@@ -21,12 +21,22 @@ import (
 // fest verdrahtet. Ein "-" in einer Zelle heißt "für diesen Prozess nicht
 // zutreffend" und zählt als 0.
 
-// parsePmon liefert sm-Prozent je PID aus der Ausgabe von
-// `nvidia-smi pmon -c 1 -s u`. Fehler, wenn die Kopfzeile weder `pid` noch
-// `sm` enthält (unbekanntes Format — kein stilles Raten).
-func parsePmon(out string) (map[int]float64, error) {
-	pidCol, smCol := -1, -1
-	procs := map[int]float64{}
+// GPUProc ist die GPU-Nutzung eines Prozesses: SM = Auslastung in Prozent
+// einer GPU, FBBytes = belegter VRAM (nur wenn der Treiber die `fb`-Spalte
+// liefert, HasFB).
+type GPUProc struct {
+	SM      float64
+	FBBytes uint64
+	HasFB   bool
+}
+
+// parsePmon liefert die GPU-Nutzung je PID aus der Ausgabe von
+// `nvidia-smi pmon -c 1 -s um` (u = Auslastung, m = Speicher `fb` in MB).
+// Fehler, wenn die Kopfzeile weder `pid` noch `sm` enthält (unbekanntes
+// Format — kein stilles Raten). Fehlt `fb`, bleibt HasFB false.
+func parsePmon(out string) (map[int]GPUProc, error) {
+	pidCol, smCol, fbCol := -1, -1, -1
+	procs := map[int]GPUProc{}
 	sc := bufio.NewScanner(strings.NewReader(out))
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -43,6 +53,8 @@ func parsePmon(out string) (map[int]float64, error) {
 					pidCol = i
 				case "sm":
 					smCol = i
+				case "fb":
+					fbCol = i
 				}
 			}
 			continue
@@ -64,7 +76,17 @@ func parsePmon(out string) (map[int]float64, error) {
 				continue
 			}
 		}
-		procs[pid] += sm // derselbe Prozess kann als Compute (C) und Graphics (G) erscheinen
+		// derselbe Prozess kann als Compute (C) und Graphics (G) bzw. auf
+		// mehreren GPUs erscheinen — Summen.
+		p := procs[pid]
+		p.SM += sm
+		if fbCol >= 0 && fbCol < len(fields) && fields[fbCol] != "-" {
+			if mb, err := strconv.ParseFloat(fields[fbCol], 64); err == nil {
+				p.FBBytes += uint64(mb * 1024 * 1024)
+				p.HasFB = true
+			}
+		}
+		procs[pid] = p
 	}
 	if pidCol < 0 || smCol < 0 {
 		if strings.TrimSpace(out) == "" {
@@ -75,12 +97,16 @@ func parsePmon(out string) (map[int]float64, error) {
 	return procs, nil
 }
 
-// TakeGPUProcs misst die GPU-Auslastung je PID auf der per index benannten
-// GPU. ok=false heißt "nicht gemessen" (nvidia-smi fehlt, Format unbekannt,
+// TakeGPUProcs misst die GPU-Nutzung je PID auf allen GPUs (index < 0)
+// bzw. der per index benannten GPU. ok=false heißt "nicht gemessen" (nvidia-smi fehlt, Format unbekannt,
 // Timeout) — nie "0 %". Ein Prozess, der in der Liste fehlt, nutzt die GPU
 // gerade nicht (0 %), das entscheidet der Aufrufer über GPUPercentForTree.
-func TakeGPUProcs(ctx context.Context, index int) (map[int]float64, bool) {
-	out, err := exec.CommandContext(ctx, "nvidia-smi", "pmon", "-c", "1", "-s", "u", "-i", strconv.Itoa(index)).Output()
+func TakeGPUProcs(ctx context.Context, index int) (map[int]GPUProc, bool) {
+	args := []string{"pmon", "-c", "1", "-s", "um"}
+	if index >= 0 {
+		args = append(args, "-i", strconv.Itoa(index))
+	}
+	out, err := exec.CommandContext(ctx, "nvidia-smi", args...).Output()
 	if err != nil {
 		return nil, false
 	}
@@ -92,8 +118,8 @@ func TakeGPUProcs(ctx context.Context, index int) (map[int]float64, bool) {
 }
 
 // ParentPIDs liest die Eltern-PID aller Prozesse aus /proc (für
-// GPUPercentForTree: ein Node kann Kindprozesse starten, die die GPU
-// nutzen, z. B. ein ffmpeg-Task).
+// GPUForTree: ein Node kann Kindprozesse starten, die die GPU nutzen,
+// z. B. ein ffmpeg-Task).
 func ParentPIDs() map[int]int {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
@@ -127,14 +153,17 @@ func ParentPIDs() map[int]int {
 	return pp
 }
 
-// GPUPercentForTree summiert die GPU-Auslastung von rootPID und all seinen
-// Nachkommen.
-func GPUPercentForTree(procs map[int]float64, parents map[int]int, rootPID int) float64 {
-	total := 0.0
-	for pid, sm := range procs {
+// GPUForTree summiert die GPU-Nutzung von rootPID und all seinen
+// Nachkommen; HasFB nur, wenn mindestens ein Prozess des Baums einen
+// VRAM-Wert geliefert hat.
+func GPUForTree(procs map[int]GPUProc, parents map[int]int, rootPID int) GPUProc {
+	var total GPUProc
+	for pid, p := range procs {
 		for cur, hops := pid, 0; hops < 64; hops++ {
 			if cur == rootPID {
-				total += sm
+				total.SM += p.SM
+				total.FBBytes += p.FBBytes
+				total.HasFB = total.HasFB || p.HasFB
 				break
 			}
 			next, ok := parents[cur]
@@ -145,4 +174,21 @@ func GPUPercentForTree(procs map[int]float64, parents map[int]int, rootPID int) 
 		}
 	}
 	return total
+}
+
+// ParseGPUSpec wertet OMP_HOST_AGENT_GPU_INDEX aus: leer oder "auto" = alle
+// GPUs des Hosts als Pool (index -1), "off"/"none" = GPU-Telemetrie aus,
+// eine Zahl = nur diese GPU. Ein anderer Wert ist ein Fehler.
+func ParseGPUSpec(v string) (index int, enabled bool, err error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "auto":
+		return -1, true, nil
+	case "off", "none", "false":
+		return -1, false, nil
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 0 {
+		return -1, false, fmt.Errorf("telemetry: ungültiger GPU-Index %q (auto, off oder eine Zahl >= 0)", v)
+	}
+	return n, true, nil
 }

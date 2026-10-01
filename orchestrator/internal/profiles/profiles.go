@@ -41,6 +41,8 @@ type Sample struct {
 	// GPUPercent: nil = in diesem Sample nicht gemessen (Host ohne
 	// konfigurierte GPU) — fließt dann nicht in das GPU-Profil ein.
 	GPUPercent *float64
+	// GPUMemBytes: belegter VRAM; nil = nicht gemessen.
+	GPUMemBytes *uint64
 }
 
 // Snapshot ist das aggregierte Profil für genau ein (nodeType, hostID)
@@ -67,6 +69,10 @@ type Snapshot struct {
 	GPUMax     float64
 	GPUP95     float64
 	GPUSamples int
+	// VRAM-Maximum (konservativ geplant, VRAM ist eine harte Grenze) und
+	// Zahl der Samples mit VRAM-Wert; 0 = nie gemessen.
+	GPUMemMax     uint64
+	GPUMemSamples int
 }
 
 // computeSnapshot fasst samples (für genau ein (nodeType, hostID) Paar)
@@ -121,6 +127,15 @@ func computeSnapshot(nodeType, hostID string, samples []Sample, now time.Time) S
 		}
 		gpus = append(gpus, *s.GPUPercent)
 		gpuSum += *s.GPUPercent
+	}
+	for _, s := range samples {
+		if s.GPUMemBytes == nil {
+			continue
+		}
+		snap.GPUMemSamples++
+		if *s.GPUMemBytes > snap.GPUMemMax {
+			snap.GPUMemMax = *s.GPUMemBytes
+		}
 	}
 	if len(gpus) > 0 {
 		sort.Float64s(gpus)

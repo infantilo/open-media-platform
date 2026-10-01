@@ -239,7 +239,7 @@ Deno.test("GPU: Bedarf nur aus gemessenen Profilen, Kapazität = eine GPU je mel
   const m: ResourceModel = {
     thresholds: { cpu: 85, mem: 90, net: 85, gpu: 85 },
     hosts: [
-      { id: "g1", label: "GPU-Host", online: true, numCpu: 16, memTotalBytes: 32 * GB, capacityKnown: true, gpuKnown: true, live: { cpuPercent: 5, memPercent: 5, gpuPercent: 90 } },
+      { id: "g1", label: "GPU-Host", online: true, numCpu: 16, memTotalBytes: 32 * GB, capacityKnown: true, gpu: { count: 1, utilPercent: 90, memUsedBytes: 2 * GB, memTotalBytes: 8 * GB }, live: { cpuPercent: 5, memPercent: 5, gpuPercent: 90 } },
       { id: "c1", label: "ohne GPU", online: true, numCpu: 8, memTotalBytes: 16 * GB, capacityKnown: true },
     ],
     workflows: [{
@@ -271,4 +271,37 @@ Deno.test("GPU: Bedarf nur aus gemessenen Profilen, Kapazität = eine GPU je mel
   const tlNow = computeTimeline(m, new Map(), [at(2026, 10, 1, 6)], 30, at(2026, 10, 1, 6, 10));
   assertEquals(tlNow.get("g1")![0].gpuPercent, 90);
   assertEquals(tlNow.get("g1")![0].liveFloor.includes("GPU"), true);
+});
+
+Deno.test("VRAM: harte Grenze, GPU-Pool mit mehreren GPUs, Jetzt-Messung als Untergrenze", () => {
+  const m: ResourceModel = {
+    thresholds: { cpu: 85, mem: 90, net: 85, gpu: 85 },
+    hosts: [{
+      id: "g2", label: "2 GPUs", online: true, numCpu: 16, memTotalBytes: 32 * GB, capacityKnown: true,
+      gpu: { count: 2, utilPercent: 10, memUsedBytes: 15 * GB, memTotalBytes: 16 * GB },
+    }],
+    workflows: [{
+      id: "w", name: "AI", status: "stopped",
+      roles: [
+        { name: "A", nodeType: "e", hostId: "g2", cpuCores: 1, cpuAvgCores: 1, rssBytes: GB, known: true, gpuKnown: true, gpuPercent: 80, gpuMemBytes: 7 * GB },
+        { name: "B", nodeType: "e", hostId: "g2", cpuCores: 1, cpuAvgCores: 1, rssBytes: GB, known: true, gpuKnown: true, gpuPercent: 80, gpuMemBytes: 8 * GB },
+      ],
+    }],
+  };
+  const scheds = new Map<string, Schedule[]>([["w", [daily("start", "09:00"), daily("stop", "12:00")]]]);
+  const tl = computeTimeline(m, scheds, slotsOfDay(at(2026, 10, 2, 0)), 30, at(2026, 10, 1, 6));
+  const cap = laneCapacity(m, "g2");
+  assertEquals(cap.gpuPercent, 200); // 2 GPUs
+  assertEquals(cap.vramBytes, 16 * GB);
+  const slot = tl.get("g2")![10 * 2];
+  const u = slotUtilization(slot, cap, m.thresholds);
+  assertEquals(slot.gpuPercent, 160);
+  assertEquals(u.gpuLevel, "warn"); // 80 % von 200 liegt unter dem Grenzwert 85
+  assertEquals(slot.gpuMemBytes, 15 * GB);
+  assertEquals(u.vramLevel, "over"); // 15/16 = 94 % > 90 %: VRAM ist hart, schon 15 GB reichen
+  assertEquals(findBottlenecks(m, tl).some((b) => b.what.includes("VRAM")), true);
+  const now = computeTimeline(m, new Map(), [at(2026, 10, 1, 6)], 30, at(2026, 10, 1, 6, 5));
+  assertEquals(now.get("g2")![0].gpuMemBytes, 15 * GB);
+  assertEquals(now.get("g2")![0].liveFloor.includes("VRAM"), true);
+  assertEquals(now.get("g2")![0].gpuPercent, 20); // 10 % von 2 GPUs
 });

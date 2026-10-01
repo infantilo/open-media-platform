@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/gpu"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
 
@@ -1372,5 +1374,42 @@ func TestHandleRemoteExitStopDuringBackoffSkipsRestart(t *testing.T) {
 
 	if len(l.List()) != 0 {
 		t.Errorf("List() = %+v, want empty (Stop() during backoff must win)", l.List())
+	}
+}
+
+// GPU je lokaler Instanz und Host-Pool kommen aus gpuProbe (hier ein
+// Fake: kein nvidia-smi nötig). Ohne Messung bleibt alles nil.
+func TestLauncherSampleLocalGPU(t *testing.T) {
+	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil, nil)
+	inst, err := l.Start("sleepy", "", "", nil)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = l.Stop(inst.ID) })
+
+	l.gpuProbe = func(context.Context) gpu.Result { return gpu.Result{} }
+	l.sampleLocalResources()
+	time.Sleep(20 * time.Millisecond)
+	l.sampleLocalResources()
+	if l.LocalGPU() != nil || l.List()[0].GPUPercent != nil {
+		t.Fatalf("ohne Messung darf nichts gesetzt sein: %+v / %+v", l.LocalGPU(), l.List()[0])
+	}
+
+	l.gpuProbe = func(context.Context) gpu.Result {
+		return gpu.Result{
+			Host:    &gpu.HostSample{Count: 2, UtilPercent: 30, MemUsed: 4 << 30, MemTotal: 16 << 30},
+			Procs:   map[int]gpu.Proc{inst.PID: {SM: 25, FB: 2 << 30, HasFB: true}},
+			Parents: map[int]int{},
+		}
+	}
+	l.sampleLocalResources()
+	time.Sleep(20 * time.Millisecond)
+	l.sampleLocalResources()
+	got := l.List()[0]
+	if got.GPUPercent == nil || *got.GPUPercent != 25 || got.GPUMemBytes == nil || *got.GPUMemBytes != 2<<30 {
+		t.Errorf("instance gpu = %v / %v", got.GPUPercent, got.GPUMemBytes)
+	}
+	if lg := l.LocalGPU(); lg == nil || lg.Count != 2 || lg.MemTotal != 16<<30 {
+		t.Errorf("LocalGPU = %+v", lg)
 	}
 }

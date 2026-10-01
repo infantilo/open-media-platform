@@ -112,6 +112,8 @@ type SnapshotService interface {
 type LauncherService interface {
 	Catalog() []launcher.CatalogEntry
 	List() []launcher.Instance
+	// LocalGPU: zuletzt gemessene GPU des lokalen Hosts (nil = nicht gemessen).
+	LocalGPU() *launcher.LocalGPUSample
 	// Get (ARCHITECTURE.md §24.1, UMSETZUNG.md C16) — s.
 	// handleIssueServiceToken, das über das nur intern (json:"-")
 	// gehaltene launcher.Instance.LaunchSecret prüft, ob der Aufrufer

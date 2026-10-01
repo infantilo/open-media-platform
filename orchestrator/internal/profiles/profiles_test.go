@@ -86,6 +86,11 @@ func TestComputeSnapshotGPUOnlyFromMeasuredSamples(t *testing.T) {
 	if snap.GPUSamples != 3 || snap.GPUAvg != 20 || snap.GPUMax != 30 || snap.GPUP95 != 30 {
 		t.Errorf("gpu snapshot = %+v", snap)
 	}
+	m := func(v uint64) *uint64 { return &v }
+	withMem := computeSnapshot("t", "h", []Sample{{GPUMemBytes: m(100)}, {}, {GPUMemBytes: m(300)}}, time.Now())
+	if withMem.GPUMemSamples != 2 || withMem.GPUMemMax != 300 {
+		t.Errorf("vram snapshot = %+v", withMem)
+	}
 	none := computeSnapshot("t", "h", []Sample{{CPUPercent: 5}}, time.Now())
 	if none.GPUSamples != 0 {
 		t.Errorf("ohne Messung muss GPUSamples 0 bleiben: %+v", none)

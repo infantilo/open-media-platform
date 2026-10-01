@@ -65,7 +65,10 @@ type Metrics struct {
 // GpuMetrics ist die zuletzt gemessene Auslastungs-/Speicher-
 // Momentaufnahme der per Host-Agent konfigurierten GPU.
 type GpuMetrics struct {
-	Index              int     `json:"index"`
+	Index int `json:"index"` // -1 = alle GPUs des Hosts (Pool)
+	// Count: Anzahl der gemessenen GPUs (Pool; 0 bei älteren Host-Agents,
+	// dann gilt eine GPU). Auslastung ist der Mittelwert, Speicher die Summe.
+	Count              int     `json:"count,omitempty"`
 	UtilizationPercent float64 `json:"utilizationPercent"`
 	MemUsedBytes       uint64  `json:"memUsedBytes"`
 	MemTotalBytes      uint64  `json:"memTotalBytes"`
@@ -96,6 +99,8 @@ type InstanceMetrics struct {
 	// GpuPercent: GPU-Auslastung dieser Instanz in Prozent einer GPU; nil =
 	// nicht gemessen (Host ohne konfigurierte GPU / nvidia-smi fehlt).
 	GpuPercent *float64 `json:"gpuPercent,omitempty"`
+	// GpuMemBytes: von dieser Instanz belegter VRAM; nil = nicht gemessen.
+	GpuMemBytes *uint64 `json:"gpuMemBytes,omitempty"`
 	// Outdated: Binary seit dem Prozessstart ersetzt (System-Update).
 	Outdated bool `json:"outdated,omitempty"`
 }

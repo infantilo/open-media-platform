@@ -116,19 +116,14 @@ func main() {
 	// telemetry.NetSample-Doku. Leer = Netz-Telemetrie deaktiviert
 	// (Sample.Net bleibt nil), unverändertes Verhalten gegenüber vorher.
 	netIface := envOr("OMP_HOST_AGENT_NET_IFACE", "")
-	// GPU-Index für die Auslastungs-/Speicher-Telemetrie (Nutzerauftrag
-	// 2026-09-17, "GPU-Telemetrie im Placement jetzt umsetzen") — bewusst
-	// kein Default/Auto-Erkennung, s. telemetry.GpuSample-Doku. Leer =
-	// GPU-Telemetrie deaktiviert (gpuIndex bleibt -1, Sample.Gpu bleibt
-	// nil), gleiches Muster wie netIface.
-	gpuIndex := -1
-	if v := envOr("OMP_HOST_AGENT_GPU_INDEX", ""); v != "" {
-		parsed, err := strconv.Atoi(v)
-		if err != nil {
-			slog.Error("invalid OMP_HOST_AGENT_GPU_INDEX", "value", v, "error", err)
-			os.Exit(1)
-		}
-		gpuIndex = parsed
+	// GPU-Telemetrie (Nutzerauftrag 2026-09-17; seit 2026-10-01 automatisch):
+	// ohne OMP_HOST_AGENT_GPU_INDEX werden alle vom Treiber gemeldeten GPUs
+	// als Pool gemessen — ist keine da (kein nvidia-smi), bleibt Sample.Gpu
+	// nil ("nicht gemessen"). Zahl = nur diese GPU, "off" = aus.
+	gpuIndex, gpuEnabled, gpuErr := telemetry.ParseGPUSpec(envOr("OMP_HOST_AGENT_GPU_INDEX", ""))
+	if gpuErr != nil {
+		slog.Error("invalid OMP_HOST_AGENT_GPU_INDEX", "error", gpuErr)
+		os.Exit(1)
 	}
 	telemetryInterval := 5 * time.Second
 
@@ -257,10 +252,16 @@ func main() {
 	} else {
 		slog.Info("network bandwidth telemetry disabled (OMP_HOST_AGENT_NET_IFACE unset)")
 	}
-	if gpuIndex >= 0 {
-		slog.Info("gpu telemetry enabled", "index", gpuIndex)
+	if gpuEnabled {
+		probeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		if g, ok := telemetry.TakeGPU(probeCtx, gpuIndex); ok {
+			slog.Info("gpu telemetry enabled", "gpus", g.Count, "index", gpuIndex, "vram_bytes", g.MemTotalBytes)
+		} else {
+			slog.Info("gpu telemetry: keine NVIDIA-GPU erkannt (nvidia-smi fehlt oder meldet keine GPU) — wird bei jedem Tick erneut versucht")
+		}
+		cancel()
 	} else {
-		slog.Info("gpu telemetry disabled (OMP_HOST_AGENT_GPU_INDEX unset)")
+		slog.Info("gpu telemetry disabled (OMP_HOST_AGENT_GPU_INDEX=off)")
 	}
 
 	// Kapitel 14 Teil 2 (docs/END-GOAL-FEATURES.md §14.3b): additive
@@ -300,7 +301,7 @@ func main() {
 			continue
 		}
 
-		if gpuIndex >= 0 {
+		if gpuEnabled {
 			// Eigener, kurzer Timeout statt telemetryInterval: TakeGPU
 			// braucht (anders als Take()) kein Sleep-Fenster, ein
 			// hängendes nvidia-smi soll trotzdem nicht den Tick blockieren
@@ -314,9 +315,9 @@ func main() {
 
 		// GPU je Prozess: nur wenn eine GPU konfiguriert ist UND pmon lief —
 		// sonst bleibt GpuPercent der Instanzen nil ("nicht gemessen").
-		var gpuProcs map[int]float64
+		var gpuProcs map[int]telemetry.GPUProc
 		var parents map[int]int
-		if gpuIndex >= 0 {
+		if gpuEnabled && sample.Gpu != nil {
 			pmonCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			if procs, ok := telemetry.TakeGPUProcs(pmonCtx, gpuIndex); ok {
 				gpuProcs, parents = procs, telemetry.ParentPIDs()
@@ -339,8 +340,11 @@ func main() {
 				Outdated:   inst.Outdated,
 			}
 			if gpuProcs != nil {
-				g := telemetry.GPUPercentForTree(gpuProcs, parents, inst.PID)
-				is.GpuPercent = &g
+				g := telemetry.GPUForTree(gpuProcs, parents, inst.PID)
+				is.GpuPercent = &g.SM
+				if g.HasFB {
+					is.GpuMemBytes = &g.FBBytes
+				}
 			}
 			sample.Instances = append(sample.Instances, is)
 		}

@@ -20,6 +20,8 @@ type fakeCatalog []launcher.CatalogEntry
 
 func (f fakeCatalog) List() []launcher.Instance { return nil }
 
+func (f fakeCatalog) LocalGPU() *launcher.LocalGPUSample { return nil }
+
 func (f fakeCatalog) Catalog() []launcher.CatalogEntry { return f }
 
 func TestComputeRoleNetwork(t *testing.T) {
@@ -173,7 +175,7 @@ func TestSchedulerResourcesGPU(t *testing.T) {
 			Instances: []hosts.InstanceMetrics{{InstanceID: "m1", CPUPercent: 50, RSSBytes: 1 << 20, GpuPercent: &g}}},
 	}}
 	prof := fakeProfileReader{snapshots: map[[2]string]profiles.Snapshot{
-		{"enc", profiles.GlobalHostID}:   {CPUAvg: 10, CPUP95: 20, SampleCount: 5, GPUAvg: 30, GPUP95: 55, GPUSamples: 4},
+		{"enc", profiles.GlobalHostID}:   {CPUAvg: 10, CPUP95: 20, SampleCount: 5, GPUAvg: 30, GPUP95: 55, GPUSamples: 4, GPUMemMax: 2 << 30, GPUMemSamples: 4},
 		{"plain", profiles.GlobalHostID}: {CPUAvg: 10, CPUP95: 20, SampleCount: 5},
 	}}
 	wf := fakeWorkflowService{list: []workflows.Workflow{{ID: "w", Name: "W", Definition: workflows.Definition{Roles: []workflows.Role{
@@ -186,11 +188,12 @@ func TestSchedulerResourcesGPU(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if !resp.Hosts[1].GPUKnown || resp.Hosts[0].GPUKnown {
-		t.Errorf("gpuKnown hosts = %+v", resp.Hosts)
+	// älterer Host-Agent ohne count → eine GPU; lokaler Host ohne Messung → nil
+	if resp.Hosts[1].GPU == nil || resp.Hosts[1].GPU.Count != 1 || resp.Hosts[1].GPU.UtilPercent != 70 || resp.Hosts[0].GPU != nil {
+		t.Errorf("hosts gpu = %+v / %+v", resp.Hosts[1].GPU, resp.Hosts[0].GPU)
 	}
 	e, p := resp.Workflows[0].Roles[0], resp.Workflows[0].Roles[1]
-	if !e.GPUKnown || e.GPUPercent != 55 || p.GPUKnown || p.GPUPercent != 0 {
+	if !e.GPUKnown || e.GPUPercent != 55 || e.GPUMemBytes != 2<<30 || p.GPUKnown || p.GPUPercent != 0 || p.GPUMemBytes != 0 {
 		t.Errorf("roles gpu: enc=%+v plain=%+v", e, p)
 	}
 	// Manuell: Messung 40 %, Profil p95 55 % → konservativ 55

@@ -119,7 +119,7 @@ func TestTakeWithUnknownNetIface(t *testing.T) {
 // (Format aus der nvidia-smi-Dokumentation) — kein echtes GPU-Gerät
 // nötig, s. parseNvidiaSmiOutput-Doku.
 func TestParseNvidiaSmiOutput(t *testing.T) {
-	sample, err := parseNvidiaSmiOutput(0, "37, 2048, 8192\n")
+	sample, err := parseNvidiaSmiOutput(0, "0, 37, 2048, 8192\n")
 	if err != nil {
 		t.Fatalf("parseNvidiaSmiOutput() error = %v", err)
 	}
@@ -157,8 +157,8 @@ func TestParseNvidiaSmiOutputMalformed(t *testing.T) {
 func TestTakeGPUWithoutNvidiaSmi(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if _, ok := TakeGPU(ctx, -1); ok {
-		t.Error("TakeGPU() ok = true, want false (Index -1 existiert nie)")
+	if _, ok := TakeGPU(ctx, 99999); ok {
+		t.Error("TakeGPU() ok = true, want false (Index 99999 existiert nie)")
 	}
 }
 
@@ -225,24 +225,31 @@ func TestProcessSamplerPrune(t *testing.T) {
 }
 
 func TestParsePmon(t *testing.T) {
-	// Format laut NVIDIA-Doku zu `nvidia-smi pmon` (neuere Treiber mit jpg/ofa).
-	out := `# gpu         pid   type     sm    mem    enc    dec    jpg    ofa    command
-# Idx           #    C/G      %      %      %      %      %      %    name
-    0       4711     C     35      7      0      -      -      -    omp-video-mixer
-    0       4712     G     10      2      -      -      -      -    omp-viewer
-    0       4712     C      5      1      -      -      -      -    omp-viewer
-    0       9999     C      -      -      -      -      -      -    some thing
+	// Format laut NVIDIA-Doku zu `nvidia-smi pmon -s um` (neuere Treiber)
+	out := `# gpu         pid   type     sm    mem    enc    dec    jpg    ofa     fb   ccpm    command
+# Idx           #    C/G      %      %      %      %      %      %     MB     MB    name
+    0       4711     C     35      7      0      -      -      -   1024      0    omp-video-mixer
+    0       4712     G     10      2      -      -      -      -    100      0    omp-viewer
+    1       4712     C      5      1      -      -      -      -    300      0    omp-viewer
+    0       9999     C      -      -      -      -      -      -      -      -    some thing
 `
 	got, err := parsePmon(out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got[4711] != 35 || got[4712] != 15 || got[9999] != 0 || len(got) != 3 {
-		t.Errorf("parsePmon = %v", got)
+	if got[4711].SM != 35 || got[4711].FBBytes != 1024<<20 || !got[4711].HasFB {
+		t.Errorf("4711 = %+v", got[4711])
 	}
-	// Älterer Treiber: andere Spalten, sm an anderer Stelle
+	// derselbe Prozess auf zwei GPUs/als C und G: Summen
+	if got[4712].SM != 15 || got[4712].FBBytes != 400<<20 {
+		t.Errorf("4712 = %+v", got[4712])
+	}
+	if got[9999].SM != 0 || got[9999].HasFB || len(got) != 3 {
+		t.Errorf("9999 = %+v len=%d", got[9999], len(got))
+	}
+	// Älterer Treiber ohne fb-Spalte: SM ok, VRAM unbekannt
 	old := "# gpu        pid  type    sm   mem   enc   dec   command\n# Idx          #   C/G     %     %     %     %   name\n    0       1  C   12   3   0   0   x\n"
-	if g, err := parsePmon(old); err != nil || g[1] != 12 {
+	if g, err := parsePmon(old); err != nil || g[1].SM != 12 || g[1].HasFB {
 		t.Errorf("old format = %v %v", g, err)
 	}
 	// Nur Kopfzeile = niemand nutzt die GPU → leere Map, kein Fehler
@@ -255,14 +262,45 @@ func TestParsePmon(t *testing.T) {
 	}
 }
 
-func TestGPUPercentForTree(t *testing.T) {
+func TestGPUForTree(t *testing.T) {
 	parents := map[int]int{200: 100, 300: 200, 400: 1, 500: 400}
-	procs := map[int]float64{100: 10, 300: 20, 500: 99}
-	// 100 + Nachkomme 300 (über 200); 500 gehört zu 400
-	if g := GPUPercentForTree(procs, parents, 100); g != 30 {
-		t.Errorf("tree(100) = %v", g)
+	procs := map[int]GPUProc{100: {SM: 10, FBBytes: 100, HasFB: true}, 300: {SM: 20, FBBytes: 50, HasFB: true}, 500: {SM: 99}}
+	g := GPUForTree(procs, parents, 100)
+	if g.SM != 30 || g.FBBytes != 150 || !g.HasFB {
+		t.Errorf("tree(100) = %+v", g)
 	}
-	if g := GPUPercentForTree(procs, parents, 7); g != 0 {
-		t.Errorf("tree(unrelated) = %v", g)
+	if g := GPUForTree(procs, parents, 7); g.SM != 0 || g.HasFB {
+		t.Errorf("tree(unrelated) = %+v", g)
+	}
+}
+
+func TestParseNvidiaSmiPool(t *testing.T) {
+	s, err := parseNvidiaSmiOutput(-1, "0, 40, 1000, 8000\n1, 20, 3000, 8000\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Pool: Auslastung gemittelt, Speicher summiert
+	if s.Count != 2 || s.UtilizationPercent != 30 || s.MemUsedBytes != 4000<<20 || s.MemTotalBytes != 16000<<20 || s.Index != -1 {
+		t.Errorf("pool = %+v", s)
+	}
+}
+
+func TestParseGPUSpec(t *testing.T) {
+	cases := []struct {
+		in      string
+		idx     int
+		enabled bool
+		bad     bool
+	}{
+		{"", -1, true, false}, {"auto", -1, true, false}, {"AUTO", -1, true, false},
+		{"off", -1, false, false}, {"none", -1, false, false},
+		{"0", 0, true, false}, {"2", 2, true, false},
+		{"-1", -1, false, true}, {"x", -1, false, true},
+	}
+	for _, c := range cases {
+		idx, en, err := ParseGPUSpec(c.in)
+		if (err != nil) != c.bad || (!c.bad && (idx != c.idx || en != c.enabled)) {
+			t.Errorf("ParseGPUSpec(%q) = %d,%v,%v", c.in, idx, en, err)
+		}
 	}
 }

@@ -30,6 +30,10 @@ type procCPUState struct {
 type instanceResourceSample struct {
 	cpuPercent float64
 	rssBytes   uint64
+	// GPU-Nutzung dieser Instanz (inkl. Kindprozesse); nil = nicht
+	// gemessen (kein nvidia-smi / Treiber ohne fb-Spalte).
+	gpuPercent *float64
+	gpuMem     *uint64
 }
 
 // processTimes liest utime+stime (Klock-Ticks) aus /proc/<pid>/stat.

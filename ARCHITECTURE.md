@@ -308,7 +308,7 @@ Interface konfiguriert ist oder der Treiber keine Link-Geschwindigkeit
 meldet. **GPU-Telemetrie seit 2026-09-17 umgesetzt** (Nutzerauftrag "GPU-
 Telemetrie im Placement jetzt umsetzen"): Host-Agent misst Auslastung/
 VRAM einer explizit konfigurierten GPU über `nvidia-smi`
-(`OMP_HOST_AGENT_GPU_INDEX`, `host-agent/internal/telemetry.GpuSample`
+(`OMP_HOST_AGENT_GPU_INDEX`, seit 2026-10-01 optional: Standard = alle GPUs als Pool, Zahl = eine GPU, `off` = aus; `host-agent/internal/telemetry.GpuSample`
 — herstellerspezifisch, kein generisches /proc-Äquivalent existiert wie
 bei CPU/RAM/Netz), die Placement-Engine wertet sie als vierte
 kontinuierlich-teilbare Dimension (`Thresholds.GpuPercent`,

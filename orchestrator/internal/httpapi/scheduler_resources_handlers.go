@@ -36,6 +36,7 @@ import (
 type CatalogReader interface {
 	Catalog() []launcher.CatalogEntry
 	List() []launcher.Instance
+	LocalGPU() *launcher.LocalGPUSample
 }
 
 type schedResHost struct {
@@ -52,10 +53,17 @@ type schedResHost struct {
 	// konfigurierten NIC (je Richtung, vollduplex). Fehlt, wenn keine NIC
 	// konfiguriert ist oder der Treiber sie nicht meldet.
 	NetLinkMbps float64 `json:"netLinkMbps,omitempty"`
-	// GPUKnown: der Host-Agent meldet eine GPU (OMP_HOST_AGENT_GPU_INDEX
-	// gesetzt, nvidia-smi erreichbar). Kapazität = eine GPU = 100 %.
-	GPUKnown    bool    `json:"gpuKnown,omitempty"`
-	LastSeenAge float64 `json:"lastSeenSeconds,omitempty"`
+	// GPU: GPU-Pool des Hosts (Anzahl, Auslastung, VRAM); nil = nicht
+	// gemessen. Kapazität = Count × 100 % Auslastung bzw. MemTotal VRAM.
+	GPU         *schedResGPU `json:"gpu,omitempty"`
+	LastSeenAge float64      `json:"lastSeenSeconds,omitempty"`
+}
+
+type schedResGPU struct {
+	Count         int     `json:"count"`
+	UtilPercent   float64 `json:"utilPercent"`
+	MemUsedBytes  uint64  `json:"memUsedBytes"`
+	MemTotalBytes uint64  `json:"memTotalBytes"`
 }
 
 type schedResHostLive struct {
@@ -96,6 +104,8 @@ type schedResRole struct {
 	// jede Rolle "unbekannt").
 	GPUPercent float64 `json:"gpuPercent,omitempty"`
 	GPUKnown   bool    `json:"gpuKnown,omitempty"`
+	// VRAM-Maximum aus dem Profil (harte Grenze, konservativ).
+	GPUMemBytes uint64 `json:"gpuMemBytes,omitempty"`
 }
 
 type schedIO struct {
@@ -137,6 +147,7 @@ type schedResManual struct {
 	NetEstimated bool    `json:"netEstimated,omitempty"`
 	GPUPercent   float64 `json:"gpuPercent,omitempty"`
 	GPUKnown     bool    `json:"gpuKnown,omitempty"`
+	GPUMemBytes  uint64  `json:"gpuMemBytes,omitempty"`
 }
 
 // handleSchedulerResources: GET /api/v1/scheduler/resources.
@@ -179,6 +190,11 @@ func handleSchedulerResources(
 		local := schedResHost{ID: "", Label: "Orchestrator (lokal)", Local: true, Online: true, NumCPU: runtime.NumCPU(), MemTotal: localMemTotal()}
 		local.CapKnown = local.MemTotal > 0
 		local.IOPorts = ioCaps(ports, claims, "")
+		if catalog != nil {
+			if lg := catalog.LocalGPU(); lg != nil {
+				local.GPU = &schedResGPU{Count: lg.Count, UtilPercent: lg.UtilPercent, MemUsedBytes: lg.MemUsed, MemTotalBytes: lg.MemTotal}
+			}
+		}
 		resp.Hosts = append(resp.Hosts, local)
 
 		all, err := registry.ListHosts()
@@ -216,7 +232,11 @@ func handleSchedulerResources(
 				if m.Gpu != nil {
 					v := m.Gpu.UtilizationPercent
 					live.GpuPercent = &v
-					sh.GPUKnown = true
+					cnt := m.Gpu.Count
+					if cnt < 1 {
+						cnt = 1 // älterer Host-Agent: genau eine GPU
+					}
+					sh.GPU = &schedResGPU{Count: cnt, UtilPercent: m.Gpu.UtilizationPercent, MemUsedBytes: m.Gpu.MemUsedBytes, MemTotalBytes: m.Gpu.MemTotalBytes}
 				}
 				sh.Live = live
 			}
@@ -252,6 +272,9 @@ func handleSchedulerResources(
 					sr.RSSBytes = snap.RSSMax
 					if sr.RSSBytes < snap.RSSAvg {
 						sr.RSSBytes = snap.RSSAvg
+					}
+					if snap.GPUMemSamples > 0 {
+						sr.GPUMemBytes = snap.GPUMemMax
 					}
 					if snap.GPUSamples > 0 {
 						sr.GPUKnown = true
@@ -291,6 +314,12 @@ func manualInstances(ctx context.Context, cat CatalogReader, metrics HostMetrics
 		mi := schedResManual{ID: inst.ID, Label: inst.Label, NodeType: inst.Type, HostID: inst.HostID}
 		if inst.CPUPercent != nil && inst.RSSBytes != nil {
 			mi.CPUCores, mi.RSSBytes, mi.Known, mi.Measured = *inst.CPUPercent/100, *inst.RSSBytes, true, true
+			if inst.GPUPercent != nil {
+				mi.GPUPercent, mi.GPUKnown = *inst.GPUPercent, true
+			}
+			if inst.GPUMemBytes != nil {
+				mi.GPUMemBytes = *inst.GPUMemBytes
+			}
 		} else if inst.HostID != "" && metrics != nil {
 			if m, ok := metrics.Get(inst.HostID); ok {
 				for _, im := range m.Instances {
@@ -298,6 +327,9 @@ func manualInstances(ctx context.Context, cat CatalogReader, metrics HostMetrics
 						mi.CPUCores, mi.RSSBytes, mi.Known, mi.Measured = im.CPUPercent/100, im.RSSBytes, true, true
 						if im.GpuPercent != nil {
 							mi.GPUPercent, mi.GPUKnown = *im.GpuPercent, true
+						}
+						if im.GpuMemBytes != nil {
+							mi.GPUMemBytes = *im.GpuMemBytes
 						}
 					}
 				}
@@ -319,6 +351,9 @@ func manualInstances(ctx context.Context, cat CatalogReader, metrics HostMetrics
 				mi.RSSBytes = rss
 			}
 			mi.Known = true
+			if snap.GPUMemSamples > 0 && snap.GPUMemMax > mi.GPUMemBytes {
+				mi.GPUMemBytes = snap.GPUMemMax
+			}
 			if snap.GPUSamples > 0 {
 				g := snap.GPUP95
 				if g < snap.GPUAvg {

@@ -37,7 +37,7 @@ func TestStoreUpsertAndGet(t *testing.T) {
 		CPUMin: 5, CPUAvg: 15, CPUMax: 30, CPUP95: 28,
 		RSSMin: 1_000_000, RSSAvg: 2_000_000, RSSMax: 3_000_000,
 		SampleCount: 12, UpdatedAt: time.Now().Truncate(time.Second),
-		GPUAvg: 22.5, GPUMax: 60, GPUP95: 55, GPUSamples: 7,
+		GPUAvg: 22.5, GPUMax: 60, GPUP95: 55, GPUSamples: 7, GPUMemMax: 4 << 30, GPUMemSamples: 6,
 	}
 	if err := store.Upsert(ctx, snap); err != nil {
 		t.Fatalf("Upsert() error = %v", err)
@@ -54,7 +54,7 @@ func TestStoreUpsertAndGet(t *testing.T) {
 		t.Errorf("Get() = %+v, unexpected", got)
 	}
 
-	if got.GPUAvg != 22.5 || got.GPUMax != 60 || got.GPUP95 != 55 || got.GPUSamples != 7 {
+	if got.GPUAvg != 22.5 || got.GPUMax != 60 || got.GPUP95 != 55 || got.GPUSamples != 7 || got.GPUMemMax != 4<<30 || got.GPUMemSamples != 6 {
 		t.Errorf("GPU-Felder gingen verloren: %+v", got)
 	}
 

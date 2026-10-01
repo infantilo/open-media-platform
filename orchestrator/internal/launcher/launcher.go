@@ -35,6 +35,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/gpu"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/safego"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 	"github.com/infantilo/openmediaplatform/tools/contract-check/checker"
@@ -200,6 +201,8 @@ type Instance struct {
 	// beim Lesen gemischt. nil = nicht gemessen (nur entfernte Hosts mit
 	// konfigurierter GPU liefern es), nie "0 %".
 	GPUPercent *float64 `json:"gpuPercent,omitempty"`
+	// GPUMemBytes: von dieser Instanz belegter VRAM (nil = nicht gemessen).
+	GPUMemBytes *uint64 `json:"gpuMemBytes,omitempty"`
 	// ContainerID ist gesetzt für `runner:"podman"`-Instanzen (Kapitel
 	// 17 Teil 4) — leer für Prozess-Instanzen (dort ist PID die
 	// Lebenszyklus-Kennung). Beide Felder sind bewusst nie gleichzeitig
@@ -342,6 +345,10 @@ type Launcher struct {
 	// Lesen.
 	procState       map[string]procCPUState
 	resourceSamples map[string]instanceResourceSample
+	// gpuProbe misst die GPU des lokalen Hosts (Default gpu.Probe, in
+	// Tests ersetzbar); localGPU ist der zuletzt gemessene Host-Pool.
+	gpuProbe func(context.Context) gpu.Result
+	localGPU *LocalGPUSample
 
 	// totalRestarts zählt jeden tatsächlichen automatischen Neustart
 	// (lokal wie remote, beide laufen durch recordRestartLocked) seit
@@ -426,6 +433,7 @@ func newWithStore(staticCatalog []CatalogEntry, registryURL, natsURL string, sto
 		restarts:        map[string]*restartState{},
 		procState:       map[string]procCPUState{},
 		resourceSamples: map[string]instanceResourceSample{},
+		gpuProbe:        gpu.Probe,
 	}
 	l.loadState()
 	l.loadImportedCatalog()
@@ -683,10 +691,33 @@ func (l *Launcher) List() []Instance {
 			cpu, rss := rs.cpuPercent, rs.rssBytes
 			inst.CPUPercent = &cpu
 			inst.RSSBytes = &rss
+			inst.GPUPercent, inst.GPUMemBytes = rs.gpuPercent, rs.gpuMem
 		}
 		list = append(list, inst)
 	}
 	return list
+}
+
+// LocalGPUSample ist die zuletzt gemessene GPU-Pool-Momentaufnahme des
+// Hosts, auf dem der Orchestrator läuft (Auslastung gemittelt, Speicher
+// summiert über Count GPUs).
+type LocalGPUSample struct {
+	Count       int
+	UtilPercent float64
+	MemUsed     uint64
+	MemTotal    uint64
+}
+
+// LocalGPU liefert die zuletzt gemessene lokale GPU; nil = nicht gemessen
+// (keine NVIDIA-GPU / nvidia-smi nicht verfügbar).
+func (l *Launcher) LocalGPU() *LocalGPUSample {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.localGPU == nil {
+		return nil
+	}
+	c := *l.localGPU
+	return &c
 }
 
 // TotalRestarts liefert die kumulative Anzahl automatischer Neustarts
@@ -742,8 +773,21 @@ func (l *Launcher) Run(ctx context.Context) {
 // beendet) überspringt nur diese Instanz, bricht den gesamten Tick
 // nicht ab (gleiche Nachsicht wie der übrige Telemetrie-Code).
 func (l *Launcher) sampleLocalResources() {
+	// GPU vor dem Lock messen: nvidia-smi darf den Launcher bei einem
+	// hängenden Treiber nicht blockieren (eigener 3-s-Timeout in gpu.Probe).
+	var gres gpu.Result
+	if l.gpuProbe != nil {
+		gres = l.gpuProbe(context.Background())
+	}
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	if gres.Host != nil {
+		l.localGPU = &LocalGPUSample{Count: gres.Host.Count, UtilPercent: gres.Host.UtilPercent, MemUsed: gres.Host.MemUsed, MemTotal: gres.Host.MemTotal}
+	} else {
+		l.localGPU = nil
+	}
 
 	active := make(map[string]bool, len(l.instances))
 	for id, inst := range l.instances {
@@ -771,7 +815,15 @@ func (l *Launcher) sampleLocalResources() {
 			continue
 		}
 		cpuPercent := (float64(ticks-prev.ticks) / clockTicksPerSecond / elapsed) * 100
-		l.resourceSamples[id] = instanceResourceSample{cpuPercent: cpuPercent, rssBytes: rss}
+		rs := instanceResourceSample{cpuPercent: cpuPercent, rssBytes: rss}
+		if gres.Host != nil && gres.Procs != nil {
+			g := gpu.ForTree(gres.Procs, gres.Parents, inst.PID)
+			rs.gpuPercent = &g.SM
+			if g.HasFB {
+				rs.gpuMem = &g.FB
+			}
+		}
+		l.resourceSamples[id] = rs
 	}
 
 	// Zustand nicht mehr lokal aktiver Instanzen entfernen (gestoppt,
