@@ -50,7 +50,7 @@
 //! Punkt 3 korrekt, kein Standard wird dupliziert.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
@@ -90,6 +90,17 @@ pub enum Event {
         rms: f64,
         peak: f64,
     },
+    /// DSP-Zustand je Kanal (≈10 Hz): Gain-Reduction von Kompressor/Gate,
+    /// Anteil von AutoMix/Ducking am Pegel und Detektor-Pegel. `None` =
+    /// Master (nur Limiter-Reduktion).
+    Dsp {
+        channel_id: Option<String>,
+        comp_gr_db: f64,
+        gate_gr_db: f64,
+        auto_db: f64,
+        duck_db: f64,
+        in_db: f64,
+    },
 }
 
 // `db_to_meter_level`/`parse_level_message` leben seit 2026-08-06 in
@@ -99,6 +110,8 @@ pub enum Event {
 // hier vermieden (Aufrufer unten nutzen `levels::`-Präfix direkt), reine
 // Verschiebung ohne Verhaltensänderung.
 use omp_mediaio::levels::parse_level_message;
+
+use crate::dsp;
 
 /// Woher ein Kanal sein Audio bezieht — `Internal` (Testton) oder
 /// `External` (echter MXL-Audio-Flow, per `flow_id` adressiert; die
@@ -110,57 +123,15 @@ pub enum ChannelSource {
     External { flow_id: String },
 }
 
-/// Ein EQ-Band von `equalizer-nbands` (§4.6, docs/END-GOAL-FEATURES.md
-/// 2026-07-17 Nachtrag): per Live-Introspektion verifiziert (nicht
-/// geraten, `UMSETZUNG.md` §0 Punkt 6) — `num-bands=3` weist den drei
-/// `GstIirEqualizerBand`-Kindobjekten automatisch Low-Shelf/Peak/
-/// High-Shelf zu (Reihenfolge 0/1/2), passend zur bisherigen Low/Mid/
-/// High-Benennung, jetzt mit einstellbarer Frequenz+Bandbreite statt
-/// nur Gain.
-#[derive(Clone, Copy)]
-pub enum EqBand {
-    Low,
-    Mid,
-    High,
-}
-
-impl EqBand {
-    fn child_index(self) -> u32 {
-        match self {
-            EqBand::Low => 0,
-            EqBand::Mid => 1,
-            EqBand::High => 2,
-        }
-    }
-}
-
-/// Kompressor-Parameter (§4.6 Teil 2, ein `audiodynamic`-Element pro
-/// Kanal bzw. auf dem Master-Bus). `threshold_db`/`makeup_db` sind
-/// Anwender-Einheiten (dB) — die Rust-Seite rechnet `threshold`
-/// (`audiodynamic` erwartet **linear** 0..1, kein dB, live per
-/// `gst-inspect-1.0 audiodynamic` verifiziert) und `makeup_db` (eigenes
-/// `volume`-Element danach, `audiodynamic` selbst hat keine Makeup-
-/// Gain-Eigenschaft) um. `enabled=false` erzwingt `ratio=1.0`
-/// (Bypass ohne das Element aus der Pipeline zu entfernen — bei
-/// `ratio=1` ist die Wirkung unabhängig vom Threshold ein No-Op).
-#[derive(Clone, Copy)]
-pub struct CompParams {
-    pub enabled: bool,
-    pub threshold_db: f64,
-    pub ratio: f64,
-    pub makeup_db: f64,
-}
-
+#[allow(clippy::large_enum_variant)]
 enum Command {
     AddChannel { id: String, source: ChannelSource },
     RemoveChannel(String),
     SetChannelSource { id: String, source: ChannelSource },
     SetGain { id: String, db: f64 },
     SetMute { id: String, muted: bool },
-    SetEq { id: String, low: f64, mid: f64, high: f64 },
-    SetEqBand { id: String, band: EqBand, freq: f64, width: f64 },
-    SetComp { id: String, params: CompParams },
-    SetMasterLimiter { params: CompParams },
+    SetProc { id: String, params: dsp::ProcParams },
+    SetMasterLimiter { params: dsp::CompParams },
     SetPfl { id: String, enabled: bool },
 }
 
@@ -201,21 +172,13 @@ impl PipelineHandle {
         let _ = self.commands.send(Command::SetMute { id, muted });
     }
 
-    pub fn set_eq(&self, id: String, low: f64, mid: f64, high: f64) {
-        let _ = self
-            .commands
-            .send(Command::SetEq { id, low, mid, high });
+    /// Komplette Bearbeitungsparameter eines Kanals (EQ/Gate/Comp/Delay/Pan,
+    /// `dsp::ProcParams`) — wirkt über Pad-Probe direkt im Audio-Thread.
+    pub fn set_proc(&self, id: String, params: dsp::ProcParams) {
+        let _ = self.commands.send(Command::SetProc { id, params });
     }
 
-    pub fn set_eq_band(&self, id: String, band: EqBand, freq: f64, width: f64) {
-        let _ = self.commands.send(Command::SetEqBand { id, band, freq, width });
-    }
-
-    pub fn set_comp(&self, id: String, params: CompParams) {
-        let _ = self.commands.send(Command::SetComp { id, params });
-    }
-
-    pub fn set_master_limiter(&self, params: CompParams) {
+    pub fn set_master_limiter(&self, params: dsp::CompParams) {
         let _ = self.commands.send(Command::SetMasterLimiter { params });
     }
 
@@ -228,44 +191,29 @@ impl PipelineHandle {
     }
 }
 
-/// dB → lineares `volume`-Pad-Property (0 dB = 1.0), Standardformel.
-fn db_to_linear(db: f64) -> f64 {
-    10f64.powf(db / 20.0)
-}
 
-/// Setzt Frequenz+Bandbreite (Hz) eines `equalizer-nbands`-Bands über
-/// `GstChildProxy` — Gain bleibt unangetastet (eigener, unveränderter
-/// `SetEq`-Pfad, s. Moduldoku bei `EqBand`).
-fn apply_eq_band(eq: &gst::Element, band: EqBand, freq: f64, width: f64) {
-    let Some(proxy) = eq.dynamic_cast_ref::<gst::ChildProxy>() else {
+/// Bearbeitet einen F32LE-Buffer in place (nach `audioconvert`+Capsfilter
+/// garantiert interleaved Stereo). Byte-weise Umwandlung statt
+/// Zeiger-Umdeuten — kein `unsafe`, der Kopieraufwand (10 ms Audio) ist
+/// vernachlässigbar.
+fn with_f32_samples(buf: &mut gst::BufferRef, scratch: &mut Vec<f32>, f: impl FnOnce(&mut [f32])) {
+    let Ok(mut map) = buf.map_writable() else {
         return;
     };
-    let Some(child) = proxy.child_by_index(band.child_index()) else {
-        return;
-    };
-    child.set_property("freq", freq);
-    child.set_property("bandwidth", width);
-}
-
-fn apply_eq_gain(eq: &gst::Element, low: f64, mid: f64, high: f64) {
-    let Some(proxy) = eq.dynamic_cast_ref::<gst::ChildProxy>() else {
-        return;
-    };
-    for (index, gain) in [(0u32, low), (1, mid), (2, high)] {
-        if let Some(child) = proxy.child_by_index(index) {
-            child.set_property("gain", gain);
-        }
+    let bytes = map.as_mut_slice();
+    scratch.clear();
+    scratch.extend(bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])));
+    f(scratch);
+    for (c, v) in bytes.chunks_exact_mut(4).zip(scratch.iter()) {
+        c.copy_from_slice(&v.to_le_bytes());
     }
 }
 
-/// Übernimmt Kompressor-Parameter auf ein `audiodynamic`-Element plus
-/// das direkt danach verkettete Makeup-`volume`-Element (s. `CompParams`-
-/// Doku: `enabled=false` erzwingt `ratio=1.0`, kein Pipeline-Umbau).
-fn apply_comp_params(comp: &gst::Element, makeup: &gst::Element, params: &CompParams) {
-    let ratio = if params.enabled { params.ratio.max(1.0) } else { 1.0 };
-    comp.set_property("ratio", ratio as f32);
-    comp.set_property("threshold", db_to_linear(params.threshold_db).clamp(0.0, 1.0) as f32);
-    makeup.set_property("volume", db_to_linear(params.makeup_db));
+/// Master-Limiter-Parameter + Gain-Reduction-Anzeige (Audio-Thread liest/schreibt).
+struct MasterShared {
+    params: std::sync::Mutex<dsp::CompParams>,
+    version: AtomicU64,
+    gr_db: dsp::AtomicF32,
 }
 
 struct ChannelBranch {
@@ -275,12 +223,6 @@ struct ChannelBranch {
     /// Testton-Fall funktionierte. Bei externer Quelle stammen die
     /// vorderen Elemente aus `MxlAudioInput::elements`.
     elements: Vec<gst::Element>,
-    eq: gst::Element,
-    /// Kompressor + Makeup-Gain (§4.6 Teil 2) — separat von `elements`
-    /// referenziert, weil Kommandos gezielt genau diese beiden
-    /// Elemente ansprechen (analog `eq` oben).
-    comp: gst::Element,
-    comp_makeup: gst::Element,
     mixer_pad: gst::Pad,
     /// Solo/PFL-Prefader-Abgriff (Nutzerwunsch 2026-07-29): `volume`-
     /// Element zwischen dem Kanal-`tee` (nach `level`, vor `mixer_pad` —
@@ -302,10 +244,11 @@ struct ActivePipeline {
     pipeline: gst::Pipeline,
     mixer: gst::Element,
     channels: HashMap<String, ChannelBranch>,
-    /// Master-Limiter + Makeup-Gain (§4.6 Teil 2), zwischen `mixer` und
-    /// `level_master` — s. `build()`.
-    master_limiter: gst::Element,
-    master_makeup: gst::Element,
+    /// Master-Limiter (Kompressor-Kern aus `dsp.rs`, Pad-Probe zwischen
+    /// `mixer` und `level_master`) — Parameter hinter Mutex+Versionszähler.
+    master_params: Arc<MasterShared>,
+    /// Kanal-DSP-Zustände über Quellwechsel hinweg (Kapitel 26).
+    shared: HashMap<String, Arc<dsp::ChannelShared>>,
     _mxl_output: MxlAudioOutput,
     /// Solo/PFL-Monitor-Bus (Nutzerwunsch 2026-07-29) — separater
     /// `audiomixer`, den jeder Kanalzweig über seinen `pfl_gain` sowie
@@ -390,42 +333,77 @@ fn add_channel_branch(
     let convert = gst::ElementFactory::make("audioconvert")
         .build()
         .map_err(|e| format!("audioconvert ({id}): {e}"))?;
-    // §4.6 (docs/END-GOAL-FEATURES.md, 2026-07-17): `equalizer-nbands`
-    // statt `equalizer-3bands` — bei `num-bands=3` weisen sich die drei
-    // Kindobjekte automatisch Low-Shelf/Peak/High-Shelf zu (per
-    // Live-Introspektion verifiziert, s. `EqBand`-Doku), macht Low/Mid/
-    // High jetzt frequenz-/bandbreiten-einstellbar statt nur im Gain.
-    let eq = gst::ElementFactory::make("equalizer-nbands")
-        .name(format!("eq-{id}"))
-        .property("num-bands", 3u32)
+    let resample = gst::ElementFactory::make("audioresample")
         .build()
-        .map_err(|e| format!("equalizer-nbands ({id}): {e}"))?;
-    apply_eq_band(&eq, EqBand::Low, 100.0, 200.0);
-    apply_eq_band(&eq, EqBand::Mid, 1000.0, 1000.0);
-    apply_eq_band(&eq, EqBand::High, 8000.0, 4000.0);
+        .map_err(|e| format!("audioresample ({id}): {e}"))?;
+    // Eigenes DSP (Kapitel 26, `dsp.rs`): ab hier garantiert F32LE/48k/
+    // Stereo-interleaved, damit die Probes direkt auf Samples rechnen.
+    let caps = gst::ElementFactory::make("capsfilter")
+        .property(
+            "caps",
+            gst::Caps::builder("audio/x-raw")
+                .field("format", "F32LE")
+                .field("layout", "interleaved")
+                .field("rate", SAMPLE_RATE as i32)
+                .field("channels", CHANNELS as i32)
+                .build(),
+        )
+        .build()
+        .map_err(|e| format!("capsfilter ({id}): {e}"))?;
+    // Probe A (Bearbeitung): HPF → EQ → Detektor → Gate → Kompressor →
+    // Delay → Pan. Hängt an einem `identity`, damit die Stufe ein eigenes
+    // Element im Zweig ist (sauberes Entfernen mit dem Zweig).
+    let proc_el = gst::ElementFactory::make("identity")
+        .name(format!("proc-{id}"))
+        .build()
+        .map_err(|e| format!("identity/proc ({id}): {e}"))?;
 
-    // Kompressor + Makeup-Gain (§4.6 Teil 2) — startet deaktiviert
-    // (`ratio=1`, No-Op, s. `apply_comp_params`), damit ein neuer Kanal
-    // sich klanglich nicht von vor diesem Schritt unterscheidet.
-    let comp = gst::ElementFactory::make("audiodynamic")
-        .name(format!("comp-{id}"))
-        .build()
-        .map_err(|e| format!("audiodynamic ({id}): {e}"))?;
-    let comp_makeup = gst::ElementFactory::make("volume")
-        .name(format!("comp-makeup-{id}"))
-        .build()
-        .map_err(|e| format!("volume/makeup ({id}): {e}"))?;
-    apply_comp_params(
-        &comp,
-        &comp_makeup,
-        &CompParams { enabled: false, threshold_db: 0.0, ratio: 1.0, makeup_db: 0.0 },
-    );
+    let shared = active
+        .shared
+        .entry(id.to_string())
+        .or_insert_with(|| Arc::new(dsp::ChannelShared::new()))
+        .clone();
+    {
+        let shared = shared.clone();
+        let stage = Mutex::new((dsp::ProcStage::new(), 0u64, Vec::<f32>::new()));
+        let pad = proc_el.static_pad("src").ok_or("proc: no src pad")?;
+        pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+            if let Some(gst::PadProbeData::Buffer(buffer)) = info.data.as_mut() {
+                let mut guard = stage.lock().expect("lock poisoned");
+                let (stage, seen, scratch) = &mut *guard;
+                shared.refresh(stage, seen);
+                with_f32_samples(buffer.make_mut(), scratch, |samples| {
+                    stage.process(samples, &shared.meters)
+                });
+            }
+            gst::PadProbeReturn::Ok
+        });
+    }
 
-    // Metering (K4-Teil-1, `docs/END-GOAL-FEATURES.md` §4.3a): **nach**
-    // EQ+Kompressor, weiterhin **vor** dem Fader (Gain/Mute bleiben
-    // `audiomixer`-Sink-Pad-Properties, s. Moduldoku "Gain/Mute als
-    // Pad-Property") — zeigt jetzt den tatsächlich klangformenden
-    // Signalpfad inklusive Kompressor, nicht mehr nur den EQ'ten Pegel.
+    // Probe B (Fader-Stufe, vor dem Mixer-Pad): Fader · Mute · AutoMix ·
+    // Ducking als ein geglätteter Gain. Ersetzt Pad-Volume/-Mute des
+    // `audiomixer` — API (`setGain`/`setMute`) unverändert.
+    let fader_el = gst::ElementFactory::make("identity")
+        .name(format!("fader-{id}"))
+        .build()
+        .map_err(|e| format!("identity/fader ({id}): {e}"))?;
+    {
+        let shared = shared.clone();
+        let stage = Mutex::new((dsp::FaderStage::new(), Vec::<f32>::new()));
+        let pad = fader_el.static_pad("src").ok_or("fader: no src pad")?;
+        pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+            if let Some(gst::PadProbeData::Buffer(buffer)) = info.data.as_mut() {
+                let mut guard = stage.lock().expect("lock poisoned");
+                let (stage, scratch) = &mut *guard;
+                let target = shared.total_gain();
+                with_f32_samples(buffer.make_mut(), scratch, |samples| stage.process(samples, target));
+            }
+            gst::PadProbeReturn::Ok
+        });
+    }
+
+    // Metering (K4-Teil-1, `docs/END-GOAL-FEATURES.md` §4.3a): nach der
+    // Bearbeitung, vor dem Fader (zeigt den klangformenden Signalpfad).
     let level = gst::ElementFactory::make("level")
         .name(format!("level-{id}"))
         .property("interval", LEVEL_INTERVAL_NS)
@@ -435,14 +413,17 @@ fn add_channel_branch(
     active
         .pipeline
         .add(&convert)
-        .and_then(|()| active.pipeline.add(&eq))
-        .and_then(|()| active.pipeline.add(&comp))
-        .and_then(|()| active.pipeline.add(&comp_makeup))
+        .and_then(|()| active.pipeline.add(&resample))
+        .and_then(|()| active.pipeline.add(&caps))
+        .and_then(|()| active.pipeline.add(&proc_el))
+        .and_then(|()| active.pipeline.add(&fader_el))
         .and_then(|()| active.pipeline.add(&level))
         .map_err(|e| format!("add channel elements ({id}): {e}"))?;
-    gst::Element::link_many([&tail, &convert, &eq, &comp, &comp_makeup, &level])
+    gst::Element::link_many([&tail, &convert, &resample, &caps, &proc_el, &level])
         .map_err(|e| format!("link channel chain ({id}): {e}"))?;
     elements.push(convert);
+    elements.push(resample.clone());
+    elements.push(caps.clone());
 
     // Solo/PFL-Abzweig (Nutzerwunsch 2026-07-29): ein `tee` direkt hinter
     // `level` speist zusätzlich zum unveränderten Haupt-Pfad
@@ -474,7 +455,7 @@ fn add_channel_branch(
         .and_then(|()| active.pipeline.add(&pfl_gain))
         .map_err(|e| format!("add pfl elements ({id}): {e}"))?;
     gst::Element::link_many([&level, &pfl_tee]).map_err(|e| format!("link level to pfl tee ({id}): {e}"))?;
-    gst::Element::link_many([&pfl_tee, &main_queue])
+    gst::Element::link_many([&pfl_tee, &main_queue, &fader_el])
         .map_err(|e| format!("link pfl tee to main queue ({id}): {e}"))?;
     gst::Element::link_many([&pfl_tee, &pfl_queue, &pfl_gain])
         .map_err(|e| format!("link pfl tee to pfl gain ({id}): {e}"))?;
@@ -483,9 +464,9 @@ fn add_channel_branch(
         .mixer
         .request_pad_simple("sink_%u")
         .ok_or_else(|| format!("audiomixer: request sink pad failed ({id})"))?;
-    main_queue
+    fader_el
         .static_pad("src")
-        .ok_or("main_queue: no src pad")?
+        .ok_or("fader: no src pad")?
         .link(&mixer_pad)
         .map_err(|e| format!("link main queue to mixer ({id}): {e}"))?;
 
@@ -504,15 +485,14 @@ fn add_channel_branch(
     // bleiben sie in NULL/READY hängen und liefern nie Daten.
     for el in elements
         .iter()
-        .chain([&eq, &comp, &comp_makeup, &level, &pfl_tee, &main_queue, &pfl_queue, &pfl_gain])
+        .chain([&proc_el, &fader_el, &level, &pfl_tee, &main_queue, &pfl_queue, &pfl_gain])
     {
         el.sync_state_with_parent()
             .map_err(|e| format!("sync_state_with_parent ({id}): {e}"))?;
     }
 
-    elements.push(eq.clone());
-    elements.push(comp.clone());
-    elements.push(comp_makeup.clone());
+    elements.push(proc_el);
+    elements.push(fader_el);
     elements.push(level.clone());
     elements.push(pfl_tee);
     elements.push(main_queue);
@@ -522,9 +502,6 @@ fn add_channel_branch(
         id.to_string(),
         ChannelBranch {
             elements,
-            eq,
-            comp,
-            comp_makeup,
             mixer_pad,
             pfl_gain,
             pfl_pad,
@@ -533,6 +510,14 @@ fn add_channel_branch(
         },
     );
     Ok(())
+}
+
+fn shared_for(active: &mut ActivePipeline, id: &str) -> Arc<dsp::ChannelShared> {
+    active
+        .shared
+        .entry(id.to_string())
+        .or_insert_with(|| Arc::new(dsp::ChannelShared::new()))
+        .clone()
 }
 
 fn remove_channel_branch(active: &mut ActivePipeline, id: &str) {
@@ -568,21 +553,47 @@ fn build(context: &Arc<MxlContext>, config: &Config) -> Result<ActivePipeline, S
         .name("mixer")
         .build()
         .map_err(|e| format!("audiomixer: {e}"))?;
-    // Master-Limiter + Makeup-Gain (§4.6 Teil 2) — startet deaktiviert,
-    // gleiches No-Op-Prinzip wie pro Kanal (`apply_comp_params`).
-    let master_limiter = gst::ElementFactory::make("audiodynamic")
+    // Master-Limiter (Kompressor-Kern aus `dsp.rs`, Pad-Probe) — startet
+    // deaktiviert (No-Op). Capsfilter davor: Probe rechnet auf F32LE-Stereo.
+    let master_caps = gst::ElementFactory::make("capsfilter")
+        .property(
+            "caps",
+            gst::Caps::builder("audio/x-raw")
+                .field("format", "F32LE")
+                .field("layout", "interleaved")
+                .field("rate", SAMPLE_RATE as i32)
+                .field("channels", CHANNELS as i32)
+                .build(),
+        )
+        .build()
+        .map_err(|e| format!("capsfilter (master): {e}"))?;
+    let master_el = gst::ElementFactory::make("identity")
         .name("master-limiter")
         .build()
-        .map_err(|e| format!("audiodynamic (master): {e}"))?;
-    let master_makeup = gst::ElementFactory::make("volume")
-        .name("master-makeup")
-        .build()
-        .map_err(|e| format!("volume/makeup (master): {e}"))?;
-    apply_comp_params(
-        &master_limiter,
-        &master_makeup,
-        &CompParams { enabled: false, threshold_db: 0.0, ratio: 1.0, makeup_db: 0.0 },
-    );
+        .map_err(|e| format!("identity (master): {e}"))?;
+    let master_params = Arc::new(MasterShared {
+        params: std::sync::Mutex::new(dsp::CompParams::default()),
+        version: AtomicU64::new(1),
+        gr_db: dsp::AtomicF32::new(0.0),
+    });
+    {
+        let shared = master_params.clone();
+        let stage = Mutex::new((dsp::MasterStage::new(), 0u64, Vec::<f32>::new()));
+        let pad = master_el.static_pad("src").ok_or("master: no src pad")?;
+        pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+            if let Some(gst::PadProbeData::Buffer(buffer)) = info.data.as_mut() {
+                let mut guard = stage.lock().expect("lock poisoned");
+                let (stage, seen, scratch) = &mut *guard;
+                let v = shared.version.load(Ordering::Acquire);
+                if v != *seen {
+                    stage.set(*shared.params.lock().expect("lock poisoned"));
+                    *seen = v;
+                }
+                with_f32_samples(buffer.make_mut(), scratch, |samples| stage.process(samples, &shared.gr_db));
+            }
+            gst::PadProbeReturn::Ok
+        });
+    }
     // Master-Meter (K4-Teil-1, §4.3a) — **nach** dem Limiter: zeigt den
     // tatsächlich gesendeten Pegel, nicht den unlimitierten Mix (echtes
     // Post-Fader-Metering, der Master-Ausgang hat keinen separaten
@@ -594,11 +605,11 @@ fn build(context: &Arc<MxlContext>, config: &Config) -> Result<ActivePipeline, S
         .map_err(|e| format!("level (master): {e}"))?;
     pipeline
         .add(&mixer)
-        .and_then(|()| pipeline.add(&master_limiter))
-        .and_then(|()| pipeline.add(&master_makeup))
+        .and_then(|()| pipeline.add(&master_caps))
+        .and_then(|()| pipeline.add(&master_el))
         .and_then(|()| pipeline.add(&level_master))
         .map_err(|e| format!("add audiomixer/limiter/level: {e}"))?;
-    gst::Element::link_many([&mixer, &master_limiter, &master_makeup, &level_master])
+    gst::Element::link_many([&mixer, &master_caps, &master_el, &level_master])
         .map_err(|e| format!("link mixer to level (master): {e}"))?;
 
     // Solo/PFL-Monitor-Bus (Nutzerwunsch 2026-07-29, K4-Entscheidung
@@ -691,8 +702,8 @@ fn build(context: &Arc<MxlContext>, config: &Config) -> Result<ActivePipeline, S
         pipeline,
         mixer,
         channels: HashMap::new(),
-        master_limiter,
-        master_makeup,
+        master_params,
+        shared: HashMap::new(),
         _mxl_output: mxl_output,
         pfl_mixer,
         master_pfl_gain,
@@ -758,7 +769,30 @@ pub fn run(
     // Zuordnung für den Timeout-Retry unten.
     let mut pending_channels: HashMap<String, ChannelSource> = HashMap::new();
 
+    let mut last_dsp_report = std::time::Instant::now();
     loop {
+        if last_dsp_report.elapsed() >= Duration::from_millis(100) {
+            last_dsp_report = std::time::Instant::now();
+            for (id, sh) in &active.shared {
+                let m = &sh.meters;
+                let _ = tx.send(Event::Dsp {
+                    channel_id: Some(id.clone()),
+                    comp_gr_db: m.comp_gr_db.get() as f64,
+                    gate_gr_db: m.gate_gr_db.get() as f64,
+                    auto_db: sh.auto_db.get() as f64,
+                    duck_db: sh.duck_db.get() as f64,
+                    in_db: m.rms_db.get() as f64,
+                });
+            }
+            let _ = tx.send(Event::Dsp {
+                channel_id: None,
+                comp_gr_db: active.master_params.gr_db.get() as f64,
+                gate_gr_db: 0.0,
+                auto_db: 0.0,
+                duck_db: 0.0,
+                in_db: 0.0,
+            });
+        }
         // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
         // Nachtrag 130/131).
         heartbeat.fetch_add(1, Ordering::Relaxed);
@@ -784,6 +818,7 @@ pub fn run(
             }
             Ok(Command::RemoveChannel(id)) => {
                 pending_channels.remove(&id);
+                active.shared.remove(&id);
                 remove_channel_branch(&mut active, &id);
             }
             Ok(Command::SetChannelSource { id, source }) => {
@@ -805,33 +840,22 @@ pub fn run(
                     }
                 }
             }
+            // Gain/Mute/Parameter landen im geteilten Kanalzustand (auch vor
+            // dem ersten erfolgreichen Zweigaufbau, z. B. bei noch nicht
+            // vorhandenem externem Flow) — die Probes im Audio-Thread lesen
+            // ihn bei jedem Buffer.
             Ok(Command::SetGain { id, db }) => {
-                if let Some(branch) = active.channels.get(&id) {
-                    branch.mixer_pad.set_property("volume", db_to_linear(db));
-                }
+                shared_for(&mut active, &id).fader_db.set(db as f32);
             }
             Ok(Command::SetMute { id, muted }) => {
-                if let Some(branch) = active.channels.get(&id) {
-                    branch.mixer_pad.set_property("mute", muted);
-                }
+                shared_for(&mut active, &id).muted.store(muted, Ordering::Relaxed);
             }
-            Ok(Command::SetEq { id, low, mid, high }) => {
-                if let Some(branch) = active.channels.get(&id) {
-                    apply_eq_gain(&branch.eq, low, mid, high);
-                }
-            }
-            Ok(Command::SetEqBand { id, band, freq, width }) => {
-                if let Some(branch) = active.channels.get(&id) {
-                    apply_eq_band(&branch.eq, band, freq, width);
-                }
-            }
-            Ok(Command::SetComp { id, params }) => {
-                if let Some(branch) = active.channels.get(&id) {
-                    apply_comp_params(&branch.comp, &branch.comp_makeup, &params);
-                }
+            Ok(Command::SetProc { id, params }) => {
+                shared_for(&mut active, &id).set_params(params);
             }
             Ok(Command::SetMasterLimiter { params }) => {
-                apply_comp_params(&active.master_limiter, &active.master_makeup, &params);
+                *active.master_params.params.lock().expect("lock poisoned") = params;
+                active.master_params.version.fetch_add(1, Ordering::Release);
             }
             Ok(Command::SetPfl { id, enabled }) => {
                 let changed = if let Some(branch) = active.channels.get_mut(&id) {
@@ -865,7 +889,12 @@ pub fn run(
         // abholen (K4-Teil-1) — `pop_filtered` statt `timed_pop_filtered`,
         // damit dieser Schritt den nächsten Kommando-Wartezyklus nicht
         // zusätzlich verzögert.
-        while let Some(msg) = bus.pop_filtered(&[gst::MessageType::Element]) {
+        while let Some(msg) = bus.pop_filtered(&[gst::MessageType::Element, gst::MessageType::Error]) {
+            if let gst::MessageView::Error(err) = msg.view() {
+                let src = msg.src().map(|o| o.path_string().to_string()).unwrap_or_default();
+                let _ = tx.send(Event::Error(format!("GStreamer {src}: {} ({:?})", err.error(), err.debug())));
+                continue;
+            }
             let gst::MessageView::Element(el) = msg.view() else {
                 continue;
             };

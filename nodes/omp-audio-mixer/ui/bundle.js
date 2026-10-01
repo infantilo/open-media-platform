@@ -922,6 +922,7 @@ class OmpAudioMixerPanel extends HTMLElement {
         } catch {
           return;
         }
+        if (parsed.type === "dsp") return; // DSP-Zustand (Kapitel 26), kein Pegel
         if (parsed.channelId == null) {
           masterMeter.value = parsed.rms;
           masterMeter.peak = parsed.peak;

@@ -14,6 +14,7 @@
 //! B6/das eigene UI-Bundle re-fetchen entsprechend (kein Push-Mechanismus
 //! nötig, `ARCHITECTURE.md` §13.2).
 
+mod dsp;
 mod pipeline;
 mod uibundle;
 
@@ -39,45 +40,185 @@ use serde_json::Value;
 const FOLLOW_CROSSFADE_MS: u64 = 500;
 const FOLLOW_CROSSFADE_STEPS: u64 = 12;
 
-/// Kompressor-Zustand (§4.6 Teil 2) — geteilt zwischen Kanal (pro
-/// `ChannelState`) und Master (`AudioMixerStore::master_limiter`), da
-/// beide dieselben vier Werte brauchen (`pipeline::CompParams` ist das
-/// Pipeline-seitige Gegenstück, gleiche Felder).
-#[derive(Clone, Copy)]
-struct CompState {
-    enabled: bool,
-    threshold_db: f64,
-    ratio: f64,
-    makeup_db: f64,
+/// Bearbeitungsparameter-Tabelle (Kapitel 26): Name, Typ, Wertebereich.
+/// Einzige Quelle für Descriptor, `get` und State-Dokument — die
+/// Parameternamen der Altfassung (`eqLow`, `eqLowFreq`, `compThreshold`, …)
+/// bleiben unverändert, neue kommen dazu.
+const PROC_PARAMS: &[(&str, ParamType, Option<(f64, f64)>)] = &[
+    ("eqBypass", ParamType::Boolean, None),
+    ("eqHpEnabled", ParamType::Boolean, None),
+    ("eqHpFreq", ParamType::Number, Some((20.0, 500.0))),
+    ("eqLow", ParamType::Number, Some((-24.0, 12.0))),
+    ("eqMid", ParamType::Number, Some((-24.0, 12.0))),
+    ("eqMid2", ParamType::Number, Some((-24.0, 12.0))),
+    ("eqHigh", ParamType::Number, Some((-24.0, 12.0))),
+    ("eqLowFreq", ParamType::Number, Some((20.0, 20000.0))),
+    ("eqMidFreq", ParamType::Number, Some((20.0, 20000.0))),
+    ("eqMid2Freq", ParamType::Number, Some((20.0, 20000.0))),
+    ("eqHighFreq", ParamType::Number, Some((20.0, 20000.0))),
+    ("eqLowWidth", ParamType::Number, Some((10.0, 20000.0))),
+    ("eqMidWidth", ParamType::Number, Some((10.0, 20000.0))),
+    ("eqMid2Width", ParamType::Number, Some((10.0, 20000.0))),
+    ("eqHighWidth", ParamType::Number, Some((10.0, 20000.0))),
+    ("compEnabled", ParamType::Boolean, None),
+    ("compThreshold", ParamType::Number, Some((-60.0, 0.0))),
+    ("compRatio", ParamType::Number, Some((1.0, 20.0))),
+    ("compMakeup", ParamType::Number, Some((0.0, 24.0))),
+    ("compAttack", ParamType::Number, Some((0.1, 200.0))),
+    ("compRelease", ParamType::Number, Some((5.0, 2000.0))),
+    ("compKnee", ParamType::Number, Some((0.0, 24.0))),
+    ("compRms", ParamType::Boolean, None),
+    ("gateEnabled", ParamType::Boolean, None),
+    ("gateThreshold", ParamType::Number, Some((-90.0, 0.0))),
+    ("gateRange", ParamType::Number, Some((-90.0, 0.0))),
+    ("gateRatio", ParamType::Number, Some((1.0, 100.0))),
+    ("gateAttack", ParamType::Number, Some((0.1, 200.0))),
+    ("gateHold", ParamType::Number, Some((0.0, 2000.0))),
+    ("gateRelease", ParamType::Number, Some((5.0, 4000.0))),
+    ("gateHysteresis", ParamType::Number, Some((0.0, 20.0))),
+    ("delayEnabled", ParamType::Boolean, None),
+    ("delayMs", ParamType::Number, Some((0.0, 2000.0))),
+    ("pan", ParamType::Number, Some((-1.0, 1.0))),
+];
+
+fn proc_get(p: &dsp::ProcParams, prop: &str) -> Option<Value> {
+    let band = |i: usize| p.eq.bands[i];
+    let width = |i: usize| band(i).freq / band(i).q.max(0.01);
+    Some(match prop {
+        "eqBypass" => p.eq.bypass.into(),
+        "eqHpEnabled" => p.eq.hp_enabled.into(),
+        "eqHpFreq" => p.eq.hp_freq.into(),
+        "eqLow" => band(0).gain_db.into(),
+        "eqMid" => band(1).gain_db.into(),
+        "eqMid2" => band(2).gain_db.into(),
+        "eqHigh" => band(3).gain_db.into(),
+        "eqLowFreq" => band(0).freq.into(),
+        "eqMidFreq" => band(1).freq.into(),
+        "eqMid2Freq" => band(2).freq.into(),
+        "eqHighFreq" => band(3).freq.into(),
+        "eqLowWidth" => width(0).into(),
+        "eqMidWidth" => width(1).into(),
+        "eqMid2Width" => width(2).into(),
+        "eqHighWidth" => width(3).into(),
+        "compEnabled" => p.comp.enabled.into(),
+        "compThreshold" => p.comp.threshold_db.into(),
+        "compRatio" => p.comp.ratio.into(),
+        "compMakeup" => p.comp.makeup_db.into(),
+        "compAttack" => p.comp.attack_ms.into(),
+        "compRelease" => p.comp.release_ms.into(),
+        "compKnee" => p.comp.knee_db.into(),
+        "compRms" => p.comp.rms.into(),
+        "gateEnabled" => p.gate.enabled.into(),
+        "gateThreshold" => p.gate.threshold_db.into(),
+        "gateRange" => p.gate.range_db.into(),
+        "gateRatio" => p.gate.ratio.into(),
+        "gateAttack" => p.gate.attack_ms.into(),
+        "gateHold" => p.gate.hold_ms.into(),
+        "gateRelease" => p.gate.release_ms.into(),
+        "gateHysteresis" => p.gate.hysteresis_db.into(),
+        "delayEnabled" => p.delay_enabled.into(),
+        "delayMs" => p.delay_ms.into(),
+        "pan" => p.pan.into(),
+        _ => return None,
+    })
 }
 
-impl Default for CompState {
-    /// Deaktiviert, aber mit einem sinnvollen Ausgangspunkt für den
-    /// Fall, dass der Bediener nur den Enable-Schalter umlegt, ohne
-    /// vorher Werte gesetzt zu haben (Ratio 1.0 wäre wirkungslos).
-    fn default() -> Self {
-        CompState { enabled: false, threshold_db: -20.0, ratio: 2.0, makeup_db: 0.0 }
+/// Schreibt einen Parameterwert (mit Bereichsbegrenzung) in `p`; `false`
+/// bei unbekanntem Namen/falschem Typ.
+fn proc_set(p: &mut dsp::ProcParams, prop: &str, v: &Value) -> bool {
+    let Some(&(_, kind, range)) = PROC_PARAMS.iter().find(|(n, _, _)| *n == prop) else {
+        return false;
+    };
+    let num = |v: &Value| -> Option<f64> {
+        let x = v.as_f64()?;
+        Some(match range {
+            Some((lo, hi)) => x.clamp(lo, hi),
+            None => x,
+        })
+    };
+    let q_of = |freq: f64, width: f64| dsp::bandwidth_to_q(freq, width);
+    macro_rules! n {
+        () => {
+            match num(v) {
+                Some(x) => x,
+                None => return false,
+            }
+        };
     }
+    macro_rules! b {
+        () => {
+            match v.as_bool() {
+                Some(x) => x,
+                None => return false,
+            }
+        };
+    }
+    let _ = kind;
+    match prop {
+        "eqBypass" => p.eq.bypass = b!(),
+        "eqHpEnabled" => p.eq.hp_enabled = b!(),
+        "eqHpFreq" => p.eq.hp_freq = n!(),
+        "eqLow" => p.eq.bands[0].gain_db = n!(),
+        "eqMid" => p.eq.bands[1].gain_db = n!(),
+        "eqMid2" => p.eq.bands[2].gain_db = n!(),
+        "eqHigh" => p.eq.bands[3].gain_db = n!(),
+        "eqLowFreq" => p.eq.bands[0].freq = n!(),
+        "eqMidFreq" => p.eq.bands[1].freq = n!(),
+        "eqMid2Freq" => p.eq.bands[2].freq = n!(),
+        "eqHighFreq" => p.eq.bands[3].freq = n!(),
+        "eqLowWidth" | "eqMidWidth" | "eqMid2Width" | "eqHighWidth" => {
+            let i = match prop {
+                "eqLowWidth" => 0,
+                "eqMidWidth" => 1,
+                "eqMid2Width" => 2,
+                _ => 3,
+            };
+            let w = n!();
+            p.eq.bands[i].q = q_of(p.eq.bands[i].freq, w);
+        }
+        "compEnabled" => p.comp.enabled = b!(),
+        "compThreshold" => p.comp.threshold_db = n!(),
+        "compRatio" => p.comp.ratio = n!(),
+        "compMakeup" => p.comp.makeup_db = n!(),
+        "compAttack" => p.comp.attack_ms = n!(),
+        "compRelease" => p.comp.release_ms = n!(),
+        "compKnee" => p.comp.knee_db = n!(),
+        "compRms" => p.comp.rms = b!(),
+        "gateEnabled" => p.gate.enabled = b!(),
+        "gateThreshold" => p.gate.threshold_db = n!(),
+        "gateRange" => p.gate.range_db = n!(),
+        "gateRatio" => p.gate.ratio = n!(),
+        "gateAttack" => p.gate.attack_ms = n!(),
+        "gateHold" => p.gate.hold_ms = n!(),
+        "gateRelease" => p.gate.release_ms = n!(),
+        "gateHysteresis" => p.gate.hysteresis_db = n!(),
+        "delayEnabled" => p.delay_enabled = b!(),
+        "delayMs" => p.delay_ms = n!(),
+        "pan" => p.pan = n!(),
+        _ => return false,
+    }
+    true
 }
 
-impl CompState {
-    fn to_pipeline_params(self) -> pipeline::CompParams {
-        pipeline::CompParams {
-            enabled: self.enabled,
-            threshold_db: self.threshold_db,
-            ratio: self.ratio,
-            makeup_db: self.makeup_db,
+/// Wendet alle im JSON-Objekt vorhandenen Bearbeitungsparameter an
+/// (fehlende bleiben beim Ausgangswert — Rückwärtskompatibilität alter
+/// Presets, die die neuen Felder nicht kennen).
+fn proc_from_json(base: dsp::ProcParams, doc: &Value) -> dsp::ProcParams {
+    let mut p = base;
+    for (name, _, _) in PROC_PARAMS {
+        if let Some(v) = doc.get(*name) {
+            proc_set(&mut p, name, v);
         }
     }
+    p
 }
 
-/// Ein EQ-Band-Zustand (Frequenz+Bandbreite; Gain bleibt bei `eq_low`
-/// u. a. unten, unverändert seit vor §4.6) — Defaults spiegeln die
-/// Pipeline-Defaults aus `pipeline.rs::add_channel_branch`.
-#[derive(Clone, Copy)]
-struct EqBandState {
-    freq: f64,
-    width: f64,
+fn proc_to_json(p: &dsp::ProcParams, out: &mut serde_json::Map<String, Value>) {
+    for (name, _, _) in PROC_PARAMS {
+        if let Some(v) = proc_get(p, name) {
+            out.insert((*name).to_string(), v);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -95,13 +236,9 @@ struct ChannelState {
     /// auf einen längst irrelevanten Kanal stehen lassen (analog dazu,
     /// dass echte Konsolen Solo/PFL ebenfalls nicht in Szenen speichern).
     pfl: bool,
-    eq_low: f64,
-    eq_mid: f64,
-    eq_high: f64,
-    eq_low_band: EqBandState,
-    eq_mid_band: EqBandState,
-    eq_high_band: EqBandState,
-    comp: CompState,
+    /// EQ/Gate/Kompressor/Delay/Pan (`dsp::ProcParams`) — wirkt direkt in
+    /// der DSP-Probe der Pipeline.
+    proc: dsp::ProcParams,
     /// Node-ID der zu verfolgenden Quelle (Tally-Bus-Subject,
     /// `omp.tally.<node_id>`) — leer = keine Kopplung.
     follow_target: String,
@@ -158,13 +295,7 @@ impl ChannelState {
             gain_db: 0.0,
             mute: false,
             pfl: false,
-            eq_low: 0.0,
-            eq_mid: 0.0,
-            eq_high: 0.0,
-            eq_low_band: EqBandState { freq: 100.0, width: 200.0 },
-            eq_mid_band: EqBandState { freq: 1000.0, width: 1000.0 },
-            eq_high_band: EqBandState { freq: 8000.0, width: 4000.0 },
-            comp: CompState::default(),
+            proc: dsp::ProcParams::default(),
             follow_target: String::new(),
             follow_mode: "off".to_string(),
             override_enabled: false,
@@ -199,7 +330,7 @@ struct AudioMixerStore {
     /// Master-Limiter-Zustand (§4.6 Teil 2) — im Gegensatz zu den
     /// Kanal-Kompressoren nicht Teil einer Liste, deshalb ein eigenes
     /// Feld statt eines `channel.<id>.*`-Eintrags.
-    master_limiter: Mutex<CompState>,
+    master_limiter: Mutex<dsp::CompParams>,
 }
 
 /// Testton-Frequenz pro Kanal — nur zur akustischen Unterscheidbarkeit im
@@ -334,51 +465,16 @@ impl ParamStore for AudioMixerStore {
             ));
             parameters.push(channel_param(id, "mute", ParamType::Boolean, None));
             parameters.push(channel_param(id, "pfl", ParamType::Boolean, None));
-            for band in ["eqLow", "eqMid", "eqHigh"] {
+            // Kapitel 26: EQ (HPF + 4 Bänder), Kompressor, Gate/Expander,
+            // Delay, Pan — Tabelle `PROC_PARAMS`, wirkt in der DSP-Probe.
+            for (name, kind, range) in PROC_PARAMS {
                 parameters.push(channel_param(
                     id,
-                    band,
-                    ParamType::Number,
-                    Some(Range::Number { min: -24.0, max: 12.0 }),
+                    name,
+                    *kind,
+                    range.map(|(min, max)| Range::Number { min, max }),
                 ));
             }
-            // §4.6: Frequenz+Bandbreite je Band (`equalizer-nbands`
-            // statt `equalizer-3bands`) — Gain bleibt in `eqLow`/
-            // `eqMid`/`eqHigh` oben, unverändert seit vor diesem Schritt.
-            for band in ["eqLow", "eqMid", "eqHigh"] {
-                parameters.push(channel_param(
-                    id,
-                    &format!("{band}Freq"),
-                    ParamType::Number,
-                    Some(Range::Number { min: 20.0, max: 20000.0 }),
-                ));
-                parameters.push(channel_param(
-                    id,
-                    &format!("{band}Width"),
-                    ParamType::Number,
-                    Some(Range::Number { min: 10.0, max: 20000.0 }),
-                ));
-            }
-            // §4.6 Teil 2: Kompressor pro Kanal.
-            parameters.push(channel_param(id, "compEnabled", ParamType::Boolean, None));
-            parameters.push(channel_param(
-                id,
-                "compThreshold",
-                ParamType::Number,
-                Some(Range::Number { min: -60.0, max: 0.0 }),
-            ));
-            parameters.push(channel_param(
-                id,
-                "compRatio",
-                ParamType::Number,
-                Some(Range::Number { min: 1.0, max: 20.0 }),
-            ));
-            parameters.push(channel_param(
-                id,
-                "compMakeup",
-                ParamType::Number,
-                Some(Range::Number { min: 0.0, max: 24.0 }),
-            ));
             // `senderId` der externen Quelle, leer = interner Testton.
             parameters.push(channel_param(id, "source", ParamType::String, None));
             parameters.push(channel_param(id, "followTarget", ParamType::String, None));
@@ -440,40 +536,57 @@ impl ParamStore for AudioMixerStore {
                     kind: ParamType::Boolean,
                 }],
             });
+            let num = |n: &str| MethodArg { name: n.to_string(), kind: ParamType::Number };
+            let flag = |n: &str| MethodArg { name: n.to_string(), kind: ParamType::Boolean };
             methods.push(MethodSpec {
                 name: format!("channel.{id}.setEq"),
-                args: vec![
-                    MethodArg {
-                        name: "low".to_string(),
-                        kind: ParamType::Number,
-                    },
-                    MethodArg {
-                        name: "mid".to_string(),
-                        kind: ParamType::Number,
-                    },
-                    MethodArg {
-                        name: "high".to_string(),
-                        kind: ParamType::Number,
-                    },
-                ],
+                args: vec![num("low"), num("mid"), num("high")],
+            });
+            methods.push(MethodSpec {
+                name: format!("channel.{id}.setEqGain"),
+                args: vec![MethodArg { name: "band".to_string(), kind: ParamType::String }, num("gainDb")],
             });
             methods.push(MethodSpec {
                 name: format!("channel.{id}.setEqBand"),
                 args: vec![
                     MethodArg { name: "band".to_string(), kind: ParamType::String },
-                    MethodArg { name: "freq".to_string(), kind: ParamType::Number },
-                    MethodArg { name: "width".to_string(), kind: ParamType::Number },
+                    num("freq"),
+                    num("width"),
                 ],
             });
             methods.push(MethodSpec {
+                name: format!("channel.{id}.setEqHp"),
+                args: vec![flag("enabled"), num("freq")],
+            });
+            methods.push(MethodSpec { name: format!("channel.{id}.setEqBypass"), args: vec![flag("bypass")] });
+            methods.push(MethodSpec {
                 name: format!("channel.{id}.setComp"),
                 args: vec![
-                    MethodArg { name: "enabled".to_string(), kind: ParamType::Boolean },
-                    MethodArg { name: "thresholdDb".to_string(), kind: ParamType::Number },
-                    MethodArg { name: "ratio".to_string(), kind: ParamType::Number },
-                    MethodArg { name: "makeupDb".to_string(), kind: ParamType::Number },
+                    flag("enabled"),
+                    num("thresholdDb"),
+                    num("ratio"),
+                    num("makeupDb"),
+                    num("attackMs"),
+                    num("releaseMs"),
+                    num("kneeDb"),
+                    flag("rms"),
                 ],
             });
+            methods.push(MethodSpec {
+                name: format!("channel.{id}.setGate"),
+                args: vec![
+                    flag("enabled"),
+                    num("thresholdDb"),
+                    num("rangeDb"),
+                    num("ratio"),
+                    num("attackMs"),
+                    num("holdMs"),
+                    num("releaseMs"),
+                    num("hysteresisDb"),
+                ],
+            });
+            methods.push(MethodSpec { name: format!("channel.{id}.setDelay"), args: vec![flag("enabled"), num("ms")] });
+            methods.push(MethodSpec { name: format!("channel.{id}.setPan"), args: vec![num("pan")] });
             methods.push(MethodSpec {
                 name: format!("channel.{id}.setSource"),
                 args: vec![MethodArg {
@@ -574,19 +687,7 @@ impl ParamStore for AudioMixerStore {
             "gain" => Some(serde_json::json!(ch.gain_db)),
             "mute" => Some(serde_json::json!(ch.mute)),
             "pfl" => Some(serde_json::json!(ch.pfl)),
-            "eqLow" => Some(serde_json::json!(ch.eq_low)),
-            "eqMid" => Some(serde_json::json!(ch.eq_mid)),
-            "eqHigh" => Some(serde_json::json!(ch.eq_high)),
-            "eqLowFreq" => Some(serde_json::json!(ch.eq_low_band.freq)),
-            "eqLowWidth" => Some(serde_json::json!(ch.eq_low_band.width)),
-            "eqMidFreq" => Some(serde_json::json!(ch.eq_mid_band.freq)),
-            "eqMidWidth" => Some(serde_json::json!(ch.eq_mid_band.width)),
-            "eqHighFreq" => Some(serde_json::json!(ch.eq_high_band.freq)),
-            "eqHighWidth" => Some(serde_json::json!(ch.eq_high_band.width)),
-            "compEnabled" => Some(serde_json::json!(ch.comp.enabled)),
-            "compThreshold" => Some(serde_json::json!(ch.comp.threshold_db)),
-            "compRatio" => Some(serde_json::json!(ch.comp.ratio)),
-            "compMakeup" => Some(serde_json::json!(ch.comp.makeup_db)),
+            other if proc_get(&ch.proc, other).is_some() => proc_get(&ch.proc, other),
             "source" => Some(serde_json::json!(ch.source)),
             "followTarget" => Some(serde_json::json!(ch.follow_target)),
             "followMode" => Some(serde_json::json!(ch.follow_mode)),
@@ -645,9 +746,9 @@ impl ParamStore for AudioMixerStore {
                     .ok_or(InvokeError::Unknown)?;
                 let ratio = args.get("ratio").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
                 let makeup_db = args.get("makeupDb").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
-                let state = CompState { enabled, threshold_db, ratio, makeup_db };
+                let state = master_limiter_params(enabled, threshold_db, ratio, makeup_db);
                 *self.master_limiter.lock().expect("lock poisoned") = state;
-                self.pipeline.set_master_limiter(state.to_pipeline_params());
+                self.pipeline.set_master_limiter(state);
                 Ok(())
             }
             _ => self.invoke_channel_method(name, args),
@@ -690,6 +791,43 @@ impl ParamStore for AudioMixerStore {
 /// Zerlegt `channel.<id>.<prop>` — `id` selbst kann kein `.` enthalten
 /// (per `ch<seq>`-Generierung, `invoke()` oben), ein einfacher Split
 /// reicht.
+/// Limiter-Charakter für den Master: schnelle Peak-Detektion, kein Knee
+/// (der Master-Limiter ist kein Klangformer, sondern Übersteuerungsschutz).
+fn master_limiter_params(enabled: bool, threshold_db: f64, ratio: f64, makeup_db: f64) -> dsp::CompParams {
+    dsp::CompParams {
+        enabled,
+        threshold_db,
+        ratio,
+        attack_ms: 1.0,
+        release_ms: 120.0,
+        knee_db: 0.0,
+        makeup_db,
+        rms: false,
+    }
+}
+
+/// Überträgt vorhandene Methoden-Argumente (`(Argumentname, Parametername)`)
+/// per `proc_set` auf `p`; fehlende Argumente bleiben unverändert, ein
+/// Argument mit falschem Typ ist ein Fehler.
+fn apply_args(
+    p: &mut dsp::ProcParams,
+    args: &serde_json::Map<String, Value>,
+    map: &[(&str, &str)],
+) -> Result<(), InvokeError> {
+    // Frequenz-/Bandbreitenreihenfolge ist hier unkritisch (keine Q-Umrechnung).
+    for (arg, param) in map {
+        if let Some(v) = args.get(*arg)
+            && !proc_set(p, param, v)
+        {
+            return Err(InvokeError::Unknown);
+        }
+    }
+    if map.is_empty() || map.iter().all(|(a, _)| !args.contains_key(*a)) {
+        return Err(InvokeError::Unknown);
+    }
+    Ok(())
+}
+
 fn parse_channel_name(name: &str) -> Option<(&str, &str)> {
     let rest = name.strip_prefix("channel.")?;
     rest.split_once('.')
@@ -712,15 +850,11 @@ impl AudioMixerStore {
             channels
                 .iter()
                 .map(|c| {
-                    serde_json::json!({
+                    let mut doc = serde_json::Map::new();
+                    proc_to_json(&c.proc, &mut doc);
+                    let rest = serde_json::json!({
                         "id": c.id, "label": c.label, "internalFreq": c.internal_freq,
                         "gainDb": c.gain_db, "mute": c.mute,
-                        "eqLow": c.eq_low, "eqMid": c.eq_mid, "eqHigh": c.eq_high,
-                        "eqLowFreq": c.eq_low_band.freq, "eqLowWidth": c.eq_low_band.width,
-                        "eqMidFreq": c.eq_mid_band.freq, "eqMidWidth": c.eq_mid_band.width,
-                        "eqHighFreq": c.eq_high_band.freq, "eqHighWidth": c.eq_high_band.width,
-                        "compEnabled": c.comp.enabled, "compThreshold": c.comp.threshold_db,
-                        "compRatio": c.comp.ratio, "compMakeup": c.comp.makeup_db,
                         "source": c.source,
                         "followTarget": c.follow_target, "followMode": c.follow_mode,
                         "overrideEnabled": c.override_enabled,
@@ -728,7 +862,11 @@ impl AudioMixerStore {
                         "followOnLevelDb": c.follow_on_level_db,
                         "followOffLevelDb": c.follow_off_level_db,
                         "followTransitionMs": c.follow_transition_ms,
-                    })
+                    });
+                    if let Value::Object(m) = rest {
+                        doc.extend(m);
+                    }
+                    Value::Object(doc)
                 })
                 .collect()
         };
@@ -776,27 +914,9 @@ impl AudioMixerStore {
 
             ch.gain_db = cd.get("gainDb").and_then(Value::as_f64).unwrap_or(0.0);
             ch.mute = cd.get("mute").and_then(Value::as_bool).unwrap_or(false);
-            ch.eq_low = cd.get("eqLow").and_then(Value::as_f64).unwrap_or(0.0);
-            ch.eq_mid = cd.get("eqMid").and_then(Value::as_f64).unwrap_or(0.0);
-            ch.eq_high = cd.get("eqHigh").and_then(Value::as_f64).unwrap_or(0.0);
-            ch.eq_low_band = EqBandState {
-                freq: cd.get("eqLowFreq").and_then(Value::as_f64).unwrap_or(ch.eq_low_band.freq),
-                width: cd.get("eqLowWidth").and_then(Value::as_f64).unwrap_or(ch.eq_low_band.width),
-            };
-            ch.eq_mid_band = EqBandState {
-                freq: cd.get("eqMidFreq").and_then(Value::as_f64).unwrap_or(ch.eq_mid_band.freq),
-                width: cd.get("eqMidWidth").and_then(Value::as_f64).unwrap_or(ch.eq_mid_band.width),
-            };
-            ch.eq_high_band = EqBandState {
-                freq: cd.get("eqHighFreq").and_then(Value::as_f64).unwrap_or(ch.eq_high_band.freq),
-                width: cd.get("eqHighWidth").and_then(Value::as_f64).unwrap_or(ch.eq_high_band.width),
-            };
-            ch.comp = CompState {
-                enabled: cd.get("compEnabled").and_then(Value::as_bool).unwrap_or(false),
-                threshold_db: cd.get("compThreshold").and_then(Value::as_f64).unwrap_or(-20.0),
-                ratio: cd.get("compRatio").and_then(Value::as_f64).unwrap_or(2.0),
-                makeup_db: cd.get("compMakeup").and_then(Value::as_f64).unwrap_or(0.0),
-            };
+            // Fehlende (neue) Felder bleiben auf Defaults — Presets aus der
+            // Zeit vor Kapitel 26 laden unverändert.
+            ch.proc = proc_from_json(ch.proc, cd);
             ch.follow_target = cd.get("followTarget").and_then(Value::as_str).unwrap_or("").to_string();
             ch.follow_mode = cd.get("followMode").and_then(Value::as_str).unwrap_or("off").to_string();
             ch.override_enabled = cd.get("overrideEnabled").and_then(Value::as_bool).unwrap_or(false);
@@ -819,39 +939,20 @@ impl AudioMixerStore {
 
             self.pipeline.set_gain(id.clone(), ch.gain_db);
             self.pipeline.set_mute(id.clone(), ch.mute);
-            self.pipeline.set_eq(id.clone(), ch.eq_low, ch.eq_mid, ch.eq_high);
-            self.pipeline.set_eq_band(
-                id.clone(),
-                pipeline::EqBand::Low,
-                ch.eq_low_band.freq,
-                ch.eq_low_band.width,
-            );
-            self.pipeline.set_eq_band(
-                id.clone(),
-                pipeline::EqBand::Mid,
-                ch.eq_mid_band.freq,
-                ch.eq_mid_band.width,
-            );
-            self.pipeline.set_eq_band(
-                id.clone(),
-                pipeline::EqBand::High,
-                ch.eq_high_band.freq,
-                ch.eq_high_band.width,
-            );
-            self.pipeline.set_comp(id.clone(), ch.comp.to_pipeline_params());
+            self.pipeline.set_proc(id.clone(), ch.proc);
 
             self.channels.lock().expect("lock poisoned").push(ch);
         }
 
         if let Some(ml) = doc.get("masterLimiter") {
-            let state = CompState {
-                enabled: ml.get("enabled").and_then(Value::as_bool).unwrap_or(false),
-                threshold_db: ml.get("thresholdDb").and_then(Value::as_f64).unwrap_or(-20.0),
-                ratio: ml.get("ratio").and_then(Value::as_f64).unwrap_or(2.0),
-                makeup_db: ml.get("makeupDb").and_then(Value::as_f64).unwrap_or(0.0),
-            };
+            let state = master_limiter_params(
+                ml.get("enabled").and_then(Value::as_bool).unwrap_or(false),
+                ml.get("thresholdDb").and_then(Value::as_f64).unwrap_or(-20.0),
+                ml.get("ratio").and_then(Value::as_f64).unwrap_or(2.0),
+                ml.get("makeupDb").and_then(Value::as_f64).unwrap_or(0.0),
+            );
             *self.master_limiter.lock().expect("lock poisoned") = state;
-            self.pipeline.set_master_limiter(state.to_pipeline_params());
+            self.pipeline.set_master_limiter(state);
         }
 
         Ok(())
@@ -911,42 +1012,100 @@ impl AudioMixerStore {
                 let low = args.get("low").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
                 let mid = args.get("mid").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
                 let high = args.get("high").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
-                ch.eq_low = low;
-                ch.eq_mid = mid;
-                ch.eq_high = high;
-                self.pipeline.set_eq(id.to_string(), low, mid, high);
+                for (k, v) in [("eqLow", low), ("eqMid", mid), ("eqHigh", high)] {
+                    proc_set(&mut ch.proc, k, &serde_json::json!(v));
+                }
+                self.pipeline.set_proc(id.to_string(), ch.proc);
+                Ok(())
+            }
+            "setEqGain" => {
+                let key = match args.get("band").and_then(Value::as_str) {
+                    Some("low") => "eqLow",
+                    Some("mid") => "eqMid",
+                    Some("mid2") => "eqMid2",
+                    Some("high") => "eqHigh",
+                    _ => return Err(InvokeError::Unknown),
+                };
+                let g = args.get("gainDb").ok_or(InvokeError::Unknown)?;
+                if !proc_set(&mut ch.proc, key, g) {
+                    return Err(InvokeError::Unknown);
+                }
+                self.pipeline.set_proc(id.to_string(), ch.proc);
                 Ok(())
             }
             "setEqBand" => {
-                let band_name = args.get("band").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
-                let freq = args.get("freq").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
-                let width = args.get("width").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
-                let band = match band_name {
-                    "low" => pipeline::EqBand::Low,
-                    "mid" => pipeline::EqBand::Mid,
-                    "high" => pipeline::EqBand::High,
+                let (fk, wk) = match args.get("band").and_then(Value::as_str) {
+                    Some("low") => ("eqLowFreq", "eqLowWidth"),
+                    Some("mid") => ("eqMidFreq", "eqMidWidth"),
+                    Some("mid2") => ("eqMid2Freq", "eqMid2Width"),
+                    Some("high") => ("eqHighFreq", "eqHighWidth"),
                     _ => return Err(InvokeError::Unknown),
                 };
-                let band_state = EqBandState { freq, width };
-                match band_name {
-                    "low" => ch.eq_low_band = band_state,
-                    "mid" => ch.eq_mid_band = band_state,
-                    "high" => ch.eq_high_band = band_state,
-                    _ => unreachable!(),
+                let freq = args.get("freq").ok_or(InvokeError::Unknown)?;
+                let width = args.get("width").ok_or(InvokeError::Unknown)?;
+                // Frequenz zuerst: die Bandbreite wird relativ zur neuen Frequenz in Q umgerechnet.
+                if !proc_set(&mut ch.proc, fk, freq) || !proc_set(&mut ch.proc, wk, width) {
+                    return Err(InvokeError::Unknown);
                 }
-                self.pipeline.set_eq_band(id.to_string(), band, freq, width);
+                self.pipeline.set_proc(id.to_string(), ch.proc);
                 Ok(())
             }
+            "setEqHp" => {
+                apply_args(&mut ch.proc, args, &[("enabled", "eqHpEnabled"), ("freq", "eqHpFreq")])?;
+                self.pipeline.set_proc(id.to_string(), ch.proc);
+                Ok(())
+            }
+            "setEqBypass" => {
+                apply_args(&mut ch.proc, args, &[("bypass", "eqBypass")])?;
+                self.pipeline.set_proc(id.to_string(), ch.proc);
+                Ok(())
+            }
+            // Kompressor/Gate: nicht übergebene (optionale) Argumente behalten
+            // ihren bisherigen Wert — Altaufrufer kennen nur die ersten vier.
             "setComp" => {
-                let enabled = args.get("enabled").and_then(Value::as_bool).ok_or(InvokeError::Unknown)?;
-                let threshold_db = args
-                    .get("thresholdDb")
-                    .and_then(Value::as_f64)
-                    .ok_or(InvokeError::Unknown)?;
-                let ratio = args.get("ratio").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
-                let makeup_db = args.get("makeupDb").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
-                ch.comp = CompState { enabled, threshold_db, ratio, makeup_db };
-                self.pipeline.set_comp(id.to_string(), ch.comp.to_pipeline_params());
+                apply_args(
+                    &mut ch.proc,
+                    args,
+                    &[
+                        ("enabled", "compEnabled"),
+                        ("thresholdDb", "compThreshold"),
+                        ("ratio", "compRatio"),
+                        ("makeupDb", "compMakeup"),
+                        ("attackMs", "compAttack"),
+                        ("releaseMs", "compRelease"),
+                        ("kneeDb", "compKnee"),
+                        ("rms", "compRms"),
+                    ],
+                )?;
+                self.pipeline.set_proc(id.to_string(), ch.proc);
+                Ok(())
+            }
+            "setGate" => {
+                apply_args(
+                    &mut ch.proc,
+                    args,
+                    &[
+                        ("enabled", "gateEnabled"),
+                        ("thresholdDb", "gateThreshold"),
+                        ("rangeDb", "gateRange"),
+                        ("ratio", "gateRatio"),
+                        ("attackMs", "gateAttack"),
+                        ("holdMs", "gateHold"),
+                        ("releaseMs", "gateRelease"),
+                        ("hysteresisDb", "gateHysteresis"),
+                    ],
+                )?;
+                self.pipeline.set_proc(id.to_string(), ch.proc);
+                Ok(())
+            }
+            "setDelay" => {
+                apply_args(&mut ch.proc, args, &[("enabled", "delayEnabled"), ("ms", "delayMs")])?;
+                self.pipeline.set_proc(id.to_string(), ch.proc);
+                Ok(())
+            }
+            "setPan" => {
+                apply_args(&mut ch.proc, args, &[("pan", "pan")])?;
+                self.pipeline.set_proc(id.to_string(), ch.proc);
                 Ok(())
             }
             "setSource" => {
@@ -983,27 +1142,7 @@ impl AudioMixerStore {
                 self.pipeline.set_gain(id.to_string(), ch.gain_db);
                 self.pipeline.set_mute(id.to_string(), ch.mute);
                 self.pipeline.set_pfl(id.to_string(), ch.pfl);
-                self.pipeline
-                    .set_eq(id.to_string(), ch.eq_low, ch.eq_mid, ch.eq_high);
-                self.pipeline.set_eq_band(
-                    id.to_string(),
-                    pipeline::EqBand::Low,
-                    ch.eq_low_band.freq,
-                    ch.eq_low_band.width,
-                );
-                self.pipeline.set_eq_band(
-                    id.to_string(),
-                    pipeline::EqBand::Mid,
-                    ch.eq_mid_band.freq,
-                    ch.eq_mid_band.width,
-                );
-                self.pipeline.set_eq_band(
-                    id.to_string(),
-                    pipeline::EqBand::High,
-                    ch.eq_high_band.freq,
-                    ch.eq_high_band.width,
-                );
-                self.pipeline.set_comp(id.to_string(), ch.comp.to_pipeline_params());
+                self.pipeline.set_proc(id.to_string(), ch.proc);
                 Ok(())
             }
             "setFollow" => {
@@ -1135,7 +1274,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         next_seq: Arc::new(AtomicU64::new(1)),
         pipeline: pipeline_handle.clone(),
         levels_url,
-        master_limiter: Mutex::new(CompState::default()),
+        master_limiter: Mutex::new(dsp::CompParams::default()),
     });
 
     // Für die Discovery gebraucht (den eigenen Sender ausschließen) —
@@ -1219,6 +1358,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         "channelId": channel_id,
                         "rms": rms,
                         "peak": peak,
+                    })
+                    .to_string();
+                    levels_broadcaster.publish(&json);
+                }
+                pipeline::Event::Dsp { channel_id, comp_gr_db, gate_gr_db, auto_db, duck_db, in_db } => {
+                    let json = serde_json::json!({
+                        "type": "dsp", "channelId": channel_id,
+                        "compGr": comp_gr_db, "gateGr": gate_gr_db,
+                        "autoDb": auto_db, "duckDb": duck_db, "inDb": in_db,
                     })
                     .to_string();
                     levels_broadcaster.publish(&json);
