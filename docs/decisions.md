@@ -30151,3 +30151,26 @@ MXL-Schreibvorgänge. **Offen:** dasselbe „Ventil am Ende der Kette“-Muster 
 `MxlVideoOutput` selbst (omp-source, omp-player …) und kostet dort ebenfalls CPU bei
 inaktivem Lowres-Ausgang — nicht angefasst, weil es alle Nodes betrifft.
 
+### Nachtrag zum Nachtrag (2026-10-01): „Ventil am Kopf" für ALLE Nodes ausgerollt (`omp_mediaio::mxl::MxlVideoOutput`)
+
+Das bei omp-ograf gefundene Muster („Ausgang inaktiv = Ventil am ENDE der Kette, die
+volle Wandlung läuft trotzdem") steckte in `MxlVideoOutput` selbst und betraf damit alle
+Nodes mit Video-Ausgang. Änderungen dort:
+- `valve` jetzt AM KOPF der Kette (`upstream ! valve ! videoscale ! videoconvert !
+  videorate ! capsfilter ! appsink`): ein inaktiver Ausgang (Lowres ohne Vorschau-Nutzer)
+  kostet nichts mehr.
+- `videoscale` VOR `videoconvert` (erst im Eingangsformat skalieren, dann nach v210
+  wandeln; bis dahin umgekehrt, das v210-Bild wurde im langsamen Pfad skaliert).
+- `videorate max-duplication-time = 1 s`: ohne das hätte ein nach langer Pause wieder
+  geöffnetes Ventil (jetzt vor der videorate) einen Schwall von Duplikaten erzeugt;
+  kurze Staus (<1 s) werden wie bisher aufgefüllt. Live geprüft: 15 s Pause, danach
+  regelmäßig 25 Grains/s ohne Schwall.
+
+Messung omp-source (640×480, Debug-Build, ein Kern = 100 %): Lowres inaktiv **70 % → ~30 %**,
+Lowres aktiv **74 % → ~43 %**. omp-ograf: Lowres aktiv kostet ~+17 % (Skalieren 720p),
+inaktiv 0. Geprüft: `cargo test -p omp-mediaio --features mxl` (31 grün), Start+laufende
+Video-Grains von omp-switcher, omp-video-mixer-me, omp-multiviewer(-custom), omp-source,
+omp-ograf, Kette omp-source → omp-scaler. **Lowres bleibt** (Entscheidung): es läuft nur auf
+Anforderung (referenzgezählt, nur Multiviewer/Vorschau) und kostet aktiv ~11–17 % je Quelle;
+ohne Lowres müssten Multiviewer das volle Bild lesen und wandeln, was teurer wäre.
+

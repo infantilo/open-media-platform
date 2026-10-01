@@ -317,7 +317,13 @@ impl MxlVideoOutput {
         let videoscale = gst::ElementFactory::make("videoscale")
             .build()
             .map_err(|e| format!("videoscale: {e}"))?;
+        // `max-duplication-time`: Lücken über 1 s im Eingangsstrom (Stau, vor
+        // allem aber ein wieder geöffnetes Ventil nach langer Pause) werden
+        // NICHT mit Duplikaten aufgefüllt — Standard (0) hätte nach z. B.
+        // 20 s Pause einen Schwall von 500 Wiederholungen erzeugt. Kurze Staus
+        // (<1 s, s. appsink max-buffers unten) werden weiter aufgefüllt.
         let videorate = gst::ElementFactory::make("videorate")
+            .property("max-duplication-time", 1_000_000_000u64)
             .build()
             .map_err(|e| format!("videorate: {e}"))?;
         let caps = gst::ElementFactory::make("capsfilter")
@@ -401,13 +407,26 @@ impl MxlVideoOutput {
             .and_then(|()| pipeline.add(&appsink))
             .map_err(|e| format!("add mxl output elements: {e}"))?;
 
+        // Das Ventil sitzt AM KOPF der Kette (nicht am Ende): ein inaktiver
+        // Ausgang (z. B. der Lowres-Begleitfluss, solange niemand die Vorschau
+        // nutzt) wandelt/skaliert so keinen einzigen Frame, statt die volle
+        // Kette zu rechnen und das Ergebnis erst am Schluss zu verwerfen
+        // (gemessen am omp-ograf: ~100 % CPU für einen unbenutzten
+        // Lowres-Zweig bei 720p).
+        //
+        // Reihenfolge `videoscale` VOR `videoconvert`: erst im Eingangsformat auf
+        // die Zielgröße skalieren, dann nach v210 wandeln. Umgekehrt (bis
+        // 2026-10-01) wurde das volle Bild zuerst nach v210 gewandelt und dann das
+        // v210-Bild skaliert (langsamer Pfad) — beim Lowres-Zweig (z. B.
+        // 640×480 → 320×180) kostete das ~24 % CPU je Quelle bei aktiver Vorschau.
+        // Ohne Größenänderung ist `videoscale` ein Durchreicher.
         gst::Element::link_many([
             upstream,
-            &videoconvert,
+            &valve,
             &videoscale,
+            &videoconvert,
             &videorate,
             &caps,
-            &valve,
             &appsink,
         ])
         .map_err(|e| format!("link mxl output chain: {e}"))?;
