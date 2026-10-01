@@ -63,3 +63,42 @@ func TestComputeRoleNetwork(t *testing.T) {
 		t.Error("ohne Katalog kein Netzbedarf")
 	}
 }
+
+// Die echten Katalog-Einträge: festverdrahtetes Format gilt unverändert
+// (auch gegen ein gesetztes Rollen-Format), "both" zählt Rx und Tx.
+func TestComputeRoleNetworkRealCatalog(t *testing.T) {
+	entries, err := launcher.LoadCatalog("../../../deploy/catalog.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat := fakeCatalog(entries)
+	near := func(a, b float64) bool { return math.Abs(a-b) < 1 }
+	def := workflows.Definition{
+		Roles: []workflows.Role{
+			{Name: "G", NodeType: "omp-2110-gateway-output", Format: "720p50"},
+			{Name: "S", NodeType: "omp-srt-gateway-uplink"},
+			{Name: "T", NodeType: "omp-fabrics-gateway-target"},
+			{Name: "I", NodeType: "omp-fabrics-gateway-initiator"},
+			{Name: "Q", NodeType: "omp-source", Format: "2160p50"},
+		},
+		Connections: []workflows.Connection{{FromRole: "Q", ToRole: "I"}},
+	}
+	g, ok := computeRoleNetwork(cat, def, def.Roles[0])
+	// 1920×1080×25 × 16 bit × 1,05 — das Rollen-Format 720p50 wirkt auf dieses Gateway nicht
+	if !ok || !near(g.TxMbps, 870.9) || g.RxMbps != 0 || g.Estimated {
+		t.Errorf("2110 out = %+v", g)
+	}
+	s, _ := computeRoleNetwork(cat, def, def.Roles[1])
+	if !near(s.TxMbps, 132.7) || !near(s.RxMbps, 132.7) || !s.Estimated {
+		t.Errorf("srt uplink = %+v", s)
+	}
+	tg, _ := computeRoleNetwork(cat, def, def.Roles[2])
+	if !near(tg.RxMbps, 1128.5) || tg.TxMbps != 0 || tg.Estimated {
+		t.Errorf("fabrics target = %+v", tg)
+	}
+	// Initiator folgt dem Format der verbundenen Quelle: 3840×2160×50×21,33×1,02
+	in, _ := computeRoleNetwork(cat, def, def.Roles[3])
+	if !near(in.TxMbps, 9022.9) || in.RxMbps != 0 || in.Estimated {
+		t.Errorf("fabrics initiator = %+v", in)
+	}
+}

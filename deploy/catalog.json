@@ -26,7 +26,7 @@
     "command": ["../nodes/target/debug/omp-2110-gateway"],
     "env": { "OMP_2110_GATEWAY_DIRECTION": "ingest" },
     "description": "Empfängt unkomprimiertes SMPTE-2110-20-Video per RTP-Multicast/-Unicast aus dem LAN und speist es als MXL-Flow ein (Kapitel 19 Teil 1). Ziel/Quelle per OMP_2110_GATEWAY_LISTEN_PORT/_MULTICAST_GROUP oder direktem SDP (OMP_2110_GATEWAY_SDP/_SDP_FILE) konfiguriert, optional PTP-Zeitbasis per OMP_PTP_DOMAIN. Meldet AMWA-BCP-008-01-Empfangsstatus (Link/Verbindung/Sync/Stream, `docs/decisions.md` BCP-008-Nachtrag) über die generischen monitor.*-Parameter.",
-    "network": { "direction": "in", "kind": "video", "bitsPerPixel": 20 },
+    "network": { "direction": "in", "kind": "video", "bitsPerPixel": 16, "width": 1920, "height": 1080, "fps": 25 },
     "expectedResources": "moderat (unkomprimiertes Video, netzwerklastig)",
     "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
   },
@@ -37,9 +37,49 @@
     "command": ["../nodes/target/debug/omp-2110-gateway"],
     "env": { "OMP_2110_GATEWAY_DIRECTION": "output" },
     "description": "Sendet einen per Flow-Editor gewählten MXL-Video-Flow als unkomprimiertes SMPTE-2110-20 per RTP an einen festen Ziel-Endpunkt (OMP_2110_GATEWAY_DEST_HOST/_DEST_PORT, Kapitel 19 Teil 1) — Quellwahl per echtem IS-05-Receiver-PATCH (Drag&Drop), Ziel bleibt fest. Optional PTP-Zeitbasis per OMP_PTP_DOMAIN. Meldet AMWA-BCP-008-02-Sendestatus über die generischen monitor.*-Parameter.",
-    "network": { "direction": "out", "kind": "video", "bitsPerPixel": 20 },
+    "network": { "direction": "out", "kind": "video", "bitsPerPixel": 16, "width": 1920, "height": 1080, "fps": 25 },
     "expectedResources": "moderat (unkomprimiertes Video, netzwerklastig)",
     "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
+  },
+  {
+    "type": "omp-srt-gateway-uplink",
+    "label": "SRT-Gateway (Uplink)",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-srt-gateway"],
+    "env": { "OMP_SRT_GATEWAY_DIRECTION": "uplink" },
+    "description": "Brücke LAN → WAN (D4): empfängt einen ST-2110-Strom (OMP_SRT_GATEWAY_ST2110_PORT) und sendet ihn als RTP-Raw-Video über SRT (OMP_SRT_GATEWAY_SRT_URI). Rein per Start-Umgebung konfiguriert, kein IS-05. Belegt die Netzwerkkarte in beide Richtungen (2110 herein, SRT hinaus).",
+    "network": { "direction": "both", "kind": "video", "bitsPerPixel": 16, "width": 640, "height": 480, "fps": 25, "overhead": 1.08, "estimated": true },
+    "expectedResources": "moderat (unkomprimiertes Video über SRT, netzwerklastig)"
+  },
+  {
+    "type": "omp-srt-gateway-downlink",
+    "label": "SRT-Gateway (Downlink)",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-srt-gateway"],
+    "env": { "OMP_SRT_GATEWAY_DIRECTION": "downlink" },
+    "description": "Brücke WAN → LAN (D4): empfängt RTP-Raw-Video über SRT (OMP_SRT_GATEWAY_SRT_URI) und sendet es als ST-2110-Strom an OMP_SRT_GATEWAY_ST2110_HOST/_PORT. Rein per Start-Umgebung konfiguriert, kein IS-05. Belegt die Netzwerkkarte in beide Richtungen (SRT herein, 2110 hinaus).",
+    "network": { "direction": "both", "kind": "video", "bitsPerPixel": 16, "width": 640, "height": 480, "fps": 25, "overhead": 1.08, "estimated": true },
+    "expectedResources": "moderat (unkomprimiertes Video über SRT, netzwerklastig)"
+  },
+  {
+    "type": "omp-fabrics-gateway-target",
+    "label": "Fabrics/RDMA-Gateway (Empfänger)",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-fabrics-gateway"],
+    "env": { "OMP_FABRICS_GATEWAY_ROLE": "target" },
+    "description": "Empfänger-Seite der Host-zu-Host-MXL-Übertragung per Fabrics/RDMA (Kapitel 16 Teil 2): legt einen lokalen MXL-Video-Flow an (OMP_FABRICS_WIDTH/_HEIGHT/_FPS_NUM/_FPS_DEN, Standard 1080p25) und exponiert die Zieladresse für den Initiator. Transport über OMP_FABRICS_PROVIDER (tcp | verbs | efa | shm, Standard tcp).",
+    "network": { "direction": "in", "kind": "video", "bitsPerPixel": 21.33, "width": 1920, "height": 1080, "fps": 25, "overhead": 1.02 },
+    "expectedResources": "moderat bis hoch (unkomprimiertes v210-Video per RDMA, netzwerklastig)"
+  },
+  {
+    "type": "omp-fabrics-gateway-initiator",
+    "label": "Fabrics/RDMA-Gateway (Sender)",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-fabrics-gateway"],
+    "env": { "OMP_FABRICS_GATEWAY_ROLE": "initiator" },
+    "description": "Sender-Seite der Host-zu-Host-MXL-Übertragung per Fabrics/RDMA (Kapitel 16 Teil 2): relayt eine per IS-05 gewählte lokale MXL-Quelle dauerhaft an die Ziel-Instanz (OMP_FABRICS_TARGET_URL). Transport über OMP_FABRICS_PROVIDER (tcp | verbs | efa | shm, Standard tcp). Das Format folgt der Quelle.",
+    "network": { "direction": "out", "kind": "video", "bitsPerPixel": 21.33, "overhead": 1.02 },
+    "expectedResources": "moderat bis hoch (unkomprimiertes v210-Video per RDMA, netzwerklastig)"
   },
   {
     "type": "omp-aes67-gateway-sink",

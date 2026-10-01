@@ -117,14 +117,25 @@ type CatalogEntry struct {
 }
 
 // CatalogNetwork beschreibt den NIC-Bedarf eines Node-Typs. Direction ist
-// aus Sicht des Hosts ("in" = Empfang/Rx, "out" = Senden/Tx). Kind "video"
-// rechnet den Bedarf aus dem Format der Rolle (Breite × Höhe × Framerate ×
-// BitsPerPixel × RTP-Overhead, z. B. ST 2110-20 yuv422 10 bit = 20 bpp),
-// Kind "fixed" nimmt den Nennwert Mbps (Audio/WebRTC: Schätzwert).
+// aus Sicht des Hosts: "in" = Empfang (Rx), "out" = Senden (Tx), "both" =
+// beides in gleicher Höhe (Gateways, die einen Strom durchreichen).
+//
+// Kind "video" rechnet Breite × Höhe × Framerate × BitsPerPixel ×
+// Overhead (Standard 1,05 für RTP/UDP/IP). Sind Width/Height/Fps gesetzt,
+// ist das Format des Node-Typs fest verdrahtet und gilt unverändert; sonst
+// folgt es der Rolle (Format, Workflow-Programmformat oder verbundene
+// Rolle). Estimated markiert Werte, die auf einer Annahme beruhen (z. B.
+// ausgehandeltes Pixelformat). Kind "fixed" nimmt den Nennwert Mbps
+// (Audio/WebRTC, immer ein Schätzwert).
 type CatalogNetwork struct {
 	Direction    string  `json:"direction"`
 	Kind         string  `json:"kind"`
 	BitsPerPixel float64 `json:"bitsPerPixel,omitempty"`
+	Overhead     float64 `json:"overhead,omitempty"`
+	Width        uint32  `json:"width,omitempty"`
+	Height       uint32  `json:"height,omitempty"`
+	Fps          float64 `json:"fps,omitempty"`
+	Estimated    bool    `json:"estimated,omitempty"`
 	Mbps         float64 `json:"mbps,omitempty"`
 }
 

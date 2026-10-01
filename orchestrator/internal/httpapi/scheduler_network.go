@@ -79,13 +79,21 @@ func computeRoleNetwork(cat CatalogReader, def workflows.Definition, role workfl
 	est := false
 	switch n.Kind {
 	case "video":
-		name, e := resolveNetFormat(def, role)
-		w, h, fps, ok := workflows.FormatDimensions(name)
-		if !ok {
-			return roleNetwork{}, false
+		w, h, fps := float64(n.Width), float64(n.Height), n.Fps
+		est = n.Estimated
+		if n.Width == 0 || n.Height == 0 || n.Fps == 0 {
+			name, e := resolveNetFormat(def, role)
+			fw, fh, ffps, ok := workflows.FormatDimensions(name)
+			if !ok {
+				return roleNetwork{}, false
+			}
+			w, h, fps, est = float64(fw), float64(fh), ffps, e || n.Estimated
 		}
-		mbps = float64(w) * float64(h) * fps * n.BitsPerPixel * rtpOverhead / 1e6
-		est = e
+		overhead := n.Overhead
+		if overhead == 0 {
+			overhead = rtpOverhead
+		}
+		mbps = w * h * fps * n.BitsPerPixel * overhead / 1e6
 	case "fixed":
 		mbps = n.Mbps
 		est = true // Nennwert, keine Messung
@@ -93,9 +101,12 @@ func computeRoleNetwork(cat CatalogReader, def workflows.Definition, role workfl
 		return roleNetwork{}, false
 	}
 	rn := roleNetwork{Estimated: est}
-	if n.Direction == "in" {
+	switch n.Direction {
+	case "in":
 		rn.RxMbps = mbps
-	} else {
+	case "both":
+		rn.RxMbps, rn.TxMbps = mbps, mbps
+	default:
 		rn.TxMbps = mbps
 	}
 	return rn, true
