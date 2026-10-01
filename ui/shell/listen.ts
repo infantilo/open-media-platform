@@ -11,6 +11,8 @@
 // Fehlt der Dienst (Node-UI ohne Shell), fällt das Panel auf seine
 // eigene Wiedergabe zurück.
 
+import { buildListenWidget } from "./listen-ui.ts";
+
 const SAMPLE_RATE = 48000;
 const CHANNELS = 2;
 const BYTES_PER_FRAME = CHANNELS * 4; // F32LE, s. omp_mediaio::pcm_stream
@@ -63,6 +65,20 @@ class PcmPlayerProcessor extends AudioWorkletProcessor {
 registerProcessor("pcm-player-processor", PcmPlayerProcessor);
 `;
 
+export type ChannelMode = "stereo" | "mono" | "left" | "right";
+
+/** Frei belegbare Schnellwahl-Taste: Quelle wird über ihr Label gefunden
+ * (Sender-IDs ändern sich bei jedem Neustart des Quellknotens). */
+export interface ListenPreset {
+  name: string;
+  sourceLabel: string;
+}
+
+export const PRESET_SLOTS = 6;
+const PREFS_KEY = "omp-listen-prefs";
+const PRESETS_KEY = "omp-listen-presets";
+const LAST_NODE_KEY = "omp-listen-node";
+
 export type ListenStatus = "idle" | "connecting" | "playing" | "reconnecting" | "error";
 
 export interface ListenState {
@@ -71,7 +87,16 @@ export interface ListenState {
   volume: number; // 0..1
   muted: boolean;
   dim: boolean;
-  mono: boolean;
+  channelMode: ChannelMode;
+  // Kopfhörer-Ausgleich (Crossfeed): beim Mischen auf Kopfhörern hört jedes
+  // Ohr nur seinen Kanal (keine Raumübersprechung wie bei Boxen) — das lässt
+  // Stereobild und Panning extrem breit wirken und verführt zu falschen
+  // Entscheidungen. Crossfeed mischt einen tiefpassgefilterten, leicht
+  // verzögerten Anteil des Gegenkanals zu, wie ihn Boxen akustisch liefern.
+  headphone: boolean;
+  crossfeed: number; // 0..1, Stärke
+  sourceLabel: string; // aktuell verbundene Quelle des Monitor-Nodes
+  presets: (ListenPreset | null)[];
   // Audio-Verzögerung in ms, damit der Ton zu Viewer/Multiviewer-Bild passt
   // (MJPEG im Browser hängt je nach Last hinter dem PCM-Strom her).
   syncMs: number;
@@ -83,12 +108,17 @@ export class ListenService extends EventTarget {
   #gain: GainNode | null = null;
   #delay: DelayNode | null = null;
   #splitter: ChannelSplitterNode | null = null;
+  #xfeed: { direct: GainNode[]; cross: GainNode[] } | null = null;
+  #labelTimer = 0;
   #analysers: AnalyserNode[] = [];
   #reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   // Generation: jede start()/stop()-Runde erhöht sie; veraltete Leseschleifen
   // und Wiederverbindungsversuche erkennen daran, dass sie überholt sind.
   #gen = 0;
-  state: ListenState = { nodeId: null, status: "idle", volume: 0.8, muted: false, dim: false, mono: false, syncMs: 0 };
+  state: ListenState = {
+    nodeId: null, status: "idle", volume: 0.8, muted: false, dim: false, channelMode: "stereo", headphone: false, crossfeed: 0.5, sourceLabel: "",
+    presets: Array(PRESET_SLOTS).fill(null), syncMs: 0,
+  };
 
   constructor() {
     super();
@@ -97,6 +127,15 @@ export class ListenService extends EventTarget {
       if (v >= 0 && v <= 1) this.state.volume = v;
       const sync = parseInt(localStorage.getItem(SYNC_KEY) ?? "", 10);
       if (sync >= 0 && sync <= MAX_SYNC_MS) this.state.syncMs = sync;
+      const prefs = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
+      if (["stereo", "mono", "left", "right"].includes(prefs.channelMode)) this.state.channelMode = prefs.channelMode;
+      if (typeof prefs.headphone === "boolean") this.state.headphone = prefs.headphone;
+      if (prefs.crossfeed >= 0 && prefs.crossfeed <= 1) this.state.crossfeed = prefs.crossfeed;
+      const presets = JSON.parse(localStorage.getItem(PRESETS_KEY) ?? "[]");
+      if (Array.isArray(presets)) {
+        this.state.presets = Array.from({ length: PRESET_SLOTS }, (_, i) =>
+          presets[i]?.sourceLabel ? { name: String(presets[i].name ?? ""), sourceLabel: String(presets[i].sourceLabel) } : null);
+      }
     } catch { /* localStorage gesperrt: Standardlautstärke */ }
     // Hintergrund-Tabs/Gerätewechsel können den Kontext anhalten.
     document.addEventListener("visibilitychange", () => this.#resume());
@@ -115,6 +154,13 @@ export class ListenService extends EventTarget {
   #applyGain() {
     if (!this.#gain) return;
     this.#delay?.delayTime.setTargetAtTime(this.state.syncMs / 1000, this.#ctx!.currentTime, 0.05);
+    if (this.#xfeed) {
+      const k = this.state.headphone ? 0.45 * this.state.crossfeed : 0; // max ca. -7 dB Gegenkanal
+      const t = this.#ctx!.currentTime;
+      // Gesamtpegel konstant halten, sonst klingt "Kopfhörer an" nur lauter.
+      for (const g of this.#xfeed.direct) g.gain.setTargetAtTime(1 / (1 + k), t, 0.02);
+      for (const g of this.#xfeed.cross) g.gain.setTargetAtTime(k / (1 + k), t, 0.02);
+    }
     const { volume, muted, dim } = this.state;
     const g = muted ? 0 : volume * volume * (dim ? DIM_GAIN : 1); // quadratisch: musikalischere Regelkurve
     this.#gain.gain.setTargetAtTime(g, this.#ctx!.currentTime, 0.015);
@@ -136,7 +182,33 @@ export class ListenService extends EventTarget {
     const gain = ctx.createGain();
     const splitter = ctx.createChannelSplitter(CHANNELS);
     const delay = ctx.createDelay(MAX_SYNC_MS / 1000);
-    worklet.connect(delay).connect(gain).connect(ctx.destination);
+    worklet.connect(delay);
+    // Crossfeed-Netz (immer im Signalweg, bei "aus" cross=0/direct=1 — kein
+    // Umstöpseln im laufenden Betrieb, das knackt): jedes Ohr bekommt
+    // direkt + tiefpassgefiltert (~700 Hz) und ~0,3 ms verzögert den Gegenkanal.
+    const split = ctx.createChannelSplitter(CHANNELS);
+    const merge = ctx.createChannelMerger(CHANNELS);
+    delay.connect(split);
+    const direct: GainNode[] = [];
+    const cross: GainNode[] = [];
+    for (let ch = 0; ch < CHANNELS; ch++) {
+      const d = ctx.createGain();
+      split.connect(d, ch);
+      d.connect(merge, 0, ch);
+      direct.push(d);
+      const lp = ctx.createBiquadFilter();
+      lp.type = "lowpass";
+      lp.frequency.value = 700;
+      const dl = ctx.createDelay(0.01);
+      dl.delayTime.value = 0.0003;
+      const x = ctx.createGain();
+      split.connect(lp, ch); // Kanal ch speist das GEGENüberliegende Ohr
+      lp.connect(dl).connect(x);
+      x.connect(merge, 0, 1 - ch);
+      cross.push(x);
+    }
+    merge.connect(gain).connect(ctx.destination);
+    this.#xfeed = { direct, cross };
     this.#delay = delay;
     worklet.connect(splitter); // Pegelabgriff VOR Lautstärke/Mute/Dim: zeigt die Quelle, nicht den Regler
     this.#analysers = [0, 1].map((ch) => {
@@ -170,7 +242,11 @@ export class ListenService extends EventTarget {
   async start(nodeId: string) {
     const gen = ++this.#gen;
     this.#reader?.cancel().catch(() => {});
+    try { localStorage.setItem(LAST_NODE_KEY, nodeId); } catch { /* egal */ }
     this.#set({ nodeId, status: "connecting" });
+    clearInterval(this.#labelTimer);
+    this.#labelTimer = setInterval(() => this.#refreshSourceLabel(), 2000) as unknown as number;
+    void this.#refreshSourceLabel();
     try {
       await this.#ensureContext();
       await this.#ctx!.resume();
@@ -185,7 +261,8 @@ export class ListenService extends EventTarget {
     this.#gen++;
     this.#reader?.cancel().catch(() => {});
     this.#reader = null;
-    this.#set({ nodeId: null, status: "idle" });
+    clearInterval(this.#labelTimer);
+    this.#set({ nodeId: null, status: "idle", sourceLabel: "" });
   }
 
   setVolume(v: number) {
@@ -245,136 +322,84 @@ export class ListenService extends EventTarget {
       const f32 = new Float32Array(combined.buffer, combined.byteOffset, frames * CHANNELS);
       const left = new Float32Array(frames);
       const right = new Float32Array(frames);
-      const mono = this.state.mono;
+      const mode = this.state.channelMode;
       for (let i = 0; i < frames; i++) {
         const l = f32[i * 2], r = f32[i * 2 + 1];
-        left[i] = mono ? (l + r) / 2 : l;
-        right[i] = mono ? (l + r) / 2 : r;
+        switch (mode) {
+          case "mono": left[i] = right[i] = (l + r) / 2; break;
+          case "left": left[i] = right[i] = l; break;
+          case "right": left[i] = right[i] = r; break;
+          default: left[i] = l; right[i] = r;
+        }
       }
       this.#worklet?.port.postMessage([left, right], [left.buffer, right.buffer]);
     }
     return gotData;
   }
 
-  setMono(mono: boolean) { this.#set({ mono }); }
-}
+  setChannelMode(channelMode: ChannelMode) { this.#set({ channelMode }); this.#savePrefs(); }
+  setHeadphone(headphone: boolean) { this.#set({ headphone }); this.#savePrefs(); }
+  setCrossfeed(crossfeed: number) { this.#set({ crossfeed }); this.#savePrefs(); }
 
-const STATUS_TEXT: Record<ListenStatus, string> = {
-  idle: "",
-  connecting: "verbinde …",
-  playing: "",
-  reconnecting: "verbinde neu …",
-  error: "kein Audiostrom",
-};
+  #savePrefs() {
+    const { channelMode, headphone, crossfeed } = this.state;
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ channelMode, headphone, crossfeed })); } catch { /* egal */ }
+  }
 
-// Schmales Widget unten links (rechts sitzt buildUserWidget). Nur sichtbar,
-// solange abgehört wird.
-export function buildListenWidget(service: ListenService): HTMLElement {
-  const w = document.createElement("div");
-  w.setAttribute("data-role", "listen-widget");
-  w.style.cssText =
-    "position:fixed;bottom:var(--omp-space-2);left:var(--omp-space-2);z-index:1000;display:none;" +
-    "align-items:center;gap:var(--omp-space-3);padding:6px var(--omp-space-3);" +
-    "font-family:var(--omp-font);font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);" +
-    "background:var(--omp-surface);border:1px solid var(--omp-border);border-radius:var(--omp-radius);" +
-    "box-shadow:0 2px 8px rgba(0,0,0,0.3);";
+  // --- Schnellwahl-Tasten -------------------------------------------------
+  // Der Monitor-Node ist der Umschalter: Tasten rufen nur dessen
+  // selectSource (wie das Panel-Dropdown). Quelle über Label gefunden.
 
-  const icon = document.createElement("span");
-  icon.textContent = "🔊 Abhören";
-  icon.style.cssText = "color:var(--omp-text);font-weight:600;";
-  const status = document.createElement("span");
-  status.style.cssText = "min-width:60px;";
+  /** Node, auf den Tasten wirken: laufender Node oder zuletzt benutzter. */
+  get targetNode(): string | null {
+    if (this.state.nodeId) return this.state.nodeId;
+    try { return localStorage.getItem(LAST_NODE_KEY); } catch { return null; }
+  }
 
-  const meter = document.createElement("div");
-  meter.style.cssText = "display:flex;flex-direction:column;gap:2px;width:90px;";
-  const bars = [0, 1].map(() => {
-    const track = document.createElement("div");
-    track.style.cssText = "height:4px;background:var(--omp-bg);border-radius:2px;overflow:hidden;";
-    const fill = document.createElement("div");
-    fill.style.cssText = "height:100%;width:0;background:var(--omp-accent-gradient);";
-    track.append(fill);
-    meter.append(track);
-    return fill;
-  });
+  async #param(nodeId: string, name: string): Promise<unknown> {
+    const res = await fetch(`/api/v1/nodes/${encodeURIComponent(nodeId)}/params/${name}`);
+    return res.ok ? (await res.json()).value : undefined;
+  }
 
-  const vol = document.createElement("input");
-  vol.type = "range";
-  vol.min = "0";
-  vol.max = "1";
-  vol.step = "0.01";
-  vol.title = "Lautstärke";
-  vol.style.cssText = "width:90px;padding:0;";
-  vol.addEventListener("input", () => service.setVolume(parseFloat(vol.value)));
+  async availableLabels(): Promise<string[]> {
+    const node = this.targetNode;
+    if (!node) return [];
+    const sources = ((await this.#param(node, "availableSources")) as { label: string }[] | undefined) ?? [];
+    return sources.map((s) => s.label).sort();
+  }
 
-  const sync = document.createElement("input");
-  sync.type = "range";
-  sync.min = "0";
-  sync.max = String(MAX_SYNC_MS);
-  sync.step = "10";
-  sync.style.cssText = "width:80px;padding:0;";
-  const syncLabel = document.createElement("span");
-  syncLabel.style.cssText = "min-width:62px;font-variant-numeric:tabular-nums;";
-  sync.addEventListener("input", () => service.setSync(parseInt(sync.value, 10)));
-  const syncWrap = document.createElement("label");
-  syncWrap.title = "Ton verzögern, bis er zum Bild in Viewer/Multiviewer passt";
-  syncWrap.style.cssText = "display:flex;align-items:center;gap:var(--omp-space-1);";
-  syncWrap.append("A/V", sync, syncLabel);
+  async #refreshSourceLabel() {
+    const node = this.state.nodeId;
+    if (!node) return;
+    const label = ((await this.#param(node, "connectedLabel")) as string | undefined) ?? "";
+    if (label !== this.state.sourceLabel && node === this.state.nodeId) this.#set({ sourceLabel: label });
+  }
 
-  const toggle = (label: string, title: string, on: (active: boolean) => void) => {
-    const b = document.createElement("button");
-    b.textContent = label;
-    b.title = title;
-    b.style.cssText = "font-size:var(--omp-font-size-xs);padding:2px var(--omp-space-2);";
-    let active = false;
-    b.addEventListener("click", () => {
-      active = !active;
-      on(active);
+  /** Schaltet den Monitor-Node auf die Quelle mit diesem Label um. */
+  async selectByLabel(sourceLabel: string): Promise<boolean> {
+    const node = this.targetNode;
+    if (!node) return false;
+    const sources = ((await this.#param(node, "availableSources")) as { senderId: string; label: string }[] | undefined) ?? [];
+    const hit = sources.find((s) => s.label === sourceLabel);
+    if (!hit) return false;
+    const res = await fetch(`/api/v1/nodes/${encodeURIComponent(node)}/methods/selectSource`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ senderId: hit.senderId }),
     });
-    return b;
-  };
-  const mute = toggle("Mute", "Stumm", (a) => service.setMuted(a));
-  const dim = toggle("Dim", "Absenken (−20 dB)", (a) => service.setDim(a));
-  const mono = toggle("Mono", "Mono-Check (L+R)", (a) => service.setMono(a));
-  const stop = document.createElement("button");
-  stop.textContent = "■";
-  stop.title = "Abhören beenden";
-  stop.style.cssText = "font-size:var(--omp-font-size-xs);padding:2px var(--omp-space-2);";
-  stop.addEventListener("click", () => service.stop());
+    if (!res.ok) return false;
+    this.#set({ sourceLabel });
+    // Wiedergabe (neu) starten, falls noch nicht aktiv — Tastendruck ist eine Nutzergeste.
+    if (!this.state.nodeId) await this.start(node);
+    return true;
+  }
 
-  w.append(icon, status, meter, vol, syncWrap, mute, dim, mono, stop);
-
-  let raf = 0;
-  const frame = () => {
-    const [l, r] = service.levels();
-    // dBFS-Anzeige -60..0 als Balkenbreite
-    for (const [bar, v] of [[bars[0], l], [bars[1], r]] as const) {
-      const db = v > 0 ? 20 * Math.log10(v) : -60;
-      bar.style.width = `${Math.max(0, Math.min(100, ((db + 60) / 60) * 100))}%`;
-    }
-    raf = requestAnimationFrame(frame);
-  };
-
-  const paint = () => {
-    const s = service.state;
-    const active = s.nodeId !== null;
-    w.style.display = active ? "flex" : "none";
-    status.textContent = STATUS_TEXT[s.status];
-    vol.value = String(s.volume);
-    sync.value = String(s.syncMs);
-    syncLabel.textContent = `+${s.syncMs} ms`;
-    const mark = (b: HTMLElement, on: boolean) => {
-      b.style.borderColor = on ? "var(--omp-accent-cyan)" : "";
-      b.style.color = on ? "var(--omp-accent-cyan)" : "";
-    };
-    mark(mute, s.muted);
-    mark(dim, s.dim);
-    mark(mono, s.mono);
-    cancelAnimationFrame(raf);
-    if (active) raf = requestAnimationFrame(frame);
-  };
-  service.addEventListener("change", paint);
-  paint();
-  return w;
+  assignPreset(slot: number, preset: ListenPreset | null) {
+    const presets = [...this.state.presets];
+    presets[slot] = preset;
+    try { localStorage.setItem(PRESETS_KEY, JSON.stringify(presets)); } catch { /* egal */ }
+    this.#set({ presets });
+  }
 }
 
 // Einziger Einstiegspunkt: von shell.ts beim Booten aufgerufen.
