@@ -51,6 +51,15 @@ import (
 // kennt nur die Sender seiner eigenen Workflow-Rollen.
 const senderAliasPrefix = "@@omp-role-sender:"
 
+// nodeAliasPrefix: gleiches Prinzip für Node-IDs (IS-04-Node-ID einer eigenen
+// Workflow-Rolle). Nodes referenzieren einander über Node-IDs — der
+// Audiomischer z. B. koppelt per `followTarget` einen Kanal an das Tally
+// (`omp.tally.<node_id>`) der Videoquelle ("Audio folgt Video"). Die
+// Node-ID ändert sich bei jedem Workflow-Start; ohne Alias zeigte die
+// gespeicherte Kopplung nach einem Neustart ins Leere, und Audio folgte
+// dem Video nicht mehr.
+const nodeAliasPrefix = "@@omp-role-node:"
+
 const roleStateTimeout = 3 * time.Second
 const maxRoleStateBytes = 1 << 20 // 1 MiB — ein Bedienzustand ist ein paar hundert Bytes JSON, keine Mediendaten
 
@@ -400,6 +409,7 @@ func (s *Service) buildSenderAliasIndex(wf Workflow) map[string]string {
 		for i, sender := range node.Senders {
 			out[sender.ID] = fmt.Sprintf("%s%s:%d", senderAliasPrefix, role, i)
 		}
+		out[node.ID] = nodeAliasPrefix + role
 	}
 	return out
 }
@@ -417,6 +427,7 @@ func (s *Service) buildAliasSenderIndex(wf Workflow) map[string]string {
 		for i, sender := range node.Senders {
 			out[fmt.Sprintf("%s%s:%d", senderAliasPrefix, role, i)] = sender.ID
 		}
+		out[nodeAliasPrefix+role] = node.ID
 	}
 	return out
 }
