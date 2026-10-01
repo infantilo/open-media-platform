@@ -145,11 +145,11 @@ esac
 # Arbeitsspeicher
 if [ -r /proc/meminfo ]; then
   mem_kb="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
-  mem_gb=$(( mem_kb / 1024 / 1024 ))
-  if [ "$mem_kb" -lt 3500000 ]; then
-    err "Arbeitsspeicher" "${mem_gb} GB — mindestens 4 GB nötig (Postgres-Cluster, NATS, Orchestrator laufen als Container/Prozesse)" "Mehr RAM bereitstellen (bei einer VM: Speicher erhöhen)"
+  mem_gb="$(awk -v k="$mem_kb" 'BEGIN {printf "%.1f", k/1024/1024}')"
+  if [ "$mem_kb" -lt 1500000 ]; then
+    err "Arbeitsspeicher" "${mem_gb} GB — mindestens 1,5 GB nötig (Postgres-Cluster, NATS, Orchestrator laufen als Container/Prozesse)" "Mehr RAM bereitstellen (bei einer VM: Speicher erhöhen)"
   elif [ "$mem_kb" -lt 7500000 ]; then
-    [ "$SCOPE" != "start" ] && warn "Arbeitsspeicher" "${mem_gb} GB — für Medien-Nodes (Mischer, Multiviewer) sind 8 GB und mehr empfehlenswert"
+    [ "$SCOPE" != "start" ] && warn "Arbeitsspeicher" "${mem_gb} GB — knapp: für den Grundbetrieb reicht es, für Medien-Nodes (Mischer, Multiviewer) sind 8 GB und mehr empfehlenswert"
   else
     ok "Arbeitsspeicher" "${mem_gb} GB"
   fi
@@ -166,10 +166,10 @@ fi
 # Plattenplatz im Projektverzeichnis
 free_kb="$(df -Pk "$ROOT_DIR" 2>/dev/null | awk 'NR==2 {print $4}')"
 if [ -n "${free_kb:-}" ]; then
-  free_gb=$(( free_kb / 1024 / 1024 ))
-  if [ "$free_gb" -lt 3 ]; then
+  free_gb="$(awk -v k="$free_kb" 'BEGIN {printf "%.1f", k/1024/1024}')"
+  if [ "$free_kb" -lt 3145728 ]; then
     err "Plattenplatz" "${free_gb} GB frei in $ROOT_DIR — Container-Images, Build-Artefakte und Datenbank brauchen mindestens 10 GB" "Platz schaffen (z. B. 'podman system prune' entfernt ungenutzte Images)"
-  elif [ "$free_gb" -lt 10 ]; then
+  elif [ "$free_kb" -lt 10485760 ]; then
     warn "Plattenplatz" "${free_gb} GB frei — knapp (Rust-Build der Nodes allein braucht mehrere GB)" "Empfohlen: mindestens 10 GB frei"
   else
     ok "Plattenplatz" "${free_gb} GB frei"
