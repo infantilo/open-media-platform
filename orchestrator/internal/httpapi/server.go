@@ -533,7 +533,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 
 	// Verbrauchsprofile pro Node-Typ, advisory (Kapitel 14 Teil 3,
 	// docs/END-GOAL-FEATURES.md §14.3d) — view-artig wie /api/v1/hosts.
-	mux.HandleFunc("GET /api/v1/scheduler/resources", g.requireAuth(handleSchedulerResources(hostRegistry, hostMetrics, ioPortStore, profileStore, workflowSvc, placementThresholds)))
+	mux.HandleFunc("GET /api/v1/scheduler/resources", g.requireAuth(handleSchedulerResources(hostRegistry, hostMetrics, ioPortStore, profileStore, workflowSvc, launcherSvc, placementThresholds)))
 	mux.HandleFunc("GET /api/v1/profiles", g.requireAuth(handleGetProfile(profileStore, hostMetrics, placementThresholds)))
 
 	// Workflow-Bereitstellung & -Verteilung (ARCHITECTURE.md §6.2,

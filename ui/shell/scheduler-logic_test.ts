@@ -4,6 +4,7 @@ import {
   AUTO_LANE,
   computeTimeline,
   findBottlenecks,
+  isOver,
   laneCapacity,
   levelOf,
   occurrenceMinutes,
@@ -133,4 +134,57 @@ Deno.test("levelOf: Grenzen", () => {
   assertEquals(levelOf(68, 85), "warn");
   assertEquals(levelOf(85, 85), "warn");
   assertEquals(levelOf(85.1, 85), "over");
+});
+
+Deno.test("Netz: Rx/Tx getrennt gegen den Link, Engpass trotz freier CPU", () => {
+  const netModel: ResourceModel = {
+    thresholds: { cpu: 85, mem: 90, net: 85 },
+    hosts: [
+      { id: "h1", label: "Regie A", online: true, numCpu: 32, memTotalBytes: 64 * GB, capacityKnown: true, netLinkMbps: 10000 },
+      { id: "h2", label: "ohne Link", online: true, numCpu: 8, memTotalBytes: 16 * GB, capacityKnown: true },
+    ],
+    workflows: [
+      {
+        id: "a", name: "A", status: "stopped",
+        roles: [{ name: "Aus1", nodeType: "g", hostId: "h1", cpuCores: 1, cpuAvgCores: 1, rssBytes: GB, known: true, netTxMbps: 4400 }],
+      },
+      {
+        id: "b", name: "B", status: "stopped",
+        roles: [
+          { name: "Aus2", nodeType: "g", hostId: "h1", cpuCores: 1, cpuAvgCores: 1, rssBytes: GB, known: true, netTxMbps: 4400, netEstimated: true },
+          // Empfang zählt in die andere Richtung, nicht zum Tx dazu
+          { name: "Ein", nodeType: "g", hostId: "h1", cpuCores: 0, cpuAvgCores: 0, rssBytes: 0, known: false, netRxMbps: 2200 },
+          { name: "Aus3", nodeType: "g", hostId: "h2", cpuCores: 0, cpuAvgCores: 0, rssBytes: 0, known: false, netTxMbps: 2200 },
+        ],
+      },
+    ],
+  };
+  const scheds = new Map<string, Schedule[]>([
+    ["a", [daily("start", "09:00"), daily("stop", "12:00")]],
+    ["b", [daily("start", "11:00"), daily("stop", "13:00")]],
+  ]);
+  const tl = computeTimeline(netModel, scheds, slotsOfDay(at(2026, 10, 2, 0)), 30, at(2026, 10, 1, 6));
+  const cap = laneCapacity(netModel, "h1");
+  assertEquals(cap.netMbps, 10000);
+
+  // 10:00: nur A → Tx 4,4 Gbit/s von 10 = 44 % ok
+  let u = slotUtilization(tl.get("h1")![10 * 2], cap, netModel.thresholds);
+  assertEquals(u.netLevel, "ok");
+  // 11:30: A+B → Tx 8,8 von 10 = 88 % > 85 → over, obwohl CPU kaum belastet
+  const slot = tl.get("h1")![11 * 2 + 1];
+  u = slotUtilization(slot, cap, netModel.thresholds);
+  assertEquals(slot.netTxMbps, 8800);
+  assertEquals(slot.netRxMbps, 2200);
+  assertEquals(slot.netEstimated, true);
+  assertEquals(u.netLevel, "over");
+  assertEquals(u.cpuLevel, "ok");
+  assertEquals(isOver(u), true);
+  assertEquals(findBottlenecks(netModel, tl).some((b) => b.laneId === "h1" && b.what.includes("Netz")), true);
+
+  // Host ohne Link: Bedarf bleibt sichtbar, Auslastung unbekannt (nie "frei")
+  const noLink = tl.get("h2")![11 * 2 + 1];
+  assertEquals(noLink.netTxMbps, 2200);
+  const u2 = slotUtilization(noLink, laneCapacity(netModel, "h2"), netModel.thresholds);
+  assertEquals(u2.netPercent, null);
+  assertEquals(u2.netLevel, "unknown");
 });

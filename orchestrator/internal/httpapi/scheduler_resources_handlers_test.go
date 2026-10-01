@@ -39,7 +39,7 @@ func TestSchedulerResourcesModel(t *testing.T) {
 	}}}
 
 	rec := httptest.NewRecorder()
-	handleSchedulerResources(reg, metrics, nil, prof, wf, placement.DefaultThresholds)(rec, httptest.NewRequest(http.MethodGet, "/api/v1/scheduler/resources", nil))
+	handleSchedulerResources(reg, metrics, nil, prof, wf, nil, placement.DefaultThresholds)(rec, httptest.NewRequest(http.MethodGet, "/api/v1/scheduler/resources", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}

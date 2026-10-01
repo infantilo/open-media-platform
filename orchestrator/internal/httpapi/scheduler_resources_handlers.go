@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profiles"
 )
@@ -28,17 +29,27 @@ import (
 // I/O-Ports als Anzahl je (Kartentyp, Richtung). Geplant wird konservativ
 // mit dem 95. Perzentil (CPU) bzw. dem Maximum (RSS) der Messhistorie.
 
+// CatalogReader liefert den Node-Katalog (Netz-Deklaration je Typ);
+// *launcher.Launcher erfüllt es.
+type CatalogReader interface {
+	Catalog() []launcher.CatalogEntry
+}
+
 type schedResHost struct {
-	ID          string            `json:"id"`
-	Label       string            `json:"label"`
-	Local       bool              `json:"local,omitempty"`
-	Online      bool              `json:"online"`
-	NumCPU      int               `json:"numCpu"`
-	MemTotal    uint64            `json:"memTotalBytes"`
-	Live        *schedResHostLive `json:"live,omitempty"`
-	IOPorts     []schedResIOCap   `json:"ioPorts,omitempty"`
-	CapKnown    bool              `json:"capacityKnown"`
-	LastSeenAge float64           `json:"lastSeenSeconds,omitempty"`
+	ID       string            `json:"id"`
+	Label    string            `json:"label"`
+	Local    bool              `json:"local,omitempty"`
+	Online   bool              `json:"online"`
+	NumCPU   int               `json:"numCpu"`
+	MemTotal uint64            `json:"memTotalBytes"`
+	Live     *schedResHostLive `json:"live,omitempty"`
+	IOPorts  []schedResIOCap   `json:"ioPorts,omitempty"`
+	CapKnown bool              `json:"capacityKnown"`
+	// NetLinkMbps: vom Host-Agent gemeldete Link-Geschwindigkeit der
+	// konfigurierten NIC (je Richtung, vollduplex). Fehlt, wenn keine NIC
+	// konfiguriert ist oder der Treiber sie nicht meldet.
+	NetLinkMbps float64 `json:"netLinkMbps,omitempty"`
+	LastSeenAge float64 `json:"lastSeenSeconds,omitempty"`
 }
 
 type schedResHostLive struct {
@@ -65,6 +76,11 @@ type schedResRole struct {
 	Known    bool     `json:"known"` // false: kein Messprofil → Bedarf unbekannt
 	Fallback bool     `json:"fallback,omitempty"`
 	IOPort   *schedIO `json:"ioPort,omitempty"`
+	// Netzbedarf in Mbit/s (berechnet, s. scheduler_network.go); Rx/Tx
+	// aus Sicht des Hosts. NetEstimated: Format/Nennwert angenommen.
+	NetRxMbps    float64 `json:"netRxMbps,omitempty"`
+	NetTxMbps    float64 `json:"netTxMbps,omitempty"`
+	NetEstimated bool    `json:"netEstimated,omitempty"`
 }
 
 type schedIO struct {
@@ -93,6 +109,7 @@ func handleSchedulerResources(
 	ioPortStore IOPortInventoryStore,
 	profileStore ProfileReader,
 	workflowSvc WorkflowService,
+	catalog CatalogReader,
 	th placement.Thresholds,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -142,6 +159,9 @@ func handleSchedulerResources(
 				sh.Online = age < placement.HostOnlineThreshold
 				sh.LastSeenAge = age.Seconds()
 				sh.MemTotal = m.MemTotalBytes
+				if m.Net != nil {
+					sh.NetLinkMbps = m.Net.LinkMbps
+				}
 				live := &schedResHostLive{CPUPercent: m.CPUPercent}
 				if m.MemTotalBytes > 0 {
 					live.MemPercent = float64(m.MemUsedBytes) / float64(m.MemTotalBytes) * 100
@@ -172,6 +192,9 @@ func handleSchedulerResources(
 				sr := schedResRole{Name: role.Name, NodeType: role.NodeType, HostID: role.HostID}
 				if role.RequiredIOPort != nil {
 					sr.IOPort = &schedIO{CardType: role.RequiredIOPort.CardType, Direction: role.RequiredIOPort.Direction}
+				}
+				if rn, has := computeRoleNetwork(catalog, wf.Definition, role); has {
+					sr.NetRxMbps, sr.NetTxMbps, sr.NetEstimated = rn.RxMbps, rn.TxMbps, rn.Estimated
 				}
 				snap, ok, fallback := lookupProfile(r.Context(), profileStore, role.NodeType, role.HostID)
 				if ok {

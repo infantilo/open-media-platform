@@ -135,3 +135,14 @@ func roleExtraEnv(extraEnv map[string]string, role Role) map[string]string {
 	}
 	return merged
 }
+
+// FormatDimensions liefert Breite/Höhe/Framerate eines benannten Presets
+// (für die Netz-Bedarfsrechnung des Schedulers) — ok=false bei leerem oder
+// unbekanntem Namen.
+func FormatDimensions(name string) (width, height uint32, fps float64, ok bool) {
+	f, found := standardFormats[name]
+	if !found || f.FramerateDenominator == 0 {
+		return 0, 0, 0, false
+	}
+	return f.Width, f.Height, float64(f.FramerateNumerator) / float64(f.FramerateDenominator), true
+}

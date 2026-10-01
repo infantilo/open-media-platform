@@ -41,6 +41,7 @@ import {
   findBottlenecks,
   fmtBytes,
   fmtCores,
+  fmtMbps,
   isOver,
   laneCapacity,
   type Level,
@@ -623,7 +624,7 @@ class SchedulerView extends HTMLElement {
       const host: ResHost | undefined = model.hosts.find((h) => h.id === laneId);
       const isAuto = laneId === AUTO_LANE;
 
-      const anyDemand = slots.some((sl) => sl.cpuCores > 0 || sl.rssBytes > 0 || Object.keys(sl.io).length > 0 || sl.unknown.length > 0);
+      const anyDemand = slots.some((sl) => sl.cpuCores > 0 || sl.rssBytes > 0 || sl.netRxMbps > 0 || sl.netTxMbps > 0 || Object.keys(sl.io).length > 0 || sl.unknown.length > 0);
       // Veraltete Host-Registrierungen (offline, nichts eingeplant) nur Rauschen.
       if (host && !host.online && !host.local && !anyDemand) continue;
       const utils = slots.map((sl) => slotUtilization(sl, cap, model.thresholds));
@@ -643,6 +644,7 @@ class SchedulerView extends HTMLElement {
       const capParts: string[] = [];
       if (cap.cpuCores > 0) capParts.push(`${cap.cpuCores} Kerne`);
       if (cap.memBytes > 0) capParts.push(`${fmtBytes(cap.memBytes)} RAM`);
+      if (cap.netMbps > 0) capParts.push(`Netz ${fmtMbps(cap.netMbps)} je Richtung`);
       for (const [k, n] of Object.entries(cap.io)) capParts.push(`${n}× ${k}`);
       capTxt.textContent =
         (isAuto ? "Summe aller erreichbaren Hosts: " : "") + (capParts.length ? capParts.join(" · ") : "Kapazität unbekannt");
@@ -675,6 +677,7 @@ class SchedulerView extends HTMLElement {
           for (let i = a; i <= b; i++) {
             if (utils[i].cpuLevel === "over") what.add("CPU");
             if (utils[i].memLevel === "over") what.add("RAM");
+            if (utils[i].netLevel === "over") what.add("Netz");
             utils[i].ioOver.forEach((k) => what.add(k));
           }
           return `${this.#slotLabel(dates, a)}–${this.#slotLabel(dates, b + 1 > dates.length * perDay - 1 ? b : b + 1)} (${[...what].join(", ")})`;
@@ -684,19 +687,21 @@ class SchedulerView extends HTMLElement {
       } else if (anyDemand) {
         const freeC = utils.map((u) => u.freeCores).filter((v): v is number => v !== null);
         const freeM = utils.map((u) => u.freeMemBytes).filter((v): v is number => v !== null);
+        const freeN = utils.map((u) => u.freeNetMbps).filter((v): v is number => v !== null);
         sum.style.color = "var(--omp-text-dim)";
         sum.textContent =
           "Kein Engpass. Freie Reserve (bis Grenzwert), Minimum im Ausschnitt: " +
-          [freeC.length ? `${fmtCores(Math.min(...freeC))} Kerne` : "", freeM.length ? `${fmtBytes(Math.min(...freeM))} RAM` : ""].filter(Boolean).join(" · ");
+          [freeC.length ? `${fmtCores(Math.min(...freeC))} Kerne` : "", freeM.length ? `${fmtBytes(Math.min(...freeM))} RAM` : "", freeN.length ? `${fmtMbps(Math.min(...freeN))} Netz` : ""].filter(Boolean).join(" · ");
       } else {
         sum.style.color = "var(--omp-text-dim)";
         sum.textContent = "Im Ausschnitt nichts eingeplant — komplett frei.";
       }
       block.appendChild(sum);
 
-      const rows: { label: string; kind: "cpu" | "mem" | "io"; key?: string }[] = [];
+      const rows: { label: string; kind: "cpu" | "mem" | "net" | "io"; key?: string }[] = [];
       if (cap.cpuCores > 0 || slots.some((s2) => s2.cpuCores > 0)) rows.push({ label: "CPU", kind: "cpu" });
       if (cap.memBytes > 0 || slots.some((s2) => s2.rssBytes > 0)) rows.push({ label: "RAM", kind: "mem" });
+      if (cap.netMbps > 0 || slots.some((s2) => s2.netRxMbps > 0 || s2.netTxMbps > 0)) rows.push({ label: "Netzwerk", kind: "net" });
       const ioKeys = new Set<string>([...Object.keys(cap.io), ...slots.flatMap((s2) => Object.keys(s2.io))]);
       for (const k of [...ioKeys].sort()) rows.push({ label: k, kind: "io", key: k });
 
@@ -713,7 +718,7 @@ class SchedulerView extends HTMLElement {
     slots: LaneSlot[],
     utils: ReturnType<typeof slotUtilization>[],
     cap: ReturnType<typeof laneCapacity>,
-    row: { label: string; kind: "cpu" | "mem" | "io"; key?: string },
+    row: { label: string; kind: "cpu" | "mem" | "net" | "io"; key?: string },
     now: Date,
   ): HTMLElement {
     const model = this.#model!;
@@ -740,6 +745,7 @@ class SchedulerView extends HTMLElement {
       const u = utils[i];
       if (row.kind === "cpu") return u.cpuPercent ?? 0;
       if (row.kind === "mem") return u.memPercent ?? 0;
+      if (row.kind === "net") return u.netPercent ?? Math.max(slots[i].netRxMbps, slots[i].netTxMbps) / 1e6;
       const need = slots[i].io[row.key!] ?? 0;
       return need;
     };
@@ -768,6 +774,19 @@ class SchedulerView extends HTMLElement {
         tip = `${when} · RAM ${fmtBytes(slot.rssBytes)} von ${cap.memBytes ? fmtBytes(cap.memBytes) : "?"}` +
           (pct !== null ? ` (${pct.toFixed(0)} %)` : "") +
           (u.freeMemBytes !== null ? ` · frei bis Grenzwert: ${fmtBytes(u.freeMemBytes)}` : "");
+      } else if (row.kind === "net") {
+        pct = u.netPercent;
+        thr = model.thresholds.net ?? 85;
+        level = u.netLevel;
+        // Link unbekannt: Bedarf trotzdem zeigen, aber nicht als "frei" einfärben.
+        if (level === "free" && (slot.netRxMbps > 0 || slot.netTxMbps > 0)) level = "unknown";
+        const est = slot.netEstimated ? "~" : "";
+        tip = `${when} · Netz Rx ${est}${fmtMbps(slot.netRxMbps)} · Tx ${est}${fmtMbps(slot.netTxMbps)}` +
+          (cap.netMbps > 0
+            ? ` von ${fmtMbps(cap.netMbps)} je Richtung` + (pct !== null ? ` (${pct.toFixed(0)} %)` : "") +
+              (u.freeNetMbps !== null ? ` · frei bis Grenzwert: ${fmtMbps(u.freeNetMbps)}` : "")
+            : " · Link-Geschwindigkeit der Karte unbekannt (Host-Agent: OMP_HOST_AGENT_NET_IFACE setzen)");
+        if (slot.netEstimated) tip += "\n~ = Annahme (Format der Rolle nicht gesetzt: 1080p50, bzw. Nennwert)";
       } else {
         const need = slot.io[row.key!] ?? 0;
         const total = cap.io[row.key!] ?? 0;
@@ -778,11 +797,18 @@ class SchedulerView extends HTMLElement {
       }
       const contribs: Contribution[] = slot.contribs;
       if (contribs.length > 0 && row.kind !== "io") {
-        const key = row.kind === "cpu" ? "cpuCores" : "rssBytes";
+        const val = (c: Contribution): number =>
+          row.kind === "cpu" ? c.cpuCores : row.kind === "mem" ? c.rssBytes : Math.max(c.netRxMbps, c.netTxMbps);
+        const fmt = (c: Contribution): string =>
+          row.kind === "cpu"
+            ? fmtCores(c.cpuCores) + " Kerne"
+            : row.kind === "mem"
+            ? fmtBytes(c.rssBytes)
+            : `${c.netRxMbps > 0 ? "Rx " + fmtMbps(c.netRxMbps) : ""}${c.netTxMbps > 0 ? "Tx " + fmtMbps(c.netTxMbps) : ""}`;
         tip += "\n" + contribs
-          .filter((c) => c[key] > 0)
-          .sort((a, b) => b[key] - a[key])
-          .map((c) => `  ${c.wfName}/${c.role}: ${row.kind === "cpu" ? fmtCores(c.cpuCores) + " Kerne" : fmtBytes(c.rssBytes)}`)
+          .filter((c) => val(c) > 0)
+          .sort((a, b) => val(b) - val(a))
+          .map((c) => `  ${c.wfName}/${c.role}: ${fmt(c)}`)
           .join("\n");
       }
       if (slot.unknown.length > 0) tip += `\n⚠ Bedarf unbekannt (kein Messprofil): ${slot.unknown.join(", ")}`;

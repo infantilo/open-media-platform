@@ -82,6 +82,12 @@ type CatalogEntry struct {
 	// Node-Typ ohne dieses Feld bleibt gültig, der Latenz-Budget-Rechner
 	// behandelt ihn dann als "Latenz unbekannt" (§15.2).
 	Latency *CatalogLatency `json:"latency,omitempty"`
+	// Network deklariert, dass dieser Node-Typ Datenverkehr über die
+	// Netzwerkkarte des Hosts erzeugt (Gateways; MXL zwischen Nodes auf
+	// einem Host ist Shared Memory und belastet die NIC nicht). Grundlage
+	// der Netz-Zeile im Scheduler (Nutzerwunsch 2026-10-01: Bandbreite der
+	// Karte planen). Optional — ohne Feld gilt der Typ als netzneutral.
+	Network *CatalogNetwork `json:"network,omitempty"`
 	// MxlAccess (nur runner:"podman") mountet die lokale MXL-Shared-
 	// Memory-Domain (OMP_MXL_DOMAIN, Default /dev/shm/omp-mxl) unverändert
 	// in den Container — Default false. Bewusst kein globales Verhalten für
@@ -108,6 +114,18 @@ type CatalogEntry struct {
 	// Default false: wie MxlAccess ein bewusster Opt-in, kein globales
 	// Verhalten für jeden Podman-Import.
 	ExtraPort bool `json:"extraPort,omitempty"`
+}
+
+// CatalogNetwork beschreibt den NIC-Bedarf eines Node-Typs. Direction ist
+// aus Sicht des Hosts ("in" = Empfang/Rx, "out" = Senden/Tx). Kind "video"
+// rechnet den Bedarf aus dem Format der Rolle (Breite × Höhe × Framerate ×
+// BitsPerPixel × RTP-Overhead, z. B. ST 2110-20 yuv422 10 bit = 20 bpp),
+// Kind "fixed" nimmt den Nennwert Mbps (Audio/WebRTC: Schätzwert).
+type CatalogNetwork struct {
+	Direction    string  `json:"direction"`
+	Kind         string  `json:"kind"`
+	BitsPerPixel float64 `json:"bitsPerPixel,omitempty"`
+	Mbps         float64 `json:"mbps,omitempty"`
 }
 
 // LatencyRange ist ein Latenzbereich in Frames (Video) bzw. Samples

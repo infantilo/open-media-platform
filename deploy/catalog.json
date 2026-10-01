@@ -26,6 +26,7 @@
     "command": ["../nodes/target/debug/omp-2110-gateway"],
     "env": { "OMP_2110_GATEWAY_DIRECTION": "ingest" },
     "description": "Empfängt unkomprimiertes SMPTE-2110-20-Video per RTP-Multicast/-Unicast aus dem LAN und speist es als MXL-Flow ein (Kapitel 19 Teil 1). Ziel/Quelle per OMP_2110_GATEWAY_LISTEN_PORT/_MULTICAST_GROUP oder direktem SDP (OMP_2110_GATEWAY_SDP/_SDP_FILE) konfiguriert, optional PTP-Zeitbasis per OMP_PTP_DOMAIN. Meldet AMWA-BCP-008-01-Empfangsstatus (Link/Verbindung/Sync/Stream, `docs/decisions.md` BCP-008-Nachtrag) über die generischen monitor.*-Parameter.",
+    "network": { "direction": "in", "kind": "video", "bitsPerPixel": 20 },
     "expectedResources": "moderat (unkomprimiertes Video, netzwerklastig)",
     "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
   },
@@ -36,6 +37,7 @@
     "command": ["../nodes/target/debug/omp-2110-gateway"],
     "env": { "OMP_2110_GATEWAY_DIRECTION": "output" },
     "description": "Sendet einen per Flow-Editor gewählten MXL-Video-Flow als unkomprimiertes SMPTE-2110-20 per RTP an einen festen Ziel-Endpunkt (OMP_2110_GATEWAY_DEST_HOST/_DEST_PORT, Kapitel 19 Teil 1) — Quellwahl per echtem IS-05-Receiver-PATCH (Drag&Drop), Ziel bleibt fest. Optional PTP-Zeitbasis per OMP_PTP_DOMAIN. Meldet AMWA-BCP-008-02-Sendestatus über die generischen monitor.*-Parameter.",
+    "network": { "direction": "out", "kind": "video", "bitsPerPixel": 20 },
     "expectedResources": "moderat (unkomprimiertes Video, netzwerklastig)",
     "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
   },
@@ -46,6 +48,7 @@
     "command": ["../nodes/target/debug/omp-aes67-gateway"],
     "env": { "OMP_AES67_GATEWAY_DIRECTION": "sink" },
     "description": "Empfängt AES67/RTP-Audio (Dante-Geräte im AES67-Modus, Ravenna/Lawo/Merging u. a.) aus dem LAN und speist es als MXL-Flow ein (Kapitel 19 Teil 3) — Audio-Pendant zum ST-2110-Gateway. Fremdströme per SAP-Discovery (OMP_AES67_GATEWAY_DISCOVER_NAME) oder direktem SDP/Einzel-Env-Vars gefunden. Optional PTP-Zeitbasis per OMP_PTP_DOMAIN. Meldet AMWA-BCP-008-01-Empfangsstatus über die generischen monitor.*-Parameter.",
+    "network": { "direction": "in", "kind": "fixed", "mbps": 10 },
     "expectedResources": "gering (Audio, geringe Bitrate)"
   },
   {
@@ -55,6 +58,7 @@
     "command": ["../nodes/target/debug/omp-aes67-gateway"],
     "env": { "OMP_AES67_GATEWAY_DIRECTION": "source" },
     "description": "Sendet einen per Flow-Editor gewählten MXL-Audio-Flow als AES67/RTP an einen festen Ziel-Endpunkt (OMP_AES67_GATEWAY_DEST_HOST/_DEST_PORT) und announct ihn dauerhaft per SAP, damit Dante-/AES67-Controller ihn finden — Quellwahl per echtem IS-05-Receiver-PATCH, Ziel bleibt fest. Optional PTP-Zeitbasis per OMP_PTP_DOMAIN. Meldet AMWA-BCP-008-02-Sendestatus über die generischen monitor.*-Parameter.",
+    "network": { "direction": "out", "kind": "fixed", "mbps": 10 },
     "expectedResources": "gering (Audio, geringe Bitrate)"
   },
   {
@@ -64,6 +68,7 @@
     "command": ["../nodes/target/debug/omp-webrtc-gateway"],
     "env": {},
     "description": "Nimmt die Kamera eines Handys per WebRTC (WHIP, H.264+Opus) entgegen und speist sie als MXL-Flow ein (Nachtrag 240 ff.) — Handy öffnet die vom Node selbst ausgelieferte Sendeseite direkt (eigener Port, NICHT über den Orchestrator). Braucht mindestens eine aktive Einladung (Bedienoberfläche dieses Node-Typs: Link/QR-Code erzeugen) — ohne gültiges `?token=` aus einem Einladungslink nimmt der Node keine Verbindung an (Nutzerwunsch 2026-09-23, \"security!\"). Bei NAT/Portweiterleitung fürs Handy übers Internet: OMP_WEBRTC_PUBLIC_IP/OMP_WEBRTC_ICE_PORT per zusätzlicher Startumgebung setzen (s. docs/decisions.md Nachtrag 240/244).",
+    "network": { "direction": "in", "kind": "fixed", "mbps": 4 },
     "expectedResources": "gering bis moderat (H.264-Hardware-Decoding im Handy, WebRTC-Signalisierung im Node)"
   },
   {
@@ -73,6 +78,7 @@
     "command": ["../nodes/target/debug/omp-webrtc-gateway"],
     "env": { "OMP_WEBRTC_GATEWAY_DIRECTION": "monitor" },
     "description": "Sendet einen per Flow-Editor gewählten MXL-Flow per WebRTC (WHEP) an ein Handy (Nachtrag 240 ff., Retourbild/Regie-Monitor) — Quellwahl per echtem IS-05-Receiver-PATCH (Drag&Drop, Video+Audio getrennt). Gleiche Einladungspflicht wie die Kamera-Richtung (Bedienoberfläche/`?token=`, \"security!\"). Bei NAT/Portweiterleitung: OMP_WEBRTC_PUBLIC_IP/OMP_WEBRTC_ICE_PORT per zusätzlicher Startumgebung setzen.",
+    "network": { "direction": "out", "kind": "fixed", "mbps": 2 },
     "expectedResources": "gering bis moderat (H.264-Encoding im Node, Wiedergabe im Handy-Browser)"
   },
   {

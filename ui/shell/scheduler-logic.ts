@@ -124,6 +124,10 @@ export interface ResHost {
   capacityKnown: boolean;
   live?: { cpuPercent: number; memPercent: number; netPercent?: number; gpuPercent?: number };
   ioPorts?: ResIOCap[];
+  // Link-Geschwindigkeit der NIC in Mbit/s je Richtung (vollduplex); fehlt,
+  // wenn der Host-Agent keine NIC konfiguriert hat oder der Treiber sie
+  // nicht meldet.
+  netLinkMbps?: number;
 }
 
 export interface ResRole {
@@ -136,6 +140,11 @@ export interface ResRole {
   known: boolean;
   fallback?: boolean;
   ioPort?: { cardType: string; direction: string };
+  // Berechneter NIC-Bedarf in Mbit/s aus Sicht des Hosts (Rx = Empfang,
+  // Tx = Senden); netEstimated: Format/Nennwert angenommen, nicht bekannt.
+  netRxMbps?: number;
+  netTxMbps?: number;
+  netEstimated?: boolean;
 }
 
 export interface ResWorkflow {
@@ -160,11 +169,18 @@ export interface Contribution {
   role: string;
   cpuCores: number;
   rssBytes: number;
+  netRxMbps: number;
+  netTxMbps: number;
 }
 
 export interface LaneSlot {
   cpuCores: number;
   rssBytes: number;
+  netRxMbps: number;
+  netTxMbps: number;
+  // Mind. ein Netz-Bedarf beruht auf einer Annahme (Standardformat bzw.
+  // Nennwert) — die Anzeige kennzeichnet ihn mit "~".
+  netEstimated: boolean;
   io: Record<string, number>;
   contribs: Contribution[];
   // Rollen ohne Messprofil — ihr Bedarf fehlt in den Summen (unbekannt,
@@ -175,7 +191,7 @@ export interface LaneSlot {
 export type Timeline = Map<string, LaneSlot[]>;
 
 function emptySlot(): LaneSlot {
-  return { cpuCores: 0, rssBytes: 0, io: {}, contribs: [], unknown: [] };
+  return { cpuCores: 0, rssBytes: 0, netRxMbps: 0, netTxMbps: 0, netEstimated: false, io: {}, contribs: [], unknown: [] };
 }
 
 export function ioKey(cardType: string, direction: string): string {
@@ -215,8 +231,21 @@ export function computeTimeline(
           const k = ioKey(role.ioPort.cardType, role.ioPort.direction);
           slot.io[k] = (slot.io[k] ?? 0) + 1;
         }
-        if (role.known) {
-          slot.contribs.push({ wfId: wf.id, wfName: wf.name, role: role.name, cpuCores: role.cpuCores, rssBytes: role.rssBytes });
+        const rx = role.netRxMbps ?? 0;
+        const tx = role.netTxMbps ?? 0;
+        slot.netRxMbps += rx;
+        slot.netTxMbps += tx;
+        if (rx + tx > 0 && role.netEstimated) slot.netEstimated = true;
+        if (role.known || rx + tx > 0) {
+          slot.contribs.push({
+            wfId: wf.id,
+            wfName: wf.name,
+            role: role.name,
+            cpuCores: role.known ? role.cpuCores : 0,
+            rssBytes: role.known ? role.rssBytes : 0,
+            netRxMbps: rx,
+            netTxMbps: tx,
+          });
         }
       }
     }
@@ -227,6 +256,7 @@ export function computeTimeline(
 export interface Capacity {
   cpuCores: number; // 0 = unbekannt
   memBytes: number; // 0 = unbekannt
+  netMbps: number; // NIC-Link je Richtung, 0 = unbekannt
   io: Record<string, number>;
 }
 
@@ -235,12 +265,13 @@ export interface Capacity {
 // Rollen ohne Host-Festlegung.
 export function laneCapacity(model: ResourceModel, laneId: string): Capacity {
   const hosts = laneId === AUTO_LANE ? model.hosts.filter((h) => h.online) : model.hosts.filter((h) => h.id === laneId);
-  const cap: Capacity = { cpuCores: 0, memBytes: 0, io: {} };
+  const cap: Capacity = { cpuCores: 0, memBytes: 0, netMbps: 0, io: {} };
   for (const h of hosts) {
     if (h.capacityKnown) {
       cap.cpuCores += h.numCpu;
       cap.memBytes += h.memTotalBytes;
     }
+    cap.netMbps += h.netLinkMbps ?? 0;
     for (const p of h.ioPorts ?? []) {
       const k = ioKey(p.cardType, p.direction);
       cap.io[k] = (cap.io[k] ?? 0) + p.total;
@@ -267,6 +298,12 @@ export interface SlotUtilization {
   memPercent: number | null;
   cpuLevel: Level;
   memLevel: Level;
+  // Netz: die höhere der beiden Richtungen (vollduplex) gegen den Link.
+  // null = Link der Karte unbekannt — der Bedarf in Mbit/s bleibt im Slot
+  // trotzdem sichtbar.
+  netPercent: number | null;
+  netLevel: Level;
+  freeNetMbps: number | null;
   // Überlastete I/O-Port-Typen (Bedarf > vorhandene Ports).
   ioOver: string[];
   incomplete: boolean; // mind. eine Rolle ohne Messprofil
@@ -275,7 +312,10 @@ export interface SlotUtilization {
   freeMemBytes: number | null;
 }
 
-export function slotUtilization(slot: LaneSlot, cap: Capacity, thresholds: { cpu: number; mem: number }): SlotUtilization {
+export function slotUtilization(slot: LaneSlot, cap: Capacity, thresholds: { cpu: number; mem: number; net?: number }): SlotUtilization {
+  const netThr = thresholds.net ?? 85;
+  const netPeak = Math.max(slot.netRxMbps, slot.netTxMbps);
+  const netPercent = cap.netMbps > 0 ? (netPeak / cap.netMbps) * 100 : null;
   const cpuPercent = cap.cpuCores > 0 ? (slot.cpuCores / cap.cpuCores) * 100 : null;
   const memPercent = cap.memBytes > 0 ? (slot.rssBytes / cap.memBytes) * 100 : null;
   const ioOver: string[] = [];
@@ -287,6 +327,9 @@ export function slotUtilization(slot: LaneSlot, cap: Capacity, thresholds: { cpu
     memPercent,
     cpuLevel: levelOf(cpuPercent, thresholds.cpu),
     memLevel: levelOf(memPercent, thresholds.mem),
+    netPercent,
+    netLevel: levelOf(netPercent, netThr),
+    freeNetMbps: cap.netMbps > 0 ? Math.max(0, cap.netMbps * (netThr / 100) - netPeak) : null,
     ioOver,
     incomplete: slot.unknown.length > 0,
     freeCores: cap.cpuCores > 0 ? Math.max(0, cap.cpuCores * (thresholds.cpu / 100) - slot.cpuCores) : null,
@@ -295,7 +338,7 @@ export function slotUtilization(slot: LaneSlot, cap: Capacity, thresholds: { cpu
 }
 
 export function isOver(u: SlotUtilization): boolean {
-  return u.cpuLevel === "over" || u.memLevel === "over" || u.ioOver.length > 0;
+  return u.cpuLevel === "over" || u.memLevel === "over" || u.netLevel === "over" || u.ioOver.length > 0;
 }
 
 // Ein Engpass, den ein Workflow (mit)verursacht: Lane + Zeit-Slot-Index +
@@ -315,6 +358,7 @@ export function findBottlenecks(model: ResourceModel, timeline: Timeline): Bottl
       const what: string[] = [];
       if (u.cpuLevel === "over") what.push("CPU");
       if (u.memLevel === "over") what.push("RAM");
+      if (u.netLevel === "over") what.push("Netz");
       what.push(...u.ioOver);
       if (what.length > 0) out.push({ laneId, slotIndex, what });
     });
@@ -326,6 +370,11 @@ export function fmtBytes(b: number): string {
   if (b >= 1 << 30) return `${(b / (1 << 30)).toFixed(1)} GB`;
   if (b >= 1 << 20) return `${Math.round(b / (1 << 20))} MB`;
   return `${Math.round(b / 1024)} kB`;
+}
+
+export function fmtMbps(m: number): string {
+  if (m >= 1000) return `${(m / 1000).toFixed(m >= 10000 ? 0 : 1)} Gbit/s`;
+  return `${Math.round(m)} Mbit/s`;
 }
 
 export function fmtCores(c: number): string {
