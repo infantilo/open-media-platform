@@ -725,9 +725,48 @@ pub struct ChannelShared {
     /// [`ENGINE_TIMEOUT_MS`], ignoriert die Fader-Stufe AutoMix/Ducking
     /// (Fail-Safe: Fader bleibt der manuelle Wert, keine hängenden Anteile).
     pub engine_beat_ms: AtomicU64,
+    /// Aux-Sends dieses Kanals (Schlüssel = Aux-ID).
+    sends: std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<SendShared>>>,
 }
 
 pub const ENGINE_TIMEOUT_MS: u64 = 1000;
+
+/// Zustand eines Aux-Sends (Kanal → Aux-Bus), vom Audio-Thread der
+/// Send-Probe gelesen. Es gibt nur einen Abgriff (nach der Bearbeitung,
+/// vor dem Fader): *Pre-Fader* nutzt das Signal unverändert, *Post-Fader*
+/// multipliziert den aktuellen Fader-Gesamtgain (Fader · Mute · AutoMix ·
+/// Ducking · Gruppe) darauf — dadurch folgt ein Post-Send exakt dem, was
+/// im Programm hörbar ist, und ein Pre-Send bleibt davon unberührt.
+pub struct SendShared {
+    pub enabled: std::sync::atomic::AtomicBool,
+    pub level_db: AtomicF32,
+    pub post: std::sync::atomic::AtomicBool,
+}
+
+impl SendShared {
+    pub fn new() -> Self {
+        SendShared {
+            enabled: std::sync::atomic::AtomicBool::new(false),
+            level_db: AtomicF32::new(0.0),
+            post: std::sync::atomic::AtomicBool::new(true),
+        }
+    }
+
+    /// Ziel-Gain (linear) dieses Sends für den aktuellen Kanalzustand.
+    pub fn target_gain(&self, ch: &ChannelShared) -> f64 {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return 0.0;
+        }
+        let post = if self.post.load(Ordering::Relaxed) { ch.total_gain() } else { 1.0 };
+        db_to_lin(self.level_db.get() as f64) * post
+    }
+}
+
+impl Default for SendShared {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ChannelShared {
     pub fn new() -> Self {
@@ -742,7 +781,29 @@ impl ChannelShared {
             group_db: AtomicF32::new(0.0),
             group_muted: std::sync::atomic::AtomicBool::new(false),
             engine_beat_ms: AtomicU64::new(0),
+            sends: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// Send-Zustand für `aux_id` (wird bei Bedarf angelegt).
+    pub fn send(&self, aux_id: &str) -> std::sync::Arc<SendShared> {
+        self.sends
+            .lock()
+            .expect("lock poisoned")
+            .entry(aux_id.to_string())
+            .or_insert_with(|| std::sync::Arc::new(SendShared::new()))
+            .clone()
+    }
+
+    /// Alle Sends, die aktuell eingeschaltet sind (Aux-ID).
+    pub fn enabled_sends(&self) -> Vec<String> {
+        self.sends
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .filter(|(_, s)| s.enabled.load(Ordering::Relaxed))
+            .map(|(k, _)| k.clone())
+            .collect()
     }
 
     pub fn set_params(&self, p: ProcParams) {
@@ -1119,6 +1180,35 @@ mod tests {
         sh.group_muted.store(false, Ordering::Relaxed);
         sh.muted.store(true, Ordering::Relaxed);
         assert_eq!(sh.total_gain(), 0.0);
+    }
+
+    #[test]
+    fn send_pre_ignores_fader_and_mute_post_follows_them() {
+        let ch = ChannelShared::new();
+        let pre = SendShared::new();
+        pre.enabled.store(true, Ordering::Relaxed);
+        pre.post.store(false, Ordering::Relaxed);
+        pre.level_db.set(-6.0);
+        let post = SendShared::new();
+        post.enabled.store(true, Ordering::Relaxed);
+        post.post.store(true, Ordering::Relaxed);
+        post.level_db.set(-6.0);
+
+        let want = db_to_lin(-6.0);
+        ch.fader_db.set(-20.0);
+        assert!((pre.target_gain(&ch) - want).abs() < 1e-9, "Pre unabhängig vom Fader");
+        assert!((post.target_gain(&ch) - want * db_to_lin(-20.0)).abs() < 1e-9, "Post folgt dem Fader");
+        ch.muted.store(true, Ordering::Relaxed);
+        assert!((pre.target_gain(&ch) - want).abs() < 1e-9, "Pre hört auch bei Mute");
+        assert_eq!(post.target_gain(&ch), 0.0, "Post stumm bei Mute");
+        pre.enabled.store(false, Ordering::Relaxed);
+        assert_eq!(pre.target_gain(&ch), 0.0);
+        // Post folgt auch AutoMix/Ducking, solange die Engine lebt.
+        ch.muted.store(false, Ordering::Relaxed);
+        ch.fader_db.set(0.0);
+        ch.auto_db.set(-10.0);
+        ch.engine_beat_ms.store(now_ms(), Ordering::Relaxed);
+        assert!((post.target_gain(&ch) - want * db_to_lin(-10.0)).abs() < 1e-9);
     }
 
     #[test]

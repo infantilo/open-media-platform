@@ -48,7 +48,8 @@ const FOLLOW_CROSSFADE_STEPS: u64 = 12;
 /// Einzige Quelle für Descriptor, `get` und State-Dokument — die
 /// Parameternamen der Altfassung (`eqLow`, `eqLowFreq`, `compThreshold`, …)
 /// bleiben unverändert, neue kommen dazu.
-const PROC_PARAMS: &[(&str, ParamType, Option<(f64, f64)>)] = &[
+type ProcParamSpec = (&'static str, ParamType, Option<(f64, f64)>);
+const PROC_PARAMS: &[ProcParamSpec] = &[
     ("eqBypass", ParamType::Boolean, None),
     ("eqHpEnabled", ParamType::Boolean, None),
     ("eqHpFreq", ParamType::Number, Some((20.0, 500.0))),
@@ -225,6 +226,38 @@ fn proc_to_json(p: &dsp::ProcParams, out: &mut serde_json::Map<String, Value>) {
     }
 }
 
+/// Aux-Bus (fester Slot, `pipeline::Config::aux_slots`). `kind == "n1"`:
+/// Mix-Minus — alle Kanäle außer `exclude` laufen automatisch post-Fader
+/// (Pegel 0 dB, individuell anpassbar) auf den Bus; das Signal des
+/// ausgeschlossenen Kanals ist *strukturell* nie enthalten (kein Send
+/// möglich), nicht bloß stummgeschaltet.
+#[derive(Clone)]
+struct AuxState {
+    id: String,
+    sender_id: String,
+    flow_id: String,
+    label: String,
+    active: bool,
+    kind: String,
+    exclude: String,
+    master_db: f64,
+    muted: bool,
+}
+
+#[derive(Clone, Copy)]
+struct SendState {
+    enabled: bool,
+    level_db: f64,
+    post: bool,
+}
+
+/// Änderungen an der NMOS-Senderliste (`invoke` läuft auf einem HTTP-Thread,
+/// `add_sender` ist async) — gleiches Muster wie `omp-mxf-player-direct`.
+enum SenderChange {
+    Add { sender_id: String, flow_id: String, label: String },
+    Remove { sender_id: String },
+}
+
 #[derive(Clone)]
 struct ChannelState {
     id: String,
@@ -258,6 +291,8 @@ struct ChannelState {
     manual: bool,
     /// Darf als Ducking-Ziel abgesenkt werden.
     duckable: bool,
+    /// Aux-Sends (Schlüssel = Aux-ID); fehlender Eintrag = Standard des Bus-Typs.
+    sends: HashMap<String, SendState>,
     /// Node-ID der zu verfolgenden Quelle (Tally-Bus-Subject,
     /// `omp.tally.<node_id>`) — leer = keine Kopplung.
     follow_target: String,
@@ -322,6 +357,7 @@ impl ChannelState {
             am_sensitivity_db: -50.0,
             manual: false,
             duckable: true,
+            sends: HashMap::new(),
             follow_target: String::new(),
             follow_mode: "off".to_string(),
             override_enabled: false,
@@ -363,6 +399,9 @@ struct AudioMixerStore {
     /// Konfiguration der Automations-Engine (`engine.rs`) — wird nach jeder
     /// Änderung aus Kanälen/Gruppen/Regeln neu aufgebaut (`sync_engine`).
     engine_cfg: engine::ConfigCell,
+    aux: Mutex<Vec<AuxState>>,
+    sender_changes: tokio::sync::mpsc::UnboundedSender<SenderChange>,
+    node_label: String,
 }
 
 /// Testton-Frequenz pro Kanal — nur zur akustischen Unterscheidbarkeit im
@@ -419,6 +458,14 @@ impl ParamStore for AudioMixerStore {
             // `group.<id>.*`/`duck.<id>.*`-Methoden.
             ParamSpec {
                 name: "groups".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            // Kapitel 26: Aux-/N-1-Busse (feste Slots, `active` zeigt die belegten).
+            ParamSpec {
+                name: "auxBuses".to_string(),
                 kind: ParamType::String,
                 unit: None,
                 range: None,
@@ -485,6 +532,17 @@ impl ParamStore for AudioMixerStore {
                     name: "channelId".to_string(),
                     kind: ParamType::String,
                 }],
+            },
+            MethodSpec {
+                name: "addAux".to_string(),
+                args: vec![
+                    MethodArg { name: "label".to_string(), kind: ParamType::String },
+                    MethodArg { name: "kind".to_string(), kind: ParamType::String },
+                ],
+            },
+            MethodSpec {
+                name: "removeAux".to_string(),
+                args: vec![MethodArg { name: "auxId".to_string(), kind: ParamType::String }],
             },
             MethodSpec {
                 name: "addGroup".to_string(),
@@ -562,6 +620,7 @@ impl ParamStore for AudioMixerStore {
                 Some(Range::Number { min: -90.0, max: -10.0 }),
             ));
             parameters.push(channel_param(id, "autoManual", ParamType::Boolean, None));
+            parameters.push(channel_param(id, "sends", ParamType::String, None));
             parameters.push(channel_param(id, "duckable", ParamType::Boolean, None));
             // `senderId` der externen Quelle, leer = interner Testton.
             parameters.push(channel_param(id, "source", ParamType::String, None));
@@ -676,6 +735,15 @@ impl ParamStore for AudioMixerStore {
             methods.push(MethodSpec { name: format!("channel.{id}.setDelay"), args: vec![flag("enabled"), num("ms")] });
             methods.push(MethodSpec { name: format!("channel.{id}.setPan"), args: vec![num("pan")] });
             methods.push(MethodSpec {
+                name: format!("channel.{id}.setSend"),
+                args: vec![
+                    MethodArg { name: "auxId".to_string(), kind: ParamType::String },
+                    flag("enabled"),
+                    num("levelDb"),
+                    flag("post"),
+                ],
+            });
+            methods.push(MethodSpec {
                 name: format!("channel.{id}.setGroup"),
                 args: vec![MethodArg { name: "groupId".to_string(), kind: ParamType::String }],
             });
@@ -744,6 +812,12 @@ impl ParamStore for AudioMixerStore {
                 ],
             });
         }
+        for a in self.aux.lock().expect("lock poisoned").iter().filter(|a| a.active) {
+            let id = &a.id;
+            methods.push(MethodSpec { name: format!("aux.{id}.setLabel"), args: vec![t("label")] });
+            methods.push(MethodSpec { name: format!("aux.{id}.setMaster"), args: vec![n("db"), b("muted")] });
+            methods.push(MethodSpec { name: format!("aux.{id}.setN1"), args: vec![t("exclude")] });
+        }
         for d in self.ducks.lock().expect("lock poisoned").iter() {
             let id = &d.id;
             methods.push(MethodSpec { name: format!("duck.{id}.setLabel"), args: vec![t("label")] });
@@ -811,6 +885,10 @@ impl ParamStore for AudioMixerStore {
             let groups = self.groups.lock().expect("lock poisoned");
             return Some(Value::Array(groups.iter().map(GroupState::to_json).collect()));
         }
+        if name == "auxBuses" {
+            let aux = self.aux.lock().expect("lock poisoned");
+            return Some(Value::Array(aux.iter().map(aux_json).collect()));
+        }
         if name == "duckRules" {
             let ducks = self.ducks.lock().expect("lock poisoned");
             return Some(Value::Array(ducks.iter().map(DuckState::to_json).collect()));
@@ -837,6 +915,18 @@ impl ParamStore for AudioMixerStore {
             "mute" => Some(serde_json::json!(ch.mute)),
             "pfl" => Some(serde_json::json!(ch.pfl)),
             other if proc_get(&ch.proc, other).is_some() => proc_get(&ch.proc, other),
+            "sends" => {
+                let aux = self.aux.lock().expect("lock poisoned");
+                Some(Value::Array(
+                    aux.iter()
+                        .filter(|a| a.active)
+                        .map(|a| {
+                            let (enabled, level_db, post, locked) = effective_send(ch, a);
+                            serde_json::json!({"auxId": a.id, "enabled": enabled, "levelDb": level_db, "post": post, "locked": locked})
+                        })
+                        .collect(),
+                ))
+            }
             "group" => Some(serde_json::json!(ch.group)),
             "autoMixEnabled" => Some(serde_json::json!(ch.am_enabled)),
             "autoMixWeight" => Some(serde_json::json!(ch.am_weight)),
@@ -866,6 +956,15 @@ impl ParamStore for AudioMixerStore {
             // Jede erfolgreiche Änderung kann Gruppen/Regeln/Kanalzuordnung
             // berühren — Engine-Konfiguration neu aufbauen (billig).
             self.sync_engine();
+            let touches_sends = name == "addChannel"
+                || name == "addAux"
+                || name == "removeAux"
+                || name.starts_with("aux.")
+                || name.ends_with(".setSend")
+                || name.ends_with(".setSource");
+            if touches_sends {
+                self.apply_sends();
+            }
         }
         result
     }
@@ -943,6 +1042,30 @@ fn apply_args(
     Ok(())
 }
 
+/// Wirksamer Send eines Kanals auf einen Aux-Bus: (aktiv, Pegel dB, Post, gesperrt).
+/// Nur hier wird die N-1-Regel erzwungen.
+fn effective_send(ch: &ChannelState, aux: &AuxState) -> (bool, f64, bool, bool) {
+    if !aux.active {
+        return (false, 0.0, true, false);
+    }
+    if aux.kind == "n1" {
+        if ch.id == aux.exclude {
+            return (false, 0.0, true, true);
+        }
+        let s = ch.sends.get(&aux.id).copied().unwrap_or(SendState { enabled: true, level_db: 0.0, post: true });
+        return (s.enabled, s.level_db, s.post, false);
+    }
+    let s = ch.sends.get(&aux.id).copied().unwrap_or(SendState { enabled: false, level_db: 0.0, post: true });
+    (s.enabled, s.level_db, s.post, false)
+}
+
+fn aux_json(a: &AuxState) -> Value {
+    serde_json::json!({
+        "id": a.id, "label": a.label, "active": a.active, "kind": a.kind,
+        "exclude": a.exclude, "masterDb": a.master_db, "mute": a.muted,
+    })
+}
+
 fn parse_channel_name(name: &str) -> Option<(&str, &str)> {
     let rest = name.strip_prefix("channel.")?;
     rest.split_once('.')
@@ -971,6 +1094,9 @@ impl AudioMixerStore {
                         "id": c.id, "label": c.label, "internalFreq": c.internal_freq,
                         "gainDb": c.gain_db, "mute": c.mute,
                         "source": c.source,
+                        "sends": c.sends.iter().map(|(k, v)| serde_json::json!({
+                            "auxId": k, "enabled": v.enabled, "levelDb": v.level_db, "post": v.post,
+                        })).collect::<Vec<_>>(),
                         "group": c.group, "autoMixEnabled": c.am_enabled,
                         "autoMixWeight": c.am_weight, "autoMixPriority": c.am_priority,
                         "autoMixSensitivity": c.am_sensitivity_db,
@@ -998,6 +1124,7 @@ impl AudioMixerStore {
             "channels": channel_docs,
             "groups": group_docs,
             "duckRules": duck_docs,
+            "auxBuses": self.aux.lock().expect("lock poisoned").iter().filter(|a| a.active).map(aux_json).collect::<Vec<_>>(),
             "masterLimiter": {
                 "enabled": ml.enabled, "thresholdDb": ml.threshold_db,
                 "ratio": ml.ratio, "makeupDb": ml.makeup_db,
@@ -1038,6 +1165,37 @@ impl AudioMixerStore {
             .map(|a| a.iter().filter_map(DuckState::from_json).collect())
             .unwrap_or_default();
 
+        // Aux-Busse abgleichen (fehlender Schlüssel in Alt-Presets → alle aus).
+        {
+            let docs: Vec<Value> = doc.get("auxBuses").and_then(Value::as_array).cloned().unwrap_or_default();
+            let mut aux = self.aux.lock().expect("lock poisoned");
+            for a in aux.iter_mut() {
+                let d = docs.iter().find(|d| d.get("id").and_then(Value::as_str) == Some(a.id.as_str()));
+                match (d, a.active) {
+                    (Some(d), was_active) => {
+                        a.label = d.get("label").and_then(Value::as_str).unwrap_or(&a.label).to_string();
+                        a.kind = d.get("kind").and_then(Value::as_str).unwrap_or("aux").to_string();
+                        a.exclude = d.get("exclude").and_then(Value::as_str).unwrap_or("").to_string();
+                        a.master_db = d.get("masterDb").and_then(Value::as_f64).unwrap_or(0.0);
+                        a.muted = d.get("mute").and_then(Value::as_bool).unwrap_or(false);
+                        a.active = true;
+                        if !was_active {
+                            let _ = self.sender_changes.send(SenderChange::Add {
+                                sender_id: a.sender_id.clone(),
+                                flow_id: a.flow_id.clone(),
+                                label: format!("{} {}", self.node_label, a.label),
+                            });
+                        }
+                    }
+                    (None, true) => {
+                        a.active = false;
+                        let _ = self.sender_changes.send(SenderChange::Remove { sender_id: a.sender_id.clone() });
+                    }
+                    (None, false) => {}
+                }
+            }
+        }
+
         let sources = self.available_sources.lock().expect("lock poisoned").clone();
 
         for cd in channel_docs {
@@ -1054,6 +1212,19 @@ impl AudioMixerStore {
             // Fehlende (neue) Felder bleiben auf Defaults — Presets aus der
             // Zeit vor Kapitel 26 laden unverändert.
             ch.proc = proc_from_json(ch.proc, cd);
+            if let Some(list) = cd.get("sends").and_then(Value::as_array) {
+                for sd in list {
+                    let Some(aux_id) = sd.get("auxId").and_then(Value::as_str) else { continue };
+                    ch.sends.insert(
+                        aux_id.to_string(),
+                        SendState {
+                            enabled: sd.get("enabled").and_then(Value::as_bool).unwrap_or(false),
+                            level_db: sd.get("levelDb").and_then(Value::as_f64).unwrap_or(0.0),
+                            post: sd.get("post").and_then(Value::as_bool).unwrap_or(true),
+                        },
+                    );
+                }
+            }
             ch.group = cd.get("group").and_then(Value::as_str).unwrap_or("").to_string();
             ch.am_enabled = cd.get("autoMixEnabled").and_then(Value::as_bool).unwrap_or(false);
             ch.am_weight = cd.get("autoMixWeight").and_then(Value::as_f64).unwrap_or(1.0);
@@ -1113,6 +1284,7 @@ impl AudioMixerStore {
             .unwrap_or(0);
         self.next_seq.fetch_max(max_seq + 1, Ordering::Relaxed);
         self.sync_engine();
+        self.apply_sends();
         Ok(())
     }
 
@@ -1161,6 +1333,80 @@ impl AudioMixerStore {
                 let state = master_limiter_params(enabled, threshold_db, ratio, makeup_db);
                 *self.master_limiter.lock().expect("lock poisoned") = state;
                 self.pipeline.set_master_limiter(state);
+                Ok(())
+            }
+            "addAux" => {
+                let kind = args.get("kind").and_then(Value::as_str).unwrap_or("aux");
+                if kind != "aux" && kind != "n1" {
+                    return Err(InvokeError::Unknown);
+                }
+                let mut aux = self.aux.lock().expect("lock poisoned");
+                let Some(slot) = aux.iter_mut().find(|a| !a.active) else {
+                    return Err(InvokeError::Unknown); // alle Slots belegt
+                };
+                let label = args
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map_or_else(|| format!("{} {}", if kind == "n1" { "N-1" } else { "Aux" }, slot.id), str::to_string);
+                slot.active = true;
+                slot.kind = kind.to_string();
+                slot.label = label.clone();
+                slot.exclude.clear();
+                slot.master_db = 0.0;
+                slot.muted = false;
+                let _ = self.sender_changes.send(SenderChange::Add {
+                    sender_id: slot.sender_id.clone(),
+                    flow_id: slot.flow_id.clone(),
+                    label: format!("{} {label}", self.node_label),
+                });
+                Ok(())
+            }
+            "removeAux" => {
+                let id = args.get("auxId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let mut aux = self.aux.lock().expect("lock poisoned");
+                let a = aux.iter_mut().find(|a| a.id == id && a.active).ok_or(InvokeError::Unknown)?;
+                a.active = false;
+                let _ = self.sender_changes.send(SenderChange::Remove { sender_id: a.sender_id.clone() });
+                // Sends dieses Busses vergessen (Slot wird später ggf. neu belegt).
+                let id = a.id.clone();
+                drop(aux);
+                for ch in self.channels.lock().expect("lock poisoned").iter_mut() {
+                    ch.sends.remove(&id);
+                }
+                Ok(())
+            }
+            _ if name.starts_with("aux.") => {
+                let (id, method) = name["aux.".len()..].split_once('.').ok_or(InvokeError::Unknown)?;
+                // Kanalliste VOR dem Aux-Lock prüfen (Lock-Reihenfolge: nie aux → channels,
+                // `setSend` hält channels → aux).
+                let channel_ids: Vec<String> =
+                    self.channels.lock().expect("lock poisoned").iter().map(|c| c.id.clone()).collect();
+                let mut aux = self.aux.lock().expect("lock poisoned");
+                let a = aux.iter_mut().find(|a| a.id == id && a.active).ok_or(InvokeError::Unknown)?;
+                match method {
+                    "setLabel" => {
+                        a.label = args.get("label").and_then(Value::as_str).ok_or(InvokeError::Unknown)?.to_string();
+                    }
+                    "setMaster" => {
+                        if let Some(v) = args.get("db") {
+                            a.master_db = v.as_f64().ok_or(InvokeError::Unknown)?.clamp(-60.0, 12.0);
+                        }
+                        if let Some(v) = args.get("muted") {
+                            a.muted = v.as_bool().ok_or(InvokeError::Unknown)?;
+                        }
+                    }
+                    "setN1" => {
+                        // Ausgeschlossener Kanal (leer = keiner); Bus wird zum N-1-Typ.
+                        let ex = args.get("exclude").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                        if !ex.is_empty() && !channel_ids.iter().any(|c| c == ex) {
+                            return Err(InvokeError::Unknown);
+                        }
+                        a.kind = "n1".to_string();
+                        a.exclude = ex.to_string();
+                    }
+                    _ => return Err(InvokeError::Unknown),
+                }
                 Ok(())
             }
             "addGroup" => {
@@ -1262,6 +1508,23 @@ impl AudioMixerStore {
             })
             .collect();
         *self.engine_cfg.lock().expect("lock poisoned") = Arc::new(engine::EngineConfig { groups, chans, ducks });
+    }
+
+    /// Überträgt alle wirksamen Sends/Master-Pegel in die Pipeline.
+    /// Nur nach Änderungen an Sends/Aux/Kanälen aufgerufen (nicht bei
+    /// jedem Fader), s. `invoke`.
+    fn apply_sends(&self) {
+        let aux = self.aux.lock().expect("lock poisoned").clone();
+        let channels = self.channels.lock().expect("lock poisoned").clone();
+        for a in &aux {
+            self.pipeline.set_aux_active(a.id.clone(), a.active);
+            self.pipeline.set_aux_master(a.id.clone(), a.master_db, a.muted);
+            for ch in &channels {
+                let (enabled, level_db, post, _) = effective_send(ch, a);
+                // Inaktive Busse: nichts senden (verhindert Zweige ohne Abnehmer).
+                self.pipeline.set_send(ch.id.clone(), a.id.clone(), enabled && a.active, level_db, post);
+            }
+        }
     }
 
     fn get_master_limiter(&self, name: &str) -> Option<Value> {
@@ -1414,6 +1677,33 @@ impl AudioMixerStore {
                 self.pipeline.set_proc(id.to_string(), ch.proc);
                 Ok(())
             }
+            "setSend" => {
+                let aux_id = args.get("auxId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let aux = self
+                    .aux
+                    .lock()
+                    .expect("lock poisoned")
+                    .iter()
+                    .find(|a| a.id == aux_id && a.active)
+                    .cloned()
+                    .ok_or(InvokeError::Unknown)?;
+                if aux.kind == "n1" && aux.exclude == ch.id {
+                    return Err(InvokeError::Unknown); // N-1: eigener Kanal gesperrt
+                }
+                let cur = effective_send(ch, &aux);
+                let mut s = SendState { enabled: cur.0, level_db: cur.1, post: cur.2 };
+                if let Some(v) = args.get("enabled") {
+                    s.enabled = v.as_bool().ok_or(InvokeError::Unknown)?;
+                }
+                if let Some(v) = args.get("levelDb") {
+                    s.level_db = v.as_f64().ok_or(InvokeError::Unknown)?.clamp(-60.0, 12.0);
+                }
+                if let Some(v) = args.get("post") {
+                    s.post = v.as_bool().ok_or(InvokeError::Unknown)?;
+                }
+                ch.sends.insert(aux_id.to_string(), s);
+                Ok(())
+            }
             "setGroup" => {
                 let gid = args.get("groupId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
                 if !gid.is_empty() && !self.groups.lock().expect("lock poisoned").iter().any(|g| g.id == gid) {
@@ -1563,12 +1853,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let shutdown = Arc::new(AtomicBool::new(false));
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
 
+    // Aux-Slots (Kapitel 26): feste Anzahl, per Umgebung änderbar.
+    let aux_slot_count: usize = env_or("OMP_AUDIO_MIXER_AUX_SLOTS", "6").parse()?;
+    let aux_states: Vec<AuxState> = (1..=aux_slot_count)
+        .map(|n| AuxState {
+            id: format!("a{n}"),
+            sender_id: omp_node_sdk::idgen::new_v4(),
+            flow_id: omp_node_sdk::idgen::new_v4(),
+            label: format!("Aux a{n}"),
+            active: false,
+            kind: "aux".to_string(),
+            exclude: String::new(),
+            master_db: 0.0,
+            muted: false,
+        })
+        .collect();
     let pipeline_config = pipeline::Config {
         domain,
         flow_id: flow_id.clone(),
         label: label.clone(),
         monitor_flow_id: monitor_flow_id.clone(),
+        aux_slots: aux_states.iter().map(|a| (a.id.clone(), a.flow_id.clone(), format!("{label} {}", a.label))).collect(),
     };
+    let (sender_changes_tx, mut sender_changes_rx) = tokio::sync::mpsc::unbounded_channel::<SenderChange>();
+    let own_sender_ids: Vec<String> = [sender_id.clone(), monitor_sender_id.clone()]
+        .into_iter()
+        .chain(aux_states.iter().map(|a| a.sender_id.clone()))
+        .collect();
     let pipeline_shutdown = shutdown.clone();
     let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
     let pipeline_heartbeat_thread = pipeline_heartbeat.clone();
@@ -1621,12 +1932,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         groups: Mutex::new(Vec::new()),
         ducks: Mutex::new(Vec::new()),
         engine_cfg: engine_cfg.clone(),
+        aux: Mutex::new(aux_states),
+        sender_changes: sender_changes_tx,
+        node_label: label.clone(),
     });
 
     // Für die Discovery gebraucht (den eigenen Sender ausschließen) —
     // `sender_id` wird gleich in die `SenderSpec` verschoben, also vorher
     // klonen; `registry_url` ebenso, weil `NodeConfig` sie konsumiert.
-    let own_sender_id = sender_id.clone();
+    let own_sender_ids_for_discovery = own_sender_ids.clone();
     let discovery_registry_url = registry_url.clone();
     // `label` wird gleich per Shorthand-Feld in `NodeConfig` verschoben —
     // vorher klonen für den zweiten (Monitor-)Sender unten.
@@ -1691,7 +2005,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     handle.register_worker("automation-engine", engine_heartbeat);
 
     let follow_video = audio_follow_video_loop(nats_url, channels, pipeline_handle);
-    let discovery = discovery_loop(discovery_registry_url, own_sender_id, available_sources);
+    let discovery = discovery_loop(discovery_registry_url, own_sender_ids_for_discovery, available_sources);
+
+    let sender_worker = async {
+        while let Some(change) = sender_changes_rx.recv().await {
+            let result = match change {
+                SenderChange::Add { sender_id, flow_id, label } => handle
+                    .add_sender(SenderSpec {
+                        id: Some(sender_id),
+                        transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
+                        flow: Some(omp_node_sdk::node::FlowSpec::Audio {
+                            id: Some(flow_id),
+                            sample_rate_numerator: pipeline::SAMPLE_RATE,
+                            channel_count: pipeline::CHANNELS,
+                            media_type: "audio/float32".to_string(),
+                            bit_depth: 32,
+                            source_id: None,
+                        }),
+                        label: Some(label),
+                        ..Default::default()
+                    })
+                    .await
+                    .map(|_| ()),
+                SenderChange::Remove { sender_id } => handle.remove_sender(&sender_id).await,
+            };
+            if let Err(e) = result {
+                eprintln!("omp-audio-mixer: Aux-Sender-Änderung fehlgeschlagen: {e}");
+                handle.publish_alert(format!("Aux-Sender-Änderung fehlgeschlagen: {e}")).await;
+            }
+        }
+    };
 
     let events = async {
         while let Some(event) = rx.recv().await {
@@ -1734,6 +2077,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
         _ = discovery => {
             eprintln!("omp-audio-mixer: discovery loop ended");
+        }
+        _ = sender_worker => {
+            eprintln!("omp-audio-mixer: sender worker ended");
         }
     }
 
@@ -1895,7 +2241,7 @@ async fn audio_follow_video_loop(
 /// Audioquelle auftauchen.
 async fn discovery_loop(
     registry_url: String,
-    own_sender_id: String,
+    own_sender_ids: Vec<String>,
     sources: Arc<Mutex<Vec<DiscoveredAudioSource>>>,
 ) {
     let registry = RegistryClient::new(registry_url);
@@ -1903,13 +2249,13 @@ async fn discovery_loop(
     loop {
         interval.tick().await;
         let registry = registry.clone();
-        let own_sender_id = own_sender_id.clone();
+        let own_sender_ids = own_sender_ids.clone();
         let result = tokio::task::spawn_blocking(
             move || -> Result<Vec<DiscoveredAudioSource>, String> {
                 let senders = registry.list_senders().map_err(|e| e.to_string())?;
                 Ok(senders
                     .into_iter()
-                    .filter(|s| s.transport == TRANSPORT_MXL && s.id != own_sender_id)
+                    .filter(|s| s.transport == TRANSPORT_MXL && !own_sender_ids.contains(&s.id))
                     .filter_map(|s| s.flow_id.map(|flow_id| (s.id, s.label, flow_id)))
                     .filter(|(_, _, flow_id)| {
                         matches!(registry.get_flow_format(flow_id), Ok(format) if format == is04::FORMAT_AUDIO)
@@ -1931,5 +2277,101 @@ async fn discovery_loop(
             Ok(Err(e)) => eprintln!("omp-audio-mixer: discovery poll failed: {e}"),
             Err(e) => eprintln!("omp-audio-mixer: discovery poll task panicked: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn aux(kind: &str, exclude: &str, active: bool) -> AuxState {
+        AuxState {
+            id: "a1".into(),
+            sender_id: "s".into(),
+            flow_id: "f".into(),
+            label: "A".into(),
+            active,
+            kind: kind.into(),
+            exclude: exclude.into(),
+            master_db: 0.0,
+            muted: false,
+        }
+    }
+
+    fn ch(id: &str) -> ChannelState {
+        ChannelState::new(id.into(), id.into(), 220.0)
+    }
+
+    #[test]
+    fn plain_aux_sends_default_off_and_follow_explicit_settings() {
+        let a = aux("aux", "", true);
+        let mut c = ch("ch1");
+        assert!(!effective_send(&c, &a).0, "ohne Einstellung kein Send");
+        c.sends.insert("a1".into(), SendState { enabled: true, level_db: -6.0, post: false });
+        let (en, lvl, post, locked) = effective_send(&c, &a);
+        assert!(en && lvl == -6.0 && !post && !locked, "Pre-Fader-Send mit Pegel");
+    }
+
+    #[test]
+    fn inactive_aux_never_sends() {
+        let a = aux("aux", "", false);
+        let mut c = ch("ch1");
+        c.sends.insert("a1".into(), SendState { enabled: true, level_db: 0.0, post: true });
+        assert!(!effective_send(&c, &a).0);
+    }
+
+    #[test]
+    fn n1_includes_everyone_post_fader_except_the_excluded_channel() {
+        let a = aux("n1", "ch1", true);
+        let commentator = ch("ch1");
+        let other = ch("ch2");
+        // Alle anderen laufen automatisch post-Fader mit 0 dB auf den Bus …
+        let (en, lvl, post, locked) = effective_send(&other, &a);
+        assert!(en && lvl == 0.0 && post && !locked);
+        // … der Kommentator strukturell nicht: ausgeschaltet UND gesperrt.
+        let (en, _, _, locked) = effective_send(&commentator, &a);
+        assert!(!en && locked, "N-1: eigenes Signal ist nicht enthalten und nicht schaltbar");
+    }
+
+    #[test]
+    fn n1_excluded_channel_cannot_be_enabled_by_stored_send() {
+        let a = aux("n1", "ch1", true);
+        let mut c = ch("ch1");
+        // Selbst ein (z. B. aus einem alten Preset stammender) Send-Eintrag ändert nichts.
+        c.sends.insert("a1".into(), SendState { enabled: true, level_db: 0.0, post: true });
+        assert!(!effective_send(&c, &a).0);
+    }
+
+    #[test]
+    fn n1_other_channels_can_be_trimmed_or_removed_from_the_mix() {
+        let a = aux("n1", "ch1", true);
+        let mut c = ch("ch2");
+        c.sends.insert("a1".into(), SendState { enabled: true, level_db: -10.0, post: true });
+        assert_eq!(effective_send(&c, &a).1, -10.0);
+        c.sends.insert("a1".into(), SendState { enabled: false, level_db: 0.0, post: true });
+        assert!(!effective_send(&c, &a).0);
+    }
+
+    #[test]
+    fn proc_param_table_roundtrips_and_clamps() {
+        let mut p = dsp::ProcParams::default();
+        assert!(proc_set(&mut p, "pan", &serde_json::json!(5.0)));
+        assert_eq!(p.pan, 1.0, "Bereichsbegrenzung");
+        assert!(proc_set(&mut p, "delayMs", &serde_json::json!(250)));
+        assert!(proc_set(&mut p, "delayEnabled", &serde_json::json!(true)));
+        assert!(proc_set(&mut p, "eqMidFreq", &serde_json::json!(2000)));
+        assert!(proc_set(&mut p, "eqMidWidth", &serde_json::json!(1000)));
+        assert!(!proc_set(&mut p, "pan", &serde_json::json!("links")), "falscher Typ");
+        assert!(!proc_set(&mut p, "nope", &serde_json::json!(1)));
+        let mut doc = serde_json::Map::new();
+        proc_to_json(&p, &mut doc);
+        let back = proc_from_json(dsp::ProcParams::default(), &Value::Object(doc));
+        assert_eq!(back, p);
+        // Alt-Preset ohne neue Felder → Defaults bleiben.
+        let old = proc_from_json(dsp::ProcParams::default(), &serde_json::json!({"eqLow": 3.0, "compEnabled": true}));
+        assert_eq!(old.eq.bands[0].gain_db, 3.0);
+        assert!(old.comp.enabled);
+        assert_eq!(old.pan, 0.0);
+        assert!(!old.gate.enabled);
     }
 }

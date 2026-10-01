@@ -369,9 +369,7 @@ mod tests {
         assert_eq!(shared["comm"].duck_db.get(), 0.0, "Key ducked sich nicht selbst");
         assert_eq!(shared["atmo"].fader_db.get(), 0.0, "Fader unangetastet");
         // Kommentator verstummt → Atmo kommt langsam zurück.
-        for a in [&shared["comm"].meters.speech_db] {
-            a.set(-90.0);
-        }
+        shared["comm"].meters.speech_db.set(-90.0);
         run(&mut st, &cfg, &shared, 800);
         assert!(shared["atmo"].duck_db.get() < -6.0, "Hold/ruhige Rückkehr");
         run(&mut st, &cfg, &shared, 8000);
@@ -395,7 +393,7 @@ mod tests {
         run(&mut st, &cfg, &shared, 200);
         // Regel aus: kein Sprung, die Absenkung läuft ruhig aus.
         let d = shared["atmo"].duck_db.get();
-        assert!(d < 0.0 || d == 0.0);
+        assert!(d <= 0.0);
         run(&mut st, &cfg, &shared, 9000);
         assert!(shared["atmo"].duck_db.get().abs() < 0.06);
     }
@@ -416,7 +414,7 @@ mod tests {
         let mut st = EngineState::default();
         run(&mut st, &cfg, &shared, 6000);
         let d = shared["atmo"].duck_db.get();
-        assert!(d >= -14.0 - 0.01 && d < -12.0, "{d}");
+        assert!((-14.01..-12.0).contains(&d), "{d}");
     }
 
     #[test]

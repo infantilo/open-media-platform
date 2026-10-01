@@ -77,6 +77,10 @@ pub struct Config {
     /// eigenständiger MXL-Audio-Sender neben `flow_id`, s.
     /// `build()`/`pfl_mixer`.
     pub monitor_flow_id: String,
+    /// Feste Aux-Slots (Kapitel 26): je ein eigener `audiomixer` + MXL-Ausgang,
+    /// der inaktiv (Ventil zu) praktisch nichts kostet. `(slot_id, flow_id,
+    /// label)`; IS-04-Sender entsteht erst bei Aktivierung (`main.rs`).
+    pub aux_slots: Vec<(String, String, String)>,
 }
 
 pub enum Event {
@@ -133,6 +137,9 @@ enum Command {
     SetProc { id: String, params: dsp::ProcParams },
     SetMasterLimiter { params: dsp::CompParams },
     SetPfl { id: String, enabled: bool },
+    SetAuxActive { aux: String, active: bool },
+    SetAuxMaster { aux: String, db: f64, muted: bool },
+    SetSend { channel: String, aux: String, enabled: bool, level_db: f64, post: bool },
 }
 
 #[derive(Clone)]
@@ -149,6 +156,20 @@ impl PipelineHandle {
     /// angeschlossen sind (der Mixer produziert auch ohne Kanäle Stille).
     pub fn media_ready(&self) -> bool {
         self.flowed.load(Ordering::Relaxed)
+    }
+
+    /// Aux-Bus (Slot) ein-/ausschalten: öffnet/schließt den MXL-Ausgang.
+    pub fn set_aux_active(&self, aux: String, active: bool) {
+        let _ = self.commands.send(Command::SetAuxActive { aux, active });
+    }
+
+    pub fn set_aux_master(&self, aux: String, db: f64, muted: bool) {
+        let _ = self.commands.send(Command::SetAuxMaster { aux, db, muted });
+    }
+
+    /// Send eines Kanals auf einen Aux-Bus (Pre/Post-Fader, Pegel, an/aus).
+    pub fn set_send(&self, channel: String, aux: String, enabled: bool, level_db: f64, post: bool) {
+        let _ = self.commands.send(Command::SetSend { channel, aux, enabled, level_db, post });
     }
 
     /// Kanal-DSP-Zustände für die Automations-Engine.
@@ -225,6 +246,20 @@ struct MasterShared {
     gr_db: dsp::AtomicF32,
 }
 
+/// Ein Aux-Send-Zweig: `tee → queue(+Gain-Probe) → Aux-Mixer`.
+struct SendBranch {
+    queue: gst::Element,
+    tee_pad: gst::Pad,
+    mixer_pad: gst::Pad,
+}
+
+/// Laufzeitteile eines Aux-Slots.
+struct AuxRt {
+    mixer: gst::Element,
+    master: gst::Element,
+    output: MxlAudioOutput,
+}
+
 struct ChannelBranch {
     /// Alle Elemente dieses Zweigs, in Verkettungsreihenfolge (Quelle …
     /// `eq`) — für sauberes chirurgisches Entfernen (`remove_channel_
@@ -244,6 +279,11 @@ struct ChannelBranch {
     pfl_gain: gst::Element,
     pfl_pad: gst::Pad,
     pfl_enabled: bool,
+    /// Abgriffspunkt (nach Bearbeitung, vor Fader): speist Haupt-, PFL- und
+    /// alle Aux-Zweige. Aux-Zweige werden lazy beim ersten Aktivieren
+    /// eines Sends angehängt.
+    tee: gst::Element,
+    sends: HashMap<String, SendBranch>,
     /// Hält den Lese-Thread einer externen Quelle am Leben (`Drop`
     /// stoppt ihn) — `None` beim internen Testton.
     _external_input: Option<MxlAudioInput>,
@@ -259,6 +299,7 @@ struct ActivePipeline {
     /// Kanal-DSP-Zustände über Quellwechsel hinweg (Kapitel 26) — auch für
     /// die Automations-Engine sichtbar (`engine.rs`).
     shared: SharedMap,
+    aux: HashMap<String, AuxRt>,
     _mxl_output: MxlAudioOutput,
     /// Solo/PFL-Monitor-Bus (Nutzerwunsch 2026-07-29) — separater
     /// `audiomixer`, den jeder Kanalzweig über seinen `pfl_gain` sowie
@@ -500,7 +541,7 @@ fn add_channel_branch(
     elements.push(proc_el);
     elements.push(fader_el);
     elements.push(level.clone());
-    elements.push(pfl_tee);
+    elements.push(pfl_tee.clone());
     elements.push(main_queue);
     elements.push(pfl_queue);
     elements.push(pfl_gain.clone());
@@ -512,10 +553,83 @@ fn add_channel_branch(
             pfl_gain,
             pfl_pad,
             pfl_enabled: false,
+            tee: pfl_tee,
+            sends: HashMap::new(),
             _external_input: external_input,
         },
     );
+    // Nach einem Quellwechsel (Zweig neu gebaut) bereits eingeschaltete
+    // Sends wieder anhängen.
+    for aux_id in shared.enabled_sends() {
+        if let Err(e) = ensure_send_branch(active, id, &aux_id) {
+            return Err(format!("send {aux_id}: {e}"));
+        }
+    }
     Ok(())
+}
+
+/// Hängt (falls nötig) den Aux-Send-Zweig `Kanal → Aux-Bus` an die laufende
+/// Pipeline: `tee → queue → aux.mixer`. Der Gain (Level, Pre/Post, Fader-
+/// Folge) wird in einer Pad-Probe an der Queue angewandt, geglättet über
+/// `dsp::FaderStage`. Existiert der Kanalzweig oder der Aux-Slot (noch)
+/// nicht, passiert nichts — `add_channel_branch` holt es später nach.
+fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) -> Result<(), String> {
+    let Some(aux) = active.aux.get(aux_id) else {
+        return Ok(());
+    };
+    let aux_mixer = aux.mixer.clone();
+    let shared = shared_for(active, ch_id);
+    let Some(branch) = active.channels.get_mut(ch_id) else {
+        return Ok(());
+    };
+    if branch.sends.contains_key(aux_id) {
+        return Ok(());
+    }
+    let queue = gst::ElementFactory::make("queue")
+        .name(format!("send-{ch_id}-{aux_id}"))
+        .build()
+        .map_err(|e| format!("queue (send {ch_id}->{aux_id}): {e}"))?;
+    active.pipeline.add(&queue).map_err(|e| format!("add send queue: {e}"))?;
+
+    let send = shared.send(aux_id);
+    {
+        let stage = Mutex::new((dsp::FaderStage::new(), Vec::<f32>::new()));
+        let shared = shared.clone();
+        let pad = queue.static_pad("src").ok_or("send queue: no src pad")?;
+        pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+            if let Some(gst::PadProbeData::Buffer(buffer)) = info.data.as_mut() {
+                let mut guard = stage.lock().expect("lock poisoned");
+                let (stage, scratch) = &mut *guard;
+                let target = send.target_gain(&shared);
+                with_f32_samples(buffer.make_mut(), scratch, |samples| stage.process(samples, target));
+            }
+            gst::PadProbeReturn::Ok
+        });
+    }
+
+    let tee_pad = branch.tee.request_pad_simple("src_%u").ok_or("tee: request src pad failed")?;
+    tee_pad
+        .link(&queue.static_pad("sink").ok_or("send queue: no sink pad")?)
+        .map_err(|e| format!("link tee to send queue: {e}"))?;
+    let mixer_pad = aux_mixer.request_pad_simple("sink_%u").ok_or("aux mixer: request sink pad failed")?;
+    queue
+        .static_pad("src")
+        .ok_or("send queue: no src pad")?
+        .link(&mixer_pad)
+        .map_err(|e| format!("link send queue to aux mixer: {e}"))?;
+    queue.sync_state_with_parent().map_err(|e| format!("sync send queue: {e}"))?;
+    branch.sends.insert(aux_id.to_string(), SendBranch { queue, tee_pad, mixer_pad });
+    Ok(())
+}
+
+/// Entfernt einen Send-Zweig sauber (Pads freigeben, Queue entfernen).
+fn drop_send_branch(pipeline: &gst::Pipeline, tee: &gst::Element, aux_mixer: Option<&gst::Element>, sb: SendBranch) {
+    if let Some(mixer) = aux_mixer {
+        mixer.release_request_pad(&sb.mixer_pad);
+    }
+    tee.release_request_pad(&sb.tee_pad);
+    let _ = sb.queue.set_state(gst::State::Null);
+    let _ = pipeline.remove(&sb.queue);
 }
 
 fn shared_for(active: &ActivePipeline, id: &str) -> Arc<dsp::ChannelShared> {
@@ -533,6 +647,11 @@ fn remove_channel_branch(active: &mut ActivePipeline, id: &str) {
         return;
     };
     let was_pfl_enabled = branch.pfl_enabled;
+    let mut branch = branch;
+    for (aux_id, sb) in std::mem::take(&mut branch.sends) {
+        let mixer = active.aux.get(&aux_id).map(|a| a.mixer.clone());
+        drop_send_branch(&active.pipeline, &branch.tee, mixer.as_ref(), sb);
+    }
     // Reihenfolge: erst beide Mixer-Pads freigeben (stoppt den Datenfluss
     // in Haupt- UND Monitor-Bus sauber), dann jedes Zweig-Element auf
     // NULL setzen und aus der Pipeline entfernen — Gegenrichtung des
@@ -552,6 +671,81 @@ fn remove_channel_branch(active: &mut ActivePipeline, id: &str) {
     if was_pfl_enabled {
         recompute_master_pfl_gain(active);
     }
+}
+
+/// Baut einen Aux-Bus (Slot) in die bereits laufende Pipeline:
+/// `audiomixer → volume(Master) → level → MxlAudioOutput`, dazu eine
+/// dauerhafte Stille-Quelle (ohne Eingang liefert ein Mixer nie Daten).
+///
+/// Bewusst erst bei der ersten Aktivierung statt beim Start (Live-Befund
+/// 2026-10-01): schon beim Start vorhandene, ungenutzte Aux-Mixer machten die
+/// Pipeline "live", bevor der erste Kanal existierte, und der Programm-Mixer
+/// lieferte danach nur noch Stille. Wie die Kanalzweige wird der Bus
+/// erst verlinkt und dann (von unten nach oben) auf den Pipelinezustand gebracht.
+/// Elemente von `MxlAudioOutput` bleiben für die Pipelinelebensdauer
+/// bestehen (kein Entfernen möglich) — ein deaktivierter Slot wird bei
+/// erneuter Aktivierung wiederverwendet.
+fn build_aux(
+    active: &mut ActivePipeline,
+    context: &Arc<MxlContext>,
+    slot_id: &str,
+    flow_id: &str,
+    label: &str,
+) -> Result<(), String> {
+    if active.aux.contains_key(slot_id) {
+        return Ok(());
+    }
+    let pipeline = active.pipeline.clone();
+    let mixer = gst::ElementFactory::make("audiomixer")
+        .name(format!("aux-mixer-{slot_id}"))
+        .build()
+        .map_err(|e| format!("audiomixer (aux {slot_id}): {e}"))?;
+    let master = gst::ElementFactory::make("volume")
+        .name(format!("aux-master-{slot_id}"))
+        .build()
+        .map_err(|e| format!("volume (aux {slot_id}): {e}"))?;
+    let level = gst::ElementFactory::make("level")
+        .name(format!("level-aux-{slot_id}"))
+        .property("interval", LEVEL_INTERVAL_NS)
+        .build()
+        .map_err(|e| format!("level (aux {slot_id}): {e}"))?;
+    let silence = gst::ElementFactory::make("audiotestsrc")
+        .name(format!("aux-silence-{slot_id}"))
+        .property("is-live", true)
+        .property("samplesperbuffer", 480i32)
+        .build()
+        .map_err(|e| format!("audiotestsrc (aux {slot_id}): {e}"))?;
+    silence.set_property_from_str("wave", "silence");
+    pipeline
+        .add(&mixer)
+        .and_then(|()| pipeline.add(&master))
+        .and_then(|()| pipeline.add(&level))
+        .and_then(|()| pipeline.add(&silence))
+        .map_err(|e| format!("add aux elements ({slot_id}): {e}"))?;
+    gst::Element::link_many([&mixer, &master, &level]).map_err(|e| format!("link aux ({slot_id}): {e}"))?;
+    let silence_pad = mixer.request_pad_simple("sink_%u").ok_or("aux mixer: request silence pad failed")?;
+    silence
+        .static_pad("src")
+        .ok_or("aux silence: no src pad")?
+        .link(&silence_pad)
+        .map_err(|e| format!("link aux silence ({slot_id}): {e}"))?;
+    let output = MxlAudioOutput::new(&pipeline, &level, context.clone(), flow_id, label, SAMPLE_RATE, CHANNELS)
+        .map_err(|e| format!("MxlAudioOutput (aux {slot_id}): {e}"))?;
+    output.set_active(false);
+
+    // Zustand angleichen, Senke zuerst: die von `MxlAudioOutput::new` im
+    // Inneren angelegten Elemente stehen noch auf NULL (sonst wäre die
+    // Pipeline selbst nicht NULL), danach level → master → mixer → Quelle.
+    for el in pipeline.iterate_elements().into_iter().flatten() {
+        if el.current_state() == gst::State::Null {
+            el.sync_state_with_parent().map_err(|e| format!("sync aux output element: {e}"))?;
+        }
+    }
+    for el in [&level, &master, &mixer, &silence] {
+        el.sync_state_with_parent().map_err(|e| format!("sync aux element ({slot_id}): {e}"))?;
+    }
+    active.aux.insert(slot_id.to_string(), AuxRt { mixer, master, output });
+    Ok(())
 }
 
 fn build(context: &Arc<MxlContext>, config: &Config, shared: &SharedMap) -> Result<ActivePipeline, String> {
@@ -705,13 +899,13 @@ fn build(context: &Arc<MxlContext>, config: &Config, shared: &SharedMap) -> Resu
     pipeline
         .set_state(gst::State::Playing)
         .map_err(|e| format!("set state playing: {e}"))?;
-
     Ok(ActivePipeline {
         pipeline,
         mixer,
         channels: HashMap::new(),
         master_params,
         shared: shared.clone(),
+        aux: HashMap::new(),
         _mxl_output: mxl_output,
         pfl_mixer,
         master_pfl_gain,
@@ -868,6 +1062,34 @@ pub fn run(
             Ok(Command::SetMasterLimiter { params }) => {
                 *active.master_params.params.lock().expect("lock poisoned") = params;
                 active.master_params.version.fetch_add(1, Ordering::Release);
+            }
+            Ok(Command::SetAuxActive { aux, active: on }) => {
+                if on
+                    && !active.aux.contains_key(&aux)
+                    && let Some((_, flow_id, label)) = config.aux_slots.iter().find(|(id, _, _)| *id == aux).cloned()
+                    && let Err(e) = build_aux(&mut active, &context, &aux, &flow_id, &label)
+                {
+                    let _ = tx.send(Event::Error(format!("aux {aux} build failed: {e}")));
+                }
+                if let Some(rt) = active.aux.get(&aux) {
+                    rt.output.set_active(on);
+                }
+            }
+            Ok(Command::SetAuxMaster { aux, db, muted }) => {
+                if let Some(rt) = active.aux.get(&aux) {
+                    rt.master.set_property("volume", dsp::db_to_lin(db));
+                    rt.master.set_property("mute", muted);
+                }
+            }
+            Ok(Command::SetSend { channel, aux, enabled, level_db, post }) => {
+                let sh = shared_for(&active, &channel);
+                let send = sh.send(&aux);
+                send.level_db.set(level_db as f32);
+                send.post.store(post, Ordering::Relaxed);
+                send.enabled.store(enabled, Ordering::Relaxed);
+                if enabled && let Err(e) = ensure_send_branch(&mut active, &channel, &aux) {
+                    let _ = tx.send(Event::Error(format!("setSend({channel}->{aux}) failed: {e}")));
+                }
             }
             Ok(Command::SetPfl { id, enabled }) => {
                 let changed = if let Some(branch) = active.channels.get_mut(&id) {
