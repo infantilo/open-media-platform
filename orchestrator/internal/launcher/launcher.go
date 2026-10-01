@@ -195,6 +195,11 @@ type Instance struct {
 	// Telemetrie-Momentaufnahme in Postgres einfrieren.
 	CPUPercent *float64 `json:"cpuPercent,omitempty"`
 	RSSBytes   *uint64  `json:"rssBytes,omitempty"`
+	// GPUPercent: Auslastung der konfigurierten GPU durch diese Instanz
+	// (Prozent einer GPU), vom Host-Agent gemeldet und wie CPUPercent erst
+	// beim Lesen gemischt. nil = nicht gemessen (nur entfernte Hosts mit
+	// konfigurierter GPU liefern es), nie "0 %".
+	GPUPercent *float64 `json:"gpuPercent,omitempty"`
 	// ContainerID ist gesetzt für `runner:"podman"`-Instanzen (Kapitel
 	// 17 Teil 4) — leer für Prozess-Instanzen (dort ist PID die
 	// Lebenszyklus-Kennung). Beide Felder sind bewusst nie gleichzeitig

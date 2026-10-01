@@ -73,3 +73,21 @@ func TestTrimBefore(t *testing.T) {
 		t.Errorf("trimBefore() kept wrong sample: %v", trimmed[0].Timestamp)
 	}
 }
+
+func TestComputeSnapshotGPUOnlyFromMeasuredSamples(t *testing.T) {
+	g := func(v float64) *float64 { return &v }
+	samples := []Sample{
+		{CPUPercent: 10, GPUPercent: g(10)},
+		{CPUPercent: 10, GPUPercent: g(30)},
+		{CPUPercent: 10}, // GPU nicht gemessen → zählt weder als 0 noch in den Schnitt
+		{CPUPercent: 10, GPUPercent: g(20)},
+	}
+	snap := computeSnapshot("t", "h", samples, time.Now())
+	if snap.GPUSamples != 3 || snap.GPUAvg != 20 || snap.GPUMax != 30 || snap.GPUP95 != 30 {
+		t.Errorf("gpu snapshot = %+v", snap)
+	}
+	none := computeSnapshot("t", "h", []Sample{{CPUPercent: 5}}, time.Now())
+	if none.GPUSamples != 0 {
+		t.Errorf("ohne Messung muss GPUSamples 0 bleiben: %+v", none)
+	}
+}

@@ -120,6 +120,7 @@ func mergeInstanceMetrics(list []launcher.Instance, hostMetrics HostMetricsReade
 			cpu, rss := im.CPUPercent, im.RSSBytes
 			list[i].CPUPercent = &cpu
 			list[i].RSSBytes = &rss
+			list[i].GPUPercent = im.GpuPercent
 			break
 		}
 	}
@@ -141,7 +142,7 @@ func (c *Collector) sample() {
 			continue
 		}
 		k := bufferKey{nodeType: inst.Type, hostID: inst.HostID}
-		buf := append(c.buffers[k], Sample{Timestamp: now, CPUPercent: *inst.CPUPercent, RSSBytes: *inst.RSSBytes})
+		buf := append(c.buffers[k], Sample{Timestamp: now, CPUPercent: *inst.CPUPercent, RSSBytes: *inst.RSSBytes, GPUPercent: inst.GPUPercent})
 		buf = trimBefore(buf, cutoff)
 		c.buffers[k] = buf
 	}

@@ -128,6 +128,8 @@ export interface ResHost {
   // wenn der Host-Agent keine NIC konfiguriert hat oder der Treiber sie
   // nicht meldet.
   netLinkMbps?: number;
+  // Der Host meldet eine GPU (Kapazität = eine GPU = 100 %).
+  gpuKnown?: boolean;
 }
 
 export interface ResRole {
@@ -145,6 +147,11 @@ export interface ResRole {
   netRxMbps?: number;
   netTxMbps?: number;
   netEstimated?: boolean;
+  // GPU-Bedarf in Prozent EINER GPU (p95 des Profils); gpuKnown=false: nie
+  // gemessen — fehlt dann in der Planung (ohne den Slot als unvollständig
+  // zu markieren, sonst wäre auf Hosts ohne GPU jede Rolle "unbekannt").
+  gpuPercent?: number;
+  gpuKnown?: boolean;
 }
 
 export interface ResWorkflow {
@@ -168,6 +175,8 @@ export interface ResManual {
   netRxMbps?: number;
   netTxMbps?: number;
   netEstimated?: boolean;
+  gpuPercent?: number;
+  gpuKnown?: boolean;
 }
 
 export const MANUAL_WF_ID = "manual";
@@ -190,6 +199,7 @@ export interface Contribution {
   rssBytes: number;
   netRxMbps: number;
   netTxMbps: number;
+  gpuPercent: number;
 }
 
 export interface LaneSlot {
@@ -200,6 +210,8 @@ export interface LaneSlot {
   // Mind. ein Netz-Bedarf beruht auf einer Annahme (Standardformat bzw.
   // Nennwert) — die Anzeige kennzeichnet ihn mit "~".
   netEstimated: boolean;
+  // Summe des GPU-Bedarfs in Prozent einer GPU (100 = eine volle GPU).
+  gpuPercent: number;
   io: Record<string, number>;
   contribs: Contribution[];
   // Rollen ohne Messprofil — ihr Bedarf fehlt in den Summen (unbekannt,
@@ -213,7 +225,7 @@ export interface LaneSlot {
 export type Timeline = Map<string, LaneSlot[]>;
 
 function emptySlot(): LaneSlot {
-  return { cpuCores: 0, rssBytes: 0, netRxMbps: 0, netTxMbps: 0, netEstimated: false, io: {}, contribs: [], unknown: [], liveFloor: [] };
+  return { cpuCores: 0, rssBytes: 0, netRxMbps: 0, netTxMbps: 0, netEstimated: false, gpuPercent: 0, io: {}, contribs: [], unknown: [], liveFloor: [] };
 }
 
 export function ioKey(cardType: string, direction: string): string {
@@ -257,8 +269,10 @@ export function computeTimeline(
         const tx = role.netTxMbps ?? 0;
         slot.netRxMbps += rx;
         slot.netTxMbps += tx;
+        const gpu = role.gpuKnown ? role.gpuPercent ?? 0 : 0;
+        slot.gpuPercent += gpu;
         if (rx + tx > 0 && role.netEstimated) slot.netEstimated = true;
-        if (role.known || rx + tx > 0) {
+        if (role.known || rx + tx > 0 || gpu > 0) {
           slot.contribs.push({
             wfId: wf.id,
             wfName: wf.name,
@@ -267,6 +281,7 @@ export function computeTimeline(
             rssBytes: role.known ? role.rssBytes : 0,
             netRxMbps: rx,
             netTxMbps: tx,
+            gpuPercent: gpu,
           });
         }
       }
@@ -287,8 +302,10 @@ export function computeTimeline(
       const tx = mi.netTxMbps ?? 0;
       slot.netRxMbps += rx;
       slot.netTxMbps += tx;
+      const gpu = mi.gpuKnown ? mi.gpuPercent ?? 0 : 0;
+      slot.gpuPercent += gpu;
       if (rx + tx > 0 && mi.netEstimated) slot.netEstimated = true;
-      if (mi.known || rx + tx > 0) {
+      if (mi.known || rx + tx > 0 || gpu > 0) {
         slot.contribs.push({
           wfId: MANUAL_WF_ID,
           wfName: "Manuell gestartet",
@@ -297,6 +314,7 @@ export function computeTimeline(
           rssBytes: mi.known ? mi.rssBytes : 0,
           netRxMbps: rx,
           netTxMbps: tx,
+          gpuPercent: gpu,
         });
       }
     }
@@ -317,6 +335,10 @@ export function computeTimeline(
           slot.rssBytes = rss;
           slot.liveFloor.push("RAM");
         }
+        if (h.gpuKnown && h.live.gpuPercent !== undefined && h.live.gpuPercent > slot.gpuPercent) {
+          slot.gpuPercent = h.live.gpuPercent;
+          slot.liveFloor.push("GPU");
+        }
         const rx = h.live.netRxMbps ?? 0;
         const tx = h.live.netTxMbps ?? 0;
         if (rx > slot.netRxMbps || tx > slot.netTxMbps) {
@@ -334,6 +356,7 @@ export interface Capacity {
   cpuCores: number; // 0 = unbekannt
   memBytes: number; // 0 = unbekannt
   netMbps: number; // NIC-Link je Richtung, 0 = unbekannt
+  gpuPercent: number; // 100 je Host mit gemeldeter GPU, 0 = keine GPU bekannt
   io: Record<string, number>;
 }
 
@@ -342,13 +365,14 @@ export interface Capacity {
 // Rollen ohne Host-Festlegung.
 export function laneCapacity(model: ResourceModel, laneId: string): Capacity {
   const hosts = laneId === AUTO_LANE ? model.hosts.filter((h) => h.online) : model.hosts.filter((h) => h.id === laneId);
-  const cap: Capacity = { cpuCores: 0, memBytes: 0, netMbps: 0, io: {} };
+  const cap: Capacity = { cpuCores: 0, memBytes: 0, netMbps: 0, gpuPercent: 0, io: {} };
   for (const h of hosts) {
     if (h.capacityKnown) {
       cap.cpuCores += h.numCpu;
       cap.memBytes += h.memTotalBytes;
     }
     cap.netMbps += h.netLinkMbps ?? 0;
+    if (h.gpuKnown) cap.gpuPercent += 100;
     for (const p of h.ioPorts ?? []) {
       const k = ioKey(p.cardType, p.direction);
       cap.io[k] = (cap.io[k] ?? 0) + p.total;
@@ -381,6 +405,11 @@ export interface SlotUtilization {
   netPercent: number | null;
   netLevel: Level;
   freeNetMbps: number | null;
+  // GPU: Bedarf gegen die Kapazität (eine GPU je Host = 100 %). null = kein
+  // Host mit gemeldeter GPU.
+  gpuPercent: number | null;
+  gpuLevel: Level;
+  freeGpuPercent: number | null;
   // Überlastete I/O-Port-Typen (Bedarf > vorhandene Ports).
   ioOver: string[];
   incomplete: boolean; // mind. eine Rolle ohne Messprofil
@@ -389,8 +418,10 @@ export interface SlotUtilization {
   freeMemBytes: number | null;
 }
 
-export function slotUtilization(slot: LaneSlot, cap: Capacity, thresholds: { cpu: number; mem: number; net?: number }): SlotUtilization {
+export function slotUtilization(slot: LaneSlot, cap: Capacity, thresholds: { cpu: number; mem: number; net?: number; gpu?: number }): SlotUtilization {
   const netThr = thresholds.net ?? 85;
+  const gpuThr = thresholds.gpu ?? 85;
+  const gpuPercent = cap.gpuPercent > 0 ? (slot.gpuPercent / cap.gpuPercent) * 100 : null;
   const netPeak = Math.max(slot.netRxMbps, slot.netTxMbps);
   const netPercent = cap.netMbps > 0 ? (netPeak / cap.netMbps) * 100 : null;
   const cpuPercent = cap.cpuCores > 0 ? (slot.cpuCores / cap.cpuCores) * 100 : null;
@@ -406,6 +437,9 @@ export function slotUtilization(slot: LaneSlot, cap: Capacity, thresholds: { cpu
     memLevel: levelOf(memPercent, thresholds.mem),
     netPercent,
     netLevel: levelOf(netPercent, netThr),
+    gpuPercent,
+    gpuLevel: levelOf(gpuPercent, gpuThr),
+    freeGpuPercent: cap.gpuPercent > 0 ? Math.max(0, cap.gpuPercent * (gpuThr / 100) - slot.gpuPercent) : null,
     freeNetMbps: cap.netMbps > 0 ? Math.max(0, cap.netMbps * (netThr / 100) - netPeak) : null,
     ioOver,
     incomplete: slot.unknown.length > 0,
@@ -415,7 +449,7 @@ export function slotUtilization(slot: LaneSlot, cap: Capacity, thresholds: { cpu
 }
 
 export function isOver(u: SlotUtilization): boolean {
-  return u.cpuLevel === "over" || u.memLevel === "over" || u.netLevel === "over" || u.ioOver.length > 0;
+  return u.cpuLevel === "over" || u.memLevel === "over" || u.netLevel === "over" || u.gpuLevel === "over" || u.ioOver.length > 0;
 }
 
 // Ein Engpass, den ein Workflow (mit)verursacht: Lane + Zeit-Slot-Index +
@@ -436,6 +470,7 @@ export function findBottlenecks(model: ResourceModel, timeline: Timeline): Bottl
       if (u.cpuLevel === "over") what.push("CPU");
       if (u.memLevel === "over") what.push("RAM");
       if (u.netLevel === "over") what.push("Netz");
+      if (u.gpuLevel === "over") what.push("GPU");
       what.push(...u.ioOver);
       if (what.length > 0) out.push({ laneId, slotIndex, what });
     });

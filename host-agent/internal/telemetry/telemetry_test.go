@@ -223,3 +223,46 @@ func TestProcessSamplerPrune(t *testing.T) {
 		t.Errorf("Sample() direkt nach Prune() ok = true, want false (Zustand wurde entfernt)")
 	}
 }
+
+func TestParsePmon(t *testing.T) {
+	// Format laut NVIDIA-Doku zu `nvidia-smi pmon` (neuere Treiber mit jpg/ofa).
+	out := `# gpu         pid   type     sm    mem    enc    dec    jpg    ofa    command
+# Idx           #    C/G      %      %      %      %      %      %    name
+    0       4711     C     35      7      0      -      -      -    omp-video-mixer
+    0       4712     G     10      2      -      -      -      -    omp-viewer
+    0       4712     C      5      1      -      -      -      -    omp-viewer
+    0       9999     C      -      -      -      -      -      -    some thing
+`
+	got, err := parsePmon(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[4711] != 35 || got[4712] != 15 || got[9999] != 0 || len(got) != 3 {
+		t.Errorf("parsePmon = %v", got)
+	}
+	// Älterer Treiber: andere Spalten, sm an anderer Stelle
+	old := "# gpu        pid  type    sm   mem   enc   dec   command\n# Idx          #   C/G     %     %     %     %   name\n    0       1  C   12   3   0   0   x\n"
+	if g, err := parsePmon(old); err != nil || g[1] != 12 {
+		t.Errorf("old format = %v %v", g, err)
+	}
+	// Nur Kopfzeile = niemand nutzt die GPU → leere Map, kein Fehler
+	if g, err := parsePmon("# gpu pid type sm mem\n# Idx # C/G % %\n"); err != nil || len(g) != 0 {
+		t.Errorf("empty = %v %v", g, err)
+	}
+	// Unbekanntes Format ist ein Fehler, kein Raten
+	if _, err := parsePmon("No devices were found\n"); err == nil {
+		t.Error("unexpected format must fail")
+	}
+}
+
+func TestGPUPercentForTree(t *testing.T) {
+	parents := map[int]int{200: 100, 300: 200, 400: 1, 500: 400}
+	procs := map[int]float64{100: 10, 300: 20, 500: 99}
+	// 100 + Nachkomme 300 (über 200); 500 gehört zu 400
+	if g := GPUPercentForTree(procs, parents, 100); g != 30 {
+		t.Errorf("tree(100) = %v", g)
+	}
+	if g := GPUPercentForTree(procs, parents, 7); g != 0 {
+		t.Errorf("tree(unrelated) = %v", g)
+	}
+}

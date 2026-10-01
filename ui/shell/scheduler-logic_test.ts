@@ -234,3 +234,41 @@ Deno.test("Jetzt-Slot: gemessene Host-Last ist Untergrenze, andere Slots bleiben
   assertEquals(spaeter.netTxMbps, 200);
   assertEquals(spaeter.liveFloor, []);
 });
+
+Deno.test("GPU: Bedarf nur aus gemessenen Profilen, Kapazität = eine GPU je meldendem Host", () => {
+  const m: ResourceModel = {
+    thresholds: { cpu: 85, mem: 90, net: 85, gpu: 85 },
+    hosts: [
+      { id: "g1", label: "GPU-Host", online: true, numCpu: 16, memTotalBytes: 32 * GB, capacityKnown: true, gpuKnown: true, live: { cpuPercent: 5, memPercent: 5, gpuPercent: 90 } },
+      { id: "c1", label: "ohne GPU", online: true, numCpu: 8, memTotalBytes: 16 * GB, capacityKnown: true },
+    ],
+    workflows: [{
+      id: "w", name: "AI", status: "stopped",
+      roles: [
+        { name: "Enc1", nodeType: "e", hostId: "g1", cpuCores: 1, cpuAvgCores: 1, rssBytes: GB, known: true, gpuKnown: true, gpuPercent: 50 },
+        { name: "Enc2", nodeType: "e", hostId: "g1", cpuCores: 1, cpuAvgCores: 1, rssBytes: GB, known: true, gpuKnown: true, gpuPercent: 45 },
+        // Profil ohne GPU-Messung: kein Bedarf angesetzt, aber auch nicht "unvollständig"
+        { name: "Plain", nodeType: "p", hostId: "g1", cpuCores: 1, cpuAvgCores: 1, rssBytes: GB, known: true },
+      ],
+    }],
+    manualInstances: [],
+  };
+  const scheds = new Map<string, Schedule[]>([["w", [daily("start", "09:00"), daily("stop", "12:00")]]]);
+  const now = at(2026, 10, 1, 6);
+  const tl = computeTimeline(m, scheds, slotsOfDay(at(2026, 10, 2, 0)), 30, now);
+  const slot = tl.get("g1")![10 * 2];
+  assertEquals(slot.gpuPercent, 95);
+  assertEquals(slot.unknown, []);
+  const cap = laneCapacity(m, "g1");
+  assertEquals(cap.gpuPercent, 100);
+  const u = slotUtilization(slot, cap, m.thresholds);
+  assertEquals(u.gpuLevel, "over"); // 95 % > 85 %
+  assertEquals(findBottlenecks(m, tl).some((b) => b.laneId === "g1" && b.what.includes("GPU")), true);
+  // Host ohne GPU: keine Kapazität → Auslastung unbekannt, kein "frei"
+  assertEquals(laneCapacity(m, "c1").gpuPercent, 0);
+  assertEquals(slotUtilization(tl.get("c1")![10 * 2], laneCapacity(m, "c1"), m.thresholds).gpuPercent, null);
+  // "Jetzt"-Slot: gemessene Host-GPU (90 %) ist Untergrenze
+  const tlNow = computeTimeline(m, new Map(), [at(2026, 10, 1, 6)], 30, at(2026, 10, 1, 6, 10));
+  assertEquals(tlNow.get("g1")![0].gpuPercent, 90);
+  assertEquals(tlNow.get("g1")![0].liveFloor.includes("GPU"), true);
+});

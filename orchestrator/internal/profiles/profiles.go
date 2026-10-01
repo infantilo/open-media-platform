@@ -38,6 +38,9 @@ type Sample struct {
 	Timestamp  time.Time
 	CPUPercent float64
 	RSSBytes   uint64
+	// GPUPercent: nil = in diesem Sample nicht gemessen (Host ohne
+	// konfigurierte GPU) — fließt dann nicht in das GPU-Profil ein.
+	GPUPercent *float64
 }
 
 // Snapshot ist das aggregierte Profil für genau ein (nodeType, hostID)
@@ -57,6 +60,13 @@ type Snapshot struct {
 	RSSMax      uint64
 	SampleCount int
 	UpdatedAt   time.Time
+	// GPU-Profil (Prozent einer GPU) nur aus den Samples, in denen der
+	// Host-Agent die GPU pro Prozess gemessen hat. GPUSamples == 0 heißt
+	// "GPU-Bedarf unbekannt" (nie gemessen), NICHT "nutzt keine GPU".
+	GPUAvg     float64
+	GPUMax     float64
+	GPUP95     float64
+	GPUSamples int
 }
 
 // computeSnapshot fasst samples (für genau ein (nodeType, hostID) Paar)
@@ -102,6 +112,30 @@ func computeSnapshot(nodeType, hostID string, samples []Sample, now time.Time) S
 		idx = len(cpus) - 1
 	}
 	snap.CPUP95 = cpus[idx]
+
+	var gpus []float64
+	var gpuSum float64
+	for _, s := range samples {
+		if s.GPUPercent == nil {
+			continue
+		}
+		gpus = append(gpus, *s.GPUPercent)
+		gpuSum += *s.GPUPercent
+	}
+	if len(gpus) > 0 {
+		sort.Float64s(gpus)
+		gi := int(0.95*float64(len(gpus))+0.999999) - 1
+		if gi < 0 {
+			gi = 0
+		}
+		if gi >= len(gpus) {
+			gi = len(gpus) - 1
+		}
+		snap.GPUSamples = len(gpus)
+		snap.GPUAvg = gpuSum / float64(len(gpus))
+		snap.GPUMax = gpus[len(gpus)-1]
+		snap.GPUP95 = gpus[gi]
+	}
 
 	return snap
 }

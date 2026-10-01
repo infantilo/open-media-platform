@@ -37,6 +37,7 @@ func TestStoreUpsertAndGet(t *testing.T) {
 		CPUMin: 5, CPUAvg: 15, CPUMax: 30, CPUP95: 28,
 		RSSMin: 1_000_000, RSSAvg: 2_000_000, RSSMax: 3_000_000,
 		SampleCount: 12, UpdatedAt: time.Now().Truncate(time.Second),
+		GPUAvg: 22.5, GPUMax: 60, GPUP95: 55, GPUSamples: 7,
 	}
 	if err := store.Upsert(ctx, snap); err != nil {
 		t.Fatalf("Upsert() error = %v", err)
@@ -51,6 +52,10 @@ func TestStoreUpsertAndGet(t *testing.T) {
 	}
 	if got.CPUAvg != 15 || got.CPUP95 != 28 || got.RSSAvg != 2_000_000 || got.SampleCount != 12 {
 		t.Errorf("Get() = %+v, unexpected", got)
+	}
+
+	if got.GPUAvg != 22.5 || got.GPUMax != 60 || got.GPUP95 != 55 || got.GPUSamples != 7 {
+		t.Errorf("GPU-Felder gingen verloren: %+v", got)
 	}
 
 	// Upsert überschreibt vollständig statt zu mergen.

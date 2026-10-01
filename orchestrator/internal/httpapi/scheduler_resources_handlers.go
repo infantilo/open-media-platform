@@ -52,6 +52,9 @@ type schedResHost struct {
 	// konfigurierten NIC (je Richtung, vollduplex). Fehlt, wenn keine NIC
 	// konfiguriert ist oder der Treiber sie nicht meldet.
 	NetLinkMbps float64 `json:"netLinkMbps,omitempty"`
+	// GPUKnown: der Host-Agent meldet eine GPU (OMP_HOST_AGENT_GPU_INDEX
+	// gesetzt, nvidia-smi erreichbar). Kapazität = eine GPU = 100 %.
+	GPUKnown    bool    `json:"gpuKnown,omitempty"`
 	LastSeenAge float64 `json:"lastSeenSeconds,omitempty"`
 }
 
@@ -87,6 +90,12 @@ type schedResRole struct {
 	NetRxMbps    float64 `json:"netRxMbps,omitempty"`
 	NetTxMbps    float64 `json:"netTxMbps,omitempty"`
 	NetEstimated bool    `json:"netEstimated,omitempty"`
+	// GPU-Bedarf in Prozent einer GPU (p95 des Profils); GPUKnown=false:
+	// nie gemessen — dann fehlt der Wert in der Planung, ohne den Slot als
+	// unvollständig zu markieren (auf Hosts ohne GPU-Messung wäre sonst
+	// jede Rolle "unbekannt").
+	GPUPercent float64 `json:"gpuPercent,omitempty"`
+	GPUKnown   bool    `json:"gpuKnown,omitempty"`
 }
 
 type schedIO struct {
@@ -126,6 +135,8 @@ type schedResManual struct {
 	NetRxMbps    float64 `json:"netRxMbps,omitempty"`
 	NetTxMbps    float64 `json:"netTxMbps,omitempty"`
 	NetEstimated bool    `json:"netEstimated,omitempty"`
+	GPUPercent   float64 `json:"gpuPercent,omitempty"`
+	GPUKnown     bool    `json:"gpuKnown,omitempty"`
 }
 
 // handleSchedulerResources: GET /api/v1/scheduler/resources.
@@ -205,6 +216,7 @@ func handleSchedulerResources(
 				if m.Gpu != nil {
 					v := m.Gpu.UtilizationPercent
 					live.GpuPercent = &v
+					sh.GPUKnown = true
 				}
 				sh.Live = live
 			}
@@ -240,6 +252,13 @@ func handleSchedulerResources(
 					sr.RSSBytes = snap.RSSMax
 					if sr.RSSBytes < snap.RSSAvg {
 						sr.RSSBytes = snap.RSSAvg
+					}
+					if snap.GPUSamples > 0 {
+						sr.GPUKnown = true
+						sr.GPUPercent = snap.GPUP95
+						if sr.GPUPercent < snap.GPUAvg {
+							sr.GPUPercent = snap.GPUAvg
+						}
 					}
 				}
 				sw.Roles = append(sw.Roles, sr)
@@ -277,6 +296,9 @@ func manualInstances(ctx context.Context, cat CatalogReader, metrics HostMetrics
 				for _, im := range m.Instances {
 					if im.InstanceID == inst.ID {
 						mi.CPUCores, mi.RSSBytes, mi.Known, mi.Measured = im.CPUPercent/100, im.RSSBytes, true, true
+						if im.GpuPercent != nil {
+							mi.GPUPercent, mi.GPUKnown = *im.GpuPercent, true
+						}
 					}
 				}
 			}
@@ -297,6 +319,16 @@ func manualInstances(ctx context.Context, cat CatalogReader, metrics HostMetrics
 				mi.RSSBytes = rss
 			}
 			mi.Known = true
+			if snap.GPUSamples > 0 {
+				g := snap.GPUP95
+				if g < snap.GPUAvg {
+					g = snap.GPUAvg
+				}
+				if g > mi.GPUPercent {
+					mi.GPUPercent = g
+				}
+				mi.GPUKnown = true
+			}
 		}
 		if rn, has := computeRoleNetwork(cat, workflows.Definition{}, workflows.Role{Name: inst.Label, NodeType: inst.Type}); has {
 			mi.NetRxMbps, mi.NetTxMbps, mi.NetEstimated = rn.RxMbps, rn.TxMbps, rn.Estimated

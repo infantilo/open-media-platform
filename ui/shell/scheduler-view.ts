@@ -624,7 +624,7 @@ class SchedulerView extends HTMLElement {
       const host: ResHost | undefined = model.hosts.find((h) => h.id === laneId);
       const isAuto = laneId === AUTO_LANE;
 
-      const anyDemand = slots.some((sl) => sl.cpuCores > 0 || sl.rssBytes > 0 || sl.netRxMbps > 0 || sl.netTxMbps > 0 || Object.keys(sl.io).length > 0 || sl.unknown.length > 0);
+      const anyDemand = slots.some((sl) => sl.cpuCores > 0 || sl.rssBytes > 0 || sl.netRxMbps > 0 || sl.netTxMbps > 0 || sl.gpuPercent > 0 || Object.keys(sl.io).length > 0 || sl.unknown.length > 0);
       // Veraltete Host-Registrierungen (offline, nichts eingeplant) nur Rauschen.
       if (host && !host.online && !host.local && !anyDemand) continue;
       const utils = slots.map((sl) => slotUtilization(sl, cap, model.thresholds));
@@ -644,6 +644,7 @@ class SchedulerView extends HTMLElement {
       const capParts: string[] = [];
       if (cap.cpuCores > 0) capParts.push(`${cap.cpuCores} Kerne`);
       if (cap.memBytes > 0) capParts.push(`${fmtBytes(cap.memBytes)} RAM`);
+      if (cap.gpuPercent > 0) capParts.push(`${cap.gpuPercent / 100}× GPU`);
       if (cap.netMbps > 0) capParts.push(`Netz ${fmtMbps(cap.netMbps)} je Richtung`);
       for (const [k, n] of Object.entries(cap.io)) capParts.push(`${n}× ${k}`);
       capTxt.textContent =
@@ -678,6 +679,7 @@ class SchedulerView extends HTMLElement {
             if (utils[i].cpuLevel === "over") what.add("CPU");
             if (utils[i].memLevel === "over") what.add("RAM");
             if (utils[i].netLevel === "over") what.add("Netz");
+            if (utils[i].gpuLevel === "over") what.add("GPU");
             utils[i].ioOver.forEach((k) => what.add(k));
           }
           return `${this.#slotLabel(dates, a)}–${this.#slotLabel(dates, b + 1 > dates.length * perDay - 1 ? b : b + 1)} (${[...what].join(", ")})`;
@@ -687,20 +689,22 @@ class SchedulerView extends HTMLElement {
       } else if (anyDemand) {
         const freeC = utils.map((u) => u.freeCores).filter((v): v is number => v !== null);
         const freeM = utils.map((u) => u.freeMemBytes).filter((v): v is number => v !== null);
+        const freeG = utils.map((u) => u.freeGpuPercent).filter((v): v is number => v !== null);
         const freeN = utils.map((u) => u.freeNetMbps).filter((v): v is number => v !== null);
         sum.style.color = "var(--omp-text-dim)";
         sum.textContent =
           "Kein Engpass. Freie Reserve (bis Grenzwert), Minimum im Ausschnitt: " +
-          [freeC.length ? `${fmtCores(Math.min(...freeC))} Kerne` : "", freeM.length ? `${fmtBytes(Math.min(...freeM))} RAM` : "", freeN.length ? `${fmtMbps(Math.min(...freeN))} Netz` : ""].filter(Boolean).join(" · ");
+          [freeC.length ? `${fmtCores(Math.min(...freeC))} Kerne` : "", freeM.length ? `${fmtBytes(Math.min(...freeM))} RAM` : "", freeN.length ? `${fmtMbps(Math.min(...freeN))} Netz` : "", freeG.length ? `${Math.round(Math.min(...freeG))} % GPU` : ""].filter(Boolean).join(" · ");
       } else {
         sum.style.color = "var(--omp-text-dim)";
         sum.textContent = "Im Ausschnitt nichts eingeplant — komplett frei.";
       }
       block.appendChild(sum);
 
-      const rows: { label: string; kind: "cpu" | "mem" | "net" | "io"; key?: string }[] = [];
+      const rows: { label: string; kind: "cpu" | "mem" | "net" | "gpu" | "io"; key?: string }[] = [];
       if (cap.cpuCores > 0 || slots.some((s2) => s2.cpuCores > 0)) rows.push({ label: "CPU", kind: "cpu" });
       if (cap.memBytes > 0 || slots.some((s2) => s2.rssBytes > 0)) rows.push({ label: "RAM", kind: "mem" });
+      if (cap.gpuPercent > 0 || slots.some((s2) => s2.gpuPercent > 0)) rows.push({ label: "GPU", kind: "gpu" });
       if (cap.netMbps > 0 || slots.some((s2) => s2.netRxMbps > 0 || s2.netTxMbps > 0)) rows.push({ label: "Netzwerk", kind: "net" });
       const ioKeys = new Set<string>([...Object.keys(cap.io), ...slots.flatMap((s2) => Object.keys(s2.io))]);
       for (const k of [...ioKeys].sort()) rows.push({ label: k, kind: "io", key: k });
@@ -718,7 +722,7 @@ class SchedulerView extends HTMLElement {
     slots: LaneSlot[],
     utils: ReturnType<typeof slotUtilization>[],
     cap: ReturnType<typeof laneCapacity>,
-    row: { label: string; kind: "cpu" | "mem" | "net" | "io"; key?: string },
+    row: { label: string; kind: "cpu" | "mem" | "net" | "gpu" | "io"; key?: string },
     now: Date,
   ): HTMLElement {
     const model = this.#model!;
@@ -745,6 +749,7 @@ class SchedulerView extends HTMLElement {
       const u = utils[i];
       if (row.kind === "cpu") return u.cpuPercent ?? 0;
       if (row.kind === "mem") return u.memPercent ?? 0;
+      if (row.kind === "gpu") return u.gpuPercent ?? slots[i].gpuPercent / 1e6;
       if (row.kind === "net") return u.netPercent ?? Math.max(slots[i].netRxMbps, slots[i].netTxMbps) / 1e6;
       const need = slots[i].io[row.key!] ?? 0;
       return need;
@@ -774,6 +779,15 @@ class SchedulerView extends HTMLElement {
         tip = `${when} · RAM ${fmtBytes(slot.rssBytes)} von ${cap.memBytes ? fmtBytes(cap.memBytes) : "?"}` +
           (pct !== null ? ` (${pct.toFixed(0)} %)` : "") +
           (u.freeMemBytes !== null ? ` · frei bis Grenzwert: ${fmtBytes(u.freeMemBytes)}` : "");
+      } else if (row.kind === "gpu") {
+        pct = u.gpuPercent;
+        thr = model.thresholds.gpu ?? 85;
+        level = u.gpuLevel;
+        if (level === "free" && slot.gpuPercent > 0) level = "unknown";
+        tip = `${when} · GPU ${Math.round(slot.gpuPercent)} % von ${cap.gpuPercent > 0 ? cap.gpuPercent + " %" : "?"}` +
+          (pct !== null ? ` (${pct.toFixed(0)} %)` : "") +
+          (u.freeGpuPercent !== null ? ` · frei bis Grenzwert: ${Math.round(u.freeGpuPercent)} %` : " · kein Host mit gemeldeter GPU (Host-Agent: OMP_HOST_AGENT_GPU_INDEX setzen)") +
+          "\n(100 % = eine volle GPU; Bedarf nur für Typen mit gemessenem GPU-Profil)";
       } else if (row.kind === "net") {
         pct = u.netPercent;
         thr = model.thresholds.net ?? 85;
@@ -798,12 +812,14 @@ class SchedulerView extends HTMLElement {
       const contribs: Contribution[] = slot.contribs;
       if (contribs.length > 0 && row.kind !== "io") {
         const val = (c: Contribution): number =>
-          row.kind === "cpu" ? c.cpuCores : row.kind === "mem" ? c.rssBytes : Math.max(c.netRxMbps, c.netTxMbps);
+          row.kind === "cpu" ? c.cpuCores : row.kind === "mem" ? c.rssBytes : row.kind === "gpu" ? c.gpuPercent : Math.max(c.netRxMbps, c.netTxMbps);
         const fmt = (c: Contribution): string =>
           row.kind === "cpu"
             ? fmtCores(c.cpuCores) + " Kerne"
             : row.kind === "mem"
             ? fmtBytes(c.rssBytes)
+            : row.kind === "gpu"
+            ? `${Math.round(c.gpuPercent)} %`
             : `${c.netRxMbps > 0 ? "Rx " + fmtMbps(c.netRxMbps) : ""}${c.netTxMbps > 0 ? "Tx " + fmtMbps(c.netTxMbps) : ""}`;
         tip += "\n" + contribs
           .filter((c) => val(c) > 0)
@@ -811,7 +827,7 @@ class SchedulerView extends HTMLElement {
           .map((c) => `  ${c.wfName}/${c.role}: ${fmt(c)}`)
           .join("\n");
       }
-      const dim = row.kind === "cpu" ? "CPU" : row.kind === "mem" ? "RAM" : row.kind === "net" ? "Netz" : "";
+      const dim = row.kind === "cpu" ? "CPU" : row.kind === "mem" ? "RAM" : row.kind === "net" ? "Netz" : row.kind === "gpu" ? "GPU" : "";
       if (dim && slot.liveFloor.includes(dim)) tip += "\n⚡ Wert = aktuell gemessene Host-Auslastung (höher als die Planung)";
       if (slot.unknown.length > 0) tip += `\n⚠ Bedarf unbekannt (kein Messprofil): ${slot.unknown.join(", ")}`;
       if (this.#viewMode === "month") tip += "\n(ungünstigster Zeitpunkt des Tages)";

@@ -173,6 +173,10 @@ type InstanceSample struct {
 	InstanceID string  `json:"instanceId"`
 	CPUPercent float64 `json:"cpuPercent"`
 	RSSBytes   uint64  `json:"rssBytes"`
+	// GpuPercent: Auslastung der konfigurierten GPU durch diese Instanz
+	// (inkl. Kindprozesse, Prozent einer GPU). nil = nicht gemessen (keine
+	// GPU konfiguriert / nvidia-smi nicht verfügbar), nie "0 %".
+	GpuPercent *float64 `json:"gpuPercent,omitempty"`
 	// Outdated: Binary seit dem Prozessstart ersetzt (System-Update).
 	Outdated bool `json:"outdated,omitempty"`
 }

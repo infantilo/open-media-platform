@@ -93,6 +93,9 @@ type InstanceMetrics struct {
 	InstanceID string  `json:"instanceId"`
 	CPUPercent float64 `json:"cpuPercent"`
 	RSSBytes   uint64  `json:"rssBytes"`
+	// GpuPercent: GPU-Auslastung dieser Instanz in Prozent einer GPU; nil =
+	// nicht gemessen (Host ohne konfigurierte GPU / nvidia-smi fehlt).
+	GpuPercent *float64 `json:"gpuPercent,omitempty"`
 	// Outdated: Binary seit dem Prozessstart ersetzt (System-Update).
 	Outdated bool `json:"outdated,omitempty"`
 }

@@ -2,10 +2,16 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/hosts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profiles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
 )
@@ -155,5 +161,40 @@ func TestManualInstances(t *testing.T) {
 	// Weder Messung noch Profil: Bedarf unbekannt, nie 0
 	if got[1].ID != "no-data" || got[1].Known {
 		t.Errorf("no-data = %+v", got[1])
+	}
+}
+
+func TestSchedulerResourcesGPU(t *testing.T) {
+	g := 40.0
+	reg := fakeHostRegistry{list: []hosts.Host{{ID: "h1", Label: "GPU", Capabilities: []byte(`{"numCPU":8}`)}}}
+	metrics := fakeHostMetrics{byHost: map[string]hosts.Metrics{
+		"h1": {CPUPercent: 10, MemUsedBytes: 1 << 30, MemTotalBytes: 8 << 30, ReceivedAt: time.Now(),
+			Gpu:       &hosts.GpuMetrics{UtilizationPercent: 70},
+			Instances: []hosts.InstanceMetrics{{InstanceID: "m1", CPUPercent: 50, RSSBytes: 1 << 20, GpuPercent: &g}}},
+	}}
+	prof := fakeProfileReader{snapshots: map[[2]string]profiles.Snapshot{
+		{"enc", profiles.GlobalHostID}:   {CPUAvg: 10, CPUP95: 20, SampleCount: 5, GPUAvg: 30, GPUP95: 55, GPUSamples: 4},
+		{"plain", profiles.GlobalHostID}: {CPUAvg: 10, CPUP95: 20, SampleCount: 5},
+	}}
+	wf := fakeWorkflowService{list: []workflows.Workflow{{ID: "w", Name: "W", Definition: workflows.Definition{Roles: []workflows.Role{
+		{Name: "E", NodeType: "enc"}, {Name: "P", NodeType: "plain"},
+	}}}}}
+	cat := fakeCatalogWithInstances{inst: []launcher.Instance{{ID: "m1", Type: "enc", Label: "Manuell", HostID: "h1"}}}
+	rec := httptest.NewRecorder()
+	handleSchedulerResources(reg, metrics, nil, prof, wf, cat, placement.DefaultThresholds)(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	var resp schedResResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Hosts[1].GPUKnown || resp.Hosts[0].GPUKnown {
+		t.Errorf("gpuKnown hosts = %+v", resp.Hosts)
+	}
+	e, p := resp.Workflows[0].Roles[0], resp.Workflows[0].Roles[1]
+	if !e.GPUKnown || e.GPUPercent != 55 || p.GPUKnown || p.GPUPercent != 0 {
+		t.Errorf("roles gpu: enc=%+v plain=%+v", e, p)
+	}
+	// Manuell: Messung 40 %, Profil p95 55 % → konservativ 55
+	if len(resp.ManualInstances) != 1 || !resp.ManualInstances[0].GPUKnown || resp.ManualInstances[0].GPUPercent != 55 {
+		t.Errorf("manual = %+v", resp.ManualInstances)
 	}
 }

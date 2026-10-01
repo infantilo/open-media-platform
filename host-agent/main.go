@@ -312,6 +312,18 @@ func main() {
 			cancel()
 		}
 
+		// GPU je Prozess: nur wenn eine GPU konfiguriert ist UND pmon lief —
+		// sonst bleibt GpuPercent der Instanzen nil ("nicht gemessen").
+		var gpuProcs map[int]float64
+		var parents map[int]int
+		if gpuIndex >= 0 {
+			pmonCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if procs, ok := telemetry.TakeGPUProcs(pmonCtx, gpuIndex); ok {
+				gpuProcs, parents = procs, telemetry.ParentPIDs()
+			}
+			cancel()
+		}
+
 		running := executor.Instances()
 		keepPIDs := make(map[int]bool, len(running))
 		for _, inst := range running {
@@ -320,12 +332,17 @@ func main() {
 			if !ok {
 				continue
 			}
-			sample.Instances = append(sample.Instances, telemetry.InstanceSample{
+			is := telemetry.InstanceSample{
 				InstanceID: inst.InstanceID,
 				CPUPercent: cpu,
 				RSSBytes:   rss,
 				Outdated:   inst.Outdated,
-			})
+			}
+			if gpuProcs != nil {
+				g := telemetry.GPUPercentForTree(gpuProcs, parents, inst.PID)
+				is.GpuPercent = &g
+			}
+			sample.Instances = append(sample.Instances, is)
 		}
 		procSampler.Prune(keepPIDs)
 
