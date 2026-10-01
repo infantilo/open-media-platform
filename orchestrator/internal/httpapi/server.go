@@ -737,7 +737,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 		mux.HandleFunc("DELETE /api/v1/groups/{id}/members/{username}", g.requireVerbGlobal(authz.VerbAdmin, handleRemoveGroupMember(options.groups, options.domainAudit)))
 	}
 
-	mux.Handle("/", spaFallback(cfg.UIDir, http.FileServer(http.Dir(cfg.UIDir))))
+	mux.Handle("/", spaFallback(cfg.UIDir, revalidateStatic(http.FileServer(http.Dir(cfg.UIDir)))))
 	return countRequests(reqCounters, noStoreForAPI(mux))
 }
 
@@ -752,6 +752,18 @@ func spaFallback(uiDir string, next http.Handler) http.Handler {
 			http.ServeFile(w, r, uiDir+"/index.html")
 			return
 		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// revalidateStatic zwingt den Browser, das statische UI (index.html,
+// design-tokens.css, dist/shell.js) bei jedem Laden per If-Modified-Since
+// zu prüfen (304, wenn unverändert). Ohne Cache-Control cacht der Browser
+// anhand von Last-Modified heuristisch — nach einem UI-Build sah der
+// Nutzer dann die alte Oberfläche bis zum harten Neuladen.
+func revalidateStatic(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
 		next.ServeHTTP(w, r)
 	})
 }
