@@ -15,6 +15,8 @@ const SAMPLE_RATE = 48000;
 const CHANNELS = 2;
 const BYTES_PER_FRAME = CHANNELS * 4; // F32LE, s. omp_mediaio::pcm_stream
 const VOLUME_KEY = "omp-listen-volume";
+const SYNC_KEY = "omp-listen-sync-ms";
+const MAX_SYNC_MS = 1000;
 const DIM_GAIN = 0.1; // -20 dB
 const RECONNECT_MS = [500, 1000, 2000, 4000];
 
@@ -70,25 +72,31 @@ export interface ListenState {
   muted: boolean;
   dim: boolean;
   mono: boolean;
+  // Audio-Verzögerung in ms, damit der Ton zu Viewer/Multiviewer-Bild passt
+  // (MJPEG im Browser hängt je nach Last hinter dem PCM-Strom her).
+  syncMs: number;
 }
 
 export class ListenService extends EventTarget {
   #ctx: AudioContext | null = null;
   #worklet: AudioWorkletNode | null = null;
   #gain: GainNode | null = null;
+  #delay: DelayNode | null = null;
   #splitter: ChannelSplitterNode | null = null;
   #analysers: AnalyserNode[] = [];
   #reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   // Generation: jede start()/stop()-Runde erhöht sie; veraltete Leseschleifen
   // und Wiederverbindungsversuche erkennen daran, dass sie überholt sind.
   #gen = 0;
-  state: ListenState = { nodeId: null, status: "idle", volume: 0.8, muted: false, dim: false, mono: false };
+  state: ListenState = { nodeId: null, status: "idle", volume: 0.8, muted: false, dim: false, mono: false, syncMs: 0 };
 
   constructor() {
     super();
     try {
       const v = parseFloat(localStorage.getItem(VOLUME_KEY) ?? "");
       if (v >= 0 && v <= 1) this.state.volume = v;
+      const sync = parseInt(localStorage.getItem(SYNC_KEY) ?? "", 10);
+      if (sync >= 0 && sync <= MAX_SYNC_MS) this.state.syncMs = sync;
     } catch { /* localStorage gesperrt: Standardlautstärke */ }
     // Hintergrund-Tabs/Gerätewechsel können den Kontext anhalten.
     document.addEventListener("visibilitychange", () => this.#resume());
@@ -106,6 +114,7 @@ export class ListenService extends EventTarget {
 
   #applyGain() {
     if (!this.#gain) return;
+    this.#delay?.delayTime.setTargetAtTime(this.state.syncMs / 1000, this.#ctx!.currentTime, 0.05);
     const { volume, muted, dim } = this.state;
     const g = muted ? 0 : volume * volume * (dim ? DIM_GAIN : 1); // quadratisch: musikalischere Regelkurve
     this.#gain.gain.setTargetAtTime(g, this.#ctx!.currentTime, 0.015);
@@ -126,7 +135,9 @@ export class ListenService extends EventTarget {
     const worklet = new AudioWorkletNode(ctx, "pcm-player-processor", { outputChannelCount: [CHANNELS] });
     const gain = ctx.createGain();
     const splitter = ctx.createChannelSplitter(CHANNELS);
-    worklet.connect(gain).connect(ctx.destination);
+    const delay = ctx.createDelay(MAX_SYNC_MS / 1000);
+    worklet.connect(delay).connect(gain).connect(ctx.destination);
+    this.#delay = delay;
     worklet.connect(splitter); // Pegelabgriff VOR Lautstärke/Mute/Dim: zeigt die Quelle, nicht den Regler
     this.#analysers = [0, 1].map((ch) => {
       const a = ctx.createAnalyser();
@@ -180,6 +191,10 @@ export class ListenService extends EventTarget {
   setVolume(v: number) {
     try { localStorage.setItem(VOLUME_KEY, String(v)); } catch { /* egal */ }
     this.#set({ volume: v });
+  }
+  setSync(syncMs: number) {
+    try { localStorage.setItem(SYNC_KEY, String(syncMs)); } catch { /* egal */ }
+    this.#set({ syncMs });
   }
   setMuted(muted: boolean) { this.#set({ muted }); }
   setDim(dim: boolean) { this.#set({ dim }); }
@@ -291,6 +306,20 @@ export function buildListenWidget(service: ListenService): HTMLElement {
   vol.style.cssText = "width:90px;padding:0;";
   vol.addEventListener("input", () => service.setVolume(parseFloat(vol.value)));
 
+  const sync = document.createElement("input");
+  sync.type = "range";
+  sync.min = "0";
+  sync.max = String(MAX_SYNC_MS);
+  sync.step = "10";
+  sync.style.cssText = "width:80px;padding:0;";
+  const syncLabel = document.createElement("span");
+  syncLabel.style.cssText = "min-width:62px;font-variant-numeric:tabular-nums;";
+  sync.addEventListener("input", () => service.setSync(parseInt(sync.value, 10)));
+  const syncWrap = document.createElement("label");
+  syncWrap.title = "Ton verzögern, bis er zum Bild in Viewer/Multiviewer passt";
+  syncWrap.style.cssText = "display:flex;align-items:center;gap:var(--omp-space-1);";
+  syncWrap.append("A/V", sync, syncLabel);
+
   const toggle = (label: string, title: string, on: (active: boolean) => void) => {
     const b = document.createElement("button");
     b.textContent = label;
@@ -312,7 +341,7 @@ export function buildListenWidget(service: ListenService): HTMLElement {
   stop.style.cssText = "font-size:var(--omp-font-size-xs);padding:2px var(--omp-space-2);";
   stop.addEventListener("click", () => service.stop());
 
-  w.append(icon, status, meter, vol, mute, dim, mono, stop);
+  w.append(icon, status, meter, vol, syncWrap, mute, dim, mono, stop);
 
   let raf = 0;
   const frame = () => {
@@ -331,6 +360,8 @@ export function buildListenWidget(service: ListenService): HTMLElement {
     w.style.display = active ? "flex" : "none";
     status.textContent = STATUS_TEXT[s.status];
     vol.value = String(s.volume);
+    sync.value = String(s.syncMs);
+    syncLabel.textContent = `+${s.syncMs} ms`;
     const mark = (b: HTMLElement, on: boolean) => {
       b.style.borderColor = on ? "var(--omp-accent-cyan)" : "";
       b.style.color = on ? "var(--omp-accent-cyan)" : "";
