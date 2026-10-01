@@ -63,8 +63,24 @@ class OmpOgrafPanel extends HTMLElement {
       }
       .field-row textarea { font-family: var(--omp-mono, monospace); resize: vertical; }
       .field-row input[type="checkbox"] { width: 16px; height: 16px; }
-      .actions { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
-      .actions omp-button { flex: 1; height: 30px; min-width: 64px; }
+      /* Steuerung: feste Geometrie, damit die Knöpfe im Live-Betrieb NIE ihre
+         Position ändern — vier gleich breite Spalten, feste Höhe, und der
+         Weiter-Knopf behält auch bei einstufigen Templates seinen Platz
+         (dann nur unsichtbar). Die Steuerung steht ganz oben, der Editor
+         (variable Höhe) darunter. */
+      .actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 6px; }
+      .actions omp-button { height: 34px; min-width: 0; }
+      .ctl-target {
+        display: flex; align-items: center; gap: 6px; height: 22px; margin-bottom: 6px; overflow: hidden;
+        font-size: var(--omp-font-size-sm, 12px); white-space: nowrap;
+      }
+      .ctl-target .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+      .ctl-target .badge { flex-shrink: 0; font-size: var(--omp-font-size-xs, 11px); padding: 1px 6px; border-radius: 8px;
+        border: 1px solid var(--omp-border, #2e3338); color: var(--omp-text-dim, #9aa0a6); }
+      .status { min-width: 0; height: 18px; overflow: hidden; }
+      .status span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .actions omp-button { white-space: nowrap; }
+      .ctl-target .badge.live { border-color: #34a853; color: #34a853; }
       .onair { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
       .onair-title { font-size: var(--omp-font-size-xs, 11px); color: var(--omp-text-dim, #9aa0a6); margin-bottom: 2px; }
       .layer-row {
@@ -105,7 +121,7 @@ class OmpOgrafPanel extends HTMLElement {
     // Nur sichtbar bei Templates mit mehreren Schritten.
     const continueBtn = document.createElement("omp-button");
     continueBtn.textContent = "Weiter";
-    continueBtn.style.display = "none";
+    continueBtn.style.visibility = "hidden";
     const hideBtn = document.createElement("omp-button");
     hideBtn.textContent = "■ Aus";
 
@@ -124,11 +140,30 @@ class OmpOgrafPanel extends HTMLElement {
     statusText.textContent = "Aus";
     status.append(statusDot, statusText);
 
-    const section = document.createElement("omp-panel-section");
-    section.setAttribute("label", "OGraf Grafik");
-    section.append(onair, search, select, fields, actions, status);
+    // Welche Grafik die Knöpfe gerade steuern, und ob sie on air ist.
+    const target = document.createElement("div");
+    target.className = "ctl-target";
+    const targetName = document.createElement("span");
+    targetName.className = "name";
+    const targetBadge = document.createElement("span");
+    targetBadge.className = "badge";
+    target.append(targetName, targetBadge);
 
-    shadow.append(style, section);
+    // Drei Teile: Steuerung (fest, oben), Auswahl (On-Air-Liste + Vorlage),
+    // Editor (Felder, variable Höhe).
+    const controlSection = document.createElement("omp-panel-section");
+    controlSection.setAttribute("label", "Steuerung");
+    controlSection.append(target, actions, status);
+
+    const pickSection = document.createElement("omp-panel-section");
+    pickSection.setAttribute("label", "Auf Sendung / Vorlage");
+    pickSection.append(onair, search, select);
+
+    const editSection = document.createElement("omp-panel-section");
+    editSection.setAttribute("label", "Editor");
+    editSection.append(fields);
+
+    shadow.append(style, controlSection, pickSection, editSection);
 
     const call = (method, body) =>
       fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {
@@ -270,35 +305,46 @@ class OmpOgrafPanel extends HTMLElement {
 
     showBtn.addEventListener("click", () => {
       const tpl = selectedTemplate();
-      if (!tpl) return;
+      if (!tpl || isOff(showBtn)) return;
       call("show", { templateId: tpl.id, data: readFieldData() });
     });
     updateBtn.addEventListener("click", () => {
       const tpl = selectedTemplate();
-      if (!tpl || !layerOf(tpl.id)) return;
+      if (!tpl || !layerOf(tpl.id) || isOff(updateBtn)) return;
       call("update", { layerId: tpl.id, data: readFieldData() });
     });
     continueBtn.addEventListener("click", () => {
       const tpl = selectedTemplate();
-      if (tpl && layerOf(tpl.id)) call("continue", { layerId: tpl.id });
+      if (tpl && layerOf(tpl.id) && !isOff(continueBtn)) call("continue", { layerId: tpl.id });
     });
     hideBtn.addEventListener("click", () => {
       const tpl = selectedTemplate();
-      if (tpl && layerOf(tpl.id)) call("hide", { layerId: tpl.id });
+      if (tpl && layerOf(tpl.id) && !isOff(hideBtn)) call("hide", { layerId: tpl.id });
     });
+
+    const setDisabled = (btn, off) => btn.toggleAttribute("disabled", !!off);
+    const isOff = (btn) => btn.hasAttribute("disabled");
 
     // Knöpfe je nach Zustand des gewählten Templates: Ein nur wenn nicht on
     // air; Update/Aus nur wenn on air; Weiter nur bei mehrstufigen Templates.
     function renderControls() {
       const tpl = selectedTemplate();
       const layer = tpl ? layerOf(tpl.id) : null;
-      showBtn.disabled = !tpl || !!layer;
-      updateBtn.disabled = !layer;
-      hideBtn.disabled = !layer;
+      // omp-button kennt nur das ATTRIBUT disabled (keine Property) — ein
+      // "btn.disabled = true" würde wirkungslos auf dem Host landen.
+      setDisabled(showBtn, !tpl || !!layer);
+      setDisabled(updateBtn, !layer);
+      setDisabled(hideBtn, !layer);
+      // Weiter: nur bei mehrstufigen Templates vorhanden (sonst unsichtbar, der
+      // Platz bleibt erhalten) und nur bedienbar, solange on air und noch ein
+      // weiterer Schritt existiert.
       const multi = !!tpl && (tpl.stepCount ?? 1) > 1;
-      continueBtn.style.display = multi ? "" : "none";
-      continueBtn.disabled = !layer || !layer.canContinue;
-      continueBtn.textContent = layer && multi ? "Weiter " + (layer.step + 1) + "/" + layer.stepCount : "Weiter";
+      continueBtn.style.visibility = multi ? "visible" : "hidden";
+      setDisabled(continueBtn, !layer || !layer.canContinue);
+      // Beschriftung bleibt konstant (feste Knopfbreite); der Schritt steht im Zustands-Badge.
+      targetName.textContent = tpl ? tpl.label : "keine Vorlage gewählt";
+      targetBadge.textContent = layer ? "● On Air" + (multi ? " · Schritt " + (layer.step + 1) + "/" + layer.stepCount : "") : "○ Aus";
+      targetBadge.className = layer ? "badge live" : "badge";
     }
 
     // On-Air-Liste: Klick auf eine Zeile öffnet die Grafik im Editor.
