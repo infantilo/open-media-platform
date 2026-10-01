@@ -70,12 +70,26 @@ pub struct Config {
 
 pub enum Command {
     Show {
+        layer_id: String,
         template_id: String,
         dir: String,
         main: String,
         data: Value,
     },
-    Hide,
+    /// Live-Änderung der Daten einer sichtbaren Ebene (vollständiger Datensatz).
+    Update {
+        layer_id: String,
+        data: Value,
+    },
+    /// Nächster Schritt einer mehrstufigen Ebene (Zielschritt, 0-basiert).
+    Continue {
+        layer_id: String,
+        step: u32,
+    },
+    /// Eine Ebene (Some) oder alle (None) ausblenden.
+    Hide {
+        layer_id: Option<String>,
+    },
 }
 
 pub enum Event {
@@ -588,9 +602,14 @@ fn transition_pipeline(pipeline: &gst::Pipeline, target: gst::State, timeout_sec
     Ok(())
 }
 
-fn show_js(template_id: &str, dir: &str, main: &str, data: &Value) -> String {
+fn js_str(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+fn show_js(layer_id: &str, template_id: &str, dir: &str, main: &str, data: &Value) -> String {
     format!(
-        "window.omp.show({}, {}, {}, {})",
+        "window.omp.show({}, {}, {}, {}, {})",
+        js_str(layer_id),
         serde_json::to_string(template_id).unwrap_or_else(|_| "\"\"".to_string()),
         serde_json::to_string(dir).unwrap_or_else(|_| "\"\"".to_string()),
         serde_json::to_string(main).unwrap_or_else(|_| "\"\"".to_string()),
@@ -695,6 +714,8 @@ pub fn run(
     // von "nach echtem `show()` per `hide()` beendet, braucht erst noch
     // einen Warte-Frame mit dem jetzt versteckten Zustand" (s. u.).
     let mut ever_shown = false;
+    // Aktuell sichtbare Ebenen (IDs) — Grundlage dafür, wann pausiert wird.
+    let mut on_air: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     loop {
         // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
@@ -711,7 +732,8 @@ pub fn run(
         if let Some(command) = pending.take() {
             if pipeline.page_ready.load(Ordering::Relaxed) {
                 match &command {
-                    Command::Show { template_id, dir, main, data } => {
+                    Command::Show { layer_id, template_id, dir, main, data } => {
+                        on_air.insert(layer_id.clone());
                         if !rendering {
                             if let Err(e) = transition_pipeline(&pipeline.pipeline, gst::State::Playing, 5) {
                                 let _ = tx.send(Event::Error(format!("Playing vor Show fehlgeschlagen: {e}")));
@@ -719,11 +741,32 @@ pub fn run(
                             rendering = true;
                         }
                         ever_shown = true;
-                        pipeline.run_javascript(&show_js(template_id, dir, main, data));
+                        pipeline.run_javascript(&show_js(layer_id, template_id, dir, main, data));
                     }
-                    Command::Hide => {
-                        pipeline.run_javascript("window.omp.hide()");
-                        if rendering {
+                    Command::Update { layer_id, data } => {
+                        pipeline.run_javascript(&format!(
+                            "window.omp.update({}, {})",
+                            js_str(layer_id),
+                            serde_json::to_string(data).unwrap_or_else(|_| "{}".to_string())
+                        ));
+                    }
+                    Command::Continue { layer_id, step } => {
+                        pipeline.run_javascript(&format!("window.omp.continue({}, {})", js_str(layer_id), step));
+                    }
+                    Command::Hide { layer_id } => {
+                        match layer_id {
+                            Some(id) => {
+                                on_air.remove(id);
+                                pipeline.run_javascript(&format!("window.omp.hide({})", js_str(id)));
+                            }
+                            None => {
+                                on_air.clear();
+                                pipeline.run_javascript("window.omp.hide()");
+                            }
+                        }
+                        // Erst pausieren, wenn KEINE Ebene mehr sichtbar ist —
+                        // bleibt eine andere on air, muss weiter gerendert werden.
+                        if rendering && on_air.is_empty() {
                             // Gnadenfrist, damit `wpesrc` den jetzt
                             // versteckten Zustand mindestens einmal
                             // wirklich rendert und dieser Frame durch

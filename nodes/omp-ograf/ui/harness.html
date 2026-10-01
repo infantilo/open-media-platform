@@ -5,8 +5,7 @@
   die OGraf-Lifecycle-Methoden aufruft"). Vom Node per `wpesrc`s
   `run-javascript`-Action gesteuert (pipeline.rs) — window.omp ist die
   einzige Schnittstelle, absichtlich minimal (Teil 1: genau ein
-  Template-Slot gleichzeitig, mehrere gleichzeitige Instanzen sind
-  K5-Teil-3).
+  Template-Slot je Ebene).
 -->
 <html>
 <head>
@@ -24,44 +23,83 @@
   // NICHT als Custom Element registriert — das muss diese Host-Seite
   // selbst tun (`new` auf einer unregistrierten HTMLElement-Unterklasse
   // wirft sonst "Illegal constructor").
+  // Mehrere gleichzeitige Grafik-Ebenen (Nutzerwunsch 2026-10-01): jede
+  // Ebene hat eine ID und ein eigenes Template-Element, alle liegen
+  // übereinander in DIESER einen Seite — wpesrc rendert die Komposition
+  // als Fill+Key. Der Schritt (continue) wird vom Node geführt und als
+  // Zielschritt übergeben (Einzige Quelle der Wahrheit, kein Auseinander-
+  // laufen mit einem hier mitgezählten Wert).
   window.omp = {
-    el: null,
-    templateId: null,
+    layers: new Map(), // layerId -> { el, templateId }
 
-    async show(templateId, dir, main, data) {
+    async show(layerId, templateId, dir, main, data) {
       try {
-        if (this.templateId !== templateId) {
-          await this.hide();
+        let layer = this.layers.get(layerId);
+        if (layer && layer.templateId !== templateId) {
+          await this.hide(layerId);
+          layer = null;
+        }
+        if (!layer) {
           const mod = await import(`/ograf-templates/${dir}/${main}`);
           const TemplateClass = mod.default;
           const tag = "ograf-tpl-" + templateId.toLowerCase().replace(/[^a-z0-9-]/g, "-");
           if (!customElements.get(tag)) {
             customElements.define(tag, TemplateClass);
           }
-          this.el = document.createElement(tag);
-          document.body.appendChild(this.el);
-          this.templateId = templateId;
-          await this.el.load({ renderType: "realtime", data });
-        } else if (this.el.updateAction) {
-          await this.el.updateAction({ data });
+          const el = document.createElement(tag);
+          document.body.appendChild(el);
+          layer = { el, templateId };
+          this.layers.set(layerId, layer);
+          await el.load({ renderType: "realtime", data });
+        } else if (layer.el.updateAction) {
+          await layer.el.updateAction({ data });
         }
-        await this.el.playAction({});
+        await layer.el.playAction({});
       } catch (e) {
         console.error("omp.show failed:", e);
       }
     },
 
-    async hide() {
-      if (!this.el) return;
+    // Live-Änderung der Daten einer sichtbaren Ebene.
+    async update(layerId, data) {
+      const layer = this.layers.get(layerId);
+      if (!layer) return;
       try {
-        await this.el.stopAction({});
-        if (this.el.dispose) await this.el.dispose();
+        if (layer.el.updateAction) await layer.el.updateAction({ data });
+      } catch (e) {
+        console.error("omp.update failed:", e);
+      }
+    },
+
+    // Nächster Schritt einer mehrstufigen Ebene: continueAction() des
+    // Elements, falls vorhanden, sonst playAction({ goto: <Zielschritt> }).
+    async continue(layerId, step) {
+      const layer = this.layers.get(layerId);
+      if (!layer) return;
+      try {
+        if (layer.el.continueAction) await layer.el.continueAction({});
+        else await layer.el.playAction({ goto: step });
+      } catch (e) {
+        console.error("omp.continue failed:", e);
+      }
+    },
+
+    // Eine Ebene ausblenden; ohne ID alle.
+    async hide(layerId) {
+      if (layerId === undefined || layerId === null) {
+        for (const id of [...this.layers.keys()]) await this.hide(id);
+        return;
+      }
+      const layer = this.layers.get(layerId);
+      if (!layer) return;
+      try {
+        await layer.el.stopAction({});
+        if (layer.el.dispose) await layer.el.dispose();
       } catch (e) {
         console.error("omp.hide failed:", e);
       } finally {
-        this.el.remove();
-        this.el = null;
-        this.templateId = null;
+        layer.el.remove();
+        this.layers.delete(layerId);
       }
     },
   };

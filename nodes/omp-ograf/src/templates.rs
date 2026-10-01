@@ -35,6 +35,18 @@ pub struct TemplateInfo {
 }
 
 impl TemplateInfo {
+    #[cfg(test)]
+    pub fn for_test(id: &str, step_count: u32) -> Self {
+        TemplateInfo {
+            id: id.to_string(),
+            label: id.to_string(),
+            step_count,
+            schema: Value::Null,
+            dir: id.to_string(),
+            main: "main.js".to_string(),
+        }
+    }
+
     pub fn to_descriptor_json(&self) -> Value {
         serde_json::json!({
             "id": self.id,

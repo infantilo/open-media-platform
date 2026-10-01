@@ -7,6 +7,7 @@
 //! `video/v210a`-Einzelflows, Begründung in `pipeline.rs`). Der
 //! Mixer-DSK-Anschluss (Empfängerseite) ist K5-Teil-2.
 
+mod layers;
 mod pipeline;
 mod templates;
 mod uibundle;
@@ -27,7 +28,8 @@ use templates::TemplateInfo;
 
 struct OgrafStore {
     templates: Vec<TemplateInfo>,
-    current: Mutex<Option<String>>,
+    /// Gleichzeitig sichtbare Grafik-Ebenen (s. layers.rs).
+    layers: Mutex<layers::Layers>,
     templates_root: PathBuf,
     lowres_flow_id: String,
     pipeline: pipeline::PipelineHandle,
@@ -47,6 +49,16 @@ impl ParamStore for OgrafStore {
                 },
                 ParamSpec {
                     name: "current".to_string(),
+                    kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
+                // Alle gerade sichtbaren Ebenen als JSON-Array (id, templateId,
+                // label, data, step, stepCount, hasContinue, canContinue) —
+                // Grundlage der "On Air"-Liste im Panel.
+                ParamSpec {
+                    name: "layers".to_string(),
                     kind: ParamType::String,
                     unit: None,
                     range: None,
@@ -82,11 +94,41 @@ impl ParamStore for OgrafStore {
                             name: "data".to_string(),
                             kind: ParamType::String,
                         },
+                        // Optional: Ebenen-ID (Standard = templateId, also
+                        // eine Ebene je Template).
+                        MethodArg {
+                            name: "layerId".to_string(),
+                            kind: ParamType::String,
+                        },
                     ],
                 },
                 MethodSpec {
+                    name: "update".to_string(),
+                    args: vec![
+                        MethodArg {
+                            name: "layerId".to_string(),
+                            kind: ParamType::String,
+                        },
+                        MethodArg {
+                            name: "data".to_string(),
+                            kind: ParamType::String,
+                        },
+                    ],
+                },
+                MethodSpec {
+                    name: "continue".to_string(),
+                    args: vec![MethodArg {
+                        name: "layerId".to_string(),
+                        kind: ParamType::String,
+                    }],
+                },
+                MethodSpec {
                     name: "hide".to_string(),
-                    args: vec![],
+                    // layerId optional: ohne alle Ebenen ausblenden.
+                    args: vec![MethodArg {
+                        name: "layerId".to_string(),
+                        kind: ParamType::String,
+                    }],
                 },
                 MethodSpec {
                     name: "activateLowresPreview".to_string(),
@@ -109,8 +151,9 @@ impl ParamStore for OgrafStore {
                     .collect::<Vec<_>>()
             )),
             "current" => Some(serde_json::json!(
-                *self.current.lock().expect("lock poisoned")
+                self.layers.lock().expect("lock poisoned").current_template()
             )),
+            "layers" => Some(self.layers.lock().expect("lock poisoned").to_json()),
             "lowresFlowId" => Some(serde_json::json!(self.lowres_flow_id)),
             "lowresActive" => Some(serde_json::json!(self.pipeline.lowres_preview_active())),
             _ => None,
@@ -147,8 +190,18 @@ impl ParamStore for OgrafStore {
                         }
                     }
                 }
-                *self.current.lock().expect("lock poisoned") = Some(template_id.to_string());
+                let layer_id = args
+                    .get("layerId")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(template_id)
+                    .to_string();
+                self.layers
+                    .lock()
+                    .expect("lock poisoned")
+                    .show(&layer_id, info, data.clone());
                 self.pipeline.send(pipeline::Command::Show {
+                    layer_id,
                     template_id: template_id.to_string(),
                     dir,
                     main,
@@ -156,9 +209,50 @@ impl ParamStore for OgrafStore {
                 });
                 Ok(())
             }
+            "update" => {
+                let layer_id = args
+                    .get("layerId")
+                    .and_then(Value::as_str)
+                    .ok_or(InvokeError::Unknown)?;
+                let Some(Value::Object(patch)) = args.get("data") else {
+                    return Err(InvokeError::Unknown);
+                };
+                let full = self
+                    .layers
+                    .lock()
+                    .expect("lock poisoned")
+                    .update(layer_id, patch)
+                    .ok_or(InvokeError::Unknown)?;
+                self.pipeline.send(pipeline::Command::Update {
+                    layer_id: layer_id.to_string(),
+                    data: full,
+                });
+                Ok(())
+            }
+            "continue" => {
+                let mut layers = self.layers.lock().expect("lock poisoned");
+                // Ohne ID nur eindeutig, wenn genau eine Ebene on air ist.
+                let layer_id = match args.get("layerId").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                    Some(id) => id.to_string(),
+                    None => layers.only().map(|l| l.id.clone()).ok_or(InvokeError::Unknown)?,
+                };
+                if !layers.contains(&layer_id) {
+                    return Err(InvokeError::Unknown);
+                }
+                // Am letzten Schritt bzw. bei einstufigen Templates: kein Effekt.
+                if let Some(step) = layers.advance(&layer_id) {
+                    self.pipeline.send(pipeline::Command::Continue { layer_id, step });
+                }
+                Ok(())
+            }
             "hide" => {
-                *self.current.lock().expect("lock poisoned") = None;
-                self.pipeline.send(pipeline::Command::Hide);
+                let id = args.get("layerId").and_then(Value::as_str).filter(|s| !s.is_empty());
+                let removed = self.layers.lock().expect("lock poisoned").hide(id);
+                // Eine unbekannte/bereits ausgeblendete Ebene ist kein Fehler
+                // (idempotent), schickt aber auch nichts an die Pipeline.
+                if id.is_none() || !removed.is_empty() {
+                    self.pipeline.send(pipeline::Command::Hide { layer_id: id.map(str::to_string) });
+                }
                 Ok(())
             }
             _ => Err(InvokeError::Unknown),
@@ -300,7 +394,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let store: Arc<dyn ParamStore> = Arc::new(OgrafStore {
         templates,
-        current: Mutex::new(None),
+        layers: Mutex::new(layers::Layers::default()),
         templates_root,
         lowres_flow_id: lowres_flow_id.clone(),
         pipeline: pipeline_handle,
