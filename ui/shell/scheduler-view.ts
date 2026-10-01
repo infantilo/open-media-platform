@@ -943,8 +943,10 @@ class SchedulerView extends HTMLElement {
       return `${dates.length > 1 || !sameCalendarDate(d, dates[0]) ? fmtDayLabel(d) + " " : ""}${fmtMinutes(d.getHours() * 60 + d.getMinutes())}`;
     };
     const dur = (ms: number) => {
-      const m = Math.max(0, Math.round(ms / 60000));
-      return `${m >= 60 ? `${Math.floor(m / 60)} h ` : ""}${m % 60} min`.replace(/^0 h /, "");
+      if (ms < 60000) return `${Math.max(0, Math.round(ms / 1000))} s`;
+      const m = Math.round(ms / 60000);
+      const h = Math.floor(m / 60);
+      return h > 0 ? (m % 60 > 0 ? `${h} h ${m % 60} min` : `${h} h`) : `${m} min`;
     };
     const SRC: Record<string, string> = { manual: "von Hand", schedule: "per Zeitplan", adopted: "übernommen", restored: "beim Orchestrator-Start vorgefunden" };
     const END: Record<string, string> = { manual: "von Hand gestoppt", scheduled: "per Zeitplan gestoppt", failed: "fehlgeschlagen", unknown: "Ende nicht beobachtet" };
