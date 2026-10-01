@@ -97,6 +97,11 @@ func TestComputeRoleNetworkRealCatalog(t *testing.T) {
 		t.Errorf("fabrics target = %+v", tg)
 	}
 	// Initiator folgt dem Format der verbundenen Quelle: 3840×2160×50×21,33×1,02
+	a, _ := computeRoleNetwork(cat, def, workflows.Role{Name: "A", NodeType: "omp-aes67-gateway-source"})
+	// 2 Kanäle L24/48k: 1000 × (288 + 58) × 8 = 2,768 Mbit/s
+	if math.Abs(a.TxMbps-2.768) > 0.01 || a.RxMbps != 0 || a.Estimated {
+		t.Errorf("aes67 source = %+v", a)
+	}
 	in, _ := computeRoleNetwork(cat, def, def.Roles[3])
 	if !near(in.TxMbps, 9022.9) || in.RxMbps != 0 || in.Estimated {
 		t.Errorf("fabrics initiator = %+v", in)

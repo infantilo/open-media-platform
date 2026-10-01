@@ -126,7 +126,8 @@ type CatalogEntry struct {
 // folgt es der Rolle (Format, Workflow-Programmformat oder verbundene
 // Rolle). Estimated markiert Werte, die auf einer Annahme beruhen (z. B.
 // ausgehandeltes Pixelformat). Kind "fixed" nimmt den Nennwert Mbps
-// (Audio/WebRTC, immer ein Schätzwert).
+// (WebRTC, immer ein Schätzwert); Kind "audio" rechnet L24-Audio aus
+// Kanälen und Abtastrate samt Paket-Headern.
 type CatalogNetwork struct {
 	Direction    string  `json:"direction"`
 	Kind         string  `json:"kind"`
@@ -137,6 +138,9 @@ type CatalogNetwork struct {
 	Fps          float64 `json:"fps,omitempty"`
 	Estimated    bool    `json:"estimated,omitempty"`
 	Mbps         float64 `json:"mbps,omitempty"`
+	// Kind "audio": AES67/L24, Paketzeit 1 ms (AES67-Standard, `a=ptime:1`).
+	Channels   int `json:"channels,omitempty"`
+	SampleRate int `json:"sampleRate,omitempty"`
 }
 
 // LatencyRange ist ein Latenzbereich in Frames (Video) bzw. Samples

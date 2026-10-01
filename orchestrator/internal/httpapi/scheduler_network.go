@@ -94,6 +94,16 @@ func computeRoleNetwork(cat CatalogReader, def workflows.Definition, role workfl
 			overhead = rtpOverhead
 		}
 		mbps = w * h * fps * n.BitsPerPixel * overhead / 1e6
+	case "audio":
+		if n.Channels <= 0 || n.SampleRate <= 0 {
+			return roleNetwork{}, false
+		}
+		// AES67/L24, Paketzeit 1 ms: 1000 Pakete/s, je 3 Byte × Kanäle ×
+		// Samples/ms Nutzlast plus RTP 12 + UDP 8 + IP 20 + Ethernet
+		// 14 + FCS 4 Byte (Gateway: nur Standard-ptime 1, s. aes67 pipeline).
+		payload := float64(3*n.Channels) * float64(n.SampleRate) / 1000
+		mbps = 1000 * (payload + 12 + 8 + 20 + 14 + 4) * 8 / 1e6
+		est = n.Estimated
 	case "fixed":
 		mbps = n.Mbps
 		est = true // Nennwert, keine Messung
