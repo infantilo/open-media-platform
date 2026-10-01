@@ -14,6 +14,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profiles"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
 )
 
 // Ressourcenmodell für den Scheduler (Nutzerwunsch 2026-09-30: "wissen um
@@ -29,10 +30,12 @@ import (
 // I/O-Ports als Anzahl je (Kartentyp, Richtung). Geplant wird konservativ
 // mit dem 95. Perzentil (CPU) bzw. dem Maximum (RSS) der Messhistorie.
 
-// CatalogReader liefert den Node-Katalog (Netz-Deklaration je Typ);
+// CatalogReader liefert den Node-Katalog (Netz-Deklaration je Typ) und die
+// laufenden Instanzen (manuell gestartete zählen als Dauerlast);
 // *launcher.Launcher erfüllt es.
 type CatalogReader interface {
 	Catalog() []launcher.CatalogEntry
+	List() []launcher.Instance
 }
 
 type schedResHost struct {
@@ -56,6 +59,9 @@ type schedResHostLive struct {
 	CPUPercent float64  `json:"cpuPercent"`
 	MemPercent float64  `json:"memPercent"`
 	NetPercent *float64 `json:"netPercent,omitempty"`
+	// Gemessener Durchsatz der konfigurierten NIC in Mbit/s (Momentaufnahme).
+	NetRxMbps  float64  `json:"netRxMbps,omitempty"`
+	NetTxMbps  float64  `json:"netTxMbps,omitempty"`
 	GpuPercent *float64 `json:"gpuPercent,omitempty"`
 }
 
@@ -100,6 +106,26 @@ type schedResResponse struct {
 	Thresholds  map[string]float64 `json:"thresholds"`
 	Hosts       []schedResHost     `json:"hosts"`
 	Workflows   []schedResWorkflow `json:"workflows"`
+	// ManualInstances: laufende Instanzen, die zu keinem Workflow gehören
+	// (von Hand gestartet). Sie laufen, bis jemand sie stoppt — der
+	// Scheduler plant sie deshalb als Dauerlast in jeden Zeit-Slot.
+	ManualInstances []schedResManual `json:"manualInstances"`
+}
+
+type schedResManual struct {
+	ID       string  `json:"id"`
+	Label    string  `json:"label"`
+	NodeType string  `json:"nodeType"`
+	HostID   string  `json:"hostId,omitempty"`
+	CPUCores float64 `json:"cpuCores"`
+	RSSBytes uint64  `json:"rssBytes"`
+	// Known: CPU/RAM stammen aus Messung oder Profil; false = Bedarf unbekannt.
+	Known bool `json:"known"`
+	// Measured: aktuelle Messung der Instanz floss ein (nicht nur das Profil).
+	Measured     bool    `json:"measured,omitempty"`
+	NetRxMbps    float64 `json:"netRxMbps,omitempty"`
+	NetTxMbps    float64 `json:"netTxMbps,omitempty"`
+	NetEstimated bool    `json:"netEstimated,omitempty"`
 }
 
 // handleSchedulerResources: GET /api/v1/scheduler/resources.
@@ -118,6 +144,8 @@ func handleSchedulerResources(
 			Thresholds:  map[string]float64{"cpu": th.CPUPercent, "mem": th.MemPercent, "net": th.NetPercent, "gpu": th.GpuPercent},
 			Hosts:       []schedResHost{},
 			Workflows:   []schedResWorkflow{},
+
+			ManualInstances: []schedResManual{},
 		}
 
 		var ports []ioPortInfo
@@ -170,6 +198,10 @@ func handleSchedulerResources(
 					v := (m.Net.RxBytesPerSec + m.Net.TxBytesPerSec) * 8 / (m.Net.LinkMbps * 1e6) * 100
 					live.NetPercent = &v
 				}
+				if m.Net != nil {
+					live.NetRxMbps = m.Net.RxBytesPerSec * 8 / 1e6
+					live.NetTxMbps = m.Net.TxBytesPerSec * 8 / 1e6
+				}
 				if m.Gpu != nil {
 					v := m.Gpu.UtilizationPercent
 					live.GpuPercent = &v
@@ -214,8 +246,64 @@ func handleSchedulerResources(
 			}
 			resp.Workflows = append(resp.Workflows, sw)
 		}
+		resp.ManualInstances = manualInstances(r.Context(), catalog, metrics, profileStore, wfs)
 		writeJSON(w, http.StatusOK, resp)
 	}
+}
+
+// manualInstances sammelt die laufenden Instanzen ohne Workflow-Zugehörigkeit.
+// Bedarf: höherer Wert aus aktueller Messung und Profil-p95 (konservativ,
+// wie die Workflow-Rollen); Netz aus der Katalog-Deklaration.
+func manualInstances(ctx context.Context, cat CatalogReader, metrics HostMetricsReader, profileStore ProfileReader, wfs []workflows.Workflow) []schedResManual {
+	out := []schedResManual{}
+	if cat == nil {
+		return out
+	}
+	owned := map[string]bool{}
+	for _, wf := range wfs {
+		for _, rt := range wf.Runtime {
+			owned[rt.InstanceID] = true
+		}
+	}
+	for _, inst := range cat.List() {
+		if inst.Crashed || owned[inst.ID] {
+			continue
+		}
+		mi := schedResManual{ID: inst.ID, Label: inst.Label, NodeType: inst.Type, HostID: inst.HostID}
+		if inst.CPUPercent != nil && inst.RSSBytes != nil {
+			mi.CPUCores, mi.RSSBytes, mi.Known, mi.Measured = *inst.CPUPercent/100, *inst.RSSBytes, true, true
+		} else if inst.HostID != "" && metrics != nil {
+			if m, ok := metrics.Get(inst.HostID); ok {
+				for _, im := range m.Instances {
+					if im.InstanceID == inst.ID {
+						mi.CPUCores, mi.RSSBytes, mi.Known, mi.Measured = im.CPUPercent/100, im.RSSBytes, true, true
+					}
+				}
+			}
+		}
+		if snap, ok, _ := lookupProfile(ctx, profileStore, inst.Type, inst.HostID); ok {
+			p95 := snap.CPUP95
+			if p95 < snap.CPUAvg {
+				p95 = snap.CPUAvg
+			}
+			rss := snap.RSSMax
+			if rss < snap.RSSAvg {
+				rss = snap.RSSAvg
+			}
+			if p95/100 > mi.CPUCores {
+				mi.CPUCores = p95 / 100
+			}
+			if rss > mi.RSSBytes {
+				mi.RSSBytes = rss
+			}
+			mi.Known = true
+		}
+		if rn, has := computeRoleNetwork(cat, workflows.Definition{}, workflows.Role{Name: inst.Label, NodeType: inst.Type}); has {
+			mi.NetRxMbps, mi.NetTxMbps, mi.NetEstimated = rn.RxMbps, rn.TxMbps, rn.Estimated
+		}
+		out = append(out, mi)
+	}
+	return out
 }
 
 func lookupProfile(ctx context.Context, store ProfileReader, nodeType, hostID string) (snap profiles.Snapshot, ok, fallback bool) {

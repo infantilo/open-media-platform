@@ -188,3 +188,49 @@ Deno.test("Netz: Rx/Tx getrennt gegen den Link, Engpass trotz freier CPU", () =>
   assertEquals(u2.netPercent, null);
   assertEquals(u2.netLevel, "unknown");
 });
+
+Deno.test("Manuell gestartete Instanzen zählen endlos in jedem Slot auf ihrem Host", () => {
+  const m: ResourceModel = {
+    thresholds: { cpu: 85, mem: 90, net: 85 },
+    hosts: [{ id: "h1", label: "A", online: true, numCpu: 4, memTotalBytes: 8 * GB, capacityKnown: true, netLinkMbps: 1000 }],
+    workflows: [],
+    manualInstances: [
+      { id: "i1", label: "Ton", nodeType: "t", hostId: "h1", cpuCores: 1.5, rssBytes: GB, known: true, measured: true, netTxMbps: 600 },
+      { id: "i2", label: "Neu", nodeType: "x", hostId: "h1", cpuCores: 0, rssBytes: 0, known: false },
+    ],
+  };
+  const now = at(2026, 10, 1, 10);
+  // Slots heute und in drei Tagen — beide enthalten die Last, obwohl kein Zeitplan existiert
+  const slots = [at(2026, 10, 1, 12), at(2026, 10, 4, 3)];
+  const tl = computeTimeline(m, new Map(), slots, 30, now);
+  for (const slot of tl.get("h1")!) {
+    assertEquals(slot.cpuCores, 1.5);
+    assertEquals(slot.netTxMbps, 600);
+    assertEquals(slot.unknown, ["Manuell/Neu"]);
+    assertEquals(slot.contribs[0].wfName, "Manuell gestartet");
+  }
+});
+
+Deno.test("Jetzt-Slot: gemessene Host-Last ist Untergrenze, andere Slots bleiben Planung", () => {
+  const m: ResourceModel = {
+    thresholds: { cpu: 85, mem: 90, net: 85 },
+    hosts: [{
+      id: "h1", label: "A", online: true, numCpu: 4, memTotalBytes: 8 * GB, capacityKnown: true, netLinkMbps: 1000,
+      live: { cpuPercent: 50, memPercent: 10, netRxMbps: 100, netTxMbps: 700 },
+    }],
+    workflows: [],
+    manualInstances: [{ id: "i1", label: "T", nodeType: "t", hostId: "h1", cpuCores: 0.5, rssBytes: 4 * GB, known: true, netTxMbps: 200 }],
+  };
+  const now = at(2026, 10, 1, 10, 10);
+  const tl = computeTimeline(m, new Map(), [at(2026, 10, 1, 10), at(2026, 10, 1, 11)], 30, now);
+  const [jetzt, spaeter] = tl.get("h1")!;
+  // gemessen: 2 Kerne > geplant 0,5; RAM geplant 4 GB > gemessen 0,8 GB; Tx gemessen 700 > 200
+  assertEquals(jetzt.cpuCores, 2);
+  assertEquals(jetzt.rssBytes, 4 * GB);
+  assertEquals(jetzt.netTxMbps, 700);
+  assertEquals(jetzt.netRxMbps, 100);
+  assertEquals(jetzt.liveFloor, ["CPU", "Netz"]);
+  assertEquals(spaeter.cpuCores, 0.5);
+  assertEquals(spaeter.netTxMbps, 200);
+  assertEquals(spaeter.liveFloor, []);
+});

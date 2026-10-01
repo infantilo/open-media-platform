@@ -811,6 +811,8 @@ class SchedulerView extends HTMLElement {
           .map((c) => `  ${c.wfName}/${c.role}: ${fmt(c)}`)
           .join("\n");
       }
+      const dim = row.kind === "cpu" ? "CPU" : row.kind === "mem" ? "RAM" : row.kind === "net" ? "Netz" : "";
+      if (dim && slot.liveFloor.includes(dim)) tip += "\n⚡ Wert = aktuell gemessene Host-Auslastung (höher als die Planung)";
       if (slot.unknown.length > 0) tip += `\n⚠ Bedarf unbekannt (kein Messprofil): ${slot.unknown.join(", ")}`;
       if (this.#viewMode === "month") tip += "\n(ungünstigster Zeitpunkt des Tages)";
 

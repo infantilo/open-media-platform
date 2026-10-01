@@ -122,7 +122,7 @@ export interface ResHost {
   numCpu: number;
   memTotalBytes: number;
   capacityKnown: boolean;
-  live?: { cpuPercent: number; memPercent: number; netPercent?: number; gpuPercent?: number };
+  live?: { cpuPercent: number; memPercent: number; netPercent?: number; netRxMbps?: number; netTxMbps?: number; gpuPercent?: number };
   ioPorts?: ResIOCap[];
   // Link-Geschwindigkeit der NIC in Mbit/s je Richtung (vollduplex); fehlt,
   // wenn der Host-Agent keine NIC konfiguriert hat oder der Treiber sie
@@ -154,11 +154,30 @@ export interface ResWorkflow {
   roles: ResRole[];
 }
 
+// Laufende Instanz ohne Workflow (von Hand gestartet): läuft, bis jemand sie
+// stoppt, und zählt deshalb in jedem Zeit-Slot.
+export interface ResManual {
+  id: string;
+  label: string;
+  nodeType: string;
+  hostId?: string;
+  cpuCores: number;
+  rssBytes: number;
+  known: boolean;
+  measured?: boolean;
+  netRxMbps?: number;
+  netTxMbps?: number;
+  netEstimated?: boolean;
+}
+
+export const MANUAL_WF_ID = "manual";
+
 export interface ResourceModel {
   generatedAt?: string;
   thresholds: { cpu: number; mem: number; net?: number; gpu?: number };
   hosts: ResHost[];
   workflows: ResWorkflow[];
+  manualInstances?: ResManual[];
 }
 
 export const AUTO_LANE = "auto";
@@ -186,12 +205,15 @@ export interface LaneSlot {
   // Rollen ohne Messprofil — ihr Bedarf fehlt in den Summen (unbekannt,
   // NICHT null): die Anzeige markiert den Slot als unvollständig.
   unknown: string[];
+  // Dimensionen, deren Wert die aktuell GEMESSENE Host-Auslastung statt der
+  // Planung ist (nur der "Jetzt"-Slot, nur wenn die Messung höher liegt).
+  liveFloor: string[];
 }
 
 export type Timeline = Map<string, LaneSlot[]>;
 
 function emptySlot(): LaneSlot {
-  return { cpuCores: 0, rssBytes: 0, netRxMbps: 0, netTxMbps: 0, netEstimated: false, io: {}, contribs: [], unknown: [] };
+  return { cpuCores: 0, rssBytes: 0, netRxMbps: 0, netTxMbps: 0, netEstimated: false, io: {}, contribs: [], unknown: [], liveFloor: [] };
 }
 
 export function ioKey(cardType: string, direction: string): string {
@@ -246,6 +268,61 @@ export function computeTimeline(
             netRxMbps: rx,
             netTxMbps: tx,
           });
+        }
+      }
+    }
+    // Von Hand gestartete Instanzen laufen endlos weiter (bis jemand sie
+    // stoppt) — in jedem Slot auf dem Host, auf dem sie tatsächlich laufen.
+    for (const mi of model.manualInstances ?? []) {
+      const laneId = lanes.has(mi.hostId ?? "") ? (mi.hostId ?? "") : AUTO_LANE;
+      const slot = lanes.get(laneId)![i];
+      const label = `${mi.label || mi.nodeType}`;
+      if (mi.known) {
+        slot.cpuCores += mi.cpuCores;
+        slot.rssBytes += mi.rssBytes;
+      } else {
+        slot.unknown.push(`Manuell/${label}`);
+      }
+      const rx = mi.netRxMbps ?? 0;
+      const tx = mi.netTxMbps ?? 0;
+      slot.netRxMbps += rx;
+      slot.netTxMbps += tx;
+      if (rx + tx > 0 && mi.netEstimated) slot.netEstimated = true;
+      if (mi.known || rx + tx > 0) {
+        slot.contribs.push({
+          wfId: MANUAL_WF_ID,
+          wfName: "Manuell gestartet",
+          role: label,
+          cpuCores: mi.known ? mi.cpuCores : 0,
+          rssBytes: mi.known ? mi.rssBytes : 0,
+          netRxMbps: rx,
+          netTxMbps: tx,
+        });
+      }
+    }
+    // Der "Jetzt"-Slot nimmt die tatsächlich gemessene Host-Auslastung als
+    // Untergrenze: liegt die Messung über der Planung (nicht verwaltete
+    // Last, unterschätzte Profile), gilt die Messung.
+    if (at === now) {
+      for (const h of model.hosts) {
+        if (!h.live || !lanes.has(h.id) || !h.capacityKnown) continue;
+        const slot = lanes.get(h.id)![i];
+        const cores = (h.live.cpuPercent / 100) * h.numCpu;
+        if (cores > slot.cpuCores) {
+          slot.cpuCores = cores;
+          slot.liveFloor.push("CPU");
+        }
+        const rss = (h.live.memPercent / 100) * h.memTotalBytes;
+        if (rss > slot.rssBytes) {
+          slot.rssBytes = rss;
+          slot.liveFloor.push("RAM");
+        }
+        const rx = h.live.netRxMbps ?? 0;
+        const tx = h.live.netTxMbps ?? 0;
+        if (rx > slot.netRxMbps || tx > slot.netTxMbps) {
+          slot.netRxMbps = Math.max(slot.netRxMbps, rx);
+          slot.netTxMbps = Math.max(slot.netTxMbps, tx);
+          slot.liveFloor.push("Netz");
         }
       }
     }

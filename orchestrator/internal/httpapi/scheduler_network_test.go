@@ -1,14 +1,18 @@
 package httpapi
 
 import (
+	"context"
 	"math"
 	"testing"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/profiles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
 )
 
 type fakeCatalog []launcher.CatalogEntry
+
+func (f fakeCatalog) List() []launcher.Instance { return nil }
 
 func (f fakeCatalog) Catalog() []launcher.CatalogEntry { return f }
 
@@ -111,5 +115,45 @@ func TestComputeRoleNetworkRealCatalog(t *testing.T) {
 	in, _ := computeRoleNetwork(cat, def, def.Roles[3])
 	if !near(in.TxMbps, 9022.9) || in.RxMbps != 0 || in.Estimated {
 		t.Errorf("fabrics initiator = %+v", in)
+	}
+}
+
+type fakeCatalogWithInstances struct {
+	fakeCatalog
+	inst []launcher.Instance
+}
+
+func (f fakeCatalogWithInstances) List() []launcher.Instance { return f.inst }
+
+func TestManualInstances(t *testing.T) {
+	cpu, rss := 150.0, uint64(300<<20)
+	cat := fakeCatalogWithInstances{
+		fakeCatalog: fakeCatalog{
+			{Type: "omp-aes67-gateway-source", Network: &launcher.CatalogNetwork{Direction: "out", Kind: "audio", Channels: 2, SampleRate: 48000}},
+			{Type: "omp-source"},
+		},
+		inst: []launcher.Instance{
+			{ID: "manual-1", Type: "omp-aes67-gateway-source", Label: "Ton", CPUPercent: &cpu, RSSBytes: &rss},
+			{ID: "wf-owned", Type: "omp-source", Label: "gehört Workflow"},
+			{ID: "crashed", Type: "omp-source", Label: "tot", Crashed: true},
+			{ID: "no-data", Type: "omp-source", Label: "ohne Messung"},
+		},
+	}
+	prof := fakeProfileReader{snapshots: map[[2]string]profiles.Snapshot{
+		// Profil-p95 (0,2 Kerne) liegt unter der aktuellen Messung (1,5) → Messung gilt
+		{"omp-aes67-gateway-source", profiles.GlobalHostID}: {CPUAvg: 10, CPUP95: 20, RSSAvg: 1 << 20, RSSMax: 2 << 20, SampleCount: 3},
+	}}
+	wfs := []workflows.Workflow{{ID: "w", Runtime: map[string]workflows.RoleRuntime{"Q": {InstanceID: "wf-owned"}}}}
+	got := manualInstances(context.Background(), cat, fakeHostMetrics{}, prof, wfs)
+	if len(got) != 2 {
+		t.Fatalf("manual = %+v (Workflow-Instanz und abgestürzte dürfen nicht zählen)", got)
+	}
+	m := got[0]
+	if m.ID != "manual-1" || !m.Known || !m.Measured || m.CPUCores != 1.5 || m.RSSBytes != 300<<20 || m.NetTxMbps < 2.7 {
+		t.Errorf("manual-1 = %+v", m)
+	}
+	// Weder Messung noch Profil: Bedarf unbekannt, nie 0
+	if got[1].ID != "no-data" || got[1].Known {
+		t.Errorf("no-data = %+v", got[1])
 	}
 }
