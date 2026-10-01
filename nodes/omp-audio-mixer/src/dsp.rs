@@ -725,6 +725,11 @@ pub struct ChannelShared {
     /// [`ENGINE_TIMEOUT_MS`], ignoriert die Fader-Stufe AutoMix/Ducking
     /// (Fail-Safe: Fader bleibt der manuelle Wert, keine hängenden Anteile).
     pub engine_beat_ms: AtomicU64,
+    /// Kanal ist auf den Programm-Bus geroutet. Aux-Sends bleiben davon
+    /// unberührt (ein Kanal kann nur auf Aux/N-1 laufen).
+    pub main_route: std::sync::atomic::AtomicBool,
+    /// Abgeleitet (Engine): tatsächlich hörbar im Programm (`rules::on_air`).
+    pub on_air: std::sync::atomic::AtomicBool,
     /// Aux-Sends dieses Kanals (Schlüssel = Aux-ID).
     sends: std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<SendShared>>>,
 }
@@ -781,6 +786,8 @@ impl ChannelShared {
             group_db: AtomicF32::new(0.0),
             group_muted: std::sync::atomic::AtomicBool::new(false),
             engine_beat_ms: AtomicU64::new(0),
+            main_route: std::sync::atomic::AtomicBool::new(true),
+            on_air: std::sync::atomic::AtomicBool::new(false),
             sends: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
@@ -824,6 +831,19 @@ impl ChannelShared {
     /// Lebt die Automations-Engine (für diesen Kanal)?
     pub fn engine_alive(&self) -> bool {
         now_ms().saturating_sub(self.engine_beat_ms.load(Ordering::Relaxed)) < ENGINE_TIMEOUT_MS
+    }
+
+    /// Gain Richtung Programm-Bus: wie [`total_gain`](Self::total_gain),
+    /// aber 0 ohne Programm-Routing.
+    pub fn main_gain(&self) -> f64 {
+        if self.main_route.load(Ordering::Relaxed) { self.total_gain() } else { 0.0 }
+    }
+
+    /// Effektiver Pegel (dB) im Programm vor dem Routing: Fader + Gruppe +
+    /// AutoMix + Ducking (`-inf`-Ersatz −120 bei Mute) — Eingang der On-Air-Ableitung.
+    pub fn effective_db(&self) -> f64 {
+        let g = self.total_gain();
+        if g <= 0.0 { -120.0 } else { lin_to_db(g) }
     }
 
     /// Gesamtgain der Fader-Stufe (linear): Fader + Gruppe (+ AutoMix +
@@ -1180,6 +1200,19 @@ mod tests {
         sh.group_muted.store(false, Ordering::Relaxed);
         sh.muted.store(true, Ordering::Relaxed);
         assert_eq!(sh.total_gain(), 0.0);
+    }
+
+    #[test]
+    fn main_route_silences_program_but_not_post_sends() {
+        let sh = ChannelShared::new();
+        assert!((sh.main_gain() - 1.0).abs() < 1e-9);
+        sh.main_route.store(false, Ordering::Relaxed);
+        assert_eq!(sh.main_gain(), 0.0, "nicht auf Programm geroutet");
+        let send = SendShared::new();
+        send.enabled.store(true, Ordering::Relaxed);
+        assert!((send.target_gain(&sh) - 1.0).abs() < 1e-9, "Post-Aux folgt weiter dem Fader");
+        sh.muted.store(true, Ordering::Relaxed);
+        assert_eq!(sh.effective_db(), -120.0);
     }
 
     #[test]

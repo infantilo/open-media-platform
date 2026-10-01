@@ -22,6 +22,7 @@ use crate::automation::{
 };
 use crate::dsp::{self, ChannelShared};
 use crate::pipeline::SharedMap;
+use crate::rules::{self, TransitionTracker};
 
 pub const TICK_MS: f64 = 10.0;
 /// Detektor älter als das → als ausgefallen behandeln.
@@ -48,6 +49,8 @@ pub struct ChanCfg {
     pub manual: bool,
     /// Darf dieser Kanal als Ducking-Target abgesenkt werden?
     pub duckable: bool,
+    /// Auf den Programm-Bus geroutet.
+    pub routed: bool,
 }
 
 #[derive(Clone)]
@@ -106,17 +109,25 @@ pub struct EngineState {
     /// Geglätteter Duck-Anteil je Kanal (τ 80 ms): Umschalten von
     /// Manual/Regel-Enable erzeugt keinen Pegelsprung.
     duck_cur: HashMap<String, f64>,
+    tracker: TransitionTracker,
 }
 
 impl EngineState {
     /// Ein Takt: liest Meter/Konfiguration, schreibt Anteile.
-    pub fn tick(&mut self, dt_ms: f64, now: u64, cfg: &EngineConfig, shared: &HashMap<String, Arc<ChannelShared>>) {
+    pub fn tick(
+        &mut self,
+        dt_ms: f64,
+        now: u64,
+        cfg: &EngineConfig,
+        shared: &HashMap<String, Arc<ChannelShared>>,
+    ) -> Vec<rules::Event> {
         // Gruppen-Fader/-Mute + Lebenszeichen.
         let group_of = |id: &str| cfg.chans.iter().find(|c| c.id == id).map(|c| c.group.as_str()).unwrap_or("");
         for (id, sh) in shared {
             let g = cfg.groups.iter().find(|g| g.id == group_of(id));
             sh.group_db.set(g.map_or(0.0, |g| g.gain_db as f32));
             sh.group_muted.store(g.is_some_and(|g| g.muted), Ordering::Relaxed);
+            sh.main_route.store(cfg.chans.iter().find(|c| &c.id == id).is_none_or(|c| c.routed), Ordering::Relaxed);
             sh.engine_beat_ms.store(now, Ordering::Relaxed);
         }
 
@@ -207,6 +218,27 @@ impl EngineState {
             *cur = if (v - *cur).abs() < 0.05 { v } else { *cur + (v - *cur) * (1.0 - (-dt_ms / 80.0).exp()) };
             sh.duck_db.set(*cur as f32);
         }
+
+        // ───── On-Air + Übergangsereignisse ─────
+        // On-Air ≠ Unmuted: aus dem tatsächlichen Zustand abgeleitet (Mute
+        // von Kanal/Gruppe, Programm-Routing, Fader, AutoMix/Ducking).
+        self.tracker.retain(|id| shared.contains_key(id));
+        let mut events = Vec::new();
+        for (id, sh) in shared {
+            let group_muted = sh.group_muted.load(Ordering::Relaxed);
+            let muted = sh.muted.load(Ordering::Relaxed);
+            let routed = sh.main_route.load(Ordering::Relaxed);
+            let air = rules::on_air(&rules::OnAirIn {
+                muted,
+                group_muted,
+                routed,
+                fader_db: sh.fader_db.get() as f64,
+                effective_db: sh.effective_db(),
+            });
+            sh.on_air.store(air, Ordering::Relaxed);
+            events.extend(self.tracker.update(id, muted || group_muted, sh.fader_db.get() as f64));
+        }
+        events
     }
 }
 
@@ -216,6 +248,7 @@ pub fn spawn(
     shared: SharedMap,
     shutdown: Arc<AtomicBool>,
     heartbeat: Arc<AtomicU64>,
+    events: std::sync::mpsc::Sender<rules::Event>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let mut state = EngineState::default();
@@ -223,7 +256,9 @@ pub fn spawn(
             heartbeat.fetch_add(1, Ordering::Relaxed);
             let cfg = config.lock().expect("lock poisoned").clone();
             let snapshot: HashMap<String, Arc<ChannelShared>> = shared.lock().expect("lock poisoned").clone();
-            state.tick(TICK_MS, dsp::now_ms(), &cfg, &snapshot);
+            for ev in state.tick(TICK_MS, dsp::now_ms(), &cfg, &snapshot) {
+                let _ = events.send(ev);
+            }
             std::thread::sleep(Duration::from_millis(TICK_MS as u64));
         }
     })
@@ -244,6 +279,7 @@ mod tests {
             sensitivity_db: -60.0,
             manual: false,
             duckable: true,
+            routed: true,
         }
     }
 
@@ -284,6 +320,39 @@ mod tests {
             chans,
             ducks: vec![],
         }
+    }
+
+    #[test]
+    fn on_air_is_derived_from_route_mute_and_effective_level_and_emits_transitions() {
+        let shared = shared_with(&[("m1", -20.0)]);
+        let mut cfg = automix_cfg(vec![chan("m1", "")]);
+        let mut st = EngineState::default();
+        run(&mut st, &cfg, &shared, 100);
+        assert!(shared["m1"].on_air.load(Ordering::Relaxed));
+        // unmuted, aber nicht auf Programm geroutet → nicht on air (und kein Mute-Ereignis)
+        cfg.chans[0].routed = false;
+        touch(&shared);
+        let ev = st.tick(10.0, dsp::now_ms(), &cfg, &shared);
+        assert!(!shared["m1"].on_air.load(Ordering::Relaxed));
+        assert!(ev.is_empty(), "Routing ist kein Mute: {ev:?}");
+        cfg.chans[0].routed = true;
+        run(&mut st, &cfg, &shared, 20);
+        assert!(shared["m1"].on_air.load(Ordering::Relaxed));
+        // Mute → Ereignis + nicht on air; Unmute → Ereignis
+        shared["m1"].muted.store(true, Ordering::Relaxed);
+        touch(&shared);
+        let ev = st.tick(10.0, dsp::now_ms(), &cfg, &shared);
+        assert_eq!(ev, vec![rules::Event::ChannelMuted("m1".into())]);
+        assert!(!shared["m1"].on_air.load(Ordering::Relaxed));
+        shared["m1"].muted.store(false, Ordering::Relaxed);
+        let ev = st.tick(10.0, dsp::now_ms(), &cfg, &shared);
+        assert_eq!(ev, vec![rules::Event::ChannelUnmuted("m1".into())]);
+        // Gruppen-Mute zählt ebenfalls.
+        let mut g = automix_cfg(vec![chan("m1", "studio")]);
+        g.groups[0].muted = true;
+        let ev = st.tick(10.0, dsp::now_ms(), &g, &shared);
+        assert_eq!(ev, vec![rules::Event::ChannelMuted("m1".into())]);
+        assert!(!shared["m1"].on_air.load(Ordering::Relaxed));
     }
 
     #[test]

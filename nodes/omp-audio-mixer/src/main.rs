@@ -17,8 +17,10 @@
 mod automation;
 mod dsp;
 mod engine;
+mod media;
 mod model;
 mod pipeline;
+mod rules;
 mod uibundle;
 
 use std::collections::HashMap;
@@ -34,6 +36,7 @@ use omp_node_sdk::{
     Range, RawResponse, SenderSpec, SetError,
 };
 use model::{DuckState, GroupState};
+use rules::{AudioContext, ChannelAutomation, ContextRule};
 use pipeline::PipelineHandle;
 use serde_json::Value;
 
@@ -251,6 +254,19 @@ struct SendState {
     post: bool,
 }
 
+/// Gespeicherte Audio-Szene: Momentaufnahme des *Mix-Zustands* (Fader/Mute/
+/// Routing/Gruppen/AutoMix/Ducking/Aux/Media-Automation, optional
+/// Bearbeitung) für die vorhandenen Kanäle — keine Strukturänderung
+/// (Kanäle werden nie angelegt/entfernt), deshalb ohne Audio-Aussetzer
+/// aktivierbar. Gegenstück zu den Presets (`/state`), die die ganze
+/// Kanalliste ersetzen.
+#[derive(Clone)]
+struct SceneState {
+    id: String,
+    label: String,
+    doc: Value,
+}
+
 /// Änderungen an der NMOS-Senderliste (`invoke` läuft auf einem HTTP-Thread,
 /// `add_sender` ist async) — gleiches Muster wie `omp-mxf-player-direct`.
 enum SenderChange {
@@ -293,6 +309,11 @@ struct ChannelState {
     duckable: bool,
     /// Aux-Sends (Schlüssel = Aux-ID); fehlender Eintrag = Standard des Bus-Typs.
     sends: HashMap<String, SendState>,
+    /// Auf den Programm-Bus geroutet (Default ja). On-Air ≠ Unmuted: ein
+    /// entstummter, aber nicht auf Programm gerouteter Kanal ist nicht on air.
+    main_route: bool,
+    /// Deklarative Media-Automation (`rules.rs`).
+    automation: ChannelAutomation,
     /// Node-ID der zu verfolgenden Quelle (Tally-Bus-Subject,
     /// `omp.tally.<node_id>`) — leer = keine Kopplung.
     follow_target: String,
@@ -358,6 +379,8 @@ impl ChannelState {
             manual: false,
             duckable: true,
             sends: HashMap::new(),
+            main_route: true,
+            automation: ChannelAutomation::default(),
             follow_target: String::new(),
             follow_mode: "off".to_string(),
             override_enabled: false,
@@ -402,6 +425,15 @@ struct AudioMixerStore {
     aux: Mutex<Vec<AuxState>>,
     sender_changes: tokio::sync::mpsc::UnboundedSender<SenderChange>,
     node_label: String,
+    /// Audio-Szenen und Video→Audio-Kontext (Kapitel 26).
+    scenes: Mutex<Vec<SceneState>>,
+    contexts: Mutex<Vec<ContextRule>>,
+    audio_ctx: Mutex<AudioContext>,
+    /// Ereignisse für die Automations-Regeln (Engine, Szenen, Video-Tally).
+    events_tx: std::sync::mpsc::Sender<rules::Event>,
+    media_status: Arc<Mutex<HashMap<String, media::MediaStatus>>>,
+    /// Labels aller bekannten Nodes (Auswahl für Media-Ziele).
+    available_nodes: Arc<Mutex<Vec<String>>>,
 }
 
 /// Testton-Frequenz pro Kanal — nur zur akustischen Unterscheidbarkeit im
@@ -466,6 +498,29 @@ impl ParamStore for AudioMixerStore {
             // Kapitel 26: Aux-/N-1-Busse (feste Slots, `active` zeigt die belegten).
             ParamSpec {
                 name: "auxBuses".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            // Kapitel 26: Szenen, Video→Audio-Kontext, Media-Ziele.
+            ParamSpec { name: "scenes".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec {
+                name: "contextRules".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
+                name: "audioContext".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
+                name: "availableNodes".to_string(),
                 kind: ParamType::String,
                 unit: None,
                 range: None,
@@ -545,6 +600,40 @@ impl ParamStore for AudioMixerStore {
                 args: vec![MethodArg { name: "auxId".to_string(), kind: ParamType::String }],
             },
             MethodSpec {
+                name: "setVideoContext".to_string(),
+                args: vec![
+                    MethodArg { name: "source".to_string(), kind: ParamType::String },
+                    MethodArg { name: "active".to_string(), kind: ParamType::Boolean },
+                ],
+            },
+            MethodSpec {
+                name: "captureScene".to_string(),
+                args: vec![
+                    MethodArg { name: "label".to_string(), kind: ParamType::String },
+                    MethodArg { name: "includeProcessing".to_string(), kind: ParamType::Boolean },
+                ],
+            },
+            MethodSpec {
+                name: "activateScene".to_string(),
+                args: vec![MethodArg { name: "sceneId".to_string(), kind: ParamType::String }],
+            },
+            MethodSpec {
+                name: "removeScene".to_string(),
+                args: vec![MethodArg { name: "sceneId".to_string(), kind: ParamType::String }],
+            },
+            MethodSpec {
+                name: "addContext".to_string(),
+                args: vec![
+                    MethodArg { name: "label".to_string(), kind: ParamType::String },
+                    MethodArg { name: "source".to_string(), kind: ParamType::String },
+                    MethodArg { name: "scene".to_string(), kind: ParamType::String },
+                ],
+            },
+            MethodSpec {
+                name: "removeContext".to_string(),
+                args: vec![MethodArg { name: "contextId".to_string(), kind: ParamType::String }],
+            },
+            MethodSpec {
                 name: "addGroup".to_string(),
                 args: vec![MethodArg { name: "label".to_string(), kind: ParamType::String }],
             },
@@ -621,6 +710,10 @@ impl ParamStore for AudioMixerStore {
             ));
             parameters.push(channel_param(id, "autoManual", ParamType::Boolean, None));
             parameters.push(channel_param(id, "sends", ParamType::String, None));
+            parameters.push(channel_param(id, "mainRoute", ParamType::Boolean, None));
+            parameters.push(channel_param(id, "onAir", ParamType::Boolean, None));
+            parameters.push(channel_param(id, "automation", ParamType::String, None));
+            parameters.push(channel_param(id, "mediaStatus", ParamType::String, None));
             parameters.push(channel_param(id, "duckable", ParamType::Boolean, None));
             // `senderId` der externen Quelle, leer = interner Testton.
             parameters.push(channel_param(id, "source", ParamType::String, None));
@@ -734,6 +827,15 @@ impl ParamStore for AudioMixerStore {
             });
             methods.push(MethodSpec { name: format!("channel.{id}.setDelay"), args: vec![flag("enabled"), num("ms")] });
             methods.push(MethodSpec { name: format!("channel.{id}.setPan"), args: vec![num("pan")] });
+            methods.push(MethodSpec { name: format!("channel.{id}.setMainRoute"), args: vec![flag("routed")] });
+            methods.push(MethodSpec {
+                name: format!("channel.{id}.setAutomation"),
+                args: vec![
+                    flag("enabled"),
+                    MethodArg { name: "target".to_string(), kind: ParamType::String },
+                    MethodArg { name: "rules".to_string(), kind: ParamType::String },
+                ],
+            });
             methods.push(MethodSpec {
                 name: format!("channel.{id}.setSend"),
                 args: vec![
@@ -812,6 +914,18 @@ impl ParamStore for AudioMixerStore {
                 ],
             });
         }
+        for sc in self.scenes.lock().expect("lock poisoned").iter() {
+            let id = &sc.id;
+            methods.push(MethodSpec { name: format!("scene.{id}.update"), args: vec![b("includeProcessing")] });
+            methods.push(MethodSpec { name: format!("scene.{id}.setLabel"), args: vec![t("label")] });
+        }
+        for c in self.contexts.lock().expect("lock poisoned").iter() {
+            let id = &c.id;
+            methods.push(MethodSpec {
+                name: format!("context.{id}.set"),
+                args: vec![b("enabled"), t("label"), t("source"), t("scene")],
+            });
+        }
         for a in self.aux.lock().expect("lock poisoned").iter().filter(|a| a.active) {
             let id = &a.id;
             methods.push(MethodSpec { name: format!("aux.{id}.setLabel"), args: vec![t("label")] });
@@ -885,6 +999,23 @@ impl ParamStore for AudioMixerStore {
             let groups = self.groups.lock().expect("lock poisoned");
             return Some(Value::Array(groups.iter().map(GroupState::to_json).collect()));
         }
+        if name == "scenes" {
+            let scenes = self.scenes.lock().expect("lock poisoned");
+            return Some(Value::Array(
+                scenes.iter().map(|s| serde_json::json!({"id": s.id, "label": s.label})).collect(),
+            ));
+        }
+        if name == "contextRules" {
+            let c = self.contexts.lock().expect("lock poisoned");
+            return Some(Value::Array(c.iter().map(ContextRule::to_json).collect()));
+        }
+        if name == "audioContext" {
+            let c = self.audio_ctx.lock().expect("lock poisoned");
+            return Some(serde_json::json!({"activeSources": c.active_sources, "activeScene": c.active_scene}));
+        }
+        if name == "availableNodes" {
+            return Some(serde_json::json!(*self.available_nodes.lock().expect("lock poisoned")));
+        }
         if name == "auxBuses" {
             let aux = self.aux.lock().expect("lock poisoned");
             return Some(Value::Array(aux.iter().map(aux_json).collect()));
@@ -927,6 +1058,23 @@ impl ParamStore for AudioMixerStore {
                         .collect(),
                 ))
             }
+            "mainRoute" => Some(serde_json::json!(ch.main_route)),
+            "onAir" => Some(serde_json::json!(
+                self.pipeline
+                    .shared_map()
+                    .lock()
+                    .expect("lock poisoned")
+                    .get(&ch.id)
+                    .is_some_and(|sh| sh.on_air.load(Ordering::Relaxed))
+            )),
+            "automation" => Some(ch.automation.to_json()),
+            "mediaStatus" => Some(
+                self.media_status
+                    .lock()
+                    .expect("lock poisoned")
+                    .get(&ch.id)
+                    .map_or(Value::Null, media::MediaStatus::to_json),
+            ),
             "group" => Some(serde_json::json!(ch.group)),
             "autoMixEnabled" => Some(serde_json::json!(ch.am_enabled)),
             "autoMixWeight" => Some(serde_json::json!(ch.am_weight)),
@@ -1097,6 +1245,7 @@ impl AudioMixerStore {
                         "sends": c.sends.iter().map(|(k, v)| serde_json::json!({
                             "auxId": k, "enabled": v.enabled, "levelDb": v.level_db, "post": v.post,
                         })).collect::<Vec<_>>(),
+                        "mainRoute": c.main_route, "automation": c.automation.to_json(),
                         "group": c.group, "autoMixEnabled": c.am_enabled,
                         "autoMixWeight": c.am_weight, "autoMixPriority": c.am_priority,
                         "autoMixSensitivity": c.am_sensitivity_db,
@@ -1124,6 +1273,9 @@ impl AudioMixerStore {
             "channels": channel_docs,
             "groups": group_docs,
             "duckRules": duck_docs,
+            "scenes": self.scenes.lock().expect("lock poisoned").iter()
+                .map(|s| serde_json::json!({"id": s.id, "label": s.label, "doc": s.doc})).collect::<Vec<_>>(),
+            "contextRules": self.contexts.lock().expect("lock poisoned").iter().map(ContextRule::to_json).collect::<Vec<_>>(),
             "auxBuses": self.aux.lock().expect("lock poisoned").iter().filter(|a| a.active).map(aux_json).collect::<Vec<_>>(),
             "masterLimiter": {
                 "enabled": ml.enabled, "thresholdDb": ml.threshold_db,
@@ -1163,6 +1315,27 @@ impl AudioMixerStore {
             .get("duckRules")
             .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(DuckState::from_json).collect())
+            .unwrap_or_default();
+
+        *self.scenes.lock().expect("lock poisoned") = doc
+            .get("scenes")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|s| {
+                        Some(SceneState {
+                            id: s.get("id")?.as_str()?.to_string(),
+                            label: s.get("label").and_then(Value::as_str).unwrap_or("").to_string(),
+                            doc: s.get("doc").cloned().unwrap_or(Value::Null),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        *self.contexts.lock().expect("lock poisoned") = doc
+            .get("contextRules")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(ContextRule::from_json).collect())
             .unwrap_or_default();
 
         // Aux-Busse abgleichen (fehlender Schlüssel in Alt-Presets → alle aus).
@@ -1225,6 +1398,8 @@ impl AudioMixerStore {
                     );
                 }
             }
+            ch.main_route = cd.get("mainRoute").and_then(Value::as_bool).unwrap_or(true);
+            ch.automation = cd.get("automation").map(ChannelAutomation::from_json).unwrap_or_default();
             ch.group = cd.get("group").and_then(Value::as_str).unwrap_or("").to_string();
             ch.am_enabled = cd.get("autoMixEnabled").and_then(Value::as_bool).unwrap_or(false);
             ch.am_weight = cd.get("autoMixWeight").and_then(Value::as_f64).unwrap_or(1.0);
@@ -1279,6 +1454,8 @@ impl AudioMixerStore {
             .map(|c| c.id.clone())
             .chain(self.groups.lock().expect("lock poisoned").iter().map(|g| g.id.clone()))
             .chain(self.ducks.lock().expect("lock poisoned").iter().map(|d| d.id.clone()))
+            .chain(self.scenes.lock().expect("lock poisoned").iter().map(|s| s.id.clone()))
+            .chain(self.contexts.lock().expect("lock poisoned").iter().map(|c| c.id.clone()))
             .filter_map(|id| id.trim_start_matches(|c: char| c.is_ascii_alphabetic()).parse::<u64>().ok())
             .max()
             .unwrap_or(0);
@@ -1409,6 +1586,93 @@ impl AudioMixerStore {
                 }
                 Ok(())
             }
+            // Video-Kontext manuell setzen (Probe/Proben ohne echte Videoquelle,
+            // Notfall-Umschaltung): läuft durch denselben Pfad wie ein
+            // Tally-Ereignis vom Bus.
+            "setVideoContext" => {
+                let source = args.get("source").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let active = args.get("active").and_then(Value::as_bool).ok_or(InvokeError::Unknown)?;
+                self.on_video_tally(source, active);
+                Ok(())
+            }
+            "captureScene" => {
+                let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
+                let label = args
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map_or_else(|| format!("Szene {seq}"), str::to_string);
+                let with_proc = args.get("includeProcessing").and_then(Value::as_bool).unwrap_or(false);
+                let doc = self.capture_scene_doc(with_proc);
+                self.scenes.lock().expect("lock poisoned").push(SceneState { id: format!("s{seq}"), label, doc });
+                Ok(())
+            }
+            "removeScene" => {
+                let id = args.get("sceneId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let mut scenes = self.scenes.lock().expect("lock poisoned");
+                let before = scenes.len();
+                scenes.retain(|s| s.id != id);
+                if scenes.len() == before { Err(InvokeError::Unknown) } else { Ok(()) }
+            }
+            "activateScene" => {
+                let id = args.get("sceneId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                self.activate_scene(id, false)
+            }
+            _ if name.starts_with("scene.") => {
+                let (id, method) = name["scene.".len()..].split_once('.').ok_or(InvokeError::Unknown)?;
+                match method {
+                    "update" => {
+                        let with_proc = args.get("includeProcessing").and_then(Value::as_bool).unwrap_or(false);
+                        let doc = self.capture_scene_doc(with_proc);
+                        let mut scenes = self.scenes.lock().expect("lock poisoned");
+                        scenes.iter_mut().find(|s| s.id == id).ok_or(InvokeError::Unknown)?.doc = doc;
+                        Ok(())
+                    }
+                    "setLabel" => {
+                        let l = args.get("label").and_then(Value::as_str).ok_or(InvokeError::Unknown)?.to_string();
+                        let mut scenes = self.scenes.lock().expect("lock poisoned");
+                        scenes.iter_mut().find(|s| s.id == id).ok_or(InvokeError::Unknown)?.label = l;
+                        Ok(())
+                    }
+                    _ => Err(InvokeError::Unknown),
+                }
+            }
+            "addContext" => {
+                let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
+                let text = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                self.contexts.lock().expect("lock poisoned").push(ContextRule {
+                    id: format!("x{seq}"),
+                    label: text("label"),
+                    enabled: true,
+                    source: text("source"),
+                    scene: text("scene"),
+                });
+                Ok(())
+            }
+            "removeContext" => {
+                let id = args.get("contextId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let mut ctx = self.contexts.lock().expect("lock poisoned");
+                let before = ctx.len();
+                ctx.retain(|c| c.id != id);
+                if ctx.len() == before { Err(InvokeError::Unknown) } else { Ok(()) }
+            }
+            _ if name.starts_with("context.") => {
+                let (id, method) = name["context.".len()..].split_once('.').ok_or(InvokeError::Unknown)?;
+                if method != "set" {
+                    return Err(InvokeError::Unknown);
+                }
+                let mut ctx = self.contexts.lock().expect("lock poisoned");
+                let c = ctx.iter_mut().find(|c| c.id == id).ok_or(InvokeError::Unknown)?;
+                if let Some(v) = args.get("enabled") {
+                    c.enabled = v.as_bool().ok_or(InvokeError::Unknown)?;
+                }
+                for (k, field) in [("label", &mut c.label), ("source", &mut c.source), ("scene", &mut c.scene)] {
+                    if let Some(v) = args.get(k) {
+                        *field = v.as_str().ok_or(InvokeError::Unknown)?.to_string();
+                    }
+                }
+                Ok(())
+            }
             "addGroup" => {
                 let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
                 let id = format!("g{seq}");
@@ -1485,6 +1749,7 @@ impl AudioMixerStore {
                 sensitivity_db: c.am_sensitivity_db,
                 manual: c.manual,
                 duckable: c.duckable,
+                routed: c.main_route,
             })
             .collect();
         let groups = self
@@ -1524,6 +1789,173 @@ impl AudioMixerStore {
                 // Inaktive Busse: nichts senden (verhindert Zweige ohne Abnehmer).
                 self.pipeline.set_send(ch.id.clone(), a.id.clone(), enabled && a.active, level_db, post);
             }
+        }
+    }
+
+    /// Mix-Zustand der vorhandenen Kanäle als Szenen-Dokument. `with_proc`
+    /// nimmt zusätzlich EQ/Dynamik/Delay/Pan auf.
+    fn capture_scene_doc(&self, with_proc: bool) -> Value {
+        let mut chans = serde_json::Map::new();
+        for c in self.channels.lock().expect("lock poisoned").iter() {
+            let mut d = serde_json::json!({
+                "gainDb": c.gain_db, "mute": c.mute, "mainRoute": c.main_route, "group": c.group,
+                "autoMixEnabled": c.am_enabled, "autoMixWeight": c.am_weight,
+                "autoMixPriority": c.am_priority, "autoMixSensitivity": c.am_sensitivity_db,
+                "autoManual": c.manual, "duckable": c.duckable,
+                "automation": c.automation.to_json(),
+                "sends": c.sends.iter().map(|(k, v)| serde_json::json!({
+                    "auxId": k, "enabled": v.enabled, "levelDb": v.level_db, "post": v.post,
+                })).collect::<Vec<_>>(),
+            });
+            if with_proc {
+                let mut pm = serde_json::Map::new();
+                proc_to_json(&c.proc, &mut pm);
+                d["proc"] = Value::Object(pm);
+            }
+            chans.insert(c.id.clone(), d);
+        }
+        serde_json::json!({
+            "channels": chans,
+            "groups": self.groups.lock().expect("lock poisoned").iter().map(GroupState::to_json).collect::<Vec<_>>(),
+            "duckRules": self.ducks.lock().expect("lock poisoned").iter().map(DuckState::to_json).collect::<Vec<_>>(),
+        })
+    }
+
+    /// Wendet eine Szene auf die *vorhandenen* Kanäle an (ohne Strukturänderung,
+    /// ohne Audio-Aussetzer). `from_context == true` (Automation, z. B. durch
+    /// einen Videoquellen-Wechsel): Kanäle im Manual-Override des Operators
+    /// bleiben unberührt — Automation überschreibt keinen manuellen Eingriff.
+    fn apply_scene(&self, doc: &Value, from_context: bool) {
+        let group_ids: Vec<String> = self.groups.lock().expect("lock poisoned").iter().map(|g| g.id.clone()).collect();
+        let mut cmds: Vec<(String, f64, bool, Option<dsp::ProcParams>)> = Vec::new();
+        {
+            let mut channels = self.channels.lock().expect("lock poisoned");
+            if let Some(map) = doc.get("channels").and_then(Value::as_object) {
+                for ch in channels.iter_mut() {
+                    if from_context && ch.manual {
+                        continue;
+                    }
+                    let Some(cd) = map.get(&ch.id) else { continue };
+                    if let Some(v) = cd.get("gainDb").and_then(Value::as_f64) {
+                        ch.gain_db = v.clamp(-60.0, 12.0);
+                    }
+                    if let Some(v) = cd.get("mute").and_then(Value::as_bool) {
+                        ch.mute = v;
+                    }
+                    if let Some(v) = cd.get("mainRoute").and_then(Value::as_bool) {
+                        ch.main_route = v;
+                    }
+                    if let Some(g) = cd.get("group").and_then(Value::as_str) {
+                        ch.group = if group_ids.iter().any(|x| x == g) { g.to_string() } else { String::new() };
+                    }
+                    if let Some(v) = cd.get("autoMixEnabled").and_then(Value::as_bool) {
+                        ch.am_enabled = v;
+                    }
+                    if let Some(v) = cd.get("autoMixWeight").and_then(Value::as_f64) {
+                        ch.am_weight = v.clamp(0.1, 4.0);
+                    }
+                    if let Some(v) = cd.get("autoMixPriority").and_then(Value::as_u64) {
+                        ch.am_priority = v.min(2) as u8;
+                    }
+                    if let Some(v) = cd.get("autoMixSensitivity").and_then(Value::as_f64) {
+                        ch.am_sensitivity_db = v.clamp(-90.0, -10.0);
+                    }
+                    if let Some(v) = cd.get("autoManual").and_then(Value::as_bool) {
+                        ch.manual = v;
+                    }
+                    if let Some(v) = cd.get("duckable").and_then(Value::as_bool) {
+                        ch.duckable = v;
+                    }
+                    if let Some(a) = cd.get("automation") {
+                        ch.automation = ChannelAutomation::from_json(a);
+                    }
+                    if let Some(list) = cd.get("sends").and_then(Value::as_array) {
+                        ch.sends.clear();
+                        for sd in list {
+                            if let Some(aux_id) = sd.get("auxId").and_then(Value::as_str) {
+                                ch.sends.insert(
+                                    aux_id.to_string(),
+                                    SendState {
+                                        enabled: sd.get("enabled").and_then(Value::as_bool).unwrap_or(false),
+                                        level_db: sd.get("levelDb").and_then(Value::as_f64).unwrap_or(0.0),
+                                        post: sd.get("post").and_then(Value::as_bool).unwrap_or(true),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    let proc = cd.get("proc").map(|p| {
+                        ch.proc = proc_from_json(ch.proc, p);
+                        ch.proc
+                    });
+                    cmds.push((ch.id.clone(), ch.gain_db, ch.mute, proc));
+                }
+            }
+        }
+        // Gruppen und Regeln: vorhandene Einträge mit gleicher ID aktualisieren
+        // (nie hinzufügen/entfernen).
+        if let Some(list) = doc.get("groups").and_then(Value::as_array) {
+            let mut groups = self.groups.lock().expect("lock poisoned");
+            for gd in list {
+                if let Some(new) = GroupState::from_json(gd)
+                    && let Some(slot) = groups.iter_mut().find(|g| g.id == new.id)
+                {
+                    *slot = new;
+                }
+            }
+        }
+        if let Some(list) = doc.get("duckRules").and_then(Value::as_array) {
+            let mut ducks = self.ducks.lock().expect("lock poisoned");
+            for dd in list {
+                if let Some(new) = DuckState::from_json(dd)
+                    && let Some(slot) = ducks.iter_mut().find(|d| d.id == new.id)
+                {
+                    *slot = new;
+                }
+            }
+        }
+        for (id, gain, mute, proc) in cmds {
+            self.pipeline.set_gain(id.clone(), gain);
+            self.pipeline.set_mute(id.clone(), mute);
+            if let Some(p) = proc {
+                self.pipeline.set_proc(id, p);
+            }
+        }
+        self.sync_engine();
+        self.apply_sends();
+    }
+
+    fn activate_scene(&self, id: &str, from_context: bool) -> Result<(), InvokeError> {
+        let doc = self
+            .scenes
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| s.doc.clone())
+            .ok_or(InvokeError::Unknown)?;
+        self.apply_scene(&doc, from_context);
+        self.audio_ctx.lock().expect("lock poisoned").active_scene = id.to_string();
+        let _ = self.events_tx.send(rules::Event::SceneActivated(id.to_string()));
+        Ok(())
+    }
+
+    /// Tally-Meldung einer Videoquelle: aktualisiert den Audio-Kontext,
+    /// aktiviert ggf. die zugeordnete Szene und meldet die Ereignisse an die
+    /// Automation (Video→Audio-Kontext statt direkter Mute-Befehle).
+    fn on_video_tally(&self, node: &str, on: bool) {
+        let _ = self.events_tx.send(if on {
+            rules::Event::VideoActive(node.to_string())
+        } else {
+            rules::Event::VideoInactive(node.to_string())
+        });
+        let rules_snapshot = self.contexts.lock().expect("lock poisoned").clone();
+        let scene = self.audio_ctx.lock().expect("lock poisoned").on_video(&rules_snapshot, node, on);
+        if let Some(scene) = scene
+            && let Err(e) = self.activate_scene(&scene, true)
+        {
+            let _ = e;
+            eprintln!("omp-audio-mixer: Kontext-Szene {scene} existiert nicht mehr");
         }
     }
 
@@ -1675,6 +2107,27 @@ impl AudioMixerStore {
             "setPan" => {
                 apply_args(&mut ch.proc, args, &[("pan", "pan")])?;
                 self.pipeline.set_proc(id.to_string(), ch.proc);
+                Ok(())
+            }
+            "setMainRoute" => {
+                ch.main_route = args.get("routed").and_then(Value::as_bool).ok_or(InvokeError::Unknown)?;
+                Ok(())
+            }
+            "setAutomation" => {
+                let mut a = ch.automation.clone();
+                if let Some(v) = args.get("enabled") {
+                    a.enabled = v.as_bool().ok_or(InvokeError::Unknown)?;
+                }
+                if let Some(v) = args.get("target") {
+                    a.target = v.as_str().ok_or(InvokeError::Unknown)?.to_string();
+                }
+                if let Some(v) = args.get("rules") {
+                    // Regeln als JSON-Text (Methodenargumente sind skalar).
+                    let text = v.as_str().ok_or(InvokeError::Unknown)?;
+                    let parsed: Value = serde_json::from_str(text).map_err(|_| InvokeError::Unknown)?;
+                    a.rules = ChannelAutomation::from_json(&serde_json::json!({ "rules": parsed })).rules;
+                }
+                ch.automation = a;
                 Ok(())
             }
             "setSend" => {
@@ -1919,10 +2372,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Automations-Engine (AutoMix/Ducking, 10-ms-Takt, eigener Thread).
     let engine_cfg = engine::new_config_cell();
     let engine_heartbeat = Arc::new(AtomicU64::new(0));
-    let engine_thread =
-        engine::spawn(engine_cfg.clone(), pipeline_handle.shared_map(), shutdown.clone(), engine_heartbeat.clone());
+    // Ereignisbus der Automation: Engine (Mute/Fader-Übergänge), Szenen, Video-Tally.
+    let (rule_events_tx, rule_events_rx) = std::sync::mpsc::channel::<rules::Event>();
+    let engine_thread = engine::spawn(
+        engine_cfg.clone(),
+        pipeline_handle.shared_map(),
+        shutdown.clone(),
+        engine_heartbeat.clone(),
+        rule_events_tx.clone(),
+    );
+    // Media-Automation: Service-Token vom Orchestrator (wie omp-playout-automation).
+    let orchestrator_url = env_or("OMP_ORCHESTRATOR_URL", "http://localhost:8000");
+    let launch_secret = std::env::var("OMP_LAUNCH_SECRET").unwrap_or_default();
+    let auth = media::OrchestratorAuth::default();
+    let token_instance = instance_id.clone();
+    if let (Some(id), false) = (token_instance.as_deref(), launch_secret.is_empty()) {
+        match media::fetch_service_token(&orchestrator_url, id, &launch_secret) {
+            Ok(t) => auth.set(t),
+            Err(e) => eprintln!("omp-audio-mixer: initialer Service-Token-Abruf fehlgeschlagen: {e}"),
+        }
+    } else {
+        eprintln!("omp-audio-mixer: OMP_INSTANCE_ID/OMP_LAUNCH_SECRET fehlen — Media-Automation bleibt wirkungslos");
+    }
+    let executor = Arc::new(media::MediaExecutor::new(
+        RegistryClient::new(registry_url.clone()),
+        orchestrator_url.clone(),
+        auth.clone(),
+    ));
+    let media_status = executor.status.clone();
+    let available_nodes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
-    let store: Arc<dyn ParamStore> = Arc::new(AudioMixerStore {
+    let store_concrete = Arc::new(AudioMixerStore {
         channels: channels.clone(),
         available_sources: available_sources.clone(),
         next_seq: Arc::new(AtomicU64::new(1)),
@@ -1935,12 +2415,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         aux: Mutex::new(aux_states),
         sender_changes: sender_changes_tx,
         node_label: label.clone(),
+        scenes: Mutex::new(Vec::new()),
+        contexts: Mutex::new(Vec::new()),
+        audio_ctx: Mutex::new(AudioContext::default()),
+        events_tx: rule_events_tx,
+        media_status,
+        available_nodes: available_nodes.clone(),
+    });
+    let store: Arc<dyn ParamStore> = store_concrete.clone();
+
+    // Automations-Worker: Ereignis → Regeln der Kanäle → Aktion → Ziel-Player.
+    // Eigener Thread, damit ein träges Ziel weder Audio noch Engine bremst.
+    let worker_channels = channels.clone();
+    let worker_shutdown = shutdown.clone();
+    let worker_heartbeat = Arc::new(AtomicU64::new(0));
+    let worker_heartbeat_thread = worker_heartbeat.clone();
+    let automation_thread = std::thread::spawn(move || {
+        while !worker_shutdown.load(Ordering::Relaxed) {
+            worker_heartbeat_thread.fetch_add(1, Ordering::Relaxed);
+            let Ok(ev) = rule_events_rx.recv_timeout(Duration::from_millis(500)) else { continue };
+            let jobs: Vec<(String, String, rules::Action)> = worker_channels
+                .lock()
+                .expect("lock poisoned")
+                .iter()
+                .flat_map(|c| {
+                    c.automation
+                        .actions_for(&c.id, &ev)
+                        .into_iter()
+                        .map(|a| (c.id.clone(), c.automation.target.clone(), a))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            for (channel, target, action) in jobs {
+                executor.run(&channel, &target, action, dsp::now_ms());
+            }
+        }
     });
 
     // Für die Discovery gebraucht (den eigenen Sender ausschließen) —
     // `sender_id` wird gleich in die `SenderSpec` verschoben, also vorher
     // klonen; `registry_url` ebenso, weil `NodeConfig` sie konsumiert.
     let own_sender_ids_for_discovery = own_sender_ids.clone();
+    let node_label_for_discovery = label.clone();
     let discovery_registry_url = registry_url.clone();
     // `label` wird gleich per Shorthand-Feld in `NodeConfig` verschoben —
     // vorher klonen für den zweiten (Monitor-)Sender unten.
@@ -2003,9 +2519,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     handle.register_worker("pipeline", pipeline_heartbeat);
     handle.register_worker("levels-accept", levels_heartbeat);
     handle.register_worker("automation-engine", engine_heartbeat);
+    handle.register_worker("media-automation", worker_heartbeat);
 
-    let follow_video = audio_follow_video_loop(nats_url, channels, pipeline_handle);
-    let discovery = discovery_loop(discovery_registry_url, own_sender_ids_for_discovery, available_sources);
+    let follow_video = audio_follow_video_loop(nats_url, channels, pipeline_handle, store_concrete.clone());
+    let discovery = discovery_loop(
+        discovery_registry_url,
+        own_sender_ids_for_discovery,
+        available_sources,
+        available_nodes,
+        node_label_for_discovery,
+    );
+    let token_refresh = token_refresh_loop(orchestrator_url, token_instance, launch_secret, auth);
 
     let sender_worker = async {
         while let Some(change) = sender_changes_rx.recv().await {
@@ -2052,11 +2576,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     .to_string();
                     levels_broadcaster.publish(&json);
                 }
-                pipeline::Event::Dsp { channel_id, comp_gr_db, gate_gr_db, auto_db, duck_db, in_db } => {
+                pipeline::Event::Dsp { channel_id, comp_gr_db, gate_gr_db, auto_db, duck_db, in_db, on_air } => {
                     let json = serde_json::json!({
                         "type": "dsp", "channelId": channel_id,
                         "compGr": comp_gr_db, "gateGr": gate_gr_db,
-                        "autoDb": auto_db, "duckDb": duck_db, "inDb": in_db,
+                        "autoDb": auto_db, "duckDb": duck_db, "inDb": in_db, "onAir": on_air,
                     })
                     .to_string();
                     levels_broadcaster.publish(&json);
@@ -2081,11 +2605,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         _ = sender_worker => {
             eprintln!("omp-audio-mixer: sender worker ended");
         }
+        _ = token_refresh => {
+            eprintln!("omp-audio-mixer: token refresh ended");
+        }
     }
 
     shutdown.store(true, Ordering::Relaxed);
     let _ = pipeline_thread.join();
     let _ = engine_thread.join();
+    let _ = automation_thread.join();
 
     Ok(())
 }
@@ -2099,6 +2627,7 @@ async fn audio_follow_video_loop(
     nats_url: String,
     channels: Arc<Mutex<Vec<ChannelState>>>,
     pipeline: PipelineHandle,
+    store: Arc<AudioMixerStore>,
 ) {
     let mut subscription = match health::subscribe_tally(&nats_url, &health::NatsTlsConfig::from_env()).await {
         Ok(s) => s,
@@ -2115,6 +2644,10 @@ async fn audio_follow_video_loop(
     let ramp_generation: Arc<Mutex<HashMap<String, u64>>> = Arc::new(Mutex::new(HashMap::new()));
 
     while let Some((node_id, on)) = subscription.next().await {
+        // Video→Audio-Kontext (Kapitel 26): Quelle aktiv → Audio-Szene und
+        // Automations-Ereignisse. Läuft zusätzlich zum bestehenden
+        // Audio-Follow-Video (Mute/Crossfade je Kanal) und ersetzt es nicht.
+        store.on_video_tally(&node_id, on);
         let matches: Vec<(String, String, bool, f64, f64, u64)> = {
             let channels = channels.lock().expect("lock poisoned");
             channels
@@ -2239,19 +2772,46 @@ async fn audio_follow_video_loop(
 /// erst nach Einführung dieses Nodes traf, s. `docs/decisions.md`
 /// 2026-07-11) — sonst würde ein Video-Sender fälschlich als wählbare
 /// Audioquelle auftauchen.
+/// Erneuert das Service-Token regelmäßig (TTL im Orchestrator 24 h).
+async fn token_refresh_loop(
+    orchestrator_url: String,
+    instance_id: Option<String>,
+    launch_secret: String,
+    auth: media::OrchestratorAuth,
+) {
+    let Some(id) = instance_id.filter(|_| !launch_secret.is_empty()) else {
+        std::future::pending::<()>().await;
+        return;
+    };
+    let mut interval = tokio::time::interval(Duration::from_secs(3600));
+    interval.tick().await;
+    loop {
+        interval.tick().await;
+        let (url, id, secret) = (orchestrator_url.clone(), id.clone(), launch_secret.clone());
+        match tokio::task::spawn_blocking(move || media::fetch_service_token(&url, &id, &secret)).await {
+            Ok(Ok(token)) => auth.set(token),
+            Ok(Err(e)) => eprintln!("omp-audio-mixer: Service-Token-Refresh fehlgeschlagen: {e}"),
+            Err(e) => eprintln!("omp-audio-mixer: Service-Token-Refresh-Task abgestürzt: {e}"),
+        }
+    }
+}
+
 async fn discovery_loop(
     registry_url: String,
     own_sender_ids: Vec<String>,
     sources: Arc<Mutex<Vec<DiscoveredAudioSource>>>,
+    nodes: Arc<Mutex<Vec<String>>>,
+    own_label: String,
 ) {
     let registry = RegistryClient::new(registry_url);
     let mut interval = tokio::time::interval(Duration::from_secs(2));
     loop {
         interval.tick().await;
-        let registry = registry.clone();
+        let registry_for_sources = registry.clone();
         let own_sender_ids = own_sender_ids.clone();
         let result = tokio::task::spawn_blocking(
             move || -> Result<Vec<DiscoveredAudioSource>, String> {
+                let registry = registry_for_sources;
                 let senders = registry.list_senders().map_err(|e| e.to_string())?;
                 Ok(senders
                     .into_iter()
@@ -2269,6 +2829,18 @@ async fn discovery_loop(
             },
         )
         .await;
+
+        // Node-Labels für die Auswahl der Media-Ziele (best effort).
+        let reg = registry.clone();
+        let own = own_label.clone();
+        if let Ok(Ok(mut labels)) = tokio::task::spawn_blocking(move || {
+            reg.list_nodes().map(|n| n.into_iter().map(|n| n.label).filter(|l| *l != own).collect::<Vec<_>>())
+        })
+        .await
+        {
+            labels.sort();
+            *nodes.lock().expect("lock poisoned") = labels;
+        }
 
         match result {
             Ok(Ok(discovered)) => {

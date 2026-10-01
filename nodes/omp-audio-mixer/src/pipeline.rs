@@ -104,6 +104,7 @@ pub enum Event {
         auto_db: f64,
         duck_db: f64,
         in_db: f64,
+        on_air: bool,
     },
 }
 
@@ -442,7 +443,7 @@ fn add_channel_branch(
             if let Some(gst::PadProbeData::Buffer(buffer)) = info.data.as_mut() {
                 let mut guard = stage.lock().expect("lock poisoned");
                 let (stage, scratch) = &mut *guard;
-                let target = shared.total_gain();
+                let target = shared.main_gain();
                 with_f32_samples(buffer.make_mut(), scratch, |samples| stage.process(samples, target));
             }
             gst::PadProbeReturn::Ok
@@ -988,6 +989,7 @@ pub fn run(
                     auto_db: sh.auto_db.get() as f64,
                     duck_db: sh.duck_db.get() as f64,
                     in_db: m.rms_db.get() as f64,
+                    on_air: sh.on_air.load(Ordering::Relaxed),
                 });
             }
             let _ = tx.send(Event::Dsp {
@@ -997,6 +999,7 @@ pub fn run(
                 auto_db: 0.0,
                 duck_db: 0.0,
                 in_db: 0.0,
+                on_air: false,
             });
         }
         // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md

@@ -1378,6 +1378,7 @@ dependencies = [
  "omp-node-sdk",
  "serde_json",
  "tokio",
+ "ureq",
 ]
 
 [[package]]
