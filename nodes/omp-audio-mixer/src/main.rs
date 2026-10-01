@@ -14,7 +14,10 @@
 //! B6/das eigene UI-Bundle re-fetchen entsprechend (kein Push-Mechanismus
 //! nötig, `ARCHITECTURE.md` §13.2).
 
+mod automation;
 mod dsp;
+mod engine;
+mod model;
 mod pipeline;
 mod uibundle;
 
@@ -30,6 +33,7 @@ use omp_node_sdk::{
     Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType,
     Range, RawResponse, SenderSpec, SetError,
 };
+use model::{DuckState, GroupState};
 use pipeline::PipelineHandle;
 use serde_json::Value;
 
@@ -239,6 +243,21 @@ struct ChannelState {
     /// EQ/Gate/Kompressor/Delay/Pan (`dsp::ProcParams`) — wirkt direkt in
     /// der DSP-Probe der Pipeline.
     proc: dsp::ProcParams,
+    /// Gruppen-ID (`GroupState::id`), leer = keine Gruppe. Gruppen
+    /// verändern die individuellen Kanalwerte nie, sie wirken additiv.
+    group: String,
+    /// Nimmt dieser Kanal am AutoMix seiner Gruppe teil?
+    am_enabled: bool,
+    /// Entscheidungsgewicht/Vorrang/Empfindlichkeit des AutoMix —
+    /// beeinflussen die *Entscheidung*, sind kein Audio-Gain.
+    am_weight: f64,
+    am_priority: u8,
+    am_sensitivity_db: f64,
+    /// "Channel Manual": AutoMix und Ducking wirken nicht auf diesen Kanal
+    /// (Override durch den Operator; die Engine schreibt nie Fader/Mute).
+    manual: bool,
+    /// Darf als Ducking-Ziel abgesenkt werden.
+    duckable: bool,
     /// Node-ID der zu verfolgenden Quelle (Tally-Bus-Subject,
     /// `omp.tally.<node_id>`) — leer = keine Kopplung.
     follow_target: String,
@@ -296,6 +315,13 @@ impl ChannelState {
             mute: false,
             pfl: false,
             proc: dsp::ProcParams::default(),
+            group: String::new(),
+            am_enabled: false,
+            am_weight: 1.0,
+            am_priority: 0,
+            am_sensitivity_db: -50.0,
+            manual: false,
+            duckable: true,
             follow_target: String::new(),
             follow_mode: "off".to_string(),
             override_enabled: false,
@@ -331,6 +357,12 @@ struct AudioMixerStore {
     /// Kanal-Kompressoren nicht Teil einer Liste, deshalb ein eigenes
     /// Feld statt eines `channel.<id>.*`-Eintrags.
     master_limiter: Mutex<dsp::CompParams>,
+    /// Gruppen und Ducking-Regeln (Kapitel 26, `model.rs`).
+    groups: Mutex<Vec<GroupState>>,
+    ducks: Mutex<Vec<DuckState>>,
+    /// Konfiguration der Automations-Engine (`engine.rs`) — wird nach jeder
+    /// Änderung aus Kanälen/Gruppen/Regeln neu aufgebaut (`sync_engine`).
+    engine_cfg: engine::ConfigCell,
 }
 
 /// Testton-Frequenz pro Kanal — nur zur akustischen Unterscheidbarkeit im
@@ -377,6 +409,23 @@ impl ParamStore for AudioMixerStore {
             // `channel.<id>.setSource`.
             ParamSpec {
                 name: "availableSources".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            // Kapitel 26: Gruppen und Ducking-Regeln als JSON-Arrays
+            // (vollständige Objekte, `model.rs`), Änderung per
+            // `group.<id>.*`/`duck.<id>.*`-Methoden.
+            ParamSpec {
+                name: "groups".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
+                name: "duckRules".to_string(),
                 kind: ParamType::String,
                 unit: None,
                 range: None,
@@ -438,6 +487,22 @@ impl ParamStore for AudioMixerStore {
                 }],
             },
             MethodSpec {
+                name: "addGroup".to_string(),
+                args: vec![MethodArg { name: "label".to_string(), kind: ParamType::String }],
+            },
+            MethodSpec {
+                name: "removeGroup".to_string(),
+                args: vec![MethodArg { name: "groupId".to_string(), kind: ParamType::String }],
+            },
+            MethodSpec {
+                name: "addDuck".to_string(),
+                args: vec![MethodArg { name: "label".to_string(), kind: ParamType::String }],
+            },
+            MethodSpec {
+                name: "removeDuck".to_string(),
+                args: vec![MethodArg { name: "duckId".to_string(), kind: ParamType::String }],
+            },
+            MethodSpec {
                 name: "setMasterLimiter".to_string(),
                 args: vec![
                     MethodArg { name: "enabled".to_string(), kind: ParamType::Boolean },
@@ -475,6 +540,29 @@ impl ParamStore for AudioMixerStore {
                     range.map(|(min, max)| Range::Number { min, max }),
                 ));
             }
+            // Kapitel 26: Gruppe, AutoMix-Teilnahme/-Gewichtung, Manual-Override.
+            parameters.push(channel_param(id, "group", ParamType::String, None));
+            parameters.push(channel_param(id, "autoMixEnabled", ParamType::Boolean, None));
+            parameters.push(channel_param(
+                id,
+                "autoMixWeight",
+                ParamType::Number,
+                Some(Range::Number { min: 0.1, max: 4.0 }),
+            ));
+            parameters.push(channel_param(
+                id,
+                "autoMixPriority",
+                ParamType::Number,
+                Some(Range::Number { min: 0.0, max: 2.0 }),
+            ));
+            parameters.push(channel_param(
+                id,
+                "autoMixSensitivity",
+                ParamType::Number,
+                Some(Range::Number { min: -90.0, max: -10.0 }),
+            ));
+            parameters.push(channel_param(id, "autoManual", ParamType::Boolean, None));
+            parameters.push(channel_param(id, "duckable", ParamType::Boolean, None));
             // `senderId` der externen Quelle, leer = interner Testton.
             parameters.push(channel_param(id, "source", ParamType::String, None));
             parameters.push(channel_param(id, "followTarget", ParamType::String, None));
@@ -588,6 +676,16 @@ impl ParamStore for AudioMixerStore {
             methods.push(MethodSpec { name: format!("channel.{id}.setDelay"), args: vec![flag("enabled"), num("ms")] });
             methods.push(MethodSpec { name: format!("channel.{id}.setPan"), args: vec![num("pan")] });
             methods.push(MethodSpec {
+                name: format!("channel.{id}.setGroup"),
+                args: vec![MethodArg { name: "groupId".to_string(), kind: ParamType::String }],
+            });
+            methods.push(MethodSpec {
+                name: format!("channel.{id}.setAutoMix"),
+                args: vec![flag("enabled"), num("weight"), num("priority"), num("sensitivityDb")],
+            });
+            methods.push(MethodSpec { name: format!("channel.{id}.setManual"), args: vec![flag("manual")] });
+            methods.push(MethodSpec { name: format!("channel.{id}.setDuckable"), args: vec![flag("enabled")] });
+            methods.push(MethodSpec {
                 name: format!("channel.{id}.setSource"),
                 args: vec![MethodArg {
                     name: "senderId".to_string(),
@@ -621,6 +719,49 @@ impl ParamStore for AudioMixerStore {
                     MethodArg { name: "onLevelDb".to_string(), kind: ParamType::Number },
                     MethodArg { name: "offLevelDb".to_string(), kind: ParamType::Number },
                     MethodArg { name: "transitionMs".to_string(), kind: ParamType::Number },
+                ],
+            });
+        }
+
+        let n = |name: &str| MethodArg { name: name.to_string(), kind: ParamType::Number };
+        let b = |name: &str| MethodArg { name: name.to_string(), kind: ParamType::Boolean };
+        let t = |name: &str| MethodArg { name: name.to_string(), kind: ParamType::String };
+        for g in self.groups.lock().expect("lock poisoned").iter() {
+            let id = &g.id;
+            methods.push(MethodSpec { name: format!("group.{id}.setLabel"), args: vec![t("label")] });
+            methods.push(MethodSpec { name: format!("group.{id}.setGain"), args: vec![n("db")] });
+            methods.push(MethodSpec { name: format!("group.{id}.setMute"), args: vec![b("muted")] });
+            methods.push(MethodSpec {
+                name: format!("group.{id}.setAutoMix"),
+                args: vec![
+                    b("enabled"),
+                    n("attackMs"),
+                    n("holdMs"),
+                    n("releaseMs"),
+                    n("maxAttenDb"),
+                    n("sharing"),
+                    t("detector"),
+                ],
+            });
+        }
+        for d in self.ducks.lock().expect("lock poisoned").iter() {
+            let id = &d.id;
+            methods.push(MethodSpec { name: format!("duck.{id}.setLabel"), args: vec![t("label")] });
+            methods.push(MethodSpec {
+                name: format!("duck.{id}.set"),
+                args: vec![
+                    b("enabled"),
+                    t("keys"),
+                    t("targets"),
+                    n("thresholdDb"),
+                    n("hysteresisDb"),
+                    n("amountDb"),
+                    n("maxDb"),
+                    n("attackMs"),
+                    n("holdMs"),
+                    n("releaseMs"),
+                    n("minTriggerMs"),
+                    t("detector"),
                 ],
             });
         }
@@ -666,6 +807,14 @@ impl ParamStore for AudioMixerStore {
                     .collect::<Vec<_>>()
             ));
         }
+        if name == "groups" {
+            let groups = self.groups.lock().expect("lock poisoned");
+            return Some(Value::Array(groups.iter().map(GroupState::to_json).collect()));
+        }
+        if name == "duckRules" {
+            let ducks = self.ducks.lock().expect("lock poisoned");
+            return Some(Value::Array(ducks.iter().map(DuckState::to_json).collect()));
+        }
         if name == "availableSources" {
             let sources = self.available_sources.lock().expect("lock poisoned");
             return Some(serde_json::json!(
@@ -688,6 +837,13 @@ impl ParamStore for AudioMixerStore {
             "mute" => Some(serde_json::json!(ch.mute)),
             "pfl" => Some(serde_json::json!(ch.pfl)),
             other if proc_get(&ch.proc, other).is_some() => proc_get(&ch.proc, other),
+            "group" => Some(serde_json::json!(ch.group)),
+            "autoMixEnabled" => Some(serde_json::json!(ch.am_enabled)),
+            "autoMixWeight" => Some(serde_json::json!(ch.am_weight)),
+            "autoMixPriority" => Some(serde_json::json!(ch.am_priority)),
+            "autoMixSensitivity" => Some(serde_json::json!(ch.am_sensitivity_db)),
+            "autoManual" => Some(serde_json::json!(ch.manual)),
+            "duckable" => Some(serde_json::json!(ch.duckable)),
             "source" => Some(serde_json::json!(ch.source)),
             "followTarget" => Some(serde_json::json!(ch.follow_target)),
             "followMode" => Some(serde_json::json!(ch.follow_mode)),
@@ -705,54 +861,13 @@ impl ParamStore for AudioMixerStore {
     }
 
     fn invoke(&self, name: &str, args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
-        match name {
-            "addChannel" => {
-                let label = args
-                    .get("label")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string);
-                let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
-                let id = format!("ch{seq}");
-                let label = label.unwrap_or_else(|| format!("Kanal {seq}"));
-                let freq = channel_freq(seq);
-                self.channels
-                    .lock()
-                    .expect("lock poisoned")
-                    .push(ChannelState::new(id.clone(), label, freq));
-                self.pipeline
-                    .add_channel(id, pipeline::ChannelSource::Internal { freq });
-                Ok(())
-            }
-            "removeChannel" => {
-                let channel_id = args
-                    .get("channelId")
-                    .and_then(Value::as_str)
-                    .ok_or(InvokeError::Unknown)?;
-                let mut channels = self.channels.lock().expect("lock poisoned");
-                let before = channels.len();
-                channels.retain(|c| c.id != channel_id);
-                if channels.len() == before {
-                    return Err(InvokeError::Unknown);
-                }
-                self.pipeline.remove_channel(channel_id.to_string());
-                Ok(())
-            }
-            "setMasterLimiter" => {
-                let enabled = args.get("enabled").and_then(Value::as_bool).ok_or(InvokeError::Unknown)?;
-                let threshold_db = args
-                    .get("thresholdDb")
-                    .and_then(Value::as_f64)
-                    .ok_or(InvokeError::Unknown)?;
-                let ratio = args.get("ratio").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
-                let makeup_db = args.get("makeupDb").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
-                let state = master_limiter_params(enabled, threshold_db, ratio, makeup_db);
-                *self.master_limiter.lock().expect("lock poisoned") = state;
-                self.pipeline.set_master_limiter(state);
-                Ok(())
-            }
-            _ => self.invoke_channel_method(name, args),
+        let result = self.invoke_inner(name, args);
+        if result.is_ok() {
+            // Jede erfolgreiche Änderung kann Gruppen/Regeln/Kanalzuordnung
+            // berühren — Engine-Konfiguration neu aufbauen (billig).
+            self.sync_engine();
         }
+        result
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
@@ -856,6 +971,10 @@ impl AudioMixerStore {
                         "id": c.id, "label": c.label, "internalFreq": c.internal_freq,
                         "gainDb": c.gain_db, "mute": c.mute,
                         "source": c.source,
+                        "group": c.group, "autoMixEnabled": c.am_enabled,
+                        "autoMixWeight": c.am_weight, "autoMixPriority": c.am_priority,
+                        "autoMixSensitivity": c.am_sensitivity_db,
+                        "autoManual": c.manual, "duckable": c.duckable,
                         "followTarget": c.follow_target, "followMode": c.follow_mode,
                         "overrideEnabled": c.override_enabled,
                         "followUseMute": c.follow_use_mute,
@@ -871,8 +990,14 @@ impl AudioMixerStore {
                 .collect()
         };
         let ml = *self.master_limiter.lock().expect("lock poisoned");
+        let group_docs: Vec<Value> =
+            self.groups.lock().expect("lock poisoned").iter().map(GroupState::to_json).collect();
+        let duck_docs: Vec<Value> =
+            self.ducks.lock().expect("lock poisoned").iter().map(DuckState::to_json).collect();
         serde_json::json!({
             "channels": channel_docs,
+            "groups": group_docs,
+            "duckRules": duck_docs,
             "masterLimiter": {
                 "enabled": ml.enabled, "thresholdDb": ml.threshold_db,
                 "ratio": ml.ratio, "makeupDb": ml.makeup_db,
@@ -901,6 +1026,18 @@ impl AudioMixerStore {
         }
         self.channels.lock().expect("lock poisoned").clear();
 
+        // Gruppen/Regeln ersetzen (fehlende Schlüssel in Alt-Presets → leer).
+        *self.groups.lock().expect("lock poisoned") = doc
+            .get("groups")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(GroupState::from_json).collect())
+            .unwrap_or_default();
+        *self.ducks.lock().expect("lock poisoned") = doc
+            .get("duckRules")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(DuckState::from_json).collect())
+            .unwrap_or_default();
+
         let sources = self.available_sources.lock().expect("lock poisoned").clone();
 
         for cd in channel_docs {
@@ -917,6 +1054,13 @@ impl AudioMixerStore {
             // Fehlende (neue) Felder bleiben auf Defaults — Presets aus der
             // Zeit vor Kapitel 26 laden unverändert.
             ch.proc = proc_from_json(ch.proc, cd);
+            ch.group = cd.get("group").and_then(Value::as_str).unwrap_or("").to_string();
+            ch.am_enabled = cd.get("autoMixEnabled").and_then(Value::as_bool).unwrap_or(false);
+            ch.am_weight = cd.get("autoMixWeight").and_then(Value::as_f64).unwrap_or(1.0);
+            ch.am_priority = cd.get("autoMixPriority").and_then(Value::as_u64).unwrap_or(0).min(2) as u8;
+            ch.am_sensitivity_db = cd.get("autoMixSensitivity").and_then(Value::as_f64).unwrap_or(-50.0);
+            ch.manual = cd.get("autoManual").and_then(Value::as_bool).unwrap_or(false);
+            ch.duckable = cd.get("duckable").and_then(Value::as_bool).unwrap_or(true);
             ch.follow_target = cd.get("followTarget").and_then(Value::as_str).unwrap_or("").to_string();
             ch.follow_mode = cd.get("followMode").and_then(Value::as_str).unwrap_or("off").to_string();
             ch.override_enabled = cd.get("overrideEnabled").and_then(Value::as_bool).unwrap_or(false);
@@ -955,7 +1099,169 @@ impl AudioMixerStore {
             self.pipeline.set_master_limiter(state);
         }
 
+        // Neue IDs dürfen nicht mit wiederhergestellten kollidieren.
+        let max_seq = self
+            .channels
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .map(|c| c.id.clone())
+            .chain(self.groups.lock().expect("lock poisoned").iter().map(|g| g.id.clone()))
+            .chain(self.ducks.lock().expect("lock poisoned").iter().map(|d| d.id.clone()))
+            .filter_map(|id| id.trim_start_matches(|c: char| c.is_ascii_alphabetic()).parse::<u64>().ok())
+            .max()
+            .unwrap_or(0);
+        self.next_seq.fetch_max(max_seq + 1, Ordering::Relaxed);
+        self.sync_engine();
         Ok(())
+    }
+
+    fn invoke_inner(&self, name: &str, args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
+        match name {
+            "addChannel" => {
+                let label = args
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
+                let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
+                let id = format!("ch{seq}");
+                let label = label.unwrap_or_else(|| format!("Kanal {seq}"));
+                let freq = channel_freq(seq);
+                self.channels
+                    .lock()
+                    .expect("lock poisoned")
+                    .push(ChannelState::new(id.clone(), label, freq));
+                self.pipeline
+                    .add_channel(id, pipeline::ChannelSource::Internal { freq });
+                Ok(())
+            }
+            "removeChannel" => {
+                let channel_id = args
+                    .get("channelId")
+                    .and_then(Value::as_str)
+                    .ok_or(InvokeError::Unknown)?;
+                let mut channels = self.channels.lock().expect("lock poisoned");
+                let before = channels.len();
+                channels.retain(|c| c.id != channel_id);
+                if channels.len() == before {
+                    return Err(InvokeError::Unknown);
+                }
+                self.pipeline.remove_channel(channel_id.to_string());
+                Ok(())
+            }
+            "setMasterLimiter" => {
+                let enabled = args.get("enabled").and_then(Value::as_bool).ok_or(InvokeError::Unknown)?;
+                let threshold_db = args
+                    .get("thresholdDb")
+                    .and_then(Value::as_f64)
+                    .ok_or(InvokeError::Unknown)?;
+                let ratio = args.get("ratio").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
+                let makeup_db = args.get("makeupDb").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
+                let state = master_limiter_params(enabled, threshold_db, ratio, makeup_db);
+                *self.master_limiter.lock().expect("lock poisoned") = state;
+                self.pipeline.set_master_limiter(state);
+                Ok(())
+            }
+            "addGroup" => {
+                let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
+                let id = format!("g{seq}");
+                let label = args
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map_or_else(|| format!("Gruppe {seq}"), str::to_string);
+                self.groups.lock().expect("lock poisoned").push(GroupState::new(id, label));
+                Ok(())
+            }
+            "removeGroup" => {
+                let gid = args.get("groupId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let mut groups = self.groups.lock().expect("lock poisoned");
+                let before = groups.len();
+                groups.retain(|g| g.id != gid);
+                if groups.len() == before {
+                    return Err(InvokeError::Unknown);
+                }
+                // Mitglieder behalten alle individuellen Werte, nur die Zuordnung entfällt.
+                for ch in self.channels.lock().expect("lock poisoned").iter_mut() {
+                    if ch.group == gid {
+                        ch.group.clear();
+                    }
+                }
+                Ok(())
+            }
+            "addDuck" => {
+                let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
+                let label = args
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map_or_else(|| format!("Ducking {seq}"), str::to_string);
+                self.ducks.lock().expect("lock poisoned").push(DuckState::new(format!("d{seq}"), label));
+                Ok(())
+            }
+            "removeDuck" => {
+                let did = args.get("duckId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let mut ducks = self.ducks.lock().expect("lock poisoned");
+                let before = ducks.len();
+                ducks.retain(|d| d.id != did);
+                if ducks.len() == before { Err(InvokeError::Unknown) } else { Ok(()) }
+            }
+            _ if name.starts_with("group.") => {
+                let (id, method) = name["group.".len()..].split_once('.').ok_or(InvokeError::Unknown)?;
+                let mut groups = self.groups.lock().expect("lock poisoned");
+                groups.iter_mut().find(|g| g.id == id).ok_or(InvokeError::Unknown)?.invoke(method, args)
+            }
+            _ if name.starts_with("duck.") => {
+                let (id, method) = name["duck.".len()..].split_once('.').ok_or(InvokeError::Unknown)?;
+                let mut ducks = self.ducks.lock().expect("lock poisoned");
+                ducks.iter_mut().find(|d| d.id == id).ok_or(InvokeError::Unknown)?.invoke(method, args)
+            }
+            _ => self.invoke_channel_method(name, args),
+        }
+    }
+
+    /// Baut die Konfiguration der Automations-Engine aus Kanälen, Gruppen
+    /// und Regeln neu auf. Reine Momentaufnahme (Arc-Tausch), die Engine
+    /// liest sie im nächsten 10-ms-Takt.
+    fn sync_engine(&self) {
+        let chans: Vec<engine::ChanCfg> = self
+            .channels
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .map(|c| engine::ChanCfg {
+                id: c.id.clone(),
+                group: c.group.clone(),
+                am_enabled: c.am_enabled,
+                weight: c.am_weight,
+                priority: c.am_priority,
+                sensitivity_db: c.am_sensitivity_db,
+                manual: c.manual,
+                duckable: c.duckable,
+            })
+            .collect();
+        let groups = self
+            .groups
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .map(|g| engine::GroupCfg { id: g.id.clone(), gain_db: g.gain_db, muted: g.muted, automix: g.automix })
+            .collect();
+        let ducks = self
+            .ducks
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .map(|d| engine::DuckCfg {
+                id: d.id.clone(),
+                enabled: d.enabled,
+                keys: d.keys.clone(),
+                targets: d.targets.clone(),
+                params: d.params.clone(),
+            })
+            .collect();
+        *self.engine_cfg.lock().expect("lock poisoned") = Arc::new(engine::EngineConfig { groups, chans, ducks });
     }
 
     fn get_master_limiter(&self, name: &str) -> Option<Value> {
@@ -1106,6 +1412,37 @@ impl AudioMixerStore {
             "setPan" => {
                 apply_args(&mut ch.proc, args, &[("pan", "pan")])?;
                 self.pipeline.set_proc(id.to_string(), ch.proc);
+                Ok(())
+            }
+            "setGroup" => {
+                let gid = args.get("groupId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                if !gid.is_empty() && !self.groups.lock().expect("lock poisoned").iter().any(|g| g.id == gid) {
+                    return Err(InvokeError::Unknown);
+                }
+                ch.group = gid.to_string();
+                Ok(())
+            }
+            "setAutoMix" => {
+                let get_f = |k: &str, cur: f64, lo: f64, hi: f64| -> Result<f64, InvokeError> {
+                    match args.get(k) {
+                        None => Ok(cur),
+                        Some(v) => v.as_f64().map(|x| x.clamp(lo, hi)).ok_or(InvokeError::Unknown),
+                    }
+                };
+                if let Some(v) = args.get("enabled") {
+                    ch.am_enabled = v.as_bool().ok_or(InvokeError::Unknown)?;
+                }
+                ch.am_weight = get_f("weight", ch.am_weight, 0.1, 4.0)?;
+                ch.am_priority = get_f("priority", ch.am_priority as f64, 0.0, 2.0)?.round() as u8;
+                ch.am_sensitivity_db = get_f("sensitivityDb", ch.am_sensitivity_db, -90.0, -10.0)?;
+                Ok(())
+            }
+            "setManual" => {
+                ch.manual = args.get("manual").and_then(Value::as_bool).ok_or(InvokeError::Unknown)?;
+                Ok(())
+            }
+            "setDuckable" => {
+                ch.duckable = args.get("enabled").and_then(Value::as_bool).ok_or(InvokeError::Unknown)?;
                 Ok(())
             }
             "setSource" => {
@@ -1268,6 +1605,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     )?;
     let levels_url = format!("http://{host}:{actual_levels_port}/levels");
 
+    // Automations-Engine (AutoMix/Ducking, 10-ms-Takt, eigener Thread).
+    let engine_cfg = engine::new_config_cell();
+    let engine_heartbeat = Arc::new(AtomicU64::new(0));
+    let engine_thread =
+        engine::spawn(engine_cfg.clone(), pipeline_handle.shared_map(), shutdown.clone(), engine_heartbeat.clone());
+
     let store: Arc<dyn ParamStore> = Arc::new(AudioMixerStore {
         channels: channels.clone(),
         available_sources: available_sources.clone(),
@@ -1275,6 +1618,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         pipeline: pipeline_handle.clone(),
         levels_url,
         master_limiter: Mutex::new(dsp::CompParams::default()),
+        groups: Mutex::new(Vec::new()),
+        ducks: Mutex::new(Vec::new()),
+        engine_cfg: engine_cfg.clone(),
     });
 
     // Für die Discovery gebraucht (den eigenen Sender ausschließen) —
@@ -1342,6 +1688,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Nachtrag 130-133).
     handle.register_worker("pipeline", pipeline_heartbeat);
     handle.register_worker("levels-accept", levels_heartbeat);
+    handle.register_worker("automation-engine", engine_heartbeat);
 
     let follow_video = audio_follow_video_loop(nats_url, channels, pipeline_handle);
     let discovery = discovery_loop(discovery_registry_url, own_sender_id, available_sources);
@@ -1392,6 +1739,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     shutdown.store(true, Ordering::Relaxed);
     let _ = pipeline_thread.join();
+    let _ = engine_thread.join();
 
     Ok(())
 }

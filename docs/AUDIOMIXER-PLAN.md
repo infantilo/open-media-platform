@@ -60,7 +60,7 @@ Auto-/Duck-Anteil (= manueller Fader).
 ## Status
 
 - [x] Phase 1 DSP-Kern (2026-10-01): `dsp.rs` (14 Unit-Tests), Pipeline-Umbau (Probe A/B, Master-Limiter), Methoden setEqGain/setEqHp/setEqBypass/setComp(erweitert)/setGate/setDelay/setPan, `type:"dsp"`-SSE-Meldungen (GR/Auto/Duck), Alt-State lädt; live gegen Test-Instanz verifiziert (Pan, HPF, Comp, Gate, Limiter, Fader, Mute)
-- [ ] Phase 2 AutoMix + Ducking
+- [x] Phase 2 AutoMix + Ducking (2026-10-01): `automation.rs` (Gain-Sharing-AutoMix mit Gewicht/Priorität/Sensitivity/Attack/Hold/Release/MaxAtten/Summenbegrenzung; Ducking mit Key→Target, Schwelle/Hysterese/Min-Trigger/Hold/langem Release/Max), `engine.rs` (10-ms-Thread, Fail-Safe: Engine-Beat + Detektor-Timeout), `model.rs` (Gruppen, Regeln), Methoden group.*/duck.*/channel.setGroup|setAutoMix|setManual|setDuckable, State/Preset; 42 Unit-Tests, live verifiziert (Dugan −6/−6, Prio, Manual, Duck −8 dB, Key stumm)
 - [ ] Phase 3 Aux / N-1
 - [ ] Phase 4 Automation + Szenen
 - [ ] Phase 5 UI

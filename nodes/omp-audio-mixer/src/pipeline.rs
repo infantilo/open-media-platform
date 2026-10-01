@@ -139,6 +139,7 @@ enum Command {
 pub struct PipelineHandle {
     commands: Sender<Command>,
     flowed: Arc<AtomicBool>,
+    shared: SharedMap,
 }
 
 impl PipelineHandle {
@@ -148,6 +149,11 @@ impl PipelineHandle {
     /// angeschlossen sind (der Mixer produziert auch ohne Kanäle Stille).
     pub fn media_ready(&self) -> bool {
         self.flowed.load(Ordering::Relaxed)
+    }
+
+    /// Kanal-DSP-Zustände für die Automations-Engine.
+    pub fn shared_map(&self) -> SharedMap {
+        self.shared.clone()
     }
 
     pub fn add_channel(&self, id: String, source: ChannelSource) {
@@ -210,6 +216,9 @@ fn with_f32_samples(buf: &mut gst::BufferRef, scratch: &mut Vec<f32>, f: impl Fn
 }
 
 /// Master-Limiter-Parameter + Gain-Reduction-Anzeige (Audio-Thread liest/schreibt).
+/// Geteilte Kanalzustände (Pipeline-Thread schreibt/legt an, Engine liest).
+pub type SharedMap = Arc<Mutex<HashMap<String, Arc<dsp::ChannelShared>>>>;
+
 struct MasterShared {
     params: std::sync::Mutex<dsp::CompParams>,
     version: AtomicU64,
@@ -247,8 +256,9 @@ struct ActivePipeline {
     /// Master-Limiter (Kompressor-Kern aus `dsp.rs`, Pad-Probe zwischen
     /// `mixer` und `level_master`) — Parameter hinter Mutex+Versionszähler.
     master_params: Arc<MasterShared>,
-    /// Kanal-DSP-Zustände über Quellwechsel hinweg (Kapitel 26).
-    shared: HashMap<String, Arc<dsp::ChannelShared>>,
+    /// Kanal-DSP-Zustände über Quellwechsel hinweg (Kapitel 26) — auch für
+    /// die Automations-Engine sichtbar (`engine.rs`).
+    shared: SharedMap,
     _mxl_output: MxlAudioOutput,
     /// Solo/PFL-Monitor-Bus (Nutzerwunsch 2026-07-29) — separater
     /// `audiomixer`, den jeder Kanalzweig über seinen `pfl_gain` sowie
@@ -358,11 +368,7 @@ fn add_channel_branch(
         .build()
         .map_err(|e| format!("identity/proc ({id}): {e}"))?;
 
-    let shared = active
-        .shared
-        .entry(id.to_string())
-        .or_insert_with(|| Arc::new(dsp::ChannelShared::new()))
-        .clone();
+    let shared = shared_for(active, id);
     {
         let shared = shared.clone();
         let stage = Mutex::new((dsp::ProcStage::new(), 0u64, Vec::<f32>::new()));
@@ -512,9 +518,11 @@ fn add_channel_branch(
     Ok(())
 }
 
-fn shared_for(active: &mut ActivePipeline, id: &str) -> Arc<dsp::ChannelShared> {
+fn shared_for(active: &ActivePipeline, id: &str) -> Arc<dsp::ChannelShared> {
     active
         .shared
+        .lock()
+        .expect("lock poisoned")
         .entry(id.to_string())
         .or_insert_with(|| Arc::new(dsp::ChannelShared::new()))
         .clone()
@@ -546,7 +554,7 @@ fn remove_channel_branch(active: &mut ActivePipeline, id: &str) {
     }
 }
 
-fn build(context: &Arc<MxlContext>, config: &Config) -> Result<ActivePipeline, String> {
+fn build(context: &Arc<MxlContext>, config: &Config, shared: &SharedMap) -> Result<ActivePipeline, String> {
     let pipeline = gst::Pipeline::new();
 
     let mixer = gst::ElementFactory::make("audiomixer")
@@ -703,7 +711,7 @@ fn build(context: &Arc<MxlContext>, config: &Config) -> Result<ActivePipeline, S
         mixer,
         channels: HashMap::new(),
         master_params,
-        shared: HashMap::new(),
+        shared: shared.clone(),
         _mxl_output: mxl_output,
         pfl_mixer,
         master_pfl_gain,
@@ -740,7 +748,8 @@ pub fn run(
         }
     };
 
-    let mut active = match build(&context, &config) {
+    let shared: SharedMap = Arc::new(Mutex::new(HashMap::new()));
+    let mut active = match build(&context, &config, &shared) {
         Ok(p) => p,
         Err(e) => {
             let _ = tx.send(Event::Error(format!("initial build failed: {e}")));
@@ -754,6 +763,7 @@ pub fn run(
     let _ = ready.send(Ok(PipelineHandle {
         commands: commands_tx,
         flowed: active.flowed.clone(),
+        shared: shared.clone(),
     }));
 
     let bus = active.pipeline.bus().expect("pipeline always has a bus");
@@ -773,7 +783,9 @@ pub fn run(
     loop {
         if last_dsp_report.elapsed() >= Duration::from_millis(100) {
             last_dsp_report = std::time::Instant::now();
-            for (id, sh) in &active.shared {
+            let snapshot: Vec<(String, Arc<dsp::ChannelShared>)> =
+                active.shared.lock().expect("lock poisoned").iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            for (id, sh) in &snapshot {
                 let m = &sh.meters;
                 let _ = tx.send(Event::Dsp {
                     channel_id: Some(id.clone()),
@@ -818,7 +830,7 @@ pub fn run(
             }
             Ok(Command::RemoveChannel(id)) => {
                 pending_channels.remove(&id);
-                active.shared.remove(&id);
+                active.shared.lock().expect("lock poisoned").remove(&id);
                 remove_channel_branch(&mut active, &id);
             }
             Ok(Command::SetChannelSource { id, source }) => {
@@ -845,13 +857,13 @@ pub fn run(
             // vorhandenem externem Flow) — die Probes im Audio-Thread lesen
             // ihn bei jedem Buffer.
             Ok(Command::SetGain { id, db }) => {
-                shared_for(&mut active, &id).fader_db.set(db as f32);
+                shared_for(&active, &id).fader_db.set(db as f32);
             }
             Ok(Command::SetMute { id, muted }) => {
-                shared_for(&mut active, &id).muted.store(muted, Ordering::Relaxed);
+                shared_for(&active, &id).muted.store(muted, Ordering::Relaxed);
             }
             Ok(Command::SetProc { id, params }) => {
-                shared_for(&mut active, &id).set_params(params);
+                shared_for(&active, &id).set_params(params);
             }
             Ok(Command::SetMasterLimiter { params }) => {
                 *active.master_params.params.lock().expect("lock poisoned") = params;

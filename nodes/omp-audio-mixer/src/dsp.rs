@@ -532,7 +532,8 @@ pub fn now_ms() -> u64 {
     use std::sync::OnceLock;
     use std::time::Instant;
     static T0: OnceLock<Instant> = OnceLock::new();
-    T0.get_or_init(Instant::now).elapsed().as_millis() as u64
+    // Offset, damit 0 als "noch nie" (z. B. `engine_beat_ms`) unterscheidbar bleibt.
+    T0.get_or_init(Instant::now).elapsed().as_millis() as u64 + 100_000
 }
 
 impl Meters {
@@ -716,7 +717,17 @@ pub struct ChannelShared {
     /// einer Pegeländerung unterscheiden kann.
     pub auto_db: AtomicF32,
     pub duck_db: AtomicF32,
+    /// Gruppen-Fader/-Mute (von der Engine aus der Gruppenkonfiguration
+    /// geschrieben) — additiv zum individuellen Fader, der unverändert bleibt.
+    pub group_db: AtomicF32,
+    pub group_muted: std::sync::atomic::AtomicBool,
+    /// Lebenszeichen der Automations-Engine (ms, `now_ms`). Ist es älter als
+    /// [`ENGINE_TIMEOUT_MS`], ignoriert die Fader-Stufe AutoMix/Ducking
+    /// (Fail-Safe: Fader bleibt der manuelle Wert, keine hängenden Anteile).
+    pub engine_beat_ms: AtomicU64,
 }
+
+pub const ENGINE_TIMEOUT_MS: u64 = 1000;
 
 impl ChannelShared {
     pub fn new() -> Self {
@@ -728,6 +739,9 @@ impl ChannelShared {
             muted: std::sync::atomic::AtomicBool::new(false),
             auto_db: AtomicF32::new(0.0),
             duck_db: AtomicF32::new(0.0),
+            group_db: AtomicF32::new(0.0),
+            group_muted: std::sync::atomic::AtomicBool::new(false),
+            engine_beat_ms: AtomicU64::new(0),
         }
     }
 
@@ -746,12 +760,22 @@ impl ChannelShared {
         }
     }
 
-    /// Gesamtgain der Fader-Stufe (linear).
+    /// Lebt die Automations-Engine (für diesen Kanal)?
+    pub fn engine_alive(&self) -> bool {
+        now_ms().saturating_sub(self.engine_beat_ms.load(Ordering::Relaxed)) < ENGINE_TIMEOUT_MS
+    }
+
+    /// Gesamtgain der Fader-Stufe (linear): Fader + Gruppe (+ AutoMix +
+    /// Ducking, solange die Engine lebt). Mute (Kanal oder Gruppe) = Stille.
     pub fn total_gain(&self) -> f64 {
-        if self.muted.load(Ordering::Relaxed) {
+        if self.muted.load(Ordering::Relaxed) || self.group_muted.load(Ordering::Relaxed) {
             return 0.0;
         }
-        db_to_lin(self.fader_db.get() as f64 + self.auto_db.get() as f64 + self.duck_db.get() as f64)
+        let mut db = self.fader_db.get() as f64;
+        if self.engine_alive() {
+            db += self.group_db.get() as f64 + self.auto_db.get() as f64 + self.duck_db.get() as f64;
+        }
+        db_to_lin(db)
     }
 }
 
@@ -1075,6 +1099,26 @@ mod tests {
         let mut b2 = vec![1.0f32; 960];
         f.process(&mut b2, 0.0);
         assert!(b2.iter().all(|x| x.abs() < 1e-6));
+    }
+
+    #[test]
+    fn total_gain_adds_parts_while_engine_lives_and_falls_back_to_fader_when_it_dies() {
+        let sh = ChannelShared::new();
+        sh.fader_db.set(-6.0);
+        sh.auto_db.set(-10.0);
+        sh.duck_db.set(-4.0);
+        // Engine nie gestartet / ausgefallen → nur manueller Fader.
+        assert!((lin_to_db(sh.total_gain()) - -6.0).abs() < 1e-4);
+        sh.engine_beat_ms.store(now_ms(), Ordering::Relaxed);
+        assert!((lin_to_db(sh.total_gain()) - -20.0).abs() < 1e-3);
+        // Gruppe additiv, Mute dominiert.
+        sh.group_db.set(-3.0);
+        assert!((lin_to_db(sh.total_gain()) - -23.0).abs() < 1e-3);
+        sh.group_muted.store(true, Ordering::Relaxed);
+        assert_eq!(sh.total_gain(), 0.0);
+        sh.group_muted.store(false, Ordering::Relaxed);
+        sh.muted.store(true, Ordering::Relaxed);
+        assert_eq!(sh.total_gain(), 0.0);
     }
 
     #[test]
