@@ -39,3 +39,7 @@ members = [
 opt-level = 3
 [profile.dev.package.omp-ograf]
 opt-level = 3
+# Audiomischer (Kapitel 26): EQ/Kompressor/Gate/Delay/Pan laufen als Per-Sample-
+# Schleifen im Audio-Thread — unoptimiert (Debug) kostete 64 Kanäle ~680 % CPU.
+[profile.dev.package.omp-audio-mixer]
+opt-level = 3

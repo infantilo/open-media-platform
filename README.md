@@ -356,8 +356,13 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   sources (no program/preset bus)
 - **omp-video-mixer-me** — video mixer (1 M/E with cut, crossfade,
   picture-in-picture, downstream keyer)
-- **omp-audio-mixer** — digital audio mixer with parametric EQ,
-  per-channel compressor, master limiter, and audio-follow-video
+- **omp-audio-mixer** — broadcast audio console: per-channel HPF + 4-band
+  EQ, compressor (attack/release/knee/GR), gate/expander, delay, pan, phase;
+  gain-sharing AutoMix and sidechain ducking (separate engines) with groups
+  and manual override; aux/N-1 buses with pre/post sends; scenes with
+  video→audio context; declarative media-player automation; derived On-Air
+  state; touch-capable responsive console (full/compact/dense/grid/touch);
+  master limiter, solo/PFL, audio-follow-video (see docs/AUDIOMIXER-PLAN.md)
 - **omp-mxf-player** — MXF file player with program-group audio shuffle
   (cued playback, plus live-MXL-source and real-file playlist items)
 - **omp-channel-player** — isel-free single-branch player for the

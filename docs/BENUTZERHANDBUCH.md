@@ -960,6 +960,32 @@ und nennt die Dauer:
 
 ![Messgerät: Schwarzbild- und Standbild-Alarm nach Ablauf der Haltezeit](screenshots/scope-qc-alarme.png)
 
+## 10a. Audiomischer-Konsole
+
+Die Konsole des Audiomischers zeigt Kanäle als **Kanalzüge** (Name, Pegel,
+ON AIR / MUTED / OFF AIR, Mute, Solo, Select, Status-Badges) und die Details
+des gewählten Kanals im **Center Control** (Tabs IN, EQ, COMP, GATE, DELAY,
+PAN, AUX, AUTOMIX, DUCK, AUTOMATION, SZENEN).
+
+- **Ansicht** (Auto, Desktop, Compact, Dicht, Grid, Touch), **Operate** (Übersicht,
+  Fader ausgeblendet) und **Mix** (Fader + Center Control), **Fader** ein/aus,
+  Spalten, Metergröße. Das sind reine Darstellungs-Einstellungen: sie ändern nie
+  Pegel oder Routing; ein ausgeblendeter Fader behält seinen Wert.
+- **ON AIR** heißt: wirklich hörbar im Programm (nicht stumm, auf Programm
+  geroutet, nicht weggeregelt) — nicht bloß „nicht stumm“.
+- **AUTO −x dB** = Absenkung durch AutoMix, **DUCK −x dB** = durch Ducking,
+  **MANUAL** = Automation wirkt nicht auf diesen Kanal. Der eigene Fader bleibt
+  davon getrennt und wird nie von der Automation überschrieben.
+- **Fader**: ziehen (Touch: horizontal/vertikal je nach Layout, Wisch quer scrollt
+  die Liste), seitlich wegziehen oder Shift = Feinmodus, Doppeltipp = 0 dB,
+  Tastatur Pfeile/Bild/Pos1.
+- **Tastatur**: Pfeile wechseln den Kanal, M = Mute, S = Solo, Esc schließt.
+- **AUX**: Aux- und N-1-Busse (max. 6) anlegen; N-1 enthält alle Kanäle außer
+  dem ausgeschlossenen — dessen Signal ist technisch nicht enthalten. Sends
+  Pre- oder Post-Fader.
+- **SZENEN**: Mix speichern/aktivieren (ohne Aussetzer); Zuordnung
+  „Videoquelle → Audio-Szene“ und Presets des ganzen Mixers.
+
 ## 11. Weiterführende Dokumente
 
 - [`HANDBUCH.md`](HANDBUCH.md) — Installation, `make`-Targets,
