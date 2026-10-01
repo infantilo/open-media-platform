@@ -96,6 +96,7 @@ pub enum Event {
     Error(String),
 }
 
+#[derive(Debug)]
 struct PipelineError(String);
 
 impl std::fmt::Display for PipelineError {
@@ -114,6 +115,110 @@ fn bgra_caps(width: u32, height: u32) -> gst::Caps {
             gst::Fraction::new(FRAMERATE_NUMERATOR as i32, FRAMERATE_DENOMINATOR as i32),
         )
         .build()
+}
+
+fn v210_caps(width: u32, height: u32) -> gst::Caps {
+    gst::Caps::builder("video/x-raw")
+        .field("format", "v210")
+        .field("width", width as i32)
+        .field("height", height as i32)
+        .build()
+}
+
+/// Zustand der Frame-Wiederholungs-Erkennung (s. `dedupe_convert`).
+#[derive(Default)]
+struct DedupeState {
+    last_in: Vec<u8>,
+    last_out: Option<gst::Buffer>,
+}
+
+/// `videoconvert ! capsfilter(out_caps)` mit Überspringen unveränderter
+/// Frames (Nutzerauftrag 2026-10-01, "ograf braucht kaum CPU"): ein
+/// HTML-Renderer liefert auch bei stehendem Bild 30 Frames/s, und die
+/// Wandlung BGRA→v210 kostet ~8 ms/Frame — pro Ausgang. Ist der Eingangs-
+/// Frame byte-identisch zum vorigen, wird die Wandlung gespart und stattdessen
+/// der zuletzt gewandelte Frame (flache Kopie, eigene Zeitstempel) erneut
+/// ausgeliefert; ein Vergleich (memcmp über 3,7 MB) kostet <1 ms. Stehende
+/// Grafiken, Uhren (ändern sich einmal pro Sekunde) und Pausen kosten so
+/// fast nichts, nur echte Bewegung rechnet.
+///
+/// Mechanik: Probe am Sink-Pad des `videoconvert` verwirft den identischen
+/// Frame und schiebt die gemerkte Ausgabe stattdessen aus demselben Thread
+/// auf das Src-Pad (vor dem ersten gewandelten Frame gibt es noch keine
+/// gemerkte Ausgabe, dann läuft die normale Wandlung).
+fn dedupe_convert(
+    pipeline: &gst::Pipeline,
+    label: &str,
+    out_caps: gst::Caps,
+) -> Result<(gst::Element, gst::Element), PipelineError> {
+    let convert = gst::ElementFactory::make("videoconvert")
+        .build()
+        .map_err(|e| PipelineError(format!("videoconvert ({label}): {e}")))?;
+    let caps = gst::ElementFactory::make("capsfilter")
+        .property("caps", out_caps)
+        .build()
+        .map_err(|e| PipelineError(format!("capsfilter ({label}): {e}")))?;
+    pipeline
+        .add(&convert)
+        .and_then(|()| pipeline.add(&caps))
+        .map_err(|e| PipelineError(format!("add {label} convert: {e}")))?;
+    convert
+        .link(&caps)
+        .map_err(|e| PipelineError(format!("link {label} convert: {e}")))?;
+
+    let state = Arc::new(std::sync::Mutex::new(DedupeState::default()));
+    let sink_pad = convert.static_pad("sink").expect("videoconvert has a sink pad");
+    let src_pad = convert.static_pad("src").expect("videoconvert has a src pad");
+
+    // Ausgabe merken (auch die selbst eingespeisten Duplikate — gleiche Daten).
+    let out_state = state.clone();
+    src_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
+        if let Some(gst::PadProbeData::Buffer(buffer)) = &info.data {
+            out_state.lock().expect("dedupe lock").last_out = Some(buffer.clone());
+        }
+        gst::PadProbeReturn::Ok
+    });
+
+    let push_pad = src_pad.clone();
+    sink_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
+        let Some(gst::PadProbeData::Buffer(buffer)) = &info.data else {
+            return gst::PadProbeReturn::Ok;
+        };
+        let Ok(map) = buffer.map_readable() else {
+            return gst::PadProbeReturn::Ok;
+        };
+        let cached = {
+            let mut st = state.lock().expect("dedupe lock");
+            if st.last_out.is_some() && st.last_in.as_slice() == map.as_slice() {
+                st.last_out.clone()
+            } else {
+                st.last_in.clear();
+                st.last_in.extend_from_slice(map.as_slice());
+                // Bis die Wandlung dieses Frames fertig ist, gibt es keine
+                // gültige Ausgabe zu diesem Eingang.
+                st.last_out = None;
+                None
+            }
+        };
+        let (pts, dts, duration) = (buffer.pts(), buffer.dts(), buffer.duration());
+        drop(map);
+        match cached {
+            Some(out) => {
+                let mut dup = out.copy(); // flach: teilt den Speicher, nur Metadaten neu
+                {
+                    let d = dup.get_mut().expect("fresh copy is writable");
+                    d.set_pts(pts);
+                    d.set_dts(dts);
+                    d.set_duration(duration);
+                }
+                let _ = push_pad.push(dup);
+                gst::PadProbeReturn::Handled
+            }
+            None => gst::PadProbeReturn::Ok,
+        }
+    });
+
+    Ok((convert, caps))
 }
 
 fn gray8_caps(width: u32, height: u32) -> gst::Caps {
@@ -238,6 +343,8 @@ fn spawn_alpha_key_bridge(
     // den offiziellen Pull-Pfad korrekt, kein Deadlock mehr.
     let pixel_count = (width as usize) * (height as usize);
     thread::spawn(move || {
+        let mut last_bgra: Vec<u8> = Vec::new();
+        let mut last_gray: Option<gst::Buffer> = None;
         while running.load(Ordering::Relaxed) {
             // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
             // Nachtrag 130/131).
@@ -266,12 +373,22 @@ fn spawn_alpha_key_bridge(
             // pro Element eliminieren (eine einzige Längenprüfung durch
             // `chunks_exact` selbst statt einer pro Zugriff wie bei der
             // vorherigen Index-Schleife `bgra[i * 4 + 3]`).
-            let mut gray = Vec::with_capacity(pixel_count);
-            gray.extend(bgra.chunks_exact(4).map(|px| px[3])); // Alpha-Byte (BGR**A**)
             let pts = buffer.pts();
+            // Unveränderter Frame (stehende Grafik): die Alpha-Ebene des
+            // vorigen Frames wiederverwenden statt neu zu berechnen.
+            let mut out_buffer = match &last_gray {
+                Some(prev) if last_bgra.as_slice() == bgra => prev.copy(),
+                _ => {
+                    let mut gray = Vec::with_capacity(pixel_count);
+                    gray.extend(bgra.chunks_exact(4).map(|px| px[3])); // Alpha-Byte (BGR**A**)
+                    last_bgra.clear();
+                    last_bgra.extend_from_slice(bgra);
+                    let b = gst::Buffer::from_slice(gray);
+                    last_gray = Some(b.clone());
+                    b
+                }
+            };
             drop(map);
-
-            let mut out_buffer = gst::Buffer::from_slice(gray);
             if let (Some(pts), Some(out)) = (pts, out_buffer.get_mut()) {
                 out.set_pts(pts);
             }
@@ -293,6 +410,7 @@ struct Pipeline {
     _mxl_fill: MxlVideoOutput,
     _mxl_key: MxlVideoOutput,
     lowres_output: Arc<MxlVideoOutput>,
+    lowres_valve: gst::Element,
     lowres_active_count: Arc<AtomicUsize>,
 }
 
@@ -342,14 +460,14 @@ impl Pipeline {
         let fill_queue = gst::ElementFactory::make("queue")
             .build()
             .map_err(|e| PipelineError(format!("queue (fill): {e}")))?;
-        let fill_convert = gst::ElementFactory::make("videoconvert")
-            .build()
-            .map_err(|e| PipelineError(format!("videoconvert (fill): {e}")))?;
+        // BGRA→v210 selbst (mit Frame-Wiederholungs-Erkennung); der
+        // MxlVideoOutput bekommt schon v210 und wandelt nur noch durch.
+        let (fill_convert_head, fill_convert) =
+            dedupe_convert(&pipeline, "fill", v210_caps(config.width, config.height))?;
         pipeline
             .add(&fill_queue)
-            .and_then(|()| pipeline.add(&fill_convert))
             .map_err(|e| PipelineError(format!("add fill elements: {e}")))?;
-        gst::Element::link_many([&tee, &fill_queue, &fill_convert])
+        gst::Element::link_many([&tee, &fill_queue, &fill_convert_head])
             .map_err(|e| PipelineError(format!("link fill branch: {e}")))?;
 
         // Kapitel 15 Teil 4: vierter `tee`-Zweig für die Fill-Lowres-
@@ -360,10 +478,28 @@ impl Pipeline {
         let lowres_queue = gst::ElementFactory::make("queue")
             .build()
             .map_err(|e| PipelineError(format!("queue (lowres): {e}")))?;
+        // Ventil AM KOPF des Zweigs (zu, solange niemand die Vorschau
+        // aktiviert): der MxlVideoOutput schaltet sonst erst am ENDE seiner
+        // Kette ab, die volle 720p-Wandlung lief trotzdem. Danach zuerst
+        // auf Vorschaugröße skalieren, dann wandeln (statt 720p→v210→klein).
+        let lowres_valve = gst::ElementFactory::make("valve")
+            .property("drop", true)
+            .build()
+            .map_err(|e| PipelineError(format!("valve (lowres): {e}")))?;
+        let lowres_scale = gst::ElementFactory::make("videoscale")
+            .build()
+            .map_err(|e| PipelineError(format!("videoscale (lowres): {e}")))?;
+        let lowres_caps = gst::ElementFactory::make("capsfilter")
+            .property("caps", bgra_caps(LOWRES_WIDTH, LOWRES_HEIGHT))
+            .build()
+            .map_err(|e| PipelineError(format!("capsfilter (lowres): {e}")))?;
         pipeline
             .add(&lowres_queue)
+            .and_then(|()| pipeline.add(&lowres_valve))
+            .and_then(|()| pipeline.add(&lowres_scale))
+            .and_then(|()| pipeline.add(&lowres_caps))
             .map_err(|e| PipelineError(format!("add lowres elements: {e}")))?;
-        gst::Element::link_many([&tee, &lowres_queue])
+        gst::Element::link_many([&tee, &lowres_queue, &lowres_valve, &lowres_scale, &lowres_caps])
             .map_err(|e| PipelineError(format!("link lowres branch: {e}")))?;
 
         let mxl_context = Arc::new(
@@ -394,7 +530,7 @@ impl Pipeline {
         let lowres_output = Arc::new(
             MxlVideoOutput::new(
                 &pipeline,
-                &lowres_queue,
+                &lowres_caps,
                 mxl_context.clone(),
                 &config.lowres_flow_id,
                 &format!("{} Fill Lowres", config.label),
@@ -417,13 +553,10 @@ impl Pipeline {
             key_bridge_running.clone(),
             key_bridge_heartbeat.clone(),
         )?;
-        let key_convert = gst::ElementFactory::make("videoconvert")
-            .build()
-            .map_err(|e| PipelineError(format!("videoconvert (key): {e}")))?;
-        pipeline
-            .add(&key_convert)
-            .map_err(|e| PipelineError(format!("add key convert: {e}")))?;
-        gst::Element::link_many([&key_appsrc, &key_convert])
+        let (key_convert_head, key_convert) =
+            dedupe_convert(&pipeline, "key", v210_caps(config.width, config.height))?;
+        key_appsrc
+            .link(&key_convert_head)
             .map_err(|e| PipelineError(format!("link key branch: {e}")))?;
 
         let mxl_key = MxlVideoOutput::new(
@@ -501,6 +634,7 @@ impl Pipeline {
             _mxl_fill: mxl_fill,
             _mxl_key: mxl_key,
             lowres_output,
+            lowres_valve,
             lowres_active_count: Arc::new(AtomicUsize::new(0)),
         })
     }
@@ -526,6 +660,7 @@ pub struct PipelineHandle {
     commands: std::sync::mpsc::Sender<Command>,
     page_ready: Arc<AtomicBool>,
     lowres_output: Arc<MxlVideoOutput>,
+    lowres_valve: gst::Element,
     lowres_active_count: Arc<AtomicUsize>,
     key_bridge_heartbeat: Arc<AtomicU64>,
     main_loop_heartbeat: Arc<AtomicU64>,
@@ -558,6 +693,7 @@ impl PipelineHandle {
     /// Aufruf erhöht nur den Zähler.
     pub fn activate_lowres_preview(&self) {
         if self.lowres_active_count.fetch_add(1, Ordering::SeqCst) == 0 {
+            self.lowres_valve.set_property("drop", false);
             self.lowres_output.set_active(true);
         }
     }
@@ -572,6 +708,7 @@ impl PipelineHandle {
             .unwrap_or(0);
         if prev == 1 {
             self.lowres_output.set_active(false);
+            self.lowres_valve.set_property("drop", true);
         }
     }
 
@@ -692,6 +829,7 @@ pub fn run(
         commands: commands_tx,
         page_ready: pipeline.page_ready.clone(),
         lowres_output: pipeline.lowres_output.clone(),
+        lowres_valve: pipeline.lowres_valve.clone(),
         lowres_active_count: pipeline.lowres_active_count.clone(),
         key_bridge_heartbeat: pipeline.key_bridge_heartbeat.clone(),
         main_loop_heartbeat,
@@ -807,4 +945,59 @@ pub fn run(
     drop(bus_watch_guard);
     main_loop.quit();
     let _ = main_loop_thread.join();
+}
+
+#[cfg(test)]
+mod dedupe_tests {
+    use super::*;
+    use gstreamer_app as gst_app;
+
+    /// Identische Eingangsframes liefern identische Ausgabe MIT jeweils eigenem
+    /// Zeitstempel, ein geänderter Frame wird neu gewandelt (kein veraltetes
+    /// Bild) — die Wandlung läuft nur einmal pro Änderung.
+    #[test]
+    fn dedupe_convert_repeats_unchanged_frames_and_converts_changes() {
+        gst::init().expect("gst init");
+        let (w, h) = (64u32, 32u32);
+        let pipeline = gst::Pipeline::new();
+        let src = gst::ElementFactory::make("appsrc")
+            .property("format", gst::Format::Time)
+            .property("caps", bgra_caps(w, h))
+            .build()
+            .unwrap();
+        let (head, tail) = dedupe_convert(&pipeline, "test", v210_caps(w, h)).unwrap();
+        let sink = gst::ElementFactory::make("appsink")
+            .property("sync", false)
+            .build()
+            .unwrap();
+        pipeline.add_many([&src, &sink]).unwrap();
+        src.link(&head).unwrap();
+        tail.link(&sink).unwrap();
+        pipeline.set_state(gst::State::Playing).unwrap();
+
+        let app_src: gst_app::AppSrc = src.dynamic_cast().unwrap();
+        let app_sink: gst_app::AppSink = sink.dynamic_cast().unwrap();
+        let frame = |fill: u8, pts_ms: u64| {
+            let mut b = gst::Buffer::from_slice(vec![fill; (w * h * 4) as usize]);
+            b.get_mut().unwrap().set_pts(gst::ClockTime::from_mseconds(pts_ms));
+            b
+        };
+        // 3× grau 0x40, dann 1× weiß 0xF0
+        for (i, fill) in [0x40u8, 0x40, 0x40, 0xF0].into_iter().enumerate() {
+            app_src.push_buffer(frame(fill, i as u64 * 40)).unwrap();
+        }
+        let mut outs = Vec::new();
+        for _ in 0..4 {
+            let s = app_sink.try_pull_sample(gst::ClockTime::from_seconds(5)).expect("sample");
+            let b = s.buffer().unwrap();
+            let map = b.map_readable().unwrap();
+            outs.push((b.pts().unwrap().mseconds(), map.as_slice().to_vec()));
+        }
+        pipeline.set_state(gst::State::Null).unwrap();
+
+        assert_eq!(outs.iter().map(|o| o.0).collect::<Vec<_>>(), vec![0, 40, 80, 120], "jeder Frame behält seinen Zeitstempel");
+        assert_eq!(outs[0].1, outs[1].1);
+        assert_eq!(outs[0].1, outs[2].1, "unveränderte Frames: gleiche Ausgabe");
+        assert_ne!(outs[0].1, outs[3].1, "geänderter Frame darf nicht das alte Bild liefern");
+    }
 }

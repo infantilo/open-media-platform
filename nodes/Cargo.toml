@@ -29,3 +29,13 @@ members = [
     "omp-scope",
     "omp-webrtc-gateway",
 ]
+
+# Eigener Rust-Code mit Pixel-Schleifen (v210-Packen/Alpha-Key-Extraktion in
+# omp-mediaio bzw. omp-ograf) läuft im Debug-Profil (opt-level 0) um
+# Größenordnungen langsamer als nötig: ein statisches 720p-Bild kostete in
+# omp-ograf ~170 % CPU, fast nur in diesen Schleifen. Gezielt optimieren,
+# ohne das übrige Debug-Profil (Kompilierzeit, Debug-Infos) anzutasten.
+[profile.dev.package.omp-mediaio]
+opt-level = 3
+[profile.dev.package.omp-ograf]
+opt-level = 3

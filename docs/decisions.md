@@ -30112,3 +30112,42 @@ omp-video-mixer-me` grün.
 **Offen:** laufende Instanzen behalten die alten Binaries → neu starten. Tally-
 Publish des Mixers läuft weiterhin in das 3-s-Timeout (separat, nicht Teil dieses
 Fixes).
+
+## Nachtrag (2026-10-01): omp-ograf — CPU-Verbrauch von ~190 % auf ~33 % bei stehender Grafik
+
+Nutzerfund: der HTML-Renderer-Node verbrauchte „unmengen“ CPU. Gemessen (Pro-Prozess
+und Pro-Thread über /proc, ein Kern = 100 %): nichts on air ~1 % (Pipeline pausiert),
+aber **eine stehende Bauchbinde ~190 %**, der Browserprozess (WPEWebProcess) dabei
+~0 %. Die Last lag komplett in den GStreamer-Streaming-Threads des Nodes.
+
+Ursachen (jeweils einzeln gemessen, gst-launch-Isolationsversuche):
+1. `wpesrc` liefert auch bei stehendem Bild ~25–30 Frames/s; je Ausgang wurde jeder
+   Frame BGRA→v210 gewandelt (~8 ms/Frame/Wandlung, generischer videoconvert) — für
+   Fill UND Key (GRAY8→v210) unabhängig voneinander.
+2. Der Lowres-Zweig (`MxlVideoOutput::set_active(false)`) schaltet erst AM ENDE seiner
+   Kette ab (Ventil hinter der Wandlung): die volle 720p-Wandlung samt Skalierung eines
+   v210-Bildes lief dauerhaft, obwohl niemand die Vorschau nutzte.
+3. Die Alpha-Extraktion der Key-Brücke lief für jeden Frame in einer Pixelschleife.
+
+Maßnahmen (nur omp-ograf, `pipeline.rs`):
+- `dedupe_convert`: `videoconvert ! capsfilter` mit Probe — ist der Eingangsframe byte-
+  identisch zum vorigen, wird die Wandlung gespart und die zuletzt gewandelte Ausgabe
+  (flache Kopie, eigene Zeitstempel) erneut ausgeliefert (memcmp <1 ms statt ~8 ms). Der
+  MXL-Fluss bleibt dadurch lückenlos (jeder Takt bekommt einen Grain, kein
+  Reader-Freeze). Unit-Test mit echter GStreamer-Pipeline (`dedupe_tests`).
+- Key-Brücke: unveränderter BGRA-Frame → vorherige Alpha-Ebene wiederverwenden.
+- Lowres: `valve` AM KOPF des Zweigs (zu bis `activate_lowres_preview`), danach zuerst
+  auf 320×180 skalieren, dann wandeln.
+- `nodes/Cargo.toml`: `[profile.dev.package.omp-mediaio]`/`omp-ograf` mit `opt-level = 3`
+  (eigene Pixelschleifen laufen sonst im Debug-Profil um Größenordnungen langsamer;
+  das übrige Debug-Profil bleibt unverändert).
+
+Ergebnis (gleiche Messung): nichts on air ~2 %, stehende Bauchbinde **~33 %**, Uhr ~58 %,
+mehrstufige News-Vorlage mit Animationen ~85 % (davon ~40 % der Browser selbst);
+Lowres-Vorschau aktiv +10 %. Inhalt verifiziert: Grain-Auswertung des Fill-Flusses
+folgt Hide/Show/Live-Update, MXL-Heads laufen mit 25 Grains/s, RSS stabil (~113 MB).
+Rest-Last: Frame-Kopie des WPE-Prozesses (~8 %), je Frame drei memcmp-Vergleiche und
+MXL-Schreibvorgänge. **Offen:** dasselbe „Ventil am Ende der Kette“-Muster steckt in
+`MxlVideoOutput` selbst (omp-source, omp-player …) und kostet dort ebenfalls CPU bei
+inaktivem Lowres-Ausgang — nicht angefasst, weil es alle Nodes betrifft.
+
