@@ -245,8 +245,8 @@ class AppShell extends HTMLElement {
     bar.setAttribute("data-role", "app-bar");
     bar.style.cssText =
       "display:flex;align-items:center;justify-content:space-between;flex:0 0 auto;" +
-      "height:var(--omp-appbar-height);background:var(--omp-surface);" +
-      "border-bottom:1px solid var(--omp-border);padding:0 var(--omp-space-3);box-sizing:border-box;" +
+      "height:var(--omp-appbar-height);background:linear-gradient(180deg,#0d1424,#0a101d);" +
+      "border-bottom:1px solid var(--omp-border);box-shadow:0 1px 0 rgba(25,211,243,0.08), 0 4px 18px rgba(0,0,0,0.35);padding:0 var(--omp-space-3);box-sizing:border-box;" +
       "font-family:var(--omp-font);color:var(--omp-text);";
 
     const left = document.createElement("div");
@@ -254,7 +254,9 @@ class AppShell extends HTMLElement {
 
     const brand = document.createElement("span");
     brand.textContent = "OpenMediaPlatform";
-    brand.style.cssText = "font-weight:600;font-size:var(--omp-font-size-md);white-space:nowrap;";
+    brand.style.cssText =
+      "font-weight:700;font-size:var(--omp-font-size-md);white-space:nowrap;letter-spacing:0.02em;" +
+      "background:var(--omp-accent-gradient);-webkit-background-clip:text;background-clip:text;color:transparent;";
 
     const tabsWrap = document.createElement("div");
     tabsWrap.setAttribute("data-role", "app-tabs");
@@ -329,7 +331,7 @@ class AppShell extends HTMLElement {
     btn.style.cssText =
       TAB_BUTTON_BASE +
       (isActive
-        ? "background:var(--omp-surface-raised);color:var(--omp-text);border-color:var(--omp-border);"
+        ? "background:rgba(47,140,255,0.12);color:var(--omp-text);border-color:rgba(25,211,243,0.35);"
         : "background:transparent;color:var(--omp-text-dim);");
   }
 

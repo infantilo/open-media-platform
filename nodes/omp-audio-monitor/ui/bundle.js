@@ -265,6 +265,31 @@ class OmpAudioMonitorPanel extends HTMLElement {
       listenBtn.textContent = "▶ Abhören starten";
     };
 
+    // Shell-Dienst (ui/shell/listen.ts): Wiedergabe überlebt Kachel-/Tab-Wechsel.
+    // Nur ohne Shell (Fallback) spielt dieses Panel selbst.
+    const shellListen = window.ompListen;
+    if (shellListen) {
+      this._shellListen = shellListen;
+      const paint = () => {
+        const mine = shellListen.state.nodeId === nodeId;
+        listenBtn.textContent = mine ? "■ Abhören stoppen" : "▶ Abhören starten";
+        const other = shellListen.state.nodeId && !mine;
+        status.textContent = other
+          ? "Es wird gerade ein anderer Monitor abgehört."
+          : mine
+            ? ""
+            : "Quelle wählen, dann Abhören starten. Der Ton läuft weiter, auch wenn diese Kachel verlassen wird.";
+      };
+      this._onListenChange = paint;
+      shellListen.addEventListener("change", paint);
+      paint();
+      listenBtn.addEventListener("click", () => {
+        if (shellListen.state.nodeId === nodeId) shellListen.stop();
+        else shellListen.start(nodeId);
+      });
+      return;
+    }
+
     listenBtn.addEventListener("click", () => {
       if (reading) {
         stopListening();
@@ -276,6 +301,11 @@ class OmpAudioMonitorPanel extends HTMLElement {
 
   disconnectedCallback() {
     clearInterval(this._sourcesInterval);
+    if (this._shellListen) {
+      // Wiedergabe gehört der Shell und läuft bewusst weiter.
+      this._shellListen.removeEventListener("change", this._onListenChange);
+      return;
+    }
     if (this._reader) this._reader.cancel().catch(() => {});
   }
 }

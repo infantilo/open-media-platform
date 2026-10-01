@@ -25,6 +25,7 @@ import type { ConsoleView, ConsoleEntry } from "./console-view.ts";
 import "./console-board.ts";
 import type { ConsoleBoard } from "./console-board.ts";
 import { whoami, showLoginOverlay, buildUserWidget } from "./auth.ts";
+import { installListenService } from "./listen.ts";
 import { connectionMonitor } from "./connection.ts";
 // Reiner Seiteneffekt-Import (registriert nur customElements.define) —
 // gleicher Grund wie beim console-view.ts-Fall oben. app-shell.ts
@@ -369,6 +370,9 @@ function renderWorkflowPicker(root: HTMLElement, consoles: ConsoleEntry[], workf
 async function boot() {
   const root = document.getElementById("shell-root");
   if (!root) return;
+
+  // Abhör-Dienst gehört der Shell, nicht dem Panel (s. listen.ts).
+  installListenService();
 
   const { authRequired, authenticated, username } = await whoami();
 

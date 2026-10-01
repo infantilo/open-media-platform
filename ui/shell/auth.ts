@@ -79,44 +79,63 @@ export function logout() {
 // bleibt bis dahin unangetastet (kein Teil-Rendering der Shell dahinter).
 export function showLoginOverlay(root: HTMLElement, onSuccess: () => void) {
   const overlay = document.createElement("div");
-  overlay.style.cssText =
-    "position:fixed;inset:0;display:flex;align-items:center;justify-content:center;" +
-    "background:var(--omp-bg);font-family:var(--omp-font);z-index:2000;";
+  overlay.className = "omp-login";
+
+  // Linke Seite: Markenbotschaft im Stil des Hero-Bilds.
+  const brand = document.createElement("div");
+  brand.className = "omp-login-brand";
+  brand.innerHTML =
+    '<div class="omp-login-eyebrow">Open Media Platform</div>' +
+    '<h1 class="omp-login-headline">Open <span class="c">· Modular</span><br><span class="v">· Interoperable</span></h1>' +
+    '<p class="omp-login-lead">Eine offene Plattform für softwaredefinierte Medien- und ' +
+    "Broadcast-Infrastrukturen – entwickelt für Interoperabilität, Flexibilität und " +
+    "die Anforderungen von morgen.</p>" +
+    '<div class="omp-login-rule"></div>' +
+    '<div class="omp-login-tag">Standards. Technologie. Freiheit.</div>' +
+    '<div class="omp-login-chips">' +
+    ["SDI", "ST 2110", "AES67", "MXL", "NMOS", "BPMN"].map((c) => `<span class="omp-login-chip">${c}</span>`).join("") +
+    "</div>";
+
+  const panel = document.createElement("div");
+  panel.className = "omp-login-panel";
 
   const form = document.createElement("form");
-  form.style.cssText =
-    "display:flex;flex-direction:column;gap:var(--omp-space-3);background:var(--omp-surface);" +
-    "padding:var(--omp-space-4) 28px 28px;border-radius:10px;border:1px solid var(--omp-border);" +
-    "min-width:260px;box-shadow:0 8px 24px rgba(0,0,0,0.4);";
+  form.className = "omp-login-card";
 
   const title = document.createElement("h2");
-  title.textContent = "OpenMediaPlatform";
-  title.style.cssText =
-    "color:var(--omp-text);font-size:var(--omp-font-size-lg);font-weight:600;margin:0 0 var(--omp-space-2);";
+  title.textContent = "Anmelden";
+  const sub = document.createElement("p");
+  sub.className = "omp-login-sub";
+  sub.textContent = "Zugang zur Control Plane";
 
   const userInput = document.createElement("input");
   userInput.placeholder = "Nutzername";
   userInput.autocomplete = "username";
-  userInput.style.padding = "9px var(--omp-space-2)";
+  const userLabel = document.createElement("label");
+  userLabel.append("Nutzername", userInput);
 
   const passInput = document.createElement("input");
   passInput.type = "password";
   passInput.placeholder = "Passwort";
   passInput.autocomplete = "current-password";
-  passInput.style.padding = "9px var(--omp-space-2)";
+  const passLabel = document.createElement("label");
+  passLabel.append("Passwort", passInput);
 
   const error = document.createElement("div");
-  error.style.cssText =
-    "color:var(--omp-error);font-size:var(--omp-font-size-sm);min-height:16px;font-family:var(--omp-font);";
+  error.className = "omp-login-error";
 
   const submit = document.createElement("button");
   submit.type = "submit";
   submit.textContent = "Anmelden";
   submit.className = "omp-btn-primary";
-  submit.style.cssText = "padding:9px var(--omp-space-3);font-size:var(--omp-font-size-md);margin-top:var(--omp-space-1);";
 
-  form.append(title, userInput, passInput, error, submit);
-  overlay.append(form);
+  const foot = document.createElement("div");
+  foot.className = "omp-login-foot";
+  foot.textContent = "OpenMediaPlatform";
+
+  form.append(title, sub, userLabel, passLabel, error, submit, foot);
+  panel.append(form);
+  overlay.append(brand, panel);
   root.replaceChildren(overlay);
 
   form.addEventListener("submit", async (ev) => {
