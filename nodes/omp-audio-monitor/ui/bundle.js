@@ -265,6 +265,22 @@ class OmpAudioMonitorPanel extends HTMLElement {
       listenBtn.textContent = "▶ Abhören starten";
     };
 
+    // Abhör-Controller-Default: ist noch nichts verbunden, wird beim Start der
+    // Monitor-Bus eines Audiomischers gewählt (Sender "<Mischer> Monitor", s.
+    // omp-audio-mixer `monitor_sender_label`). Dieser Bus spiegelt das
+    // Programm, solange kein Kanal PFL/Solo hat, und schaltet bei PFL
+    // automatisch auf den Solo-Kanal — der Operator hört also ohne Zutun
+    // genau das, was er gerade bedient.
+    const ensureSource = async () => {
+      if (await getParam("connectedFlowId")) return;
+      const sources = (await getParam("availableSources")) || [];
+      const mixerMonitor = sources.find((s) => /\sMonitor$/.test(s.label || ""));
+      if (mixerMonitor) {
+        await call("selectSource", { senderId: mixerMonitor.senderId });
+        select.value = mixerMonitor.senderId;
+      }
+    };
+
     // Shell-Dienst (ui/shell/listen.ts): Wiedergabe überlebt Kachel-/Tab-Wechsel.
     // Nur ohne Shell (Fallback) spielt dieses Panel selbst.
     const shellListen = window.ompListen;
@@ -285,7 +301,7 @@ class OmpAudioMonitorPanel extends HTMLElement {
       paint();
       listenBtn.addEventListener("click", () => {
         if (shellListen.state.nodeId === nodeId) shellListen.stop();
-        else shellListen.start(nodeId);
+        else ensureSource().finally(() => shellListen.start(nodeId));
       });
       return;
     }
@@ -294,7 +310,7 @@ class OmpAudioMonitorPanel extends HTMLElement {
       if (reading) {
         stopListening();
       } else {
-        startListening();
+        ensureSource().finally(startListening);
       }
     });
   }

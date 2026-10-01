@@ -30174,3 +30174,17 @@ omp-ograf, Kette omp-source → omp-scaler. **Lowres bleibt** (Entscheidung): es
 Anforderung (referenzgezählt, nur Multiviewer/Vorschau) und kostet aktiv ~11–17 % je Quelle;
 ohne Lowres müssten Multiviewer das volle Bild lesen und wandeln, was teurer wäre.
 
+
+## 2026-10-01 — Abhör-Controller als Shell-Dienst
+
+Problem: Der Ton des Audiomonitors brach ab, sobald die Kachel verlassen wurde (Wiedergabe
+lebte im Panel-Element und wurde in `disconnectedCallback` abgebrochen). Entscheidung:
+Wiedergabe (AudioContext, Worklet, PCM-Strom) gehört der Shell (`ui/shell/listen.ts`,
+`window.ompListen`); das Panel von `omp-audio-monitor` startet/stoppt nur noch und zeigt den
+Zustand (Fallback auf eigene Wiedergabe, wenn keine Shell da ist). Widget unten links:
+Pegel, Lautstärke, Mute, Dim (−20 dB), Mono-Check, Stopp; Auto-Reconnect bei Stromende.
+Ohne gewählte Quelle verbindet der Start automatisch den Monitor-Bus des Audiomischers
+(`<Mischer> Monitor`) — der spiegelt das Programm und schaltet bei PFL/Solo auf den
+Solo-Kanal um (`recompute_master_pfl_gain`), eine eigene Kopplung ist dafür nicht nötig.
+Offen: ein Monitor-Node pro Operator (der Ton läuft über dessen Browser); Aux/N-1 als
+fest benannte Abhörquellen; WebRTC statt PCM-über-HTTP nur bei Bedarf an Rücksprache.
