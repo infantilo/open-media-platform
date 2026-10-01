@@ -589,6 +589,8 @@ pub struct ProcParams {
     pub delay_enabled: bool,
     pub delay_ms: f64,
     pub pan: f64,
+    /// Polaritätsumkehr (Phase) am Kanaleingang.
+    pub phase_invert: bool,
 }
 
 impl Default for ProcParams {
@@ -600,6 +602,7 @@ impl Default for ProcParams {
             delay_enabled: false,
             delay_ms: 0.0,
             pan: 0.0,
+            phase_invert: false,
         }
     }
 }
@@ -660,8 +663,9 @@ impl ProcStage {
         let mut min_comp = 0f64;
         let mut min_gate = 0f64;
         for n in 0..frames {
-            let l = self.eq.process(0, buf[n * CH] as f64);
-            let r = self.eq.process(1, buf[n * CH + 1] as f64);
+            let pol = if self.params.phase_invert { -1.0 } else { 1.0 };
+            let l = self.eq.process(0, buf[n * CH] as f64 * pol);
+            let r = self.eq.process(1, buf[n * CH + 1] as f64 * pol);
 
             // Detektor (vor Dynamik).
             peak = peak.max(l.abs()).max(r.abs());
@@ -952,6 +956,20 @@ mod tests {
             last = b;
         }
         rms_db(&last)
+    }
+
+    #[test]
+    fn phase_invert_flips_polarity_exactly() {
+        let mut p = ProcParams::default();
+        p.phase_invert = true;
+        let mut s = ProcStage::new();
+        s.set_params(p);
+        let input = sine(440.0, 0.5, 480, 0);
+        let mut b = input.clone();
+        s.process(&mut b, &Meters::new());
+        for (a, b) in input.iter().zip(&b) {
+            assert!((a + b).abs() < 1e-6);
+        }
     }
 
     #[test]

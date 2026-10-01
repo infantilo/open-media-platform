@@ -531,10 +531,17 @@ fn add_channel_branch(
     // Neue Elemente in einer bereits laufenden (PLAYING) Pipeline müssen
     // ihren Zustand explizit an den Elternzustand angleichen — sonst
     // bleiben sie in NULL/READY hängen und liefern nie Daten.
-    for el in elements
-        .iter()
-        .chain([&proc_el, &fader_el, &level, &pfl_tee, &main_queue, &pfl_queue, &pfl_gain])
-    {
+    //
+    // Reihenfolge: von der SENKE zur QUELLE (Live-Befund 2026-10-01). Wird die
+    // Live-Quelle zuerst auf PLAYING gebracht, schiebt sie schon Daten in noch
+    // nicht laufende Elemente; ein `basesrc` pausiert dann bei FLUSHING still
+    // und dauerhaft — der Kanal liefert nie einen Buffer (zufällig 1 von 8
+    // Kanälen, je länger die Kette, desto wahrscheinlicher).
+    let downstream_first: Vec<&gst::Element> = [&pfl_gain, &pfl_queue, &fader_el, &main_queue, &pfl_tee, &level, &proc_el]
+        .into_iter()
+        .chain(elements.iter().rev())
+        .collect();
+    for el in downstream_first {
         el.sync_state_with_parent()
             .map_err(|e| format!("sync_state_with_parent ({id}): {e}"))?;
     }
@@ -608,17 +615,60 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
         });
     }
 
-    let tee_pad = branch.tee.request_pad_simple("src_%u").ok_or("tee: request src pad failed")?;
-    tee_pad
-        .link(&queue.static_pad("sink").ok_or("send queue: no sink pad")?)
-        .map_err(|e| format!("link tee to send queue: {e}"))?;
-    let mixer_pad = aux_mixer.request_pad_simple("sink_%u").ok_or("aux mixer: request sink pad failed")?;
-    queue
-        .static_pad("src")
-        .ok_or("send queue: no src pad")?
-        .link(&mixer_pad)
-        .map_err(|e| format!("link send queue to aux mixer: {e}"))?;
-    queue.sync_state_with_parent().map_err(|e| format!("sync send queue: {e}"))?;
+    // Reihenfolge und Blockade (Live-Befund 2026-10-01: ohne sie standen
+    // zufällig 1–3 von 8 Kanälen dauerhaft, sobald mehrere Sends gleichzeitig
+    // an laufende `tee`s gehängt wurden — gleiche Ursache wie das Memory
+    // "GStreamer tee request-pad race"):
+    //   1. Queue → Aux-Mixer verlinken und Queue auf PLAYING bringen (noch ohne Daten),
+    //   2. den Datenstrom am `tee`-Eingang per BLOCK-Probe anhalten,
+    //   3. erst dann Src-Pad anfordern und verlinken,
+    //   4. Probe entfernen (Strom läuft weiter).
+    let mut mixer_pad_slot: Option<gst::Pad> = None;
+    let attempt = (|| -> Result<gst::Pad, String> {
+        let mixer_pad = aux_mixer.request_pad_simple("sink_%u").ok_or("aux mixer: request sink pad failed")?;
+        mixer_pad_slot = Some(mixer_pad.clone());
+        queue
+            .static_pad("src")
+            .ok_or("send queue: no src pad")?
+            .link(&mixer_pad)
+            .map_err(|e| format!("link send queue to aux mixer: {e}"))?;
+        queue.sync_state_with_parent().map_err(|e| format!("sync send queue: {e}"))?;
+
+        let tee_sink = branch.tee.static_pad("sink").ok_or("tee: no sink pad")?;
+        let (blocked_tx, blocked_rx) = std::sync::mpsc::channel::<()>();
+        let probe = tee_sink.add_probe(gst::PadProbeType::BLOCK_DOWNSTREAM, move |_, _| {
+            let _ = blocked_tx.send(());
+            gst::PadProbeReturn::Ok // Pad bleibt blockiert, bis die Probe entfernt wird
+        });
+        // Kommt kein Buffer (Quelle liefert gerade nichts), nach kurzer Frist ohne
+        // Blockade fortfahren — der Kanal läuft dann ohnehin nicht.
+        let _ = blocked_rx.recv_timeout(Duration::from_millis(500));
+        let link_result = (|| -> Result<gst::Pad, String> {
+            let tee_pad = branch.tee.request_pad_simple("src_%u").ok_or("tee: request src pad failed")?;
+            tee_pad
+                .link(&queue.static_pad("sink").ok_or("send queue: no sink pad")?)
+                .map_err(|e| format!("link tee to send queue: {e}"))?;
+            Ok(tee_pad)
+        })();
+        if let Some(id) = probe {
+            tee_sink.remove_probe(id);
+        }
+        link_result
+    })();
+    let tee_pad = match attempt {
+        Ok(p) => p,
+        Err(e) => {
+            // Aufräumen: sonst bleibt eine halb verlinkte Queue in der Pipeline, und
+            // jeder weitere Versuch scheitert zusätzlich an doppeltem Elementnamen.
+            if let Some(p) = mixer_pad_slot.take() {
+                aux_mixer.release_request_pad(&p);
+            }
+            let _ = queue.set_state(gst::State::Null);
+            let _ = active.pipeline.remove(&queue);
+            return Err(e);
+        }
+    };
+    let mixer_pad = mixer_pad_slot.take().expect("gesetzt im Erfolgsfall");
     branch.sends.insert(aux_id.to_string(), SendBranch { queue, tee_pad, mixer_pad });
     Ok(())
 }
@@ -686,6 +736,35 @@ fn remove_channel_branch(active: &mut ActivePipeline, id: &str) {
 /// Elemente von `MxlAudioOutput` bleiben für die Pipelinelebensdauer
 /// bestehen (kein Entfernen möglich) — ein deaktivierter Slot wird bei
 /// erneuter Aktivierung wiederverwendet.
+/// Live-Stille-Quelle mit FESTEN Caps (F32LE/48 kHz/Stereo): ohne sie gibt der
+/// `audiotestsrc`-Standard (Mono, 44,1 kHz) dem Mixer das Ausgangsformat vor,
+/// und später angehängte Stereo-Kanäle lassen sich zufällig nicht mehr
+/// verlinken ("Pads do not have common format", Live-Befund 2026-10-01).
+/// Rückgabe: (Quelle, Capsfilter) — der Capsfilter ist das Element zum Verlinken.
+fn silence_source(name: &str) -> Result<(gst::Element, gst::Element), String> {
+    let src = gst::ElementFactory::make("audiotestsrc")
+        .name(format!("{name}-src"))
+        .property("is-live", true)
+        .property("samplesperbuffer", 480i32)
+        .build()
+        .map_err(|e| format!("audiotestsrc ({name}): {e}"))?;
+    src.set_property_from_str("wave", "silence");
+    let caps = gst::ElementFactory::make("capsfilter")
+        .name(format!("{name}-caps"))
+        .property(
+            "caps",
+            gst::Caps::builder("audio/x-raw")
+                .field("format", "F32LE")
+                .field("layout", "interleaved")
+                .field("rate", SAMPLE_RATE as i32)
+                .field("channels", CHANNELS as i32)
+                .build(),
+        )
+        .build()
+        .map_err(|e| format!("capsfilter ({name}): {e}"))?;
+    Ok((src, caps))
+}
+
 fn build_aux(
     active: &mut ActivePipeline,
     context: &Arc<MxlContext>,
@@ -710,19 +789,15 @@ fn build_aux(
         .property("interval", LEVEL_INTERVAL_NS)
         .build()
         .map_err(|e| format!("level (aux {slot_id}): {e}"))?;
-    let silence = gst::ElementFactory::make("audiotestsrc")
-        .name(format!("aux-silence-{slot_id}"))
-        .property("is-live", true)
-        .property("samplesperbuffer", 480i32)
-        .build()
-        .map_err(|e| format!("audiotestsrc (aux {slot_id}): {e}"))?;
-    silence.set_property_from_str("wave", "silence");
+    let (silence_src, silence) = silence_source(&format!("aux-silence-{slot_id}"))?;
     pipeline
         .add(&mixer)
         .and_then(|()| pipeline.add(&master))
         .and_then(|()| pipeline.add(&level))
+        .and_then(|()| pipeline.add(&silence_src))
         .and_then(|()| pipeline.add(&silence))
         .map_err(|e| format!("add aux elements ({slot_id}): {e}"))?;
+    gst::Element::link_many([&silence_src, &silence]).map_err(|e| format!("link aux silence caps ({slot_id}): {e}"))?;
     gst::Element::link_many([&mixer, &master, &level]).map_err(|e| format!("link aux ({slot_id}): {e}"))?;
     let silence_pad = mixer.request_pad_simple("sink_%u").ok_or("aux mixer: request silence pad failed")?;
     silence
@@ -732,19 +807,25 @@ fn build_aux(
         .map_err(|e| format!("link aux silence ({slot_id}): {e}"))?;
     let output = MxlAudioOutput::new(&pipeline, &level, context.clone(), flow_id, label, SAMPLE_RATE, CHANNELS)
         .map_err(|e| format!("MxlAudioOutput (aux {slot_id}): {e}"))?;
-    output.set_active(false);
+    // Ventil bleibt beim Bau OFFEN (Live-Befund 2026-10-01): der Aufrufer
+    // (`SetAuxActive`) stellt es unmittelbar danach ohnehin ein. Ein hier
+    // geschlossenes Ventil ließ die Stille-Quelle zufällig mit "not-linked"
+    // sterben, wenn ihr erster Buffer in das Fenster bis zum Öffnen fiel.
+    output.set_active(true);
 
-    // Zustand angleichen, Senke zuerst: die von `MxlAudioOutput::new` im
-    // Inneren angelegten Elemente stehen noch auf NULL (sonst wäre die
-    // Pipeline selbst nicht NULL), danach level → master → mixer → Quelle.
+    // Zustand angleichen: ALLES außer der Live-Quelle zuerst (die internen
+    // Elemente von `MxlAudioOutput::new` UND meine eigenen noch auf NULL
+    // stehenden Elemente liegen hier in beliebiger Iterationsreihenfolge), die
+    // Quelle ganz zuletzt. Live-Befund 2026-10-01: wurde die Stille-Quelle vor
+    // dem Mixer auf PLAYING gesetzt, endete sie mit "not-linked" und riss die
+    // Pipeline mit (jeder zweite bis dritte Neustart mit Aux).
     for el in pipeline.iterate_elements().into_iter().flatten() {
-        if el.current_state() == gst::State::Null {
-            el.sync_state_with_parent().map_err(|e| format!("sync aux output element: {e}"))?;
+        if el.current_state() == gst::State::Null && el != silence_src && el != silence {
+            el.sync_state_with_parent().map_err(|e| format!("sync aux element: {e}"))?;
         }
     }
-    for el in [&level, &master, &mixer, &silence] {
-        el.sync_state_with_parent().map_err(|e| format!("sync aux element ({slot_id}): {e}"))?;
-    }
+    silence.sync_state_with_parent().map_err(|e| format!("sync aux silence caps ({slot_id}): {e}"))?;
+    silence_src.sync_state_with_parent().map_err(|e| format!("sync aux silence ({slot_id}): {e}"))?;
     active.aux.insert(slot_id.to_string(), AuxRt { mixer, master, output });
     Ok(())
 }
@@ -814,6 +895,26 @@ fn build(context: &Arc<MxlContext>, config: &Config, shared: &SharedMap) -> Resu
         .map_err(|e| format!("add audiomixer/limiter/level: {e}"))?;
     gst::Element::link_many([&mixer, &master_caps, &master_el, &level_master])
         .map_err(|e| format!("link mixer to level (master): {e}"))?;
+
+    // Dauerhafte Live-Stille-Quelle am Programm-Mixer (Fund 2026-10-01, Stress-
+    // test: ohne sie kam es bei ~50 % der Starts zu einer dauerhaft stehenden
+    // Pipeline). Ohne Live-Quelle ist die Pipeline beim Start nicht "live";
+    // der `async` MXL-Appsink am Ausgang wartet dann auf einen Preroll-Buffer,
+    // den der pad-lose Mixer nur zufällig rechtzeitig liefert. Mit einer
+    // Live-Quelle meldet der Zustandswechsel NO_PREROLL und die Pipeline läuft
+    // sofort deterministisch in PLAYING.
+    let (main_silence, main_silence_caps) = silence_source("main-silence")?;
+    pipeline
+        .add(&main_silence)
+        .and_then(|()| pipeline.add(&main_silence_caps))
+        .map_err(|e| format!("add main silence: {e}"))?;
+    gst::Element::link_many([&main_silence, &main_silence_caps]).map_err(|e| format!("link main silence caps: {e}"))?;
+    let main_silence_pad = mixer.request_pad_simple("sink_%u").ok_or("mixer: request silence pad failed")?;
+    main_silence_caps
+        .static_pad("src")
+        .ok_or("main silence: no src pad")?
+        .link(&main_silence_pad)
+        .map_err(|e| format!("link main silence: {e}"))?;
 
     // Solo/PFL-Monitor-Bus (Nutzerwunsch 2026-07-29, K4-Entscheidung
     // "Monitor-Summe + lokale Wiedergabe"): ein `tee` NACH `level_master`

@@ -7,7 +7,19 @@
 use omp_node_sdk::RawResponse;
 
 const MANIFEST: &str = include_str!("../ui/manifest.json");
-const BUNDLE: &str = include_str!("../ui/bundle.js");
+/// Quelldateien des Konsolen-UIs (Reihenfolge = Abhängigkeitsreihenfolge),
+/// zur Compile-Zeit zu EINEM Bundle zusammengefügt (kein JS-Build nötig).
+const BUNDLE: &str = concat!(
+    include_str!("../ui/00-core.js"),
+    "\n",
+    include_str!("../ui/10-channel.js"),
+    "\n",
+    include_str!("../ui/20-center.js"),
+    "\n",
+    include_str!("../ui/21-center2.js"),
+    "\n",
+    include_str!("../ui/30-panel.js"),
+);
 
 pub fn route(method: &str, path: &str) -> Option<RawResponse> {
     if method != "GET" {

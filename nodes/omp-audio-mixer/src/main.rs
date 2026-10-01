@@ -87,6 +87,7 @@ const PROC_PARAMS: &[ProcParamSpec] = &[
     ("delayEnabled", ParamType::Boolean, None),
     ("delayMs", ParamType::Number, Some((0.0, 2000.0))),
     ("pan", ParamType::Number, Some((-1.0, 1.0))),
+    ("phaseInvert", ParamType::Boolean, None),
 ];
 
 fn proc_get(p: &dsp::ProcParams, prop: &str) -> Option<Value> {
@@ -127,6 +128,7 @@ fn proc_get(p: &dsp::ProcParams, prop: &str) -> Option<Value> {
         "delayEnabled" => p.delay_enabled.into(),
         "delayMs" => p.delay_ms.into(),
         "pan" => p.pan.into(),
+        "phaseInvert" => p.phase_invert.into(),
         _ => return None,
     })
 }
@@ -203,6 +205,7 @@ fn proc_set(p: &mut dsp::ProcParams, prop: &str, v: &Value) -> bool {
         "delayEnabled" => p.delay_enabled = b!(),
         "delayMs" => p.delay_ms = n!(),
         "pan" => p.pan = n!(),
+        "phaseInvert" => p.phase_invert = b!(),
         _ => return false,
     }
     true
@@ -504,6 +507,9 @@ impl ParamStore for AudioMixerStore {
                 readonly: true,
             },
             // Kapitel 26: Szenen, Video→Audio-Kontext, Media-Ziele.
+            // Gesamtzustand in EINEM Abruf (Konsolen-UI: ein Poll statt
+            // Dutzenden Einzelparametern je Kanal, wichtig bei 32–128 Kanälen).
+            ParamSpec { name: "mixState".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             ParamSpec { name: "scenes".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             ParamSpec {
                 name: "contextRules".to_string(),
@@ -827,6 +833,11 @@ impl ParamStore for AudioMixerStore {
             });
             methods.push(MethodSpec { name: format!("channel.{id}.setDelay"), args: vec![flag("enabled"), num("ms")] });
             methods.push(MethodSpec { name: format!("channel.{id}.setPan"), args: vec![num("pan")] });
+            methods.push(MethodSpec { name: format!("channel.{id}.setPhase"), args: vec![flag("invert")] });
+            methods.push(MethodSpec {
+                name: format!("channel.{id}.setLabel"),
+                args: vec![MethodArg { name: "label".to_string(), kind: ParamType::String }],
+            });
             methods.push(MethodSpec { name: format!("channel.{id}.setMainRoute"), args: vec![flag("routed")] });
             methods.push(MethodSpec {
                 name: format!("channel.{id}.setAutomation"),
@@ -998,6 +1009,9 @@ impl ParamStore for AudioMixerStore {
         if name == "groups" {
             let groups = self.groups.lock().expect("lock poisoned");
             return Some(Value::Array(groups.iter().map(GroupState::to_json).collect()));
+        }
+        if name == "mixState" {
+            return Some(self.mix_state());
         }
         if name == "scenes" {
             let scenes = self.scenes.lock().expect("lock poisoned");
@@ -1959,6 +1973,61 @@ impl AudioMixerStore {
         }
     }
 
+    /// Alles, was die Konsolen-UI anzeigt, in einem Dokument. Reine Sicht auf
+    /// den Zustand (kein Audiozugriff); Live-Werte (Pegel, GR, On-Air,
+    /// AutoMix/Duck-Anteile) kommen über den SSE-Strom.
+    fn mix_state(&self) -> Value {
+        let aux = self.aux.lock().expect("lock poisoned").clone();
+        let media = self.media_status.lock().expect("lock poisoned").clone();
+        let channels: Vec<Value> = self
+            .channels
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .map(|c| {
+                let mut proc = serde_json::Map::new();
+                proc_to_json(&c.proc, &mut proc);
+                let sends: Vec<Value> = aux
+                    .iter()
+                    .filter(|a| a.active)
+                    .map(|a| {
+                        let (enabled, level_db, post, locked) = effective_send(c, a);
+                        serde_json::json!({"auxId": a.id, "enabled": enabled, "levelDb": level_db, "post": post, "locked": locked})
+                    })
+                    .collect();
+                serde_json::json!({
+                    "id": c.id, "label": c.label, "gainDb": c.gain_db, "mute": c.mute, "pfl": c.pfl,
+                    "source": c.source, "proc": proc, "group": c.group,
+                    "autoMix": {"enabled": c.am_enabled, "weight": c.am_weight, "priority": c.am_priority,
+                                "sensitivityDb": c.am_sensitivity_db},
+                    "manual": c.manual, "duckable": c.duckable, "mainRoute": c.main_route,
+                    "sends": sends, "automation": c.automation.to_json(),
+                    "mediaStatus": media.get(&c.id).map_or(Value::Null, media::MediaStatus::to_json),
+                    "follow": {"target": c.follow_target, "mode": c.follow_mode, "override": c.override_enabled,
+                               "useMute": c.follow_use_mute, "onLevelDb": c.follow_on_level_db,
+                               "offLevelDb": c.follow_off_level_db, "transitionMs": c.follow_transition_ms},
+                })
+            })
+            .collect();
+        let ml = *self.master_limiter.lock().expect("lock poisoned");
+        let ctx = self.audio_ctx.lock().expect("lock poisoned").clone();
+        serde_json::json!({
+            "channels": channels,
+            "groups": self.groups.lock().expect("lock poisoned").iter().map(GroupState::to_json).collect::<Vec<_>>(),
+            "duckRules": self.ducks.lock().expect("lock poisoned").iter().map(DuckState::to_json).collect::<Vec<_>>(),
+            "auxBuses": aux.iter().filter(|a| a.active).map(aux_json).collect::<Vec<_>>(),
+            "auxFree": aux.iter().filter(|a| !a.active).count(),
+            "scenes": self.scenes.lock().expect("lock poisoned").iter()
+                .map(|s| serde_json::json!({"id": s.id, "label": s.label})).collect::<Vec<_>>(),
+            "contextRules": self.contexts.lock().expect("lock poisoned").iter().map(ContextRule::to_json).collect::<Vec<_>>(),
+            "audioContext": {"activeSources": ctx.active_sources, "activeScene": ctx.active_scene},
+            "availableSources": self.available_sources.lock().expect("lock poisoned").iter()
+                .map(|s| serde_json::json!({"senderId": s.sender_id, "label": s.label})).collect::<Vec<_>>(),
+            "availableNodes": *self.available_nodes.lock().expect("lock poisoned"),
+            "masterLimiter": {"enabled": ml.enabled, "thresholdDb": ml.threshold_db, "ratio": ml.ratio, "makeupDb": ml.makeup_db},
+        })
+    }
+
     fn get_master_limiter(&self, name: &str) -> Option<Value> {
         let state = *self.master_limiter.lock().expect("lock poisoned");
         match name {
@@ -2102,6 +2171,16 @@ impl AudioMixerStore {
             "setDelay" => {
                 apply_args(&mut ch.proc, args, &[("enabled", "delayEnabled"), ("ms", "delayMs")])?;
                 self.pipeline.set_proc(id.to_string(), ch.proc);
+                Ok(())
+            }
+            "setPhase" => {
+                apply_args(&mut ch.proc, args, &[("invert", "phaseInvert")])?;
+                self.pipeline.set_proc(id.to_string(), ch.proc);
+                Ok(())
+            }
+            "setLabel" => {
+                let l = args.get("label").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or(InvokeError::Unknown)?;
+                ch.label = l.to_string();
                 Ok(())
             }
             "setPan" => {
