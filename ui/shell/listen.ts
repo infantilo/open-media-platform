@@ -11,7 +11,7 @@
 // Fehlt der Dienst (Node-UI ohne Shell), fällt das Panel auf seine
 // eigene Wiedergabe zurück.
 
-import { buildListenWidget } from "./listen-ui.ts";
+import { buildListenControls, buildListenWidget } from "./listen-ui.ts";
 
 const SAMPLE_RATE = 48000;
 const CHANNELS = 2;
@@ -350,9 +350,14 @@ export class ListenService extends EventTarget {
   // Der Monitor-Node ist der Umschalter: Tasten rufen nur dessen
   // selectSource (wie das Panel-Dropdown). Quelle über Label gefunden.
 
-  /** Node, auf den Tasten wirken: laufender Node oder zuletzt benutzter. */
+  /** Vom eingebetteten Panel gesetzt: dieser Monitor-Node ist gemeint. */
+  hintNode: string | null = null;
+  mountControls?: (nodeId: string) => HTMLElement;
+
+  /** Node, auf den Tasten wirken: laufender Node, Panel-Node oder zuletzt benutzter. */
   get targetNode(): string | null {
     if (this.state.nodeId) return this.state.nodeId;
+    if (this.hintNode) return this.hintNode;
     try { return localStorage.getItem(LAST_NODE_KEY); } catch { return null; }
   }
 
@@ -403,11 +408,18 @@ export class ListenService extends EventTarget {
 }
 
 // Einziger Einstiegspunkt: von shell.ts beim Booten aufgerufen.
+/** Vom Node-Panel aufgerufen: baut den vollen Controller zum Einbetten. */
+export function mountListenControls(service: ListenService, nodeId: string): HTMLElement {
+  service.hintNode = nodeId;
+  return buildListenControls(service);
+}
+
 export function installListenService(): ListenService {
   const existing = (window as unknown as { ompListen?: ListenService }).ompListen;
   if (existing) return existing;
   const service = new ListenService();
   (window as unknown as { ompListen?: ListenService }).ompListen = service;
+  service.mountControls = (nodeId: string) => mountListenControls(service, nodeId);
   document.body.appendChild(buildListenWidget(service));
   return service;
 }

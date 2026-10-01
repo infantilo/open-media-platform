@@ -19,6 +19,17 @@ const KNOB_ARC_SPAN = 270;
 const NS = "http://www.w3.org/2000/svg";
 
 const CSS = `
+/* Eigenständige Basis-Optik (specificity 0): im Shadow-DOM eines Node-Panels
+   greift design-tokens.css' button/input-Reset nicht. */
+:where(.omp-listen) button { font-family:var(--omp-font); font-size:var(--omp-font-size-xs); color:var(--omp-text);
+  background:var(--omp-surface-raised); border:1px solid var(--omp-border); border-radius:var(--omp-radius);
+  padding:4px 8px; cursor:pointer; }
+:where(.omp-listen) button:hover { border-color:var(--omp-text-dim); }
+:where(.omp-listen) select, :where(.omp-listen) input:not([type=range]) { font-family:var(--omp-font);
+  font-size:var(--omp-font-size-sm); color:var(--omp-text); background:#060912; border:1px solid var(--omp-border);
+  border-radius:var(--omp-radius); padding:5px 8px; }
+:where(.omp-listen) .omp-btn-primary { background:linear-gradient(90deg,#0fb8e6,#2f8cff 55%,#8b5cf6); border-color:transparent; color:#fff; font-weight:600; }
+.omp-listen { color:var(--omp-text-dim); }
 .omp-listen { position:fixed; left:var(--omp-space-2); bottom:var(--omp-space-2); z-index:1000; display:none;
   flex-direction:column; align-items:flex-start; gap:6px; font-family:var(--omp-font); font-size:var(--omp-font-size-xs);
   color:var(--omp-text-dim); }
@@ -32,6 +43,8 @@ const CSS = `
   background:linear-gradient(180deg,rgba(20,29,48,.98),rgba(8,12,22,.99));
   box-shadow:0 24px 70px rgba(0,0,0,.6),0 0 50px rgba(47,140,255,.1),inset 0 1px 0 rgba(255,255,255,.06); }
 .omp-listen.open .omp-listen-panel { display:flex; }
+.omp-listen.embedded { position:static; display:block; }
+.omp-listen-panel.embedded { display:flex; width:auto; box-shadow:none; border-radius:10px; }
 .omp-listen-sec { font-size:10px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:var(--omp-text-dim); }
 .omp-listen-knobwrap { display:flex; flex-direction:column; align-items:center; gap:4px; }
 .omp-listen-knob { width:150px; height:150px; touch-action:none; cursor:grab; outline:none; user-select:none; }
@@ -148,33 +161,11 @@ function buildKnob(initial: number, onChange: (v: number) => void) {
   return { el: root, paint };
 }
 
-export function buildListenWidget(service: ListenService): HTMLElement {
-  const host = document.createElement("div");
-  host.className = "omp-listen";
-  host.setAttribute("data-role", "listen-widget");
-  const style = document.createElement("style");
-  style.textContent = CSS;
-
-  // --- Streifen (immer sichtbar, solange abgehört wird) ---
-  const bar = document.createElement("div");
-  bar.className = "omp-listen-bar";
-  const expand = document.createElement("button");
-  expand.title = "Abhör-Controller auf-/zuklappen";
-  const title = document.createElement("span");
-  title.className = "title";
-  title.textContent = "ABHÖREN";
-  const barSrc = document.createElement("span");
-  barSrc.className = "omp-listen-src";
-  const status = document.createElement("span");
-  const stopBtn = document.createElement("button");
-  stopBtn.textContent = "■";
-  stopBtn.title = "Abhören beenden";
-  stopBtn.addEventListener("click", () => service.stop());
-  bar.append(expand, title, barSrc, status, stopBtn);
-
-  // --- Panel ---
+function buildControls(service: ListenService): { panel: HTMLElement; repaint: () => void } {
   const panel = document.createElement("div");
   panel.className = "omp-listen-panel";
+  const style = document.createElement("style");
+  style.textContent = CSS;
 
   const knobWrap = document.createElement("div");
   knobWrap.className = "omp-listen-knobwrap";
@@ -375,37 +366,29 @@ export function buildListenWidget(service: ListenService): HTMLElement {
   btnPair.append(mute, dim);
   ctlRow.append(btnPair, syncWrap);
 
-  panel.append(knobWrap, meters, presetHead, presetGrid, editor, hint, modeRow, hpRow, ctlRow);
-
-  host.append(style, panel, bar);
-
-  let open = false;
-  try { open = localStorage.getItem(EXPANDED_KEY) === "1"; } catch { /* egal */ }
-  expand.addEventListener("click", () => {
-    open = !open;
-    try { localStorage.setItem(EXPANDED_KEY, open ? "1" : "0"); } catch { /* egal */ }
-    paint();
-  });
+  panel.append(style, knobWrap, meters, presetHead, presetGrid, editor, hint, modeRow, hpRow, ctlRow);
 
   const mark = (b: HTMLElement, on: boolean) => b.classList.toggle("on", on);
   let raf = 0;
   const frame = () => {
-    const [l, r] = service.levels();
-    for (const [fillEl, v] of [[bars[0], l], [bars[1], r]] as const) {
-      const d = v > 0 ? 20 * Math.log10(v) : -60;
-      fillEl.style.width = `${Math.max(0, Math.min(100, ((d + 60) / 60) * 100))}%`;
+    if (!panel.isConnected) return; // aus dem DOM entfernt: Schleife endet
+    if (panel.offsetParent !== null) {
+      const [l, r] = service.levels();
+      for (const [fillEl, v] of [[bars[0], l], [bars[1], r]] as const) {
+        const d = v > 0 ? 20 * Math.log10(v) : -60;
+        fillEl.style.width = `${Math.max(0, Math.min(100, ((d + 60) / 60) * 100))}%`;
+      }
     }
     raf = requestAnimationFrame(frame);
   };
 
   const paint = () => {
+    if (!panel.isConnected && wasConnected) {
+      service.removeEventListener("change", paint); // Panel wurde entfernt
+      return;
+    }
+    if (panel.isConnected) wasConnected = true;
     const s = service.state;
-    const active = s.nodeId !== null;
-    host.style.display = active ? "flex" : "none";
-    host.classList.toggle("open", open);
-    expand.textContent = open ? "▾" : "🔊";
-    barSrc.textContent = s.sourceLabel;
-    status.textContent = STATUS_TEXT[s.status];
     knob.paint(s.volume);
     db.textContent = s.muted ? "MUTE" : s.volume <= 0 ? "−∞ dB" : `${(40 * Math.log10(s.volume)).toFixed(1)} dB`;
     sync.value = String(s.syncMs);
@@ -426,9 +409,69 @@ export function buildListenWidget(service: ListenService): HTMLElement {
       b.classList.toggle("assigning", assigning);
     });
     cancelAnimationFrame(raf);
-    if (active && open) raf = requestAnimationFrame(frame);
+    if (panel.isConnected) raf = requestAnimationFrame(frame);
   };
+  let wasConnected = false;
   service.addEventListener("change", paint);
-  paint();
+  // Erstes Zeichnen erst, wenn das Element im DOM hängt (isConnected).
+  queueMicrotask(paint);
+  setTimeout(paint, 0);
+  return { panel, repaint: paint };
+}
+
+/** Controller-Inhalt zum Einbetten (z. B. ins Eigenschaften-Fenster des Audiomonitors). */
+export function buildListenControls(service: ListenService): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "omp-listen embedded";
+  const { panel } = buildControls(service);
+  panel.classList.add("embedded");
+  wrap.append(panel);
+  return wrap;
+}
+
+export function buildListenWidget(service: ListenService): HTMLElement {
+  const host = document.createElement("div");
+  host.className = "omp-listen";
+  host.setAttribute("data-role", "listen-widget");
+
+  // --- Streifen (immer sichtbar, solange abgehört wird) ---
+  const bar = document.createElement("div");
+  bar.className = "omp-listen-bar";
+  const expand = document.createElement("button");
+  expand.title = "Abhör-Controller auf-/zuklappen";
+  const title = document.createElement("span");
+  title.className = "title";
+  title.textContent = "ABHÖREN";
+  const barSrc = document.createElement("span");
+  barSrc.className = "omp-listen-src";
+  const status = document.createElement("span");
+  const stopBtn = document.createElement("button");
+  stopBtn.textContent = "■";
+  stopBtn.title = "Abhören beenden";
+  stopBtn.addEventListener("click", () => service.stop());
+  bar.append(expand, title, barSrc, status, stopBtn);
+
+  const { panel, repaint } = buildControls(service);
+  host.append(panel, bar);
+
+  let open = false;
+  try { open = localStorage.getItem(EXPANDED_KEY) === "1"; } catch { /* egal */ }
+  expand.addEventListener("click", () => {
+    open = !open;
+    try { localStorage.setItem(EXPANDED_KEY, open ? "1" : "0"); } catch { /* egal */ }
+    paintBar();
+    repaint();
+  });
+
+  const paintBar = () => {
+    const s = service.state;
+    host.style.display = s.nodeId !== null ? "flex" : "none";
+    host.classList.toggle("open", open);
+    expand.textContent = open ? "▾" : "🔊";
+    barSrc.textContent = s.sourceLabel;
+    status.textContent = STATUS_TEXT[s.status];
+  };
+  service.addEventListener("change", paintBar);
+  paintBar();
   return host;
 }

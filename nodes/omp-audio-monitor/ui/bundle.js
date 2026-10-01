@@ -299,6 +299,9 @@ class OmpAudioMonitorPanel extends HTMLElement {
       this._onListenChange = paint;
       shellListen.addEventListener("change", paint);
       paint();
+      // Voller Abhör-Controller (Poti, Schnellwahl, Kanalmodus, Kopfhörer-Ausgleich)
+      // direkt im Eigenschaften-Fenster — derselbe Dienst wie der Streifen unten links.
+      if (shellListen.mountControls) shadow.append(shellListen.mountControls(nodeId));
       listenBtn.addEventListener("click", () => {
         if (shellListen.state.nodeId === nodeId) shellListen.stop();
         else ensureSource().finally(() => shellListen.start(nodeId));
