@@ -544,6 +544,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Instanz-Launcher — ein Workflow-Start ist nichts anderes als
 	// mehrere gebündelte Instanz-Starts).
 	mux.HandleFunc("GET /api/v1/workflows", g.requireAuth(handleListWorkflows(workflowSvc)))
+	mux.HandleFunc("GET /api/v1/workflows/runs", g.requireAuth(handleWorkflowRuns(options.workflowRuns, workflowSvc)))
 	mux.HandleFunc("GET /api/v1/workflows/{id}", g.requireAuth(handleGetWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows", g.requireVerbGlobal(authz.VerbConfigure, handleCreateWorkflow(workflowSvc)))
 	mux.HandleFunc("PUT /api/v1/workflows/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleUpdateWorkflow(workflowSvc)))

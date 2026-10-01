@@ -36,6 +36,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/groups"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/health"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/hosts"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/housekeeping"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/httpapi"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/ioports"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
@@ -708,6 +709,18 @@ func main() {
 	// und prüft vor jedem Start die Ressourcenlage der Ziel-Hosts
 	// (placementEngine.CheckHost).
 	workflowSvc := workflows.NewService(workflows.NewStore(database), store, graphSvc, launcherSvc, hub, nodeHTTPClient, placementEngine, authzStore)
+	// Lauf-Historie (Scheduler: geplant vs. real) samt täglicher Bereinigung.
+	workflowRunStore := workflows.NewRunStore(database)
+	workflowSvc.SetRunRecorder(workflowRunStore)
+	workflowSvc.ReconcileRuns()
+	go workflowRunStore.RunRetention(ctx, cfg.WorkflowRunRetentionDays)
+	// Aufräumen der übrigen unbegrenzt wachsenden Tabellen (Outbox, Host-
+	// Einmaltokens, abgeschlossene Prozess-Ausführungen, Alarm-Quittierungen).
+	go housekeeping.New(database, housekeeping.Config{
+		OutboxDays:           cfg.OutboxRetentionDays,
+		HostTokenDays:        cfg.HostTokenRetentionDays,
+		ProcessExecutionDays: cfg.ProcessExecutionRetentionDays,
+	}, alarmacks.NewStore(database)).Run(ctx)
 	// D13: ioPortAdapter reshapes *ioports.Store.GetClaim (liefert
 	// ioports.Claim) auf die schlanken Klartext-Strings, die
 	// workflows.IOPortClaimer erwartet — gleiches Adapter-Muster wie
@@ -897,7 +910,7 @@ func main() {
 	}
 	updateSvc := updates.New(cfg.UpdateDir, cfg.UpdatePubKeyFile, cfg.UpdateAllowUnsigned, runtime.GOOS+"/"+runtime.GOARCH, 0)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist))
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist))
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

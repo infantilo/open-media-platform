@@ -164,6 +164,16 @@ type Config struct {
 	// AuditRetentionDays (<= 0 deaktiviert die Löschung), zusätzlich der
 	// JetStream-Stream-MaxAge (logbus.NewPublisher).
 	LogRetentionHours int
+	// WorkflowRunRetentionDays: Aufbewahrung der Lauf-Historie der Workflows
+	// (Tabelle workflow_runs, Scheduler: geplant vs. real); <= 0 löscht nie.
+	WorkflowRunRetentionDays int
+	// OutboxRetentionDays / HostTokenRetentionDays / ProcessExecutionRetentionDays:
+	// Aufbewahrung versendeter Outbox-Zeilen, verbrauchter Host-Einmaltokens
+	// bzw. abgeschlossener Prozess-Ausführungen (internal/housekeeping);
+	// <= 0 löscht nie.
+	OutboxRetentionDays           int
+	HostTokenRetentionDays        int
+	ProcessExecutionRetentionDays int
 	// BackupDir/PatroniNodes/BackupKeep (Nutzerwunsch 2026-08-13: Backup
 	// über das Browser-UI) — spiegeln exakt deploy/dev/backup-omp.shs
 	// BACKUP_DIR/BACKUP_KEEP, beide Wege teilen sich denselben Ordner und
@@ -300,9 +310,13 @@ func Load() Config {
 		// dupliziert statt importiert, gleiches Muster wie die
 		// Placement-Defaults oben — config bleibt frei von
 		// Business-Logik-Abhängigkeiten).
-		AuditRetentionDays: getEnvInt("OMP_AUDIT_RETENTION_DAYS", 90),
-		LogRetentionHours:  getEnvInt("OMP_LOG_RETENTION_HOURS", 72),
-		BackupDir:          getEnv("OMP_BACKUP_DIR", "../.backups"),
+		AuditRetentionDays:            getEnvInt("OMP_AUDIT_RETENTION_DAYS", 90),
+		LogRetentionHours:             getEnvInt("OMP_LOG_RETENTION_HOURS", 72),
+		WorkflowRunRetentionDays:      getEnvInt("OMP_WORKFLOW_RUN_RETENTION_DAYS", 30),
+		OutboxRetentionDays:           getEnvInt("OMP_OUTBOX_RETENTION_DAYS", 14),
+		HostTokenRetentionDays:        getEnvInt("OMP_HOST_TOKEN_RETENTION_DAYS", 7),
+		ProcessExecutionRetentionDays: getEnvInt("OMP_PROCESS_EXECUTION_RETENTION_DAYS", 180),
+		BackupDir:                     getEnv("OMP_BACKUP_DIR", "../.backups"),
 		PatroniNodes: getEnv("OMP_POSTGRES_PATRONI_NODES",
 			"omp-patroni-1=http://127.0.0.1:8008,omp-patroni-2=http://127.0.0.1:8018,omp-patroni-3=http://127.0.0.1:8028"),
 		// Default spiegelt backup-omp.shs BACKUP_KEEP=14 (bewusst hier

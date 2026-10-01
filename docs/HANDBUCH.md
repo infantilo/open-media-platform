@@ -355,6 +355,22 @@ Skriptpaar wurde bei seiner Einführung einmal echt durchgespielt
 (Backup → Testnutzer angelegt → Restore → Testnutzer wieder weg,
 dokumentiert in `docs/decisions.md`), nicht nur gelesen/geschrieben.
 
+## 5a. Aufbewahrung und automatisches Aufräumen
+
+Alles, was mit der Zeit wächst, wird automatisch gelöscht — beim Start und danach täglich. Die Dauer ist je Bereich per Umgebungsvariable des Orchestrators einstellbar; `0` oder weniger schaltet das Löschen für den Bereich ab.
+
+| Bereich | Variable | Standard |
+|---|---|---|
+| Zentrales Log (`logs`) | `OMP_LOG_RETENTION_HOURS` | 72 Stunden |
+| Audit-Log und fachliches Audit | `OMP_AUDIT_RETENTION_DAYS` | 90 Tage |
+| Workflow-Läufe (Scheduler: geplant gegen real) | `OMP_WORKFLOW_RUN_RETENTION_DAYS` | 30 Tage |
+| Versendete Outbox-Ereignisse | `OMP_OUTBOX_RETENTION_DAYS` | 14 Tage |
+| Verbrauchte/abgelaufene Host-Einmaltokens | `OMP_HOST_TOKEN_RETENTION_DAYS` | 7 Tage |
+| Abgeschlossene Prozess-Ausführungen (samt Schritten, Aufgaben und Asset-Verknüpfungen) | `OMP_PROCESS_EXECUTION_RETENTION_DAYS` | 180 Tage |
+| Quittierte/maskierte Alarme | fest | 30 Tage bzw. bis Ablauf |
+
+Nicht automatisch gelöscht werden Nutzerdaten und Betriebsstand: Workflows, Snapshots, Layouts, Assets, Prozess-Definitionen, Hosts, Katalog, Verbrauchsprofile und Instanzen. Noch nicht versendete Outbox-Ereignisse und noch laufende Workflow-Läufe bleiben immer erhalten. Die NATS-Streams (Domain-Ereignisse, Logs) begrenzt NATS selbst über ihre Höchstdauer.
+
 ## 5b. System-Update (Browser-Upload)
 
 Neue Versionen des Servers lassen sich ohne Zugriff auf die Maschine

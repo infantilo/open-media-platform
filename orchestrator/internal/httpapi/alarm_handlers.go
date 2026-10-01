@@ -36,6 +36,13 @@ type handlerOptions struct {
 	updateSup       UpdateSupervisor
 	updateBackup    BackupService
 	updateDist      UpdateDistributor
+	workflowRuns    WorkflowRunReader
+}
+
+// WithWorkflowRuns aktiviert GET /api/v1/workflows/runs (Lauf-Historie für
+// den Scheduler: geplant vs. real).
+func WithWorkflowRuns(r WorkflowRunReader) HandlerOption {
+	return func(o *handlerOptions) { o.workflowRuns = r }
 }
 
 // WithAlarmAckStore aktiviert /api/v1/alarms/acks.

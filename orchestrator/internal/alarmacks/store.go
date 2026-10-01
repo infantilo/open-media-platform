@@ -42,6 +42,20 @@ type Store struct {
 
 func NewStore(database *sql.DB) *Store { return &Store{db: database} }
 
+// PurgeStale löscht abgelaufene sowie über die Retention hinaus alte
+// Einträge (periodisch durch internal/housekeeping, zusätzlich zur
+// opportunistischen Bereinigung in List).
+func (s *Store) PurgeStale() (int64, error) {
+	res, err := s.db.Exec(
+		`DELETE FROM alarm_acks WHERE (expires_at IS NOT NULL AND expires_at <= now()) OR created_at < $1`,
+		time.Now().Add(-Retention),
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // List liefert alle gültigen Einträge und räumt dabei abgelaufene sowie
 // über die Retention hinaus alte auf (opportunistisch).
 func (s *Store) List() ([]Ack, error) {

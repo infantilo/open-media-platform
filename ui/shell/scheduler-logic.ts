@@ -193,6 +193,65 @@ export interface ResourceModel {
   manualInstances?: ResManual[];
 }
 
+// ---- Lauf-Historie (geplant vs. real) -------------------------------------
+
+// Ein tatsächlicher Lauf eines Workflows (GET /api/v1/workflows/runs).
+export interface RunRec {
+  id: number;
+  workflowId: string;
+  workflowName: string;
+  startedAt: string;
+  endedAt?: string; // fehlt = läuft noch
+  startSource: string; // manual | schedule | adopted | restored
+  endReason?: string; // manual | scheduled | failed | unknown
+}
+
+export interface RunInterval {
+  start: number; // ms
+  end: number | null; // null = läuft noch
+  rec: RunRec;
+}
+
+export interface RunHistory {
+  // Ab hier existiert eine Aufzeichnung; davor ist nichts bekannt und die
+  // Auswertung fällt auf den Plan zurück.
+  trackingSince: number | null;
+  byWf: Map<string, RunInterval[]>;
+}
+
+export function buildRunHistory(runs: RunRec[], trackingSince?: string): RunHistory {
+  const byWf = new Map<string, RunInterval[]>();
+  for (const r of runs) {
+    const arr = byWf.get(r.workflowId) ?? [];
+    arr.push({ start: Date.parse(r.startedAt), end: r.endedAt ? Date.parse(r.endedAt) : null, rec: r });
+    byWf.set(r.workflowId, arr);
+  }
+  return { trackingSince: trackingSince ? Date.parse(trackingSince) : null, byWf };
+}
+
+// Lief der Workflow zum Zeitpunkt t (ms) laut Aufzeichnung? null = dazu gibt
+// es keine Aufzeichnung (vor Beginn der Historie) — Aufrufer nimmt den Plan.
+export function runActiveAt(h: RunHistory | undefined, wfId: string, t: number, now: number): boolean | null {
+  if (!h || h.trackingSince === null || t < h.trackingSince) return null;
+  for (const iv of h.byWf.get(wfId) ?? []) {
+    if (iv.start <= t && t < (iv.end ?? now)) return true;
+  }
+  return false;
+}
+
+export interface PlannedWindow {
+  start: Date | null; // letzter geplanter Start vor/bei dem echten Start (bis 1 Tag zurück)
+  stop: Date | null; // erster geplanter Stop ab dem echten Start (bis 8 Tage voraus)
+}
+
+// Geplantes Fenster zu einem echten Lauf: für den Vergleich geplante gegen
+// reale Zeit ("vorzeitig beendet", "später gestartet").
+export function plannedWindowFor(schedules: Schedule[], runStart: Date): PlannedWindow {
+  const before = eventsBetween(schedules, addDays(runStart, -1), runStart).filter((e) => e.action === "start");
+  const after = eventsBetween(schedules, runStart, addDays(runStart, 8)).filter((e) => e.action === "stop");
+  return { start: before.length ? before[before.length - 1].t : null, stop: after.length ? after[0].t : null };
+}
+
 export const AUTO_LANE = "auto";
 
 export interface Contribution {
@@ -248,6 +307,7 @@ export function computeTimeline(
   slots: Date[],
   slotMinutes: number,
   now: Date,
+  runs?: RunHistory,
 ): Timeline {
   const lanes: Timeline = new Map();
   const laneIds = [AUTO_LANE, ...model.hosts.map((h) => h.id)];
@@ -258,7 +318,10 @@ export function computeTimeline(
     const at = slotStart.getTime() <= now.getTime() && now.getTime() < slotEnd ? now : slotStart;
     for (const wf of model.workflows) {
       const schedules = schedulesByWf.get(wf.id) ?? [];
-      if (!activeAt(schedules, wf.status, at, now)) continue;
+      // Vergangenheit: was tatsächlich lief (Aufzeichnung) schlägt den Plan —
+      // z. B. ein vorzeitig von Hand beendeter Lauf belegt danach nichts mehr.
+      const real = at.getTime() < now.getTime() ? runActiveAt(runs, wf.id, at.getTime(), now.getTime()) : null;
+      if (!(real ?? activeAt(schedules, wf.status, at, now))) continue;
       for (const role of wf.roles) {
         const laneId = role.hostId && lanes.has(role.hostId) ? role.hostId : AUTO_LANE;
         const slot = lanes.get(laneId)![i];

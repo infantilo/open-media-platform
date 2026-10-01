@@ -43,6 +43,10 @@ import {
   fmtCores,
   fmtMbps,
   workflowDemand,
+  buildRunHistory,
+  plannedWindowFor,
+  type RunHistory,
+  type RunRec,
   isOver,
   laneCapacity,
   type Level,
@@ -81,7 +85,7 @@ const REFRESH_EVENT_TYPES = new Set(["workflow.updated", "lost-events"]);
 const SNAP_MINUTES = 30;
 const MIN_DURATION_MINUTES = 30;
 const EDGE_PX = 8; // Randbereich eines Balkens, der als Resize-Griff zählt
-const ROW_HEIGHT_PX = 34;
+const ROW_HEIGHT_PX = 40;
 const BAR_HEIGHT_PX = 22;
 
 type ViewMode = "day" | "week" | "month";
@@ -195,6 +199,8 @@ class SchedulerView extends HTMLElement {
   #resRaf = 0;
   // Pro Workflow: Slot-Index -> Engpass-Beschreibung (Markierung der Balken).
   #wfOver = new Map<string, Map<number, string[]>>();
+  // Tatsächliche Läufe im sichtbaren Zeitraum (geplant vs. real).
+  #runs: RunHistory | undefined;
 
   connectedCallback() {
     // position:relative ist Pflicht: #openAddMenu positioniert das
@@ -230,13 +236,21 @@ class SchedulerView extends HTMLElement {
   async #poll() {
     if (this.#dragging) return;
     try {
-      const [res, resModel] = await Promise.all([
+      const dates = this.#visibleDates();
+      const runsFrom = startOfDay(dates[0]).toISOString();
+      const runsTo = addDays(startOfDay(dates[dates.length - 1]), 1).toISOString();
+      const [res, resModel, resRuns] = await Promise.all([
         apiFetch("/api/v1/workflows"),
         apiFetch("/api/v1/scheduler/resources").catch(() => null),
+        apiFetch(`/api/v1/workflows/runs?from=${encodeURIComponent(runsFrom)}&to=${encodeURIComponent(runsTo)}`).catch(() => null),
       ]);
       if (!res.ok) return;
       this.#workflows = await res.json();
       if (resModel && resModel.ok) this.#model = (await resModel.json()) as ResourceModel;
+      if (resRuns && resRuns.ok) {
+        const body = (await resRuns.json()) as { trackingSince?: string; runs: RunRec[] };
+        this.#runs = buildRunHistory(body.runs ?? [], body.trackingSince);
+      }
       this.#render();
     } catch {
       // Orchestrator kurzzeitig nicht erreichbar — nächster Poll holt es auf.
@@ -265,11 +279,13 @@ class SchedulerView extends HTMLElement {
       this.#anchorDate = startOfDay(d);
     }
     this.#render();
+    void this.#poll();
   }
 
   #setViewMode(mode: ViewMode) {
     this.#viewMode = mode;
     this.#render();
+    void this.#poll();
   }
 
   async #persist(wf: Workflow, schedules: Schedule[]) {
@@ -406,6 +422,7 @@ class SchedulerView extends HTMLElement {
     todayBtn.addEventListener("click", () => {
       this.#anchorDate = startOfDay(new Date());
       this.#render();
+      void this.#poll();
     });
     toolbar.appendChild(todayBtn);
 
@@ -528,7 +545,7 @@ class SchedulerView extends HTMLElement {
     for (const wf of this.#workflows) {
       map.set(wf.id, override && override.wfId === wf.id ? override.schedules : wf.definition.schedules ?? []);
     }
-    return computeTimeline(this.#model, map, this.#slotsFor(dates), SNAP_MINUTES, new Date());
+    return computeTimeline(this.#model, map, this.#slotsFor(dates), SNAP_MINUTES, new Date(), this.#runs);
   }
 
   // Slot-Index -> Engpass-Text je Workflow, nur für die Lanes, auf denen der
@@ -906,6 +923,87 @@ class SchedulerView extends HTMLElement {
     track.appendChild(line);
   }
 
+  // Reale Läufe als schmale Spur am unteren Rand der Zeile, unter den
+  // geplanten Balken: grün = wie geplant/regulär beendet bzw. läuft noch,
+  // orange = von Hand VOR dem geplanten Stop beendet (die fehlende Zeit bis
+  // zum geplanten Stop schraffiert), rot = fehlgeschlagen, grau = Ende
+  // unbekannt. Tooltip: echte vs. geplante Zeiten.
+  #renderRunLane(track: HTMLElement, wf: Workflow, dates: Date[], totalMinutes: number) {
+    const hist = this.#runs;
+    if (!hist) return;
+    const runs = hist.byWf.get(wf.id) ?? [];
+    if (runs.length === 0) return;
+    const rangeStart = startOfDay(dates[0]).getTime();
+    const rangeEnd = rangeStart + totalMinutes * 60000;
+    const now = Date.now();
+    const schedules = wf.definition.schedules ?? [];
+    const laneTop = ROW_HEIGHT_PX - 7;
+    const fmtT = (t: number) => {
+      const d = new Date(t);
+      return `${dates.length > 1 || !sameCalendarDate(d, dates[0]) ? fmtDayLabel(d) + " " : ""}${fmtMinutes(d.getHours() * 60 + d.getMinutes())}`;
+    };
+    const dur = (ms: number) => {
+      const m = Math.max(0, Math.round(ms / 60000));
+      return `${m >= 60 ? `${Math.floor(m / 60)} h ` : ""}${m % 60} min`.replace(/^0 h /, "");
+    };
+    const SRC: Record<string, string> = { manual: "von Hand", schedule: "per Zeitplan", adopted: "übernommen", restored: "beim Orchestrator-Start vorgefunden" };
+    const END: Record<string, string> = { manual: "von Hand gestoppt", scheduled: "per Zeitplan gestoppt", failed: "fehlgeschlagen", unknown: "Ende nicht beobachtet" };
+    const place = (from: number, to: number) => {
+      const a = Math.max(from, rangeStart), b = Math.min(to, rangeEnd);
+      if (b <= a) return null;
+      return { left: ((a - rangeStart) / 60000 / totalMinutes) * 100, width: Math.max(0.15, ((b - a) / 60000 / totalMinutes) * 100) };
+    };
+    for (const iv of runs) {
+      const end = iv.end ?? now;
+      const pos = place(iv.start, end);
+      if (!pos) continue;
+      const planned = plannedWindowFor(schedules, new Date(iv.start));
+      const plannedStop = planned.stop?.getTime() ?? null;
+      const early = iv.end !== null && iv.rec.endReason === "manual" && plannedStop !== null && plannedStop - iv.end > 60000;
+      const color = iv.end === null
+        ? "var(--omp-success, #5cb85c)"
+        : iv.rec.endReason === "failed"
+        ? "var(--omp-error, #e55)"
+        : iv.rec.endReason === "unknown"
+        ? "rgba(160,160,160,0.7)"
+        : early
+        ? "var(--omp-warning, #e0a030)"
+        : "var(--omp-success, #5cb85c)";
+      const lines = [`Lauf: ${fmtT(iv.start)} (${SRC[iv.rec.startSource] ?? iv.rec.startSource}) → ${iv.end === null ? "läuft noch" : `${fmtT(iv.end)} (${END[iv.rec.endReason ?? ""] ?? iv.rec.endReason ?? "beendet"})`}`,
+        `Dauer: ${dur(end - iv.start)}`];
+      if (planned.start || planned.stop) {
+        lines.push(`Geplant: ${planned.start ? fmtT(planned.start.getTime()) : "—"} → ${planned.stop ? fmtT(planned.stop.getTime()) : "—"}`);
+      }
+      if (planned.start && Math.abs(iv.start - planned.start.getTime()) > 60000) {
+        const d = iv.start - planned.start.getTime();
+        lines.push(`Start ${dur(Math.abs(d))} ${d > 0 ? "später" : "früher"} als geplant`);
+      }
+      if (early) lines.push(`⚠ ${dur(plannedStop! - iv.end!)} vor dem geplanten Stop beendet`);
+      if (iv.end !== null && plannedStop !== null && iv.end - plannedStop > 60000) lines.push(`${dur(iv.end - plannedStop)} nach dem geplanten Stop beendet`);
+      const el = document.createElement("div");
+      el.dataset.role = "run-bar";
+      el.style.cssText =
+        `position:absolute;top:${laneTop}px;height:5px;left:${pos.left}%;width:${pos.width}%;` +
+        `background:${color};border-radius:2px;z-index:1;`;
+      el.title = lines.join("\n");
+      track.appendChild(el);
+      if (early) {
+        // Schraffiert: die geplante, aber nicht gelaufene Restzeit.
+        const miss = place(iv.end!, plannedStop!);
+        if (miss) {
+          const gap = document.createElement("div");
+          gap.dataset.role = "run-missed";
+          gap.style.cssText =
+            `position:absolute;top:${laneTop}px;height:5px;left:${miss.left}%;width:${miss.width}%;` +
+            "background-image:repeating-linear-gradient(45deg, var(--omp-warning, #e0a030) 0 2px, transparent 2px 5px);" +
+            "opacity:0.6;border-radius:2px;z-index:1;";
+          gap.title = el.title;
+          track.appendChild(gap);
+        }
+      }
+    }
+  }
+
   #renderWorkflowRow(wf: Workflow, dates: Date[], totalMinutes: number): HTMLElement {
     const row = document.createElement("div");
     row.style.cssText = `display:flex;align-items:stretch;height:${ROW_HEIGHT_PX}px;`;
@@ -943,6 +1041,7 @@ class SchedulerView extends HTMLElement {
     for (const bar of buildBarsForDates(schedules, dates)) {
       track.appendChild(this.#renderBar(wf, bar, dates.length, totalMinutes));
     }
+    this.#renderRunLane(track, wf, dates, totalMinutes);
 
     const addBtn = document.createElement("button");
     addBtn.textContent = "+";

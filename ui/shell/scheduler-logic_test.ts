@@ -1,6 +1,9 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import {
   activeAt,
+  buildRunHistory,
+  plannedWindowFor,
+  runActiveAt,
   AUTO_LANE,
   computeTimeline,
   findBottlenecks,
@@ -324,4 +327,39 @@ Deno.test("workflowDemand: Summe der Rollen, unbekannte Rollen gezählt statt al
   assertEquals([d.cpuCores, d.rssBytes, d.netRxMbps, d.netTxMbps, d.gpuPercent, d.gpuMemBytes, d.roles, d.unknownRoles], [2, 2 * GB, 100, 870, 40, 2 * GB, 3, 1]);
   assertEquals(workflowDemand(m, "nope"), null);
   assertEquals(workflowDemand(null, "w"), null);
+});
+
+Deno.test("Lauf-Historie: Vergangenheit nach Aufzeichnung, davor und Zukunft nach Plan", () => {
+  const m: ResourceModel = {
+    thresholds: { cpu: 85, mem: 90 },
+    hosts: [{ id: "h", label: "H", online: true, numCpu: 8, memTotalBytes: 16 * GB, capacityKnown: true }],
+    workflows: [{ id: "w", name: "W", status: "stopped", roles: [{ name: "A", nodeType: "a", hostId: "h", cpuCores: 2, cpuAvgCores: 1, rssBytes: GB, known: true }] }],
+  };
+  // Plan: täglich 09:00-12:00. Real heute: 09:00 gestartet, 10:00 von Hand beendet.
+  const scheds = new Map<string, Schedule[]>([["w", [daily("start", "09:00"), daily("stop", "12:00")]]]);
+  const now = at(2026, 10, 1, 15);
+  const hist = buildRunHistory(
+    [{ id: 1, workflowId: "w", workflowName: "W", startedAt: at(2026, 10, 1, 9).toISOString(), endedAt: at(2026, 10, 1, 10).toISOString(), startSource: "schedule", endReason: "manual" }],
+    at(2026, 9, 30, 0).toISOString(),
+  );
+  const slots = [at(2026, 10, 1, 9, 30), at(2026, 10, 1, 10, 30), at(2026, 10, 1, 11, 0), at(2026, 9, 29, 10, 0), at(2026, 10, 2, 10, 0)];
+  const tl = computeTimeline(m, scheds, slots, 30, now, hist).get("h")!;
+  assertEquals(tl[0].cpuCores, 2); // lief wirklich
+  assertEquals(tl[1].cpuCores, 0); // geplant bis 12:00, aber real schon um 10:00 beendet
+  assertEquals(tl[2].cpuCores, 0);
+  assertEquals(tl[3].cpuCores, 2); // vor Beginn der Aufzeichnung: Plan
+  assertEquals(tl[4].cpuCores, 2); // Zukunft: Plan
+  // ohne Historie unverändert nach Plan
+  assertEquals(computeTimeline(m, scheds, slots, 30, now).get("h")![1].cpuCores, 2);
+  // offener Lauf zählt bis jetzt
+  const open = buildRunHistory([{ id: 2, workflowId: "w", workflowName: "W", startedAt: at(2026, 10, 1, 13).toISOString(), startSource: "manual" }], at(2026, 9, 30, 0).toISOString());
+  assertEquals(runActiveAt(open, "w", at(2026, 10, 1, 14).getTime(), now.getTime()), true);
+  assertEquals(runActiveAt(open, "w", at(2026, 10, 1, 12).getTime(), now.getTime()), false);
+});
+
+Deno.test("plannedWindowFor: geplanter Start/Stop zu einem echten Lauf", () => {
+  const s = [daily("start", "09:00"), daily("stop", "12:00")];
+  const w = plannedWindowFor(s, at(2026, 10, 1, 9, 2));
+  assertEquals([w.start?.getHours(), w.stop?.getHours()], [9, 12]);
+  assertEquals(plannedWindowFor([], at(2026, 10, 1, 9)).stop, null);
 });

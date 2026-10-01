@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
@@ -282,6 +283,10 @@ type IOPortClaimer interface {
 // Service verwaltet Workflow-Definitionen und führt Bundle-Start/-Stop
 // aus (ARCHITECTURE.md §6.2, UMSETZUNG.md D7 Teil 1/Teil 2).
 type Service struct {
+	// runs/stopCause: Lauf-Historie (runs.go). stopCause merkt sich je
+	// Workflow, ob ein laufender Stop von Hand oder vom Zeitplan kam.
+	runs      RunRecorder
+	stopCause sync.Map
 	store     workflowStore
 	nodes     NodeLister
 	graph     GraphService
@@ -416,6 +421,9 @@ func (s *Service) Create(name string, def Definition, adopt map[string]RoleRunti
 	}
 	if err := s.store.Put(wf); err != nil {
 		return Workflow{}, err
+	}
+	if len(adopt) > 0 {
+		s.runOpen(wf, RunSourceAdopted)
 	}
 	// S2 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md), live-verifiziert
 	// per CDP gefunden: Create() fehlte bisher als einziger Schreibpfad
@@ -704,6 +712,7 @@ func (s *Service) Start(ctx context.Context, id string) error {
 		}
 		return err
 	}
+	s.runOpen(wf, triggerOf(ctx))
 	s.publish(wf)
 
 	safego.Go("workflows.runStart", func() { s.runStart(wf, ioAssignments) })
@@ -1672,6 +1681,7 @@ func (s *Service) nodeForRole(wf Workflow, role string) (registry.NodeView, bool
 }
 
 func (s *Service) fail(wf Workflow, reason string) {
+	s.runClose(wf.ID, RunEndFailed)
 	wf.Status = StatusFailed
 	wf.Error = reason
 	wf.UpdatedAt = time.Now()
@@ -1723,6 +1733,11 @@ func (s *Service) stopOrPause(ctx context.Context, id string, confirm bool, targ
 		return ErrConfirmationRequired
 	}
 
+	cause := RunEndManual
+	if triggerOf(ctx) == RunSourceSchedule {
+		cause = RunEndScheduled
+	}
+	s.stopCause.Store(wf.ID, cause)
 	wf.Status = StatusStopping
 	if targetStatus == StatusPaused {
 		wf.Status = StatusPausing
@@ -1836,6 +1851,11 @@ func (s *Service) runStop(wf Workflow, targetStatus string) {
 	if err := s.store.UpdateRuntime(wf); err != nil {
 		slog.Warn("workflows: failed to persist stopped state", "id", wf.ID, "error", err)
 	}
+	reason := RunEndManual
+	if c, ok := s.stopCause.LoadAndDelete(wf.ID); ok {
+		reason = c.(string)
+	}
+	s.runClose(wf.ID, reason)
 	s.publish(wf)
 }
 
