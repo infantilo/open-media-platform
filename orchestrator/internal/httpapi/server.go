@@ -726,6 +726,16 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Rechteverwaltung, auch als Vorbereitung für eine spätere Windows-
 	// Active-Directory-Anbindung) — global VerbAdmin, dieselbe Stufe wie
 	// Rollenbindungen/Organisationen/Nutzerverwaltung selbst.
+	if options.playout != nil {
+		mux.HandleFunc("GET /api/v1/playout/channels", g.requireAuth(handleListPlayoutChannels(options.playout)))
+		mux.HandleFunc("POST /api/v1/playout/channels", g.requireVerbGlobal(authz.VerbConfigure, handleCreatePlayoutChannel(options.playout, options.domainAudit)))
+		mux.HandleFunc("GET /api/v1/playout/channels/{id}", g.requireAuth(handleGetPlayoutChannel(options.playout)))
+		mux.HandleFunc("PUT /api/v1/playout/channels/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleUpdatePlayoutChannel(options.playout, options.domainAudit)))
+		mux.HandleFunc("DELETE /api/v1/playout/channels/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleDeletePlayoutChannel(options.playout, options.domainAudit)))
+		mux.HandleFunc("GET /api/v1/playout/channels/{id}/state", g.requireAuth(handleGetPlayoutState(options.playout, authzStore)))
+		mux.HandleFunc("PUT /api/v1/playout/channels/{id}/state", g.requireAuth(handlePutPlayoutState(options.playout, authzStore)))
+		mux.HandleFunc("POST /api/v1/playout/channels/{id}/executions", g.requireAuth(handleRecordPlayoutExecution(options.playout, authzStore)))
+	}
 	if options.groups != nil {
 		mux.HandleFunc("GET /api/v1/groups", g.requireVerbGlobal(authz.VerbAdmin, handleListGroups(options.groups)))
 		mux.HandleFunc("POST /api/v1/groups", g.requireVerbGlobal(authz.VerbAdmin, handleCreateGroup(options.groups, options.domainAudit)))

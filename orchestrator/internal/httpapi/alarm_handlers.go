@@ -31,6 +31,7 @@ type handlerOptions struct {
 	storageBackends StorageBackendService
 	organizations   OrganizationService
 	groups          GroupService
+	playout         PlayoutService
 	ffmpegTools     FFmpegToolsService
 	updates         UpdateService
 	updateSup       UpdateSupervisor
@@ -97,6 +98,11 @@ func WithOrganizations(svc OrganizationService) HandlerOption {
 // handleDeleteUser/handleDeleteRoleBinding) — fehlt die Option, bleiben
 // die Endpunkte inaktiv und die Selbstschutz-/isAdmin-Prüfungen
 // beschränken sich auf direkte Bindungen (unverändertes Verhalten).
+// WithPlayout verdrahtet die Playout-Domäne (Kapitel 27 / P1a).
+func WithPlayout(svc PlayoutService) HandlerOption {
+	return func(o *handlerOptions) { o.playout = svc }
+}
+
 func WithGroups(svc GroupService) HandlerOption {
 	return func(o *handlerOptions) { o.groups = svc }
 }
