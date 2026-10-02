@@ -647,6 +647,10 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       else if (item.eventType === "HOLD") entry.eventType = "hold";
       else if (item.eventType === "JUMP") entry.eventType = "jump"; // jumpToIndex setzt reorderItems
       if (item.sourceSelector) entry.sourceSelector = item.sourceSelector;
+      // Kapitel 27 / P5: Audio-Absicht gehört in den load()-Roundtrip.
+      if (item.audio && item.audio.intent && Object.keys(item.audio.intent).some((k) => item.audio.intent[k] != null && item.audio.intent[k].length !== 0)) {
+        entry.audio = item.audio.intent;
+      }
       // Kapitel 6 Teil 4: dieselbe Lücke ein drittes Mal proaktiv vermieden.
       if (item.transition) entry.transition = item.transition;
       if (item.transitionRateFrames != null) entry.transitionRateFrames = item.transitionRateFrames;
@@ -821,6 +825,26 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         }
         call("setChildren", { itemId: item.id, childrenJson: JSON.stringify(parsed) }).then(poll);
       });
+      // Kapitel 27 / P5: Audio-Wahl eines Live-Items. Angeboten werden nur die
+      // Audio-Capabilities der AUFGELÖSTEN Quelle (nicht alle globalen Presets);
+      // jeder Klick schaltet zur nächsten, nach der letzten zurück auf „Auto“
+      // (Quell-Default bzw. einzige Capability, Spec §260).
+      const audioBtn = document.createElement("button");
+      audioBtn.style.display = "none";
+      audioBtn.addEventListener("click", () => {
+        const a = item.audio;
+        if (!a) return;
+        const ids = (a.capabilities || []).map((c) => c.id);
+        const cur = a.intent && a.intent.capability ? a.intent.capability : null;
+        // Gespeicherte, nicht (mehr) angebotene Capability: erster Klick → erste angebotene.
+        const idx = cur === null ? -1 : ids.indexOf(cur);
+        const nextIdx = idx + 1;
+        const next = nextIdx < ids.length ? ids[nextIdx] : null;
+        const intent = Object.assign({}, a.intent || {});
+        if (next === null) delete intent.capability;
+        else intent.capability = next;
+        call("setAudio", { itemId: item.id, audioJson: JSON.stringify(intent) }).then(poll);
+      });
       const cueBtn = document.createElement("button");
       cueBtn.addEventListener("click", () => call("cue", { itemId: item.id }).then(poll));
       const removeBtn = document.createElement("button");
@@ -830,7 +854,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         if (!(await confirmDialog(`„${item.label}" wirklich aus dem Rundown entfernen?`, "Entfernen"))) return;
         call("remove", { itemId: item.id }).then(poll);
       });
-      actionsEl.append(startTypeBtn, transitionBtn, childrenBtn, cueBtn, removeBtn);
+      actionsEl.append(startTypeBtn, transitionBtn, childrenBtn, audioBtn, cueBtn, removeBtn);
 
       // Touch-Fund 2026-09-07 (Kapitel 6 Teil 1, unabhängig vom Touch-
       // Audit gefunden): natives HTML5-Drag&Drop (dragstart/dragover/drop)
@@ -886,7 +910,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const setItem = (fresh) => {
         item = fresh;
       };
-      return { el, setItem, dragEl, numEl, iconEl, titleEl, durEl, timeEl, remTxt, remBarInner, availEl, startTypeBtn, transitionBtn, childrenBtn, cueBtn, removeBtn };
+      return { el, setItem, dragEl, numEl, iconEl, titleEl, durEl, timeEl, remTxt, remBarInner, availEl, startTypeBtn, transitionBtn, childrenBtn, audioBtn, cueBtn, removeBtn };
     };
 
     // Formatiert Millisekunden als mm:ss (Playlists dieses Nodes sind
@@ -1263,6 +1287,28 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
             ? `${childCount} Child Event(s) — klicken zum Bearbeiten`
             : "Keine Child Events — klicken zum Hinzufügen") + (childStates ? `\n${childStates}` : "");
         refs.childrenBtn.className = childCount > 0 ? "has-children" : "";
+
+        // Kapitel 27 / P5: Audio-Schaltfläche nur für Live-Items mit bekannter Quelle.
+        const au = item.audio;
+        if (au) {
+          const res = au.resolution || {};
+          const warn = res.warnings && res.warnings.length > 0;
+          const chosen = res.chosen || (au.capabilities && au.capabilities.length > 0 ? "—" : "kein Audio");
+          refs.audioBtn.style.display = "";
+          const manual = au.intent && au.intent.capability; // ausdrücklich gewählt vs. Auto
+          refs.audioBtn.textContent = `🔊 ${chosen}${manual ? "" : " (auto)"}${warn ? " ⚠" : ""}`;
+          refs.audioBtn.style.color = warn ? "#e0a030" : "";
+          const layoutName = (l) => (typeof l === "string" ? l : l && l.other != null ? `${l.other} Kanäle` : "?");
+          refs.audioBtn.title = [
+            `Audio von ${au.source}`,
+            ...(au.capabilities || []).map((c) => `${c.id === res.chosen ? "● " : "○ "}${c.id} (${layoutName(c.layout)})${c.isDefault ? " [Default]" : ""}`),
+            `Wahl: ${res.via || "none"}`,
+            ...(warn ? res.warnings.map((w2) => `⚠ ${w2}`) : []),
+            "Klick: nächste Capability, nach der letzten wieder Auto",
+          ].join("\n");
+        } else {
+          refs.audioBtn.style.display = "none";
+        }
       }
 
       // C18 (ARCHITECTURE.md §24.3): Cart-Liste + aktiv-Banner.

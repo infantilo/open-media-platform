@@ -640,6 +640,7 @@ mod tests {
                 c.data = serde_json::json!({"name": "X"});
                 c
             }],
+            audio: None,
         }
     }
 

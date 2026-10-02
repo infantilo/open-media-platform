@@ -119,7 +119,7 @@ enum ItemMedia {
     /// P4c, Spec §14–17): erst beim Cue/Take gegen die aktuellen Quellen mit
     /// Tags aufgelöst (`omp-resolver`). Nur tatsächlich passende, erreichbare
     /// Quellen werden automatisch gewählt.
-    LiveSelect { selector: omp_resolver::Selector },
+    LiveSelect { selector: Box<omp_resolver::Selector> },
     /// Standbild (Kapitel 27 / P2b) — `omp-channel-player` bekommt
     /// `mediaType=image` (ausdrücklich, nicht an der Dateiendung erkannt).
     Image { path: String },
@@ -265,6 +265,11 @@ struct ItemMeta {
     transition_rate_frames: Option<u32>,
     /// Child Events (Kapitel 6 Teil 5 Grafik, Kapitel 27 / P3 verallgemeinert), s. `children.rs`.
     children: Vec<ChildEvent>,
+    /// Kapitel 27 / P5: Audio-Absicht dieses Events (ausdrückliche Capability,
+    /// erwartete Tags, Fallback-Kette, Spec §104/§146/§263). `None` = keine —
+    /// dann greifen Quell-Default bzw. die einzige Capability (§260).
+    #[serde(default)]
+    audio: Option<omp_resolver::audio::AudioIntent>,
 }
 
 /// Fachlicher Event-Typ eines Items (Spec §7). Leitet sich aus dem Medium
@@ -281,6 +286,28 @@ fn event_type(media: &ItemMedia) -> &'static str {
         ItemMedia::TestPattern { pattern, .. } if pattern == "black" => "BLACK",
         ItemMedia::TestPattern { .. } => "PATTERN",
     }
+}
+
+/// Kapitel 27 / P5: die Audio-Sicht eines Live-Items — welche Audio-Capabilities
+/// bietet die (aufgelöste) Quelle an, und was ergibt die Audio-Absicht des Events?
+/// `None` für Items ohne Live-Quelle oder wenn die Quelle (noch) nicht bekannt ist.
+fn audio_view(state: &AutomationState, m: &ItemMeta) -> Option<Value> {
+    let source = match &m.media {
+        ItemMedia::Live { sender_id } => state.sources.iter().find(|s| &s.sender_id == sender_id),
+        ItemMedia::LiveSelect { selector } => {
+            omp_resolver::resolve(&effective_selector(selector), &state.sources).selected_id.and_then(|id| state.sources.iter().find(|s| s.sender_id == id))
+        }
+        _ => None,
+    }?;
+    let caps = omp_resolver::audio::audio_capabilities(&state.sources, &omp_resolver::SourceContext::of(source));
+    let intent = m.audio.clone().unwrap_or_default();
+    let resolution = omp_resolver::audio::resolve_audio_intent(&intent, &caps);
+    Some(serde_json::json!({
+        "source": format!("{} / {}", source.node_label, source.label),
+        "capabilities": caps,
+        "intent": intent,
+        "resolution": resolution,
+    }))
 }
 
 /// Kapitel 27 / P4c: Live-Items sind Video — ohne ausdrückliche Medienart im
@@ -335,7 +362,7 @@ fn item_media_from_args(
     if let Some(sender_id) = sender_id.filter(|s| !s.is_empty()) {
         ItemMedia::Live { sender_id: sender_id.to_string() }
     } else if let Some(selector) = live_selector {
-        ItemMedia::LiveSelect { selector: selector.clone() }
+        ItemMedia::LiveSelect { selector: Box::new(selector.clone()) }
     } else if let Some(file) = file.filter(|s| !s.is_empty()) {
         ItemMedia::File { path: file.to_string() }
     } else {
@@ -1088,6 +1115,7 @@ impl AutomationStore {
             transition: Transition::default(),
             transition_rate_frames: None,
             children: Vec::new(),
+            audio: None,
         };
 
         // Kapitel 6 Teil 4: Schwarzbild-Stop bleibt immer ein sofortiger
@@ -1177,6 +1205,7 @@ impl AutomationStore {
             transition: Transition::default(),
             transition_rate_frames: None,
             children: Vec::new(),
+            audio: None,
         };
         state.playlist.append(id.clone());
         state.metadata.insert(id, meta);
@@ -1231,6 +1260,9 @@ impl AutomationStore {
             transition_rate_frames: Option<u32>,
             #[serde(default)]
             children: Vec<ChildEvent>,
+            /// Kapitel 27 / P5: Audio-Absicht (`omp_resolver::audio::AudioIntent`).
+            #[serde(default)]
+            audio: Option<omp_resolver::audio::AudioIntent>,
         }
         let load_items: Vec<LoadItem> = serde_json::from_str(items_json)
             .map_err(|e| format!("itemsJson ungültig: {e}"))?;
@@ -1286,6 +1318,7 @@ impl AutomationStore {
                 transition: li.transition,
                 transition_rate_frames: li.transition_rate_frames,
                 children: li.children,
+                audio: li.audio,
             };
             metadata.insert(id.clone(), meta);
             ids.push(id);
@@ -1458,6 +1491,19 @@ impl AutomationStore {
     /// (`schedule_children` liest die Liste dort neu), ein bereits
     /// laufender On-Air-Zeitplan wird von einer Änderung hier nicht
     /// rückwirkend angepasst.
+    /// Kapitel 27 / P5: setzt (oder löscht, bei `None`) die Audio-Absicht eines
+    /// Items — rein lokal wie `do_set_transition`, wirkt beim nächsten Take.
+    fn do_set_audio(&self, item_id: &str, intent: Option<omp_resolver::audio::AudioIntent>) -> Result<(), String> {
+        let mut state = self.state.lock().expect("lock poisoned");
+        match state.metadata.get_mut(item_id) {
+            Some(meta) => {
+                meta.audio = intent;
+                Ok(())
+            }
+            None => Err("unbekannte itemId".to_string()),
+        }
+    }
+
     fn do_set_children(&self, item_id: &str, mut children: Vec<ChildEvent>) -> Result<(), String> {
         // Vorab validieren (Kapitel 27 / P3): ein ungültiges Kind verwirft die
         // ganze Liste, statt halb gesetzt zu werden. IDs werden vergeben, wenn leer.
@@ -1515,6 +1561,7 @@ impl AutomationStore {
                 transition: Transition::default(),
                 transition_rate_frames: None,
                 children: Vec::new(),
+                audio: None,
             },
         ));
         Ok(())
@@ -2401,6 +2448,14 @@ impl ParamStore for AutomationStore {
                     },
                 ],
             },
+            // Kapitel 27 / P5: Audio-Absicht eines Live-Items (JSON, `AudioIntent`).
+            MethodSpec {
+                name: "setAudio".to_string(),
+                args: vec![
+                    MethodArg { name: "itemId".to_string(), kind: ParamType::String },
+                    MethodArg { name: "audioJson".to_string(), kind: ParamType::String },
+                ],
+            },
             // Kapitel 6 Teil 4: ebenfalls reine lokale Metadaten-Änderung
             // (do_set_transition-Doku).
             MethodSpec {
@@ -2519,6 +2574,9 @@ impl ParamStore for AutomationStore {
                             );
                             v["resolutionSummary"] = serde_json::json!(r.summary);
                             v["resolutionAmbiguous"] = serde_json::json!(r.ambiguous);
+                        }
+                        if let Some(a) = audio_view(&state, m) {
+                            v["audio"] = a;
                         }
                         v["available"] =
                             serde_json::json!(item_is_available(m, &state.media_library, &state.available_sources, &state.sources));
@@ -2696,6 +2754,19 @@ impl ParamStore for AutomationStore {
                     (_, None) => Err("startType fehlt oder ungültig (sequence|manual|fixtime)".to_string()),
                 }
             }
+            "setAudio" => (|| {
+                let item_id = args.get("itemId").and_then(Value::as_str).ok_or("itemId fehlt".to_string())?;
+                let json = args.get("audioJson").and_then(Value::as_str).unwrap_or("").trim();
+                // Leer/„null“/„{}“ löscht die Absicht (zurück zu Quell-Default).
+                let intent: Option<omp_resolver::audio::AudioIntent> = if json.is_empty() || json == "null" {
+                    None
+                } else {
+                    let i: omp_resolver::audio::AudioIntent =
+                        serde_json::from_str(json).map_err(|e| format!("audioJson ungültig: {e}"))?;
+                    if i == omp_resolver::audio::AudioIntent::default() { None } else { Some(i) }
+                };
+                self.do_set_audio(item_id, intent)
+            })(),
             "setTransition" => {
                 let item_id = args.get("itemId").and_then(Value::as_str);
                 let transition = args.get("transition").and_then(Value::as_str).and_then(Transition::parse);
@@ -3606,6 +3677,7 @@ mod availability_tests {
             transition: Transition::Cut,
             transition_rate_frames: None,
             children: Vec::new(),
+            audio: None,
         }
     }
 
@@ -3620,6 +3692,7 @@ mod availability_tests {
             transition: Transition::Cut,
             transition_rate_frames: None,
             children: Vec::new(),
+            audio: None,
         }
     }
 
@@ -3634,6 +3707,7 @@ mod availability_tests {
             transition: Transition::Cut,
             transition_rate_frames: None,
             children: Vec::new(),
+            audio: None,
         }
     }
 
@@ -3779,7 +3853,7 @@ mod live_select_tests {
     fn live_select_item_availability_follows_the_current_sources() {
         let meta = ItemMeta {
             label: "L".to_string(),
-            media: ItemMedia::LiveSelect { selector: selector(&["video.camera"]) },
+            media: ItemMedia::LiveSelect { selector: Box::new(selector(&["video.camera"])) },
             duration_ms: 0,
             start_type: StartType::Sequence,
             fixtime_hms: None,
@@ -3787,6 +3861,7 @@ mod live_select_tests {
             transition: Transition::Cut,
             transition_rate_frames: None,
             children: Vec::new(),
+            audio: None,
         };
         assert!(item_is_available(&meta, &[], &[], &[video("a", &["video.camera"], true)]));
         assert!(!item_is_available(&meta, &[], &[], &[video("a", &["video.camera"], false)]), "offline source: not available");
@@ -3796,6 +3871,75 @@ mod live_select_tests {
         let back: ItemMeta = serde_json::from_str(&serde_json::to_string(&meta).unwrap()).unwrap();
         assert_eq!(back.media, meta.media);
         assert_eq!(item_meta_to_json("i", &meta)["sourceSelector"]["required"][0], "video.camera");
+    }
+
+    fn audio_src(id: &str, node: &str, tags: &[&str]) -> Source {
+        let mut s = video(id, tags, true);
+        s.media_type = Some(MediaType::Audio);
+        s.node_id = node.to_string();
+        s.channel_count = 2;
+        s
+    }
+
+    fn live_item(sender: &str, audio: Option<omp_resolver::audio::AudioIntent>) -> ItemMeta {
+        ItemMeta {
+            label: "L".to_string(),
+            media: ItemMedia::Live { sender_id: sender.to_string() },
+            duration_ms: 0,
+            start_type: StartType::Sequence,
+            fixtime_hms: None,
+            start_at_utc_ms: None,
+            transition: Transition::Cut,
+            transition_rate_frames: None,
+            children: Vec::new(),
+            audio,
+        }
+    }
+
+    #[test]
+    fn audio_view_offers_only_the_audio_of_the_selected_source() {
+        use omp_resolver::audio::{AudioIntent, AudioVia};
+        let mut state = AutomationState::new(String::new(), String::new(), String::new(), String::new());
+        let mut v = video("v-x", &["video.camera"], true);
+        v.node_id = "x".to_string();
+        state.sources = vec![
+            v,
+            audio_src("ax1", "x", &["role.program"]),
+            audio_src("ax2", "x", &["role.commentator"]),
+            audio_src("ay1", "y", &["role.international"]),
+        ];
+        // Kein Intent: zwei Capabilities, kein Default → keine willkürliche Wahl.
+        let view = audio_view(&state, &live_item("v-x", None)).unwrap();
+        let ids: Vec<&str> = view["capabilities"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["commentator", "program"], "nothing from node y");
+        assert!(view["resolution"]["chosen"].is_null());
+        // Ausdrückliche Wahl.
+        let intent = AudioIntent { capability: Some("commentator".to_string()), ..Default::default() };
+        let view = audio_view(&state, &live_item("v-x", Some(intent))).unwrap();
+        assert_eq!(view["resolution"]["chosen"], "commentator");
+        assert_eq!(view["resolution"]["via"], serde_json::to_value(AudioVia::Explicit).unwrap()["via"]);
+        // Gespeichertes Preset, das die Quelle nicht (mehr) anbietet: Warnung, keine stille Ersatzwahl.
+        let intent = AudioIntent { capability: Some("surround".to_string()), ..Default::default() };
+        let view = audio_view(&state, &live_item("v-x", Some(intent))).unwrap();
+        assert!(view["resolution"]["chosen"].is_null());
+        assert!(view["resolution"]["warnings"][0].as_str().unwrap().contains("surround"));
+        // Unbekannte Quelle / kein Live-Item: keine Audio-Sicht.
+        assert!(audio_view(&state, &live_item("unbekannt", None)).is_none());
+        let mut pattern = live_item("x", None);
+        pattern.media = ItemMedia::TestPattern { pattern: "smpte".to_string(), tone_frequency: 0.0 };
+        assert!(audio_view(&state, &pattern).is_none());
+    }
+
+    #[test]
+    fn audio_intent_survives_the_snapshot_roundtrip_and_old_items_load_without_it() {
+        let intent = omp_resolver::audio::AudioIntent { capability: Some("program".to_string()), ..Default::default() };
+        let m = live_item("s", Some(intent.clone()));
+        let back: ItemMeta = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(back.audio, Some(intent));
+        let mut v = serde_json::to_value(live_item("s", None)).unwrap();
+        v.as_object_mut().unwrap().remove("audio");
+        let old: ItemMeta = serde_json::from_value(v).unwrap();
+        assert_eq!(old.audio, None, "snapshots from before P5 still load");
     }
 
     #[test]
@@ -3827,6 +3971,7 @@ mod control_event_tests {
             transition: Transition::Cut,
             transition_rate_frames: None,
             children: Vec::new(),
+            audio: None,
         }
     }
 
@@ -3940,6 +4085,7 @@ mod fixtime_wait_tests {
             transition: Transition::Cut,
             transition_rate_frames: None,
             children: Vec::new(),
+            audio: None,
         }
     }
 
@@ -3993,6 +4139,7 @@ mod graphics_children_tests {
                 transition: Transition::Cut,
                 transition_rate_frames: None,
                 children,
+                audio: None,
             },
         );
         s.playlist.append("p".to_string());
