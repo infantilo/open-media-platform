@@ -9,6 +9,7 @@ package httpapi
 
 import (
 	"fmt"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/asrun"
 	"net/http"
 	"runtime"
 	"strconv"
@@ -55,7 +56,7 @@ func countRequests(counters *requestCounters, next http.Handler) http.Handler {
 // handleMetrics liefert alle Kennzahlen aus §S8: Go-Runtime (Goroutinen,
 // Heap, GC), Registry (Nodes online/gesamt, Poll-Dauer), SSE
 // (Clients+Drops), Launcher (Instanzen, Neustarts), HTTP-Request-Zähler.
-func handleMetrics(nodes NodeLister, events EventSubscriber, launcherSvc LauncherService, counters *requestCounters) http.HandlerFunc {
+func handleMetrics(nodes NodeLister, events EventSubscriber, launcherSvc LauncherService, counters *requestCounters, playoutMetrics ...*asrun.Metrics) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var b strings.Builder
 		writeGoRuntimeMetrics(&b)
@@ -63,6 +64,9 @@ func handleMetrics(nodes NodeLister, events EventSubscriber, launcherSvc Launche
 		writeSSEMetrics(&b, events)
 		writeLauncherMetrics(&b, launcherSvc)
 		writeHTTPMetrics(&b, counters)
+		for _, pm := range playoutMetrics {
+			pm.WritePrometheus(&b)
+		}
 
 		// text/plain mit expliziter Prometheus-Exposition-Format-Version
 		// (offizieller Content-Type, s. Prometheus-Doku "Exposition

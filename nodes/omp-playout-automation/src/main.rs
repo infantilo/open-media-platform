@@ -57,6 +57,7 @@
 //! tatsächlichen `take_on_targets`-Erfolg gesetzt wird — die einzige
 //! verlässliche Quelle für "was zeigt der Player gerade wirklich".
 
+mod asrun;
 mod children;
 mod persist;
 mod playlist;
@@ -291,6 +292,69 @@ fn event_type(media: &ItemMedia) -> &'static str {
         ItemMedia::TestPattern { pattern, .. } if pattern == "black" => "BLACK",
         ItemMedia::TestPattern { .. } => "PATTERN",
     }
+}
+
+/// Kapitel 27 / P10: kurze Quellbeschreibung fürs As-Run.
+fn asrun_source(state: &AutomationState, m: &ItemMeta) -> String {
+    match &m.media {
+        ItemMedia::File { path } | ItemMedia::Image { path } => path.clone(),
+        ItemMedia::Live { sender_id } => state.sources.iter().find(|s| &s.sender_id == sender_id).map(|s| format!("{} / {}", s.node_label, s.label)).unwrap_or_else(|| sender_id.clone()),
+        ItemMedia::LiveSelect { selector } => omp_resolver::resolve(&effective_selector(selector), &state.sources)
+            .selected_id
+            .and_then(|id| state.sources.iter().find(|s| s.sender_id == id))
+            .map(|s| format!("{} / {}", s.node_label, s.label))
+            .unwrap_or_else(|| "keine passende Quelle".to_string()),
+        ItemMedia::TestPattern { pattern, .. } => format!("Testmuster {pattern}"),
+        ItemMedia::Hold => "HOLD".to_string(),
+        ItemMedia::Jump { target_id } => format!("JUMP → {target_id}"),
+    }
+}
+
+/// Das On-Air-Primary hat gewechselt (`schedule_children`-Aufrufer): As-Run nachführen.
+/// `item_id` ist eine Playlist-Item-ID (Start), „stop“ (Schwarzbild) oder eine Cart-ID (Unterbrechung).
+fn asrun_primary_changed(state: &mut AutomationState, item_id: &str) {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let Some(meta) = state.metadata.get(item_id).cloned() else {
+        if item_id == "stop" {
+            state.asrun.end(now_ms, "STOPPED", "Operator-Stopp (Schwarzbild)");
+        } else {
+            state.asrun.end(now_ms, "INTERRUPTED", &format!("Cart {item_id} unterbricht"));
+        }
+        return;
+    };
+    let info = asrun::StartInfo {
+        event_id: item_id.to_string(),
+        label: meta.label.clone(),
+        asset: meta.media_ref.asset.as_ref().map(|a| a.asset_id.clone()).unwrap_or_default(),
+        source: asrun_source(state, &meta),
+        anchored_start_ms: if meta.start_type == StartType::Fixtime { meta.start_at_utc_ms } else { None },
+        duration_ms: Some(meta.duration_ms).filter(|d| *d > 0 && !meta.media.is_control()),
+        mode: match state.playlist.mode() {
+            Mode::Auto => "auto",
+            Mode::Hold => "hold",
+        }
+        .to_string(),
+    };
+    state.asrun.start(now_ms, info);
+    // Audio-Absicht nicht auflösbar / mit Warnungen → protokollieren (Spec §192 audio_resolution_failures).
+    if let Some(av) = audio_view(state, &meta)
+        && let Some(w) = av["resolution"]["warnings"].as_array().filter(|w| !w.is_empty())
+    {
+        let text = w.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("; ");
+        state.asrun.warning(now_ms, "audio_resolution", item_id, &meta.label, &text);
+    }
+}
+
+/// Ein Take wurde verweigert, weil die Quelle fehlt: als Warnung festhalten (Art nach Event-Typ).
+fn asrun_take_refused(state: &mut AutomationState, item_id: &str, meta: &ItemMeta) {
+    let action = if matches!(meta.media, ItemMedia::LiveSelect { .. }) {
+        "source_resolution"
+    } else if meta.media_ref.asset.is_some() {
+        "asset_preflight"
+    } else {
+        "source_unavailable"
+    };
+    state.asrun.warning(chrono::Utc::now().timestamp_millis(), action, item_id, &meta.label, "Take verweigert: Quelle nicht verfügbar");
 }
 
 /// Kapitel 27 / P5: die Audio-Sicht eines Live-Items — welche Audio-Capabilities
@@ -663,6 +727,8 @@ struct AutomationState {
     child_schedule: Vec<ScheduledChild>,
     /// Kapitel 27 / P3: Lebenszyklus der Kinder (aktuelles + gerade abgelöstes Primary).
     child_runtime: Vec<ChildRuntime>,
+    /// Kapitel 27 / P10: As-Run-Protokoll (Primary/Child/Warnungen/Trigger), geliefert an den Orchestrator.
+    asrun: asrun::AsRunTracker,
     /// Kapitel 27 / P4c: zuletzt gelesene Quellen mit Tags (Orchestrator,
     /// `discovery_loop`) — Grundlage der Anzeige „aufgelöst zu …“ und der
     /// Verfügbarkeit von `LiveSelect`-Items. Das echte Auflösen beim Cue/Take
@@ -708,6 +774,7 @@ impl AutomationState {
             child_epoch: 0,
             child_schedule: Vec::new(),
             child_runtime: Vec::new(),
+            asrun: Default::default(),
             sources: Vec::new(),
             onair_utc_ms: 0,
         }
@@ -870,6 +937,16 @@ impl AutomationStore {
     }
 
     fn log_trigger(&self, entry: Value) {
+        {
+            let text = |k: &str| entry.get(k).map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())).unwrap_or_default();
+            let dir = text("direction");
+            let id = {
+                let i = text("id");
+                if i.is_empty() { format!("{}-{}", text("event"), chrono::Utc::now().timestamp_millis()) } else { i }
+            };
+            let mut st = self.state.lock().expect("lock poisoned");
+            st.asrun.trigger(chrono::Utc::now().timestamp_millis(), &id, &text("correlationId"), &dir, &text("event"), &text("status"), &text("detail"));
+        }
         let mut log = self.trigger_log.lock().expect("lock poisoned");
         log.push_front(entry);
         log.truncate(30);
@@ -924,6 +1001,7 @@ impl AutomationStore {
         retire_children(state);
         state.child_epoch += 1;
         state.onair_utc_ms = chrono::Utc::now().timestamp_millis() - onair_since.elapsed().as_millis() as i64;
+        asrun_primary_changed(state, item_id);
         for notice in plan_children(state, item_id, onair_since, None) {
             self.report(notice);
         }
@@ -967,6 +1045,7 @@ impl AutomationStore {
         // stattdessen automatisch nehmen sollte, ist eine eigene, noch
         // nicht getroffene Design-Entscheidung.
         if !item_is_available(&meta, &state.media_library, &state.available_sources, &state.sources) {
+            asrun_take_refused(&mut state, &item_id, &meta);
             return Err(format!(
                 "„{}\u{201c} nicht verfügbar (Datei fehlt oder Live-Quelle offline) — Take verweigert",
                 meta.label
@@ -985,6 +1064,7 @@ impl AutomationStore {
         state.playlist.take().map_err(|e| e.to_string())?;
         let onair_since = Instant::now();
         state.onair_since = Some(onair_since);
+        state.asrun.cause = "take";
         self.schedule_children(&mut state, &item_id, onair_since);
         if !meta.media.is_control() {
             state.last_live_item_id = Some(item_id);
@@ -1042,6 +1122,7 @@ impl AutomationStore {
         }
         let Some(item_id) = state.playlist.advance() else {
             state.onair_since = None;
+            state.asrun.end(chrono::Utc::now().timestamp_millis(), "COMPLETED", "Playlist-Ende");
             // last_live_item_id bleibt bewusst unangetastet: der Player
             // zeigt das letzte Item remote unverändert weiter (kein
             // EOS-Konzept) — nur die lokale Sequenzierung endet hier, s.
@@ -1065,6 +1146,7 @@ impl AutomationStore {
         state.live_channel = new_channel;
         let onair_since = Instant::now();
         state.onair_since = Some(onair_since);
+        state.asrun.cause = "auto";
         self.schedule_children(&mut state, &item_id, onair_since);
         // Ein per Sequenz (zu spät/gerade rechtzeitig) genommenes Fixtime-
         // Item gilt als erledigt — sonst meldete der `fixtime_loop`
@@ -1109,6 +1191,7 @@ impl AutomationStore {
             .cloned()
             .ok_or("Item-Metadaten fehlen (Rundown-Eintrag inkonsistent)".to_string())?;
         if !item_is_available(&meta, &state.media_library, &state.available_sources, &state.sources) {
+            asrun_take_refused(&mut state, item_id, &meta);
             return Err(format!(
                 "„{}\u{201c} nicht verfügbar (Datei fehlt oder Live-Quelle offline)",
                 meta.label
@@ -1128,6 +1211,7 @@ impl AutomationStore {
         state.playlist.take().map_err(|e| e.to_string())?;
         let onair_since = Instant::now();
         state.onair_since = Some(onair_since);
+        state.asrun.cause = "fixtime";
         self.schedule_children(&mut state, item_id, onair_since);
         if !meta.media.is_control() {
             state.last_live_item_id = Some(item_id.to_string());
@@ -1168,6 +1252,7 @@ impl AutomationStore {
         state.live_channel = new_channel;
         let onair_since = Instant::now();
         state.onair_since = Some(onair_since);
+        state.asrun.cause = "next";
         self.schedule_children(&mut state, &item_id, onair_since);
         if !meta.media.is_control() {
             state.last_live_item_id = Some(item_id);
@@ -1219,6 +1304,7 @@ impl AutomationStore {
         state.playlist.take().map_err(|e| e.to_string())?;
         let onair_since = Instant::now();
         state.onair_since = Some(onair_since);
+        state.asrun.cause = "next_live";
         self.schedule_children(&mut state, &item_id, onair_since);
         if !meta.media.is_control() {
             state.last_live_item_id = Some(item_id);
@@ -1489,6 +1575,7 @@ impl AutomationStore {
         }
         state.fixtime_resolved.clear();
         state.playlist.replace_all(ids);
+        state.asrun.end(chrono::Utc::now().timestamp_millis(), "INTERRUPTED", "Playlist ersetzt (load)");
         state.metadata = metadata;
         state.onair_since = None;
         // Die Rundown-Liste wurde komplett ersetzt — eine vorher
@@ -4049,6 +4136,13 @@ async fn preflight_loop(store: Arc<AutomationStore>) {
                             && !entry.warned_late
                         {
                             entry.warned_late = true;
+                            store.state.lock().expect("lock poisoned").asrun.warning(
+                                chrono::Utc::now().timestamp_millis(),
+                                "asset_preflight",
+                                &id,
+                                &id,
+                                &format!("Bereitstellung wird voraussichtlich {} s zu spät fertig", short_by_ms / 1000),
+                            );
                             report_throttled(&store, format!("Event „{id}\u{201c}: Bereitstellung wird voraussichtlich {} s zu spät fertig (Sendezeit zu nah) — Ausfallrichtlinie greift bei Bedarf", short_by_ms / 1000));
                         }
                     }
@@ -4481,13 +4575,38 @@ async fn child_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender<E
 /// Setzt den Lebenszyklus-Zustand eines Kindes (nur erlaubte Übergänge, `ChildState::can_go`).
 fn set_child_state(store: &AutomationStore, ev: &ScheduledChild, to: ChildState, error: Option<String>) {
     let mut state = store.state.lock().expect("lock poisoned");
+    let mut note: Option<(String, String, &'static str, String)> = None;
     if let Some(rt) = state.child_runtime.iter_mut().find(|r| r.item_id == ev.item_id && r.child.id == ev.child_id) {
+        let changed = rt.state != to && rt.state.can_go(to);
         if rt.state == to || rt.state.can_go(to) {
             rt.state = to;
         }
         if error.is_some() {
             rt.error = error;
         }
+        if changed {
+            let label = if !rt.child.template_id.is_empty() {
+                format!("{:?} {}", rt.child.kind, rt.child.template_id)
+            } else if !rt.child.target.is_empty() {
+                format!("{:?} {}.{}", rt.child.kind, rt.child.target, rt.child.method)
+            } else {
+                format!("{:?}", rt.child.kind)
+            };
+            let status = match to {
+                ChildState::Fired => Some("FIRED"),
+                ChildState::Active => Some("ACTIVE"),
+                ChildState::Completed => Some("COMPLETED"),
+                ChildState::Failed => Some("FAILED"),
+                ChildState::Cancelled => Some("CANCELLED"),
+                _ => None,
+            };
+            if let Some(status) = status {
+                note = Some((rt.child.id.clone(), label, status, rt.error.clone().unwrap_or_default()));
+            }
+        }
+    }
+    if let Some((child_id, label, status, reason)) = note {
+        state.asrun.child(chrono::Utc::now().timestamp_millis(), &ev.item_id, &child_id, &label, status, &reason);
     }
 }
 
@@ -4689,6 +4808,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tokio::spawn(child_loop(store.clone(), graphics_events));
 
     tokio::spawn(persist::persist_loop(store.clone()));
+    // Kapitel 27 / P10: As-Run an den Orchestrator liefern.
+    tokio::spawn(persist::asrun_loop(store.clone()));
     // Kapitel 27 / P8: Medien-Preflight (Verfügbarkeit, rechtzeitige Bereitstellung, Bereitschaft je Event).
     tokio::spawn(preflight_loop(store.clone()));
     // Kapitel 27 / P7: Channel-Trigger empfangen.

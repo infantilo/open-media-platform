@@ -20,6 +20,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/alarmacks"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/asrun"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/asset"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/assetlinks"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/audit"
@@ -970,8 +971,28 @@ func main() {
 	// Kapitel 27 / P7: Channel-Trigger — Zustellung per NATS, Wiederholung nur auf dem Cluster-Leader.
 	playoutStore := playout.NewStore(database)
 	triggerStore := channeltrigger.NewStore(database)
+	asrunMetrics := asrun.NewMetrics()
+	asrunStore := asrun.NewStore(database, asrunMetrics)
+	// As-Run-Protokoll: Aufbewahrung wie das Domänen-Audit (cfg.AuditRetentionDays), täglicher Lauf.
+	go func() {
+		t := time.NewTicker(24 * time.Hour)
+		defer t.Stop()
+		for {
+			if n, err := asrunStore.Prune(ctx, time.Now().AddDate(0, 0, -cfg.AuditRetentionDays)); err != nil {
+				slog.Warn("as-run: Bereinigung fehlgeschlagen", "error", err)
+			} else if n > 0 {
+				slog.Info("as-run: alte Einträge gelöscht", "count", n)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
 	triggerRouter := &channeltrigger.Router{
-		Store: triggerStore, Channels: playoutStore,
+		OnApplied: asrunMetrics.ObserveTriggerLatency,
+		Store:     triggerStore, Channels: playoutStore,
 		Audit: func(actor, id, action string, d map[string]any) {
 			domainAuditStore.Log(actor, "channel_trigger", id, action, d)
 		},
@@ -981,7 +1002,7 @@ func main() {
 	}
 	go runWhileLeader(ctx, clusterNode, triggerRouter.Run)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithPlayout(playoutStore, workflowSvc), httpapi.WithChannelTriggers(triggerRouter, triggerStore), httpapi.WithPreflight(preflightSvc), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)))
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithPlayout(playoutStore, workflowSvc), httpapi.WithChannelTriggers(triggerRouter, triggerStore), httpapi.WithAsRun(asrunStore, asrunMetrics), httpapi.WithPreflight(preflightSvc), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)))
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

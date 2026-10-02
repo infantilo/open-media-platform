@@ -364,6 +364,20 @@ impl PersistClient {
         }
     }
 
+    /// Kapitel 27 / P10: As-Run-Zeilen liefern (idempotent über `key`).
+    pub fn post_asrun(&self, channel_id: &str, records: &[crate::asrun::AsRunRecord]) -> Result<(), String> {
+        let h = self.header()?;
+        let url = self.url(&format!("/{channel_id}/as-run"));
+        ureq::post(&url)
+            .config()
+            .timeout_global(Some(HTTP_TIMEOUT))
+            .build()
+            .header("Authorization", &h)
+            .send_json(serde_json::json!({ "records": records }))
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     /// `true` = erste Ausführung, `false` = bereits protokolliert.
     pub fn record_execution(&self, channel_id: &str, execution_id: &str, kind: &str) -> Result<bool, String> {
         let h = self.header()?;
@@ -606,6 +620,34 @@ fn persist_tick(store: &AutomationStore) {
                 store.report(format!("Playout-Zustand konnte nicht gespeichert werden: {e}"));
             }
         }
+    }
+}
+
+/// Liefert den As-Run-Ausgang (höchstens 200 Zeilen je Lauf); bei Fehlern kommen die Zeilen zurück in die Warteschlange.
+fn asrun_tick(store: &AutomationStore) {
+    let Some(client) = store.persistence.client.clone() else { return };
+    let channel = store.persistence.channel_id();
+    if channel.is_empty() {
+        return;
+    }
+    let batch = store.state.lock().expect("lock poisoned").asrun.drain(200);
+    if batch.is_empty() {
+        return;
+    }
+    if let Err(e) = client.post_asrun(&channel, &batch) {
+        let mut st = store.state.lock().expect("lock poisoned");
+        st.asrun.requeue(batch);
+        drop(st);
+        crate::report_throttled(store, format!("As-Run konnte nicht an den Orchestrator geliefert werden: {e}"));
+    }
+}
+
+pub async fn asrun_loop(store: Arc<AutomationStore>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(2));
+    loop {
+        interval.tick().await;
+        let store2 = store.clone();
+        let _ = tokio::task::spawn_blocking(move || asrun_tick(&store2)).await;
     }
 }
 

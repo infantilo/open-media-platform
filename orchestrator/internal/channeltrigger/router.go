@@ -42,6 +42,8 @@ type Router struct {
 	Pub      Publisher
 	Audit    AuditFunc
 	Now      func() time.Time
+	// OnApplied meldet die Zustelllatenz (Sekunden ab Zielzeit bzw. Senden bis zur Quittung) — für /metrics.
+	OnApplied func(targetChannel string, seconds float64)
 }
 
 func (r *Router) now() time.Time {
@@ -179,6 +181,13 @@ func (r *Router) Ack(channelID, id, status, detail, by string) (Record, error) {
 	rec, first, err := r.Store.Ack(id, channelID, status, detail)
 	if err != nil {
 		return Record{}, err
+	}
+	if first && r.OnApplied != nil && (status == "applied" || status == "applied_late") {
+		from := rec.CreatedAt
+		if rec.TargetTime != nil && rec.TargetTime.After(from) {
+			from = *rec.TargetTime
+		}
+		r.OnApplied(channelID, r.now().Sub(from).Seconds())
 	}
 	if first {
 		r.audit(by, id, "ack_"+status, map[string]any{"target": channelID, "origin": rec.OriginChannel, "event": rec.Event, "detail": detail})

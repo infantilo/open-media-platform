@@ -366,7 +366,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Bewusst unauthentifiziert wie /healthz (Prometheus-Scraper senden
 	// üblicherweise keinen Bearer-Token; Netzwerk-Isolation ist hier die
 	// erwartete Absicherung, nicht Anwendungs-Auth) — s. metrics.go.
-	mux.HandleFunc("GET /metrics", handleMetrics(nodes, events, launcherSvc, reqCounters))
+	mux.HandleFunc("GET /metrics", handleMetrics(nodes, events, launcherSvc, reqCounters, options.asrunMetrics))
 
 	// Nachtrag 243: geteilter Quittier-/Maskierstand der Alarme. Lesen für
 	// jeden authentifizierten Nutzer, Ändern braucht "operate" (globaler
@@ -392,7 +392,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/nodes/{id}/descriptor", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/descriptor.json", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/params/{name}", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/params/{name}", nodeLogs)))
 	mux.HandleFunc("PATCH /api/v1/nodes/{id}/params/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/params/{name}", nodeLogs)))
-	mux.HandleFunc("POST /api/v1/nodes/{id}/methods/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/methods/{name}", nodeLogs)))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/methods/{name}", g.requireVerbOnNode(authz.VerbOperate, asRunOperatorTap(handleNodeProxy(nodes, nodeClient, "/methods/{name}", nodeLogs), &options, nodes)))
 	// Plugin-Host (ARCHITECTURE.md §24.4, UMSETZUNG.md C19) — reine
 	// Routenregistrierung, keine neue Proxy-Logik: derselbe generische
 	// handleNodeProxy wie bei params/methods, gleiche Auth-Abstufung
@@ -768,6 +768,10 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 			mux.HandleFunc("POST /api/v1/playout/channels/{id}/materialize", g.requireAuth(handlePlayoutMaterialize(options.preflight, options.playout, authzStore, options.playoutRoles, launcherSvc, options.nodeValues, options.domainAudit)))
 		}
 		// Kapitel 27 / P7: Channel-Trigger (vermittelt, berechtigt, protokolliert).
+		if options.asrun != nil {
+			mux.HandleFunc("POST /api/v1/playout/channels/{id}/as-run", g.requireAuth(handlePostAsRun(options.asrun, options.playout, authzStore, options.playoutRoles)))
+			mux.HandleFunc("GET /api/v1/playout/channels/{id}/as-run", g.requireVerbGlobal(authz.VerbView, handleGetAsRun(options.asrun, options.playout)))
+		}
 		if options.triggerRouter != nil && options.triggerStore != nil {
 			mux.HandleFunc("POST /api/v1/playout/channels/{id}/triggers", g.requireAuth(handleSendChannelTrigger(options.triggerRouter, options.playout, authzStore, options.playoutRoles)))
 			mux.HandleFunc("POST /api/v1/playout/channels/{id}/trigger-ack", g.requireAuth(handleAckChannelTrigger(options.triggerRouter, options.playout, authzStore, options.playoutRoles)))

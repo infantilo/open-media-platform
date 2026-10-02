@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/asrun"
 	"log/slog"
 	"net/http"
 	"time"
@@ -43,6 +44,8 @@ type handlerOptions struct {
 	nodeValues      NodeOptionValues
 	locations       LocationStore
 	triggerRouter   ChannelTriggerService
+	asrun           AsRunStore
+	asrunMetrics    *asrun.Metrics
 	preflight       PreflightService
 	triggerStore    ChannelTriggerStore
 	systemSettings  SystemSettingsStore
