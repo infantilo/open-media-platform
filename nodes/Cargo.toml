@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "omp-mediaio",
+    "omp-resolver",
     "omp-node-sdk",
     "playout",
     "omp-source",
