@@ -9,6 +9,18 @@ import (
 
 func TestStoreSetOverwriteResetAndScopes(t *testing.T) {
 	s := NewStore(dbtest.Open(t))
+	// Die Test-Datenbank lebt zwischen Läufen: Reste früherer Läufe wegräumen.
+	for _, id := range []string{"inst1", "alt", "neu"} {
+		_ = s.DeleteInstance(id)
+	}
+	for _, k := range []string{"OMP_MEDIA_DIR", "OMP_WIDTH"} {
+		_ = s.Set(ScopeType, "omp-mxf-player", k, "", "t")
+	}
+	t.Cleanup(func() {
+		for _, id := range []string{"inst1", "alt", "neu"} {
+			_ = s.DeleteInstance(id)
+		}
+	})
 	if err := s.Set(ScopeType, "omp-mxf-player", "OMP_MEDIA_DIR", "/mnt/a", "admin"); err != nil {
 		t.Fatal(err)
 	}
