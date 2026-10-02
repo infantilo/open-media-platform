@@ -16,6 +16,7 @@
 // Regieplatzes (festes Gerät/Browser), gleiches Muster wie die bereits
 // bestehende, lokal gespeicherte Parameter-Panel-Breite in
 // ui/graph/flow-canvas.ts.
+import "./upcoming.ts";
 import { mountUIBundle } from "./ui-bundle.ts";
 import type { ConsoleEntry } from "./console-view.ts";
 import {
@@ -84,6 +85,8 @@ export class ConsoleBoard extends HTMLElement {
     this.#emptyMessage.textContent = "Keine Konsole für diesen Nutzer zugewiesen.";
     this.#emptyMessage.style.cssText = "padding:12px;display:none;";
     this.appendChild(this.#emptyMessage);
+    // Countdown bis zum nächsten für den Nutzer geplanten Workflow-Start; blendet sich selbst aus.
+    this.appendChild(document.createElement("omp-upcoming-start"));
 
     const toolbar = document.createElement("div");
     toolbar.style.cssText = "position:sticky;top:0;display:flex;justify-content:flex-end;padding:6px 6px 0 6px;z-index:1000000;pointer-events:none;";

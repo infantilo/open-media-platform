@@ -462,6 +462,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// im Flow-Editor für eigenständige (nicht Workflow-gebundene)
 	// Instanzen, s. instancemigrate.Service.MigrateInstance-Doku.
 	mux.HandleFunc("POST /api/v1/instances/{id}/migrate", g.requireVerbGlobal(authz.VerbAdmin, handleMigrateInstance(instanceMigrateSvc)))
+	mux.HandleFunc("GET /api/v1/me/upcoming", g.requireAuth(handleMeUpcoming(workflowSvc, authzStore, time.Now)))
 	mux.HandleFunc("GET /api/v1/me/consoles", g.requireAuth(handleMeConsoles(nodes, consoleResolver)))
 
 	// Service-Token-Ausgabe für Control-Plane-Instanzen (ARCHITECTURE.md

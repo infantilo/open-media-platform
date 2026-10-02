@@ -223,3 +223,33 @@ func newID() (string, error) {
 	}
 	return hex.EncodeToString(b[:]), nil
 }
+
+// WorkflowIDsFor liefert die Workflows, für die subject (direkt oder über eine
+// Gruppe) mindestens minVerb auf IRGENDEINER Rolle hat — Grundlage der
+// „Was ist für mich geplant?“-Sicht eines Operators.
+func (s *Store) WorkflowIDsFor(subject string, minVerb Verb) ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT workflow_id, verb FROM role_bindings
+		 WHERE workflow_id <> ''
+		   AND ((subject_type = 'user' AND subject = $1)
+		     OR (subject_type = 'group' AND subject IN (SELECT group_id FROM group_members WHERE username = $1)))`,
+		subject)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	var out []string
+	for rows.Next() {
+		var id string
+		var v Verb
+		if err := rows.Scan(&id, &v); err != nil {
+			return nil, err
+		}
+		if v.Covers(minVerb) && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out, rows.Err()
+}

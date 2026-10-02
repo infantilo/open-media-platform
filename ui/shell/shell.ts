@@ -18,6 +18,7 @@
 // das `customElements.define(...)` in console-view.ts stillschweigend
 // entfernen (per Browser-Test gefunden: `view.setEntries is not a
 // function`, weil das Custom Element nie registriert wurde).
+import "./upcoming.ts";
 import "./console-view.ts";
 import type { ConsoleView, ConsoleEntry } from "./console-view.ts";
 // Gleicher Grund wie beim console-view.ts-Import oben (sonst optimiert der
@@ -312,6 +313,20 @@ function renderNoActiveConsole(root: HTMLElement) {
     "Sobald ein zugewiesener Workflow gestartet wird, erscheint er hier.";
   message.style.cssText = "max-width:420px;color:#aaa;font-size:13px;margin:0;";
   container.appendChild(message);
+
+  // Countdown bis zum nächsten geplanten Start eines bedienbaren Workflows (blendet sich ohne Plan aus).
+  const upcoming = document.createElement("omp-upcoming-start");
+  upcoming.style.color = "#eee";
+  container.appendChild(upcoming);
+  // Sobald ein zugewiesener Workflow läuft, die Seite selbst neu laden statt auf „Neu laden“ zu warten.
+  window.setInterval(async () => {
+    try {
+      const { consoles } = await fetchConsoles();
+      if (consoles.length > 0) location.reload();
+    } catch {
+      // nächster Versuch in 10 s
+    }
+  }, 10_000);
 
   const reloadBtn = document.createElement("button");
   reloadBtn.textContent = "Neu laden";

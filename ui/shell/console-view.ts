@@ -6,6 +6,7 @@
 //
 // Bei genau einem Eintrag wird direkt dessen Bundle gezeigt; bei mehreren
 // eine schmale Tab-Leiste nur dieser Einträge (§14: "nie ein Graph").
+import "./upcoming.ts";
 import { mountUIBundle } from "./ui-bundle.ts";
 import { pickActiveEntry } from "./console-logic.ts";
 import { hasPreviewUrl, bundleOwnsPreview, mountNodePreview, type MountedPreview } from "./node-preview.ts";
@@ -78,7 +79,7 @@ export class ConsoleView extends HTMLElement {
       const p = document.createElement("p");
       p.className = "omp-empty";
       p.textContent = "Keine Konsole für diesen Nutzer zugewiesen.";
-      this.#panel.appendChild(p);
+      this.#panel.append(p, document.createElement("omp-upcoming-start"));
       return;
     }
 
