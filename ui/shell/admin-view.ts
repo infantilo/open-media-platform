@@ -18,6 +18,7 @@
 // Audit-Log reagiert auf "audit.appended" (neu, audit.go) statt alle
 // paar Sekunden zu pollen. Poll bleibt nur als deutlich langsamerer
 // Reconnect-/Fallback-Pfad (AUDIT_POLL_FALLBACK_INTERVAL_MS).
+import { fetchBuildInfo, formatFirmwareLong } from "./version.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { getToken, login } from "./auth.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
@@ -1523,6 +1524,15 @@ class AdminView extends HTMLElement {
     head.textContent = "System-Update";
     section.appendChild(head);
 
+    // Kapitel „Firmware“: aktuelle Version gut sichtbar, auch solange die
+    // Übersicht noch lädt oder das Update-System nicht aktiviert ist.
+    const fw = document.createElement("div");
+    fw.className = "omp-firmware-version";
+    fw.style.cssText = "font-size:18px;font-weight:600;margin:4px 0;";
+    fw.textContent = upd ? formatFirmwareLong(upd.current) : "Firmware wird gelesen …";
+    if (!upd) void fetchBuildInfo().then((i) => { if (i && !this.#upd) fw.textContent = formatFirmwareLong(i); });
+    section.appendChild(fw);
+
     const info = document.createElement("div");
     info.style.cssText = "color:var(--omp-text-dim);margin:6px 0 12px;white-space:pre-wrap;";
     if (!upd) {
@@ -1530,9 +1540,7 @@ class AdminView extends HTMLElement {
       section.appendChild(info);
       return section;
     }
-    const cur = upd.current;
     info.textContent =
-      `Installiert: ${cur.version}${cur.commit ? ` (${cur.commit})` : ""}${cur.builtAt ? `, gebaut ${cur.builtAt}` : ""}\n` +
       (upd.trustedKeys.length > 0
         ? `Vertrauenswürdige Signaturschlüssel: ${upd.trustedKeys.join(", ")}`
         : "Kein Signaturschlüssel hinterlegt (.run/update-trusted.pub) — Pakete werden abgelehnt.") +

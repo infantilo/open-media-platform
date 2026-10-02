@@ -504,6 +504,12 @@ textarea::placeholder {
   color: var(--omp-text-disabled);
   text-align: center;
 }
+.omp-login-firmware {
+  font-size: 11px;
+  color: var(--omp-text-dim);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
 @media (max-width: 860px) {
   .omp-login { grid-template-columns: 1fr; }
   .omp-login-brand { padding-bottom: 8px; }

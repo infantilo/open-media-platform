@@ -1,3 +1,4 @@
+import { fetchBuildInfo, formatFirmware, formatFirmwareLong } from "./version.ts";
 // Echte Anmeldung (ARCHITECTURE.md §12, UMSETZUNG.md D3 Teil 2) — löst
 // den bisherigen, trivial spoofbaren Stub-Nutzer (X-OMP-Stub-User-Header,
 // s. docs/decisions.md C13/D3 Teil 2) ab. Tokens sind Bearer-Tokens
@@ -132,8 +133,15 @@ export function showLoginOverlay(root: HTMLElement, onSuccess: () => void) {
   const foot = document.createElement("div");
   foot.className = "omp-login-foot";
   foot.textContent = "OpenMediaPlatform";
+  // Firmware-Version aus dem öffentlichen Versions-Endpunkt (auch ohne Anmeldung lesbar).
+  const firmware = document.createElement("div");
+  firmware.className = "omp-login-firmware";
+  void fetchBuildInfo().then((info) => {
+    firmware.textContent = formatFirmware(info);
+    firmware.title = formatFirmwareLong(info);
+  });
 
-  form.append(title, sub, userLabel, passLabel, error, submit, foot);
+  form.append(title, sub, userLabel, passLabel, error, submit, foot, firmware);
   panel.append(form);
   overlay.append(brand, panel);
   root.replaceChildren(overlay);
