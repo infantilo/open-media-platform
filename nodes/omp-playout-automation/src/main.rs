@@ -60,6 +60,7 @@
 mod children;
 mod persist;
 mod playlist;
+mod readiness;
 mod remote;
 mod schedule;
 mod timeline;
@@ -271,6 +272,9 @@ struct ItemMeta {
     /// dann greifen Quell-Default bzw. die einzige Capability (§260).
     #[serde(default)]
     audio: Option<omp_resolver::audio::AudioIntent>,
+    /// Kapitel 27 / P8: Asset-Referenz, Ausfallrichtlinie und Ersatzdatei (flach im JSON).
+    #[serde(flatten)]
+    media_ref: readiness::MediaRef,
 }
 
 /// Fachlicher Event-Typ eines Items (Spec §7). Leitet sich aus dem Medium
@@ -384,6 +388,11 @@ fn item_media_from_args(
 /// ein zentraler, gepflegter Katalog, kein Dateisystem mit
 /// Ausweich-Ordnern, s. §6.4-Doku).
 fn item_is_available(m: &ItemMeta, media_library: &[String], available_sources: &[Value], sources: &[omp_resolver::Source]) -> bool {
+    // Kapitel 27 / P8: Items mit Asset-Referenz regelt der Medien-Preflight (Bereitschaft + Ausfallrichtlinie
+    // beim Take) — die Datei muss nicht schon im Medienverzeichnis liegen, sie wird bereitgestellt.
+    if m.media_ref.asset.is_some() && matches!(m.media, ItemMedia::File { .. }) {
+        return true;
+    }
     match &m.media {
         // Kapitel 27 / P4c: verfügbar, wenn die Kriterien gerade eine Quelle ergeben.
         ItemMedia::LiveSelect { selector } => omp_resolver::resolve(&effective_selector(selector), sources).selected_id.is_some(),
@@ -512,7 +521,29 @@ fn item_meta_to_json(id: &str, m: &ItemMeta) -> Value {
     if !m.children.is_empty() {
         v["children"] = serde_json::json!(m.children);
     }
+    if let Some(a) = &m.media_ref.asset {
+        v["asset"] = serde_json::json!(a);
+        v["onMissing"] = serde_json::json!(m.media_ref.on_missing);
+    }
+    if let Some(f) = &m.media_ref.fallback_file {
+        v["fallbackFile"] = serde_json::json!(f);
+    }
     v
+}
+
+/// Bereitschaft eines Items (Preflight-Ergebnis, Spec §184).
+#[derive(Debug, Clone, Default)]
+struct ReadinessEntry {
+    /// Verfügbarkeitszustand des Orchestrators (READY/REMOTE_ONLY/TRANSFERRING/FAILED/MISSING).
+    state: String,
+    detail: String,
+    progress: f64,
+    estimate_s: f64,
+    checked_ms: i64,
+    /// Schon gewarnt, dass die Bereitstellung nicht mehr rechtzeitig fertig wird.
+    warned_late: bool,
+    /// Bereitstellung wurde angestoßen.
+    materializing: bool,
 }
 
 struct AutomationState {
@@ -597,6 +628,12 @@ struct AutomationState {
     /// `fixtime_hms`-Werte), daher bei jedem `do_load()` geleert (dessen
     /// eigene Doku).
     fixtime_resolved: HashMap<String, FixtimeResolution>,
+    /// Kapitel 27 / P8: zuletzt ermittelte Medien-Bereitschaft je Item (Preflight-Schleife).
+    readiness: HashMap<String, ReadinessEntry>,
+    /// Preflight-Fenster in Minuten (Spec §72): davor wird nichts bewegt.
+    preflight_window_min: u32,
+    /// Standard-Filler des Channels (Dateiname im Medienverzeichnis), Richtlinie DEFAULT_FILLER.
+    default_filler: String,
     /// Kapitel 6 Teil 5 (`graphics_loop`-Doku): Ziel-`omp-ograf` für
     /// Grafik-Kind-Ereignisse — dasselbe dynamische Label-Muster wie
     /// `target_player_label`/`target_mixer_label`, aber bewusst
@@ -656,6 +693,9 @@ impl AutomationState {
             active_cart: None,
             timeline: TimelineCache::new(),
             fixtime_resolved: HashMap::new(),
+            readiness: HashMap::new(),
+            preflight_window_min: 15,
+            default_filler: String::new(),
             target_graphics_label: graphics_label,
             target_audio_mixer_label: String::new(),
             audio_mixer_node_id: None,
@@ -753,6 +793,10 @@ struct AutomationStore {
     audio_status: Mutex<String>,
     /// Kapitel 27 / P7: die letzten ein-/ausgehenden Channel-Trigger (Anzeige im Panel).
     trigger_log: Mutex<std::collections::VecDeque<Value>>,
+    /// Kapitel 27 / P8: von der Ausfallrichtlinie STOP angefordert — die Auto-Advance-Schleife stellt auf Hold.
+    request_hold: std::sync::atomic::AtomicBool,
+    /// Drosselung gleicher Meldungen (Take im Auto-Advance-Takt würde sonst jede Viertelsekunde alarmieren).
+    report_throttle: Mutex<HashMap<String, Instant>>,
     /// Serialisiert die Ausführung eingehender Trigger (Reihenfolge der Zustellung, Policy QUEUE).
     trigger_gate: tokio::sync::Mutex<()>,
     registry: RegistryClient,
@@ -1210,6 +1254,7 @@ impl AutomationStore {
             transition_rate_frames: None,
             children: Vec::new(),
             audio: None,
+            media_ref: Default::default(),
         };
 
         // Kapitel 6 Teil 4: Schwarzbild-Stop bleibt immer ein sofortiger
@@ -1300,6 +1345,7 @@ impl AutomationStore {
             transition_rate_frames: None,
             children: Vec::new(),
             audio: None,
+            media_ref: Default::default(),
         };
         state.playlist.append(id.clone());
         state.metadata.insert(id, meta);
@@ -1357,6 +1403,8 @@ impl AutomationStore {
             /// Kapitel 27 / P5: Audio-Absicht (`omp_resolver::audio::AudioIntent`).
             #[serde(default)]
             audio: Option<omp_resolver::audio::AudioIntent>,
+            #[serde(flatten)]
+            media_ref: readiness::MediaRef,
         }
         let load_items: Vec<LoadItem> = serde_json::from_str(items_json)
             .map_err(|e| format!("itemsJson ungültig: {e}"))?;
@@ -1413,6 +1461,7 @@ impl AutomationStore {
                 transition_rate_frames: li.transition_rate_frames,
                 children: li.children,
                 audio: li.audio,
+                media_ref: li.media_ref,
             };
             metadata.insert(id.clone(), meta);
             ids.push(id);
@@ -1493,7 +1542,9 @@ impl AutomationStore {
             .get(item_id)
             .cloned()
             .ok_or("Item-Metadaten fehlen (Rundown-Eintrag inkonsistent)".to_string())?;
-        let (standby_node_id, _) = standby_target(&state)?;
+        let (standby_node_id, standby_label) = standby_target(&state)?;
+        // Kapitel 27 / P8: auch das Cue folgt der Ausfallrichtlinie (Vorschau des Ersatzes bzw. „gehalten“).
+        let meta = if meta.media_ref.asset.is_some() { apply_media_policy(self, &state, &standby_label, &meta, false)? } else { meta };
         load_onto_channel(self, &standby_node_id, &meta)?;
 
         state.playlist.cue(index).map_err(|e| e.to_string())?;
@@ -1656,6 +1707,7 @@ impl AutomationStore {
                 transition_rate_frames: None,
                 children: Vec::new(),
                 audio: None,
+                media_ref: Default::default(),
             },
         ));
         Ok(())
@@ -1878,6 +1930,100 @@ fn resolve_item_media(store: &AutomationStore, meta: &ItemMeta) -> Result<ItemMe
     Ok(out)
 }
 
+/// Meldet höchstens alle 10 s dieselbe Nachricht (Take im Auto-Advance-Takt).
+fn report_throttled(store: &AutomationStore, message: String) {
+    let mut map = store.report_throttle.lock().expect("lock poisoned");
+    let now = Instant::now();
+    if map.get(&message).is_some_and(|t| now.duration_since(*t) < Duration::from_secs(10)) {
+        return;
+    }
+    map.retain(|_, t| now.duration_since(*t) < Duration::from_secs(60));
+    map.insert(message.clone(), now);
+    drop(map);
+    store.report(message);
+}
+
+/// Fragt den Orchestrator nach der Verfügbarkeit von Asset-Medien am Ziel-Player (`preflight`). Blockierend.
+/// Antwort je Eintrag: `{key, state, detail, fileName, estimateSeconds, progress, materializable}`.
+fn preflight_request(store: &AutomationStore, channel_id: &str, target_label: &str, items: &[(String, readiness::AssetRef)]) -> Result<Vec<Value>, String> {
+    if channel_id.is_empty() {
+        return Err("Channel unbekannt (Persistenz noch nicht verbunden)".to_string());
+    }
+    let body = serde_json::json!({
+        "target": {"nodeLabel": target_label},
+        "items": items.iter().map(|(k, a)| serde_json::json!({
+            "key": k, "assetId": a.asset_id, "versionId": a.version_id, "representationType": a.representation_type,
+        })).collect::<Vec<_>>(),
+    });
+    let resp = remote::post_json(&store.orchestrator_url, &store.auth, &format!("/api/v1/playout/channels/{channel_id}/preflight"), &body)?;
+    Ok(resp.get("items").and_then(Value::as_array).cloned().unwrap_or_default())
+}
+
+/// Stößt die Bereitstellung eines Assets am Ziel-Player an (OMP-Prozess „Asset materialisieren“).
+fn materialize_request(store: &AutomationStore, channel_id: &str, target_label: &str, key: &str, asset: &readiness::AssetRef) -> Result<Value, String> {
+    let body = serde_json::json!({
+        "target": {"nodeLabel": target_label},
+        "item": {"key": key, "assetId": asset.asset_id, "versionId": asset.version_id, "representationType": asset.representation_type},
+    });
+    remote::post_json(&store.orchestrator_url, &store.auth, &format!("/api/v1/playout/channels/{channel_id}/materialize"), &body)
+}
+
+/// Löst eine Asset-Referenz zum Dateinamen am Ziel-Player auf (nur Auflösung, keine Bereitschaft verlangt).
+fn resolve_asset_file(store: &AutomationStore, target_label: &str, asset: &readiness::AssetRef) -> Result<String, String> {
+    let channel = store.persistence.channel_id();
+    let res = preflight_request(store, &channel, target_label, &[("resolve".to_string(), asset.clone())])?;
+    let first = res.first().ok_or("leere Antwort des Orchestrators")?;
+    let name = first.get("fileName").and_then(Value::as_str).unwrap_or("");
+    if name.is_empty() {
+        let why = first.get("detail").and_then(Value::as_str).unwrap_or("Asset nicht auflösbar");
+        return Err(format!("Asset „{}\u{201c}: {why}", asset.asset_id));
+    }
+    Ok(name.to_string())
+}
+
+/// Spec §73: Ist das Asset-Medium des Items zur Sendezeit nicht bereit, entscheidet die Ausfallrichtlinie.
+/// Wird vor dem Laden aufgerufen (Take). Liefert das tatsächlich zu sendende Item (ggf. ersetzt) oder den
+/// Fehler „Event gehalten“. Ist der Preflight selbst nicht erreichbar, wird NICHT ersetzt (ungeprüft laden —
+/// der Player meldet fehlende Dateien selbst), aber gemeldet.
+fn apply_media_policy(store: &AutomationStore, state: &AutomationState, target_label: &str, meta: &ItemMeta, at_take: bool) -> Result<ItemMeta, String> {
+    let Some(asset) = meta.media_ref.asset.clone() else { return Ok(meta.clone()) };
+    if !matches!(meta.media, ItemMedia::File { .. }) {
+        return Ok(meta.clone());
+    }
+    let channel = store.persistence.channel_id();
+    let check = preflight_request(store, &channel, target_label, &[("take".to_string(), asset)]);
+    let entry = match check {
+        Ok(v) => v.into_iter().next().unwrap_or(Value::Null),
+        Err(e) => {
+            report_throttled(store, format!("Preflight für „{}\u{201c} nicht möglich ({e}) — Medium wird ungeprüft geladen", meta.label));
+            return Ok(meta.clone());
+        }
+    };
+    let st = entry.get("state").and_then(Value::as_str).unwrap_or("");
+    if st == "READY" {
+        return Ok(meta.clone());
+    }
+    let why = format!("{st}{}", entry.get("detail").and_then(Value::as_str).filter(|d| !d.is_empty()).map(|d| format!(": {d}")).unwrap_or_default());
+    let outcome = readiness::apply_policy(
+        meta.media_ref.on_missing,
+        meta.media_ref.fallback_file.as_deref(),
+        Some(state.default_filler.as_str()),
+        &why,
+    );
+    report_throttled(store, format!("„{}\u{201c}: {}", meta.label, outcome.note));
+    if outcome.stop_auto && at_take {
+        store.request_hold.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    let mut out = meta.clone();
+    match outcome.substitute {
+        readiness::Substitute::Fail => return Err(outcome.note),
+        readiness::Substitute::Black => out.media = ItemMedia::TestPattern { pattern: "black".to_string(), tone_frequency: 0.0 },
+        readiness::Substitute::HoldProgram => out.media = ItemMedia::Hold,
+        readiness::Substitute::File(f) => out.media = ItemMedia::File { path: f },
+    }
+    Ok(out)
+}
+
 /// Lädt ein Item auf einen bestimmten Kanal, OHNE den Mixer anzufassen
 /// — Kern von `do_cue` (reine Vorschau, kein On-Air-Wechsel).
 fn load_onto_channel(store: &AutomationStore, node_id: &str, meta: &ItemMeta) -> Result<(), String> {
@@ -1926,6 +2072,15 @@ fn take_on_targets(
     transition: Transition,
     rate_frames: Option<u32>,
 ) -> Result<Channel, String> {
+    // Kapitel 27 / P8: Medium nicht bereit → Ausfallrichtlinie (Ersatz oder „gehalten“) VOR allem anderen.
+    let policy_meta;
+    let meta = if meta.media_ref.asset.is_some() {
+        let (_, label) = standby_target(state)?;
+        policy_meta = apply_media_policy(store, state, &label, meta, true)?;
+        &policy_meta
+    } else {
+        meta
+    };
     // Kapitel 27 / P2b: HOLD ändert nichts am Programm — das vorherige Bild
     // bleibt stehen; JUMP wird VOR dem Take aufgelöst (`resolve_jump`).
     match &meta.media {
@@ -2388,6 +2543,15 @@ impl ParamStore for AutomationStore {
                 readonly: false,
             },
             ParamSpec { name: "audioRouting".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            // Kapitel 27 / P8: Preflight-Fenster (Minuten) und Standard-Filler des Channels.
+            ParamSpec {
+                name: "preflightWindowMin".to_string(),
+                kind: ParamType::Number,
+                unit: Some("min".to_string()),
+                range: Some(Range::Number { min: 1.0, max: 240.0 }),
+                readonly: false,
+            },
+            ParamSpec { name: "defaultFiller".to_string(), kind: ParamType::String, unit: None, range: None, readonly: false },
             // Kapitel 27 / P7: Protokoll der letzten Channel-Trigger (JSON-Array, neueste zuerst).
             ParamSpec { name: "triggerLog".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             // Kapitel 27 / P1b: Anbindung an die Domäne `playout` (s.
@@ -2613,6 +2777,28 @@ impl ParamStore for AutomationStore {
                     },
                 ],
             },
+            // Kapitel 27 / P8: Event mit Asset-Referenz (Datei wird am Ziel-Player aufgelöst) und
+            // nachträgliche Änderung von Asset/Ausfallrichtlinie/Ersatzdatei.
+            MethodSpec {
+                name: "appendAsset".to_string(),
+                args: vec![
+                    MethodArg { name: "label".to_string(), kind: ParamType::String },
+                    MethodArg { name: "assetJson".to_string(), kind: ParamType::String },
+                    MethodArg { name: "onMissing".to_string(), kind: ParamType::String },
+                    MethodArg { name: "fallbackFile".to_string(), kind: ParamType::String },
+                    MethodArg { name: "startType".to_string(), kind: ParamType::String },
+                    MethodArg { name: "durationMs".to_string(), kind: ParamType::Number },
+                ],
+            },
+            MethodSpec {
+                name: "setMediaRef".to_string(),
+                args: vec![
+                    MethodArg { name: "itemId".to_string(), kind: ParamType::String },
+                    MethodArg { name: "assetJson".to_string(), kind: ParamType::String },
+                    MethodArg { name: "onMissing".to_string(), kind: ParamType::String },
+                    MethodArg { name: "fallbackFile".to_string(), kind: ParamType::String },
+                ],
+            },
             // Kapitel 27 / P7: Trigger an andere Channels (vermittelt der Orchestrator: Rechte, Audit).
             // targetKind = channel|group|all, target = Name/ID/Gruppe (bei all leer).
             MethodSpec {
@@ -2759,6 +2945,15 @@ impl ParamStore for AutomationStore {
                         }
                         v["available"] =
                             serde_json::json!(item_is_available(m, &state.media_library, &state.available_sources, &state.sources));
+                        if let Some(r) = state.readiness.get(id).filter(|_| m.media_ref.asset.is_some()) {
+                            v["readiness"] = serde_json::json!(readiness::readiness_of(&r.state));
+                            v["readinessState"] = serde_json::json!(r.state);
+                            v["readinessDetail"] = serde_json::json!(r.detail);
+                            v["readinessProgress"] = serde_json::json!(r.progress);
+                            v["readinessEstimateS"] = serde_json::json!(r.estimate_s);
+                        } else if m.media_ref.asset.is_some() {
+                            v["readiness"] = serde_json::json!(readiness::Readiness::Unknown);
+                        }
                         v
                     }))
                     .collect::<Vec<_>>()
@@ -2775,6 +2970,8 @@ impl ParamStore for AutomationStore {
             "targetGraphicsLabel" => Some(serde_json::json!(state.target_graphics_label)),
             "targetAudioMixerLabel" => Some(serde_json::json!(state.target_audio_mixer_label)),
             "audioRouting" => Some(serde_json::json!(self.audio_status.lock().expect("lock poisoned").clone())),
+            "preflightWindowMin" => Some(serde_json::json!(state.preflight_window_min)),
+            "defaultFiller" => Some(serde_json::json!(state.default_filler)),
             "triggerLog" => Some(Value::Array(self.trigger_log.lock().expect("lock poisoned").iter().cloned().collect())),
             "schedule" => Some(schedule_json(&state, chrono::Utc::now().timestamp_millis())),
             "childEvents" => Some(child_events_json(&state)),
@@ -2867,6 +3064,18 @@ impl ParamStore for AutomationStore {
                 state.graphics_node_id = None;
                 Ok(())
             }
+            "preflightWindowMin" => {
+                let v = value.as_f64().ok_or(SetError::Unknown)?;
+                if !(1.0..=240.0).contains(&v) {
+                    return Err(SetError::Unknown);
+                }
+                state.preflight_window_min = v as u32;
+                Ok(())
+            }
+            "defaultFiller" => {
+                state.default_filler = value.as_str().unwrap_or_default().trim().to_string();
+                Ok(())
+            }
             "targetAudioMixerLabel" => {
                 state.target_audio_mixer_label = value.as_str().unwrap_or_default().to_string();
                 state.audio_mixer_node_id = None;
@@ -2941,6 +3150,52 @@ impl ParamStore for AutomationStore {
                     (_, None) => Err("startType fehlt oder ungültig (sequence|manual|fixtime)".to_string()),
                 }
             }
+            "appendAsset" => (|| {
+                let text = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+                let asset: readiness::AssetRef =
+                    serde_json::from_str(&text("assetJson")).map_err(|e| format!("assetJson ungültig: {e}"))?;
+                if asset.asset_id.is_empty() {
+                    return Err("assetJson braucht assetId".to_string());
+                }
+                let on_missing = match text("onMissing").as_str() {
+                    "" => readiness::MissingPolicy::default(),
+                    p => readiness::MissingPolicy::parse(p).ok_or_else(|| format!("onMissing „{p}\u{201c} unbekannt (HOLD/STOP/SKIP/BLACK/FALLBACK/DEFAULT_FILLER)"))?,
+                };
+                let fallback = Some(text("fallbackFile")).filter(|f| !f.is_empty());
+                let player = self.state.lock().expect("lock poisoned").target_player_a_label.clone();
+                let file = resolve_asset_file(self, &player, &asset)?;
+                let label = Some(text("label")).filter(|l| !l.is_empty()).unwrap_or_else(|| file.clone());
+                let start_type = args.get("startType").and_then(Value::as_str).and_then(StartType::parse);
+                let duration_ms = args.get("durationMs").and_then(Value::as_f64).filter(|d| *d > 0.0).map(|d| d as u64);
+                self.do_append(label, None, Some(file), None, None, duration_ms, start_type, None, None, None)?;
+                let mut st = self.state.lock().expect("lock poisoned");
+                let id = format!("item{}", st.next_item_seq);
+                if let Some(m) = st.metadata.get_mut(&id) {
+                    m.media_ref = readiness::MediaRef { asset: Some(asset), on_missing, fallback_file: fallback };
+                }
+                Ok(())
+            })(),
+            "setMediaRef" => (|| {
+                let text = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+                let item_id = text("itemId");
+                let json = text("assetJson");
+                let asset: Option<readiness::AssetRef> = if json.is_empty() || json == "null" {
+                    None
+                } else {
+                    let a: readiness::AssetRef = serde_json::from_str(&json).map_err(|e| format!("assetJson ungültig: {e}"))?;
+                    if a.asset_id.is_empty() { None } else { Some(a) }
+                };
+                let on_missing = match text("onMissing").as_str() {
+                    "" => readiness::MissingPolicy::default(),
+                    p => readiness::MissingPolicy::parse(p).ok_or_else(|| format!("onMissing „{p}\u{201c} unbekannt"))?,
+                };
+                let fallback = Some(text("fallbackFile")).filter(|f| !f.is_empty());
+                let mut st = self.state.lock().expect("lock poisoned");
+                let m = st.metadata.get_mut(&item_id).ok_or("unbekannte itemId".to_string())?;
+                m.media_ref = readiness::MediaRef { asset, on_missing, fallback_file: fallback };
+                st.readiness.remove(&item_id);
+                Ok(())
+            })(),
             "sendTrigger" => (|| {
                 let text = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
                 let kind = text("targetKind");
@@ -3287,6 +3542,11 @@ async fn auto_advance_loop(
     loop {
         interval.tick().await;
 
+        // Kapitel 27 / P8: Ausfallrichtlinie STOP hat den Automatikmodus angefordert → Hold.
+        if store.request_hold.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            store.state.lock().expect("lock poisoned").playlist.set_mode(Mode::Hold);
+        }
+
         let action = {
             let state = store.state.lock().expect("lock poisoned");
             if let Some(active) = &state.active_cart {
@@ -3351,6 +3611,163 @@ async fn auto_advance_loop(
 /// Zehntelsekunden-Auflösung, ein eigener, gröberer Takt hält diese
 /// neue Logik außerdem vollständig getrennt vom bereits bewährten
 /// Advance-Pfad (kein Risiko, dort etwas zu verändern).
+/// Items mit Asset-Referenz innerhalb der ersten Positionen der Playlist samt geplanter Sendezeit (UTC-ms,
+/// `None` = manuell/unbekannt). Spec §72: nur was im Preflight-Fenster liegt (oder als Nächstes drankommt).
+fn upcoming_asset_items(state: &AutomationState, now_ms: i64) -> Vec<(String, readiness::AssetRef, Option<i64>)> {
+    let from = state.playlist.current_index().unwrap_or(0);
+    let base = match (state.playlist.on_air(), state.onair_since) {
+        (true, Some(since)) => now_ms - since.elapsed().as_millis() as i64,
+        _ => now_ms,
+    };
+    let inputs: Vec<schedule::PlanInput> = state
+        .playlist
+        .items()
+        .iter()
+        .skip(from)
+        .take(SCHEDULE_MAX_ENTRIES)
+        .filter_map(|id| {
+            state.metadata.get(id).map(|m| schedule::PlanInput {
+                id: id.clone(),
+                duration_ms: m.duration_ms,
+                anchor_utc_ms: if m.start_type == StartType::Fixtime { m.start_at_utc_ms } else { None },
+                manual: m.start_type == StartType::Manual,
+            })
+        })
+        .collect();
+    let entries = schedule::plan(&inputs, base);
+    entries
+        .iter()
+        .filter_map(|e| {
+            let asset = state.metadata.get(&e.id)?.media_ref.asset.clone()?;
+            Some((e.id.clone(), asset, e.start_ms))
+        })
+        .collect()
+}
+
+/// Kapitel 27 / P8: prüft alle 5 s die Medien der anstehenden Events, stößt die Bereitstellung rechtzeitig an
+/// (Spec §71) und hält die Bereitschaft je Item fest. Läuft vollständig asynchron zum Playout-Takt (Spec §182):
+/// Prozesse laufen im Orchestrator, hier wird nur gefragt und angestoßen — ein Fehler macht das Event „NOT_READY“,
+/// nie den Takt kaputt (Spec §183).
+async fn preflight_loop(store: Arc<AutomationStore>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(5));
+    loop {
+        interval.tick().await;
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let (items, labels, window_ms, channel) = {
+            let state = store.state.lock().expect("lock poisoned");
+            let mut labels: Vec<String> = [&state.target_player_a_label, &state.target_player_b_label]
+                .into_iter()
+                .filter(|l| !l.is_empty())
+                .cloned()
+                .collect();
+            labels.dedup();
+            (upcoming_asset_items(&state, now_ms), labels, state.preflight_window_min as i64 * 60_000, store.persistence.channel_id())
+        };
+        if items.is_empty() || labels.is_empty() || channel.is_empty() {
+            let mut state = store.state.lock().expect("lock poisoned");
+            if items.is_empty() {
+                state.readiness.clear();
+            }
+            continue;
+        }
+        let store2 = store.clone();
+        let items2: Vec<(String, readiness::AssetRef)> = items.iter().map(|(id, a, _)| (id.clone(), a.clone())).collect();
+        let (labels2, channel2) = (labels.clone(), channel.clone());
+        // Ergebnisse je (Item, Ziel-Player): schlechtester Zustand gewinnt.
+        let checked = tokio::task::spawn_blocking(move || {
+            let mut per_item: HashMap<String, Vec<(String, Value)>> = HashMap::new();
+            let mut error = None;
+            for label in &labels2 {
+                match preflight_request(&store2, &channel2, label, &items2) {
+                    Ok(entries) => {
+                        for e in entries {
+                            if let Some(k) = e.get("key").and_then(Value::as_str) {
+                                per_item.entry(k.to_string()).or_default().push((label.clone(), e.clone()));
+                            }
+                        }
+                    }
+                    Err(e) => error = Some(e),
+                }
+            }
+            (per_item, error)
+        })
+        .await;
+        let Ok((per_item, error)) = checked else { continue };
+        if let Some(e) = error {
+            report_throttled(&store, format!("Preflight nicht erreichbar: {e}"));
+        }
+        let rank = |s: &str| match s {
+            "READY" => 0,
+            "TRANSFERRING" => 1,
+            "REMOTE_ONLY" => 2,
+            "FAILED" => 3,
+            "MISSING" => 4,
+            _ => 5,
+        };
+        for (id, asset, start_ms) in items {
+            let Some(results) = per_item.get(&id) else { continue };
+            let worst = results.iter().max_by_key(|(_, e)| rank(e.get("state").and_then(Value::as_str).unwrap_or(""))).cloned();
+            let Some((_, worst)) = worst else { continue };
+            let st = worst.get("state").and_then(Value::as_str).unwrap_or("").to_string();
+            let mut entry = {
+                let state = store.state.lock().expect("lock poisoned");
+                state.readiness.get(&id).cloned().unwrap_or_default()
+            };
+            entry.state = st.clone();
+            entry.detail = worst.get("detail").and_then(Value::as_str).unwrap_or("").to_string();
+            entry.progress = worst.get("progress").and_then(Value::as_f64).unwrap_or(0.0);
+            entry.estimate_s = worst.get("estimateSeconds").and_then(Value::as_f64).unwrap_or(0.0);
+            entry.checked_ms = now_ms;
+            if st == "READY" {
+                entry.materializing = false;
+                entry.warned_late = false;
+            }
+            // Noch nicht lokal, aber bereitstellbar: Zeitpunkt nach Spec §71 berechnen und ggf. anstoßen.
+            if st == "REMOTE_ONLY" || (st == "FAILED" && worst.get("materializable").and_then(Value::as_bool).unwrap_or(false)) {
+                let materializable = worst.get("materializable").and_then(Value::as_bool).unwrap_or(false);
+                if materializable {
+                    let estimate_ms = (entry.estimate_s * 1000.0) as i64;
+                    // Ohne feste Startzeit (manuell): sofort bereitstellen, sobald das Event in Reichweite ist.
+                    let plan = match start_ms {
+                        Some(at) => readiness::plan_materialization(now_ms, at, estimate_ms, readiness::DEFAULT_SAFETY_MARGIN_MS, window_ms),
+                        None => readiness::Plan::Start,
+                    };
+                    if !matches!(plan, readiness::Plan::Wait) && !(st == "FAILED" && entry.materializing && now_ms - entry.checked_ms < 30_000) {
+                        let targets: Vec<String> = results
+                            .iter()
+                            .filter(|(_, e)| e.get("state").and_then(Value::as_str) != Some("READY"))
+                            .map(|(l, _)| l.clone())
+                            .collect();
+                        let (s3, ch3, a3, id3) = (store.clone(), channel.clone(), asset.clone(), id.clone());
+                        let r = tokio::task::spawn_blocking(move || {
+                            targets.iter().map(|l| (l.clone(), materialize_request(&s3, &ch3, l, &id3, &a3))).collect::<Vec<_>>()
+                        })
+                        .await;
+                        if let Ok(rs) = r {
+                            for (label, res) in rs {
+                                match res {
+                                    Ok(_) => entry.materializing = true,
+                                    Err(e) => report_throttled(&store, format!("Bereitstellung für Event „{id}\u{201c} auf „{label}\u{201c} nicht gestartet: {e}")),
+                                }
+                            }
+                        }
+                        if let readiness::Plan::StartLate { short_by_ms } = plan
+                            && !entry.warned_late
+                        {
+                            entry.warned_late = true;
+                            report_throttled(&store, format!("Event „{id}\u{201c}: Bereitstellung wird voraussichtlich {} s zu spät fertig (Sendezeit zu nah) — Ausfallrichtlinie greift bei Bedarf", short_by_ms / 1000));
+                        }
+                    }
+                }
+            }
+            store.state.lock().expect("lock poisoned").readiness.insert(id, entry);
+        }
+        // Einträge für Items, die nicht mehr vorne in der Liste stehen, verfallen.
+        let ids: std::collections::HashSet<String> = per_item.keys().cloned().collect();
+        store.state.lock().expect("lock poisoned").readiness.retain(|k, _| ids.contains(k));
+    }
+}
+
 /// Kapitel 27 / P7: abonniert `omp.channel.<channelId>.trigger` und führt eingehende Channel-Trigger aus.
 /// Wartet, bis die Persistenz den eigenen Channel kennt; folgt einem Channel-Wechsel (neu abonnieren).
 async fn trigger_loop(store: Arc<AutomationStore>, nats_url: String) {
@@ -3927,6 +4344,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let store = Arc::new(AutomationStore {
         audio_status: Mutex::new(String::new()),
         trigger_log: Mutex::new(std::collections::VecDeque::new()),
+        request_hold: std::sync::atomic::AtomicBool::new(false),
+        report_throttle: Mutex::new(HashMap::new()),
         trigger_gate: tokio::sync::Mutex::new(()),
         state,
         registry: registry.clone(),
@@ -3976,6 +4395,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tokio::spawn(child_loop(store.clone(), graphics_events));
 
     tokio::spawn(persist::persist_loop(store.clone()));
+    // Kapitel 27 / P8: Medien-Preflight (Verfügbarkeit, rechtzeitige Bereitstellung, Bereitschaft je Event).
+    tokio::spawn(preflight_loop(store.clone()));
     // Kapitel 27 / P7: Channel-Trigger empfangen.
     tokio::spawn(trigger_loop(store.clone(), nats_url_for_triggers));
 
@@ -4029,6 +4450,7 @@ mod availability_tests {
             transition_rate_frames: None,
             children: Vec::new(),
             audio: None,
+            media_ref: Default::default(),
         }
     }
 
@@ -4044,6 +4466,7 @@ mod availability_tests {
             transition_rate_frames: None,
             children: Vec::new(),
             audio: None,
+            media_ref: Default::default(),
         }
     }
 
@@ -4059,6 +4482,7 @@ mod availability_tests {
             transition_rate_frames: None,
             children: Vec::new(),
             audio: None,
+            media_ref: Default::default(),
         }
     }
 
@@ -4213,6 +4637,7 @@ mod live_select_tests {
             transition_rate_frames: None,
             children: Vec::new(),
             audio: None,
+            media_ref: Default::default(),
         };
         assert!(item_is_available(&meta, &[], &[], &[video("a", &["video.camera"], true)]));
         assert!(!item_is_available(&meta, &[], &[], &[video("a", &["video.camera"], false)]), "offline source: not available");
@@ -4244,7 +4669,7 @@ mod live_select_tests {
             transition_rate_frames: None,
             children: Vec::new(),
             audio,
-        }
+            media_ref: Default::default(),        }
     }
 
     #[test]
@@ -4323,6 +4748,7 @@ mod control_event_tests {
             transition_rate_frames: None,
             children: Vec::new(),
             audio: None,
+            media_ref: Default::default(),
         }
     }
 
@@ -4437,6 +4863,7 @@ mod fixtime_wait_tests {
             transition_rate_frames: None,
             children: Vec::new(),
             audio: None,
+            media_ref: Default::default(),
         }
     }
 
@@ -4491,6 +4918,7 @@ mod graphics_children_tests {
                 transition_rate_frames: None,
                 children,
                 audio: None,
+                media_ref: Default::default(),
             },
         );
         s.playlist.append("p".to_string());
@@ -4641,5 +5069,95 @@ mod graphics_children_tests {
         let data = serde_json::json!({"count": 5, "flag": true, "title": "Fixed Title"});
         let resolved = resolve_variables(&data, Some("Ignored"));
         assert_eq!(resolved, data);
+    }
+}
+
+#[cfg(test)]
+mod media_ref_tests {
+    use super::*;
+
+    fn meta_with(media_ref: readiness::MediaRef) -> ItemMeta {
+        ItemMeta {
+            label: "Clip".into(),
+            media: ItemMedia::File { path: "clip.mxf".into() },
+            duration_ms: 1000,
+            start_type: StartType::default(),
+            fixtime_hms: None,
+            start_at_utc_ms: None,
+            transition: Transition::default(),
+            transition_rate_frames: None,
+            children: Vec::new(),
+            audio: None,
+            media_ref,
+        }
+    }
+
+    #[test]
+    fn asset_reference_policy_and_fallback_survive_the_snapshot_roundtrip_flat() {
+        let m = meta_with(readiness::MediaRef {
+            asset: Some(readiness::AssetRef { asset_id: "a1".into(), version_id: String::new(), representation_type: "playout".into() }),
+            on_missing: readiness::MissingPolicy::Fallback,
+            fallback_file: Some("ersatz.mxf".into()),
+        });
+        let v = serde_json::to_value(&m).unwrap();
+        // Flach (nicht verschachtelt) — Altbestand und neue Felder liegen auf derselben Ebene.
+        assert_eq!(v["asset"]["assetId"], "a1");
+        assert_eq!(v["onMissing"], "FALLBACK");
+        assert_eq!(v["fallbackFile"], "ersatz.mxf");
+        let back: ItemMeta = serde_json::from_value(v).unwrap();
+        assert_eq!(back.media_ref, m.media_ref);
+    }
+
+    #[test]
+    fn snapshots_from_before_p8_load_without_media_ref() {
+        let mut v = serde_json::to_value(meta_with(readiness::MediaRef::default())).unwrap();
+        for k in ["asset", "onMissing", "fallbackFile"] {
+            v.as_object_mut().unwrap().remove(k);
+        }
+        let back: ItemMeta = serde_json::from_value(v).unwrap();
+        assert!(back.media_ref.asset.is_none());
+        assert_eq!(back.media_ref.on_missing, readiness::MissingPolicy::Hold);
+    }
+
+    #[test]
+    fn item_json_shows_asset_and_policy_only_when_set() {
+        let plain = item_meta_to_json("i", &meta_with(readiness::MediaRef::default()));
+        assert!(plain.get("asset").is_none());
+        let with = item_meta_to_json(
+            "i",
+            &meta_with(readiness::MediaRef {
+                asset: Some(readiness::AssetRef { asset_id: "a1".into(), ..Default::default() }),
+                on_missing: readiness::MissingPolicy::Skip,
+                fallback_file: None,
+            }),
+        );
+        assert_eq!(with["asset"]["assetId"], "a1");
+        assert_eq!(with["onMissing"], "SKIP");
+    }
+
+    #[test]
+    fn asset_items_are_not_gated_by_the_local_file_list() {
+        let asset = readiness::AssetRef { asset_id: "a1".into(), ..Default::default() };
+        let m = meta_with(readiness::MediaRef { asset: Some(asset), ..Default::default() });
+        assert!(item_is_available(&m, &[], &[], &[]), "Datei fehlt lokal, aber der Preflight stellt sie bereit");
+        assert!(!item_is_available(&meta_with(readiness::MediaRef::default()), &[], &[], &[]), "ohne Asset-Referenz gilt wie bisher die Dateiliste");
+    }
+
+    #[test]
+    fn upcoming_asset_items_only_lists_items_with_a_reference_and_their_planned_start() {
+        let mut state = AutomationState::new(String::new(), String::new(), String::new(), String::new());
+        let asset = readiness::AssetRef { asset_id: "a1".into(), ..Default::default() };
+        state.next_item_seq = 2;
+        for (id, with_asset) in [("item1", false), ("item2", true)] {
+            let mut m = meta_with(readiness::MediaRef { asset: with_asset.then(|| asset.clone()), ..Default::default() });
+            m.duration_ms = 10_000;
+            state.metadata.insert(id.to_string(), m);
+            state.playlist.append(id.to_string());
+        }
+        let now = 1_790_000_000_000;
+        let up = upcoming_asset_items(&state, now);
+        assert_eq!(up.len(), 1);
+        assert_eq!(up[0].0, "item2");
+        assert_eq!(up[0].2, Some(now + 10_000), "startet nach dem ersten 10-s-Item");
     }
 }

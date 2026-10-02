@@ -329,6 +329,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     for (const [v, t] of [
       ["pattern", "Testmuster"],
       ["file", "Datei"],
+      ["asset", "Asset (Bereitstellung)"],
       ["image", "Standbild"],
       ["live", "Live-Quelle"],
       ["liveselect", "Live nach Tags"],
@@ -362,6 +363,29 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     const prefInput = document.createElement("input");
     prefInput.type = "text";
     prefInput.placeholder = "bevorzugt (optional)";
+    // Kapitel 27 / P8: Asset-Event — Asset-ID aus dem OMP-Asset-System; der Node löst die Datei am Ziel-Player auf,
+    // bereitet sie rechtzeitig vor und wendet bei Nichtverfügbarkeit die gewählte Ausfallrichtlinie an.
+    const assetInput = document.createElement("input");
+    assetInput.type = "text";
+    assetInput.placeholder = "Asset-ID";
+    assetInput.style.minWidth = "200px";
+    const missingSelect = document.createElement("select");
+    for (const [v, t] of [
+      ["HOLD", "wenn fehlt: halten"],
+      ["SKIP", "wenn fehlt: überspringen"],
+      ["BLACK", "wenn fehlt: Schwarz"],
+      ["STOP", "wenn fehlt: Schwarz + Stopp"],
+      ["FALLBACK", "wenn fehlt: Ersatzdatei"],
+      ["DEFAULT_FILLER", "wenn fehlt: Standard-Filler"],
+    ]) {
+      const opt = document.createElement("option");
+      opt.value = v;
+      opt.textContent = t;
+      missingSelect.append(opt);
+    }
+    const fallbackInput = document.createElement("input");
+    fallbackInput.type = "text";
+    fallbackInput.placeholder = "Ersatzdatei (bei FALLBACK)";
     const durationInput = document.createElement("input");
     durationInput.type = "number";
     durationInput.placeholder = "Dauer (ms)";
@@ -370,6 +394,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const v = sourceTypeSelect.value;
       patternSelect.style.display = v === "pattern" ? "" : "none";
       fileSelect.style.display = v === "file" || v === "image" ? "" : "none";
+      assetInput.style.display = v === "asset" ? "" : "none";
+      missingSelect.style.display = v === "asset" ? "" : "none";
+      fallbackInput.style.display = v === "asset" ? "" : "none";
       liveSelect.style.display = v === "live" ? "" : "none";
       jumpSelect.style.display = v === "jump" ? "" : "none";
       tagsInput.style.display = v === "liveselect" ? "" : "none";
@@ -378,7 +405,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       // ignoriert ein mitgeschicktes durationMs vollständig (s. main.rs
       // dort) — das Feld hier wäre irreführend.
       // Steuer-Events (HOLD/JUMP) haben keine Dauer; ein Standbild schon.
-      durationInput.style.display = v === "file" || v === "hold" || v === "jump" ? "none" : "";
+      durationInput.style.display = v === "file" || v === "asset" || v === "hold" || v === "jump" ? "none" : "";
     };
     sourceTypeSelect.addEventListener("change", updateSourceTypeVisibility);
     updateSourceTypeVisibility();
@@ -386,6 +413,25 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     addBtn.textContent = "+ Item";
     addBtn.addEventListener("click", () => {
       const body = { label: labelInput.value.trim() || "Item" };
+      if (sourceTypeSelect.value === "asset") {
+        if (!assetInput.value.trim()) {
+          showError("Asset-ID fehlt");
+          return;
+        }
+        call("appendAsset", {
+          label: labelInput.value.trim(),
+          assetJson: JSON.stringify({ assetId: assetInput.value.trim() }),
+          onMissing: missingSelect.value,
+          fallbackFile: missingSelect.value === "FALLBACK" ? fallbackInput.value.trim() : "",
+          startType: "",
+          durationMs: 0,
+        }).then(() => {
+          labelInput.value = "";
+          assetInput.value = "";
+          poll();
+        });
+        return;
+      }
       if (sourceTypeSelect.value === "file") {
         if (!fileSelect.value) return;
         body.file = fileSelect.value;
@@ -423,7 +469,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         poll();
       });
     });
-    addRow.append(labelInput, sourceTypeSelect, patternSelect, fileSelect, liveSelect, tagsInput, prefInput, jumpSelect, durationInput, addBtn);
+    addRow.append(labelInput, sourceTypeSelect, patternSelect, fileSelect, assetInput, missingSelect, fallbackInput, liveSelect, tagsInput, prefInput, jumpSelect, durationInput, addBtn);
 
     // Listenansicht (PIPELINE-CONTROLLER-Parität, .pl-hdr-row dort) —
     // Spaltentitel über den Zeilen, gleiches Grid-Template wie .pl-row.
@@ -1349,6 +1395,24 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         refs.availEl.title = isAvailable
           ? "Quelle verfügbar"
           : "Quelle nicht verfügbar (Datei fehlt oder Live-Quelle offline) — Take wird verweigert";
+        // Kapitel 27 / P8: Bereitschaft von Asset-Events (READY ✓ / NOT_READY ⏳|✗ / UNKNOWN ?) — der Node stellt
+        // fehlende Medien rechtzeitig bereit; Tooltip nennt Zustand, Fortschritt, Schätzung und die Ausfallrichtlinie.
+        if (item.asset) {
+          const st = item.readinessState || "";
+          const pct = item.readinessProgress > 0 ? ` ${Math.round(item.readinessProgress * 100)} %` : "";
+          const eta = item.readinessEstimateS > 0 ? `, ca. ${Math.ceil(item.readinessEstimateS)} s` : "";
+          const [icon, cls] =
+            item.readiness === "READY" ? ["✓", "pl-avail"]
+            : st === "TRANSFERRING" ? ["⏳", "pl-avail"]
+            : item.readiness === "NOT_READY" ? ["✗", "pl-avail unavailable"]
+            : ["?", "pl-avail"];
+          refs.availEl.textContent = icon + (st === "TRANSFERRING" ? pct : "");
+          refs.availEl.className = cls;
+          refs.availEl.title =
+            `Asset ${item.asset.assetId} — Bereitschaft: ${item.readiness || "UNKNOWN"}${st ? ` (${st}${pct}${eta})` : ""}` +
+            `${item.readinessDetail ? `\n${item.readinessDetail}` : ""}\nBei Nichtverfügbarkeit: ${item.onMissing || "HOLD"}` +
+            `${item.fallbackFile ? ` (Ersatz: ${item.fallbackFile})` : ""}`;
+        }
 
         // Kapitel 6 Teil 4: ✂ = Cut (Standard), ⇄ = Mix (`crosspoint.
         // autoTrans` statt `crosspoint.cut` beim Take dieses Items).

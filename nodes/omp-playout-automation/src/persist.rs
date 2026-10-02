@@ -641,6 +641,7 @@ mod tests {
                 c
             }],
             audio: None,
+            media_ref: Default::default(),
         }
     }
 
