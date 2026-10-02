@@ -777,7 +777,10 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       childrenBtn.addEventListener("click", () => {
         const current = JSON.stringify(item.children || [], null, 0);
         const input = prompt(
-          "Grafik-Kinder als JSON-Array bearbeiten (templateId, data, delayMs, durationMs, relativeTo: \"start\"|\"end\"):",
+          "Child Events als JSON-Array bearbeiten.\n" +
+            "type: GRAPHIC | LOGO | CHANNEL_BRANDING (templateId, data) · TRIGGER | NODE_COMMAND | AUDIO | VOICEOVER (target = Node-Label, method, params, stopMethod) · WEBHOOK (url, params)\n" +
+            "timing: RELATIVE_TO_START | RELATIVE_TO_END | FULL_PRIMARY | ABSOLUTE (atUtc) · delayMs, durationMs (0 = bis Primary-Ende)\n" +
+            "failurePolicy: IGNORE | WARN | RETRY (retryCount, retryDelayMs) | BLOCK (+required) | FALLBACK (fallbackTarget)",
           current
         );
         if (input === null) return;
@@ -955,6 +958,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         channelName,
         persistenceStatus,
         scheduleValue,
+        childEventsValue,
       ] = await Promise.all([
         getParam("items"),
         getParam("currentItemId"),
@@ -976,6 +980,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         getParam("channelName"),
         getParam("persistence"),
         getParam("schedule"),
+        getParam("childEvents"),
       ]);
       const items = itemsValue || [];
       const currentIds = new Set(items.map((it) => it.id));
@@ -1219,10 +1224,15 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         // die Liste selbst aufzuklappen.
         const childCount = (item.children || []).length;
         refs.childrenBtn.textContent = childCount > 0 ? `🎨 ${childCount}` : "🎨";
+        // Kapitel 27 / P3: Lebenszyklus der Kinder des laufenden Primary im Tooltip.
+        const childStates = (childEventsValue || [])
+          .filter((c) => c.itemId === item.id)
+          .map((c) => `${c.id}: ${c.state}${c.error ? ` (${c.error})` : ""}`)
+          .join("\n");
         refs.childrenBtn.title =
-          childCount > 0
-            ? `${childCount} Grafik-Kind(er) — klicken zum Bearbeiten`
-            : "Keine Grafik-Kinder — klicken zum Hinzufügen";
+          (childCount > 0
+            ? `${childCount} Child Event(s) — klicken zum Bearbeiten`
+            : "Keine Child Events — klicken zum Hinzufügen") + (childStates ? `\n${childStates}` : "");
         refs.childrenBtn.className = childCount > 0 ? "has-children" : "";
       }
 

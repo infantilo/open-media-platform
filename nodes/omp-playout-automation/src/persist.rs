@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::playlist::Mode;
 use crate::remote::OrchestratorAuth;
+use crate::children::ChildState;
 use crate::{AutomationState, AutomationStore, Channel, FixtimeResolution, ItemMeta};
 
 pub const SNAPSHOT_SCHEMA: u32 = 1;
@@ -75,6 +76,22 @@ pub struct Snapshot {
     pub target_player_b_label: String,
     pub target_mixer_label: String,
     pub target_graphics_label: String,
+    /// Kapitel 27 / P3: Lebenszyklus der Child Events des On-Air-Primary
+    /// (Restart: bereits gestartete Kinder nicht erneut starten, verpasste
+    /// melden). Fehlt in Snapshots aus P1b/P2 → leer (§224).
+    #[serde(default)]
+    pub children_runtime: Vec<SnapChild>,
+    /// Exakter On-Air-Beginn in UTC-ms — Journal-Schlüssel und ABSOLUTE-Kinder
+    /// brauchen denselben Wert wie vor dem Neustart.
+    #[serde(default)]
+    pub onair_utc_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnapChild {
+    pub item_id: String,
+    pub id: String,
+    pub state: ChildState,
 }
 
 fn resolution_name(r: FixtimeResolution) -> &'static str {
@@ -144,6 +161,12 @@ pub fn build_snapshot(state: &AutomationState, since_cache: &mut SinceCache, now
         target_player_b_label: state.target_player_b_label.clone(),
         target_mixer_label: state.target_mixer_label.clone(),
         target_graphics_label: state.target_graphics_label.clone(),
+        children_runtime: state
+            .child_runtime
+            .iter()
+            .map(|rt| SnapChild { item_id: rt.item_id.clone(), id: rt.child.id.clone(), state: rt.state })
+            .collect(),
+        onair_utc_ms: state.onair_utc_ms,
     }
 }
 
@@ -206,6 +229,23 @@ pub fn apply_snapshot(state: &mut AutomationState, snap: Snapshot, now_utc_ms: i
             Some(e) if duration_ms == 0 || e <= duration_ms => {
                 state.onair_since = Instant::now().checked_sub(Duration::from_millis(e)).or_else(|| Some(Instant::now()));
                 report.resumed_on_air = true;
+                // Kapitel 27 / P3: Child Events des laufenden Primary neu planen.
+                if snap.onair_utc_ms != 0 {
+                    state.onair_utc_ms = snap.onair_utc_ms;
+                } else if let Some(s) = snap.onair_since_utc_ms {
+                    state.onair_utc_ms = s;
+                }
+                if let (Some(item_id), Some(since)) =
+                    (idx.and_then(|i| state.playlist.items().get(i)).cloned(), state.onair_since)
+                {
+                    let saved: HashMap<String, ChildState> = snap
+                        .children_runtime
+                        .iter()
+                        .filter(|c| c.item_id == item_id)
+                        .map(|c| (c.id.clone(), c.state))
+                        .collect();
+                    report.notices.extend(crate::plan_children(state, &item_id, since, Some(&saved)));
+                }
                 report.notices.push(format!(
                     "Neustart: „{label}\u{201c} läuft laut Snapshot weiter ({}s von {}s) — Zustand der Player nicht abgeglichen",
                     e / 1000,
@@ -581,7 +621,8 @@ pub async fn persist_loop(store: Arc<AutomationStore>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{GraphicsChild, ItemMedia, RelativeTo, StartType, Transition};
+    use crate::children::{ChildEvent, TimingMode};
+    use crate::{ItemMedia, StartType, Transition};
 
     fn meta(label: &str, duration_ms: u64) -> ItemMeta {
         ItemMeta {
@@ -593,12 +634,11 @@ mod tests {
             start_at_utc_ms: None,
             transition: Transition::Cut,
             transition_rate_frames: None,
-            children: vec![GraphicsChild {
-                template_id: "lt".to_string(),
-                data: serde_json::json!({"name": "X"}),
-                delay_ms: 1000,
-                duration_ms: 2000,
-                relative_to: RelativeTo::Start,
+            children: vec![{
+                let mut c = ChildEvent::graphic("lt", TimingMode::RelativeToStart, 1000, 2000);
+                c.id = "c1".to_string();
+                c.data = serde_json::json!({"name": "X"});
+                c
             }],
         }
     }
@@ -755,6 +795,69 @@ mod tests {
         apply_snapshot(&mut fresh, snap, 0).unwrap();
         assert_eq!(fresh.target_player_a_label, "EnvA");
         assert_eq!(fresh.target_mixer_label, "SavedMixer");
+    }
+
+    #[test]
+    fn restart_rearms_children_of_the_resumed_primary_from_the_snapshot() {
+        use crate::children::ChildState;
+        let mut s = state_with_three_items();
+        s.graphics_node_id = Some("g".to_string());
+        // item1 (60 s) on air seit 20 s, zwei Kinder: eines lief (Stopp bei 50 s), eines noch offen (bei 40 s).
+        let mut c1 = ChildEvent::graphic("lt", TimingMode::RelativeToStart, 5_000, 45_000);
+        c1.id = "c1".to_string();
+        let mut c2 = ChildEvent::graphic("lt", TimingMode::RelativeToStart, 40_000, 0);
+        c2.id = "c2".to_string();
+        s.metadata.get_mut("item1").unwrap().children = vec![c1, c2];
+        s.playlist.take().unwrap();
+        s.onair_since = Some(Instant::now());
+        s.onair_utc_ms = 7_000_000;
+        s.child_runtime = vec![
+            crate::ChildRuntime {
+                item_id: "item1".to_string(),
+                child: s.metadata["item1"].children[0].clone(),
+                state: ChildState::Active,
+                start_offset_ms: 5000,
+                stop_offset_ms: Some(50_000),
+                until_primary_end: false,
+                attempt: 0,
+                error: None,
+                used_fallback: false,
+            },
+            crate::ChildRuntime {
+                item_id: "item1".to_string(),
+                child: s.metadata["item1"].children[1].clone(),
+                state: ChildState::Armed,
+                start_offset_ms: 40_000,
+                stop_offset_ms: None,
+                until_primary_end: true,
+                attempt: 0,
+                error: None,
+                used_fallback: false,
+            },
+        ];
+        let mut cache = None;
+        let snap = build_snapshot(&s, &mut cache, 7_000_000);
+        assert_eq!(snap.children_runtime.len(), 2);
+        // JSON-Roundtrip (so liegt es in der Domäne `playout`)
+        let snap: Snapshot = serde_json::from_str(&serde_json::to_string(&snap).unwrap()).unwrap();
+
+        let (mut r, rep) = restore_into_fresh(snap, 7_000_000 + 20_000);
+        assert!(rep.resumed_on_air);
+        assert_eq!(r.onair_utc_ms, 7_000_000, "exact on-air start, so journal keys stay identical");
+        let by_id = |r: &AutomationState, id: &str| r.child_runtime.iter().find(|x| x.child.id == id).map(|x| x.state);
+        assert_eq!(by_id(&r, "c1"), Some(ChildState::Active));
+        // Frischer Node: Grafik-Ziel noch nicht aufgelöst → bleibt SCHEDULED (ARMED erst mit Ziel).
+        assert_eq!(by_id(&r, "c2"), Some(ChildState::Scheduled));
+        // c1 wird NICHT erneut gestartet, bekommt nur den Stopp; c2 (Start in der Zukunft) wird geplant.
+        let starts: Vec<&str> = r
+            .child_schedule
+            .iter()
+            .filter(|e| matches!(e.action, crate::ChildAction::Start { .. }))
+            .map(|e| e.child_id.as_str())
+            .collect();
+        assert_eq!(starts, ["c2"]);
+        assert!(r.child_schedule.iter().any(|e| e.child_id == "c1" && e.action == crate::ChildAction::Stop));
+        r.child_schedule.clear();
     }
 
     #[test]

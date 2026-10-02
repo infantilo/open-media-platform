@@ -57,6 +57,7 @@
 //! tatsächlichen `take_on_targets`-Erfolg gesetzt wird — die einzige
 //! verlässliche Quelle für "was zeigt der Player gerade wirklich".
 
+mod children;
 mod persist;
 mod playlist;
 mod remote;
@@ -73,6 +74,7 @@ use omp_node_sdk::{
     Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType,
     Range, SetError,
 };
+use children::{ChildEvent, ChildState, ChildType, FailAction};
 use playlist::{Mode, Playlist};
 use remote::{OrchestratorAuth, ProxyClient};
 use serde::{Deserialize, Serialize};
@@ -226,43 +228,6 @@ impl Channel {
     }
 }
 
-/// Kapitel 6 Teil 5 (`docs/END-GOAL-FEATURES.md` §6.4 "Grafik-Child-
-/// Events"): ein Kind-Ereignis ist relativ zum START oder ENDE des
-/// tragenden Rundown-Items terminiert — `End` ist nur sinnvoll, wenn das
-/// Item eine echte `duration_ms > 0` hat (Live-/manuell endlose Items
-/// kennen kein "Ende", `schedule_children` überspringt solche
-/// End-relativen Kinder dann mit einer Meldung statt sie nie feuern zu
-/// lassen, ohne dass der Operator erfährt, warum).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum RelativeTo {
-    Start,
-    End,
-}
-
-/// Ein Grafik-Kind-Ereignis (`docs/END-GOAL-FEATURES.md` §6.4) — zeigt
-/// `template_id` mit `data` am Ziel-`omp-ograf` (`targetGraphicsLabel`)
-/// für `duration_ms` (0 = bleibt stehen, bis das tragende Item endet
-/// oder der Kanal wechselt — kein eigenes `hide()` geplant) ab
-/// `delay_ms` relativ zu `relative_to`. `data` ist bewusst rohes JSON
-/// (nicht typisiert) — die Feldform hängt vom jeweiligen OGraf-Template-
-/// Schema ab, das dieser Node nicht kennt und nicht kennen muss
-/// (`omp-ograf::show` wendet es ohnehin nur als Override auf die
-/// Schema-Defaults an).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct GraphicsChild {
-    #[serde(rename = "templateId")]
-    template_id: String,
-    #[serde(default)]
-    data: Value,
-    #[serde(rename = "delayMs", default)]
-    delay_ms: u64,
-    #[serde(rename = "durationMs", default)]
-    duration_ms: u64,
-    #[serde(rename = "relativeTo")]
-    relative_to: RelativeTo,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct ItemMeta {
     label: String,
@@ -293,8 +258,8 @@ struct ItemMeta {
     /// setzt sie vorher explizit (`crosspoint.setTransRate`,
     /// 1..=250 Frames, Mixer-seitige Grenze).
     transition_rate_frames: Option<u32>,
-    /// Kapitel 6 Teil 5: Grafik-Kind-Ereignisse, s. `GraphicsChild`-Doku.
-    children: Vec<GraphicsChild>,
+    /// Child Events (Kapitel 6 Teil 5 Grafik, Kapitel 27 / P3 verallgemeinert), s. `children.rs`.
+    children: Vec<ChildEvent>,
 }
 
 /// Fachlicher Event-Typ eines Items (Spec §7). Leitet sich aus dem Medium
@@ -585,11 +550,16 @@ struct AutomationState {
     /// Erhöht sich bei JEDER On-Air-Änderung (alle 8 `take_on_targets`-
     /// Aufrufstellen, auch die drei "immer harter Cut"-Ausnahmen) — ein
     /// `ScheduledGraphicsEvent` mit einer älteren Epoche gilt als
-    /// storniert, ohne dass `graphics_schedule` aktiv durchsucht/
+    /// storniert, ohne dass `child_schedule` aktiv durchsucht/
     /// bereinigt werden muss (verhindert, dass ein End-relatives Kind
     /// des VORHERIGEN On-Air-Items verspätet auf dem NEUEN Item auftaucht).
-    graphics_epoch: u64,
-    graphics_schedule: Vec<ScheduledGraphicsEvent>,
+    child_epoch: u64,
+    child_schedule: Vec<ScheduledChild>,
+    /// Kapitel 27 / P3: Lebenszyklus der Kinder (aktuelles + gerade abgelöstes Primary).
+    child_runtime: Vec<ChildRuntime>,
+    /// On-Air-Beginn des aktuellen Primary in UTC-ms (für ABSOLUTE-Kinder und
+    /// den Journal-Schlüssel, der Neustarts überlebt).
+    onair_utc_ms: i64,
 }
 
 impl AutomationState {
@@ -619,8 +589,10 @@ impl AutomationState {
             fixtime_resolved: HashMap::new(),
             target_graphics_label: graphics_label,
             graphics_node_id: None,
-            graphics_epoch: 0,
-            graphics_schedule: Vec::new(),
+            child_epoch: 0,
+            child_schedule: Vec::new(),
+            child_runtime: Vec::new(),
+            onair_utc_ms: 0,
         }
     }
 }
@@ -633,18 +605,41 @@ enum FixtimeResolution {
     Skipped,
 }
 
-/// s. `AutomationState::graphics_epoch`-Doku.
-#[derive(Debug, Clone)]
-enum GraphicsAction {
-    Show { template_id: String, data: Value },
-    Hide,
+/// Kapitel 27 / P3: was der zentrale Child-Scheduler zu einem Kind tut.
+#[derive(Debug, Clone, PartialEq)]
+enum ChildAction {
+    /// `attempt` 0 = erster Versuch; `use_fallback`: `fallbackTarget` statt `target`.
+    Start { attempt: u32, use_fallback: bool },
+    Stop,
 }
 
+/// Ein fälliger/ausstehender Child-Befehl. `Start`-Einträge werden bei jedem
+/// Primary-Wechsel verworfen, `Stop`-Einträge NIE (ein gestartetes Kind muss
+/// auch nach einem Primary-Wechsel wieder gestoppt werden).
 #[derive(Debug, Clone)]
-struct ScheduledGraphicsEvent {
-    epoch: u64,
+struct ScheduledChild {
     fire_at: Instant,
-    action: GraphicsAction,
+    item_id: String,
+    child_id: String,
+    action: ChildAction,
+}
+
+/// Laufzeit-Zustand eines Kindes des aktuellen (bzw. gerade abgelösten)
+/// Primary — Grundlage für Lebenszyklus-Anzeige (`childEvents`) und Restart.
+#[derive(Debug, Clone)]
+struct ChildRuntime {
+    item_id: String,
+    /// Mit bereits aufgelösten Variablen (`{{next:title}}`).
+    child: ChildEvent,
+    state: ChildState,
+    start_offset_ms: u64,
+    stop_offset_ms: Option<u64>,
+    until_primary_end: bool,
+    attempt: u32,
+    error: Option<String>,
+    /// Der erfolgreiche Start lief über `fallbackTarget` — der Stopp muss
+    /// denselben Node treffen, nicht das (nicht erreichbare) Haupt-Ziel.
+    used_fallback: bool,
 }
 
 /// Zustand eines gerade laufenden Cart-Interrupts (`ARCHITECTURE.md`
@@ -718,42 +713,11 @@ impl AutomationStore {
     /// Carts/das synthetische Stop-Item haben nie welche, dieser Zweig
     /// ist für sie ein reines No-op nach dem Epochen-Sprung).
     fn schedule_children(&self, state: &mut AutomationState, item_id: &str, onair_since: Instant) {
-        state.graphics_epoch += 1;
-        let epoch = state.graphics_epoch;
-        let Some(meta) = state.metadata.get(item_id) else { return };
-        if meta.children.is_empty() {
-            return;
-        }
-        let next_title = state
-            .playlist
-            .peek_next()
-            .and_then(|id| state.metadata.get(id))
-            .map(|m| m.label.clone());
-        let item_duration_ms = meta.duration_ms;
-        let item_label = meta.label.clone();
-        let children = meta.children.clone();
-        for child in &children {
-            let Some(offset_ms) = child_show_offset_ms(child, item_duration_ms) else {
-                self.report(format!(
-                    "Grafik-Kind „{}\u{201c} von „{item_label}\u{201c} übersprungen: End-relativ ohne feste Item-Dauer (oder Verzögerung länger als die Dauer)",
-                    child.template_id
-                ));
-                continue;
-            };
-            let fire_at = onair_since + Duration::from_millis(offset_ms);
-            let data = resolve_variables(&child.data, next_title.as_deref());
-            state.graphics_schedule.push(ScheduledGraphicsEvent {
-                epoch,
-                fire_at,
-                action: GraphicsAction::Show { template_id: child.template_id.clone(), data },
-            });
-            if child.duration_ms > 0 {
-                state.graphics_schedule.push(ScheduledGraphicsEvent {
-                    epoch,
-                    fire_at: fire_at + Duration::from_millis(child.duration_ms),
-                    action: GraphicsAction::Hide,
-                });
-            }
+        retire_children(state);
+        state.child_epoch += 1;
+        state.onair_utc_ms = chrono::Utc::now().timestamp_millis() - onair_since.elapsed().as_millis() as i64;
+        for notice in plan_children(state, item_id, onair_since, None) {
+            self.report(notice);
         }
     }
 
@@ -1223,7 +1187,7 @@ impl AutomationStore {
             #[serde(rename = "transitionRateFrames", default)]
             transition_rate_frames: Option<u32>,
             #[serde(default)]
-            children: Vec<GraphicsChild>,
+            children: Vec<ChildEvent>,
         }
         let load_items: Vec<LoadItem> = serde_json::from_str(items_json)
             .map_err(|e| format!("itemsJson ungültig: {e}"))?;
@@ -1450,7 +1414,19 @@ impl AutomationStore {
     /// (`schedule_children` liest die Liste dort neu), ein bereits
     /// laufender On-Air-Zeitplan wird von einer Änderung hier nicht
     /// rückwirkend angepasst.
-    fn do_set_children(&self, item_id: &str, children: Vec<GraphicsChild>) -> Result<(), String> {
+    fn do_set_children(&self, item_id: &str, mut children: Vec<ChildEvent>) -> Result<(), String> {
+        // Vorab validieren (Kapitel 27 / P3): ein ungültiges Kind verwirft die
+        // ganze Liste, statt halb gesetzt zu werden. IDs werden vergeben, wenn leer.
+        let mut seen = std::collections::HashSet::new();
+        for (n, c) in children.iter_mut().enumerate() {
+            if c.id.trim().is_empty() {
+                c.id = format!("c{}", n + 1);
+            }
+            c.validate().map_err(|e| format!("Child {} („{}\u{201c}): {e}", n + 1, c.id))?;
+            if !seen.insert(c.id.clone()) {
+                return Err(format!("Child-ID „{}\u{201c} kommt doppelt vor", c.id));
+            }
+        }
         let mut state = self.state.lock().expect("lock poisoned");
         match state.metadata.get_mut(item_id) {
             Some(meta) => {
@@ -1752,6 +1728,17 @@ fn take_on_targets(
         ItemMedia::Jump { .. } => return Err("JUMP-Event nicht aufgelöst (interner Fehler)".to_string()),
         _ => {}
     }
+    // Kapitel 27 / P3 Preflight (Spec §187): ein ERFORDERLICHES Child mit
+    // Richtlinie BLOCK, dessen Ziel nicht auflösbar ist, verhindert den Take —
+    // vorher, nicht erst mitten in der Sendung.
+    for child in meta.children.iter().filter(|c| c.required && c.failure_policy == children::FailurePolicy::Block) {
+        if !child_target_ok(state, child) {
+            return Err(format!(
+                "Preflight: erforderliches Child „{}\u{201c} von „{}\u{201c} hat kein auflösbares Ziel — Take blockiert",
+                child.id, meta.label
+            ));
+        }
+    }
     let (standby_node_id, standby_label) = standby_target(state)?;
     load_onto_channel(store, &standby_node_id, meta)?;
 
@@ -1802,21 +1789,231 @@ fn item_transition(state: &AutomationState, item_id: &str) -> (Transition, Optio
 /// Kapitel 6 Teil 5 (`docs/END-GOAL-FEATURES.md` §6.4 "Grafik-Child-
 /// Events... relativ zu Clip-Start ODER -Ende"): reine Zeit-Arithmetik,
 /// kein State/keine Uhr — testbar wie `fixtime_action`. Rechnet den
-/// Versatz (ms) zwischen dem On-Air-Beginn des tragenden Items und dem
-/// Anzeige-Zeitpunkt des Kinds aus. `item_duration_ms == 0` (endlos,
-/// Live-/manuelle Items) macht `RelativeTo::End` bedeutungslos — `None`
-/// statt eines erfundenen Zeitpunkts, ebenso bei einer `delay_ms` >
-/// `item_duration_ms` (End-relativ VOR dem Start wäre unsinnig).
-fn child_show_offset_ms(child: &GraphicsChild, item_duration_ms: u64) -> Option<u64> {
-    match child.relative_to {
-        RelativeTo::Start => Some(child.delay_ms),
-        RelativeTo::End => {
-            if item_duration_ms == 0 {
-                return None;
-            }
-            item_duration_ms.checked_sub(child.delay_ms)
+/// Kapitel 27 / P3: der bisherige Primary wird abgelöst. Noch nicht gestartete
+/// Kinder → CANCELLED (Spec §234: keine späteren Trigger mehr), gestartete
+/// Kinder bekommen SOFORT einen Stopp (Spec §243: FULL_PRIMARY-Kinder enden
+/// mit dem Primary; auch zeitlich begrenzte dürfen nicht stehenbleiben, weil
+/// ihr geplanter Stopp sonst mit dem Primary verfiele).
+fn retire_children(state: &mut AutomationState) {
+    let now = Instant::now();
+    // Starts aller Primaries verwerfen, Stopps vorziehen.
+    state.child_schedule.retain(|e| matches!(e.action, ChildAction::Stop));
+    for e in state.child_schedule.iter_mut() {
+        if e.fire_at > now {
+            e.fire_at = now;
         }
     }
+    let mut stops = Vec::new();
+    for rt in state.child_runtime.iter_mut() {
+        match rt.state {
+            ChildState::Scheduled | ChildState::Armed => {
+                rt.state = ChildState::Cancelled;
+            }
+            ChildState::Fired | ChildState::Active => {
+                if needs_stop(&rt.child) {
+                    stops.push((rt.item_id.clone(), rt.child.id.clone()));
+                } else {
+                    rt.state = ChildState::Completed;
+                }
+            }
+            _ => {}
+        }
+    }
+    for (item_id, child_id) in stops {
+        if !state.child_schedule.iter().any(|e| e.item_id == item_id && e.child_id == child_id && e.action == ChildAction::Stop) {
+            state.child_schedule.push(ScheduledChild { fire_at: now, item_id, child_id, action: ChildAction::Stop });
+        }
+    }
+    // Abgeschlossene Einträge älterer Primaries fallen weg; laufende bleiben bis zu ihrem Stopp.
+    state.child_runtime.retain(|rt| !rt.state.is_terminal());
+}
+
+/// Braucht das Kind nach dem Start noch einen Stopp-Befehl?
+fn needs_stop(child: &ChildEvent) -> bool {
+    match child.kind {
+        k if k.is_graphics() => true,
+        k if k.is_node_command() => !child.stop_method.trim().is_empty(),
+        _ => false,
+    }
+}
+
+/// Plant die Kinder des gerade auf Sendung gegangenen Items (reine
+/// Zustandsfunktion, testbar ohne Netzwerk). `saved`: Zustand je Kind-ID aus
+/// einem Snapshot (Restart-Rekonstruktion, `Some`) — dann werden bereits
+/// gestartete Kinder nicht erneut gestartet und verpasste Starts als
+/// CANCELLED gemeldet statt nachgeholt (Spec §115: nicht blind erneut
+/// ausführen). Liefert Meldungen für den Operator.
+fn plan_children(
+    state: &mut AutomationState,
+    item_id: &str,
+    onair_since: Instant,
+    saved: Option<&HashMap<String, ChildState>>,
+) -> Vec<String> {
+    let mut notices = Vec::new();
+    let Some(meta) = state.metadata.get(item_id) else { return notices };
+    if meta.children.is_empty() {
+        return notices;
+    }
+    let next_title = state.playlist.peek_next().and_then(|id| state.metadata.get(id)).map(|m| m.label.clone());
+    let item_duration_ms = meta.duration_ms;
+    let item_label = meta.label.clone();
+    let children = meta.children.clone();
+    let elapsed_ms = onair_since.elapsed().as_millis() as u64;
+    for (n, original) in children.iter().enumerate() {
+        let mut child = original.clone();
+        if child.id.is_empty() {
+            child.id = format!("c{}", n + 1);
+        }
+        child.data = resolve_variables(&child.data, next_title.as_deref());
+        let window = match child.resolve_window(item_duration_ms, state.onair_utc_ms) {
+            Ok(w) => w,
+            Err(e) => {
+                notices.push(format!("Child „{}\u{201c} von „{item_label}\u{201c} übersprungen: {e}", child.id));
+                state.child_runtime.push(ChildRuntime {
+                    item_id: item_id.to_string(),
+                    child,
+                    state: ChildState::Failed,
+                    start_offset_ms: 0,
+                    stop_offset_ms: None,
+                    until_primary_end: false,
+                    attempt: 0,
+                    error: Some(e),
+                    used_fallback: false,
+                });
+                continue;
+            }
+        };
+        if let Some(w) = child.warn_outside_primary(&window, item_duration_ms) {
+            notices.push(format!("Child „{}\u{201c} von „{item_label}\u{201c}: {w}", child.id));
+        }
+        let prior = saved.and_then(|m| m.get(&child.id)).copied();
+        let start_at = onair_since + Duration::from_millis(window.start_offset_ms);
+        let mut runtime = ChildRuntime {
+            item_id: item_id.to_string(),
+            child: child.clone(),
+            state: ChildState::Scheduled,
+            start_offset_ms: window.start_offset_ms,
+            stop_offset_ms: window.stop_offset_ms,
+            until_primary_end: window.until_primary_end,
+            attempt: 0,
+            error: None,
+            used_fallback: false,
+        };
+        let push_stop = |state: &mut AutomationState, at: Instant| {
+            state.child_schedule.push(ScheduledChild {
+                fire_at: at,
+                item_id: item_id.to_string(),
+                child_id: child.id.clone(),
+                action: ChildAction::Stop,
+            });
+        };
+        match prior {
+            // Restart: Endzustände bleiben, ohne etwas auszuführen.
+            Some(st) if st.is_terminal() => runtime.state = st,
+            // Restart: lief schon — nur noch den geplanten Stopp nachziehen.
+            Some(ChildState::Fired) | Some(ChildState::Active) => {
+                runtime.state = ChildState::Active;
+                if needs_stop(&child)
+                    && let Some(stop) = window.stop_offset_ms
+                {
+                    push_stop(state, onair_since + Duration::from_millis(stop));
+                }
+            }
+            // Restart: noch nicht gestartet, Startzeit aber verstrichen → nicht nachholen.
+            Some(_) if window.start_offset_ms < elapsed_ms => {
+                runtime.state = ChildState::Cancelled;
+                notices.push(format!(
+                    "Neustart: Child „{}\u{201c} von „{item_label}\u{201c} wurde während des Ausfalls verpasst — nicht nachgeholt",
+                    child.id
+                ));
+            }
+            _ => {
+                state.child_schedule.push(ScheduledChild {
+                    fire_at: start_at,
+                    item_id: item_id.to_string(),
+                    child_id: child.id.clone(),
+                    action: ChildAction::Start { attempt: 0, use_fallback: false },
+                });
+                if let Some(stop) = window.stop_offset_ms
+                    && needs_stop(&child)
+                {
+                    push_stop(state, onair_since + Duration::from_millis(stop));
+                }
+                // ARMED, sobald das Ziel auflösbar ist (sonst bleibt es SCHEDULED, Auflösung beim Start).
+                if child_target_ok(state, &child) {
+                    runtime.state = ChildState::Armed;
+                }
+            }
+        }
+        state.child_runtime.push(runtime);
+    }
+    notices
+}
+
+/// Ist das Ziel eines Kindes gerade auflösbar? (Preflight/ARMED; für Node-
+/// Befehle gegen die zuletzt entdeckten Node-Labels, für Grafik gegen den
+/// aufgelösten Grafik-Node, Webhooks sind immer „auflösbar“ — das Netz zeigt
+/// sich erst beim Senden.)
+fn child_target_ok(state: &AutomationState, child: &ChildEvent) -> bool {
+    if child.kind.is_graphics() {
+        state.graphics_node_id.is_some()
+    } else if child.kind.is_node_command() {
+        state.discovered_labels.iter().any(|l| l == &child.target)
+    } else {
+        true
+    }
+}
+
+/// Führt Start oder Stopp eines Kindes aus (blockierend, `spawn_blocking`).
+/// Knoten-agnostisch: Grafik → `show`/`hide` am Grafik-Node, sonst der in
+/// `target`/`method` genannte Node-Befehl über denselben Proxy wie überall.
+fn execute_child(
+    store: &AutomationStore,
+    child: &ChildEvent,
+    graphics_node_id: Option<String>,
+    use_fallback: bool,
+    stop: bool,
+) -> Result<(), String> {
+    let obj = |v: &Value| if v.is_null() { serde_json::json!({}) } else { v.clone() };
+    if child.kind.is_graphics() {
+        let node_id = graphics_node_id.ok_or("kein Ziel-omp-ograf aufgelöst (targetGraphicsLabel)")?;
+        let graphics = store.proxy_client(node_id);
+        return if stop {
+            graphics.invoke("hide", serde_json::json!({})).map_err(|e| e.to_string())
+        } else {
+            graphics
+                .invoke("show", serde_json::json!({"templateId": child.template_id, "data": child.data}))
+                .map_err(|e| e.to_string())
+        };
+    }
+    if child.kind.is_node_command() {
+        let method = if stop { child.stop_method.as_str() } else { child.method.as_str() };
+        if method.is_empty() {
+            return Ok(());
+        }
+        let label = if use_fallback && !child.fallback_target.is_empty() { &child.fallback_target } else { &child.target };
+        let node_id = remote::resolve_node_id_by_label(&store.registry, label)
+            .ok_or_else(|| format!("Ziel-Node „{label}\u{201c} nicht gefunden"))?;
+        let params = if stop { obj(&child.stop_params) } else { obj(&child.params) };
+        return store.proxy_client(node_id).invoke(method, params).map_err(|e| e.to_string());
+    }
+    if child.kind == ChildType::Webhook {
+        if stop {
+            return Ok(());
+        }
+        let body = obj(&child.params);
+        return match ureq::post(&child.url)
+            .config()
+            .timeout_global(Some(Duration::from_secs(10)))
+            .build()
+            .send_json(body)
+        {
+            Ok(_) => Ok(()),
+            Err(ureq::Error::StatusCode(code)) => Err(format!("Webhook antwortete mit Status {code}")),
+            Err(e) => Err(format!("Webhook fehlgeschlagen: {e}")),
+        };
+    }
+    Err(format!("{:?} wird nicht unterstützt", child.kind))
 }
 
 /// Kapitel 6 Teil 5 (§6.4 "Variablen-Auflösung ({{next:title}}-
@@ -1919,6 +2116,14 @@ impl ParamStore for AutomationStore {
             // Kapitel 6 Teil 5 — optional, s. `target_graphics_label`-Doku.
             // Kapitel 27 / P1b: Anbindung an die Domäne `playout` (s.
             // `persist.rs`) — reine Anzeige.
+            // Kapitel 27 / P3: Lebenszyklus der Child Events (SCHEDULED…COMPLETED).
+            ParamSpec {
+                name: "childEvents".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
             // Kapitel 27 / P2a: Wanduhr-Plan (UTC) mit Warnungen, s. `schedule.rs`.
             ParamSpec {
                 name: "schedule".to_string(),
@@ -2253,6 +2458,7 @@ impl ParamStore for AutomationStore {
             "targetMixerLabel" => Some(serde_json::json!(state.target_mixer_label)),
             "targetGraphicsLabel" => Some(serde_json::json!(state.target_graphics_label)),
             "schedule" => Some(schedule_json(&state, chrono::Utc::now().timestamp_millis())),
+            "childEvents" => Some(child_events_json(&state)),
             "channelId" => Some(serde_json::json!(self.persistence.channel_id())),
             "channelName" => Some(serde_json::json!(self.persistence.channel_name())),
             "persistence" => Some(serde_json::json!(self.persistence.status())),
@@ -2425,7 +2631,7 @@ impl ParamStore for AutomationStore {
             "setChildren" => (|| {
                 let item_id = args.get("itemId").and_then(Value::as_str).ok_or("itemId fehlt".to_string())?;
                 let children_json = args.get("childrenJson").and_then(Value::as_str).unwrap_or("[]");
-                let children: Vec<GraphicsChild> = serde_json::from_str(children_json)
+                let children: Vec<ChildEvent> = serde_json::from_str(children_json)
                     .map_err(|e| format!("childrenJson ungültig: {e}"))?;
                 self.do_set_children(item_id, children)
             })(),
@@ -2906,77 +3112,192 @@ async fn fixtime_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender
 /// (Grafikeinblendungen dürfen sichtbar präziser sein als eine
 /// Wanduhr-Minute), aber nicht so fein wie der 200ms-Advance-Tick
 /// (kein Zeitkritischer On-Air-Wechsel, nur ein Overlay).
-async fn graphics_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender<Event>) {
+async fn child_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender<Event>) {
     let mut interval = tokio::time::interval(GRAPHICS_TICK);
     loop {
         interval.tick().await;
         let now = Instant::now();
 
-        // Fällige Ereignisse aus der aktuellen Epoche einsammeln (nach
-        // `fire_at` sortiert — wichtig für den Cart-Return-Nachhol-Fall,
-        // s. dortige Doku: Show muss vor ihrem eigenen Hide versendet
-        // werden, auch wenn beide bereits überfällig sind), storniert
-        // (falsche Epoche) UND noch-nicht-fällige Einträge bleiben in
-        // `graphics_schedule` bzw. werden beim `retain` verworfen —
-        // dieselbe Drain-und-Prune-Bewegung in einem Schritt.
-        let (graphics_node_id, due) = {
+        // Fällige Befehle einsammeln, nach `fire_at` sortiert (ein Start muss
+        // vor seinem eigenen Stopp laufen, auch wenn beide überfällig sind).
+        let due: Vec<(ScheduledChild, ChildEvent, Option<String>, i64)> = {
             let mut state = store.state.lock().expect("lock poisoned");
-            let current_epoch = state.graphics_epoch;
-            let mut due = Vec::new();
-            state.graphics_schedule.retain(|ev| {
-                if ev.epoch != current_epoch {
-                    return false; // storniert, verwerfen
-                }
+            let mut due_events = Vec::new();
+            state.child_schedule.retain(|ev| {
                 if ev.fire_at <= now {
-                    due.push(ev.clone());
-                    false // fällig, aus der Warteschlange entfernen
+                    due_events.push(ev.clone());
+                    false
                 } else {
-                    true // noch in der Zukunft, behalten
+                    true
                 }
             });
-            due.sort_by_key(|ev| ev.fire_at);
-            (state.graphics_node_id.clone(), due)
+            due_events.sort_by_key(|ev| ev.fire_at);
+            let graphics_node = state.graphics_node_id.clone();
+            let occurrence_secs = state.onair_utc_ms.div_euclid(1000);
+            due_events
+                .into_iter()
+                .filter_map(|ev| {
+                    let rt = state.child_runtime.iter().find(|r| r.item_id == ev.item_id && r.child.id == ev.child_id)?;
+                    // Ein Start für ein schon beendetes Kind (z. B. abgebrochen) entfällt.
+                    if ev.action != ChildAction::Stop && rt.state.is_terminal() {
+                        return None;
+                    }
+                    // Stopp trifft denselben Node wie der erfolgreiche Start (Fallback!).
+                    let mut child = rt.child.clone();
+                    if ev.action == ChildAction::Stop && rt.used_fallback && !child.fallback_target.is_empty() {
+                        child.target = child.fallback_target.clone();
+                    }
+                    Some((ev, child, graphics_node.clone(), occurrence_secs))
+                })
+                .collect()
         };
         if due.is_empty() {
             continue;
         }
-        let Some(graphics_node_id) = graphics_node_id else {
-            // Kinder geplant, aber kein Ziel-`omp-ograf` (mehr) aufgelöst
-            // (z. B. `targetGraphicsLabel` nie/nicht mehr gültig) — einmal
-            // pro fälligem Ereignis melden statt still zu verwerfen.
-            let label = store.state.lock().expect("lock poisoned").target_graphics_label.clone();
-            for _ in &due {
-                store.report(format!(
-                    "Grafik-Ereignis nicht zustellbar: kein Ziel-omp-ograf aufgelöst (targetGraphicsLabel: „{label}\u{201c})"
-                ));
-            }
-            continue;
-        };
 
-        for ev in due {
-            let store2 = store.clone();
-            let node_id = graphics_node_id.clone();
-            let result = tokio::task::spawn_blocking(move || {
-                let graphics = store2.proxy_client(node_id);
-                match ev.action {
-                    GraphicsAction::Show { template_id, data } => {
-                        graphics.invoke("show", serde_json::json!({"templateId": template_id, "data": data}))
+        for (ev, child, graphics_node, occurrence_secs) in due {
+            match ev.action.clone() {
+                ChildAction::Start { attempt, use_fallback } => {
+                    // Exactly-once über Neustarts: VOR dem ersten Versuch ins
+                    // Ausführungsjournal der Domäne `playout` eintragen.
+                    if attempt == 0 && !use_fallback {
+                        let key = format!("child:{}:{}:{occurrence_secs}", ev.item_id, ev.child_id);
+                        let store3 = store.clone();
+                        let (claim, warn) =
+                            tokio::task::spawn_blocking(move || store3.persistence.claim_execution(&key, "child"))
+                                .await
+                                .unwrap_or((persist::Claim::Proceed, Some("Journal-Task abgestürzt".to_string())));
+                        if let Some(w) = warn {
+                            let _ = events.send(Event::Error(w));
+                        }
+                        if claim == persist::Claim::AlreadyDone {
+                            set_child_state(&store, &ev, ChildState::Completed, Some("laut Ausführungsjournal bereits ausgeführt".to_string()));
+                            let _ = events.send(Event::Error(format!(
+                                "Child „{}\u{201c} laut Ausführungsjournal bereits ausgeführt — nicht erneut gestartet",
+                                ev.child_id
+                            )));
+                            continue;
+                        }
                     }
-                    GraphicsAction::Hide => graphics.invoke("hide", serde_json::json!({})),
+                    let store2 = store.clone();
+                    let child2 = child.clone();
+                    let result = tokio::task::spawn_blocking(move || execute_child(&store2, &child2, graphics_node, use_fallback, false))
+                        .await
+                        .unwrap_or_else(|e| Err(format!("Task abgestürzt: {e}")));
+                    match result {
+                        Ok(()) => {
+                            if use_fallback {
+                                let mut state = store.state.lock().expect("lock poisoned");
+                                if let Some(rt) = state.child_runtime.iter_mut().find(|r| r.item_id == ev.item_id && r.child.id == ev.child_id) {
+                                    rt.used_fallback = true;
+                                }
+                            }
+                            set_child_state(&store, &ev, ChildState::Fired, None);
+                            // Läuft weiter (wartet auf Stopp) oder ist schon fertig.
+                            let stop_pending = {
+                                let state = store.state.lock().expect("lock poisoned");
+                                let rt_until_end = state
+                                    .child_runtime
+                                    .iter()
+                                    .find(|r| r.item_id == ev.item_id && r.child.id == ev.child_id)
+                                    .map(|r| r.until_primary_end)
+                                    .unwrap_or(false);
+                                needs_stop(&child)
+                                    && (rt_until_end
+                                        || state.child_schedule.iter().any(|e| {
+                                            e.item_id == ev.item_id && e.child_id == ev.child_id && e.action == ChildAction::Stop
+                                        }))
+                            };
+                            set_child_state(&store, &ev, if stop_pending { ChildState::Active } else { ChildState::Completed }, None);
+                        }
+                        Err(e) => match children::decide_on_failure(&child, attempt, use_fallback) {
+                            FailAction::Retry { delay_ms } => {
+                                set_child_attempt(&store, &ev, attempt + 1, Some(e.clone()));
+                                store.state.lock().expect("lock poisoned").child_schedule.push(ScheduledChild {
+                                    fire_at: Instant::now() + Duration::from_millis(delay_ms),
+                                    item_id: ev.item_id.clone(),
+                                    child_id: ev.child_id.clone(),
+                                    action: ChildAction::Start { attempt: attempt + 1, use_fallback },
+                                });
+                            }
+                            FailAction::UseFallback => {
+                                set_child_attempt(&store, &ev, attempt + 1, Some(e.clone()));
+                                store.state.lock().expect("lock poisoned").child_schedule.push(ScheduledChild {
+                                    fire_at: Instant::now(),
+                                    item_id: ev.item_id.clone(),
+                                    child_id: ev.child_id.clone(),
+                                    action: ChildAction::Start { attempt: attempt + 1, use_fallback: true },
+                                });
+                            }
+                            FailAction::Warn => {
+                                set_child_state(&store, &ev, ChildState::Failed, Some(e.clone()));
+                                let _ = events.send(Event::Error(format!("Child „{}\u{201c} fehlgeschlagen: {e}", ev.child_id)));
+                            }
+                            FailAction::Ignore => set_child_state(&store, &ev, ChildState::Failed, Some(e)),
+                        },
+                    }
                 }
-            })
-            .await;
-            match result {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    let _ = events.send(Event::Error(format!("Grafik-Ereignis fehlgeschlagen: {e}")));
-                }
-                Err(e) => {
-                    let _ = events.send(Event::Error(format!("Grafik-Ereignis-Task abgestürzt: {e}")));
+                ChildAction::Stop => {
+                    let store2 = store.clone();
+                    let child2 = child.clone();
+                    let result = tokio::task::spawn_blocking(move || execute_child(&store2, &child2, graphics_node, false, true))
+                        .await
+                        .unwrap_or_else(|e| Err(format!("Task abgestürzt: {e}")));
+                    match result {
+                        Ok(()) => set_child_state(&store, &ev, ChildState::Completed, None),
+                        Err(e) => {
+                            set_child_state(&store, &ev, ChildState::Failed, Some(e.clone()));
+                            let _ = events.send(Event::Error(format!("Child „{}\u{201c}: Stopp fehlgeschlagen: {e}", ev.child_id)));
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+/// Setzt den Lebenszyklus-Zustand eines Kindes (nur erlaubte Übergänge, `ChildState::can_go`).
+fn set_child_state(store: &AutomationStore, ev: &ScheduledChild, to: ChildState, error: Option<String>) {
+    let mut state = store.state.lock().expect("lock poisoned");
+    if let Some(rt) = state.child_runtime.iter_mut().find(|r| r.item_id == ev.item_id && r.child.id == ev.child_id) {
+        if rt.state == to || rt.state.can_go(to) {
+            rt.state = to;
+        }
+        if error.is_some() {
+            rt.error = error;
+        }
+    }
+}
+
+fn set_child_attempt(store: &AutomationStore, ev: &ScheduledChild, attempt: u32, error: Option<String>) {
+    let mut state = store.state.lock().expect("lock poisoned");
+    if let Some(rt) = state.child_runtime.iter_mut().find(|r| r.item_id == ev.item_id && r.child.id == ev.child_id) {
+        rt.attempt = attempt;
+        rt.error = error;
+    }
+}
+
+/// Lebenszyklus der Kinder für `childEvents` (Parameter) und den Snapshot.
+fn child_events_json(state: &AutomationState) -> Value {
+    Value::Array(
+        state
+            .child_runtime
+            .iter()
+            .map(|rt| {
+                serde_json::json!({
+                    "itemId": rt.item_id,
+                    "id": rt.child.id,
+                    "type": rt.child.kind,
+                    "state": rt.state,
+                    "startOffsetMs": rt.start_offset_ms,
+                    "stopOffsetMs": rt.stop_offset_ms,
+                    "untilPrimaryEnd": rt.until_primary_end,
+                    "attempt": rt.attempt,
+                    "error": rt.error,
+                })
+            })
+            .collect(),
+    )
 }
 
 /// Wanduhr-Plan (UTC) der Hauptplaylist ab dem aktuellen Item: Basis ist der
@@ -3137,7 +3458,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tokio::spawn(fixtime_loop(store.clone(), fixtime_events));
 
     let graphics_events = events_tx.clone();
-    tokio::spawn(graphics_loop(store.clone(), graphics_events));
+    tokio::spawn(child_loop(store.clone(), graphics_events));
 
     tokio::spawn(persist::persist_loop(store.clone()));
 
@@ -3475,54 +3796,148 @@ mod fixtime_wait_tests {
     }
 }
 
-// Kapitel 6 Teil 5: `child_show_offset_ms`/`resolve_variables` sind
-// ebenfalls reine Funktionen (kein State/keine Uhr) — direkt
-// unit-testbar, gleiches Prinzip wie oben.
+// Kapitel 6 Teil 5 / Kapitel 27 P3: `resolve_variables` und die Child-Planung
+// sind reine Zustandsfunktionen (kein Netzwerk) — direkt unit-testbar.
 #[cfg(test)]
 mod graphics_children_tests {
     use super::*;
+    use children::{ChildEvent, TimingMode};
 
-    fn start_child(delay_ms: u64) -> GraphicsChild {
-        GraphicsChild {
-            template_id: "lower-third".to_string(),
-            data: Value::Null,
-            delay_ms,
-            duration_ms: 0,
-            relative_to: RelativeTo::Start,
-        }
+    fn item_with(children: Vec<ChildEvent>, duration_ms: u64) -> AutomationState {
+        let mut s = AutomationState::new(String::new(), String::new(), String::new(), String::new());
+        s.metadata.insert(
+            "p".to_string(),
+            ItemMeta {
+                label: "Primary".to_string(),
+                media: ItemMedia::TestPattern { pattern: "smpte".to_string(), tone_frequency: 0.0 },
+                duration_ms,
+                start_type: StartType::Sequence,
+                fixtime_hms: None,
+                start_at_utc_ms: None,
+                transition: Transition::Cut,
+                transition_rate_frames: None,
+                children,
+            },
+        );
+        s.playlist.append("p".to_string());
+        s.graphics_node_id = Some("g".to_string());
+        s
     }
 
-    fn end_child(delay_ms: u64) -> GraphicsChild {
-        GraphicsChild {
-            template_id: "lower-third".to_string(),
-            data: Value::Null,
-            delay_ms,
-            duration_ms: 0,
-            relative_to: RelativeTo::End,
-        }
-    }
-
-    #[test]
-    fn start_relative_offset_is_just_the_delay() {
-        assert_eq!(child_show_offset_ms(&start_child(3000), 10_000), Some(3000));
-        // Auch bei einem endlosen (Live-)Item unverändert — Start-relativ
-        // braucht keine bekannte Dauer.
-        assert_eq!(child_show_offset_ms(&start_child(3000), 0), Some(3000));
-    }
-
-    #[test]
-    fn end_relative_offset_is_duration_minus_delay() {
-        assert_eq!(child_show_offset_ms(&end_child(2000), 10_000), Some(8000));
+    fn graphic(timing: TimingMode, delay: u64, dur: u64) -> ChildEvent {
+        let mut c = ChildEvent::graphic("lt", timing, delay, dur);
+        c.data = serde_json::json!({"t": "{{next:title}}"});
+        c
     }
 
     #[test]
-    fn end_relative_on_unlimited_item_is_none() {
-        assert_eq!(child_show_offset_ms(&end_child(2000), 0), None);
+    fn plan_schedules_start_and_timed_stop_and_arms_resolvable_targets() {
+        let mut s = item_with(vec![graphic(TimingMode::RelativeToStart, 10_000, 8_000)], 60_000);
+        let now = Instant::now();
+        let notices = plan_children(&mut s, "p", now, None);
+        assert!(notices.is_empty(), "{notices:?}");
+        let kinds: Vec<(String, u64)> = s
+            .child_schedule
+            .iter()
+            .map(|e| (format!("{:?}", e.action), (e.fire_at - now).as_millis() as u64))
+            .collect();
+        assert_eq!(kinds.len(), 2);
+        assert!(kinds.iter().any(|(a, t)| a.starts_with("Start") && *t == 10_000));
+        assert!(kinds.iter().any(|(a, t)| a == "Stop" && *t == 18_000));
+        assert_eq!(s.child_runtime[0].state, ChildState::Armed, "graphics node resolved");
+        assert_eq!(s.child_runtime[0].child.id, "c1", "id assigned");
     }
 
     #[test]
-    fn end_relative_delay_longer_than_duration_is_none() {
-        assert_eq!(child_show_offset_ms(&end_child(15_000), 10_000), None);
+    fn full_primary_has_no_own_stop_it_ends_with_the_primary() {
+        let mut s = item_with(vec![graphic(TimingMode::FullPrimary, 0, 0)], 0);
+        plan_children(&mut s, "p", Instant::now(), None);
+        assert_eq!(s.child_schedule.len(), 1, "only the start");
+        assert!(s.child_runtime[0].until_primary_end);
+    }
+
+    #[test]
+    fn unresolved_target_leaves_the_child_scheduled_not_armed() {
+        let mut s = item_with(vec![graphic(TimingMode::FullPrimary, 0, 0)], 0);
+        s.graphics_node_id = None;
+        plan_children(&mut s, "p", Instant::now(), None);
+        assert_eq!(s.child_runtime[0].state, ChildState::Scheduled);
+    }
+
+    #[test]
+    fn impossible_window_fails_the_child_with_a_notice_and_schedules_nothing() {
+        // RELATIVE_TO_END an einem endlosen Live-Primary.
+        let mut s = item_with(vec![graphic(TimingMode::RelativeToEnd, 2000, 0)], 0);
+        let notices = plan_children(&mut s, "p", Instant::now(), None);
+        assert!(notices[0].contains("fester Dauer"), "{notices:?}");
+        assert!(s.child_schedule.is_empty());
+        assert_eq!(s.child_runtime[0].state, ChildState::Failed);
+    }
+
+    #[test]
+    fn primary_change_cancels_pending_starts_and_stops_active_children_immediately() {
+        let mut s = item_with(
+            vec![graphic(TimingMode::RelativeToStart, 60_000, 0), graphic(TimingMode::FullPrimary, 0, 0)],
+            120_000,
+        );
+        s.child_runtime.clear();
+        plan_children(&mut s, "p", Instant::now(), None);
+        // Zweites Kind lief bereits.
+        s.child_runtime[1].state = ChildState::Active;
+        s.child_schedule.retain(|e| e.child_id != "c2");
+
+        retire_children(&mut s);
+
+        assert!(s.child_schedule.iter().all(|e| e.action == ChildAction::Stop), "no start survives a primary change");
+        let stop = s.child_schedule.iter().find(|e| e.child_id == "c2").expect("active child gets a stop");
+        assert!(stop.fire_at <= Instant::now());
+        // Das nicht gestartete Kind (c1) ist storniert und aus der Laufzeitliste verschwunden (terminal).
+        assert!(s.child_runtime.iter().all(|r| r.child.id != "c1"));
+        assert!(s.child_runtime.iter().any(|r| r.child.id == "c2" && r.state == ChildState::Active));
+    }
+
+    #[test]
+    fn restart_does_not_refire_started_children_and_reports_missed_ones() {
+        let mut s = item_with(
+            vec![
+                graphic(TimingMode::RelativeToStart, 1_000, 30_000), // lief schon
+                graphic(TimingMode::RelativeToStart, 2_000, 0),      // verpasst
+                graphic(TimingMode::RelativeToStart, 500_000, 0),    // liegt in der Zukunft
+            ],
+            600_000,
+        );
+        let onair = Instant::now() - Duration::from_secs(10);
+        let saved: HashMap<String, ChildState> =
+            [("c1".to_string(), ChildState::Active), ("c2".to_string(), ChildState::Scheduled), ("c3".to_string(), ChildState::Scheduled)]
+                .into_iter()
+                .collect();
+        let notices = plan_children(&mut s, "p", onair, Some(&saved));
+        assert!(notices.iter().any(|n| n.contains("c2") && n.contains("verpasst")), "{notices:?}");
+        let by_id = |id: &str| s.child_runtime.iter().find(|r| r.child.id == id).unwrap().state;
+        assert_eq!(by_id("c1"), ChildState::Active);
+        assert_eq!(by_id("c2"), ChildState::Cancelled);
+        assert_eq!(by_id("c3"), ChildState::Armed);
+        // Nur c3 bekommt einen Start; c1 nur seinen Stopp.
+        assert_eq!(s.child_schedule.iter().filter(|e| matches!(e.action, ChildAction::Start { .. })).count(), 1);
+        assert!(s.child_schedule.iter().any(|e| e.child_id == "c1" && e.action == ChildAction::Stop));
+    }
+
+    #[test]
+    fn preflight_target_check_by_type() {
+        let s = item_with(vec![], 0);
+        let mut c = graphic(TimingMode::FullPrimary, 0, 0);
+        assert!(child_target_ok(&s, &c));
+        c.kind = ChildType::NodeCommand;
+        c.target = "Audiomischer".to_string();
+        c.method = "x".to_string();
+        assert!(!child_target_ok(&s, &c));
+        let mut s2 = item_with(vec![], 0);
+        s2.discovered_labels = vec!["Audiomischer".to_string()];
+        assert!(child_target_ok(&s2, &c));
+        assert!(needs_stop(&graphic(TimingMode::FullPrimary, 0, 0)));
+        assert!(!needs_stop(&c), "node commands only stop when a stopMethod is set");
+        c.stop_method = "off".to_string();
+        assert!(needs_stop(&c));
     }
 
     #[test]
