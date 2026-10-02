@@ -83,6 +83,8 @@ const POLL_FALLBACK_INTERVAL_MS = 30000;
 const REFRESH_EVENT_TYPES = new Set(["workflow.updated", "lost-events"]);
 
 const SNAP_MINUTES = 30;
+// Mindest-Mausweg (px), ab dem ein Klick auf die Zeitleiste als Drag zum Anlegen gilt.
+const CREATE_DRAG_THRESHOLD_PX = 6;
 const MIN_DURATION_MINUTES = 30;
 const EDGE_PX = 8; // Randbereich eines Balkens, der als Resize-Griff zählt
 const ROW_HEIGHT_PX = 40;
@@ -1545,9 +1547,18 @@ class SchedulerView extends HTMLElement {
       ghost.textContent = `${fmtMinutes(left - dayStart)}–${fmtMinutes(right - dayStart)}`;
     };
     draw();
+    ghost.style.display = "none"; // erst bei echtem Ziehen sichtbar
 
     const pair = (): Schedule[] => this.#buildPair(this.#newKind, dates[dayIdx], left - dayStart, right - dayStart);
+    // Ein bloßer Klick (kein Ziehen) legt NICHTS an: erst eine echte Mausbewegung
+    // über die Schwelle macht aus dem Klick einen Drag.
+    let moved = false;
     const onMove = (m: PointerEvent) => {
+      if (!moved) {
+        if (Math.abs(m.clientX - ev.clientX) < CREATE_DRAG_THRESHOLD_PX) return;
+        moved = true;
+        ghost.style.display = "flex";
+      }
       const cur = Math.max(dayStart, Math.min(dayEnd, toMinute(m.clientX)));
       left = Math.min(anchor, cur);
       right = Math.max(anchor, cur);
@@ -1568,6 +1579,11 @@ class SchedulerView extends HTMLElement {
       this.#preview = null;
     };
     const onUp = () => {
+      if (!moved) {
+        cleanup();
+        this.#repaintResources();
+        return;
+      }
       const created = pair();
       cleanup();
       const next = [...(wf.definition.schedules ?? []), ...created];

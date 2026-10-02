@@ -1,6 +1,7 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@std/assert@*": "1.0.19",
     "jsr:@std/assert@1": "1.0.19",
     "jsr:@std/async@^1.4.0": "1.5.0",
     "jsr:@std/data-structures@^1.1.0": "1.1.1",

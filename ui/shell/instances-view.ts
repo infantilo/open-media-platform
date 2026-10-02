@@ -45,6 +45,8 @@ interface HostEntry {
   label: string;
 }
 
+import { defaultDir, type InstanceSortKey, type SortDir, sortInstances } from "./instances-logic.ts";
+
 const POLL_INTERVAL_MS = 5000;
 
 const REFRESH_EVENT_TYPES = new Set(["instance.crashed", "instance.restarted", "lost-events"]);
@@ -59,21 +61,58 @@ function formatRss(rssBytes: number | undefined): string {
   return `${(rssBytes / 1024 / 1024).toFixed(0)} MB`;
 }
 
+const SORT_STORAGE_KEY = "omp-instances-sort";
+const SORT_KEYS: InstanceSortKey[] = ["label", "status", "host", "cpu", "ram", "pid", "restarts"];
+
 class InstancesView extends HTMLElement {
   #pollHandle: number | undefined;
+  // Sortierung überlebt Polls und (best effort) einen Neuladen der Seite.
+  #sortKey: InstanceSortKey = "label";
+  #sortDir: SortDir = "asc";
+  #instances: LauncherInstance[] = [];
+  #hosts: HostEntry[] = [];
 
   connectedCallback() {
     this.style.cssText =
       "display:block;background:var(--omp-surface);font-family:var(--omp-font);" +
       "font-size:var(--omp-font-size-sm);color:var(--omp-text);padding:var(--omp-space-3);" +
       "box-sizing:border-box;width:100%;height:100%;overflow-y:auto;";
+    try {
+      const saved = JSON.parse(localStorage.getItem(SORT_STORAGE_KEY) ?? "null");
+      if (saved && SORT_KEYS.includes(saved.key) && (saved.dir === "asc" || saved.dir === "desc")) {
+        this.#sortKey = saved.key;
+        this.#sortDir = saved.dir;
+      }
+    } catch {
+      // kein localStorage — Standardsortierung
+    }
+    this.addEventListener("click", this.#onHeaderClick);
     this.#render([], []);
     this.#poll();
     this.#pollHandle = window.setInterval(() => this.#poll(), POLL_INTERVAL_MS);
     connectionMonitor.addEventListener("sse-message", this.#onSseMessage);
   }
 
+  #onHeaderClick = (ev: Event) => {
+    const th = (ev.target as HTMLElement).closest<HTMLElement>("th[data-sort]");
+    if (!th) return;
+    const key = th.dataset.sort as InstanceSortKey;
+    if (key === this.#sortKey) {
+      this.#sortDir = this.#sortDir === "asc" ? "desc" : "asc";
+    } else {
+      this.#sortKey = key;
+      this.#sortDir = defaultDir(key);
+    }
+    try {
+      localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify({ key: this.#sortKey, dir: this.#sortDir }));
+    } catch {
+      // nur eine Komfortfunktion
+    }
+    this.#render(this.#instances, this.#hosts);
+  };
+
   disconnectedCallback() {
+    this.removeEventListener("click", this.#onHeaderClick);
     if (this.#pollHandle !== undefined) window.clearInterval(this.#pollHandle);
     connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
   }
@@ -103,13 +142,18 @@ class InstancesView extends HTMLElement {
   }
 
   #render(instances: LauncherInstance[], hosts: HostEntry[]) {
+    this.#instances = instances;
+    this.#hosts = hosts;
     // launcher.Launcher.List() iteriert eine Go-Map (keine Reihenfolge-
-    // Garantie) — ohne eigene Sortierung würden Zeilen bei jedem Poll
-    // scheinbar zufällig die Plätze tauschen. Label, dann ID als
-    // Tie-Breaker, für eine über Polls hinweg stabile Reihenfolge.
-    const sorted = [...instances].sort(
-      (a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id),
-    );
+    // Garantie) — ohne eigene, stabile Sortierung (Spaltenwahl, Label/ID als
+    // Tie-Breaker) würden Zeilen bei jedem Poll die Plätze tauschen.
+    const hostName = (i: LauncherInstance) => (i.hostId ? hosts.find((h) => h.id === i.hostId)?.label || i.hostId : "lokal");
+    const sorted = sortInstances(instances, this.#sortKey, this.#sortDir, hostName);
+    const th = (key: InstanceSortKey, text: string) => {
+      const active = key === this.#sortKey;
+      const arrow = active ? (this.#sortDir === "asc" ? " ▲" : " ▼") : "";
+      return `<th data-sort="${key}" aria-sort="${active ? (this.#sortDir === "asc" ? "ascending" : "descending") : "none"}" title="Nach ${text} sortieren" style="padding:2px 8px;cursor:pointer;user-select:none;${active ? "color:var(--omp-text);" : ""}">${text}${arrow}</th>`;
+    };
 
     const rows = sorted
       .map((inst) => {
@@ -144,13 +188,13 @@ class InstancesView extends HTMLElement {
           ? `<div class="omp-empty">Keine Instanz läuft.</div>`
           : `<table style="border-collapse:collapse;width:100%;">
               <thead><tr style="color:var(--omp-text-dim);text-align:left;">
-                <th style="padding:2px 8px;">Instanz</th>
-                <th style="padding:2px 8px;">Status</th>
-                <th style="padding:2px 8px;">Host</th>
-                <th style="padding:2px 8px;">CPU</th>
-                <th style="padding:2px 8px;">RAM</th>
-                <th style="padding:2px 8px;">PID</th>
-                <th style="padding:2px 8px;">Neustarts</th>
+                ${th("label", "Instanz")}
+                ${th("status", "Status")}
+                ${th("host", "Host")}
+                ${th("cpu", "CPU")}
+                ${th("ram", "RAM")}
+                ${th("pid", "PID")}
+                ${th("restarts", "Neustarts")}
               </tr></thead>
               <tbody>${rows}</tbody>
             </table>`
