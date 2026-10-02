@@ -108,6 +108,19 @@ impl Playlist {
         self.on_air = false;
     }
 
+    /// Stellt einen zuvor gespeicherten Zustand wieder her (Kapitel 27 /
+    /// P1b, Restart-Rekonstruktion). Ein Cursor außerhalb der Liste wird zu
+    /// `None`; `on_air` ohne gültigen Cursor wird `false` — ein defekter
+    /// Snapshot soll nie einen Zustand erzeugen, den die normalen
+    /// Operationen nicht herstellen könnten.
+    pub fn restore(&mut self, items: Vec<String>, current_index: Option<usize>, on_air: bool, mode: Mode) {
+        let current_index = current_index.filter(|i| *i < items.len());
+        self.on_air = on_air && current_index.is_some();
+        self.current_index = current_index;
+        self.items = items;
+        self.mode = mode;
+    }
+
     /// Entfernt die Item-ID an `index`. Zeigte `current_index` auf oder
     /// hinter den entfernten Eintrag, wird er angepasst (geclampt, `None`
     /// wenn leer); zeigt er auf den gerade on-air befindlichen Eintrag,
@@ -217,6 +230,28 @@ impl Playlist {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restore_sets_all_fields() {
+        let mut p = Playlist::new();
+        p.restore(vec!["a".into(), "b".into()], Some(1), true, Mode::Hold);
+        assert_eq!(p.items(), ["a", "b"]);
+        assert_eq!(p.current_index(), Some(1));
+        assert!(p.on_air());
+        assert_eq!(p.mode(), Mode::Hold);
+    }
+
+    #[test]
+    fn restore_sanitizes_inconsistent_snapshot() {
+        let mut p = Playlist::new();
+        // Cursor hinter dem Ende → None, damit auch nicht on-air.
+        p.restore(vec!["a".into()], Some(5), true, Mode::Auto);
+        assert_eq!(p.current_index(), None);
+        assert!(!p.on_air());
+        // on_air ohne Cursor bleibt aus.
+        p.restore(vec!["a".into()], None, true, Mode::Auto);
+        assert!(!p.on_air());
+    }
 
     #[test]
     fn append_to_empty_playlist_cues_first_item() {

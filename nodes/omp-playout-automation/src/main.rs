@@ -57,6 +57,7 @@
 //! tatsächlichen `take_on_targets`-Erfolg gesetzt wird — die einzige
 //! verlässliche Quelle für "was zeigt der Player gerade wirklich".
 
+mod persist;
 mod playlist;
 mod remote;
 mod timeline;
@@ -105,7 +106,8 @@ const TOKEN_REFRESH_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
 /// (`item_media_from_args`), statt es aus einer Ziel-Player-Antwort zu
 /// übernehmen (`omp-channel-player` hat kein eigenes Item-Modell mehr,
 /// das eine solche Entscheidung träfe).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 enum ItemMedia {
     TestPattern { pattern: String, tone_frequency: f64 },
     File { path: String },
@@ -230,7 +232,7 @@ enum RelativeTo {
 /// Schema ab, das dieser Node nicht kennt und nicht kennen muss
 /// (`omp-ograf::show` wendet es ohnehin nur als Override auf die
 /// Schema-Defaults an).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct GraphicsChild {
     #[serde(rename = "templateId")]
     template_id: String,
@@ -244,7 +246,7 @@ struct GraphicsChild {
     relative_to: RelativeTo,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct ItemMeta {
     label: String,
     media: ItemMedia,
@@ -514,6 +516,39 @@ struct AutomationState {
     graphics_schedule: Vec<ScheduledGraphicsEvent>,
 }
 
+impl AutomationState {
+    /// Leerer Ausgangszustand eines frisch gestarteten Nodes — geteilt
+    /// zwischen `main()` und den `persist`-Tests.
+    fn new(player_a_label: String, player_b_label: String, mixer_label: String, graphics_label: String) -> Self {
+        AutomationState {
+            playlist: Playlist::new(),
+            metadata: HashMap::new(),
+            next_item_seq: 0,
+            onair_since: None,
+            target_player_a_label: player_a_label,
+            target_player_b_label: player_b_label,
+            target_mixer_label: mixer_label,
+            player_a_node_id: None,
+            player_b_node_id: None,
+            mixer_node_id: None,
+            live_channel: Channel::default(),
+            discovered_labels: Vec::new(),
+            media_library: Vec::new(),
+            available_sources: Vec::new(),
+            last_live_item_id: None,
+            carts: Vec::new(),
+            next_cart_seq: 0,
+            active_cart: None,
+            timeline: TimelineCache::new(),
+            fixtime_resolved: HashMap::new(),
+            target_graphics_label: graphics_label,
+            graphics_node_id: None,
+            graphics_epoch: 0,
+            graphics_schedule: Vec::new(),
+        }
+    }
+}
+
 /// s. `AutomationState::fixtime_resolved`-Doku.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FixtimeResolution {
@@ -580,6 +615,10 @@ struct AutomationStore {
     /// `remote::list_node_labels` schließt es aus (dieser Node ist nie
     /// ein sinnvolles Player-/Mixer-Ziel).
     own_label: String,
+    /// Kapitel 27 / P1a+P1b: Anbindung an die Orchestrator-Domäne
+    /// `playout` (Snapshot, Restart-Rekonstruktion, Ausführungsjournal),
+    /// s. `persist.rs`.
+    persistence: persist::Persistence,
 }
 
 impl AutomationStore {
@@ -1651,6 +1690,29 @@ impl ParamStore for AutomationStore {
                 readonly: false,
             },
             // Kapitel 6 Teil 5 — optional, s. `target_graphics_label`-Doku.
+            // Kapitel 27 / P1b: Anbindung an die Domäne `playout` (s.
+            // `persist.rs`) — reine Anzeige.
+            ParamSpec {
+                name: "channelId".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
+                name: "channelName".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
+                name: "persistence".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
             ParamSpec {
                 name: "targetGraphicsLabel".to_string(),
                 kind: ParamType::String,
@@ -1940,6 +2002,9 @@ impl ParamStore for AutomationStore {
             "targetPlayerBLabel" => Some(serde_json::json!(state.target_player_b_label)),
             "targetMixerLabel" => Some(serde_json::json!(state.target_mixer_label)),
             "targetGraphicsLabel" => Some(serde_json::json!(state.target_graphics_label)),
+            "channelId" => Some(serde_json::json!(self.persistence.channel_id())),
+            "channelName" => Some(serde_json::json!(self.persistence.channel_name())),
+            "persistence" => Some(serde_json::json!(self.persistence.status())),
             // Kapitel 6 Teil 7: welcher Kanal gerade live ist — reine
             // Anzeige fürs UI (z. B. um die aktive Kanal-Kachel optisch
             // hervorzuheben), keine Bedienmöglichkeit über diesen Node
@@ -2499,6 +2564,33 @@ async fn fixtime_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender
             if cart_active {
                 continue;
             }
+            // Kapitel 27 / P1b: VOR dem Feuern ins Ausführungsjournal der
+            // Domäne `playout` eintragen (at-most-once über Neustarts
+            // hinweg, `persist::Persistence::claim_execution`-Doku). Key =
+            // Item-ID + Fixtime + UTC-Datum.
+            let exec_key = {
+                let state = store.state.lock().expect("lock poisoned");
+                format!(
+                    "fixtime:{id}:{}:{}",
+                    state.metadata.get(&id).and_then(|m| m.fixtime_hms.clone()).unwrap_or_default(),
+                    chrono::Utc::now().format("%Y-%m-%d")
+                )
+            };
+            let store3 = store.clone();
+            let (claim, warn) =
+                tokio::task::spawn_blocking(move || store3.persistence.claim_execution(&exec_key, "fixtime"))
+                    .await
+                    .unwrap_or((persist::Claim::Proceed, Some("Journal-Task abgestürzt".to_string())));
+            if let Some(w) = warn {
+                let _ = events.send(Event::Error(w));
+            }
+            if claim == persist::Claim::AlreadyDone {
+                store.state.lock().expect("lock poisoned").fixtime_resolved.insert(id.clone(), FixtimeResolution::Fired);
+                let _ = events.send(Event::Error(format!(
+                    "Fixtime-Event „{id}\u{201c} laut Ausführungsjournal bereits ausgeführt — nicht erneut gefeuert"
+                )));
+                continue;
+            }
             let store2 = store.clone();
             let id2 = id.clone();
             let result = tokio::task::spawn_blocking(move || store2.do_fire_fixtime(&id2)).await;
@@ -2666,32 +2758,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         );
     }
 
-    let state = Mutex::new(AutomationState {
-        playlist: Playlist::new(),
-        metadata: HashMap::new(),
-        next_item_seq: 0,
-        onair_since: None,
-        target_player_a_label: initial_player_a_label,
-        target_player_b_label: initial_player_b_label,
-        target_mixer_label: initial_mixer_label,
-        player_a_node_id: None,
-        player_b_node_id: None,
-        mixer_node_id: None,
-        live_channel: Channel::default(),
-        discovered_labels: Vec::new(),
-        media_library: Vec::new(),
-        available_sources: Vec::new(),
-        last_live_item_id: None,
-        carts: Vec::new(),
-        next_cart_seq: 0,
-        active_cart: None,
-        timeline: TimelineCache::new(),
-        fixtime_resolved: HashMap::new(),
-        target_graphics_label: initial_graphics_label,
-        graphics_node_id: None,
-        graphics_epoch: 0,
-        graphics_schedule: Vec::new(),
-    });
+    let state = Mutex::new(AutomationState::new(
+        initial_player_a_label,
+        initial_player_b_label,
+        initial_mixer_label,
+        initial_graphics_label,
+    ));
     let store = Arc::new(AutomationStore {
         state,
         registry: registry.clone(),
@@ -2699,6 +2771,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         orchestrator_url: orchestrator_url.clone(),
         auth: auth.clone(),
         own_label: label.clone(),
+        persistence: persist::Persistence::new(
+            instance_id.clone().filter(|_| !launch_secret.is_empty()),
+            orchestrator_url.clone(),
+            auth.clone(),
+        ),
     });
 
     // instance_id vor dem Move in NodeConfig sichern — wird unten für
@@ -2734,6 +2811,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let graphics_events = events_tx.clone();
     tokio::spawn(graphics_loop(store.clone(), graphics_events));
+
+    tokio::spawn(persist::persist_loop(store.clone()));
 
     // ARCHITECTURE.md §24.1: nur spawnen, wenn überhaupt ein Refresh
     // Sinn ergibt (Instanz-ID + Launch-Secret vorhanden) — ohne die

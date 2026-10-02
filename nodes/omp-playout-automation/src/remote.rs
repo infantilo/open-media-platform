@@ -124,7 +124,7 @@ impl OrchestratorAuth {
     /// allerersten Start, bevor der Orchestrator erreichbar war) — jeder
     /// `ProxyClient`-Aufruf behandelt das wie einen normalen Fehler
     /// ("Ziel noch nicht aufgelöst"-Äquivalent), kein Sonderfall.
-    fn header_value(&self) -> Option<String> {
+    pub(crate) fn header_value(&self) -> Option<String> {
         self.token
             .lock()
             .expect("lock poisoned")
