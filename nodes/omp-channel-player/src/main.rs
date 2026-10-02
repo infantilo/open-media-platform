@@ -109,6 +109,8 @@ impl ParamStore for PlayerStore {
                     MethodArg { name: "senderId".to_string(), kind: ParamType::String },
                     MethodArg { name: "toneFrequency".to_string(), kind: ParamType::Number },
                     MethodArg { name: "durationMs".to_string(), kind: ParamType::Number },
+                    // Kapitel 27 / P2b: "image" = `file` ist ein Standbild.
+                    MethodArg { name: "mediaType".to_string(), kind: ParamType::String },
                 ],
             },
             MethodSpec { name: "stop".to_string(), args: vec![] },
@@ -167,6 +169,16 @@ impl ParamStore for PlayerStore {
                 }
                 if let Some(file) = args.get("file").and_then(Value::as_str).filter(|s| !s.is_empty()) {
                     let abs = resolve_media_path(&self.media_dir, file).map_err(|_| InvokeError::Unknown)?;
+                    // Kapitel 27 / P2b: Standbild nur auf ausdrücklichen Wunsch
+                    // (`mediaType=image`), keine Erkennung an der Dateiendung.
+                    if args.get("mediaType").and_then(Value::as_str) == Some("image") {
+                        self.pipeline.load(pipeline::Item {
+                            label,
+                            source: pipeline::ItemSource::Image { path: abs.to_string_lossy().to_string() },
+                            duration_hint_ms: duration_ms_arg,
+                        });
+                        return Ok(());
+                    }
                     let duration_hint_ms = duration_ms_arg.or_else(|| probe_duration_ms(&abs).map(|ms| ms as i64));
                     self.pipeline.load(pipeline::Item {
                         label,

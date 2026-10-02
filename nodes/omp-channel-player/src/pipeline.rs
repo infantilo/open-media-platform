@@ -91,6 +91,11 @@ pub enum ItemSource {
     /// (`build_mxf_file`), alles andere den generischen
     /// `uridecodebin`-Pfad (`build_generic_file`).
     File { path: String },
+    /// Standbild (JPEG/PNG/…; Kapitel 27 / P2b) — ausdrücklich per
+    /// `mediaType=image` gewählt, NICHT an der Dateiendung erkannt (Spec §10).
+    /// Ein Bild liefert über `uridecodebin` genau EIN Bild und dann EOS;
+    /// `imagefreeze` hält es als Videostrom (`build_image_file`), der Ton ist Stille.
+    Image { path: String },
     /// Bereits von `main.rs` (`discovery::resolve`) zu MXL-Flow-IDs
     /// aufgelöste Live-Quelle — `pipeline.rs` bleibt registry-agnostisch
     /// (gleiche Trennung wie `omp-player`). `None` fällt auf
@@ -103,6 +108,7 @@ fn media_type_str(source: &ItemSource) -> &'static str {
         ItemSource::TestPattern { .. } => "pattern",
         ItemSource::File { path } if path.to_ascii_lowercase().ends_with(".mxf") => "mxf",
         ItemSource::File { .. } => "file",
+        ItemSource::Image { .. } => "image",
         ItemSource::Live { .. } => "live",
     }
 }
@@ -347,6 +353,68 @@ fn build_generic_file(pipeline: &gst::Pipeline, uri: &str, width: u32, height: u
     });
 
     Ok((src, vcaps.upcast(), acaps.upcast()))
+}
+
+/// Standbild-Zweig (Kapitel 27 / P2b): `uridecodebin ! videoconvert !
+/// videoscale ! capsfilter(v210, Zielgröße) ! imagefreeze ! videorate !
+/// capsfilter`. Konvertierung und Skalierung laufen nur EINMAL, für das eine
+/// decodierte Bild; `imagefreeze` wiederholt danach den fertigen v210-Puffer
+/// als Videostrom (der Paced-Appsink drosselt auf Echtzeit) — ohne es endete
+/// der Strom nach einem Bild mit EOS und der Ausgang stünde. (Erste Fassung
+/// stellte `imagefreeze` an den Anfang: Konvertierung+Skalierung liefen dann
+/// jedes Bild neu, 56 % CPU für ein Standbild.) `videoscale` mit `add-borders`:
+/// ein 4:3-Foto bekommt Balken statt auf 16:9 gestreckt zu werden.
+/// Rückgabe: (`uridecodebin`, Video-Tail).
+fn build_image_file(pipeline: &gst::Pipeline, uri: &str, width: u32, height: u32) -> Result<(gst::Element, gst::Element), String> {
+    let vconvert = gst::ElementFactory::make("videoconvert").build().map_err(|e| format!("videoconvert: {e}"))?;
+    let vscale = gst::ElementFactory::make("videoscale")
+        .property("add-borders", true)
+        .build()
+        .map_err(|e| format!("videoscale: {e}"))?;
+    let pre = gst::ElementFactory::make("capsfilter")
+        .property(
+            "caps",
+            gst::Caps::builder("video/x-raw")
+                .field("format", "v210")
+                .field("width", width as i32)
+                .field("height", height as i32)
+                .build(),
+        )
+        .build()
+        .map_err(|e| format!("capsfilter(image v210): {e}"))?;
+    let freeze = gst::ElementFactory::make("imagefreeze").build().map_err(|e| format!("imagefreeze: {e}"))?;
+    let vrate = gst::ElementFactory::make("videorate").build().map_err(|e| format!("videorate: {e}"))?;
+    let vcaps = gst::ElementFactory::make("capsfilter")
+        .property("caps", video_caps(width, height))
+        .build()
+        .map_err(|e| format!("capsfilter(video): {e}"))?;
+    pipeline
+        .add(&vconvert)
+        .and_then(|()| pipeline.add(&vscale))
+        .and_then(|()| pipeline.add(&pre))
+        .and_then(|()| pipeline.add(&freeze))
+        .and_then(|()| pipeline.add(&vrate))
+        .and_then(|()| pipeline.add(&vcaps))
+        .map_err(|e| format!("add image video chain: {e}"))?;
+    gst::Element::link_many([&vconvert, &vscale, &pre, &freeze, &vrate, &vcaps]).map_err(|e| format!("link image video chain: {e}"))?;
+
+    let src = gst::ElementFactory::make("uridecodebin")
+        .property("uri", uri)
+        .property("expose-all-streams", false)
+        .build()
+        .map_err(|e| format!("uridecodebin: {e}"))?;
+    pipeline.add(&src).map_err(|e| format!("add uridecodebin: {e}"))?;
+    let video_sink_pad = vconvert.static_pad("sink").ok_or("videoconvert: no sink pad")?;
+    src.connect_pad_added(move |_src, new_pad| {
+        let Some(caps) = new_pad.current_caps() else { return };
+        let Some(structure) = caps.structure(0) else { return };
+        if structure.name().starts_with("video/") && !video_sink_pad.is_linked() {
+            if let Err(e) = new_pad.link(&video_sink_pad) {
+                eprintln!("omp-channel-player: image pad-added link failed: {e:?}");
+            }
+        }
+    });
+    Ok((src, vcaps.upcast()))
 }
 
 /// MXF-Datei-Zweig — Element-Konstruktion wortgleich aus
@@ -610,6 +678,13 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
                 (v, a)
             }
         }
+        ItemSource::Image { path } => {
+            let uri = gst::glib::filename_to_uri(path, None).map_err(|e| format!("filename_to_uri({path}): {e}"))?;
+            let (_src, v) = build_image_file(&pipeline, uri.as_str(), config.width, config.height)?;
+            // Standbild ohne Ton: Stille (kein eigener Audio-Strom im Bild).
+            let a = build_testpattern_audio(&pipeline, 0.0)?;
+            (v, a)
+        }
         ItemSource::Live { video_flow_id, audio_flow_id } => {
             let (v, mv) = match video_flow_id {
                 Some(flow_id) => {
@@ -809,6 +884,9 @@ mod tests {
         assert_eq!(media_type_str(&ItemSource::TestPattern { pattern: "smpte".to_string(), tone_freq: 0.0 }), "pattern");
         assert_eq!(media_type_str(&ItemSource::File { path: "/media/clip.MXF".to_string() }), "mxf");
         assert_eq!(media_type_str(&ItemSource::File { path: "/media/clip.mp4".to_string() }), "file");
+        // Bild wird nie an der Endung erkannt, sondern ausdrücklich gewählt.
+        assert_eq!(media_type_str(&ItemSource::Image { path: "/media/still.jpg".to_string() }), "image");
+        assert_eq!(media_type_str(&ItemSource::File { path: "/media/still.jpg".to_string() }), "file");
         assert_eq!(media_type_str(&ItemSource::Live { video_flow_id: None, audio_flow_id: None }), "live");
     }
 

@@ -113,6 +113,22 @@ enum ItemMedia {
     TestPattern { pattern: String, tone_frequency: f64 },
     File { path: String },
     Live { sender_id: String },
+    /// Standbild (Kapitel 27 / P2b) — `omp-channel-player` bekommt
+    /// `mediaType=image` (ausdrücklich, nicht an der Dateiendung erkannt).
+    Image { path: String },
+    /// Steuer-Event (Kapitel 27 / P2b): wird nie auf einen Player geladen.
+    /// `Hold`: hält die Sequenz an — das vorherige Bild bleibt auf Sendung, bis
+    /// der Operator weiterschaltet (Dauer 0 = endlos, kein Auto-Advance).
+    Hold,
+    /// `Jump`: springt beim Erreichen zu `target_id` (Item-ID derselben Liste).
+    Jump { target_id: String },
+}
+
+impl ItemMedia {
+    /// Steuer-Events laden nichts auf einen Player.
+    fn is_control(&self) -> bool {
+        matches!(self, ItemMedia::Hold | ItemMedia::Jump { .. })
+    }
 }
 
 /// Kapitel 6 Teil 1 (`docs/END-GOAL-FEATURES.md` §6.4/§6.2b): rein
@@ -289,6 +305,9 @@ fn event_type(media: &ItemMedia) -> &'static str {
     match media {
         ItemMedia::File { .. } => "CLIP",
         ItemMedia::Live { .. } => "LIVE",
+        ItemMedia::Image { .. } => "IMAGE",
+        ItemMedia::Hold => "HOLD",
+        ItemMedia::Jump { .. } => "JUMP",
         ItemMedia::TestPattern { pattern, .. } if pattern == "black" => "BLACK",
         ItemMedia::TestPattern { .. } => "PATTERN",
     }
@@ -306,7 +325,21 @@ fn item_media_from_args(
     file: Option<&str>,
     sender_id: Option<&str>,
     tone_frequency: Option<f64>,
+    event_type: Option<&str>,
+    jump_target: Option<&str>,
 ) -> ItemMedia {
+    // Kapitel 27 / P2b: ausdrücklicher Event-Typ (Spec §10: keine Erkennung an
+    // der Dateiendung) hat Vorrang vor der Quellen-Wahl unten.
+    match event_type.map(str::to_ascii_lowercase).as_deref() {
+        Some("hold") => return ItemMedia::Hold,
+        Some("jump") => return ItemMedia::Jump { target_id: jump_target.unwrap_or_default().to_string() },
+        Some("image") => {
+            if let Some(file) = file.filter(|s| !s.is_empty()) {
+                return ItemMedia::Image { path: file.to_string() };
+            }
+        }
+        _ => {}
+    }
     if let Some(sender_id) = sender_id.filter(|s| !s.is_empty()) {
         ItemMedia::Live { sender_id: sender_id.to_string() }
     } else if let Some(file) = file.filter(|s| !s.is_empty()) {
@@ -331,7 +364,9 @@ fn item_media_from_args(
 fn item_is_available(m: &ItemMeta, media_library: &[String], available_sources: &[Value]) -> bool {
     match &m.media {
         ItemMedia::TestPattern { .. } => true,
-        ItemMedia::File { path } => media_library.iter().any(|f| f == path),
+        ItemMedia::File { path } | ItemMedia::Image { path } => media_library.iter().any(|f| f == path),
+        // Steuer-Events brauchen kein Medium.
+        ItemMedia::Hold | ItemMedia::Jump { .. } => true,
         ItemMedia::Live { sender_id } => available_sources
             .iter()
             .any(|s| s.get("senderId").and_then(Value::as_str) == Some(sender_id.as_str())),
@@ -430,6 +465,9 @@ fn item_meta_to_json(id: &str, m: &ItemMeta) -> Value {
         }),
         ItemMedia::File { path } => serde_json::json!({ "file": path }),
         ItemMedia::Live { sender_id } => serde_json::json!({ "senderId": sender_id }),
+        ItemMedia::Image { path } => serde_json::json!({ "file": path, "mediaType": "image" }),
+        ItemMedia::Hold => serde_json::json!({}),
+        ItemMedia::Jump { target_id } => serde_json::json!({ "jumpTarget": target_id }),
     };
     v["id"] = serde_json::json!(id);
     v["label"] = serde_json::json!(m.label);
@@ -732,6 +770,8 @@ impl AutomationStore {
             .current_index()
             .ok_or("nichts gecued".to_string())?;
         let item_id = state.playlist.items()[index].clone();
+        // JUMP: erst auf das Ziel umcuen (Take unten nimmt dann das Ziel).
+        let item_id = resolve_jump(&mut state, item_id, false)?;
 
         // Kapitel 6 Teil 7: OHNE eigene ItemMeta kann `take_on_targets`
         // gar nicht mehr `load()` aufrufen (anders als im alten
@@ -774,7 +814,9 @@ impl AutomationStore {
         let onair_since = Instant::now();
         state.onair_since = Some(onair_since);
         self.schedule_children(&mut state, &item_id, onair_since);
-        state.last_live_item_id = Some(item_id);
+        if !meta.media.is_control() {
+            state.last_live_item_id = Some(item_id);
+        }
         Ok(())
     }
 
@@ -834,6 +876,7 @@ impl AutomationStore {
             // `last_live_item_id`-Doku.
             return Ok(());
         };
+        let item_id = resolve_jump(&mut state, item_id, true)?;
 
         let meta = state
             .metadata
@@ -857,7 +900,9 @@ impl AutomationStore {
         if meta.start_type == StartType::Fixtime {
             state.fixtime_resolved.insert(item_id.clone(), FixtimeResolution::Fired);
         }
-        state.last_live_item_id = Some(item_id);
+        if !meta.media.is_control() {
+            state.last_live_item_id = Some(item_id);
+        }
         Ok(())
     }
 
@@ -878,6 +923,9 @@ impl AutomationStore {
         if state.active_cart.is_some() {
             return Err("Cart aktiv".to_string());
         }
+        // Ein Fixtime-JUMP springt zum Ziel (und nimmt DAS auf Sendung).
+        let resolved = resolve_jump(&mut state, item_id.to_string(), false)?;
+        let item_id = resolved.as_str();
         let index = state
             .playlist
             .index_of(item_id)
@@ -909,7 +957,9 @@ impl AutomationStore {
         let onair_since = Instant::now();
         state.onair_since = Some(onair_since);
         self.schedule_children(&mut state, item_id, onair_since);
-        state.last_live_item_id = Some(item_id.to_string());
+        if !meta.media.is_control() {
+            state.last_live_item_id = Some(item_id.to_string());
+        }
         Ok(())
     }
 
@@ -929,6 +979,7 @@ impl AutomationStore {
             state.onair_since = None;
             return Ok(());
         };
+        let item_id = resolve_jump(&mut state, item_id, true)?;
 
         let meta = state
             .metadata
@@ -946,7 +997,9 @@ impl AutomationStore {
         let onair_since = Instant::now();
         state.onair_since = Some(onair_since);
         self.schedule_children(&mut state, &item_id, onair_since);
-        state.last_live_item_id = Some(item_id);
+        if !meta.media.is_control() {
+            state.last_live_item_id = Some(item_id);
+        }
         Ok(())
     }
 
@@ -995,7 +1048,9 @@ impl AutomationStore {
         let onair_since = Instant::now();
         state.onair_since = Some(onair_since);
         self.schedule_children(&mut state, &item_id, onair_since);
-        state.last_live_item_id = Some(item_id);
+        if !meta.media.is_control() {
+            state.last_live_item_id = Some(item_id);
+        }
         Ok(())
     }
 
@@ -1086,13 +1141,31 @@ impl AutomationStore {
         tone_frequency: Option<f64>,
         duration_ms: Option<u64>,
         start_type: Option<StartType>,
+        event_type: Option<String>,
+        jump_target: Option<String>,
     ) -> Result<(), String> {
         let mut state = self.state.lock().expect("lock poisoned");
         state.next_item_seq += 1;
         let id = format!("item{}", state.next_item_seq);
+        let media = item_media_from_args(
+            pattern.as_deref(),
+            file.as_deref(),
+            sender_id.as_deref(),
+            tone_frequency,
+            event_type.as_deref(),
+            jump_target.as_deref(),
+        );
+        if let ItemMedia::Jump { target_id } = &media
+            && state.playlist.index_of(target_id).is_none()
+        {
+            state.next_item_seq -= 1;
+            return Err(format!("jumpTarget „{target_id}\u{201c} ist kein Item dieser Liste"));
+        }
+        // Steuer-Events haben keine eigene Dauer (Hold = endlos, Jump = sofort).
+        let duration_ms = if media.is_control() { Some(0) } else { duration_ms };
         let meta = ItemMeta {
             label,
-            media: item_media_from_args(pattern.as_deref(), file.as_deref(), sender_id.as_deref(), tone_frequency),
+            media,
             duration_ms: duration_ms.unwrap_or(DEFAULT_DURATION_MS),
             start_type: start_type.unwrap_or_default(),
             fixtime_hms: None,
@@ -1138,6 +1211,13 @@ impl AutomationStore {
             /// Kapitel 27 / P2a: RFC 3339 mit Offset (`2026-10-02T10:00:00+02:00`).
             #[serde(rename = "startAt", default)]
             start_at: Option<String>,
+            /// Kapitel 27 / P2b: "image" | "hold" | "jump".
+            #[serde(rename = "eventType", default)]
+            event_type: Option<String>,
+            /// JUMP-Ziel als Position (0-basiert) in DIESER Liste — die Item-IDs
+            /// entstehen erst beim Laden.
+            #[serde(rename = "jumpToIndex", default)]
+            jump_to_index: Option<usize>,
             #[serde(rename = "transition", default)]
             transition: Transition,
             #[serde(rename = "transitionRateFrames", default)]
@@ -1160,6 +1240,17 @@ impl AutomationStore {
             });
         }
 
+        for (n, li) in load_items.iter().enumerate() {
+            if li.event_type.as_deref().map(str::to_ascii_lowercase).as_deref() == Some("jump") {
+                match li.jump_to_index {
+                    Some(i) if i < load_items.len() && i != n => {}
+                    Some(i) => return Err(format!("Item {n}: jumpToIndex {i} ungültig (außerhalb der Liste oder auf sich selbst)")),
+                    None => return Err(format!("Item {n}: JUMP braucht jumpToIndex")),
+                }
+            }
+        }
+        let jump_indices: Vec<Option<usize>> = load_items.iter().map(|li| li.jump_to_index).collect();
+
         let mut state = self.state.lock().expect("lock poisoned");
         let mut ids = Vec::with_capacity(load_items.len());
         let mut metadata = HashMap::with_capacity(load_items.len());
@@ -1173,8 +1264,14 @@ impl AutomationStore {
                     li.file.as_deref(),
                     li.sender_id.as_deref(),
                     li.tone_frequency,
+                    li.event_type.as_deref(),
+                    None,
                 ),
-                duration_ms: li.duration_ms.unwrap_or(DEFAULT_DURATION_MS),
+                duration_ms: if matches!(li.event_type.as_deref().map(str::to_ascii_lowercase).as_deref(), Some("hold" | "jump")) {
+                    0
+                } else {
+                    li.duration_ms.unwrap_or(DEFAULT_DURATION_MS)
+                },
                 start_type: li.start_type,
                 fixtime_hms: li.fixtime_hms,
                 start_at_utc_ms,
@@ -1193,6 +1290,14 @@ impl AutomationStore {
         // VOR einem Reorder bereits gefeuert hat, feuert danach
         // höchstens ein zweites Mal fälschlich (harmlos: derselbe Take
         // wie eh schon aktiv), verpasst aber nie eins.
+        // JUMP-Ziele (Listenposition → Item-ID) erst jetzt, wo alle IDs feststehen.
+        for (n, target_index) in jump_indices.iter().enumerate() {
+            if let (Some(t), Some(m)) = (target_index, metadata.get_mut(&ids[n]))
+                && let ItemMedia::Jump { target_id } = &mut m.media
+            {
+                *target_id = ids[*t].clone();
+            }
+        }
         state.fixtime_resolved.clear();
         state.playlist.replace_all(ids);
         state.metadata = metadata;
@@ -1540,6 +1645,12 @@ fn load_args(meta: &ItemMeta) -> Value {
         }
         ItemMedia::File { path } => body["file"] = serde_json::json!(path),
         ItemMedia::Live { sender_id } => body["senderId"] = serde_json::json!(sender_id),
+        ItemMedia::Image { path } => {
+            body["file"] = serde_json::json!(path);
+            body["mediaType"] = serde_json::json!("image");
+        }
+        // Steuer-Events werden nie geladen (`load_onto_channel`/`take_on_targets`).
+        ItemMedia::Hold | ItemMedia::Jump { .. } => {}
     }
     body
 }
@@ -1559,9 +1670,41 @@ fn standby_target(state: &AutomationState) -> Result<(String, String), String> {
     Ok((node_id, label.clone()))
 }
 
+/// Maximale Kettenlänge aufeinanderfolgender JUMP-Events (Schleifenschutz).
+const MAX_JUMP_CHAIN: usize = 8;
+
+/// Kapitel 27 / P2b: löst ein JUMP-Event auf. Ist `item_id` ein `Jump`, wird
+/// (ggf. über mehrere Sprünge) das Ziel-Item ermittelt und die Playlist darauf
+/// gecued; mit `mark_on_air` zusätzlich auf Sendung markiert (für Pfade, in
+/// denen `advance()` bereits „on air“ gesetzt hat — der Aufrufer nimmt das
+/// Ziel danach selbst auf den Ziel-Nodes). Liefert die endgültige Item-ID
+/// (unverändert, wenn `item_id` kein JUMP ist). Fehler bei fehlendem Ziel oder
+/// einer Kette länger als `MAX_JUMP_CHAIN` (Endlosschleife JUMP→JUMP).
+fn resolve_jump(state: &mut AutomationState, item_id: String, mark_on_air: bool) -> Result<String, String> {
+    let mut current = item_id;
+    for _ in 0..=MAX_JUMP_CHAIN {
+        let Some(ItemMedia::Jump { target_id }) = state.metadata.get(&current).map(|m| m.media.clone()) else {
+            return Ok(current);
+        };
+        let idx = state
+            .playlist
+            .index_of(&target_id)
+            .ok_or_else(|| format!("JUMP-Ziel „{target_id}\u{201c} nicht mehr im Rundown"))?;
+        state.playlist.cue(idx).map_err(|e| e.to_string())?;
+        if mark_on_air {
+            state.playlist.take().map_err(|e| e.to_string())?;
+        }
+        current = target_id;
+    }
+    Err(format!("JUMP-Kette länger als {MAX_JUMP_CHAIN} — Schleife?"))
+}
+
 /// Lädt ein Item auf einen bestimmten Kanal, OHNE den Mixer anzufassen
 /// — Kern von `do_cue` (reine Vorschau, kein On-Air-Wechsel).
 fn load_onto_channel(store: &AutomationStore, node_id: &str, meta: &ItemMeta) -> Result<(), String> {
+    if meta.media.is_control() {
+        return Ok(()); // nichts zu laden
+    }
     store
         .proxy_client(node_id.to_string())
         .invoke("load", load_args(meta))
@@ -1602,6 +1745,13 @@ fn take_on_targets(
     transition: Transition,
     rate_frames: Option<u32>,
 ) -> Result<Channel, String> {
+    // Kapitel 27 / P2b: HOLD ändert nichts am Programm — das vorherige Bild
+    // bleibt stehen; JUMP wird VOR dem Take aufgelöst (`resolve_jump`).
+    match &meta.media {
+        ItemMedia::Hold => return Ok(state.live_channel),
+        ItemMedia::Jump { .. } => return Err("JUMP-Event nicht aufgelöst (interner Fehler)".to_string()),
+        _ => {}
+    }
     let (standby_node_id, standby_label) = standby_target(state)?;
     load_onto_channel(store, &standby_node_id, meta)?;
 
@@ -1915,6 +2065,15 @@ impl ParamStore for AutomationStore {
                         name: "startType".to_string(),
                         kind: ParamType::String,
                     },
+                    // Kapitel 27 / P2b: "image" | "hold" | "jump" (+ jumpTarget = Item-ID).
+                    MethodArg {
+                        name: "eventType".to_string(),
+                        kind: ParamType::String,
+                    },
+                    MethodArg {
+                        name: "jumpTarget".to_string(),
+                        kind: ParamType::String,
+                    },
                 ],
             },
             MethodSpec {
@@ -2211,7 +2370,9 @@ impl ParamStore for AutomationStore {
                     .filter(|d| *d > 0.0)
                     .map(|d| d as u64);
                 let start_type = args.get("startType").and_then(Value::as_str).and_then(StartType::parse);
-                self.do_append(label, pattern, file, sender_id, tone_frequency, duration_ms, start_type)
+                let event_type = args.get("eventType").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+                let jump_target = args.get("jumpTarget").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+                self.do_append(label, pattern, file, sender_id, tone_frequency, duration_ms, start_type, event_type, jump_target)
             }
             "load" => {
                 let items_json = args.get("itemsJson").and_then(Value::as_str).unwrap_or("[]");
@@ -3150,6 +3311,119 @@ mod fixtime_tests {
             fixtime_action(target + 1000, target, Some(FixtimeResolution::Skipped)),
             FixtimeAction::None
         );
+    }
+}
+
+// Kapitel 27 / P2b: Bild-, Hold- und Jump-Events.
+#[cfg(test)]
+mod control_event_tests {
+    use super::*;
+
+    fn item(media: ItemMedia, duration_ms: u64) -> ItemMeta {
+        ItemMeta {
+            label: "x".to_string(),
+            media,
+            duration_ms,
+            start_type: StartType::Sequence,
+            fixtime_hms: None,
+            start_at_utc_ms: None,
+            transition: Transition::Cut,
+            transition_rate_frames: None,
+            children: Vec::new(),
+        }
+    }
+
+    fn state_with(items: Vec<(&str, ItemMedia)>) -> AutomationState {
+        let mut s = AutomationState::new(String::new(), String::new(), String::new(), String::new());
+        for (id, media) in items {
+            s.metadata.insert(id.to_string(), item(media, 1000));
+            s.playlist.append(id.to_string());
+        }
+        s
+    }
+
+    fn pat() -> ItemMedia {
+        ItemMedia::TestPattern { pattern: "smpte".to_string(), tone_frequency: 0.0 }
+    }
+
+    #[test]
+    fn event_type_comes_from_the_explicit_type_not_the_extension() {
+        let m = item_media_from_args(None, Some("still.jpg"), None, None, Some("image"), None);
+        assert_eq!(m, ItemMedia::Image { path: "still.jpg".to_string() });
+        assert_eq!(event_type(&m), "IMAGE");
+        // Ohne ausdrückliche Angabe bleibt eine .jpg-Datei ein CLIP (kein Raten an der Endung).
+        let m = item_media_from_args(None, Some("still.jpg"), None, None, None, None);
+        assert_eq!(event_type(&m), "CLIP");
+        assert_eq!(event_type(&item_media_from_args(None, None, None, None, Some("hold"), None)), "HOLD");
+        let j = item_media_from_args(None, None, None, None, Some("JUMP"), Some("item3"));
+        assert_eq!(j, ItemMedia::Jump { target_id: "item3".to_string() });
+        assert!(j.is_control() && ItemMedia::Hold.is_control() && !pat().is_control());
+    }
+
+    #[test]
+    fn image_is_sent_to_the_player_with_media_type_and_checked_in_the_media_library() {
+        let meta = item(ItemMedia::Image { path: "logo.png".to_string() }, 5000);
+        let args = load_args(&meta);
+        assert_eq!(args["file"], "logo.png");
+        assert_eq!(args["mediaType"], "image");
+        assert!(item_is_available(&meta, &["logo.png".to_string()], &[]));
+        assert!(!item_is_available(&meta, &["other.png".to_string()], &[]));
+        // Steuer-Events brauchen kein Medium und werden nie geladen.
+        assert!(item_is_available(&item(ItemMedia::Hold, 0), &[], &[]));
+        assert_eq!(load_args(&item(ItemMedia::Hold, 0)).get("file"), None);
+    }
+
+    #[test]
+    fn jump_resolves_to_its_target_and_chains() {
+        let mut s = state_with(vec![
+            ("a", pat()),
+            ("j1", ItemMedia::Jump { target_id: "j2".to_string() }),
+            ("j2", ItemMedia::Jump { target_id: "a".to_string() }),
+            ("z", pat()),
+        ]);
+        let id = resolve_jump(&mut s, "j1".to_string(), true).unwrap();
+        assert_eq!(id, "a", "j1 -> j2 -> a");
+        assert_eq!(s.playlist.current_index(), Some(0));
+        assert!(s.playlist.on_air(), "mark_on_air=true takes the target");
+        // kein Jump: unverändert, Playlist unangetastet
+        let before = s.playlist.current_index();
+        assert_eq!(resolve_jump(&mut s, "z".to_string(), true).unwrap(), "z");
+        assert_eq!(s.playlist.current_index(), before);
+    }
+
+    #[test]
+    fn jump_without_take_only_cues_the_target() {
+        let mut s = state_with(vec![("a", pat()), ("j", ItemMedia::Jump { target_id: "a".to_string() })]);
+        s.playlist.cue(1).unwrap();
+        assert_eq!(resolve_jump(&mut s, "j".to_string(), false).unwrap(), "a");
+        assert_eq!(s.playlist.current_index(), Some(0));
+        assert!(!s.playlist.on_air());
+    }
+
+    #[test]
+    fn jump_loop_and_missing_target_are_errors_not_hangs() {
+        // Neun Sprünge in Folge (länger als MAX_JUMP_CHAIN) ohne Ziel-Item.
+        let mut items = Vec::new();
+        let names: Vec<String> = (0..=MAX_JUMP_CHAIN + 1).map(|i| format!("j{i}")).collect();
+        for (i, n) in names.iter().enumerate() {
+            let next = names[(i + 1) % names.len()].clone();
+            items.push((n.as_str(), ItemMedia::Jump { target_id: next }));
+        }
+        let mut s = state_with(items);
+        let err = resolve_jump(&mut s, "j0".to_string(), false).unwrap_err();
+        assert!(err.contains("Schleife"), "{err}");
+
+        let mut s = state_with(vec![("j", ItemMedia::Jump { target_id: "gone".to_string() })]);
+        assert!(resolve_jump(&mut s, "j".to_string(), false).unwrap_err().contains("nicht mehr im Rundown"));
+    }
+
+    #[test]
+    fn control_events_survive_a_snapshot_roundtrip() {
+        for media in [ItemMedia::Hold, ItemMedia::Jump { target_id: "x".to_string() }, ItemMedia::Image { path: "a.png".to_string() }] {
+            let json = serde_json::to_string(&item(media.clone(), 0)).unwrap();
+            let back: ItemMeta = serde_json::from_str(&json).unwrap();
+            assert_eq!(back.media, media);
+        }
     }
 }
 
