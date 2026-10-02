@@ -4689,6 +4689,19 @@ Audio-Preset-Resilience im alten `AudioRouter.js` und
 `PlaylistEngine.js::_applyLiveAudioPreset`; ein Process-Template für
 File-Transfer; das IS-04-Tag-Schema für Namespace-Tags.
 
+### 27.7 Zurückgestellte Punkte (Stand 2026-10-02 — bewusst NICHT umgesetzt, für später)
+
+Aus den bisher abgeschlossenen Schritten P1–P4 (Details je Zeile der Status-Checkliste):
+
+- **Reconcile mit dem echten Zustand (Spec §115):** nach einem Neustart wird der Zustand aus dem Snapshot wiederhergestellt, aber nicht mit dem tatsächlichen Player-/Mixer-Zustand abgeglichen. Dazu: Live-Test des Zweigs „on-air Item beim Neustart abgelaufen“ nur als Unit-Test; Neustart-Re-Arming der Child Events nur als Unit-Test (kein echter Absturz).
+- **Aktions-Queue (P2a):** `schedule::event_queue` ist Plan/Anzeige; ausgeführt wird weiter über `fixtime_loop`/Auto-Advance. Zusammenführen = eigener Schritt.
+- **Ortszeit-Eingabe mit Channel-Zeitzone (P2c):** Eingabe läuft im Browser (lokale Zeit → UTC); eine Umrechnung im Node (IANA-Zone, `chrono-tz`) gibt es nicht. Channel-Zeitzone wird noch nicht für die Anzeige im Panel genutzt.
+- **Child Events (P3):** SUBTITLE, ROUTING, SOURCE, SCTE35, GPI werden abgelehnt (kein Ziel-Node vorhanden); ABSOLUTE-Kinder und die Sichtbarkeit der OGraf-Grafik im Bild nicht live geprüft; Panel-Änderungen nur auf Syntax, nicht per Klicktest geprüft; kein eigener Editor (JSON per `prompt()`).
+- **Standbild (P2b):** Balken beim 4:3-Bild und die Bildauswahl im Panel nicht visuell geprüft.
+- **Quellen (P4):** (a) Wechsel einer LAUFENDEN Live-Quelle bei Ausfall (Spec §156/§157, kontrollierter Cut/Fade); (b) Failover-Kandidaten Primary/Backup/Fallback (§76) und Fallback-Politik (§75/§200: Filler, Black, Notfall); (c) Tag-Editor in der UI (Spec §153) und Tag-/Health-Filter im Source-Selector (§92/§256); (d) Tag-Setzen braucht heute `configure` (Spec nennt „Operatoren“); (e) Tags ad-hoc gestarteter Instanzen gehen mit der Instanz verloren (Schlüssel `node_id`+Label); (f) nur Rohdaten für Health (online/offline), keine Monitor-/Sync-Status.
+- **Noch nicht begonnen (Phasenplan §27.5):** P5 Audio-Capabilities/Presets, P6 semantisches Audio-Routing (braucht Entscheidung zu Mixer-Erwartungen und E7), P7 Multi-Channel/Channel-Trigger (NATS), P8 Asset-/Process-Preflight (E4), P9 Subtitle/Voiceover/Plugins/SCTE-35, P10 As-Run/Metrics/Hardening/Doku/Abschlussbericht. Offene Entscheidungen: E4, E7, E8 (Reihenfolge).
+- **Umfeld (nicht Teil des Kapitels):** MXF-Player: Audio-Gruppen-Kette und Ausgabe-Thread als weitere CPU-Hebel; während eines Clips lief 1 von 5 Audio-Flows nicht (nicht gegen den Ausgangsstand verglichen); Mixer: Compositor-/Ausgabe-Thread als Rest-Last; `cargo test --workspace`: 5–6 MXL-/Fabrics-Tests in `omp-mediaio` schlagen ohne `mxl.env` fehl; `process.TestTriggerListenerStartsExecutionOnMatchingEvent` unter Parallellast flaky.
+
 ---
 
 ## 7. Status-Checkliste (von Claude nach jedem Schritt pflegen)
