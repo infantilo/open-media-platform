@@ -98,6 +98,13 @@ pub struct MediaRef {
     pub on_missing: MissingPolicy,
     #[serde(rename = "fallbackFile", default, skip_serializing_if = "Option::is_none")]
     pub fallback_file: Option<String>,
+    /// Darstellung im Panel (kein Einfluss auf die Sendung): Symbol, Farbe, Notiz.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub icon: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub color: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
 }
 
 /// Event-Bereitschaft (Spec §184).

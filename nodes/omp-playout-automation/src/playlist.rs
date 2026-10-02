@@ -145,6 +145,33 @@ impl Playlist {
         Ok(())
     }
 
+    /// Verschiebt den Eintrag von `from` nach `to` (Position in der NEUEN Liste). Der Cursor
+    /// (`current_index`) folgt demselben Item; Sendezustand und Modus bleiben unberührt — anders als
+    /// ein `replace_all` verliert das Umsortieren also weder das gecuete noch das laufende Event.
+    pub fn move_item(&mut self, from: usize, to: usize) -> Result<(), PlaylistError> {
+        let len = self.items.len();
+        if from >= len || to >= len {
+            return Err(PlaylistError::IndexOutOfBounds);
+        }
+        if from == to {
+            return Ok(());
+        }
+        let id = self.items.remove(from);
+        self.items.insert(to, id);
+        if let Some(cur) = self.current_index {
+            self.current_index = Some(if cur == from {
+                to
+            } else if from < cur && cur <= to {
+                cur - 1
+            } else if to <= cur && cur < from {
+                cur + 1
+            } else {
+                cur
+            });
+        }
+        Ok(())
+    }
+
     /// Findet den Index einer Item-ID — Hilfsfunktion für `main.rs`s
     /// `cue(itemId)`/`remove(itemId)`-Methoden, die (wie beim ferngesteuerten
     /// Player, §13.3) über die ID adressieren, nicht über den Index.
@@ -229,6 +256,38 @@ impl Playlist {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn move_item_reorders_and_the_cursor_follows_its_item() {
+        let mk = |ids: &[&str], cur: usize| {
+            let mut p = Playlist::new();
+            p.restore(ids.iter().map(|s| s.to_string()).collect(), Some(cur), true, Mode::Auto);
+            p
+        };
+        // Cursor auf dem verschobenen Item.
+        let mut p = mk(&["a", "b", "c", "d"], 1);
+        p.move_item(1, 3).unwrap();
+        assert_eq!(p.items(), ["a", "c", "d", "b"]);
+        assert_eq!(p.current_index(), Some(3));
+        // Verschieben über den Cursor hinweg nach hinten: Cursor rückt vor.
+        let mut p = mk(&["a", "b", "c", "d"], 2);
+        p.move_item(0, 3).unwrap();
+        assert_eq!(p.items(), ["b", "c", "d", "a"]);
+        assert_eq!(p.items()[p.current_index().unwrap()], "c");
+        // … und nach vorn: Cursor rückt zurück.
+        let mut p = mk(&["a", "b", "c", "d"], 1);
+        p.move_item(3, 0).unwrap();
+        assert_eq!(p.items(), ["d", "a", "b", "c"]);
+        assert_eq!(p.items()[p.current_index().unwrap()], "b");
+        assert!(p.on_air(), "Sendezustand bleibt");
+        // Außerhalb des Cursors: unverändert; Randfälle.
+        let mut p = mk(&["a", "b", "c", "d"], 0);
+        p.move_item(2, 3).unwrap();
+        assert_eq!(p.current_index(), Some(0));
+        assert!(p.move_item(0, 9).is_err());
+        assert!(p.move_item(9, 0).is_err());
+        assert!(p.move_item(1, 1).is_ok());
+    }
+
     use super::*;
 
     #[test]

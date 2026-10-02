@@ -528,6 +528,11 @@ fn item_meta_to_json(id: &str, m: &ItemMeta) -> Value {
     if let Some(f) = &m.media_ref.fallback_file {
         v["fallbackFile"] = serde_json::json!(f);
     }
+    for (k, val) in [("icon", &m.media_ref.icon), ("color", &m.media_ref.color), ("note", &m.media_ref.note)] {
+        if !val.is_empty() {
+            v[k] = serde_json::json!(val);
+        }
+    }
     v
 }
 
@@ -1522,6 +1527,124 @@ impl AutomationStore {
         Ok(())
     }
 
+    /// Verschiebt ein Event an eine neue Position (Drag & Drop im Panel). Cue/On-Air-Zustand bleiben,
+    /// der Cursor folgt dem Event (`Playlist::move_item`).
+    fn do_move_item(&self, item_id: &str, to_index: usize) -> Result<(), String> {
+        let mut state = self.state.lock().expect("lock poisoned");
+        let from = state.playlist.index_of(item_id).ok_or("unbekannte itemId".to_string())?;
+        state.playlist.move_item(from, to_index).map_err(|_| format!("Zielposition {to_index} liegt außerhalb der Liste"))?;
+        state.timeline.invalidate_from(from.min(to_index));
+        Ok(())
+    }
+
+    /// Property-Editor: ändert beliebige Eigenschaften EINES Events in einem Schritt (alles-oder-nichts —
+    /// zuerst vollständig geprüft, dann angewendet). Das laufende Event darf nicht umgebaut werden
+    /// (Medium/Dauer), Children/Audio/Titel/Start/Transition schon.
+    fn do_update_item(&self, item_id: &str, patch: &Value) -> Result<(), String> {
+        let mut p: ItemPatch = serde_json::from_value(patch.clone()).map_err(|e| format!("Eigenschaften ungültig: {e}"))?;
+
+        // 1) Vorab prüfen/auflösen (ohne den State-Lock zu halten: Asset-Auflösung ist ein HTTP-Aufruf).
+        let player_label = self.state.lock().expect("lock poisoned").target_player_a_label.clone();
+        let mut new_media: Option<(ItemMedia, Option<readiness::AssetRef>)> = None;
+        if let Some(m) = &p.media {
+            let nonempty = |o: &Option<String>| o.as_deref().filter(|s| !s.trim().is_empty()).map(|s| s.trim().to_string());
+            let media = match m.kind.as_str() {
+                "pattern" => item_media_from_args(m.pattern.as_deref(), None, None, m.tone_frequency, None, None, None),
+                "file" => ItemMedia::File { path: nonempty(&m.file).ok_or("Datei fehlt")? },
+                "image" => ItemMedia::Image { path: nonempty(&m.file).ok_or("Bilddatei fehlt")? },
+                "live" => ItemMedia::Live { sender_id: nonempty(&m.sender_id).ok_or("Live-Quelle fehlt")? },
+                "liveselect" => {
+                    let sel = m.source_selector.clone().ok_or("sourceSelector fehlt")?;
+                    ItemMedia::LiveSelect { selector: Box::new(sel) }
+                }
+                "hold" => ItemMedia::Hold,
+                "jump" => ItemMedia::Jump { target_id: nonempty(&m.jump_target).ok_or("Sprungziel fehlt")? },
+                "asset" => {
+                    let a = m.asset.clone().filter(|a| !a.asset_id.is_empty()).ok_or("Asset-ID fehlt")?;
+                    let file = resolve_asset_file(self, &player_label, &a)?;
+                    new_media = Some((ItemMedia::File { path: file }, Some(a)));
+                    ItemMedia::Hold // Platzhalter, unten überschrieben
+                }
+                other => return Err(format!("unbekannter Medientyp „{other}\u{201c}")),
+            };
+            if new_media.is_none() {
+                new_media = Some((media, None));
+            }
+        }
+        let start_type = match p.start_type.as_deref() {
+            None => None,
+            Some(s) => Some(StartType::parse(s).ok_or_else(|| format!("startType „{s}\u{201c} unbekannt"))?),
+        };
+        let start_at_ms = match p.start_at.as_deref() {
+            None => None,
+            Some("") => Some(None),
+            Some(t) => Some(Some(schedule::parse_start_at(t).ok_or("startAt ungültig (RFC 3339 mit Zeitzone)")?)),
+        };
+        if let Some(h) = p.fixtime_hms.as_deref().filter(|h| !h.is_empty())
+            && parse_hms_to_secs(h).is_none()
+        {
+            return Err(format!("fixtimeHms „{h}\u{201c} ungültig (Format HH:MM:SS)"));
+        }
+        let on_missing = match p.on_missing.as_deref() {
+            None => None,
+            Some("") => Some(readiness::MissingPolicy::default()),
+            Some(s) => Some(readiness::MissingPolicy::parse(s).ok_or_else(|| format!("onMissing „{s}\u{201c} unbekannt"))?),
+        };
+        let audio: Option<Option<omp_resolver::audio::AudioIntent>> = match &p.audio {
+            None => None,
+            Some(Value::Null) => Some(None),
+            Some(v) => {
+                let i: omp_resolver::audio::AudioIntent = serde_json::from_value(v.clone()).map_err(|e| format!("audio ungültig: {e}"))?;
+                Some(if i == omp_resolver::audio::AudioIntent::default() { None } else { Some(i) })
+            }
+        };
+        if let Some(children) = p.children.as_mut() {
+            let mut seen = std::collections::HashSet::new();
+            for (n, c) in children.iter_mut().enumerate() {
+                if c.id.trim().is_empty() {
+                    c.id = format!("c{}", n + 1);
+                }
+                c.validate().map_err(|e| format!("Child {} („{}\u{201c}): {e}", n + 1, c.id))?;
+                if !seen.insert(c.id.clone()) {
+                    return Err(format!("Child-ID „{}\u{201c} kommt doppelt vor", c.id));
+                }
+            }
+        }
+
+        apply_item_patch(&mut self.state.lock().expect("lock poisoned"), item_id, new_media, start_type, start_at_ms, on_missing, audio, p)
+    }
+
+    /// Ändert ein bestehendes Cart (Panel „Assets verwalten“).
+    fn do_cart_update(&self, asset_id: &str, patch: &Value) -> Result<(), String> {
+        let mut state = self.state.lock().expect("lock poisoned");
+        let (_, meta) = state.carts.iter_mut().find(|(id, _)| id == asset_id).ok_or("unbekannte Cart-ID".to_string())?;
+        let text = |k: &str| patch.get(k).and_then(Value::as_str);
+        if let Some(l) = text("label") {
+            if l.trim().is_empty() {
+                return Err("label darf nicht leer sein".to_string());
+            }
+            meta.label = l.trim().to_string();
+        }
+        if let ItemMedia::TestPattern { pattern, tone_frequency } = &mut meta.media {
+            if let Some(p) = text("pattern").filter(|p| !p.is_empty()) {
+                *pattern = p.to_string();
+            }
+            if let Some(t) = patch.get("toneFrequency").and_then(Value::as_f64) {
+                *tone_frequency = t.max(0.0);
+            }
+        }
+        if let Some(d) = patch.get("durationMs").and_then(Value::as_f64) {
+            meta.duration_ms = d.max(0.0) as u64;
+        }
+        if let Some(i) = text("icon") {
+            meta.media_ref.icon = i.to_string();
+        }
+        if let Some(c) = text("color") {
+            meta.media_ref.color = c.to_string();
+        }
+        Ok(())
+    }
+
     /// Kapitel 6 Teil 7: "cue" bedeutet jetzt echtes `load()` auf den
     /// Standby-Kanal (Vorschau/Vorbereitung, PROGRAM/Mixer bleibt
     /// unberührt) statt nur eines internen Zeigers beim Ziel-Player —
@@ -1886,6 +2009,138 @@ fn standby_target(state: &AutomationState) -> Result<(String, String), String> {
 
 /// Maximale Kettenlänge aufeinanderfolgender JUMP-Events (Schleifenschutz).
 const MAX_JUMP_CHAIN: usize = 8;
+
+/// Medien-Teil eines Property-Editor-Patches.
+#[derive(serde::Deserialize, Default)]
+struct MediaPatch {
+    kind: String,
+    #[serde(default)]
+    pattern: Option<String>,
+    #[serde(default)]
+    file: Option<String>,
+    #[serde(rename = "senderId", default)]
+    sender_id: Option<String>,
+    #[serde(rename = "toneFrequency", default)]
+    tone_frequency: Option<f64>,
+    #[serde(rename = "sourceSelector", default)]
+    source_selector: Option<omp_resolver::Selector>,
+    #[serde(rename = "jumpTarget", default)]
+    jump_target: Option<String>,
+    #[serde(default)]
+    asset: Option<readiness::AssetRef>,
+}
+#[derive(serde::Deserialize, Default)]
+struct ItemPatch {
+    label: Option<String>,
+    note: Option<String>,
+    icon: Option<String>,
+    color: Option<String>,
+    media: Option<MediaPatch>,
+    #[serde(rename = "durationMs")]
+    duration_ms: Option<u64>,
+    #[serde(rename = "startType")]
+    start_type: Option<String>,
+    #[serde(rename = "startAt")]
+    start_at: Option<String>,
+    #[serde(rename = "fixtimeHms")]
+    fixtime_hms: Option<String>,
+    transition: Option<Transition>,
+    #[serde(rename = "transitionRateFrames")]
+    transition_rate_frames: Option<Value>,
+    children: Option<Vec<ChildEvent>>,
+    audio: Option<Value>,
+    #[serde(rename = "onMissing")]
+    on_missing: Option<String>,
+    #[serde(rename = "fallbackFile")]
+    fallback_file: Option<String>,
+}
+
+
+/// Wendet einen vollständig vorab geprüften Patch an (alles oder nichts — nach der ersten Änderung gibt es
+/// keinen Fehlerpfad mehr). Reine Zustandsfunktion, ohne Netz.
+#[allow(clippy::too_many_arguments)]
+fn apply_item_patch(
+    state: &mut AutomationState,
+    item_id: &str,
+    new_media: Option<(ItemMedia, Option<readiness::AssetRef>)>,
+    start_type: Option<StartType>,
+    start_at_ms: Option<Option<i64>>,
+    on_missing: Option<readiness::MissingPolicy>,
+    audio: Option<Option<omp_resolver::audio::AudioIntent>>,
+    p: ItemPatch,
+) -> Result<(), String> {
+    let index = state.playlist.index_of(item_id).ok_or("unbekannte itemId".to_string())?;
+    let is_on_air = state.playlist.on_air() && state.playlist.current_index() == Some(index);
+    if is_on_air && (new_media.is_some() || p.duration_ms.is_some()) {
+        return Err("Das laufende Event kann nicht umgebaut werden (Medium/Dauer) — Titel, Children, Audio, Start und Transition sind änderbar".to_string());
+    }
+    if let Some((ItemMedia::Jump { target_id }, _)) = &new_media
+        && state.playlist.index_of(target_id).is_none()
+    {
+        return Err(format!("Sprungziel „{target_id}\u{201c} ist kein Event dieser Liste"));
+    }
+    let meta = state.metadata.get_mut(item_id).ok_or("Metadaten fehlen".to_string())?;
+    if let Some(l) = p.label {
+        meta.label = l;
+    }
+    for (field, val) in [(&mut meta.media_ref.note, p.note), (&mut meta.media_ref.icon, p.icon), (&mut meta.media_ref.color, p.color)] {
+        if let Some(v) = val {
+            *field = v;
+        }
+    }
+    if let Some((media, asset)) = new_media {
+        meta.media = media;
+        meta.media_ref.asset = asset;
+        if meta.media.is_control() {
+            meta.duration_ms = 0;
+        }
+    }
+    if let Some(d) = p.duration_ms
+        && !meta.media.is_control()
+    {
+        meta.duration_ms = d;
+    }
+    if let Some(st) = start_type {
+        meta.start_type = st;
+    }
+    if meta.start_type == StartType::Fixtime {
+        if let Some(at) = start_at_ms {
+            meta.start_at_utc_ms = at;
+        }
+        if let Some(h) = p.fixtime_hms.as_deref() {
+            meta.fixtime_hms = Some(h).filter(|h| !h.is_empty()).map(str::to_string);
+        }
+        if meta.start_at_utc_ms.is_none() && meta.fixtime_hms.is_none() {
+            meta.start_type = StartType::default(); // „Fixtime ohne Zeit“ gibt es nicht
+        }
+    } else {
+        meta.start_at_utc_ms = None;
+        meta.fixtime_hms = None;
+    }
+    if let Some(t) = p.transition {
+        meta.transition = t;
+    }
+    if let Some(v) = p.transition_rate_frames {
+        meta.transition_rate_frames = v.as_u64().filter(|f| (1..=250).contains(f)).map(|f| f as u32);
+    }
+    if let Some(c) = p.children {
+        meta.children = c;
+    }
+    if let Some(a) = audio {
+        meta.audio = a;
+    }
+    if let Some(m) = on_missing {
+        meta.media_ref.on_missing = m;
+    }
+    if let Some(f) = p.fallback_file {
+        meta.media_ref.fallback_file = Some(f).filter(|f| !f.trim().is_empty());
+    }
+    state.fixtime_resolved.remove(item_id);
+    state.readiness.remove(item_id);
+    state.timeline.invalidate_from(index);
+    Ok(())
+}
+
 
 /// Kapitel 27 / P2b: löst ein JUMP-Event auf. Ist `item_id` ein `Jump`, wird
 /// (ggf. über mehrere Sprünge) das Ziel-Item ermittelt und die Playlist darauf
@@ -2777,6 +3032,28 @@ impl ParamStore for AutomationStore {
                     },
                 ],
             },
+            // Panel: Drag & Drop (Position in der neuen Liste), Property-Editor (JSON-Patch), Cart ändern.
+            MethodSpec {
+                name: "moveItem".to_string(),
+                args: vec![
+                    MethodArg { name: "itemId".to_string(), kind: ParamType::String },
+                    MethodArg { name: "toIndex".to_string(), kind: ParamType::Number },
+                ],
+            },
+            MethodSpec {
+                name: "updateItem".to_string(),
+                args: vec![
+                    MethodArg { name: "itemId".to_string(), kind: ParamType::String },
+                    MethodArg { name: "patchJson".to_string(), kind: ParamType::String },
+                ],
+            },
+            MethodSpec {
+                name: "cart.update".to_string(),
+                args: vec![
+                    MethodArg { name: "assetId".to_string(), kind: ParamType::String },
+                    MethodArg { name: "patchJson".to_string(), kind: ParamType::String },
+                ],
+            },
             // Kapitel 27 / P8: Event mit Asset-Referenz (Datei wird am Ziel-Player aufgelöst) und
             // nachträgliche Änderung von Asset/Ausfallrichtlinie/Ersatzdatei.
             MethodSpec {
@@ -3150,6 +3427,23 @@ impl ParamStore for AutomationStore {
                     (_, None) => Err("startType fehlt oder ungültig (sequence|manual|fixtime)".to_string()),
                 }
             }
+            "moveItem" => (|| {
+                let item_id = args.get("itemId").and_then(Value::as_str).ok_or("itemId fehlt".to_string())?;
+                let to = args.get("toIndex").and_then(Value::as_f64).filter(|n| *n >= 0.0).ok_or("toIndex fehlt".to_string())? as usize;
+                self.do_move_item(item_id, to)
+            })(),
+            "updateItem" => (|| {
+                let item_id = args.get("itemId").and_then(Value::as_str).ok_or("itemId fehlt".to_string())?;
+                let patch: Value = serde_json::from_str(args.get("patchJson").and_then(Value::as_str).unwrap_or("{}"))
+                    .map_err(|e| format!("patchJson ungültig: {e}"))?;
+                self.do_update_item(item_id, &patch)
+            })(),
+            "cart.update" => (|| {
+                let id = args.get("assetId").and_then(Value::as_str).ok_or("assetId fehlt".to_string())?;
+                let patch: Value = serde_json::from_str(args.get("patchJson").and_then(Value::as_str).unwrap_or("{}"))
+                    .map_err(|e| format!("patchJson ungültig: {e}"))?;
+                self.do_cart_update(id, &patch)
+            })(),
             "appendAsset" => (|| {
                 let text = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
                 let asset: readiness::AssetRef =
@@ -3171,7 +3465,7 @@ impl ParamStore for AutomationStore {
                 let mut st = self.state.lock().expect("lock poisoned");
                 let id = format!("item{}", st.next_item_seq);
                 if let Some(m) = st.metadata.get_mut(&id) {
-                    m.media_ref = readiness::MediaRef { asset: Some(asset), on_missing, fallback_file: fallback };
+                    m.media_ref = readiness::MediaRef { asset: Some(asset), on_missing, fallback_file: fallback, ..m.media_ref.clone() };
                 }
                 Ok(())
             })(),
@@ -3192,7 +3486,7 @@ impl ParamStore for AutomationStore {
                 let fallback = Some(text("fallbackFile")).filter(|f| !f.is_empty());
                 let mut st = self.state.lock().expect("lock poisoned");
                 let m = st.metadata.get_mut(&item_id).ok_or("unbekannte itemId".to_string())?;
-                m.media_ref = readiness::MediaRef { asset, on_missing, fallback_file: fallback };
+                m.media_ref = readiness::MediaRef { asset, on_missing, fallback_file: fallback, ..m.media_ref.clone() };
                 st.readiness.remove(&item_id);
                 Ok(())
             })(),
@@ -5098,6 +5392,7 @@ mod media_ref_tests {
             asset: Some(readiness::AssetRef { asset_id: "a1".into(), version_id: String::new(), representation_type: "playout".into() }),
             on_missing: readiness::MissingPolicy::Fallback,
             fallback_file: Some("ersatz.mxf".into()),
+            ..Default::default()
         });
         let v = serde_json::to_value(&m).unwrap();
         // Flach (nicht verschachtelt) — Altbestand und neue Felder liegen auf derselben Ebene.
@@ -5129,6 +5424,7 @@ mod media_ref_tests {
                 asset: Some(readiness::AssetRef { asset_id: "a1".into(), ..Default::default() }),
                 on_missing: readiness::MissingPolicy::Skip,
                 fallback_file: None,
+                ..Default::default()
             }),
         );
         assert_eq!(with["asset"]["assetId"], "a1");
@@ -5159,5 +5455,109 @@ mod media_ref_tests {
         assert_eq!(up.len(), 1);
         assert_eq!(up[0].0, "item2");
         assert_eq!(up[0].2, Some(now + 10_000), "startet nach dem ersten 10-s-Item");
+    }
+}
+
+#[cfg(test)]
+mod patch_tests {
+    use super::*;
+
+    fn state_with(ids: &[&str]) -> AutomationState {
+        let mut st = AutomationState::new(String::new(), String::new(), String::new(), String::new());
+        for id in ids {
+            st.metadata.insert(
+                id.to_string(),
+                ItemMeta {
+                    label: id.to_string(),
+                    media: ItemMedia::File { path: "a.mp4".into() },
+                    duration_ms: 1000,
+                    start_type: StartType::default(),
+                    fixtime_hms: None,
+                    start_at_utc_ms: None,
+                    transition: Transition::default(),
+                    transition_rate_frames: None,
+                    children: Vec::new(),
+                    audio: None,
+                    media_ref: Default::default(),
+                },
+            );
+            st.playlist.append(id.to_string());
+        }
+        st
+    }
+
+    fn apply(st: &mut AutomationState, id: &str, patch: Value) -> Result<(), String> {
+        let p: ItemPatch = serde_json::from_value(patch).unwrap();
+        apply_item_patch(st, id, None, None, None, None, None, p)
+    }
+
+    #[test]
+    fn simple_fields_and_transition_are_applied() {
+        let mut st = state_with(&["a"]);
+        apply(&mut st, "a", serde_json::json!({
+            "label": "Neu", "note": "Hinweis", "icon": "🎬", "color": "#5aabff", "durationMs": 4000,
+            "transition": "mix", "transitionRateFrames": 25,
+        })).unwrap();
+        let m = &st.metadata["a"];
+        assert_eq!((m.label.as_str(), m.duration_ms, m.transition_rate_frames), ("Neu", 4000, Some(25)));
+        assert_eq!(m.transition, Transition::Mix);
+        assert_eq!((m.media_ref.note.as_str(), m.media_ref.icon.as_str(), m.media_ref.color.as_str()), ("Hinweis", "🎬", "#5aabff"));
+        // Rate außerhalb 1..=250 oder null löscht sie.
+        apply(&mut st, "a", serde_json::json!({"transitionRateFrames": 999})).unwrap();
+        assert_eq!(st.metadata["a"].transition_rate_frames, None);
+    }
+
+    #[test]
+    fn on_air_event_keeps_its_media_and_duration_but_allows_the_rest() {
+        let mut st = state_with(&["a", "b"]);
+        st.playlist.take().unwrap(); // a on air
+        let media = Some((ItemMedia::Hold, None));
+        let err = apply_item_patch(&mut st, "a", media, None, None, None, None, ItemPatch::default()).unwrap_err();
+        assert!(err.contains("laufende Event"));
+        assert!(apply(&mut st, "a", serde_json::json!({"durationMs": 5})).unwrap_err().contains("laufende Event"));
+        apply(&mut st, "a", serde_json::json!({"label": "Live-Titel", "children": []})).unwrap();
+        assert_eq!(st.metadata["a"].label, "Live-Titel");
+        // Das nicht laufende Event b ist frei änderbar.
+        apply_item_patch(&mut st, "b", Some((ItemMedia::File { path: "x.mxf".into() }, None)), None, None, None, None, ItemPatch::default()).unwrap();
+        assert!(matches!(&st.metadata["b"].media, ItemMedia::File { path } if path == "x.mxf"));
+    }
+
+    #[test]
+    fn control_media_zeroes_the_duration_and_fixtime_without_a_time_falls_back() {
+        let mut st = state_with(&["a", "b"]);
+        apply_item_patch(&mut st, "b", Some((ItemMedia::Hold, None)), None, None, None, None, ItemPatch::default()).unwrap();
+        assert_eq!(st.metadata["b"].duration_ms, 0);
+        apply_item_patch(&mut st, "a", None, Some(StartType::Fixtime), None, None, None, ItemPatch::default()).unwrap();
+        assert_eq!(st.metadata["a"].start_type, StartType::default(), "Fixtime ohne Zeit gibt es nicht");
+        apply_item_patch(&mut st, "a", None, Some(StartType::Fixtime), Some(Some(1_790_000_000_000)), None, None, ItemPatch::default()).unwrap();
+        assert_eq!((st.metadata["a"].start_type, st.metadata["a"].start_at_utc_ms), (StartType::Fixtime, Some(1_790_000_000_000)));
+        // Zurück auf „sequence“ räumt die Zeiten ab.
+        apply_item_patch(&mut st, "a", None, Some(StartType::default()), None, None, None, ItemPatch::default()).unwrap();
+        assert_eq!(st.metadata["a"].start_at_utc_ms, None);
+    }
+
+    #[test]
+    fn jump_target_must_exist_and_unknown_items_are_rejected() {
+        let mut st = state_with(&["a"]);
+        let jump = Some((ItemMedia::Jump { target_id: "gibts-nicht".into() }, None));
+        assert!(apply_item_patch(&mut st, "a", jump, None, None, None, None, ItemPatch::default()).unwrap_err().contains("kein Event"));
+        assert_eq!(st.metadata["a"].label, "a", "bei Fehler bleibt alles unverändert");
+        assert!(apply(&mut st, "nix", serde_json::json!({"label": "x"})).unwrap_err().contains("unbekannte itemId"));
+    }
+
+    #[test]
+    fn policy_asset_and_children_patches() {
+        let mut st = state_with(&["a"]);
+        let asset = readiness::AssetRef { asset_id: "as1".into(), ..Default::default() };
+        apply_item_patch(&mut st, "a", Some((ItemMedia::File { path: "clip.mxf".into() }, Some(asset.clone()))),
+            None, None, Some(readiness::MissingPolicy::Black), None,
+            serde_json::from_value(serde_json::json!({"fallbackFile": "filler.mxf"})).unwrap()).unwrap();
+        let m = &st.metadata["a"];
+        assert_eq!(m.media_ref.asset, Some(asset));
+        assert_eq!(m.media_ref.on_missing, readiness::MissingPolicy::Black);
+        assert_eq!(m.media_ref.fallback_file.as_deref(), Some("filler.mxf"));
+        let c = ChildEvent::graphic("t1", children::TimingMode::RelativeToStart, 1000, 0);
+        apply_item_patch(&mut st, "a", None, None, None, None, None, ItemPatch { children: Some(vec![c]), ..Default::default() }).unwrap();
+        assert_eq!(st.metadata["a"].children.len(), 1);
     }
 }
