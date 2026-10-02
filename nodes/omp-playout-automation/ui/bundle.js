@@ -492,7 +492,77 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     cartsEmpty.textContent = '"+ Cart" zum Anlegen eines Interrupt-Assets (Blackclip, Standby, …)';
     cartsSection.append(cartsHeading, activeCartBanner, cartAddRow, cartList, cartsEmpty);
 
-    shadow.append(style, clockEl, nextFixtimeEl, planWarnEl, errorBanner, targetsRow, statusRow, progress, addRow, listHdr, list, empty, cartsSection);
+    // Kapitel 27 / P7: Channel-Trigger — andere Channels steuern (der Orchestrator prüft die Regeln
+    // „wer darf wen“ und protokolliert) und das Protokoll der letzten ein-/ausgehenden Trigger.
+    const triggerSection = document.createElement("details");
+    triggerSection.className = "carts";
+    const triggerSummary = document.createElement("summary");
+    triggerSummary.textContent = "Channel-Trigger";
+    triggerSummary.style.cssText = "cursor:pointer;font-weight:bold;margin:8px 0 4px;";
+    const triggerForm = document.createElement("div");
+    triggerForm.className = "add-row";
+    const mkSelect = (options) => {
+      const sel = document.createElement("select");
+      for (const [value, label] of options) {
+        const o = document.createElement("option");
+        o.value = value;
+        o.textContent = label;
+        sel.append(o);
+      }
+      return sel;
+    };
+    const triggerEvent = mkSelect([
+      ["NEXT", "NEXT"], ["NEXT_LIVE", "NEXT_LIVE"], ["CUT", "CUT"], ["JUMP", "JUMP (Item-ID)"], ["HOLD", "HOLD"], ["RESUME", "RESUME"],
+    ]);
+    const triggerKind = mkSelect([["group", "Gruppe"], ["channel", "Channel"], ["all", "Alle erlaubten"]]);
+    const triggerTarget = document.createElement("input");
+    triggerTarget.type = "text";
+    triggerTarget.placeholder = "Gruppe/Channel";
+    const triggerItem = document.createElement("input");
+    triggerItem.type = "text";
+    triggerItem.placeholder = "Item-ID (JUMP)";
+    const triggerLate = mkSelect([
+      ["EXECUTE_IMMEDIATELY", "verspätet: sofort"], ["SKIP", "verspätet: überspringen"], ["RESYNC", "verspätet: resync"], ["QUEUE", "verspätet: einreihen"],
+    ]);
+    const triggerAt = document.createElement("input");
+    triggerAt.type = "text";
+    triggerAt.placeholder = "Zielzeit HH:MM:SS (optional)";
+    triggerAt.style.width = "150px";
+    const triggerSend = document.createElement("button");
+    triggerSend.textContent = "Senden";
+    triggerKind.addEventListener("change", () => {
+      triggerTarget.style.display = triggerKind.value === "all" ? "none" : "";
+    });
+    triggerSend.addEventListener("click", async () => {
+      const event = triggerEvent.value;
+      const at = triggerAt.value.trim() ? parseStartInput(triggerAt.value) : "";
+      if (triggerAt.value.trim() && !at) {
+        showError("Zielzeit ungültig (HH:MM[:SS] oder YYYY-MM-DD HH:MM[:SS], lokale Zeit)");
+        return;
+      }
+      const ok = await confirmDialog(
+        `Trigger ${event} an ${triggerKind.value === "all" ? "alle erlaubten Channels" : (triggerKind.value === "group" ? "Gruppe " : "Channel ") + triggerTarget.value} senden?`,
+        "Senden",
+      );
+      if (!ok) return;
+      await call("sendTrigger", {
+        event,
+        targetKind: triggerKind.value,
+        target: triggerTarget.value.trim(),
+        argsJson: event === "JUMP" ? JSON.stringify({ itemId: triggerItem.value.trim() }) : "",
+        targetTime: at || "",
+        relativeOffsetMs: "0",
+        latePolicy: triggerLate.value,
+      });
+      poll();
+    });
+    triggerForm.append(triggerEvent, triggerKind, triggerTarget, triggerItem, triggerAt, triggerLate, triggerSend);
+    const triggerLogEl = document.createElement("div");
+    triggerLogEl.style.cssText = "font-size:11px;font-family:monospace;color:#bbb;max-height:140px;overflow:auto;";
+    triggerLogEl.textContent = "Noch keine Trigger.";
+    triggerSection.append(triggerSummary, triggerForm, triggerLogEl);
+
+    shadow.append(style, clockEl, nextFixtimeEl, planWarnEl, errorBanner, targetsRow, statusRow, progress, addRow, listHdr, list, empty, cartsSection, triggerSection);
 
     // Meldet fehlgeschlagene Methodenaufrufe sichtbar statt sie stillschweigend
     // zu verschlucken (`fetch()` lehnt nur bei Netzwerkfehlern ab, nicht bei
@@ -1012,6 +1082,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         persistenceStatus,
         scheduleValue,
         childEventsValue,
+        triggerLogValue,
       ] = await Promise.all([
         getParam("items"),
         getParam("currentItemId"),
@@ -1034,7 +1105,23 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         getParam("persistence"),
         getParam("schedule"),
         getParam("childEvents"),
+        getParam("triggerLog"),
       ]);
+      {
+        const entries = Array.isArray(triggerLogValue) ? triggerLogValue : [];
+        if (entries.length > 0) {
+          triggerLogEl.replaceChildren(
+            ...entries.map((e) => {
+              const line = document.createElement("div");
+              const t = new Date(e.at).toLocaleTimeString();
+              const who = e.direction === "out" ? `→ ${e.target ? JSON.stringify(e.target) : ""}` : `← ${e.origin || "?"}`;
+              line.textContent = `${t} ${e.direction === "out" ? "OUT" : "IN "} ${e.event} ${who} [${e.status}] ${e.detail || ""}`;
+              if (["denied", "failed", "rejected"].includes(e.status)) line.style.color = "#ff8080";
+              return line;
+            }),
+          );
+        }
+      }
       const items = itemsValue || [];
       const currentIds = new Set(items.map((it) => it.id));
       lastItems = items;

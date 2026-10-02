@@ -63,6 +63,7 @@ mod playlist;
 mod remote;
 mod schedule;
 mod timeline;
+mod trigger;
 mod uibundle;
 
 use std::collections::HashMap;
@@ -750,6 +751,10 @@ struct AutomationStore {
     /// Kapitel 27 / P6: Ergebnis des letzten Audio-Kontext-Aufrufs (Anzeige; eigener
     /// Mutex, weil `take_on_targets` unter dem State-Lock läuft).
     audio_status: Mutex<String>,
+    /// Kapitel 27 / P7: die letzten ein-/ausgehenden Channel-Trigger (Anzeige im Panel).
+    trigger_log: Mutex<std::collections::VecDeque<Value>>,
+    /// Serialisiert die Ausführung eingehender Trigger (Reihenfolge der Zustellung, Policy QUEUE).
+    trigger_gate: tokio::sync::Mutex<()>,
     registry: RegistryClient,
     events: mpsc::UnboundedSender<Event>,
     /// ARCHITECTURE.md §24.1 — Basis-URL des Orchestrators (für den
@@ -770,6 +775,82 @@ impl AutomationStore {
     /// Baut einen `ProxyClient` für eine gegebene Ziel-Node-ID —
     /// gemeinsamer Kern für Player- und Mixer-Zugriffe (beide sprechen
     /// denselben Orchestrator-Proxy an, nur unter unterschiedlicher ID).
+    /// Kapitel 27 / P7: Trigger über den Orchestrator senden (blockierend). Der Orchestrator prüft die
+    /// Regeln „wer darf wen steuern“ und protokolliert; ein verweigerter Trigger wird als Fehler gemeldet.
+    fn send_channel_trigger(
+        &self,
+        event: &str,
+        target: Value,
+        args: Value,
+        target_time: &str,
+        relative_offset_ms: i64,
+        late_policy: &str,
+    ) -> Result<Value, String> {
+        let channel_id = self.persistence.channel_id();
+        if channel_id.is_empty() {
+            return Err("dieser Node ist (noch) keinem Channel zugeordnet — Trigger können nur Channels senden".to_string());
+        }
+        if event.trim().is_empty() {
+            return Err("event fehlt (z. B. NEXT_LIVE)".to_string());
+        }
+        let mut body = serde_json::json!({
+            "event": event.trim(),
+            "target": target,
+            "args": args,
+            "relativeOffsetMs": relative_offset_ms,
+            "latePolicy": late_policy.trim(),
+        });
+        if !target_time.trim().is_empty() {
+            body["targetTime"] = Value::String(target_time.trim().to_string());
+        }
+        let result = remote::post_json(&self.orchestrator_url, &self.auth, &format!("/api/v1/playout/channels/{channel_id}/triggers"), &body);
+        let entry = |status: &str, detail: String| {
+            serde_json::json!({
+                "at": chrono::Utc::now().timestamp_millis(), "direction": "out", "event": event.trim(),
+                "target": body["target"], "status": status, "detail": detail,
+            })
+        };
+        match &result {
+            Ok(v) => {
+                let n = v.get("deliveries").and_then(Value::as_array).map_or(0, Vec::len);
+                self.log_trigger(entry("sent", format!("{n} Zustellung(en)")));
+            }
+            Err(e) => self.log_trigger(entry("denied", e.clone())),
+        }
+        result
+    }
+
+    fn log_trigger(&self, entry: Value) {
+        let mut log = self.trigger_log.lock().expect("lock poisoned");
+        log.push_front(entry);
+        log.truncate(30);
+    }
+
+    /// Wendet ein eingehendes Trigger-Event an (blockierend). Rückgabe: Detailtext für die Quittung.
+    fn apply_trigger_event(&self, env: &trigger::Envelope) -> Result<String, String> {
+        use trigger::Event;
+        match Event::parse(&env.event) {
+            Some(Event::Next) => self.do_next().map(|_| "weitergeschaltet".to_string()),
+            Some(Event::NextLive) => self.do_next_live().map(|_| "nächstes Live-Item genommen".to_string()),
+            Some(Event::Cut) => self.do_take().map(|_| "gecuetes Item genommen".to_string()),
+            Some(Event::Jump) => {
+                let item = trigger::jump_item(&env.args).ok_or("args.itemId fehlt")?.to_string();
+                self.do_cue(&item)?;
+                self.do_take().map(|_| format!("auf „{item}\u{201c} gesprungen"))
+            }
+            Some(Event::Hold) => {
+                self.state.lock().expect("lock poisoned").playlist.set_mode(Mode::Hold);
+                Ok("Hold".to_string())
+            }
+            Some(Event::Resume) => {
+                self.state.lock().expect("lock poisoned").playlist.set_mode(Mode::Auto);
+                Ok("Auto".to_string())
+            }
+            Some(Event::Custom) => Err("benannte Trigger (CHANNEL_TRIGGER) haben noch keinen Handler im Automator".to_string()),
+            None => Err(format!("unbekanntes Event „{}\u{201c}", env.event)),
+        }
+    }
+
     fn audio_status_hint(&self, status: String) {
         *self.audio_status.lock().expect("lock poisoned") = status;
     }
@@ -2165,6 +2246,23 @@ fn execute_child(
         let params = if stop { obj(&child.stop_params) } else { obj(&child.params) };
         return store.proxy_client(node_id).invoke(method, params).map_err(|e| e.to_string());
     }
+    if child.kind == ChildType::ChannelTrigger {
+        if stop {
+            return Ok(());
+        }
+        let p = &child.params;
+        let text = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        return store
+            .send_channel_trigger(
+                &text("event"),
+                p.get("target").cloned().unwrap_or(Value::Null),
+                p.get("args").cloned().unwrap_or_else(|| serde_json::json!({})),
+                &text("targetTime"),
+                p.get("relativeOffsetMs").and_then(Value::as_i64).unwrap_or(0),
+                &text("latePolicy"),
+            )
+            .map(|_| ());
+    }
     if child.kind == ChildType::Webhook {
         if stop {
             return Ok(());
@@ -2290,6 +2388,8 @@ impl ParamStore for AutomationStore {
                 readonly: false,
             },
             ParamSpec { name: "audioRouting".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            // Kapitel 27 / P7: Protokoll der letzten Channel-Trigger (JSON-Array, neueste zuerst).
+            ParamSpec { name: "triggerLog".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             // Kapitel 27 / P1b: Anbindung an die Domäne `playout` (s.
             // `persist.rs`) — reine Anzeige.
             // Kapitel 27 / P3: Lebenszyklus der Child Events (SCHEDULED…COMPLETED).
@@ -2513,6 +2613,20 @@ impl ParamStore for AutomationStore {
                     },
                 ],
             },
+            // Kapitel 27 / P7: Trigger an andere Channels (vermittelt der Orchestrator: Rechte, Audit).
+            // targetKind = channel|group|all, target = Name/ID/Gruppe (bei all leer).
+            MethodSpec {
+                name: "sendTrigger".to_string(),
+                args: vec![
+                    MethodArg { name: "event".to_string(), kind: ParamType::String },
+                    MethodArg { name: "targetKind".to_string(), kind: ParamType::String },
+                    MethodArg { name: "target".to_string(), kind: ParamType::String },
+                    MethodArg { name: "argsJson".to_string(), kind: ParamType::String },
+                    MethodArg { name: "targetTime".to_string(), kind: ParamType::String },
+                    MethodArg { name: "relativeOffsetMs".to_string(), kind: ParamType::String },
+                    MethodArg { name: "latePolicy".to_string(), kind: ParamType::String },
+                ],
+            },
             // Kapitel 27 / P5: Audio-Absicht eines Live-Items (JSON, `AudioIntent`).
             MethodSpec {
                 name: "setAudio".to_string(),
@@ -2661,6 +2775,7 @@ impl ParamStore for AutomationStore {
             "targetGraphicsLabel" => Some(serde_json::json!(state.target_graphics_label)),
             "targetAudioMixerLabel" => Some(serde_json::json!(state.target_audio_mixer_label)),
             "audioRouting" => Some(serde_json::json!(self.audio_status.lock().expect("lock poisoned").clone())),
+            "triggerLog" => Some(Value::Array(self.trigger_log.lock().expect("lock poisoned").iter().cloned().collect())),
             "schedule" => Some(schedule_json(&state, chrono::Utc::now().timestamp_millis())),
             "childEvents" => Some(child_events_json(&state)),
             "channelId" => Some(serde_json::json!(self.persistence.channel_id())),
@@ -2826,6 +2941,26 @@ impl ParamStore for AutomationStore {
                     (_, None) => Err("startType fehlt oder ungültig (sequence|manual|fixtime)".to_string()),
                 }
             }
+            "sendTrigger" => (|| {
+                let text = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+                let kind = text("targetKind");
+                let target = text("target");
+                let target_obj = match kind.as_str() {
+                    "channel" if !target.is_empty() => serde_json::json!({"channel": target}),
+                    "group" if !target.is_empty() => serde_json::json!({"group": target}),
+                    "all" => serde_json::json!({"all": true}),
+                    _ => return Err("targetKind muss channel, group oder all sein (channel/group brauchen target)".to_string()),
+                };
+                let args_json = text("argsJson");
+                let args_val: Value = if args_json.is_empty() { serde_json::json!({}) } else {
+                    serde_json::from_str(&args_json).map_err(|e| format!("argsJson ungültig: {e}"))?
+                };
+                let offset: i64 = match text("relativeOffsetMs").as_str() {
+                    "" => 0,
+                    v => v.parse().map_err(|_| "relativeOffsetMs muss eine ganze Zahl sein".to_string())?,
+                };
+                self.send_channel_trigger(&text("event"), target_obj, args_val, &text("targetTime"), offset, &text("latePolicy")).map(|_| ())
+            })(),
             "setAudio" => (|| {
                 let item_id = args.get("itemId").and_then(Value::as_str).ok_or("itemId fehlt".to_string())?;
                 let json = args.get("audioJson").and_then(Value::as_str).unwrap_or("").trim();
@@ -3216,6 +3351,141 @@ async fn auto_advance_loop(
 /// Zehntelsekunden-Auflösung, ein eigener, gröberer Takt hält diese
 /// neue Logik außerdem vollständig getrennt vom bereits bewährten
 /// Advance-Pfad (kein Risiko, dort etwas zu verändern).
+/// Kapitel 27 / P7: abonniert `omp.channel.<channelId>.trigger` und führt eingehende Channel-Trigger aus.
+/// Wartet, bis die Persistenz den eigenen Channel kennt; folgt einem Channel-Wechsel (neu abonnieren).
+async fn trigger_loop(store: Arc<AutomationStore>, nats_url: String) {
+    use futures_util::StreamExt;
+    let tls = omp_node_sdk::health::NatsTlsConfig::from_env();
+    loop {
+        let channel = store.persistence.channel_id();
+        if channel.is_empty() {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
+        }
+        let mut opts = async_nats::ConnectOptions::new().retry_on_initial_connect().max_reconnects(None).name("omp-playout-trigger");
+        if let Some(ca) = &tls.ca_file {
+            opts = opts.add_root_certificates(ca.into());
+        }
+        if let (Some(cert), Some(key)) = (&tls.cert_file, &tls.key_file) {
+            opts = opts.add_client_certificate(cert.into(), key.into()).require_tls(true);
+        }
+        let addrs: Vec<String> = nats_url.split(',').map(|s| s.trim().trim_end_matches('/').to_string()).filter(|s| !s.is_empty()).collect();
+        let client = match opts.connect(addrs).await {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("omp-playout-automation: NATS-Verbindung für Channel-Trigger fehlgeschlagen: {e}");
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            }
+        };
+        let subject = format!("omp.channel.{channel}.trigger");
+        let mut sub = match client.subscribe(subject.clone()).await {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("omp-playout-automation: Abo {subject} fehlgeschlagen: {e}");
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            }
+        };
+        let mut recheck = tokio::time::interval(Duration::from_secs(5));
+        loop {
+            tokio::select! {
+                msg = sub.next() => {
+                    let Some(msg) = msg else { break };
+                    match serde_json::from_slice::<trigger::Envelope>(&msg.payload) {
+                        Ok(env) => { tokio::spawn(handle_trigger(store.clone(), env, channel.clone())); }
+                        Err(e) => eprintln!("omp-playout-automation: ungültiger Trigger auf {subject}: {e}"),
+                    }
+                }
+                _ = recheck.tick() => {
+                    if store.persistence.channel_id() != channel { break; }
+                }
+            }
+        }
+    }
+}
+
+/// Quittiert einen Trigger beim Orchestrator (best effort; bei Ausfall wiederholt der Orchestrator die
+/// Zustellung und die Deduplizierung quittiert dann als Duplikat).
+async fn ack_trigger(store: &Arc<AutomationStore>, channel: &str, id: &str, status: &str, detail: String) {
+    let (url, auth) = (store.orchestrator_url.clone(), store.auth.clone());
+    let (ch, tid, st) = (channel.to_string(), id.to_string(), status.to_string());
+    let result = tokio::task::spawn_blocking(move || {
+        remote::post_json(&url, &auth, &format!("/api/v1/playout/channels/{ch}/trigger-ack"), &serde_json::json!({"id": tid, "status": st, "detail": detail}))
+    })
+    .await;
+    match result {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => eprintln!("omp-playout-automation: Quittung für Trigger {id} fehlgeschlagen: {e}"),
+        Err(e) => eprintln!("omp-playout-automation: Quittungs-Task abgestürzt: {e}"),
+    }
+}
+
+async fn handle_trigger(store: Arc<AutomationStore>, env: trigger::Envelope, channel: String) {
+    let now = chrono::Utc::now().timestamp_millis();
+    let log = |status: &str, detail: &str| {
+        store.log_trigger(serde_json::json!({
+            "at": chrono::Utc::now().timestamp_millis(), "direction": "in", "event": env.event, "origin": env.origin_channel,
+            "id": env.id, "correlationId": env.correlation_id, "status": status, "detail": detail,
+        }));
+    };
+    let decision = trigger::decide(&env, &channel, now);
+    if let trigger::Decision::Reject(reason) = &decision {
+        log("rejected", reason);
+        ack_trigger(&store, &channel, &env.id, "rejected", reason.clone()).await;
+        return;
+    }
+    // Deduplizierung über das Ausführungsjournal (at-most-once, auch über Neustarts hinweg).
+    let key = trigger::journal_key(&env);
+    let s2 = store.clone();
+    let (claim, warn) = tokio::task::spawn_blocking(move || s2.persistence.claim_execution(&key, "trigger"))
+        .await
+        .unwrap_or((persist::Claim::Proceed, Some("Journal-Task abgestürzt".to_string())));
+    if let Some(w) = warn {
+        eprintln!("omp-playout-automation: {w}");
+    }
+    if claim == persist::Claim::AlreadyDone {
+        log("duplicate", "bereits angenommen");
+        ack_trigger(&store, &channel, &env.id, "applied", "Duplikat — bereits zuvor angenommen".to_string()).await;
+        return;
+    }
+    match decision {
+        trigger::Decision::Skip { late_ms } => {
+            let d = format!("{late_ms} ms verspätet, Policy SKIP");
+            log("skipped_late", &d);
+            ack_trigger(&store, &channel, &env.id, "skipped_late", d).await;
+        }
+        trigger::Decision::Execute { wait_ms, late_ms, resync } => {
+            if wait_ms > 0 {
+                let d = format!("Ausführung in {wait_ms} ms (Zielzeit)");
+                log("scheduled", &d);
+                ack_trigger(&store, &channel, &env.id, "scheduled", d).await;
+                tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+            }
+            let _gate = store.trigger_gate.lock().await;
+            let s3 = store.clone();
+            let env2 = env.clone();
+            let res = tokio::task::spawn_blocking(move || s3.apply_trigger_event(&env2)).await.unwrap_or_else(|e| Err(format!("abgestürzt: {e}")));
+            match res {
+                Ok(msg) => {
+                    let (status, detail) = if late_ms > 0 {
+                        ("applied_late", format!("{msg} — {late_ms} ms verspätet{}", if resync { " (RESYNC: Versatz gemeldet)" } else { "" }))
+                    } else {
+                        ("applied", msg)
+                    };
+                    log(status, &detail);
+                    ack_trigger(&store, &channel, &env.id, status, detail).await;
+                }
+                Err(e) => {
+                    log("failed", &e);
+                    ack_trigger(&store, &channel, &env.id, "failed", e).await;
+                }
+            }
+        }
+        trigger::Decision::Reject(_) => unreachable!("oben behandelt"),
+    }
+}
+
 async fn fixtime_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender<Event>) {
     let mut interval = tokio::time::interval(FIXTIME_TICK);
     loop {
@@ -3604,6 +3874,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let port: u16 = env_or("OMP_PORT", "9370").parse()?;
     let registry_url = env_or("OMP_REGISTRY_URL", "http://localhost:8010");
     let nats_url = env_or("OMP_NATS_URL", "nats://localhost:4222");
+    let nats_url_for_triggers = nats_url.clone();
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
     // ARCHITECTURE.md §24.1, UMSETZUNG.md C16: Basis-URL des
     // Orchestrators (für den Proxy-Pfad) + das eigene, nur dieser
@@ -3655,6 +3926,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     ));
     let store = Arc::new(AutomationStore {
         audio_status: Mutex::new(String::new()),
+        trigger_log: Mutex::new(std::collections::VecDeque::new()),
+        trigger_gate: tokio::sync::Mutex::new(()),
         state,
         registry: registry.clone(),
         events: events_tx.clone(),
@@ -3703,6 +3976,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tokio::spawn(child_loop(store.clone(), graphics_events));
 
     tokio::spawn(persist::persist_loop(store.clone()));
+    // Kapitel 27 / P7: Channel-Trigger empfangen.
+    tokio::spawn(trigger_loop(store.clone(), nats_url_for_triggers));
 
     // ARCHITECTURE.md §24.1: nur spawnen, wenn überhaupt ein Refresh
     // Sinn ergibt (Instanz-ID + Launch-Secret vorhanden) — ohne die

@@ -282,3 +282,32 @@ pub fn fetch_sources(orchestrator_url: &str, auth: &OrchestratorAuth) -> Result<
         Err(e) => Err(RemoteError::Request(e.to_string())),
     }
 }
+
+/// POST gegen die Orchestrator-API (nicht den Node-Proxy) mit dem Service-Token (Kapitel 27 / P7:
+/// Trigger senden/quittieren). Liefert den JSON-Body; bei einem Fehlerstatus den Fehlertext des
+/// Servers (z. B. „darf nicht steuern“), damit der Operator ihn sieht.
+pub fn post_json(orchestrator_url: &str, auth: &OrchestratorAuth, path: &str, body: &Value) -> Result<Value, String> {
+    let header = auth.header_value().ok_or_else(|| "kein Service-Token verfügbar (Orchestrator noch nicht erreicht?)".to_string())?;
+    let url = format!("{}{}", orchestrator_url.trim_end_matches('/'), path);
+    let mut resp = ureq::post(&url)
+        .config()
+        .timeout_global(Some(CALL_TIMEOUT))
+        .http_status_as_error(false)
+        .build()
+        .header("Authorization", &header)
+        .send_json(body.clone())
+        .map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    if (200..300).contains(&status) {
+        return resp.body_mut().read_json::<Value>().map_err(|e| e.to_string());
+    }
+    // 403 mit Zustellungen im Body: Detailtext herausziehen.
+    let text = resp.body_mut().read_to_string().unwrap_or_default();
+    let detail = serde_json::from_str::<Value>(&text)
+        .ok()
+        .and_then(|v| {
+            v.get("deliveries")?.as_array()?.iter().find_map(|d| d.get("detail")?.as_str().map(str::to_string))
+        })
+        .unwrap_or_else(|| text.trim().to_string());
+    Err(format!("{} (HTTP {status})", if detail.is_empty() { "abgelehnt".to_string() } else { detail }))
+}

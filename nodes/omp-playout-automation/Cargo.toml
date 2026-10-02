@@ -22,6 +22,9 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock", "s
 omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
 # Kapitel 27 / P4c: gemeinsame, reine Quellen-Auswahl (Tags/Capabilities/Health).
 omp-resolver = { version = "0.1.0", path = "../omp-resolver" }
+# Kapitel 27 / P7: Abo der Channel-Trigger (`omp.channel.<id>.trigger`) — dieselben Versionen wie omp-node-sdk.
+async-nats = "0.49.1"
+futures-util = { version = "0.3.32", default-features = false, features = ["std"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "sync", "time"] }

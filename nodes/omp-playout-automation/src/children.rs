@@ -35,6 +35,8 @@ pub enum ChildType {
     Trigger,
     NodeCommand,
     Webhook,
+    /// Kapitel 27 / P7: sendet einen Channel-Trigger (über den Orchestrator) an andere Channels.
+    ChannelTrigger,
     Audio,
     Voiceover,
     // Ohne Ziel-Node in diesem System — nur zum sauberen Ablehnen:
@@ -57,7 +59,7 @@ impl ChildType {
     }
 
     pub fn is_supported(self) -> bool {
-        self.is_graphics() || self.is_node_command() || self == ChildType::Webhook
+        self.is_graphics() || self.is_node_command() || matches!(self, ChildType::Webhook | ChildType::ChannelTrigger)
     }
 }
 
@@ -247,6 +249,13 @@ impl ChildEvent {
         if self.kind == ChildType::Webhook && !(self.url.starts_with("http://") || self.url.starts_with("https://")) {
             return Err("url muss mit http:// oder https:// beginnen (Webhook)".to_string());
         }
+        if self.kind == ChildType::ChannelTrigger {
+            let ok = self.params.get("event").and_then(Value::as_str).is_some_and(|e| !e.trim().is_empty())
+                && self.params.get("target").is_some_and(Value::is_object);
+            if !ok {
+                return Err("params braucht event (z. B. NEXT_LIVE) und target ({\"channel\"|\"group\"|\"all\"}) (CHANNEL_TRIGGER)".to_string());
+            }
+        }
         if self.timing_mode() == TimingMode::Absolute && self.at_utc_ms().is_none() {
             return Err("ABSOLUTE braucht atUtc im RFC-3339-Format mit Offset (z. B. 2026-10-02T10:00:30+02:00)".to_string());
         }
@@ -406,6 +415,20 @@ mod tests {
         // Ohne atUtc gar nicht erst gültig.
         let bad = ChildEvent::graphic("t", TimingMode::Absolute, 0, 0);
         assert!(bad.validate().unwrap_err().contains("atUtc"));
+    }
+
+    #[test]
+    fn channel_trigger_child_needs_event_and_target() {
+        let mut c = ChildEvent::graphic("", TimingMode::RelativeToStart, 1000, 0);
+        c.kind = ChildType::ChannelTrigger;
+        assert!(c.kind.is_supported() && !c.kind.is_node_command() && !c.kind.is_graphics());
+        assert!(c.validate().unwrap_err().contains("event"));
+        c.params = serde_json::json!({"event": "NEXT_LIVE"});
+        assert!(c.validate().is_err(), "ohne target");
+        c.params = serde_json::json!({"event": "NEXT_LIVE", "target": {"group": "regional"}});
+        c.validate().unwrap();
+        // Serialisierung wie die übrigen Typen (SCREAMING_SNAKE_CASE).
+        assert_eq!(serde_json::to_value(ChildType::ChannelTrigger).unwrap(), "CHANNEL_TRIGGER");
     }
 
     #[test]

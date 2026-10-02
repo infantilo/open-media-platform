@@ -1545,7 +1545,9 @@ dependencies = [
 name = "omp-playout-automation"
 version = "0.1.0"
 dependencies = [
+ "async-nats",
  "chrono",
+ "futures-util",
  "omp-node-sdk",
  "omp-resolver",
  "serde",
