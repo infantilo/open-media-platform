@@ -4689,6 +4689,17 @@ Audio-Preset-Resilience im alten `AudioRouter.js` und
 `PlaylistEngine.js::_applyLiveAudioPreset`; ein Process-Template für
 File-Transfer; das IS-04-Tag-Schema für Namespace-Tags.
 
+**Entscheidungen 2026-10-02 (Nutzer), E3/E6 s. oben:** **E7 = Variante C (Hybrid):**
+der Automator spricht kein IS-05 selbst, sondern meldet dem Orchestrator eine
+Verbindungs-Absicht (Berechtigung je Channel, Audit, Besitzer-Verwaltung,
+Abgleich nach Neustart) — wird erst gebaut, wenn die erste receiver-basierte
+Quelle (SRT/ST2110) gebraucht wird; MXL-Quellen werden direkt gelesen und
+brauchen keine Verbindung. **Mixer-Erwartungen = im Audiomischer selbst, als
+Eigenschaft des Kanals** (mit Szenen/Presets gespeichert; der Mixer löst per
+`omp-resolver` auf, sobald ihm die gewählte Quelle als Kontext gemeldet wird)
+**plus optionaler Override im Playlist-Event** (Spec §104/§263: Event-explizit >
+Event-Erwartung > Kanal-Präferenz > Quell-Default > globaler Fallback > Operator).
+
 ### 27.7 Zurückgestellte Punkte (Stand 2026-10-02 — bewusst NICHT umgesetzt, für später)
 
 Aus den bisher abgeschlossenen Schritten P1–P4 (Details je Zeile der Status-Checkliste):
