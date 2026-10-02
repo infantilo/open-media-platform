@@ -28,6 +28,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -221,6 +222,12 @@ type Instance struct {
 	// ändert nichts an bereits laufenden/neu gestarteten Instanzen der
 	// alten Version.
 	Version string `json:"version,omitempty"`
+	// NodeVersion ist die Versions-ID aus dem Versionsspeicher
+	// (nodeversions, Kapitel 28), aus deren Binary diese Instanz gestartet
+	// wurde — leer, wenn das im Katalog verzeichnete (installierte) Binary
+	// lief. Wie Version einmal beim Start festgelegt und bei automatischen
+	// Neustarts beibehalten.
+	NodeVersion string `json:"nodeVersion,omitempty"`
 }
 
 // EventPublisher verteilt ein SSE-Event an alle verbundenen Flow-Editor-
@@ -314,9 +321,10 @@ func catalogKey(nodeType, version string) string {
 // nur importierte Fremd-Einträge bekommen die neue, andere
 // Vertrauensstufe.
 type Launcher struct {
-	staticCatalog []CatalogEntry
-	registryURL   string
-	natsURL       string
+	binaryResolver BinaryResolver
+	staticCatalog  []CatalogEntry
+	registryURL    string
+	natsURL        string
 	// orchestratorURL (ARCHITECTURE.md §24.1, UMSETZUNG.md C16) — per
 	// SetOrchestratorURL statt Konstruktor-Parameter gesetzt, um die
 	// zahlreichen bestehenden New/newWithStore-Aufrufstellen (Tests)
@@ -910,12 +918,13 @@ func (l *Launcher) startLocal(nodeType, version, customLabel string, extraEnv ma
 		return Instance{}, ErrUnsupportedRunner
 	}
 
+	entry, nodeVersion := l.applyProductiveBinary(entry)
 	cmd, stderrTail, err := l.execEntry(entry, id, label, launchSecret, extraEnv)
 	if err != nil {
 		return Instance{}, fmt.Errorf("launcher: start %s: %w", nodeType, err)
 	}
 
-	inst := Instance{ID: id, Type: nodeType, Label: label, PID: cmd.Process.Pid, ExtraEnv: extraEnv, Version: entry.Version, LaunchSecret: launchSecret}
+	inst := Instance{ID: id, Type: nodeType, Label: label, PID: cmd.Process.Pid, ExtraEnv: extraEnv, Version: entry.Version, NodeVersion: nodeVersion, LaunchSecret: launchSecret}
 
 	l.mu.Lock()
 	l.instances[id] = inst
@@ -938,6 +947,51 @@ func (l *Launcher) startLocal(nodeType, version, customLabel string, extraEnv ma
 	safego.Go("launcher.supervise", func() { l.supervise(id, nodeType, entry, label, extraEnv, cmd, stderrTail) })
 
 	return inst, nil
+}
+
+// BinaryResolver liefert zu einem Binary-Namen (z. B. "omp-audio-mixer") den
+// Pfad und die Versions-ID der als produktiv markierten Version, oder
+// ("", "") wenn das Katalog-Binary gelten soll (Kapitel 28).
+type BinaryResolver func(binaryName string) (path, versionID string)
+
+// SetBinaryResolver aktiviert den Versionsspeicher für lokale Prozess-Starts.
+// Gilt nur für neu gestartete Instanzen; laufende bleiben bei ihrem Binary.
+func (l *Launcher) SetBinaryResolver(r BinaryResolver) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.binaryResolver = r
+}
+
+// ProductiveVersion: Versions-ID, die ein Neustart des Binaries `binaryName`
+// jetzt bekäme ("" = installiertes Katalog-Binary).
+func (l *Launcher) ProductiveVersion(binaryName string) string {
+	l.mu.Lock()
+	resolve := l.binaryResolver
+	l.mu.Unlock()
+	if resolve == nil {
+		return ""
+	}
+	_, id := resolve(binaryName)
+	return id
+}
+
+// applyProductiveBinary ersetzt bei gesetzter produktiver Version das Binary
+// des Eintrags (Kopie des Command-Slices — der Katalog bleibt unverändert).
+func (l *Launcher) applyProductiveBinary(entry CatalogEntry) (CatalogEntry, string) {
+	l.mu.Lock()
+	resolve := l.binaryResolver
+	l.mu.Unlock()
+	if resolve == nil || len(entry.Command) == 0 {
+		return entry, ""
+	}
+	path, id := resolve(filepath.Base(entry.Command[0]))
+	if path == "" {
+		return entry, ""
+	}
+	cmd := append([]string(nil), entry.Command...)
+	cmd[0] = path
+	entry.Command = cmd
+	return entry, id
 }
 
 // startPodmanLocal — Podman-Pendant zu startLocal (Kapitel 17 Teil 4):

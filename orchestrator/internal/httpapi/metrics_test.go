@@ -174,4 +174,3 @@ func TestCountRequestsDoesNotBreakFlushing(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 }
-

@@ -39,6 +39,7 @@ type handlerOptions struct {
 	updateSup       UpdateSupervisor
 	updateBackup    BackupService
 	updateDist      UpdateDistributor
+	nodeVersions    NodeVersionStore
 	workflowRuns    WorkflowRunReader
 }
 

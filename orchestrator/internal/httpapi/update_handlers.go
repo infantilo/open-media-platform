@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeversions"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/updates"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/version"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
@@ -58,6 +61,13 @@ func WithUpdateDistributor(d UpdateDistributor) HandlerOption {
 type UpdateSupervisor interface {
 	TriggerUpdate(ctx context.Context, file string) error
 	Status(ctx context.Context) (json.RawMessage, error)
+}
+
+// NodeVersionRegistrar übernimmt Node-Binaries in den Versionsspeicher
+// (implementiert von *nodeversions.Store).
+type NodeVersionRegistrar interface {
+	RegisterPackage(pkgFile string, m update.Manifest, source string) ([]nodeversions.Version, error)
+	RegisterInstalled(paths map[string]string) ([]nodeversions.Version, map[string]string)
 }
 
 // WithUpdates aktiviert /api/v1/admin/updates*. bk wird für das Backup vor
@@ -129,7 +139,7 @@ func handleListUpdates(svc UpdateService, sup UpdateSupervisor, launcherSvc Laun
 
 // handleUploadUpdate: POST /api/v1/admin/updates/upload — rohe Bytes
 // (application/gzip), gestreamt auf Platte.
-func handleUploadUpdate(svc UpdateService, domainAudit DomainAuditLogger) http.HandlerFunc {
+func handleUploadUpdate(svc UpdateService, nv NodeVersionRegistrar, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if updatesDisabled(w, svc) {
 			return
@@ -145,6 +155,15 @@ func handleUploadUpdate(svc UpdateService, domainAudit DomainAuditLogger) http.H
 		}
 		logDomainAudit(domainAudit, actorFromRequest(r), "system_update", e.ID, "uploaded",
 			map[string]any{"version": e.Version, "sha256": e.SHA256, "signed": e.Signed, "keyId": e.KeyID})
+		// Kapitel 28: die Node-Binaries des Pakets in den Versionsspeicher —
+		// Fehler hier verwerfen das (gültige) Paket nicht.
+		if nv != nil {
+			if added, err := nv.RegisterPackage(e.File, e.Manifest, "Update "+e.Version); err != nil {
+				slog.Warn("node-versionen: Paket-Binaries nicht übernommen", "update", e.ID, "error", err)
+			} else if len(added) > 0 {
+				logDomainAudit(domainAudit, actorFromRequest(r), "node_version", e.ID, "registered", map[string]any{"count": len(added)})
+			}
+		}
 		writeJSON(w, http.StatusCreated, e)
 	}
 }
@@ -171,7 +190,7 @@ func handleDeleteUpdate(svc UpdateService, domainAudit DomainAuditLogger) http.H
 
 // handleApplyUpdate: POST /api/v1/admin/updates/{id}/apply
 // {"confirm":true,"version":"<Version zur Bestätigung>","backup":true,"force":false}
-func handleApplyUpdate(svc UpdateService, sup UpdateSupervisor, bk BackupService, domainAudit DomainAuditLogger) http.HandlerFunc {
+func handleApplyUpdate(svc UpdateService, sup UpdateSupervisor, bk BackupService, nv NodeVersionRegistrar, launcherSvc LauncherService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if updatesDisabled(w, svc) {
 			return
@@ -235,6 +254,12 @@ func handleApplyUpdate(svc UpdateService, sup UpdateSupervisor, bk BackupService
 			backupName = res.Name
 		}
 
+		// Kapitel 28: den gerade installierten Stand archivieren, BEVOR das Update ihn
+		// überschreibt — damit „zurück auf die vorige Version“ möglich bleibt.
+		if nv != nil && launcherSvc != nil {
+			paths, _ := catalogBinaries(launcherSvc.Catalog())
+			nv.RegisterInstalled(paths)
+		}
 		if err := sup.TriggerUpdate(r.Context(), e.File); err != nil {
 			http.Error(w, fmt.Sprintf("Supervisor nicht erreichbar oder beschäftigt: %s", err), http.StatusServiceUnavailable)
 			return
@@ -444,6 +469,9 @@ func instancesWithOutdated(svc LauncherService) []launcher.Instance {
 			catalog[c.Type] = c.Command
 		}
 	}
+	productive, _ := svc.(interface {
+		ProductiveVersion(binaryName string) string
+	})
 	for i := range list {
 		if list[i].HostID != "" || list[i].PID <= 0 || list[i].Crashed {
 			continue
@@ -451,6 +479,15 @@ func instancesWithOutdated(svc LauncherService) []launcher.Instance {
 		cmd, ok := catalog[list[i].Type]
 		if !ok {
 			continue
+		}
+		// Kapitel 28: produktive Version gewechselt (oder Markierung aufgehoben) →
+		// die Instanz läuft mit einem anderen Binary als ein Neustart ergäbe.
+		if productive != nil {
+			want := productive.ProductiveVersion(filepath.Base(cmd[0]))
+			if want != "" || list[i].NodeVersion != "" {
+				list[i].Outdated = want != list[i].NodeVersion
+				continue
+			}
 		}
 		bin, err := os.Stat(cmd[0])
 		if err != nil {

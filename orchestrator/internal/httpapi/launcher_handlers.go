@@ -206,10 +206,10 @@ func handleListInstances(svc LauncherService, hostMetrics HostMetricsReader) htt
 func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStore IOPortInventoryStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Type           string                     `json:"type"`
-			Version        string                     `json:"version"`
-			HostID         string                     `json:"hostId"`
-			Label          string                     `json:"label"`
+			Type           string                       `json:"type"`
+			Version        string                       `json:"version"`
+			HostID         string                       `json:"hostId"`
+			Label          string                       `json:"label"`
 			RequiredIOPort *workflows.IOPortRequirement `json:"requiredIoPort,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

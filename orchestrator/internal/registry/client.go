@@ -232,6 +232,7 @@ func buildSnapshot(nodes []is04Node, devices []is04Device, senders []is04Sender,
 			Receivers:  []ReceiverView{},
 			APIBaseURL: apiBaseURL(n),
 			InstanceID: instanceID(n),
+			Build:      buildInfo(n),
 		}
 
 		for _, d := range devicesByNode[n.ID] {
@@ -279,6 +280,25 @@ func apiBaseURL(n is04Node) string {
 // INSTANCE_TAG) — dieselbe Konstante lässt sich zwischen Go und Rust
 // nicht teilen, daher hier als String-Literal dupliziert.
 const instanceTagName = "urn:x-omp:instance"
+
+// buildTagName: Gegenstück zu omp_node_sdk::buildinfo::BUILD_TAG.
+const buildTagName = "urn:x-omp:build"
+
+// buildInfo liest den Build-Stempel aus dem Tag (nil, wenn er fehlt).
+func buildInfo(n is04Node) *BuildInfo {
+	v := n.Tags[buildTagName]
+	if len(v) == 0 || v[0] == "" {
+		return nil
+	}
+	b := &BuildInfo{Version: v[0]}
+	if len(v) > 1 {
+		b.Commit = v[1]
+	}
+	if len(v) > 2 {
+		b.BuiltAt = v[2]
+	}
+	return b
+}
 
 // instanceID liest den ersten Wert von n.Tags["urn:x-omp:instance"],
 // leer wenn der Tag fehlt (manuell gestartete Nodes, alle vor C8).

@@ -269,7 +269,7 @@ interface UpdateOverview {
   supervisorError?: string;
 }
 
-type AdminTabId = "users" | "organizations" | "groups" | "bindings" | "catalog" | "storage" | "audit" | "diagnose" | "backup" | "update" | "cluster";
+type AdminTabId = "users" | "organizations" | "groups" | "bindings" | "catalog" | "storage" | "audit" | "diagnose" | "backup" | "update" | "nodeversions" | "cluster";
 const ADMIN_SUB_TABS: { id: AdminTabId; label: string }[] = [
   { id: "users", label: "Nutzer" },
   { id: "organizations", label: "Organisationen" },
@@ -281,11 +281,31 @@ const ADMIN_SUB_TABS: { id: AdminTabId; label: string }[] = [
   { id: "diagnose", label: "Diagnose" },
   { id: "backup", label: "Backup/Restore" },
   { id: "update", label: "System-Update" },
+  { id: "nodeversions", label: "Node-Versionen" },
   { id: "cluster", label: "Cluster" },
 ];
 const SUB_TAB_BUTTON_BASE =
   "border:1px solid transparent;border-radius:var(--omp-radius);" +
   "padding:6px 12px;font-size:var(--omp-font-size-sm);font-family:var(--omp-font);cursor:pointer;";
+
+interface NodeVersionEntry {
+  id: string;
+  version: string;
+  commit?: string;
+  source?: string;
+  size: number;
+}
+interface NodeVersionType {
+  name: string;
+  catalogTypes?: string[];
+  installed?: { version: string; commit?: string; builtAt?: string };
+  productive: string;
+  versions: NodeVersionEntry[];
+  instances: { id: string; label: string; type: string; nodeVersion?: string; outdated: boolean; remote?: boolean }[];
+}
+interface NodeVersionOverview {
+  types: NodeVersionType[];
+}
 
 class AdminView extends HTMLElement {
   // Nutzerwunsch 2026-08-13: welcher der vier Abschnitte gerade sichtbar
@@ -459,6 +479,12 @@ class AdminView extends HTMLElement {
   #updPollHandle: number | null = null;
   #restartingOutdated = false;
 
+  // Node-Versionen (Kapitel 28): Versionsspeicher je Node-Typ, produktive Version
+  // pro Typ. #nvBuilds: Instanz-ID → vom laufenden Node gemeldeter Build-Stempel.
+  #nv: NodeVersionOverview | null = null;
+  #nvBuilds = new Map<string, string>();
+  #nvBusy = false;
+
   // Cluster-Sub-Tab (ARCHITECTURE.md §19.3, UMSETZUNG.md D12) — die
   // bisher UI-lose Raft-Status-/Join-/Leave-API bekommt hier eine
   // Oberfläche (Nutzerauftrag 2026-08-27, gleicher Anlass wie
@@ -491,6 +517,7 @@ class AdminView extends HTMLElement {
     this.#loadCatalog();
     this.#loadBackups();
     this.#loadUpdates();
+    this.#loadNodeVersions();
     this.#loadClusterStatus();
     this.#auditPollHandle = window.setInterval(() => this.#loadAudit(), AUDIT_POLL_FALLBACK_INTERVAL_MS);
     this.#logPollHandle = window.setInterval(() => this.#loadLogs(), LOG_POLL_FALLBACK_INTERVAL_MS);
@@ -1331,6 +1358,184 @@ class AdminView extends HTMLElement {
     })();
   }
 
+  // ---- Node-Versionen (Kapitel 28) ----------------------------------------
+
+  async #loadNodeVersions() {
+    try {
+      const [res, nodesRes] = await Promise.all([apiFetch("/api/v1/admin/node-versions"), apiFetch("/api/v1/nodes")]);
+      if (res.ok) {
+        this.#nv = (await res.json()) as NodeVersionOverview;
+        this.#nvBuilds.clear();
+        if (nodesRes.ok) {
+          const nodes = (await nodesRes.json()) as { instance_id?: string; build?: { version: string; commit?: string } }[];
+          for (const n of nodes) {
+            if (n.instance_id && n.build) {
+              this.#nvBuilds.set(n.instance_id, n.build.commit ? `${n.build.version} (${n.build.commit})` : n.build.version);
+            }
+          }
+        }
+        this.#render();
+      }
+    } catch {
+      // Orchestrator kurzzeitig nicht erreichbar — der nächste Tab-Wechsel lädt neu.
+    }
+  }
+
+  async #nodeVersionCall(url: string, init: RequestInit, failure: string): Promise<string | null> {
+    this.#nvBusy = true;
+    this.#error = "";
+    this.#render();
+    try {
+      const res = await apiFetch(url, init);
+      if (!res.ok) {
+        this.#error = `${failure}: ${(await res.text()).trim()}`;
+        return null;
+      }
+      return res.status === 204 ? "" : await res.text();
+    } catch (err) {
+      this.#error = `${failure}: ${err}`;
+      return null;
+    } finally {
+      this.#nvBusy = false;
+      await this.#loadNodeVersions();
+      await this.#loadUpdates();
+    }
+  }
+
+  async #setProductiveVersion(t: NodeVersionType, id: string) {
+    const target = id === "" ? "das installierte Binary" : `Version ${id}`;
+    const ok = await confirmDialog(
+      `${t.name}: ${target} als produktiv festlegen? Es gilt für neu gestartete Instanzen. Laufende Instanzen bleiben ` +
+        `unverändert, bis sie neu gestartet werden (System-Update → „Veraltete neu starten“).`,
+      { confirmLabel: "Festlegen" },
+    );
+    if (!ok) return;
+    await this.#nodeVersionCall(
+      `/api/v1/admin/node-versions/${encodeURIComponent(t.name)}/productive`,
+      { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: id }) },
+      "Festlegen fehlgeschlagen",
+    );
+  }
+
+  async #deleteNodeVersion(t: NodeVersionType, id: string) {
+    if (!(await confirmDialog(`${t.name} ${id} aus dem Versionsspeicher löschen?`, { confirmLabel: "Löschen" }))) return;
+    await this.#nodeVersionCall(
+      `/api/v1/admin/node-versions/${encodeURIComponent(t.name)}/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+      "Löschen fehlgeschlagen",
+    );
+  }
+
+  #renderNodeVersionsSection(): HTMLElement {
+    const section = document.createElement("div");
+    const head = document.createElement("div");
+    head.className = "omp-h1";
+    head.textContent = "Node-Versionen";
+    section.appendChild(head);
+
+    const info = document.createElement("div");
+    info.style.cssText = "color:var(--omp-text-dim);margin:6px 0 12px;white-space:pre-wrap;";
+    info.textContent =
+      "Je Node-Typ liegen mehrere Binary-Versionen im Versionsspeicher (aus hochgeladenen Update-Paketen und dem " +
+      "jeweils installierten Stand). Die produktive Version gilt für neu gestartete lokale Instanzen; Auf- und " +
+      "Abwärtswechsel ist „andere Version produktiv setzen“. Dev-Builds sind nicht versioniert und werden nicht archiviert.";
+    section.appendChild(info);
+
+    const nv = this.#nv;
+    if (!nv) {
+      info.textContent += "\n\nWird geladen …";
+      return section;
+    }
+    const rescan = document.createElement("button");
+    rescan.textContent = "Installierte Binaries archivieren";
+    rescan.disabled = this.#nvBusy;
+    rescan.style.cssText = "margin-bottom:12px;";
+    rescan.addEventListener("click", () => void this.#nodeVersionCall("/api/v1/admin/node-versions/rescan", { method: "POST" }, "Archivieren fehlgeschlagen"));
+    section.appendChild(rescan);
+
+    for (const t of nv.types) {
+      const card = document.createElement("div");
+      card.className = "omp-card";
+      card.style.cssText = "margin-bottom:10px;";
+      const title = document.createElement("div");
+      title.style.cssText = "font-weight:600;";
+      title.textContent = t.name + (t.catalogTypes?.length ? `  (${t.catalogTypes.join(", ")})` : "");
+      card.appendChild(title);
+      const state = document.createElement("div");
+      state.style.cssText = "color:var(--omp-text-dim);margin:4px 0 8px;";
+      const inst = t.installed ? `${t.installed.version}${t.installed.commit ? ` (${t.installed.commit})` : ""}` : "unbekannt";
+      state.textContent = `Installiert: ${inst} · Produktiv: ${t.productive || "installiertes Binary"}`;
+      card.appendChild(state);
+
+      if (t.versions.length > 0) {
+        const table = document.createElement("table");
+        table.style.cssText = "border-collapse:collapse;font-size:12px;margin-bottom:8px;";
+        for (const v of t.versions) {
+          const tr = document.createElement("tr");
+          const cell = (text: string) => {
+            const td = document.createElement("td");
+            td.style.cssText = "padding:2px 14px 2px 0;";
+            td.textContent = text;
+            return td;
+          };
+          const isProd = v.id === t.productive;
+          tr.append(
+            cell(isProd ? `● ${v.id}` : v.id),
+            cell(v.commit ?? ""),
+            cell(v.source ?? ""),
+            cell(`${(v.size / 1048576).toFixed(1)} MB`),
+          );
+          const actions = document.createElement("td");
+          const setBtn = document.createElement("button");
+          setBtn.textContent = isProd ? "produktiv" : "Produktiv setzen";
+          setBtn.disabled = isProd || this.#nvBusy;
+          setBtn.addEventListener("click", () => void this.#setProductiveVersion(t, v.id));
+          actions.appendChild(setBtn);
+          if (!isProd) {
+            const del = document.createElement("button");
+            del.className = "omp-btn-danger";
+            del.style.cssText = "margin-left:6px;";
+            del.textContent = "Löschen";
+            del.disabled = this.#nvBusy;
+            del.addEventListener("click", () => void this.#deleteNodeVersion(t, v.id));
+            actions.appendChild(del);
+          }
+          tr.appendChild(actions);
+          table.appendChild(tr);
+        }
+        card.appendChild(table);
+      } else {
+        const none = document.createElement("div");
+        none.style.cssText = "color:var(--omp-text-dim);margin-bottom:8px;";
+        none.textContent = "Keine archivierten Versionen (Dev-Build oder noch kein Update-Paket).";
+        card.appendChild(none);
+      }
+      if (t.productive) {
+        const back = document.createElement("button");
+        back.textContent = "Zurück zum installierten Binary";
+        back.disabled = this.#nvBusy;
+        back.addEventListener("click", () => void this.#setProductiveVersion(t, ""));
+        card.appendChild(back);
+      }
+      if (t.instances.length > 0) {
+        const list = document.createElement("div");
+        list.style.cssText = "margin-top:8px;font-size:11px;color:var(--omp-text-dim);";
+        for (const i of t.instances) {
+          const line = document.createElement("div");
+          const build = this.#nvBuilds.get(i.id);
+          line.textContent =
+            `${i.label}: ${build ?? "Stand unbekannt"}${i.nodeVersion ? ` · aus Versionsspeicher ${i.nodeVersion}` : ""}` +
+            (i.outdated ? " · veraltet (Neustart nötig)" : "") +
+            (i.remote ? " · Remote-Host (Versionsspeicher gilt nur lokal)" : "");
+          list.appendChild(line);
+        }
+        card.appendChild(list);
+      }
+      section.appendChild(card);
+    }
+    return section;
+  }
+
   // ---- System-Update -----------------------------------------------------
 
   async #loadUpdates() {
@@ -2088,6 +2293,9 @@ class AdminView extends HTMLElement {
         break;
       case "update":
         this.appendChild(this.#renderUpdateSection());
+        break;
+      case "nodeversions":
+        this.appendChild(this.#renderNodeVersionsSection());
         break;
       case "cluster":
         this.appendChild(this.#renderClusterSection());

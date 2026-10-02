@@ -203,7 +203,9 @@ type Config struct {
 	// Public-Keys (einer pro Zeile) und der Dev-Schalter für unsignierte
 	// Pakete. Ohne Schlüssel und ohne AllowUnsigned wird jedes Paket
 	// abgelehnt. start-omp.sh exportiert absolute Pfade.
-	UpdateDir           string
+	UpdateDir string
+	// NodeVersionsDir: Versionsspeicher für Node-Binaries (Kapitel 28).
+	NodeVersionsDir     string
 	UpdatePubKeyFile    string
 	UpdateAllowUnsigned bool
 	// ClusterNodeID/ClusterRaftAddr/ClusterDataDir/ClusterPeers steuern
@@ -325,6 +327,7 @@ func Load() Config {
 		BackupKeep:       getEnvInt("OMP_BACKUP_KEEP", 14),
 		SupervisorURL:    getEnv("OMP_SUPERVISOR_URL", "http://127.0.0.1:8091"),
 		UpdateDir:        getEnv("OMP_UPDATE_DIR", "../.updates"),
+		NodeVersionsDir:  getEnv("OMP_NODE_VERSIONS_DIR", "../.node-versions"),
 		UpdatePubKeyFile: getEnv("OMP_UPDATE_PUBKEY_FILE", "../.run/update-trusted.pub"),
 		UpdateAllowUnsigned: func() bool {
 			v, _ := strconv.ParseBool(getEnv("OMP_UPDATE_ALLOW_UNSIGNED", "false"))

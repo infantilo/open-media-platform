@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -44,15 +45,17 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeversions"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/organizations"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/outbox"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/playout"
-	"github.com/infantilo/openmediaplatform/orchestrator/internal/sourcetags"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/process"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profiles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/safego"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/snapshots"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/sourcetags"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/storagebackends"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/supervisorclient"
@@ -910,9 +913,26 @@ func main() {
 			return launcherNATS.RequestBytes(subject, data, timeout)
 		},
 	}
+	// Kapitel 28: Versionsspeicher für Node-Binaries; produktive Version gilt für
+	// neu gestartete lokale Instanzen. Gestempelte, installierte Binaries werden
+	// im Hintergrund archiviert (Rückkehr nach einem Update).
+	nodeVersionStore := nodeversions.New(cfg.NodeVersionsDir)
+	launcherSvc.SetBinaryResolver(nodeVersionStore.Resolve)
+	safego.Go("nodeversions.registerInstalled", func() {
+		paths := map[string]string{}
+		for _, c := range launcherSvc.Catalog() {
+			if (c.Runner == "process" || c.Runner == "") && len(c.Command) > 0 {
+				paths[filepath.Base(c.Command[0])] = c.Command[0]
+			}
+		}
+		added, _ := nodeVersionStore.RegisterInstalled(paths)
+		if len(added) > 0 {
+			slog.Info("node-versionen: installierte Binaries archiviert", "count", len(added))
+		}
+	})
 	updateSvc := updates.New(cfg.UpdateDir, cfg.UpdatePubKeyFile, cfg.UpdateAllowUnsigned, runtime.GOOS+"/"+runtime.GOARCH, 0)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithPlayout(playout.NewStore(database), workflowSvc), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist))
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithPlayout(playout.NewStore(database), workflowSvc), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore))
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

@@ -102,6 +102,16 @@ type NodeView struct {
 	// (UMSETZUNG.md C8), erlaubt der UI, einen Stop-Control nur an
 	// Kacheln zu zeigen, die tatsächlich vom Launcher gestartet wurden.
 	InstanceID string `json:"instance_id,omitempty"`
+	// Build ist der vom Node gemeldete Build-Stempel (IS-04-Tag
+	// "urn:x-omp:build" = [version, commit, builtAt]); nil bei Nodes ohne Tag.
+	Build *BuildInfo `json:"build,omitempty"`
+}
+
+// BuildInfo ist der Build-Stempel eines Node-Binaries (Kapitel 28).
+type BuildInfo struct {
+	Version string `json:"version"`
+	Commit  string `json:"commit,omitempty"`
+	BuiltAt string `json:"builtAt,omitempty"`
 }
 
 // DeviceView ist die normalisierte Sicht auf ein IS-04-Device.

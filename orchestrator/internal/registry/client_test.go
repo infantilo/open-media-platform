@@ -276,3 +276,17 @@ func TestBuildSnapshotCarriesChannelCountAndDiscoveredTags(t *testing.T) {
 		t.Fatalf("ChannelCount without sources = %d, want 0", views[0].Senders[0].ChannelCount)
 	}
 }
+
+func TestBuildInfoFromTag(t *testing.T) {
+	if buildInfo(is04Node{}) != nil {
+		t.Fatal("ohne Tag kein Build")
+	}
+	n := is04Node{Tags: map[string][]string{buildTagName: {"2026.10.2", "abc1234", "2026-10-02T10:00:00Z"}}}
+	b := buildInfo(n)
+	if b == nil || b.Version != "2026.10.2" || b.Commit != "abc1234" || b.BuiltAt != "2026-10-02T10:00:00Z" {
+		t.Fatalf("%+v", b)
+	}
+	if b := buildInfo(is04Node{Tags: map[string][]string{buildTagName: {"dev"}}}); b == nil || b.Version != "dev" || b.Commit != "" {
+		t.Fatalf("%+v", b)
+	}
+}

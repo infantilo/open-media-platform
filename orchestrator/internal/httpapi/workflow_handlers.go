@@ -72,7 +72,7 @@ func workflowOrgGuard(w http.ResponseWriter, r *http.Request, svc WorkflowServic
 func handleCreateWorkflow(svc WorkflowService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Name         string                          `json:"name"`
+			Name         string                           `json:"name"`
 			Definition   workflows.Definition             `json:"definition"`
 			AdoptRuntime map[string]workflows.RoleRuntime `json:"adoptRuntime,omitempty"`
 		}

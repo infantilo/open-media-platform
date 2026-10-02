@@ -686,6 +686,7 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
             .tags
             .insert(INSTANCE_TAG.to_string(), vec![instance_id.clone()]);
     }
+    node_res.tags.insert(crate::buildinfo::BUILD_TAG.to_string(), crate::buildinfo::tag_values());
     if let Ok(workflow_id) = std::env::var("OMP_WORKFLOW_ID") {
         if !workflow_id.is_empty() {
             node_res.tags.insert(is04::WORKFLOW_TAG.to_string(), vec![workflow_id]);

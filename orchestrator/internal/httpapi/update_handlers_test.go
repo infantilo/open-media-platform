@@ -67,7 +67,7 @@ func (e updateEnv) pkg(t *testing.T, ver string, migrations []string, sign bool)
 func (e updateEnv) upload(t *testing.T, data []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	handleUploadUpdate(e.svc, nil)(rec, httptest.NewRequest(http.MethodPost, "/api/v1/admin/updates/upload", bytes.NewReader(data)))
+	handleUploadUpdate(e.svc, nil, nil)(rec, httptest.NewRequest(http.MethodPost, "/api/v1/admin/updates/upload", bytes.NewReader(data)))
 	return rec
 }
 
@@ -143,7 +143,7 @@ func apply(e updateEnv, id string, sup UpdateSupervisor, bk BackupService, body 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/updates/"+id+"/apply", strings.NewReader(body))
 	req.SetPathValue("id", id)
-	handleApplyUpdate(e.svc, sup, bk, nil)(rec, req)
+	handleApplyUpdate(e.svc, sup, bk, nil, nil, nil)(rec, req)
 	return rec
 }
 
@@ -265,7 +265,7 @@ func TestDeleteAndUnknownUpdate(t *testing.T) {
 
 func TestUpdatesDisabledWithoutOption(t *testing.T) {
 	rec := httptest.NewRecorder()
-	handleUploadUpdate(nil, nil)(rec, httptest.NewRequest(http.MethodPost, "/x", nil))
+	handleUploadUpdate(nil, nil, nil)(rec, httptest.NewRequest(http.MethodPost, "/x", nil))
 	if rec.Code != http.StatusNotImplemented {
 		t.Errorf("status = %d, want 501", rec.Code)
 	}

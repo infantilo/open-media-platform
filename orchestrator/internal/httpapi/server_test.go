@@ -240,7 +240,7 @@ type fakeLauncherService struct {
 
 func (f fakeLauncherService) Catalog() []launcher.CatalogEntry { return f.catalog }
 
-func (f fakeLauncherService) List() []launcher.Instance { return f.instances }
+func (f fakeLauncherService) List() []launcher.Instance          { return f.instances }
 func (f fakeLauncherService) LocalGPU() *launcher.LocalGPUSample { return nil }
 
 func (f fakeLauncherService) Get(id string) (launcher.Instance, bool) {
