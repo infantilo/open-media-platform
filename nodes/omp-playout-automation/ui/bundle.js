@@ -40,6 +40,32 @@ function confirmDialog(message, confirmLabel) {
   });
 }
 
+// Kapitel 27 / P2c: Startzeit-Eingabe. Akzeptiert "HH:MM[:SS]" (heute) oder
+// "YYYY-MM-DD HH:MM[:SS]" in LOKALER Zeit und liefert den absoluten Zeitpunkt
+// als ISO-8601-UTC-String (`…Z`) — der Node rechnet nur mit UTC (E5), die
+// Zeitzone des Bedieners steckt damit in der Umrechnung hier, nicht im Node.
+// `null` bei ungültiger Eingabe.
+function parseStartInput(text, now = new Date()) {
+  const m = /^(?:(\d{4})-(\d{2})-(\d{2})[ T])?(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec((text || "").trim());
+  if (!m) return null;
+  const [, y, mo, d, h, mi, sec] = m;
+  const date = y
+    ? new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(sec || 0))
+    : new Date(now.getFullYear(), now.getMonth(), now.getDate(), Number(h), Number(mi), Number(sec || 0));
+  if (Number.isNaN(date.getTime()) || Number(h) > 23 || Number(mi) > 59 || Number(sec || 0) > 59) return null;
+  return date.toISOString();
+}
+
+// ISO-UTC → "TT.MM. HH:MM:SS" lokal (nur Datum, wenn nicht heute).
+function formatLocalStart(iso, now = new Date()) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const hms = d.toLocaleTimeString("de-DE");
+  if (d.toDateString() === now.toDateString()) return hms;
+  return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}. ${hms}`;
+}
+
 class OmpPlayoutAutomationPanel extends HTMLElement {
   connectedCallback() {
     const nodeId = this.getAttribute("node-id");
@@ -193,6 +219,11 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     // Kapitel 6 Teil 3: Countdown zum chronologisch nächsten
     // Fixtime-Event (Berechnung s. `poll()`) — der Fixzeit-Scheduler
     // selbst existiert jetzt, s. `docs/decisions.md` Nachtrag 183.
+    // Kapitel 27 / P2c: Zusammenfassung der Plan-Warnungen (Details je Zeile am ⚠).
+    const planWarnEl = document.createElement("div");
+    planWarnEl.className = "next-fixtime";
+    planWarnEl.style.color = "#e0a030";
+    planWarnEl.style.display = "none";
     const nextFixtimeEl = document.createElement("div");
     nextFixtimeEl.className = "next-fixtime";
     nextFixtimeEl.style.display = "none";
@@ -295,7 +326,14 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     // Testmuster-Dropdown — spiegelt omp-players eigene append/load-
     // Precedence (senderId > file > pattern, s. main.rs-Doku dort).
     const sourceTypeSelect = document.createElement("select");
-    for (const [v, t] of [["pattern", "Testmuster"], ["file", "Datei"], ["live", "Live-Quelle"]]) {
+    for (const [v, t] of [
+      ["pattern", "Testmuster"],
+      ["file", "Datei"],
+      ["image", "Standbild"],
+      ["live", "Live-Quelle"],
+      ["hold", "HOLD (anhalten)"],
+      ["jump", "JUMP (springen zu …)"],
+    ]) {
       const opt = document.createElement("option");
       opt.value = v;
       opt.textContent = t;
@@ -313,6 +351,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     const liveSelect = document.createElement("omp-source-selector");
     liveSelect.emptyLabel = "— Quelle wählen —";
     liveSelect.excludeRoles = ["low"];
+    // Kapitel 27 / P2b: JUMP-Ziel = ein Item der aktuellen Liste.
+    const jumpSelect = document.createElement("select");
     const durationInput = document.createElement("input");
     durationInput.type = "number";
     durationInput.placeholder = "Dauer (ms)";
@@ -320,12 +360,14 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     const updateSourceTypeVisibility = () => {
       const v = sourceTypeSelect.value;
       patternSelect.style.display = v === "pattern" ? "" : "none";
-      fileSelect.style.display = v === "file" ? "" : "none";
+      fileSelect.style.display = v === "file" || v === "image" ? "" : "none";
       liveSelect.style.display = v === "live" ? "" : "none";
+      jumpSelect.style.display = v === "jump" ? "" : "none";
       // Bei Datei-Items probt der Ziel-Player die echte Clip-Dauer und
       // ignoriert ein mitgeschicktes durationMs vollständig (s. main.rs
       // dort) — das Feld hier wäre irreführend.
-      durationInput.style.display = v === "file" ? "none" : "";
+      // Steuer-Events (HOLD/JUMP) haben keine Dauer; ein Standbild schon.
+      durationInput.style.display = v === "file" || v === "hold" || v === "jump" ? "none" : "";
     };
     sourceTypeSelect.addEventListener("change", updateSourceTypeVisibility);
     updateSourceTypeVisibility();
@@ -336,6 +378,17 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (sourceTypeSelect.value === "file") {
         if (!fileSelect.value) return;
         body.file = fileSelect.value;
+      } else if (sourceTypeSelect.value === "image") {
+        if (!fileSelect.value) return;
+        body.file = fileSelect.value;
+        body.eventType = "image";
+        body.durationMs = parseFloat(durationInput.value) || 5000;
+      } else if (sourceTypeSelect.value === "hold") {
+        body.eventType = "hold";
+      } else if (sourceTypeSelect.value === "jump") {
+        if (!jumpSelect.value) return;
+        body.eventType = "jump";
+        body.jumpTarget = jumpSelect.value;
       } else if (sourceTypeSelect.value === "live") {
         if (!liveSelect.value) return;
         body.senderId = liveSelect.value;
@@ -350,7 +403,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         poll();
       });
     });
-    addRow.append(labelInput, sourceTypeSelect, patternSelect, fileSelect, liveSelect, durationInput, addBtn);
+    addRow.append(labelInput, sourceTypeSelect, patternSelect, fileSelect, liveSelect, jumpSelect, durationInput, addBtn);
 
     // Listenansicht (PIPELINE-CONTROLLER-Parität, .pl-hdr-row dort) —
     // Spaltentitel über den Zeilen, gleiches Grid-Template wie .pl-row.
@@ -419,7 +472,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     cartsEmpty.textContent = '"+ Cart" zum Anlegen eines Interrupt-Assets (Blackclip, Standby, …)';
     cartsSection.append(cartsHeading, activeCartBanner, cartAddRow, cartList, cartsEmpty);
 
-    shadow.append(style, clockEl, nextFixtimeEl, errorBanner, targetsRow, statusRow, progress, addRow, listHdr, list, empty, cartsSection);
+    shadow.append(style, clockEl, nextFixtimeEl, planWarnEl, errorBanner, targetsRow, statusRow, progress, addRow, listHdr, list, empty, cartsSection);
 
     // Meldet fehlgeschlagene Methodenaufrufe sichtbar statt sie stillschweigend
     // zu verschlucken (`fetch()` lehnt nur bei Netzwerkfehlern ab, nicht bei
@@ -532,7 +585,12 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     // Listenansicht-Folgeschritt: Icon je nach tatsächlich zugewiesener
     // Quelle (genau eines von pattern/file/senderId ist gesetzt, s.
     // omp-playout-automation main.rs::item_meta_to_json).
-    const sourceIcon = (item) => (item.senderId ? "📡" : item.file ? "📁" : "🎨");
+    const sourceIcon = (item) => {
+      if (item.eventType === "HOLD") return "⏸";
+      if (item.eventType === "JUMP") return "↪";
+      if (item.eventType === "IMAGE") return "🖼";
+      return item.senderId ? "📡" : item.file ? "📁" : "🎨";
+    };
 
     // Drag&Drop-Reorder (Listenansicht-Folgeschritt, PIPELINE-CONTROLLER-
     // Parität — `plDragStart`/`plDragOver`/`plDrop` dort): baut die neue
@@ -561,12 +619,20 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       // ohne `fixtimeHms` hier würde jeder Reorder eine Fixzeit
       // verlieren, obwohl `do_load()` sie längst positionell zurückzippt.
       if (item.fixtimeHms) entry.fixtimeHms = item.fixtimeHms;
+      // Kapitel 27 / P2a+P2b: absolute Startzeit und Event-Typ gehören ebenfalls
+      // in den load()-Roundtrip (gleiche Lücke wie oben, proaktiv geschlossen).
+      if (item.startAt) entry.startAt = item.startAt;
+      if (item.eventType === "IMAGE") entry.eventType = "image";
+      else if (item.eventType === "HOLD") entry.eventType = "hold";
+      else if (item.eventType === "JUMP") entry.eventType = "jump"; // jumpToIndex setzt reorderItems
       // Kapitel 6 Teil 4: dieselbe Lücke ein drittes Mal proaktiv vermieden.
       if (item.transition) entry.transition = item.transition;
       if (item.transitionRateFrames != null) entry.transitionRateFrames = item.transitionRateFrames;
       // Kapitel 6 Teil 5: dieselbe Lücke ein viertes Mal proaktiv vermieden.
       if (item.children && item.children.length > 0) entry.children = item.children;
-      if (item.senderId) entry.senderId = item.senderId;
+      if (item.eventType === "HOLD" || item.eventType === "JUMP") {
+        entry.durationMs = 0;
+      } else if (item.senderId) entry.senderId = item.senderId;
       else if (item.file) entry.file = item.file;
       else {
         entry.pattern = item.pattern;
@@ -582,7 +648,16 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const reordered = lastItems.slice();
       const [moved] = reordered.splice(fromIdx, 1);
       reordered.splice(toIdx, 0, moved);
-      call("load", { itemsJson: JSON.stringify(reordered.map(itemToLoadEntry)) }).then(poll);
+      const entries = reordered.map(itemToLoadEntry);
+      // JUMP-Ziele sind Item-IDs, die beim load() neu vergeben werden — also
+      // als Position in der NEUEN Reihenfolge mitgeben.
+      reordered.forEach((it, i) => {
+        if (it.eventType === "JUMP") {
+          const pos = reordered.findIndex((x) => x.id === it.jumpTarget);
+          if (pos >= 0) entries[i].jumpToIndex = pos;
+        }
+      });
+      call("load", { itemsJson: JSON.stringify(entries) }).then(poll);
     };
 
     const createItemElement = (item) => {
@@ -652,11 +727,19 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         const next = order[(order.indexOf(item.startType || "sequence") + 1) % order.length];
         const body = { itemId: item.id, startType: next };
         if (next === "fixtime") {
-          const input = prompt("Fixzeit (HH:MM:SS, lokale Uhrzeit):", item.fixtimeHms || "");
+          // Kapitel 27 / P2c: absolute Startzeit mit Datum (lokal eingegeben,
+          // als UTC-Zeitpunkt gespeichert, DST-sicher). Nur "HH:MM:SS" = heute.
+          const input = prompt(
+            "Startzeit (lokal): „HH:MM:SS“ = heute, oder „JJJJ-MM-TT HH:MM:SS“",
+            item.startAt ? new Date(item.startAt).toLocaleString("sv-SE") : item.fixtimeHms || "",
+          );
           if (input === null) return;
-          const trimmed = input.trim();
-          if (!trimmed) return;
-          body.fixtimeHms = trimmed;
+          const iso = parseStartInput(input);
+          if (!iso) {
+            alert("Ungültige Startzeit. Beispiele: 14:30:00 oder 2026-10-03 06:00:00");
+            return;
+          }
+          body.startAt = iso;
         }
         call("setStartType", body).then(poll);
       });
@@ -768,7 +851,15 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       dragEl.addEventListener("pointercancel", endDrag);
 
       el.append(dragEl, numEl, iconEl, titleEl, durEl, timeEl, remWrap, availEl, actionsEl);
-      return { el, dragEl, numEl, iconEl, titleEl, durEl, timeEl, remTxt, remBarInner, availEl, startTypeBtn, transitionBtn, childrenBtn, cueBtn, removeBtn };
+      // Die Klick-Handler oben lesen `item` (Closure über den Parameter). Ohne
+      // Nachführen sähen sie für immer den Stand beim ANLEGEN der Zeile:
+      // der Start-Typ-Umschalter rotierte dann immer von „sequence“ aus (nie
+      // weiter zu „fixtime“), Übergangs-/Kind-Editor arbeiteten auf alten
+      // Werten. `setItem` wird bei jedem Poll mit dem frischen Item gerufen.
+      const setItem = (fresh) => {
+        item = fresh;
+      };
+      return { el, setItem, dragEl, numEl, iconEl, titleEl, durEl, timeEl, remTxt, remBarInner, availEl, startTypeBtn, transitionBtn, childrenBtn, cueBtn, removeBtn };
     };
 
     // Formatiert Millisekunden als mm:ss (Playlists dieses Nodes sind
@@ -789,6 +880,12 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     // Titel-Zelle (eigene Icon-Spalte übernimmt die Kurzform, s.
     // `sourceIcon`) statt eines langen Textsuffixes in der schmalen Spalte.
     const describeItem = (item, liveLabelBySenderId) => {
+      if (item.eventType === "HOLD") return "HOLD: Sequenz hält an, das vorherige Bild bleibt, bis der Operator weiterschaltet (Next).";
+      if (item.eventType === "JUMP") {
+        const t = lastItems.find((it) => it.id === item.jumpTarget);
+        return `JUMP: springt zu „${t ? t.label : item.jumpTarget}“`;
+      }
+      if (item.eventType === "IMAGE") return `Standbild: ${item.file}`;
       if (item.senderId) return `Live: ${liveLabelBySenderId.get(item.senderId) || item.senderId}`;
       if (item.file) return `Datei: ${item.file}`;
       return `Testmuster: ${item.pattern}`;
@@ -857,6 +954,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         availableSourcesValue,
         channelName,
         persistenceStatus,
+        scheduleValue,
       ] = await Promise.all([
         getParam("items"),
         getParam("currentItemId"),
@@ -877,6 +975,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         getParam("availableSources"),
         getParam("channelName"),
         getParam("persistence"),
+        getParam("schedule"),
       ]);
       const items = itemsValue || [];
       const currentIds = new Set(items.map((it) => it.id));
@@ -894,20 +993,31 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         const d = new Date();
         return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
       })();
+      // Kapitel 27 / P2c: absolute Startzeit (startAt, mit Datum) hat Vorrang vor
+      // dem dateilosen HH:MM:SS; `remain` immer in Sekunden bis zum Ereignis.
+      const nowMs = Date.now();
       const upcoming = items
-        .filter((it) => it.startType === "fixtime" && it.fixtimeHms)
+        .filter((it) => it.startType === "fixtime" && (it.startAt || it.fixtimeHms))
         .map((it) => {
-          const [h, m, s] = it.fixtimeHms.split(":").map(Number);
-          return { label: it.label, hms: it.fixtimeHms, targetSecs: h * 3600 + m * 60 + s };
+          if (it.startAt) {
+            return { label: it.label, hms: formatLocalStart(it.startAt), remain: Math.floor((Date.parse(it.startAt) - nowMs) / 1000) };
+          }
+          const [h, m, s2] = it.fixtimeHms.split(":").map(Number);
+          return { label: it.label, hms: it.fixtimeHms, remain: h * 3600 + m * 60 + s2 - nowSecs };
         })
-        .filter((f) => Number.isFinite(f.targetSecs) && f.targetSecs >= nowSecs)
-        .sort((a, b) => a.targetSecs - b.targetSecs);
+        .filter((f) => Number.isFinite(f.remain) && f.remain >= 0)
+        .sort((x, y) => x.remain - y.remain);
       if (upcoming.length > 0) {
         const next = upcoming[0];
-        const remain = next.targetSecs - nowSecs;
-        const mm = Math.floor(remain / 60);
+        const remain = next.remain;
+        // Über eine Stunde als H:MM:SS, sonst M:SS.
+        const hh = Math.floor(remain / 3600);
+        const mm = Math.floor((remain % 3600) / 60);
         const ss = remain % 60;
-        nextFixtimeEl.textContent = `⏰ ${next.hms} „${next.label}“ in ${mm}:${String(ss).padStart(2, "0")}`;
+        const countdown = hh > 0
+          ? `${hh}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`
+          : `${mm}:${String(ss).padStart(2, "0")}`;
+        nextFixtimeEl.textContent = `⏰ ${next.hms} „${next.label}“ in ${countdown}`;
         nextFixtimeEl.style.display = "";
       } else {
         nextFixtimeEl.style.display = "none";
@@ -984,6 +1094,29 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const timeline = await getTimelineWindow(0, items.length);
       const timeByIndex = new Map(timeline.map((e) => [e.index, e]));
 
+      // Kapitel 27 / P2c: Wanduhr-Plan (UTC) des Nodes — geplanter Start/Ende je
+      // Item samt Warnungen (Überlappung/Lücke/Start unbestimmt).
+      const planById = new Map(((scheduleValue && scheduleValue.entries) || []).map((e) => [e.id, e]));
+      const planWarnings = [...planById.values()].filter((e) => e.warnings && e.warnings.length > 0).length;
+      planWarnEl.textContent = `⚠ ${planWarnings} Plan-Warnung${planWarnings === 1 ? "" : "en"} (Überlappung, Lücke oder unbestimmter Start — Details am ⚠ in der Zeitspalte)`;
+      planWarnEl.style.display = planWarnings > 0 ? "" : "none";
+
+      // JUMP-Ziel-Auswahl aus der aktuellen Liste (nur bei Änderung neu aufbauen).
+      const jumpKey = items.map((it) => `${it.id}:${it.label}`).join("|");
+      if (jumpKey !== jumpSelect.dataset.key) {
+        const keep = jumpSelect.value;
+        jumpSelect.replaceChildren();
+        for (const it of items) {
+          if (it.eventType === "JUMP") continue;
+          const opt = document.createElement("option");
+          opt.value = it.id;
+          opt.textContent = `${items.indexOf(it) + 1}. ${it.label}`;
+          jumpSelect.append(opt);
+        }
+        if ([...jumpSelect.options].some((o) => o.value === keep)) jumpSelect.value = keep;
+        jumpSelect.dataset.key = jumpKey;
+      }
+
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
         let refs = itemEls.get(item.id);
@@ -992,6 +1125,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           itemEls.set(item.id, refs);
           list.append(refs.el);
         }
+        refs.setItem(item);
         const isOnair = item.id === currentItemId;
         const isCued = item.id === cuedItemId;
 
@@ -1001,7 +1135,18 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         refs.titleEl.title = describeItem(item, liveLabelBySenderId);
         refs.durEl.textContent = `${(item.durationMs / 1000).toFixed(1)}s`;
         const t = timeByIndex.get(i);
-        refs.timeEl.textContent = t ? `${formatMs(t.startMs)}–${formatMs(t.endMs)}` : "";
+        const plan = planById.get(item.id);
+        const relRange = t ? `${formatMs(t.startMs)}–${formatMs(t.endMs)}` : "";
+        // Geplante Wanduhrzeit (lokal) bevorzugt, sonst die relative Zeit ab Listenbeginn.
+        const planStart = plan && plan.start ? formatLocalStart(plan.start) : "";
+        const warn = plan && plan.warnings && plan.warnings.length > 0;
+        refs.timeEl.textContent = (planStart || relRange) + (warn ? " ⚠" : "");
+        refs.timeEl.style.color = warn ? "#e0a030" : "";
+        refs.timeEl.title = [
+          plan && plan.start ? `Geplant: ${formatLocalStart(plan.start)} – ${plan.end ? formatLocalStart(plan.end) : "offen"}${plan.anchored ? " (feste Startzeit)" : ""}` : "",
+          relRange ? `Ab Listenbeginn: ${relRange}` : "",
+          ...(warn ? plan.warnings.map((w2) => `⚠ ${w2}`) : []),
+        ].filter(Boolean).join("\n");
 
         // Rest+Fortschritt nur für das tatsächlich on-air Item bekannt
         // (automation führt nur einen globalen Playhead, kein Pro-Item-
@@ -1037,8 +1182,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         // Sequenz-Position.
         if (isFixtimeStart) {
           refs.startTypeBtn.textContent = "⏰";
-          refs.startTypeBtn.title = item.fixtimeHms
-            ? `Fixtime ${item.fixtimeHms} — feuert selbst zu dieser Uhrzeit, unabhängig von der Sequenz. Klicken für Sequenz-Start.`
+          const fixLabel = item.startAt ? formatLocalStart(item.startAt) : item.fixtimeHms;
+          refs.startTypeBtn.title = fixLabel
+            ? `Fixtime ${fixLabel} — feuert selbst zu diesem Zeitpunkt, unabhängig von der Sequenz. Klicken für Sequenz-Start.`
             : "Fixtime ohne gültige Uhrzeit — feuert nicht. Klicken für Sequenz-Start.";
           refs.startTypeBtn.className = "start-type-fixtime";
         } else {
