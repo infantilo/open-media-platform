@@ -229,6 +229,10 @@ type Instance struct {
 	// lief. Wie Version einmal beim Start festgelegt und bei automatischen
 	// Neustarts beibehalten.
 	NodeVersion string `json:"nodeVersion,omitempty"`
+	// OptionsApplied ist der Stand der Node-Optionen (Hash der wirksamen Werte), mit dem der
+	// Prozess zuletzt (neu) gestartet wurde (Kapitel 29). Persistiert, damit „Neustart nötig“
+	// einen Orchestrator-Neustart überlebt; leer = ohne Optionen gestartet.
+	OptionsApplied string `json:"optionsApplied,omitempty"`
 }
 
 // EventPublisher verteilt ein SSE-Event an alle verbundenen Flow-Editor-
@@ -888,7 +892,7 @@ func (l *Launcher) Start(nodeType, version, hostID string, extraEnv map[string]s
 // Sender-Label, s. omp-node-sdk::node::start).
 func (l *Launcher) StartLabeled(nodeType, version, hostID, customLabel string, extraEnv map[string]string) (Instance, error) {
 	if hostID != "" {
-		return l.startRemote(nodeType, hostID, customLabel, extraEnv)
+		return l.startRemote(nodeType, hostID, customLabel, extraEnv, "")
 	}
 	return l.startLocal(nodeType, version, customLabel, extraEnv, "")
 }
@@ -931,7 +935,7 @@ func (l *Launcher) startLocal(nodeType, version, customLabel string, extraEnv ma
 		return Instance{}, fmt.Errorf("launcher: start %s: %w", nodeType, err)
 	}
 
-	inst := Instance{ID: id, Type: nodeType, Label: label, PID: cmd.Process.Pid, ExtraEnv: extraEnv, Version: entry.Version, NodeVersion: nodeVersion, LaunchSecret: launchSecret}
+	inst := Instance{OptionsApplied: l.appliedFor(id), ID: id, Type: nodeType, Label: label, PID: cmd.Process.Pid, ExtraEnv: extraEnv, Version: entry.Version, NodeVersion: nodeVersion, LaunchSecret: launchSecret}
 
 	l.mu.Lock()
 	l.instances[id] = inst
@@ -1023,16 +1027,7 @@ func hashOptions(a, b map[string]string) string {
 // sich, welche Optionen für diese Instanz jetzt wirksam sind. valuesFrom (optional): Instanz,
 // deren Instanz-Werte statt der eigenen gelten (Neustart per Stop + Start mit neuer ID).
 func (l *Launcher) withOptions(nodeType, instanceID, valuesFrom string, extraEnv map[string]string) map[string]string {
-	if valuesFrom == "" {
-		valuesFrom = instanceID
-	}
-	typeVals, instVals := l.optionValues(nodeType, valuesFrom)
-	l.mu.Lock()
-	if l.optionsApplied == nil {
-		l.optionsApplied = map[string]string{}
-	}
-	l.optionsApplied[instanceID] = hashOptions(typeVals, instVals)
-	l.mu.Unlock()
+	typeVals, instVals := l.optionLayers(nodeType, instanceID, valuesFrom)
 	if len(typeVals) == 0 && len(instVals) == 0 {
 		return extraEnv
 	}
@@ -1053,20 +1048,94 @@ func (l *Launcher) withOptions(nodeType, instanceID, valuesFrom string, extraEnv
 // Instanz `optionsFrom` (Neustart mit neuer ID: die Einstellungen sollen von Anfang an gelten).
 func (l *Launcher) StartInheriting(nodeType, version, hostID, customLabel string, extraEnv map[string]string, optionsFrom string) (Instance, error) {
 	if hostID != "" {
-		return l.StartLabeled(nodeType, version, hostID, customLabel, extraEnv)
+		return l.startRemote(nodeType, hostID, customLabel, extraEnv, optionsFrom)
 	}
 	return l.startLocal(nodeType, version, customLabel, extraEnv, optionsFrom)
 }
 
+// appliedFor liefert den beim Start gemerkten Optionsstand einer (neuen) Instanz.
+func (l *Launcher) appliedFor(instanceID string) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.optionsApplied[instanceID]
+}
+
+// optionLayers liest Typ- und Instanz-Werte und merkt sich den Stand als „für diese
+// Instanz wirksam“ (Grundlage von OptionsChanged).
+func (l *Launcher) optionLayers(nodeType, instanceID, valuesFrom string) (typeVals, instVals map[string]string) {
+	if valuesFrom == "" {
+		valuesFrom = instanceID
+	}
+	typeVals, instVals = l.optionValues(nodeType, valuesFrom)
+	h := hashOptions(typeVals, instVals)
+	l.mu.Lock()
+	if l.optionsApplied == nil {
+		l.optionsApplied = map[string]string{}
+	}
+	l.optionsApplied[instanceID] = h
+	if inst, ok := l.instances[instanceID]; ok && inst.OptionsApplied != h {
+		inst.OptionsApplied = h // Neustart einer bestehenden Instanz: Stand nachziehen und persistieren
+		l.instances[instanceID] = inst
+		if l.store != nil {
+			if err := l.persistInstanceLocked(instanceID); err != nil {
+				slog.Warn("launcher: failed to persist instance state", "error", err)
+			}
+		}
+	}
+	l.mu.Unlock()
+	return typeVals, instVals
+}
+
+// remoteOptions: die Optionen für einen Remote-Start. Gleiche Rangfolge wie lokal (Typ <
+// extraEnv < Instanz), aber extraEnv geht separat und bleibt über die Allowlist des Agents
+// geschützt — hier nur Typ-Werte, die extraEnv nicht ohnehin setzt, plus Instanz-Werte.
+func (l *Launcher) remoteOptions(nodeType, instanceID, valuesFrom string, extraEnv map[string]string) map[string]string {
+	typeVals, instVals := l.optionLayers(nodeType, instanceID, valuesFrom)
+	if len(typeVals) == 0 && len(instVals) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	for k, v := range typeVals {
+		if _, set := extraEnv[k]; !set {
+			out[k] = v
+		}
+	}
+	for k, v := range instVals {
+		out[k] = v
+	}
+	return out
+}
+
+// CheckPathOnHost prüft einen Pfad auf dem Dateisystem eines Remote-Hosts (Host-Agent).
+func (l *Launcher) CheckPathOnHost(hostID, path, kind string) (nodeoptions.PathInfo, error) {
+	if l.nc == nil {
+		return nodeoptions.PathInfo{}, ErrRemoteUnavailable
+	}
+	resp, err := l.sendCommand(hostID, remoteCommand{Action: "check-path", Path: path, Kind: kind})
+	if err != nil {
+		return nodeoptions.PathInfo{}, err
+	}
+	if !resp.OK {
+		return nodeoptions.PathInfo{}, fmt.Errorf("host %s: %s", hostID, resp.Error)
+	}
+	var info nodeoptions.PathInfo
+	if err := json.Unmarshal([]byte(resp.Detail), &info); err != nil {
+		return nodeoptions.PathInfo{}, fmt.Errorf("host %s: unlesbare Antwort: %w", hostID, err)
+	}
+	return info, nil
+}
+
 // OptionsChanged meldet, ob sich die Optionswerte einer laufenden Instanz seit ihrem
-// (Neu-)Start geändert haben (Neustart nötig). Unbekannter Startzustand = false.
+// (Neu-)Start geändert haben (Neustart nötig). Instanzen ohne gespeicherten Stand (vor
+// Kapitel 29 gestartet) gelten als „ohne Optionen gestartet“.
 func (l *Launcher) OptionsChanged(nodeType, instanceID string) bool {
 	l.mu.Lock()
-	applied, known := l.optionsApplied[instanceID]
+	inst, known := l.instances[instanceID]
 	l.mu.Unlock()
 	if !known {
 		return false
 	}
+	applied := inst.OptionsApplied
 	typeVals, instVals := l.optionValues(nodeType, instanceID)
 	return hashOptions(typeVals, instVals) != applied
 }
@@ -1126,7 +1195,7 @@ func (l *Launcher) startPodmanLocal(nodeType string, entry CatalogEntry, id, lab
 		return Instance{}, fmt.Errorf("launcher: start %s: %w", nodeType, err)
 	}
 
-	inst := Instance{ID: id, Type: nodeType, Label: label, ContainerID: containerID, ExtraEnv: extraEnv, Version: entry.Version, LaunchSecret: launchSecret}
+	inst := Instance{OptionsApplied: l.appliedFor(id), ID: id, Type: nodeType, Label: label, ContainerID: containerID, ExtraEnv: extraEnv, Version: entry.Version, LaunchSecret: launchSecret}
 
 	l.mu.Lock()
 	l.instances[id] = inst
@@ -1421,7 +1490,7 @@ func (l *Launcher) recordRestartLocked(id string) (shouldRestart bool, totalRest
 // Zielhost kommt als Fehler in der Kommando-Antwort zurück. extraEnv
 // (S3) wird mitgeschickt — der Host-Agent prüft es gegen seine eigene
 // Allowlist, s. `Start`-Doku.
-func (l *Launcher) startRemote(nodeType, hostID, customLabel string, extraEnv map[string]string) (Instance, error) {
+func (l *Launcher) startRemote(nodeType, hostID, customLabel string, extraEnv map[string]string, optionsFrom string) (Instance, error) {
 	if l.nc == nil {
 		return Instance{}, ErrRemoteUnavailable
 	}
@@ -1451,6 +1520,7 @@ func (l *Launcher) startRemote(nodeType, hostID, customLabel string, extraEnv ma
 		InstanceID:   id,
 		Label:        label,
 		ExtraEnv:     extraEnv,
+		Options:      l.remoteOptions(nodeType, id, optionsFrom, extraEnv),
 		LaunchSecret: launchSecret,
 	})
 	if err != nil {
@@ -1460,7 +1530,7 @@ func (l *Launcher) startRemote(nodeType, hostID, customLabel string, extraEnv ma
 		return Instance{}, fmt.Errorf("launcher: remote start on host %s failed: %s", hostID, resp.Error)
 	}
 
-	inst := Instance{ID: id, Type: nodeType, Label: label, PID: resp.PID, HostID: hostID, ExtraEnv: extraEnv, LaunchSecret: launchSecret}
+	inst := Instance{OptionsApplied: l.appliedFor(id), ID: id, Type: nodeType, Label: label, PID: resp.PID, HostID: hostID, ExtraEnv: extraEnv, LaunchSecret: launchSecret}
 	l.mu.Lock()
 	l.instances[id] = inst
 	if err := l.persistInstanceLocked(id); err != nil {
@@ -1489,12 +1559,19 @@ type remoteCommand struct {
 	// dieses Feld (dieselbe bewusste Wire-Format-Duplikation wie der
 	// Rest von remoteCommand).
 	LaunchSecret string `json:"launchSecret,omitempty"`
+	// Options (Kapitel 29): Node-Optionen; der Host-Agent prüft sie gegen sein EIGENES Schema.
+	Options map[string]string `json:"options,omitempty"`
+	// Path/Kind: Action "check-path".
+	Path string `json:"path,omitempty"`
+	Kind string `json:"kind,omitempty"`
 }
 
 type remoteResponse struct {
 	OK    bool   `json:"ok"`
 	PID   int    `json:"pid,omitempty"`
 	Error string `json:"error,omitempty"`
+	// Detail: Zusatzinfo (z. B. ignorierte Optionen, Pfadprüfung als JSON).
+	Detail string `json:"detail,omitempty"`
 }
 
 func (l *Launcher) sendCommand(hostID string, cmd remoteCommand) (remoteResponse, error) {
@@ -1605,6 +1682,7 @@ func (l *Launcher) HandleRemoteExit(hostID string, payload []byte) {
 		InstanceID: ev.InstanceID,
 		Label:      current.Label,
 		ExtraEnv:   current.ExtraEnv,
+		Options:    l.remoteOptions(current.Type, ev.InstanceID, "", current.ExtraEnv),
 		// Dieselbe Instanz-ID behält über einen Crash-Neustart hinweg
 		// auch dasselbe Secret (Live-Fund 2026-09-11, gleiches Prinzip
 		// wie beim lokalen Restart-Pfad, s. execEntry-Aufrufstelle

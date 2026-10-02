@@ -22,12 +22,14 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/host-agent/internal/catalog"
+	"github.com/infantilo/openmediaplatform/nodeoptions"
 )
 
 // Publisher ist die von Executor für ExitEvent-Publishing (S3) genutzte
@@ -102,6 +104,16 @@ type Request struct {
 	// System-Update (Action "update", s. update.go): Pfad (relativ zum
 	// eigenen Orchestrator, inkl. Einmal-Token), erwartete Version und
 	// SHA-256 des Pakets.
+	// Options (Kapitel 29): vom Orchestrator gewünschte Node-Optionen (Umgebungsvariablen).
+	// Anders als ExtraEnv KEINE feste Allowlist, sondern das agent-LOKALE Schema
+	// (node-options.json neben dem Katalog): nur dort für diesen Typ deklarierte Schlüssel
+	// werden übernommen, jeder Wert wird auf DIESEM Host geprüft (Pfade gegen sein
+	// Dateisystem). Unbekannte Schlüssel werden ignoriert und gemeldet (Response.Detail),
+	// ein ungültiger Wert eines deklarierten Schlüssels lässt den Start scheitern.
+	Options map[string]string `json:"options,omitempty"`
+	// Path/Kind: Action "check-path" — Pfadprüfung auf diesem Host (Antwort: Detail = JSON).
+	Path string `json:"path,omitempty"`
+	Kind string `json:"kind,omitempty"`
 	UpdatePath    string `json:"updatePath,omitempty"`
 	UpdateVersion string `json:"updateVersion,omitempty"`
 	UpdateSHA256  string `json:"updateSha256,omitempty"`
@@ -149,6 +161,8 @@ type Executor struct {
 	hostID          string
 	nc              Publisher
 	upd             *UpdateConfig
+	// nodeOptions: agent-lokales Optionsschema je Node-Typ (Kapitel 29), nil = keine Optionen.
+	nodeOptions map[string][]nodeoptions.Option
 
 	mu        sync.Mutex
 	instances map[string]*runningInstance
@@ -186,6 +200,42 @@ func NewExecutor(cat []catalog.Entry, registryURL, natsURL, orchestratorURL, hos
 	}
 }
 
+// SetNodeOptions setzt das agent-lokale Optionsschema (Kapitel 29).
+func (e *Executor) SetNodeOptions(schema map[string][]nodeoptions.Option) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.nodeOptions = schema
+}
+
+// applyOptions prüft die gewünschten Optionen gegen das lokale Schema und liefert die
+// zu setzenden Variablen sowie die ignorierten Schlüssel.
+func (e *Executor) applyOptions(nodeType string, want map[string]string) (valid map[string]string, ignored []string, err error) {
+	e.mu.Lock()
+	schema := e.nodeOptions[nodeType]
+	e.mu.Unlock()
+	valid = map[string]string{}
+	keys := make([]string, 0, len(want))
+	for k := range want {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		opt, ok := nodeoptions.Find(schema, k)
+		if !ok {
+			ignored = append(ignored, k)
+			continue
+		}
+		v, _, verr := nodeoptions.Validate(opt, want[k])
+		if verr != nil {
+			return nil, nil, fmt.Errorf("%s: %w", k, verr)
+		}
+		if v != "" {
+			valid[k] = v
+		}
+	}
+	return valid, ignored, nil
+}
+
 // InstanceInfo ist eine minimale Momentaufnahme einer laufenden
 // Instanz (nur ID+PID) — für die Pro-Instanz-Telemetrie in main.go
 // (Kapitel 14 Teil 2, docs/END-GOAL-FEATURES.md §14.3b), kein
@@ -219,6 +269,12 @@ func (e *Executor) Handle(req Request) Response {
 		return e.stop(req)
 	case "update":
 		return e.update(req)
+	case "check-path":
+		if req.Path == "" {
+			return Response{OK: false, Error: "path required"}
+		}
+		data, _ := json.Marshal(nodeoptions.CheckPath(req.Path, req.Kind))
+		return Response{OK: true, Detail: string(data)}
 	default:
 		return Response{OK: false, Error: fmt.Sprintf("unknown action %q", req.Action)}
 	}
@@ -241,9 +297,21 @@ func (e *Executor) start(req Request) Response {
 		}
 	}
 
+	opts, ignored, oerr := e.applyOptions(req.Type, req.Options)
+	if oerr != nil {
+		return Response{OK: false, Error: fmt.Sprintf("option rejected on this host: %v", oerr)}
+	}
+	extra := map[string]string{}
+	for k, v := range req.ExtraEnv {
+		extra[k] = v
+	}
+	for k, v := range opts {
+		extra[k] = v
+	}
+
 	stderrTail := newTailBuffer(crashStderrLines)
 	cmd := exec.Command(entry.Command[0], entry.Command[1:]...)
-	cmd.Env = buildEnv(entry.Env, req.ExtraEnv, req.InstanceID, req.Label, e.registryURL, e.natsURL, e.orchestratorURL, req.LaunchSecret)
+	cmd.Env = buildEnv(entry.Env, extra, req.InstanceID, req.Label, e.registryURL, e.natsURL, e.orchestratorURL, req.LaunchSecret)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = io.MultiWriter(os.Stderr, stderrTail)
 
@@ -284,7 +352,11 @@ func (e *Executor) start(req Request) Response {
 		e.publishExit(req.InstanceID, exitCode, stderrTail.String())
 	}()
 
-	return Response{OK: true, PID: pid}
+	detail := ""
+	if len(ignored) > 0 {
+		detail = "ignored options (not declared in this host's node-options.json): " + strings.Join(ignored, ", ")
+	}
+	return Response{OK: true, PID: pid, Detail: detail}
 }
 
 // publishExit meldet ein unerwartetes Prozessende auf

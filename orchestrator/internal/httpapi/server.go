@@ -510,7 +510,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("DELETE /api/v1/admin/node-versions/{name}/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteNodeVersion(options.nodeVersions, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/admin/settings/nodes", g.requireVerbGlobal(authz.VerbAdmin, handleListNodeSettings(options.nodeValues, launcherSvc)))
 	mux.HandleFunc("PUT /api/v1/admin/settings/nodes/{type}/{key}", g.requireVerbGlobal(authz.VerbAdmin, handleSetNodeSetting(options.nodeValues, launcherSvc, options.domainAudit)))
-	mux.HandleFunc("POST /api/v1/admin/settings/check-path", g.requireVerbGlobal(authz.VerbAdmin, handleCheckPath()))
+	mux.HandleFunc("POST /api/v1/admin/settings/check-path", g.requireVerbGlobal(authz.VerbAdmin, handleCheckPath(launcherSvc)))
 	mux.HandleFunc("GET /api/v1/admin/settings/system", g.requireVerbGlobal(authz.VerbAdmin, handleListSystemSettings(options.systemSettings, cfg, options.startupSkipped)))
 	mux.HandleFunc("PUT /api/v1/admin/settings/system/{key}", g.requireVerbGlobal(authz.VerbAdmin, handleSetSystemSetting(options.systemSettings, cfg, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/host-updates/{id}", handleHostUpdateDownload(options.updates, options.updateDist))

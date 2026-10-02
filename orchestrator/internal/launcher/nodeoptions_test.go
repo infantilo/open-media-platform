@@ -35,6 +35,11 @@ func TestWithOptionsPrecedenceAndRestartDetection(t *testing.T) {
 		t.Fatalf("Typ-Werte: %v", got)
 	}
 
+	l.instances = map[string]Instance{"i1": {ID: "i1", Type: "omp-mxf-player"}, "alt": {ID: "alt", Type: "omp-mxf-player"}}
+	l.withOptions("omp-mxf-player", "i1", "", extra) // Start: Stand wird in der Instanz festgehalten
+	if l.instances["i1"].OptionsApplied == "" {
+		t.Fatal("Optionsstand muss in der Instanz persistiert werden")
+	}
 	if l.OptionsChanged("omp-mxf-player", "i1") {
 		t.Fatal("direkt nach dem Start nicht veraltet")
 	}
@@ -55,7 +60,11 @@ func TestWithOptionsPrecedenceAndRestartDetection(t *testing.T) {
 		t.Fatalf("Vererbung: %v", got)
 	}
 	if l.OptionsChanged("omp-mxf-player", "unbekannt") {
-		t.Fatal("unbekannter Startzustand = nicht veraltet")
+		t.Fatal("unbekannte Instanz = nicht veraltet")
+	}
+	// Vor Kapitel 29 gestartet (kein gespeicherter Stand) UND es gibt Typ-Werte → Neustart nötig.
+	if !l.OptionsChanged("omp-mxf-player", "alt") {
+		t.Fatal("Instanz ohne gespeicherten Stand, aber mit wirksamen Optionswerten: Neustart nötig")
 	}
 }
 

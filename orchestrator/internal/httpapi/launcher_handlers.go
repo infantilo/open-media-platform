@@ -54,7 +54,7 @@ func mergeInstanceMetrics(list []launcher.Instance, hostMetrics HostMetricsReade
 			list[i].RSSBytes = &rss
 			list[i].GPUPercent = im.GpuPercent
 			list[i].GPUMemBytes = im.GpuMemBytes
-			list[i].Outdated = im.Outdated
+			list[i].Outdated = list[i].Outdated || im.Outdated // Kapitel 29: Options-Änderung bleibt erhalten
 			break
 		}
 	}

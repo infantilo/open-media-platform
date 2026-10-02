@@ -5,6 +5,7 @@ go 1.26.4
 require github.com/nats-io/nats.go v1.52.0
 
 require (
+	github.com/infantilo/openmediaplatform/nodeoptions v0.0.0
 	github.com/infantilo/openmediaplatform/update v0.0.0
 	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/nats-io/nkeys v0.4.15 // indirect
@@ -12,5 +13,7 @@ require (
 	golang.org/x/crypto v0.49.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 )
+
+replace github.com/infantilo/openmediaplatform/nodeoptions => ../nodeoptions
 
 replace github.com/infantilo/openmediaplatform/update => ../update

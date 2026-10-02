@@ -42,6 +42,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/infantilo/openmediaplatform/host-agent/internal/catalog"
+	"github.com/infantilo/openmediaplatform/nodeoptions"
 	"github.com/infantilo/openmediaplatform/host-agent/internal/commands"
 	"github.com/infantilo/openmediaplatform/host-agent/internal/state"
 	"github.com/infantilo/openmediaplatform/host-agent/internal/telemetry"
@@ -203,6 +204,17 @@ func main() {
 	defer nc.Close()
 
 	executor := commands.NewExecutor(cat, registryURL, natsURL, orchestratorURL, st.HostID, nc)
+	// Kapitel 29: agent-lokales Optionsschema (Sicherheitsgrenze: der Host entscheidet, welche
+	// Variablen der Orchestrator pro Node-Typ setzen darf). Fehlt die Datei, bleibt alles wie früher.
+	optionsPath := envOr("OMP_HOST_AGENT_NODE_OPTIONS", filepath.Join(filepath.Dir(catalogPath), "node-options.json"))
+	if catalogPath != "" {
+		if schema, err := nodeoptions.LoadFile(optionsPath); err == nil {
+			executor.SetNodeOptions(schema)
+			slog.Info("node options loaded", "path", optionsPath, "types", len(schema))
+		} else if !os.IsNotExist(err) {
+			slog.Error("node-options.json invalid — options disabled on this host", "path", optionsPath, "error", err)
+		}
+	}
 	// System-Update auf diesem Host (docs/ENTWURF-SYSTEM-UPDATE.md): der
 	// Agent prüft Pakete mit seinem EIGENEN Vertrauensanker. Ohne
 	// Schlüsseldatei lehnt er jedes Paket ab.

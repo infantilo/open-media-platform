@@ -1,6 +1,6 @@
 .PHONY: preflight doctor update-keygen update-bundle build test check check-ci up down ci ui nodes contract start hosts stop status mtls-up mtls-down mtls-issue-certs nmos-registry-tls-up nmos-registry-tls-down nats-tls-up nats-tls-down backup restore proxy-up proxy-down soak
 
-GO_MODULES := orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check tools/update-bundle host-agent supervisor update
+GO_MODULES := orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check tools/update-bundle host-agent supervisor update nodeoptions
 
 build: ui
 	$(foreach m,$(GO_MODULES),cd $(m) && go build ./... && cd $(CURDIR) &&) true

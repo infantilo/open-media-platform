@@ -122,8 +122,16 @@ func TestNodeSettingsListSetAndGuards(t *testing.T) {
 	if rec := put("omp-mxf-player", "OMP_WIDTH", `{"value":"1280","instanceId":"local1"}`); rec.Code != 200 || vals.m["instance|local1|OMP_WIDTH"] != "1280" {
 		t.Fatalf("Instanz: %d %s", rec.Code, rec.Body)
 	}
-	if rec := put("omp-mxf-player", "OMP_WIDTH", `{"value":"1280","instanceId":"remote1"}`); rec.Code != 409 {
-		t.Fatalf("Remote-Instanz muss 409 liefern: %d", rec.Code)
+	// Remote-Instanz: Pfad wird NICHT gegen das lokale Dateisystem geprüft, der Host-Agent entscheidet.
+	if rec := put("omp-mxf-player", "OMP_MEDIA_DIR", `{"value":"/nur/auf/dem/remote/host","instanceId":"remote1"}`); rec.Code != 200 {
+		t.Fatalf("Remote-Instanz mit fremdem Pfad: %d %s", rec.Code, rec.Body)
+	}
+	// Typ-weit: fehlender lokaler Pfad scheitert, mit force wird er mit Warnung gespeichert.
+	if rec := put("omp-mxf-player", "OMP_MEDIA_DIR", `{"value":"/nur/auf/dem/remote/host"}`); rec.Code != 400 {
+		t.Fatalf("ohne force: %d", rec.Code)
+	}
+	if rec := put("omp-mxf-player", "OMP_MEDIA_DIR", `{"value":"/nur/auf/dem/remote/host","force":true}`); rec.Code != 200 || !strings.Contains(rec.Body.String(), "erzwungen") {
+		t.Fatalf("mit force: %d %s", rec.Code, rec.Body)
 	}
 	if rec := put("omp-mxf-player", "OMP_WIDTH", `{"value":"1280","instanceId":"gibtsnicht"}`); rec.Code != 404 {
 		t.Fatalf("unbekannte Instanz: %d", rec.Code)
@@ -213,14 +221,14 @@ func TestCheckPathHandler(t *testing.T) {
 	dir := t.TempDir()
 	_ = os.WriteFile(dir+"/a", []byte("x"), 0o644)
 	rec := httptest.NewRecorder()
-	handleCheckPath()(rec, httptest.NewRequest(http.MethodPost, "/c", strings.NewReader(`{"path":"`+dir+`","kind":"dir"}`)))
+	handleCheckPath(fakeLauncherService{})(rec, httptest.NewRequest(http.MethodPost, "/c", strings.NewReader(`{"path":"`+dir+`","kind":"dir"}`)))
 	var info nodeoptions.PathInfo
 	_ = json.Unmarshal(rec.Body.Bytes(), &info)
 	if rec.Code != 200 || !info.Readable || info.Entries != 1 {
 		t.Fatalf("%d %+v", rec.Code, info)
 	}
 	rec = httptest.NewRecorder()
-	handleCheckPath()(rec, httptest.NewRequest(http.MethodPost, "/c", strings.NewReader(`{}`)))
+	handleCheckPath(fakeLauncherService{})(rec, httptest.NewRequest(http.MethodPost, "/c", strings.NewReader(`{}`)))
 	if rec.Code != 400 {
 		t.Fatalf("ohne Pfad: %d", rec.Code)
 	}

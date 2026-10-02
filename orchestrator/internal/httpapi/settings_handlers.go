@@ -28,6 +28,11 @@ type SystemSettingsStore interface {
 	Set(key, value, by string) error
 }
 
+// hostPathChecker prüft Pfade auf dem Dateisystem eines Remote-Hosts (Launcher → Host-Agent).
+type hostPathChecker interface {
+	CheckPathOnHost(hostID, path, kind string) (nodeoptions.PathInfo, error)
+}
+
 // nodeOptionSource ist die Fähigkeit des Launchers, Schema und „Neustart nötig“ zu nennen.
 type nodeOptionSource interface {
 	NodeOptions(nodeType string) []nodeoptions.Option
@@ -103,7 +108,7 @@ func handleListNodeSettings(values NodeOptionValues, svc LauncherService) http.H
 					}
 				}
 				t.Instances = append(t.Instances, settingsInstance{ID: in.ID, Label: in.Label, Remote: in.HostID != "",
-					Overrides: ov, RestartNeeded: in.HostID == "" && src.OptionsChanged(c.Type, in.ID)})
+					Overrides: ov, RestartNeeded: src.OptionsChanged(c.Type, in.ID)})
 			}
 			sort.Slice(t.Instances, func(i, j int) bool { return t.Instances[i].Label < t.Instances[j].Label })
 			out = append(out, t)
@@ -126,6 +131,9 @@ func handleSetNodeSetting(values NodeOptionValues, svc LauncherService, domainAu
 		var body struct {
 			Value      string `json:"value"`
 			InstanceID string `json:"instanceId"`
+			// Force speichert auch dann, wenn ein Pfad auf DIESEM Rechner (Orchestrator) nicht
+			// existiert, aber z. B. nur auf einem Remote-Host vorhanden ist.
+			Force bool `json:"force"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
@@ -137,6 +145,8 @@ func handleSetNodeSetting(values NodeOptionValues, svc LauncherService, domainAu
 			return
 		}
 		scope, subject := nodeoptions.ScopeType, nodeType
+		checkFS := true
+		remoteHost := ""
 		if body.InstanceID != "" {
 			inst, ok := svc.Get(body.InstanceID)
 			if !ok || inst.Type != nodeType {
@@ -144,15 +154,30 @@ func handleSetNodeSetting(values NodeOptionValues, svc LauncherService, domainAu
 				return
 			}
 			if inst.HostID != "" {
-				http.Error(w, "Optionen gelten nur für lokal gestartete Instanzen (der Host-Agent reicht nur eine feste Allowlist an Variablen durch)", http.StatusConflict)
-				return
+				// Remote-Instanz: Pfade gelten auf DEM Host — der Host-Agent prüft sie beim Start
+				// gegen sein eigenes Dateisystem und sein eigenes Schema.
+				checkFS, remoteHost = false, inst.HostID
 			}
 			scope, subject = nodeoptions.ScopeInstance, body.InstanceID
 		}
-		value, warning, err := nodeoptions.Validate(opt, body.Value)
+		value, warning, err := nodeoptions.ValidateWith(opt, body.Value, checkFS)
+		if err != nil && body.Force && opt.Type == nodeoptions.TypePath {
+			if v2, _, err2 := nodeoptions.ValidateWith(opt, body.Value, false); err2 == nil {
+				value, warning, err = v2, "auf diesem Rechner nicht geprüft/vorhanden (erzwungen) — gilt dort, wo der Pfad existiert", nil
+			}
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		}
+		if remoteHost != "" && value != "" && opt.Type == nodeoptions.TypePath {
+			if chk, ok := svc.(hostPathChecker); ok {
+				if info, cerr := chk.CheckPathOnHost(remoteHost, value, opt.PathKind); cerr != nil {
+					warning = "Pfad auf dem Remote-Host nicht prüfbar: " + cerr.Error()
+				} else if !info.Readable {
+					warning = "auf dem Remote-Host: " + info.Message + " — der Start dort schlägt fehl, bis der Pfad stimmt"
+				}
+			}
 		}
 		if err := values.Set(scope, subject, key, value, actorFromRequest(r)); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -162,7 +187,7 @@ func handleSetNodeSetting(values NodeOptionValues, svc LauncherService, domainAu
 			map[string]any{"scope": scope, "subject": subject, "value": value})
 		restart := 0
 		for _, in := range svc.List() {
-			if in.Type == nodeType && in.HostID == "" && src.OptionsChanged(nodeType, in.ID) {
+			if in.Type == nodeType && src.OptionsChanged(nodeType, in.ID) {
 				restart++
 			}
 		}
@@ -171,14 +196,29 @@ func handleSetNodeSetting(values NodeOptionValues, svc LauncherService, domainAu
 }
 
 // handleCheckPath: POST /api/v1/admin/settings/check-path {"path":"…","kind":"dir|file"}.
-func handleCheckPath() http.HandlerFunc {
+func handleCheckPath(svc LauncherService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Path string `json:"path"`
-			Kind string `json:"kind"`
+			Path   string `json:"path"`
+			Kind   string `json:"kind"`
+			HostID string `json:"hostId"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Path == "" {
 			http.Error(w, "path erforderlich", http.StatusBadRequest)
+			return
+		}
+		if body.HostID != "" {
+			chk, ok := svc.(hostPathChecker)
+			if !ok {
+				http.Error(w, "Remote-Prüfung nicht verfügbar", http.StatusNotImplemented)
+				return
+			}
+			info, err := chk.CheckPathOnHost(body.HostID, body.Path, body.Kind)
+			if err != nil {
+				http.Error(w, "Host nicht erreichbar: "+err.Error(), http.StatusBadGateway)
+				return
+			}
+			writeJSON(w, http.StatusOK, info)
 			return
 		}
 		writeJSON(w, http.StatusOK, nodeoptions.CheckPath(body.Path, body.Kind))

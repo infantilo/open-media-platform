@@ -104,11 +104,11 @@ func TestValidateSchemaRejectsReservedDuplicatesAndBadTypes(t *testing.T) {
 // Die ausgelieferte deploy/node-options.json muss gültig sein, nur Typen des Katalogs
 // betreffen und für jede Option einen gültigen Standardwert tragen.
 func TestShippedNodeOptionsAreValid(t *testing.T) {
-	m, err := LoadFile("../../../deploy/node-options.json")
+	m, err := LoadFile("../deploy/node-options.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cat, err := os.ReadFile("../../../deploy/catalog.json")
+	cat, err := os.ReadFile("../deploy/catalog.json")
 	if err != nil {
 		t.Fatal(err)
 	}

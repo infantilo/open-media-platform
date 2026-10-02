@@ -1,4 +1,4 @@
-// Package nodeoptions macht die Umgebungsvariablen der Nodes über die UI
+// Package nodeoptions (eigenes Go-Modul, gemeinsam von Orchestrator und Host-Agent genutzt) macht die Umgebungsvariablen der Nodes über die UI
 // einstellbar (Kapitel 29): Jeder Node-Typ deklariert seine Optionen (Schema
 // aus deploy/node-options.json bzw. dem Katalog-Eintrag), der Orchestrator
 // speichert Werte je Node-Typ und optional je Instanz in der Datenbank und der
@@ -132,6 +132,12 @@ func Find(opts []Option, key string) (Option, bool) {
 // optionale Warnung (z. B. Pfad existiert (noch) nicht). Ein leerer Wert ist
 // immer gültig und bedeutet „Standard verwenden“ (Aufrufer löscht dann den Eintrag).
 func Validate(o Option, raw string) (value, warning string, err error) {
+	return ValidateWith(o, raw, true)
+}
+
+// ValidateWith wie Validate; checkFS=false prüft Pfade nur syntaktisch (für Werte, die auf
+// einem ANDEREN Host gelten — dessen Dateisystem kennt der Aufrufer nicht).
+func ValidateWith(o Option, raw string, checkFS bool) (value, warning string, err error) {
 	v := strings.TrimSpace(raw)
 	if v == "" {
 		return "", "", nil
@@ -189,6 +195,12 @@ func Validate(o Option, raw string) (value, warning string, err error) {
 		}
 		return v, "", nil
 	case TypePath:
+		if !checkFS {
+			if strings.Contains(v, "..") {
+				return "", "", fmt.Errorf("%w: %s: „..“ im Pfad ist nicht erlaubt", ErrInvalid, o.Label)
+			}
+			return v, "", nil
+		}
 		return validatePath(o, v)
 	}
 	return "", "", fmt.Errorf("%w: unbekannter Typ %q", ErrInvalid, o.Type)

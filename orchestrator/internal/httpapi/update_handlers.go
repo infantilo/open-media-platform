@@ -510,7 +510,7 @@ func instancesWithOutdated(svc LauncherService) []launcher.Instance {
 		OptionsChanged(nodeType, instanceID string) bool
 	}); ok {
 		for i := range list {
-			if list[i].HostID == "" && list[i].PID > 0 && !list[i].Crashed && oc.OptionsChanged(list[i].Type, list[i].ID) {
+			if list[i].PID > 0 && !list[i].Crashed && oc.OptionsChanged(list[i].Type, list[i].ID) {
 				list[i].Outdated = true
 			}
 		}

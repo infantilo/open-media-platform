@@ -48,6 +48,7 @@ require (
 
 require (
 	github.com/infantilo/openmediaplatform/tools/contract-check v0.0.0-00010101000000-000000000000
+	github.com/infantilo/openmediaplatform/nodeoptions v0.0.0
 	github.com/infantilo/openmediaplatform/update v0.0.0
 	github.com/klauspost/compress v1.19.2 // indirect
 	github.com/nats-io/nkeys v0.4.15 // indirect
@@ -56,5 +57,7 @@ require (
 )
 
 replace github.com/infantilo/openmediaplatform/tools/contract-check => ../tools/contract-check
+
+replace github.com/infantilo/openmediaplatform/nodeoptions => ../nodeoptions
 
 replace github.com/infantilo/openmediaplatform/update => ../update

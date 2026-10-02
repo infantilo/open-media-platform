@@ -46,6 +46,8 @@ class SettingsView extends HTMLElement {
   #busy = false;
   // Nicht gespeicherte Eingaben bleiben beim Neuzeichnen erhalten: key → Text.
   #drafts = new Map<string, string>();
+  // Instanz-ID → Host-ID (Remote-Instanzen), aus /api/v1/instances.
+  #hostIds = new Map<string, string>();
 
   #loaded = false;
 
@@ -63,6 +65,11 @@ class SettingsView extends HTMLElement {
   async #load() {
     try {
       const [n, s] = await Promise.all([apiFetch("/api/v1/admin/settings/nodes"), apiFetch("/api/v1/admin/settings/system")]);
+      const inst = await apiFetch("/api/v1/instances");
+      if (inst.ok) {
+        this.#hostIds.clear();
+        for (const i of (await inst.json()) as { id: string; hostId?: string }[]) if (i.hostId) this.#hostIds.set(i.id, i.hostId);
+      }
       if (n.ok) this.#types = ((await n.json()) as { types: NodeTypeRow[] }).types ?? [];
       if (s.ok) this.#system = await s.json();
       if (!this.#types.some((t) => t.type === this.#selectedType)) {
@@ -94,12 +101,20 @@ class SettingsView extends HTMLElement {
     }
   }
 
-  async #saveNode(t: NodeTypeRow, o: OptionDef, value: string, instanceId: string) {
+  async #saveNode(t: NodeTypeRow, o: OptionDef, value: string, instanceId: string, force = false) {
     const r = await this.#call(
       `/api/v1/admin/settings/nodes/${encodeURIComponent(t.type)}/${encodeURIComponent(o.key)}`,
       "PUT",
-      { value, instanceId },
+      { value, instanceId, force },
     );
+    if (!r.ok && o.type === "path" && !instanceId && !force && /existiert nicht|nicht zugreifbar|Verzeichnis|Datei/.test(this.#error)) {
+      // Pfad fehlt auf DIESEM Rechner (Orchestrator) — evtl. nur auf einem Remote-Host vorhanden.
+      const msg = this.#error;
+      if (confirm(`${msg}\n\nTrotzdem speichern (der Pfad existiert z. B. nur auf einem Remote-Host)?`)) {
+        await this.#saveNode(t, o, value, instanceId, true);
+        return;
+      }
+    }
     if (r.ok) {
       this.#drafts.delete(this.#draftKey(t, o, instanceId));
       const warn = (r.data.warning as string) || "";
@@ -174,9 +189,8 @@ class SettingsView extends HTMLElement {
     all.value = "";
     scopeSel.append(all);
     for (const i of t.instances) {
-      const o = el("option", "", `Nur Instanz: ${i.label}${i.remote ? " (Remote-Host — nicht möglich)" : ""}${i.restartNeeded ? " · Neustart nötig" : ""}`);
+      const o = el("option", "", `Nur Instanz: ${i.label}${i.remote ? " (Remote-Host)" : ""}${i.restartNeeded ? " · Neustart nötig" : ""}`);
       o.value = i.id;
-      o.disabled = !!i.remote;
       o.selected = i.id === this.#selectedInstance;
       scopeSel.append(o);
     }
@@ -193,9 +207,10 @@ class SettingsView extends HTMLElement {
         `Neustart nötig für: ${pending.map((p) => p.label).join(", ")} — die geänderten Werte gelten dort erst nach einem Neustart.`));
     }
     const inst = t.instances.find((i) => i.id === this.#selectedInstance);
-    if (!inst && t.instances.some((i) => i.remote)) {
+    if (t.instances.some((i) => i.remote)) {
       sec.append(el("div", "color:var(--omp-text-dim);margin-bottom:8px;font-size:var(--omp-font-size-xs);",
-        "Hinweis: Instanzen auf Remote-Hosts erhalten diese Werte nicht — der Host-Agent reicht aus Sicherheitsgründen nur eine feste Liste von Variablen durch."));
+        "Hinweis: Auf Remote-Hosts prüft der Host-Agent jeden Wert selbst gegen SEIN Schema (node-options.json neben seinem Katalog) und SEIN Dateisystem; " +
+        "nicht dort deklarierte Variablen werden ignoriert. Pfade gelten dort — „Pfad prüfen“ fragt bei einer Remote-Instanz den Host."));
     }
 
     for (const [group, opts] of groupOptions(t.options)) {
@@ -274,7 +289,7 @@ class SettingsView extends HTMLElement {
       test.addEventListener("click", () => {
         const p = input.value.trim() || o.default || "";
         if (!p) { check.textContent = "Kein Pfad angegeben."; return; }
-        void this.#checkPathInline(p, o.pathKind ?? "dir", check);
+        void this.#checkPathInline(p, o.pathKind ?? "dir", check, inst?.remote ? this.#hostOf(inst.id) : "");
       });
       actions.append(test);
     }
@@ -282,12 +297,21 @@ class SettingsView extends HTMLElement {
     return row;
   }
 
-  async #checkPathInline(path: string, kind: string, out: HTMLElement) {
+  #hostOf(instanceId: string): string {
+    return this.#hostIds.get(instanceId) ?? "";
+  }
+
+  async #checkPathInline(path: string, kind: string, out: HTMLElement, hostId = "") {
     out.textContent = "Prüfe …";
     try {
       const res = await apiFetch("/api/v1/admin/settings/check-path", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, kind }),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, kind, hostId }),
       });
+      if (!res.ok) {
+        out.textContent = `✗ ${(await res.text()).trim()}`;
+        out.style.color = "var(--omp-danger, #d33)";
+        return;
+      }
       const d = (await res.json()) as { readable?: boolean; message?: string };
       out.textContent = `${d.readable ? "✓" : "✗"} ${d.message ?? ""}`;
       out.style.color = d.readable ? "var(--omp-success, #4a4)" : "var(--omp-danger, #d33)";
