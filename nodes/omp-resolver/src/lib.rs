@@ -23,6 +23,8 @@
 //! Namensbasierte Erkennung gibt es bewusst nicht (Spec §222): nur Tags,
 //! Capabilities und IDs.
 
+pub mod audio;
+
 use serde::{Deserialize, Serialize};
 
 /// Medienart einer Quelle.
@@ -111,7 +113,7 @@ impl SourceContext {
         SourceContext { node_id: source.node_id.clone(), group: source.group_name().unwrap_or("").to_string() }
     }
 
-    fn matches(&self, s: &Source) -> bool {
+    pub(crate) fn matches(&self, s: &Source) -> bool {
         (!self.node_id.is_empty() && s.node_id == self.node_id)
             || (!self.group.is_empty() && s.group_name() == Some(self.group.as_str()))
     }
