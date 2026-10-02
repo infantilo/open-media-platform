@@ -331,6 +331,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       ["file", "Datei"],
       ["image", "Standbild"],
       ["live", "Live-Quelle"],
+      ["liveselect", "Live nach Tags"],
       ["hold", "HOLD (anhalten)"],
       ["jump", "JUMP (springen zu …)"],
     ]) {
@@ -353,6 +354,14 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     liveSelect.excludeRoles = ["low"];
     // Kapitel 27 / P2b: JUMP-Ziel = ein Item der aktuellen Liste.
     const jumpSelect = document.createElement("select");
+    // Kapitel 27 / P4c: Live-Quelle per Tags statt fester Sender-ID.
+    const tagsInput = document.createElement("input");
+    tagsInput.type = "text";
+    tagsInput.placeholder = "Pflicht-Tags, z. B. video.camera, role.program";
+    tagsInput.style.minWidth = "230px";
+    const prefInput = document.createElement("input");
+    prefInput.type = "text";
+    prefInput.placeholder = "bevorzugt (optional)";
     const durationInput = document.createElement("input");
     durationInput.type = "number";
     durationInput.placeholder = "Dauer (ms)";
@@ -363,6 +372,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       fileSelect.style.display = v === "file" || v === "image" ? "" : "none";
       liveSelect.style.display = v === "live" ? "" : "none";
       jumpSelect.style.display = v === "jump" ? "" : "none";
+      tagsInput.style.display = v === "liveselect" ? "" : "none";
+      prefInput.style.display = v === "liveselect" ? "" : "none";
       // Bei Datei-Items probt der Ziel-Player die echte Clip-Dauer und
       // ignoriert ein mitgeschicktes durationMs vollständig (s. main.rs
       // dort) — das Feld hier wäre irreführend.
@@ -382,6 +393,15 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         if (!fileSelect.value) return;
         body.file = fileSelect.value;
         body.eventType = "image";
+        body.durationMs = parseFloat(durationInput.value) || 5000;
+      } else if (sourceTypeSelect.value === "liveselect") {
+        const split = (t) => t.split(",").map((x) => x.trim()).filter(Boolean);
+        const required = split(tagsInput.value);
+        if (required.length === 0) {
+          showError("Live nach Tags braucht mindestens einen Pflicht-Tag (z. B. video.camera)");
+          return;
+        }
+        body.sourceSelectorJson = JSON.stringify({ required, preferred: split(prefInput.value) });
         body.durationMs = parseFloat(durationInput.value) || 5000;
       } else if (sourceTypeSelect.value === "hold") {
         body.eventType = "hold";
@@ -403,7 +423,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         poll();
       });
     });
-    addRow.append(labelInput, sourceTypeSelect, patternSelect, fileSelect, liveSelect, jumpSelect, durationInput, addBtn);
+    addRow.append(labelInput, sourceTypeSelect, patternSelect, fileSelect, liveSelect, tagsInput, prefInput, jumpSelect, durationInput, addBtn);
 
     // Listenansicht (PIPELINE-CONTROLLER-Parität, .pl-hdr-row dort) —
     // Spaltentitel über den Zeilen, gleiches Grid-Template wie .pl-row.
@@ -589,6 +609,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (item.eventType === "HOLD") return "⏸";
       if (item.eventType === "JUMP") return "↪";
       if (item.eventType === "IMAGE") return "🖼";
+      if (item.sourceSelector) return "🏷";
       return item.senderId ? "📡" : item.file ? "📁" : "🎨";
     };
 
@@ -625,6 +646,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (item.eventType === "IMAGE") entry.eventType = "image";
       else if (item.eventType === "HOLD") entry.eventType = "hold";
       else if (item.eventType === "JUMP") entry.eventType = "jump"; // jumpToIndex setzt reorderItems
+      if (item.sourceSelector) entry.sourceSelector = item.sourceSelector;
       // Kapitel 6 Teil 4: dieselbe Lücke ein drittes Mal proaktiv vermieden.
       if (item.transition) entry.transition = item.transition;
       if (item.transitionRateFrames != null) entry.transitionRateFrames = item.transitionRateFrames;
@@ -632,6 +654,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (item.children && item.children.length > 0) entry.children = item.children;
       if (item.eventType === "HOLD" || item.eventType === "JUMP") {
         entry.durationMs = 0;
+      } else if (item.sourceSelector) {
+        entry.durationMs = item.durationMs;
       } else if (item.senderId) entry.senderId = item.senderId;
       else if (item.file) entry.file = item.file;
       else {
@@ -889,6 +913,11 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         return `JUMP: springt zu „${t ? t.label : item.jumpTarget}“`;
       }
       if (item.eventType === "IMAGE") return `Standbild: ${item.file}`;
+      if (item.sourceSelector) {
+        const sel = item.sourceSelector;
+        const crit = [...(sel.required || []), ...((sel.preferred || []).map((t) => `(${t})`))].join(", ");
+        return `Live nach Tags: ${crit}\n→ ${item.resolvedLabel || "keine passende Quelle"}${item.resolutionAmbiguous ? "  ⚠ gleichrangig mit weiteren" : ""}\n${item.resolutionSummary || ""}`;
+      }
       if (item.senderId) return `Live: ${liveLabelBySenderId.get(item.senderId) || item.senderId}`;
       if (item.file) return `Datei: ${item.file}`;
       return `Testmuster: ${item.pattern}`;

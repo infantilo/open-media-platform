@@ -115,6 +115,11 @@ enum ItemMedia {
     TestPattern { pattern: String, tone_frequency: f64 },
     File { path: String },
     Live { sender_id: String },
+    /// Live-Quelle per Auswahlkriterien statt fester Sender-ID (Kapitel 27 /
+    /// P4c, Spec §14–17): erst beim Cue/Take gegen die aktuellen Quellen mit
+    /// Tags aufgelöst (`omp-resolver`). Nur tatsächlich passende, erreichbare
+    /// Quellen werden automatisch gewählt.
+    LiveSelect { selector: omp_resolver::Selector },
     /// Standbild (Kapitel 27 / P2b) — `omp-channel-player` bekommt
     /// `mediaType=image` (ausdrücklich, nicht an der Dateiendung erkannt).
     Image { path: String },
@@ -269,12 +274,33 @@ struct ItemMeta {
 fn event_type(media: &ItemMedia) -> &'static str {
     match media {
         ItemMedia::File { .. } => "CLIP",
-        ItemMedia::Live { .. } => "LIVE",
+        ItemMedia::Live { .. } | ItemMedia::LiveSelect { .. } => "LIVE",
         ItemMedia::Image { .. } => "IMAGE",
         ItemMedia::Hold => "HOLD",
         ItemMedia::Jump { .. } => "JUMP",
         ItemMedia::TestPattern { pattern, .. } if pattern == "black" => "BLACK",
         ItemMedia::TestPattern { .. } => "PATTERN",
+    }
+}
+
+/// Kapitel 27 / P4c: Live-Items sind Video — ohne ausdrückliche Medienart im
+/// Selektor wird `video` angenommen (sonst könnte ein reiner Tag-Selektor eine
+/// Audio-Quelle als „Live-Bild“ wählen).
+fn effective_selector(selector: &omp_resolver::Selector) -> omp_resolver::Selector {
+    let mut s = selector.clone();
+    if s.media_type.is_none() {
+        s.media_type = Some(omp_resolver::MediaType::Video);
+    }
+    s
+}
+
+/// Löst einen Selektor gegen die gelieferten Quellen auf (rein, testbar).
+/// Ergebnis: gewählte Sender-ID oder Fehlertext mit der Begründung.
+fn resolve_live_selector(selector: &omp_resolver::Selector, sources: &[omp_resolver::Source]) -> Result<(String, omp_resolver::Resolution), String> {
+    let resolution = omp_resolver::resolve(&effective_selector(selector), sources);
+    match resolution.selected_id.clone() {
+        Some(id) => Ok((id, resolution)),
+        None => Err(format!("Live-Quelle nicht auflösbar — {}", resolution.summary)),
     }
 }
 
@@ -292,6 +318,7 @@ fn item_media_from_args(
     tone_frequency: Option<f64>,
     event_type: Option<&str>,
     jump_target: Option<&str>,
+    live_selector: Option<&omp_resolver::Selector>,
 ) -> ItemMedia {
     // Kapitel 27 / P2b: ausdrücklicher Event-Typ (Spec §10: keine Erkennung an
     // der Dateiendung) hat Vorrang vor der Quellen-Wahl unten.
@@ -307,6 +334,8 @@ fn item_media_from_args(
     }
     if let Some(sender_id) = sender_id.filter(|s| !s.is_empty()) {
         ItemMedia::Live { sender_id: sender_id.to_string() }
+    } else if let Some(selector) = live_selector {
+        ItemMedia::LiveSelect { selector: selector.clone() }
     } else if let Some(file) = file.filter(|s| !s.is_empty()) {
         ItemMedia::File { path: file.to_string() }
     } else {
@@ -326,8 +355,10 @@ fn item_media_from_args(
 /// Backup-Verzeichnis-Mechanismus wie bei PC (`omp-media-library` ist
 /// ein zentraler, gepflegter Katalog, kein Dateisystem mit
 /// Ausweich-Ordnern, s. §6.4-Doku).
-fn item_is_available(m: &ItemMeta, media_library: &[String], available_sources: &[Value]) -> bool {
+fn item_is_available(m: &ItemMeta, media_library: &[String], available_sources: &[Value], sources: &[omp_resolver::Source]) -> bool {
     match &m.media {
+        // Kapitel 27 / P4c: verfügbar, wenn die Kriterien gerade eine Quelle ergeben.
+        ItemMedia::LiveSelect { selector } => omp_resolver::resolve(&effective_selector(selector), sources).selected_id.is_some(),
         ItemMedia::TestPattern { .. } => true,
         ItemMedia::File { path } | ItemMedia::Image { path } => media_library.iter().any(|f| f == path),
         // Steuer-Events brauchen kein Medium.
@@ -433,6 +464,7 @@ fn item_meta_to_json(id: &str, m: &ItemMeta) -> Value {
         ItemMedia::Image { path } => serde_json::json!({ "file": path, "mediaType": "image" }),
         ItemMedia::Hold => serde_json::json!({}),
         ItemMedia::Jump { target_id } => serde_json::json!({ "jumpTarget": target_id }),
+        ItemMedia::LiveSelect { selector } => serde_json::json!({ "sourceSelector": selector }),
     };
     v["id"] = serde_json::json!(id);
     v["label"] = serde_json::json!(m.label);
@@ -557,6 +589,11 @@ struct AutomationState {
     child_schedule: Vec<ScheduledChild>,
     /// Kapitel 27 / P3: Lebenszyklus der Kinder (aktuelles + gerade abgelöstes Primary).
     child_runtime: Vec<ChildRuntime>,
+    /// Kapitel 27 / P4c: zuletzt gelesene Quellen mit Tags (Orchestrator,
+    /// `discovery_loop`) — Grundlage der Anzeige „aufgelöst zu …“ und der
+    /// Verfügbarkeit von `LiveSelect`-Items. Das echte Auflösen beim Cue/Take
+    /// holt die Quellen frisch.
+    sources: Vec<omp_resolver::Source>,
     /// On-Air-Beginn des aktuellen Primary in UTC-ms (für ABSOLUTE-Kinder und
     /// den Journal-Schlüssel, der Neustarts überlebt).
     onair_utc_ms: i64,
@@ -592,6 +629,7 @@ impl AutomationState {
             child_epoch: 0,
             child_schedule: Vec::new(),
             child_runtime: Vec::new(),
+            sources: Vec::new(),
             onair_utc_ms: 0,
         }
     }
@@ -758,7 +796,7 @@ impl AutomationStore {
         // Vorbild s. Nachtrag 180): welches Item ein Auto-Advance
         // stattdessen automatisch nehmen sollte, ist eine eigene, noch
         // nicht getroffene Design-Entscheidung.
-        if !item_is_available(&meta, &state.media_library, &state.available_sources) {
+        if !item_is_available(&meta, &state.media_library, &state.available_sources, &state.sources) {
             return Err(format!(
                 "„{}\u{201c} nicht verfügbar (Datei fehlt oder Live-Quelle offline) — Take verweigert",
                 meta.label
@@ -900,7 +938,7 @@ impl AutomationStore {
             .get(item_id)
             .cloned()
             .ok_or("Item-Metadaten fehlen (Rundown-Eintrag inkonsistent)".to_string())?;
-        if !item_is_available(&meta, &state.media_library, &state.available_sources) {
+        if !item_is_available(&meta, &state.media_library, &state.available_sources, &state.sources) {
             return Err(format!(
                 "„{}\u{201c} nicht verfügbar (Datei fehlt oder Live-Quelle offline)",
                 meta.label
@@ -1107,6 +1145,7 @@ impl AutomationStore {
         start_type: Option<StartType>,
         event_type: Option<String>,
         jump_target: Option<String>,
+        live_selector: Option<omp_resolver::Selector>,
     ) -> Result<(), String> {
         let mut state = self.state.lock().expect("lock poisoned");
         state.next_item_seq += 1;
@@ -1118,6 +1157,7 @@ impl AutomationStore {
             tone_frequency,
             event_type.as_deref(),
             jump_target.as_deref(),
+            live_selector.as_ref(),
         );
         if let ItemMedia::Jump { target_id } = &media
             && state.playlist.index_of(target_id).is_none()
@@ -1175,6 +1215,9 @@ impl AutomationStore {
             /// Kapitel 27 / P2a: RFC 3339 mit Offset (`2026-10-02T10:00:00+02:00`).
             #[serde(rename = "startAt", default)]
             start_at: Option<String>,
+            /// Kapitel 27 / P4c: Live-Quelle per Auswahlkriterien (`omp-resolver::Selector`).
+            #[serde(rename = "sourceSelector", default)]
+            source_selector: Option<omp_resolver::Selector>,
             /// Kapitel 27 / P2b: "image" | "hold" | "jump".
             #[serde(rename = "eventType", default)]
             event_type: Option<String>,
@@ -1230,6 +1273,7 @@ impl AutomationStore {
                     li.tone_frequency,
                     li.event_type.as_deref(),
                     None,
+                    li.source_selector.as_ref(),
                 ),
                 duration_ms: if matches!(li.event_type.as_deref().map(str::to_ascii_lowercase).as_deref(), Some("hold" | "jump")) {
                     0
@@ -1625,8 +1669,9 @@ fn load_args(meta: &ItemMeta) -> Value {
             body["file"] = serde_json::json!(path);
             body["mediaType"] = serde_json::json!("image");
         }
-        // Steuer-Events werden nie geladen (`load_onto_channel`/`take_on_targets`).
-        ItemMedia::Hold | ItemMedia::Jump { .. } => {}
+        // Steuer-Events werden nie geladen (`load_onto_channel`/`take_on_targets`);
+        // `LiveSelect` wird vorher zu `Live` aufgelöst (`resolve_item_media`).
+        ItemMedia::Hold | ItemMedia::Jump { .. } | ItemMedia::LiveSelect { .. } => {}
     }
     body
 }
@@ -1675,12 +1720,31 @@ fn resolve_jump(state: &mut AutomationState, item_id: String, mark_on_air: bool)
     Err(format!("JUMP-Kette länger als {MAX_JUMP_CHAIN} — Schleife?"))
 }
 
+/// Kapitel 27 / P4c: `LiveSelect` → `Live` mit der JETZT gewählten Sender-ID
+/// (frische Quellen vom Orchestrator; kein Raten bei Unsicherheit: ohne Treffer
+/// ein Fehler mit Begründung, bei Gleichrang eine Meldung). Alle anderen Medien
+/// unverändert.
+fn resolve_item_media(store: &AutomationStore, meta: &ItemMeta) -> Result<ItemMeta, String> {
+    let ItemMedia::LiveSelect { selector } = &meta.media else { return Ok(meta.clone()) };
+    let sources = remote::fetch_sources(&store.orchestrator_url, &store.auth)
+        .map_err(|e| format!("Quellen konnten nicht gelesen werden ({e}) — Live-Auswahl für „{}\u{201c} nicht möglich", meta.label))?;
+    let (sender_id, resolution) = resolve_live_selector(selector, &sources).map_err(|e| format!("„{}\u{201c}: {e}", meta.label))?;
+    if resolution.ambiguous {
+        store.report(format!("Live-Auswahl für „{}\u{201c} mehrdeutig: {}", meta.label, resolution.summary));
+    }
+    let mut out = meta.clone();
+    out.media = ItemMedia::Live { sender_id };
+    Ok(out)
+}
+
 /// Lädt ein Item auf einen bestimmten Kanal, OHNE den Mixer anzufassen
 /// — Kern von `do_cue` (reine Vorschau, kein On-Air-Wechsel).
 fn load_onto_channel(store: &AutomationStore, node_id: &str, meta: &ItemMeta) -> Result<(), String> {
     if meta.media.is_control() {
         return Ok(()); // nichts zu laden
     }
+    let resolved = resolve_item_media(store, meta)?;
+    let meta = &resolved;
     store
         .proxy_client(node_id.to_string())
         .invoke("load", load_args(meta))
@@ -2279,6 +2343,12 @@ impl ParamStore for AutomationStore {
                         name: "jumpTarget".to_string(),
                         kind: ParamType::String,
                     },
+                    // Kapitel 27 / P4c: Live-Quelle per Kriterien statt Sender-ID —
+                    // JSON-Objekt (`omp-resolver::Selector`), z. B. {"required":["video.camera"],"preferred":["role.program"]}.
+                    MethodArg {
+                        name: "sourceSelectorJson".to_string(),
+                        kind: ParamType::String,
+                    },
                 ],
             },
             MethodSpec {
@@ -2441,8 +2511,17 @@ impl ParamStore for AutomationStore {
                     .iter()
                     .filter_map(|id| state.metadata.get(id).map(|m| {
                         let mut v = item_meta_to_json(id, m);
+                        if let ItemMedia::LiveSelect { selector } = &m.media {
+                            let r = omp_resolver::resolve(&effective_selector(selector), &state.sources);
+                            v["resolvedSenderId"] = serde_json::json!(r.selected_id);
+                            v["resolvedLabel"] = serde_json::json!(
+                                r.selected(&state.sources).map(|s| format!("{} / {}", s.node_label, s.label))
+                            );
+                            v["resolutionSummary"] = serde_json::json!(r.summary);
+                            v["resolutionAmbiguous"] = serde_json::json!(r.ambiguous);
+                        }
                         v["available"] =
-                            serde_json::json!(item_is_available(m, &state.media_library, &state.available_sources));
+                            serde_json::json!(item_is_available(m, &state.media_library, &state.available_sources, &state.sources));
                         v
                     }))
                     .collect::<Vec<_>>()
@@ -2578,7 +2657,15 @@ impl ParamStore for AutomationStore {
                 let start_type = args.get("startType").and_then(Value::as_str).and_then(StartType::parse);
                 let event_type = args.get("eventType").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
                 let jump_target = args.get("jumpTarget").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
-                self.do_append(label, pattern, file, sender_id, tone_frequency, duration_ms, start_type, event_type, jump_target)
+                // Kapitel 27 / P4c: Live-Quelle per Kriterien (JSON-Objekt als String).
+                let live_selector = match args.get("sourceSelectorJson").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                    Some(j) => match serde_json::from_str::<omp_resolver::Selector>(j) {
+                        Ok(sel) => Some(sel),
+                        Err(e) => return Err(InvokeError::Message(format!("sourceSelectorJson ungültig: {e}"))),
+                    },
+                    None => None,
+                };
+                self.do_append(label, pattern, file, sender_id, tone_frequency, duration_ms, start_type, event_type, jump_target, live_selector)
             }
             "load" => {
                 let items_json = args.get("itemsJson").and_then(Value::as_str).unwrap_or("[]");
@@ -2826,6 +2913,14 @@ async fn discovery_loop(store: Arc<AutomationStore>) {
         // stehen. Kapitel 6 Teil 7: absichtlich nur Kanal A (s.
         // `AutomationState::media_library`-Doku, warum ein zweiter Poll
         // von Kanal B redundant wäre).
+        // Kapitel 27 / P4c: Quellen mit Tags vom Orchestrator spiegeln (Anzeige
+        // „aufgelöst zu …“, Verfügbarkeit von LiveSelect-Items). Best effort.
+        {
+            let (url, auth) = (store.orchestrator_url.clone(), store.auth.clone());
+            if let Ok(Ok(sources)) = tokio::task::spawn_blocking(move || remote::fetch_sources(&url, &auth)).await {
+                store.state.lock().expect("lock poisoned").sources = sources;
+            }
+        }
         let player_a_node_id_for_media = {
             store.state.lock().expect("lock poisoned").player_a_node_id.clone()
         };
@@ -3544,21 +3639,21 @@ mod availability_tests {
 
     #[test]
     fn test_pattern_is_always_available() {
-        assert!(item_is_available(&pattern_item(), &[], &[]));
+        assert!(item_is_available(&pattern_item(), &[], &[], &[]));
     }
 
     #[test]
     fn file_is_available_iff_listed_in_media_library() {
         let media_library = vec!["clip.mp4".to_string()];
-        assert!(item_is_available(&file_item("clip.mp4"), &media_library, &[]));
-        assert!(!item_is_available(&file_item("missing.mp4"), &media_library, &[]));
+        assert!(item_is_available(&file_item("clip.mp4"), &media_library, &[], &[]));
+        assert!(!item_is_available(&file_item("missing.mp4"), &media_library, &[], &[]));
     }
 
     #[test]
     fn live_is_available_iff_sender_id_in_available_sources() {
         let sources = vec![serde_json::json!({"senderId": "sender-1", "label": "Cam 1"})];
-        assert!(item_is_available(&live_item("sender-1"), &[], &sources));
-        assert!(!item_is_available(&live_item("sender-2"), &[], &sources));
+        assert!(item_is_available(&live_item("sender-1"), &[], &sources, &[]));
+        assert!(!item_is_available(&live_item("sender-2"), &[], &sources, &[]));
     }
 }
 
@@ -3635,6 +3730,87 @@ mod fixtime_tests {
     }
 }
 
+// Kapitel 27 / P4c: Live-Quelle per Kriterien.
+#[cfg(test)]
+mod live_select_tests {
+    use super::*;
+    use omp_resolver::{MediaType, Selector, Source, SourceTag, TagOrigin};
+
+    fn video(id: &str, tags: &[&str], online: bool) -> Source {
+        Source {
+            sender_id: id.to_string(),
+            label: format!("Cam {id}"),
+            node_id: "n".to_string(),
+            node_label: "Remote".to_string(),
+            workflow_id: String::new(),
+            media_type: Some(MediaType::Video),
+            group_hint: String::new(),
+            channel_count: 0,
+            online,
+            visible: true,
+            selectable: true,
+            tags: tags.iter().map(|t| SourceTag { tag: t.to_string(), origin: TagOrigin::Explicit }).collect(),
+        }
+    }
+
+    fn selector(required: &[&str]) -> Selector {
+        Selector { required: required.iter().map(|s| s.to_string()).collect(), ..Selector::default() }
+    }
+
+    #[test]
+    fn selector_picks_the_matching_online_source_and_defaults_to_video() {
+        let sources = vec![video("a", &["video.camera"], false), video("b", &["video.camera"], true), video("c", &["video.clean"], true)];
+        let (id, res) = resolve_live_selector(&selector(&["video.camera"]), &sources).unwrap();
+        assert_eq!(id, "b", "offline alternative is skipped");
+        assert!(!res.ambiguous);
+        // Ein reiner Tag-Selektor darf keine Audio-Quelle als Live-Bild wählen (Medienart-Default video).
+        let mut audio = video("x", &["role.program"], true);
+        audio.media_type = Some(MediaType::Audio);
+        assert!(resolve_live_selector(&selector(&["role.program"]), &[audio]).is_err());
+    }
+
+    #[test]
+    fn no_match_is_an_error_with_the_reason_never_a_guess() {
+        let err = resolve_live_selector(&selector(&["video.program"]), &[video("a", &["video.camera"], true)]).unwrap_err();
+        assert!(err.contains("nicht auflösbar") && err.contains("keine passende Quelle"), "{err}");
+    }
+
+    #[test]
+    fn live_select_item_availability_follows_the_current_sources() {
+        let meta = ItemMeta {
+            label: "L".to_string(),
+            media: ItemMedia::LiveSelect { selector: selector(&["video.camera"]) },
+            duration_ms: 0,
+            start_type: StartType::Sequence,
+            fixtime_hms: None,
+            start_at_utc_ms: None,
+            transition: Transition::Cut,
+            transition_rate_frames: None,
+            children: Vec::new(),
+        };
+        assert!(item_is_available(&meta, &[], &[], &[video("a", &["video.camera"], true)]));
+        assert!(!item_is_available(&meta, &[], &[], &[video("a", &["video.camera"], false)]), "offline source: not available");
+        assert!(!item_is_available(&meta, &[], &[], &[]));
+        assert_eq!(event_type(&meta.media), "LIVE");
+        // Im Snapshot erhalten (Neustart) und als Item-JSON sichtbar.
+        let back: ItemMeta = serde_json::from_str(&serde_json::to_string(&meta).unwrap()).unwrap();
+        assert_eq!(back.media, meta.media);
+        assert_eq!(item_meta_to_json("i", &meta)["sourceSelector"]["required"][0], "video.camera");
+    }
+
+    #[test]
+    fn selector_json_from_the_operator_parses_with_defaults() {
+        let s: Selector = serde_json::from_str(r#"{"required":["video.camera"],"preferred":["role.program"],"failOnAmbiguity":true}"#).unwrap();
+        assert_eq!(s.required, ["video.camera"]);
+        assert!(s.fail_on_ambiguity && !s.allow_offline && s.exact_id.is_none());
+        let m = item_media_from_args(None, None, None, None, None, None, Some(&s));
+        assert!(matches!(m, ItemMedia::LiveSelect { .. }));
+        // Eine feste Sender-ID hat Vorrang (EXACT_ID bleibt der einfache Fall).
+        let m = item_media_from_args(None, None, Some("snd-1"), None, None, None, Some(&s));
+        assert_eq!(m, ItemMedia::Live { sender_id: "snd-1".to_string() });
+    }
+}
+
 // Kapitel 27 / P2b: Bild-, Hold- und Jump-Events.
 #[cfg(test)]
 mod control_event_tests {
@@ -3669,14 +3845,14 @@ mod control_event_tests {
 
     #[test]
     fn event_type_comes_from_the_explicit_type_not_the_extension() {
-        let m = item_media_from_args(None, Some("still.jpg"), None, None, Some("image"), None);
+        let m = item_media_from_args(None, Some("still.jpg"), None, None, Some("image"), None, None);
         assert_eq!(m, ItemMedia::Image { path: "still.jpg".to_string() });
         assert_eq!(event_type(&m), "IMAGE");
         // Ohne ausdrückliche Angabe bleibt eine .jpg-Datei ein CLIP (kein Raten an der Endung).
-        let m = item_media_from_args(None, Some("still.jpg"), None, None, None, None);
+        let m = item_media_from_args(None, Some("still.jpg"), None, None, None, None, None);
         assert_eq!(event_type(&m), "CLIP");
-        assert_eq!(event_type(&item_media_from_args(None, None, None, None, Some("hold"), None)), "HOLD");
-        let j = item_media_from_args(None, None, None, None, Some("JUMP"), Some("item3"));
+        assert_eq!(event_type(&item_media_from_args(None, None, None, None, Some("hold"), None, None)), "HOLD");
+        let j = item_media_from_args(None, None, None, None, Some("JUMP"), Some("item3"), None);
         assert_eq!(j, ItemMedia::Jump { target_id: "item3".to_string() });
         assert!(j.is_control() && ItemMedia::Hold.is_control() && !pat().is_control());
     }
@@ -3687,10 +3863,10 @@ mod control_event_tests {
         let args = load_args(&meta);
         assert_eq!(args["file"], "logo.png");
         assert_eq!(args["mediaType"], "image");
-        assert!(item_is_available(&meta, &["logo.png".to_string()], &[]));
-        assert!(!item_is_available(&meta, &["other.png".to_string()], &[]));
+        assert!(item_is_available(&meta, &["logo.png".to_string()], &[], &[]));
+        assert!(!item_is_available(&meta, &["other.png".to_string()], &[], &[]));
         // Steuer-Events brauchen kein Medium und werden nie geladen.
-        assert!(item_is_available(&item(ItemMedia::Hold, 0), &[], &[]));
+        assert!(item_is_available(&item(ItemMedia::Hold, 0), &[], &[], &[]));
         assert_eq!(load_args(&item(ItemMedia::Hold, 0)).get("file"), None);
     }
 

@@ -261,3 +261,24 @@ pub fn list_node_labels(registry: &RegistryClient, own_label: &str) -> Vec<Strin
     labels.dedup();
     labels
 }
+
+/// Kapitel 27 / P4c: alle Quellen mit Tags aus der einheitlichen Sicht des
+/// Orchestrators (`GET /api/v1/sources`) — dieselbe Quelle der Wahrheit wie
+/// Playlist-Editor und Mixer (Spec §254/§255), keine eigene Discovery.
+pub fn fetch_sources(orchestrator_url: &str, auth: &OrchestratorAuth) -> Result<Vec<omp_resolver::Source>, RemoteError> {
+    let header = auth
+        .header_value()
+        .ok_or_else(|| RemoteError::Request("kein Service-Token verfügbar (Orchestrator noch nicht erreicht?)".to_string()))?;
+    let url = format!("{}/api/v1/sources", orchestrator_url.trim_end_matches('/'));
+    match ureq::get(&url)
+        .config()
+        .timeout_global(Some(CALL_TIMEOUT))
+        .build()
+        .header("Authorization", &header)
+        .call()
+    {
+        Ok(mut resp) => resp.body_mut().read_json().map_err(|e| RemoteError::Request(e.to_string())),
+        Err(ureq::Error::StatusCode(code)) => Err(RemoteError::Status(code)),
+        Err(e) => Err(RemoteError::Request(e.to_string())),
+    }
+}

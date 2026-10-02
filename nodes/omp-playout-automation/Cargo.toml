@@ -20,6 +20,8 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock", "s
 # Methoden von Ziel-Nodes (Player/Mixer) über deren eigene Descriptor-
 # HTTP-API auf (siehe src/remote.rs), analog zur Flow-Editor-UI (B6).
 omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
+# Kapitel 27 / P4c: gemeinsame, reine Quellen-Auswahl (Tags/Capabilities/Health).
+omp-resolver = { version = "0.1.0", path = "../omp-resolver" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "sync", "time"] }
