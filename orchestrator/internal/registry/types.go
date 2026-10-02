@@ -1,5 +1,7 @@
 package registry
 
+import "encoding/json"
+
 // Die folgenden Typen decoden nur die Felder, die für das normalisierte
 // Node-Inventar gebraucht werden — bewusst kein vollständiges Abbild der
 // IS-04-Schemas (siehe specs.amwa.tv, AMWA-TV/is-04 v1.3.x). Unbekannte
@@ -46,6 +48,12 @@ type is04Sender struct {
 // (Format "<group>:<role>[:<scope>]", Sender/Receiver-Tag).
 const GroupHintTag = "urn:x-nmos:tag:grouphint/v1.0"
 
+// OMPTagsTag ist der OMP-eigene IS-04-Tag für semantische Quell-Tags
+// (Namespace `urn:x-omp:`, wie `urn:x-omp:workflow`/`urn:x-omp:instance`;
+// Werte `domain.name`, z. B. `audio.commentator`). Eine Tag-MAP je Ressource
+// ist IS-04-konform (`map<string,string[]>`), das Schema bleibt unberührt.
+const OMPTagsTag = "urn:x-omp:tags"
+
 // groupHint liefert den ersten Grouphint-Tag-Wert unverändert ("" wenn
 // keiner vorhanden) — Parsing (Gruppe/Rolle) macht die UI
 // (ui/kit/source-selector-logic.ts), damit es genau eine Parse-Stelle gibt.
@@ -65,8 +73,16 @@ type is04Receiver struct {
 }
 
 type is04Flow struct {
-	ID     string `json:"id"`
-	Format string `json:"format"`
+	ID       string `json:"id"`
+	Format   string `json:"format"`
+	SourceID string `json:"source_id"`
+}
+
+// is04Source: nur die Audio-Kanalliste wird gebraucht (Kanalanzahl → abgeleitete
+// Tags audio.mono/stereo/…, UMSETZUNG.md Kapitel 27 / P4).
+type is04Source struct {
+	ID       string            `json:"id"`
+	Channels []json.RawMessage `json:"channels"`
 }
 
 // NodeView ist die vom Orchestrator normalisierte Sicht auf einen
@@ -106,6 +122,13 @@ type SenderView struct {
 	DeviceID  string `json:"device_id"`
 	Format    string `json:"format"`
 	Transport string `json:"transport,omitempty"`
+	// FlowID: der referenzierte IS-04-Flow (leer, wenn keiner).
+	FlowID string `json:"flow_id,omitempty"`
+	// DiscoveredTags: Werte des IS-04-Sender-Tags OMPTagsTag (`urn:x-omp:tags`) —
+	// semantische Tags, die der Node selbst meldet (Herkunft DISCOVERED).
+	DiscoveredTags []string `json:"discovered_tags,omitempty"`
+	// ChannelCount: Audio-Kanäle der Quelle des Flows (0 = unbekannt/kein Audio).
+	ChannelCount int `json:"channel_count,omitempty"`
 	// GroupHint ist der rohe erste `urn:x-nmos:tag:grouphint/v1.0`-Wert
 	// des Senders (leer, wenn nicht gesetzt) — Grundlage für die
 	// Natural-Group-Darstellung im Source-Selector.

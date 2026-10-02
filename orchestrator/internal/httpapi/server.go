@@ -726,6 +726,10 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Rechteverwaltung, auch als Vorbereitung für eine spätere Windows-
 	// Active-Directory-Anbindung) — global VerbAdmin, dieselbe Stufe wie
 	// Rollenbindungen/Organisationen/Nutzerverwaltung selbst.
+	if options.sourceTags != nil {
+		mux.HandleFunc("GET /api/v1/sources", g.requireAuth(handleListSources(nodes, options.sourceTags, workflowSvc.FindRoleForNode)))
+		mux.HandleFunc("PUT /api/v1/sources/{senderId}/tags", g.requireVerbGlobal(authz.VerbConfigure, handlePutSourceTags(nodes, options.sourceTags, options.domainAudit)))
+	}
 	if options.playout != nil {
 		mux.HandleFunc("GET /api/v1/playout/channels", g.requireAuth(handleListPlayoutChannels(options.playout, options.playoutRoles)))
 		mux.HandleFunc("POST /api/v1/playout/channels", g.requireVerbGlobal(authz.VerbConfigure, handleCreatePlayoutChannel(options.playout, options.domainAudit)))

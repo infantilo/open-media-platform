@@ -32,6 +32,7 @@ type handlerOptions struct {
 	organizations   OrganizationService
 	groups          GroupService
 	playout         PlayoutService
+	sourceTags      SourceTagStore
 	playoutRoles    InstanceRoleResolver
 	ffmpegTools     FFmpegToolsService
 	updates         UpdateService
@@ -99,6 +100,11 @@ func WithOrganizations(svc OrganizationService) HandlerOption {
 // handleDeleteUser/handleDeleteRoleBinding) — fehlt die Option, bleiben
 // die Endpunkte inaktiv und die Selbstschutz-/isAdmin-Prüfungen
 // beschränken sich auf direkte Bindungen (unverändertes Verhalten).
+// WithSourceTags verdrahtet den Tag-Overlay (Kapitel 27 / P4).
+func WithSourceTags(store SourceTagStore) HandlerOption {
+	return func(o *handlerOptions) { o.sourceTags = store }
+}
+
 // WithPlayout verdrahtet die Playout-Domäne (Kapitel 27 / P1a).
 func WithPlayout(svc PlayoutService, roles InstanceRoleResolver) HandlerOption {
 	return func(o *handlerOptions) { o.playout = svc; o.playoutRoles = roles }

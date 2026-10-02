@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -127,6 +128,8 @@ func TestFetchSnapshotFillsDeviceMissingFromBulkSendersList(t *testing.T) {
 			_, _ = w.Write([]byte(`[{"id":"send-1","label":"PGM","device_id":"dev-1","flow_id":"flow-1"}]`))
 		case r.URL.Path == "/x-nmos/query/v1.3/receivers":
 			_, _ = w.Write([]byte(`[]`))
+		case r.URL.Path == "/x-nmos/query/v1.3/sources":
+			_, _ = w.Write([]byte(`[]`))
 		case r.URL.Path == "/x-nmos/query/v1.3/flows":
 			_, _ = w.Write([]byte(`[{"id":"flow-1","format":"urn:x-nmos:format:video"}]`))
 		default:
@@ -170,6 +173,8 @@ func TestFetchSnapshotDoesNotQueryDevicesAlreadyInBulkResult(t *testing.T) {
 			scopedQueryCount++
 			_, _ = w.Write([]byte(`[]`))
 		case r.URL.Path == "/x-nmos/query/v1.3/receivers":
+			_, _ = w.Write([]byte(`[]`))
+		case r.URL.Path == "/x-nmos/query/v1.3/sources":
 			_, _ = w.Write([]byte(`[]`))
 		case r.URL.Path == "/x-nmos/query/v1.3/flows":
 			_, _ = w.Write([]byte(`[]`))
@@ -238,5 +243,36 @@ func TestBuildSnapshotCarriesGroupHint(t *testing.T) {
 	}
 	if got["s-hint"] != "cam1:video" || got["s-none"] != "" {
 		t.Errorf("group hints = %+v, want s-hint=cam1:video, s-none empty", got)
+	}
+}
+
+// Kapitel 27 / P4: Kanalanzahl (Flow → Source → channels) und vom Node
+// gemeldete semantische Tags kommen in der Sender-Sicht an.
+func TestBuildSnapshotCarriesChannelCountAndDiscoveredTags(t *testing.T) {
+	nodes := []is04Node{{ID: "n1", Label: "Remote"}}
+	devices := []is04Device{{ID: "d1", Label: "D", NodeID: "n1"}}
+	flowID, srcID := "f1", "s1"
+	senders := []is04Sender{{
+		ID: "snd1", Label: "Audio 1", DeviceID: "d1", FlowID: &flowID,
+		Tags: map[string][]string{OMPTagsTag: {"audio.commentator", "role.program"}},
+	}}
+	flows := []is04Flow{{ID: flowID, Format: "urn:x-nmos:format:audio", SourceID: srcID}}
+	sources := []is04Source{{ID: srcID, Channels: []json.RawMessage{json.RawMessage(`{"label":"L"}`), json.RawMessage(`{"label":"R"}`)}}}
+
+	views := buildSnapshot(nodes, devices, senders, nil, flows)
+	applyChannelCounts(views, flows, sources)
+
+	got := views[0].Senders[0]
+	if got.ChannelCount != 2 || got.FlowID != flowID {
+		t.Fatalf("sender = %+v, want ChannelCount 2 / FlowID %s", got, flowID)
+	}
+	if len(got.DiscoveredTags) != 2 || got.DiscoveredTags[0] != "audio.commentator" {
+		t.Fatalf("DiscoveredTags = %v", got.DiscoveredTags)
+	}
+	// Ohne Source-Eintrag bleibt die Anzahl 0 (unbekannt), nichts wird geraten.
+	views = buildSnapshot(nodes, devices, senders, nil, flows)
+	applyChannelCounts(views, flows, nil)
+	if views[0].Senders[0].ChannelCount != 0 {
+		t.Fatalf("ChannelCount without sources = %d, want 0", views[0].Senders[0].ChannelCount)
 	}
 }

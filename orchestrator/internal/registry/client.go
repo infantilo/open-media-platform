@@ -55,7 +55,13 @@ func (c *Client) FetchSnapshot(ctx context.Context) ([]NodeView, error) {
 		flowFormat[fl.ID] = fl.Format
 	}
 
+	// Kapitel 27 / P4: Audio-Kanalanzahl je Sender über Flow → Source. Nicht
+	// fatal: ohne Sources bleibt ChannelCount 0 (nur abgeleitete Tags fehlen).
+	var sources []is04Source
+	_ = c.getJSON(ctx, "sources", &sources)
+
 	views := buildSnapshot(nodes, devices, senders, receivers, flows)
+	applyChannelCounts(views, flows, sources)
 
 	// Nutzerfund 2026-07-28 (Regieplatz-1-Start scheiterte mit "role
 	// omp-video-mixer-me has no sender", docs/decisions.md — Fortsetzung
@@ -101,9 +107,7 @@ func (c *Client) fillSuspiciouslyEmptyDevices(ctx context.Context, views []NodeV
 					if s.FlowID != nil {
 						format = flowFormat[*s.FlowID]
 					}
-					views[ni].Senders = append(views[ni].Senders, SenderView{
-						ID: s.ID, Label: s.Label, DeviceID: s.DeviceID, Format: format, Transport: s.Transport, GroupHint: s.groupHint(),
-					})
+					views[ni].Senders = append(views[ni].Senders, newSenderView(s, format))
 				}
 			}
 
@@ -238,14 +242,7 @@ func buildSnapshot(nodes []is04Node, devices []is04Device, senders []is04Sender,
 				if s.FlowID != nil {
 					format = flowFormat[*s.FlowID]
 				}
-				view.Senders = append(view.Senders, SenderView{
-					ID:        s.ID,
-					Label:     s.Label,
-					DeviceID:  s.DeviceID,
-					Format:    format,
-					Transport: s.Transport,
-					GroupHint: s.groupHint(),
-				})
+				view.Senders = append(view.Senders, newSenderView(s, format))
 			}
 
 			for _, r := range receiversByDevice[d.ID] {
@@ -291,4 +288,33 @@ func instanceID(n is04Node) string {
 		return ""
 	}
 	return values[0]
+}
+
+// newSenderView baut die normalisierte Sender-Sicht (gemeinsam für den
+// Bulk-Pfad und die Device-gescopte Nachfrage).
+func newSenderView(s is04Sender, format string) SenderView {
+	v := SenderView{ID: s.ID, Label: s.Label, DeviceID: s.DeviceID, Format: format, Transport: s.Transport, GroupHint: s.groupHint(), DiscoveredTags: s.Tags[OMPTagsTag]}
+	if s.FlowID != nil {
+		v.FlowID = *s.FlowID
+	}
+	return v
+}
+
+// applyChannelCounts setzt SenderView.ChannelCount aus Flow → Source → channels.
+func applyChannelCounts(views []NodeView, flows []is04Flow, sources []is04Source) {
+	channelsBySource := make(map[string]int, len(sources))
+	for _, s := range sources {
+		channelsBySource[s.ID] = len(s.Channels)
+	}
+	sourceByFlow := make(map[string]string, len(flows))
+	for _, f := range flows {
+		sourceByFlow[f.ID] = f.SourceID
+	}
+	for ni := range views {
+		for si := range views[ni].Senders {
+			if fid := views[ni].Senders[si].FlowID; fid != "" {
+				views[ni].Senders[si].ChannelCount = channelsBySource[sourceByFlow[fid]]
+			}
+		}
+	}
 }
