@@ -243,6 +243,43 @@ impl MxlVideoOutput {
             framerate_denominator,
             output_delay,
             false,
+            false,
+        )
+    }
+
+    /// Wie [`Self::new`], aber für einen Aufrufer, dessen `upstream` RGBA
+    /// liefert (z. B. der Compositor von `omp-video-mixer-me`): die
+    /// Konvertierung nach v210 läuft über einen Zwischenschritt Y42B
+    /// (RGBA → Y42B → v210 ≈ 4,3 ms statt 7,1 ms CPU je 720p-Bild; gemessen
+    /// 2026-10-02 mit `gst-launch`). Bewusst NICHT der Standard von
+    /// [`Self::new`]: liefert `upstream` bereits ein YUV-Format, wäre der
+    /// Umweg über Y42B eine zusätzliche, unnötige Konvertierung.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_from_rgba(
+        pipeline: &gst::Pipeline,
+        upstream: &gst::Element,
+        context: Arc<MxlContext>,
+        flow_id: &str,
+        label: &str,
+        width: u32,
+        height: u32,
+        framerate_numerator: u32,
+        framerate_denominator: u32,
+        output_delay: Arc<AtomicU64>,
+    ) -> Result<Self, String> {
+        Self::new_impl(
+            pipeline,
+            upstream,
+            context,
+            flow_id,
+            label,
+            width,
+            height,
+            framerate_numerator,
+            framerate_denominator,
+            output_delay,
+            false,
+            true,
         )
     }
 
@@ -282,6 +319,7 @@ impl MxlVideoOutput {
             framerate_denominator,
             output_delay,
             true,
+            false,
         )
     }
 
@@ -310,6 +348,7 @@ impl MxlVideoOutput {
         // gemeinsamer Blast-Radius über einen einzelnen Bool-Parameter an
         // 13 Aufrufstellen, s. dortige Doku).
         paced: bool,
+        rgba_hop: bool,
     ) -> Result<Self, String> {
         let videoconvert = gst::ElementFactory::make("videoconvert")
             .build()
@@ -420,16 +459,32 @@ impl MxlVideoOutput {
         // v210-Bild skaliert (langsamer Pfad) — beim Lowres-Zweig (z. B.
         // 640×480 → 320×180) kostete das ~24 % CPU je Quelle bei aktiver Vorschau.
         // Ohne Größenänderung ist `videoscale` ein Durchreicher.
-        gst::Element::link_many([
-            upstream,
-            &valve,
-            &videoscale,
-            &videoconvert,
-            &videorate,
-            &caps,
-            &appsink,
-        ])
-        .map_err(|e| format!("link mxl output chain: {e}"))?;
+        // Optionaler Y42B-Zwischenschritt (`new_from_rgba`): eigenes
+        // `videoconvert` + `capsfilter(Y42B)` zwischen `videoscale` und dem
+        // eigentlichen `videoconvert` (das dann Y42B → v210 macht).
+        let hop: Option<(gst::Element, gst::Element)> = if rgba_hop {
+            let to_y42b = gst::ElementFactory::make("videoconvert")
+                .build()
+                .map_err(|e| format!("videoconvert (y42b hop): {e}"))?;
+            let y42b = gst::ElementFactory::make("capsfilter")
+                .property("caps", gst::Caps::builder("video/x-raw").field("format", "Y42B").build())
+                .build()
+                .map_err(|e| format!("capsfilter (y42b hop): {e}"))?;
+            pipeline
+                .add(&to_y42b)
+                .and_then(|()| pipeline.add(&y42b))
+                .map_err(|e| format!("add y42b hop: {e}"))?;
+            Some((to_y42b, y42b))
+        } else {
+            None
+        };
+        let mut chain: Vec<&gst::Element> = vec![upstream, &valve, &videoscale];
+        if let Some((a, b)) = &hop {
+            chain.push(a);
+            chain.push(b);
+        }
+        chain.extend([&videoconvert, &videorate, &caps, &appsink]);
+        gst::Element::link_many(chain).map_err(|e| format!("link mxl output chain: {e}"))?;
 
         // Gleicher Verwaisungs-Schutz wie `MxlVideoInput::new` (s. dort):
         // ab hier hängen sechs Elemente bereits im `pipeline`, ein
@@ -446,6 +501,12 @@ impl MxlVideoOutput {
             ] {
                 let _ = el.set_state(gst::State::Null);
                 let _ = pipeline.remove(el);
+            }
+            if let Some((a, b)) = &hop {
+                for el in [a, b] {
+                    let _ = el.set_state(gst::State::Null);
+                    let _ = pipeline.remove(el);
+                }
             }
         };
 
@@ -1355,6 +1416,15 @@ pub struct MxlVideoInput {
     /// der Pipeline zu entfernen, nicht nur `MxlVideoInput` fallen zu
     /// lassen.
     pub elements: Vec<gst::Element>,
+    /// Native Bildgröße des gelesenen Flows (aus der Flow-Definition; der
+    /// `appsrc` ist auf genau diese Größe festgelegt). Aufrufer können damit
+    /// die Skalierung gezielt NACH der Konvertierung in ein billiges Format
+    /// legen, statt sie GStreamers Caps-Verhandlung zu überlassen: ohne
+    /// Festlegung skaliert das erste `videoscale` dieser Kette das rohe
+    /// v210-Bild auf die Zielgröße (langsamer Pfad) und die Konvertierung
+    /// zu RGBA läuft danach auf der vollen Zielgröße.
+    pub width: u32,
+    pub height: u32,
     running: Arc<AtomicBool>,
     flowed: Arc<AtomicBool>,
     /// S. `MxlVideoOutput::heartbeat`.
@@ -1629,6 +1699,8 @@ impl MxlVideoInput {
         Ok(MxlVideoInput {
             elements: vec![appsrc, videoconvert, videoscale, videorate.clone()],
             tail: videorate,
+            width,
+            height,
             running,
             flowed,
             heartbeat,

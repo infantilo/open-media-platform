@@ -109,7 +109,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gst::prelude::*;
 use gstreamer as gst;
@@ -731,14 +731,23 @@ fn build_keyfill_tail(
 /// selbst hinzugefügten Elemente zurück, damit ein Aufrufer, der diesen
 /// einen Zweig später wieder verwerfen muss (s. `build_one_input`), sie
 /// gezielt aus der Pipeline entfernen kann statt sie verwaisen zu lassen.
+///
+/// `native` = native Bildgröße der Quelle (`MxlVideoInput::width/height`),
+/// sofern bekannt: dann läuft die Software-Kette über
+/// [`build_normalized_branch_sw`] (CPU-optimierte Reihenfolge), sonst die
+/// bisherige Kette (`None`, oder GPU-Pfad).
 fn build_normalized_branch(
     pipeline: &gst::Pipeline,
     tail: &gst::Element,
     name_suffix: &str,
     width: u32,
     height: u32,
+    native: Option<(u32, u32)>,
     hwaccel: omp_mediaio::hwaccel::HwAccel,
 ) -> Result<(gst::Element, Vec<gst::Element>), String> {
+    if let (Some((sw, sh)), false) = (native, hwaccel.video_convert_scale_available()) {
+        return build_normalized_branch_sw(pipeline, tail, name_suffix, sw, sh, width, height);
+    }
     // `queue` zwischen `tail` und der Konvertierungskette: ohne ein
     // pufferndes Element hier beantwortet keins der nachgelagerten
     // Elemente (videoconvert/-scale/-rate sind reine GstBaseTransforms,
@@ -792,6 +801,135 @@ fn build_normalized_branch(
     elements.push(videorate);
     elements.push(caps.clone());
     Ok((caps, elements))
+}
+
+/// Schritte der Software-Normalisierung, abhängig von Quell- und Zielgröße —
+/// reine Entscheidungslogik, getrennt vom GStreamer-Aufbau (testbar).
+///
+/// **CPU-Befund (2026-10-02, „Video-Mixer braucht unmengen CPU", gemessen mit
+/// `gst-launch` pro Eingang bei 25 fps, 640×480 → 1280×720):** die frühere
+/// Kette `[MxlVideoInput: videoconvert ! videoscale ! videorate] ! queue !
+/// videoconvert ! videoscale ! capsfilter(RGBA Zielgröße)` ließ GStreamer
+/// die Skalierung im ersten `videoscale` des `MxlVideoInput` erledigen —
+/// auf dem ROHEN v210-Bild (kein SIMD-Pfad) — und danach v210 → RGBA auf der
+/// vollen Zielgröße (zweiter, langsamer Pfad) konvertieren: ≈ 25–30 ms CPU
+/// je Bild und Eingang (≈ 65 % eines Kerns). Neu: Quellgröße festnageln,
+/// v210 → Y42B (8 Bit, 4:2:2 bleibt erhalten, ~halbe Kosten der direkten
+/// v210 → RGBA-Konvertierung), dann entweder in Y42B herunterskalieren
+/// (Quelle größer als Ziel) oder erst in RGBA konvertieren und dort
+/// hochskalieren (Quelle kleiner/gleich) — jeweils die Variante mit den
+/// weniger zu verarbeitenden Pixeln. Messung: 8,8 / 17,3 / 35,8 ms statt
+/// 25,4 / 23,3 / 51,3 ms (640×480 / 1280×720 / 1920×1080 → 1280×720).
+/// Pixelvergleich gegen die direkte Konvertierung: max. Abweichung 5/255
+/// (Rundung), nicht über I420 — dort bis 119/255 an Farbkanten, weil die
+/// vertikale Chroma-Auflösung halbiert würde.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SwScalePlan {
+    /// Quelle hat bereits die Zielgröße: nur Konvertierung.
+    ConvertOnly,
+    /// Quelle kleiner als Ziel: in RGBA konvertieren (kleines Bild), dann RGBA hochskalieren.
+    ConvertThenScale,
+    /// Quelle größer als Ziel: in Y42B herunterskalieren, dann in RGBA konvertieren (kleines Bild).
+    ScaleThenConvert,
+}
+
+fn sw_scale_plan(sw: u32, sh: u32, width: u32, height: u32) -> SwScalePlan {
+    if (sw, sh) == (width, height) {
+        SwScalePlan::ConvertOnly
+    } else if (sw as u64) * (sh as u64) > (width as u64) * (height as u64) {
+        SwScalePlan::ScaleThenConvert
+    } else {
+        SwScalePlan::ConvertThenScale
+    }
+}
+
+fn raw_caps(format: Option<&str>, width: u32, height: u32) -> gst::Caps {
+    let mut b = gst::Caps::builder("video/x-raw").field("width", width as i32).field("height", height as i32);
+    if let Some(f) = format {
+        b = b.field("format", f);
+    }
+    b.build()
+}
+
+/// Software-Variante von `build_normalized_branch` mit festgelegter
+/// Quellgröße, s. [`SwScalePlan`]. Gleiche Außenschnittstelle (letztes
+/// Element = Capsfilter mit `rgba_caps`), `videoscale` behält `add-borders`
+/// (Seitenverhältnis erhalten, Nutzerfund 2026-09-30).
+fn build_normalized_branch_sw(
+    pipeline: &gst::Pipeline,
+    tail: &gst::Element,
+    name_suffix: &str,
+    sw: u32,
+    sh: u32,
+    width: u32,
+    height: u32,
+) -> Result<(gst::Element, Vec<gst::Element>), String> {
+    let make = |factory: &str, what: &str| -> Result<gst::Element, String> {
+        gst::ElementFactory::make(factory).build().map_err(|e| format!("{factory} ({what}, {name_suffix}): {e}"))
+    };
+    let capsf = |caps: gst::Caps, what: &str| -> Result<gst::Element, String> {
+        gst::ElementFactory::make("capsfilter")
+            .property("caps", caps)
+            .build()
+            .map_err(|e| format!("capsfilter ({what}, {name_suffix}): {e}"))
+    };
+    let scaler = |what: &str| -> Result<gst::Element, String> {
+        gst::ElementFactory::make("videoscale")
+            .property("add-borders", true)
+            .build()
+            .map_err(|e| format!("videoscale ({what}, {name_suffix}): {e}"))
+    };
+
+    // Native Größe festnageln: das `videoscale` im `MxlVideoInput` bleibt
+    // dadurch ein Durchreicher (sonst skaliert es das rohe v210-Bild).
+    let pin = capsf(raw_caps(None, sw, sh), "pin native")?;
+    let queue = gst::ElementFactory::make("queue")
+        .property_from_str("leaky", "downstream")
+        .property("max-size-buffers", 3u32)
+        .property("max-size-bytes", 0u32)
+        .property("max-size-time", 0u64)
+        .build()
+        .map_err(|e| format!("queue ({name_suffix}): {e}"))?;
+    let to_y42b = make("videoconvert", "v210->Y42B")?;
+    let y42b_native = capsf(raw_caps(Some("Y42B"), sw, sh), "Y42B native")?;
+
+    let mut chain: Vec<gst::Element> = vec![pin, queue, to_y42b, y42b_native];
+    match sw_scale_plan(sw, sh, width, height) {
+        SwScalePlan::ConvertOnly => {
+            chain.push(make("videoconvert", "Y42B->RGBA")?);
+        }
+        SwScalePlan::ConvertThenScale => {
+            chain.push(make("videoconvert", "Y42B->RGBA")?);
+            chain.push(capsf(raw_caps(Some("RGBA"), sw, sh), "RGBA native")?);
+            chain.push(scaler("RGBA up")?);
+        }
+        SwScalePlan::ScaleThenConvert => {
+            chain.push(scaler("Y42B down")?);
+            chain.push(capsf(raw_caps(Some("Y42B"), width, height), "Y42B target")?);
+            chain.push(make("videoconvert", "Y42B->RGBA")?);
+        }
+    }
+    // Nach dem CPU-Gate (`refresh_source_gates`) ist beim Wieder-Öffnen eine
+    // Zeitlücke im Strom: ohne Begrenzung würde `videorate` sie mit
+    // Duplikaten füllen (Burst, Latenz); mit Begrenzung gilt sie als
+    // Diskontinuität.
+    let rate = make("videorate", "rate")?;
+    rate.set_property("max-duplication-time", 200_000_000u64);
+    chain.push(rate);
+    let out_caps = capsf(rgba_caps(width, height), "RGBA target")?;
+    chain.push(out_caps.clone());
+
+    let refs: Vec<&gst::Element> = chain.iter().collect();
+    pipeline.add_many(refs.iter().copied()).map_err(|e| format!("add branch elements ({name_suffix}): {e}"))?;
+    let mut linked = vec![tail];
+    linked.extend(refs.iter().copied());
+    if let Err(e) = gst::Element::link_many(linked) {
+        for el in &chain {
+            let _ = pipeline.remove(el);
+        }
+        return Err(format!("link branch ({name_suffix}): {e}"));
+    }
+    Ok((out_caps, chain))
 }
 
 /// Vereinfachte Variante von `build_normalized_branch` für rein
@@ -907,6 +1045,11 @@ fn remove_mxl_video_input(pipeline: &gst::Pipeline, mxl_input: MxlVideoInput) {
 /// (Rest 2) rückgebaut") — kein Hot-Swap-Ziel mehr.
 struct SourceBranch {
     mxl_input: MxlVideoInput,
+    /// CPU-Gate (s. `refresh_source_gates`): `false` = Puffer dieses Eingangs
+    /// werden direkt hinter dem `MxlVideoInput` verworfen, bevor die teure
+    /// Konvertierung/Skalierung läuft. Nur ein Pad-Probe-Flag — kein
+    /// Element, keine Caps-Änderung, kein Relink.
+    gate: Arc<AtomicBool>,
     /// Root-Cause-Fund Bugliste 2026-09-25 #7-Nachbesserung: vorher fünf
     /// einzeln benannte Felder (`queue`/`videoconvert`/`videoscale`/
     /// `videorate`/`caps`), die `build_normalized_branch` unter der
@@ -977,7 +1120,32 @@ fn build_source_branch(
     // vollständigen Verlinkung bis zum `tee`.
     let mxl_input = MxlVideoInput::new_unsynced(pipeline, context.clone(), read_flow_id)
         .map_err(|e| format!("MxlVideoInput({name_suffix}, {sender_id}): {e}"))?;
-    let (_, elements) = match build_normalized_branch(pipeline, &mxl_input.tail, name_suffix, width, height, hwaccel) {
+    // CPU-Gate: Start OFFEN (sicherer Ausgangszustand, bis die erste
+    // `refresh_source_gates`-Runde entscheidet). Ein Buffer-Probe, der
+    // verwirft, liefert dem Vorgänger `Ok` zurück — anders als ein
+    // geschlossenes `valve` (dokumentiert: erster Puffer auf geschlossenem
+    // Valve tötete eine Live-Quelle mit `not-linked`) und ohne dessen
+    // `drop-mode`-Falle (Standard `drop-all` verwirft auch Caps-Events).
+    let gate = Arc::new(AtomicBool::new(true));
+    if let Some(pad) = mxl_input.tail.static_pad("src") {
+        let gate_probe = gate.clone();
+        pad.add_probe(gst::PadProbeType::BUFFER, move |_, _| {
+            if gate_probe.load(Ordering::Relaxed) {
+                gst::PadProbeReturn::Ok
+            } else {
+                gst::PadProbeReturn::Drop
+            }
+        });
+    }
+    let (_, elements) = match build_normalized_branch(
+        pipeline,
+        &mxl_input.tail,
+        name_suffix,
+        width,
+        height,
+        Some((mxl_input.width, mxl_input.height)),
+        hwaccel,
+    ) {
         Ok(r) => r,
         Err(e) => {
             remove_mxl_video_input(pipeline, mxl_input);
@@ -1046,6 +1214,7 @@ fn build_source_branch(
 
     Ok(SourceBranch {
         mxl_input,
+        gate,
         chain_elements: elements,
         tee,
         taps: Vec::new(),
@@ -1293,6 +1462,43 @@ fn switch_isel(isel: &gst::Element, pads: &HashMap<String, gst::Pad>, black: &gs
     }
 }
 
+/// Wie lange ein Eingang nach dem letzten Einsatz (Programm oder Preset)
+/// noch „warm" bleibt, bevor sein CPU-Gate schließt.
+const GATE_GRACE: Duration = Duration::from_secs(2);
+
+fn is_active_pad(isel: &gst::Element, pad: Option<&gst::Pad>) -> bool {
+    match (isel.property::<Option<gst::Pad>>("active-pad"), pad) {
+        (Some(active), Some(p)) => &active == p,
+        _ => false,
+    }
+}
+
+/// CPU-Befund 2026-10-02: jeder angeschlossene Eingang wurde dauernd mit
+/// voller Bildrate nach RGBA konvertiert/skaliert — auch wenn er weder auf
+/// Programm (`isel`) noch auf Preset (`isel_bg`) lag; bei acht Eingängen
+/// liefen sechs davon umsonst. Dieses Gate lässt die Puffer eines Eingangs
+/// nur durch, solange er auf irgendeiner Ebene als `active-pad` des
+/// Programm- oder Preset-Selektors gewählt ist, plus `GATE_GRACE` danach
+/// (und beim ersten Sehen, damit ein frisch gebauter Eingang warm startet).
+/// Wird am Anfang JEDER Schleifenrunde des Pipeline-Threads aufgerufen —
+/// also unmittelbar nach jedem Kommando (`SelectPreset` öffnet das Gate
+/// binnen eines Bildes), höchstens 500 ms nach Änderungen aus dem
+/// Auto-Transition-Thread.
+fn refresh_source_gates(p: &ActivePipeline, last_used: &mut HashMap<String, Instant>) {
+    let now = Instant::now();
+    for (id, branch) in &p._branches {
+        let in_use = p.levels.iter().any(|lvl| {
+            is_active_pad(&lvl.isel, lvl.source_pads_fg.get(id)) || is_active_pad(&lvl.isel_bg, lvl.source_pads_bg.get(id))
+        });
+        let seen = last_used.entry(id.clone()).or_insert(now);
+        if in_use {
+            *seen = now;
+        }
+        let open = in_use || now.duration_since(*seen) < GATE_GRACE;
+        branch.gate.store(open, Ordering::Relaxed);
+    }
+}
+
 /// Ob für `level` gerade ein ECHTER Hintergrund-Animations-Thread läuft
 /// (nur `AutoTrans` startet einen) — anders als das gröbere
 /// `fading[level]`-Flag, das AUCH "T-Bar wurde per Hand gezogen und
@@ -1371,6 +1577,7 @@ fn build_pip_tail(
     width: u32,
     height: u32,
     hwaccel: omp_mediaio::hwaccel::HwAccel,
+    shared_black: &gst::Element,
 ) -> Result<(gst::Element, Option<MxlVideoInput>), String> {
     match pip_source_input {
         Some(input) => {
@@ -1380,23 +1587,23 @@ fn build_pip_tail(
             // ebenso möglich (PIP-Quelle friert dauerhaft ein).
             let mxl_input = MxlVideoInput::new_unsynced(pipeline, context.clone(), &input.flow_id)
                 .map_err(|e| format!("MxlVideoInput(pip, {}): {e}", input.sender_id))?;
-            let (caps, _elements) = build_normalized_branch(pipeline, &mxl_input.tail, "pip", width, height, hwaccel)?;
+            let (caps, _elements) = build_normalized_branch(
+                pipeline,
+                &mxl_input.tail,
+                "pip",
+                width,
+                height,
+                Some((mxl_input.width, mxl_input.height)),
+                hwaccel,
+            )?;
             mxl_input
                 .activate()
                 .map_err(|e| format!("activate MxlVideoInput(pip, {}): {e}", input.sender_id))?;
             Ok((caps, Some(mxl_input)))
         }
         None => {
-            let black_src = gst::ElementFactory::make("videotestsrc")
-                .property("is-live", true)
-                .build()
-                .map_err(|e| format!("videotestsrc (pip black): {e}"))?;
-            black_src.set_property_from_str("pattern", "black");
-            pipeline.add(&black_src).map_err(|e| format!("add pip black source: {e}"))?;
-            // Root-Cause-Fund Bugliste 2026-09-25 #5, s. `build_synthetic_
-            // branch`-Doku: synthetisches Schwarzbild braucht keine
-            // Konvertierungskette.
-            let (caps, _elements) = build_synthetic_branch(pipeline, &black_src, "pip-black", width, height)?;
+            // Geteiltes Schwarzbild der Ebene (`build()`), keine eigene Quelle.
+            let (caps, _elements) = build_synthetic_branch(pipeline, shared_black, "pip-black", width, height)?;
             Ok((caps, None))
         }
     }
@@ -1455,6 +1662,8 @@ fn build(
     let mut isels = Vec::with_capacity(level_count);
     let mut isel_bgs = Vec::with_capacity(level_count);
     let mut black_pads_fg = Vec::with_capacity(level_count);
+    // Je Ebene EIN geteiltes Schwarzbild (`tee`) für fg, bg und PIP-Fallback.
+    let mut black_tees: Vec<gst::Element> = Vec::with_capacity(level_count);
     let mut black_pads_bg = Vec::with_capacity(level_count);
     for level_idx in 0..level_count {
         let isel = gst::ElementFactory::make("input-selector")
@@ -1476,34 +1685,41 @@ fn build(
         //    verfügbar, exakt wie im Vorbild (dort black auf isel UND
         //    isel_bg gespiegelt) — je Ebene unabhängig (billig, kein
         //    MXL-Reader, kein Tee-Sharing nötig).
-        let black_src_fg = gst::ElementFactory::make("videotestsrc")
+        // CPU-Befund 2026-10-02: früher erzeugten drei getrennte
+        // `videotestsrc` (fg, bg, PIP) je Ebene dasselbe Schwarzbild (je ~2,5 ms
+        // CPU pro Bild bei 720p). Jetzt EINE Quelle + `tee`: die Puffer werden
+        // nur referenziert (kein Kopieren), jeder Verbraucher behält seine
+        // eigene `queue` (s. `build_synthetic_branch`).
+        let black_src = gst::ElementFactory::make("videotestsrc")
             .property("is-live", true)
             .build()
-            .map_err(|e| format!("videotestsrc (black fg, level {level_idx}): {e}"))?;
-        black_src_fg.set_property_from_str("pattern", "black");
-        let black_src_bg = gst::ElementFactory::make("videotestsrc")
-            .property("is-live", true)
+            .map_err(|e| format!("videotestsrc (black, level {level_idx}): {e}"))?;
+        black_src.set_property_from_str("pattern", "black");
+        let black_tee = gst::ElementFactory::make("tee")
+            .property("allow-not-linked", true)
             .build()
-            .map_err(|e| format!("videotestsrc (black bg, level {level_idx}): {e}"))?;
-        black_src_bg.set_property_from_str("pattern", "black");
+            .map_err(|e| format!("tee (black, level {level_idx}): {e}"))?;
         pipeline
-            .add(&black_src_fg)
-            .and_then(|()| pipeline.add(&black_src_bg))
-            .map_err(|e| format!("add black sources (level {level_idx}): {e}"))?;
+            .add(&black_src)
+            .and_then(|()| pipeline.add(&black_tee))
+            .map_err(|e| format!("add black source (level {level_idx}): {e}"))?;
+        gst::Element::link(&black_src, &black_tee)
+            .map_err(|e| format!("link black source to tee (level {level_idx}): {e}"))?;
         let (black_caps_fg, _) = build_synthetic_branch(
             &pipeline,
-            &black_src_fg,
+            &black_tee,
             &format!("black-fg-l{level_idx}"),
             config.width,
             config.height,
         )?;
         let (black_caps_bg, _) = build_synthetic_branch(
             &pipeline,
-            &black_src_bg,
+            &black_tee,
             &format!("black-bg-l{level_idx}"),
             config.width,
             config.height,
         )?;
+        black_tees.push(black_tee);
 
         let black_pad_fg = isel
             .request_pad_simple("sink_0")
@@ -1626,7 +1842,7 @@ fn build(
         let (keyer_caps, keyer_keyfill) = match keyer_source_input {
             Some(kf) => {
                 let (tail, fill_input, key_input) = build_keyfill_tail(&pipeline, context, kf)?;
-                let (caps, _) = build_normalized_branch(&pipeline, &tail, &format!("keyer-l{level_idx}"), config.width, config.height, config.hwaccel)?;
+                let (caps, _) = build_normalized_branch(&pipeline, &tail, &format!("keyer-l{level_idx}"), config.width, config.height, None, config.hwaccel)?;
                 (caps, Some((fill_input, key_input)))
             }
             None => {
@@ -1639,8 +1855,18 @@ fn build(
                 pipeline
                     .add(&keyer_src)
                     .map_err(|e| format!("add keyer source (level {level_idx}): {e}"))?;
-                let (caps, _) =
-                    build_synthetic_branch(&pipeline, &keyer_src, &format!("keyer-l{level_idx}"), config.width, config.height)?;
+                // Einfarbige Fläche: muss nicht in voller Mixer-Größe erzeugt
+                // werden (je ~2,5 ms CPU/Bild bei 720p) — der Compositor
+                // skaliert sie über `width`/`height` des Pads ohnehin auf die
+                // Keyer-Box (unten), bei einer Farbfläche ohne sichtbaren
+                // Unterschied.
+                let (caps, _) = build_synthetic_branch(
+                    &pipeline,
+                    &keyer_src,
+                    &format!("keyer-l{level_idx}"),
+                    (config.width / 8).max(2),
+                    (config.height / 8).max(2),
+                )?;
                 (caps, None)
             }
         };
@@ -1678,7 +1904,7 @@ fn build(
         //    traf).
         let pip_source_input = pip_sources[level_idx].as_ref().and_then(|id| inputs.iter().find(|i| &i.sender_id == id));
         let (pip_caps, pip_input) =
-            build_pip_tail(&pipeline, context, pip_source_input, config.width, config.height, config.hwaccel)?;
+            build_pip_tail(&pipeline, context, pip_source_input, config.width, config.height, config.hwaccel, &black_tees[level_idx])?;
         let comp_pip_pad = comp
             .request_pad_simple("sink_3")
             .ok_or_else(|| format!("comp: request sink_3 (pip) failed (level {level_idx})"))?;
@@ -1703,7 +1929,7 @@ fn build(
             dbg_probe(&pad, format!("{}/comp-out{level_idx}", pipeline.name()));
         }
 
-        let mxl_output = MxlVideoOutput::new(
+        let mxl_output = MxlVideoOutput::new_from_rgba(
             &pipeline,
             &comp_out_caps,
             context.clone(),
@@ -2108,12 +2334,16 @@ pub fn run(
         *flowed_slot.lock().expect("lock poisoned") = p.levels.iter().map(|l| Some(l.flowed.clone())).collect();
     }
 
+    let mut gate_last_used: HashMap<String, Instant> = HashMap::new();
     loop {
         // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
         // Nachtrag 130/131).
         heartbeat.fetch_add(1, Ordering::Relaxed);
         if shutdown.load(Ordering::Relaxed) {
             break;
+        }
+        if let Some(p) = &active {
+            refresh_source_gates(p, &mut gate_last_used);
         }
 
         match commands_rx.recv_timeout(Duration::from_millis(500)) {
@@ -2682,6 +2912,18 @@ pub fn run(
 #[cfg(test)]
 mod trans_kind_tests {
     use super::*;
+
+    #[test]
+    fn sw_scale_plan_picks_the_variant_with_fewer_pixels_to_process() {
+        // Quelle == Ziel: nur konvertieren.
+        assert_eq!(sw_scale_plan(1280, 720, 1280, 720), SwScalePlan::ConvertOnly);
+        // Kleinere Quelle: erst im kleinen Bild nach RGBA, dann hochskalieren.
+        assert_eq!(sw_scale_plan(640, 480, 1280, 720), SwScalePlan::ConvertThenScale);
+        // Größere Quelle: erst herunterskalieren (Y42B), dann konvertieren.
+        assert_eq!(sw_scale_plan(1920, 1080, 1280, 720), SwScalePlan::ScaleThenConvert);
+        // Gleiche Pixelzahl, andere Form: kein Herunterskalieren nötig.
+        assert_eq!(sw_scale_plan(720, 1280, 1280, 720), SwScalePlan::ConvertThenScale);
+    }
 
     #[test]
     fn names_and_ids_roundtrip() {
