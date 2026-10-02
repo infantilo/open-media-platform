@@ -30188,3 +30188,14 @@ Ohne gewählte Quelle verbindet der Start automatisch den Monitor-Bus des Audiom
 Solo-Kanal um (`recompute_master_pfl_gain`), eine eigene Kopplung ist dafür nicht nötig.
 Offen: ein Monitor-Node pro Operator (der Ton läuft über dessen Browser); Aux/N-1 als
 fest benannte Abhörquellen; WebRTC statt PCM-über-HTTP nur bei Bedarf an Rücksprache.
+
+## 2026-10-02 — Video-Mixer M/E: CPU-Optimierung (Nutzermeldung „braucht unmengen CPU")
+
+Befund (Messung je Eingang mit `gst-launch`, 25 fps; Mixer idle mit 3 Quellen 640×480 → 1280×720: 284 % eines Kerns):
+- Die Kette `MxlVideoInput[videoconvert!videoscale!videorate] ! queue ! videoconvert ! videoscale ! RGBA` ließ das ERSTE `videoscale` das rohe v210-Bild skalieren (langsamer Pfad) und konvertierte danach v210 → RGBA auf voller Zielgröße: ~25–30 ms CPU je Bild und Eingang. Neu (`build_normalized_branch_sw`): Quellgröße festnageln, v210 → Y42B, dann in Y42B herunter- bzw. in RGBA hochskalieren (je weniger Pixel). 8,8 / 17,3 / 35,8 ms statt 25,4 / 23,3 / 51,3 ms (640×480 / 720p / 1080p → 720p). Über I420 statt Y42B wären Farbkanten bis 119/255 abgewichen (4:2:2 → 4:2:0), Y42B max. 5/255.
+- Drei getrennte Schwarz-`videotestsrc` je Ebene (fg/bg/PIP) → eine Quelle + `tee`. Keyer-Farbfläche nur noch 1/8 Größe erzeugt.
+- CPU-Gate (`refresh_source_gates`): Eingänge, die weder Programm noch Preset sind (+2 s Nachlauf), verwerfen Puffer per Pad-Probe direkt hinter dem `MxlVideoInput`. Bewusst KEIN `valve` (Memo 2026-10-01: geschlossenes Valve tötete eine Live-Quelle mit `not-linked`; `drop-mode` Standard verwirft auch Caps-Events) und kein Relink. Folge-`videorate` mit `max-duplication-time` 200 ms, damit die Zeitlücke beim Wiederöffnen nicht als Duplikat-Burst endet.
+- Ausgang `MxlVideoOutput::new_from_rgba`: RGBA → Y42B → v210 (4,3 statt 7,1 ms/720p-Bild). Nur für RGBA-Zulieferer, Standard-`new` unverändert.
+Ergebnis live (1 Mixer + 3 Quellen, `nice`d, 10 s): idle 284 % → 114 %, eine Quelle auf Programm 132–148 %; Select/Cut/AutoTrans auf zuvor geschlossene Eingänge liefern Bild (Head-Index +50 in 2 s, Inhalt nicht schwarz).
+Bekannte Folge: ein 4:3-Quellbild bekommt jetzt wirklich Balken (`add-borders` griff vorher nicht, weil das erste `videoscale` schon gestreckt hatte).
+Offen: `omp-mxf-player` idle ~78 % (2 leere Zweige mit `videotestsrc`/`audiotestsrc` je Gruppe laufen dauerhaft, s. Antwort 2026-10-02).
