@@ -66,7 +66,15 @@ type NodeLister interface {
 type LauncherService interface {
 	Get(id string) (launcher.Instance, bool)
 	StartLabeled(nodeType, version, hostID, customLabel string, extraEnv map[string]string) (launcher.Instance, error)
+	// StartPinned: wie StartLabeled, aber aus einer bestimmten Binary-Version und mit den
+	// Instanz-Optionen der Instanz optionsFrom (Kapitel 28 Schritt 3 / Kapitel 29).
+	StartPinned(nodeType, version, hostID, customLabel string, extraEnv map[string]string, optionsFrom, pin string) (launcher.Instance, error)
 	Stop(id string) error
+}
+
+// OptionMover überträgt die Instanz-Optionen auf die neue Instanz-ID (*nodeoptions.Store).
+type OptionMover interface {
+	MoveInstance(from, to string) error
 }
 
 // GraphService ist die von Service genutzte Teilmenge von
@@ -81,7 +89,11 @@ type Service struct {
 	nodes    NodeLister
 	launcher LauncherService
 	graph    GraphService
+	options  OptionMover
 }
+
+// SetOptionMover setzt den Speicher, dessen Instanz-Optionen bei RestartInPlace mitwandern.
+func (s *Service) SetOptionMover(m OptionMover) { s.options = m }
 
 func NewService(nodes NodeLister, launcherSvc LauncherService, graphSvc GraphService) *Service {
 	return &Service{nodes: nodes, launcher: launcherSvc, graph: graphSvc}
@@ -205,7 +217,8 @@ func (s *Service) captureEdges(ctx context.Context, oldNode registry.NodeView) [
 // könnte nach dem Neustart z. B. weniger Ports haben als zuvor
 // (Konfigurationsänderung), das darf den restlichen Umzug nicht
 // verhindern.
-func (s *Service) reconnect(ctx context.Context, newNode registry.NodeView, edges []edgeRef) {
+func (s *Service) reconnect(ctx context.Context, newNode registry.NodeView, edges []edgeRef) int {
+	connected := 0
 	for _, e := range edges {
 		var fromSender, toReceiver string
 		switch e.side {
@@ -232,6 +245,94 @@ func (s *Service) reconnect(ctx context.Context, newNode registry.NodeView, edge
 		cancel()
 		if err != nil {
 			slog.Warn("instancemigrate: reconnect failed", "fromSender", fromSender, "toReceiver", toReceiver, "error", err)
+			continue
 		}
+		connected++
 	}
+	return connected
+}
+
+// RestartResult beschreibt den Ausgang von RestartInPlace.
+type RestartResult struct {
+	OldInstanceID string `json:"oldInstanceId"`
+	NewInstanceID string `json:"newInstanceId"`
+	// RolledBack: der Start mit der neuen Version scheiterte, die Instanz läuft wieder mit dem
+	// bisherigen Binary (NewInstanceID ist dann die zurückgerollte Instanz).
+	RolledBack bool `json:"rolledBack,omitempty"`
+	// Reconnected: Anzahl wiederhergestellter Kanten.
+	Reconnected int `json:"reconnected"`
+}
+
+// RestartInPlace startet eine eigenständige Instanz auf DEMSELBEN Host neu — mit der Binary-Version,
+// die ein regulärer Start jetzt bekäme (produktive Version) — und stellt ihre Kanten wieder her
+// (Kapitel 28 Schritt 3, kontrollierte Migration auf eine andere Version). Synchron.
+//
+// Sicherheitsnetz: scheitert der Start der neuen Version oder ihre Registrierung, wird sofort
+// die alte Version (Pin auf den bisherigen Stand) neu gestartet und verkabelt; der Fehler wird
+// trotzdem gemeldet. Instanz-Optionen wandern mit. Ein kurzer Signalausfall ist hier wie beim
+// Host-Umzug hinnehmbar (kein Make-before-break für eigenständige Instanzen).
+func (s *Service) RestartInPlace(ctx context.Context, oldInstanceID string) (RestartResult, error) {
+	inst, ok := s.launcher.Get(oldInstanceID)
+	if !ok {
+		return RestartResult{}, fmt.Errorf("%w: %q", ErrUnknownInstance, oldInstanceID)
+	}
+	res := RestartResult{OldInstanceID: oldInstanceID}
+	var edges []edgeRef
+	if oldNode, ok := s.findNodeByInstance(oldInstanceID); ok {
+		edges = s.captureEdges(ctx, oldNode)
+	}
+	oldPin := inst.NodeVersion
+	if oldPin == "" {
+		oldPin = launcher.PinInstalled
+	}
+
+	if err := s.launcher.Stop(oldInstanceID); err != nil {
+		return res, fmt.Errorf("alte Instanz stoppen: %w", err)
+	}
+
+	start := func(pin string) (launcher.Instance, registry.NodeView, error) {
+		n, err := s.launcher.StartPinned(inst.Type, inst.Version, inst.HostID, inst.Label, inst.ExtraEnv, oldInstanceID, pin)
+		if err != nil {
+			return n, registry.NodeView{}, err
+		}
+		rctx, cancel := context.WithTimeout(ctx, registrationTimeout)
+		defer cancel()
+		node, err := s.awaitRegistration(rctx, n.ID)
+		if err != nil {
+			_ = s.launcher.Stop(n.ID)
+			return n, registry.NodeView{}, err
+		}
+		return n, node, nil
+	}
+
+	newInst, newNode, err := start("")
+	if err != nil {
+		slog.Warn("instancemigrate: neue Version startet nicht — Rollback", "instance", oldInstanceID, "error", err)
+		rb, rbNode, rbErr := start(oldPin)
+		if rbErr != nil {
+			return res, fmt.Errorf("neue Version fehlgeschlagen (%v) UND Rollback fehlgeschlagen: %w", err, rbErr)
+		}
+		res.RolledBack, res.NewInstanceID = true, rb.ID
+		res.Reconnected = s.reconnectCounting(ctx, rbNode, edges)
+		s.moveOptions(oldInstanceID, rb.ID)
+		return res, fmt.Errorf("neue Version fehlgeschlagen, auf bisherigen Stand zurückgerollt: %w", err)
+	}
+	res.NewInstanceID = newInst.ID
+	res.Reconnected = s.reconnectCounting(ctx, newNode, edges)
+	s.moveOptions(oldInstanceID, newInst.ID)
+	return res, nil
+}
+
+func (s *Service) moveOptions(from, to string) {
+	if s.options == nil {
+		return
+	}
+	if err := s.options.MoveInstance(from, to); err != nil {
+		slog.Warn("instancemigrate: Instanz-Optionen nicht übertragen", "from", from, "to", to, "error", err)
+	}
+}
+
+// reconnectCounting wie reconnect, liefert aber die Zahl der Kanten, die der neue Node aufnehmen konnte.
+func (s *Service) reconnectCounting(ctx context.Context, newNode registry.NodeView, edges []edgeRef) int {
+	return s.reconnect(ctx, newNode, edges)
 }

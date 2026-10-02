@@ -137,12 +137,38 @@ func handleSetProductiveNodeVersion(store NodeVersionStore, svc LauncherService,
 		name := r.PathValue("name")
 		var body struct {
 			Version string `json:"version"`
+			// Force bestätigt einen Wechsel über eine Contract-Generation hinweg.
+			Force bool `json:"force"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
 		prev := store.Productive(name)
+		// Kapitel 28 Schritt 4: Verträglichkeit der Contract-Generation prüfen, BEVOR umgestellt wird.
+		paths, _ := catalogBinaries(svc.Catalog())
+		installed := 0
+		if p, ok := paths[name]; ok {
+			if info, err := nodeversions.InstalledInfo(p); err == nil {
+				installed = info.Generation()
+			}
+		}
+		current, target := installed, installed
+		for _, v := range store.List(name) {
+			if v.ID == prev {
+				current = v.Contract
+			}
+			if v.ID == body.Version {
+				target = v.Contract
+			}
+		}
+		if current > 0 && target > 0 {
+			err := nodeversions.CheckSwitch(current, target)
+			if errors.Is(err, nodeversions.ErrIncompatible) || (errors.Is(err, nodeversions.ErrContractChange) && !body.Force) {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+		}
 		if err := store.SetProductive(name, body.Version); err != nil {
 			status := http.StatusInternalServerError
 			if errors.Is(err, nodeversions.ErrNotFound) {

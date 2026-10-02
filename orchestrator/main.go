@@ -26,6 +26,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/backup"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/channeltrigger"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/cluster"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/consoles"
@@ -43,9 +44,9 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/locations"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
-	"github.com/infantilo/openmediaplatform/orchestrator/internal/locations"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeoptions"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeversions"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/organizations"
@@ -939,6 +940,10 @@ func main() {
 	// im Hintergrund archiviert (Rückkehr nach einem Update).
 	nodeVersionStore := nodeversions.New(cfg.NodeVersionsDir)
 	launcherSvc.SetBinaryResolver(nodeVersionStore.Resolve)
+	launcherSvc.SetBinaryLookup(func(name, id string) (string, bool) {
+		p, err := nodeVersionStore.Path(name, id)
+		return p, err == nil
+	})
 	safego.Go("nodeversions.registerInstalled", func() {
 		paths := map[string]string{}
 		for _, c := range launcherSvc.Catalog() {
@@ -953,7 +958,21 @@ func main() {
 	})
 	updateSvc := updates.New(cfg.UpdateDir, cfg.UpdatePubKeyFile, cfg.UpdateAllowUnsigned, runtime.GOOS+"/"+runtime.GOARCH, 0)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithPlayout(playout.NewStore(database), workflowSvc), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)))
+	// Kapitel 27 / P7: Channel-Trigger — Zustellung per NATS, Wiederholung nur auf dem Cluster-Leader.
+	playoutStore := playout.NewStore(database)
+	triggerStore := channeltrigger.NewStore(database)
+	triggerRouter := &channeltrigger.Router{
+		Store: triggerStore, Channels: playoutStore,
+		Audit: func(actor, id, action string, d map[string]any) {
+			domainAuditStore.Log(actor, "channel_trigger", id, action, d)
+		},
+	}
+	if nc != nil {
+		triggerRouter.Pub = nc
+	}
+	go runWhileLeader(ctx, clusterNode, triggerRouter.Run)
+
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithPlayout(playoutStore, workflowSvc), httpapi.WithChannelTriggers(triggerRouter, triggerStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)))
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

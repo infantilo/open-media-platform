@@ -112,6 +112,8 @@ type BuildInfo struct {
 	Version string `json:"version"`
 	Commit  string `json:"commit,omitempty"`
 	BuiltAt string `json:"builtAt,omitempty"`
+	// Contract: Contract-Generation des Node-Binaries (Kapitel 28 Schritt 4); 0 = nicht gemeldet.
+	Contract int `json:"contract,omitempty"`
 }
 
 // DeviceView ist die normalisierte Sicht auf ein IS-04-Device.

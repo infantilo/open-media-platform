@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -296,6 +297,11 @@ func buildInfo(n is04Node) *BuildInfo {
 	}
 	if len(v) > 2 {
 		b.BuiltAt = v[2]
+	}
+	if len(v) > 3 {
+		if n, err := strconv.Atoi(v[3]); err == nil {
+			b.Contract = n
+		}
 	}
 	return b
 }

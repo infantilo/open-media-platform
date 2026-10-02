@@ -42,6 +42,8 @@ type handlerOptions struct {
 	nodeVersions    NodeVersionStore
 	nodeValues      NodeOptionValues
 	locations       LocationStore
+	triggerRouter   ChannelTriggerService
+	triggerStore    ChannelTriggerStore
 	systemSettings  SystemSettingsStore
 	startupSkipped  []string
 	workflowRuns    WorkflowRunReader

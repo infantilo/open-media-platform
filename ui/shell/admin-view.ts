@@ -291,7 +291,22 @@ const SUB_TAB_BUTTON_BASE =
   "border:1px solid transparent;border-radius:var(--omp-radius);" +
   "padding:6px 12px;font-size:var(--omp-font-size-sm);font-family:var(--omp-font);cursor:pointer;";
 
+interface RolloutItem {
+  instanceId: string;
+  label: string;
+  mode: string;
+  from: string;
+  state: string;
+  detail?: string;
+}
+interface RolloutStatus {
+  name?: string;
+  target?: string;
+  running: boolean;
+  items: RolloutItem[];
+}
 interface NodeVersionEntry {
+  contract?: number;
   id: string;
   version: string;
   commit?: string;
@@ -487,6 +502,9 @@ class AdminView extends HTMLElement {
   #nv: NodeVersionOverview | null = null;
   #nvBuilds = new Map<string, string>();
   #nvBusy = false;
+  // Rollout (Kapitel 28 Schritt 3): letzter Stand je Binary-Name + Poll, solange einer läuft.
+  #nvRollouts = new Map<string, RolloutStatus>();
+  #nvRolloutPoll: number | null = null;
   // Einstellungs-Ansicht: dieselbe Instanz bei jedem Neuzeichnen, damit Eingaben erhalten bleiben.
   #settingsView: HTMLElement | null = null;
   #locationsView: HTMLElement | null = null;
@@ -1408,19 +1426,87 @@ class AdminView extends HTMLElement {
     }
   }
 
-  async #setProductiveVersion(t: NodeVersionType, id: string) {
+  async #setProductiveVersion(t: NodeVersionType, id: string, force = false): Promise<void> {
     const target = id === "" ? "das installierte Binary" : `Version ${id}`;
-    const ok = await confirmDialog(
+    const ok = force || await confirmDialog(
       `${t.name}: ${target} als produktiv festlegen? Es gilt für neu gestartete Instanzen. Laufende Instanzen bleiben ` +
         `unverändert, bis sie neu gestartet werden (System-Update → „Veraltete neu starten“).`,
       { confirmLabel: "Festlegen" },
     );
     if (!ok) return;
-    await this.#nodeVersionCall(
+    const res = await this.#nodeVersionCall(
       `/api/v1/admin/node-versions/${encodeURIComponent(t.name)}/productive`,
-      { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: id }) },
+      { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: id, force }) },
       "Festlegen fehlgeschlagen",
     );
+    // Wechsel über eine Contract-Generation: erst nach ausdrücklicher Bestätigung (unbekannte Generationen nie).
+    if (res === null && !force && /Wechsel über eine Contract-Generation/.test(this.#error)) {
+      const msg = this.#error;
+      if (await confirmDialog(`${msg}\n\nTrotzdem umstellen?`, { confirmLabel: "Trotzdem umstellen" })) {
+        this.#error = "";
+        await this.#setProductiveVersion(t, id, true);
+      }
+    }
+  }
+
+  async #loadRollout(name: string) {
+    try {
+      const res = await apiFetch(`/api/v1/admin/node-versions/${encodeURIComponent(name)}/rollout`);
+      if (res.ok) this.#nvRollouts.set(name, (await res.json()) as RolloutStatus);
+    } catch {
+      // nächster Poll
+    }
+  }
+
+  #pollRollout(name: string) {
+    if (this.#nvRolloutPoll !== null) return;
+    this.#nvRolloutPoll = window.setInterval(async () => {
+      await this.#loadRollout(name);
+      this.#render();
+      if (!this.#nvRollouts.get(name)?.running && this.#nvRolloutPoll !== null) {
+        window.clearInterval(this.#nvRolloutPoll);
+        this.#nvRolloutPoll = null;
+        await this.#loadNodeVersions();
+      }
+    }, 2000);
+  }
+
+  /** Plan zeigen, bestätigen, dann nacheinander umstellen (mit Rollback bei Fehler). */
+  async #startRollout(t: NodeVersionType) {
+    const call = (body: unknown) =>
+      apiFetch(`/api/v1/admin/node-versions/${encodeURIComponent(t.name)}/rollout`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+    this.#error = "";
+    const dry = await call({ dryRun: true });
+    if (!dry.ok) {
+      this.#error = (await dry.text()).trim();
+      this.#render();
+      return;
+    }
+    const plan = (await dry.json()) as RolloutStatus;
+    if (plan.items.length === 0) {
+      this.#error = "Keine laufende Instanz muss umgestellt werden.";
+      this.#render();
+      return;
+    }
+    const lines = plan.items.map((i) => `• ${i.label} (${i.mode === "workflow-role" ? "Workflow-Rolle" : "eigenständig"}): ${i.from || "installiert"} → ${plan.target || "installiert"}`);
+    const ok = await confirmDialog(
+      `${plan.items.length} Instanz(en) nacheinander auf ${plan.target || "das installierte Binary"} umstellen?\n\n${lines.join("\n")}\n\n` +
+        `Jede Instanz wird neu gestartet (kurzer Signalausfall), ihre Verbindungen werden wiederhergestellt. ` +
+        `Startet eine neue Version nicht, läuft die Instanz mit dem bisherigen Stand weiter und der Rollout bricht ab.`,
+      { confirmLabel: "Rollout starten" },
+    );
+    if (!ok) return;
+    const res = await call({ confirm: true });
+    if (!res.ok) {
+      this.#error = `Rollout nicht gestartet: ${(await res.text()).trim()}`;
+      this.#render();
+      return;
+    }
+    this.#nvRollouts.set(t.name, (await res.json()) as RolloutStatus);
+    this.#render();
+    this.#pollRollout(t.name);
   }
 
   async #deleteNodeVersion(t: NodeVersionType, id: string) {
@@ -1488,6 +1574,7 @@ class AdminView extends HTMLElement {
           tr.append(
             cell(isProd ? `● ${v.id}` : v.id),
             cell(v.commit ?? ""),
+            cell(`Gen ${v.contract ?? 1}`),
             cell(v.source ?? ""),
             cell(`${(v.size / 1048576).toFixed(1)} MB`),
           );
@@ -1522,6 +1609,32 @@ class AdminView extends HTMLElement {
         back.disabled = this.#nvBusy;
         back.addEventListener("click", () => void this.#setProductiveVersion(t, ""));
         card.appendChild(back);
+      }
+      // Rollout: laufende lokale Instanzen, die nicht mit der gewählten Version laufen
+      const target = t.productive;
+      const behind = t.instances.filter((i) => !i.remote && (i.nodeVersion ?? "") !== target);
+      const ro = this.#nvRollouts.get(t.name);
+      if (behind.length > 0 || ro?.running) {
+        const row = document.createElement("div");
+        row.style.cssText = "margin-top:8px;";
+        const btn = document.createElement("button");
+        btn.textContent = ro?.running ? "Rollout läuft …" : `${behind.length} laufende Instanz(en) auf ${target || "installiertes Binary"} umstellen …`;
+        btn.disabled = !!ro?.running || this.#nvBusy;
+        btn.addEventListener("click", () => void this.#startRollout(t));
+        row.appendChild(btn);
+        if (ro && ro.items.length > 0) {
+          const list = document.createElement("div");
+          list.style.cssText = "margin-top:6px;font-size:11px;";
+          const marks: Record<string, string> = { ok: "✓", rolled_back: "↩", failed: "✗", running: "…", pending: "·", skipped: "–" };
+          for (const i of ro.items) {
+            const line = document.createElement("div");
+            line.style.cssText = i.state === "failed" || i.state === "rolled_back" ? "color:var(--omp-danger,#d33);" : "";
+            line.textContent = `${marks[i.state] ?? "?"} ${i.label}: ${i.state}${i.detail ? ` — ${i.detail}` : ""}`;
+            list.appendChild(line);
+          }
+          row.appendChild(list);
+        }
+        card.appendChild(row);
       }
       if (t.instances.length > 0) {
         const list = document.createElement("div");

@@ -327,6 +327,7 @@ func catalogKey(nodeType, version string) string {
 // Vertrauensstufe.
 type Launcher struct {
 	binaryResolver BinaryResolver
+	binaryLookup   BinaryLookup
 	// Kapitel 29: einstellbare Node-Optionen (Schema je Typ + gespeicherte Werte).
 	optionSchema map[string][]nodeoptions.Option
 	optionStore  *nodeoptions.Store
@@ -894,7 +895,7 @@ func (l *Launcher) StartLabeled(nodeType, version, hostID, customLabel string, e
 	if hostID != "" {
 		return l.startRemote(nodeType, hostID, customLabel, extraEnv, "")
 	}
-	return l.startLocal(nodeType, version, customLabel, extraEnv, "")
+	return l.startLocal(nodeType, version, customLabel, extraEnv, "", "")
 }
 
 // startLocal — unverändertes Verhalten aus C8 (OMP_INSTANCE_ID/
@@ -903,7 +904,7 @@ func (l *Launcher) StartLabeled(nodeType, version, hostID, customLabel string, e
 // extraEnv (s. `Start`-Doku). version (§17 Teil 5) wählt zwischen
 // mehreren importierten Versionen desselben Typs — leer heißt "die
 // einzige/statische Version", s. resolveCatalogEntry.
-func (l *Launcher) startLocal(nodeType, version, customLabel string, extraEnv map[string]string, optionsFrom string) (Instance, error) {
+func (l *Launcher) startLocal(nodeType, version, customLabel string, extraEnv map[string]string, optionsFrom, pin string) (Instance, error) {
 	entry, err := l.resolveCatalogEntry(nodeType, version)
 	if err != nil {
 		return Instance{}, err
@@ -929,7 +930,10 @@ func (l *Launcher) startLocal(nodeType, version, customLabel string, extraEnv ma
 		return Instance{}, ErrUnsupportedRunner
 	}
 
-	entry, nodeVersion := l.applyProductiveBinary(entry)
+	entry, nodeVersion, perr := l.applyBinary(entry, pin)
+	if perr != nil {
+		return Instance{}, perr
+	}
 	cmd, stderrTail, err := l.execEntry(entry, id, label, launchSecret, l.withOptions(nodeType, id, optionsFrom, extraEnv))
 	if err != nil {
 		return Instance{}, fmt.Errorf("launcher: start %s: %w", nodeType, err)
@@ -1050,7 +1054,56 @@ func (l *Launcher) StartInheriting(nodeType, version, hostID, customLabel string
 	if hostID != "" {
 		return l.startRemote(nodeType, hostID, customLabel, extraEnv, optionsFrom)
 	}
-	return l.startLocal(nodeType, version, customLabel, extraEnv, optionsFrom)
+	return l.startLocal(nodeType, version, customLabel, extraEnv, optionsFrom, "")
+}
+
+// PinInstalled ist der Pin-Wert für „das im Katalog verzeichnete (installierte) Binary“.
+const PinInstalled = "@installed"
+
+// StartPinned startet wie StartInheriting, aber aus einer BESTIMMTEN Binary-Version (Pin = Versions-ID
+// des Versionsspeichers, PinInstalled = Katalog-Binary, "" = produktive Version). Gebraucht für den
+// Rollback eines gescheiterten Rollouts (zurück auf den Stand der alten Instanz). Remote-Hosts
+// beziehen ihre Binaries über den Host-Agent — dort gilt der Pin nicht.
+func (l *Launcher) StartPinned(nodeType, version, hostID, customLabel string, extraEnv map[string]string, optionsFrom, pin string) (Instance, error) {
+	if hostID != "" {
+		return l.startRemote(nodeType, hostID, customLabel, extraEnv, optionsFrom)
+	}
+	return l.startLocal(nodeType, version, customLabel, extraEnv, optionsFrom, pin)
+}
+
+// BinaryLookup liefert den Pfad einer bestimmten Binary-Version (Kapitel 28 Schritt 3).
+type BinaryLookup func(binaryName, versionID string) (path string, ok bool)
+
+// SetBinaryLookup aktiviert Pins auf bestimmte Versionen.
+func (l *Launcher) SetBinaryLookup(f BinaryLookup) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.binaryLookup = f
+}
+
+// applyBinary wählt das Binary: Pin vor produktiver Version vor Katalog-Binary.
+func (l *Launcher) applyBinary(entry CatalogEntry, pin string) (CatalogEntry, string, error) {
+	switch pin {
+	case "":
+		e, id := l.applyProductiveBinary(entry)
+		return e, id, nil
+	case PinInstalled:
+		return entry, "", nil
+	}
+	l.mu.Lock()
+	lookup := l.binaryLookup
+	l.mu.Unlock()
+	if lookup == nil || len(entry.Command) == 0 {
+		return entry, "", fmt.Errorf("launcher: Version %q nicht verfügbar (kein Versionsspeicher)", pin)
+	}
+	path, ok := lookup(filepath.Base(entry.Command[0]), pin)
+	if !ok {
+		return entry, "", fmt.Errorf("launcher: Version %q von %s nicht im Versionsspeicher", pin, filepath.Base(entry.Command[0]))
+	}
+	cmd := append([]string(nil), entry.Command...)
+	cmd[0] = path
+	entry.Command = cmd
+	return entry, pin, nil
 }
 
 // appliedFor liefert den beim Start gemerkten Optionsstand einer (neuen) Instanz.

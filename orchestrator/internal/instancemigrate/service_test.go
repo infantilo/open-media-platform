@@ -38,6 +38,10 @@ type fakeLauncher struct {
 	nextID   int
 	stopped  []string
 	startErr error
+	// failPin: StartPinned mit diesem Pin schlägt fehl ("" = die neue/produktive Version).
+	failPin   *string
+	pinsUsed  []string
+	onStarted func(launcher.Instance) // simuliert die Node-Registrierung der gestarteten Instanz
 }
 
 func newFakeLauncher() *fakeLauncher {
@@ -67,6 +71,21 @@ func (f *fakeLauncher) StartLabeled(nodeType, version, hostID, customLabel strin
 	inst := launcher.Instance{ID: fmt.Sprintf("inst-%d", f.nextID), Type: nodeType, Label: customLabel, HostID: hostID}
 	f.byID[inst.ID] = inst
 	return inst, nil
+}
+
+func (f *fakeLauncher) StartPinned(nodeType, version, hostID, customLabel string, extraEnv map[string]string, optionsFrom, pin string) (launcher.Instance, error) {
+	f.mu.Lock()
+	f.pinsUsed = append(f.pinsUsed, pin)
+	fail := f.failPin != nil && *f.failPin == pin
+	f.mu.Unlock()
+	if fail {
+		return launcher.Instance{}, errors.New("start fehlgeschlagen (Test)")
+	}
+	inst, err := f.StartLabeled(nodeType, version, hostID, customLabel, extraEnv)
+	if err == nil && f.onStarted != nil {
+		f.onStarted(inst)
+	}
+	return inst, err
 }
 
 func (f *fakeLauncher) Stop(id string) error {
@@ -217,5 +236,89 @@ func TestMigrateInstanceRejectsUnregisteredInstance(t *testing.T) {
 	err := svc.MigrateInstance(context.Background(), "old-1", "host-b")
 	if !errors.Is(err, ErrNotRegistered) {
 		t.Fatalf("MigrateInstance() error = %v, want ErrNotRegistered", err)
+	}
+}
+
+type fakeMover struct{ moves [][2]string }
+
+func (m *fakeMover) MoveInstance(from, to string) error {
+	m.moves = append(m.moves, [2]string{from, to})
+	return nil
+}
+
+func restartSetup(t *testing.T) (*Service, *fakeLauncher, *fakeGraph, *fakeNodes, *fakeMover) {
+	t.Helper()
+	orig := registrationPollInterval
+	origTimeout := registrationTimeout
+	registrationPollInterval = 5 * time.Millisecond
+	registrationTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { registrationPollInterval, registrationTimeout = orig, origTimeout })
+
+	nodes := &fakeNodes{}
+	l := newFakeLauncher()
+	g := &fakeGraph{}
+	svc := NewService(nodes, l, g)
+	mv := &fakeMover{}
+	svc.SetOptionMover(mv)
+	l.onStarted = func(i launcher.Instance) {
+		nodes.add(registry.NodeView{ID: "node-" + i.ID, InstanceID: i.ID,
+			Senders: []registry.SenderView{{ID: "send-" + i.ID}}, Receivers: []registry.ReceiverView{{ID: "recv-" + i.ID}}})
+	}
+	l.seed(launcher.Instance{ID: "old-1", Type: "omp-scaler", Label: "Scaler", NodeVersion: "1.0"})
+	nodes.add(registry.NodeView{ID: "node-old", InstanceID: "old-1",
+		Senders: []registry.SenderView{{ID: "send-old"}}, Receivers: []registry.ReceiverView{{ID: "recv-old"}}})
+	g.g = graph.Graph{Edges: []graph.Edge{{FromSender: "send-old", ToReceiver: "recv-ext"}, {FromSender: "send-ext", ToReceiver: "recv-old"}}}
+	return svc, l, g, nodes, mv
+}
+
+func TestRestartInPlaceRewiresAndMovesOptions(t *testing.T) {
+	svc, l, g, _, mv := restartSetup(t)
+	res, err := svc.RestartInPlace(context.Background(), "old-1")
+	if err != nil || res.RolledBack || res.NewInstanceID == "" || res.Reconnected != 2 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if len(g.calls) != 2 {
+		t.Fatalf("beide Kanten müssen auf den neuen Ports wiederhergestellt sein: %+v", g.calls)
+	}
+	if len(mv.moves) != 1 || mv.moves[0] != [2]string{"old-1", res.NewInstanceID} {
+		t.Fatalf("Instanz-Optionen müssen mitwandern: %+v", mv.moves)
+	}
+	if len(l.pinsUsed) != 1 || l.pinsUsed[0] != "" {
+		t.Fatalf("neue Version = Start ohne Pin (produktiv): %v", l.pinsUsed)
+	}
+}
+
+func TestRestartInPlaceRollsBackToTheOldVersionWhenTheNewOneFails(t *testing.T) {
+	svc, l, g, _, mv := restartSetup(t)
+	empty := ""
+	l.failPin = &empty // die neue (produktive) Version startet nicht
+	res, err := svc.RestartInPlace(context.Background(), "old-1")
+	if err == nil || !res.RolledBack || res.NewInstanceID == "" {
+		t.Fatalf("Fehler + Rollback erwartet: %+v %v", res, err)
+	}
+	if len(l.pinsUsed) != 2 || l.pinsUsed[1] != "1.0" {
+		t.Fatalf("Rollback muss auf den Stand der alten Instanz pinnen: %v", l.pinsUsed)
+	}
+	if len(g.calls) != 2 || res.Reconnected != 2 {
+		t.Fatalf("auch nach dem Rollback müssen die Kanten stehen: %+v %+v", g.calls, res)
+	}
+	if len(mv.moves) != 1 {
+		t.Fatalf("Optionen wandern auch bei Rollback: %+v", mv.moves)
+	}
+}
+
+func TestRestartInPlaceReportsDoubleFailure(t *testing.T) {
+	svc, l, _, _, _ := restartSetup(t)
+	l.startErr = errors.New("kein Start möglich")
+	res, err := svc.RestartInPlace(context.Background(), "old-1")
+	if err == nil || res.NewInstanceID != "" {
+		t.Fatalf("%+v %v", res, err)
+	}
+}
+
+func TestRestartInPlaceUnknownInstance(t *testing.T) {
+	svc, _, _, _, _ := restartSetup(t)
+	if _, err := svc.RestartInPlace(context.Background(), "nix"); !errors.Is(err, ErrUnknownInstance) {
+		t.Fatal(err)
 	}
 }

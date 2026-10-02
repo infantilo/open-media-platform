@@ -26,3 +26,30 @@ func TestApplyProductiveBinaryReplacesOnlyTheCopy(t *testing.T) {
 		t.Fatal("ProductiveVersion")
 	}
 }
+
+func TestApplyBinaryPins(t *testing.T) {
+	l := &Launcher{}
+	entry := CatalogEntry{Type: "audio-mixer", Runner: "process", Command: []string{"../nodes/target/debug/omp-audio-mixer"}}
+	l.SetBinaryResolver(func(string) (string, string) { return "/store/prod/omp-audio-mixer", "2.0" })
+	l.SetBinaryLookup(func(name, id string) (string, bool) {
+		if name == "omp-audio-mixer" && id == "1.0" {
+			return "/store/1.0/omp-audio-mixer", true
+		}
+		return "", false
+	})
+	if e, id, err := l.applyBinary(entry, ""); err != nil || id != "2.0" || e.Command[0] != "/store/prod/omp-audio-mixer" {
+		t.Fatalf("ohne Pin: produktiv: %v %q %v", e.Command, id, err)
+	}
+	if e, id, err := l.applyBinary(entry, PinInstalled); err != nil || id != "" || e.Command[0] != entry.Command[0] {
+		t.Fatalf("PinInstalled: Katalog-Binary trotz produktiver Version: %v %q %v", e.Command, id, err)
+	}
+	if e, id, err := l.applyBinary(entry, "1.0"); err != nil || id != "1.0" || e.Command[0] != "/store/1.0/omp-audio-mixer" {
+		t.Fatalf("Pin auf Version: %v %q %v", e.Command, id, err)
+	}
+	if _, _, err := l.applyBinary(entry, "9.9"); err == nil {
+		t.Fatal("unbekannte Version muss scheitern, nicht still auf ein anderes Binary fallen")
+	}
+	if entry.Command[0] != "../nodes/target/debug/omp-audio-mixer" {
+		t.Fatal("Katalogeintrag unverändert")
+	}
+}

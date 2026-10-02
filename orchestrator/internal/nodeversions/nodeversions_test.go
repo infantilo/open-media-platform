@@ -160,3 +160,48 @@ func TestRegisterPackageStoresNodeComponentsAndInstalledSkipsDev(t *testing.T) {
 		t.Fatalf("added=%+v skipped=%+v", added, skipped)
 	}
 }
+
+func TestContractChecks(t *testing.T) {
+	if (Info{}).Generation() != 1 || (Info{Contract: 2}).Generation() != 2 {
+		t.Fatal("fehlende Angabe = Generation 1")
+	}
+	if err := CheckSupported(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckSupported(2); !errors.Is(err, ErrIncompatible) {
+		t.Fatalf("unbekannte Generation: %v", err)
+	}
+	if err := CheckSupported(0); !errors.Is(err, ErrIncompatible) {
+		t.Fatalf("Generation 0: %v", err)
+	}
+	if err := CheckSwitch(1, 1); err != nil {
+		t.Fatal(err)
+	}
+	// Unterstützt der Orchestrator nur Generation 1, ist jeder Wechsel auf eine andere unzulässig.
+	if err := CheckSwitch(2, 1); !errors.Is(err, ErrContractChange) || !strings.Contains(err.Error(), "Downgrade") {
+		t.Fatalf("Downgrade 2→1: %v", err)
+	}
+	if err := CheckSwitch(1, 2); !errors.Is(err, ErrIncompatible) {
+		t.Fatalf("Upgrade auf unbekannte Generation: %v", err)
+	}
+}
+
+func TestMarkerCarriesContractAndAddKeepsIt(t *testing.T) {
+	src, st := t.TempDir(), New(t.TempDir())
+	body := `xx OMPBUILD1{"contract":1,"version":"2026.10.7","commit":"c1"}OMPBUILD1END yy`
+	p := filepath.Join(src, "bin")
+	_ = os.WriteFile(p, []byte(body), 0o755)
+	if info, err := ReadMarker(p); err != nil || info.Generation() != 1 || info.Contract != 1 {
+		t.Fatalf("%+v %v", info, err)
+	}
+	v, err := st.Add("omp-m", p, "")
+	if err != nil || v.Contract != 1 {
+		t.Fatalf("%+v %v", v, err)
+	}
+	// Binary ohne contract-Feld (älterer Stempel) → Generation 1.
+	q := filepath.Join(src, "old")
+	_ = os.WriteFile(q, []byte(`OMPBUILD1{"version":"2026.9.1"}OMPBUILD1END`), 0o755)
+	if v, err := st.Add("omp-m", q, ""); err != nil || v.Contract != 1 {
+		t.Fatalf("%+v %v", v, err)
+	}
+}

@@ -47,9 +47,12 @@ var (
 
 // Info ist der aus einem Binary gelesene Stempel.
 type Info struct {
-	Version string `json:"version"`
-	Commit  string `json:"commit,omitempty"`
-	BuiltAt string `json:"builtAt,omitempty"`
+	// Contract: Contract-Generation (Node-Schnittstelle + Format persistierter Zustände).
+	// 0/fehlend = Binary aus der Zeit vor dieser Angabe, gilt als Generation 1.
+	Contract int    `json:"contract,omitempty"`
+	Version  string `json:"version"`
+	Commit   string `json:"commit,omitempty"`
+	BuiltAt  string `json:"builtAt,omitempty"`
 }
 
 const (
@@ -106,14 +109,16 @@ func ReadMarker(path string) (Info, error) {
 
 // Version ist eine gespeicherte Binary-Version.
 type Version struct {
-	Name    string    `json:"name"`
-	ID      string    `json:"id"`
-	Version string    `json:"version"`
-	Commit  string    `json:"commit,omitempty"`
-	BuiltAt string    `json:"builtAt,omitempty"`
-	SHA256  string    `json:"sha256"`
-	Size    int64     `json:"size"`
-	AddedAt time.Time `json:"addedAt"`
+	Name    string `json:"name"`
+	ID      string `json:"id"`
+	Version string `json:"version"`
+	Commit  string `json:"commit,omitempty"`
+	BuiltAt string `json:"builtAt,omitempty"`
+	// Contract: Contract-Generation (>= 1).
+	Contract int       `json:"contract"`
+	SHA256   string    `json:"sha256"`
+	Size     int64     `json:"size"`
+	AddedAt  time.Time `json:"addedAt"`
 	// Source: woher die Version kam („Update 2026.10.1“, „installiert“, „Import“).
 	Source string `json:"source,omitempty"`
 }
@@ -188,7 +193,7 @@ func (s *Store) Add(name, srcPath, source string) (Version, error) {
 	if err := os.Rename(dst+".part", dst); err != nil {
 		return Version{}, err
 	}
-	v := Version{Name: name, ID: id, Version: info.Version, Commit: info.Commit, BuiltAt: info.BuiltAt,
+	v := Version{Name: name, ID: id, Version: info.Version, Commit: info.Commit, BuiltAt: info.BuiltAt, Contract: info.Generation(),
 		SHA256: sha, Size: size, AddedAt: time.Now().UTC(), Source: source}
 	meta, _ := json.MarshalIndent(v, "", "  ")
 	if err := os.WriteFile(filepath.Join(dir, "meta.json"), meta, 0o640); err != nil {
@@ -222,7 +227,13 @@ func (s *Store) readMeta(dir string) (Version, error) {
 		return Version{}, err
 	}
 	var v Version
-	return v, json.Unmarshal(data, &v)
+	if err := json.Unmarshal(data, &v); err != nil {
+		return v, err
+	}
+	if v.Contract <= 0 {
+		v.Contract = 1 // vor Einführung der Contract-Generation archiviert
+	}
+	return v, nil
 }
 
 // Names liefert die Typen mit mindestens einer gespeicherten Version.
@@ -437,4 +448,50 @@ func (s *Store) RegisterPackage(pkgFile string, m update.Manifest, source string
 		out = append(out, v)
 	}
 	return out, nil
+}
+
+// Vom Orchestrator unterstützte Contract-Generationen (Kapitel 28 Schritt 4). Wird nur
+// zusammen mit der Unterstützung der neuen Generation im Orchestrator erhöht.
+const (
+	MinContract = 1
+	MaxContract = 1
+)
+
+// Generation liefert die Contract-Generation (fehlende Angabe = 1).
+func (i Info) Generation() int {
+	if i.Contract <= 0 {
+		return 1
+	}
+	return i.Contract
+}
+
+// ErrIncompatible: die Contract-Generation liegt außerhalb dessen, was dieser Orchestrator kennt.
+var ErrIncompatible = errors.New("nodeversions: Contract-Generation wird von diesem Orchestrator nicht unterstützt")
+
+// ErrContractChange: Wechsel über eine Contract-Generation hinweg (Zustandsformate/Schnittstelle
+// können inkompatibel sein) — nur mit ausdrücklicher Bestätigung.
+var ErrContractChange = errors.New("nodeversions: Wechsel über eine Contract-Generation hinweg")
+
+// CheckSupported prüft, ob der Orchestrator die Generation kennt.
+func CheckSupported(contract int) error {
+	if contract < MinContract || contract > MaxContract {
+		return fmt.Errorf("%w (Generation %d, unterstützt %d–%d)", ErrIncompatible, contract, MinContract, MaxContract)
+	}
+	return nil
+}
+
+// CheckSwitch beurteilt den Wechsel von Generation `from` auf `to`: unterstützt? gleiche
+// Generation? Sonst ErrContractChange (der Aufrufer fragt nach / erzwingt).
+func CheckSwitch(from, to int) error {
+	if err := CheckSupported(to); err != nil {
+		return err
+	}
+	if from != to {
+		dir := "Upgrade"
+		if to < from {
+			dir = "Downgrade"
+		}
+		return fmt.Errorf("%w: %s von Generation %d auf %d — gespeicherte Zustände (Presets, Snapshots) und die Node-Schnittstelle können inkompatibel sein", ErrContractChange, dir, from, to)
+	}
+	return nil
 }

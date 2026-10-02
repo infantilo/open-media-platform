@@ -123,6 +123,9 @@ type LauncherService interface {
 	// StartLabeled ist Start mit optionalem customLabel (Nutzerwunsch
 	// 2026-07-28) — leer heißt automatisch generiertes Label wie bisher.
 	StartLabeled(nodeType, version, hostID, customLabel string, extraEnv map[string]string) (launcher.Instance, error)
+	// StartPinned (Kapitel 28 Schritt 3): Start aus einer bestimmten Binary-Version, mit den
+	// Instanz-Optionen von optionsFrom — s. launcher.Launcher.StartPinned.
+	StartPinned(nodeType, version, hostID, customLabel string, extraEnv map[string]string, optionsFrom, pin string) (launcher.Instance, error)
 	Stop(id string) error
 	// TotalRestarts (S8, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — s.
 	// handleMetrics in metrics.go.
@@ -339,6 +342,9 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// sind schon da und erfüllen strukturell die (bewusst kleineren)
 	// Interfaces von instancemigrate.
 	instanceMigrateSvc := instancemigrate.NewService(nodes, launcherSvc, graphSvc)
+	if mover, ok := options.nodeValues.(instancemigrate.OptionMover); ok {
+		instanceMigrateSvc.SetOptionMover(mover)
+	}
 	// Sicherheits-Härtung 2026-08-10 (ARCHITECTURE.md §20.4): prozesslokal
 	// statt injiziert — reines In-Memory-Rate-Limiting braucht keinen
 	// austauschbaren Test-Doppelgänger, der über die ohnehin schon sehr
@@ -517,6 +523,9 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/admin/storage-locations", g.requireVerbGlobal(authz.VerbAdmin, handleCreateLocation(options.locations, launcherSvc, options.domainAudit)))
 	mux.HandleFunc("PUT /api/v1/admin/storage-locations/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleUpdateLocation(options.locations, options.domainAudit)))
 	mux.HandleFunc("DELETE /api/v1/admin/storage-locations/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteLocation(options.locations, options.nodeValues, launcherSvc, options.domainAudit)))
+	rolloutMgr := NewRolloutManager()
+	mux.HandleFunc("POST /api/v1/admin/node-versions/{name}/rollout", g.requireVerbGlobal(authz.VerbAdmin, handleStartNodeRollout(rolloutMgr, launcherSvc, workflowSvc, instanceMigrateSvc, options.domainAudit)))
+	mux.HandleFunc("GET /api/v1/admin/node-versions/{name}/rollout", g.requireVerbGlobal(authz.VerbAdmin, handleGetNodeRollout(rolloutMgr)))
 	mux.HandleFunc("GET /api/v1/host-updates/{id}", handleHostUpdateDownload(options.updates, options.updateDist))
 	mux.HandleFunc("POST /api/v1/admin/updates/{id}/apply", g.requireVerbGlobal(authz.VerbAdmin, handleApplyUpdate(options.updates, options.updateSup, options.updateBackup, options.nodeRegistrar(), launcherSvc, options.domainAudit)))
 
@@ -753,6 +762,15 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 		mux.HandleFunc("GET /api/v1/playout/channels/{id}/state", g.requireAuth(handleGetPlayoutState(options.playout, authzStore, options.playoutRoles)))
 		mux.HandleFunc("PUT /api/v1/playout/channels/{id}/state", g.requireAuth(handlePutPlayoutState(options.playout, authzStore, options.playoutRoles)))
 		mux.HandleFunc("POST /api/v1/playout/channels/{id}/executions", g.requireAuth(handleRecordPlayoutExecution(options.playout, authzStore, options.playoutRoles)))
+		// Kapitel 27 / P7: Channel-Trigger (vermittelt, berechtigt, protokolliert).
+		if options.triggerRouter != nil && options.triggerStore != nil {
+			mux.HandleFunc("POST /api/v1/playout/channels/{id}/triggers", g.requireAuth(handleSendChannelTrigger(options.triggerRouter, options.playout, authzStore, options.playoutRoles)))
+			mux.HandleFunc("POST /api/v1/playout/channels/{id}/trigger-ack", g.requireAuth(handleAckChannelTrigger(options.triggerRouter, options.playout, authzStore, options.playoutRoles)))
+			mux.HandleFunc("GET /api/v1/playout/triggers", g.requireVerbGlobal(authz.VerbView, handleListChannelTriggers(options.triggerStore)))
+			mux.HandleFunc("GET /api/v1/playout/trigger-rules", g.requireVerbGlobal(authz.VerbView, handleListTriggerRules(options.triggerStore)))
+			mux.HandleFunc("POST /api/v1/playout/trigger-rules", g.requireVerbGlobal(authz.VerbConfigure, handleAddTriggerRule(options.triggerStore, options.domainAudit)))
+			mux.HandleFunc("DELETE /api/v1/playout/trigger-rules/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleDeleteTriggerRule(options.triggerStore, options.domainAudit)))
+		}
 	}
 	if options.groups != nil {
 		mux.HandleFunc("GET /api/v1/groups", g.requireVerbGlobal(authz.VerbAdmin, handleListGroups(options.groups)))

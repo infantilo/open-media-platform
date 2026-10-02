@@ -3,10 +3,12 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -108,5 +110,44 @@ func TestNodeVersionsDisabledIs501(t *testing.T) {
 	handleListNodeVersions(nil, fakeLauncherService{})(rec, httptest.NewRequest(http.MethodGet, "/l", nil))
 	if rec.Code != http.StatusNotImplemented {
 		t.Fatalf("want 501, got %d", rec.Code)
+	}
+}
+
+func stampedContract(version string, contract int) []byte {
+	return []byte("ELF.." + `OMPBUILD1{"contract":` + strconv.Itoa(contract) + `,"version":"` + version + `"}OMPBUILD1END` + "..")
+}
+
+// Wechsel über Contract-Generationen: unbekannte Generation nie, bekannte nur mit Bestätigung.
+func TestSetProductiveChecksContractGeneration(t *testing.T) {
+	dir := t.TempDir()
+	store := nodeversions.New(filepath.Join(dir, "nv"))
+	put := func(file string, b []byte) string {
+		p := filepath.Join(dir, file)
+		_ = os.WriteFile(p, b, 0o755)
+		return p
+	}
+	installed := put("omp-mixer", stampedContract("1.0", 1))
+	if _, err := store.Add("omp-mixer", put("v-same", stampedContract("1.1", 1)), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Add("omp-mixer", put("v-new", stampedContract("2.0", 2)), ""); err != nil {
+		t.Fatal(err)
+	}
+	svc := fakeLauncherService{catalog: []launcher.CatalogEntry{{Type: "audio-mixer", Runner: "process", Command: []string{installed}}}}
+	set := func(v string, force bool) int {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPut, "/p", strings.NewReader(fmt.Sprintf(`{"version":%q,"force":%v}`, v, force)))
+		req.SetPathValue("name", "omp-mixer")
+		handleSetProductiveNodeVersion(store, svc, nil)(rec, req)
+		return rec.Code
+	}
+	if c := set("1.1", false); c != 200 {
+		t.Fatalf("gleiche Generation: %d", c)
+	}
+	if c := set("2.0", true); c != 409 {
+		t.Fatalf("unbekannte Generation 2 darf auch mit force nie produktiv werden: %d", c)
+	}
+	if store.Productive("omp-mixer") != "1.1" {
+		t.Fatal("Markierung darf sich nicht geändert haben")
 	}
 }
