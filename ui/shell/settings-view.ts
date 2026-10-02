@@ -48,6 +48,9 @@ class SettingsView extends HTMLElement {
   #drafts = new Map<string, string>();
   // Instanz-ID → Host-ID (Remote-Instanzen), aus /api/v1/instances.
   #hostIds = new Map<string, string>();
+  // Benannte Speicherorte (Admin → Storage) als Auswahl für Pfad-Optionen.
+  #locations: { id: string; name: string; hostId: string; path: string; status: string }[] = [];
+  #hostLabels = new Map<string, string>();
 
   #loaded = false;
 
@@ -70,6 +73,9 @@ class SettingsView extends HTMLElement {
         this.#hostIds.clear();
         for (const i of (await inst.json()) as { id: string; hostId?: string }[]) if (i.hostId) this.#hostIds.set(i.id, i.hostId);
       }
+      const [loc, hosts] = await Promise.all([apiFetch("/api/v1/admin/storage-locations?checks=0"), apiFetch("/api/v1/hosts")]);
+      if (loc.ok) this.#locations = ((await loc.json()) as { locations: { id: string; name: string; hostId: string; path: string; status: string }[] }).locations ?? [];
+      if (hosts.ok) for (const h of (await hosts.json()) as { id: string; label: string }[]) this.#hostLabels.set(h.id, h.label);
       if (n.ok) this.#types = ((await n.json()) as { types: NodeTypeRow[] }).types ?? [];
       if (s.ok) this.#system = await s.json();
       if (!this.#types.some((t) => t.type === this.#selectedType)) {
@@ -285,6 +291,28 @@ class SettingsView extends HTMLElement {
     reset.addEventListener("click", () => void this.#saveNode(t, o, "", instanceId));
     actions.append(save, reset);
     if (o.type === "path") {
+      // Speicherort wählen: Orte des Hosts, auf dem der Wert gilt (Instanz) bzw. alle (Typ-Wert).
+      const hostFilter = inst ? (inst.remote ? this.#hostOf(inst.id) : "") : null;
+      const choices = this.#locations.filter((l) => l.status === "active" && (hostFilter === null || l.hostId === hostFilter));
+      if (choices.length > 0) {
+        const pick = el("select", "padding:2px;max-width:200px;");
+        const first = el("option", "", "Speicherort wählen …");
+        first.value = "";
+        pick.append(first);
+        for (const l of choices) {
+          const op = el("option", "", `${l.name}${hostFilter === null ? ` · ${l.hostId ? this.#hostLabels.get(l.hostId) ?? "Host" : "Orchestrator"}` : ""} — ${l.path}`);
+          op.value = l.path;
+          pick.append(op);
+        }
+        pick.addEventListener("change", () => {
+          if (!pick.value) return;
+          input.value = pick.value;
+          this.#drafts.set(dk, pick.value);
+          save.disabled = !isDirty(pick.value, saved) || this.#busy;
+          pick.value = "";
+        });
+        actions.append(pick);
+      }
       const test = el("button", BTN, "Pfad prüfen");
       test.addEventListener("click", () => {
         const p = input.value.trim() || o.default || "";

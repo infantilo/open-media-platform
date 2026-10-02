@@ -41,6 +41,7 @@ type handlerOptions struct {
 	updateDist      UpdateDistributor
 	nodeVersions    NodeVersionStore
 	nodeValues      NodeOptionValues
+	locations       LocationStore
 	systemSettings  SystemSettingsStore
 	startupSkipped  []string
 	workflowRuns    WorkflowRunReader

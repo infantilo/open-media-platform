@@ -19,6 +19,7 @@
 // paar Sekunden zu pollen. Poll bleibt nur als deutlich langsamerer
 // Reconnect-/Fallback-Pfad (AUDIT_POLL_FALLBACK_INTERVAL_MS).
 import "./settings-view.ts";
+import "./locations-view.ts";
 import { fetchBuildInfo, formatFirmwareLong } from "./version.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { getToken, login } from "./auth.ts";
@@ -488,6 +489,7 @@ class AdminView extends HTMLElement {
   #nvBusy = false;
   // Einstellungs-Ansicht: dieselbe Instanz bei jedem Neuzeichnen, damit Eingaben erhalten bleiben.
   #settingsView: HTMLElement | null = null;
+  #locationsView: HTMLElement | null = null;
 
   // Cluster-Sub-Tab (ARCHITECTURE.md §19.3, UMSETZUNG.md D12) — die
   // bisher UI-lose Raft-Status-/Join-/Leave-API bekommt hier eine
@@ -2285,6 +2287,8 @@ class AdminView extends HTMLElement {
         break;
       case "storage":
         this.appendChild(this.#renderStorageSection());
+        this.#locationsView ??= document.createElement("omp-locations-view");
+        this.appendChild(this.#locationsView);
         break;
       case "audit":
         this.appendChild(this.#renderAuditSection());

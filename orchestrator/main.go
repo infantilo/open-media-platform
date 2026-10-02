@@ -45,6 +45,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/locations"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeoptions"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeversions"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/organizations"
@@ -952,7 +953,7 @@ func main() {
 	})
 	updateSvc := updates.New(cfg.UpdateDir, cfg.UpdatePubKeyFile, cfg.UpdateAllowUnsigned, runtime.GOOS+"/"+runtime.GOARCH, 0)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithPlayout(playout.NewStore(database), workflowSvc), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped))
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithPlayout(playout.NewStore(database), workflowSvc), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)))
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

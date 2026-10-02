@@ -218,11 +218,14 @@ func checkRange(o Option, n float64, lo, hi *float64) error {
 
 // PathInfo ist das Ergebnis einer Pfadprüfung auf dem Orchestrator-Host.
 type PathInfo struct {
-	Exists   bool   `json:"exists"`
-	IsDir    bool   `json:"isDir"`
-	Readable bool   `json:"readable"`
-	Entries  int    `json:"entries,omitempty"` // Verzeichnis: Anzahl Einträge (gedeckelt)
-	Message  string `json:"message"`
+	Exists   bool `json:"exists"`
+	IsDir    bool `json:"isDir"`
+	Readable bool `json:"readable"`
+	Entries  int  `json:"entries,omitempty"` // Verzeichnis: Anzahl Einträge (gedeckelt)
+	// FreeBytes/TotalBytes: Speicherplatz des Dateisystems (Verzeichnisse, wo ermittelbar).
+	FreeBytes  uint64 `json:"freeBytes,omitempty"`
+	TotalBytes uint64 `json:"totalBytes,omitempty"`
+	Message    string `json:"message"`
 }
 
 // CheckPath prüft einen Pfad (relativ = zum Arbeitsverzeichnis des Orchestrators,
@@ -248,6 +251,7 @@ func CheckPath(p, kind string) PathInfo {
 			return info
 		}
 		info.Readable = true
+		info.FreeBytes, info.TotalBytes = diskSpace(p)
 		info.Entries = len(entries)
 		info.Message = fmt.Sprintf("Verzeichnis lesbar, %d Einträge", len(entries))
 	default:
