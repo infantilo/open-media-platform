@@ -4428,6 +4428,236 @@ aktualisiert.
 
 ---
 
+## 6g. Kapitel 27 — Playout-Automation: vom Rundown-Controller zum Channel-Automator (Bestandsaufnahme, 2026-10-02)
+
+Nutzerauftrag 2026-10-02: Spezifikation `~/automatisation.txt` (Nummer 27, weil 26 bereits der Audiomischer-Auftrag vom 2026-10-01 ist) (275
+Abschnitte). `omp-playout-automation` soll einen kompletten linearen
+TV-Channel steuern (Playlist/Timeline, Primary + Child Events, dynamische
+Source-Auflösung über Tags/Capabilities, semantisches Audio-Routing,
+Multi-Channel-Trigger, Asset-Preflight, Recovery, As-Run). Leitregel der
+Spec: der Automator entscheidet *was/wann/warum*, die Nodes *wie*; keine
+Rückkehr zu einem `MasterPipeline.js`-Monolithen; nichts doppelt bauen, was
+OMP generisch kann; **kein Fake** (§275: Funktion erst „fertig", wenn sie
+real gegen Control/NMOS/MXL/NATS/Audio/Video/Asset läuft, sonst Grenze
+dokumentieren).
+
+**Dieses Kapitel ist reine Bestandsaufnahme + Plan, KEIN Code** (gleiche
+Disziplin wie Kapitel 21/22/25). Nichts davon ist umgesetzt.
+
+### 27.1 Bestandsaufnahme OMP (existing)
+
+**`omp-playout-automation` heute** (`nodes/omp-playout-automation`, ~3900
+Zeilen Rust: `main.rs` 2986, `playlist.rs` 412, `timeline.rs` 235,
+`remote.rs` 263, UI-Bundle):
+
+- **Architektur stimmt bereits mit der Spec-Leitregel überein:** keine
+  eigene Pipeline, kein GStreamer; steuert über den Orchestrator-Proxy
+  (`remote.rs`, Service-Token, IS-12/14-Methoden) zwei
+  `omp-channel-player` (A/B-Kanal), einen `omp-video-mixer-me` und optional
+  `omp-ograf`. Ziele per beschreibbarem Label-Parameter
+  (`targetPlayerALabel/BLabel/MixerLabel/GraphicsLabel`), Auswahl aus
+  `availableNodes`.
+- **Datenmodell:** `Playlist` (`playlist.rs`) hält nur eine flache
+  `Vec<String>` von Item-IDs + `current_index`/`on_air`/`Mode{Auto,Hold}`;
+  die Substanz liegt in `ItemMeta` (`main.rs:248`): `label`,
+  `ItemMedia{TestPattern, File{path}, Live{sender_id}}`, `duration_ms`,
+  `StartType{Sequence,Manual,Fixtime}`, `fixtime_hms`,
+  `Transition{Cut,Mix}` + Rate, `children: Vec<GraphicsChild>`.
+- **Bereits vorhanden (Spec-Bezug):** Take/Next/NextLive/Stop/Hold
+  (§62–64; Methoden `take`, `next`, `nextLive`, `stop`, Parameter `mode`),
+  Fixtime mit Pre-Cue/Gnadenfenster/Skip (§61 teilweise, `fixtime_loop`),
+  Cut/Mix-Transition (§65 teilweise), Grafik-Kind-Events relativ zu
+  Start/Ende mit Epochen-Stornierung (§46–50 teilweise, `graphics_loop`),
+  Cart-/Interrupt-Assets mit automatischem Return (§244–247, `cart.*`),
+  gefensterter inkrementeller Timeline-Cache statt Full-Recompute
+  (§229/§231, `timeline.rs`), Verfügbarkeitsprüfung File/Live (§67
+  teilweise, `item_is_available`), Dauer-Auto-Advance (`auto_advance_loop`).
+- **Lücken gegenüber der Spec (im Code gefunden, nicht aus der Spec
+  geraten):**
+  - **Keine Persistenz:** kein Datei-/DB-Zugriff im Node (Suche nach
+    persist/save/.json ergab nur Kommentare). Zustand lebt im
+    `Mutex<AutomationState>`. → §114–116, §166–171 (Recovery, Versionen,
+    Snapshots) komplett offen; ein Neustart verliert die Playlist.
+  - **Keine Wanduhr-Playlist:** Zeitplan ist *sequenziell*
+    (Präfixsummen ab Playlist-Beginn) + Einzel-Fixtimes als `HH:MM:SS` ohne
+    Datum (selbst dokumentierte Mitternachts-Grenze,
+    `seconds_since_midnight_local`, `chrono::Local` — keine IANA-Zone/
+    DST-Logik). → §6, §172 offen.
+  - **Kein Event-Typ-Modell:** nur 3 Medienarten; kein IMAGE, GRAPHIC,
+    BREAK, VOICEOVER, TRIGGER, BLACK, HOLD, JUMP als Primary (§7, §11).
+  - **Child Events nur Grafik** (`GraphicsChild`: `Start|End`-relativ,
+    `delayMs`/`durationMs`). Fehlend: Zeitmodi `ABSOLUTE`/`FULL_PRIMARY`
+    (§48), Typen LOGO/BRANDING/TRIGGER/SUBTITLE/VOICEOVER/AUDIO/ROUTING/
+    SOURCE/SCTE35/GPI/WEBHOOK/NODE_COMMAND (§49), Lifecycle/Failure-Policy/
+    Retry/Idempotenz (§56–57, §188–190).
+  - **Keine Capability-Auswahl des Players:** `File{path}` geht fest an den
+    `omp-channel-player`; Rohdateipfad statt Asset-Referenz (§9–10, §68,
+    §177). Der `omp-mxf-player` (eigenes Item-Modell, `audioPreset`,
+    `programGroups`, `shufflePresets`) wird von der Automation **nicht**
+    gesteuert.
+  - **Kein Source-Resolver:** `Live{sender_id}` = exakte Sender-ID
+    (`EXACT_ID`), kein Tag-/Capability-/Group-Match, keine Health-Wahl,
+    kein Failover (§14–17, §75–76, §156).
+  - **Kein NATS-Eventpublishing:** `OMP_NATS_URL` geht nur ans SDK
+    (Health); keine `playout.*`-Events (§113), kein Channel-Bus (§81).
+  - **Kein As-Run, kein Preflight, keine Severity-Stufen, kein
+    LIVE_ASSIST/MANUAL als Channel-Zustand** (nur `Mode{Auto,Hold}` plus
+    pro-Item `StartType::Manual`), kein expliziter Channel-/Event-
+    Zustandsautomat (§117–129, §196–197).
+  - **Genau ein Channel pro Node-Instanz** (impliziter Single-Channel;
+    „Channel" als Domain-Objekt existiert nicht, §5, §77).
+  - **Keine IS-05-Verbindungen:** der Mixer wählt per
+    `crosspoint.select/cut` bereits verbundene Eingänge; die Automation
+    legt keine NMOS-Verbindungen an (§211–214 offen).
+
+**Bestehende OMP-Bausteine, die die Spec wiederverwendet sehen will:**
+
+| Spec-Thema | Vorhanden (Fundstelle) | Bewertung |
+|---|---|---|
+| Source-Discovery (§13) | IS-04-Registry (`orchestrator/internal/registry`), Adapter `ui/kit/source-catalog.ts` → `SourceEntry` (Workflow/Node/Natural-Group/`mediaType`/`access{visible,selectable}`) | **Wiederverwenden.** `<omp-source-selector>` (§92/§216) existiert inkl. visible/selectable. Fehlt: Tags/Capabilities/Health als Filter. |
+| Tags (§18–25) | IS-04-`tags`-Map (`map<string,string[]>`) auf Node/Device/Source/Flow/Sender/Receiver (`omp-node-sdk/src/is04.rs`, `SenderSpec.tags` → `node.rs:84`), `urn:x-omp:workflow`, NMOS-`grouphint` | **Datenmodell existiert**, eigene URN wie `urn:x-omp:workflow` ist etabliertes Muster. **Nicht gefunden:** Operator-Tag-Editor, Persistenz manueller Tags, EXPLICIT/DERIVED/DISCOVERED-Herkunft, automatische Ableitung aus Kanalzahl. |
+| Natural Groups (§220) | `grouphint`-Parsing im Source-Selector (`ParsedGroupHint`) | wiederverwenden; ersetzt kein Tag-System (Spec §220 sagt dasselbe). |
+| Audio-Kontext (§40–44) | `omp-audio-mixer`: `ContextRule{source→scene}`, `AudioContext{active_sources,active_scene}`, `setVideoContext`, Tally-getrieben (`rules.rs`), Szenen (`captureScene/activateScene`) | **Teilweiser Vorläufer:** Kontext = „Videoquelle live → Szene aktivieren". Das ist *Szenen*-, nicht *Rollen*-Routing (`expects=role.commentator`). Erweiterungspunkt, kein Ersatz. |
+| Audio-Presets (§27–31, §97) | Mixer-Szenen/Presets (`docs/decisions.md` Nachtrag 40); `omp-mxf-player`: `audioPreset`, `shufflePresets`, `programGroups` | zwei getrennte Preset-Welten (Mixer-Szene vs. MXF-Track-Shuffle). Keine **Source→angebotene Presets**-Capability. |
+| Asset/Representation/Availability (§67–70) | `orchestrator/internal/asset` (Asset, AssetVersion, `Representation` mit `StorageLocation`/`StorageBackendID`, Lifecycle `registered…ready…`, NATS `omp.asset.<id>.<event>` via Outbox), `storagebackends`, `objectstore` | **Wiederverwenden** für Asset-Referenz (`assetId/version/representation`). Lifecycle ≠ Spec-Materialisierung (`AVAILABLE/REMOTE_ONLY/TRANSFERRING/READY`) — Abbildung offen (E4). |
+| Process-Engine (§69, §181–183) | `orchestrator/internal/process`: Executors (service_call, media_function, script, human_task, subworkflow, condition/branch, notification), Events `omp.process.<exec>.<status>`, `triggerlistener` | **Wiederverwenden** für Materialize/Transfer/QC/Transcode; asynchron, Status auf NATS. **Kein** fertiges File-Transfer-Materialize-Template gefunden. |
+| Event-Bus/NATS (§113) | `eventbus`, `outbox`, Subjects `omp.asset.>`, `omp.process.>`, `omp.health.>`, `omp.tally.<node>`, `omp.logs.*`; SDK-Publisher (`health.rs`) | wiederverwenden; Namensraum `omp.playout.<channel>.…` wäre neu. |
+| Scheduler/Zeit (§60, §172) | `workflows/scheduler.go` (Workflow-Start-Schedules) | gehört der Workflow-Engine, **kein** Playlist-Scheduler. Keine PTP-/frame-genaue Zeitbasis im Orchestrator gefunden. |
+| Auth/Rollen/Audit (§164, §227–228) | `authz` (Bindings subject×workflow×node×Verb), `auth`, `audit`, `domainaudit`; Service-Token-Proxy | wiederverwenden. Cross-Channel-Berechtigung wäre eine Binding-Anwendung. |
+| Node-Control (§110–112) | IS-12/14-Descriptor + generischer Proxy (`httpapi/proxy.go`), `PeerClient` im SDK | wiederverwenden; ograf-Methoden `show/update/continue/hide` (+`layerId`) sind bereits die generische Steuerfläche. |
+| Persistenz-Muster | Postgres im Orchestrator (`internal/db`, Migrationen); Nodes halten sonst Zustand lokal/in Parametern | **Offene Architekturfrage** (E1). |
+| Cross-Host (§78) | `cluster`, `hosts`, `placement`, `supervisorclient` | Grundlage für verteilte Channels vorhanden. |
+
+### 27.2 Bestandsaufnahme PIPELINE CONTROLLER (fachliche Referenz)
+
+Gelesen aus `/home/infantilo/PIPELINE CONTROLLER` (nur Struktur/Signaturen,
+nichts kopiert): `lib/PlaylistEngine.js` (2539 Z.: `calcTimeline`,
+`_armFixTimers`, `_advance`, `_schedulePreCues`, `_cancelChildEvents`,
+`_scheduleTriggerChildren`, `_scheduleVoiceoverChildren`, `_nextLiveIndex`,
+`_applyLiveAudioPreset`, `_resolveBackupFile`, `fillGaps`,
+`overlapWarnings`, `validate`, `_holdToFixtime`, `_waitManual`),
+`lib/ChannelBus.js` (TCP + NDJSON, Targets `*`/peerId/Gruppe,
+Hello-Handshake mit `groups`, Reconnect 5 s, kein Multi-Hop),
+`AudioRouter.js` (920 Z.), `AudioGroupConfig.js`/`AudioRules.js`,
+`VoiceoverEngine.js`, `GrafixEngine.js`, `MxlSource.js`,
+`PluginHost.js`/`PluginWorker.js` (Isolation per Worker), Plugins
+`file-transfer-manager`, `scte35`, `subtitle-fab`, `broadcast-controller`,
+`snmp-monitor`, `marina-sync`; As-Run als Tagesdatei
+(`asrun/AsRun_YYYYMMDD.txt`), `MarinaParser.js` (externer Playlist-Import).
+Die Spec verweist auf GitHub; die lokale Kopie wurde stattdessen gelesen
+(Stand kann vom GitHub-Repo abweichen).
+
+### 27.3 Mapping Alt → OMP (Entwurf, Spec §206/§270)
+
+| Pipeline Controller | OMP-Ziel | Status |
+|---|---|---|
+| PlaylistEngine (Sequenz, Fixtime, Precue, Hold, NextLive, Gaps, Overlap-Warnungen, Validate) | `omp-playout-automation` | Sequenz/Fixtime/Precue/Hold/NextLive **vorhanden**; Gaps/Overlap/Validate/Wanduhr **offen** |
+| Child Events Trigger/Voiceover/Record/Grafik | Child-Event-Modell im Automator, Ausführung per IS-12/14 | Grafik vorhanden; Rest offen |
+| PlayerPipeline | `omp-channel-player`, `omp-mxf-player` (+ künftige) | Nodes vorhanden; Capability-Auswahl offen |
+| MxlSource / Live-Source-Handling | IS-04/MXL-Discovery + Source-Resolver | Discovery vorhanden, Resolver offen |
+| AudioRouter/AudioRules/AudioGroupConfig | `omp-audio-mixer` (Szenen, Kontextregeln, Ducking) + neue Rollen-Routing-Policy | Teil vorhanden, Rollen/Tags offen |
+| Audio-Preset-Resilience (Fallback/Per-Track) | Mixer + Resolver-Fallback-Kette | offen (Verhalten vor Phase 5 gezielt im alten Code nachlesen) |
+| GrafixEngine/oGraf | `omp-ograf` | vorhanden (show/update/continue/hide) |
+| VoiceoverEngine | Audio-/Voiceover-Fähigkeit im Mixer (Ducking existiert: `addDuck`) | Voiceover-Trigger offen |
+| ChannelBus (TCP/NDJSON) | NATS-Subjects `omp.playout.…` | offen |
+| File-Transfer-Manager-Plugin | Asset-System + Process-Engine (Materialize) | offen (E4) |
+| SCTE-35-Plugin | eigener Node/Service, Playlist liefert Klassifikation | offen, spät |
+| Plugin-System | OMP Process/Node-Mechanismen; Plugin-Hooks nur wo nötig | offen (Spec §133: nichts automatisch als Plugin) |
+| As-Run (Tagesdatei) | persistenter As-Run-Store + NATS-Event | offen |
+| Supervisor / Multi-Channel | OMP-Orchestrator/Launcher/Placement | offen (E2) |
+| MarinaParser (externer Import) | nicht in der Spec | außerhalb Umfang, nicht übernehmen |
+| `omp-pipeline-controller` (OMP-Adapter-Sidecar) | bleibt unverändert | nicht anfassen |
+
+### 27.4 Offene Entscheidungen (§0 Punkt 8 — Nutzer entscheidet vor dem jeweiligen Phasenstart)
+
+- **E1 Wo lebt Playlist-/Channel-State (Persistenz)?** (a) Orchestrator-
+  Postgres als neue Domäne `playout` (wie `asset`/`workflows`;
+  Versionierung/Optimistic-Concurrency §166/§168 fast gratis,
+  Crash-Recovery über Orchestrator), (b) lokal im Node (Datei/SQLite;
+  einfacher, Multi-Host/Concurrency selbst bauen), (c) hybrid. —
+  Empfehlung (a), konsistent mit Kapitel 21.
+- **E2 Mehrere Channels:** eine Instanz = ein Channel oder N Channels je
+  Instanz? „Eine Instanz je Channel" nutzt Launcher/Placement
+  (§78), N je Instanz braucht Mandanten-Logik im Node. — Empfehlung: eine
+  Instanz je Channel, „Channel" als persistiertes Domain-Objekt (E1).
+- **E3 Wo sitzt die Tag-Wahrheit (§21–25)?** Sender-Tags kommen vom Node
+  per IS-04 (für Dritte read-only). Manuelle Operator-Tags + Herkunft
+  (EXPLICIT/DERIVED/DISCOVERED) brauchen einen Overlay-Store (Orchestrator,
+  pro Sender-ID, überlebt Node-Neustart), den Resolver/Selector über das
+  Registry-API lesen. Alternative: Nodes selbst beschreibbar (aufwendig,
+  jeder Node). Namespace-Format (`urn:x-omp:…`, Werte `domain.name`, Spec
+  §20) gegen das IS-04-Schema prüfen (§0 Punkt 6).
+- **E4 Materialisierung (§69–73):** passt der Asset-Lifecycle + 
+  `Representation.Storage` auf `REMOTE_ONLY → TRANSFERRING → READY`,
+  oder braucht es „lokal verfügbar auf Host X"? Erst Asset-Datenmodell +
+  `storagebackends` gezielt prüfen.
+- **E5 Zeitbasis (§60, §173):** kein PTP im Dev-System (§0 Punkt 7).
+  Vorschlag: UTC als interne Basis, Planung/Anzeige in Channel-Zeitzone
+  (IANA, DST-sicher; `chrono` allein hat keine Zonendatenbank → neue
+  Dependency `chrono-tz`, nach §0 Punkt 5 zu begründen), PTP später als
+  austauschbare Uhr.
+- **E6 Wohnort der Audio-Rollen-Policy/Resolver (§32–44, §100, §254):**
+  (a) Rust-Crate im Workspace (von Automator + Mixern genutzt),
+  (b) Go-Paket im Orchestrator als HTTP-Dienst, (c) TS-Modul in `ui/kit`
+  (nur UI — verfehlt die Spec, der Automator muss headless auflösen). —
+  Empfehlung (a).
+- **E7 Dynamische IS-05-Verbindungen (§211–214):** darf der Automator
+  Verbindungen herstellen (Berechtigung/Audit), oder wählt er nur zwischen
+  *vorverbundenen* Quellen (heutiger Stand)? Sicherheits-/Betriebsfrage.
+- **E8 Reihenfolge/Umfang:** Die Spec ist weit größer als ein Schritt je
+  Sitzung. Vorschlag: **Persistenz + Channel-/Event-Modell zuerst (P1)**,
+  weil alles Weitere darauf aufsetzt und der Node heute bei Neustart alles
+  verliert.
+
+### 27.5 Phasenplan (Entwurf — jede Phase = ein oder mehrere Schritte nach §0)
+
+Jede Phase endet mit Verifikation (Unit-Tests + Live-Test gegen die echte
+Dev-Umgebung, UI per CDP-Klicktest) und Doku-Update. Nichts gilt als
+fertig, wenn ein UI-Element nur simuliert (Spec §275).
+
+- **P1 — Modell + Persistenz** (§5–7, §58, §114–116, §166, §196–197).
+  Channel als Domain-Objekt (ID, Name, Zeitzone, Gruppe, Output-/Branding-/
+  Audio-Kontext-Felder), expliziter Channel-/Event-Zustandsautomat
+  (`statemachine`-Muster wie im Asset-Lifecycle), Persistenz nach E1,
+  Restart-Rekonstruktion ohne Re-Exec bereits ausgeführter Aktionen
+  (Execution-IDs). Bestehende Methoden bleiben kompatibel (§224).
+  Verifikation: `cargo test -p omp-playout-automation` (Zustandsübergänge,
+  Reload), Live: Playlist laden, Instanz per `DELETE
+  /api/v1/instances/{id}` + Neustart (nicht `kill -9`), Zustand
+  identisch, bereits gefeuerte Fixtime/Grafik feuert nicht doppelt.
+- **P2 — Primary Events + Wanduhr-Timeline** (§6–11, §59–64, §172,
+  §232–233): Typen CLIP/LIVE/IMAGE/BLACK/HOLD/JUMP, Startzeit mit Datum in
+  Channel-Zeitzone (E5), zentrale deterministische Event-Queue, CUE/TAKE/
+  ON-AIR getrennt.
+- **P3 — Child Events** (§46–58, §186–190, §234–243): Zeitmodi, alle Typen,
+  Lifecycle, Failure-Policy, Cancellation; `GraphicsChild` wird
+  Spezialfall (Migration, §225).
+- **P4 — Source-Resolver + Tags** (§12–25, §216–223, §251–255): Tag-
+  Overlay-Store (E3), `resolveSource(selector, ctx)` mit Erklärungsobjekt
+  (§252), Selector-UI um Tags/Health erweitern.
+- **P5 — Audio-Capabilities/Presets** (§26–31, §94–99, §261–265).
+- **P6 — Semantisches Audio-Routing** (§32–44, §100–103, §143) auf Basis
+  des vorhandenen `AudioContext` (nicht ersetzen); E6/E7 vorher entschieden.
+- **P7 — Multi-Channel/Channel-Trigger über NATS** (§77–90, §163–165,
+  §84–87): Idempotenz/Dedup/Late-Policy, Audit.
+- **P8 — Asset-/Process-Preflight** (§67–73, §181–185), E4 vorher.
+- **P9 — Graphics/Subtitle/Voiceover/Plugins/SCTE-35** (§130–138).
+- **P10 — As-Run, Metrics, Hardening, Doku, Abschlussbericht** (§117–119,
+  §191–193, §269–274), End-to-End-Test §210/§271.
+
+### 27.6 Nächster Schritt
+
+Nutzer entscheidet E1–E8 (mindestens E1, E2, E5 für P1), danach P1. Bis
+dahin keine Code-Änderung am Node. Vor dem jeweiligen Phasenstart gezielt
+nachzuprüfen (bewusst jetzt NICHT geraten): Image-Fähigkeit des
+`omp-channel-player`; ob `omp-video-mixer-me` FADE/V-FADE/CUT-FADE/
+FADE-CUT/X-FADE abbilden kann (bisher nur `autoTrans` bekannt);
+Audio-Preset-Resilience im alten `AudioRouter.js` und
+`PlaylistEngine.js::_applyLiveAudioPreset`; ein Process-Template für
+File-Transfer; das IS-04-Tag-Schema für Namespace-Tags.
+
+---
+
 ## 7. Status-Checkliste (von Claude nach jedem Schritt pflegen)
 
 | Schritt | Status | Commit | Datum |
@@ -4696,3 +4926,4 @@ aktualisiert.
 | Bugfix: "kein Bild" blieb permanent über einem erfolgreich geladenen Vorschaubild stehen (omp-video-mixer-me + omp-switcher, Nutzermeldung 2026-09-28) | erledigt | Nutzermeldung: bei eingeschalteten Quell-Vorschaubildern zeigte jede Kachel dauerhaft "kein Bild" über dem eigentlichen Bild, dazwischen blitzte ein schwarzes Frame durch. Root Cause live per CDP bestätigt (nicht geraten): `noSignal.hidden`/`img.hidden` wurden korrekt per JS gesetzt, hatten aber KEINE Wirkung — `.bus-thumb img { display:block; }`/`.bus-thumb .no-signal { display:flex; }` (Klassen-Selektor, Spezifität (0,1,1)/(0,2,0)) überstimmten die UA-Regel `[hidden]{display:none}` (Spezifität (0,1,0)) IMMER, unabhängig vom `hidden`-Attribut — bestätigt per `getComputedStyle().display`, blieb "flex" trotz `hidden=true`. Identischer Code (`img.addEventListener("load"/"error", ...)`-Muster) in BEIDEN Bundles gefunden und gefixt: Wechsel von `.hidden`-Property auf `.style.display` (inline, Spezifität 1000, schlägt jede externe Regel zuverlässig). `node --check` beide Bundles grün. `include_str!`-Neubau nötig (s. Memory `feedback_include_str_requires_rebuild_to_test_ui_changes`) — `cargo build --bin omp-video-mixer-me --bin omp-switcher`, laufende Mixer-Instanz per `POST /api/v1/workflows/{id}/roles/omp-video-mixer-me/restart` neu gestartet (gleiche Node-Identität, neue PID). Live per CDP gegen die ECHTE neu gestartete Instanz + echte SMPTE-Quellen verifiziert: alle vier Kacheln zeigen `img: display:block, noSignal: display:none`, über 2+ echte 2s-Poll-Zyklen hinweg stabil (kein Zurückfallen auf "kein Bild"), Screenshot zeigt saubere SMPTE-Farbbalken ohne Overlay-Text. `cargo test`/`cargo clippy` für beide Crates grün (Clippy-Warnungen in `omp-video-mixer-me/src/main.rs` sind vorbestehend, unrelated zu dieser Änderung, nicht angefasst). `omp-switcher` selbst nicht live neu gestartet (kein laufender Test-Workflow dafür vorhanden) — Fix ist aber byte-identisches Muster zum live verifizierten Mixer-Fix. | 2026-09-28 |
 | Bugfix Teil 2: Vorschaubild-Overlay-Fix behob "kein Bild", zyklisches Schwarz-Flackern blieb (omp-video-mixer-me + omp-switcher, Nutzer-Folgemeldung 2026-09-28) | erledigt | Nutzer-Folgemeldung nach Teil 1: "kein bild" weg, aber weiterhin zyklisches Schwarz-Flackern. Server-Seite live ausgeschlossen (20 direkte Snapshot-Requests in Folge, alle HTTP 200, konsistente Dateigröße — kein 503/kein echter Schwarz-Frame vom Server). Root Cause per Pixel-genauem `requestAnimationFrame`-Sampling gefunden: direkt nach jedem `img.src = neueURL` lief das `<img>` tatsächlich kurz durch `complete=false`/`naturalWidth=0` (echte Netzwerk-Ladezeit) — der bisherige Code-Kommentar ("der Browser zeigt das alte Bild von selbst weiter") war für dieses Setup schlicht falsch, live widerlegt statt weiter geglaubt. Ein einfacher "vorab laden, dieselbe URL zuweisen"-Trick scheidet aus, da der Server bewusst `Cache-Control: no-store` setzt (kein verältetes Bild einer anderen Instanz) — eine zweite Zuweisung derselben URL löst einen echten zweiten Roundtrip aus. Fix: `loadPreviewImage()` lädt als Blob + weist eine `Object-URL` zu (zeigt auf bereits vollständig im Speicher liegende Daten, kein Netzwerk-Wartezustand beim Zuweisen mehr) statt direkt `img.src = url`; `img._previewToken` verhindert, dass eine langsamere ältere Anfrage eine bereits fertige neuere überschreibt (relevant, da Tally-Events `refreshAll()` öfter als alle 2s auslösen können); Object-URLs verwaister (nicht wiederverwendeter) Knöpfe werden in `renderBusRow`/`refresh` per `URL.revokeObjectURL` freigegeben (sonst langsamer Speicherleck über eine lange Regie-Sitzung). Identischer Fix in beiden Bundles. Methodik-Fund dabei: eine erste Verifikation per `ctx.drawImage(img,...)` + `getImageData` auf einem Hilfs-Canvas erzeugte einen FALSCH-POSITIVEN "immer noch schwarz"-Befund (transparente/leere Pixel während der kurzen Decode-Microtask nach Zuweisen der Object-URL) — `drawImage` auf einem `<img>` mit `complete=false` liefert offenbar keinen Fehler, sondern zeichnet nichts, was mit "leer" verwechselt werden kann; die eigentliche Bildschirmausgabe (echte `page.screenshot()`-Serie, 60 Aufnahmen über 3,3s inkl. mehrerer echter Poll-Zyklen, alle mit konstanter Dateigröße und sichtbar sauberen SMPTE-Balken) zeigte KEIN Schwarz — reale Screenshots statt Canvas-Introspektion sind das verlässlichere Werkzeug für Flacker-Verifikation. `node --check` beide Bundles grün, `cargo build`+Neustart der laufenden Mixer-Instanz (erneut per Workflow-Rollen-Neustart), `cargo test`/`cargo clippy` für beide Crates grün (keine neuen Warnungen). | 2026-09-28 |
 | Kapitel 26: Audiomischer professionell (Nutzerauftrag 2026-10-01, `~/audiomixer.txt`) | erledigt (nicht gepusht) | Plan, Phasenstatus und Befunde in `docs/AUDIOMIXER-PLAN.md`, Abschlussbericht `docs/AUDIOMIXER-BERICHT.md`. Eigenes DSP (`dsp.rs`), AutoMix/Ducking (`automation.rs`, `engine.rs`), Gruppen/Regeln (`model.rs`), Automation/On-Air/Kontext (`rules.rs`, `media.rs`), Konsole `ui/*.js`, Tests `tests-ui/`. 63 Rust-Tests + CDP-Maus-/Touch-Tests; Stresstest 40 Neustarts ohne Ausfall. | 2026-10-01 |
+| Kapitel 27: Playout-Automation — Bestandsaufnahme + Phasenplan P1–P10 (KEIN Code) | erledigt | Nutzerauftrag `~/automatisation.txt`. §27.1 Bestand OMP (Playout-Node hat bereits Take/Next/NextLive/Fixtime/Cut+Mix/Grafik-Kinder/Carts/Timeline-Cache, aber keine Persistenz, keine Wanduhr-/Zeitzonen-Timeline, keinen Source-Resolver, kein NATS-Publishing, kein As-Run, kein Channel-Objekt), §27.2 Alt-Projekt lokal gelesen, §27.3 Mapping, §27.4 acht offene Entscheidungen E1–E8 (Persistenz, Channels/Instanz, Tag-Store, Materialisierung, Zeitbasis, Resolver-Wohnort, IS-05, Reihenfolge), §27.5 Phasenplan. Nächster Schritt: Nutzer entscheidet E1/E2/E5, dann P1. | 2026-10-02 |
