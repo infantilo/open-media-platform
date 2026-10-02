@@ -53,7 +53,7 @@ impl OrchestratorAuth {
     pub fn set(&self, token: String) {
         *self.token.lock().expect("lock poisoned") = Some(token);
     }
-    fn header(&self) -> Option<String> {
+    pub fn header(&self) -> Option<String> {
         self.token.lock().expect("lock poisoned").as_ref().map(|t| format!("Bearer {t}"))
     }
 }

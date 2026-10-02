@@ -149,6 +149,10 @@ pub struct AudioIntent {
     /// Globaler Fallback (Capability-Kennung).
     #[serde(rename = "globalDefault", default)]
     pub global_default: Option<String>,
+    /// P6: ausdrückliche Wahl je Audiomixer-Kanal (Kanal-ID → Capability bzw. Tags).
+    /// Schlägt die Kanal-Erwartung des Mixers (Spec §263: Event vor Kanal).
+    #[serde(default)]
+    pub channels: std::collections::BTreeMap<String, AudioChoice>,
 }
 
 /// Wodurch die Wahl zustande kam.

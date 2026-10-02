@@ -605,6 +605,10 @@ struct AutomationState {
     /// Player/Mixer) — erst `schedule_children` selbst meldet einen
     /// Fehler, und auch dann nur, wenn das Item tatsächlich Kinder hat.
     target_graphics_label: String,
+    /// Kapitel 27 / P6 (optional): Ziel-`omp-audio-mixer`, dem beim Take der Quell-Kontext
+    /// (`setSourceContext`) gemeldet wird. Leer = kein semantisches Audio-Routing.
+    target_audio_mixer_label: String,
+    audio_mixer_node_id: Option<String>,
     graphics_node_id: Option<String>,
     /// Erhöht sich bei JEDER On-Air-Änderung (alle 8 `take_on_targets`-
     /// Aufrufstellen, auch die drei "immer harter Cut"-Ausnahmen) — ein
@@ -652,6 +656,8 @@ impl AutomationState {
             timeline: TimelineCache::new(),
             fixtime_resolved: HashMap::new(),
             target_graphics_label: graphics_label,
+            target_audio_mixer_label: String::new(),
+            audio_mixer_node_id: None,
             graphics_node_id: None,
             child_epoch: 0,
             child_schedule: Vec::new(),
@@ -741,6 +747,9 @@ enum Event {
 
 struct AutomationStore {
     state: Mutex<AutomationState>,
+    /// Kapitel 27 / P6: Ergebnis des letzten Audio-Kontext-Aufrufs (Anzeige; eigener
+    /// Mutex, weil `take_on_targets` unter dem State-Lock läuft).
+    audio_status: Mutex<String>,
     registry: RegistryClient,
     events: mpsc::UnboundedSender<Event>,
     /// ARCHITECTURE.md §24.1 — Basis-URL des Orchestrators (für den
@@ -761,6 +770,10 @@ impl AutomationStore {
     /// Baut einen `ProxyClient` für eine gegebene Ziel-Node-ID —
     /// gemeinsamer Kern für Player- und Mixer-Zugriffe (beide sprechen
     /// denselben Orchestrator-Proxy an, nur unter unterschiedlicher ID).
+    fn audio_status_hint(&self, status: String) {
+        *self.audio_status.lock().expect("lock poisoned") = status;
+    }
+
     fn proxy_client(&self, node_id: String) -> ProxyClient {
         ProxyClient::new(self.orchestrator_url.clone(), node_id, self.auth.clone())
     }
@@ -1881,7 +1894,51 @@ fn take_on_targets(
         }
     }
 
+    apply_audio_context(store, state, meta);
     Ok(state.live_channel.other())
+}
+
+/// Kapitel 27 / P6: meldet dem Audiomixer nach dem Take, WELCHE Quelle jetzt im
+/// Programm ist (Quell-Kontext) und welche Kanal-Wahlen das Event ausdrücklich
+/// vorgibt. Der Mixer ordnet seine Kanäle anhand ihrer Tag-Erwartung selbst zu.
+/// Items ohne Live-Quelle beenden den Kontext (Mixer stellt die manuelle Zuordnung
+/// wieder her). Best effort: ein Fehler hier blockiert nie den Videotake — er
+/// landet in `audioRouting` (Anzeige) und im Log.
+fn apply_audio_context(store: &AutomationStore, state: &AutomationState, meta: &ItemMeta) {
+    let Some(node_id) = state.audio_mixer_node_id.clone() else { return };
+    let source = match &meta.media {
+        ItemMedia::Live { sender_id } => state.sources.iter().find(|s| &s.sender_id == sender_id),
+        ItemMedia::LiveSelect { selector } => omp_resolver::resolve(&effective_selector(selector), &state.sources)
+            .selected_id
+            .and_then(|id| state.sources.iter().find(|s| s.sender_id == id)),
+        _ => None,
+    };
+    let (method, args, what) = match source {
+        Some(src) => {
+            let ctx = omp_resolver::SourceContext::of(src);
+            let overrides = meta.audio.as_ref().map(|a| a.channels.clone()).unwrap_or_default();
+            (
+                "setSourceContext",
+                serde_json::json!({
+                    "nodeId": ctx.node_id,
+                    "group": ctx.group,
+                    "label": format!("{} / {}", src.node_label, src.label),
+                    "overridesJson": serde_json::to_string(&overrides).unwrap_or_default(),
+                }),
+                format!("Kontext {} / {}", src.node_label, src.label),
+            )
+        }
+        None => ("clearSourceContext", serde_json::json!({}), "Kontext beendet".to_string()),
+    };
+    let result = store.proxy_client(node_id).invoke(method, args);
+    let status = match &result {
+        Ok(()) => format!("{what}: gemeldet"),
+        Err(e) => {
+            eprintln!("omp-playout-automation: Audio-Kontext ({what}) fehlgeschlagen: {e}");
+            format!("{what}: FEHLGESCHLAGEN ({e})")
+        }
+    };
+    store.audio_status_hint(status);
 }
 
 /// Kapitel 6 Teil 4: liest `transition`/`transition_rate_frames` aus
@@ -2225,6 +2282,14 @@ impl ParamStore for AutomationStore {
                 readonly: false,
             },
             // Kapitel 6 Teil 5 — optional, s. `target_graphics_label`-Doku.
+            ParamSpec {
+                name: "targetAudioMixerLabel".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: false,
+            },
+            ParamSpec { name: "audioRouting".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             // Kapitel 27 / P1b: Anbindung an die Domäne `playout` (s.
             // `persist.rs`) — reine Anzeige.
             // Kapitel 27 / P3: Lebenszyklus der Child Events (SCHEDULED…COMPLETED).
@@ -2594,6 +2659,8 @@ impl ParamStore for AutomationStore {
             "targetPlayerBLabel" => Some(serde_json::json!(state.target_player_b_label)),
             "targetMixerLabel" => Some(serde_json::json!(state.target_mixer_label)),
             "targetGraphicsLabel" => Some(serde_json::json!(state.target_graphics_label)),
+            "targetAudioMixerLabel" => Some(serde_json::json!(state.target_audio_mixer_label)),
+            "audioRouting" => Some(serde_json::json!(self.audio_status.lock().expect("lock poisoned").clone())),
             "schedule" => Some(schedule_json(&state, chrono::Utc::now().timestamp_millis())),
             "childEvents" => Some(child_events_json(&state)),
             "channelId" => Some(serde_json::json!(self.persistence.channel_id())),
@@ -2683,6 +2750,11 @@ impl ParamStore for AutomationStore {
             "targetGraphicsLabel" => {
                 state.target_graphics_label = value.as_str().unwrap_or_default().to_string();
                 state.graphics_node_id = None;
+                Ok(())
+            }
+            "targetAudioMixerLabel" => {
+                state.target_audio_mixer_label = value.as_str().unwrap_or_default().to_string();
+                state.audio_mixer_node_id = None;
                 Ok(())
             }
             _ => Err(SetError::ReadOnly),
@@ -2935,6 +3007,7 @@ async fn discovery_loop(store: Arc<AutomationStore>) {
     let mut interval = tokio::time::interval(DISCOVERY_INTERVAL);
     loop {
         interval.tick().await;
+        let audio_label = store.state.lock().expect("lock poisoned").target_audio_mixer_label.clone();
         let (player_a_label, player_b_label, mixer_label, graphics_label) = {
             let state = store.state.lock().expect("lock poisoned");
             (
@@ -2962,10 +3035,11 @@ async fn discovery_loop(store: Arc<AutomationStore>) {
                     remote::resolve_node_id_by_label(&registry, &graphics_label)
                 },
                 remote::list_node_labels(&registry, &own_label),
+                if audio_label.is_empty() { None } else { remote::resolve_node_id_by_label(&registry, &audio_label) },
             )
         })
         .await;
-        if let Ok((player_a_node_id, player_b_node_id, mixer_node_id, graphics_node_id, discovered_labels)) =
+        if let Ok((player_a_node_id, player_b_node_id, mixer_node_id, graphics_node_id, discovered_labels, audio_mixer_node_id)) =
             resolved
         {
             let mut state = store.state.lock().expect("lock poisoned");
@@ -2973,6 +3047,7 @@ async fn discovery_loop(store: Arc<AutomationStore>) {
             state.player_b_node_id = player_b_node_id;
             state.mixer_node_id = mixer_node_id;
             state.graphics_node_id = graphics_node_id;
+            state.audio_mixer_node_id = audio_mixer_node_id;
             state.discovered_labels = discovered_labels;
         }
 
@@ -3579,6 +3654,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         initial_graphics_label,
     ));
     let store = Arc::new(AutomationStore {
+        audio_status: Mutex::new(String::new()),
         state,
         registry: registry.clone(),
         events: events_tx.clone(),

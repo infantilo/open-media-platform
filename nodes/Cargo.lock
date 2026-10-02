@@ -1376,6 +1376,8 @@ dependencies = [
  "gstreamer",
  "omp-mediaio",
  "omp-node-sdk",
+ "omp-resolver",
+ "serde",
  "serde_json",
  "tokio",
  "ureq",

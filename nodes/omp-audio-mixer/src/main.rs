@@ -20,6 +20,7 @@ mod engine;
 mod media;
 mod model;
 mod pipeline;
+mod routing;
 mod rules;
 mod uibundle;
 
@@ -437,6 +438,8 @@ struct AudioMixerStore {
     media_status: Arc<Mutex<HashMap<String, media::MediaStatus>>>,
     /// Labels aller bekannten Nodes (Auswahl für Media-Ziele).
     available_nodes: Arc<Mutex<Vec<String>>>,
+    /// Semantisches Routing (Kapitel 27 / P6).
+    routing: Mutex<routing::RoutingState>,
 }
 
 /// Testton-Frequenz pro Kanal — nur zur akustischen Unterscheidbarkeit im
@@ -511,6 +514,8 @@ impl ParamStore for AudioMixerStore {
             // Dutzenden Einzelparametern je Kanal, wichtig bei 32–128 Kanälen).
             ParamSpec { name: "mixState".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             ParamSpec { name: "scenes".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            // P6: Erwartungen, Quell-Kontext, letzter Plan samt Begründung/Konflikten.
+            ParamSpec { name: "routing".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             ParamSpec {
                 name: "contextRules".to_string(),
                 kind: ParamType::String,
@@ -618,6 +623,29 @@ impl ParamStore for AudioMixerStore {
                     MethodArg { name: "label".to_string(), kind: ParamType::String },
                     MethodArg { name: "includeProcessing".to_string(), kind: ParamType::Boolean },
                 ],
+            },
+            // P6: semantisches Routing. `ruleJson` = {"required":[],"preferred":[],"forbidden":[]}
+            // (leer = Erwartung entfernen); `overridesJson` = {"ch1":{"capability":{"id":"commentator"}}}.
+            MethodSpec {
+                name: "setRouting".to_string(),
+                args: vec![
+                    MethodArg { name: "channelId".to_string(), kind: ParamType::String },
+                    MethodArg { name: "ruleJson".to_string(), kind: ParamType::String },
+                ],
+            },
+            MethodSpec {
+                name: "setSourceContext".to_string(),
+                args: vec![
+                    MethodArg { name: "nodeId".to_string(), kind: ParamType::String },
+                    MethodArg { name: "group".to_string(), kind: ParamType::String },
+                    MethodArg { name: "label".to_string(), kind: ParamType::String },
+                    MethodArg { name: "overridesJson".to_string(), kind: ParamType::String },
+                ],
+            },
+            MethodSpec { name: "clearSourceContext".to_string(), args: vec![] },
+            MethodSpec {
+                name: "resetRouting".to_string(),
+                args: vec![MethodArg { name: "channelId".to_string(), kind: ParamType::String }],
             },
             MethodSpec {
                 name: "activateScene".to_string(),
@@ -1013,6 +1041,9 @@ impl ParamStore for AudioMixerStore {
         if name == "mixState" {
             return Some(self.mix_state());
         }
+        if name == "routing" {
+            return Some(self.routing.lock().expect("lock poisoned").view());
+        }
         if name == "scenes" {
             let scenes = self.scenes.lock().expect("lock poisoned");
             return Some(Value::Array(
@@ -1270,6 +1301,8 @@ impl AudioMixerStore {
                         "followOnLevelDb": c.follow_on_level_db,
                         "followOffLevelDb": c.follow_off_level_db,
                         "followTransitionMs": c.follow_transition_ms,
+                        "routingExpect": self.routing.lock().expect("lock poisoned").expects.get(&c.id)
+                            .and_then(|r| serde_json::to_value(r).ok()).unwrap_or(Value::Null),
                     });
                     if let Value::Object(m) = rest {
                         doc.extend(m);
@@ -1429,6 +1462,19 @@ impl AudioMixerStore {
             ch.follow_off_level_db = cd.get("followOffLevelDb").and_then(Value::as_f64).unwrap_or(-20.0);
             ch.follow_transition_ms =
                 cd.get("followTransitionMs").and_then(Value::as_u64).unwrap_or(FOLLOW_CROSSFADE_MS);
+            {
+                let mut r = self.routing.lock().expect("lock poisoned");
+                match cd.get("routingExpect").and_then(routing::parse_rule) {
+                    Some(rule) => {
+                        r.expects.insert(id.clone(), rule);
+                    }
+                    None => {
+                        r.expects.remove(&id);
+                    }
+                }
+                r.restore.remove(&id);
+                r.pinned.remove(&id);
+            }
 
             let source = cd.get("source").and_then(Value::as_str).unwrap_or("");
             if !source.is_empty()
@@ -1511,6 +1557,10 @@ impl AudioMixerStore {
                     return Err(InvokeError::Unknown);
                 }
                 self.pipeline.remove_channel(channel_id.to_string());
+                let mut r = self.routing.lock().expect("lock poisoned");
+                r.expects.remove(channel_id);
+                r.restore.remove(channel_id);
+                r.pinned.remove(channel_id);
                 Ok(())
             }
             "setMasterLimiter" => {
@@ -1627,6 +1677,67 @@ impl AudioMixerStore {
                 let before = scenes.len();
                 scenes.retain(|s| s.id != id);
                 if scenes.len() == before { Err(InvokeError::Unknown) } else { Ok(()) }
+            }
+            "setRouting" => {
+                let ch = args.get("channelId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                if !self.channels.lock().expect("lock poisoned").iter().any(|c| c.id == ch) {
+                    return Err(InvokeError::Unknown);
+                }
+                let json = args.get("ruleJson").and_then(Value::as_str).unwrap_or("").trim();
+                let rule = if json.is_empty() || json == "null" {
+                    None
+                } else {
+                    routing::parse_rule(&serde_json::from_str::<Value>(json).map_err(|_| InvokeError::Unknown)?)
+                };
+                {
+                    let mut r = self.routing.lock().expect("lock poisoned");
+                    match rule {
+                        Some(rule) => {
+                            r.expects.insert(ch.to_string(), rule);
+                        }
+                        None => {
+                            r.expects.remove(ch);
+                        }
+                    }
+                }
+                self.reapply_routing();
+                Ok(())
+            }
+            "setSourceContext" => {
+                let node_id = args.get("nodeId").and_then(Value::as_str).unwrap_or("").to_string();
+                let group = args.get("group").and_then(Value::as_str).unwrap_or("").to_string();
+                if node_id.is_empty() && group.is_empty() {
+                    return Err(InvokeError::Unknown);
+                }
+                let label = args.get("label").and_then(Value::as_str).unwrap_or("").to_string();
+                let json = args.get("overridesJson").and_then(Value::as_str).unwrap_or("").trim();
+                let overrides = if json.is_empty() || json == "null" {
+                    Default::default()
+                } else {
+                    serde_json::from_str(json).map_err(|_| InvokeError::Unknown)?
+                };
+                {
+                    let mut r = self.routing.lock().expect("lock poisoned");
+                    // Neuer Kontext = neue Entscheidungsrunde: Pins des alten Kontexts verfallen.
+                    r.pinned.clear();
+                    r.active = Some(routing::ActiveContext {
+                        label,
+                        context: omp_resolver::SourceContext { node_id, group },
+                        overrides,
+                    });
+                }
+                self.reapply_routing();
+                Ok(())
+            }
+            "clearSourceContext" => {
+                self.clear_routing_context();
+                Ok(())
+            }
+            "resetRouting" => {
+                let ch = args.get("channelId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                self.routing.lock().expect("lock poisoned").pinned.remove(ch);
+                self.reapply_routing();
+                Ok(())
             }
             "activateScene" => {
                 let id = args.get("sceneId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
@@ -1821,6 +1932,9 @@ impl AudioMixerStore {
                     "auxId": k, "enabled": v.enabled, "levelDb": v.level_db, "post": v.post,
                 })).collect::<Vec<_>>(),
             });
+            if let Some(rule) = self.routing.lock().expect("lock poisoned").expects.get(&c.id) {
+                d["routingExpect"] = serde_json::to_value(rule).unwrap_or(Value::Null);
+            }
             if with_proc {
                 let mut pm = serde_json::Map::new();
                 proc_to_json(&c.proc, &mut pm);
@@ -1842,6 +1956,7 @@ impl AudioMixerStore {
     fn apply_scene(&self, doc: &Value, from_context: bool) {
         let group_ids: Vec<String> = self.groups.lock().expect("lock poisoned").iter().map(|g| g.id.clone()).collect();
         let mut cmds: Vec<(String, f64, bool, Option<dsp::ProcParams>)> = Vec::new();
+        let mut reroute = false;
         {
             let mut channels = self.channels.lock().expect("lock poisoned");
             if let Some(map) = doc.get("channels").and_then(Value::as_object) {
@@ -1850,6 +1965,10 @@ impl AudioMixerStore {
                         continue;
                     }
                     let Some(cd) = map.get(&ch.id) else { continue };
+                    if let Some(rule) = cd.get("routingExpect").and_then(routing::parse_rule) {
+                        self.routing.lock().expect("lock poisoned").expects.insert(ch.id.clone(), rule);
+                        reroute = true;
+                    }
                     if let Some(v) = cd.get("gainDb").and_then(Value::as_f64) {
                         ch.gain_db = v.clamp(-60.0, 12.0);
                     }
@@ -1936,6 +2055,107 @@ impl AudioMixerStore {
             }
         }
         self.sync_engine();
+        self.apply_sends();
+        if reroute {
+            self.reapply_routing();
+        }
+    }
+
+    /// Quelle eines Kanals setzen (Handeingriff UND Auto-Routing, gleicher Pfad).
+    /// `sender_id` leer = interner Testton.
+    fn set_channel_source(&self, ch: &mut ChannelState, id: &str, sender_id: &str) -> Result<(), InvokeError> {
+        if sender_id.is_empty() {
+            ch.source.clear();
+            self.pipeline.set_channel_source(id.to_string(), pipeline::ChannelSource::Internal { freq: ch.internal_freq });
+        } else {
+            let flow_id = self
+                .available_sources
+                .lock()
+                .expect("lock poisoned")
+                .iter()
+                .find(|s| s.sender_id == sender_id)
+                .map(|s| s.flow_id.clone())
+                .ok_or(InvokeError::Unknown)?;
+            ch.source = sender_id.to_string();
+            self.pipeline.set_channel_source(id.to_string(), pipeline::ChannelSource::External { flow_id });
+        }
+        // Der neue Zweig startet mit Standardwerten — bereits konfigurierte Werte
+        // erneut anwenden (FIFO-Kommandokanal der Pipeline garantiert die Reihenfolge).
+        self.pipeline.set_gain(id.to_string(), ch.gain_db);
+        self.pipeline.set_mute(id.to_string(), ch.mute);
+        self.pipeline.set_pfl(id.to_string(), ch.pfl);
+        self.pipeline.set_proc(id.to_string(), ch.proc);
+        Ok(())
+    }
+
+    /// Plan neu berechnen und anwenden. Lock-Reihenfolge: `channels` → `routing`
+    /// (hier nie `routing` gehalten, während `channels` genommen wird).
+    fn reapply_routing(&self) {
+        let (expects, active, sources, pinned) = {
+            let r = self.routing.lock().expect("lock poisoned");
+            (r.expects.clone(), r.active.clone(), r.sources.clone(), r.pinned.clone())
+        };
+        let Some(active) = active else {
+            self.routing.lock().expect("lock poisoned").last_plan = None;
+            return;
+        };
+        let plan = routing::plan(&expects, &active, &sources);
+        let mut new_restore: Vec<(String, String)> = Vec::new();
+        let restore_known = self.routing.lock().expect("lock poisoned").restore.clone();
+        let mut changed = false;
+        {
+            let mut channels = self.channels.lock().expect("lock poisoned");
+            for a in &plan.assignments {
+                let Some(sender) = a.sender_id.as_deref() else { continue };
+                if plan.in_conflict(&a.channel) || pinned.contains(&a.channel) {
+                    continue;
+                }
+                let Some(ch) = channels.iter_mut().find(|c| c.id == a.channel) else { continue };
+                if ch.source == sender {
+                    continue;
+                }
+                let prev = ch.source.clone();
+                if self.set_channel_source(ch, &a.channel, sender).is_ok() {
+                    if !restore_known.contains_key(&a.channel) {
+                        new_restore.push((a.channel.clone(), prev));
+                    }
+                    changed = true;
+                }
+            }
+        }
+        {
+            let mut r = self.routing.lock().expect("lock poisoned");
+            r.restore.extend(new_restore);
+            // Nur speichern, wenn der Kontext zwischenzeitlich nicht beendet wurde.
+            r.last_plan = r.active.is_some().then_some(plan);
+        }
+        if changed {
+            self.apply_sends();
+        }
+    }
+
+    /// Kontext beenden: von Auto gesetzte Kanäle zurück auf ihre manuelle Zuordnung
+    /// (Spec §101). Vom Operator festgehaltene (gepinnte) Kanäle behalten seine Wahl.
+    fn clear_routing_context(&self) {
+        let (restore, pinned) = {
+            let mut r = self.routing.lock().expect("lock poisoned");
+            r.active = None;
+            r.last_plan = None;
+            (std::mem::take(&mut r.restore), std::mem::take(&mut r.pinned))
+        };
+        {
+            let mut channels = self.channels.lock().expect("lock poisoned");
+            for (ch_id, prev) in restore {
+                if pinned.contains(&ch_id) {
+                    continue;
+                }
+                let Some(ch) = channels.iter_mut().find(|c| c.id == ch_id) else { continue };
+                // Ist die frühere Quelle inzwischen weg, bleibt nur der interne Testton.
+                if self.set_channel_source(ch, &ch_id, &prev).is_err() {
+                    let _ = self.set_channel_source(ch, &ch_id, "");
+                }
+            }
+        }
         self.apply_sends();
     }
 
@@ -2024,6 +2244,7 @@ impl AudioMixerStore {
             "availableSources": self.available_sources.lock().expect("lock poisoned").iter()
                 .map(|s| serde_json::json!({"senderId": s.sender_id, "label": s.label})).collect::<Vec<_>>(),
             "availableNodes": *self.available_nodes.lock().expect("lock poisoned"),
+            "routing": self.routing.lock().expect("lock poisoned").view(),
             "masterLimiter": {"enabled": ml.enabled, "thresholdDb": ml.threshold_db, "ratio": ml.ratio, "makeupDb": ml.makeup_db},
         })
     }
@@ -2272,36 +2493,13 @@ impl AudioMixerStore {
                     .get("senderId")
                     .and_then(Value::as_str)
                     .ok_or(InvokeError::Unknown)?;
-                if sender_id.is_empty() {
-                    ch.source.clear();
-                    self.pipeline.set_channel_source(
-                        id.to_string(),
-                        pipeline::ChannelSource::Internal { freq: ch.internal_freq },
-                    );
-                } else {
-                    let flow_id = self
-                        .available_sources
-                        .lock()
-                        .expect("lock poisoned")
-                        .iter()
-                        .find(|s| s.sender_id == sender_id)
-                        .map(|s| s.flow_id.clone())
-                        .ok_or(InvokeError::Unknown)?;
-                    ch.source = sender_id.to_string();
-                    self.pipeline
-                        .set_channel_source(id.to_string(), pipeline::ChannelSource::External { flow_id });
+                self.set_channel_source(ch, id, sender_id)?;
+                // Handeingriff gegen die Auto-Zuordnung: bleibt bestehen, bis der Kontext
+                // endet oder `resetRouting` ihn aufhebt (Automation überschreibt keinen Operator).
+                let mut r = self.routing.lock().expect("lock poisoned");
+                if r.active.as_ref().is_some_and(|a| a.overrides.contains_key(id)) || (r.active.is_some() && r.expects.contains_key(id)) {
+                    r.pinned.insert(id.to_string());
                 }
-                // Der neue Zweig startet mit Standardwerten (Gain 0dB,
-                // nicht stumm, EQ flach, Kompressor per Default-Werten
-                // deaktiviert) — bereits konfigurierte Werte dieses
-                // Kanals erneut anwenden. Reihenfolge garantiert durch
-                // den einen mpsc-Kommandokanal der Pipeline (FIFO):
-                // `SetChannelSource` ist längst verarbeitet, bevor diese
-                // Kommandos ankommen.
-                self.pipeline.set_gain(id.to_string(), ch.gain_db);
-                self.pipeline.set_mute(id.to_string(), ch.mute);
-                self.pipeline.set_pfl(id.to_string(), ch.pfl);
-                self.pipeline.set_proc(id.to_string(), ch.proc);
                 Ok(())
             }
             "setFollow" => {
@@ -2500,6 +2698,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         events_tx: rule_events_tx,
         media_status,
         available_nodes: available_nodes.clone(),
+        routing: Mutex::new(routing::RoutingState::default()),
     });
     let store: Arc<dyn ParamStore> = store_concrete.clone();
 
@@ -2608,6 +2807,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         available_nodes,
         node_label_for_discovery,
     );
+    let routing_poll = routing_loop(store_concrete.clone(), orchestrator_url.clone(), auth.clone());
     let token_refresh = token_refresh_loop(orchestrator_url, token_instance, launch_secret, auth);
 
     let sender_worker = async {
@@ -2683,6 +2883,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
         _ = sender_worker => {
             eprintln!("omp-audio-mixer: sender worker ended");
+        }
+        _ = routing_poll => {
+            eprintln!("omp-audio-mixer: routing loop ended");
         }
         _ = token_refresh => {
             eprintln!("omp-audio-mixer: token refresh ended");
@@ -2871,6 +3074,47 @@ async fn token_refresh_loop(
             Ok(Ok(token)) => auth.set(token),
             Ok(Err(e)) => eprintln!("omp-audio-mixer: Service-Token-Refresh fehlgeschlagen: {e}"),
             Err(e) => eprintln!("omp-audio-mixer: Service-Token-Refresh-Task abgestürzt: {e}"),
+        }
+    }
+}
+
+/// P6: holt alle 2 s die Audio-Quellen samt Tags vom Orchestrator
+/// (`GET /api/v1/sources`, Service-Token) und plant bei Änderung neu. Ohne Token
+/// oder bei Fehlern bleibt die letzte bekannte Liste stehen — das Routing ändert
+/// dann nichts (Fail-Safe), nur ein Neustart des Kontexts würde es anstoßen.
+async fn routing_loop(store: Arc<AudioMixerStore>, orchestrator_url: String, auth: media::OrchestratorAuth) {
+    let mut interval = tokio::time::interval(Duration::from_secs(2));
+    loop {
+        interval.tick().await;
+        let Some(header) = auth.header() else { continue };
+        let url = format!("{}/api/v1/sources?mediaType=audio", orchestrator_url.trim_end_matches('/'));
+        let fetched = tokio::task::spawn_blocking(move || -> Result<Vec<omp_resolver::Source>, String> {
+            ureq::get(&url)
+                .config()
+                .timeout_global(Some(Duration::from_secs(4)))
+                .build()
+                .header("Authorization", &header)
+                .call()
+                .map_err(|e| e.to_string())?
+                .body_mut()
+                .read_json()
+                .map_err(|e| e.to_string())
+        })
+        .await;
+        let Ok(Ok(list)) = fetched else { continue };
+        // Auch ohne Änderung neu planen: die IS-04-Discovery des Mixers (`available_sources`)
+        // kann hinter dem Orchestrator herhinken, ein erster Versuch also scheitern.
+        let active = {
+            let mut r = store.routing.lock().expect("lock poisoned");
+            if r.sources != list {
+                r.sources = list;
+            }
+            r.sources_at_ms = dsp::now_ms();
+            r.active.is_some()
+        };
+        if active {
+            let st = store.clone();
+            let _ = tokio::task::spawn_blocking(move || st.reapply_routing()).await;
         }
     }
 }

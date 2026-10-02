@@ -113,7 +113,7 @@ impl SourceContext {
         SourceContext { node_id: source.node_id.clone(), group: source.group_name().unwrap_or("").to_string() }
     }
 
-    pub(crate) fn matches(&self, s: &Source) -> bool {
+    pub fn matches(&self, s: &Source) -> bool {
         (!self.node_id.is_empty() && s.node_id == self.node_id)
             || (!self.group.is_empty() && s.group_name() == Some(self.group.as_str()))
     }
