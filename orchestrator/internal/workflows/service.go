@@ -475,6 +475,28 @@ func (s *Service) FindRoleForNode(nodeID string) (workflowID, workflowName, role
 	return "", "", "", false
 }
 
+// FindRoleForInstance liefert Workflow und Rolle, die die Instanz gerade
+// erfüllt (Gegenstück zu FindRoleForNode, aber über die Launcher-Instanz-ID).
+// ok=false, wenn die Instanz keiner Workflow-Rolle gehört (z. B. manuell
+// über den Katalog gestartet).
+func (s *Service) FindRoleForInstance(instanceID string) (workflowID, role string, ok bool) {
+	if instanceID == "" {
+		return "", "", false
+	}
+	wfs, err := s.store.List()
+	if err != nil {
+		return "", "", false
+	}
+	for _, wf := range wfs {
+		for r, rt := range wf.Runtime {
+			if rt.InstanceID == instanceID {
+				return wf.ID, r, true
+			}
+		}
+	}
+	return "", "", false
+}
+
 // Delete entfernt einen Workflow — nur im Zustand "stopped" (kein
 // stilles Verwaisen laufender Prozesse: erst stoppen, dann löschen).
 func (s *Service) Delete(id string) error {

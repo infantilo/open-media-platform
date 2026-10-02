@@ -26,12 +26,37 @@ type PlayoutService interface {
 	CreateChannel(in playout.ChannelInput, createdBy string) (playout.Channel, error)
 	GetChannel(id string) (playout.Channel, error)
 	ChannelByInstance(instanceID string) (playout.Channel, error)
+	ChannelByRole(workflowID, role string) (playout.Channel, error)
 	ListChannels() ([]playout.Channel, error)
 	UpdateChannel(id string, in playout.ChannelInput) (playout.Channel, error)
 	DeleteChannel(id string) error
 	GetState(channelID string) (playout.State, error)
 	PutState(channelID string, expectedVersion int64, state json.RawMessage) (playout.State, error)
 	RecordExecution(channelID, executionID, kind string) (bool, error)
+}
+
+// InstanceRoleResolver ordnet eine Launcher-Instanz ihrer aktuellen
+// Workflow-Rolle zu (*workflows.Service). Nil erlaubt = nur Instanz-Bindung.
+type InstanceRoleResolver interface {
+	FindRoleForInstance(instanceID string) (workflowID, role string, ok bool)
+}
+
+// boundTo meldet, ob `instanceID` die an den Channel gebundene Instanz ist:
+// direkt per Instanz-ID oder über die Workflow-Rolle des Channels (die auch
+// nach einem Workflow-Neustart mit neuer Instanz-ID gilt).
+func boundTo(ch playout.Channel, instanceID string, roles InstanceRoleResolver) bool {
+	if instanceID == "" {
+		return false
+	}
+	if ch.Instance != "" && ch.Instance == instanceID {
+		return true
+	}
+	if ch.WorkflowID != "" && roles != nil {
+		if wf, role, ok := roles.FindRoleForInstance(instanceID); ok {
+			return wf == ch.WorkflowID && role == ch.Role
+		}
+	}
+	return false
 }
 
 // verbChecker ist der Ausschnitt von AuthzChecker, den die Playout-Handler brauchen.
@@ -56,7 +81,7 @@ func writePlayoutError(w http.ResponseWriter, err error) {
 // Instanz des Channels ist oder global mindestens `operate` hat. Ohne
 // Principal im Kontext (Bootstrap-Bypass, noch kein Nutzer angelegt) wird
 // wie überall sonst durchgelassen.
-func channelAccess(svc PlayoutService, az verbChecker, w http.ResponseWriter, r *http.Request) (playout.Channel, bool) {
+func channelAccess(svc PlayoutService, az verbChecker, roles InstanceRoleResolver, w http.ResponseWriter, r *http.Request) (playout.Channel, bool) {
 	ch, err := svc.GetChannel(r.PathValue("id"))
 	if err != nil {
 		writePlayoutError(w, err)
@@ -66,7 +91,7 @@ func channelAccess(svc PlayoutService, az verbChecker, w http.ResponseWriter, r 
 	if !ok {
 		return ch, true
 	}
-	if ch.Instance != "" && p.Username == ch.Instance {
+	if boundTo(ch, p.Username, roles) {
 		return ch, true
 	}
 	allowed, err := az.Check(p.Username, authz.AnyNode, authz.VerbOperate)
@@ -81,11 +106,17 @@ func channelAccess(svc PlayoutService, az verbChecker, w http.ResponseWriter, r 
 	return ch, true
 }
 
-func handleListPlayoutChannels(svc PlayoutService) http.HandlerFunc {
+func handleListPlayoutChannels(svc PlayoutService, roles InstanceRoleResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// ?instanceId=…: der Automator findet seinen Channel (höchstens einer).
 		if inst := r.URL.Query().Get("instanceId"); inst != "" {
 			ch, err := svc.ChannelByInstance(inst)
+			if errors.Is(err, playout.ErrNotFound) && roles != nil {
+				// Kein direkter Treffer: über die Workflow-Rolle der Instanz suchen.
+				if wf, role, ok := roles.FindRoleForInstance(inst); ok {
+					ch, err = svc.ChannelByRole(wf, role)
+				}
+			}
 			if errors.Is(err, playout.ErrNotFound) {
 				writeJSON(w, http.StatusOK, []playout.Channel{})
 				return
@@ -165,9 +196,9 @@ func handleDeletePlayoutChannel(svc PlayoutService, domainAudit DomainAuditLogge
 	}
 }
 
-func handleGetPlayoutState(svc PlayoutService, az verbChecker) http.HandlerFunc {
+func handleGetPlayoutState(svc PlayoutService, az verbChecker, roles InstanceRoleResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ch, ok := channelAccess(svc, az, w, r)
+		ch, ok := channelAccess(svc, az, roles, w, r)
 		if !ok {
 			return
 		}
@@ -183,9 +214,9 @@ func handleGetPlayoutState(svc PlayoutService, az verbChecker) http.HandlerFunc 
 // handlePutPlayoutState: PUT {id}/state?version=<n>, Body = Snapshot-JSON.
 // `version` ist die zuletzt gelesene Version (0 = erster Schreibzugriff);
 // stimmt sie nicht, 409 (Spec §168).
-func handlePutPlayoutState(svc PlayoutService, az verbChecker) http.HandlerFunc {
+func handlePutPlayoutState(svc PlayoutService, az verbChecker, roles InstanceRoleResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ch, ok := channelAccess(svc, az, w, r)
+		ch, ok := channelAccess(svc, az, roles, w, r)
 		if !ok {
 			return
 		}
@@ -210,9 +241,9 @@ func handlePutPlayoutState(svc PlayoutService, az verbChecker) http.HandlerFunc 
 
 // handleRecordPlayoutExecution: POST {id}/executions {executionId, kind}
 // → {"first": true|false}. first=false: nicht erneut ausführen.
-func handleRecordPlayoutExecution(svc PlayoutService, az verbChecker) http.HandlerFunc {
+func handleRecordPlayoutExecution(svc PlayoutService, az verbChecker, roles InstanceRoleResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ch, ok := channelAccess(svc, az, w, r)
+		ch, ok := channelAccess(svc, az, roles, w, r)
 		if !ok {
 			return
 		}

@@ -2204,3 +2204,33 @@ func TestFindRoleForNodeNotFoundForUnknownNode(t *testing.T) {
 		t.Fatalf("FindRoleForNode(unrelated node) ok = true, want false")
 	}
 }
+
+// Kapitel 27 / P1c: Zuordnung über die Launcher-Instanz-ID (Playout-Channel-
+// Bindung an eine Rolle statt an eine wechselnde Instanz-ID).
+func TestFindRoleForInstance(t *testing.T) {
+	store := newFakeStore()
+	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
+
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "automation", NodeType: "omp-playout-automation"}}}, nil, "")
+	started := wf
+	started.Status = StatusStarted
+	started.Runtime = map[string]RoleRuntime{"automation": {InstanceID: "inst-1", NodeID: "node-1"}}
+	store.Put(started)
+
+	if id, role, ok := svc.FindRoleForInstance("inst-1"); !ok || id != wf.ID || role != "automation" {
+		t.Fatalf("FindRoleForInstance(inst-1) = (%q, %q, %v)", id, role, ok)
+	}
+	// Nach einem Neustart besetzt eine neue Instanz dieselbe Rolle.
+	restarted := started
+	restarted.Runtime = map[string]RoleRuntime{"automation": {InstanceID: "inst-2", NodeID: "node-2"}}
+	store.Put(restarted)
+	if _, role, ok := svc.FindRoleForInstance("inst-2"); !ok || role != "automation" {
+		t.Fatalf("FindRoleForInstance(inst-2) after restart: role=%q ok=%v", role, ok)
+	}
+	if _, _, ok := svc.FindRoleForInstance("inst-1"); ok {
+		t.Fatal("the old instance no longer holds the role")
+	}
+	if _, _, ok := svc.FindRoleForInstance(""); ok {
+		t.Fatal("empty instance id must not match")
+	}
+}

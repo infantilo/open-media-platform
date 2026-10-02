@@ -36,24 +36,30 @@ var (
 const MaxStateBytes = 8 << 20
 
 type Channel struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Timezone  string          `json:"timezone"`
-	Group     string          `json:"group,omitempty"`
-	Instance  string          `json:"instanceId,omitempty"`
-	Config    json.RawMessage `json:"config"`
-	CreatedBy string          `json:"createdBy"`
-	CreatedAt time.Time       `json:"createdAt"`
-	UpdatedAt time.Time       `json:"updatedAt"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Timezone string `json:"timezone"`
+	Group    string `json:"group,omitempty"`
+	Instance string `json:"instanceId,omitempty"`
+	// WorkflowID+Role: stabile Bindung an eine Workflow-Rolle (überlebt
+	// Workflow-Neustarts, anders als die Instanz-ID).
+	WorkflowID string          `json:"workflowId,omitempty"`
+	Role       string          `json:"role,omitempty"`
+	Config     json.RawMessage `json:"config"`
+	CreatedBy  string          `json:"createdBy"`
+	CreatedAt  time.Time       `json:"createdAt"`
+	UpdatedAt  time.Time       `json:"updatedAt"`
 }
 
 // ChannelInput sind die änderbaren Felder (Create/Update).
 type ChannelInput struct {
-	Name     string          `json:"name"`
-	Timezone string          `json:"timezone"`
-	Group    string          `json:"group"`
-	Instance string          `json:"instanceId"`
-	Config   json.RawMessage `json:"config"`
+	Name       string          `json:"name"`
+	Timezone   string          `json:"timezone"`
+	Group      string          `json:"group"`
+	Instance   string          `json:"instanceId"`
+	WorkflowID string          `json:"workflowId"`
+	Role       string          `json:"role"`
+	Config     json.RawMessage `json:"config"`
 }
 
 // State ist der gespeicherte Automationszustand eines Channels.
@@ -83,6 +89,11 @@ func normalize(in ChannelInput) (ChannelInput, error) {
 		return in, fmt.Errorf("%w: unknown timezone %q", ErrValidation, in.Timezone)
 	}
 	in.Group = strings.TrimSpace(in.Group)
+	in.WorkflowID = strings.TrimSpace(in.WorkflowID)
+	in.Role = strings.TrimSpace(in.Role)
+	if (in.WorkflowID == "") != (in.Role == "") {
+		return in, fmt.Errorf("%w: workflowId and role must be set together", ErrValidation)
+	}
 	if len(in.Config) == 0 {
 		in.Config = json.RawMessage(`{}`)
 	} else if !json.Valid(in.Config) {
@@ -91,12 +102,12 @@ func normalize(in ChannelInput) (ChannelInput, error) {
 	return in, nil
 }
 
-const channelCols = `id, name, timezone, channel_group, instance_id, config, created_by, created_at, updated_at`
+const channelCols = `id, name, timezone, channel_group, instance_id, workflow_id, role, config, created_by, created_at, updated_at`
 
 func scanChannel(row interface{ Scan(...any) error }) (Channel, error) {
 	var c Channel
 	var cfg []byte
-	if err := row.Scan(&c.ID, &c.Name, &c.Timezone, &c.Group, &c.Instance, &cfg, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
+	if err := row.Scan(&c.ID, &c.Name, &c.Timezone, &c.Group, &c.Instance, &c.WorkflowID, &c.Role, &cfg, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return Channel{}, err
 	}
 	c.Config = json.RawMessage(cfg)
@@ -117,9 +128,9 @@ func (s *Store) CreateChannel(in ChannelInput, createdBy string) (Channel, error
 	if id == "" {
 		return Channel{}, fmt.Errorf("playout: id generation failed")
 	}
-	row := s.db.QueryRow(`INSERT INTO playout_channels (id, name, timezone, channel_group, instance_id, config, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING `+channelCols,
-		id, in.Name, in.Timezone, in.Group, in.Instance, []byte(in.Config), createdBy)
+	row := s.db.QueryRow(`INSERT INTO playout_channels (id, name, timezone, channel_group, instance_id, workflow_id, role, config, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING `+channelCols,
+		id, in.Name, in.Timezone, in.Group, in.Instance, in.WorkflowID, in.Role, []byte(in.Config), createdBy)
 	c, err := scanChannel(row)
 	if isUniqueViolation(err) {
 		return Channel{}, fmt.Errorf("%w: name or instance already in use", ErrConflict)
@@ -148,6 +159,18 @@ func (s *Store) ChannelByInstance(instanceID string) (Channel, error) {
 	return c, err
 }
 
+// ChannelByRole liefert den an die Workflow-Rolle gebundenen Channel.
+func (s *Store) ChannelByRole(workflowID, role string) (Channel, error) {
+	if workflowID == "" || role == "" {
+		return Channel{}, ErrNotFound
+	}
+	c, err := scanChannel(s.db.QueryRow(`SELECT `+channelCols+` FROM playout_channels WHERE workflow_id=$1 AND role=$2`, workflowID, role))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Channel{}, ErrNotFound
+	}
+	return c, err
+}
+
 func (s *Store) ListChannels() ([]Channel, error) {
 	rows, err := s.db.Query(`SELECT ` + channelCols + ` FROM playout_channels ORDER BY name`)
 	if err != nil {
@@ -170,8 +193,8 @@ func (s *Store) UpdateChannel(id string, in ChannelInput) (Channel, error) {
 	if err != nil {
 		return Channel{}, err
 	}
-	row := s.db.QueryRow(`UPDATE playout_channels SET name=$2, timezone=$3, channel_group=$4, instance_id=$5, config=$6, updated_at=now()
-		WHERE id=$1 RETURNING `+channelCols, id, in.Name, in.Timezone, in.Group, in.Instance, []byte(in.Config))
+	row := s.db.QueryRow(`UPDATE playout_channels SET name=$2, timezone=$3, channel_group=$4, instance_id=$5, workflow_id=$6, role=$7, config=$8, updated_at=now()
+		WHERE id=$1 RETURNING `+channelCols, id, in.Name, in.Timezone, in.Group, in.Instance, in.WorkflowID, in.Role, []byte(in.Config))
 	c, err := scanChannel(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Channel{}, ErrNotFound

@@ -57,6 +57,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       }
       .connected { padding: 2px 7px; border-radius: 3px; background: #7a1f1f; }
       .connected.ok { background: #2e7d32; }
+      .persist { padding: 2px 7px; border-radius: 3px; background: #4a4a4a; font-size: 11px; }
+      .persist.ok { background: #1f4d7a; }
+      .persist.err { background: #7a1f1f; }
       .error-banner {
         display: none; padding: 6px 10px; margin-bottom: 8px; border-radius: 4px;
         background: #7a1f1f; color: #fff; font-size: 12px;
@@ -219,6 +222,12 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     const connectedEl = document.createElement("span");
     connectedEl.className = "connected";
     connectedEl.textContent = "nicht verbunden";
+    // Kapitel 27 / P1c: Anbindung an den Playout-Channel (Domäne `playout`,
+    // main.rs::persist) — zeigt Channel-Name und ob/wie der Zustand
+    // gespeichert wird; Tooltip trägt den vollen Status.
+    const persistEl = document.createElement("span");
+    persistEl.className = "persist";
+    persistEl.textContent = "Channel: …";
     const playerALabelWrap = document.createElement("label");
     playerALabelWrap.append("Kanal A: ", playerALabelSelect);
     const playerBLabelWrap = document.createElement("label");
@@ -227,7 +236,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     mixerLabelWrap.append("Mixer: ", mixerLabelSelect);
     const graphicsLabelWrap = document.createElement("label");
     graphicsLabelWrap.append("Grafik: ", graphicsLabelSelect);
-    targetsRow.append(playerALabelWrap, playerBLabelWrap, mixerLabelWrap, graphicsLabelWrap, connectedEl);
+    targetsRow.append(playerALabelWrap, playerBLabelWrap, mixerLabelWrap, graphicsLabelWrap, connectedEl, persistEl);
 
     const statusRow = document.createElement("div");
     statusRow.className = "status-row";
@@ -846,6 +855,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         liveChannel,
         mediaLibraryValue,
         availableSourcesValue,
+        channelName,
+        persistenceStatus,
       ] = await Promise.all([
         getParam("items"),
         getParam("currentItemId"),
@@ -864,6 +875,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         getParam("liveChannel"),
         getParam("mediaLibrary"),
         getParam("availableSources"),
+        getParam("channelName"),
+        getParam("persistence"),
       ]);
       const items = itemsValue || [];
       const currentIds = new Set(items.map((it) => it.id));
@@ -927,6 +940,18 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         ? `verbunden (Kanal ${liveChannelLabel} live)`
         : "nicht verbunden";
       connectedEl.className = connected ? "connected ok" : "connected";
+
+      // Kapitel 27 / P1c: Channel-/Persistenz-Anzeige. Fehlerzustände
+      // ("fehlgeschlagen", "Konflikt", "nicht lesbar") rot, laufende
+      // Speicherung blau, kein Channel neutral grau.
+      const persistText = persistenceStatus || "";
+      persistEl.textContent = channelName ? `Channel: ${channelName}` : "kein Channel";
+      persistEl.title = persistText;
+      persistEl.className = /fehlgeschlagen|Konflikt|nicht lesbar|nicht serialisierbar/.test(persistText)
+        ? "persist err"
+        : channelName
+          ? "persist ok"
+          : "persist";
 
       // Listenansicht-Folgeschritt: Next/Next-Live-Verfügbarkeit
       // (PIPELINE-CONTROLLER-Parität, `ui.html::updateNextLiveBtn` —

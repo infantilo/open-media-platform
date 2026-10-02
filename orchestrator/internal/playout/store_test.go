@@ -79,6 +79,31 @@ func TestChannelCRUDAndValidation(t *testing.T) {
 	}
 }
 
+func TestChannelRoleBinding(t *testing.T) {
+	s, _ := testStore(t)
+	if _, err := s.CreateChannel(ChannelInput{Name: "A", WorkflowID: "wf1"}, "u"); !errors.Is(err, ErrValidation) {
+		t.Fatalf("workflowId without role: err = %v, want ErrValidation", err)
+	}
+	c, err := s.CreateChannel(ChannelInput{Name: "A", WorkflowID: "wf1", Role: "automation"}, "u")
+	if err != nil {
+		t.Fatalf("CreateChannel: %v", err)
+	}
+	got, err := s.ChannelByRole("wf1", "automation")
+	if err != nil || got.ID != c.ID {
+		t.Fatalf("ChannelByRole = %+v, %v", got, err)
+	}
+	if _, err := s.ChannelByRole("wf1", "other"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("other role: err = %v, want ErrNotFound", err)
+	}
+	if _, err := s.ChannelByRole("", ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("empty: err = %v, want ErrNotFound", err)
+	}
+	// Eine Rolle gehört höchstens einem Channel.
+	if _, err := s.CreateChannel(ChannelInput{Name: "B", WorkflowID: "wf1", Role: "automation"}, "u"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate role: err = %v, want ErrConflict", err)
+	}
+}
+
 func TestStateOptimisticConcurrency(t *testing.T) {
 	s, _ := testStore(t)
 	c, _ := s.CreateChannel(ChannelInput{Name: "A"}, "u")
