@@ -139,6 +139,8 @@ export OMP_BACKUP_DIR="$ROOT_DIR/.backups"
 # erzeugt mit `make update-keygen`). Ohne Schlüsseldatei wird jedes Paket
 # abgelehnt (OMP_UPDATE_ALLOW_UNSIGNED=true nur für die Entwicklung).
 export OMP_UPDATE_DIR="${OMP_UPDATE_DIR:-$ROOT_DIR/.updates}"
+# Node-Versionierung (Kapitel 28): Versionsspeicher für Node-Binaries.
+export OMP_NODE_VERSIONS_DIR="${OMP_NODE_VERSIONS_DIR:-$ROOT_DIR/.node-versions}"
 export OMP_UPDATE_PUBKEY_FILE="${OMP_UPDATE_PUBKEY_FILE:-$ROOT_DIR/.run/update-trusted.pub}"
 # mTLS (UMSETZUNG.md D3) ist per Default aus (OMP_MTLS_ENABLED unten nur
 # gesetzt, falls schon in der aufrufenden Shell exportiert) — die

@@ -48,3 +48,4 @@ build/
 
 # System-Update-Pakete (Upload-Ablage, Rollback-Kopien, Historie)
 /.updates/
+/.node-versions/

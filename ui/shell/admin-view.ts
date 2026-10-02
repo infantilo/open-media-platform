@@ -1463,7 +1463,7 @@ class AdminView extends HTMLElement {
       card.appendChild(title);
       const state = document.createElement("div");
       state.style.cssText = "color:var(--omp-text-dim);margin:4px 0 8px;";
-      const inst = t.installed ? `${t.installed.version}${t.installed.commit ? ` (${t.installed.commit})` : ""}` : "unbekannt";
+      const inst = t.installed ? `${t.installed.version}${t.installed.commit ? ` (${t.installed.commit})` : ""}` : "ohne Build-Stempel (älterer/Dev-Build)";
       state.textContent = `Installiert: ${inst} · Produktiv: ${t.productive || "installiertes Binary"}`;
       card.appendChild(state);
 
