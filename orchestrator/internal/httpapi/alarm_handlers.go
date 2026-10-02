@@ -40,6 +40,9 @@ type handlerOptions struct {
 	updateBackup    BackupService
 	updateDist      UpdateDistributor
 	nodeVersions    NodeVersionStore
+	nodeValues      NodeOptionValues
+	systemSettings  SystemSettingsStore
+	startupSkipped  []string
 	workflowRuns    WorkflowRunReader
 }
 

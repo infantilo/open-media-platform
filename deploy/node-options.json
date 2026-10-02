@@ -1,0 +1,1207 @@
+{
+  "omp-source": [
+    {
+      "key": "OMP_WIDTH",
+      "label": "Breite",
+      "type": "int",
+      "description": "Bildbreite in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_HEIGHT",
+      "label": "Höhe",
+      "type": "int",
+      "description": "Bildhöhe in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_FRAMERATE_NUM",
+      "label": "Bildrate (Zähler)",
+      "type": "int",
+      "description": "z. B. 25 oder 30000.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 1,
+      "max": 240000
+    },
+    {
+      "key": "OMP_FRAMERATE_DEN",
+      "label": "Bildrate (Nenner)",
+      "type": "int",
+      "description": "z. B. 1 oder 1001.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 1,
+      "max": 100000
+    },
+    {
+      "key": "OMP_SOURCE_PATTERN",
+      "label": "Testbild",
+      "type": "enum",
+      "description": "Anfangs-Testbild (zur Laufzeit im Panel änderbar).",
+      "default": "smpte",
+      "group": "Signal",
+      "choices": [
+        {
+          "value": "smpte"
+        },
+        {
+          "value": "snow"
+        },
+        {
+          "value": "black"
+        },
+        {
+          "value": "white"
+        },
+        {
+          "value": "red"
+        },
+        {
+          "value": "green"
+        },
+        {
+          "value": "blue"
+        },
+        {
+          "value": "ball"
+        },
+        {
+          "value": "checkers-1"
+        },
+        {
+          "value": "circular"
+        },
+        {
+          "value": "gradient"
+        },
+        {
+          "value": "colors"
+        }
+      ]
+    },
+    {
+      "key": "OMP_SOURCE_PREVIEW_PORT",
+      "label": "Vorschau-Port",
+      "type": "port",
+      "description": "TCP-Port des Vorschau-/Level-Servers. 0 = automatisch ein freier Port (empfohlen, mehrere Instanzen pro Host).",
+      "default": "0",
+      "group": "Netzwerk (Ports)"
+    }
+  ],
+  "omp-decklink": [
+    {
+      "key": "OMP_DECKLINK_DEVICE_NUMBER",
+      "label": "Gerätenummer",
+      "type": "int",
+      "description": "Nummer der DeckLink-Karte/des Ports auf dem Host (0 = erste).",
+      "default": "0",
+      "group": "Hardware",
+      "min": 0,
+      "max": 31
+    },
+    {
+      "key": "OMP_DECKLINK_DIRECTION",
+      "label": "Richtung",
+      "type": "enum",
+      "description": "Eingang (SDI→MXL) oder Ausgang (MXL→SDI).",
+      "default": "ingest",
+      "group": "Hardware",
+      "choices": [
+        {
+          "value": "ingest"
+        },
+        {
+          "value": "output"
+        }
+      ]
+    },
+    {
+      "key": "OMP_DECKLINK_MODE",
+      "label": "Videomodus",
+      "type": "enum",
+      "default": "1080p25",
+      "group": "Format",
+      "choices": [
+        {
+          "value": "pal-p"
+        },
+        {
+          "value": "720p50"
+        },
+        {
+          "value": "720p5994"
+        },
+        {
+          "value": "1080p25"
+        },
+        {
+          "value": "1080p2997"
+        },
+        {
+          "value": "1080p50"
+        }
+      ]
+    },
+    {
+      "key": "OMP_DECKLINK_AUDIO_CHANNELS",
+      "label": "Audiokanäle",
+      "type": "enum",
+      "description": "Die DeckLink-Elemente unterstützen nur diese Kanalzahlen.",
+      "default": "2",
+      "group": "Format",
+      "choices": [
+        {
+          "value": "2",
+          "label": "2"
+        },
+        {
+          "value": "8",
+          "label": "8"
+        },
+        {
+          "value": "16",
+          "label": "16"
+        }
+      ]
+    }
+  ],
+  "omp-2110-gateway-ingest": [
+    {
+      "key": "OMP_2110_GATEWAY_LISTEN_PORT",
+      "label": "Video: Empfangsport",
+      "type": "port",
+      "description": "UDP-Port, auf dem das 2110-20-Video ankommt.",
+      "default": "6000",
+      "group": "Video"
+    },
+    {
+      "key": "OMP_2110_GATEWAY_MULTICAST_GROUP",
+      "label": "Video: Multicast-Gruppe",
+      "type": "host",
+      "description": "Multicast-Adresse, der beigetreten wird. Leer = Unicast.",
+      "group": "Video"
+    },
+    {
+      "key": "OMP_2110_GATEWAY_SDP_FILE",
+      "label": "Video: SDP-Datei",
+      "type": "path",
+      "description": "Alternativ zu Port/Gruppe: SDP-Datei der Quelle.",
+      "group": "Video",
+      "pathKind": "file",
+      "mustExist": true
+    },
+    {
+      "key": "OMP_2110_GATEWAY_AUDIO_LISTEN_PORT",
+      "label": "Audio: Empfangsport",
+      "type": "port",
+      "description": "UDP-Port für 2110-30-Audio.",
+      "default": "6002",
+      "group": "Audio"
+    },
+    {
+      "key": "OMP_2110_GATEWAY_AUDIO_MULTICAST_GROUP",
+      "label": "Audio: Multicast-Gruppe",
+      "type": "host",
+      "group": "Audio"
+    },
+    {
+      "key": "OMP_2110_GATEWAY_AUDIO_SDP_FILE",
+      "label": "Audio: SDP-Datei",
+      "type": "path",
+      "group": "Audio",
+      "pathKind": "file",
+      "mustExist": true
+    },
+    {
+      "key": "OMP_2110_GATEWAY_WIDTH",
+      "label": "Breite",
+      "type": "int",
+      "default": "1920",
+      "group": "Video",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_2110_GATEWAY_HEIGHT",
+      "label": "Höhe",
+      "type": "int",
+      "default": "1080",
+      "group": "Video",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_2110_GATEWAY_FPS_NUM",
+      "label": "Bildrate (Zähler)",
+      "type": "int",
+      "default": "25",
+      "group": "Video",
+      "min": 1,
+      "max": 240000
+    },
+    {
+      "key": "OMP_2110_GATEWAY_FPS_DEN",
+      "label": "Bildrate (Nenner)",
+      "type": "int",
+      "default": "1",
+      "group": "Video",
+      "min": 1,
+      "max": 100000
+    },
+    {
+      "key": "OMP_2110_GATEWAY_AUDIO_SAMPLE_RATE",
+      "label": "Abtastrate",
+      "type": "int",
+      "description": "Hz",
+      "default": "48000",
+      "group": "Audio",
+      "min": 8000,
+      "max": 192000
+    },
+    {
+      "key": "OMP_2110_GATEWAY_AUDIO_CHANNELS",
+      "label": "Kanäle",
+      "type": "int",
+      "default": "2",
+      "group": "Audio",
+      "min": 1,
+      "max": 64
+    },
+    {
+      "key": "OMP_PTP_DOMAIN",
+      "label": "PTP-Domäne",
+      "type": "int",
+      "description": "PTP-Zeitbasis (0–127). Leer = ohne PTP.",
+      "group": "Zeit",
+      "min": 0,
+      "max": 127
+    }
+  ],
+  "omp-2110-gateway-output": [
+    {
+      "key": "OMP_2110_GATEWAY_DEST_HOST",
+      "label": "Video: Zieladresse",
+      "type": "host",
+      "description": "Ziel (Unicast/Multicast) des gesendeten Videos.",
+      "default": "239.1.1.1",
+      "group": "Video"
+    },
+    {
+      "key": "OMP_2110_GATEWAY_DEST_PORT",
+      "label": "Video: Zielport",
+      "type": "port",
+      "default": "6000",
+      "group": "Video"
+    },
+    {
+      "key": "OMP_2110_GATEWAY_AUDIO_DEST_HOST",
+      "label": "Audio: Zieladresse",
+      "type": "host",
+      "default": "239.1.1.2",
+      "group": "Audio"
+    },
+    {
+      "key": "OMP_2110_GATEWAY_AUDIO_DEST_PORT",
+      "label": "Audio: Zielport",
+      "type": "port",
+      "default": "6002",
+      "group": "Audio"
+    },
+    {
+      "key": "OMP_2110_GATEWAY_WIDTH",
+      "label": "Breite",
+      "type": "int",
+      "default": "1920",
+      "group": "Video",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_2110_GATEWAY_HEIGHT",
+      "label": "Höhe",
+      "type": "int",
+      "default": "1080",
+      "group": "Video",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_2110_GATEWAY_FPS_NUM",
+      "label": "Bildrate (Zähler)",
+      "type": "int",
+      "default": "25",
+      "group": "Video",
+      "min": 1,
+      "max": 240000
+    },
+    {
+      "key": "OMP_2110_GATEWAY_FPS_DEN",
+      "label": "Bildrate (Nenner)",
+      "type": "int",
+      "default": "1",
+      "group": "Video",
+      "min": 1,
+      "max": 100000
+    },
+    {
+      "key": "OMP_2110_GATEWAY_AUDIO_SAMPLE_RATE",
+      "label": "Abtastrate",
+      "type": "int",
+      "description": "Hz",
+      "default": "48000",
+      "group": "Audio",
+      "min": 8000,
+      "max": 192000
+    },
+    {
+      "key": "OMP_2110_GATEWAY_AUDIO_CHANNELS",
+      "label": "Kanäle",
+      "type": "int",
+      "default": "2",
+      "group": "Audio",
+      "min": 1,
+      "max": 64
+    },
+    {
+      "key": "OMP_PTP_DOMAIN",
+      "label": "PTP-Domäne",
+      "type": "int",
+      "description": "PTP-Zeitbasis (0–127). Leer = ohne PTP.",
+      "group": "Zeit",
+      "min": 0,
+      "max": 127
+    }
+  ],
+  "omp-srt-gateway-uplink": [
+    {
+      "key": "OMP_SRT_GATEWAY_SRT_URI",
+      "label": "SRT-Adresse",
+      "type": "url",
+      "description": "Ziel/Quelle der SRT-Strecke, z. B. srt://host:7000.",
+      "default": "srt://127.0.0.1:7000",
+      "group": "SRT"
+    },
+    {
+      "key": "OMP_SRT_GATEWAY_ST2110_HOST",
+      "label": "2110-Host",
+      "type": "host",
+      "default": "127.0.0.1",
+      "group": "2110"
+    },
+    {
+      "key": "OMP_SRT_GATEWAY_ST2110_PORT",
+      "label": "2110-Port",
+      "type": "port",
+      "default": "6000",
+      "group": "2110"
+    }
+  ],
+  "omp-srt-gateway-downlink": [
+    {
+      "key": "OMP_SRT_GATEWAY_SRT_URI",
+      "label": "SRT-Adresse",
+      "type": "url",
+      "description": "Ziel/Quelle der SRT-Strecke, z. B. srt://host:7000.",
+      "default": "srt://127.0.0.1:7000",
+      "group": "SRT"
+    },
+    {
+      "key": "OMP_SRT_GATEWAY_ST2110_HOST",
+      "label": "2110-Host",
+      "type": "host",
+      "default": "127.0.0.1",
+      "group": "2110"
+    },
+    {
+      "key": "OMP_SRT_GATEWAY_ST2110_PORT",
+      "label": "2110-Port",
+      "type": "port",
+      "default": "6000",
+      "group": "2110"
+    }
+  ],
+  "omp-fabrics-gateway-target": [
+    {
+      "key": "OMP_FABRICS_PROVIDER",
+      "label": "Provider",
+      "type": "enum",
+      "description": "Transport der Fabrics-Verbindung (RDMA: verbs/efa, lokal: shm).",
+      "default": "tcp",
+      "group": "Netzwerk",
+      "choices": [
+        {
+          "value": "tcp"
+        },
+        {
+          "value": "verbs"
+        },
+        {
+          "value": "efa"
+        },
+        {
+          "value": "shm"
+        }
+      ]
+    },
+    {
+      "key": "OMP_FABRICS_BIND_NODE",
+      "label": "Bind-Adresse",
+      "type": "host",
+      "default": "0.0.0.0",
+      "group": "Netzwerk"
+    },
+    {
+      "key": "OMP_FABRICS_BIND_SERVICE",
+      "label": "Bind-Port",
+      "type": "port",
+      "description": "0 = automatisch.",
+      "default": "0",
+      "group": "Netzwerk"
+    },
+    {
+      "key": "OMP_FABRICS_WIDTH",
+      "label": "Breite",
+      "type": "int",
+      "default": "1920",
+      "group": "Format",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_FABRICS_HEIGHT",
+      "label": "Höhe",
+      "type": "int",
+      "default": "1080",
+      "group": "Format",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_FABRICS_FPS_NUM",
+      "label": "Bildrate (Zähler)",
+      "type": "int",
+      "default": "25",
+      "group": "Format",
+      "min": 1,
+      "max": 240000
+    },
+    {
+      "key": "OMP_FABRICS_FPS_DEN",
+      "label": "Bildrate (Nenner)",
+      "type": "int",
+      "default": "1",
+      "group": "Format",
+      "min": 1,
+      "max": 100000
+    }
+  ],
+  "omp-fabrics-gateway-initiator": [
+    {
+      "key": "OMP_FABRICS_PROVIDER",
+      "label": "Provider",
+      "type": "enum",
+      "description": "Transport der Fabrics-Verbindung (RDMA: verbs/efa, lokal: shm).",
+      "default": "tcp",
+      "group": "Netzwerk",
+      "choices": [
+        {
+          "value": "tcp"
+        },
+        {
+          "value": "verbs"
+        },
+        {
+          "value": "efa"
+        },
+        {
+          "value": "shm"
+        }
+      ]
+    },
+    {
+      "key": "OMP_FABRICS_BIND_NODE",
+      "label": "Bind-Adresse",
+      "type": "host",
+      "default": "0.0.0.0",
+      "group": "Netzwerk"
+    },
+    {
+      "key": "OMP_FABRICS_BIND_SERVICE",
+      "label": "Bind-Port",
+      "type": "port",
+      "description": "0 = automatisch.",
+      "default": "0",
+      "group": "Netzwerk"
+    },
+    {
+      "key": "OMP_FABRICS_WIDTH",
+      "label": "Breite",
+      "type": "int",
+      "default": "1920",
+      "group": "Format",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_FABRICS_HEIGHT",
+      "label": "Höhe",
+      "type": "int",
+      "default": "1080",
+      "group": "Format",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_FABRICS_FPS_NUM",
+      "label": "Bildrate (Zähler)",
+      "type": "int",
+      "default": "25",
+      "group": "Format",
+      "min": 1,
+      "max": 240000
+    },
+    {
+      "key": "OMP_FABRICS_FPS_DEN",
+      "label": "Bildrate (Nenner)",
+      "type": "int",
+      "default": "1",
+      "group": "Format",
+      "min": 1,
+      "max": 100000
+    },
+    {
+      "key": "OMP_FABRICS_TARGET_URL",
+      "label": "Ziel-URL",
+      "type": "url",
+      "description": "Adresse des Fabrics-Targets (Schema://Host:Port).",
+      "group": "Netzwerk"
+    }
+  ],
+  "omp-aes67-gateway-sink": [
+    {
+      "key": "OMP_AES67_GATEWAY_CHANNELS",
+      "label": "Kanäle",
+      "type": "int",
+      "default": "2",
+      "group": "Audio",
+      "min": 1,
+      "max": 64
+    },
+    {
+      "key": "OMP_AES67_GATEWAY_SAMPLE_RATE",
+      "label": "Abtastrate",
+      "type": "int",
+      "description": "Hz",
+      "default": "48000",
+      "group": "Audio",
+      "min": 8000,
+      "max": 192000
+    },
+    {
+      "key": "OMP_PTP_DOMAIN",
+      "label": "PTP-Domäne",
+      "type": "int",
+      "description": "PTP-Zeitbasis (0–127). Leer = ohne PTP.",
+      "group": "Zeit",
+      "min": 0,
+      "max": 127
+    },
+    {
+      "key": "OMP_AES67_GATEWAY_DEST_HOST",
+      "label": "Zieladresse",
+      "type": "host",
+      "default": "239.5.5.6",
+      "group": "Netzwerk"
+    },
+    {
+      "key": "OMP_AES67_GATEWAY_DEST_PORT",
+      "label": "Zielport",
+      "type": "port",
+      "default": "6100",
+      "group": "Netzwerk"
+    },
+    {
+      "key": "OMP_AES67_GATEWAY_LOCAL_ADDR",
+      "label": "Lokale Adresse",
+      "type": "host",
+      "description": "Netzwerkschnittstelle, über die gesendet wird.",
+      "default": "127.0.0.1",
+      "group": "Netzwerk"
+    },
+    {
+      "key": "OMP_AES67_GATEWAY_SAP_INTERVAL_SECS",
+      "label": "SAP-Intervall",
+      "type": "int",
+      "description": "Sekunden zwischen den Session-Ankündigungen.",
+      "default": "30",
+      "group": "Netzwerk",
+      "min": 1,
+      "max": 3600
+    }
+  ],
+  "omp-aes67-gateway-source": [
+    {
+      "key": "OMP_AES67_GATEWAY_CHANNELS",
+      "label": "Kanäle",
+      "type": "int",
+      "default": "2",
+      "group": "Audio",
+      "min": 1,
+      "max": 64
+    },
+    {
+      "key": "OMP_AES67_GATEWAY_SAMPLE_RATE",
+      "label": "Abtastrate",
+      "type": "int",
+      "description": "Hz",
+      "default": "48000",
+      "group": "Audio",
+      "min": 8000,
+      "max": 192000
+    },
+    {
+      "key": "OMP_PTP_DOMAIN",
+      "label": "PTP-Domäne",
+      "type": "int",
+      "description": "PTP-Zeitbasis (0–127). Leer = ohne PTP.",
+      "group": "Zeit",
+      "min": 0,
+      "max": 127
+    },
+    {
+      "key": "OMP_AES67_GATEWAY_LISTEN_PORT",
+      "label": "Empfangsport",
+      "type": "port",
+      "default": "6100",
+      "group": "Netzwerk"
+    },
+    {
+      "key": "OMP_AES67_GATEWAY_MULTICAST_GROUP",
+      "label": "Multicast-Gruppe",
+      "type": "host",
+      "description": "Leer = Unicast.",
+      "group": "Netzwerk"
+    },
+    {
+      "key": "OMP_AES67_GATEWAY_SDP_FILE",
+      "label": "SDP-Datei",
+      "type": "path",
+      "description": "Alternativ zu Port/Gruppe.",
+      "group": "Netzwerk",
+      "pathKind": "file",
+      "mustExist": true
+    },
+    {
+      "key": "OMP_AES67_GATEWAY_DISCOVER_NAME",
+      "label": "Session-Name (SAP-Suche)",
+      "type": "string",
+      "description": "Sucht eine angekündigte Session mit diesem Namen.",
+      "group": "Netzwerk"
+    },
+    {
+      "key": "OMP_AES67_GATEWAY_DISCOVER_TIMEOUT_SECS",
+      "label": "Such-Timeout",
+      "type": "int",
+      "description": "Sekunden",
+      "default": "30",
+      "group": "Netzwerk",
+      "min": 1,
+      "max": 600
+    }
+  ],
+  "omp-webrtc-gateway-camera": [
+    {
+      "key": "OMP_WIDTH",
+      "label": "Breite",
+      "type": "int",
+      "description": "Bildbreite in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_HEIGHT",
+      "label": "Höhe",
+      "type": "int",
+      "description": "Bildhöhe in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_FRAMERATE_NUM",
+      "label": "Bildrate (Zähler)",
+      "type": "int",
+      "description": "z. B. 25 oder 30000.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 1,
+      "max": 240000
+    },
+    {
+      "key": "OMP_FRAMERATE_DEN",
+      "label": "Bildrate (Nenner)",
+      "type": "int",
+      "description": "z. B. 1 oder 1001.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 1,
+      "max": 100000
+    },
+    {
+      "key": "OMP_WEBRTC_BITRATE_KBPS",
+      "label": "Bitrate",
+      "type": "int",
+      "description": "kbit/s",
+      "default": "4000",
+      "group": "Kodierung",
+      "min": 100,
+      "max": 100000
+    },
+    {
+      "key": "OMP_WEBRTC_LATENCY_MS",
+      "label": "Latenz",
+      "type": "int",
+      "description": "ms Jitterbuffer",
+      "default": "40",
+      "group": "Kodierung",
+      "min": 0,
+      "max": 5000
+    },
+    {
+      "key": "OMP_WEBRTC_ICE_PORT",
+      "label": "ICE-Port",
+      "type": "port",
+      "description": "UDP-Port für ICE/Medien (0 = automatisch).",
+      "default": "0",
+      "group": "Netzwerk"
+    },
+    {
+      "key": "OMP_WEBRTC_PUBLIC_IP",
+      "label": "Öffentliche IP",
+      "type": "host",
+      "description": "Adresse, die Browsern als Kandidat gemeldet wird (hinter NAT).",
+      "group": "Netzwerk"
+    }
+  ],
+  "omp-webrtc-gateway-monitor": [
+    {
+      "key": "OMP_WIDTH",
+      "label": "Breite",
+      "type": "int",
+      "description": "Bildbreite in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_HEIGHT",
+      "label": "Höhe",
+      "type": "int",
+      "description": "Bildhöhe in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_FRAMERATE_NUM",
+      "label": "Bildrate (Zähler)",
+      "type": "int",
+      "description": "z. B. 25 oder 30000.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 1,
+      "max": 240000
+    },
+    {
+      "key": "OMP_FRAMERATE_DEN",
+      "label": "Bildrate (Nenner)",
+      "type": "int",
+      "description": "z. B. 1 oder 1001.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 1,
+      "max": 100000
+    },
+    {
+      "key": "OMP_WEBRTC_BITRATE_KBPS",
+      "label": "Bitrate",
+      "type": "int",
+      "description": "kbit/s",
+      "default": "4000",
+      "group": "Kodierung",
+      "min": 100,
+      "max": 100000
+    },
+    {
+      "key": "OMP_WEBRTC_LATENCY_MS",
+      "label": "Latenz",
+      "type": "int",
+      "description": "ms Jitterbuffer",
+      "default": "40",
+      "group": "Kodierung",
+      "min": 0,
+      "max": 5000
+    },
+    {
+      "key": "OMP_WEBRTC_ICE_PORT",
+      "label": "ICE-Port",
+      "type": "port",
+      "description": "UDP-Port für ICE/Medien (0 = automatisch).",
+      "default": "0",
+      "group": "Netzwerk"
+    },
+    {
+      "key": "OMP_WEBRTC_PUBLIC_IP",
+      "label": "Öffentliche IP",
+      "type": "host",
+      "description": "Adresse, die Browsern als Kandidat gemeldet wird (hinter NAT).",
+      "group": "Netzwerk"
+    }
+  ],
+  "omp-switcher": [
+    {
+      "key": "OMP_WIDTH",
+      "label": "Breite",
+      "type": "int",
+      "description": "Bildbreite in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_HEIGHT",
+      "label": "Höhe",
+      "type": "int",
+      "description": "Bildhöhe in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    }
+  ],
+  "omp-viewer": [
+    {
+      "key": "OMP_VIEWER_PREVIEW_PORT",
+      "label": "Vorschau-Port",
+      "type": "port",
+      "description": "TCP-Port des Vorschau-/Level-Servers. 0 = automatisch ein freier Port (empfohlen, mehrere Instanzen pro Host).",
+      "default": "0",
+      "group": "Netzwerk (Ports)"
+    },
+    {
+      "key": "OMP_VIEWER_LEVELS_PORT",
+      "label": "Pegel-Port",
+      "type": "port",
+      "description": "TCP-Port des Vorschau-/Level-Servers. 0 = automatisch ein freier Port (empfohlen, mehrere Instanzen pro Host).",
+      "default": "0",
+      "group": "Netzwerk (Ports)"
+    },
+    {
+      "key": "OMP_VIEWER_SINK",
+      "label": "Video-Ausgabeelement",
+      "type": "string",
+      "description": "GStreamer-Element für die Anzeige (z. B. autovideosink). Leer = Standard.",
+      "group": "Signal"
+    }
+  ],
+  "omp-scope": [
+    {
+      "key": "OMP_SCOPE_PREVIEW_PORT",
+      "label": "Vorschau-Port",
+      "type": "port",
+      "description": "TCP-Port des Vorschau-/Level-Servers. 0 = automatisch ein freier Port (empfohlen, mehrere Instanzen pro Host).",
+      "default": "0",
+      "group": "Netzwerk (Ports)"
+    },
+    {
+      "key": "OMP_SCOPE_LEVELS_PORT",
+      "label": "Pegel-Port",
+      "type": "port",
+      "description": "TCP-Port des Vorschau-/Level-Servers. 0 = automatisch ein freier Port (empfohlen, mehrere Instanzen pro Host).",
+      "default": "0",
+      "group": "Netzwerk (Ports)"
+    }
+  ],
+  "omp-video-mixer-me": [
+    {
+      "key": "OMP_WIDTH",
+      "label": "Breite",
+      "type": "int",
+      "description": "Bildbreite in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_HEIGHT",
+      "label": "Höhe",
+      "type": "int",
+      "description": "Bildhöhe in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_ME_LEVELS",
+      "label": "Mix/Effekt-Ebenen",
+      "type": "int",
+      "description": "Anzahl der Programm-Ebenen (Mix/Effects).",
+      "default": "1",
+      "group": "Funktion",
+      "min": 1,
+      "max": 8
+    }
+  ],
+  "omp-audio-mixer": [
+    {
+      "key": "OMP_AUDIO_MIXER_AUX_SLOTS",
+      "label": "Aux-/N-1-Busse",
+      "type": "int",
+      "description": "Anzahl der Zusatzbusse (nur beim Start änderbar).",
+      "default": "6",
+      "group": "Funktion",
+      "min": 0,
+      "max": 32
+    },
+    {
+      "key": "OMP_AUDIO_MIXER_LEVELS_PORT",
+      "label": "Pegel-Port",
+      "type": "port",
+      "description": "TCP-Port des Vorschau-/Level-Servers. 0 = automatisch ein freier Port (empfohlen, mehrere Instanzen pro Host).",
+      "default": "0",
+      "group": "Netzwerk (Ports)"
+    }
+  ],
+  "omp-audio-monitor": [
+    {
+      "key": "OMP_AUDIO_MONITOR_STREAM_PORT",
+      "label": "Stream-Port",
+      "type": "port",
+      "description": "TCP-Port des Vorschau-/Level-Servers. 0 = automatisch ein freier Port (empfohlen, mehrere Instanzen pro Host).",
+      "default": "0",
+      "group": "Netzwerk (Ports)"
+    }
+  ],
+  "omp-mxf-player": [
+    {
+      "key": "OMP_MEDIA_DIR",
+      "label": "Medienverzeichnis",
+      "type": "path",
+      "description": "Verzeichnis mit den Mediendateien auf dem Rechner, auf dem der Node läuft (lokal oder eingehängte Netzwerk-Share). Relative Pfade gelten ab dem Arbeitsverzeichnis des Orchestrators.",
+      "default": "data/media",
+      "group": "Medien und Dateien",
+      "pathKind": "dir"
+    },
+    {
+      "key": "OMP_WIDTH",
+      "label": "Breite",
+      "type": "int",
+      "description": "Bildbreite in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_HEIGHT",
+      "label": "Höhe",
+      "type": "int",
+      "description": "Bildhöhe in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    }
+  ],
+  "omp-mxf-player-direct": [
+    {
+      "key": "OMP_MEDIA_DIR",
+      "label": "Medienverzeichnis",
+      "type": "path",
+      "description": "Verzeichnis mit den Mediendateien auf dem Rechner, auf dem der Node läuft (lokal oder eingehängte Netzwerk-Share). Relative Pfade gelten ab dem Arbeitsverzeichnis des Orchestrators.",
+      "default": "data/media",
+      "group": "Medien und Dateien",
+      "pathKind": "dir"
+    },
+    {
+      "key": "OMP_MXF_FILE",
+      "label": "MXF-Datei",
+      "type": "string",
+      "description": "Dateiname (relativ zum Medienverzeichnis) der abzuspielenden Datei, z. B. clip.mxf.",
+      "group": "Medien und Dateien"
+    },
+    {
+      "key": "OMP_STATE_DIR",
+      "label": "Zustandsverzeichnis",
+      "type": "path",
+      "description": "Ablage für den Wiedergabezustand.",
+      "group": "Medien und Dateien",
+      "pathKind": "dir"
+    },
+    {
+      "key": "OMP_WIDTH",
+      "label": "Breite",
+      "type": "int",
+      "description": "Bildbreite in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_HEIGHT",
+      "label": "Höhe",
+      "type": "int",
+      "description": "Bildhöhe in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    }
+  ],
+  "omp-channel-player": [
+    {
+      "key": "OMP_MEDIA_DIR",
+      "label": "Medienverzeichnis",
+      "type": "path",
+      "description": "Verzeichnis mit den Mediendateien auf dem Rechner, auf dem der Node läuft (lokal oder eingehängte Netzwerk-Share). Relative Pfade gelten ab dem Arbeitsverzeichnis des Orchestrators.",
+      "default": "data/media",
+      "group": "Medien und Dateien",
+      "pathKind": "dir"
+    },
+    {
+      "key": "OMP_WIDTH",
+      "label": "Breite",
+      "type": "int",
+      "description": "Bildbreite in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_HEIGHT",
+      "label": "Höhe",
+      "type": "int",
+      "description": "Bildhöhe in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    }
+  ],
+  "omp-multiviewer": [
+    {
+      "key": "OMP_MULTIVIEWER_PREVIEW_PORT",
+      "label": "Vorschau-Port",
+      "type": "port",
+      "description": "TCP-Port des Vorschau-/Level-Servers. 0 = automatisch ein freier Port (empfohlen, mehrere Instanzen pro Host).",
+      "default": "0",
+      "group": "Netzwerk (Ports)"
+    }
+  ],
+  "omp-multiviewer-custom": [
+    {
+      "key": "OMP_MULTIVIEWER_CUSTOM_PREVIEW_PORT",
+      "label": "Vorschau-Port",
+      "type": "port",
+      "description": "TCP-Port des Vorschau-/Level-Servers. 0 = automatisch ein freier Port (empfohlen, mehrere Instanzen pro Host).",
+      "default": "0",
+      "group": "Netzwerk (Ports)"
+    }
+  ],
+  "omp-playout-automation": [
+    {
+      "key": "OMP_PLAYOUT_TARGET_PLAYER_A_LABEL",
+      "label": "Ziel Player A",
+      "type": "string",
+      "description": "Label der Instanz, die als Player A dient (zur Laufzeit im Panel änderbar).",
+      "group": "Ziele"
+    },
+    {
+      "key": "OMP_PLAYOUT_TARGET_PLAYER_B_LABEL",
+      "label": "Ziel Player B",
+      "type": "string",
+      "description": "Label der Instanz für Player B.",
+      "group": "Ziele"
+    },
+    {
+      "key": "OMP_PLAYOUT_TARGET_MIXER_LABEL",
+      "label": "Ziel Videomischer",
+      "type": "string",
+      "description": "Label des Videomischers.",
+      "group": "Ziele"
+    },
+    {
+      "key": "OMP_PLAYOUT_TARGET_GRAPHICS_LABEL",
+      "label": "Ziel Grafik (optional)",
+      "type": "string",
+      "description": "Label der Grafik-Instanz (omp-ograf).",
+      "group": "Ziele"
+    }
+  ],
+  "omp-ograf": [
+    {
+      "key": "OMP_OGRAF_TEMPLATES",
+      "label": "Vorlagenverzeichnis",
+      "type": "path",
+      "description": "Verzeichnis mit den OGraf-Grafikvorlagen.",
+      "default": "data/ograf-templates",
+      "group": "Medien und Dateien",
+      "pathKind": "dir"
+    }
+  ],
+  "omp-media-library": [
+    {
+      "key": "OMP_MEDIA_DIR",
+      "label": "Medienverzeichnis",
+      "type": "path",
+      "description": "Verzeichnis, das nach Mediendateien durchsucht wird. Zur Laufzeit zusätzlich im Panel änderbar (setMediaDir).",
+      "default": "data/media",
+      "group": "Medien und Dateien",
+      "pathKind": "dir"
+    }
+  ],
+  "omp-recorder": [
+    {
+      "key": "OMP_MEDIA_DIR",
+      "label": "Medienverzeichnis",
+      "type": "path",
+      "description": "Verzeichnis, in das aufgenommen wird.",
+      "default": "data/media",
+      "group": "Medien und Dateien",
+      "pathKind": "dir"
+    }
+  ],
+  "omp-scaler": [
+    {
+      "key": "OMP_WIDTH",
+      "label": "Breite",
+      "type": "int",
+      "description": "Bildbreite in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_HEIGHT",
+      "label": "Höhe",
+      "type": "int",
+      "description": "Bildhöhe in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_FRAMERATE_NUM",
+      "label": "Bildrate (Zähler)",
+      "type": "int",
+      "description": "z. B. 25 oder 30000.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 1,
+      "max": 240000
+    },
+    {
+      "key": "OMP_FRAMERATE_DEN",
+      "label": "Bildrate (Nenner)",
+      "type": "int",
+      "description": "z. B. 1 oder 1001.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 1,
+      "max": 100000
+    }
+  ]
+}

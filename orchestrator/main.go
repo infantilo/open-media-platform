@@ -45,6 +45,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeoptions"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeversions"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/organizations"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/outbox"
@@ -53,6 +54,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/process"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profiles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/runtimesettings"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/safego"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/snapshots"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sourcetags"
@@ -320,6 +322,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Kapitel 29: in der UI gesetzte Betriebswerte überschreiben Umgebung/Defaults (wirksam
+	// ab diesem Start). Ungültige Einträge werden übersprungen und gemeldet, nie angewendet.
+	systemSettingsStore := runtimesettings.NewStore(database)
+	var startupSkipped []string
+	if overrides, oerr := systemSettingsStore.Overrides(); oerr != nil {
+		slog.Warn("einstellungen: Überschreibungen nicht lesbar", "error", oerr)
+	} else if startupSkipped = runtimesettings.Apply(&cfg, overrides); len(startupSkipped) > 0 {
+		slog.Warn("einstellungen: Überschreibungen verworfen", "details", startupSkipped)
+	}
+
 	// Zentraler Log-Kanal (ARCHITECTURE.md §25.2, UMSETZUNG.md D19) —
 	// baut auf dem bereits laufenden NATS-JetStream-Cluster auf (D14),
 	// keine neue Infrastruktur. Beobachtbarkeit ist nicht kritischer
@@ -518,6 +530,14 @@ func main() {
 	// um sich ein Service-Token zu holen und den generischen Proxy
 	// statt eines direkten Node-zu-Node-Zugriffs anzusprechen.
 	launcherSvc.SetOrchestratorURL(cfg.OrchestratorURL)
+	// Kapitel 29: einstellbare Node-Optionen (Schema aus node-options.json neben dem Katalog,
+	// Werte aus Postgres). Fehlt die Datei, bleibt alles wie früher.
+	nodeOptionStore := nodeoptions.NewStore(database)
+	if schema, serr := nodeoptions.LoadFile(filepath.Join(filepath.Dir(cfg.CatalogPath), "node-options.json")); serr == nil {
+		launcherSvc.SetNodeOptions(schema, nodeOptionStore)
+	} else if !errors.Is(serr, os.ErrNotExist) {
+		slog.Error("node-optionen: node-options.json ungültig — Optionen deaktiviert", "error", serr)
+	}
 	// Kapitel 14 Teil 2 (docs/END-GOAL-FEATURES.md §14.3b): periodisches
 	// Pro-Instanz-Sampling (CPU%/RSS aus /proc) für lokal laufende
 	// Instanzen — das Orchestrator-seitige Gegenstück zum Host-Agent-
@@ -932,7 +952,7 @@ func main() {
 	})
 	updateSvc := updates.New(cfg.UpdateDir, cfg.UpdatePubKeyFile, cfg.UpdateAllowUnsigned, runtime.GOOS+"/"+runtime.GOARCH, 0)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithPlayout(playout.NewStore(database), workflowSvc), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore))
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithPlayout(playout.NewStore(database), workflowSvc), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped))
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

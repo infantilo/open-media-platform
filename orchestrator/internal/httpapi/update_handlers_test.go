@@ -407,7 +407,7 @@ func TestRestartOutdated(t *testing.T) {
 
 	call := func(body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		handleRestartOutdated(lsvc, wsvc, fakeHostMetrics{}, nil)(rec, httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body)))
+		handleRestartOutdated(lsvc, wsvc, fakeHostMetrics{}, nil, nil)(rec, httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body)))
 		return rec
 	}
 	if rec := call(`{}`); rec.Code != http.StatusBadRequest {

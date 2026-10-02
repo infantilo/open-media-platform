@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/gpu"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeoptions"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/safego"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 	"github.com/infantilo/openmediaplatform/tools/contract-check/checker"
@@ -322,6 +323,12 @@ func catalogKey(nodeType, version string) string {
 // Vertrauensstufe.
 type Launcher struct {
 	binaryResolver BinaryResolver
+	// Kapitel 29: einstellbare Node-Optionen (Schema je Typ + gespeicherte Werte).
+	optionSchema map[string][]nodeoptions.Option
+	optionStore  *nodeoptions.Store
+	// optionsApplied: Instanz-ID → Hash der beim letzten (Neu-)Start wirksamen Optionswerte
+	// (nicht persistiert; nach einem Orchestrator-Neustart unbekannt = nicht „veraltet“).
+	optionsApplied map[string]string
 	staticCatalog  []CatalogEntry
 	registryURL    string
 	natsURL        string
@@ -883,7 +890,7 @@ func (l *Launcher) StartLabeled(nodeType, version, hostID, customLabel string, e
 	if hostID != "" {
 		return l.startRemote(nodeType, hostID, customLabel, extraEnv)
 	}
-	return l.startLocal(nodeType, version, customLabel, extraEnv)
+	return l.startLocal(nodeType, version, customLabel, extraEnv, "")
 }
 
 // startLocal — unverändertes Verhalten aus C8 (OMP_INSTANCE_ID/
@@ -892,7 +899,7 @@ func (l *Launcher) StartLabeled(nodeType, version, hostID, customLabel string, e
 // extraEnv (s. `Start`-Doku). version (§17 Teil 5) wählt zwischen
 // mehreren importierten Versionen desselben Typs — leer heißt "die
 // einzige/statische Version", s. resolveCatalogEntry.
-func (l *Launcher) startLocal(nodeType, version, customLabel string, extraEnv map[string]string) (Instance, error) {
+func (l *Launcher) startLocal(nodeType, version, customLabel string, extraEnv map[string]string, optionsFrom string) (Instance, error) {
 	entry, err := l.resolveCatalogEntry(nodeType, version)
 	if err != nil {
 		return Instance{}, err
@@ -912,14 +919,14 @@ func (l *Launcher) startLocal(nodeType, version, customLabel string, extraEnv ma
 	}
 
 	if entry.Runner == runnerPodman {
-		return l.startPodmanLocal(nodeType, entry, id, label, launchSecret, extraEnv)
+		return l.startPodmanLocal(nodeType, entry, id, label, launchSecret, extraEnv, optionsFrom)
 	}
 	if entry.Runner != runnerProcess {
 		return Instance{}, ErrUnsupportedRunner
 	}
 
 	entry, nodeVersion := l.applyProductiveBinary(entry)
-	cmd, stderrTail, err := l.execEntry(entry, id, label, launchSecret, extraEnv)
+	cmd, stderrTail, err := l.execEntry(entry, id, label, launchSecret, l.withOptions(nodeType, id, optionsFrom, extraEnv))
 	if err != nil {
 		return Instance{}, fmt.Errorf("launcher: start %s: %w", nodeType, err)
 	}
@@ -947,6 +954,121 @@ func (l *Launcher) startLocal(nodeType, version, customLabel string, extraEnv ma
 	safego.Go("launcher.supervise", func() { l.supervise(id, nodeType, entry, label, extraEnv, cmd, stderrTail) })
 
 	return inst, nil
+}
+
+// SetNodeOptions aktiviert die einstellbaren Node-Optionen (Kapitel 29): Schema je
+// Node-Typ und der Wertespeicher. Beides darf nil sein (dann tut der Launcher wie früher).
+func (l *Launcher) SetNodeOptions(schema map[string][]nodeoptions.Option, store *nodeoptions.Store) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.optionSchema = schema
+	l.optionStore = store
+}
+
+// NodeOptions liefert das Optionsschema eines Node-Typs (leer = keine).
+func (l *Launcher) NodeOptions(nodeType string) []nodeoptions.Option {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.optionSchema[nodeType]
+}
+
+// optionValues liefert die wirksamen, im Schema deklarierten Werte:
+// Typ-Werte und Instanz-Werte getrennt (Fehler beim Lesen = keine Werte, der Start geht vor).
+func (l *Launcher) optionValues(nodeType, instanceID string) (typeVals, instVals map[string]string) {
+	l.mu.Lock()
+	schema, store := l.optionSchema[nodeType], l.optionStore
+	l.mu.Unlock()
+	if len(schema) == 0 || store == nil {
+		return nil, nil
+	}
+	keep := func(m map[string]string, err error) map[string]string {
+		out := map[string]string{}
+		if err != nil {
+			slog.Warn("launcher: node-optionen nicht lesbar", "type", nodeType, "error", err)
+			return out
+		}
+		for k, v := range m {
+			if _, ok := nodeoptions.Find(schema, k); ok && v != "" {
+				out[k] = v
+			}
+		}
+		return out
+	}
+	return keep(store.Values(nodeoptions.ScopeType, nodeType)), keep(store.Values(nodeoptions.ScopeInstance, instanceID))
+}
+
+func hashOptions(a, b map[string]string) string {
+	keys := make([]string, 0, len(a)+len(b))
+	merged := map[string]string{}
+	for k, v := range a {
+		merged[k] = v
+	}
+	for k, v := range b {
+		merged[k] = v
+	}
+	for k := range merged {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	for _, k := range keys {
+		sb.WriteString(k + "=" + merged[k] + "\n")
+	}
+	return sb.String()
+}
+
+// withOptions mischt die Optionswerte in extraEnv: Typ-Wert < extraEnv (Workflow, z. B.
+// Format-Preset) < Instanz-Wert. Gibt eine neue Map zurück (Instance.ExtraEnv bleibt
+// unverändert, sonst würden alte Werte bei späteren Neustarts festgeschrieben) und merkt
+// sich, welche Optionen für diese Instanz jetzt wirksam sind. valuesFrom (optional): Instanz,
+// deren Instanz-Werte statt der eigenen gelten (Neustart per Stop + Start mit neuer ID).
+func (l *Launcher) withOptions(nodeType, instanceID, valuesFrom string, extraEnv map[string]string) map[string]string {
+	if valuesFrom == "" {
+		valuesFrom = instanceID
+	}
+	typeVals, instVals := l.optionValues(nodeType, valuesFrom)
+	l.mu.Lock()
+	if l.optionsApplied == nil {
+		l.optionsApplied = map[string]string{}
+	}
+	l.optionsApplied[instanceID] = hashOptions(typeVals, instVals)
+	l.mu.Unlock()
+	if len(typeVals) == 0 && len(instVals) == 0 {
+		return extraEnv
+	}
+	out := make(map[string]string, len(typeVals)+len(extraEnv)+len(instVals))
+	for k, v := range typeVals {
+		out[k] = v
+	}
+	for k, v := range extraEnv {
+		out[k] = v
+	}
+	for k, v := range instVals {
+		out[k] = v
+	}
+	return out
+}
+
+// StartInheriting startet wie StartLabeled, übernimmt aber die Instanz-Optionen der
+// Instanz `optionsFrom` (Neustart mit neuer ID: die Einstellungen sollen von Anfang an gelten).
+func (l *Launcher) StartInheriting(nodeType, version, hostID, customLabel string, extraEnv map[string]string, optionsFrom string) (Instance, error) {
+	if hostID != "" {
+		return l.StartLabeled(nodeType, version, hostID, customLabel, extraEnv)
+	}
+	return l.startLocal(nodeType, version, customLabel, extraEnv, optionsFrom)
+}
+
+// OptionsChanged meldet, ob sich die Optionswerte einer laufenden Instanz seit ihrem
+// (Neu-)Start geändert haben (Neustart nötig). Unbekannter Startzustand = false.
+func (l *Launcher) OptionsChanged(nodeType, instanceID string) bool {
+	l.mu.Lock()
+	applied, known := l.optionsApplied[instanceID]
+	l.mu.Unlock()
+	if !known {
+		return false
+	}
+	typeVals, instVals := l.optionValues(nodeType, instanceID)
+	return hashOptions(typeVals, instVals) != applied
 }
 
 // BinaryResolver liefert zu einem Binary-Namen (z. B. "omp-audio-mixer") den
@@ -998,8 +1120,8 @@ func (l *Launcher) applyProductiveBinary(entry CatalogEntry) (CatalogEntry, stri
 // gleiche Instanz-ID-/Label-/Persistenz-/Supervise-Struktur, aber ein
 // Container statt eines Subprozesses. Wird von startLocal aufgerufen,
 // nachdem id/label bereits vergeben sind (gemeinsamer erster Teil).
-func (l *Launcher) startPodmanLocal(nodeType string, entry CatalogEntry, id, label, launchSecret string, extraEnv map[string]string) (Instance, error) {
-	containerID, _, err := runPodmanEntry(entry, id, label, launchSecret, extraEnv, l.registryURL, l.orchestratorURL, l.natsURL)
+func (l *Launcher) startPodmanLocal(nodeType string, entry CatalogEntry, id, label, launchSecret string, extraEnv map[string]string, optionsFrom string) (Instance, error) {
+	containerID, _, err := runPodmanEntry(entry, id, label, launchSecret, l.withOptions(nodeType, id, optionsFrom, extraEnv), l.registryURL, l.orchestratorURL, l.natsURL)
 	if err != nil {
 		return Instance{}, fmt.Errorf("launcher: start %s: %w", nodeType, err)
 	}
@@ -1098,7 +1220,7 @@ func (l *Launcher) supervise(id, nodeType string, entry CatalogEntry, label stri
 		// Parameter (ARCHITECTURE.md §24.1) — dieselbe Instanz-ID
 		// behält über einen Crash-Neustart hinweg auch dasselbe Secret,
 		// kein neues Provisioning nötig.
-		newCmd, newStderrTail, err := l.execEntry(entry, id, label, beforeRestart.LaunchSecret, extraEnv)
+		newCmd, newStderrTail, err := l.execEntry(entry, id, label, beforeRestart.LaunchSecret, l.withOptions(nodeType, id, "", extraEnv))
 		if err != nil {
 			l.mu.Lock()
 			current, stillTracked := l.instances[id]
@@ -1208,7 +1330,7 @@ func (l *Launcher) supervisePodman(id, nodeType string, entry CatalogEntry, labe
 		}
 		l.mu.Unlock()
 
-		newContainerID, _, err := runPodmanEntry(entry, id, label, beforeRestart.LaunchSecret, extraEnv, l.registryURL, l.orchestratorURL, l.natsURL)
+		newContainerID, _, err := runPodmanEntry(entry, id, label, beforeRestart.LaunchSecret, l.withOptions(nodeType, id, "", extraEnv), l.registryURL, l.orchestratorURL, l.natsURL)
 		if err != nil {
 			l.mu.Lock()
 			current, stillTracked := l.instances[id]

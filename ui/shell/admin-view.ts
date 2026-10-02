@@ -18,6 +18,7 @@
 // Audit-Log reagiert auf "audit.appended" (neu, audit.go) statt alle
 // paar Sekunden zu pollen. Poll bleibt nur als deutlich langsamerer
 // Reconnect-/Fallback-Pfad (AUDIT_POLL_FALLBACK_INTERVAL_MS).
+import "./settings-view.ts";
 import { fetchBuildInfo, formatFirmwareLong } from "./version.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { getToken, login } from "./auth.ts";
@@ -269,7 +270,7 @@ interface UpdateOverview {
   supervisorError?: string;
 }
 
-type AdminTabId = "users" | "organizations" | "groups" | "bindings" | "catalog" | "storage" | "audit" | "diagnose" | "backup" | "update" | "nodeversions" | "cluster";
+type AdminTabId = "users" | "organizations" | "groups" | "bindings" | "catalog" | "storage" | "audit" | "diagnose" | "backup" | "update" | "nodeversions" | "settings" | "cluster";
 const ADMIN_SUB_TABS: { id: AdminTabId; label: string }[] = [
   { id: "users", label: "Nutzer" },
   { id: "organizations", label: "Organisationen" },
@@ -282,6 +283,7 @@ const ADMIN_SUB_TABS: { id: AdminTabId; label: string }[] = [
   { id: "backup", label: "Backup/Restore" },
   { id: "update", label: "System-Update" },
   { id: "nodeversions", label: "Node-Versionen" },
+  { id: "settings", label: "Einstellungen" },
   { id: "cluster", label: "Cluster" },
 ];
 const SUB_TAB_BUTTON_BASE =
@@ -484,6 +486,8 @@ class AdminView extends HTMLElement {
   #nv: NodeVersionOverview | null = null;
   #nvBuilds = new Map<string, string>();
   #nvBusy = false;
+  // Einstellungs-Ansicht: dieselbe Instanz bei jedem Neuzeichnen, damit Eingaben erhalten bleiben.
+  #settingsView: HTMLElement | null = null;
 
   // Cluster-Sub-Tab (ARCHITECTURE.md §19.3, UMSETZUNG.md D12) — die
   // bisher UI-lose Raft-Status-/Join-/Leave-API bekommt hier eine
@@ -2293,6 +2297,10 @@ class AdminView extends HTMLElement {
         break;
       case "update":
         this.appendChild(this.#renderUpdateSection());
+        break;
+      case "settings":
+        this.#settingsView ??= document.createElement("omp-settings-view");
+        this.appendChild(this.#settingsView);
         break;
       case "nodeversions":
         this.appendChild(this.#renderNodeVersionsSection());

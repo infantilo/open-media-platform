@@ -367,7 +367,7 @@ type restartResult struct {
 // instanceIds werden alle veralteten Instanzen neu gestartet. Bewusst eine
 // eigene, bestätigte Aktion — ein Update startet nie selbstständig
 // laufende Sendungen neu.
-func handleRestartOutdated(launcherSvc LauncherService, workflowSvc WorkflowService, hostMetrics HostMetricsReader, domainAudit DomainAuditLogger) http.HandlerFunc {
+func handleRestartOutdated(launcherSvc LauncherService, workflowSvc WorkflowService, hostMetrics HostMetricsReader, nodeValues NodeOptionValues, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Confirm     bool     `json:"confirm"`
@@ -419,10 +419,16 @@ func handleRestartOutdated(launcherSvc LauncherService, workflowSvc WorkflowServ
 				res.Mode = "standalone"
 				if err := launcherSvc.Stop(inst.ID); err != nil {
 					res.Error = "stoppen: " + err.Error()
-				} else if _, err := launcherSvc.StartLabeled(inst.Type, inst.Version, inst.HostID, inst.Label, inst.ExtraEnv); err != nil {
+				} else if started, err := startKeepingOptions(launcherSvc, inst); err != nil {
 					res.Error = "starten: " + err.Error()
 				} else {
 					res.Ok = true
+					// Kapitel 29: Instanz-Einstellungen wandern auf die neue Instanz-ID mit.
+					if nodeValues != nil {
+						if err := nodeValues.MoveInstance(inst.ID, started.ID); err != nil {
+							slog.Warn("einstellungen: Instanz-Werte nicht übertragen", "from", inst.ID, "to", started.ID, "error", err)
+						}
+					}
 				}
 			}
 			results = append(results, res)
@@ -499,6 +505,16 @@ func instancesWithOutdated(svc LauncherService) []launcher.Instance {
 		}
 		list[i].Outdated = bin.ModTime().After(start)
 	}
+	// Kapitel 29: geänderte Einstellungen (Node-Optionen) gelten erst nach einem Neustart.
+	if oc, ok := svc.(interface {
+		OptionsChanged(nodeType, instanceID string) bool
+	}); ok {
+		for i := range list {
+			if list[i].HostID == "" && list[i].PID > 0 && !list[i].Crashed && oc.OptionsChanged(list[i].Type, list[i].ID) {
+				list[i].Outdated = true
+			}
+		}
+	}
 	return list
 }
 
@@ -538,4 +554,15 @@ func processStartTime(pid int) (time.Time, bool) {
 		}
 	}
 	return time.Time{}, false
+}
+
+// startKeepingOptions startet eine Instanz neu und lässt die neue sofort mit den
+// Instanz-Optionen der alten laufen (Kapitel 29), sofern der Launcher das kann.
+func startKeepingOptions(svc LauncherService, old launcher.Instance) (launcher.Instance, error) {
+	if inh, ok := svc.(interface {
+		StartInheriting(nodeType, version, hostID, customLabel string, extraEnv map[string]string, optionsFrom string) (launcher.Instance, error)
+	}); ok {
+		return inh.StartInheriting(old.Type, old.Version, old.HostID, old.Label, old.ExtraEnv, old.ID)
+	}
+	return svc.StartLabeled(old.Type, old.Version, old.HostID, old.Label, old.ExtraEnv)
 }
