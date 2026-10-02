@@ -66,555 +66,215 @@ function formatLocalStart(iso, now = new Date()) {
   return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}. ${hms}`;
 }
 
+
+// ---------------------------------------------------------------------------
+// Kleine DOM-Helfer
+// ---------------------------------------------------------------------------
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === undefined || v === null || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k === "style") el.style.cssText = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k === "value") el.value = v;
+    else if (k === "checked") el.checked = !!v;
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat()) {
+    if (kid === null || kid === undefined || kid === false) continue;
+    el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+}
+
+const fmtMs = (ms) => {
+  const s = Math.floor(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+
+const MISSING_POLICIES = [
+  ["HOLD", "halten"], ["SKIP", "überspringen"], ["BLACK", "Schwarz"], ["STOP", "Schwarz + Stopp"],
+  ["FALLBACK", "Ersatzdatei"], ["DEFAULT_FILLER", "Standard-Filler"],
+];
+const PATTERNS = ["smpte", "ball", "snow", "circular", "checkers-1", "solid-color"];
+const MEDIA_KINDS = [
+  ["pattern", "Testmuster"], ["file", "Datei"], ["asset", "Asset (Bereitstellung)"], ["image", "Standbild"],
+  ["live", "Live-Quelle"], ["liveselect", "Live nach Tags"], ["hold", "HOLD (anhalten)"], ["jump", "JUMP (springen zu …)"],
+];
+const CHILD_TYPES = [
+  ["GRAPHIC", "🎨 Grafik"], ["LOGO", "🏷 Logo"], ["CHANNEL_BRANDING", "📺 Channel-Branding"],
+  ["NODE_COMMAND", "⚙ Node-Befehl"], ["TRIGGER", "⚡ Trigger"], ["AUDIO", "🔊 Audio"], ["VOICEOVER", "🎙 Voiceover"],
+  ["WEBHOOK", "🌐 Webhook"], ["CHANNEL_TRIGGER", "📡 Channel-Trigger"],
+];
+const CHILD_ICON = Object.fromEntries(CHILD_TYPES.map(([v, t]) => [v, t.split(" ")[0]]));
+const TIMINGS = [
+  ["RELATIVE_TO_START", "ab Start (Delay)"], ["RELATIVE_TO_END", "vor Ende (Delay)"],
+  ["FULL_PRIMARY", "gesamte Primary-Dauer"], ["ABSOLUTE", "absolute Uhrzeit"],
+];
+const FAIL_POLICIES = [
+  ["WARN", "Warnung"], ["IGNORE", "ignorieren"], ["RETRY", "wiederholen"], ["BLOCK", "Primary blockieren"], ["FALLBACK", "Ersatz-Ziel"],
+];
+const TRIGGER_EVENTS = ["NEXT", "NEXT_LIVE", "CUT", "JUMP", "HOLD", "RESUME"];
+
+const STYLE = `
+  :host { display: block; font-family: system-ui, sans-serif; color: var(--t, #e6e6e6); font-size: 12px;
+    --bg: #1b1b1d; --bg2: #232326; --bg3: #2c2c30; --bd: #3a3a40; --mut: #8a8a92; --acc: #4a90d9;
+    --ok: #3fae4b; --warn: #e0a030; --err: #e05050; outline: none; }
+  * { box-sizing: border-box; }
+  button, select, input, textarea { font: inherit; color: inherit; }
+  input, select, textarea { background: var(--bg); border: 1px solid var(--bd); border-radius: 3px; padding: 4px 6px; }
+  input[type=color] { padding: 0; width: 34px; height: 24px; }
+  button { cursor: pointer; background: var(--bg3); border: 1px solid var(--bd); border-radius: 4px; padding: 4px 9px; }
+  button:hover:not(:disabled) { border-color: var(--acc); }
+  button:disabled { opacity: .4; cursor: default; }
+  button.primary { background: #2a5a8f; border-color: var(--acc); }
+  button.danger { color: #ff8a8a; border-color: #7a3030; }
+  .head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+  .clock { font: bold 20px "SF Mono","Roboto Mono",monospace; font-variant-numeric: tabular-nums; }
+  .chip { padding: 2px 8px; border-radius: 10px; background: var(--bg3); font-size: 11px; }
+  .chip.ok { background: #1f5a28; } .chip.err { background: #7a1f1f; } .chip.onair { background: #1f5a28; font-weight: bold; }
+  .chip.blue { background: #1f4d7a; }
+  .info { color: var(--acc); font-variant-numeric: tabular-nums; margin-bottom: 4px; }
+  .info.warn { color: var(--warn); }
+  .banner { display: none; padding: 6px 10px; margin-bottom: 6px; border-radius: 4px; background: #7a1f1f; color: #fff; }
+  .banner.show { display: block; }
+  .banner.note { background: #1f4d7a; }
+  /* Abschnitte */
+  details.sec { border: 1px solid var(--bd); border-radius: 6px; margin-bottom: 8px; background: var(--bg2); }
+  details.sec > summary { cursor: pointer; padding: 6px 10px; font-weight: 600; list-style: none; display: flex; gap: 8px; align-items: center; user-select: none; }
+  details.sec > summary::before { content: "▸"; color: var(--mut); }
+  details.sec[open] > summary::before { content: "▾"; }
+  details.sec > .body { padding: 8px 10px 10px; border-top: 1px solid var(--bd); }
+  .ctrl { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .take { background: #7a1f1f; border-color: #a33; font-weight: bold; font-size: 14px; padding: 8px 20px; }
+  .progress { height: 4px; background: var(--bg3); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+  .progress .bar { height: 100%; background: var(--ok); width: 0; }
+  .targets { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px 14px; }
+  .targets label { display: flex; flex-direction: column; gap: 2px; color: var(--mut); }
+  /* Playlist: linke Aktionsleiste + Liste */
+  .pl-wrap { display: flex; gap: 8px; }
+  .sidebar { display: flex; flex-direction: column; gap: 6px; }
+  .sidebar button { width: 38px; height: 38px; font-size: 17px; padding: 0; }
+  .pl-main { flex: 1; min-width: 0; }
+  .pl-tools { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+  .pl-tools input[type=search] { flex: 1; }
+  .cols-pop { position: absolute; right: 0; top: 30px; z-index: 5; background: var(--bg3); border: 1px solid var(--bd); border-radius: 6px; padding: 8px; display: none; flex-direction: column; gap: 4px; }
+  .cols-pop.show { display: flex; }
+  .cols-pop label { display: flex; gap: 6px; align-items: center; }
+  .pl-cols { grid-template-columns: 16px 26px 22px minmax(0,1fr) 54px 108px 84px 40px 92px; }
+  .hide-dur .c-dur, .hide-time .c-time, .hide-rem .c-rem { display: none; }
+  .hide-dur.pl-cols, .hide-dur .pl-cols { grid-template-columns: 16px 26px 22px minmax(0,1fr) 108px 84px 40px 92px; }
+  .pl-hdr { display: grid; gap: 4px; padding: 2px 6px; font-size: 9px; color: var(--mut); text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid var(--bd); }
+  .pl-rowwrap { position: relative; }
+  .pl-row { display: grid; gap: 4px; align-items: center; padding: 4px 6px; border-bottom: 1px solid #2a2a2e; border-left: 3px solid transparent; cursor: default; user-select: none; }
+  .pl-row:hover { background: #2a2a30; }
+  .pl-row.sel { background: #26384f; }
+  .pl-row.onair { background: #17301c; border-left-color: var(--ok); }
+  .pl-row.cued { background: #35290f; border-left-color: #d4a017; }
+  .pl-row.fix { border-left-color: var(--acc); }
+  .pl-row.manual { border-left-color: #d4a017; }
+  .pl-row.dragging { opacity: .45; }
+  .pl-row.skipped { opacity: .55; }
+  .pl-row .drag { cursor: grab; color: var(--mut); text-align: center; touch-action: none; }
+  .pl-row .num { color: var(--mut); text-align: right; font-variant-numeric: tabular-nums; }
+  .pl-row .ico { text-align: center; }
+  .pl-row .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 5px; }
+  .pl-row .title .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: transparent; }
+  .pl-row .title .chips { display: inline-flex; gap: 3px; }
+  .pl-row .title .chip { font-size: 10px; padding: 0 5px; cursor: pointer; }
+  .pl-row .dur, .pl-row .time { color: #aaa; font-variant-numeric: tabular-nums; }
+  .pl-row .rem { display: flex; flex-direction: column; gap: 1px; }
+  .pl-row .rem .txt { color: var(--ok); font-size: 9px; text-align: right; font-variant-numeric: tabular-nums; }
+  .pl-row .rem .rbar { height: 3px; background: var(--bg3); border-radius: 2px; overflow: hidden; }
+  .pl-row .rem .rbar span { display: block; height: 100%; background: var(--ok); width: 0; }
+  .pl-row .av { text-align: center; color: var(--ok); }
+  .pl-row .av.bad { color: var(--err); font-weight: bold; }
+  .pl-row .acts { display: flex; gap: 3px; justify-content: flex-end; opacity: 0; }
+  .pl-row:hover .acts, .pl-row.sel .acts { opacity: 1; }
+  .pl-row .acts button { padding: 1px 6px; font-size: 11px; }
+  .kids { margin: 0 0 2px 54px; border-left: 2px solid var(--bd); }
+  .kid { display: flex; gap: 8px; align-items: center; padding: 2px 8px; color: #bbb; font-size: 11px; cursor: pointer; }
+  .kid:hover { background: #2a2a30; }
+  .kid .st { font-size: 10px; padding: 0 5px; border-radius: 8px; background: var(--bg3); }
+  .kid .st.Failed { background: #7a1f1f; } .kid .st.Active, .kid .st.Fired { background: #1f5a28; } .kid .st.Armed { background: #1f4d7a; }
+  .drop-line { position: absolute; left: 0; right: 0; height: 2px; background: var(--acc); pointer-events: none; z-index: 3; }
+  .empty { color: var(--mut); padding: 14px; text-align: center; }
+  /* Carts */
+  .cart-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px; }
+  .cart-btn { height: 54px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border-radius: 6px; font-weight: 600; border: 1px solid var(--bd); }
+  .cart-btn .ci { font-size: 18px; } .cart-btn .cl { font-size: 11px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cart-btn.firing { outline: 2px solid #ff5050; animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: .6; } }
+  .cart-banner { display: none; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-radius: 4px; background: #7a1f1f; margin-bottom: 8px; }
+  .cart-banner.show { display: flex; }
+  /* Dialoge */
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+  .modal { background: var(--bg2); border: 1px solid var(--bd); border-radius: 8px; width: min(760px, 96vw); max-height: 92vh; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,.6); }
+  .modal > header { padding: 10px 14px; font-weight: 600; font-size: 14px; border-bottom: 1px solid var(--bd); display: flex; justify-content: space-between; }
+  .modal > .tabs { display: flex; gap: 2px; padding: 6px 10px 0; border-bottom: 1px solid var(--bd); }
+  .modal > .tabs button { border-radius: 4px 4px 0 0; border-bottom: none; background: transparent; }
+  .modal > .tabs button.act { background: var(--bg3); border-color: var(--acc); }
+  .modal > .content { padding: 12px 14px; overflow: auto; flex: 1; min-height: 280px; }
+  .modal > footer { padding: 10px 14px; border-top: 1px solid var(--bd); display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+  .modal > footer .err { color: #ff8a8a; margin-right: auto; }
+  .form { display: grid; grid-template-columns: 130px 1fr; gap: 7px 10px; align-items: center; }
+  .form > label { color: var(--mut); }
+  .form .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .form input[type=text], .form input[type=number], .form select, .form textarea { width: 100%; }
+  .form textarea { min-height: 54px; font-family: monospace; }
+  .hint { color: var(--mut); font-size: 11px; grid-column: 1 / -1; }
+  .kid-edit { display: grid; grid-template-columns: 210px 1fr; gap: 12px; }
+  .kid-list { border: 1px solid var(--bd); border-radius: 4px; max-height: 340px; overflow: auto; }
+  .kid-list .it { padding: 5px 8px; cursor: pointer; border-bottom: 1px solid #2a2a2e; display: flex; gap: 6px; align-items: center; }
+  .kid-list .it.act { background: #26384f; }
+  .kid-list .it .x { margin-left: auto; color: #ff8a8a; }
+  .pick-list { max-height: 360px; overflow: auto; border: 1px solid var(--bd); border-radius: 4px; }
+  .pick-list .it { padding: 5px 8px; cursor: pointer; border-bottom: 1px solid #2a2a2e; display: flex; gap: 8px; }
+  .pick-list .it:hover { background: #2a2a30; }
+  .pick-list .it.chk { background: #26384f; }
+`;
+
+// ---------------------------------------------------------------------------
+// Panel
+// ---------------------------------------------------------------------------
 class OmpPlayoutAutomationPanel extends HTMLElement {
   connectedCallback() {
     const nodeId = this.getAttribute("node-id");
     const shadow = this.attachShadow({ mode: "open" });
+    this.tabIndex = 0;
 
-    const style = document.createElement("style");
-    style.textContent = `
-      :host { display: block; font-family: sans-serif; color: #eee; font-size: 12px; }
-      .clock { font-family: "SF Mono", "Roboto Mono", monospace; font-size: 22px; font-weight: bold; margin-bottom: 6px; font-variant-numeric: tabular-nums; }
-      .next-fixtime { font-size: 12px; color: #4a90d9; margin-bottom: 8px; font-variant-numeric: tabular-nums; }
-      .targets { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
-      .targets label { color: #999; display: flex; gap: 4px; align-items: center; }
-      .targets select.target-select {
-        width: 180px; background: #222; color: #eee; border: 1px solid #555; border-radius: 3px;
-      }
-      .connected { padding: 2px 7px; border-radius: 3px; background: #7a1f1f; }
-      .connected.ok { background: #2e7d32; }
-      .persist { padding: 2px 7px; border-radius: 3px; background: #4a4a4a; font-size: 11px; }
-      .persist.ok { background: #1f4d7a; }
-      .persist.err { background: #7a1f1f; }
-      .error-banner {
-        display: none; padding: 6px 10px; margin-bottom: 8px; border-radius: 4px;
-        background: #7a1f1f; color: #fff; font-size: 12px;
-      }
-      .error-banner.show { display: block; }
-      .status-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-      .status-row .mode-badge { padding: 3px 8px; border-radius: 3px; background: #333; }
-      .status-row .mode-badge.onair { background: #2e7d32; }
-      omp-source-selector { min-width: 180px; max-width: 260px; }
-      select.mode-select { background: #222; color: #eee; border: 1px solid #555; border-radius: 3px; }
-      button.take {
-        cursor: pointer; padding: 8px 18px; border: 1px solid #a33; border-radius: 4px;
-        background: #7a1f1f; color: #fff; font-weight: bold; font-size: 14px;
-      }
-      button.take:disabled { opacity: 0.4; cursor: default; }
-      /* Listenansicht-Folgeschritt (PIPELINE-CONTROLLER-Parität, "Playlist
-         Control"-Leiste dort): Next/Next-Live/Stop neben TAKE. */
-      button.pl-ctrl-btn {
-        cursor: pointer; padding: 6px 12px; border-radius: 4px; border: 1px solid #555;
-        background: #222; color: #eee; font-size: 12px;
-      }
-      button.pl-ctrl-btn:disabled { opacity: 0.4; cursor: default; }
-      button.pl-ctrl-btn.stop { border-color: #a33; color: #ff8080; }
-      .progress { height: 4px; background: #333; border-radius: 2px; margin-bottom: 8px; overflow: hidden; }
-      .progress .bar { height: 100%; background: #4caf50; width: 0%; }
-      .add-row { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
-      .add-row input[type="text"] { width: 100px; }
-      .add-row input[type="number"] { width: 64px; }
-      .add-row button {
-        cursor: pointer; padding: 6px 10px; border: 1px solid #4caf50;
-        background: #2e7d32; color: #eee; border-radius: 4px;
-      }
-      /* Listenansicht (PIPELINE-CONTROLLER-Parität, .pl-item/.pl-cell dort):
-         Grid-Zeilen statt Karten — Drag-Handle, Nummer/Status, Quell-Icon,
-         Titel, Dauer, Zeitplan, Rest+Fortschritt, Aktionen. */
-      /* Kapitel 6 Teil 2 (docs/END-GOAL-FEATURES.md §6.4 "Verfuegbarkeit
-         (haken/kreuz)"): eine neue schmale Spalte vor den Aktionen statt
-         eines Icon-Overlays — bleibt so unabhaengig von der Quell-Icon-
-         Spalte lesbar/erweiterbar (spaetere Trans-/Children-Badges-
-         Spalten aus demselben §6.4-Absatz reihen sich hier gleich an). */
-      /* Kapitel 6 Teil 4/5: Aktionen-Spalte von 96px über 128px auf 160px
-         verbreitert — jetzt fünf Buttons (Start-Typ, Transition, Grafik-
-         Kinder, Cue, Entfernen). */
-      .pl-grid-cols { grid-template-columns: 18px 24px 20px minmax(0, 1fr) 56px 92px 90px 20px 160px; }
-      .pl-hdr-row {
-        display: grid; align-items: center; gap: 4px; padding: 2px 6px;
-        font-size: 9px; color: #888; text-transform: uppercase; letter-spacing: .04em;
-        border-bottom: 1px solid #444; margin-bottom: 2px;
-      }
-      .pl-row {
-        display: grid; align-items: center; gap: 4px; padding: 3px 6px;
-        border-bottom: 1px solid #2a2a2a; font-size: 11px;
-      }
-      .pl-row.onair { background: #16281a; }
-      .pl-row.cued { background: #2a2210; }
-      /* Kapitel 6 Teil 1: linker Rand statt Hintergrundwechsel, damit sich
-         das mit onair/cued (Hintergrundfarbe) kombinieren lässt — ein
-         gecuetes Manual-Item bleibt so erkennbar amber-hinterlegt UND
-         mit Rand markiert. */
-      .pl-row.manual-start { border-left: 3px solid #d4a017; }
-      /* Kapitel 6 Teil 3: eigene Farbe (blau) statt Manual-Starts Amber,
-         damit die beiden Start-Typen auch am Zeilenrand unterscheidbar
-         bleiben, nicht nur am Umschalter-Icon. */
-      .pl-row.fixtime-start { border-left: 3px solid #4a90d9; }
-      .pl-row button.start-type-fixtime { background: #2a5a8f; border-color: #4a90d9; }
-      /* Kapitel 6 Teil 4: Grün statt Amber/Blau (Start-Typ-Farben), damit
-         beide Umschalter auch farblich klar getrennt bleiben. */
-      .pl-row button.transition-mix { background: #2e7d32; border-color: #4caf50; }
-      /* Kapitel 6 Teil 5: violett statt Grün/Amber/Blau — vierte, klar
-         unterscheidbare Umschalter-Farbe in derselben Aktionen-Spalte. */
-      .pl-row button.has-children { background: #6a3d9a; border-color: #9b59b6; }
-      .pl-row .pl-avail { text-align: center; color: #4caf50; }
-      .pl-row .pl-avail.unavailable { color: #e05050; font-weight: bold; }
-      .pl-row button.start-type-manual { background: #b8860b; border-color: #d4a017; }
-      .pl-row.drag-over { outline: 1px dashed #888; outline-offset: -1px; }
-      .pl-row.dragging { opacity: 0.5; }
-      /* touch-action:none, s. Pointer-Event-Reorder-Doku unten: ohne das
-         hijackt der Browser das erste Touchmove auf dem Griff als
-         Seiten-Scroll statt es als Drag an uns weiterzugeben. */
-      .pl-row .pl-drag { cursor: grab; color: #666; text-align: center; touch-action: none; }
-      .pl-row .pl-num { color: #888; font-variant-numeric: tabular-nums; text-align: right; }
-      .pl-row .pl-icon { text-align: center; }
-      .pl-row .pl-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .pl-row .pl-dur { color: #aaa; font-variant-numeric: tabular-nums; text-align: right; }
-      .pl-row .pl-time { color: #888; font-variant-numeric: tabular-nums; }
-      .pl-row .pl-rem { display: flex; flex-direction: column; gap: 1px; }
-      .pl-row .pl-rem-txt { font-variant-numeric: tabular-nums; color: #4caf50; font-size: 9px; text-align: right; }
-      .pl-row .pl-rem-bar { height: 3px; background: #333; border-radius: 2px; overflow: hidden; }
-      .pl-row .pl-rem-bar .bar { height: 100%; background: #4caf50; width: 0%; }
-      .pl-row .pl-actions { display: flex; gap: 3px; justify-content: flex-end; }
-      .pl-row button { cursor: pointer; padding: 3px 6px; border-radius: 3px; border: 1px solid #555; background: #222; color: #eee; font-size: 10px; }
-      .pl-row button.cue-active { background: #b8860b; border-color: #d4a017; }
-      p.empty { font-size: 12px; color: #888; }
-      .carts-section { margin-top: 14px; border-top: 1px solid #333; padding-top: 10px; }
-      .carts-section h4 { margin: 0 0 6px; font-size: 12px; color: #999; font-weight: normal; }
-      .cart-active-banner {
-        display: none; align-items: center; justify-content: space-between; gap: 8px;
-        padding: 6px 10px; border-radius: 4px; background: #7a1f1f; margin-bottom: 8px;
-      }
-      .cart-active-banner.shown { display: flex; }
-      .cart-active-banner button {
-        cursor: pointer; padding: 4px 10px; border-radius: 3px; border: 1px solid #eee;
-        background: #eee; color: #7a1f1f; font-weight: bold;
-      }
-      .cart {
-        border: 1px solid #444; border-radius: 4px; padding: 6px 8px;
-        margin-bottom: 4px; display: flex; align-items: center; gap: 8px;
-      }
-      .cart .label { flex: 1; }
-      .cart button { cursor: pointer; padding: 4px 8px; border-radius: 3px; border: 1px solid #555; background: #222; color: #eee; }
-      .cart button.fire { border-color: #d4a017; }
-      .cart button.fire:disabled, .cart button.remove:disabled { opacity: 0.4; cursor: default; }
-    `;
+    // ---- Zustand --------------------------------------------------------
+    let items = [];
+    let assets = [];
+    let childRuntime = [];
+    let availableNodes = [];
+    let mediaLibrary = [];
+    let channelId = "";
+    let currentItemId = "";
+    let cuedItemId = "";
+    let activeCartId = "";
+    let audioMixerLabel = "";
+    const selected = new Set();
+    let lastClickedId = null;
+    const expanded = new Set();
+    let search = "";
+    let dragging = false;
+    let modalOpen = false;
+    const prefs = (() => {
+      try { return JSON.parse(localStorage.getItem("omp-pa-cols") || "{}"); } catch { return {}; }
+    })();
+    const savePrefs = () => { try { localStorage.setItem("omp-pa-cols", JSON.stringify(prefs)); } catch { /* ignorieren */ } };
 
-    const errorBanner = document.createElement("div");
-    errorBanner.className = "error-banner";
-    let errorBannerTimer = null;
-    const showError = (text) => {
-      errorBanner.textContent = text;
-      errorBanner.classList.add("show");
-      clearTimeout(errorBannerTimer);
-      errorBannerTimer = setTimeout(() => errorBanner.classList.remove("show"), 6000);
+    // ---- API ------------------------------------------------------------
+    let bannerTimer = null;
+    const banner = h("div", { class: "banner" });
+    const showBanner = (text, note) => {
+      banner.textContent = text;
+      banner.className = `banner show${note ? " note" : ""}`;
+      clearTimeout(bannerTimer);
+      bannerTimer = setTimeout(() => banner.classList.remove("show"), 6000);
     };
-
-    // Kapitel 6 Teil 1 (`docs/END-GOAL-FEATURES.md` §6.4 "Kopfzeile"):
-    // reine Wanduhr, aktualisiert sich im bestehenden 1-Sekunden-
-    // `poll()`-Takt statt eines eigenen Timers.
-    const clockEl = document.createElement("div");
-    clockEl.className = "clock";
-
-    // Kapitel 6 Teil 3: Countdown zum chronologisch nächsten
-    // Fixtime-Event (Berechnung s. `poll()`) — der Fixzeit-Scheduler
-    // selbst existiert jetzt, s. `docs/decisions.md` Nachtrag 183.
-    // Kapitel 27 / P2c: Zusammenfassung der Plan-Warnungen (Details je Zeile am ⚠).
-    const planWarnEl = document.createElement("div");
-    planWarnEl.className = "next-fixtime";
-    planWarnEl.style.color = "#e0a030";
-    planWarnEl.style.display = "none";
-    const nextFixtimeEl = document.createElement("div");
-    nextFixtimeEl.className = "next-fixtime";
-    nextFixtimeEl.style.display = "none";
-
-    const targetsRow = document.createElement("div");
-    targetsRow.className = "targets";
-    // Nutzerwunsch 2026-07-22: Player-/Mixer-Ziel wie beim Video-Mixer-
-    // DSK aus einer Discovery-Liste wählen statt den exakten Node-Label-
-    // Text selbst eintippen zu müssen (main.rs::AutomationState::
-    // discovered_labels/availableNodes-Param, remote::list_node_labels).
-    // Kapitel 6 Teil 7: zwei Kanal-Ziele (A/B) statt eines — dieselbe
-    // Auswahl-Logik, nur zweimal (echtes Xfade braucht zwei physisch
-    // getrennte omp-channel-player-Instanzen am Mixer-Crosspoint).
-    const playerALabelSelect = document.createElement("select");
-    playerALabelSelect.className = "target-select";
-    const playerBLabelSelect = document.createElement("select");
-    playerBLabelSelect.className = "target-select";
-    const mixerLabelSelect = document.createElement("select");
-    mixerLabelSelect.className = "target-select";
-    // Kapitel 6 Teil 5 (§6.4 "Grafik-Child-Events"): gleiches Muster wie
-    // Player/Mixer, aber bewusst OPTIONAL — "— wählen —" (leer) ist ein
-    // gültiger Dauerzustand für einen Rundown ohne Grafik-Kinder, kein
-    // "noch nicht konfiguriert"-Übergangszustand (main.rs::
-    // target_graphics_label-Doku).
-    const graphicsLabelSelect = document.createElement("select");
-    graphicsLabelSelect.className = "target-select";
-    const connectedEl = document.createElement("span");
-    connectedEl.className = "connected";
-    connectedEl.textContent = "nicht verbunden";
-    // Kapitel 27 / P1c: Anbindung an den Playout-Channel (Domäne `playout`,
-    // main.rs::persist) — zeigt Channel-Name und ob/wie der Zustand
-    // gespeichert wird; Tooltip trägt den vollen Status.
-    const persistEl = document.createElement("span");
-    persistEl.className = "persist";
-    persistEl.textContent = "Channel: …";
-    const playerALabelWrap = document.createElement("label");
-    playerALabelWrap.append("Kanal A: ", playerALabelSelect);
-    const playerBLabelWrap = document.createElement("label");
-    playerBLabelWrap.append("Kanal B: ", playerBLabelSelect);
-    const mixerLabelWrap = document.createElement("label");
-    mixerLabelWrap.append("Mixer: ", mixerLabelSelect);
-    const graphicsLabelWrap = document.createElement("label");
-    graphicsLabelWrap.append("Grafik: ", graphicsLabelSelect);
-    targetsRow.append(playerALabelWrap, playerBLabelWrap, mixerLabelWrap, graphicsLabelWrap, connectedEl, persistEl);
-
-    const statusRow = document.createElement("div");
-    statusRow.className = "status-row";
-    const modeBadge = document.createElement("span");
-    modeBadge.className = "mode-badge";
-    const modeSelect = document.createElement("select");
-    modeSelect.className = "mode-select";
-    for (const [value, text] of [["auto", "Auto"], ["hold", "Hold"]]) {
-      const opt = document.createElement("option");
-      opt.value = value;
-      opt.textContent = text;
-      modeSelect.append(opt);
-    }
-    const takeBtn = document.createElement("button");
-    takeBtn.className = "take";
-    takeBtn.textContent = "TAKE";
-    takeBtn.addEventListener("click", () => call("take", {}).then(poll));
-
-    // Listenansicht-Folgeschritt, PIPELINE-CONTROLLER-Parität
-    // (`ui.html`s "Playlist Control"-Leiste: ▶▶ Next / ▶ Live / ■ Stop).
-    const nextBtn = document.createElement("button");
-    nextBtn.className = "pl-ctrl-btn";
-    nextBtn.textContent = "▶▶ Next";
-    nextBtn.title = "Sofort zum nächsten Rundown-Item (auch im Hold-Modus)";
-    nextBtn.addEventListener("click", () => call("next", {}).then(poll));
-
-    const nextLiveBtn = document.createElement("button");
-    nextLiveBtn.className = "pl-ctrl-btn";
-    nextLiveBtn.textContent = "▶ Live";
-    nextLiveBtn.title = "Zum nächsten Live-Quellen-Item springen";
-    nextLiveBtn.addEventListener("click", () => call("nextLive", {}).then(poll));
-
-    const stopBtn = document.createElement("button");
-    stopBtn.className = "pl-ctrl-btn stop";
-    stopBtn.textContent = "■ Stop";
-    stopBtn.title = "Hauptkanal sofort auf Schwarzbild schalten (Rundown bleibt erhalten)";
-    stopBtn.addEventListener("click", async () => {
-      if (!(await confirmDialog("Hauptkanal wirklich auf Schwarzbild schalten?", "Auf Schwarzbild schalten"))) return;
-      call("stop", {}).then(poll);
-    });
-
-    statusRow.append(modeBadge, modeSelect, takeBtn, nextBtn, nextLiveBtn, stopBtn);
-
-    const progress = document.createElement("div");
-    progress.className = "progress";
-    const progressBar = document.createElement("div");
-    progressBar.className = "bar";
-    progress.append(progressBar);
-
-    const addRow = document.createElement("div");
-    addRow.className = "add-row";
-    const labelInput = document.createElement("input");
-    labelInput.type = "text";
-    labelInput.placeholder = "Titel";
-    // Rundown-Echtmedien-Folgeschritt: Quelltyp-Wahl statt reinem
-    // Testmuster-Dropdown — spiegelt omp-players eigene append/load-
-    // Precedence (senderId > file > pattern, s. main.rs-Doku dort).
-    const sourceTypeSelect = document.createElement("select");
-    for (const [v, t] of [
-      ["pattern", "Testmuster"],
-      ["file", "Datei"],
-      ["asset", "Asset (Bereitstellung)"],
-      ["image", "Standbild"],
-      ["live", "Live-Quelle"],
-      ["liveselect", "Live nach Tags"],
-      ["hold", "HOLD (anhalten)"],
-      ["jump", "JUMP (springen zu …)"],
-    ]) {
-      const opt = document.createElement("option");
-      opt.value = v;
-      opt.textContent = t;
-      sourceTypeSelect.append(opt);
-    }
-    const patternSelect = document.createElement("select");
-    for (const p of ["smpte", "ball", "snow", "circular", "checkers-1", "solid-color"]) {
-      const opt = document.createElement("option");
-      opt.value = p;
-      opt.textContent = p;
-      patternSelect.append(opt);
-    }
-    const fileSelect = document.createElement("select");
-    // Hierarchischer Picker (ui/kit/omp-source-selector.ts), Wert = Sender-ID wie zuvor.
-    const liveSelect = document.createElement("omp-source-selector");
-    liveSelect.emptyLabel = "— Quelle wählen —";
-    liveSelect.excludeRoles = ["low"];
-    // Kapitel 27 / P2b: JUMP-Ziel = ein Item der aktuellen Liste.
-    const jumpSelect = document.createElement("select");
-    // Kapitel 27 / P4c: Live-Quelle per Tags statt fester Sender-ID.
-    const tagsInput = document.createElement("input");
-    tagsInput.type = "text";
-    tagsInput.placeholder = "Pflicht-Tags, z. B. video.camera, role.program";
-    tagsInput.style.minWidth = "230px";
-    const prefInput = document.createElement("input");
-    prefInput.type = "text";
-    prefInput.placeholder = "bevorzugt (optional)";
-    // Kapitel 27 / P8: Asset-Event — Asset-ID aus dem OMP-Asset-System; der Node löst die Datei am Ziel-Player auf,
-    // bereitet sie rechtzeitig vor und wendet bei Nichtverfügbarkeit die gewählte Ausfallrichtlinie an.
-    const assetInput = document.createElement("input");
-    assetInput.type = "text";
-    assetInput.placeholder = "Asset-ID";
-    assetInput.style.minWidth = "200px";
-    const missingSelect = document.createElement("select");
-    for (const [v, t] of [
-      ["HOLD", "wenn fehlt: halten"],
-      ["SKIP", "wenn fehlt: überspringen"],
-      ["BLACK", "wenn fehlt: Schwarz"],
-      ["STOP", "wenn fehlt: Schwarz + Stopp"],
-      ["FALLBACK", "wenn fehlt: Ersatzdatei"],
-      ["DEFAULT_FILLER", "wenn fehlt: Standard-Filler"],
-    ]) {
-      const opt = document.createElement("option");
-      opt.value = v;
-      opt.textContent = t;
-      missingSelect.append(opt);
-    }
-    const fallbackInput = document.createElement("input");
-    fallbackInput.type = "text";
-    fallbackInput.placeholder = "Ersatzdatei (bei FALLBACK)";
-    const durationInput = document.createElement("input");
-    durationInput.type = "number";
-    durationInput.placeholder = "Dauer (ms)";
-    durationInput.value = "5000";
-    const updateSourceTypeVisibility = () => {
-      const v = sourceTypeSelect.value;
-      patternSelect.style.display = v === "pattern" ? "" : "none";
-      fileSelect.style.display = v === "file" || v === "image" ? "" : "none";
-      assetInput.style.display = v === "asset" ? "" : "none";
-      missingSelect.style.display = v === "asset" ? "" : "none";
-      fallbackInput.style.display = v === "asset" ? "" : "none";
-      liveSelect.style.display = v === "live" ? "" : "none";
-      jumpSelect.style.display = v === "jump" ? "" : "none";
-      tagsInput.style.display = v === "liveselect" ? "" : "none";
-      prefInput.style.display = v === "liveselect" ? "" : "none";
-      // Bei Datei-Items probt der Ziel-Player die echte Clip-Dauer und
-      // ignoriert ein mitgeschicktes durationMs vollständig (s. main.rs
-      // dort) — das Feld hier wäre irreführend.
-      // Steuer-Events (HOLD/JUMP) haben keine Dauer; ein Standbild schon.
-      durationInput.style.display = v === "file" || v === "asset" || v === "hold" || v === "jump" ? "none" : "";
-    };
-    sourceTypeSelect.addEventListener("change", updateSourceTypeVisibility);
-    updateSourceTypeVisibility();
-    const addBtn = document.createElement("button");
-    addBtn.textContent = "+ Item";
-    addBtn.addEventListener("click", () => {
-      const body = { label: labelInput.value.trim() || "Item" };
-      if (sourceTypeSelect.value === "asset") {
-        if (!assetInput.value.trim()) {
-          showError("Asset-ID fehlt");
-          return;
-        }
-        call("appendAsset", {
-          label: labelInput.value.trim(),
-          assetJson: JSON.stringify({ assetId: assetInput.value.trim() }),
-          onMissing: missingSelect.value,
-          fallbackFile: missingSelect.value === "FALLBACK" ? fallbackInput.value.trim() : "",
-          startType: "",
-          durationMs: 0,
-        }).then(() => {
-          labelInput.value = "";
-          assetInput.value = "";
-          poll();
-        });
-        return;
-      }
-      if (sourceTypeSelect.value === "file") {
-        if (!fileSelect.value) return;
-        body.file = fileSelect.value;
-      } else if (sourceTypeSelect.value === "image") {
-        if (!fileSelect.value) return;
-        body.file = fileSelect.value;
-        body.eventType = "image";
-        body.durationMs = parseFloat(durationInput.value) || 5000;
-      } else if (sourceTypeSelect.value === "liveselect") {
-        const split = (t) => t.split(",").map((x) => x.trim()).filter(Boolean);
-        const required = split(tagsInput.value);
-        if (required.length === 0) {
-          showError("Live nach Tags braucht mindestens einen Pflicht-Tag (z. B. video.camera)");
-          return;
-        }
-        body.sourceSelectorJson = JSON.stringify({ required, preferred: split(prefInput.value) });
-        body.durationMs = parseFloat(durationInput.value) || 5000;
-      } else if (sourceTypeSelect.value === "hold") {
-        body.eventType = "hold";
-      } else if (sourceTypeSelect.value === "jump") {
-        if (!jumpSelect.value) return;
-        body.eventType = "jump";
-        body.jumpTarget = jumpSelect.value;
-      } else if (sourceTypeSelect.value === "live") {
-        if (!liveSelect.value) return;
-        body.senderId = liveSelect.value;
-        body.durationMs = parseFloat(durationInput.value) || 5000;
-      } else {
-        body.pattern = patternSelect.value;
-        body.toneFrequency = 0;
-        body.durationMs = parseFloat(durationInput.value) || 5000;
-      }
-      call("append", body).then(() => {
-        labelInput.value = "";
-        poll();
-      });
-    });
-    addRow.append(labelInput, sourceTypeSelect, patternSelect, fileSelect, assetInput, missingSelect, fallbackInput, liveSelect, tagsInput, prefInput, jumpSelect, durationInput, addBtn);
-
-    // Listenansicht (PIPELINE-CONTROLLER-Parität, .pl-hdr-row dort) —
-    // Spaltentitel über den Zeilen, gleiches Grid-Template wie .pl-row.
-    const listHdr = document.createElement("div");
-    listHdr.className = "pl-hdr-row pl-grid-cols";
-    for (const t of ["", "#", "", "Titel", "Dauer", "Zeit", "Rest", "", ""]) {
-      const cell = document.createElement("span");
-      cell.textContent = t;
-      listHdr.append(cell);
-    }
-
-    const list = document.createElement("div");
-    const empty = document.createElement("p");
-    empty.className = "empty";
-    empty.textContent = '"+ Item" zum Anlegen des Rundowns';
-
-    // C18 (ARCHITECTURE.md §24.3): Cart-/Interrupt-Assets — eigener
-    // Abschnitt unterhalb des Rundowns, gleiches Add-Row-Muster wie
-    // oben, plus ein "aktiv"-Banner mit Return-Knopf.
-    const cartsSection = document.createElement("div");
-    cartsSection.className = "carts-section";
-    const cartsHeading = document.createElement("h4");
-    cartsHeading.textContent = "Carts / Interrupts";
-    const activeCartBanner = document.createElement("div");
-    activeCartBanner.className = "cart-active-banner";
-    const activeCartLabel = document.createElement("span");
-    const returnBtn = document.createElement("button");
-    returnBtn.textContent = "RETURN";
-    returnBtn.addEventListener("click", () => call("cart.return", {}).then(poll));
-    activeCartBanner.append(activeCartLabel, returnBtn);
-
-    const cartAddRow = document.createElement("div");
-    cartAddRow.className = "add-row";
-    const cartLabelInput = document.createElement("input");
-    cartLabelInput.type = "text";
-    cartLabelInput.placeholder = "Titel";
-    const cartPatternSelect = document.createElement("select");
-    for (const p of ["smpte", "ball", "snow", "circular", "checkers-1", "solid-color"]) {
-      const opt = document.createElement("option");
-      opt.value = p;
-      opt.textContent = p;
-      cartPatternSelect.append(opt);
-    }
-    const cartDurationInput = document.createElement("input");
-    cartDurationInput.type = "number";
-    cartDurationInput.placeholder = "Dauer (ms), 0 = manuell";
-    cartDurationInput.value = "0";
-    const cartAddBtn = document.createElement("button");
-    cartAddBtn.textContent = "+ Cart";
-    cartAddBtn.addEventListener("click", () => {
-      call("cart.define", {
-        label: cartLabelInput.value.trim() || "Cart",
-        pattern: cartPatternSelect.value,
-        toneFrequency: 0,
-        durationMs: parseFloat(cartDurationInput.value) || 0,
-      }).then(() => {
-        cartLabelInput.value = "";
-        poll();
-      });
-    });
-    cartAddRow.append(cartLabelInput, cartPatternSelect, cartDurationInput, cartAddBtn);
-
-    const cartList = document.createElement("div");
-    const cartsEmpty = document.createElement("p");
-    cartsEmpty.className = "empty";
-    cartsEmpty.textContent = '"+ Cart" zum Anlegen eines Interrupt-Assets (Blackclip, Standby, …)';
-    cartsSection.append(cartsHeading, activeCartBanner, cartAddRow, cartList, cartsEmpty);
-
-    // Kapitel 27 / P7: Channel-Trigger — andere Channels steuern (der Orchestrator prüft die Regeln
-    // „wer darf wen“ und protokolliert) und das Protokoll der letzten ein-/ausgehenden Trigger.
-    const triggerSection = document.createElement("details");
-    triggerSection.className = "carts";
-    const triggerSummary = document.createElement("summary");
-    triggerSummary.textContent = "Channel-Trigger";
-    triggerSummary.style.cssText = "cursor:pointer;font-weight:bold;margin:8px 0 4px;";
-    const triggerForm = document.createElement("div");
-    triggerForm.className = "add-row";
-    const mkSelect = (options) => {
-      const sel = document.createElement("select");
-      for (const [value, label] of options) {
-        const o = document.createElement("option");
-        o.value = value;
-        o.textContent = label;
-        sel.append(o);
-      }
-      return sel;
-    };
-    const triggerEvent = mkSelect([
-      ["NEXT", "NEXT"], ["NEXT_LIVE", "NEXT_LIVE"], ["CUT", "CUT"], ["JUMP", "JUMP (Item-ID)"], ["HOLD", "HOLD"], ["RESUME", "RESUME"],
-    ]);
-    const triggerKind = mkSelect([["group", "Gruppe"], ["channel", "Channel"], ["all", "Alle erlaubten"]]);
-    const triggerTarget = document.createElement("input");
-    triggerTarget.type = "text";
-    triggerTarget.placeholder = "Gruppe/Channel";
-    const triggerItem = document.createElement("input");
-    triggerItem.type = "text";
-    triggerItem.placeholder = "Item-ID (JUMP)";
-    const triggerLate = mkSelect([
-      ["EXECUTE_IMMEDIATELY", "verspätet: sofort"], ["SKIP", "verspätet: überspringen"], ["RESYNC", "verspätet: resync"], ["QUEUE", "verspätet: einreihen"],
-    ]);
-    const triggerAt = document.createElement("input");
-    triggerAt.type = "text";
-    triggerAt.placeholder = "Zielzeit HH:MM:SS (optional)";
-    triggerAt.style.width = "150px";
-    const triggerSend = document.createElement("button");
-    triggerSend.textContent = "Senden";
-    triggerKind.addEventListener("change", () => {
-      triggerTarget.style.display = triggerKind.value === "all" ? "none" : "";
-    });
-    triggerSend.addEventListener("click", async () => {
-      const event = triggerEvent.value;
-      const at = triggerAt.value.trim() ? parseStartInput(triggerAt.value) : "";
-      if (triggerAt.value.trim() && !at) {
-        showError("Zielzeit ungültig (HH:MM[:SS] oder YYYY-MM-DD HH:MM[:SS], lokale Zeit)");
-        return;
-      }
-      const ok = await confirmDialog(
-        `Trigger ${event} an ${triggerKind.value === "all" ? "alle erlaubten Channels" : (triggerKind.value === "group" ? "Gruppe " : "Channel ") + triggerTarget.value} senden?`,
-        "Senden",
-      );
-      if (!ok) return;
-      await call("sendTrigger", {
-        event,
-        targetKind: triggerKind.value,
-        target: triggerTarget.value.trim(),
-        argsJson: event === "JUMP" ? JSON.stringify({ itemId: triggerItem.value.trim() }) : "",
-        targetTime: at || "",
-        relativeOffsetMs: "0",
-        latePolicy: triggerLate.value,
-      });
-      poll();
-    });
-    triggerForm.append(triggerEvent, triggerKind, triggerTarget, triggerItem, triggerAt, triggerLate, triggerSend);
-    const triggerLogEl = document.createElement("div");
-    triggerLogEl.style.cssText = "font-size:11px;font-family:monospace;color:#bbb;max-height:140px;overflow:auto;";
-    triggerLogEl.textContent = "Noch keine Trigger.";
-    triggerSection.append(triggerSummary, triggerForm, triggerLogEl);
-
-    shadow.append(style, clockEl, nextFixtimeEl, planWarnEl, errorBanner, targetsRow, statusRow, progress, addRow, listHdr, list, empty, cartsSection, triggerSection);
-
-    // Meldet fehlgeschlagene Methodenaufrufe sichtbar statt sie stillschweigend
-    // zu verschlucken (`fetch()` lehnt nur bei Netzwerkfehlern ab, nicht bei
-    // einem Nicht-2xx-Status — ein `.then(poll)`-Aufrufer würde einen Fehler
-    // sonst nie bemerken, z. B. `do_append`s "Player-append fehlgeschlagen",
-    // wenn der Ziel-Player eine Datei ablehnt oder nicht antwortet).
     const call = (method, body) =>
       fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {
         method: "POST",
@@ -623,875 +283,953 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       }).then(async (res) => {
         if (!res.ok) {
           const detail = await res.text().catch(() => "");
-          showError(`${method} fehlgeschlagen: ${detail || res.status}`);
+          const msg = `${method} fehlgeschlagen: ${detail || res.status}`;
+          showBanner(msg);
+          const e = new Error(detail || String(res.status));
+          e.shown = true;
+          throw e;
         }
         return res;
-      }).catch((e) => {
-        showError(`${method} fehlgeschlagen: ${e}`);
-        throw e;
       });
-
+    // wie call(), aber Fehler als Text zurück (für Dialoge)
+    const tryCall = async (method, body) => {
+      const res = await fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}),
+      });
+      if (res.ok) return null;
+      let t = await res.text().catch(() => "");
+      try { const j = JSON.parse(t); t = j.error || j.message || t; } catch { /* Klartext */ }
+      return t || `HTTP ${res.status}`;
+    };
     const setParam = (name, value) =>
       fetch(`/api/v1/nodes/${nodeId}/params/${encodeURIComponent(name)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ value }),
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ value }),
       });
-
     const getParam = async (name) => {
       const res = await fetch(`/api/v1/nodes/${nodeId}/params/${encodeURIComponent(name)}`);
       if (!res.ok) return undefined;
       return (await res.json()).value;
     };
+    const act = (method, body) => call(method, body).then(() => poll()).catch(() => {});
 
-    // Sofort-Anwenden bei Auswahl, gleiches Muster wie
-    // `omp-video-mixer-me`s DSK-Quellauswahl (`keyerSourceSelect`) —
-    // kein separater Übernehmen-Schritt nötig.
-    playerALabelSelect.addEventListener("change", () => setParam("targetPlayerALabel", playerALabelSelect.value));
-    playerBLabelSelect.addEventListener("change", () => setParam("targetPlayerBLabel", playerBLabelSelect.value));
-    mixerLabelSelect.addEventListener("change", () => setParam("targetMixerLabel", mixerLabelSelect.value));
-    graphicsLabelSelect.addEventListener("change", () => setParam("targetGraphicsLabel", graphicsLabelSelect.value));
-    modeSelect.addEventListener("change", () => setParam("mode", modeSelect.value));
+    // ---- Kopf -----------------------------------------------------------
+    const clockEl = h("span", { class: "clock" });
+    const modeChip = h("span", { class: "chip" });
+    const connectedChip = h("span", { class: "chip" }, "nicht verbunden");
+    const persistChip = h("span", { class: "chip" }, "Channel: …");
+    const nextFixEl = h("div", { class: "info", style: "display:none" });
+    const planWarnEl = h("div", { class: "info warn", style: "display:none" });
+    const head = h("div", { class: "head" }, clockEl, modeChip, connectedChip, persistChip);
 
-    // Baut die Optionsliste eines Ziel-Selects neu auf, nur wenn sich die
-    // Discovery-Liste tatsächlich geändert hat (Options-Key-Vergleich,
-    // gleiches Muster wie `omp-video-mixer-me::buildGroupedOptions`s
-    // Aufrufer) — verhindert, dass ein offener Dropdown unter dem Cursor
-    // bei jedem 1s-Poll zuklappt. `currentValue` bleibt auch dann als
-    // Option erhalten, wenn der konfigurierte Node gerade nicht (mehr)
-    // discovered ist (z. B. kurz offline) — sonst ginge die Konfiguration
-    // beim nächsten Poll sichtbar verloren.
-    const buildTargetOptions = (selectEl, labels, currentValue) => {
-      const allLabels = currentValue && !labels.includes(currentValue) ? [currentValue, ...labels] : labels;
-      const optionsKey = JSON.stringify(allLabels);
-      if (selectEl.dataset.optionsKey === optionsKey) return;
-      selectEl.dataset.optionsKey = optionsKey;
-      selectEl.replaceChildren();
-      const placeholder = document.createElement("option");
-      placeholder.value = "";
-      placeholder.textContent = "— wählen —";
-      selectEl.append(placeholder);
-      for (const label of allLabels) {
-        const opt = document.createElement("option");
-        opt.value = label;
-        opt.textContent = label;
-        selectEl.append(opt);
+    // ---- Playlist Control ----------------------------------------------
+    const takeBtn = h("button", { class: "take", onclick: () => act("take", {}) }, "TAKE");
+    const nextBtn = h("button", { title: "Sofort zum nächsten Event (auch im Hold-Modus)", onclick: () => act("next", {}) }, "▶▶ Next");
+    const nextLiveBtn = h("button", { title: "Zum nächsten Live-Event springen", onclick: () => act("nextLive", {}) }, "▶ Live");
+    const stopBtn = h("button", {
+      class: "danger", title: "Hauptkanal sofort auf Schwarzbild schalten (Playlist bleibt erhalten)",
+      onclick: async () => {
+        if (await confirmDialog("Hauptkanal wirklich auf Schwarzbild schalten?", "Auf Schwarzbild schalten")) act("stop", {});
+      },
+    }, "■ Stop");
+    const modeSelect = h("select", { onchange: () => setParam("mode", modeSelect.value) },
+      h("option", { value: "auto" }, "Auto"), h("option", { value: "hold" }, "Hold"));
+    const progressBar = h("div", { class: "bar" });
+    const controlSec = h("details", { class: "sec", open: true },
+      h("summary", {}, "Playlist Control"),
+      h("div", { class: "body" },
+        h("div", { class: "ctrl" }, takeBtn, nextBtn, nextLiveBtn, stopBtn, h("span", { style: "flex:1" }), h("label", {}, "Modus ", modeSelect)),
+        h("div", { class: "progress" }, progressBar)));
+
+    // ---- Ziele ----------------------------------------------------------
+    const mkTarget = (param) => {
+      const sel = h("select", { onchange: () => setParam(param, sel.value) });
+      return sel;
+    };
+    const selA = mkTarget("targetPlayerALabel");
+    const selB = mkTarget("targetPlayerBLabel");
+    const selMix = mkTarget("targetMixerLabel");
+    const selGfx = mkTarget("targetGraphicsLabel");
+    const selAud = mkTarget("targetAudioMixerLabel");
+    const targetsSec = h("details", { class: "sec" },
+      h("summary", {}, "Ziele"),
+      h("div", { class: "body targets" },
+        h("label", {}, "Kanal A", selA), h("label", {}, "Kanal B", selB), h("label", {}, "Mixer", selMix),
+        h("label", {}, "Grafik", selGfx), h("label", {}, "Audio-Mixer", selAud),
+        h("label", {}, "Preflight-Vorlauf (min)", h("input", { type: "number", min: "0", id: "preflightWin", onchange: (e) => setParam("preflightWindowMin", Number(e.target.value) || 0) })),
+        h("label", {}, "Standard-Filler (Datei)", h("input", { type: "text", id: "defaultFiller", onchange: (e) => setParam("defaultFiller", e.target.value.trim()) }))));
+    const fillTargets = (sel, labels, cur) => {
+      const all = cur && !labels.includes(cur) ? [cur, ...labels] : labels;
+      const key = JSON.stringify(all);
+      if (sel.dataset.k !== key) {
+        sel.dataset.k = key;
+        sel.replaceChildren(h("option", { value: "" }, "— wählen —"), ...all.map((l) => h("option", { value: l }, l)));
       }
+      if (shadow.activeElement !== sel) sel.value = cur || "";
     };
 
-    // Wie `buildTargetOptions`, aber ohne "aktuellen Wert immer erhalten"
-    // (Add-Formular-Selects, kein am Node hängender Zielwert) — für die
-    // Rundown-Echtmedien-Auswahl (Datei-/Live-Liste vom Ziel-Player).
-    const buildSimpleOptions = (selectEl, values, placeholderText) => {
-      const optionsKey = JSON.stringify(values);
-      if (selectEl.dataset.optionsKey === optionsKey) return;
-      selectEl.dataset.optionsKey = optionsKey;
-      const prevValue = selectEl.value;
-      selectEl.replaceChildren();
-      const placeholder = document.createElement("option");
-      placeholder.value = "";
-      placeholder.textContent = placeholderText;
-      selectEl.append(placeholder);
-      for (const v of values) {
-        const opt = document.createElement("option");
-        opt.value = v;
-        opt.textContent = v;
-        selectEl.append(opt);
+    // ---- Playlist -------------------------------------------------------
+    const listEl = h("div", { class: "pl-list" });
+    const emptyEl = h("div", { class: "empty" }, "Noch keine Events — „＋“ links legt das erste an.");
+    const hdr = h("div", { class: "pl-hdr pl-cols" },
+      ...["", "#", "", "Titel", "Dauer", "Zeit", "Rest", "", ""].map((t, i) =>
+        h("span", { class: ["", "", "", "", "c-dur", "c-time", "c-rem", "", ""][i] }, t)));
+    const searchInput = h("input", { type: "search", placeholder: "Suchen …", oninput: () => { search = searchInput.value.trim().toLowerCase(); renderList(); } });
+    const colsPop = h("div", { class: "cols-pop" },
+      ...[["dur", "Dauer"], ["time", "Zeit"], ["rem", "Rest"]].map(([k, t]) =>
+        h("label", {}, h("input", { type: "checkbox", checked: !prefs[`hide-${k}`], onchange: (e) => { prefs[`hide-${k}`] = !e.target.checked; savePrefs(); applyCols(); } }), t)));
+    const colsBtn = h("button", { title: "Spalten", onclick: () => colsPop.classList.toggle("show") }, "⚙");
+    const applyCols = () => {
+      for (const k of ["dur", "time", "rem"]) plMain.classList.toggle(`hide-${k}`, !!prefs[`hide-${k}`]);
+      const parts = ["16px", "26px", "22px", "minmax(0,1fr)"];
+      if (!prefs["hide-dur"]) parts.push("54px");
+      if (!prefs["hide-time"]) parts.push("108px");
+      if (!prefs["hide-rem"]) parts.push("84px");
+      parts.push("40px", "92px");
+      plMain.style.setProperty("--cols", parts.join(" "));
+    };
+    const sidebar = h("div", { class: "sidebar" },
+      h("button", { class: "primary", title: "Neues Event anlegen", onclick: () => openEditor(null) }, "＋"),
+      h("button", { title: "Medien aus der Bibliothek hinzufügen", onclick: () => openMediaPicker() }, "📂"),
+      h("button", { title: "Bereitschaft der Asset-Events prüfen", onclick: () => checkReadiness() }, "✓"));
+    const plMain = h("div", { class: "pl-main" },
+      h("div", { class: "pl-tools", style: "position:relative" }, searchInput, colsBtn, colsPop),
+      hdr, listEl, emptyEl);
+    const playlistSec = h("details", { class: "sec", open: true },
+      h("summary", {}, "Playlist"),
+      h("div", { class: "body" }, h("div", { class: "pl-wrap" }, sidebar, plMain)));
+
+    // ---- Assets / Carts --------------------------------------------------
+    const cartBanner = h("div", { class: "cart-banner" });
+    const cartBannerLabel = h("span");
+    cartBanner.append(cartBannerLabel, h("button", { onclick: () => act("cart.return", {}) }, "RETURN"));
+    const cartGrid = h("div", { class: "cart-grid" });
+    const cartsSec = h("details", { class: "sec", open: true },
+      h("summary", {}, "Assets / Carts"),
+      h("div", { class: "body" },
+        cartBanner, cartGrid,
+        h("div", { style: "margin-top:8px" }, h("button", { onclick: () => openCartManager() }, "Assets verwalten …"))));
+
+    // ---- Channel-Trigger (unverändert in der Funktion) -------------------
+    const mkSelect = (options) => h("select", {}, ...options.map(([v, t]) => h("option", { value: v }, t)));
+    const trEvent = mkSelect(TRIGGER_EVENTS.map((e) => [e, e]));
+    const trKind = mkSelect([["group", "Gruppe"], ["channel", "Channel"], ["all", "Alle erlaubten"]]);
+    const trTarget = h("input", { type: "text", placeholder: "Gruppe/Channel" });
+    const trItem = h("input", { type: "text", placeholder: "Item-ID (JUMP)" });
+    const trLate = mkSelect([["EXECUTE_IMMEDIATELY", "verspätet: sofort"], ["SKIP", "verspätet: überspringen"], ["RESYNC", "verspätet: resync"], ["QUEUE", "verspätet: einreihen"]]);
+    const trAt = h("input", { type: "text", placeholder: "Zielzeit HH:MM:SS (optional)", style: "width:170px" });
+    trKind.addEventListener("change", () => { trTarget.style.display = trKind.value === "all" ? "none" : ""; });
+    const trSend = h("button", {
+      onclick: async () => {
+        const event = trEvent.value;
+        const at = trAt.value.trim() ? parseStartInput(trAt.value) : "";
+        if (trAt.value.trim() && !at) return showBanner("Zielzeit ungültig (HH:MM[:SS] oder YYYY-MM-DD HH:MM[:SS], lokale Zeit)");
+        const who = trKind.value === "all" ? "alle erlaubten Channels" : `${trKind.value === "group" ? "Gruppe" : "Channel"} ${trTarget.value}`;
+        if (!(await confirmDialog(`Trigger ${event} an ${who} senden?`, "Senden"))) return;
+        act("sendTrigger", {
+          event, targetKind: trKind.value, target: trTarget.value.trim(),
+          argsJson: event === "JUMP" ? JSON.stringify({ itemId: trItem.value.trim() }) : "",
+          targetTime: at || "", relativeOffsetMs: "0", latePolicy: trLate.value,
+        });
+      },
+    }, "Senden");
+    const trLog = h("div", { style: "font:11px monospace;color:#bbb;max-height:140px;overflow:auto;margin-top:6px" }, "Noch keine Trigger.");
+    const triggerSec = h("details", { class: "sec" },
+      h("summary", {}, "Channel-Trigger"),
+      h("div", { class: "body" }, h("div", { class: "ctrl" }, trEvent, trKind, trTarget, trItem, trAt, trLate, trSend), trLog));
+
+    shadow.append(h("style", {}, STYLE), head, nextFixEl, planWarnEl, banner, controlSec, playlistSec, cartsSec, triggerSec, targetsSec);
+    plMain.style.setProperty("--cols", "");
+    applyCols();
+    // Spalten-Template an die Zeilen weitergeben
+    const colStyle = h("style", {}, ".pl-cols, .pl-row { grid-template-columns: var(--cols); }");
+    shadow.append(colStyle);
+
+    // ---- Helfer ---------------------------------------------------------
+    const srcIcon = (it) => {
+      if (it.icon) return it.icon;
+      if (it.eventType === "HOLD") return "⏸";
+      if (it.eventType === "JUMP") return "↪";
+      if (it.eventType === "IMAGE") return "🖼";
+      if (it.asset) return "📦";
+      if (it.sourceSelector) return "🏷";
+      return it.senderId ? "📡" : it.file ? "📁" : "🎨";
+    };
+    const describe = (it) => {
+      if (it.eventType === "HOLD") return "HOLD: Sequenz hält an, bis der Operator weiterschaltet.";
+      if (it.eventType === "JUMP") {
+        const t = items.find((x) => x.id === it.jumpTarget);
+        return `JUMP → ${t ? t.label : it.jumpTarget}`;
       }
-      if (values.includes(prevValue)) selectEl.value = prevValue;
+      if (it.asset) return `Asset ${it.asset.assetId}${it.file ? ` → ${it.file}` : ""}`;
+      if (it.eventType === "IMAGE") return `Standbild: ${it.file}`;
+      if (it.sourceSelector) return `Live nach Tags: ${(it.sourceSelector.required || []).join(", ")} → ${it.resolvedLabel || "keine passende Quelle"}`;
+      if (it.senderId) return `Live: ${it.senderId}`;
+      if (it.file) return `Datei: ${it.file}`;
+      return `Testmuster: ${it.pattern}`;
+    };
+    const checkReadiness = () => {
+      const a = items.filter((i) => i.asset);
+      if (a.length === 0) return showBanner("Keine Asset-Events in der Playlist — Dateien/Live sind sofort verfügbar.", true);
+      const c = (f) => a.filter(f).length;
+      const bad = items.filter((i) => !(i.available ?? true)).length;
+      showBanner(`${a.length} Asset-Events: ${c((i) => i.readiness === "READY")} bereit, ${c((i) => i.readinessState === "TRANSFERRING")} in Übertragung, ${c((i) => i.readiness === "NOT_READY" && i.readinessState !== "TRANSFERRING")} nicht bereit${bad ? ` · ${bad} Events ohne verfügbare Quelle` : ""}.`, true);
     };
 
-    // Quellen-Katalog (Workflow/Node/grouphint, 2 GETs) nur bei geänderter
-    // Senderliste oder alle 15 s neu laden, nicht bei jedem 2s-Poll.
-    let liveCatalogKey = "";
-    let liveCatalogAt = 0;
-    const refreshLiveSources = async (sources) => {
-      const key = JSON.stringify(sources);
-      if (key === liveCatalogKey && Date.now() - liveCatalogAt < 15000) return;
-      liveCatalogKey = key;
-      liveCatalogAt = Date.now();
-      const catalog = await customElements.get("omp-source-selector").loadCatalog(nodeId, sources);
-      liveSelect.currentWorkflowId = catalog.currentWorkflowId;
-      liveSelect.entries = catalog.entries;
-    };
+    // ---- Liste rendern ---------------------------------------------------
+    const rowEls = new Map(); // itemId -> { wrap, row, refs… }
+    let dropLine = null;
 
-    // itemId -> { el, dragEl, numEl, iconEl, titleEl, durEl, timeEl, remTxt, remBarInner, startTypeBtn, cueBtn, removeBtn }
-    const itemEls = new Map();
-
-    // Listenansicht-Folgeschritt: Icon je nach tatsächlich zugewiesener
-    // Quelle (genau eines von pattern/file/senderId ist gesetzt, s.
-    // omp-playout-automation main.rs::item_meta_to_json).
-    const sourceIcon = (item) => {
-      if (item.eventType === "HOLD") return "⏸";
-      if (item.eventType === "JUMP") return "↪";
-      if (item.eventType === "IMAGE") return "🖼";
-      if (item.sourceSelector) return "🏷";
-      return item.senderId ? "📡" : item.file ? "📁" : "🎨";
-    };
-
-    // Drag&Drop-Reorder (Listenansicht-Folgeschritt, PIPELINE-CONTROLLER-
-    // Parität — `plDragStart`/`plDragOver`/`plDrop` dort): baut die neue
-    // Reihenfolge aus dem zuletzt gepollten `lastItems` und schreibt sie
-    // per `load()` komplett neu. Bewusst nur erlaubt, wenn NICHTS gerade
-    // on-air ist — `load()` setzt beim Ziel-Player unbedingt beide
-    // Pipeline-Slots auf Schwarzbild zurück (s. dessen `main.rs`), ein
-    // Reorder während laufender Sendung würde also den Hauptkanal
-    // sichtbar kurz schwarz schalten. Anders als im PC-Original (das
-    // Array-Reorder ohne Pipeline-Neuaufbau kennt) — dokumentierte
-    // Lücke, kein automatisches "wie drüben".
-    let lastItems = [];
-    let dragSourceId = null;
-    const itemToLoadEntry = (item) => {
-      // Kapitel 6 Teil 1: `startType` MUSS hier mit, sonst verliert jeder
-      // Reorder (der über `load()` läuft, s. `reorderItems`-Doku) still
-      // alle Manual-Start-Markierungen — `main.rs::do_load()` zippt
-      // `startType` positionell aus genau diesem Feld gegen die frischen
-      // Player-IDs zurück (Live-Fund 2026-09-07: ohne diese Zeile setzte
-      // ein echter Browser-Drag alle Items lautlos auf "sequence" zurück,
-      // trotz korrekter Backend-Logik — nur per Klicktest gefunden, nicht
-      // durch API-Tests allein).
-      const entry = { label: item.label, durationMs: item.durationMs, startType: item.startType || "sequence" };
-      // Kapitel 6 Teil 3: dieselbe Lücke wie oben bei `startType` (Nachtrag
-      // 181-Lehre angewendet, statt sie erneut per Klicktest zu finden) —
-      // ohne `fixtimeHms` hier würde jeder Reorder eine Fixzeit
-      // verlieren, obwohl `do_load()` sie längst positionell zurückzippt.
-      if (item.fixtimeHms) entry.fixtimeHms = item.fixtimeHms;
-      // Kapitel 27 / P2a+P2b: absolute Startzeit und Event-Typ gehören ebenfalls
-      // in den load()-Roundtrip (gleiche Lücke wie oben, proaktiv geschlossen).
-      if (item.startAt) entry.startAt = item.startAt;
-      if (item.eventType === "IMAGE") entry.eventType = "image";
-      else if (item.eventType === "HOLD") entry.eventType = "hold";
-      else if (item.eventType === "JUMP") entry.eventType = "jump"; // jumpToIndex setzt reorderItems
-      if (item.sourceSelector) entry.sourceSelector = item.sourceSelector;
-      // Kapitel 27 / P5: Audio-Absicht gehört in den load()-Roundtrip.
-      if (item.audio && item.audio.intent && Object.keys(item.audio.intent).some((k) => item.audio.intent[k] != null && item.audio.intent[k].length !== 0)) {
-        entry.audio = item.audio.intent;
+    const removeItems = async (ids) => {
+      const del = ids.filter((id) => id !== currentItemId);
+      if (del.length === 0) return;
+      const names = del.map((id) => items.find((i) => i.id === id)).filter(Boolean).map((i) => `„${i.label}“`);
+      const msg = del.length === 1 ? `${names[0]} wirklich aus der Playlist entfernen?` : `${del.length} Events wirklich entfernen (${names.slice(0, 3).join(", ")}${names.length > 3 ? " …" : ""})?`;
+      if (!(await confirmDialog(msg, "Entfernen"))) return;
+      for (const id of del) {
+        try { await call("remove", { itemId: id }); selected.delete(id); } catch { break; }
       }
-      // Kapitel 6 Teil 4: dieselbe Lücke ein drittes Mal proaktiv vermieden.
-      if (item.transition) entry.transition = item.transition;
-      if (item.transitionRateFrames != null) entry.transitionRateFrames = item.transitionRateFrames;
-      // Kapitel 6 Teil 5: dieselbe Lücke ein viertes Mal proaktiv vermieden.
-      if (item.children && item.children.length > 0) entry.children = item.children;
-      if (item.eventType === "HOLD" || item.eventType === "JUMP") {
-        entry.durationMs = 0;
-      } else if (item.sourceSelector) {
-        entry.durationMs = item.durationMs;
-      } else if (item.senderId) entry.senderId = item.senderId;
-      else if (item.file) entry.file = item.file;
-      else {
-        entry.pattern = item.pattern;
-        entry.toneFrequency = item.toneFrequency;
-      }
-      return entry;
+      poll();
     };
-    const reorderItems = (draggedId, targetId) => {
-      const ids = lastItems.map((it) => it.id);
-      const fromIdx = ids.indexOf(draggedId);
-      const toIdx = ids.indexOf(targetId);
-      if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
-      const reordered = lastItems.slice();
-      const [moved] = reordered.splice(fromIdx, 1);
-      reordered.splice(toIdx, 0, moved);
-      const entries = reordered.map(itemToLoadEntry);
-      // JUMP-Ziele sind Item-IDs, die beim load() neu vergeben werden — also
-      // als Position in der NEUEN Reihenfolge mitgeben.
-      reordered.forEach((it, i) => {
-        if (it.eventType === "JUMP") {
-          const pos = reordered.findIndex((x) => x.id === it.jumpTarget);
-          if (pos >= 0) entries[i].jumpToIndex = pos;
+
+    const select = (id, ev) => {
+      if (ev && (ev.ctrlKey || ev.metaKey)) {
+        if (selected.has(id)) selected.delete(id); else selected.add(id);
+      } else if (ev && ev.shiftKey && lastClickedId) {
+        const a = items.findIndex((i) => i.id === lastClickedId);
+        const b = items.findIndex((i) => i.id === id);
+        selected.clear();
+        for (let k = Math.min(a, b); k <= Math.max(a, b); k++) if (items[k]) selected.add(items[k].id);
+      } else {
+        selected.clear();
+        selected.add(id);
+      }
+      lastClickedId = id;
+      renderList();
+    };
+
+    // Drag&Drop-Reorder (Pointer-Events, funktioniert mit Maus und Finger): echte serverseitige
+    // `moveItem`-Umsortierung — der Cursor (on-air/gecued) folgt dem Event, kein Schwarzbild.
+    const startDrag = (itemId, ev, rowEl) => {
+      if (search) return showBanner("Umsortieren geht nicht mit aktiver Suche — Suchfeld leeren.", true);
+      ev.preventDefault();
+      dragging = true;
+      const handle = ev.currentTarget;
+      handle.setPointerCapture(ev.pointerId);
+      rowEl.classList.add("dragging");
+      let insertAt = null;
+      const visible = () => items.filter((i) => rowEls.has(i.id)).map((i) => rowEls.get(i.id).wrap);
+      const move = (e) => {
+        const wraps = visible();
+        let ins = wraps.length;
+        let y = null;
+        for (let k = 0; k < wraps.length; k++) {
+          const r = wraps[k].querySelector(".pl-row").getBoundingClientRect();
+          if (e.clientY < r.top + r.height / 2) { ins = k; break; }
         }
-      });
-      call("load", { itemsJson: JSON.stringify(entries) }).then(poll);
-    };
-
-    const createItemElement = (item) => {
-      const el = document.createElement("div");
-      el.className = "pl-row pl-grid-cols";
-
-      const dragEl = document.createElement("span");
-      dragEl.className = "pl-drag";
-      dragEl.textContent = "⠿";
-
-      const numEl = document.createElement("span");
-      numEl.className = "pl-num";
-
-      const iconEl = document.createElement("span");
-      iconEl.className = "pl-icon";
-
-      const titleEl = document.createElement("span");
-      titleEl.className = "pl-title";
-
-      const durEl = document.createElement("span");
-      durEl.className = "pl-dur";
-
-      // C20 (ARCHITECTURE.md §24.5): Start-/Endzeit aus dem gefensterten
-      // Timeline-Endpunkt, separat vom Titel-Text, damit ein Fetch-
-      // Fehlschlag (z. B. während eines Node-Neustarts) nur diese
-      // Anzeige leer lässt, nicht den ganzen Zeileninhalt ersetzt.
-      const timeEl = document.createElement("span");
-      timeEl.className = "pl-time";
-
-      const remWrap = document.createElement("span");
-      remWrap.className = "pl-rem";
-      const remTxt = document.createElement("span");
-      remTxt.className = "pl-rem-txt";
-      const remBar = document.createElement("span");
-      remBar.className = "pl-rem-bar";
-      const remBarInner = document.createElement("span");
-      remBarInner.className = "bar";
-      remBar.append(remBarInner);
-      remWrap.append(remTxt, remBar);
-
-      // Kapitel 6 Teil 2 (§6.4 "Verfügbarkeit (✓/✗)"): spiegelt
-      // `item.available` (main.rs::item_is_available, gegen den
-      // zuletzt bekannten Media-Library-/Live-Quellen-Stand des
-      // Ziel-Players) — reine Anzeige hier, die eigentliche
-      // Durchsetzung (Take verweigern) sitzt serverseitig in `do_take`.
-      const availEl = document.createElement("span");
-      availEl.className = "pl-avail";
-
-      const actionsEl = document.createElement("span");
-      actionsEl.className = "pl-actions";
-      // Kapitel 6 Teil 1/3 (`docs/END-GOAL-FEATURES.md` §6.4, `startType`):
-      // Umschalter statt Dropdown/Radio-Gruppe — ein Klick rotiert
-      // sequence -> manual -> fixtime -> sequence. "sequence" (Standard)
-      // rückt beim Auto-Advance normal vor, "manual" bleibt bis zum
-      // expliziten Cue+Take stehen, "fixtime" feuert selbst zur
-      // hinterlegten Uhrzeit (main.rs::fixtime_loop) — unabhängig vom
-      // Sequenz-Fortschritt. Bewusst KEIN `load()`-Umweg
-      // (do_set_start_type-Doku: reiner lokaler Metadaten-Roundtrip,
-      // kein Schwarzbild-Nebeneffekt). Der Wechsel AUF "fixtime" braucht
-      // eine Uhrzeit — dafür reicht hier ein einfacher `prompt()` (kein
-      // eigener Zeit-Editor-Dialog, gleiches Minimal-Muster wie
-      // `#groupSelection` im Flow-Editor für Gruppennamen); Abbrechen
-      // lässt den `startType` unverändert.
-      const startTypeBtn = document.createElement("button");
-      startTypeBtn.addEventListener("click", () => {
-        const order = ["sequence", "manual", "fixtime"];
-        const next = order[(order.indexOf(item.startType || "sequence") + 1) % order.length];
-        const body = { itemId: item.id, startType: next };
-        if (next === "fixtime") {
-          // Kapitel 27 / P2c: absolute Startzeit mit Datum (lokal eingegeben,
-          // als UTC-Zeitpunkt gespeichert, DST-sicher). Nur "HH:MM:SS" = heute.
-          const input = prompt(
-            "Startzeit (lokal): „HH:MM:SS“ = heute, oder „JJJJ-MM-TT HH:MM:SS“",
-            item.startAt ? new Date(item.startAt).toLocaleString("sv-SE") : item.fixtimeHms || "",
-          );
-          if (input === null) return;
-          const iso = parseStartInput(input);
-          if (!iso) {
-            alert("Ungültige Startzeit. Beispiele: 14:30:00 oder 2026-10-03 06:00:00");
+        insertAt = ins;
+        const lr = listEl.getBoundingClientRect();
+        if (ins < wraps.length) y = wraps[ins].querySelector(".pl-row").getBoundingClientRect().top - lr.top;
+        else if (wraps.length) y = wraps[wraps.length - 1].getBoundingClientRect().bottom - lr.top;
+        if (!dropLine) { dropLine = h("div", { class: "drop-line" }); listEl.style.position = "relative"; listEl.append(dropLine); }
+        dropLine.style.top = `${y ?? 0}px`;
+      };
+      const end = (e) => {
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", end);
+        handle.removeEventListener("pointercancel", end);
+        rowEl.classList.remove("dragging");
+        if (dropLine) { dropLine.remove(); dropLine = null; }
+        dragging = false;
+        if (e.type === "pointerup" && insertAt !== null) {
+          const from = items.findIndex((i) => i.id === itemId);
+          const to = insertAt > from ? insertAt - 1 : insertAt;
+          if (from >= 0 && to !== from) {
+            // lokal sofort umordnen (kein Flackern), der Poll bestätigt
+            const [m] = items.splice(from, 1);
+            items.splice(to, 0, m);
+            renderList();
+            act("moveItem", { itemId, toIndex: to });
             return;
           }
-          body.startAt = iso;
         }
-        call("setStartType", body).then(poll);
-      });
-      // Kapitel 6 Teil 4 (§6.4 "Take-Choreografie mit Transitions"):
-      // zweiter Umschalter, unabhängig vom Start-Typ — "cut" (Standard,
-      // wie bisher) oder "mix" (`crosspoint.autoTrans` am Ziel-Mixer statt
-      // `crosspoint.cut`, K3-Teil-2). Wechsel AUF "mix" fragt optional
-      // eine Rampendauer in Frames ab (leer/Abbrechen = die am Mixer
-      // aktuell gesetzte Rate unverändert lassen, kein PATCH).
-      const transitionBtn = document.createElement("button");
-      transitionBtn.addEventListener("click", () => {
-        const next = item.transition === "mix" ? "cut" : "mix";
-        const body = { itemId: item.id, transition: next };
-        if (next === "mix") {
-          const input = prompt(
-            "Rampendauer in Frames (1–250, leer = aktuelle Mixer-Rate unverändert lassen):",
-            item.transitionRateFrames != null ? String(item.transitionRateFrames) : ""
-          );
-          if (input === null) return;
-          const trimmed = input.trim();
-          if (trimmed) body.transitionRateFrames = Number(trimmed);
-        }
-        call("setTransition", body).then(poll);
-      });
-      // Kapitel 6 Teil 5 (§6.4 "Children-Editor"): bewusst KEIN
-      // Feld-für-Feld-Formular (Quelle/SOM/EOM/Delay/Dauer je Kind
-      // einzeln) — stattdessen die gesamte Kind-Liste als rohes JSON-
-      // Array zum Editieren, vorbefüllt mit dem aktuellen Stand.
-      // Deckungsgleiches Minimal-Muster wie schon bei Fixzeit/Rampendauer
-      // (ein `prompt()` statt eines eigenen Dialogs), hier nur mit einem
-      // ganzen Array statt eines einzelnen Werts — volle Ausdruckskraft
-      // (add/remove/edit jedes Feld jedes Kinds) ohne einen mehrseitigen
-      // Formular-Editor zu bauen.
-      const childrenBtn = document.createElement("button");
-      childrenBtn.addEventListener("click", () => {
-        const current = JSON.stringify(item.children || [], null, 0);
-        const input = prompt(
-          "Child Events als JSON-Array bearbeiten.\n" +
-            "type: GRAPHIC | LOGO | CHANNEL_BRANDING (templateId, data) · TRIGGER | NODE_COMMAND | AUDIO | VOICEOVER (target = Node-Label, method, params, stopMethod) · WEBHOOK (url, params)\n" +
-            "timing: RELATIVE_TO_START | RELATIVE_TO_END | FULL_PRIMARY | ABSOLUTE (atUtc) · delayMs, durationMs (0 = bis Primary-Ende)\n" +
-            "failurePolicy: IGNORE | WARN | RETRY (retryCount, retryDelayMs) | BLOCK (+required) | FALLBACK (fallbackTarget)",
-          current
-        );
-        if (input === null) return;
-        let parsed;
-        try {
-          parsed = JSON.parse(input.trim() || "[]");
-        } catch (e) {
-          showError(`Ungültiges JSON: ${e}`);
-          return;
-        }
-        if (!Array.isArray(parsed)) {
-          showError("Grafik-Kinder müssen ein JSON-Array sein");
-          return;
-        }
-        call("setChildren", { itemId: item.id, childrenJson: JSON.stringify(parsed) }).then(poll);
-      });
-      // Kapitel 27 / P5: Audio-Wahl eines Live-Items. Angeboten werden nur die
-      // Audio-Capabilities der AUFGELÖSTEN Quelle (nicht alle globalen Presets);
-      // jeder Klick schaltet zur nächsten, nach der letzten zurück auf „Auto“
-      // (Quell-Default bzw. einzige Capability, Spec §260).
-      const audioBtn = document.createElement("button");
-      audioBtn.style.display = "none";
-      audioBtn.addEventListener("click", () => {
-        const a = item.audio;
-        if (!a) return;
-        const ids = (a.capabilities || []).map((c) => c.id);
-        const cur = a.intent && a.intent.capability ? a.intent.capability : null;
-        // Gespeicherte, nicht (mehr) angebotene Capability: erster Klick → erste angebotene.
-        const idx = cur === null ? -1 : ids.indexOf(cur);
-        const nextIdx = idx + 1;
-        const next = nextIdx < ids.length ? ids[nextIdx] : null;
-        const intent = Object.assign({}, a.intent || {});
-        if (next === null) delete intent.capability;
-        else intent.capability = next;
-        call("setAudio", { itemId: item.id, audioJson: JSON.stringify(intent) }).then(poll);
-      });
-      const cueBtn = document.createElement("button");
-      cueBtn.addEventListener("click", () => call("cue", { itemId: item.id }).then(poll));
-      const removeBtn = document.createElement("button");
-      removeBtn.textContent = "✕";
-      removeBtn.title = "Entfernen";
-      removeBtn.addEventListener("click", async () => {
-        if (!(await confirmDialog(`„${item.label}" wirklich aus dem Rundown entfernen?`, "Entfernen"))) return;
-        call("remove", { itemId: item.id }).then(poll);
-      });
-      actionsEl.append(startTypeBtn, transitionBtn, childrenBtn, audioBtn, cueBtn, removeBtn);
-
-      // Touch-Fund 2026-09-07 (Kapitel 6 Teil 1, unabhängig vom Touch-
-      // Audit gefunden): natives HTML5-Drag&Drop (dragstart/dragover/drop)
-      // feuert auf Touch-Geräten überhaupt nicht — das Reorder war dort
-      // komplett unerreichbar. Pointer-Events + `setPointerCapture` statt-
-      // dessen (gleiches Muster wie `ui/graph/flow-canvas.ts`/`ui/kit/
-      // omp-fader.ts`): der Zeiger bleibt am Griff "gebunden", auch wenn er
-      // während des Ziehens dessen Grenzen verlässt — funktioniert
-      // identisch mit Maus UND Finger, ohne Browser-Unterschiede.
-      // `shadow.elementFromPoint` statt `document.elementFromPoint`, weil
-      // dieses Bundle komplett innerhalb eines Shadow-Roots rendert (s.
-      // `attachShadow` oben) — `ShadowRoot` hat dafür eine eigene Methode.
-      let dragPointerId = null;
-      dragEl.addEventListener("pointerdown", (ev) => {
-        if (!el.draggable) return;
-        ev.preventDefault();
-        dragSourceId = item.id;
-        dragPointerId = ev.pointerId;
-        dragEl.setPointerCapture(ev.pointerId);
-        el.classList.add("dragging");
-      });
-      const rowUnderPointer = (ev) => {
-        const under = shadow.elementFromPoint(ev.clientX, ev.clientY);
-        return under && under.closest(".pl-row");
+        poll();
       };
-      dragEl.addEventListener("pointermove", (ev) => {
-        if (dragSourceId !== item.id || ev.pointerId !== dragPointerId) return;
-        for (const [, r] of itemEls) r.el.classList.remove("drag-over");
-        const row = rowUnderPointer(ev);
-        if (row && row !== el) row.classList.add("drag-over");
-      });
-      const endDrag = (ev) => {
-        if (dragSourceId !== item.id || ev.pointerId !== dragPointerId) return;
-        const row = rowUnderPointer(ev);
-        for (const [, r] of itemEls) r.el.classList.remove("drag-over");
-        el.classList.remove("dragging");
-        if (row && row !== el) {
-          const targetEntry = [...itemEls.entries()].find(([, r]) => r.el === row);
-          if (targetEntry) reorderItems(dragSourceId, targetEntry[0]);
-        }
-        dragSourceId = null;
-        dragPointerId = null;
-      };
-      dragEl.addEventListener("pointerup", endDrag);
-      dragEl.addEventListener("pointercancel", endDrag);
-
-      el.append(dragEl, numEl, iconEl, titleEl, durEl, timeEl, remWrap, availEl, actionsEl);
-      // Die Klick-Handler oben lesen `item` (Closure über den Parameter). Ohne
-      // Nachführen sähen sie für immer den Stand beim ANLEGEN der Zeile:
-      // der Start-Typ-Umschalter rotierte dann immer von „sequence“ aus (nie
-      // weiter zu „fixtime“), Übergangs-/Kind-Editor arbeiteten auf alten
-      // Werten. `setItem` wird bei jedem Poll mit dem frischen Item gerufen.
-      const setItem = (fresh) => {
-        item = fresh;
-      };
-      return { el, setItem, dragEl, numEl, iconEl, titleEl, durEl, timeEl, remTxt, remBarInner, availEl, startTypeBtn, transitionBtn, childrenBtn, audioBtn, cueBtn, removeBtn };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", end);
+      handle.addEventListener("pointercancel", end);
     };
 
-    // Formatiert Millisekunden als mm:ss (Playlists dieses Nodes sind
-    // rundown-lang, nicht tagelang — Stunden wären hier unnötiger Ballast).
-    const formatMs = (ms) => {
-      const totalSec = Math.floor(ms / 1000);
-      const m = Math.floor(totalSec / 60);
-      const s = totalSec % 60;
-      return `${m}:${String(s).padStart(2, "0")}`;
+    const makeRow = (it) => {
+      const wrap = h("div", { class: "pl-rowwrap" });
+      const row = h("div", { class: "pl-row pl-cols" });
+      const refs = { wrap, row, it };
+      refs.drag = h("span", { class: "drag", title: "Ziehen zum Umsortieren", onpointerdown: (e) => startDrag(refs.it.id, e, row) }, "⠿");
+      refs.num = h("span", { class: "num" });
+      refs.ico = h("span", { class: "ico" });
+      refs.dot = h("span", { class: "dot" });
+      refs.text = h("span", { class: "txt", style: "overflow:hidden;text-overflow:ellipsis" });
+      refs.chips = h("span", { class: "chips" });
+      refs.title = h("span", { class: "title" }, refs.dot, refs.text, refs.chips);
+      refs.dur = h("span", { class: "dur c-dur" });
+      refs.time = h("span", { class: "time c-time" });
+      refs.remTxt = h("span", { class: "txt" });
+      refs.remBar = h("span", {});
+      refs.rem = h("span", { class: "rem c-rem" }, refs.remTxt, h("span", { class: "rbar" }, refs.remBar));
+      refs.av = h("span", { class: "av" });
+      refs.cueBtn = h("button", { title: "Cue + Take: dieses Event sofort senden", onclick: async (e) => {
+        e.stopPropagation();
+        try { await call("cue", { itemId: refs.it.id }); await call("take", {}); } catch { /* Banner */ }
+        poll();
+      } }, "▶");
+      refs.editBtn = h("button", { title: "Eigenschaften bearbeiten", onclick: (e) => { e.stopPropagation(); openEditor(refs.it); } }, "✎");
+      refs.delBtn = h("button", { class: "danger", title: "Event entfernen", onclick: (e) => { e.stopPropagation(); removeItems([refs.it.id]); } }, "✕");
+      refs.acts = h("span", { class: "acts" }, refs.cueBtn, refs.editBtn, refs.delBtn);
+      row.append(refs.drag, refs.num, refs.ico, refs.title, refs.dur, refs.time, refs.rem, refs.av, refs.acts);
+      row.addEventListener("click", (e) => select(refs.it.id, e));
+      row.addEventListener("dblclick", () => openEditor(refs.it));
+      refs.kids = h("div", { class: "kids" });
+      wrap.append(row, refs.kids);
+      return refs;
     };
 
-    // Rundown-Echtmedien-Folgeschritt: Item-Beschreibung je nach
-    // tatsächlich zugewiesener Quelle (genau eines von pattern/file/
-    // senderId ist gesetzt, s. omp-playout-automation main.rs::
-    // item_meta_to_json). `liveLabelBySenderId` zeigt bei Live-Quellen den
-    // aktuellen Discovery-Namen statt der rohen Sender-ID, wenn bekannt.
-    // Listenansicht-Folgeschritt: Quell-Detail als Tooltip auf der
-    // Titel-Zelle (eigene Icon-Spalte übernimmt die Kurzform, s.
-    // `sourceIcon`) statt eines langen Textsuffixes in der schmalen Spalte.
-    const describeItem = (item, liveLabelBySenderId) => {
-      if (item.eventType === "HOLD") return "HOLD: Sequenz hält an, das vorherige Bild bleibt, bis der Operator weiterschaltet (Next).";
-      if (item.eventType === "JUMP") {
-        const t = lastItems.find((it) => it.id === item.jumpTarget);
-        return `JUMP: springt zu „${t ? t.label : item.jumpTarget}“`;
+    let planById = new Map();
+    let timeByIndex = new Map();
+    let playheadMs = 0;
+    let durationMs = 0;
+
+    const renderList = () => {
+      if (dragging) return;
+      const q = search;
+      const ids = new Set(items.map((i) => i.id));
+      for (const [id, r] of rowEls) if (!ids.has(id)) { r.wrap.remove(); rowEls.delete(id); }
+      let shown = 0;
+      items.forEach((it, i) => {
+        let r = rowEls.get(it.id);
+        if (!r) { r = makeRow(it); rowEls.set(it.id, r); }
+        r.it = it;
+        const match = !q || `${it.label} ${describe(it)} ${it.note || ""}`.toLowerCase().includes(q);
+        r.wrap.style.display = match ? "" : "none";
+        if (match) shown++;
+        const isOn = it.id === currentItemId;
+        const isCued = it.id === cuedItemId;
+        r.row.className = `pl-row pl-cols${isOn ? " onair" : isCued ? " cued" : ""}${selected.has(it.id) ? " sel" : ""}` +
+          `${it.startType === "fixtime" ? " fix" : it.startType === "manual" ? " manual" : ""}`;
+        r.num.textContent = String(i + 1);
+        r.ico.textContent = srcIcon(it);
+        r.dot.style.background = it.color || "transparent";
+        r.text.textContent = it.label;
+        r.title.title = describe(it) + (it.note ? `\n${it.note}` : "");
+        r.dur.textContent = it.eventType === "HOLD" || it.eventType === "JUMP" ? "" : `${(it.durationMs / 1000).toFixed(1)}s`;
+        const plan = planById.get(it.id);
+        const t = timeByIndex.get(i);
+        const rel = t ? `${fmtMs(t.startMs)}–${fmtMs(t.endMs)}` : "";
+        const warn = plan && plan.warnings && plan.warnings.length > 0;
+        r.time.textContent = ((plan && plan.start ? formatLocalStart(plan.start) : rel) || "") + (warn ? " ⚠" : "");
+        r.time.style.color = warn ? "var(--warn)" : "";
+        r.time.title = [
+          plan && plan.start ? `Geplant: ${formatLocalStart(plan.start)} – ${plan.end ? formatLocalStart(plan.end) : "offen"}${plan.anchored ? " (feste Startzeit)" : ""}` : "",
+          rel ? `Ab Listenbeginn: ${rel}` : "",
+          ...(warn ? plan.warnings.map((w) => `⚠ ${w}`) : []),
+        ].filter(Boolean).join("\n");
+        if (isOn && durationMs > 0) {
+          r.remTxt.textContent = `-${(Math.max(0, durationMs - playheadMs) / 1000).toFixed(1)}s`;
+          r.remBar.style.width = `${Math.min(100, (100 * playheadMs) / durationMs)}%`;
+        } else { r.remTxt.textContent = ""; r.remBar.style.width = "0"; }
+        // Verfügbarkeit / Bereitschaft
+        let avText = (it.available ?? true) ? "✓" : "✗";
+        let avBad = !(it.available ?? true);
+        let avTip = avBad ? "Quelle nicht verfügbar — Take wird verweigert" : "Quelle verfügbar";
+        if (it.asset) {
+          const st = it.readinessState || "";
+          const pct = it.readinessProgress > 0 ? ` ${Math.round(it.readinessProgress * 100)}%` : "";
+          avText = it.readiness === "READY" ? "✓" : st === "TRANSFERRING" ? `⏳${pct}` : it.readiness === "NOT_READY" ? "✗" : "?";
+          avBad = it.readiness === "NOT_READY" && st !== "TRANSFERRING";
+          avTip = `Asset ${it.asset.assetId} — ${it.readiness || "UNKNOWN"}${st ? ` (${st}${pct})` : ""}${it.readinessDetail ? `\n${it.readinessDetail}` : ""}\nBei Nichtverfügbarkeit: ${it.onMissing || "HOLD"}`;
+        }
+        r.av.textContent = avText;
+        r.av.className = `av${avBad ? " bad" : ""}`;
+        r.av.title = avTip;
+        r.cueBtn.disabled = isOn;
+        r.delBtn.disabled = isOn;
+        // Chips: Start-Typ, Transition, Kinder, Audio
+        const chips = [];
+        if (it.startType === "fixtime") chips.push(h("span", { class: "chip blue", title: "Fixzeit-Start" }, `⏰ ${it.startAt ? formatLocalStart(it.startAt) : it.fixtimeHms || ""}`));
+        if (it.startType === "manual") chips.push(h("span", { class: "chip", style: "background:#6b5210", title: "Manueller Start" }, "✋"));
+        if (it.transition === "mix") chips.push(h("span", { class: "chip", style: "background:#1f5a28", title: "Mix-Übergang" }, "⇄"));
+        const nk = (it.children || []).length;
+        if (nk > 0) {
+          chips.push(h("span", {
+            class: "chip", style: "background:#5a3585", title: "Child Events ein-/ausklappen",
+            onclick: (e) => { e.stopPropagation(); if (expanded.has(it.id)) expanded.delete(it.id); else expanded.add(it.id); renderList(); },
+          }, `${expanded.has(it.id) ? "▾" : "▸"} ${nk}`));
+        }
+        if (it.audio) {
+          const res = it.audio.resolution || {};
+          chips.push(h("span", { class: "chip", style: res.warnings && res.warnings.length ? "background:#7a5a10" : "", title: "Audio" }, `🔊 ${res.chosen || "—"}`));
+        }
+        r.chips.replaceChildren(...chips);
+        // Kinder darunter
+        const showKids = expanded.has(it.id) && nk > 0;
+        const kidKey = showKids ? JSON.stringify([it.children, childRuntime.filter((c) => c.itemId === it.id).map((c) => [c.id, c.state])]) : "";
+        if (r.kidKey !== kidKey) {
+          r.kidKey = kidKey;
+          r.kids.replaceChildren(...(showKids ? it.children.map((c, ci) => {
+            const rt = childRuntime.find((x) => x.itemId === it.id && x.id === c.id);
+            return h("div", { class: "kid", onclick: () => openEditor(it, "kids", ci), title: rt && rt.error ? rt.error : "Klicken zum Bearbeiten" },
+              CHILD_ICON[c.type] || "•", h("span", {}, c.templateId || c.target || c.url || c.type),
+              h("span", { style: "color:var(--mut)" }, timingText(c)),
+              rt ? h("span", { class: `st ${rt.state}` }, rt.state) : null);
+          }) : []));
+        }
+        r.kids.style.display = showKids ? "" : "none";
+      });
+      // DOM-Reihenfolge nur bei Abweichung korrigieren (Verschieben mitten im Klick würde Klicks verschlucken)
+      const wraps = items.map((i) => rowEls.get(i.id).wrap);
+      const cur = [...listEl.children].filter((c) => c !== dropLine);
+      if (wraps.length !== cur.length || wraps.some((w, k) => w !== cur[k])) wraps.forEach((w) => listEl.append(w));
+      emptyEl.style.display = items.length === 0 ? "" : "none";
+      hdr.style.display = items.length === 0 ? "none" : "";
+    };
+
+    const timingText = (c) => {
+      const t = c.timing || (c.relativeTo === "END" ? "RELATIVE_TO_END" : "RELATIVE_TO_START");
+      const d = c.durationMs ? `${(c.durationMs / 1000).toFixed(1)}s` : "bis Ende";
+      if (t === "ABSOLUTE") return `${c.atUtc ? formatLocalStart(c.atUtc) : "?"} · ${d}`;
+      if (t === "FULL_PRIMARY") return "gesamte Dauer";
+      return `${t === "RELATIVE_TO_END" ? "−" : "+"}${((c.delayMs || 0) / 1000).toFixed(1)}s · ${d}`;
+    };
+
+    // Delete-Taste (Fokus im Panel, nicht in einem Eingabefeld)
+    this.addEventListener("keydown", (e) => {
+      if (modalOpen) return;
+      const tag = (shadow.activeElement && shadow.activeElement.tagName) || "";
+      if (["INPUT", "SELECT", "TEXTAREA"].includes(tag)) return;
+      if ((e.key === "Delete" || e.key === "Backspace") && selected.size > 0) {
+        e.preventDefault();
+        removeItems([...selected]);
       }
-      if (item.eventType === "IMAGE") return `Standbild: ${item.file}`;
-      if (item.sourceSelector) {
-        const sel = item.sourceSelector;
-        const crit = [...(sel.required || []), ...((sel.preferred || []).map((t) => `(${t})`))].join(", ");
-        return `Live nach Tags: ${crit}\n→ ${item.resolvedLabel || "keine passende Quelle"}${item.resolutionAmbiguous ? "  ⚠ gleichrangig mit weiteren" : ""}\n${item.resolutionSummary || ""}`;
+    });
+
+    // ---- Dialog-Grundgerüst ----------------------------------------------
+    const openModal = ({ title, tabs, render, onSave, saveLabel, onClose }) => {
+      modalOpen = true;
+      let tab = tabs ? tabs[0][0] : null;
+      const errEl = h("span", { class: "err" });
+      const content = h("div", { class: "content" });
+      const tabBar = tabs ? h("div", { class: "tabs" }) : null;
+      const close = () => { overlay.remove(); modalOpen = false; if (onClose) onClose(); poll(); };
+      const draw = () => {
+        if (tabBar) tabBar.replaceChildren(...tabs.map(([k, t]) => h("button", { class: k === tab ? "act" : "", onclick: () => { tab = k; draw(); } }, t)));
+        content.replaceChildren(render(tab, { redraw: draw, setTab: (k) => { tab = k; draw(); }, setError: (t) => { errEl.textContent = t; } }));
+      };
+      const save = async () => {
+        errEl.textContent = "";
+        const err = await onSave();
+        if (err) errEl.textContent = err; else close();
+      };
+      const modal = h("div", { class: "modal" },
+        h("header", {}, title, h("button", { onclick: close }, "✕")),
+        tabBar, content,
+        h("footer", {}, errEl, h("button", { onclick: close }, onSave ? "Abbrechen" : "Schließen"), onSave ? h("button", { class: "primary", onclick: save }, saveLabel || "Speichern") : null));
+      const overlay = h("div", { class: "overlay", onmousedown: (e) => { if (e.target === overlay) close(); } }, modal);
+      overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); e.stopPropagation(); });
+      shadow.append(overlay);
+      draw();
+      return { close, redraw: draw };
+    };
+
+    // Formular-Helfer: Feld an ein Objekt binden
+    const bindText = (obj, key, attrs) => h("input", { type: "text", ...attrs, value: obj[key] ?? "", oninput: (e) => { obj[key] = e.target.value; } });
+    const bindNum = (obj, key, attrs) => h("input", { type: "number", min: "0", ...attrs, value: obj[key] ?? 0, oninput: (e) => { obj[key] = Number(e.target.value) || 0; } });
+    const bindSelect = (obj, key, options, onchange) => {
+      const s = h("select", { onchange: (e) => { obj[key] = e.target.value; if (onchange) onchange(); } },
+        ...options.map(([v, t]) => h("option", { value: v }, t)));
+      s.value = obj[key] ?? options[0][0];
+      return s;
+    };
+    const field = (label, ...ctrl) => [h("label", {}, label), h("div", { class: "row" }, ...ctrl)];
+
+    const mediaKindOf = (it) => {
+      if (!it) return "pattern";
+      if (it.asset) return "asset";
+      if (it.eventType === "HOLD") return "hold";
+      if (it.eventType === "JUMP") return "jump";
+      if (it.eventType === "IMAGE") return "image";
+      if (it.sourceSelector) return "liveselect";
+      if (it.senderId) return "live";
+      if (it.file) return "file";
+      return "pattern";
+    };
+    const mediaSig = (d) => JSON.stringify([d.kind, d.pattern, d.file, d.senderId, d.tags, d.pref, d.jumpTarget, d.assetId]);
+    const splitTags = (t) => (t || "").split(",").map((x) => x.trim()).filter(Boolean);
+
+    let availableSources = [];
+
+    // ---- Event-Editor ----------------------------------------------------
+    const newKid = (n) => ({ id: `c${n}`, type: "GRAPHIC", timing: "RELATIVE_TO_START", delayMs: 0, durationMs: 0, templateId: "", failurePolicy: "WARN" });
+    function openEditor(item, startTab, startKid) {
+      const isNew = !item;
+      const onAir = !!item && item.id === currentItemId;
+      const d = {
+        kind: mediaKindOf(item), label: item ? item.label : "", note: item?.note || "", icon: item?.icon || "", color: item?.color || "",
+        pattern: item?.pattern || "smpte", file: item?.file || "", senderId: item?.senderId || "",
+        tags: item?.sourceSelector ? (item.sourceSelector.required || []).join(", ") : "", pref: item?.sourceSelector ? (item.sourceSelector.preferred || []).join(", ") : "",
+        jumpTarget: item?.jumpTarget || "", assetId: item?.asset?.assetId || "", onMissing: item?.onMissing || "HOLD", fallbackFile: item?.fallbackFile || "",
+        durationMs: item ? item.durationMs : 5000,
+        startType: item?.startType || "sequence",
+        startLocal: item?.startAt ? new Date(item.startAt).toLocaleString("sv-SE") : item?.fixtimeHms || "",
+        transition: item?.transition || "cut", rateFrames: item?.transitionRateFrames ?? "",
+        audioCap: item?.audio?.intent?.capability || "",
+      };
+      const origSig = mediaSig(d);
+      const origDur = d.durationMs;
+      const kids = JSON.parse(JSON.stringify(item?.children || []));
+      let kidIdx = Math.min(startKid ?? 0, kids.length - 1);
+
+      const durationEditable = () => ["pattern", "image", "live", "liveselect"].includes(d.kind);
+
+      const renderContent = (ctx) => {
+        const f = h("div", { class: "form" });
+        f.append(...field("Titel", bindText(d, "label", { placeholder: "Titel" })));
+        f.append(...field("Typ", bindSelect(d, "kind", MEDIA_KINDS, ctx.redraw)));
+        if (onAir) f.querySelectorAll("select").forEach((s) => { s.disabled = true; });
+        const dis = onAir ? { disabled: "" } : {};
+        switch (d.kind) {
+          case "pattern": f.append(...field("Testmuster", bindSelect(d, "pattern", PATTERNS.map((p) => [p, p])))); break;
+          case "file": case "image": {
+            const files = d.file && !mediaLibrary.includes(d.file) ? [d.file, ...mediaLibrary] : mediaLibrary;
+            f.append(...field("Datei", bindSelect(d, "file", [["", "— Datei wählen —"], ...files.map((x) => [x, x])])));
+            break;
+          }
+          case "live": {
+            const known = availableSources.map((s) => [s.senderId, s.label]);
+            if (d.senderId && !known.some(([id]) => id === d.senderId)) known.unshift([d.senderId, d.senderId]);
+            f.append(...field("Live-Quelle", bindSelect(d, "senderId", [["", "— Quelle wählen —"], ...known])));
+            break;
+          }
+          case "liveselect":
+            f.append(...field("Pflicht-Tags", bindText(d, "tags", { placeholder: "z. B. video.camera, role.program" })));
+            f.append(...field("bevorzugt", bindText(d, "pref", { placeholder: "optional" })));
+            break;
+          case "jump":
+            f.append(...field("Sprungziel", bindSelect(d, "jumpTarget", [["", "— Event wählen —"], ...items.filter((x) => x.eventType !== "JUMP" && x.id !== item?.id).map((x) => [x.id, `${items.indexOf(x) + 1}. ${x.label}`])])));
+            break;
+          case "asset":
+            f.append(...field("Asset-ID", bindText(d, "assetId", { placeholder: "Asset-ID aus dem OMP-Asset-System" })));
+            f.append(...field("Wenn fehlt", bindSelect(d, "onMissing", MISSING_POLICIES)));
+            f.append(...field("Ersatzdatei", bindText(d, "fallbackFile", { placeholder: "nur bei „Ersatzdatei“" })));
+            break;
+          default: break;
+        }
+        if (durationEditable()) f.append(...field("Dauer (ms)", bindNum(d, "durationMs", dis)));
+        else if (d.kind === "file" || d.kind === "asset") f.append(h("div", { class: "hint" }, "Die Dauer wird vom Ziel-Player aus der Datei ermittelt."));
+        if (onAir) f.append(h("div", { class: "hint" }, "Dieses Event läuft gerade: Medium und Dauer sind gesperrt, Titel/Timing/Child Events sind änderbar."));
+        f.append(...field("Notiz", bindText(d, "note", { placeholder: "Operator-Notiz" })));
+        const color = h("input", { type: "color", value: d.color || "#4a90d9", oninput: (e) => { d.color = e.target.value; } });
+        f.append(...field("Icon / Farbe", bindText(d, "icon", { placeholder: "Emoji", style: "width:80px" }), color,
+          h("button", { onclick: () => { d.color = ""; color.value = "#4a90d9"; } }, "Farbe löschen")));
+        return f;
+      };
+
+      const renderTiming = () => {
+        const f = h("div", { class: "form" });
+        const startInput = bindText(d, "startLocal", { placeholder: "HH:MM:SS oder JJJJ-MM-TT HH:MM:SS (lokal)" });
+        const startRow = field("Startzeit", startInput);
+        const sync = () => { startRow.forEach((e) => { e.style.display = d.startType === "fixtime" ? "" : "none"; }); };
+        f.append(...field("Start", bindSelect(d, "startType", [["sequence", "⏭ Sequenz (nach dem Vorgänger)"], ["manual", "✋ Manuell (Cue + Take)"], ["fixtime", "⏰ Fixzeit (feste Uhrzeit)"]], sync)));
+        f.append(...startRow);
+        sync();
+        const rate = bindText(d, "rateFrames", { placeholder: "Frames 1–250, leer = Mixer-Rate" });
+        const rateRow = field("Rampe", rate);
+        const syncT = () => { rateRow.forEach((e) => { e.style.display = d.transition === "mix" ? "" : "none"; }); };
+        f.append(...field("Übergang", bindSelect(d, "transition", [["cut", "✂ Cut"], ["mix", "⇄ Mix (Auto-Trans am Mixer)"]], syncT)));
+        f.append(...rateRow);
+        syncT();
+        return f;
+      };
+
+      const renderAudio = () => {
+        const f = h("div", { class: "form" });
+        const a = item?.audio;
+        if (!a) {
+          f.append(h("div", { class: "hint" }, isNew ? "Die Audio-Wahl ist nach dem Anlegen verfügbar (sie hängt von den Capabilities der aufgelösten Live-Quelle ab)." : "Nur Live-Events mit bekannter Quelle bieten eine Audio-Wahl."));
+          return f;
+        }
+        const layoutName = (l) => (typeof l === "string" ? l : l && l.other != null ? `${l.other} Kanäle` : "?");
+        f.append(...field(`Audio von ${a.source}`, bindSelect(d, "audioCap", [["", "Auto (Quell-Default)"], ...(a.capabilities || []).map((c) => [c.id, `${c.id} (${layoutName(c.layout)})${c.isDefault ? " [Default]" : ""}`])])));
+        const res = a.resolution || {};
+        f.append(h("div", { class: "hint" }, `Aktuelle Wahl: ${res.chosen || "—"} (${res.via || "none"})`, ...(res.warnings || []).map((w) => h("div", { style: "color:var(--warn)" }, `⚠ ${w}`))));
+        return f;
+      };
+
+      const renderKids = (ctx) => {
+        const list = h("div", { class: "kid-list" });
+        kids.forEach((k, i) => list.append(h("div", { class: `it${i === kidIdx ? " act" : ""}`, onclick: () => { kidIdx = i; ctx.redraw(); } },
+          CHILD_ICON[k.type] || "•", h("span", {}, k.templateId || k.target || k.url || k.type),
+          h("span", { class: "x", title: "Child Event löschen", onclick: (e) => { e.stopPropagation(); kids.splice(i, 1); kidIdx = Math.min(kidIdx, kids.length - 1); ctx.redraw(); } }, "✕"))));
+        list.append(h("div", { class: "it", style: "color:var(--acc)", onclick: () => { kids.push(newKid(kids.length + 1)); kidIdx = kids.length - 1; ctx.redraw(); } }, "＋ Child Event"));
+        const box = h("div", { class: "kid-edit" }, list, kids.length ? kidForm(kids[kidIdx], ctx) : h("div", { class: "empty" }, "Child Events laufen parallel zum Event: Grafik ein-/ausblenden, Node-Befehle, Webhooks, Audio/Voiceover, Channel-Trigger."));
+        return box;
+      };
+
+      const kidForm = (k, ctx) => {
+        const f = h("div", { class: "form" });
+        const rt = item && childRuntime.find((x) => x.itemId === item.id && x.id === k.id);
+        if (rt) f.append(h("div", { class: "hint" }, `Laufzeit: ${rt.state}${rt.error ? ` — ${rt.error}` : ""}${rt.attempt > 1 ? ` (Versuch ${rt.attempt})` : ""}`));
+        f.append(...field("Typ", bindSelect(k, "type", CHILD_TYPES, ctx.redraw)));
+        const t = k.type;
+        // Parameter/Daten als JSON-Text, beim Speichern geparst
+        const jsonField = (label, key, ph) => {
+          const ta = h("textarea", { placeholder: ph || "{}", oninput: (e) => { k[`_${key}Text`] = e.target.value; } });
+          ta.value = k[`_${key}Text`] ?? (k[key] && Object.keys(k[key]).length ? JSON.stringify(k[key]) : "");
+          return field(label, ta);
+        };
+        if (["GRAPHIC", "LOGO", "CHANNEL_BRANDING"].includes(t)) {
+          f.append(...field("Template-ID", bindText(k, "templateId")));
+          f.append(...jsonField("Daten (JSON)", "data", '{"name":"…"}'));
+        } else if (["NODE_COMMAND", "TRIGGER", "AUDIO", "VOICEOVER"].includes(t)) {
+          const lbl = bindText(k, "target", { list: "pa-nodes", placeholder: "Node-Label" });
+          f.append(...field("Ziel-Node", lbl, h("datalist", { id: "pa-nodes" }, ...availableNodes.map((n) => h("option", { value: n })))));
+          f.append(...field("Methode", bindText(k, "method")));
+          f.append(...jsonField("Parameter (JSON)", "params"));
+          f.append(...field("Stopp-Methode", bindText(k, "stopMethod", { placeholder: "optional, beim Ende" })));
+          f.append(...jsonField("Stopp-Parameter", "stopParams"));
+        } else if (t === "WEBHOOK") {
+          f.append(...field("URL", bindText(k, "url", { placeholder: "https://…" })));
+          f.append(...jsonField("Body (JSON)", "params"));
+        } else if (t === "CHANNEL_TRIGGER") {
+          const p = (k.params = k.params && typeof k.params === "object" ? k.params : {});
+          p.target = p.target || {};
+          const tk = p.target.group !== undefined ? "group" : p.target.channel !== undefined ? "channel" : p.target.all ? "all" : "group";
+          const state = { event: p.event || "NEXT_LIVE", kind: tk, name: p.target.group ?? p.target.channel ?? "", itemId: p.args?.itemId || "" };
+          const apply = () => {
+            const o = { event: state.event, target: state.kind === "all" ? { all: true } : { [state.kind]: state.name } };
+            if (state.event === "JUMP") o.args = { itemId: state.itemId };
+            k.params = o;
+          };
+          apply();
+          f.append(...field("Event", bindSelect(state, "event", TRIGGER_EVENTS.map((e) => [e, e]), () => { apply(); ctx.redraw(); })));
+          f.append(...field("Ziel", bindSelect(state, "kind", [["group", "Gruppe"], ["channel", "Channel"], ["all", "Alle erlaubten"]], () => { apply(); ctx.redraw(); })));
+          if (state.kind !== "all") f.append(...field("Name", h("input", { type: "text", value: state.name, oninput: (e) => { state.name = e.target.value; apply(); } })));
+          if (state.event === "JUMP") f.append(...field("Item-ID", h("input", { type: "text", value: state.itemId, oninput: (e) => { state.itemId = e.target.value; apply(); } })));
+        }
+        f.append(h("div", { class: "hint", style: "border-top:1px solid var(--bd);padding-top:6px" }, "Timing"));
+        f.append(...field("Modus", bindSelect(k, "timing", TIMINGS, ctx.redraw)));
+        if (k.timing === "ABSOLUTE") {
+          const at = h("input", { type: "text", placeholder: "HH:MM:SS oder JJJJ-MM-TT HH:MM:SS (lokal)", value: k.atUtc ? new Date(k.atUtc).toLocaleString("sv-SE") : "", oninput: (e) => { k._atLocal = e.target.value; } });
+          f.append(...field("Uhrzeit", at));
+        } else if (k.timing !== "FULL_PRIMARY") {
+          f.append(...field(k.timing === "RELATIVE_TO_END" ? "Vor Ende (ms)" : "Delay (ms)", bindNum(k, "delayMs")));
+        }
+        if (k.timing !== "FULL_PRIMARY") f.append(...field("Dauer (ms)", bindNum(k, "durationMs", { title: "0 = bis zum Ende des Primary" })));
+        f.append(h("div", { class: "hint", style: "border-top:1px solid var(--bd);padding-top:6px" }, "Bei Fehlern"));
+        f.append(...field("Richtlinie", bindSelect(k, "failurePolicy", FAIL_POLICIES, ctx.redraw)));
+        if (k.failurePolicy === "RETRY") {
+          f.append(...field("Wiederholungen", bindNum(k, "retryCount")));
+          f.append(...field("Pause (ms)", bindNum(k, "retryDelayMs")));
+        }
+        if (k.failurePolicy === "FALLBACK") f.append(...field("Ersatz-Ziel", bindText(k, "fallbackTarget", { placeholder: "Node-Label" })));
+        f.append(...field("Pflicht", h("input", { type: "checkbox", checked: !!k.required, onchange: (e) => { k.required = e.target.checked; } }), h("span", { style: "color:var(--mut)" }, "nur sinnvoll mit „Primary blockieren“")));
+        return f;
+      };
+
+      // Child → sauberes JSON für den Node
+      const cleanKid = (k) => {
+        const o = { ...k };
+        for (const key of ["data", "params", "stopParams"]) {
+          const txt = o[`_${key}Text`];
+          if (txt !== undefined) {
+            if (txt.trim() === "") delete o[key];
+            else {
+              try { o[key] = JSON.parse(txt); } catch { throw new Error(`Child „${o.id}“: ${key} ist kein gültiges JSON`); }
+            }
+          }
+          delete o[`_${key}Text`];
+        }
+        if (o._atLocal !== undefined) {
+          const iso = parseStartInput(o._atLocal);
+          if (!iso) throw new Error(`Child „${o.id}“: Uhrzeit ungültig`);
+          o.atUtc = iso;
+        }
+        delete o._atLocal;
+        return o;
+      };
+
+      const buildPatch = () => {
+        const p = { label: d.label.trim(), note: d.note, icon: d.icon.trim(), color: d.color, startType: d.startType, transition: d.transition };
+        if (!p.label) throw new Error("Titel fehlt");
+        if (d.startType === "fixtime") {
+          const iso = parseStartInput(d.startLocal);
+          if (!iso) throw new Error("Startzeit ungültig (z. B. 14:30:00 oder 2026-10-03 06:00:00)");
+          p.startAt = iso;
+        } else p.startAt = "";
+        if (d.transition === "mix" && String(d.rateFrames).trim() !== "") p.transitionRateFrames = Number(d.rateFrames);
+        p.children = kids.map(cleanKid);
+        if (item?.audio && d.audioCap !== (item.audio.intent?.capability || "")) {
+          const intent = { ...(item.audio.intent || {}) };
+          if (d.audioCap) intent.capability = d.audioCap; else delete intent.capability;
+          p.audio = intent;
+        }
+        if (d.kind === "asset") { p.onMissing = d.onMissing; p.fallbackFile = d.onMissing === "FALLBACK" ? d.fallbackFile.trim() : ""; }
+        return p;
+      };
+      const mediaPatch = () => {
+        switch (d.kind) {
+          case "pattern": return { kind: "pattern", pattern: d.pattern };
+          case "file": case "image": return { kind: d.kind, file: d.file };
+          case "live": return { kind: "live", senderId: d.senderId };
+          case "liveselect": return { kind: "liveselect", sourceSelector: { required: splitTags(d.tags), preferred: splitTags(d.pref) } };
+          case "jump": return { kind: "jump", jumpTarget: d.jumpTarget };
+          case "asset": return { kind: "asset", asset: { assetId: d.assetId.trim() } };
+          default: return { kind: "hold" };
+        }
+      };
+      const appendNew = async () => {
+        const body = { label: d.label.trim() || "Event" };
+        let method = "append";
+        switch (d.kind) {
+          case "pattern": body.pattern = d.pattern; body.toneFrequency = 0; body.durationMs = d.durationMs || 5000; break;
+          case "file": if (!d.file) return "Datei wählen"; body.file = d.file; break;
+          case "image": if (!d.file) return "Bilddatei wählen"; body.file = d.file; body.eventType = "image"; body.durationMs = d.durationMs || 5000; break;
+          case "live": if (!d.senderId) return "Live-Quelle wählen"; body.senderId = d.senderId; body.durationMs = d.durationMs || 5000; break;
+          case "liveselect":
+            if (splitTags(d.tags).length === 0) return "Live nach Tags braucht mindestens einen Pflicht-Tag";
+            body.sourceSelectorJson = JSON.stringify({ required: splitTags(d.tags), preferred: splitTags(d.pref) });
+            body.durationMs = d.durationMs || 5000;
+            break;
+          case "hold": body.eventType = "hold"; break;
+          case "jump": if (!d.jumpTarget) return "Sprungziel wählen"; body.eventType = "jump"; body.jumpTarget = d.jumpTarget; break;
+          case "asset":
+            if (!d.assetId.trim()) return "Asset-ID fehlt";
+            method = "appendAsset";
+            Object.assign(body, { assetJson: JSON.stringify({ assetId: d.assetId.trim() }), onMissing: d.onMissing, fallbackFile: d.onMissing === "FALLBACK" ? d.fallbackFile.trim() : "", startType: "", durationMs: 0 });
+            break;
+          default: break;
+        }
+        return tryCall(method, body);
+      };
+
+      openModal({
+        title: isNew ? "Neues Event" : `Event bearbeiten — ${item.label}`,
+        tabs: [["content", "Inhalt"], ["timing", "Timing"], ["audio", "Audio"], ["kids", `Child Events (${kids.length})`]],
+        saveLabel: isNew ? "Anlegen" : "Speichern",
+        render: (tab, ctx) => (tab === "content" ? renderContent(ctx) : tab === "timing" ? renderTiming() : tab === "audio" ? renderAudio() : renderKids(ctx)),
+        onSave: async () => {
+          let patch;
+          try { patch = buildPatch(); } catch (e) { return e.message; }
+          if (isNew) {
+            const before = items.length;
+            const err = await appendNew();
+            if (err) return err;
+            const list = (await getParam("items")) || [];
+            const created = list[list.length - 1];
+            if (!created || list.length <= before) return null;
+            delete patch.audio;
+            const err2 = await tryCall("updateItem", { itemId: created.id, patchJson: JSON.stringify(patch) });
+            return err2 ? `Event angelegt, aber Eigenschaften nicht übernommen: ${err2}` : null;
+          }
+          if (!onAir) {
+            if (mediaSig(d) !== origSig) patch.media = mediaPatch();
+            if (durationEditable() && d.durationMs !== origDur) patch.durationMs = d.durationMs;
+          }
+          return tryCall("updateItem", { itemId: item.id, patchJson: JSON.stringify(patch) });
+        },
+      }).redraw();
+      if (startTab) {
+        // direkt auf den gewünschten Reiter springen
+        const tabs = shadow.querySelectorAll(".modal > .tabs button");
+        const idx = { content: 0, timing: 1, audio: 2, kids: 3 }[startTab] ?? 0;
+        if (tabs[idx]) tabs[idx].click();
       }
-      if (item.senderId) return `Live: ${liveLabelBySenderId.get(item.senderId) || item.senderId}`;
-      if (item.file) return `Datei: ${item.file}`;
-      return `Testmuster: ${item.pattern}`;
-    };
+    }
 
-    // Gefensterte Timeline-Anfrage (C20): nur so viele Einträge wie
-    // tatsächlich gerade gerendert werden (count = Item-Anzahl), nicht
-    // "alles" oder ein fest verdrahtetes Maximum — bei einer langen
-    // Playlist entspricht das genau dem PC-Antipattern-Fix aus §24.5
-    // (kein Full-Recompute für Items, die die UI gar nicht zeigt).
-    const getTimelineWindow = async (fromIndex, count) => {
-      if (count <= 0) return [];
-      const res = await fetch(
-        `/api/v1/nodes/${nodeId}/timeline/window?fromIndex=${fromIndex}&count=${count}`
-      );
-      if (!res.ok) return [];
-      return await res.json();
-    };
-
-    // assetId -> { el, labelEl, fireBtn, removeBtn }
-    const cartEls = new Map();
-
-    const createCartElement = (asset) => {
-      const el = document.createElement("div");
-      el.className = "cart";
-
-      const labelEl = document.createElement("span");
-      labelEl.className = "label";
-
-      const fireBtn = document.createElement("button");
-      fireBtn.className = "fire";
-      fireBtn.textContent = "Fire";
-      fireBtn.addEventListener("click", () => call("cart.fire", { assetId: asset.id }).then(poll));
-
-      const removeBtn = document.createElement("button");
-      removeBtn.className = "remove";
-      removeBtn.textContent = "Entfernen";
-      removeBtn.addEventListener("click", async () => {
-        if (!(await confirmDialog(`Cart „${asset.label}" wirklich entfernen?`, "Entfernen"))) return;
-        call("cart.remove", { assetId: asset.id }).then(poll);
+    // ---- Medien-Auswahl (📂) ---------------------------------------------
+    function openMediaPicker() {
+      const picked = new Set();
+      let q = "";
+      const listEl2 = h("div", { class: "pick-list" });
+      const draw = () => {
+        const files = mediaLibrary.filter((f) => f.toLowerCase().includes(q));
+        listEl2.replaceChildren(...(files.length ? files.map((f) => h("div", {
+          class: `it${picked.has(f) ? " chk" : ""}`,
+          onclick: () => { if (picked.has(f)) picked.delete(f); else picked.add(f); draw(); },
+        }, picked.has(f) ? "☑" : "☐", f)) : [h("div", { class: "empty" }, "Keine Dateien in der Medienbibliothek des Ziel-Players.")]));
+      };
+      draw();
+      openModal({
+        title: "Medien hinzufügen",
+        saveLabel: "Hinzufügen",
+        render: () => h("div", {}, h("input", { type: "search", placeholder: "Suchen …", style: "width:100%;margin-bottom:6px", oninput: (e) => { q = e.target.value.toLowerCase(); draw(); } }), listEl2),
+        onSave: async () => {
+          for (const f of [...picked]) {
+            const err = await tryCall("append", { label: f.replace(/\.[^.]+$/, ""), file: f });
+            if (err) return `${f}: ${err}`;
+          }
+          return null;
+        },
       });
+    }
 
-      el.append(labelEl, fireBtn, removeBtn);
-      return { el, labelEl, fireBtn, removeBtn };
+    // ---- Carts: Raster + Verwaltung --------------------------------------
+    const cartBtns = new Map();
+    const renderCarts = () => {
+      const ids = new Set(assets.map((a) => a.id));
+      for (const [id, b] of cartBtns) if (!ids.has(id)) { b.remove(); cartBtns.delete(id); }
+      const active = !!activeCartId;
+      cartBanner.classList.toggle("show", active);
+      if (active) cartBannerLabel.textContent = `CART ON AIR: ${assets.find((a) => a.id === activeCartId)?.label || activeCartId}`;
+      assets.forEach((a) => {
+        let b = cartBtns.get(a.id);
+        if (!b) {
+          b = h("button", { class: "cart-btn", onclick: () => act("cart.fire", { assetId: b.dataset.id }) }, h("span", { class: "ci" }), h("span", { class: "cl" }));
+          b.dataset.id = a.id;
+          cartBtns.set(a.id, b);
+          cartGrid.append(b);
+        }
+        b.children[0].textContent = a.icon || "▶";
+        b.children[1].textContent = a.label;
+        b.style.background = a.color || "";
+        b.style.color = a.color ? "#fff" : "";
+        b.title = `${a.pattern || ""}${a.durationMs > 0 ? ` · ${a.durationMs} ms` : " · manuell (RETURN)"}`;
+        b.disabled = active;
+        b.classList.toggle("firing", a.id === activeCartId);
+      });
     };
 
+    function openCartManager() {
+      const rows = () => assets.map((a) => ({ id: a.id, label: a.label, pattern: a.pattern || "smpte", durationMs: a.durationMs || 0, icon: a.icon || "", color: a.color || "" }));
+      let list = rows();
+      let fresh = { label: "", pattern: "smpte", durationMs: 0, icon: "", color: "" };
+      const box = h("div", {});
+      const patch = (r) => JSON.stringify({ label: r.label, pattern: r.pattern, durationMs: r.durationMs, icon: r.icon, color: r.color });
+      const draw = () => {
+        const mk = (r, isNew) => {
+          const color = h("input", { type: "color", value: r.color || "#4a90d9", oninput: (e) => { r.color = e.target.value; } });
+          const row = h("div", { class: "row", style: "margin-bottom:6px" },
+            bindText(r, "icon", { placeholder: "Icon", style: "width:54px" }), color,
+            bindText(r, "label", { placeholder: "Titel", style: "width:150px" }),
+            bindSelect(r, "pattern", PATTERNS.map((p) => [p, p])),
+            bindNum(r, "durationMs", { style: "width:90px", title: "ms, 0 = manuell (RETURN)" }),
+            isNew
+              ? h("button", { class: "primary", onclick: async () => {
+                  const err = await tryCall("cart.define", { label: r.label || "Cart", pattern: r.pattern, toneFrequency: 0, durationMs: r.durationMs });
+                  if (err) return showBanner(err);
+                  const a = (await getParam("assets")) || [];
+                  const last = a[a.length - 1];
+                  if (last && (r.icon || r.color)) await tryCall("cart.update", { assetId: last.id, patchJson: patch(r) });
+                  assets = (await getParam("assets")) || [];
+                  list = rows(); fresh = { label: "", pattern: "smpte", durationMs: 0, icon: "", color: "" }; draw(); renderCarts();
+                } }, "＋ Anlegen")
+              : [h("button", { onclick: async () => {
+                  const err = await tryCall("cart.update", { assetId: r.id, patchJson: patch(r) });
+                  showBanner(err || `„${r.label}“ gespeichert`, !err);
+                  assets = (await getParam("assets")) || assets; renderCarts();
+                } }, "Speichern"),
+                h("button", { class: "danger", onclick: async () => {
+                  if (!(await confirmDialog(`Cart „${r.label}“ wirklich entfernen?`, "Entfernen"))) return;
+                  const err = await tryCall("cart.remove", { assetId: r.id });
+                  if (err) return showBanner(err);
+                  assets = (await getParam("assets")) || []; list = rows(); draw(); renderCarts();
+                } }, "✕")]);
+          return row;
+        };
+        box.replaceChildren(
+          ...(list.length ? list.map((r) => mk(r, false)) : [h("div", { class: "empty" }, "Noch keine Carts (Blackclip, Standby, …).")]),
+          h("div", { style: "border-top:1px solid var(--bd);margin:8px 0;padding-top:8px;color:var(--mut)" }, "Neuer Cart"),
+          mk(fresh, true));
+      };
+      draw();
+      openModal({ title: "Assets / Carts verwalten", render: () => box });
+    }
+
+    // ---- Poll ------------------------------------------------------------
     const poll = async () => {
       clockEl.textContent = new Date().toLocaleTimeString("de-DE");
-      const [
-        itemsValue,
-        currentItemId,
-        cuedItemId,
-        mode,
-        connected,
-        playheadMs,
-        durationMs,
-        assetsValue,
-        activeCartId,
-        availableNodesValue,
-        targetPlayerALabel,
-        targetPlayerBLabel,
-        targetMixerLabel,
-        targetGraphicsLabel,
-        liveChannel,
-        mediaLibraryValue,
-        availableSourcesValue,
-        channelName,
-        persistenceStatus,
-        scheduleValue,
-        childEventsValue,
-        triggerLogValue,
-      ] = await Promise.all([
-        getParam("items"),
-        getParam("currentItemId"),
-        getParam("cuedItemId"),
-        getParam("mode"),
-        getParam("connected"),
-        getParam("playheadPositionMs"),
-        getParam("currentDurationMs"),
-        getParam("assets"),
-        getParam("activeCartId"),
-        getParam("availableNodes"),
-        getParam("targetPlayerALabel"),
-        getParam("targetPlayerBLabel"),
-        getParam("targetMixerLabel"),
-        getParam("targetGraphicsLabel"),
-        getParam("liveChannel"),
-        getParam("mediaLibrary"),
-        getParam("availableSources"),
-        getParam("channelName"),
-        getParam("persistence"),
-        getParam("schedule"),
-        getParam("childEvents"),
-        getParam("triggerLog"),
-      ]);
-      {
-        const entries = Array.isArray(triggerLogValue) ? triggerLogValue : [];
-        if (entries.length > 0) {
-          triggerLogEl.replaceChildren(
-            ...entries.map((e) => {
-              const line = document.createElement("div");
-              const t = new Date(e.at).toLocaleTimeString();
-              const who = e.direction === "out" ? `→ ${e.target ? JSON.stringify(e.target) : ""}` : `← ${e.origin || "?"}`;
-              line.textContent = `${t} ${e.direction === "out" ? "OUT" : "IN "} ${e.event} ${who} [${e.status}] ${e.detail || ""}`;
-              if (["denied", "failed", "rejected"].includes(e.status)) line.style.color = "#ff8080";
-              return line;
-            }),
-          );
-        }
-      }
-      const items = itemsValue || [];
-      const currentIds = new Set(items.map((it) => it.id));
-      lastItems = items;
+      if (dragging) return;
+      const names = ["items", "currentItemId", "cuedItemId", "mode", "connected", "playheadPositionMs", "currentDurationMs", "assets", "activeCartId",
+        "availableNodes", "targetPlayerALabel", "targetPlayerBLabel", "targetMixerLabel", "targetGraphicsLabel", "targetAudioMixerLabel", "liveChannel", "mediaLibrary",
+        "availableSources", "channelName", "persistence", "schedule", "childEvents", "triggerLog", "channelId", "preflightWindowMin", "defaultFiller"];
+      const v = Object.fromEntries(await Promise.all(names.map(async (n) => [n, await getParam(n)])));
+      if (dragging) return;
+      items = v.items || [];
+      assets = v.assets || [];
+      childRuntime = v.childEvents || [];
+      availableNodes = v.availableNodes || [];
+      mediaLibrary = v.mediaLibrary || [];
+      availableSources = v.availableSources || [];
+      channelId = v.channelId || "";
+      currentItemId = v.currentItemId || "";
+      cuedItemId = v.cuedItemId || "";
+      activeCartId = v.activeCartId || "";
+      durationMs = v.currentDurationMs || 0;
+      playheadMs = v.playheadPositionMs || 0;
+      for (const id of [...selected]) if (!items.some((i) => i.id === id)) selected.delete(id);
 
-      // Kapitel 6 Teil 3 (§6.4 "Countdown zum nächsten Fixtime-Event"):
-      // rein clientseitig aus den ohnehin gepollten Items berechnet, kein
-      // eigener Endpunkt. Vereinfachung gegenüber dem Server: kennt
-      // NICHT, ob ein Item serverseitig schon `fixtime_resolved` ist
-      // (Vor-Cue/gefeuert/übersprungen) — zeigt einfach das
-      // chronologisch nächste `fixtime`-Item, dessen Uhrzeit noch nicht
-      // erreicht ist. Sekundengenau, aktualisiert sich im bestehenden
-      // 1-Sekunden-`poll()`-Takt wie die Uhr selbst.
-      const nowSecs = (() => {
-        const d = new Date();
-        return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
-      })();
-      // Kapitel 27 / P2c: absolute Startzeit (startAt, mit Datum) hat Vorrang vor
-      // dem dateilosen HH:MM:SS; `remain` immer in Sekunden bis zum Ereignis.
+      // Trigger-Protokoll
+      const log = Array.isArray(v.triggerLog) ? v.triggerLog : [];
+      if (log.length) {
+        trLog.replaceChildren(...log.map((e) => {
+          const who = e.direction === "out" ? `→ ${e.target ? JSON.stringify(e.target) : ""}` : `← ${e.origin || "?"}`;
+          return h("div", { style: ["denied", "failed", "rejected"].includes(e.status) ? "color:#ff8080" : "" },
+            `${new Date(e.at).toLocaleTimeString()} ${e.direction === "out" ? "OUT" : "IN "} ${e.event} ${who} [${e.status}] ${e.detail || ""}`);
+        }));
+      }
+
+      // Countdown zum nächsten Fixzeit-Event
       const nowMs = Date.now();
-      const upcoming = items
-        .filter((it) => it.startType === "fixtime" && (it.startAt || it.fixtimeHms))
-        .map((it) => {
-          if (it.startAt) {
-            return { label: it.label, hms: formatLocalStart(it.startAt), remain: Math.floor((Date.parse(it.startAt) - nowMs) / 1000) };
-          }
-          const [h, m, s2] = it.fixtimeHms.split(":").map(Number);
-          return { label: it.label, hms: it.fixtimeHms, remain: h * 3600 + m * 60 + s2 - nowSecs };
-        })
-        .filter((f) => Number.isFinite(f.remain) && f.remain >= 0)
-        .sort((x, y) => x.remain - y.remain);
-      if (upcoming.length > 0) {
-        const next = upcoming[0];
-        const remain = next.remain;
-        // Über eine Stunde als H:MM:SS, sonst M:SS.
-        const hh = Math.floor(remain / 3600);
-        const mm = Math.floor((remain % 3600) / 60);
-        const ss = remain % 60;
-        const countdown = hh > 0
-          ? `${hh}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`
-          : `${mm}:${String(ss).padStart(2, "0")}`;
-        nextFixtimeEl.textContent = `⏰ ${next.hms} „${next.label}“ in ${countdown}`;
-        nextFixtimeEl.style.display = "";
-      } else {
-        nextFixtimeEl.style.display = "none";
-      }
+      const d0 = new Date();
+      const nowSecs = d0.getHours() * 3600 + d0.getMinutes() * 60 + d0.getSeconds();
+      const upcoming = items.filter((it) => it.startType === "fixtime" && (it.startAt || it.fixtimeHms)).map((it) => {
+        if (it.startAt) return { label: it.label, hms: formatLocalStart(it.startAt), remain: Math.floor((Date.parse(it.startAt) - nowMs) / 1000) };
+        const [hh, mm, ss] = it.fixtimeHms.split(":").map(Number);
+        return { label: it.label, hms: it.fixtimeHms, remain: hh * 3600 + mm * 60 + ss - nowSecs };
+      }).filter((f) => Number.isFinite(f.remain) && f.remain >= 0).sort((a, b) => a.remain - b.remain);
+      if (upcoming.length) {
+        const n = upcoming[0];
+        const hh = Math.floor(n.remain / 3600), mm = Math.floor((n.remain % 3600) / 60), ss = n.remain % 60;
+        nextFixEl.textContent = `⏰ ${n.hms} „${n.label}“ in ${hh > 0 ? `${hh}:${String(mm).padStart(2, "0")}` : mm}:${String(ss).padStart(2, "0")}`;
+        nextFixEl.style.display = "";
+      } else nextFixEl.style.display = "none";
 
-      // Rundown-Echtmedien-Folgeschritt: Add-Formular-Selects aus dem
-      // Ziel-Player-Spiegel befüllen.
-      const availableSources = availableSourcesValue || [];
-      buildSimpleOptions(fileSelect, mediaLibraryValue || [], "— Datei wählen —");
-      await refreshLiveSources(availableSources);
-      const liveLabelBySenderId = new Map(availableSources.map((s) => [s.senderId, s.label]));
+      // Plan + Zeitfenster
+      const timeline = items.length ? await fetch(`/api/v1/nodes/${nodeId}/timeline/window?fromIndex=0&count=${items.length}`).then((r) => (r.ok ? r.json() : [])).catch(() => []) : [];
+      timeByIndex = new Map(timeline.map((e) => [e.index, e]));
+      planById = new Map(((v.schedule && v.schedule.entries) || []).map((e) => [e.id, e]));
+      const nw = [...planById.values()].filter((e) => e.warnings && e.warnings.length).length;
+      planWarnEl.textContent = `⚠ ${nw} Plan-Warnung${nw === 1 ? "" : "en"} (Überlappung, Lücke oder unbestimmter Start — Details am ⚠ in der Zeitspalte)`;
+      planWarnEl.style.display = nw ? "" : "none";
 
-      for (const [id, refs] of itemEls) {
-        if (!currentIds.has(id)) {
-          refs.el.remove();
-          itemEls.delete(id);
-        }
-      }
-
-      empty.style.display = items.length === 0 ? "" : "none";
+      // Kopf / Steuerung
       const onAir = !!currentItemId;
-      modeBadge.textContent = onAir ? "ON AIR" : "STANDBY";
-      modeBadge.className = onAir ? "mode-badge onair" : "mode-badge";
+      modeChip.textContent = onAir ? "ON AIR" : "STANDBY";
+      modeChip.className = `chip${onAir ? " onair" : ""}`;
+      connectedChip.textContent = v.connected ? `verbunden (Kanal ${v.liveChannel === "b" ? "B" : "A"} live)` : "nicht verbunden";
+      connectedChip.className = `chip${v.connected ? " ok" : " err"}`;
+      const ptxt = v.persistence || "";
+      persistChip.textContent = v.channelName ? `Channel: ${v.channelName}` : "kein Channel";
+      persistChip.title = ptxt;
+      persistChip.className = `chip${/fehlgeschlagen|Konflikt|nicht lesbar|nicht serialisierbar/.test(ptxt) ? " err" : v.channelName ? " blue" : ""}`;
       takeBtn.disabled = !cuedItemId;
-      // Kapitel 6 Teil 7: zeigt zusätzlich, welcher Kanal gerade live ist
-      // (reine Anzeige — der Kanalwechsel läuft ausschließlich über
-      // take()/advance(), nicht über einen Bedienknopf hier).
-      const liveChannelLabel = liveChannel === "b" ? "B" : "A";
-      connectedEl.textContent = connected
-        ? `verbunden (Kanal ${liveChannelLabel} live)`
-        : "nicht verbunden";
-      connectedEl.className = connected ? "connected ok" : "connected";
-
-      // Kapitel 27 / P1c: Channel-/Persistenz-Anzeige. Fehlerzustände
-      // ("fehlgeschlagen", "Konflikt", "nicht lesbar") rot, laufende
-      // Speicherung blau, kein Channel neutral grau.
-      const persistText = persistenceStatus || "";
-      persistEl.textContent = channelName ? `Channel: ${channelName}` : "kein Channel";
-      persistEl.title = persistText;
-      persistEl.className = /fehlgeschlagen|Konflikt|nicht lesbar|nicht serialisierbar/.test(persistText)
-        ? "persist err"
-        : channelName
-          ? "persist ok"
-          : "persist";
-
-      // Listenansicht-Folgeschritt: Next/Next-Live-Verfügbarkeit
-      // (PIPELINE-CONTROLLER-Parität, `ui.html::updateNextLiveBtn` —
-      // ohne dessen Fix-Zeit-Blockade, s. `do_next_live`-Doku in main.rs:
-      // OMP-Items kennen dieses Konzept noch nicht).
       nextBtn.disabled = items.length === 0;
-      const refId = currentItemId || cuedItemId;
-      const refIdx = refId ? items.findIndex((it) => it.id === refId) : -1;
-      const startFrom = refIdx >= 0 ? refIdx + 1 : 0;
-      const hasAnyLive = items.some((it) => it.senderId);
-      const hasNextLive = items.slice(startFrom).some((it) => it.senderId);
-      nextLiveBtn.style.display = hasAnyLive ? "" : "none";
-      nextLiveBtn.disabled = !hasNextLive;
+      const refIdx = items.findIndex((i) => i.id === (currentItemId || cuedItemId));
+      const hasLive = items.some((i) => i.senderId);
+      nextLiveBtn.style.display = hasLive ? "" : "none";
+      nextLiveBtn.disabled = !items.slice(refIdx >= 0 ? refIdx + 1 : 0).some((i) => i.senderId);
+      if (v.mode && shadow.activeElement !== modeSelect) modeSelect.value = v.mode;
+      progressBar.style.width = durationMs > 0 ? `${Math.min(100, (100 * playheadMs) / durationMs)}%` : "0";
 
-      const availableLabels = availableNodesValue || [];
-      buildTargetOptions(playerALabelSelect, availableLabels, targetPlayerALabel);
-      buildTargetOptions(playerBLabelSelect, availableLabels, targetPlayerBLabel);
-      buildTargetOptions(mixerLabelSelect, availableLabels, targetMixerLabel);
-      buildTargetOptions(graphicsLabelSelect, availableLabels, targetGraphicsLabel);
-      if (shadow.activeElement !== playerALabelSelect) playerALabelSelect.value = targetPlayerALabel || "";
-      if (shadow.activeElement !== playerBLabelSelect) playerBLabelSelect.value = targetPlayerBLabel || "";
-      if (shadow.activeElement !== mixerLabelSelect) mixerLabelSelect.value = targetMixerLabel || "";
-      if (shadow.activeElement !== graphicsLabelSelect) graphicsLabelSelect.value = targetGraphicsLabel || "";
+      fillTargets(selA, availableNodes, v.targetPlayerALabel);
+      fillTargets(selB, availableNodes, v.targetPlayerBLabel);
+      fillTargets(selMix, availableNodes, v.targetMixerLabel);
+      fillTargets(selGfx, availableNodes, v.targetGraphicsLabel);
+      fillTargets(selAud, availableNodes, v.targetAudioMixerLabel);
+      const pw = shadow.getElementById("preflightWin");
+      if (pw && shadow.activeElement !== pw && v.preflightWindowMin !== undefined) pw.value = v.preflightWindowMin;
+      const df = shadow.getElementById("defaultFiller");
+      if (df && shadow.activeElement !== df && v.defaultFiller !== undefined) df.value = v.defaultFiller;
 
-      if (mode) modeSelect.value = mode;
-      progressBar.style.width = durationMs > 0 ? `${Math.min(100, (100 * (playheadMs || 0)) / durationMs)}%` : "0%";
-
-      // C20: nur so viele Einträge anfragen wie tatsächlich gerendert
-      // werden — das eigentliche Fenster.
-      const timeline = await getTimelineWindow(0, items.length);
-      const timeByIndex = new Map(timeline.map((e) => [e.index, e]));
-
-      // Kapitel 27 / P2c: Wanduhr-Plan (UTC) des Nodes — geplanter Start/Ende je
-      // Item samt Warnungen (Überlappung/Lücke/Start unbestimmt).
-      const planById = new Map(((scheduleValue && scheduleValue.entries) || []).map((e) => [e.id, e]));
-      const planWarnings = [...planById.values()].filter((e) => e.warnings && e.warnings.length > 0).length;
-      planWarnEl.textContent = `⚠ ${planWarnings} Plan-Warnung${planWarnings === 1 ? "" : "en"} (Überlappung, Lücke oder unbestimmter Start — Details am ⚠ in der Zeitspalte)`;
-      planWarnEl.style.display = planWarnings > 0 ? "" : "none";
-
-      // JUMP-Ziel-Auswahl aus der aktuellen Liste (nur bei Änderung neu aufbauen).
-      const jumpKey = items.map((it) => `${it.id}:${it.label}`).join("|");
-      if (jumpKey !== jumpSelect.dataset.key) {
-        const keep = jumpSelect.value;
-        jumpSelect.replaceChildren();
-        for (const it of items) {
-          if (it.eventType === "JUMP") continue;
-          const opt = document.createElement("option");
-          opt.value = it.id;
-          opt.textContent = `${items.indexOf(it) + 1}. ${it.label}`;
-          jumpSelect.append(opt);
-        }
-        if ([...jumpSelect.options].some((o) => o.value === keep)) jumpSelect.value = keep;
-        jumpSelect.dataset.key = jumpKey;
-      }
-
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        let refs = itemEls.get(item.id);
-        if (!refs) {
-          refs = createItemElement(item);
-          itemEls.set(item.id, refs);
-          list.append(refs.el);
-        }
-        refs.setItem(item);
-        const isOnair = item.id === currentItemId;
-        const isCued = item.id === cuedItemId;
-
-        refs.numEl.textContent = String(i + 1);
-        refs.iconEl.textContent = sourceIcon(item);
-        refs.titleEl.textContent = item.label;
-        refs.titleEl.title = describeItem(item, liveLabelBySenderId);
-        refs.durEl.textContent = `${(item.durationMs / 1000).toFixed(1)}s`;
-        const t = timeByIndex.get(i);
-        const plan = planById.get(item.id);
-        const relRange = t ? `${formatMs(t.startMs)}–${formatMs(t.endMs)}` : "";
-        // Geplante Wanduhrzeit (lokal) bevorzugt, sonst die relative Zeit ab Listenbeginn.
-        const planStart = plan && plan.start ? formatLocalStart(plan.start) : "";
-        const warn = plan && plan.warnings && plan.warnings.length > 0;
-        refs.timeEl.textContent = (planStart || relRange) + (warn ? " ⚠" : "");
-        refs.timeEl.style.color = warn ? "#e0a030" : "";
-        refs.timeEl.title = [
-          plan && plan.start ? `Geplant: ${formatLocalStart(plan.start)} – ${plan.end ? formatLocalStart(plan.end) : "offen"}${plan.anchored ? " (feste Startzeit)" : ""}` : "",
-          relRange ? `Ab Listenbeginn: ${relRange}` : "",
-          ...(warn ? plan.warnings.map((w2) => `⚠ ${w2}`) : []),
-        ].filter(Boolean).join("\n");
-
-        // Rest+Fortschritt nur für das tatsächlich on-air Item bekannt
-        // (automation führt nur einen globalen Playhead, kein Pro-Item-
-        // Timer) — gleiche Datenquelle wie der globale Fortschrittsbalken
-        // oben (playheadMs/durationMs).
-        if (isOnair && durationMs > 0) {
-          const remMs = Math.max(0, durationMs - (playheadMs || 0));
-          refs.remTxt.textContent = `-${(remMs / 1000).toFixed(1)}s`;
-          refs.remBarInner.style.width = `${Math.min(100, (100 * (playheadMs || 0)) / durationMs)}%`;
-        } else {
-          refs.remTxt.textContent = "";
-          refs.remBarInner.style.width = "0%";
-        }
-
-        // Reorder-Guard (s. `reorderItems`-Doku): Drag nur erlaubt, wenn
-        // nichts on-air ist — `load()` würde sonst den Hauptkanal kurz
-        // schwarz schalten.
-        refs.el.draggable = !onAir;
-        refs.dragEl.title = onAir ? "Reorder während laufender Sendung nicht möglich" : "Ziehen zum Umsortieren";
-
-        const isManualStart = item.startType === "manual";
-        const isFixtimeStart = item.startType === "fixtime";
-        refs.el.className =
-          `pl-row pl-grid-cols${isOnair ? " onair" : isCued ? " cued" : ""}` +
-          `${isManualStart ? " manual-start" : ""}${isFixtimeStart ? " fixtime-start" : ""}`;
-        refs.cueBtn.textContent = isCued ? "Gecued" : "Cue";
-        refs.cueBtn.className = isCued ? "cue-active" : "";
-        refs.cueBtn.disabled = isOnair;
-        refs.removeBtn.disabled = isOnair || isCued;
-        // Kapitel 6 Teil 1/3: ✋ = wartet auf explizites Cue+Take (nimmt am
-        // Auto-Advance nicht teil), ⏰ = feuert selbst zur hinterlegten
-        // Uhrzeit (unabhängig von der Sequenz), ⏭ = normale
-        // Sequenz-Position.
-        if (isFixtimeStart) {
-          refs.startTypeBtn.textContent = "⏰";
-          const fixLabel = item.startAt ? formatLocalStart(item.startAt) : item.fixtimeHms;
-          refs.startTypeBtn.title = fixLabel
-            ? `Fixtime ${fixLabel} — feuert selbst zu diesem Zeitpunkt, unabhängig von der Sequenz. Klicken für Sequenz-Start.`
-            : "Fixtime ohne gültige Uhrzeit — feuert nicht. Klicken für Sequenz-Start.";
-          refs.startTypeBtn.className = "start-type-fixtime";
-        } else {
-          refs.startTypeBtn.textContent = isManualStart ? "✋" : "⏭";
-          refs.startTypeBtn.title = isManualStart
-            ? "Manueller Start — rückt beim Auto-Advance NICHT von selbst vor, klicken für Fixtime-Start"
-            : "Sequenz-Start — rückt beim Auto-Advance normal vor, klicken für manuellen Start";
-          refs.startTypeBtn.className = isManualStart ? "start-type-manual" : "";
-        }
-
-        // Kapitel 6 Teil 2 (§6.4 "Verfügbarkeit (✓/✗)"): `available` fehlt
-        // nur bei einem sehr alten, noch nicht neu gepollten Client-Stand
-        // (`??`-Fallback statt fälschlich "fehlt" zu zeigen).
-        const isAvailable = item.available ?? true;
-        refs.availEl.textContent = isAvailable ? "✓" : "✗";
-        refs.availEl.className = isAvailable ? "pl-avail" : "pl-avail unavailable";
-        refs.availEl.title = isAvailable
-          ? "Quelle verfügbar"
-          : "Quelle nicht verfügbar (Datei fehlt oder Live-Quelle offline) — Take wird verweigert";
-        // Kapitel 27 / P8: Bereitschaft von Asset-Events (READY ✓ / NOT_READY ⏳|✗ / UNKNOWN ?) — der Node stellt
-        // fehlende Medien rechtzeitig bereit; Tooltip nennt Zustand, Fortschritt, Schätzung und die Ausfallrichtlinie.
-        if (item.asset) {
-          const st = item.readinessState || "";
-          const pct = item.readinessProgress > 0 ? ` ${Math.round(item.readinessProgress * 100)} %` : "";
-          const eta = item.readinessEstimateS > 0 ? `, ca. ${Math.ceil(item.readinessEstimateS)} s` : "";
-          const [icon, cls] =
-            item.readiness === "READY" ? ["✓", "pl-avail"]
-            : st === "TRANSFERRING" ? ["⏳", "pl-avail"]
-            : item.readiness === "NOT_READY" ? ["✗", "pl-avail unavailable"]
-            : ["?", "pl-avail"];
-          refs.availEl.textContent = icon + (st === "TRANSFERRING" ? pct : "");
-          refs.availEl.className = cls;
-          refs.availEl.title =
-            `Asset ${item.asset.assetId} — Bereitschaft: ${item.readiness || "UNKNOWN"}${st ? ` (${st}${pct}${eta})` : ""}` +
-            `${item.readinessDetail ? `\n${item.readinessDetail}` : ""}\nBei Nichtverfügbarkeit: ${item.onMissing || "HOLD"}` +
-            `${item.fallbackFile ? ` (Ersatz: ${item.fallbackFile})` : ""}`;
-        }
-
-        // Kapitel 6 Teil 4: ✂ = Cut (Standard), ⇄ = Mix (`crosspoint.
-        // autoTrans` statt `crosspoint.cut` beim Take dieses Items).
-        const isMix = item.transition === "mix";
-        refs.transitionBtn.textContent = isMix ? "⇄" : "✂";
-        refs.transitionBtn.title = isMix
-          ? `Mix${item.transitionRateFrames ? ` (${item.transitionRateFrames} Frames)` : ""} — klicken für Cut`
-          : "Cut — klicken für Mix (Auto-Trans am Mixer)";
-        refs.transitionBtn.className = isMix ? "transition-mix" : "";
-
-        // Kapitel 6 Teil 5: 🎨 + Anzahl statt eines reinen Icons — die
-        // Anzahl ist die einzige "Vorschau" dieses Minimal-Editors, ohne
-        // die Liste selbst aufzuklappen.
-        const childCount = (item.children || []).length;
-        refs.childrenBtn.textContent = childCount > 0 ? `🎨 ${childCount}` : "🎨";
-        // Kapitel 27 / P3: Lebenszyklus der Kinder des laufenden Primary im Tooltip.
-        const childStates = (childEventsValue || [])
-          .filter((c) => c.itemId === item.id)
-          .map((c) => `${c.id}: ${c.state}${c.error ? ` (${c.error})` : ""}`)
-          .join("\n");
-        refs.childrenBtn.title =
-          (childCount > 0
-            ? `${childCount} Child Event(s) — klicken zum Bearbeiten`
-            : "Keine Child Events — klicken zum Hinzufügen") + (childStates ? `\n${childStates}` : "");
-        refs.childrenBtn.className = childCount > 0 ? "has-children" : "";
-
-        // Kapitel 27 / P5: Audio-Schaltfläche nur für Live-Items mit bekannter Quelle.
-        const au = item.audio;
-        if (au) {
-          const res = au.resolution || {};
-          const warn = res.warnings && res.warnings.length > 0;
-          const chosen = res.chosen || (au.capabilities && au.capabilities.length > 0 ? "—" : "kein Audio");
-          refs.audioBtn.style.display = "";
-          const manual = au.intent && au.intent.capability; // ausdrücklich gewählt vs. Auto
-          refs.audioBtn.textContent = `🔊 ${chosen}${manual ? "" : " (auto)"}${warn ? " ⚠" : ""}`;
-          refs.audioBtn.style.color = warn ? "#e0a030" : "";
-          const layoutName = (l) => (typeof l === "string" ? l : l && l.other != null ? `${l.other} Kanäle` : "?");
-          refs.audioBtn.title = [
-            `Audio von ${au.source}`,
-            ...(au.capabilities || []).map((c) => `${c.id === res.chosen ? "● " : "○ "}${c.id} (${layoutName(c.layout)})${c.isDefault ? " [Default]" : ""}`),
-            `Wahl: ${res.via || "none"}`,
-            ...(warn ? res.warnings.map((w2) => `⚠ ${w2}`) : []),
-            "Klick: nächste Capability, nach der letzten wieder Auto",
-          ].join("\n");
-        } else {
-          refs.audioBtn.style.display = "none";
-        }
-      }
-
-      // C18 (ARCHITECTURE.md §24.3): Cart-Liste + aktiv-Banner.
-      const assets = assetsValue || [];
-      const assetIds = new Set(assets.map((a) => a.id));
-      for (const [id, refs] of cartEls) {
-        if (!assetIds.has(id)) {
-          refs.el.remove();
-          cartEls.delete(id);
-        }
-      }
-      cartsEmpty.style.display = assets.length === 0 ? "" : "none";
-      const cartActive = !!activeCartId;
-      activeCartBanner.classList.toggle("shown", cartActive);
-      if (cartActive) {
-        const activeAsset = assets.find((a) => a.id === activeCartId);
-        activeCartLabel.textContent = `CART ON AIR: ${activeAsset ? activeAsset.label : activeCartId}`;
-      }
-      for (const asset of assets) {
-        let refs = cartEls.get(asset.id);
-        if (!refs) {
-          refs = createCartElement(asset);
-          cartEls.set(asset.id, refs);
-          cartList.append(refs.el);
-        }
-        const durationLabel = asset.durationMs > 0 ? `${asset.durationMs}ms` : "manuell";
-        refs.labelEl.textContent = `${asset.label} (${asset.pattern}, ${durationLabel})`;
-        const isFiring = asset.id === activeCartId;
-        refs.fireBtn.disabled = cartActive;
-        refs.fireBtn.textContent = isFiring ? "On Air" : "Fire";
-        refs.removeBtn.disabled = cartActive;
-      }
+      renderList();
+      renderCarts();
     };
 
     poll();
