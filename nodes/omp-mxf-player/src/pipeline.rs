@@ -429,11 +429,44 @@ fn build_empty_branch(
 ) -> Result<Branch, String> {
     let mut elements = Vec::new();
 
-    let vsrc = gst::ElementFactory::make("videotestsrc")
-        .property("is-live", true)
+    // CPU (Befund 2026-10-02): ein MXF-Player ohne Clip brauchte ~78 % eines
+    // Kerns; ein Teil davon war, dass JEDER der zwei Slots dauerhaft ein
+    // 1080p-Schwarzbild neu erzeugte (`videotestsrc`, ~10 % je Slot). Jetzt
+    // wird EIN schwarzes Bild einmal erzeugt (`videotestsrc num-buffers=1`)
+    // und `imagefreeze is-live=true` wiederholt es in Echtzeit — dieselbe
+    // Pufferreferenz, nur neue Zeitstempel (gemessen 10 % → ~1,5 %). Das
+    // Format wird auf v210 festgelegt (= das Ausgabeformat des Players, die
+    // Kette dahinter bleibt Durchreicher). Ohne `imagefreeze` (Plugin fehlt)
+    // der bisherige Live-`videotestsrc`.
+    let (vsrc, vfreeze) = match gst::ElementFactory::make("imagefreeze").property("is-live", true).build() {
+        Ok(freeze) => {
+            let src = gst::ElementFactory::make("videotestsrc")
+                .property("num-buffers", 1i32)
+                .build()
+                .map_err(|e| format!("videotestsrc: {e}"))?;
+            src.set_property_from_str("pattern", EMPTY_PATTERN);
+            (src, Some(freeze))
+        }
+        Err(_) => {
+            let src = gst::ElementFactory::make("videotestsrc")
+                .property("is-live", true)
+                .build()
+                .map_err(|e| format!("videotestsrc: {e}"))?;
+            src.set_property_from_str("pattern", EMPTY_PATTERN);
+            (src, None)
+        }
+    };
+    let vfmt = gst::ElementFactory::make("capsfilter")
+        .property(
+            "caps",
+            gst::Caps::builder("video/x-raw")
+                .field("format", "v210")
+                .field("width", width as i32)
+                .field("height", height as i32)
+                .build(),
+        )
         .build()
-        .map_err(|e| format!("videotestsrc: {e}"))?;
-    vsrc.set_property_from_str("pattern", EMPTY_PATTERN);
+        .map_err(|e| format!("capsfilter(empty video format): {e}"))?;
     let vconvert = gst::ElementFactory::make("videoconvert").build().map_err(|e| format!("videoconvert: {e}"))?;
     let vscale = gst::ElementFactory::make("videoscale").build().map_err(|e| format!("videoscale: {e}"))?;
     let vrate = gst::ElementFactory::make("videorate").build().map_err(|e| format!("videorate: {e}"))?;
@@ -443,18 +476,27 @@ fn build_empty_branch(
         .map_err(|e| format!("capsfilter(video): {e}"))?;
     pipeline
         .add(&vsrc)
+        .and_then(|()| pipeline.add(&vfmt))
         .and_then(|()| pipeline.add(&vconvert))
         .and_then(|()| pipeline.add(&vscale))
         .and_then(|()| pipeline.add(&vrate))
         .and_then(|()| pipeline.add(&vcaps))
         .map_err(|e| format!("add empty video branch: {e}"))?;
-    gst::Element::link_many([&vsrc, &vconvert, &vscale, &vrate, &vcaps])
-        .map_err(|e| format!("link empty video branch: {e}"))?;
+    if let Some(freeze) = &vfreeze {
+        pipeline.add(freeze).map_err(|e| format!("add imagefreeze: {e}"))?;
+        gst::Element::link_many([&vsrc, &vfmt, freeze, &vconvert, &vscale, &vrate, &vcaps])
+            .map_err(|e| format!("link empty video branch: {e}"))?;
+    } else {
+        gst::Element::link_many([&vsrc, &vfmt, &vconvert, &vscale, &vrate, &vcaps])
+            .map_err(|e| format!("link empty video branch: {e}"))?;
+    }
     let video_tail_pad = vcaps.static_pad("src").ok_or("empty video branch: no src pad")?;
     video_tail_pad
         .link(&video_pad)
         .map_err(|e| format!("link empty video branch to isel: {e}"))?;
-    elements.extend([vsrc, vconvert, vscale, vrate, vcaps]);
+    elements.extend([vsrc, vfmt]);
+    elements.extend(vfreeze);
+    elements.extend([vconvert, vscale, vrate, vcaps]);
 
     let mut group_terminals = Vec::with_capacity(group_pads.len());
     for (group, pad) in groups.iter().zip(group_pads.into_iter()) {
@@ -483,7 +525,13 @@ fn build_empty_branch(
         group_terminals.push(Terminal { sink_pad: pad, tail_src_pad: tail_pad });
     }
 
-    for el in &elements {
+    // SENKE → QUELLE (Lehre aus dem Audiomischer, 2026-10-01): wird der Zweig in
+    // eine laufende Pipeline eingehängt, darf die Quelle erst starten, wenn alles
+    // hinter ihr läuft — sonst pusht sie in noch nicht laufende Elemente, geht in
+    // FLUSHING und pausiert still und dauerhaft. Für den Einmal-Schwarzbild-
+    // Zweig (ein einziger Puffer) ist das zwingend: ein verlorener Puffer hieße
+    // dauerhaft kein Bild.
+    for el in elements.iter().rev() {
         el.sync_state_with_parent()
             .map_err(|e| format!("sync_state_with_parent (empty branch): {e}"))?;
     }
