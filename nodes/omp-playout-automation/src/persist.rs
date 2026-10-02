@@ -590,6 +590,7 @@ mod tests {
             duration_ms,
             start_type: StartType::Sequence,
             fixtime_hms: None,
+            start_at_utc_ms: None,
             transition: Transition::Cut,
             transition_rate_frames: None,
             children: vec![GraphicsChild {
@@ -627,6 +628,21 @@ mod tests {
         assert_eq!(back, snap);
         assert_eq!(back.items.len(), 3);
         assert_eq!(back.live_channel, "b");
+    }
+
+    #[test]
+    fn absolute_start_survives_roundtrip_and_old_snapshots_still_load() {
+        let mut m = meta("fix", 1000);
+        m.start_type = StartType::Fixtime;
+        m.start_at_utc_ms = Some(1_790_000_000_000);
+        let back: ItemMeta = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(back.start_at_utc_ms, Some(1_790_000_000_000));
+
+        // Snapshot aus P1b (ohne das Feld) muss weiter lesbar sein (§224).
+        let mut v = serde_json::to_value(meta("old", 1000)).unwrap();
+        v.as_object_mut().unwrap().remove("start_at_utc_ms");
+        let old: ItemMeta = serde_json::from_value(v).unwrap();
+        assert_eq!(old.start_at_utc_ms, None);
     }
 
     #[test]

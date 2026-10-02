@@ -60,6 +60,7 @@
 mod persist;
 mod playlist;
 mod remote;
+mod schedule;
 mod timeline;
 mod uibundle;
 
@@ -260,6 +261,13 @@ struct ItemMeta {
     /// eindeutig "noch nicht scharf" bleibt statt fälschlich auf
     /// Mitternacht zu feuern.
     fixtime_hms: Option<String>,
+    /// Kapitel 27 / P2a: absoluter Startzeitpunkt in UTC-Millisekunden
+    /// (`schedule::parse_start_at`, RFC 3339 mit Offset, E5) — bei
+    /// `StartType::Fixtime` hat er Vorrang vor dem dateilosen
+    /// `fixtime_hms` (Altbestand, §224), ist DST-sicher und kennt das
+    /// Datum (keine Mitternachts-Grenze mehr).
+    #[serde(default)]
+    start_at_utc_ms: Option<i64>,
     /// Kapitel 6 Teil 4: wie DIESES Item auf Sendung genommen wird,
     /// s. `Transition`-Doku.
     transition: Transition,
@@ -271,6 +279,19 @@ struct ItemMeta {
     transition_rate_frames: Option<u32>,
     /// Kapitel 6 Teil 5: Grafik-Kind-Ereignisse, s. `GraphicsChild`-Doku.
     children: Vec<GraphicsChild>,
+}
+
+/// Fachlicher Event-Typ eines Items (Spec §7). Leitet sich aus dem Medium
+/// ab, ist aber ein eigenes Konzept: die Playlist beschreibt Intent, nicht
+/// den Player. `BLACK` = Testmuster „black"; reine Testmuster heißen
+/// `PATTERN`.
+fn event_type(media: &ItemMedia) -> &'static str {
+    match media {
+        ItemMedia::File { .. } => "CLIP",
+        ItemMedia::Live { .. } => "LIVE",
+        ItemMedia::TestPattern { pattern, .. } if pattern == "black" => "BLACK",
+        ItemMedia::TestPattern { .. } => "PATTERN",
+    }
 }
 
 /// Baut `ItemMedia` aus den vom Operator übergebenen Rohargumenten —
@@ -384,6 +405,19 @@ fn fixtime_action(now_secs: i64, target_secs: i64, already: Option<FixtimeResolu
     }
 }
 
+/// Kapitel 27 / P2a: liegt die Startzeit eines Fixtime-Items noch in der
+/// Zukunft? Absolute UTC-Zeit hat Vorrang vor dem dateilosen HH:MM:SS-
+/// Altbestand (der gegen die lokale Wanduhr verglichen wird). Reine Funktion.
+fn fixtime_is_in_future(m: &ItemMeta, now_utc_secs: i64, now_local_secs: i64) -> bool {
+    if m.start_type != StartType::Fixtime {
+        return false;
+    }
+    if let Some(ms) = m.start_at_utc_ms {
+        return ms.div_euclid(1000) > now_utc_secs;
+    }
+    m.fixtime_hms.as_deref().and_then(parse_hms_to_secs).map(|t| t > now_local_secs).unwrap_or(false)
+}
+
 /// Serialisiert ein `ItemMeta` für `get("items")`/`get("assets")` —
 /// dieselbe Feld-Shape, die `omp-channel-player::invoke("load")`
 /// erwartet (jeweils genau eines von `pattern`+`toneFrequency` / `file`
@@ -404,6 +438,10 @@ fn item_meta_to_json(id: &str, m: &ItemMeta) -> Value {
     if let Some(hms) = &m.fixtime_hms {
         v["fixtimeHms"] = serde_json::json!(hms);
     }
+    if let Some(ms) = m.start_at_utc_ms {
+        v["startAt"] = serde_json::json!(schedule::format_start_at(ms));
+    }
+    v["eventType"] = serde_json::json!(event_type(&m.media));
     v["transition"] = serde_json::json!(m.transition);
     if let Some(frames) = m.transition_rate_frames {
         v["transitionRateFrames"] = serde_json::json!(frames);
@@ -765,7 +803,17 @@ impl AutomationStore {
                 .get(&next_id)
                 .map(|m| m.start_type == StartType::Manual)
                 .unwrap_or(false);
-            if is_manual {
+            // Kapitel 27 / P2a: ein Fixtime-Item, dessen Startzeit noch in der
+            // Zukunft liegt, wird NICHT vorzeitig genommen — es wird nur
+            // gecued, der `fixtime_loop` feuert es zur Zeit (vorher nahm
+            // Auto-Advance es sofort, mit absoluten Zeiten wäre das ein
+            // Sendefehler, den der Plan als „Lücke“ ausweist).
+            let waits_for_clock = state
+                .metadata
+                .get(&next_id)
+                .map(|m| fixtime_is_in_future(m, chrono::Utc::now().timestamp(), seconds_since_midnight_local()))
+                .unwrap_or(false);
+            if is_manual || waits_for_clock {
                 // Cued, aber NICHT auf Sendung genommen — sichtbar als
                 // "als Nächstes fällig, wartet auf TAKE" statt einfach
                 // am Listenende zu verharren. Kein Remote-Aufruf: das
@@ -803,6 +851,12 @@ impl AutomationStore {
         let onair_since = Instant::now();
         state.onair_since = Some(onair_since);
         self.schedule_children(&mut state, &item_id, onair_since);
+        // Ein per Sequenz (zu spät/gerade rechtzeitig) genommenes Fixtime-
+        // Item gilt als erledigt — sonst meldete der `fixtime_loop`
+        // fälschlich „verpasst“ für ein Item, das längst läuft.
+        if meta.start_type == StartType::Fixtime {
+            state.fixtime_resolved.insert(item_id.clone(), FixtimeResolution::Fired);
+        }
         state.last_live_item_id = Some(item_id);
         Ok(())
     }
@@ -973,6 +1027,7 @@ impl AutomationStore {
             duration_ms: 0,
             start_type: StartType::default(),
             fixtime_hms: None,
+            start_at_utc_ms: None,
             transition: Transition::default(),
             transition_rate_frames: None,
             children: Vec::new(),
@@ -1041,6 +1096,7 @@ impl AutomationStore {
             duration_ms: duration_ms.unwrap_or(DEFAULT_DURATION_MS),
             start_type: start_type.unwrap_or_default(),
             fixtime_hms: None,
+            start_at_utc_ms: None,
             transition: Transition::default(),
             transition_rate_frames: None,
             children: Vec::new(),
@@ -1079,6 +1135,9 @@ impl AutomationStore {
             start_type: StartType,
             #[serde(rename = "fixtimeHms", default)]
             fixtime_hms: Option<String>,
+            /// Kapitel 27 / P2a: RFC 3339 mit Offset (`2026-10-02T10:00:00+02:00`).
+            #[serde(rename = "startAt", default)]
+            start_at: Option<String>,
             #[serde(rename = "transition", default)]
             transition: Transition,
             #[serde(rename = "transitionRateFrames", default)]
@@ -1088,11 +1147,23 @@ impl AutomationStore {
         }
         let load_items: Vec<LoadItem> = serde_json::from_str(items_json)
             .map_err(|e| format!("itemsJson ungültig: {e}"))?;
+        // Vorab validieren, damit ein ungültiges `startAt` die Liste nicht
+        // halb ersetzt (die Schleife unten ändert den State).
+        let mut start_ats = Vec::with_capacity(load_items.len());
+        for li in &load_items {
+            start_ats.push(match li.start_at.as_deref().filter(|s| !s.is_empty()) {
+                Some(s) => Some(
+                    schedule::parse_start_at(s)
+                        .ok_or_else(|| format!("startAt „{s}\u{201c} ungültig (RFC 3339, z. B. 2026-10-02T10:00:00+02:00)"))?,
+                ),
+                None => None,
+            });
+        }
 
         let mut state = self.state.lock().expect("lock poisoned");
         let mut ids = Vec::with_capacity(load_items.len());
         let mut metadata = HashMap::with_capacity(load_items.len());
-        for li in load_items {
+        for (li, start_at_utc_ms) in load_items.into_iter().zip(start_ats) {
             state.next_item_seq += 1;
             let id = format!("item{}", state.next_item_seq);
             let meta = ItemMeta {
@@ -1106,6 +1177,7 @@ impl AutomationStore {
                 duration_ms: li.duration_ms.unwrap_or(DEFAULT_DURATION_MS),
                 start_type: li.start_type,
                 fixtime_hms: li.fixtime_hms,
+                start_at_utc_ms,
                 transition: li.transition,
                 transition_rate_frames: li.transition_rate_frames,
                 children: li.children,
@@ -1210,10 +1282,12 @@ impl AutomationStore {
         item_id: &str,
         start_type: StartType,
         fixtime_hms: Option<String>,
+        start_at_utc_ms: Option<i64>,
     ) -> Result<(), String> {
         let mut state = self.state.lock().expect("lock poisoned");
-        let resolved_fixtime = if start_type == StartType::Fixtime {
-            let hms = fixtime_hms.ok_or("fixtimeHms fehlt (Format HH:MM:SS)".to_string())?;
+        // `startAt` (absolut, UTC) hat Vorrang vor dem dateilosen `fixtimeHms`.
+        let resolved_fixtime = if start_type == StartType::Fixtime && start_at_utc_ms.is_none() {
+            let hms = fixtime_hms.ok_or("startAt (RFC 3339) oder fixtimeHms (HH:MM:SS) fehlt".to_string())?;
             if parse_hms_to_secs(&hms).is_none() {
                 return Err(format!("fixtimeHms „{hms}\u{201c} ungültig (Format HH:MM:SS)"));
             }
@@ -1221,10 +1295,12 @@ impl AutomationStore {
         } else {
             None
         };
+        let start_at_utc_ms = if start_type == StartType::Fixtime { start_at_utc_ms } else { None };
         match state.metadata.get_mut(item_id) {
             Some(meta) => {
                 meta.start_type = start_type;
                 meta.fixtime_hms = resolved_fixtime;
+                meta.start_at_utc_ms = start_at_utc_ms;
                 // Ein manueller Rückstufungs-/Neuansetzungs-Wunsch des
                 // Operators soll sofort wieder feuern dürfen, nicht an
                 // einem alten Resolved-Zustand von vorher hängen bleiben.
@@ -1310,6 +1386,7 @@ impl AutomationStore {
                 // auch für `transition`.
                 start_type: StartType::default(),
                 fixtime_hms: None,
+            start_at_utc_ms: None,
                 transition: Transition::default(),
                 transition_rate_frames: None,
                 children: Vec::new(),
@@ -1692,6 +1769,14 @@ impl ParamStore for AutomationStore {
             // Kapitel 6 Teil 5 — optional, s. `target_graphics_label`-Doku.
             // Kapitel 27 / P1b: Anbindung an die Domäne `playout` (s.
             // `persist.rs`) — reine Anzeige.
+            // Kapitel 27 / P2a: Wanduhr-Plan (UTC) mit Warnungen, s. `schedule.rs`.
+            ParamSpec {
+                name: "schedule".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
             ParamSpec {
                 name: "channelId".to_string(),
                 kind: ParamType::String,
@@ -1874,6 +1959,12 @@ impl ParamStore for AutomationStore {
                         name: "fixtimeHms".to_string(),
                         kind: ParamType::String,
                     },
+                    // Kapitel 27 / P2a: absoluter Start (RFC 3339 mit Offset),
+                    // hat Vorrang vor fixtimeHms.
+                    MethodArg {
+                        name: "startAt".to_string(),
+                        kind: ParamType::String,
+                    },
                 ],
             },
             // Kapitel 6 Teil 4: ebenfalls reine lokale Metadaten-Änderung
@@ -2002,6 +2093,7 @@ impl ParamStore for AutomationStore {
             "targetPlayerBLabel" => Some(serde_json::json!(state.target_player_b_label)),
             "targetMixerLabel" => Some(serde_json::json!(state.target_mixer_label)),
             "targetGraphicsLabel" => Some(serde_json::json!(state.target_graphics_label)),
+            "schedule" => Some(schedule_json(&state, chrono::Utc::now().timestamp_millis())),
             "channelId" => Some(serde_json::json!(self.persistence.channel_id())),
             "channelName" => Some(serde_json::json!(self.persistence.channel_name())),
             "persistence" => Some(serde_json::json!(self.persistence.status())),
@@ -2132,9 +2224,20 @@ impl ParamStore for AutomationStore {
             "setStartType" => {
                 let item_id = args.get("itemId").and_then(Value::as_str);
                 let start_type = args.get("startType").and_then(Value::as_str).and_then(StartType::parse);
-                let fixtime_hms = args.get("fixtimeHms").and_then(Value::as_str).map(str::to_string);
+                let fixtime_hms = args.get("fixtimeHms").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+                let start_at = match args.get("startAt").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                    Some(s) => match schedule::parse_start_at(s) {
+                        Some(ms) => Some(ms),
+                        None => {
+                            return Err(InvokeError::Message(format!(
+                                "startAt „{s}\u{201c} ungültig (RFC 3339, z. B. 2026-10-02T10:00:00+02:00)"
+                            )));
+                        }
+                    },
+                    None => None,
+                };
                 match (item_id, start_type) {
-                    (Some(id), Some(st)) => self.do_set_start_type(id, st, fixtime_hms),
+                    (Some(id), Some(st)) => self.do_set_start_type(id, st, fixtime_hms, start_at),
                     (None, _) => Err("itemId fehlt".to_string()),
                     (_, None) => Err("startType fehlt oder ungültig (sequence|manual|fixtime)".to_string()),
                 }
@@ -2510,6 +2613,7 @@ async fn fixtime_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender
     loop {
         interval.tick().await;
         let now_secs = seconds_since_midnight_local();
+        let now_utc_secs = chrono::Utc::now().timestamp();
 
         // Entscheidungs-Schnappschuss bei kurz gehaltenem Lock — keine
         // Fernaufrufe/`spawn_blocking`s, während die Sperre hält (gleiches
@@ -2524,11 +2628,17 @@ async fn fixtime_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender
                 if meta.start_type != StartType::Fixtime || !live_ids.contains(id) {
                     continue;
                 }
-                let Some(target_secs) = meta.fixtime_hms.as_deref().and_then(parse_hms_to_secs) else {
+                // P2a: absolute UTC-Zeit (Datum, DST-sicher) hat Vorrang;
+                // sonst der dateilose HH:MM:SS-Altbestand gegen die lokale Uhr.
+                let (now_cmp, target_secs) = if let Some(ms) = meta.start_at_utc_ms {
+                    (now_utc_secs, ms.div_euclid(1000))
+                } else if let Some(t) = meta.fixtime_hms.as_deref().and_then(parse_hms_to_secs) {
+                    (now_secs, t)
+                } else {
                     continue;
                 };
                 let already = state.fixtime_resolved.get(id).copied();
-                match fixtime_action(now_secs, target_secs, already) {
+                match fixtime_action(now_cmp, target_secs, already) {
                     FixtimeAction::None => {}
                     FixtimeAction::PreCue => precue.push(id.clone()),
                     FixtimeAction::Fire => fire.push(id.clone()),
@@ -2570,11 +2680,15 @@ async fn fixtime_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender
             // Item-ID + Fixtime + UTC-Datum.
             let exec_key = {
                 let state = store.state.lock().expect("lock poisoned");
-                format!(
-                    "fixtime:{id}:{}:{}",
-                    state.metadata.get(&id).and_then(|m| m.fixtime_hms.clone()).unwrap_or_default(),
-                    chrono::Utc::now().format("%Y-%m-%d")
-                )
+                match state.metadata.get(&id).and_then(|m| m.start_at_utc_ms) {
+                    // Absolut: der Zeitpunkt selbst ist der Schlüssel (kein Datum nötig).
+                    Some(ms) => format!("fixtime:{id}:at:{ms}"),
+                    None => format!(
+                        "fixtime:{id}:{}:{}",
+                        state.metadata.get(&id).and_then(|m| m.fixtime_hms.clone()).unwrap_or_default(),
+                        chrono::Utc::now().format("%Y-%m-%d")
+                    ),
+                }
             };
             let store3 = store.clone();
             let (claim, warn) =
@@ -2702,6 +2816,58 @@ async fn graphics_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSende
             }
         }
     }
+}
+
+/// Wanduhr-Plan (UTC) der Hauptplaylist ab dem aktuellen Item: Basis ist der
+/// tatsächliche On-Air-Start des laufenden Items (sonst „jetzt"). Begrenzt auf
+/// die nächsten `SCHEDULE_MAX_ENTRIES` Einträge (Spec §229: keine volle
+/// Neuberechnung großer Listen bei jedem UI-Poll).
+const SCHEDULE_MAX_ENTRIES: usize = 200;
+const SCHEDULE_PREROLL_MS: i64 = FIXTIME_PRECUE_SECS * 1000;
+
+fn schedule_json(state: &AutomationState, now_utc_ms: i64) -> Value {
+    let from = state.playlist.current_index().unwrap_or(0);
+    let base = match (state.playlist.on_air(), state.onair_since) {
+        (true, Some(since)) => now_utc_ms - since.elapsed().as_millis() as i64,
+        _ => now_utc_ms,
+    };
+    let inputs: Vec<schedule::PlanInput> = state
+        .playlist
+        .items()
+        .iter()
+        .skip(from)
+        .take(SCHEDULE_MAX_ENTRIES)
+        .filter_map(|id| {
+            state.metadata.get(id).map(|m| schedule::PlanInput {
+                id: id.clone(),
+                duration_ms: m.duration_ms,
+                anchor_utc_ms: if m.start_type == StartType::Fixtime { m.start_at_utc_ms } else { None },
+                manual: m.start_type == StartType::Manual,
+            })
+        })
+        .collect();
+    let entries = schedule::plan(&inputs, base);
+    let queue = schedule::event_queue(&entries, SCHEDULE_PREROLL_MS);
+    serde_json::json!({
+        "generatedAt": schedule::format_start_at(now_utc_ms),
+        "entries": entries.iter().map(|e| serde_json::json!({
+            "id": e.id,
+            "eventType": state.metadata.get(&e.id).map(|m| event_type(&m.media)).unwrap_or(""),
+            "start": e.start_ms.map(schedule::format_start_at),
+            "end": e.end_ms.map(schedule::format_start_at),
+            "anchored": e.anchored,
+            "warnings": e.warnings,
+        })).collect::<Vec<_>>(),
+        "queue": queue.iter().map(|a| serde_json::json!({
+            "at": schedule::format_start_at(a.at_ms),
+            "action": match a.kind {
+                schedule::ActionKind::End => "end",
+                schedule::ActionKind::Cue => "cue",
+                schedule::ActionKind::Take => "take",
+            },
+            "id": a.id,
+        })).collect::<Vec<_>>(),
+    })
 }
 
 fn env_or(key: &str, fallback: &str) -> String {
@@ -2859,6 +3025,7 @@ mod availability_tests {
             duration_ms: 1000,
             start_type: StartType::Sequence,
             fixtime_hms: None,
+            start_at_utc_ms: None,
             transition: Transition::Cut,
             transition_rate_frames: None,
             children: Vec::new(),
@@ -2872,6 +3039,7 @@ mod availability_tests {
             duration_ms: 1000,
             start_type: StartType::Sequence,
             fixtime_hms: None,
+            start_at_utc_ms: None,
             transition: Transition::Cut,
             transition_rate_frames: None,
             children: Vec::new(),
@@ -2885,6 +3053,7 @@ mod availability_tests {
             duration_ms: 1000,
             start_type: StartType::Sequence,
             fixtime_hms: None,
+            start_at_utc_ms: None,
             transition: Transition::Cut,
             transition_rate_frames: None,
             children: Vec::new(),
@@ -2981,6 +3150,54 @@ mod fixtime_tests {
             fixtime_action(target + 1000, target, Some(FixtimeResolution::Skipped)),
             FixtimeAction::None
         );
+    }
+}
+
+// Kapitel 27 / P2a: Auto-Advance darf ein Fixtime-Item nicht vor seiner Zeit nehmen.
+#[cfg(test)]
+mod fixtime_wait_tests {
+    use super::*;
+
+    fn fix(start_at_utc_ms: Option<i64>, hms: Option<&str>) -> ItemMeta {
+        ItemMeta {
+            label: "F".to_string(),
+            media: ItemMedia::TestPattern { pattern: "smpte".to_string(), tone_frequency: 0.0 },
+            duration_ms: 1000,
+            start_type: StartType::Fixtime,
+            fixtime_hms: hms.map(str::to_string),
+            start_at_utc_ms,
+            transition: Transition::Cut,
+            transition_rate_frames: None,
+            children: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn absolute_future_waits_and_past_does_not() {
+        let now = 1_000_000;
+        assert!(fixtime_is_in_future(&fix(Some((now + 60) * 1000), None), now, 0));
+        assert!(!fixtime_is_in_future(&fix(Some((now - 60) * 1000), None), now, 0));
+        assert!(!fixtime_is_in_future(&fix(Some(now * 1000), None), now, 0), "exactly now = due, not future");
+    }
+
+    #[test]
+    fn absolute_time_wins_over_legacy_hms() {
+        // Altes HH:MM:SS läge in der Zukunft, die absolute Zeit ist aber vorbei.
+        assert!(!fixtime_is_in_future(&fix(Some(1000), Some("23:59:59")), 5000, 100));
+    }
+
+    #[test]
+    fn legacy_hms_compares_against_local_clock() {
+        assert!(fixtime_is_in_future(&fix(None, Some("12:00:00")), 0, 11 * 3600));
+        assert!(!fixtime_is_in_future(&fix(None, Some("12:00:00")), 0, 13 * 3600));
+        assert!(!fixtime_is_in_future(&fix(None, None), 0, 0), "fixtime without any time never waits");
+    }
+
+    #[test]
+    fn non_fixtime_items_never_wait() {
+        let mut m = fix(Some(i64::MAX / 2), None);
+        m.start_type = StartType::Sequence;
+        assert!(!fixtime_is_in_future(&m, 0, 0));
     }
 }
 
