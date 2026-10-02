@@ -41,6 +41,9 @@ const (
 	StepTypeEventTrigger  StepType = "event_trigger"
 	StepTypeSubworkflow   StepType = "subworkflow"
 	StepTypeCompensation  StepType = "compensation"
+	// StepTypeMaterialize (Kapitel 27 / P8): bringt ein Asset-Medium in das Medienverzeichnis eines
+	// Players (Eingabe: materialize.Spec als Execution-Input); Executor: internal/materialize.
+	StepTypeMaterialize StepType = "materialize"
 )
 
 // RetryPolicy konfiguriert Fehlerstrategie eines Schritts (A4). Backoff

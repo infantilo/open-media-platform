@@ -762,6 +762,11 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 		mux.HandleFunc("GET /api/v1/playout/channels/{id}/state", g.requireAuth(handleGetPlayoutState(options.playout, authzStore, options.playoutRoles)))
 		mux.HandleFunc("PUT /api/v1/playout/channels/{id}/state", g.requireAuth(handlePutPlayoutState(options.playout, authzStore, options.playoutRoles)))
 		mux.HandleFunc("POST /api/v1/playout/channels/{id}/executions", g.requireAuth(handleRecordPlayoutExecution(options.playout, authzStore, options.playoutRoles)))
+		// Kapitel 27 / P8: Medien-Preflight und Materialisierung.
+		if options.preflight != nil {
+			mux.HandleFunc("POST /api/v1/playout/channels/{id}/preflight", g.requireAuth(handlePlayoutPreflight(options.preflight, options.playout, authzStore, options.playoutRoles, launcherSvc, options.nodeValues)))
+			mux.HandleFunc("POST /api/v1/playout/channels/{id}/materialize", g.requireAuth(handlePlayoutMaterialize(options.preflight, options.playout, authzStore, options.playoutRoles, launcherSvc, options.nodeValues, options.domainAudit)))
+		}
 		// Kapitel 27 / P7: Channel-Trigger (vermittelt, berechtigt, protokolliert).
 		if options.triggerRouter != nil && options.triggerStore != nil {
 			mux.HandleFunc("POST /api/v1/playout/channels/{id}/triggers", g.requireAuth(handleSendChannelTrigger(options.triggerRouter, options.playout, authzStore, options.playoutRoles)))

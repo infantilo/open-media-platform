@@ -67,7 +67,7 @@ func (o optLauncher) NodeOptions(t string) []nodeoptions.Option {
 		return nil
 	}
 	return []nodeoptions.Option{
-		{Key: "OMP_MEDIA_DIR", Label: "Medien", Type: nodeoptions.TypePath, PathKind: nodeoptions.PathDir, MustExist: true},
+		{Key: "OMP_MEDIA_DIR", Label: "Medien", Type: nodeoptions.TypePath, PathKind: nodeoptions.PathDir, MustExist: true, Default: "data/media"},
 		{Key: "OMP_WIDTH", Label: "Breite", Type: nodeoptions.TypeInt},
 	}
 }

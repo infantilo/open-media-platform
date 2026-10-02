@@ -46,6 +46,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/locations"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/materialize"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeoptions"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeversions"
@@ -846,6 +847,14 @@ func main() {
 	// MediaFunction/ServiceCall brauchen keine zusätzliche Sicherheits-
 	// entscheidung (HTTP-Client + registry.Store genügen) — anders als
 	// Script (s. u.), daher immer registriert.
+	// Kapitel 27 / P8: Materialisierung als Prozess-Schritt (Playout-Preflight).
+	var matObjects materialize.ObjectBackends
+	if storageBackendStore != nil {
+		matObjects = storageBackendStore
+	}
+	matManager := materialize.NewManager(assetStore, matObjects)
+	processEngine.Register(process.StepTypeMaterialize, materialize.Executor{Manager: matManager})
+	preflightSvc := materialize.Preflight{Manager: matManager, Starter: &materialize.Starter{Store: processStore, Engine: processEngine}}
 	processEngine.Register(process.StepTypeServiceCall, process.NewServiceCallExecutor(nodeHTTPClient))
 	processEngine.Register(process.StepTypeMediaFunction, process.NewMediaFunctionExecutor(process.NewRegistryNodeResolver(store), nodeHTTPClient))
 	// Script (Aufgaben-Zusatzwunsch "Datei-Workflows nach Möglichkeit auf
@@ -972,7 +981,7 @@ func main() {
 	}
 	go runWhileLeader(ctx, clusterNode, triggerRouter.Run)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithPlayout(playoutStore, workflowSvc), httpapi.WithChannelTriggers(triggerRouter, triggerStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)))
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithPlayout(playoutStore, workflowSvc), httpapi.WithChannelTriggers(triggerRouter, triggerStore), httpapi.WithPreflight(preflightSvc), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)))
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

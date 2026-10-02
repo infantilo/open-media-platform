@@ -43,6 +43,7 @@ type handlerOptions struct {
 	nodeValues      NodeOptionValues
 	locations       LocationStore
 	triggerRouter   ChannelTriggerService
+	preflight       PreflightService
 	triggerStore    ChannelTriggerStore
 	systemSettings  SystemSettingsStore
 	startupSkipped  []string
