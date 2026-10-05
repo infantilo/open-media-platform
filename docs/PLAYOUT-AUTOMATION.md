@@ -174,6 +174,29 @@ die Audioquelle **desselben Kontexts** gewählt, Konflikte (zwei Kanäle, eine Q
 nicht erfüllbare Erwartungen lassen den Kanal unverändert und werden gemeldet; ein
 Handeingriff am Kanal pinnt ihn (Parameter `routing`/`mixState.routing`).
 
+## 7a. Dynamische Audio-Ausgabe des Kanal-Players (Kapitel 27 / A3)
+
+Der `omp-channel-player` hat nicht mehr einen festen Stereo-Ausgang, sondern **einen
+MXL-Audio-Sender je Zielgruppe** des Ausgabeprofils (Standard: Programmton, Hörfilm/AD,
+Originalton, Dolby E, 5.1 diskret). Konfiguration, Regeln und Vorlagen siehe
+`docs/ENTWURF-AUDIO-REGELN.md`; sie liegen als ein Dokument im Orchestrator
+(`GET/PUT /api/v1/audio-rules`, `GET /api/v1/audio-rules/default`). Der Node lädt es beim
+Start und fällt ohne erreichbaren Orchestrator auf die eingebauten Standardwerte zurück.
+
+- **Sender:** Der erste Sender heißt wie bisher „<Node> Audio“, die übrigen „<Node> Audio
+  <Gruppenname>“. Die Gruppen-Tags stehen als NMOS-Tag `urn:x-omp:tags` am Sender.
+  Änderungen an Anzahl/Aufbau der Gruppen wirken nach einem Neustart der Instanz.
+- **Zuordnung je Event:** `load` nimmt das Argument `audioMapping` (ID einer Vorlage, z. B.
+  `stereo-dolbye-hoerfilm`). Ohne Angabe gilt für MXF die Vorlage `stereo`, sonst der
+  Programmton der Quelle (Live, Testton, Standbild, generische Datei).
+- **Ersatzregeln:** Fehlt eine verlangte Spur, greifen die Regeln des Dokuments (Standard:
+  Programmton aus 5.1 per Downmix, 5.1 per Upmix aus dem Stereo-Programmton). Ohne passende
+  Regel bleibt die Gruppe still, mit Warnung.
+- **Parameter:** `audioPlan` (zuletzt aufgelöster Plan mit Matrizen, Ersatzregel und
+  Warnungen), `audioGroups`, `audioMappings`.
+- **Noch nicht enthalten:** Verarbeitungsschritte wie Loudness oder „Klare Sprache“ werden
+  gemeldet, aber noch nicht ausgeführt (Schritte A6/A7).
+
 ## 8. Asset-Preflight und Materialisierung
 
 `preflight_loop` (alle 5 s, asynchron zum Playout-Takt) prüft die anstehenden Events

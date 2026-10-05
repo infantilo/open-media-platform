@@ -44,7 +44,11 @@ pub(crate) fn group(id: &str, label: &str, layout: Layout, tags: &[&str]) -> Tar
 pub fn default_profile() -> OutputProfile {
     OutputProfile {
         groups: vec![
-            group("pt", "Programmton", Layout::Stereo, &["role:pt"]),
+            // Ohne Zuordnung (Live, Testbild, generische Datei): der Programmton der Quelle.
+            TargetGroup {
+                default_source: Some(SourceSpec { select: Some("role:pt".to_string()), ..Default::default() }),
+                ..group("pt", "Programmton", Layout::Stereo, &["role:pt"])
+            },
             group("ad", "Hörfilm/AD", Layout::Stereo, &["role:ad"]),
             group("ot", "Originalton", Layout::Stereo, &["role:ot"]),
             // Dolby E wird als Bitstrom in PCM getragen: nur 1:1-Auswahl.
@@ -108,7 +112,6 @@ pub fn default_rules() -> RuleSet {
                 then: vec![
                     select("layout:5.1", None),
                     select("role:pt AND layout:stereo", Some("upmix51")),
-                    Action { silence: true, warn: Some("kein 5.1-Ton und kein Stereo-Programmton, Gruppe bleibt still".to_string()), ..Default::default() },
                 ],
             },
         ],

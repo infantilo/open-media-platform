@@ -42,10 +42,8 @@ fn try_spec(group: &TargetGroup, spec: &SourceSpec, tracks: &[SourceTrack], ncol
         None
     };
     let mut selected: Vec<Option<usize>> = Vec::new();
-    let truncate_ok;
     match (&spec.tracks, &spec.select) {
         (Some(list), None) => {
-            truncate_ok = false;
             for &n in list {
                 if n == 0 {
                     selected.push(None);
@@ -57,7 +55,6 @@ fn try_spec(group: &TargetGroup, spec: &SourceSpec, tracks: &[SourceTrack], ncol
             }
         }
         (None, Some(expr)) => {
-            truncate_ok = true;
             let e = parse(expr)?;
             let matching: Vec<&SourceTrack> = tracks.iter().filter(|t| e.matches(&t.all_tags())).collect();
             if matching.is_empty() {
@@ -90,9 +87,6 @@ fn try_spec(group: &TargetGroup, spec: &SourceSpec, tracks: &[SourceTrack], ncol
     let via = spec.via.as_deref().unwrap_or("auto");
     if !processors::MATRIX_PROCESSORS.contains(&via) {
         return Err(format!("unbekannter Prozessor '{via}'"));
-    }
-    if truncate_ok && via == "auto" && selected.len() > dst {
-        selected.truncate(dst);
     }
     let m = selected.len();
     let coeffs = processors::matrix_for(via, m, dst).ok_or_else(|| format!("Prozessor '{via}' passt nicht zu {m} → {dst} Kanälen"))?;
@@ -458,7 +452,9 @@ mod tests {
 
     #[test]
     fn group_without_any_spec_is_silent_and_quiet() {
-        let plan = resolve(&default_profile(), &mono_tracks(8), None, &RuleSet::default());
+        let mut profile = default_profile();
+        profile.groups.iter_mut().for_each(|g| g.default_source = None);
+        let plan = resolve(&profile, &mono_tracks(8), None, &RuleSet::default());
         assert!(plan.groups.iter().all(|g| g.silent) && plan.warnings.is_empty());
     }
 

@@ -51,7 +51,9 @@ use omp_mediaio::mxl::{GateStats, MxlAudioInput, MxlAudioOutput, MxlContext, Mxl
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-use crate::presets;
+use omp_audio_rules::{AudioPlan, Mapping, SourceKind};
+
+use crate::audio::{self, AudioCtx, Distributor};
 
 pub const DEFAULT_WIDTH: u32 = 1920;
 pub const DEFAULT_HEIGHT: u32 = 1080;
@@ -64,17 +66,12 @@ pub const CHANNELS: u32 = 2;
 /// still"-Fallback wie `omp-player`s `EMPTY_PATTERN`/`EMPTY_TONE_FREQ`.
 pub const EMPTY_PATTERN: &str = "black";
 const EMPTY_TONE_FREQ: f64 = 0.0;
-/// Programmgruppe, die dieser Node aus einer MXF-Datei ausspielt — dieser
-/// Node hat (anders als `omp-mxf-player[-direct]`) nur EINEN Audio-
-/// Sender, s. Moduldoku. "pt"/"stereo" ist derselbe Fallback wie
-/// `omp-mxf-player-direct`s eigener Default.
-const MXF_GROUP_ID: &str = "pt";
-const MXF_PRESET_ID: &str = "stereo";
 
 pub struct Config {
     pub domain: String,
     pub video_flow_id: String,
-    pub audio_flow_id: String,
+    /// Dynamische Audio-Zielgruppen (je Gruppe ein MXL-Audio-Flow), s. `audio.rs`.
+    pub audio: Arc<AudioCtx>,
     pub label: String,
     pub width: u32,
     pub height: u32,
@@ -122,6 +119,9 @@ pub struct Item {
     /// lässt `durationMs` bei `0`, bis der Positions-/Dauer-Poll-Tick
     /// (nur MXF/generische Datei, s. `run()`) einen echten Wert liefert.
     pub duration_hint_ms: Option<i64>,
+    /// Audio-Zuordnung (ID einer Vorlage aus den Audio-Einstellungen); `None` =
+    /// Standard (MXF: `audio::DEFAULT_MXF_MAPPING`, sonst Programmton der Quelle).
+    pub audio_mapping: Option<String>,
 }
 
 pub enum Event {
@@ -159,9 +159,18 @@ pub struct PipelineHandle {
     shared: Arc<Mutex<SharedState>>,
     position_ms: Arc<AtomicI64>,
     duration_ms: Arc<AtomicI64>,
+    /// Zuletzt aufgelöster Audio-Plan (JSON im Parameter `audioPlan`).
+    audio_plan: Arc<Mutex<Option<AudioPlan>>>,
 }
 
 impl PipelineHandle {
+    pub fn audio_plan_json(&self) -> serde_json::Value {
+        match &*self.audio_plan.lock().expect("lock poisoned") {
+            Some(p) => serde_json::to_value(p).unwrap_or(serde_json::Value::Null),
+            None => serde_json::Value::Null,
+        }
+    }
+
     /// "media-ready" (ARCHITECTURE.md §5 Punkt 6) — Video- UND
     /// Audio-Ausgang müssen jeweils mindestens einmal geflossen sein.
     pub fn media_ready(&self) -> bool {
@@ -218,12 +227,6 @@ fn audio_caps() -> gst::Caps {
         .field("channels", CHANNELS as i32)
         .field("layout", "interleaved")
         .build()
-}
-
-/// S. `omp-mxf-player-direct/src/pipeline.rs`s gleichnamige Funktion —
-/// wortgleich übernommen (reine Werteumformung).
-fn matrix_to_gst_array(matrix: &[Vec<f64>]) -> gst::Array {
-    gst::Array::new(matrix.iter().map(|row| gst::Array::new(row.iter().copied())))
 }
 
 /// `gst::Element::set_property_from_str` panikt INTERN (kein `Result`,
@@ -439,7 +442,7 @@ fn build_image_file(pipeline: &gst::Pipeline, uri: &str, width: u32, height: u32
 /// default_settings()`-Gruppen — dieser Node hat nur einen Audio-Sender,
 /// s. Moduldoku. Rückgabe: (`mxfdemux`-Element für Positions-/Dauer-
 /// Query, Video-Tail, Audio-Tail).
-fn build_mxf_file(pipeline: &gst::Pipeline, path: &str, width: u32, height: u32) -> Result<(gst::Element, gst::Element, gst::Element), String> {
+fn build_mxf_file(pipeline: &gst::Pipeline, path: &str, width: u32, height: u32, dist: Arc<Distributor>, mapping: Option<Mapping>) -> Result<(gst::Element, gst::Element, gst::Element), String> {
     let filesrc = gst::ElementFactory::make("filesrc")
         .property("location", path)
         .build()
@@ -482,24 +485,21 @@ fn build_mxf_file(pipeline: &gst::Pipeline, path: &str, width: u32, height: u32)
 
     let interleave = gst::ElementFactory::make("interleave").build().map_err(|e| format!("interleave: {e}"))?;
     let aconvert = gst::ElementFactory::make("audioconvert").build().map_err(|e| format!("audioconvert(bridge): {e}"))?;
-    let matrix = gst::ElementFactory::make("audiomixmatrix").build().map_err(|e| format!("audiomixmatrix: {e}"))?;
-    // Reihenfolge kritisch (s. omp-mxf-player-direct-Vorbild): erst
-    // bauen, dann sequenziell setzen, sonst validiert audiomixmatrix die
-    // Matrixform gegen die (0/0)-Default-Werte.
-    matrix.set_property("out-channels", CHANNELS);
-    matrix.set_property("in-channels", 1u32);
-    matrix.set_property("matrix", matrix_to_gst_array(&vec![vec![0.0f64; 1]; CHANNELS as usize]));
+    // Alle Spuren bleiben als interleaved F32LE-Strom (N Kanäle) erhalten; die
+    // Zuordnung zu den Zielgruppen macht der Verteiler (`audio::Distributor`).
     let acaps = gst::ElementFactory::make("capsfilter")
-        .property("caps", audio_caps())
+        .property(
+            "caps",
+            gst::Caps::builder("audio/x-raw").field("format", "F32LE").field("rate", SAMPLE_RATE as i32).field("layout", "interleaved").build(),
+        )
         .build()
         .map_err(|e| format!("capsfilter(audio): {e}"))?;
     pipeline
         .add(&interleave)
         .and_then(|()| pipeline.add(&aconvert))
-        .and_then(|()| pipeline.add(&matrix))
         .and_then(|()| pipeline.add(&acaps))
         .map_err(|e| format!("add audio backbone: {e}"))?;
-    gst::Element::link_many([&interleave, &aconvert, &matrix, &acaps]).map_err(|e| format!("link audio backbone: {e}"))?;
+    gst::Element::link_many([&interleave, &aconvert, &acaps]).map_err(|e| format!("link audio backbone: {e}"))?;
 
     let pending: Arc<Mutex<Vec<(u32, gst::Pad)>>> = Arc::new(Mutex::new(Vec::new()));
     let pending_pad_added = pending.clone();
@@ -524,10 +524,7 @@ fn build_mxf_file(pipeline: &gst::Pipeline, path: &str, width: u32, height: u32)
             }
     });
 
-    let settings = presets::default_settings();
-    let preset = presets::find_preset(&settings.presets, MXF_PRESET_ID)
-        .cloned()
-        .ok_or_else(|| format!("kein '{MXF_PRESET_ID}'-Preset in presets::default_settings()"))?;
+    let path_for_plan = path.to_string();
     // SCHWACHE Referenz statt `pipeline.clone()` (Nutzerfund
     // `omp-mxf-player-direct`, s. dortige ausführliche Doku): dieser Node
     // baut wie jener die ganze Pipeline pro EOS-Zyklus neu auf — ein
@@ -570,10 +567,9 @@ fn build_mxf_file(pipeline: &gst::Pipeline, path: &str, width: u32, height: u32)
             }
         }
 
-        let coeffs = presets::matrix_for(&preset, MXF_GROUP_ID, CHANNELS, input_channels.max(1));
-        matrix.set_property("in-channels", input_channels.max(1));
-        matrix.set_property("out-channels", CHANNELS);
-        matrix.set_property("matrix", matrix_to_gst_array(&coeffs));
+        // Spurzahl steht jetzt fest: Plan auflösen und Matrizen setzen, bevor Daten fließen.
+        let source = dist.mxf_source(input_channels, &path_for_plan);
+        dist.configure(&source, mapping.as_ref());
     });
 
     Ok((demux, vqueue.upcast(), acaps.upcast()))
@@ -631,7 +627,8 @@ struct ActivePipeline {
     // Output-Typen setzen in ihrem `Drop` `running=false`, s.
     // `omp-mxf-player-direct::ActivePipeline`-Doku.
     _mxl_video_output: MxlVideoOutput,
-    _mxl_audio_output: MxlAudioOutput,
+    /// Ein MXL-Audio-Ausgang je Zielgruppe (Profil-Reihenfolge).
+    _mxl_audio_outputs: Vec<MxlAudioOutput>,
     // Dito für Live-Empfang (`read_loop`-Thread).
     _mxl_video_input: Option<MxlVideoInput>,
     _mxl_audio_input: Option<MxlAudioInput>,
@@ -668,9 +665,21 @@ fn query_duration_ms(el: &gst::Element) -> Option<i64> {
 /// Preroll-Tanz nötig"). `new_paced` (statt `new`) passt sich derselben
 /// Begründung wie bei `omp-mxf-player-direct` an: Datei-Decode-Quellen
 /// produzieren nicht von sich aus in Echtzeit.
-fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::sync::mpsc::Sender<LoopEvent>) -> Result<ActivePipeline, String> {
+fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::sync::mpsc::Sender<LoopEvent>, plan_slot: Arc<Mutex<Option<AudioPlan>>>) -> Result<ActivePipeline, String> {
     let context = Arc::new(MxlContext::new_synced(&config.domain)?);
     let pipeline = gst::Pipeline::new();
+
+    *plan_slot.lock().expect("lock poisoned") = None;
+    let dist = Arc::new(Distributor::build(&pipeline, config.audio.clone(), plan_slot)?);
+    // Zuordnung: ausdrücklich gewählt, sonst für MXF die frühere Standardwahl.
+    let requested_mapping = item.audio_mapping.as_deref().and_then(|id| {
+        let m = dist.mapping_named(id).cloned();
+        if m.is_none() {
+            eprintln!("omp-channel-player: Audio-Zuordnung '{id}' unbekannt — Standard");
+        }
+        m
+    });
+    let mut mxf_audio = false;
 
     let mut query_el: Option<gst::Element> = None;
     let mut mxl_video_input: Option<MxlVideoInput> = None;
@@ -684,7 +693,9 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
         }
         ItemSource::File { path } => {
             if path.to_ascii_lowercase().ends_with(".mxf") {
-                let (demux, v, a) = build_mxf_file(&pipeline, path, config.width, config.height)?;
+                let mapping = requested_mapping.clone().or_else(|| dist.mapping_named(audio::DEFAULT_MXF_MAPPING).cloned());
+                let (demux, v, a) = build_mxf_file(&pipeline, path, config.width, config.height, dist.clone(), mapping)?;
+                mxf_audio = true;
                 query_el = Some(demux);
                 (v, a)
             } else {
@@ -722,6 +733,13 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
         }
     };
 
+    audio_tail.link(&dist.input).map_err(|e| format!("link audio to distributor: {e}"))?;
+    if !mxf_audio {
+        // Quelle ohne Mehrspur-Container (Live, Testton, Standbild, generische Datei): ein Programmton-Stream.
+        let kind = if matches!(item.source, ItemSource::Live { .. }) { SourceKind::Live } else { SourceKind::File };
+        dist.configure(&dist.stereo_program_source(kind), requested_mapping.as_ref());
+    }
+
     let mxl_video_output = MxlVideoOutput::new_paced(
         &pipeline,
         &video_tail,
@@ -741,12 +759,18 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
     mxl_video_output.set_active(true);
     let video_flowed = mxl_video_output.flowed_handle();
 
-    let mxl_audio_output = MxlAudioOutput::new_paced(&pipeline, &audio_tail, context.clone(), &config.audio_flow_id, &config.label, SAMPLE_RATE, CHANNELS).map_err(|e| {
-        let _ = pipeline.set_state(gst::State::Null);
-        format!("MxlAudioOutput: {e}")
-    })?;
-    mxl_audio_output.set_active(true);
-    let audio_flowed = mxl_audio_output.flowed_handle();
+    let mut mxl_audio_outputs = Vec::new();
+    for (i, (group, tail)) in config.audio.groups.iter().zip(dist.tails()).enumerate() {
+        // Die erste Gruppe behält das bisherige Label ("<Node> Audio"), die übrigen tragen ihren Namen.
+        let label = if i == 0 { config.label.clone() } else { format!("{} {}", config.label, group.label) };
+        let out = MxlAudioOutput::new_paced(&pipeline, &tail, context.clone(), &group.flow_id, &label, SAMPLE_RATE, group.channels).map_err(|e| {
+            let _ = pipeline.set_state(gst::State::Null);
+            format!("MxlAudioOutput({}): {e}", group.id)
+        })?;
+        out.set_active(true);
+        mxl_audio_outputs.push(out);
+    }
+    let audio_flowed = mxl_audio_outputs.first().ok_or("kein Audio-Ausgang (Ausgabeprofil ohne Zielgruppen)")?.flowed_handle();
 
     pipeline.set_state(gst::State::Playing).map_err(|e| format!("set state playing: {e}"))?;
     let (result, state, _pending) = pipeline.state(gst::ClockTime::from_seconds(8));
@@ -785,7 +809,7 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
         video_flowed,
         audio_flowed,
         _mxl_video_output: mxl_video_output,
-        _mxl_audio_output: mxl_audio_output,
+        _mxl_audio_outputs: mxl_audio_outputs,
         gate: (mxl_video_input_gate, mxl_audio_input_gate),
         _mxl_video_input: mxl_video_input,
         _mxl_audio_input: mxl_audio_input,
@@ -820,8 +844,10 @@ pub fn run(config: Config, tx: UnboundedSender<Event>, ready: oneshot::Sender<Re
     }));
     let position_ms = Arc::new(AtomicI64::new(0));
     let duration_ms = Arc::new(AtomicI64::new(0));
+    let audio_plan: Arc<Mutex<Option<AudioPlan>>> = Arc::new(Mutex::new(None));
 
     let _ = ready.send(Ok(PipelineHandle {
+        audio_plan: audio_plan.clone(),
         events: event_tx.clone(),
         shared: shared.clone(),
         position_ms: position_ms.clone(),
@@ -839,7 +865,7 @@ pub fn run(config: Config, tx: UnboundedSender<Event>, ready: oneshot::Sender<Re
                 }
                 std::thread::sleep(std::time::Duration::from_millis(500));
                 if let Some(item) = current_item.clone() {
-                    match build(&config, &item, tx.clone(), event_tx.clone()) {
+                    match build(&config, &item, tx.clone(), event_tx.clone(), audio_plan.clone()) {
                         Ok(p) => {
                             let mut s = shared.lock().expect("lock poisoned");
                             s.video_flowed = p.video_flowed.clone();
@@ -860,7 +886,7 @@ pub fn run(config: Config, tx: UnboundedSender<Event>, ready: oneshot::Sender<Re
                 }
                 position_ms.store(0, Ordering::Relaxed);
                 duration_ms.store(item.duration_hint_ms.unwrap_or(0), Ordering::Relaxed);
-                match build(&config, &item, tx.clone(), event_tx.clone()) {
+                match build(&config, &item, tx.clone(), event_tx.clone(), audio_plan.clone()) {
                     Ok(p) => {
                         let mut s = shared.lock().expect("lock poisoned");
                         s.label = item.label.clone();
@@ -910,13 +936,5 @@ mod tests {
         assert_eq!(media_type_str(&ItemSource::Image { path: "/media/still.jpg".to_string() }), "image");
         assert_eq!(media_type_str(&ItemSource::File { path: "/media/still.jpg".to_string() }), "file");
         assert_eq!(media_type_str(&ItemSource::Live { video_flow_id: None, audio_flow_id: None }), "live");
-    }
-
-    #[test]
-    fn matrix_to_gst_array_preserves_shape() {
-        let _ = gst::init();
-        let matrix = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
-        let array = matrix_to_gst_array(&matrix);
-        assert_eq!(array.as_slice().len(), 2);
     }
 }

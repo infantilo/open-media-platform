@@ -12,9 +12,9 @@
 //! baut/verifiziert nur den Node selbst (Teil 6). Automation-Retargeting
 //! auf zwei physische Kanäle ist Teil 7 (s. `docs/END-GOAL-FEATURES.md`
 //! §6.5).
+mod audio;
 mod discovery;
 mod pipeline;
-mod presets;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -64,6 +64,7 @@ fn resolve_media_path(media_dir: &Path, rel_or_abs: &str) -> Result<PathBuf, Str
 }
 
 struct PlayerStore {
+    audio: Arc<audio::AudioCtx>,
     pipeline: PipelineHandle,
     media_dir: PathBuf,
     registry: RegistryClient,
@@ -99,6 +100,12 @@ impl ParamStore for PlayerStore {
             // JSON-Array [{senderId,label}] — Live-Kandidaten, s.
             // `discovery::discover`.
             ParamSpec { name: "availableSources".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            // JSON: zuletzt aufgelöster Audio-Plan (Matrizen je Zielgruppe, Ersatzregeln, Warnungen), `null` ohne Item.
+            ParamSpec { name: "audioPlan".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            // JSON-Array [{id,label,channels}] — die Zielgruppen (je Gruppe ein Audio-Sender).
+            ParamSpec { name: "audioGroups".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            // JSON-Array [{id,label}] — wählbare Zuordnungsvorlagen für `load(audioMapping)`.
+            ParamSpec { name: "audioMappings".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
         ];
 
         let methods = vec![
@@ -113,6 +120,8 @@ impl ParamStore for PlayerStore {
                     MethodArg { name: "durationMs".to_string(), kind: ParamType::Number },
                     // Kapitel 27 / P2b: "image" = `file` ist ein Standbild.
                     MethodArg { name: "mediaType".to_string(), kind: ParamType::String },
+                    // ID einer Audio-Zuordnungsvorlage (s. `audioMappings`); leer = Standard.
+                    MethodArg { name: "audioMapping".to_string(), kind: ParamType::String },
                 ],
             },
             MethodSpec { name: "stop".to_string(), args: vec![] },
@@ -128,6 +137,13 @@ impl ParamStore for PlayerStore {
             "syncGate" => Some(serde_json::json!(self.pipeline.sync_gate())),
             "positionMs" => Some(serde_json::json!(self.pipeline.position_ms() as f64)),
             "durationMs" => Some(serde_json::json!(self.pipeline.duration_ms() as f64)),
+            "audioPlan" => Some(self.pipeline.audio_plan_json()),
+            "audioGroups" => Some(serde_json::json!(
+                self.audio.groups.iter().map(|g| serde_json::json!({"id": g.id, "label": g.label, "channels": g.channels})).collect::<Vec<_>>()
+            )),
+            "audioMappings" => Some(serde_json::json!(
+                self.audio.settings.mappings.iter().map(|m| serde_json::json!({"id": m.id, "label": m.label})).collect::<Vec<_>>()
+            )),
             "mediaLibrary" => {
                 let mut files: Vec<String> = std::fs::read_dir(&self.media_dir)
                     .into_iter()
@@ -158,6 +174,7 @@ impl ParamStore for PlayerStore {
             "load" => {
                 let label = args.get("label").and_then(Value::as_str).unwrap_or("Item").to_string();
                 let duration_ms_arg = args.get("durationMs").and_then(Value::as_f64).map(|v| v as i64);
+                let audio_mapping = args.get("audioMapping").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
 
                 // Precedence senderId > file > pattern — deckungsgleich mit
                 // `omp-player::invoke("append")`.
@@ -167,6 +184,7 @@ impl ParamStore for PlayerStore {
                         label,
                         source: pipeline::ItemSource::Live { video_flow_id, audio_flow_id },
                         duration_hint_ms: None,
+                        audio_mapping: audio_mapping.clone(),
                     });
                     return Ok(());
                 }
@@ -179,6 +197,7 @@ impl ParamStore for PlayerStore {
                             label,
                             source: pipeline::ItemSource::Image { path: abs.to_string_lossy().to_string() },
                             duration_hint_ms: duration_ms_arg,
+                            audio_mapping: audio_mapping.clone(),
                         });
                         return Ok(());
                     }
@@ -187,6 +206,7 @@ impl ParamStore for PlayerStore {
                         label,
                         source: pipeline::ItemSource::File { path: abs.to_string_lossy().to_string() },
                         duration_hint_ms,
+                        audio_mapping: audio_mapping.clone(),
                     });
                     return Ok(());
                 }
@@ -196,6 +216,7 @@ impl ParamStore for PlayerStore {
                     label,
                     source: pipeline::ItemSource::TestPattern { pattern, tone_freq },
                     duration_hint_ms: duration_ms_arg,
+                    audio_mapping,
                 });
                 Ok(())
             }
@@ -204,6 +225,7 @@ impl ParamStore for PlayerStore {
                     label: String::new(),
                     source: pipeline::ItemSource::TestPattern { pattern: pipeline::EMPTY_PATTERN.to_string(), tone_freq: 0.0 },
                     duration_hint_ms: None,
+                    audio_mapping: None,
                 });
                 Ok(())
             }
@@ -230,7 +252,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let media_dir = PathBuf::from(env_or("OMP_MEDIA_DIR", "data/media"));
 
     let video_flow_id = omp_node_sdk::idgen::new_v4();
-    let audio_flow_id = omp_node_sdk::idgen::new_v4();
+    let orchestrator_url = env_or("OMP_ORCHESTRATOR_URL", "http://localhost:8000");
+    let launch_secret = std::env::var("OMP_LAUNCH_SECRET").unwrap_or_default();
+    let audio_settings = audio::load_settings(&orchestrator_url, instance_id.as_deref(), &launch_secret);
+    let audio_ctx = Arc::new(audio::AudioCtx::new(audio_settings, omp_node_sdk::idgen::new_v4));
     let own_video_sender_id = omp_node_sdk::idgen::new_v4();
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
@@ -239,7 +264,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pipeline_config = pipeline::Config {
         domain,
         video_flow_id: video_flow_id.clone(),
-        audio_flow_id: audio_flow_id.clone(),
+        audio: audio_ctx.clone(),
         label: label.clone(),
         width,
         height,
@@ -258,7 +283,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
-    let senders = vec![
+    let mut senders = vec![
         SenderSpec {
             id: Some(own_video_sender_id.clone()),
             transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
@@ -272,23 +297,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             label: Some(format!("{label} Sender")),
             ..Default::default()
         },
-        SenderSpec {
+    ];
+    // Ein Audio-Sender je Zielgruppe; der erste behält das bisherige Label "<Node> Audio".
+    for (i, g) in audio_ctx.groups.iter().enumerate() {
+        let tags = audio_ctx.settings.output_profile.groups[i].tags.clone();
+        let mut sender = SenderSpec {
             transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
             flow: Some(omp_node_sdk::node::FlowSpec::Audio {
-                id: Some(audio_flow_id),
+                id: Some(g.flow_id.clone()),
                 sample_rate_numerator: pipeline::SAMPLE_RATE,
-                channel_count: pipeline::CHANNELS,
+                channel_count: g.channels,
                 media_type: "audio/float32".to_string(),
                 bit_depth: 32,
                 source_id: None,
             }),
-            label: Some(format!("{label} Audio")),
+            label: Some(if i == 0 { format!("{label} Audio") } else { format!("{label} Audio {}", g.label) }),
             ..Default::default()
-        },
-    ];
+        };
+        if !tags.is_empty() {
+            sender.tags.insert("urn:x-omp:tags".to_string(), tags);
+        }
+        senders.push(sender);
+    }
 
     let available_sources = Arc::new(Mutex::new(Vec::new()));
     let store: Arc<dyn ParamStore> = Arc::new(PlayerStore {
+        audio: audio_ctx.clone(),
         pipeline: pipeline_handle.clone(),
         media_dir,
         registry: RegistryClient::new(registry_url.clone()),

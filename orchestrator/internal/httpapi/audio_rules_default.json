@@ -7,7 +7,10 @@
         "layout": "stereo",
         "tags": [
           "role:pt"
-        ]
+        ],
+        "default": {
+          "select": "role:pt"
+        }
       },
       {
         "id": "ad",
@@ -415,10 +418,6 @@
               "select": "role:pt AND layout:stereo",
               "via": "upmix51"
             }
-          },
-          {
-            "silence": true,
-            "warn": "kein 5.1-Ton und kein Stereo-Programmton, Gruppe bleibt still"
           }
         ]
       }

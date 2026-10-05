@@ -1408,11 +1408,13 @@ version = "0.1.0"
 dependencies = [
  "gstreamer",
  "gstreamer-pbutils",
+ "omp-audio-rules",
  "omp-mediaio",
  "omp-node-sdk",
  "serde",
  "serde_json",
  "tokio",
+ "ureq",
 ]
 
 [[package]]

@@ -1232,6 +1232,19 @@ fn audio_caps(sample_rate: u32, channels: u32, layout: &str) -> gst::Caps {
         .build()
 }
 
+/// Caps des Lese-`appsrc`: wie [`audio_caps`], bei mehr als 2 Kanälen aber mit
+/// `channel-mask=0` (unpositioniert). Ohne Maske lehnt das nachfolgende `audioconvert`
+/// jeden Flow mit mehr als 2 Kanälen ab ("no channel-mask property given") — ein
+/// 5.1-Flow war so für keinen Leser nutzbar. Der Schreibpfad bleibt unverändert,
+/// weil dort die vorgelagerte Kette die Kanalmaske bestimmt.
+fn reader_audio_caps(sample_rate: u32, channels: u32) -> gst::Caps {
+    let mut caps = audio_caps(sample_rate, channels, "interleaved");
+    if channels > 2 {
+        caps.make_mut().structure_mut(0).expect("audio caps structure").set("channel-mask", gst::Bitmask::new(0));
+    }
+    caps
+}
+
 /// MXL-Audio-Ausgang, Pendant zu [`MxlVideoOutput`] für **continuous**-
 /// Flows (s. `audio_flow_def`). `audiobuffersplit` erzwingt eine feste
 /// Blockgröße (`output-buffer-duration` 1/100 = 10ms, gleicher Batch-Wert
@@ -2471,7 +2484,7 @@ impl MxlAudioInput {
             // (read_audio_loop). Arrival-Zeitstempel ließen die Audio-Sinks
             // ständig nachregeln/resyncen ("Roboterstimme", Nachtrag 253).
             .property("do-timestamp", !index_timebase_enabled())
-            .property("caps", audio_caps(sample_rate, channel_count, "interleaved"))
+            .property("caps", reader_audio_caps(sample_rate, channel_count))
             // Gleicher live gefundener OOM-Bug wie `MxlVideoInput::new` —
             // s. dortige ausführliche Doku, `docs/decisions.md` Nachtrag
             // 58.
