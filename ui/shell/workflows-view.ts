@@ -14,6 +14,7 @@
 // s. sse.Hub). Über apiFetch() (connection.ts) statt rohem fetch — ein
 // Fehlschlag setzt den geteilten ConnectionMonitor auf "degraded" statt
 // still zu bleiben.
+import { demandText, groupByHost, loadText, type StartPlan } from "./workflow-plan-logic.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { showToast } from "../kit/omp-toast.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
@@ -209,6 +210,8 @@ class WorkflowsView extends HTMLElement {
   #catalog: CatalogEntry[] = [];
   #hosts: HostEntry[] = [];
   #workflows: Workflow[] = [];
+  // Plan-Vorschau je Workflow (Hosts, Bedarf, Engpass-Warnungen), s. workflow-plan-logic.ts.
+  #plans = new Map<string, StartPlan>();
   #formRoles: Role[] = [{ name: "", nodeType: "", hostId: "" }];
   #formConnections: Connection[] = [];
   #formName = "";
@@ -308,10 +311,86 @@ class WorkflowsView extends HTMLElement {
       const res = await apiFetch("/api/v1/workflows");
       if (!res.ok) return;
       this.#workflows = await res.json();
+      await this.#loadPlans();
       this.#render();
     } catch {
       // Orchestrator kurzzeitig nicht erreichbar — nächster Poll holt es auf.
     }
+  }
+
+  async #loadPlans() {
+    const results = await Promise.all(
+      this.#workflows.map(async (wf): Promise<[string, StartPlan | null]> => {
+        try {
+          const res = await apiFetch(`/api/v1/workflows/${encodeURIComponent(wf.id)}/plan`);
+          return [wf.id, res.ok ? ((await res.json()) as StartPlan) : null];
+        } catch {
+          return [wf.id, null];
+        }
+      }),
+    );
+    this.#plans = new Map(results.filter((r): r is [string, StartPlan] => r[1] !== null));
+  }
+
+  // Rollen und Hosts eines Workflows: je Host ein Block mit den Rollen, die dort laufen (würden), dem erwarteten
+  // Bedarf und der Auslastung; Warnungen (Engpass, Host nicht erreichbar, fehlendes Messprofil) stehen oben.
+  // Ersetzt die frühere Topologie-Miniatur, die bei mehr als wenigen Rollen unlesbar war.
+  #renderPlan(wf: Workflow): HTMLElement {
+    const box = document.createElement("div");
+    box.setAttribute("data-role", "workflow-plan");
+    box.style.cssText = "margin-top:6px;display:flex;flex-direction:column;gap:6px;";
+    const plan = this.#plans.get(wf.id);
+    if (!plan) {
+      const fallback = document.createElement("div");
+      fallback.style.cssText = "color:var(--omp-text-dim);font-size:11px;";
+      fallback.textContent = wf.definition.roles.map((r) => r.name).join(", ");
+      box.appendChild(fallback);
+      return box;
+    }
+    const SEV_COLOR: Record<string, string> = {
+      ok: "var(--omp-preset, #43a047)", warn: "var(--omp-cue, #fb8c00)", bad: "var(--omp-error, #ef5350)", unknown: "var(--omp-text-dim)",
+    };
+    if (plan.warnings.length > 0 && !plan.running) {
+      const warn = document.createElement("div");
+      warn.setAttribute("data-role", "workflow-plan-warnings");
+      warn.style.cssText =
+        "font-size:11px;padding:4px 8px;border-radius:4px;border:1px solid var(--omp-cue,#fb8c00);background:rgba(251,140,0,.08);";
+      for (const w of plan.warnings) {
+        const line = document.createElement("div");
+        line.textContent = `⚠ ${w}`;
+        warn.appendChild(line);
+      }
+      box.appendChild(warn);
+    }
+    for (const group of groupByHost(plan)) {
+      const block = document.createElement("div");
+      block.setAttribute("data-role", "workflow-plan-host");
+      block.style.cssText = `border-left:3px solid ${SEV_COLOR[group.severity]};padding:2px 0 2px 8px;`;
+      const name = document.createElement("div");
+      name.style.cssText = "font-size:12px;font-weight:600;";
+      name.textContent = group.host.label;
+      const load = document.createElement("div");
+      load.style.cssText = `font-size:11px;margin-bottom:3px;color:${group.severity === "bad" ? SEV_COLOR.bad : "var(--omp-text-dim)"};`;
+      load.textContent = loadText(group.host, plan.running);
+      block.append(name, load);
+      for (const r of group.roles) {
+        const line = document.createElement("div");
+        line.style.cssText = "margin-bottom:2px;";
+        const title = document.createElement("div");
+        title.style.cssText = "font-size:11px;";
+        title.textContent = r.role;
+        const detail = document.createElement("div");
+        detail.style.cssText = "font-size:10px;color:var(--omp-text-dim);";
+        const parts = [r.nodeType];
+        if (!plan.running) parts.push(r.fixed ? "Host fest" : "automatisch", demandText(r));
+        detail.textContent = parts.join(" · ");
+        line.append(title, detail);
+        if (r.reason && !plan.running) line.title = r.reason;
+        block.appendChild(line);
+      }
+      box.appendChild(block);
+    }
+    return box;
   }
 
   // Anlegen (POST) und Bearbeiten (PUT, Kapitel 12 Teil 1) teilen sich
@@ -842,104 +921,6 @@ class WorkflowsView extends HTMLElement {
     }
   }
 
-  // Ersetzt das frühere PGM-Video-Thumbnail (§22.3 Punkt 5,
-  // captureWorkflowThumbnail): statt eines Frames vom laufenden
-  // Programm-Ausgang (bei einem gestoppten Workflow zwangsläufig
-  // veraltet oder — nie gestartet — gar nicht vorhanden) zeigt die
-  // Vorschau jetzt unabhängig vom Status immer dieselbe kleine
-  // Topologie-Grafik: Rollen als Kacheln, Verbindungen als Linien,
-  // direkt aus der bereits geladenen Workflow-Definition gerendert
-  // (kein Netzwerk-Request, kein Cache nötig — Grund für die 2026-07-27
-  // Änderung: docs/decisions.md).
-  #renderTopologyPreview(wf: Workflow): HTMLElement {
-    const box = document.createElement("div");
-    // Rand in voller Status-Farbe statt der früheren "+44"-Alpha-
-    // Abblendung (Hex-Alpha-Suffix lässt sich nicht auf einen
-    // var(--omp-*)-Wert aufkleben) — gleiche volle Deckkraft wie der
-    // Akzent-Rand in #renderWorkflowRow, optisch konsistent statt einer
-    // zweiten, abweichenden Rand-Intensität.
-    box.style.cssText =
-      "width:100%;height:100px;border-radius:2px;margin-bottom:4px;overflow:hidden;" +
-      `background:var(--omp-bg);border:1px solid ${STATUS_COLORS[wf.status] ?? "var(--omp-text-dim)"};`;
-
-    const roles = wf.definition.roles;
-    if (roles.length === 0) {
-      const placeholder = document.createElement("div");
-      placeholder.style.cssText =
-        "width:100%;height:100%;display:flex;align-items:center;justify-content:center;" +
-        "color:var(--omp-text-dim);font-size:11px;";
-      placeholder.textContent = "Keine Rollen";
-      box.appendChild(placeholder);
-      return box;
-    }
-
-    // Einfaches Zeilenraster statt echtem Graph-Layout — reicht für ein
-    // Vorschau-Icon-Format (kein Bezier-Routing/Kollisionsvermeidung
-    // wie im vollen Flow-Editor nötig). Bis zu 4 Rollen pro Zeile.
-    const cols = Math.min(4, Math.ceil(Math.sqrt(roles.length)) + 1);
-    const rowsCount = Math.ceil(roles.length / cols);
-    const cellW = 100 / cols;
-    const cellH = 100 / rowsCount;
-    const centerOf = (i: number): [number, number] => {
-      const col = i % cols;
-      const row = Math.floor(i / cols);
-      return [col * cellW + cellW / 2, row * cellH + cellH / 2];
-    };
-    const indexByRole = new Map(roles.map((r, i) => [r.name, i]));
-
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("viewBox", "0 0 100 100");
-    svg.setAttribute("preserveAspectRatio", "none");
-    svg.style.cssText = "width:100%;height:100%;display:block;";
-
-    for (const conn of wf.definition.connections) {
-      const fromIdx = indexByRole.get(conn.fromRole);
-      const toIdx = indexByRole.get(conn.toRole);
-      if (fromIdx === undefined || toIdx === undefined) continue;
-      const [x1, y1] = centerOf(fromIdx);
-      const [x2, y2] = centerOf(toIdx);
-      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-      line.setAttribute("x1", String(x1));
-      line.setAttribute("y1", String(y1));
-      line.setAttribute("x2", String(x2));
-      line.setAttribute("y2", String(y2));
-      // CSS-Custom-Properties werden von SVG-Präsentationsattributen
-      // (nicht nur style=) aufgelöst — kein Fallback-Hex nötig, dieselbe
-      // --omp-info-Variable wie überall sonst.
-      line.setAttribute("stroke", "var(--omp-info)");
-      line.setAttribute("stroke-width", "0.6");
-      svg.appendChild(line);
-    }
-
-    roles.forEach((role, i) => {
-      const [cx, cy] = centerOf(i);
-      const boxW = cellW * 0.7;
-      const boxH = Math.min(cellH * 0.6, 14);
-      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-      rect.setAttribute("x", String(cx - boxW / 2));
-      rect.setAttribute("y", String(cy - boxH / 2));
-      rect.setAttribute("width", String(boxW));
-      rect.setAttribute("height", String(boxH));
-      rect.setAttribute("rx", "1");
-      rect.setAttribute("fill", "var(--omp-surface-raised)");
-      rect.setAttribute("stroke", "var(--omp-border)");
-      rect.setAttribute("stroke-width", "0.4");
-      svg.appendChild(rect);
-
-      const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      label.setAttribute("x", String(cx));
-      label.setAttribute("y", String(cy + 1.5));
-      label.setAttribute("text-anchor", "middle");
-      label.setAttribute("font-size", "3.6");
-      label.setAttribute("fill", "var(--omp-text)");
-      label.textContent = role.name.length > 14 ? role.name.slice(0, 13) + "…" : role.name;
-      svg.appendChild(label);
-    });
-
-    box.appendChild(svg);
-    return box;
-  }
-
   #renderWorkflowRow(wf: Workflow): HTMLElement {
     const row = document.createElement("div");
     row.setAttribute("data-role", "workflow-row");
@@ -950,8 +931,6 @@ class WorkflowsView extends HTMLElement {
     row.style.cssText =
       `padding:var(--omp-space-2) var(--omp-space-3);` +
       `border-left:3px solid ${STATUS_COLORS[wf.status] ?? "var(--omp-text-dim)"};display:flex;flex-direction:column;`;
-
-    row.appendChild(this.#renderTopologyPreview(wf));
 
     const header = document.createElement("div");
     header.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:4px;";
@@ -1001,22 +980,7 @@ class WorkflowsView extends HTMLElement {
       row.appendChild(tagsRow);
     }
 
-    const roles = document.createElement("div");
-    roles.style.cssText = "color:var(--omp-text-dim);font-size:11px;margin-top:2px;";
-    // Nachtrag 99: zeigt den vom Auto-Placement tatsächlich gewählten
-    // Host an (Runtime.hostId), sobald gestartet — kann von der bloßen
-    // Präferenz (Role.hostId) abweichen, falls diese nicht reichte.
-    // Leer/"" (lokal) wird nicht extra angezeigt, nur ein echter
-    // Remote-Host ist hier interessant.
-    roles.textContent = wf.definition.roles
-      .map((r) => {
-        const resolved = wf.runtime?.[r.name]?.hostId;
-        if (!resolved) return r.name;
-        const label = this.#hosts.find((h) => h.id === resolved)?.label ?? resolved;
-        return `${r.name} (@${label})`;
-      })
-      .join(", ");
-    row.appendChild(roles);
+    row.appendChild(this.#renderPlan(wf));
 
     // Kapitel 15: nur anzeigen, wenn tatsächlich gesetzt — die meisten
     // Workflows laufen weiterhin mit den Node-eigenen Defaults.

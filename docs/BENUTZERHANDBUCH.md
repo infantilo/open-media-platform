@@ -190,8 +190,15 @@ derselben Verkabelung":
 
 ![Workflows: „Regie 1" mit sechs Rollen, gestartet, mit vier Zeitplänen](screenshots/workflows.png)
 
-Jede Workflow-Kachel zeigt eine Miniaturvorschau ihrer Rollen-Struktur,
-Namen, Status und ihre Rollenliste. „+ Neu" legt einen leeren Workflow
+Jede Workflow-Kachel zeigt Namen, Status und — nach Hosts gruppiert — ihre
+Rollen: je Host ein Block mit den Rollen, die dort laufen (bei einem
+gestoppten Workflow: laufen würden), Node-Typ, ob der Host fest vorgegeben
+oder automatisch gewählt wird, und dem erwarteten Bedarf (aus den gemessenen
+Profilen). Neben dem Host steht seine aktuelle Auslastung und die Prognose
+mit diesem Workflow („CPU 35 % → 96 %“). Oben in der Kachel warnt ein
+gelber Kasten vor einem **Engpass beim Start** (CPU/RAM über der Grenze),
+vor nicht erreichbaren Hosts und vor Node-Typen ohne Messprofil (Bedarf
+unbekannt, nicht „null“). Die Plan-Vorschau startet nichts. „+ Neu" legt einen leeren Workflow
 an, „Grafisch entwerfen" öffnet den Flow Editor in einem Workflow-
 Entwurfsmodus, „Importieren" lädt eine zuvor exportierte Workflow-
 Definition. Start/Stop/Pausieren wirken auf den ganzen Workflow;
