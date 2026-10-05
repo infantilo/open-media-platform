@@ -371,11 +371,16 @@ fn build(
             let audioresample = gst::ElementFactory::make("audioresample")
                 .build()
                 .map_err(|e| format!("audioresample: {e}"))?;
-            let avenc_aac = gst::ElementFactory::make("avenc_aac")
-                .property("bitrate", AUDIO_BITRATE_BPS)
+            // `OMP_RECORDER_RAW_AUDIO=1` (Diagnose): unkomprimierter PCM-Ton statt AAC — trennt
+            // Encoder-/Dekoder-Vorlauf von echtem Versatz bei der A/V-Messung.
+            let raw_audio = std::env::var("OMP_RECORDER_RAW_AUDIO").is_ok_and(|v| v == "1");
+            let avenc_aac = gst::ElementFactory::make(if raw_audio { "identity" } else { "avenc_aac" })
                 .build()
-                .map_err(|e| format!("avenc_aac: {e}"))?;
-            let aacparse = gst::ElementFactory::make("aacparse")
+                .map_err(|e| format!("audio encoder: {e}"))?;
+            if !raw_audio {
+                avenc_aac.set_property("bitrate", AUDIO_BITRATE_BPS);
+            }
+            let aacparse = gst::ElementFactory::make(if raw_audio { "identity" } else { "aacparse" })
                 .build()
                 .map_err(|e| format!("aacparse: {e}"))?;
             let queue = gst::ElementFactory::make("queue")

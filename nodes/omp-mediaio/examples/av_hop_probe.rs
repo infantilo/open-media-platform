@@ -136,6 +136,8 @@ fn main() {
         let vq0 = gst::ElementFactory::make("queue").build().unwrap();
         let vc = gst::ElementFactory::make("videoconvert").build().unwrap();
         let enc = gst::ElementFactory::make("x264enc").property("bitrate", 4000u32).property("key-int-max", 50u32).build().unwrap();
+        if std::env::var("REC_THREADS1").is_ok() { enc.set_property("threads", 1u32); }
+        if std::env::var("REC_SLICED").is_ok() { enc.set_property("sliced-threads", true); }
         enc.set_property_from_str("speed-preset", "veryfast");
         enc.set_property_from_str("tune", "zerolatency");
         let parse = gst::ElementFactory::make("h264parse").property("config-interval", 1i32).build().unwrap();
@@ -143,8 +145,9 @@ fn main() {
         let aq0 = gst::ElementFactory::make("queue").build().unwrap();
         let ac = gst::ElementFactory::make("audioconvert").build().unwrap();
         let ars = gst::ElementFactory::make("audioresample").build().unwrap();
-        let aenc = gst::ElementFactory::make("avenc_aac").property("bitrate", 192000i32).build().unwrap();
-        let aparse = gst::ElementFactory::make("aacparse").build().unwrap();
+        let raw = std::env::var("REC_RAW").is_ok();
+        let aenc = if raw { gst::ElementFactory::make("identity").build().unwrap() } else { gst::ElementFactory::make("avenc_aac").property("bitrate", 192000i32).build().unwrap() };
+        let aparse = if raw { gst::ElementFactory::make("identity").build().unwrap() } else { gst::ElementFactory::make("aacparse").build().unwrap() };
         let aq1 = gst::ElementFactory::make("queue").build().unwrap();
         pipe.add_many([&mux, &fs, &vq0, &vc, &enc, &parse, &vq1, &aq0, &ac, &ars, &aenc, &aparse, &aq1]).unwrap();
         mux.link(&fs).unwrap();
@@ -160,6 +163,31 @@ fn main() {
             at.link(&aq0).unwrap();
             gst::Element::link_many([&aq0, &ac, &ars, &aenc, &aparse, &aq1]).unwrap();
         }
+        for (name, el) in [("enc-in", &vc), ("enc-out", &parse)] {
+            let cnt = Arc::new(std::sync::atomic::AtomicU32::new(0));
+            let name = name.to_string();
+            let pad = if name == "enc-in" { el.static_pad("sink").unwrap() } else { el.static_pad("src").unwrap() };
+            pad.add_probe(gst::PadProbeType::BUFFER, move |_p, info| {
+                if let Some(gst::PadProbeData::Buffer(b)) = &info.data
+                    && cnt.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 4
+                {
+                    eprintln!("VENC {name} pts={:?} dts={:?}", b.pts(), b.dts());
+                }
+                gst::PadProbeReturn::Ok
+            });
+        }
+        for (name, q) in [("video", &vq1), ("audio", &aq1)] {
+            let first = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let name = name.to_string();
+            q.static_pad("src").unwrap().add_probe(gst::PadProbeType::BUFFER, move |_p, info| {
+                if let Some(gst::PadProbeData::Buffer(b)) = &info.data
+                    && !first.swap(true, std::sync::atomic::Ordering::Relaxed)
+                {
+                    eprintln!("MUXIN {name} first pts={:?} dts={:?}", b.pts(), b.dts());
+                }
+                gst::PadProbeReturn::Ok
+            });
+        }
         vq1.static_pad("src").unwrap().link(&mux.request_pad_simple("video_%u").unwrap()).unwrap();
         aq1.static_pad("src").unwrap().link(&mux.request_pad_simple("audio_%u").unwrap()).unwrap();
         mux_opt = Some(mux);
@@ -172,6 +200,7 @@ fn main() {
         let s = st.lock().unwrap();
         let mut d: Vec<f64> = s.aticks.iter().filter_map(|t| s.vflips.iter().min_by_key(|v| (**v as i64 - *t as i64).abs()).map(|v| (*t as i64 - *v as i64) as f64 / 1e6)).filter(|d| d.abs() < 500.0).collect();
         d.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        println!("abs PTS first flips(s) {:?} ticks {:?}", s.vflips.iter().take(4).map(|v| *v as f64 / 1e9).collect::<Vec<_>>(), s.aticks.iter().take(4).map(|v| *v as f64 / 1e9).collect::<Vec<_>>());
         println!("Stufe {name}: Marker-Bilder={}, Ticks={}, Median PTS_a - PTS_v = {:.1} ms", s.vflips.len(), s.aticks.len(), d.get(d.len() / 2).copied().unwrap_or(f64::NAN));
     }
     if mux_opt.is_some() {
