@@ -3,40 +3,73 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#121212">
+<meta name="theme-color" content="#080c16">
 <title>OMP Kamera</title>
 <style>
-  :root { color-scheme: dark; --bg:#121212; --surface:#1e1e1e; --text:#eaeaea; --dim:#9a9a9a;
-          --ok:#4caf50; --err:#ef5350; --warn:#fb8c00; --accent:#4c8dff; }
+  /* Look der OMP-Anmeldeseite (ui/design-tokens.css, .omp-login): tiefes Navy,
+     Cyan→Violett-Verläufe, Glas-Karte. Rein CSS, kein Bild-Asset. */
+  :root { color-scheme: dark;
+          --bg:#080c16; --surface:#0f1522; --raised:#172033; --border:rgba(110,150,255,.22);
+          --text:#eaf0fa; --dim:#93a1ba; --ok:#43a047; --err:#ef5350; --warn:#fb8c00; --onair:#e53935;
+          --cyan:#19d3f3; --violet:#a45cff; --accent:#2f8cff;
+          --grad:linear-gradient(90deg,#0fb8e6,#2f8cff 55%,#8b5cf6); }
   * { box-sizing: border-box; }
-  html, body { height: 100%; }
-  body { margin:0; padding:12px 16px calc(12px + env(safe-area-inset-bottom)); background:var(--bg);
-         color:var(--text); font:16px/1.4 system-ui,sans-serif; max-width:640px; margin-inline:auto;
-         display:flex; flex-direction:column; min-height:100%; }
-  h1 { font-size:18px; margin:4px 0 12px; }
-  select, button { font:inherit; padding:10px; border-radius:8px; border:1px solid #444; background:var(--surface);
-                   color:var(--text); min-height:44px; }
-  button { font-weight:600; }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-  button.stop { background:var(--err); border-color:var(--err); color:#fff; }
+  html, body { min-height:100%; }
+  body { margin:0; padding:max(18px,env(safe-area-inset-top)) 16px calc(18px + env(safe-area-inset-bottom));
+         color:var(--text); font:16px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;
+         display:flex; flex-direction:column; min-height:100vh; min-height:100dvh;
+         background:
+           radial-gradient(700px 480px at 8% 0%, rgba(25,211,243,.16), transparent 60%),
+           radial-gradient(700px 520px at 95% 100%, rgba(164,92,255,.18), transparent 60%),
+           linear-gradient(160deg,#060912 0%,#0a1224 55%,#0b0a1e 100%) fixed; }
+  body > * { width:100%; max-width:560px; margin-inline:auto; }
+
+  /* Markenkopf */
+  .brand { padding:6px 4px 18px; }
+  .eyebrow { font-size:11px; font-weight:600; letter-spacing:.4em; text-transform:uppercase; }
+  .brand h1 { margin:10px 0 0; font-size:30px; line-height:1.08; font-weight:800; letter-spacing:-.02em; }
+  .brand h1 .c { color:var(--cyan); }
+  .brand h1 .v { background:linear-gradient(90deg,#7b6bff,var(--violet)); -webkit-background-clip:text;
+                 background-clip:text; color:transparent; }
+  .rule { width:96px; height:3px; border-radius:2px; margin:14px 0 8px; background:linear-gradient(90deg,var(--cyan),var(--violet)); }
+  .tag { font-size:11px; letter-spacing:.3em; text-transform:uppercase; color:var(--dim); }
+
+  select, button { font:inherit; padding:11px 12px; border-radius:8px; min-height:46px;
+                   border:1px solid rgba(110,150,255,.2); background:rgba(6,9,18,.7); color:var(--text); }
+  select { appearance:none; -webkit-appearance:none; padding-right:34px;
+           background-image:linear-gradient(45deg,transparent 50%,var(--dim) 50%),linear-gradient(135deg,var(--dim) 50%,transparent 50%);
+           background-position:calc(100% - 18px) 52%,calc(100% - 13px) 52%; background-size:5px 5px; background-repeat:no-repeat; }
+  select:focus, button:focus-visible { outline:none; border-color:var(--cyan); box-shadow:0 0 0 3px rgba(25,211,243,.18); }
+  button { font-weight:600; letter-spacing:.01em; cursor:pointer; }
+  button.primary { background:var(--grad); border-color:transparent; color:#fff; box-shadow:0 4px 16px rgba(47,140,255,.28); }
+  button.stop { background:transparent; border-color:var(--err); color:var(--err); }
   button:disabled { opacity:.45; }
   .dim { color:var(--dim); }
 
-  /* ---- Vor dem Verbinden / nach dem Trennen: NUR Konfiguration + großer Verbinden-Button ---- */
-  #setup .row { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
-  #setup label { display:flex; flex-direction:column; gap:2px; font-size:13px; color:var(--dim); flex:1 1 130px; }
-  #setup .check { flex-direction:row; align-items:center; gap:8px; color:var(--text); font-size:15px; flex:1 1 100%; }
-  #setup .check input { width:22px; height:22px; }
-  #setup #start { width:100%; margin-top:16px; font-size:17px; padding:16px; }
-  /* Bugliste 2026-09-25 #2: gut sichtbarer, laienverständlicher Fehler-
-     Hinweis direkt im Setup-Bildschirm (s. HTML-Kommentar bei #setupError). */
-  .error-banner { margin-top:10px; padding:10px 12px; border-radius:8px; background:var(--err); color:#fff;
-                  font-size:14px; font-weight:600; line-height:1.35; }
+  /* ---- Vor dem Verbinden: Glas-Karte mit Konfiguration + großem Verbinden-Button ---- */
+  #setup { padding:24px 20px 20px; border-radius:16px; border:1px solid var(--border);
+           background:linear-gradient(180deg,rgba(23,32,51,.72),rgba(11,16,29,.8));
+           box-shadow:0 24px 80px rgba(0,0,0,.55),0 0 60px rgba(47,140,255,.1),inset 0 1px 0 rgba(255,255,255,.06);
+           -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px); }
+  #setup .row { display:flex; gap:12px; margin-top:12px; flex-wrap:wrap; }
+  #setup .row:first-child { margin-top:0; }
+  #setup label { display:flex; flex-direction:column; gap:6px; font-size:11px; font-weight:600;
+                 letter-spacing:.12em; text-transform:uppercase; color:var(--dim); flex:1 1 140px; }
+  #setup label select { text-transform:none; letter-spacing:normal; font-weight:400; font-size:15px; }
+  #setup .check { flex-direction:row; align-items:center; gap:10px; color:var(--text); font-size:15px; flex:1 1 100%;
+                  text-transform:none; letter-spacing:normal; font-weight:400; }
+  #setup .check input { width:22px; height:22px; accent-color:var(--accent); }
+  #setup #start { width:100%; margin-top:20px; font-size:17px; padding:16px; border-radius:10px; }
+  #setupHint { margin:12px 0 0; font-size:12px; text-align:center; }
+  /* Bugliste 2026-09-25 #2: gut sichtbarer, laienverständlicher Fehler-Hinweis im Setup-Bildschirm. */
+  .error-banner { margin:14px 0 0; padding:10px 12px; border-radius:8px; font-size:14px; font-weight:600; line-height:1.35;
+                  color:#ffd9d8; background:rgba(239,83,80,.14); border:1px solid rgba(239,83,80,.5); }
 
   /* ---- Nach dem Verbinden: Kachel-Ansicht (Kamera + Retourbild) ---- */
   #live { display:none; flex-direction:column; flex:1; min-height:0; }
   #live.active { display:flex; }
-  #tiles { position:relative; flex:1; min-height:0; display:flex; gap:4px; background:#000; border-radius:8px; overflow:hidden; }
+  #tiles { position:relative; flex:1; min-height:0; display:flex; gap:6px; background:#000; border-radius:14px; overflow:hidden;
+           border:1px solid var(--border); box-shadow:0 18px 60px rgba(0,0,0,.55); }
   #tiles.single { aspect-ratio:16/9; flex:none; }
   .tile { position:relative; background:#000; overflow:hidden; }
   .tile video { width:100%; height:100%; object-fit:contain; display:block; }
@@ -45,29 +78,37 @@
   #tiles.cam-large .tile[data-role="cam"] { flex:1 1 100%; }
   #tiles.cam-large .tile[data-role="retour"],
   #tiles.retour-large .tile[data-role="cam"] {
-    position:absolute; right:8px; bottom:8px; width:32%; aspect-ratio:16/9;
-    border:2px solid #444; border-radius:6px; z-index:2; box-shadow:0 2px 8px #000a;
+    position:absolute; right:10px; bottom:10px; width:32%; aspect-ratio:16/9;
+    border:1px solid rgba(110,150,255,.5); border-radius:8px; z-index:2; box-shadow:0 4px 16px #000c;
   }
   #tiles.retour-large .tile[data-role="retour"] { flex:1 1 100%; }
-  .badge { position:absolute; top:8px; left:8px; padding:2px 10px; border-radius:12px; font-size:13px;
-           font-weight:600; background:#000a; pointer-events:none; }
-  .badge.live { color:#fff; background:var(--err); }
-  .tile-label { position:absolute; bottom:6px; left:8px; font-size:11px; color:#fff; background:#000a;
-                padding:1px 8px; border-radius:10px; pointer-events:none; }
+  .badge { position:absolute; top:10px; left:10px; padding:3px 11px; border-radius:12px; font-size:12px; font-weight:700;
+           letter-spacing:.06em; text-transform:uppercase; color:#cfe9ff; pointer-events:none;
+           background:rgba(6,9,18,.7); border:1px solid rgba(25,211,243,.35); -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px); }
+  .badge.live { color:#fff; background:var(--onair); border-color:transparent; box-shadow:0 0 10px 1px rgba(229,57,53,.6); }
+  .tile-label { position:absolute; bottom:8px; left:10px; font-size:11px; font-weight:600; letter-spacing:.06em; color:#fff;
+                background:rgba(6,9,18,.7); padding:2px 9px; border-radius:10px; pointer-events:none; }
 
-  #live .row { display:flex; gap:8px; margin-top:10px; }
+  #live .row { display:flex; gap:10px; margin-top:12px; }
   #live .row > button { flex:1; }
 
   /* ---- Status/Log: eingeklappt, per kleinem Button erreichbar ---- */
-  #statusPanel { display:none; margin-top:10px; }
+  #statusPanel { display:none; margin-top:12px; }
   #statusPanel.open { display:block; }
-  .stats { padding:10px 12px; background:var(--surface); border-radius:8px; font-size:14px; }
+  .stats { padding:12px 14px; border-radius:12px; font-size:14px; border:1px solid var(--border);
+           background:linear-gradient(180deg,rgba(23,32,51,.72),rgba(11,16,29,.8)); }
   .stats b { font-size:26px; font-variant-numeric:tabular-nums; }
-  #log { margin-top:8px; font:12px ui-monospace,monospace; color:var(--dim); white-space:pre-wrap; max-height:8em; overflow:auto; }
+  #log { margin-top:8px; font:12px ui-monospace,"SF Mono",monospace; color:var(--dim); white-space:pre-wrap; max-height:8em; overflow:auto; }
+  .foot { margin-top:auto; padding-top:18px; text-align:center; font-size:11px; color:#5f6368; }
 </style>
 </head>
 <body>
-<h1>OMP Kamera</h1>
+<header class="brand">
+  <div class="eyebrow">Open Media Platform</div>
+  <h1><span class="c">Kamera</span> <span class="v">· Zuspielung</span></h1>
+  <div class="rule"></div>
+  <div class="tag">Standards. Technologie. Freiheit.</div>
+</header>
 
 <!-- Vor dem Verbinden / nach dem Trennen: nur Konfiguration, kein Videobild sichtbar (Nutzerauftrag 2026-09-24). -->
 <div id="setup">
@@ -489,5 +530,6 @@ document.addEventListener('visibilitychange', async () => {
 if (!window.isSecureContext) log('Hinweis: Kamera-Zugriff braucht HTTPS (oder localhost).');
 navigator.mediaDevices?.enumerateDevices().then(listCameras).catch(() => {});
 </script>
+<div class="foot">OpenMediaPlatform</div>
 </body>
 </html>
