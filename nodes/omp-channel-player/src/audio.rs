@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use gst::prelude::*;
 use gstreamer as gst;
+use omp_audio_rules::loudness::{LoudnessParams, Normalizer};
 use omp_audio_rules::{AudioPlan, AudioSettings, Mapping, SourceDesc, SourceKind};
 
 use crate::pipeline::SAMPLE_RATE;
@@ -66,8 +67,12 @@ fn matrix_to_gst_array(matrix: &[Vec<f64>]) -> gst::Array {
 /// Ein Zweig des Verteilers: `queue → audiomixmatrix → capsfilter → volume → queue(delay)`, am Ende `tail`.
 struct DistGroup {
     matrix: gst::Element,
-    /// Verarbeitungsschritt `gain` (Standard 1,0 = Durchgriff).
+    /// Verarbeitungsschritt `gain` (Standard 1,0 = Durchgriff); mit `loudness` führt ihn der Normalizer nach.
     volume: gst::Element,
+    /// Schritt `loudness` (EBU R128): `Some` = aktiv. Der Pad-Probe vor `volume` misst und regelt.
+    loudness: Arc<Mutex<Option<Normalizer>>>,
+    /// Fester Gain des Schritts `gain` (linear), mit dem der Normalizer-Gain multipliziert wird.
+    base_gain: Arc<Mutex<f64>>,
     /// Verarbeitungsschritt `delay`: `min-threshold-time` der Queue (Standard 0).
     delay: gst::Element,
     channels: u32,
@@ -75,7 +80,7 @@ struct DistGroup {
 }
 
 /// Verarbeitungsschritte, die dieser Node ausführt (Rest wird als Warnung gemeldet).
-const EXECUTABLE_STEPS: [&str; 2] = ["gain", "delay"];
+const EXECUTABLE_STEPS: [&str; 3] = ["gain", "delay", "loudness"];
 
 /// Verteilt einen interleaved Quellstrom (N Kanäle) auf alle Zielgruppen.
 pub struct Distributor {
@@ -105,6 +110,24 @@ impl Distributor {
             matrix.set_property("matrix", matrix_to_gst_array(&vec![vec![0.0f64; 1]; g.channels as usize]));
             let caps = gst::ElementFactory::make("capsfilter").property("caps", group_caps(g.channels)).build().map_err(|e| format!("capsfilter({}): {e}", g.id))?;
             let volume = make("volume")?;
+            let loudness: Arc<Mutex<Option<Normalizer>>> = Arc::new(Mutex::new(None));
+            let base_gain = Arc::new(Mutex::new(1.0f64));
+            {
+                // Messen und nachregeln: jeder Puffer vor `volume` geht durch den Normalizer (nur wenn aktiv).
+                let (state, base, vol) = (loudness.clone(), base_gain.clone(), volume.clone());
+                volume.static_pad("sink").ok_or("volume: kein sink-Pad")?.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
+                    if let Some(buf) = info.buffer()
+                        && let Ok(mut guard) = state.try_lock()
+                        && let Some(n) = guard.as_mut()
+                        && let Ok(map) = buf.map_readable()
+                    {
+                        let samples: Vec<f32> = map.as_slice().chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+                        let lin = n.process(&samples) * *base.lock().expect("lock poisoned");
+                        vol.set_property("volume", lin.clamp(0.0, 10.0));
+                    }
+                    gst::PadProbeReturn::Ok
+                });
+            }
             let delay = gst::ElementFactory::make("queue")
                 .property("max-size-buffers", 0u32)
                 .property("max-size-bytes", 0u32)
@@ -114,7 +137,7 @@ impl Distributor {
             let tail = make("identity")?;
             pipeline.add_many([&queue, &matrix, &caps, &volume, &delay, &tail]).map_err(|e| format!("add group chain ({}): {e}", g.id))?;
             gst::Element::link_many([&tee, &queue, &matrix, &caps, &volume, &delay, &tail]).map_err(|e| format!("link group chain ({}): {e}", g.id))?;
-            groups.push(DistGroup { matrix, volume, delay, channels: g.channels, tail });
+            groups.push(DistGroup { matrix, volume, loudness, base_gain, delay, channels: g.channels, tail });
         }
         Ok(Distributor { input, groups, ctx, plan })
     }
@@ -183,7 +206,19 @@ fn apply_chain(dg: &DistGroup, chain: &[omp_audio_rules::ProcessorRef]) {
             _ => {}
         }
     }
-    dg.volume.set_property("volume", 10f64.powf(gain_db / 20.0).clamp(0.0, 10.0));
+    let base = 10f64.powf(gain_db / 20.0).clamp(0.0, 10.0);
+    dg.volume.set_property("volume", base);
+    *dg.base_gain.lock().expect("lock poisoned") = base;
+    // `loudness`: Ziel in LUFS (Standard -23), optional `maxGain` (dB) und `ceiling` (dBFS).
+    *dg.loudness.lock().expect("lock poisoned") = chain.iter().find(|s| s.name == "loudness").and_then(|s| {
+        let d = LoudnessParams::default();
+        let params = LoudnessParams {
+            target_lufs: num(s, "target").unwrap_or(d.target_lufs),
+            max_gain_db: num(s, "maxGain").unwrap_or(d.max_gain_db).max(0.0),
+            ceiling_dbfs: num(s, "ceiling").unwrap_or(d.ceiling_dbfs),
+        };
+        Normalizer::new(dg.channels, SAMPLE_RATE, params).map_err(|e| eprintln!("omp-channel-player: loudness: {e}")).ok()
+    });
     dg.delay.set_property("min-threshold-time", (delay_ms * 1_000_000.0) as u64);
 }
 
@@ -195,12 +230,16 @@ mod tests {
     fn gain_and_delay_are_applied_and_reset_per_chain() {
         gst::init().unwrap();
         let mk = |n: &str| gst::ElementFactory::make(n).build().unwrap();
-        let dg = DistGroup { matrix: mk("audiomixmatrix"), volume: mk("volume"), delay: mk("queue"), channels: 2, tail: mk("identity") };
+        let dg = DistGroup { matrix: mk("audiomixmatrix"), volume: mk("volume"), loudness: Default::default(), base_gain: Arc::new(Mutex::new(1.0)), delay: mk("queue"), channels: 2, tail: mk("identity") };
         let step = |name: &str, key: &str, v: f64| omp_audio_rules::ProcessorRef { name: name.into(), params: [(key.to_string(), serde_json::json!(v))].into_iter().collect() };
         apply_chain(&dg, &[step("gain", "db", -6.0), step("delay", "ms", 40.0)]);
         assert!((dg.volume.property::<f64>("volume") - 0.501).abs() < 0.01);
         assert_eq!(dg.delay.property::<u64>("min-threshold-time"), 40_000_000);
+        assert!(dg.loudness.lock().unwrap().is_none());
+        apply_chain(&dg, &[step("loudness", "target", -23.0)]);
+        assert!(dg.loudness.lock().unwrap().is_some(), "loudness aktiviert den Normalizer");
         apply_chain(&dg, &[]);
+        assert!(dg.loudness.lock().unwrap().is_none());
         assert_eq!(dg.volume.property::<f64>("volume"), 1.0);
         assert_eq!(dg.delay.property::<u64>("min-threshold-time"), 0);
     }

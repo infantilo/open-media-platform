@@ -16,6 +16,12 @@ fn service_token(orchestrator_url: &str, instance_id: &str, launch_secret: &str)
 /// Strenger Abruf: jeder Fehler (kein Launcher, nicht erreichbar, ungültiges Dokument) ist ein `Err`.
 /// Für „Neu laden“ im laufenden Betrieb, wo ein Fehler sichtbar werden soll statt still auf Standard zu fallen.
 pub fn fetch_settings(orchestrator_url: &str, instance_id: Option<&str>, launch_secret: &str) -> Result<AudioSettings, String> {
+    // Entwicklungs-/Testhilfe: `OMP_AUDIO_RULES_FILE` zeigt auf ein Dokument, das statt des Orchestrator-Stands gilt.
+    if let Ok(path) = std::env::var("OMP_AUDIO_RULES_FILE") {
+        let s: AudioSettings = serde_json::from_str(&std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?).map_err(|e| format!("{path}: {e}"))?;
+        let errs = s.validate();
+        return if errs.is_empty() { Ok(s) } else { Err(format!("{path} ungültig ({})", errs.join("; "))) };
+    }
     let instance_id = instance_id.filter(|_| !launch_secret.is_empty()).ok_or("OMP_INSTANCE_ID/OMP_LAUNCH_SECRET fehlen")?;
     let token = service_token(orchestrator_url, instance_id, launch_secret)?;
     let url = format!("{}/api/v1/audio-rules", orchestrator_url.trim_end_matches('/'));
@@ -33,7 +39,7 @@ pub fn fetch_settings(orchestrator_url: &str, instance_id: Option<&str>, launch_
 pub fn load_settings(node: &str, orchestrator_url: &str, instance_id: Option<&str>, launch_secret: &str) -> AudioSettings {
     match fetch_settings(orchestrator_url, instance_id, launch_secret) {
         Ok(s) => {
-            eprintln!("{node}: Audio-Einstellungen vom Orchestrator geladen ({} Zielgruppen, {} Zuordnungen)", s.output_profile.groups.len(), s.mappings.len());
+            eprintln!("{node}: Audio-Einstellungen geladen ({} Zielgruppen, {} Zuordnungen)", s.output_profile.groups.len(), s.mappings.len());
             s
         }
         Err(why) => {

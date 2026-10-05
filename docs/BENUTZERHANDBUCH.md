@@ -1055,8 +1055,10 @@ mit **Speichern**; **Auf Standard zurücksetzen** lädt die mitgelieferten ORF-W
 3. **Zuordnungsvorlagen** — pro Vorlage und Gruppe eine **Klick-Matrix**: Zeilen sind die
    Quellspuren, Spalten die Kanäle der Gruppe. Ein Klick weist die Spur dem Kanal zu, ein zweiter
    macht ihn still. Alternativ „Tags statt Spuren“ (Tag-Ausdruck wie `role:ad AND layout:stereo`)
-   und ein Prozessor (z. B. Upmix Stereo → 5.1). Je Zuordnung lassen sich **Gain (dB)** und
-   **Verzögerung (ms)** einstellen (z. B. Laufzeitausgleich für den Hörfilmton). Die 13 ORF-Presets sind als Vorlagen enthalten.
+   und ein Prozessor (z. B. Upmix Stereo → 5.1). Je Zuordnung lassen sich **Gain (dB)**,
+   **Verzögerung (ms)** (z. B. Laufzeitausgleich für den Hörfilmton) und ein **Loudness-Ziel (LUFS)** einstellen.
+   Das Loudness-Ziel schaltet einen dynamischen EBU-R128-Normalizer ein (z. B. −23 LUFS); leer = aus.
+   Verarbeitung führt bisher nur der Kanal-Player aus. Die 13 ORF-Presets sind als Vorlagen enthalten.
 4. **Ersatzregeln** — greifen, wenn die Zuordnung einer Gruppe nicht erfüllbar ist. Von oben nach
    unten gewinnt die erste Regel, die eine Quelle findet; in einer Regel die erste Aktion, die
    klappt: *Quelle nehmen* (Tag-Ausdruck, optional über Upmix/Downmix), *Stille* oder *Event nicht

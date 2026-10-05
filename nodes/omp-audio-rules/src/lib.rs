@@ -7,6 +7,8 @@
 #[cfg(feature = "client")]
 pub mod client;
 pub mod defaults;
+#[cfg(feature = "dsp")]
+pub mod loudness;
 pub mod model;
 pub mod processors;
 pub mod resolve;

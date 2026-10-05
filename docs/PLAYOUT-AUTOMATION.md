@@ -195,10 +195,14 @@ Start und fällt ohne erreichbaren Orchestrator auf die eingebauten Standardwert
 - **In der Automation:** Das Event trägt `audioMapping` (flach im Event-JSON, per `updateItem` setzbar, leer = Standard des Players) und reicht es beim Laden an den Kanal-Player. Der Automation-Node spiegelt alle 2 s `audioPlans` (Plan je Kanal a/b), `audioGroups` und `audioMappings` vom Player.
 - **Parameter am Player:** `audioPlan` (zuletzt aufgelöster Plan mit Matrizen, Ersatzregel und
   Warnungen), `audioGroups`, `audioMappings`.
-- **Verarbeitung:** Der Kanal-Player führt `gain` (dB) und `delay` (ms, z. B. für Laufzeitausgleich)
-  je Gruppe aus. Andere Schritte (`loudness`, später „Klare Sprache“) erscheinen als Warnung am
-  Plan und werden nicht ausgeführt; für EBU R128 fehlt im System ein passendes GStreamer-Element
-  (`audioloudnorm`).
+- **Verarbeitung:** Der Kanal-Player führt `gain` (dB), `delay` (ms, z. B. für Laufzeitausgleich) und
+  `loudness` je Gruppe aus. `loudness` ist ein dynamischer EBU-R128-Normalizer (ITU-R BS.1770,
+  Short-Term-Messung über 3 s): Er führt den Gain sanft auf das Ziel nach (Parameter `target` in LUFS,
+  Standard −23; `maxGain` ±dB, Standard 12; `ceiling` dBFS, Standard −1). Absenken geht schneller (6 dB/s)
+  als Anheben (1 dB/s); bei Stille bleibt der Gain stehen. Es ist kein True-Peak-Limiter und hat keine
+  Vorausschau: Die Obergrenze bezieht sich auf die zuletzt gesehenen Sample-Spitzen. Andere Schritte
+  (später „Klare Sprache“) erscheinen als Warnung am Plan und werden nicht ausgeführt. Der MXF-Player
+  und der MXF-Player direct führen noch keine Verarbeitungsschritte aus (nur Zuordnung und Matrizen).
 
 ## 8. Asset-Preflight und Materialisierung
 

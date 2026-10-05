@@ -435,6 +435,7 @@ class AudioRulesView extends HTMLElement {
     const num = (v: string) => (v.trim() === "" ? undefined : Number(v.replace(",", ".")));
     return [
       field("Gain (dB)", textInput(String(chainParam(spec, "gain", "db") ?? ""), (v) => { setChainParam(spec, "gain", "db", num(v)); this.#touch(); }, { width: "70px", placeholder: "0" })),
+      field("Loudness-Ziel (LUFS)", textInput(String(chainParam(spec, "loudness", "target") ?? ""), (v) => { setChainParam(spec, "loudness", "target", num(v)); this.#touch(); }, { width: "90px", placeholder: "aus (z. B. -23)" })),
       field("Verzögerung (ms)", textInput(String(chainParam(spec, "delay", "ms") ?? ""), (v) => { setChainParam(spec, "delay", "ms", num(v)); this.#touch(); }, { width: "90px", placeholder: "0" })),
     ];
   }

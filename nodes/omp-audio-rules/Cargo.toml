@@ -11,8 +11,11 @@ publish = false
 [features]
 # Lädt das Dokument vom Orchestrator (Service-Token), für die Nodes.
 client = ["dep:ureq"]
+# Dynamischer Loudness-Normalizer (EBU R128 / ITU-R BS.1770), s. `loudness`.
+dsp = ["dep:ebur128"]
 
 [dependencies]
+ebur128 = { version = "0.1.10", optional = true }
 ureq = { version = "3.3.0", features = ["json"], optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"

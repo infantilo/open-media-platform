@@ -139,7 +139,7 @@ der im Editor sichtbar und änderbar ist.
 | A3 ✓ | Gemeinsames Ausspiel-Crate: dynamische Zielgruppen, Matrix, Plan→GStreamer; `omp-channel-player` darauf umstellen |
 | A4 ✓ | Automation: Event-Audioplan, Resolve beim Cue, Warnungen/As-Run, API |
 | A5 ✓ | UI: Editor „Audio-Ausgabe“ (Gruppen, Schemata, Vorlagen-Matrix, Regel-Baukasten, Testwerkzeug), Event-Reiter, Tabellenspalte |
-| A6 ✓ | Prozessoren: Up-/Downmix und Mono↔Stereo als Matrizen (A1), `gain` und `delay` als Kette im Kanal-Player; `loudness` zurückgestellt (kein R128-Element im System) |
+| A6 ✓ | Prozessoren: Up-/Downmix und Mono↔Stereo als Matrizen (A1), `gain` und `delay` als Kette im Kanal-Player; `loudness` als dynamischer R128-Normalizer (Crate `ebur128`, Feature `dsp`) im Kanal-Player; MXF-Player führen die Kette noch nicht aus |
 | A7 | `dialog-enhance` („Klare Sprache“) — **auf später verschoben** (Nutzerentscheidung 2026-10-05) |
 | A8 ✓ | `omp-mxf-player` auf dieselbe Engine migrieren, hartkodierte Presets entfernen |
 
