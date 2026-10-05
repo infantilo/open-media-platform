@@ -35,6 +35,9 @@
 //! und Viewer-Frame-Grab). Dieser Node hat strukturell kein
 //! Active-Pad-Switching mehr, der Bug kann hier nicht auftreten.
 //!
+//! **Dateiende:** Standard ist KEIN Loop — danach leeres Bild bis zum nächsten `load()`; mit `OMP_LOOP=1`
+//! gilt der folgende Loop-Neuaufbau.
+//!
 //! **EOS-Loop** (nur für `File`-Items relevant, `TestPattern`/`Live` sind
 //! endlose Live-Quellen): wie bei `omp-mxf-player-direct` baut ein echtes
 //! Dateiende den ZULETZT geladenen Zweig automatisch neu auf (dieselben
@@ -887,6 +890,20 @@ pub fn run(config: Config, tx: UnboundedSender<Event>, ready: oneshot::Sender<Re
                     a.teardown();
                 }
                 std::thread::sleep(std::time::Duration::from_millis(500));
+                // Kein Endlos-Loop im Playout: Nach dem Dateiende (auch wenn der Kanal längst nicht mehr im
+                // Programm ist) geht der Kanal auf das leere Bild, bis die Automation das nächste Item lädt.
+                // `OMP_LOOP=1` stellt den alten Loop-Neuaufbau wieder her (Einzelbetrieb ohne Automation).
+                if std::env::var("OMP_LOOP").map(|v| v == "1").unwrap_or(false) == false
+                    && matches!(current_item.as_ref().map(|i| &i.source), Some(ItemSource::File { .. }))
+                {
+                    current_item = Some(Item {
+                        label: String::new(),
+                        source: ItemSource::TestPattern { pattern: EMPTY_PATTERN.to_string(), tone_freq: 0.0 },
+                        duration_hint_ms: None,
+                        audio_mapping: None,
+                    });
+                    shared.lock().expect("lock poisoned").label = String::new();
+                }
                 if let Some(item) = current_item.clone() {
                     match build(&config, &item, tx.clone(), event_tx.clone(), audio_plan.clone()) {
                         Ok(p) => {

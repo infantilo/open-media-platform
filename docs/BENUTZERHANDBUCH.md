@@ -1123,6 +1123,8 @@ Live-Quelle im Wechsel, mit den Übergängen Cut, Fade-Cut und Cut-Fade. Sie ble
 **Live-Quelle in der Playlist:** Die Quelle wird per Tag (`source.live`) gewählt, nicht per Sender-ID; die
 Playlist funktioniert deshalb auch nach einem Neustart der Live-Quelle.
 
+**Dateiende:** Der Kanal-Player wiederholt eine Datei nach ihrem Ende **nicht** mehr, sondern zeigt das leere Bild, bis die Automation das nächste Event lädt (Loop nur mit `OMP_LOOP=1`).
+
 **Ausgangsgruppen hören:** Im Panel des **Audio-Monitors** über das Dropdown **Gruppenwahl** die gewünschte
 Quelle wählen — jeder Kanal-Player bietet dort seine Audio-Gruppen an („… Audio“ = Programmton, danach
 „… Audio Hörfilm/AD“, „… Originalton“, „… Dolby E“, „… Audio 5.1 Diskret“). Das Audio wird direkt im
