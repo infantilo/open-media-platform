@@ -233,6 +233,12 @@ impl ChildEvent {
     }
 
     /// Prüft ein Kind beim Setzen — Fehler als Klartext für den Operator.
+    /// Voiceover im neuen Format (Kanal/Blenden/Ducking in `params`, Ausführung am Audiomischer)
+    /// — ein Voiceover mit `method` bleibt ein freier Node-Befehl (Altbestand).
+    pub fn is_native_voiceover(&self) -> bool {
+        self.kind == ChildType::Voiceover && self.method.trim().is_empty()
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if !self.kind.is_supported() {
             return Err(format!(
@@ -243,7 +249,9 @@ impl ChildEvent {
         if self.kind.is_graphics() && self.template_id.trim().is_empty() {
             return Err("templateId fehlt (Grafik/Logo/Branding)".to_string());
         }
-        if self.kind.is_node_command() && (self.target.trim().is_empty() || self.method.trim().is_empty()) {
+        if self.is_native_voiceover() {
+            crate::voiceover::Voiceover::parse(&self.params)?;
+        } else if self.kind.is_node_command() && (self.target.trim().is_empty() || self.method.trim().is_empty()) {
             return Err("target (Node-Label) und method müssen gesetzt sein (Trigger/Node-Command/Audio/Voiceover)".to_string());
         }
         if self.kind == ChildType::Webhook && !(self.url.starts_with("http://") || self.url.starts_with("https://")) {
@@ -415,6 +423,22 @@ mod tests {
         // Ohne atUtc gar nicht erst gültig.
         let bad = ChildEvent::graphic("t", TimingMode::Absolute, 0, 0);
         assert!(bad.validate().unwrap_err().contains("atUtc"));
+    }
+
+    #[test]
+    fn native_voiceover_validates_its_params_and_legacy_voiceover_stays_a_node_command() {
+        let mut c = ChildEvent::graphic("", TimingMode::RelativeToStart, 1000, 5000);
+        c.kind = ChildType::Voiceover;
+        assert!(c.is_native_voiceover());
+        assert!(c.validate().unwrap_err().contains("channel"));
+        c.params = serde_json::json!({"channel": "ch3", "duck": {"rule": "duck1"}});
+        c.validate().unwrap();
+        // Altbestand: mit `method` ein freier Node-Befehl (target + method Pflicht).
+        c.method = "play".to_string();
+        assert!(!c.is_native_voiceover());
+        assert!(c.validate().unwrap_err().contains("target"));
+        c.target = "Sprecher".to_string();
+        c.validate().unwrap();
     }
 
     #[test]

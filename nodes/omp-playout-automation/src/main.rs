@@ -68,6 +68,7 @@ mod structlog;
 mod timeline;
 mod trigger;
 mod uibundle;
+mod voiceover;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -886,6 +887,8 @@ struct AutomationStore {
     /// `playout` (Snapshot, Restart-Rekonstruktion, Ausführungsjournal),
     /// s. `persist.rs`.
     persistence: persist::Persistence,
+    /// Kapitel 27 / P9: laufende Voiceovers (`Label:Kanal`, Priorität).
+    voiceovers_active: Mutex<Vec<(String, i64)>>,
 }
 
 impl AutomationStore {
@@ -2577,6 +2580,9 @@ fn retire_children(state: &mut AutomationState) {
 
 /// Braucht das Kind nach dem Start noch einen Stopp-Befehl?
 fn needs_stop(child: &ChildEvent) -> bool {
+    if child.is_native_voiceover() {
+        return true;
+    }
     match child.kind {
         k if k.is_graphics() => true,
         k if k.is_node_command() => !child.stop_method.trim().is_empty(),
@@ -2704,11 +2710,58 @@ fn plan_children(
 fn child_target_ok(state: &AutomationState, child: &ChildEvent) -> bool {
     if child.kind.is_graphics() {
         state.graphics_node_id.is_some()
+    } else if child.is_native_voiceover() {
+        let label = if child.target.trim().is_empty() { &state.target_audio_mixer_label } else { &child.target };
+        state.discovered_labels.iter().any(|l| l == label)
     } else if child.kind.is_node_command() {
         state.discovered_labels.iter().any(|l| l == &child.target)
     } else {
         true
     }
+}
+
+/// Voiceover (Kapitel 27 / P9, `voiceover.rs`): Ablaufplan gegen den Audiomischer. Eine höhere
+/// Priorität verdrängt kein laufendes Voiceover, aber ein laufendes mit HÖHERER Priorität
+/// blockiert den Start eines niedrigeren (Fehler → Fehlerrichtlinie des Kindes).
+fn execute_voiceover(store: &AutomationStore, child: &ChildEvent, stop: bool) -> Result<(), String> {
+    let vo = voiceover::Voiceover::parse(&child.params)?;
+    let label = if child.target.trim().is_empty() {
+        store.state.lock().expect("lock poisoned").target_audio_mixer_label.clone()
+    } else {
+        child.target.clone()
+    };
+    if label.trim().is_empty() {
+        return Err("Voiceover: kein Audiomischer (target des Kindes oder targetAudioMixerLabel des Automators)".to_string());
+    }
+    let node_id = remote::resolve_node_id_by_label(&store.registry, &label).ok_or_else(|| format!("Ziel-Node „{label}\u{201c} nicht gefunden"))?;
+    let client = store.proxy_client(node_id);
+    let key = format!("{}:{}", label, vo.channel);
+    if !stop {
+        let mut active = store.voiceovers_active.lock().expect("lock poisoned");
+        if let Some((_, p)) = active.iter().find(|(k, p)| *k != key && *p > vo.priority) {
+            return Err(format!("Voiceover verdrängt: ein Voiceover mit höherer Priorität ({p}) läuft"));
+        }
+        active.retain(|(k, _)| *k != key);
+        active.push((key.clone(), vo.priority));
+    }
+    let plan = if stop { vo.stop_plan() } else { vo.start_plan() };
+    let mut first_err: Option<String> = None;
+    for step in plan {
+        if step.wait_ms > 0 {
+            std::thread::sleep(Duration::from_millis(step.wait_ms));
+        }
+        if let Err(e) = client.invoke(&step.method, step.params.clone()) {
+            // Beim Stoppen trotzdem alle Schritte versuchen (Kanal muss zu, Regel aus).
+            first_err.get_or_insert_with(|| format!("{}: {e}", step.method));
+            if !stop {
+                break;
+            }
+        }
+    }
+    if stop || first_err.is_some() {
+        store.voiceovers_active.lock().expect("lock poisoned").retain(|(k, _)| *k != key);
+    }
+    first_err.map_or(Ok(()), Err)
 }
 
 /// Führt Start oder Stopp eines Kindes aus (blockierend, `spawn_blocking`).
@@ -2732,6 +2785,9 @@ fn execute_child(
                 .invoke("show", serde_json::json!({"templateId": child.template_id, "data": child.data}))
                 .map_err(|e| e.to_string())
         };
+    }
+    if child.is_native_voiceover() {
+        return execute_voiceover(store, child, stop);
     }
     if child.kind.is_node_command() {
         let method = if stop { child.stop_method.as_str() } else { child.method.as_str() };
@@ -4767,6 +4823,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         orchestrator_url: orchestrator_url.clone(),
         auth: auth.clone(),
         own_label: label.clone(),
+        voiceovers_active: Mutex::new(Vec::new()),
         persistence: persist::Persistence::new(
             instance_id.clone().filter(|_| !launch_secret.is_empty()),
             orchestrator_url.clone(),

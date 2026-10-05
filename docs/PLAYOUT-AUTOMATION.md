@@ -70,6 +70,13 @@ Typen: `GRAPHIC`, `LOGO`, `CHANNEL_BRANDING` (Grafik-Node `show`/`hide`);
 **Abgelehnt statt simuliert:** `SUBTITLE`, `ROUTING`, `SOURCE`, `SCTE35`, `GPI` — dafür gibt
 es keinen Ziel-Node; `setChildren` meldet es im Klartext.
 
+**Voiceover (P9, §53/§135):** `VOICEOVER` ohne `method` ist ein eigener Typ, der den Audiomischer
+steuert (der Automator plant, die Audioverarbeitung macht der Mischer). `params`:
+`{"channel":"ch3","gainDb":0,"fadeInMs":300,"fadeOutMs":500,"duck":{"rule":"d3","amountDb":-12,"attackMs":80,"releaseMs":600},"priority":0}`.
+`target` = Mischer-Label (leer → `targetAudioMixerLabel`). Start: Ducking-Regel an (Sprecher-Kanal als Schlüssel),
+Kanal auf Stille, entstummen, einblenden; Stopp: ausblenden, stumm, Regel aus. Ein laufendes Voiceover mit
+höherer `priority` blockiert den Start eines niedrigeren. Ein `VOICEOVER` mit `method` bleibt ein freier Node-Befehl.
+
 Zeitmodi (`timing`): `ABSOLUTE` (`atUtc`), `RELATIVE_TO_START` (`delayMs`),
 `RELATIVE_TO_END` (`delayMs` vor dem Ende, braucht feste Dauer), `FULL_PRIMARY`
 (Start bis Primary-Ende, auch bei Live; `durationMs=0`).
