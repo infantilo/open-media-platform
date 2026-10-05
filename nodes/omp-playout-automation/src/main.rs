@@ -596,7 +596,7 @@ fn item_meta_to_json(id: &str, m: &ItemMeta) -> Value {
     if let Some(f) = &m.media_ref.fallback_file {
         v["fallbackFile"] = serde_json::json!(f);
     }
-    for (k, val) in [("icon", &m.media_ref.icon), ("color", &m.media_ref.color), ("note", &m.media_ref.note), ("adClass", &m.media_ref.ad_class)] {
+    for (k, val) in [("icon", &m.media_ref.icon), ("color", &m.media_ref.color), ("note", &m.media_ref.note), ("adClass", &m.media_ref.ad_class), ("audioMapping", &m.media_ref.audio_mapping)] {
         if !val.is_empty() {
             v[k] = serde_json::json!(val);
         }
@@ -666,6 +666,12 @@ struct AutomationState {
     /// mehr angesprochenen Kanals an.
     media_library: Vec<String>,
     available_sources: Vec<Value>,
+    /// Kapitel 27 / A4: Audio-Spiegel der Kanal-Player (Discovery-Tick): zuletzt
+    /// aufgelöster Plan je Kanal (`audioPlan`), Zielgruppen und wählbare Vorlagen.
+    audio_plan_a: Value,
+    audio_plan_b: Value,
+    audio_groups: Value,
+    audio_mappings: Value,
     /// Item-ID, die zuletzt tatsächlich per `take_on_targets` remote live
     /// geschaltet wurde (C18-Fund, `ARCHITECTURE.md` §24.3) — bewusst
     /// **nicht** aus `playlist.on_air()` abgeleitet: erreicht `advance()`
@@ -762,6 +768,10 @@ impl AutomationState {
             discovered_labels: Vec::new(),
             media_library: Vec::new(),
             available_sources: Vec::new(),
+            audio_plan_a: Value::Null,
+            audio_plan_b: Value::Null,
+            audio_groups: Value::Array(vec![]),
+            audio_mappings: Value::Array(vec![]),
             last_live_item_id: None,
             carts: Vec::new(),
             next_cart_seq: 0,
@@ -2092,6 +2102,10 @@ fn load_args(meta: &ItemMeta) -> Value {
         // `LiveSelect` wird vorher zu `Live` aufgelöst (`resolve_item_media`).
         ItemMedia::Hold | ItemMedia::Jump { .. } | ItemMedia::LiveSelect { .. } => {}
     }
+    // Audio-Zuordnung des Events (Kapitel 27 / A4): der Player löst sie gegen die Quelle auf.
+    if !meta.media_ref.audio_mapping.is_empty() {
+        body["audioMapping"] = serde_json::json!(meta.media_ref.audio_mapping);
+    }
     body
 }
 
@@ -2140,6 +2154,8 @@ struct ItemPatch {
     color: Option<String>,
     #[serde(rename = "adClass")]
     ad_class: Option<String>,
+    #[serde(rename = "audioMapping")]
+    audio_mapping: Option<String>,
     media: Option<MediaPatch>,
     #[serde(rename = "durationMs")]
     duration_ms: Option<u64>,
@@ -2188,7 +2204,7 @@ fn apply_item_patch(
     if let Some(l) = p.label {
         meta.label = l;
     }
-    for (field, val) in [(&mut meta.media_ref.note, p.note), (&mut meta.media_ref.icon, p.icon), (&mut meta.media_ref.color, p.color), (&mut meta.media_ref.ad_class, p.ad_class)] {
+    for (field, val) in [(&mut meta.media_ref.note, p.note), (&mut meta.media_ref.icon, p.icon), (&mut meta.media_ref.color, p.color), (&mut meta.media_ref.ad_class, p.ad_class), (&mut meta.media_ref.audio_mapping, p.audio_mapping)] {
         if let Some(v) = val {
             *field = v;
         }
@@ -3172,6 +3188,11 @@ impl ParamStore for AutomationStore {
                 range: None,
                 readonly: true,
             },
+            // Kapitel 27 / A4 — Audio-Spiegel der Kanal-Player (JSON): `audioPlans` = {"a": Plan|null, "b": …},
+            // `audioGroups` = Zielgruppen, `audioMappings` = wählbare Vorlagen [{id,label}].
+            ParamSpec { name: "audioPlans".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec { name: "audioGroups".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec { name: "audioMappings".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
         ];
 
         let methods = vec![
@@ -3547,6 +3568,9 @@ impl ParamStore for AutomationStore {
             "availableNodes" => Some(serde_json::json!(state.discovered_labels)),
             "mediaLibrary" => Some(serde_json::json!(state.media_library)),
             "availableSources" => Some(serde_json::json!(state.available_sources)),
+            "audioPlans" => Some(serde_json::json!({"a": state.audio_plan_a, "b": state.audio_plan_b})),
+            "audioGroups" => Some(state.audio_groups.clone()),
+            "audioMappings" => Some(state.audio_mappings.clone()),
             _ => None,
         }
     }
@@ -4016,11 +4040,24 @@ async fn discovery_loop(store: Arc<AutomationStore>) {
                 let store2 = store.clone();
                 let fetched = tokio::task::spawn_blocking(move || {
                     let player = store2.proxy_client(player_a_node_id);
-                    (player.get_param("mediaLibrary"), player.get_param("availableSources"))
+                    (
+                        player.get_param("mediaLibrary"),
+                        player.get_param("availableSources"),
+                        player.get_param("audioPlan"),
+                        player.get_param("audioGroups"),
+                        player.get_param("audioMappings"),
+                    )
                 })
                 .await;
-                if let Ok((media_library, available_sources)) = fetched {
+                if let Ok((media_library, available_sources, audio_plan, audio_groups, audio_mappings)) = fetched {
                     let mut state = store.state.lock().expect("lock poisoned");
+                    state.audio_plan_a = audio_plan.unwrap_or(Value::Null);
+                    if let Ok(g) = audio_groups {
+                        state.audio_groups = g;
+                    }
+                    if let Ok(m) = audio_mappings {
+                        state.audio_mappings = m;
+                    }
                     if let Ok(v) = media_library {
                         state.media_library = v
                             .as_array()
@@ -4043,8 +4080,19 @@ async fn discovery_loop(store: Arc<AutomationStore>) {
                 let mut state = store.state.lock().expect("lock poisoned");
                 state.media_library.clear();
                 state.available_sources.clear();
+                state.audio_plan_a = Value::Null;
             }
         }
+        // Audio-Plan von Kanal B (Kanal A wird oben mitgeholt).
+        let player_b_node_id_for_plan = store.state.lock().expect("lock poisoned").player_b_node_id.clone();
+        let plan_b = match player_b_node_id_for_plan {
+            Some(id) => {
+                let store2 = store.clone();
+                tokio::task::spawn_blocking(move || store2.proxy_client(id).get_param("audioPlan").unwrap_or(Value::Null)).await.unwrap_or(Value::Null)
+            }
+            None => Value::Null,
+        };
+        store.state.lock().expect("lock poisoned").audio_plan_b = plan_b;
     }
 }
 
@@ -5809,6 +5857,18 @@ mod patch_tests {
         // Rate außerhalb 1..=250 oder null löscht sie.
         apply(&mut st, "a", serde_json::json!({"transitionRateFrames": 999})).unwrap();
         assert_eq!(st.metadata["a"].transition_rate_frames, None);
+    }
+
+    #[test]
+    fn audio_mapping_is_set_cleared_shown_and_passed_to_the_player() {
+        let mut st = state_with(&["a"]);
+        apply(&mut st, "a", serde_json::json!({"audioMapping": "stereo-dolbye"})).unwrap();
+        assert_eq!(st.metadata["a"].media_ref.audio_mapping, "stereo-dolbye");
+        assert_eq!(item_meta_to_json("a", &st.metadata["a"])["audioMapping"], "stereo-dolbye");
+        assert_eq!(load_args(&st.metadata["a"])["audioMapping"], "stereo-dolbye");
+        apply(&mut st, "a", serde_json::json!({"audioMapping": ""})).unwrap();
+        assert!(item_meta_to_json("a", &st.metadata["a"]).get("audioMapping").is_none());
+        assert!(load_args(&st.metadata["a"]).get("audioMapping").is_none(), "ohne Wahl nichts mitschicken");
     }
 
     #[test]

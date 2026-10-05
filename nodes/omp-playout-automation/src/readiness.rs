@@ -109,6 +109,10 @@ pub struct MediaRef {
     /// oder leer. Metadaten für As-Run/Anzeige und für SCTE-35-Regeln; löst selbst nichts aus.
     #[serde(rename = "adClass", default, skip_serializing_if = "String::is_empty")]
     pub ad_class: String,
+    /// Audio-Zuordnung (ID einer Vorlage aus dem Dokument `audio-rules`); leer = Standard des
+    /// Players (MXF: `stereo`, sonst Programmton der Quelle). Wird beim Laden an den Player gereicht.
+    #[serde(rename = "audioMapping", default, skip_serializing_if = "String::is_empty")]
+    pub audio_mapping: String,
 }
 
 /// Erlaubte Werte der Klassifikation (leer = keine).

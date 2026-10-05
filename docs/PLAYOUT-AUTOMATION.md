@@ -192,7 +192,8 @@ Start und fällt ohne erreichbaren Orchestrator auf die eingebauten Standardwert
 - **Ersatzregeln:** Fehlt eine verlangte Spur, greifen die Regeln des Dokuments (Standard:
   Programmton aus 5.1 per Downmix, 5.1 per Upmix aus dem Stereo-Programmton). Ohne passende
   Regel bleibt die Gruppe still, mit Warnung.
-- **Parameter:** `audioPlan` (zuletzt aufgelöster Plan mit Matrizen, Ersatzregel und
+- **In der Automation:** Das Event trägt `audioMapping` (flach im Event-JSON, per `updateItem` setzbar, leer = Standard des Players) und reicht es beim Laden an den Kanal-Player. Der Automation-Node spiegelt alle 2 s `audioPlans` (Plan je Kanal a/b), `audioGroups` und `audioMappings` vom Player.
+- **Parameter am Player:** `audioPlan` (zuletzt aufgelöster Plan mit Matrizen, Ersatzregel und
   Warnungen), `audioGroups`, `audioMappings`.
 - **Noch nicht enthalten:** Verarbeitungsschritte wie Loudness oder „Klare Sprache“ werden
   gemeldet, aber noch nicht ausgeführt (Schritte A6/A7).

@@ -137,7 +137,7 @@ der im Editor sichtbar und änderbar ist.
 | A1 ✓ | Crate `omp-audio-rules`: Datenmodell, Tag-Ausdrücke, Resolver, Standard-Regelsatz, Tests (kein GStreamer) |
 | A2 ✓ | Orchestrator: Speicherung/Validierung (`outputProfile`, `trackSchema`, `mapping`, `ruleSet`), Import der 13 ORF-Presets und 5 Gruppen als Standard |
 | A3 ✓ | Gemeinsames Ausspiel-Crate: dynamische Zielgruppen, Matrix, Plan→GStreamer; `omp-channel-player` darauf umstellen |
-| A4 | Automation: Event-Audioplan, Resolve beim Cue, Warnungen/As-Run, API |
+| A4 ✓ | Automation: Event-Audioplan, Resolve beim Cue, Warnungen/As-Run, API |
 | A5 | UI: Editor „Audio-Ausgabe“ (Gruppen, Schemata, Vorlagen-Matrix, Regel-Baukasten, Testwerkzeug), Event-Reiter, Tabellenspalte |
 | A6 | Prozessoren: `upmix51`, `downmix`, `mono-to-stereo`, `loudness` |
 | A7 | `dialog-enhance` („Klare Sprache“) — Verfahren noch zu klären |
