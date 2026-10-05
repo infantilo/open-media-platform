@@ -109,6 +109,8 @@ const GRAPHICS_TICK: Duration = Duration::from_millis(250);
 /// Orchestrator beim ersten Versuch kurz nicht erreichbar ist (nächster
 /// Tick holt es einfach nach, s. `token_refresh_loop`).
 const TOKEN_REFRESH_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
+/// Wiederholabstand, solange noch gar kein Service-Token vorliegt.
+const TOKEN_RETRY_INTERVAL: Duration = Duration::from_secs(3);
 
 /// Woher ein Rundown-/Cart-Item seine Essenz bezieht. Kapitel 6 Teil 7:
 /// dieser Node entscheidet das jetzt selbst aus den Operator-Argumenten
@@ -4126,10 +4128,12 @@ async fn token_refresh_loop(
     launch_secret: String,
     auth: OrchestratorAuth,
 ) {
-    let mut interval = tokio::time::interval(TOKEN_REFRESH_INTERVAL);
-    interval.tick().await; // erster Tick feuert sofort — Startwert wird vorher separat geholt
     loop {
-        interval.tick().await;
+        // Ohne Token (der Orchestrator kannte die Instanz beim ersten Abruf noch nicht — typisch auf einem
+        // anderen Host: 404 direkt nach dem Start) kurz und häufig wiederholen, sonst bliebe der Node bis
+        // zum regulären Refresh nach `TOKEN_REFRESH_INTERVAL` ohne Fernzugriff auf Player/Mischer.
+        let wait = if auth.header_value().is_some() { TOKEN_REFRESH_INTERVAL } else { TOKEN_RETRY_INTERVAL };
+        tokio::time::sleep(wait).await;
         let url = orchestrator_url.clone();
         let id = instance_id.clone();
         let secret = launch_secret.clone();

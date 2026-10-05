@@ -19,21 +19,17 @@ ui:
 # Binaries (UMSETZUNG.md C8) — separates Target von `build`, weil der
 # Launcher vorgebaute Binaries erwartet, kein `cargo run` pro Start.
 #
-# KEIN Release-Profil für omp-video-mixer-me/omp-multiviewer-custom
-# trotz ihres hohen CPU-Verbrauchs (Nutzerfund 2026-08-24, "CPU
-# burning", mehrere hundert Prozent bei aktiver Kompositions-Last) —
-# per fairem Debug-vs-Release-Vergleich UNTER DERSELBEN echten
-# Arbeitslast (4 Multiviewer-Pips, 2 Mixer-Ebenen, nicht im Leerlauf)
-# live widerlegt: praktisch kein Unterschied (s. docs/decisions.md
-# Nachtrag 163). Die eigentliche Frame-Verarbeitung läuft in
-# GStreamer/gst-plugins' eigenem, bereits optimiertem C-Code — Rusts
-# Debug-/Release-Profil betrifft nur die dünne Rust-Glue-Schicht
-# drumherum, die neben kontinuierlicher Echtzeit-Komposition kaum ins
-# Gewicht fällt. Ein erster, vorschneller Vergleich (Leerlauf-Release
-# gegen belastetes Debug) hatte fälschlich einen großen Unterschied
-# suggeriert — dieser Vergleich war nicht fair, s. Nachtrag 163.
+# Die Medien-Nodes (MEDIA_NODES, in deploy/catalog.json auf target/release
+# verdrahtet) werden im Release-Profil gebaut, alle übrigen im Debug-Profil.
+# Nutzerwunsch 2026-10-05. Erwartung realistisch halten: die Frame-Verarbeitung
+# läuft in GStreamers C-Code, Release betrifft nur die Rust-Schicht — gemessen
+# beim Kanal-Player (1080i-MXF → 720p25): 146 % Debug vs. 138 % Release (docs/
+# decisions.md Nachtrag 163 kam für den Mischer zum selben Schluss). Der größere
+# Hebel sind Ausgabeformat (720p statt 1080p) und die Deinterlace-Methode.
+MEDIA_NODES := omp-channel-player omp-video-mixer-me omp-audio-mixer omp-audio-monitor omp-viewer omp-playout-automation omp-source omp-mxf-player omp-mxf-player-direct omp-webrtc-gateway omp-multiviewer omp-scaler omp-switcher
 nodes:
-	cd nodes && cargo build --workspace --bins
+	cd nodes && cargo build --workspace --bins $(foreach n,$(MEDIA_NODES),--exclude $(n))
+	cd nodes && cargo build --release $(foreach n,$(MEDIA_NODES),-p $(n))
 
 # Prüft, ob dieser Rechner alles hat, was OpenMediaPlatform braucht
 # (Werkzeuge, Podman, Container-Images, Ports, GStreamer/MXL für die Medien-

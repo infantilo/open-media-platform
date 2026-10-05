@@ -441,11 +441,15 @@ fn build_image_file(pipeline: &gst::Pipeline, uri: &str, width: u32, height: u32
 /// Bewegung). Der MXL-Flow ist als progressiv deklariert, interlaced Quellmaterial (Broadcast-MXF 1080i,
 /// `field_order=tt`) lief bisher unverändert durch. `mode=auto` lässt progressive Quellen unberührt (kein
 /// Rechenaufwand); `fields=top` liefert Einzelrate (25i → 25p), passend zum festen Ausgangstakt.
+///
+/// Die Methode wählt `OMP_DEINTERLACE_METHOD` (`greedyh` Standard = beste Qualität; `linear`/`vfir` sparen
+/// bei 1080i-Material rund ein Viertel der Rechenzeit, `tomsmocomp`, `greedyl`, `scalerbob` ebenfalls möglich).
 fn make_deinterlace() -> Result<gst::Element, String> {
+    let method = std::env::var("OMP_DEINTERLACE_METHOD").ok().filter(|m| ["greedyh", "greedyl", "linear", "vfir", "tomsmocomp", "scalerbob", "linearblend"].contains(&m.as_str())).unwrap_or_else(|| "greedyh".to_string());
     gst::ElementFactory::make("deinterlace")
         .property_from_str("mode", "auto")
         .property_from_str("fields", "top")
-        .property_from_str("method", "greedyh")
+        .property_from_str("method", &method)
         .build()
         .map_err(|e| format!("deinterlace: {e}"))
 }
@@ -750,12 +754,14 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
         }
     };
 
-    audio_tail.link(&dist.input).map_err(|e| format!("link audio to distributor: {e}"))?;
     if !mxf_audio {
         // Quelle ohne Mehrspur-Container (Live, Testton, Standbild, generische Datei): ein Programmton-Stream.
+        // VOR dem Linken konfigurieren: die Matrizen stehen anfangs auf einem Eingangskanal, und ein Zweig mit
+        // festen Stereo-Caps (Live, generische Datei) ließe sich sonst nicht mit dem Verteiler verbinden.
         let kind = if matches!(item.source, ItemSource::Live { .. }) { SourceKind::Live } else { SourceKind::File };
         dist.configure(&dist.stereo_program_source(kind), requested_mapping.as_ref());
     }
+    audio_tail.link(&dist.input).map_err(|e| format!("link audio to distributor: {e}"))?;
 
     let mxl_video_output = MxlVideoOutput::new_paced(
         &pipeline,

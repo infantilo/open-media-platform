@@ -305,7 +305,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     ];
     // Ein Audio-Sender je Zielgruppe; der erste behält das bisherige Label "<Node> Audio".
     for (i, g) in audio_ctx.groups.iter().enumerate() {
-        let tags = audio_ctx.settings.output_profile.groups[i].tags.clone();
+        // Die Quell-Tags des Orchestrators heißen `domain.name` (`role.pt`); die Engine-Tags `role:pt` werden so
+        // umgeschrieben, Tags ohne Domain (z. B. `bitexact`) sind dort ungültig und entfallen.
+        let tags: Vec<String> = audio_ctx.settings.output_profile.groups[i]
+            .tags
+            .iter()
+            .map(|t| t.to_ascii_lowercase().replacen(':', ".", 1))
+            .filter(|t| t.contains('.'))
+            .collect();
         let mut sender = SenderSpec {
             transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
             flow: Some(omp_node_sdk::node::FlowSpec::Audio {

@@ -335,10 +335,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         grain_rate_numerator: framerate_numerator,
                         grain_rate_denominator: framerate_denominator,
                     }),
-                    tags: HashMap::from([(
-                        "urn:x-nmos:tag:grouphint/v1.0".to_string(),
-                        vec![format!("{highres_group_name}:high")],
-                    )]),
+                    // `urn:x-omp:tags`: frei wählbare OMP-Tags (Source-Selector der Playout-Automation).
+                    // `source.live` kennzeichnet diese Quelle als Live-Quelle, damit eine Playlist sie per Tag statt
+                    // per Sender-ID (neu bei jedem Start) wählen kann.
+                    tags: HashMap::from([
+                        (
+                            "urn:x-nmos:tag:grouphint/v1.0".to_string(),
+                            vec![format!("{highres_group_name}:high")],
+                        ),
+                        ("urn:x-omp:tags".to_string(), vec!["source.live".to_string()]),
+                    ]),
                     ..Default::default()
                 },
                 SenderSpec {
