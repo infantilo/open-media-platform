@@ -267,3 +267,23 @@ pub struct AudioPlan {
     /// Kein `failed` in einer Gruppe.
     pub ok: bool,
 }
+
+/// Das gesamte, vom Orchestrator gespeicherte Einstellungsdokument.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AudioSettings {
+    #[serde(rename = "outputProfile")]
+    pub output_profile: OutputProfile,
+    #[serde(rename = "trackSchemas", default)]
+    pub track_schemas: Vec<TrackSchema>,
+    #[serde(default)]
+    pub mappings: Vec<Mapping>,
+    #[serde(rename = "ruleSet", default)]
+    pub rule_set: RuleSet,
+}
+
+impl AudioSettings {
+    /// Semantische Prüfung (s. [`crate::validate`]); leer = gültig.
+    pub fn validate(&self) -> Vec<String> {
+        crate::resolve::validate(&self.output_profile, &self.track_schemas, &self.mappings, &self.rule_set)
+    }
+}

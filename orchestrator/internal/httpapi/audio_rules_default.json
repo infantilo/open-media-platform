@@ -1,0 +1,427 @@
+{
+  "outputProfile": {
+    "groups": [
+      {
+        "id": "pt",
+        "label": "Programmton",
+        "layout": "stereo",
+        "tags": [
+          "role:pt"
+        ]
+      },
+      {
+        "id": "ad",
+        "label": "Hörfilm/AD",
+        "layout": "stereo",
+        "tags": [
+          "role:ad"
+        ]
+      },
+      {
+        "id": "ot",
+        "label": "Originalton",
+        "layout": "stereo",
+        "tags": [
+          "role:ot"
+        ]
+      },
+      {
+        "id": "dolbye",
+        "label": "Dolby E",
+        "layout": "stereo",
+        "tags": [
+          "role:dolbye",
+          "bitexact"
+        ]
+      },
+      {
+        "id": "surround51",
+        "label": "5.1 Diskret",
+        "layout": "5.1",
+        "tags": [
+          "role:pt51"
+        ]
+      }
+    ]
+  },
+  "trackSchemas": [
+    {
+      "id": "orf-mxf-8",
+      "match": {
+        "format": "mxf",
+        "tracks": 8
+      },
+      "tracks": [
+        {
+          "n": 1,
+          "layout": "mono",
+          "tags": [
+            "pos:1"
+          ]
+        },
+        {
+          "n": 2,
+          "layout": "mono",
+          "tags": [
+            "pos:2"
+          ]
+        },
+        {
+          "n": 3,
+          "layout": "mono",
+          "tags": [
+            "pos:3"
+          ]
+        },
+        {
+          "n": 4,
+          "layout": "mono",
+          "tags": [
+            "pos:4"
+          ]
+        },
+        {
+          "n": 5,
+          "layout": "mono",
+          "tags": [
+            "pos:5"
+          ]
+        },
+        {
+          "n": 6,
+          "layout": "mono",
+          "tags": [
+            "pos:6"
+          ]
+        },
+        {
+          "n": 7,
+          "layout": "mono",
+          "tags": [
+            "pos:7"
+          ]
+        },
+        {
+          "n": 8,
+          "layout": "mono",
+          "tags": [
+            "pos:8"
+          ]
+        }
+      ]
+    }
+  ],
+  "mappings": [
+    {
+      "id": "mono",
+      "label": "Mono",
+      "groups": {
+        "pt": {
+          "tracks": [
+            1,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "id": "stereo",
+      "label": "Stereo",
+      "groups": {
+        "pt": {
+          "tracks": [
+            1,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "id": "2ton-mono",
+      "label": "2-Ton-Mono",
+      "groups": {
+        "ad": {
+          "tracks": [
+            2,
+            2
+          ]
+        },
+        "pt": {
+          "tracks": [
+            1,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "id": "stereo-hoerfilm",
+      "label": "Stereo/Hörfilm",
+      "groups": {
+        "ad": {
+          "tracks": [
+            5,
+            6
+          ]
+        },
+        "pt": {
+          "tracks": [
+            1,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "id": "stereo-ot-56",
+      "label": "Stereo/OT 5,6",
+      "groups": {
+        "ot": {
+          "tracks": [
+            5,
+            6
+          ]
+        },
+        "pt": {
+          "tracks": [
+            1,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "id": "stereo-ot",
+      "label": "Stereo/OT",
+      "groups": {
+        "ot": {
+          "tracks": [
+            7,
+            8
+          ]
+        },
+        "pt": {
+          "tracks": [
+            1,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "id": "stereo-hoerfilm-ot",
+      "label": "Stereo/Hörfilm/OT",
+      "groups": {
+        "ad": {
+          "tracks": [
+            5,
+            6
+          ]
+        },
+        "ot": {
+          "tracks": [
+            7,
+            8
+          ]
+        },
+        "pt": {
+          "tracks": [
+            1,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "id": "stereo-dolbye",
+      "label": "Stereo/Dolby E",
+      "groups": {
+        "dolbye": {
+          "tracks": [
+            3,
+            4
+          ]
+        },
+        "pt": {
+          "tracks": [
+            1,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "id": "stereo-dolbye-hoerfilm",
+      "label": "Stereo/Dolby E/Hörfilm",
+      "groups": {
+        "ad": {
+          "tracks": [
+            5,
+            6
+          ]
+        },
+        "dolbye": {
+          "tracks": [
+            3,
+            4
+          ]
+        },
+        "pt": {
+          "tracks": [
+            1,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "id": "stereo-dolbye-ot-56",
+      "label": "Stereo/Dolby E/OT 5,6",
+      "groups": {
+        "dolbye": {
+          "tracks": [
+            3,
+            4
+          ]
+        },
+        "ot": {
+          "tracks": [
+            5,
+            6
+          ]
+        },
+        "pt": {
+          "tracks": [
+            1,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "id": "stereo-dolbye-ot",
+      "label": "Stereo/Dolby E/OT",
+      "groups": {
+        "dolbye": {
+          "tracks": [
+            3,
+            4
+          ]
+        },
+        "ot": {
+          "tracks": [
+            7,
+            8
+          ]
+        },
+        "pt": {
+          "tracks": [
+            1,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "id": "stereo-dolbye-hoerfilm-ot",
+      "label": "Stereo/Dolby E/Hörfilm/OT",
+      "groups": {
+        "ad": {
+          "tracks": [
+            5,
+            6
+          ]
+        },
+        "dolbye": {
+          "tracks": [
+            3,
+            4
+          ]
+        },
+        "ot": {
+          "tracks": [
+            7,
+            8
+          ]
+        },
+        "pt": {
+          "tracks": [
+            1,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "id": "stereo-51-diskret",
+      "label": "Stereo/5.1 diskret",
+      "groups": {
+        "pt": {
+          "tracks": [
+            1,
+            2
+          ]
+        },
+        "surround51": {
+          "tracks": [
+            3,
+            4,
+            5,
+            6,
+            7,
+            8
+          ]
+        }
+      }
+    }
+  ],
+  "ruleSet": {
+    "rules": [
+      {
+        "id": "pt-aus-51",
+        "group": "pt",
+        "when": {},
+        "then": [
+          {
+            "use": {
+              "select": "role:pt AND layout:stereo"
+            }
+          },
+          {
+            "use": {
+              "select": "layout:5.1",
+              "via": "downmix"
+            }
+          },
+          {
+            "use": {
+              "select": "role:pt AND layout:mono"
+            }
+          }
+        ]
+      },
+      {
+        "id": "51-aus-stereo",
+        "group": "surround51",
+        "when": {},
+        "then": [
+          {
+            "use": {
+              "select": "layout:5.1"
+            }
+          },
+          {
+            "use": {
+              "select": "role:pt AND layout:stereo",
+              "via": "upmix51"
+            }
+          },
+          {
+            "silence": true,
+            "warn": "kein 5.1-Ton und kein Stereo-Programmton, Gruppe bleibt still"
+          }
+        ]
+      }
+    ]
+  }
+}

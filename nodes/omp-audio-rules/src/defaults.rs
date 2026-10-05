@@ -114,3 +114,27 @@ pub fn default_rules() -> RuleSet {
         ],
     }
 }
+
+/// Komplettes Standarddokument (`GET /api/v1/audio-rules`, solange nichts gespeichert ist).
+pub fn default_settings() -> AudioSettings {
+    AudioSettings { output_profile: default_profile(), track_schemas: default_schemas(), mappings: default_mappings(), rule_set: default_rules() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Der Orchestrator (Go) bettet dieselben Standardwerte als JSON ein. Weichen sie ab:
+    /// `OMP_UPDATE_DEFAULTS=1 cargo test -p omp-audio-rules defaults_json` schreibt die Datei neu.
+    #[test]
+    fn defaults_json_in_sync_with_orchestrator() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../orchestrator/internal/httpapi/audio_rules_default.json");
+        let current = serde_json::to_string_pretty(&default_settings()).unwrap() + "\n";
+        if std::env::var("OMP_UPDATE_DEFAULTS").is_ok() {
+            std::fs::write(path, &current).unwrap();
+        }
+        let committed = std::fs::read_to_string(path).expect("audio_rules_default.json fehlt (OMP_UPDATE_DEFAULTS=1 setzen)");
+        assert_eq!(committed, current, "Standardwerte weichen vom Orchestrator-JSON ab");
+        assert!(default_settings().validate().is_empty());
+    }
+}
