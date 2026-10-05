@@ -46,6 +46,28 @@ alles-oder-nichts), `moveItem` (Cursor folgt), `remove`, `load` (ganze Liste),
 unbestimmt bei endlosem/manuellem Vorgänger) und die deterministische Aktions-Queue
 (Reihenfolge bei Gleichstand: End < Cue < Take, danach Playlist-Position).
 
+## 2a. Playlist-Tabelle: Spaltenauswahl
+
+Die Playlist-Tabelle der Bedienoberfläche zeigt standardmäßig Titel, Dauer,
+Zeit, Rest und Bereitschaft. Über das Zahnrad (⚙) über der Tabelle lassen sich
+weitere Spalten einblenden; die Auswahl wird pro Browser gemerkt:
+
+| Spalte | Inhalt |
+|---|---|
+| Typ | Event-Typ (CLIP, LIVE, IMAGE, HOLD, JUMP, PATTERN, BLACK) |
+| Medium / Quelle | Dateiname, aufgelöste Live-Quelle bzw. Testmuster |
+| Media-ID | Asset-ID, Sender-ID bzw. Auswahl-Tags der Live-Quelle |
+| Transition | Cut oder Mix (mit Dauer in Frames) |
+| Start | Sequenz, manuell oder Fixzeit (mit Datum/Uhrzeit) |
+| Player | A oder B. Für ON AIR und CUED exakt, für übrige Events mit `~` markiert (voraussichtlich, da A/B je ladendem Event wechselt) |
+| Status | ON AIR, CUED, gespielt, geplant, nicht bereit, fehlt |
+| Gap / Overlap | Abstand zum Vorgänger laut Zeitplan: `0` nahtlos, `+x s` Lücke, `−x s` Überlappung (orange) |
+| Audio | Gewählte Audio-Variante des Events |
+| Child | Anzahl der Child Events |
+| Bereitschaft | Ergebnis des Asset-Preflights (READY/NOT_READY/…) |
+
+Reicht die Breite nicht, scrollt die Tabelle waagerecht.
+
 ## 3. Primary Events
 
 - **CLIP/PATTERN/IMAGE** — Datei/Testmuster/Standbild auf den Standby-Player laden

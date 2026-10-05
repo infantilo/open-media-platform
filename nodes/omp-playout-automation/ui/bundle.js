@@ -164,7 +164,12 @@ const STYLE = `
   .cols-pop label { display: flex; gap: 6px; align-items: center; }
   .pl-cols { grid-template-columns: 16px 26px 22px minmax(0,1fr) 54px 108px 84px 40px 92px; }
   .hide-dur .c-dur, .hide-time .c-time, .hide-rem .c-rem { display: none; }
-  .hide-dur.pl-cols, .hide-dur .pl-cols { grid-template-columns: 16px 26px 22px minmax(0,1fr) 108px 84px 40px 92px; }
+  .pl-main { min-width: 0; overflow-x: auto; }
+  .pl-hdr, .pl-row { min-width: var(--minw, 0); }
+  .pl-row .xc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--mut); }
+  .pl-row .xc.st-onair { color: #ff6b6b; font-weight: 700; } .pl-row .xc.st-cued { color: #6bd36b; font-weight: 700; }
+  .pl-row .xc.st-played { color: #777; } .pl-row .xc.st-bad { color: var(--warn); }
+  .pl-row .xc.gap-neg { color: var(--warn); }
   .pl-hdr { display: grid; gap: 4px; padding: 2px 6px; font-size: 9px; color: var(--mut); text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid var(--bd); }
   .pl-rowwrap { position: relative; }
   .pl-row { display: grid; gap: 4px; align-items: center; padding: 4px 6px; border-bottom: 1px solid #2a2a2e; border-left: 3px solid transparent; cursor: default; user-select: none; }
@@ -370,22 +375,93 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     // ---- Playlist -------------------------------------------------------
     const listEl = h("div", { class: "pl-list" });
     const emptyEl = h("div", { class: "empty" }, "Noch keine Events — „＋“ links legt das erste an.");
+    // Zusätzliche, wählbare Spalten (⚙): alle standardmäßig aus, Auswahl wird je Browser gemerkt.
+    const baseName = (p) => String(p || "").split("/").pop();
+    const mediaOf = (it) => {
+      if (it.asset) return it.file ? baseName(it.file) : it.asset.assetId;
+      if (it.sourceSelector) return it.resolvedLabel || "(keine Quelle)";
+      if (it.senderId) return it.resolvedLabel || it.senderId;
+      if (it.file) return baseName(it.file);
+      if (it.eventType === "JUMP") return `→ ${items.find((x) => x.id === it.jumpTarget)?.label || it.jumpTarget}`;
+      return it.pattern || "";
+    };
+    const mediaIdOf = (it) => (it.asset ? it.asset.assetId : it.senderId || (it.sourceSelector ? (it.sourceSelector.required || []).join(",") : "") || "");
+    const fmtGap = (ms) => `${ms < 0 ? "−" : "+"}${(Math.abs(ms) / 1000).toFixed(1)}s`;
+    const EXTRA_COLS = [
+      { k: "type", t: "Typ", w: "62px", get: (it) => ({ text: it.eventType || "" }) },
+      { k: "media", t: "Medium / Quelle", w: "minmax(110px,1fr)", get: (it) => ({ text: mediaOf(it), tip: describe(it) }) },
+      { k: "mediaid", t: "Media-ID", w: "minmax(90px,.8fr)", get: (it) => ({ text: mediaIdOf(it), tip: mediaIdOf(it) }) },
+      { k: "transition", t: "Transition", w: "74px", get: (it) => ({ text: it.transition === "mix" ? `Mix${it.transitionRateFrames ? ` ${it.transitionRateFrames}f` : ""}` : "Cut" }) },
+      { k: "starttype", t: "Start", w: "92px", get: (it) => ({ text: it.startType === "fixtime" ? `⏰ ${it.startAt ? formatLocalStart(it.startAt) : it.fixtimeHms || ""}` : it.startType === "manual" ? "manuell" : "Sequenz" }) },
+      { k: "player", t: "Player", w: "52px", get: (it, i) => playerOf(it, i) },
+      { k: "status", t: "Status", w: "78px", get: (it, i) => statusOf(it, i) },
+      { k: "gap", t: "Gap / Overlap", w: "84px", get: (it, i) => gapOf(i) },
+      { k: "audio", t: "Audio", w: "92px", get: (it) => ({ text: it.audio ? (it.audio.resolution?.chosen || "—") : "" , tip: it.audio ? "Gewählte Audio-Variante" : "" }) },
+      { k: "kids", t: "Child", w: "46px", get: (it) => ({ text: (it.children || []).length ? String(it.children.length) : "" }) },
+      { k: "ready", t: "Bereitschaft", w: "92px", get: (it) => ({ text: it.asset ? (it.readiness || "UNKNOWN") : (it.available ?? true) ? "" : "nicht verfügbar", tip: it.readinessDetail || "" }) },
+    ];
+    let liveCh = "a";
+    const itemIndex = (id) => items.findIndex((x) => x.id === id);
+    const statusOf = (it, i) => {
+      const cur = itemIndex(currentItemId);
+      if (it.id === currentItemId) return { text: "ON AIR", cls: "st-onair" };
+      if (it.id === cuedItemId) return { text: "CUED", cls: "st-cued" };
+      if (cur >= 0 && i < cur) return { text: "gespielt", cls: "st-played" };
+      if (it.asset && it.readiness === "NOT_READY") return { text: "nicht bereit", cls: "st-bad" };
+      if (!(it.available ?? true)) return { text: "fehlt", cls: "st-bad" };
+      return { text: "geplant" };
+    };
+    // A/B wechseln je ladendem Event; Steuer-Events (HOLD/JUMP) laden nichts. Exakt nur für ON AIR/CUED, sonst abgeleitet (~).
+    const playerOf = (it, i) => {
+      if (it.eventType === "HOLD" || it.eventType === "JUMP") return { text: "" };
+      const letter = (c) => c.toUpperCase();
+      const other = (c) => (c === "a" ? "b" : "a");
+      if (it.id === currentItemId) return { text: letter(liveCh) };
+      if (it.id === cuedItemId) return { text: letter(other(liveCh)) };
+      const cur = itemIndex(currentItemId);
+      if (cur < 0) return { text: "" };
+      const lo = Math.min(cur, i), hi = Math.max(cur, i);
+      let hops = 0;
+      for (let k = lo + 1; k <= hi; k++) if (items[k].eventType !== "HOLD" && items[k].eventType !== "JUMP") hops++;
+      return { text: `~${letter(hops % 2 === 0 ? liveCh : other(liveCh))}`, tip: "Voraussichtlicher Player (A/B wechselt je Event)" };
+    };
+    const gapOf = (i) => {
+      if (i === 0) return { text: "" };
+      const a = planById.get(items[i - 1].id), b = planById.get(items[i].id);
+      let gap = null;
+      if (a && b && a.end && b.start) gap = Date.parse(b.start) - Date.parse(a.end);
+      else {
+        const ta = timeByIndex.get(i - 1), tb = timeByIndex.get(i);
+        if (ta && tb) gap = tb.startMs - ta.endMs;
+      }
+      if (gap === null || Number.isNaN(gap)) return { text: "" };
+      if (Math.abs(gap) < 50) return { text: "0", tip: "nahtlos" };
+      return gap > 0 ? { text: fmtGap(gap), tip: `Lücke zum Vorgänger: ${(gap / 1000).toFixed(1)} s` } : { text: fmtGap(gap), cls: "gap-neg", tip: `Überlappung mit dem Vorgänger: ${(-gap / 1000).toFixed(1)} s` };
+    };
     const hdr = h("div", { class: "pl-hdr pl-cols" },
-      ...["", "#", "", "Titel", "Dauer", "Zeit", "Rest", "", ""].map((t, i) =>
-        h("span", { class: ["", "", "", "", "c-dur", "c-time", "c-rem", "", ""][i] }, t)));
+      ...[["", ""], ["#", ""], ["", ""], ["Titel", ""], ["Dauer", "c-dur"], ["Zeit", "c-time"], ["Rest", "c-rem"]].map(([t, c]) => h("span", { class: c }, t)),
+      ...EXTRA_COLS.map((c) => h("span", { class: `c-${c.k}` }, c.t)),
+      h("span", {}, ""), h("span", {}, ""));
     const searchInput = h("input", { type: "search", placeholder: "Suchen …", oninput: () => { search = searchInput.value.trim().toLowerCase(); renderList(); } });
     const colsPop = h("div", { class: "cols-pop" },
       ...[["dur", "Dauer"], ["time", "Zeit"], ["rem", "Rest"]].map(([k, t]) =>
-        h("label", {}, h("input", { type: "checkbox", checked: !prefs[`hide-${k}`], onchange: (e) => { prefs[`hide-${k}`] = !e.target.checked; savePrefs(); applyCols(); } }), t)));
+        h("label", {}, h("input", { type: "checkbox", checked: !prefs[`hide-${k}`], onchange: (e) => { prefs[`hide-${k}`] = !e.target.checked; savePrefs(); applyCols(); } }), t)),
+      ...EXTRA_COLS.map((c) =>
+        h("label", {}, h("input", { type: "checkbox", checked: !!prefs[`show-${c.k}`], onchange: (e) => { prefs[`show-${c.k}`] = e.target.checked; savePrefs(); applyCols(); renderList(); } }), c.t)));
     const colsBtn = h("button", { title: "Spalten", onclick: () => colsPop.classList.toggle("show") }, "⚙");
     const applyCols = () => {
       for (const k of ["dur", "time", "rem"]) plMain.classList.toggle(`hide-${k}`, !!prefs[`hide-${k}`]);
-      const parts = ["16px", "26px", "22px", "minmax(0,1fr)"];
+      for (const c of EXTRA_COLS) plMain.classList.toggle(`hide-${c.k}`, !prefs[`show-${c.k}`]);
+      const parts = ["16px", "26px", "22px", "minmax(150px,1.4fr)"];
       if (!prefs["hide-dur"]) parts.push("54px");
       if (!prefs["hide-time"]) parts.push("108px");
       if (!prefs["hide-rem"]) parts.push("84px");
+      for (const c of EXTRA_COLS) if (prefs[`show-${c.k}`]) parts.push(c.w);
       parts.push("40px", "92px");
       plMain.style.setProperty("--cols", parts.join(" "));
+      // Mindestbreite der Tabelle: reicht der Platz nicht, scrollt sie waagerecht statt Spalten zu quetschen.
+      const minw = parts.reduce((a, p) => a + (Number((/(\d+)px/.exec(p) || [0, 0])[1]) || 0), 0) + parts.length * 4 + 12;
+      plMain.style.setProperty("--minw", `${minw}px`);
     };
     const sidebar = h("div", { class: "sidebar" },
       h("button", { class: "primary", title: "Neues Event anlegen", onclick: () => openEditor(null) }, "＋"),
@@ -443,6 +519,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     // Spalten-Template an die Zeilen weitergeben
     const colStyle = h("style", {}, ".pl-cols, .pl-row { grid-template-columns: var(--cols); }");
     shadow.append(colStyle);
+    shadow.append(h("style", {}, EXTRA_COLS.map((c) => `.hide-${c.k} .c-${c.k} { display: none; }`).join("\n")));
 
     // ---- Helfer ---------------------------------------------------------
     const srcIcon = (it) => {
@@ -584,7 +661,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       refs.editBtn = h("button", { title: "Eigenschaften bearbeiten", onclick: (e) => { e.stopPropagation(); openEditor(refs.it); } }, "✎");
       refs.delBtn = h("button", { class: "danger", title: "Event entfernen", onclick: (e) => { e.stopPropagation(); removeItems([refs.it.id]); } }, "✕");
       refs.acts = h("span", { class: "acts" }, refs.cueBtn, refs.editBtn, refs.delBtn);
-      row.append(refs.drag, refs.num, refs.ico, refs.title, refs.dur, refs.time, refs.rem, refs.av, refs.acts);
+      refs.xc = {};
+      for (const c of EXTRA_COLS) refs.xc[c.k] = h("span", { class: `xc c-${c.k}` });
+      row.append(refs.drag, refs.num, refs.ico, refs.title, refs.dur, refs.time, refs.rem, ...EXTRA_COLS.map((c) => refs.xc[c.k]), refs.av, refs.acts);
       row.addEventListener("click", (e) => select(refs.it.id, e));
       row.addEventListener("dblclick", () => openEditor(refs.it));
       refs.kids = h("div", { class: "kids" });
@@ -649,6 +728,14 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         r.av.textContent = avText;
         r.av.className = `av${avBad ? " bad" : ""}`;
         r.av.title = avTip;
+        for (const c of EXTRA_COLS) {
+          if (!prefs[`show-${c.k}`]) continue;
+          const v = c.get(it, i);
+          const el = r.xc[c.k];
+          el.textContent = v.text || "";
+          el.title = v.tip || "";
+          el.className = `xc c-${c.k}${v.cls ? ` ${v.cls}` : ""}`;
+        }
         r.cueBtn.disabled = isOn;
         r.delBtn.disabled = isOn;
         // Chips: Start-Typ, Transition, Kinder, Audio
@@ -1203,6 +1290,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const onAir = !!currentItemId;
       modeChip.textContent = onAir ? "ON AIR" : "STANDBY";
       modeChip.className = `chip${onAir ? " onair" : ""}`;
+      liveCh = v.liveChannel === "b" ? "b" : "a";
       connectedChip.textContent = v.connected ? `verbunden (Kanal ${v.liveChannel === "b" ? "B" : "A"} live)` : "nicht verbunden";
       connectedChip.className = `chip${v.connected ? " ok" : " err"}`;
       const ptxt = v.persistence || "";
