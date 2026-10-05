@@ -105,7 +105,14 @@ pub struct MediaRef {
     pub color: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
+    /// Werbe-/Block-Klassifikation (Spec §134): `block_start`, `block_end`, `commercial`, `promo`
+    /// oder leer. Metadaten für As-Run/Anzeige und für SCTE-35-Regeln; löst selbst nichts aus.
+    #[serde(rename = "adClass", default, skip_serializing_if = "String::is_empty")]
+    pub ad_class: String,
 }
+
+/// Erlaubte Werte der Klassifikation (leer = keine).
+pub const AD_CLASSES: [&str; 4] = ["block_start", "block_end", "commercial", "promo"];
 
 /// Event-Bereitschaft (Spec §184).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

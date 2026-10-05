@@ -66,7 +66,10 @@ pub fn emit(level: &str, msg: &str, ids: &Ids) {
         && let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path.trim())
     {
         use std::io::Write;
-        let _ = writeln!(f, "{l}");
+        // Eine Zeile = EIN Schreibaufruf unter Sperre — sonst vermischen sich gleichzeitige Zeilen.
+        static FILE_LOCK: Mutex<()> = Mutex::new(());
+        let _g = FILE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _ = f.write_all(format!("{l}\n").as_bytes());
     }
 }
 
@@ -105,7 +108,7 @@ mod tests {
             .filter(|v| v["msg"].as_str().is_some_and(|m| m.starts_with("structlog-test")))
             .collect();
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0]["channelId"], "chan-x");
+        // channelId nicht prüfen: die Kanal-ID ist prozessweit, parallele Tests können sie setzen.
         assert_eq!(lines[1]["level"], "WARN");
         assert_eq!(lines[1]["sourceId"], "Remote X");
     }

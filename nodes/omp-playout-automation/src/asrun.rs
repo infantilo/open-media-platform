@@ -122,6 +122,8 @@ pub struct StartInfo {
     /// `None` = endlos (Live) bzw. Steuer-Event.
     pub duration_ms: Option<u64>,
     pub mode: String,
+    /// Werbe-/Block-Klassifikation des Items (Spec §134), leer = keine.
+    pub ad_class: String,
 }
 
 #[derive(Debug, Clone)]
@@ -189,6 +191,9 @@ impl AsRunTracker {
         rec.status = "RUNNING".to_string();
         rec.reason = cause.to_string();
         rec.mode = info.mode;
+        if !info.ad_class.is_empty() {
+            rec.detail = Some(serde_json::json!({ "adClass": info.ad_class }));
+        }
         self.prev_planned_end_ms = match (planned, info.duration_ms) {
             (Some(p), Some(d)) => Some(p + d as i64),
             _ => None,

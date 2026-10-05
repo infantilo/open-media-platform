@@ -1226,5 +1226,14 @@
       "min": 1,
       "max": 100000
     }
+  ],
+  "omp-scte35": [
+    {
+      "key": "OMP_SCTE35_UDP",
+      "label": "UDP-Ziel (host:port)",
+      "type": "string",
+      "description": "Jeden erzeugten Abschnitt zusätzlich als rohes UDP-Datagramm an dieses Ziel senden. Leer = nur Parameter/Verlauf.",
+      "group": "Ausgabe"
+    }
   ]
 }

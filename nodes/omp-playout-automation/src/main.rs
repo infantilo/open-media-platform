@@ -336,6 +336,7 @@ fn asrun_primary_changed(state: &mut AutomationState, item_id: &str) {
             Mode::Hold => "hold",
         }
         .to_string(),
+        ad_class: meta.media_ref.ad_class.clone(),
     };
     state.asrun.start(now_ms, info);
     // Audio-Absicht nicht auflösbar / mit Warnungen → protokollieren (Spec §192 audio_resolution_failures).
@@ -594,7 +595,7 @@ fn item_meta_to_json(id: &str, m: &ItemMeta) -> Value {
     if let Some(f) = &m.media_ref.fallback_file {
         v["fallbackFile"] = serde_json::json!(f);
     }
-    for (k, val) in [("icon", &m.media_ref.icon), ("color", &m.media_ref.color), ("note", &m.media_ref.note)] {
+    for (k, val) in [("icon", &m.media_ref.icon), ("color", &m.media_ref.color), ("note", &m.media_ref.note), ("adClass", &m.media_ref.ad_class)] {
         if !val.is_empty() {
             v[k] = serde_json::json!(val);
         }
@@ -889,6 +890,8 @@ struct AutomationStore {
     persistence: persist::Persistence,
     /// Kapitel 27 / P9: laufende Voiceovers (`Label:Kanal`, Priorität).
     voiceovers_active: Mutex<Vec<(String, i64)>>,
+    /// Kapitel 27 / P9.2: laufende SCTE-35-Events (`Label:Kind-ID` → Event-ID), damit der Stopp dieselbe ID trägt.
+    scte35_events: Mutex<HashMap<String, u32>>,
 }
 
 impl AutomationStore {
@@ -1662,6 +1665,12 @@ impl AutomationStore {
                 new_media = Some((media, None));
             }
         }
+        if let Some(c) = p.ad_class.as_deref()
+            && !c.is_empty()
+            && !readiness::AD_CLASSES.contains(&c)
+        {
+            return Err(format!("adClass „{c}\u{201c} unbekannt ({})", readiness::AD_CLASSES.join(" | ")));
+        }
         let start_type = match p.start_type.as_deref() {
             None => None,
             Some(s) => Some(StartType::parse(s).ok_or_else(|| format!("startType „{s}\u{201c} unbekannt"))?),
@@ -2126,6 +2135,8 @@ struct ItemPatch {
     note: Option<String>,
     icon: Option<String>,
     color: Option<String>,
+    #[serde(rename = "adClass")]
+    ad_class: Option<String>,
     media: Option<MediaPatch>,
     #[serde(rename = "durationMs")]
     duration_ms: Option<u64>,
@@ -2174,7 +2185,7 @@ fn apply_item_patch(
     if let Some(l) = p.label {
         meta.label = l;
     }
-    for (field, val) in [(&mut meta.media_ref.note, p.note), (&mut meta.media_ref.icon, p.icon), (&mut meta.media_ref.color, p.color)] {
+    for (field, val) in [(&mut meta.media_ref.note, p.note), (&mut meta.media_ref.icon, p.icon), (&mut meta.media_ref.color, p.color), (&mut meta.media_ref.ad_class, p.ad_class)] {
         if let Some(v) = val {
             *field = v;
         }
@@ -2583,6 +2594,12 @@ fn needs_stop(child: &ChildEvent) -> bool {
     if child.is_native_voiceover() {
         return true;
     }
+    if child.kind == ChildType::Scte35 {
+        // Rückkehr ins Netz (splice.in) bzw. End-Signal (endTypeId) beim Stopp.
+        let p = &child.params;
+        return p.get("returnAtStop").and_then(Value::as_bool).unwrap_or(true) && p.get("action").and_then(Value::as_str).unwrap_or("out") == "out"
+            || p.get("endTypeId").is_some();
+    }
     match child.kind {
         k if k.is_graphics() => true,
         k if k.is_node_command() => !child.stop_method.trim().is_empty(),
@@ -2710,6 +2727,8 @@ fn plan_children(
 fn child_target_ok(state: &AutomationState, child: &ChildEvent) -> bool {
     if child.kind.is_graphics() {
         state.graphics_node_id.is_some()
+    } else if child.kind == ChildType::Scte35 {
+        state.discovered_labels.iter().any(|l| l == &child.target)
     } else if child.is_native_voiceover() {
         let label = if child.target.trim().is_empty() { &state.target_audio_mixer_label } else { &child.target };
         state.discovered_labels.iter().any(|l| l == label)
@@ -2717,6 +2736,52 @@ fn child_target_ok(state: &AutomationState, child: &ChildEvent) -> bool {
         state.discovered_labels.iter().any(|l| l == &child.target)
     } else {
         true
+    }
+}
+
+/// SCTE-35 (Kapitel 27 / P9.2): der Automator plant, `omp-scte35` kodiert. `action: out` →
+/// `splice.out` (Dauer aus `params.durationMs` bzw. der Kind-Dauer), beim Stopp `splice.in` mit
+/// derselben Event-ID (`returnAtStop`, Standard an); `action: signal` → `time_signal` mit
+/// `typeId`, beim Stopp optional mit `endTypeId` (z. B. 0x34 Start → 0x35 Ende).
+fn execute_scte35(store: &AutomationStore, child: &ChildEvent, stop: bool) -> Result<(), String> {
+    let node_id = remote::resolve_node_id_by_label(&store.registry, &child.target).ok_or_else(|| format!("Ziel-Node „{}\u{201c} nicht gefunden", child.target))?;
+    let client = store.proxy_client(node_id);
+    let p = &child.params;
+    let action = p.get("action").and_then(Value::as_str).unwrap_or("out");
+    let key = format!("{}:{}", child.target, child.id);
+    if !stop {
+        // Eindeutige, über Start und Stopp stabile Event-ID (31 Bit) aus Kind-ID und Zeit.
+        let id = (chrono::Utc::now().timestamp_millis() as u32 ^ child.id.bytes().fold(5381u32, |h, b| h.wrapping_mul(33) ^ b as u32)) & 0x7FFF_FFFF;
+        store.scte35_events.lock().expect("lock poisoned").insert(key.clone(), id);
+        let duration = p.get("durationMs").and_then(Value::as_u64).or((child.duration_ms > 0).then_some(child.duration_ms));
+        return if action == "signal" {
+            let mut args = serde_json::json!({"typeId": p["typeId"], "eventId": id});
+            if let Some(d) = duration {
+                args["durationMs"] = serde_json::json!(d);
+            }
+            if let Some(u) = p.get("upid") {
+                args["upid"] = u.clone();
+            }
+            client.invoke("signal", args).map_err(|e| e.to_string())
+        } else {
+            let mut args = serde_json::json!({"eventId": id, "autoReturn": p.get("autoReturn").and_then(Value::as_bool).unwrap_or(true)});
+            if let Some(d) = duration {
+                args["durationMs"] = serde_json::json!(d);
+            }
+            client.invoke("splice.out", args).map_err(|e| e.to_string())
+        };
+    }
+    let id = store.scte35_events.lock().expect("lock poisoned").remove(&key);
+    let Some(id) = id else { return Ok(()) };
+    if action == "signal" {
+        match p.get("endTypeId") {
+            Some(t) => client.invoke("signal", serde_json::json!({"typeId": t, "eventId": id})).map_err(|e| e.to_string()),
+            None => Ok(()),
+        }
+    } else if p.get("returnAtStop").and_then(Value::as_bool).unwrap_or(true) {
+        client.invoke("splice.in", serde_json::json!({"eventId": id})).map_err(|e| e.to_string())
+    } else {
+        Ok(())
     }
 }
 
@@ -2788,6 +2853,9 @@ fn execute_child(
     }
     if child.is_native_voiceover() {
         return execute_voiceover(store, child, stop);
+    }
+    if child.kind == ChildType::Scte35 {
+        return execute_scte35(store, child, stop);
     }
     if child.kind.is_node_command() {
         let method = if stop { child.stop_method.as_str() } else { child.method.as_str() };
@@ -4824,6 +4892,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         auth: auth.clone(),
         own_label: label.clone(),
         voiceovers_active: Mutex::new(Vec::new()),
+        scte35_events: Mutex::new(HashMap::new()),
         persistence: persist::Persistence::new(
             instance_id.clone().filter(|_| !launch_secret.is_empty()),
             orchestrator_url.clone(),
@@ -5684,6 +5753,17 @@ mod patch_tests {
         // Rate außerhalb 1..=250 oder null löscht sie.
         apply(&mut st, "a", serde_json::json!({"transitionRateFrames": 999})).unwrap();
         assert_eq!(st.metadata["a"].transition_rate_frames, None);
+    }
+
+    #[test]
+    fn ad_class_is_set_cleared_and_shown_in_the_item_json() {
+        let mut st = state_with(&["a"]);
+        apply(&mut st, "a", serde_json::json!({"adClass": "commercial"})).unwrap();
+        assert_eq!(st.metadata["a"].media_ref.ad_class, "commercial");
+        assert_eq!(item_meta_to_json("a", &st.metadata["a"])["adClass"], "commercial");
+        apply(&mut st, "a", serde_json::json!({"adClass": ""})).unwrap();
+        assert!(st.metadata["a"].media_ref.ad_class.is_empty());
+        assert!(item_meta_to_json("a", &st.metadata["a"]).get("adClass").is_none());
     }
 
     #[test]

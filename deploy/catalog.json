@@ -250,6 +250,15 @@
     "expectedResources": "sehr gering (keine Medienverarbeitung)"
   },
   {
+    "type": "omp-scte35",
+    "label": "SCTE-35 Generator",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-scte35"],
+    "env": {},
+    "description": "Erzeugt SCTE-35-Abschnitte (splice_insert Out/In/Cancel, time_signal mit Segmentation Descriptor) für Werbeblöcke und Grenzen. Der Playout-Automator steuert ihn per Child Event SCTE35; Ausgabe als Parameter und optional UDP.",
+    "expectedResources": "sehr gering (keine Medienverarbeitung)"
+  },
+  {
     "type": "omp-recorder",
     "label": "Recorder",
     "runner": "process",

@@ -59,7 +59,7 @@ impl ChildType {
     }
 
     pub fn is_supported(self) -> bool {
-        self.is_graphics() || self.is_node_command() || matches!(self, ChildType::Webhook | ChildType::ChannelTrigger)
+        self.is_graphics() || self.is_node_command() || matches!(self, ChildType::Webhook | ChildType::ChannelTrigger | ChildType::Scte35)
     }
 }
 
@@ -240,9 +240,23 @@ impl ChildEvent {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.kind == ChildType::Scte35 {
+            if self.target.trim().is_empty() {
+                return Err("SCTE35: target (Label des omp-scte35-Nodes) fehlt".to_string());
+            }
+            match self.params.get("action").and_then(Value::as_str).unwrap_or("out") {
+                "out" => {}
+                "signal" => {
+                    if self.params.get("typeId").and_then(Value::as_u64).is_none_or(|t| t > 255) {
+                        return Err("SCTE35 signal: params.typeId (segmentation_type_id 0…255) fehlt".to_string());
+                    }
+                }
+                other => return Err(format!("SCTE35: action „{other}\u{201c} unbekannt (out | signal)")),
+            }
+        }
         if !self.kind.is_supported() {
             return Err(format!(
-                "{:?} wird nicht unterstützt: in diesem System gibt es dafür keinen Ziel-Node (Untertitel/Routing/Source/SCTE-35/GPI)",
+                "{:?} wird nicht unterstützt: in diesem System gibt es dafür keinen Ziel-Node (Untertitel/Routing/Source/GPI)",
                 self.kind
             ));
         }
@@ -426,6 +440,22 @@ mod tests {
     }
 
     #[test]
+    fn scte35_child_needs_a_target_and_a_known_action() {
+        let mut c = ChildEvent::graphic("", TimingMode::RelativeToStart, 1000, 30000);
+        c.kind = ChildType::Scte35;
+        assert!(c.kind.is_supported() && !c.kind.is_node_command());
+        assert!(c.validate().unwrap_err().contains("target"));
+        c.target = "SCTE-35".to_string();
+        c.validate().unwrap();
+        c.params = serde_json::json!({"action": "signal"});
+        assert!(c.validate().unwrap_err().contains("typeId"));
+        c.params = serde_json::json!({"action": "signal", "typeId": 52, "endTypeId": 53});
+        c.validate().unwrap();
+        c.params = serde_json::json!({"action": "splice"});
+        assert!(c.validate().unwrap_err().contains("unbekannt"));
+    }
+
+    #[test]
     fn native_voiceover_validates_its_params_and_legacy_voiceover_stays_a_node_command() {
         let mut c = ChildEvent::graphic("", TimingMode::RelativeToStart, 1000, 5000);
         c.kind = ChildType::Voiceover;
@@ -457,7 +487,7 @@ mod tests {
 
     #[test]
     fn validation_rejects_unsupported_and_incomplete_children() {
-        for kind in [ChildType::Subtitle, ChildType::Routing, ChildType::Source, ChildType::Scte35, ChildType::Gpi] {
+        for kind in [ChildType::Subtitle, ChildType::Routing, ChildType::Source, ChildType::Gpi] {
             let mut c = ChildEvent::graphic("t", TimingMode::FullPrimary, 0, 0);
             c.kind = kind;
             assert!(c.validate().unwrap_err().contains("keinen Ziel-Node"), "{kind:?}");

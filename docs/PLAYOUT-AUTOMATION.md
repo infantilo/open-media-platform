@@ -67,7 +67,7 @@ Typen: `GRAPHIC`, `LOGO`, `CHANNEL_BRANDING` (Grafik-Node `show`/`hide`);
 `TRIGGER`, `NODE_COMMAND`, `AUDIO`, `VOICEOVER` (ausdrücklich `target` = Node-Label,
 `method`, `params`, optional `stopMethod` — der Automator kennt keine Node-Typen);
 `WEBHOOK` (HTTP-POST); `CHANNEL_TRIGGER` (§6).
-**Abgelehnt statt simuliert:** `SUBTITLE`, `ROUTING`, `SOURCE`, `SCTE35`, `GPI` — dafür gibt
+**Abgelehnt statt simuliert:** `SUBTITLE`, `ROUTING`, `SOURCE`, `GPI` — dafür gibt
 es keinen Ziel-Node; `setChildren` meldet es im Klartext.
 
 **Voiceover (P9, §53/§135):** `VOICEOVER` ohne `method` ist ein eigener Typ, der den Audiomischer
@@ -76,6 +76,18 @@ steuert (der Automator plant, die Audioverarbeitung macht der Mischer). `params`
 `target` = Mischer-Label (leer → `targetAudioMixerLabel`). Start: Ducking-Regel an (Sprecher-Kanal als Schlüssel),
 Kanal auf Stille, entstummen, einblenden; Stopp: ausblenden, stumm, Regel aus. Ein laufendes Voiceover mit
 höherer `priority` blockiert den Start eines niedrigeren. Ein `VOICEOVER` mit `method` bleibt ein freier Node-Befehl.
+
+**SCTE-35 (P9.2, §134):** `SCTE35` ist ein eigener Typ; Kodierung macht der Node `omp-scte35`
+(Katalog „SCTE-35 Generator“), nicht der Playlist-Core. `target` = Label des Nodes, `params`:
+`{"action":"out","durationMs":30000,"autoReturn":true,"returnAtStop":true}` → Start `splice.out`
+(`splice_insert`, Out of Network, Dauer aus `params`/Kind-Dauer), Stopp `splice.in` mit derselben Event-ID;
+oder `{"action":"signal","typeId":52,"endTypeId":53,"upid":"…"}` → `time_signal` mit Segmentation Descriptor
+(0x34/0x35 Provider Placement Opportunity, 0x36/0x37 Distributor, 0x10/0x11 Programm, 0x22/0x23 Break).
+Der Node liefert den Abschnitt als Parameter `lastSection`/`lastBase64`/`history` und optional als rohes
+UDP-Datagramm (`OMP_SCTE35_UDP=host:port`). **Nicht enthalten:** Einbettung in einen MXL-ANC-Flow oder
+Transportstrom, Verschlüsselung, Komponenten-Splices, PTS-genaue Vorlaufplanung (immer „sofort“).
+**Klassifikation:** Item-Feld `adClass` (`block_start`, `block_end`, `commercial`, `promo`, leer = keine) —
+Metadaten (Anzeige, As-Run-`detail.adClass`), löst selbst nichts aus.
 
 Zeitmodi (`timing`): `ABSOLUTE` (`atUtc`), `RELATIVE_TO_START` (`delayMs`),
 `RELATIVE_TO_END` (`delayMs` vor dem Ende, braucht feste Dauer), `FULL_PRIMARY`
@@ -208,7 +220,7 @@ Wichtige Parameter: `items`, `currentItemId`, `cuedItemId`, `mode`, `schedule`, 
 | VoiceoverEngine | `VOICEOVER`-Kind + Mixer-Ducking; **offen:** eigener Voiceover-Trigger (P9) |
 | ChannelBus (TCP/NDJSON) | Channel-Trigger über NATS + Orchestrator (§6) |
 | File-Transfer-Manager-Plugin | Asset-System + Prozess-Schritt `materialize` (§8) |
-| SCTE-35-Plugin | **offen** (P9); Kind-Typ `SCTE35` wird abgelehnt |
+| SCTE-35-Plugin | Node `omp-scte35` + Child `SCTE35` (P9.2); MXL-ANC-/TS-Ausgang offen |
 | Plugin-System | OMP-Prozess-/Node-Mechanismen; Plugin-Hooks nur wo nötig (nichts automatisch als Plugin) |
 | As-Run (Tagesdatei) | persistenter As-Run-Store (§11) |
 | Supervisor / Multi-Channel | OMP-Orchestrator/Launcher/Placement; Channel = eine Instanz |
