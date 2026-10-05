@@ -5,6 +5,7 @@
 // `deno test` geprüft) — dieses Modul bindet sie nur an DOM-/Fetch-/
 // EventSource-APIs.
 
+import { ghostEntriesForZone, type GhostEntry, type PlanInput, type StartPlan, zoneForStoppedWorkflow } from "../shell/workflow-plan-logic.ts";
 import {
   type ArrangeEdge,
   type ArrangeNode,
@@ -81,6 +82,10 @@ const HOST_ZONE_LANE_GAP = 30;
 const HOST_ZONE_MIN_LANE_WIDTH = NODE_WIDTH + 40;
 const HOST_ZONE_RESIZE_HANDLE_WIDTH = 8;
 const HOST_ZONE_HEADER_HEIGHT = 46;
+// Höhe des "Geplant"-Blocks am Fuß einer Host-Zone (Titelzeile + eine Zeile je nicht gestartetem Workflow).
+function ghostBlockHeight(entries: number): number {
+  return 36 + entries * 14;
+}
 const HOST_ZONE_TILE_GAP = 24;
 const HOST_ZONE_MARGIN = 24;
 // Ein Host gilt als "online", wenn seine letzte Telemetrie nicht älter
@@ -258,7 +263,7 @@ interface WorkflowSummary {
 type WorkflowDefinition = {
   // standbyFor (K7 Teil 4, docs/END-GOAL-FEATURES.md §7.4) — s.
   // orchestrator/internal/workflows/types.go Role.StandbyFor.
-  roles: { name: string; nodeType: string; standbyFor?: string }[];
+  roles: { name: string; nodeType: string; standbyFor?: string; hostId?: string }[];
   connections: { fromRole: string; toRole: string }[];
 } & Record<string, unknown>;
 
@@ -461,6 +466,8 @@ export class FlowCanvas extends HTMLElement {
   // (#groupTree bleibt B5s rein visuelles Konzept, s. Abgrenzung in
   // docs/END-GOAL-FEATURES.md §12.1).
   #workflows: WorkflowSummary[] = [];
+  // Plan-Vorschau nicht gestarteter Workflows (voraussichtliche Hosts je Rolle) für die Host-Ansicht.
+  #workflowPlans = new Map<string, StartPlan>();
   // S6 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "Flow-Editor-Filter
   // auf die Nodes des gewählten Workflows, globale Sicht bleibt als
   // 'Alle' wählbar") — gesetzt von außen über setWorkflowFilter()
@@ -1023,6 +1030,19 @@ export class FlowCanvas extends HTMLElement {
     } catch {
       this.#workflows = [];
     }
+    // Nicht gestartete Workflows: voraussichtliche Hosts je Rolle (best effort, ohne Plan gilt "lokal"/Rollen-Host).
+    try {
+      const idle = this.#workflows.filter((wf) => !wf.runtime || Object.keys(wf.runtime).length === 0);
+      const plans = await Promise.all(
+        idle.map(async (wf): Promise<[string, StartPlan] | null> => {
+          const res = await apiFetch(`/api/v1/workflows/${encodeURIComponent(wf.id)}/plan`);
+          return res.ok ? [wf.id, (await res.json()) as StartPlan] : null;
+        }),
+      );
+      this.#workflowPlans = new Map(plans.filter((p): p is [string, StartPlan] => p !== null));
+    } catch {
+      this.#workflowPlans = new Map();
+    }
     // Beide geben nur zurück, *ob* sich #positions geändert hat, statt
     // selbst zu speichern — sonst würde ein Zwischen-Save mit dem noch
     // unangepassten Viewport (IDENTITY_VIEWPORT vor dem Fit unten)
@@ -1397,9 +1417,25 @@ export class FlowCanvas extends HTMLElement {
   // Bedeutung wie bei #zoneIdForGroup).
   #zoneIdForWorkflow(wf: WorkflowSummary): string {
     const runtime = wf.runtime;
-    if (!runtime || Object.keys(runtime).length === 0) return "local";
+    // Nicht gestartet: Zone aus der Planung (voraussichtlicher Host je Rolle); verteilt sich der Workflow auf
+    // mehrere Hosts, steht die Kachel in "mixed" und jede beteiligte Zone zeigt einen "Geplant"-Eintrag.
+    if (!runtime || Object.keys(runtime).length === 0) return zoneForStoppedWorkflow(this.#planInput(wf));
     const zones = new Set(Object.values(runtime).map((rt) => rt.hostId || "local"));
     return zones.size === 1 ? [...zones][0] : "mixed";
+  }
+
+  #planInput(wf: WorkflowSummary): PlanInput {
+    return {
+      name: wf.name,
+      hasRuntime: !!wf.runtime && Object.keys(wf.runtime).length > 0,
+      plan: this.#workflowPlans.get(wf.id),
+      roles: (wf.definition?.roles ?? []).map((r) => ({ name: r.name, hostId: r.hostId })),
+    };
+  }
+
+  // "Geplant"-Einträge einer Host-Zone: nicht gestartete Workflows, die sich über mehrere Zonen verteilen.
+  #ghostsForZone(zoneId: string): GhostEntry[] {
+    return ghostEntriesForZone(zoneId, this.#workflowsInScope().map((wf) => this.#planInput(wf)));
   }
 
   #zoneIdForNodeId(nodeId: string): string {
@@ -3206,6 +3242,8 @@ export class FlowCanvas extends HTMLElement {
       if (!pos) continue;
       bottom = Math.max(bottom, pos.y - HOST_ZONE_MARGIN + (MIN_BODY_HEIGHT + HEADER_HEIGHT) + HOST_ZONE_MARGIN);
     }
+    const ghosts = this.#ghostsForZone(zoneId);
+    if (ghosts.length > 0) bottom += ghostBlockHeight(ghosts.length);
     return bottom;
   }
 
@@ -3343,6 +3381,42 @@ export class FlowCanvas extends HTMLElement {
         metricsText.textContent =
           `CPU ${zone.metrics.cpuPercent.toFixed(0)}% · RAM ${gb(zone.metrics.memUsedBytes)}/${gb(zone.metrics.memTotalBytes)} GB`;
         g.appendChild(metricsText);
+      }
+
+      const ghosts = collapsed ? [] : this.#ghostsForZone(zone.id);
+      if (ghosts.length > 0) {
+        const blockH = ghostBlockHeight(ghosts.length);
+        const y0 = bottom - blockH + 4;
+        const frame = document.createElementNS(SVG_NS, "rect");
+        frame.setAttribute("x", "8");
+        frame.setAttribute("y", String(y0));
+        frame.setAttribute("width", String(laneWidth - 16));
+        frame.setAttribute("height", String(blockH - 8));
+        frame.setAttribute("rx", "4");
+        frame.setAttribute("fill", "none");
+        frame.setAttribute("stroke", "#7c8798");
+        frame.setAttribute("stroke-dasharray", "4 3");
+        g.appendChild(frame);
+        const cap = document.createElementNS(SVG_NS, "text");
+        cap.setAttribute("x", "16");
+        cap.setAttribute("y", String(y0 + 14));
+        cap.setAttribute("fill", "#9aa0a6");
+        cap.setAttribute("font-size", "10");
+        cap.textContent = "Geplant (nicht gestartet)";
+        g.appendChild(cap);
+        ghosts.forEach((e, i) => {
+          const t = document.createElementNS(SVG_NS, "text");
+          t.setAttribute("x", "16");
+          t.setAttribute("y", String(y0 + 28 + i * 14));
+          t.setAttribute("fill", "#c8ced6");
+          t.setAttribute("font-size", "11");
+          const full = `▣ ${e.workflow}: ${e.roles.join(", ")}`;
+          t.textContent = truncateTileTitle(full, Math.max(16, Math.floor((laneWidth - 32) / 6.3)));
+          const tip = document.createElementNS(SVG_NS, "title");
+          tip.textContent = full;
+          t.appendChild(tip);
+          g.appendChild(t);
+        });
       }
 
       if (collapsed) {

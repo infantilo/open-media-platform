@@ -90,3 +90,53 @@ export function loadText(h: HostEstimate, running: boolean): string {
   if (running) return `jetzt ${now}`;
   return `${now} → CPU ${Math.round(h.cpuProjected)} % · RAM ${Math.round(h.memProjected)} %`;
 }
+
+// ---- Flow-Editor: nicht gestartete Workflows in den Host-Zonen ---------------------------------------
+
+export interface PlanInput {
+  name: string;
+  /** true = es gibt eine Runtime (Workflow läuft), dann gilt nicht die Planung. */
+  hasRuntime: boolean;
+  plan?: StartPlan;
+  /** Rollen der Definition (Rückfall, solange kein Plan vorliegt: nur die fest vorgegebenen Hosts). */
+  roles: { name: string; hostId?: string }[];
+}
+
+/** Zone eines Planeintrags: "" (lokal) wird zu "local". */
+export function zoneOfPlannedHost(hostId: string | undefined): string {
+  return hostId ? hostId : "local";
+}
+
+/** Zonen, in denen die Rollen eines nicht gestarteten Workflows laufen würden (leer, wenn nichts bekannt). */
+export function plannedZoneIds(w: PlanInput): string[] {
+  const hosts = w.plan && w.plan.roles.length > 0 ? w.plan.roles.map((r) => r.plannedHostId) : w.roles.map((r) => r.hostId ?? "");
+  return [...new Set(hosts.map(zoneOfPlannedHost))];
+}
+
+/** Einzelne Zone eines nicht gestarteten Workflows; bei mehreren Hosts "mixed"; ohne Plan "local". */
+export function zoneForStoppedWorkflow(w: PlanInput): string {
+  const zones = plannedZoneIds(w);
+  if (zones.length === 0) return "local";
+  return zones.length === 1 ? zones[0] : "mixed";
+}
+
+export interface GhostEntry {
+  workflow: string;
+  roles: string[];
+}
+
+/**
+ * „Geplant“-Einträge einer Host-Zone: nur Workflows ohne Runtime, die sich auf MEHRERE Zonen verteilen
+ * (ein Workflow in einer einzigen Zone hat seine Kachel direkt dort).
+ */
+export function ghostEntriesForZone(zoneId: string, workflows: PlanInput[]): GhostEntry[] {
+  const out: GhostEntry[] = [];
+  for (const w of workflows) {
+    if (w.hasRuntime || plannedZoneIds(w).length < 2) continue;
+    const roles = w.plan && w.plan.roles.length > 0
+      ? w.plan.roles.filter((r) => zoneOfPlannedHost(r.plannedHostId) === zoneId).map((r) => r.role)
+      : w.roles.filter((r) => zoneOfPlannedHost(r.hostId) === zoneId).map((r) => r.name);
+    if (roles.length > 0) out.push({ workflow: w.name, roles });
+  }
+  return out;
+}
