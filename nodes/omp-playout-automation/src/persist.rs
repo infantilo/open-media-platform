@@ -85,6 +85,9 @@ pub struct Snapshot {
     /// brauchen denselben Wert wie vor dem Neustart.
     #[serde(default)]
     pub onair_utc_ms: i64,
+    /// Kapitel 27 / P9.3: Zustand des Plugin-Hosts (Ereignis-Hooks: enabled + Konfiguration).
+    #[serde(default)]
+    pub plugins: serde_json::Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -167,6 +170,7 @@ pub fn build_snapshot(state: &AutomationState, since_cache: &mut SinceCache, now
             .map(|rt| SnapChild { item_id: rt.item_id.clone(), id: rt.child.id.clone(), state: rt.state })
             .collect(),
         onair_utc_ms: state.onair_utc_ms,
+        plugins: crate::hooks::capture(),
     }
 }
 
@@ -181,6 +185,7 @@ pub struct RestoreReport {
 /// Wendet einen Snapshot auf einen FRISCHEN Zustand an (Aufrufer prüft,
 /// dass der Node noch leer ist). Reine Funktion bis auf `Instant::now()`.
 pub fn apply_snapshot(state: &mut AutomationState, snap: Snapshot, now_utc_ms: i64) -> Result<RestoreReport, String> {
+    crate::hooks::restore(&snap.plugins);
     if snap.schema != SNAPSHOT_SCHEMA {
         return Err(format!("Snapshot-Schema {} wird nicht unterstützt (erwartet {SNAPSHOT_SCHEMA})", snap.schema));
     }

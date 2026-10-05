@@ -19,6 +19,10 @@ pub fn set_channel(id: &str) {
     }
 }
 
+pub fn current_channel() -> String {
+    channel()
+}
+
 fn channel() -> String {
     CHANNEL.get().map(|m| m.lock().expect("lock poisoned").clone()).unwrap_or_default()
 }

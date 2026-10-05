@@ -65,6 +65,18 @@ fn log_record(rec: &AsRunRecord) {
         ("trigger", st) => ("INFO", format!("Channel-Trigger {} ({st}) {}", rec.action, rec.reason)),
         (other, st) => ("INFO", format!("{other} {st}")),
     };
+// Ereignis-Hooks (P9.3): Primary-Start/-Ende und Child-Zustände.
+    let hook_event = match (rec.kind, rec.status.as_str()) {
+        ("primary", "RUNNING") => Some("primaryStart"),
+        ("primary", _) => Some("primaryEnd"),
+        ("child", _) => Some("childEvent"),
+        _ => None,
+    };
+    if let Some(ev) = hook_event {
+        let mut body = serde_json::to_value(rec).unwrap_or_default();
+        body["channelId"] = serde_json::json!(crate::structlog::current_channel());
+        crate::hooks::fire(ev, body);
+    }
     let trigger_id = if rec.kind == "trigger" { rec.key.rsplit(':').next().unwrap_or("") } else { "" };
     crate::structlog::emit(
         level,

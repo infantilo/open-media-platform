@@ -59,6 +59,7 @@
 
 mod asrun;
 mod children;
+mod hooks;
 mod persist;
 mod playlist;
 mod readiness;
@@ -892,6 +893,8 @@ struct AutomationStore {
     voiceovers_active: Mutex<Vec<(String, i64)>>,
     /// Kapitel 27 / P9.2: laufende SCTE-35-Events (`Label:Kind-ID` → Event-ID), damit der Stopp dieselbe ID trägt.
     scte35_events: Mutex<HashMap<String, u32>>,
+    /// Kapitel 27 / P9.3: Plugin-Host des Node-SDK (Plugin `event-hooks`, s. `hooks.rs`).
+    plugins: Arc<omp_node_sdk::PluginRegistry>,
 }
 
 impl AutomationStore {
@@ -3060,6 +3063,8 @@ impl ParamStore for AutomationStore {
                 range: None,
                 readonly: true,
             },
+            // Kapitel 27 / P9.3: Zustand der Ereignis-Hooks (JSON).
+            ParamSpec { name: "hookStatus".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             ParamSpec {
                 name: "targetGraphicsLabel".to_string(),
                 kind: ParamType::String,
@@ -3467,6 +3472,7 @@ impl ParamStore for AutomationStore {
             "channelId" => Some(serde_json::json!(self.persistence.channel_id())),
             "channelName" => Some(serde_json::json!(self.persistence.channel_name())),
             "persistence" => Some(serde_json::json!(self.persistence.status())),
+            "hookStatus" => Some(hooks::status_json(&self.plugins)),
             // Kapitel 6 Teil 7: welcher Kanal gerade live ist — reine
             // Anzeige fürs UI (z. B. um die aktive Kanal-Kachel optisch
             // hervorzuheben), keine Bedienmöglichkeit über diesen Node
@@ -3808,10 +3814,22 @@ impl ParamStore for AutomationStore {
             _ => return Err(InvokeError::Unknown),
         };
 
+        if result.is_ok()
+            && matches!(
+                name,
+                "append" | "appendAsset" | "load" | "remove" | "moveItem" | "updateItem" | "setStartType" | "setTransition" | "setAudio" | "setChildren" | "setMediaRef"
+            )
+        {
+            hooks::fire("playlistEvent", serde_json::json!({ "method": name, "channelId": structlog::current_channel(), "args": Value::Object(args.clone()) }));
+        }
         result.map_err(|e| {
             self.report(e.clone());
             InvokeError::Message(e)
         })
+    }
+
+    fn plugins(&self) -> Option<&omp_node_sdk::PluginRegistry> {
+        Some(&self.plugins)
     }
 
     fn extra_route(&self, method: &str, path: &str, _body: &[u8]) -> Option<omp_node_sdk::RawResponse> {
@@ -4825,6 +4843,7 @@ fn env_or(key: &str, fallback: &str) -> String {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let label = env_or("OMP_LABEL", "PlayoutAutomation");
+    let hook_label = label.clone();
     let host = env_or("OMP_HOST", "127.0.0.1");
     let port: u16 = env_or("OMP_PORT", "9370").parse()?;
     let registry_url = env_or("OMP_REGISTRY_URL", "http://localhost:8010");
@@ -4893,6 +4912,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         own_label: label.clone(),
         voiceovers_active: Mutex::new(Vec::new()),
         scte35_events: Mutex::new(HashMap::new()),
+        plugins: {
+            let p = Arc::new(omp_node_sdk::PluginRegistry::new());
+            p.register(hooks::PLUGIN_ID, "Ereignis-Hooks (HTTP)", serde_json::json!({"hooks": []}));
+            hooks::start(p.clone());
+            p
+        },
         persistence: persist::Persistence::new(
             instance_id.clone().filter(|_| !launch_secret.is_empty()),
             orchestrator_url.clone(),
@@ -4958,9 +4983,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
+    hooks::fire("channelStart", serde_json::json!({ "channelId": structlog::current_channel(), "label": hook_label }));
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             eprintln!("omp-playout-automation: shutdown requested");
+            hooks::fire("channelStop", serde_json::json!({ "channelId": structlog::current_channel(), "label": hook_label }));
+            // Der Zustell-Thread bekommt kurz Zeit, die Abschlussmeldung noch abzusetzen.
+            tokio::time::sleep(Duration::from_millis(300)).await;
         }
         _ = alerts => {
             eprintln!("omp-playout-automation: event channel closed");

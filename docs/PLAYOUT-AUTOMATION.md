@@ -205,6 +205,20 @@ Node-Methoden (`POST /api/v1/nodes/{id}/methods/{name}`, Body = Argumente als JS
 Wichtige Parameter: `items`, `currentItemId`, `cuedItemId`, `mode`, `schedule`, `childEvents`,
 `triggerLog`, `audioRouting`, `channelId`, `persistence`, `target*Label`.
 
+## 12a. Ereignis-Hooks / Plugin-Architektur (P9.3, Spec §130–133)
+
+Prüfung „Plugin vs. Prozess vs. Node vs. Core“: OMP hat bereits den generischen Plugin-Host des Node-SDK
+(`GET /plugins`, `PATCH /plugins/<id>`, über den Orchestrator unter `/api/v1/nodes/<id>/plugins`). Der Automator
+registriert dort das Plugin **`event-hooks`** (Standard aus). Konfiguration:
+`{"enabled":true,"config":{"hooks":[{"label":"Router","event":"primaryStart","url":"http://…","timeoutMs":2000}]}}`;
+`event` = `playlistEvent` (Playlist geändert), `primaryStart`, `primaryEnd`, `childEvent`, `channelStart`,
+`channelStop` oder `*`. Jede Zustellung ist ein JSON-POST (`event`, `at`, `channelId` + die As-Run-Zeile bzw.
+Methode/Argumente). Aktionen (`execute`/`preflight`) sind die Child-Typen `WEBHOOK`/`NODE_COMMAND`/`SCTE35` —
+keine zweite Mechanik. **Isolation:** eigener Zustell-Thread hinter begrenzter Warteschlange (256), `fire()` blockiert
+nie, Zeitüberschreitung/Fehler/Absturz des Ziels landen nur in `hookStatus` (je Hook gesendet/fehlgeschlagen/letzter
+Fehler, ungültige Einträge mit Grund, verworfene Meldungen) — nie im Event oder Takt. Die Konfiguration steht im
+Channel-Snapshot (überlebt Neustarts). Grenze: `channelStop` kommt nur bei geordnetem Beenden (Ctrl-C), nicht bei SIGTERM/Absturz.
+
 ## 13. Migration: PIPELINE CONTROLLER → OMP (§270)
 
 | PIPELINE-CONTROLLER-Funktion | Wo sie in OMP lebt |
@@ -221,7 +235,7 @@ Wichtige Parameter: `items`, `currentItemId`, `cuedItemId`, `mode`, `schedule`, 
 | ChannelBus (TCP/NDJSON) | Channel-Trigger über NATS + Orchestrator (§6) |
 | File-Transfer-Manager-Plugin | Asset-System + Prozess-Schritt `materialize` (§8) |
 | SCTE-35-Plugin | Node `omp-scte35` + Child `SCTE35` (P9.2); MXL-ANC-/TS-Ausgang offen |
-| Plugin-System | OMP-Prozess-/Node-Mechanismen; Plugin-Hooks nur wo nötig (nichts automatisch als Plugin) |
+| Plugin-System | SDK-Plugin-Host + Plugin `event-hooks` (HTTP-Ereignis-Hooks, §12a); Aktionen = Child-Typen; nichts automatisch als Plugin |
 | As-Run (Tagesdatei) | persistenter As-Run-Store (§11) |
 | Supervisor / Multi-Channel | OMP-Orchestrator/Launcher/Placement; Channel = eine Instanz |
 | MarinaParser (externer Import) | nicht übernommen (außerhalb Umfang) |
