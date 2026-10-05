@@ -74,6 +74,18 @@ var allowedExtraEnvKeys = map[string]bool{
 	// gefunden, s. docs/decisions.md.
 	"OMP_DECKLINK_DEVICE_NUMBER": true,
 	"OMP_DECKLINK_DIRECTION":     true,
+	// Die Programm-/Rollenformate setzen zusätzlich zur Auflösung die Bildrate (workflows/formats.go
+	// formatExtraEnv): ohne diese beiden Schlüssel lehnte der Agent jeden Remote-Start eines Workflows
+	// mit Format ab ("extraEnv key OMP_FRAMERATE_DEN not allowed"). OMP_ME_LEVELS: Role.MixerLevels.
+	"OMP_FRAMERATE_NUM": true,
+	"OMP_FRAMERATE_DEN": true,
+	"OMP_ME_LEVELS":     true,
+	// Ziele der Playout-Automation, aus den Rollen des Workflows vorbelegt (workflows/autotargets.go).
+	"OMP_PLAYOUT_TARGET_PLAYER_A_LABEL":    true,
+	"OMP_PLAYOUT_TARGET_PLAYER_B_LABEL":    true,
+	"OMP_PLAYOUT_TARGET_MIXER_LABEL":       true,
+	"OMP_PLAYOUT_TARGET_AUDIO_MIXER_LABEL": true,
+	"OMP_PLAYOUT_TARGET_GRAPHICS_LABEL":    true,
 }
 
 // Request ist die auf omp.host.<hostId>.cmd empfangene Nachricht.
@@ -112,8 +124,8 @@ type Request struct {
 	// ein ungültiger Wert eines deklarierten Schlüssels lässt den Start scheitern.
 	Options map[string]string `json:"options,omitempty"`
 	// Path/Kind: Action "check-path" — Pfadprüfung auf diesem Host (Antwort: Detail = JSON).
-	Path string `json:"path,omitempty"`
-	Kind string `json:"kind,omitempty"`
+	Path          string `json:"path,omitempty"`
+	Kind          string `json:"kind,omitempty"`
 	UpdatePath    string `json:"updatePath,omitempty"`
 	UpdateVersion string `json:"updateVersion,omitempty"`
 	UpdateSHA256  string `json:"updateSha256,omitempty"`

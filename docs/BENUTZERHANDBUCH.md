@@ -1103,6 +1103,7 @@ ist — Kanal-Player melden dafür ihre Audio-Gruppen als zusammengehörig.
 
 - Die Automation sucht ihre Ziele jetzt in der Node-Liste des Orchestrators, nicht nur in der lokalen
   Registry: Player und Mischer auf einem **anderen Host** erscheinen dadurch in der Zielauswahl.
+- Für Workflows auf Remote-Hosts lässt der Host-Agent jetzt auch die Bildraten-Variablen (`OMP_FRAMERATE_NUM/DEN`), die Mischer-Ebenen und die Ziel-Variablen der Automation durch; vorher scheiterte der Start eines Workflows mit Programmformat auf einem Remote-Host mit „extraEnv key … not allowed“. Host-Agents nach dem Update neu starten (`make hosts`).
 - Läuft die Automation auf einem anderen Host als der Player, liest die Dateiauswahl die Dateien des
   Players (Kanal A); die Datei muss dort unter `OMP_MEDIA_DIR` liegen.
 
