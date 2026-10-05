@@ -9,6 +9,7 @@
 
 mod layers;
 mod pipeline;
+mod subtitles;
 mod templates;
 mod uibundle;
 
@@ -33,6 +34,100 @@ struct OgrafStore {
     templates_root: PathBuf,
     lowres_flow_id: String,
     pipeline: pipeline::PipelineHandle,
+    /// Kapitel 27 / P9.4: Untertitel-Engine (s. `subtitles.rs`).
+    subtitle_dir: PathBuf,
+    subtitle_track: Mutex<Option<subtitles::Track>>,
+    subtitle_play: Mutex<Option<subtitles::Playback>>,
+    /// Für den Ticker-Thread (ruft `show`/`update`/`hide` des Stores auf, ohne Referenzzyklus).
+    self_ref: std::sync::OnceLock<std::sync::Weak<dyn ParamStore>>,
+}
+
+/// Ebene und Template der Untertitel im OGraf-Pfad.
+const SUBTITLE_LAYER: &str = "subtitle";
+
+impl OgrafStore {
+    fn subtitle_args(v: Value) -> serde_json::Map<String, Value> {
+        v.as_object().cloned().unwrap_or_default()
+    }
+
+    fn subtitle_state(&self) -> Value {
+        let play = self.subtitle_play.lock().expect("lock poisoned");
+        let sel = self.subtitle_track.lock().expect("lock poisoned");
+        serde_json::json!({
+            "selected": sel.as_ref().map(|t| t.id.clone()),
+            "running": play.is_some(),
+            "positionMs": play.as_ref().map(|p| p.position_ms()),
+            "text": play.as_ref().map(|p| p.last_text.clone()).unwrap_or_default(),
+            "tracks": subtitles::list_tracks(&self.subtitle_dir),
+        })
+    }
+
+    fn subtitle_invoke(&self, method: &str, args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
+        let msg = |e: String| InvokeError::Message(e);
+        match method {
+            "load" | "select" => {
+                let id = args.get("track").and_then(Value::as_str).ok_or_else(|| msg("track fehlt".to_string()))?;
+                let t = subtitles::load_track(&self.subtitle_dir, id).map_err(msg)?;
+                *self.subtitle_track.lock().expect("lock poisoned") = Some(t);
+                Ok(())
+            }
+            "start" => {
+                if let Some(id) = args.get("track").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                    let t = subtitles::load_track(&self.subtitle_dir, id).map_err(msg)?;
+                    *self.subtitle_track.lock().expect("lock poisoned") = Some(t);
+                }
+                let track = self.subtitle_track.lock().expect("lock poisoned").clone().ok_or_else(|| msg("keine Spur gewählt (subtitle.select/load oder track)".to_string()))?;
+                let offset = args.get("offsetMs").and_then(Value::as_u64).unwrap_or(0);
+                // Ebene sichtbar machen (leerer Text), dann läuft der Ticker.
+                self.invoke("show", &Self::subtitle_args(serde_json::json!({"templateId": "subtitle", "layerId": SUBTITLE_LAYER, "data": {"text": ""}}))).map_err(|_| msg("Template „subtitle“ nicht gefunden (data/ograf-templates/subtitle)".to_string()))?;
+                *self.subtitle_play.lock().expect("lock poisoned") = Some(subtitles::Playback::new(track, offset));
+                self.spawn_ticker();
+                Ok(())
+            }
+            "tick" => {
+                // Ereignisse außerhalb der Sperre ausführen.
+                let (update, finished) = {
+                    let mut g = self.subtitle_play.lock().expect("lock poisoned");
+                    match g.as_mut() {
+                        Some(p) => (p.changed_text(), p.finished()),
+                        None => return Ok(()),
+                    }
+                };
+                if let Some(text) = update {
+                    let _ = self.invoke("update", &Self::subtitle_args(serde_json::json!({"layerId": SUBTITLE_LAYER, "data": {"text": text}})));
+                }
+                if finished {
+                    return self.subtitle_invoke("stop", args);
+                }
+                Ok(())
+            }
+            "stop" => {
+                let was_running = self.subtitle_play.lock().expect("lock poisoned").take().is_some();
+                if was_running {
+                    let _ = self.invoke("hide", &Self::subtitle_args(serde_json::json!({"layerId": SUBTITLE_LAYER})));
+                }
+                Ok(())
+            }
+            _ => Err(InvokeError::Unknown),
+        }
+    }
+
+    /// Ein Thread je Prozess, beendet sich mit dem Store; prüft alle 60 ms den aktuellen Cue.
+    fn spawn_ticker(&self) {
+        static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if STARTED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let Some(weak) = self.self_ref.get().cloned() else { return };
+        std::thread::Builder::new()
+            .name("omp-ograf-subtitles".into())
+            .spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_millis(60));
+                let Some(store) = weak.upgrade() else { break };
+                let _ = store.invoke("subtitle.tick", &Default::default());
+            })
+            .ok();
+    }
 }
 
 impl ParamStore for OgrafStore {
@@ -81,8 +176,17 @@ impl ParamStore for OgrafStore {
                     range: None,
                     readonly: true,
                 },
+                // Kapitel 27 / P9.4: Untertitel-Engine (JSON: selected, running, positionMs, text, tracks).
+                ParamSpec { name: "subtitle".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             ],
             methods: vec![
+                MethodSpec { name: "subtitle.load".to_string(), args: vec![MethodArg { name: "track".to_string(), kind: ParamType::String }] },
+                MethodSpec { name: "subtitle.select".to_string(), args: vec![MethodArg { name: "track".to_string(), kind: ParamType::String }] },
+                MethodSpec {
+                    name: "subtitle.start".to_string(),
+                    args: vec![MethodArg { name: "track".to_string(), kind: ParamType::String }, MethodArg { name: "offsetMs".to_string(), kind: ParamType::Number }],
+                },
+                MethodSpec { name: "subtitle.stop".to_string(), args: vec![] },
                 MethodSpec {
                     name: "show".to_string(),
                     args: vec![
@@ -143,6 +247,9 @@ impl ParamStore for OgrafStore {
     }
 
     fn get(&self, name: &str) -> Option<Value> {
+        if name == "subtitle" {
+            return Some(self.subtitle_state());
+        }
         match name {
             "templates" => Some(serde_json::json!(
                 self.templates
@@ -255,6 +362,7 @@ impl ParamStore for OgrafStore {
                 }
                 Ok(())
             }
+            _ if name.starts_with("subtitle.") => self.subtitle_invoke(&name["subtitle.".len()..], args),
             _ => Err(InvokeError::Unknown),
         }
     }
@@ -329,6 +437,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let domain = env_or("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl");
     let templates_root = PathBuf::from(env_or("OMP_OGRAF_TEMPLATES", "data/ograf-templates"));
     std::fs::create_dir_all(&templates_root).ok();
+    subtitles::ensure_builtin_template(&templates_root);
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
 
     let templates = templates::scan_templates(&templates_root);
@@ -392,13 +501,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let key_bridge_heartbeat = pipeline_handle.key_bridge_heartbeat_handle();
     let main_loop_heartbeat = pipeline_handle.main_loop_heartbeat_handle();
 
-    let store: Arc<dyn ParamStore> = Arc::new(OgrafStore {
+    let concrete = Arc::new(OgrafStore {
         templates,
         layers: Mutex::new(layers::Layers::default()),
         templates_root,
         lowres_flow_id: lowres_flow_id.clone(),
         pipeline: pipeline_handle,
+        subtitle_dir: PathBuf::from(env_or("OMP_SUBTITLE_DIR", "data/subtitles")),
+        subtitle_track: Mutex::new(None),
+        subtitle_play: Mutex::new(None),
+        self_ref: std::sync::OnceLock::new(),
     });
+    // Rückverweis für den Untertitel-Ticker (kein Zyklus: schwache Referenz).
+    let store: Arc<dyn ParamStore> = concrete.clone();
+    let _ = concrete.self_ref.set(Arc::downgrade(&store));
 
     // Port-Labels (Nutzerfund 2026-07-16, §22 Flow-Editor-Lesbarkeit):
     // ohne eigenes Label sähe man an der Kachel nur zwei gleich benannte

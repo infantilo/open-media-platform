@@ -3,11 +3,11 @@
 Gemäß Spec §274. Technische Referenz: `docs/PLAYOUT-AUTOMATION.md`; Entscheidungen und
 Messungen je Schritt: `UMSETZUNG.md` (Kapitel 27, §27.7), `docs/decisions.md`.
 
-**Ehrliches Gesamtbild:** P1–P8 und P10 sind umgesetzt und live geprüft; **P9 (Subtitle,
-Voiceover-Trigger, Plugins, SCTE-35) ist bewusst zurückgestellt** (Nutzerentscheidung
-2026-10-02). Der Produktionsanspruch „kompletter 24/7-Channel“ (§272) ist damit für
-Video/Live/Audio-Routing/Grafik/Trigger/Preflight/As-Run erfüllt, nicht für Untertitel und
-SCTE-35. Ein Dauerbetrieb über Tage wurde **nicht** gemessen.
+**Ehrliches Gesamtbild:** P1–P10 sind umgesetzt und live geprüft. P9 (2026-10-05 nachgeholt):
+Voiceover (Delegation an den Audiomischer), SCTE-35 (eigener Generator-Node, Child `SCTE35`,
+Klassifikation `adClass`), Ereignis-Hooks über den SDK-Plugin-Host, Untertitel (SRT/VTT-Engine im
+Grafik-Node). Grenzen von P9: SCTE-35 nur als Parameter/UDP (keine MXL-ANC-/TS-Einbettung),
+Untertitel nur Text. Ein Dauerbetrieb über Tage wurde **nicht** gemessen.
 
 ## Repository-Analyse
 - **Genutzte OMP-Komponenten:** `omp-channel-player` (A/B), `omp-video-mixer-me`,
@@ -32,7 +32,7 @@ SCTE-35. Ein Dauerbetrieb über Tage wurde **nicht** gemessen.
 Event-Typen CLIP/LIVE/PATTERN/IMAGE/BLACK/HOLD/JUMP; Startarten sequence/manual/fixtime
 (RFC 3339 mit Offset); Child Events GRAPHIC/LOGO/CHANNEL_BRANDING, TRIGGER/NODE_COMMAND/
 AUDIO/VOICEOVER, WEBHOOK, CHANNEL_TRIGGER mit vier Zeitmodi und Fehlerrichtlinien.
-**Offen:** SUBTITLE, ROUTING, SOURCE, SCTE35, GPI (werden abgelehnt, nicht simuliert).
+**Offen:** ROUTING, SOURCE, GPI (werden abgelehnt, nicht simuliert).
 
 ## Sources
 Discovery über IS-04 (`GET /api/v1/sources`), Tags in drei Herkünften, Capabilities (Audio),

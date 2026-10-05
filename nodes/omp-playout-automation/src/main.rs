@@ -2597,6 +2597,9 @@ fn needs_stop(child: &ChildEvent) -> bool {
     if child.is_native_voiceover() {
         return true;
     }
+    if child.kind == ChildType::Subtitle {
+        return true; // Start und Stopp: subtitle.start/stop am Grafik-Node
+    }
     if child.kind == ChildType::Scte35 {
         // Rückkehr ins Netz (splice.in) bzw. End-Signal (endTypeId) beim Stopp.
         let p = &child.params;
@@ -2730,6 +2733,12 @@ fn plan_children(
 fn child_target_ok(state: &AutomationState, child: &ChildEvent) -> bool {
     if child.kind.is_graphics() {
         state.graphics_node_id.is_some()
+    } else if child.kind == ChildType::Subtitle {
+        if child.target.trim().is_empty() {
+            state.graphics_node_id.is_some()
+        } else {
+            state.discovered_labels.iter().any(|l| l == &child.target)
+        }
     } else if child.kind == ChildType::Scte35 {
         state.discovered_labels.iter().any(|l| l == &child.target)
     } else if child.is_native_voiceover() {
@@ -2859,6 +2868,24 @@ fn execute_child(
     }
     if child.kind == ChildType::Scte35 {
         return execute_scte35(store, child, stop);
+    }
+    if child.kind == ChildType::Subtitle {
+        // Untertitel-Engine im Grafik-Node: `target` = anderer Node, sonst der aufgelöste Grafik-Node.
+        let node_id = if child.target.trim().is_empty() {
+            graphics_node_id.ok_or("kein Ziel-omp-ograf aufgelöst (targetGraphicsLabel)")?
+        } else {
+            remote::resolve_node_id_by_label(&store.registry, &child.target).ok_or_else(|| format!("Ziel-Node „{}\u{201c} nicht gefunden", child.target))?
+        };
+        let client = store.proxy_client(node_id);
+        return if stop {
+            client.invoke("subtitle.stop", serde_json::json!({})).map_err(|e| e.to_string())
+        } else {
+            let mut args = serde_json::json!({"track": child.params["track"]});
+            if let Some(o) = child.params.get("offsetMs") {
+                args["offsetMs"] = o.clone();
+            }
+            client.invoke("subtitle.start", args).map_err(|e| e.to_string())
+        };
     }
     if child.kind.is_node_command() {
         let method = if stop { child.stop_method.as_str() } else { child.method.as_str() };

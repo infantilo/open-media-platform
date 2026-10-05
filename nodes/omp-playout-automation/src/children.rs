@@ -59,7 +59,7 @@ impl ChildType {
     }
 
     pub fn is_supported(self) -> bool {
-        self.is_graphics() || self.is_node_command() || matches!(self, ChildType::Webhook | ChildType::ChannelTrigger | ChildType::Scte35)
+        self.is_graphics() || self.is_node_command() || matches!(self, ChildType::Webhook | ChildType::ChannelTrigger | ChildType::Scte35 | ChildType::Subtitle)
     }
 }
 
@@ -240,6 +240,9 @@ impl ChildEvent {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.kind == ChildType::Subtitle && self.params.get("track").and_then(Value::as_str).is_none_or(|t| t.trim().is_empty()) {
+            return Err("SUBTITLE: params.track (Spur im Untertitel-Verzeichnis des Grafik-Nodes) fehlt".to_string());
+        }
         if self.kind == ChildType::Scte35 {
             if self.target.trim().is_empty() {
                 return Err("SCTE35: target (Label des omp-scte35-Nodes) fehlt".to_string());
@@ -256,7 +259,7 @@ impl ChildEvent {
         }
         if !self.kind.is_supported() {
             return Err(format!(
-                "{:?} wird nicht unterstützt: in diesem System gibt es dafür keinen Ziel-Node (Untertitel/Routing/Source/GPI)",
+                "{:?} wird nicht unterstützt: in diesem System gibt es dafür keinen Ziel-Node (Routing/Source/GPI)",
                 self.kind
             ));
         }
@@ -440,6 +443,16 @@ mod tests {
     }
 
     #[test]
+    fn subtitle_child_needs_a_track() {
+        let mut c = ChildEvent::graphic("", TimingMode::FullPrimary, 0, 0);
+        c.kind = ChildType::Subtitle;
+        assert!(c.kind.is_supported() && !c.kind.is_graphics() && !c.kind.is_node_command());
+        assert!(c.validate().unwrap_err().contains("track"));
+        c.params = serde_json::json!({"track": "demo-de"});
+        c.validate().unwrap();
+    }
+
+    #[test]
     fn scte35_child_needs_a_target_and_a_known_action() {
         let mut c = ChildEvent::graphic("", TimingMode::RelativeToStart, 1000, 30000);
         c.kind = ChildType::Scte35;
@@ -487,7 +500,7 @@ mod tests {
 
     #[test]
     fn validation_rejects_unsupported_and_incomplete_children() {
-        for kind in [ChildType::Subtitle, ChildType::Routing, ChildType::Source, ChildType::Gpi] {
+        for kind in [ChildType::Routing, ChildType::Source, ChildType::Gpi] {
             let mut c = ChildEvent::graphic("t", TimingMode::FullPrimary, 0, 0);
             c.kind = kind;
             assert!(c.validate().unwrap_err().contains("keinen Ziel-Node"), "{kind:?}");

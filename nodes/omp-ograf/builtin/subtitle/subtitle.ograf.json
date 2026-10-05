@@ -1,0 +1,24 @@
+{
+  "$schema": "https://ograf.ebu.io/v1/specification/json-schemas/graphics/schema.json",
+  "id": "subtitle",
+  "version": "1.0.0",
+  "name": "Untertitel",
+  "description": "Untertitelzeilen (unten mittig, Kontur). Wird von der Untertitel-Engine des Grafik-Nodes (subtitle.start/stop) mit dem jeweils aktuellen Text versorgt; leerer Text blendet aus.",
+  "author": { "name": "OpenMediaPlatform" },
+  "main": "subtitle.js",
+  "supportsRealTime": true,
+  "supportsNonRealTime": false,
+  "stepCount": 1,
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "text": { "type": "string", "title": "Text", "default": "" },
+      "fontSize": { "type": "integer", "title": "Schriftgröße (px)", "default": 38, "minimum": 16, "maximum": 96 },
+      "bottom": { "type": "integer", "title": "Abstand unten (px)", "default": 56, "minimum": 0, "maximum": 400 }
+    }
+  },
+  "renderRequirements": [
+    { "resolution": { "width": { "ideal": 1280 }, "height": { "ideal": 720 } }, "frameRate": { "ideal": 25 } }
+  ]
+}

@@ -67,7 +67,7 @@ Typen: `GRAPHIC`, `LOGO`, `CHANNEL_BRANDING` (Grafik-Node `show`/`hide`);
 `TRIGGER`, `NODE_COMMAND`, `AUDIO`, `VOICEOVER` (ausdrücklich `target` = Node-Label,
 `method`, `params`, optional `stopMethod` — der Automator kennt keine Node-Typen);
 `WEBHOOK` (HTTP-POST); `CHANNEL_TRIGGER` (§6).
-**Abgelehnt statt simuliert:** `SUBTITLE`, `ROUTING`, `SOURCE`, `GPI` — dafür gibt
+**Abgelehnt statt simuliert:** `ROUTING`, `SOURCE`, `GPI` — dafür gibt
 es keinen Ziel-Node; `setChildren` meldet es im Klartext.
 
 **Voiceover (P9, §53/§135):** `VOICEOVER` ohne `method` ist ein eigener Typ, der den Audiomischer
@@ -88,6 +88,15 @@ UDP-Datagramm (`OMP_SCTE35_UDP=host:port`). **Nicht enthalten:** Einbettung in e
 Transportstrom, Verschlüsselung, Komponenten-Splices, PTS-genaue Vorlaufplanung (immer „sofort“).
 **Klassifikation:** Item-Feld `adClass` (`block_start`, `block_end`, `commercial`, `promo`, leer = keine) —
 Metadaten (Anzeige, As-Run-`detail.adClass`), löst selbst nichts aus.
+
+**Untertitel (P9.4, §52):** `SUBTITLE` steuert die Untertitel-Engine des Grafik-Nodes (`omp-ograf`,
+Modul `subtitles.rs`): `params`: `{"track":"demo-de","offsetMs":0}`, `target` leer = aufgelöster Grafik-Node
+(`targetGraphicsLabel`). Start `subtitle.start`, Stopp `subtitle.stop`; am Node außerdem `subtitle.load/select`.
+Spuren (Beispiel `docs/examples/demo-de.srt`): SRT oder WebVTT im Verzeichnis `OMP_SUBTITLE_DIR` (Standard `data/subtitles`, Spur-ID = Dateiname);
+die Engine spielt gegen eine Uhr (mit Versatz) und setzt je Cue-Wechsel den Text der OGraf-Ebene `subtitle`
+(Template `data/ograf-templates/subtitle`) — das Bild kommt über den vorhandenen Fill+Key-Pfad in den Bildmischer-DSK.
+Parameter `subtitle` (ausgewählte Spur, läuft, Position, aktueller Text, Spuren). Grenzen: nur Text mit Zeilenumbruch
+(keine Positionen/Farben/Stile aus der Datei), keine Live-/CEA-608-Untertitel, keine Mehrspur-Mischung.
 
 Zeitmodi (`timing`): `ABSOLUTE` (`atUtc`), `RELATIVE_TO_START` (`delayMs`),
 `RELATIVE_TO_END` (`delayMs` vor dem Ende, braucht feste Dauer), `FULL_PRIMARY`
@@ -239,6 +248,6 @@ Channel-Snapshot (überlebt Neustarts). Grenze: `channelStop` kommt nur bei geor
 | As-Run (Tagesdatei) | persistenter As-Run-Store (§11) |
 | Supervisor / Multi-Channel | OMP-Orchestrator/Launcher/Placement; Channel = eine Instanz |
 | MarinaParser (externer Import) | nicht übernommen (außerhalb Umfang) |
-| Subtitle-Engine | **offen** (P9); Kind-Typ `SUBTITLE` wird abgelehnt |
+| Subtitle-Engine | Untertitel-Engine im Grafik-Node (SRT/VTT) + Child `SUBTITLE` (P9.4) |
 
 Der OMP-Adapter-Sidecar `omp-pipeline-controller` bleibt unverändert.
