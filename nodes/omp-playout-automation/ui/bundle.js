@@ -396,11 +396,44 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       { k: "player", t: "Player", w: "52px", get: (it, i) => playerOf(it, i) },
       { k: "status", t: "Status", w: "78px", get: (it, i) => statusOf(it, i) },
       { k: "gap", t: "Gap / Overlap", w: "84px", get: (it, i) => gapOf(i) },
-      { k: "audio", t: "Audio", w: "92px", get: (it) => ({ text: it.audio ? (it.audio.resolution?.chosen || "—") : "" , tip: it.audio ? "Gewählte Audio-Variante" : "" }) },
+      { k: "audio", t: "Audio", w: "150px", get: (it) => {
+        const plan = planOf(it);
+        const rows = plan ? planRows(plan) : [];
+        const warn = rows.some((r) => r.rule || r.failed || r.warnings.length);
+        const base = it.audioMapping ? mappingLabel(it.audioMapping) : it.audio ? it.audio.resolution?.chosen || "—" : "";
+        const tip = rows.length ? rows.map((r) => `${r.label}: ${r.text}${r.warnings.length ? `\n   ⚠ ${r.warnings.join("\n   ⚠ ")}` : ""}`).join("\n") : it.audioMapping ? `Zuordnung: ${mappingLabel(it.audioMapping)}` : "";
+        return { text: (base || (rows.length ? "Standard" : "")) + (warn ? " ⚠" : ""), cls: warn ? "gap-neg" : "", tip };
+      } },
       { k: "kids", t: "Child", w: "46px", get: (it) => ({ text: (it.children || []).length ? String(it.children.length) : "" }) },
       { k: "ready", t: "Bereitschaft", w: "92px", get: (it) => ({ text: it.asset ? (it.readiness || "UNKNOWN") : (it.available ?? true) ? "" : "nicht verfügbar", tip: it.readinessDetail || "" }) },
     ];
     let liveCh = "a";
+    // Audio-Spiegel der Kanal-Player (Plan je Kanal, Zielgruppen, Zuordnungsvorlagen).
+    let audioPlans = { a: null, b: null };
+    let audioGroups = [];
+    let audioMappings = [];
+    const mappingLabel = (id) => (audioMappings.find((m) => m.id === id) || {}).label || id;
+    // Plan des Players, der dieses Event gerade abspielt bzw. vorbereitet hat (sonst null: erst beim Cue aufgelöst).
+    const planOf = (it) => {
+      if (it.id === currentItemId) return audioPlans[liveCh];
+      if (it.id === cuedItemId) return audioPlans[liveCh === "a" ? "b" : "a"];
+      return null;
+    };
+    // Plan → lesbare Zeilen je Zielgruppe: aus welchen Quellspuren, per welcher Ersatzregel, oder still.
+    const planRows = (plan) => (plan.groups || []).map((g) => {
+      const tracks = new Set();
+      g.matrix.forEach((row) => row.forEach((c, col) => { if (c) tracks.add(plan.src_channels[col].track); }));
+      const label = (audioGroups.find((x) => x.id === g.group) || {}).label || g.group;
+      const mixed = g.matrix.some((row) => row.filter((c) => c).length > 1 || row.some((c) => c && c !== 1));
+      return {
+        label,
+        silent: g.silent,
+        rule: g.rule,
+        failed: g.failed,
+        text: g.silent ? "still" : `Spur ${[...tracks].sort((a, b) => a - b).join(", ")}${mixed ? " (gemischt)" : ""}${g.rule ? ` · Ersatz „${g.rule}“` : ""}`,
+        warnings: g.warnings || [],
+      };
+    });
     const itemIndex = (id) => items.findIndex((x) => x.id === id);
     const statusOf = (it, i) => {
       const cur = itemIndex(currentItemId);
@@ -867,6 +900,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         startLocal: item?.startAt ? new Date(item.startAt).toLocaleString("sv-SE") : item?.fixtimeHms || "",
         transition: item?.transition || "cut", rateFrames: item?.transitionRateFrames ?? "",
         audioCap: item?.audio?.intent?.capability || "",
+        audioMapping: item?.audioMapping || "",
       };
       const origSig = mediaSig(d);
       const origDur = d.durationMs;
@@ -937,6 +971,17 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
 
       const renderAudio = () => {
         const f = h("div", { class: "form" });
+        if (d.kind !== "hold" && d.kind !== "jump") {
+          f.append(...field("Audio-Zuordnung", bindSelect(d, "audioMapping", [["", "Standard (Player-Vorgabe)"], ...audioMappings.map((m) => [m.id, m.label || m.id])])));
+          f.append(h("div", { class: "hint" }, "Welche Quellspuren in welche Ausgabegruppe gehen. Fehlt eine Spur, greifen die Ersatzregeln (Upmix, Downmix …). Ohne Wahl: MXF = Vorlage „Stereo“, sonst der Programmton der Quelle."));
+          const plan = item ? planOf(item) : null;
+          if (plan) {
+            const t = h("div", { class: "hint" });
+            planRows(plan).forEach((r) => t.append(h("div", { style: r.failed ? "color:var(--err,#ff6b6b)" : r.rule ? "color:var(--warn)" : r.silent ? "color:var(--mut)" : "" }, `${r.label}: ${r.text}`)));
+            plan.warnings.forEach((w) => t.append(h("div", { style: "color:var(--warn)" }, `⚠ ${w}`)));
+            f.append(h("label", {}, "Aufgelöster Plan"), t);
+          } else f.append(h("div", { class: "hint" }, "Der aufgelöste Plan erscheint, sobald das Event gecued oder auf Sendung ist."));
+        }
         const a = item?.audio;
         if (!a) {
           f.append(h("div", { class: "hint" }, isNew ? "Die Audio-Wahl ist nach dem Anlegen verfügbar (sie hängt von den Capabilities der aufgelösten Live-Quelle ab)." : "Nur Live-Events mit bekannter Quelle bieten eine Audio-Wahl."));
@@ -1052,6 +1097,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         } else p.startAt = "";
         if (d.transition === "mix" && String(d.rateFrames).trim() !== "") p.transitionRateFrames = Number(d.rateFrames);
         p.children = kids.map(cleanKid);
+        p.audioMapping = d.audioMapping || "";
         if (item?.audio && d.audioCap !== (item.audio.intent?.capability || "")) {
           const intent = { ...(item.audio.intent || {}) };
           if (d.audioCap) intent.capability = d.audioCap; else delete intent.capability;
@@ -1234,7 +1280,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       clockEl.textContent = new Date().toLocaleTimeString("de-DE");
       if (dragging) return;
       const names = ["items", "currentItemId", "cuedItemId", "mode", "connected", "playheadPositionMs", "currentDurationMs", "assets", "activeCartId",
-        "availableNodes", "targetPlayerALabel", "targetPlayerBLabel", "targetMixerLabel", "targetGraphicsLabel", "targetAudioMixerLabel", "liveChannel", "mediaLibrary",
+        "availableNodes", "targetPlayerALabel", "targetPlayerBLabel", "targetMixerLabel", "targetGraphicsLabel", "targetAudioMixerLabel", "liveChannel", "mediaLibrary", "audioPlans", "audioGroups", "audioMappings",
         "availableSources", "channelName", "persistence", "schedule", "childEvents", "triggerLog", "channelId", "preflightWindowMin", "defaultFiller"];
       const v = Object.fromEntries(await Promise.all(names.map(async (n) => [n, await getParam(n)])));
       if (dragging) return;
@@ -1245,6 +1291,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       mediaLibrary = v.mediaLibrary || [];
       availableSources = v.availableSources || [];
       channelId = v.channelId || "";
+      audioPlans = (v.audioPlans && typeof v.audioPlans === "object") ? v.audioPlans : { a: null, b: null };
+      audioGroups = Array.isArray(v.audioGroups) ? v.audioGroups : [];
+      audioMappings = Array.isArray(v.audioMappings) ? v.audioMappings : [];
       currentItemId = v.currentItemId || "";
       cuedItemId = v.cuedItemId || "";
       activeCartId = v.activeCartId || "";
