@@ -1354,9 +1354,9 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const cancelBtn = document.createElement("omp-button");
         cancelBtn.textContent = "Abbrechen";
         cancelBtn.addEventListener("click", close);
-        const saveBtn = document.createElement("omp-button");
-        saveBtn.textContent = "Speichern & Anzeigen";
-        saveBtn.addEventListener("click", async () => {
+        // Gemeinsame Speicherroutine: "Nur speichern" legt das Preset an/aktualisiert es,
+        // ohne es zu aktivieren (nichts geht on air); "Speichern & Anzeigen" fährt es danach ein.
+        const savePreset = async () => {
           const name = draft.name.trim() || `PIP ${latestPipPresets.length + 1}`;
           const args = {
             id: draft.id,
@@ -1378,12 +1378,25 @@ class OmpVideoMixerMePanel extends HTMLElement {
             args[`${key}Height`] = b.height;
           }
           await call("pip.savePreset", args);
+        };
+        const saveOnlyBtn = document.createElement("omp-button");
+        saveOnlyBtn.textContent = "Nur speichern";
+        saveOnlyBtn.title = "Preset speichern, ohne es zu aktivieren";
+        saveOnlyBtn.addEventListener("click", async () => {
+          await savePreset();
+          close();
+        });
+        const saveBtn = document.createElement("omp-button");
+        saveBtn.textContent = "Speichern & Anzeigen";
+        saveBtn.title = "Preset speichern und sofort einfahren";
+        saveBtn.addEventListener("click", async () => {
+          await savePreset();
           // applyPreset setzt die Box auf Start zurück und fährt die Einfahrt
           // erneut (auch wenn das Preset schon aktiv war).
           await call("pip.applyPreset", { id: draft.id });
           close();
         });
-        actions.append(spacer, cancelBtn, saveBtn);
+        actions.append(spacer, cancelBtn, saveOnlyBtn, saveBtn);
 
         bodyEl.append(nameField, sourceField, pointsField, timingRow, editorField, actions);
 
