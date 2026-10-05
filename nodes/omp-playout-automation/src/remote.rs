@@ -311,3 +311,96 @@ pub fn post_json(orchestrator_url: &str, auth: &OrchestratorAuth, path: &str, bo
         .unwrap_or_else(|| text.trim().to_string());
     Err(format!("{} (HTTP {status})", if detail.is_empty() { "abgelehnt".to_string() } else { detail }))
 }
+
+/// Alle Nodes mit ID und Label, so wie der Orchestrator sie kennt (`GET /api/v1/nodes`): über alle Hosts hinweg.
+/// Die lokale Registry kennt auf einem anderen Host oft nur die eigenen Nodes; ein Player oder Mischer von
+/// einem anderen Host fehlte dann in der Zielauswahl der Automation.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NodeIndex {
+    nodes: Vec<(String, String)>,
+}
+
+impl NodeIndex {
+    pub fn from_pairs(nodes: Vec<(String, String)>) -> Self {
+        Self { nodes }
+    }
+
+    /// Node-ID zum exakten Label (leeres Label → `None`).
+    pub fn resolve(&self, label: &str) -> Option<String> {
+        if label.is_empty() {
+            return None;
+        }
+        self.nodes.iter().find(|(_, l)| l == label).map(|(id, _)| id.clone())
+    }
+
+    /// Alle Labels außer `own_label`, sortiert und ohne Doppelte.
+    pub fn labels(&self, own_label: &str) -> Vec<String> {
+        let mut labels: Vec<String> = self.nodes.iter().map(|(_, l)| l.clone()).filter(|l| l != own_label).collect();
+        labels.sort();
+        labels.dedup();
+        labels
+    }
+}
+
+/// Node-Liste vom Orchestrator; schlägt der Abruf fehl (kein Token, nicht erreichbar), fällt der Aufrufer auf
+/// die lokale Registry zurück ([`node_index_from_registry`]).
+pub fn fetch_node_index(orchestrator_url: &str, auth: &OrchestratorAuth) -> Result<NodeIndex, RemoteError> {
+    let header = auth
+        .header_value()
+        .ok_or_else(|| RemoteError::Request("kein Service-Token verfügbar (Orchestrator noch nicht erreicht?)".to_string()))?;
+    let url = format!("{}/api/v1/nodes", orchestrator_url.trim_end_matches('/'));
+    let mut resp = ureq::get(&url)
+        .config()
+        .timeout_global(Some(CALL_TIMEOUT))
+        .build()
+        .header("Authorization", &header)
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::StatusCode(code) => RemoteError::Status(code),
+            e => RemoteError::Request(e.to_string()),
+        })?;
+    let body: Value = resp.body_mut().read_json().map_err(|e| RemoteError::Request(e.to_string()))?;
+    Ok(parse_node_index(&body))
+}
+
+fn parse_node_index(body: &Value) -> NodeIndex {
+    let items = body.as_array().cloned().or_else(|| body.get("nodes").and_then(Value::as_array).cloned()).unwrap_or_default();
+    NodeIndex::from_pairs(
+        items
+            .iter()
+            .filter_map(|n| Some((n.get("id")?.as_str()?.to_string(), n.get("label")?.as_str()?.to_string())))
+            .collect(),
+    )
+}
+
+/// Rückfall: Nodes der lokalen NMOS-Registry.
+pub fn node_index_from_registry(registry: &RegistryClient) -> NodeIndex {
+    NodeIndex::from_pairs(registry.list_nodes().unwrap_or_default().into_iter().map(|n| (n.id, n.label)).collect())
+}
+
+#[cfg(test)]
+mod node_index_tests {
+    use super::*;
+
+    #[test]
+    fn resolves_by_exact_label_and_lists_other_labels() {
+        let idx = parse_node_index(&serde_json::json!([
+            {"id": "a", "label": "Kanal-Player A"},
+            {"id": "b", "label": "Kanal-Player B"},
+            {"id": "c", "label": "Automation"},
+            {"id": "d", "label": "Kanal-Player A"},
+            {"label": "ohne id"},
+        ]));
+        assert_eq!(idx.resolve("Kanal-Player B").as_deref(), Some("b"));
+        assert_eq!(idx.resolve("Kanal-Player A").as_deref(), Some("a"), "bei Doppelung gewinnt der erste");
+        assert_eq!(idx.resolve(""), None);
+        assert_eq!(idx.resolve("gibt es nicht"), None);
+        assert_eq!(idx.labels("Automation"), vec!["Kanal-Player A".to_string(), "Kanal-Player B".to_string()]);
+    }
+
+    #[test]
+    fn accepts_a_wrapped_list() {
+        let idx = parse_node_index(&serde_json::json!({"nodes": [{"id": "x", "label": "L"}]}));
+        assert_eq!(idx.resolve("L").as_deref(), Some("x"));
+    }
+}

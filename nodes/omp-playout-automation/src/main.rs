@@ -3984,11 +3984,15 @@ async fn discovery_loop(store: Arc<AutomationStore>) {
         };
         let registry = store.registry.clone();
         let own_label = store.own_label.clone();
+        let (orch_url, orch_auth) = (store.orchestrator_url.clone(), store.auth.clone());
         let resolved = tokio::task::spawn_blocking(move || {
+            // Node-Liste vom Orchestrator (kennt alle Hosts); die lokale Registry nur als Rückfall — auf einem
+            // anderen Host kennt sie oft nur die eigenen Nodes, Player/Mischer anderer Hosts fehlten sonst.
+            let index = remote::fetch_node_index(&orch_url, &orch_auth).unwrap_or_else(|_| remote::node_index_from_registry(&registry));
             (
-                remote::resolve_node_id_by_label(&registry, &player_a_label),
-                remote::resolve_node_id_by_label(&registry, &player_b_label),
-                remote::resolve_node_id_by_label(&registry, &mixer_label),
+                index.resolve(&player_a_label),
+                index.resolve(&player_b_label),
+                index.resolve(&mixer_label),
                 // Kapitel 6 Teil 5: `resolve_node_id_by_label` gibt bei
                 // leerem Label ohnehin `None` zurück (eigener Guard dort)
                 // — der Kurzschluss hier spart nur den sonst unnötigen
@@ -3997,10 +4001,10 @@ async fn discovery_loop(store: Arc<AutomationStore>) {
                 if graphics_label.is_empty() {
                     None
                 } else {
-                    remote::resolve_node_id_by_label(&registry, &graphics_label)
+                    index.resolve(&graphics_label)
                 },
-                remote::list_node_labels(&registry, &own_label),
-                if audio_label.is_empty() { None } else { remote::resolve_node_id_by_label(&registry, &audio_label) },
+                index.labels(&own_label),
+                if audio_label.is_empty() { None } else { index.resolve(&audio_label) },
             )
         })
         .await;
