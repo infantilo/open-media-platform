@@ -1079,8 +1079,11 @@ oder Ersatzregel, oder still); die Playlist-Spalte „Audio“ markiert Ersatz u
 ## 10d. Playout-Workflow „Playout MXF“ (Player, Mischer, Monitor)
 
 Der Workflow **Playout MXF** (Reiter Workflows, nach dem Anlegen im Zustand „gestoppt“) enthält:
-zwei **Kanal-Player** (A/B), **Bildmischer**, **Tonmischer**, **Audio-Monitor**, **Viewer** und die
-**Playout-Automation** — ohne Grafik. Programmformat 720p25; der Bildmischer ist mit dem Viewer verbunden.
+zwei **Kanal-Player** (A/B), eine **Live-Quelle** (Testbild mit Ton), **Bildmischer**, **Tonmischer**,
+**Audio-Monitor**, **Viewer** und die **Playout-Automation** — ohne Grafik. Programmformat 720p25; der
+Bildmischer ist mit dem Viewer verbunden. Die Playlist ist als Beispiel mit sechs Events belegt: MXF-Clip und
+Live-Quelle im Wechsel, mit den Übergängen Cut, Fade-Cut und Cut-Fade. Sie bleibt über Neustarts erhalten
+(der Workflow hat dafür einen Channel „Playout MXF“, der an die Rolle gebunden ist).
 
 **Starten und abspielen**
 
@@ -1091,6 +1094,18 @@ zwei **Kanal-Player** (A/B), **Bildmischer**, **Tonmischer**, **Audio-Monitor**,
    anlegen, als Medium die MXF-Datei wählen (Dateiliste des Kanal-Players, `OMP_MEDIA_DIR`), und im Reiter
    **Audio** bei Bedarf die Zuordnung wählen (Standard für MXF: „Stereo“).
 3. **TAKE** bzw. ▶ beim Event drücken. Der Viewer zeigt das Programmbild.
+
+**Übergänge** (Reiter Inhalt/Timing des Events, Auswahl „Übergang“, gilt beim Auftakt des jeweiligen Events):
+
+| Übergang | Wirkung |
+|---|---|
+| Cut | harter Schnitt |
+| Mix | Überblendung (Dauer in Frames einstellbar) |
+| Fade-Cut | das bisherige Bild blendet über die Dauer auf Schwarz, danach steht das neue hart da |
+| Cut-Fade | hart auf Schwarz, das neue Bild blendet über die Dauer auf |
+
+**Live-Quelle in der Playlist:** Die Quelle wird per Tag (`source.live`) gewählt, nicht per Sender-ID; die
+Playlist funktioniert deshalb auch nach einem Neustart der Live-Quelle.
 
 **Ausgangsgruppen hören:** Im Panel des **Audio-Monitors** über das Dropdown **Gruppenwahl** die gewünschte
 Quelle wählen — jeder Kanal-Player bietet dort seine Audio-Gruppen an („… Audio“ = Programmton, danach
@@ -1104,6 +1119,7 @@ ist — Kanal-Player melden dafür ihre Audio-Gruppen als zusammengehörig.
 - Die Automation sucht ihre Ziele jetzt in der Node-Liste des Orchestrators, nicht nur in der lokalen
   Registry: Player und Mischer auf einem **anderen Host** erscheinen dadurch in der Zielauswahl.
 - Für Workflows auf Remote-Hosts lässt der Host-Agent jetzt auch die Bildraten-Variablen (`OMP_FRAMERATE_NUM/DEN`), die Mischer-Ebenen und die Ziel-Variablen der Automation durch; vorher scheiterte der Start eines Workflows mit Programmformat auf einem Remote-Host mit „extraEnv key … not allowed“. Host-Agents nach dem Update neu starten (`make hosts`).
+- **Leistung:** Die Medien-Nodes laufen als Release-Build (`make nodes`), das Programmformat ist 720p25. Gemessen beim Kanal-Player mit einer 1080i-MPEG-2-Datei: Release spart nur etwa 5 % gegenüber Debug, weil die Arbeit in GStreamers C-Code läuft; 720p statt 1080p etwa 15 %. Den größten Teil kostet die Dekodierung des 1080i-Materials samt Deinterlacing. Mit der Umgebungsvariable `OMP_DEINTERLACE_METHOD` (`greedyh` Standard, `linear` oder `vfir` sparen rund ein Viertel der Rechenzeit) lässt sich die Methode ändern.
 - Läuft die Automation auf einem anderen Host als der Player, liest die Dateiauswahl die Dateien des
   Players (Kanal A); die Datei muss dort unter `OMP_MEDIA_DIR` liegen.
 

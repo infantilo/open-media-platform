@@ -193,6 +193,7 @@ Start und fällt ohne erreichbaren Orchestrator auf die eingebauten Standardwert
   Programmton aus 5.1 per Downmix, 5.1 per Upmix aus dem Stereo-Programmton). Ohne passende
   Regel bleibt die Gruppe still, mit Warnung.
 - **In der Automation:** Das Event trägt `audioMapping` (flach im Event-JSON, per `updateItem` setzbar, leer = Standard des Players) und reicht es beim Laden an den Kanal-Player. Der Automation-Node spiegelt alle 2 s `audioPlans` (Plan je Kanal a/b), `audioGroups` und `audioMappings` vom Player.
+- **Übergänge am Bildmischer:** `cut`, `mix`, `fadecut` (Ausblenden auf Schwarz, dann hart) und `cutfade` (hart auf Schwarz, dann aufblenden). Die Automation setzt vor jeder Rampe die Mischer-Art (`crosspoint.setTransType`) und die Dauer (`transitionRateFrames`).
 - **Interlaced-Material:** Datei-Zweige (MXF und generisch) deinterlacen vor der Wandlung (`deinterlace`, `mode=auto`, obere Halbbilder → Einzelrate, z. B. 1080i25 → 25p). Progressive Quellen bleiben unberührt und kosten nichts. Vorher zeigte 1080i-Material Kammartefakte bei Bewegung.
 - **Parameter am Player:** `audioPlan` (zuletzt aufgelöster Plan mit Matrizen, Ersatzregel und
   Warnungen), `audioGroups`, `audioMappings`.
