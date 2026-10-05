@@ -70,6 +70,7 @@ class InstancesView extends HTMLElement {
   #sortKey: InstanceSortKey = "label";
   #sortDir: SortDir = "asc";
   #instances: LauncherInstance[] = [];
+  #owners = new Map<string, string>();
   #hosts: HostEntry[] = [];
 
   connectedCallback() {
@@ -129,10 +130,22 @@ class InstancesView extends HTMLElement {
 
   async #poll() {
     try {
-      const [instancesRes, hostsRes] = await Promise.all([
+      const [instancesRes, hostsRes, workflowsRes] = await Promise.all([
         apiFetch("/api/v1/instances"),
         apiFetch("/api/v1/hosts"),
+        apiFetch("/api/v1/workflows"),
       ]);
+      // Instanz-ID → „Workflow · Rolle“ aus den Laufzeitdaten laufender Workflows.
+      const owners = new Map<string, string>();
+      const workflows = workflowsRes.ok
+        ? ((await workflowsRes.json()) as { name: string; runtime?: Record<string, { instanceId: string }> }[])
+        : [];
+      for (const wf of workflows) {
+        for (const [role, rt] of Object.entries(wf.runtime ?? {})) {
+          if (rt?.instanceId) owners.set(rt.instanceId, `${wf.name} · ${role}`);
+        }
+      }
+      this.#owners = owners;
       const instances = instancesRes.ok ? ((await instancesRes.json()) as LauncherInstance[]) : [];
       const hosts = hostsRes.ok ? ((await hostsRes.json()) as HostEntry[]) : [];
       this.#render(instances, hosts);
@@ -172,6 +185,7 @@ class InstancesView extends HTMLElement {
         return `<tr>
           <td style="padding:2px 8px;">${escapeHtml(inst.label)}<div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">${escapeHtml(inst.type)}${inst.version ? ` (${escapeHtml(inst.version)})` : ""}</div>${crashLine}</td>
           <td style="padding:2px 8px;">${status}</td>
+          <td style="padding:2px 8px;">${this.#owners.has(inst.id) ? escapeHtml(this.#owners.get(inst.id)!) : `<span style="color:var(--omp-text-dim);" title="Von Hand gestartet, gehört zu keinem Workflow">–</span>`}</td>
           <td style="padding:2px 8px;color:var(--omp-text-dim);">${escapeHtml(hostLabel)}</td>
           <td style="padding:2px 8px;">${formatCpu(inst.cpuPercent)}</td>
           <td style="padding:2px 8px;">${formatRss(inst.rssBytes)}</td>
@@ -190,6 +204,7 @@ class InstancesView extends HTMLElement {
               <thead><tr style="color:var(--omp-text-dim);text-align:left;">
                 ${th("label", "Instanz")}
                 ${th("status", "Status")}
+                <th style="padding:2px 8px;">Workflow</th>
                 ${th("host", "Host")}
                 ${th("cpu", "CPU")}
                 ${th("ram", "RAM")}

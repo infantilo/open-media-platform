@@ -163,7 +163,7 @@ einzelnen Rolle in eine andere Zone fehlt noch.
 ## 3. Instanzen-Übersicht
 
 Der Reiter **Instanzen** zeigt alle laufenden Node-Prozesse tabellarisch
-mit Status, Host, CPU-Auslastung, RAM-Verbrauch, PID und der Anzahl
+mit Status, **Workflow** (z. B. „Playout MXF · Tonmischer“; „–“ = von Hand gestartet, gehört zu keinem Workflow), Host, CPU-Auslastung, RAM-Verbrauch, PID und der Anzahl
 automatischer Neustarts nach einem Absturz:
 
 ![Instanzen-Übersicht](screenshots/instanzen.png)
