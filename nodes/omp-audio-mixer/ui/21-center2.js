@@ -334,12 +334,33 @@ Object.assign(CenterControl.prototype, {
       const go = h("button", { class: "tog scene-go", type: "button", text: s.label, onclick: () => app.cmd("activateScene", { sceneId: s.id }).then(() => { app.announce(`Szene ${s.label} aktiviert`); app.poll(); }) });
       const upd = h("button", { class: "tog", type: "button", text: "Aktualisieren", title: "Szene mit dem aktuellen Mix überschreiben", onclick: async () => { if (await app.confirm(`Szene „${s.label}“ mit dem aktuellen Mix überschreiben?`)) app.cmd(`scene.${s.id}.update`, { includeProcessing: false }).then(() => app.poll()); } });
       const del = h("button", { class: "tog danger", type: "button", text: "Löschen", onclick: async () => { if (await app.confirm(`Szene „${s.label}“ löschen?`)) app.cmd("removeScene", { sceneId: s.id }).then(() => app.poll()); } });
-      return { root: h("div", { class: "row" }, go, upd, del), update: (x) => { go.textContent = x.label; go.setAttribute("aria-pressed", String(app.state.audioContext.activeScene === x.id)); } };
+      // Auslöser direkt an der Szene: „Wenn Videoquelle X im Programm → diese Szene“ (genau eine einfache Regel je Szene).
+      const trig = h("select", { class: "sel-input", "aria-label": "Automatisch aktivieren, wenn Videoquelle im Programm", title: "Szene automatisch aktivieren, sobald diese Videoquelle im Programm ist" });
+      const ruleOf = () => app.state.contextRules.find((r) => r.scene === s.id);
+      trig.addEventListener("change", async () => {
+        const r = ruleOf();
+        if (!trig.value) { if (r) await app.cmd("removeContext", { contextId: r.id }); }
+        else if (r) await app.cmd(`context.${r.id}.set`, { source: trig.value, enabled: true });
+        else await app.cmd("addContext", { label: s.label, source: trig.value, scene: s.id });
+        app.poll();
+      });
+      let k0 = "";
+      return {
+        root: h("div", { class: "row" }, go, h("span", { class: "arrow", text: "automatisch bei" }), trig, upd, del),
+        update: (x) => {
+          go.textContent = x.label; go.setAttribute("aria-pressed", String(app.state.audioContext.activeScene === x.id));
+          const r = ruleOf();
+          const n = [["", "— nur manuell —"], ...app.nodes.map((q) => [q.id, q.label]), ...(r && r.source && !app.nodes.some((q) => q.id === r.source) ? [[r.source, r.source]] : [])];
+          const k = JSON.stringify(n);
+          if (k !== k0) { k0 = k; trig.replaceChildren(...n.map(([v, t]) => h("option", { value: v, text: t }))); }
+          trig.value = r ? r.source : "";
+        },
+      };
     });
-    this.bind(() => scenes.sync(app.state.scenes, (s) => s.id, app.state.scenes.map((s) => s.label).join("|")));
+    this.bind(() => scenes.sync(app.state.scenes, (s) => s.id, app.state.scenes.map((s) => s.label).join("|") + JSON.stringify(app.state.contextRules.map((r) => [r.scene, r.source]))));
     const nm = h("input", { class: "text-input", type: "text", placeholder: "Name der Szene (z. B. Football)", "aria-label": "Neue Szene", maxlength: "40" });
     const withProc = h("input", { type: "checkbox", "aria-label": "Bearbeitung einschließen" });
-    const cap = h("button", { class: "tog", type: "button", text: "Aktuellen Mix als Szene speichern", onclick: () => app.cmd("captureScene", { label: nm.value, includeProcessing: withProc.checked }).then(() => { nm.value = ""; app.poll(); }) });
+    const cap = h("button", { class: "tog", type: "button", text: "● Aktuellen Mix als Szene speichern", onclick: () => app.cmd("captureScene", { label: nm.value, includeProcessing: withProc.checked }).then(() => { nm.value = ""; app.poll(); }) });
     const hint = h("p", { class: "hint", text: "Eine Szene enthält Fader, Mute, Routing, Gruppen, AutoMix, Ducking, Aux-Sends und Media-Automation der vorhandenen Kanäle (optional auch EQ/Dynamik/Delay/Pan). Das Aktivieren ändert keine Kanalstruktur und erzeugt keine Audio-Aussetzer." });
 
     // Video → Audio-Kontext
@@ -381,8 +402,8 @@ Object.assign(CenterControl.prototype, {
     const savePreset = h("button", { class: "tog", type: "button", text: "Preset speichern", onclick: async () => { if (!pn.value.trim()) return; await fetch("/api/v1/snapshots", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label: pn.value.trim(), nodeIds: [app.nodeId] }) }); pn.value = ""; this.loadPresets(presetHost); } });
     this.bind(() => this.loadPresets(presetHost));
     root.append(
-      this.section("Audio-Szenen", host, h("div", { class: "rows" }, h("div", { class: "row" }, nm, h("label", { class: "chk" }, withProc, "inkl. Bearbeitung"), cap)), hint),
-      this.section("Video → Audio-Kontext", ctxHost, h("div", { class: "rows" }, h("div", { class: "row" }, addCtx)), ctxInfo, ctxHint),
+      this.section("Szenen & Automatik: 1. Mix einstellen → 2. speichern → 3. optional Videoquelle zuordnen", host, h("div", { class: "rows" }, h("div", { class: "row" }, nm, h("label", { class: "chk" }, withProc, "inkl. Bearbeitung"), cap)), hint),
+      this.advanced("Erweitert: freie Video → Audio-Zuordnungen", ctxHost, h("div", { class: "rows" }, h("div", { class: "row" }, addCtx)), ctxInfo, ctxHint),
       this.section("Presets (ganzer Mixer, ersetzt die Kanalliste)", presetHost, h("div", { class: "rows" }, h("div", { class: "row" }, pn, savePreset))),
     );
     return root;

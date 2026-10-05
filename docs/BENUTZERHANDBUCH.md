@@ -1136,6 +1136,10 @@ legt beim ersten Öffnen (leerer Mixer) automatisch **je Ausgabegruppe einen Kan
 `role.<Gruppe>`; über den Knopf **Ausgabegruppen** in der Kopfleiste lassen sich fehlende Gruppenkanäle jederzeit
 nachziehen (bestehende bleiben unberührt).
 
+**Szenen und Automatik (Tonmischer):** Mix einstellen → in der Kopfleiste **● Szene speichern** → im Reiter
+**SZENEN** pro Szene im Feld **automatisch bei** eine Videoquelle wählen: Sobald diese im Programm ist, wird die
+Szene aktiv (**— nur manuell —** schaltet das ab). Freie Mehrfach-Zuordnungen stehen unter „Erweitert“.
+
 **Hinweise**
 
 - Die Automation sucht ihre Ziele jetzt in der Node-Liste des Orchestrators, nicht nur in der lokalen

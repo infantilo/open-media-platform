@@ -152,6 +152,9 @@ class CenterControl {
   section(title, ...kids) {
     return h("section", { class: "csec" }, title ? h("h3", { text: title }) : null, ...kids);
   }
+  advanced(title, ...kids) {
+    return h("details", { class: "csec" }, h("summary", { text: title }), ...kids);
+  }
   grid(cls = "cgrid") {
     return h("div", { class: cls });
   }
