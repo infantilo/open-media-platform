@@ -500,6 +500,7 @@ fn persist_tick(store: &AutomationStore) {
             Ok(Some(ch)) => {
                 let mut inner = p.inner.lock().expect("lock poisoned");
                 inner.status = format!("Channel „{}\u{201c} gefunden, Zustand wird geladen", ch.name);
+                crate::structlog::set_channel(&ch.id);
                 inner.channel = Some(ch);
                 inner.last_error = None;
             }

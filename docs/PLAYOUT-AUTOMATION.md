@@ -1,0 +1,211 @@
+# Playout-Automation (Kapitel 27)
+
+Technische Referenz des Channel-Automators `omp-playout-automation` und seiner
+Orchestrator-Domäne `playout` (Spec `~/automatisation.txt` §269/§270).
+Bedienung im Panel: `docs/BENUTZERHANDBUCH.md`. Entscheidungen und Messungen je
+Schritt: `UMSETZUNG.md` (Kapitel 27, §27.7) und `docs/decisions.md`.
+
+## 1. Begriffe
+
+- **Channel** — persistiertes Domänenobjekt des Orchestrators (`playout_channels`):
+  Name, Zeitzone (IANA, nur Anzeige/Eingabe), optionale Gruppe, Bindung an eine
+  Instanz **oder** an eine Workflow-Rolle (Rollenbindung überlebt Neustarts, die
+  Instanz-ID nicht). Eine Automations-Instanz bedient genau einen Channel.
+- **Primary Event** — ein Eintrag der Playlist (Clip, Live, Standbild, Testmuster,
+  Steuer-Event). Läuft immer über einen der zwei A/B-`omp-channel-player` und den
+  Mixer (`crosspoint.select` + `cut`/`autoTrans`).
+- **Child Event** — zeitlich an ein Primary gebundene Nebenaktion (Grafik, Logo,
+  Node-Befehl, Webhook, Channel-Trigger …).
+- **Zeitbasis** — intern UTC (Wanduhr-Millisekunden), Anzeige im Panel lokal.
+  Kein PTP im Dev-System (Entscheidung E5).
+
+## 2. Playlist-Schema
+
+Je Item (Parameter `items`, flaches JSON; Alt-Snapshots laden unverändert):
+
+| Feld | Bedeutung |
+|---|---|
+| `id` | stabile Item-ID (`item<N>`, nie wiederverwendet) |
+| `label` | Anzeigename |
+| `eventType` | `CLIP`, `LIVE`, `PATTERN`, `IMAGE`, `BLACK`, `HOLD`, `JUMP` (aus dem Medium abgeleitet) |
+| `file` / `pattern` / `senderId` / `sourceSelector` | Medium: Datei im Medienverzeichnis, Testmuster, feste Live-Quelle oder Live-Quelle per Kriterien |
+| `asset` | Asset-Referenz `{assetId, versionId?, representationType?}` statt Rohdateiname |
+| `durationMs` | Dauer; `0` = endlos (Live/HOLD) |
+| `startType` | `sequence` (folgt dem Vorgänger), `manual` (nur per Operator-Cue+Take), `fixtime` |
+| `startAt` / `fixtimeHms` | Fixzeit: RFC 3339 mit Offset (→ UTC, DST-sicher, hat Vorrang) bzw. Alt-Form `HH:MM:SS` |
+| `transition`, `transitionRateFrames` | `cut` oder `mix` (Auto-Transition am Mixer) |
+| `onMissing`, `fallbackFile` | Ausfallrichtlinie, s. §9 |
+| `audio` | Audio-Absicht, s. §7 |
+| `children` | Child Events, s. §4 |
+| `icon`, `color`, `note` | reine Darstellung im Panel |
+
+Die Methoden `append`, `appendAsset`, `updateItem` (Property-Editor: Patch,
+alles-oder-nichts), `moveItem` (Cursor folgt), `remove`, `load` (ganze Liste),
+`setStartType`, `setTransition`, `setAudio`, `setChildren`, `setMediaRef` ändern die Liste.
+`schedule` liefert den berechneten UTC-Plan samt Warnungen (Überlappung, Lücke, Start
+unbestimmt bei endlosem/manuellem Vorgänger) und die deterministische Aktions-Queue
+(Reihenfolge bei Gleichstand: End < Cue < Take, danach Playlist-Position).
+
+## 3. Primary Events
+
+- **CLIP/PATTERN/IMAGE** — Datei/Testmuster/Standbild auf den Standby-Player laden
+  (Cue), beim Take am Mixer umschalten. Standbild wird mit `mediaType=image`
+  ausdrücklich geladen (keine Erkennung an der Endung).
+- **LIVE** — feste `senderId` (EXACT_ID) oder `sourceSelector` (§5); wird beim Cue/Take
+  frisch aufgelöst, keine Verbindungs-Annahme.
+- **HOLD** — hält die Sequenz an, das vorherige Bild bleibt stehen; Dauer 0 = bis der
+  Operator weiterschaltet. **JUMP** — springt beim Erreichen zu `jumpTarget` (Item-ID).
+- **Take-Arten:** `take` (Cue-Item), `next`, `nextLive` (nächstes Live-Item), Auto-Advance
+  bei Item-Ende, Fixtime (harter Unterbrecher zur Wanduhrzeit, Journal verhindert
+  Doppelfeuern), Carts (`cart.fire`/`cart.return`, unterbrechen und kehren zurück).
+- **Auto-Advance wartet auf Fixtime:** ein Fixtime-Item in der Zukunft wird nur gecued
+  und vom Fixtime-Takt gefeuert, nicht früh genommen.
+
+## 4. Child Events
+
+Typen: `GRAPHIC`, `LOGO`, `CHANNEL_BRANDING` (Grafik-Node `show`/`hide`);
+`TRIGGER`, `NODE_COMMAND`, `AUDIO`, `VOICEOVER` (ausdrücklich `target` = Node-Label,
+`method`, `params`, optional `stopMethod` — der Automator kennt keine Node-Typen);
+`WEBHOOK` (HTTP-POST); `CHANNEL_TRIGGER` (§6).
+**Abgelehnt statt simuliert:** `SUBTITLE`, `ROUTING`, `SOURCE`, `SCTE35`, `GPI` — dafür gibt
+es keinen Ziel-Node; `setChildren` meldet es im Klartext.
+
+Zeitmodi (`timing`): `ABSOLUTE` (`atUtc`), `RELATIVE_TO_START` (`delayMs`),
+`RELATIVE_TO_END` (`delayMs` vor dem Ende, braucht feste Dauer), `FULL_PRIMARY`
+(Start bis Primary-Ende, auch bei Live; `durationMs=0`).
+Lebenszyklus: `SCHEDULED → ARMED → FIRED → ACTIVE → COMPLETED | FAILED | CANCELLED`.
+Fehlerrichtlinie (`failurePolicy`): `IGNORE`, `WARN` (Standard), `RETRY` (count/delay),
+`BLOCK` (mit `required`: Take wird im Preflight verweigert), `FALLBACK` (`fallbackTarget`).
+Beim Primary-Wechsel werden nicht gestartete Kinder `CANCELLED`, gestartete erhalten
+sofort ihren Stopp. Neustart: bereits gestartete Kinder werden nicht wiederholt (Ausführungs-
+Journal `child:<item>:<child>:<on-air-sekunde>`), verpasste als `CANCELLED` gemeldet.
+Zustand: Parameter `childEvents`.
+
+## 5. Source Selector und Tags
+
+Quellen-Sicht: `GET /api/v1/sources` (Filter `tag`, `mediaType`, `workflowId`). Tags
+haben das Format `domain.name` (max. 32 je Quelle) und drei Herkünfte, die nie
+vermischt werden: **EXPLICIT** (Operator, `PUT /api/v1/sources/{senderId}/tags`,
+Postgres, Schlüssel `(node_id, sender_label)`) > **DERIVED** (Medientyp, Audio-
+Kanalanzahl → `audio.mono|stereo|51`) > **DISCOVERED** (Node-Meldung via IS-04-Tag
+`urn:x-omp:tags`). Namen beeinflussen nie die Wahl.
+
+`sourceSelector` (JSON, Crate `omp-resolver`): `exactId`, `mediaType` (Standard `video`),
+`minChannels`, `required[]`, `preferred[]`, `forbidden[]`, `group`, `workflow`, `context`,
+`priorityIds[]`, `allowOffline`, `failOnAmbiguity`. Rangfolge: Sichtbarkeit → Capability →
+Tags → Health → Quell-Kontext > Priorität > Workflow-Präferenz > Zahl erfüllter PREFERRED-
+Tags > stabiler Tie-Breaker. Gleichstand vor dem Tie-Breaker wird gemeldet; mit
+`failOnAmbiguity` gibt es dann keine Auswahl. Ohne Treffer: Fehler mit Begründung je Kandidat.
+
+## 6. Channel-Trigger
+
+Ein Channel steuert andere über den Orchestrator (`POST /api/v1/playout/channels/{id}/triggers`),
+Zustellung per NATS (`omp.playout.…`) mit Wiederholung, Deduplizierung und Quittung
+(`trigger-ack`). Events: `CHANNEL_NEXT`, `CHANNEL_NEXT_LIVE`, `CHANNEL_JUMP`, `CHANNEL_CUT`,
+`CHANNEL_HOLD`, `CHANNEL_RESUME`, `CHANNEL_TRIGGER` (benannt, ohne eingebauten Handler).
+Ziele: Channel-ID, Gruppe, `*`. **Standard ist verweigern:** nur Regeln
+(`/api/v1/playout/trigger-rules`, Admin → Playout) erlauben, wer wen steuert; jede Zustellung,
+auch verweigerte, steht im Trigger-Protokoll. Late-Policy bei `targetTime`: `EXECUTE_IMMEDIATELY`,
+`SKIP`, `RESYNC`, `QUEUE`. Grenze: der NATS-Absender ist auf Bus-Ebene nicht authentisiert
+(der Orchestrator erzwingt die Rechte).
+
+## 7. Audio-Capabilities und Audio-Absicht
+
+`audio_capabilities` = die Audio-Flows **einer** Quelle (gleicher Node/Natural Group) mit
+stabiler Kennung (Rolle `role.x` → `x`, sonst Label-Slug), Layout und Default-Marker
+(`audio.default`). `setAudio(itemId, audioJson)` setzt die Absicht: ausdrückliche
+`capability` > erwartete Tags (`expected`) > `channelPreference` > Quell-Default
+(genau eine → vorgewählt, mehrere → keine willkürliche Wahl) > `globalDefault`; scheitert
+die ausdrückliche Absicht, greift nur die konfigurierte `fallback`-Kette mit Warnung (keine
+stille Ersatzwahl). `channels` ist der Event-Override je Mixerkanal.
+Anwendung am Mixer (P6): Der Audiomischer-Kanal trägt eine Tag-Erwartung
+(`setRouting`), der Automator meldet den Quell-Kontext (`setSourceContext`); je Kanal wird
+die Audioquelle **desselben Kontexts** gewählt, Konflikte (zwei Kanäle, eine Quelle) und
+nicht erfüllbare Erwartungen lassen den Kanal unverändert und werden gemeldet; ein
+Handeingriff am Kanal pinnt ihn (Parameter `routing`/`mixState.routing`).
+
+## 8. Asset-Preflight und Materialisierung
+
+`preflight_loop` (alle 5 s, asynchron zum Playout-Takt) prüft die anstehenden Events
+beider Player-Ziele: Bereitschaft je Event `READY` / `NOT_READY` / `UNKNOWN`,
+`start-spätestens = Sendezeit − Sicherheitsabstand (10 s) − geschätzte Dauer`.
+Fehlendes Material wird als OMP-Prozess (`materialize`) bereitgestellt: Kopie nach
+`<datei>.part`, Größe/SHA-256 prüfen, atomar umbenennen (nie eine halbe Datei im
+Medienverzeichnis). API: `POST /api/v1/playout/channels/{id}/preflight` und `…/materialize`
+(idempotent). Fenster: Parameter `preflightWindowMin` (Standard 15). Grenze: schreibt nur
+Medienverzeichnisse auf dem Orchestrator-Rechner.
+
+## 9. Ausfallrichtlinien (`onMissing`)
+
+`HOLD` (Standard: nichts laden, Programm bleibt, Take schlägt mit Begründung fehl), `SKIP`,
+`BLACK`, `STOP` (Schwarz + Automatik auf Hold), `FALLBACK` (`fallbackFile`),
+`DEFAULT_FILLER` (Parameter `defaultFiller`, sonst Schwarz). Ohne Ersatzdatei/Filler gibt es
+keinen Phantasie-Ersatz. Gilt beim Cue und beim Take.
+
+## 10. Recovery
+
+Der Node schreibt alle 1 s (nur bei Änderung, nie vor dem Laden) einen Snapshot über
+`PUT /api/v1/playout/channels/{id}/state` (Optimistic Concurrency, Versionsabgleich bei 409):
+Playlist samt Metadaten, Cursor, Modus, Carts, Kanal A/B, Ziel-Labels, On-Air-Start (UTC-ms),
+Fixtime-Stand, Kind-Laufzeit. Nach `kill -9`/Neustart (gleiche Instanz-ID) wird er geladen:
+ein on-air Item läuft nur weiter, wenn es laut Wanduhr noch in seiner Dauer liegt (sonst nicht
+on air, nichts wird automatisch genommen, Operator-Meldung); aktiver Cart und Grafik-Zeitplan
+werden nicht wiederhergestellt (gemeldet). Doppelausführung verhindert das Ausführungs-
+Journal (`POST …/executions`, at-most-once, auch über Neustarts). Grenze: kein Abgleich mit
+dem tatsächlichen Player-/Mixer-Zustand (Spec §115).
+
+## 11. As-Run, Kennzahlen, Logs
+
+- **As-Run** (`POST/GET /api/v1/playout/channels/{id}/as-run`, GET mit `kind`, `from`, `to`,
+  `limit`, `format=csv`): je Primary Ist-Start/-Ende, Plan-Abweichung, Endstatus
+  (`COMPLETED`, `INTERRUPTED`, `STOPPED`, `FAILED`), Child-Zeilen, Warnungen (gedrosselt),
+  Trigger mit Korrelations-ID, manuelle Eingriffe mit Benutzername. Idempotent über `key`,
+  Bereinigung täglich nach `AuditRetentionDays`. Ansicht: Admin → Playout → As-Run-Protokoll
+  (Filter, CSV-Export).
+- **Metriken** (`/metrics`): `omp_playout_events_total`, `…_event_start_lateness_seconds`,
+  `…_event_start_early_seconds`, `…_event_duration_seconds`, `…_child_event_failures_total`,
+  `…_source_resolution_failures_total`, `…_audio_resolution_failures_total`,
+  `…_asset_preflight_failures_total`, `…_channel_trigger_latency_seconds`,
+  `…_operator_actions_total`.
+- **Strukturierte Logs (§193):** der Node schreibt je As-Run-Ereignis eine JSON-Zeile auf stderr
+  mit `channelId`, `eventId`, `childEventId`, `sourceId`, `correlationId`, `triggerId` (leere
+  Felder entfallen). Mit der Node-Option `OMP_PLAYOUT_LOG_FILE` zusätzlich in eine Datei
+  (durchsuchbar mit `grep`/`jq`); der Orchestrator hält von Node-stderr nur die letzten Zeilen für
+  Absturzmeldungen.
+
+## 12. APIs (Übersicht)
+
+Orchestrator (`/api/v1/playout/…`): `channels` (GET/POST), `channels/{id}` (GET/PUT/DELETE),
+`channels/{id}/state` (GET/PUT), `…/as-run` (GET/POST), `…/executions`, `…/preflight`,
+`…/materialize`, `…/triggers`, `…/trigger-ack`, `triggers` (Protokoll), `trigger-rules`
+(GET/POST/DELETE). Quellen: `GET /api/v1/sources`, `PUT /api/v1/sources/{senderId}/tags`.
+Node-Methoden (`POST /api/v1/nodes/{id}/methods/{name}`, Body = Argumente als JSON-Objekt):
+`append`, `appendAsset`, `load`, `remove`, `cue`, `take`, `next`, `nextLive`, `stop`,
+`moveItem`, `updateItem`, `setStartType`, `setTransition`, `setAudio`, `setChildren`,
+`setMediaRef`, `sendTrigger`, `cart.define|update|remove|fire|return`.
+Wichtige Parameter: `items`, `currentItemId`, `cuedItemId`, `mode`, `schedule`, `childEvents`,
+`triggerLog`, `audioRouting`, `channelId`, `persistence`, `target*Label`.
+
+## 13. Migration: PIPELINE CONTROLLER → OMP (§270)
+
+| PIPELINE-CONTROLLER-Funktion | Wo sie in OMP lebt |
+|---|---|
+| PlaylistEngine (Sequenz, Fixtime, Precue, Hold, NextLive, Lücken/Überlappung, Validierung) | `omp-playout-automation` (`playlist.rs`, `schedule.rs`), Plan + Warnungen im Parameter `schedule` |
+| Child Events Trigger / Voiceover / Grafik | `children.rs`; Ausführung als Node-Befehle (IS-12/14-Methoden) bzw. Grafik-Node; Voiceover = `VOICEOVER`-Kind (Ducking im Audiomischer) |
+| Child Event Record | `NODE_COMMAND` an `omp-recorder` (`record.start`/`record.stop`) |
+| PlayerPipeline | `omp-channel-player` (A/B), `omp-mxf-player` |
+| MxlSource / Live-Source-Handling | IS-04/MXL-Discovery + Quellen-Overlay (`/api/v1/sources`) + Crate `omp-resolver` |
+| AudioRouter / AudioRules / AudioGroupConfig | Audio-Absicht (`setAudio`) + Mixer-Kanal-Erwartung/Quell-Kontext (`omp-audio-mixer`, P6) |
+| Audio-Preset-Resilience (Fallback) | Fallback-Kette der Audio-Absicht (nur bei Cue/Take, kein Per-Track-Fallback zur Laufzeit — offen) |
+| GrafixEngine / oGraf | `omp-ograf` |
+| VoiceoverEngine | `VOICEOVER`-Kind + Mixer-Ducking; **offen:** eigener Voiceover-Trigger (P9) |
+| ChannelBus (TCP/NDJSON) | Channel-Trigger über NATS + Orchestrator (§6) |
+| File-Transfer-Manager-Plugin | Asset-System + Prozess-Schritt `materialize` (§8) |
+| SCTE-35-Plugin | **offen** (P9); Kind-Typ `SCTE35` wird abgelehnt |
+| Plugin-System | OMP-Prozess-/Node-Mechanismen; Plugin-Hooks nur wo nötig (nichts automatisch als Plugin) |
+| As-Run (Tagesdatei) | persistenter As-Run-Store (§11) |
+| Supervisor / Multi-Channel | OMP-Orchestrator/Launcher/Placement; Channel = eine Instanz |
+| MarinaParser (externer Import) | nicht übernommen (außerhalb Umfang) |
+| Subtitle-Engine | **offen** (P9); Kind-Typ `SUBTITLE` wird abgelehnt |
+
+Der OMP-Adapter-Sidecar `omp-pipeline-controller` bleibt unverändert.

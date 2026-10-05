@@ -64,6 +64,7 @@ mod playlist;
 mod readiness;
 mod remote;
 mod schedule;
+mod structlog;
 mod timeline;
 mod trigger;
 mod uibundle;

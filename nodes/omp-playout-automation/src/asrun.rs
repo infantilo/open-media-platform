@@ -53,6 +53,32 @@ pub struct AsRunRecord {
     pub detail: Option<serde_json::Value>,
 }
 
+/// Jede As-Run-Zeile erzeugt zugleich eine strukturierte Log-Zeile mit den
+/// Korrelations-IDs (Spec §193) — ein einziger Durchgang für alle Quellen
+/// (Event-Start/-Ende, Child, Warnung, Trigger).
+fn log_record(rec: &AsRunRecord) {
+    let (level, msg) = match (rec.kind, rec.status.as_str()) {
+        ("primary", "RUNNING") => ("INFO", format!("Event gestartet: {}", rec.label)),
+        ("primary", st) => (if st == "FAILED" { "ERROR" } else { "INFO" }, format!("Event beendet ({st}): {} — {}", rec.label, rec.reason)),
+        ("child", st) => (if st == "FAILED" { "ERROR" } else { "INFO" }, format!("Child Event {st}: {} — {}", rec.label, rec.reason)),
+        ("warning", _) => ("WARN", format!("{}: {}", rec.action, rec.reason)),
+        ("trigger", st) => ("INFO", format!("Channel-Trigger {} ({st}) {}", rec.action, rec.reason)),
+        (other, st) => ("INFO", format!("{other} {st}")),
+    };
+    let trigger_id = if rec.kind == "trigger" { rec.key.rsplit(':').next().unwrap_or("") } else { "" };
+    crate::structlog::emit(
+        level,
+        &msg,
+        &crate::structlog::Ids {
+            event_id: &rec.event_id,
+            child_event_id: &rec.child_id,
+            source_id: &rec.source,
+            correlation_id: &rec.correlation_id,
+            trigger_id,
+        },
+    );
+}
+
 fn iso(ms: i64) -> String {
     chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms)
         .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
@@ -120,6 +146,7 @@ pub struct AsRunTracker {
 
 impl AsRunTracker {
     fn push(&mut self, rec: AsRunRecord) {
+        log_record(&rec);
         if self.outbox.len() >= OUTBOX_MAX {
             self.outbox.pop_front();
             self.dropped += 1;

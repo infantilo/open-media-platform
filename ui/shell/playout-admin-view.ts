@@ -3,7 +3,10 @@
 
 import { apiFetch } from "./connection.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
-import { describeSelector, groupByCorrelation, statusText, statusTone, type TriggerRecord, type TriggerRule } from "./playout-admin-logic.ts";
+import {
+  actualDurationMs, asRunKindText, asRunTone, deviationText, describeSelector, durationText, filterAsRun, groupByCorrelation, startDeviationMs, statusText, statusTone,
+  type AsRunRow, type TriggerRecord, type TriggerRule,
+} from "./playout-admin-logic.ts";
 
 interface Channel {
   id: string;
@@ -36,6 +39,9 @@ class PlayoutAdminView extends HTMLElement {
   #poll: number | undefined;
   #newChannel = { name: "", group: "", timezone: "UTC" };
   #newRule = { origin: "group:", target: "group:" };
+  #asRun: AsRunRow[] = [];
+  #asRunChannel = "";
+  #asRunKind = "";
 
   connectedCallback() {
     this.style.cssText = "display:block;";
@@ -44,7 +50,7 @@ class PlayoutAdminView extends HTMLElement {
       this.#loaded = true;
       void this.#load();
     }
-    this.#poll = window.setInterval(() => void this.#loadLog(), 3000);
+    this.#poll = window.setInterval(() => void this.#loadLog().then(() => this.#loadAsRun()), 3000);
   }
 
   disconnectedCallback() {
@@ -60,7 +66,35 @@ class PlayoutAdminView extends HTMLElement {
       this.#error = "Playout-Daten konnten nicht geladen werden.";
     }
     await this.#loadLog(false);
+    if (!this.#asRunChannel && this.#channels.length > 0) this.#asRunChannel = this.#channels[0].id;
+    await this.#loadAsRun(false);
     this.#render();
+  }
+
+  async #loadAsRun(render = true) {
+    if (!this.#asRunChannel) return;
+    try {
+      const res = await apiFetch(`/api/v1/playout/channels/${encodeURIComponent(this.#asRunChannel)}/as-run?limit=200`);
+      if (res.ok) this.#asRun = ((await res.json()) as AsRunRow[]) ?? [];
+    } catch {
+      // nächster Poll
+    }
+    if (render) this.#renderAsRunOnly();
+  }
+
+  async #downloadAsRunCsv() {
+    const res = await apiFetch(`/api/v1/playout/channels/${encodeURIComponent(this.#asRunChannel)}/as-run?format=csv&limit=100000`);
+    if (!res.ok) {
+      this.#error = `CSV-Export fehlgeschlagen (${res.status})`;
+      this.#render();
+      return;
+    }
+    const url = URL.createObjectURL(await res.blob());
+    const a = el("a");
+    a.href = url;
+    a.download = `as-run-${this.#name(this.#asRunChannel)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   async #loadLog(render = true) {
@@ -140,6 +174,77 @@ class PlayoutAdminView extends HTMLElement {
     logBox.dataset.role = "trigger-log";
     this.append(logBox);
     this.#renderLogOnly();
+    const asRunBox = el("div", "margin-bottom:24px;");
+    asRunBox.dataset.role = "as-run";
+    this.append(asRunBox);
+    this.#renderAsRunOnly();
+  }
+
+  #renderAsRunOnly() {
+    const box = this.querySelector<HTMLElement>('[data-role="as-run"]');
+    if (!box) return;
+    box.replaceChildren(el("div", "font-weight:600;font-size:15px;margin-bottom:2px;", "As-Run-Protokoll"));
+    box.append(el("div", "color:var(--omp-text-dim);font-size:12px;margin-bottom:6px;max-width:900px;",
+      "Was wirklich gesendet wurde: Ist-Start/-Ende je Event gegen Plan, Child Events, Warnungen, Trigger und manuelle Eingriffe mit Benutzername. " +
+        "Wird je Channel gespeichert und nach der Audit-Aufbewahrung bereinigt."));
+    if (this.#channels.length === 0) {
+      box.append(el("div", "color:var(--omp-text-dim);", "Noch kein Channel."));
+      return;
+    }
+    const bar = el("div", "display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap;");
+    const ch = el("select", "padding:3px 6px;");
+    for (const c of this.#channels) {
+      const o = el("option", "", c.name);
+      o.value = c.id;
+      ch.append(o);
+    }
+    ch.value = this.#asRunChannel;
+    ch.addEventListener("change", () => {
+      this.#asRunChannel = ch.value;
+      this.#asRun = [];
+      void this.#loadAsRun();
+    });
+    const kind = el("select", "padding:3px 6px;");
+    for (const [v, l] of [["", "alle Arten"], ["primary", "Events"], ["child", "Child Events"], ["warning", "Warnungen"], ["trigger", "Trigger"], ["operator", "Bedienung"]]) {
+      const o = el("option", "", l);
+      o.value = v;
+      kind.append(o);
+    }
+    kind.value = this.#asRunKind;
+    kind.addEventListener("change", () => {
+      this.#asRunKind = kind.value;
+      this.#renderAsRunOnly();
+    });
+    const csv = el("button", "padding:3px 10px;", "CSV exportieren");
+    csv.addEventListener("click", () => void this.#downloadAsRunCsv());
+    bar.append(ch, kind, csv);
+    box.append(bar);
+    const rows = filterAsRun(this.#asRun, this.#asRunKind);
+    if (rows.length === 0) {
+      box.append(el("div", "color:var(--omp-text-dim);", "Noch keine As-Run-Einträge für diesen Channel."));
+      return;
+    }
+    const t = el("table", "border-collapse:collapse;font-size:12px;");
+    const hr = el("tr", "color:var(--omp-text-dim);text-align:left;");
+    for (const h of ["Zeit", "Art", "Bezeichnung", "Quelle/Asset", "Start Ist (Δ Plan)", "Dauer", "Status / Eingriff"]) hr.append(el("th", "padding:3px 12px 3px 0;", h));
+    t.append(hr);
+    const time = (iso?: string) => (iso ? new Date(iso).toLocaleTimeString("de-DE") : "—");
+    for (const r of rows) {
+      const tr = el("tr", "border-top:1px solid rgba(255,255,255,0.06);");
+      const cell = (text: string, css = "") => el("td", `padding:3px 12px 3px 0;${css}`, text);
+      const status = r.kind === "operator" ? `${r.operator ?? "?"}: ${r.action ?? ""}` : [r.status, r.reason].filter(Boolean).join(" — ");
+      tr.append(
+        cell(time(r.recordedAt), "color:var(--omp-text-dim);white-space:nowrap;"),
+        cell(asRunKindText(r.kind)),
+        cell(r.label || r.childId || ""),
+        cell([r.source, r.asset].filter(Boolean).join(" · "), "color:var(--omp-text-dim);"),
+        cell(r.actualStart ? `${time(r.actualStart)} (${deviationText(startDeviationMs(r))})` : "", "white-space:nowrap;"),
+        cell(r.actualEnd ? durationText(actualDurationMs(r)) : ""),
+        cell(status, `color:${TONE[asRunTone(r)]};`),
+      );
+      t.append(tr);
+    }
+    box.append(t);
   }
 
   #renderChannels(): HTMLElement {

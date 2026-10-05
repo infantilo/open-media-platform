@@ -1131,6 +1131,13 @@
       "type": "string",
       "description": "Label der Grafik-Instanz (omp-ograf).",
       "group": "Ziele"
+    },
+    {
+      "key": "OMP_PLAYOUT_LOG_FILE",
+      "label": "Log-Datei (JSON-Zeilen)",
+      "type": "string",
+      "description": "Zusätzlich zu stderr alle strukturierten Log-Zeilen (channelId, eventId, childEventId, sourceId, correlationId, triggerId) in diese Datei anhängen — durchsuchbar mit grep/jq. Leer = aus.",
+      "group": "Betrieb"
     }
   ],
   "omp-ograf": [
