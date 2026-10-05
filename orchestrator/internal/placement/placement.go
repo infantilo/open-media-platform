@@ -860,3 +860,63 @@ func (e *Engine) broadcastAdvice(a Advice) {
 	}
 	e.events.Broadcast(sse.Event{Type: "placement.advice", Data: data})
 }
+
+// HostEstimate ist die Vorschau der Auslastung eines Hosts mit zusätzlicher, erst geplanter Last
+// (Plan-Vorschau eines Workflow-Starts). Prozentwerte beziehen sich wie überall hier auf den ganzen Host.
+type HostEstimate struct {
+	HostID       string   `json:"hostId"`
+	Label        string   `json:"label"`
+	Online       bool     `json:"online"`
+	HasMetrics   bool     `json:"hasMetrics"`
+	CPUNow       float64  `json:"cpuNow"`
+	MemNow       float64  `json:"memNow"`
+	CPUProjected float64  `json:"cpuProjected"`
+	MemProjected float64  `json:"memProjected"`
+	CPULimit     float64  `json:"cpuLimit"`
+	MemLimit     float64  `json:"memLimit"`
+	Over         []string `json:"over,omitempty"`
+}
+
+// EstimateHost schätzt die Auslastung von hostID, wenn zusätzlich `extra` (Summe der Profile geplanter Rollen)
+// darauf läuft. Unbekannte Telemetrie bleibt unbekannt (HasMetrics=false), kein Raten; der lokale
+// Orchestrator-Host (hostID "") hat keine Agent-Telemetrie.
+func (e *Engine) EstimateHost(hostID string, extra profiles.Snapshot) HostEstimate {
+	est := HostEstimate{HostID: hostID, CPULimit: e.thresholds.CPUPercent, MemLimit: e.thresholds.MemPercent}
+	if hostID == "" {
+		est.Label = "Orchestrator-Host (lokal)"
+		est.Online = true
+		return est
+	}
+	if hosts, err := e.hostLister.ListHosts(); err == nil {
+		for _, h := range hosts {
+			if h.ID == hostID {
+				est.Label = h.Label
+			}
+		}
+	}
+	if est.Label == "" {
+		est.Label = hostID
+	}
+	m, ok := e.metrics.Get(hostID)
+	if !ok {
+		return est
+	}
+	est.Online = time.Since(m.ReceivedAt) < HostOnlineThreshold
+	est.HasMetrics = true
+	est.CPUNow = m.CPUPercent
+	if m.MemTotalBytes > 0 {
+		est.MemNow = float64(m.MemUsedBytes) / float64(m.MemTotalBytes) * 100
+	}
+	est.CPUProjected = est.CPUNow + extra.CPUAvg
+	est.MemProjected = est.MemNow
+	if m.MemTotalBytes > 0 {
+		est.MemProjected += float64(extra.RSSAvg) / float64(m.MemTotalBytes) * 100
+	}
+	if est.CPUProjected >= est.CPULimit {
+		est.Over = append(est.Over, fmt.Sprintf("CPU %.0f %% (Grenze %.0f %%)", est.CPUProjected, est.CPULimit))
+	}
+	if est.MemProjected >= est.MemLimit {
+		est.Over = append(est.Over, fmt.Sprintf("RAM %.0f %% (Grenze %.0f %%)", est.MemProjected, est.MemLimit))
+	}
+	return est
+}

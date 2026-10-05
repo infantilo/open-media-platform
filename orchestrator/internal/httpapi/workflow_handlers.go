@@ -360,3 +360,20 @@ func writeWorkflowError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
+
+// handleWorkflowPlan liefert GET /api/v1/workflows/{id}/plan: voraussichtlicher Host je Rolle, erwarteter
+// Bedarf und Engpass-Warnungen (Plan-Vorschau, startet nichts).
+func handleWorkflowPlan(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if !workflowOrgGuard(w, r, svc, id) {
+			return
+		}
+		plan, err := svc.PlanStart(id)
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, plan)
+	}
+}

@@ -38,6 +38,9 @@ func (s *Service) buildOccupancy(now time.Time) placement.Occupancy {
 		ExtraLoad:            map[string]profiles.Snapshot{},
 	}
 
+	if st, isStore := s.store.(*Store); s.store == nil || (isStore && st == nil) {
+		return occ // kein Speicher (z. B. Vorschau-Test ohne Datenbank)
+	}
 	all, err := s.store.List()
 	if err != nil {
 		return occ // best effort — eine leere Occupancy blockiert SelectHost nicht, s. dortige fail-open-Haltung

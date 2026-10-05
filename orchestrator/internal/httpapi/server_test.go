@@ -565,6 +565,9 @@ func (f fakeWorkflowService) Create(name string, def workflows.Definition, adopt
 func (f fakeWorkflowService) List() ([]workflows.Workflow, error) { return f.list, f.listErr }
 
 func (f fakeWorkflowService) Get(id string) (workflows.Workflow, error) { return f.get, f.getErr }
+func (f fakeWorkflowService) PlanStart(id string) (workflows.StartPlan, error) {
+	return workflows.StartPlan{WorkflowID: id}, nil
+}
 
 func (f fakeWorkflowService) Update(id, name string, def workflows.Definition) (workflows.Workflow, error) {
 	return f.updated, f.updateErr
