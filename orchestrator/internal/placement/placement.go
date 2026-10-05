@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -864,12 +865,15 @@ func (e *Engine) broadcastAdvice(a Advice) {
 // HostEstimate ist die Vorschau der Auslastung eines Hosts mit zusätzlicher, erst geplanter Last
 // (Plan-Vorschau eines Workflow-Starts). Prozentwerte beziehen sich wie überall hier auf den ganzen Host.
 type HostEstimate struct {
-	HostID       string   `json:"hostId"`
-	Label        string   `json:"label"`
-	Online       bool     `json:"online"`
-	HasMetrics   bool     `json:"hasMetrics"`
-	CPUNow       float64  `json:"cpuNow"`
-	MemNow       float64  `json:"memNow"`
+	HostID     string  `json:"hostId"`
+	Label      string  `json:"label"`
+	Online     bool    `json:"online"`
+	HasMetrics bool    `json:"hasMetrics"`
+	CPUNow     float64 `json:"cpuNow"`
+	MemNow     float64 `json:"memNow"`
+	// Cores: Kernzahl des Hosts (0 = unbekannt). Die Profile messen CPU je Prozess (100 % = ein Kern); für die
+	// Prognose wird die zusätzliche Last durch Cores geteilt, um auf Prozent des ganzen Hosts zu kommen.
+	Cores        int      `json:"cores"`
 	CPUProjected float64  `json:"cpuProjected"`
 	MemProjected float64  `json:"memProjected"`
 	CPULimit     float64  `json:"cpuLimit"`
@@ -885,12 +889,26 @@ func (e *Engine) EstimateHost(hostID string, extra profiles.Snapshot) HostEstima
 	if hostID == "" {
 		est.Label = "Orchestrator-Host (lokal)"
 		est.Online = true
+		est.Cores = runtime.NumCPU()
+		// Ohne Agent-Telemetrie kein Ist-Wert: nur die Zusatzlast der geplanten Rollen gegen die Grenze prüfen.
+		if est.Cores > 0 {
+			est.CPUProjected = extra.CPUAvg / float64(est.Cores)
+			if est.CPUProjected >= est.CPULimit {
+				est.Over = append(est.Over, fmt.Sprintf("CPU %.0f %% (Grenze %.0f %%)", est.CPUProjected, est.CPULimit))
+			}
+		}
 		return est
 	}
 	if hosts, err := e.hostLister.ListHosts(); err == nil {
 		for _, h := range hosts {
 			if h.ID == hostID {
 				est.Label = h.Label
+				var caps struct {
+					NumCPU int `json:"numCPU"`
+				}
+				if json.Unmarshal(h.Capabilities, &caps) == nil {
+					est.Cores = caps.NumCPU
+				}
 			}
 		}
 	}
@@ -907,7 +925,10 @@ func (e *Engine) EstimateHost(hostID string, extra profiles.Snapshot) HostEstima
 	if m.MemTotalBytes > 0 {
 		est.MemNow = float64(m.MemUsedBytes) / float64(m.MemTotalBytes) * 100
 	}
-	est.CPUProjected = est.CPUNow + extra.CPUAvg
+	est.CPUProjected = est.CPUNow
+	if est.Cores > 0 {
+		est.CPUProjected += extra.CPUAvg / float64(est.Cores)
+	}
 	est.MemProjected = est.MemNow
 	if m.MemTotalBytes > 0 {
 		est.MemProjected += float64(extra.RSSAvg) / float64(m.MemTotalBytes) * 100

@@ -219,6 +219,15 @@ ohne Workflow-Zugehörigkeit bekommen dagegen weiterhin nur das
 generische „`<Typ>` (`<Kurz-ID>`)"-Label — ein eigenes Namensfeld dafür
 gibt es in der Oberfläche noch nicht.
 
+**Nicht gestartete Workflows** erscheinen ebenfalls in den Zonen: Ein
+gestoppter Workflow liegt als Kachel in der Zone des Hosts, auf dem er laufen
+würde (voraussichtlicher Host je Rolle laut Plan-Vorschau, s. Abschnitt 4).
+Verteilt er sich auf mehrere Hosts, liegt seine Kachel in „Gruppen über mehrere
+Hosts“, und **jede beteiligte Host-Zone zeigt am Fuß einen gestrichelten Block
+„Geplant (nicht gestartet)“** mit dem Workflow-Namen und den Rollen, die dort
+vorgesehen sind. Der Block verschwindet, sobald der Workflow läuft und seine
+echten Kacheln in den Zonen stehen.
+
 ### 4.1 Hot-Standby (Redundanz für kritische Rollen)
 
 Im Rollen-Designer bietet jede Rolle ein zusätzliches Dropdown „Standby

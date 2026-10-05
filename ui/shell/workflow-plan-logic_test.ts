@@ -33,9 +33,10 @@ Deno.test("Rollen werden je Host gruppiert, Gesamtzustand ist der schlimmste", (
 });
 
 Deno.test("Texte: Bedarf bekannt/unbekannt, Auslastung jetzt und mit Workflow", () => {
-  assertEquals(demandText(role()), "~30 % CPU · 512 MB");
+  assertEquals(demandText(role()), "~0,3 Kerne · 512 MB");
+  assertEquals(demandText(role({ cpuPercent: 4 })), "~<0,1 Kerne · 512 MB");
   assertEquals(demandText(role({ profileKnown: false })), "Bedarf unbekannt");
-  assertEquals(demandText(role({ ramBytes: 2.5 * 1024 ** 3 })), "~30 % CPU · 2.5 GB");
+  assertEquals(demandText(role({ ramBytes: 2.5 * 1024 ** 3 })), "~0,3 Kerne · 2.5 GB");
   assertEquals(loadText(host(), false), "CPU 20 % · RAM 30 % → CPU 40 % · RAM 40 %");
   assertEquals(loadText(host(), true), "jetzt CPU 20 % · RAM 30 %");
   assertEquals(loadText(host({ hasMetrics: false }), false), "keine Messwerte");

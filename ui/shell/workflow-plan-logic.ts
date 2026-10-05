@@ -22,6 +22,7 @@ export interface HostEstimate {
   hasMetrics: boolean;
   cpuNow: number;
   memNow: number;
+  cores?: number;
   cpuProjected: number;
   memProjected: number;
   cpuLimit: number;
@@ -80,7 +81,9 @@ function bytesText(b: number): string {
 /** Erwarteter Bedarf einer Rolle als kurzer Text; ohne Messprofil ausdrücklich „unbekannt“, nicht „0“. */
 export function demandText(r: RolePlan): string {
   if (!r.profileKnown) return "Bedarf unbekannt";
-  return `~${Math.round(r.cpuPercent)} % CPU · ${bytesText(r.ramBytes)}`;
+  // Profile messen CPU je Prozess (100 % = ein Kern).
+  const cores = r.cpuPercent / 100;
+  return `~${cores < 0.1 ? "<0,1" : cores.toFixed(1).replace(".", ",")} Kerne · ${bytesText(r.ramBytes)}`;
 }
 
 /** Auslastung eines Hosts: jetzt → mit diesem Workflow. */
