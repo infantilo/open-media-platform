@@ -87,7 +87,15 @@ struct GateState {
 pub struct SharedLatency {
     slots: Mutex<std::collections::HashMap<u64, (u64, std::time::Instant)>>,
     next_id: AtomicU64,
+    /// Zeitpunkt der ersten Anmeldung — Grundlage des Anlauf-Fensters (s. [`SHARED_LATENCY_SETTLE`]).
+    first_register: Mutex<Option<std::time::Instant>>,
 }
+
+/// Anlauf-Fenster: so lange nach der ersten Anmeldung geben die Leser noch KEIN Bild/keinen
+/// Block aus, damit alle Leser ihre Anfangs-Latenz melden können und von Anfang an dieselbe
+/// (größte) Latenz verwenden. Vorher sprang die Latenz des zuerst startenden Lesers
+/// beim Eintreffen der anderen um bis zu 100 ms → 50–60 ms Tonlücke am Anfang jeder Aufnahme.
+const SHARED_LATENCY_SETTLE: Duration = Duration::from_millis(250);
 
 /// Slots, die länger nicht aktualisiert wurden (Leser ohne Daten), zählen nicht mit —
 /// ein toter Eingang soll die Latenz der anderen nicht dauerhaft hochhalten.
@@ -95,6 +103,7 @@ const SHARED_LATENCY_STALE: Duration = Duration::from_secs(3);
 
 impl SharedLatency {
     pub fn register(self: &Arc<Self>) -> LatencyMember {
+        self.first_register.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(std::time::Instant::now);
         LatencyMember { domain: self.clone(), id: self.next_id.fetch_add(1, Ordering::Relaxed) }
     }
 }
@@ -105,6 +114,11 @@ pub struct LatencyMember {
 }
 
 impl LatencyMember {
+    /// `true`, sobald das Anlauf-Fenster seit der ersten Anmeldung vorbei ist.
+    pub fn settled(&self) -> bool {
+        self.domain.first_register.lock().unwrap_or_else(|p| p.into_inner()).is_none_or(|t| t.elapsed() >= SHARED_LATENCY_SETTLE)
+    }
+
     /// Meldet die eigene Latenz und liefert die wirksame (Maximum aller frischen Slots).
     pub fn update(&self, own_ns: u64) -> u64 {
         let now = std::time::Instant::now();
@@ -1956,6 +1970,8 @@ enum IndexPts {
     Push(u64),
     Skip,
     NotPlaying,
+    /// Gemeinsame Latenz schwingt noch ein: nichts ausgeben, Index auf "jetzt" nachführen.
+    Settling,
 }
 
 /// PTS eines gelesenen Grains aus seinem Index (Nachtrag 271, s.
@@ -2001,6 +2017,13 @@ fn index_pts(
         let max = (1_000_000_000 / period_ns).max(2);
         LatencyTracker::new(period_ns, initial, 1, max)
     });
+    if let Some(m) = shared {
+        // Anfangs-Latenz melden, aber noch nichts ausgeben, bis alle Leser gemeldet haben.
+        m.update(tracker.latency_ns());
+        if !m.settled() {
+            return IndexPts::Settling;
+        }
+    }
     if tracker.observe(lag) == LatencyChange::Shrink {
         return IndexPts::Skip;
     }
@@ -2088,6 +2111,11 @@ fn read_loop(
                         IndexPts::Skip => {
                             st[2] += 1;
                             index += 1;
+                            continue;
+                        }
+                        IndexPts::Settling => {
+                            thread::sleep(Duration::from_millis(5));
+                            index = context.instance.get_current_index(grain_rate);
                             continue;
                         }
                         IndexPts::NotPlaying => {
@@ -2626,6 +2654,11 @@ fn read_audio_loop(
                         IndexPts::Push(pts) => Some(pts),
                         IndexPts::Skip => {
                             index += batch_size;
+                            continue;
+                        }
+                        IndexPts::Settling => {
+                            thread::sleep(Duration::from_millis(5));
+                            index = context.instance.get_current_index(sample_rate);
                             continue;
                         }
                         IndexPts::NotPlaying => {
@@ -3451,6 +3484,15 @@ mod shared_latency_tests {
         // Video wächst → Audio folgt beim nächsten Update.
         assert_eq!(video.update(160_000_000), 160_000_000);
         assert_eq!(audio.update(20_000_000), 160_000_000);
+    }
+
+    #[test]
+    fn domain_settles_only_after_the_startup_window() {
+        let d = Arc::new(SharedLatency::default());
+        let m = d.register();
+        assert!(!m.settled(), "direkt nach der Anmeldung läuft das Anlauf-Fenster noch");
+        std::thread::sleep(SHARED_LATENCY_SETTLE + Duration::from_millis(30));
+        assert!(m.settled());
     }
 
     #[test]
