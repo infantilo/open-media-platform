@@ -313,6 +313,7 @@ fn build_testpattern_audio(pipeline: &gst::Pipeline, tone_freq: f64) -> Result<g
 /// Rückgabe: (`uridecodebin`-Element für Positions-/Dauer-Query,
 /// Video-Tail, Audio-Tail).
 fn build_generic_file(pipeline: &gst::Pipeline, uri: &str, width: u32, height: u32) -> Result<(gst::Element, gst::Element, gst::Element), String> {
+    let vdeint = make_deinterlace()?;
     let vconvert = gst::ElementFactory::make("videoconvert").build().map_err(|e| format!("videoconvert: {e}"))?;
     let vscale = gst::ElementFactory::make("videoscale").build().map_err(|e| format!("videoscale: {e}"))?;
     let vrate = gst::ElementFactory::make("videorate").build().map_err(|e| format!("videorate: {e}"))?;
@@ -321,12 +322,13 @@ fn build_generic_file(pipeline: &gst::Pipeline, uri: &str, width: u32, height: u
         .build()
         .map_err(|e| format!("capsfilter(video): {e}"))?;
     pipeline
-        .add(&vconvert)
+        .add(&vdeint)
+        .and_then(|()| pipeline.add(&vconvert))
         .and_then(|()| pipeline.add(&vscale))
         .and_then(|()| pipeline.add(&vrate))
         .and_then(|()| pipeline.add(&vcaps))
         .map_err(|e| format!("add file video chain: {e}"))?;
-    gst::Element::link_many([&vconvert, &vscale, &vrate, &vcaps]).map_err(|e| format!("link file video chain: {e}"))?;
+    gst::Element::link_many([&vdeint, &vconvert, &vscale, &vrate, &vcaps]).map_err(|e| format!("link file video chain: {e}"))?;
 
     let aconvert = gst::ElementFactory::make("audioconvert").build().map_err(|e| format!("audioconvert: {e}"))?;
     let aresample = gst::ElementFactory::make("audioresample").build().map_err(|e| format!("audioresample: {e}"))?;
@@ -348,7 +350,7 @@ fn build_generic_file(pipeline: &gst::Pipeline, uri: &str, width: u32, height: u
         .map_err(|e| format!("uridecodebin: {e}"))?;
     pipeline.add(&src).map_err(|e| format!("add uridecodebin: {e}"))?;
 
-    let video_sink_pad = vconvert.static_pad("sink").ok_or("videoconvert: no sink pad")?;
+    let video_sink_pad = vdeint.static_pad("sink").ok_or("deinterlace: no sink pad")?;
     let audio_sink_pad = aconvert.static_pad("sink").ok_or("audioconvert: no sink pad")?;
     src.connect_pad_added(move |_src, new_pad| {
         let Some(caps) = new_pad.current_caps() else { return };
@@ -435,6 +437,19 @@ fn build_image_file(pipeline: &gst::Pipeline, uri: &str, width: u32, height: u32
     Ok((src, vcaps.upcast()))
 }
 
+/// Deinterlace VOR `videoconvert` (Nutzerfund 2026-09-30, `omp-mxf-player-direct`: Kammartefakte bei
+/// Bewegung). Der MXL-Flow ist als progressiv deklariert, interlaced Quellmaterial (Broadcast-MXF 1080i,
+/// `field_order=tt`) lief bisher unverändert durch. `mode=auto` lässt progressive Quellen unberührt (kein
+/// Rechenaufwand); `fields=top` liefert Einzelrate (25i → 25p), passend zum festen Ausgangstakt.
+fn make_deinterlace() -> Result<gst::Element, String> {
+    gst::ElementFactory::make("deinterlace")
+        .property_from_str("mode", "auto")
+        .property_from_str("fields", "top")
+        .property_from_str("method", "greedyh")
+        .build()
+        .map_err(|e| format!("deinterlace: {e}"))
+}
+
 /// MXF-Datei-Zweig — Element-Konstruktion wortgleich aus
 /// `omp-mxf-player-direct/src/pipeline.rs::build()` übernommen (dort
 /// selbst wortgleich aus `omp-mxf-player`), auf EINE feste Ausgabegruppe
@@ -455,6 +470,7 @@ fn build_mxf_file(pipeline: &gst::Pipeline, path: &str, width: u32, height: u32,
     gst::Element::link(&filesrc, &demux).map_err(|e| format!("link filesrc to mxfdemux: {e}"))?;
 
     let decodebin = gst::ElementFactory::make("decodebin").build().map_err(|e| format!("decodebin: {e}"))?;
+    let vdeint = make_deinterlace()?;
     let vconvert = gst::ElementFactory::make("videoconvert").build().map_err(|e| format!("videoconvert: {e}"))?;
     let vscale = gst::ElementFactory::make("videoscale").build().map_err(|e| format!("videoscale: {e}"))?;
     let vrate = gst::ElementFactory::make("videorate").build().map_err(|e| format!("videorate: {e}"))?;
@@ -465,15 +481,16 @@ fn build_mxf_file(pipeline: &gst::Pipeline, path: &str, width: u32, height: u32,
     let vqueue = gst::ElementFactory::make("queue").build().map_err(|e| format!("queue(video): {e}"))?;
     pipeline
         .add(&decodebin)
+        .and_then(|()| pipeline.add(&vdeint))
         .and_then(|()| pipeline.add(&vconvert))
         .and_then(|()| pipeline.add(&vscale))
         .and_then(|()| pipeline.add(&vrate))
         .and_then(|()| pipeline.add(&vcaps))
         .and_then(|()| pipeline.add(&vqueue))
         .map_err(|e| format!("add video chain: {e}"))?;
-    gst::Element::link_many([&vconvert, &vscale, &vrate, &vcaps, &vqueue]).map_err(|e| format!("link video chain: {e}"))?;
+    gst::Element::link_many([&vdeint, &vconvert, &vscale, &vrate, &vcaps, &vqueue]).map_err(|e| format!("link video chain: {e}"))?;
 
-    let decodebin_sink = vconvert.static_pad("sink").ok_or("videoconvert: no sink pad")?;
+    let decodebin_sink = vdeint.static_pad("sink").ok_or("deinterlace: no sink pad")?;
     decodebin.connect_pad_added(move |_db, new_pad| {
         let Some(caps) = new_pad.current_caps() else { return };
         let Some(structure) = caps.structure(0) else { return };
