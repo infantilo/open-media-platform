@@ -10,7 +10,7 @@ import { apiFetch } from "./connection.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 import {
   type Action, actionKind, type AudioRulesDoc, channelNames, cleanDoc, hasBitExact, joinTags, knownTags, LAYOUTS, type Mapping, monoTracks, moveItem,
-  newRule, parseSourceText, parseTags, type Rule, setBitExact, type SourceSpec, sourceText, specSummary, toggleTrack, trackRowCount, type TrackSchema,
+  newRule, chainParam, setChainParam, parseSourceText, parseTags, type Rule, setBitExact, type SourceSpec, sourceText, specSummary, toggleTrack, trackRowCount, type TrackSchema,
   uniqueId, VIA_OPTIONS,
 } from "./audio-rules-logic.ts";
 
@@ -339,7 +339,7 @@ class AudioRulesView extends HTMLElement {
       this.#render();
     }, "230px");
     head.append(mode);
-    if (spec) head.append(select(VIA_OPTIONS, spec.via ?? "", (v) => { spec.via = v || undefined; this.#touch(); this.#render(); }, "260px"));
+    if (spec) head.append(select(VIA_OPTIONS, spec.via ?? "", (v) => { spec.via = v || undefined; this.#touch(); this.#render(); }, "260px"), ...this.#processingFields(spec));
     box.append(head);
     if (spec && useTags) {
       box.append(textInput(spec.select ?? "", (v) => { spec.select = v; this.#touch(); }, { width: "420px", list: "omp-audio-tags", placeholder: "z. B. role:ad AND layout:stereo", mono: true }));
@@ -370,6 +370,15 @@ class AudioRulesView extends HTMLElement {
       box.append(t);
     }
     return box;
+  }
+
+  /** Eingabefelder für die ausführbaren Verarbeitungsschritte Gain (dB) und Delay (ms) einer Quellvorgabe. */
+  #processingFields(spec: SourceSpec): HTMLElement[] {
+    const num = (v: string) => (v.trim() === "" ? undefined : Number(v.replace(",", ".")));
+    return [
+      field("Gain (dB)", textInput(String(chainParam(spec, "gain", "db") ?? ""), (v) => { setChainParam(spec, "gain", "db", num(v)); this.#touch(); }, { width: "70px", placeholder: "0" })),
+      field("Verzögerung (ms)", textInput(String(chainParam(spec, "delay", "ms") ?? ""), (v) => { setChainParam(spec, "delay", "ms", num(v)); this.#touch(); }, { width: "90px", placeholder: "0" })),
+    ];
   }
 
   // ---- 4. Ersatzregeln ----------------------------------------------------------------------------------
@@ -429,6 +438,7 @@ class AudioRulesView extends HTMLElement {
       row.append(
         field("Tag-Ausdruck", textInput(u.select ?? "", (v) => { u.select = v; this.#touch(); }, { width: "260px", list: "omp-audio-tags", mono: true, placeholder: "role:pt AND layout:stereo" })),
         field("über", select(VIA_OPTIONS, u.via ?? "", (v) => { u.via = v || undefined; this.#touch(); }, "250px")),
+        ...this.#processingFields(u),
       );
     }
     row.append(field("Hinweis", textInput(a.warn ?? "", (v) => { a.warn = v; this.#touch(); }, { width: "220px", placeholder: "erscheint als Warnung am Event" })),

@@ -100,12 +100,19 @@ fn matrix_to_gst_array(matrix: &[Vec<f64>]) -> gst::Array {
     gst::Array::new(matrix.iter().map(|row| gst::Array::new(row.iter().copied())))
 }
 
-/// Ein Zweig des Verteilers: `queue → audiomixmatrix → capsfilter`, am Ende `tail`.
+/// Ein Zweig des Verteilers: `queue → audiomixmatrix → capsfilter → volume → queue(delay)`, am Ende `tail`.
 struct DistGroup {
     matrix: gst::Element,
+    /// Verarbeitungsschritt `gain` (Standard 1,0 = Durchgriff).
+    volume: gst::Element,
+    /// Verarbeitungsschritt `delay`: `min-threshold-time` der Queue (Standard 0).
+    delay: gst::Element,
     channels: u32,
     tail: gst::Element,
 }
+
+/// Verarbeitungsschritte, die dieser Node ausführt (Rest wird als Warnung gemeldet).
+const EXECUTABLE_STEPS: [&str; 2] = ["gain", "delay"];
 
 /// Verteilt einen interleaved Quellstrom (N Kanäle) auf alle Zielgruppen.
 pub struct Distributor {
@@ -134,10 +141,17 @@ impl Distributor {
             matrix.set_property("in-channels", 1u32);
             matrix.set_property("matrix", matrix_to_gst_array(&vec![vec![0.0f64; 1]; g.channels as usize]));
             let caps = gst::ElementFactory::make("capsfilter").property("caps", group_caps(g.channels)).build().map_err(|e| format!("capsfilter({}): {e}", g.id))?;
+            let volume = make("volume")?;
+            let delay = gst::ElementFactory::make("queue")
+                .property("max-size-buffers", 0u32)
+                .property("max-size-bytes", 0u32)
+                .property("max-size-time", 10_000_000_000u64)
+                .build()
+                .map_err(|e| format!("queue(delay): {e}"))?;
             let tail = make("identity")?;
-            pipeline.add_many([&queue, &matrix, &caps, &tail]).map_err(|e| format!("add group chain ({}): {e}", g.id))?;
-            gst::Element::link_many([&tee, &queue, &matrix, &caps, &tail]).map_err(|e| format!("link group chain ({}): {e}", g.id))?;
-            groups.push(DistGroup { matrix, channels: g.channels, tail });
+            pipeline.add_many([&queue, &matrix, &caps, &volume, &delay, &tail]).map_err(|e| format!("add group chain ({}): {e}", g.id))?;
+            gst::Element::link_many([&tee, &queue, &matrix, &caps, &volume, &delay, &tail]).map_err(|e| format!("link group chain ({}): {e}", g.id))?;
+            groups.push(DistGroup { matrix, volume, delay, channels: g.channels, tail });
         }
         Ok(Distributor { input, groups, ctx, plan })
     }
@@ -151,7 +165,7 @@ impl Distributor {
     /// Datenfluss laufen (nach `no-more-pads` bzw. vor `Playing`).
     pub fn configure(&self, source: &SourceDesc, mapping: Option<&Mapping>) -> AudioPlan {
         let settings = &self.ctx.settings;
-        let plan = omp_audio_rules::resolve(&settings.output_profile, source, mapping, &settings.rule_set);
+        let mut plan = omp_audio_rules::resolve(&settings.output_profile, source, mapping, &settings.rule_set);
         let ncols = plan.src_channels.len().max(1) as u32;
         for (dg, gp) in self.groups.iter().zip(&plan.groups) {
             dg.matrix.set_property("out-channels", dg.channels);
@@ -162,10 +176,16 @@ impl Distributor {
                 vec![vec![0.0; ncols as usize]; dg.channels as usize]
             };
             dg.matrix.set_property("matrix", matrix_to_gst_array(&rows));
-            if !gp.chain.is_empty() {
-                eprintln!("omp-channel-player: Gruppe '{}': Verarbeitungskette {:?} noch nicht ausführbar (A6/A7), ignoriert", gp.group, gp.chain.iter().map(|p| &p.name).collect::<Vec<_>>());
+            apply_chain(dg, &gp.chain);
+        }
+        // Nicht ausführbare Verarbeitungsschritte als Warnung am Plan (sichtbar in der Automation).
+        for gp in plan.groups.iter_mut() {
+            for step in gp.chain.iter().filter(|p| !EXECUTABLE_STEPS.contains(&p.name.as_str())) {
+                let label = settings.output_profile.groups.iter().find(|g| g.id == gp.group).map_or(gp.group.clone(), |g| g.label.clone());
+                gp.warnings.push(format!("{label}: Verarbeitungsschritt '{}' wird von diesem Node nicht ausgeführt", step.name));
             }
         }
+        plan.warnings = plan.groups.iter().flat_map(|g| g.warnings.clone()).collect();
         for w in &plan.warnings {
             eprintln!("omp-channel-player: Audio: {w}");
         }
@@ -190,5 +210,40 @@ impl Distributor {
 
     pub fn mapping_named(&self, id: &str) -> Option<&Mapping> {
         self.ctx.settings.mappings.iter().find(|m| m.id == id)
+    }
+}
+
+/// Setzt `gain`/`delay` des Gruppenzweigs; ohne Eintrag Durchgriff (1,0 / 0 ms).
+fn apply_chain(dg: &DistGroup, chain: &[omp_audio_rules::ProcessorRef]) {
+    let num = |p: &omp_audio_rules::ProcessorRef, key: &str| p.params.get(key).and_then(|v| v.as_f64());
+    let mut gain_db = 0.0f64;
+    let mut delay_ms = 0.0f64;
+    for step in chain {
+        match step.name.as_str() {
+            "gain" => gain_db += num(step, "db").unwrap_or(0.0),
+            "delay" => delay_ms += num(step, "ms").unwrap_or(0.0).max(0.0),
+            _ => {}
+        }
+    }
+    dg.volume.set_property("volume", 10f64.powf(gain_db / 20.0).clamp(0.0, 10.0));
+    dg.delay.set_property("min-threshold-time", (delay_ms * 1_000_000.0) as u64);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gain_and_delay_are_applied_and_reset_per_chain() {
+        gst::init().unwrap();
+        let mk = |n: &str| gst::ElementFactory::make(n).build().unwrap();
+        let dg = DistGroup { matrix: mk("audiomixmatrix"), volume: mk("volume"), delay: mk("queue"), channels: 2, tail: mk("identity") };
+        let step = |name: &str, key: &str, v: f64| omp_audio_rules::ProcessorRef { name: name.into(), params: [(key.to_string(), serde_json::json!(v))].into_iter().collect() };
+        apply_chain(&dg, &[step("gain", "db", -6.0), step("delay", "ms", 40.0)]);
+        assert!((dg.volume.property::<f64>("volume") - 0.501).abs() < 0.01);
+        assert_eq!(dg.delay.property::<u64>("min-threshold-time"), 40_000_000);
+        apply_chain(&dg, &[]);
+        assert_eq!(dg.volume.property::<f64>("volume"), 1.0);
+        assert_eq!(dg.delay.property::<u64>("min-threshold-time"), 0);
     }
 }

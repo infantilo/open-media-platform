@@ -195,8 +195,10 @@ Start und fällt ohne erreichbaren Orchestrator auf die eingebauten Standardwert
 - **In der Automation:** Das Event trägt `audioMapping` (flach im Event-JSON, per `updateItem` setzbar, leer = Standard des Players) und reicht es beim Laden an den Kanal-Player. Der Automation-Node spiegelt alle 2 s `audioPlans` (Plan je Kanal a/b), `audioGroups` und `audioMappings` vom Player.
 - **Parameter am Player:** `audioPlan` (zuletzt aufgelöster Plan mit Matrizen, Ersatzregel und
   Warnungen), `audioGroups`, `audioMappings`.
-- **Noch nicht enthalten:** Verarbeitungsschritte wie Loudness oder „Klare Sprache“ werden
-  gemeldet, aber noch nicht ausgeführt (Schritte A6/A7).
+- **Verarbeitung:** Der Kanal-Player führt `gain` (dB) und `delay` (ms, z. B. für Laufzeitausgleich)
+  je Gruppe aus. Andere Schritte (`loudness`, später „Klare Sprache“) erscheinen als Warnung am
+  Plan und werden nicht ausgeführt; für EBU R128 fehlt im System ein passendes GStreamer-Element
+  (`audioloudnorm`).
 
 ## 8. Asset-Preflight und Materialisierung
 

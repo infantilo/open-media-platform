@@ -1,7 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
   type AudioRulesDoc, channelNames, cleanDoc, hasBitExact, monoTracks, moveItem, parseSourceText, parseTags, setBitExact, slug, sourceText, specSummary,
-  toggleTrack, trackRowCount, uniqueId,
+  toggleTrack, trackRowCount, uniqueId, chainParam, setChainParam, type SourceSpec,
 } from "./audio-rules-logic.ts";
 
 Deno.test("Kanalnamen: Standard je Layout, eigene Namen gewinnen", () => {
@@ -75,4 +75,18 @@ Deno.test("cleanDoc entfernt Leerfelder, die der Server ablehnt", () => {
   assertEquals(c.outputProfile.groups[0], { id: "pt", label: "pt", layout: "stereo" });
   assertEquals(c.trackSchemas[0], { id: "s", match: { format: "mxf" }, tracks: [{ n: 1, layout: "mono" }] });
   assertEquals(c.ruleSet.rules[0], { group: "pt", when: { has: "a" }, then: [{ use: { select: "x" } }, { silence: true }] });
+});
+
+Deno.test("Gain/Delay: setzen, lesen, mit 0 oder leer entfernen", () => {
+  const spec: SourceSpec = { select: "role:pt" };
+  setChainParam(spec, "gain", "db", -3);
+  setChainParam(spec, "delay", "ms", 40);
+  assertEquals(chainParam(spec, "gain", "db"), -3);
+  assertEquals(chainParam(spec, "delay", "ms"), 40);
+  setChainParam(spec, "gain", "db", -6);
+  assertEquals(spec.chain?.length, 2);
+  assertEquals(chainParam(spec, "gain", "db"), -6);
+  setChainParam(spec, "gain", "db", 0);
+  setChainParam(spec, "delay", "ms", undefined);
+  assertEquals(spec.chain, undefined);
 });

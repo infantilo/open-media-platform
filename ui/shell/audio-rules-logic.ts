@@ -190,3 +190,17 @@ export function cleanDoc(doc: AudioRulesDoc): AudioRulesDoc {
     },
   };
 }
+
+/** Wert eines Verarbeitungsschritts (z. B. gain/db, delay/ms) einer Quellvorgabe. */
+export function chainParam(spec: SourceSpec | undefined, name: string, key: string): number | undefined {
+  const v = spec?.chain?.find((p) => p.name === name)?.params?.[key];
+  return typeof v === "number" ? v : undefined;
+}
+
+/** Setzt/entfernt einen Verarbeitungsschritt; leer oder 0 entfernt ihn (Durchgriff). */
+export function setChainParam(spec: SourceSpec, name: string, key: string, value: number | undefined): void {
+  const rest = (spec.chain ?? []).filter((p) => p.name !== name);
+  if (value !== undefined && Number.isFinite(value) && value !== 0) rest.push({ name, params: { [key]: value } });
+  if (rest.length > 0) spec.chain = rest;
+  else delete spec.chain;
+}
