@@ -10,7 +10,7 @@ import { apiFetch } from "./connection.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 import {
   type Action, actionKind, type AudioRulesDoc, channelNames, cleanDoc, hasBitExact, joinTags, knownTags, LAYOUTS, type Mapping, monoTracks, moveItem,
-  newRule, chainParam, setChainParam, parseSourceText, parseTags, type Rule, setBitExact, type SourceSpec, sourceText, specSummary, toggleTrack, trackRowCount, type TrackSchema,
+  newRule, chainParam, planRows, simulatedSource, type AudioPlan, setChainParam, parseSourceText, parseTags, type Rule, setBitExact, type SourceSpec, sourceText, specSummary, toggleTrack, trackRowCount, type TrackSchema,
   uniqueId, VIA_OPTIONS,
 } from "./audio-rules-logic.ts";
 
@@ -67,6 +67,8 @@ class AudioRulesView extends HTMLElement {
   #mappingIdx = 0;
   #schemaIdx = 0;
   #loaded = false;
+  #sim = { kind: "schema", count: 8, schemaIdx: 0, mapping: "" };
+  #simResult: { plan?: AudioPlan; errors?: string[] } | null = null;
 
   connectedCallback() {
     this.style.cssText = "display:block;";
@@ -154,7 +156,7 @@ class AudioRulesView extends HTMLElement {
       o.value = t;
       tags.append(o);
     }
-    this.append(tags, this.#renderGroups(), this.#renderSchemas(), this.#renderMappings(), this.#renderRules());
+    this.append(tags, this.#renderGroups(), this.#renderSchemas(), this.#renderMappings(), this.#renderRules(), this.#renderSimulator());
   }
 
   // ---- 1. Ausgabegruppen -------------------------------------------------------------------------------
@@ -370,6 +372,62 @@ class AudioRulesView extends HTMLElement {
       box.append(t);
     }
     return box;
+  }
+
+  // ---- 5. Testwerkzeug ----------------------------------------------------------------------------------
+  #renderSimulator(): HTMLElement {
+    const doc = this.#doc!;
+    const sec = el("div", BOX);
+    sec.append(el("div", "font-weight:600;font-size:15px;margin-bottom:2px;", "5 · Testen (Quelle simulieren)"));
+    sec.append(el("div", `${DIM}font-size:12px;margin-bottom:8px;`,
+      "Rechnet mit dem Entwurf, der oben im Editor steht (auch ungespeichert), und zeigt, was mit einer Quelle passieren würde — ohne Medien. Dieselbe Logik wie in den Playern."));
+    const kinds: [string, string][] = [
+      ["schema", "Datei laut Spurschema"], ["mono-n", "Datei mit N Mono-Spuren (ohne Schema)"],
+      ["live-stereo", "Live: Stereo-Programmton"], ["live-mono", "Live: Mono-Programmton"], ["live-51", "Live: 5.1-Programmton"],
+    ];
+    const row = el("div", "display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:8px;");
+    row.append(field("Quelle", select(kinds, this.#sim.kind, (v) => { this.#sim.kind = v; this.#render(); }, "270px")));
+    if (this.#sim.kind === "schema") {
+      row.append(field("Schema", select(doc.trackSchemas.map((s, i): [string, string] => [String(i), s.id]), String(this.#sim.schemaIdx), (v) => { this.#sim.schemaIdx = Number(v); }, "180px")));
+    }
+    if (this.#sim.kind === "mono-n") row.append(field("Spuren", textInput(String(this.#sim.count), (v) => { this.#sim.count = Number(v) || 1; }, { width: "60px" })));
+    row.append(field("Zuordnung", select([["", "keine (Vorgaben/Regeln)"], ...doc.mappings.map((m): [string, string] => [m.id, m.label || m.id])], this.#sim.mapping, (v) => { this.#sim.mapping = v; }, "260px")));
+    row.append(button("Berechnen", () => void this.#simulate(), "omp-btn-primary"));
+    sec.append(row);
+    const out = el("div", "font-size:13px;");
+    const r = this.#simResult;
+    if (r?.errors) for (const e of r.errors) out.append(el("div", "color:var(--omp-danger,#d33);", e));
+    if (r?.plan) {
+      const label = (id: string) => doc.outputProfile.groups.find((g) => g.id === id)?.label || id;
+      const colors = { ok: "", rule: "color:var(--omp-warn,#b8860b);", silent: `${DIM}`, failed: "color:var(--omp-danger,#d33);" };
+      for (const pr of planRows(r.plan, label)) {
+        const line = el("div", `padding:2px 0;${colors[pr.tone]}`);
+        line.append(el("b", "display:inline-block;min-width:150px;", pr.label), document.createTextNode(pr.text));
+        out.append(line);
+      }
+      for (const w of r.plan.warnings) out.append(el("div", "color:var(--omp-warn,#b8860b);padding-top:2px;", `⚠ ${w}`));
+    }
+    sec.append(out);
+    return sec;
+  }
+
+  async #simulate() {
+    const doc = this.#doc;
+    if (!doc) return;
+    const source = simulatedSource(this.#sim.kind, this.#sim.count, doc.trackSchemas[this.#sim.schemaIdx]);
+    try {
+      const res = await apiFetch("/api/v1/audio-rules/simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ settings: cleanDoc(doc), source, mapping: this.#sim.mapping || null }),
+      });
+      if (!res.ok) this.#simResult = { errors: [(await res.text()) || `Fehler ${res.status}`] };
+      else this.#simResult = (await res.json()) as { plan?: AudioPlan; errors?: string[] } & AudioPlan;
+      if (this.#simResult && !("errors" in this.#simResult) && "groups" in this.#simResult) this.#simResult = { plan: this.#simResult as unknown as AudioPlan };
+    } catch {
+      this.#simResult = { errors: ["Keine Verbindung zum Server."] };
+    }
+    this.#render();
   }
 
   /** Eingabefelder für die ausführbaren Verarbeitungsschritte Gain (dB) und Delay (ms) einer Quellvorgabe. */

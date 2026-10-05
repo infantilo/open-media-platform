@@ -461,6 +461,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("DELETE /api/v1/catalog/{type}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteCatalogEntry(launcherSvc)))
 	mux.HandleFunc("GET /api/v1/audio-rules", g.requireAuth(handleGetAudioRules(nodeSettingsStore)))
 	mux.HandleFunc("GET /api/v1/audio-rules/default", g.requireAuth(handleGetAudioRulesDefault()))
+	mux.HandleFunc("POST /api/v1/audio-rules/simulate", g.requireAuth(handleSimulateAudioRules()))
 	mux.HandleFunc("PUT /api/v1/audio-rules", g.requireVerbGlobal(authz.VerbAdmin, handlePutAudioRules(nodeSettingsStore)))
 	mux.HandleFunc("GET /api/v1/instances", g.requireAuth(handleListInstances(launcherSvc, hostMetrics)))
 	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, handlePostInstance(launcherSvc, authzStore, ioPortStore)))

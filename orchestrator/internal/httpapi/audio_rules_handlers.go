@@ -1,12 +1,18 @@
 package httpapi
 
 import (
+	"bytes"
+	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 )
@@ -374,4 +380,51 @@ func parseAudioTagExpr(src string) error {
 		return fmt.Errorf("unerwartetes '%s'", tokens[pos])
 	}
 	return nil
+}
+
+// audioSimCandidates sind die Fundorte des Testprogramms `audio-sim` (Rust-Crate omp-audio-rules);
+// `OMP_AUDIO_SIM_BIN` überschreibt sie. Relativ zum Arbeitsverzeichnis des Orchestrators, wie die
+// Kommandos im Node-Katalog.
+func audioSimBinary() string {
+	if p := os.Getenv("OMP_AUDIO_SIM_BIN"); p != "" {
+		return p
+	}
+	for _, p := range []string{"nodes/target/release/audio-sim", "nodes/target/debug/audio-sim", "../nodes/target/release/audio-sim", "../nodes/target/debug/audio-sim"} {
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
+// handleSimulateAudioRules löst für eine beschriebene Quelle einen Audio-Plan auf (Testwerkzeug im
+// Editor „Audio-Ausgabe“). Die Logik liefert dasselbe Rust-Crate wie die Nodes (Programm
+// `audio-sim`), damit es keine zweite Implementierung gibt; gerechnet wird mit dem im Editor
+// stehenden, auch noch ungespeicherten Dokument.
+func handleSimulateAudioRules() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		bin := audioSimBinary()
+		if bin == "" {
+			http.Error(w, "audio-sim nicht gefunden (cargo build -p omp-audio-rules --bin audio-sim)", http.StatusServiceUnavailable)
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			http.Error(w, "unreadable body", http.StatusBadRequest)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, bin)
+		cmd.Stdin = bytes.NewReader(body)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		if err := cmd.Run(); err != nil {
+			http.Error(w, "audio-sim fehlgeschlagen: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(out.Bytes())
+	}
 }

@@ -1063,6 +1063,12 @@ mit **Speichern**; **Auf Standard zurücksetzen** lädt die mitgelieferten ORF-W
    senden (Alarm)*, jeweils mit optionalem Hinweistext. Beispiel: 5.1 → „nimm `role:pt AND
    layout:stereo` über Upmix, sonst Stille“.
 
+5. **Testen** — unten im Editor beschreibst du eine Quelle (Datei laut Spurschema, N Mono-Spuren oder
+   Live mit Stereo/Mono/5.1), wählst optional eine Zuordnung und klickst **Berechnen**: Du siehst je
+   Gruppe, aus welchen Spuren sie entsteht, welche Ersatzregel greift oder ob sie still bleibt —
+   ohne Medien und mit dem aktuellen, auch ungespeicherten Stand des Editors. (Der Orchestrator
+   ruft dafür das Programm `audio-sim` auf; es entsteht mit `make nodes`.)
+
 **Pro Event:** Im Event-Editor der Playout-Automation wählst du im Reiter **Audio** die Zuordnung.
 Ohne Wahl gilt für MXF-Dateien die Vorlage „Stereo“, sonst der Programmton der Quelle. Sobald das
 Event gecued oder auf Sendung ist, zeigt der Reiter den aufgelösten Plan (je Gruppe: welche Spuren,

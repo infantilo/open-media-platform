@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -80,5 +81,24 @@ func TestAudioTagExprSyntax(t *testing.T) {
 		if parseAudioTagExpr(bad) == nil {
 			t.Errorf("%q muss ein Fehler sein", bad)
 		}
+	}
+}
+
+func TestSimulateAudioRulesUsesTheConfiguredBinary(t *testing.T) {
+	script := t.TempDir() + "/sim.sh"
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ncat >/dev/null\necho '{\"ok\":true}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OMP_AUDIO_SIM_BIN", script)
+	rec := httptest.NewRecorder()
+	handleSimulateAudioRules()(rec, httptest.NewRequest("POST", "/", strings.NewReader(`{"x":1}`)))
+	if rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != `{"ok":true}` {
+		t.Fatalf("unerwartete Antwort: %d %s", rec.Code, rec.Body.String())
+	}
+	t.Setenv("OMP_AUDIO_SIM_BIN", "/nonexistent/audio-sim")
+	rec = httptest.NewRecorder()
+	handleSimulateAudioRules()(rec, httptest.NewRequest("POST", "/", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("fehlendes Programm muss 502 liefern, got %d", rec.Code)
 	}
 }

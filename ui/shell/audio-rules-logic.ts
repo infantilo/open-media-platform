@@ -204,3 +204,40 @@ export function setChainParam(spec: SourceSpec, name: string, key: string, value
   if (rest.length > 0) spec.chain = rest;
   else delete spec.chain;
 }
+
+// ---- Testwerkzeug (Plan anzeigen) --------------------------------------------------------------------
+
+export interface PlanGroup { group: string; matrix: number[][]; silent: boolean; rule?: string; failed: boolean; warnings: string[] }
+export interface AudioPlan { src_channels: { track: number; name: string }[]; groups: PlanGroup[]; warnings: string[]; ok: boolean }
+
+export interface PlanRow { label: string; text: string; tone: "ok" | "rule" | "silent" | "failed" }
+
+/** Plan → eine lesbare Zeile je Zielgruppe (welche Spuren, gemischt?, Ersatzregel, still, Fehler). */
+export function planRows(plan: AudioPlan, groupLabel: (id: string) => string): PlanRow[] {
+  return plan.groups.map((g) => {
+    const tracks = new Set<number>();
+    g.matrix.forEach((row) => row.forEach((c, col) => { if (c) tracks.add(plan.src_channels[col].track); }));
+    const mixed = g.matrix.some((row) => row.filter((c) => c).length > 1 || row.some((c) => c && c !== 1));
+    const label = groupLabel(g.group);
+    if (g.failed) return { label, text: "Event würde NICHT gesendet (Regel „Fehler“)", tone: "failed" };
+    if (g.silent) return { label, text: "still", tone: "silent" };
+    const src = `Spur ${[...tracks].sort((a, b) => a - b).join(", ")}${mixed ? " (gemischt/umgerechnet)" : ""}`;
+    return { label, text: g.rule ? `${src} · Ersatz per Regel „${g.rule}“` : src, tone: g.rule ? "rule" : "ok" };
+  });
+}
+
+/** Quellvarianten des Testwerkzeugs → Beschreibung für `audio-sim`. */
+export function simulatedSource(kind: string, count: number, schema?: TrackSchema): { kind: "file" | "live"; tracks: SourceTrack[] } {
+  switch (kind) {
+    case "schema":
+      return { kind: "file", tracks: schema?.tracks ?? [] };
+    case "mono-n":
+      return { kind: "file", tracks: monoTracks(Math.max(1, count)) };
+    case "live-mono":
+      return { kind: "live", tracks: [{ n: 1, layout: "mono", tags: ["role:pt"] }] };
+    case "live-51":
+      return { kind: "live", tracks: [{ n: 1, layout: "5.1", tags: ["role:pt"] }] };
+    default:
+      return { kind: "live", tracks: [{ n: 1, layout: "stereo", tags: ["role:pt"] }] };
+  }
+}

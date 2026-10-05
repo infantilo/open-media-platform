@@ -1,7 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
   type AudioRulesDoc, channelNames, cleanDoc, hasBitExact, monoTracks, moveItem, parseSourceText, parseTags, setBitExact, slug, sourceText, specSummary,
-  toggleTrack, trackRowCount, uniqueId, chainParam, setChainParam, type SourceSpec,
+  toggleTrack, trackRowCount, uniqueId, chainParam, setChainParam, type SourceSpec, planRows, simulatedSource, type AudioPlan,
 } from "./audio-rules-logic.ts";
 
 Deno.test("Kanalnamen: Standard je Layout, eigene Namen gewinnen", () => {
@@ -89,4 +89,26 @@ Deno.test("Gain/Delay: setzen, lesen, mit 0 oder leer entfernen", () => {
   setChainParam(spec, "gain", "db", 0);
   setChainParam(spec, "delay", "ms", undefined);
   assertEquals(spec.chain, undefined);
+});
+
+Deno.test("Plan-Zeilen: Spuren, Mischung, Ersatzregel, still", () => {
+  const plan: AudioPlan = {
+    src_channels: [{ track: 1, name: "L" }, { track: 1, name: "R" }],
+    ok: true, warnings: [],
+    groups: [
+      { group: "pt", matrix: [[1, 0], [0, 1]], silent: false, failed: false, warnings: [] },
+      { group: "s51", matrix: [[1, 0], [0, 1], [0.5, 0.5]], silent: false, failed: false, rule: "51-aus-stereo", warnings: [] },
+      { group: "ad", matrix: [[0, 0], [0, 0]], silent: true, failed: false, warnings: [] },
+    ],
+  };
+  const rows = planRows(plan, (id) => id.toUpperCase());
+  assertEquals(rows.map((r) => r.text), ["Spur 1", "Spur 1 (gemischt/umgerechnet) · Ersatz per Regel „51-aus-stereo“", "still"]);
+  assertEquals(rows.map((r) => r.tone), ["ok", "rule", "silent"]);
+});
+
+Deno.test("Testquellen: Live-Varianten und N Mono-Spuren", () => {
+  assertEquals(simulatedSource("live-51", 0).tracks[0].layout, "5.1");
+  assertEquals(simulatedSource("mono-n", 4).tracks.length, 4);
+  assertEquals(simulatedSource("schema", 0, { id: "s", match: {}, tracks: [{ n: 1 }] }).tracks.length, 1);
+  assertEquals(simulatedSource("live-stereo", 0).kind, "live");
 });
