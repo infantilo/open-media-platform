@@ -29,7 +29,7 @@
 | AMWA BCP-003-01 | Secure transport for the NMOS control plane | Registry over TLS, opt-in, same model as orchestrator↔node mTLS |
 | AMWA BCP-007-03 | MXL as a standardized NMOS transport, not a proprietary one | Own schema-conformance tool against the real published JSON schemas (spec too new for an official AMWA suite yet) |
 | AMWA BCP-008-01/02 | Receiver/sender health status | Real signals (GStreamer jitterbuffer stats, PTP lock, DeckLink cable lock, SRT stats), live-verified |
-| MXL (Media eXchange Layer) | Zero-copy local media exchange | Read/write path run against MXL's own independent reference tools, both directions, down to actual pixels |
+| MXL v1.1.0 (Media eXchange Layer) | Zero-copy local media exchange | Read/write path run against MXL's own independent reference tools, both directions, down to actual pixels |
 | SMPTE ST 2110-20/30 | Video/audio over IP | Conformant SDP, live-verified against real RTP traffic |
 | AES67 (Dante-compatible) | Audio interop over IP | SAP discovery, live-verified |
 | PTP (IEEE 1588) | Network timebase for the 2110 paths | Opt-in domain, verified live-synchronized across two network namespaces |
@@ -182,8 +182,8 @@ Full walkthroughs and context for every screen above are in
   individually named and justified in the workflow file — no silent
   skips (and as of the latest pass, zero: all IS-05-01 exceptions,
   including the ones that needed a real Sender fixture, are closed).
-- MXL zero-copy shared memory for same-host media exchange, on the
-  current stable MXL release; SMPTE ST 2110 (+ SRT gateway for lossy
+- MXL zero-copy shared memory for same-host media exchange, on
+  **MXL v1.1.0** (GA, incl. the native Fabrics API); SMPTE ST 2110 (+ SRT gateway for lossy
   WANs) or MXL-native Fabrics (RDMA) for cross-host exchange,
   including AES67 audio (Dante-compatible). Because MXL is an open
   format shared by the whole software-defined-production ecosystem
