@@ -1,0 +1,429 @@
+{
+  "groups": [
+    {
+      "id": "pt",
+      "label": "Programmton",
+      "channels": 2
+    },
+    {
+      "id": "ad",
+      "label": "Hörfilm/AD",
+      "channels": 2
+    },
+    {
+      "id": "ot",
+      "label": "Originalton",
+      "channels": 2
+    },
+    {
+      "id": "dolbye",
+      "label": "Dolby E",
+      "channels": 2
+    },
+    {
+      "id": "surround51",
+      "label": "5.1 Diskret",
+      "channels": 6
+    }
+  ],
+  "presets": [
+    {
+      "id": "mono",
+      "label": "Mono",
+      "routes": [
+        {
+          "srcTrack": 1,
+          "group": "pt",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 1,
+          "group": "pt",
+          "groupChannel": 1
+        }
+      ]
+    },
+    {
+      "id": "stereo",
+      "label": "Stereo",
+      "routes": [
+        {
+          "srcTrack": 1,
+          "group": "pt",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 2,
+          "group": "pt",
+          "groupChannel": 1
+        }
+      ]
+    },
+    {
+      "id": "2ton-mono",
+      "label": "2-Ton-Mono",
+      "routes": [
+        {
+          "srcTrack": 1,
+          "group": "pt",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 1,
+          "group": "pt",
+          "groupChannel": 1
+        },
+        {
+          "srcTrack": 2,
+          "group": "ad",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 2,
+          "group": "ad",
+          "groupChannel": 1
+        }
+      ]
+    },
+    {
+      "id": "stereo-hoerfilm",
+      "label": "Stereo/Hörfilm",
+      "routes": [
+        {
+          "srcTrack": 1,
+          "group": "pt",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 2,
+          "group": "pt",
+          "groupChannel": 1
+        },
+        {
+          "srcTrack": 5,
+          "group": "ad",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 6,
+          "group": "ad",
+          "groupChannel": 1
+        }
+      ]
+    },
+    {
+      "id": "stereo-ot-56",
+      "label": "Stereo/OT 5,6",
+      "routes": [
+        {
+          "srcTrack": 1,
+          "group": "pt",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 2,
+          "group": "pt",
+          "groupChannel": 1
+        },
+        {
+          "srcTrack": 5,
+          "group": "ot",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 6,
+          "group": "ot",
+          "groupChannel": 1
+        }
+      ]
+    },
+    {
+      "id": "stereo-ot",
+      "label": "Stereo/OT",
+      "routes": [
+        {
+          "srcTrack": 1,
+          "group": "pt",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 2,
+          "group": "pt",
+          "groupChannel": 1
+        },
+        {
+          "srcTrack": 7,
+          "group": "ot",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 8,
+          "group": "ot",
+          "groupChannel": 1
+        }
+      ]
+    },
+    {
+      "id": "stereo-hoerfilm-ot",
+      "label": "Stereo/Hörfilm/OT",
+      "routes": [
+        {
+          "srcTrack": 1,
+          "group": "pt",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 2,
+          "group": "pt",
+          "groupChannel": 1
+        },
+        {
+          "srcTrack": 5,
+          "group": "ad",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 6,
+          "group": "ad",
+          "groupChannel": 1
+        },
+        {
+          "srcTrack": 7,
+          "group": "ot",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 8,
+          "group": "ot",
+          "groupChannel": 1
+        }
+      ]
+    },
+    {
+      "id": "stereo-dolbye",
+      "label": "Stereo/Dolby E",
+      "routes": [
+        {
+          "srcTrack": 1,
+          "group": "pt",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 2,
+          "group": "pt",
+          "groupChannel": 1
+        },
+        {
+          "srcTrack": 3,
+          "group": "dolbye",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 4,
+          "group": "dolbye",
+          "groupChannel": 1
+        }
+      ]
+    },
+    {
+      "id": "stereo-dolbye-hoerfilm",
+      "label": "Stereo/Dolby E/Hörfilm",
+      "routes": [
+        {
+          "srcTrack": 1,
+          "group": "pt",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 2,
+          "group": "pt",
+          "groupChannel": 1
+        },
+        {
+          "srcTrack": 3,
+          "group": "dolbye",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 4,
+          "group": "dolbye",
+          "groupChannel": 1
+        },
+        {
+          "srcTrack": 5,
+          "group": "ad",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 6,
+          "group": "ad",
+          "groupChannel": 1
+        }
+      ]
+    },
+    {
+      "id": "stereo-dolbye-ot-56",
+      "label": "Stereo/Dolby E/OT 5,6",
+      "routes": [
+        {
+          "srcTrack": 1,
+          "group": "pt",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 2,
+          "group": "pt",
+          "groupChannel": 1
+        },
+        {
+          "srcTrack": 3,
+          "group": "dolbye",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 4,
+          "group": "dolbye",
+          "groupChannel": 1
+        },
+        {
+          "srcTrack": 5,
+          "group": "ot",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 6,
+          "group": "ot",
+          "groupChannel": 1
+        }
+      ]
+    },
+    {
+      "id": "stereo-dolbye-ot",
+      "label": "Stereo/Dolby E/OT",
+      "routes": [
+        {
+          "srcTrack": 1,
+          "group": "pt",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 2,
+          "group": "pt",
+          "groupChannel": 1
+        },
+        {
+          "srcTrack": 3,
+          "group": "dolbye",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 4,
+          "group": "dolbye",
+          "groupChannel": 1
+        },
+        {
+          "srcTrack": 7,
+          "group": "ot",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 8,
+          "group": "ot",
+          "groupChannel": 1
+        }
+      ]
+    },
+    {
+      "id": "stereo-dolbye-hoerfilm-ot",
+      "label": "Stereo/Dolby E/Hörfilm/OT",
+      "routes": [
+        {
+          "srcTrack": 1,
+          "group": "pt",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 2,
+          "group": "pt",
+          "groupChannel": 1
+        },
+        {
+          "srcTrack": 3,
+          "group": "dolbye",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 4,
+          "group": "dolbye",
+          "groupChannel": 1
+        },
+        {
+          "srcTrack": 5,
+          "group": "ad",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 6,
+          "group": "ad",
+          "groupChannel": 1
+        },
+        {
+          "srcTrack": 7,
+          "group": "ot",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 8,
+          "group": "ot",
+          "groupChannel": 1
+        }
+      ]
+    },
+    {
+      "id": "stereo-51-diskret",
+      "label": "Stereo/5.1 diskret",
+      "routes": [
+        {
+          "srcTrack": 1,
+          "group": "pt",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 2,
+          "group": "pt",
+          "groupChannel": 1
+        },
+        {
+          "srcTrack": 3,
+          "group": "surround51",
+          "groupChannel": 0
+        },
+        {
+          "srcTrack": 4,
+          "group": "surround51",
+          "groupChannel": 1
+        },
+        {
+          "srcTrack": 5,
+          "group": "surround51",
+          "groupChannel": 2
+        },
+        {
+          "srcTrack": 6,
+          "group": "surround51",
+          "groupChannel": 3
+        },
+        {
+          "srcTrack": 7,
+          "group": "surround51",
+          "groupChannel": 4
+        },
+        {
+          "srcTrack": 8,
+          "group": "surround51",
+          "groupChannel": 5
+        }
+      ]
+    }
+  ]
+}

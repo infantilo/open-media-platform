@@ -30,6 +30,7 @@ members = [
     "omp-pipeline-controller",
     "omp-scope",
     "omp-webrtc-gateway",
+    "omp-audio-rules",
 ]
 
 # Eigener Rust-Code mit Pixel-Schleifen (v210-Packen/Alpha-Key-Extraktion in

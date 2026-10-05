@@ -1,6 +1,6 @@
 # Entwurf: Dynamische Audio-Zuordnung und Regel-Engine
 
-Status: **Entwurf zur Freigabe** (2026-10-05), noch kein Code. Ersetzt langfristig
+Status: **freigegeben** (2026-10-05, Umsetzung nach Abschnitt 7). A1 erledigt (Crate `omp-audio-rules`, 21 Tests). Ersetzt langfristig
 die fest einkompilierten Programmgruppen/Shuffle-Presets von `omp-mxf-player` und
 `omp-channel-player` und erweitert die Audio-Absicht (`AudioIntent`, P5) der
 Playout-Automation auf **alle** Eventtypen (Datei, Live, Standbild).
@@ -85,8 +85,7 @@ Regeln sind Daten, geordnet, erste passende gewinnt (mit optionalem „weiter pr
 ```json
 { "group": "surround51",
   "when": { "missing": "role:pt AND layout:5.1" },
-  "then": [ { "use": "role:pt AND layout:stereo", "via": "upmix51" },
-            { "use": "role:pt", "via": "mono-to-51" },
+  "then": [ { "use": { "select": "role:pt AND layout:stereo", "via": "upmix51" } },
             { "silence": true, "warn": "Kein 5.1-Programmton, Stille" } ] }
 ```
 
@@ -135,7 +134,7 @@ der im Editor sichtbar und änderbar ist.
 
 | Schritt | Inhalt |
 |---|---|
-| A1 | Crate `omp-audio-rules`: Datenmodell, Tag-Ausdrücke, Resolver, Standard-Regelsatz, Tests (kein GStreamer) |
+| A1 ✓ | Crate `omp-audio-rules`: Datenmodell, Tag-Ausdrücke, Resolver, Standard-Regelsatz, Tests (kein GStreamer) |
 | A2 | Orchestrator: Speicherung/Validierung (`outputProfile`, `trackSchema`, `mapping`, `ruleSet`), Import der 13 ORF-Presets und 5 Gruppen als Standard |
 | A3 | Gemeinsames Ausspiel-Crate: dynamische Zielgruppen, Matrix, Plan→GStreamer; `omp-channel-player` darauf umstellen |
 | A4 | Automation: Event-Audioplan, Resolve beim Cue, Warnungen/As-Run, API |

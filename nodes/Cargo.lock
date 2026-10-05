@@ -1395,6 +1395,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-audio-rules"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "omp-channel-player"
 version = "0.1.0"
 dependencies = [
