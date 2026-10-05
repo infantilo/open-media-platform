@@ -223,9 +223,12 @@ gibt es in der Oberfläche noch nicht.
 gestoppter Workflow liegt als Kachel in der Zone des Hosts, auf dem er laufen
 würde (voraussichtlicher Host je Rolle laut Plan-Vorschau, s. Abschnitt 4).
 Verteilt er sich auf mehrere Hosts, liegt seine Kachel in „Gruppen über mehrere
-Hosts“, und **jede beteiligte Host-Zone zeigt am Fuß einen gestrichelten Block
-„Geplant (nicht gestartet)“** mit dem Workflow-Namen und den Rollen, die dort
-vorgesehen sind. Der Block verschwindet, sobald der Workflow läuft und seine
+Hosts“, und **jede beteiligte Host-Zone zeigt oben, direkt unter dem Zonenkopf,
+einen gestrichelten Block „Geplant (nicht gestartet)“**. Jede Zeile steht für
+einen Workflow (`▣ Workflow-Name: Rolle, Rolle`) und nennt nur die Rollen, die
+auf diesem Host vorgesehen sind (fester Host der Rolle, sonst die automatische
+Platzierung laut Plan-Vorschau). Es ist eine Vorschau: dort läuft noch nichts.
+Der Block verschwindet, sobald der Workflow läuft und seine
 echten Kacheln in den Zonen stehen.
 
 ### 4.1 Hot-Standby (Redundanz für kritische Rollen)
