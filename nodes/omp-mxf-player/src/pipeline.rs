@@ -78,6 +78,8 @@ pub struct Config {
     /// 2026-08-06, s. presets.rs-Moduldoku).
     pub groups: Vec<presets::ProgramGroup>,
     pub presets: Vec<presets::AudioPreset>,
+    /// Gemeinsames Audio-Dokument: die Matrizen je Gruppe löst `omp_audio_rules::resolve` auf.
+    pub audio: Arc<omp_audio_rules::AudioSettings>,
     pub label: String,
     pub width: u32,
     pub height: u32,
@@ -566,6 +568,7 @@ fn build_mxf_branch(
     groups: &[presets::ProgramGroup],
     path: &str,
     preset: &presets::AudioPreset,
+    audio: Arc<omp_audio_rules::AudioSettings>,
     width: u32,
     height: u32,
 ) -> Result<Branch, String> {
@@ -743,7 +746,8 @@ fn build_mxf_branch(
     // GStreamer-Signal-Closure muss 'static sein, ein Klon des bereits
     // vorliegenden Presets ist hier einfacher und robuster als eine
     // erneute Id-Suche in einer geklonten Presets-Liste, s. presets.rs).
-    let preset_owned = preset.clone();
+    let preset_id_owned = preset.id.clone();
+    let path_owned = path.to_string();
     let pipeline_for_nmp = pipeline.clone();
     let elements_for_nmp = elements.clone();
     // Geklont, damit die ursprüngliche `interleave`-Variable NICHT vom
@@ -824,9 +828,20 @@ fn build_mxf_branch(
             elements_for_nmp.lock().expect("lock poisoned").push(queue);
         }
 
+        // Spurzahl steht fest: Plan der gemeinsamen Audio-Engine auflösen (Spurschema, Zuordnung, Ersatzregeln).
+        let source = audio.mxf_source(input_channels, &path_owned);
+        let mapping = audio.mappings.iter().find(|m| m.id == preset_id_owned);
+        let plan = omp_audio_rules::resolve(&audio.output_profile, &source, mapping, &audio.rule_set);
+        for w in &plan.warnings {
+            eprintln!("omp-mxf-player: Audio: {w}");
+        }
+        let ncols = plan.src_channels.len().max(1);
         for (group_id, group_channels, matrix_el) in &matrix_elements {
-            let coeffs = presets::matrix_for(&preset_owned, group_id, *group_channels, input_channels.max(1));
-            matrix_el.set_property("in-channels", input_channels.max(1));
+            let coeffs: Vec<Vec<f64>> = match plan.groups.iter().find(|g| &g.group == group_id) {
+                Some(g) if g.matrix.iter().all(|r| r.len() == ncols) => g.matrix.iter().map(|r| r.iter().map(|&c| f64::from(c)).collect()).collect(),
+                _ => vec![vec![0.0; ncols]; *group_channels as usize],
+            };
+            matrix_el.set_property("in-channels", ncols as u32);
             matrix_el.set_property("out-channels", *group_channels);
             matrix_el.set_property("matrix", matrix_to_gst_array(&coeffs));
         }
@@ -1062,6 +1077,7 @@ struct ActivePipeline {
     branches: HashMap<Slot, Branch>,
     groups: Vec<presets::ProgramGroup>,
     presets: Vec<presets::AudioPreset>,
+    audio: Arc<omp_audio_rules::AudioSettings>,
     width: u32,
     height: u32,
     _mxl_video_output: MxlVideoOutput,
@@ -1166,7 +1182,7 @@ fn replace_slot(active: &mut ActivePipeline, slot: Slot, source: &ItemSource) ->
     let build_result = match source {
         ItemSource::TestPattern => build_empty_branch(&active.pipeline, video_pad, group_pads, &active.groups, active.width, active.height),
         ItemSource::Mxf { path, preset_id } => match presets::find_preset(&active.presets, preset_id) {
-            Some(preset) => build_mxf_branch(&active.pipeline, video_pad, group_pads, &active.groups, path, preset, active.width, active.height),
+            Some(preset) => build_mxf_branch(&active.pipeline, video_pad, group_pads, &active.groups, path, preset, active.audio.clone(), active.width, active.height),
             None => Err(format!("unknown preset: {preset_id}")),
         },
     };
@@ -1343,6 +1359,7 @@ fn build(context: &Arc<MxlContext>, config: &Config, _event_tx: UnboundedSender<
         branches,
         groups: config.groups.clone(),
         presets: config.presets.clone(),
+        audio: config.audio.clone(),
         width: config.width,
         height: config.height,
         _mxl_video_output: mxl_video_output,

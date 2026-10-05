@@ -4,6 +4,8 @@
 //! ([`Mapping`]); fehlt etwas, greifen die [`Rule`]s (Ersatzspur, Up-/Downmix,
 //! Verarbeitung, Stille). Ergebnis ist ein [`AudioPlan`] mit Matrizen je Gruppe.
 
+#[cfg(feature = "client")]
+pub mod client;
 pub mod defaults;
 pub mod model;
 pub mod processors;

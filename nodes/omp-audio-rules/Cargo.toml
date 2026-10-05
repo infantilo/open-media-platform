@@ -8,6 +8,11 @@ publish = false
 # reine Logik ohne GStreamer/HTTP/Uhr. Gemeinsam genutzt von Playout-Automation
 # (Auflösung beim Cue), Ausspielnodes (Plan -> Matrix) und dem Orchestrator
 # (Validierung der Einstellungen).
+[features]
+# Lädt das Dokument vom Orchestrator (Service-Token), für die Nodes.
+client = ["dep:ureq"]
+
 [dependencies]
+ureq = { version = "3.3.0", features = ["json"], optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"

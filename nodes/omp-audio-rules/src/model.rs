@@ -282,6 +282,21 @@ pub struct AudioSettings {
 }
 
 impl AudioSettings {
+    /// Quelle ohne Mehrspur-Container (Live, Testton, Standbild, generische Datei): ein Programmton-Stream.
+    pub fn stereo_program_source(kind: SourceKind) -> SourceDesc {
+        SourceDesc { kind, tracks: vec![SourceTrack { n: 1, layout: Layout::Stereo, channels: vec![], tags: vec!["role:pt".to_string()] }] }
+    }
+
+    /// MXF-Datei mit `track_count` Spuren: Spurschema per Probe, sonst `pos:N`-Mono-Spuren.
+    pub fn mxf_source(&self, track_count: u32, path: &str) -> SourceDesc {
+        let probe = ProbeInfo { format: "mxf".to_string(), track_count, path: path.to_string() };
+        if let Some(schema) = crate::resolve::select_schema(&self.track_schemas, &probe) {
+            return SourceDesc { kind: SourceKind::File, tracks: schema.tracks.clone() };
+        }
+        let tracks = (1..=track_count).map(|n| SourceTrack { n, layout: Layout::Mono, channels: vec![], tags: vec![format!("pos:{n}")] }).collect();
+        SourceDesc { kind: SourceKind::File, tracks }
+    }
+
     /// Semantische Prüfung (s. [`crate::validate`]); leer = gültig.
     pub fn validate(&self) -> Vec<String> {
         crate::resolve::validate(&self.output_profile, &self.track_schemas, &self.mappings, &self.rule_set)

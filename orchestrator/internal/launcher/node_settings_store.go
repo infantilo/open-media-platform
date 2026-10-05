@@ -23,7 +23,7 @@ var ErrNodeSettingsInvalidJSON = errors.New("launcher: node settings data is not
 // Node-Typ, gleiches Muster wie CatalogStore. Bewusst generisch: kennt
 // nur "irgendein JSON-Blob unter diesem Node-Typ-Namen", jede
 // typspezifische Validierung/Bedeutung gehört in die jeweilige
-// httpapi-Handler-Schicht (s. node_settings_handlers.go), nicht hierher
+// httpapi-Handler-Schicht (s. audio_rules_handlers.go), nicht hierher
 // — künftige Node-Typen mit eigenen Einstellungen brauchen dafür keine
 // neue Migration/Store, nur einen neuen Handler.
 type NodeSettingsStore struct {

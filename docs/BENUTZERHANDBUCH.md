@@ -1038,7 +1038,7 @@ Startumgebung `OMP_WEBRTC_PUBLIC_IP` und `OMP_WEBRTC_ICE_PORT` setzen.
 ## 10c. Audio-Ausgabe (Ausgabegruppen, Zuordnung, Ersatzregeln)
 
 Unter **Administration → Audio-Ausgabe** legst du fest, wie die Kanal-Player ihren Ton ausgeben.
-Alles ist Konfiguration, nichts ist fest im Programm — andere Gruppen, mehr Spuren (z. B. 16 bei
+Gilt für den Kanal-Player und den MXF-Player (dessen früherer eigener Editor für Programmgruppen und Presets im Flow-Editor entfällt). Alles ist Konfiguration, nichts ist fest im Programm — andere Gruppen, mehr Spuren (z. B. 16 bei
 XAVC) oder neue Ersatzregeln brauchen keine Programmänderung. Gespeichert wird das ganze Dokument
 mit **Speichern**; **Auf Standard zurücksetzen** lädt die mitgelieferten ORF-Werte in den Editor
 (erst Speichern übernimmt sie).

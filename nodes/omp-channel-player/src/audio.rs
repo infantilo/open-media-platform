@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use gst::prelude::*;
 use gstreamer as gst;
-use omp_audio_rules::{AudioPlan, AudioSettings, Layout, Mapping, ProbeInfo, SourceDesc, SourceKind, SourceTrack};
+use omp_audio_rules::{AudioPlan, AudioSettings, Mapping, SourceDesc, SourceKind};
 
 use crate::pipeline::SAMPLE_RATE;
 
@@ -45,46 +45,9 @@ impl AudioCtx {
     }
 }
 
-fn service_token(orchestrator_url: &str, instance_id: &str, launch_secret: &str) -> Result<String, String> {
-    let url = format!("{}/api/v1/instances/{}/service-token", orchestrator_url.trim_end_matches('/'), instance_id);
-    let mut resp = ureq::post(&url).send_json(serde_json::json!({ "launchSecret": launch_secret })).map_err(|e| format!("service-token request failed: {e}"))?;
-    let body: serde_json::Value = resp.body_mut().read_json().map_err(|e| format!("service-token response: {e}"))?;
-    body.get("token").and_then(|v| v.as_str()).map(str::to_string).ok_or_else(|| "service-token response missing 'token' field".to_string())
-}
-
-/// Lädt das Audio-Dokument vom Orchestrator; jeder Fehler (kein Launcher,
-/// nicht erreichbar, ungültig) fällt mit Log-Zeile auf die eingebauten
-/// Standardwerte zurück, damit der Node immer startet.
+/// Lädt das Audio-Dokument vom Orchestrator (Fallback: Standardwerte), s. `omp_audio_rules::client`.
 pub fn load_settings(orchestrator_url: &str, instance_id: Option<&str>, launch_secret: &str) -> AudioSettings {
-    let fallback = |why: String| {
-        eprintln!("omp-channel-player: Audio-Einstellungen: {why} — verwende eingebaute Standardwerte");
-        omp_audio_rules::defaults::default_settings()
-    };
-    let Some(instance_id) = instance_id.filter(|_| !launch_secret.is_empty()) else {
-        return fallback("OMP_INSTANCE_ID/OMP_LAUNCH_SECRET fehlen".to_string());
-    };
-    let token = match service_token(orchestrator_url, instance_id, launch_secret) {
-        Ok(t) => t,
-        Err(e) => return fallback(e),
-    };
-    let url = format!("{}/api/v1/audio-rules", orchestrator_url.trim_end_matches('/'));
-    let fetched = ureq::get(&url)
-        .header("Authorization", &format!("Bearer {token}"))
-        .call()
-        .map_err(|e| format!("Abruf fehlgeschlagen: {e}"))
-        .and_then(|mut r| r.body_mut().read_json::<AudioSettings>().map_err(|e| format!("Antwort ungültig: {e}")));
-    match fetched {
-        Ok(s) => {
-            let errs = s.validate();
-            if errs.is_empty() {
-                eprintln!("omp-channel-player: Audio-Einstellungen vom Orchestrator geladen ({} Zielgruppen, {} Zuordnungen)", s.output_profile.groups.len(), s.mappings.len());
-                s
-            } else {
-                fallback(format!("Dokument ungültig ({})", errs.join("; ")))
-            }
-        }
-        Err(e) => fallback(e),
-    }
+    omp_audio_rules::client::load_settings("omp-channel-player", orchestrator_url, instance_id, launch_secret)
 }
 
 fn group_caps(channels: u32) -> gst::Caps {
@@ -195,17 +158,12 @@ impl Distributor {
 
     /// Quelle ohne Mehrspur-Container: ein Programmton-Stream (Live, Testton, Standbild, generische Datei).
     pub fn stereo_program_source(&self, kind: SourceKind) -> SourceDesc {
-        SourceDesc { kind, tracks: vec![SourceTrack { n: 1, layout: Layout::Stereo, channels: vec![], tags: vec!["role:pt".to_string()] }] }
+        AudioSettings::stereo_program_source(kind)
     }
 
     /// MXF-Datei mit `track_count` Spuren: Schema per Probe, sonst `pos:N`-Mono-Spuren.
     pub fn mxf_source(&self, track_count: u32, path: &str) -> SourceDesc {
-        let probe = ProbeInfo { format: "mxf".to_string(), track_count, path: path.to_string() };
-        if let Some(schema) = omp_audio_rules::select_schema(&self.ctx.settings.track_schemas, &probe) {
-            return SourceDesc { kind: SourceKind::File, tracks: schema.tracks.clone() };
-        }
-        let tracks = (1..=track_count).map(|n| SourceTrack { n, layout: Layout::Mono, channels: vec![], tags: vec![format!("pos:{n}")] }).collect();
-        SourceDesc { kind: SourceKind::File, tracks }
+        self.ctx.settings.mxf_source(track_count, path)
     }
 
     pub fn mapping_named(&self, id: &str) -> Option<&Mapping> {

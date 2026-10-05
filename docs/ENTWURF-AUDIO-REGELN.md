@@ -141,7 +141,7 @@ der im Editor sichtbar und änderbar ist.
 | A5 ✓ (ohne Testwerkzeug) | UI: Editor „Audio-Ausgabe“ (Gruppen, Schemata, Vorlagen-Matrix, Regel-Baukasten, Testwerkzeug), Event-Reiter, Tabellenspalte |
 | A6 ✓ | Prozessoren: Up-/Downmix und Mono↔Stereo als Matrizen (A1), `gain` und `delay` als Kette im Kanal-Player; `loudness` zurückgestellt (kein R128-Element im System) |
 | A7 | `dialog-enhance` („Klare Sprache“) — **auf später verschoben** (Nutzerentscheidung 2026-10-05) |
-| A8 | `omp-mxf-player` auf dieselbe Engine migrieren, hartkodierte Presets entfernen |
+| A8 ✓ | `omp-mxf-player` auf dieselbe Engine migrieren, hartkodierte Presets entfernen |
 
 Handbuch, Node-Tabelle und Katalogbeschreibung werden in jedem Schritt mitgeführt.
 

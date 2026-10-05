@@ -27,7 +27,6 @@
 //! "stereo-dolbye-hoerfilm" für den Bedienenden reine Rateerei — genau
 //! der ursprünglich vom generischen B6-Panel unbeantwortete Bedarf.
 
-mod orchestrator_settings;
 mod pipeline;
 mod presets;
 mod uibundle;
@@ -455,7 +454,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         eprintln!("omp-mxf-player: OMP_MEDIA_DIR ({media_dir:?}) konnte nicht angelegt werden: {e}");
     }
 
-    let mxf_settings = orchestrator_settings::load_settings(&orchestrator_url, instance_id.as_deref(), &launch_secret);
+    // Gemeinsames Audio-Dokument (Ausgabeprofil, Spurschemata, Vorlagen, Regeln) vom Orchestrator; die
+    // Parameter `programGroups`/`shufflePresets` sind eine Ansicht darauf (presets.rs).
+    let audio_doc = Arc::new(omp_audio_rules::client::load_settings("omp-mxf-player", &orchestrator_url, instance_id.as_deref(), &launch_secret));
+    let mxf_settings = presets::from_audio_settings(&audio_doc);
 
     let video_flow_id = omp_node_sdk::idgen::new_v4();
     let group_flow_ids: Vec<String> = mxf_settings.groups.iter().map(|_| omp_node_sdk::idgen::new_v4()).collect();
@@ -470,6 +472,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         group_flow_ids: group_flow_ids.clone(),
         groups: mxf_settings.groups.clone(),
         presets: mxf_settings.presets.clone(),
+        audio: audio_doc.clone(),
         label: label.clone(),
         width,
         height,

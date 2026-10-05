@@ -459,8 +459,6 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/catalog", g.requireAuth(handleCatalog(launcherSvc)))
 	mux.HandleFunc("POST /api/v1/catalog", g.requireVerbGlobal(authz.VerbAdmin, handlePostCatalogEntry(launcherSvc)))
 	mux.HandleFunc("DELETE /api/v1/catalog/{type}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteCatalogEntry(launcherSvc)))
-	mux.HandleFunc("GET /api/v1/node-types/omp-mxf-player/settings", g.requireAuth(handleGetMxfPlayerSettings(nodeSettingsStore)))
-	mux.HandleFunc("PUT /api/v1/node-types/omp-mxf-player/settings", g.requireVerbGlobal(authz.VerbAdmin, handlePutMxfPlayerSettings(nodeSettingsStore)))
 	mux.HandleFunc("GET /api/v1/audio-rules", g.requireAuth(handleGetAudioRules(nodeSettingsStore)))
 	mux.HandleFunc("GET /api/v1/audio-rules/default", g.requireAuth(handleGetAudioRulesDefault()))
 	mux.HandleFunc("PUT /api/v1/audio-rules", g.requireVerbGlobal(authz.VerbAdmin, handlePutAudioRules(nodeSettingsStore)))
