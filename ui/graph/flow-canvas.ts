@@ -1434,6 +1434,11 @@ export class FlowCanvas extends HTMLElement {
   }
 
   // "Geplant"-Einträge einer Host-Zone: nicht gestartete Workflows, die sich über mehrere Zonen verteilen.
+  #zoneTopInset(zoneId: string): number {
+    if (this.#collapsedZoneIds.has(zoneId)) return 0;
+    const n = this.#ghostsForZone(zoneId).length;
+    return n > 0 ? ghostBlockHeight(n) : 0;
+  }
   #ghostsForZone(zoneId: string): GhostEntry[] {
     return ghostEntriesForZone(zoneId, this.#workflowsInScope().map((wf) => this.#planInput(wf)));
   }
@@ -1609,6 +1614,9 @@ export class FlowCanvas extends HTMLElement {
       // bestehenden ihren Platz damit nie mehr wegnehmen.
       const GAP = HOST_ZONE_TILE_GAP;
       const reserved: { y: number; height: number }[] = [];
+      // „Geplant“-Block steht oben direkt unter dem Zonenkopf: Kacheln beginnen darunter.
+      const ghostInset = this.#zoneTopInset(zone.id);
+      if (ghostInset > 0) reserved.push({ y: 0, height: HOST_ZONE_HEADER_HEIGHT + ghostInset });
       const overlapsReserved = (candidateY: number, height: number) =>
         reserved.some((r) => candidateY < r.y + r.height + GAP && candidateY + height + GAP > r.y);
 
@@ -3242,8 +3250,8 @@ export class FlowCanvas extends HTMLElement {
       if (!pos) continue;
       bottom = Math.max(bottom, pos.y - HOST_ZONE_MARGIN + (MIN_BODY_HEIGHT + HEADER_HEIGHT) + HOST_ZONE_MARGIN);
     }
-    const ghosts = this.#ghostsForZone(zoneId);
-    if (ghosts.length > 0) bottom += ghostBlockHeight(ghosts.length);
+    // Der „Geplant“-Block liegt oben; leere Zonen brauchen trotzdem Platz dafür.
+    bottom = Math.max(bottom, HOST_ZONE_HEADER_HEIGHT + this.#zoneTopInset(zoneId) + HOST_ZONE_MARGIN * 2);
     return bottom;
   }
 
@@ -3386,7 +3394,7 @@ export class FlowCanvas extends HTMLElement {
       const ghosts = collapsed ? [] : this.#ghostsForZone(zone.id);
       if (ghosts.length > 0) {
         const blockH = ghostBlockHeight(ghosts.length);
-        const y0 = bottom - blockH + 4;
+        const y0 = HOST_ZONE_HEADER_HEIGHT + 2;
         const frame = document.createElementNS(SVG_NS, "rect");
         frame.setAttribute("x", "8");
         frame.setAttribute("y", String(y0));
@@ -4146,7 +4154,7 @@ export class FlowCanvas extends HTMLElement {
     if (!range) return pos;
     const minX = range.xMin;
     const maxX = Math.max(minX, range.xMax - NODE_WIDTH);
-    const minY = HOST_ZONE_HEADER_HEIGHT + HOST_ZONE_MARGIN;
+    const minY = HOST_ZONE_HEADER_HEIGHT + HOST_ZONE_MARGIN + this.#zoneTopInset(zoneId);
     return {
       x: Math.min(Math.max(pos.x, minX), maxX),
       y: Math.max(pos.y, minY),
