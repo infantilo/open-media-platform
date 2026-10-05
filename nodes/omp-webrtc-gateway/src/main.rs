@@ -65,6 +65,9 @@ struct CameraStore {
     // trennen, wenn der widerrufene Token tatsächlich zur laufenden
     // Sitzung gehört (nicht z. B. zu einer bereits ersetzten/beendeten).
     active_token: Mutex<Option<String>>,
+    /// Handy-Sendeseite mit den Betriebswerten des Gateways als vorgewählte
+    /// Auflösung/Bildrate (einmal beim Start gebaut).
+    camera_page: Vec<u8>,
 }
 
 impl ParamStore for CameraStore {
@@ -155,7 +158,7 @@ impl ParamStore for CameraStore {
             ("GET", "/" | "/camera.html" | "/whip-test.html") => Some(RawResponse {
                 status: 200,
                 content_type: "text/html; charset=utf-8",
-                body: CAMERA_PAGE.as_bytes().to_vec(),
+                body: self.camera_page.clone(),
             }),
             // Uhrenabgleich für die Latenzmessung: die Seite schätzt daraus
             // ihren Versatz zur Server-Uhr (NTP-artig, kleinste RTT gewinnt).
@@ -309,6 +312,19 @@ async fn run_camera(common: Common) -> Result<(), Box<dyn std::error::Error + Se
         gateway: gateway.clone(),
         invites: Arc::new(invite::InviteStore::new()),
         active_token: Mutex::new(None),
+        // Remote-Nutzer sollen Auflösung/Bildrate schon passend zum
+        // Gateway-Betrieb vorgewählt vorfinden (Nutzerwunsch 2026-10-05).
+        camera_page: CAMERA_PAGE
+            .replace(
+                "/*OMP_DEFAULTS*/null",
+                &serde_json::json!({
+                    "w": width,
+                    "h": height,
+                    "fps": (fps_num as f64 / fps_den.max(1) as f64).round() as u32,
+                })
+                .to_string(),
+            )
+            .into_bytes(),
     });
 
     let handle = omp_node_sdk::start(

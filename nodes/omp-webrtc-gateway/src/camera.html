@@ -172,7 +172,20 @@
 </div>
 
 <script>
+// Vom Gateway beim Ausliefern gesetzt (Betriebsauflösung/-bildrate); `null`
+// bei statischem Öffnen der Datei.
+const OMP_DEFAULTS = /*OMP_DEFAULTS*/null;
 const $ = (id) => document.getElementById(id);
+(function preselect() {
+  if (!OMP_DEFAULTS) return;
+  const pick = (sel, value, label) => {
+    let opt = [...sel.options].find((o) => o.value === value);
+    if (!opt) { opt = new Option(label, value); sel.add(opt); }
+    sel.value = value;
+  };
+  pick($('res'), OMP_DEFAULTS.w + 'x' + OMP_DEFAULTS.h, OMP_DEFAULTS.w + '×' + OMP_DEFAULTS.h);
+  pick($('fps'), String(OMP_DEFAULTS.fps), String(OMP_DEFAULTS.fps));
+})();
 const log = (t) => { const l = $('log'); l.textContent = new Date().toLocaleTimeString() + ' ' + t + '\n' + l.textContent; };
 
 // Bugliste 2026-09-25 #2: `showConnectError` ist die einzige Stelle, die
