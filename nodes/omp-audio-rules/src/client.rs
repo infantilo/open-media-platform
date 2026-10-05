@@ -13,35 +13,32 @@ fn service_token(orchestrator_url: &str, instance_id: &str, launch_secret: &str)
     body.get("token").and_then(|v| v.as_str()).map(str::to_string).ok_or_else(|| "service-token response missing 'token' field".to_string())
 }
 
-/// `node` ist nur der Präfix der Log-Zeilen (z. B. "omp-channel-player").
-pub fn load_settings(node: &str, orchestrator_url: &str, instance_id: Option<&str>, launch_secret: &str) -> AudioSettings {
-    let fallback = |why: String| {
-        eprintln!("{node}: Audio-Einstellungen: {why} — verwende eingebaute Standardwerte");
-        defaults::default_settings()
-    };
-    let Some(instance_id) = instance_id.filter(|_| !launch_secret.is_empty()) else {
-        return fallback("OMP_INSTANCE_ID/OMP_LAUNCH_SECRET fehlen".to_string());
-    };
-    let token = match service_token(orchestrator_url, instance_id, launch_secret) {
-        Ok(t) => t,
-        Err(e) => return fallback(e),
-    };
+/// Strenger Abruf: jeder Fehler (kein Launcher, nicht erreichbar, ungültiges Dokument) ist ein `Err`.
+/// Für „Neu laden“ im laufenden Betrieb, wo ein Fehler sichtbar werden soll statt still auf Standard zu fallen.
+pub fn fetch_settings(orchestrator_url: &str, instance_id: Option<&str>, launch_secret: &str) -> Result<AudioSettings, String> {
+    let instance_id = instance_id.filter(|_| !launch_secret.is_empty()).ok_or("OMP_INSTANCE_ID/OMP_LAUNCH_SECRET fehlen")?;
+    let token = service_token(orchestrator_url, instance_id, launch_secret)?;
     let url = format!("{}/api/v1/audio-rules", orchestrator_url.trim_end_matches('/'));
-    let fetched = ureq::get(&url)
+    let s = ureq::get(&url)
         .header("Authorization", &format!("Bearer {token}"))
         .call()
         .map_err(|e| format!("Abruf fehlgeschlagen: {e}"))
-        .and_then(|mut r| r.body_mut().read_json::<AudioSettings>().map_err(|e| format!("Antwort ungültig: {e}")));
-    match fetched {
+        .and_then(|mut r| r.body_mut().read_json::<AudioSettings>().map_err(|e| format!("Antwort ungültig: {e}")))?;
+    let errs = s.validate();
+    if errs.is_empty() { Ok(s) } else { Err(format!("Dokument ungültig ({})", errs.join("; "))) }
+}
+
+/// `node` ist nur der Präfix der Log-Zeilen (z. B. "omp-channel-player"). Beim Start: jeder Fehler
+/// fällt mit Log-Zeile auf die eingebauten Standardwerte zurück.
+pub fn load_settings(node: &str, orchestrator_url: &str, instance_id: Option<&str>, launch_secret: &str) -> AudioSettings {
+    match fetch_settings(orchestrator_url, instance_id, launch_secret) {
         Ok(s) => {
-            let errs = s.validate();
-            if errs.is_empty() {
-                eprintln!("{node}: Audio-Einstellungen vom Orchestrator geladen ({} Zielgruppen, {} Zuordnungen)", s.output_profile.groups.len(), s.mappings.len());
-                s
-            } else {
-                fallback(format!("Dokument ungültig ({})", errs.join("; ")))
-            }
+            eprintln!("{node}: Audio-Einstellungen vom Orchestrator geladen ({} Zielgruppen, {} Zuordnungen)", s.output_profile.groups.len(), s.mappings.len());
+            s
         }
-        Err(e) => fallback(e),
+        Err(why) => {
+            eprintln!("{node}: Audio-Einstellungen: {why} — verwende eingebaute Standardwerte");
+            defaults::default_settings()
+        }
     }
 }

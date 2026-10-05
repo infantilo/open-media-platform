@@ -1,53 +1,14 @@
-//! Programmgruppen + Shuffle-Presets nach `Audio Tonspurerweiterung Q3
-//! 2026 PD.pdf` (ORF-intern, `/home/infantilo/`): 8 MXF-Audiotonspuren
-//! (Tonspur 1/2, 3/4, 5/6, 7/8) tragen je nach "Ton ausspielen als"-Status
-//! unterschiedliche Signale (Programmton/PT, Hörfilm-Audio-Description/AD,
-//! Originalton/OT, Dolby E, diskretes 5.1) — 13 offizielle Status ab
-//! 15.9.2026 (PDF S.3, "PCMS ausspielen als"), hier als reine Daten
-//! hinterlegt statt als Code-Verzweigung, damit künftige Presets (weitere
-//! ORF-Status, XAVC-100/300-Varianten mit demselben Tonspur-Schema) ohne
-//! Programmänderung ergänzbar bleiben (`pipeline.rs` liest nur `find_*`/
-//! `matrix_for`, kennt keine der 13 Namen).
-//!
-//! **Nutzerwunsch 2026-08-06** ("Shuffle Presets und Output Groups
-//! dynamisch... definieren, für einfachere künftige Anpassungen"):
-//! `GROUPS`/`PRESETS` waren bis dahin `&'static`-Konstanten — jetzt
-//! owned/laufzeit-veränderlich (`Settings`, per `Clone`/`serde::
-//! Deserialize`), damit `main.rs` sie beim Start entweder vom
-//! Orchestrator laden kann (`orchestrator_settings.rs`,
-//! Postgres-gestützt über `PUT /api/v1/node-types/omp-mxf-player/
-//! settings`) oder — ohne erreichbaren Orchestrator/Launcher, z. B.
-//! lokale `cargo run`-Entwicklung — auf `default_settings()` unten
-//! zurückfällt. Die Struct-*Form* bleibt unverändert, nur die
-//! String-Felder sind jetzt `String` statt `&'static str` und die
-//! Slices `Vec` statt `&'static [_]`.
-//!
-//! Track-Indizes sind 1-basiert (deckt sich mit der PDF-Nomenklatur
-//! "Tonspur 1/2, 3/4, …") und referenzieren die MXF-Audiospuren in
-//! Datei-/PCMS-Reihenfolge — s. `pipeline.rs`s Zuordnung der
-//! `mxfdemux`-`track_%u`-Pads zu diesem Index (dort empirisch/defensiv
-//! behandelt, nicht hier).
-//!
-//! **Dolby E bleibt bit-exakt**: jede Route in eine `dolbye`-Gruppe ist
-//! immer eine reine 1:1-Auswahl (Koeffizient exakt 1.0, keine
-//! Summierung) — kein Preset hier mischt/upmixt in diese Gruppe. S24LE
-//! (Quellformat laut `ffprobe`) passt verlustfrei in F32LEs 24-Bit-
-//! Mantisse, ein reiner Auswahl-Durchgriff über `audiomixmatrix`
-//! verändert die Sample-Werte nicht — s. Plan-Dokument für die
-//! ausführliche Begründung. Diese Invariante ist inhaltlich, nicht
-//! technisch erzwungen — wer über die neue Einstellungsseite eine
-//! `dolbye`-Route mit mehreren Quellspuren anlegt, bekäme technisch
-//! eine Summierung statt eines reinen Durchgriffs (kein Validierungs-
-//! Fehler dafür, s. orchestrator `validateMxfPlayerSettings` — bewusst
-//! nur strukturelle, keine inhaltliche ORF-Konventions-Prüfung).
+//! Ansicht des gemeinsamen Audio-Dokuments (`omp-audio-rules`, docs/ENTWURF-AUDIO-REGELN.md, A8) für
+//! die Parameter und das UI dieses Nodes: Programmgruppen und „Shuffle-Presets“ (jetzt Zuordnungs-
+//! vorlagen). Die Matrizen berechnet die Engine (`omp_audio_rules::resolve`); hier stehen nur die
+//! Datentypen der bisherigen Parameter `programGroups`/`shufflePresets` und die Umrechnung aus dem
+//! Dokument. Die frühere feste Preset-Tabelle (13 ORF-Status) und `matrix_for` entfallen — die
+//! ORF-Presets sind als mitgelieferte Vorlagen im Dokument enthalten (`omp_audio_rules::defaults`).
 
+use omp_audio_rules::AudioSettings;
 use serde::{Deserialize, Serialize};
 
-/// Eine dauerhaft aktive Audio-Ausgangsgruppe — Kanalzahl ändert sich nie
-/// zwischen Presets (nur die Routing-Koeffizienten tun das), s.
-/// `pipeline.rs`-Moduldoku zur A/B-Slot-Architektur. Neue/entfernte/
-/// geänderte Gruppen wirken seit 2026-09-30 live (`applySettings` in
-/// `main.rs`: Pipeline-Neuaufbau + `NodeHandle::add_sender`/`remove_sender`).
+/// Eine dauerhaft aktive Audio-Ausgangsgruppe (ein NMOS-Sender), Kanalzahl aus dem Layout.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProgramGroup {
     pub id: String,
@@ -55,9 +16,8 @@ pub struct ProgramGroup {
     pub channels: u32,
 }
 
-/// Eine Route ordnet EINE Quell-Tonspur (1-basiert) einem Ausgabekanal
-/// einer Gruppe zu (`group_channel` 0-basiert: bei Stereo-Gruppen 0=L,
-/// 1=R; bei `surround51` 0=L,1=R,2=C,3=LFE,4=SL,5=SR, s. PDF S.5).
+/// Eine Route ordnet EINE Quell-Tonspur (1-basiert) einem Ausgabekanal einer Gruppe zu — nur zur Anzeige
+/// im Referenz-Panel; Vorlagen mit Tag-Auswahl haben keine festen Routen.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Route {
     #[serde(rename = "srcTrack")]
@@ -74,290 +34,71 @@ pub struct AudioPreset {
     pub routes: Vec<Route>,
 }
 
-/// Das gesamte, laufzeit-ladbare Dokument — identisches JSON-Schema wie
-/// `orchestrator/internal/httpapi/node_settings_handlers.go`s
-/// `mxfPlayerSettings` (camelCase-Feldnamen dort/hier über
-/// `#[serde(rename)]` synchron gehalten, s. Route oben).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Settings {
     pub groups: Vec<ProgramGroup>,
     pub presets: Vec<AudioPreset>,
 }
 
-/// Die 13 offiziellen "PCMS ausspielen als"-Status (PDF S.3+4/5) + die 5
-/// ORF-Programmgruppen — identischer Inhalt wie vor der Umstellung auf
-/// laufzeit-ladbare Settings, dient jetzt als Fallback, wenn kein
-/// Orchestrator erreichbar ist (s. Moduldoku), UND als Vorbelegung des
-/// `node_type_settings`-Eintrags beim allerersten Abruf (orchestrator-
-/// seitig identisch dupliziert, s. dortige `defaultMxfPlayerSettings`).
-/// Presets mit nur einem Quellkanal für einen an sich stereo geführten
-/// Ausgang (Mono, 2-Ton-Mono) speisen L UND R aus derselben Spur — so
-/// bleibt jede Gruppe für Abnehmer immer ein echtes Stereo-Signal,
-/// unabhängig davon, ob die Quelle mono war (Broadcast-Konvention,
-/// entspricht der PDF-Spalte "PT" ohne "PT L"/"PT R"-Unterscheidung bei
-/// Mono/2-Ton-Mono).
-pub fn default_settings() -> Settings {
-    let group = |id: &str, label: &str, channels: u32| ProgramGroup { id: id.to_string(), label: label.to_string(), channels };
-    let route = |src_track: u8, group: &str, group_channel: u8| Route { src_track, group: group.to_string(), group_channel };
-    let preset = |id: &str, label: &str, routes: Vec<Route>| AudioPreset { id: id.to_string(), label: label.to_string(), routes };
-
-    Settings {
-        groups: vec![
-            group("pt", "Programmton", 2),
-            group("ad", "Hörfilm/AD", 2),
-            group("ot", "Originalton", 2),
-            group("dolbye", "Dolby E", 2),
-            group("surround51", "5.1 Diskret", 6),
-        ],
-        presets: vec![
-            preset("mono", "Mono", vec![
-                route(1, "pt", 0),
-                route(1, "pt", 1),
-            ]),
-            preset("stereo", "Stereo", vec![
-                route(1, "pt", 0),
-                route(2, "pt", 1),
-            ]),
-            // Nutzerentscheidung (2026-08-05): Track 2 ("AD/OT" laut PDF
-            // S.4 mehrdeutig) wird als AD interpretiert.
-            preset("2ton-mono", "2-Ton-Mono", vec![
-                route(1, "pt", 0),
-                route(1, "pt", 1),
-                route(2, "ad", 0),
-                route(2, "ad", 1),
-            ]),
-            preset("stereo-hoerfilm", "Stereo/Hörfilm", vec![
-                route(1, "pt", 0),
-                route(2, "pt", 1),
-                route(5, "ad", 0),
-                route(6, "ad", 1),
-            ]),
-            preset("stereo-ot-56", "Stereo/OT 5,6", vec![
-                route(1, "pt", 0),
-                route(2, "pt", 1),
-                route(5, "ot", 0),
-                route(6, "ot", 1),
-            ]),
-            preset("stereo-ot", "Stereo/OT", vec![
-                route(1, "pt", 0),
-                route(2, "pt", 1),
-                route(7, "ot", 0),
-                route(8, "ot", 1),
-            ]),
-            preset("stereo-hoerfilm-ot", "Stereo/Hörfilm/OT", vec![
-                route(1, "pt", 0),
-                route(2, "pt", 1),
-                route(5, "ad", 0),
-                route(6, "ad", 1),
-                route(7, "ot", 0),
-                route(8, "ot", 1),
-            ]),
-            preset("stereo-dolbye", "Stereo/Dolby E", vec![
-                route(1, "pt", 0),
-                route(2, "pt", 1),
-                route(3, "dolbye", 0),
-                route(4, "dolbye", 1),
-            ]),
-            preset("stereo-dolbye-hoerfilm", "Stereo/Dolby E/Hörfilm", vec![
-                route(1, "pt", 0),
-                route(2, "pt", 1),
-                route(3, "dolbye", 0),
-                route(4, "dolbye", 1),
-                route(5, "ad", 0),
-                route(6, "ad", 1),
-            ]),
-            preset("stereo-dolbye-ot-56", "Stereo/Dolby E/OT 5,6", vec![
-                route(1, "pt", 0),
-                route(2, "pt", 1),
-                route(3, "dolbye", 0),
-                route(4, "dolbye", 1),
-                route(5, "ot", 0),
-                route(6, "ot", 1),
-            ]),
-            preset("stereo-dolbye-ot", "Stereo/Dolby E/OT", vec![
-                route(1, "pt", 0),
-                route(2, "pt", 1),
-                route(3, "dolbye", 0),
-                route(4, "dolbye", 1),
-                route(7, "ot", 0),
-                route(8, "ot", 1),
-            ]),
-            preset("stereo-dolbye-hoerfilm-ot", "Stereo/Dolby E/Hörfilm/OT", vec![
-                route(1, "pt", 0),
-                route(2, "pt", 1),
-                route(3, "dolbye", 0),
-                route(4, "dolbye", 1),
-                route(5, "ad", 0),
-                route(6, "ad", 1),
-                route(7, "ot", 0),
-                route(8, "ot", 1),
-            ]),
-            preset("stereo-51-diskret", "Stereo/5.1 diskret", vec![
-                // 1/2: Stereo-Kompatibilitäts-Downmix fürs pt-Programm.
-                route(1, "pt", 0),
-                route(2, "pt", 1),
-                // 3/4: 5.1 L/R, 5/6: 5.1 C/LFE, 7/8: 5.1 SL/SR (PDF S.5).
-                route(3, "surround51", 0),
-                route(4, "surround51", 1),
-                route(5, "surround51", 2),
-                route(6, "surround51", 3),
-                route(7, "surround51", 4),
-                route(8, "surround51", 5),
-            ]),
-        ],
-    }
-}
-
-/// Strukturvalidierung — identische Regeln wie orchestrator
-/// `validateMxfPlayerSettings` (eindeutige, nicht-leere IDs, Kanalzahl
-/// 1..=64, Routes referenzieren vorhandene Gruppen/Kanäle), aber NUR
-/// mit Mindestens-eine-Gruppe/ein-Preset wie dort.
-pub fn validate(s: &Settings) -> Result<(), String> {
-    if s.groups.is_empty() {
-        return Err("mindestens eine Ausgangsgruppe nötig".into());
-    }
-    if s.presets.is_empty() {
-        return Err("mindestens ein Preset nötig".into());
-    }
-    let mut channels = std::collections::HashMap::new();
-    for g in &s.groups {
-        if g.id.trim().is_empty() || g.label.trim().is_empty() {
-            return Err("Gruppen-ID und -Name dürfen nicht leer sein".into());
-        }
-        if !(1..=64).contains(&g.channels) {
-            return Err(format!("Gruppe {}: Kanalzahl muss 1..64 sein", g.id));
-        }
-        if channels.insert(g.id.clone(), g.channels).is_some() {
-            return Err(format!("doppelte Gruppen-ID: {}", g.id));
-        }
-    }
-    let mut seen = std::collections::HashSet::new();
-    for p in &s.presets {
-        if p.id.trim().is_empty() || p.label.trim().is_empty() {
-            return Err("Preset-ID und -Name dürfen nicht leer sein".into());
-        }
-        if !seen.insert(p.id.clone()) {
-            return Err(format!("doppelte Preset-ID: {}", p.id));
-        }
-        for r in &p.routes {
-            let Some(ch) = channels.get(&r.group) else {
-                return Err(format!("Preset {}: unbekannte Gruppe {}", p.id, r.group));
-            };
-            if u32::from(r.group_channel) >= *ch {
-                return Err(format!("Preset {}: Kanal {} außerhalb von Gruppe {}", p.id, r.group_channel, r.group));
+/// Gruppen und Vorlagen des Dokuments in die Parameter-Sicht dieses Nodes umrechnen.
+pub fn from_audio_settings(doc: &AudioSettings) -> Settings {
+    let groups = doc
+        .output_profile
+        .groups
+        .iter()
+        .map(|g| ProgramGroup { id: g.id.clone(), label: g.label.clone(), channels: g.channel_names().len() as u32 })
+        .collect();
+    let presets = doc
+        .mappings
+        .iter()
+        .map(|m| {
+            let mut routes = Vec::new();
+            for (gid, spec) in &m.groups {
+                for (channel, &track) in spec.tracks.iter().flatten().enumerate() {
+                    if track > 0 {
+                        routes.push(Route { src_track: track.min(255) as u8, group: gid.clone(), group_channel: channel as u8 });
+                    }
+                }
             }
-            if r.src_track < 1 {
-                return Err(format!("Preset {}: srcTrack muss >= 1 sein", p.id));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Instanz-lokale Persistenz (Nutzerwunsch 2026-09-30): JSON-Datei unter
-/// `OMP_STATE_DIR` (Default `data/state`). Fehlt sie oder ist ungültig,
-/// gilt `default_settings()`.
-pub fn state_path(instance_key: &str) -> std::path::PathBuf {
-    let dir = std::env::var("OMP_STATE_DIR").unwrap_or_else(|_| "data/state".to_string());
-    let safe: String = instance_key.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
-    std::path::Path::new(&dir).join(format!("mxf-player-direct-{safe}.json"))
-}
-
-pub fn load_settings(path: &std::path::Path) -> Settings {
-    match std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<Settings>(&t).ok()) {
-        Some(s) if validate(&s).is_ok() => {
-            eprintln!("omp-mxf-player-direct: Einstellungen aus {} geladen", path.display());
-            s
-        }
-        _ => default_settings(),
-    }
-}
-
-pub fn save_settings(path: &std::path::Path, s: &Settings) -> Result<(), String> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(s).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+            AudioPreset { id: m.id.clone(), label: if m.label.is_empty() { m.id.clone() } else { m.label.clone() }, routes }
+        })
+        .collect();
+    Settings { groups, presets }
 }
 
 pub fn find_preset<'a>(presets: &'a [AudioPreset], id: &str) -> Option<&'a AudioPreset> {
     presets.iter().find(|p| p.id == id)
 }
 
-/// Baut die `audiomixmatrix`-Koeffizienten (Zeilen = Ausgabekanäle,
-/// Spalten = Eingabekanäle — GStreamers eigene Konvention, s.
-/// `pipeline.rs`) für EINE Gruppe aus den Routes eines Presets.
-/// `input_channels` ist die Zahl tatsächlich in der Datei gefundener
-/// Tonspuren (kann <8 sein bei älteren/kleineren Dateien) — eine Route,
-/// die eine nicht existierende Spur referenziert, wird übersprungen (der
-/// Zielkanal bleibt stumm), kein Fehler: dieselbe Nachsicht wie
-/// PIPELINE CONTROLLERs Preset-Fallback (s. Plan-Dokument), nur ohne
-/// dessen Laufzeit-Silence-Detection — hier rein statisch aus der
-/// tatsächlichen Spurzahl.
-pub fn matrix_for(preset: &AudioPreset, group_id: &str, group_channels: u32, input_channels: u32) -> Vec<Vec<f64>> {
-    let mut matrix = vec![vec![0.0f64; input_channels as usize]; group_channels as usize];
-    for route in preset.routes.iter().filter(|r| r.group == group_id) {
-        let in_idx = (route.src_track as usize).saturating_sub(1);
-        let out_idx = route.group_channel as usize;
-        if in_idx < input_channels as usize && out_idx < group_channels as usize {
-            matrix[out_idx][in_idx] = 1.0;
-        }
-    }
-    matrix
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn defaults() -> Settings {
+        from_audio_settings(&omp_audio_rules::defaults::default_settings())
+    }
+
     #[test]
-    fn default_settings_has_five_groups_and_thirteen_presets() {
-        let settings = default_settings();
-        assert_eq!(settings.groups.len(), 5);
-        assert_eq!(settings.presets.len(), 13);
+    fn default_document_has_five_groups_and_thirteen_presets() {
+        let s = defaults();
+        assert_eq!(s.groups.len(), 5);
+        assert_eq!(s.presets.len(), 13);
+        assert_eq!(s.groups.iter().find(|g| g.id == "surround51").unwrap().channels, 6);
     }
 
     #[test]
     fn find_preset_finds_by_id_and_none_for_unknown() {
-        let settings = default_settings();
-        assert!(find_preset(&settings.presets, "stereo").is_some());
-        assert!(find_preset(&settings.presets, "does-not-exist").is_none());
+        let s = defaults();
+        assert!(find_preset(&s.presets, "stereo").is_some());
+        assert!(find_preset(&s.presets, "does-not-exist").is_none());
     }
 
     #[test]
-    fn matrix_for_stereo_is_identity_on_first_two_tracks() {
-        let settings = default_settings();
-        let preset = find_preset(&settings.presets, "stereo").unwrap();
-        let matrix = matrix_for(preset, "pt", 2, 8);
-        assert_eq!(matrix[0][0], 1.0);
-        assert_eq!(matrix[1][1], 1.0);
-        // Keine anderen Koeffizienten gesetzt.
-        let sum: f64 = matrix.iter().flatten().sum();
-        assert_eq!(sum, 2.0);
-    }
-
-    #[test]
-    fn matrix_for_skips_routes_beyond_actual_track_count() {
-        // "stereo-hoerfilm" routet auch auf Tracks 5/6 — bei einer Datei
-        // mit nur 2 tatsächlichen Tracks (input_channels=2) muss die
-        // Route auf Track 5/6 stumm bleiben statt zu fehlern (s.
-        // matrix_for-Doku "dieselbe Nachsicht wie PIPELINE CONTROLLERs
-        // Preset-Fallback").
-        let settings = default_settings();
-        let preset = find_preset(&settings.presets, "stereo-hoerfilm").unwrap();
-        let matrix = matrix_for(preset, "ad", 2, 2);
-        let sum: f64 = matrix.iter().flatten().sum();
-        assert_eq!(sum, 0.0);
-    }
-
-    #[test]
-    fn matrix_for_unknown_group_id_yields_all_zero_matrix() {
-        let settings = default_settings();
-        let preset = find_preset(&settings.presets, "stereo").unwrap();
-        let matrix = matrix_for(preset, "does-not-exist", 2, 8);
-        let sum: f64 = matrix.iter().flatten().sum();
-        assert_eq!(sum, 0.0);
+    fn stereo_preset_shows_the_two_program_routes() {
+        let s = defaults();
+        let p = find_preset(&s.presets, "stereo").unwrap();
+        let mut r: Vec<(u8, &str, u8)> = p.routes.iter().map(|r| (r.src_track, r.group.as_str(), r.group_channel)).collect();
+        r.sort();
+        assert_eq!(r, vec![(1, "pt", 0), (2, "pt", 1)]);
     }
 }

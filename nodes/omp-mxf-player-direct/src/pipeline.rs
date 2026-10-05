@@ -94,6 +94,8 @@ pub struct Config {
     pub group_flow_ids: Vec<String>,
     pub groups: Vec<presets::ProgramGroup>,
     pub preset: presets::AudioPreset,
+    /// Gemeinsames Audio-Dokument: die Matrizen je Gruppe löst `omp_audio_rules::resolve` auf.
+    pub audio: Arc<omp_audio_rules::AudioSettings>,
     pub label: String,
     pub width: u32,
     pub height: u32,
@@ -119,7 +121,7 @@ pub enum Command {
     /// Gruppen (samt MXL-Flow-IDs) und aktives Preset ersetzen —
     /// Nutzerwunsch 2026-09-30 (Gruppen/Presets dynamisch in der UI).
     /// Wirkt wie `SetPreset` per kompletten Neuaufbau.
-    SetConfig { groups: Vec<presets::ProgramGroup>, group_flow_ids: Vec<String>, preset: presets::AudioPreset },
+    SetConfig { groups: Vec<presets::ProgramGroup>, group_flow_ids: Vec<String>, preset: presets::AudioPreset, audio: Arc<omp_audio_rules::AudioSettings> },
     Seek(u64),
 }
 
@@ -187,8 +189,8 @@ impl PipelineHandle {
         let _ = self.events.send(LoopEvent::Cmd(Command::SetPreset(preset)));
     }
 
-    pub fn set_config(&self, groups: Vec<presets::ProgramGroup>, group_flow_ids: Vec<String>, preset: presets::AudioPreset) {
-        let _ = self.events.send(LoopEvent::Cmd(Command::SetConfig { groups, group_flow_ids, preset }));
+    pub fn set_config(&self, groups: Vec<presets::ProgramGroup>, group_flow_ids: Vec<String>, preset: presets::AudioPreset, audio: Arc<omp_audio_rules::AudioSettings>) {
+        let _ = self.events.send(LoopEvent::Cmd(Command::SetConfig { groups, group_flow_ids, preset, audio }));
     }
 
     pub fn seek(&self, position_ms: i64) {
@@ -511,7 +513,9 @@ fn build(config: &Config, tx: UnboundedSender<Event>, events: std::sync::mpsc::S
     // ein `Playing`-Ziel (der Sammel-Aufruf unten läuft noch), das
     // GStreamer-Standardmuster für dynamische Demuxer-Pads gilt
     // unverändert (s. Moduldoku).
-    let preset_owned = config.preset.clone();
+    let preset_id_owned = config.preset.id.clone();
+    let audio_doc = config.audio.clone();
+    let path_owned = config.file_path.clone();
     // SCHWACHE Referenz statt `pipeline.clone()` (Nutzerfund 2026-09-02:
     // "im audiomonitor höre ich aber keinen ton" — tatsächliche Ursache:
     // 180% CPU/stetig wachsendes RSS, weil dieser Node im Gegensatz zu
@@ -570,9 +574,20 @@ fn build(config: &Config, tx: UnboundedSender<Event>, events: std::sync::mpsc::S
             }
         }
 
+        // Spurzahl steht fest: Plan der gemeinsamen Audio-Engine auflösen (Spurschema, Zuordnung, Ersatzregeln).
+        let source = audio_doc.mxf_source(input_channels, &path_owned);
+        let mapping = audio_doc.mappings.iter().find(|m| m.id == preset_id_owned);
+        let plan = omp_audio_rules::resolve(&audio_doc.output_profile, &source, mapping, &audio_doc.rule_set);
+        for w in &plan.warnings {
+            eprintln!("omp-mxf-player-direct: Audio: {w}");
+        }
+        let ncols = plan.src_channels.len().max(1);
         for (group_id, group_channels, matrix_el) in &matrix_elements {
-            let coeffs = presets::matrix_for(&preset_owned, group_id, *group_channels, input_channels.max(1));
-            matrix_el.set_property("in-channels", input_channels.max(1));
+            let coeffs: Vec<Vec<f64>> = match plan.groups.iter().find(|g| &g.group == group_id) {
+                Some(g) if g.matrix.iter().all(|r| r.len() == ncols) => g.matrix.iter().map(|r| r.iter().map(|&c| f64::from(c)).collect()).collect(),
+                _ => vec![vec![0.0; ncols]; *group_channels as usize],
+            };
+            matrix_el.set_property("in-channels", ncols as u32);
             matrix_el.set_property("out-channels", *group_channels);
             matrix_el.set_property("matrix", matrix_to_gst_array(&coeffs));
         }
@@ -967,9 +982,10 @@ pub fn run(
             Ok(LoopEvent::Cmd(cmd @ (Command::SetPreset(_) | Command::SetConfig { .. }))) => {
                 let preset = match cmd {
                     Command::SetPreset(preset) => preset,
-                    Command::SetConfig { groups, group_flow_ids, preset } => {
+                    Command::SetConfig { groups, group_flow_ids, preset, audio } => {
                         cfg.groups = groups;
                         cfg.group_flow_ids = group_flow_ids;
+                        cfg.audio = audio;
                         preset
                     }
                     _ => unreachable!(),

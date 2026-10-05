@@ -86,7 +86,10 @@ struct PlayerStore {
     pipeline: PipelineHandle,
     media_dir: PathBuf,
     live: std::sync::Mutex<LiveState>,
-    state_path: PathBuf,
+    /// Für „Einstellungen neu laden“ (`reloadSettings`): Zugang zum Orchestrator.
+    orchestrator_url: String,
+    instance_id: Option<String>,
+    launch_secret: String,
     node_label: String,
     sender_changes: tokio::sync::mpsc::UnboundedSender<SenderChange>,
 }
@@ -136,13 +139,9 @@ impl ParamStore for PlayerStore {
                 name: "setPreset".to_string(),
                 args: vec![MethodArg { name: "audioPreset".to_string(), kind: ParamType::String }],
             },
-            // Ganzes Dokument {groups:[{id,label,channels}],presets:[{id,label,
-            // routes}]} als JSON-String ersetzen (expliziter Save, kein
-            // Patch pro Feld) — legt Gruppen/Sender an bzw. löscht sie live.
-            MethodSpec {
-                name: "applySettings".to_string(),
-                args: vec![MethodArg { name: "settings".to_string(), kind: ParamType::String }],
-            },
+            // Gemeinsames Audio-Dokument (Administration → Audio-Ausgabe) neu vom Orchestrator
+            // laden und live anwenden — legt Gruppen/Sender an bzw. löscht sie.
+            MethodSpec { name: "reloadSettings".to_string(), args: vec![] },
         ];
 
         Descriptor { parameters, methods, latency: None }
@@ -246,11 +245,15 @@ impl ParamStore for PlayerStore {
                 self.pipeline.set_preset(preset);
                 Ok(())
             }
-            "applySettings" => {
-                let raw = args.get("settings").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
-                let new: presets::Settings =
-                    serde_json::from_str(raw).map_err(|e| InvokeError::Message(format!("ungültiges JSON: {e}")))?;
-                presets::validate(&new).map_err(InvokeError::Message)?;
+            "reloadSettings" => {
+                let doc = std::sync::Arc::new(
+                    omp_audio_rules::client::fetch_settings(&self.orchestrator_url, self.instance_id.as_deref(), &self.launch_secret)
+                        .map_err(|e| InvokeError::Message(format!("Einstellungen laden: {e}")))?,
+                );
+                let new = presets::from_audio_settings(&doc);
+                if new.groups.is_empty() {
+                    return Err(InvokeError::Message("Das Ausgabeprofil hat keine Zielgruppe".to_string()));
+                }
                 let mut live = self.live.lock().expect("lock poisoned");
 
                 // Diff: unveränderte Gruppen (id+label+channels) behalten
@@ -286,8 +289,6 @@ impl ParamStore for PlayerStore {
                     }
                 }
 
-                presets::save_settings(&self.state_path, &new).map_err(|e| InvokeError::Message(format!("speichern: {e}")))?;
-
                 let current = self.pipeline.current_preset_id();
                 let preset = presets::find_preset(&new.presets, &current)
                     .or_else(|| presets::find_preset(&new.presets, "stereo"))
@@ -298,6 +299,7 @@ impl ParamStore for PlayerStore {
                     next.iter().map(|r| r.group.clone()).collect(),
                     next.iter().map(|r| r.flow_id.clone()).collect(),
                     preset,
+                    doc.clone(),
                 );
                 live.groups = next;
                 live.presets = new.presets;
@@ -362,12 +364,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let file_path = resolve_media_path(&media_dir, &file_arg)?;
     let file_path_str = file_path.to_string_lossy().to_string();
 
-    let state_path = presets::state_path(instance_id.as_deref().unwrap_or("default"));
-    let settings = presets::load_settings(&state_path);
+    // Gemeinsames Audio-Dokument (Ausgabeprofil, Spurschemata, Vorlagen, Regeln) vom Orchestrator;
+    // Gruppen und Presets sind eine Ansicht darauf (presets.rs). Änderungen: `reloadSettings`.
+    let orchestrator_url = env_or("OMP_ORCHESTRATOR_URL", "http://localhost:8000");
+    let launch_secret = std::env::var("OMP_LAUNCH_SECRET").unwrap_or_default();
+    let audio_doc = std::sync::Arc::new(omp_audio_rules::client::load_settings("omp-mxf-player-direct", &orchestrator_url, instance_id.as_deref(), &launch_secret));
+    let settings = presets::from_audio_settings(&audio_doc);
     let preset = presets::find_preset(&settings.presets, "stereo")
         .or_else(|| settings.presets.first())
         .cloned()
-        .ok_or("keine Audio-Presets in presets::default_settings()")?;
+        .ok_or("keine Audio-Zuordnungen im Audio-Dokument")?;
 
     let video_flow_id = omp_node_sdk::idgen::new_v4();
     let group_flow_ids: Vec<String> = settings.groups.iter().map(|_| omp_node_sdk::idgen::new_v4()).collect();
@@ -382,6 +388,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         group_flow_ids: group_flow_ids.clone(),
         groups: settings.groups.clone(),
         preset,
+        audio: audio_doc.clone(),
         label: label.clone(),
         width,
         height,
@@ -451,7 +458,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         pipeline: pipeline_handle.clone(),
         media_dir,
         live: std::sync::Mutex::new(LiveState { groups: live_groups, presets: settings.presets }),
-        state_path,
+        orchestrator_url,
+        instance_id: instance_id.clone(),
+        launch_secret,
         node_label: label.clone(),
         sender_changes: sender_changes_tx,
     });
