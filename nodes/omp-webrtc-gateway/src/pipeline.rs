@@ -527,6 +527,15 @@ fn attach_receive_chain(
                     .property("max-threads", 1i32)
                     .build()
                     .map_err(|e| format!("avdec_h264: {e}"))?,
+                // Thread-Grenze: Decode läuft auf dem Jitterbuffer-Thread,
+                // Skalieren + v210-Wandlung (MxlVideoOutput) auf eigenem
+                // Thread statt alles seriell auf einem Kern (~60 %).
+                gst::ElementFactory::make("queue")
+                    .property("max-size-buffers", 3u32)
+                    .property("max-size-bytes", 0u32)
+                    .property("max-size-time", 0u64)
+                    .build()
+                    .map_err(|e| format!("queue: {e}"))?,
             ],
             video_tail,
         ),
@@ -554,7 +563,10 @@ fn attach_receive_chain(
     pad.link(&first_sink)
         .map_err(|e| format!("link pad: {e:?}"))?;
     if media == "video"
-        && let Some(src) = chain.last().and_then(|d| d.static_pad("src"))
+        && let Some(src) = chain
+            .len()
+            .checked_sub(2)
+            .and_then(|i| chain[i].static_pad("src"))
     {
         install_latency_probe(&src, latency.clone());
     }

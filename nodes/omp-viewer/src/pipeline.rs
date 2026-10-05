@@ -195,8 +195,9 @@ fn build(
     broadcaster: &Arc<Broadcaster>,
     sink_element: Option<&str>,
     flowed: Arc<AtomicBool>,
-    preview_fps: i32,
+    preview_fps_live: &Arc<AtomicI32>,
 ) -> Result<ActivePipeline, String> {
+    let preview_fps = preview_fps_live.load(Ordering::Relaxed);
     let pipeline = gst::Pipeline::new();
 
     let input = MxlVideoInput::new(&pipeline, context.clone(), flow_id)?;
@@ -212,21 +213,49 @@ fn build(
         gst::PadProbeReturn::Remove
     });
 
-    // UMD-artiges Textoverlay mit der IS-04-Sender-Bezeichnung der
-    // gewählten Quelle (Nutzeranforderung 2026-07-12) — vor dem `tee`,
-    // damit sowohl der MJPEG- als auch ein optionaler Terminal-Sink-Zweig
-    // das Label sehen.
-    // `valignment`/`halignment` sind GEnums (`GstBaseTextOverlayV/HAlign`),
-    // keine Strings — `set_property_from_str` statt `.property()` (per
-    // Absturz gefunden: `.property("valignment", "bottom")` schlägt zur
-    // Laufzeit fehl, "expected GstBaseTextOverlayVAlign, got gchararray").
-    let umd = gst::ElementFactory::make("textoverlay")
-        .property("text", label)
-        .property("shaded-background", true)
-        .build()
-        .map_err(|e| format!("textoverlay: {e}"))?;
-    umd.set_property_from_str("valignment", "bottom");
-    umd.set_property_from_str("halignment", "center");
+    // Vorschau-Takt VOR jeder Pixelarbeit: die Vorschau braucht nur
+    // `previewFps` Bilder/s (Default 5), der MXL-Eingang liefert aber die
+    // volle Flow-Rate. Ohne diesen Probe lief jedes 720p-Bild durch
+    // v210-Wandlung + Textoverlay und wurde erst im MJPEG-Zweig
+    // verworfen (~86 % CPU). Nur ohne Terminal-Sink; der braucht die
+    // volle Rate. Die Bezeichnung der Quelle zeigt die UI als
+    // HTML-Overlay (Parameter `connectedLabel`), nicht im Bild.
+    if sink_element.is_none()
+        && let Some(src_pad) = input.elements.first().and_then(|e| e.static_pad("src"))
+    {
+        let fps_live = preview_fps_live.clone();
+        let last_slot = std::sync::atomic::AtomicI64::new(-1);
+        src_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
+            let Some(pts) = info.buffer().and_then(|b| b.pts()) else {
+                return gst::PadProbeReturn::Ok;
+            };
+            let fps = i64::from(fps_live.load(Ordering::Relaxed).max(1));
+            let slot = (pts.nseconds() as u128 * fps as u128 / 1_000_000_000) as i64;
+            if last_slot.swap(slot, Ordering::Relaxed) == slot {
+                gst::PadProbeReturn::Drop
+            } else {
+                gst::PadProbeReturn::Ok
+            }
+        });
+    }
+
+    // Terminal-Sink-Fenster hat kein HTML: dort bleibt das Label im Bild.
+    let umd = match sink_element {
+        Some(_) => {
+            let umd = gst::ElementFactory::make("textoverlay")
+                .property("text", label)
+                .property("shaded-background", true)
+                .build()
+                .map_err(|e| format!("textoverlay: {e}"))?;
+            // GEnums: `set_property_from_str`, nicht `.property()`.
+            umd.set_property_from_str("valignment", "bottom");
+            umd.set_property_from_str("halignment", "center");
+            umd
+        }
+        None => gst::ElementFactory::make("identity")
+            .build()
+            .map_err(|e| format!("identity: {e}"))?,
+    };
 
     let tee = gst::ElementFactory::make("tee")
         .name("preview_tee")
@@ -373,7 +402,7 @@ pub fn run(
                     &broadcaster,
                     config.sink_element.as_deref(),
                     flowed.clone(),
-                    preview_fps.load(Ordering::Relaxed),
+                    &preview_fps,
                 ) {
                     Ok(p) => {
                         active = Some(p);
@@ -436,7 +465,7 @@ pub fn run(
                         &broadcaster,
                         config.sink_element.as_deref(),
                         flowed.clone(),
-                        preview_fps.load(Ordering::Relaxed),
+                        &preview_fps,
                     )
                 {
                     active = Some(p);

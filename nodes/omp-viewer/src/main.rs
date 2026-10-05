@@ -35,6 +35,7 @@ struct ViewerControl {
     registry: RegistryClient,
     pipeline: pipeline::PipelineHandle,
     connected_flow_id: Arc<Mutex<String>>,
+    connected_label: Arc<Mutex<String>>,
     /// S. `ViewerStore::monitor`-Doku.
     monitor: Arc<omp_node_sdk::Monitor>,
 }
@@ -46,6 +47,7 @@ impl ReceiverControl for ViewerControl {
                 Ok(sender) => match sender.flow_id {
                     Some(flow_id) => {
                         *self.connected_flow_id.lock().expect("lock poisoned") = flow_id.clone();
+                        *self.connected_label.lock().expect("lock poisoned") = sender.label.clone();
                         self.pipeline.connect(flow_id, sender.label);
                         self.monitor.activate();
                     }
@@ -55,6 +57,7 @@ impl ReceiverControl for ViewerControl {
             },
             _ => {
                 *self.connected_flow_id.lock().expect("lock poisoned") = String::new();
+                self.connected_label.lock().expect("lock poisoned").clear();
                 self.pipeline.disconnect();
                 self.monitor.deactivate();
             }
@@ -113,6 +116,7 @@ enum ViewerCommand {
 
 struct ViewerStore {
     connected_flow_id: Arc<Mutex<String>>,
+    connected_label: Arc<Mutex<String>>,
     preview_url: String,
     connection: Arc<ReceiverConnection<ViewerControl>>,
     levels_url: String,
@@ -137,6 +141,13 @@ struct ViewerStore {
 impl ParamStore for ViewerStore {
     fn descriptor(&self) -> Descriptor {
         let mut parameters = vec![
+                ParamSpec {
+                    name: "connectedLabel".to_string(),
+                    kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
                 ParamSpec {
                     name: "connectedFlowId".to_string(),
                     kind: ParamType::String,
@@ -210,6 +221,9 @@ impl ParamStore for ViewerStore {
         match name {
             "connectedFlowId" => Some(serde_json::json!(
                 *self.connected_flow_id.lock().expect("lock poisoned")
+            )),
+            "connectedLabel" => Some(serde_json::json!(
+                *self.connected_label.lock().expect("lock poisoned")
             )),
             "previewUrl" => Some(serde_json::json!(self.preview_url)),
             "previewFps" => Some(serde_json::json!(self.pipeline.preview_fps())),
@@ -475,6 +489,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // wandert unten in `ViewerControl`.
     let store_pipeline = pipeline_handle.clone();
     let connected_flow_id = Arc::new(Mutex::new(String::new()));
+    let connected_label = Arc::new(Mutex::new(String::new()));
     let monitor = Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Receiver));
     // Startzustand `Inactive` — noch kein IS-05-Connect erfolgt.
     monitor.deactivate();
@@ -485,6 +500,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             registry: RegistryClient::new(registry_url.clone()),
             pipeline: pipeline_handle,
             connected_flow_id: connected_flow_id.clone(),
+            connected_label: connected_label.clone(),
             monitor: monitor.clone(),
         },
     ));
@@ -494,6 +510,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let store: Arc<dyn ParamStore> = Arc::new(ViewerStore {
         connected_flow_id,
+        connected_label,
         preview_url,
         connection,
         levels_url,

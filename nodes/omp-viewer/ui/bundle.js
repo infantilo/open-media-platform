@@ -27,6 +27,12 @@ class OmpViewerPanel extends HTMLElement {
     const style = document.createElement("style");
     style.textContent = `
       :host { display: block; font-family: sans-serif; color: #eee; }
+      .preview-wrap { position: relative; }
+      .umd {
+        position: absolute; left: 0; right: 0; bottom: 0; text-align: center;
+        background: rgba(0,0,0,.6); color: #fff; font-size: 12px; padding: 2px 4px;
+        pointer-events: none;
+      }
       img {
         display: block; width: 100%; background: #000;
         border: 1px solid #444;
@@ -94,6 +100,21 @@ class OmpViewerPanel extends HTMLElement {
     // image angezeigt, stattdessen sollte 'not connected' stehen").
     img.style.display = "none";
 
+    // Quellenbezeichnung als HTML-Overlay über dem Bild (nicht ins Video
+    // gerendert — das kostete CPU je Bild).
+    const wrap = document.createElement("div");
+    wrap.className = "preview-wrap";
+    const umd = document.createElement("div");
+    umd.className = "umd";
+    wrap.append(img, umd);
+    const refreshLabel = async () => {
+      const l = await getParam("connectedLabel");
+      umd.textContent = l || "";
+      umd.style.display = l ? "" : "none";
+    };
+    refreshLabel();
+    this._labelInterval = setInterval(refreshLabel, 2000);
+
     const status = document.createElement("p");
     status.textContent = "lade Vorschau …";
 
@@ -129,7 +150,7 @@ class OmpViewerPanel extends HTMLElement {
     addBtn.textContent = "+ Audio-Eingang";
     audioSection.append(audioTitle, rowsContainer, addBtn);
 
-    shadow.append(style, img, status, fpsRow, audioSection);
+    shadow.append(style, wrap, status, fpsRow, audioSection);
 
     // Bewusst per `style.display` statt `status.remove()` umgeschaltet
     // (vormaliger Bug: nach dem ersten erfolgreichen Frame war `status`
@@ -264,6 +285,7 @@ class OmpViewerPanel extends HTMLElement {
   disconnectedCallback() {
     clearInterval(this._inputsInterval);
     clearInterval(this._previewInterval);
+    clearInterval(this._labelInterval);
     if (this._levelsSource) this._levelsSource.close();
   }
 }
