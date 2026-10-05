@@ -690,7 +690,7 @@ pub fn run_output(
         return;
     }
 
-    let context = match MxlContext::new(&config.domain) {
+    let context = match MxlContext::new_synced(&config.domain) {
         Ok(c) => Arc::new(c),
         Err(e) => {
             let _ = tx.send(Event::Error(e.clone()));

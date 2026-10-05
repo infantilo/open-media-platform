@@ -47,6 +47,9 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let secs: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(10);
     let audio_delay: f64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(90.0);
+    // Optional: Audio-Schreiber stoppt nach so vielen Sekunden (Ausfalltest:
+    // das Tor darf das Video dadurch nicht ausbremsen).
+    let audio_stop_ms: f64 = args.get(3).and_then(|s| s.parse::<f64>().ok()).map_or(f64::MAX, |s| s * 1000.0);
     let domain = format!("/dev/shm/omp-mxl-syncgroup-probe-{}", std::process::id());
     std::fs::create_dir_all(&domain).unwrap();
     let ctx = Arc::new(MxlContext::new(&domain).expect("MxlContext"));
@@ -92,7 +95,7 @@ fn main() {
     });
     let afeed = std::thread::spawn(move || {
         let (mut k, mut c) = (0u64, 0.0f64);
-        while c < total_ms {
+        while c < total_ms.min(audio_stop_ms) {
             sleep_until(start + Duration::from_micros(((c + audio_delay) * 1000.0) as u64));
             let mut b = gst::Buffer::from_slice(vec![0u8; (CHUNK * 4) as usize]);
             {

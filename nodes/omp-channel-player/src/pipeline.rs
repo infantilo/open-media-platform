@@ -653,7 +653,7 @@ fn query_duration_ms(el: &gst::Element) -> Option<i64> {
 /// Begründung wie bei `omp-mxf-player-direct` an: Datei-Decode-Quellen
 /// produzieren nicht von sich aus in Echtzeit.
 fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::sync::mpsc::Sender<LoopEvent>) -> Result<ActivePipeline, String> {
-    let context = Arc::new(MxlContext::new(&config.domain)?);
+    let context = Arc::new(MxlContext::new_synced(&config.domain)?);
     let pipeline = gst::Pipeline::new();
 
     let mut query_el: Option<gst::Element> = None;

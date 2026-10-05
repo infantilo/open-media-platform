@@ -59,12 +59,30 @@ pub struct MxlContext {
 /// einfrieren).
 const SYNC_GATE_MAX_WAIT: Duration = Duration::from_millis(40);
 
-/// Nicht blockierende Torprüfung (kehrt zurück, sobald gelesen werden darf). Wartet in 2-ms-Schritten
-/// (Timeout 0 → kein Futex-Wait, s. `Sync.cpp`; die Futex-Hänger der
-/// blockierenden Lesepfade betreffen genau das nicht) maximal
-/// [`SYNC_GATE_MAX_WAIT`].
-fn sync_gate(context: &MxlContext, rate: &mxl_sys::Rational, index: u64, running: &AtomicBool, stat: &mut [u32; 2]) {
+/// Zustand des Lese-Tors je Leser-Thread.
+#[derive(Default)]
+struct GateState {
+    /// Tor hat wirklich gewartet / ist in die Zeitüberschreitung gelaufen (Diagnose).
+    waited: u32,
+    timeouts: u32,
+    /// Sicherung: nach einer Zeitüberschreitung (ein Flow der Gruppe liefert
+    /// nicht) das Tor für `SYNC_GATE_PAUSE` aussetzen — sonst würde jeder
+    /// andere Leser je Lesevorgang 40 ms warten und verhungern (Audio-
+    /// Batches à 10 ms!).
+    off_until: Option<std::time::Instant>,
+}
+
+const SYNC_GATE_PAUSE: Duration = Duration::from_secs(2);
+
+/// Nicht blockierende Torprüfung (kehrt zurück, sobald gelesen werden darf). Wartet
+/// in 2-ms-Schritten (Timeout 0 → kein Futex-Wait, s. `Sync.cpp`; die
+/// Futex-Hänger der blockierenden Lesepfade betreffen genau das nicht)
+/// maximal [`SYNC_GATE_MAX_WAIT`], danach fail-open + Pause (s. [`GateState`]).
+fn sync_gate(context: &MxlContext, rate: &mxl_sys::Rational, index: u64, running: &AtomicBool, st: &mut GateState) {
     let Some(group) = &context.sync_group else { return };
+    if st.off_until.is_some_and(|t| std::time::Instant::now() < t) {
+        return;
+    }
     let Ok(ts) = context.instance.index_to_timestamp(index, rate) else { return };
     let started = std::time::Instant::now();
     while running.load(Ordering::Relaxed) {
@@ -72,14 +90,15 @@ fn sync_gate(context: &MxlContext, rate: &mxl_sys::Rational, index: u64, running
             Ok(true) => break,
             Ok(false) if started.elapsed() < SYNC_GATE_MAX_WAIT => thread::sleep(Duration::from_millis(2)),
             Ok(false) => {
-                stat[1] += 1; // Zeitüberschreitung → fail-open
+                st.timeouts += 1;
+                st.off_until = Some(std::time::Instant::now() + SYNC_GATE_PAUSE);
                 break;
             }
             Err(_) => break,
         }
     }
     if started.elapsed() > Duration::from_micros(500) {
-        stat[0] += 1; // Tor hat wirklich gewartet
+        st.waited += 1;
     }
 }
 
@@ -1881,7 +1900,7 @@ fn read_loop(
     let mut grain_reader = Some(grain_reader);
     // NACH dem Reader deklariert → beim Verlassen vor ihm zerstört.
     let mut member = context.sync_group.as_ref().and_then(|g| g.add_grain_reader(grain_reader.as_ref().unwrap()).ok());
-    let mut gate_stat = [0u32; 2];
+    let mut gate_stat = GateState::default();
     let timebase = index_timebase_enabled();
     let period_ns = (1_000_000_000u64 * grain_rate.denominator.max(1) as u64) / grain_rate.numerator.max(1) as u64;
     let mut latency: Option<crate::timebase::LatencyTracker> = None;
@@ -1892,7 +1911,7 @@ fn read_loop(
     while running.load(Ordering::Relaxed) {
         heartbeat.fetch_add(1, Ordering::Relaxed);
         if dbg && st_t.elapsed() > Duration::from_secs(2) {
-            eprintln!("MXLDBG {flow_id} ok={} mismatch={} skip={} notplaying={} toolate={} tooearly={} pusherr={} gatewait={} gatetimeout={} idx={index} lastpts={last_pts:?} appsrc_state={:?}", st[0],st[1],st[2],st[3],st[4],st[5],st[6], gate_stat[0], gate_stat[1], app_src.current_state());
+            eprintln!("MXLDBG {flow_id} ok={} mismatch={} skip={} notplaying={} toolate={} tooearly={} pusherr={} gatewait={} gatetimeout={} idx={index} lastpts={last_pts:?} appsrc_state={:?}", st[0],st[1],st[2],st[3],st[4],st[5],st[6], gate_stat.waited, gate_stat.timeouts, app_src.current_state());
             st = [0; 8];
             st_t = std::time::Instant::now();
         }
@@ -2430,7 +2449,7 @@ fn read_audio_loop(
     // `FLOW_INVALID`-Zweig) — außerhalb dieses einen Zweigs immer `Some`.
     let mut samples_reader = Some(samples_reader);
     let mut member = context.sync_group.as_ref().and_then(|g| g.add_samples_reader(samples_reader.as_ref().unwrap()).ok());
-    let mut gate_stat = [0u32; 2];
+    let mut gate_stat = GateState::default();
     let timebase = index_timebase_enabled();
     let batch_ns = (batch_size * 1_000_000_000 * sample_rate.denominator.max(1) as u64) / sample_rate.numerator.max(1) as u64;
     let mut latency: Option<crate::timebase::LatencyTracker> = None;

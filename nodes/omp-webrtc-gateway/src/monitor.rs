@@ -99,7 +99,7 @@ fn add_dummy_branch(pipeline: &gst::Pipeline, tee: &gst::Element) -> Result<(), 
 impl Monitor {
     pub fn new(config: Config, tx: UnboundedSender<Event>) -> Result<Arc<Self>, String> {
         gst::init().map_err(|e| format!("gst init failed: {e}"))?;
-        let context = Arc::new(MxlContext::new(&config.domain)?);
+        let context = Arc::new(MxlContext::new_synced(&config.domain)?);
         let pipeline = gst::Pipeline::new();
 
         let video_mid = make("identity")?;
