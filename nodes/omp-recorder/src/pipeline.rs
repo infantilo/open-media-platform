@@ -420,7 +420,7 @@ pub fn run(
         return;
     }
 
-    let context = match MxlContext::new(&config.domain) {
+    let context = match MxlContext::new_synced(&config.domain) {
         Ok(c) => Arc::new(c),
         Err(e) => {
             let _ = ready.send(Err(e));

@@ -93,10 +93,23 @@ impl MxlContext {
     /// Preset des jeweiligen `install-mxl.sh`-Laufs egal ist) und
     /// öffnet/erstellt die Instanz für `domain`.
     pub fn new(domain: &str) -> Result<Self, String> {
+        Self::build(domain, sync_group_enabled())
+    }
+
+    /// Wie [`Self::new`], aber mit Flow-Synchronization-Group als Standard
+    /// (Kapitel 30.3) — für Nodes, deren Kontext genau die zusammengehörigen
+    /// Flows liest (z. B. ein Recorder: 1 Video + 1 Audio). Abschaltbar mit
+    /// `OMP_MXL_SYNCGROUP=0`. NICHT für Kontexte mit vielen unabhängigen
+    /// Eingängen (Mixer/Switcher): dort würde jeder auf jeden warten.
+    pub fn new_synced(domain: &str) -> Result<Self, String> {
+        Self::build(domain, std::env::var("OMP_MXL_SYNCGROUP").map_or(true, |v| v != "0"))
+    }
+
+    fn build(domain: &str, sync: bool) -> Result<Self, String> {
         let api = mxl::load_api("libmxl.so").map_err(|e| format!("libmxl.so laden: {e}"))?;
         let instance =
             mxl::MxlInstance::new(api, domain, "").map_err(|e| format!("MXL-Instanz: {e}"))?;
-        let sync_group = if sync_group_enabled() {
+        let sync_group = if sync {
             Some(instance.create_sync_group().map_err(|e| format!("Sync-Group: {e}"))?)
         } else {
             None
