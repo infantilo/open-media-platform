@@ -1925,6 +1925,9 @@ func validate(def Definition) error {
 				return fmt.Errorf("%w: role %q references unknown format %q (not one of %v)", ErrValidation, r.Name, r.Format, StandardFormatNames())
 			}
 		}
+		if err := validateRoleEnv(r); err != nil {
+			return fmt.Errorf("%w: %v", ErrValidation, err)
+		}
 		if r.RequiredIOPort != nil {
 			if r.RequiredIOPort.CardType == "" {
 				return fmt.Errorf("%w: role %q requiredIoPort needs a cardType", ErrValidation, r.Name)

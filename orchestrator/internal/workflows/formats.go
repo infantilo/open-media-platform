@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"fmt"
 	"strconv"
 )
 
@@ -114,7 +115,43 @@ func formatExtraEnv(name string) map[string]string {
 // Liefert extraEnv selbst zurück (dieselbe Map, kein Kopieren), wenn
 // weder Format noch MixerLevels gesetzt sind — unverändertes Verhalten
 // für den häufigen Fall ohne Rollen-Overrides.
+// allowedRoleEnv: Schlüssel und erlaubte Werte für Role.Env (leere Wertemenge = beliebiger Wert ohne
+// Steuerzeichen). Muss zusätzlich in host-agent/internal/commands (allowedExtraEnvKeys) stehen.
+var allowedRoleEnv = map[string][]string{
+	"OMP_DEINTERLACE_METHOD": {"greedyh", "greedyl", "linear", "linearblend", "vfir", "tomsmocomp", "scalerbob"},
+}
+
+// validateRoleEnv prüft Role.Env gegen die Allowlist.
+func validateRoleEnv(role Role) error {
+	for k, v := range role.Env {
+		values, ok := allowedRoleEnv[k]
+		if !ok {
+			return fmt.Errorf("role %q: env key %q not allowed", role.Name, k)
+		}
+		valid := len(values) == 0
+		for _, a := range values {
+			if v == a {
+				valid = true
+			}
+		}
+		if !valid {
+			return fmt.Errorf("role %q: env %s=%q invalid (allowed: %v)", role.Name, k, v, values)
+		}
+	}
+	return nil
+}
+
 func roleExtraEnv(extraEnv map[string]string, role Role) map[string]string {
+	if len(role.Env) > 0 {
+		merged := make(map[string]string, len(extraEnv)+len(role.Env))
+		for k, v := range extraEnv {
+			merged[k] = v
+		}
+		for k, v := range role.Env {
+			merged[k] = v
+		}
+		extraEnv = merged
+	}
 	roleFormatEnv := formatExtraEnv(role.Format)
 	var mixerLevelsEnv map[string]string
 	if role.MixerLevels > 0 {

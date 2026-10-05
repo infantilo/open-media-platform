@@ -87,6 +87,11 @@ type Role struct {
 	// Prozess-Laufzeit, kein Live-Hinzufügen — s. `nodes/
 	// omp-video-mixer-me/src/main.rs` OMP_ME_LEVELS-Doku).
 	MixerLevels int `json:"mixerLevels,omitempty"`
+	// Env: zusätzliche Start-Umgebung dieser Rolle für ausgewählte, bekannte Schlüssel
+	// (`allowedRoleEnv`, z. B. OMP_DEINTERLACE_METHOD=linear am Kanal-Player). Bewusst eine feste
+	// Allowlist statt freier Variablen: ein Workflow-Autor darf Nodes konfigurieren, aber keine
+	// beliebige Umgebung (LD_PRELOAD u. Ä.) in Prozesse auf Hosts einschleusen.
+	Env map[string]string `json:"env,omitempty"`
 	// StandbyFor (K7 Teil 4, docs/END-GOAL-FEATURES.md §7.4/§7.7): Name
 	// einer anderen Rolle DESSELBEN Workflows, für die diese Rolle als
 	// warmer Standby dient. Leer = normale Rolle (unverändertes

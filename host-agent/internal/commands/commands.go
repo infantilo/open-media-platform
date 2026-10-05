@@ -77,9 +77,10 @@ var allowedExtraEnvKeys = map[string]bool{
 	// Die Programm-/Rollenformate setzen zusätzlich zur Auflösung die Bildrate (workflows/formats.go
 	// formatExtraEnv): ohne diese beiden Schlüssel lehnte der Agent jeden Remote-Start eines Workflows
 	// mit Format ab ("extraEnv key OMP_FRAMERATE_DEN not allowed"). OMP_ME_LEVELS: Role.MixerLevels.
-	"OMP_FRAMERATE_NUM": true,
-	"OMP_FRAMERATE_DEN": true,
-	"OMP_ME_LEVELS":     true,
+	"OMP_DEINTERLACE_METHOD": true, // Role.Env (workflows/formats.go allowedRoleEnv)
+	"OMP_FRAMERATE_NUM":      true,
+	"OMP_FRAMERATE_DEN":      true,
+	"OMP_ME_LEVELS":          true,
 	// Ziele der Playout-Automation, aus den Rollen des Workflows vorbelegt (workflows/autotargets.go).
 	"OMP_PLAYOUT_TARGET_PLAYER_A_LABEL":    true,
 	"OMP_PLAYOUT_TARGET_PLAYER_B_LABEL":    true,
