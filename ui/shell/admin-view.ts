@@ -20,6 +20,7 @@
 // Reconnect-/Fallback-Pfad (AUDIT_POLL_FALLBACK_INTERVAL_MS).
 import "./settings-view.ts";
 import "./playout-admin-view.ts";
+import "./audio-rules-view.ts";
 import "./locations-view.ts";
 import { fetchBuildInfo, formatFirmwareLong } from "./version.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
@@ -272,7 +273,7 @@ interface UpdateOverview {
   supervisorError?: string;
 }
 
-type AdminTabId = "users" | "organizations" | "groups" | "bindings" | "catalog" | "storage" | "audit" | "diagnose" | "backup" | "update" | "nodeversions" | "settings" | "playout" | "cluster";
+type AdminTabId = "users" | "organizations" | "groups" | "bindings" | "catalog" | "storage" | "audit" | "diagnose" | "backup" | "update" | "nodeversions" | "settings" | "playout" | "audio" | "cluster";
 const ADMIN_SUB_TABS: { id: AdminTabId; label: string }[] = [
   { id: "users", label: "Nutzer" },
   { id: "organizations", label: "Organisationen" },
@@ -287,6 +288,7 @@ const ADMIN_SUB_TABS: { id: AdminTabId; label: string }[] = [
   { id: "update", label: "System-Update" },
   { id: "settings", label: "Einstellungen" },
   { id: "playout", label: "Playout" },
+  { id: "audio", label: "Audio-Ausgabe" },
   { id: "cluster", label: "Cluster" },
 ];
 const SUB_TAB_BUTTON_BASE =
@@ -511,6 +513,7 @@ class AdminView extends HTMLElement {
   #settingsView: HTMLElement | null = null;
   #locationsView: HTMLElement | null = null;
   #playoutView: HTMLElement | null = null;
+  #audioRulesView: HTMLElement | null = null;
 
   // Cluster-Sub-Tab (ARCHITECTURE.md §19.3, UMSETZUNG.md D12) — die
   // bisher UI-lose Raft-Status-/Join-/Leave-API bekommt hier eine
@@ -2421,6 +2424,10 @@ class AdminView extends HTMLElement {
       case "playout":
         this.#playoutView ??= document.createElement("omp-playout-admin");
         this.appendChild(this.#playoutView);
+        break;
+      case "audio":
+        this.#audioRulesView ??= document.createElement("omp-audio-rules");
+        this.appendChild(this.#audioRulesView);
         break;
       case "settings":
         this.#settingsView ??= document.createElement("omp-settings-view");

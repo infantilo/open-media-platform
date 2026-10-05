@@ -1,6 +1,6 @@
 # Entwurf: Dynamische Audio-Zuordnung und Regel-Engine
 
-Status: **freigegeben** (2026-10-05, Umsetzung nach Abschnitt 7). A1 erledigt (Crate `omp-audio-rules`, 22 Tests), A2 erledigt (`GET/PUT /api/v1/audio-rules`, `GET /api/v1/audio-rules/default`), A3 erledigt für `omp-channel-player` (live gegen echte MXF-Datei und MXL-Flows geprüft; Beispielwerkzeug `mxl_audio_levels`). Ersetzt langfristig
+Status: **freigegeben** (2026-10-05, Umsetzung nach Abschnitt 7). A1 erledigt (Crate `omp-audio-rules`, 22 Tests), A2 erledigt (`GET/PUT /api/v1/audio-rules`, `GET /api/v1/audio-rules/default`), A5 erledigt (Editor Admin → Audio-Ausgabe, Event-Reiter Audio, Tabellenspalte; das Testwerkzeug „Quelle simulieren“ fehlt noch), A3 erledigt für `omp-channel-player` (live gegen echte MXF-Datei und MXL-Flows geprüft; Beispielwerkzeug `mxl_audio_levels`). Ersetzt langfristig
 die fest einkompilierten Programmgruppen/Shuffle-Presets von `omp-mxf-player` und
 `omp-channel-player` und erweitert die Audio-Absicht (`AudioIntent`, P5) der
 Playout-Automation auf **alle** Eventtypen (Datei, Live, Standbild).
@@ -138,7 +138,7 @@ der im Editor sichtbar und änderbar ist.
 | A2 ✓ | Orchestrator: Speicherung/Validierung (`outputProfile`, `trackSchema`, `mapping`, `ruleSet`), Import der 13 ORF-Presets und 5 Gruppen als Standard |
 | A3 ✓ | Gemeinsames Ausspiel-Crate: dynamische Zielgruppen, Matrix, Plan→GStreamer; `omp-channel-player` darauf umstellen |
 | A4 ✓ | Automation: Event-Audioplan, Resolve beim Cue, Warnungen/As-Run, API |
-| A5 | UI: Editor „Audio-Ausgabe“ (Gruppen, Schemata, Vorlagen-Matrix, Regel-Baukasten, Testwerkzeug), Event-Reiter, Tabellenspalte |
+| A5 ✓ (ohne Testwerkzeug) | UI: Editor „Audio-Ausgabe“ (Gruppen, Schemata, Vorlagen-Matrix, Regel-Baukasten, Testwerkzeug), Event-Reiter, Tabellenspalte |
 | A6 | Prozessoren: `upmix51`, `downmix`, `mono-to-stereo`, `loudness` |
 | A7 | `dialog-enhance` („Klare Sprache“) — Verfahren noch zu klären |
 | A8 | `omp-mxf-player` auf dieselbe Engine migrieren, hartkodierte Presets entfernen |

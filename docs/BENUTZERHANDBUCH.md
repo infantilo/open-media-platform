@@ -1035,6 +1035,38 @@ Startumgebung `OMP_WEBRTC_PUBLIC_IP` und `OMP_WEBRTC_ICE_PORT` setzen.
 `OMP_WEBRTC_LATENCY_MS` (Standard 40) steuert den Jitterbuffer,
 `OMP_WEBRTC_BITRATE_KBPS` (Standard 4000) die Bitrate des Retourbilds.
 
+## 10c. Audio-Ausgabe (Ausgabegruppen, Zuordnung, Ersatzregeln)
+
+Unter **Administration → Audio-Ausgabe** legst du fest, wie die Kanal-Player ihren Ton ausgeben.
+Alles ist Konfiguration, nichts ist fest im Programm — andere Gruppen, mehr Spuren (z. B. 16 bei
+XAVC) oder neue Ersatzregeln brauchen keine Programmänderung. Gespeichert wird das ganze Dokument
+mit **Speichern**; **Auf Standard zurücksetzen** lädt die mitgelieferten ORF-Werte in den Editor
+(erst Speichern übernimmt sie).
+
+1. **Ausgabegruppen** — jede Gruppe wird ein eigener Audio-Sender der Player (Standard:
+   Programmton, Hörfilm/AD, Originalton, Dolby E, 5.1). Je Gruppe: ID, Name, Layout (Mono, Stereo,
+   5.1, 7.1 oder eigene Kanalnamen), Tags (z. B. `role:pt`), „bit-exakt“ (nur reine 1:1-Auswahl,
+   für Dolby E) und eine Vorgabe, falls ein Event nichts anderes sagt. Die erste Gruppe behält den
+   Sendernamen „… Audio“. Änderungen an den Gruppen wirken nach einem Neustart der Player-Instanz.
+2. **Spurschemata** — was die Spuren einer Quelle bedeuten (Spurnummer, Layout, Tags). Das passende
+   Schema wird je Datei automatisch nach Format, Spurzahl und Pfadmuster gewählt. Mit „Als
+   Mono-Spuren“ entsteht schnell ein Schema für N Spuren. Ein Tag `ch:L`, `ch:R`, … weist einer
+   Spur einen Zielkanal zu.
+3. **Zuordnungsvorlagen** — pro Vorlage und Gruppe eine **Klick-Matrix**: Zeilen sind die
+   Quellspuren, Spalten die Kanäle der Gruppe. Ein Klick weist die Spur dem Kanal zu, ein zweiter
+   macht ihn still. Alternativ „Tags statt Spuren“ (Tag-Ausdruck wie `role:ad AND layout:stereo`)
+   und ein Prozessor (z. B. Upmix Stereo → 5.1). Die 13 ORF-Presets sind als Vorlagen enthalten.
+4. **Ersatzregeln** — greifen, wenn die Zuordnung einer Gruppe nicht erfüllbar ist. Von oben nach
+   unten gewinnt die erste Regel, die eine Quelle findet; in einer Regel die erste Aktion, die
+   klappt: *Quelle nehmen* (Tag-Ausdruck, optional über Upmix/Downmix), *Stille* oder *Event nicht
+   senden (Alarm)*, jeweils mit optionalem Hinweistext. Beispiel: 5.1 → „nimm `role:pt AND
+   layout:stereo` über Upmix, sonst Stille“.
+
+**Pro Event:** Im Event-Editor der Playout-Automation wählst du im Reiter **Audio** die Zuordnung.
+Ohne Wahl gilt für MXF-Dateien die Vorlage „Stereo“, sonst der Programmton der Quelle. Sobald das
+Event gecued oder auf Sendung ist, zeigt der Reiter den aufgelösten Plan (je Gruppe: welche Spuren,
+oder Ersatzregel, oder still); die Playlist-Spalte „Audio“ markiert Ersatz und Warnungen mit ⚠.
+
 ## 11. Weiterführende Dokumente
 
 - [`HANDBUCH.md`](HANDBUCH.md) — Installation, `make`-Targets,
