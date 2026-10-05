@@ -152,6 +152,10 @@ pub enum TransKind {
     Mix,
     /// Ausgehendes Bild blendet auf Schwarz, dann blendet das neue auf.
     VFade,
+    /// Fade-Cut: das ausgehende Bild blendet über die ganze Dauer auf Schwarz, danach steht das neue hart da.
+    FadeCut,
+    /// Cut-Fade: hart auf Schwarz, dann blendet das neue Bild über die ganze Dauer auf.
+    CutFade,
     /// Slide: das neue Bild fährt über das stehende alte. Pfeil = Bewegungsrichtung.
     SlideR,
     SlideL,
@@ -165,9 +169,11 @@ pub enum TransKind {
 }
 
 impl TransKind {
-    const ALL: [TransKind; 10] = [
+    const ALL: [TransKind; 12] = [
         Self::Mix,
         Self::VFade,
+        Self::FadeCut,
+        Self::CutFade,
         Self::SlideR,
         Self::SlideL,
         Self::SlideD,
@@ -186,6 +192,8 @@ impl TransKind {
         match self {
             Self::Mix => "mix",
             Self::VFade => "vfade",
+            Self::FadeCut => "fadecut",
+            Self::CutFade => "cutfade",
             Self::SlideR => "slideR",
             Self::SlideL => "slideL",
             Self::SlideD => "slideD",
@@ -2116,6 +2124,16 @@ fn apply_transition_frame(t: &TransPads, kind: TransKind, pos: f64) {
                 t.bg.set_property("alpha", 0.0f64);
             }
         }
+        // Ganze Dauer ausblenden (`fg` bleibt unsichtbar); erst am Ende (`pos >= 1`) steht das neue Bild hart da.
+        TransKind::FadeCut => {
+            t.fg.set_property("alpha", if pos >= 1.0 { 1.0f64 } else { 0.0f64 });
+            t.bg.set_property("alpha", if pos >= 1.0 { 0.0f64 } else { 1.0 - pos });
+        }
+        // Sofort Schwarz (`bg` weg), das neue Bild blendet über die ganze Dauer auf.
+        TransKind::CutFade => {
+            t.bg.set_property("alpha", 0.0f64);
+            t.fg.set_property("alpha", pos);
+        }
         slide_or_push => {
             let (dx, dy) = slide_or_push.direction().unwrap_or((1, 0));
             t.bg.set_property("alpha", 1.0f64);
@@ -2166,6 +2184,9 @@ fn spawn_autotrans(
     std::thread::spawn(move || {
         let steps = (duration_ms / STEP_MS).max(2);
         let start = std::time::Instant::now();
+        // Startbild der Rampe sofort setzen: bei Cut-Fade ist es Schwarz (hartes Wegschalten des alten Bildes),
+        // bei allen anderen Arten entspricht Position 0 dem unveränderten Ausgangszustand.
+        apply_transition_frame(&pads, kind, 0.0);
         for i in 1..=steps {
             let target = Duration::from_millis(duration_ms * i / steps);
             if let Some(wait) = target.checked_sub(start.elapsed()) {
@@ -2956,6 +2977,8 @@ mod trans_kind_tests {
     fn slide_and_push_directions() {
         assert_eq!(TransKind::Mix.direction(), None);
         assert_eq!(TransKind::VFade.direction(), None);
+        assert_eq!(TransKind::FadeCut.direction(), None);
+        assert_eq!(TransKind::CutFade.direction(), None);
         assert_eq!(TransKind::SlideR.direction(), Some((1, 0)));
         assert_eq!(TransKind::PushL.direction(), Some((-1, 0)));
         assert_eq!(TransKind::SlideD.direction(), Some((0, 1)));

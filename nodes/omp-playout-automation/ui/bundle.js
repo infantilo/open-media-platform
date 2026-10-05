@@ -88,6 +88,7 @@ function h(tag, attrs, ...kids) {
   return el;
 }
 
+const TRANSITION_LABEL = { cut: "Cut", mix: "Mix", fadecut: "Fade-Cut", cutfade: "Cut-Fade" };
 const fmtMs = (ms) => {
   const s = Math.floor(ms / 1000);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
@@ -391,7 +392,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       { k: "type", t: "Typ", w: "62px", get: (it) => ({ text: it.eventType || "" }) },
       { k: "media", t: "Medium / Quelle", w: "minmax(110px,1fr)", get: (it) => ({ text: mediaOf(it), tip: describe(it) }) },
       { k: "mediaid", t: "Media-ID", w: "minmax(90px,.8fr)", get: (it) => ({ text: mediaIdOf(it), tip: mediaIdOf(it) }) },
-      { k: "transition", t: "Transition", w: "74px", get: (it) => ({ text: it.transition === "mix" ? `Mix${it.transitionRateFrames ? ` ${it.transitionRateFrames}f` : ""}` : "Cut" }) },
+      { k: "transition", t: "Transition", w: "92px", get: (it) => ({ text: TRANSITION_LABEL[it.transition] ? `${TRANSITION_LABEL[it.transition]}${it.transition !== "cut" && it.transitionRateFrames ? ` ${it.transitionRateFrames}f` : ""}` : "Cut" }) },
       { k: "starttype", t: "Start", w: "92px", get: (it) => ({ text: it.startType === "fixtime" ? `⏰ ${it.startAt ? formatLocalStart(it.startAt) : it.fixtimeHms || ""}` : it.startType === "manual" ? "manuell" : "Sequenz" }) },
       { k: "player", t: "Player", w: "52px", get: (it, i) => playerOf(it, i) },
       { k: "status", t: "Status", w: "78px", get: (it, i) => statusOf(it, i) },
@@ -775,7 +776,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         const chips = [];
         if (it.startType === "fixtime") chips.push(h("span", { class: "chip blue", title: "Fixzeit-Start" }, `⏰ ${it.startAt ? formatLocalStart(it.startAt) : it.fixtimeHms || ""}`));
         if (it.startType === "manual") chips.push(h("span", { class: "chip", style: "background:#6b5210", title: "Manueller Start" }, "✋"));
-        if (it.transition === "mix") chips.push(h("span", { class: "chip", style: "background:#1f5a28", title: "Mix-Übergang" }, "⇄"));
+        if (it.transition && it.transition !== "cut") chips.push(h("span", { class: "chip", style: "background:#1f5a28", title: `${TRANSITION_LABEL[it.transition] || it.transition}-Übergang` }, it.transition === "mix" ? "⇄" : it.transition === "fadecut" ? "◐✂" : "✂◑"));
         const nk = (it.children || []).length;
         if (nk > 0) {
           chips.push(h("span", {
@@ -962,8 +963,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         sync();
         const rate = bindText(d, "rateFrames", { placeholder: "Frames 1–250, leer = Mixer-Rate" });
         const rateRow = field("Rampe", rate);
-        const syncT = () => { rateRow.forEach((e) => { e.style.display = d.transition === "mix" ? "" : "none"; }); };
-        f.append(...field("Übergang", bindSelect(d, "transition", [["cut", "✂ Cut"], ["mix", "⇄ Mix (Auto-Trans am Mixer)"]], syncT)));
+        const syncT = () => { rateRow.forEach((e) => { e.style.display = d.transition && d.transition !== "cut" ? "" : "none"; }); };
+        f.append(...field("Übergang", bindSelect(d, "transition", [["cut", "✂ Cut"], ["mix", "⇄ Mix (Auto-Trans am Mixer)"], ["fadecut", "◐✂ Fade-Cut (ausblenden auf Schwarz, dann hart)"], ["cutfade", "✂◑ Cut-Fade (hart auf Schwarz, dann aufblenden)"]], syncT)));
         f.append(...rateRow);
         syncT();
         return f;
@@ -1095,7 +1096,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           if (!iso) throw new Error("Startzeit ungültig (z. B. 14:30:00 oder 2026-10-03 06:00:00)");
           p.startAt = iso;
         } else p.startAt = "";
-        if (d.transition === "mix" && String(d.rateFrames).trim() !== "") p.transitionRateFrames = Number(d.rateFrames);
+        if (d.transition && d.transition !== "cut" && String(d.rateFrames).trim() !== "") p.transitionRateFrames = Number(d.rateFrames);
         p.children = kids.map(cleanKid);
         p.audioMapping = d.audioMapping || "";
         if (item?.audio && d.audioCap !== (item.audio.intent?.capability || "")) {

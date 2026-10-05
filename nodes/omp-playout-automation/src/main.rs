@@ -197,6 +197,10 @@ enum Transition {
     #[default]
     Cut,
     Mix,
+    /// Ausgehendes Bild blendet auf Schwarz, dann steht das neue hart da (Mixer-Art `fadecut`).
+    FadeCut,
+    /// Hart auf Schwarz, das neue Bild blendet auf (Mixer-Art `cutfade`).
+    CutFade,
 }
 
 impl Transition {
@@ -204,6 +208,8 @@ impl Transition {
         match s {
             "cut" => Some(Self::Cut),
             "mix" => Some(Self::Mix),
+            "fadecut" | "fade-cut" => Some(Self::FadeCut),
+            "cutfade" | "cut-fade" => Some(Self::CutFade),
             _ => None,
         }
     }
@@ -2494,7 +2500,17 @@ fn take_on_targets(
                 .invoke("crosspoint.cut", serde_json::json!({}))
                 .map_err(|e| format!("Mixer-crosspoint.cut fehlgeschlagen: {e}"))?;
         }
-        Transition::Mix => {
+        Transition::Mix | Transition::FadeCut | Transition::CutFade => {
+            // Art vor jeder Rampe setzen: der Mixer behält sie, ein späteres Mix-Event darf nicht in der
+            // Art des vorigen Fade-Events laufen.
+            let kind = match transition {
+                Transition::FadeCut => "fadecut",
+                Transition::CutFade => "cutfade",
+                _ => "mix",
+            };
+            mixer
+                .invoke("crosspoint.setTransType", serde_json::json!({"type": kind}))
+                .map_err(|e| format!("Mixer-crosspoint.setTransType fehlgeschlagen: {e}"))?;
             if let Some(frames) = rate_frames {
                 mixer
                     .invoke("crosspoint.setTransRate", serde_json::json!({"frames": frames}))
@@ -5864,6 +5880,17 @@ mod patch_tests {
         // Rate außerhalb 1..=250 oder null löscht sie.
         apply(&mut st, "a", serde_json::json!({"transitionRateFrames": 999})).unwrap();
         assert_eq!(st.metadata["a"].transition_rate_frames, None);
+    }
+
+    #[test]
+    fn fade_transitions_parse_and_serialize_by_name() {
+        assert_eq!(Transition::parse("fadecut"), Some(Transition::FadeCut));
+        assert_eq!(Transition::parse("fade-cut"), Some(Transition::FadeCut));
+        assert_eq!(Transition::parse("cutfade"), Some(Transition::CutFade));
+        assert_eq!(Transition::parse("cut-fade"), Some(Transition::CutFade));
+        assert_eq!(Transition::parse("nope"), None);
+        assert_eq!(serde_json::to_value(Transition::FadeCut).unwrap(), "fadecut");
+        assert_eq!(serde_json::from_value::<Transition>(serde_json::json!("cutfade")).unwrap(), Transition::CutFade);
     }
 
     #[test]

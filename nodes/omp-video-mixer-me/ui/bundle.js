@@ -860,6 +860,8 @@ class OmpVideoMixerMePanel extends HTMLElement {
       mixWipe.append(
         makeKindButton("mix", "MIX", "Überblendung"),
         makeKindButton("vfade", "V-FADE", "Über Schwarz (ausgehendes Bild blendet ab, neues auf)"),
+        makeKindButton("fadecut", "FADE-CUT", "Ausgehendes Bild blendet auf Schwarz, dann steht das neue hart da"),
+        makeKindButton("cutfade", "CUT-FADE", "Hart auf Schwarz, das neue Bild blendet auf"),
       );
       // Slide: neues Bild fährt über das alte; Push: es schiebt das alte hinaus.
       // Pfeil = Bewegungsrichtung. Bewusst keine Crop-Wipes (s. pipeline.rs-Moduldoku).
