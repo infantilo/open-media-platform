@@ -986,6 +986,54 @@ PAN, AUX, AUTOMIX, DUCK, AUTOMATION, SZENEN).
 - **SZENEN**: Mix speichern/aktivieren (ohne Aussetzer); Zuordnung
   „Videoquelle → Audio-Szene“ und Presets des ganzen Mixers.
 
+## 10b. Handy-Kamera (WebRTC-Gateway)
+
+Mit dem Node **WebRTC-Gateway (Handy-Kamera)** kann ein gewöhnliches Handy
+per Browser als Kamera in OMP einspeisen — ohne App-Installation. Der
+Node liefert die Sendeseite selbst aus (eigener Port, nicht über den
+Orchestrator). Ein zweiter Node-Typ, **WebRTC-Gateway (Monitor)**, schickt
+ein beliebiges Bild aus dem Flow Editor als **Retourbild** zurück aufs Handy.
+
+**Einrichten**
+
+1. Instanz „WebRTC-Gateway (Handy-Kamera)“ starten (Flow Editor, Abschnitt 2.1).
+2. In der Bedienoberfläche des Nodes eine **Einladung** erzeugen: Das ergibt
+   einen Link und einen QR-Code. Ohne gültige Einladung nimmt der Node
+   keine Verbindung an; Einladungen lassen sich einzeln widerrufen
+   (laufende Verbindung optional gleich trennen).
+3. Optional im Feld **Retourbild-Node** einen Monitor-Node wählen: Dann
+   enthält derselbe Link/QR-Code auch das Retourbild, und die Quelle wird per
+   Drag & Drop im Flow Editor am Monitor-Node ausgewählt.
+4. Das Handy öffnet den Link, erlaubt Kamera/Mikrofon und tippt
+   **Verbinden**.
+
+**Die Handy-Seite**
+
+- Im Look der Anmeldeseite (dunkles Navy, Cyan→Violett-Verlauf, Glas-Karte),
+  für Hoch- und Querformat ausgelegt.
+- **Vorausgewählte Auflösung und Bildrate:** Die Auswahlfelder sind schon auf
+  die Werte eingestellt, mit denen das Gateway betrieben wird (Workflow-
+  Format bzw. `OMP_WIDTH`, `OMP_HEIGHT`, `OMP_FRAMERATE_NUM/DEN`; ohne
+  Angabe 1280×720 bei 25 fps). Der Nutzer kann abweichen, muss es aber nicht.
+  Nach einer Änderung der Gateway-Werte lädt das Handy die Seite neu.
+- Nach dem Verbinden: Kamerabild (und ggf. Retourbild; Antippen vergrößert),
+  Anzeige „Live“, **Verbindung trennen** und ein aufklappbares **Status**-Feld
+  mit Verbindungszustand und Latenz. Die optionale **Latenzmessung**
+  blendet einen Zeitstempel-Streifen ins Bild ein.
+- Fehler beim Verbinden (Kamera nicht erlaubt, Einladung ungültig, Server
+  nicht erreichbar) erscheinen als gut sichtbarer Hinweis im Startbildschirm.
+
+**CPU-Last und Empfehlung:** Das Gateway dekodiert das Handy-Bild in
+Software. Wähle deshalb nach Möglichkeit **1280×720 bei 25–30 fps**;
+1080p oder 50/60 fps verdoppeln den Aufwand. Der Viewer rechnet seine
+Vorschau nur mit der eingestellten Vorschau-Bildrate (`previewFps`) und
+legt die Quellenbezeichnung als HTML-Overlay über das Bild.
+
+**Betriebshinweise:** Läuft das Handy übers Internet hinter NAT, die
+Startumgebung `OMP_WEBRTC_PUBLIC_IP` und `OMP_WEBRTC_ICE_PORT` setzen.
+`OMP_WEBRTC_LATENCY_MS` (Standard 40) steuert den Jitterbuffer,
+`OMP_WEBRTC_BITRATE_KBPS` (Standard 4000) die Bitrate des Retourbilds.
+
 ## 11. Weiterführende Dokumente
 
 - [`HANDBUCH.md`](HANDBUCH.md) — Installation, `make`-Targets,

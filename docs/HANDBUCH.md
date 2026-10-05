@@ -651,6 +651,7 @@ startbar ist.
 | **omp-2110-gateway** | Bidirektionale Brücke SMPTE-ST-2110-Multicast (LAN, Fremdgeräte) ⇄ OMP-internes MXL-Fabric. Gerichtet je Instanz (Ingest/Output), SDP- oder Einzel-Env-Var-Konfiguration. |
 | **omp-aes67-gateway** | Audio-Pendant zu `omp-2110-gateway`: AES67/RTP-Multicast (Dante im AES67-Modus, Ravenna, Lawo/Merging u. a.) ⇄ MXL, inkl. SAP-Discovery (RFC 2974) für Fremdströme, die nur darüber auffindbar sind. |
 | **omp-srt-gateway** | Bidirektionale Brücke ST 2110 (LAN) ⇄ SRT (WAN) für Beitrag/Distribution über verlustbehaftete Netze. Gerichtet je Instanz (Uplink/Downlink). |
+| **omp-webrtc-gateway** (Typen `omp-webrtc-gateway-camera` / `-monitor`) | Anbindung gewöhnlicher Handys per Browser, ohne App: **Kamera** nimmt Handy-Kamera/-Mikrofon per WebRTC (WHIP, H.264 + Opus) auf und speist sie als MXL-Flow ein; **Monitor** sendet einen gewählten MXL-Flow als Retourbild (WHEP) zurück. Zugang nur über Einladungslinks/QR-Codes. Ausführlich: Benutzerhandbuch, Abschnitt „Handy-Kamera“. |
 | **omp-fabrics-gateway** | Siehe Abschnitt 9.3 — **Remote Memory Access** zwischen zwei OMP-Hosts. |
 
 ### 9.3 Remote Memory Access (MXL-native Fabrics)
