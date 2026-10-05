@@ -5078,3 +5078,5 @@ Ausgangslage (geprüft 2026-10-05): Tonmischer hat einen Stereo-Programmausgang,
 | 31.6 UI | Tonmischer-Panel: Gruppen-Busse als Ausgangsstreifen, Quellen-Streifen gruppiert je Quelle, AFV-Anzeige; Handbuch + Katalogbeschreibung | CDP-Klicktest, Screenshot |
 
 Hinweise: Kap. 30 (Sync-Group) ist Lese-Gating, keine Frame-Ausrichtung — 31.4 braucht einen eigenen Zeitpunkt-Mechanismus. Bekanntes Lip-Sync-Problem `omp-source` (~56 ms) vorher klären (s. Memory). Je Schritt ein Commit, live verifiziert, Handbuch mitführen.
+
+**Regel zu Kapitel 31 (Nutzer 2026-10-05): nichts hartcodieren.** Gruppen-Busse, Kanalzahl und Layout des Tonmischers sind **Konfiguration je Mischer-Instanz** (ohne Playout-Automation z. B. nur Stereo oder eine ganz andere Aufteilung). Standard einer neuen Instanz: ein Stereo-Programmbus. Das Ausgabeprofil der Audio-Regeln ist nur eine **optionale Vorlage** (Import per Knopf bzw. per Workflow-Rolle/Env), nie ein stiller Standard; der frühere Auto-Anlegen-Schritt bei leerem Mixer (1ff0abb) wurde entfernt.

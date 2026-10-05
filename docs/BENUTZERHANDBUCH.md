@@ -1137,9 +1137,9 @@ ist — Kanal-Player melden dafür ihre Audio-Gruppen als zusammengehörig.
 
 **Wo werden die Ausgabegruppen festgelegt?** Welche Gruppen es gibt (Programmton, Hörfilm/AD, …), definiert
 **Admin → Audio-Ausgabe**; pro Event wählt der Reiter **Audio** die Zuordnung der Quellspuren. Der **Tonmischer**
-legt beim ersten Öffnen (leerer Mixer) automatisch **je Ausgabegruppe einen Kanal** an, mit der Erwartung
-`role.<Gruppe>`; über den Knopf **Ausgabegruppen** in der Kopfleiste lassen sich fehlende Gruppenkanäle jederzeit
-nachziehen (bestehende bleiben unberührt).
+startet **leer und frei konfigurierbar** (z. B. nur Stereo, ohne Playout-Automation). Über den Knopf
+**Ausgabegruppen** in der Kopfleiste legst du bei Bedarf **je Ausgabegruppe einen Kanal** an (Erwartung
+`role.<Gruppe>`); bestehende Kanäle bleiben unberührt. Es wird nichts automatisch angelegt.
 
 **Szenen und Automatik (Tonmischer):** Mix einstellen → in der Kopfleiste **● Szene speichern** → im Reiter
 **SZENEN** pro Szene im Feld **automatisch bei** eine Videoquelle wählen: Sobald diese im Programm ist, wird die

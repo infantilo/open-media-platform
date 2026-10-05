@@ -463,10 +463,6 @@ class MixerApp {
     } catch {}
   }
   afterState() {
-    if (!this.autoGroupsTried && this.state.channels.length === 0 && this.state.groups.length === 0) {
-      this.autoGroupsTried = true;
-      this.syncGroupChannels();
-    }
     const ids = this.state.channels.map((c) => c.id);
     if (!this.ui.selected || !ids.includes(this.ui.selected)) {
       this.ui.selected = ids[0] || "";
