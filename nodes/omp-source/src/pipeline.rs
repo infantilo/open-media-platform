@@ -145,10 +145,15 @@ impl Pipeline {
             .map_err(|e| PipelineError(format!("videotestsrc: {e}")))?;
         videotestsrc.set_property_from_str("pattern", &config.initial_pattern);
 
+        let marker_mode = std::env::var("OMP_SOURCE_VIDEO_MARKER").is_ok_and(|v| v == "1");
+        let mut caps_builder = gst::Caps::builder("video/x-raw");
+        if marker_mode {
+            caps_builder = caps_builder.field("format", "I420");
+        }
         let caps = gst::ElementFactory::make("capsfilter")
             .property(
                 "caps",
-                gst::Caps::builder("video/x-raw")
+                caps_builder
                     .field("width", config.width as i32)
                     .field("height", config.height as i32)
                     .field(
@@ -162,6 +167,33 @@ impl Pipeline {
             )
             .build()
             .map_err(|e| PipelineError(format!("capsfilter: {e}")))?;
+        // `OMP_SOURCE_VIDEO_MARKER=1` (Diagnose, zusammen mit `OMP_SOURCE_PATTERN=black`
+        // und `OMP_SOURCE_AUDIO_WAVE=ticks`): je volle Sekunde der Pipeline-Laufzeit
+        // EIN weißes Bild — passend zum Audio-Tick (Sekundenbeginn), zur echten
+        // A/V-Versatzmessung der MXL-Etiketten (`omp-mediaio` `av_marker_probe`).
+        if std::env::var("OMP_SOURCE_VIDEO_MARKER").is_ok_and(|v| v == "1")
+            && let Some(pad) = caps.static_pad("src")
+        {
+            pad.add_probe(gst::PadProbeType::BUFFER, |pad, info| {
+                if let Some(gst::PadProbeData::Buffer(buf)) = &mut info.data {
+                    let is_marker = buf.pts().is_some_and(|p| p.nseconds() % 1_000_000_000 < 40_000_000);
+                    let fmt_i420 = pad
+                        .current_caps()
+                        .and_then(|c| c.structure(0).and_then(|s| s.get::<String>("format").ok()))
+                        .is_some_and(|f| f == "I420");
+                    if is_marker && let Some(p) = buf.pts() {
+                        eprintln!("MARKER video pts_ns={}", p.nseconds());
+                    }
+                    if is_marker && fmt_i420 {
+                        let b = buf.make_mut();
+                        if let Ok(mut m) = b.map_writable() {
+                            m.as_mut_slice().fill(235);
+                        }
+                    }
+                }
+                gst::PadProbeReturn::Ok
+            });
+        }
         let tee = gst::ElementFactory::make("tee")
             .name("video_tee")
             .build()
@@ -272,7 +304,29 @@ impl Pipeline {
             .property("volume", 0.3f64)
             .build()
             .map_err(|e| PipelineError(format!("audiotestsrc: {e}")))?;
-        audiotestsrc.set_property_from_str("wave", "sine");
+        // `OMP_SOURCE_AUDIO_WAVE=ticks` (Diagnose): periodische Ticks im
+        // Sekundentakt — zusammen mit dem Muster `blink` ein Marker-Paar
+        // zur echten A/V-Versatzmessung (`examples/av_marker_probe`).
+        let wave = std::env::var("OMP_SOURCE_AUDIO_WAVE").ok().filter(|w| matches!(w.as_str(), "sine" | "ticks" | "silence")).unwrap_or_else(|| "sine".to_string());
+        audiotestsrc.set_property_from_str("wave", &wave);
+        if std::env::var("OMP_SOURCE_VIDEO_MARKER").is_ok_and(|v| v == "1")
+            && let Some(pad) = audiotestsrc.static_pad("src")
+        {
+            pad.add_probe(gst::PadProbeType::BUFFER, |_pad, info| {
+                if let Some(gst::PadProbeData::Buffer(buf)) = &info.data
+                    && let (Some(pts), Some(off)) = (buf.pts(), Some(buf.offset()))
+                {
+                    // Sample-Offset des Buffer-Beginns; ein Tick beginnt bei jedem Vielfachen von 48000.
+                    let n = buf.duration().map_or(0, |d| d.nseconds() * 48_000 / 1_000_000_000);
+                    let next = off.div_ceil(48_000) * 48_000;
+                    if next >= off && next < off + n {
+                        let tick_pts = pts.nseconds() + (next - off) * 1_000_000_000 / 48_000;
+                        eprintln!("MARKER audio tick pts_ns={tick_pts} (buf pts={} offset={off} samples={n})", pts.nseconds());
+                    }
+                }
+                gst::PadProbeReturn::Ok
+            });
+        }
         let audioconvert = gst::ElementFactory::make("audioconvert")
             .build()
             .map_err(|e| PipelineError(format!("audioconvert: {e}")))?;

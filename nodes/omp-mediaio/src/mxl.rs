@@ -14,7 +14,7 @@
 //! Funktion [`mxl::load_api`]) — muss über `LD_LIBRARY_PATH` auffindbar
 //! sein (`deploy/dev/mxl.env`).
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
@@ -52,6 +52,8 @@ pub struct MxlContext {
     /// frei, wenn ALLE Flows der Gruppe Daten zum selben TAI-Zeitpunkt
     /// haben (nicht blockierend, fail-open nach `SYNC_GATE_MAX_WAIT`).
     sync_group: Option<Arc<mxl::SyncGroup>>,
+    /// Gemeinsame Anzeige-Latenz der Leser (s. [`SharedLatency`]) — `None` = je Leser eigene Latenz.
+    shared_latency: Option<Arc<SharedLatency>>,
 }
 
 /// Längstes Warten eines Lesers auf die übrigen Flows der Gruppe, danach
@@ -69,6 +71,54 @@ struct GateState {
     /// andere Leser je Lesevorgang 40 ms warten und verhungern (Audio-
     /// Batches à 10 ms!).
     off_until: Option<std::time::Instant>,
+}
+
+/// Gemeinsame Anzeige-Latenz aller Leser EINES Kontexts (Lip-Sync, Kapitel 30).
+///
+/// **Befund (2026-10-05, echte Marker-Messung `examples/av_marker_probe`):** jeder
+/// Leser hatte seine eigene adaptive Latenz in GANZEN PERIODEN SEINES Flows
+/// (Video 40 ms, Audio 10 ms). Der Video-Leser kam wegen seines schwereren
+/// Quellpfads auf z. B. 3 Perioden = 120 ms, der Audio-Leser auf 2 Perioden =
+/// 20 ms — der PTS `TAI(Etikett) + L` verschob Ton und Bild um die Differenz
+/// (40–100 ms) gegeneinander, obwohl die Quelle korrekt etikettiert hatte.
+/// Mit gemeinsamer Latenz bekommen alle Leser eines Kontexts `max` ihrer
+/// Einzel-Latenzen: die Etiketten-Differenz bleibt exakt erhalten.
+#[derive(Default)]
+pub struct SharedLatency {
+    slots: Mutex<std::collections::HashMap<u64, (u64, std::time::Instant)>>,
+    next_id: AtomicU64,
+}
+
+/// Slots, die länger nicht aktualisiert wurden (Leser ohne Daten), zählen nicht mit —
+/// ein toter Eingang soll die Latenz der anderen nicht dauerhaft hochhalten.
+const SHARED_LATENCY_STALE: Duration = Duration::from_secs(3);
+
+impl SharedLatency {
+    pub fn register(self: &Arc<Self>) -> LatencyMember {
+        LatencyMember { domain: self.clone(), id: self.next_id.fetch_add(1, Ordering::Relaxed) }
+    }
+}
+
+pub struct LatencyMember {
+    domain: Arc<SharedLatency>,
+    id: u64,
+}
+
+impl LatencyMember {
+    /// Meldet die eigene Latenz und liefert die wirksame (Maximum aller frischen Slots).
+    pub fn update(&self, own_ns: u64) -> u64 {
+        let now = std::time::Instant::now();
+        let mut g = self.domain.slots.lock().unwrap_or_else(|p| p.into_inner());
+        g.insert(self.id, (own_ns, now));
+        g.retain(|_, (_, t)| now.duration_since(*t) < SHARED_LATENCY_STALE);
+        g.values().map(|(l, _)| *l).max().unwrap_or(own_ns)
+    }
+}
+
+impl Drop for LatencyMember {
+    fn drop(&mut self) {
+        self.domain.slots.lock().unwrap_or_else(|p| p.into_inner()).remove(&self.id);
+    }
 }
 
 /// Von außen lesbare Zähler des Lese-Tors eines Eingangs
@@ -124,6 +174,12 @@ fn sync_gate(context: &MxlContext, group: &mxl::SyncGroup, rate: &mxl_sys::Ratio
     }
 }
 
+/// Strikte Ursprungs-Etiketten für Video-Ausgänge (Standard AN; `OMP_MXL_STRICT_ORIGIN=0`
+/// = früheres Ratschen-Verhalten, s. `compute_write_index`).
+fn strict_origin_labels() -> bool {
+    std::env::var("OMP_MXL_STRICT_ORIGIN").map_or(true, |v| v != "0")
+}
+
 pub fn sync_group_enabled() -> bool {
     std::env::var("OMP_MXL_SYNCGROUP").is_ok_and(|v| v == "1")
 }
@@ -134,7 +190,16 @@ impl MxlContext {
     /// Preset des jeweiligen `install-mxl.sh`-Laufs egal ist) und
     /// öffnet/erstellt die Instanz für `domain`.
     pub fn new(domain: &str) -> Result<Self, String> {
-        Self::build(domain, sync_group_enabled())
+        Self::build(domain, sync_group_enabled(), std::env::var("OMP_MXL_SHARED_LATENCY").is_ok_and(|v| v == "1"))
+    }
+
+    /// Für Nodes, die zusammengehörige Video- UND Audio-Flows lesen (channel-
+    /// player, Recorder, Monitor, DeckLink-Ausgang): wie [`Self::new`], aber mit
+    /// **gemeinsamer Anzeige-Latenz** aller Leser ([`SharedLatency`]) als Standard,
+    /// damit die Quell-Etiketten bei der Wiedergabe-Zeit exakt erhalten bleiben.
+    /// Abschaltbar mit `OMP_MXL_SHARED_LATENCY=0`.
+    pub fn new_av_aligned(domain: &str) -> Result<Self, String> {
+        Self::build(domain, sync_group_enabled(), std::env::var("OMP_MXL_SHARED_LATENCY").map_or(true, |v| v != "0"))
     }
 
     /// Für Nodes, deren Kontext genau die zusammengehörigen Flows liest
@@ -145,10 +210,10 @@ impl MxlContext {
     /// (`docs/decisions.md`). Der Aufruf bleibt, damit ein späteres
     /// Wiedereinschalten pro Node nur diese Funktion berührt.
     pub fn new_synced(domain: &str) -> Result<Self, String> {
-        Self::build(domain, sync_group_enabled())
+        Self::new_av_aligned(domain)
     }
 
-    fn build(domain: &str, sync: bool) -> Result<Self, String> {
+    fn build(domain: &str, sync: bool, shared_latency: bool) -> Result<Self, String> {
         let api = mxl::load_api("libmxl.so").map_err(|e| format!("libmxl.so laden: {e}"))?;
         let instance =
             mxl::MxlInstance::new(api, domain, "").map_err(|e| format!("MXL-Instanz: {e}"))?;
@@ -157,7 +222,7 @@ impl MxlContext {
         } else {
             None
         };
-        Ok(MxlContext { instance, sync_group })
+        Ok(MxlContext { instance, sync_group, shared_latency: shared_latency.then(|| Arc::new(SharedLatency::default())) })
     }
 
     /// Neue, leere Synchronization-Group dieser Instanz (für
@@ -764,6 +829,7 @@ fn compute_write_index(
     last_written: Option<u64>,
     delay: u64,
     step: u64,
+    strict_origin: bool,
     now: impl FnOnce() -> u64,
 ) -> Option<u64> {
     match origin_index {
@@ -781,7 +847,17 @@ fn compute_write_index(
             match last_written {
                 Some(last) => {
                     let floor = last + step;
-                    if floor > candidate + MAX_RATCHET_AHEAD_STEPS * step {
+                    // `strict_origin` (Video, Lip-Sync 2026-10-05): ein `videorate`-
+                    // Duplikat (gleiche Ursprungs-Meta) bekam früher `last+1`, und
+                    // das nächste echte Bild (Ursprung = last) wurde dahinter auf
+                    // `last+2` geschoben — das Etikett lief so bis zum Cap (2 Bilder =
+                    // 40–80 ms) dem Ursprung DAUERHAFT hinterher, während Audio (kein
+                    // Duplikat, kein Ratschen) exakt blieb: gemessener A/V-Versatz
+                    // 40–80 ms hinter dem channel-player. Jetzt wird ein Bild, dessen
+                    // Etikett schon belegt ist (Duplikat), VERWORFEN statt dahinter
+                    // geschrieben — die Etiketten bleiben gleich dem Ursprung; die
+                    // Lücke füllt der Leser (wiederholt das letzte Bild).
+                    if (strict_origin && floor > candidate) || floor > candidate + MAX_RATCHET_AHEAD_STEPS * step {
                         None
                     } else {
                         Some(candidate.max(floor))
@@ -991,7 +1067,10 @@ fn write_loop(
 
         let delay = output_delay.load(Ordering::Relaxed);
         let origin_index = origin_index_from_buffer(context, buffer, &reference_caps, grain_rate);
-        let Some(this_index) = compute_write_index(origin_index, last_written, delay, 1, || {
+        if std::env::var("OMP_MXL_DEBUG").is_ok() && last_written.is_some_and(|l| l % 100 == 50) {
+            eprintln!("MXLDBG write video origin_index={origin_index:?} pts={:?} last_written={last_written:?}", buffer.pts());
+        }
+        let Some(this_index) = compute_write_index(origin_index, last_written, delay, 1, strict_origin_labels(), || {
             // Zeitbasis (Nachtrag 271): ohne durchgereichten Ursprung den
             // Index aus dem PTS des Bildes ableiten (Aufnahme-/Erzeugungs-
             // zeit), nicht aus dem Moment des Abholens — sonst bekommen
@@ -1421,7 +1500,7 @@ fn write_audio_loop(
         // `output_delay`, daher fest `0`.
         let origin_index =
             origin_index_from_buffer(context, buffer, &reference_caps, sample_rate);
-        let Some(this_index) = compute_write_index(origin_index, last_written, 0, batch_size, || {
+        let Some(this_index) = compute_write_index(origin_index, last_written, 0, batch_size, false, || {
             // Zeitbasis (Nachtrag 271), wie write_loop: Sample-Index aus dem
             // PTS (1 s voraus / 10 s zurück plausibel), sonst Wallclock.
             let rate_hz = (sample_rate.numerator / sample_rate.denominator.max(1)).max(1) as u64;
@@ -1892,6 +1971,7 @@ fn index_pts(
     period_ns: u64,
     latency: &mut Option<crate::timebase::LatencyTracker>,
     last_pts: &mut Option<u64>,
+    shared: Option<&LatencyMember>,
 ) -> IndexPts {
     use crate::timebase::{tai_to_running, LatencyChange, LatencyTracker};
     let (Some(clock), Some(base)) = (element.clock(), element.base_time()) else {
@@ -1924,7 +2004,10 @@ fn index_pts(
     if tracker.observe(lag) == LatencyChange::Shrink {
         return IndexPts::Skip;
     }
-    let Some(pts) = tai_to_running(index_tai, base.nseconds(), clock_now, tai_now, tracker.latency_ns()) else {
+    // Gemeinsame Latenz (Lip-Sync): wirksam ist das Maximum aller Leser des Kontexts.
+    let own_latency = tracker.latency_ns();
+    let effective_latency = shared.map_or(own_latency, |m| m.update(own_latency));
+    let Some(pts) = tai_to_running(index_tai, base.nseconds(), clock_now, tai_now, effective_latency) else {
         return IndexPts::Skip;
     };
     if !crate::timebase::pts_plausible(pts, running_now) {
@@ -1962,6 +2045,7 @@ fn read_loop(
     let timebase = index_timebase_enabled();
     let period_ns = (1_000_000_000u64 * grain_rate.denominator.max(1) as u64) / grain_rate.numerator.max(1) as u64;
     let mut latency: Option<crate::timebase::LatencyTracker> = None;
+    let latency_member = context.shared_latency.as_ref().map(|d| d.register());
     let mut last_pts: Option<u64> = None;
     let dbg = std::env::var("OMP_MXL_DEBUG").is_ok();
     let mut st = [0u32; 8]; // ok, mismatch, skip, notplaying, toolate, tooearly, pusherr, other
@@ -1995,7 +2079,7 @@ fn read_loop(
                     continue;
                 }
                 let pts = if timebase {
-                    match index_pts(context, app_src, grain_rate, index, period_ns, &mut latency, &mut last_pts) {
+                    match index_pts(context, app_src, grain_rate, index, period_ns, &mut latency, &mut last_pts, latency_member.as_ref()) {
                         IndexPts::Push(pts) => Some(pts),
                         IndexPts::Skip => {
                             st[2] += 1;
@@ -2524,6 +2608,7 @@ fn read_audio_loop(
     let timebase = index_timebase_enabled();
     let batch_ns = (batch_size * 1_000_000_000 * sample_rate.denominator.max(1) as u64) / sample_rate.numerator.max(1) as u64;
     let mut latency: Option<crate::timebase::LatencyTracker> = None;
+    let latency_member = context.shared_latency.as_ref().map(|d| d.register());
     let mut last_pts: Option<u64> = None;
     while running.load(Ordering::Relaxed) {
         heartbeat.fetch_add(1, Ordering::Relaxed);
@@ -2533,7 +2618,7 @@ fn read_audio_loop(
         match samples_reader.as_ref().expect("samples_reader is Some outside the FLOW_INVALID branch").get_samples_non_blocking(index, batch_size as usize) {
             Ok(data) => {
                 let pts = if timebase {
-                    match index_pts(context, app_src, sample_rate, index, batch_ns, &mut latency, &mut last_pts) {
+                    match index_pts(context, app_src, sample_rate, index, batch_ns, &mut latency, &mut last_pts, latency_member.as_ref()) {
                         IndexPts::Push(pts) => Some(pts),
                         IndexPts::Skip => {
                             index += batch_size;
@@ -2708,7 +2793,7 @@ mod tests {
     #[test]
     fn compute_write_index_adds_delay_to_origin() {
         let now_called = std::cell::Cell::new(false);
-        let index = compute_write_index(Some(1000), None, 3, 1, || {
+        let index = compute_write_index(Some(1000), None, 3, 1, false, || {
             now_called.set(true);
             0
         });
@@ -2717,28 +2802,42 @@ mod tests {
     }
 
     #[test]
+    fn strict_origin_drops_a_duplicate_instead_of_ratcheting_the_label_ahead() {
+        // Bild mit Ursprung 100 wurde auf Etikett 100 geschrieben; `videorate` liefert ein
+        // Duplikat (Ursprung 100): strikt → verworfen (kein Etikett 101).
+        assert_eq!(compute_write_index(Some(100), Some(100), 0, 1, true, || 0), None);
+        // Das nächste echte Bild (Ursprung 101) bekommt dann exakt 101 (nicht 102).
+        assert_eq!(compute_write_index(Some(101), Some(100), 0, 1, true, || 0), Some(101));
+        // Altes Verhalten (nicht strikt): Duplikat → 101, nächstes echtes Bild → 102 (Drift).
+        assert_eq!(compute_write_index(Some(100), Some(100), 0, 1, false, || 0), Some(101));
+        assert_eq!(compute_write_index(Some(101), Some(101), 0, 1, false, || 0), Some(102));
+        // Mit Delay bleibt die Lage relativ zum Ursprung exakt.
+        assert_eq!(compute_write_index(Some(101), Some(103), 3, 1, true, || 0), Some(104));
+    }
+
+    #[test]
     fn compute_write_index_zero_delay_is_a_no_op() {
-        let index = compute_write_index(Some(1000), None, 0, 1, || 0);
+        let index = compute_write_index(Some(1000), None, 0, 1, false, || 0);
         assert_eq!(index, Some(1000), "unverändertes Verhalten ohne gesetztes Delay");
     }
 
     #[test]
     fn compute_write_index_origin_with_delay_still_monotonic() {
         // last_written liegt bereits VOR origin+delay -> origin+delay gewinnt.
-        let index = compute_write_index(Some(1000), Some(1001), 3, 1, || 0);
+        let index = compute_write_index(Some(1000), Some(1001), 3, 1, false, || 0);
         assert_eq!(index, Some(1003));
         // last_written knapp NACH origin+delay (innerhalb des Caps) ->
         // Monotonie-Schutz greift, kein Rückwärtssprung.
-        let index = compute_write_index(Some(1000), Some(1003), 3, 1, || 0);
+        let index = compute_write_index(Some(1000), Some(1003), 3, 1, false, || 0);
         assert_eq!(index, Some(1004), "max(origin+delay, letzter+1) schützt vor Rückwärtssprüngen");
         // Weit davor (z. B. Delay live verkleinert, oder Bilder schneller als
         // Echtzeit) -> Sample verwerfen statt dauerhaft in die Zukunft zu
         // schreiben (Nachtrag 271, live: omp-switcher +33..+100 Grains).
-        let index = compute_write_index(Some(1000), Some(1010), 3, 1, || 0);
+        let index = compute_write_index(Some(1000), Some(1010), 3, 1, false, || 0);
         assert_eq!(index, None, "Origin-Zweig ist jetzt ebenfalls gecapped");
         // Audio: Cap in Batches.
-        assert_eq!(compute_write_index(Some(48_000), Some(48_000 + 480 * 3), 0, 480, || 0), None);
-        assert_eq!(compute_write_index(Some(48_000), Some(48_000), 0, 480, || 0), Some(48_480));
+        assert_eq!(compute_write_index(Some(48_000), Some(48_000 + 480 * 3), 0, 480, false, || 0), None);
+        assert_eq!(compute_write_index(Some(48_000), Some(48_000), 0, 480, false, || 0), Some(48_480));
     }
 
     #[test]
@@ -2751,13 +2850,13 @@ mod tests {
         // weil der Orchestrator setOutputDelay erst NACH awaitRegistration
         // aufrufen kann, ein Node wie der Mixer aber ggf. schon vorher
         // Frames schreibt (s. compute_write_index-Doku).
-        let index = compute_write_index(None, None, 5, 1, || 2000);
+        let index = compute_write_index(None, None, 5, 1, false, || 2000);
         assert_eq!(index, Some(2005));
         // Folgeaufruf mit geändertem Delay UND fortgeschrittener Wallclock
         // -> beide werden neu gelesen, nicht eingefroren. Wallclock+delay
         // liegt hier VOR dem Ratschen-Boden, das Cap greift also gar nicht
         // erst (candidate gewinnt sowieso).
-        let index = compute_write_index(None, Some(2005), 9, 1, || 2001);
+        let index = compute_write_index(None, Some(2005), 9, 1, false, || 2001);
         assert_eq!(index, Some(2010), "wallclock (2001) + neues delay (9), nicht der alte Anker");
     }
 
@@ -2766,7 +2865,7 @@ mod tests {
         // Ratschen-Boden liegt nur 1 Schritt vor der Wallclock (innerhalb
         // von MAX_RATCHET_AHEAD_STEPS=2) -> weiterhin normal bedient, kein
         // Verwerfen bei jedem kleinen, harmlosen Vorsprung.
-        let index = compute_write_index(None, Some(2010), 0, 1, || 2010);
+        let index = compute_write_index(None, Some(2010), 0, 1, false, || 2010);
         assert_eq!(index, Some(2011), "max(wallclock+delay, letzter+1) innerhalb des Caps");
     }
 
@@ -2778,7 +2877,7 @@ mod tests {
         // zurück -- hier liegt er 9 vor der Wallclock, klar über dem Cap
         // von 2. Erwartung: `None` (Sample verwerfen), NICHT einfach der
         // alte Ratschen-Wert 2011 wie vor dem Fix.
-        let index = compute_write_index(None, Some(2010), 0, 1, || 2001);
+        let index = compute_write_index(None, Some(2010), 0, 1, false, || 2001);
         assert_eq!(
             index, None,
             "Vorsprung von 9 > Cap 2 -> verwerfen statt Ratschen-Boden weiter zu bedienen"
@@ -2792,7 +2891,7 @@ mod tests {
         // — `continue` ohne `last_written`-Update). Holt die Wallclock
         // wieder bis auf das Cap auf, läuft das Schreiben ohne
         // Rückwärtssprung von selbst weiter.
-        let index = compute_write_index(None, Some(2010), 0, 1, || 2009);
+        let index = compute_write_index(None, Some(2010), 0, 1, false, || 2009);
         assert_eq!(index, Some(2011), "Vorsprung wieder innerhalb des Caps -> normales Ratschen");
     }
 
@@ -2801,16 +2900,16 @@ mod tests {
         // `step` ist `batch_size` im Audio-Schreibpfad (`write_audio_loop`),
         // nicht `1` wie bei Video — dieselbe Cap-Logik muss dafür
         // unverändert funktionieren, nur mit größerer Schrittweite.
-        let index = compute_write_index(None, Some(1000), 0, 480, || 1480);
+        let index = compute_write_index(None, Some(1000), 0, 480, false, || 1480);
         assert_eq!(index, Some(1480), "Wallclock exakt im Takt -> kein Ratschen nötig");
 
         // Wallclock ~1,7 ms (80 Samples) hinter dem Boden: normaler Abhol-
         // Jitter, KEIN Verwerfen (früher: Cap in Samples statt Batches,
         // verwarf hier einen ganzen Block, Nachtrag 271).
-        let index = compute_write_index(None, Some(1000), 0, 480, || 1400);
+        let index = compute_write_index(None, Some(1000), 0, 480, false, || 1400);
         assert_eq!(index, Some(1480), "Jitter innerhalb von 2 Batches wird bedient");
 
-        let index = compute_write_index(None, Some(1480), 0, 480, || 900);
+        let index = compute_write_index(None, Some(1480), 0, 480, false, || 900);
         assert_eq!(
             index, None,
             "Wallclock weit hinter dem Ratschen-Boden -> verwerfen, exakt wie bei Video"
@@ -3330,5 +3429,34 @@ mod tests {
                 HANG_THRESHOLD, READER_COUNT, WRITER_FRAMES
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod shared_latency_tests {
+    use super::*;
+
+    #[test]
+    fn effective_latency_is_the_maximum_of_all_members() {
+        let d = Arc::new(SharedLatency::default());
+        let video = d.register();
+        let audio = d.register();
+        assert_eq!(video.update(120_000_000), 120_000_000);
+        // Audio hätte allein 20 ms, wirksam sind die 120 ms des Videos → gleiche Verschiebung.
+        assert_eq!(audio.update(20_000_000), 120_000_000);
+        // Video wächst → Audio folgt beim nächsten Update.
+        assert_eq!(video.update(160_000_000), 160_000_000);
+        assert_eq!(audio.update(20_000_000), 160_000_000);
+    }
+
+    #[test]
+    fn dropped_member_no_longer_holds_the_latency_up() {
+        let d = Arc::new(SharedLatency::default());
+        let video = d.register();
+        let audio = d.register();
+        video.update(120_000_000);
+        assert_eq!(audio.update(20_000_000), 120_000_000);
+        drop(video);
+        assert_eq!(audio.update(20_000_000), 20_000_000);
     }
 }
