@@ -47,7 +47,7 @@ use std::sync::{Arc, Mutex};
 use gst::prelude::*;
 use gstreamer as gst;
 use omp_mediaio::Output;
-use omp_mediaio::mxl::{MxlAudioInput, MxlAudioOutput, MxlContext, MxlVideoInput, MxlVideoOutput};
+use omp_mediaio::mxl::{GateStats, MxlAudioInput, MxlAudioOutput, MxlContext, MxlVideoInput, MxlVideoOutput};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
@@ -149,6 +149,8 @@ struct SharedState {
     // `MxlAudioOutput`-Instanz, neues `AtomicBool`).
     video_flowed: Arc<AtomicBool>,
     audio_flowed: Arc<AtomicBool>,
+    /// Lese-Tor-Zähler der Live-Eingänge (Video, Audio), nur bei `Live`.
+    gate: (Option<Arc<GateStats>>, Option<Arc<GateStats>>),
 }
 
 #[derive(Clone)]
@@ -177,6 +179,19 @@ impl PipelineHandle {
 
     pub fn media_type(&self) -> String {
         self.shared.lock().expect("lock poisoned").media_type.clone()
+    }
+
+    /// Zustand der MXL-Synchronization-Group der Live-Eingänge für das Panel.
+    pub fn sync_gate(&self) -> String {
+        let s = self.shared.lock().expect("lock poisoned");
+        match (&s.gate.0, &s.gate.1) {
+            (None, None) => "kein Live-Eingang".to_string(),
+            (v, a) => format!(
+                "Video: {} | Audio: {}",
+                v.as_ref().map_or("-".to_string(), |g| g.summary()),
+                a.as_ref().map_or("-".to_string(), |g| g.summary())
+            ),
+        }
     }
 
     pub fn position_ms(&self) -> i64 {
@@ -620,6 +635,7 @@ struct ActivePipeline {
     // Dito für Live-Empfang (`read_loop`-Thread).
     _mxl_video_input: Option<MxlVideoInput>,
     _mxl_audio_input: Option<MxlAudioInput>,
+    gate: (Option<Arc<GateStats>>, Option<Arc<GateStats>>),
 }
 
 impl ActivePipeline {
@@ -761,6 +777,8 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
         }
     });
 
+    let mxl_video_input_gate = mxl_video_input.as_ref().map(|i| i.gate_stats());
+    let mxl_audio_input_gate = mxl_audio_input.as_ref().map(|i| i.gate_stats());
     Ok(ActivePipeline {
         pipeline,
         query_el,
@@ -768,6 +786,7 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
         audio_flowed,
         _mxl_video_output: mxl_video_output,
         _mxl_audio_output: mxl_audio_output,
+        gate: (mxl_video_input_gate, mxl_audio_input_gate),
         _mxl_video_input: mxl_video_input,
         _mxl_audio_input: mxl_audio_input,
     })
@@ -797,6 +816,7 @@ pub fn run(config: Config, tx: UnboundedSender<Event>, ready: oneshot::Sender<Re
         media_type: "none".to_string(),
         video_flowed: Arc::new(AtomicBool::new(false)),
         audio_flowed: Arc::new(AtomicBool::new(false)),
+        gate: (None, None),
     }));
     let position_ms = Arc::new(AtomicI64::new(0));
     let duration_ms = Arc::new(AtomicI64::new(0));
@@ -824,6 +844,7 @@ pub fn run(config: Config, tx: UnboundedSender<Event>, ready: oneshot::Sender<Re
                             let mut s = shared.lock().expect("lock poisoned");
                             s.video_flowed = p.video_flowed.clone();
                             s.audio_flowed = p.audio_flowed.clone();
+                            s.gate = p.gate.clone();
                             drop(s);
                             active = Some(p);
                         }
@@ -846,6 +867,7 @@ pub fn run(config: Config, tx: UnboundedSender<Event>, ready: oneshot::Sender<Re
                         s.media_type = media_type_str(&item.source).to_string();
                         s.video_flowed = p.video_flowed.clone();
                         s.audio_flowed = p.audio_flowed.clone();
+                        s.gate = p.gate.clone();
                         drop(s);
                         active = Some(p);
                         current_item = Some(item);

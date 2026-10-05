@@ -191,6 +191,13 @@ impl Monitor {
         self.video_flowed.load(Ordering::Relaxed)
     }
 
+    /// Zustand der MXL-Synchronization-Group (Lese-Tor) beider Eingänge.
+    pub fn sync_gate(&self) -> String {
+        let v = self.video_input.lock().expect("lock poisoned").as_ref().map(|i| i.gate_stats().summary());
+        let a = self.audio_input.lock().expect("lock poisoned").as_ref().map(|i| i.gate_stats().summary());
+        format!("Video: {} | Audio: {}", v.unwrap_or_else(|| "-".into()), a.unwrap_or_else(|| "-".into()))
+    }
+
     pub fn audio_flowed(&self) -> bool {
         self.audio_flowed.load(Ordering::Relaxed)
     }

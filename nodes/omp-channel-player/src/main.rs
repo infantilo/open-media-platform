@@ -92,6 +92,8 @@ impl ParamStore for PlayerStore {
                 range: None,
                 readonly: true,
             },
+            // Zustand der MXL-Synchronization-Group der Live-Eingänge.
+            ParamSpec { name: "syncGate".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             // JSON-Array [string] — Dateinamen direkt unter OMP_MEDIA_DIR.
             ParamSpec { name: "mediaLibrary".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             // JSON-Array [{senderId,label}] — Live-Kandidaten, s.
@@ -123,6 +125,7 @@ impl ParamStore for PlayerStore {
         match name {
             "currentLabel" => Some(serde_json::json!(self.pipeline.current_label())),
             "mediaType" => Some(serde_json::json!(self.pipeline.media_type())),
+            "syncGate" => Some(serde_json::json!(self.pipeline.sync_gate())),
             "positionMs" => Some(serde_json::json!(self.pipeline.position_ms() as f64)),
             "durationMs" => Some(serde_json::json!(self.pipeline.duration_ms() as f64)),
             "mediaLibrary" => {

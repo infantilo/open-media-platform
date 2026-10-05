@@ -1,7 +1,7 @@
 //! Kapitel 30.3: echte `omp-recorder`-Pipeline (Quelltext per `#[path]`
 //! eingebunden) gegen zwei Echtzeit-Schreiber (Video 320x180@25 + Audio
 //! 48 kHz mono, korrekt etikettiert) — nimmt N Sekunden auf und gibt den
-//! Dateipfad aus. Mit/ohne Sync-Group (`OMP_MXL_SYNCGROUP=0` schaltet ab).
+//! Dateipfad aus. Mit/ohne Sync-Group (`OMP_MXL_SYNCGROUP=1` schaltet ein, Standard aus).
 //!   cargo run -p omp-recorder --example sync_live_check -- <sekunden>
 #[path = "../src/pipeline.rs"]
 #[allow(dead_code)]

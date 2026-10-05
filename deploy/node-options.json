@@ -1142,6 +1142,22 @@
       "default": "data/ograf-templates",
       "group": "Medien und Dateien",
       "pathKind": "dir"
+    },
+    {
+      "key": "OMP_OGRAF_KEEPALIVE",
+      "label": "Fluss im Leerlauf halten",
+      "type": "enum",
+      "description": "Aus: Pipeline pausiert ohne sichtbare Grafik (spart CPU, Fill/Key stehen dann). An: Fill/Key schreiben dauerhaft (leeres Bild), kostet Leerlauf-CPU.",
+      "default": "0",
+      "group": "Signal",
+      "choices": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "1"
+        }
+      ]
     }
   ],
   "omp-media-library": [

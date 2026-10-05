@@ -539,6 +539,7 @@ impl ParamStore for MonitorStore {
                 ro("videoFlowing", ParamType::Boolean),
                 ro("audioFlowing", ParamType::Boolean),
                 ro("bitrateKbps", ParamType::Number),
+                ro("syncGate", ParamType::String),
             ],
             methods: vec![],
         }
@@ -561,6 +562,7 @@ impl ParamStore for MonitorStore {
             "videoFlowing" => Some(serde_json::json!(self.monitor.media_ready())),
             "audioFlowing" => Some(serde_json::json!(self.monitor.audio_flowed())),
             "bitrateKbps" => Some(serde_json::json!(self.monitor.bitrate_kbps())),
+            "syncGate" => Some(serde_json::json!(self.monitor.sync_gate())),
             _ => None,
         }
     }
@@ -568,7 +570,7 @@ impl ParamStore for MonitorStore {
     fn set(&self, name: &str, _value: Value) -> Result<(), SetError> {
         match name {
             "direction" | "whepEndpoint" | "connectionState" | "sessionActive" | "videoFlowId"
-            | "audioFlowId" | "videoFlowing" | "audioFlowing" | "bitrateKbps" => {
+            | "audioFlowId" | "videoFlowing" | "audioFlowing" | "bitrateKbps" | "syncGate" => {
                 Err(SetError::ReadOnly)
             }
             _ => Err(SetError::Unknown),

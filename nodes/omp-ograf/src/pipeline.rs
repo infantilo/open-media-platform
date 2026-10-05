@@ -854,6 +854,11 @@ pub fn run(
     let mut ever_shown = false;
     // Aktuell sichtbare Ebenen (IDs) — Grundlage dafür, wann pausiert wird.
     let mut on_air: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // `OMP_OGRAF_KEEPALIVE=1`: nie pausieren — Fill/Key schreiben dann auch
+    // im Leerlauf fortlaufend (leeres/transparentes Bild), Leser sehen einen
+    // lebenden Flow statt eines eingefrorenen. Kostet die Leerlauf-CPU, die das
+    // Pausieren spart (Standard AUS).
+    let keepalive = std::env::var("OMP_OGRAF_KEEPALIVE").is_ok_and(|v| v == "1");
 
     loop {
         // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
@@ -904,7 +909,7 @@ pub fn run(
                         }
                         // Erst pausieren, wenn KEINE Ebene mehr sichtbar ist —
                         // bleibt eine andere on air, muss weiter gerendert werden.
-                        if rendering && on_air.is_empty() {
+                        if !keepalive && rendering && on_air.is_empty() {
                             // Gnadenfrist, damit `wpesrc` den jetzt
                             // versteckten Zustand mindestens einmal
                             // wirklich rendert und dieser Frame durch
@@ -927,7 +932,7 @@ pub fn run(
             } else {
                 pending = Some(command);
             }
-        } else if rendering && !ever_shown && pipeline.page_ready.load(Ordering::Relaxed) {
+        } else if !keepalive && rendering && !ever_shown && pipeline.page_ready.load(Ordering::Relaxed) {
             // Nie etwas gezeigt worden — die Harness-Seite hat bereits
             // ihren (leeren/transparenten) Startzustand gerendert
             // (`page_ready`), kein Warte-Frame nötig wie bei `Hide`
