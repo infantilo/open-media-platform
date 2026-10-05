@@ -626,6 +626,12 @@ fn rgba_caps(width: u32, height: u32) -> gst::Caps {
             "framerate",
             gst::Fraction::new(FRAMERATE_NUMERATOR as i32, FRAMERATE_DENOMINATOR as i32),
         )
+        // Quadratische Pixel FEST: nur dann setzt `videoscale add-borders` die
+        // Quelle mit erhaltenem Seitenverhältnis und ZENTRIERT (Balken
+        // seitlich/oben+unten) ins Zielbild. Ohne feste PAR wählte es die PAR
+        // selbst, der `compositor` rechnete sie in eine 960×720-Fläche links
+        // oben um (4:3-Quelle im 16:9-Mixer stand links, rechts schwarz).
+        .field("pixel-aspect-ratio", gst::Fraction::new(1, 1))
         .build()
 }
 
@@ -854,6 +860,14 @@ fn raw_caps(format: Option<&str>, width: u32, height: u32) -> gst::Caps {
     b.build()
 }
 
+/// Wie [`raw_caps`], aber mit festen quadratischen Pixeln (s. `rgba_caps`):
+/// Voraussetzung dafür, dass `videoscale add-borders` zentriert letterboxt.
+fn raw_caps_square(format: Option<&str>, width: u32, height: u32) -> gst::Caps {
+    let mut c = raw_caps(format, width, height);
+    c.make_mut().set("pixel-aspect-ratio", gst::Fraction::new(1, 1));
+    c
+}
+
 /// Software-Variante von `build_normalized_branch` mit festgelegter
 /// Quellgröße, s. [`SwScalePlan`]. Gleiche Außenschnittstelle (letztes
 /// Element = Capsfilter mit `rgba_caps`), `videoscale` behält `add-borders`
@@ -908,7 +922,7 @@ fn build_normalized_branch_sw(
         }
         SwScalePlan::ScaleThenConvert => {
             chain.push(scaler("Y42B down")?);
-            chain.push(capsf(raw_caps(Some("Y42B"), width, height), "Y42B target")?);
+            chain.push(capsf(raw_caps_square(Some("Y42B"), width, height), "Y42B target")?);
             chain.push(make("videoconvert", "Y42B->RGBA")?);
         }
     }
@@ -2947,5 +2961,105 @@ mod trans_kind_tests {
         assert_eq!(TransKind::SlideD.direction(), Some((0, 1)));
         assert_eq!(TransKind::PushU.direction(), Some((0, -1)));
         assert!(TransKind::PushR.is_push() && !TransKind::SlideR.is_push());
+    }
+}
+
+#[cfg(test)]
+mod letterbox_tests {
+    use super::*;
+    use gstreamer_app as gst_app;
+
+    /// Spaltenbereich [erste, letzte] der nicht-schwarzen Pixel in der
+    /// Bildmitte (RGBA) sowie Zeilenbereich in der Bildmitte-Spalte.
+    fn content_bounds(buf: &[u8], w: usize, h: usize) -> ((usize, usize), (usize, usize)) {
+        let lit = |x: usize, y: usize| buf[(y * w + x) * 4] > 40;
+        let row = h / 2;
+        let col = w / 2;
+        let xs: Vec<usize> = (0..w).filter(|&x| lit(x, row)).collect();
+        let ys: Vec<usize> = (0..h).filter(|&y| lit(col, y)).collect();
+        ((*xs.first().unwrap(), *xs.last().unwrap()), (*ys.first().unwrap(), *ys.last().unwrap()))
+    }
+
+    /// Quelle beliebiger Größe → Mixer-Zielformat: Seitenverhältnis bleibt,
+    /// Bild sitzt ZENTRIERT (gleich breite Balken links/rechts bzw. oben/unten).
+    fn run(sw: u32, sh: u32) -> ((usize, usize), (usize, usize)) {
+        gst::init().expect("gst init");
+        let (w, h) = (1280u32, 720u32);
+        let pipeline = gst::Pipeline::new();
+        let src = gst::ElementFactory::make("videotestsrc")
+            .property("num-buffers", 30i32)
+            .property_from_str("pattern", "white")
+            .property("is-live", true)
+            .build()
+            .unwrap();
+        let caps = gst::ElementFactory::make("capsfilter")
+            .property(
+                "caps",
+                gst::Caps::builder("video/x-raw")
+                    .field("format", "I420")
+                    .field("width", sw as i32)
+                    .field("height", sh as i32)
+                    .field("framerate", gst::Fraction::new(25, 1))
+                    .build(),
+            )
+            .build()
+            .unwrap();
+        let sink = gst::ElementFactory::make("appsink").property("sync", false).property("max-buffers", 1u32).property("drop", true).build().unwrap();
+        pipeline.add_many([&src, &caps, &sink]).unwrap();
+        src.link(&caps).unwrap();
+        let (tail, _els) = build_normalized_branch_sw(&pipeline, &caps, "t", sw, sh, w, h).expect("branch");
+        tail.link(&sink).unwrap();
+        pipeline.set_state(gst::State::Playing).unwrap();
+        let app: gst_app::AppSink = sink.dynamic_cast().unwrap();
+        let mut last = None;
+        for _ in 0..20 {
+            if let Some(s) = app.try_pull_sample(gst::ClockTime::from_seconds(2)) {
+                last = Some(s);
+            } else {
+                break;
+            }
+            if last.is_some() {
+                break;
+            }
+        }
+        let sample = last.expect("sample");
+        let st = sample.caps().unwrap().structure(0).unwrap().to_owned();
+        assert_eq!((st.get::<i32>("width").unwrap(), st.get::<i32>("height").unwrap()), (w as i32, h as i32));
+        let buf = sample.buffer().unwrap().map_readable().unwrap();
+        let r = content_bounds(buf.as_slice(), w as usize, h as usize);
+        pipeline.set_state(gst::State::Null).unwrap();
+        r
+    }
+
+    #[test]
+    fn four_by_three_source_is_pillarboxed_and_centered() {
+        let ((x0, x1), (y0, y1)) = run(640, 480);
+        // 4:3 in 16:9 → 960×720 mittig: Balken je 160 px.
+        assert!((x0 as i32 - 160).abs() <= 2, "linker Balken {x0}");
+        assert!((1279 - x1 as i32 - 160).abs() <= 2, "rechter Balken {}", 1279 - x1);
+        assert!(y0 <= 1 && y1 >= 718);
+    }
+
+    #[test]
+    fn small_source_is_scaled_up_and_centered() {
+        let ((x0, x1), (y0, y1)) = run(320, 240);
+        assert!((x0 as i32 - 160).abs() <= 2 && (1279 - x1 as i32 - 160).abs() <= 2, "{x0} {x1}");
+        assert!(y0 <= 1 && y1 >= 718);
+    }
+
+    #[test]
+    fn large_source_is_scaled_down_and_centered() {
+        // 1920×1200 (16:10) → 1152×720 mittig: Balken je 64 px.
+        let ((x0, x1), (y0, y1)) = run(1920, 1200);
+        assert!((x0 as i32 - 64).abs() <= 2 && (1279 - x1 as i32 - 64).abs() <= 2, "{x0} {x1}");
+        assert!(y0 <= 1 && y1 >= 718);
+    }
+
+    #[test]
+    fn wide_source_is_letterboxed_top_and_bottom_centered() {
+        // 2.4:1-Quelle 1920×800 → 1280×533 mittig: Balken oben/unten je ~93 px.
+        let ((x0, x1), (y0, y1)) = run(1920, 800);
+        assert!(x0 <= 1 && x1 >= 1278);
+        assert!((y0 as i32 - 93).abs() <= 3 && (719 - y1 as i32 - 93).abs() <= 3, "{y0} {y1}");
     }
 }
