@@ -1015,7 +1015,8 @@ ein beliebiges Bild aus dem Flow Editor als **Retourbild** zurück aufs Handy.
   die Werte eingestellt, mit denen das Gateway betrieben wird (Workflow-
   Format bzw. `OMP_WIDTH`, `OMP_HEIGHT`, `OMP_FRAMERATE_NUM/DEN`; ohne
   Angabe 1280×720 bei 25 fps). Der Nutzer kann abweichen, muss es aber nicht.
-  Nach einer Änderung der Gateway-Werte lädt das Handy die Seite neu.
+  Die Vorauswahl wird beim Laden der Seite gesetzt; eine bereits offene Seite
+  muss nach geänderten Gateway-Werten neu geladen werden.
 - Nach dem Verbinden: Kamerabild (und ggf. Retourbild; Antippen vergrößert),
   Anzeige „Live“, **Verbindung trennen** und ein aufklappbares **Status**-Feld
   mit Verbindungszustand und Latenz. Die optionale **Latenzmessung**
