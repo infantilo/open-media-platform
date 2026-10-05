@@ -2007,6 +2007,10 @@ fn index_pts(
     // Gemeinsame Latenz (Lip-Sync): wirksam ist das Maximum aller Leser des Kontexts.
     let own_latency = tracker.latency_ns();
     let effective_latency = shared.map_or(own_latency, |m| m.update(own_latency));
+    static DBG_N: AtomicU64 = AtomicU64::new(0);
+    if std::env::var("OMP_MXL_DEBUG").is_ok() && DBG_N.fetch_add(1, Ordering::Relaxed) % 150 == 0 {
+        eprintln!("MXLDBG latency rate={}/{} own_ms={} effective_ms={} lag_ms={}", rate.numerator, rate.denominator, own_latency / 1_000_000, effective_latency / 1_000_000, lag / 1_000_000);
+    }
     let Some(pts) = tai_to_running(index_tai, base.nseconds(), clock_now, tai_now, effective_latency) else {
         return IndexPts::Skip;
     };

@@ -1,3 +1,4 @@
+//! (Mit `REC_FILE=/pfad.mkv` zusätzlich Aufnahme wie omp-recorder aus denselben Eingängen: x264enc/avenc_aac → matroskamux.)
 //! Misst, wo in einer Lese-Kette A/V verschoben wird: liest Marker-Flows (s.
 //! `av_marker_probe`) über `MxlVideoInput`/`MxlAudioInput` (gemeinsamer Kontext, gemeinsame
 //! Latenz) und vergleicht am Ende JEDER Teilstrecke die PTS von Marker-Bild und Tick:
@@ -128,6 +129,41 @@ fn main() {
         tap(st.clone(), true, &vsink);
         tap(st.clone(), false, &asink);
     }
+    let mut mux_opt = None;
+    if let Ok(path) = std::env::var("REC_FILE") {
+        let mux = gst::ElementFactory::make("matroskamux").property("streamable", true).build().unwrap();
+        let fs = gst::ElementFactory::make("filesink").property("location", path.as_str()).property("sync", false).build().unwrap();
+        let vq0 = gst::ElementFactory::make("queue").build().unwrap();
+        let vc = gst::ElementFactory::make("videoconvert").build().unwrap();
+        let enc = gst::ElementFactory::make("x264enc").property("bitrate", 4000u32).property("key-int-max", 50u32).build().unwrap();
+        enc.set_property_from_str("speed-preset", "veryfast");
+        enc.set_property_from_str("tune", "zerolatency");
+        let parse = gst::ElementFactory::make("h264parse").property("config-interval", 1i32).build().unwrap();
+        let vq1 = gst::ElementFactory::make("queue").build().unwrap();
+        let aq0 = gst::ElementFactory::make("queue").build().unwrap();
+        let ac = gst::ElementFactory::make("audioconvert").build().unwrap();
+        let ars = gst::ElementFactory::make("audioresample").build().unwrap();
+        let aenc = gst::ElementFactory::make("avenc_aac").property("bitrate", 192000i32).build().unwrap();
+        let aparse = gst::ElementFactory::make("aacparse").build().unwrap();
+        let aq1 = gst::ElementFactory::make("queue").build().unwrap();
+        pipe.add_many([&mux, &fs, &vq0, &vc, &enc, &parse, &vq1, &aq0, &ac, &ars, &aenc, &aparse, &aq1]).unwrap();
+        mux.link(&fs).unwrap();
+        // REC_NOQ=1: wie omp-recorder KEINE Queues vor den Encodern (Tee → direkt convert).
+        if std::env::var("REC_NOQ").is_ok() {
+            vt.link(&vc).unwrap();
+            gst::Element::link_many([&vc, &enc, &parse, &vq1]).unwrap();
+            at.link(&ac).unwrap();
+            gst::Element::link_many([&ac, &ars, &aenc, &aparse, &aq1]).unwrap();
+        } else {
+            vt.link(&vq0).unwrap();
+            gst::Element::link_many([&vq0, &vc, &enc, &parse, &vq1]).unwrap();
+            at.link(&aq0).unwrap();
+            gst::Element::link_many([&aq0, &ac, &ars, &aenc, &aparse, &aq1]).unwrap();
+        }
+        vq1.static_pad("src").unwrap().link(&mux.request_pad_simple("video_%u").unwrap()).unwrap();
+        aq1.static_pad("src").unwrap().link(&mux.request_pad_simple("audio_%u").unwrap()).unwrap();
+        mux_opt = Some(mux);
+    }
     vin.activate().unwrap();
     ain.activate().unwrap();
     pipe.set_state(gst::State::Playing).unwrap();
@@ -137,6 +173,10 @@ fn main() {
         let mut d: Vec<f64> = s.aticks.iter().filter_map(|t| s.vflips.iter().min_by_key(|v| (**v as i64 - *t as i64).abs()).map(|v| (*t as i64 - *v as i64) as f64 / 1e6)).filter(|d| d.abs() < 500.0).collect();
         d.sort_by(|x, y| x.partial_cmp(y).unwrap());
         println!("Stufe {name}: Marker-Bilder={}, Ticks={}, Median PTS_a - PTS_v = {:.1} ms", s.vflips.len(), s.aticks.len(), d.get(d.len() / 2).copied().unwrap_or(f64::NAN));
+    }
+    if mux_opt.is_some() {
+        pipe.send_event(gst::event::Eos::new());
+        let _ = pipe.bus().unwrap().timed_pop_filtered(gst::ClockTime::from_seconds(5), &[gst::MessageType::Eos, gst::MessageType::Error]);
     }
     vin.stop();
     ain.stop();

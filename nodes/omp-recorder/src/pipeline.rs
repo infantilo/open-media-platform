@@ -42,6 +42,77 @@ const AUDIO_BITRATE_BPS: i32 = 192_000;
 const STOP_EOS_TIMEOUT: Duration = Duration::from_secs(3);
 const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
+
+/// Diagnose (`OMP_AV_MARKER_TAP=1`, mit der Marker-Quelle von `omp-source`): misst direkt hinter
+/// den MXL-Eingängen die PTS-Differenz Ton-Tick − Marker-Bild und gibt den Median beim Stoppen
+/// aus (`Drop` des Tap) — trennt Lese-Kette von Encoder/Muxer (Lip-Sync-Suche 2026-10-05).
+struct MarkerTap {
+    vflips: Arc<Mutex<Vec<u64>>>,
+    aticks: Arc<Mutex<Vec<u64>>>,
+}
+
+impl MarkerTap {
+    fn attach(video_tail: Option<&gst::Element>, audio_tail: Option<&gst::Element>) -> Option<MarkerTap> {
+        if !std::env::var("OMP_AV_MARKER_TAP").is_ok_and(|v| v == "1") {
+            return None;
+        }
+        let vflips = Arc::new(Mutex::new(Vec::new()));
+        let aticks = Arc::new(Mutex::new(Vec::new()));
+        if let Some(pad) = video_tail.and_then(|e| e.static_pad("src")) {
+            let v = vflips.clone();
+            let bright = Arc::new(AtomicBool::new(false));
+            pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
+                if let Some(gst::PadProbeData::Buffer(b)) = &info.data
+                    && let (Some(pts), Ok(map)) = (b.pts(), b.map_readable())
+                {
+                    let n = map.len().min(1 << 15);
+                    let mean = map[..n].iter().map(|&x| x as f64).sum::<f64>() / n as f64;
+                    let now_bright = mean > 100.0;
+                    if now_bright && !bright.swap(now_bright, Ordering::Relaxed) {
+                        v.lock().unwrap().push(pts.nseconds());
+                    } else {
+                        bright.store(now_bright, Ordering::Relaxed);
+                    }
+                }
+                gst::PadProbeReturn::Ok
+            });
+        }
+        if let Some(pad) = audio_tail.and_then(|e| e.static_pad("src")) {
+            let a = aticks.clone();
+            let quiet = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX / 2));
+            pad.add_probe(gst::PadProbeType::BUFFER, move |pad, info| {
+                if let Some(gst::PadProbeData::Buffer(b)) = &info.data
+                    && let (Some(pts), Ok(map)) = (b.pts(), b.map_readable())
+                {
+                    let ch = pad.current_caps().and_then(|c| c.structure(0).and_then(|s| s.get::<i32>("channels").ok())).unwrap_or(1).max(1) as usize;
+                    for (i, c) in map.chunks_exact(4 * ch).enumerate() {
+                        let x = f32::from_le_bytes(c[..4].try_into().unwrap());
+                        if x.abs() > 0.05 {
+                            if quiet.load(Ordering::Relaxed) > 24_000 {
+                                a.lock().unwrap().push(pts.nseconds() + i as u64 * 1_000_000_000 / 48_000);
+                            }
+                            quiet.store(0, Ordering::Relaxed);
+                        } else {
+                            quiet.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
+                gst::PadProbeReturn::Ok
+            });
+        }
+        Some(MarkerTap { vflips, aticks })
+    }
+}
+
+impl Drop for MarkerTap {
+    fn drop(&mut self) {
+        let (v, a) = (self.vflips.lock().unwrap(), self.aticks.lock().unwrap());
+        let mut d: Vec<f64> = a.iter().filter_map(|t| v.iter().min_by_key(|f| (**f as i64 - *t as i64).abs()).map(|f| (*t as i64 - *f as i64) as f64 / 1e6)).filter(|d| d.abs() < 500.0).collect();
+        d.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        eprintln!("MARKERTAP flips={} ticks={} median PTS_a - PTS_v = {:.1} ms", v.len(), a.len(), d.get(d.len() / 2).copied().unwrap_or(f64::NAN));
+    }
+}
+
 pub struct Config {
     pub domain: String,
     pub media_dir: String,
@@ -167,6 +238,7 @@ struct ActiveRecording {
     // gelesen.
     _video_input: Option<MxlVideoInput>,
     _audio_input: Option<MxlAudioInput>,
+    _marker_tap: Option<MarkerTap>,
 }
 
 /// Nimmt einen vom Operator frei eingegebenen Dateinamen (`record.start`-
@@ -346,10 +418,12 @@ fn build(
         .set_state(gst::State::Playing)
         .map_err(|e| format!("set state playing: {e}"))?;
 
+    let marker_tap = MarkerTap::attach(video_input.as_ref().map(|i| &i.tail), audio_input.as_ref().map(|i| &i.tail));
     Ok(ActiveRecording {
         pipeline,
         _video_input: video_input,
         _audio_input: audio_input,
+        _marker_tap: marker_tap,
     })
 }
 
