@@ -678,7 +678,10 @@ fn build_keyfill_tail(
     // unten (`docs/decisions.md` Nachtrag 272, s. ausführliche Doku bei
     // `build_source_branch`) — gleicher Bug wäre hier sonst ebenso
     // möglich (Fill/Key-Quelle friert dauerhaft ein).
-    let fill_input = MxlVideoInput::new_unsynced(pipeline, context.clone(), &keyfill.fill_flow_id)
+    // Fill+Key gehören zusammen: eigene Synchronization-Group NUR für dieses
+    // Paar (Kapitel 30.4) — alle übrigen Mixer-Eingänge bleiben ungekoppelt.
+    let pair_group = context.create_sync_group();
+    let fill_input = MxlVideoInput::new_unsynced_in_group(pipeline, context.clone(), &keyfill.fill_flow_id, pair_group.clone())
         .map_err(|e| format!("MxlVideoInput(keyer-fill, {}): {e}", keyfill.fill_sender_id))?;
     let fill_caps = gst::ElementFactory::make("capsfilter")
         .property("caps", keyfill_fill_caps())
@@ -687,7 +690,7 @@ fn build_keyfill_tail(
     pipeline.add(&fill_caps).map_err(|e| format!("add keyer-fill caps: {e}"))?;
     gst::Element::link(&fill_input.tail, &fill_caps).map_err(|e| format!("link keyer-fill caps: {e}"))?;
 
-    let key_input = MxlVideoInput::new_unsynced(pipeline, context.clone(), &keyfill.key_flow_id)
+    let key_input = MxlVideoInput::new_unsynced_in_group(pipeline, context.clone(), &keyfill.key_flow_id, pair_group)
         .map_err(|e| format!("MxlVideoInput(keyer-key, {}): {e}", keyfill.key_sender_id))?;
     let key_caps = gst::ElementFactory::make("capsfilter")
         .property("caps", keyfill_key_caps())

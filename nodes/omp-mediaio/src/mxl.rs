@@ -78,8 +78,7 @@ const SYNC_GATE_PAUSE: Duration = Duration::from_secs(2);
 /// in 2-ms-Schritten (Timeout 0 → kein Futex-Wait, s. `Sync.cpp`; die
 /// Futex-Hänger der blockierenden Lesepfade betreffen genau das nicht)
 /// maximal [`SYNC_GATE_MAX_WAIT`], danach fail-open + Pause (s. [`GateState`]).
-fn sync_gate(context: &MxlContext, rate: &mxl_sys::Rational, index: u64, running: &AtomicBool, st: &mut GateState) {
-    let Some(group) = &context.sync_group else { return };
+fn sync_gate(context: &MxlContext, group: &mxl::SyncGroup, rate: &mxl_sys::Rational, index: u64, running: &AtomicBool, st: &mut GateState) {
     if st.off_until.is_some_and(|t| std::time::Instant::now() < t) {
         return;
     }
@@ -134,6 +133,16 @@ impl MxlContext {
             None
         };
         Ok(MxlContext { instance, sync_group })
+    }
+
+    /// Neue, leere Synchronization-Group dieser Instanz (für
+    /// [`MxlVideoInput::new_unsynced_in_group`]). `None` bei
+    /// `OMP_MXL_SYNCGROUP=0` (globaler Notausschalter).
+    pub fn create_sync_group(&self) -> Option<Arc<mxl::SyncGroup>> {
+        if std::env::var("OMP_MXL_SYNCGROUP").is_ok_and(|v| v == "0") {
+            return None;
+        }
+        self.instance.create_sync_group().ok()
     }
 
     /// Aktuelle MXL-Zeit in Nanosekunden — **dieselbe Epoche**, aus der
@@ -1566,6 +1575,21 @@ impl MxlVideoInput {
         context: Arc<MxlContext>,
         flow_id: &str,
     ) -> Result<Self, String> {
+        let group = context.sync_group.clone();
+        Self::new_unsynced_in_group(pipeline, context, flow_id, group)
+    }
+
+    /// Wie [`Self::new_unsynced`], aber mit ausdrücklich gewählter
+    /// Synchronization-Group (`None` = kein Tor) statt der des Kontexts —
+    /// für gezielte Paare (z. B. Keyer Fill+Key im `omp-video-mixer-me`,
+    /// Kapitel 30.4), ohne alle anderen Eingänge desselben Kontexts zu
+    /// koppeln. Gruppe aus [`MxlContext::create_sync_group`].
+    pub fn new_unsynced_in_group(
+        pipeline: &gst::Pipeline,
+        context: Arc<MxlContext>,
+        flow_id: &str,
+        group: Option<Arc<mxl::SyncGroup>>,
+    ) -> Result<Self, String> {
         let flow_def_json = context
             .instance
             .get_flow_def(flow_id)
@@ -1762,6 +1786,7 @@ impl MxlVideoInput {
         thread::spawn(move || {
             read_loop(
                 &context,
+                group,
                 grain_reader,
                 &flow_id_owned,
                 &grain_rate,
@@ -1885,6 +1910,7 @@ fn index_pts(
 #[allow(clippy::too_many_arguments)]
 fn read_loop(
     context: &Arc<MxlContext>,
+    group: Option<Arc<mxl::SyncGroup>>,
     grain_reader: mxl::GrainReader,
     flow_id: &str,
     grain_rate: &mxl_sys::Rational,
@@ -1899,7 +1925,7 @@ fn read_loop(
     // unten für den Grund) — außerhalb dieses einen Zweigs immer `Some`.
     let mut grain_reader = Some(grain_reader);
     // NACH dem Reader deklariert → beim Verlassen vor ihm zerstört.
-    let mut member = context.sync_group.as_ref().and_then(|g| g.add_grain_reader(grain_reader.as_ref().unwrap()).ok());
+    let mut member = group.as_ref().and_then(|g| g.add_grain_reader(grain_reader.as_ref().unwrap()).ok());
     let mut gate_stat = GateState::default();
     let timebase = index_timebase_enabled();
     let period_ns = (1_000_000_000u64 * grain_rate.denominator.max(1) as u64) / grain_rate.numerator.max(1) as u64;
@@ -1915,8 +1941,8 @@ fn read_loop(
             st = [0; 8];
             st_t = std::time::Instant::now();
         }
-        if member.is_some() {
-            sync_gate(context, grain_rate, index, running, &mut gate_stat);
+        if let (Some(_), Some(g)) = (&member, &group) {
+            sync_gate(context, g, grain_rate, index, running, &mut gate_stat);
         }
         match grain_reader.as_ref().expect("grain_reader is Some outside the FLOW_INVALID branch").get_grain_non_blocking(index) {
             Ok(grain) => {
@@ -2110,7 +2136,7 @@ fn read_loop(
                         .and_then(|r| r.to_grain_reader())
                     {
                         Ok(new_reader) => {
-                            member = context.sync_group.as_ref().and_then(|g| g.add_grain_reader(&new_reader).ok());
+                            member = group.as_ref().and_then(|g| g.add_grain_reader(&new_reader).ok());
                             grain_reader = Some(new_reader);
                             index = context.instance.get_current_index(grain_rate);
                             break;
@@ -2456,8 +2482,8 @@ fn read_audio_loop(
     let mut last_pts: Option<u64> = None;
     while running.load(Ordering::Relaxed) {
         heartbeat.fetch_add(1, Ordering::Relaxed);
-        if member.is_some() {
-            sync_gate(context, sample_rate, index, running, &mut gate_stat);
+        if let (Some(_), Some(g)) = (&member, &context.sync_group) {
+            sync_gate(context, g, sample_rate, index, running, &mut gate_stat);
         }
         match samples_reader.as_ref().expect("samples_reader is Some outside the FLOW_INVALID branch").get_samples_non_blocking(index, batch_size as usize) {
             Ok(data) => {
