@@ -5052,7 +5052,7 @@ Ausgangslage: `MxlVideoInput`/`MxlAudioInput` (`omp-mediaio/src/mxl.rs`) lesen j
 
 | Schritt | Inhalt | Verifikation |
 |---|---|---|
-| 30.1 Spike | dünner Wrapper `SyncGroup` in `omp-mediaio` über `mxl-sys` (Create/AddReader/WaitForDataAt/Release, Drop-sicher); ein Video+Audio-Paar im `omp-recorder` darüber lesen, Schalter `OMP_MXL_SYNCGROUP=1` (Standard aus) | `omp-scope`-Lip-Sync-Versatz mit/ohne Gruppe, 10-s-Stichproben, wenige Instanzen |
+| 30.1 Spike (erledigt 2026-10-05, s. docs/decisions.md) | dünner Wrapper `SyncGroup` in `omp-mediaio` über `mxl-sys` (Create/AddReader/WaitForDataAt/Release, Drop-sicher); ein Video+Audio-Paar im `omp-recorder` darüber lesen, Schalter `OMP_MXL_SYNCGROUP=1` (Standard aus) | `omp-scope`-Lip-Sync-Versatz mit/ohne Gruppe, 10-s-Stichproben, wenige Instanzen |
 | 30.2 Entscheidung | Messwerte in `docs/decisions.md`; nur bei messbarem Gewinn/Gleichstand weiter | Nutzer-Review |
 | 30.3 Ausrollen | Reihenfolge: recorder → channel-player → webrtc-gateway → 2110-gateway → decklink → scope; je Node ein Schritt, alte Pfad per Schalter erhalten | je Node Neustart-Test 15× (GStreamer-Races), Pegel/Bild je Kanal |
 | 30.4 Mixer | audio-mixer/video-mixer-me nur nach Einzelabstimmung (Regel: keine Laufzeit-Caps-Änderung im Signalpfad, Freeze-Historie) | Take-Test, Freeze-Check |

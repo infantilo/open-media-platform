@@ -46,6 +46,45 @@ pub fn tai_reference_caps() -> gst::Caps {
 /// `MxlVideoOutput` in einem Prozess).
 pub struct MxlContext {
     instance: mxl::MxlInstance,
+    /// MXL-v1.1-Flow-Synchronization-Group (Kapitel 30, Spike): nur mit
+    /// `OMP_MXL_SYNCGROUP=1`. Alle über diesen Kontext gelesenen Flows
+    /// werden zu einer Gruppe; die Lese-Threads geben ein Grain/Batch erst
+    /// frei, wenn ALLE Flows der Gruppe Daten zum selben TAI-Zeitpunkt
+    /// haben (nicht blockierend, fail-open nach `SYNC_GATE_MAX_WAIT`).
+    sync_group: Option<Arc<mxl::SyncGroup>>,
+}
+
+/// Längstes Warten eines Lesers auf die übrigen Flows der Gruppe, danach
+/// wird trotzdem gelesen (ein toter/fehlender Flow darf keinen anderen
+/// einfrieren).
+const SYNC_GATE_MAX_WAIT: Duration = Duration::from_millis(40);
+
+/// Nicht blockierende Torprüfung (kehrt zurück, sobald gelesen werden darf). Wartet in 2-ms-Schritten
+/// (Timeout 0 → kein Futex-Wait, s. `Sync.cpp`; die Futex-Hänger der
+/// blockierenden Lesepfade betreffen genau das nicht) maximal
+/// [`SYNC_GATE_MAX_WAIT`].
+fn sync_gate(context: &MxlContext, rate: &mxl_sys::Rational, index: u64, running: &AtomicBool, stat: &mut [u32; 2]) {
+    let Some(group) = &context.sync_group else { return };
+    let Ok(ts) = context.instance.index_to_timestamp(index, rate) else { return };
+    let started = std::time::Instant::now();
+    while running.load(Ordering::Relaxed) {
+        match group.wait_for_data_at(ts, 0) {
+            Ok(true) => break,
+            Ok(false) if started.elapsed() < SYNC_GATE_MAX_WAIT => thread::sleep(Duration::from_millis(2)),
+            Ok(false) => {
+                stat[1] += 1; // Zeitüberschreitung → fail-open
+                break;
+            }
+            Err(_) => break,
+        }
+    }
+    if started.elapsed() > Duration::from_micros(500) {
+        stat[0] += 1; // Tor hat wirklich gewartet
+    }
+}
+
+pub fn sync_group_enabled() -> bool {
+    std::env::var("OMP_MXL_SYNCGROUP").is_ok_and(|v| v == "1")
 }
 
 impl MxlContext {
@@ -57,7 +96,12 @@ impl MxlContext {
         let api = mxl::load_api("libmxl.so").map_err(|e| format!("libmxl.so laden: {e}"))?;
         let instance =
             mxl::MxlInstance::new(api, domain, "").map_err(|e| format!("MXL-Instanz: {e}"))?;
-        Ok(MxlContext { instance })
+        let sync_group = if sync_group_enabled() {
+            Some(instance.create_sync_group().map_err(|e| format!("Sync-Group: {e}"))?)
+        } else {
+            None
+        };
+        Ok(MxlContext { instance, sync_group })
     }
 
     /// Aktuelle MXL-Zeit in Nanosekunden — **dieselbe Epoche**, aus der
@@ -1822,6 +1866,9 @@ fn read_loop(
     // `Option`, nicht der nackte `GrainReader` (s. `FLOW_INVALID`-Zweig
     // unten für den Grund) — außerhalb dieses einen Zweigs immer `Some`.
     let mut grain_reader = Some(grain_reader);
+    // NACH dem Reader deklariert → beim Verlassen vor ihm zerstört.
+    let mut member = context.sync_group.as_ref().and_then(|g| g.add_grain_reader(grain_reader.as_ref().unwrap()).ok());
+    let mut gate_stat = [0u32; 2];
     let timebase = index_timebase_enabled();
     let period_ns = (1_000_000_000u64 * grain_rate.denominator.max(1) as u64) / grain_rate.numerator.max(1) as u64;
     let mut latency: Option<crate::timebase::LatencyTracker> = None;
@@ -1832,9 +1879,12 @@ fn read_loop(
     while running.load(Ordering::Relaxed) {
         heartbeat.fetch_add(1, Ordering::Relaxed);
         if dbg && st_t.elapsed() > Duration::from_secs(2) {
-            eprintln!("MXLDBG {flow_id} ok={} mismatch={} skip={} notplaying={} toolate={} tooearly={} pusherr={} idx={index} lastpts={last_pts:?} appsrc_state={:?}", st[0],st[1],st[2],st[3],st[4],st[5],st[6], app_src.current_state());
+            eprintln!("MXLDBG {flow_id} ok={} mismatch={} skip={} notplaying={} toolate={} tooearly={} pusherr={} gatewait={} gatetimeout={} idx={index} lastpts={last_pts:?} appsrc_state={:?}", st[0],st[1],st[2],st[3],st[4],st[5],st[6], gate_stat[0], gate_stat[1], app_src.current_state());
             st = [0; 8];
             st_t = std::time::Instant::now();
+        }
+        if member.is_some() {
+            sync_gate(context, grain_rate, index, running, &mut gate_stat);
         }
         match grain_reader.as_ref().expect("grain_reader is Some outside the FLOW_INVALID branch").get_grain_non_blocking(index) {
             Ok(grain) => {
@@ -2019,6 +2069,7 @@ fn read_loop(
                 // `create_flow_reader`-Aufruf fallenlassen, nicht erst bei
                 // der Zuweisung danach — dafür ist `grain_reader` jetzt
                 // `Option<GrainReader>`, `None` genau in diesem Fenster.
+                drop(member.take());
                 drop(grain_reader.take());
                 loop {
                     match context
@@ -2027,6 +2078,7 @@ fn read_loop(
                         .and_then(|r| r.to_grain_reader())
                     {
                         Ok(new_reader) => {
+                            member = context.sync_group.as_ref().and_then(|g| g.add_grain_reader(&new_reader).ok());
                             grain_reader = Some(new_reader);
                             index = context.instance.get_current_index(grain_rate);
                             break;
@@ -2364,12 +2416,17 @@ fn read_audio_loop(
     // `Option`, gleicher Grund wie in `read_loop` (s. dortiger
     // `FLOW_INVALID`-Zweig) — außerhalb dieses einen Zweigs immer `Some`.
     let mut samples_reader = Some(samples_reader);
+    let mut member = context.sync_group.as_ref().and_then(|g| g.add_samples_reader(samples_reader.as_ref().unwrap()).ok());
+    let mut gate_stat = [0u32; 2];
     let timebase = index_timebase_enabled();
     let batch_ns = (batch_size * 1_000_000_000 * sample_rate.denominator.max(1) as u64) / sample_rate.numerator.max(1) as u64;
     let mut latency: Option<crate::timebase::LatencyTracker> = None;
     let mut last_pts: Option<u64> = None;
     while running.load(Ordering::Relaxed) {
         heartbeat.fetch_add(1, Ordering::Relaxed);
+        if member.is_some() {
+            sync_gate(context, sample_rate, index, running, &mut gate_stat);
+        }
         match samples_reader.as_ref().expect("samples_reader is Some outside the FLOW_INVALID branch").get_samples_non_blocking(index, batch_size as usize) {
             Ok(data) => {
                 let pts = if timebase {
@@ -2446,6 +2503,7 @@ fn read_audio_loop(
                 // `flowId` referenzgezählte Reader-Cache im vendorten C++
                 // (`Instance::getFlowReader`) auf ewig denselben, längst
                 // auf gelöschte Dateien zeigenden Reader zurück.
+                drop(member.take());
                 drop(samples_reader.take());
                 loop {
                     match context
@@ -2454,6 +2512,7 @@ fn read_audio_loop(
                         .and_then(|r| r.to_samples_reader())
                     {
                         Ok(new_reader) => {
+                            member = context.sync_group.as_ref().and_then(|g| g.add_samples_reader(&new_reader).ok());
                             samples_reader = Some(new_reader);
                             index = context.instance.get_current_index(sample_rate);
                             break;

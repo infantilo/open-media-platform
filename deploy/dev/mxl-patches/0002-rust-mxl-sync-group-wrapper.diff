@@ -1,0 +1,180 @@
+diff --git a/rust/mxl/src/grain/reader.rs b/rust/mxl/src/grain/reader.rs
+index 97906c7..583550d 100644
+--- a/rust/mxl/src/grain/reader.rs
++++ b/rust/mxl/src/grain/reader.rs
+@@ -26,6 +26,10 @@ impl GrainReader {
+         Self { context, reader }
+     }
+ 
++    pub(crate) fn raw_handle(&self) -> mxl_sys::FlowReader {
++        self.reader
++    }
++
+     pub fn destroy(mut self) -> Result<()> {
+         self.destroy_inner()
+     }
+diff --git a/rust/mxl/src/instance.rs b/rust/mxl/src/instance.rs
+index bc6253d..c369bd8 100644
+--- a/rust/mxl/src/instance.rs
++++ b/rust/mxl/src/instance.rs
+@@ -86,6 +86,11 @@ impl MxlInstance {
+         create_flow_reader(&self.context, flow_id)
+     }
+ 
++    /// OMP-Erweiterung: MXL-v1.1-Flow-Synchronization-Group.
++    pub fn create_sync_group(&self) -> Result<Arc<crate::SyncGroup>> {
++        crate::SyncGroup::new(self.context.clone()).map(Arc::new)
++    }
++
+     pub fn create_flow_writer(
+         &self,
+         flow_def: &str,
+diff --git a/rust/mxl/src/lib.rs b/rust/mxl/src/lib.rs
+index 8c327ce..f5249e3 100644
+--- a/rust/mxl/src/lib.rs
++++ b/rust/mxl/src/lib.rs
+@@ -7,6 +7,7 @@ mod flow;
+ mod grain;
+ mod instance;
+ mod samples;
++mod sync_group;
+ 
+ pub mod config;
+ 
+@@ -17,6 +18,7 @@ pub use grain::{
+     data::*, reader::GrainReader, write_access::GrainWriteAccess, writer::GrainWriter,
+ };
+ pub use instance::MxlInstance;
++pub use sync_group::{SyncGroup, SyncMember};
+ pub const MXL_DATA_FORMAT_GRAIN_SIZE: usize = mxl_sys::MXL_DATA_FORMAT_GRAIN_SIZE as usize;
+ pub use mxl_sys::Rational;
+ pub use samples::{
+diff --git a/rust/mxl/src/samples/reader.rs b/rust/mxl/src/samples/reader.rs
+index fefb95a..f26a8cf 100644
+--- a/rust/mxl/src/samples/reader.rs
++++ b/rust/mxl/src/samples/reader.rs
+@@ -26,6 +26,10 @@ impl SamplesReader {
+         Self { context, reader }
+     }
+ 
++    pub(crate) fn raw_handle(&self) -> mxl_sys::FlowReader {
++        self.reader
++    }
++
+     pub fn destroy(mut self) -> Result<()> {
+         self.destroy_inner()
+     }
+diff --git a/rust/mxl/src/sync_group.rs b/rust/mxl/src/sync_group.rs
+new file mode 100644
+index 0000000..56c562c
+--- /dev/null
++++ b/rust/mxl/src/sync_group.rs
+@@ -0,0 +1,108 @@
++// OMP-Erweiterung (deploy/dev/mxl-patches/0002-…): sicherer Wrapper um die
++// `mxlFlowSynchronizationGroup*`-API aus MXL v1.1.0, die der Upstream-
++// Rust-Crate nicht kapselt.
++
++use std::sync::{Arc, Mutex};
++
++use crate::{Error, GrainReader, Result, SamplesReader, instance::InstanceContext};
++
++/// Alle Aufrufe laufen unter einem Mutex: die C++-Gruppe ist nicht
++/// thread-sicher (sie sortiert ihre Leserliste beim Warten um).
++pub struct SyncGroup {
++    context: Arc<InstanceContext>,
++    group: mxl_sys::FlowSynchronizationGroup,
++    lock: Mutex<()>,
++}
++
++unsafe impl Send for SyncGroup {}
++unsafe impl Sync for SyncGroup {}
++
++impl SyncGroup {
++    pub(crate) fn new(context: Arc<InstanceContext>) -> Result<Self> {
++        let mut group: mxl_sys::FlowSynchronizationGroup = std::ptr::null_mut();
++        unsafe {
++            Error::from_status(
++                context
++                    .api
++                    .create_flow_synchronization_group(context.instance, &mut group),
++            )?;
++        }
++        if group.is_null() {
++            return Err(Error::Other("Failed to create synchronization group.".to_string()));
++        }
++        Ok(Self { context, group, lock: Mutex::new(()) })
++    }
++
++    /// Meldet den Reader an; die Abmeldung erfolgt über das zurückgegebene
++    /// [`SyncMember`] (Drop). Das Mitglied MUSS vor dem Reader zerstört
++    /// werden (die Gruppe hält einen rohen Zeiger) — in Strukturen/Funktionen
++    /// daher NACH dem Reader deklarieren bzw. vor dem Reader-Drop explizit
++    /// fallenlassen.
++    pub fn add_grain_reader(self: &Arc<Self>, reader: &GrainReader) -> Result<SyncMember> {
++        self.add_raw(reader.raw_handle())
++    }
++
++    pub fn add_samples_reader(self: &Arc<Self>, reader: &SamplesReader) -> Result<SyncMember> {
++        self.add_raw(reader.raw_handle())
++    }
++
++    fn add_raw(self: &Arc<Self>, reader: mxl_sys::FlowReader) -> Result<SyncMember> {
++        let _g = self.lock.lock().unwrap_or_else(|p| p.into_inner());
++        unsafe {
++            Error::from_status(
++                self.context
++                    .api
++                    .flow_synchronization_group_add_reader(self.group, reader),
++            )?;
++        }
++        Ok(SyncMember { group: self.clone(), reader })
++    }
++
++    /// Wartet bis zu `timeout_ns`, bis in ALLEN Flows der Gruppe die zu
++    /// `timestamp` (TAI, ns) gehörenden Daten vorliegen. `Ok(true)` =
++    /// verfügbar, `Ok(false)` = Timeout. Mit `timeout_ns = 0` ein reiner
++    /// Nicht-Blockier-Test (kein Futex-Wait, s. `Sync.cpp`).
++    pub fn wait_for_data_at(&self, timestamp: u64, timeout_ns: u64) -> Result<bool> {
++        let _g = self.lock.lock().unwrap_or_else(|p| p.into_inner());
++        let status = unsafe {
++            self.context
++                .api
++                .flow_synchronization_group_wait_for_data_at(self.group, timestamp, timeout_ns)
++        };
++        match Error::from_status(status) {
++            Ok(()) => Ok(true),
++            Err(Error::Timeout) => Ok(false),
++            Err(e) => Err(e),
++        }
++    }
++}
++
++impl Drop for SyncGroup {
++    fn drop(&mut self) {
++        unsafe {
++            self.context
++                .api
++                .release_flow_synchronization_group(self.context.instance, self.group);
++        }
++    }
++}
++
++/// Mitgliedschaft eines Readers in einer [`SyncGroup`]; meldet ihn beim Drop ab.
++pub struct SyncMember {
++    group: Arc<SyncGroup>,
++    reader: mxl_sys::FlowReader,
++}
++
++unsafe impl Send for SyncMember {}
++
++impl Drop for SyncMember {
++    fn drop(&mut self) {
++        let _g = self.group.lock.lock().unwrap_or_else(|p| p.into_inner());
++        unsafe {
++            self.group
++                .context
++                .api
++                .flow_synchronization_group_remove_reader(self.group.group, self.reader);
++        }
++    }
++}
