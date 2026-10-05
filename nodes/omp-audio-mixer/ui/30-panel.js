@@ -314,6 +314,7 @@ class MixerApp {
     this.meterSel.addEventListener("change", () => { this.ui.meterSize = this.meterSel.value; this.saveUi(); this.applyLayoutVars(); });
     this.sceneBar = h("div", { class: "scenebar", role: "group", "aria-label": "Szenen" });
     this.addBtn = h("button", { class: "tb", type: "button", text: "+ Kanal", onclick: () => this.cmd("addChannel", { label: "" }).then(() => this.poll()) });
+    this.groupBtn = h("button", { class: "tb", type: "button", text: "Ausgabegruppen", title: "Pro Ausgabegruppe (Admin → Audio-Ausgabe) einen Kanal anlegen, der automatisch die passende Quelle (Tag role.<Gruppe>) übernimmt", onclick: () => this.syncGroupChannels() });
     this.masterMeter = new Meter();
     this.masterMeter.root.className = "meter mm";
     this.masterMeter.root.style.cssText = "width:160px;height:12px";
@@ -337,7 +338,7 @@ class MixerApp {
       h("div", { class: "tgrp opt" }, this.faderBtn, this.colSel, this.meterSel),
       this.sceneBar,
       h("span", { class: "spacer" }),
-      master, this.addBtn);
+      master, this.groupBtn, this.addBtn);
     this.channelsEl = h("section", { class: "channels", "aria-label": "Kanäle" });
     this.centerHost = h("aside", { class: "center", "aria-label": "Center Control" });
     this.live_ = h("div", { class: "sr", role: "status", "aria-live": "polite" });
@@ -461,6 +462,10 @@ class MixerApp {
     } catch {}
   }
   afterState() {
+    if (!this.autoGroupsTried && this.state.channels.length === 0 && this.state.groups.length === 0) {
+      this.autoGroupsTried = true;
+      this.syncGroupChannels();
+    }
     const ids = this.state.channels.map((c) => c.id);
     if (!this.ui.selected || !ids.includes(this.ui.selected)) {
       this.ui.selected = ids[0] || "";
@@ -474,6 +479,25 @@ class MixerApp {
     this.updateMasterUi();
     this.center.refresh();
     this.layoutNow();
+  }
+  // Je Ausgabegruppe der Audio-Regeln ein Kanal mit Tag-Erwartung (z. B. role.pt); vorhandene werden übersprungen.
+  async syncGroupChannels() {
+    let groups = [];
+    try {
+      const res = await fetch("/api/v1/audio-rules");
+      if (res.ok) groups = ((await res.json()).outputProfile || {}).groups || [];
+    } catch {}
+    for (const g of groups) {
+      const tags = (g.tags || []).map((t) => String(t).replace(":", "."));
+      if (!tags.length) continue;
+      const known = new Set(this.state.channels.map((c) => c.label));
+      if (known.has(g.label)) continue;
+      await this.cmd("addChannel", { label: g.label });
+      await this.poll();
+      const ch = this.state.channels.find((c) => c.label === g.label);
+      if (ch) await this.cmd("setRouting", { channelId: ch.id, ruleJson: JSON.stringify({ required: tags }) });
+    }
+    await this.poll();
   }
   async loadNodes() {
     try {

@@ -1130,6 +1130,12 @@ Browser abgespielt. Mehr Kanäle gleichzeitig mischt der Tonmischer (Kanäle dor
 Gruppen als Quelle wählen); er folgt dem Bildmischer nur, wenn die Quelle als Gruppe (Video + Audio) bekannt
 ist — Kanal-Player melden dafür ihre Audio-Gruppen als zusammengehörig.
 
+**Wo werden die Ausgabegruppen festgelegt?** Welche Gruppen es gibt (Programmton, Hörfilm/AD, …), definiert
+**Admin → Audio-Ausgabe**; pro Event wählt der Reiter **Audio** die Zuordnung der Quellspuren. Der **Tonmischer**
+legt beim ersten Öffnen (leerer Mixer) automatisch **je Ausgabegruppe einen Kanal** an, mit der Erwartung
+`role.<Gruppe>`; über den Knopf **Ausgabegruppen** in der Kopfleiste lassen sich fehlende Gruppenkanäle jederzeit
+nachziehen (bestehende bleiben unberührt).
+
 **Hinweise**
 
 - Die Automation sucht ihre Ziele jetzt in der Node-Liste des Orchestrators, nicht nur in der lokalen
