@@ -1076,6 +1076,36 @@ Ohne Wahl gilt für MXF-Dateien die Vorlage „Stereo“, sonst der Programmton 
 Event gecued oder auf Sendung ist, zeigt der Reiter den aufgelösten Plan (je Gruppe: welche Spuren,
 oder Ersatzregel, oder still); die Playlist-Spalte „Audio“ markiert Ersatz und Warnungen mit ⚠.
 
+## 10d. Playout-Workflow „Playout MXF“ (Player, Mischer, Monitor)
+
+Der Workflow **Playout MXF** (Reiter Workflows, nach dem Anlegen im Zustand „gestoppt“) enthält:
+zwei **Kanal-Player** (A/B), **Bildmischer**, **Tonmischer**, **Audio-Monitor**, **Viewer** und die
+**Playout-Automation** — ohne Grafik. Programmformat 720p25; der Bildmischer ist mit dem Viewer verbunden.
+
+**Starten und abspielen**
+
+1. Workflow **starten**. Die Automation belegt ihre Ziele selbst anhand der Rollen (erster Kanal-Player =
+   Kanal A, zweiter = Kanal B, Bildmischer, Tonmischer, Grafik falls vorhanden; Panel-Bereich „Ziele“,
+   dort weiter änderbar).
+2. In der Operator-Konsole (oder im Panel der Automation) im Bereich **Playlist** mit **＋** ein Event
+   anlegen, als Medium die MXF-Datei wählen (Dateiliste des Kanal-Players, `OMP_MEDIA_DIR`), und im Reiter
+   **Audio** bei Bedarf die Zuordnung wählen (Standard für MXF: „Stereo“).
+3. **TAKE** bzw. ▶ beim Event drücken. Der Viewer zeigt das Programmbild.
+
+**Ausgangsgruppen hören:** Im Panel des **Audio-Monitors** über das Dropdown **Gruppenwahl** die gewünschte
+Quelle wählen — jeder Kanal-Player bietet dort seine Audio-Gruppen an („… Audio“ = Programmton, danach
+„… Audio Hörfilm/AD“, „… Originalton“, „… Dolby E“, „… Audio 5.1 Diskret“). Das Audio wird direkt im
+Browser abgespielt. Mehr Kanäle gleichzeitig mischt der Tonmischer (Kanäle dort hinzufügen und die
+Gruppen als Quelle wählen); er folgt dem Bildmischer nur, wenn die Quelle als Gruppe (Video + Audio) bekannt
+ist — Kanal-Player melden dafür ihre Audio-Gruppen als zusammengehörig.
+
+**Hinweise**
+
+- Die Automation sucht ihre Ziele jetzt in der Node-Liste des Orchestrators, nicht nur in der lokalen
+  Registry: Player und Mischer auf einem **anderen Host** erscheinen dadurch in der Zielauswahl.
+- Läuft die Automation auf einem anderen Host als der Player, liest die Dateiauswahl die Dateien des
+  Players (Kanal A); die Datei muss dort unter `OMP_MEDIA_DIR` liegen.
+
 ## 11. Weiterführende Dokumente
 
 - [`HANDBUCH.md`](HANDBUCH.md) — Installation, `make`-Targets,

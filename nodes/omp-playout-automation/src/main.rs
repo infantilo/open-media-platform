@@ -4971,12 +4971,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         );
     }
 
-    let state = Mutex::new(AutomationState::new(
+    let mut initial_state = AutomationState::new(
         initial_player_a_label,
         initial_player_b_label,
         initial_mixer_label,
         initial_graphics_label,
-    ));
+    );
+    // Vom Workflow-Start vorbelegt (Rollenname des Audiomischers), sonst leer.
+    initial_state.target_audio_mixer_label = std::env::var("OMP_PLAYOUT_TARGET_AUDIO_MIXER_LABEL").unwrap_or_default();
+    let state = Mutex::new(initial_state);
     let store = Arc::new(AutomationStore {
         audio_status: Mutex::new(String::new()),
         trigger_log: Mutex::new(std::collections::VecDeque::new()),

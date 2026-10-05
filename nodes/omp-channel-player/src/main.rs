@@ -257,6 +257,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let audio_settings = audio::load_settings(&orchestrator_url, instance_id.as_deref(), &launch_secret);
     let audio_ctx = Arc::new(audio::AudioCtx::new(audio_settings, omp_node_sdk::idgen::new_v4));
     let own_video_sender_id = omp_node_sdk::idgen::new_v4();
+    let natural_group = video_flow_id.clone();
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
@@ -295,6 +296,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
             }),
             label: Some(format!("{label} Sender")),
+            // Natural Group (NMOS grouphint "<Gruppe>:<Rolle>"): Video und alle Audio-Gruppen dieses Players
+            // gehören zur selben Quelle — der Quellen-Selektor und der Audiomischer (Audio folgt Video) fassen
+            // sie so zusammen. Wie bei `omp-source`; der Gruppenname ist die Video-Flow-ID.
+            tags: std::collections::HashMap::from([("urn:x-nmos:tag:grouphint/v1.0".to_string(), vec![format!("{natural_group}:high")])]),
             ..Default::default()
         },
     ];
@@ -317,6 +322,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if !tags.is_empty() {
             sender.tags.insert("urn:x-omp:tags".to_string(), tags);
         }
+        // Erste Gruppe = Programmton → Rolle `audio` (Konvention aller Quellen); die übrigen `audio-<id>`.
+        let role = if i == 0 { "audio".to_string() } else { format!("audio-{}", g.id) };
+        sender.tags.insert("urn:x-nmos:tag:grouphint/v1.0".to_string(), vec![format!("{natural_group}:{role}")]);
         senders.push(sender);
     }
 
