@@ -1633,6 +1633,10 @@ pub struct MxlVideoInput {
     /// S. `MxlVideoOutput::heartbeat`.
     heartbeat: Arc<AtomicU64>,
     gate: Arc<GateStats>,
+    /// Obergrenze der weitergereichten Bilder/s (0 = volle Flow-Rate).
+    /// Der Lese-Thread überspringt überzählige Grains VOR der Kopie nach
+    /// GStreamer (~3,5 MB je 720p-v210-Bild) — für Vorschau-Verbraucher.
+    pub max_fps: Arc<std::sync::atomic::AtomicI32>,
 }
 
 impl MxlVideoInput {
@@ -1904,6 +1908,8 @@ impl MxlVideoInput {
         let flow_id_owned = flow_id.to_string();
         let gate = Arc::new(GateStats::default());
         let gate_thread = gate.clone();
+        let max_fps = Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let max_fps_thread = max_fps.clone();
         thread::spawn(move || {
             read_loop(
                 &context,
@@ -1916,6 +1922,7 @@ impl MxlVideoInput {
                 &running_thread,
                 &flowed_thread,
                 &heartbeat_thread,
+                &max_fps_thread,
             );
         });
 
@@ -1928,6 +1935,7 @@ impl MxlVideoInput {
             flowed,
             heartbeat,
             gate,
+            max_fps,
         })
     }
 
@@ -2059,7 +2067,9 @@ fn read_loop(
     running: &Arc<AtomicBool>,
     flowed: &Arc<AtomicBool>,
     heartbeat: &Arc<AtomicU64>,
+    max_fps: &Arc<std::sync::atomic::AtomicI32>,
 ) {
+    let mut last_slot: i64 = -1;
     let reference_caps = tai_reference_caps();
     let mut index = context.instance.get_current_index(grain_rate);
     // `Option`, nicht der nackte `GrainReader` (s. `FLOW_INVALID`-Zweig
@@ -2129,6 +2139,15 @@ fn read_loop(
                 } else {
                     None
                 };
+                let fps = max_fps.load(Ordering::Relaxed);
+                if fps > 0 {
+                    let slot = (index as u128 * period_ns as u128 * fps as u128 / 1_000_000_000) as i64;
+                    if slot == last_slot {
+                        index += 1;
+                        continue;
+                    }
+                    last_slot = slot;
+                }
                 let mut buffer = gst::Buffer::from_slice(grain.payload.to_vec());
                 if let (Some(pts), Some(b)) = (pts, buffer.get_mut()) {
                     b.set_pts(gst::ClockTime::from_nseconds(pts));

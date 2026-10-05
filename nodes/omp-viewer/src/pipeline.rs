@@ -215,28 +215,14 @@ fn build(
 
     // Vorschau-Takt VOR jeder Pixelarbeit: die Vorschau braucht nur
     // `previewFps` Bilder/s (Default 5), der MXL-Eingang liefert aber die
-    // volle Flow-Rate. Ohne diesen Probe lief jedes 720p-Bild durch
-    // v210-Wandlung + Textoverlay und wurde erst im MJPEG-Zweig
-    // verworfen (~86 % CPU). Nur ohne Terminal-Sink; der braucht die
-    // volle Rate. Die Bezeichnung der Quelle zeigt die UI als
-    // HTML-Overlay (Parameter `connectedLabel`), nicht im Bild.
-    if sink_element.is_none()
-        && let Some(src_pad) = input.elements.first().and_then(|e| e.static_pad("src"))
-    {
-        let fps_live = preview_fps_live.clone();
-        let last_slot = std::sync::atomic::AtomicI64::new(-1);
-        src_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
-            let Some(pts) = info.buffer().and_then(|b| b.pts()) else {
-                return gst::PadProbeReturn::Ok;
-            };
-            let fps = i64::from(fps_live.load(Ordering::Relaxed).max(1));
-            let slot = (pts.nseconds() as u128 * fps as u128 / 1_000_000_000) as i64;
-            if last_slot.swap(slot, Ordering::Relaxed) == slot {
-                gst::PadProbeReturn::Drop
-            } else {
-                gst::PadProbeReturn::Ok
-            }
-        });
+    // volle Flow-Rate. Der Lese-Thread überspringt überzählige Grains schon
+    // vor der Kopie (`MxlVideoInput::max_fps`); sonst lief jedes 720p-Bild
+    // durch Kopie, v210-Wandlung und Textoverlay und wurde erst im MJPEG-
+    // Zweig verworfen (~86 % CPU). Nur ohne Terminal-Sink; der braucht die
+    // volle Rate. Die Quellenbezeichnung zeigt die UI als HTML-Overlay
+    // (Parameter `connectedLabel`), nicht im Bild.
+    if sink_element.is_none() {
+        spawn_fps_follower(input.max_fps.clone(), preview_fps_live.clone());
     }
 
     // Terminal-Sink-Fenster hat kein HTML: dort bleibt das Label im Bild.
@@ -297,6 +283,18 @@ fn build(
         _input: input,
         mjpeg_caps,
     })
+}
+
+/// Hält `max_fps` des Eingangs auf dem (zur Laufzeit änderbaren)
+/// Vorschau-Wert; endet, sobald der Eingang (und damit die Pipeline) weg ist.
+fn spawn_fps_follower(max_fps: Arc<AtomicI32>, live: Arc<AtomicI32>) {
+    max_fps.store(live.load(Ordering::Relaxed), Ordering::Relaxed);
+    std::thread::spawn(move || {
+        while Arc::strong_count(&max_fps) > 1 {
+            max_fps.store(live.load(Ordering::Relaxed), Ordering::Relaxed);
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    });
 }
 
 fn build_sink_branch(
