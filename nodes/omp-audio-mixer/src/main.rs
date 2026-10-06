@@ -1319,6 +1319,43 @@ fn parse_channel_name(name: &str) -> Option<(&str, &str)> {
 }
 
 impl AudioMixerStore {
+    /// Sender-ID → Node-ID der Quellen (Orchestrator-Quellenliste, Kap. 31.3).
+    fn source_nodes(&self) -> HashMap<String, String> {
+        self.routing
+            .lock()
+            .expect("lock poisoned")
+            .sources
+            .iter()
+            .map(|s| (s.sender_id.clone(), s.node_id.clone()))
+            .collect()
+    }
+
+    /// Audio-folgt-Video (Kap. 31.3): Streifen, deren Ziel (fest oder = Node ihrer Quelle) die
+    /// gemeldete Videoquelle ist, öffnen/schließen ihr Tor mit sample-genauer Rampe im Audio-Thread
+    /// (Cut = hart, Crossfade = `FOLLOW_CROSSFADE_MS`). Fader/Mute des Bedieners bleiben unberührt;
+    /// Kanäle im Manual-Override oder mit Modus „off“ werden nicht angefasst.
+    fn afv_follow(&self, node_id: &str, on: bool) {
+        let nodes = self.source_nodes();
+        let hits: Vec<(String, bool)> = self
+            .channels
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .filter(|c| {
+                let target = if c.follow_target.is_empty() {
+                    nodes.get(&c.source).map_or("", String::as_str)
+                } else {
+                    c.follow_target.as_str()
+                };
+                c.follow_use_mute && !c.override_enabled && c.follow_mode != "off" && !target.is_empty() && target == node_id
+            })
+            .map(|c| (c.id.clone(), c.follow_mode == "cut"))
+            .collect();
+        for (id, cut) in hits {
+            self.pipeline.set_afv(id, on, if cut { 0 } else { FOLLOW_CROSSFADE_MS });
+        }
+    }
+
     /// Wirksamer Send inkl. Tag-Zuordnung (Kap. 31.2): Ein Kanal, dessen Erwartung `role.<Gruppe>`
     /// verlangt, speist den Gruppen-Bus dieser Gruppe standardmäßig (Post-Fader, 0 dB), solange der
     /// Operator nichts Ausdrückliches eingestellt hat.
@@ -1775,6 +1812,7 @@ impl AudioMixerStore {
                 let source = args.get("source").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
                 let active = args.get("active").and_then(Value::as_bool).ok_or(InvokeError::Unknown)?;
                 self.on_video_tally(source, active);
+                self.afv_follow(source, active);
                 Ok(())
             }
             "captureScene" => {
@@ -3057,12 +3095,19 @@ async fn audio_follow_video_loop(
         // Automations-Ereignisse. Läuft zusätzlich zum bestehenden
         // Audio-Follow-Video (Mute/Crossfade je Kanal) und ersetzt es nicht.
         store.on_video_tally(&node_id, on);
+        store.afv_follow(&node_id, on);
+        let source_nodes = store.source_nodes();
         let matches: Vec<(String, String, bool, f64, f64, u64)> = {
             let channels = channels.lock().expect("lock poisoned");
             channels
                 .iter()
                 .filter(|c| {
-                    !c.override_enabled && c.follow_mode != "off" && c.follow_target == node_id
+                    let target = if c.follow_target.is_empty() {
+                        source_nodes.get(&c.source).map_or("", String::as_str)
+                    } else {
+                        c.follow_target.as_str()
+                    };
+                    !c.follow_use_mute && !c.override_enabled && c.follow_mode != "off" && !target.is_empty() && target == node_id
                 })
                 .map(|c| {
                     (

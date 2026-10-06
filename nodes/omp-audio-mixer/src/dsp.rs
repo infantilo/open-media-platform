@@ -734,6 +734,12 @@ pub struct ChannelShared {
     pub main_route: std::sync::atomic::AtomicBool,
     /// Abgeleitet (Engine): tatsächlich hörbar im Programm (`rules::on_air`).
     pub on_air: std::sync::atomic::AtomicBool,
+    /// Audio-folgt-Video-Tor (Kap. 31.3): Ziel (linear, 1 = offen, 0 = zu) und Rampenlänge in
+    /// Frames; `afv_ver` zählt die Aufträge. Die Rampe läuft sample-genau in den Audio-Stufen
+    /// ([`AfvGate`]), nicht zeitgesteuert über die Steuerschnittstelle.
+    afv_target: AtomicF32,
+    afv_frames: AtomicU64,
+    afv_ver: AtomicU64,
     /// Aux-Sends dieses Kanals (Schlüssel = Aux-ID).
     sends: std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<SendShared>>>,
 }
@@ -792,6 +798,9 @@ impl ChannelShared {
             engine_beat_ms: AtomicU64::new(0),
             main_route: std::sync::atomic::AtomicBool::new(true),
             on_air: std::sync::atomic::AtomicBool::new(false),
+            afv_target: AtomicF32::new(1.0),
+            afv_frames: AtomicU64::new(0),
+            afv_ver: AtomicU64::new(0),
             sends: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
@@ -837,6 +846,13 @@ impl ChannelShared {
         now_ms().saturating_sub(self.engine_beat_ms.load(Ordering::Relaxed)) < ENGINE_TIMEOUT_MS
     }
 
+    /// AFV-Tor öffnen/schließen: `open` mit Rampe über `frames` Samples (0 = hart).
+    pub fn set_afv(&self, open: bool, frames: u64) {
+        self.afv_target.set(if open { 1.0 } else { 0.0 });
+        self.afv_frames.store(frames, Ordering::Relaxed);
+        self.afv_ver.fetch_add(1, Ordering::Release);
+    }
+
     /// Gain Richtung Programm-Bus: wie [`total_gain`](Self::total_gain),
     /// aber 0 ohne Programm-Routing.
     pub fn main_gain(&self) -> f64 {
@@ -846,7 +862,7 @@ impl ChannelShared {
     /// Effektiver Pegel (dB) im Programm vor dem Routing: Fader + Gruppe +
     /// AutoMix + Ducking (`-inf`-Ersatz −120 bei Mute) — Eingang der On-Air-Ableitung.
     pub fn effective_db(&self) -> f64 {
-        let g = self.total_gain();
+        let g = self.total_gain() * self.afv_target.get() as f64;
         if g <= 0.0 { -120.0 } else { lin_to_db(g) }
     }
 
@@ -906,6 +922,55 @@ impl FaderStage {
     }
 }
 
+/// Sample-genaue AFV-Rampe (Kap. 31.3): pro Audio-Stufe ein Zustand, der dem Auftrag aus
+/// [`ChannelShared::set_afv`] folgt; linear in der Amplitude über die vorgegebene Frame-Zahl.
+pub struct AfvGate {
+    cur: f64,
+    step: f64,
+    remaining: u64,
+    target: f64,
+    seen: u64,
+    ch: usize,
+}
+
+impl AfvGate {
+    pub fn new(ch: usize) -> Self {
+        AfvGate { cur: 1.0, step: 0.0, remaining: 0, target: 1.0, seen: 0, ch: ch.max(1) }
+    }
+
+    pub fn process(&mut self, buf: &mut [f32], shared: &ChannelShared) {
+        let v = shared.afv_ver.load(Ordering::Acquire);
+        if v != self.seen {
+            self.seen = v;
+            self.target = shared.afv_target.get() as f64;
+            let frames = shared.afv_frames.load(Ordering::Relaxed);
+            if frames == 0 {
+                self.cur = self.target;
+                self.remaining = 0;
+            } else {
+                self.remaining = frames;
+                self.step = (self.target - self.cur) / frames as f64;
+            }
+        }
+        if self.remaining == 0 && (self.cur - 1.0).abs() < 1e-9 {
+            return;
+        }
+        let ch = self.ch;
+        for frame in buf.chunks_exact_mut(ch) {
+            if self.remaining > 0 {
+                self.cur += self.step;
+                self.remaining -= 1;
+                if self.remaining == 0 {
+                    self.cur = self.target;
+                }
+            }
+            for s in frame {
+                *s = (*s as f64 * self.cur) as f32;
+            }
+        }
+    }
+}
+
 /// Master-Limiter/-Kompressor (gleiche Kompressor-Mathematik wie pro Kanal).
 pub struct MasterStage {
     comp: Compressor,
@@ -932,6 +997,33 @@ impl MasterStage {
             buf[n * CH + 1] = (buf[n * CH + 1] as f64 * g) as f32;
         }
         gr_out.set(min_gr as f32);
+    }
+}
+
+#[cfg(test)]
+mod afv_tests {
+    use super::*;
+
+    #[test]
+    fn afv_ramp_is_sample_exact_and_linear() {
+        let sh = ChannelShared::new();
+        let mut g = AfvGate::new(2);
+        let mut buf = vec![1.0f32; 2 * 100];
+        g.process(&mut buf, &sh);
+        assert!(buf.iter().all(|s| *s == 1.0));
+        sh.set_afv(false, 200);
+        let mut a = vec![1.0f32; 2 * 100];
+        g.process(&mut a, &sh);
+        assert!((a[0] - 0.995).abs() < 1e-6, "erster Frame");
+        assert!((a[2 * 99] - 0.5).abs() < 1e-6, "Frame 100 = halb");
+        let mut b = vec![1.0f32; 2 * 150];
+        g.process(&mut b, &sh);
+        assert!(b[2 * 99].abs() < 1e-6, "Frame 200 = zu");
+        assert!(b[2 * 120].abs() < 1e-9 && b[2 * 149 + 1].abs() < 1e-9, "danach still");
+        sh.set_afv(true, 0);
+        let mut c = vec![1.0f32; 2 * 10];
+        g.process(&mut c, &sh);
+        assert!(c.iter().all(|s| *s == 1.0));
     }
 }
 

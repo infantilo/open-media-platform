@@ -1016,6 +1016,13 @@ PAN, AUX, AUTOMIX, DUCK, AUTOMATION, SZENEN).
   Bus; Fader, Mute, AFV und AutoMix wirken auf alle Kanäle. Der Kanalzug selbst
   (Pegel, EQ, Programm) arbeitet weiter in Stereo (Mehrkanal wird heruntergemischt).
   Die Regel-Engine (Ersatzspur, Up-/Downmix) bleibt in den Playern.
+- **Audio folgt Video (Tor)**: Ein Kanal mit Folge-Modus Cut/Crossfade öffnet und schließt
+  sein Tor, wenn seine Videoquelle ins Programm geht bzw. verschwindet. Ohne festes Ziel ist
+  das Ziel automatisch die Node der gewählten Audioquelle. Das Tor ist eine eigene Stufe im
+  Audio-Thread: Rampe sample-genau und linear (Crossfade 500 ms, Cut hart), unabhängig von
+  Fader, Mute, AutoMix; Kanäle im Manual-Override bleiben unberührt. Es wirkt auf Programm
+  und auf Post-Fader-Sends (Gruppen-Busse, auch Mehrkanal), nicht auf PFL und Pre-Sends.
+  Die Methode `setVideoContext` löst dasselbe aus wie eine Tally-Meldung (Probe/Notfall).
 - **AUX**: Aux- und N-1-Busse (max. 10) anlegen; N-1 enthält alle Kanäle außer
   dem ausgeschlossenen — dessen Signal ist technisch nicht enthalten. Sends
   Pre- oder Post-Fader.

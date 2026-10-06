@@ -135,6 +135,7 @@ enum Command {
     SetChannelSource { id: String, source: ChannelSource },
     SetGain { id: String, db: f64 },
     SetMute { id: String, muted: bool },
+    SetAfv { id: String, open: bool, frames: u64 },
     SetProc { id: String, params: dsp::ProcParams },
     SetMasterLimiter { params: dsp::CompParams },
     SetPfl { id: String, enabled: bool },
@@ -194,6 +195,11 @@ impl PipelineHandle {
 
     pub fn set_gain(&self, id: String, db: f64) {
         let _ = self.commands.send(Command::SetGain { id, db });
+    }
+
+    /// Audio-folgt-Video-Tor (Kap. 31.3): sample-genaue Rampe im Audio-Thread über `ramp_ms`.
+    pub fn set_afv(&self, id: String, open: bool, ramp_ms: u64) {
+        let _ = self.commands.send(Command::SetAfv { id, open, frames: ramp_ms * SAMPLE_RATE as u64 / 1000 });
     }
 
     pub fn set_mute(&self, id: String, muted: bool) {
@@ -448,14 +454,17 @@ fn add_channel_branch(
         .map_err(|e| format!("identity/fader ({id}): {e}"))?;
     {
         let shared = shared.clone();
-        let stage = Mutex::new((dsp::FaderStage::new(), Vec::<f32>::new()));
+        let stage = Mutex::new((dsp::FaderStage::new(), dsp::AfvGate::new(CHANNELS as usize), Vec::<f32>::new()));
         let pad = fader_el.static_pad("src").ok_or("fader: no src pad")?;
         pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
             if let Some(gst::PadProbeData::Buffer(buffer)) = info.data.as_mut() {
                 let mut guard = stage.lock().expect("lock poisoned");
-                let (stage, scratch) = &mut *guard;
+                let (stage, afv, scratch) = &mut *guard;
                 let target = shared.main_gain();
-                with_f32_samples(buffer.make_mut(), scratch, |samples| stage.process(samples, target));
+                with_f32_samples(buffer.make_mut(), scratch, |samples| {
+                    stage.process(samples, target);
+                    afv.process(samples, &shared);
+                });
             }
             gst::PadProbeReturn::Ok
         });
@@ -722,18 +731,22 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
 
     let send = shared.send(aux_id);
     {
-        let stage = Mutex::new((
-            dsp::FaderStage::with_channels(if wide_tee.is_some() { bus_channels as usize } else { CHANNELS as usize }),
-            Vec::<f32>::new(),
-        ));
+        let probe_ch = if wide_tee.is_some() { bus_channels as usize } else { CHANNELS as usize };
+        let stage = Mutex::new((dsp::FaderStage::with_channels(probe_ch), dsp::AfvGate::new(probe_ch), Vec::<f32>::new()));
         let shared = shared.clone();
         let pad = queue.static_pad("src").ok_or("send queue: no src pad")?;
         pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
             if let Some(gst::PadProbeData::Buffer(buffer)) = info.data.as_mut() {
                 let mut guard = stage.lock().expect("lock poisoned");
-                let (stage, scratch) = &mut *guard;
+                let (stage, afv, scratch) = &mut *guard;
                 let target = send.target_gain(&shared);
-                with_f32_samples(buffer.make_mut(), scratch, |samples| stage.process(samples, target));
+                let post = send.post.load(Ordering::Relaxed);
+                with_f32_samples(buffer.make_mut(), scratch, |samples| {
+                    stage.process(samples, target);
+                    if post {
+                        afv.process(samples, &shared);
+                    }
+                });
             }
             gst::PadProbeReturn::Ok
         });
@@ -1301,6 +1314,9 @@ pub fn run(
             // ihn bei jedem Buffer.
             Ok(Command::SetGain { id, db }) => {
                 shared_for(&active, &id).fader_db.set(db as f32);
+            }
+            Ok(Command::SetAfv { id, open, frames }) => {
+                shared_for(&active, &id).set_afv(open, frames);
             }
             Ok(Command::SetMute { id, muted }) => {
                 shared_for(&active, &id).muted.store(muted, Ordering::Relaxed);
