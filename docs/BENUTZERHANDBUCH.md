@@ -1008,6 +1008,14 @@ PAN, AUX, AUTOMIX, DUCK, AUTOMATION, SZENEN).
   Ausgabeprofil** übernimmt die Gruppen der Audio-Regeln als Vorlage (Layouts
   Dolby E wird übersprungen) — nie automatisch. Je Gruppe nur ein
   Bus; ein einmal gebauter Slot behält seine Kanalzahl.
+- **Quellen-Streifen → Gruppen-Bus (Tag-Zuordnung)**: Hat ein Kanal die Erwartung
+  `role.<Gruppe>` (Routing), speist er den Gruppen-Bus dieser Gruppe automatisch
+  (Post-Fader, 0 dB; ein ausdrücklich gesetzter Send hat Vorrang). Liefert die Quelle
+  mehr als 2 Kanäle (z. B. ein 5.1-Gruppen-Sender eines Players) und hat der Bus
+  dieselbe Kanalzahl, läuft das Signal **nativ** (alle Kanäle, unverändert) auf den
+  Bus; Fader, Mute, AFV und AutoMix wirken auf alle Kanäle. Der Kanalzug selbst
+  (Pegel, EQ, Programm) arbeitet weiter in Stereo (Mehrkanal wird heruntergemischt).
+  Die Regel-Engine (Ersatzspur, Up-/Downmix) bleibt in den Playern.
 - **AUX**: Aux- und N-1-Busse (max. 10) anlegen; N-1 enthält alle Kanäle außer
   dem ausgeschlossenen — dessen Signal ist technisch nicht enthalten. Sends
   Pre- oder Post-Fader.

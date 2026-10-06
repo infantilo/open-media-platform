@@ -249,6 +249,8 @@ struct MasterShared {
 
 /// Ein Aux-Send-Zweig: `tee → queue(+Gain-Probe) → Aux-Mixer`.
 struct SendBranch {
+    /// `tee`, an dem `tee_pad` hängt (Kanal-`tee` oder nativer Mehrkanal-`tee`).
+    tee: gst::Element,
     queue: gst::Element,
     /// Kanalzahl-Anpassung (`audioconvert` + Capsfilter) vor einem Bus mit
     /// anderer Kanalzahl als Stereo (Kap. 31.1); leer bei Stereo-Bussen.
@@ -289,6 +291,10 @@ struct ChannelBranch {
     /// alle Aux-Zweige. Aux-Zweige werden lazy beim ersten Aktivieren
     /// eines Sends angehängt.
     tee: gst::Element,
+    /// Nativer Mehrkanal-Abgriff der Quelle (Kap. 31.2): `tee` direkt hinter dem Eingang +
+    /// Kanalzahl; nur bei Quellen mit mehr als 2 Kanälen. Speist Gruppen-Busse gleicher
+    /// Kanalzahl ohne Umweg über die Stereo-Kette.
+    wide: Option<(gst::Element, u32)>,
     sends: HashMap<String, SendBranch>,
     /// Hält den Lese-Thread einer externen Quelle am Leben (`Drop`
     /// stoppt ihn) — `None` beim internen Testton.
@@ -472,8 +478,61 @@ fn add_channel_branch(
         .and_then(|()| active.pipeline.add(&fader_el))
         .and_then(|()| active.pipeline.add(&level))
         .map_err(|e| format!("add channel elements ({id}): {e}"))?;
-    gst::Element::link_many([&tail, &convert, &resample, &caps, &proc_el, &level])
-        .map_err(|e| format!("link channel chain ({id}): {e}"))?;
+    let wide_channels = external_input.as_ref().map(|i| i.channels).filter(|c| *c > CHANNELS);
+    let mut wide: Option<(gst::Element, u32)> = None;
+    if let Some(n) = wide_channels {
+        let wtee = gst::ElementFactory::make("tee")
+            .name(format!("wide-tee-{id}"))
+            .build()
+            .map_err(|e| format!("tee (wide, {id}): {e}"))?;
+        let wq = gst::ElementFactory::make("queue")
+            .name(format!("wide-q-{id}"))
+            .build()
+            .map_err(|e| format!("queue (wide, {id}): {e}"))?;
+        active
+            .pipeline
+            .add(&wtee)
+            .and_then(|()| active.pipeline.add(&wq))
+            .map_err(|e| format!("add wide elements ({id}): {e}"))?;
+        // Der Eingang liefert Mehrkanal unpositioniert (Kanalmaske 0); `audioconvert` kann so nicht
+        // auf Stereo mischen (not-negotiated). Standardlayouts bekommen ihre Maske, freie
+        // Kanalzahlen nehmen Kanal 1/2 als L/R.
+        let fold = if matches!(n, 6 | 8) {
+            gst::ElementFactory::make("capssetter")
+                .name(format!("wide-mask-{id}"))
+                .property("caps", bus_caps(n))
+                .property("join", true)
+                .property("replace", false)
+                .build()
+                .map_err(|e| format!("capssetter (wide, {id}): {e}"))?
+        } else {
+            let rows: Vec<String> = (0..2).map(|o| {
+                let cols: Vec<String> = (0..n).map(|i| format!("(double){}", u8::from(i == o))).collect();
+                format!("<{}>", cols.join(","))
+            }).collect();
+            let m = gst::ElementFactory::make("audiomixmatrix")
+                .name(format!("wide-fold-{id}"))
+                .property("in-channels", n)
+                .property("out-channels", CHANNELS)
+                .build()
+                .map_err(|e| format!("audiomixmatrix (wide, {id}): {e}"))?;
+            m.set_property_from_str("mode", "manual");
+            m.set_property_from_str("matrix", &format!("<{}>", rows.join(",")));
+            m
+        };
+        let fold_el = fold.clone();
+        active.pipeline.add(&fold).map_err(|e| format!("add wide fold ({id}): {e}"))?;
+        gst::Element::link_many([&tail, &wtee, &wq, &fold, &convert]).map_err(|e| format!("link wide tap ({id}): {e}"))?;
+        gst::Element::link_many([&convert, &resample, &caps, &proc_el, &level])
+            .map_err(|e| format!("link channel chain ({id}): {e}"))?;
+        elements.push(wtee.clone());
+        elements.push(wq);
+        elements.push(fold_el);
+        wide = Some((wtee, n));
+    } else {
+        gst::Element::link_many([&tail, &convert, &resample, &caps, &proc_el, &level])
+            .map_err(|e| format!("link channel chain ({id}): {e}"))?;
+    }
     elements.push(convert);
     elements.push(resample.clone());
     elements.push(caps.clone());
@@ -567,6 +626,7 @@ fn add_channel_branch(
             pfl_pad,
             pfl_enabled: false,
             tee: pfl_tee,
+            wide,
             sends: HashMap::new(),
             _external_input: external_input,
         },
@@ -599,6 +659,8 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
     if branch.sends.contains_key(aux_id) {
         return Ok(());
     }
+    let wide_tee = branch.wide.as_ref().filter(|(_, n)| *n == bus_channels).map(|(t, _)| t.clone());
+    let src_tee = wide_tee.clone().unwrap_or_else(|| branch.tee.clone());
     let queue = gst::ElementFactory::make("queue")
         .name(format!("send-{ch_id}-{aux_id}"))
         .build()
@@ -606,7 +668,24 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
     active.pipeline.add(&queue).map_err(|e| format!("add send queue: {e}"))?;
     // Bus mit anderer Kanalzahl als der (stereo) Kanalzweig: Abbildung per audioconvert.
     let mut adapt: Vec<gst::Element> = Vec::new();
-    if bus_channels != CHANNELS {
+    if wide_tee.is_some() {
+        // Nativer Abgriff: Daten bleiben unverändert, nur die (unpositionierte) Kanalmaske des
+        // Eingangs wird auf die Busmaske gesetzt.
+        if matches!(bus_channels, 6 | 8) {
+            let setter = gst::ElementFactory::make("capssetter")
+                .name(format!("send-mask-{ch_id}-{aux_id}"))
+                .property("caps", bus_caps(bus_channels))
+                .property("join", true)
+                .property("replace", false)
+                .build()
+                .map_err(|e| format!("capssetter (send {ch_id}->{aux_id}): {e}"))?;
+            if let Err(e) = active.pipeline.add(&setter) {
+                let _ = active.pipeline.remove(&queue);
+                return Err(format!("add send mask: {e}"));
+            }
+            adapt = vec![setter];
+        }
+    } else if bus_channels != CHANNELS {
         let conv = if matches!(bus_channels, 1 | 6 | 8) {
             gst::ElementFactory::make("audioconvert")
                 .name(format!("send-conv-{ch_id}-{aux_id}"))
@@ -643,7 +722,10 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
 
     let send = shared.send(aux_id);
     {
-        let stage = Mutex::new((dsp::FaderStage::new(), Vec::<f32>::new()));
+        let stage = Mutex::new((
+            dsp::FaderStage::with_channels(if wide_tee.is_some() { bus_channels as usize } else { CHANNELS as usize }),
+            Vec::<f32>::new(),
+        ));
         let shared = shared.clone();
         let pad = queue.static_pad("src").ok_or("send queue: no src pad")?;
         pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
@@ -682,7 +764,7 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
             el.sync_state_with_parent().map_err(|e| format!("sync send chain: {e}"))?;
         }
 
-        let tee_sink = branch.tee.static_pad("sink").ok_or("tee: no sink pad")?;
+        let tee_sink = src_tee.static_pad("sink").ok_or("tee: no sink pad")?;
         let (blocked_tx, blocked_rx) = std::sync::mpsc::channel::<()>();
         let probe = tee_sink.add_probe(gst::PadProbeType::BLOCK_DOWNSTREAM, move |_, _| {
             let _ = blocked_tx.send(());
@@ -692,7 +774,7 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
         // Blockade fortfahren — der Kanal läuft dann ohnehin nicht.
         let _ = blocked_rx.recv_timeout(Duration::from_millis(500));
         let link_result = (|| -> Result<gst::Pad, String> {
-            let tee_pad = branch.tee.request_pad_simple("src_%u").ok_or("tee: request src pad failed")?;
+            let tee_pad = src_tee.request_pad_simple("src_%u").ok_or("tee: request src pad failed")?;
             tee_pad
                 .link(&queue.static_pad("sink").ok_or("send queue: no sink pad")?)
                 .map_err(|e| format!("link tee to send queue: {e}"))?;
@@ -719,16 +801,16 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
         }
     };
     let mixer_pad = mixer_pad_slot.take().expect("gesetzt im Erfolgsfall");
-    branch.sends.insert(aux_id.to_string(), SendBranch { queue, adapt, tee_pad, mixer_pad });
+    branch.sends.insert(aux_id.to_string(), SendBranch { tee: src_tee, queue, adapt, tee_pad, mixer_pad });
     Ok(())
 }
 
 /// Entfernt einen Send-Zweig sauber (Pads freigeben, Queue entfernen).
-fn drop_send_branch(pipeline: &gst::Pipeline, tee: &gst::Element, aux_mixer: Option<&gst::Element>, sb: SendBranch) {
+fn drop_send_branch(pipeline: &gst::Pipeline, aux_mixer: Option<&gst::Element>, sb: SendBranch) {
     if let Some(mixer) = aux_mixer {
         mixer.release_request_pad(&sb.mixer_pad);
     }
-    tee.release_request_pad(&sb.tee_pad);
+    sb.tee.release_request_pad(&sb.tee_pad);
     for el in std::iter::once(&sb.queue).chain(sb.adapt.iter()) {
         let _ = el.set_state(gst::State::Null);
         let _ = pipeline.remove(el);
@@ -753,7 +835,7 @@ fn remove_channel_branch(active: &mut ActivePipeline, id: &str) {
     let mut branch = branch;
     for (aux_id, sb) in std::mem::take(&mut branch.sends) {
         let mixer = active.aux.get(&aux_id).map(|a| a.mixer.clone());
-        drop_send_branch(&active.pipeline, &branch.tee, mixer.as_ref(), sb);
+        drop_send_branch(&active.pipeline, mixer.as_ref(), sb);
     }
     // Reihenfolge: erst beide Mixer-Pads freigeben (stoppt den Datenfluss
     // in Haupt- UND Monitor-Bus sauber), dann jedes Zweig-Element auf

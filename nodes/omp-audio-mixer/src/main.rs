@@ -1150,7 +1150,7 @@ impl ParamStore for AudioMixerStore {
                     aux.iter()
                         .filter(|a| a.active)
                         .map(|a| {
-                            let (enabled, level_db, post, locked) = effective_send(ch, a);
+                            let (enabled, level_db, post, locked) = self.effective(ch, a);
                             serde_json::json!({"auxId": a.id, "enabled": enabled, "levelDb": level_db, "post": post, "locked": locked})
                         })
                         .collect(),
@@ -1319,6 +1319,26 @@ fn parse_channel_name(name: &str) -> Option<(&str, &str)> {
 }
 
 impl AudioMixerStore {
+    /// Wirksamer Send inkl. Tag-Zuordnung (Kap. 31.2): Ein Kanal, dessen Erwartung `role.<Gruppe>`
+    /// verlangt, speist den Gruppen-Bus dieser Gruppe standardmäßig (Post-Fader, 0 dB), solange der
+    /// Operator nichts Ausdrückliches eingestellt hat.
+    fn effective(&self, ch: &ChannelState, a: &AuxState) -> (bool, f64, bool, bool) {
+        if a.active && a.kind == "group" && !ch.sends.contains_key(&a.id) {
+            let tag = format!("role.{}", a.group);
+            let matches = self
+                .routing
+                .lock()
+                .expect("lock poisoned")
+                .expects
+                .get(&ch.id)
+                .is_some_and(|r| r.required.iter().any(|t| t.eq_ignore_ascii_case(&tag)));
+            if matches {
+                return (true, 0.0, true, false);
+            }
+        }
+        effective_send(ch, a)
+    }
+
     /// Node-eigener Vollzustand (§4.6 Punkt 4, `docs/END-GOAL-FEATURES.md`
     /// "Mixer-Presets", `docs/decisions.md` Nachtrag 40): alle Kanäle
     /// inkl. Gain/EQ/Kompressor/AFV + Master-Limiter als ein opakes
@@ -1799,6 +1819,7 @@ impl AudioMixerStore {
                     }
                 }
                 self.reapply_routing();
+                self.apply_sends();
                 Ok(())
             }
             "setSourceContext" => {
@@ -2008,7 +2029,7 @@ impl AudioMixerStore {
             self.pipeline.set_aux_active(a.id.clone(), a.active, a.channels);
             self.pipeline.set_aux_master(a.id.clone(), a.master_db, a.muted);
             for ch in &channels {
-                let (enabled, level_db, post, _) = effective_send(ch, a);
+                let (enabled, level_db, post, _) = self.effective(ch, a);
                 // Inaktive Busse: nichts senden (verhindert Zweige ohne Abnehmer).
                 self.pipeline.set_send(ch.id.clone(), a.id.clone(), enabled && a.active, level_db, post);
             }
@@ -2309,7 +2330,7 @@ impl AudioMixerStore {
                     .iter()
                     .filter(|a| a.active)
                     .map(|a| {
-                        let (enabled, level_db, post, locked) = effective_send(c, a);
+                        let (enabled, level_db, post, locked) = self.effective(c, a);
                         serde_json::json!({"auxId": a.id, "enabled": enabled, "levelDb": level_db, "post": post, "locked": locked})
                     })
                     .collect();
@@ -2541,7 +2562,7 @@ impl AudioMixerStore {
                 if aux.kind == "n1" && aux.exclude == ch.id {
                     return Err(InvokeError::Unknown); // N-1: eigener Kanal gesperrt
                 }
-                let cur = effective_send(ch, &aux);
+                let cur = self.effective(ch, &aux);
                 let mut s = SendState { enabled: cur.0, level_db: cur.1, post: cur.2 };
                 if let Some(v) = args.get("enabled") {
                     s.enabled = v.as_bool().ok_or(InvokeError::Unknown)?;

@@ -2410,6 +2410,8 @@ impl Drop for MxlVideoInput {
 /// internen Testton weiterverarbeiten kann, unabhängig von der Quelle.
 pub struct MxlAudioInput {
     pub tail: gst::Element,
+    /// Kanalzahl des gelesenen Flows (Kap. 31.2).
+    pub channels: u32,
     /// Alle von diesem Eingang selbst zur Pipeline hinzugefügten Elemente
     /// (`appsrc`/`audioconvert`/`capsfilter`, in Verkettungsreihenfolge)
     /// — anders als bei [`MxlVideoInput`] (dort baut der Aufrufer bei
@@ -2583,6 +2585,7 @@ impl MxlAudioInput {
         Ok(MxlAudioInput {
             elements: vec![appsrc, convert.clone()],
             tail: convert,
+            channels: channel_count,
             running,
             flowed,
             heartbeat,

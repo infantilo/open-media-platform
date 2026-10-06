@@ -870,17 +870,24 @@ impl ChannelShared {
 /// Anteile bleiben getrennt lesbar (UI: manuell ≠ AutoMix ≠ Duck).
 pub struct FaderStage {
     last: f64,
+    /// Kanalzahl der verarbeiteten Puffer (Standard Stereo; Gruppen-Busse bis 16).
+    ch: usize,
 }
 
 impl FaderStage {
     pub fn new() -> Self {
-        FaderStage { last: 1.0 }
+        FaderStage { last: 1.0, ch: CH }
+    }
+
+    pub fn with_channels(ch: usize) -> Self {
+        FaderStage { last: 1.0, ch: ch.max(1) }
     }
 
     /// Rampt linear über den Buffer vom letzten zum neuen Gesamtgain
     /// (kein Zipper-Rauschen bei Fader-/Engine-Änderungen).
     pub fn process(&mut self, buf: &mut [f32], target: f64) {
-        let frames = buf.len() / CH;
+        let ch = self.ch;
+        let frames = buf.len() / ch;
         if frames == 0 {
             return;
         }
@@ -891,8 +898,9 @@ impl FaderStage {
         let mut g = self.last;
         for n in 0..frames {
             g += step;
-            buf[n * CH] = (buf[n * CH] as f64 * g) as f32;
-            buf[n * CH + 1] = (buf[n * CH + 1] as f64 * g) as f32;
+            for c in 0..ch {
+                buf[n * ch + c] = (buf[n * ch + c] as f64 * g) as f32;
+            }
         }
         self.last = target;
     }
