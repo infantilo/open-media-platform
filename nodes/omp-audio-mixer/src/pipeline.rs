@@ -138,7 +138,7 @@ enum Command {
     SetProc { id: String, params: dsp::ProcParams },
     SetMasterLimiter { params: dsp::CompParams },
     SetPfl { id: String, enabled: bool },
-    SetAuxActive { aux: String, active: bool },
+    SetAuxActive { aux: String, active: bool, channels: u32 },
     SetAuxMaster { aux: String, db: f64, muted: bool },
     SetSend { channel: String, aux: String, enabled: bool, level_db: f64, post: bool },
 }
@@ -160,8 +160,8 @@ impl PipelineHandle {
     }
 
     /// Aux-Bus (Slot) ein-/ausschalten: öffnet/schließt den MXL-Ausgang.
-    pub fn set_aux_active(&self, aux: String, active: bool) {
-        let _ = self.commands.send(Command::SetAuxActive { aux, active });
+    pub fn set_aux_active(&self, aux: String, active: bool, channels: u32) {
+        let _ = self.commands.send(Command::SetAuxActive { aux, active, channels });
     }
 
     pub fn set_aux_master(&self, aux: String, db: f64, muted: bool) {
@@ -250,12 +250,17 @@ struct MasterShared {
 /// Ein Aux-Send-Zweig: `tee → queue(+Gain-Probe) → Aux-Mixer`.
 struct SendBranch {
     queue: gst::Element,
+    /// Kanalzahl-Anpassung (`audioconvert` + Capsfilter) vor einem Bus mit
+    /// anderer Kanalzahl als Stereo (Kap. 31.1); leer bei Stereo-Bussen.
+    adapt: Vec<gst::Element>,
     tee_pad: gst::Pad,
     mixer_pad: gst::Pad,
 }
 
 /// Laufzeitteile eines Aux-Slots.
 struct AuxRt {
+    /// Kanalzahl, mit der der MXL-Ausgang gebaut wurde (nicht mehr änderbar).
+    channels: u32,
     mixer: gst::Element,
     master: gst::Element,
     output: MxlAudioOutput,
@@ -586,6 +591,7 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
         return Ok(());
     };
     let aux_mixer = aux.mixer.clone();
+    let bus_channels = aux.channels;
     let shared = shared_for(active, ch_id);
     let Some(branch) = active.channels.get_mut(ch_id) else {
         return Ok(());
@@ -598,6 +604,25 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
         .build()
         .map_err(|e| format!("queue (send {ch_id}->{aux_id}): {e}"))?;
     active.pipeline.add(&queue).map_err(|e| format!("add send queue: {e}"))?;
+    // Bus mit anderer Kanalzahl als der (stereo) Kanalzweig: Abbildung per audioconvert.
+    let mut adapt: Vec<gst::Element> = Vec::new();
+    if bus_channels != CHANNELS {
+        let conv = gst::ElementFactory::make("audioconvert")
+            .name(format!("send-conv-{ch_id}-{aux_id}"))
+            .build()
+            .map_err(|e| format!("audioconvert (send {ch_id}->{aux_id}): {e}"))?;
+        let caps = gst::ElementFactory::make("capsfilter")
+            .name(format!("send-caps-{ch_id}-{aux_id}"))
+            .property("caps", bus_caps(bus_channels))
+            .build()
+            .map_err(|e| format!("capsfilter (send {ch_id}->{aux_id}): {e}"))?;
+        let added = active.pipeline.add(&conv).and_then(|()| active.pipeline.add(&caps));
+        if let Err(e) = added {
+            let _ = active.pipeline.remove(&queue);
+            return Err(format!("add send adapt: {e}"));
+        }
+        adapt = vec![conv, caps];
+    }
 
     let send = shared.send(aux_id);
     {
@@ -627,12 +652,18 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
     let attempt = (|| -> Result<gst::Pad, String> {
         let mixer_pad = aux_mixer.request_pad_simple("sink_%u").ok_or("aux mixer: request sink pad failed")?;
         mixer_pad_slot = Some(mixer_pad.clone());
-        queue
-            .static_pad("src")
-            .ok_or("send queue: no src pad")?
+        let mut chain: Vec<&gst::Element> = vec![&queue];
+        chain.extend(adapt.iter());
+        gst::Element::link_many(chain.iter().copied()).map_err(|e| format!("link send adapt: {e}"))?;
+        chain
+            .last()
+            .and_then(|e| e.static_pad("src"))
+            .ok_or("send chain: no src pad")?
             .link(&mixer_pad)
             .map_err(|e| format!("link send queue to aux mixer: {e}"))?;
-        queue.sync_state_with_parent().map_err(|e| format!("sync send queue: {e}"))?;
+        for el in chain.iter().rev() {
+            el.sync_state_with_parent().map_err(|e| format!("sync send chain: {e}"))?;
+        }
 
         let tee_sink = branch.tee.static_pad("sink").ok_or("tee: no sink pad")?;
         let (blocked_tx, blocked_rx) = std::sync::mpsc::channel::<()>();
@@ -663,13 +694,15 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
             if let Some(p) = mixer_pad_slot.take() {
                 aux_mixer.release_request_pad(&p);
             }
-            let _ = queue.set_state(gst::State::Null);
-            let _ = active.pipeline.remove(&queue);
+            for el in std::iter::once(&queue).chain(adapt.iter()) {
+                let _ = el.set_state(gst::State::Null);
+                let _ = active.pipeline.remove(el);
+            }
             return Err(e);
         }
     };
     let mixer_pad = mixer_pad_slot.take().expect("gesetzt im Erfolgsfall");
-    branch.sends.insert(aux_id.to_string(), SendBranch { queue, tee_pad, mixer_pad });
+    branch.sends.insert(aux_id.to_string(), SendBranch { queue, adapt, tee_pad, mixer_pad });
     Ok(())
 }
 
@@ -679,8 +712,10 @@ fn drop_send_branch(pipeline: &gst::Pipeline, tee: &gst::Element, aux_mixer: Opt
         mixer.release_request_pad(&sb.mixer_pad);
     }
     tee.release_request_pad(&sb.tee_pad);
-    let _ = sb.queue.set_state(gst::State::Null);
-    let _ = pipeline.remove(&sb.queue);
+    for el in std::iter::once(&sb.queue).chain(sb.adapt.iter()) {
+        let _ = el.set_state(gst::State::Null);
+        let _ = pipeline.remove(el);
+    }
 }
 
 fn shared_for(active: &ActivePipeline, id: &str) -> Arc<dsp::ChannelShared> {
@@ -741,7 +776,25 @@ fn remove_channel_branch(active: &mut ActivePipeline, id: &str) {
 /// und später angehängte Stereo-Kanäle lassen sich zufällig nicht mehr
 /// verlinken ("Pads do not have common format", Live-Befund 2026-10-01).
 /// Rückgabe: (Quelle, Capsfilter) — der Capsfilter ist das Element zum Verlinken.
-fn silence_source(name: &str) -> Result<(gst::Element, gst::Element), String> {
+/// Festes Busformat F32LE/48 kHz/interleaved mit `channels` Kanälen. Ab 3
+/// Kanälen mit Standard-Kanalmaske (5.1 = 0x3f, 7.1 = 0x63f), damit
+/// `audioconvert` Stereo-Quellen dorthin positionsrichtig abbilden kann.
+pub fn bus_caps(channels: u32) -> gst::Caps {
+    let mut b = gst::Caps::builder("audio/x-raw")
+        .field("format", "F32LE")
+        .field("layout", "interleaved")
+        .field("rate", SAMPLE_RATE as i32)
+        .field("channels", channels as i32);
+    match channels {
+        2 => b = b.field("channel-mask", gst::Bitmask::new(0x3)),
+        6 => b = b.field("channel-mask", gst::Bitmask::new(0x3f)),
+        8 => b = b.field("channel-mask", gst::Bitmask::new(0x63f)),
+        _ => {}
+    }
+    b.build()
+}
+
+fn silence_source(name: &str, channels: u32) -> Result<(gst::Element, gst::Element), String> {
     let src = gst::ElementFactory::make("audiotestsrc")
         .name(format!("{name}-src"))
         .property("is-live", true)
@@ -751,15 +804,7 @@ fn silence_source(name: &str) -> Result<(gst::Element, gst::Element), String> {
     src.set_property_from_str("wave", "silence");
     let caps = gst::ElementFactory::make("capsfilter")
         .name(format!("{name}-caps"))
-        .property(
-            "caps",
-            gst::Caps::builder("audio/x-raw")
-                .field("format", "F32LE")
-                .field("layout", "interleaved")
-                .field("rate", SAMPLE_RATE as i32)
-                .field("channels", CHANNELS as i32)
-                .build(),
-        )
+        .property("caps", bus_caps(channels))
         .build()
         .map_err(|e| format!("capsfilter ({name}): {e}"))?;
     Ok((src, caps))
@@ -771,6 +816,7 @@ fn build_aux(
     slot_id: &str,
     flow_id: &str,
     label: &str,
+    channels: u32,
 ) -> Result<(), String> {
     if active.aux.contains_key(slot_id) {
         return Ok(());
@@ -789,7 +835,7 @@ fn build_aux(
         .property("interval", LEVEL_INTERVAL_NS)
         .build()
         .map_err(|e| format!("level (aux {slot_id}): {e}"))?;
-    let (silence_src, silence) = silence_source(&format!("aux-silence-{slot_id}"))?;
+    let (silence_src, silence) = silence_source(&format!("aux-silence-{slot_id}"), channels)?;
     pipeline
         .add(&mixer)
         .and_then(|()| pipeline.add(&master))
@@ -805,7 +851,7 @@ fn build_aux(
         .ok_or("aux silence: no src pad")?
         .link(&silence_pad)
         .map_err(|e| format!("link aux silence ({slot_id}): {e}"))?;
-    let output = MxlAudioOutput::new(&pipeline, &level, context.clone(), flow_id, label, SAMPLE_RATE, CHANNELS)
+    let output = MxlAudioOutput::new(&pipeline, &level, context.clone(), flow_id, label, SAMPLE_RATE, channels)
         .map_err(|e| format!("MxlAudioOutput (aux {slot_id}): {e}"))?;
     // Ventil bleibt beim Bau OFFEN (Live-Befund 2026-10-01): der Aufrufer
     // (`SetAuxActive`) stellt es unmittelbar danach ohnehin ein. Ein hier
@@ -826,7 +872,7 @@ fn build_aux(
     }
     silence.sync_state_with_parent().map_err(|e| format!("sync aux silence caps ({slot_id}): {e}"))?;
     silence_src.sync_state_with_parent().map_err(|e| format!("sync aux silence ({slot_id}): {e}"))?;
-    active.aux.insert(slot_id.to_string(), AuxRt { mixer, master, output });
+    active.aux.insert(slot_id.to_string(), AuxRt { channels, mixer, master, output });
     Ok(())
 }
 
@@ -903,7 +949,7 @@ fn build(context: &Arc<MxlContext>, config: &Config, shared: &SharedMap) -> Resu
     // den der pad-lose Mixer nur zufällig rechtzeitig liefert. Mit einer
     // Live-Quelle meldet der Zustandswechsel NO_PREROLL und die Pipeline läuft
     // sofort deterministisch in PLAYING.
-    let (main_silence, main_silence_caps) = silence_source("main-silence")?;
+    let (main_silence, main_silence_caps) = silence_source("main-silence", CHANNELS)?;
     pipeline
         .add(&main_silence)
         .and_then(|()| pipeline.add(&main_silence_caps))
@@ -1167,11 +1213,11 @@ pub fn run(
                 *active.master_params.params.lock().expect("lock poisoned") = params;
                 active.master_params.version.fetch_add(1, Ordering::Release);
             }
-            Ok(Command::SetAuxActive { aux, active: on }) => {
+            Ok(Command::SetAuxActive { aux, active: on, channels }) => {
                 if on
                     && !active.aux.contains_key(&aux)
                     && let Some((_, flow_id, label)) = config.aux_slots.iter().find(|(id, _, _)| *id == aux).cloned()
-                    && let Err(e) = build_aux(&mut active, &context, &aux, &flow_id, &label)
+                    && let Err(e) = build_aux(&mut active, &context, &aux, &flow_id, &label, channels)
                 {
                     let _ = tx.send(Event::Error(format!("aux {aux} build failed: {e}")));
                 }

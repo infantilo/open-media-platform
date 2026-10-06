@@ -164,7 +164,7 @@
     "runner": "process",
     "command": ["../nodes/target/release/omp-audio-mixer"],
     "env": {},
-    "description": "Digitales Audiomischpult mit dynamischer Kanalanzahl, Gain/EQ pro Kanal und automatischem Audio-Follow-Video.",
+    "description": "Digitales Audiomischpult mit dynamischer Kanalanzahl, Gain/EQ pro Kanal, automatischem Audio-Follow-Video sowie Aux-, N-1- und frei konfigurierbaren Gruppen-Bussen (Mono bis 7.1, je Bus eigener MXL-Sender mit Gruppen-Tag).",
     "expectedResources": "gering bis moderat, wächst mit Kanalzahl",
     "latency": { "audio": { "minLatencyFrames": 0, "maxLatencyFrames": 480 } }
   },

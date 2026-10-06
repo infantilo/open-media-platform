@@ -249,6 +249,52 @@ struct AuxState {
     exclude: String,
     master_db: f64,
     muted: bool,
+    /// Kanalzahl des MXL-Ausgangs (Kap. 31.1; Aux/N-1 = Stereo).
+    channels: u32,
+    /// Bereits mit dieser Kanalzahl gebauter MXL-Ausgang (0 = noch nie gebaut);
+    /// ein gebauter Slot behält seine Kanalzahl für die Pipeline-Lebensdauer.
+    built_channels: u32,
+    /// Nur `kind == "group"`: Gruppenname (Tag `role.<group>` am Sender).
+    group: String,
+}
+
+/// Layout-Name → Kanalzahl der unterstützten diskreten Layouts (Kap. 31.1).
+fn layout_channels(layout: &str) -> Option<u32> {
+    match layout {
+        "mono" => Some(1),
+        "stereo" => Some(2),
+        "5.1" => Some(6),
+        "7.1" => Some(8),
+        _ => None,
+    }
+}
+
+fn channels_layout(channels: u32) -> &'static str {
+    match channels {
+        1 => "mono",
+        6 => "5.1",
+        8 => "7.1",
+        _ => "stereo",
+    }
+}
+
+/// Gruppenname für den Tag `role.<group>`: klein, nur `a-z0-9_-`.
+fn sanitize_group(s: &str) -> String {
+    s.trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '-' })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+
+/// IS-04-Tags des Sender eines Busses (`urn:x-omp:tags`, wie bei den Playern).
+fn bus_sender_tags(a: &AuxState) -> Vec<String> {
+    if a.kind != "group" {
+        return vec![];
+    }
+    vec![format!("role.{}", a.group), format!("layout.{}", channels_layout(a.channels))]
 }
 
 #[derive(Clone, Copy)]
@@ -274,7 +320,7 @@ struct SceneState {
 /// Änderungen an der NMOS-Senderliste (`invoke` läuft auf einem HTTP-Thread,
 /// `add_sender` ist async) — gleiches Muster wie `omp-mxf-player-direct`.
 enum SenderChange {
-    Add { sender_id: String, flow_id: String, label: String },
+    Add { sender_id: String, flow_id: String, label: String, channels: u32, tags: Vec<String> },
     Remove { sender_id: String },
 }
 
@@ -604,6 +650,8 @@ impl ParamStore for AudioMixerStore {
                 args: vec![
                     MethodArg { name: "label".to_string(), kind: ParamType::String },
                     MethodArg { name: "kind".to_string(), kind: ParamType::String },
+                    MethodArg { name: "layout".to_string(), kind: ParamType::String },
+                    MethodArg { name: "group".to_string(), kind: ParamType::String },
                 ],
             },
             MethodSpec {
@@ -1256,6 +1304,7 @@ fn aux_json(a: &AuxState) -> Value {
     serde_json::json!({
         "id": a.id, "label": a.label, "active": a.active, "kind": a.kind,
         "exclude": a.exclude, "masterDb": a.master_db, "mute": a.muted,
+        "channels": a.channels, "layout": channels_layout(a.channels), "group": a.group,
     })
 }
 
@@ -1398,12 +1447,20 @@ impl AudioMixerStore {
                         a.exclude = d.get("exclude").and_then(Value::as_str).unwrap_or("").to_string();
                         a.master_db = d.get("masterDb").and_then(Value::as_f64).unwrap_or(0.0);
                         a.muted = d.get("mute").and_then(Value::as_bool).unwrap_or(false);
+                        a.group = d.get("group").and_then(Value::as_str).unwrap_or("").to_string();
+                        let want = d.get("channels").and_then(Value::as_u64).map_or(2, |c| c as u32);
+                        // Ein bereits gebauter Ausgang behält seine Kanalzahl.
+                        if a.built_channels == 0 || a.built_channels == want {
+                            a.channels = want;
+                        }
                         a.active = true;
                         if !was_active {
                             let _ = self.sender_changes.send(SenderChange::Add {
                                 sender_id: a.sender_id.clone(),
                                 flow_id: a.flow_id.clone(),
                                 label: format!("{} {}", self.node_label, a.label),
+                                channels: a.channels,
+                                tags: bus_sender_tags(a),
                             });
                         }
                     }
@@ -1578,19 +1635,45 @@ impl AudioMixerStore {
             }
             "addAux" => {
                 let kind = args.get("kind").and_then(Value::as_str).unwrap_or("aux");
-                if kind != "aux" && kind != "n1" {
+                if kind != "aux" && kind != "n1" && kind != "group" {
                     return Err(InvokeError::Unknown);
                 }
+                // Gruppen-Bus (Kap. 31.1): Layout + Gruppenname sind Konfiguration je Instanz.
+                let (channels, group) = if kind == "group" {
+                    let layout = args.get("layout").and_then(Value::as_str).unwrap_or("stereo");
+                    let channels = layout_channels(layout).ok_or(InvokeError::Unknown)?;
+                    let group = sanitize_group(args.get("group").and_then(Value::as_str).unwrap_or(""));
+                    if group.is_empty() {
+                        return Err(InvokeError::Unknown);
+                    }
+                    (channels, group)
+                } else {
+                    (2, String::new())
+                };
                 let mut aux = self.aux.lock().expect("lock poisoned");
-                let Some(slot) = aux.iter_mut().find(|a| !a.active) else {
+                if kind == "group" && aux.iter().any(|a| a.active && a.kind == "group" && a.group == group) {
+                    return Err(InvokeError::Unknown); // je Gruppe nur ein Bus
+                }
+                // Slot mit passender (oder noch ungebauter) Kanalzahl.
+                let Some(slot) = aux.iter_mut().find(|a| !a.active && (a.built_channels == 0 || a.built_channels == channels)) else {
                     return Err(InvokeError::Unknown); // alle Slots belegt
                 };
                 let label = args
                     .get("label")
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty())
-                    .map_or_else(|| format!("{} {}", if kind == "n1" { "N-1" } else { "Aux" }, slot.id), str::to_string);
+                    .map_or_else(
+                        || match kind {
+                            "n1" => format!("N-1 {}", slot.id),
+                            "group" => format!("Bus {group}"),
+                            _ => format!("Aux {}", slot.id),
+                        },
+                        str::to_string,
+                    );
                 slot.active = true;
+                slot.channels = channels;
+                slot.built_channels = channels;
+                slot.group = group;
                 slot.kind = kind.to_string();
                 slot.label = label.clone();
                 slot.exclude.clear();
@@ -1600,6 +1683,8 @@ impl AudioMixerStore {
                     sender_id: slot.sender_id.clone(),
                     flow_id: slot.flow_id.clone(),
                     label: format!("{} {label}", self.node_label),
+                    channels,
+                    tags: bus_sender_tags(slot),
                 });
                 Ok(())
             }
@@ -1907,7 +1992,7 @@ impl AudioMixerStore {
         let aux = self.aux.lock().expect("lock poisoned").clone();
         let channels = self.channels.lock().expect("lock poisoned").clone();
         for a in &aux {
-            self.pipeline.set_aux_active(a.id.clone(), a.active);
+            self.pipeline.set_aux_active(a.id.clone(), a.active, a.channels);
             self.pipeline.set_aux_master(a.id.clone(), a.master_db, a.muted);
             for ch in &channels {
                 let (enabled, level_db, post, _) = effective_send(ch, a);
@@ -2584,7 +2669,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
 
     // Aux-Slots (Kapitel 26): feste Anzahl, per Umgebung änderbar.
-    let aux_slot_count: usize = env_or("OMP_AUDIO_MIXER_AUX_SLOTS", "6").parse()?;
+    let aux_slot_count: usize = env_or("OMP_AUDIO_MIXER_AUX_SLOTS", "10").parse()?;
     let aux_states: Vec<AuxState> = (1..=aux_slot_count)
         .map(|n| AuxState {
             id: format!("a{n}"),
@@ -2596,6 +2681,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             exclude: String::new(),
             master_db: 0.0,
             muted: false,
+            channels: 2,
+            built_channels: 0,
+            group: String::new(),
         })
         .collect();
     let pipeline_config = pipeline::Config {
@@ -2813,19 +2901,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let sender_worker = async {
         while let Some(change) = sender_changes_rx.recv().await {
             let result = match change {
-                SenderChange::Add { sender_id, flow_id, label } => handle
+                SenderChange::Add { sender_id, flow_id, label, channels, tags } => handle
                     .add_sender(SenderSpec {
                         id: Some(sender_id),
                         transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
                         flow: Some(omp_node_sdk::node::FlowSpec::Audio {
                             id: Some(flow_id),
                             sample_rate_numerator: pipeline::SAMPLE_RATE,
-                            channel_count: pipeline::CHANNELS,
+                            channel_count: channels,
                             media_type: "audio/float32".to_string(),
                             bit_depth: 32,
                             source_id: None,
                         }),
                         label: Some(label),
+                        tags: if tags.is_empty() {
+                            Default::default()
+                        } else {
+                            std::collections::HashMap::from([("urn:x-omp:tags".to_string(), tags)])
+                        },
                         ..Default::default()
                     })
                     .await
@@ -3190,7 +3283,23 @@ mod tests {
             exclude: exclude.into(),
             master_db: 0.0,
             muted: false,
+            channels: 2,
+            built_channels: 0,
+            group: String::new(),
         }
+    }
+
+    #[test]
+    fn group_bus_layout_tags_and_sanitizing() {
+        assert_eq!(layout_channels("5.1"), Some(6));
+        assert_eq!(layout_channels("dolby-e"), None);
+        assert_eq!(channels_layout(8), "7.1");
+        assert_eq!(sanitize_group("  PT Main! "), "pt-main");
+        let mut a = aux("group", "", true);
+        a.group = "pt".into();
+        a.channels = 6;
+        assert_eq!(bus_sender_tags(&a), vec!["role.pt", "layout.5.1"]);
+        assert!(bus_sender_tags(&aux("aux", "", true)).is_empty());
     }
 
     fn ch(id: &str) -> ChannelState {

@@ -97,6 +97,7 @@ Object.assign(CenterControl.prototype, {
           master.setValue(a.masterDb);
           mute.setAttribute("aria-pressed", String(a.mute));
           exWrap.hidden = a.kind !== "n1";
+          name.title = a.kind === "group" ? `Gruppen-Bus ${a.group} · ${a.layout} (${a.channels} Kanäle) · Sender-Tag role.${a.group}` : "";
           const k = app.state.channels.map((c) => c.id + c.label).join("|");
           if (k !== exKey) { exKey = k; ex.replaceChildren(h("option", { value: "", text: "(keiner)" }), ...app.state.channels.map((c) => h("option", { value: c.id, text: c.label }))); }
           ex.value = a.exclude || "";
@@ -115,9 +116,26 @@ Object.assign(CenterControl.prototype, {
       newName.value = "";
       app.poll();
     } });
+    // Gruppen-Busse (Kap. 31.1): eigener Ausgang mit Layout + Gruppen-Tag je Bus — reine Konfiguration.
+    const grpName = h("input", { class: "text-input", type: "text", placeholder: "Gruppe (z. B. pt, ad, intl)", "aria-label": "Gruppenname", maxlength: "20" });
+    const grpLayout = h("select", { class: "sel-input", "aria-label": "Layout" }, ...["mono", "stereo", "5.1", "7.1"].map((l) => h("option", { value: l, text: l })));
+    grpLayout.value = "stereo";
+    const addGrp = h("button", { class: "tog", type: "button", text: "+ Gruppen-Bus", title: "Eigener Ausgangsbus mit Kanal-Layout und Sender-Tag role.<Gruppe>", onclick: () => app.cmd("addAux", { kind: "group", group: grpName.value, layout: grpLayout.value, label: "" }).then(() => { grpName.value = ""; app.poll(); }) });
+    const impProfile = h("button", { class: "tog", type: "button", text: "Aus Ausgabeprofil", title: "Je Ausgabegruppe der Audio-Regeln (Admin → Audio-Ausgabe) einen Bus anlegen — nur Vorlage, nie Standard; Layouts custom/Dolby E werden übersprungen", onclick: async () => {
+      let groups = [];
+      try { const res = await fetch("/api/v1/audio-rules"); if (res.ok) groups = ((await res.json()).outputProfile || {}).groups || []; } catch {}
+      for (const g of groups) {
+        if (!["mono", "stereo", "5.1", "7.1"].includes(g.layout) || /dolby/i.test(`${g.id} ${g.label}`)) continue;
+        const tag = (g.tags || []).map((t) => String(t).replace(":", ".")).find((t) => t.startsWith("role."));
+        const group = tag ? tag.slice(5) : g.id;
+        if (app.state.auxBuses.some((a) => a.kind === "group" && a.group === String(group).toLowerCase())) continue;
+        await app.cmd("addAux", { kind: "group", group, layout: g.layout, label: g.label });
+        await app.poll();
+      }
+    } });
     const free = h("span", { class: "hint" });
-    this.bind(() => { free.textContent = `${app.state.auxFree} Slots frei`; addAux.disabled = addN1.disabled = app.state.auxFree <= 0; });
-    root.append(this.section("Programm", main, note), this.section("Aux- und N-1-Sends dieses Kanals", sendHost, emptyHint), this.section("Busse verwalten", mgr, h("div", { class: "rows" }, h("div", { class: "row" }, newName, addAux, addN1, free))));
+    this.bind(() => { free.textContent = `${app.state.auxFree} Slots frei`; addAux.disabled = addN1.disabled = addGrp.disabled = app.state.auxFree <= 0; });
+    root.append(this.section("Programm", main, note), this.section("Aux- und N-1-Sends dieses Kanals", sendHost, emptyHint), this.section("Busse verwalten", mgr, h("div", { class: "rows" }, h("div", { class: "row" }, newName, addAux, addN1, free), h("div", { class: "row" }, grpName, grpLayout, addGrp, impProfile))));
     return root;
   },
   setSend(auxId, patch) {
