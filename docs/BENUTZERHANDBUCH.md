@@ -1001,12 +1001,12 @@ PAN, AUX, AUTOMIX, DUCK, AUTOMATION, SZENEN).
 - **Tastatur**: Pfeile wechseln den Kanal, M = Mute, S = Solo, Esc schließt.
 - **Gruppen-Busse**: Unter AUX → „Busse verwalten“ legt **+ Gruppen-Bus** einen
   eigenen Ausgangsbus an: Gruppenname (z. B. `pt`, `ad`) und Layout
-  (mono, stereo, 5.1, 7.1) sind frei wählbar. Jeder Bus ist ein eigener
+  (mono, stereo, 5.1, 7.1 oder custom mit 1–16 Kanälen) sind frei wählbar. Jeder Bus ist ein eigener
   MXL-Audio-Sender mit der passenden Kanalzahl und den Tags `role.<Gruppe>` /
   `layout.<Layout>` (im Audio-Monitor als Quelle wählbar). Stereo-Kanäle werden
-  per Send auf den Bus abgebildet (Mono: Mischung, 5.1/7.1: L/R vorn). **Aus
+  per Send auf den Bus abgebildet (Mono: Mischung, 5.1/7.1 und custom: L/R auf Kanal 1/2, der Rest bleibt still). **Aus
   Ausgabeprofil** übernimmt die Gruppen der Audio-Regeln als Vorlage (Layouts
-  custom und Dolby E werden übersprungen) — nie automatisch. Je Gruppe nur ein
+  Dolby E wird übersprungen) — nie automatisch. Je Gruppe nur ein
   Bus; ein einmal gebauter Slot behält seine Kanalzahl.
 - **AUX**: Aux- und N-1-Busse (max. 10) anlegen; N-1 enthält alle Kanäle außer
   dem ausgeschlossenen — dessen Signal ist technisch nicht enthalten. Sends

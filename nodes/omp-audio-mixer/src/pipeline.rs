@@ -607,10 +607,27 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
     // Bus mit anderer Kanalzahl als der (stereo) Kanalzweig: Abbildung per audioconvert.
     let mut adapt: Vec<gst::Element> = Vec::new();
     if bus_channels != CHANNELS {
-        let conv = gst::ElementFactory::make("audioconvert")
-            .name(format!("send-conv-{ch_id}-{aux_id}"))
-            .build()
-            .map_err(|e| format!("audioconvert (send {ch_id}->{aux_id}): {e}"))?;
+        let conv = if matches!(bus_channels, 1 | 6 | 8) {
+            gst::ElementFactory::make("audioconvert")
+                .name(format!("send-conv-{ch_id}-{aux_id}"))
+                .build()
+                .map_err(|e| format!("audioconvert (send {ch_id}->{aux_id}): {e}"))?
+        } else {
+            // Freie Kanalzahl (Layout custom): L/R auf Kanal 1/2, der Rest bleibt still.
+            let rows: Vec<String> = (0..bus_channels)
+                .map(|o| format!("<(double){},(double){}>", u8::from(o == 0), u8::from(o == 1)))
+                .collect();
+            let m = gst::ElementFactory::make("audiomixmatrix")
+                .name(format!("send-conv-{ch_id}-{aux_id}"))
+                .property("in-channels", CHANNELS)
+                .property("out-channels", bus_channels)
+                .property("channel-mask", 0u64)
+                .build()
+                .map_err(|e| format!("audiomixmatrix (send {ch_id}->{aux_id}): {e}"))?;
+            m.set_property_from_str("mode", "manual");
+            m.set_property_from_str("matrix", &format!("<{}>", rows.join(",")));
+            m
+        };
         let caps = gst::ElementFactory::make("capsfilter")
             .name(format!("send-caps-{ch_id}-{aux_id}"))
             .property("caps", bus_caps(bus_channels))

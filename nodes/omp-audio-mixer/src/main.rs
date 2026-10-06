@@ -269,12 +269,16 @@ fn layout_channels(layout: &str) -> Option<u32> {
     }
 }
 
+/// Freie Kanalzahl (Layout `custom`): 1..=16.
+const CUSTOM_MAX_CHANNELS: u32 = 16;
+
 fn channels_layout(channels: u32) -> &'static str {
     match channels {
         1 => "mono",
         6 => "5.1",
         8 => "7.1",
-        _ => "stereo",
+        2 => "stereo",
+        _ => "custom",
     }
 }
 
@@ -652,6 +656,7 @@ impl ParamStore for AudioMixerStore {
                     MethodArg { name: "kind".to_string(), kind: ParamType::String },
                     MethodArg { name: "layout".to_string(), kind: ParamType::String },
                     MethodArg { name: "group".to_string(), kind: ParamType::String },
+                    MethodArg { name: "channels".to_string(), kind: ParamType::Number },
                 ],
             },
             MethodSpec {
@@ -1641,7 +1646,15 @@ impl AudioMixerStore {
                 // Gruppen-Bus (Kap. 31.1): Layout + Gruppenname sind Konfiguration je Instanz.
                 let (channels, group) = if kind == "group" {
                     let layout = args.get("layout").and_then(Value::as_str).unwrap_or("stereo");
-                    let channels = layout_channels(layout).ok_or(InvokeError::Unknown)?;
+                    let channels = if layout == "custom" {
+                        let n = args.get("channels").and_then(Value::as_u64).ok_or(InvokeError::Unknown)? as u32;
+                        if !(1..=CUSTOM_MAX_CHANNELS).contains(&n) {
+                            return Err(InvokeError::Unknown);
+                        }
+                        n
+                    } else {
+                        layout_channels(layout).ok_or(InvokeError::Unknown)?
+                    };
                     let group = sanitize_group(args.get("group").and_then(Value::as_str).unwrap_or(""));
                     if group.is_empty() {
                         return Err(InvokeError::Unknown);
@@ -3293,6 +3306,7 @@ mod tests {
     fn group_bus_layout_tags_and_sanitizing() {
         assert_eq!(layout_channels("5.1"), Some(6));
         assert_eq!(layout_channels("dolby-e"), None);
+        assert_eq!(channels_layout(4), "custom");
         assert_eq!(channels_layout(8), "7.1");
         assert_eq!(sanitize_group("  PT Main! "), "pt-main");
         let mut a = aux("group", "", true);

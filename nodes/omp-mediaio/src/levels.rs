@@ -153,6 +153,10 @@ pub fn parse_level_message(structure: &gst::StructureRef) -> Option<(f64, f64)> 
         let values: Vec<f64> = arr.iter().filter_map(|v| v.get::<f64>().ok()).collect();
         if values.is_empty() {
             f64::NEG_INFINITY
+        } else if values.len() > 2 {
+            // Mehrkanal (Gruppen-Busse 5.1/7.1/custom): lautester Kanal, sonst zieht jeder
+            // stille Kanal den dB-Mittelwert auf „leer“.
+            values.iter().copied().fold(f64::NEG_INFINITY, f64::max)
         } else {
             values.iter().sum::<f64>() / values.len() as f64
         }

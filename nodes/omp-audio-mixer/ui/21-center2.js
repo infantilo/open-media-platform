@@ -118,24 +118,29 @@ Object.assign(CenterControl.prototype, {
     } });
     // Gruppen-Busse (Kap. 31.1): eigener Ausgang mit Layout + Gruppen-Tag je Bus — reine Konfiguration.
     const grpName = h("input", { class: "text-input", type: "text", placeholder: "Gruppe (z. B. pt, ad, intl)", "aria-label": "Gruppenname", maxlength: "20" });
-    const grpLayout = h("select", { class: "sel-input", "aria-label": "Layout" }, ...["mono", "stereo", "5.1", "7.1"].map((l) => h("option", { value: l, text: l })));
+    const grpLayout = h("select", { class: "sel-input", "aria-label": "Layout" }, ...["mono", "stereo", "5.1", "7.1", "custom"].map((l) => h("option", { value: l, text: l })));
     grpLayout.value = "stereo";
-    const addGrp = h("button", { class: "tog", type: "button", text: "+ Gruppen-Bus", title: "Eigener Ausgangsbus mit Kanal-Layout und Sender-Tag role.<Gruppe>", onclick: () => app.cmd("addAux", { kind: "group", group: grpName.value, layout: grpLayout.value, label: "" }).then(() => { grpName.value = ""; app.poll(); }) });
-    const impProfile = h("button", { class: "tog", type: "button", text: "Aus Ausgabeprofil", title: "Je Ausgabegruppe der Audio-Regeln (Admin → Audio-Ausgabe) einen Bus anlegen — nur Vorlage, nie Standard; Layouts custom/Dolby E werden übersprungen", onclick: async () => {
+    const grpCh = h("input", { class: "text-input", type: "number", min: "1", max: "16", value: "4", "aria-label": "Kanalzahl (custom)", title: "Kanalzahl für Layout custom", style: "width:4.5em" });
+    grpCh.hidden = true;
+    grpLayout.addEventListener("change", () => { grpCh.hidden = grpLayout.value !== "custom"; });
+    const addGrp = h("button", { class: "tog", type: "button", text: "+ Gruppen-Bus", title: "Eigener Ausgangsbus mit Kanal-Layout und Sender-Tag role.<Gruppe>", onclick: () => app.cmd("addAux", { kind: "group", group: grpName.value, layout: grpLayout.value, channels: Number(grpCh.value), label: "" }).then(() => { grpName.value = ""; app.poll(); }) });
+    const impProfile = h("button", { class: "tog", type: "button", text: "Aus Ausgabeprofil", title: "Je Ausgabegruppe der Audio-Regeln (Admin → Audio-Ausgabe) einen Bus anlegen — nur Vorlage, nie Standard; Dolby E wird übersprungen", onclick: async () => {
       let groups = [];
       try { const res = await fetch("/api/v1/audio-rules"); if (res.ok) groups = ((await res.json()).outputProfile || {}).groups || []; } catch {}
       for (const g of groups) {
-        if (!["mono", "stereo", "5.1", "7.1"].includes(g.layout) || /dolby/i.test(`${g.id} ${g.label}`)) continue;
+        const n = (g.channels || []).length;
+        if (!["mono", "stereo", "5.1", "7.1"].includes(g.layout) && !(g.layout === "custom" && n >= 1 && n <= 16)) continue;
+        if (/dolby/i.test(`${g.id} ${g.label}`)) continue;
         const tag = (g.tags || []).map((t) => String(t).replace(":", ".")).find((t) => t.startsWith("role."));
         const group = tag ? tag.slice(5) : g.id;
         if (app.state.auxBuses.some((a) => a.kind === "group" && a.group === String(group).toLowerCase())) continue;
-        await app.cmd("addAux", { kind: "group", group, layout: g.layout, label: g.label });
+        await app.cmd("addAux", { kind: "group", group, layout: g.layout, channels: n, label: g.label });
         await app.poll();
       }
     } });
     const free = h("span", { class: "hint" });
     this.bind(() => { free.textContent = `${app.state.auxFree} Slots frei`; addAux.disabled = addN1.disabled = addGrp.disabled = app.state.auxFree <= 0; });
-    root.append(this.section("Programm", main, note), this.section("Aux- und N-1-Sends dieses Kanals", sendHost, emptyHint), this.section("Busse verwalten", mgr, h("div", { class: "rows" }, h("div", { class: "row" }, newName, addAux, addN1, free), h("div", { class: "row" }, grpName, grpLayout, addGrp, impProfile))));
+    root.append(this.section("Programm", main, note), this.section("Aux- und N-1-Sends dieses Kanals", sendHost, emptyHint), this.section("Busse verwalten", mgr, h("div", { class: "rows" }, h("div", { class: "row" }, newName, addAux, addN1, free), h("div", { class: "row" }, grpName, grpLayout, grpCh, addGrp, impProfile))));
     return root;
   },
   setSend(auxId, patch) {
