@@ -26,7 +26,9 @@ class ChannelView {
     this.bManual = badge("manual", "MANUAL");
     this.bMedia = badge("media", "");
     this.bPfl = badge("pfl", "PFL");
-    this.badges = h("div", { class: "badges" }, this.bOnAir, this.bAuto, this.bDuck, this.bAfv, this.bManual, this.bMedia, this.bPfl);
+    // Routing wie am Hardware-Pult (Kap. 32.5): je Ausgang ein Schalter, Mehrfachwahl möglich.
+    this.routes = h("div", { class: "routes", role: "group", "aria-label": "Routing auf Ausgänge" });
+    this.badges = h("div", { class: "badges" }, this.bOnAir, this.bAuto, this.bDuck, this.bAfv, this.bManual, this.bMedia, this.bPfl, this.routes);
 
     this.meter = new Meter();
     this.meterWrap = h("div", { class: "meterwrap" }, this.meter.root);
@@ -110,6 +112,8 @@ class ChannelView {
       this.root.dataset.manual = v ? "1" : "0";
     });
 
+    this.updateRoutes(ch, ctx.buses || []);
+
     // On-Air kommt vom Node (abgeleitet: Mute, Gruppe, Programm-Routing,
     // Fader, AutoMix/Ducking) — nicht aus `!mute` berechnet.
     const onAir = live ? !!live.onAir : false;
@@ -157,6 +161,44 @@ class ChannelView {
       this.bMedia.textContent = mediaTxt;
       this.bMedia.title = ms ? (ms.ok ? `${ms.action} → ${a.target}` : `Fehler: ${ms.error}`) : `Ziel: ${a ? a.target : ""}`;
     });
+  }
+
+  /** Routing-Schalter: Programm + alle Ausgänge (Busse); ein Klick schaltet den Weg an/aus. */
+  updateRoutes(ch, buses) {
+    const key = JSON.stringify([ch.mainRoute, buses.map((b) => [b.id, b.label, b.kind, b.channels]), ch.sends.map((s) => [s.auxId, s.enabled, s.locked])]);
+    if (this.last.routes === key) return;
+    this.last.routes = key;
+    const app = this.app;
+    const btn = (text, title, on, kind, locked, onclick) => {
+      const b = h("button", { class: "rt", type: "button", "aria-pressed": String(!!on), "data-kind": kind, title, text });
+      b.disabled = !!locked;
+      b.addEventListener("click", (e) => { e.stopPropagation(); onclick(); });
+      return b;
+    };
+    const items = [btn("PGM", "Auf Programm (Stereo-Master) routen", ch.mainRoute, "program", false, () => {
+      const cur = app.state.channels.find((c) => c.id === this.id); // aktueller Zustand, nicht die Closure vom Aufbau
+      if (!cur) return;
+      app.touchedAt = performance.now();
+      cur.mainRoute = !cur.mainRoute;
+      app.sendCh(cur.id, "setMainRoute", { routed: cur.mainRoute });
+      this.last.routes = "";
+      this.update(cur, app.live.get(cur.id), app.ctxFor(cur));
+    })];
+    for (const bus of buses) {
+      const s = ch.sends.find((x) => x.auxId === bus.id);
+      const label = bus.label.length > 9 ? bus.label.slice(0, 8) + "…" : bus.label;
+      items.push(btn(label, `${bus.label} (${outputKind(bus)})${s && s.locked ? " — automatisch zugeordnet" : ""}`, s && s.enabled, bus.kind, s && s.locked, () => {
+        const cur = app.state.channels.find((c) => c.id === this.id);
+        const sd = cur && cur.sends.find((x) => x.auxId === bus.id);
+        if (!sd) return;
+        app.touchedAt = performance.now();
+        sd.enabled = !sd.enabled;
+        app.sendCh(cur.id, "setSend", { auxId: bus.id, enabled: sd.enabled }, "send" + bus.id);
+        this.last.routes = "";
+        this.update(cur, app.live.get(cur.id), app.ctxFor(cur));
+      }));
+    }
+    this.routes.replaceChildren(...items);
   }
 
   /** Meter + Signalaktivität (aus rAF, nur Transform/Variable). */

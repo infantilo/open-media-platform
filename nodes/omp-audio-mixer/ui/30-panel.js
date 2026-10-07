@@ -125,6 +125,11 @@ button{cursor:pointer}
 .name{flex:1;min-width:0;min-height:var(--hit);background:none;border:0;text-align:left;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 2px}
 .name[aria-pressed=true]{color:var(--c-accent)}
 .badges{display:flex;flex-wrap:wrap;gap:3px;min-height:18px}
+.routes{display:flex;flex-wrap:wrap;gap:3px;flex:1 1 100%}.routes:empty{display:none}
+.rt{font-size:10px;font-weight:700;line-height:1;padding:4px 6px;min-height:22px;border-radius:3px;border:1px solid var(--c-border);background:transparent;color:var(--c-dim);cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.rt[aria-pressed=true]{color:#03140a;border-color:transparent;background:var(--c-air)}
+.rt[aria-pressed=true][data-kind=group]{background:#e0a04a}.rt[aria-pressed=true][data-kind=aux]{background:#5aa9e6}.rt[aria-pressed=true][data-kind=n1]{background:#b07ae0}
+.rt:disabled{opacity:.55;cursor:default}
 .b{font-size:10px;font-weight:700;line-height:1;padding:3px 5px;border-radius:3px;border:1px solid var(--c-border);white-space:nowrap;font-variant-numeric:tabular-nums}
 .b.onair[data-state=air]{background:var(--c-air);color:#03140a;border-color:var(--c-air)}
 .b.onair[data-state=muted]{background:var(--c-mute);color:#fff;border-color:var(--c-mute)}
@@ -555,7 +560,7 @@ class MixerApp {
   }
   ctxFor(ch) {
     const g = this.state.groups.find((x) => x.id === ch.group);
-    return { selected: ch.id === this.ui.selected, groupMuted: !!(g && g.mute), autoMixActive: !!(g && g.autoMixEnabled && ch.autoMix.enabled) };
+    return { selected: ch.id === this.ui.selected, groupMuted: !!(g && g.mute), autoMixActive: !!(g && g.autoMixEnabled && ch.autoMix.enabled), buses: this.state.auxBuses };
   }
 
   // ───── Kommandos (Node-Methoden) ─────

@@ -164,7 +164,7 @@ class OutputsDialog {
     const app = this.app;
     if (!bus) {
       const b = h("button", { class: "tog cell", type: "button", "aria-pressed": String(!!ch.mainRoute), "aria-label": `${ch.label} → Programm`, text: ch.mainRoute ? "●" : "○" });
-      b.addEventListener("click", () => { ch.mainRoute = !ch.mainRoute; app.sendCh(ch.id, "setMainRoute", { routed: ch.mainRoute }); this.render(); });
+      b.addEventListener("click", () => { const cur = app.state.channels.find((c) => c.id === ch.id) || ch; app.touchedAt = performance.now(); cur.mainRoute = !cur.mainRoute; app.sendCh(cur.id, "setMainRoute", { routed: cur.mainRoute }); this.render(); });
       return b;
     }
     const s = ch.sends.find((x) => x.auxId === bus.id);
@@ -179,9 +179,12 @@ class OutputsDialog {
     }
     if (s && s.locked) { b.disabled = true; b.title = "Automatisch zugeordnet (Tag-Regel)"; }
     b.addEventListener("click", () => {
-      if (!s) return;
-      s.enabled = !s.enabled;
-      app.sendCh(ch.id, "setSend", { auxId: bus.id, enabled: s.enabled }, "send" + bus.id);
+      const cur = app.state.channels.find((c) => c.id === ch.id) || ch;
+      const sd = cur.sends.find((x) => x.auxId === bus.id);
+      if (!sd) return;
+      app.touchedAt = performance.now();
+      sd.enabled = !sd.enabled;
+      app.sendCh(cur.id, "setSend", { auxId: bus.id, enabled: sd.enabled }, "send" + bus.id);
       this.render();
     });
     return b;

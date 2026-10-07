@@ -1035,6 +1035,11 @@ PAN, AUX, AUTOMIX, DUCK, AUTOMATION, SZENEN).
   mit Gruppen-Fader, Mute und AutoMix-Hinweis je Mischgruppe): **Programm** (Pegelanzeige, Limiter oben rechts), **Gruppen-Busse** (orange,
   z. B. „5.1 · Gruppe“), **Aux** (blau) und **N-1** (violett), jeweils mit Pegelanzeige, Ausgangs-Fader,
   Mute und Entfernen. Klick auf den Namen öffnet die Routing-Matrix, Doppelklick benennt um.
+- **Routing am Kanalzug (wie am Hardware-Pult)**: Jeder Kanalzug trägt unter den Statusanzeigen eine
+  Schalterreihe: **PGM** (Programm) und je ein Schalter pro Ausgang (Gruppen-Bus orange, Aux blau,
+  N-1 violett). Ein Klick schaltet den Weg an/aus, **Mehrfachwahl** ist möglich — z. B. PGM aus und nur
+  „5.1-TEST“ an, oder beides. Automatisch per Tag zugeordnete Wege sind gesperrt (Tooltip). Ein neuer
+  Kanal läuft zunächst auf PGM; neue Ausgänge erscheinen sofort als Schalter in allen Kanalzügen.
 - **Neuen Ausgang anlegen**: Am Ende des Bereichs AUSGÄNGE steht die Karte **+ Neuer Ausgang**: Namen
   eingeben, Vorlage wählen (Stereo, 5.1, 7.1, Mono, Eigene Kanalzahl), **Anlegen**. Der Gruppen-Tag
   (`role.<name>`) wird aus dem Namen gebildet.
