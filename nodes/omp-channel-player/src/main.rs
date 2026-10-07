@@ -124,6 +124,8 @@ impl ParamStore for PlayerStore {
                     MethodArg { name: "audioMapping".to_string(), kind: ParamType::String },
                 ],
             },
+            // Kap. 31.5: gehaltenes Item (`load` mit `hold`) auf den TAI-Zeitpunkt `takeAt` (ns) freigeben.
+            MethodSpec { name: "playAt".to_string(), args: vec![] },
             MethodSpec { name: "stop".to_string(), args: vec![] },
         ];
 
@@ -185,6 +187,7 @@ impl ParamStore for PlayerStore {
                         source: pipeline::ItemSource::Live { video_flow_id, audio_flow_id },
                         duration_hint_ms: None,
                         audio_mapping: audio_mapping.clone(),
+                        timing: Default::default(),
                     });
                     return Ok(());
                 }
@@ -198,6 +201,7 @@ impl ParamStore for PlayerStore {
                             source: pipeline::ItemSource::Image { path: abs.to_string_lossy().to_string() },
                             duration_hint_ms: duration_ms_arg,
                             audio_mapping: audio_mapping.clone(),
+                            timing: Default::default(),
                         });
                         return Ok(());
                     }
@@ -207,6 +211,12 @@ impl ParamStore for PlayerStore {
                         source: pipeline::ItemSource::File { path: abs.to_string_lossy().to_string() },
                         duration_hint_ms,
                         audio_mapping: audio_mapping.clone(),
+                        // Kap. 31.5: `hold` hält nach dem Preroll bis `playAt`; `somMs`/`eomMs` = Start-/Endmarke.
+                        timing: pipeline::Timing {
+                            hold: args.get("hold").and_then(Value::as_bool).unwrap_or(false),
+                            som_ms: args.get("somMs").and_then(Value::as_f64).filter(|v| *v > 0.0).map(|v| v as u64),
+                            eom_ms: args.get("eomMs").and_then(Value::as_f64).filter(|v| *v > 0.0).map(|v| v as u64),
+                        },
                     });
                     return Ok(());
                 }
@@ -217,7 +227,13 @@ impl ParamStore for PlayerStore {
                     source: pipeline::ItemSource::TestPattern { pattern, tone_freq },
                     duration_hint_ms: duration_ms_arg,
                     audio_mapping,
+                    timing: Default::default(),
                 });
+                Ok(())
+            }
+            "playAt" => {
+                let at = args.get("takeAt").and_then(Value::as_u64).unwrap_or(0);
+                self.pipeline.play_at(at);
                 Ok(())
             }
             "stop" => {
@@ -226,6 +242,7 @@ impl ParamStore for PlayerStore {
                     source: pipeline::ItemSource::TestPattern { pattern: pipeline::EMPTY_PATTERN.to_string(), tone_freq: 0.0 },
                     duration_hint_ms: None,
                     audio_mapping: None,
+                    timing: Default::default(),
                 });
                 Ok(())
             }

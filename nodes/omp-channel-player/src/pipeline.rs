@@ -125,6 +125,18 @@ pub struct Item {
     /// Audio-Zuordnung (ID einer Vorlage aus den Audio-Einstellungen); `None` =
     /// Standard (MXF: `audio::DEFAULT_MXF_MAPPING`, sonst Programmton der Quelle).
     pub audio_mapping: Option<String>,
+    /// Start-/Endpunkt und Haltemodus (Kap. 31.5); nur für `File`-Items wirksam.
+    pub timing: Timing,
+}
+
+/// Framegenauer Start (Kap. 31.5): `hold` baut die Pipeline bis zum Preroll auf und hält sie an
+/// (erstes Bild + erster Ton stehen bereit), `play_at` gibt sie dann auf einen TAI-Zeitpunkt frei.
+/// `som_ms`/`eom_ms` = Start-/Endmarke (Start of/End of Message) der Wiedergabe in der Datei.
+#[derive(Clone, Debug, Default)]
+pub struct Timing {
+    pub hold: bool,
+    pub som_ms: Option<u64>,
+    pub eom_ms: Option<u64>,
 }
 
 pub enum Event {
@@ -133,6 +145,8 @@ pub enum Event {
 
 enum Command {
     Load(Item),
+    /// Gehaltene Pipeline auf TAI-Zeitpunkt (ns) freigeben; 0 = sofort.
+    PlayAt(u64),
 }
 
 /// Vereinigt externe Kommandos UND das interne "Zyklus zu Ende"-Signal in
@@ -179,6 +193,12 @@ impl PipelineHandle {
     pub fn media_ready(&self) -> bool {
         let s = self.shared.lock().expect("lock poisoned");
         s.video_flowed.load(Ordering::Relaxed) && s.audio_flowed.load(Ordering::Relaxed)
+    }
+
+    /// Gibt ein mit `hold` geladenes Item frei: das erste Bild/der erste Ton liegen exakt am
+    /// TAI-Zeitpunkt `at_tai_ns` an (0 = sofort).
+    pub fn play_at(&self, at_tai_ns: u64) {
+        let _ = self.events.send(LoopEvent::Cmd(Command::PlayAt(at_tai_ns)));
     }
 
     pub fn load(&self, item: Item) {
@@ -657,6 +677,31 @@ struct ActivePipeline {
     _mxl_video_input: Option<MxlVideoInput>,
     _mxl_audio_input: Option<MxlAudioInput>,
     gate: (Option<Arc<GateStats>>, Option<Arc<GateStats>>),
+    /// Gehalten im PAUSED-Preroll (Kap. 31.5), wartet auf `PlayAt`.
+    held: bool,
+}
+
+impl ActivePipeline {
+    /// Gibt die gehaltene Pipeline frei. Mit Zeitpunkt in der Zukunft wird die Basiszeit so
+    /// gesetzt, dass das erste Bild/der erste Ton (Laufzeit 0) genau bei `at_tai_ns` (TAI)
+    /// gerendert wird — der MXL-Ausgang leitet den Index aus genau dieser Zeit ab.
+    fn release(&mut self, at_tai_ns: u64) -> Result<(), String> {
+        if !self.held {
+            return Ok(());
+        }
+        let tai_now = omp_mediaio::timebase::tai_now_ns();
+        if at_tai_ns > tai_now {
+            // Im PAUSED-Zustand ist noch keine Pipeline-Uhr gewählt; ohne Uhr-Anbieter (appsink,
+            // Dekoder) ist das beim Wechsel nach PLAYING die Standard-Systemuhr.
+            let clock = self.pipeline.clock().unwrap_or_else(|| gst::SystemClock::obtain().upcast());
+            let base = clock.time().nseconds() + (at_tai_ns - tai_now);
+            self.pipeline.set_start_time(gst::ClockTime::NONE);
+            self.pipeline.set_base_time(gst::ClockTime::from_nseconds(base));
+        }
+        self.pipeline.set_state(gst::State::Playing).map_err(|e| format!("set state playing: {e}"))?;
+        self.held = false;
+        Ok(())
+    }
 }
 
 impl ActivePipeline {
@@ -798,11 +843,41 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
     }
     let audio_flowed = mxl_audio_outputs.first().ok_or("kein Audio-Ausgang (Ausgabeprofil ohne Zielgruppen)")?.flowed_handle();
 
-    pipeline.set_state(gst::State::Playing).map_err(|e| format!("set state playing: {e}"))?;
-    let (result, state, _pending) = pipeline.state(gst::ClockTime::from_seconds(8));
-    if result.is_err() || state != gst::State::Playing {
-        let _ = pipeline.set_state(gst::State::Null);
-        return Err(format!("pipeline erreichte Playing nicht innerhalb 8s (state={state:?})"));
+    let held = item.timing.hold && matches!(item.source, ItemSource::File { .. });
+    let wants_seek = matches!(item.source, ItemSource::File { .. }) && (item.timing.som_ms.is_some() || item.timing.eom_ms.is_some());
+    if held || wants_seek {
+        // Erst PAUSED (Preroll: erstes Bild + erster Ton stehen bereit), dann ggf. SOM/EOM-Seek.
+        pipeline.set_state(gst::State::Paused).map_err(|e| format!("set state paused: {e}"))?;
+        let (result, state, _pending) = pipeline.state(gst::ClockTime::from_seconds(8));
+        if result.is_err() || state != gst::State::Paused {
+            let _ = pipeline.set_state(gst::State::Null);
+            return Err(format!("pipeline erreichte Paused nicht innerhalb 8s (state={state:?})"));
+        }
+        if wants_seek {
+            let start = gst::ClockTime::from_mseconds(item.timing.som_ms.unwrap_or(0));
+            let (stop_type, stop) = match item.timing.eom_ms {
+                Some(ms) => (gst::SeekType::Set, gst::ClockTime::from_mseconds(ms)),
+                None => (gst::SeekType::None, gst::ClockTime::ZERO),
+            };
+            // Wie `omp-mxf-player-direct::seek_to`: direkt auf dem Demuxer, nicht auf der Pipeline.
+            let demux = query_el.as_ref().ok_or("SOM/EOM: kein Demuxer (nur Dateien)")?;
+            demux
+                .seek(1.0, gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE, gst::SeekType::Set, start, stop_type, stop)
+                .map_err(|e| format!("SOM/EOM-Seek fehlgeschlagen: {e}"))?;
+            let (result, state, _pending) = pipeline.state(gst::ClockTime::from_seconds(8));
+            if result.is_err() || state != gst::State::Paused {
+                let _ = pipeline.set_state(gst::State::Null);
+                return Err(format!("pipeline erreichte Paused nach Seek nicht innerhalb 8s (state={state:?})"));
+            }
+        }
+    }
+    if !held {
+        pipeline.set_state(gst::State::Playing).map_err(|e| format!("set state playing: {e}"))?;
+        let (result, state, _pending) = pipeline.state(gst::ClockTime::from_seconds(8));
+        if result.is_err() || state != gst::State::Playing {
+            let _ = pipeline.set_state(gst::State::Null);
+            return Err(format!("pipeline erreichte Playing nicht innerhalb 8s (state={state:?})"));
+        }
     }
 
     // EOS ist bei `File`-Items erstklassig (Loop-Neuaufbau, s.
@@ -839,6 +914,7 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
         gate: (mxl_video_input_gate, mxl_audio_input_gate),
         _mxl_video_input: mxl_video_input,
         _mxl_audio_input: mxl_audio_input,
+        held,
     })
 }
 
@@ -901,6 +977,7 @@ pub fn run(config: Config, tx: UnboundedSender<Event>, ready: oneshot::Sender<Re
                         source: ItemSource::TestPattern { pattern: EMPTY_PATTERN.to_string(), tone_freq: 0.0 },
                         duration_hint_ms: None,
                         audio_mapping: None,
+                        timing: Timing::default(),
                     });
                     shared.lock().expect("lock poisoned").label = String::new();
                 }
@@ -942,6 +1019,13 @@ pub fn run(config: Config, tx: UnboundedSender<Event>, ready: oneshot::Sender<Re
                         let _ = tx.send(Event::Error(format!("load failed: {e}")));
                         current_item = None;
                     }
+                }
+            }
+            Ok(LoopEvent::Cmd(Command::PlayAt(at))) => {
+                if let Some(a) = active.as_mut()
+                    && let Err(e) = a.release(at)
+                {
+                    let _ = tx.send(Event::Error(format!("playAt failed: {e}")));
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}

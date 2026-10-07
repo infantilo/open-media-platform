@@ -1789,7 +1789,7 @@ impl AutomationStore {
         let (standby_node_id, standby_label) = standby_target(&state)?;
         // Kapitel 27 / P8: auch das Cue folgt der Ausfallrichtlinie (Vorschau des Ersatzes bzw. „gehalten“).
         let meta = if meta.media_ref.asset.is_some() { apply_media_policy(self, &state, &standby_label, &meta, false)? } else { meta };
-        load_onto_channel(self, &standby_node_id, &meta)?;
+        load_onto_channel(self, &standby_node_id, &meta, false)?;
 
         state.playlist.cue(index).map_err(|e| e.to_string())?;
         Ok(())
@@ -2410,7 +2410,10 @@ fn apply_media_policy(store: &AutomationStore, state: &AutomationState, target_l
 
 /// Lädt ein Item auf einen bestimmten Kanal, OHNE den Mixer anzufassen
 /// — Kern von `do_cue` (reine Vorschau, kein On-Air-Wechsel).
-fn load_onto_channel(store: &AutomationStore, node_id: &str, meta: &ItemMeta) -> Result<(), String> {
+///
+/// `hold` (Kap. 31.5): Datei-Item bis zum Preroll aufbauen und anhalten; der Take gibt es mit
+/// `playAt` auf den gemeinsamen Schaltzeitpunkt frei.
+fn load_onto_channel(store: &AutomationStore, node_id: &str, meta: &ItemMeta, hold: bool) -> Result<(), String> {
     if meta.media.is_control() {
         return Ok(()); // nichts zu laden
     }
@@ -2418,7 +2421,13 @@ fn load_onto_channel(store: &AutomationStore, node_id: &str, meta: &ItemMeta) ->
     let meta = &resolved;
     store
         .proxy_client(node_id.to_string())
-        .invoke("load", load_args(meta))
+        .invoke("load", {
+            let mut args = load_args(meta);
+            if hold && matches!(meta.media, ItemMedia::File { .. }) {
+                args["hold"] = serde_json::json!(true);
+            }
+            args
+        })
         .map_err(|e| format!("Kanal-load fehlgeschlagen: {e}"))
 }
 
@@ -2484,7 +2493,8 @@ fn take_on_targets(
         }
     }
     let (standby_node_id, standby_label) = standby_target(state)?;
-    load_onto_channel(store, &standby_node_id, meta)?;
+    let held = take_at_enabled() && matches!(meta.media, ItemMedia::File { .. });
+    load_onto_channel(store, &standby_node_id, meta, held)?;
 
     let mixer = store.proxy_client(mixer_node_id.to_string());
     let sender_id = resolve_mixer_sender_id(&mixer, &standby_label).ok_or_else(|| {
@@ -2500,6 +2510,13 @@ fn take_on_targets(
     let take_at = take_at_ns();
     if take_at != 0 {
         schedule_audio_follow(store, state, &standby_node_id, take_at);
+    }
+    if held {
+        // Gehaltenes Datei-Item: erstes Bild + erster Ton genau am Take-Zeitpunkt (sonst sofort).
+        store
+            .proxy_client(standby_node_id.clone())
+            .invoke("playAt", serde_json::json!({"takeAt": take_at}))
+            .map_err(|e| format!("Kanal-playAt fehlgeschlagen: {e}"))?;
     }
     let at_args = |mut v: serde_json::Value| {
         if take_at != 0 {
@@ -2542,8 +2559,30 @@ fn take_on_targets(
 /// Kapitel 31.4: Vorlauf des gemeinsamen Schaltzeitpunkts in ms (`OMP_PLAYOUT_TAKE_LEAD_MS`,
 /// Standard 150; 0 = Funktion aus, Take sofort wie bisher). Muss die Laufzeit der folgenden
 /// Steuerbefehle (Ton → Bild) überdecken.
+fn take_lead_ms() -> f64 {
+    std::env::var("OMP_PLAYOUT_TAKE_LEAD_MS").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(150.0)
+}
+
+fn take_at_enabled() -> bool {
+    take_lead_ms() > 0.0 && tai_now_ns() != 0
+}
+
+/// Bildrate des Schaltrasters (`OMP_PLAYOUT_FRAMERATE`, Standard 25 wie die Mischer/Player).
+fn take_framerate() -> f64 {
+    std::env::var("OMP_PLAYOUT_FRAMERATE").ok().and_then(|v| v.parse::<f64>().ok()).filter(|r| *r >= 1.0).unwrap_or(25.0)
+}
+
+/// Rundet `tai_ns` auf die nächste Bildgrenze des MXL-Rasters (Index = ⌊t·Rate⌋) auf und addiert
+/// 0,5 ms Sicherheitsabstand: der Schreiber rechnet Zeit → Index mit µs-Rauschen, genau auf der
+/// Grenze würde das erste Bild sporadisch einen Index später landen (Messung Kap. 31.5).
+fn snap_to_frame(tai_ns: u64, fps: f64) -> u64 {
+    let frame_ns = 1e9 / fps;
+    let idx = (tai_ns as f64 / frame_ns).ceil();
+    (idx * frame_ns) as u64 + 500_000
+}
+
 fn take_at_ns() -> u64 {
-    let lead_ms = std::env::var("OMP_PLAYOUT_TAKE_LEAD_MS").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(150.0);
+    let lead_ms = take_lead_ms();
     if lead_ms <= 0.0 {
         return 0;
     }
@@ -2551,7 +2590,7 @@ fn take_at_ns() -> u64 {
     if now == 0 {
         return 0;
     }
-    now + (lead_ms * 1e6) as u64
+    snap_to_frame(now + (lead_ms * 1e6) as u64, take_framerate())
 }
 
 /// Aktuelle TAI-Zeit in ns (`CLOCK_TAI`, dieselbe Uhr wie libmxl); 0 bei Fehler.
@@ -2562,6 +2601,20 @@ fn tai_now_ns() -> u64 {
         return 0;
     }
     ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
+}
+
+#[cfg(test)]
+mod take_at_tests {
+    use super::snap_to_frame;
+
+    #[test]
+    fn snaps_up_to_next_frame_boundary_plus_margin() {
+        let t = snap_to_frame(1_000_000_010, 25.0);
+        assert_eq!(t % 40_000_000, 500_000);
+        assert!(t >= 1_000_000_010 && t < 1_000_000_010 + 40_000_000 + 500_000);
+        // schon auf der Grenze: bleibt dort (plus Abstand)
+        assert_eq!(snap_to_frame(1_040_000_000, 25.0), 1_040_500_000);
+    }
 }
 
 /// Kapitel 31.4: sagt dem Audiomixer, dass das Programm zum Zeitpunkt `take_at` vom bisherigen
