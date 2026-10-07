@@ -563,6 +563,14 @@ fn level_method_specs(level_count: usize, level: usize) -> Vec<MethodSpec> {
                 kind: ParamType::String,
             }],
         },
+        // Reihenfolge der angehefteten Quellen (= Reihenfolge der PGM/PST-Tasten) ändern.
+        MethodSpec {
+            name: n("crosspoint.movePin"),
+            args: vec![
+                MethodArg { name: "senderId".to_string(), kind: ParamType::String },
+                MethodArg { name: "toIndex".to_string(), kind: ParamType::Number },
+            ],
+        },
         MethodSpec {
             name: n("crosspoint.unpin"),
             args: vec![MethodArg {
@@ -893,6 +901,16 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
             if !pinned.iter().any(|s| s == sender_id) {
                 pinned.push(sender_id.to_string());
             }
+            Ok(())
+        }
+        "crosspoint.movePin" => {
+            let sender_id = args.get("senderId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+            let to = args.get("toIndex").and_then(Value::as_f64).filter(|v| v.is_finite() && *v >= 0.0).ok_or(InvokeError::Unknown)? as usize;
+            let mut pinned = store.pinned[level].lock().expect("lock poisoned");
+            let from = pinned.iter().position(|s| s == sender_id).ok_or(InvokeError::Unknown)?;
+            let item = pinned.remove(from);
+            let at = to.min(pinned.len());
+            pinned.insert(at, item);
             Ok(())
         }
         "crosspoint.unpin" => {

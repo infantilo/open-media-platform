@@ -224,6 +224,8 @@ button{cursor:pointer}
 .modal .box{background:var(--c-surface);border:1px solid var(--c-border);border-radius:10px;padding:18px;max-width:360px}
 .modal .box.wide{max-width:min(96vw,980px);max-height:88vh;overflow:auto}
 .omatrix table{border-collapse:collapse;margin-top:10px}.omatrix th,.omatrix td{padding:4px 8px;text-align:center;border-bottom:1px solid var(--c-border)}.omatrix td.rname{text-align:left;font-weight:600}
+.grip{cursor:grab;color:var(--c-dim);font-size:14px;line-height:1;padding:0 2px;user-select:none;touch-action:none}.grip:active{cursor:grabbing}
+.ch[data-dragging="1"]{opacity:.45}.ch[data-drop-target="1"]{outline:2px dashed var(--c-accent);outline-offset:2px}
 .stage{display:flex;flex-direction:column;min-width:0;max-height:calc(100vh - 140px);overflow:auto}
 .stage .channels{max-height:none;overflow:visible;min-height:0}
 .sec{padding:0 0 6px}.sec-out{border-top:3px solid var(--c-border);margin-top:6px;background:linear-gradient(#ffffff08,transparent 60px)}
@@ -710,6 +712,29 @@ class MixerApp {
     this.select(ids[(i + dir + ids.length) % ids.length], { open: this.ui.centerOpen });
     this.views.get(this.ui.selected)?.root.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
+  /** Kanal `fromId` an die Stelle von `targetId` setzen (davor, wenn von rechts kommend, sonst dahinter). */
+  async moveChannelBefore(fromId, targetId) {
+    const ids = this.state.channels.map((c) => c.id);
+    const from = ids.indexOf(fromId);
+    const to = ids.indexOf(targetId);
+    if (from < 0 || to < 0 || from === to) return;
+    await this.moveChannelTo(fromId, to);
+  }
+  async moveChannelTo(id, index) {
+    const list = this.state.channels;
+    const from = list.findIndex((c) => c.id === id);
+    if (from < 0) return;
+    const i = Math.max(0, Math.min(index, list.length - 1));
+    if (i === from) return;
+    const [ch] = list.splice(from, 1);
+    list.splice(i, 0, ch);
+    this.touchedAt = performance.now();
+    this.lastSig = "";
+    this.renderChannels(true);
+    await this.cmd("moveChannel", { channelId: id, toIndex: i });
+    this.announce(`${ch.label} an Position ${i + 1}`);
+    this.poll();
+  }
   closeCenter() {
     this.ui.centerOpen = false;
     this.ui.centerDismissed = true;
@@ -719,6 +744,11 @@ class MixerApp {
   onKey(e) {
     const t = e.composedPath()[0];
     if (t && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName)) return;
+    if (e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.ctrlKey && !e.metaKey && this.ui.selected) {
+      const i = this.state.channels.findIndex((c) => c.id === this.ui.selected);
+      if (i >= 0) { this.moveChannelTo(this.ui.selected, i + (e.key === "ArrowLeft" ? -1 : 1)); e.preventDefault(); }
+      return;
+    }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const sel = this.cur();
     switch (e.key) {

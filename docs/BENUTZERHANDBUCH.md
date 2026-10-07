@@ -1040,6 +1040,10 @@ PAN, AUX, AUTOMIX, DUCK, AUTOMATION, SZENEN).
   N-1 violett). Ein Klick schaltet den Weg an/aus, **Mehrfachwahl** ist möglich — z. B. PGM aus und nur
   „5.1-TEST“ an, oder beides. Automatisch per Tag zugeordnete Wege sind gesperrt (Tooltip). Ein neuer
   Kanal läuft zunächst auf PGM; neue Ausgänge erscheinen sofort als Schalter in allen Kanalzügen.
+- **Reihenfolge der Kanalzüge ändern**: Am Griff **⠿** im Kopf des Kanalzugs ziehen und auf einen anderen
+  Kanalzug fallen lassen, oder den Kanal wählen und **Alt+◀ / Alt+▶** drücken; im Kanal-Editor (Reiter IN,
+  Bereich „Reihenfolge“) gibt es dieselbe Funktion als Knöpfe. Die Reihenfolge gilt für alle Bediener und
+  steckt in Presets und Szenen-Sicherungen.
 - **Neuen Ausgang anlegen**: Am Ende des Bereichs AUSGÄNGE steht die Karte **+ Neuer Ausgang**: Namen
   eingeben, Vorlage wählen (Stereo, 5.1, 7.1, Mono, Eigene Kanalzahl), **Anlegen**. Der Gruppen-Tag
   (`role.<name>`) wird aus dem Namen gebildet.

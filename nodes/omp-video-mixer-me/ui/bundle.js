@@ -1007,7 +1007,45 @@ class OmpVideoMixerMePanel extends HTMLElement {
               latestPinned = latestPinned.filter((s) => s !== senderId);
               renderPinnedList();
             });
-            chip.append(label, removeBtn);
+            // Reihenfolge ändern: ▲▼ oder Chip ziehen.
+            const movePin = async (toIndex) => {
+              const from = latestPinned.indexOf(senderId);
+              const to = Math.max(0, Math.min(toIndex, latestPinned.length - 1));
+              if (from < 0 || to === from) return;
+              const next = latestPinned.filter((s) => s !== senderId);
+              next.splice(to, 0, senderId);
+              latestPinned = next;
+              renderPinnedList();
+              await call("crosspoint.movePin", { senderId, toIndex: to });
+            };
+            const idx = latestPinned.indexOf(senderId);
+            const upBtn = document.createElement("omp-button");
+            upBtn.textContent = "▲";
+            upBtn.title = "Nach vorn (links)";
+            upBtn.disabled = idx === 0;
+            upBtn.addEventListener("click", () => movePin(idx - 1));
+            const downBtn = document.createElement("omp-button");
+            downBtn.textContent = "▼";
+            downBtn.title = "Nach hinten (rechts)";
+            downBtn.disabled = idx === latestPinned.length - 1;
+            downBtn.addEventListener("click", () => movePin(idx + 1));
+            chip.draggable = true;
+            chip.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/x-omp-pin", senderId); e.dataTransfer.effectAllowed = "move"; });
+            chip.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("text/x-omp-pin")) e.preventDefault(); });
+            chip.addEventListener("drop", (e) => {
+              const from = e.dataTransfer.getData("text/x-omp-pin");
+              if (!from || from === senderId) return;
+              e.preventDefault();
+              const target = latestPinned.indexOf(senderId);
+              const dragged = latestPinned.indexOf(from);
+              if (dragged < 0 || target < 0) return;
+              const next = latestPinned.filter((s) => s !== from);
+              next.splice(target, 0, from);
+              latestPinned = next;
+              renderPinnedList();
+              call("crosspoint.movePin", { senderId: from, toIndex: target });
+            });
+            chip.append(label, upBtn, downBtn, removeBtn);
             pinnedList.append(chip);
           }
           const addRow = document.createElement("div");
@@ -1513,7 +1551,10 @@ class OmpVideoMixerMePanel extends HTMLElement {
         if (program) alwaysVisible.add(program);
         if (preset) alwaysVisible.add(preset);
         if (level === 0) for (const id of otherLevelSenderIds) alwaysVisible.add(id);
-        const visibleInputs = inputs.filter((i) => alwaysVisible.has(i.senderId));
+        // Reihenfolge der Tasten = Reihenfolge der angehefteten Quellen (Quellen-Dialog, ▲▼/Ziehen);
+        // nicht angeheftete Sonderfälle (aktuelles PGM/PST, Ebenen-Ausgänge) folgen dahinter.
+        const pinRank = (id) => { const k = pinned.indexOf(id); return k < 0 ? Number.MAX_SAFE_INTEGER : k; };
+        const visibleInputs = inputs.filter((i) => alwaysVisible.has(i.senderId)).sort((a, b) => pinRank(a.senderId) - pinRank(b.senderId));
         const entries = [{ label: "BLK", senderId: "" }, ...visibleInputs.map((i) => ({ label: i.label, senderId: i.senderId, format: i.format, mixerFormat: i.mixerFormat, mismatch: !!i.mismatch }))];
         // Nur dieses eine Hinweis-Element gezielt ersetzen (statt eines
         // vollen `innerHTML = ""`), damit `renderBusRow`s wiederverwendete

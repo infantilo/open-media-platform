@@ -16,7 +16,18 @@ class ChannelView {
 
     this.nameBtn = h("button", { class: "name", type: "button", "aria-pressed": "false" });
     this.sig = h("i", { class: "sig", title: "Signalaktivität" });
-    this.head = h("div", { class: "chead" }, this.sig, this.nameBtn);
+    // Reihenfolge ändern: Griff ziehen (Maus/Touch-Stift) oder Alt+◀/▶ am gewählten Kanal.
+    this.grip = h("span", { class: "grip", draggable: "true", title: "Ziehen, um die Reihenfolge zu ändern (Alt+◀ ▶ am gewählten Kanal)", "aria-hidden": "true", text: "⠿" });
+    this.grip.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/x-omp-channel", id); e.dataTransfer.effectAllowed = "move"; this.root.dataset.dragging = "1"; });
+    this.grip.addEventListener("dragend", () => { delete this.root.dataset.dragging; });
+    this.root.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("text/x-omp-channel")) { e.preventDefault(); this.root.dataset.dropTarget = "1"; } });
+    this.root.addEventListener("dragleave", () => { delete this.root.dataset.dropTarget; });
+    this.root.addEventListener("drop", (e) => {
+      delete this.root.dataset.dropTarget;
+      const from = e.dataTransfer.getData("text/x-omp-channel");
+      if (from && from !== id) { e.preventDefault(); app.moveChannelBefore(from, id); }
+    });
+    this.head = h("div", { class: "chead" }, this.grip, this.sig, this.nameBtn);
 
     const badge = (cls, label) => h("span", { class: "b " + cls, text: label });
     this.bOnAir = badge("onair", "");

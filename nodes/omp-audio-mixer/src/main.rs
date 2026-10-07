@@ -655,6 +655,14 @@ impl ParamStore for AudioMixerStore {
                     kind: ParamType::String,
                 }],
             },
+            // Reihenfolge der Kanalzüge ändern (Nutzerwunsch 2026-10-07); `toIndex` zählt in der gesamten Kanalliste.
+            MethodSpec {
+                name: "moveChannel".to_string(),
+                args: vec![
+                    MethodArg { name: "channelId".to_string(), kind: ParamType::String },
+                    MethodArg { name: "toIndex".to_string(), kind: ParamType::Number },
+                ],
+            },
             MethodSpec {
                 name: "addAux".to_string(),
                 args: vec![
@@ -1723,6 +1731,16 @@ impl AudioMixerStore {
                     .push(ChannelState::new(id.clone(), label, freq));
                 self.pipeline
                     .add_channel(id, pipeline::ChannelSource::Internal { freq });
+                Ok(())
+            }
+            "moveChannel" => {
+                let channel_id = args.get("channelId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let to = args.get("toIndex").and_then(Value::as_f64).filter(|v| v.is_finite() && *v >= 0.0).ok_or(InvokeError::Unknown)? as usize;
+                let mut channels = self.channels.lock().expect("lock poisoned");
+                let from = channels.iter().position(|c| c.id == channel_id).ok_or(InvokeError::Unknown)?;
+                let ch = channels.remove(from);
+                let at = to.min(channels.len());
+                channels.insert(at, ch);
                 Ok(())
             }
             "removeChannel" => {

@@ -227,7 +227,10 @@ class CenterControl {
     });
     this.bind(() => { const ch = this.cur(); if (ch && document.activeElement !== name && app.shadow.activeElement !== name) name.value = ch.label; });
     const rm = h("button", { class: "tog danger", type: "button", text: "Kanal entfernen", onclick: async () => { const ch = this.cur(); if (ch && (await app.confirm(`Kanal „${ch.label}“ entfernen?`))) app.cmd("removeChannel", { channelId: ch.id }).then(() => app.poll()); } });
-    root.append(src, this.section("Pegel", g), this.section("Name", name, rm));
+    const mv = (d) => () => { const ch = this.cur(); if (!ch) return; const i = app.state.channels.findIndex((c) => c.id === ch.id); app.moveChannelTo(ch.id, i + d); };
+    const left = h("button", { class: "tog", type: "button", text: "◀ Nach links", title: "Kanalzug nach links (Alt+◀)", onclick: mv(-1) });
+    const right = h("button", { class: "tog", type: "button", text: "Nach rechts ▶", title: "Kanalzug nach rechts (Alt+▶)", onclick: mv(1) });
+    root.append(src, this.section("Pegel", g), this.section("Name", name, rm), this.section("Reihenfolge", h("div", { class: "row" }, left, right)));
     return root;
   }
 
