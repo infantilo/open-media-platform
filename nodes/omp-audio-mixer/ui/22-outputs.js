@@ -15,6 +15,82 @@ function slugGroup(name) {
   return String(name || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 20);
 }
 
+/** Legt einen Ausgang (Gruppen-Bus) aus einer Vorlage an — gemeinsam für Dialog und Inline-Formular. */
+async function createOutput(app, name, layout, count) {
+  const label = String(name || "").trim();
+  if (!label) return { ok: false, msg: "Bitte einen Namen eingeben." };
+  const group = slugGroup(label);
+  if (!group) return { ok: false, msg: "Der Name braucht mindestens einen Buchstaben oder eine Ziffer." };
+  const st = app.state;
+  if (st.auxBuses.some((a) => a.kind === "group" && a.group === group)) return { ok: false, msg: `Es gibt schon einen Ausgang mit der Gruppe „${group}“.` };
+  if (st.auxFree <= 0) return { ok: false, msg: "Keine freien Ausgänge mehr (max. 10 Busse)." };
+  const channels = layout === "custom" ? Number(count) : OUTPUT_TEMPLATES.find((t) => t[0] === layout)[2];
+  await app.cmd("addAux", { kind: "group", group, layout, channels, label });
+  await app.poll();
+  return { ok: true, msg: `Ausgang „${label}“ angelegt (Sender-Tag role.${group}). Kanäle in der Routing-Matrix zuordnen.` };
+}
+
+/** Anzeigename + Art eines Ausgangs für Streifenkopf und Matrix. */
+function outputKind(a) {
+  if (a.kind === "group") return `${{ mono: "Mono", stereo: "Stereo", "5.1": "5.1", "7.1": "7.1" }[a.layout] || `${a.channels} Kn.`} · Gruppe`;
+  return a.kind === "n1" ? "N-1 (Mix-Minus)" : "Aux";
+}
+
+/** Ausgangs-Streifen: Pegelanzeige, Master-Fader, Mute — eine Spalte je Ausgang (Kap. 32.4). */
+class OutputStrip {
+  constructor(app, aux) {
+    this.app = app;
+    this.id = aux.id;
+    this.root = h("div", { class: "ch out", "data-kind": aux.kind, role: "group" });
+    this.nameBtn = h("button", { class: "name", type: "button", title: "Umbenennen (Doppelklick) · Routing-Matrix öffnen (Klick)" });
+    this.nameBtn.addEventListener("click", () => app.openOutputs());
+    this.nameBtn.addEventListener("dblclick", () => {
+      const a = app.state.auxBuses.find((x) => x.id === this.id);
+      const n = a && window.prompt("Name des Ausgangs", a.label);
+      if (n && n.trim()) app.cmd(`aux.${this.id}.setLabel`, { label: n.trim() }).then(() => app.poll());
+    });
+    this.kind = h("span", { class: "b outkind" });
+    this.head = h("div", { class: "chead" }, this.nameBtn);
+    this.badges = h("div", { class: "badges" }, this.kind);
+    this.meter = new Meter();
+    this.meterWrap = h("div", { class: "meterwrap" }, this.meter.root);
+    this.fader = new Fader({
+      label: "Ausgangspegel",
+      onInput: (db) => { const a = app.state.auxBuses.find((x) => x.id === this.id); if (a) a.masterDb = db; app.touchedAt = performance.now(); app.sendNow(`aux.${this.id}.setMaster`, { db }, "am" + this.id); },
+      onCommit: () => app.setGainCommit(),
+    });
+    this.muteBtn = h("button", { class: "tog mute", type: "button", "aria-pressed": "false", title: "Ausgang stumm" }, h("span", { class: "s", text: "M" }), h("span", { class: "l", text: "MUTE" }));
+    this.muteBtn.addEventListener("click", () => { const a = app.state.auxBuses.find((x) => x.id === this.id); if (a) app.cmd(`aux.${this.id}.setMaster`, { muted: !a.mute }).then(() => app.poll()); });
+    this.rmBtn = h("button", { class: "tog danger", type: "button", title: "Ausgang entfernen", "aria-label": "Ausgang entfernen" }, h("span", { class: "s", text: "✕" }), h("span", { class: "l", text: "ENTF." }));
+    this.rmBtn.addEventListener("click", async () => { const a = app.state.auxBuses.find((x) => x.id === this.id); if (a && (await app.confirm(`Ausgang „${a.label}“ entfernen?`))) { await app.cmd("removeAux", { auxId: this.id }); app.poll(); } });
+    this.btns = h("div", { class: "btns" }, this.muteBtn, this.rmBtn);
+    this.root.append(this.head, this.badges, this.meterWrap, this.fader.root, this.btns);
+  }
+  update(a) {
+    this.nameBtn.textContent = a.label;
+    this.root.setAttribute("aria-label", `Ausgang ${a.label}`);
+    this.kind.textContent = outputKind(a);
+    this.kind.title = a.kind === "group" ? `Sender-Tag role.${a.group}` : "";
+    this.fader.setValue(a.masterDb);
+    this.muteBtn.setAttribute("aria-pressed", String(!!a.mute));
+    this.root.dataset.muted = a.mute ? "1" : "0";
+  }
+}
+
+/** Inline-Karte „+ Neuer Ausgang“ am Ende der Ausgangs-Sektion. */
+function buildNewOutputCard(app) {
+  const name = h("input", { class: "text-input", type: "text", placeholder: "Name, z. B. Hauptton", "aria-label": "Name des neuen Ausgangs", maxlength: "30" });
+  const tpl = h("select", { class: "sel-input", "aria-label": "Vorlage" }, ...OUTPUT_TEMPLATES.map(([v, t]) => h("option", { value: v, text: t })));
+  const cnt = h("input", { class: "text-input", type: "number", min: "1", max: "16", value: "4", "aria-label": "Kanalzahl", style: "width:4.5em" });
+  cnt.hidden = true;
+  tpl.addEventListener("change", () => { cnt.hidden = tpl.value !== "custom"; });
+  const msg = h("p", { class: "hint" });
+  const go = async () => { const r = await createOutput(app, name.value, tpl.value, cnt.value); msg.textContent = r.msg; if (r.ok) name.value = ""; };
+  name.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+  const root = h("div", { class: "newout" }, h("strong", { text: "+ Neuer Ausgang" }), name, tpl, cnt, h("button", { class: "tog", type: "button", text: "Anlegen", onclick: go }), msg);
+  return { root, name };
+}
+
 class OutputsDialog {
   constructor(app) {
     this.app = app;
@@ -50,19 +126,9 @@ class OutputsDialog {
     return this.root.isConnected;
   }
   async create(nameEl, tplEl, cntEl) {
-    const label = nameEl.value.trim();
-    if (!label) { this.msg.textContent = "Bitte einen Namen eingeben."; return; }
-    const group = slugGroup(label);
-    if (!group) { this.msg.textContent = "Der Name braucht mindestens einen Buchstaben oder eine Ziffer."; return; }
-    const st = this.app.state;
-    if (st.auxBuses.some((a) => a.kind === "group" && a.group === group)) { this.msg.textContent = `Es gibt schon einen Ausgang mit der Gruppe „${group}“.`; return; }
-    if (st.auxFree <= 0) { this.msg.textContent = "Keine freien Ausgänge mehr (max. 10 Busse)."; return; }
-    const layout = tplEl.value;
-    const channels = layout === "custom" ? Number(cntEl.value) : OUTPUT_TEMPLATES.find((t) => t[0] === layout)[2];
-    await this.app.cmd("addAux", { kind: "group", group, layout, channels, label });
-    nameEl.value = "";
-    this.msg.textContent = `Ausgang „${label}“ angelegt (Sender-Tag role.${group}). Kanäle in der Matrix zuordnen.`;
-    await this.app.poll();
+    const r = await createOutput(this.app, nameEl.value, tplEl.value, cntEl.value);
+    this.msg.textContent = r.msg;
+    if (r.ok) nameEl.value = "";
     this.render();
   }
   /** Zelle: Programm (mainRoute) oder Send auf einen Bus. */
@@ -123,7 +189,7 @@ class OutputsDialog {
     const buses = st.auxBuses;
     const head = h("tr", {}, h("th", { text: "Kanal" }), h("th", { text: "Programm" }),
       ...buses.map((a) => {
-        const kind = a.kind === "group" ? `${a.layout || ""} · ${a.channels} Kn.` : a.kind === "n1" ? "N-1" : "Aux";
+        const kind = outputKind(a);
         const rm = h("button", { class: "tog danger mini", type: "button", "aria-label": `Ausgang ${a.label} entfernen`, text: "✕", onclick: async () => { if (await app.confirm(`Ausgang „${a.label}“ entfernen?`)) { await app.cmd("removeAux", { auxId: a.id }); await app.poll(); this.render(); } } });
         return h("th", { title: a.kind === "group" ? `Sender-Tag role.${a.group}` : "" }, h("div", { text: a.label }), h("div", { class: "hint", text: kind }), rm);
       }));

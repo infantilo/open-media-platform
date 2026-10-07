@@ -1028,12 +1028,19 @@ PAN, AUX, AUTOMIX, DUCK, AUTOMATION, SZENEN).
   Pre- oder Post-Fader.
 - **SZENEN**: Mix speichern/aktivieren (ohne Aussetzer); Zuordnung
   „Videoquelle → Audio-Szene“ und Presets des ganzen Mixers.
-- **Ausgänge & Routing (Kap. 32)**: Der Knopf **Ausgänge** öffnet einen Dialog. Oben legt man mit Name
-  und Vorlage (Stereo, 5.1, 7.1, Mono, Eigene Kanalzahl) einen neuen Ausgang an — der Gruppen-Tag
-  (`role.<name>`) wird aus dem Namen gebildet. Darunter zeigt die **Matrix** jeden Kanal gegen
-  „Programm“ und alle Ausgänge; ein Klick schaltet den Send an/aus, ein Kanal kann beliebig viele
-  Ausgänge speisen. Automatisch (per Tag) zugeordnete Zellen sind gesperrt. Das ✕ in der Spaltenüberschrift
-  entfernt einen Ausgang.
+- **Bereiche der Konsole (Kap. 32)**: Die Oberfläche ist in zwei klar getrennte Bereiche gegliedert —
+  **EINGÄNGE** (Kanäle, bei Bedarf je Mischgruppe oder „Nach Quelle“ gruppiert; Knöpfe „Nach Quelle“,
+  „Ausgabegruppen“, „+ Kanal“ in der Kopfzeile des Bereichs) und darunter **AUSGÄNGE** mit einem
+  Streifen je Ausgang: **Programm** (Pegelanzeige, Limiter oben rechts), **Gruppen-Busse** (orange,
+  z. B. „5.1 · Gruppe“), **Aux** (blau) und **N-1** (violett), jeweils mit Pegelanzeige, Ausgangs-Fader,
+  Mute und Entfernen. Klick auf den Namen öffnet die Routing-Matrix, Doppelklick benennt um.
+- **Neuen Ausgang anlegen**: Am Ende des Bereichs AUSGÄNGE steht die Karte **+ Neuer Ausgang**: Namen
+  eingeben, Vorlage wählen (Stereo, 5.1, 7.1, Mono, Eigene Kanalzahl), **Anlegen**. Der Gruppen-Tag
+  (`role.<name>`) wird aus dem Namen gebildet.
+- **Routing-Matrix**: Der Knopf **Routing-Matrix** (Kopfzeile AUSGÄNGE) zeigt jeden Kanal gegen „Programm“ und
+  alle Ausgänge; ein Klick schaltet den Send an/aus, ein Kanal kann beliebig viele Ausgänge speisen.
+  Automatisch (per Tag) zugeordnete Zellen sind gesperrt, das ✕ in der Spaltenüberschrift entfernt einen
+  Ausgang.
 - **Surround-Panner (Kap. 32)**: Geht ein Kanal auf einen 5.1- oder 7.1-Ausgang, erscheint neben der
   aktiven Zelle ein **⌖**-Knopf. Er öffnet den Joystick (vorn oben, hinten unten; Doppelklick oder Pos1 =
   vorn Mitte; Pfeiltasten feinfühlig, Umschalt = grob) sowie **Center-Anteil** und **LFE-Pegel**

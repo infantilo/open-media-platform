@@ -218,6 +218,16 @@ button{cursor:pointer}
 .modal .box{background:var(--c-surface);border:1px solid var(--c-border);border-radius:10px;padding:18px;max-width:360px}
 .modal .box.wide{max-width:min(96vw,980px);max-height:88vh;overflow:auto}
 .omatrix table{border-collapse:collapse;margin-top:10px}.omatrix th,.omatrix td{padding:4px 8px;text-align:center;border-bottom:1px solid var(--c-border)}.omatrix td.rname{text-align:left;font-weight:600}
+.stage{display:flex;flex-direction:column;min-width:0;max-height:calc(100vh - 140px);overflow:auto}
+.stage .channels{max-height:none;overflow:visible;min-height:0}
+.sec{padding:0 0 6px}.sec-out{border-top:3px solid var(--c-border);margin-top:6px;background:linear-gradient(#ffffff08,transparent 60px)}
+.sechead{display:flex;align-items:center;gap:10px;padding:8px 12px 0}.sechead h2{margin:0;font-size:13px;letter-spacing:.12em;text-transform:uppercase}
+.sec-in .sechead h2{color:var(--c-air)}.sec-out .sechead h2{color:#e0a04a}
+.ch.out{border-color:#e0a04a55}.ch.out[data-kind=group]{border-top:3px solid #e0a04a}.ch.out[data-kind=aux]{border-top:3px solid #5aa9e6}.ch.out[data-kind=n1]{border-top:3px solid #b07ae0}.ch.out.prog{border-top:3px solid var(--c-air)}
+.ch.out.prog .progfill{visibility:hidden}
+.b.outkind{border-color:var(--c-border);color:var(--c-dim)}
+.newout{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:4px 12px 8px;padding:10px;border:1px dashed var(--c-border);border-radius:8px}
+.newout .hint{flex:1 1 100%;margin:0}
 .tog.cell{min-width:36px}
 .cellwrap{display:flex;gap:4px;justify-content:center}.opan h4{margin:14px 0 4px}
 .panner{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start;margin-top:6px}
@@ -330,7 +340,7 @@ class MixerApp {
     this.addBtn = h("button", { class: "tb", type: "button", text: "+ Kanal", onclick: () => this.cmd("addChannel", { label: "" }).then(() => this.poll()) });
     this.sceneSaveBtn = h("button", { class: "tb", type: "button", text: "● Szene speichern", title: "Aktuellen Mix (Fader, Mute, Routing …) als neue Szene speichern", onclick: () => { const n = window.prompt("Name der Szene", ""); if (n && n.trim()) this.cmd("captureScene", { label: n.trim(), includeProcessing: false }).then(() => { this.announce(`Szene ${n.trim()} gespeichert`); this.poll(); }); } });
     this.srcBtn = h("button", { class: "tb", type: "button", "aria-pressed": "false", text: "Nach Quelle", title: "Kanäle je Quelle gruppieren (statt je Mischgruppe)", onclick: () => { this.ui.bySource = !this.ui.bySource; this.srcBtn.setAttribute("aria-pressed", String(this.ui.bySource)); this.saveUi(); this.lastSig = ""; this.renderChannels(); } });
-    this.outBtn = h("button", { class: "tb", type: "button", text: "Ausgänge", title: "Ausgänge anlegen (Stereo, 5.1, 7.1 …) und Kanäle auf beliebig viele Ausgänge routen", onclick: () => { this.outputs = this.outputs || new OutputsDialog(this); this.outputs.open(); } });
+    this.outBtn = h("button", { class: "tb", type: "button", text: "Routing-Matrix", title: "Kanäle auf beliebig viele Ausgänge routen, Ausgänge anlegen/entfernen, Surround-Panner", onclick: () => this.openOutputs() });
     this.groupBtn = h("button", { class: "tb", type: "button", text: "Ausgabegruppen", title: "Pro Ausgabegruppe (Admin → Audio-Ausgabe) einen Kanal anlegen, der automatisch die passende Quelle (Tag role.<Gruppe>) übernimmt", onclick: () => this.syncGroupChannels() });
     this.masterMeter = new Meter();
     this.masterMeter.root.className = "meter mm";
@@ -355,11 +365,20 @@ class MixerApp {
       h("div", { class: "tgrp opt" }, this.faderBtn, this.colSel, this.meterSel),
       this.sceneBar,
       h("span", { class: "spacer" }),
-      master, this.sceneSaveBtn, this.srcBtn, this.outBtn, this.groupBtn, this.addBtn);
+      master, this.sceneSaveBtn);
     this.channelsEl = h("section", { class: "channels", "aria-label": "Kanäle" });
+    // Optisch getrennte Bereiche (Kap. 32.4): EINGÄNGE (Kanäle, ggf. je Mischgruppe/Quelle) und AUSGÄNGE
+    // (Programm, Gruppen-Busse, Aux/N-1 mit eigenen Pegelanzeigen und Fadern).
+    this.outputsEl = h("section", { class: "channels outs", "aria-label": "Ausgänge" });
+    this.outStrips = new Map();
+    this.newOut = buildNewOutputCard(this);
+    const secHead = (title, sub, ...btns) => h("header", { class: "sechead" }, h("h2", { text: title }), h("span", { class: "hint", text: sub }), h("span", { class: "spacer" }), ...btns);
+    this.secIn = h("div", { class: "sec sec-in" }, secHead("Eingänge", "Kanäle · Mischgruppen", this.srcBtn, this.groupBtn, this.addBtn), this.channelsEl);
+    this.secOut = h("div", { class: "sec sec-out" }, secHead("Ausgänge", "Programm · Gruppen-Busse · Aux / N-1", this.outBtn), this.outputsEl, this.newOut.root);
+    this.stage = h("div", { class: "stage" }, this.secIn, this.secOut);
     this.centerHost = h("aside", { class: "center", "aria-label": "Center Control" });
     this.live_ = h("div", { class: "sr", role: "status", "aria-live": "polite" });
-    this.body = h("div", { class: "body" }, this.channelsEl, this.centerHost);
+    this.body = h("div", { class: "body" }, this.stage, this.centerHost);
     this.ctHandle = h("button", { class: "cthandle", type: "button", onclick: () => { this.ui.centerOpen = true; this.saveUi(); this.layoutNow(); } });
     this.root.append(this.toolbar, this.body, this.ctHandle, this.live_);
     this.shadow.append(style, this.root);
@@ -452,6 +471,9 @@ class MixerApp {
     // Mindestbreite je Zelle: lieber Spalten reduzieren, als Elemente zu verkleinern.
     const min = { grid: 128, gridf: 150, touch: 170, touchf: 190, dense: 128 }[v] || 128;
     this.channelsEl.style.setProperty("--cell-min", min + "px");
+    for (const k of ["variant", "faders", "meter"]) this.outputsEl.dataset[k] = this.channelsEl.dataset[k];
+    this.outputsEl.style.setProperty("--cols", this.channelsEl.style.getPropertyValue("--cols"));
+    this.outputsEl.style.setProperty("--cell-min", min + "px");
     this.variantKey = this.variantSig();
     this.centerHost.dataset.layout = this.layout;
     for (const view of this.views.values()) view.fader.setOrientation(v === "touchf" ? "horizontal" : "vertical");
@@ -489,6 +511,7 @@ class MixerApp {
       this.renderChannels(true);
     } else this.updateChannels();
     this.renderScenes();
+    this.renderOutputs();
     if (this.outputs && this.outputs.isOpen) this.outputs.render();
     this.updateMasterUi();
     this.center.refresh();
@@ -587,6 +610,36 @@ class MixerApp {
     const l = Object.assign(this.state.masterLimiter, patch);
     this.sendNow("setMasterLimiter", { enabled: l.enabled, thresholdDb: l.thresholdDb, ratio: l.ratio, makeupDb: l.makeupDb }, "limiter");
     this.updateMasterUi();
+  }
+  openOutputs() {
+    this.outputs = this.outputs || new OutputsDialog(this);
+    this.outputs.open();
+  }
+  /** Ausgangs-Sektion: Programm-Streifen + je Ausgang ein Streifen (Gruppen-Busse, dann Aux, dann N-1). */
+  renderOutputs() {
+    const order = { group: 0, aux: 1, n1: 2 };
+    const buses = [...this.state.auxBuses].sort((a, b) => (order[a.kind] ?? 3) - (order[b.kind] ?? 3));
+    const ids = new Set(buses.map((b) => b.id));
+    for (const [id, v] of this.outStrips) if (!ids.has(id)) { v.root.remove(); this.outStrips.delete(id); }
+    for (const a of buses) if (!this.outStrips.has(a.id)) this.outStrips.set(a.id, new OutputStrip(this, a));
+    if (!this.progStrip) {
+      this.progMeter = new Meter();
+      this.progStrip = h("div", { class: "ch out prog", "data-kind": "program", role: "group", "aria-label": "Programm" },
+        h("div", { class: "chead" }, h("button", { class: "name", type: "button", text: "Programm", onclick: () => this.openOutputs() })),
+        h("div", { class: "badges" }, h("span", { class: "b outkind", text: "Stereo · Master" })),
+        h("div", { class: "meterwrap" }, this.progMeter.root),
+        h("div", { class: "fader progfill", title: "Programm hat keinen Fader — Limiter oben rechts" }),
+        h("div", { class: "btns" }));
+    }
+    const nodes = [this.progStrip, ...buses.map((a) => this.outStrips.get(a.id).root)];
+    const sig = nodes.map((n) => n.dataset.sid || n.className).join("|") + "|" + buses.map((b) => b.id + b.kind).join(",");
+    for (const a of buses) this.outStrips.get(a.id).update(a);
+    if (this.outSig !== sig || !this.outBody) {
+      this.outSig = sig;
+      // Wie bei den Kanälen: Streifen liegen in einem `.gbody` (Flex/Grid je Darstellungsvariante).
+      this.outBody = h("div", { class: "gbody" }, ...nodes);
+      this.outputsEl.replaceChildren(h("div", { class: "group" }, this.outBody));
+    }
   }
   confirm(message) {
     return new Promise((resolve) => {
@@ -742,6 +795,8 @@ class MixerApp {
       }
     }
     this.masterMeter.set(this.masterLive.rms || 0, this.masterLive.peak || 0, now);
+    if (this.progMeter) this.progMeter.set(this.masterLive.rms || 0, this.masterLive.peak || 0, now);
+    for (const [id, v] of this.outStrips) { const l = this.live.get("aux-" + id); if (l) v.meter.set(l.rms || 0, l.peak || 0, now); }
     const gr = "GR " + fmtSigned(this.masterLive.gr || 0) + " dB";
     if (this.limGr.textContent !== gr) this.limGr.textContent = gr;
     this.center.tickLive(now);
