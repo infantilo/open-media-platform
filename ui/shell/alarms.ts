@@ -1,6 +1,7 @@
 // Gemeinsame Alarm-Logik für <omp-alarm-view> und <omp-alert-bar>
 // (Footer). Aus alarm-view.ts ausgelagert (Nutzerauftrag 2026-09-21);
 // Erläuterungen zur Quellenwahl/SSE-Strategie stehen dort.
+import { t } from "./i18n.ts";
 import { apiFetch } from "./connection.ts";
 
 export interface HostInfo {
@@ -73,8 +74,8 @@ export const SEVERITY_COLOR: Record<Severity, string> = {
 };
 
 export const SEVERITY_LABEL: Record<Severity, string> = {
-  critical: "Kritisch",
-  warning: "Warnung",
+  critical: t("alarms.c6fbd0"),
+  warning: t("alarms.d00803"),
 };
 
 
@@ -93,7 +94,7 @@ export const REFRESH_EVENT_TYPES = new Set([
 // Dimensionen (placement.evaluateOnce) — generisch übersetzt statt fest
 // verdrahteter Kombinationen, sonst müsste jede neue Kombination (jetzt:
 // net, cpu+net, mem+net, cpu+mem+net) hier extra nachgezogen werden.
-const REASON_TOKEN_LABEL: Record<string, string> = { cpu: "CPU", mem: "RAM", net: "Netz" };
+const REASON_TOKEN_LABEL: Record<string, string> = { cpu: "CPU", mem: "RAM", net: t("alarms.72ce72") };
 
 function reasonLabel(reason: string): string {
   return reason
@@ -116,9 +117,9 @@ export function buildAlarms(
         key: `instance:${inst.id}:crashed`,
         fingerprint: `${inst.crashMessage ?? ""}|${inst.restartCount ?? 0}`,
         severity: "critical",
-        source: "Instanz",
+        source: t("alarms.50c3a7"),
         title: inst.label,
-        detail: inst.crashMessage || "Prozess abgestürzt",
+        detail: inst.crashMessage || t("alarms.03a35d"),
       });
     } else if (inst.restartCount) {
       // Läuft gerade wieder, aber ist bereits mindestens einmal
@@ -129,25 +130,25 @@ export function buildAlarms(
         key: `instance:${inst.id}:restarted`,
         fingerprint: `${inst.restartCount}`,
         severity: "warning",
-        source: "Instanz",
+        source: t("alarms.50c3a7"),
         title: inst.label,
-        detail: `${inst.restartCount}× automatisch neu gestartet`,
+        detail: t("alarms.a0457b", { p0: inst.restartCount }),
       });
     }
   }
 
   for (const a of advice) {
     const target = a.suggestedHostId
-      ? `Ausweichhost: ${a.suggestedHostLabel ?? a.suggestedHostId}`
-      : "kein Ausweichhost frei";
+      ? t("alarms.31c1e2", { p0: a.suggestedHostLabel ?? a.suggestedHostId })
+      : t("alarms.c77b3a");
     const netPart = a.netPercent !== undefined ? ` / Netz ${a.netPercent.toFixed(0)}%` : "";
     alarms.push({
       key: `placement:${a.hostId}`,
       fingerprint: `${a.reason}|${[...a.instanceIds].sort().join(",")}`,
       severity: "warning",
-      source: "Host",
+      source: t("alarms.c2ca16"),
       title: a.hostLabel,
-      detail: `überlastet (${reasonLabel(a.reason)}: CPU ${a.cpuPercent.toFixed(0)}% / RAM ${a.memPercent.toFixed(0)}%${netPart}), ${a.instanceIds.length} Instanz(en) betroffen — ${target}`,
+      detail: t("alarms.fee224", { p0: reasonLabel(a.reason), p1: a.cpuPercent.toFixed(0), p2: a.memPercent.toFixed(0), p3: netPart, p4: a.instanceIds.length, p5: target }),
     });
   }
 
@@ -163,9 +164,9 @@ export function buildAlarms(
             key: `host:${h.id}:offline`,
             fingerprint: `critical|${m.receivedAt}`,
             severity: "critical",
-            source: "Host",
+            source: t("alarms.c2ca16"),
             title: h.label,
-            detail: `OFFLINE — unerwartet ausgefallen (zuletzt gesehen ${new Date(m.receivedAt).toLocaleTimeString()}), nicht manuell beendet`,
+            detail: t("alarms.808471", { p0: new Date(m.receivedAt).toLocaleTimeString() }),
           }
         : {
             key: `host:${h.id}:offline`,
@@ -174,9 +175,9 @@ export function buildAlarms(
             // (z. B. Orchestrator neu gestartet, Host schon vorher weg) —
             // Warnung statt Kritisch, weil "unerwartet" hier nicht belegbar ist.
             severity: "warning",
-            source: "Host",
+            source: t("alarms.c2ca16"),
             title: h.label,
-            detail: "offline — keine Telemetrie seit Orchestrator-Start empfangen",
+            detail: t("alarms.3494ff"),
           },
     );
   }
@@ -187,9 +188,9 @@ export function buildAlarms(
         key: `workflow:${wf.id}:failed`,
         fingerprint: `${wf.error ?? ""}|${wf.updatedAt ?? ""}`,
         severity: "critical",
-        source: "Workflow",
+        source: t("alarms.24f47c"),
         title: wf.name,
-        detail: wf.error || "gestartet fehlgeschlagen",
+        detail: wf.error || t("alarms.ffca7b"),
       });
     }
   }

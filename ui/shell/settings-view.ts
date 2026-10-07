@@ -2,6 +2,7 @@
 // je Instanz sowie die Betriebswerte des Orchestrators — alles ohne Shell/Umgebungsvariablen.
 // Explizites Speichern je Zeile (kein Schreiben bei jedem Tastendruck).
 
+import { t as tr } from "./i18n.ts";
 import { apiFetch } from "./connection.ts";
 import {
   effectiveValue, groupOptions, hintFor, inputKind, isDirty, type OptionDef, type SystemItem,
@@ -83,7 +84,7 @@ class SettingsView extends HTMLElement {
         this.#selectedInstance = "";
       }
     } catch {
-      this.#error = "Einstellungen konnten nicht geladen werden.";
+      this.#error = tr("sett.ef891c");
     }
     this.#render();
   }
@@ -95,12 +96,12 @@ class SettingsView extends HTMLElement {
     try {
       const res = await apiFetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (!res.ok) {
-        this.#error = (await res.text()).trim() || `Fehler ${res.status}`;
+        this.#error = (await res.text()).trim() || tr("sett.435a5a", { p0: res.status });
         return { ok: false, data: {} };
       }
       return { ok: true, data: (await res.json()) as Record<string, unknown> };
     } catch (err) {
-      this.#error = `Anfrage fehlgeschlagen: ${err}`;
+      this.#error = tr("sett.473549", { p0: err });
       return { ok: false, data: {} };
     } finally {
       this.#busy = false;
@@ -116,7 +117,7 @@ class SettingsView extends HTMLElement {
     if (!r.ok && o.type === "path" && !instanceId && !force && /existiert nicht|nicht zugreifbar|Verzeichnis|Datei/.test(this.#error)) {
       // Pfad fehlt auf DIESEM Rechner (Orchestrator) — evtl. nur auf einem Remote-Host vorhanden.
       const msg = this.#error;
-      if (confirm(`${msg}\n\nTrotzdem speichern (der Pfad existiert z. B. nur auf einem Remote-Host)?`)) {
+      if (confirm(tr("sett.808dfe", { p0: msg }))) {
         await this.#saveNode(t, o, value, instanceId, true);
         return;
       }
@@ -126,8 +127,8 @@ class SettingsView extends HTMLElement {
       const warn = (r.data.warning as string) || "";
       const restart = (r.data.restartNeeded as number) || 0;
       this.#message =
-        `„${o.label}“ gespeichert.` + (warn ? ` Hinweis: ${warn}` : "") +
-        (restart > 0 ? ` ${restart} laufende Instanz(en) brauchen einen Neustart (System-Update → „Veraltete Instanzen neu starten“, oder Instanz neu starten).` : "");
+        `„${o.label}“ gespeichert.` + (warn ? tr("sett.fad7a2", { p0: warn }) : "") +
+        (restart > 0 ? tr("sett.688b22", { p0: restart }) : "");
     }
     await this.#load();
   }
@@ -136,7 +137,7 @@ class SettingsView extends HTMLElement {
     const r = await this.#call(`/api/v1/admin/settings/system/${encodeURIComponent(item.key)}`, "PUT", { value });
     if (r.ok) {
       this.#drafts.delete("sys|" + item.key);
-      this.#message = `„${item.label}“ gespeichert — wirksam nach dem nächsten Neustart des Orchestrators.`;
+      this.#message = tr("sett.948895", { p0: item.label });
     }
     await this.#load();
   }
@@ -150,15 +151,15 @@ class SettingsView extends HTMLElement {
   #render() {
     const scroll = this.closest("[style*=overflow]")?.scrollTop ?? 0;
     this.replaceChildren();
-    const head = el("div", "", "Einstellungen");
+    const head = el("div", "", tr("sett.27014d"));
     head.className = "omp-h1";
     this.append(head);
     const intro = el(
       "div",
       "color:var(--omp-text-dim);margin:6px 0 12px;max-width:900px;",
-      "Hier werden die bisher nur per Umgebungsvariable möglichen Einstellungen verwaltet. Änderungen an Node-Optionen gelten " +
-        "für neu gestartete Instanzen (laufende zeigen „veraltet“ bis zum Neustart); Betriebswerte des Orchestrators gelten nach dessen Neustart. " +
-        "Geheimnisse und Infrastruktur-Zugänge (JWT, TLS, Datenbank) sind bewusst nicht hier änderbar.",
+      tr("sett.089fb5") +
+        tr("sett.347f18") +
+        tr("sett.3ef13f"),
     );
     this.append(intro);
     if (this.#error) this.append(el("div", "color:var(--omp-danger,#d33);margin-bottom:10px;white-space:pre-wrap;", this.#error));
@@ -171,9 +172,9 @@ class SettingsView extends HTMLElement {
 
   #renderNodes(): HTMLElement {
     const sec = el("div", "margin-bottom:28px;");
-    sec.append(el("div", "font-weight:600;font-size:15px;margin-bottom:8px;", "Node-Optionen"));
+    sec.append(el("div", "font-weight:600;font-size:15px;margin-bottom:8px;", tr("sett.3287f2")));
     if (this.#types.length === 0) {
-      sec.append(el("div", "color:var(--omp-text-dim);", "Keine Node-Typen mit Optionen (deploy/node-options.json)."));
+      sec.append(el("div", "color:var(--omp-text-dim);", tr("sett.33e760")));
       return sec;
     }
     const bar = el("div", "display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;");
@@ -191,11 +192,11 @@ class SettingsView extends HTMLElement {
     });
     const t = this.#types.find((x) => x.type === this.#selectedType)!;
     const scopeSel = el("select", "padding:3px;");
-    const all = el("option", "", "Alle Instanzen dieses Typs (Standard)");
+    const all = el("option", "", tr("sett.b66666"));
     all.value = "";
     scopeSel.append(all);
     for (const i of t.instances) {
-      const o = el("option", "", `Nur Instanz: ${i.label}${i.remote ? " (Remote-Host)" : ""}${i.restartNeeded ? " · Neustart nötig" : ""}`);
+      const o = el("option", "", tr("sett.12915a", { p0: i.label, p1: i.remote ? tr("sett.0cc091") : "", p2: i.restartNeeded ? tr("sett.b36046") : "" }));
       o.value = i.id;
       o.selected = i.id === this.#selectedInstance;
       scopeSel.append(o);
@@ -204,19 +205,19 @@ class SettingsView extends HTMLElement {
       this.#selectedInstance = scopeSel.value;
       this.#render();
     });
-    bar.append(el("span", "color:var(--omp-text-dim);", "Typ:"), typeSel, el("span", "color:var(--omp-text-dim);", "Gilt für:"), scopeSel);
+    bar.append(el("span", "color:var(--omp-text-dim);", tr("sett.dbc566")), typeSel, el("span", "color:var(--omp-text-dim);", tr("sett.695edd")), scopeSel);
     sec.append(bar);
 
     const pending = t.instances.filter((i) => i.restartNeeded);
     if (pending.length > 0) {
       sec.append(el("div", "margin-bottom:10px;padding:6px 10px;border:1px solid var(--omp-warn,#b8860b);border-radius:var(--omp-radius);",
-        `Neustart nötig für: ${pending.map((p) => p.label).join(", ")} — die geänderten Werte gelten dort erst nach einem Neustart.`));
+        tr("sett.7f769f", { p0: pending.map((p) => p.label).join(", ") })));
     }
     const inst = t.instances.find((i) => i.id === this.#selectedInstance);
     if (t.instances.some((i) => i.remote)) {
       sec.append(el("div", "color:var(--omp-text-dim);margin-bottom:8px;font-size:var(--omp-font-size-xs);",
-        "Hinweis: Auf Remote-Hosts prüft der Host-Agent jeden Wert selbst gegen SEIN Schema (node-options.json neben seinem Katalog) und SEIN Dateisystem; " +
-        "nicht dort deklarierte Variablen werden ignoriert. Pfade gelten dort — „Pfad prüfen“ fragt bei einer Remote-Instanz den Host."));
+        tr("sett.a664c2") +
+        tr("sett.a3ccd7")));
     }
 
     for (const [group, opts] of groupOptions(t.options)) {
@@ -262,7 +263,7 @@ class SettingsView extends HTMLElement {
         if (o.type === "float") inp.step = "any";
       }
       inp.value = current;
-  inp.placeholder = inst ? effectiveValue(o, undefined).value || "Standard" : o.default || o.placeholder || "Standard";
+  inp.placeholder = inst ? effectiveValue(o, undefined).value || tr("sett.eb6d8a") : o.default || o.placeholder || tr("sett.eb6d8a");
       input = inp;
     }
     field.append(input);
@@ -270,18 +271,18 @@ class SettingsView extends HTMLElement {
     field.append(hint);
     if (inst && !saved) {
       const e = effectiveValue(o, undefined);
-      field.append(el("div", "font-size:10px;color:var(--omp-text-dim);", `wirksam: ${e.value || "Standard des Nodes"} (${e.source === "type" ? "Typ-Wert" : e.source === "default" ? "Standard" : "Node"})`));
+      field.append(el("div", "font-size:10px;color:var(--omp-text-dim);", `wirksam: ${e.value || tr("sett.eba8ae")} (${e.source === "type" ? tr("sett.545dfe") : e.source === "default" ? tr("sett.eb6d8a") : tr("sett.6c3a69")})`));
     }
     const check = el("div", "font-size:11px;margin-top:2px;");
     check.dataset.check = current;
     field.append(check);
 
     const actions = el("div", "display:flex;gap:6px;flex-wrap:wrap;");
-    const save = el("button", BTN, "Speichern");
+    const save = el("button", BTN, tr("sett.b97d23"));
     save.className = "omp-btn-primary";
     const dirty = isDirty(current, saved);
     save.disabled = !dirty || this.#busy;
-    const reset = el("button", BTN, "Zurücksetzen");
+    const reset = el("button", BTN, tr("sett.02fa34"));
     reset.disabled = !saved || this.#busy;
     input.addEventListener("input", () => {
       this.#drafts.set(dk, input.value);
@@ -296,11 +297,11 @@ class SettingsView extends HTMLElement {
       const choices = this.#locations.filter((l) => l.status === "active" && (hostFilter === null || l.hostId === hostFilter));
       if (choices.length > 0) {
         const pick = el("select", "padding:2px;max-width:200px;");
-        const first = el("option", "", "Speicherort wählen …");
+        const first = el("option", "", tr("sett.3e3767"));
         first.value = "";
         pick.append(first);
         for (const l of choices) {
-          const op = el("option", "", `${l.name}${hostFilter === null ? ` · ${l.hostId ? this.#hostLabels.get(l.hostId) ?? "Host" : "Orchestrator"}` : ""} — ${l.path}`);
+          const op = el("option", "", `${l.name}${hostFilter === null ? ` · ${l.hostId ? this.#hostLabels.get(l.hostId) ?? tr("sett.c2ca16") : tr("sett.4c94fe")}` : ""} — ${l.path}`);
           op.value = l.path;
           pick.append(op);
         }
@@ -313,10 +314,10 @@ class SettingsView extends HTMLElement {
         });
         actions.append(pick);
       }
-      const test = el("button", BTN, "Pfad prüfen");
+      const test = el("button", BTN, tr("sett.5fc6ec"));
       test.addEventListener("click", () => {
         const p = input.value.trim() || o.default || "";
-        if (!p) { check.textContent = "Kein Pfad angegeben."; return; }
+        if (!p) { check.textContent = tr("sett.c21537"); return; }
         void this.#checkPathInline(p, o.pathKind ?? "dir", check, inst?.remote ? this.#hostOf(inst.id) : "");
       });
       actions.append(test);
@@ -330,7 +331,7 @@ class SettingsView extends HTMLElement {
   }
 
   async #checkPathInline(path: string, kind: string, out: HTMLElement, hostId = "") {
-    out.textContent = "Prüfe …";
+    out.textContent = tr("sett.a85e64");
     try {
       const res = await apiFetch("/api/v1/admin/settings/check-path", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, kind, hostId }),
@@ -344,21 +345,21 @@ class SettingsView extends HTMLElement {
       out.textContent = `${d.readable ? "✓" : "✗"} ${d.message ?? ""}`;
       out.style.color = d.readable ? "var(--omp-success, #4a4)" : "var(--omp-danger, #d33)";
     } catch {
-      out.textContent = "Prüfung fehlgeschlagen.";
+      out.textContent = tr("sett.f3de9d");
     }
   }
 
   #renderSystem(): HTMLElement {
     const sec = el("div", "margin-bottom:28px;");
-    sec.append(el("div", "font-weight:600;font-size:15px;margin-bottom:8px;", "Orchestrator (Betriebswerte)"));
+    sec.append(el("div", "font-weight:600;font-size:15px;margin-bottom:8px;", tr("sett.c97fd8")));
     const sys = this.#system;
     if (!sys) {
-      sec.append(el("div", "color:var(--omp-text-dim);", "Wird geladen …"));
+      sec.append(el("div", "color:var(--omp-text-dim);", tr("sett.cd73c1")));
       return sec;
     }
     if (sys.skipped?.length) {
       sec.append(el("div", "margin-bottom:10px;color:var(--omp-warn,#b8860b);white-space:pre-wrap;",
-        `Beim letzten Start wurden Überschreibungen verworfen:\n${sys.skipped.join("\n")}`));
+        tr("sett.17a397", { p0: sys.skipped.join("\n") })));
     }
     for (const [group, items] of groupOptions(sys.items)) {
       const box = el("div", "margin-bottom:14px;");
@@ -368,7 +369,7 @@ class SettingsView extends HTMLElement {
     }
 
     const det = el("details", "margin-top:10px;");
-    det.append(el("summary", "cursor:pointer;color:var(--omp-text-dim);", "Start-Konfiguration (nur lesend, Geheimnisse maskiert)"));
+    det.append(el("summary", "cursor:pointer;color:var(--omp-text-dim);", tr("sett.a51de6")));
     const table = el("table", "border-collapse:collapse;margin-top:6px;font-size:12px;");
     for (const e of sys.startup) {
       const tr = el("tr");
@@ -397,13 +398,13 @@ class SettingsView extends HTMLElement {
     inp.value = current;
     inp.placeholder = it.active;
     field.append(inp, el("div", "font-size:10px;color:var(--omp-text-dim);margin-top:2px;",
-      `${it.description} Aktiv: ${it.active}${it.unit ? " " + it.unit : ""} · erlaubt ${it.min}–${it.max}`));
+      tr("sett.ef8d9d", { p0: it.description, p1: it.active, p2: it.unit ? " " + it.unit : "", p3: it.min, p4: it.max })));
     if (it.pendingRestart) field.append(el("div", "font-size:11px;color:var(--omp-warn,#b8860b);", `gespeichert: ${it.override} — gilt erst nach Neustart des Orchestrators`));
     const actions = el("div", "display:flex;gap:6px;");
-    const save = el("button", BTN, "Speichern");
+    const save = el("button", BTN, tr("sett.b97d23"));
     save.className = "omp-btn-primary";
     save.disabled = !isDirty(current, saved) || this.#busy;
-    const reset = el("button", BTN, "Zurücksetzen");
+    const reset = el("button", BTN, tr("sett.02fa34"));
     reset.disabled = !saved || this.#busy;
     inp.addEventListener("input", () => {
       this.#drafts.set(dk, inp.value);

@@ -2,6 +2,7 @@
 // die ein Host lokal eingehängt hat (NFS/SMB/Platte). Zeigt Erreichbarkeit, Platz und Verwendung;
 // die Orte erscheinen in den Node-Einstellungen als Auswahl für Pfad-Optionen.
 
+import { t as tt } from "./i18n.ts";
 import { apiFetch } from "./connection.ts";
 import { describeCheck, type LocationItem } from "./locations-logic.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
@@ -36,13 +37,13 @@ class LocationsView extends HTMLElement {
       if (l.ok) this.#items = ((await l.json()) as { locations: LocationItem[] }).locations ?? [];
       if (h.ok) this.#hosts = ((await h.json()) as { id: string; label: string }[]) ?? [];
     } catch {
-      this.#error = "Speicherorte konnten nicht geladen werden.";
+      this.#error = tt("loc.669349");
     }
     this.#render();
   }
 
   #hostName(id: string): string {
-    return id ? this.#hosts.find((h) => h.id === id)?.label ?? id : "Orchestrator-Rechner";
+    return id ? this.#hosts.find((h) => h.id === id)?.label ?? id : tt("loc.3e96ca");
   }
 
   async #create(force: boolean): Promise<void> {
@@ -54,12 +55,12 @@ class LocationsView extends HTMLElement {
     if (!res.ok) {
       const msg = (await res.text()).trim();
       if (!force && (res.status === 400 || res.status === 502) && /force/.test(msg)) {
-        if (await confirmDialog(`${msg}\n\nTrotzdem anlegen?`, { confirmLabel: "Trotzdem anlegen" })) return this.#create(true);
+        if (await confirmDialog(`${msg}\n\nTrotzdem anlegen?`, { confirmLabel: tt("loc.b4e5a7") })) return this.#create(true);
       }
       this.#error = msg;
     } else {
       const d = (await res.json()) as { warning?: string };
-      this.#message = `Speicherort angelegt.${d.warning ? ` Hinweis: ${d.warning}` : ""}`;
+      this.#message = tt("loc.53b57b", { p0: d.warning ? tt("loc.fad7a2", { p0: d.warning }) : "" });
       this.#form = { name: "", hostId: this.#form.hostId, path: "", note: "" };
     }
     await this.#load();
@@ -75,7 +76,7 @@ class LocationsView extends HTMLElement {
   }
 
   async #delete(l: LocationItem) {
-    if (!(await confirmDialog(`Speicherort „${l.name}“ entfernen? Die Dateien bleiben unberührt, nur der Eintrag verschwindet.`, { confirmLabel: "Entfernen" }))) return;
+    if (!(await confirmDialog(tt("loc.0025a8", { p0: l.name }), { confirmLabel: tt("loc.513d30") }))) return;
     const res = await apiFetch(`/api/v1/admin/storage-locations/${encodeURIComponent(l.id)}`, { method: "DELETE" });
     this.#error = res.ok ? "" : (await res.text()).trim();
     this.#message = res.ok ? `„${l.name}“ entfernt.` : "";
@@ -84,18 +85,18 @@ class LocationsView extends HTMLElement {
 
   #render() {
     this.replaceChildren();
-    const head = el("div", "font-weight:600;font-size:15px;margin-bottom:6px;", "Lokale Speicherorte");
+    const head = el("div", "font-weight:600;font-size:15px;margin-bottom:6px;", tt("loc.18a80a"));
     this.append(head, el("div", "color:var(--omp-text-dim);max-width:900px;margin-bottom:10px;",
-      "Verzeichnisse oder Netzwerk-Shares, die ein Host lokal eingehängt hat (NFS/SMB/Platte — das Einhängen selbst geschieht am Betriebssystem, z. B. per /etc/fstab). " +
-      "Hier bekommen sie einen Namen, werden auf Erreichbarkeit und Platz geprüft und erscheinen in Admin → Einstellungen als Auswahl für Pfad-Optionen (z. B. das Medienverzeichnis eines Players)."));
+      tt("loc.6ab318") +
+      tt("loc.764153")));
     if (this.#error) this.append(el("div", "color:var(--omp-danger,#d33);margin-bottom:8px;white-space:pre-wrap;", this.#error));
     if (this.#message) this.append(el("div", "color:var(--omp-success,#4a4);margin-bottom:8px;", this.#message));
 
-    if (this.#items.length === 0) this.append(el("div", "color:var(--omp-text-dim);margin-bottom:10px;", "Noch keine Speicherorte angelegt."));
+    if (this.#items.length === 0) this.append(el("div", "color:var(--omp-text-dim);margin-bottom:10px;", tt("loc.54d2e5")));
     else {
       const table = el("table", "border-collapse:collapse;font-size:12px;margin-bottom:12px;width:100%;max-width:1100px;");
       const hr = el("tr", "color:var(--omp-text-dim);text-align:left;");
-      for (const t of ["Name", "Host", "Pfad", "Zustand", "Verwendung", ""]) hr.append(el("th", "padding:3px 10px 3px 0;", t));
+      for (const t of [tt("loc.49ee30"), tt("loc.c2ca16"), tt("loc.b6a791"), tt("loc.7f5acf"), tt("loc.f7a012"), ""]) hr.append(el("th", "padding:3px 10px 3px 0;", t));
       table.append(hr);
       for (const l of this.#items) {
         const c = describeCheck(l);
@@ -103,12 +104,12 @@ class LocationsView extends HTMLElement {
         const name = el("td", "padding:4px 10px 4px 0;", l.name + (l.status === "deprecated" ? " (ausgelaufen)" : ""));
         if (l.note) name.title = l.note;
         const state = el("td", `padding:4px 10px 4px 0;color:${c.ok ? "var(--omp-success,#4a4)" : "var(--omp-danger,#d33)"};`, `${c.ok ? "✓" : "✗"} ${c.text}`);
-        const use = el("td", "padding:4px 10px 4px 0;color:var(--omp-text-dim);", l.usage.length ? `${l.usage.length} Einstellung(en)` : "ungenutzt");
+        const use = el("td", "padding:4px 10px 4px 0;color:var(--omp-text-dim);", l.usage.length ? tt("loc.44621c", { p0: l.usage.length }) : "ungenutzt");
         if (l.usage.length) use.title = l.usage.map((u) => `${u.nodeType} → ${u.option}${u.instanceLabel ? ` (${u.instanceLabel})` : ""}: ${u.value}`).join("\n");
         const act = el("td", "padding:4px 0;white-space:nowrap;");
-        const st = el("button", "padding:2px 8px;margin-right:6px;", l.status === "active" ? "Auslaufen lassen" : "Reaktivieren");
+        const st = el("button", "padding:2px 8px;margin-right:6px;", l.status === "active" ? tt("loc.e01524") : tt("loc.1a1a97"));
         st.addEventListener("click", () => void this.#setStatus(l));
-        const del = el("button", "padding:2px 8px;", "Entfernen");
+        const del = el("button", "padding:2px 8px;", tt("loc.513d30"));
         del.className = "omp-btn-danger";
         del.addEventListener("click", () => void this.#delete(l));
         act.append(st, del);
@@ -129,7 +130,7 @@ class LocationsView extends HTMLElement {
     name.value = this.#form.name;
     name.addEventListener("input", () => (this.#form.name = name.value));
     const host = el("select", "padding:3px;");
-    const local = el("option", "", "Orchestrator-Rechner");
+    const local = el("option", "", tt("loc.3e96ca"));
     local.value = "";
     host.append(local);
     for (const h of this.#hosts) {
@@ -144,13 +145,13 @@ class LocationsView extends HTMLElement {
     path.value = this.#form.path;
     path.addEventListener("input", () => (this.#form.path = path.value));
     const note = el("input", "padding:3px 6px;width:200px;");
-    note.placeholder = "Notiz (optional)";
+    note.placeholder = tt("loc.88cb27");
     note.value = this.#form.note;
     note.addEventListener("input", () => (this.#form.note = note.value));
-    const add = el("button", "padding:4px 12px;", "Prüfen und anlegen");
+    const add = el("button", "padding:4px 12px;", tt("loc.443e0a"));
     add.className = "omp-btn-primary";
     add.addEventListener("click", () => void this.#create(false));
-    form.append(field("Name", name), field("Host", host), field("Pfad", path), field("Notiz", note), add);
+    form.append(field(tt("loc.49ee30"), name), field(tt("loc.c2ca16"), host), field(tt("loc.b6a791"), path), field(tt("loc.7ae5b1"), note), add);
     this.append(form);
   }
 }

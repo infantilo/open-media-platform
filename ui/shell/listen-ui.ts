@@ -2,6 +2,7 @@
 // schmaler Streifen unten links, aufgeklappt ein Pult-Panel: großes
 // Lautstärke-Poti, frei belegbare Schnellwahl-Tasten, Kanalmodus
 // (Stereo/Mono/L/R), Kopfhörer-Ausgleich, A/V-Sync und Pegel.
+import { t } from "./i18n.ts";
 import type { ChannelMode, ListenService, ListenStatus } from "./listen.ts";
 import { PRESET_SLOTS } from "./listen.ts";
 
@@ -10,7 +11,7 @@ const STATUS_TEXT: Record<ListenStatus, string> = {
   connecting: "verbinde …",
   playing: "",
   reconnecting: "verbinde neu …",
-  error: "kein Audiostrom",
+  error: t("listen.a27ba8"),
 };
 
 const EXPANDED_KEY = "omp-listen-expanded";
@@ -92,7 +93,7 @@ function arcPath(cx: number, cy: number, r: number, from: number, to: number): s
 /** Großes Lautstärke-Poti: vertikaler Drag, Mausrad, Pfeiltasten, Doppelklick = Standard. */
 function buildKnob(initial: number, onChange: (v: number) => void) {
   const root = svg("svg", { viewBox: "0 0 150 150", class: "omp-listen-knob", tabindex: "0", role: "slider",
-    "aria-label": "Abhörlautstärke", "aria-valuemin": "0", "aria-valuemax": "100" });
+    "aria-label": t("listen.b34670"), "aria-valuemin": "0", "aria-valuemax": "100" });
   const defs = svg("defs", {});
   const grad = svg("linearGradient", { id: "omp-lk-grad", x1: "0", y1: "1", x2: "1", y2: "0" });
   grad.append(svg("stop", { offset: "0", "stop-color": "#19d3f3" }), svg("stop", { offset: "1", "stop-color": "#a45cff" }));
@@ -189,10 +190,10 @@ function buildControls(service: ListenService): { panel: HTMLElement; repaint: (
   presetHead.className = "omp-listen-row";
   const presetTitle = document.createElement("span");
   presetTitle.className = "omp-listen-sec";
-  presetTitle.textContent = "Schnellwahl";
+  presetTitle.textContent = t("listen.977a2d");
   const assignBtn = document.createElement("button");
   assignBtn.textContent = "✎ Belegen";
-  assignBtn.title = "Taste anklicken, um sie mit einer Quelle zu belegen";
+  assignBtn.title = t("listen.c8108d");
   presetHead.append(presetTitle, assignBtn);
   const presetGrid = document.createElement("div");
   presetGrid.className = "omp-listen-presets";
@@ -210,16 +211,16 @@ function buildControls(service: ListenService): { panel: HTMLElement; repaint: (
   edTitle.className = "omp-listen-sec";
   const edSelect = document.createElement("select");
   const edName = document.createElement("input");
-  edName.placeholder = "Beschriftung (z. B. PGM)";
+  edName.placeholder = t("listen.ab6eb8");
   edName.maxLength = 18;
   const edRow = document.createElement("div");
   edRow.style.cssText = "display:flex;gap:6px;justify-content:flex-end;";
   const edClear = document.createElement("button");
-  edClear.textContent = "Leeren";
+  edClear.textContent = t("listen.33dddf");
   const edCancel = document.createElement("button");
-  edCancel.textContent = "Abbrechen";
+  edCancel.textContent = t("listen.4b9727");
   const edSave = document.createElement("button");
-  edSave.textContent = "Speichern";
+  edSave.textContent = t("listen.b97d23");
   edSave.className = "omp-btn-primary";
   edRow.append(edClear, edCancel, edSave);
   editor.append(edTitle, edSelect, edName, edRow);
@@ -252,11 +253,11 @@ function buildControls(service: ListenService): { panel: HTMLElement; repaint: (
     const existing = service.state.presets[slot];
     if (existing && !labels.includes(existing.sourceLabel)) labels.unshift(existing.sourceLabel);
     if (labels.length === 0) {
-      hint.textContent = "Keine Audioquellen gefunden.";
+      hint.textContent = t("listen.c15782");
       return;
     }
     editSlot = slot;
-    edTitle.textContent = `Taste ${slot + 1} belegen`;
+    edTitle.textContent = t("listen.24e79f", { p0: slot + 1 });
     edSelect.replaceChildren(...labels.map((l) => {
       const o = document.createElement("option");
       o.value = o.textContent = l;
@@ -283,7 +284,7 @@ function buildControls(service: ListenService): { panel: HTMLElement; repaint: (
       }
       hint.textContent = (await service.selectByLabel(preset.sourceLabel))
         ? ""
-        : `„${preset.sourceLabel}“ ist gerade nicht verfügbar.`;
+        : t("listen.e7d29a", { p0: preset.sourceLabel });
     });
     b.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
@@ -302,14 +303,14 @@ function buildControls(service: ListenService): { panel: HTMLElement; repaint: (
   modeRow.className = "omp-listen-row";
   const modeTitle = document.createElement("span");
   modeTitle.className = "omp-listen-sec";
-  modeTitle.textContent = "Kanäle";
+  modeTitle.textContent = t("listen.45cef4");
   const seg = document.createElement("div");
   seg.className = "omp-listen-seg";
   const modes: [ChannelMode, string, string][] = [
-    ["stereo", "ST", "Stereo"],
-    ["mono", "MONO", "Mono-Summe (L+R) — Kompatibilitätscheck"],
-    ["left", "L", "Nur linker Kanal auf beiden Ohren"],
-    ["right", "R", "Nur rechter Kanal auf beiden Ohren"],
+    ["stereo", "ST", t("listen.bbc45d")],
+    ["mono", "MONO", t("listen.ca293d")],
+    ["left", "L", t("listen.7834b5")],
+    ["right", "R", t("listen.878f43")],
   ];
   const modeBtns = modes.map(([m, label, tip]) => {
     const b = document.createElement("button");
@@ -325,17 +326,17 @@ function buildControls(service: ListenService): { panel: HTMLElement; repaint: (
   const hpRow = document.createElement("div");
   hpRow.className = "omp-listen-row";
   const hpBtn = document.createElement("button");
-  hpBtn.textContent = "🎧 Kopfhörer-Ausgleich";
+  hpBtn.textContent = t("listen.c5103a");
   hpBtn.title =
-    "Crossfeed: mischt einen gefilterten, leicht verzögerten Anteil des Gegenkanals zu — so wie Boxen es akustisch tun. " +
-    "Verhindert, dass das Stereobild auf Kopfhörern zu breit wirkt.";
+    t("listen.178039") +
+    t("listen.5d839e");
   hpBtn.addEventListener("click", () => service.setHeadphone(!service.state.headphone));
   const xf = document.createElement("input");
   xf.type = "range";
   xf.min = "0";
   xf.max = "1";
   xf.step = "0.05";
-  xf.title = "Stärke";
+  xf.title = t("listen.63e7ec");
   xf.addEventListener("input", () => service.setCrossfeed(parseFloat(xf.value)));
   hpRow.append(hpBtn, xf);
 
@@ -343,11 +344,11 @@ function buildControls(service: ListenService): { panel: HTMLElement; repaint: (
   const ctlRow = document.createElement("div");
   ctlRow.className = "omp-listen-row";
   const mute = document.createElement("button");
-  mute.textContent = "Mute";
+  mute.textContent = t("listen.00cd7b");
   mute.addEventListener("click", () => service.setMuted(!service.state.muted));
   const dim = document.createElement("button");
   dim.textContent = "Dim";
-  dim.title = "Absenken (−20 dB)";
+  dim.title = t("listen.f0bddc");
   dim.addEventListener("click", () => service.setDim(!service.state.dim));
   const sync = document.createElement("input");
   sync.type = "range";
@@ -358,7 +359,7 @@ function buildControls(service: ListenService): { panel: HTMLElement; repaint: (
   const syncLabel = document.createElement("span");
   syncLabel.style.cssText = "min-width:54px;font-variant-numeric:tabular-nums;";
   const syncWrap = document.createElement("label");
-  syncWrap.title = "Ton verzögern, bis er zum Bild in Viewer/Multiviewer passt";
+  syncWrap.title = t("listen.669306");
   syncWrap.style.cssText = "display:flex;align-items:center;gap:6px;";
   syncWrap.append("A/V", sync, syncLabel);
   const btnPair = document.createElement("div");
@@ -403,7 +404,7 @@ function buildControls(service: ListenService): { panel: HTMLElement; repaint: (
     presetBtns.forEach((b, i) => {
       const p = s.presets[i];
       b.textContent = p ? p.name : assigning ? "＋" : "—";
-      b.title = p ? `${p.sourceLabel}\n(Rechtsklick: neu belegen)` : "Leer — Rechtsklick oder „Belegen“";
+      b.title = p ? `${p.sourceLabel}\n(Rechtsklick: neu belegen)` : t("listen.85d6d3");
       b.classList.toggle("empty", !p);
       b.classList.toggle("live", !!p && p.sourceLabel === s.sourceLabel);
       b.classList.toggle("assigning", assigning);
@@ -438,16 +439,16 @@ export function buildListenWidget(service: ListenService): HTMLElement {
   const bar = document.createElement("div");
   bar.className = "omp-listen-bar";
   const expand = document.createElement("button");
-  expand.title = "Abhör-Controller auf-/zuklappen";
+  expand.title = t("listen.6fd701");
   const title = document.createElement("span");
   title.className = "title";
-  title.textContent = "ABHÖREN";
+  title.textContent = t("listen.30f29f");
   const barSrc = document.createElement("span");
   barSrc.className = "omp-listen-src";
   const status = document.createElement("span");
   const stopBtn = document.createElement("button");
   stopBtn.textContent = "■";
-  stopBtn.title = "Abhören beenden";
+  stopBtn.title = t("listen.756de8");
   stopBtn.addEventListener("click", () => service.stop());
   bar.append(expand, title, barSrc, status, stopBtn);
 

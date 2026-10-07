@@ -35,6 +35,7 @@
 // sich gegenseitig verwirren — für einen von einem Admin geführten
 // Onboarding-Schritt keine praxisrelevante Lücke, nicht weiter
 // abgesichert.
+import { t } from "./i18n.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 
 interface HostCapabilities {
@@ -62,9 +63,9 @@ interface TargetTile {
 
 // Reihenfolge/Wortlaut wie ARCHITECTURE.md §18.8s Klassen-Tabelle.
 const TARGET_TILES: TargetTile[] = [
-  { id: "bare-metal", title: "Bare-Metal", hint: "eigener/dedizierter Server (z. B. 2110/SDI-Karten)" },
+  { id: "bare-metal", title: t("hwiz.8adbea"), hint: "eigener/dedizierter Server (z. B. 2110/SDI-Karten)" },
   { id: "vm", title: "VM (lokaler Cluster)", hint: "virtuelle Maschine im eigenen Netz" },
-  { id: "cloud-aws", title: "Cloud (AWS EC2)", hint: "Zusatzkapazität, kein PTP/Multicast (§6)" },
+  { id: "cloud-aws", title: t("hwiz.5f5b8f"), hint: t("hwiz.704b3b") },
 ];
 
 const WAIT_POLL_INTERVAL_MS = 2000;
@@ -211,8 +212,8 @@ class HostWizard extends HTMLElement {
       if (!tokenRes.ok) {
         this.#errorMessage =
           tokenRes.status === 403
-            ? "Nur Admins können ein Bootstrap-Token erzeugen."
-            : `Token-Erzeugung fehlgeschlagen (${tokenRes.status}).`;
+            ? t("hwiz.851e7f")
+            : t("hwiz.fe39d4", { p0: tokenRes.status });
         this.#step = "error";
         this.#render();
         return;
@@ -223,7 +224,7 @@ class HostWizard extends HTMLElement {
       this.#provisionLoading = false;
       this.#render();
     } catch {
-      this.#errorMessage = "Orchestrator nicht erreichbar.";
+      this.#errorMessage = t("hwiz.876ed3");
       this.#step = "error";
       this.#render();
     }
@@ -340,8 +341,8 @@ class HostWizard extends HTMLElement {
     title.style.cssText = "margin-bottom:var(--omp-space-3);";
     title.textContent =
       this.#step === "error"
-        ? "Neuen Host hinzufügen — Fehler"
-        : `Neuen Host hinzufügen (Schritt ${this.#stepNumber()}/4)`;
+        ? t("hwiz.2b9a71")
+        : t("hwiz.dee66f", { p0: this.#stepNumber() });
     dialog.appendChild(title);
 
     switch (this.#step) {
@@ -386,7 +387,7 @@ class HostWizard extends HTMLElement {
     const hint = document.createElement("div");
     hint.style.cssText = "color:var(--omp-text-dim);margin-bottom:var(--omp-space-3);";
     hint.textContent =
-      "Wo läuft der neue Host? Der Host-Agent verhält sich in allen drei Fällen identisch — die Auswahl bestimmt nur das unten erzeugte Provisionierungs-Skript.";
+      t("hwiz.3a4a80");
     wrap.appendChild(hint);
 
     const tiles = document.createElement("div");
@@ -418,9 +419,9 @@ class HostWizard extends HTMLElement {
     labelWrap.style.cssText = "margin-bottom:var(--omp-space-4);";
     const labelText = document.createElement("label");
     labelText.style.cssText = "display:block;margin-bottom:4px;color:var(--omp-text-dim);";
-    labelText.textContent = "Label für den neuen Host";
+    labelText.textContent = t("hwiz.2a44e7");
     const labelInput = document.createElement("input");
-    labelInput.placeholder = "z. B. Regie-Host-C";
+    labelInput.placeholder = t("hwiz.ce2855");
     labelInput.autocomplete = "off";
     labelInput.value = this.#label;
     labelInput.style.cssText = "width:100%;box-sizing:border-box;";
@@ -435,12 +436,12 @@ class HostWizard extends HTMLElement {
     actions.style.cssText = "display:flex;justify-content:flex-end;gap:var(--omp-space-2);";
     const cancelBtn = document.createElement("button");
     cancelBtn.type = "button";
-    cancelBtn.textContent = "Abbrechen";
+    cancelBtn.textContent = t("hwiz.4b9727");
     cancelBtn.addEventListener("click", () => this.#close());
     const nextBtn = document.createElement("button");
     nextBtn.type = "button";
     nextBtn.className = "omp-btn-primary";
-    nextBtn.textContent = "Weiter";
+    nextBtn.textContent = t("hwiz.c39838");
     nextBtn.disabled = !this.#canProceedFromTarget();
     nextBtn.addEventListener("click", () => this.#proceedToToken());
     actions.append(cancelBtn, nextBtn);
@@ -465,20 +466,20 @@ class HostWizard extends HTMLElement {
     if (this.#provisionLoading) {
       const loading = document.createElement("div");
       loading.style.cssText = "color:var(--omp-text-dim);padding:var(--omp-space-4) 0;";
-      loading.textContent = "Bootstrap-Token wird erzeugt …";
+      loading.textContent = t("hwiz.25d4d9");
       wrap.appendChild(loading);
       return wrap;
     }
 
     const info = document.createElement("div");
     info.style.cssText = "color:var(--omp-text-dim);margin-bottom:var(--omp-space-3);";
-    info.innerHTML = `Token erzeugt, gültig für <strong style="color:var(--omp-text);">${formatRemaining(this.#tokenExpiresAt)}</strong>. Prüfe die drei Adressen (vom Zielhost aus erreichbar, ggf. anpassen) und übertrage das Skript auf den neuen Host.`;
+    info.innerHTML = `${t("hwiz.7b0156")} <strong style="color:var(--omp-text);">${formatRemaining(this.#tokenExpiresAt)}</strong>${t("hwiz.874bdf")}`;
     wrap.appendChild(info);
 
     type UrlFieldKey = "orchestratorUrl" | "registryUrl" | "natsUrl";
     const fields: { key: UrlFieldKey; label: string }[] = [
-      { key: "orchestratorUrl", label: "Orchestrator-URL" },
-      { key: "registryUrl", label: "Registry-URL (vermutet)" },
+      { key: "orchestratorUrl", label: t("hwiz.df9147") },
+      { key: "registryUrl", label: t("hwiz.939ad8") },
       { key: "natsUrl", label: "NATS-URL (vermutet)" },
     ];
     const fieldsWrap = document.createElement("div");
@@ -513,19 +514,19 @@ class HostWizard extends HTMLElement {
     actions.style.cssText = "display:flex;justify-content:space-between;gap:var(--omp-space-2);align-items:center;";
     const copyBtn = document.createElement("button");
     copyBtn.type = "button";
-    copyBtn.textContent = this.#copyFeedback ? "Kopiert!" : "Skript kopieren";
+    copyBtn.textContent = this.#copyFeedback ? t("hwiz.70dfc1") : t("hwiz.c5ce55");
     copyBtn.addEventListener("click", () => this.#copySnippet());
 
     const rightActions = document.createElement("div");
     rightActions.style.cssText = "display:flex;gap:var(--omp-space-2);";
     const cancelBtn = document.createElement("button");
     cancelBtn.type = "button";
-    cancelBtn.textContent = "Abbrechen";
+    cancelBtn.textContent = t("hwiz.4b9727");
     cancelBtn.addEventListener("click", () => this.#close());
     const nextBtn = document.createElement("button");
     nextBtn.type = "button";
     nextBtn.className = "omp-btn-primary";
-    nextBtn.textContent = "Weiter — auf Anmeldung warten";
+    nextBtn.textContent = t("hwiz.e50954");
     nextBtn.addEventListener("click", () => this.#startWaiting());
     rightActions.append(cancelBtn, nextBtn);
 
@@ -542,9 +543,9 @@ class HostWizard extends HTMLElement {
     const status = document.createElement("div");
     status.style.cssText = "padding:var(--omp-space-3) 0;";
     if (expired) {
-      status.innerHTML = `<strong style="color:var(--omp-cue);">Token abgelaufen</strong> — „${escapeHtml(this.#label)}" hat sich nicht gemeldet.`;
+      status.innerHTML = `<strong style="color:var(--omp-cue);">${t("hwiz.cb070c")}</strong> ${t("hwiz.21a0ca", { p0: escapeHtml(this.#label) })}`;
     } else {
-      status.innerHTML = `Warte auf Anmeldung von „<strong>${escapeHtml(this.#label)}</strong>" … (Token läuft in ${formatRemaining(this.#tokenExpiresAt)} ab)`;
+      status.innerHTML = `${t("hwiz.fa44f4")}<strong>${escapeHtml(this.#label)}</strong>${t("hwiz.2ff25e", { p0: formatRemaining(this.#tokenExpiresAt) })}`;
     }
     wrap.appendChild(status);
 
@@ -554,7 +555,7 @@ class HostWizard extends HTMLElement {
       const retryBtn = document.createElement("button");
       retryBtn.type = "button";
       retryBtn.className = "omp-btn-primary";
-      retryBtn.textContent = "Neuen Token erzeugen";
+      retryBtn.textContent = t("hwiz.8a1656");
       retryBtn.addEventListener("click", () => {
         this.#stopPoll();
         this.#stopTick();
@@ -565,7 +566,7 @@ class HostWizard extends HTMLElement {
     const closeBtn = document.createElement("button");
     closeBtn.type = "button";
     closeBtn.textContent = "Im Hintergrund weiterlaufen lassen";
-    closeBtn.title = "Der Host erscheint bei Anmeldung ohnehin in der Hosts-Liste.";
+    closeBtn.title = t("hwiz.4d839e");
     closeBtn.addEventListener("click", () => this.#close());
     actions.appendChild(closeBtn);
     wrap.appendChild(actions);
@@ -579,18 +580,18 @@ class HostWizard extends HTMLElement {
 
     const status = document.createElement("div");
     status.style.cssText = "padding:var(--omp-space-2) 0 var(--omp-space-3) 0;";
-    status.innerHTML = `<strong style="color:var(--omp-preset);">Host registriert.</strong>`;
+    status.innerHTML = `<strong style="color:var(--omp-preset);">${t("hwiz.2c25a7")}</strong>`;
     wrap.appendChild(status);
 
     if (h) {
       const table = document.createElement("table");
       table.style.cssText = "border-collapse:collapse;margin-bottom:var(--omp-space-3);";
       const rows: [string, string][] = [
-        ["Label", h.label],
-        ["Hostname", h.hostname],
+        [t("hwiz.b021df"), h.label],
+        [t("hwiz.c8f4b8"), h.hostname],
       ];
       if (h.capabilities?.os) rows.push(["OS", h.capabilities.os]);
-      if (h.capabilities?.arch) rows.push(["Architektur", h.capabilities.arch]);
+      if (h.capabilities?.arch) rows.push([t("hwiz.abbdd4"), h.capabilities.arch]);
       if (h.capabilities?.numCPU) rows.push(["CPUs", String(h.capabilities.numCPU)]);
       for (const [k, v] of rows) {
         const tr = document.createElement("tr");
@@ -611,7 +612,7 @@ class HostWizard extends HTMLElement {
     const doneBtn = document.createElement("button");
     doneBtn.type = "button";
     doneBtn.className = "omp-btn-primary";
-    doneBtn.textContent = "Fertig";
+    doneBtn.textContent = t("hwiz.4d7915");
     doneBtn.addEventListener("click", () => this.#close());
     actions.appendChild(doneBtn);
     wrap.appendChild(actions);
@@ -630,7 +631,7 @@ class HostWizard extends HTMLElement {
     actions.style.cssText = "display:flex;justify-content:flex-end;";
     const closeBtn = document.createElement("button");
     closeBtn.type = "button";
-    closeBtn.textContent = "Schließen";
+    closeBtn.textContent = t("hwiz.8311b9");
     closeBtn.addEventListener("click", () => this.#close());
     actions.appendChild(closeBtn);
     wrap.appendChild(actions);

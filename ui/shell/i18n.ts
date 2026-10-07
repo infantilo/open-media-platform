@@ -69,7 +69,7 @@ export function setLang(lang: Lang, reload = true): void {
 }
 
 /** Übersetzt einen Schlüssel; {name} im Text wird aus params ersetzt. */
-export function t(key: I18nKey, params?: Record<string, string | number>): string {
+export function t(key: I18nKey, params?: Record<string, unknown>): string {
   let s = DICTS[current][key] ?? DICTS.de[key] ?? key;
   if (params) for (const [k, v] of Object.entries(params)) s = s.replaceAll(`{${k}}`, String(v));
   return s;

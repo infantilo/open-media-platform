@@ -14,6 +14,7 @@
 // Icon bis zum ersten Frame). Eigenes, kleines Modul statt Import aus
 // flow-canvas.ts, weil dessen Vorschau an SVG-<foreignObject>-Kacheln
 // hängt — hier reines HTML (die Operator-Konsole hat keinen SVG-Canvas).
+import { t } from "./i18n.ts";
 import { apiFetch } from "./connection.ts";
 
 const STREAM_TOKEN_KEY = "omp-auth-token";
@@ -82,13 +83,13 @@ export function mountNodePreview(apiBase: string): MountedPreview {
   wrapper.style.cssText = "position:relative;width:100%;flex-shrink:0;";
 
   const img = document.createElement("img");
-  img.alt = "Vorschau";
+  img.alt = t("nprev.a50d91");
   img.style.cssText =
     "display:none;width:100%;aspect-ratio:16/9;object-fit:contain;background:var(--omp-bg,#101214);" +
     "border:1px solid var(--omp-border,#444);border-radius:4px;";
 
   const notConnected = document.createElement("div");
-  notConnected.textContent = "nicht verbunden";
+  notConnected.textContent = t("nprev.08fd3e");
   notConnected.style.cssText =
     "display:flex;align-items:center;justify-content:center;width:100%;aspect-ratio:16/9;" +
     "background:var(--omp-bg,#101214);border:1px solid var(--omp-border,#444);border-radius:4px;" +

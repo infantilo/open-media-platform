@@ -6,6 +6,7 @@
 // vom app-shell behandelt). Quelle ist dieselbe fetchAlarms() wie im
 // Alarme-Tab; Poll alle 5 s, weil "Host offline" zeitbasiert entsteht
 // (kein SSE-Event beim Ausbleiben von Telemetrie).
+import { t } from "./i18n.ts";
 import { connectionMonitor } from "./connection.ts";
 import { fetchAlarms, REFRESH_EVENT_TYPES, SEVERITY_COLOR } from "./alarms.ts";
 import type { AlarmState } from "./alarms.ts";
@@ -76,11 +77,11 @@ class AlertBar extends HTMLElement {
       `font-size:var(--omp-font-size-sm);font-weight:600;color:${quiet ? "var(--omp-text-dim)" : "#fff"};background:${bg};` +
       (quiet ? "border-top:1px solid var(--omp-border);" : "") +
       (!quiet && worst === "critical" ? "animation:omp-pulse 1.2s ease-in-out infinite;" : "");
-    this.title = "Klicken: Alarme-Tab öffnen";
+    this.title = t("abar.5262ab");
 
     const parts: string[] = [];
     if (critical.length > 0) parts.push(`${critical.length} kritisch`);
-    if (active.length > critical.length) parts.push(`${active.length - critical.length} Warnung(en)`);
+    if (active.length > critical.length) parts.push(t("abar.ae4f82", { p0: active.length - critical.length }));
     const summary = document.createElement("span");
     summary.style.whiteSpace = "nowrap";
     summary.textContent = quiet ? `✓ ${acked.length} quittiert` : `⚠ ${parts.join(", ")}`;

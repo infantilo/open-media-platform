@@ -16,6 +16,7 @@
 // docs/decisions.md Nachtrag 32) — eine als "live" beworbene
 // Ressourcen-Ansicht muss deshalb selbst im Sample-Takt pollen, SSE
 // deckt hier nur den Status-Sprung (Crash/Neustart) zusätzlich ab.
+import { t } from "./i18n.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 
 // Wire-Format identisch zu launcher.Instance (orchestrator/internal/
@@ -165,27 +166,27 @@ class InstancesView extends HTMLElement {
     const th = (key: InstanceSortKey, text: string) => {
       const active = key === this.#sortKey;
       const arrow = active ? (this.#sortDir === "asc" ? " ▲" : " ▼") : "";
-      return `<th data-sort="${key}" aria-sort="${active ? (this.#sortDir === "asc" ? "ascending" : "descending") : "none"}" title="Nach ${text} sortieren" style="padding:2px 8px;cursor:pointer;user-select:none;${active ? "color:var(--omp-text);" : ""}">${text}${arrow}</th>`;
+      return `<th data-sort="${key}" aria-sort="${active ? (this.#sortDir === "asc" ? "ascending" : "descending") : "none"}" title="${t("inst.9e4506", { p0: text })}" style="padding:2px 8px;cursor:pointer;user-select:none;${active ? "color:var(--omp-text);" : ""}">${text}${arrow}</th>`;
     };
 
     const rows = sorted
       .map((inst) => {
         const hostLabel = inst.hostId ? hosts.find((h) => h.id === inst.hostId)?.label || inst.hostId : "lokal";
         const status = inst.crashed
-          ? `<span class="omp-badge omp-badge-error">Abgestürzt</span>`
-          : `<span class="omp-badge omp-badge-running">Läuft</span>` +
+          ? `<span class="omp-badge omp-badge-error">${t("inst.aba7a7")}</span>`
+          : `<span class="omp-badge omp-badge-running">${t("inst.d4a100")}</span>` +
             (inst.outdated
-              ? ` <span class="omp-badge" title="Das Programm wurde durch ein Update ersetzt; diese Instanz läuft noch mit dem alten Stand bis zum nächsten Neustart.">veraltet</span>`
+              ? ` <span class="omp-badge" title="${t("inst.f9ab8e")}">${t("inst.2b4695")}</span>`
               : "");
         const restarts =
           inst.restartCount ? `↻ ${inst.restartCount}×` : `<span style="color:var(--omp-text-dim);">–</span>`;
         const crashLine = inst.crashed
-          ? `<div style="color:var(--omp-error);font-size:var(--omp-font-size-xs);white-space:pre-wrap;word-break:break-word;">${escapeHtml(inst.crashMessage || "Prozess abgestürzt")}</div>`
+          ? `<div style="color:var(--omp-error);font-size:var(--omp-font-size-xs);white-space:pre-wrap;word-break:break-word;">${escapeHtml(inst.crashMessage || t("inst.03a35d"))}</div>`
           : "";
         return `<tr>
           <td style="padding:2px 8px;">${escapeHtml(inst.label)}<div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">${escapeHtml(inst.type)}${inst.version ? ` (${escapeHtml(inst.version)})` : ""}</div>${crashLine}</td>
           <td style="padding:2px 8px;">${status}</td>
-          <td style="padding:2px 8px;">${this.#owners.has(inst.id) ? escapeHtml(this.#owners.get(inst.id)!) : `<span style="color:var(--omp-text-dim);" title="Von Hand gestartet, gehört zu keinem Workflow">–</span>`}</td>
+          <td style="padding:2px 8px;">${this.#owners.has(inst.id) ? escapeHtml(this.#owners.get(inst.id)!) : `<span style="color:var(--omp-text-dim);" title="${t("inst.93e356")}">–</span>`}</td>
           <td style="padding:2px 8px;color:var(--omp-text-dim);">${escapeHtml(hostLabel)}</td>
           <td style="padding:2px 8px;">${formatCpu(inst.cpuPercent)}</td>
           <td style="padding:2px 8px;">${formatRss(inst.rssBytes)}</td>
@@ -196,20 +197,20 @@ class InstancesView extends HTMLElement {
       .join("");
 
     this.innerHTML = `
-      <div class="omp-h1" style="margin-bottom:var(--omp-space-3);">Laufende Instanzen (${instances.length})</div>
+      <div class="omp-h1" style="margin-bottom:var(--omp-space-3);">${t("inst.bedfb0", { p0: instances.length })}</div>
       ${
         instances.length === 0
-          ? `<div class="omp-empty">Keine Instanz läuft.</div>`
+          ? `<div class="omp-empty">${t("inst.3e3d94")}</div>`
           : `<table style="border-collapse:collapse;width:100%;">
               <thead><tr style="color:var(--omp-text-dim);text-align:left;">
-                ${th("label", "Instanz")}
-                ${th("status", "Status")}
-                <th style="padding:2px 8px;">Workflow</th>
-                ${th("host", "Host")}
+                ${th("label", t("inst.50c3a7"))}
+                ${th("status", t("inst.ec53a8"))}
+                <th style="padding:2px 8px;">${t("inst.24f47c")}</th>
+                ${th("host", t("inst.c2ca16"))}
                 ${th("cpu", "CPU")}
                 ${th("ram", "RAM")}
                 ${th("pid", "PID")}
-                ${th("restarts", "Neustarts")}
+                ${th("restarts", t("inst.974607"))}
               </tr></thead>
               <tbody>${rows}</tbody>
             </table>`

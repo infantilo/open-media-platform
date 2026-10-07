@@ -25,6 +25,7 @@
 // alarm-view.ts (node.added/node.removed/instance.crashed/-restarted
 // lösen einen sofortigen Refresh aus), da sich diese Struktur seltener
 // ändert als die Statuswerte.
+import { t } from "./i18n.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import type { Descriptor } from "../graph/controls.ts";
 import {
@@ -98,10 +99,10 @@ interface NodeHealth {
 // grobe Kategorie des Overall-Status, deshalb eigene, kleine Bucket-
 // Zuordnung statt der feineren Domain-Farblogik.
 const OVERALL_BUCKETS: Array<{ key: string; label: string; match: (s: string) => boolean }> = [
-  { key: "healthy", label: "Healthy", match: (s) => s === "Healthy" },
-  { key: "partial", label: "Partially Healthy", match: (s) => s === "PartiallyHealthy" },
-  { key: "unhealthy", label: "Unhealthy", match: (s) => s === "Unhealthy" },
-  { key: "inactive", label: "Inactive", match: (s) => s === "Inactive" },
+  { key: "healthy", label: t("health.396d45"), match: (s) => s === "Healthy" },
+  { key: "partial", label: t("health.49ae97"), match: (s) => s === "PartiallyHealthy" },
+  { key: "unhealthy", label: t("health.2b329f"), match: (s) => s === "Unhealthy" },
+  { key: "inactive", label: t("health.3cab03"), match: (s) => s === "Inactive" },
 ];
 
 class HealthView extends HTMLElement {
@@ -243,9 +244,9 @@ class HealthView extends HTMLElement {
       overallMessage: values["monitor.overallStatusMessage"] ? String(values["monitor.overallStatusMessage"]) : undefined,
       syncSource: values["monitor.synchronizationSourceId"] ? String(values["monitor.synchronizationSourceId"]) : undefined,
       domains: [
-        { label: "Link", status: String(values["monitor.linkStatus"] ?? ""), message: optStr(values["monitor.linkStatusMessage"]) },
+        { label: t("health.97e7c9"), status: String(values["monitor.linkStatus"] ?? ""), message: optStr(values["monitor.linkStatusMessage"]) },
         {
-          label: "Sync",
+          label: t("health.d8e87c"),
           status: String(values["monitor.externalSynchronizationStatus"] ?? ""),
           message: optStr(values["monitor.externalSynchronizationStatusMessage"]),
         },
@@ -296,7 +297,7 @@ class HealthView extends HTMLElement {
     const statTiles = OVERALL_BUCKETS.map(
       (b) => `
         <div class="omp-card" style="flex:1 1 120px;min-width:120px;text-align:center;border-top:3px solid ${bcp008StatusColor(
-          b.key === "healthy" ? "Healthy" : b.key === "partial" ? "PartiallyHealthy" : b.key === "unhealthy" ? "Unhealthy" : "Inactive",
+          b.key === "healthy" ? t("health.396d45") : b.key === "partial" ? "PartiallyHealthy" : b.key === "unhealthy" ? t("health.2b329f") : t("health.3cab03"),
         )};">
           <div style="font-size:28px;font-weight:700;line-height:1.1;">${counts.get(b.key)}</div>
           <div style="color:var(--omp-text-dim);margin-top:4px;">${escapeHtml(b.label)}</div>
@@ -305,23 +306,23 @@ class HealthView extends HTMLElement {
 
     const header = `
       <div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:var(--omp-space-2);margin-bottom:var(--omp-space-3);">
-        <div class="omp-h1">Health — AMWA BCP-008</div>
-        <div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">${nodes.length} Node(s) mit BCP-008-Support · aktualisiert alle ${
+        <div class="omp-h1">${t("health.1b62eb")}</div>
+        <div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">${t("health.41ecdf", { p0: nodes.length, p1: 
           VALUES_POLL_INTERVAL_MS / 1000
-        }s</div>
+         })}</div>
       </div>
       <div style="display:flex;gap:var(--omp-space-2);flex-wrap:wrap;margin-bottom:var(--omp-space-4);">${statTiles}</div>
     `;
 
     if (phase === "loading") {
-      this.innerHTML = header + `<div class="omp-empty">Lädt…</div>`;
+      this.innerHTML = header + `<div class="omp-empty">${t("health.3b7344")}</div>`;
       return;
     }
     if (phase === "empty" || nodes.length === 0) {
       this.innerHTML =
         header +
-        `<div class="omp-empty">Keine laufenden Instanzen mit BCP-008-Support gefunden. ` +
-        `(2110-Gateway, DeckLink, AES67-Gateway, SRT-Gateway, Recorder, Viewer, Video-Mixer unterstützen BCP-008.)</div>`;
+        `<div class="omp-empty">${t("health.efc263")} ` +
+        `${t("health.45e570")}</div>`;
       return;
     }
 
@@ -367,7 +368,7 @@ class HealthView extends HTMLElement {
               ${n.hostLabel !== "lokal" ? `<span class="omp-badge" style="margin-left:4px;">${escapeHtml(n.hostLabel)}</span>` : ""}
             </div>
           </div>
-          <button data-reset-node="${escapeHtml(n.nodeId)}" title="Zähler/Meldungen dieses Nodes zurücksetzen" style="font-size:var(--omp-font-size-xs);flex-shrink:0;">↺ Reset</button>
+          <button data-reset-node="${escapeHtml(n.nodeId)}" title="${t("health.4333cf")}" style="font-size:var(--omp-font-size-xs);flex-shrink:0;">${t("health.c963b3")}</button>
         </div>
 
         <div style="display:flex;align-items:center;gap:6px;margin:var(--omp-space-2) 0 6px 0;font-weight:600;">
@@ -381,7 +382,7 @@ class HealthView extends HTMLElement {
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px 10px;font-size:var(--omp-font-size-xs);">
           ${domainRows}
         </div>
-        ${n.syncSource ? `<div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-top:6px;">Sync-Quelle: ${escapeHtml(n.syncSource)}</div>` : ""}
+        ${n.syncSource ? `<div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-top:6px;">${t("health.502f11", { p0: escapeHtml(n.syncSource) })}</div>` : ""}
       </div>`;
   }
 }

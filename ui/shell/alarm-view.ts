@@ -26,6 +26,7 @@
 // maskierbar (ausgeblendet, unter "Maskiert" wiederherstellbar). Beides
 // gilt nur, solange der Alarm-Zustand (Fingerprint, s. alarms.ts) gleich
 // bleibt, und ist serverseitig geteilt (/api/v1/alarms/acks).
+import { t } from "./i18n.ts";
 import { connectionMonitor } from "./connection.ts";
 import { clearAlarmAck, fetchAlarms, REFRESH_EVENT_TYPES, setAlarmAck, SEVERITY_COLOR, SEVERITY_LABEL } from "./alarms.ts";
 import type { AlarmState, AckMode } from "./alarms.ts";
@@ -99,7 +100,7 @@ class AlarmView extends HTMLElement {
       const minutes = Number(row?.querySelector<HTMLSelectElement>("select[data-role=dur]")?.value ?? "0");
       ok = await setAlarmAck(alarm, action as AckMode, comment, action === "mask" ? minutes : 0);
     }
-    this.#notice = ok ? "" : "Aktion fehlgeschlagen (fehlende Berechtigung \"operate\" oder Orchestrator nicht erreichbar).";
+    this.#notice = ok ? "" : t("alarmv.d89d48");
     this.#renderPending = false;
     await this.#poll();
     this.#render();
@@ -134,24 +135,24 @@ class AlarmView extends HTMLElement {
 
     const activeHtml =
       active.length === 0
-        ? `<div style="padding:var(--omp-space-2);color:var(--omp-preset);">✓ Keine aktiven Alarme.</div>`
+        ? `<div style="padding:var(--omp-space-2);color:var(--omp-preset);">${t("alarmv.3eb4f8")}</div>`
         : active.map(({ a }) => row(a, "active")).join("");
     const ackedHtml =
       acked.length === 0
         ? ""
-        : `<div class="omp-h1" style="font-size:var(--omp-font-size-md,14px);margin:var(--omp-space-3) 0 var(--omp-space-1);">Quittiert (${acked.length})</div>` +
+        : `<div class="omp-h1" style="font-size:var(--omp-font-size-md,14px);margin:var(--omp-space-3) 0 var(--omp-space-1);">${t("alarmv.6b43af", { p0: acked.length })}</div>` +
           acked.map(({ a }) => row(a, "acked")).join("");
     const maskedHtml =
       masked.length === 0
         ? ""
         : `<details data-role="masked" ${this.#maskedOpen ? "open" : ""} style="margin-top:var(--omp-space-3);">
-             <summary style="cursor:pointer;color:var(--omp-text-dim);">Maskiert (${masked.length})</summary>
+             <summary style="cursor:pointer;color:var(--omp-text-dim);">${t("alarmv.1a722d", { p0: masked.length })}</summary>
              <div style="margin-top:var(--omp-space-1);">${masked.map(({ a }) => row(a, "masked")).join("")}</div>
            </details>`;
 
     this.innerHTML = `
       <div class="omp-h1" style="margin-bottom:var(--omp-space-3);">
-        Alarme (${criticalCount} kritisch, ${warningCount} Warnung${warningCount === 1 ? "" : "en"})
+        ${t("alarmv.077f20", { p0: criticalCount, p1: warningCount, p2: warningCount === 1 ? "" : "en" })}
       </div>
       ${notice}${activeHtml}${ackedHtml}${maskedHtml}
     `;
@@ -173,18 +174,18 @@ function row(a: AlarmState, kind: "active" | "acked" | "masked"): string {
   let controls: string;
   if (a.ack) {
     const who = `${a.ack.mode === "ack" ? "quittiert" : "maskiert"} von ${escapeHtml(a.ack.username)} um ${new Date(a.ack.createdAt).toLocaleString()}`;
-    const until = a.ack.expiresAt ? `, bis ${new Date(a.ack.expiresAt).toLocaleString()}` : ", bis zur Zustandsänderung";
+    const until = a.ack.expiresAt ? `, bis ${new Date(a.ack.expiresAt).toLocaleString()}` : t("alarmv.95ee27");
     const cmt = a.ack.comment ? ` — „${escapeHtml(a.ack.comment)}“` : "";
     meta = `<div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">${who}${a.ack.mode === "mask" ? until : ""}${cmt}</div>`;
-    controls = `<button type="button" data-action="clear">Wiederherstellen</button>`;
+    controls = `<button type="button" data-action="clear">${t("alarmv.577e3a")}</button>`;
   } else {
     controls = `
-      <input data-role="comment" type="text" maxlength="500" placeholder="Kommentar (optional)" style="flex:1 1 140px;min-width:0;">
-      <button type="button" data-action="ack" title="Gesehen — bleibt sichtbar, zählt nicht mehr als laut">Quittieren</button>
-      <select data-role="dur" title="Dauer der Maskierung">
-        <option value="0">bis Änderung</option><option value="60">1 h</option><option value="480">8 h</option>
+      <input data-role="comment" type="text" maxlength="500" placeholder="${t("alarmv.4cac0b")}" style="flex:1 1 140px;min-width:0;">
+      <button type="button" data-action="ack" title="${t("alarmv.0e8eac")}">${t("alarmv.146e19")}</button>
+      <select data-role="dur" title="${t("alarmv.2ba8d2")}">
+        <option value="0">${t("alarmv.b41fc6")}</option><option value="60">1 h</option><option value="480">8 h</option>
       </select>
-      <button type="button" data-action="mask" title="Ausblenden aus Footer/Zähler">Maskieren</button>`;
+      <button type="button" data-action="mask" title="${t("alarmv.ce0e13")}">${t("alarmv.5323ef")}</button>`;
   }
   return `
     <div class="omp-card" data-row data-key="${encodeURIComponent(a.key)}" data-fp="${encodeURIComponent(a.fingerprint)}" style="padding:var(--omp-space-2);margin-bottom:var(--omp-space-1);border-left:3px solid ${color};${dim}">

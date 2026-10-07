@@ -13,6 +13,7 @@
 // (POLL_FALLBACK_INTERVAL_MS). Über apiFetch() (connection.ts), damit
 // ein Fehlschlag den geteilten ConnectionMonitor auf "degraded" setzt
 // statt still zu bleiben.
+import { t } from "./i18n.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
 import { openHostWizard } from "./host-wizard.ts";
@@ -157,7 +158,7 @@ function secondsUntil(deadlineAt: string): number {
 // — generisch übersetzt statt fest verdrahteter Kombinationen (gleiches
 // Muster wie alarm-view.ts' reasonLabel), sonst müsste jede neue
 // Kombination hier extra nachgezogen werden.
-const REASON_TOKEN_LABEL: Record<string, string> = { cpu: "CPU", mem: "RAM", net: "Netz", gpu: "GPU" };
+const REASON_TOKEN_LABEL: Record<string, string> = { cpu: "CPU", mem: "RAM", net: t("hosts.72ce72"), gpu: "GPU" };
 
 function reasonLabel(reason: string): string {
   return reason
@@ -396,14 +397,14 @@ class HostsView extends HTMLElement {
         // Text statt reiner Farbe (Tooltip trägt den genauen Zeitpunkt
         // bzw. "keine Telemetrie" bei einem frisch registrierten Host).
         const statusTitle = online
-          ? "Host online"
+          ? t("hosts.514366")
           : m
-            ? `Host offline — zuletzt gesehen ${new Date(m.receivedAt).toLocaleTimeString()}`
-            : "Host offline — keine Telemetrie empfangen";
+            ? t("hosts.eda8d2", { p0: new Date(m.receivedAt).toLocaleTimeString() })
+            : t("hosts.61ea4b");
         const status = `<span title="${escapeHtml(statusTitle)}" style="display:inline-flex;align-items:center;gap:5px;white-space:nowrap;color:${
           online ? "inherit" : "#e05252"
         };">
-          <span style="color:${online ? "#4caf50" : "#e05252"};font-size:11px;line-height:1;">●</span>${online ? "Online" : "Offline"}
+          <span style="color:${online ? "#4caf50" : "#e05252"};font-size:11px;line-height:1;">●</span>${online ? t("hosts.54f664") : t("hosts.8d9da4")}
         </span>`;
         const rowTint = online ? "" : "background:rgba(224,82,82,0.08);";
         return `<tr style="${rowTint}">
@@ -424,13 +425,12 @@ class HostsView extends HTMLElement {
     const adviceBanner = advice
       .map((a) => {
         const target = a.suggestedHostId
-          ? `Vorschlag: <strong>${escapeHtml(a.suggestedHostLabel ?? a.suggestedHostId)}</strong>`
-          : `<span style="color:var(--omp-cue);">kein Ausweichhost frei</span>`;
+          ? `${t("hosts.424d6d")} <strong>${escapeHtml(a.suggestedHostLabel ?? a.suggestedHostId)}</strong>`
+          : `<span style="color:var(--omp-cue);">${t("hosts.c77b3a")}</span>`;
         const netPart = a.netPercent !== undefined ? ` / Netz ${a.netPercent.toFixed(0)}%` : "";
         const gpuPart = a.gpuPercent !== undefined ? ` / GPU ${a.gpuPercent.toFixed(0)}%` : "";
         return `<div style="padding:var(--omp-space-2);margin-bottom:var(--omp-space-1);background:rgba(239,83,80,0.15);border:1px solid var(--omp-error);border-radius:var(--omp-radius);">
-          <strong>${escapeHtml(a.hostLabel)}</strong> überlastet (Grund: ${reasonLabel(a.reason)}, CPU ${a.cpuPercent.toFixed(0)}% / RAM ${a.memPercent.toFixed(0)}%${netPart}${gpuPart}),
-          ${a.instanceIds.length} Instanz(en) betroffen — ${target}
+          <strong>${escapeHtml(a.hostLabel)}</strong> ${t("hosts.857412", { p0: reasonLabel(a.reason), p1: a.cpuPercent.toFixed(0), p2: a.memPercent.toFixed(0), p3: netPart, p4: gpuPart, p5: a.instanceIds.length, p6: target })}
         </div>`;
       })
       .join("");
@@ -444,39 +444,39 @@ class HostsView extends HTMLElement {
       .map((p) => {
         const remaining = secondsUntil(p.deadlineAt);
         return `<div style="padding:var(--omp-space-2);margin-bottom:var(--omp-space-1);background:rgba(255,183,77,0.15);border:1px solid var(--omp-cue);border-radius:var(--omp-radius);display:flex;align-items:center;gap:var(--omp-space-2);flex-wrap:wrap;">
-          <span>Rolle <strong>${escapeHtml(p.role)}</strong> zieht in <strong>${remaining}s</strong> automatisch auf <strong>${escapeHtml(p.targetHostLabel || p.targetHostId)}</strong> um, falls kein Eingriff erfolgt.</span>
-          <button data-migration-action="confirm" data-workflow-id="${escapeHtml(p.workflowId)}" data-role="${escapeHtml(p.role)}" style="font-size:11px;padding:2px 8px;cursor:pointer;">Jetzt ausführen</button>
-          <button data-migration-action="cancel" data-workflow-id="${escapeHtml(p.workflowId)}" data-role="${escapeHtml(p.role)}" style="font-size:11px;padding:2px 8px;cursor:pointer;">Abbrechen</button>
+          <span>${t("hosts.e50108")} <strong>${escapeHtml(p.role)}</strong> ${t("hosts.7fdb90")} <strong>${remaining}s</strong> ${t("hosts.bcf38d")} <strong>${escapeHtml(p.targetHostLabel || p.targetHostId)}</strong> ${t("hosts.0f1de4")}</span>
+          <button data-migration-action="confirm" data-workflow-id="${escapeHtml(p.workflowId)}" data-role="${escapeHtml(p.role)}" style="font-size:11px;padding:2px 8px;cursor:pointer;">${t("hosts.578226")}</button>
+          <button data-migration-action="cancel" data-workflow-id="${escapeHtml(p.workflowId)}" data-role="${escapeHtml(p.role)}" style="font-size:11px;padding:2px 8px;cursor:pointer;">${t("hosts.4b9727")}</button>
         </div>`;
       })
       .join("");
 
     const addHostButton = this.#isAdmin
-      ? `<button type="button" data-action="add-host" class="omp-btn-primary" style="font-size:11px;padding:4px 10px;">+ Neuen Host hinzufügen</button>`
+      ? `<button type="button" data-action="add-host" class="omp-btn-primary" style="font-size:11px;padding:4px 10px;">${t("hosts.995111")}</button>`
       : "";
 
     this.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--omp-space-3);">
-        <div class="omp-h1">Hosts (${hosts.length})</div>
+        <div class="omp-h1">${t("hosts.080196", { p0: hosts.length })}</div>
         ${addHostButton}
       </div>
       ${adviceBanner}
       ${pendingBanner}
       ${
         hosts.length === 0
-          ? `<div class="omp-empty">Noch kein Host registriert.</div>`
+          ? `<div class="omp-empty">${t("hosts.75d9aa")}</div>`
           : `<table style="border-collapse:collapse;width:100%;">
               <thead><tr style="color:var(--omp-text-dim);text-align:left;">
-                <th style="padding:2px 8px;">Status</th>
-                <th style="padding:2px 8px;">Label</th>
-                <th style="padding:2px 8px;">Hostname</th>
-                <th style="padding:2px 8px;">CPU</th>
-                <th style="padding:2px 8px;">RAM</th>
-                <th style="padding:2px 8px;">Netz</th>
-                <th style="padding:2px 8px;">GPU</th>
-                <th style="padding:2px 8px;">Verlauf (1h)</th>
-                <th style="padding:2px 8px;">Min/Ø/Max CPU</th>
-                <th style="padding:2px 8px;">Zuletzt gesehen</th>
+                <th style="padding:2px 8px;">${t("hosts.ec53a8")}</th>
+                <th style="padding:2px 8px;">${t("hosts.b021df")}</th>
+                <th style="padding:2px 8px;">${t("hosts.c8f4b8")}</th>
+                <th style="padding:2px 8px;">${t("hosts.2b5538")}</th>
+                <th style="padding:2px 8px;">${t("hosts.e53619")}</th>
+                <th style="padding:2px 8px;">${t("hosts.72ce72")}</th>
+                <th style="padding:2px 8px;">${t("hosts.52f9ec")}</th>
+                <th style="padding:2px 8px;">${t("hosts.25850a")}</th>
+                <th style="padding:2px 8px;">${t("hosts.be62a5")}</th>
+                <th style="padding:2px 8px;">${t("hosts.4d62c2")}</th>
               </tr></thead>
               <tbody>${rows}</tbody>
             </table>`
