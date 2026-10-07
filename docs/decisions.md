@@ -30382,3 +30382,20 @@ die erscheinen weiter deutsch, bis das Backend Codes statt Texte liefert.
 Live geprüft (EN: „New event“-Dialog, Kopfzeile, Abschnitte).
 **Offen:** Audio-Mischer, Scope, Audio-Monitor, MXF-Player(-direct),
 Multiviewer(-custom), OGraf, Media-Library, WebRTC-Gateway; Shell-Views.
+
+**Nachtrag (2026-10-07, Teil 5): Mehrsprachigkeit — gesamte UI.**
+Werkzeug-gestützt (Skript im Sitzungs-Scratchpad, nicht im Repo): Extraktion
+deutscher Literale (auch in verschachtelten Templates), Übersetzungsliste
+je Datei, automatisches Ersetzen durch `t()`/`T()`, danach Nachlese per
+Laufzeit-Scan der echten Seiten in EN. Shell: ~2.000 Schlüssel in
+`i18n/de.ts`+`en.ts` (Hash-Schlüssel `<datei>.<md5-6>`); Tests laufen ohne
+DOM deterministisch auf Deutsch. Node-Bundles: eigenes `T()` mit
+eingebettetem Wörterbuch (Audio-Mischer: `ui/05-i18n.js`, in `uibundle.rs`
+vorangestellt). **Serverseitig lokalisiert** (Header `Accept-Language`, von
+`auth.ts`-Fetch-Wrapper gesetzt): Katalog (`i18n.en` je Eintrag),
+Node-Optionen (`i18n.en` je Option), Betriebswerte
+(`runtimesettings/localize.go`). **Bewusst offen:** Server-/Node-Meldungen im
+Klartext (http.Error, Trigger-Protokoll, Plan-Warnungen, Descriptor-Texte),
+WebRTC-Handy-Seiten (`camera.html`/`monitor.html`), Handbücher.
+Stolperstein: viele Katalog-Typen starten `target/debug/…`-Binaries — für
+Live-Tests von Bundle-Änderungen das passende Profil bauen.

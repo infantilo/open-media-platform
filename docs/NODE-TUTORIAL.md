@@ -554,3 +554,13 @@ Wörterbuch für `de` und `en` am Dateianfang (Vorbild:
 `nodes/omp-viewer/ui/bundle.js`), Fallback Deutsch. Texte, die der Node-
 Backend-Code liefert (z. B. Urteile aus Messwerten), sind davon nicht
 betroffen und bleiben, wie sie sind.
+
+### Katalog- und Options-Texte übersetzen
+
+`deploy/catalog.json` und `deploy/node-options.json` tragen die deutschen
+Grundtexte. Optional ergänzt ein Feld `"i18n": { "en": { … } }` die
+englischen Anzeigetexte (Katalog: `label`, `description`,
+`expectedResources`; Optionen: `label`, `description`, `group`; leere Felder
+lassen den Grundtext stehen). Die UI sendet bei jedem API-Aufruf
+`Accept-Language`; der Orchestrator liefert bei `en` die übersetzten Texte
+aus (`launcher.CatalogEntry.Localized`, `nodeoptions.Option.Localized`).

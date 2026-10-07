@@ -33,13 +33,15 @@ abläuft.
 Oben rechts (neben der Verbindungsanzeige) und im Nutzer-Widget unten rechts
 wechselt die Auswahl **DE/EN** die Oberfläche; die Seite lädt dabei neu. Die
 Wahl gilt pro Browser, ohne Wahl richtet sich die Sprache nach dem Browser
-(Deutsch, sonst Englisch). **Stand:** Anmeldung, Navigationsleiste, Nutzer-Widget, Operator-Konsole
-(Workflow-Auswahl, Kacheln, Countdown), Administration (Reiter), der Tab
-„Signalweg" die gemeinsamen Dialoge (Bestätigung, Quellenauswahl) sowie die
-Node-Oberflächen von Viewer, Switcher, Video-Mischer und Playout-Automation
-sind zweisprachig; alle übrigen Ansichten, die übrigen Node-Oberflächen
-(Audio-Mischer, Scope u. a.) und dieses Handbuch sind noch deutsch und werden
-schrittweise umgestellt.
+(Deutsch, sonst Englisch). **Stand:** Die gesamte Orchestrator-Oberfläche (alle Tabs, Administration,
+Dialoge, Operator-Konsole) und alle Node-Oberflächen sind zweisprachig. Auch
+Node-Katalog, Node-Optionen und die Betriebswerte unter Einstellungen
+erscheinen in der gewählten Sprache. **Noch deutsch:** Texte, die der Server
+oder ein Node selbst erzeugt (z. B. Fehlermeldungen des Servers, das
+Trigger-Protokoll der Playout-Automation, Beschreibungen aus
+Node-Deskriptoren), Workflow-Vorlagen und Audio-Gruppennamen aus Ihren
+Daten, die Handy-Seiten des WebRTC-Gateways (Kamera/Monitor) und die
+Handbücher.
 
 ## 2. Der Flow Editor
 
