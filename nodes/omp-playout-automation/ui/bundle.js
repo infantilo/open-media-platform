@@ -1,3 +1,555 @@
+// i18n (de/en): Sprache aus <html lang> (setzt die Shell, ui/shell/i18n.ts),
+// Fallback Deutsch. Eigenes Mini-t(), weil Node-Bundles keine Shell-Imports nutzen.
+const T = (() => {
+  const D = {
+    de: {
+      "confirmFallback": "Hauptkanal wirklich auf Schwarzbild schalten?",
+      "toBlack": "Auf Schwarzbild schalten",
+      "mp.hold": "halten",
+      "mp.skip": "überspringen",
+      "mp.black": "Schwarz",
+      "mp.stop": "Schwarz + Stopp",
+      "mp.fallback": "Ersatzdatei",
+      "mp.filler": "Standard-Filler",
+      "mk.pattern": "Testmuster",
+      "mk.file": "Datei",
+      "mk.asset": "Asset (Bereitstellung)",
+      "mk.image": "Standbild",
+      "mk.live": "Live-Quelle",
+      "mk.liveselect": "Live nach Tags",
+      "mk.hold": "HOLD (anhalten)",
+      "mk.jump": "JUMP (springen zu …)",
+      "ct.graphic": "🎨 Grafik",
+      "ct.logo": "🏷 Logo",
+      "ct.branding": "📺 Channel-Branding",
+      "ct.node": "⚙ Node-Befehl",
+      "ct.trigger": "⚡ Trigger",
+      "ct.audio": "🔊 Audio",
+      "ct.voiceover": "🎙 Voiceover",
+      "ct.webhook": "🌐 Webhook",
+      "ct.channelTrigger": "📡 Channel-Trigger",
+      "tm.start": "ab Start (Delay)",
+      "tm.end": "vor Ende (Delay)",
+      "tm.full": "gesamte Primary-Dauer",
+      "tm.abs": "absolute Uhrzeit",
+      "fp.warn": "Warnung",
+      "fp.ignore": "ignorieren",
+      "fp.retry": "wiederholen",
+      "fp.block": "Primary blockieren",
+      "fp.fallback": "Ersatz-Ziel",
+      "noCall": "{method} fehlgeschlagen: {detail}",
+      "notConnected": "nicht verbunden",
+      "connected": "verbunden (Kanal {ch} live)",
+      "channelLabel": "Channel: {name}",
+      "noChannel": "kein Channel",
+      "nextTitle": "Sofort zum nächsten Event (auch im Hold-Modus)",
+      "liveTitle": "Zum nächsten Live-Event springen",
+      "stopTitle": "Hauptkanal sofort auf Schwarzbild schalten (Playlist bleibt erhalten)",
+      "mode": "Modus ",
+      "sec.control": "Playlist Control",
+      "sec.targets": "Ziele",
+      "sec.playlist": "Playlist",
+      "sec.carts": "Assets / Carts",
+      "sec.trigger": "Channel-Trigger",
+      "tgt.a": "Kanal A",
+      "tgt.b": "Kanal B",
+      "tgt.mixer": "Mixer",
+      "tgt.gfx": "Grafik",
+      "tgt.audio": "Audio-Mixer",
+      "tgt.preflight": "Preflight-Vorlauf (min)",
+      "tgt.filler": "Standard-Filler (Datei)",
+      "choose": "— wählen —",
+      "emptyList": "Noch keine Events — „＋“ links legt das erste an.",
+      "noSource": "(keine Quelle)",
+      "col.type": "Typ",
+      "col.media": "Medium / Quelle",
+      "col.mediaId": "Media-ID",
+      "col.transition": "Transition",
+      "col.start": "Start",
+      "col.player": "Player",
+      "col.status": "Status",
+      "col.gap": "Gap / Overlap",
+      "col.audio": "Audio",
+      "col.child": "Child",
+      "col.ready": "Bereitschaft",
+      "col.title": "Titel",
+      "col.dur": "Dauer",
+      "col.time": "Zeit",
+      "col.rem": "Rest",
+      "manual": "manuell",
+      "sequence": "Sequenz",
+      "standard": "Standard",
+      "unavailable": "nicht verfügbar",
+      "audioTip": "Zuordnung: {label}",
+      "silent": "still",
+      "track": "Spur {tracks}",
+      "mixedSuffix": " (gemischt)",
+      "ruleSuffix": " · Ersatz „{rule}“",
+      "st.played": "gespielt",
+      "st.notReady": "nicht bereit",
+      "st.missing": "fehlt",
+      "st.planned": "geplant",
+      "playerTip": "Voraussichtlicher Player (A/B wechselt je Event)",
+      "seamless": "nahtlos",
+      "gapTip": "Lücke zum Vorgänger: {s} s",
+      "overlapTip": "Überlappung mit dem Vorgänger: {s} s",
+      "search": "Suchen …",
+      "columns": "Spalten",
+      "newEvent": "Neues Event anlegen",
+      "addMedia": "Medien aus der Bibliothek hinzufügen",
+      "checkReady": "Bereitschaft der Asset-Events prüfen",
+      "manageAssets": "Assets verwalten …",
+      "tr.group": "Gruppe",
+      "tr.channel": "Channel",
+      "tr.all": "Alle erlaubten",
+      "tr.targetPh": "Gruppe/Channel",
+      "tr.itemPh": "Item-ID (JUMP)",
+      "tr.atPh": "Zielzeit HH:MM:SS (optional)",
+      "tr.lateNow": "verspätet: sofort",
+      "tr.lateSkip": "verspätet: überspringen",
+      "tr.lateResync": "verspätet: resync",
+      "tr.lateQueue": "verspätet: einreihen",
+      "tr.badTime": "Zielzeit ungültig (HH:MM[:SS] oder YYYY-MM-DD HH:MM[:SS], lokale Zeit)",
+      "tr.allChannels": "alle erlaubten Channels",
+      "tr.whoGroup": "Gruppe {name}",
+      "tr.whoChannel": "Channel {name}",
+      "tr.confirm": "Trigger {event} an {who} senden?",
+      "tr.send": "Senden",
+      "tr.none": "Noch keine Trigger.",
+      "noAssetEvents": "Keine Asset-Events in der Playlist — Dateien/Live sind sofort verfügbar.",
+      "readinessSummary": "{n} Asset-Events: {ready} bereit, {transfer} in Übertragung, {notReady} nicht bereit{bad}.",
+      "readinessBad": " · {n} Events ohne verfügbare Quelle",
+      "describe.hold": "HOLD: Sequenz hält an, bis der Operator weiterschaltet.",
+      "describe.still": "Standbild: {file}",
+      "describe.liveTags": "Live nach Tags: {tags} → {label}",
+      "describe.noMatch": "keine passende Quelle",
+      "describe.live": "Live: {id}",
+      "describe.file": "Datei: {file}",
+      "describe.pattern": "Testmuster: {pattern}",
+      "removeOne": "{name} wirklich aus der Playlist entfernen?",
+      "removeMany": "{n} Events wirklich entfernen ({names}{more})?",
+      "remove": "Entfernen",
+      "noReorderSearch": "Umsortieren geht nicht mit aktiver Suche — Suchfeld leeren.",
+      "dragTitle": "Ziehen zum Umsortieren",
+      "cueTake": "Cue + Take: dieses Event sofort senden",
+      "editProps": "Eigenschaften bearbeiten",
+      "removeEvent": "Event entfernen",
+      "plannedAt": "Geplant: {from} – {to}{anchored}",
+      "open": "offen",
+      "anchored": " (feste Startzeit)",
+      "fromStart": "Ab Listenbeginn: {rel}",
+      "srcUnavailableTip": "Quelle nicht verfügbar — Take wird verweigert",
+      "srcAvailableTip": "Quelle verfügbar",
+      "assetTip": "Asset {id} — {ready}{st}{detail}\nBei Nichtverfügbarkeit: {onMissing}",
+      "fixStart": "Fixzeit-Start",
+      "manualStart": "Manueller Start",
+      "transitionTitle": "{name}-Übergang",
+      "kidsToggle": "Child Events ein-/ausklappen",
+      "audioTitle": "Audio",
+      "kidClickEdit": "Klicken zum Bearbeiten",
+      "untilEnd": "bis Ende",
+      "fullDuration": "gesamte Dauer",
+      "close": "Schließen",
+      "cancel": "Abbrechen",
+      "save": "Speichern",
+      "ed.new": "Neues Event",
+      "ed.edit": "Event bearbeiten — {label}",
+      "ed.create": "Anlegen",
+      "ed.tab.content": "Inhalt",
+      "ed.tab.timing": "Timing",
+      "ed.tab.audio": "Audio",
+      "ed.tab.kids": "Child Events ({n})",
+      "ed.title": "Titel",
+      "ed.type": "Typ",
+      "ed.pattern": "Testmuster",
+      "ed.file": "Datei",
+      "ed.chooseFile": "— Datei wählen —",
+      "ed.liveSource": "Live-Quelle",
+      "ed.chooseSource": "— Quelle wählen —",
+      "ed.reqTags": "Pflicht-Tags",
+      "ed.tagsPh": "z. B. video.camera, role.program",
+      "ed.preferred": "bevorzugt",
+      "ed.optional": "optional",
+      "ed.jumpTarget": "Sprungziel",
+      "ed.chooseEvent": "— Event wählen —",
+      "ed.assetId": "Asset-ID",
+      "ed.assetIdPh": "Asset-ID aus dem OMP-Asset-System",
+      "ed.ifMissing": "Wenn fehlt",
+      "ed.fallbackFile": "Ersatzdatei",
+      "ed.fallbackPh": "nur bei „Ersatzdatei“",
+      "ed.durationMs": "Dauer (ms)",
+      "ed.durationHint": "Die Dauer wird vom Ziel-Player aus der Datei ermittelt.",
+      "ed.onAirHint": "Dieses Event läuft gerade: Medium und Dauer sind gesperrt, Titel/Timing/Child Events sind änderbar.",
+      "ed.note": "Notiz",
+      "ed.notePh": "Operator-Notiz",
+      "ed.iconColor": "Icon / Farbe",
+      "ed.emoji": "Emoji",
+      "ed.clearColor": "Farbe löschen",
+      "ed.startTime": "Startzeit",
+      "ed.startPh": "HH:MM:SS oder JJJJ-MM-TT HH:MM:SS (lokal)",
+      "ed.start": "Start",
+      "ed.startSeq": "⏭ Sequenz (nach dem Vorgänger)",
+      "ed.startManual": "✋ Manuell (Cue + Take)",
+      "ed.startFix": "⏰ Fixzeit (feste Uhrzeit)",
+      "ed.ramp": "Rampe",
+      "ed.rampPh": "Frames 1–250, leer = Mixer-Rate",
+      "ed.transition": "Übergang",
+      "ed.trMix": "⇄ Mix (Auto-Trans am Mixer)",
+      "ed.trFadecut": "◐✂ Fade-Cut (ausblenden auf Schwarz, dann hart)",
+      "ed.trCutfade": "✂◑ Cut-Fade (hart auf Schwarz, dann aufblenden)",
+      "ed.audioMapping": "Audio-Zuordnung",
+      "ed.audioStd": "Standard (Player-Vorgabe)",
+      "ed.audioMappingHint": "Welche Quellspuren in welche Ausgabegruppe gehen. Fehlt eine Spur, greifen die Ersatzregeln (Upmix, Downmix …). Ohne Wahl: MXF = Vorlage „Stereo“, sonst der Programmton der Quelle.",
+      "ed.resolvedPlan": "Aufgelöster Plan",
+      "ed.planLater": "Der aufgelöste Plan erscheint, sobald das Event gecued oder auf Sendung ist.",
+      "ed.audioAfterCreate": "Die Audio-Wahl ist nach dem Anlegen verfügbar (sie hängt von den Capabilities der aufgelösten Live-Quelle ab).",
+      "ed.audioLiveOnly": "Nur Live-Events mit bekannter Quelle bieten eine Audio-Wahl.",
+      "ed.channelsN": "{n} Kanäle",
+      "ed.audioFrom": "Audio von {source}",
+      "ed.audioAuto": "Auto (Quell-Default)",
+      "ed.default": " [Default]",
+      "ed.currentChoice": "Aktuelle Wahl: {chosen} ({via})",
+      "ed.deleteKid": "Child Event löschen",
+      "ed.addKid": "＋ Child Event",
+      "ed.kidsEmpty": "Child Events laufen parallel zum Event: Grafik ein-/ausblenden, Node-Befehle, Webhooks, Audio/Voiceover, Channel-Trigger.",
+      "ed.runtime": "Laufzeit: {state}{error}{attempt}",
+      "ed.attempt": " (Versuch {n})",
+      "ed.templateId": "Template-ID",
+      "ed.dataJson": "Daten (JSON)",
+      "ed.targetNode": "Ziel-Node",
+      "ed.nodeLabelPh": "Node-Label",
+      "ed.method": "Methode",
+      "ed.paramsJson": "Parameter (JSON)",
+      "ed.stopMethod": "Stopp-Methode",
+      "ed.stopMethodPh": "optional, beim Ende",
+      "ed.stopParams": "Stopp-Parameter",
+      "ed.bodyJson": "Body (JSON)",
+      "ed.event": "Event",
+      "ed.target": "Ziel",
+      "ed.name": "Name",
+      "ed.itemId": "Item-ID",
+      "ed.timingHdr": "Timing",
+      "ed.mode": "Modus",
+      "ed.clock": "Uhrzeit",
+      "ed.beforeEnd": "Vor Ende (ms)",
+      "ed.delay": "Delay (ms)",
+      "ed.zeroUntilEnd": "0 = bis zum Ende des Primary",
+      "ed.onErrors": "Bei Fehlern",
+      "ed.policy": "Richtlinie",
+      "ed.retries": "Wiederholungen",
+      "ed.pause": "Pause (ms)",
+      "ed.fallbackTarget": "Ersatz-Ziel",
+      "ed.required": "Pflicht",
+      "ed.requiredHint": "nur sinnvoll mit „Primary blockieren“",
+      "ed.badJson": "Child „{id}“: {key} ist kein gültiges JSON",
+      "ed.badTime": "Child „{id}“: Uhrzeit ungültig",
+      "ed.titleMissing": "Titel fehlt",
+      "ed.badStart": "Startzeit ungültig (z. B. 14:30:00 oder 2026-10-03 06:00:00)",
+      "ed.pickFile": "Datei wählen",
+      "ed.pickImage": "Bilddatei wählen",
+      "ed.pickLive": "Live-Quelle wählen",
+      "ed.needTag": "Live nach Tags braucht mindestens einen Pflicht-Tag",
+      "ed.pickJump": "Sprungziel wählen",
+      "ed.assetMissing": "Asset-ID fehlt",
+      "ed.createdNoProps": "Event angelegt, aber Eigenschaften nicht übernommen: {err}",
+      "pick.none": "Keine Dateien in der Medienbibliothek des Ziel-Players.",
+      "pick.title": "Medien hinzufügen",
+      "pick.add": "Hinzufügen",
+      "cart.onAir": "CART ON AIR: {label}",
+      "cart.manual": " · manuell (RETURN)",
+      "cart.iconPh": "Icon",
+      "cart.titlePh": "Titel",
+      "cart.msTitle": "ms, 0 = manuell (RETURN)",
+      "cart.create": "＋ Anlegen",
+      "cart.saved": "„{label}“ gespeichert",
+      "cart.confirmRemove": "Cart „{label}“ wirklich entfernen?",
+      "cart.none": "Noch keine Carts (Blackclip, Standby, …).",
+      "cart.new": "Neuer Cart",
+      "cart.manageTitle": "Assets / Carts verwalten",
+      "fixCountdown": "⏰ {hms} „{label}“ in {t}",
+      "planWarn.one": "⚠ 1 Plan-Warnung (Überlappung, Lücke oder unbestimmter Start — Details am ⚠ in der Zeitspalte)",
+      "planWarn.many": "⚠ {n} Plan-Warnungen (Überlappung, Lücke oder unbestimmter Start — Details am ⚠ in der Zeitspalte)",
+      "noTriggerYet": "Noch keine Trigger."
+  },
+    en: {
+      "confirmFallback": "Really switch the main channel to black?",
+      "toBlack": "Switch to black",
+      "mp.hold": "hold",
+      "mp.skip": "skip",
+      "mp.black": "Black",
+      "mp.stop": "Black + stop",
+      "mp.fallback": "Fallback file",
+      "mp.filler": "Default filler",
+      "mk.pattern": "Test pattern",
+      "mk.file": "File",
+      "mk.asset": "Asset (provisioning)",
+      "mk.image": "Still image",
+      "mk.live": "Live source",
+      "mk.liveselect": "Live by tags",
+      "mk.hold": "HOLD (pause)",
+      "mk.jump": "JUMP (go to …)",
+      "ct.graphic": "🎨 Graphic",
+      "ct.logo": "🏷 Logo",
+      "ct.branding": "📺 Channel branding",
+      "ct.node": "⚙ Node command",
+      "ct.trigger": "⚡ Trigger",
+      "ct.audio": "🔊 Audio",
+      "ct.voiceover": "🎙 Voiceover",
+      "ct.webhook": "🌐 Webhook",
+      "ct.channelTrigger": "📡 Channel trigger",
+      "tm.start": "from start (delay)",
+      "tm.end": "before end (delay)",
+      "tm.full": "entire primary duration",
+      "tm.abs": "absolute time",
+      "fp.warn": "Warning",
+      "fp.ignore": "ignore",
+      "fp.retry": "retry",
+      "fp.block": "Block primary",
+      "fp.fallback": "Fallback target",
+      "noCall": "{method} failed: {detail}",
+      "notConnected": "not connected",
+      "connected": "connected (channel {ch} live)",
+      "channelLabel": "Channel: {name}",
+      "noChannel": "no channel",
+      "nextTitle": "Go to the next event immediately (also in hold mode)",
+      "liveTitle": "Jump to the next live event",
+      "stopTitle": "Switch the main channel to black immediately (the playlist is kept)",
+      "mode": "Mode ",
+      "sec.control": "Playlist control",
+      "sec.targets": "Targets",
+      "sec.playlist": "Playlist",
+      "sec.carts": "Assets / carts",
+      "sec.trigger": "Channel trigger",
+      "tgt.a": "Channel A",
+      "tgt.b": "Channel B",
+      "tgt.mixer": "Mixer",
+      "tgt.gfx": "Graphics",
+      "tgt.audio": "Audio mixer",
+      "tgt.preflight": "Preflight lead time (min)",
+      "tgt.filler": "Default filler (file)",
+      "choose": "— choose —",
+      "emptyList": "No events yet — “＋” on the left creates the first one.",
+      "noSource": "(no source)",
+      "col.type": "Type",
+      "col.media": "Media / source",
+      "col.mediaId": "Media ID",
+      "col.transition": "Transition",
+      "col.start": "Start",
+      "col.player": "Player",
+      "col.status": "Status",
+      "col.gap": "Gap / overlap",
+      "col.audio": "Audio",
+      "col.child": "Child",
+      "col.ready": "Readiness",
+      "col.title": "Title",
+      "col.dur": "Duration",
+      "col.time": "Time",
+      "col.rem": "Remaining",
+      "manual": "manual",
+      "sequence": "Sequence",
+      "standard": "Default",
+      "unavailable": "unavailable",
+      "audioTip": "Mapping: {label}",
+      "silent": "silent",
+      "track": "Track {tracks}",
+      "mixedSuffix": " (mixed)",
+      "ruleSuffix": " · fallback “{rule}”",
+      "st.played": "played",
+      "st.notReady": "not ready",
+      "st.missing": "missing",
+      "st.planned": "planned",
+      "playerTip": "Expected player (A/B alternates per event)",
+      "seamless": "seamless",
+      "gapTip": "Gap to the previous event: {s} s",
+      "overlapTip": "Overlap with the previous event: {s} s",
+      "search": "Search …",
+      "columns": "Columns",
+      "newEvent": "Create a new event",
+      "addMedia": "Add media from the library",
+      "checkReady": "Check the readiness of the asset events",
+      "manageAssets": "Manage assets …",
+      "tr.group": "Group",
+      "tr.channel": "Channel",
+      "tr.all": "All permitted",
+      "tr.targetPh": "Group/channel",
+      "tr.itemPh": "Item ID (JUMP)",
+      "tr.atPh": "Target time HH:MM:SS (optional)",
+      "tr.lateNow": "late: immediately",
+      "tr.lateSkip": "late: skip",
+      "tr.lateResync": "late: resync",
+      "tr.lateQueue": "late: queue",
+      "tr.badTime": "Invalid target time (HH:MM[:SS] or YYYY-MM-DD HH:MM[:SS], local time)",
+      "tr.allChannels": "all permitted channels",
+      "tr.whoGroup": "group {name}",
+      "tr.whoChannel": "channel {name}",
+      "tr.confirm": "Send trigger {event} to {who}?",
+      "tr.send": "Send",
+      "tr.none": "No triggers yet.",
+      "noAssetEvents": "No asset events in the playlist — files/live are available immediately.",
+      "readinessSummary": "{n} asset events: {ready} ready, {transfer} transferring, {notReady} not ready{bad}.",
+      "readinessBad": " · {n} events without an available source",
+      "describe.hold": "HOLD: the sequence pauses until the operator continues.",
+      "describe.still": "Still image: {file}",
+      "describe.liveTags": "Live by tags: {tags} → {label}",
+      "describe.noMatch": "no matching source",
+      "describe.live": "Live: {id}",
+      "describe.file": "File: {file}",
+      "describe.pattern": "Test pattern: {pattern}",
+      "removeOne": "Really remove {name} from the playlist?",
+      "removeMany": "Really remove {n} events ({names}{more})?",
+      "remove": "Remove",
+      "noReorderSearch": "Reordering is not possible while a search is active — clear the search field.",
+      "dragTitle": "Drag to reorder",
+      "cueTake": "Cue + take: send this event immediately",
+      "editProps": "Edit properties",
+      "removeEvent": "Remove event",
+      "plannedAt": "Planned: {from} – {to}{anchored}",
+      "open": "open",
+      "anchored": " (fixed start time)",
+      "fromStart": "From list start: {rel}",
+      "srcUnavailableTip": "Source unavailable — take is refused",
+      "srcAvailableTip": "Source available",
+      "assetTip": "Asset {id} — {ready}{st}{detail}\nIf unavailable: {onMissing}",
+      "fixStart": "Fixed-time start",
+      "manualStart": "Manual start",
+      "transitionTitle": "{name} transition",
+      "kidsToggle": "Expand/collapse child events",
+      "audioTitle": "Audio",
+      "kidClickEdit": "Click to edit",
+      "untilEnd": "until end",
+      "fullDuration": "entire duration",
+      "close": "Close",
+      "cancel": "Cancel",
+      "save": "Save",
+      "ed.new": "New event",
+      "ed.edit": "Edit event — {label}",
+      "ed.create": "Create",
+      "ed.tab.content": "Content",
+      "ed.tab.timing": "Timing",
+      "ed.tab.audio": "Audio",
+      "ed.tab.kids": "Child events ({n})",
+      "ed.title": "Title",
+      "ed.type": "Type",
+      "ed.pattern": "Test pattern",
+      "ed.file": "File",
+      "ed.chooseFile": "— choose file —",
+      "ed.liveSource": "Live source",
+      "ed.chooseSource": "— choose source —",
+      "ed.reqTags": "Required tags",
+      "ed.tagsPh": "e.g. video.camera, role.program",
+      "ed.preferred": "preferred",
+      "ed.optional": "optional",
+      "ed.jumpTarget": "Jump target",
+      "ed.chooseEvent": "— choose event —",
+      "ed.assetId": "Asset ID",
+      "ed.assetIdPh": "Asset ID from the OMP asset system",
+      "ed.ifMissing": "If missing",
+      "ed.fallbackFile": "Fallback file",
+      "ed.fallbackPh": "only for “Fallback file”",
+      "ed.durationMs": "Duration (ms)",
+      "ed.durationHint": "The duration is determined by the target player from the file.",
+      "ed.onAirHint": "This event is on air: media and duration are locked; title, timing and child events can be changed.",
+      "ed.note": "Note",
+      "ed.notePh": "Operator note",
+      "ed.iconColor": "Icon / colour",
+      "ed.emoji": "Emoji",
+      "ed.clearColor": "Clear colour",
+      "ed.startTime": "Start time",
+      "ed.startPh": "HH:MM:SS or YYYY-MM-DD HH:MM:SS (local)",
+      "ed.start": "Start",
+      "ed.startSeq": "⏭ Sequence (after the previous event)",
+      "ed.startManual": "✋ Manual (cue + take)",
+      "ed.startFix": "⏰ Fixed time (clock time)",
+      "ed.ramp": "Ramp",
+      "ed.rampPh": "Frames 1–250, empty = mixer rate",
+      "ed.transition": "Transition",
+      "ed.trMix": "⇄ Mix (auto-trans on the mixer)",
+      "ed.trFadecut": "◐✂ Fade-cut (fade to black, then hard)",
+      "ed.trCutfade": "✂◑ Cut-fade (hard to black, then fade in)",
+      "ed.audioMapping": "Audio mapping",
+      "ed.audioStd": "Default (player preset)",
+      "ed.audioMappingHint": "Which source tracks go to which output group. If a track is missing, the fallback rules apply (upmix, downmix …). Without a choice: MXF = “Stereo” template, otherwise the programme sound of the source.",
+      "ed.resolvedPlan": "Resolved plan",
+      "ed.planLater": "The resolved plan appears as soon as the event is cued or on air.",
+      "ed.audioAfterCreate": "The audio choice is available after creating the event (it depends on the capabilities of the resolved live source).",
+      "ed.audioLiveOnly": "Only live events with a known source offer an audio choice.",
+      "ed.channelsN": "{n} channels",
+      "ed.audioFrom": "Audio from {source}",
+      "ed.audioAuto": "Auto (source default)",
+      "ed.default": " [default]",
+      "ed.currentChoice": "Current choice: {chosen} ({via})",
+      "ed.deleteKid": "Delete child event",
+      "ed.addKid": "＋ Child event",
+      "ed.kidsEmpty": "Child events run in parallel to the event: show/hide graphics, node commands, webhooks, audio/voiceover, channel triggers.",
+      "ed.runtime": "Runtime: {state}{error}{attempt}",
+      "ed.attempt": " (attempt {n})",
+      "ed.templateId": "Template ID",
+      "ed.dataJson": "Data (JSON)",
+      "ed.targetNode": "Target node",
+      "ed.nodeLabelPh": "Node label",
+      "ed.method": "Method",
+      "ed.paramsJson": "Parameters (JSON)",
+      "ed.stopMethod": "Stop method",
+      "ed.stopMethodPh": "optional, at the end",
+      "ed.stopParams": "Stop parameters",
+      "ed.bodyJson": "Body (JSON)",
+      "ed.event": "Event",
+      "ed.target": "Target",
+      "ed.name": "Name",
+      "ed.itemId": "Item ID",
+      "ed.timingHdr": "Timing",
+      "ed.mode": "Mode",
+      "ed.clock": "Time of day",
+      "ed.beforeEnd": "Before end (ms)",
+      "ed.delay": "Delay (ms)",
+      "ed.zeroUntilEnd": "0 = until the end of the primary",
+      "ed.onErrors": "On errors",
+      "ed.policy": "Policy",
+      "ed.retries": "Retries",
+      "ed.pause": "Pause (ms)",
+      "ed.fallbackTarget": "Fallback target",
+      "ed.required": "Required",
+      "ed.requiredHint": "only useful with “Block primary”",
+      "ed.badJson": "Child “{id}”: {key} is not valid JSON",
+      "ed.badTime": "Child “{id}”: invalid time",
+      "ed.titleMissing": "Title missing",
+      "ed.badStart": "Invalid start time (e.g. 14:30:00 or 2026-10-03 06:00:00)",
+      "ed.pickFile": "Choose a file",
+      "ed.pickImage": "Choose an image file",
+      "ed.pickLive": "Choose a live source",
+      "ed.needTag": "Live by tags needs at least one required tag",
+      "ed.pickJump": "Choose a jump target",
+      "ed.assetMissing": "Asset ID missing",
+      "ed.createdNoProps": "Event created, but properties were not applied: {err}",
+      "pick.none": "No files in the media library of the target player.",
+      "pick.title": "Add media",
+      "pick.add": "Add",
+      "cart.onAir": "CART ON AIR: {label}",
+      "cart.manual": " · manual (RETURN)",
+      "cart.iconPh": "Icon",
+      "cart.titlePh": "Title",
+      "cart.msTitle": "ms, 0 = manual (RETURN)",
+      "cart.create": "＋ Create",
+      "cart.saved": "“{label}” saved",
+      "cart.confirmRemove": "Really remove cart “{label}”?",
+      "cart.none": "No carts yet (black clip, standby, …).",
+      "cart.new": "New cart",
+      "cart.manageTitle": "Manage assets / carts",
+      "fixCountdown": "⏰ {hms} “{label}” in {t}",
+      "planWarn.one": "⚠ 1 plan warning (overlap, gap or undetermined start — details at the ⚠ in the time column)",
+      "planWarn.many": "⚠ {n} plan warnings (overlap, gap or undetermined start — details at the ⚠ in the time column)",
+      "noTriggerYet": "No triggers yet."
+  },
+  };
+  const lang = document.documentElement.lang === "en" ? "en" : "de";
+  return (k, p) => {
+    let s = (D[lang] && D[lang][k]) ?? D.de[k] ?? k;
+    if (p) for (const x in p) s = s.split("{" + x + "}").join(p[x]);
+    return s;
+  };
+})();
+const LOCALE = document.documentElement.lang === "en" ? "en-GB" : "de-DE";
+
 // Node-UI-Bundle des Playout-Automation-Controllers (UMSETZUNG.md
 // C14/C15, ARCHITECTURE.md §13.3/§7.4): Rundown-Liste mit Cue/Take wie
 // omp-players Videoplayer-Panel (bundle-video.js, C12), zusätzlich
@@ -61,7 +613,7 @@ function formatLocalStart(iso, now = new Date()) {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
-  const hms = d.toLocaleTimeString("de-DE");
+  const hms = d.toLocaleTimeString(LOCALE);
   if (d.toDateString() === now.toDateString()) return hms;
   return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}. ${hms}`;
 }
@@ -95,26 +647,26 @@ const fmtMs = (ms) => {
 };
 
 const MISSING_POLICIES = [
-  ["HOLD", "halten"], ["SKIP", "überspringen"], ["BLACK", "Schwarz"], ["STOP", "Schwarz + Stopp"],
-  ["FALLBACK", "Ersatzdatei"], ["DEFAULT_FILLER", "Standard-Filler"],
+  ["HOLD", T("mp.hold")], ["SKIP", T("mp.skip")], ["BLACK", T("mp.black")], ["STOP", T("mp.stop")],
+  ["FALLBACK", T("mp.fallback")], ["DEFAULT_FILLER", T("mp.filler")],
 ];
 const PATTERNS = ["smpte", "ball", "snow", "circular", "checkers-1", "solid-color"];
 const MEDIA_KINDS = [
-  ["pattern", "Testmuster"], ["file", "Datei"], ["asset", "Asset (Bereitstellung)"], ["image", "Standbild"],
-  ["live", "Live-Quelle"], ["liveselect", "Live nach Tags"], ["hold", "HOLD (anhalten)"], ["jump", "JUMP (springen zu …)"],
+  ["pattern", T("mk.pattern")], ["file", T("mk.file")], ["asset", T("mk.asset")], ["image", T("mk.image")],
+  ["live", T("mk.live")], ["liveselect", T("mk.liveselect")], ["hold", T("mk.hold")], ["jump", T("mk.jump")],
 ];
 const CHILD_TYPES = [
-  ["GRAPHIC", "🎨 Grafik"], ["LOGO", "🏷 Logo"], ["CHANNEL_BRANDING", "📺 Channel-Branding"],
-  ["NODE_COMMAND", "⚙ Node-Befehl"], ["TRIGGER", "⚡ Trigger"], ["AUDIO", "🔊 Audio"], ["VOICEOVER", "🎙 Voiceover"],
-  ["WEBHOOK", "🌐 Webhook"], ["CHANNEL_TRIGGER", "📡 Channel-Trigger"],
+  ["GRAPHIC", T("ct.graphic")], ["LOGO", T("ct.logo")], ["CHANNEL_BRANDING", T("ct.branding")],
+  ["NODE_COMMAND", T("ct.node")], ["TRIGGER", T("ct.trigger")], ["AUDIO", T("ct.audio")], ["VOICEOVER", T("ct.voiceover")],
+  ["WEBHOOK", T("ct.webhook")], ["CHANNEL_TRIGGER", T("ct.channelTrigger")],
 ];
 const CHILD_ICON = Object.fromEntries(CHILD_TYPES.map(([v, t]) => [v, t.split(" ")[0]]));
 const TIMINGS = [
-  ["RELATIVE_TO_START", "ab Start (Delay)"], ["RELATIVE_TO_END", "vor Ende (Delay)"],
-  ["FULL_PRIMARY", "gesamte Primary-Dauer"], ["ABSOLUTE", "absolute Uhrzeit"],
+  ["RELATIVE_TO_START", T("tm.start")], ["RELATIVE_TO_END", T("tm.end")],
+  ["FULL_PRIMARY", T("tm.full")], ["ABSOLUTE", T("tm.abs")],
 ];
 const FAIL_POLICIES = [
-  ["WARN", "Warnung"], ["IGNORE", "ignorieren"], ["RETRY", "wiederholen"], ["BLOCK", "Primary blockieren"], ["FALLBACK", "Ersatz-Ziel"],
+  ["WARN", T("fp.warn")], ["IGNORE", T("fp.ignore")], ["RETRY", T("fp.retry")], ["BLOCK", T("fp.block")], ["FALLBACK", T("fp.fallback")],
 ];
 const TRIGGER_EVENTS = ["NEXT", "NEXT_LIVE", "CUT", "JUMP", "HOLD", "RESUME"];
 
@@ -289,7 +841,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       }).then(async (res) => {
         if (!res.ok) {
           const detail = await res.text().catch(() => "");
-          const msg = `${method} fehlgeschlagen: ${detail || res.status}`;
+          const msg = T("noCall", { method, detail: detail || res.status });
           showBanner(msg);
           const e = new Error(detail || String(res.status));
           e.shown = true;
@@ -321,29 +873,29 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     // ---- Kopf -----------------------------------------------------------
     const clockEl = h("span", { class: "clock" });
     const modeChip = h("span", { class: "chip" });
-    const connectedChip = h("span", { class: "chip" }, "nicht verbunden");
-    const persistChip = h("span", { class: "chip" }, "Channel: …");
+    const connectedChip = h("span", { class: "chip" }, T("notConnected"));
+    const persistChip = h("span", { class: "chip" }, T("channelLabel", { name: "…" }));
     const nextFixEl = h("div", { class: "info", style: "display:none" });
     const planWarnEl = h("div", { class: "info warn", style: "display:none" });
     const head = h("div", { class: "head" }, clockEl, modeChip, connectedChip, persistChip);
 
     // ---- Playlist Control ----------------------------------------------
     const takeBtn = h("button", { class: "take", onclick: () => act("take", {}) }, "TAKE");
-    const nextBtn = h("button", { title: "Sofort zum nächsten Event (auch im Hold-Modus)", onclick: () => act("next", {}) }, "▶▶ Next");
-    const nextLiveBtn = h("button", { title: "Zum nächsten Live-Event springen", onclick: () => act("nextLive", {}) }, "▶ Live");
+    const nextBtn = h("button", { title: T("nextTitle"), onclick: () => act("next", {}) }, "▶▶ Next");
+    const nextLiveBtn = h("button", { title: T("liveTitle"), onclick: () => act("nextLive", {}) }, "▶ Live");
     const stopBtn = h("button", {
-      class: "danger", title: "Hauptkanal sofort auf Schwarzbild schalten (Playlist bleibt erhalten)",
+      class: "danger", title: T("stopTitle"),
       onclick: async () => {
-        if (await confirmDialog("Hauptkanal wirklich auf Schwarzbild schalten?", "Auf Schwarzbild schalten")) act("stop", {});
+        if (await confirmDialog(T("confirmFallback"), T("toBlack"))) act("stop", {});
       },
     }, "■ Stop");
     const modeSelect = h("select", { onchange: () => setParam("mode", modeSelect.value) },
       h("option", { value: "auto" }, "Auto"), h("option", { value: "hold" }, "Hold"));
     const progressBar = h("div", { class: "bar" });
     const controlSec = h("details", { class: "sec", open: true },
-      h("summary", {}, "Playlist Control"),
+      h("summary", {}, T("sec.control")),
       h("div", { class: "body" },
-        h("div", { class: "ctrl" }, takeBtn, nextBtn, nextLiveBtn, stopBtn, h("span", { style: "flex:1" }), h("label", {}, "Modus ", modeSelect)),
+        h("div", { class: "ctrl" }, takeBtn, nextBtn, nextLiveBtn, stopBtn, h("span", { style: "flex:1" }), h("label", {}, T("mode"), modeSelect)),
         h("div", { class: "progress" }, progressBar)));
 
     // ---- Ziele ----------------------------------------------------------
@@ -357,30 +909,30 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     const selGfx = mkTarget("targetGraphicsLabel");
     const selAud = mkTarget("targetAudioMixerLabel");
     const targetsSec = h("details", { class: "sec" },
-      h("summary", {}, "Ziele"),
+      h("summary", {}, T("sec.targets")),
       h("div", { class: "body targets" },
-        h("label", {}, "Kanal A", selA), h("label", {}, "Kanal B", selB), h("label", {}, "Mixer", selMix),
-        h("label", {}, "Grafik", selGfx), h("label", {}, "Audio-Mixer", selAud),
-        h("label", {}, "Preflight-Vorlauf (min)", h("input", { type: "number", min: "0", id: "preflightWin", onchange: (e) => setParam("preflightWindowMin", Number(e.target.value) || 0) })),
-        h("label", {}, "Standard-Filler (Datei)", h("input", { type: "text", id: "defaultFiller", onchange: (e) => setParam("defaultFiller", e.target.value.trim()) }))));
+        h("label", {}, T("tgt.a"), selA), h("label", {}, T("tgt.b"), selB), h("label", {}, T("tgt.mixer"), selMix),
+        h("label", {}, T("tgt.gfx"), selGfx), h("label", {}, T("tgt.audio"), selAud),
+        h("label", {}, T("tgt.preflight"), h("input", { type: "number", min: "0", id: "preflightWin", onchange: (e) => setParam("preflightWindowMin", Number(e.target.value) || 0) })),
+        h("label", {}, T("tgt.filler"), h("input", { type: "text", id: "defaultFiller", onchange: (e) => setParam("defaultFiller", e.target.value.trim()) }))));
     const fillTargets = (sel, labels, cur) => {
       const all = cur && !labels.includes(cur) ? [cur, ...labels] : labels;
       const key = JSON.stringify(all);
       if (sel.dataset.k !== key) {
         sel.dataset.k = key;
-        sel.replaceChildren(h("option", { value: "" }, "— wählen —"), ...all.map((l) => h("option", { value: l }, l)));
+        sel.replaceChildren(h("option", { value: "" }, T("choose")), ...all.map((l) => h("option", { value: l }, l)));
       }
       if (shadow.activeElement !== sel) sel.value = cur || "";
     };
 
     // ---- Playlist -------------------------------------------------------
     const listEl = h("div", { class: "pl-list" });
-    const emptyEl = h("div", { class: "empty" }, "Noch keine Events — „＋“ links legt das erste an.");
+    const emptyEl = h("div", { class: "empty" }, T("emptyList"));
     // Zusätzliche, wählbare Spalten (⚙): alle standardmäßig aus, Auswahl wird je Browser gemerkt.
     const baseName = (p) => String(p || "").split("/").pop();
     const mediaOf = (it) => {
       if (it.asset) return it.file ? baseName(it.file) : it.asset.assetId;
-      if (it.sourceSelector) return it.resolvedLabel || "(keine Quelle)";
+      if (it.sourceSelector) return it.resolvedLabel || T("noSource");
       if (it.senderId) return it.resolvedLabel || it.senderId;
       if (it.file) return baseName(it.file);
       if (it.eventType === "JUMP") return `→ ${items.find((x) => x.id === it.jumpTarget)?.label || it.jumpTarget}`;
@@ -389,24 +941,24 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     const mediaIdOf = (it) => (it.asset ? it.asset.assetId : it.senderId || (it.sourceSelector ? (it.sourceSelector.required || []).join(",") : "") || "");
     const fmtGap = (ms) => `${ms < 0 ? "−" : "+"}${(Math.abs(ms) / 1000).toFixed(1)}s`;
     const EXTRA_COLS = [
-      { k: "type", t: "Typ", w: "62px", get: (it) => ({ text: it.eventType || "" }) },
-      { k: "media", t: "Medium / Quelle", w: "minmax(110px,1fr)", get: (it) => ({ text: mediaOf(it), tip: describe(it) }) },
-      { k: "mediaid", t: "Media-ID", w: "minmax(90px,.8fr)", get: (it) => ({ text: mediaIdOf(it), tip: mediaIdOf(it) }) },
-      { k: "transition", t: "Transition", w: "92px", get: (it) => ({ text: TRANSITION_LABEL[it.transition] ? `${TRANSITION_LABEL[it.transition]}${it.transition !== "cut" && it.transitionRateFrames ? ` ${it.transitionRateFrames}f` : ""}` : "Cut" }) },
-      { k: "starttype", t: "Start", w: "92px", get: (it) => ({ text: it.startType === "fixtime" ? `⏰ ${it.startAt ? formatLocalStart(it.startAt) : it.fixtimeHms || ""}` : it.startType === "manual" ? "manuell" : "Sequenz" }) },
-      { k: "player", t: "Player", w: "52px", get: (it, i) => playerOf(it, i) },
-      { k: "status", t: "Status", w: "78px", get: (it, i) => statusOf(it, i) },
-      { k: "gap", t: "Gap / Overlap", w: "84px", get: (it, i) => gapOf(i) },
-      { k: "audio", t: "Audio", w: "150px", get: (it) => {
+      { k: "type", t: T("col.type"), w: "62px", get: (it) => ({ text: it.eventType || "" }) },
+      { k: "media", t: T("col.media"), w: "minmax(110px,1fr)", get: (it) => ({ text: mediaOf(it), tip: describe(it) }) },
+      { k: "mediaid", t: T("col.mediaId"), w: "minmax(90px,.8fr)", get: (it) => ({ text: mediaIdOf(it), tip: mediaIdOf(it) }) },
+      { k: "transition", t: T("col.transition"), w: "92px", get: (it) => ({ text: TRANSITION_LABEL[it.transition] ? `${TRANSITION_LABEL[it.transition]}${it.transition !== "cut" && it.transitionRateFrames ? ` ${it.transitionRateFrames}f` : ""}` : "Cut" }) },
+      { k: "starttype", t: T("col.start"), w: "92px", get: (it) => ({ text: it.startType === "fixtime" ? `⏰ ${it.startAt ? formatLocalStart(it.startAt) : it.fixtimeHms || ""}` : it.startType === "manual" ? T("manual") : T("sequence") }) },
+      { k: "player", t: T("col.player"), w: "52px", get: (it, i) => playerOf(it, i) },
+      { k: "status", t: T("col.status"), w: "78px", get: (it, i) => statusOf(it, i) },
+      { k: "gap", t: T("col.gap"), w: "84px", get: (it, i) => gapOf(i) },
+      { k: "audio", t: T("col.audio"), w: "150px", get: (it) => {
         const plan = planOf(it);
         const rows = plan ? planRows(plan) : [];
         const warn = rows.some((r) => r.rule || r.failed || r.warnings.length);
         const base = it.audioMapping ? mappingLabel(it.audioMapping) : it.audio ? it.audio.resolution?.chosen || "—" : "";
-        const tip = rows.length ? rows.map((r) => `${r.label}: ${r.text}${r.warnings.length ? `\n   ⚠ ${r.warnings.join("\n   ⚠ ")}` : ""}`).join("\n") : it.audioMapping ? `Zuordnung: ${mappingLabel(it.audioMapping)}` : "";
-        return { text: (base || (rows.length ? "Standard" : "")) + (warn ? " ⚠" : ""), cls: warn ? "gap-neg" : "", tip };
+        const tip = rows.length ? rows.map((r) => `${r.label}: ${r.text}${r.warnings.length ? `\n   ⚠ ${r.warnings.join("\n   ⚠ ")}` : ""}`).join("\n") : it.audioMapping ? T("audioTip", { label: mappingLabel(it.audioMapping) }) : "";
+        return { text: (base || (rows.length ? T("standard") : "")) + (warn ? " ⚠" : ""), cls: warn ? "gap-neg" : "", tip };
       } },
-      { k: "kids", t: "Child", w: "46px", get: (it) => ({ text: (it.children || []).length ? String(it.children.length) : "" }) },
-      { k: "ready", t: "Bereitschaft", w: "92px", get: (it) => ({ text: it.asset ? (it.readiness || "UNKNOWN") : (it.available ?? true) ? "" : "nicht verfügbar", tip: it.readinessDetail || "" }) },
+      { k: "kids", t: T("col.child"), w: "46px", get: (it) => ({ text: (it.children || []).length ? String(it.children.length) : "" }) },
+      { k: "ready", t: T("col.ready"), w: "92px", get: (it) => ({ text: it.asset ? (it.readiness || "UNKNOWN") : (it.available ?? true) ? "" : T("unavailable"), tip: it.readinessDetail || "" }) },
     ];
     let liveCh = "a";
     // Audio-Spiegel der Kanal-Player (Plan je Kanal, Zielgruppen, Zuordnungsvorlagen).
@@ -431,7 +983,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         silent: g.silent,
         rule: g.rule,
         failed: g.failed,
-        text: g.silent ? "still" : `Spur ${[...tracks].sort((a, b) => a - b).join(", ")}${mixed ? " (gemischt)" : ""}${g.rule ? ` · Ersatz „${g.rule}“` : ""}`,
+        text: g.silent ? T("silent") : `${T("track", { tracks: [...tracks].sort((a, b) => a - b).join(", ") })}${mixed ? T("mixedSuffix") : ""}${g.rule ? T("ruleSuffix", { rule: g.rule }) : ""}`,
         warnings: g.warnings || [],
       };
     });
@@ -440,10 +992,10 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const cur = itemIndex(currentItemId);
       if (it.id === currentItemId) return { text: "ON AIR", cls: "st-onair" };
       if (it.id === cuedItemId) return { text: "CUED", cls: "st-cued" };
-      if (cur >= 0 && i < cur) return { text: "gespielt", cls: "st-played" };
-      if (it.asset && it.readiness === "NOT_READY") return { text: "nicht bereit", cls: "st-bad" };
-      if (!(it.available ?? true)) return { text: "fehlt", cls: "st-bad" };
-      return { text: "geplant" };
+      if (cur >= 0 && i < cur) return { text: T("st.played"), cls: "st-played" };
+      if (it.asset && it.readiness === "NOT_READY") return { text: T("st.notReady"), cls: "st-bad" };
+      if (!(it.available ?? true)) return { text: T("st.missing"), cls: "st-bad" };
+      return { text: T("st.planned") };
     };
     // A/B wechseln je ladendem Event; Steuer-Events (HOLD/JUMP) laden nichts. Exakt nur für ON AIR/CUED, sonst abgeleitet (~).
     const playerOf = (it, i) => {
@@ -457,7 +1009,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const lo = Math.min(cur, i), hi = Math.max(cur, i);
       let hops = 0;
       for (let k = lo + 1; k <= hi; k++) if (items[k].eventType !== "HOLD" && items[k].eventType !== "JUMP") hops++;
-      return { text: `~${letter(hops % 2 === 0 ? liveCh : other(liveCh))}`, tip: "Voraussichtlicher Player (A/B wechselt je Event)" };
+      return { text: `~${letter(hops % 2 === 0 ? liveCh : other(liveCh))}`, tip: T("playerTip") };
     };
     const gapOf = (i) => {
       if (i === 0) return { text: "" };
@@ -469,20 +1021,20 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         if (ta && tb) gap = tb.startMs - ta.endMs;
       }
       if (gap === null || Number.isNaN(gap)) return { text: "" };
-      if (Math.abs(gap) < 50) return { text: "0", tip: "nahtlos" };
-      return gap > 0 ? { text: fmtGap(gap), tip: `Lücke zum Vorgänger: ${(gap / 1000).toFixed(1)} s` } : { text: fmtGap(gap), cls: "gap-neg", tip: `Überlappung mit dem Vorgänger: ${(-gap / 1000).toFixed(1)} s` };
+      if (Math.abs(gap) < 50) return { text: "0", tip: T("seamless") };
+      return gap > 0 ? { text: fmtGap(gap), tip: T("gapTip", { s: (gap / 1000).toFixed(1) }) } : { text: fmtGap(gap), cls: "gap-neg", tip: T("overlapTip", { s: (-gap / 1000).toFixed(1) }) };
     };
     const hdr = h("div", { class: "pl-hdr pl-cols" },
-      ...[["", ""], ["#", ""], ["", ""], ["Titel", ""], ["Dauer", "c-dur"], ["Zeit", "c-time"], ["Rest", "c-rem"]].map(([t, c]) => h("span", { class: c }, t)),
+      ...[["", ""], ["#", ""], ["", ""], [T("col.title"), ""], [T("col.dur"), "c-dur"], [T("col.time"), "c-time"], [T("col.rem"), "c-rem"]].map(([t, c]) => h("span", { class: c }, t)),
       ...EXTRA_COLS.map((c) => h("span", { class: `c-${c.k}` }, c.t)),
       h("span", {}, ""), h("span", {}, ""));
-    const searchInput = h("input", { type: "search", placeholder: "Suchen …", oninput: () => { search = searchInput.value.trim().toLowerCase(); renderList(); } });
+    const searchInput = h("input", { type: "search", placeholder: T("search"), oninput: () => { search = searchInput.value.trim().toLowerCase(); renderList(); } });
     const colsPop = h("div", { class: "cols-pop" },
-      ...[["dur", "Dauer"], ["time", "Zeit"], ["rem", "Rest"]].map(([k, t]) =>
+      ...[["dur", T("col.dur")], ["time", T("col.time")], ["rem", T("col.rem")]].map(([k, t]) =>
         h("label", {}, h("input", { type: "checkbox", checked: !prefs[`hide-${k}`], onchange: (e) => { prefs[`hide-${k}`] = !e.target.checked; savePrefs(); applyCols(); } }), t)),
       ...EXTRA_COLS.map((c) =>
         h("label", {}, h("input", { type: "checkbox", checked: !!prefs[`show-${c.k}`], onchange: (e) => { prefs[`show-${c.k}`] = e.target.checked; savePrefs(); applyCols(); renderList(); } }), c.t)));
-    const colsBtn = h("button", { title: "Spalten", onclick: () => colsPop.classList.toggle("show") }, "⚙");
+    const colsBtn = h("button", { title: T("columns"), onclick: () => colsPop.classList.toggle("show") }, "⚙");
     const applyCols = () => {
       for (const k of ["dur", "time", "rem"]) plMain.classList.toggle(`hide-${k}`, !!prefs[`hide-${k}`]);
       for (const c of EXTRA_COLS) plMain.classList.toggle(`hide-${c.k}`, !prefs[`show-${c.k}`]);
@@ -498,14 +1050,14 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       plMain.style.setProperty("--minw", `${minw}px`);
     };
     const sidebar = h("div", { class: "sidebar" },
-      h("button", { class: "primary", title: "Neues Event anlegen", onclick: () => openEditor(null) }, "＋"),
-      h("button", { title: "Medien aus der Bibliothek hinzufügen", onclick: () => openMediaPicker() }, "📂"),
-      h("button", { title: "Bereitschaft der Asset-Events prüfen", onclick: () => checkReadiness() }, "✓"));
+      h("button", { class: "primary", title: T("newEvent"), onclick: () => openEditor(null) }, "＋"),
+      h("button", { title: T("addMedia"), onclick: () => openMediaPicker() }, "📂"),
+      h("button", { title: T("checkReady"), onclick: () => checkReadiness() }, "✓"));
     const plMain = h("div", { class: "pl-main" },
       h("div", { class: "pl-tools", style: "position:relative" }, searchInput, colsBtn, colsPop),
       hdr, listEl, emptyEl);
     const playlistSec = h("details", { class: "sec", open: true },
-      h("summary", {}, "Playlist"),
+      h("summary", {}, T("sec.playlist")),
       h("div", { class: "body" }, h("div", { class: "pl-wrap" }, sidebar, plMain)));
 
     // ---- Assets / Carts --------------------------------------------------
@@ -514,37 +1066,37 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     cartBanner.append(cartBannerLabel, h("button", { onclick: () => act("cart.return", {}) }, "RETURN"));
     const cartGrid = h("div", { class: "cart-grid" });
     const cartsSec = h("details", { class: "sec", open: true },
-      h("summary", {}, "Assets / Carts"),
+      h("summary", {}, T("sec.carts")),
       h("div", { class: "body" },
         cartBanner, cartGrid,
-        h("div", { style: "margin-top:8px" }, h("button", { onclick: () => openCartManager() }, "Assets verwalten …"))));
+        h("div", { style: "margin-top:8px" }, h("button", { onclick: () => openCartManager() }, T("manageAssets")))));
 
     // ---- Channel-Trigger (unverändert in der Funktion) -------------------
     const mkSelect = (options) => h("select", {}, ...options.map(([v, t]) => h("option", { value: v }, t)));
     const trEvent = mkSelect(TRIGGER_EVENTS.map((e) => [e, e]));
-    const trKind = mkSelect([["group", "Gruppe"], ["channel", "Channel"], ["all", "Alle erlaubten"]]);
-    const trTarget = h("input", { type: "text", placeholder: "Gruppe/Channel" });
-    const trItem = h("input", { type: "text", placeholder: "Item-ID (JUMP)" });
-    const trLate = mkSelect([["EXECUTE_IMMEDIATELY", "verspätet: sofort"], ["SKIP", "verspätet: überspringen"], ["RESYNC", "verspätet: resync"], ["QUEUE", "verspätet: einreihen"]]);
-    const trAt = h("input", { type: "text", placeholder: "Zielzeit HH:MM:SS (optional)", style: "width:170px" });
+    const trKind = mkSelect([["group", T("tr.group")], ["channel", T("tr.channel")], ["all", T("tr.all")]]);
+    const trTarget = h("input", { type: "text", placeholder: T("tr.targetPh") });
+    const trItem = h("input", { type: "text", placeholder: T("tr.itemPh") });
+    const trLate = mkSelect([["EXECUTE_IMMEDIATELY", T("tr.lateNow")], ["SKIP", T("tr.lateSkip")], ["RESYNC", T("tr.lateResync")], ["QUEUE", T("tr.lateQueue")]]);
+    const trAt = h("input", { type: "text", placeholder: T("tr.atPh"), style: "width:170px" });
     trKind.addEventListener("change", () => { trTarget.style.display = trKind.value === "all" ? "none" : ""; });
     const trSend = h("button", {
       onclick: async () => {
         const event = trEvent.value;
         const at = trAt.value.trim() ? parseStartInput(trAt.value) : "";
-        if (trAt.value.trim() && !at) return showBanner("Zielzeit ungültig (HH:MM[:SS] oder YYYY-MM-DD HH:MM[:SS], lokale Zeit)");
-        const who = trKind.value === "all" ? "alle erlaubten Channels" : `${trKind.value === "group" ? "Gruppe" : "Channel"} ${trTarget.value}`;
-        if (!(await confirmDialog(`Trigger ${event} an ${who} senden?`, "Senden"))) return;
+        if (trAt.value.trim() && !at) return showBanner(T("tr.badTime"));
+        const who = trKind.value === "all" ? T("tr.allChannels") : T(trKind.value === "group" ? "tr.whoGroup" : "tr.whoChannel", { name: trTarget.value });
+        if (!(await confirmDialog(T("tr.confirm", { event, who }), T("tr.send")))) return;
         act("sendTrigger", {
           event, targetKind: trKind.value, target: trTarget.value.trim(),
           argsJson: event === "JUMP" ? JSON.stringify({ itemId: trItem.value.trim() }) : "",
           targetTime: at || "", relativeOffsetMs: "0", latePolicy: trLate.value,
         });
       },
-    }, "Senden");
-    const trLog = h("div", { style: "font:11px monospace;color:#bbb;max-height:140px;overflow:auto;margin-top:6px" }, "Noch keine Trigger.");
+    }, T("tr.send"));
+    const trLog = h("div", { style: "font:11px monospace;color:#bbb;max-height:140px;overflow:auto;margin-top:6px" }, T("tr.none"));
     const triggerSec = h("details", { class: "sec" },
-      h("summary", {}, "Channel-Trigger"),
+      h("summary", {}, T("sec.trigger")),
       h("div", { class: "body" }, h("div", { class: "ctrl" }, trEvent, trKind, trTarget, trItem, trAt, trLate, trSend), trLog));
 
     shadow.append(h("style", {}, STYLE), head, nextFixEl, planWarnEl, banner, controlSec, playlistSec, cartsSec, triggerSec, targetsSec);
@@ -566,24 +1118,24 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       return it.senderId ? "📡" : it.file ? "📁" : "🎨";
     };
     const describe = (it) => {
-      if (it.eventType === "HOLD") return "HOLD: Sequenz hält an, bis der Operator weiterschaltet.";
+      if (it.eventType === "HOLD") return T("describe.hold");
       if (it.eventType === "JUMP") {
         const t = items.find((x) => x.id === it.jumpTarget);
         return `JUMP → ${t ? t.label : it.jumpTarget}`;
       }
       if (it.asset) return `Asset ${it.asset.assetId}${it.file ? ` → ${it.file}` : ""}`;
-      if (it.eventType === "IMAGE") return `Standbild: ${it.file}`;
-      if (it.sourceSelector) return `Live nach Tags: ${(it.sourceSelector.required || []).join(", ")} → ${it.resolvedLabel || "keine passende Quelle"}`;
-      if (it.senderId) return `Live: ${it.senderId}`;
-      if (it.file) return `Datei: ${it.file}`;
-      return `Testmuster: ${it.pattern}`;
+      if (it.eventType === "IMAGE") return T("describe.still", { file: it.file });
+      if (it.sourceSelector) return T("describe.liveTags", { tags: (it.sourceSelector.required || []).join(", "), label: it.resolvedLabel || T("describe.noMatch") });
+      if (it.senderId) return T("describe.live", { id: it.senderId });
+      if (it.file) return T("describe.file", { file: it.file });
+      return T("describe.pattern", { pattern: it.pattern });
     };
     const checkReadiness = () => {
       const a = items.filter((i) => i.asset);
-      if (a.length === 0) return showBanner("Keine Asset-Events in der Playlist — Dateien/Live sind sofort verfügbar.", true);
+      if (a.length === 0) return showBanner(T("noAssetEvents"), true);
       const c = (f) => a.filter(f).length;
       const bad = items.filter((i) => !(i.available ?? true)).length;
-      showBanner(`${a.length} Asset-Events: ${c((i) => i.readiness === "READY")} bereit, ${c((i) => i.readinessState === "TRANSFERRING")} in Übertragung, ${c((i) => i.readiness === "NOT_READY" && i.readinessState !== "TRANSFERRING")} nicht bereit${bad ? ` · ${bad} Events ohne verfügbare Quelle` : ""}.`, true);
+      showBanner(T("readinessSummary", { n: a.length, ready: c((i) => i.readiness === "READY"), transfer: c((i) => i.readinessState === "TRANSFERRING"), notReady: c((i) => i.readiness === "NOT_READY" && i.readinessState !== "TRANSFERRING"), bad: bad ? T("readinessBad", { n: bad }) : "" }), true);
     };
 
     // ---- Liste rendern ---------------------------------------------------
@@ -594,8 +1146,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const del = ids.filter((id) => id !== currentItemId);
       if (del.length === 0) return;
       const names = del.map((id) => items.find((i) => i.id === id)).filter(Boolean).map((i) => `„${i.label}“`);
-      const msg = del.length === 1 ? `${names[0]} wirklich aus der Playlist entfernen?` : `${del.length} Events wirklich entfernen (${names.slice(0, 3).join(", ")}${names.length > 3 ? " …" : ""})?`;
-      if (!(await confirmDialog(msg, "Entfernen"))) return;
+      const msg = del.length === 1 ? T("removeOne", { name: names[0] }) : T("removeMany", { n: del.length, names: names.slice(0, 3).join(", "), more: names.length > 3 ? " …" : "" });
+      if (!(await confirmDialog(msg, T("remove")))) return;
       for (const id of del) {
         try { await call("remove", { itemId: id }); selected.delete(id); } catch { break; }
       }
@@ -621,7 +1173,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     // Drag&Drop-Reorder (Pointer-Events, funktioniert mit Maus und Finger): echte serverseitige
     // `moveItem`-Umsortierung — der Cursor (on-air/gecued) folgt dem Event, kein Schwarzbild.
     const startDrag = (itemId, ev, rowEl) => {
-      if (search) return showBanner("Umsortieren geht nicht mit aktiver Suche — Suchfeld leeren.", true);
+      if (search) return showBanner(T("noReorderSearch"), true);
       ev.preventDefault();
       dragging = true;
       const handle = ev.currentTarget;
@@ -674,7 +1226,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const wrap = h("div", { class: "pl-rowwrap" });
       const row = h("div", { class: "pl-row pl-cols" });
       const refs = { wrap, row, it };
-      refs.drag = h("span", { class: "drag", title: "Ziehen zum Umsortieren", onpointerdown: (e) => startDrag(refs.it.id, e, row) }, "⠿");
+      refs.drag = h("span", { class: "drag", title: T("dragTitle"), onpointerdown: (e) => startDrag(refs.it.id, e, row) }, "⠿");
       refs.num = h("span", { class: "num" });
       refs.ico = h("span", { class: "ico" });
       refs.dot = h("span", { class: "dot" });
@@ -687,13 +1239,13 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       refs.remBar = h("span", {});
       refs.rem = h("span", { class: "rem c-rem" }, refs.remTxt, h("span", { class: "rbar" }, refs.remBar));
       refs.av = h("span", { class: "av" });
-      refs.cueBtn = h("button", { title: "Cue + Take: dieses Event sofort senden", onclick: async (e) => {
+      refs.cueBtn = h("button", { title: T("cueTake"), onclick: async (e) => {
         e.stopPropagation();
         try { await call("cue", { itemId: refs.it.id }); await call("take", {}); } catch { /* Banner */ }
         poll();
       } }, "▶");
-      refs.editBtn = h("button", { title: "Eigenschaften bearbeiten", onclick: (e) => { e.stopPropagation(); openEditor(refs.it); } }, "✎");
-      refs.delBtn = h("button", { class: "danger", title: "Event entfernen", onclick: (e) => { e.stopPropagation(); removeItems([refs.it.id]); } }, "✕");
+      refs.editBtn = h("button", { title: T("editProps"), onclick: (e) => { e.stopPropagation(); openEditor(refs.it); } }, "✎");
+      refs.delBtn = h("button", { class: "danger", title: T("removeEvent"), onclick: (e) => { e.stopPropagation(); removeItems([refs.it.id]); } }, "✕");
       refs.acts = h("span", { class: "acts" }, refs.cueBtn, refs.editBtn, refs.delBtn);
       refs.xc = {};
       for (const c of EXTRA_COLS) refs.xc[c.k] = h("span", { class: `xc c-${c.k}` });
@@ -740,8 +1292,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         r.time.textContent = ((plan && plan.start ? formatLocalStart(plan.start) : rel) || "") + (warn ? " ⚠" : "");
         r.time.style.color = warn ? "var(--warn)" : "";
         r.time.title = [
-          plan && plan.start ? `Geplant: ${formatLocalStart(plan.start)} – ${plan.end ? formatLocalStart(plan.end) : "offen"}${plan.anchored ? " (feste Startzeit)" : ""}` : "",
-          rel ? `Ab Listenbeginn: ${rel}` : "",
+          plan && plan.start ? T("plannedAt", { from: formatLocalStart(plan.start), to: plan.end ? formatLocalStart(plan.end) : T("open"), anchored: plan.anchored ? T("anchored") : "" }) : "",
+          rel ? T("fromStart", { rel }) : "",
           ...(warn ? plan.warnings.map((w) => `⚠ ${w}`) : []),
         ].filter(Boolean).join("\n");
         if (isOn && durationMs > 0) {
@@ -751,13 +1303,13 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         // Verfügbarkeit / Bereitschaft
         let avText = (it.available ?? true) ? "✓" : "✗";
         let avBad = !(it.available ?? true);
-        let avTip = avBad ? "Quelle nicht verfügbar — Take wird verweigert" : "Quelle verfügbar";
+        let avTip = avBad ? T("srcUnavailableTip") : T("srcAvailableTip");
         if (it.asset) {
           const st = it.readinessState || "";
           const pct = it.readinessProgress > 0 ? ` ${Math.round(it.readinessProgress * 100)}%` : "";
           avText = it.readiness === "READY" ? "✓" : st === "TRANSFERRING" ? `⏳${pct}` : it.readiness === "NOT_READY" ? "✗" : "?";
           avBad = it.readiness === "NOT_READY" && st !== "TRANSFERRING";
-          avTip = `Asset ${it.asset.assetId} — ${it.readiness || "UNKNOWN"}${st ? ` (${st}${pct})` : ""}${it.readinessDetail ? `\n${it.readinessDetail}` : ""}\nBei Nichtverfügbarkeit: ${it.onMissing || "HOLD"}`;
+          avTip = T("assetTip", { id: it.asset.assetId, ready: it.readiness || "UNKNOWN", st: st ? ` (${st}${pct})` : "", detail: it.readinessDetail ? `\n${it.readinessDetail}` : "", onMissing: it.onMissing || "HOLD" });
         }
         r.av.textContent = avText;
         r.av.className = `av${avBad ? " bad" : ""}`;
@@ -774,19 +1326,19 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         r.delBtn.disabled = isOn;
         // Chips: Start-Typ, Transition, Kinder, Audio
         const chips = [];
-        if (it.startType === "fixtime") chips.push(h("span", { class: "chip blue", title: "Fixzeit-Start" }, `⏰ ${it.startAt ? formatLocalStart(it.startAt) : it.fixtimeHms || ""}`));
-        if (it.startType === "manual") chips.push(h("span", { class: "chip", style: "background:#6b5210", title: "Manueller Start" }, "✋"));
-        if (it.transition && it.transition !== "cut") chips.push(h("span", { class: "chip", style: "background:#1f5a28", title: `${TRANSITION_LABEL[it.transition] || it.transition}-Übergang` }, it.transition === "mix" ? "⇄" : it.transition === "fadecut" ? "◐✂" : "✂◑"));
+        if (it.startType === "fixtime") chips.push(h("span", { class: "chip blue", title: T("fixStart") }, `⏰ ${it.startAt ? formatLocalStart(it.startAt) : it.fixtimeHms || ""}`));
+        if (it.startType === "manual") chips.push(h("span", { class: "chip", style: "background:#6b5210", title: T("manualStart") }, "✋"));
+        if (it.transition && it.transition !== "cut") chips.push(h("span", { class: "chip", style: "background:#1f5a28", title: T("transitionTitle", { name: TRANSITION_LABEL[it.transition] || it.transition }) }, it.transition === "mix" ? "⇄" : it.transition === "fadecut" ? "◐✂" : "✂◑"));
         const nk = (it.children || []).length;
         if (nk > 0) {
           chips.push(h("span", {
-            class: "chip", style: "background:#5a3585", title: "Child Events ein-/ausklappen",
+            class: "chip", style: "background:#5a3585", title: T("kidsToggle"),
             onclick: (e) => { e.stopPropagation(); if (expanded.has(it.id)) expanded.delete(it.id); else expanded.add(it.id); renderList(); },
           }, `${expanded.has(it.id) ? "▾" : "▸"} ${nk}`));
         }
         if (it.audio) {
           const res = it.audio.resolution || {};
-          chips.push(h("span", { class: "chip", style: res.warnings && res.warnings.length ? "background:#7a5a10" : "", title: "Audio" }, `🔊 ${res.chosen || "—"}`));
+          chips.push(h("span", { class: "chip", style: res.warnings && res.warnings.length ? "background:#7a5a10" : "", title: T("audioTitle") }, `🔊 ${res.chosen || "—"}`));
         }
         r.chips.replaceChildren(...chips);
         // Kinder darunter
@@ -796,7 +1348,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           r.kidKey = kidKey;
           r.kids.replaceChildren(...(showKids ? it.children.map((c, ci) => {
             const rt = childRuntime.find((x) => x.itemId === it.id && x.id === c.id);
-            return h("div", { class: "kid", onclick: () => openEditor(it, "kids", ci), title: rt && rt.error ? rt.error : "Klicken zum Bearbeiten" },
+            return h("div", { class: "kid", onclick: () => openEditor(it, "kids", ci), title: rt && rt.error ? rt.error : T("kidClickEdit") },
               CHILD_ICON[c.type] || "•", h("span", {}, c.templateId || c.target || c.url || c.type),
               h("span", { style: "color:var(--mut)" }, timingText(c)),
               rt ? h("span", { class: `st ${rt.state}` }, rt.state) : null);
@@ -814,9 +1366,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
 
     const timingText = (c) => {
       const t = c.timing || (c.relativeTo === "END" ? "RELATIVE_TO_END" : "RELATIVE_TO_START");
-      const d = c.durationMs ? `${(c.durationMs / 1000).toFixed(1)}s` : "bis Ende";
+      const d = c.durationMs ? `${(c.durationMs / 1000).toFixed(1)}s` : T("untilEnd");
       if (t === "ABSOLUTE") return `${c.atUtc ? formatLocalStart(c.atUtc) : "?"} · ${d}`;
-      if (t === "FULL_PRIMARY") return "gesamte Dauer";
+      if (t === "FULL_PRIMARY") return T("fullDuration");
       return `${t === "RELATIVE_TO_END" ? "−" : "+"}${((c.delayMs || 0) / 1000).toFixed(1)}s · ${d}`;
     };
 
@@ -851,7 +1403,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const modal = h("div", { class: "modal" },
         h("header", {}, title, h("button", { onclick: close }, "✕")),
         tabBar, content,
-        h("footer", {}, errEl, h("button", { onclick: close }, onSave ? "Abbrechen" : "Schließen"), onSave ? h("button", { class: "primary", onclick: save }, saveLabel || "Speichern") : null));
+        h("footer", {}, errEl, h("button", { onclick: close }, onSave ? T("cancel") : T("close")), onSave ? h("button", { class: "primary", onclick: save }, saveLabel || T("save")) : null));
       const overlay = h("div", { class: "overlay", onmousedown: (e) => { if (e.target === overlay) close(); } }, modal);
       overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); e.stopPropagation(); });
       shadow.append(overlay);
@@ -912,59 +1464,59 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
 
       const renderContent = (ctx) => {
         const f = h("div", { class: "form" });
-        f.append(...field("Titel", bindText(d, "label", { placeholder: "Titel" })));
-        f.append(...field("Typ", bindSelect(d, "kind", MEDIA_KINDS, ctx.redraw)));
+        f.append(...field(T("ed.title"), bindText(d, "label", { placeholder: T("ed.title") })));
+        f.append(...field(T("ed.type"), bindSelect(d, "kind", MEDIA_KINDS, ctx.redraw)));
         if (onAir) f.querySelectorAll("select").forEach((s) => { s.disabled = true; });
         const dis = onAir ? { disabled: "" } : {};
         switch (d.kind) {
-          case "pattern": f.append(...field("Testmuster", bindSelect(d, "pattern", PATTERNS.map((p) => [p, p])))); break;
+          case "pattern": f.append(...field(T("ed.pattern"), bindSelect(d, "pattern", PATTERNS.map((p) => [p, p])))); break;
           case "file": case "image": {
             const files = d.file && !mediaLibrary.includes(d.file) ? [d.file, ...mediaLibrary] : mediaLibrary;
-            f.append(...field("Datei", bindSelect(d, "file", [["", "— Datei wählen —"], ...files.map((x) => [x, x])])));
+            f.append(...field(T("ed.file"), bindSelect(d, "file", [["", T("ed.chooseFile")], ...files.map((x) => [x, x])])));
             break;
           }
           case "live": {
             const known = availableSources.map((s) => [s.senderId, s.label]);
             if (d.senderId && !known.some(([id]) => id === d.senderId)) known.unshift([d.senderId, d.senderId]);
-            f.append(...field("Live-Quelle", bindSelect(d, "senderId", [["", "— Quelle wählen —"], ...known])));
+            f.append(...field(T("ed.liveSource"), bindSelect(d, "senderId", [["", T("ed.chooseSource")], ...known])));
             break;
           }
           case "liveselect":
-            f.append(...field("Pflicht-Tags", bindText(d, "tags", { placeholder: "z. B. video.camera, role.program" })));
-            f.append(...field("bevorzugt", bindText(d, "pref", { placeholder: "optional" })));
+            f.append(...field(T("ed.reqTags"), bindText(d, "tags", { placeholder: T("ed.tagsPh") })));
+            f.append(...field(T("ed.preferred"), bindText(d, "pref", { placeholder: T("ed.optional") })));
             break;
           case "jump":
-            f.append(...field("Sprungziel", bindSelect(d, "jumpTarget", [["", "— Event wählen —"], ...items.filter((x) => x.eventType !== "JUMP" && x.id !== item?.id).map((x) => [x.id, `${items.indexOf(x) + 1}. ${x.label}`])])));
+            f.append(...field(T("ed.jumpTarget"), bindSelect(d, "jumpTarget", [["", T("ed.chooseEvent")], ...items.filter((x) => x.eventType !== "JUMP" && x.id !== item?.id).map((x) => [x.id, `${items.indexOf(x) + 1}. ${x.label}`])])));
             break;
           case "asset":
-            f.append(...field("Asset-ID", bindText(d, "assetId", { placeholder: "Asset-ID aus dem OMP-Asset-System" })));
-            f.append(...field("Wenn fehlt", bindSelect(d, "onMissing", MISSING_POLICIES)));
-            f.append(...field("Ersatzdatei", bindText(d, "fallbackFile", { placeholder: "nur bei „Ersatzdatei“" })));
+            f.append(...field(T("ed.assetId"), bindText(d, "assetId", { placeholder: T("ed.assetIdPh") })));
+            f.append(...field(T("ed.ifMissing"), bindSelect(d, "onMissing", MISSING_POLICIES)));
+            f.append(...field(T("ed.fallbackFile"), bindText(d, "fallbackFile", { placeholder: T("ed.fallbackPh") })));
             break;
           default: break;
         }
-        if (durationEditable()) f.append(...field("Dauer (ms)", bindNum(d, "durationMs", dis)));
-        else if (d.kind === "file" || d.kind === "asset") f.append(h("div", { class: "hint" }, "Die Dauer wird vom Ziel-Player aus der Datei ermittelt."));
-        if (onAir) f.append(h("div", { class: "hint" }, "Dieses Event läuft gerade: Medium und Dauer sind gesperrt, Titel/Timing/Child Events sind änderbar."));
-        f.append(...field("Notiz", bindText(d, "note", { placeholder: "Operator-Notiz" })));
+        if (durationEditable()) f.append(...field(T("ed.durationMs"), bindNum(d, "durationMs", dis)));
+        else if (d.kind === "file" || d.kind === "asset") f.append(h("div", { class: "hint" }, T("ed.durationHint")));
+        if (onAir) f.append(h("div", { class: "hint" }, T("ed.onAirHint")));
+        f.append(...field(T("ed.note"), bindText(d, "note", { placeholder: T("ed.notePh") })));
         const color = h("input", { type: "color", value: d.color || "#4a90d9", oninput: (e) => { d.color = e.target.value; } });
-        f.append(...field("Icon / Farbe", bindText(d, "icon", { placeholder: "Emoji", style: "width:80px" }), color,
-          h("button", { onclick: () => { d.color = ""; color.value = "#4a90d9"; } }, "Farbe löschen")));
+        f.append(...field(T("ed.iconColor"), bindText(d, "icon", { placeholder: T("ed.emoji"), style: "width:80px" }), color,
+          h("button", { onclick: () => { d.color = ""; color.value = "#4a90d9"; } }, T("ed.clearColor"))));
         return f;
       };
 
       const renderTiming = () => {
         const f = h("div", { class: "form" });
-        const startInput = bindText(d, "startLocal", { placeholder: "HH:MM:SS oder JJJJ-MM-TT HH:MM:SS (lokal)" });
-        const startRow = field("Startzeit", startInput);
+        const startInput = bindText(d, "startLocal", { placeholder: T("ed.startPh") });
+        const startRow = field(T("ed.startTime"), startInput);
         const sync = () => { startRow.forEach((e) => { e.style.display = d.startType === "fixtime" ? "" : "none"; }); };
-        f.append(...field("Start", bindSelect(d, "startType", [["sequence", "⏭ Sequenz (nach dem Vorgänger)"], ["manual", "✋ Manuell (Cue + Take)"], ["fixtime", "⏰ Fixzeit (feste Uhrzeit)"]], sync)));
+        f.append(...field(T("ed.start"), bindSelect(d, "startType", [["sequence", T("ed.startSeq")], ["manual", T("ed.startManual")], ["fixtime", T("ed.startFix")]], sync)));
         f.append(...startRow);
         sync();
-        const rate = bindText(d, "rateFrames", { placeholder: "Frames 1–250, leer = Mixer-Rate" });
-        const rateRow = field("Rampe", rate);
+        const rate = bindText(d, "rateFrames", { placeholder: T("ed.rampPh") });
+        const rateRow = field(T("ed.ramp"), rate);
         const syncT = () => { rateRow.forEach((e) => { e.style.display = d.transition && d.transition !== "cut" ? "" : "none"; }); };
-        f.append(...field("Übergang", bindSelect(d, "transition", [["cut", "✂ Cut"], ["mix", "⇄ Mix (Auto-Trans am Mixer)"], ["fadecut", "◐✂ Fade-Cut (ausblenden auf Schwarz, dann hart)"], ["cutfade", "✂◑ Cut-Fade (hart auf Schwarz, dann aufblenden)"]], syncT)));
+        f.append(...field(T("ed.transition"), bindSelect(d, "transition", [["cut", "✂ Cut"], ["mix", T("ed.trMix")], ["fadecut", T("ed.trFadecut")], ["cutfade", T("ed.trCutfade")]], syncT)));
         f.append(...rateRow);
         syncT();
         return f;
@@ -973,25 +1525,25 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const renderAudio = () => {
         const f = h("div", { class: "form" });
         if (d.kind !== "hold" && d.kind !== "jump") {
-          f.append(...field("Audio-Zuordnung", bindSelect(d, "audioMapping", [["", "Standard (Player-Vorgabe)"], ...audioMappings.map((m) => [m.id, m.label || m.id])])));
-          f.append(h("div", { class: "hint" }, "Welche Quellspuren in welche Ausgabegruppe gehen. Fehlt eine Spur, greifen die Ersatzregeln (Upmix, Downmix …). Ohne Wahl: MXF = Vorlage „Stereo“, sonst der Programmton der Quelle."));
+          f.append(...field(T("ed.audioMapping"), bindSelect(d, "audioMapping", [["", T("ed.audioStd")], ...audioMappings.map((m) => [m.id, m.label || m.id])])));
+          f.append(h("div", { class: "hint" }, T("ed.audioMappingHint")));
           const plan = item ? planOf(item) : null;
           if (plan) {
             const t = h("div", { class: "hint" });
             planRows(plan).forEach((r) => t.append(h("div", { style: r.failed ? "color:var(--err,#ff6b6b)" : r.rule ? "color:var(--warn)" : r.silent ? "color:var(--mut)" : "" }, `${r.label}: ${r.text}`)));
             plan.warnings.forEach((w) => t.append(h("div", { style: "color:var(--warn)" }, `⚠ ${w}`)));
-            f.append(h("label", {}, "Aufgelöster Plan"), t);
-          } else f.append(h("div", { class: "hint" }, "Der aufgelöste Plan erscheint, sobald das Event gecued oder auf Sendung ist."));
+            f.append(h("label", {}, T("ed.resolvedPlan")), t);
+          } else f.append(h("div", { class: "hint" }, T("ed.planLater")));
         }
         const a = item?.audio;
         if (!a) {
-          f.append(h("div", { class: "hint" }, isNew ? "Die Audio-Wahl ist nach dem Anlegen verfügbar (sie hängt von den Capabilities der aufgelösten Live-Quelle ab)." : "Nur Live-Events mit bekannter Quelle bieten eine Audio-Wahl."));
+          f.append(h("div", { class: "hint" }, isNew ? T("ed.audioAfterCreate") : T("ed.audioLiveOnly")));
           return f;
         }
-        const layoutName = (l) => (typeof l === "string" ? l : l && l.other != null ? `${l.other} Kanäle` : "?");
-        f.append(...field(`Audio von ${a.source}`, bindSelect(d, "audioCap", [["", "Auto (Quell-Default)"], ...(a.capabilities || []).map((c) => [c.id, `${c.id} (${layoutName(c.layout)})${c.isDefault ? " [Default]" : ""}`])])));
+        const layoutName = (l) => (typeof l === "string" ? l : l && l.other != null ? T("ed.channelsN", { n: l.other }) : "?");
+        f.append(...field(T("ed.audioFrom", { source: a.source }), bindSelect(d, "audioCap", [["", T("ed.audioAuto")], ...(a.capabilities || []).map((c) => [c.id, `${c.id} (${layoutName(c.layout)})${c.isDefault ? T("ed.default") : ""}`])])));
         const res = a.resolution || {};
-        f.append(h("div", { class: "hint" }, `Aktuelle Wahl: ${res.chosen || "—"} (${res.via || "none"})`, ...(res.warnings || []).map((w) => h("div", { style: "color:var(--warn)" }, `⚠ ${w}`))));
+        f.append(h("div", { class: "hint" }, T("ed.currentChoice", { chosen: res.chosen || "—", via: res.via || "none" }), ...(res.warnings || []).map((w) => h("div", { style: "color:var(--warn)" }, `⚠ ${w}`))));
         return f;
       };
 
@@ -999,17 +1551,17 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         const list = h("div", { class: "kid-list" });
         kids.forEach((k, i) => list.append(h("div", { class: `it${i === kidIdx ? " act" : ""}`, onclick: () => { kidIdx = i; ctx.redraw(); } },
           CHILD_ICON[k.type] || "•", h("span", {}, k.templateId || k.target || k.url || k.type),
-          h("span", { class: "x", title: "Child Event löschen", onclick: (e) => { e.stopPropagation(); kids.splice(i, 1); kidIdx = Math.min(kidIdx, kids.length - 1); ctx.redraw(); } }, "✕"))));
-        list.append(h("div", { class: "it", style: "color:var(--acc)", onclick: () => { kids.push(newKid(kids.length + 1)); kidIdx = kids.length - 1; ctx.redraw(); } }, "＋ Child Event"));
-        const box = h("div", { class: "kid-edit" }, list, kids.length ? kidForm(kids[kidIdx], ctx) : h("div", { class: "empty" }, "Child Events laufen parallel zum Event: Grafik ein-/ausblenden, Node-Befehle, Webhooks, Audio/Voiceover, Channel-Trigger."));
+          h("span", { class: "x", title: T("ed.deleteKid"), onclick: (e) => { e.stopPropagation(); kids.splice(i, 1); kidIdx = Math.min(kidIdx, kids.length - 1); ctx.redraw(); } }, "✕"))));
+        list.append(h("div", { class: "it", style: "color:var(--acc)", onclick: () => { kids.push(newKid(kids.length + 1)); kidIdx = kids.length - 1; ctx.redraw(); } }, T("ed.addKid")));
+        const box = h("div", { class: "kid-edit" }, list, kids.length ? kidForm(kids[kidIdx], ctx) : h("div", { class: "empty" }, T("ed.kidsEmpty")));
         return box;
       };
 
       const kidForm = (k, ctx) => {
         const f = h("div", { class: "form" });
         const rt = item && childRuntime.find((x) => x.itemId === item.id && x.id === k.id);
-        if (rt) f.append(h("div", { class: "hint" }, `Laufzeit: ${rt.state}${rt.error ? ` — ${rt.error}` : ""}${rt.attempt > 1 ? ` (Versuch ${rt.attempt})` : ""}`));
-        f.append(...field("Typ", bindSelect(k, "type", CHILD_TYPES, ctx.redraw)));
+        if (rt) f.append(h("div", { class: "hint" }, T("ed.runtime", { state: rt.state, error: rt.error ? ` — ${rt.error}` : "", attempt: rt.attempt > 1 ? T("ed.attempt", { n: rt.attempt }) : "" })));
+        f.append(...field(T("ed.type"), bindSelect(k, "type", CHILD_TYPES, ctx.redraw)));
         const t = k.type;
         // Parameter/Daten als JSON-Text, beim Speichern geparst
         const jsonField = (label, key, ph) => {
@@ -1018,18 +1570,18 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           return field(label, ta);
         };
         if (["GRAPHIC", "LOGO", "CHANNEL_BRANDING"].includes(t)) {
-          f.append(...field("Template-ID", bindText(k, "templateId")));
-          f.append(...jsonField("Daten (JSON)", "data", '{"name":"…"}'));
+          f.append(...field(T("ed.templateId"), bindText(k, "templateId")));
+          f.append(...jsonField(T("ed.dataJson"), "data", '{"name":"…"}'));
         } else if (["NODE_COMMAND", "TRIGGER", "AUDIO", "VOICEOVER"].includes(t)) {
-          const lbl = bindText(k, "target", { list: "pa-nodes", placeholder: "Node-Label" });
-          f.append(...field("Ziel-Node", lbl, h("datalist", { id: "pa-nodes" }, ...availableNodes.map((n) => h("option", { value: n })))));
-          f.append(...field("Methode", bindText(k, "method")));
-          f.append(...jsonField("Parameter (JSON)", "params"));
-          f.append(...field("Stopp-Methode", bindText(k, "stopMethod", { placeholder: "optional, beim Ende" })));
-          f.append(...jsonField("Stopp-Parameter", "stopParams"));
+          const lbl = bindText(k, "target", { list: "pa-nodes", placeholder: T("ed.nodeLabelPh") });
+          f.append(...field(T("ed.targetNode"), lbl, h("datalist", { id: "pa-nodes" }, ...availableNodes.map((n) => h("option", { value: n })))));
+          f.append(...field(T("ed.method"), bindText(k, "method")));
+          f.append(...jsonField(T("ed.paramsJson"), "params"));
+          f.append(...field(T("ed.stopMethod"), bindText(k, "stopMethod", { placeholder: T("ed.stopMethodPh") })));
+          f.append(...jsonField(T("ed.stopParams"), "stopParams"));
         } else if (t === "WEBHOOK") {
           f.append(...field("URL", bindText(k, "url", { placeholder: "https://…" })));
-          f.append(...jsonField("Body (JSON)", "params"));
+          f.append(...jsonField(T("ed.bodyJson"), "params"));
         } else if (t === "CHANNEL_TRIGGER") {
           const p = (k.params = k.params && typeof k.params === "object" ? k.params : {});
           p.target = p.target || {};
@@ -1041,28 +1593,28 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
             k.params = o;
           };
           apply();
-          f.append(...field("Event", bindSelect(state, "event", TRIGGER_EVENTS.map((e) => [e, e]), () => { apply(); ctx.redraw(); })));
-          f.append(...field("Ziel", bindSelect(state, "kind", [["group", "Gruppe"], ["channel", "Channel"], ["all", "Alle erlaubten"]], () => { apply(); ctx.redraw(); })));
-          if (state.kind !== "all") f.append(...field("Name", h("input", { type: "text", value: state.name, oninput: (e) => { state.name = e.target.value; apply(); } })));
-          if (state.event === "JUMP") f.append(...field("Item-ID", h("input", { type: "text", value: state.itemId, oninput: (e) => { state.itemId = e.target.value; apply(); } })));
+          f.append(...field(T("ed.event"), bindSelect(state, "event", TRIGGER_EVENTS.map((e) => [e, e]), () => { apply(); ctx.redraw(); })));
+          f.append(...field(T("ed.target"), bindSelect(state, "kind", [["group", T("tr.group")], ["channel", T("tr.channel")], ["all", T("tr.all")]], () => { apply(); ctx.redraw(); })));
+          if (state.kind !== "all") f.append(...field(T("ed.name"), h("input", { type: "text", value: state.name, oninput: (e) => { state.name = e.target.value; apply(); } })));
+          if (state.event === "JUMP") f.append(...field(T("ed.itemId"), h("input", { type: "text", value: state.itemId, oninput: (e) => { state.itemId = e.target.value; apply(); } })));
         }
-        f.append(h("div", { class: "hint", style: "border-top:1px solid var(--bd);padding-top:6px" }, "Timing"));
-        f.append(...field("Modus", bindSelect(k, "timing", TIMINGS, ctx.redraw)));
+        f.append(h("div", { class: "hint", style: "border-top:1px solid var(--bd);padding-top:6px" }, T("ed.timingHdr")));
+        f.append(...field(T("ed.mode"), bindSelect(k, "timing", TIMINGS, ctx.redraw)));
         if (k.timing === "ABSOLUTE") {
-          const at = h("input", { type: "text", placeholder: "HH:MM:SS oder JJJJ-MM-TT HH:MM:SS (lokal)", value: k.atUtc ? new Date(k.atUtc).toLocaleString("sv-SE") : "", oninput: (e) => { k._atLocal = e.target.value; } });
-          f.append(...field("Uhrzeit", at));
+          const at = h("input", { type: "text", placeholder: T("ed.startPh"), value: k.atUtc ? new Date(k.atUtc).toLocaleString("sv-SE") : "", oninput: (e) => { k._atLocal = e.target.value; } });
+          f.append(...field(T("ed.clock"), at));
         } else if (k.timing !== "FULL_PRIMARY") {
-          f.append(...field(k.timing === "RELATIVE_TO_END" ? "Vor Ende (ms)" : "Delay (ms)", bindNum(k, "delayMs")));
+          f.append(...field(k.timing === "RELATIVE_TO_END" ? T("ed.beforeEnd") : T("ed.delay"), bindNum(k, "delayMs")));
         }
-        if (k.timing !== "FULL_PRIMARY") f.append(...field("Dauer (ms)", bindNum(k, "durationMs", { title: "0 = bis zum Ende des Primary" })));
-        f.append(h("div", { class: "hint", style: "border-top:1px solid var(--bd);padding-top:6px" }, "Bei Fehlern"));
-        f.append(...field("Richtlinie", bindSelect(k, "failurePolicy", FAIL_POLICIES, ctx.redraw)));
+        if (k.timing !== "FULL_PRIMARY") f.append(...field(T("ed.durationMs"), bindNum(k, "durationMs", { title: T("ed.zeroUntilEnd") })));
+        f.append(h("div", { class: "hint", style: "border-top:1px solid var(--bd);padding-top:6px" }, T("ed.onErrors")));
+        f.append(...field(T("ed.policy"), bindSelect(k, "failurePolicy", FAIL_POLICIES, ctx.redraw)));
         if (k.failurePolicy === "RETRY") {
-          f.append(...field("Wiederholungen", bindNum(k, "retryCount")));
-          f.append(...field("Pause (ms)", bindNum(k, "retryDelayMs")));
+          f.append(...field(T("ed.retries"), bindNum(k, "retryCount")));
+          f.append(...field(T("ed.pause"), bindNum(k, "retryDelayMs")));
         }
-        if (k.failurePolicy === "FALLBACK") f.append(...field("Ersatz-Ziel", bindText(k, "fallbackTarget", { placeholder: "Node-Label" })));
-        f.append(...field("Pflicht", h("input", { type: "checkbox", checked: !!k.required, onchange: (e) => { k.required = e.target.checked; } }), h("span", { style: "color:var(--mut)" }, "nur sinnvoll mit „Primary blockieren“")));
+        if (k.failurePolicy === "FALLBACK") f.append(...field(T("ed.fallbackTarget"), bindText(k, "fallbackTarget", { placeholder: T("ed.nodeLabelPh") })));
+        f.append(...field(T("ed.required"), h("input", { type: "checkbox", checked: !!k.required, onchange: (e) => { k.required = e.target.checked; } }), h("span", { style: "color:var(--mut)" }, T("ed.requiredHint"))));
         return f;
       };
 
@@ -1074,14 +1626,14 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           if (txt !== undefined) {
             if (txt.trim() === "") delete o[key];
             else {
-              try { o[key] = JSON.parse(txt); } catch { throw new Error(`Child „${o.id}“: ${key} ist kein gültiges JSON`); }
+              try { o[key] = JSON.parse(txt); } catch { throw new Error(T("ed.badJson", { id: o.id, key })); }
             }
           }
           delete o[`_${key}Text`];
         }
         if (o._atLocal !== undefined) {
           const iso = parseStartInput(o._atLocal);
-          if (!iso) throw new Error(`Child „${o.id}“: Uhrzeit ungültig`);
+          if (!iso) throw new Error(T("ed.badTime", { id: o.id }));
           o.atUtc = iso;
         }
         delete o._atLocal;
@@ -1090,10 +1642,10 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
 
       const buildPatch = () => {
         const p = { label: d.label.trim(), note: d.note, icon: d.icon.trim(), color: d.color, startType: d.startType, transition: d.transition };
-        if (!p.label) throw new Error("Titel fehlt");
+        if (!p.label) throw new Error(T("ed.titleMissing"));
         if (d.startType === "fixtime") {
           const iso = parseStartInput(d.startLocal);
-          if (!iso) throw new Error("Startzeit ungültig (z. B. 14:30:00 oder 2026-10-03 06:00:00)");
+          if (!iso) throw new Error(T("ed.badStart"));
           p.startAt = iso;
         } else p.startAt = "";
         if (d.transition && d.transition !== "cut" && String(d.rateFrames).trim() !== "") p.transitionRateFrames = Number(d.rateFrames);
@@ -1123,18 +1675,18 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         let method = "append";
         switch (d.kind) {
           case "pattern": body.pattern = d.pattern; body.toneFrequency = 0; body.durationMs = d.durationMs || 5000; break;
-          case "file": if (!d.file) return "Datei wählen"; body.file = d.file; break;
-          case "image": if (!d.file) return "Bilddatei wählen"; body.file = d.file; body.eventType = "image"; body.durationMs = d.durationMs || 5000; break;
-          case "live": if (!d.senderId) return "Live-Quelle wählen"; body.senderId = d.senderId; body.durationMs = d.durationMs || 5000; break;
+          case "file": if (!d.file) return T("ed.pickFile"); body.file = d.file; break;
+          case "image": if (!d.file) return T("ed.pickImage"); body.file = d.file; body.eventType = "image"; body.durationMs = d.durationMs || 5000; break;
+          case "live": if (!d.senderId) return T("ed.pickLive"); body.senderId = d.senderId; body.durationMs = d.durationMs || 5000; break;
           case "liveselect":
-            if (splitTags(d.tags).length === 0) return "Live nach Tags braucht mindestens einen Pflicht-Tag";
+            if (splitTags(d.tags).length === 0) return T("ed.needTag");
             body.sourceSelectorJson = JSON.stringify({ required: splitTags(d.tags), preferred: splitTags(d.pref) });
             body.durationMs = d.durationMs || 5000;
             break;
           case "hold": body.eventType = "hold"; break;
-          case "jump": if (!d.jumpTarget) return "Sprungziel wählen"; body.eventType = "jump"; body.jumpTarget = d.jumpTarget; break;
+          case "jump": if (!d.jumpTarget) return T("ed.pickJump"); body.eventType = "jump"; body.jumpTarget = d.jumpTarget; break;
           case "asset":
-            if (!d.assetId.trim()) return "Asset-ID fehlt";
+            if (!d.assetId.trim()) return T("ed.assetMissing");
             method = "appendAsset";
             Object.assign(body, { assetJson: JSON.stringify({ assetId: d.assetId.trim() }), onMissing: d.onMissing, fallbackFile: d.onMissing === "FALLBACK" ? d.fallbackFile.trim() : "", startType: "", durationMs: 0 });
             break;
@@ -1144,9 +1696,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       };
 
       openModal({
-        title: isNew ? "Neues Event" : `Event bearbeiten — ${item.label}`,
-        tabs: [["content", "Inhalt"], ["timing", "Timing"], ["audio", "Audio"], ["kids", `Child Events (${kids.length})`]],
-        saveLabel: isNew ? "Anlegen" : "Speichern",
+        title: isNew ? T("ed.new") : T("ed.edit", { label: item.label }),
+        tabs: [["content", T("ed.tab.content")], ["timing", T("ed.tab.timing")], ["audio", T("ed.tab.audio")], ["kids", T("ed.tab.kids", { n: kids.length })]],
+        saveLabel: isNew ? T("ed.create") : T("save"),
         render: (tab, ctx) => (tab === "content" ? renderContent(ctx) : tab === "timing" ? renderTiming() : tab === "audio" ? renderAudio() : renderKids(ctx)),
         onSave: async () => {
           let patch;
@@ -1160,7 +1712,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
             if (!created || list.length <= before) return null;
             delete patch.audio;
             const err2 = await tryCall("updateItem", { itemId: created.id, patchJson: JSON.stringify(patch) });
-            return err2 ? `Event angelegt, aber Eigenschaften nicht übernommen: ${err2}` : null;
+            return err2 ? T("ed.createdNoProps", { err: err2 }) : null;
           }
           if (!onAir) {
             if (mediaSig(d) !== origSig) patch.media = mediaPatch();
@@ -1187,13 +1739,13 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         listEl2.replaceChildren(...(files.length ? files.map((f) => h("div", {
           class: `it${picked.has(f) ? " chk" : ""}`,
           onclick: () => { if (picked.has(f)) picked.delete(f); else picked.add(f); draw(); },
-        }, picked.has(f) ? "☑" : "☐", f)) : [h("div", { class: "empty" }, "Keine Dateien in der Medienbibliothek des Ziel-Players.")]));
+        }, picked.has(f) ? "☑" : "☐", f)) : [h("div", { class: "empty" }, T("pick.none"))]));
       };
       draw();
       openModal({
-        title: "Medien hinzufügen",
-        saveLabel: "Hinzufügen",
-        render: () => h("div", {}, h("input", { type: "search", placeholder: "Suchen …", style: "width:100%;margin-bottom:6px", oninput: (e) => { q = e.target.value.toLowerCase(); draw(); } }), listEl2),
+        title: T("pick.title"),
+        saveLabel: T("pick.add"),
+        render: () => h("div", {}, h("input", { type: "search", placeholder: T("search"), style: "width:100%;margin-bottom:6px", oninput: (e) => { q = e.target.value.toLowerCase(); draw(); } }), listEl2),
         onSave: async () => {
           for (const f of [...picked]) {
             const err = await tryCall("append", { label: f.replace(/\.[^.]+$/, ""), file: f });
@@ -1211,7 +1763,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       for (const [id, b] of cartBtns) if (!ids.has(id)) { b.remove(); cartBtns.delete(id); }
       const active = !!activeCartId;
       cartBanner.classList.toggle("show", active);
-      if (active) cartBannerLabel.textContent = `CART ON AIR: ${assets.find((a) => a.id === activeCartId)?.label || activeCartId}`;
+      if (active) cartBannerLabel.textContent = T("cart.onAir", { label: assets.find((a) => a.id === activeCartId)?.label || activeCartId });
       assets.forEach((a) => {
         let b = cartBtns.get(a.id);
         if (!b) {
@@ -1224,7 +1776,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         b.children[1].textContent = a.label;
         b.style.background = a.color || "";
         b.style.color = a.color ? "#fff" : "";
-        b.title = `${a.pattern || ""}${a.durationMs > 0 ? ` · ${a.durationMs} ms` : " · manuell (RETURN)"}`;
+        b.title = `${a.pattern || ""}${a.durationMs > 0 ? ` · ${a.durationMs} ms` : T("cart.manual")}`;
         b.disabled = active;
         b.classList.toggle("firing", a.id === activeCartId);
       });
@@ -1240,10 +1792,10 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         const mk = (r, isNew) => {
           const color = h("input", { type: "color", value: r.color || "#4a90d9", oninput: (e) => { r.color = e.target.value; } });
           const row = h("div", { class: "row", style: "margin-bottom:6px" },
-            bindText(r, "icon", { placeholder: "Icon", style: "width:54px" }), color,
-            bindText(r, "label", { placeholder: "Titel", style: "width:150px" }),
+            bindText(r, "icon", { placeholder: T("cart.iconPh"), style: "width:54px" }), color,
+            bindText(r, "label", { placeholder: T("cart.titlePh"), style: "width:150px" }),
             bindSelect(r, "pattern", PATTERNS.map((p) => [p, p])),
-            bindNum(r, "durationMs", { style: "width:90px", title: "ms, 0 = manuell (RETURN)" }),
+            bindNum(r, "durationMs", { style: "width:90px", title: T("cart.msTitle") }),
             isNew
               ? h("button", { class: "primary", onclick: async () => {
                   const err = await tryCall("cart.define", { label: r.label || "Cart", pattern: r.pattern, toneFrequency: 0, durationMs: r.durationMs });
@@ -1253,14 +1805,14 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
                   if (last && (r.icon || r.color)) await tryCall("cart.update", { assetId: last.id, patchJson: patch(r) });
                   assets = (await getParam("assets")) || [];
                   list = rows(); fresh = { label: "", pattern: "smpte", durationMs: 0, icon: "", color: "" }; draw(); renderCarts();
-                } }, "＋ Anlegen")
+                } }, T("cart.create"))
               : [h("button", { onclick: async () => {
                   const err = await tryCall("cart.update", { assetId: r.id, patchJson: patch(r) });
-                  showBanner(err || `„${r.label}“ gespeichert`, !err);
+                  showBanner(err || T("cart.saved", { label: r.label }), !err);
                   assets = (await getParam("assets")) || assets; renderCarts();
-                } }, "Speichern"),
+                } }, T("save")),
                 h("button", { class: "danger", onclick: async () => {
-                  if (!(await confirmDialog(`Cart „${r.label}“ wirklich entfernen?`, "Entfernen"))) return;
+                  if (!(await confirmDialog(T("cart.confirmRemove", { label: r.label }), T("remove")))) return;
                   const err = await tryCall("cart.remove", { assetId: r.id });
                   if (err) return showBanner(err);
                   assets = (await getParam("assets")) || []; list = rows(); draw(); renderCarts();
@@ -1268,17 +1820,17 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           return row;
         };
         box.replaceChildren(
-          ...(list.length ? list.map((r) => mk(r, false)) : [h("div", { class: "empty" }, "Noch keine Carts (Blackclip, Standby, …).")]),
-          h("div", { style: "border-top:1px solid var(--bd);margin:8px 0;padding-top:8px;color:var(--mut)" }, "Neuer Cart"),
+          ...(list.length ? list.map((r) => mk(r, false)) : [h("div", { class: "empty" }, T("cart.none"))]),
+          h("div", { style: "border-top:1px solid var(--bd);margin:8px 0;padding-top:8px;color:var(--mut)" }, T("cart.new")),
           mk(fresh, true));
       };
       draw();
-      openModal({ title: "Assets / Carts verwalten", render: () => box });
+      openModal({ title: T("cart.manageTitle"), render: () => box });
     }
 
     // ---- Poll ------------------------------------------------------------
     const poll = async () => {
-      clockEl.textContent = new Date().toLocaleTimeString("de-DE");
+      clockEl.textContent = new Date().toLocaleTimeString(LOCALE);
       if (dragging) return;
       const names = ["items", "currentItemId", "cuedItemId", "mode", "connected", "playheadPositionMs", "currentDurationMs", "assets", "activeCartId",
         "availableNodes", "targetPlayerALabel", "targetPlayerBLabel", "targetMixerLabel", "targetGraphicsLabel", "targetAudioMixerLabel", "liveChannel", "mediaLibrary", "audioPlans", "audioGroups", "audioMappings",
@@ -1324,7 +1876,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (upcoming.length) {
         const n = upcoming[0];
         const hh = Math.floor(n.remain / 3600), mm = Math.floor((n.remain % 3600) / 60), ss = n.remain % 60;
-        nextFixEl.textContent = `⏰ ${n.hms} „${n.label}“ in ${hh > 0 ? `${hh}:${String(mm).padStart(2, "0")}` : mm}:${String(ss).padStart(2, "0")}`;
+        nextFixEl.textContent = T("fixCountdown", { hms: n.hms, label: n.label, t: `${hh > 0 ? `${hh}:${String(mm).padStart(2, "0")}` : mm}:${String(ss).padStart(2, "0")}` });
         nextFixEl.style.display = "";
       } else nextFixEl.style.display = "none";
 
@@ -1333,7 +1885,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       timeByIndex = new Map(timeline.map((e) => [e.index, e]));
       planById = new Map(((v.schedule && v.schedule.entries) || []).map((e) => [e.id, e]));
       const nw = [...planById.values()].filter((e) => e.warnings && e.warnings.length).length;
-      planWarnEl.textContent = `⚠ ${nw} Plan-Warnung${nw === 1 ? "" : "en"} (Überlappung, Lücke oder unbestimmter Start — Details am ⚠ in der Zeitspalte)`;
+      planWarnEl.textContent = nw === 1 ? T("planWarn.one") : T("planWarn.many", { n: nw });
       planWarnEl.style.display = nw ? "" : "none";
 
       // Kopf / Steuerung
@@ -1341,10 +1893,10 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       modeChip.textContent = onAir ? "ON AIR" : "STANDBY";
       modeChip.className = `chip${onAir ? " onair" : ""}`;
       liveCh = v.liveChannel === "b" ? "b" : "a";
-      connectedChip.textContent = v.connected ? `verbunden (Kanal ${v.liveChannel === "b" ? "B" : "A"} live)` : "nicht verbunden";
+      connectedChip.textContent = v.connected ? T("connected", { ch: v.liveChannel === "b" ? "B" : "A" }) : T("notConnected");
       connectedChip.className = `chip${v.connected ? " ok" : " err"}`;
       const ptxt = v.persistence || "";
-      persistChip.textContent = v.channelName ? `Channel: ${v.channelName}` : "kein Channel";
+      persistChip.textContent = v.channelName ? T("channelLabel", { name: v.channelName }) : T("noChannel");
       persistChip.title = ptxt;
       persistChip.className = `chip${/fehlgeschlagen|Konflikt|nicht lesbar|nicht serialisierbar/.test(ptxt) ? " err" : v.channelName ? " blue" : ""}`;
       takeBtn.disabled = !cuedItemId;

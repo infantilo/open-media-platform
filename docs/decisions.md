@@ -30370,3 +30370,15 @@ Editor, Dialoge, `confirm`/`prompt`/`alert`). **Nächster Block:**
 zusammengesetzte Strings und Tabellenköpfe → eigener Schritt), danach
 Audio-Mischer, Scope (Backend-Urteile!), Audio-Monitor, MXF-Player,
 Multiviewer, OGraf, Media-Library, WebRTC-Gateway, übrige Shell-Views.
+
+**Nachtrag (2026-10-07, Teil 4): Mehrsprachigkeit — Playout-Automation.**
+`omp-playout-automation`-Bundle komplett über `T()` (≈265 Texte: Rundown-
+Tabelle und Spaltenwahl, Event-Editor mit allen Reitern, Child Events,
+Trigger, Carts, Medienauswahl, Banner/Bestätigungen). Zeit-/Datumsformat
+über `LOCALE` (de-DE/en-GB). Bewusst unverändert: Texte, die der Node-
+Backend-Code liefert (z. B. `persistence`-Statustext, gegen den eine
+deutsche Regex den Fehler-Chip steuert; Plan-Warnungen aus `schedule`) —
+die erscheinen weiter deutsch, bis das Backend Codes statt Texte liefert.
+Live geprüft (EN: „New event“-Dialog, Kopfzeile, Abschnitte).
+**Offen:** Audio-Mischer, Scope, Audio-Monitor, MXF-Player(-direct),
+Multiviewer(-custom), OGraf, Media-Library, WebRTC-Gateway; Shell-Views.
