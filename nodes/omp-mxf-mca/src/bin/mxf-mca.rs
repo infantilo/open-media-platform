@@ -12,8 +12,21 @@ fn main() {
                 std::process::exit(1);
             }
         },
+        [_, cmd, src, dst, plan] if cmd == "inject" => {
+            let run = || -> Result<_, Box<dyn std::error::Error>> {
+                let plan = omp_mxf_mca::inject::Plan::from_json(&std::fs::read_to_string(plan)?)?;
+                Ok(omp_mxf_mca::inject::inject(Path::new(src), Path::new(dst), &plan)?)
+            };
+            match run() {
+                Ok(r) => println!("{r:?}"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+        }
         _ => {
-            eprintln!("Aufruf: mxf-mca dump <datei.mxf>");
+            eprintln!("Aufruf: mxf-mca dump <datei.mxf> | mxf-mca inject <quelle.mxf> <ziel.mxf> <plan.json>");
             std::process::exit(2);
         }
     }

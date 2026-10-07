@@ -1,7 +1,7 @@
 //! Datenmodell der MCA-Labels (ST 377-4 §5/§6) und die aufgelöste Sicht
 //! (Vorrangregeln §5.1.1.2 / §5.1.2.2 / §5.1.3.2).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::keys::{Ul, Uuid};
 use crate::vocab::{self, Facet};
@@ -42,8 +42,8 @@ impl LabelKind {
 }
 
 /// Die optionalen Text-Items eines Labels (alle in ST 377-4 Tab. 3).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct McaItems {
     pub spoken_language: Option<String>,
     pub title: Option<String>,

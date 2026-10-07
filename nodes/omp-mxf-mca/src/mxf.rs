@@ -136,9 +136,15 @@ impl PartitionPack {
         v
     }
 
-    /// Gesamte serialisierte Länge (Key + BER-Länge + Wert).
+    /// Serialisieren (Key + BER-Länge + Wert) mit minimaler BER-Länge.
     pub fn encode(&self) -> Vec<u8> {
-        klv::write_klv(&self.key(), &self.value(), 0)
+        self.encode_with(0)
+    }
+
+    /// Wie `encode`, mit mindestens `ber_bytes` Längen-Bytes (z. B. um die
+    /// Länge eines vorhandenen Packs zu erhalten, wenn der Encoder 4-Byte-BER nutzte).
+    pub fn encode_with(&self, ber_bytes: usize) -> Vec<u8> {
+        klv::write_klv(&self.key(), &self.value(), ber_bytes)
     }
 }
 

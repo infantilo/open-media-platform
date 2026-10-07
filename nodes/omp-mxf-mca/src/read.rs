@@ -111,43 +111,38 @@ fn parse_label(set: &RawSet, map: &HashMap<u16, Item>) -> Option<McaLabel> {
     Some(l)
 }
 
+/// Die Audio-Descriptoren des (ersten) Source Package, das solche enthält,
+/// in Dateireihenfolge (MultipleDescriptor-Reihenfolge bzw. der einzelne Descriptor).
+pub fn sound_descriptors(hm: &HeaderMetadata) -> Vec<&RawSet> {
+    for pkg in hm.sets().filter(|s| s.kind() == Some(keys::SET_SOURCE_PACKAGE)) {
+        let Some(desc) = pkg.get(keys::TAG_PACKAGE_DESCRIPTOR).and_then(uuid16).and_then(|u| hm.find_by_uid(&u)) else { continue };
+        let leaves: Vec<&RawSet> = if desc.kind() == Some(keys::SET_MULTIPLE_DESCRIPTOR) {
+            desc.get(keys::TAG_MULTI_SUBDESCRIPTORS).map(batch16).unwrap_or_default().iter().filter_map(|u| hm.find_by_uid(u)).collect()
+        } else {
+            vec![desc]
+        };
+        let sound: Vec<&RawSet> = leaves.into_iter().filter(|d| d.kind().is_some_and(keys::is_sound_descriptor)).collect();
+        if !sound.is_empty() {
+            return sound;
+        }
+    }
+    Vec::new()
+}
+
 /// MCA-Labels aus bereits geparsten Header-Metadaten extrahieren.
 pub fn from_header_metadata(hm: &HeaderMetadata) -> McaFile {
     let map = tag_map(&hm.primer);
     let sub_tag = hm.primer.tag_for(&keys::UL_SUBDESCRIPTORS);
     let mut file = McaFile::default();
-    for pkg in hm.sets().filter(|s| s.kind() == Some(keys::SET_SOURCE_PACKAGE)) {
-        let Some(desc) = pkg.get(keys::TAG_PACKAGE_DESCRIPTOR).and_then(uuid16).and_then(|u| hm.find_by_uid(&u)) else { continue };
-        let leaf_sets: Vec<&RawSet> = if desc.kind() == Some(keys::SET_MULTIPLE_DESCRIPTOR) {
-            desc.get(keys::TAG_MULTI_SUBDESCRIPTORS).map(batch16).unwrap_or_default().iter().filter_map(|u| hm.find_by_uid(u)).collect()
-        } else {
-            vec![desc]
-        };
-        let mut descriptors = Vec::new();
-        for d in leaf_sets {
-            if !d.kind().is_some_and(keys::is_sound_descriptor) {
-                continue;
-            }
-            let labels = sub_tag
-                .and_then(|t| d.get(t))
-                .map(batch16)
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|u| hm.find_by_uid(u))
-                .filter_map(|s| parse_label(s, &map))
-                .collect();
-            descriptors.push(SoundDescriptor {
-                instance_uid: d.instance_uid().unwrap_or([0; 16]),
-                set_kind: d.kind().unwrap_or(0),
-                linked_track_id: d.get(keys::TAG_LINKED_TRACK_ID).and_then(u32be),
-                channel_count: d.get(keys::TAG_CHANNEL_COUNT).and_then(u32be).unwrap_or(0),
-                labels,
-            });
-        }
-        if !descriptors.is_empty() {
-            file.descriptors = descriptors;
-            break;
-        }
+    for d in sound_descriptors(hm) {
+        let labels = sub_tag.and_then(|t| d.get(t)).map(batch16).unwrap_or_default().iter().filter_map(|u| hm.find_by_uid(u)).filter_map(|s| parse_label(s, &map)).collect();
+        file.descriptors.push(SoundDescriptor {
+            instance_uid: d.instance_uid().unwrap_or([0; 16]),
+            set_kind: d.kind().unwrap_or(0),
+            linked_track_id: d.get(keys::TAG_LINKED_TRACK_ID).and_then(u32be),
+            channel_count: d.get(keys::TAG_CHANNEL_COUNT).and_then(u32be).unwrap_or(0),
+            labels,
+        });
     }
     file
 }

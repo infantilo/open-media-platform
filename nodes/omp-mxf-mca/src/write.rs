@@ -24,6 +24,15 @@ fn batch16(items: &[[u8; 16]]) -> Vec<u8> {
 /// Ein Label als Local Set kodieren; dynamische Tags werden im Primer ergänzt.
 /// Pflicht-Items nach ST 377-4 Tab. 3: Dictionary ID, Link ID, Tag Symbol.
 pub fn label_to_set(l: &McaLabel, primer: &mut Primer) -> Result<RawSet, MxfError> {
+    let set = label_to_set_inner(l, primer)?;
+    // Local-Set-Items tragen eine 2-Byte-Länge (ST 377-1 §9.3).
+    if let Some((_, v)) = set.items.iter().find(|(_, v)| v.len() > 0xFFFF) {
+        return Err(MxfError::Corrupt(format!("MCA-Item von {} Bytes ist zu lang (max. 65535)", v.len())));
+    }
+    Ok(set)
+}
+
+fn label_to_set_inner(l: &McaLabel, primer: &mut Primer) -> Result<RawSet, MxfError> {
     let mut set = RawSet { key: keys::set_key(l.kind.set_kind()), items: Vec::new() };
     set.items.push((keys::TAG_INSTANCE_UID, l.instance_uid.to_vec()));
     set.items.push((primer.ensure(&keys::UL_DICTIONARY_ID)?, l.dictionary_id.to_vec()));

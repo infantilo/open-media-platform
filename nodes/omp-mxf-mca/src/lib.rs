@@ -1,10 +1,12 @@
 //! MXF Multichannel Audio Labeling Framework (SMPTE ST 377-4) mit dem
 //! kontrollierten Vokabular aus ST 377-41. Siehe docs/ENTWURF-MXF-MCA.md.
 
+pub mod inject;
 pub mod keys;
 pub mod klv;
 pub mod model;
 pub mod mxf;
+pub mod plan_json;
 pub mod read;
 pub mod vocab;
 

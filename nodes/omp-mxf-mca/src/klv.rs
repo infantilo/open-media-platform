@@ -30,7 +30,7 @@ pub fn read_ber(buf: &[u8]) -> Option<(u64, usize)> {
 /// BER-Länge schreiben. `min_bytes` > 0 erzwingt die lange Form mit genau so
 /// vielen Längen-Bytes (z. B. 4 für feste 4-Byte-Längen in Header-Metadaten).
 pub fn write_ber(len: u64, min_bytes: usize) -> Vec<u8> {
-    if min_bytes == 0 && len < 0x80 {
+    if min_bytes <= 1 && len < 0x80 {
         return vec![len as u8];
     }
     let mut n = 1;
