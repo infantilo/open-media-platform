@@ -17,12 +17,13 @@ import "./instances-view.ts";
 import "./alarm-view.ts";
 import "./alert-bar.ts";
 import "./health-view.ts";
+import "./signal-path-view.ts";
 import "./scheduler-view.ts";
 import "./admin-view.ts";
 import { apiFetch, type ConnectionChangeDetail, type ConnectionState, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
 
-type TabId = "flow" | "workflows" | "process" | "assets" | "hosts" | "instances" | "alarms" | "health" | "scheduler" | "admin";
+type TabId = "flow" | "workflows" | "process" | "assets" | "hosts" | "instances" | "alarms" | "health" | "signal-path" | "scheduler" | "admin";
 
 interface TabDef {
   id: TabId;
@@ -54,6 +55,9 @@ const BASE_TABS: TabDef[] = [
   // als das bestehende Statuspanel im Flow-Editor (EIN Node, Nachtrag
   // 214), s. ui/shell/health-view.ts.
   { id: "health", label: "Health", element: "omp-health-view" },
+  // Nutzerauftrag 2026-10-07: Signalweg Quelle → Ziel über die IST-
+  // Verbindungen, reine Anzeige, s. ui/shell/signal-path-view.ts.
+  { id: "signal-path", label: "Signalweg", element: "omp-signal-path-view" },
   // Nachtrag 97 Folgearbeit (2026-07-27): workflow-übergreifende
   // Zeitplan-Übersicht/-Bearbeitung, sichtbar für alle wie der
   // Workflows-Tab selbst — kein eigenes Client-Gating, das zugrunde

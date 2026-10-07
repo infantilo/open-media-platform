@@ -181,6 +181,29 @@ neu; die Instanzen werden erst mit ihrem nächsten Neustart aktuell —
 gezielt über „Veraltete Instanzen jetzt neu starten" im Reiter
 System-Update.
 
+## 3a. Signalweg (Quelle → Ziel nachverfolgen)
+
+Der Tab **Signalweg** beantwortet die Frage „Läuft Quelle X wirklich bei
+Ziel Y an – und wo bricht es?". Er zeigt den **Ist-Zustand** (die aktuell
+aktiven Verbindungen), ändert aber nichts.
+
+1. **Quelle** wählen (ein Ausgang einer Node), **Ziel** wählen (eine Node
+   „jeder Eingang" oder ein bestimmter Eingang).
+2. Optional **über Node**: nur Wege, die durch diese Node laufen.
+3. Darunter erscheint jeder gefundene Weg als Kette aus Karten: Node mit
+   Host und Online-Status, dazwischen die Verbindung mit Format und
+   Transport (z. B. „Video · MXL").
+
+Die Kopfzeile jedes Wegs sagt „in Ordnung", „mit Hinweisen" oder nennt die
+**erste Fehlerstelle** (rot umrandet): Node offline oder abgestürzt,
+Formate passen nicht (z. B. Audio → Video), MXL über Hostgrenzen
+(Gateway nötig). Orange sind Hinweise, z. B. unterschiedliche Transporte.
+
+Grenzen: Innerhalb einer Node wird angenommen, dass jeder Ausgang aus jedem
+Eingang entstehen kann (die tatsächliche Signalführung im Mischer ist nicht
+sichtbar). Es werden höchstens 20 Wege gezeigt, die kürzesten zuerst. Ob
+wirklich Bild/Ton fließt, prüfen die Health- und Scope-Ansichten.
+
 ## 4. Workflows
 
 Der Reiter **Workflows** verwaltet benannte, wiederverwendbare

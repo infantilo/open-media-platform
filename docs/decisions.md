@@ -30291,3 +30291,18 @@ Default-Route (`OMP_LOCAL_NET_IFACE`: leer/auto, Name, off);
 `/api/v1/scheduler/resources` liefert daraus `netLinkMbps` + `live` für den
 lokalen Host. Folge: der lokale Host bekommt jetzt auch einen CPU/RAM-
 Live-Boden im Scheduler wie die Agent-Hosts.
+
+## Nachtrag (2026-10-07): Signalweg-Tab (Admin-Werkzeug, nur Anzeige)
+
+Nutzerauftrag: „Quelle, Destination, Node aussuchen und den gesamten Flow
+sehen" — Entscheidung: Ist-Zustand (aktive IS-05-Kanten aus
+`GET /api/v1/graph`), nur Anzeige. Rein clientseitig (kein neuer
+Endpunkt): `ui/shell/signal-path-logic.ts` (Pfadsuche, einfache Wege, max.
+20/12 Hops, portgenauer Start, Node-intern „jeder Eingang → jeder Ausgang"
+wie `graph.buildNodeSignalGraph`; Diagnose: offline/abgestürzt, Format,
+Transport, MXL über Hostgrenze) + `signal-path-view.ts`; Host/Absturz aus
+`/instances` + `/hosts`. Bewusst nicht enthalten: Bandbreite je Link,
+Bild-/Pegel-Fluss (Health/Scope), Soll-Abgleich zu Workflows, Eingriffe.
+Live geprüft (omp-source → omp-viewer, CDP); Mehr-Hop und Fehlerfälle nur
+per Unit-Test (4 Tests), da keine Test-Node mit Durchleitung billig
+startbar war.
