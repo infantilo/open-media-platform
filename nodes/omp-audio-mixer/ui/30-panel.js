@@ -218,7 +218,15 @@ button{cursor:pointer}
 .modal .box{background:var(--c-surface);border:1px solid var(--c-border);border-radius:10px;padding:18px;max-width:360px}
 .modal .box.wide{max-width:min(96vw,980px);max-height:88vh;overflow:auto}
 .omatrix table{border-collapse:collapse;margin-top:10px}.omatrix th,.omatrix td{padding:4px 8px;text-align:center;border-bottom:1px solid var(--c-border)}.omatrix td.rname{text-align:left;font-weight:600}
-.tog.cell{min-width:36px}.tog.mini{padding:0 6px;min-height:20px}
+.tog.cell{min-width:36px}
+.cellwrap{display:flex;gap:4px;justify-content:center}.opan h4{margin:14px 0 4px}
+.panner{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start;margin-top:6px}
+.ppad{position:relative;width:200px;height:200px;border:1px solid var(--c-border);border-radius:12px;background:radial-gradient(circle at 50% 50%,#ffffff10,transparent 70%);touch-action:none;cursor:crosshair;flex:none}
+.ppad:focus-visible{outline:2px solid var(--c-air)}
+.pcross{position:absolute;background:var(--c-border);opacity:.6}.pcross.h{left:0;right:0;top:50%;height:1px}.pcross.v{top:0;bottom:0;left:50%;width:1px}
+.pspk{position:absolute;transform:translate(-50%,-50%);font-size:11px;color:var(--c-dim);pointer-events:none}
+.ppuck{position:absolute;width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;background:var(--c-air);border:2px solid #fff;box-shadow:0 0 8px #0008;pointer-events:none}
+.pctl{display:flex;flex-direction:column;gap:8px;min-width:220px;flex:1 1 220px}.tog.mini{padding:0 6px;min-height:20px}
 .modal .acts{display:flex;gap:8px;margin-top:14px;justify-content:flex-end}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 .toastbar{padding:6px 12px;color:var(--c-dim);font-size:12px}

@@ -1028,6 +1028,18 @@ PAN, AUX, AUTOMIX, DUCK, AUTOMATION, SZENEN).
   Pre- oder Post-Fader.
 - **SZENEN**: Mix speichern/aktivieren (ohne Aussetzer); Zuordnung
   „Videoquelle → Audio-Szene“ und Presets des ganzen Mixers.
+- **Ausgänge & Routing (Kap. 32)**: Der Knopf **Ausgänge** öffnet einen Dialog. Oben legt man mit Name
+  und Vorlage (Stereo, 5.1, 7.1, Mono, Eigene Kanalzahl) einen neuen Ausgang an — der Gruppen-Tag
+  (`role.<name>`) wird aus dem Namen gebildet. Darunter zeigt die **Matrix** jeden Kanal gegen
+  „Programm“ und alle Ausgänge; ein Klick schaltet den Send an/aus, ein Kanal kann beliebig viele
+  Ausgänge speisen. Automatisch (per Tag) zugeordnete Zellen sind gesperrt. Das ✕ in der Spaltenüberschrift
+  entfernt einen Ausgang.
+- **Surround-Panner (Kap. 32)**: Geht ein Kanal auf einen 5.1- oder 7.1-Ausgang, erscheint neben der
+  aktiven Zelle ein **⌖**-Knopf. Er öffnet den Joystick (vorn oben, hinten unten; Doppelklick oder Pos1 =
+  vorn Mitte; Pfeiltasten feinfühlig, Umschalt = grob) sowie **Center-Anteil** und **LFE-Pegel**
+  (Standard aus). Links/Rechts ist eine Balance des Stereobilds, vorn/hinten verteilt mit konstanter
+  Leistung (bei 7.1 auf Rear und Side). Ohne Eingriff bleibt die frühere Abbildung (L→Front links,
+  R→Front rechts). Der Panner wirkt nur auf Sends zu Surround-Bussen und wird mit Szenen/Presets gesichert.
 - **AFV-Anzeige und Gruppierung (Kap. 31.6)**: Folgt ein Kanal dem Bild, zeigt sein Kanalzug die
   Plakette **AFV ●** (Quelle im Programm, Tor offen) bzw. **AFV ○** (gestrichelt, Tor zu). Die
   Schaltfläche **Nach Quelle** in der Werkzeugleiste gruppiert die Kanäle je Quelle (Sender-Name als
