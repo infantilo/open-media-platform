@@ -216,6 +216,9 @@ button{cursor:pointer}
 /* Dialog + Live-Region */
 .modal{position:fixed;inset:0;background:#000a;display:flex;align-items:center;justify-content:center;z-index:100}
 .modal .box{background:var(--c-surface);border:1px solid var(--c-border);border-radius:10px;padding:18px;max-width:360px}
+.modal .box.wide{max-width:min(96vw,980px);max-height:88vh;overflow:auto}
+.omatrix table{border-collapse:collapse;margin-top:10px}.omatrix th,.omatrix td{padding:4px 8px;text-align:center;border-bottom:1px solid var(--c-border)}.omatrix td.rname{text-align:left;font-weight:600}
+.tog.cell{min-width:36px}.tog.mini{padding:0 6px;min-height:20px}
 .modal .acts{display:flex;gap:8px;margin-top:14px;justify-content:flex-end}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 .toastbar{padding:6px 12px;color:var(--c-dim);font-size:12px}
@@ -318,6 +321,7 @@ class MixerApp {
     this.addBtn = h("button", { class: "tb", type: "button", text: "+ Kanal", onclick: () => this.cmd("addChannel", { label: "" }).then(() => this.poll()) });
     this.sceneSaveBtn = h("button", { class: "tb", type: "button", text: "● Szene speichern", title: "Aktuellen Mix (Fader, Mute, Routing …) als neue Szene speichern", onclick: () => { const n = window.prompt("Name der Szene", ""); if (n && n.trim()) this.cmd("captureScene", { label: n.trim(), includeProcessing: false }).then(() => { this.announce(`Szene ${n.trim()} gespeichert`); this.poll(); }); } });
     this.srcBtn = h("button", { class: "tb", type: "button", "aria-pressed": "false", text: "Nach Quelle", title: "Kanäle je Quelle gruppieren (statt je Mischgruppe)", onclick: () => { this.ui.bySource = !this.ui.bySource; this.srcBtn.setAttribute("aria-pressed", String(this.ui.bySource)); this.saveUi(); this.lastSig = ""; this.renderChannels(); } });
+    this.outBtn = h("button", { class: "tb", type: "button", text: "Ausgänge", title: "Ausgänge anlegen (Stereo, 5.1, 7.1 …) und Kanäle auf beliebig viele Ausgänge routen", onclick: () => { this.outputs = this.outputs || new OutputsDialog(this); this.outputs.open(); } });
     this.groupBtn = h("button", { class: "tb", type: "button", text: "Ausgabegruppen", title: "Pro Ausgabegruppe (Admin → Audio-Ausgabe) einen Kanal anlegen, der automatisch die passende Quelle (Tag role.<Gruppe>) übernimmt", onclick: () => this.syncGroupChannels() });
     this.masterMeter = new Meter();
     this.masterMeter.root.className = "meter mm";
@@ -342,7 +346,7 @@ class MixerApp {
       h("div", { class: "tgrp opt" }, this.faderBtn, this.colSel, this.meterSel),
       this.sceneBar,
       h("span", { class: "spacer" }),
-      master, this.sceneSaveBtn, this.srcBtn, this.groupBtn, this.addBtn);
+      master, this.sceneSaveBtn, this.srcBtn, this.outBtn, this.groupBtn, this.addBtn);
     this.channelsEl = h("section", { class: "channels", "aria-label": "Kanäle" });
     this.centerHost = h("aside", { class: "center", "aria-label": "Center Control" });
     this.live_ = h("div", { class: "sr", role: "status", "aria-live": "polite" });
@@ -476,6 +480,7 @@ class MixerApp {
       this.renderChannels(true);
     } else this.updateChannels();
     this.renderScenes();
+    if (this.outputs && this.outputs.isOpen) this.outputs.render();
     this.updateMasterUi();
     this.center.refresh();
     this.layoutNow();

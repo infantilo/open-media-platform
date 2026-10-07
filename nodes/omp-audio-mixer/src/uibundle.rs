@@ -18,6 +18,8 @@ const BUNDLE: &str = concat!(
     "\n",
     include_str!("../ui/21-center2.js"),
     "\n",
+    include_str!("../ui/22-outputs.js"),
+    "\n",
     include_str!("../ui/30-panel.js"),
 );
 
