@@ -226,6 +226,7 @@ button{cursor:pointer}
 .pcross{position:absolute;background:var(--c-border);opacity:.6}.pcross.h{left:0;right:0;top:50%;height:1px}.pcross.v{top:0;bottom:0;left:50%;width:1px}
 .pspk{position:absolute;transform:translate(-50%,-50%);font-size:11px;color:var(--c-dim);pointer-events:none}
 .ppuck{position:absolute;width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;background:var(--c-air);border:2px solid #fff;box-shadow:0 0 8px #0008;pointer-events:none}
+.panbox{flex:1 1 100%}
 .pctl{display:flex;flex-direction:column;gap:8px;min-width:220px;flex:1 1 220px}.tog.mini{padding:0 6px;min-height:20px}
 .modal .acts{display:flex;gap:8px;margin-top:14px;justify-content:flex-end}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}

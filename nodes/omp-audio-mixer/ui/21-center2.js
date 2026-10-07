@@ -49,13 +49,39 @@ Object.assign(CenterControl.prototype, {
       tgl.addEventListener("click", () => { const s = curSend(); if (s && !s.locked) this.setSend(aux.id, { enabled: !s.enabled }); });
       pre.addEventListener("click", () => { const s = curSend(); if (s && !s.locked) this.setSend(aux.id, { post: false }); });
       post.addEventListener("click", () => { const s = curSend(); if (s && !s.locked) this.setSend(aux.id, { post: true }); });
-      const rowRoot = h("div", { class: "row" }, name, tgl, seg, sl.root, lock);
+      // Surround-Panner (Kap. 32): nur bei Sends auf 5.1-/7.1-Busse, aufklappbar.
+      let panner = null;
+      const panHost = h("div", { class: "panbox" });
+      panHost.hidden = true;
+      const panBtn = h("button", { class: "tog", type: "button", "aria-pressed": "false", text: "Panner ⌖", title: "Surround-Panner (Joystick, Center, LFE)" });
+      panBtn.hidden = true;
+      panBtn.addEventListener("click", () => {
+        const open = panBtn.getAttribute("aria-pressed") !== "true";
+        panBtn.setAttribute("aria-pressed", String(open));
+        panHost.hidden = !open;
+        if (open && !panner) {
+          panner = new PannerWidget({ channels: aux.channels, onChange: (p) => {
+            const c = this.cur();
+            const sd = c?.sends.find((x) => x.auxId === aux.id);
+            if (!sd) return;
+            sd.pan = p;
+            app.sendCh(c.id, "setSendPan", { auxId: aux.id, x: p.x, y: p.y, center: p.center, lfeDb: p.lfeDb }, "pan" + aux.id);
+          } });
+          panHost.append(panner.root);
+        }
+      });
+      const rowRoot = h("div", { class: "row" }, name, tgl, seg, sl.root, lock, panBtn, panHost);
       return {
         root: rowRoot,
         update: (a) => {
           const ch = this.cur();
           const s = ch?.sends.find((x) => x.auxId === aux.id);
           if (!s) return;
+          const surround = (a.channels === 6 || a.channels === 8) && s.enabled;
+          panBtn.hidden = !surround;
+          if (!surround) panHost.hidden = true;
+          else panHost.hidden = panBtn.getAttribute("aria-pressed") !== "true";
+          if (panner && !panHost.hidden && !panner.pad.matches(":active")) panner.setPan(s.pan);
           const exName = a.kind === "n1" && a.exclude ? app.state.channels.find((c) => c.id === a.exclude)?.label : "";
           name.textContent = a.label + (a.kind === "n1" ? ` (N-1${exName ? " ohne " + exName : ""})` : "");
           tgl.setAttribute("aria-pressed", String(s.enabled));
