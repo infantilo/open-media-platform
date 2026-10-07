@@ -30,6 +30,7 @@
 //   (09:00–17:00, Kind aus einer kleinen Auswahl), kein Klick-Zieh-Neu-
 //   Anlegen direkt auf leerer Fläche — reduziert Aufwand deutlich, ohne
 //   Funktion zu verlieren (danach normal ziehbar).
+import { t as tt } from "./i18n.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { showToast } from "../kit/omp-toast.ts";
 import {
@@ -75,8 +76,8 @@ const WEEKDAY_LABELS = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"]; // JS Date.ge
 
 const KIND_LABELS: Record<Schedule["kind"], string> = {
   once: "einmalig",
-  daily: "täglich",
-  weekly: "wöchentlich",
+  daily: tt("sched.0d9d6e"),
+  weekly: tt("sched.b7ca91"),
 };
 
 const POLL_FALLBACK_INTERVAL_MS = 30000;
@@ -302,11 +303,11 @@ class SchedulerView extends HTMLElement {
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        showToast(`Speichern fehlgeschlagen: ${await res.text()}`);
+        showToast(tt("sched.616d9c", { p0: await res.text() }));
         return;
       }
     } catch (err) {
-      showToast(`Speichern fehlgeschlagen: ${err}`);
+      showToast(tt("sched.616d9c", { p0: err }));
       return;
     }
     await this.#poll();
@@ -375,7 +376,7 @@ class SchedulerView extends HTMLElement {
     if (this.#workflows.length === 0) {
       const empty = document.createElement("div");
       empty.style.cssText = "color:var(--omp-text-dim);margin-top:8px;";
-      empty.textContent = "Keine Workflows vorhanden.";
+      empty.textContent = tt("sched.982fb6");
       container.appendChild(empty);
       this.replaceChildren(container);
       return;
@@ -397,14 +398,14 @@ class SchedulerView extends HTMLElement {
     const heading = document.createElement("div");
     heading.className = "omp-h1";
     heading.style.cssText = "margin-right:var(--omp-space-2);";
-    heading.textContent = "Scheduler";
+    heading.textContent = tt("sched.ffaac1");
     toolbar.appendChild(heading);
 
     const modeGroup = document.createElement("div");
     modeGroup.style.cssText = "display:flex;gap:2px;";
     (["day", "week", "month"] as const).forEach((mode) => {
       const btn = document.createElement("button");
-      btn.textContent = mode === "day" ? "Tag" : mode === "week" ? "Woche" : "Monat";
+      btn.textContent = mode === "day" ? tt("sched.c10105") : mode === "week" ? tt("sched.14098f") : tt("sched.1570ac");
       // Aktiver Modus per .omp-btn-primary statt eigener Farb-Inline-
       // Duplikation (Nutzerauftrag 2026-09-02) — der globale
       // button-Reset (design-tokens.css) deckt den Rest bereits ab.
@@ -420,7 +421,7 @@ class SchedulerView extends HTMLElement {
     toolbar.appendChild(prevBtn);
 
     const todayBtn = document.createElement("button");
-    todayBtn.textContent = "Heute";
+    todayBtn.textContent = tt("sched.02afda");
     todayBtn.addEventListener("click", () => {
       this.#anchorDate = startOfDay(new Date());
       this.#render();
@@ -441,8 +442,8 @@ class SchedulerView extends HTMLElement {
     if (this.#viewMode !== "month") {
       const newLbl = document.createElement("label");
       newLbl.style.cssText = "margin-left:auto;display:flex;align-items:center;gap:4px;color:var(--omp-text-dim);";
-      newLbl.title = "Auf eine leere Stelle einer Zeile ziehen, um einen Zeitplan anzulegen";
-      newLbl.append("Neu ziehen als:");
+      newLbl.title = tt("sched.5f42f2");
+      newLbl.append(tt("sched.d050aa"));
       const sel = document.createElement("select");
       (["once", "daily", "weekly"] as const).forEach((k) => {
         const opt = document.createElement("option");
@@ -558,7 +559,7 @@ class SchedulerView extends HTMLElement {
     if (!timeline || !model) return;
     const bottlenecks = findBottlenecks(model, timeline);
     if (bottlenecks.length === 0) return;
-    const laneLabel = (id: string) => (id === AUTO_LANE ? "Auto-Pool" : model.hosts.find((h) => h.id === id)?.label ?? id);
+    const laneLabel = (id: string) => (id === AUTO_LANE ? tt("sched.880a4f") : model.hosts.find((h) => h.id === id)?.label ?? id);
     for (const mw of model.workflows) {
       const lanes = new Set(mw.roles.map((r) => (r.hostId && timeline.has(r.hostId) ? r.hostId : AUTO_LANE)));
       const perSlot = new Map<number, string[]>();
@@ -643,11 +644,11 @@ class SchedulerView extends HTMLElement {
     const title = document.createElement("div");
     title.className = "omp-h1";
     title.style.cssText = "font-size:var(--omp-font-size-md);";
-    title.textContent = this.#preview ? "Ressourcen (Vorschau beim Ziehen)" : "Ressourcen (geplant)";
+    title.textContent = this.#preview ? tt("sched.1dc921") : tt("sched.7ff6ed");
     head.appendChild(title);
     const legend = document.createElement("div");
     legend.style.cssText = "display:flex;gap:8px;align-items:center;font-size:10px;color:var(--omp-text-dim);";
-    for (const [lvl, txt] of [["free", "frei"], ["ok", "ok"], ["warn", "knapp"], ["over", "Engpass"], ["unknown", "Bedarf/Kapazität unbekannt"]] as const) {
+    for (const [lvl, txt] of [["free", "frei"], ["ok", "ok"], ["warn", "knapp"], ["over", tt("sched.f7d87d")], ["unknown", tt("sched.f6db1b")]] as const) {
       const item = document.createElement("span");
       item.style.cssText = "display:inline-flex;align-items:center;gap:3px;";
       const sw = document.createElement("span");
@@ -661,8 +662,8 @@ class SchedulerView extends HTMLElement {
     const hint = document.createElement("div");
     hint.style.cssText = "font-size:10px;color:var(--omp-text-dim);margin-bottom:6px;";
     hint.textContent =
-      "Geplanter Bedarf = gemessenes Profil je Node-Typ (CPU: 95. Perzentil, RAM: Maximum) aller Workflows, die zu diesem Zeitpunkt laufen, " +
-      "gegen die Kapazität des Hosts. Rollen ohne Messprofil sind schraffiert (Bedarf unbekannt, nicht null).";
+      tt("sched.0c6e43") +
+      tt("sched.449b97");
     box.appendChild(hint);
 
     const laneIds = [...model.hosts.map((h) => h.id), AUTO_LANE];
@@ -687,18 +688,18 @@ class SchedulerView extends HTMLElement {
       bh.style.cssText = "display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;margin-bottom:3px;";
       const name = document.createElement("span");
       name.style.cssText = "font-weight:600;";
-      name.textContent = isAuto ? "Ohne Host-Festlegung (Auto-Platzierung)" : host!.label;
+      name.textContent = isAuto ? tt("sched.569499") : host!.label;
       bh.appendChild(name);
       const capTxt = document.createElement("span");
       capTxt.style.cssText = "color:var(--omp-text-dim);font-size:11px;";
       const capParts: string[] = [];
-      if (cap.cpuCores > 0) capParts.push(`${cap.cpuCores} Kerne`);
+      if (cap.cpuCores > 0) capParts.push(tt("sched.446205", { p0: cap.cpuCores }));
       if (cap.memBytes > 0) capParts.push(`${fmtBytes(cap.memBytes)} RAM`);
       if (cap.gpuPercent > 0) capParts.push(`${cap.gpuPercent / 100}× GPU${cap.vramBytes > 0 ? ` (${fmtBytes(cap.vramBytes)} VRAM)` : ""}`);
-      if (cap.netMbps > 0) capParts.push(`Netz ${fmtMbps(cap.netMbps)} je Richtung`);
+      if (cap.netMbps > 0) capParts.push(tt("sched.6a3c1a", { p0: fmtMbps(cap.netMbps) }));
       for (const [k, n] of Object.entries(cap.io)) capParts.push(`${n}× ${k}`);
       capTxt.textContent =
-        (isAuto ? "Summe aller erreichbaren Hosts: " : "") + (capParts.length ? capParts.join(" · ") : "Kapazität unbekannt");
+        (isAuto ? tt("sched.0595be") : "") + (capParts.length ? capParts.join(" · ") : tt("sched.22b4a1"));
       bh.appendChild(capTxt);
       if (host && !host.online && !host.local) {
         const off = document.createElement("span");
@@ -709,9 +710,9 @@ class SchedulerView extends HTMLElement {
       if (host?.live) {
         const live = document.createElement("span");
         live.style.cssText = "font-size:11px;color:var(--omp-text-dim);";
-        live.title = "Momentaufnahme der aktuellen Auslastung (nicht die Planung)";
+        live.title = tt("sched.95c28d");
         live.textContent =
-          `jetzt: CPU ${host.live.cpuPercent.toFixed(0)} % · RAM ${host.live.memPercent.toFixed(0)} %` +
+          tt("sched.ed7157", { p0: host.live.cpuPercent.toFixed(0), p1: host.live.memPercent.toFixed(0) }) +
           (host.live.netPercent !== undefined ? ` · Netz ${host.live.netPercent.toFixed(0)} %` : "") +
           (host.live.gpuPercent !== undefined ? ` · GPU ${host.live.gpuPercent.toFixed(0)} %` : "");
         bh.appendChild(live);
@@ -745,8 +746,8 @@ class SchedulerView extends HTMLElement {
         const freeN = utils.map((u) => u.freeNetMbps).filter((v): v is number => v !== null);
         sum.style.color = "var(--omp-text-dim)";
         sum.textContent =
-          "Kein Engpass. Freie Reserve (bis Grenzwert), Minimum im Ausschnitt: " +
-          [freeC.length ? `${fmtCores(Math.min(...freeC))} Kerne` : "", freeM.length ? `${fmtBytes(Math.min(...freeM))} RAM` : "", freeN.length ? `${fmtMbps(Math.min(...freeN))} Netz` : "", freeG.length ? `${Math.round(Math.min(...freeG))} % GPU` : "", freeV.length ? `${fmtBytes(Math.min(...freeV))} VRAM` : ""].filter(Boolean).join(" · ");
+          tt("sched.92e155") +
+          [freeC.length ? tt("sched.446205", { p0: fmtCores(Math.min(...freeC)) }) : "", freeM.length ? `${fmtBytes(Math.min(...freeM))} RAM` : "", freeN.length ? tt("sched.a161c7", { p0: fmtMbps(Math.min(...freeN)) }) : "", freeG.length ? `${Math.round(Math.min(...freeG))} % GPU` : "", freeV.length ? `${fmtBytes(Math.min(...freeV))} VRAM` : ""].filter(Boolean).join(" · ");
       } else {
         sum.style.color = "var(--omp-text-dim)";
         sum.textContent = "Im Ausschnitt nichts eingeplant — komplett frei.";
@@ -758,7 +759,7 @@ class SchedulerView extends HTMLElement {
       if (cap.memBytes > 0 || slots.some((s2) => s2.rssBytes > 0)) rows.push({ label: "RAM", kind: "mem" });
       if (cap.gpuPercent > 0 || slots.some((s2) => s2.gpuPercent > 0)) rows.push({ label: "GPU", kind: "gpu" });
       if (cap.vramBytes > 0 || slots.some((s2) => s2.gpuMemBytes > 0)) rows.push({ label: "VRAM", kind: "vram" });
-      if (cap.netMbps > 0 || slots.some((s2) => s2.netRxMbps > 0 || s2.netTxMbps > 0)) rows.push({ label: "Netzwerk", kind: "net" });
+      if (cap.netMbps > 0 || slots.some((s2) => s2.netRxMbps > 0 || s2.netTxMbps > 0)) rows.push({ label: tt("sched.a98328"), kind: "net" });
       const ioKeys = new Set<string>([...Object.keys(cap.io), ...slots.flatMap((s2) => Object.keys(s2.io))]);
       for (const k of [...ioKeys].sort()) rows.push({ label: k, kind: "io", key: k });
 
@@ -823,34 +824,34 @@ class SchedulerView extends HTMLElement {
         pct = u.cpuPercent;
         thr = model.thresholds.cpu;
         level = u.cpuLevel;
-        tip = `${when} · CPU ${fmtCores(slot.cpuCores)} von ${cap.cpuCores || "?"} Kernen` +
+        tip = tt("sched.cddb50", { p0: when, p1: fmtCores(slot.cpuCores), p2: cap.cpuCores || "?" }) +
           (pct !== null ? ` (${pct.toFixed(0)} %)` : "") +
-          (u.freeCores !== null ? ` · frei bis Grenzwert: ${fmtCores(u.freeCores)} Kerne` : "");
+          (u.freeCores !== null ? tt("sched.c3b17e", { p0: fmtCores(u.freeCores) }) : "");
       } else if (row.kind === "mem") {
         pct = u.memPercent;
         thr = model.thresholds.mem;
         level = u.memLevel;
-        tip = `${when} · RAM ${fmtBytes(slot.rssBytes)} von ${cap.memBytes ? fmtBytes(cap.memBytes) : "?"}` +
+        tip = tt("sched.21a957", { p0: when, p1: fmtBytes(slot.rssBytes), p2: cap.memBytes ? fmtBytes(cap.memBytes) : "?" }) +
           (pct !== null ? ` (${pct.toFixed(0)} %)` : "") +
-          (u.freeMemBytes !== null ? ` · frei bis Grenzwert: ${fmtBytes(u.freeMemBytes)}` : "");
+          (u.freeMemBytes !== null ? tt("sched.c19736", { p0: fmtBytes(u.freeMemBytes) }) : "");
       } else if (row.kind === "gpu") {
         pct = u.gpuPercent;
         thr = model.thresholds.gpu ?? 85;
         level = u.gpuLevel;
         if (level === "free" && slot.gpuPercent > 0) level = "unknown";
-        tip = `${when} · GPU ${Math.round(slot.gpuPercent)} % von ${cap.gpuPercent > 0 ? cap.gpuPercent + " %" : "?"}` +
+        tip = tt("sched.0a7180", { p0: when, p1: Math.round(slot.gpuPercent), p2: cap.gpuPercent > 0 ? cap.gpuPercent + " %" : "?" }) +
           (pct !== null ? ` (${pct.toFixed(0)} %)` : "") +
-          (u.freeGpuPercent !== null ? ` · frei bis Grenzwert: ${Math.round(u.freeGpuPercent)} %` : " · keine NVIDIA-GPU erkannt (nvidia-smi nicht verfügbar; Host-Agent: OMP_HOST_AGENT_GPU_INDEX nicht auf off?)") +
-          "\n(100 % = eine volle GPU; Bedarf nur für Typen mit gemessenem GPU-Profil)";
+          (u.freeGpuPercent !== null ? tt("sched.bd46bd", { p0: Math.round(u.freeGpuPercent) }) : tt("sched.7d0cfb")) +
+          tt("sched.3bb3f9");
       } else if (row.kind === "vram") {
         pct = u.vramPercent;
         thr = model.thresholds.mem;
         level = u.vramLevel;
         if (level === "free" && slot.gpuMemBytes > 0) level = "unknown";
-        tip = `${when} · VRAM ${fmtBytes(slot.gpuMemBytes)} von ${cap.vramBytes > 0 ? fmtBytes(cap.vramBytes) : "?"}` +
+        tip = tt("sched.560b4b", { p0: when, p1: fmtBytes(slot.gpuMemBytes), p2: cap.vramBytes > 0 ? fmtBytes(cap.vramBytes) : "?" }) +
           (pct !== null ? ` (${pct.toFixed(0)} %)` : "") +
-          (u.freeVramBytes !== null ? ` · frei bis Grenzwert: ${fmtBytes(u.freeVramBytes)}` : " · kein Host mit gemeldeter GPU") +
-          "\n(VRAM ist eine harte Grenze: Überlauf bricht Prozesse ab)";
+          (u.freeVramBytes !== null ? tt("sched.c19736", { p0: fmtBytes(u.freeVramBytes) }) : tt("sched.0818ec")) +
+          tt("sched.f36f2d");
       } else if (row.kind === "net") {
         pct = u.netPercent;
         thr = model.thresholds.net ?? 85;
@@ -860,17 +861,17 @@ class SchedulerView extends HTMLElement {
         const est = slot.netEstimated ? "~" : "";
         tip = `${when} · Netz Rx ${est}${fmtMbps(slot.netRxMbps)} · Tx ${est}${fmtMbps(slot.netTxMbps)}` +
           (cap.netMbps > 0
-            ? ` von ${fmtMbps(cap.netMbps)} je Richtung` + (pct !== null ? ` (${pct.toFixed(0)} %)` : "") +
-              (u.freeNetMbps !== null ? ` · frei bis Grenzwert: ${fmtMbps(u.freeNetMbps)}` : "")
-            : " · Link-Geschwindigkeit der Karte unbekannt (Host-Agent: OMP_HOST_AGENT_NET_IFACE setzen)");
-        if (slot.netEstimated) tip += "\n~ = Annahme (Format der Rolle nicht gesetzt: 1080p50, bzw. Nennwert)";
+            ? tt("sched.ab0c20", { p0: fmtMbps(cap.netMbps) }) + (pct !== null ? ` (${pct.toFixed(0)} %)` : "") +
+              (u.freeNetMbps !== null ? tt("sched.c19736", { p0: fmtMbps(u.freeNetMbps) }) : "")
+            : tt("sched.f154b0"));
+        if (slot.netEstimated) tip += tt("sched.130aa4");
       } else {
         const need = slot.io[row.key!] ?? 0;
         const total = cap.io[row.key!] ?? 0;
         level = need > total ? "over" : need > 0 ? (need === total ? "warn" : "ok") : "free";
         pct = total > 0 ? (need / total) * 100 : null;
         thr = 100;
-        tip = `${when} · ${row.key}: ${need} von ${total} Port(s) belegt · frei: ${Math.max(0, total - need)}`;
+        tip = tt("sched.f6ba17", { p0: when, p1: row.key, p2: need, p3: total, p4: Math.max(0, total - need) });
       }
       const contribs: Contribution[] = slot.contribs;
       if (contribs.length > 0 && row.kind !== "io") {
@@ -878,7 +879,7 @@ class SchedulerView extends HTMLElement {
           row.kind === "cpu" ? c.cpuCores : row.kind === "mem" ? c.rssBytes : row.kind === "gpu" ? c.gpuPercent : row.kind === "vram" ? c.gpuMemBytes : Math.max(c.netRxMbps, c.netTxMbps);
         const fmt = (c: Contribution): string =>
           row.kind === "cpu"
-            ? fmtCores(c.cpuCores) + " Kerne"
+            ? fmtCores(c.cpuCores) + tt("sched.f333a8")
             : row.kind === "mem"
             ? fmtBytes(c.rssBytes)
             : row.kind === "gpu"
@@ -892,10 +893,10 @@ class SchedulerView extends HTMLElement {
           .map((c) => `  ${c.wfName}/${c.role}: ${fmt(c)}`)
           .join("\n");
       }
-      const dim = row.kind === "cpu" ? "CPU" : row.kind === "mem" ? "RAM" : row.kind === "net" ? "Netz" : row.kind === "gpu" ? "GPU" : row.kind === "vram" ? "VRAM" : "";
-      if (dim && slot.liveFloor.includes(dim)) tip += "\n⚡ Wert = aktuell gemessene Host-Auslastung (höher als die Planung)";
-      if (slot.unknown.length > 0) tip += `\n⚠ Bedarf unbekannt (kein Messprofil): ${slot.unknown.join(", ")}`;
-      if (this.#viewMode === "month") tip += "\n(ungünstigster Zeitpunkt des Tages)";
+      const dim = row.kind === "cpu" ? "CPU" : row.kind === "mem" ? "RAM" : row.kind === "net" ? tt("sched.72ce72") : row.kind === "gpu" ? "GPU" : row.kind === "vram" ? "VRAM" : "";
+      if (dim && slot.liveFloor.includes(dim)) tip += tt("sched.5baf86");
+      if (slot.unknown.length > 0) tip += tt("sched.ce7463", { p0: slot.unknown.join(", ") });
+      if (this.#viewMode === "month") tip += tt("sched.fd07d2");
 
       const cell = document.createElement("div");
       cell.style.cssText = `flex:1;min-width:0;background:${this.#levelColor(level, pct, thr)};`;
@@ -948,10 +949,10 @@ class SchedulerView extends HTMLElement {
       if (ms < 60000) return `${Math.max(0, Math.round(ms / 1000))} s`;
       const m = Math.round(ms / 60000);
       const h = Math.floor(m / 60);
-      return h > 0 ? (m % 60 > 0 ? `${h} h ${m % 60} min` : `${h} h`) : `${m} min`;
+      return h > 0 ? (m % 60 > 0 ? tt("sched.19706e", { p0: h, p1: m % 60 }) : `${h} h`) : `${m} min`;
     };
-    const SRC: Record<string, string> = { manual: "von Hand", schedule: "per Zeitplan", adopted: "übernommen", restored: "beim Orchestrator-Start vorgefunden" };
-    const END: Record<string, string> = { manual: "von Hand gestoppt", scheduled: "per Zeitplan gestoppt", failed: "fehlgeschlagen", unknown: "Ende nicht beobachtet" };
+    const SRC: Record<string, string> = { manual: tt("sched.ed6c70"), schedule: tt("sched.6131ad"), adopted: tt("sched.96f435"), restored: tt("sched.e8da08") };
+    const END: Record<string, string> = { manual: tt("sched.d9d61d"), scheduled: tt("sched.58740c"), failed: "fehlgeschlagen", unknown: tt("sched.e98ab7") };
     const place = (from: number, to: number) => {
       const a = Math.max(from, rangeStart), b = Math.min(to, rangeEnd);
       if (b <= a) return null;
@@ -973,17 +974,17 @@ class SchedulerView extends HTMLElement {
         : early
         ? "var(--omp-warning, #e0a030)"
         : "var(--omp-success, #5cb85c)";
-      const lines = [`Lauf: ${fmtT(iv.start)} (${SRC[iv.rec.startSource] ?? iv.rec.startSource}) → ${iv.end === null ? "läuft noch" : `${fmtT(iv.end)} (${END[iv.rec.endReason ?? ""] ?? iv.rec.endReason ?? "beendet"})`}`,
-        `Dauer: ${dur(end - iv.start)}`];
+      const lines = [tt("sched.f621af", { p0: fmtT(iv.start), p1: SRC[iv.rec.startSource] ?? iv.rec.startSource, p2: iv.end === null ? tt("sched.13ac40") : `${fmtT(iv.end)} (${END[iv.rec.endReason ?? ""] ?? iv.rec.endReason ?? "beendet"})` }),
+        tt("sched.23c086", { p0: dur(end - iv.start) })];
       if (planned.start || planned.stop) {
-        lines.push(`Geplant: ${planned.start ? fmtT(planned.start.getTime()) : "—"} → ${planned.stop ? fmtT(planned.stop.getTime()) : "—"}`);
+        lines.push(tt("sched.b3259b", { p0: planned.start ? fmtT(planned.start.getTime()) : "—", p1: planned.stop ? fmtT(planned.stop.getTime()) : "—" }));
       }
       if (planned.start && Math.abs(iv.start - planned.start.getTime()) > 60000) {
         const d = iv.start - planned.start.getTime();
-        lines.push(`Start ${dur(Math.abs(d))} ${d > 0 ? "später" : "früher"} als geplant`);
+        lines.push(tt("sched.722ee1", { p0: dur(Math.abs(d)), p1: d > 0 ? tt("sched.4ff5c9") : tt("sched.17d70d") }));
       }
-      if (early) lines.push(`⚠ ${dur(plannedStop! - iv.end!)} vor dem geplanten Stop beendet`);
-      if (iv.end !== null && plannedStop !== null && iv.end - plannedStop > 60000) lines.push(`${dur(iv.end - plannedStop)} nach dem geplanten Stop beendet`);
+      if (early) lines.push(tt("sched.ec6aed", { p0: dur(plannedStop! - iv.end!) }));
+      if (iv.end !== null && plannedStop !== null && iv.end - plannedStop > 60000) lines.push(tt("sched.700ecf", { p0: dur(iv.end - plannedStop) }));
       const el = document.createElement("div");
       el.dataset.role = "run-bar";
       el.style.cssText =
@@ -1038,7 +1039,7 @@ class SchedulerView extends HTMLElement {
       track.appendChild(sep);
     });
     this.#addNowMarker(track, dates, totalMinutes, new Date());
-    track.title = "Auf eine leere Stelle ziehen: neuen Zeitplan anlegen";
+    track.title = tt("sched.05f798");
     track.addEventListener("pointerdown", (ev) => this.#startCreateDrag(ev, track, wf, dates, totalMinutes));
 
     const schedules = wf.definition.schedules ?? [];
@@ -1049,7 +1050,7 @@ class SchedulerView extends HTMLElement {
 
     const addBtn = document.createElement("button");
     addBtn.textContent = "+";
-    addBtn.title = "Zeitplan hinzufügen";
+    addBtn.title = tt("sched.162657");
     addBtn.style.cssText =
       "position:absolute;right:2px;top:50%;transform:translateY(-50%);font-size:10px;cursor:pointer;" +
       "opacity:0.5;padding:1px 5px;";
@@ -1116,9 +1117,9 @@ class SchedulerView extends HTMLElement {
       `border:1px solid ${isPartial ? "var(--omp-cue)" : "var(--omp-info)"};border-radius:3px;cursor:grab;` +
       "box-sizing:border-box;display:flex;align-items:center;justify-content:center;overflow:hidden;";
     el.title =
-      (bar.start ? `Start ${fmtMinutes(bar.start.minutes)}` : "kein Start") +
+      (bar.start ? tt("sched.71a8aa", { p0: fmtMinutes(bar.start.minutes) }) : tt("sched.9ed479")) +
       " – " +
-      (bar.stop ? `Stop ${fmtMinutes(bar.stop.minutes)}` : "kein Stop");
+      (bar.stop ? tt("sched.c1e806", { p0: fmtMinutes(bar.stop.minutes) }) : tt("sched.a3a320"));
     // Ressourcen-Engpass in der Laufzeit dieses Balkens? (roter Rand + Grund)
     const over = this.#wfOver.get(wf.id);
     if (over && right > left) {
@@ -1243,8 +1244,8 @@ class SchedulerView extends HTMLElement {
       panel.appendChild(row);
     };
 
-    addRow("Start", bar.start);
-    addRow("Stop", bar.stop);
+    addRow(tt("sched.a6122a"), bar.start);
+    addRow(tt("sched.11a755"), bar.stop);
 
     this.appendChild(panel);
     const closeOnOutside = (ev: MouseEvent) => {
@@ -1389,7 +1390,7 @@ class SchedulerView extends HTMLElement {
     const key = (b: { laneId: string; slotIndex: number }) => `${b.laneId}#${b.slotIndex}`;
     const had = new Set(findBottlenecks(model, before).map(key));
     const fresh = findBottlenecks(model, after).filter((b) => !had.has(key(b)));
-    const laneLabel = (id: string) => (id === AUTO_LANE ? "Auto-Pool" : model.hosts.find((h) => h.id === id)?.label ?? id);
+    const laneLabel = (id: string) => (id === AUTO_LANE ? tt("sched.880a4f") : model.hosts.find((h) => h.id === id)?.label ?? id);
     const parts = fresh.slice(0, 3).map((b) => `${laneLabel(b.laneId)} ${this.#slotLabel(dates, b.slotIndex)} (${b.what.join(", ")})`);
     if (fresh.length > 3) parts.push(`… (+${fresh.length - 3})`);
     return parts;
@@ -1399,7 +1400,7 @@ class SchedulerView extends HTMLElement {
   // vorher nicht gab (der Nutzer entscheidet — gespeichert wird trotzdem).
   #warnNewBottlenecks(wf: Workflow, next: Schedule[]) {
     const parts = this.#newBottleneckParts(wf, next);
-    if (parts.length > 0) showToast(`⚠ Ressourcen-Engpass durch diese Änderung: ${parts.join(" · ")}`);
+    if (parts.length > 0) showToast(tt("sched.48bff0", { p0: parts.join(" · ") }));
   }
 
   // Sicherheitsabfrage vor dem Anlegen eines per Ziehen erzeugten Zeitplans:
@@ -1442,21 +1443,21 @@ class SchedulerView extends HTMLElement {
 
     const title = document.createElement("div");
     title.style.cssText = "font-weight:600;";
-    title.textContent = `Zeitplan anlegen: ${wf.name}`;
+    title.textContent = tt("sched.4c2f74", { p0: wf.name });
     panel.appendChild(title);
 
     const kind = this.#newKind;
     const art = kind === "once"
-      ? `Einmalig am ${fmtDayLabel(info.date)}`
+      ? tt("sched.9c3ca2", { p0: fmtDayLabel(info.date) })
       : kind === "daily"
-      ? "Täglich"
-      : `Wöchentlich (${WEEKDAY_LABELS[info.date.getDay()]})`;
+      ? tt("sched.045d26")
+      : tt("sched.e50e76", { p0: WEEKDAY_LABELS[info.date.getDay()] });
     line("Art", art);
-    line("Start", fmtMinutes(info.startMin));
-    const stopLabel = fmtMinutes(info.stopMin) + (kind !== "once" && info.stopMin >= DAY_MINUTES ? " (als 23:59 gespeichert)" : "");
-    line("Stop", stopLabel);
+    line(tt("sched.a6122a"), fmtMinutes(info.startMin));
+    const stopLabel = fmtMinutes(info.stopMin) + (kind !== "once" && info.stopMin >= DAY_MINUTES ? tt("sched.9a6ec4") : "");
+    line(tt("sched.11a755"), stopLabel);
     const dur = info.stopMin - info.startMin;
-    line("Dauer", `${Math.floor(dur / 60) > 0 ? `${Math.floor(dur / 60)} h ` : ""}${dur % 60 > 0 || dur < 60 ? `${dur % 60} min` : ""}`.trim());
+    line(tt("sched.5daac8"), `${Math.floor(dur / 60) > 0 ? `${Math.floor(dur / 60)} h ` : ""}${dur % 60 > 0 || dur < 60 ? `${dur % 60} min` : ""}`.trim());
 
     const d = workflowDemand(this.#model, wf.id);
     if (d && d.roles > 0) {
@@ -1464,25 +1465,25 @@ class SchedulerView extends HTMLElement {
       if (d.cpuCores > 0) parts.push(`CPU ${fmtCores(d.cpuCores)} Kerne`);
       if (d.rssBytes > 0) parts.push(`RAM ${fmtBytes(d.rssBytes)}`);
       if (d.netRxMbps > 0 || d.netTxMbps > 0) {
-        parts.push(`Netz ${d.netRxMbps > 0 ? "Rx " + fmtMbps(d.netRxMbps) : ""}${d.netRxMbps > 0 && d.netTxMbps > 0 ? " / " : ""}${d.netTxMbps > 0 ? "Tx " + fmtMbps(d.netTxMbps) : ""}`);
+        parts.push(tt("sched.d86ee9", { p0: d.netRxMbps > 0 ? "Rx " + fmtMbps(d.netRxMbps) : "", p1: d.netRxMbps > 0 && d.netTxMbps > 0 ? " / " : "", p2: d.netTxMbps > 0 ? "Tx " + fmtMbps(d.netTxMbps) : "" }));
       }
       if (d.gpuPercent > 0) parts.push(`GPU ${Math.round(d.gpuPercent)} %`);
       if (d.gpuMemBytes > 0) parts.push(`VRAM ${fmtBytes(d.gpuMemBytes)}`);
-      line("Bedarf", parts.length > 0 ? parts.join(" · ") : "unbekannt");
+      line(tt("sched.b61145"), parts.length > 0 ? parts.join(" · ") : "unbekannt");
       if (d.unknownRoles > 0) {
-        line("", `⚠ ${d.unknownRoles} von ${d.roles} Rolle(n) ohne Messprofil — Bedarf unvollständig`, "var(--omp-warning, #d9a400)");
+        line("", tt("sched.ab1867", { p0: d.unknownRoles, p1: d.roles }), "var(--omp-warning, #d9a400)");
       }
     }
     const fresh = this.#newBottleneckParts(wf, next);
-    if (fresh.length > 0) line("Engpass", `⚠ ${fresh.join(" · ")}`, "var(--omp-error, #e55)");
-    else if (this.#model) line("Engpass", "✓ kein neuer Ressourcen-Engpass im sichtbaren Ausschnitt", "var(--omp-success, #5cb85c)");
+    if (fresh.length > 0) line(tt("sched.f7d87d"), `⚠ ${fresh.join(" · ")}`, "var(--omp-error, #e55)");
+    else if (this.#model) line(tt("sched.f7d87d"), tt("sched.ba0c15"), "var(--omp-success, #5cb85c)");
 
     const btnRow = document.createElement("div");
     btnRow.style.cssText = "display:flex;gap:6px;justify-content:flex-end;margin-top:4px;";
     const cancel = document.createElement("button");
-    cancel.textContent = "Abbrechen";
+    cancel.textContent = tt("sched.4b9727");
     const ok = document.createElement("button");
-    ok.textContent = "Anlegen";
+    ok.textContent = tt("sched.6212ff");
     ok.className = "omp-btn-primary";
     btnRow.append(cancel, ok);
     panel.appendChild(btnRow);

@@ -12,6 +12,7 @@
 // ui/graph-Basis, kein Blockly) — ein rohes JSON-<textarea> war Teil 1s
 // bewusst dokumentierte Übergangslösung, s. dortiger docs/decisions.md-
 // Nachtrag 266, jetzt ersetzt.
+import { t as tt } from "./i18n.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
 import { showToast } from "../kit/omp-toast.ts";
@@ -149,10 +150,10 @@ const POLL_FALLBACK_INTERVAL_MS = 15000;
 // nichts zu tun).
 type DefSort = "updated" | "name" | "user" | "status";
 const DEF_SORT_LABEL: Record<DefSort, string> = {
-  updated: "Zuletzt geändert",
-  name: "Name",
-  user: "Angelegt von",
-  status: "Status",
+  updated: tt("proc.d3e635"),
+  name: tt("proc.49ee30"),
+  user: tt("proc.62c21d"),
+  status: tt("proc.ec53a8"),
 };
 const DEF_STATUS_ORDER = ["", "draft", "published", "deprecated", "archived"];
 
@@ -344,16 +345,16 @@ class ProcessView extends HTMLElement {
   // Ausführung, lehnt der Server mit 409 ab — die Meldung wird angezeigt.
   async #deleteDefinition(def: ProcessDefinition) {
     const ok = await confirmDialog(
-      `Prozess „${def.name}" mit allen Versionen und der Ausführungs-Historie endgültig löschen?`,
-      { confirmLabel: "Löschen" },
+      tt("proc.73f8e4", { p0: def.name }),
+      { confirmLabel: tt("proc.1010b0") },
     );
     if (!ok) return;
     const res = await apiFetch(`/api/v1/process-definitions/${def.id}`, { method: "DELETE" });
     if (!res.ok) {
-      showToast(`Löschen fehlgeschlagen: ${(await res.text()).trim()}`, { variant: "error" });
+      showToast(tt("proc.05f6da", { p0: (await res.text()).trim() }), { variant: "error" });
       return;
     }
-    showToast(`Prozess „${def.name}" gelöscht.`, { variant: "info" });
+    showToast(tt("proc.862e41", { p0: def.name }), { variant: "info" });
     this.#selectedDefId = null;
     this.#selectedExecId = null;
     this.#versions = [];
@@ -379,13 +380,13 @@ class ProcessView extends HTMLElement {
       body: JSON.stringify({ name, description, category }),
     });
     if (!res.ok) {
-      showToast(`Anlegen fehlgeschlagen: ${await res.text()}`, { variant: "error" });
+      showToast(tt("proc.055ecb", { p0: await res.text() }), { variant: "error" });
       return;
     }
     this.#showDefForm = false;
     await this.#loadDefinitions();
     this.#render();
-    showToast("Prozess-Definition angelegt.", { variant: "info" });
+    showToast(tt("proc.efc8c6"), { variant: "info" });
   }
 
   // Öffnet den visuellen Schritt-Graph-Editor als Vollbild-Overlay —
@@ -419,13 +420,13 @@ class ProcessView extends HTMLElement {
       body: JSON.stringify(definition),
     });
     if (!res.ok) {
-      showToast(`Version anlegen fehlgeschlagen: ${await res.text()}`, { variant: "error" });
+      showToast(tt("proc.9c01ed", { p0: await res.text() }), { variant: "error" });
       return;
     }
     onSuccess();
     await this.#loadVersionsAndExecutions(defId);
     this.#render();
-    showToast(`Version angelegt${changeReason ? ` (${changeReason})` : ""}.`, { variant: "info" });
+    showToast(tt("proc.62626a", { p0: changeReason ? ` (${changeReason})` : "" }), { variant: "info" });
   }
 
   async #versionAction(versionId: string, action: "publish" | "deprecate" | "archive") {
@@ -444,7 +445,7 @@ class ProcessView extends HTMLElement {
       try {
         input = JSON.parse(inputText);
       } catch (err) {
-        showToast(`Ungültiges Input-JSON: ${err instanceof Error ? err.message : String(err)}`, { variant: "error" });
+        showToast(tt("proc.433ea0", { p0: err instanceof Error ? err.message : String(err) }), { variant: "error" });
         return;
       }
     }
@@ -454,13 +455,13 @@ class ProcessView extends HTMLElement {
       body: JSON.stringify({ processDefinitionId: defId, processVersionId: versionId, input }),
     });
     if (!res.ok) {
-      showToast(`Start fehlgeschlagen: ${await res.text()}`, { variant: "error" });
+      showToast(tt("proc.f6d6b4", { p0: await res.text() }), { variant: "error" });
       return;
     }
     this.#showStartForm = false;
     await this.#loadVersionsAndExecutions(defId);
     this.#render();
-    showToast("Execution gestartet.", { variant: "info" });
+    showToast(tt("proc.38419a"), { variant: "info" });
   }
 
   async #executionAction(execId: string, action: "cancel" | "pause" | "resume") {
@@ -519,20 +520,20 @@ class ProcessView extends HTMLElement {
       body: JSON.stringify({ assetVersionId, role }),
     });
     if (!res.ok) {
-      showToast(`Verknüpfen fehlgeschlagen: ${await res.text()}`, { variant: "error" });
+      showToast(tt("proc.ba4a47", { p0: await res.text() }), { variant: "error" });
       return;
     }
     this.#showLinkForm = false;
     this.#linkExecId = null;
     await this.#loadExecutionDetail(execId);
     this.#render();
-    showToast("Asset verknüpft.", { variant: "info" });
+    showToast(tt("proc.e14b84"), { variant: "info" });
   }
 
   async #deleteAssetLink(link: AssetLink) {
     const res = await apiFetch(`/api/v1/asset-links/${link.id}`, { method: "DELETE" });
     if (!res.ok) {
-      showToast(`Entfernen fehlgeschlagen: ${await res.text()}`, { variant: "error" });
+      showToast(tt("proc.64bd21", { p0: await res.text() }), { variant: "error" });
       return;
     }
     if (this.#selectedExecId) await this.#loadExecutionDetail(this.#selectedExecId);
@@ -552,7 +553,7 @@ class ProcessView extends HTMLElement {
         body: JSON.stringify({ assignee: this.#username }),
       });
       if (!assignRes.ok) {
-        showToast(`Zuweisen fehlgeschlagen: ${await assignRes.text()}`, { variant: "error" });
+        showToast(tt("proc.ca6fd6", { p0: await assignRes.text() }), { variant: "error" });
         return;
       }
       const updated = (await assignRes.json()) as HumanTask;
@@ -568,7 +569,7 @@ class ProcessView extends HTMLElement {
       body: JSON.stringify({ expectedRowVersion, status, decision, comment }),
     });
     if (!res.ok) {
-      showToast(`Aktion fehlgeschlagen: ${await res.text()}`, { variant: "error" });
+      showToast(tt("proc.fc886f", { p0: await res.text() }), { variant: "error" });
       return;
     }
     await this.#loadMyTasks();
@@ -596,7 +597,7 @@ class ProcessView extends HTMLElement {
     this.#defCountEl.className = "omp-h1";
     const newBtn = document.createElement("button");
     newBtn.className = "omp-btn-primary";
-    newBtn.textContent = "+ Neu";
+    newBtn.textContent = tt("proc.8df699");
     newBtn.addEventListener("click", () => {
       this.#showDefForm = true;
       this.#render();
@@ -633,7 +634,7 @@ class ProcessView extends HTMLElement {
     const search = document.createElement("input");
     search.className = "omp-search-input";
     search.type = "search";
-    search.placeholder = "Suche (Name, Kategorie, Beschreibung, Nutzer) …";
+    search.placeholder = tt("proc.cbb97d");
     search.style.cssText = "width:100%;box-sizing:border-box;";
     search.addEventListener("input", () => {
       this.#defSearch = search.value;
@@ -646,7 +647,7 @@ class ProcessView extends HTMLElement {
     sortRow.style.cssText = "display:flex;align-items:center;gap:6px;";
     const sortLabel = document.createElement("span");
     sortLabel.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);white-space:nowrap;";
-    sortLabel.textContent = "Sortieren:";
+    sortLabel.textContent = tt("proc.2c9513");
     const sortSelect = document.createElement("select");
     sortSelect.style.cssText = "flex:1;min-width:0;";
     for (const [value, label] of Object.entries(DEF_SORT_LABEL) as [DefSort, string][]) {
@@ -715,22 +716,22 @@ class ProcessView extends HTMLElement {
     const visible = this.#filteredSortedDefinitions();
     this.#defCountEl.textContent =
       visible.length === this.#definitions.length
-        ? `Prozesse (${this.#definitions.length})`
-        : `Prozesse (${visible.length} von ${this.#definitions.length})`;
+        ? tt("proc.5adedc", { p0: this.#definitions.length })
+        : tt("proc.dbd8d0", { p0: visible.length, p1: this.#definitions.length });
 
     this.#defListEl.replaceChildren();
 
     if (this.#definitions.length === 0) {
       const empty = document.createElement("div");
       empty.className = "omp-empty";
-      empty.textContent = "Noch keine Prozess-Definition angelegt.";
+      empty.textContent = tt("proc.f07b49");
       this.#defListEl.appendChild(empty);
       return;
     }
     if (visible.length === 0) {
       const empty = document.createElement("div");
       empty.className = "omp-empty";
-      empty.textContent = "Kein Prozess passt zum Filter.";
+      empty.textContent = tt("proc.b2e353");
       this.#defListEl.appendChild(empty);
       return;
     }
@@ -760,7 +761,7 @@ class ProcessView extends HTMLElement {
     if (!this.#selectedDefId) {
       const empty = document.createElement("div");
       empty.className = "omp-empty";
-      empty.textContent = "Links eine Prozess-Definition auswählen.";
+      empty.textContent = tt("proc.0d7ac2");
       wrap.appendChild(empty);
       return wrap;
     }
@@ -774,12 +775,12 @@ class ProcessView extends HTMLElement {
       info.innerHTML = `
         <div class="omp-h1">${escapeHtml(def.name)}</div>
         <div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-top:4px;">
-          Angelegt von ${escapeHtml(def.createdBy)} am ${fmtTime(def.createdAt)}
+          ${tt("proc.a75bfb", { p0: escapeHtml(def.createdBy), p1: fmtTime(def.createdAt) })}
         </div>
       `;
       const delBtn = document.createElement("button");
-      delBtn.textContent = "Prozess löschen";
-      delBtn.title = "Löscht den Prozess mit allen Versionen und der Historie (nicht möglich, solange Ausführungen laufen)";
+      delBtn.textContent = tt("proc.e524e0");
+      delBtn.title = tt("proc.4a833e");
       delBtn.addEventListener("click", () => void this.#deleteDefinition(def));
       header.append(info, delBtn);
       wrap.appendChild(header);
@@ -802,9 +803,9 @@ class ProcessView extends HTMLElement {
 
     const heading = document.createElement("div");
     heading.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--omp-space-2);";
-    heading.innerHTML = `<span style="font-weight:600;">Versionen (${this.#versions.length})</span>`;
+    heading.innerHTML = `<span style="font-weight:600;">${tt("proc.54741f", { p0: this.#versions.length })}</span>`;
     const newVersionBtn = document.createElement("button");
-    newVersionBtn.textContent = "+ Neue Version";
+    newVersionBtn.textContent = tt("proc.d3bb06");
     newVersionBtn.addEventListener("click", () => {
       if (this.#selectedDefId) this.#openVersionEditor(this.#selectedDefId);
     });
@@ -814,7 +815,7 @@ class ProcessView extends HTMLElement {
     if (this.#versions.length === 0) {
       const empty = document.createElement("div");
       empty.className = "omp-empty";
-      empty.textContent = "Noch keine Version.";
+      empty.textContent = tt("proc.72fc01");
       section.appendChild(empty);
       return section;
     }
@@ -822,8 +823,8 @@ class ProcessView extends HTMLElement {
     const table = document.createElement("table");
     table.style.cssText = "border-collapse:collapse;width:100%;";
     table.innerHTML = `<thead><tr style="color:var(--omp-text-dim);text-align:left;">
-      <th style="padding:2px 8px;">#</th><th style="padding:2px 8px;">Status</th>
-      <th style="padding:2px 8px;">Start-Schritt</th><th style="padding:2px 8px;">Angelegt</th>
+      <th style="padding:2px 8px;">#</th><th style="padding:2px 8px;">${tt("proc.ec53a8")}</th>
+      <th style="padding:2px 8px;">${tt("proc.b9b524")}</th><th style="padding:2px 8px;">${tt("proc.2c51ef")}</th>
       <th style="padding:2px 8px;"></th></tr></thead>`;
     const tbody = document.createElement("tbody");
     for (const v of [...this.#versions].sort((a, b) => b.versionNumber - a.versionNumber)) {
@@ -837,25 +838,25 @@ class ProcessView extends HTMLElement {
       const actionsTd = document.createElement("td");
       actionsTd.style.cssText = "padding:2px 8px;display:flex;gap:4px;";
       const editBtn = document.createElement("button");
-      editBtn.textContent = "Bearbeiten";
-      editBtn.title = `Öffnet v${v.versionNumber} im grafischen Editor — Speichern legt eine neue Draft-Version an`;
+      editBtn.textContent = tt("proc.5ad05d");
+      editBtn.title = tt("proc.6e31cb", { p0: v.versionNumber });
       editBtn.addEventListener("click", () => {
         if (this.#selectedDefId) this.#openVersionEditor(this.#selectedDefId, v);
       });
       actionsTd.appendChild(editBtn);
       if (v.status === "draft") {
         const publishBtn = document.createElement("button");
-        publishBtn.textContent = "Veröffentlichen";
+        publishBtn.textContent = tt("proc.e9e284");
         publishBtn.addEventListener("click", () => void this.#versionAction(v.id, "publish"));
         actionsTd.appendChild(publishBtn);
         const archiveBtn = document.createElement("button");
-        archiveBtn.textContent = "Archivieren";
+        archiveBtn.textContent = tt("proc.f19dbc");
         archiveBtn.addEventListener("click", () => void this.#versionAction(v.id, "archive"));
         actionsTd.appendChild(archiveBtn);
       } else if (v.status === "published") {
         const startBtn = document.createElement("button");
         startBtn.className = "omp-btn-primary";
-        startBtn.textContent = "Starten";
+        startBtn.textContent = tt("proc.f50fc9");
         startBtn.addEventListener("click", () => {
           this.#startVersionId = v.id;
           this.#showStartForm = true;
@@ -863,12 +864,12 @@ class ProcessView extends HTMLElement {
         });
         actionsTd.appendChild(startBtn);
         const deprecateBtn = document.createElement("button");
-        deprecateBtn.textContent = "Deprecaten";
+        deprecateBtn.textContent = tt("proc.ba1f4c");
         deprecateBtn.addEventListener("click", () => void this.#versionAction(v.id, "deprecate"));
         actionsTd.appendChild(deprecateBtn);
       } else if (v.status === "deprecated") {
         const archiveBtn = document.createElement("button");
-        archiveBtn.textContent = "Archivieren";
+        archiveBtn.textContent = tt("proc.f19dbc");
         archiveBtn.addEventListener("click", () => void this.#versionAction(v.id, "archive"));
         actionsTd.appendChild(archiveBtn);
       }
@@ -883,12 +884,12 @@ class ProcessView extends HTMLElement {
   #renderExecutionsSection(): HTMLElement {
     const section = document.createElement("div");
     section.className = "omp-card";
-    section.innerHTML = `<div style="font-weight:600;margin-bottom:var(--omp-space-2);">Executions (${this.#executions.length})</div>`;
+    section.innerHTML = `<div style="font-weight:600;margin-bottom:var(--omp-space-2);">${tt("proc.d8cfda", { p0: this.#executions.length })}</div>`;
 
     if (this.#executions.length === 0) {
       const empty = document.createElement("div");
       empty.className = "omp-empty";
-      empty.textContent = "Noch keine Execution.";
+      empty.textContent = tt("proc.b36d04");
       section.appendChild(empty);
       return section;
     }
@@ -896,8 +897,8 @@ class ProcessView extends HTMLElement {
     const table = document.createElement("table");
     table.style.cssText = "border-collapse:collapse;width:100%;";
     table.innerHTML = `<thead><tr style="color:var(--omp-text-dim);text-align:left;">
-      <th style="padding:2px 8px;">Status</th><th style="padding:2px 8px;">Gestartet</th>
-      <th style="padding:2px 8px;">Abgeschlossen</th><th style="padding:2px 8px;"></th></tr></thead>`;
+      <th style="padding:2px 8px;">${tt("proc.ec53a8")}</th><th style="padding:2px 8px;">${tt("proc.bdff97")}</th>
+      <th style="padding:2px 8px;">${tt("proc.e5a557")}</th><th style="padding:2px 8px;"></th></tr></thead>`;
     const tbody = document.createElement("tbody");
     for (const e of [...this.#executions].sort((a, b) => b.startedAt.localeCompare(a.startedAt))) {
       const tr = document.createElement("tr");
@@ -912,14 +913,14 @@ class ProcessView extends HTMLElement {
       if (["pending", "running", "waiting"].includes(e.status)) {
         const cancelBtn = document.createElement("button");
         cancelBtn.className = "omp-btn-danger";
-        cancelBtn.textContent = "Abbrechen";
+        cancelBtn.textContent = tt("proc.4b9727");
         cancelBtn.addEventListener("click", (ev) => {
           ev.stopPropagation();
           void this.#executionAction(e.id, "cancel");
         });
         actionsTd.appendChild(cancelBtn);
         const pauseBtn = document.createElement("button");
-        pauseBtn.textContent = "Pausieren";
+        pauseBtn.textContent = tt("proc.d63f99");
         pauseBtn.addEventListener("click", (ev) => {
           ev.stopPropagation();
           void this.#executionAction(e.id, "pause");
@@ -927,7 +928,7 @@ class ProcessView extends HTMLElement {
         actionsTd.appendChild(pauseBtn);
       } else if (e.status === "paused") {
         const resumeBtn = document.createElement("button");
-        resumeBtn.textContent = "Fortsetzen";
+        resumeBtn.textContent = tt("proc.527daf");
         resumeBtn.addEventListener("click", (ev) => {
           ev.stopPropagation();
           void this.#executionAction(e.id, "resume");
@@ -948,7 +949,7 @@ class ProcessView extends HTMLElement {
     section.className = "omp-card";
     const exec = this.#executions.find((e) => e.id === this.#selectedExecId);
     section.innerHTML = `<div style="font-weight:600;margin-bottom:var(--omp-space-2);">
-      Schritte${exec ? ` — ${badge(exec.status, EXEC_BADGE[exec.status] ?? "")}` : ""}
+      ${tt("proc.84f4b2", { p0: exec ? ` — ${badge(exec.status, EXEC_BADGE[exec.status] ?? "")}` : "" })}
     </div>`;
     if (exec?.error) {
       const errDiv = document.createElement("div");
@@ -979,7 +980,7 @@ class ProcessView extends HTMLElement {
     if (this.#execTasks.length > 0) {
       const tasksHeading = document.createElement("div");
       tasksHeading.style.cssText = "font-weight:600;margin-top:var(--omp-space-2);margin-bottom:4px;";
-      tasksHeading.textContent = "Human Tasks dieser Execution";
+      tasksHeading.textContent = tt("proc.a2a88e");
       section.appendChild(tasksHeading);
       for (const t of this.#execTasks) {
         section.appendChild(this.#renderTaskRow(t));
@@ -999,9 +1000,9 @@ class ProcessView extends HTMLElement {
     section.className = "omp-card";
     const head = document.createElement("div");
     head.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--omp-space-2);";
-    head.innerHTML = `<span style="font-weight:600;">Verknüpfte Assets (${this.#assetLinks.length})</span>`;
+    head.innerHTML = `<span style="font-weight:600;">${tt("proc.718f46", { p0: this.#assetLinks.length })}</span>`;
     const addBtn = document.createElement("button");
-    addBtn.textContent = "+ Asset verknüpfen";
+    addBtn.textContent = tt("proc.c63d58");
     addBtn.addEventListener("click", () => void this.#openLinkForm(execId));
     head.appendChild(addBtn);
     section.appendChild(head);
@@ -1009,7 +1010,7 @@ class ProcessView extends HTMLElement {
     if (this.#assetLinks.length === 0) {
       const empty = document.createElement("div");
       empty.className = "omp-empty";
-      empty.textContent = "Keine Asset-Version verknüpft — z. B. eine Datei, die dieser Lauf gelesen oder erzeugt hat.";
+      empty.textContent = tt("proc.626cee");
       section.appendChild(empty);
       return section;
     }
@@ -1021,7 +1022,7 @@ class ProcessView extends HTMLElement {
       const left = document.createElement("span");
       left.innerHTML = `${badge(link.role, link.role === "input" ? "omp-badge-info" : "omp-badge-running")} ${escapeHtml(label)}`;
       const delBtn = document.createElement("button");
-      delBtn.textContent = "Entfernen";
+      delBtn.textContent = tt("proc.513d30");
       delBtn.addEventListener("click", () => void this.#deleteAssetLink(link));
       row.append(left, delBtn);
       section.appendChild(row);
@@ -1037,19 +1038,19 @@ class ProcessView extends HTMLElement {
 
     const title = document.createElement("div");
     title.className = "omp-h1";
-    title.textContent = "Asset verknüpfen";
+    title.textContent = tt("proc.8500e1");
     modal.appendChild(title);
 
     const hint = document.createElement("div");
     hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin:4px 0 var(--omp-space-2);";
-    hint.textContent = "Verknüpft eine Asset-Version mit dieser Execution — z. B. eine Datei, die dieser Lauf gelesen (Input) oder erzeugt (Output) hat.";
+    hint.textContent = tt("proc.1fdf08");
     modal.appendChild(hint);
 
     const assetSelect = document.createElement("select");
     assetSelect.style.cssText = "width:100%;margin-bottom:var(--omp-space-2);";
     const noneOpt = document.createElement("option");
     noneOpt.value = "";
-    noneOpt.textContent = this.#linkAssetOptions.length ? "– Asset wählen –" : "– lädt … –";
+    noneOpt.textContent = this.#linkAssetOptions.length ? tt("proc.e24d2a") : tt("proc.e9c23c");
     assetSelect.appendChild(noneOpt);
     for (const a of this.#linkAssetOptions) {
       const opt = document.createElement("option");
@@ -1066,7 +1067,7 @@ class ProcessView extends HTMLElement {
     if (this.#linkVersionOptions.length === 0) {
       const opt = document.createElement("option");
       opt.value = "";
-      opt.textContent = this.#linkSelectedAssetId ? "– keine Version vorhanden –" : "– zuerst ein Asset wählen –";
+      opt.textContent = this.#linkSelectedAssetId ? tt("proc.09aee0") : tt("proc.1b0fe9");
       versionSelect.appendChild(opt);
     } else {
       for (const v of this.#linkVersionOptions) {
@@ -1085,8 +1086,8 @@ class ProcessView extends HTMLElement {
     const roleSelect = document.createElement("select");
     roleSelect.style.cssText = "width:100%;margin-bottom:var(--omp-space-3);";
     const roleOptions: [string, string][] = [
-      ["output", "Output — von diesem Lauf erzeugt"],
-      ["input", "Input — von diesem Lauf gelesen"],
+      ["output", tt("proc.45e007")],
+      ["input", tt("proc.c36918")],
     ];
     for (const [value, label] of roleOptions) {
       const opt = document.createElement("option");
@@ -1103,7 +1104,7 @@ class ProcessView extends HTMLElement {
     const actions = document.createElement("div");
     actions.style.cssText = "display:flex;justify-content:flex-end;gap:8px;";
     const cancelBtn = document.createElement("button");
-    cancelBtn.textContent = "Abbrechen";
+    cancelBtn.textContent = tt("proc.4b9727");
     cancelBtn.addEventListener("click", () => {
       this.#showLinkForm = false;
       this.#linkExecId = null;
@@ -1111,10 +1112,10 @@ class ProcessView extends HTMLElement {
     });
     const saveBtn = document.createElement("button");
     saveBtn.className = "omp-btn-primary";
-    saveBtn.textContent = "Verknüpfen";
+    saveBtn.textContent = tt("proc.2c7495");
     saveBtn.addEventListener("click", () => {
       if (!this.#linkSelectedVersionId) {
-        showToast("Bitte ein Asset und eine Version wählen.", { variant: "error" });
+        showToast(tt("proc.db8c44"), { variant: "error" });
         return;
       }
       void this.#createAssetLink(execId, this.#linkSelectedVersionId, this.#linkRole);
@@ -1137,7 +1138,7 @@ class ProcessView extends HTMLElement {
     const section = document.createElement("div");
     section.className = "omp-card";
     section.style.cssText += "margin-top:var(--omp-space-3);";
-    section.innerHTML = `<div class="omp-h1" style="margin-bottom:var(--omp-space-2);">Meine Human Tasks (${this.#myTasks.length})</div>`;
+    section.innerHTML = `<div class="omp-h1" style="margin-bottom:var(--omp-space-2);">${tt("proc.a6fed1", { p0: this.#myTasks.length })}</div>`;
     for (const t of this.#myTasks) {
       section.appendChild(this.#renderTaskRow(t));
     }
@@ -1152,7 +1153,7 @@ class ProcessView extends HTMLElement {
     info.innerHTML = `
       <div>${escapeHtml(task.title)} ${badge(task.status, TASK_BADGE[task.status] ?? "")}</div>
       <div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">
-        ${task.assignee ? `Zugewiesen: ${escapeHtml(task.assignee)}` : "Nicht zugewiesen"}
+        ${task.assignee ? tt("proc.11386c", { p0: escapeHtml(task.assignee) }) : tt("proc.83d9fd")}
       </div>
     `;
     row.appendChild(info);
@@ -1163,22 +1164,22 @@ class ProcessView extends HTMLElement {
     if (task.status === "pending") {
       const claimBtn = document.createElement("button");
       claimBtn.className = "omp-btn-primary";
-      claimBtn.textContent = "Für mich beanspruchen";
+      claimBtn.textContent = tt("proc.2084fb");
       claimBtn.addEventListener("click", () => void this.#claimTask(task));
       actions.appendChild(claimBtn);
     } else if (task.status === "claimed" && task.assignee === this.#username) {
       const approveBtn = document.createElement("button");
       approveBtn.className = "omp-btn-primary";
-      approveBtn.textContent = "Genehmigen";
+      approveBtn.textContent = tt("proc.bc0a4d");
       approveBtn.addEventListener("click", () => this.#promptDecision(task, "approved"));
       actions.appendChild(approveBtn);
       const rejectBtn = document.createElement("button");
       rejectBtn.className = "omp-btn-danger";
-      rejectBtn.textContent = "Ablehnen";
+      rejectBtn.textContent = tt("proc.5e17b3");
       rejectBtn.addEventListener("click", () => this.#promptDecision(task, "rejected"));
       actions.appendChild(rejectBtn);
       const changesBtn = document.createElement("button");
-      changesBtn.textContent = "Änderungen anfordern";
+      changesBtn.textContent = tt("proc.c4ca49");
       changesBtn.addEventListener("click", () => this.#promptDecision(task, "changes_requested"));
       actions.appendChild(changesBtn);
     }
@@ -1194,7 +1195,7 @@ class ProcessView extends HTMLElement {
   // Textzeile — gleiche Abwägung wie z. B. admin-view.ts' einfache
   // Lösch-Bestätigungen.
   #promptDecision(task: HumanTask, status: "approved" | "rejected" | "changes_requested") {
-    const comment = window.prompt("Kommentar (optional):", "") ?? "";
+    const comment = window.prompt(tt("proc.8435ef"), "") ?? "";
     void this.#completeTask(task.id, task.rowVersion, status, status, comment);
   }
 
@@ -1206,21 +1207,21 @@ class ProcessView extends HTMLElement {
 
     const title = document.createElement("div");
     title.className = "omp-h1";
-    title.textContent = "Neue Prozess-Definition";
+    title.textContent = tt("proc.47c409");
     modal.appendChild(title);
 
     const nameInput = document.createElement("input");
-    nameInput.placeholder = "Name";
+    nameInput.placeholder = tt("proc.49ee30");
     nameInput.style.cssText = "width:100%;margin:var(--omp-space-2) 0;box-sizing:border-box;";
     modal.appendChild(nameInput);
 
     const categoryInput = document.createElement("input");
-    categoryInput.placeholder = "Kategorie (optional)";
+    categoryInput.placeholder = tt("proc.31805a");
     categoryInput.style.cssText = "width:100%;margin-bottom:var(--omp-space-2);box-sizing:border-box;";
     modal.appendChild(categoryInput);
 
     const descInput = document.createElement("textarea");
-    descInput.placeholder = "Beschreibung (optional)";
+    descInput.placeholder = tt("proc.234de2");
     descInput.rows = 3;
     descInput.style.cssText = "width:100%;margin-bottom:var(--omp-space-3);box-sizing:border-box;resize:vertical;font-family:inherit;";
     modal.appendChild(descInput);
@@ -1228,17 +1229,17 @@ class ProcessView extends HTMLElement {
     const actions = document.createElement("div");
     actions.style.cssText = "display:flex;justify-content:flex-end;gap:8px;";
     const cancelBtn = document.createElement("button");
-    cancelBtn.textContent = "Abbrechen";
+    cancelBtn.textContent = tt("proc.4b9727");
     cancelBtn.addEventListener("click", () => {
       this.#showDefForm = false;
       this.#render();
     });
     const saveBtn = document.createElement("button");
     saveBtn.className = "omp-btn-primary";
-    saveBtn.textContent = "Anlegen";
+    saveBtn.textContent = tt("proc.6212ff");
     saveBtn.addEventListener("click", () => {
       if (!nameInput.value.trim()) {
-        showToast("Name ist erforderlich.", { variant: "error" });
+        showToast(tt("proc.681403"), { variant: "error" });
         return;
       }
       void this.#createDefinition(nameInput.value.trim(), descInput.value.trim(), categoryInput.value.trim());
@@ -1266,12 +1267,12 @@ class ProcessView extends HTMLElement {
 
     const title = document.createElement("div");
     title.className = "omp-h1";
-    title.textContent = "Execution starten";
+    title.textContent = tt("proc.d1ceb6");
     modal.appendChild(title);
 
     const hint = document.createElement("div");
     hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin:4px 0;";
-    hint.textContent = "Input als JSON (optional, leer lassen für kein Input).";
+    hint.textContent = tt("proc.ad18ad");
     modal.appendChild(hint);
 
     const jsonArea = document.createElement("textarea");
@@ -1284,14 +1285,14 @@ class ProcessView extends HTMLElement {
     const actions = document.createElement("div");
     actions.style.cssText = "display:flex;justify-content:flex-end;gap:8px;";
     const cancelBtn = document.createElement("button");
-    cancelBtn.textContent = "Abbrechen";
+    cancelBtn.textContent = tt("proc.4b9727");
     cancelBtn.addEventListener("click", () => {
       this.#showStartForm = false;
       this.#render();
     });
     const startBtn = document.createElement("button");
     startBtn.className = "omp-btn-primary";
-    startBtn.textContent = "Starten";
+    startBtn.textContent = tt("proc.f50fc9");
     startBtn.addEventListener("click", () => void this.#startExecution(defId, this.#startVersionId, jsonArea.value));
     actions.append(cancelBtn, startBtn);
     modal.appendChild(actions);

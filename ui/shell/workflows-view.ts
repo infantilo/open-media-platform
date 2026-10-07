@@ -14,6 +14,7 @@
 // s. sse.Hub). Über apiFetch() (connection.ts) statt rohem fetch — ein
 // Fehlschlag setzt den geteilten ConnectionMonitor auf "degraded" statt
 // still zu bleiben.
+import { t as tt } from "./i18n.ts";
 import { demandText, groupByHost, loadText, type StartPlan } from "./workflow-plan-logic.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { showToast } from "../kit/omp-toast.ts";
@@ -131,14 +132,14 @@ interface Workflow {
 // serverseitig validiert (freies Textfeld, robust gegen ältere/fremde
 // Einträge); die Auswahl hier ist reiner UI-Komfort.
 const CATEGORY_LABELS: Record<string, string> = {
-  regieplatz: "Regieplatz",
-  input: "Input",
-  output: "Output",
-  audio: "Audio",
-  video: "Video",
-  graphics: "Grafik",
-  data: "Daten",
-  control: "Steuerung",
+  regieplatz: tt("wf.dd4edc"),
+  input: tt("wf.324118"),
+  output: tt("wf.29c2c0"),
+  audio: tt("wf.b22f04"),
+  video: tt("wf.34e2d1"),
+  graphics: tt("wf.e64b29"),
+  data: tt("wf.81c1cc"),
+  control: tt("wf.9090e4"),
 };
 
 // Fallback/Reconnect-Intervall (S2) — der Normalfall ist SSE-getrieben
@@ -382,7 +383,7 @@ class WorkflowsView extends HTMLElement {
         const detail = document.createElement("div");
         detail.style.cssText = "font-size:10px;color:var(--omp-text-dim);";
         const parts = [r.nodeType];
-        if (!plan.running) parts.push(r.fixed ? "Host fest" : "automatisch", demandText(r));
+        if (!plan.running) parts.push(r.fixed ? tt("wf.2dc84a") : "automatisch", demandText(r));
         detail.textContent = parts.join(" · ");
         line.append(title, detail);
         if (r.reason && !plan.running) line.title = r.reason;
@@ -410,7 +411,7 @@ class WorkflowsView extends HTMLElement {
     // Überarbeitung bei einer leeren Rollen-Liste bereits der Fall war.
     const roles = this.#formRoles.filter((r) => r.name && r.nodeType);
     if (!this.#formName) {
-      showToast("Workflow-Name ist erforderlich.");
+      showToast(tt("wf.24eb99"));
       return;
     }
     const settings: Settings = {};
@@ -455,7 +456,7 @@ class WorkflowsView extends HTMLElement {
       },
     };
     const editingId = this.#editingId;
-    const verb = editingId ? "Speichern" : "Anlegen";
+    const verb = editingId ? tt("wf.b97d23") : tt("wf.6212ff");
     // try/catch statt nur !res.ok: apiFetch() wirft bei einem
     // Netzwerkfehler (z. B. Orchestrator gestoppt), nicht nur bei einer
     // abgeschlossenen Antwort mit Fehlerstatus — beide Fälle sollen als
@@ -530,7 +531,7 @@ class WorkflowsView extends HTMLElement {
   // sonst unverändertes Verhalten wie vor diesem Feld.
   async #stopWorkflow(wf: Workflow) {
     if (wf.definition.settings?.confirmStop) {
-      const ok = await confirmDialog(`Workflow „${wf.name}" wirklich stoppen?`, { confirmLabel: "Stoppen" });
+      const ok = await confirmDialog(tt("wf.b5f13f", { p0: wf.name }), { confirmLabel: tt("wf.4c4650") });
       if (!ok) return;
     }
     try {
@@ -540,11 +541,11 @@ class WorkflowsView extends HTMLElement {
         body: JSON.stringify({ confirm: true }),
       });
       if (!res.ok) {
-        showToast(`Stoppen fehlgeschlagen: ${await res.text()}`);
+        showToast(tt("wf.2fcdd3", { p0: await res.text() }));
         return;
       }
     } catch (err) {
-      showToast(`Stoppen fehlgeschlagen: ${err}`);
+      showToast(tt("wf.2fcdd3", { p0: err }));
       return;
     }
     await this.#poll();
@@ -555,7 +556,7 @@ class WorkflowsView extends HTMLElement {
   // in "paused" statt "stopped".
   async #pauseWorkflow(wf: Workflow) {
     if (wf.definition.settings?.confirmStop) {
-      const ok = await confirmDialog(`Workflow „${wf.name}" wirklich pausieren?`, { confirmLabel: "Pausieren" });
+      const ok = await confirmDialog(tt("wf.a85624", { p0: wf.name }), { confirmLabel: tt("wf.d63f99") });
       if (!ok) return;
     }
     try {
@@ -565,11 +566,11 @@ class WorkflowsView extends HTMLElement {
         body: JSON.stringify({ confirm: true }),
       });
       if (!res.ok) {
-        showToast(`Pausieren fehlgeschlagen: ${await res.text()}`);
+        showToast(tt("wf.a73f32", { p0: await res.text() }));
         return;
       }
     } catch (err) {
-      showToast(`Pausieren fehlgeschlagen: ${err}`);
+      showToast(tt("wf.a73f32", { p0: err }));
       return;
     }
     await this.#poll();
@@ -583,7 +584,7 @@ class WorkflowsView extends HTMLElement {
       const query = this.#exportWithBindings ? "?includeBindings=true" : "";
       const res = await apiFetch(`/api/v1/workflows/${wf.id}/export${query}`);
       if (!res.ok) {
-        showToast(`Export fehlgeschlagen: ${await res.text()}`);
+        showToast(tt("wf.43069e", { p0: await res.text() }));
         return;
       }
       const exported = (await res.json()) as ExportedWorkflow;
@@ -596,7 +597,7 @@ class WorkflowsView extends HTMLElement {
       link.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      showToast(`Export fehlgeschlagen: ${err}`);
+      showToast(tt("wf.43069e", { p0: err }));
     }
   }
 
@@ -615,7 +616,7 @@ class WorkflowsView extends HTMLElement {
     try {
       const res = await apiFetch(`/api/v1/workflows/${wf.id}/export`);
       if (!res.ok) {
-        showToast(`Duplizieren fehlgeschlagen: ${await res.text()}`);
+        showToast(tt("wf.8a7bae", { p0: await res.text() }));
         return;
       }
       const exported = (await res.json()) as ExportedWorkflow;
@@ -625,13 +626,13 @@ class WorkflowsView extends HTMLElement {
         body: JSON.stringify(exported),
       });
       if (!importRes.ok) {
-        showToast(`Duplizieren fehlgeschlagen: ${await importRes.text()}`);
+        showToast(tt("wf.8a7bae", { p0: await importRes.text() }));
         return;
       }
       const created = (await importRes.json()) as Workflow;
-      showToast(`Workflow als „${created.name}" dupliziert.`);
+      showToast(tt("wf.7d5095", { p0: created.name }));
     } catch (err) {
-      showToast(`Duplizieren fehlgeschlagen: ${err}`);
+      showToast(tt("wf.8a7bae", { p0: err }));
       return;
     }
     await this.#poll();
@@ -646,7 +647,7 @@ class WorkflowsView extends HTMLElement {
     try {
       exported = JSON.parse(await file.text());
     } catch (err) {
-      showToast(`Import fehlgeschlagen: Datei ist kein gültiges JSON (${err})`);
+      showToast(tt("wf.e7dba3", { p0: err }));
       return;
     }
     try {
@@ -656,13 +657,13 @@ class WorkflowsView extends HTMLElement {
         body: JSON.stringify(exported),
       });
       if (!res.ok) {
-        showToast(`Import fehlgeschlagen: ${await res.text()}`);
+        showToast(tt("wf.6cdb17", { p0: await res.text() }));
         return;
       }
       const created = (await res.json()) as Workflow;
-      showToast(`Workflow „${created.name}" importiert.`);
+      showToast(tt("wf.db21f2", { p0: created.name }));
     } catch (err) {
-      showToast(`Import fehlgeschlagen: ${err}`);
+      showToast(tt("wf.6cdb17", { p0: err }));
       return;
     }
     await this.#poll();
@@ -672,11 +673,11 @@ class WorkflowsView extends HTMLElement {
     try {
       const res = await apiFetch(`/api/v1/workflows/${id}`, { method: "DELETE" });
       if (!res.ok) {
-        showToast(`Löschen fehlgeschlagen: ${await res.text()}`);
+        showToast(tt("wf.05f6da", { p0: await res.text() }));
         return;
       }
     } catch (err) {
-      showToast(`Löschen fehlgeschlagen: ${err}`);
+      showToast(tt("wf.05f6da", { p0: err }));
       return;
     }
     await this.#poll();
@@ -733,7 +734,7 @@ class WorkflowsView extends HTMLElement {
     heading.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--omp-space-3);";
     const headingTitle = document.createElement("span");
     headingTitle.className = "omp-h1";
-    headingTitle.textContent = `Workflows (${this.#workflows.length})`;
+    headingTitle.textContent = tt("wf.8a9663", { p0: this.#workflows.length });
     heading.appendChild(headingTitle);
     // Nutzerauftrag 2026-09-02 ("Workflows nach demselben Muster"): "+ Neu"
     // öffnet jetzt das Modal (s. #renderFormModal) statt die Form inline
@@ -742,7 +743,7 @@ class WorkflowsView extends HTMLElement {
     // eines Umschalt-Zustands mit "Abbrechen"-Beschriftung.
     const newBtn = document.createElement("button");
     newBtn.className = "omp-btn-primary";
-    newBtn.textContent = "+ Neu";
+    newBtn.textContent = tt("wf.8df699");
     newBtn.addEventListener("click", () => {
       this.#editingId = null;
       this.#resetForm();
@@ -755,7 +756,7 @@ class WorkflowsView extends HTMLElement {
     // Text-Formulars — beide erzeugen denselben POST /api/v1/workflows,
     // reine UX-Alternative, kein zweiter Datenpfad.
     const designBtn = document.createElement("button");
-    designBtn.textContent = "Grafisch entwerfen";
+    designBtn.textContent = tt("wf.881fa7");
     designBtn.style.cssText = "margin-left:6px;";
     designBtn.addEventListener("click", () => this.#openRoleDesigner(null));
     heading.appendChild(designBtn);
@@ -764,7 +765,7 @@ class WorkflowsView extends HTMLElement {
     // <input type="file"> — Klick auf das Label öffnet nativ den
     // Datei-Dialog, kein eigener Klick-Handler nötig.
     const importLabel = document.createElement("label");
-    importLabel.textContent = "Importieren";
+    importLabel.textContent = tt("wf.5af5fb");
     importLabel.style.cssText =
       "font-size:11px;cursor:pointer;border:1px solid var(--omp-border);border-radius:var(--omp-radius);padding:2px 6px;margin-left:6px;";
     const importInput = document.createElement("input");
@@ -786,15 +787,15 @@ class WorkflowsView extends HTMLElement {
     const bindingsLabel = document.createElement("label");
     bindingsLabel.style.cssText = "font-size:11px;cursor:pointer;margin-left:10px;display:inline-flex;align-items:center;gap:4px;";
     bindingsLabel.title =
-      "Nur sinnvoll für Export→Import auf demselben System (dieselben Nutzerkonten) — " +
-      "ein Export auf ein anderes System bleibt ohne diese Option portabel.";
+      tt("wf.b7d029") +
+      tt("wf.196e31");
     const bindingsCheckbox = document.createElement("input");
     bindingsCheckbox.type = "checkbox";
     bindingsCheckbox.checked = this.#exportWithBindings;
     bindingsCheckbox.addEventListener("change", () => {
       this.#exportWithBindings = bindingsCheckbox.checked;
     });
-    bindingsLabel.append(bindingsCheckbox, "Rollenbindungen mit exportieren");
+    bindingsLabel.append(bindingsCheckbox, tt("wf.937351"));
     heading.appendChild(bindingsLabel);
 
     this.appendChild(heading);
@@ -806,7 +807,7 @@ class WorkflowsView extends HTMLElement {
     if (this.#workflows.length === 0 && !this.#showForm) {
       const empty = document.createElement("div");
       empty.className = "omp-empty";
-      empty.textContent = "Noch kein Workflow angelegt.";
+      empty.textContent = tt("wf.ad8902");
       this.appendChild(empty);
       return;
     }
@@ -828,7 +829,7 @@ class WorkflowsView extends HTMLElement {
     const empty = document.createElement("div");
     empty.setAttribute("data-role", "workflow-filter-empty");
     empty.className = "omp-empty";
-    empty.textContent = filtered.length === 0 ? "Kein Workflow entspricht dem aktuellen Filter." : "";
+    empty.textContent = filtered.length === 0 ? tt("wf.bd4e9e") : "";
     this.appendChild(empty);
 
     // Kapitel 12 Teil 6 (§22.3 Punkt 6): Katalog-Übersicht als
@@ -858,7 +859,7 @@ class WorkflowsView extends HTMLElement {
     const searchInput = document.createElement("input");
     searchInput.className = "omp-search-input";
     searchInput.type = "search";
-    searchInput.placeholder = "Suche (Titel, Beschreibung, Tags) …";
+    searchInput.placeholder = tt("wf.4d0c9d");
     searchInput.value = this.#searchQuery;
     searchInput.style.cssText = "width:100%;box-sizing:border-box;";
     searchInput.addEventListener("input", () => {
@@ -871,7 +872,7 @@ class WorkflowsView extends HTMLElement {
     const categorySelect = document.createElement("select");
     const anyCategoryOpt = document.createElement("option");
     anyCategoryOpt.value = "";
-    anyCategoryOpt.textContent = "Alle Kategorien";
+    anyCategoryOpt.textContent = tt("wf.111336");
     categorySelect.appendChild(anyCategoryOpt);
     for (const [value, label] of Object.entries(CATEGORY_LABELS)) {
       const opt = document.createElement("option");
@@ -889,7 +890,7 @@ class WorkflowsView extends HTMLElement {
     const statusSelect = document.createElement("select");
     const anyStatusOpt = document.createElement("option");
     anyStatusOpt.value = "";
-    anyStatusOpt.textContent = "Alle Status";
+    anyStatusOpt.textContent = tt("wf.bcec0a");
     statusSelect.appendChild(anyStatusOpt);
     for (const value of Object.keys(STATUS_COLORS)) {
       const opt = document.createElement("option");
@@ -917,7 +918,7 @@ class WorkflowsView extends HTMLElement {
       grid.replaceChildren(...filtered.map((wf) => this.#renderWorkflowRow(wf)));
     }
     if (empty) {
-      empty.textContent = filtered.length === 0 ? "Kein Workflow entspricht dem aktuellen Filter." : "";
+      empty.textContent = filtered.length === 0 ? tt("wf.bd4e9e") : "";
     }
   }
 
@@ -995,10 +996,10 @@ class WorkflowsView extends HTMLElement {
     // D7 Teil 2: kompakte Hinweise statt vollem Zeitplan-Text — Details
     // stehen im Formular ("Bearbeiten").
     const badges: string[] = [];
-    if (settings?.confirmStop) badges.push("Sicherheitsabfrage beim Stoppen");
-    if (settings?.targetLatencyFrames) badges.push(`Latenzbudget ${settings.targetLatencyFrames} Frames`);
+    if (settings?.confirmStop) badges.push(tt("wf.91d470"));
+    if (settings?.targetLatencyFrames) badges.push(tt("wf.7b3fe9", { p0: settings.targetLatencyFrames }));
     const scheduleCount = wf.definition.schedules?.length ?? 0;
-    if (scheduleCount > 0) badges.push(`${scheduleCount} Zeitplan${scheduleCount === 1 ? "" : "e"}`);
+    if (scheduleCount > 0) badges.push(tt("wf.46f0b8", { p0: scheduleCount, p1: scheduleCount === 1 ? "" : "e" }));
     if (badges.length > 0) {
       const badgeRow = document.createElement("div");
       badgeRow.style.cssText = "color:var(--omp-text-dim);font-size:11px;margin-top:2px;";
@@ -1027,20 +1028,20 @@ class WorkflowsView extends HTMLElement {
     const isIdle = wf.status === "stopped" || wf.status === "paused";
 
     const startBtn = document.createElement("button");
-    startBtn.textContent = wf.status === "paused" ? "Fortsetzen" : "Start";
+    startBtn.textContent = wf.status === "paused" ? tt("wf.527daf") : tt("wf.a6122a");
     startBtn.disabled = !canStart;
     startBtn.addEventListener("click", () => this.#startWorkflow(wf.id));
     actions.appendChild(startBtn);
 
     const stopBtn = document.createElement("button");
-    stopBtn.textContent = "Stop";
+    stopBtn.textContent = tt("wf.11a755");
     stopBtn.disabled = !canStop;
     stopBtn.addEventListener("click", () => this.#stopWorkflow(wf));
     actions.appendChild(stopBtn);
 
     // Kapitel 12 Teil 3 (§12.3c).
     const pauseBtn = document.createElement("button");
-    pauseBtn.textContent = "Pausieren";
+    pauseBtn.textContent = tt("wf.d63f99");
     pauseBtn.disabled = !canPause;
     pauseBtn.addEventListener("click", () => this.#pauseWorkflow(wf));
     actions.appendChild(pauseBtn);
@@ -1049,9 +1050,9 @@ class WorkflowsView extends HTMLElement {
     // (s. workflows.Service.Update) — gleiche Begründung wie beim
     // Löschen, kein Umschreiben unter laufenden Prozessen.
     const editBtn = document.createElement("button");
-    editBtn.textContent = "Bearbeiten";
+    editBtn.textContent = tt("wf.5ad05d");
     editBtn.disabled = !isIdle;
-    editBtn.title = isIdle ? "" : "Erst stoppen/pausieren, dann bearbeiten";
+    editBtn.title = isIdle ? "" : tt("wf.f7bfda");
     editBtn.addEventListener("click", () => this.#editWorkflow(wf));
     actions.appendChild(editBtn);
 
@@ -1059,9 +1060,9 @@ class WorkflowsView extends HTMLElement {
     // Definition — gleiche Zustands-Voraussetzung wie "Bearbeiten"
     // (PUT nur in stopped/paused), reine UX-Alternative.
     const designEditBtn = document.createElement("button");
-    designEditBtn.textContent = "Grafisch bearbeiten";
+    designEditBtn.textContent = tt("wf.971a83");
     designEditBtn.disabled = !isIdle;
-    designEditBtn.title = isIdle ? "" : "Erst stoppen/pausieren, dann bearbeiten";
+    designEditBtn.title = isIdle ? "" : tt("wf.f7bfda");
     designEditBtn.addEventListener("click", () => this.#openRoleDesigner(wf.id));
     actions.appendChild(designEditBtn);
 
@@ -1088,17 +1089,17 @@ class WorkflowsView extends HTMLElement {
     // Weg dorthin).
 
     const delBtn = document.createElement("button");
-    delBtn.textContent = "Löschen";
+    delBtn.textContent = tt("wf.1010b0");
     delBtn.className = "omp-btn-danger";
     delBtn.disabled = !isIdle;
-    delBtn.title = isIdle ? "" : "Erst stoppen/pausieren, dann löschen";
+    delBtn.title = isIdle ? "" : tt("wf.bc9ab0");
     delBtn.addEventListener("click", () => this.#deleteWorkflow(wf.id));
     actions.appendChild(delBtn);
 
     // Kapitel 12 Teil 3 (§12.3d): in jedem Zustand exportierbar (der
     // Export beschreibt die Definition, nicht den Laufzeitzustand).
     const exportBtn = document.createElement("button");
-    exportBtn.textContent = "Exportieren";
+    exportBtn.textContent = tt("wf.8721fc");
     exportBtn.addEventListener("click", () => this.#exportWorkflow(wf));
     actions.appendChild(exportBtn);
 
@@ -1109,8 +1110,8 @@ class WorkflowsView extends HTMLElement {
     // beide API-Aufrufe intern, ohne Datei-Umweg — in jedem Zustand
     // möglich wie Export selbst (Definition, nicht Laufzeitzustand).
     const duplicateBtn = document.createElement("button");
-    duplicateBtn.textContent = "Duplizieren";
-    duplicateBtn.title = "Legt eine Kopie dieses Workflows an (gestoppt, neuer Name).";
+    duplicateBtn.textContent = tt("wf.529fdd");
+    duplicateBtn.title = tt("wf.5e9890");
     duplicateBtn.addEventListener("click", () => this.#duplicateWorkflow(wf));
     actions.appendChild(duplicateBtn);
 
@@ -1152,10 +1153,10 @@ class WorkflowsView extends HTMLElement {
     modalHeading.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--omp-space-3);";
     const modalTitle = document.createElement("span");
     modalTitle.className = "omp-h1";
-    modalTitle.textContent = this.#editingId ? "Workflow bearbeiten" : "Neuen Workflow anlegen";
+    modalTitle.textContent = this.#editingId ? tt("wf.a12710") : tt("wf.dfb7da");
     const closeBtn = document.createElement("button");
     closeBtn.textContent = "✕";
-    closeBtn.setAttribute("aria-label", "Schließen");
+    closeBtn.setAttribute("aria-label", tt("wf.8311b9"));
     closeBtn.addEventListener("click", () => this.#closeWorkflowForm());
     modalHeading.append(modalTitle, closeBtn);
     modal.appendChild(modalHeading);
@@ -1176,7 +1177,7 @@ class WorkflowsView extends HTMLElement {
     const form = document.createElement("div");
 
     const nameInput = document.createElement("input");
-    nameInput.placeholder = "Workflow-Name";
+    nameInput.placeholder = tt("wf.b2d236");
     nameInput.value = this.#formName;
     nameInput.style.cssText = "width:100%;margin-bottom:6px;box-sizing:border-box;";
     nameInput.addEventListener("input", () => {
@@ -1188,12 +1189,12 @@ class WorkflowsView extends HTMLElement {
     // Katalog-Metadaten, alle optional — leer gelassen zeigt der
     // Katalog den Namen als Titel-Fallback und keine Beschreibung/Tags.
     const metaHeading = document.createElement("div");
-    metaHeading.textContent = "Katalog-Metadaten (optional)";
+    metaHeading.textContent = tt("wf.3b82d6");
     metaHeading.style.cssText = "color:var(--omp-text-dim);margin-bottom:2px;";
     form.appendChild(metaHeading);
 
     const titleInput = document.createElement("input");
-    titleInput.placeholder = "Titel (Fallback: Workflow-Name)";
+    titleInput.placeholder = tt("wf.a964f6");
     titleInput.value = this.#formTitle;
     titleInput.style.cssText = "width:100%;margin-bottom:4px;box-sizing:border-box;";
     titleInput.addEventListener("input", () => {
@@ -1202,7 +1203,7 @@ class WorkflowsView extends HTMLElement {
     form.appendChild(titleInput);
 
     const descInput = document.createElement("textarea");
-    descInput.placeholder = "Beschreibung";
+    descInput.placeholder = tt("wf.35bedb");
     descInput.value = this.#formDescription;
     descInput.rows = 2;
     descInput.style.cssText = "width:100%;margin-bottom:4px;box-sizing:border-box;resize:vertical;font-family:inherit;";
@@ -1215,7 +1216,7 @@ class WorkflowsView extends HTMLElement {
     metaRow.style.cssText = "display:flex;gap:4px;margin-bottom:8px;";
 
     const tagsInput = document.createElement("input");
-    tagsInput.placeholder = "Tags (kommagetrennt)";
+    tagsInput.placeholder = tt("wf.ed8a68");
     tagsInput.value = this.#formTags;
     tagsInput.style.cssText = "width:65%;";
     tagsInput.addEventListener("input", () => {
@@ -1226,7 +1227,7 @@ class WorkflowsView extends HTMLElement {
     categorySelect.style.cssText = "width:35%;";
     const emptyCategoryOpt = document.createElement("option");
     emptyCategoryOpt.value = "";
-    emptyCategoryOpt.textContent = "Kategorie …";
+    emptyCategoryOpt.textContent = tt("wf.f8c1f7");
     categorySelect.appendChild(emptyCategoryOpt);
     for (const [value, label] of Object.entries(CATEGORY_LABELS)) {
       const opt = document.createElement("option");
@@ -1270,11 +1271,11 @@ class WorkflowsView extends HTMLElement {
     const summaryText = document.createElement("span");
     summaryText.textContent =
       roleCount > 0
-        ? `Rollen & Verbindungen: ${roleCount} Rolle(n), ${connCount} Verbindung(en)`
-        : "Rollen & Verbindungen: noch keine Rolle angelegt";
+        ? tt("wf.bbef58", { p0: roleCount, p1: connCount })
+        : tt("wf.6d7c2c");
     summaryText.style.color = "var(--omp-text-dim)";
     const openDesignerBtn = document.createElement("button");
-    openDesignerBtn.textContent = "Grafisch bearbeiten →";
+    openDesignerBtn.textContent = tt("wf.276af7");
     openDesignerBtn.addEventListener("click", () => {
       const workflowId = this.#editingId;
       this.#closeWorkflowForm();
@@ -1287,7 +1288,7 @@ class WorkflowsView extends HTMLElement {
     // Programm-Auflösung, optional — leer gelassen behalten die Nodes
     // ihren eigenen Default.
     const settingsHeading = document.createElement("div");
-    settingsHeading.textContent = "Programm-Format (optional)";
+    settingsHeading.textContent = tt("wf.17c01d");
     settingsHeading.style.cssText = "color:var(--omp-text-dim);margin-bottom:2px;";
     form.appendChild(settingsHeading);
 
@@ -1302,11 +1303,11 @@ class WorkflowsView extends HTMLElement {
     const settingsRow = document.createElement("div");
     settingsRow.style.cssText = "display:flex;gap:4px;align-items:center;margin-bottom:8px;";
     const formatSelect = document.createElement("select");
-    formatSelect.title = "Programm-Format des Workflows — leer lässt jeden Node bei seinem eigenen Default.";
+    formatSelect.title = tt("wf.5be567");
     formatSelect.style.cssText = "width:100%;";
     const defaultOpt = document.createElement("option");
     defaultOpt.value = "";
-    defaultOpt.textContent = "Node-Standard (kein Programm-Format)";
+    defaultOpt.textContent = tt("wf.d6aaa2");
     formatSelect.appendChild(defaultOpt);
     for (const name of STANDARD_FORMATS) {
       const opt = document.createElement("option");
@@ -1327,7 +1328,7 @@ class WorkflowsView extends HTMLElement {
     // Breite/Höhe oben). Bewusst nur Video-Frames (D8 Teil 2-Scope, s.
     // orchestrator/internal/workflows/latencybudget.go).
     const latencyHeading = document.createElement("div");
-    latencyHeading.textContent = "Latenzbudget in Video-Frames (optional)";
+    latencyHeading.textContent = tt("wf.f64b3f");
     latencyHeading.style.cssText = "color:var(--omp-text-dim);margin-bottom:2px;";
     form.appendChild(latencyHeading);
 
@@ -1347,7 +1348,7 @@ class WorkflowsView extends HTMLElement {
 
     // D7 Teil 2 (ARCHITECTURE.md §6.2 Punkt 1): Start/Stop-Zeitpläne.
     const scheduleHeading = document.createElement("div");
-    scheduleHeading.textContent = "Zeitsteuerung (optional)";
+    scheduleHeading.textContent = tt("wf.741ee9");
     scheduleHeading.style.cssText = "color:var(--omp-text-dim);margin-bottom:2px;";
     form.appendChild(scheduleHeading);
 
@@ -1356,7 +1357,7 @@ class WorkflowsView extends HTMLElement {
     });
 
     const addScheduleBtn = document.createElement("button");
-    addScheduleBtn.textContent = "+ Zeitplan";
+    addScheduleBtn.textContent = tt("wf.ec5db6");
     addScheduleBtn.style.cssText = "font-size:11px;cursor:pointer;margin-bottom:8px;";
     addScheduleBtn.addEventListener("click", () => {
       this.#formSchedules.push({ id: crypto.randomUUID(), kind: "daily", action: "start" });
@@ -1374,13 +1375,13 @@ class WorkflowsView extends HTMLElement {
       this.#formConfirmStop = confirmStopCheckbox.checked;
     });
     const confirmStopLabel = document.createElement("span");
-    confirmStopLabel.textContent = "Sicherheitsabfrage beim Stoppen verlangen";
+    confirmStopLabel.textContent = tt("wf.b7d530");
     confirmStopRow.append(confirmStopCheckbox, confirmStopLabel);
     form.appendChild(confirmStopRow);
 
     const createBtn = document.createElement("button");
     createBtn.className = "omp-btn-primary";
-    createBtn.textContent = this.#editingId ? "Speichern" : "Anlegen";
+    createBtn.textContent = this.#editingId ? tt("wf.b97d23") : tt("wf.6212ff");
     createBtn.style.cssText = "display:block;";
     createBtn.addEventListener("click", () => this.#submitForm());
     form.appendChild(createBtn);
@@ -1399,7 +1400,7 @@ class WorkflowsView extends HTMLElement {
     (["once", "daily", "weekly"] as const).forEach((value) => {
       const opt = document.createElement("option");
       opt.value = value;
-      opt.textContent = value === "once" ? "einmalig" : value === "daily" ? "täglich" : "wöchentlich";
+      opt.textContent = value === "once" ? "einmalig" : value === "daily" ? tt("wf.0d9d6e") : tt("wf.b7ca91");
       if (value === sched.kind) opt.selected = true;
       kindSelect.appendChild(opt);
     });
@@ -1412,7 +1413,7 @@ class WorkflowsView extends HTMLElement {
     (["start", "stop"] as const).forEach((value) => {
       const opt = document.createElement("option");
       opt.value = value;
-      opt.textContent = value === "start" ? "Start" : "Stop";
+      opt.textContent = value === "start" ? tt("wf.a6122a") : tt("wf.11a755");
       if (value === sched.action) opt.selected = true;
       actionSelect.appendChild(opt);
     });
