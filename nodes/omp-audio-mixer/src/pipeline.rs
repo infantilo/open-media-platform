@@ -105,6 +105,8 @@ pub enum Event {
         duck_db: f64,
         in_db: f64,
         on_air: bool,
+        /// AFV-Tor offen (Kap. 31.6) — Ziel des Tors, nicht der Rampenstand.
+        afv_open: bool,
     },
 }
 
@@ -1266,6 +1268,7 @@ pub fn run(
                     duck_db: sh.duck_db.get() as f64,
                     in_db: m.rms_db.get() as f64,
                     on_air: sh.on_air.load(Ordering::Relaxed),
+                    afv_open: sh.afv_is_open(),
                 });
             }
             let _ = tx.send(Event::Dsp {
@@ -1276,6 +1279,7 @@ pub fn run(
                 duck_db: 0.0,
                 in_db: 0.0,
                 on_air: false,
+                afv_open: true,
             });
         }
         // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md

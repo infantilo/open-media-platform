@@ -1028,6 +1028,17 @@ PAN, AUX, AUTOMIX, DUCK, AUTOMATION, SZENEN).
   Pre- oder Post-Fader.
 - **SZENEN**: Mix speichern/aktivieren (ohne Aussetzer); Zuordnung
   „Videoquelle → Audio-Szene“ und Presets des ganzen Mixers.
+- **AFV-Anzeige und Gruppierung (Kap. 31.6)**: Folgt ein Kanal dem Bild, zeigt sein Kanalzug die
+  Plakette **AFV ●** (Quelle im Programm, Tor offen) bzw. **AFV ○** (gestrichelt, Tor zu). Die
+  Schaltfläche **Nach Quelle** in der Werkzeugleiste gruppiert die Kanäle je Quelle (Sender-Name als
+  Gruppenkopf) statt je Mischgruppe; die Wahl wird im Browser gemerkt.
+- **Gemeinsamer Schaltzeitpunkt (`takeAt`, Kap. 31.4/31.5)**: Die Playout-Automation gibt bei jedem
+  Take einen absoluten TAI-Zeitpunkt (ns, auf das Bildraster gerundet) an Bildmischer
+  (`crosspoint.cut/take/autoTrans`), Tonmischer (`setVideoContext`) und Kanal-Player (`playAt`) weiter.
+  Bild schaltet auf genau dem Frame, Ton am Sample; der Kanal-Player gibt das vorgeladene Datei-Item
+  (`load` mit `hold`) so frei, dass erstes Bild und erster Ton exakt dort anliegen. `somMs`/`eomMs`
+  im `load` begrenzen die Wiedergabe auf Start-/Endmarke. Einstellungen der Automation:
+  `OMP_PLAYOUT_TAKE_LEAD_MS` (Vorlauf, Standard 150, 0 = aus), `OMP_PLAYOUT_FRAMERATE` (Standard 25).
 
 ## 10b. Handy-Kamera (WebRTC-Gateway)
 

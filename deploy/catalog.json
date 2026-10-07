@@ -154,7 +154,7 @@
     "runner": "process",
     "command": ["../nodes/target/release/omp-video-mixer-me"],
     "env": {},
-    "description": "Vollwertiger M/E-Bildmischer: Programm-/Preset-Bus, Cut/Auto-Transition, DVE-Kanal, Keyer, Tally-Signalisierung.",
+    "description": "Vollwertiger M/E-Bildmischer: Programm-/Preset-Bus, Cut/Auto-Transition (optional framegenau zum gemeinsamen Schaltzeitpunkt takeAt), DVE-Kanal, Keyer, Tally-Signalisierung.",
     "expectedResources": "moderat, wächst mit Eingangszahl/Vorschauen",
     "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 2 }, "supportsDelayCompensation": true }
   },
@@ -164,7 +164,7 @@
     "runner": "process",
     "command": ["../nodes/target/release/omp-audio-mixer"],
     "env": {},
-    "description": "Digitales Audiomischpult mit dynamischer Kanalanzahl, Gain/EQ pro Kanal, automatischem Audio-Follow-Video sowie Aux-, N-1- und frei konfigurierbaren Gruppen-Bussen (Mono bis 7.1, je Bus eigener MXL-Sender mit Gruppen-Tag).",
+    "description": "Digitales Audiomischpult mit dynamischer Kanalanzahl, Gain/EQ pro Kanal, automatischem Audio-Follow-Video (sample-genau, mit AFV-Anzeige und gemeinsamem Schaltzeitpunkt takeAt) sowie Aux-, N-1- und frei konfigurierbaren Gruppen-Bussen (Mono bis 7.1, je Bus eigener MXL-Sender mit Gruppen-Tag).",
     "expectedResources": "gering bis moderat, wächst mit Kanalzahl",
     "latency": { "audio": { "minLatencyFrames": 0, "maxLatencyFrames": 480 } }
   },
@@ -201,7 +201,7 @@
     "runner": "process",
     "command": ["../nodes/target/release/omp-channel-player"],
     "env": {},
-    "description": "Kapitel 6 Teil 6: einzweigiger, Isel-freier Player ohne Playlist/Cue-Take — load() ersetzt den aktuellen Inhalt (Testbild/Datei inkl. MXF-Audio-Shuffle/Live-Quelle) sofort. Audio: je Zielgruppe des Ausgabeprofils (Orchestrator-Dokument audio-rules) ein eigener Sender, Zuordnung per load(audioMapping), Ersatzregeln bei fehlenden Spuren. Gedacht als EINE von zwei physischen Quellen am Video-Mixer-Crosspoint für echten Crossfade (zweimal im selben Workflow als Player A/Player B).",
+    "description": "Kapitel 6 Teil 6: einzweigiger, Isel-freier Player (Datei-Items optional mit hold/playAt für framegenauen Start und somMs/eomMs) ohne Playlist/Cue-Take — load() ersetzt den aktuellen Inhalt (Testbild/Datei inkl. MXF-Audio-Shuffle/Live-Quelle) sofort. Audio: je Zielgruppe des Ausgabeprofils (Orchestrator-Dokument audio-rules) ein eigener Sender, Zuordnung per load(audioMapping), Ersatzregeln bei fehlenden Spuren. Gedacht als EINE von zwei physischen Quellen am Video-Mixer-Crosspoint für echten Crossfade (zweimal im selben Workflow als Player A/Player B).",
     "expectedResources": "gering bis moderat (Datei-Decoding)"
   },
   {

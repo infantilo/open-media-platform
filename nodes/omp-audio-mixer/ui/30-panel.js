@@ -8,7 +8,7 @@ const PRESETS = [
   ["grid", "Grid"],
   ["touch", "Touch"],
 ];
-const DEFAULT_UI = { preset: "auto", mode: "mix", showFaders: null, columns: 0, meterSize: "m", selected: "", centerTab: "in", centerOpen: false, collapsed: {} };
+const DEFAULT_UI = { preset: "auto", mode: "mix", showFaders: null, columns: 0, meterSize: "m", selected: "", centerTab: "in", centerOpen: false, collapsed: {}, bySource: false };
 
 const emptyState = () => ({ channels: [], groups: [], duckRules: [], auxBuses: [], auxFree: 0, scenes: [], contextRules: [], audioContext: { activeSources: [], activeScene: "" }, availableSources: [], availableNodes: [], masterLimiter: { enabled: false, thresholdDb: -6, ratio: 10, makeupDb: 0 } });
 
@@ -131,6 +131,8 @@ button{cursor:pointer}
 .b.onair[data-state=off]{color:var(--c-dim);border-style:dashed}
 .b.auto{border-color:var(--c-auto);color:var(--c-auto);border-radius:10px}
 .b.duck{border-color:var(--c-duck);color:var(--c-duck);border-style:double;border-width:3px}
+.b.afv{border-color:var(--c-air);color:var(--c-air)}
+.b.afv[data-state=closed]{border-color:var(--c-dim);color:var(--c-dim);border-style:dashed}
 .b.manual{background:var(--c-manual);color:#201300;border-color:var(--c-manual)}
 .b.media{border-color:var(--c-dim);color:var(--c-dim)}
 .b.pfl{background:var(--c-accent);color:#04121f;border-color:var(--c-accent)}
@@ -315,6 +317,7 @@ class MixerApp {
     this.sceneBar = h("div", { class: "scenebar", role: "group", "aria-label": "Szenen" });
     this.addBtn = h("button", { class: "tb", type: "button", text: "+ Kanal", onclick: () => this.cmd("addChannel", { label: "" }).then(() => this.poll()) });
     this.sceneSaveBtn = h("button", { class: "tb", type: "button", text: "● Szene speichern", title: "Aktuellen Mix (Fader, Mute, Routing …) als neue Szene speichern", onclick: () => { const n = window.prompt("Name der Szene", ""); if (n && n.trim()) this.cmd("captureScene", { label: n.trim(), includeProcessing: false }).then(() => { this.announce(`Szene ${n.trim()} gespeichert`); this.poll(); }); } });
+    this.srcBtn = h("button", { class: "tb", type: "button", "aria-pressed": "false", text: "Nach Quelle", title: "Kanäle je Quelle gruppieren (statt je Mischgruppe)", onclick: () => { this.ui.bySource = !this.ui.bySource; this.srcBtn.setAttribute("aria-pressed", String(this.ui.bySource)); this.saveUi(); this.lastSig = ""; this.renderChannels(); } });
     this.groupBtn = h("button", { class: "tb", type: "button", text: "Ausgabegruppen", title: "Pro Ausgabegruppe (Admin → Audio-Ausgabe) einen Kanal anlegen, der automatisch die passende Quelle (Tag role.<Gruppe>) übernimmt", onclick: () => this.syncGroupChannels() });
     this.masterMeter = new Meter();
     this.masterMeter.root.className = "meter mm";
@@ -339,7 +342,7 @@ class MixerApp {
       h("div", { class: "tgrp opt" }, this.faderBtn, this.colSel, this.meterSel),
       this.sceneBar,
       h("span", { class: "spacer" }),
-      master, this.sceneSaveBtn, this.groupBtn, this.addBtn);
+      master, this.sceneSaveBtn, this.srcBtn, this.groupBtn, this.addBtn);
     this.channelsEl = h("section", { class: "channels", "aria-label": "Kanäle" });
     this.centerHost = h("aside", { class: "center", "aria-label": "Center Control" });
     this.live_ = h("div", { class: "sr", role: "status", "aria-live": "polite" });
@@ -467,7 +470,7 @@ class MixerApp {
     if (!this.ui.selected || !ids.includes(this.ui.selected)) {
       this.ui.selected = ids[0] || "";
     }
-    const sig = JSON.stringify([this.state.channels.map((c) => [c.id, c.group]), this.state.groups.map((g) => [g.id, g.label]), this.ui.collapsed]);
+    const sig = JSON.stringify([this.state.channels.map((c) => [c.id, c.group, c.source]), this.ui.bySource, this.state.groups.map((g) => [g.id, g.label]), this.ui.collapsed]);
     if (sig !== this.lastSig) {
       this.lastSig = sig;
       this.renderChannels(true);
@@ -629,10 +632,19 @@ class MixerApp {
   // ───── Rendering der Kanäle ─────
   renderChannels() {
     const st = this.state;
+    this.srcBtn.setAttribute("aria-pressed", String(!!this.ui.bySource));
+    // „Nach Quelle“ (Kap. 31.6): Sender-Label als Gruppenkopf, Kanäle ohne Quelle unter „Ohne Quelle“.
+    const srcLabel = (id) => ((st.availableSources || []).find((s) => s.senderId === id) || {}).label || id;
+    const viewGroups = this.ui.bySource
+      ? [...new Set(st.channels.map((c) => c.source || ""))].filter(Boolean).map((id) => ({ id: "src:" + id, label: srcLabel(id), src: id }))
+      : st.groups;
     const byGroup = new Map();
-    for (const g of st.groups) byGroup.set(g.id, []);
+    for (const g of viewGroups) byGroup.set(g.id, []);
     const loose = [];
-    for (const ch of st.channels) (byGroup.has(ch.group) ? byGroup.get(ch.group) : loose).push(ch);
+    for (const ch of st.channels) {
+      const key = this.ui.bySource ? (ch.source ? "src:" + ch.source : "") : ch.group;
+      (byGroup.has(key) ? byGroup.get(key) : loose).push(ch);
+    }
     const ids = new Set(st.channels.map((c) => c.id));
     for (const [id, v] of this.views) if (!ids.has(id)) { v.root.remove(); this.views.delete(id); }
     for (const ch of st.channels) if (!this.views.has(ch.id)) this.views.set(ch.id, new ChannelView(this, ch.id));
@@ -642,7 +654,7 @@ class MixerApp {
       const body = h("div", { class: "gbody" }, collapsed ? null : members.map((c) => this.views.get(c.id).root));
       if (collapsed) for (const c of members) this.views.get(c.id).root.remove();
       let head = null;
-      if (group || st.groups.length) {
+      if (group || viewGroups.length) {
         const tog = h("button", { class: "gtoggle", type: "button", "aria-expanded": String(!collapsed), "aria-label": (collapsed ? "Ausklappen " : "Einklappen ") + label, text: collapsed ? "▸" : "▾", onclick: () => { this.ui.collapsed[id] = !collapsed; this.saveUi(); this.lastSig = ""; this.renderChannels(); } });
         const name = h("button", { class: "gname", type: "button", text: label, title: "Gruppe: Details", onclick: () => { const f = members[0]; if (f) { this.ui.centerTab = "auto"; this.center.setTab("auto"); this.select(f.id, { open: true }); } } });
         const cnt = h("span", { class: "gcnt", text: `${members.length} Kanäle${group && group.autoMixEnabled ? " · AutoMix" : ""}` });
@@ -653,8 +665,8 @@ class MixerApp {
       }
       sections.push(h("div", { class: "group", "data-group": id }, head, body));
     };
-    for (const g of st.groups) { const m = byGroup.get(g.id); if (m.length || true) mk(g.id, g.label, m, g); }
-    if (loose.length) mk("_loose", st.groups.length ? "Ohne Gruppe" : "Kanäle", loose, null);
+    for (const g of viewGroups) { const m = byGroup.get(g.id); if (m.length || !g.src) mk(g.id, g.label, m, g.src ? null : g); }
+    if (loose.length) mk("_loose", this.ui.bySource ? "Ohne Quelle" : st.groups.length ? "Ohne Gruppe" : "Kanäle", loose, null);
     if (!st.channels.length) sections.push(h("p", { class: "empty", text: 'Keine Kanäle — „+ Kanal“ zum Hinzufügen.' }));
     this.channelsEl.replaceChildren(...sections);
     this.applyLayoutVars();
@@ -690,7 +702,7 @@ class MixerApp {
       if (m.type === "dsp") {
         if (m.channelId == null) { this.masterLive.gr = m.compGr; return; }
         const l = this.live.get(m.channelId) || { rms: 0, peak: 0 };
-        Object.assign(l, { compGr: m.compGr, gateGr: m.gateGr, autoDb: m.autoDb, duckDb: m.duckDb, onAir: m.onAir, dspAt: performance.now() });
+        Object.assign(l, { compGr: m.compGr, gateGr: m.gateGr, autoDb: m.autoDb, duckDb: m.duckDb, onAir: m.onAir, afv: m.afv, dspAt: performance.now() });
         this.live.set(m.channelId, l);
         return;
       }
@@ -708,7 +720,7 @@ class MixerApp {
       const l = this.live.get(id);
       if (!l) continue;
       v.setLevel(l.rms || 0, l.peak || 0, now);
-      const sig = (l.onAir ? 1 : 0) + "|" + Math.round((l.autoDb || 0) * 10) + "|" + Math.round((l.duckDb || 0) * 10);
+      const sig = (l.onAir ? 1 : 0) + "|" + (l.afv === false ? 0 : 1) + "|" + Math.round((l.autoDb || 0) * 10) + "|" + Math.round((l.duckDb || 0) * 10);
       if (v.liveSig !== sig) {
         v.liveSig = sig;
         const ch = this.state.channels.find((c) => c.id === id);

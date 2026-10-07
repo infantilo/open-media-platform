@@ -3047,11 +3047,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     .to_string();
                     levels_broadcaster.publish(&json);
                 }
-                pipeline::Event::Dsp { channel_id, comp_gr_db, gate_gr_db, auto_db, duck_db, in_db, on_air } => {
+                pipeline::Event::Dsp { channel_id, comp_gr_db, gate_gr_db, auto_db, duck_db, in_db, on_air, afv_open } => {
                     let json = serde_json::json!({
                         "type": "dsp", "channelId": channel_id,
                         "compGr": comp_gr_db, "gateGr": gate_gr_db,
-                        "autoDb": auto_db, "duckDb": duck_db, "inDb": in_db, "onAir": on_air,
+                        "autoDb": auto_db, "duckDb": duck_db, "inDb": in_db, "onAir": on_air, "afv": afv_open,
                     })
                     .to_string();
                     levels_broadcaster.publish(&json);

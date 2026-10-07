@@ -22,10 +22,11 @@ class ChannelView {
     this.bOnAir = badge("onair", "");
     this.bAuto = badge("auto", "");
     this.bDuck = badge("duck", "");
+    this.bAfv = badge("afv", "");
     this.bManual = badge("manual", "MANUAL");
     this.bMedia = badge("media", "");
     this.bPfl = badge("pfl", "PFL");
-    this.badges = h("div", { class: "badges" }, this.bOnAir, this.bAuto, this.bDuck, this.bManual, this.bMedia, this.bPfl);
+    this.badges = h("div", { class: "badges" }, this.bOnAir, this.bAuto, this.bDuck, this.bAfv, this.bManual, this.bMedia, this.bPfl);
 
     this.meter = new Meter();
     this.meterWrap = h("div", { class: "meterwrap" }, this.meter.root);
@@ -136,6 +137,16 @@ class ChannelView {
       this.bDuck.hidden = !v;
       this.bDuck.textContent = v;
       this.root.dataset.duck = v ? "1" : "0";
+    });
+
+    // Audio-folgt-Video (Kap. 31.6): Plakette nur, wenn der Kanal dem Bild folgt; offen = Quelle im Programm.
+    const follows = !!(ch.follow && ch.follow.mode && ch.follow.mode !== "off");
+    const afvKey = follows ? (live && live.afv === false ? "closed" : "open") : "";
+    set("afv", afvKey, (v) => {
+      this.bAfv.hidden = !v;
+      this.bAfv.dataset.state = v;
+      this.bAfv.textContent = v === "open" ? "AFV ●" : v === "closed" ? "AFV ○" : "";
+      this.bAfv.title = v === "open" ? "Folgt dem Bild: Quelle im Programm, Tor offen" : v === "closed" ? "Folgt dem Bild: Quelle nicht im Programm, Tor zu" : "";
     });
 
     const a = ch.automation;

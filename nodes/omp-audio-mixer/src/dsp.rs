@@ -864,6 +864,11 @@ impl ChannelShared {
         self.afv_ver.fetch_add(1, Ordering::Release);
     }
 
+    /// AFV-Tor offen (Ziel; die Rampe läuft sample-genau im Audio-Thread).
+    pub fn afv_is_open(&self) -> bool {
+        self.afv_target.get() > 0.5
+    }
+
     /// Gain Richtung Programm-Bus: wie [`total_gain`](Self::total_gain),
     /// aber 0 ohne Programm-Routing.
     pub fn main_gain(&self) -> f64 {
