@@ -199,6 +199,15 @@ Die Kopfzeile jedes Wegs sagt „in Ordnung", „mit Hinweisen" oder nennt die
 Formate passen nicht (z. B. Audio → Video), MXL über Hostgrenzen
 (Gateway nötig). Orange sind Hinweise, z. B. unterschiedliche Transporte.
 
+**Bandbreite:** Eine einzelne Verbindung wird nicht gemessen. Zwischen Nodes
+auf demselben Host steht „lokal, kein Netz" (MXL läuft über Shared Memory).
+Über das Netz laufen nur Gateways (2110, SRT, AES67, WebRTC): deren Karte
+zeigt den **berechneten Netzbedarf** („Netz: Tx 871 Mbit/s", „~" = Annahme,
+z. B. Standardformat) und die aktuelle Auslastung der Netzkarte des Hosts
+(„Karte: 6 % von 10 Gbit/s"). Rot wird es, wenn der Bedarf die Karte
+übersteigt oder die Karte über dem Grenzwert (Standard 85 %) belegt ist;
+orange, wenn die Link-Geschwindigkeit unbekannt ist.
+
 Grenzen: Innerhalb einer Node wird angenommen, dass jeder Ausgang aus jedem
 Eingang entstehen kann (die tatsächliche Signalführung im Mischer ist nicht
 sichtbar). Es werden höchstens 20 Wege gezeigt, die kürzesten zuerst. Ob

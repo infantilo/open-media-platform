@@ -12,10 +12,13 @@ import {
   firstError,
   formatName,
   type GraphData,
+  formatMbps,
   type Hop,
   type Issue,
+  linkNetNote,
   MAX_PATHS,
   type NodeContext,
+  netDemandText,
   nodeOptions,
   senderOptions,
   targetOptions,
@@ -26,6 +29,12 @@ interface InstanceInfo {
   id: string;
   hostId?: string;
   crashed?: boolean;
+}
+
+interface NetInfo {
+  thresholdPercent: number;
+  instances: Record<string, { hostKey: string; netRxMbps?: number; netTxMbps?: number; netEstimated?: boolean }>;
+  hosts: Record<string, { label: string; linkMbps?: number; percent?: number; measured: boolean }>;
 }
 
 const POLL_INTERVAL_MS = 5000;
@@ -44,6 +53,7 @@ class SignalPathView extends HTMLElement {
   #graph: GraphData = { nodes: [], edges: [] };
   #instances = new Map<string, InstanceInfo>();
   #hostLabels = new Map<string, string>();
+  #net: NetInfo | null = null;
   #from = "";
   #to = "";
   #via = "";
@@ -97,11 +107,13 @@ class SignalPathView extends HTMLElement {
 
   async #poll() {
     try {
-      const [g, inst, hosts] = await Promise.all([
+      const [g, inst, hosts, net] = await Promise.all([
         apiFetch("/api/v1/graph"),
         apiFetch("/api/v1/instances"),
         apiFetch("/api/v1/hosts"),
+        apiFetch("/api/v1/graph/network"),
       ]);
+      this.#net = net.ok ? ((await net.json()) as NetInfo) : null;
       if (!g.ok) return;
       this.#graph = (await g.json()) as GraphData;
       this.#instances = new Map(((inst.ok ? await inst.json() : []) as InstanceInfo[]).map((i) => [i.id, i]));
@@ -137,11 +149,20 @@ class SignalPathView extends HTMLElement {
     const node = this.#graph.nodes.find((n) => n.id === nodeId);
     const inst = node?.instanceId ? this.#instances.get(node.instanceId) : undefined;
     if (!inst) return {};
-    return {
+    const ctx: NodeContext = {
       hostKey: inst.hostId ?? "",
       hostLabel: inst.hostId ? this.#hostLabels.get(inst.hostId) || inst.hostId : "lokal",
       crashed: inst.crashed,
     };
+    const ni = this.#net?.instances[inst.id];
+    if (ni) {
+      ctx.netRxMbps = ni.netRxMbps;
+      ctx.netTxMbps = ni.netTxMbps;
+      ctx.netEstimated = ni.netEstimated;
+      const h = this.#net!.hosts[ni.hostKey];
+      if (h) ctx.hostNet = { measured: h.measured, linkMbps: h.linkMbps, percent: h.percent, thresholdPercent: this.#net!.thresholdPercent };
+    }
+    return ctx;
   };
 
   #renderResult() {
@@ -184,6 +205,8 @@ class SignalPathView extends HTMLElement {
       parts.push(`<div data-testid="sp-node" style="border:2px solid ${border(2 * k)};border-radius:var(--omp-radius);background:var(--omp-surface-raised);padding:var(--omp-space-2);min-width:150px;max-width:220px;">
         <div style="font-weight:600;">${esc(n.label)}</div>
         <div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">${c.hostLabel ? "Host: " + esc(c.hostLabel) : "Host unbekannt"} · ${n.health === "ok" ? "online" : "offline"}</div>
+        ${netDemandText(c) ? `<div style="font-size:var(--omp-font-size-xs);">Netz: ${esc(netDemandText(c))}</div>` : ""}
+        ${c.hostNet?.measured && c.hostNet.linkMbps && netDemandText(c) ? `<div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">Karte: ${(c.hostNet.percent ?? 0).toFixed(0)} % von ${esc(formatMbps(c.hostNet.linkMbps))}</div>` : ""}
         ${inLabel ? `<div style="font-size:var(--omp-font-size-xs);">▶ ${esc(inLabel)}</div>` : ""}
         ${outLabel ? `<div style="font-size:var(--omp-font-size-xs);">${esc(outLabel)} ▶</div>` : ""}
         ${at(2 * k).map((i) => `<div style="color:${COLOR[i.severity]};font-size:var(--omp-font-size-xs);">${esc(i.text)}</div>`).join("")}
@@ -193,6 +216,7 @@ class SignalPathView extends HTMLElement {
         parts.push(`<div data-testid="sp-link" style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:110px;max-width:200px;color:${border(2 * k + 1) === "var(--omp-border)" ? "var(--omp-text-dim)" : border(2 * k + 1)};font-size:var(--omp-font-size-xs);text-align:center;">
           <div>${esc(formatName(h.sender.format))} · ${esc(transportName(h.sender.transport))}</div>
           <div style="font-size:18px;line-height:1;">⟶</div>
+          ${linkNetNote(h, this.#ctx) ? `<div>${esc(linkNetNote(h, this.#ctx))}</div>` : ""}
           ${at(2 * k + 1).map((i) => `<div>${esc(i.text)}</div>`).join("")}
         </div>`);
       }

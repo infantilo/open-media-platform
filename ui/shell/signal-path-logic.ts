@@ -151,6 +151,36 @@ export interface NodeContext {
   hostLabel?: string;
   hostKey?: string; // "" = lokaler Host, undefined = unbekannt
   crashed?: boolean;
+  /** Berechneter Netzbedarf der Node in Mbit/s (nur Nodes mit Netzverkehr, z. B. Gateways). */
+  netRxMbps?: number;
+  netTxMbps?: number;
+  netEstimated?: boolean;
+  /** Netzkarte des Hosts, auf dem die Node läuft. */
+  hostNet?: { measured: boolean; linkMbps?: number; percent?: number; thresholdPercent: number };
+}
+
+export function formatMbps(v: number): string {
+  return v >= 1000 ? `${(v / 1000).toFixed(v >= 10000 ? 0 : 1)} Gbit/s` : `${v.toFixed(v >= 100 ? 0 : 1)} Mbit/s`;
+}
+
+/** Netzbedarf einer Node als Text, z. B. "Rx ~2,2 Gbit/s"; leer ohne Netzverkehr. */
+export function netDemandText(c: NodeContext): string {
+  const rx = c.netRxMbps ?? 0;
+  const tx = c.netTxMbps ?? 0;
+  if (rx <= 0 && tx <= 0) return "";
+  const est = c.netEstimated ? "~" : "";
+  return [rx > 0 ? `Rx ${est}${formatMbps(rx)}` : "", tx > 0 ? `Tx ${est}${formatMbps(tx)}` : ""].filter(Boolean).join(" / ");
+}
+
+/** Beschriftung der Verbindung zwischen zwei Nodes zum Thema Netz. */
+export function linkNetNote(h: Hop, ctx: (nodeId: string) => NodeContext): string {
+  const a = ctx(h.fromNode.id);
+  const b = ctx(h.toNode.id);
+  if (h.sender.transport?.endsWith(":mxl")) {
+    return a.hostKey !== undefined && a.hostKey === b.hostKey ? "lokal, kein Netz" : "";
+  }
+  const t = netDemandText({ netTxMbps: a.netTxMbps, netEstimated: a.netEstimated });
+  return t ? `Netz ${t}` : "";
 }
 
 const FORMAT_NAMES: Record<string, string> = {
@@ -177,6 +207,35 @@ export function diagnosePath(path: Hop[], ctx: (nodeId: string) => NodeContext):
   nodes.forEach((n, k) => {
     if (n.health !== "ok") issues.push({ severity: "error", position: 2 * k, text: `${n.label} ist offline` });
     if (ctx(n.id).crashed) issues.push({ severity: "error", position: 2 * k, text: `${n.label} ist abgestürzt` });
+  });
+  nodes.forEach((n, k) => {
+    const c = ctx(n.id);
+    const rx = c.netRxMbps ?? 0;
+    const tx = c.netTxMbps ?? 0;
+    if (rx <= 0 && tx <= 0) return;
+    const hn = c.hostNet;
+    const host = c.hostLabel ?? "Host";
+    if (!hn || !hn.measured || !hn.linkMbps) {
+      issues.push({
+        severity: "warn",
+        position: 2 * k,
+        text: `Netz: ${netDemandText(c)} — Link-Geschwindigkeit der Karte von ${host} unbekannt, Reserve nicht prüfbar`,
+      });
+      return;
+    }
+    if (Math.max(rx, tx) > hn.linkMbps) {
+      issues.push({
+        severity: "error",
+        position: 2 * k,
+        text: `Netz: braucht ${netDemandText(c)}, die Karte von ${host} schafft nur ${formatMbps(hn.linkMbps)} je Richtung`,
+      });
+    } else if (hn.percent !== undefined && hn.percent >= hn.thresholdPercent) {
+      issues.push({
+        severity: "error",
+        position: 2 * k,
+        text: `Netzkarte von ${host} zu ${hn.percent.toFixed(0)} % belegt (Grenzwert ${hn.thresholdPercent} %)`,
+      });
+    }
   });
   path.forEach((h, k) => {
     const pos = 2 * k + 1;

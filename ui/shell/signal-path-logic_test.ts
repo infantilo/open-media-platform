@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { diagnosePath, findPaths, firstError, type GraphData, type GraphNode } from "./signal-path-logic.ts";
+import { diagnosePath, findPaths, firstError, linkNetNote, netDemandText, type GraphData, type GraphNode } from "./signal-path-logic.ts";
 
 const V = "urn:x-nmos:format:video";
 const A = "urn:x-nmos:format:audio";
@@ -62,4 +62,23 @@ Deno.test("diagnosePath: offline, Formatfehler, Host-Grenze, erste Fehlerstelle"
   assertEquals(issues.filter((i) => i.severity === "error").length, 3);
   const ok = findPaths(g, { fromSender: "src.s1", toNodeId: "out" }).paths[0];
   assertEquals(diagnosePath(ok, () => ({})), []);
+});
+
+Deno.test("Netz: Bedarf größer als Karte, Auslastung über Grenzwert, unbekannter Link, lokaler MXL-Link", () => {
+  const p = findPaths(g, { fromSender: "src.s1", toNodeId: "mix" }).paths[0];
+  const hn = (percent: number, linkMbps?: number) => ({ measured: true, linkMbps, percent, thresholdPercent: 85 });
+  const ctx = (c: Partial<import("./signal-path-logic.ts").NodeContext>) => (id: string) => id === "src" ? { hostKey: "h", ...c } : { hostKey: "h" };
+  // 12 Gbit/s Bedarf auf 10-Gbit/s-Karte
+  let issues = diagnosePath(p, ctx({ netTxMbps: 12000, hostNet: hn(1, 10000) }));
+  assertEquals(issues.length, 1);
+  assertEquals(issues[0].severity, "error");
+  // Bedarf passt, Karte aber zu 90 % belegt
+  issues = diagnosePath(p, ctx({ netTxMbps: 2000, hostNet: hn(90, 10000) }));
+  assertEquals(issues[0].severity, "error");
+  // Bedarf passt, Karte frei → keine Meldung
+  assertEquals(diagnosePath(p, ctx({ netTxMbps: 2000, hostNet: hn(10, 10000) })), []);
+  // Link-Geschwindigkeit unbekannt → Hinweis, kein Fehler
+  assertEquals(diagnosePath(p, ctx({ netTxMbps: 2000, hostNet: { measured: true, thresholdPercent: 85 } }))[0].severity, "warn");
+  assertEquals(netDemandText({ netRxMbps: 2177.28, netEstimated: true }), "Rx ~2.2 Gbit/s");
+  assertEquals(linkNetNote(p[0], () => ({ hostKey: "h" })), "lokal, kein Netz");
 });

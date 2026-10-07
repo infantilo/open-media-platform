@@ -30306,3 +30306,14 @@ Bild-/Pegel-Fluss (Health/Scope), Soll-Abgleich zu Workflows, Eingriffe.
 Live geprüft (omp-source → omp-viewer, CDP); Mehr-Hop und Fehlerfälle nur
 per Unit-Test (4 Tests), da keine Test-Node mit Durchleitung billig
 startbar war.
+
+**Nachtrag (2026-10-07, Teil 2): Bandbreite im Signalweg.** Keine Messung je
+IS-05-Verbindung (Host-Agent misst nur die ganze Karte; MXL zwischen Nodes
+eines Hosts ist Shared Memory). Neuer Endpunkt `GET /api/v1/graph/network`
+(`graph_network_handlers.go`): berechneter Netzbedarf je Instanz (derselbe
+Rechenweg wie der Scheduler, `computeRoleNetwork`, Fallback 1080p50 → „~")
+plus Karte/Auslastung je Host (Agent-Hosts und lokaler Host, Grenzwert aus
+`placement.Thresholds.NetPercent`). UI: Bedarf + Kartenauslastung auf der
+Node-Karte, „lokal, kein Netz" an MXL-Links auf einem Host; Fehler bei
+Bedarf > Karte oder Auslastung ≥ Grenzwert, Hinweis bei unbekanntem Link.
+Live geprüft (omp-source → omp-2110-gateway-output: 871 Mbit/s Tx, Karte 6 %).

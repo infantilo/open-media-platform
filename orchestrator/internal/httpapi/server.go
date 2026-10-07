@@ -454,6 +454,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("DELETE /api/v1/nodes/{id}/invites", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/invites", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/invites/qr", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/invites/qr", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/graph", g.requireAuth(handleGraph(graphSvc)))
+	mux.HandleFunc("GET /api/v1/graph/network", g.requireAuth(handleGraphNetwork(hostRegistry, hostMetrics, launcherSvc, placementThresholds)))
 	mux.HandleFunc("POST /api/v1/graph/edges", g.requireVerbGlobal(authz.VerbConfigure, handlePostGraphEdge(graphSvc)))
 	mux.HandleFunc("DELETE /api/v1/graph/edges/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleDeleteGraphEdge(graphSvc)))
 	mux.HandleFunc("GET /api/v1/layouts/{name}", g.requireAuth(handleGetLayout(layoutStore)))
