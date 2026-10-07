@@ -1,4 +1,4 @@
-import { t } from "../shell/i18n.ts";
+import { t, t as tt } from "../shell/i18n.ts";
 // Grafische Audio-Routing-/Mix-/Verzögerungs-Matrix (UMSETZUNG.md
 // Kapitel 23, Schritt 3) — DOM-freie Kompilierung, per `deno test`
 // geprüft. Allgemeiner Baustein ("beliebige Quellkanäle auf beliebige
@@ -183,7 +183,7 @@ export const DOWNMIX_PRESETS: DownmixPreset[] = [
   },
   {
     id: "5.1-to-stereo",
-    label: "5.1 → Stereo (ITU-Downmix, −3dB)",
+    label: tt("y.dm51"),
     fromLayout: "5.1",
     outputCount: 2,
     help: t("aml.40faff"),

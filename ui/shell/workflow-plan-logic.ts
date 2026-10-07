@@ -1,4 +1,4 @@
-import { t } from "./i18n.ts";
+import { t, t as tt } from "./i18n.ts";
 // Plan-Vorschau eines Workflows (GET /api/v1/workflows/{id}/plan): Wire-Format und reine Anzeigelogik
 // (ohne DOM, testbar). Gezeigt wird, wo die Rollen laufen würden bzw. laufen, mit welchem erwarteten
 // Bedarf und ob dabei ein Ressourcenengpass droht.
@@ -84,7 +84,7 @@ export function demandText(r: RolePlan): string {
   if (!r.profileKnown) return t("wpl.d6616a");
   // Profile messen CPU je Prozess (100 % = ein Kern).
   const cores = r.cpuPercent / 100;
-  return `~${cores < 0.1 ? "<0,1" : cores.toFixed(1).replace(".", ",")} Kerne · ${bytesText(r.ramBytes)}`;
+  return tt("y.cores", { p0: cores < 0.1 ? "<0,1" : cores.toFixed(1).replace(".", ","), p1: bytesText(r.ramBytes) });
 }
 
 /** Auslastung eines Hosts: jetzt → mit diesem Workflow. */

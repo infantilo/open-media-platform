@@ -2688,7 +2688,7 @@ class AdminView extends HTMLElement {
     for (const org of this.#organizations) {
       const opt = document.createElement("option");
       opt.value = org.id;
-      opt.textContent = org.id === "default" ? `${org.name} (Standard)` : org.name;
+      opt.textContent = org.id === "default" ? tt("y.orgStd", { p0: org.name }) : org.name;
       select.appendChild(opt);
     }
     select.value = value || "default";
@@ -2961,7 +2961,7 @@ class AdminView extends HTMLElement {
     title.className = "omp-h1";
     title.textContent = tt("adm.a45bce", { p0: this.#storageBackends.length });
     const newBtn = document.createElement("button");
-    newBtn.textContent = this.#showStorageForm ? tt("adm.4b9727") : "+ Neues Backend";
+    newBtn.textContent = this.#showStorageForm ? tt("adm.4b9727") : tt("y.newBackend");
     newBtn.style.cssText = "font-size:11px;cursor:pointer;";
     newBtn.addEventListener("click", () => {
       if (this.#showStorageForm) this.#closeStorageForm();
@@ -3728,7 +3728,7 @@ class AdminView extends HTMLElement {
     // egal in welcher Richtung (userFirst/nodeFirst, s. o.).
     const subjectField: HTMLElement[] = this.#newSubjectType === "group" ? [groupSelect] : [subjectInput, subjectDatalist];
 
-    // Kapitel 12 Teil 4 (§12.3e): Scope-Auswahl — "(Global)" ist das
+    // Kapitel 12 Teil 4 (§12.3e): Scope-Auswahl — tt("y.global") ist das
     // unveränderte Vor-Kapitel-12-Teil-4-Verhalten (Node-ID/Instanz-ID
     // unten), ein gewählter Workflow schaltet das Feld darunter auf
     // Rollennamen um (stabil über Rollen-Neustarts, anders als eine
@@ -3737,7 +3737,7 @@ class AdminView extends HTMLElement {
     workflowSelect.style.cssText = "min-width:140px;";
     const globalOpt = document.createElement("option");
     globalOpt.value = "";
-    globalOpt.textContent = "(Global)";
+    globalOpt.textContent = tt("y.global");
     workflowSelect.appendChild(globalOpt);
     for (const wf of this.#workflows) {
       const opt = document.createElement("option");
@@ -3875,7 +3875,7 @@ class AdminView extends HTMLElement {
 
     const newBtn = document.createElement("button");
     newBtn.className = "omp-btn-primary";
-    newBtn.textContent = "+ Node/Microservice importieren";
+    newBtn.textContent = tt("y.importNode");
     newBtn.addEventListener("click", () => {
       this.#showCatalogForm = true;
       this.#admissionResults = null;

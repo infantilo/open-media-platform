@@ -713,7 +713,7 @@ class SchedulerView extends HTMLElement {
         live.title = tt("sched.95c28d");
         live.textContent =
           tt("sched.ed7157", { p0: host.live.cpuPercent.toFixed(0), p1: host.live.memPercent.toFixed(0) }) +
-          (host.live.netPercent !== undefined ? ` · Netz ${host.live.netPercent.toFixed(0)} %` : "") +
+          (host.live.netPercent !== undefined ? tt("y.netPct", { p0: host.live.netPercent.toFixed(0) }) : "") +
           (host.live.gpuPercent !== undefined ? ` · GPU ${host.live.gpuPercent.toFixed(0)} %` : "");
         bh.appendChild(live);
       }
@@ -737,7 +737,7 @@ class SchedulerView extends HTMLElement {
           return `${this.#slotLabel(dates, a)}–${this.#slotLabel(dates, b + 1 > dates.length * perDay - 1 ? b : b + 1)} (${[...what].join(", ")})`;
         });
         sum.style.color = "var(--omp-error, #e55)";
-        sum.textContent = `⚠ Engpass: ${parts.join(" · ")}${this.#ranges(overIdx).length > 4 ? " …" : ""}`;
+        sum.textContent = tt("y.bottleneck", { p0: parts.join(" · "), p1: this.#ranges(overIdx).length > 4 ? " …" : "" });
       } else if (anyDemand) {
         const freeC = utils.map((u) => u.freeCores).filter((v): v is number => v !== null);
         const freeM = utils.map((u) => u.freeMemBytes).filter((v): v is number => v !== null);
@@ -859,7 +859,7 @@ class SchedulerView extends HTMLElement {
         // Link unbekannt: Bedarf trotzdem zeigen, aber nicht als "frei" einfärben.
         if (level === "free" && (slot.netRxMbps > 0 || slot.netTxMbps > 0)) level = "unknown";
         const est = slot.netEstimated ? "~" : "";
-        tip = `${when} · Netz Rx ${est}${fmtMbps(slot.netRxMbps)} · Tx ${est}${fmtMbps(slot.netTxMbps)}` +
+        tip = `${when}${tt("y.netRxTx", { p0: est + fmtMbps(slot.netRxMbps), p1: est + fmtMbps(slot.netTxMbps) })}` +
           (cap.netMbps > 0
             ? tt("sched.ab0c20", { p0: fmtMbps(cap.netMbps) }) + (pct !== null ? ` (${pct.toFixed(0)} %)` : "") +
               (u.freeNetMbps !== null ? tt("sched.c19736", { p0: fmtMbps(u.freeNetMbps) }) : "")
@@ -1130,7 +1130,7 @@ class SchedulerView extends HTMLElement {
       if (reasons.size > 0) {
         el.style.borderColor = "var(--omp-error, #e55)";
         el.style.boxShadow = "0 0 0 1px var(--omp-error, #e55)";
-        el.title += `\n⚠ Ressourcen-Engpass: ${[...reasons].join(" · ")}`;
+        el.title += tt("y.resBottleneck", { p0: [...reasons].join(" · ") });
       }
     }
 

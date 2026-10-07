@@ -1,7 +1,7 @@
 // Gemeinsame Alarm-Logik für <omp-alarm-view> und <omp-alert-bar>
 // (Footer). Aus alarm-view.ts ausgelagert (Nutzerauftrag 2026-09-21);
 // Erläuterungen zur Quellenwahl/SSE-Strategie stehen dort.
-import { t } from "./i18n.ts";
+import { t, t as tt } from "./i18n.ts";
 import { apiFetch } from "./connection.ts";
 
 export interface HostInfo {
@@ -141,7 +141,7 @@ export function buildAlarms(
     const target = a.suggestedHostId
       ? t("alarms.31c1e2", { p0: a.suggestedHostLabel ?? a.suggestedHostId })
       : t("alarms.c77b3a");
-    const netPart = a.netPercent !== undefined ? ` / Netz ${a.netPercent.toFixed(0)}%` : "";
+    const netPart = a.netPercent !== undefined ? tt("y.netPart", { p0: a.netPercent.toFixed(0) }) : "";
     alarms.push({
       key: `placement:${a.hostId}`,
       fingerprint: `${a.reason}|${[...a.instanceIds].sort().join(",")}`,

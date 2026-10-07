@@ -151,7 +151,7 @@ export function rowsToMetadata(rows: MetadataRows): { ok: true; metadata: AssetM
       const k = row.key.trim();
       if (!k && !row.value.trim()) continue;
       if (!k) return { ok: false, error: tt("avl.29cb3a", { p0: label, p1: row.value }) };
-      if (k in obj) return { ok: false, error: `${label}: Feld "${k}" doppelt` };
+      if (k in obj) return { ok: false, error: tt("y.dupField", { p0: label, p1: k }) };
       if (row.json) {
         try {
           obj[k] = JSON.parse(row.value);

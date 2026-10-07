@@ -12,26 +12,26 @@ const EQ_BANDS = [
   { key: "high", name: "HIGH", gain: "eqHigh", freq: "eqHighFreq", width: "eqHighWidth", kind: "high", defF: 8000 },
 ];
 const TRIGGERS = [
-  ["unmute", "Beim Entstummen"],
-  ["mute", "Beim Stummschalten"],
-  ["fader_open", "Fader öffnet"],
-  ["fader_close", "Fader schließt"],
-  ["scene_activate", "Szene aktiviert"],
-  ["video_active", "Videoquelle aktiv"],
-  ["video_inactive", "Videoquelle inaktiv"],
+  ["unmute", T("am2.e1b587")],
+  ["mute", T("am2.e1bd52")],
+  ["fader_open", T("am2.08a722")],
+  ["fader_close", T("am2.880483")],
+  ["scene_activate", T("am2.134d3e")],
+  ["video_active", T("am2.6b78f7")],
+  ["video_inactive", T("am2.539cb7")],
 ];
 const ACTIONS = [
-  ["none", "Nichts"],
-  ["play", "Play"],
-  ["resume", "Resume"],
-  ["pause", "Pause"],
-  ["stop", "Stop"],
+  ["none", T("am2.ab87cc")],
+  ["play", T("am2.de3c73")],
+  ["resume", T("am2.f1cefe")],
+  ["pause", T("am2.105b29")],
+  ["stop", T("am2.11a755")],
 ];
 const DETECTORS = [
-  ["speech", "Sprache (300–3400 Hz)"],
+  ["speech", T("am2.28810f")],
   ["rms", "RMS"],
-  ["short", "Kurzzeit (400 ms)"],
-  ["peak", "Peak"],
+  ["short", T("am2.31fd4a")],
+  ["peak", T("am2.a21e60")],
 ];
 
 class CenterControl {
@@ -43,13 +43,13 @@ class CenterControl {
     this.built = new Map();
 
     this.title = h("div", { class: "ctitle" });
-    this.prevBtn = h("button", { class: "nav", type: "button", "aria-label": "Vorheriger Kanal", text: "◀", onclick: () => app.step(-1) });
-    this.nextBtn = h("button", { class: "nav", type: "button", "aria-label": "Nächster Kanal", text: "▶", onclick: () => app.step(1) });
-    this.closeBtn = h("button", { class: "nav close", type: "button", "aria-label": "Center Control schließen", text: "✕", onclick: () => app.closeCenter() });
+    this.prevBtn = h("button", { class: "nav", type: "button", "aria-label": T("am2.8a1533"), text: "◀", onclick: () => app.step(-1) });
+    this.nextBtn = h("button", { class: "nav", type: "button", "aria-label": T("am2.f8baf8"), text: "▶", onclick: () => app.step(1) });
+    this.closeBtn = h("button", { class: "nav close", type: "button", "aria-label": T("am2.781460"), text: "✕", onclick: () => app.closeCenter() });
     this.head = h("div", { class: "chead2" }, this.prevBtn, this.title, this.nextBtn, this.closeBtn);
-    this.tabBar = h("div", { class: "tabs", role: "tablist", "aria-label": "Center-Control-Bereiche" });
+    this.tabBar = h("div", { class: "tabs", role: "tablist", "aria-label": T("am2.c18a6f") });
     this.body = h("div", { class: "cbody", role: "tabpanel" });
-    this.empty = h("p", { class: "empty", text: "Kanal auswählen, um Details zu bearbeiten." });
+    this.empty = h("p", { class: "empty", text: T("am2.9e0322") });
     this.root = h("div", { class: "center-inner" }, this.head, this.tabBar, this.body, this.empty);
 
     this.tabs = [
@@ -214,23 +214,23 @@ class CenterControl {
   tabIn() {
     const app = this.app;
     const root = h("div", { class: "ctab" });
-    const src = this.section("Eingang");
-    this.select("Quelle", () => [["", "Intern (Testton)"], ...app.state.availableSources.map((s) => [s.senderId, s.label])], (ch) => ch.source || "", (ch, v) => { ch.source = v; app.sendCh(ch.id, "setSource", { senderId: v }); }, src);
+    const src = this.section(T("am2.4bf36f"));
+    this.select(T("am2.d3402e"), () => [["", T("am2.3621e8")], ...app.state.availableSources.map((s) => [s.senderId, s.label])], (ch) => ch.source || "", (ch, v) => { ch.source = v; app.sendCh(ch.id, "setSource", { senderId: v }); }, src);
     const g = this.grid();
-    this.slider({ label: "Gain / Fader", min: -60, max: 12, step: 0.1, def: 0, unit: "dB", get: (ch) => ch.gainDb, set: (ch, v) => app.setGainLive(ch.id, v), fmt: (v) => fmtSigned(v) + " dB" }, g);
-    this.toggle("Phase ⌀ invertieren", (ch) => ch.proc.phaseInvert, (ch, v) => { ch.proc.phaseInvert = v; app.sendCh(ch.id, "setPhase", { invert: v }); }, g);
-    this.toggle("Solo / PFL", (ch) => ch.pfl, (ch) => app.togglePfl(ch.id), g);
-    const name = h("input", { class: "text-input", type: "text", "aria-label": "Kanalname", maxlength: "40" });
+    this.slider({ label: T("am2.d9a3ff"), min: -60, max: 12, step: 0.1, def: 0, unit: "dB", get: (ch) => ch.gainDb, set: (ch, v) => app.setGainLive(ch.id, v), fmt: (v) => fmtSigned(v) + " dB" }, g);
+    this.toggle(T("am2.5a8536"), (ch) => ch.proc.phaseInvert, (ch, v) => { ch.proc.phaseInvert = v; app.sendCh(ch.id, "setPhase", { invert: v }); }, g);
+    this.toggle(T("am2.b8ffb3"), (ch) => ch.pfl, (ch) => app.togglePfl(ch.id), g);
+    const name = h("input", { class: "text-input", type: "text", "aria-label": T("am2.459cc4"), maxlength: "40" });
     name.addEventListener("change", () => {
       const ch = this.cur();
       if (ch && name.value.trim()) { ch.label = name.value.trim(); app.sendCh(ch.id, "setLabel", { label: ch.label }); app.renderChannels(); this.refresh(); }
     });
     this.bind(() => { const ch = this.cur(); if (ch && document.activeElement !== name && app.shadow.activeElement !== name) name.value = ch.label; });
-    const rm = h("button", { class: "tog danger", type: "button", text: "Kanal entfernen", onclick: async () => { const ch = this.cur(); if (ch && (await app.confirm(`Kanal „${ch.label}“ entfernen?`))) app.cmd("removeChannel", { channelId: ch.id }).then(() => app.poll()); } });
+    const rm = h("button", { class: "tog danger", type: "button", text: T("am2.efc04e"), onclick: async () => { const ch = this.cur(); if (ch && (await app.confirm(T("am2.fcd23f", { p0: ch.label })))) app.cmd("removeChannel", { channelId: ch.id }).then(() => app.poll()); } });
     const mv = (d) => () => { const ch = this.cur(); if (!ch) return; const i = app.state.channels.findIndex((c) => c.id === ch.id); app.moveChannelTo(ch.id, i + d); };
-    const left = h("button", { class: "tog", type: "button", text: "◀ Nach links", title: "Kanalzug nach links (Alt+◀)", onclick: mv(-1) });
-    const right = h("button", { class: "tog", type: "button", text: "Nach rechts ▶", title: "Kanalzug nach rechts (Alt+▶)", onclick: mv(1) });
-    root.append(src, this.section("Pegel", g), this.section("Name", name, rm), this.section("Reihenfolge", h("div", { class: "row" }, left, right)));
+    const left = h("button", { class: "tog", type: "button", text: T("x.left"), title: T("am2.abb6e2"), onclick: mv(-1) });
+    const right = h("button", { class: "tog", type: "button", text: T("am2.90cf6b"), title: T("am2.300a10"), onclick: mv(1) });
+    root.append(src, this.section(T("am2.f23ca0"), g), this.section(T("am2.49ee30"), name, rm), this.section(T("am2.29c5cb"), h("div", { class: "row" }, left, right)));
     return root;
   }
 
@@ -241,7 +241,7 @@ class CenterControl {
     const canvas = h("canvas", { class: "eqplot", "aria-label": "EQ-Frequenzgang. Punkte ziehen: waagerecht Frequenz, senkrecht Gain." });
     const top = this.grid("cgrid");
     this.toggle("EQ Bypass", (ch) => ch.proc.eqBypass, (ch, v) => { ch.proc.eqBypass = v; app.sendCh(ch.id, "setEqBypass", { bypass: v }); }, top);
-    this.toggle("Hochpass", (ch) => ch.proc.eqHpEnabled, (ch, v) => { ch.proc.eqHpEnabled = v; app.sendCh(ch.id, "setEqHp", { enabled: v, freq: ch.proc.eqHpFreq }); }, top);
+    this.toggle(T("am2.db3c8f"), (ch) => ch.proc.eqHpEnabled, (ch, v) => { ch.proc.eqHpEnabled = v; app.sendCh(ch.id, "setEqHp", { enabled: v, freq: ch.proc.eqHpFreq }); }, top);
     this.slider({ label: "HP-Frequenz", min: 20, max: 500, step: 1, scale: "log", def: 80, unit: "Hz", get: (ch) => ch.proc.eqHpFreq, set: (ch, v) => { ch.proc.eqHpFreq = v; app.sendCh(ch.id, "setEqHp", { enabled: ch.proc.eqHpEnabled, freq: v }, "hp"); } }, top);
 
     const draw = () => {
@@ -315,12 +315,12 @@ class CenterControl {
     const bands = h("div", { class: "bands" });
     for (const b of EQ_BANDS) {
       const col = h("div", { class: "band" }, h("h4", { text: b.name }));
-      this.slider({ label: "Gain", min: -24, max: 12, step: 0.5, def: 0, center: 0, unit: "dB", fmt: (v) => fmtSigned(v) + " dB", get: (ch) => ch.proc[b.gain], set: (ch, v) => { ch.proc[b.gain] = v; app.sendCh(ch.id, "setEqGain", { band: b.key, gainDb: v }, "g" + b.key); draw(); } }, col);
-      this.slider({ label: "Frequenz", min: 20, max: 20000, step: 1, scale: "log", def: b.defF, fmt: (v) => (v >= 1000 ? (v / 1000).toFixed(2) + " kHz" : Math.round(v) + " Hz"), get: (ch) => ch.proc[b.freq], set: (ch, v) => { const q = ch.proc[b.freq] / Math.max(ch.proc[b.width], 1); ch.proc[b.freq] = v; ch.proc[b.width] = v / q; app.sendCh(ch.id, "setEqBand", { band: b.key, freq: v, width: v / q }, "f" + b.key); draw(); } }, col);
+      this.slider({ label: T("am2.35d72f"), min: -24, max: 12, step: 0.5, def: 0, center: 0, unit: "dB", fmt: (v) => fmtSigned(v) + " dB", get: (ch) => ch.proc[b.gain], set: (ch, v) => { ch.proc[b.gain] = v; app.sendCh(ch.id, "setEqGain", { band: b.key, gainDb: v }, "g" + b.key); draw(); } }, col);
+      this.slider({ label: T("am2.0c4b5d"), min: 20, max: 20000, step: 1, scale: "log", def: b.defF, fmt: (v) => (v >= 1000 ? (v / 1000).toFixed(2) + " kHz" : Math.round(v) + " Hz"), get: (ch) => ch.proc[b.freq], set: (ch, v) => { const q = ch.proc[b.freq] / Math.max(ch.proc[b.width], 1); ch.proc[b.freq] = v; ch.proc[b.width] = v / q; app.sendCh(ch.id, "setEqBand", { band: b.key, freq: v, width: v / q }, "f" + b.key); draw(); } }, col);
       this.slider({ label: "Q", min: 0.1, max: 20, step: 0.1, scale: "log", def: 1, fmt: (v) => v.toFixed(1), get: (ch) => ch.proc[b.freq] / Math.max(ch.proc[b.width], 1), set: (ch, v) => { ch.proc[b.width] = ch.proc[b.freq] / v; app.sendCh(ch.id, "setEqBand", { band: b.key, freq: ch.proc[b.freq], width: ch.proc[b.width] }, "f" + b.key); draw(); } }, col);
       bands.append(col);
     }
-    root.append(this.section("Frequenzgang", canvas), this.section("Filter", top), this.section("Bänder", bands));
+    root.append(this.section(T("am2.cffd09"), canvas), this.section(T("am2.d7778d"), top), this.section(T("am2.79946f"), bands));
     return root;
   }
 
@@ -347,16 +347,16 @@ class CenterControl {
       const root = h("div", { class: "ctab" });
       const g = this.grid();
       const send = (ch) => app.sendCh(ch.id, "setComp", { enabled: ch.proc.compEnabled, thresholdDb: ch.proc.compThreshold, ratio: ch.proc.compRatio, makeupDb: ch.proc.compMakeup, attackMs: ch.proc.compAttack, releaseMs: ch.proc.compRelease, kneeDb: ch.proc.compKnee, rms: ch.proc.compRms }, "comp");
-      this.toggle("Kompressor aktiv", (ch) => ch.proc.compEnabled, (ch, v) => { ch.proc.compEnabled = v; send(ch); }, g);
-      this.segmented([[true, "RMS"], [false, "Peak"]], (ch) => ch.proc.compRms, (ch, v) => { ch.proc.compRms = v; send(ch); }, g, "Detektor");
+      this.toggle(T("am2.6627c9"), (ch) => ch.proc.compEnabled, (ch, v) => { ch.proc.compEnabled = v; send(ch); }, g);
+      this.segmented([[true, "RMS"], [false, T("am2.a21e60")]], (ch) => ch.proc.compRms, (ch, v) => { ch.proc.compRms = v; send(ch); }, g, T("am2.98babc"));
       const s = (label, key, min, max, step, def, unit, scale) => this.slider({ label, min, max, step, def, unit, scale, get: (ch) => ch.proc[key], set: (ch, v) => { ch.proc[key] = v; send(ch); } }, g);
-      s("Threshold", "compThreshold", -60, 0, 0.5, -20, "dB");
-      s("Ratio", "compRatio", 1, 20, 0.1, 2, ":1");
-      s("Attack", "compAttack", 0.1, 200, 0.1, 15, "ms", "log");
-      s("Release", "compRelease", 5, 2000, 1, 150, "ms", "log");
-      s("Knee", "compKnee", 0, 24, 0.5, 6, "dB");
-      s("Makeup", "compMakeup", 0, 24, 0.5, 0, "dB");
-      root.append(this.section("Dynamik", g), this.section("Gain Reduction", this.grMeter("Kompressor", "compGr")));
+      s(T("am2.2a63f5"), "compThreshold", -60, 0, 0.5, -20, "dB");
+      s(T("am2.8334a1"), "compRatio", 1, 20, 0.1, 2, ":1");
+      s(T("am2.dcfafc"), "compAttack", 0.1, 200, 0.1, 15, "ms", "log");
+      s(T("am2.b8e7b4"), "compRelease", 5, 2000, 1, 150, "ms", "log");
+      s(T("am2.e50c79"), "compKnee", 0, 24, 0.5, 6, "dB");
+      s(T("am2.2ae04b"), "compMakeup", 0, 24, 0.5, 0, "dB");
+      root.append(this.section(T("am2.9cd246"), g), this.section(T("am2.b117c1"), this.grMeter(T("am2.5be5d1"), "compGr")));
       return root;
     });
   }
@@ -367,17 +367,17 @@ class CenterControl {
       const root = h("div", { class: "ctab" });
       const g = this.grid();
       const send = (ch) => app.sendCh(ch.id, "setGate", { enabled: ch.proc.gateEnabled, thresholdDb: ch.proc.gateThreshold, rangeDb: ch.proc.gateRange, ratio: ch.proc.gateRatio, attackMs: ch.proc.gateAttack, holdMs: ch.proc.gateHold, releaseMs: ch.proc.gateRelease, hysteresisDb: ch.proc.gateHysteresis }, "gate");
-      this.toggle("Gate / Expander aktiv", (ch) => ch.proc.gateEnabled, (ch, v) => { ch.proc.gateEnabled = v; send(ch); }, g);
-      this.segmented([[false, "Expander (sanft, Sprache)"], [true, "Gate (hart)"]], (ch) => ch.proc.gateRatio >= 20, (ch, v) => { ch.proc.gateRatio = v ? 100 : 2; send(ch); }, g, "Modus");
+      this.toggle(T("am2.f4019c"), (ch) => ch.proc.gateEnabled, (ch, v) => { ch.proc.gateEnabled = v; send(ch); }, g);
+      this.segmented([[false, T("am2.77d9bb")], [true, T("am2.fa1bac")]], (ch) => ch.proc.gateRatio >= 20, (ch, v) => { ch.proc.gateRatio = v ? 100 : 2; send(ch); }, g, T("am2.1aecce"));
       const s = (label, key, min, max, step, def, unit, scale) => this.slider({ label, min, max, step, def, unit, scale, get: (ch) => ch.proc[key], set: (ch, v) => { ch.proc[key] = v; send(ch); } }, g);
-      s("Threshold", "gateThreshold", -90, 0, 0.5, -55, "dB");
-      s("Range", "gateRange", -90, 0, 1, -30, "dB");
-      this.slider({ label: "Expander-Ratio", min: 1, max: 19, step: 0.1, def: 2, unit: ":1", get: (ch) => Math.min(ch.proc.gateRatio, 19), set: (ch, v) => { ch.proc.gateRatio = v; send(ch); } }, g);
-      s("Attack", "gateAttack", 0.1, 200, 0.1, 5, "ms", "log");
-      s("Hold", "gateHold", 0, 2000, 5, 80, "ms");
-      s("Release", "gateRelease", 5, 4000, 5, 300, "ms", "log");
-      s("Hysterese", "gateHysteresis", 0, 20, 0.5, 4, "dB");
-      root.append(this.section("Gate / Expander", g), this.section("Gain Reduction", this.grMeter("Gate", "gateGr")));
+      s(T("am2.2a63f5"), "gateThreshold", -90, 0, 0.5, -55, "dB");
+      s(T("am2.87ba2e"), "gateRange", -90, 0, 1, -30, "dB");
+      this.slider({ label: T("am2.d913ce"), min: 1, max: 19, step: 0.1, def: 2, unit: ":1", get: (ch) => Math.min(ch.proc.gateRatio, 19), set: (ch, v) => { ch.proc.gateRatio = v; send(ch); } }, g);
+      s(T("am2.dcfafc"), "gateAttack", 0.1, 200, 0.1, 5, "ms", "log");
+      s(T("am2.bcd8db"), "gateHold", 0, 2000, 5, 80, "ms");
+      s(T("am2.b8e7b4"), "gateRelease", 5, 4000, 5, 300, "ms", "log");
+      s(T("am2.dfc2d5"), "gateHysteresis", 0, 20, 0.5, 4, "dB");
+      root.append(this.section(T("am2.96f8f1"), g), this.section(T("am2.b117c1"), this.grMeter(T("am2.d25b4b"), "gateGr")));
       return root;
     });
   }
@@ -388,13 +388,13 @@ class CenterControl {
       const root = h("div", { class: "ctab" });
       const g = this.grid();
       const send = (ch) => app.sendCh(ch.id, "setDelay", { enabled: ch.proc.delayEnabled, ms: ch.proc.delayMs }, "delay");
-      this.toggle("Delay aktiv", (ch) => ch.proc.delayEnabled, (ch, v) => { ch.proc.delayEnabled = v; send(ch); }, g);
-      this.slider({ label: "Verzögerung", min: 0, max: 500, step: 0.5, def: 0, unit: "ms", get: (ch) => ch.proc.delayMs, set: (ch, v) => { ch.proc.delayMs = v; send(ch); } }, g);
+      this.toggle(T("am2.7695f4"), (ch) => ch.proc.delayEnabled, (ch, v) => { ch.proc.delayEnabled = v; send(ch); }, g);
+      this.slider({ label: T("am2.1ee99c"), min: 0, max: 500, step: 0.5, def: 0, unit: "ms", get: (ch) => ch.proc.delayMs, set: (ch, v) => { ch.proc.delayMs = v; send(ch); } }, g);
       const quick = h("div", { class: "seg" });
-      for (const [t, ms] of [["0", 0], ["−1 Frame (20 ms)", -20], ["+1 Frame (20 ms)", 20], ["+10 ms", 10], ["+100 ms", 100]]) {
+      for (const [t, ms] of [["0", 0], [T("x.m1f"), -20], [T("x.p1f"), 20], ["+10 ms", 10], ["+100 ms", 100]]) {
         quick.append(h("button", { class: "tog", type: "button", text: t, onclick: () => { const ch = this.cur(); if (!ch) return; ch.proc.delayMs = ms === 0 ? 0 : clamp(ch.proc.delayMs + ms, 0, 2000); send(ch); this.refresh(); } }));
       }
-      root.append(this.section("Kanal-Delay", g, quick));
+      root.append(this.section(T("am2.9e0422"), g, quick));
       return root;
     });
   }
@@ -405,10 +405,10 @@ class CenterControl {
       const root = h("div", { class: "ctab" });
       const g = this.grid();
       const send = (ch) => app.sendCh(ch.id, "setPan", { pan: ch.proc.pan }, "pan");
-      this.slider({ label: "Panorama / Balance", min: -1, max: 1, step: 0.01, def: 0, center: 0, fmt: (v) => (Math.abs(v) < 0.005 ? "Mitte" : v < 0 ? "L " + Math.round(-v * 100) : "R " + Math.round(v * 100)), get: (ch) => ch.proc.pan, set: (ch, v) => { ch.proc.pan = Math.abs(v) < 0.03 ? 0 : v; send(ch); } }, g);
+      this.slider({ label: T("am2.ac31b0"), min: -1, max: 1, step: 0.01, def: 0, center: 0, fmt: (v) => (Math.abs(v) < 0.005 ? T("am2.28c13c") : v < 0 ? "L " + Math.round(-v * 100) : "R " + Math.round(v * 100)), get: (ch) => ch.proc.pan, set: (ch, v) => { ch.proc.pan = Math.abs(v) < 0.03 ? 0 : v; send(ch); } }, g);
       const seg = h("div", { class: "seg" });
-      for (const [t, v] of [["L", -1], ["Mitte", 0], ["R", 1]]) seg.append(h("button", { class: "tog", type: "button", text: t, onclick: () => { const ch = this.cur(); if (ch) { ch.proc.pan = v; send(ch); this.refresh(); } } }));
-      root.append(this.section("Pan", g, seg), h("p", { class: "hint", text: "Stereo-Balance: Mitte lässt das Signal unverändert, zur Seite wird die Gegenseite abgesenkt." }));
+      for (const [t, v] of [["L", -1], [T("am2.28c13c"), 0], ["R", 1]]) seg.append(h("button", { class: "tog", type: "button", text: t, onclick: () => { const ch = this.cur(); if (ch) { ch.proc.pan = v; send(ch); this.refresh(); } } }));
+      root.append(this.section("Pan", g, seg), h("p", { class: "hint", text: T("am2.9ea071") }));
       return root;
     });
   }

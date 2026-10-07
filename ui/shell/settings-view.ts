@@ -244,7 +244,7 @@ class SettingsView extends HTMLElement {
     let input: HTMLInputElement | HTMLSelectElement;
     if (inputKind(o) === "select") {
       const sel = el("select", "width:100%;padding:3px;");
-      const none = el("option", "", `— Standard${o.default ? ` (${o.default})` : ""} —`);
+      const none = el("option", "", tt("y.stdOpt", { p0: o.default ? ` (${o.default})` : "" }));
       none.value = "";
       sel.append(none);
       for (const c of o.choices ?? []) {

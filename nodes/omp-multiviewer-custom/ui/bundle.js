@@ -1,3 +1,125 @@
+// i18n (de/en): Sprache aus <html lang> (setzt die Shell, ui/shell/i18n.ts),
+// Fallback Deutsch. Eigenes Mini-t(), weil Node-Bundles keine Shell-Imports nutzen.
+const T = (() => {
+  const D = {
+    de: {
+        "x.choose": "— auswählen —",
+        "mvc.26bc42": "Leinwand\n            ",
+        "mvc.f30ff5": "+ PIP",
+        "mvc.3ee601": "Beim Ziehen der Größenänderungs-Ecke bleibt das aktuelle Breite/Höhe-Verhältnis der Kachel erhalten, statt frei verzerrbar zu sein.",
+        "mvc.2fe42e": " Seitenverhältnis beim Ziehen beibehalten\n          ",
+        "mvc.6e5595": "Neu laden",
+        "mvc.b97d23": "Speichern",
+        "mvc.e7e31a": "Gespeicherte Layouts\n            ",
+        "mvc.1e116b": "— auswählen —",
+        "mvc.2ac895": "Das ausgewählte gespeicherte Layout als aktuelles Layout übernehmen und sofort anwenden.",
+        "mvc.c450c6": "Anwenden",
+        "mvc.ad983a": "Das ausgewählte gespeicherte Layout endgültig löschen.",
+        "mvc.1010b0": "Löschen",
+        "mvc.69c4c0": "Das ausgewählte gespeicherte Layout als JSON-Datei herunterladen.",
+        "mvc.0095a9": "Export",
+        "mvc.32d4bc": "Name für neues Layout",
+        "mvc.b80ac8": "Das aktuell im Editor angezeigte Layout unter diesem Namen ablegen (überschreibt einen gleichnamigen Eintrag).",
+        "mvc.024bb3": "Speichern als …",
+        "mvc.6a5ccd": "Eine zuvor exportierte Layout-Datei (.json) importieren.",
+        "mvc.3331b7": "\n            Import\n            ",
+        "mvc.4446bb": "Lädt …",
+        "mvc.2b891b": "Laden fehlgeschlagen: {p0}",
+        "mvc.b55aba": "Speichert …",
+        "mvc.616d9c": "Speichern fehlgeschlagen: {p0}",
+        "mvc.d88dae": "Gespeichert.",
+        "mvc.e7452a": "Kein gespeichertes Layout ausgewählt.",
+        "mvc.040f62": "Wendet an …",
+        "mvc.7bbb64": "Anwenden fehlgeschlagen: {p0}",
+        "mvc.5f37b7": "Layout „{p0}\" angewendet.",
+        "mvc.2e04c4": "Gespeichertes Layout „{p0}\" wirklich löschen?",
+        "mvc.ca71a2": "Löscht …",
+        "mvc.05f6da": "Löschen fehlgeschlagen: {p0}",
+        "mvc.062b66": "Layout „{p0}\" gelöscht.",
+        "mvc.5a6db4": "Kein gespeichertes Layout zum Exportieren ausgewählt.",
+        "mvc.edc754": "Layout „{p0}\" exportiert.",
+        "mvc.885464": "Name für \"Speichern als …\" fehlt.",
+        "mvc.0c6337": "Layout „{p0}\" existiert bereits — überschreiben?",
+        "mvc.2237b3": "Layout „{p0}\" gespeichert.",
+        "mvc.e7dba3": "Import fehlgeschlagen: Datei ist kein gültiges JSON ({p0})",
+        "mvc.397ffc": "Import fehlgeschlagen: Datei enthält kein gültiges Layout-Dokument.",
+        "mvc.75338e": "Name für das importierte Layout:",
+        "mvc.74aa7e": "Ungespeicherte Änderungen.",
+        "mvc.715d8e": "{p0} (nicht gefunden)",
+        "mvc.28ba47": "— keine Quelle —",
+        "mvc.5751b0": "kein Signal",
+        "mvc.9cd414": "Kachel entfernen",
+        "mvc.f82c39": "Größe ändern",
+        "mvc.0d7350": "Noch keine Kachel — \"+ PIP\" anklicken.",
+        "mvc.fb71d8": "Kachel anklicken, um sie zu bearbeiten.",
+        "mvc.d3402e": "Quelle",
+        "mvc.526407": "Breite",
+        "mvc.46f51f": "Höhe"
+    },
+    en: {
+        "x.choose": "— choose —",
+        "mvc.26bc42": "Canvas\n            ",
+        "mvc.f30ff5": "+ PIP",
+        "mvc.3ee601": "When dragging the resize corner the current width/height ratio of the tile is kept instead of being freely distortable.",
+        "mvc.2fe42e": " Keep aspect ratio while dragging\n          ",
+        "mvc.6e5595": "Reload",
+        "mvc.b97d23": "Save",
+        "mvc.e7e31a": "Saved layouts\n            ",
+        "mvc.1e116b": "— choose —",
+        "mvc.2ac895": "Take the selected saved layout as the current layout and apply it immediately.",
+        "mvc.c450c6": "Apply",
+        "mvc.ad983a": "Delete the selected saved layout permanently.",
+        "mvc.1010b0": "Delete",
+        "mvc.69c4c0": "Download the selected saved layout as a JSON file.",
+        "mvc.0095a9": "Export",
+        "mvc.32d4bc": "Name for new layout",
+        "mvc.b80ac8": "Store the layout currently shown in the editor under this name (overwrites an entry of the same name).",
+        "mvc.024bb3": "Save as …",
+        "mvc.6a5ccd": "Import a previously exported layout file (.json).",
+        "mvc.3331b7": "\n            Import\n            ",
+        "mvc.4446bb": "Loading …",
+        "mvc.2b891b": "Loading failed: {p0}",
+        "mvc.b55aba": "Saving …",
+        "mvc.616d9c": "Saving failed: {p0}",
+        "mvc.d88dae": "Saved.",
+        "mvc.e7452a": "No saved layout selected.",
+        "mvc.040f62": "Applying …",
+        "mvc.7bbb64": "Applying failed: {p0}",
+        "mvc.5f37b7": "Layout “{p0}” applied.",
+        "mvc.2e04c4": "Really delete saved layout “{p0}”?",
+        "mvc.ca71a2": "Deleting …",
+        "mvc.05f6da": "Deleting failed: {p0}",
+        "mvc.062b66": "Layout “{p0}” deleted.",
+        "mvc.5a6db4": "No saved layout selected for export.",
+        "mvc.edc754": "Layout “{p0}” exported.",
+        "mvc.885464": "Name for “Save as …” missing.",
+        "mvc.0c6337": "Layout “{p0}” already exists — overwrite?",
+        "mvc.2237b3": "Layout “{p0}” saved.",
+        "mvc.e7dba3": "Import failed: file is not valid JSON ({p0})",
+        "mvc.397ffc": "Import failed: file does not contain a valid layout document.",
+        "mvc.75338e": "Name for the imported layout:",
+        "mvc.74aa7e": "Unsaved changes.",
+        "mvc.715d8e": "{p0} (not found)",
+        "mvc.28ba47": "— no source —",
+        "mvc.5751b0": "no signal",
+        "mvc.9cd414": "Remove tile",
+        "mvc.f82c39": "Resize",
+        "mvc.0d7350": "No tile yet — click \"+ PIP\".",
+        "mvc.fb71d8": "Click a tile to edit it.",
+        "mvc.d3402e": "Source",
+        "mvc.526407": "Width",
+        "mvc.46f51f": "Height"
+    },
+  };
+  const lang = document.documentElement.lang === "en" ? "en" : "de";
+  return (k, p) => {
+    let s = (D[lang] && D[lang][k]) ?? D.de[k] ?? k;
+    if (p) for (const x in p) s = s.split("{" + x + "}").join(p[x]);
+    return s;
+  };
+})();
+const LOCALE = document.documentElement.lang === "en" ? "en-GB" : "de-DE";
+
 // Node-UI-Bundle des manuell konfigurierten Multiviewers (Nutzerauftrag
 // 2026-08-20: "layout editor, selektierbare quellen, dynamische anzahl an
 // pip's. tally und umd pro pip"). Gleiches Muster wie
@@ -56,31 +178,31 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
       <style>${this._css()}</style>
       <div class="wrap">
         <div class="toolbar">
-          <label>Leinwand
+          <label>${T("mvc.26bc42")}
             <input type="number" class="canvas-w" min="${MIN_PIP_SIZE}" max="7680" step="1"> ×
             <input type="number" class="canvas-h" min="${MIN_PIP_SIZE}" max="4320" step="1">
           </label>
-          <button class="add-pip">+ PIP</button>
-          <label class="keep-ratio-label" title="Beim Ziehen der Größenänderungs-Ecke bleibt das aktuelle Breite/Höhe-Verhältnis der Kachel erhalten, statt frei verzerrbar zu sein.">
-            <input type="checkbox" class="keep-ratio"> Seitenverhältnis beim Ziehen beibehalten
+          <button class="add-pip">${T("mvc.f30ff5")}</button>
+          <label class="keep-ratio-label" title="${T("mvc.3ee601")}">
+            <input type="checkbox" class="keep-ratio"> ${T("mvc.2fe42e")}
           </label>
           <span class="spacer"></span>
           <span class="status"></span>
-          <button class="reload">Neu laden</button>
-          <button class="save omp-btn-primary">Speichern</button>
+          <button class="reload">${T("mvc.6e5595")}</button>
+          <button class="save omp-btn-primary">${T("mvc.b97d23")}</button>
         </div>
         <div class="toolbar layouts-toolbar">
-          <label>Gespeicherte Layouts
-            <select class="layout-select"><option value="">— auswählen —</option></select>
+          <label>${T("mvc.e7e31a")}
+            <select class="layout-select"><option value="">${T("mvc.1e116b")}</option></select>
           </label>
-          <button class="layout-apply" title="Das ausgewählte gespeicherte Layout als aktuelles Layout übernehmen und sofort anwenden.">Anwenden</button>
-          <button class="layout-delete omp-btn-danger" title="Das ausgewählte gespeicherte Layout endgültig löschen.">Löschen</button>
-          <button class="layout-export" title="Das ausgewählte gespeicherte Layout als JSON-Datei herunterladen.">Export</button>
+          <button class="layout-apply" title="${T("mvc.2ac895")}">${T("mvc.c450c6")}</button>
+          <button class="layout-delete omp-btn-danger" title="${T("mvc.ad983a")}">${T("mvc.1010b0")}</button>
+          <button class="layout-export" title="${T("mvc.69c4c0")}">${T("mvc.0095a9")}</button>
           <span class="toolbar-sep"></span>
-          <input type="text" class="layout-save-as-name" placeholder="Name für neues Layout">
-          <button class="layout-save-as" title="Das aktuell im Editor angezeigte Layout unter diesem Namen ablegen (überschreibt einen gleichnamigen Eintrag).">Speichern als …</button>
-          <label class="layout-import-label" title="Eine zuvor exportierte Layout-Datei (.json) importieren.">
-            Import
+          <input type="text" class="layout-save-as-name" placeholder="${T("mvc.32d4bc")}">
+          <button class="layout-save-as" title="${T("mvc.b80ac8")}">${T("mvc.024bb3")}</button>
+          <label class="layout-import-label" title="${T("mvc.6a5ccd")}">
+            ${T("mvc.3331b7")}
             <input type="file" class="layout-import-file" accept="application/json,.json">
           </label>
         </div>
@@ -216,7 +338,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
   }
 
   async _reload() {
-    this._setStatus("Lädt …", "");
+    this._setStatus(T("mvc.4446bb"), "");
     try {
       const [stateRes, sourcesRes, layoutsRes] = await Promise.all([
         fetch(`/api/v1/nodes/${this._nodeId}/state`),
@@ -242,13 +364,13 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
       this._dirty = false;
       this._setStatus("", "");
     } catch (err) {
-      this._setStatus(`Laden fehlgeschlagen: ${err}`, "error");
+      this._setStatus(T("mvc.2b891b", { p0: err }), "error");
     }
     this._render();
   }
 
   async _save() {
-    this._setStatus("Speichert …", "");
+    this._setStatus(T("mvc.b55aba"), "");
     try {
       const res = await fetch(`/api/v1/nodes/${this._nodeId}/state`, {
         method: "POST",
@@ -257,13 +379,13 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        this._setStatus(`Speichern fehlgeschlagen: ${body.error || res.status}`, "error");
+        this._setStatus(T("mvc.616d9c", { p0: body.error || res.status }), "error");
         return;
       }
       this._dirty = false;
-      this._setStatus("Gespeichert.", "ok");
+      this._setStatus(T("mvc.d88dae"), "ok");
     } catch (err) {
-      this._setStatus(`Speichern fehlgeschlagen: ${err}`, "error");
+      this._setStatus(T("mvc.616d9c", { p0: err }), "error");
     }
     this._render();
   }
@@ -277,15 +399,15 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
   async _applySelectedLayout() {
     const name = this._selectedSavedLayoutName();
     if (!name) {
-      this._setStatus("Kein gespeichertes Layout ausgewählt.", "error");
+      this._setStatus(T("mvc.e7452a"), "error");
       return;
     }
-    this._setStatus("Wendet an …", "");
+    this._setStatus(T("mvc.040f62"), "");
     try {
       const res = await fetch(`/api/v1/nodes/${this._nodeId}/layouts/${encodeURIComponent(name)}/apply`, { method: "POST" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        this._setStatus(`Anwenden fehlgeschlagen: ${body.error || res.status}`, "error");
+        this._setStatus(T("mvc.7bbb64", { p0: body.error || res.status }), "error");
         return;
       }
       // Serverseitig ist das benannte Layout jetzt das aktive — lokalen
@@ -296,9 +418,9 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
       if (applied) this._layout = JSON.parse(JSON.stringify(applied.layout));
       this._selectedPipId = null;
       this._dirty = false;
-      this._setStatus(`Layout „${name}" angewendet.`, "ok");
+      this._setStatus(T("mvc.5f37b7", { p0: name }), "ok");
     } catch (err) {
-      this._setStatus(`Anwenden fehlgeschlagen: ${err}`, "error");
+      this._setStatus(T("mvc.7bbb64", { p0: err }), "error");
     }
     this._render();
   }
@@ -306,22 +428,22 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
   async _deleteSelectedLayout() {
     const name = this._selectedSavedLayoutName();
     if (!name) {
-      this._setStatus("Kein gespeichertes Layout ausgewählt.", "error");
+      this._setStatus(T("mvc.e7452a"), "error");
       return;
     }
-    if (!confirm(`Gespeichertes Layout „${name}" wirklich löschen?`)) return;
-    this._setStatus("Löscht …", "");
+    if (!confirm(T("mvc.2e04c4", { p0: name }))) return;
+    this._setStatus(T("mvc.ca71a2"), "");
     try {
       const res = await fetch(`/api/v1/nodes/${this._nodeId}/layouts/${encodeURIComponent(name)}`, { method: "DELETE" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        this._setStatus(`Löschen fehlgeschlagen: ${body.error || res.status}`, "error");
+        this._setStatus(T("mvc.05f6da", { p0: body.error || res.status }), "error");
         return;
       }
       this._savedLayouts = this._savedLayouts.filter((l) => l.name !== name);
-      this._setStatus(`Layout „${name}" gelöscht.`, "ok");
+      this._setStatus(T("mvc.062b66", { p0: name }), "ok");
     } catch (err) {
-      this._setStatus(`Löschen fehlgeschlagen: ${err}`, "error");
+      this._setStatus(T("mvc.05f6da", { p0: err }), "error");
     }
     this._render();
   }
@@ -336,7 +458,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
     const name = this._selectedSavedLayoutName();
     const entry = this._savedLayouts.find((l) => l.name === name);
     if (!entry) {
-      this._setStatus("Kein gespeichertes Layout zum Exportieren ausgewählt.", "error");
+      this._setStatus(T("mvc.5a6db4"), "error");
       return;
     }
     const blob = new Blob([JSON.stringify(entry, null, 2)], { type: "application/json" });
@@ -348,16 +470,16 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    this._setStatus(`Layout „${name}" exportiert.`, "ok");
+    this._setStatus(T("mvc.edc754", { p0: name }), "ok");
   }
 
   async _saveAsNamedLayout() {
     const name = this._el.layoutSaveAsName.value.trim();
     if (!name) {
-      this._setStatus('Name für "Speichern als …" fehlt.', "error");
+      this._setStatus(T("mvc.885464"), "error");
       return;
     }
-    if (this._savedLayouts.some((l) => l.name === name) && !confirm(`Layout „${name}" existiert bereits — überschreiben?`)) {
+    if (this._savedLayouts.some((l) => l.name === name) && !confirm(T("mvc.0c6337", { p0: name }))) {
       return;
     }
     await this._postNamedLayout(name, this._layout);
@@ -368,7 +490,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
   // nichts anderes als ein Speichern-als mit dem Inhalt einer
   // hochgeladenen Datei statt des aktuellen Editor-Entwurfs.
   async _postNamedLayout(name, layout) {
-    this._setStatus("Speichert …", "");
+    this._setStatus(T("mvc.b55aba"), "");
     try {
       const res = await fetch(`/api/v1/nodes/${this._nodeId}/layouts`, {
         method: "POST",
@@ -377,7 +499,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        this._setStatus(`Speichern fehlgeschlagen: ${body.error || res.status}`, "error");
+        this._setStatus(T("mvc.616d9c", { p0: body.error || res.status }), "error");
         return;
       }
       const existing = this._savedLayouts.find((l) => l.name === name);
@@ -387,9 +509,9 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
         this._savedLayouts.push({ name, layout });
       }
       this._el.layoutSaveAsName.value = "";
-      this._setStatus(`Layout „${name}" gespeichert.`, "ok");
+      this._setStatus(T("mvc.2237b3", { p0: name }), "ok");
     } catch (err) {
-      this._setStatus(`Speichern fehlgeschlagen: ${err}`, "error");
+      this._setStatus(T("mvc.616d9c", { p0: err }), "error");
     }
     this._render();
   }
@@ -402,7 +524,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
     try {
       doc = JSON.parse(await file.text());
     } catch (err) {
-      this._setStatus(`Import fehlgeschlagen: Datei ist kein gültiges JSON (${err})`, "error");
+      this._setStatus(T("mvc.e7dba3", { p0: err }), "error");
       return;
     }
     // Exportierte Dateien haben die Form {name, layout:{...}} (s.
@@ -411,11 +533,11 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
     // wird nach einem Namen gefragt (z. B. eine von Hand gebaute Datei).
     const layout = doc && typeof doc === "object" && doc.layout ? doc.layout : doc;
     if (!layout || !Array.isArray(layout.pips)) {
-      this._setStatus("Import fehlgeschlagen: Datei enthält kein gültiges Layout-Dokument.", "error");
+      this._setStatus(T("mvc.397ffc"), "error");
       return;
     }
     const suggestedName = (doc && doc.name) || file.name.replace(/\.multiviewer-layout\.json$|\.json$/i, "");
-    const name = prompt("Name für das importierte Layout:", suggestedName);
+    const name = prompt(T("mvc.75338e"), suggestedName);
     if (!name || !name.trim()) return;
     await this._postNamedLayout(name.trim(), layout);
   }
@@ -444,7 +566,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
     });
     this._selectedPipId = this._layout.pips[this._layout.pips.length - 1].id;
     this._dirty = true;
-    this._setStatus("Ungespeicherte Änderungen.", "dirty");
+    this._setStatus(T("mvc.74aa7e"), "dirty");
     this._render();
   }
 
@@ -452,7 +574,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
     this._layout.pips = this._layout.pips.filter((p) => p.id !== id);
     if (this._selectedPipId === id) this._selectedPipId = null;
     this._dirty = true;
-    this._setStatus("Ungespeicherte Änderungen.", "dirty");
+    this._setStatus(T("mvc.74aa7e"), "dirty");
     this._render();
   }
 
@@ -534,19 +656,19 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
   _onPointerUp() {
     if (!this._drag) return;
     this._drag = null;
-    this._setStatus("Ungespeicherte Änderungen.", "dirty");
+    this._setStatus(T("mvc.74aa7e"), "dirty");
     this._render();
   }
 
   _sourceLabel(senderId) {
     if (!senderId) return null;
     const src = this._sources.find((s) => s.senderId === senderId);
-    return src ? src.label : `${senderId} (nicht gefunden)`;
+    return src ? src.label : T("mvc.715d8e", { p0: senderId });
   }
 
   _renderLayoutSelect() {
     const previousValue = this._el.layoutSelect.value;
-    this._el.layoutSelect.innerHTML = '<option value="">— auswählen —</option>';
+    this._el.layoutSelect.innerHTML = '<option value="">' + T("x.choose") + '</option>';
     for (const entry of this._savedLayouts) {
       const opt = document.createElement("option");
       opt.value = entry.name;
@@ -588,13 +710,13 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
       const label = document.createElement("div");
       label.className = "label";
       const sourceLabel = this._sourceLabel(pip.senderId);
-      label.textContent = sourceLabel || "— keine Quelle —";
+      label.textContent = sourceLabel || T("mvc.28ba47");
       box.appendChild(label);
 
       if (!pip.senderId) {
         const hint = document.createElement("div");
         hint.className = "no-source";
-        hint.textContent = "kein Signal";
+        hint.textContent = T("mvc.5751b0");
         box.appendChild(hint);
       }
 
@@ -608,7 +730,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
       const remove = document.createElement("div");
       remove.className = "remove";
       remove.textContent = "×";
-      remove.title = "Kachel entfernen";
+      remove.title = T("mvc.9cd414");
       remove.addEventListener("pointerdown", (ev) => ev.stopPropagation());
       remove.addEventListener("click", (ev) => {
         ev.stopPropagation();
@@ -618,7 +740,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
 
       const resize = document.createElement("div");
       resize.className = "resize";
-      resize.title = "Größe ändern";
+      resize.title = T("mvc.f82c39");
       resize.addEventListener("pointerdown", (ev) => this._onPipPointerDown(ev, pip, "resize"));
       box.appendChild(resize);
 
@@ -635,15 +757,15 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
     if (!pip) {
       const hint = document.createElement("div");
       hint.className = "empty-hint";
-      hint.textContent = this._layout.pips.length === 0 ? 'Noch keine Kachel — "+ PIP" anklicken.' : "Kachel anklicken, um sie zu bearbeiten.";
+      hint.textContent = this._layout.pips.length === 0 ? T("mvc.0d7350") : T("mvc.fb71d8");
       inspector.appendChild(hint);
       return;
     }
 
-    const sourceField = this._field("Quelle");
+    const sourceField = this._field(T("mvc.d3402e"));
     // Hierarchischer Picker (ui/kit/omp-source-selector.ts), Wert = Sender-ID wie zuvor.
     const select = document.createElement("omp-source-selector");
-    select.emptyLabel = "— keine Quelle —";
+    select.emptyLabel = T("mvc.28ba47");
     select.accepts = ["video"];
     select.excludeRoles = ["low"];
     select.currentWorkflowId = this._catalog?.currentWorkflowId ?? null;
@@ -653,7 +775,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
     select.addEventListener("change", () => {
       pip.senderId = select.value || null;
       this._dirty = true;
-      this._setStatus("Ungespeicherte Änderungen.", "dirty");
+      this._setStatus(T("mvc.74aa7e"), "dirty");
       this._render();
     });
     sourceField.appendChild(select);
@@ -668,7 +790,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
     umdInput.addEventListener("change", () => {
       pip.umd = umdInput.value;
       this._dirty = true;
-      this._setStatus("Ungespeicherte Änderungen.", "dirty");
+      this._setStatus(T("mvc.74aa7e"), "dirty");
       this._render();
     });
     umdField.appendChild(umdInput);
@@ -686,10 +808,10 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
 
     const row2 = document.createElement("div");
     row2.className = "row";
-    row2.appendChild(this._numberField("Breite", pip.width, (v) => {
+    row2.appendChild(this._numberField(T("mvc.526407"), pip.width, (v) => {
       pip.width = clamp(v, MIN_PIP_SIZE, this._layout.canvasWidth - pip.x);
     }));
-    row2.appendChild(this._numberField("Höhe", pip.height, (v) => {
+    row2.appendChild(this._numberField(T("mvc.46f51f"), pip.height, (v) => {
       pip.height = clamp(v, MIN_PIP_SIZE, this._layout.canvasHeight - pip.y);
     }));
     inspector.appendChild(row2);
@@ -713,7 +835,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
       const v = parseInt(input.value, 10);
       if (Number.isFinite(v)) onChange(v);
       this._dirty = true;
-      this._setStatus("Ungespeicherte Änderungen.", "dirty");
+      this._setStatus(T("mvc.74aa7e"), "dirty");
       this._render();
     });
     field.appendChild(input);

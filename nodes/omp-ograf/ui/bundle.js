@@ -1,3 +1,53 @@
+// i18n (de/en): Sprache aus <html lang> (setzt die Shell, ui/shell/i18n.ts),
+// Fallback Deutsch. Eigenes Mini-t(), weil Node-Bundles keine Shell-Imports nutzen.
+const T = (() => {
+  const D = {
+    de: {
+        "x.onair": "● On Air",
+        "x.step": " · Schritt ",
+        "x.off": "○ Aus",
+        "ogr.c25756": "Template suchen…",
+        "ogr.069330": "Update",
+        "ogr.83988d": "Geänderte Felder live in die laufende Grafik übernehmen",
+        "ogr.c39838": "Weiter",
+        "ogr.9090e4": "Steuerung",
+        "ogr.25406b": "Auf Sendung / Vorlage",
+        "ogr.344a7f": "Editor",
+        "ogr.98b54b": "keine Vorlage gewählt",
+        "ogr.79eed3": "Auf Sendung (",
+        "ogr.25b279": "Klick: im Editor öffnen (Live-Update)",
+        "ogr.398d8a": "Schritt ",
+        "ogr.419ff4": "Diese Grafik ausblenden",
+        "ogr.e8bc14": "keine Templates gefunden"
+    },
+    en: {
+        "x.onair": "● On air",
+        "x.step": " · step ",
+        "x.off": "○ Off",
+        "ogr.c25756": "Search template…",
+        "ogr.069330": "Update",
+        "ogr.83988d": "Apply changed fields live to the running graphic",
+        "ogr.c39838": "Next",
+        "ogr.9090e4": "Control",
+        "ogr.25406b": "On air / template",
+        "ogr.344a7f": "Editor",
+        "ogr.98b54b": "no template chosen",
+        "ogr.79eed3": "On air (",
+        "ogr.25b279": "Click: open in the editor (live update)",
+        "ogr.398d8a": "Step ",
+        "ogr.419ff4": "Hide this graphic",
+        "ogr.e8bc14": "no templates found"
+    },
+  };
+  const lang = document.documentElement.lang === "en" ? "en" : "de";
+  return (k, p) => {
+    let s = (D[lang] && D[lang][k]) ?? D.de[k] ?? k;
+    if (p) for (const x in p) s = s.split("{" + x + "}").join(p[x]);
+    return s;
+  };
+})();
+const LOCALE = document.documentElement.lang === "en" ? "en-GB" : "de-DE";
+
 // Node-UI-Bundle von omp-ograf (ARCHITECTURE.md §4.5, gleiches Muster wie
 // omp-video-mixer-me/omp-switcher, s. dortige uibundle.rs-Doku): das
 // generische, aus dem Descriptor erzeugte Panel kann `templates` (ein
@@ -104,7 +154,7 @@ class OmpOgrafPanel extends HTMLElement {
     const search = document.createElement("input");
     search.type = "text";
     search.className = "search";
-    search.placeholder = "Template suchen…";
+    search.placeholder = T("ogr.c25756");
 
     const select = document.createElement("select");
     select.className = "tpl-select";
@@ -116,11 +166,11 @@ class OmpOgrafPanel extends HTMLElement {
     showBtn.textContent = "▶ Ein";
     showBtn.setAttribute("color", "onair");
     const updateBtn = document.createElement("omp-button");
-    updateBtn.textContent = "Update";
-    updateBtn.title = "Geänderte Felder live in die laufende Grafik übernehmen";
+    updateBtn.textContent = T("ogr.069330");
+    updateBtn.title = T("ogr.83988d");
     // Nur sichtbar bei Templates mit mehreren Schritten.
     const continueBtn = document.createElement("omp-button");
-    continueBtn.textContent = "Weiter";
+    continueBtn.textContent = T("ogr.c39838");
     continueBtn.style.visibility = "hidden";
     const hideBtn = document.createElement("omp-button");
     hideBtn.textContent = "■ Aus";
@@ -152,15 +202,15 @@ class OmpOgrafPanel extends HTMLElement {
     // Drei Teile: Steuerung (fest, oben), Auswahl (On-Air-Liste + Vorlage),
     // Editor (Felder, variable Höhe).
     const controlSection = document.createElement("omp-panel-section");
-    controlSection.setAttribute("label", "Steuerung");
+    controlSection.setAttribute("label", T("ogr.9090e4"));
     controlSection.append(target, actions, status);
 
     const pickSection = document.createElement("omp-panel-section");
-    pickSection.setAttribute("label", "Auf Sendung / Vorlage");
+    pickSection.setAttribute("label", T("ogr.25406b"));
     pickSection.append(onair, search, select);
 
     const editSection = document.createElement("omp-panel-section");
-    editSection.setAttribute("label", "Editor");
+    editSection.setAttribute("label", T("ogr.344a7f"));
     editSection.append(fields);
 
     shadow.append(style, controlSection, pickSection, editSection);
@@ -342,8 +392,8 @@ class OmpOgrafPanel extends HTMLElement {
       continueBtn.style.visibility = multi ? "visible" : "hidden";
       setDisabled(continueBtn, !layer || !layer.canContinue);
       // Beschriftung bleibt konstant (feste Knopfbreite); der Schritt steht im Zustands-Badge.
-      targetName.textContent = tpl ? tpl.label : "keine Vorlage gewählt";
-      targetBadge.textContent = layer ? "● On Air" + (multi ? " · Schritt " + (layer.step + 1) + "/" + layer.stepCount : "") : "○ Aus";
+      targetName.textContent = tpl ? tpl.label : T("ogr.98b54b");
+      targetBadge.textContent = layer ? T("x.onair") + (multi ? T("x.step") + (layer.step + 1) + "/" + layer.stepCount : "") : T("x.off");
       targetBadge.className = layer ? "badge live" : "badge";
     }
 
@@ -356,12 +406,12 @@ class OmpOgrafPanel extends HTMLElement {
       if (layers.length === 0) return;
       const title = document.createElement("div");
       title.className = "onair-title";
-      title.textContent = "Auf Sendung (" + layers.length + ")";
+      title.textContent = T("ogr.79eed3") + layers.length + ")";
       onair.appendChild(title);
       for (const l of layers) {
         const row = document.createElement("div");
         row.className = "layer-row" + (l.id === select.value ? " selected" : "");
-        row.title = "Klick: im Editor öffnen (Live-Update)";
+        row.title = T("ogr.25b279");
         const dot = document.createElement("span");
         dot.className = "dot";
         const name = document.createElement("span");
@@ -371,12 +421,12 @@ class OmpOgrafPanel extends HTMLElement {
         if (l.stepCount > 1) {
           const st = document.createElement("span");
           st.className = "step";
-          st.textContent = "Schritt " + (l.step + 1) + "/" + l.stepCount;
+          st.textContent = T("ogr.398d8a") + (l.step + 1) + "/" + l.stepCount;
           row.appendChild(st);
         }
         const off = document.createElement("button");
         off.textContent = "■";
-        off.title = "Diese Grafik ausblenden";
+        off.title = T("ogr.419ff4");
         off.addEventListener("click", (ev) => {
           ev.stopPropagation();
           call("hide", { layerId: l.id });
@@ -416,7 +466,7 @@ class OmpOgrafPanel extends HTMLElement {
         if (templates.length === 0) {
           const empty = document.createElement("option");
           empty.value = "";
-          empty.textContent = "keine Templates gefunden";
+          empty.textContent = T("ogr.e8bc14");
           select.appendChild(empty);
         }
         for (const t of templates) {

@@ -394,7 +394,7 @@ function keyValueEditor(
     list.appendChild(line);
   };
   for (const [k, v] of pairs) addRow(k, v);
-  const add = h("button", "margin-top:4px;", "+ Eintrag");
+  const add = h("button", "margin-top:4px;", tt("y.addEntry"));
   add.type = "button";
   add.setAttribute("data-kv-add", opts.name);
   add.addEventListener("click", () => addRow());
@@ -606,7 +606,7 @@ function buildBranch(cfg: Record<string, unknown>, vars: VariableOption[]): Form
   };
   for (const c of cases) addCase(c);
   if (cases.length === 0) addCase();
-  const add = h("button", "margin-top:6px;", "+ Fall");
+  const add = h("button", "margin-top:6px;", tt("y.addCase"));
   add.type = "button";
   add.setAttribute("data-role", "branch-add-case");
   add.addEventListener("click", () => addCase());
@@ -1198,7 +1198,7 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
     outputTracksList.appendChild(box);
     syncSimpleCodecVisibility();
   };
-  const addOutputTrackBtn = h("button", "margin-top:6px;", "+ Ausgabespur");
+  const addOutputTrackBtn = h("button", "margin-top:6px;", tt("y.addTrack"));
   addOutputTrackBtn.type = "button";
   addOutputTrackBtn.addEventListener("click", addOutputTrack);
 
@@ -1821,7 +1821,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
       const row = h("div", "padding:4px;cursor:pointer;border-bottom:1px solid var(--omp-border);");
       const head = h("div", "");
       head.append(h("b", "", m.entry.value.name), categoryBadge(tt("psc.cbb958")));
-      if (m.fuzzy) head.appendChild(categoryBadge("≈ Tippfehler?", "cue"));
+      if (m.fuzzy) head.appendChild(categoryBadge(tt("y.typo"), "cue"));
       row.append(head, h("div", HELP_CSS, m.entry.value.description));
       const activate = () => insertGlobalFlag(m.entry.value.name);
       row.addEventListener("click", activate);
@@ -1837,7 +1837,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
       const row = h("div", "padding:4px;cursor:pointer;border-bottom:1px solid var(--omp-border);");
       const head = h("div", "");
       head.append(h("b", "", m.entry.value.name), categoryBadge(tt("psc.a0f383")));
-      if (m.fuzzy) head.appendChild(categoryBadge("≈ Tippfehler?", "cue"));
+      if (m.fuzzy) head.appendChild(categoryBadge(tt("y.typo"), "cue"));
       row.append(head, h("div", HELP_CSS, m.entry.value.description));
       const activate = () => insertGlobalFlag(m.entry.value.name);
       row.addEventListener("click", activate);
@@ -1862,7 +1862,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
       const row = h("div", "padding:4px;cursor:pointer;border-bottom:1px solid var(--omp-border);");
       const head = h("div", "");
       head.append(h("span", "font-family:ui-monospace,monospace;font-weight:600;", m.entry.value.flag), categoryBadge(m.entry.value.source));
-      if (m.fuzzy) head.appendChild(categoryBadge("≈ Tippfehler?", "cue"));
+      if (m.fuzzy) head.appendChild(categoryBadge(tt("y.typo"), "cue"));
       row.append(head, h("div", HELP_CSS, optionHelpText(m.entry.value.opt)));
       const activate = () => insertOption(m.entry.value.flag, m.entry.value.opt);
       row.addEventListener("click", activate);
@@ -1878,7 +1878,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
       const head = h("div", "cursor:pointer;");
       const headText = h("div", "");
       headText.append(h("b", "", c.name), categoryBadge(kindLabel[c.kind]));
-      if (m.fuzzy) headText.appendChild(categoryBadge("≈ Tippfehler?", "cue"));
+      if (m.fuzzy) headText.appendChild(categoryBadge(tt("y.typo"), "cue"));
       head.append(headText, h("div", HELP_CSS, c.description));
       const sub = h("div", "margin-left:10px;display:none;");
       const toggle = async () => {
@@ -1958,7 +1958,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     setArgs(t.args);
     tplHelp.textContent = t.help + tt("psc.cd6dbf");
   });
-  const addBtn = h("button", "margin-top:4px;", "+ Argument");
+  const addBtn = h("button", "margin-top:4px;", tt("y.addArg"));
   addBtn.type = "button";
   addBtn.addEventListener("click", () => addArg());
   const pasteBtn = h("button", "margin-top:4px;margin-left:4px;", tt("psc.a7b058"));

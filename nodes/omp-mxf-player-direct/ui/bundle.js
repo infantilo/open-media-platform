@@ -1,3 +1,53 @@
+// i18n (de/en): Sprache aus <html lang> (setzt die Shell, ui/shell/i18n.ts),
+// Fallback Deutsch. Eigenes Mini-t(), weil Node-Bundles keine Shell-Imports nutzen.
+const T = (() => {
+  const D = {
+    de: {
+        "x.play": "▶ Play",
+        "x.stop": "■ Stop",
+        "x.chOne": "{p0} — {p1} Kanal",
+        "x.chMany": "{p0} — {p1} Kanäle",
+        "mxfd.970f2c": "Clip laden:",
+        "mxfd.252c6d": "Datei (relativ zu OMP_MEDIA_DIR)",
+        "mxfd.18f6ee": "Laden",
+        "mxfd.79a3ca": "Audio-Shuffle-Preset:",
+        "mxfd.dad80f": "Legt fest, welche MXF-Tonspur in welche Programmgruppe (Programmton/Hörfilm/Originalton/Dolby E/5.1) geroutet wird.",
+        "mxfd.c450c6": "Anwenden",
+        "mxfd.62a27e": "Ausgangsgruppen (Audio-Konfiguration)",
+        "mxfd.7125c0": "Einstellungen neu laden",
+        "mxfd.f5433d": "Holt das Audio-Dokument (Administration → Audio-Ausgabe) neu und wendet Gruppen und Zuordnungen live an.",
+        "mxfd.96f435": "übernommen",
+        "mxfd.435a5a": "Fehler {p0}",
+        "mxfd.768745": "(keine Datei)"
+    },
+    en: {
+        "x.play": "▶ Play",
+        "x.stop": "■ Stop",
+        "x.chOne": "{p0} — {p1} channel",
+        "x.chMany": "{p0} — {p1} channels",
+        "mxfd.970f2c": "Load clip:",
+        "mxfd.252c6d": "File (relative to OMP_MEDIA_DIR)",
+        "mxfd.18f6ee": "Load",
+        "mxfd.79a3ca": "Audio shuffle preset:",
+        "mxfd.dad80f": "Determines which MXF audio track is routed into which programme group (programme sound/audio description/original sound/Dolby E/5.1).",
+        "mxfd.c450c6": "Apply",
+        "mxfd.62a27e": "Output groups (audio configuration)",
+        "mxfd.7125c0": "Reload settings",
+        "mxfd.f5433d": "Fetches the audio document (Administration → Audio output) again and applies groups and mappings live.",
+        "mxfd.96f435": "applied",
+        "mxfd.435a5a": "Error {p0}",
+        "mxfd.768745": "(no file)"
+    },
+  };
+  const lang = document.documentElement.lang === "en" ? "en" : "de";
+  return (k, p) => {
+    let s = (D[lang] && D[lang][k]) ?? D.de[k] ?? k;
+    if (p) for (const x in p) s = s.split("{" + x + "}").join(p[x]);
+    return s;
+  };
+})();
+const LOCALE = document.documentElement.lang === "en" ? "en-GB" : "de-DE";
+
 // Node-UI-Bundle von omp-mxf-player-direct (Nutzerauftrag 2026-09-03:
 // "mxf player (direkt ohne playliste) braucht noch ein ui zum laden des
 // clips, seeking, play, stop... und audioshuffle selection"). Vereinfachter
@@ -69,11 +119,11 @@ class OmpMxfPlayerDirectPanel extends HTMLElement {
     transportRow.className = "transport-row";
     const playBtn = document.createElement("button");
     playBtn.className = "play";
-    playBtn.textContent = "▶ Play";
+    playBtn.textContent = T("x.play");
     playBtn.addEventListener("click", () => call("play", {}).then(poll));
     const stopBtn = document.createElement("button");
     stopBtn.className = "stop";
-    stopBtn.textContent = "■ Stop";
+    stopBtn.textContent = T("x.stop");
     stopBtn.addEventListener("click", () => call("stop", {}).then(poll));
     transportRow.append(playBtn, stopBtn);
 
@@ -101,15 +151,15 @@ class OmpMxfPlayerDirectPanel extends HTMLElement {
     const loadRow = document.createElement("div");
     loadRow.className = "load-row";
     const loadLabel = document.createElement("label");
-    loadLabel.textContent = "Clip laden:";
+    loadLabel.textContent = T("mxfd.970f2c");
     const fileInput = document.createElement("input");
     fileInput.type = "text";
-    fileInput.placeholder = "Datei (relativ zu OMP_MEDIA_DIR)";
+    fileInput.placeholder = T("mxfd.252c6d");
     fileInput.setAttribute("list", "media-library");
     const mediaLibraryList = document.createElement("datalist");
     mediaLibraryList.id = "media-library";
     const loadBtn = document.createElement("button");
-    loadBtn.textContent = "Laden";
+    loadBtn.textContent = T("mxfd.18f6ee");
     loadBtn.addEventListener("click", () => {
       const file = fileInput.value.trim();
       if (!file) return;
@@ -123,11 +173,11 @@ class OmpMxfPlayerDirectPanel extends HTMLElement {
     const presetRow = document.createElement("div");
     presetRow.className = "preset-row";
     const presetLabel = document.createElement("label");
-    presetLabel.textContent = "Audio-Shuffle-Preset:";
+    presetLabel.textContent = T("mxfd.79a3ca");
     const presetSelect = document.createElement("select");
-    presetSelect.title = "Legt fest, welche MXF-Tonspur in welche Programmgruppe (Programmton/Hörfilm/Originalton/Dolby E/5.1) geroutet wird.";
+    presetSelect.title = T("mxfd.dad80f");
     const presetApplyBtn = document.createElement("button");
-    presetApplyBtn.textContent = "Anwenden";
+    presetApplyBtn.textContent = T("mxfd.c450c6");
     presetApplyBtn.addEventListener("click", () => call("setPreset", { audioPreset: presetSelect.value }).then(poll));
     presetRow.append(presetLabel, presetSelect, presetApplyBtn);
 
@@ -136,14 +186,14 @@ class OmpMxfPlayerDirectPanel extends HTMLElement {
     const reference = document.createElement("details");
     reference.className = "reference";
     const referenceSummary = document.createElement("summary");
-    referenceSummary.textContent = "Ausgangsgruppen (Audio-Konfiguration)";
+    referenceSummary.textContent = T("mxfd.62a27e");
     const groupsInfo = document.createElement("div");
     groupsInfo.className = "groups-info";
     const reloadRow = document.createElement("div");
     reloadRow.style.cssText = "display:flex;gap:8px;align-items:center;margin-top:8px;";
     const reloadBtn = document.createElement("button");
-    reloadBtn.textContent = "Einstellungen neu laden";
-    reloadBtn.title = "Holt das Audio-Dokument (Administration → Audio-Ausgabe) neu und wendet Gruppen und Zuordnungen live an.";
+    reloadBtn.textContent = T("mxfd.7125c0");
+    reloadBtn.title = T("mxfd.f5433d");
     const reloadMsg = document.createElement("span");
     reloadMsg.style.cssText = "font-size:12px;color:#9aa0a6;";
     reloadBtn.addEventListener("click", async () => {
@@ -151,10 +201,10 @@ class OmpMxfPlayerDirectPanel extends HTMLElement {
       reloadMsg.textContent = "lade …";
       const res = await call("reloadSettings", {});
       if (res.ok) {
-        reloadMsg.textContent = "übernommen";
+        reloadMsg.textContent = T("mxfd.96f435");
       } else {
         reloadMsg.style.color = "#ff6b6b";
-        reloadMsg.textContent = (await res.text()).trim() || `Fehler ${res.status}`;
+        reloadMsg.textContent = (await res.text()).trim() || T("mxfd.435a5a", { p0: res.status });
       }
       poll();
     });
@@ -232,14 +282,14 @@ class OmpMxfPlayerDirectPanel extends HTMLElement {
       if (shadow.activeElement !== presetSelect) presetSelect.value = audioPreset || "";
       groupsInfo.replaceChildren(...groups.map((g) => {
         const row = document.createElement("div");
-        row.textContent = `${g.label} — ${g.channels} Kanal${g.channels === 1 ? "" : "äle"}`;
+        row.textContent = T(g.channels === 1 ? "x.chOne" : "x.chMany", { p0: g.label, p1: g.channels });
         return row;
       }));
 
       const isPlaying = status === "playing";
       statusEl.textContent = isPlaying ? "PLAYING" : "GESTOPPT";
       statusEl.className = isPlaying ? "status playing" : "status";
-      fileEl.textContent = file || "(keine Datei)";
+      fileEl.textContent = file || T("mxfd.768745");
       fileEl.title = file || "";
       playBtn.disabled = isPlaying;
       stopBtn.disabled = !isPlaying;

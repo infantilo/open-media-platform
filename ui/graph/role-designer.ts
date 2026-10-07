@@ -27,7 +27,7 @@
 // derselbe Workflow lässt sich abwechselnd grafisch (Topologie) und
 // per Formular (Metadaten) bearbeiten, keine doppelte Formular-UI für
 // bereits vollständig vorhandene Felder.
-import { t } from "../shell/i18n.ts";
+import { t, t as tt } from "../shell/i18n.ts";
 import {
   defaultPosition,
   HEADER_HEIGHT,
@@ -607,7 +607,7 @@ export class RoleDesigner extends HTMLElement {
     this.#undoBtn = undoBtn;
 
     const redoBtn = document.createElement("button");
-    redoBtn.textContent = "↷ Wiederholen";
+    redoBtn.textContent = tt("y.redo");
     redoBtn.title = t("rd.d84dd6");
     redoBtn.disabled = this.#redoStack.length === 0;
     redoBtn.addEventListener("click", () => this.#redo());

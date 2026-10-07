@@ -10,6 +10,8 @@ const MANIFEST: &str = include_str!("../ui/manifest.json");
 /// Quelldateien des Konsolen-UIs (Reihenfolge = Abhängigkeitsreihenfolge),
 /// zur Compile-Zeit zu EINEM Bundle zusammengefügt (kein JS-Build nötig).
 const BUNDLE: &str = concat!(
+    include_str!("../ui/05-i18n.js"),
+    "\n",
     include_str!("../ui/00-core.js"),
     "\n",
     include_str!("../ui/10-channel.js"),

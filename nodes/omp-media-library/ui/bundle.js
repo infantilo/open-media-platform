@@ -1,3 +1,27 @@
+// i18n (de/en): Sprache aus <html lang> (setzt die Shell, ui/shell/i18n.ts),
+// Fallback Deutsch. Eigenes Mini-t(), weil Node-Bundles keine Shell-Imports nutzen.
+const T = (() => {
+  const D = {
+    de: {
+        "mlib.647a43": "Medienverzeichnis:",
+        "mlib.a20a81": "Absoluter Pfad auf dem Host, auf dem dieser Node läuft — muss dort als Verzeichnis existieren.",
+        "mlib.95184e": "Setzen"
+    },
+    en: {
+        "mlib.647a43": "Media directory:",
+        "mlib.a20a81": "Absolute path on the host this node runs on — must exist there as a directory.",
+        "mlib.95184e": "Set"
+    },
+  };
+  const lang = document.documentElement.lang === "en" ? "en" : "de";
+  return (k, p) => {
+    let s = (D[lang] && D[lang][k]) ?? D.de[k] ?? k;
+    if (p) for (const x in p) s = s.split("{" + x + "}").join(p[x]);
+    return s;
+  };
+})();
+const LOCALE = document.documentElement.lang === "en" ? "en-GB" : "de-DE";
+
 // Node-UI-Bundle der Media Library (UMSETZUNG.md C17, ARCHITECTURE.md §4.5):
 // Katalog-Übersicht mit Scan/Rescan/Cleanup-Aktionen und Segment-Editor.
 // Nutzt die gleiche generische Node-Proxy-API wie alle anderen Nodes.
@@ -44,13 +68,13 @@ class OmpMediaLibraryPanel extends HTMLElement {
     const settingsRow = document.createElement("div");
     settingsRow.className = "settings";
     const mediaDirLabel = document.createElement("label");
-    mediaDirLabel.textContent = "Medienverzeichnis:";
+    mediaDirLabel.textContent = T("mlib.647a43");
     const mediaDirInput = document.createElement("input");
     mediaDirInput.type = "text";
     mediaDirInput.placeholder = "/pfad/zu/medien";
-    mediaDirInput.title = "Absoluter Pfad auf dem Host, auf dem dieser Node läuft — muss dort als Verzeichnis existieren.";
+    mediaDirInput.title = T("mlib.a20a81");
     const setMediaDirBtn = document.createElement("button");
-    setMediaDirBtn.textContent = "Setzen";
+    setMediaDirBtn.textContent = T("mlib.95184e");
     setMediaDirBtn.addEventListener("click", async () => {
       const path = mediaDirInput.value.trim();
       if (!path) return;

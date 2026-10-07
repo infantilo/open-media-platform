@@ -949,7 +949,7 @@ class AssetView extends HTMLElement {
     head.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--omp-space-2);";
     head.innerHTML = `<span style="font-weight:600;">${tt("asset.074891", { p0: this.#relationships.length })}</span>`;
     const addBtn = document.createElement("button");
-    addBtn.textContent = "+ Beziehung";
+    addBtn.textContent = tt("y.addRel");
     addBtn.addEventListener("click", () => this.#openCreateRelationshipModal(asset));
     head.appendChild(addBtn);
     card.appendChild(head);
@@ -1178,7 +1178,7 @@ class AssetView extends HTMLElement {
     const editable = version.status === "draft";
     if (editable) {
       const addBtn = document.createElement("button");
-      addBtn.textContent = "+ Representation";
+      addBtn.textContent = tt("y.addRep");
       addBtn.setAttribute("data-role", "rep-new");
       addBtn.addEventListener("click", () => this.#openRepresentationModal(version));
       head.appendChild(addBtn);
@@ -1559,7 +1559,7 @@ class AssetView extends HTMLElement {
         head.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-top:var(--omp-space-3);";
         head.innerHTML = `<span style="font-weight:600;">${label}</span>`;
         const add = document.createElement("button");
-        add.textContent = "+ Feld";
+        add.textContent = tt("y.addField");
         add.setAttribute("data-add-field", cat);
         add.addEventListener("click", () => {
           rows[cat].push({ key: "", value: "", json: false });

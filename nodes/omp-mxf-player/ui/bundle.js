@@ -1,3 +1,69 @@
+// i18n (de/en): Sprache aus <html lang> (setzt die Shell, ui/shell/i18n.ts),
+// Fallback Deutsch. Eigenes Mini-t(), weil Node-Bundles keine Shell-Imports nutzen.
+const T = (() => {
+  const D = {
+    de: {
+        "x.item": "+ Item",
+        "x.tonspur": "MXF-Tonspur",
+        "x.toGroup": "→ Programmgruppe",
+        "mxfp.181e1c": "Shuttle {p0}×",
+        "mxfp.ecc34a": "10 Bilder zurück (Jog)",
+        "mxfp.a27056": "1 Bild zurück (Jog)",
+        "mxfp.b5782b": "1 Bild vor (Jog)",
+        "mxfp.4c41f9": "10 Bilder vor (Jog)",
+        "mxfp.18a802": "Titel",
+        "mxfp.252c6d": "Datei (relativ zu OMP_MEDIA_DIR)",
+        "mxfp.76dfbe": "Audio-Shuffle-Preset dieses Items — legt fest, welche MXF-Tonspur in welche Programmgruppe (Programmton/Hörfilm/Originalton/Dolby E/5.1) geroutet wird.",
+        "mxfp.7ca717": "Dauer (ms, optional)",
+        "mxfp.94f9d4": "Datei wählen und \"+ Item\" anklicken, um die Playlist zu füllen.",
+        "mxfp.68f4f2": "Programmgruppen & Shuffle-Presets",
+        "mxfp.331b62": "Routing anzeigen für:",
+        "mxfp.982e11": "Kein Preset ausgewählt.",
+        "mxfp.815f10": "Programmgruppe",
+        "mxfp.45cef4": "Kanäle",
+        "mxfp.84eb86": "Kanal",
+        "mxfp.ed808c": "Tonspur {p0}",
+        "mxfp.1c2876": "Audio-Shuffle-Preset dieses Items ändern.",
+        "mxfp.513d30": "Entfernen",
+        "mxfp.96c237": "„{p0}\" wirklich aus der Playlist entfernen?",
+        "mxfp.0888a6": "Gecued"
+    },
+    en: {
+        "x.item": "+ Item",
+        "x.tonspur": "MXF audio track",
+        "x.toGroup": "→ Programme group",
+        "mxfp.181e1c": "Shuttle {p0}×",
+        "mxfp.ecc34a": "10 frames back (jog)",
+        "mxfp.a27056": "1 frame back (jog)",
+        "mxfp.b5782b": "1 frame forward (jog)",
+        "mxfp.4c41f9": "10 frames forward (jog)",
+        "mxfp.18a802": "Title",
+        "mxfp.252c6d": "File (relative to OMP_MEDIA_DIR)",
+        "mxfp.76dfbe": "Audio shuffle preset of this item — determines which MXF audio track is routed into which programme group (programme sound/audio description/original sound/Dolby E/5.1)",
+        "mxfp.7ca717": "Duration (ms, optional)",
+        "mxfp.94f9d4": "Choose a file and click \"+ Item\" to fill the playlist.",
+        "mxfp.68f4f2": "Programme groups & shuffle presets",
+        "mxfp.331b62": "Show routing for:",
+        "mxfp.982e11": "No preset selected.",
+        "mxfp.815f10": "Programme group",
+        "mxfp.45cef4": "Channels",
+        "mxfp.84eb86": "Channel",
+        "mxfp.ed808c": "Audio track {p0}",
+        "mxfp.1c2876": "Change the audio shuffle preset of this item.",
+        "mxfp.513d30": "Remove",
+        "mxfp.96c237": "Really remove “{p0}” from the playlist?",
+        "mxfp.0888a6": "Cued"
+    },
+  };
+  const lang = document.documentElement.lang === "en" ? "en" : "de";
+  return (k, p) => {
+    let s = (D[lang] && D[lang][k]) ?? D.de[k] ?? k;
+    if (p) for (const x in p) s = s.split("{" + x + "}").join(p[x]);
+    return s;
+  };
+})();
+const LOCALE = document.documentElement.lang === "en" ? "en-GB" : "de-DE";
+
 // Node-UI-Bundle des MXF-Players (Nutzerauftrag 2026-08-20: "mxf player
 // muss vernünftige gui haben um clip auszuwählen, shuffeling zu
 // editieren"). Direkter Nachbau von omp-player/ui/bundle-video.js (gleiche
@@ -154,7 +220,7 @@ class OmpMxfPlayerPanel extends HTMLElement {
     const shuttleBtn = (rate) => {
       const btn = jogBtn(
         rate === 1 ? "▶ 1×" : `${rate > 0 ? "▶▶" : "◀◀"} ${Math.abs(rate)}×`,
-        `Shuttle ${rate}×`,
+        T("mxfp.181e1c", { p0: rate }),
         () => call("setRate", { rate }),
       );
       btn.dataset.rate = String(rate);
@@ -162,8 +228,8 @@ class OmpMxfPlayerPanel extends HTMLElement {
       return btn;
     };
     jogShuttle.append(
-      jogBtn("⏮ -10", "10 Bilder zurück (Jog)", () => call("step", { frames: -10 })),
-      jogBtn("◀ -1", "1 Bild zurück (Jog)", () => call("step", { frames: -1 })),
+      jogBtn("⏮ -10", T("mxfp.ecc34a"), () => call("step", { frames: -10 })),
+      jogBtn("◀ -1", T("mxfp.a27056"), () => call("step", { frames: -1 })),
       sep(),
       shuttleBtn(-8),
       shuttleBtn(-2),
@@ -171,8 +237,8 @@ class OmpMxfPlayerPanel extends HTMLElement {
       shuttleBtn(2),
       shuttleBtn(8),
       sep(),
-      jogBtn("+1 ▶", "1 Bild vor (Jog)", () => call("step", { frames: 1 })),
-      jogBtn("+10 ⏭", "10 Bilder vor (Jog)", () => call("step", { frames: 10 })),
+      jogBtn("+1 ▶", T("mxfp.b5782b"), () => call("step", { frames: 1 })),
+      jogBtn("+10 ⏭", T("mxfp.4c41f9"), () => call("step", { frames: 10 })),
     );
 
     transportRow.append(scrubRow, jogShuttle);
@@ -181,12 +247,12 @@ class OmpMxfPlayerPanel extends HTMLElement {
     addRow.className = "add-row";
     const labelInput = document.createElement("input");
     labelInput.type = "text";
-    labelInput.placeholder = "Titel";
+    labelInput.placeholder = T("mxfp.18a802");
     // K2-Teil-1-Muster (omp-player): Datei relativ zu OMP_MEDIA_DIR, ein
     // <datalist> aus dem "mediaLibrary"-Param spart Tipparbeit.
     const fileInput = document.createElement("input");
     fileInput.type = "text";
-    fileInput.placeholder = "Datei (relativ zu OMP_MEDIA_DIR)";
+    fileInput.placeholder = T("mxfp.252c6d");
     fileInput.setAttribute("list", "media-library");
     const mediaLibraryList = document.createElement("datalist");
     mediaLibraryList.id = "media-library";
@@ -194,12 +260,12 @@ class OmpMxfPlayerPanel extends HTMLElement {
     // editieren" aus dem Nutzerauftrag: welche der 8 MXF-Tonspuren in
     // welche Programmgruppe geroutet wird, s. Referenz-Panel unten.
     const presetSelect = document.createElement("select");
-    presetSelect.title = "Audio-Shuffle-Preset dieses Items — legt fest, welche MXF-Tonspur in welche Programmgruppe (Programmton/Hörfilm/Originalton/Dolby E/5.1) geroutet wird.";
+    presetSelect.title = T("mxfp.76dfbe");
     const durationInput = document.createElement("input");
     durationInput.type = "number";
-    durationInput.placeholder = "Dauer (ms, optional)";
+    durationInput.placeholder = T("mxfp.7ca717");
     const addBtn = document.createElement("button");
-    addBtn.textContent = "+ Item";
+    addBtn.textContent = T("x.item");
     addBtn.addEventListener("click", () => {
       const file = fileInput.value.trim();
       if (!file) return;
@@ -221,7 +287,7 @@ class OmpMxfPlayerPanel extends HTMLElement {
     const list = document.createElement("div");
     const empty = document.createElement("p");
     empty.className = "empty";
-    empty.textContent = 'Datei wählen und "+ Item" anklicken, um die Playlist zu füllen.';
+    empty.textContent = T("mxfp.94f9d4");
 
     // Referenz-Panel (Nutzerauftrag: Shuffle-Presets müssen nachvollziehbar
     // sein, nicht nur namentlich wählbar) — Programmgruppen-Tabelle immer
@@ -229,20 +295,20 @@ class OmpMxfPlayerPanel extends HTMLElement {
     const reference = document.createElement("details");
     reference.className = "reference";
     const referenceSummary = document.createElement("summary");
-    referenceSummary.textContent = "Programmgruppen & Shuffle-Presets";
+    referenceSummary.textContent = T("mxfp.68f4f2");
     const groupsTable = document.createElement("table");
     groupsTable.className = "groups-table";
     const referenceControls = document.createElement("div");
     referenceControls.className = "reference-controls";
     const referenceLabel = document.createElement("label");
-    referenceLabel.textContent = "Routing anzeigen für:";
+    referenceLabel.textContent = T("mxfp.331b62");
     const referencePresetSelect = document.createElement("select");
     referenceControls.append(referenceLabel, referencePresetSelect);
     const routesTable = document.createElement("table");
     routesTable.className = "routes-table";
     const routesEmpty = document.createElement("div");
     routesEmpty.className = "empty-routes";
-    routesEmpty.textContent = "Kein Preset ausgewählt.";
+    routesEmpty.textContent = T("mxfp.982e11");
     reference.append(referenceSummary, groupsTable, referenceControls, routesTable, routesEmpty);
 
     shadow.append(style, statusRow, transportRow, addRow, list, empty, reference);
@@ -273,7 +339,7 @@ class OmpMxfPlayerPanel extends HTMLElement {
     const renderGroupsTable = () => {
       groupsTable.innerHTML = "";
       const headerRow = document.createElement("tr");
-      for (const h of ["Programmgruppe", "Kanäle"]) {
+      for (const h of [T("mxfp.815f10"), T("mxfp.45cef4")]) {
         const th = document.createElement("th");
         th.textContent = h;
         headerRow.append(th);
@@ -300,7 +366,7 @@ class OmpMxfPlayerPanel extends HTMLElement {
       }
       routesEmpty.style.display = "none";
       const headerRow = document.createElement("tr");
-      for (const h of ["MXF-Tonspur", "→ Programmgruppe", "Kanal"]) {
+      for (const h of [T("x.tonspur"), T("x.toGroup"), T("mxfp.84eb86")]) {
         const th = document.createElement("th");
         th.textContent = h;
         headerRow.append(th);
@@ -310,7 +376,7 @@ class OmpMxfPlayerPanel extends HTMLElement {
         const group = groups.find((g) => g.id === route.group);
         const row = document.createElement("tr");
         const trackCell = document.createElement("td");
-        trackCell.textContent = `Tonspur ${route.srcTrack}`;
+        trackCell.textContent = T("mxfp.ed808c", { p0: route.srcTrack });
         const groupCell = document.createElement("td");
         groupCell.textContent = group ? group.label : route.group;
         const channelCell = document.createElement("td");
@@ -357,7 +423,7 @@ class OmpMxfPlayerPanel extends HTMLElement {
       labelEl.className = "label";
 
       const presetSel = document.createElement("select");
-      presetSel.title = "Audio-Shuffle-Preset dieses Items ändern.";
+      presetSel.title = T("mxfp.1c2876");
       presetSel.addEventListener("change", () => {
         call("setItemPreset", { itemId: item.id, audioPreset: presetSel.value }).then(poll);
       });
@@ -366,9 +432,9 @@ class OmpMxfPlayerPanel extends HTMLElement {
       cueBtn.addEventListener("click", () => call("cue", { itemId: item.id }).then(poll));
 
       const removeBtn = document.createElement("button");
-      removeBtn.textContent = "Entfernen";
+      removeBtn.textContent = T("mxfp.513d30");
       removeBtn.addEventListener("click", async () => {
-        if (!(await confirmDialog(`„${item.label}" wirklich aus der Playlist entfernen?`, "Entfernen"))) return;
+        if (!(await confirmDialog(T("mxfp.96c237", { p0: item.label }), T("mxfp.513d30")))) return;
         call("remove", { itemId: item.id }).then(poll);
       });
 
@@ -458,7 +524,7 @@ class OmpMxfPlayerPanel extends HTMLElement {
         const isOnair = item.id === currentItemId;
         const isCued = item.id === cuedItemId;
         refs.el.className = isOnair ? "item onair" : isCued ? "item cued" : "item";
-        refs.cueBtn.textContent = isCued ? "Gecued" : "Cue";
+        refs.cueBtn.textContent = isCued ? T("mxfp.0888a6") : "Cue";
         refs.cueBtn.className = isCued ? "cue-active" : "";
         refs.cueBtn.disabled = isOnair;
         refs.removeBtn.disabled = isOnair || isCued;

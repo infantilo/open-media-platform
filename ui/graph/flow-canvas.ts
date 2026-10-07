@@ -3435,7 +3435,7 @@ export class FlowCanvas extends HTMLElement {
         countText.setAttribute("fill", "#9aa0a6");
         countText.setAttribute("font-size", "10");
         const totalCount = zoneTiles.length + zoneWorkflowTileIds.length;
-        countText.textContent = totalCount === 1 ? "1 Kachel" : tt("flow.4d543b", { p0: totalCount });
+        countText.textContent = totalCount === 1 ? tt("y.oneTile") : tt("flow.4d543b", { p0: totalCount });
         g.appendChild(countText);
       }
 

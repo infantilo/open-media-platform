@@ -12,7 +12,7 @@
 // neuen Zeichenbibliothek — Filter-Pads sind strukturell dasselbe wie
 // NMOS-Sender/Receiver-Ports (mehrere benannte Ein-/Ausgänge je
 // Kachel), nur die Bedeutung ist eine andere.
-import { t } from "../shell/i18n.ts";
+import { t, t as tt } from "../shell/i18n.ts";
 import {
   arrangeByFlow,
   type ArrangeEdge,
@@ -124,7 +124,7 @@ export function openFilterGraphEditor(
 
   // ---- Palette --------------------------------------------------------
 
-  const addInputBtn = h("button", "width:100%;margin-bottom:4px;", "+ Eingang");
+  const addInputBtn = h("button", "width:100%;margin-bottom:4px;", tt("y.addIn"));
   addInputBtn.type = "button";
   addInputBtn.addEventListener("click", () => {
     const id = nextId("in");
@@ -132,7 +132,7 @@ export function openFilterGraphEditor(
     positions[id] = defaultNodePosition();
     render();
   });
-  const addOutputBtn = h("button", "width:100%;margin-bottom:8px;", "+ Ausgang");
+  const addOutputBtn = h("button", "width:100%;margin-bottom:8px;", tt("y.addOut"));
   addOutputBtn.type = "button";
   addOutputBtn.addEventListener("click", () => {
     const id = nextId("out");
@@ -338,7 +338,7 @@ export function openFilterGraphEditor(
           const bounds = opt.choices && opt.choices.length > 0 ? null : optionRangeBounds(opt);
           if (opt.choices && opt.choices.length > 0) {
             const input = h("select", "width:100%;font-size:10px;");
-            input.appendChild(new Option("– Standard –", ""));
+            input.appendChild(new Option(tt("y.std"), ""));
             for (const c of opt.choices) input.appendChild(new Option(c.name, c.value || c.name));
             input.value = node.options?.[opt.name] ?? "";
             input.title = opt.description ?? "";

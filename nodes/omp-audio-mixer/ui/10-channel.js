@@ -15,9 +15,9 @@ class ChannelView {
     this.root = h("div", { class: "ch", "data-id": id, role: "group" });
 
     this.nameBtn = h("button", { class: "name", type: "button", "aria-pressed": "false" });
-    this.sig = h("i", { class: "sig", title: "Signalaktivität" });
+    this.sig = h("i", { class: "sig", title: T("am1.2024a1") });
     // Reihenfolge ändern: Griff ziehen (Maus/Touch-Stift) oder Alt+◀/▶ am gewählten Kanal.
-    this.grip = h("span", { class: "grip", draggable: "true", title: "Ziehen, um die Reihenfolge zu ändern (Alt+◀ ▶ am gewählten Kanal)", "aria-hidden": "true", text: "⠿" });
+    this.grip = h("span", { class: "grip", draggable: "true", title: T("am1.e3f9d6"), "aria-hidden": "true", text: "⠿" });
     this.grip.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/x-omp-channel", id); e.dataTransfer.effectAllowed = "move"; this.root.dataset.dragging = "1"; });
     this.grip.addEventListener("dragend", () => { delete this.root.dataset.dragging; });
     this.root.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("text/x-omp-channel")) { e.preventDefault(); this.root.dataset.dropTarget = "1"; } });
@@ -38,22 +38,22 @@ class ChannelView {
     this.bMedia = badge("media", "");
     this.bPfl = badge("pfl", "PFL");
     // Routing wie am Hardware-Pult (Kap. 32.5): je Ausgang ein Schalter, Mehrfachwahl möglich.
-    this.routes = h("div", { class: "routes", role: "group", "aria-label": "Routing auf Ausgänge" });
+    this.routes = h("div", { class: "routes", role: "group", "aria-label": T("am1.07d844") });
     this.badges = h("div", { class: "badges" }, this.bOnAir, this.bAuto, this.bDuck, this.bAfv, this.bManual, this.bMedia, this.bPfl, this.routes);
 
     this.meter = new Meter();
     this.meterWrap = h("div", { class: "meterwrap" }, this.meter.root);
 
     this.fader = new Fader({
-      label: "Fader",
+      label: T("am1.e2ab41"),
       onInput: (db) => app.setGainLive(id, db),
       onCommit: (db) => app.setGainCommit(id, db),
     });
 
     const twoLabel = (s, l) => [h("span", { class: "s", text: s }), h("span", { class: "l", text: l })];
-    this.muteBtn = h("button", { class: "tog mute", type: "button", "aria-pressed": "false", title: "Mute" }, twoLabel("M", "MUTE"));
-    this.soloBtn = h("button", { class: "tog solo", type: "button", "aria-pressed": "false", title: "Solo/PFL" }, twoLabel("S", "SOLO"));
-    this.selBtn = h("button", { class: "tog sel", type: "button", "aria-pressed": "false", title: "Auswählen" }, twoLabel("SEL", "SELECT"));
+    this.muteBtn = h("button", { class: "tog mute", type: "button", "aria-pressed": "false", title: T("am1.00cd7b") }, twoLabel("M", "MUTE"));
+    this.soloBtn = h("button", { class: "tog solo", type: "button", "aria-pressed": "false", title: T("am1.47a7ad") }, twoLabel("S", "SOLO"));
+    this.selBtn = h("button", { class: "tog sel", type: "button", "aria-pressed": "false", title: T("am1.751a99") }, twoLabel("SEL", "SELECT"));
     this.btns = h("div", { class: "btns" }, this.muteBtn, this.soloBtn, this.selBtn);
 
     this.root.append(this.head, this.badges, this.meterWrap, this.fader.root, this.btns);
@@ -98,8 +98,8 @@ class ChannelView {
     set("label", ch.label, (v) => {
       this.nameBtn.textContent = v;
       this.nameBtn.title = v;
-      this.root.setAttribute("aria-label", "Kanal " + v);
-      this.fader.root.setAttribute("aria-label", "Fader " + v);
+      this.root.setAttribute("aria-label", T("am1.be5e2c") + v);
+      this.fader.root.setAttribute("aria-label", T("am1.57e678") + v);
     });
     this.fader.setValue(ch.gainDb);
     set("mute", ch.mute || ctx.groupMuted, (v) => {
@@ -107,7 +107,7 @@ class ChannelView {
       this.root.dataset.muted = v ? "1" : "0";
     });
     set("groupMuted", ctx.groupMuted, (v) => {
-      this.muteBtn.title = v ? "Mute (Gruppe stumm)" : "Mute";
+      this.muteBtn.title = v ? T("am1.0b8259") : T("am1.00cd7b");
     });
     set("pfl", !!ch.pfl, (v) => {
       this.soloBtn.setAttribute("aria-pressed", String(v));
@@ -134,7 +134,7 @@ class ChannelView {
       this.root.dataset.onair = v === "air" ? "1" : "0";
       this.bOnAir.textContent = v === "air" ? "● ON AIR" : v === "muted" ? "MUTED" : "OFF AIR";
       this.bOnAir.dataset.state = v;
-      this.bOnAir.title = v === "off" ? (ch.mainRoute ? "Nicht hörbar (Fader/AutoMix)" : "Nicht auf Programm geroutet") : "";
+      this.bOnAir.title = v === "off" ? (ch.mainRoute ? T("am1.3db904") : T("am1.7302aa")) : "";
     });
 
     // AutoMix und Ducking getrennt sichtbar (Ursache einer Pegeländerung erkennbar).
@@ -161,7 +161,7 @@ class ChannelView {
       this.bAfv.hidden = !v;
       this.bAfv.dataset.state = v;
       this.bAfv.textContent = v === "open" ? "AFV ●" : v === "closed" ? "AFV ○" : "";
-      this.bAfv.title = v === "open" ? "Folgt dem Bild: Quelle im Programm, Tor offen" : v === "closed" ? "Folgt dem Bild: Quelle nicht im Programm, Tor zu" : "";
+      this.bAfv.title = v === "open" ? T("am1.f21d40") : v === "closed" ? T("am1.365d48") : "";
     });
 
     const a = ch.automation;
@@ -170,7 +170,7 @@ class ChannelView {
     set("mediaTxt", mediaTxt + (ms ? ms.error : ""), () => {
       this.bMedia.hidden = !mediaTxt;
       this.bMedia.textContent = mediaTxt;
-      this.bMedia.title = ms ? (ms.ok ? `${ms.action} → ${a.target}` : `Fehler: ${ms.error}`) : `Ziel: ${a ? a.target : ""}`;
+      this.bMedia.title = ms ? (ms.ok ? `${ms.action} → ${a.target}` : T("am1.84b0ea", { p0: ms.error })) : T("am1.348c49", { p0: a ? a.target : "" });
     });
   }
 
@@ -186,7 +186,7 @@ class ChannelView {
       b.addEventListener("click", (e) => { e.stopPropagation(); onclick(); });
       return b;
     };
-    const items = [btn("PGM", "Auf Programm (Stereo-Master) routen", ch.mainRoute, "program", false, () => {
+    const items = [btn("PGM", T("am1.e32a39"), ch.mainRoute, "program", false, () => {
       const cur = app.state.channels.find((c) => c.id === this.id); // aktueller Zustand, nicht die Closure vom Aufbau
       if (!cur) return;
       app.touchedAt = performance.now();
@@ -198,7 +198,7 @@ class ChannelView {
     for (const bus of buses) {
       const s = ch.sends.find((x) => x.auxId === bus.id);
       const label = bus.label.length > 9 ? bus.label.slice(0, 8) + "…" : bus.label;
-      items.push(btn(label, `${bus.label} (${outputKind(bus)})${s && s.locked ? " — automatisch zugeordnet" : ""}`, s && s.enabled, bus.kind, s && s.locked, () => {
+      items.push(btn(label, `${bus.label} (${outputKind(bus)})${s && s.locked ? T("am1.15cbee") : ""}`, s && s.enabled, bus.kind, s && s.locked, () => {
         const cur = app.state.channels.find((c) => c.id === this.id);
         const sd = cur && cur.sends.find((x) => x.auxId === bus.id);
         if (!sd) return;

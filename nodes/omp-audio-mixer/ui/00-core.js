@@ -94,7 +94,7 @@ function biquadMagDb(kind, f0, q, gainDb, f, fs = 48000) {
  */
 class Fader {
   #lastTap = 0;
-  constructor({ onInput, onCommit, orientation = "vertical", label = "Fader" }) {
+  constructor({ onInput, onCommit, orientation = "vertical", label = T("am0.e2ab41") }) {
     this.onInput = onInput;
     this.onCommit = onCommit;
     this.orientation = orientation;
@@ -340,7 +340,7 @@ class Slider {
 /** Meter: Füllung + Spitzenwert (Peak-Hold), Pegel linear 0..1 vom Node (rms/peak), Anzeige −60…0 dB. */
 class Meter {
   constructor() {
-    this.root = h("div", { class: "meter", role: "img", "aria-label": "Pegel" });
+    this.root = h("div", { class: "meter", role: "img", "aria-label": T("am0.f23ca0") });
     this.fill = h("i", { class: "mfill" });
     this.peak = h("i", { class: "mpeak" });
     this.root.append(this.fill, this.peak);

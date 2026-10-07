@@ -355,7 +355,7 @@ class PlayoutAdminView extends HTMLElement {
       card.append(el("div", "font-weight:600;", tt("pav.53fc17", { p0: g.event, p1: this.#name(g.origin), p2: new Date(g.at).toLocaleString(dateLocale()) })));
       for (const r of g.items) {
         const line = el("div", `color:${TONE[statusTone(r.status)]};padding-left:12px;`,
-          `→ ${this.#name(r.targetChannel)} (#${r.seq}): ${statusText(r.status)}${r.detail ? ` — ${r.detail}` : ""}${r.attempts > 1 ? ` · ${r.attempts} Versuche` : ""}`);
+          `→ ${this.#name(r.targetChannel)} (#${r.seq}): ${statusText(r.status)}${r.detail ? ` — ${r.detail}` : ""}${r.attempts > 1 ? tt("y.attempts", { p0: r.attempts }) : ""}`);
         card.append(line);
       }
       box.append(card);

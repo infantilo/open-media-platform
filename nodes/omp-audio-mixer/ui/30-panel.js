@@ -1,12 +1,12 @@
 // ───────────────────────────── Panel (Custom Element) ─────────────────────────────
 
 const PRESETS = [
-  ["auto", "Auto"],
-  ["desktop", "Desktop"],
-  ["compact", "Compact"],
-  ["dense", "Dicht"],
-  ["grid", "Grid"],
-  ["touch", "Touch"],
+  ["auto", T("am5.06b928")],
+  ["desktop", T("am5.231040")],
+  ["compact", T("am5.b1fe2c")],
+  ["dense", T("am5.7f7f13")],
+  ["grid", T("am5.5174d1")],
+  ["touch", T("am5.f0f31c")],
 ];
 const DEFAULT_UI = { preset: "auto", mode: "mix", showFaders: null, columns: 0, meterSize: "m", selected: "", centerTab: "in", centerOpen: false, collapsed: {}, bySource: false, centerDismissed: false };
 
@@ -335,29 +335,29 @@ class MixerApp {
     style.textContent = CSS;
     this.root = h("div", { class: "root", tabindex: "-1" });
     // Toolbar
-    this.presetSel = h("select", { class: "tsel presetsel", "aria-label": "Ansicht" }, ...PRESETS.map(([id, label]) => h("option", { value: id, text: "Ansicht: " + label })));
+    this.presetSel = h("select", { class: "tsel presetsel", "aria-label": T("am5.42d57d") }, ...PRESETS.map(([id, label]) => h("option", { value: id, text: T("am5.3b6a72") + label })));
     this.presetSel.addEventListener("change", () => this.setPreset(this.presetSel.value));
     const presetBtns = PRESETS.map(([id, label]) => h("button", { class: "tb", type: "button", "data-preset": id, "aria-pressed": "false", text: label, onclick: () => this.setPreset(id) }));
     this.presetBtns = presetBtns;
-    this.modeBtns = [["operate", "Operate"], ["mix", "Mix"]].map(([id, label]) => h("button", { class: "tb mode", type: "button", "data-mode": id, "aria-pressed": "false", text: label, title: id === "operate" ? "Betrieb: Übersicht, Fader ausgeblendet" : "Mischen: Fader + Center Control", onclick: () => this.setMode(id) }));
-    this.faderBtn = h("button", { class: "tb", type: "button", "aria-pressed": "true", text: "Fader", title: "Fader ein-/ausblenden (nur Darstellung, Pegel bleiben erhalten)", onclick: () => this.toggleFaders() });
-    this.colSel = h("select", { class: "tsel", "aria-label": "Spalten" }, h("option", { value: "0", text: "Spalten: auto" }), ...[1, 2, 3, 4, 5, 6, 8, 10].map((n) => h("option", { value: String(n), text: n + " Spalten" })));
+    this.modeBtns = [["operate", T("am5.3ff3e7")], ["mix", "Mix"]].map(([id, label]) => h("button", { class: "tb mode", type: "button", "data-mode": id, "aria-pressed": "false", text: label, title: id === "operate" ? T("am5.1372a6") : T("am5.ac17fe"), onclick: () => this.setMode(id) }));
+    this.faderBtn = h("button", { class: "tb", type: "button", "aria-pressed": "true", text: T("am5.e2ab41"), title: T("am5.191bfa"), onclick: () => this.toggleFaders() });
+    this.colSel = h("select", { class: "tsel", "aria-label": T("am5.f36614") }, h("option", { value: "0", text: T("am5.1d0811") }), ...[1, 2, 3, 4, 5, 6, 8, 10].map((n) => h("option", { value: String(n), text: n + T("am5.55ada9") })));
     this.colSel.addEventListener("change", () => { this.ui.columns = Number(this.colSel.value); this.saveUi(); this.applyLayoutVars(); });
-    this.meterSel = h("select", { class: "tsel", "aria-label": "Metergröße" }, ...[["s", "Meter klein"], ["m", "Meter mittel"], ["l", "Meter groß"]].map(([v, t]) => h("option", { value: v, text: t })));
+    this.meterSel = h("select", { class: "tsel", "aria-label": T("am5.caf700") }, ...[["s", T("am5.4ec9c9")], ["m", T("am5.88bdab")], ["l", T("am5.8cccb5")]].map(([v, t]) => h("option", { value: v, text: t })));
     this.meterSel.addEventListener("change", () => { this.ui.meterSize = this.meterSel.value; this.saveUi(); this.applyLayoutVars(); });
-    this.sceneBar = h("div", { class: "scenebar", role: "group", "aria-label": "Szenen" });
-    this.addBtn = h("button", { class: "tb", type: "button", text: "+ Kanal", onclick: () => this.cmd("addChannel", { label: "" }).then(() => this.poll()) });
-    this.sceneSaveBtn = h("button", { class: "tb", type: "button", text: "● Szene speichern", title: "Aktuellen Mix (Fader, Mute, Routing …) als neue Szene speichern", onclick: () => { const n = window.prompt("Name der Szene", ""); if (n && n.trim()) this.cmd("captureScene", { label: n.trim(), includeProcessing: false }).then(() => { this.announce(`Szene ${n.trim()} gespeichert`); this.poll(); }); } });
-    this.srcBtn = h("button", { class: "tb", type: "button", "aria-pressed": "false", text: "Nach Quelle", title: "Kanäle je Quelle gruppieren (statt je Mischgruppe)", onclick: () => { this.ui.bySource = !this.ui.bySource; this.srcBtn.setAttribute("aria-pressed", String(this.ui.bySource)); this.saveUi(); this.lastSig = ""; this.renderChannels(); } });
-    this.outBtn = h("button", { class: "tb", type: "button", text: "Routing-Matrix", title: "Kanäle auf beliebig viele Ausgänge routen, Ausgänge anlegen/entfernen, Surround-Panner", onclick: () => this.openOutputs() });
-    this.groupBtn = h("button", { class: "tb", type: "button", text: "Ausgabegruppen", title: "Pro Ausgabegruppe (Admin → Audio-Ausgabe) einen Kanal anlegen, der automatisch die passende Quelle (Tag role.<Gruppe>) übernimmt", onclick: () => this.syncGroupChannels() });
+    this.sceneBar = h("div", { class: "scenebar", role: "group", "aria-label": T("am5.3cbb2d") });
+    this.addBtn = h("button", { class: "tb", type: "button", text: T("x.addCh"), onclick: () => this.cmd("addChannel", { label: "" }).then(() => this.poll()) });
+    this.sceneSaveBtn = h("button", { class: "tb", type: "button", text: T("x.saveScene"), title: T("am5.b82be3"), onclick: () => { const n = window.prompt(T("am5.b07796"), ""); if (n && n.trim()) this.cmd("captureScene", { label: n.trim(), includeProcessing: false }).then(() => { this.announce(T("am5.d718c3", { p0: n.trim() })); this.poll(); }); } });
+    this.srcBtn = h("button", { class: "tb", type: "button", "aria-pressed": "false", text: T("am5.a7c93e"), title: T("am5.62a232"), onclick: () => { this.ui.bySource = !this.ui.bySource; this.srcBtn.setAttribute("aria-pressed", String(this.ui.bySource)); this.saveUi(); this.lastSig = ""; this.renderChannels(); } });
+    this.outBtn = h("button", { class: "tb", type: "button", text: T("am5.31561f"), title: T("am5.8f4bcb"), onclick: () => this.openOutputs() });
+    this.groupBtn = h("button", { class: "tb", type: "button", text: T("am5.eb7c90"), title: T("am5.902db1"), onclick: () => this.syncGroupChannels() });
     this.masterMeter = new Meter();
     this.masterMeter.root.className = "meter mm";
     this.masterMeter.root.style.cssText = "width:160px;height:12px";
-    this.limBtn = h("button", { class: "tb", type: "button", "aria-pressed": "false", text: "Limiter", onclick: () => this.setLimiter({ enabled: !this.state.masterLimiter.enabled }) });
+    this.limBtn = h("button", { class: "tb", type: "button", "aria-pressed": "false", text: T("am5.7bb8be"), onclick: () => this.setLimiter({ enabled: !this.state.masterLimiter.enabled }) });
     const pop = h("div", { class: "pop" });
     this.limSliders = [];
-    for (const [label, key, min, max, step, unit] of [["Threshold", "thresholdDb", -60, 0, 0.5, "dB"], ["Ratio", "ratio", 1, 20, 0.5, ":1"], ["Makeup", "makeupDb", 0, 24, 0.5, "dB"]]) {
+    for (const [label, key, min, max, step, unit] of [[T("am5.2a63f5"), "thresholdDb", -60, 0, 0.5, "dB"], [T("am5.8334a1"), "ratio", 1, 20, 0.5, ":1"], [T("am5.2ae04b"), "makeupDb", 0, 24, 0.5, "dB"]]) {
       const s = new Slider({ label, min, max, step, unit, def: key === "ratio" ? 10 : key === "thresholdDb" ? -6 : 0, onInput: (v) => this.setLimiter({ [key]: v }) });
       this.limSliders.push([key, s]);
       pop.append(s.root);
@@ -365,31 +365,31 @@ class MixerApp {
     this.limGr = h("div", { class: "hint", text: "GR 0.0 dB" });
     pop.append(this.limGr);
     this.limBtn.classList.add("limit");
-    const limDetails = h("details", { class: "limit" }, h("summary", { class: "tb", text: "⚙ Limiter", title: "Master-Limiter einstellen" }), pop);
-    const master = h("div", { class: "master" }, h("span", { class: "lbl", text: "Master" }), this.masterMeter.root, limDetails, this.limBtn);
+    const limDetails = h("details", { class: "limit" }, h("summary", { class: "tb", text: T("x.limiter"), title: T("am5.b23960") }), pop);
+    const master = h("div", { class: "master" }, h("span", { class: "lbl", text: T("am5.f03bde") }), this.masterMeter.root, limDetails, this.limBtn);
     this.toolbar = h("header", { class: "toolbar" },
-      h("div", { class: "tgrp presetbtns", role: "group", "aria-label": "Darstellung" }, h("span", { class: "lbl", text: "Ansicht" }), ...presetBtns),
+      h("div", { class: "tgrp presetbtns", role: "group", "aria-label": T("am5.a91603") }, h("span", { class: "lbl", text: T("am5.42d57d") }), ...presetBtns),
       this.presetSel,
-      h("div", { class: "tgrp", role: "group", "aria-label": "Betriebsart" }, ...this.modeBtns),
+      h("div", { class: "tgrp", role: "group", "aria-label": T("am5.db77ef") }, ...this.modeBtns),
       h("div", { class: "tgrp opt" }, this.faderBtn, this.colSel, this.meterSel),
       this.sceneBar,
       h("span", { class: "spacer" }),
       master, this.sceneSaveBtn);
-    this.channelsEl = h("section", { class: "channels", "aria-label": "Kanäle" });
+    this.channelsEl = h("section", { class: "channels", "aria-label": T("am5.45cef4") });
     // Optisch getrennte Bereiche (Kap. 32.4): EINGÄNGE (Kanäle, ggf. je Mischgruppe/Quelle) und AUSGÄNGE
     // (Programm, Gruppen-Busse, Aux/N-1 mit eigenen Pegelanzeigen und Fadern).
-    this.outputsEl = h("section", { class: "channels outs", "aria-label": "Ausgänge" });
+    this.outputsEl = h("section", { class: "channels outs", "aria-label": T("am5.7925fb") });
     this.outStrips = new Map();
     this.newOut = buildNewOutputCard(this);
     const secHead = (title, sub, ...btns) => h("header", { class: "sechead" }, h("h2", { text: title }), h("span", { class: "hint", text: sub }), h("span", { class: "spacer" }), ...btns);
-    this.secIn = h("div", { class: "sec sec-in" }, secHead("Eingänge", "Kanäle · Mischgruppen", this.srcBtn, this.groupBtn, this.addBtn), this.channelsEl);
-    this.groupsEl = h("section", { class: "channels grps", "aria-label": "Mischgruppen" });
+    this.secIn = h("div", { class: "sec sec-in" }, secHead(T("am5.47a809"), T("am5.6a5ccc"), this.srcBtn, this.groupBtn, this.addBtn), this.channelsEl);
+    this.groupsEl = h("section", { class: "channels grps", "aria-label": T("am5.5fa3d3") });
     this.grpStrips = new Map();
-    this.secGrp = h("div", { class: "sec sec-grp" }, secHead("Gruppen", "Mischgruppen: Gruppen-Fader · Mute · AutoMix"), this.groupsEl);
+    this.secGrp = h("div", { class: "sec sec-grp" }, secHead(T("am5.e1e914"), T("am5.fcd947")), this.groupsEl);
     this.secGrp.hidden = true;
-    this.secOut = h("div", { class: "sec sec-out" }, secHead("Ausgänge", "Programm · Gruppen-Busse · Aux / N-1", this.outBtn), this.outputsEl, this.newOut.root);
+    this.secOut = h("div", { class: "sec sec-out" }, secHead(T("am5.7925fb"), T("am5.cc60a3"), this.outBtn), this.outputsEl, this.newOut.root);
     this.stage = h("div", { class: "stage" }, this.secIn, this.secGrp, this.secOut);
-    this.centerHost = h("aside", { class: "center", "aria-label": "Center Control" });
+    this.centerHost = h("aside", { class: "center", "aria-label": T("am5.32bd9b") });
     this.live_ = h("div", { class: "sr", role: "status", "aria-live": "polite" });
     this.body = h("div", { class: "body" }, this.stage, this.centerHost);
     this.ctHandle = h("button", { class: "cthandle", type: "button", onclick: () => { this.ui.centerOpen = true; this.saveUi(); this.layoutNow(); } });
@@ -501,7 +501,7 @@ class MixerApp {
     this.faderBtn?.setAttribute("aria-pressed", String(faders));
     const sel = this.cur();
     this.ctHandle.dataset.has = sel ? "1" : "0";
-    this.ctHandle.textContent = sel ? `▲ ${sel.label} — Center Control` : "";
+    this.ctHandle.textContent = sel ? T("x.ct", { p0: sel.label }) : "";
     this.root.dataset.center = this.centerIsOpen() && this.state.channels.length ? "open" : "closed";
   }
 
@@ -657,11 +657,11 @@ class MixerApp {
     for (const a of buses) if (!this.outStrips.has(a.id)) this.outStrips.set(a.id, new OutputStrip(this, a));
     if (!this.progStrip) {
       this.progMeter = new Meter();
-      this.progStrip = h("div", { class: "ch out prog", "data-kind": "program", role: "group", "aria-label": "Programm" },
-        h("div", { class: "chead" }, h("button", { class: "name", type: "button", text: "Programm", onclick: () => this.openOutputs() })),
-        h("div", { class: "badges" }, h("span", { class: "b outkind", text: "Stereo · Master" })),
+      this.progStrip = h("div", { class: "ch out prog", "data-kind": "program", role: "group", "aria-label": T("am5.3b0451") },
+        h("div", { class: "chead" }, h("button", { class: "name", type: "button", text: T("am5.3b0451"), onclick: () => this.openOutputs() })),
+        h("div", { class: "badges" }, h("span", { class: "b outkind", text: T("am5.693c32") })),
         h("div", { class: "meterwrap" }, this.progMeter.root),
-        h("div", { class: "fader progfill", title: "Programm hat keinen Fader — Limiter oben rechts" }),
+        h("div", { class: "fader progfill", title: T("am5.b50533") }),
         h("div", { class: "btns" }));
     }
     const nodes = [this.progStrip, ...buses.map((a) => this.outStrips.get(a.id).root)];
@@ -678,7 +678,7 @@ class MixerApp {
     return new Promise((resolve) => {
       const done = (v) => { m.remove(); resolve(v); };
       const m = h("div", { class: "modal", role: "alertdialog", "aria-modal": "true", "aria-label": message },
-        h("div", { class: "box" }, h("p", { text: message }), h("div", { class: "acts" }, h("button", { class: "tog", type: "button", text: "Abbrechen", onclick: () => done(false) }), h("button", { class: "tog danger", type: "button", text: "OK", onclick: () => done(true) }))));
+        h("div", { class: "box" }, h("p", { text: message }), h("div", { class: "acts" }, h("button", { class: "tog", type: "button", text: T("am5.4b9727"), onclick: () => done(false) }), h("button", { class: "tog danger", type: "button", text: "OK", onclick: () => done(true) }))));
       this.shadow.append(m);
       m.querySelector("button").focus();
     });
@@ -703,7 +703,7 @@ class MixerApp {
     if (open) requestAnimationFrame(() => this.centerHost.scrollIntoView({ block: "nearest", behavior: "smooth" }));
     if (focus) this.center.tabBar.querySelector("[aria-selected=true]")?.focus();
     const ch = this.state.channels.find((c) => c.id === id);
-    if (ch) this.announce(`Kanal ${ch.label} ausgewählt`);
+    if (ch) this.announce(T("am5.faaa33", { p0: ch.label }));
   }
   step(dir) {
     const ids = this.state.channels.map((c) => c.id);
@@ -732,7 +732,7 @@ class MixerApp {
     this.lastSig = "";
     this.renderChannels(true);
     await this.cmd("moveChannel", { channelId: id, toIndex: i });
-    this.announce(`${ch.label} an Position ${i + 1}`);
+    this.announce(T("am5.b0237d", { p0: ch.label, p1: i + 1 }));
     this.poll();
   }
   closeCenter() {
@@ -789,19 +789,19 @@ class MixerApp {
       if (collapsed) for (const c of members) this.views.get(c.id).root.remove();
       let head = null;
       if (group || viewGroups.length) {
-        const tog = h("button", { class: "gtoggle", type: "button", "aria-expanded": String(!collapsed), "aria-label": (collapsed ? "Ausklappen " : "Einklappen ") + label, text: collapsed ? "▸" : "▾", onclick: () => { this.ui.collapsed[id] = !collapsed; this.saveUi(); this.lastSig = ""; this.renderChannels(); } });
-        const name = h("button", { class: "gname", type: "button", text: label, title: "Gruppe: Details", onclick: () => { const f = members[0]; if (f) { this.ui.centerTab = "auto"; this.center.setTab("auto"); this.select(f.id, { open: true }); } } });
-        const cnt = h("span", { class: "gcnt", text: `${members.length} Kanäle${group && group.autoMixEnabled ? " · AutoMix" : ""}` });
+        const tog = h("button", { class: "gtoggle", type: "button", "aria-expanded": String(!collapsed), "aria-label": (collapsed ? T("am5.960e1d") : T("am5.e61a44")) + label, text: collapsed ? "▸" : "▾", onclick: () => { this.ui.collapsed[id] = !collapsed; this.saveUi(); this.lastSig = ""; this.renderChannels(); } });
+        const name = h("button", { class: "gname", type: "button", text: label, title: T("am5.196eef"), onclick: () => { const f = members[0]; if (f) { this.ui.centerTab = "auto"; this.center.setTab("auto"); this.select(f.id, { open: true }); } } });
+        const cnt = h("span", { class: "gcnt", text: T("am5.cfac66", { p0: members.length, p1: group && group.autoMixEnabled ? " · AutoMix" : "" }) });
         head = h("div", { class: "ghead" }, tog, name, cnt);
         if (group) {
-          head.append(h("button", { class: "gmute", type: "button", "aria-pressed": String(!!group.mute), text: "Gruppe stumm", onclick: () => { group.mute = !group.mute; this.cmd(`group.${group.id}.setMute`, { muted: group.mute }).then(() => this.poll()); this.updateChannels(); this.renderChannels(); } }));
+          head.append(h("button", { class: "gmute", type: "button", "aria-pressed": String(!!group.mute), text: T("am5.69467e"), onclick: () => { group.mute = !group.mute; this.cmd(`group.${group.id}.setMute`, { muted: group.mute }).then(() => this.poll()); this.updateChannels(); this.renderChannels(); } }));
         }
       }
       sections.push(h("div", { class: "group", "data-group": id }, head, body));
     };
     for (const g of viewGroups) { const m = byGroup.get(g.id); if (m.length || !g.src) mk(g.id, g.label, m, g.src ? null : g); }
-    if (loose.length) mk("_loose", this.ui.bySource ? "Ohne Quelle" : st.groups.length ? "Ohne Gruppe" : "Kanäle", loose, null);
-    if (!st.channels.length) sections.push(h("p", { class: "empty", text: 'Keine Kanäle — „+ Kanal“ zum Hinzufügen.' }));
+    if (loose.length) mk("_loose", this.ui.bySource ? T("am5.db25d8") : st.groups.length ? T("am5.c745ae") : T("am5.45cef4"), loose, null);
+    if (!st.channels.length) sections.push(h("p", { class: "empty", text: T("am5.a1f272") }));
     this.channelsEl.replaceChildren(...sections);
     this.applyLayoutVars();
     this.updateChannels();
@@ -817,7 +817,7 @@ class MixerApp {
     const key = JSON.stringify([this.state.scenes, this.state.audioContext.activeScene]);
     if (key === this.sceneKey) return;
     this.sceneKey = key;
-    this.sceneBar.replaceChildren(...this.state.scenes.map((s) => h("button", { class: "tb", type: "button", text: s.label, "aria-pressed": String(this.state.audioContext.activeScene === s.id), title: "Szene aktivieren", onclick: () => this.cmd("activateScene", { sceneId: s.id }).then(() => { this.announce(`Szene ${s.label} aktiviert`); this.poll(); }) })));
+    this.sceneBar.replaceChildren(...this.state.scenes.map((s) => h("button", { class: "tb", type: "button", text: s.label, "aria-pressed": String(this.state.audioContext.activeScene === s.id), title: T("am5.c44e5c"), onclick: () => this.cmd("activateScene", { sceneId: s.id }).then(() => { this.announce(T("am5.ef315d", { p0: s.label })); this.poll(); }) })));
   }
   updateMasterUi() {
     const l = this.state.masterLimiter;

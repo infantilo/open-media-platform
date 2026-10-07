@@ -1,3 +1,155 @@
+// i18n (de/en): Sprache aus <html lang> (setzt die Shell, ui/shell/i18n.ts),
+// Fallback Deutsch. Eigenes Mini-t(), weil Node-Bundles keine Shell-Imports nutzen.
+const T = (() => {
+  const D = {
+    de: {
+      "v:unbekannt": "unbekannt",
+      "v:innerhalb EBU R 37": "innerhalb EBU R 37",
+      "v:außerhalb EBU R 37": "außerhalb EBU R 37",
+      "v:R 128 erfüllt": "R 128 erfüllt",
+      "v:True Peak über −1 dBTP": "True Peak über −1 dBTP",
+      "v:Lautheit außerhalb −23 ±0,5 LUFS": "Lautheit außerhalb −23 ±0,5 LUFS",
+        "scp.d7607a": "Waveform / Vektorskop",
+        "scp.a00fa5": "kein Video verbunden",
+        "scp.18f42a": "kein Video-/Audio-Paar verbunden",
+        "scp.30b199": "Ton hinkt nach",
+        "scp.dede84": "Ton eilt vor",
+        "scp.3203b1": "Quellgruppe unbekannt",
+        "scp.003b20": "Schwarzbild",
+        "scp.bdaf0f": "Standbild",
+        "scp.a0a083": "Stille",
+        "scp.c0483b": "Peak/RMS",
+        "scp.be6369": "Momentary (LUFS)",
+        "scp.1b4389": "Short-term (LUFS)",
+        "scp.2c93be": "Integrated (LUFS)",
+        "scp.fb92f2": "Range (LU)",
+        "scp.4dcc6f": "True Peak (dBTP)",
+        "scp.f696ab": "Block-Peak (dBFS)",
+        "scp.34e2d1": "Video",
+        "scp.b22f04": "Audio",
+        "scp.d7b569": "Latenz (Ist)",
+        "scp.84ac4b": "Latenz (Mittel)",
+        "scp.acf986": "Latenz min/max",
+        "scp.3c813e": "Jitter (Spitze-Spitze)",
+        "scp.9c043c": "Kadenz Ist/Soll",
+        "scp.281d47": "Grains",
+        "scp.72355f": "Diskontinuitäten",
+        "scp.653c19": "Flow-Deklaration",
+        "scp.5f23a4": "Media-Type",
+        "scp.dcb66f": "Rate",
+        "scp.30507b": "Bittiefe",
+        "scp.45cef4": "Kanäle",
+        "scp.e32d85": "Farbraum",
+        "scp.85069b": "Abtastraster",
+        "scp.2d0160": "Grain-Größe",
+        "scp.ebace4": "Datenrate",
+        "scp.75d289": "Grouphint",
+        "scp.01ef6b": "Gemessen",
+        "scp.5a597b": "Wert",
+        "scp.faeae5": "Video-Quelle",
+        "scp.711cd6": "Auflösung",
+        "scp.04a23f": "Framerate (Quelle)",
+        "scp.e666a2": "Framerate (gemessen)",
+        "scp.e3246d": "Mittleres Luma",
+        "scp.97b764": "Bilddifferenz",
+        "scp.6d7bfd": "Audio-Quelle",
+        "scp.0ab6cb": "Abtastrate",
+        "scp.f488c4": "· aus MXL-Ursprungszeitstempeln",
+        "scp.ee42eb": "Signalüberwachung",
+        "scp.e71d24": "Audio-Pegel",
+        "scp.00f47c": "Lautheit (EBU R 128)",
+        "scp.d00749": "· gemessen am Tap · negativ = Schreiber stempelt in die Zukunft",
+        "scp.42889b": "· wie der Schreiber ihn deklariert",
+        "scp.4a876b": "Gemessene Werte",
+        "scp.060af1": "unauffällig",
+        "scp.ac4b1a": "{p0} Bilder · ",
+        "scp.4b686e": "Ton eilt dem Bild voraus",
+        "scp.3e11ba": "Ton hinkt dem Bild nach",
+        "scp.caca19": "gleiche Quellgruppe",
+        "scp.086fb1": "verschiedene Quellgruppen",
+        "scp.0a6161": "Die NMOS-Grouphints der beiden Flows nennen verschiedene Gruppen. Bei OMP-eigenen Quellen ist das derzeit immer so: deren MXL-Schreiber verwenden die jeweilige Flow-ID als Gruppennamen, statt Video und Audio einer Quelle derselben Gruppe zuzuordnen.",
+        "scp.08fd3e": "nicht verbunden"
+    },
+    en: {
+      "v:unbekannt": "unknown",
+      "v:innerhalb EBU R 37": "within EBU R 37",
+      "v:außerhalb EBU R 37": "outside EBU R 37",
+      "v:R 128 erfüllt": "R 128 met",
+      "v:True Peak über −1 dBTP": "True peak above −1 dBTP",
+      "v:Lautheit außerhalb −23 ±0,5 LUFS": "Loudness outside −23 ±0.5 LUFS",
+        "scp.d7607a": "Waveform / Vectorscope",
+        "scp.a00fa5": "no video connected",
+        "scp.18f42a": "no video/audio pair connected",
+        "scp.30b199": "Audio lags",
+        "scp.dede84": "Audio leads",
+        "scp.3203b1": "Source group unknown",
+        "scp.003b20": "Black picture",
+        "scp.bdaf0f": "Frozen picture",
+        "scp.a0a083": "Silence",
+        "scp.c0483b": "Peak/RMS",
+        "scp.be6369": "Momentary (LUFS)",
+        "scp.1b4389": "Short-term (LUFS)",
+        "scp.2c93be": "Integrated (LUFS)",
+        "scp.fb92f2": "Range (LU)",
+        "scp.4dcc6f": "True Peak (dBTP)",
+        "scp.f696ab": "Block peak (dBFS)",
+        "scp.34e2d1": "Video",
+        "scp.b22f04": "Audio",
+        "scp.d7b569": "Latency (actual)",
+        "scp.84ac4b": "Latency (mean)",
+        "scp.acf986": "Latency min/max",
+        "scp.3c813e": "Jitter (peak-to-peak)",
+        "scp.9c043c": "Cadence actual/target",
+        "scp.281d47": "Grains",
+        "scp.72355f": "Discontinuities",
+        "scp.653c19": "Flow declaration",
+        "scp.5f23a4": "Media type",
+        "scp.dcb66f": "Rate",
+        "scp.30507b": "Bit depth",
+        "scp.45cef4": "Channels",
+        "scp.e32d85": "Colour space",
+        "scp.85069b": "Sampling raster",
+        "scp.2d0160": "Grain size",
+        "scp.ebace4": "Data rate",
+        "scp.75d289": "Group hint",
+        "scp.01ef6b": "Measured",
+        "scp.5a597b": "Value",
+        "scp.faeae5": "Video source",
+        "scp.711cd6": "Resolution",
+        "scp.04a23f": "Frame rate (source)",
+        "scp.e666a2": "Frame rate (measured)",
+        "scp.e3246d": "Mean luma",
+        "scp.97b764": "Picture difference",
+        "scp.6d7bfd": "Audio source",
+        "scp.0ab6cb": "Sample rate",
+        "scp.f488c4": "· from MXL origin timestamps",
+        "scp.ee42eb": "Signal monitoring",
+        "scp.e71d24": "Audio level",
+        "scp.00f47c": "Loudness (EBU R 128)",
+        "scp.d00749": "· measured at the tap · negative = writer stamps into the future",
+        "scp.42889b": "· as declared by the writer",
+        "scp.4a876b": "Measured values",
+        "scp.060af1": "unremarkable",
+        "scp.ac4b1a": "{p0} frames · ",
+        "scp.4b686e": "Audio leads the picture",
+        "scp.3e11ba": "Audio lags the picture",
+        "scp.caca19": "same source group",
+        "scp.086fb1": "different source groups",
+        "scp.0a6161": "The NMOS group hints of the two flows name different groups. For OMP's own sources this is currently always the case: their MXL writers use the respective flow ID as group name instead of assigning video and audio of a source to the same group.",
+        "scp.08fd3e": "not connected"
+    },
+  };
+  const lang = document.documentElement.lang === "en" ? "en" : "de";
+  return (k, p) => {
+    let s = (D[lang] && D[lang][k]) ?? D.de[k] ?? k;
+    if (p) for (const x in p) s = s.split("{" + x + "}").join(p[x]);
+    return s;
+  };
+})();
+// Urteile kommen deutsch aus dem Rust-Backend (qc.rs/timing.rs) — hier nur die Anzeige übersetzen.
+const vt = (v) => { const k = "v:" + v; const r = T(k); return r === k ? v : r; };
+const LOCALE = document.documentElement.lang === "en" ? "en-GB" : "de-DE";
+
 // Node-UI-Bundle von omp-scope: kombiniertes Waveform/Vektorskop-Bild
 // als <img> (identisches Einzelbild-Polling-Muster wie
 // omp-viewer/ui/bundle.js — img.complete-Check vor jedem src-Neusetzen,
@@ -100,7 +252,7 @@ class OmpScopePanel extends HTMLElement {
 
     // --- Scope-Bild (Waveform + Vektorskop) ---
     const img = document.createElement("img");
-    img.alt = "Waveform / Vektorskop";
+    img.alt = T("scp.d7607a");
     img.style.display = "none";
     const status = document.createElement("p");
     status.className = "status";
@@ -111,7 +263,7 @@ class OmpScopePanel extends HTMLElement {
     });
     img.addEventListener("error", () => {
       img.style.display = "none";
-      status.textContent = "kein Video verbunden";
+      status.textContent = T("scp.a00fa5");
       status.style.display = "";
     });
     const previewUrl = () => withToken(`/api/v1/nodes/${nodeId}/stream/previewUrl?_=${Date.now()}`);
@@ -162,7 +314,7 @@ class OmpScopePanel extends HTMLElement {
     syncBig.textContent = "–";
     const syncSub = document.createElement("div");
     syncSub.className = "sub";
-    syncSub.textContent = "kein Video-/Audio-Paar verbunden";
+    syncSub.textContent = T("scp.18f42a");
     const scale = document.createElement("div");
     scale.className = "scale";
     const inspec = document.createElement("div");
@@ -179,7 +331,7 @@ class OmpScopePanel extends HTMLElement {
     scale.append(inspec, zero, marker);
     const ticks = document.createElement("div");
     ticks.className = "ticks";
-    for (const label of ["Ton hinkt nach", "0", "Ton eilt vor"]) {
+    for (const label of [T("scp.30b199"), "0", T("scp.dede84")]) {
       const span = document.createElement("span");
       span.textContent = label;
       ticks.appendChild(span);
@@ -188,11 +340,11 @@ class OmpScopePanel extends HTMLElement {
     syncBadgeWrap.className = "center";
     const syncBadge = document.createElement("span");
     syncBadge.className = "badge idle";
-    syncBadge.textContent = "unbekannt";
+    syncBadge.textContent = vt("unbekannt");
     const groupBadge = document.createElement("span");
     groupBadge.className = "badge idle";
     groupBadge.style.marginLeft = "6px";
-    groupBadge.textContent = "Quellgruppe unbekannt";
+    groupBadge.textContent = T("scp.3203b1");
     syncBadgeWrap.append(syncBadge, groupBadge);
     syncBox.append(syncBig, syncSub, scale, ticks, syncBadgeWrap);
 
@@ -212,16 +364,16 @@ class OmpScopePanel extends HTMLElement {
       chips.appendChild(chip);
       return { chip, detail: d };
     };
-    const blackChip = makeChip("Schwarzbild");
-    const freezeChip = makeChip("Standbild");
-    const silenceChip = makeChip("Stille");
+    const blackChip = makeChip(T("scp.003b20"));
+    const freezeChip = makeChip(T("scp.bdaf0f"));
+    const silenceChip = makeChip(T("scp.a0a083"));
 
     // --- Audio-Pegel ---
     const meterRow = document.createElement("div");
     meterRow.className = "meter-row";
     const meterLabel = document.createElement("span");
     meterLabel.className = "label";
-    meterLabel.textContent = "Peak/RMS";
+    meterLabel.textContent = T("scp.c0483b");
     const meter = document.createElement("omp-meter");
     meterRow.append(meterLabel, meter);
 
@@ -255,17 +407,17 @@ class OmpScopePanel extends HTMLElement {
       lufsGrid.appendChild(wrap);
       return value;
     };
-    const momentaryEl = lufsCell("Momentary (LUFS)");
-    const shortTermEl = lufsCell("Short-term (LUFS)");
-    const integratedEl = lufsCell("Integrated (LUFS)");
-    const rangeEl = lufsCell("Range (LU)");
-    const truePeakEl = lufsCell("True Peak (dBTP)");
-    const blockPeakEl = lufsCell("Block-Peak (dBFS)");
+    const momentaryEl = lufsCell(T("scp.be6369"));
+    const shortTermEl = lufsCell(T("scp.1b4389"));
+    const integratedEl = lufsCell(T("scp.2c93be"));
+    const rangeEl = lufsCell(T("scp.fb92f2"));
+    const truePeakEl = lufsCell(T("scp.4dcc6f"));
+    const blockPeakEl = lufsCell(T("scp.f696ab"));
     const r128Wrap = document.createElement("div");
     r128Wrap.className = "center";
     const r128Badge = document.createElement("span");
     r128Badge.className = "badge idle";
-    r128Badge.textContent = "unbekannt";
+    r128Badge.textContent = vt("unbekannt");
     r128Wrap.appendChild(r128Badge);
 
     // --- Tabellen (Transport / Flow-Deklaration / gemessene Werte) ---
@@ -297,18 +449,18 @@ class OmpScopePanel extends HTMLElement {
       return { table, rows, row };
     };
 
-    const transport = twoColTable(["MXL-Transport", "Video", "Audio"]);
-    for (const label of ["Latenz (Ist)", "Latenz (Mittel)", "Latenz min/max", "Jitter (Spitze-Spitze)", "Kadenz Ist/Soll", "Grains", "ausgelassen", "Diskontinuitäten"]) {
+    const transport = twoColTable(["MXL-Transport", T("scp.34e2d1"), T("scp.b22f04")]);
+    for (const label of [T("scp.d7b569"), T("scp.84ac4b"), T("scp.acf986"), T("scp.3c813e"), T("scp.9c043c"), T("scp.281d47"), "ausgelassen", T("scp.72355f")]) {
       transport.row(label, 2);
     }
 
-    const decl = twoColTable(["Flow-Deklaration", "Video", "Audio"]);
-    for (const label of ["Media-Type", "Rate", "Bittiefe", "Kanäle", "Farbraum", "Abtastraster", "Grain-Größe", "Datenrate", "Grouphint"]) {
+    const decl = twoColTable([T("scp.653c19"), T("scp.34e2d1"), T("scp.b22f04")]);
+    for (const label of [T("scp.5f23a4"), T("scp.dcb66f"), T("scp.30507b"), T("scp.45cef4"), T("scp.e32d85"), T("scp.85069b"), T("scp.2d0160"), T("scp.ebace4"), T("scp.75d289")]) {
       decl.row(label, 2);
     }
 
-    const measured = twoColTable(["Gemessen", "Wert"]);
-    for (const label of ["Video-Quelle", "Auflösung", "Framerate (Quelle)", "Framerate (gemessen)", "Mittleres Luma", "Bilddifferenz", "Audio-Quelle", "Abtastrate", "Kanäle"]) {
+    const measured = twoColTable([T("scp.01ef6b"), T("scp.5a597b")]);
+    for (const label of [T("scp.faeae5"), T("scp.711cd6"), T("scp.04a23f"), T("scp.e666a2"), T("scp.e3246d"), T("scp.97b764"), T("scp.6d7bfd"), T("scp.0ab6cb"), T("scp.45cef4")]) {
       measured.row(label, 1);
     }
 
@@ -316,20 +468,20 @@ class OmpScopePanel extends HTMLElement {
       style,
       img,
       status,
-      section("A/V-Timing (Lipsync)", "· aus MXL-Ursprungszeitstempeln"),
+      section("A/V-Timing (Lipsync)", T("scp.f488c4")),
       syncBox,
-      section("Signalüberwachung"),
+      section(T("scp.ee42eb")),
       chips,
-      section("Audio-Pegel"),
+      section(T("scp.e71d24")),
       meterRow,
-      section("Lautheit (EBU R 128)"),
+      section(T("scp.00f47c")),
       lufsGrid,
       r128Wrap,
-      section("MXL-Transport", "· gemessen am Tap · negativ = Schreiber stempelt in die Zukunft"),
+      section("MXL-Transport", T("scp.d00749")),
       transport.table,
-      section("MXL-Flow", "· wie der Schreiber ihn deklariert"),
+      section("MXL-Flow", T("scp.42889b")),
       decl.table,
-      section("Gemessene Werte"),
+      section(T("scp.4a876b")),
       measured.table,
     );
 
@@ -341,7 +493,7 @@ class OmpScopePanel extends HTMLElement {
       chip.chip.className = raised ? "chip alarm" : "chip";
       if (raised) chip.detail.textContent = `seit ${fmt(seconds, 1, "s")}`;
       else if (num(seconds) !== undefined) chip.detail.textContent = `beobachtet ${fmt(seconds, 1, "s")}`;
-      else chip.detail.textContent = "unauffällig";
+      else chip.detail.textContent = T("scp.060af1");
     };
 
     const refresh = async () => {
@@ -358,22 +510,22 @@ class OmpScopePanel extends HTMLElement {
       const offset = num(m.avOffsetMs);
       syncBig.textContent = offset === undefined ? "–" : signed(offset, 1, "ms");
       if (offset === undefined) {
-        syncSub.textContent = "kein Video-/Audio-Paar verbunden";
+        syncSub.textContent = T("scp.18f42a");
         marker.style.display = "none";
       } else {
         const frames = num(m.avOffsetFrames);
         syncSub.textContent =
-          (frames === undefined ? "" : `${signed(frames, 2)} Bilder · `) +
-          (offset > 0 ? "Ton eilt dem Bild voraus" : offset < 0 ? "Ton hinkt dem Bild nach" : "deckungsgleich");
+          (frames === undefined ? "" : T("scp.ac4b1a", { p0: signed(frames, 2) })) +
+          (offset > 0 ? T("scp.4b686e") : offset < 0 ? T("scp.3e11ba") : "deckungsgleich");
         marker.style.display = "";
         marker.style.left = `${pct(offset)}%`;
       }
       const verdict = m.avSyncVerdict || "unbekannt";
-      setBadge(syncBadge, verdict, verdict.startsWith("innerhalb") ? "ok" : verdict.startsWith("außerhalb") ? "bad" : "idle");
+      setBadge(syncBadge, vt(verdict), verdict.startsWith("innerhalb") ? "ok" : verdict.startsWith("außerhalb") ? "bad" : "idle");
       const group = m.avSourceGroupMatch || "unbekannt";
       setBadge(
         groupBadge,
-        group === "dieselbe Quelle" ? "gleiche Quellgruppe" : group === "verschiedene Quellen" ? "verschiedene Quellgruppen" : "Quellgruppe unbekannt",
+        group === "dieselbe Quelle" ? T("scp.caca19") : group === "verschiedene Quellen" ? T("scp.086fb1") : T("scp.3203b1"),
         group === "dieselbe Quelle" ? "ok" : group === "verschiedene Quellen" ? "warn" : "idle",
       );
       // Warn- statt Fehlerstil, und der Grund steht im Tooltip: OMPs
@@ -385,7 +537,7 @@ class OmpScopePanel extends HTMLElement {
       // aber er zeigt eine Plattform-Lücke an, keinen Bedienfehler.
       groupBadge.title =
         group === "verschiedene Quellen"
-          ? "Die NMOS-Grouphints der beiden Flows nennen verschiedene Gruppen. Bei OMP-eigenen Quellen ist das derzeit immer so: deren MXL-Schreiber verwenden die jeweilige Flow-ID als Gruppennamen, statt Video und Audio einer Quelle derselben Gruppe zuzuordnen."
+          ? T("scp.0a6161")
           : "";
 
       // QC
@@ -411,7 +563,7 @@ class OmpScopePanel extends HTMLElement {
       truePeakEl.textContent = peakText(m.loudnessTruePeakDbtp);
       blockPeakEl.textContent = peakText(m.audioBlockPeakDbfs);
       const r128 = m.loudnessR128Verdict || "unbekannt";
-      setBadge(r128Badge, r128, r128 === "R 128 erfüllt" ? "ok" : r128 === "unbekannt" ? "idle" : "bad");
+      setBadge(r128Badge, vt(r128), r128 === "R 128 erfüllt" ? "ok" : r128 === "unbekannt" ? "idle" : "bad");
 
       // Transport
       const t = transport.rows;
@@ -419,14 +571,14 @@ class OmpScopePanel extends HTMLElement {
         t[label][0].textContent = fn("video");
         t[label][1].textContent = fn("audio");
       };
-      pair("Latenz (Ist)", (p) => fmt(m[`${p}TransportLatencyMs`], 2, "ms"));
-      pair("Latenz (Mittel)", (p) => fmt(m[`${p}TransportLatencyAvgMs`], 2, "ms"));
-      pair("Latenz min/max", (p) => `${fmt(m[`${p}TransportLatencyMinMs`], 2)} / ${fmt(m[`${p}TransportLatencyMaxMs`], 2)}`);
-      pair("Jitter (Spitze-Spitze)", (p) => fmt(m[`${p}LatencyJitterMs`], 2, "ms"));
-      pair("Kadenz Ist/Soll", (p) => `${fmt(m[`${p}GrainCadenceMs`], 2)} / ${fmt(m[`${p}GrainCadenceNominalMs`], 2)}`);
-      pair("Grains", (p) => int(m[`${p}GrainsSeen`]));
+      pair(T("scp.d7b569"), (p) => fmt(m[`${p}TransportLatencyMs`], 2, "ms"));
+      pair(T("scp.84ac4b"), (p) => fmt(m[`${p}TransportLatencyAvgMs`], 2, "ms"));
+      pair(T("scp.acf986"), (p) => `${fmt(m[`${p}TransportLatencyMinMs`], 2)} / ${fmt(m[`${p}TransportLatencyMaxMs`], 2)}`);
+      pair(T("scp.3c813e"), (p) => fmt(m[`${p}LatencyJitterMs`], 2, "ms"));
+      pair(T("scp.9c043c"), (p) => `${fmt(m[`${p}GrainCadenceMs`], 2)} / ${fmt(m[`${p}GrainCadenceNominalMs`], 2)}`);
+      pair(T("scp.281d47"), (p) => int(m[`${p}GrainsSeen`]));
       pair("ausgelassen", (p) => int(m[`${p}GrainsDropped`]));
-      pair("Diskontinuitäten", (p) => int(m[`${p}Discontinuities`]));
+      pair(T("scp.72355f"), (p) => int(m[`${p}Discontinuities`]));
 
       // Flow-Deklaration
       const d = decl.rows;
@@ -434,34 +586,34 @@ class OmpScopePanel extends HTMLElement {
         d[label][0].textContent = v ?? "–";
         d[label][1].textContent = a ?? "–";
       };
-      set2("Media-Type", m.videoFlowMediaType, m.audioFlowMediaType);
+      set2(T("scp.5f23a4"), m.videoFlowMediaType, m.audioFlowMediaType);
       set2(
-        "Rate",
+        T("scp.dcb66f"),
         m.videoFlowGrainRate ? `${m.videoFlowGrainRate} fps` : undefined,
         num(m.audioFlowSampleRate) === undefined ? undefined : `${int(m.audioFlowSampleRate)} Hz`,
       );
-      set2("Bittiefe", num(m.videoFlowBitDepth) === undefined ? undefined : `${m.videoFlowBitDepth} bit`, undefined);
-      set2("Kanäle", undefined, m.audioFlowChannelCount ?? undefined);
-      set2("Farbraum", m.videoFlowColorspace, undefined);
-      set2("Abtastraster", m.videoFlowInterlaceMode, undefined);
-      set2("Grain-Größe", num(m.videoFlowGrainBytes) === undefined ? undefined : `${int(Math.round(m.videoFlowGrainBytes / 1024))} KiB`, undefined);
-      set2("Datenrate", fmt(m.videoFlowBitrateMbps, 1, "Mbit/s"), fmt(m.audioFlowBitrateMbps, 2, "Mbit/s"));
-      set2("Grouphint", m.videoFlowGroupHint, m.audioFlowGroupHint);
+      set2(T("scp.30507b"), num(m.videoFlowBitDepth) === undefined ? undefined : `${m.videoFlowBitDepth} bit`, undefined);
+      set2(T("scp.45cef4"), undefined, m.audioFlowChannelCount ?? undefined);
+      set2(T("scp.e32d85"), m.videoFlowColorspace, undefined);
+      set2(T("scp.85069b"), m.videoFlowInterlaceMode, undefined);
+      set2(T("scp.2d0160"), num(m.videoFlowGrainBytes) === undefined ? undefined : `${int(Math.round(m.videoFlowGrainBytes / 1024))} KiB`, undefined);
+      set2(T("scp.ebace4"), fmt(m.videoFlowBitrateMbps, 1, "Mbit/s"), fmt(m.audioFlowBitrateMbps, 2, "Mbit/s"));
+      set2(T("scp.75d289"), m.videoFlowGroupHint, m.audioFlowGroupHint);
 
       // Gemessene Werte
       const g = measured.rows;
       const set1 = (label, v) => {
         g[label][0].textContent = v ?? "–";
       };
-      set1("Video-Quelle", m.videoSourceLabel || "nicht verbunden");
-      set1("Auflösung", m.videoWidth && m.videoHeight ? `${m.videoWidth}×${m.videoHeight}` : undefined);
-      set1("Framerate (Quelle)", m.videoFramerate);
-      set1("Framerate (gemessen)", fmt(m.videoMeasuredFps, 1, "fps"));
-      set1("Mittleres Luma", fmt(m.videoMeanLumaPercent, 1, "%"));
-      set1("Bilddifferenz", fmt(m.videoFrameDifference, 2));
-      set1("Audio-Quelle", m.audioSourceLabel || "nicht verbunden");
-      set1("Abtastrate", num(m.audioSampleRate) === undefined ? undefined : `${int(m.audioSampleRate)} Hz`);
-      set1("Kanäle", m.audioChannels ?? undefined);
+      set1(T("scp.faeae5"), m.videoSourceLabel || T("scp.08fd3e"));
+      set1(T("scp.711cd6"), m.videoWidth && m.videoHeight ? `${m.videoWidth}×${m.videoHeight}` : undefined);
+      set1(T("scp.04a23f"), m.videoFramerate);
+      set1(T("scp.e666a2"), fmt(m.videoMeasuredFps, 1, "fps"));
+      set1(T("scp.e3246d"), fmt(m.videoMeanLumaPercent, 1, "%"));
+      set1(T("scp.97b764"), fmt(m.videoFrameDifference, 2));
+      set1(T("scp.6d7bfd"), m.audioSourceLabel || T("scp.08fd3e"));
+      set1(T("scp.0ab6cb"), num(m.audioSampleRate) === undefined ? undefined : `${int(m.audioSampleRate)} Hz`);
+      set1(T("scp.45cef4"), m.audioChannels ?? undefined);
     };
     refresh();
     this._metaInterval = setInterval(refresh, 1000);

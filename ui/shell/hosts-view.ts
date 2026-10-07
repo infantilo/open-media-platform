@@ -13,7 +13,7 @@
 // (POLL_FALLBACK_INTERVAL_MS). Über apiFetch() (connection.ts), damit
 // ein Fehlschlag den geteilten ConnectionMonitor auf "degraded" setzt
 // statt still zu bleiben.
-import { t } from "./i18n.ts";
+import { t, t as tt } from "./i18n.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
 import { openHostWizard } from "./host-wizard.ts";
@@ -427,7 +427,7 @@ class HostsView extends HTMLElement {
         const target = a.suggestedHostId
           ? `${t("hosts.424d6d")} <strong>${escapeHtml(a.suggestedHostLabel ?? a.suggestedHostId)}</strong>`
           : `<span style="color:var(--omp-cue);">${t("hosts.c77b3a")}</span>`;
-        const netPart = a.netPercent !== undefined ? ` / Netz ${a.netPercent.toFixed(0)}%` : "";
+        const netPart = a.netPercent !== undefined ? tt("y.netPart", { p0: a.netPercent.toFixed(0) }) : "";
         const gpuPart = a.gpuPercent !== undefined ? ` / GPU ${a.gpuPercent.toFixed(0)}%` : "";
         return `<div style="padding:var(--omp-space-2);margin-bottom:var(--omp-space-1);background:rgba(239,83,80,0.15);border:1px solid var(--omp-error);border-radius:var(--omp-radius);">
           <strong>${escapeHtml(a.hostLabel)}</strong> ${t("hosts.857412", { p0: reasonLabel(a.reason), p1: a.cpuPercent.toFixed(0), p2: a.memPercent.toFixed(0), p3: netPart, p4: gpuPart, p5: a.instanceIds.length, p6: target })}

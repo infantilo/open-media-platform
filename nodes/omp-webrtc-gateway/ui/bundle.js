@@ -1,3 +1,65 @@
+// i18n (de/en): Sprache aus <html lang> (setzt die Shell, ui/shell/i18n.ts),
+// Fallback Deutsch. Eigenes Mini-t(), weil Node-Bundles keine Shell-Imports nutzen.
+const T = (() => {
+  const D = {
+    de: {
+        "x.retourTile": "+ Retourbild",
+        "x.retourLbl": "{p0} (Retour)",
+        "wrb.ada5c5": "Basis-URL fürs Handy\n        ",
+        "wrb.36b01a": "Retourbild-Node (optional)\n          ",
+        "wrb.470692": "Kein Retourbild",
+        "wrb.6e77cd": "Wird mitgewählt, erzeugt \"Neue Einladung\" zusätzlich eine Einladung auf dieser Monitor-Instanz und verschmilzt beide zu EINEM Link/QR-Code fürs Handy (Kamera senden + Retourbild ansehen).",
+        "wrb.028124": "Bezeichnung (optional, z. B. „Kamera Regie 1“)",
+        "wrb.5c3fbe": "+ Neue Einladung",
+        "wrb.7140d5": "Keine Einladungen — ohne mindestens eine aktive Einladung nimmt dieser Node keine Verbindung an.",
+        "wrb.bf4a61": "Link kopieren",
+        "wrb.70dfc1": "Kopiert!",
+        "wrb.c59219": "Kopieren fehlgeschlagen — Link von Hand markieren: ",
+        "wrb.4d2063": "Widerrufen",
+        "wrb.3b20d8": "Einladungen laden fehlgeschlagen ({p0})",
+        "wrb.d7227c": "Einladungen laden fehlgeschlagen: ",
+        "wrb.97093f": "Einladung anlegen fehlgeschlagen ({p0})",
+        "wrb.7727eb": "Retour",
+        "wrb.f7c602": "Retourbild-Einladung auf \"{p0}\" fehlgeschlagen ({p1}) — Kamera-Einladung wurde trotzdem angelegt, nur ohne Retourbild.",
+        "wrb.a0fe28": "Retourbild-Einladung fehlgeschlagen: ",
+        "wrb.d7c468": " — Kamera-Einladung wurde trotzdem angelegt, nur ohne Retourbild.",
+        "wrb.e78478": "Einladung widerrufen. Soll eine damit möglicherweise gerade aktive Verbindung sofort getrennt werden?",
+        "wrb.af58b1": "Widerrufen fehlgeschlagen ({p0})"
+    },
+    en: {
+        "x.retourTile": "+ Return feed",
+        "x.retourLbl": "{p0} (return)",
+        "wrb.ada5c5": "Base URL for the phone\n        ",
+        "wrb.36b01a": "Return-feed node (optional)\n          ",
+        "wrb.470692": "No return feed",
+        "wrb.6e77cd": "When selected, “New invitation” additionally creates an invitation on this monitor instance and merges both into ONE link/QR code for the phone (send camera + view return feed).",
+        "wrb.028124": "Label (optional, e.g. “Camera control room 1”)",
+        "wrb.5c3fbe": "+ New invitation",
+        "wrb.7140d5": "No invitations — without at least one active invitation this node accepts no connection.",
+        "wrb.bf4a61": "Copy link",
+        "wrb.70dfc1": "Copied!",
+        "wrb.c59219": "Copying failed — select the link by hand: ",
+        "wrb.4d2063": "Revoke",
+        "wrb.3b20d8": "Loading invitations failed ({p0})",
+        "wrb.d7227c": "Loading invitations failed: ",
+        "wrb.97093f": "Creating invitation failed ({p0})",
+        "wrb.7727eb": "Return",
+        "wrb.f7c602": "Return-feed invitation on \"{p0}\" failed ({p1}) — camera invitation was created anyway, just without return feed.",
+        "wrb.a0fe28": "Return-feed invitation failed: ",
+        "wrb.d7c468": " — camera invitation was created anyway, just without return feed.",
+        "wrb.e78478": "Invitation revoked. Should a connection that may be active with it be disconnected immediately?",
+        "wrb.af58b1": "Revoking failed ({p0})"
+    },
+  };
+  const lang = document.documentElement.lang === "en" ? "en" : "de";
+  return (k, p) => {
+    let s = (D[lang] && D[lang][k]) ?? D.de[k] ?? k;
+    if (p) for (const x in p) s = s.split("{" + x + "}").join(p[x]);
+    return s;
+  };
+})();
+const LOCALE = document.documentElement.lang === "en" ? "en-GB" : "de-DE";
+
 // Node-UI-Bundle für omp-webrtc-gateway (Nutzerwunsch 2026-09-23):
 // Einladungslinks/QR-Codes fürs Handy verwalten — ohne gültige
 // Einladung lehnt der Node seit demselben Nutzerauftrag jede /whip-
@@ -81,18 +143,18 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
 
     const root = document.createElement("div");
     root.innerHTML = `
-      <label>Basis-URL fürs Handy
+      <label>${T("wrb.ada5c5")}
         <input type="text" id="base-url" placeholder="https://192.168.1.5:9441">
       </label>
       <div class="retour-row" id="retour-row" hidden>
-        <label>Retourbild-Node (optional)
-          <select id="retour-node"><option value="">Kein Retourbild</option></select>
+        <label>${T("wrb.36b01a")}
+          <select id="retour-node"><option value="">${T("wrb.470692")}</option></select>
         </label>
-        <div class="hint">Wird mitgewählt, erzeugt "Neue Einladung" zusätzlich eine Einladung auf dieser Monitor-Instanz und verschmilzt beide zu EINEM Link/QR-Code fürs Handy (Kamera senden + Retourbild ansehen).</div>
+        <div class="hint">${T("wrb.6e77cd")}</div>
       </div>
       <div class="add-row">
-        <input type="text" id="new-label" placeholder="Bezeichnung (optional, z. B. „Kamera Regie 1“)">
-        <button id="add">+ Neue Einladung</button>
+        <input type="text" id="new-label" placeholder="${T("wrb.028124")}">
+        <button id="add">${T("wrb.5c3fbe")}</button>
       </div>
       <div id="error"></div>
       <ul id="list"></ul>
@@ -196,7 +258,7 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
 
       const prevValue = retourSelect.value;
       retourSelect.innerHTML = "";
-      retourSelect.add(new Option("Kein Retourbild", ""));
+      retourSelect.add(new Option(T("wrb.470692"), ""));
       for (const c of monitorCandidates) retourSelect.add(new Option(c.label, c.nodeId));
       if (monitorCandidates.some((c) => c.nodeId === prevValue)) retourSelect.value = prevValue;
     };
@@ -216,7 +278,7 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
       if (invites.length === 0) {
         const p = document.createElement("p");
         p.className = "empty";
-        p.textContent = "Keine Einladungen — ohne mindestens eine aktive Einladung nimmt dieser Node keine Verbindung an.";
+        p.textContent = T("wrb.7140d5");
         listEl.append(p);
         return;
       }
@@ -244,26 +306,26 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
         if (pair) {
           const retourDiv = document.createElement("div");
           retourDiv.className = "retour";
-          retourDiv.textContent = "+ Retourbild";
+          retourDiv.textContent = T("x.retourTile");
           meta.append(retourDiv);
         }
 
         const actions = document.createElement("div");
         actions.className = "actions";
         const copyBtn = document.createElement("button");
-        copyBtn.textContent = "Link kopieren";
+        copyBtn.textContent = T("wrb.bf4a61");
         copyBtn.addEventListener("click", async () => {
           try {
             await navigator.clipboard.writeText(link);
-            copyBtn.textContent = "Kopiert!";
-            setTimeout(() => (copyBtn.textContent = "Link kopieren"), 1500);
+            copyBtn.textContent = T("wrb.70dfc1");
+            setTimeout(() => (copyBtn.textContent = T("wrb.bf4a61")), 1500);
           } catch {
-            showError("Kopieren fehlgeschlagen — Link von Hand markieren: " + link);
+            showError(T("wrb.c59219") + link);
           }
         });
         const revokeBtn = document.createElement("button");
         revokeBtn.className = "danger";
-        revokeBtn.textContent = "Widerrufen";
+        revokeBtn.textContent = T("wrb.4d2063");
         revokeBtn.addEventListener("click", () => void revoke(invite.token));
         actions.append(copyBtn, revokeBtn);
 
@@ -280,7 +342,7 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
           fetch("/api/v1/instances"),
         ]);
         if (!invitesRes.ok) {
-          showError(`Einladungen laden fehlgeschlagen (${invitesRes.status})`);
+          showError(T("wrb.3b20d8", { p0: invitesRes.status }));
           return;
         }
         if (nodesRes.ok && instancesRes.ok) {
@@ -292,7 +354,7 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
         showError("");
         render(await invitesRes.json());
       } catch (e) {
-        showError("Einladungen laden fehlgeschlagen: " + e);
+        showError(T("wrb.d7227c") + e);
       }
     };
 
@@ -304,7 +366,7 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
         body: JSON.stringify({ label }),
       });
       if (!res.ok) {
-        showError(`Einladung anlegen fehlgeschlagen (${res.status})`);
+        showError(T("wrb.97093f", { p0: res.status }));
         return;
       }
       const invite = await res.json();
@@ -317,7 +379,7 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
             const monRes = await fetch(`/api/v1/nodes/${retourNodeId}/invites`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ label: label ? `${label} (Retour)` : "Retour" }),
+              body: JSON.stringify({ label: label ? T("x.retourLbl", { p0: label }) : T("wrb.7727eb") }),
             });
             if (monRes.ok) {
               const monInvite = await monRes.json();
@@ -329,11 +391,11 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
               });
             } else {
               showError(
-                `Retourbild-Einladung auf "${candidate.label}" fehlgeschlagen (${monRes.status}) — Kamera-Einladung wurde trotzdem angelegt, nur ohne Retourbild.`
+                T("wrb.f7c602", { p0: candidate.label, p1: monRes.status })
               );
             }
           } catch (e) {
-            showError("Retourbild-Einladung fehlgeschlagen: " + e + " — Kamera-Einladung wurde trotzdem angelegt, nur ohne Retourbild.");
+            showError(T("wrb.a0fe28") + e + T("wrb.d7c468"));
           }
         }
       }
@@ -355,12 +417,12 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
     // Token gar nicht (mehr) zur aktiven Sitzung gehört.
     const revoke = async (token) => {
       const alsoDisconnect = window.confirm(
-        "Einladung widerrufen. Soll eine damit möglicherweise gerade aktive Verbindung sofort getrennt werden?"
+        T("wrb.e78478")
       );
       const disconnectQuery = alsoDisconnect ? "&disconnect=true" : "";
       const res = await api(`/invites?token=${encodeURIComponent(token)}${disconnectQuery}`, { method: "DELETE" });
       if (!res.ok) {
-        showError(`Widerrufen fehlgeschlagen (${res.status})`);
+        showError(T("wrb.af58b1", { p0: res.status }));
         return;
       }
       const pair = findPair(token);

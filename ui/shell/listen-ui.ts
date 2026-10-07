@@ -2,7 +2,7 @@
 // schmaler Streifen unten links, aufgeklappt ein Pult-Panel: großes
 // Lautstärke-Poti, frei belegbare Schnellwahl-Tasten, Kanalmodus
 // (Stereo/Mono/L/R), Kopfhörer-Ausgleich, A/V-Sync und Pegel.
-import { t } from "./i18n.ts";
+import { t, t as tt } from "./i18n.ts";
 import type { ChannelMode, ListenService, ListenStatus } from "./listen.ts";
 import { PRESET_SLOTS } from "./listen.ts";
 
@@ -192,7 +192,7 @@ function buildControls(service: ListenService): { panel: HTMLElement; repaint: (
   presetTitle.className = "omp-listen-sec";
   presetTitle.textContent = t("listen.977a2d");
   const assignBtn = document.createElement("button");
-  assignBtn.textContent = "✎ Belegen";
+  assignBtn.textContent = tt("y.assign");
   assignBtn.title = t("listen.c8108d");
   presetHead.append(presetTitle, assignBtn);
   const presetGrid = document.createElement("div");

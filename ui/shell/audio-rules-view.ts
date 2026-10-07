@@ -164,7 +164,7 @@ class AudioRulesView extends HTMLElement {
   #renderGroups(): HTMLElement {
     const doc = this.#doc!;
     const sec = el("div", BOX);
-    sec.append(el("div", "font-weight:600;font-size:15px;margin-bottom:2px;", "1 · Ausgabegruppen"));
+    sec.append(el("div", "font-weight:600;font-size:15px;margin-bottom:2px;", tt("y.grp1")));
     sec.append(el("div", `${DIM}font-size:12px;margin-bottom:8px;`,
       tt("arv.3c3493")));
     const rows = el("div", "display:flex;flex-direction:column;gap:6px;");
@@ -215,7 +215,7 @@ class AudioRulesView extends HTMLElement {
     const sel = select(doc.trackSchemas.map((s, i): [string, string] => [String(i), s.id || tt("arv.24941e")]), String(this.#schemaIdx), (v) => { this.#schemaIdx = Number(v); this.#render(); }, "220px");
     const top = el("div", "display:flex;gap:8px;align-items:end;margin-bottom:8px;flex-wrap:wrap;");
     top.append(field(tt("arv.7146a6"), sel));
-    top.append(button("+ Schema", () => {
+    top.append(button(tt("y.addSchema"), () => {
       const id = uniqueId("schema", doc.trackSchemas.map((s) => s.id));
       doc.trackSchemas.push({ id, match: { format: "mxf", tracks: 8 }, tracks: monoTracks(8) });
       this.#schemaIdx = doc.trackSchemas.length - 1;
@@ -266,7 +266,7 @@ class AudioRulesView extends HTMLElement {
         cell(button("✕", () => { s.tracks.splice(i, 1); this.#touch(); this.#render(); }, "omp-btn-danger", tt("arv.e9da74"))));
       t.append(r);
     });
-    sec.append(t, button("+ Spur", () => {
+    sec.append(t, button(tt("y.addTrk"), () => {
       s.tracks.push({ n: Math.max(0, ...s.tracks.map((x) => x.n)) + 1, layout: "mono", tags: [] });
       this.#touch();
       this.#render();
@@ -298,7 +298,7 @@ class AudioRulesView extends HTMLElement {
       top.append(button(tt("arv.529fdd"), () => {
         const copy: Mapping = JSON.parse(JSON.stringify(cur));
         copy.id = uniqueId(cur.id, doc.mappings.map((m) => m.id));
-        copy.label = `${cur.label || cur.id} (Kopie)`;
+        copy.label = tt("y.copy", { p0: cur.label || cur.id });
         doc.mappings.push(copy);
         this.#mappingIdx = doc.mappings.length - 1;
         this.#touch();
@@ -451,7 +451,7 @@ class AudioRulesView extends HTMLElement {
         tt("arv.e44c07")));
     const groupOpts: [string, string][] = [["*", tt("arv.d893b7")], ...doc.outputProfile.groups.map((g): [string, string] => [g.id, g.label || g.id])];
     doc.ruleSet.rules.forEach((r, i) => sec.append(this.#renderRule(r, i, groupOpts)));
-    sec.append(button("+ Regel", () => {
+    sec.append(button(tt("y.addRule"), () => {
       doc.ruleSet.rules.push(newRule(doc.outputProfile.groups[0]?.id ?? "*"));
       this.#touch();
       this.#render();

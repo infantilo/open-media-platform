@@ -1,3 +1,37 @@
+// i18n (de/en): Sprache aus <html lang> (setzt die Shell, ui/shell/i18n.ts),
+// Fallback Deutsch. Eigenes Mini-t(), weil Node-Bundles keine Shell-Imports nutzen.
+const T = (() => {
+  const D = {
+    de: {
+        "amon.df6a67": "— Quelle wählen —",
+        "amon.1e872e": "▶ Abhören starten",
+        "amon.5757a4": "Quelle wählen, dann Abhören starten (Browser verlangt eine Nutzergeste für Audio-Wiedergabe).",
+        "amon.640d7c": "kein Audiostrom verfügbar",
+        "amon.28bd4d": "■ Abhören stoppen",
+        "amon.6a7ee7": "Abhören beendet.",
+        "amon.1050d8": "Es wird gerade ein anderer Monitor abgehört.",
+        "amon.1d278b": "Quelle wählen, dann Abhören starten. Der Ton läuft weiter, auch wenn diese Kachel verlassen wird."
+    },
+    en: {
+        "amon.df6a67": "— choose source —",
+        "amon.1e872e": "▶ Start monitoring",
+        "amon.5757a4": "Choose a source, then start monitoring (the browser requires a user gesture for audio playback).",
+        "amon.640d7c": "no audio stream available",
+        "amon.28bd4d": "■ Stop monitoring",
+        "amon.6a7ee7": "Monitoring ended.",
+        "amon.1050d8": "Another monitor is currently being monitored.",
+        "amon.1d278b": "Choose a source, then start monitoring. The sound keeps playing even if this tile is left."
+    },
+  };
+  const lang = document.documentElement.lang === "en" ? "en" : "de";
+  return (k, p) => {
+    let s = (D[lang] && D[lang][k]) ?? D.de[k] ?? k;
+    if (p) for (const x in p) s = s.split("{" + x + "}").join(p[x]);
+    return s;
+  };
+})();
+const LOCALE = document.documentElement.lang === "en" ? "en-GB" : "de-DE";
+
 // Node-UI-Bundle des Audio-Monitors (2026-08-06 redesignt, Nutzerwunsch
 // "es sollte wie der viewer ohne einen html player auskommen, direkt
 // das audio ausgeben"): kein sichtbares `<audio controls>` mehr — rohes
@@ -130,14 +164,14 @@ class OmpAudioMonitorPanel extends HTMLElement {
 
     // Hierarchischer Picker (ui/kit/omp-source-selector.ts), Wert = Sender-ID wie zuvor.
     const select = document.createElement("omp-source-selector");
-    select.emptyLabel = "— Quelle wählen —";
+    select.emptyLabel = T("amon.df6a67");
     select.accepts = ["audio"];
 
     const listenBtn = document.createElement("button");
-    listenBtn.textContent = "▶ Abhören starten";
+    listenBtn.textContent = T("amon.1e872e");
 
     const status = document.createElement("p");
-    status.textContent = "Quelle wählen, dann Abhören starten (Browser verlangt eine Nutzergeste für Audio-Wiedergabe).";
+    status.textContent = T("amon.5757a4");
 
     shadow.append(style, select, listenBtn, status);
 
@@ -212,17 +246,17 @@ class OmpAudioMonitorPanel extends HTMLElement {
       try {
         res = await fetch(streamUrl);
       } catch {
-        status.textContent = "kein Audiostrom verfügbar";
+        status.textContent = T("amon.640d7c");
         reading = false;
         return;
       }
       if (!res.ok || !res.body) {
-        status.textContent = "kein Audiostrom verfügbar";
+        status.textContent = T("amon.640d7c");
         reading = false;
         return;
       }
       status.textContent = "";
-      listenBtn.textContent = "■ Abhören stoppen";
+      listenBtn.textContent = T("amon.28bd4d");
 
       const reader = res.body.getReader();
       // Ungerade Byte-Reste zwischen zwei Chunks (BYTES_PER_FRAME teilt
@@ -252,8 +286,8 @@ class OmpAudioMonitorPanel extends HTMLElement {
           workletNode.port.postMessage([left, right], [left.buffer, right.buffer]);
         }
       }
-      status.textContent = "Abhören beendet.";
-      listenBtn.textContent = "▶ Abhören starten";
+      status.textContent = T("amon.6a7ee7");
+      listenBtn.textContent = T("amon.1e872e");
       reading = false;
     };
 
@@ -262,7 +296,7 @@ class OmpAudioMonitorPanel extends HTMLElement {
       if (this._reader) {
         this._reader.cancel().catch(() => {});
       }
-      listenBtn.textContent = "▶ Abhören starten";
+      listenBtn.textContent = T("amon.1e872e");
     };
 
     // Abhör-Controller-Default: ist noch nichts verbunden, wird beim Start der
@@ -288,13 +322,13 @@ class OmpAudioMonitorPanel extends HTMLElement {
       this._shellListen = shellListen;
       const paint = () => {
         const mine = shellListen.state.nodeId === nodeId;
-        listenBtn.textContent = mine ? "■ Abhören stoppen" : "▶ Abhören starten";
+        listenBtn.textContent = mine ? T("amon.28bd4d") : T("amon.1e872e");
         const other = shellListen.state.nodeId && !mine;
         status.textContent = other
-          ? "Es wird gerade ein anderer Monitor abgehört."
+          ? T("amon.1050d8")
           : mine
             ? ""
-            : "Quelle wählen, dann Abhören starten. Der Ton läuft weiter, auch wenn diese Kachel verlassen wird.";
+            : T("amon.1d278b");
       };
       this._onListenChange = paint;
       shellListen.addEventListener("change", paint);

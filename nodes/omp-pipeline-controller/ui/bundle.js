@@ -1,3 +1,25 @@
+// i18n (de/en): Sprache aus <html lang> (setzt die Shell, ui/shell/i18n.ts),
+// Fallback Deutsch. Eigenes Mini-t(), weil Node-Bundles keine Shell-Imports nutzen.
+const T = (() => {
+  const D = {
+    de: {
+        "pcb.c6e6ba": "webUiUrl nicht erreichbar",
+        "pcb.3ce9c3": "keine Web-UI-Adresse verfügbar"
+    },
+    en: {
+        "pcb.c6e6ba": "webUiUrl not reachable",
+        "pcb.3ce9c3": "no web UI address available"
+    },
+  };
+  const lang = document.documentElement.lang === "en" ? "en" : "de";
+  return (k, p) => {
+    let s = (D[lang] && D[lang][k]) ?? D.de[k] ?? k;
+    if (p) for (const x in p) s = s.split("{" + x + "}").join(p[x]);
+    return s;
+  };
+})();
+const LOCALE = document.documentElement.lang === "en" ? "en-GB" : "de-DE";
+
 // Node-UI-Bundle (UMSETZUNG.md, ARCHITECTURE.md §4.5): zeigt PIPELINE
 // CONTROLLERs eigenes Web-UI eingebettet als <iframe>. Bewusst kein
 // eigenes Steuer-Interface (kein Play/Stop/Cue über OMP) — die komplette
@@ -28,11 +50,11 @@ class OmpPipelineControllerPanel extends HTMLElement {
       const data = await res.json();
       url = data.value;
     } catch {
-      status.textContent = "webUiUrl nicht erreichbar";
+      status.textContent = T("pcb.c6e6ba");
       return;
     }
     if (!url) {
-      status.textContent = "keine Web-UI-Adresse verfügbar";
+      status.textContent = T("pcb.3ce9c3");
       return;
     }
 
