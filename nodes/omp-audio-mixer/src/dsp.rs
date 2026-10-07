@@ -758,6 +758,78 @@ pub struct SendShared {
     pub enabled: std::sync::atomic::AtomicBool,
     pub level_db: AtomicF32,
     pub post: std::sync::atomic::AtomicBool,
+    /// Surround-Panner (Kap. 32.2) für Sends auf 5.1-/7.1-Busse; `pan_ver` zählt die Änderungen.
+    pub pan: std::sync::Mutex<PanParams>,
+    pub pan_ver: AtomicU64,
+}
+
+/// Aus dem „Joystick“ abgeleitete Panner-Parameter eines Sends auf einen Surround-Bus.
+/// `x` −1 links … +1 rechts (Balance des Stereobilds), `y` +1 vorn … −1 hinten,
+/// `center` 0…1 (Anteil des Mittensignals auf den Center-Lautsprecher), `lfe_db` Pegel
+/// auf den LFE-Kanal ([`PAN_LFE_OFF_DB`] = aus).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PanParams {
+    pub x: f64,
+    pub y: f64,
+    pub center: f64,
+    pub lfe_db: f64,
+}
+
+pub const PAN_LFE_OFF_DB: f64 = -60.0;
+
+impl Default for PanParams {
+    /// Entspricht der früheren Abbildung per `audioconvert`: L→FL, R→FR, sonst still.
+    fn default() -> Self {
+        PanParams { x: 0.0, y: 1.0, center: 0.0, lfe_db: PAN_LFE_OFF_DB }
+    }
+}
+
+impl PanParams {
+    pub fn clamped(self) -> Self {
+        PanParams {
+            x: self.x.clamp(-1.0, 1.0),
+            y: self.y.clamp(-1.0, 1.0),
+            center: self.center.clamp(0.0, 1.0),
+            lfe_db: self.lfe_db.clamp(PAN_LFE_OFF_DB, 6.0),
+        }
+    }
+}
+
+/// Mischmatrix (Zeilen = Buskanäle, Spalten = L/R des Kanals) für einen 5.1-Bus (`out` = 6:
+/// FL FR FC LFE RL RR) oder 7.1-Bus (`out` = 8: … SL SR). Konstante Leistung zwischen vorn und
+/// hinten; das Stereobild bleibt erhalten (L→links, R→rechts), `x` ist eine Balance.
+pub fn pan_matrix(out: u32, p: &PanParams) -> Vec<Vec<f64>> {
+    let p = p.clamped();
+    let theta = (1.0 - p.y) / 2.0 * std::f64::consts::FRAC_PI_2;
+    let (front, rear) = (theta.cos(), theta.sin());
+    let gl = if p.x <= 0.0 { 1.0 } else { (p.x * std::f64::consts::FRAC_PI_2).cos() };
+    let gr = if p.x >= 0.0 { 1.0 } else { (-p.x * std::f64::consts::FRAC_PI_2).cos() };
+    let c = p.center;
+    let h = std::f64::consts::FRAC_1_SQRT_2;
+    let lfe = if p.lfe_db <= PAN_LFE_OFF_DB + 0.01 { 0.0 } else { db_to_lin(p.lfe_db) * 0.5 };
+    let mut m = vec![
+        vec![front * gl * (1.0 - c), 0.0],
+        vec![0.0, front * gr * (1.0 - c)],
+        vec![c * front * gl * h, c * front * gr * h],
+        vec![lfe, lfe],
+    ];
+    if out == 8 {
+        // Hinten teilt sich konstant-leistend auf Rear und Side.
+        m.push(vec![rear * gl * h, 0.0]);
+        m.push(vec![0.0, rear * gr * h]);
+        m.push(vec![rear * gl * h, 0.0]);
+        m.push(vec![0.0, rear * gr * h]);
+    } else {
+        m.push(vec![rear * gl, 0.0]);
+        m.push(vec![0.0, rear * gr]);
+    }
+    m
+}
+
+/// `audiomixmatrix`-Syntax (`<<a,b>,<c,d>>`) für [`pan_matrix`].
+pub fn matrix_to_gst_string(m: &[Vec<f64>]) -> String {
+    let rows: Vec<String> = m.iter().map(|r| format!("<{}>", r.iter().map(|v| format!("(double){v:.6}")).collect::<Vec<_>>().join(","))).collect();
+    format!("<{}>", rows.join(","))
 }
 
 impl SendShared {
@@ -766,7 +838,18 @@ impl SendShared {
             enabled: std::sync::atomic::AtomicBool::new(false),
             level_db: AtomicF32::new(0.0),
             post: std::sync::atomic::AtomicBool::new(true),
+            pan: std::sync::Mutex::new(PanParams::default()),
+            pan_ver: AtomicU64::new(0),
         }
+    }
+
+    pub fn set_pan(&self, p: PanParams) {
+        *self.pan.lock().expect("lock poisoned") = p.clamped();
+        self.pan_ver.fetch_add(1, Ordering::Release);
+    }
+
+    pub fn pan(&self) -> PanParams {
+        *self.pan.lock().expect("lock poisoned")
     }
 
     /// Ziel-Gain (linear) dieses Sends für den aktuellen Kanalzustand.
@@ -1052,6 +1135,52 @@ impl MasterStage {
             buf[n * CH + 1] = (buf[n * CH + 1] as f64 * g) as f32;
         }
         gr_out.set(min_gr as f32);
+    }
+}
+
+#[cfg(test)]
+mod pan_tests {
+    use super::*;
+
+    #[test]
+    fn default_pan_matches_plain_stereo_upmix() {
+        let m = pan_matrix(6, &PanParams::default());
+        assert_eq!(m[0], vec![1.0, 0.0]);
+        assert_eq!(m[1], vec![0.0, 1.0]);
+        for row in &m[2..] {
+            assert!(row.iter().all(|v| v.abs() < 1e-12), "{row:?}");
+        }
+    }
+
+    #[test]
+    fn rear_position_moves_signal_to_rear_with_constant_power() {
+        let m = pan_matrix(6, &PanParams { y: -1.0, ..PanParams::default() });
+        assert!(m[0][0].abs() < 1e-9 && (m[4][0] - 1.0).abs() < 1e-9 && (m[5][1] - 1.0).abs() < 1e-9);
+        let mid = pan_matrix(6, &PanParams { y: 0.0, ..PanParams::default() });
+        let power = mid[0][0].powi(2) + mid[4][0].powi(2);
+        assert!((power - 1.0).abs() < 1e-9, "front²+rear² = {power}");
+    }
+
+    #[test]
+    fn center_and_lfe_and_seven_one_layout() {
+        let m = pan_matrix(8, &PanParams { center: 1.0, lfe_db: 0.0, y: 0.0, x: 0.0 });
+        assert_eq!(m.len(), 8);
+        assert!(m[0][0].abs() < 1e-9, "mit center=1 kein Direktanteil auf FL");
+        assert!(m[2][0] > 0.4 && (m[2][0] - m[2][1]).abs() < 1e-9);
+        assert!((m[3][0] - 0.5).abs() < 1e-9, "LFE 0 dB = halbe Summe");
+        let rear_power: f64 = [4, 6].iter().map(|&r| m[r][0].powi(2)).sum();
+        assert!((rear_power - 0.5).abs() < 1e-9, "Rear+Side teilen sich den Rear-Anteil: {rear_power}");
+    }
+
+    #[test]
+    fn balance_attenuates_the_far_channel_only() {
+        let m = pan_matrix(6, &PanParams { x: 1.0, ..PanParams::default() });
+        assert!(m[0][0].abs() < 1e-9 && (m[1][1] - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn gst_string_has_double_cells() {
+        assert_eq!(matrix_to_gst_string(&[vec![1.0, 0.0], vec![0.0, 1.0]]), "<<(double)1.000000,(double)0.000000>,<(double)0.000000,(double)1.000000>>");
     }
 }
 

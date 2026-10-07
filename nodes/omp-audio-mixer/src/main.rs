@@ -363,6 +363,8 @@ struct ChannelState {
     duckable: bool,
     /// Aux-Sends (Schlüssel = Aux-ID); fehlender Eintrag = Standard des Bus-Typs.
     sends: HashMap<String, SendState>,
+    /// Surround-Panner je Send auf einen 5.1-/7.1-Bus (Kap. 32.2); fehlend = Standard (nur L/R vorn).
+    pans: HashMap<String, dsp::PanParams>,
     /// Auf den Programm-Bus geroutet (Default ja). On-Air ≠ Unmuted: ein
     /// entstummter, aber nicht auf Programm gerouteter Kanal ist nicht on air.
     main_route: bool,
@@ -433,6 +435,7 @@ impl ChannelState {
             manual: false,
             duckable: true,
             sends: HashMap::new(),
+            pans: HashMap::new(),
             main_route: true,
             automation: ChannelAutomation::default(),
             follow_target: String::new(),
@@ -941,6 +944,16 @@ impl ParamStore for AudioMixerStore {
                 ],
             });
             methods.push(MethodSpec {
+                name: format!("channel.{id}.setSendPan"),
+                args: vec![
+                    MethodArg { name: "auxId".to_string(), kind: ParamType::String },
+                    num("x"),
+                    num("y"),
+                    num("center"),
+                    num("lfeDb"),
+                ],
+            });
+            methods.push(MethodSpec {
                 name: format!("channel.{id}.setGroup"),
                 args: vec![MethodArg { name: "groupId".to_string(), kind: ParamType::String }],
             });
@@ -1154,7 +1167,9 @@ impl ParamStore for AudioMixerStore {
                         .filter(|a| a.active)
                         .map(|a| {
                             let (enabled, level_db, post, locked) = self.effective(ch, a);
-                            serde_json::json!({"auxId": a.id, "enabled": enabled, "levelDb": level_db, "post": post, "locked": locked})
+                            let pan = ch.pans.get(&a.id).copied().unwrap_or_default();
+                            serde_json::json!({"auxId": a.id, "enabled": enabled, "levelDb": level_db, "post": post, "locked": locked,
+                                "pan": pan_to_json(&pan)})
                         })
                         .collect(),
                 ))
@@ -1210,6 +1225,7 @@ impl ParamStore for AudioMixerStore {
                 || name == "removeAux"
                 || name.starts_with("aux.")
                 || name.ends_with(".setSend")
+                || name.ends_with(".setSendPan")
                 || name.ends_with(".setSource");
             if touches_sends {
                 self.apply_sends();
@@ -1306,6 +1322,23 @@ fn effective_send(ch: &ChannelState, aux: &AuxState) -> (bool, f64, bool, bool) 
     }
     let s = ch.sends.get(&aux.id).copied().unwrap_or(SendState { enabled: false, level_db: 0.0, post: true });
     (s.enabled, s.level_db, s.post, false)
+}
+
+fn pan_to_json(p: &dsp::PanParams) -> Value {
+    serde_json::json!({"x": p.x, "y": p.y, "center": p.center, "lfeDb": p.lfe_db})
+}
+
+fn pan_from_json(v: &Value) -> Option<dsp::PanParams> {
+    let d = dsp::PanParams::default();
+    v.is_object().then(|| {
+        dsp::PanParams {
+            x: v.get("x").and_then(Value::as_f64).unwrap_or(d.x),
+            y: v.get("y").and_then(Value::as_f64).unwrap_or(d.y),
+            center: v.get("center").and_then(Value::as_f64).unwrap_or(d.center),
+            lfe_db: v.get("lfeDb").and_then(Value::as_f64).unwrap_or(d.lfe_db),
+        }
+        .clamped()
+    })
 }
 
 fn aux_json(a: &AuxState) -> Value {
@@ -1424,6 +1457,7 @@ impl AudioMixerStore {
                         "source": c.source,
                         "sends": c.sends.iter().map(|(k, v)| serde_json::json!({
                             "auxId": k, "enabled": v.enabled, "levelDb": v.level_db, "post": v.post,
+                            "pan": c.pans.get(k).map(pan_to_json),
                         })).collect::<Vec<_>>(),
                         "mainRoute": c.main_route, "automation": c.automation.to_json(),
                         "group": c.group, "autoMixEnabled": c.am_enabled,
@@ -1586,6 +1620,9 @@ impl AudioMixerStore {
                             post: sd.get("post").and_then(Value::as_bool).unwrap_or(true),
                         },
                     );
+                    if let Some(p) = sd.get("pan").and_then(pan_from_json) {
+                        ch.pans.insert(aux_id.to_string(), p);
+                    }
                 }
             }
             ch.main_route = cd.get("mainRoute").and_then(Value::as_bool).unwrap_or(true);
@@ -2096,6 +2133,9 @@ impl AudioMixerStore {
                 let (enabled, level_db, post, _) = self.effective(ch, a);
                 // Inaktive Busse: nichts senden (verhindert Zweige ohne Abnehmer).
                 self.pipeline.set_send(ch.id.clone(), a.id.clone(), enabled && a.active, level_db, post);
+                if matches!(a.channels, 6 | 8) {
+                    self.pipeline.set_send_pan(ch.id.clone(), a.id.clone(), ch.pans.get(&a.id).copied().unwrap_or_default());
+                }
             }
         }
     }
@@ -2113,6 +2153,7 @@ impl AudioMixerStore {
                 "automation": c.automation.to_json(),
                 "sends": c.sends.iter().map(|(k, v)| serde_json::json!({
                     "auxId": k, "enabled": v.enabled, "levelDb": v.level_db, "post": v.post,
+                    "pan": c.pans.get(k).map(pan_to_json),
                 })).collect::<Vec<_>>(),
             });
             if let Some(rule) = self.routing.lock().expect("lock poisoned").expects.get(&c.id) {
@@ -2197,6 +2238,9 @@ impl AudioMixerStore {
                                         post: sd.get("post").and_then(Value::as_bool).unwrap_or(true),
                                     },
                                 );
+                                if let Some(p) = sd.get("pan").and_then(pan_from_json) {
+                                    ch.pans.insert(aux_id.to_string(), p);
+                                }
                             }
                         }
                     }
@@ -2395,7 +2439,9 @@ impl AudioMixerStore {
                     .filter(|a| a.active)
                     .map(|a| {
                         let (enabled, level_db, post, locked) = self.effective(c, a);
-                        serde_json::json!({"auxId": a.id, "enabled": enabled, "levelDb": level_db, "post": post, "locked": locked})
+                        let pan = c.pans.get(&a.id).copied().unwrap_or_default();
+                        serde_json::json!({"auxId": a.id, "enabled": enabled, "levelDb": level_db, "post": post, "locked": locked,
+                            "pan": pan_to_json(&pan)})
                     })
                     .collect();
                 serde_json::json!({
@@ -2638,6 +2684,21 @@ impl AudioMixerStore {
                     s.post = v.as_bool().ok_or(InvokeError::Unknown)?;
                 }
                 ch.sends.insert(aux_id.to_string(), s);
+                Ok(())
+            }
+            "setSendPan" => {
+                // Surround-Panner (Kap. 32.2): nur Teilwerte ändern, der Rest bleibt wie zuvor.
+                let aux_id = args.get("auxId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                if !self.aux.lock().expect("lock poisoned").iter().any(|a| a.id == aux_id && a.active) {
+                    return Err(InvokeError::Unknown);
+                }
+                let mut p = ch.pans.get(aux_id).copied().unwrap_or_default();
+                for (key, slot) in [("x", &mut p.x), ("y", &mut p.y), ("center", &mut p.center), ("lfeDb", &mut p.lfe_db)] {
+                    if let Some(v) = args.get(key) {
+                        *slot = v.as_f64().filter(|f| f.is_finite()).ok_or(InvokeError::Unknown)?;
+                    }
+                }
+                ch.pans.insert(aux_id.to_string(), p.clamped());
                 Ok(())
             }
             "setGroup" => {

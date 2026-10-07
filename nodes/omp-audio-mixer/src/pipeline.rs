@@ -144,6 +144,8 @@ enum Command {
     SetAuxActive { aux: String, active: bool, channels: u32 },
     SetAuxMaster { aux: String, db: f64, muted: bool },
     SetSend { channel: String, aux: String, enabled: bool, level_db: f64, post: bool },
+    /// Surround-Panner eines Sends (Kap. 32.2).
+    SetSendPan { channel: String, aux: String, pan: dsp::PanParams },
 }
 
 #[derive(Clone)]
@@ -174,6 +176,11 @@ impl PipelineHandle {
     /// Send eines Kanals auf einen Aux-Bus (Pre/Post-Fader, Pegel, an/aus).
     pub fn set_send(&self, channel: String, aux: String, enabled: bool, level_db: f64, post: bool) {
         let _ = self.commands.send(Command::SetSend { channel, aux, enabled, level_db, post });
+    }
+
+    /// Surround-Panner eines Sends auf einen 5.1-/7.1-Bus (Kap. 32.2).
+    pub fn set_send_pan(&self, channel: String, aux: String, pan: dsp::PanParams) {
+        let _ = self.commands.send(Command::SetSendPan { channel, aux, pan });
     }
 
     /// Kanal-DSP-Zustände für die Automations-Engine.
@@ -374,6 +381,45 @@ fn buffer_tai(pad: &gst::Pad, pts: Option<gst::ClockTime>) -> Option<u64> {
 /// überschreibt den Standard (40 ms).
 fn mixer_latency_ns() -> u64 {
     std::env::var("OMP_AUDIO_MIX_LATENCY_MS").ok().and_then(|v| v.parse::<f64>().ok()).map_or(40_000_000, |ms| (ms * 1e6) as u64)
+}
+
+/// Gleitet die Mischmatrix eines Surround-Sends Block für Block (10 ms) auf die Zielwerte aus
+/// `SendShared::pan` — kein Knacken beim Ziehen des Joysticks, auch bei Sprüngen (≈ 30 ms).
+fn attach_pan_probe(matrix_el: &gst::Element, send: Arc<dsp::SendShared>, out: u32) {
+    let Some(pad) = matrix_el.static_pad("sink") else { return };
+    let weak = matrix_el.downgrade();
+    let start = dsp::pan_matrix(out, &send.pan());
+    let state = Mutex::new((start.clone(), start, send.pan_ver.load(Ordering::Acquire)));
+    pad.add_probe(gst::PadProbeType::BUFFER, move |_, _| {
+        let mut guard = state.lock().expect("lock poisoned");
+        let (cur, tgt, seen) = &mut *guard;
+        let v = send.pan_ver.load(Ordering::Acquire);
+        if v != *seen {
+            *seen = v;
+            *tgt = dsp::pan_matrix(out, &send.pan());
+        }
+        if cur != tgt {
+            let mut done = true;
+            for (cr, tr) in cur.iter_mut().zip(tgt.iter()) {
+                for (c, t) in cr.iter_mut().zip(tr.iter()) {
+                    let d = *t - *c;
+                    if d.abs() < 1e-4 {
+                        *c = *t;
+                    } else {
+                        *c += d * 0.34;
+                        done = false;
+                    }
+                }
+            }
+            if done {
+                *cur = tgt.clone();
+            }
+            if let Some(el) = weak.upgrade() {
+                el.set_property_from_str("matrix", &dsp::matrix_to_gst_string(cur));
+            }
+        }
+        gst::PadProbeReturn::Ok
+    });
 }
 
 fn add_channel_branch(
@@ -695,6 +741,7 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
     if branch.sends.contains_key(aux_id) {
         return Ok(());
     }
+    let send = shared.send(aux_id);
     let wide_tee = branch.wide.as_ref().filter(|(_, n)| *n == bus_channels).map(|(t, _)| t.clone());
     let src_tee = wide_tee.clone().unwrap_or_else(|| branch.tee.clone());
     let queue = gst::ElementFactory::make("queue")
@@ -722,7 +769,22 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
             adapt = vec![setter];
         }
     } else if bus_channels != CHANNELS {
-        let conv = if matches!(bus_channels, 1 | 6 | 8) {
+        let mut pan_matrix_el: Option<gst::Element> = None;
+        let conv = if matches!(bus_channels, 6 | 8) {
+            // Surround-Bus (Kap. 32.2): Mischmatrix mit Panner statt `audioconvert`; Zielwerte kommen aus
+            // `SendShared::pan` und werden im Probe unten Block für Block angeglichen.
+            let m = gst::ElementFactory::make("audiomixmatrix")
+                .name(format!("send-conv-{ch_id}-{aux_id}"))
+                .property("in-channels", CHANNELS)
+                .property("out-channels", bus_channels)
+                .property("channel-mask", if bus_channels == 6 { 0x3fu64 } else { 0x63fu64 })
+                .build()
+                .map_err(|e| format!("audiomixmatrix (send {ch_id}->{aux_id}): {e}"))?;
+            m.set_property_from_str("mode", "manual");
+            m.set_property_from_str("matrix", &dsp::matrix_to_gst_string(&dsp::pan_matrix(bus_channels, &send.pan())));
+            pan_matrix_el = Some(m.clone());
+            m
+        } else if bus_channels == 1 {
             gst::ElementFactory::make("audioconvert")
                 .name(format!("send-conv-{ch_id}-{aux_id}"))
                 .build()
@@ -753,11 +815,14 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
             let _ = active.pipeline.remove(&queue);
             return Err(format!("add send adapt: {e}"));
         }
+        if let Some(m) = &pan_matrix_el {
+            attach_pan_probe(m, send.clone(), bus_channels);
+        }
         adapt = vec![conv, caps];
     }
 
-    let send = shared.send(aux_id);
     {
+        let send = send.clone();
         let probe_ch = if wide_tee.is_some() { bus_channels as usize } else { CHANNELS as usize };
         let stage = Mutex::new((dsp::FaderStage::with_channels(probe_ch), dsp::AfvGate::new(probe_ch), Vec::<f32>::new()));
         let shared = shared.clone();
@@ -1386,6 +1451,9 @@ pub fn run(
                 if enabled && let Err(e) = ensure_send_branch(&mut active, &channel, &aux) {
                     let _ = tx.send(Event::Error(format!("setSend({channel}->{aux}) failed: {e}")));
                 }
+            }
+            Ok(Command::SetSendPan { channel, aux, pan }) => {
+                shared_for(&active, &channel).send(&aux).set_pan(pan);
             }
             Ok(Command::SetPfl { id, enabled }) => {
                 let changed = if let Some(branch) = active.channels.get_mut(&id) {
