@@ -22,61 +22,62 @@ import "./scheduler-view.ts";
 import "./admin-view.ts";
 import { apiFetch, type ConnectionChangeDetail, type ConnectionState, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
+import { buildLangSelect, type I18nKey, t } from "./i18n.ts";
 
 type TabId = "flow" | "workflows" | "process" | "assets" | "hosts" | "instances" | "alarms" | "health" | "signal-path" | "scheduler" | "admin";
 
 interface TabDef {
   id: TabId;
-  label: string;
+  labelKey: I18nKey;
   element: string;
 }
 
 const BASE_TABS: TabDef[] = [
-  { id: "flow", label: "Flow Editor", element: "omp-flow-canvas" },
-  { id: "workflows", label: "Workflows", element: "omp-workflows-view" },
+  { id: "flow", labelKey: "app.tab.flow", element: "omp-flow-canvas" },
+  { id: "workflows", labelKey: "app.tab.workflows", element: "omp-workflows-view" },
   // Kapitel 21 Phase 6 Teil 1: Business-Prozess-Engine (Definitions/
   // Versions/Executions/HumanTasks) — disjunkt vom Workflow-Tab, s.
   // UMSETZUNG.md §6b/21.2 Namenskollisions-Entscheidung.
-  { id: "process", label: "Prozesse", element: "omp-process-view" },
+  { id: "process", labelKey: "app.tab.process", element: "omp-process-view" },
   // Kapitel 21 Phase 6 Teil 3: Asset/Content-Domäne (Assets/Lifecycle/
   // Metadaten/Versionen/Representations), direkt neben "Prozesse" —
   // beide Domänen gehören laut Aufgabenstellung eng zusammen.
-  { id: "assets", label: "Assets", element: "omp-asset-view" },
-  { id: "hosts", label: "Hosts", element: "omp-hosts-view" },
+  { id: "assets", labelKey: "app.tab.assets", element: "omp-asset-view" },
+  { id: "hosts", labelKey: "app.tab.hosts", element: "omp-hosts-view" },
   // §17 Teil 2 (docs/END-GOAL-FEATURES.md, 2026-07-19): "Laufende
   // Instanzen"-Tab — baut auf Kapitel 14 (Ressourcenwerte), kein neuer
   // Backend-Konsument.
-  { id: "instances", label: "Instanzen", element: "omp-instances-view" },
+  { id: "instances", labelKey: "app.tab.instances", element: "omp-instances-view" },
   // §17 Teil 3 (docs/END-GOAL-FEATURES.md, 2026-07-17): genereller
   // Alarm-View, fünfter Tab neben Flow-Editor/Workflows/Hosts/Instanzen.
-  { id: "alarms", label: "Alarme", element: "omp-alarm-view" },
+  { id: "alarms", labelKey: "app.tab.alarms", element: "omp-alarm-view" },
   // Nutzerauftrag 2026-09-14 ("BCP008 Dashboard"): systemweite Fleet-
   // Übersicht über alle BCP-008-fähigen Instanzen gleichzeitig — anders
   // als das bestehende Statuspanel im Flow-Editor (EIN Node, Nachtrag
   // 214), s. ui/shell/health-view.ts.
-  { id: "health", label: "Health", element: "omp-health-view" },
+  { id: "health", labelKey: "app.tab.health", element: "omp-health-view" },
   // Nutzerauftrag 2026-10-07: Signalweg Quelle → Ziel über die IST-
   // Verbindungen, reine Anzeige, s. ui/shell/signal-path-view.ts.
-  { id: "signal-path", label: "Signalweg", element: "omp-signal-path-view" },
+  { id: "signal-path", labelKey: "app.tab.signalPath", element: "omp-signal-path-view" },
   // Nachtrag 97 Folgearbeit (2026-07-27): workflow-übergreifende
   // Zeitplan-Übersicht/-Bearbeitung, sichtbar für alle wie der
   // Workflows-Tab selbst — kein eigenes Client-Gating, das zugrunde
   // liegende PUT /api/v1/workflows/{id} bleibt serverseitig
   // VerbConfigure-gated (schlägt für Nutzer ohne diesen Verb einfach
   // fehl, exakt wie im bestehenden Workflow-Formular).
-  { id: "scheduler", label: "Scheduler", element: "omp-scheduler-view" },
+  { id: "scheduler", labelKey: "app.tab.scheduler", element: "omp-scheduler-view" },
 ];
 
 // Kapitel 11 Teil 1 (docs/END-GOAL-FEATURES.md §11.4): eigener Tab statt
 // Teil von BASE_TABS, weil er nur bei whoami().isAdmin nachträglich
 // angehängt wird (admin-Verb ODER Bootstrap-Modus, s. auth_handlers.go:
 // handleWhoami) — für alle anderen Nutzer bleibt die Bar unverändert.
-const ADMIN_TAB: TabDef = { id: "admin", label: "Administration", element: "omp-admin-view" };
+const ADMIN_TAB: TabDef = { id: "admin", labelKey: "app.tab.admin", element: "omp-admin-view" };
 
-const PILL_LABEL: Record<ConnectionState, string> = {
-  connected: "● Connected",
-  degraded: "● Degraded",
-  disconnected: "● Disconnected",
+const PILL_LABEL: Record<ConnectionState, I18nKey> = {
+  connected: "app.conn.connected",
+  degraded: "app.conn.degraded",
+  disconnected: "app.conn.disconnected",
 };
 
 const PILL_COLOR: Record<ConnectionState, string> = {
@@ -292,6 +293,7 @@ class AppShell extends HTMLElement {
     pill.style.cssText = "font-size:var(--omp-font-size-xs);";
     this.#pillEl = pill;
     right.appendChild(pill);
+    right.appendChild(buildLangSelect());
 
     bar.append(left, right);
 
@@ -316,7 +318,7 @@ class AppShell extends HTMLElement {
   #buildTabButton(tab: TabDef): HTMLButtonElement {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = tab.label;
+    btn.textContent = t(tab.labelKey);
     btn.setAttribute("data-tab-id", tab.id);
     btn.addEventListener("click", () => this.#switchTab(tab.id));
     return btn;
@@ -370,7 +372,7 @@ class AppShell extends HTMLElement {
     const reconnected = state === "connected" && this.#lastState === "disconnected";
     this.#lastState = state;
 
-    this.#pillEl.textContent = PILL_LABEL[state];
+    this.#pillEl.textContent = t(PILL_LABEL[state]);
     this.#pillEl.style.color = PILL_COLOR[state];
 
     this.#setInteractiveLock(state === "disconnected");
@@ -409,14 +411,14 @@ class AppShell extends HTMLElement {
     const label = document.createElement("span");
     const retryBtn = document.createElement("button");
     retryBtn.type = "button";
-    retryBtn.textContent = "Jetzt verbinden";
+    retryBtn.textContent = t("app.conn.retryNow");
     retryBtn.style.cssText = "font-size:var(--omp-font-size-xs);padding:2px var(--omp-space-2);";
     retryBtn.addEventListener("click", () => connectionMonitor.reconnectNow());
     this.#bannerEl.replaceChildren(label, retryBtn);
 
     const tick = () => {
       const secs = nextRetryAt ? Math.max(0, Math.ceil((nextRetryAt - Date.now()) / 1000)) : 0;
-      label.textContent = `Verbindung zum Orchestrator verloren — neuer Versuch in ${secs}s`;
+      label.textContent = t("app.conn.lost", { secs });
     };
     tick();
     this.#countdownHandle = setInterval(tick, 1000);

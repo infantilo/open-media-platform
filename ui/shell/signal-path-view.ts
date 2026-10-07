@@ -6,6 +6,7 @@
 // aktive IS-05-Verbindungen), GET /api/v1/instances (Host, Absturz) und
 // GET /api/v1/hosts (Label). Pfadsuche/Diagnose: signal-path-logic.ts.
 import { apiFetch, connectionMonitor } from "./connection.ts";
+import { t } from "./i18n.ts";
 import {
   diagnosePath,
   findPaths,
@@ -65,14 +66,14 @@ class SignalPathView extends HTMLElement {
       "font-size:var(--omp-font-size-sm);color:var(--omp-text);padding:var(--omp-space-3);" +
       "box-sizing:border-box;width:100%;height:100%;overflow-y:auto;";
     this.innerHTML = `
-      <div class="omp-h1" style="margin-bottom:var(--omp-space-3);">Signalweg</div>
+      <div class="omp-h1" style="margin-bottom:var(--omp-space-3);">${t("sp.title")}</div>
       <div style="color:var(--omp-text-dim);margin-bottom:var(--omp-space-3);">
-        Zeigt, über welche Nodes ein Signal gerade tatsächlich von der Quelle zum Ziel läuft (aktive Verbindungen), und wo die Kette bricht.
+        ${t("sp.intro")}
       </div>
       <div id="form" style="display:flex;flex-wrap:wrap;gap:var(--omp-space-3);align-items:flex-end;margin-bottom:var(--omp-space-4);">
-        <label style="display:flex;flex-direction:column;gap:2px;">Quelle<select id="from" style="min-width:260px;"></select></label>
-        <label style="display:flex;flex-direction:column;gap:2px;">Ziel<select id="to" style="min-width:260px;"></select></label>
-        <label style="display:flex;flex-direction:column;gap:2px;">über Node (optional)<select id="via" style="min-width:220px;"></select></label>
+        <label style="display:flex;flex-direction:column;gap:2px;">${t("sp.source")}<select id="from" style="min-width:260px;"></select></label>
+        <label style="display:flex;flex-direction:column;gap:2px;">${t("sp.target")}<select id="to" style="min-width:260px;"></select></label>
+        <label style="display:flex;flex-direction:column;gap:2px;">${t("sp.via")}<select id="via" style="min-width:220px;"></select></label>
       </div>
       <div id="result"></div>`;
     this.addEventListener("change", this.#onChange);
@@ -140,9 +141,9 @@ class SignalPathView extends HTMLElement {
       sel.value = keep;
       return keep;
     };
-    this.#from = fill("from", this.#from, senderOptions(this.#graph).map((o) => ({ value: o.id, label: o.label })), "— Quelle wählen —");
-    this.#to = fill("to", this.#to, targetOptions(this.#graph), "— Ziel wählen —");
-    this.#via = fill("via", this.#via, nodeOptions(this.#graph).map((o) => ({ value: o.id, label: o.label })), "— keine Vorgabe —");
+    this.#from = fill("from", this.#from, senderOptions(this.#graph).map((o) => ({ value: o.id, label: o.label })), t("sp.chooseSource"));
+    this.#to = fill("to", this.#to, targetOptions(this.#graph), t("sp.chooseTarget"));
+    this.#via = fill("via", this.#via, nodeOptions(this.#graph).map((o) => ({ value: o.id, label: o.label })), t("sp.noVia"));
   }
 
   #ctx = (nodeId: string): NodeContext => {
@@ -151,7 +152,7 @@ class SignalPathView extends HTMLElement {
     if (!inst) return {};
     const ctx: NodeContext = {
       hostKey: inst.hostId ?? "",
-      hostLabel: inst.hostId ? this.#hostLabels.get(inst.hostId) || inst.hostId : "lokal",
+      hostLabel: inst.hostId ? this.#hostLabels.get(inst.hostId) || inst.hostId : t("sp.hostLocal"),
       crashed: inst.crashed,
     };
     const ni = this.#net?.instances[inst.id];
@@ -168,11 +169,11 @@ class SignalPathView extends HTMLElement {
   #renderResult() {
     const out = this.querySelector<HTMLElement>("#result")!;
     if (!this.#loaded) {
-      out.innerHTML = `<div class="omp-empty">Lade …</div>`;
+      out.innerHTML = `<div class="omp-empty">${t("sp.loading")}</div>`;
       return;
     }
     if (!this.#from || !this.#to) {
-      out.innerHTML = `<div class="omp-empty">Quelle und Ziel wählen.</div>`;
+      out.innerHTML = `<div class="omp-empty">${t("sp.pick")}</div>`;
       return;
     }
     const q = this.#to.startsWith("rx:")
@@ -180,13 +181,11 @@ class SignalPathView extends HTMLElement {
       : { fromSender: this.#from, toNodeId: this.#to.slice(5), viaNodeId: this.#via || undefined };
     const res = findPaths(this.#graph, q);
     if (res.paths.length === 0) {
-      out.innerHTML = `<div class="omp-empty">Kein Signalweg: Zwischen Quelle und Ziel besteht keine aktive Verbindungskette${
-        this.#via ? " über die gewählte Node" : ""
-      }. Prüfe, ob alle Teilstücke verbunden sind (Flow-Editor).</div>`;
+      out.innerHTML = `<div class="omp-empty">${t(this.#via ? "sp.noPathVia" : "sp.noPath")}</div>`;
       return;
     }
     const blocks = res.paths.map((p, i) => this.#renderPath(p, i, res.paths.length));
-    const more = res.truncated ? `<div style="color:var(--omp-text-dim);">Nur die ersten ${MAX_PATHS} Wege (kürzeste zuerst) werden gezeigt.</div>` : "";
+    const more = res.truncated ? `<div style="color:var(--omp-text-dim);">${t("sp.truncated", { max: MAX_PATHS })}</div>` : "";
     out.innerHTML = blocks.join("") + more;
   }
 
@@ -204,9 +203,9 @@ class SignalPathView extends HTMLElement {
       const outLabel = k < path.length ? path[k].sender.label : "";
       parts.push(`<div data-testid="sp-node" style="border:2px solid ${border(2 * k)};border-radius:var(--omp-radius);background:var(--omp-surface-raised);padding:var(--omp-space-2);min-width:150px;max-width:220px;">
         <div style="font-weight:600;">${esc(n.label)}</div>
-        <div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">${c.hostLabel ? "Host: " + esc(c.hostLabel) : "Host unbekannt"} · ${n.health === "ok" ? "online" : "offline"}</div>
-        ${netDemandText(c) ? `<div style="font-size:var(--omp-font-size-xs);">Netz: ${esc(netDemandText(c))}</div>` : ""}
-        ${c.hostNet?.measured && c.hostNet.linkMbps && netDemandText(c) ? `<div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">Karte: ${(c.hostNet.percent ?? 0).toFixed(0)} % von ${esc(formatMbps(c.hostNet.linkMbps))}</div>` : ""}
+        <div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">${c.hostLabel ? esc(t("sp.host", { host: c.hostLabel })) : t("sp.hostUnknown")} · ${n.health === "ok" ? t("sp.online") : t("sp.offline")}</div>
+        ${netDemandText(c) ? `<div style="font-size:var(--omp-font-size-xs);">${esc(t("sp.net", { demand: netDemandText(c) }))}</div>` : ""}
+        ${c.hostNet?.measured && c.hostNet.linkMbps && netDemandText(c) ? `<div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">${esc(t("sp.card", { percent: (c.hostNet.percent ?? 0).toFixed(0), link: formatMbps(c.hostNet.linkMbps) }))}</div>` : ""}
         ${inLabel ? `<div style="font-size:var(--omp-font-size-xs);">▶ ${esc(inLabel)}</div>` : ""}
         ${outLabel ? `<div style="font-size:var(--omp-font-size-xs);">${esc(outLabel)} ▶</div>` : ""}
         ${at(2 * k).map((i) => `<div style="color:${COLOR[i.severity]};font-size:var(--omp-font-size-xs);">${esc(i.text)}</div>`).join("")}
@@ -223,12 +222,13 @@ class SignalPathView extends HTMLElement {
     });
 
     const verdict = err
-      ? `<span style="color:${COLOR.error};">✖ Erste Fehlerstelle: ${esc(err.text)}</span>`
+      ? `<span style="color:${COLOR.error};">${esc(t("sp.verdict.error", { text: err.text }))}</span>`
       : issues.length
-      ? `<span style="color:${COLOR.warn};">⚠ Signalweg steht, mit Hinweisen</span>`
-      : `<span style="color:${COLOR.ok};">✔ Signalweg in Ordnung</span>`;
+      ? `<span style="color:${COLOR.warn};">${t("sp.verdict.warn")}</span>`
+      : `<span style="color:${COLOR.ok};">${t("sp.verdict.ok")}</span>`;
+    const count = path.length === 1 ? t("sp.connections.one") : t("sp.connections.many", { n: path.length });
     return `<section style="margin-bottom:var(--omp-space-4);">
-      <div style="margin-bottom:var(--omp-space-2);"><strong>${total > 1 ? `Weg ${index + 1} von ${total}` : "Weg"}</strong> · ${path.length} Verbindung${path.length === 1 ? "" : "en"} · ${verdict}</div>
+      <div style="margin-bottom:var(--omp-space-2);"><strong>${total > 1 ? t("sp.pathN", { n: index + 1, total }) : t("sp.path")}</strong> · ${count} · ${verdict}</div>
       <div style="display:flex;flex-wrap:wrap;align-items:stretch;gap:var(--omp-space-1);">${parts.join("")}</div>
     </section>`;
   }

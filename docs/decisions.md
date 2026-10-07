@@ -30326,3 +30326,20 @@ Unterleiste in `admin-view.ts` jetzt zweigeteilt (`ADMIN_SUB_TAB_GROUPS`):
 Plattform (13 Tabs) und Playout (Channels & Trigger, Audio-Ausgabe).
 Tab-IDs/Views unverändert. Nächster Schritt (vereinbart): Mehrsprachigkeit
 Deutsch/Englisch, zuerst Kern (`t()`, Sprachdateien, Nutzerwahl).
+
+## Nachtrag (2026-10-07): Mehrsprachigkeit Deutsch/Englisch — Kern
+
+Entscheidung (Nutzer): Deutsch + Englisch. Kern ohne Fremdbibliothek:
+`ui/shell/i18n.ts` (`t(key, {params})`, `setLang`, `buildLangSelect`),
+Wörterbücher `ui/shell/i18n/de.ts` (Quelle) und `en.ts` (Typ erzwingt
+gleiche Schlüssel; `i18n_test.ts` prüft zusätzlich {Platzhalter} und leere
+Texte). Fallback: Deutsch, dann der Schlüssel. Sprache pro Browser
+(localStorage `omp-lang`, sonst `navigator.language`), Wechsel lädt die Seite
+neu (Views bauen Texte einmalig). Migriert als Muster: Navigationsleiste,
+Verbindungsanzeige/-banner, Nutzer-Widget, Admin-Unterleiste, Signalweg-Tab
+(inkl. Diagnosetexte). **Regel für neuen Code: keine festen Texte, sondern
+Schlüssel in beiden Wörterbüchern.** Offen: übrige Views (Reihenfolge nach
+Sichtbarkeit: Operator-Konsole, Node-UIs, dann Admin-Inhalte), Texte aus
+Server-Fehlermeldungen und Node-Deskriptoren, Node-`bundle.js` (brauchen die
+Sprache vom Orchestrator), Handbücher. Pro-Nutzer-Sprache serverseitig wäre
+eine spätere Erweiterung.

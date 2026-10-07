@@ -28,6 +28,16 @@ Nach erfolgreicher Anmeldung bleibt die Sitzung angemeldet (Token im
 Browser gespeichert), bis auf „Abmelden" geklickt wird oder das Token
 abläuft.
 
+### 1.1 Sprache (Deutsch/English)
+
+Oben rechts (neben der Verbindungsanzeige) und im Nutzer-Widget unten rechts
+wechselt die Auswahl **DE/EN** die Oberfläche; die Seite lädt dabei neu. Die
+Wahl gilt pro Browser, ohne Wahl richtet sich die Sprache nach dem Browser
+(Deutsch, sonst Englisch). **Stand:** Navigationsleiste, Nutzer-Widget,
+Administration (Reiter) und der Tab „Signalweg" sind zweisprachig; alle
+übrigen Ansichten, die Node-Oberflächen und dieses Handbuch sind noch
+deutsch und werden schrittweise umgestellt.
+
 ## 2. Der Flow Editor
 
 Der Flow Editor ist die zentrale Ansicht: links der **Node-Katalog**

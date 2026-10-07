@@ -18,6 +18,7 @@
 // Audit-Log reagiert auf "audit.appended" (neu, audit.go) statt alle
 // paar Sekunden zu pollen. Poll bleibt nur als deutlich langsamerer
 // Reconnect-/Fallback-Pfad (AUDIT_POLL_FALLBACK_INTERVAL_MS).
+import { type I18nKey, t } from "./i18n.ts";
 import "./settings-view.ts";
 import "./playout-admin-view.ts";
 import "./audio-rules-view.ts";
@@ -276,32 +277,32 @@ interface UpdateOverview {
 type AdminTabId = "users" | "organizations" | "groups" | "bindings" | "catalog" | "storage" | "audit" | "diagnose" | "backup" | "update" | "nodeversions" | "settings" | "playout" | "audio" | "cluster";
 // Gruppiert (Nutzerhinweis 2026-10-07): "Playout" und "Audio-Ausgabe" gehören
 // zur Playout-Automation (Kapitel 27), nicht zur allgemeinen Plattform-Verwaltung.
-const ADMIN_SUB_TAB_GROUPS: { id: string; label: string; tabs: { id: AdminTabId; label: string }[] }[] = [
+const ADMIN_SUB_TAB_GROUPS: { id: string; labelKey: I18nKey; tabs: { id: AdminTabId; labelKey: I18nKey }[] }[] = [
   {
     id: "platform",
-    label: "Plattform",
+    labelKey: "admin.group.platform",
     tabs: [
-      { id: "users", label: "Nutzer" },
-      { id: "organizations", label: "Organisationen" },
-      { id: "groups", label: "Gruppen" },
-      { id: "bindings", label: "Rollenbindungen" },
-      { id: "catalog", label: "Node-Katalog" },
-      { id: "nodeversions", label: "Node-Versionen" },
-      { id: "storage", label: "Storage" },
-      { id: "audit", label: "Audit-Log" },
-      { id: "diagnose", label: "Diagnose" },
-      { id: "backup", label: "Backup/Restore" },
-      { id: "update", label: "System-Update" },
-      { id: "settings", label: "Einstellungen" },
-      { id: "cluster", label: "Cluster" },
+      { id: "users", labelKey: "admin.tab.users" },
+      { id: "organizations", labelKey: "admin.tab.organizations" },
+      { id: "groups", labelKey: "admin.tab.groups" },
+      { id: "bindings", labelKey: "admin.tab.bindings" },
+      { id: "catalog", labelKey: "admin.tab.catalog" },
+      { id: "nodeversions", labelKey: "admin.tab.nodeversions" },
+      { id: "storage", labelKey: "admin.tab.storage" },
+      { id: "audit", labelKey: "admin.tab.audit" },
+      { id: "diagnose", labelKey: "admin.tab.diagnose" },
+      { id: "backup", labelKey: "admin.tab.backup" },
+      { id: "update", labelKey: "admin.tab.update" },
+      { id: "settings", labelKey: "admin.tab.settings" },
+      { id: "cluster", labelKey: "admin.tab.cluster" },
     ],
   },
   {
     id: "playout",
-    label: "Playout",
+    labelKey: "admin.group.playout",
     tabs: [
-      { id: "playout", label: "Channels & Trigger" },
-      { id: "audio", label: "Audio-Ausgabe" },
+      { id: "playout", labelKey: "admin.tab.playout" },
+      { id: "audio", labelKey: "admin.tab.audio" },
     ],
   },
 ];
@@ -2388,7 +2389,7 @@ class AdminView extends HTMLElement {
 
     const heading = document.createElement("div");
     heading.style.cssText = "font-weight:700;font-size:var(--omp-font-size-md);margin-bottom:var(--omp-space-3);";
-    heading.textContent = "Administration";
+    heading.textContent = t("admin.title");
     this.appendChild(heading);
 
     if (this.#error) {
@@ -2465,14 +2466,14 @@ class AdminView extends HTMLElement {
       box.setAttribute("data-group", group.id);
       box.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:var(--omp-space-2);";
       const label = document.createElement("span");
-      label.textContent = group.label;
+      label.textContent = t(group.labelKey);
       label.style.cssText =
         "font-size:var(--omp-font-size-xs);text-transform:uppercase;letter-spacing:0.05em;color:var(--omp-text-dim);";
       box.appendChild(label);
       for (const tab of group.tabs) {
         const btn = document.createElement("button");
         btn.type = "button";
-        btn.textContent = tab.label;
+        btn.textContent = t(tab.labelKey);
         btn.setAttribute("data-tab-id", tab.id);
         const isActive = tab.id === this.#activeAdminTab;
         btn.style.cssText =

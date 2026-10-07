@@ -1,4 +1,5 @@
 import { fetchBuildInfo, formatFirmware, formatFirmwareLong } from "./version.ts";
+import { buildLangSelect, t } from "./i18n.ts";
 // Echte Anmeldung (ARCHITECTURE.md §12, UMSETZUNG.md D3 Teil 2) — löst
 // den bisherigen, trivial spoofbaren Stub-Nutzer (X-OMP-Stub-User-Header,
 // s. docs/decisions.md C13/D3 Teil 2) ab. Tokens sind Bearer-Tokens
@@ -204,14 +205,14 @@ export function buildUserWidget(username: string, homeHref?: string): HTMLElemen
     "display:flex;gap:var(--omp-space-2);align-items:center;box-shadow:0 2px 8px rgba(0,0,0,0.3);" +
     "transition:bottom 0.15s ease;";
   const label = document.createElement("span");
-  label.textContent = `Angemeldet als ${username}`;
+  label.textContent = t("auth.loggedInAs", { user: username });
   widget.appendChild(label);
 
   if (homeHref) {
     const homeLink = document.createElement("a");
     homeLink.href = homeHref;
-    homeLink.textContent = "🏠 Workflow wechseln";
-    homeLink.title = "Zurück zur Workflow-Auswahl";
+    homeLink.textContent = t("auth.switchWorkflow");
+    homeLink.title = t("auth.switchWorkflowTitle");
     homeLink.style.cssText =
       "font-size:var(--omp-font-size-xs);padding:2px var(--omp-space-2);text-decoration:none;" +
       "color:var(--omp-text);border:1px solid var(--omp-border);border-radius:var(--omp-radius);";
@@ -219,10 +220,11 @@ export function buildUserWidget(username: string, homeHref?: string): HTMLElemen
   }
 
   const logoutButton = document.createElement("button");
-  logoutButton.textContent = "Abmelden";
+  logoutButton.textContent = t("auth.logout");
   logoutButton.style.cssText = "font-size:var(--omp-font-size-xs);padding:2px var(--omp-space-2);";
   logoutButton.addEventListener("click", logout);
   widget.appendChild(logoutButton);
+  widget.appendChild(buildLangSelect());
 
   const alertBar = document.querySelector("omp-alert-bar");
   if (alertBar) {

@@ -1,5 +1,8 @@
 import { assertEquals } from "jsr:@std/assert";
 import { diagnosePath, findPaths, firstError, linkNetNote, netDemandText, type GraphData, type GraphNode } from "./signal-path-logic.ts";
+import { setLang } from "./i18n.ts";
+
+setLang("de", false);
 
 const V = "urn:x-nmos:format:video";
 const A = "urn:x-nmos:format:audio";

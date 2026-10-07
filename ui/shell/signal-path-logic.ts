@@ -9,6 +9,8 @@
 // jedem Eingang abgeleitet sein kann; der erste Hop ist dagegen portgenau
 // (genau der gewählte Sender).
 
+import { t } from "./i18n.ts";
+
 export interface GraphPort {
   id: string;
   label: string;
@@ -177,21 +179,22 @@ export function linkNetNote(h: Hop, ctx: (nodeId: string) => NodeContext): strin
   const a = ctx(h.fromNode.id);
   const b = ctx(h.toNode.id);
   if (h.sender.transport?.endsWith(":mxl")) {
-    return a.hostKey !== undefined && a.hostKey === b.hostKey ? "lokal, kein Netz" : "";
+    return a.hostKey !== undefined && a.hostKey === b.hostKey ? t("sp.localLink") : "";
   }
-  const t = netDemandText({ netTxMbps: a.netTxMbps, netEstimated: a.netEstimated });
-  return t ? `Netz ${t}` : "";
+  const demand = netDemandText({ netTxMbps: a.netTxMbps, netEstimated: a.netEstimated });
+  return demand ? t("sp.netLink", { demand }) : "";
 }
 
-const FORMAT_NAMES: Record<string, string> = {
-  "urn:x-nmos:format:video": "Video",
-  "urn:x-nmos:format:audio": "Audio",
-  "urn:x-nmos:format:data": "Daten",
-  "urn:x-nmos:format:mux": "Mux",
-};
+const FORMAT_KEYS = {
+  "urn:x-nmos:format:video": "sp.format.video",
+  "urn:x-nmos:format:audio": "sp.format.audio",
+  "urn:x-nmos:format:data": "sp.format.data",
+  "urn:x-nmos:format:mux": "sp.format.mux",
+} as const;
 
 export function formatName(f: string): string {
-  return FORMAT_NAMES[f] ?? (f.split(":").pop() || f);
+  const key = FORMAT_KEYS[f as keyof typeof FORMAT_KEYS];
+  return key ? t(key) : (f.split(":").pop() || f);
 }
 
 export function transportName(t: string | undefined): string {
@@ -205,8 +208,8 @@ export function diagnosePath(path: Hop[], ctx: (nodeId: string) => NodeContext):
   const issues: Issue[] = [];
   const nodes = path.length ? [path[0].fromNode, ...path.map((h) => h.toNode)] : [];
   nodes.forEach((n, k) => {
-    if (n.health !== "ok") issues.push({ severity: "error", position: 2 * k, text: `${n.label} ist offline` });
-    if (ctx(n.id).crashed) issues.push({ severity: "error", position: 2 * k, text: `${n.label} ist abgestürzt` });
+    if (n.health !== "ok") issues.push({ severity: "error", position: 2 * k, text: t("sp.issue.offline", { node: n.label }) });
+    if (ctx(n.id).crashed) issues.push({ severity: "error", position: 2 * k, text: t("sp.issue.crashed", { node: n.label }) });
   });
   nodes.forEach((n, k) => {
     const c = ctx(n.id);
@@ -219,7 +222,7 @@ export function diagnosePath(path: Hop[], ctx: (nodeId: string) => NodeContext):
       issues.push({
         severity: "warn",
         position: 2 * k,
-        text: `Netz: ${netDemandText(c)} — Link-Geschwindigkeit der Karte von ${host} unbekannt, Reserve nicht prüfbar`,
+        text: t("sp.issue.netUnknownLink", { demand: netDemandText(c), host }),
       });
       return;
     }
@@ -227,13 +230,13 @@ export function diagnosePath(path: Hop[], ctx: (nodeId: string) => NodeContext):
       issues.push({
         severity: "error",
         position: 2 * k,
-        text: `Netz: braucht ${netDemandText(c)}, die Karte von ${host} schafft nur ${formatMbps(hn.linkMbps)} je Richtung`,
+        text: t("sp.issue.netTooBig", { demand: netDemandText(c), host, link: formatMbps(hn.linkMbps) }),
       });
     } else if (hn.percent !== undefined && hn.percent >= hn.thresholdPercent) {
       issues.push({
         severity: "error",
         position: 2 * k,
-        text: `Netzkarte von ${host} zu ${hn.percent.toFixed(0)} % belegt (Grenzwert ${hn.thresholdPercent} %)`,
+        text: t("sp.issue.netOverThreshold", { host, percent: hn.percent.toFixed(0), threshold: hn.thresholdPercent }),
       });
     }
   });
@@ -243,14 +246,14 @@ export function diagnosePath(path: Hop[], ctx: (nodeId: string) => NodeContext):
       issues.push({
         severity: "error",
         position: pos,
-        text: `Formate passen nicht: ${formatName(h.sender.format)} → ${formatName(h.receiver.format)}`,
+        text: t("sp.issue.formatMismatch", { from: formatName(h.sender.format), to: formatName(h.receiver.format) }),
       });
     }
     if (h.sender.transport && h.receiver.transport && h.sender.transport !== h.receiver.transport) {
       issues.push({
         severity: "warn",
         position: pos,
-        text: `Transporte unterschiedlich: ${transportName(h.sender.transport)} → ${transportName(h.receiver.transport)}`,
+        text: t("sp.issue.transportDiffers", { from: transportName(h.sender.transport), to: transportName(h.receiver.transport) }),
       });
     }
     const a = ctx(h.fromNode.id).hostKey;
@@ -259,7 +262,7 @@ export function diagnosePath(path: Hop[], ctx: (nodeId: string) => NodeContext):
       issues.push({
         severity: "error",
         position: pos,
-        text: "MXL ist host-lokal, Quelle und Ziel liegen auf verschiedenen Hosts (Gateway nötig)",
+        text: t("sp.issue.mxlAcrossHosts"),
       });
     }
   });
@@ -283,7 +286,7 @@ export function targetOptions(g: GraphData): { value: string; label: string }[] 
   const out: { value: string; label: string }[] = [];
   for (const n of g.nodes) {
     if (!n.inputs.length) continue;
-    out.push({ value: `node:${n.id}`, label: `${n.label} (jeder Eingang)` });
+    out.push({ value: `node:${n.id}`, label: t("sp.anyInput", { node: n.label }) });
     for (const p of n.inputs) out.push({ value: `rx:${p.id}`, label: `${n.label} › ${p.label}` });
   }
   return out.sort((a, b) => a.label.localeCompare(b.label, "de"));
