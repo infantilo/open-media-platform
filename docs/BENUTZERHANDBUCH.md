@@ -1031,7 +1031,8 @@ PAN, AUX, AUTOMIX, DUCK, AUTOMATION, SZENEN).
 - **Bereiche der Konsole (Kap. 32)**: Die Oberfläche ist in zwei klar getrennte Bereiche gegliedert —
   **EINGÄNGE** (Kanäle, bei Bedarf je Mischgruppe oder „Nach Quelle“ gruppiert; Knöpfe „Nach Quelle“,
   „Ausgabegruppen“, „+ Kanal“ in der Kopfzeile des Bereichs) und darunter **AUSGÄNGE** mit einem
-  Streifen je Ausgang: **Programm** (Pegelanzeige, Limiter oben rechts), **Gruppen-Busse** (orange,
+  Streifen je Ausgang (zwischen beiden liegt, sobald Mischgruppen existieren, der Bereich **GRUPPEN** in Violett
+  mit Gruppen-Fader, Mute und AutoMix-Hinweis je Mischgruppe): **Programm** (Pegelanzeige, Limiter oben rechts), **Gruppen-Busse** (orange,
   z. B. „5.1 · Gruppe“), **Aux** (blau) und **N-1** (violett), jeweils mit Pegelanzeige, Ausgangs-Fader,
   Mute und Entfernen. Klick auf den Namen öffnet die Routing-Matrix, Doppelklick benennt um.
 - **Neuen Ausgang anlegen**: Am Ende des Bereichs AUSGÄNGE steht die Karte **+ Neuer Ausgang**: Namen

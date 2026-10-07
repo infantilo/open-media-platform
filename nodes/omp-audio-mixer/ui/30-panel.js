@@ -222,7 +222,8 @@ button{cursor:pointer}
 .stage .channels{max-height:none;overflow:visible;min-height:0}
 .sec{padding:0 0 6px}.sec-out{border-top:3px solid var(--c-border);margin-top:6px;background:linear-gradient(#ffffff08,transparent 60px)}
 .sechead{display:flex;align-items:center;gap:10px;padding:8px 12px 0}.sechead h2{margin:0;font-size:13px;letter-spacing:.12em;text-transform:uppercase}
-.sec-in .sechead h2{color:var(--c-air)}.sec-out .sechead h2{color:#e0a04a}
+.sec-in .sechead h2{color:var(--c-air)}.sec-grp{border-top:3px solid var(--c-border);margin-top:6px}.sec-grp .sechead h2{color:#b07ae0}
+.ch.out.grp{border-top:3px solid #b07ae0;border-color:#b07ae055}.ch.out.grp .grpfill{visibility:hidden}.sec-out .sechead h2{color:#e0a04a}
 .ch.out{border-color:#e0a04a55}.ch.out[data-kind=group]{border-top:3px solid #e0a04a}.ch.out[data-kind=aux]{border-top:3px solid #5aa9e6}.ch.out[data-kind=n1]{border-top:3px solid #b07ae0}.ch.out.prog{border-top:3px solid var(--c-air)}
 .ch.out.prog .progfill{visibility:hidden}
 .b.outkind{border-color:var(--c-border);color:var(--c-dim)}
@@ -374,8 +375,12 @@ class MixerApp {
     this.newOut = buildNewOutputCard(this);
     const secHead = (title, sub, ...btns) => h("header", { class: "sechead" }, h("h2", { text: title }), h("span", { class: "hint", text: sub }), h("span", { class: "spacer" }), ...btns);
     this.secIn = h("div", { class: "sec sec-in" }, secHead("Eingänge", "Kanäle · Mischgruppen", this.srcBtn, this.groupBtn, this.addBtn), this.channelsEl);
+    this.groupsEl = h("section", { class: "channels grps", "aria-label": "Mischgruppen" });
+    this.grpStrips = new Map();
+    this.secGrp = h("div", { class: "sec sec-grp" }, secHead("Gruppen", "Mischgruppen: Gruppen-Fader · Mute · AutoMix"), this.groupsEl);
+    this.secGrp.hidden = true;
     this.secOut = h("div", { class: "sec sec-out" }, secHead("Ausgänge", "Programm · Gruppen-Busse · Aux / N-1", this.outBtn), this.outputsEl, this.newOut.root);
-    this.stage = h("div", { class: "stage" }, this.secIn, this.secOut);
+    this.stage = h("div", { class: "stage" }, this.secIn, this.secGrp, this.secOut);
     this.centerHost = h("aside", { class: "center", "aria-label": "Center Control" });
     this.live_ = h("div", { class: "sr", role: "status", "aria-live": "polite" });
     this.body = h("div", { class: "body" }, this.stage, this.centerHost);
@@ -471,7 +476,9 @@ class MixerApp {
     // Mindestbreite je Zelle: lieber Spalten reduzieren, als Elemente zu verkleinern.
     const min = { grid: 128, gridf: 150, touch: 170, touchf: 190, dense: 128 }[v] || 128;
     this.channelsEl.style.setProperty("--cell-min", min + "px");
-    for (const k of ["variant", "faders", "meter"]) this.outputsEl.dataset[k] = this.channelsEl.dataset[k];
+    for (const k of ["variant", "faders", "meter"]) { this.outputsEl.dataset[k] = this.channelsEl.dataset[k]; this.groupsEl.dataset[k] = this.channelsEl.dataset[k]; }
+    this.groupsEl.style.setProperty("--cols", this.channelsEl.style.getPropertyValue("--cols"));
+    this.groupsEl.style.setProperty("--cell-min", min + "px");
     this.outputsEl.style.setProperty("--cols", this.channelsEl.style.getPropertyValue("--cols"));
     this.outputsEl.style.setProperty("--cell-min", min + "px");
     this.variantKey = this.variantSig();
@@ -511,6 +518,7 @@ class MixerApp {
       this.renderChannels(true);
     } else this.updateChannels();
     this.renderScenes();
+    this.renderGroups();
     this.renderOutputs();
     if (this.outputs && this.outputs.isOpen) this.outputs.render();
     this.updateMasterUi();
@@ -614,6 +622,20 @@ class MixerApp {
   openOutputs() {
     this.outputs = this.outputs || new OutputsDialog(this);
     this.outputs.open();
+  }
+  /** Gruppen-Sektion: ein Streifen je Mischgruppe (nur sichtbar, wenn Gruppen existieren). */
+  renderGroups() {
+    const gs = this.state.groups;
+    this.secGrp.hidden = !gs.length;
+    const ids = new Set(gs.map((g) => g.id));
+    for (const [id, v] of this.grpStrips) if (!ids.has(id)) { v.root.remove(); this.grpStrips.delete(id); }
+    for (const g of gs) if (!this.grpStrips.has(g.id)) this.grpStrips.set(g.id, new GroupStrip(this, g));
+    for (const g of gs) this.grpStrips.get(g.id).update(g, this.state.channels.filter((c) => c.group === g.id).length);
+    const sig = gs.map((g) => g.id).join(",");
+    if (this.grpSig !== sig) {
+      this.grpSig = sig;
+      this.groupsEl.replaceChildren(h("div", { class: "group" }, h("div", { class: "gbody" }, ...gs.map((g) => this.grpStrips.get(g.id).root))));
+    }
   }
   /** Ausgangs-Sektion: Programm-Streifen + je Ausgang ein Streifen (Gruppen-Busse, dann Aux, dann N-1). */
   renderOutputs() {

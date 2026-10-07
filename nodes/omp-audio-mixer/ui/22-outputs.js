@@ -77,6 +77,34 @@ class OutputStrip {
   }
 }
 
+/** Mischgruppen-Streifen (Gruppen-Fader + Mute der AutoMix-/Mischgruppen), Kap. 32.4. */
+class GroupStrip {
+  constructor(app, g) {
+    this.app = app;
+    this.id = g.id;
+    this.root = h("div", { class: "ch out grp", "data-kind": "mixgroup", role: "group" });
+    this.nameBtn = h("button", { class: "name", type: "button", title: "Gruppe: Details" });
+    this.nameBtn.addEventListener("click", () => { const f = app.state.channels.find((c) => c.group === this.id); if (f) { app.ui.centerTab = "auto"; app.center.setTab("auto"); app.select(f.id, { open: true }); } });
+    this.kind = h("span", { class: "b outkind" });
+    this.fader = new Fader({
+      label: "Gruppenpegel",
+      onInput: (db) => { const x = app.state.groups.find((y) => y.id === this.id); if (x) x.gainDb = db; app.touchedAt = performance.now(); app.sendNow(`group.${this.id}.setGain`, { db }, "gg" + this.id); },
+      onCommit: () => app.setGainCommit(),
+    });
+    this.muteBtn = h("button", { class: "tog mute", type: "button", "aria-pressed": "false", title: "Gruppe stumm" }, h("span", { class: "s", text: "M" }), h("span", { class: "l", text: "MUTE" }));
+    this.muteBtn.addEventListener("click", () => { const x = app.state.groups.find((y) => y.id === this.id); if (x) app.cmd(`group.${this.id}.setMute`, { muted: !x.mute }).then(() => app.poll()); });
+    this.root.append(h("div", { class: "chead" }, this.nameBtn), h("div", { class: "badges" }, this.kind), h("div", { class: "meterwrap grpfill" }), this.fader.root, h("div", { class: "btns" }, this.muteBtn));
+  }
+  update(g, members) {
+    this.nameBtn.textContent = g.label;
+    this.kind.textContent = `${members} Kanäle${g.autoMixEnabled ? " · AutoMix" : ""}`;
+    this.fader.setValue(g.gainDb);
+    this.muteBtn.setAttribute("aria-pressed", String(!!g.mute));
+    this.root.dataset.muted = g.mute ? "1" : "0";
+    this.root.setAttribute("aria-label", `Gruppe ${g.label}`);
+  }
+}
+
 /** Inline-Karte „+ Neuer Ausgang“ am Ende der Ausgangs-Sektion. */
 function buildNewOutputCard(app) {
   const name = h("input", { class: "text-input", type: "text", placeholder: "Name, z. B. Hauptton", "aria-label": "Name des neuen Ausgangs", maxlength: "30" });
