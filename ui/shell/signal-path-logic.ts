@@ -9,7 +9,7 @@
 // jedem Eingang abgeleitet sein kann; der erste Hop ist dagegen portgenau
 // (genau der gewählte Sender).
 
-import { t } from "./i18n.ts";
+import { getLang, t } from "./i18n.ts";
 
 export interface GraphPort {
   id: string;
@@ -278,7 +278,7 @@ export function firstError(issues: Issue[]): Issue | null {
 export function senderOptions(g: GraphData): { id: string; label: string }[] {
   const out: { id: string; label: string }[] = [];
   for (const n of g.nodes) for (const p of n.outputs) out.push({ id: p.id, label: `${n.label} › ${p.label}` });
-  return out.sort((a, b) => a.label.localeCompare(b.label, "de"));
+  return out.sort((a, b) => a.label.localeCompare(b.label, getLang()));
 }
 
 /** Auswahlliste für das Ziel: "Node (jeder Eingang)" und je Receiver-Port. */
@@ -289,9 +289,9 @@ export function targetOptions(g: GraphData): { value: string; label: string }[] 
     out.push({ value: `node:${n.id}`, label: t("sp.anyInput", { node: n.label }) });
     for (const p of n.inputs) out.push({ value: `rx:${p.id}`, label: `${n.label} › ${p.label}` });
   }
-  return out.sort((a, b) => a.label.localeCompare(b.label, "de"));
+  return out.sort((a, b) => a.label.localeCompare(b.label, getLang()));
 }
 
 export function nodeOptions(g: GraphData): { id: string; label: string }[] {
-  return g.nodes.map((n) => ({ id: n.id, label: n.label })).sort((a, b) => a.label.localeCompare(b.label, "de"));
+  return g.nodes.map((n) => ({ id: n.id, label: n.label })).sort((a, b) => a.label.localeCompare(b.label, getLang()));
 }

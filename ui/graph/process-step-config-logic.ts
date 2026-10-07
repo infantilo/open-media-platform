@@ -17,6 +17,7 @@
 // Alle Ausgabe-/Konfigurationsfelder spiegeln orchestrator/internal/
 // process/executors.go (Config-Structs, Output-Formen) — bei Änderungen
 // dort hier mitziehen.
+import { t as tt } from "../shell/i18n.ts";
 import type { DraftDefinition, DraftStep, RetryPolicy } from "./process-editor-logic.ts";
 
 // ---- Schritt-Typ-Metadaten --------------------------------------------------------------------
@@ -28,23 +29,23 @@ export interface StepTypeInfo {
 }
 
 export const STEP_TYPE_INFO: Record<string, StepTypeInfo> = {
-  media_function: { label: "Node-Funktion", group: "action", help: "Ruft eine Funktion eines laufenden Microservice auf (z. B. Aufnahme starten, Grafik zeigen)." },
-  service_call: { label: "Web-Aufruf (HTTP)", group: "action", help: "Ruft eine Web-Adresse auf (REST-API eines anderen Systems)." },
-  script: { label: "Datei-Werkzeug (ffmpeg)", group: "action", help: "Führt ein freigegebenes Werkzeug wie ffmpeg/ffprobe aus — z. B. Proxy erzeugen, Metadaten auslesen." },
-  notification: { label: "Benachrichtigung", group: "action", help: "Sendet eine Nachricht auf den Ereignisbus, auf die andere Systeme reagieren können." },
-  subworkflow: { label: "Unterprozess", group: "action", help: "Startet einen anderen Prozess und wartet, bis er fertig ist." },
-  condition: { label: "Wenn … dann", group: "flow", help: "Prüft eine Regel und verzweigt in einen Ja- oder Nein-Weg." },
-  branch: { label: "Verteiler (mehrere Fälle)", group: "flow", help: "Prüft mehrere Regeln der Reihe nach und nimmt den Weg des ersten zutreffenden Falls." },
-  parallel: { label: "Parallel aufteilen", group: "flow", help: "Startet alle verbundenen Folgeschritte gleichzeitig." },
-  join: { label: "Zusammenführen", group: "flow", help: "Wartet, bis alle eingehenden Wege angekommen sind." },
-  wait: { label: "Warten", group: "flow", help: "Pausiert den Ablauf für eine feste Zeit." },
-  timer: { label: "Timer", group: "flow", help: "Wie „Warten“: läuft nach Ablauf der Zeit weiter." },
-  human_task: { label: "Aufgabe für Person", group: "human", help: "Legt eine Aufgabe an, die eine Person erledigen muss, bevor es weitergeht." },
-  approval: { label: "Freigabe", group: "human", help: "Eine Person gibt frei, lehnt ab oder fordert Änderungen an — je Ergebnis ein eigener Weg." },
-  task: { label: "Task (generisch)", group: "action", help: "Platzhalter ohne eingebaute Ausführung." },
-  loop: { label: "Schleife", group: "flow", help: "Noch nicht ausführbar." },
-  event_trigger: { label: "Auf Ereignis warten", group: "flow", help: "Noch nicht ausführbar — Prozess-Start durch Ereignisse über „Auslöser“ in der Werkzeugleiste." },
-  compensation: { label: "Kompensation", group: "action", help: "Noch nicht ausführbar." },
+  media_function: { label: tt("pscl.edf89b"), group: "action", help: tt("pscl.3ec2a9") },
+  service_call: { label: tt("pscl.252f47"), group: "action", help: tt("pscl.be6156") },
+  script: { label: tt("pscl.ba264e"), group: "action", help: tt("pscl.50dc19") },
+  notification: { label: tt("pscl.490ba3"), group: "action", help: tt("pscl.6b7645") },
+  subworkflow: { label: tt("pscl.9da01f"), group: "action", help: tt("pscl.96a4f7") },
+  condition: { label: tt("pscl.ae59d5"), group: "flow", help: tt("pscl.1a789c") },
+  branch: { label: tt("pscl.a6e3cb"), group: "flow", help: tt("pscl.29f701") },
+  parallel: { label: tt("pscl.755c8f"), group: "flow", help: tt("pscl.6f5185") },
+  join: { label: tt("pscl.834ac6"), group: "flow", help: tt("pscl.c8f0b4") },
+  wait: { label: tt("pscl.f152a5"), group: "flow", help: tt("pscl.402c2d") },
+  timer: { label: tt("pscl.efb477"), group: "flow", help: tt("pscl.534969") },
+  human_task: { label: tt("pscl.4ca08f"), group: "human", help: tt("pscl.774c40") },
+  approval: { label: tt("pscl.c947f6"), group: "human", help: tt("pscl.5f3043") },
+  task: { label: tt("pscl.e4fa94"), group: "action", help: tt("pscl.8faa35") },
+  loop: { label: tt("pscl.6c5de6"), group: "flow", help: tt("pscl.2b4ae5") },
+  event_trigger: { label: tt("pscl.3727f6"), group: "flow", help: tt("pscl.dcc732") },
+  compensation: { label: tt("pscl.cec559"), group: "action", help: tt("pscl.2b4ae5") },
 };
 
 export function stepTypeLabel(type: string): string {
@@ -62,28 +63,28 @@ export function outputFieldsFor(step: DraftStep): OutputField[] {
   switch (step.type) {
     case "service_call":
       return [
-        { path: "status", label: "HTTP-Status (z. B. 200)" },
-        { path: "body", label: "Antwort (Inhalt)" },
+        { path: "status", label: tt("pscl.3e9f80") },
+        { path: "body", label: tt("pscl.f385d3") },
       ];
     case "script":
       return [
-        { path: "exitCode", label: "Exit-Code (0 = ok)" },
-        { path: "stdout", label: "Ausgabe (stdout)" },
-        { path: "stderr", label: "Fehlerausgabe (stderr)" },
+        { path: "exitCode", label: tt("pscl.0d3958") },
+        { path: "stdout", label: tt("pscl.b65498") },
+        { path: "stderr", label: tt("pscl.daeec0") },
       ];
     case "human_task":
     case "approval":
       return [
-        { path: "decision", label: "Entscheidung" },
-        { path: "comment", label: "Kommentar" },
-        { path: "assignee", label: "Bearbeitet von" },
+        { path: "decision", label: tt("pscl.7c0760") },
+        { path: "comment", label: tt("pscl.cd0559") },
+        { path: "assignee", label: tt("pscl.9d885e") },
       ];
     case "condition":
     case "branch":
-      return [{ path: "decision", label: "Gewählter Weg" }];
+      return [{ path: "decision", label: tt("pscl.6cf0a2") }];
     case "media_function":
     case "subworkflow":
-      return [{ path: "", label: "Ergebnis (gesamt)" }];
+      return [{ path: "", label: tt("pscl.2f0304") }];
     default:
       return [];
   }
@@ -102,57 +103,57 @@ export interface TriggerKind {
 // Subject "omp.asset.<assetId>.<event>"). Status-Wechsel veröffentlichen
 // den NEUEN Status als Event-Namen.
 const ASSET_STATUS_EVENT_FIELDS: OutputField[] = [
-  { path: "assetId", label: "Asset-ID" },
-  { path: "status", label: "Neuer Status" },
-  { path: "updatedBy", label: "Geändert von" },
+  { path: "assetId", label: tt("pscl.8c7a60") },
+  { path: "status", label: tt("pscl.406438") },
+  { path: "updatedBy", label: tt("pscl.06464c") },
 ];
 
 export function triggerKinds(assetStatuses: string[], statusLabel: (s: string) => string): TriggerKind[] {
   const kinds: TriggerKind[] = [
     {
       id: "asset.created",
-      label: "Asset wurde angelegt",
+      label: tt("pscl.a405eb"),
       subject: "omp.asset.*.created",
       inputFields: [
-        { path: "id", label: "Asset-ID" },
-        { path: "title", label: "Titel" },
-        { path: "type", label: "Typ" },
+        { path: "id", label: tt("pscl.8c7a60") },
+        { path: "title", label: tt("pscl.18a802") },
+        { path: "type", label: tt("pscl.c2ea84") },
       ],
     },
     {
       id: "asset.metadata_updated",
-      label: "Asset-Metadaten wurden geändert",
+      label: tt("pscl.e94273"),
       subject: "omp.asset.*.metadata_updated",
       inputFields: [
-        { path: "assetId", label: "Asset-ID" },
-        { path: "updatedBy", label: "Geändert von" },
+        { path: "assetId", label: tt("pscl.8c7a60") },
+        { path: "updatedBy", label: tt("pscl.06464c") },
       ],
     },
     {
       id: "asset.version_created",
-      label: "Asset-Version wurde angelegt",
+      label: tt("pscl.481861"),
       subject: "omp.asset.*.version_created",
       inputFields: [
-        { path: "id", label: "Versions-ID" },
-        { path: "assetId", label: "Asset-ID" },
-        { path: "versionNumber", label: "Versionsnummer" },
+        { path: "id", label: tt("pscl.3ef4be") },
+        { path: "assetId", label: tt("pscl.8c7a60") },
+        { path: "versionNumber", label: tt("pscl.668bfa") },
       ],
     },
     {
       id: "asset.version_published",
-      label: "Asset-Version wurde veröffentlicht",
+      label: tt("pscl.f87cf1"),
       subject: "omp.asset.*.version_published",
       inputFields: [
-        { path: "assetId", label: "Asset-ID" },
-        { path: "assetVersionId", label: "Versions-ID" },
-        { path: "versionNumber", label: "Versionsnummer" },
+        { path: "assetId", label: tt("pscl.8c7a60") },
+        { path: "assetVersionId", label: tt("pscl.3ef4be") },
+        { path: "versionNumber", label: tt("pscl.668bfa") },
       ],
     },
   ];
   for (const st of assetStatuses) {
     kinds.push({
       id: `asset.status.${st}`,
-      label: `Asset wechselt auf „${statusLabel(st)}“`,
+      label: tt("pscl.e1ed1e", { p0: statusLabel(st) }),
       subject: `omp.asset.*.${st}`,
       inputFields: ASSET_STATUS_EVENT_FIELDS,
     });
@@ -208,7 +209,7 @@ export function variableOptions(def: DraftDefinition, stepId: string, triggerFie
   for (const f of triggerFields) {
     if (seenInput.has(f.path)) continue;
     seenInput.add(f.path);
-    out.push({ path: member("input", f.path), label: f.label, group: "Start-Eingabe / auslösendes Ereignis" });
+    out.push({ path: member("input", f.path), label: f.label, group: tt("pscl.cedbae") });
   }
   for (const id of ancestorsOf(def, stepId)) {
     const step = def.steps.find((s) => s.id === id)!;
@@ -217,14 +218,14 @@ export function variableOptions(def: DraftDefinition, stepId: string, triggerFie
       out.push({
         path: f.path ? member(member("outputs", id), f.path) : member("outputs", id),
         label: f.label,
-        group: `Ergebnis von „${name}“ (${stepTypeLabel(step.type)})`,
+        group: tt("pscl.0ac1be", { p0: name, p1: stepTypeLabel(step.type) }),
       });
     }
   }
   out.push(
-    { path: "workflow.executionId", label: "ID dieses Prozesslaufs", group: "Prozesslauf" },
-    { path: "workflow.correlationId", label: "Korrelations-ID", group: "Prozesslauf" },
-    { path: "workflow.retryCount", label: "Anzahl bisheriger Wiederholungen", group: "Prozesslauf" },
+    { path: "workflow.executionId", label: tt("pscl.b74155"), group: tt("pscl.5657ea") },
+    { path: "workflow.correlationId", label: tt("pscl.44923c"), group: tt("pscl.5657ea") },
+    { path: "workflow.retryCount", label: tt("pscl.a65a49"), group: tt("pscl.5657ea") },
   );
   return out;
 }
@@ -238,14 +239,14 @@ export function insertionText(path: string, mode: "template" | "expression"): st
 // ---- Regel-Baukasten für Bedingungen ----------------------------------------------------------
 
 export const RULE_OPERATORS: { op: string; label: string }[] = [
-  { op: "==", label: "ist gleich" },
-  { op: "!=", label: "ist nicht gleich" },
-  { op: ">", label: "ist größer als" },
-  { op: ">=", label: "ist mindestens" },
-  { op: "<", label: "ist kleiner als" },
-  { op: "<=", label: "ist höchstens" },
-  { op: "contains", label: "enthält" },
-  { op: "startsWith", label: "beginnt mit" },
+  { op: "==", label: tt("pscl.4ef614") },
+  { op: "!=", label: tt("pscl.d83ad5") },
+  { op: ">", label: tt("pscl.7b8174") },
+  { op: ">=", label: tt("pscl.a113df") },
+  { op: "<", label: tt("pscl.d2c8f8") },
+  { op: "<=", label: tt("pscl.c64548") },
+  { op: "contains", label: tt("pscl.a4aaeb") },
+  { op: "startsWith", label: tt("pscl.460b70") },
 ];
 
 export interface Rule {
@@ -309,16 +310,16 @@ export function branchLabelsFor(step: DraftStep | undefined): string[] {
 export const DECISION_LABELS: Record<string, string> = {
   approved: "freigegeben",
   rejected: "abgelehnt",
-  changes_requested: "Änderungen angefordert",
+  changes_requested: tt("pscl.dd578a"),
   true: "Ja",
-  false: "Nein",
+  false: tt("pscl.b397ec"),
 };
 
 // ---- Dauern (Wartezeit/Timeout/Retry) ---------------------------------------------------------
 
 export type TimeUnit = "s" | "m" | "h";
 export const UNIT_SECONDS: Record<TimeUnit, number> = { s: 1, m: 60, h: 3600 };
-export const UNIT_LABEL: Record<TimeUnit, string> = { s: "Sekunden", m: "Minuten", h: "Stunden" };
+export const UNIT_LABEL: Record<TimeUnit, string> = { s: tt("pscl.847202"), m: tt("pscl.2006ff"), h: tt("pscl.f45588") };
 
 // Größte glatte Einheit für die Anzeige (90 → 90 s, 120 → 2 min).
 export function splitSeconds(total: number | undefined): { value: string; unit: TimeUnit } {
@@ -356,8 +357,8 @@ export function formatGoDuration(seconds: number): string {
 }
 
 export function describeRetry(r: RetryPolicy | undefined): string {
-  if (!r || r.maxAttempts <= 1) return "keine Wiederholung";
-  return `bis zu ${r.maxAttempts} Versuche, ${r.backoff === "exponential" ? "zunehmender" : "gleicher"} Abstand`;
+  if (!r || r.maxAttempts <= 1) return tt("pscl.5f5c5a");
+  return tt("pscl.616a18", { p0: r.maxAttempts, p1: r.backoff === "exponential" ? "zunehmender" : "gleicher" });
 }
 
 // ---- Script-Vorlagen (ffmpeg/ffprobe) ---------------------------------------------------------
@@ -376,28 +377,28 @@ export interface ScriptTemplate {
 export const SCRIPT_TEMPLATES: ScriptTemplate[] = [
   {
     id: "probe",
-    label: "Technische Metadaten auslesen",
+    label: tt("pscl.b987ca"),
     command: "ffprobe",
     args: ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", "${input.path}"],
-    help: "Liefert Codec, Auflösung, Dauer usw. als JSON im Ergebnis-Feld „Ausgabe (stdout)“.",
+    help: tt("pscl.4b6338"),
   },
   {
     id: "proxy",
-    label: "Proxy erzeugen (H.264, 960 px breit)",
+    label: tt("pscl.ebf39e"),
     command: "ffmpeg",
     args: ["-y", "-i", "${input.path}", "-vf", "scale=960:-2", "-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-c:a", "aac", "-b:a", "128k", "${input.proxyPath}"],
-    help: "Kleine Sichtungskopie der Quelldatei.",
+    help: tt("pscl.71816a"),
   },
   {
     id: "thumbnail",
-    label: "Vorschaubild erzeugen",
+    label: tt("pscl.e0f287"),
     command: "ffmpeg",
     args: ["-y", "-ss", "00:00:05", "-i", "${input.path}", "-frames:v", "1", "-vf", "scale=480:-2", "${input.thumbnailPath}"],
-    help: "Einzelbild bei Sekunde 5, 480 px breit.",
+    help: tt("pscl.5ad538"),
   },
   {
     id: "audio",
-    label: "Tonspur als WAV extrahieren",
+    label: tt("pscl.e33f6d"),
     command: "ffmpeg",
     args: ["-y", "-i", "${input.path}", "-vn", "-c:a", "pcm_s24le", "-ar", "48000", "${input.audioPath}"],
     help: "48 kHz / 24 Bit PCM.",
@@ -434,22 +435,22 @@ export interface ScriptIntent {
 }
 
 export const SCRIPT_INTENTS: ScriptIntent[] = [
-  { id: "probe", label: "Technische Metadaten auslesen", help: "Liefert Codec, Auflösung, Dauer usw. als JSON im Ergebnis-Feld „Ausgabe (stdout)“." },
-  { id: "thumbnail", label: "Vorschaubild erzeugen", help: "Einzelbild aus einem Video, z. B. für eine Vorschaukachel." },
-  { id: "convert", label: "Format/Codec konvertieren", help: "Container, Video-/Audio-Codec und deren Einstellungen frei wählen — mit echten erlaubten Werten und Hilfetexten von diesem Server. Enthält auch die grafische Audio-Matrix und den Filter-Graph-Builder." },
-  { id: "extract_audio", label: "Tonspur extrahieren", help: "Nur den Ton einer Datei speichern, mit frei wählbarem Audio-Codec." },
-  { id: "concat", label: "Clips aneinanderhängen (Schnittliste)", help: "Mehrere Dateien in einer festgelegten Reihenfolge zu einer Ausgabedatei zusammenfügen — je Clip optional mit Start-/End-Beschnitt." },
-  { id: "overlay", label: "Overlay/Senderkennung/Abspann zeitgesteuert einblenden", help: "Text (z. B. Bauchbinde, Abspann-Credits) oder ein Bild (z. B. Senderlogo) zu festgelegten Zeiten über das Video legen." },
+  { id: "probe", label: tt("pscl.b987ca"), help: tt("pscl.4b6338") },
+  { id: "thumbnail", label: tt("pscl.e0f287"), help: tt("pscl.272a13") },
+  { id: "convert", label: tt("pscl.44038d"), help: tt("pscl.fef9af") },
+  { id: "extract_audio", label: tt("pscl.1d7d40"), help: tt("pscl.7faa8d") },
+  { id: "concat", label: tt("pscl.b1e82a"), help: tt("pscl.8f2c02") },
+  { id: "overlay", label: tt("pscl.02bf41"), help: tt("pscl.ca9a47") },
   {
     id: "loudnorm",
-    label: "Lautheit normalisieren (EBU R128)",
-    help: "Tonspur auf eine Ziel-Lautheit (LUFS) bringen, z. B. für Sendeabnahme (-23 LUFS) oder Streaming-Plattformen. Einpass-Verfahren — für eine noch präzisere Zweipass-Messung den Experten-Modus nutzen.",
+    label: tt("pscl.c974f8"),
+    help: tt("pscl.7cfc14"),
   },
-  { id: "remux_copy", label: "Verlustfreier Passthrough/Remux (Container wechseln)", help: "Container wechseln ohne Neukodierung (Stream-Copy) — schnell, aber nur zwischen kompatiblen Containern/Codecs möglich." },
+  { id: "remux_copy", label: tt("pscl.eee8e9"), help: tt("pscl.853c91") },
   {
     id: "hls_ladder",
-    label: "Streaming-Ausgabeleiter (Multi-Bitrate HLS)",
-    help: "Mehrere Auflösungen/Bitraten gleichzeitig als HLS-Ausgabeleiter (Master-Playlist + je Rendition ein Unterordner) — für adaptives Streaming in Web-/App-Playern.",
+    label: tt("pscl.dcd50a"),
+    help: tt("pscl.9e4fd7"),
   },
 ];
 
@@ -560,10 +561,10 @@ export const GENERIC_SCRIPT_TASKS: GenericScriptTask[] = [
   {
     id: "probe",
     command: "ffprobe",
-    fields: [{ kind: "template-text", id: "inputPath", label: "Zu prüfende Datei", required: true, defaultValue: "${input.path}" }],
+    fields: [{ kind: "template-text", id: "inputPath", label: tt("pscl.be80be"), required: true, defaultValue: "${input.path}" }],
     toArgs: (v) => {
       const p = v.scalars.inputPath?.trim();
-      if (!p) return { ok: false, error: "Zu prüfende Datei fehlt." };
+      if (!p) return { ok: false, error: tt("pscl.7d7927") };
       return { ok: true, args: buildProbeArgs({ inputPath: p }) };
     },
   },
@@ -571,17 +572,17 @@ export const GENERIC_SCRIPT_TASKS: GenericScriptTask[] = [
     id: "thumbnail",
     command: "ffmpeg",
     fields: [
-      { kind: "template-text", id: "inputPath", label: "Eingabedatei", required: true, defaultValue: "${input.path}" },
-      { kind: "template-text", id: "outputPath", label: "Ausgabedatei (Bild)", required: true, defaultValue: "${input.thumbnailPath}" },
-      { kind: "text", id: "atTime", label: "Zeitpunkt im Video", defaultValue: "00:00:05", placeholder: "hh:mm:ss", help: "hh:mm:ss, z. B. 00:00:05." },
-      { kind: "text", id: "widthPixels", label: "Breite in Pixeln", defaultValue: "480", placeholder: "Pixel", numeric: true, help: "Höhe wird proportional berechnet." },
+      { kind: "template-text", id: "inputPath", label: tt("pscl.7ddbbe"), required: true, defaultValue: "${input.path}" },
+      { kind: "template-text", id: "outputPath", label: tt("pscl.70f1da"), required: true, defaultValue: "${input.thumbnailPath}" },
+      { kind: "text", id: "atTime", label: tt("pscl.a0ef65"), defaultValue: "00:00:05", placeholder: "hh:mm:ss", help: "hh:mm:ss, z. B. 00:00:05." },
+      { kind: "text", id: "widthPixels", label: tt("pscl.86b066"), defaultValue: "480", placeholder: tt("pscl.08822b"), numeric: true, help: tt("pscl.969a03") },
     ],
     toArgs: (v) => {
       const p = v.scalars.inputPath?.trim();
       const o = v.scalars.outputPath?.trim();
       const w = Number(v.scalars.widthPixels);
-      if (!p || !o) return { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." };
-      if (!Number.isFinite(w) || w <= 0) return { ok: false, error: "Breite: keine gültige Zahl." };
+      if (!p || !o) return { ok: false, error: tt("pscl.9205c3") };
+      if (!Number.isFinite(w) || w <= 0) return { ok: false, error: tt("pscl.f6dd2b") };
       return { ok: true, args: buildThumbnailArgs({ inputPath: p, outputPath: o, atTime: v.scalars.atTime?.trim() || "00:00:05", widthPixels: w }) };
     },
   },
@@ -589,14 +590,14 @@ export const GENERIC_SCRIPT_TASKS: GenericScriptTask[] = [
     id: "extract_audio",
     command: "ffmpeg",
     fields: [
-      { kind: "template-text", id: "inputPath", label: "Eingabedatei", required: true, defaultValue: "${input.path}" },
-      { kind: "template-text", id: "outputPath", label: "Ausgabedatei", required: true, defaultValue: "${input.audioPath}" },
-      { kind: "codec-picker", id: "audio", mediaType: "audio", label: "Audio-Codec", help: "Leer = ffmpeg-Standard für die gewählte Dateiendung." },
+      { kind: "template-text", id: "inputPath", label: tt("pscl.7ddbbe"), required: true, defaultValue: "${input.path}" },
+      { kind: "template-text", id: "outputPath", label: tt("pscl.8adabd"), required: true, defaultValue: "${input.audioPath}" },
+      { kind: "codec-picker", id: "audio", mediaType: "audio", label: tt("pscl.16202d"), help: tt("pscl.1ea5b7") },
     ],
     toArgs: (v) => {
       const p = v.scalars.inputPath?.trim();
       const o = v.scalars.outputPath?.trim();
-      if (!p || !o) return { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." };
+      if (!p || !o) return { ok: false, error: tt("pscl.9205c3") };
       const a = v.pickers.audio;
       return { ok: true, args: buildExtractAudioArgs({ inputPath: p, outputPath: o, audioCodec: a?.codec || undefined, audioOptions: a?.options ?? {} }) };
     },
@@ -605,30 +606,30 @@ export const GENERIC_SCRIPT_TASKS: GenericScriptTask[] = [
     id: "loudnorm",
     command: "ffmpeg",
     fields: [
-      { kind: "template-text", id: "inputPath", label: "Eingabedatei", required: true, defaultValue: "${input.path}" },
-      { kind: "template-text", id: "outputPath", label: "Ausgabedatei", required: true, defaultValue: "${input.outputPath}" },
+      { kind: "template-text", id: "inputPath", label: tt("pscl.7ddbbe"), required: true, defaultValue: "${input.path}" },
+      { kind: "template-text", id: "outputPath", label: tt("pscl.8adabd"), required: true, defaultValue: "${input.outputPath}" },
       {
         kind: "text",
         id: "targetLufs",
-        label: "Ziel-Lautheit (LUFS)",
+        label: tt("pscl.0b9820"),
         defaultValue: "-23",
         numeric: true,
-        help: "EBU R128 (Sendeabnahme Broadcast): -23. Häufige Streaming-Ziele: -16 (YouTube), -14 (Spotify/Apple Music).",
+        help: tt("pscl.85ee17"),
       },
-      { kind: "text", id: "truePeak", label: "Maximaler True Peak (dBTP)", defaultValue: "-2", numeric: true, help: "EBU R128 empfiehlt -1 oder niedriger." },
-      { kind: "text", id: "loudnessRange", label: "Lautheits-Schwankungsbreite / LRA (LU)", defaultValue: "7", numeric: true },
-      { kind: "codec-picker", id: "audio", mediaType: "audio", label: "Audio-Codec", help: "Leer = ffmpeg-Standard für die gewählte Dateiendung. Das Bild wird immer unverändert übernommen (Stream-Copy)." },
+      { kind: "text", id: "truePeak", label: tt("pscl.475054"), defaultValue: "-2", numeric: true, help: tt("pscl.d7f1ac") },
+      { kind: "text", id: "loudnessRange", label: tt("pscl.0c605b"), defaultValue: "7", numeric: true },
+      { kind: "codec-picker", id: "audio", mediaType: "audio", label: tt("pscl.16202d"), help: tt("pscl.749393") },
     ],
     toArgs: (v) => {
       const p = v.scalars.inputPath?.trim();
       const o = v.scalars.outputPath?.trim();
-      if (!p || !o) return { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." };
+      if (!p || !o) return { ok: false, error: tt("pscl.9205c3") };
       const lufs = Number(v.scalars.targetLufs);
       const tp = Number(v.scalars.truePeak);
       const lra = Number(v.scalars.loudnessRange);
-      if (!Number.isFinite(lufs)) return { ok: false, error: "Ziel-Lautheit: keine gültige Zahl." };
-      if (!Number.isFinite(tp)) return { ok: false, error: "Maximaler True Peak: keine gültige Zahl." };
-      if (!Number.isFinite(lra) || lra <= 0) return { ok: false, error: "Lautheits-Schwankungsbreite: keine gültige Zahl größer 0." };
+      if (!Number.isFinite(lufs)) return { ok: false, error: tt("pscl.738fb5") };
+      if (!Number.isFinite(tp)) return { ok: false, error: tt("pscl.b46f8d") };
+      if (!Number.isFinite(lra) || lra <= 0) return { ok: false, error: tt("pscl.b2cee1") };
       const a = v.pickers.audio;
       return {
         ok: true,
@@ -640,14 +641,14 @@ export const GENERIC_SCRIPT_TASKS: GenericScriptTask[] = [
     id: "remux_copy",
     command: "ffmpeg",
     fields: [
-      { kind: "template-text", id: "inputPath", label: "Eingabedatei", required: true, defaultValue: "${input.path}" },
-      { kind: "template-text", id: "outputPath", label: "Ausgabedatei", required: true, defaultValue: "${input.outputPath}" },
-      { kind: "format-picker", id: "format", label: "Container erzwingen (optional)", withOptions: false, help: "Leer = ffmpeg leitet ihn aus der Endung der Ausgabedatei ab." },
+      { kind: "template-text", id: "inputPath", label: tt("pscl.7ddbbe"), required: true, defaultValue: "${input.path}" },
+      { kind: "template-text", id: "outputPath", label: tt("pscl.8adabd"), required: true, defaultValue: "${input.outputPath}" },
+      { kind: "format-picker", id: "format", label: tt("pscl.6bbca5"), withOptions: false, help: tt("pscl.74d4bd") },
     ],
     toArgs: (v) => {
       const p = v.scalars.inputPath?.trim();
       const o = v.scalars.outputPath?.trim();
-      if (!p || !o) return { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." };
+      if (!p || !o) return { ok: false, error: tt("pscl.9205c3") };
       const f = v.pickers.format;
       return { ok: true, args: buildRemuxCopyArgs({ inputPath: p, outputPath: o, format: f?.format || undefined }) };
     },
@@ -656,41 +657,41 @@ export const GENERIC_SCRIPT_TASKS: GenericScriptTask[] = [
     id: "hls_ladder",
     command: "ffmpeg",
     fields: [
-      { kind: "template-text", id: "inputPath", label: "Eingabedatei", required: true, defaultValue: "${input.path}" },
+      { kind: "template-text", id: "inputPath", label: tt("pscl.7ddbbe"), required: true, defaultValue: "${input.path}" },
       {
         kind: "template-text",
         id: "outputDir",
-        label: "Ausgabeverzeichnis",
+        label: tt("pscl.4c7e15"),
         required: true,
         defaultValue: "${input.outputDir}",
-        help: "Master-Playlist (master.m3u8) landet direkt hier, je Rendition ein Unterordner mit Segmenten.",
+        help: tt("pscl.94a565"),
       },
-      { kind: "text", id: "segmentSeconds", label: "Segmentlänge (Sekunden)", defaultValue: "6", numeric: true },
+      { kind: "text", id: "segmentSeconds", label: tt("pscl.c93db4"), defaultValue: "6", numeric: true },
       {
         kind: "group",
         id: "renditions",
-        label: "Renditionen",
-        help: "Mindestens eine — jede wird als eigene Bitrate/Auflösung in der Ausgabeleiter erzeugt. Name nur Buchstaben/Zahlen/Bindestrich (wird als Verzeichnisname verwendet).",
+        label: tt("pscl.f59f69"),
+        help: tt("pscl.4cba27"),
         minItems: 2,
         addLabel: "+ weitere Rendition",
-        itemLabel: (i) => `Rendition ${i + 1}`,
+        itemLabel: (i) => tt("pscl.475096", { p0: i + 1 }),
         itemFields: [
-          { kind: "text", id: "label", label: "Name", defaultValue: "", placeholder: "z. B. 1080p", required: true },
-          { kind: "text", id: "width", label: "Breite (Pixel)", defaultValue: "1280", numeric: true, required: true },
-          { kind: "text", id: "height", label: "Höhe (Pixel)", defaultValue: "720", numeric: true, required: true },
-          { kind: "text", id: "videoBitrateKbps", label: "Video-Bitrate (kbit/s)", defaultValue: "2500", numeric: true, required: true },
-          { kind: "text", id: "audioBitrateKbps", label: "Audio-Bitrate (kbit/s)", defaultValue: "128", numeric: true, required: true },
+          { kind: "text", id: "label", label: tt("pscl.49ee30"), defaultValue: "", placeholder: "z. B. 1080p", required: true },
+          { kind: "text", id: "width", label: tt("pscl.9a9491"), defaultValue: "1280", numeric: true, required: true },
+          { kind: "text", id: "height", label: tt("pscl.cd2da5"), defaultValue: "720", numeric: true, required: true },
+          { kind: "text", id: "videoBitrateKbps", label: tt("pscl.64153c"), defaultValue: "2500", numeric: true, required: true },
+          { kind: "text", id: "audioBitrateKbps", label: tt("pscl.45845d"), defaultValue: "128", numeric: true, required: true },
         ],
       },
     ],
     toArgs: (v) => {
       const p = v.scalars.inputPath?.trim();
       const dir = v.scalars.outputDir?.trim();
-      if (!p || !dir) return { ok: false, error: "Eingabedatei und Ausgabeverzeichnis sind Pflicht." };
+      if (!p || !dir) return { ok: false, error: tt("pscl.d99ff6") };
       const seg = Number(v.scalars.segmentSeconds);
-      if (!Number.isFinite(seg) || seg <= 0) return { ok: false, error: "Segmentlänge: keine gültige Zahl größer 0." };
+      if (!Number.isFinite(seg) || seg <= 0) return { ok: false, error: tt("pscl.98a492") };
       const rows = v.groups.renditions ?? [];
-      if (rows.length === 0) return { ok: false, error: "Mindestens eine Rendition ist nötig." };
+      if (rows.length === 0) return { ok: false, error: tt("pscl.138685") };
       const renditions: HlsRendition[] = [];
       for (const row of rows) {
         const label = row.scalars.label?.trim();
@@ -698,15 +699,15 @@ export const GENERIC_SCRIPT_TASKS: GenericScriptTask[] = [
         const height = Number(row.scalars.height);
         const videoBitrateKbps = Number(row.scalars.videoBitrateKbps);
         const audioBitrateKbps = Number(row.scalars.audioBitrateKbps);
-        if (!label) return { ok: false, error: "Jede Rendition braucht einen Namen." };
-        if (!/^[A-Za-z0-9-]+$/.test(label)) return { ok: false, error: `"${label}": Name darf nur Buchstaben, Zahlen und Bindestrich enthalten.` };
-        if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) return { ok: false, error: `"${label}": Breite/Höhe müssen gültige Zahlen größer 0 sein.` };
-        if (!Number.isFinite(videoBitrateKbps) || videoBitrateKbps <= 0) return { ok: false, error: `"${label}": Video-Bitrate muss eine gültige Zahl größer 0 sein.` };
-        if (!Number.isFinite(audioBitrateKbps) || audioBitrateKbps <= 0) return { ok: false, error: `"${label}": Audio-Bitrate muss eine gültige Zahl größer 0 sein.` };
+        if (!label) return { ok: false, error: tt("pscl.cf38a8") };
+        if (!/^[A-Za-z0-9-]+$/.test(label)) return { ok: false, error: tt("pscl.d1865d", { p0: label }) };
+        if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) return { ok: false, error: tt("pscl.67d2c0", { p0: label }) };
+        if (!Number.isFinite(videoBitrateKbps) || videoBitrateKbps <= 0) return { ok: false, error: tt("pscl.754226", { p0: label }) };
+        if (!Number.isFinite(audioBitrateKbps) || audioBitrateKbps <= 0) return { ok: false, error: tt("pscl.202bf1", { p0: label }) };
         renditions.push({ label, width, height, videoBitrateKbps, audioBitrateKbps });
       }
       const labels = renditions.map((r) => r.label);
-      if (new Set(labels).size !== labels.length) return { ok: false, error: "Rendition-Namen müssen eindeutig sein." };
+      if (new Set(labels).size !== labels.length) return { ok: false, error: tt("pscl.73802f") };
       return { ok: true, args: buildHlsLadderArgs({ inputPath: p, outputDir: dir, segmentSeconds: seg, renditions }) };
     },
   },
@@ -815,10 +816,10 @@ export function ffOptionControlKind(opt: FFOption): OptionControlKind {
 export function optionHelpText(opt: FFOption): string {
   const parts: string[] = [];
   if (opt.description) parts.push(opt.description);
-  if (opt.min || opt.max) parts.push(`Bereich: ${opt.min ?? "…"} bis ${opt.max ?? "…"}`);
-  if (opt.default) parts.push(`Standard: ${opt.default}`);
+  if (opt.min || opt.max) parts.push(tt("pscl.bf4c3c", { p0: opt.min ?? "…", p1: opt.max ?? "…" }));
+  if (opt.default) parts.push(tt("pscl.440a36", { p0: opt.default }));
   if (opt.type === "flags" && opt.choices?.length) {
-    parts.push(`Mögliche Werte (kombinierbar mit "+", z. B. ${opt.choices[0].name}+${opt.choices[1]?.name ?? opt.choices[0].name}): ${opt.choices.map((c) => c.name).join(", ")}`);
+    parts.push(tt("pscl.cce2fa", { p0: opt.choices[0].name, p1: opt.choices[1]?.name ?? opt.choices[0].name, p2: opt.choices.map((c) => c.name).join(", ") }));
   }
   return parts.join(" — ");
 }
@@ -1249,40 +1250,40 @@ export interface GlobalFlagDef {
 }
 
 export const GLOBAL_FFMPEG_FLAGS: GlobalFlagDef[] = [
-  { name: "-y", type: "boolean", description: "Ausgabedatei ohne Nachfrage überschreiben." },
-  { name: "-n", type: "boolean", description: "Niemals überschreiben — bricht ab, falls die Ausgabedatei existiert." },
-  { name: "-hide_banner", type: "boolean", description: "Unterdrückt ffmpegs Versions-/Build-Bannerausgabe." },
-  { name: "-loglevel", type: "select", description: "Ausführlichkeit der Konsolenausgabe.", choices: ["quiet", "panic", "fatal", "error", "warning", "info", "verbose", "debug", "trace"] },
-  { name: "-ss", type: "time", description: "Startzeit (vor -i: Eingabe-seeking, schnell; nach -i: Ausgabe-seeking, exakter)." },
-  { name: "-t", type: "time", description: "Maximale Dauer ab Startzeit." },
-  { name: "-to", type: "time", description: "Endzeit (Alternative zu -t)." },
-  { name: "-f", type: "text", description: "Container-Format erzwingen (sonst aus der Dateiendung abgeleitet)." },
-  { name: "-map", type: "text", description: "Wählt Streams für die Ausgabe aus, z. B. \"0:v\" oder \"1:a:0\"." },
-  { name: "-vn", type: "boolean", description: "Keine Videospur in die Ausgabe übernehmen." },
-  { name: "-an", type: "boolean", description: "Keine Tonspur in die Ausgabe übernehmen." },
-  { name: "-sn", type: "boolean", description: "Keine Untertitelspur in die Ausgabe übernehmen." },
-  { name: "-dn", type: "boolean", description: "Keine Datenspur in die Ausgabe übernehmen." },
-  { name: "-c", type: "text", description: "Codec für alle Streams (Kurzform für -c:v/-c:a/-c:s zusammen), z. B. \"copy\"." },
-  { name: "-c:v", type: "text", description: "Video-Codec, z. B. libx264 oder copy." },
-  { name: "-c:a", type: "text", description: "Audio-Codec, z. B. aac oder copy." },
-  { name: "-c:s", type: "text", description: "Untertitel-Codec." },
-  { name: "-b:v", type: "text", description: "Video-Zielbitrate, z. B. \"4M\"." },
-  { name: "-b:a", type: "text", description: "Audio-Zielbitrate, z. B. \"192k\"." },
-  { name: "-ar", type: "number", description: "Audio-Abtastrate in Hz, z. B. 48000." },
-  { name: "-ac", type: "number", description: "Anzahl Audiokanäle." },
-  { name: "-r", type: "number", description: "Video-Bildrate in fps." },
-  { name: "-s", type: "text", description: "Videoauflösung, z. B. \"1920x1080\"." },
-  { name: "-aspect", type: "text", description: "Seitenverhältnis, z. B. \"16:9\"." },
-  { name: "-vf", type: "text", description: "Video-Filterkette (Kurzform für -filter:v)." },
-  { name: "-af", type: "text", description: "Audio-Filterkette (Kurzform für -filter:a)." },
-  { name: "-filter_complex", type: "text", description: "Mehrfach-Ein-/Ausgang-Filtergraph." },
-  { name: "-metadata", type: "text", description: "Metadaten-Schlüssel=Wert, z. B. \"title=Mein Titel\"." },
-  { name: "-threads", type: "number", description: "Anzahl Encoding-Threads (0 = automatisch)." },
-  { name: "-shortest", type: "boolean", description: "Ausgabe bei der kürzesten Eingabespur beenden." },
+  { name: "-y", type: "boolean", description: tt("pscl.c55048") },
+  { name: "-n", type: "boolean", description: tt("pscl.f464ad") },
+  { name: "-hide_banner", type: "boolean", description: tt("pscl.72cb7c") },
+  { name: "-loglevel", type: "select", description: tt("pscl.7d0ede"), choices: ["quiet", "panic", "fatal", "error", "warning", "info", "verbose", "debug", "trace"] },
+  { name: "-ss", type: "time", description: tt("pscl.041552") },
+  { name: "-t", type: "time", description: tt("pscl.3cb7b9") },
+  { name: "-to", type: "time", description: tt("pscl.1085b1") },
+  { name: "-f", type: "text", description: tt("pscl.f32cca") },
+  { name: "-map", type: "text", description: tt("pscl.847d4a") },
+  { name: "-vn", type: "boolean", description: tt("pscl.0230a4") },
+  { name: "-an", type: "boolean", description: tt("pscl.36692c") },
+  { name: "-sn", type: "boolean", description: tt("pscl.39341f") },
+  { name: "-dn", type: "boolean", description: tt("pscl.a81aa9") },
+  { name: "-c", type: "text", description: tt("pscl.aaf04a") },
+  { name: "-c:v", type: "text", description: tt("pscl.748b37") },
+  { name: "-c:a", type: "text", description: tt("pscl.76a00d") },
+  { name: "-c:s", type: "text", description: tt("pscl.eb5986") },
+  { name: "-b:v", type: "text", description: tt("pscl.97d5ed") },
+  { name: "-b:a", type: "text", description: tt("pscl.5608df") },
+  { name: "-ar", type: "number", description: tt("pscl.93946f") },
+  { name: "-ac", type: "number", description: tt("pscl.118fc3") },
+  { name: "-r", type: "number", description: tt("pscl.579128") },
+  { name: "-s", type: "text", description: tt("pscl.f2e288") },
+  { name: "-aspect", type: "text", description: tt("pscl.cce5db") },
+  { name: "-vf", type: "text", description: tt("pscl.a86942") },
+  { name: "-af", type: "text", description: tt("pscl.1f23d9") },
+  { name: "-filter_complex", type: "text", description: tt("pscl.21909e") },
+  { name: "-metadata", type: "text", description: tt("pscl.044b6e") },
+  { name: "-threads", type: "number", description: tt("pscl.503bf8") },
+  { name: "-shortest", type: "boolean", description: tt("pscl.046953") },
   { name: "-movflags", type: "text", description: "MOV/MP4-Muxer-Flags, z. B. \"+faststart\"." },
-  { name: "-g", type: "number", description: "GOP-Größe (Abstand zwischen Keyframes)." },
-  { name: "-bf", type: "number", description: "Maximale Anzahl aufeinanderfolgender B-Frames." },
-  { name: "-vsync", type: "select", description: "Zeitstempel-/Frame-Anpassung bei der Ausgabe.", choices: ["passthrough", "cfr", "vfr", "drop"] },
+  { name: "-g", type: "number", description: tt("pscl.03361f") },
+  { name: "-bf", type: "number", description: tt("pscl.b70c5f") },
+  { name: "-vsync", type: "select", description: tt("pscl.b74742"), choices: ["passthrough", "cfr", "vfr", "drop"] },
 ];
 
 export function globalFlagByName(name: string): GlobalFlagDef | undefined {
@@ -1329,33 +1330,33 @@ export function validateArgValue(flag: string, value: string, dynamicOptions?: M
     if (value === "") return { ok: true };
     if (dynamic.choices?.length && dynamic.type !== "flags") {
       const ok = dynamic.choices.some((c) => (c.value || c.name) === value);
-      return ok ? { ok: true } : { ok: false, message: `Erwartet einen von: ${dynamic.choices.map((c) => c.name).join(", ")}` };
+      return ok ? { ok: true } : { ok: false, message: tt("pscl.53e1fb", { p0: dynamic.choices.map((c) => c.name).join(", ") }) };
     }
     if (dynamic.type === "boolean") {
-      return value === "true" || value === "false" ? { ok: true } : { ok: false, message: 'Erwartet "true" oder "false".' };
+      return value === "true" || value === "false" ? { ok: true } : { ok: false, message: tt("pscl.9b0b40") };
     }
     const bounds = optionRangeBounds(dynamic);
     if (bounds) {
       const n = Number(value);
-      if (!Number.isFinite(n)) return { ok: false, message: "Erwartet eine Zahl." };
-      return n >= bounds.min && n <= bounds.max ? { ok: true } : { ok: false, message: `Erwartet einen Wert zwischen ${bounds.min} und ${bounds.max}.` };
+      if (!Number.isFinite(n)) return { ok: false, message: tt("pscl.13a83c") };
+      return n >= bounds.min && n <= bounds.max ? { ok: true } : { ok: false, message: tt("pscl.e2bc00", { p0: bounds.min, p1: bounds.max }) };
     }
     if (dynamic.type === "int" || dynamic.type === "int64" || dynamic.type === "float" || dynamic.type === "double" || dynamic.type === "rational") {
-      return Number.isFinite(Number(value)) ? { ok: true } : { ok: false, message: "Erwartet eine Zahl." };
+      return Number.isFinite(Number(value)) ? { ok: true } : { ok: false, message: tt("pscl.13a83c") };
     }
     return { ok: true };
   }
   const global = globalFlagByName(flag) ?? globalOverrides?.find((f) => f.name === flag);
   if (!global) return { ok: true };
-  if (global.type === "boolean") return value === "" ? { ok: true } : { ok: false, message: `"${flag}" nimmt keinen Wert (Ein-/Aus-Flag).` };
+  if (global.type === "boolean") return value === "" ? { ok: true } : { ok: false, message: tt("pscl.d2383a", { p0: flag }) };
   if (value === "") return { ok: true };
   switch (global.type) {
     case "select":
-      return global.choices?.includes(value) ? { ok: true } : { ok: false, message: `Erwartet einen von: ${global.choices?.join(", ")}` };
+      return global.choices?.includes(value) ? { ok: true } : { ok: false, message: tt("pscl.53e1fb", { p0: global.choices?.join(", ") }) };
     case "number":
-      return Number.isFinite(Number(value)) ? { ok: true } : { ok: false, message: "Erwartet eine Zahl." };
+      return Number.isFinite(Number(value)) ? { ok: true } : { ok: false, message: tt("pscl.13a83c") };
     case "time":
-      return /^-?(\d+:)?\d{1,2}:\d{1,2}(\.\d+)?$|^-?\d+(\.\d+)?$/.test(value) ? { ok: true } : { ok: false, message: 'Erwartet eine Dauer, z. B. "5" oder "00:01:23.5".' };
+      return /^-?(\d+:)?\d{1,2}:\d{1,2}(\.\d+)?$|^-?\d+(\.\d+)?$/.test(value) ? { ok: true } : { ok: false, message: tt("pscl.29c387") };
     default:
       return { ok: true };
   }
@@ -1470,22 +1471,22 @@ export function missingConfig(step: DraftStep): string | null {
   const c = (step.config ?? {}) as Record<string, unknown>;
   switch (step.type) {
     case "service_call":
-      return c.url ? null : "Adresse (URL) fehlt";
+      return c.url ? null : tt("pscl.3c326c");
     case "script":
-      return c.command ? null : "Werkzeug fehlt";
+      return c.command ? null : tt("pscl.4423d3");
     case "media_function":
-      return c.instanceId && c.method ? null : "Node/Funktion fehlt";
+      return c.instanceId && c.method ? null : tt("pscl.a400c0");
     case "notification":
-      return c.subject ? null : "Kanal fehlt";
+      return c.subject ? null : tt("pscl.d92700");
     case "condition":
-      return c.expression ? null : "Regel fehlt";
+      return c.expression ? null : tt("pscl.bf4504");
     case "branch":
-      return Array.isArray(c.cases) && c.cases.length > 0 ? null : "mindestens ein Fall nötig";
+      return Array.isArray(c.cases) && c.cases.length > 0 ? null : tt("pscl.131bec");
     case "subworkflow":
-      return c.processDefinitionId ? null : "Prozess fehlt";
+      return c.processDefinitionId ? null : tt("pscl.a9dca0");
     case "wait":
     case "timer":
-      return typeof c.seconds === "number" && c.seconds > 0 ? null : "Wartezeit fehlt";
+      return typeof c.seconds === "number" && c.seconds > 0 ? null : tt("pscl.d60d5c");
     default:
       return null;
   }

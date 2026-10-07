@@ -1,7 +1,7 @@
 // Admin → Playout (Kapitel 27 / P7): Channels (Gruppen, Zeitzone), Trigger-Regeln („wer darf wen
 // steuern“) und das Trigger-Protokoll samt Zustellzustand je Ziel (Spec §84, §162, §164, §165).
 
-import { t as tt } from "./i18n.ts";
+import { dateLocale, t as tt } from "./i18n.ts";
 import { apiFetch } from "./connection.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 import {
@@ -229,7 +229,7 @@ class PlayoutAdminView extends HTMLElement {
     const hr = el("tr", "color:var(--omp-text-dim);text-align:left;");
     for (const h of [tt("pav.718271"), "Art", tt("pav.6e2ee1"), tt("pav.966bf3"), tt("pav.23cced"), tt("pav.5daac8"), tt("pav.7f2ec6")]) hr.append(el("th", "padding:3px 12px 3px 0;", h));
     t.append(hr);
-    const time = (iso?: string) => (iso ? new Date(iso).toLocaleTimeString("de-DE") : "—");
+    const time = (iso?: string) => (iso ? new Date(iso).toLocaleTimeString(dateLocale()) : "—");
     for (const r of rows) {
       const tr = el("tr", "border-top:1px solid rgba(255,255,255,0.06);");
       const cell = (text: string, css = "") => el("td", `padding:3px 12px 3px 0;${css}`, text);
@@ -352,7 +352,7 @@ class PlayoutAdminView extends HTMLElement {
     }
     for (const g of groupByCorrelation(this.#log)) {
       const card = el("div", "margin-bottom:8px;padding:6px 10px;border:1px solid rgba(255,255,255,0.08);border-radius:var(--omp-radius);font-size:12px;");
-      card.append(el("div", "font-weight:600;", tt("pav.53fc17", { p0: g.event, p1: this.#name(g.origin), p2: new Date(g.at).toLocaleString("de-DE") })));
+      card.append(el("div", "font-weight:600;", tt("pav.53fc17", { p0: g.event, p1: this.#name(g.origin), p2: new Date(g.at).toLocaleString(dateLocale()) })));
       for (const r of g.items) {
         const line = el("div", `color:${TONE[statusTone(r.status)]};padding-left:12px;`,
           `→ ${this.#name(r.targetChannel)} (#${r.seq}): ${statusText(r.status)}${r.detail ? ` — ${r.detail}` : ""}${r.attempts > 1 ? ` · ${r.attempts} Versuche` : ""}`);
