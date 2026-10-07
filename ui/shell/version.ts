@@ -1,3 +1,4 @@
+import { t } from "./i18n.ts";
 // Firmware-/Build-Stempel des Orchestrators (GET /api/v1/version, öffentlich —
 // auch vor der Anmeldung lesbar). Wird im Login-Bildschirm und im Admin-Bereich
 // „System-Update“ angezeigt.
@@ -12,9 +13,9 @@ export interface BuildInfo {
 export function formatFirmware(info: BuildInfo | null | undefined): string {
   if (!info || !info.version) return "";
   // „dev“ = ohne Release-Stempel gebaut (Entwicklungsstand).
-  const v = info.version === "dev" ? "Entwicklungsstand" : info.version;
+  const v = info.version === "dev" ? t("ver.a4394c") : info.version;
   const commit = info.commit ? ` (${info.commit.slice(0, 7)})` : "";
-  return `Firmware ${v}${commit}`;
+  return t("ver.f7c666", { p0: v, p1: commit });
 }
 
 /** Ausführliche Form für Admin/System-Update, inkl. Bauzeitpunkt. */

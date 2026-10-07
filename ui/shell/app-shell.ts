@@ -22,7 +22,7 @@ import "./scheduler-view.ts";
 import "./admin-view.ts";
 import { apiFetch, type ConnectionChangeDetail, type ConnectionState, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
-import { buildLangSelect, type I18nKey, t } from "./i18n.ts";
+import { buildLangSelect, type I18nKey, t, t as tt } from "./i18n.ts";
 
 type TabId = "flow" | "workflows" | "process" | "assets" | "hosts" | "instances" | "alarms" | "health" | "signal-path" | "scheduler" | "admin";
 
@@ -224,7 +224,7 @@ class AppShell extends HTMLElement {
 
     const allOpt = document.createElement("option");
     allOpt.value = "";
-    allOpt.textContent = "Workflow: Alle";
+    allOpt.textContent = tt("aps.00a8fd");
     select.appendChild(allOpt);
 
     for (const wf of list) {

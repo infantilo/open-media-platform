@@ -25,7 +25,7 @@ import {
   type SourceTreeNode,
   visibleRows,
 } from "./source-selector-logic.ts";
-import { t } from "../shell/i18n.ts";
+import { t, t as tt } from "../shell/i18n.ts";
 import { loadSourceCatalog } from "./source-catalog.ts";
 
 const ICON: Record<string, string> = { video: "🎥", audio: "🔊", data: "▤" };
@@ -191,12 +191,12 @@ export class OmpSourceSelector extends HTMLElement {
     const leaf = this.#value ? findLeaf(this.#getTree(), this.#value) : null;
     let text: string;
     let missing = false;
-    if (!this.#value) text = this.#emptyLabel ?? "— auswählen —";
+    if (!this.#value) text = this.#emptyLabel ?? tt("kss.1e116b");
     else if (leaf) text = leaf.label;
     else {
       // Gespeicherte ID (evtl. vom Filter ausgeblendet oder offline): mit Label aus entries, sonst rohe ID.
       const raw = this.#entries.find((e) => e.id === this.#value);
-      text = `${raw?.label ?? this.#value}${raw ? "" : " (nicht verfügbar)"}`;
+      text = `${raw?.label ?? this.#value}${raw ? "" : tt("kss.8b9c05")}`;
       missing = !raw;
     }
     this.#labelEl.textContent = text;

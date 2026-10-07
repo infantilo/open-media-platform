@@ -26,7 +26,7 @@
 // maskierbar (ausgeblendet, unter "Maskiert" wiederherstellbar). Beides
 // gilt nur, solange der Alarm-Zustand (Fingerprint, s. alarms.ts) gleich
 // bleibt, und ist serverseitig geteilt (/api/v1/alarms/acks).
-import { t } from "./i18n.ts";
+import { t, t as tt } from "./i18n.ts";
 import { connectionMonitor } from "./connection.ts";
 import { clearAlarmAck, fetchAlarms, REFRESH_EVENT_TYPES, setAlarmAck, SEVERITY_COLOR, SEVERITY_LABEL } from "./alarms.ts";
 import type { AlarmState, AckMode } from "./alarms.ts";
@@ -173,8 +173,8 @@ function row(a: AlarmState, kind: "active" | "acked" | "masked"): string {
   let meta = "";
   let controls: string;
   if (a.ack) {
-    const who = `${a.ack.mode === "ack" ? "quittiert" : "maskiert"} von ${escapeHtml(a.ack.username)} um ${new Date(a.ack.createdAt).toLocaleString()}`;
-    const until = a.ack.expiresAt ? `, bis ${new Date(a.ack.expiresAt).toLocaleString()}` : t("alarmv.95ee27");
+    const who = tt("alv2.1f3b58", { p0: a.ack.mode === "ack" ? "quittiert" : "maskiert", p1: escapeHtml(a.ack.username), p2: new Date(a.ack.createdAt).toLocaleString() });
+    const until = a.ack.expiresAt ? tt("alv2.6edd48", { p0: new Date(a.ack.expiresAt).toLocaleString() }) : t("alarmv.95ee27");
     const cmt = a.ack.comment ? ` — „${escapeHtml(a.ack.comment)}“` : "";
     meta = `<div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">${who}${a.ack.mode === "mask" ? until : ""}${cmt}</div>`;
     controls = `<button type="button" data-action="clear">${t("alarmv.577e3a")}</button>`;

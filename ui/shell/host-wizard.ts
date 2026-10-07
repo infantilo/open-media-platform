@@ -35,7 +35,7 @@
 // sich gegenseitig verwirren — für einen von einem Admin geführten
 // Onboarding-Schritt keine praxisrelevante Lücke, nicht weiter
 // abgesichert.
-import { t } from "./i18n.ts";
+import { t, t as tt } from "./i18n.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 
 interface HostCapabilities {
@@ -64,7 +64,7 @@ interface TargetTile {
 // Reihenfolge/Wortlaut wie ARCHITECTURE.md §18.8s Klassen-Tabelle.
 const TARGET_TILES: TargetTile[] = [
   { id: "bare-metal", title: t("hwiz.8adbea"), hint: "eigener/dedizierter Server (z. B. 2110/SDI-Karten)" },
-  { id: "vm", title: "VM (lokaler Cluster)", hint: "virtuelle Maschine im eigenen Netz" },
+  { id: "vm", title: "VM (lokaler Cluster)", hint: tt("hw2.592c6d") },
   { id: "cloud-aws", title: t("hwiz.5f5b8f"), hint: t("hwiz.704b3b") },
 ];
 

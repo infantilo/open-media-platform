@@ -126,7 +126,7 @@ class LocationsView extends HTMLElement {
       return w;
     };
     const name = el("input", "padding:3px 6px;width:160px;");
-    name.placeholder = "z. B. Archiv-Share";
+    name.placeholder = tt("loc2.1c3172");
     name.value = this.#form.name;
     name.addEventListener("input", () => (this.#form.name = name.value));
     const host = el("select", "padding:3px;");

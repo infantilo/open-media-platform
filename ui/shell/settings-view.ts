@@ -2,7 +2,7 @@
 // je Instanz sowie die Betriebswerte des Orchestrators — alles ohne Shell/Umgebungsvariablen.
 // Explizites Speichern je Zeile (kein Schreiben bei jedem Tastendruck).
 
-import { t as tr } from "./i18n.ts";
+import { t as tr, t as tt } from "./i18n.ts";
 import { apiFetch } from "./connection.ts";
 import {
   effectiveValue, groupOptions, hintFor, inputKind, isDirty, type OptionDef, type SystemItem,
@@ -127,7 +127,7 @@ class SettingsView extends HTMLElement {
       const warn = (r.data.warning as string) || "";
       const restart = (r.data.restartNeeded as number) || 0;
       this.#message =
-        `„${o.label}“ gespeichert.` + (warn ? tr("sett.fad7a2", { p0: warn }) : "") +
+        tt("set2.09cc1e", { p0: o.label }) + (warn ? tr("sett.fad7a2", { p0: warn }) : "") +
         (restart > 0 ? tr("sett.688b22", { p0: restart }) : "");
     }
     await this.#load();
@@ -271,7 +271,7 @@ class SettingsView extends HTMLElement {
     field.append(hint);
     if (inst && !saved) {
       const e = effectiveValue(o, undefined);
-      field.append(el("div", "font-size:10px;color:var(--omp-text-dim);", `wirksam: ${e.value || tr("sett.eba8ae")} (${e.source === "type" ? tr("sett.545dfe") : e.source === "default" ? tr("sett.eb6d8a") : tr("sett.6c3a69")})`));
+      field.append(el("div", "font-size:10px;color:var(--omp-text-dim);", tt("set2.9ad047", { p0: e.value || tr("sett.eba8ae"), p1: e.source === "type" ? tr("sett.545dfe") : e.source === "default" ? tr("sett.eb6d8a") : tr("sett.6c3a69") })));
     }
     const check = el("div", "font-size:11px;margin-top:2px;");
     check.dataset.check = current;
@@ -399,7 +399,7 @@ class SettingsView extends HTMLElement {
     inp.placeholder = it.active;
     field.append(inp, el("div", "font-size:10px;color:var(--omp-text-dim);margin-top:2px;",
       tr("sett.ef8d9d", { p0: it.description, p1: it.active, p2: it.unit ? " " + it.unit : "", p3: it.min, p4: it.max })));
-    if (it.pendingRestart) field.append(el("div", "font-size:11px;color:var(--omp-warn,#b8860b);", `gespeichert: ${it.override} — gilt erst nach Neustart des Orchestrators`));
+    if (it.pendingRestart) field.append(el("div", "font-size:11px;color:var(--omp-warn,#b8860b);", tt("set2.ae997f", { p0: it.override })));
     const actions = el("div", "display:flex;gap:6px;");
     const save = el("button", BTN, tr("sett.b97d23"));
     save.className = "omp-btn-primary";
