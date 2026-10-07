@@ -461,6 +461,9 @@ struct AudioMixerStore {
     channels: Arc<Mutex<Vec<ChannelState>>>,
     available_sources: Arc<Mutex<Vec<DiscoveredAudioSource>>>,
     next_seq: Arc<AtomicU64>,
+    /// Per `takeAt` bereits geplante AFV-Schaltungen (Quell-Node, Zustand, Zeitpunkt): das später
+    /// eintreffende Tally-Ereignis desselben Takes darf die Rampe nicht noch einmal anstoßen.
+    afv_scheduled: Mutex<HashMap<(String, bool), std::time::Instant>>,
     pipeline: PipelineHandle,
     /// `http://<host>:<port>/levels` (K4-Teil-1) — gleiches Muster wie
     /// `omp-viewer`s `previewUrl` (C6): der tatsächlich gebundene Port
@@ -1335,12 +1338,27 @@ impl AudioMixerStore {
     /// (Cut = hart, Crossfade = `FOLLOW_CROSSFADE_MS`). Fader/Mute des Bedieners bleiben unberührt;
     /// Kanäle im Manual-Override oder mit Modus „off“ werden nicht angefasst.
     fn afv_follow(&self, node_id: &str, on: bool) {
-        self.afv_follow_at(node_id, on, 0);
+        // Tally-Echo eines per `takeAt` schon geplanten Takes: überspringen.
+        let echo = self
+            .afv_scheduled
+            .lock()
+            .expect("lock poisoned")
+            .remove(&(node_id.to_string(), on))
+            .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(3));
+        if !echo {
+            self.afv_follow_at(node_id, on, 0);
+        }
     }
 
     /// Wie [`afv_follow`](Self::afv_follow), aber mit gemeinsamem Schaltzeitpunkt (`takeAt`,
     /// TAI ns, Kap. 31.4): Tor und Rampe beginnen sample-genau an diesem Zeitpunkt (0 = sofort).
     fn afv_follow_at(&self, node_id: &str, on: bool, at_tai_ns: u64) {
+        if at_tai_ns != 0 {
+            self.afv_scheduled
+                .lock()
+                .expect("lock poisoned")
+                .insert((node_id.to_string(), on), std::time::Instant::now());
+        }
         let nodes = self.source_nodes();
         let hits: Vec<(String, bool)> = self
             .channels
@@ -2851,6 +2869,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         channels: channels.clone(),
         available_sources: available_sources.clone(),
         next_seq: Arc::new(AtomicU64::new(1)),
+        afv_scheduled: Mutex::new(HashMap::new()),
         pipeline: pipeline_handle.clone(),
         levels_url,
         master_limiter: Mutex::new(dsp::CompParams::default()),

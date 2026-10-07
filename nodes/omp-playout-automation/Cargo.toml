@@ -14,6 +14,8 @@ publish = false
 # eigenen `libc`-FFI-Umweg. `default-features = false` + nur `clock`/
 # `std`: kein `serde` (eigene JSON-Kodierung reicht für ein
 # `HH:MM:SS`-String-Feld), kein wasm-Zeug.
+# Kapitel 31.4: `CLOCK_TAI` für den gemeinsamen Schaltzeitpunkt (`takeAt`) — bereits im Lockfile.
+libc = "0.2"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 # Kein gstreamer/omp-mediaio: dieser Node hat bewusst keine eigene
 # Medienpipeline (UMSETZUNG.md C14/C15) — er ruft nur die IS-12/14-

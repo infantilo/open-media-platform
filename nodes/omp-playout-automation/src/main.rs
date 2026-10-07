@@ -2496,10 +2496,21 @@ fn take_on_targets(
     mixer
         .invoke("crosspoint.select", serde_json::json!({"senderId": sender_id}))
         .map_err(|e| format!("Mixer-crosspoint.select fehlgeschlagen: {e}"))?;
+    // Kapitel 31.4: gemeinsamer Schaltzeitpunkt (TAI ns) für Bild- und Tonmischer; 0 = aus.
+    let take_at = take_at_ns();
+    if take_at != 0 {
+        schedule_audio_follow(store, state, &standby_node_id, take_at);
+    }
+    let at_args = |mut v: serde_json::Value| {
+        if take_at != 0 {
+            v["takeAt"] = serde_json::json!(take_at);
+        }
+        v
+    };
     match transition {
         Transition::Cut => {
             mixer
-                .invoke("crosspoint.cut", serde_json::json!({}))
+                .invoke("crosspoint.cut", at_args(serde_json::json!({})))
                 .map_err(|e| format!("Mixer-crosspoint.cut fehlgeschlagen: {e}"))?;
         }
         Transition::Mix | Transition::FadeCut | Transition::CutFade => {
@@ -2519,13 +2530,56 @@ fn take_on_targets(
                     .map_err(|e| format!("Mixer-crosspoint.setTransRate fehlgeschlagen: {e}"))?;
             }
             mixer
-                .invoke("crosspoint.autoTrans", serde_json::json!({}))
+                .invoke("crosspoint.autoTrans", at_args(serde_json::json!({})))
                 .map_err(|e| format!("Mixer-crosspoint.autoTrans fehlgeschlagen: {e}"))?;
         }
     }
 
     apply_audio_context(store, state, meta);
     Ok(state.live_channel.other())
+}
+
+/// Kapitel 31.4: Vorlauf des gemeinsamen Schaltzeitpunkts in ms (`OMP_PLAYOUT_TAKE_LEAD_MS`,
+/// Standard 150; 0 = Funktion aus, Take sofort wie bisher). Muss die Laufzeit der folgenden
+/// Steuerbefehle (Ton → Bild) überdecken.
+fn take_at_ns() -> u64 {
+    let lead_ms = std::env::var("OMP_PLAYOUT_TAKE_LEAD_MS").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(150.0);
+    if lead_ms <= 0.0 {
+        return 0;
+    }
+    let now = tai_now_ns();
+    if now == 0 {
+        return 0;
+    }
+    now + (lead_ms * 1e6) as u64
+}
+
+/// Aktuelle TAI-Zeit in ns (`CLOCK_TAI`, dieselbe Uhr wie libmxl); 0 bei Fehler.
+fn tai_now_ns() -> u64 {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: `ts` ist ein gültiger, beschreibbarer timespec.
+    if unsafe { libc::clock_gettime(libc::CLOCK_TAI, &mut ts) } != 0 {
+        return 0;
+    }
+    ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
+}
+
+/// Kapitel 31.4: sagt dem Audiomixer, dass das Programm zum Zeitpunkt `take_at` vom bisherigen
+/// Live-Kanal auf den Standby-Kanal wechselt (AFV-Tor sample-genau am selben Zeitpunkt wie der
+/// Bildmischer-Take). Best effort wie `apply_audio_context`.
+fn schedule_audio_follow(store: &AutomationStore, state: &AutomationState, standby_node_id: &str, take_at: u64) {
+    let Some(audio) = state.audio_mixer_node_id.clone() else { return };
+    let live_node_id = match state.live_channel {
+        Channel::A => state.player_a_node_id.clone(),
+        Channel::B => state.player_b_node_id.clone(),
+    };
+    let client = store.proxy_client(audio);
+    if let Some(live) = live_node_id.filter(|n| n != standby_node_id) {
+        let _ = client.invoke("setVideoContext", serde_json::json!({"source": live, "active": false, "takeAt": take_at}));
+    }
+    if let Err(e) = client.invoke("setVideoContext", serde_json::json!({"source": standby_node_id, "active": true, "takeAt": take_at})) {
+        eprintln!("omp-playout-automation: takeAt-Audio fehlgeschlagen: {e}");
+    }
 }
 
 /// Kapitel 27 / P6: meldet dem Audiomixer nach dem Take, WELCHE Quelle jetzt im
