@@ -801,7 +801,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	}
 
 	mux.Handle("/", spaFallback(cfg.UIDir, revalidateStatic(http.FileServer(http.Dir(cfg.UIDir)))))
-	return countRequests(reqCounters, noStoreForAPI(mux))
+	return countRequests(reqCounters, noStoreForAPI(localizeEnglish(mux)))
 }
 
 // spaFallback liefert für die Kiosk-Routen /console/... (ARCHITECTURE.md

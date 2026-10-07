@@ -40,7 +40,7 @@ erscheinen in der gewählten Sprache. **Noch deutsch:** Texte, die der Server
 oder ein Node selbst erzeugt (z. B. Fehlermeldungen des Servers, das
 Trigger-Protokoll der Playout-Automation, Beschreibungen aus
 Node-Deskriptoren), Workflow-Vorlagen und Audio-Gruppennamen aus Ihren
-Daten, die Handy-Seiten des WebRTC-Gateways (Kamera/Monitor) und die
+Daten, die Handbücher; die Handy-Seiten des WebRTC-Gateways (Kamera/Monitor) folgen der Browsersprache (oder `?lang=en`). Bekannte Server-Meldungen werden bei Englisch übersetzt, unbekannte bleiben deutsch. Die
 Handbücher.
 
 ## 2. Der Flow Editor
