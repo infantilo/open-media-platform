@@ -1,6 +1,7 @@
 // Admin → Playout (Kapitel 27 / P7): Channels (Gruppen, Zeitzone), Trigger-Regeln („wer darf wen
 // steuern“) und das Trigger-Protokoll samt Zustellzustand je Ziel (Spec §84, §162, §164, §165).
 
+import { t as tt } from "./i18n.ts";
 import { apiFetch } from "./connection.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 import {
@@ -63,7 +64,7 @@ class PlayoutAdminView extends HTMLElement {
       if (c.ok) this.#channels = ((await c.json()) as Channel[]) ?? [];
       if (r.ok) this.#rules = ((await r.json()) as TriggerRule[]) ?? [];
     } catch {
-      this.#error = "Playout-Daten konnten nicht geladen werden.";
+      this.#error = tt("pav.a4357f");
     }
     await this.#loadLog(false);
     if (!this.#asRunChannel && this.#channels.length > 0) this.#asRunChannel = this.#channels[0].id;
@@ -117,12 +118,12 @@ class PlayoutAdminView extends HTMLElement {
     try {
       const res = await apiFetch(url, { method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
       if (!res.ok) {
-        this.#error = (await res.text()).trim() || `Fehler ${res.status}`;
+        this.#error = (await res.text()).trim() || tt("pav.435a5a", { p0: res.status });
         return false;
       }
       return true;
     } catch (err) {
-      this.#error = `Anfrage fehlgeschlagen: ${err}`;
+      this.#error = tt("pav.473549", { p0: err });
       return false;
     }
   }
@@ -130,7 +131,7 @@ class PlayoutAdminView extends HTMLElement {
   async #createChannel() {
     const n = this.#newChannel;
     if (await this.#send("/api/v1/playout/channels", "POST", { name: n.name.trim(), group: n.group.trim(), timezone: n.timezone.trim() || "UTC" })) {
-      this.#message = `Channel „${n.name}“ angelegt.`;
+      this.#message = tt("pav.b180cc", { p0: n.name });
       this.#newChannel = { name: "", group: "", timezone: n.timezone };
     }
     await this.#load();
@@ -139,34 +140,34 @@ class PlayoutAdminView extends HTMLElement {
   async #saveGroup(c: Channel, group: string) {
     if (await this.#send(`/api/v1/playout/channels/${encodeURIComponent(c.id)}`, "PUT", {
       name: c.name, timezone: c.timezone, group: group.trim(), instanceId: c.instanceId ?? "", workflowId: c.workflowId ?? "", role: c.role ?? "",
-    })) this.#message = `Gruppe von „${c.name}“ gespeichert.`;
+    })) this.#message = tt("pav.2980d5", { p0: c.name });
     await this.#load();
   }
 
   async #deleteChannel(c: Channel) {
-    if (!(await confirmDialog(`Channel „${c.name}“ samt gespeichertem Automationszustand löschen?`, { confirmLabel: "Löschen" }))) return;
-    if (await this.#send(`/api/v1/playout/channels/${encodeURIComponent(c.id)}`, "DELETE")) this.#message = `Channel „${c.name}“ gelöscht.`;
+    if (!(await confirmDialog(tt("pav.da33c5", { p0: c.name }), { confirmLabel: tt("pav.1010b0") }))) return;
+    if (await this.#send(`/api/v1/playout/channels/${encodeURIComponent(c.id)}`, "DELETE")) this.#message = tt("pav.06f2bf", { p0: c.name });
     await this.#load();
   }
 
   async #addRule() {
-    if (await this.#send("/api/v1/playout/trigger-rules", "POST", this.#newRule)) this.#message = "Regel angelegt.";
+    if (await this.#send("/api/v1/playout/trigger-rules", "POST", this.#newRule)) this.#message = tt("pav.f75079");
     await this.#load();
   }
 
   async #deleteRule(r: TriggerRule) {
-    if (await this.#send(`/api/v1/playout/trigger-rules/${encodeURIComponent(r.id)}`, "DELETE")) this.#message = "Regel entfernt.";
+    if (await this.#send(`/api/v1/playout/trigger-rules/${encodeURIComponent(r.id)}`, "DELETE")) this.#message = tt("pav.9d34e3");
     await this.#load();
   }
 
   #render() {
     this.replaceChildren();
-    this.append(el("div", "", "Playout"));
+    this.append(el("div", "", tt("pav.b973c2")));
     (this.firstChild as HTMLElement).className = "omp-h1";
     this.append(el("div", "color:var(--omp-text-dim);max-width:900px;margin:6px 0 12px;",
-      "Ein Channel ist eine Automations-Instanz mit eigener Playlist (Zuordnung im Panel der Instanz). Channels einer Gruppe lassen sich gemeinsam " +
-        "adressieren (z. B. alle „regional“). Ein Channel darf andere nur steuern, wenn eine Regel es erlaubt — Standard ist verweigern; " +
-        "jede Zustellung (auch verweigerte) wird protokolliert."));
+      tt("pav.96cf1f") +
+        tt("pav.d16169") +
+        tt("pav.6d1443")));
     if (this.#error) this.append(el("div", "color:var(--omp-danger,#d33);margin-bottom:8px;white-space:pre-wrap;", this.#error));
     if (this.#message) this.append(el("div", "color:var(--omp-success,#4a4);margin-bottom:8px;", this.#message));
     this.append(this.#renderChannels(), this.#renderRules());
@@ -185,10 +186,10 @@ class PlayoutAdminView extends HTMLElement {
     if (!box) return;
     box.replaceChildren(el("div", "font-weight:600;font-size:15px;margin-bottom:2px;", "As-Run-Protokoll"));
     box.append(el("div", "color:var(--omp-text-dim);font-size:12px;margin-bottom:6px;max-width:900px;",
-      "Was wirklich gesendet wurde: Ist-Start/-Ende je Event gegen Plan, Child Events, Warnungen, Trigger und manuelle Eingriffe mit Benutzername. " +
-        "Wird je Channel gespeichert und nach der Audit-Aufbewahrung bereinigt."));
+      tt("pav.544226") +
+        tt("pav.bcfd43")));
     if (this.#channels.length === 0) {
-      box.append(el("div", "color:var(--omp-text-dim);", "Noch kein Channel."));
+      box.append(el("div", "color:var(--omp-text-dim);", tt("pav.dab143")));
       return;
     }
     const bar = el("div", "display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap;");
@@ -205,7 +206,7 @@ class PlayoutAdminView extends HTMLElement {
       void this.#loadAsRun();
     });
     const kind = el("select", "padding:3px 6px;");
-    for (const [v, l] of [["", "alle Arten"], ["primary", "Events"], ["child", "Child Events"], ["warning", "Warnungen"], ["trigger", "Trigger"], ["operator", "Bedienung"]]) {
+    for (const [v, l] of [["", tt("pav.05e8d1")], ["primary", tt("pav.87f9f7")], ["child", tt("pav.0b3acd")], ["warning", tt("pav.5e2ce9")], ["trigger", tt("pav.f698f6")], ["operator", tt("pav.eb2ead")]]) {
       const o = el("option", "", l);
       o.value = v;
       kind.append(o);
@@ -221,12 +222,12 @@ class PlayoutAdminView extends HTMLElement {
     box.append(bar);
     const rows = filterAsRun(this.#asRun, this.#asRunKind);
     if (rows.length === 0) {
-      box.append(el("div", "color:var(--omp-text-dim);", "Noch keine As-Run-Einträge für diesen Channel."));
+      box.append(el("div", "color:var(--omp-text-dim);", tt("pav.3f3511")));
       return;
     }
     const t = el("table", "border-collapse:collapse;font-size:12px;");
     const hr = el("tr", "color:var(--omp-text-dim);text-align:left;");
-    for (const h of ["Zeit", "Art", "Bezeichnung", "Quelle/Asset", "Start Ist (Δ Plan)", "Dauer", "Status / Eingriff"]) hr.append(el("th", "padding:3px 12px 3px 0;", h));
+    for (const h of [tt("pav.718271"), "Art", tt("pav.6e2ee1"), tt("pav.966bf3"), tt("pav.23cced"), tt("pav.5daac8"), tt("pav.7f2ec6")]) hr.append(el("th", "padding:3px 12px 3px 0;", h));
     t.append(hr);
     const time = (iso?: string) => (iso ? new Date(iso).toLocaleTimeString("de-DE") : "—");
     for (const r of rows) {
@@ -249,23 +250,23 @@ class PlayoutAdminView extends HTMLElement {
 
   #renderChannels(): HTMLElement {
     const sec = el("div", "margin-bottom:24px;");
-    sec.append(el("div", "font-weight:600;font-size:15px;margin-bottom:6px;", "Channels"));
+    sec.append(el("div", "font-weight:600;font-size:15px;margin-bottom:6px;", tt("pav.14cb42")));
     if (this.#channels.length > 0) {
       const t = el("table", "border-collapse:collapse;font-size:12px;margin-bottom:10px;");
       const hr = el("tr", "color:var(--omp-text-dim);text-align:left;");
-      for (const h of ["Name", "Gruppe", "Zeitzone", "Bindung", ""]) hr.append(el("th", "padding:3px 12px 3px 0;", h));
+      for (const h of [tt("pav.49ee30"), tt("pav.3b77a5"), tt("pav.01f001"), tt("pav.e9b5bb"), ""]) hr.append(el("th", "padding:3px 12px 3px 0;", h));
       t.append(hr);
       for (const c of this.#channels) {
         const tr = el("tr", "border-top:1px solid rgba(255,255,255,0.06);");
         const group = el("input", "padding:2px 6px;width:120px;");
         group.value = c.group ?? "";
-        group.placeholder = "z. B. regional";
-        const save = el("button", "padding:2px 8px;margin-left:4px;", "Speichern");
+        group.placeholder = tt("pav.4e17d8");
+        const save = el("button", "padding:2px 8px;margin-left:4px;", tt("pav.b97d23"));
         save.addEventListener("click", () => void this.#saveGroup(c, group.value));
         const gcell = el("td", "padding:3px 12px 3px 0;white-space:nowrap;");
         gcell.append(group, save);
-        const bind = c.workflowId ? `Workflow-Rolle ${c.role}` : c.instanceId ? "Instanz" : "nicht gebunden";
-        const del = el("button", "padding:2px 8px;", "Löschen");
+        const bind = c.workflowId ? tt("pav.add50d", { p0: c.role }) : c.instanceId ? tt("pav.50c3a7") : tt("pav.5423b1");
+        const del = el("button", "padding:2px 8px;", tt("pav.1010b0"));
         del.className = "omp-btn-danger";
         del.addEventListener("click", () => void this.#deleteChannel(c));
         tr.append(el("td", "padding:3px 12px 3px 0;", c.name), gcell, el("td", "padding:3px 12px 3px 0;color:var(--omp-text-dim);", c.timezone),
@@ -274,7 +275,7 @@ class PlayoutAdminView extends HTMLElement {
         t.append(tr);
       }
       sec.append(t);
-    } else sec.append(el("div", "color:var(--omp-text-dim);margin-bottom:8px;", "Noch kein Channel angelegt."));
+    } else sec.append(el("div", "color:var(--omp-text-dim);margin-bottom:8px;", tt("pav.0147be")));
 
     const form = el("div", "display:flex;gap:8px;flex-wrap:wrap;align-items:end;");
     const f = (label: string, input: HTMLElement) => {
@@ -291,21 +292,21 @@ class PlayoutAdminView extends HTMLElement {
     const tz = el("input", "padding:3px 6px;width:130px;");
     tz.value = this.#newChannel.timezone;
     tz.addEventListener("input", () => (this.#newChannel.timezone = tz.value));
-    const add = el("button", "padding:4px 12px;", "Channel anlegen");
+    const add = el("button", "padding:4px 12px;", tt("pav.ab25aa"));
     add.className = "omp-btn-primary";
     add.addEventListener("click", () => void this.#createChannel());
-    form.append(f("Name", name), f("Gruppe", group), f("Zeitzone (IANA)", tz), add);
+    form.append(f(tt("pav.49ee30"), name), f(tt("pav.3b77a5"), group), f(tt("pav.cb8fcc"), tz), add);
     sec.append(form);
     return sec;
   }
 
   #renderRules(): HTMLElement {
     const sec = el("div", "margin-bottom:24px;");
-    sec.append(el("div", "font-weight:600;font-size:15px;margin-bottom:6px;", "Trigger-Regeln (wer darf wen steuern)"));
-    if (this.#rules.length === 0) sec.append(el("div", "color:var(--omp-text-dim);margin-bottom:8px;", "Keine Regeln — kein Channel darf einen anderen steuern (nur sich selbst)."));
+    sec.append(el("div", "font-weight:600;font-size:15px;margin-bottom:6px;", tt("pav.1a703c")));
+    if (this.#rules.length === 0) sec.append(el("div", "color:var(--omp-text-dim);margin-bottom:8px;", tt("pav.143257")));
     for (const r of this.#rules) {
       const row = el("div", "display:flex;gap:10px;align-items:center;margin-bottom:3px;font-size:12px;");
-      const del = el("button", "padding:1px 8px;", "Entfernen");
+      const del = el("button", "padding:1px 8px;", tt("pav.513d30"));
       del.addEventListener("click", () => void this.#deleteRule(r));
       row.append(el("span", "", `${describeSelector(r.origin, (id) => this.#name(id))}  →  ${describeSelector(r.target, (id) => this.#name(id))}`), del);
       sec.append(row);
@@ -332,11 +333,11 @@ class PlayoutAdminView extends HTMLElement {
       w.append(el("span", "font-size:10px;color:var(--omp-text-dim);", label), input);
       return w;
     };
-    const add = el("button", "padding:4px 12px;", "Regel anlegen");
+    const add = el("button", "padding:4px 12px;", tt("pav.0ab555"));
     add.className = "omp-btn-primary";
     add.addEventListener("click", () => void this.#addRule());
-    form.append(dl, f("Ursprung (channel:<id> | group:<name> | *)", sel(this.#newRule.origin, (v) => (this.#newRule.origin = v))),
-      f("darf steuern", sel(this.#newRule.target, (v) => (this.#newRule.target = v))), add);
+    form.append(dl, f(tt("pav.1063ea"), sel(this.#newRule.origin, (v) => (this.#newRule.origin = v))),
+      f(tt("pav.86c51e"), sel(this.#newRule.target, (v) => (this.#newRule.target = v))), add);
     sec.append(form);
     return sec;
   }
@@ -344,14 +345,14 @@ class PlayoutAdminView extends HTMLElement {
   #renderLogOnly() {
     const box = this.querySelector<HTMLElement>('[data-role="trigger-log"]');
     if (!box) return;
-    box.replaceChildren(el("div", "font-weight:600;font-size:15px;margin-bottom:6px;", "Trigger-Protokoll"));
+    box.replaceChildren(el("div", "font-weight:600;font-size:15px;margin-bottom:6px;", tt("pav.d4b874")));
     if (this.#log.length === 0) {
-      box.append(el("div", "color:var(--omp-text-dim);", "Noch keine Trigger gesendet."));
+      box.append(el("div", "color:var(--omp-text-dim);", tt("pav.0ceb35")));
       return;
     }
     for (const g of groupByCorrelation(this.#log)) {
       const card = el("div", "margin-bottom:8px;padding:6px 10px;border:1px solid rgba(255,255,255,0.08);border-radius:var(--omp-radius);font-size:12px;");
-      card.append(el("div", "font-weight:600;", `${g.event} von ${this.#name(g.origin)} · ${new Date(g.at).toLocaleString("de-DE")}`));
+      card.append(el("div", "font-weight:600;", tt("pav.53fc17", { p0: g.event, p1: this.#name(g.origin), p2: new Date(g.at).toLocaleString("de-DE") })));
       for (const r of g.items) {
         const line = el("div", `color:${TONE[statusTone(r.status)]};padding-left:12px;`,
           `→ ${this.#name(r.targetChannel)} (#${r.seq}): ${statusText(r.status)}${r.detail ? ` — ${r.detail}` : ""}${r.attempts > 1 ? ` · ${r.attempts} Versuche` : ""}`);
