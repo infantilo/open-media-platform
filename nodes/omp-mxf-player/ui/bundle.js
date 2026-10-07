@@ -26,7 +26,15 @@ const T = (() => {
         "mxfp.1c2876": "Audio-Shuffle-Preset dieses Items ändern.",
         "mxfp.513d30": "Entfernen",
         "mxfp.96c237": "„{p0}\" wirklich aus der Playlist entfernen?",
-        "mxfp.0888a6": "Gecued"
+        "mxfp.0888a6": "Gecued",
+        "mxfp.mca1": "MXF-Audiolabels (MCA, ST 377-4)",
+        "mxfp.mca2": "Datei",
+        "mxfp.mca3": "Kanal",
+        "mxfp.mca4": "Label",
+        "mxfp.mca5": "Sprache",
+        "mxfp.mca6": "Inhalt / Klasse",
+        "mxfp.mca7": "Gruppe",
+        "mxfp.mca8": "Hinweis"
     },
     en: {
         "x.item": "+ Item",
@@ -52,7 +60,15 @@ const T = (() => {
         "mxfp.1c2876": "Change the audio shuffle preset of this item.",
         "mxfp.513d30": "Remove",
         "mxfp.96c237": "Really remove “{p0}” from the playlist?",
-        "mxfp.0888a6": "Cued"
+        "mxfp.0888a6": "Cued",
+        "mxfp.mca1": "MXF audio labels (MCA, ST 377-4)",
+        "mxfp.mca2": "File",
+        "mxfp.mca3": "Channel",
+        "mxfp.mca4": "Label",
+        "mxfp.mca5": "Language",
+        "mxfp.mca6": "Content / class",
+        "mxfp.mca7": "Group",
+        "mxfp.mca8": "Note"
     },
   };
   const lang = document.documentElement.lang === "en" ? "en" : "de";
@@ -311,7 +327,55 @@ class OmpMxfPlayerPanel extends HTMLElement {
     routesEmpty.textContent = T("mxfp.982e11");
     reference.append(referenceSummary, groupsTable, referenceControls, routesTable, routesEmpty);
 
-    shadow.append(style, statusRow, transportRow, addRow, list, empty, reference);
+    // MCA-Labels (SMPTE ST 377-4/-41): nur sichtbar, wenn mindestens eine Playlist-Datei Labels trägt.
+    const mcaBox = document.createElement("details");
+    mcaBox.className = "reference";
+    mcaBox.style.display = "none";
+    const mcaSummary = document.createElement("summary");
+    mcaSummary.textContent = T("mxfp.mca1");
+    const mcaTable = document.createElement("table");
+    mcaTable.className = "groups-table";
+    mcaBox.append(mcaSummary, mcaTable);
+    let mcaSig = "";
+    const renderMca = (items, mca) => {
+      const sig = JSON.stringify([items.map((i) => [i.id, i.label]), mca]);
+      if (sig === mcaSig) return;
+      mcaSig = sig;
+      const withLabels = items.filter((i) => mca && mca[i.id] && mca[i.id].channels && mca[i.id].channels.length);
+      mcaBox.style.display = withLabels.length ? "" : "none";
+      mcaTable.replaceChildren();
+      const hr = document.createElement("tr");
+      for (const h of [T("mxfp.mca2"), T("mxfp.mca3"), T("mxfp.mca4"), T("mxfp.mca5"), T("mxfp.mca6"), T("mxfp.mca7"), T("mxfp.mca8")]) {
+        const th = document.createElement("th");
+        th.textContent = h;
+        hr.append(th);
+      }
+      mcaTable.append(hr);
+      for (const it of withLabels) {
+        const sum = mca[it.id];
+        for (const ch of sum.channels) {
+          const it2 = ch.label.items || {};
+          const cells = [
+            it.label,
+            String(ch.index + 1),
+            ch.label.dictionarySymbol || ch.label.symbol + (ch.label.meaning ? " (" + ch.label.meaning + ")" : ""),
+            it2.spokenLanguage || "",
+            [it2.content, it2.useClass].filter(Boolean).join(" / "),
+            ch.soundfieldGroup ? ch.soundfieldGroup.dictionarySymbol || ch.soundfieldGroup.symbol : "",
+            (sum.issues || []).join("; "),
+          ];
+          const tr = document.createElement("tr");
+          for (const c of cells) {
+            const td = document.createElement("td");
+            td.textContent = c;
+            tr.append(td);
+          }
+          mcaTable.append(tr);
+        }
+      }
+    };
+
+    shadow.append(style, statusRow, transportRow, addRow, list, empty, mcaBox, reference);
 
     const formatTime = (ms) => {
       const total = Math.max(0, Math.round(ms / 1000));
@@ -443,7 +507,7 @@ class OmpMxfPlayerPanel extends HTMLElement {
     };
 
     const poll = async () => {
-      const [itemsValue, currentItemId, cuedItemId, mode, playheadMs, shuttleRate, mediaLibrary, groupsValue, presetsValue] =
+      const [itemsValue, currentItemId, cuedItemId, mode, playheadMs, shuttleRate, mediaLibrary, groupsValue, presetsValue, mcaValue] =
         await Promise.all([
           getParam("items"),
           getParam("currentItemId"),
@@ -454,8 +518,10 @@ class OmpMxfPlayerPanel extends HTMLElement {
           getParam("mediaLibrary"),
           getParam("programGroups"),
           getParam("shufflePresets"),
+          getParam("mcaLabels"),
         ]);
       const items = itemsValue || [];
+      renderMca(items, mcaValue || {});
       groups = groupsValue || [];
       presets = presetsValue || [];
 

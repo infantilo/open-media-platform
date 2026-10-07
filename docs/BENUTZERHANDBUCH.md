@@ -1176,6 +1176,8 @@ XAVC) oder neue Ersatzregeln brauchen keine Programmänderung. Gespeichert wird 
 mit **Speichern**; **Auf Standard zurücksetzen** lädt die mitgelieferten ORF-Werte in den Editor
 (erst Speichern übernimmt sie).
 
+**MXF-Audiolabels (MCA):** Trägt eine MXF-Datei Labels nach SMPTE ST 377-4/-41 (Sprache, Inhalt wie PRM/DV, Soundfield-Gruppe), übernehmen die Player sie automatisch als Tags (`lang:`, `role:pt`/`role:ad`, `ch:`); im MXF-Player zeigt das Panel „MXF-Audiolabels“ sie je Playlist-Datei an.
+
 1. **Ausgabegruppen** — jede Gruppe wird ein eigener Audio-Sender der Player (Standard:
    Programmton, Hörfilm/AD, Originalton, Dolby E, 5.1). Je Gruppe: ID, Name, Layout (Mono, Stereo,
    5.1, 7.1 oder eigene Kanalnamen), Tags (z. B. `role:pt`), „bit-exakt“ (nur reine 1:1-Auswahl,

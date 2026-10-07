@@ -74,6 +74,30 @@ struct PlayerStore {
     // an Programmgruppen/Presets wirken erst nach einem Neustart).
     groups: Vec<presets::ProgramGroup>,
     shuffle_presets: Vec<presets::AudioPreset>,
+    /// MCA-Zusammenfassung je Datei (ST 377-4), einmal pro Pfad gelesen.
+    mca_cache: Mutex<std::collections::HashMap<String, Value>>,
+}
+
+impl PlayerStore {
+    /// `{itemId: {channels, unlabeledChannels, issues} | null}` — null = Datei ohne MCA-Labels/unlesbar.
+    fn mca_labels(&self, items: &[(String, String)]) -> Value {
+        let mut cache = self.mca_cache.lock().expect("lock poisoned");
+        let mut out = serde_json::Map::new();
+        for (id, file) in items {
+            let v = cache
+                .entry(file.clone())
+                .or_insert_with(|| {
+                    let Ok(path) = resolve_media_path(&self.media_dir, file) else { return Value::Null };
+                    match omp_mxf_mca::read::read_file(&path) {
+                        Ok(f) if !f.is_empty() => serde_json::to_value(f.summarize()).unwrap_or(Value::Null),
+                        _ => Value::Null,
+                    }
+                })
+                .clone();
+            out.insert(id.clone(), v);
+        }
+        Value::Object(out)
+    }
 }
 
 const DEFAULT_DURATION_MS: u64 = 5000;
@@ -185,6 +209,8 @@ impl ParamStore for PlayerStore {
             ParamSpec { name: "programGroups".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             // JSON-Array [{id,label}] — die 13 Shuffle-Presets.
             ParamSpec { name: "shufflePresets".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            // JSON-Objekt {itemId: MCA-Zusammenfassung|null} (SMPTE ST 377-4/-41, Kap. 33).
+            ParamSpec { name: "mcaLabels".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
         ];
 
         let methods = vec![
@@ -270,6 +296,11 @@ impl ParamStore for PlayerStore {
                     .collect();
                 files.sort();
                 Some(serde_json::json!(files))
+            }
+            "mcaLabels" => {
+                let items: Vec<(String, String)> = state.items.iter().map(|i| (i.id.clone(), i.file.clone())).collect();
+                drop(state);
+                Some(self.mca_labels(&items))
             }
             "programGroups" => Some(serde_json::json!(
                 self.groups
@@ -541,6 +572,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         media_dir,
         groups: mxf_settings.groups,
         shuffle_presets: mxf_settings.presets,
+        mca_cache: Mutex::new(std::collections::HashMap::new()),
     });
 
     let handle = omp_node_sdk::start(

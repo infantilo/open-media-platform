@@ -201,7 +201,7 @@
     "runner": "process",
     "command": ["../nodes/target/release/omp-mxf-player"],
     "env": {},
-    "description": "MXF-Player mit Programmgruppen-Audio-Shuffle (Audio-Tonspur-Erweiterung Q3/2026): ordnet die 8 MXF-Tonspuren je nach gewähltem Preset fünf getrennten Sendern zu (Programmton, Hörfilm/AD, Originalton, Dolby E, 5.1 diskret).",
+    "description": "MXF-Player mit Programmgruppen-Audio-Shuffle (Audio-Tonspur-Erweiterung Q3/2026): ordnet die 8 MXF-Tonspuren je nach gewähltem Preset fünf getrennten Sendern zu (Programmton, Hörfilm/AD, Originalton, Dolby E, 5.1 diskret). Liest MXF-Audiolabels (SMPTE ST 377-4/-41) und zeigt sie an.",
     "i18n": { "en": {"label": "MXF Player", "description": "MXF player with programme-group audio shuffle (audio track extension Q3/2026): assigns the 8 MXF audio tracks to five separate senders depending on the chosen preset (programme sound, audio description/AD, original sound, Dolby E, 5.1 discrete).", "expectedResources": "low to moderate (file decoding)"} },
     "expectedResources": "gering bis moderat (Datei-Decoding)"
   },
