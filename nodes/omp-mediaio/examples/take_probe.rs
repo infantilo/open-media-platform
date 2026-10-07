@@ -104,6 +104,35 @@ fn main() {
     if let (Some(at), Some((first, _))) = (take_at, vmeans.first()) {
         println!("erstes gelesenes Grain: {:+} Frames zu take_at (Index), Mittel {:.0}", *first as i64 - inst.timestamp_to_index(at, &vrate).unwrap() as i64, vmeans[0].1);
     }
+    if let (Some(at), Some((_, m0))) = (take_at, vmeans.first()) {
+        // Wechsel-Messung (Mischer): erstes Bild, dessen Mittelwert vom ersten gelesenen abweicht.
+        let at_v = inst.timestamp_to_index(at, &vrate).unwrap() as i64;
+        match vmeans.iter().find(|(_, m)| (m - m0).abs() > 0.5) {
+            Some((i, m1)) => {
+                let flicker = vmeans.iter().filter(|(j, m)| j > i && (m - m1).abs() > 0.5).count();
+                println!("WECHSEL Bild: erstes verändertes Grain {:+} Frames zu take_at, Rückfälle danach: {flicker}", *i as i64 - at_v)
+            }
+            None => println!("WECHSEL Bild: keiner"),
+        }
+        // Ton: erster Sample nach lautem Signal, ab dem 480 Samples lang Stille herrscht.
+        let at_a = inst.timestamp_to_index(at, &arate).unwrap() as i64;
+        let keys: Vec<u64> = a_all.keys().copied().collect();
+        let mut loud = false;
+        let mut cut = None;
+        for (n, k) in keys.iter().enumerate() {
+            let v = a_all[k].abs();
+            if v > 0.01 {
+                loud = true;
+            } else if loud && n + 480 < keys.len() && keys[n..n + 480].iter().all(|kk| a_all[kk].abs() < 1e-4) {
+                cut = Some(*k);
+                break;
+            }
+        }
+        match cut {
+            Some(k) => println!("WECHSEL Ton: erster stiller Sample {:+} Samples zu take_at ({:+.2} ms)", k as i64 - at_a, (k as i64 - at_a) as f64 / 48.0),
+            None => println!("WECHSEL Ton: keiner"),
+        }
+    }
     println!("video grains={} (mean {vmin:.0}..{vmax:.0}), Marker-Bilder={}", vmeans.len(), bright.len());
     let report = |name: &str, tai: Option<u64>, unit_ns: f64, unit: &str| match (tai, take_at) {
         (Some(t), Some(at)) => println!("{name}: TAI {t}  Δ zu take_at = {:+.3} {unit} ({:+.2} ms)", (t as f64 - at as f64) / unit_ns, (t as f64 - at as f64) / 1e6),

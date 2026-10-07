@@ -438,6 +438,13 @@ pub enum Event {
 }
 
 enum Command {
+    /// Geplanter Befehl (Kap. 31.4): der Befehls-Thread wartet auf den Puffer mit TAI-Zeitmarke `at`
+    /// (Alter der Ziel-Quelle am Selektor eingerechnet) und führt dann `inner` aus.
+    At(u64, Box<Command>),
+    /// Der am Compositor geplante harte Wechsel ist erfolgt (Ebene, neue Quelle).
+    FlipDone(usize, Option<String>),
+    /// Nach dem Einlaufen des Vordergrund-Zweigs: Bild von Hintergrund auf Vordergrund zurücklegen.
+    FlipSettle(usize, Option<String>),
     SetInputs(Vec<DiscoveredInput>),
     SelectPreset(usize, Option<String>),
     Cut(usize),
@@ -523,20 +530,18 @@ impl PipelineHandle {
     }
 
     /// Gemeinsamer Schaltzeitpunkt (Kap. 31.4): `at_tai_ns` ist ein absoluter
-    /// TAI-Zeitpunkt (ns). Liegt er in der Zukunft, schaltet der Mischer erst dort
-    /// (abzüglich der Pipeline-Latenz `OMP_TAKE_LEAD_MS`, Standard 0); sonst sofort.
+    /// TAI-Zeitpunkt (ns). Liegt er in der Zukunft, schaltet der Mischer erst, wenn der Puffer mit dieser
+    /// Zeitmarke den Selektor erreicht (Alter der Quelle eingerechnet); sonst sofort.
     /// Die Wartezeit liegt in einem eigenen Thread — der Command-Thread bleibt frei.
     fn send_at(&self, at_tai_ns: Option<u64>, cmd: Command) {
         match at_tai_ns {
             Some(at) if at > omp_mediaio::timebase::tai_now_ns() => {
                 let tx = self.commands.clone();
-                let lead_ns = std::env::var("OMP_TAKE_LEAD_MS")
-                    .ok()
-                    .and_then(|v| v.parse::<f64>().ok())
-                    .map_or(0, |ms| (ms * 1e6) as u64);
                 std::thread::spawn(move || {
-                    omp_mediaio::timebase::sleep_until_tai(at, lead_ns);
-                    let _ = tx.send(cmd);
+                    // Grob warten; die genaue Wartezeit (Alter der Quelle am Selektor) bestimmt der
+                    // Befehls-Thread, der die Pads kennt, s. `Command::At`.
+                    omp_mediaio::timebase::sleep_until_tai(at, TAKE_AT_EARLY_NS);
+                    let _ = tx.send(Command::At(at, Box::new(cmd)));
                 });
             }
             _ => {
@@ -1498,6 +1503,70 @@ impl Drop for ActivePipeline {
 /// Setzt `isel`s `active-pad` auf den Eingang `selected` (Schwarzbild bei
 /// `None` oder unbekannter `senderId`) und liefert die tatsächlich aktiv
 /// geschaltete `senderId` zurück.
+/// So früh vor `takeAt` übergibt der Wartethread den Befehl an den Befehls-Thread (der die Quelle
+/// im Hintergrund-Zweig vorbereitet, damit ihre Bilder am Compositor bereitstehen).
+const TAKE_AT_EARLY_NS: u64 = 400_000_000;
+/// So lange läuft nach einem geplanten Cut der Vordergrund-Zweig ein (Selektor + Warteschlangen),
+/// bevor das Bild von Hintergrund auf Vordergrund zurückgelegt wird.
+const FLIP_SETTLE: Duration = Duration::from_millis(600);
+
+/// Geplanter Wechsel am Compositor (Kap. 31.4): ein Probe am Compositor-Ausgang wartet auf das
+/// Ausgangsbild unmittelbar VOR dem Zielbild `takeAt` und legt dann im Aggregator-Thread die
+/// Alpha-Werte um — der Compositor liest sie erst für das nächste Ausgangsbild, der Wechsel liegt
+/// damit unabhängig von Warteschlangen/Latenzen genau auf dem Bild `takeAt`.
+struct FlipJob {
+    at_tai_ns: u64,
+    /// `Some(quelle)`: harter Wechsel (Alpha umlegen, dann `FlipDone`); `None` im Feld `auto`:
+    /// stattdessen eine Überblendung per `AutoTrans` anstoßen.
+    cut_to: Option<Option<String>>,
+    comp_fg: gst::Pad,
+    comp_bg: gst::Pad,
+    tx: Sender<Command>,
+    level: usize,
+}
+
+static FLIPS: std::sync::LazyLock<Mutex<HashMap<usize, FlipJob>>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Hängt den Wechsel-Probe an den Ausgang des Compositors einer Ebene.
+fn attach_flip_probe(comp: &gst::Element, level: usize, frame_ns: u64) {
+    let Some(src) = comp.static_pad("src") else { return };
+    src.add_probe(gst::PadProbeType::BUFFER, move |pad, info| {
+        let armed = FLIPS.lock().expect("lock poisoned").contains_key(&level);
+        if !armed {
+            return gst::PadProbeReturn::Ok;
+        }
+        if let Some(gst::PadProbeData::Buffer(buffer)) = &info.data
+            && let Some(pts) = buffer.pts()
+            && let Some(ev) = pad.sticky_event::<gst::event::Segment>(0)
+            && let Ok(seg) = ev.segment().clone().downcast::<gst::ClockTime>()
+            && let Some(running) = seg.to_running_time(pts)
+            && let Some(el) = pad.parent_element()
+            && let (Some(clock), Some(base)) = (el.clock(), el.base_time())
+        {
+            let tai_now = omp_mediaio::timebase::tai_now_ns();
+            if let Some(tai) = omp_mediaio::timebase::running_to_tai(running.nseconds(), base.nseconds(), clock.time().nseconds(), tai_now) {
+                let mut flips = FLIPS.lock().expect("lock poisoned");
+                // Dieses Ausgangsbild ist das letzte vor dem Zielbild (oder schon später: sofort).
+                if flips.get(&level).is_some_and(|j| tai + frame_ns + 1_000_000 >= j.at_tai_ns)
+                    && let Some(job) = flips.remove(&level)
+                {
+                    match job.cut_to {
+                        Some(target) => {
+                            job.comp_bg.set_property("alpha", 1.0f64);
+                            job.comp_fg.set_property("alpha", 0.0f64);
+                            let _ = job.tx.send(Command::FlipDone(job.level, target));
+                        }
+                        None => {
+                            let _ = job.tx.send(Command::AutoTrans(job.level));
+                        }
+                    }
+                }
+            }
+        }
+        gst::PadProbeReturn::Ok
+    });
+}
+
 fn switch_isel(isel: &gst::Element, pads: &HashMap<String, gst::Pad>, black: &gst::Pad, selected: &Option<String>) -> Option<String> {
     let pad = selected
         .as_ref()
@@ -1838,6 +1907,7 @@ fn build(
         pipeline
             .add(&comp)
             .map_err(|e| format!("add compositor (level {level_idx}): {e}"))?;
+        attach_flip_probe(&comp, level_idx, 1_000_000_000 * FRAMERATE_DENOMINATOR as u64 / FRAMERATE_NUMERATOR as u64);
 
         // ── comp.sink_0 = Programm (fg, zorder 2). Dauerhaft vollflächig
         //    (Architekturentscheidung 2026-07-22, s. Moduldoku "PIP als
@@ -2411,7 +2481,81 @@ pub fn run(
             refresh_source_gates(p, &mut gate_last_used);
         }
 
-        match commands_rx.recv_timeout(Duration::from_millis(500)) {
+        let received = match commands_rx.recv_timeout(Duration::from_millis(500)) {
+            Ok(Command::At(at, inner)) => {
+                // Geplanter Take/Cut/Mix (Kap. 31.4): Zielquelle jetzt im Hintergrund-Zweig bereitstellen und
+                // den Wechsel am Compositor auf das Bild `takeAt` scharf schalten. Ohne aktive Pipeline oder
+                // bei laufender Überblendung: wie ein sofortiger Befehl.
+                let plan = match &*inner {
+                    Command::Take(level, sender) => Some((*level, Some(sender.clone()))),
+                    Command::Cut(level) => preset.get(*level).map(|p| (*level, Some(p.clone()))),
+                    Command::AutoTrans(level) => Some((*level, None)),
+                    _ => None,
+                };
+                let armed = plan.and_then(|(level, cut_to)| {
+                    if auto_trans_running(&fade_threads, level) {
+                        return None;
+                    }
+                    let lvl = active.as_ref()?.levels.get(level)?;
+                    if let Some(target) = &cut_to {
+                        switch_isel(&lvl.isel_bg, &lvl.source_pads_bg, &lvl.black_pad_bg, target);
+                    }
+                    FLIPS.lock().expect("lock poisoned").insert(
+                        level,
+                        FlipJob {
+                            at_tai_ns: at,
+                            cut_to,
+                            comp_fg: lvl.comp_fg_pad.clone(),
+                            comp_bg: lvl.comp_bg_pad.clone(),
+                            tx: anim_tx.clone(),
+                            level,
+                        },
+                    );
+                    Some(())
+                });
+                match armed {
+                    Some(()) => continue,
+                    None => Ok(*inner),
+                }
+            }
+            other => other,
+        };
+        match received {
+            Ok(Command::At(..)) => {}
+            // Geplanter Cut ist am Compositor erfolgt (Alpha umgelegt): Programm-Zustand nachziehen, den
+            // Vordergrund-Selektor auf die Quelle stellen und nach `FLIP_SETTLE` das Bild vom Hintergrund
+            // auf den Vordergrund zurücklegen (dann zeigen beide dieselbe Quelle — unsichtbarer Tausch).
+            Ok(Command::FlipDone(level, target)) => {
+                if let (Some(p), Some(prog), Some(fading_l)) = (
+                    active.as_mut().and_then(|a| a.levels.get_mut(level)),
+                    program.get_mut(level),
+                    fading.get(level),
+                ) {
+                    let previous = prog.clone();
+                    let applied = switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, &target);
+                    *prog = applied;
+                    fading_l.store(false, Ordering::Release);
+                    let _ = tx.send(Event::ProgramChanged { level, previous, current: prog.clone() });
+                    let _ = tx.send(Event::TransitionPositionChanged { level, position: 0.0 });
+                    let settle_tx = anim_tx.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(FLIP_SETTLE);
+                        let _ = settle_tx.send(Command::FlipSettle(level, target));
+                    });
+                }
+            }
+            Ok(Command::FlipSettle(level, target)) => {
+                if let (Some(p), Some(prog)) = (active.as_mut().and_then(|a| a.levels.get_mut(level)), program.get(level))
+                    && *prog == target
+                    && !auto_trans_running(&fade_threads, level)
+                {
+                    switch_isel(&p.isel_bg, &p.source_pads_bg, &p.black_pad_bg, &target);
+                    p.comp_fg_pad.set_property("alpha", 1.0f64);
+                    p.comp_bg_pad.set_property("alpha", 0.0f64);
+                    set_pos(&p.comp_fg_pad, 0, 0);
+                    set_pos(&p.comp_bg_pad, 0, 0);
+                }
+            }
             Ok(Command::SetInputs(inputs)) => {
                 if inputs_changed(&current_inputs, &inputs) {
                     current_inputs = inputs;
