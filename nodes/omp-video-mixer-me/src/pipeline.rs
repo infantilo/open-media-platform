@@ -1672,7 +1672,7 @@ fn report_missing_inputs(monitor: &omp_node_sdk::Monitor, missing: &[String]) {
     monitor.activity.observe(
         level,
         delay,
-        Some(&format!("{} Crosspoint-Eingang/-Eingänge nicht lesbar (Flow not found): {missing:?}", missing.len())),
+        (!missing.is_empty()).then(|| format!("{} Crosspoint-Eingang/-Eingänge nicht lesbar (Flow not found): {missing:?}", missing.len())).as_deref(),
     );
 }
 
@@ -3041,6 +3041,11 @@ pub fn run(
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // `connectionStatus` entprellt eine ERHOLUNG (Healthy erst nach `status_reporting_delay`
+                // ununterbrochen): dafür muss der Rohwert regelmäßig neu gemeldet werden, nicht nur beim
+                // Rebuild — sonst blieb nach einem erfolgreichen Retry die „nicht lesbar“-Meldung dauerhaft
+                // stehen (Start-Race-Befund 2026-10-07: Eingänge liefen längst, Status blieb Unhealthy).
+                report_missing_inputs(&monitor, &missing_inputs);
                 // Missing-Input-Retry (s. Doku bei `OLD_WRITER_DRAIN`/
                 // Nachtrag Bug 2): ohne diesen Zweig bliebe ein beim
                 // letzten Build übersprungener Eingang bis zur nächsten
