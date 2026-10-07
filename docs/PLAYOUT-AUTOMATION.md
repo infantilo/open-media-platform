@@ -154,7 +154,7 @@ Zustellung per NATS (`omp.playout.…`) mit Wiederholung, Deduplizierung und Qui
 (`trigger-ack`). Events: `CHANNEL_NEXT`, `CHANNEL_NEXT_LIVE`, `CHANNEL_JUMP`, `CHANNEL_CUT`,
 `CHANNEL_HOLD`, `CHANNEL_RESUME`, `CHANNEL_TRIGGER` (benannt, ohne eingebauten Handler).
 Ziele: Channel-ID, Gruppe, `*`. **Standard ist verweigern:** nur Regeln
-(`/api/v1/playout/trigger-rules`, Admin → Playout) erlauben, wer wen steuert; jede Zustellung,
+(`/api/v1/playout/trigger-rules`, Admin → Playout → Channels & Trigger) erlauben, wer wen steuert; jede Zustellung,
 auch verweigerte, steht im Trigger-Protokoll. Late-Policy bei `targetTime`: `EXECUTE_IMMEDIATELY`,
 `SKIP`, `RESYNC`, `QUEUE`. Grenze: der NATS-Absender ist auf Bus-Ebene nicht authentisiert
 (der Orchestrator erzwingt die Rechte).
@@ -242,7 +242,7 @@ dem tatsächlichen Player-/Mixer-Zustand (Spec §115).
   `limit`, `format=csv`): je Primary Ist-Start/-Ende, Plan-Abweichung, Endstatus
   (`COMPLETED`, `INTERRUPTED`, `STOPPED`, `FAILED`), Child-Zeilen, Warnungen (gedrosselt),
   Trigger mit Korrelations-ID, manuelle Eingriffe mit Benutzername. Idempotent über `key`,
-  Bereinigung täglich nach `AuditRetentionDays`. Ansicht: Admin → Playout → As-Run-Protokoll
+  Bereinigung täglich nach `AuditRetentionDays`. Ansicht: Admin → Playout → Channels & Trigger → As-Run-Protokoll
   (Filter, CSV-Export).
 - **Metriken** (`/metrics`): `omp_playout_events_total`, `…_event_start_lateness_seconds`,
   `…_event_start_early_seconds`, `…_event_duration_seconds`, `…_child_event_failures_total`,

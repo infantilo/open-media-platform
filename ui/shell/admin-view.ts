@@ -274,22 +274,36 @@ interface UpdateOverview {
 }
 
 type AdminTabId = "users" | "organizations" | "groups" | "bindings" | "catalog" | "storage" | "audit" | "diagnose" | "backup" | "update" | "nodeversions" | "settings" | "playout" | "audio" | "cluster";
-const ADMIN_SUB_TABS: { id: AdminTabId; label: string }[] = [
-  { id: "users", label: "Nutzer" },
-  { id: "organizations", label: "Organisationen" },
-  { id: "groups", label: "Gruppen" },
-  { id: "bindings", label: "Rollenbindungen" },
-  { id: "catalog", label: "Node-Katalog" },
-  { id: "nodeversions", label: "Node-Versionen" },
-  { id: "storage", label: "Storage" },
-  { id: "audit", label: "Audit-Log" },
-  { id: "diagnose", label: "Diagnose" },
-  { id: "backup", label: "Backup/Restore" },
-  { id: "update", label: "System-Update" },
-  { id: "settings", label: "Einstellungen" },
-  { id: "playout", label: "Playout" },
-  { id: "audio", label: "Audio-Ausgabe" },
-  { id: "cluster", label: "Cluster" },
+// Gruppiert (Nutzerhinweis 2026-10-07): "Playout" und "Audio-Ausgabe" gehören
+// zur Playout-Automation (Kapitel 27), nicht zur allgemeinen Plattform-Verwaltung.
+const ADMIN_SUB_TAB_GROUPS: { id: string; label: string; tabs: { id: AdminTabId; label: string }[] }[] = [
+  {
+    id: "platform",
+    label: "Plattform",
+    tabs: [
+      { id: "users", label: "Nutzer" },
+      { id: "organizations", label: "Organisationen" },
+      { id: "groups", label: "Gruppen" },
+      { id: "bindings", label: "Rollenbindungen" },
+      { id: "catalog", label: "Node-Katalog" },
+      { id: "nodeversions", label: "Node-Versionen" },
+      { id: "storage", label: "Storage" },
+      { id: "audit", label: "Audit-Log" },
+      { id: "diagnose", label: "Diagnose" },
+      { id: "backup", label: "Backup/Restore" },
+      { id: "update", label: "System-Update" },
+      { id: "settings", label: "Einstellungen" },
+      { id: "cluster", label: "Cluster" },
+    ],
+  },
+  {
+    id: "playout",
+    label: "Playout",
+    tabs: [
+      { id: "playout", label: "Channels & Trigger" },
+      { id: "audio", label: "Audio-Ausgabe" },
+    ],
+  },
 ];
 const SUB_TAB_BUTTON_BASE =
   "border:1px solid transparent;border-radius:var(--omp-radius);" +
@@ -2445,23 +2459,34 @@ class AdminView extends HTMLElement {
   #renderTabBar(): HTMLElement {
     const bar = document.createElement("div");
     bar.setAttribute("data-role", "admin-sub-tabs");
-    bar.style.cssText = "display:flex;gap:var(--omp-space-2);margin-bottom:var(--omp-space-3);";
-    for (const tab of ADMIN_SUB_TABS) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.textContent = tab.label;
-      btn.setAttribute("data-tab-id", tab.id);
-      const isActive = tab.id === this.#activeAdminTab;
-      btn.style.cssText =
-        SUB_TAB_BUTTON_BASE +
-        (isActive
-          ? "background:var(--omp-surface-raised);color:var(--omp-text);border-color:var(--omp-border);"
-          : "background:transparent;color:var(--omp-text-dim);");
-      btn.addEventListener("click", () => {
-        this.#activeAdminTab = tab.id;
-        this.#render();
-      });
-      bar.appendChild(btn);
+    bar.style.cssText = "display:flex;flex-wrap:wrap;gap:var(--omp-space-2) var(--omp-space-4);margin-bottom:var(--omp-space-3);";
+    for (const group of ADMIN_SUB_TAB_GROUPS) {
+      const box = document.createElement("div");
+      box.setAttribute("data-group", group.id);
+      box.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:var(--omp-space-2);";
+      const label = document.createElement("span");
+      label.textContent = group.label;
+      label.style.cssText =
+        "font-size:var(--omp-font-size-xs);text-transform:uppercase;letter-spacing:0.05em;color:var(--omp-text-dim);";
+      box.appendChild(label);
+      for (const tab of group.tabs) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = tab.label;
+        btn.setAttribute("data-tab-id", tab.id);
+        const isActive = tab.id === this.#activeAdminTab;
+        btn.style.cssText =
+          SUB_TAB_BUTTON_BASE +
+          (isActive
+            ? "background:var(--omp-surface-raised);color:var(--omp-text);border-color:var(--omp-border);"
+            : "background:transparent;color:var(--omp-text-dim);");
+        btn.addEventListener("click", () => {
+          this.#activeAdminTab = tab.id;
+          this.#render();
+        });
+        box.appendChild(btn);
+      }
+      bar.appendChild(box);
     }
     return bar;
   }

@@ -30317,3 +30317,12 @@ plus Karte/Auslastung je Host (Agent-Hosts und lokaler Host, Grenzwert aus
 Node-Karte, „lokal, kein Netz" an MXL-Links auf einem Host; Fehler bei
 Bedarf > Karte oder Auslastung ≥ Grenzwert, Hinweis bei unbekanntem Link.
 Live geprüft (omp-source → omp-2110-gateway-output: 871 Mbit/s Tx, Karte 6 %).
+
+## Nachtrag (2026-10-07): Administration in Gruppen „Plattform" und „Playout"
+
+Nutzerhinweis: „Playout" und „Audio-Ausgabe" gehören zur Playout-
+Automation (Kap. 27), nicht zur allgemeinen Orchestrator-Verwaltung.
+Unterleiste in `admin-view.ts` jetzt zweigeteilt (`ADMIN_SUB_TAB_GROUPS`):
+Plattform (13 Tabs) und Playout (Channels & Trigger, Audio-Ausgabe).
+Tab-IDs/Views unverändert. Nächster Schritt (vereinbart): Mehrsprachigkeit
+Deutsch/Englisch, zuerst Kern (`t()`, Sprachdateien, Nutzerwahl).
