@@ -1489,6 +1489,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-mxf-mca"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "omp-mxf-player"
 version = "0.1.0"
 dependencies = [

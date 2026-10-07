@@ -31,6 +31,7 @@ members = [
     "omp-scope",
     "omp-webrtc-gateway",
     "omp-audio-rules",
+    "omp-mxf-mca",
 ]
 
 # Eigener Rust-Code mit Pixel-Schleifen (v210-Packen/Alpha-Key-Extraktion in

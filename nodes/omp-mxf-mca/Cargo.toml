@@ -1,0 +1,14 @@
+[package]
+name = "omp-mxf-mca"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# MXF Multichannel Audio Labeling (SMPTE ST 377-4 + kontrolliertes Vokabular
+# ST 377-41): Lesen der MCA-Label-SubDescriptors aus MXF-Dateien und
+# (Schreib-Teil) Einfügen in bestehende Dateien. Reine Logik ohne
+# GStreamer/ffmpeg — weder mxfdemux noch ffmpeg 5.1 liefern die Labels
+# (docs/ENTWURF-MXF-MCA.md). Nur serde für die JSON-Sicht in Node-Parametern.
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
