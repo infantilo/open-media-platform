@@ -1,3 +1,160 @@
+// i18n (de/en): Sprache aus <html lang> (setzt die Shell, ui/shell/i18n.ts),
+// Fallback Deutsch. Eigenes Mini-t(), weil Node-Bundles keine Shell-Imports nutzen.
+const T = (() => {
+  const D = {
+    de: {
+      "close": "Schließen (Esc)",
+      "closeAria": "Schließen",
+      "noPicture": "kein Bild",
+      "mismatch": "Abweichendes Format: {format} — Mixer: {own}",
+      "mixerLevels": "Mischerebenen",
+      "ownWorkflow": "Dieser Workflow",
+      "otherSources": "Andere Quellen",
+      "sources": "Quellen",
+      "sourcesTitle": "Quellen anpinnen/entfernen, DSK-Quelle wählen",
+      "pipAddTitle": "Neues PIP-Preset anlegen",
+      "kindMix": "Überblendung",
+      "kindVfade": "Über Schwarz (ausgehendes Bild blendet ab, neues auf)",
+      "kindFadecut": "Ausgehendes Bild blendet auf Schwarz, dann steht das neue hart da",
+      "kindCutfade": "Hart auf Schwarz, das neue Bild blendet auf",
+      "slideWhat": "Slide: neues Bild fährt über das alte,",
+      "pushWhat": "Push: neues Bild schiebt das alte hinaus,",
+      "dirRight": "nach rechts",
+      "dirLeft": "nach links",
+      "dirDown": "nach unten",
+      "dirUp": "nach oben",
+      "rampTitle": "Rampendauer: {frames} Frames ({ms}ms)",
+      "pinned": "Angepinnte Quellen (PGM/PST-Kreuzschiene)",
+      "nonePinned": "keine Quellen angeheftet",
+      "removeSource": "Quelle entfernen",
+      "moveFront": "Nach vorn (links)",
+      "moveBack": "Nach hinten (rechts)",
+      "addSource": "Quelle hinzufügen…",
+      "dskSource": "DSK-Quelle (Fill+Key)",
+      "name": "Name",
+      "source": "Quelle",
+      "black": "Schwarz",
+      "pipPoints": "Fahrt: Start → Halten → Ende",
+      "ptStart": "Start",
+      "ptHold": "Halten",
+      "ptEnd": "Ende",
+      "usePosition": "{text}-Position verwenden",
+      "slideIn": "Einfahrt ",
+      "slideOut": "Ausfahrt ",
+      "outside": "Außerhalb:",
+      "edgeLeft": "◀ links",
+      "edgeRight": "rechts ▶",
+      "edgeTop": "▲ oben",
+      "edgeBottom": "unten ▼",
+      "editorHint": "Ziehen zum Verschieben, Ecke zum Skalieren",
+      "hint0": "Ohne Start/Ende erscheint PIP direkt an der Haltposition.",
+      "hint3": "3 Punkte: fährt von Start nach Halten; beim Ausschalten von Halten nach Ende.",
+      "hint2s": "2 Punkte: fährt von Start nach Halten; beim Ausschalten zurück nach Start.",
+      "hint2e": "Beim Ausschalten fährt PIP von Halten nach Ende.",
+      "delete": "Löschen",
+      "cancel": "Abbrechen",
+      "confirmDelete": "PIP-Preset \"{name}\" wirklich löschen?",
+      "saveOnly": "Nur speichern",
+      "saveOnlyTitle": "Preset speichern, ohne es zu aktivieren",
+      "saveShow": "Speichern & Anzeigen",
+      "saveShowTitle": "Preset speichern und sofort einfahren",
+      "editPreset": "Preset bearbeiten",
+      "editTitle": "PIP-Preset bearbeiten",
+      "newTitle": "Neues PIP-Preset",
+      "emptyPinned": "keine Quellen angeheftet — über den Quellen-Dialog hinzufügen",
+      "levels": "Ebenen",
+      "apply": "Übernehmen",
+      "applyTitle": "Node neu starten — kurz nicht erreichbar, zuvor aufgelegte Quellen werden danach automatisch wieder verbunden.",
+      "confirmRestart": "Rolle \"{role}\" mit {n} Ebene(n) neu starten? Der Node ist dabei kurz nicht erreichbar, zuvor aufgelegte Quellen werden danach automatisch wieder verbunden.",
+      "restartFailed": "Neustart fehlgeschlagen: {err}",
+      "savePreset": "Preset speichern",
+      "noPresets": "keine Presets gespeichert",
+      "applyPreset": "Preset anwenden",
+      "promptName": "Name des Presets:",
+      "newPresetName": "Neues Preset",
+      "thumbnails": "Vorschaubilder"
+  },
+    en: {
+      "close": "Close (Esc)",
+      "closeAria": "Close",
+      "noPicture": "no picture",
+      "mismatch": "Different format: {format} — mixer: {own}",
+      "mixerLevels": "Mixer levels",
+      "ownWorkflow": "This workflow",
+      "otherSources": "Other sources",
+      "sources": "Sources",
+      "sourcesTitle": "Pin/remove sources, choose DSK source",
+      "pipAddTitle": "Create a new PIP preset",
+      "kindMix": "Dissolve",
+      "kindVfade": "Via black (outgoing picture fades out, new one fades in)",
+      "kindFadecut": "Outgoing picture fades to black, then the new one cuts in",
+      "kindCutfade": "Hard cut to black, the new picture fades in",
+      "slideWhat": "Slide: new picture slides over the old one,",
+      "pushWhat": "Push: new picture pushes the old one out,",
+      "dirRight": "to the right",
+      "dirLeft": "to the left",
+      "dirDown": "downwards",
+      "dirUp": "upwards",
+      "rampTitle": "Ramp duration: {frames} frames ({ms}ms)",
+      "pinned": "Pinned sources (PGM/PST crosspoint)",
+      "nonePinned": "no sources pinned",
+      "removeSource": "Remove source",
+      "moveFront": "Move forward (left)",
+      "moveBack": "Move back (right)",
+      "addSource": "Add source…",
+      "dskSource": "DSK source (fill+key)",
+      "name": "Name",
+      "source": "Source",
+      "black": "Black",
+      "pipPoints": "Move: start → hold → end",
+      "ptStart": "Start",
+      "ptHold": "Hold",
+      "ptEnd": "End",
+      "usePosition": "Use {text} position",
+      "slideIn": "Slide in ",
+      "slideOut": "Slide out ",
+      "outside": "Outside:",
+      "edgeLeft": "◀ left",
+      "edgeRight": "right ▶",
+      "edgeTop": "▲ top",
+      "edgeBottom": "bottom ▼",
+      "editorHint": "Drag to move, corner to resize",
+      "hint0": "Without start/end the PIP appears directly at the hold position.",
+      "hint3": "3 points: moves from start to hold; when switched off from hold to end.",
+      "hint2s": "2 points: moves from start to hold; when switched off back to start.",
+      "hint2e": "When switched off the PIP moves from hold to end.",
+      "delete": "Delete",
+      "cancel": "Cancel",
+      "confirmDelete": "Really delete PIP preset \"{name}\"?",
+      "saveOnly": "Save only",
+      "saveOnlyTitle": "Save the preset without activating it",
+      "saveShow": "Save & show",
+      "saveShowTitle": "Save the preset and show it immediately",
+      "editPreset": "Edit preset",
+      "editTitle": "Edit PIP preset",
+      "newTitle": "New PIP preset",
+      "emptyPinned": "no sources pinned — add them via the sources dialog",
+      "levels": "Levels",
+      "apply": "Apply",
+      "applyTitle": "Restarts the node — briefly unreachable; sources patched in before are reconnected automatically afterwards.",
+      "confirmRestart": "Restart role \"{role}\" with {n} level(s)? The node is briefly unreachable; sources patched in before are reconnected automatically afterwards.",
+      "restartFailed": "Restart failed: {err}",
+      "savePreset": "Save preset",
+      "noPresets": "no presets saved",
+      "applyPreset": "Apply preset",
+      "promptName": "Preset name:",
+      "newPresetName": "New preset",
+      "thumbnails": "Thumbnails"
+  },
+  };
+  const lang = document.documentElement.lang === "en" ? "en" : "de";
+  return (k, p) => {
+    let s = (D[lang] && D[lang][k]) ?? D.de[k] ?? k;
+    if (p) for (const x in p) s = s.split("{" + x + "}").join(p[x]);
+    return s;
+  };
+})();
+
 // Node-UI-Bundle des Bildmischers (UMSETZUNG.md C10/K3-Teil-1,
 // ARCHITECTURE.md §4.5, docs/END-GOAL-FEATURES.md §3.3/§3.4) — Hardware-
 // Pult-Optik statt generischer Button-Liste — PGM/PST-Doppelreihe,
@@ -263,7 +420,7 @@ function openModal(titleText, opts) {
     </style>
     <div class="backdrop" part="backdrop"></div>
     <div class="dialog" role="dialog" aria-label="${titleText}">
-      <div class="head"><h3>${titleText}</h3><button class="close" type="button" title="Schließen (Esc)" aria-label="Schließen">✕</button></div>
+      <div class="head"><h3>${titleText}</h3><button class="close" type="button" title="${T("close")}" aria-label="${T("closeAria")}">✕</button></div>
       <div class="body"></div>
     </div>
   `;
@@ -446,7 +603,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
       [disabled] { opacity: 0.4; }
     `;
 
-    // Bugfund 2026-09-28 Teil 2 (Nutzermeldung: "kein Bild"-Text ist weg,
+    // Bugfund 2026-09-28 Teil 2 (Nutzermeldung: T("noPicture")-Text ist weg,
     // aber es blitzt weiterhin zyklisch schwarz durch): live per
     // Pixel-genauem `requestAnimationFrame`-Sampling bestätigt (nicht
     // geraten) — direkt nach JEDER `img.src = neueURL`-Zuweisung lief das
@@ -510,7 +667,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
           img.style.display = "none"; // erst sichtbar, sobald das erste Bild wirklich geladen ist
           const noSignal = document.createElement("div");
           noSignal.className = "no-signal";
-          noSignal.textContent = "kein Bild";
+          noSignal.textContent = T("noPicture");
           // `.hidden` toggeln reicht hier NICHT (s. Bugfund 2026-09-28
           // Teil 1 oben in der Moduldoku): `.bus-thumb .no-signal {
           // display:flex; }` (Klassen-Selektor) überstimmt die UA-Regel
@@ -523,7 +680,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         } else {
           const noSignal = document.createElement("div");
           noSignal.className = "no-signal";
-          noSignal.textContent = "kein Bild";
+          noSignal.textContent = T("noPicture");
           thumb.append(noSignal);
         }
         const thumbLabel = document.createElement("div");
@@ -625,7 +782,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const btn = reusable
           ? updateBusButton(reused, shownLabel, entry.senderId, sourceNodeId)
           : makeBusButton(call, shownLabel, entry.senderId, isProgram, sourceNodeId);
-        if (entry.mismatch) btn.title = `Abweichendes Format: ${entry.format || "?"} — Mixer: ${entry.mixerFormat || "?"}`;
+        if (entry.mismatch) btn.title = T("mismatch", { format: entry.format || "?", own: entry.mixerFormat || "?" });
         else btn.removeAttribute("title");
         if (reused) existingButtons.delete(entry.senderId);
         btn.dataset.senderId = entry.senderId;
@@ -642,7 +799,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         if (levelEntries.length > 0) {
           const levelLabel = document.createElement("div");
           levelLabel.className = "group-label";
-          levelLabel.textContent = "Mischerebenen";
+          levelLabel.textContent = T("mixerLevels");
           fragment.append(levelLabel);
           for (const entry of levelEntries) appendEntry(entry);
         }
@@ -653,13 +810,13 @@ class OmpVideoMixerMePanel extends HTMLElement {
       if (own.length > 0 && others.length > 0) {
         const ownLabel = document.createElement("div");
         ownLabel.className = "group-label";
-        ownLabel.textContent = "Dieser Workflow";
+        ownLabel.textContent = T("ownWorkflow");
         fragment.append(ownLabel);
         for (const entry of own) appendEntry(entry);
 
         const otherLabel = document.createElement("div");
         otherLabel.className = "group-label";
-        otherLabel.textContent = "Andere Quellen";
+        otherLabel.textContent = T("otherSources");
         fragment.append(otherLabel);
         for (const entry of others) appendEntry(entry);
       } else {
@@ -802,8 +959,8 @@ class OmpVideoMixerMePanel extends HTMLElement {
       toolbarRow.className = "toolbar-row";
       const sourcesBtn = document.createElement("omp-button");
       sourcesBtn.className = "sources-btn";
-      sourcesBtn.textContent = "Quellen";
-      sourcesBtn.title = "Quellen anpinnen/entfernen, DSK-Quelle wählen";
+      sourcesBtn.textContent = T("sources");
+      sourcesBtn.title = T("sourcesTitle");
       const keyerBtn = document.createElement("omp-button");
       keyerBtn.className = "dsk-btn";
       keyerBtn.textContent = "DSK";
@@ -817,7 +974,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
       const pipAddBtn = document.createElement("omp-button");
       pipAddBtn.className = "pip-add";
       pipAddBtn.textContent = "+";
-      pipAddBtn.title = "Neues PIP-Preset anlegen";
+      pipAddBtn.title = T("pipAddTitle");
 
       buses.append(pgmRow, pstRow, toolbarRow, pipRow);
 
@@ -858,10 +1015,10 @@ class OmpVideoMixerMePanel extends HTMLElement {
       const mixWipe = document.createElement("div");
       mixWipe.className = "mix-wipe";
       mixWipe.append(
-        makeKindButton("mix", "MIX", "Überblendung"),
-        makeKindButton("vfade", "V-FADE", "Über Schwarz (ausgehendes Bild blendet ab, neues auf)"),
-        makeKindButton("fadecut", "FADE-CUT", "Ausgehendes Bild blendet auf Schwarz, dann steht das neue hart da"),
-        makeKindButton("cutfade", "CUT-FADE", "Hart auf Schwarz, das neue Bild blendet auf"),
+        makeKindButton("mix", "MIX", T("kindMix")),
+        makeKindButton("vfade", "V-FADE", T("kindVfade")),
+        makeKindButton("fadecut", "FADE-CUT", T("kindFadecut")),
+        makeKindButton("cutfade", "CUT-FADE", T("kindCutfade")),
       );
       // Slide: neues Bild fährt über das alte; Push: es schiebt das alte hinaus.
       // Pfeil = Bewegungsrichtung. Bewusst keine Crop-Wipes (s. pipeline.rs-Moduldoku).
@@ -872,17 +1029,17 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const row = document.createElement("div");
         row.className = "mix-wipe";
         for (const [suffix, arrow, dir] of [
-          ["R", "▶", "nach rechts"],
-          ["L", "◀", "nach links"],
-          ["D", "▼", "nach unten"],
-          ["U", "▲", "nach oben"],
+          ["R", "▶", T("dirRight")],
+          ["L", "◀", T("dirLeft")],
+          ["D", "▼", T("dirDown")],
+          ["U", "▲", T("dirUp")],
         ]) {
           row.append(makeKindButton(prefix + suffix, arrow, `${what} ${dir}`));
         }
         return [cap, row];
       };
-      const slideRow = makeKindRow("SLIDE", "slide", "Slide: neues Bild fährt über das alte,");
-      const pushRow = makeKindRow("PUSH", "push", "Push: neues Bild schiebt das alte hinaus,");
+      const slideRow = makeKindRow("SLIDE", "slide", T("slideWhat"));
+      const pushRow = makeKindRow("PUSH", "push", T("pushWhat"));
       setKindActive("mix");
       transition.append(cutBtn, autoBtn, tBar, mixWipe, ...slideRow, ...pushRow);
 
@@ -945,7 +1102,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
       for (const frames of RATES) {
         const btn = document.createElement("omp-button");
         btn.textContent = `${frames}f`;
-        btn.title = `Rampendauer: ${frames} Frames (${frames * MS_PER_TRANS_FRAME}ms)`;
+        btn.title = T("rampTitle", { frames, ms: frames * MS_PER_TRANS_FRAME });
         btn.addEventListener("click", () => call("crosspoint.setTransRate", { frames }));
         rateButtons.set(frames, btn);
         rateRow.append(btn);
@@ -978,7 +1135,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const pinnedSection = document.createElement("div");
         pinnedSection.className = "field";
         const pinnedLabel = document.createElement("label");
-        pinnedLabel.textContent = "Angepinnte Quellen (PGM/PST-Kreuzschiene)";
+        pinnedLabel.textContent = T("pinned");
         const pinnedList = document.createElement("div");
         pinnedList.className = "list";
         pinnedSection.append(pinnedLabel, pinnedList);
@@ -988,7 +1145,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
           if (latestPinned.length === 0) {
             const hint = document.createElement("p");
             hint.className = "empty";
-            hint.textContent = "keine Quellen angeheftet";
+            hint.textContent = T("nonePinned");
             pinnedList.append(hint);
           }
           for (const senderId of latestPinned) {
@@ -1001,7 +1158,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
             label.title = senderId;
             const removeBtn = document.createElement("omp-button");
             removeBtn.textContent = "×";
-            removeBtn.title = "Quelle entfernen";
+            removeBtn.title = T("removeSource");
             removeBtn.addEventListener("click", async () => {
               await call("crosspoint.unpin", { senderId });
               latestPinned = latestPinned.filter((s) => s !== senderId);
@@ -1021,12 +1178,12 @@ class OmpVideoMixerMePanel extends HTMLElement {
             const idx = latestPinned.indexOf(senderId);
             const upBtn = document.createElement("omp-button");
             upBtn.textContent = "▲";
-            upBtn.title = "Nach vorn (links)";
+            upBtn.title = T("moveFront");
             upBtn.disabled = idx === 0;
             upBtn.addEventListener("click", () => movePin(idx - 1));
             const downBtn = document.createElement("omp-button");
             downBtn.textContent = "▼";
-            downBtn.title = "Nach hinten (rechts)";
+            downBtn.title = T("moveBack");
             downBtn.disabled = idx === latestPinned.length - 1;
             downBtn.addEventListener("click", () => movePin(idx + 1));
             chip.draggable = true;
@@ -1053,7 +1210,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
           const available = latestInputs
             .filter((i) => !latestPinned.includes(i.senderId))
             .map((i) => ({ label: i.mismatch ? `⚠ ${i.label} (${i.format})` : i.label, senderId: i.senderId }));
-          const picker = buildSourceSelector(available, "Quelle hinzufügen…");
+          const picker = buildSourceSelector(available, T("addSource"));
           picker.addEventListener("change", async () => {
             if (!picker.value) return;
             const pinnedId = picker.value;
@@ -1070,7 +1227,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const dskSection = document.createElement("div");
         dskSection.className = "field";
         const dskLabel = document.createElement("label");
-        dskLabel.textContent = "DSK-Quelle (Fill+Key)";
+        dskLabel.textContent = T("dskSource");
         const dskSelect = buildSourceSelector(latestKeyerInputs, "Testfarbe");
         dskSelect.value = latestKeyerSource;
         dskSelect.addEventListener("change", () => {
@@ -1115,14 +1272,14 @@ class OmpVideoMixerMePanel extends HTMLElement {
         // ab — Backdrop-Klick/Escape rufen intern `close()` selbst auf,
         // "Abbrechen"/"Speichern"/"Löschen" unten rufen das zurückgegebene
         // `close` — beide Wege müssen die window-Listener unten abräumen.
-        const { bodyEl, close } = openModal(preset ? "PIP-Preset bearbeiten" : "Neues PIP-Preset", {
+        const { bodyEl, close } = openModal(preset ? T("editTitle") : T("newTitle"), {
           onClose: () => cleanup(),
         });
 
         const nameField = document.createElement("div");
         nameField.className = "field";
         const nameLabel = document.createElement("label");
-        nameLabel.textContent = "Name";
+        nameLabel.textContent = T("name");
         const nameInput = document.createElement("input");
         nameInput.type = "text";
         nameInput.value = draft.name;
@@ -1132,9 +1289,9 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const sourceField = document.createElement("div");
         sourceField.className = "field";
         const sourceLabel = document.createElement("label");
-        sourceLabel.textContent = "Quelle";
+        sourceLabel.textContent = T("source");
         const pipInputEntries = latestInputs.map((i) => ({ label: i.mismatch ? `⚠ ${i.label} (${i.format})` : i.label, senderId: i.senderId }));
-        const sourceSelect = buildSourceSelector(pipInputEntries, "Schwarz");
+        const sourceSelect = buildSourceSelector(pipInputEntries, T("black"));
         sourceSelect.value = draft.senderId;
         sourceSelect.addEventListener("change", () => (draft.senderId = sourceSelect.value));
         sourceField.append(sourceLabel, sourceSelect);
@@ -1143,13 +1300,13 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const pointsField = document.createElement("div");
         pointsField.className = "field";
         const pointsLabel = document.createElement("label");
-        pointsLabel.textContent = "Fahrt: Start → Halten → Ende";
+        pointsLabel.textContent = T("pipPoints");
         const pointRow = document.createElement("div");
         pointRow.className = "row pip-points";
         const POINTS = [
-          { key: "start", text: "Start", color: "#4285f4", optional: true },
-          { key: "box", text: "Halten", color: "#43a047", optional: false },
-          { key: "end", text: "Ende", color: "#fb8c00", optional: true },
+          { key: "start", text: T("ptStart"), color: "#4285f4", optional: true },
+          { key: "box", text: T("ptHold"), color: "#43a047", optional: false },
+          { key: "end", text: T("ptEnd"), color: "#fb8c00", optional: true },
         ];
         let editing = "box";
         const pointEls = new Map();
@@ -1162,7 +1319,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
             toggle = document.createElement("input");
             toggle.type = "checkbox";
             toggle.checked = !!draft[pt.key];
-            toggle.title = `${pt.text}-Position verwenden`;
+            toggle.title = T("usePosition", { text: pt.text });
             toggle.addEventListener("change", () => {
               if (toggle.checked) {
                 // Neuer Punkt startet als Kopie der Haltposition, knapp außerhalb des Bildes.
@@ -1209,8 +1366,8 @@ class OmpVideoMixerMePanel extends HTMLElement {
           wrap.append(input, document.createTextNode(" ms"));
           return wrap;
         };
-        const inMsWrap = makeMsInput("Einfahrt ", "inMs");
-        const outMsWrap = makeMsInput("Ausfahrt ", "outMs");
+        const inMsWrap = makeMsInput(T("slideIn"), "inMs");
+        const outMsWrap = makeMsInput(T("slideOut"), "outMs");
         timingRow.append(inMsWrap, outMsWrap);
 
         // Randstart-Schnellwahl für den gerade bearbeiteten Start/Ende-Punkt.
@@ -1218,13 +1375,13 @@ class OmpVideoMixerMePanel extends HTMLElement {
         edgeRow.className = "row";
         const edgeLabel = document.createElement("span");
         edgeLabel.className = "pip-edge-label";
-        edgeLabel.textContent = "Außerhalb:";
+        edgeLabel.textContent = T("outside");
         edgeRow.append(edgeLabel);
         const EDGES = [
-          ["◀ links", (b) => ({ ...b, x: -b.width })],
-          ["rechts ▶", (b) => ({ ...b, x: WIDTH })],
-          ["▲ oben", (b) => ({ ...b, y: -b.height })],
-          ["unten ▼", (b) => ({ ...b, y: HEIGHT })],
+          [T("edgeLeft"), (b) => ({ ...b, x: -b.width })],
+          [T("edgeRight"), (b) => ({ ...b, x: WIDTH })],
+          [T("edgeTop"), (b) => ({ ...b, y: -b.height })],
+          [T("edgeBottom"), (b) => ({ ...b, y: HEIGHT })],
         ];
         for (const [text, fn] of EDGES) {
           const eb = document.createElement("button");
@@ -1284,7 +1441,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         }
         canvasOuter.append(canvas);
         const editorLabel = document.createElement("label");
-        editorLabel.textContent = "Ziehen zum Verschieben, Ecke zum Skalieren";
+        editorLabel.textContent = T("editorHint");
         editorField.append(editorLabel, canvasOuter, edgeRow);
 
         const toStage = (v, margin) => Math.round((v + margin) * scale);
@@ -1324,12 +1481,12 @@ class OmpVideoMixerMePanel extends HTMLElement {
           outMsWrap.style.display = hasExit ? "" : "none";
           edgeRow.style.display = editing === "box" ? "none" : "";
           hint.textContent = !draft.start && !draft.end
-            ? "Ohne Start/Ende erscheint PIP direkt an der Haltposition."
+            ? T("hint0")
             : draft.start && draft.end
-              ? "3 Punkte: fährt von Start nach Halten; beim Ausschalten von Halten nach Ende."
+              ? T("hint3")
               : draft.start
-                ? "2 Punkte: fährt von Start nach Halten; beim Ausschalten zurück nach Start."
-                : "Beim Ausschalten fährt PIP von Halten nach Ende.";
+                ? T("hint2s")
+                : T("hint2e");
           renderBoxes();
         };
 
@@ -1381,9 +1538,9 @@ class OmpVideoMixerMePanel extends HTMLElement {
         actions.className = "actions";
         if (preset) {
           const deleteBtn = document.createElement("omp-button");
-          deleteBtn.textContent = "Löschen";
+          deleteBtn.textContent = T("delete");
           deleteBtn.addEventListener("click", async () => {
-            if (!confirm(`PIP-Preset "${preset.name}" wirklich löschen?`)) return;
+            if (!confirm(T("confirmDelete", { name: preset.name }))) return;
             await call("pip.deletePreset", { id: preset.id });
             close();
           });
@@ -1392,7 +1549,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const spacer = document.createElement("div");
         spacer.className = "spacer";
         const cancelBtn = document.createElement("omp-button");
-        cancelBtn.textContent = "Abbrechen";
+        cancelBtn.textContent = T("cancel");
         cancelBtn.addEventListener("click", close);
         // Gemeinsame Speicherroutine: "Nur speichern" legt das Preset an/aktualisiert es,
         // ohne es zu aktivieren (nichts geht on air); "Speichern & Anzeigen" fährt es danach ein.
@@ -1420,15 +1577,15 @@ class OmpVideoMixerMePanel extends HTMLElement {
           await call("pip.savePreset", args);
         };
         const saveOnlyBtn = document.createElement("omp-button");
-        saveOnlyBtn.textContent = "Nur speichern";
-        saveOnlyBtn.title = "Preset speichern, ohne es zu aktivieren";
+        saveOnlyBtn.textContent = T("saveOnly");
+        saveOnlyBtn.title = T("saveOnlyTitle");
         saveOnlyBtn.addEventListener("click", async () => {
           await savePreset();
           close();
         });
         const saveBtn = document.createElement("omp-button");
-        saveBtn.textContent = "Speichern & Anzeigen";
-        saveBtn.title = "Preset speichern und sofort einfahren";
+        saveBtn.textContent = T("saveShow");
+        saveBtn.title = T("saveShowTitle");
         saveBtn.addEventListener("click", async () => {
           await savePreset();
           // applyPreset setzt die Box auf Start zurück und fährt die Einfahrt
@@ -1470,7 +1627,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
           const editBtn = document.createElement("omp-button");
           editBtn.className = "pip-edit";
           editBtn.textContent = "✎";
-          editBtn.title = "Preset bearbeiten";
+          editBtn.title = T("editPreset");
           editBtn.addEventListener("click", () => openPipEditor(preset));
           chip.append(nameBtn, editBtn);
           pipRow.append(chip);
@@ -1563,7 +1720,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         if (visibleInputs.length === 0) {
           const empty = document.createElement("p");
           empty.className = "empty";
-          empty.textContent = "keine Quellen angeheftet — über den Quellen-Dialog hinzufügen";
+          empty.textContent = T("emptyPinned");
           pstButtons.append(empty);
         }
         const levelOutputSenderIds = level === 0 ? otherLevelSenderIds : undefined;
@@ -1587,7 +1744,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
     const thumbsCheckbox = document.createElement("input");
     thumbsCheckbox.type = "checkbox";
     thumbsCheckbox.checked = thumbsEnabled;
-    thumbsToggle.append(thumbsCheckbox, document.createTextNode("Vorschaubilder"));
+    thumbsToggle.append(thumbsCheckbox, document.createTextNode(T("thumbnails")));
     thumbsCheckbox.addEventListener("change", () => {
       thumbsEnabled = thumbsCheckbox.checked;
       localStorage.setItem(THUMBS_KEY, thumbsEnabled ? "1" : "0");
@@ -1629,12 +1786,12 @@ class OmpVideoMixerMePanel extends HTMLElement {
     const roleInfo = await findRunningRole();
     if (roleInfo) {
       levelsSection = document.createElement("omp-panel-section");
-      levelsSection.setAttribute("label", "Mischerebenen");
+      levelsSection.setAttribute("label", T("mixerLevels"));
 
       const row = document.createElement("div");
       row.style.cssText = "display:flex;align-items:center;gap:var(--omp-space-2, 8px);flex-wrap:wrap;";
       const label = document.createElement("span");
-      label.textContent = "Ebenen";
+      label.textContent = T("levels");
       label.style.cssText =
         "font-size:var(--omp-font-size-xs, 11px);color:var(--omp-text-dim, #9aa0a6);" +
         "text-transform:uppercase;letter-spacing:0.04em;font-weight:700;";
@@ -1649,8 +1806,8 @@ class OmpVideoMixerMePanel extends HTMLElement {
         "color:var(--omp-text, #e8eaed);border:1px solid var(--omp-metal-dark, #1a1c1f);" +
         "box-shadow:0 1px 0 rgba(255,255,255,0.1) inset, 0 1px 2px rgba(0,0,0,0.4);box-sizing:border-box;";
       const applyBtn = document.createElement("omp-button");
-      applyBtn.textContent = "Übernehmen";
-      applyBtn.title = "Node neu starten — kurz nicht erreichbar, zuvor aufgelegte Quellen werden danach automatisch wieder verbunden.";
+      applyBtn.textContent = T("apply");
+      applyBtn.title = T("applyTitle");
       applyBtn.style.cssText = "height:34px !important; padding:0 var(--omp-space-3, 12px) !important;";
 
       // Sendet `roleInfo.format` unverändert mit (s. Moduldoku oben) —
@@ -1660,10 +1817,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
       // Node-Standard zurückgesetzt.
       applyBtn.addEventListener("click", async () => {
         const n = Math.max(1, Math.min(8, parseInt(input.value, 10) || 1));
-        const ok = confirm(
-          `Rolle "${roleInfo.roleName}" mit ${n} Ebene(n) neu starten? Der Node ist dabei kurz nicht erreichbar, ` +
-            `zuvor aufgelegte Quellen werden danach automatisch wieder verbunden.`,
-        );
+        const ok = confirm(T("confirmRestart", { role: roleInfo.roleName, n }));
         if (!ok) return;
         applyBtn.setAttribute("disabled", "");
         try {
@@ -1675,9 +1829,9 @@ class OmpVideoMixerMePanel extends HTMLElement {
               body: JSON.stringify({ format: roleInfo.format, mixerLevels: n }),
             },
           );
-          if (!res.ok) alert(`Neustart fehlgeschlagen: ${await res.text()}`);
+          if (!res.ok) alert(T("restartFailed", { err: await res.text() }));
         } catch (err) {
-          alert(`Neustart fehlgeschlagen: ${err}`);
+          alert(T("restartFailed", { err }));
         } finally {
           applyBtn.removeAttribute("disabled");
         }
@@ -1699,7 +1853,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
     // 2026-09-04 auch die PIP-Presets jeder Ebene mit (main.rs::
     // capture_level_state).
     const presetSaveBtn = document.createElement("omp-button");
-    presetSaveBtn.textContent = "Preset speichern";
+    presetSaveBtn.textContent = T("savePreset");
     const presetList = document.createElement("div");
     presetList.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;margin-top:var(--omp-space-2, 8px);";
 
@@ -1713,7 +1867,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
       );
       if (mine.length === 0) {
         const empty_ = document.createElement("span");
-        empty_.textContent = "keine Presets gespeichert";
+        empty_.textContent = T("noPresets");
         empty_.style.cssText = "color:var(--omp-text-dim, #9aa0a6);font-size:11px;";
         presetList.appendChild(empty_);
         return;
@@ -1721,7 +1875,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
       for (const snap of mine) {
         const chip = document.createElement("omp-button");
         chip.textContent = snap.label || snap.id.slice(0, 8);
-        chip.title = "Preset anwenden";
+        chip.title = T("applyPreset");
         chip.addEventListener("click", async () => {
           await fetch(`/api/v1/snapshots/${snap.id}/apply`, { method: "POST" });
           await refreshAll();
@@ -1731,7 +1885,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
     };
 
     presetSaveBtn.addEventListener("click", async () => {
-      const label = prompt("Name des Presets:", "Neues Preset");
+      const label = prompt(T("promptName"), T("newPresetName"));
       if (!label) return;
       await fetch("/api/v1/snapshots", {
         method: "POST",

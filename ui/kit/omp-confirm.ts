@@ -1,3 +1,4 @@
+import { t } from "../shell/i18n.ts";
 // <omp-confirm> + confirmDialog() — Ersatz für window.confirm() (S10,
 // docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): synchrones confirm()
 // blockiert den ganzen Tab (inkl. der SSE-Verbindung im Hintergrund) und
@@ -105,8 +106,8 @@ export class OmpConfirm extends HTMLElement {
   }
 
   connectedCallback() {
-    this.#cancelBtn.textContent = this.getAttribute("cancel-label") || "Abbrechen";
-    this.#confirmBtn.textContent = this.getAttribute("confirm-label") || "Löschen";
+    this.#cancelBtn.textContent = this.getAttribute("cancel-label") || t("kit.cancel");
+    this.#confirmBtn.textContent = this.getAttribute("confirm-label") || t("kit.delete");
     // Direkt fokussieren, nicht die bestätigende Aktion — ein versehentlicher
     // Enter-Druck (z. B. Fokus kam von einem Formular-Feld) soll nicht
     // sofort löschen.

@@ -121,4 +121,14 @@ export const de = {
   "up.now": "startet jetzt …",
   "up.planned": "geplant {when} Uhr",
   "up.dayShort": "T",
+
+  "kit.cancel": "Abbrechen",
+  "kit.delete": "Löschen",
+  "kit.searchPlaceholder": "🔍 Quellen suchen …",
+  "kit.searchAria": "Quellen suchen",
+  "kit.noHits": "Keine Treffer",
+  "kit.noSources": "Keine Quellen verfügbar",
+  "kit.currentWorkflow": "Aktueller Workflow",
+  "kit.otherWorkflows": "Andere Workflows",
+  "kit.otherUnassigned": "Sonstige / nicht zugeordnet",
 };

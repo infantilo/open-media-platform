@@ -122,4 +122,14 @@ export const en: Record<keyof typeof de, string> = {
   "up.now": "starting now …",
   "up.planned": "scheduled {when}",
   "up.dayShort": "d",
+
+  "kit.cancel": "Cancel",
+  "kit.delete": "Delete",
+  "kit.searchPlaceholder": "🔍 Search sources …",
+  "kit.searchAria": "Search sources",
+  "kit.noHits": "No matches",
+  "kit.noSources": "No sources available",
+  "kit.currentWorkflow": "Current workflow",
+  "kit.otherWorkflows": "Other workflows",
+  "kit.otherUnassigned": "Other / unassigned",
 };

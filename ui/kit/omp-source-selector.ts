@@ -25,6 +25,7 @@ import {
   type SourceTreeNode,
   visibleRows,
 } from "./source-selector-logic.ts";
+import { t } from "../shell/i18n.ts";
 import { loadSourceCatalog } from "./source-catalog.ts";
 
 const ICON: Record<string, string> = { video: "🎥", audio: "🔊", data: "▤" };
@@ -64,7 +65,7 @@ TEMPLATE.innerHTML = `
     <span class="label"></span><span aria-hidden="true">▾</span>
   </button>
   <div class="panel" part="panel">
-    <input class="search" type="text" placeholder="🔍 Quellen suchen …" aria-label="Quellen suchen" />
+    <input class="search" type="text" placeholder="${t("kit.searchPlaceholder")}" aria-label="${t("kit.searchAria")}" />
     <div class="list" role="tree"></div>
   </div>
 `;
@@ -218,7 +219,7 @@ export class OmpSourceSelector extends HTMLElement {
     if (rows.length === 0) {
       const d = document.createElement("div");
       d.className = "empty";
-      d.textContent = this.#query ? "Keine Treffer" : "Keine Quellen verfügbar";
+      d.textContent = this.#query ? t("kit.noHits") : t("kit.noSources");
       this.#listEl.append(d);
       return;
     }

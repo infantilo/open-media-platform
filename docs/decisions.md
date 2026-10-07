@@ -30358,3 +30358,15 @@ omp-video-mixer-me (1800 Z.), omp-playout-automation (1400), omp-scope
 deutsch aus Rust), audio-monitor, mxf-player(-direct), multiviewer(-custom),
 ograf, media-library, webrtc-gateway, Audio-Mischer, kit-Komponenten
 (`omp-confirm`, `omp-toast`, `omp-source-selector`), übrige Shell-Views.
+
+**Nachtrag (2026-10-07, Teil 3): Mehrsprachigkeit — Kit + Video-Mischer.**
+Kit-Komponenten (`omp-confirm`-Standardtexte, `omp-source-selector`,
+Abschnittsnamen in `source-selector-logic`) laufen über `t()` (Schlüssel
+`kit.*`; die bisher englischen Abschnittsnamen sind jetzt „Aktueller
+Workflow"/„Andere Workflows"/„Sonstige / nicht zugeordnet" auf Deutsch).
+`omp-video-mixer-me`-Bundle komplett über `T()` (≈75 Texte inkl. PIP-
+Editor, Dialoge, `confirm`/`prompt`/`alert`). **Nächster Block:**
+`omp-playout-automation` (1400 Zeilen, deutlich mehr Texte, viele
+zusammengesetzte Strings und Tabellenköpfe → eigener Schritt), danach
+Audio-Mischer, Scope (Backend-Urteile!), Audio-Monitor, MXF-Player,
+Multiviewer, OGraf, Media-Library, WebRTC-Gateway, übrige Shell-Views.

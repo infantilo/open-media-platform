@@ -1,3 +1,4 @@
+import { t } from "../shell/i18n.ts";
 // Reine View-Model-Logik des hierarchischen Source-Selectors
 // (<omp-source-selector>, ui/kit/omp-source-selector.ts) — kein DOM, kein
 // fetch, damit sie mit `deno test` prüfbar ist und der Selector selbst
@@ -229,7 +230,7 @@ export function buildSourceTree(entries: SourceEntry[], opts: BuildOptions = {},
     sections.push({
       type: "group",
       id: "sec:current",
-      label: "Current workflow",
+      label: t("kit.currentWorkflow"),
       level: "section",
       children: nodeGroups("sec:current", current, true),
       defaultOpen: true,
@@ -249,7 +250,7 @@ export function buildSourceTree(entries: SourceEntry[], opts: BuildOptions = {},
       });
     }
     wfs.sort(byLabel);
-    sections.push({ type: "group", id: "sec:other", label: "Other workflows", level: "section", children: wfs, defaultOpen: current.length === 0 });
+    sections.push({ type: "group", id: "sec:other", label: t("kit.otherWorkflows"), level: "section", children: wfs, defaultOpen: current.length === 0 });
   }
   if (unassigned.length > 0) {
     // Einzige Sektion (keine Workflow-Zuordnung vorhanden): auch die Node-Gruppen offen,
@@ -258,7 +259,7 @@ export function buildSourceTree(entries: SourceEntry[], opts: BuildOptions = {},
     sections.push({
       type: "group",
       id: "sec:unassigned",
-      label: "Other / unassigned",
+      label: t("kit.otherUnassigned"),
       level: "section",
       children: nodeGroups("sec:unassigned", unassigned, only),
       defaultOpen: only,
