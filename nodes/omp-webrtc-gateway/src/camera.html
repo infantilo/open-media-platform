@@ -172,6 +172,85 @@
 </div>
 
 <script>
+// i18n (de/en): Sprache per ?lang=, sonst Browsersprache (Handy-Seite ohne Shell); Fallback Deutsch.
+const LANG = ((new URLSearchParams(location.search).get("lang") || navigator.language || "de").toLowerCase().startsWith("de")) ? "de" : "en";
+const T = (() => {
+  const D = {
+    de: {
+        "pcam.f93fb3": "Kein Zugriff auf Kamera/Mikrofon. Bitte in den Browser-Einstellungen erlauben und erneut versuchen.",
+        "pcam.3edf30": "Keine Kamera gefunden. Bitte prüfen, ob eine Kamera vorhanden/aktiviert ist.",
+        "pcam.9e141d": "Die Kamera wird bereits von einer anderen App verwendet. Bitte diese schließen und erneut versuchen.",
+        "pcam.5a94bc": "Die gewählte Auflösung/Bildrate wird von dieser Kamera nicht unterstützt. Bitte eine andere Einstellung wählen.",
+        "pcam.c2d3b5": "Diese Einladung ist ungültig oder wurde zurückgezogen. Bitte einen neuen Link/QR-Code vom Bediener/der Regie anfordern.",
+        "pcam.b8bc7e": "Verbindung zum Server fehlgeschlagen (Code {p0}). Bitte erneut versuchen oder die Regie kontaktieren.",
+        "pcam.9662ed": "Verbindung fehlgeschlagen. Bitte erneut versuchen oder die Regie kontaktieren.",
+        "pcam.cd856c": "Diese Einladung bringt auch ein Retourbild mit — nach dem Verbinden erscheinen Kamera- und Retourbild nebeneinander.",
+        "pcam.21da36": "Uhrenversatz {p0} ms (RTT {p1} ms) — Messfehler ≈ ±{p2} ms",
+        "pcam.968f4f": "Kamera ",
+        "pcam.77361b": "Kamera: ",
+        "pcam.9de960": "Diese Seite muss über eine sichere (https-)Verbindung geöffnet werden, sonst funktioniert der Kamera-Zugriff nicht.",
+        "pcam.b88473": "Kein sicherer Kontext — Seite per HTTPS öffnen (Kamera-Zugriff).",
+        "pcam.ab2d9d": "Kein gültiger Einladungslink. Bitte den Link oder QR-Code vom Bediener/der Regie neu anfordern.",
+        "pcam.1abe61": "kein Einladungslink — diese Seite ohne gültigen Link (mit \"?token=…\") geöffnet.",
+        "pcam.831575": "Retourbild-FEHLER: ",
+        "pcam.8cad30": "WARNUNG: kein H.264 im Browser verfügbar",
+        "pcam.bcd6a2": "WHIP verbunden",
+        "pcam.30510c": "Retourbild-Track: ",
+        "pcam.6cb0ea": "Retourbild (WHEP) verbunden",
+        "pcam.379ee8": "Bereit",
+        "pcam.580899": "Hinweis: Kamera-Zugriff braucht HTTPS (oder localhost)."
+    },
+    en: {
+        "pcam.f93fb3": "No access to camera/microphone. Please allow it in the browser settings and try again.",
+        "pcam.3edf30": "No camera found. Please check that a camera is present/enabled.",
+        "pcam.9e141d": "The camera is already in use by another app. Please close it and try again.",
+        "pcam.5a94bc": "The chosen resolution/frame rate is not supported by this camera. Please choose another setting.",
+        "pcam.c2d3b5": "This invitation is invalid or has been withdrawn. Please request a new link/QR code from the operator/control room.",
+        "pcam.b8bc7e": "Connection to the server failed (code {p0}). Please try again or contact the control room.",
+        "pcam.9662ed": "Connection failed. Please try again or contact the control room.",
+        "pcam.cd856c": "This invitation also brings a return feed — after connecting, camera and return feed appear side by side.",
+        "pcam.21da36": "Clock offset {p0} ms (RTT {p1} ms) — measurement error ≈ ±{p2} ms",
+        "pcam.968f4f": "Camera ",
+        "pcam.77361b": "Camera: ",
+        "pcam.9de960": "This page must be opened over a secure (https) connection, otherwise camera access does not work.",
+        "pcam.b88473": "Not a secure context — open the page via HTTPS (camera access).",
+        "pcam.ab2d9d": "No valid invitation link. Please request the link or QR code from the operator/control room again.",
+        "pcam.1abe61": "no invitation link — this page was opened without a valid link (with \"?token=…\").",
+        "pcam.831575": "Return-feed ERROR: ",
+        "pcam.8cad30": "WARNING: no H.264 available in the browser",
+        "pcam.bcd6a2": "WHIP connected",
+        "pcam.30510c": "Return-feed track: ",
+        "pcam.6cb0ea": "Return feed (WHEP) connected",
+        "pcam.379ee8": "Ready",
+        "pcam.580899": "Note: camera access needs HTTPS (or localhost)."
+    },
+  };
+  return (k, p) => {
+    let s = (D[LANG] && D[LANG][k]) ?? D.de[k] ?? k;
+    if (p) for (const x in p) s = s.split("{" + x + "}").join(p[x]);
+    return s;
+  };
+})();
+// Statische Texte der Seite (Markup) per exaktem Textvergleich übersetzen.
+(() => {
+  if (LANG !== "en") return;
+  const MAP = {"Auflösung": "Resolution", "Bereit": "Ready", "Bildrate": "Frame rate", "Kamera": "Camera", "Latenz Glas→Decoder:": "Latency glass→decoder:", "Latenz messen (Zeitstempel im Bild)": "Measure latency (timestamp in picture)", "Retourbild": "Return feed", "Standards. Technologie. Freiheit.": "Standards. Technology. Freedom.", "Status": "Status", "Ton senden": "Send audio", "Verbinden": "Connect", "Verbindung Kamera:": "Connection camera:", "Verbindung Retourbild:": "Connection return feed:", "Verbindung trennen": "Disconnect", "· Zuspielung": "· Contribution", "(Ø · max": "(avg · max", "ms)": "ms)"};
+  document.documentElement.lang = "en";
+  document.title = "OMP Camera";
+  const walk = (n) => {
+    for (const k of n.childNodes) {
+      if (k.nodeType === 3) {
+        const t = k.textContent.trim();
+        if (MAP[t]) k.textContent = k.textContent.replace(t, MAP[t]);
+      } else if (k.nodeType === 1 && !["SCRIPT", "STYLE"].includes(k.tagName)) {
+        for (const a of ["title", "placeholder", "aria-label"]) { const v = k.getAttribute(a); if (v && MAP[v]) k.setAttribute(a, MAP[v]); }
+        walk(k);
+      }
+    }
+  };
+  walk(document.body);
+})();
+
 // Vom Gateway beim Ausliefern gesetzt (Betriebsauflösung/-bildrate); `null`
 // bei statischem Öffnen der Datei.
 const OMP_DEFAULTS = /*OMP_DEFAULTS*/null;
@@ -209,27 +288,27 @@ const clearConnectError = () => { $('setupError').hidden = true; };
 function friendlyConnectError(e) {
   const name = e && e.name;
   if (name === 'NotAllowedError' || name === 'SecurityError') {
-    return 'Kein Zugriff auf Kamera/Mikrofon. Bitte in den Browser-Einstellungen erlauben und erneut versuchen.';
+    return T("pcam.f93fb3");
   }
   if (name === 'NotFoundError') {
-    return 'Keine Kamera gefunden. Bitte prüfen, ob eine Kamera vorhanden/aktiviert ist.';
+    return T("pcam.3edf30");
   }
   if (name === 'NotReadableError') {
-    return 'Die Kamera wird bereits von einer anderen App verwendet. Bitte diese schließen und erneut versuchen.';
+    return T("pcam.9e141d");
   }
   if (name === 'OverconstrainedError') {
-    return 'Die gewählte Auflösung/Bildrate wird von dieser Kamera nicht unterstützt. Bitte eine andere Einstellung wählen.';
+    return T("pcam.5a94bc");
   }
   const msg = (e && (e.message || String(e))) || '';
   const statusMatch = /^(?:WHIP|WHEP) (\d+):/.exec(msg);
   if (statusMatch) {
     const status = Number(statusMatch[1]);
     if (status === 401) {
-      return 'Diese Einladung ist ungültig oder wurde zurückgezogen. Bitte einen neuen Link/QR-Code vom Bediener/der Regie anfordern.';
+      return T("pcam.c2d3b5");
     }
-    return `Verbindung zum Server fehlgeschlagen (Code ${status}). Bitte erneut versuchen oder die Regie kontaktieren.`;
+    return T("pcam.b8bc7e", { p0: status });
   }
-  return 'Verbindung fehlgeschlagen. Bitte erneut versuchen oder die Regie kontaktieren.';
+  return T("pcam.9662ed");
 }
 
 // Einladungs-Token (Nutzerwunsch 2026-09-23, "security!"): nur mit
@@ -258,7 +337,7 @@ let clockOffset = 0;
 let disconnectGraceTimer = null;
 
 $('setupHint').textContent = hasRetour
-  ? 'Diese Einladung bringt auch ein Retourbild mit — nach dem Verbinden erscheinen Kamera- und Retourbild nebeneinander.'
+  ? T("pcam.cd856c")
   : '';
 
 // ---- Uhrenabgleich (Messmodus): Versatz Handy-Uhr -> Server-Uhr, kleinste RTT gewinnt ----
@@ -273,7 +352,7 @@ async function syncClock() {
     if (!best || rtt < best.rtt) best = { rtt, off };
   }
   clockOffset = best.off;
-  $('clockInfo').textContent = `Uhrenversatz ${best.off.toFixed(1)} ms (RTT ${best.rtt.toFixed(1)} ms) — Messfehler ≈ ±${(best.rtt / 2).toFixed(1)} ms`;
+  $('clockInfo').textContent = T("pcam.21da36", { p0: best.off.toFixed(1), p1: best.rtt.toFixed(1), p2: (best.rtt / 2).toFixed(1) });
 }
 
 // ---- Zeitstempel-Streifen: 1 Marker + 44 Bit Server-ms + 4 Bit Prüfsumme (s. pipeline.rs) ----
@@ -297,7 +376,7 @@ async function listCameras() {
   const sel = $('camera');
   const cur = sel.value;
   sel.innerHTML = '';
-  devs.forEach((d, i) => sel.add(new Option(d.label || 'Kamera ' + (i + 1), d.deviceId)));
+  devs.forEach((d, i) => sel.add(new Option(d.label || T("pcam.968f4f") + (i + 1), d.deviceId)));
   if (cur) sel.value = cur;
 }
 
@@ -311,7 +390,7 @@ async function openCamera() {
   await listCameras(); // erst nach der Freigabe sind die Kameranamen sichtbar
   $('preview').srcObject = camStream;
   const t = camStream.getVideoTracks()[0];
-  if (t) { t.contentHint = 'motion'; log('Kamera: ' + t.label + ' ' + JSON.stringify(t.getSettings())); }
+  if (t) { t.contentHint = 'motion'; log(T("pcam.77361b") + t.label + ' ' + JSON.stringify(t.getSettings())); }
   return { w, h, fps };
 }
 
@@ -335,15 +414,15 @@ async function start() {
   clearConnectError();
   if (!window.isSecureContext) {
     showConnectError(
-      'Diese Seite muss über eine sichere (https-)Verbindung geöffnet werden, sonst funktioniert der Kamera-Zugriff nicht.',
-      'Kein sicherer Kontext — Seite per HTTPS öffnen (Kamera-Zugriff).'
+      T("pcam.9de960"),
+      T("pcam.b88473")
     );
     return;
   }
   if (!inviteToken) {
     showConnectError(
-      'Kein gültiger Einladungslink. Bitte den Link oder QR-Code vom Bediener/der Regie neu anfordern.',
-      'kein Einladungslink — diese Seite ohne gültigen Link (mit "?token=…") geöffnet.'
+      T("pcam.ab2d9d"),
+      T("pcam.1abe61")
     );
     return;
   }
@@ -383,7 +462,7 @@ async function start() {
       // Retourbild-Verbindung ist ein reiner Zusatznutzen — ein Fehler
       // hier darf die bereits laufende Kamera-Sendung nicht abbrechen,
       // daher eigenes try/catch statt im selben Ablauf wie oben.
-      try { await connectRetour(); } catch (e) { log('Retourbild-FEHLER: ' + (e.message || e)); }
+      try { await connectRetour(); } catch (e) { log(T("pcam.831575") + (e.message || e)); }
     }
     $('setup').style.display = 'none';
     $('live').classList.add('active');
@@ -410,7 +489,7 @@ async function connect(stream) {
   const h264 = caps.filter((c) => c.mimeType === 'video/H264');
   const vt = pc.getTransceivers().find((t) => t.sender.track && t.sender.track.kind === 'video');
   if (h264.length && vt) vt.setCodecPreferences([...h264, ...caps.filter((c) => c.mimeType !== 'video/H264')]);
-  else log('WARNUNG: kein H.264 im Browser verfügbar');
+  else log(T("pcam.8cad30"));
   // Bugliste 2026-09-25 Nachtrag ("Trennen"-Button hängt nach
   // server-seitigem Disconnect fest"): bislang wurde `stop()` NUR vom
   // eigenen "Trennen"-Klick (oder dem Fehlerpfad in `start()`) erreicht
@@ -454,7 +533,7 @@ async function connect(stream) {
     p.degradationPreference = 'maintain-framerate';
     try { await sender.setParameters(p); } catch (_) {}
   }
-  log('WHIP verbunden');
+  log(T("pcam.bcd6a2"));
 }
 
 // ---- Retourbild: direkte WHEP-Verbindung zur gepaarten Monitor-Node-Instanz ----
@@ -475,7 +554,7 @@ async function connectRetour() {
   }
   const ms = new MediaStream();
   $('retourVideo').srcObject = ms;
-  retourPc.ontrack = (e) => { ms.addTrack(e.track); log('Retourbild-Track: ' + e.track.kind); };
+  retourPc.ontrack = (e) => { ms.addTrack(e.track); log(T("pcam.30510c") + e.track.kind); };
   retourPc.onconnectionstatechange = () => { $('retourConn').textContent = retourPc.connectionState; setBadges(); };
   await retourPc.setLocalDescription(await retourPc.createOffer());
   await new Promise((r) => { if (retourPc.iceGatheringState === 'complete') r(); else
@@ -484,13 +563,13 @@ async function connectRetour() {
   const text = await res.text();
   if (res.status !== 201) throw new Error('WHEP ' + res.status + ': ' + text);
   await retourPc.setRemoteDescription({ type: 'answer', sdp: text });
-  log('Retourbild (WHEP) verbunden');
+  log(T("pcam.6cb0ea"));
 }
 
 function setBadges() {
   const camBadge = $('camBadge');
   const camLive = pc && pc.connectionState === 'connected';
-  camBadge.textContent = camLive ? 'LIVE' : (pc ? pc.connectionState : 'Bereit');
+  camBadge.textContent = camLive ? 'LIVE' : (pc ? pc.connectionState : T("pcam.379ee8"));
   camBadge.className = 'badge' + (camLive ? ' live' : '');
   if (hasRetour) {
     const retourBadge = $('retourBadge');
@@ -540,7 +619,7 @@ document.addEventListener('visibilitychange', async () => {
   // Wake-Lock geht beim Wechsel in den Hintergrund verloren.
   if (document.visibilityState === 'visible' && pc) { try { wakeLock = await navigator.wakeLock?.request('screen'); } catch (_) {} }
 });
-if (!window.isSecureContext) log('Hinweis: Kamera-Zugriff braucht HTTPS (oder localhost).');
+if (!window.isSecureContext) log(T("pcam.580899"));
 navigator.mediaDevices?.enumerateDevices().then(listCameras).catch(() => {});
 </script>
 <div class="foot">OpenMediaPlatform</div>

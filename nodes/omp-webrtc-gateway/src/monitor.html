@@ -57,6 +57,57 @@
 <div id="log"></div>
 
 <script>
+// i18n (de/en): Sprache per ?lang=, sonst Browsersprache (Handy-Seite ohne Shell); Fallback Deutsch.
+const LANG = ((new URLSearchParams(location.search).get("lang") || navigator.language || "de").toLowerCase().startsWith("de")) ? "de" : "en";
+const T = (() => {
+  const D = {
+    de: {
+        "pmon.21da36": "Uhrenversatz {p0} ms (RTT {p1} ms) — Messfehler ≈ ±{p2} ms",
+        "pmon.ad383a": "FEHLER: kein Einladungslink — diese Seite ohne gültigen Link (mit \"?token=…\") geöffnet. Bitte den Link/QR-Code vom Bediener verwenden.",
+        "pmon.d8bca6": "Track: ",
+        "pmon.6ae95a": "WHEP verbunden",
+        "pmon.a6d4c8": " · Jitterbuffer {p0} ms",
+        "pmon.379ee8": "Bereit",
+        "pmon.9582c5": "Ton an",
+        "pmon.cd35c7": "Ton aus"
+    },
+    en: {
+        "pmon.21da36": "Clock offset {p0} ms (RTT {p1} ms) — measurement error ≈ ±{p2} ms",
+        "pmon.ad383a": "ERROR: no invitation link — this page was opened without a valid link (with \"?token=…\"). Please use the link/QR code from the operator.",
+        "pmon.d8bca6": "Track: ",
+        "pmon.6ae95a": "WHEP connected",
+        "pmon.a6d4c8": " · jitter buffer {p0} ms",
+        "pmon.379ee8": "Ready",
+        "pmon.9582c5": "Sound on",
+        "pmon.cd35c7": "Sound off"
+    },
+  };
+  return (k, p) => {
+    let s = (D[LANG] && D[LANG][k]) ?? D.de[k] ?? k;
+    if (p) for (const x in p) s = s.split("{" + x + "}").join(p[x]);
+    return s;
+  };
+})();
+// Statische Texte der Seite (Markup) per exaktem Textvergleich übersetzen.
+(() => {
+  if (LANG !== "en") return;
+  const MAP = {"(Ø · min": "(avg · min", "Ansehen": "Watch", "Bereit": "Ready", "Bilder)": "frames)", "Latenz Kamera→Monitor:": "Latency camera→monitor:", "Latenz messen (Quelle mit Zeitstempel-Streifen, z. B. Kamera im Messmodus)": "Measure latency (source with timestamp strip, e.g. camera in measurement mode)", "Stopp": "Stop", "Ton an": "Sound on", "Verbindung:": "Connection:", "ms ·": "ms ·", "· max": "· max"};
+  document.documentElement.lang = "en";
+  document.title = "OMP Monitor";
+  const walk = (n) => {
+    for (const k of n.childNodes) {
+      if (k.nodeType === 3) {
+        const t = k.textContent.trim();
+        if (MAP[t]) k.textContent = k.textContent.replace(t, MAP[t]);
+      } else if (k.nodeType === 1 && !["SCRIPT", "STYLE"].includes(k.tagName)) {
+        for (const a of ["title", "placeholder", "aria-label"]) { const v = k.getAttribute(a); if (v && MAP[v]) k.setAttribute(a, MAP[v]); }
+        walk(k);
+      }
+    }
+  };
+  walk(document.body);
+})();
+
 const $ = (id) => document.getElementById(id);
 const log = (t) => { const l = $('log'); l.textContent = new Date().toLocaleTimeString() + ' ' + t + '\n' + l.textContent; };
 
@@ -77,7 +128,7 @@ async function syncClock() {
     if (!best || rtt < best.rtt) best = { rtt, off };
   }
   clockOffset = best.off;
-  $('clockInfo').textContent = `Uhrenversatz ${best.off.toFixed(1)} ms (RTT ${best.rtt.toFixed(1)} ms) — Messfehler ≈ ±${(best.rtt / 2).toFixed(1)} ms`;
+  $('clockInfo').textContent = T("pmon.21da36", { p0: best.off.toFixed(1), p1: best.rtt.toFixed(1), p2: (best.rtt / 2).toFixed(1) });
 }
 
 // Zeitstempel-Streifen lesen (1 Marker + 44 Bit Server-ms + 4 Bit Prüfsumme, s. camera.html/pipeline.rs)
@@ -121,7 +172,7 @@ function measureLoop(v) {
 
 async function start() {
   if (!inviteToken) {
-    log('FEHLER: kein Einladungslink — diese Seite ohne gültigen Link (mit "?token=…") geöffnet. Bitte den Link/QR-Code vom Bediener verwenden.');
+    log(T("pmon.ad383a"));
     return;
   }
   $('start').disabled = true;
@@ -141,7 +192,7 @@ async function start() {
     // webrtcbin sendet keine msid -> e.streams ist leer: Tracks selbst sammeln.
     const ms = new MediaStream();
     $('v').srcObject = ms;
-    pc.ontrack = (e) => { ms.addTrack(e.track); log('Track: ' + e.track.kind); };
+    pc.ontrack = (e) => { ms.addTrack(e.track); log(T("pmon.d8bca6") + e.track.kind); };
     pc.onconnectionstatechange = () => { $('conn').textContent = pc.connectionState; setBadge(); };
     await pc.setLocalDescription(await pc.createOffer());
     await new Promise((r) => { if (pc.iceGatheringState === 'complete') r(); else
@@ -160,7 +211,7 @@ async function start() {
       if (v.readyState >= 2) go(); else v.addEventListener('loadeddata', go, { once: true });
     }
     statsTimer = setInterval(showStats, 1000);
-    log('WHEP verbunden');
+    log(T("pmon.6ae95a"));
   } catch (e) {
     log('FEHLER: ' + (e.message || e));
     await stop(true);
@@ -173,14 +224,14 @@ async function showStats() {
   stats.forEach((r) => {
     if (r.type === 'inbound-rtp' && r.kind === 'video') {
       $('res').textContent = `${r.frameWidth || '?'}×${r.frameHeight || '?'} @ ${r.framesPerSecond ?? '?'} fps`
-        + (r.jitterBufferDelay && r.jitterBufferEmittedCount ? ` · Jitterbuffer ${(1000 * r.jitterBufferDelay / r.jitterBufferEmittedCount).toFixed(0)} ms` : '');
+        + (r.jitterBufferDelay && r.jitterBufferEmittedCount ? T("pmon.a6d4c8", { p0: (1000 * r.jitterBufferDelay / r.jitterBufferEmittedCount).toFixed(0) }) : '');
     }
   });
 }
 
 function setBadge() {
   const live = pc && pc.connectionState === 'connected';
-  $('badge').textContent = live ? 'LIVE' : (pc ? pc.connectionState : 'Bereit');
+  $('badge').textContent = live ? 'LIVE' : (pc ? pc.connectionState : T("pmon.379ee8"));
   $('badge').className = 'badge' + (live ? ' live' : '');
 }
 
@@ -196,7 +247,7 @@ async function stop(quiet) {
 
 $('start').onclick = start;
 $('stop').onclick = () => stop(false);
-$('unmute').onclick = () => { const v = $('v'); v.muted = !v.muted; $('unmute').textContent = v.muted ? 'Ton an' : 'Ton aus'; };
+$('unmute').onclick = () => { const v = $('v'); v.muted = !v.muted; $('unmute').textContent = v.muted ? T("pmon.9582c5") : T("pmon.cd35c7"); };
 </script>
 </body>
 </html>
