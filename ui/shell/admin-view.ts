@@ -18,7 +18,7 @@
 // Audit-Log reagiert auf "audit.appended" (neu, audit.go) statt alle
 // paar Sekunden zu pollen. Poll bleibt nur als deutlich langsamerer
 // Reconnect-/Fallback-Pfad (AUDIT_POLL_FALLBACK_INTERVAL_MS).
-import { type I18nKey, t } from "./i18n.ts";
+import { type I18nKey, t, t as tt } from "./i18n.ts";
 import "./settings-view.ts";
 import "./playout-admin-view.ts";
 import "./audio-rules-view.ts";
@@ -220,10 +220,10 @@ const LOG_LEVEL_COLOR: Record<string, string> = {
 const VERBS = ["view", "operate", "configure", "admin"] as const;
 
 const VERB_LABEL: Record<string, string> = {
-  view: "Ansehen",
-  operate: "Bedienen",
-  configure: "Konfigurieren",
-  admin: "Administrieren",
+  view: tt("adm.6970d8"),
+  operate: tt("adm.993f73"),
+  configure: tt("adm.c752db"),
+  admin: tt("adm.d977b4"),
 };
 
 // Nutzerwunsch 2026-08-13: die vier Abschnitte liefen bisher als eine
@@ -633,7 +633,7 @@ class AdminView extends HTMLElement {
       body: JSON.stringify({ name: this.#newOrgName.trim() }),
     });
     if (!res.ok) {
-      this.#error = `Organisation anlegen fehlgeschlagen: ${await res.text()}`;
+      this.#error = tt("adm.5b0f32", { p0: await res.text() });
       this.#render();
       return;
     }
@@ -648,16 +648,16 @@ class AdminView extends HTMLElement {
   // Fachobjekte" (bewusst keine Kaskade) — beides braucht eine für
   // Nicht-Techniker verständliche Erklärung statt des rohen Backend-Texts.
   async #deleteOrganization(org: Organization) {
-    if (!(await confirmDialog(`Organisation "${org.name}" wirklich löschen?`, { confirmLabel: "Löschen" }))) return;
+    if (!(await confirmDialog(tt("adm.44bbde", { p0: org.name }), { confirmLabel: tt("adm.1010b0") }))) return;
     const res = await apiFetch(`/api/v1/organizations/${encodeURIComponent(org.id)}`, { method: "DELETE" });
     if (!res.ok) {
       const text = await res.text();
       if (res.status === 409 && text.includes("cannot be deleted")) {
-        this.#error = `"${org.name}" ist die Standard-Organisation und kann nicht gelöscht werden.`;
+        this.#error = tt("adm.ea96f5", { p0: org.name });
       } else if (res.status === 409) {
-        this.#error = `"${org.name}" hat noch Nutzer oder Objekte (Workflows/Assets/…) — erst diese verschieben oder entfernen.`;
+        this.#error = tt("adm.fc057a", { p0: org.name });
       } else {
-        this.#error = `Löschen fehlgeschlagen: ${text}`;
+        this.#error = tt("adm.05f6da", { p0: text });
       }
       this.#render();
       return;
@@ -673,7 +673,7 @@ class AdminView extends HTMLElement {
       body: JSON.stringify({ orgId }),
     });
     if (!res.ok) {
-      this.#error = `Organisation ändern fehlgeschlagen: ${await res.text()}`;
+      this.#error = tt("adm.c9957a", { p0: await res.text() });
       this.#render();
       return;
     }
@@ -746,7 +746,7 @@ class AdminView extends HTMLElement {
       body: JSON.stringify({ name: this.#newGroupName.trim(), description: this.#newGroupDescription.trim() }),
     });
     if (!res.ok) {
-      this.#error = `Gruppe anlegen fehlgeschlagen: ${await res.text()}`;
+      this.#error = tt("adm.740737", { p0: await res.text() });
       this.#render();
       return;
     }
@@ -764,7 +764,7 @@ class AdminView extends HTMLElement {
       body: JSON.stringify({ name: name.trim(), description: description.trim() }),
     });
     if (!res.ok) {
-      this.#error = `Gruppe speichern fehlgeschlagen: ${await res.text()}`;
+      this.#error = tt("adm.f0fe51", { p0: await res.text() });
       this.#render();
       return;
     }
@@ -778,7 +778,7 @@ class AdminView extends HTMLElement {
   // expliziter Rückfrage per confirmDialog wird mit ?cascade=true erneut
   // versucht (Nutzerauftrag: "protection guards... with warnings").
   async #deleteGroup(group: Group) {
-    if (!(await confirmDialog(`Gruppe "${group.name}" wirklich löschen?`, { confirmLabel: "Löschen" }))) return;
+    if (!(await confirmDialog(tt("adm.006ae0", { p0: group.name }), { confirmLabel: tt("adm.1010b0") }))) return;
     const res = await apiFetch(`/api/v1/groups/${group.id}`, { method: "DELETE" });
     if (res.ok) {
       this.#error = "";
@@ -789,13 +789,13 @@ class AdminView extends HTMLElement {
     const text = await res.text();
     if (res.status === 409) {
       const cascade = await confirmDialog(
-        `${text} Rollenbindungen dieser Gruppe jetzt mit entfernen und die Gruppe trotzdem löschen?`,
-        { confirmLabel: "Gruppe + Bindungen löschen" },
+        tt("adm.b0eec4", { p0: text }),
+        { confirmLabel: tt("adm.bbd42e") },
       );
       if (!cascade) return;
       const res2 = await apiFetch(`/api/v1/groups/${group.id}?cascade=true`, { method: "DELETE" });
       if (!res2.ok) {
-        this.#error = `Löschen fehlgeschlagen: ${await res2.text()}`;
+        this.#error = tt("adm.05f6da", { p0: await res2.text() });
         this.#render();
         return;
       }
@@ -804,7 +804,7 @@ class AdminView extends HTMLElement {
       await this.#loadGroups();
       return;
     }
-    this.#error = `Löschen fehlgeschlagen: ${text}`;
+    this.#error = tt("adm.05f6da", { p0: text });
     this.#render();
   }
 
@@ -816,7 +816,7 @@ class AdminView extends HTMLElement {
       body: JSON.stringify({ username: username.trim() }),
     });
     if (!res.ok) {
-      this.#error = `Mitglied hinzufügen fehlgeschlagen: ${await res.text()}`;
+      this.#error = tt("adm.116589", { p0: await res.text() });
       this.#render();
       return;
     }
@@ -829,7 +829,7 @@ class AdminView extends HTMLElement {
   async #removeGroupMember(groupId: string, username: string) {
     const res = await apiFetch(`/api/v1/groups/${groupId}/members/${encodeURIComponent(username)}`, { method: "DELETE" });
     if (!res.ok) {
-      this.#error = `Mitglied entfernen fehlgeschlagen: ${await res.text()}`;
+      this.#error = tt("adm.473556", { p0: await res.text() });
       this.#render();
       return;
     }
@@ -884,7 +884,7 @@ class AdminView extends HTMLElement {
     });
     if (res.ok) {
       this.#storageTestState = "ok";
-      this.#storageTestMessage = "Verbindung erfolgreich.";
+      this.#storageTestMessage = tt("adm.d6c746");
     } else {
       this.#storageTestState = "failed";
       this.#storageTestMessage = await res.text();
@@ -902,9 +902,9 @@ class AdminView extends HTMLElement {
     if (this.#storageTestState !== "ok") {
       const proceed = await confirmDialog(
         this.#storageTestState === "failed"
-          ? "Der letzte Verbindungstest ist fehlgeschlagen. Trotzdem speichern?"
-          : "Die Verbindung wurde noch nicht getestet. Trotzdem speichern?",
-        { confirmLabel: "Trotzdem speichern" },
+          ? tt("adm.c18d1f")
+          : tt("adm.712bf9"),
+        { confirmLabel: tt("adm.71af06") },
       );
       if (!proceed) return;
     }
@@ -922,14 +922,14 @@ class AdminView extends HTMLElement {
       body: JSON.stringify(this.#storageFormPayload()),
     });
     if (!res.ok) {
-      this.#storageFormError = `Anlegen fehlgeschlagen: ${await res.text()}`;
+      this.#storageFormError = tt("adm.055ecb", { p0: await res.text() });
       this.#render();
       return false;
     }
     this.#storageFormError = "";
     this.#showStorageForm = false;
     await this.#loadStorageBackends();
-    showToast("Storage-Backend angelegt.", { variant: "info" });
+    showToast(tt("adm.d033fe"), { variant: "info" });
     return true;
   }
 
@@ -940,7 +940,7 @@ class AdminView extends HTMLElement {
       body: JSON.stringify(this.#storageFormPayload()),
     });
     if (!res.ok) {
-      this.#storageFormError = `Speichern fehlgeschlagen: ${await res.text()}`;
+      this.#storageFormError = tt("adm.616d9c", { p0: await res.text() });
       this.#render();
       return false;
     }
@@ -948,7 +948,7 @@ class AdminView extends HTMLElement {
     this.#showStorageForm = false;
     this.#editingStorageBackend = null;
     await this.#loadStorageBackends();
-    showToast("Storage-Backend aktualisiert.", { variant: "info" });
+    showToast(tt("adm.24bd50"), { variant: "info" });
     return true;
   }
 
@@ -956,7 +956,7 @@ class AdminView extends HTMLElement {
     const action = toStatus === "deprecated" ? "deprecate" : "reactivate";
     const res = await apiFetch(`/api/v1/storage-backends/${backend.id}/${action}`, { method: "POST" });
     if (!res.ok) {
-      this.#error = `${toStatus === "deprecated" ? "Deaktivieren" : "Reaktivieren"} fehlgeschlagen: ${await res.text()}`;
+      this.#error = `${toStatus === "deprecated" ? tt("adm.5e3e07") : tt("adm.1a1a97")} fehlgeschlagen: ${await res.text()}`;
       this.#render();
       return;
     }
@@ -966,14 +966,14 @@ class AdminView extends HTMLElement {
 
   async #deleteStorageBackend(backend: StorageBackend) {
     const ok = await confirmDialog(
-      `Storage-Backend "${backend.name}" (${backend.endpoint}/${backend.bucket}) wirklich entfernen? ` +
-        "Dateien, die bereits dort liegen, werden dadurch NICHT gelöscht — nur die Verwaltung dieses Ziels hier.",
-      { confirmLabel: "Entfernen" },
+      tt("adm.22ae39", { p0: backend.name, p1: backend.endpoint, p2: backend.bucket }) +
+        tt("adm.cab673"),
+      { confirmLabel: tt("adm.513d30") },
     );
     if (!ok) return;
     const res = await apiFetch(`/api/v1/storage-backends/${backend.id}`, { method: "DELETE" });
     if (!res.ok) {
-      this.#error = `Entfernen fehlgeschlagen: ${await res.text()}`;
+      this.#error = tt("adm.64bd21", { p0: await res.text() });
       this.#render();
       return;
     }
@@ -1163,7 +1163,7 @@ class AdminView extends HTMLElement {
       body: JSON.stringify({ username, password, orgId: this.#newUserOrgId || undefined }),
     });
     if (!res.ok) {
-      this.#error = `Nutzer anlegen fehlgeschlagen: ${await res.text()}`;
+      this.#error = tt("adm.8f63e4", { p0: await res.text() });
       this.#render();
       return;
     }
@@ -1188,7 +1188,7 @@ class AdminView extends HTMLElement {
         location.reload();
         return;
       } catch {
-        this.#error = "Nutzer angelegt, automatische Anmeldung fehlgeschlagen — bitte manuell anmelden.";
+        this.#error = tt("adm.d125d4");
         this.#render();
         return;
       }
@@ -1198,10 +1198,10 @@ class AdminView extends HTMLElement {
   }
 
   async #deleteUser(username: string) {
-    if (!(await confirmDialog(`Nutzer "${username}" wirklich löschen?`, { confirmLabel: "Löschen" }))) return;
+    if (!(await confirmDialog(tt("adm.50e59c", { p0: username }), { confirmLabel: tt("adm.1010b0") }))) return;
     const res = await apiFetch(`/api/v1/auth/users/${encodeURIComponent(username)}`, { method: "DELETE" });
     if (!res.ok) {
-      this.#error = `Löschen fehlgeschlagen: ${await res.text()}`;
+      this.#error = tt("adm.05f6da", { p0: await res.text() });
       this.#render();
       return;
     }
@@ -1217,7 +1217,7 @@ class AdminView extends HTMLElement {
       body: JSON.stringify({ password: this.#resetPassword }),
     });
     if (!res.ok) {
-      this.#error = `Passwort-Reset fehlgeschlagen: ${await res.text()}`;
+      this.#error = tt("adm.5d0b05", { p0: await res.text() });
       this.#render();
       return;
     }
@@ -1241,7 +1241,7 @@ class AdminView extends HTMLElement {
       }),
     });
     if (!res.ok) {
-      this.#error = `Rollenbindung anlegen fehlgeschlagen: ${await res.text()}`;
+      this.#error = tt("adm.f397bc", { p0: await res.text() });
       this.#render();
       return;
     }
@@ -1259,15 +1259,15 @@ class AdminView extends HTMLElement {
     // ohne Rückfrage. Gleiches Confirm-Muster wie #deleteUser.
     const label = this.#scopeLabel(binding);
     if (
-      !(await confirmDialog(`Rollenbindung "${this.#subjectLabel(binding)}" → ${label} (${VERB_LABEL[binding.verb] ?? binding.verb}) wirklich löschen?`, {
-        confirmLabel: "Löschen",
+      !(await confirmDialog(tt("adm.a9b709", { p0: this.#subjectLabel(binding), p1: label, p2: VERB_LABEL[binding.verb] ?? binding.verb }), {
+        confirmLabel: tt("adm.1010b0"),
       }))
     ) {
       return;
     }
     const res = await apiFetch(`/api/v1/admin/role-bindings/${encodeURIComponent(binding.id)}`, { method: "DELETE" });
     if (!res.ok) {
-      this.#error = `Löschen fehlgeschlagen: ${await res.text()}`;
+      this.#error = tt("adm.05f6da", { p0: await res.text() });
       this.#render();
       return;
     }
@@ -1309,7 +1309,7 @@ class AdminView extends HTMLElement {
     try {
       const res = await apiFetch("/api/v1/admin/backup", { method: "POST" });
       if (!res.ok) {
-        this.#error = `Backup fehlgeschlagen: ${await res.text()}`;
+        this.#error = tt("adm.b8b2ff", { p0: await res.text() });
         return;
       }
       const disposition = res.headers.get("Content-Disposition") ?? "";
@@ -1329,7 +1329,7 @@ class AdminView extends HTMLElement {
       // Bestätigung, kein separater Toast).
       await this.#loadBackups();
     } catch (err) {
-      this.#error = `Backup fehlgeschlagen: ${err}`;
+      this.#error = tt("adm.b8b2ff", { p0: err });
     } finally {
       this.#creatingBackup = false;
       this.#render();
@@ -1359,7 +1359,7 @@ class AdminView extends HTMLElement {
         body: data,
       });
       if (!res.ok) {
-        this.#error = `Hochladen fehlgeschlagen: ${await res.text()}`;
+        this.#error = tt("adm.31299d", { p0: await res.text() });
         return;
       }
       const body = (await res.json()) as { name: string };
@@ -1367,7 +1367,7 @@ class AdminView extends HTMLElement {
       this.#restoreSelected = body.name;
       this.#restoreTyped = "";
     } catch (err) {
-      this.#error = `Hochladen fehlgeschlagen: ${err}`;
+      this.#error = tt("adm.31299d", { p0: err });
     } finally {
       this.#uploadingBackup = false;
       this.#render();
@@ -1385,7 +1385,7 @@ class AdminView extends HTMLElement {
       try {
         const res = await apiFetch(`/api/v1/admin/backups/${encodeURIComponent(name)}`);
         if (!res.ok) {
-          this.#error = `Download fehlgeschlagen: ${await res.text()}`;
+          this.#error = tt("adm.3eceda", { p0: await res.text() });
           this.#render();
           return;
         }
@@ -1397,7 +1397,7 @@ class AdminView extends HTMLElement {
         link.click();
         URL.revokeObjectURL(url);
       } catch (err) {
-        this.#error = `Download fehlgeschlagen: ${err}`;
+        this.#error = tt("adm.3eceda", { p0: err });
         this.#render();
       }
     })();
@@ -1448,22 +1448,22 @@ class AdminView extends HTMLElement {
   }
 
   async #setProductiveVersion(t: NodeVersionType, id: string, force = false): Promise<void> {
-    const target = id === "" ? "das installierte Binary" : `Version ${id}`;
+    const target = id === "" ? tt("adm.361528") : tt("adm.4c4de5", { p0: id });
     const ok = force || await confirmDialog(
-      `${t.name}: ${target} als produktiv festlegen? Es gilt für neu gestartete Instanzen. Laufende Instanzen bleiben ` +
-        `unverändert, bis sie neu gestartet werden (System-Update → „Veraltete neu starten“).`,
-      { confirmLabel: "Festlegen" },
+      tt("adm.b5d818", { p0: t.name, p1: target }) +
+        tt("adm.0e3a0a"),
+      { confirmLabel: tt("adm.a8aea0") },
     );
     if (!ok) return;
     const res = await this.#nodeVersionCall(
       `/api/v1/admin/node-versions/${encodeURIComponent(t.name)}/productive`,
       { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: id, force }) },
-      "Festlegen fehlgeschlagen",
+      tt("adm.89b0ff"),
     );
     // Wechsel über eine Contract-Generation: erst nach ausdrücklicher Bestätigung (unbekannte Generationen nie).
     if (res === null && !force && /Wechsel über eine Contract-Generation/.test(this.#error)) {
       const msg = this.#error;
-      if (await confirmDialog(`${msg}\n\nTrotzdem umstellen?`, { confirmLabel: "Trotzdem umstellen" })) {
+      if (await confirmDialog(`${msg}\n\nTrotzdem umstellen?`, { confirmLabel: tt("adm.88ca3b") })) {
         this.#error = "";
         await this.#setProductiveVersion(t, id, true);
       }
@@ -1507,21 +1507,21 @@ class AdminView extends HTMLElement {
     }
     const plan = (await dry.json()) as RolloutStatus;
     if (plan.items.length === 0) {
-      this.#error = "Keine laufende Instanz muss umgestellt werden.";
+      this.#error = tt("adm.224408");
       this.#render();
       return;
     }
-    const lines = plan.items.map((i) => `• ${i.label} (${i.mode === "workflow-role" ? "Workflow-Rolle" : "eigenständig"}): ${i.from || "installiert"} → ${plan.target || "installiert"}`);
+    const lines = plan.items.map((i) => `• ${i.label} (${i.mode === "workflow-role" ? tt("adm.ad2749") : tt("adm.74cacb")}): ${i.from || "installiert"} → ${plan.target || "installiert"}`);
     const ok = await confirmDialog(
-      `${plan.items.length} Instanz(en) nacheinander auf ${plan.target || "das installierte Binary"} umstellen?\n\n${lines.join("\n")}\n\n` +
-        `Jede Instanz wird neu gestartet (kurzer Signalausfall), ihre Verbindungen werden wiederhergestellt. ` +
-        `Startet eine neue Version nicht, läuft die Instanz mit dem bisherigen Stand weiter und der Rollout bricht ab.`,
-      { confirmLabel: "Rollout starten" },
+      tt("adm.9a9247", { p0: plan.items.length, p1: plan.target || tt("adm.361528"), p2: lines.join("\n") }) +
+        tt("adm.150afc") +
+        tt("adm.5d9e5b"),
+      { confirmLabel: tt("adm.603736") },
     );
     if (!ok) return;
     const res = await call({ confirm: true });
     if (!res.ok) {
-      this.#error = `Rollout nicht gestartet: ${(await res.text()).trim()}`;
+      this.#error = tt("adm.2597aa", { p0: (await res.text()).trim() });
       this.#render();
       return;
     }
@@ -1531,11 +1531,11 @@ class AdminView extends HTMLElement {
   }
 
   async #deleteNodeVersion(t: NodeVersionType, id: string) {
-    if (!(await confirmDialog(`${t.name} ${id} aus dem Versionsspeicher löschen?`, { confirmLabel: "Löschen" }))) return;
+    if (!(await confirmDialog(tt("adm.68797a", { p0: t.name, p1: id }), { confirmLabel: tt("adm.1010b0") }))) return;
     await this.#nodeVersionCall(
       `/api/v1/admin/node-versions/${encodeURIComponent(t.name)}/${encodeURIComponent(id)}`,
       { method: "DELETE" },
-      "Löschen fehlgeschlagen",
+      tt("adm.290534"),
     );
   }
 
@@ -1543,15 +1543,15 @@ class AdminView extends HTMLElement {
     const section = document.createElement("div");
     const head = document.createElement("div");
     head.className = "omp-h1";
-    head.textContent = "Node-Versionen";
+    head.textContent = tt("adm.2b5ab6");
     section.appendChild(head);
 
     const info = document.createElement("div");
     info.style.cssText = "color:var(--omp-text-dim);margin:6px 0 12px;white-space:pre-wrap;";
     info.textContent =
-      "Je Node-Typ liegen mehrere Binary-Versionen im Versionsspeicher (aus hochgeladenen Update-Paketen und dem " +
-      "jeweils installierten Stand). Die produktive Version gilt für neu gestartete lokale Instanzen; Auf- und " +
-      "Abwärtswechsel ist „andere Version produktiv setzen“. Dev-Builds sind nicht versioniert und werden nicht archiviert.";
+      tt("adm.667df2") +
+      tt("adm.3ca706") +
+      tt("adm.bfb34a");
     section.appendChild(info);
 
     const nv = this.#nv;
@@ -1560,10 +1560,10 @@ class AdminView extends HTMLElement {
       return section;
     }
     const rescan = document.createElement("button");
-    rescan.textContent = "Installierte Binaries archivieren";
+    rescan.textContent = tt("adm.3397a7");
     rescan.disabled = this.#nvBusy;
     rescan.style.cssText = "margin-bottom:12px;";
-    rescan.addEventListener("click", () => void this.#nodeVersionCall("/api/v1/admin/node-versions/rescan", { method: "POST" }, "Archivieren fehlgeschlagen"));
+    rescan.addEventListener("click", () => void this.#nodeVersionCall("/api/v1/admin/node-versions/rescan", { method: "POST" }, tt("adm.ff58ad")));
     section.appendChild(rescan);
 
     for (const t of nv.types) {
@@ -1576,8 +1576,8 @@ class AdminView extends HTMLElement {
       card.appendChild(title);
       const state = document.createElement("div");
       state.style.cssText = "color:var(--omp-text-dim);margin:4px 0 8px;";
-      const inst = t.installed ? `${t.installed.version}${t.installed.commit ? ` (${t.installed.commit})` : ""}` : "ohne Build-Stempel (älterer/Dev-Build)";
-      state.textContent = `Installiert: ${inst} · Produktiv: ${t.productive || "installiertes Binary"}`;
+      const inst = t.installed ? `${t.installed.version}${t.installed.commit ? ` (${t.installed.commit})` : ""}` : tt("adm.2f5000");
+      state.textContent = tt("adm.3846c6", { p0: inst, p1: t.productive || tt("adm.dfb6b8") });
       card.appendChild(state);
 
       if (t.versions.length > 0) {
@@ -1601,7 +1601,7 @@ class AdminView extends HTMLElement {
           );
           const actions = document.createElement("td");
           const setBtn = document.createElement("button");
-          setBtn.textContent = isProd ? "produktiv" : "Produktiv setzen";
+          setBtn.textContent = isProd ? "produktiv" : tt("adm.ec4dde");
           setBtn.disabled = isProd || this.#nvBusy;
           setBtn.addEventListener("click", () => void this.#setProductiveVersion(t, v.id));
           actions.appendChild(setBtn);
@@ -1609,7 +1609,7 @@ class AdminView extends HTMLElement {
             const del = document.createElement("button");
             del.className = "omp-btn-danger";
             del.style.cssText = "margin-left:6px;";
-            del.textContent = "Löschen";
+            del.textContent = tt("adm.1010b0");
             del.disabled = this.#nvBusy;
             del.addEventListener("click", () => void this.#deleteNodeVersion(t, v.id));
             actions.appendChild(del);
@@ -1621,12 +1621,12 @@ class AdminView extends HTMLElement {
       } else {
         const none = document.createElement("div");
         none.style.cssText = "color:var(--omp-text-dim);margin-bottom:8px;";
-        none.textContent = "Keine archivierten Versionen (Dev-Build oder noch kein Update-Paket).";
+        none.textContent = tt("adm.8c876a");
         card.appendChild(none);
       }
       if (t.productive) {
         const back = document.createElement("button");
-        back.textContent = "Zurück zum installierten Binary";
+        back.textContent = tt("adm.0c7131");
         back.disabled = this.#nvBusy;
         back.addEventListener("click", () => void this.#setProductiveVersion(t, ""));
         card.appendChild(back);
@@ -1639,7 +1639,7 @@ class AdminView extends HTMLElement {
         const row = document.createElement("div");
         row.style.cssText = "margin-top:8px;";
         const btn = document.createElement("button");
-        btn.textContent = ro?.running ? "Rollout läuft …" : `${behind.length} laufende Instanz(en) auf ${target || "installiertes Binary"} umstellen …`;
+        btn.textContent = ro?.running ? tt("adm.f43217") : tt("adm.2d37e3", { p0: behind.length, p1: target || tt("adm.dfb6b8") });
         btn.disabled = !!ro?.running || this.#nvBusy;
         btn.addEventListener("click", () => void this.#startRollout(t));
         row.appendChild(btn);
@@ -1664,9 +1664,9 @@ class AdminView extends HTMLElement {
           const line = document.createElement("div");
           const build = this.#nvBuilds.get(i.id);
           line.textContent =
-            `${i.label}: ${build ?? "Stand unbekannt"}${i.nodeVersion ? ` · aus Versionsspeicher ${i.nodeVersion}` : ""}` +
-            (i.outdated ? " · veraltet (Neustart nötig)" : "") +
-            (i.remote ? " · Remote-Host (Versionsspeicher gilt nur lokal)" : "");
+            `${i.label}: ${build ?? tt("adm.00b3d4")}${i.nodeVersion ? tt("adm.db0548", { p0: i.nodeVersion }) : ""}` +
+            (i.outdated ? tt("adm.66a668") : "") +
+            (i.remote ? tt("adm.4f37c8") : "");
           list.appendChild(line);
         }
         card.appendChild(list);
@@ -1707,7 +1707,7 @@ class AdminView extends HTMLElement {
         body: file,
       });
       if (!res.ok) {
-        this.#error = `Update-Paket abgelehnt: ${(await res.text()).trim()}`;
+        this.#error = tt("adm.207f5e", { p0: (await res.text()).trim() });
         return;
       }
       const entry = (await res.json()) as UpdatePackage;
@@ -1716,7 +1716,7 @@ class AdminView extends HTMLElement {
       this.#updTyped = "";
       this.#updForce = false;
     } catch (err) {
-      this.#error = `Hochladen fehlgeschlagen: ${err}`;
+      this.#error = tt("adm.31299d", { p0: err });
     } finally {
       this.#updUploading = false;
       this.#render();
@@ -1728,10 +1728,10 @@ class AdminView extends HTMLElement {
   // und Node-Binaries). Ergebnis je Host erscheint live in der Liste.
   async #distributeUpdate(pkg: UpdatePackage) {
     const ok = await confirmDialog(
-      `Version ${pkg.version} an alle registrierten Remote-Hosts verteilen? Host-Agent und Node-Binaries auf den ` +
-        `Hosts werden ersetzt; ein neuer Host-Agent wird erst nach dessen Neustart aktiv, laufende Instanzen behalten ` +
-        `den alten Stand bis zu ihrem Neustart.`,
-      { confirmLabel: "Verteilen" },
+      tt("adm.17421d", { p0: pkg.version }) +
+        tt("adm.41c0d3") +
+        tt("adm.77ae28"),
+      { confirmLabel: tt("adm.b63a37") },
     );
     if (!ok) return;
     this.#error = "";
@@ -1741,7 +1741,7 @@ class AdminView extends HTMLElement {
       body: JSON.stringify({ confirm: true, version: pkg.version }),
     });
     if (!res.ok) {
-      this.#error = `Verteilen fehlgeschlagen: ${(await res.text()).trim()}`;
+      this.#error = tt("adm.a7b1ed", { p0: (await res.text()).trim() });
       this.#render();
       return;
     }
@@ -1767,9 +1767,9 @@ class AdminView extends HTMLElement {
   async #restartOutdated() {
     const n = this.#upd?.outdatedInstances ?? 0;
     const ok = await confirmDialog(
-      `${n} veraltete Instanz(en) jetzt neu starten? Ihre Signale unterbrechen sich dabei kurz ` +
-        `(Workflow-Rollen behalten Node-IDs und Bedienzustand).`,
-      { confirmLabel: "Neu starten" },
+      tt("adm.98298f", { p0: n }) +
+        tt("adm.979273"),
+      { confirmLabel: tt("adm.bad5b8") },
     );
     if (!ok) return;
     this.#restartingOutdated = true;
@@ -1782,16 +1782,16 @@ class AdminView extends HTMLElement {
         body: JSON.stringify({ confirm: true }),
       });
       if (!res.ok) {
-        this.#error = `Neustart fehlgeschlagen: ${(await res.text()).trim()}`;
+        this.#error = tt("adm.7b8028", { p0: (await res.text()).trim() });
       } else {
         const body = (await res.json()) as { results: { label: string; ok: boolean; error?: string }[] };
         const failed = body.results.filter((r) => !r.ok);
         if (failed.length > 0) {
-          this.#error = `Nicht alle Instanzen neu gestartet: ${failed.map((f) => `${f.label} (${f.error})`).join("; ")}`;
+          this.#error = tt("adm.e89f49", { p0: failed.map((f) => `${f.label} (${f.error})`).join("; ") });
         }
       }
     } catch (err) {
-      this.#error = `Neustart fehlgeschlagen: ${err}`;
+      this.#error = tt("adm.7b8028", { p0: err });
     } finally {
       this.#restartingOutdated = false;
       // Telemetrie/Prozessstart brauchen einen Moment, bis das Badge verschwindet.
@@ -1802,11 +1802,11 @@ class AdminView extends HTMLElement {
   }
 
   async #deleteUpdate(id: string) {
-    const ok = await confirmDialog(`Update-Paket „${id}" vom Server löschen?`, { confirmLabel: "Löschen" });
+    const ok = await confirmDialog(tt("adm.901c45", { p0: id }), { confirmLabel: tt("adm.1010b0") });
     if (!ok) return;
     const res = await apiFetch(`/api/v1/admin/updates/${encodeURIComponent(id)}`, { method: "DELETE" });
     if (!res.ok) {
-      this.#error = `Löschen fehlgeschlagen: ${(await res.text()).trim()}`;
+      this.#error = tt("adm.05f6da", { p0: (await res.text()).trim() });
     }
     await this.#loadUpdates();
     this.#render();
@@ -1816,11 +1816,11 @@ class AdminView extends HTMLElement {
     if (this.#updTyped !== pkg.version) return;
     const migrations = pkg.manifest.migrations ?? [];
     const confirmed = await confirmDialog(
-      `Version ${pkg.version} jetzt installieren? Der Server (Orchestrator) wird dafür neu gestartet und ` +
-        `ist einige Sekunden nicht erreichbar. Laufende Nodes bleiben in Betrieb, laufen aber bis zu ihrem ` +
-        `nächsten Neustart mit dem alten Stand.` +
-        (migrations.length > 0 ? ` Dieses Update ändert die Datenbank (${migrations.length} Migration(en)).` : ""),
-      { confirmLabel: "Installieren" },
+      tt("adm.1ec094", { p0: pkg.version }) +
+        tt("adm.7dd803") +
+        tt("adm.776d94") +
+        (migrations.length > 0 ? tt("adm.e117f9", { p0: migrations.length }) : ""),
+      { confirmLabel: tt("adm.6c6655") },
     );
     if (!confirmed) return;
 
@@ -1836,7 +1836,7 @@ class AdminView extends HTMLElement {
       if (!res.ok) {
         // Klarer Fehlschlag VOR dem eigentlichen Update (Prüfung, Backup,
         // Supervisor) — der Server lebt unverändert weiter.
-        this.#error = `Update fehlgeschlagen: ${(await res.text()).trim()}`;
+        this.#error = tt("adm.20f290", { p0: (await res.text()).trim() });
         this.#updApplying = false;
         this.#render();
         return;
@@ -1853,11 +1853,11 @@ class AdminView extends HTMLElement {
       const box = document.createElement("div");
       box.className = "omp-card";
       box.innerHTML =
-        `<div class="omp-h1">Update läuft …</div>` +
-        `<div style="color:var(--omp-text-dim);margin-top:8px;">Der Server wird gesichert, angehalten, aktualisiert und neu ` +
-        `gestartet. Diese Seite lädt automatisch neu, sobald er wieder erreichbar ist (kann bis zu ~1–2 Minuten dauern). ` +
-        `Bei einem Fehler stellt der Supervisor den vorherigen Stand automatisch wieder her — das Ergebnis steht danach ` +
-        `hier unter „Verlauf“.</div>`;
+        `<div class="omp-h1">${tt("adm.a346cd")}</div>` +
+        `<div style="color:var(--omp-text-dim);margin-top:8px;">${tt("adm.ed0484")} ` +
+        tt("adm.737d1d") +
+        tt("adm.450de1") +
+        `${tt("adm.64e9be")}</div>`;
       return box;
     }
 
@@ -1866,7 +1866,7 @@ class AdminView extends HTMLElement {
 
     const head = document.createElement("div");
     head.className = "omp-h1";
-    head.textContent = "System-Update";
+    head.textContent = tt("adm.059a95");
     section.appendChild(head);
 
     // Kapitel „Firmware“: aktuelle Version gut sichtbar, auch solange die
@@ -1874,33 +1874,33 @@ class AdminView extends HTMLElement {
     const fw = document.createElement("div");
     fw.className = "omp-firmware-version";
     fw.style.cssText = "font-size:18px;font-weight:600;margin:4px 0;";
-    fw.textContent = upd ? formatFirmwareLong(upd.current) : "Firmware wird gelesen …";
+    fw.textContent = upd ? formatFirmwareLong(upd.current) : tt("adm.2a87f2");
     if (!upd) void fetchBuildInfo().then((i) => { if (i && !this.#upd) fw.textContent = formatFirmwareLong(i); });
     section.appendChild(fw);
 
     const info = document.createElement("div");
     info.style.cssText = "color:var(--omp-text-dim);margin:6px 0 12px;white-space:pre-wrap;";
     if (!upd) {
-      info.textContent = "Wird geladen …";
+      info.textContent = tt("adm.cd73c1");
       section.appendChild(info);
       return section;
     }
     info.textContent =
       (upd.trustedKeys.length > 0
-        ? `Vertrauenswürdige Signaturschlüssel: ${upd.trustedKeys.join(", ")}`
-        : "Kein Signaturschlüssel hinterlegt (.run/update-trusted.pub) — Pakete werden abgelehnt.") +
-      (upd.allowUnsigned ? "\nACHTUNG: unsignierte Pakete sind erlaubt (OMP_UPDATE_ALLOW_UNSIGNED, nur Entwicklung)." : "");
+        ? tt("adm.f4f4c4", { p0: upd.trustedKeys.join(", ") })
+        : tt("adm.e898a8")) +
+      (upd.allowUnsigned ? tt("adm.9df498") : "");
     section.appendChild(info);
 
     if (upd.outdatedInstances > 0) {
       const warn = document.createElement("div");
       warn.style.cssText = "margin-bottom:12px;padding:6px 10px;border:1px solid var(--omp-warn, #b8860b);border-radius:var(--omp-radius);";
       warn.textContent =
-        `${upd.outdatedInstances} laufende Node-Instanz(en) nutzen noch einen älteren Stand als die installierten Dateien ` +
-        `— sie werden beim nächsten Neustart (Instanz oder Workflow) aktualisiert.`;
+        tt("adm.e9553d", { p0: upd.outdatedInstances }) +
+        tt("adm.9301a7");
       const restartBtn = document.createElement("button");
       restartBtn.style.cssText = "margin-left:10px;";
-      restartBtn.textContent = this.#restartingOutdated ? "Startet neu …" : "Veraltete Instanzen jetzt neu starten";
+      restartBtn.textContent = this.#restartingOutdated ? tt("adm.0c2f79") : tt("adm.b7843f");
       restartBtn.disabled = this.#restartingOutdated;
       restartBtn.addEventListener("click", () => void this.#restartOutdated());
       warn.appendChild(restartBtn);
@@ -1911,13 +1911,13 @@ class AdminView extends HTMLElement {
     if (sup && sup.kind === "update" && sup.busy) {
       const busy = document.createElement("div");
       busy.style.cssText = "margin-bottom:12px;";
-      busy.textContent = `Ein Update auf ${sup.version ?? "?"} läuft (Phase: ${sup.phase ?? "?"}).`;
+      busy.textContent = tt("adm.d5fe38", { p0: sup.version ?? "?", p1: sup.phase ?? "?" });
       section.appendChild(busy);
     }
     if (upd.supervisorError) {
       const e = document.createElement("div");
       e.style.cssText = "margin-bottom:12px;color:var(--omp-danger, #d33);";
-      e.textContent = `Supervisor nicht erreichbar: ${upd.supervisorError} — ohne ihn kann kein Update angewendet werden (deploy/dev/start-supervisor.sh).`;
+      e.textContent = tt("adm.9e6d27", { p0: upd.supervisorError });
       section.appendChild(e);
     }
 
@@ -1925,7 +1925,7 @@ class AdminView extends HTMLElement {
     const uploadRow = document.createElement("div");
     uploadRow.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:var(--omp-space-3);";
     const uploadLabel = document.createElement("span");
-    uploadLabel.textContent = this.#updUploading ? "Wird hochgeladen und geprüft …" : "Update-Paket hochladen (.tar.gz):";
+    uploadLabel.textContent = this.#updUploading ? tt("adm.e2bdb7") : tt("adm.684cab");
     const uploadInput = document.createElement("input");
     uploadInput.type = "file";
     uploadInput.accept = ".gz,.tar.gz,application/gzip";
@@ -1939,12 +1939,12 @@ class AdminView extends HTMLElement {
     // Pakete
     const pkgHead = document.createElement("div");
     pkgHead.style.cssText = "font-weight:600;margin-bottom:6px;";
-    pkgHead.textContent = `Hochgeladene Pakete (${upd.packages.length})`;
+    pkgHead.textContent = tt("adm.e05a6b", { p0: upd.packages.length });
     section.appendChild(pkgHead);
     if (upd.packages.length === 0) {
       const empty = document.createElement("div");
       empty.style.cssText = "color:var(--omp-text-dim);margin-bottom:12px;";
-      empty.textContent = "Noch kein Paket hochgeladen.";
+      empty.textContent = tt("adm.7fcec6");
       section.appendChild(empty);
     }
     for (const pkg of upd.packages) {
@@ -1954,10 +1954,10 @@ class AdminView extends HTMLElement {
       const label = document.createElement("span");
       label.style.cssText = "flex:1;";
       label.textContent =
-        `${pkg.version} · ${(pkg.size / (1024 * 1024)).toFixed(1)} MB · ${pkg.signed ? `signiert (${pkg.keyId})` : "NICHT signiert"}` +
+        `${pkg.version} · ${(pkg.size / (1024 * 1024)).toFixed(1)} MB · ${pkg.signed ? tt("adm.fc16a0", { p0: pkg.keyId }) : "NICHT signiert"}` +
         ` · ${new Date(pkg.uploadedAt).toLocaleString()}`;
       const pick = document.createElement("button");
-      pick.textContent = pkg.id === this.#updSelected ? "Ausgewählt" : "Auswählen";
+      pick.textContent = pkg.id === this.#updSelected ? tt("adm.9ac107") : tt("adm.751a99");
       pick.disabled = pkg.id === this.#updSelected;
       pick.addEventListener("click", () => {
         this.#updSelected = pkg.id;
@@ -1966,7 +1966,7 @@ class AdminView extends HTMLElement {
         this.#render();
       });
       const del = document.createElement("button");
-      del.textContent = "Löschen";
+      del.textContent = tt("adm.1010b0");
       del.addEventListener("click", () => void this.#deleteUpdate(pkg.id));
       row.append(label, pick, del);
       section.appendChild(row);
@@ -1980,20 +1980,20 @@ class AdminView extends HTMLElement {
       detail.style.cssText = "margin-top:12px;";
       const title = document.createElement("div");
       title.style.cssText = "font-weight:600;margin-bottom:6px;";
-      title.textContent = `Version ${selected.version}`;
+      title.textContent = tt("adm.4c4de5", { p0: selected.version });
       detail.appendChild(title);
       const meta = document.createElement("div");
       meta.style.cssText = "color:var(--omp-text-dim);white-space:pre-wrap;margin-bottom:8px;";
       meta.textContent =
-        `Architektur: ${m.arch}${m.gitCommit ? ` · Commit ${m.gitCommit}` : ""}${m.builtAt ? ` · gebaut ${m.builtAt}` : ""}\n` +
+        tt("adm.6bf4de", { p0: m.arch, p1: m.gitCommit ? ` · Commit ${m.gitCommit}` : "", p2: m.builtAt ? ` · gebaut ${m.builtAt}` : "" }) +
         `SHA-256: ${selected.sha256}\n` +
-        (m.minFromVersion ? `Voraussetzung: mindestens Version ${m.minFromVersion}\n` : "") +
-        (m.notes ? `Hinweis: ${m.notes}\n` : "");
+        (m.minFromVersion ? tt("adm.cbe66e", { p0: m.minFromVersion }) : "") +
+        (m.notes ? tt("adm.b57cef", { p0: m.notes }) : "");
       detail.appendChild(meta);
       if ((m.migrations ?? []).length > 0) {
         const mig = document.createElement("div");
         mig.style.cssText = "margin-bottom:8px;color:var(--omp-warn, #b8860b);";
-        mig.textContent = `Dieses Update ändert die Datenbank (${m.migrations!.join(", ")}). Ein Backup wird zwingend vorher angelegt.`;
+        mig.textContent = tt("adm.2ebe10", { p0: m.migrations!.join(", ") });
         detail.appendChild(mig);
       }
       const comps = document.createElement("table");
@@ -2016,7 +2016,7 @@ class AdminView extends HTMLElement {
       const distRow = document.createElement("div");
       distRow.style.cssText = "margin-bottom:10px;";
       const distBtn = document.createElement("button");
-      distBtn.textContent = dist?.running ? "Verteilung läuft …" : "An Remote-Hosts verteilen";
+      distBtn.textContent = dist?.running ? tt("adm.3f6065") : "An Remote-Hosts verteilen";
       distBtn.disabled = !!dist?.running || (!selected.signed && !upd.allowUnsigned);
       distBtn.addEventListener("click", () => void this.#distributeUpdate(selected));
       distRow.appendChild(distBtn);
@@ -2030,7 +2030,7 @@ class AdminView extends HTMLElement {
           line.textContent = `${mark} ${h.label}: ${h.state}${h.detail ? ` — ${h.detail}` : ""}`;
           list.appendChild(line);
         }
-        if (dist.hosts.length === 0) list.textContent = "Keine Remote-Hosts registriert.";
+        if (dist.hosts.length === 0) list.textContent = tt("adm.a85888");
         distRow.appendChild(list);
       }
       detail.appendChild(distRow);
@@ -2042,7 +2042,7 @@ class AdminView extends HTMLElement {
       backupCb.checked = this.#updBackup || (m.migrations ?? []).length > 0;
       backupCb.disabled = (m.migrations ?? []).length > 0;
       backupCb.addEventListener("change", () => (this.#updBackup = backupCb.checked));
-      backupLbl.append(backupCb, document.createTextNode("Vorher ein Datenbank-Backup anlegen"));
+      backupLbl.append(backupCb, document.createTextNode(tt("adm.c0fc67")));
       detail.appendChild(backupLbl);
 
       const forceLbl = document.createElement("label");
@@ -2051,12 +2051,12 @@ class AdminView extends HTMLElement {
       forceCb.type = "checkbox";
       forceCb.checked = this.#updForce;
       forceCb.addEventListener("change", () => (this.#updForce = forceCb.checked));
-      forceLbl.append(forceCb, document.createTextNode("Auch installieren, wenn nicht neuer als die installierte Version (Downgrade)"));
+      forceLbl.append(forceCb, document.createTextNode(tt("adm.a2eeb2")));
       detail.appendChild(forceLbl);
 
       const confirmLabel = document.createElement("div");
       confirmLabel.style.cssText = "color:var(--omp-text-dim);margin-bottom:4px;";
-      confirmLabel.textContent = `Zur Bestätigung die Versionsnummer eintippen: ${selected.version}`;
+      confirmLabel.textContent = tt("adm.700ea0", { p0: selected.version });
       detail.appendChild(confirmLabel);
       const row = document.createElement("div");
       row.style.cssText = "display:flex;gap:8px;align-items:center;";
@@ -2065,7 +2065,7 @@ class AdminView extends HTMLElement {
       typed.value = this.#updTyped;
       typed.placeholder = selected.version;
       const go = document.createElement("button");
-      go.textContent = "Jetzt installieren";
+      go.textContent = tt("adm.69a300");
       go.disabled = this.#updTyped !== selected.version || !selected.signed && !upd.allowUnsigned;
       typed.addEventListener("input", () => {
         this.#updTyped = typed.value;
@@ -2080,12 +2080,12 @@ class AdminView extends HTMLElement {
     // Verlauf
     const histHead = document.createElement("div");
     histHead.style.cssText = "font-weight:600;margin:16px 0 6px;";
-    histHead.textContent = "Verlauf";
+    histHead.textContent = tt("adm.2f93d5");
     section.appendChild(histHead);
     if (upd.history.length === 0) {
       const none = document.createElement("div");
       none.style.cssText = "color:var(--omp-text-dim);";
-      none.textContent = "Noch kein Update durchgeführt.";
+      none.textContent = tt("adm.641ad5");
       section.appendChild(none);
     }
     for (const h of upd.history) {
@@ -2093,14 +2093,14 @@ class AdminView extends HTMLElement {
       line.style.cssText = "padding:3px 0;white-space:pre-wrap;" + (h.ok ? "" : "color:var(--omp-danger, #d33);");
       line.textContent =
         `${new Date(h.time).toLocaleString()} · ${h.from ? `${h.from} → ` : ""}${h.version} · ` +
-        (h.ok ? "erfolgreich" : h.rolledBack ? "FEHLGESCHLAGEN, zurückgerollt" : "FEHLGESCHLAGEN") +
+        (h.ok ? "erfolgreich" : h.rolledBack ? tt("adm.5a64e9") : "FEHLGESCHLAGEN") +
         (h.error ? `\n${h.error}` : "");
       section.appendChild(line);
     }
 
     const refresh = document.createElement("button");
     refresh.style.cssText = "margin-top:12px;";
-    refresh.textContent = "Aktualisieren";
+    refresh.textContent = tt("adm.bf3cfc");
     refresh.addEventListener("click", () => void this.#loadUpdates());
     section.appendChild(refresh);
     return section;
@@ -2114,10 +2114,10 @@ class AdminView extends HTMLElement {
   async #restoreDatabase() {
     if (!this.#restoreSelected || this.#restoreTyped !== this.#restoreSelected) return;
     const confirmed = await confirmDialog(
-      `Backup „${this.#restoreSelected}" wirklich zurückspielen? Dies ERSETZT den kompletten ` +
-        `aktuellen Datenbankinhalt (Nutzer, Rollenbindungen, Audit-Log, Layouts, Snapshots, ` +
-        `Workflows, Hosts) unwiderruflich.`,
-      { confirmLabel: "Zurückspielen" },
+      tt("adm.13e8c8", { p0: this.#restoreSelected }) +
+        tt("adm.d62715") +
+        tt("adm.676834"),
+      { confirmLabel: tt("adm.c8ef6c") },
     );
     if (!confirmed) return;
 
@@ -2134,7 +2134,7 @@ class AdminView extends HTMLElement {
         // Klarer Fehlschlag VOR dem eigentlichen Restore (Validierung,
         // Supervisor nicht erreichbar) — der Orchestrator lebt
         // unverändert weiter, kein Reconnect-Overlay nötig.
-        this.#error = `Restore fehlgeschlagen: ${await res.text()}`;
+        this.#error = tt("adm.3f341c", { p0: await res.text() });
         this.#restoring = false;
         this.#render();
         return;
@@ -2192,7 +2192,7 @@ class AdminView extends HTMLElement {
       this.#newCatalogEnvText = JSON.stringify(parsed.env ?? {}, null, 2);
       this.#error = "";
     } catch {
-      this.#error = "Datei konnte nicht als Katalog-Eintrag gelesen werden (ungültiges JSON).";
+      this.#error = tt("adm.e91dd5");
     }
     this.#render();
   }
@@ -2203,7 +2203,7 @@ class AdminView extends HTMLElement {
     try {
       env = JSON.parse(this.#newCatalogEnvText || "{}");
     } catch {
-      this.#error = "Env muss gültiges JSON sein (Objekt aus String-Paaren), z. B. {}";
+      this.#error = tt("adm.1ee99d");
       this.#render();
       return;
     }
@@ -2231,7 +2231,7 @@ class AdminView extends HTMLElement {
         this.#error = "";
       } else {
         this.#admissionResults = null;
-        this.#error = `Import fehlgeschlagen: ${await res.text()}`;
+        this.#error = tt("adm.6cdb17", { p0: await res.text() });
       }
       this.#render();
       return;
@@ -2251,13 +2251,13 @@ class AdminView extends HTMLElement {
   }
 
   async #removeCatalogEntry(entry: CatalogEntry) {
-    const versionLabel = entry.version ? ` (Version ${entry.version})` : "";
-    if (!(await confirmDialog(`Katalog-Eintrag "${entry.label}"${versionLabel} wirklich entfernen?`, { confirmLabel: "Entfernen" })))
+    const versionLabel = entry.version ? tt("adm.c32b0c", { p0: entry.version }) : "";
+    if (!(await confirmDialog(tt("adm.34066f", { p0: entry.label, p1: versionLabel }), { confirmLabel: tt("adm.513d30") })))
       return;
     const q = entry.version ? `?version=${encodeURIComponent(entry.version)}` : "";
     const res = await apiFetch(`/api/v1/catalog/${encodeURIComponent(entry.type)}${q}`, { method: "DELETE" });
     if (!res.ok) {
-      this.#error = `Entfernen fehlgeschlagen: ${await res.text()}`;
+      this.#error = tt("adm.64bd21", { p0: await res.text() });
       this.#render();
       return;
     }
@@ -2305,7 +2305,7 @@ class AdminView extends HTMLElement {
       body: JSON.stringify({ nodeId, raftAddr, httpAddr: this.#newClusterHttpAddr.trim() || undefined }),
     });
     if (!res.ok) {
-      this.#error = `Beitritt fehlgeschlagen: ${await res.text()}`;
+      this.#error = tt("adm.8a554c", { p0: await res.text() });
       this.#render();
       return;
     }
@@ -2336,19 +2336,19 @@ class AdminView extends HTMLElement {
     const memberCount = this.#cluster?.peers.length ?? 0;
     if (isLeader && memberCount <= 1) {
       this.#error =
-        `„${peer.id}" ist der Leader und das einzige verbleibende Cluster-Mitglied — ` +
-        "Entfernen ist gesperrt, das würde den Cluster dauerhaft unbrauchbar machen.";
+        tt("adm.e66e64", { p0: peer.id }) +
+        tt("adm.835eb0");
       this.#render();
       return;
     }
     const message = isLeader
-      ? `„${peer.id}" (${peer.raftAddr}) ist der aktuelle Leader. Nach dem Entfernen wählen die ` +
-        `verbleibenden ${memberCount - 1} Mitglieder automatisch einen neuen Leader. Wirklich entfernen?`
-      : `Mitglied "${peer.id}" (${peer.raftAddr}) wirklich aus dem Cluster entfernen?`;
-    if (!(await confirmDialog(message, { confirmLabel: "Entfernen" }))) return;
+      ? tt("adm.4e0b70", { p0: peer.id, p1: peer.raftAddr }) +
+        tt("adm.b8b22a", { p0: memberCount - 1 })
+      : tt("adm.f7c6bf", { p0: peer.id, p1: peer.raftAddr });
+    if (!(await confirmDialog(message, { confirmLabel: tt("adm.513d30") }))) return;
     const res = await apiFetch(`/api/v1/cluster/members/${encodeURIComponent(peer.id)}`, { method: "DELETE" });
     if (!res.ok) {
-      this.#error = `Entfernen fehlgeschlagen: ${await res.text()}`;
+      this.#error = tt("adm.64bd21", { p0: await res.text() });
       this.#render();
       return;
     }
@@ -2501,9 +2501,9 @@ class AdminView extends HTMLElement {
       "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;";
     const title = document.createElement("span");
     title.className = "omp-h1";
-    title.textContent = `Nutzer (${this.#users.length})`;
+    title.textContent = tt("adm.da5fc1", { p0: this.#users.length });
     const newBtn = document.createElement("button");
-    newBtn.textContent = this.#showUserForm ? "Abbrechen" : "+ Neuer Nutzer";
+    newBtn.textContent = this.#showUserForm ? tt("adm.4b9727") : tt("adm.e6319b");
     newBtn.style.cssText = "font-size:11px;cursor:pointer;";
     newBtn.addEventListener("click", () => {
       this.#showUserForm = !this.#showUserForm;
@@ -2519,9 +2519,9 @@ class AdminView extends HTMLElement {
     const hint = document.createElement("div");
     hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:var(--omp-space-2);";
     hint.textContent =
-      '"Rechte" bei einem Nutzer zeigt ALLE seine Rechte an einem Ort: direkt zugewiesene ' +
-      "Rollenbindungen UND über Gruppenmitgliedschaft geerbte — Rollenbindungen/Gruppen/" +
-      "Organisation bleiben die Verwaltungs-Werkzeuge, diese Ansicht hier ist die Antwort.";
+      tt("adm.a9e8b4") +
+      tt("adm.e2e8f7") +
+      tt("adm.7bb70b");
     section.appendChild(hint);
 
     if (this.#showUserForm) {
@@ -2531,7 +2531,7 @@ class AdminView extends HTMLElement {
     if (this.#users.length === 0 && !this.#showUserForm) {
       const empty = document.createElement("div");
       empty.style.cssText = "color:var(--omp-text-dim);";
-      empty.textContent = 'Noch kein Nutzer angelegt — mit "+ Neuer Nutzer" den ersten (Admin-)Nutzer anlegen.';
+      empty.textContent = tt("adm.5ea427");
       section.appendChild(empty);
       return section;
     }
@@ -2541,10 +2541,10 @@ class AdminView extends HTMLElement {
       table.style.cssText = "border-collapse:collapse;width:100%;";
       const thead = document.createElement("thead");
       thead.innerHTML = `<tr style="color:var(--omp-text-dim);text-align:left;">
-        <th style="padding:2px 8px;">Nutzername</th>
-        <th style="padding:2px 8px;">Angelegt</th>
-        <th style="padding:2px 8px;">Organisation</th>
-        <th style="padding:2px 8px;">Rolle</th>
+        <th style="padding:2px 8px;">${tt("adm.f5f8d4")}</th>
+        <th style="padding:2px 8px;">${tt("adm.2c51ef")}</th>
+        <th style="padding:2px 8px;">${tt("adm.17b83a")}</th>
+        <th style="padding:2px 8px;">${tt("adm.e897f3")}</th>
         <th style="padding:2px 8px;"></th>
       </tr>`;
       table.appendChild(thead);
@@ -2594,19 +2594,19 @@ class AdminView extends HTMLElement {
 
     const heading = document.createElement("div");
     heading.style.cssText = "font-weight:600;margin-bottom:6px;";
-    heading.textContent = `Rechte von ${u.username}`;
+    heading.textContent = tt("adm.4820a0", { p0: u.username });
     panel.appendChild(heading);
 
     if (u.isAdmin) {
       const note = document.createElement("div");
       note.style.cssText = "color:var(--omp-preset);font-size:var(--omp-font-size-xs);margin-bottom:6px;";
-      note.textContent = "Globaler Admin — hat automatisch alle Rechte auf alles, unabhängig von Bindungen/Gruppen unten.";
+      note.textContent = tt("adm.64b2a5");
       panel.appendChild(note);
     }
 
     const direct = this.#userDirectBindings(u.username);
     if (direct.length > 0) {
-      panel.appendChild(this.#renderBindingGroup("Direkt zugewiesen", direct, "scope"));
+      panel.appendChild(this.#renderBindingGroup(tt("adm.65f9b0"), direct, "scope"));
     }
 
     const groups = this.#userGroups(u.username);
@@ -2615,13 +2615,13 @@ class AdminView extends HTMLElement {
       const bindings = this.#groupBindings(g.id);
       if (bindings.length === 0) continue;
       anyGroupRights = true;
-      panel.appendChild(this.#renderBindingGroup(`Über Gruppe "${g.name}"`, bindings, "scope"));
+      panel.appendChild(this.#renderBindingGroup(tt("adm.5241aa", { p0: g.name }), bindings, "scope"));
     }
 
     if (groups.length > 0 && !anyGroupRights) {
       const note = document.createElement("div");
       note.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:4px;";
-      note.textContent = `Mitglied in ${groups.map((g) => g.name).join(", ")} — diese Gruppe(n) haben aber (noch) keine eigenen Rechte.`;
+      note.textContent = tt("adm.89d043", { p0: groups.map((g) => g.name).join(", ") });
       panel.appendChild(note);
     }
 
@@ -2629,8 +2629,8 @@ class AdminView extends HTMLElement {
       const note = document.createElement("div");
       note.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);";
       note.textContent =
-        "Keine Rechte — dieser Nutzer kann sich anmelden, aber nichts sehen oder bedienen, " +
-        'bis er direkt oder über eine Gruppe eine Rollenbindung bekommt ("+ Neue Bindung" unten bei Rollenbindungen).';
+        tt("adm.1f9d88") +
+        tt("adm.1e5016");
       panel.appendChild(note);
     }
 
@@ -2644,7 +2644,7 @@ class AdminView extends HTMLElement {
       "margin-bottom:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;";
 
     const userInput = document.createElement("input");
-    userInput.placeholder = "Nutzername";
+    userInput.placeholder = tt("adm.f5f8d4");
     userInput.autocomplete = "off";
     userInput.value = this.#newUsername;
     userInput.style.cssText = "flex:1;min-width:100px;";
@@ -2654,7 +2654,7 @@ class AdminView extends HTMLElement {
 
     const passInput = document.createElement("input");
     passInput.type = "password";
-    passInput.placeholder = "Passwort";
+    passInput.placeholder = tt("adm.3e45af");
     passInput.autocomplete = "new-password";
     passInput.value = this.#newPassword;
     passInput.style.cssText = "flex:1;min-width:100px;";
@@ -2671,7 +2671,7 @@ class AdminView extends HTMLElement {
     orgSelect.style.cssText = "flex:1;min-width:100px;";
 
     const createBtn = document.createElement("button");
-    createBtn.textContent = "Anlegen";
+    createBtn.textContent = tt("adm.6212ff");
     createBtn.style.cssText = "cursor:pointer;";
     createBtn.addEventListener("click", () => this.#createUser());
 
@@ -2739,8 +2739,8 @@ class AdminView extends HTMLElement {
       const nameSpan = document.createElement("span");
       nameSpan.textContent = this.#orgName(u.orgId);
       const changeBtn = document.createElement("button");
-      changeBtn.textContent = "ändern";
-      changeBtn.title = "Organisation dieses Nutzers ändern";
+      changeBtn.textContent = tt("adm.94b42c");
+      changeBtn.title = tt("adm.7ea51d");
       changeBtn.style.cssText = "font-size:11px;cursor:pointer;margin-left:6px;";
       changeBtn.addEventListener("click", () => {
         this.#orgChangeTarget = u.username;
@@ -2755,7 +2755,7 @@ class AdminView extends HTMLElement {
     roleTd.style.cssText = "padding:2px 8px;";
     if (u.isAdmin) {
       const badge = document.createElement("span");
-      badge.textContent = "Admin";
+      badge.textContent = tt("adm.e3afed");
       badge.style.cssText = "color:var(--omp-preset);font-size:var(--omp-font-size-xs);font-weight:600;";
       roleTd.appendChild(badge);
     } else {
@@ -2769,7 +2769,7 @@ class AdminView extends HTMLElement {
     if (isResetting) {
       const pwInput = document.createElement("input");
       pwInput.type = "password";
-      pwInput.placeholder = "neues Passwort";
+      pwInput.placeholder = tt("adm.191f52");
       pwInput.autocomplete = "new-password";
       pwInput.style.cssText = "font-size:11px;width:120px;";
       pwInput.value = this.#resetPassword;
@@ -2802,8 +2802,8 @@ class AdminView extends HTMLElement {
 
     const rightsBtn = document.createElement("button");
     const rightsOpen = this.#rightsExpandedUsername === u.username;
-    rightsBtn.textContent = rightsOpen ? "Rechte ▲" : "Rechte ▼";
-    rightsBtn.title = "Alle Rechte dieses Nutzers anzeigen — direkt zugewiesen UND über Gruppenmitgliedschaft geerbt";
+    rightsBtn.textContent = rightsOpen ? tt("adm.a294ab") : tt("adm.ae7313");
+    rightsBtn.title = tt("adm.927eb5");
     rightsBtn.style.cssText = "font-size:11px;cursor:pointer;margin-right:4px;";
     rightsBtn.addEventListener("click", () => {
       this.#rightsExpandedUsername = rightsOpen ? null : u.username;
@@ -2811,7 +2811,7 @@ class AdminView extends HTMLElement {
     });
 
     const resetBtn = document.createElement("button");
-    resetBtn.textContent = "Passwort";
+    resetBtn.textContent = tt("adm.3e45af");
     resetBtn.style.cssText = "font-size:11px;cursor:pointer;margin-right:4px;";
     resetBtn.addEventListener("click", () => {
       this.#resetTarget = u.username;
@@ -2821,7 +2821,7 @@ class AdminView extends HTMLElement {
     });
 
     const delBtn = document.createElement("button");
-    delBtn.textContent = "Löschen";
+    delBtn.textContent = tt("adm.1010b0");
     delBtn.className = "omp-btn-danger";
     delBtn.style.cssText = "font-size:11px;";
     delBtn.addEventListener("click", () => this.#deleteUser(u.username));
@@ -2845,9 +2845,9 @@ class AdminView extends HTMLElement {
       "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;";
     const title = document.createElement("span");
     title.className = "omp-h1";
-    title.textContent = `Organisationen (${this.#organizations.length})`;
+    title.textContent = tt("adm.201c47", { p0: this.#organizations.length });
     const newBtn = document.createElement("button");
-    newBtn.textContent = this.#showOrgForm ? "Abbrechen" : "+ Neue Organisation";
+    newBtn.textContent = this.#showOrgForm ? tt("adm.4b9727") : tt("adm.42d3b7");
     newBtn.style.cssText = "font-size:11px;cursor:pointer;";
     newBtn.addEventListener("click", () => {
       this.#showOrgForm = !this.#showOrgForm;
@@ -2859,8 +2859,8 @@ class AdminView extends HTMLElement {
     const hint = document.createElement("div");
     hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:var(--omp-space-2);";
     hint.textContent =
-      "Eine Organisation trennt Sichtbarkeit: Nutzer sehen nur Workflows/Assets/Prozesse ihrer eigenen Organisation. " +
-      'Jeder Nutzer gehört genau einer Organisation an (änderbar im Tab "Nutzer").';
+      tt("adm.8e03b1") +
+      tt("adm.51113f");
     section.appendChild(hint);
 
     if (this.#showOrgForm) {
@@ -2870,7 +2870,7 @@ class AdminView extends HTMLElement {
     if (this.#organizations.length === 0 && !this.#showOrgForm) {
       const empty = document.createElement("div");
       empty.style.cssText = "color:var(--omp-text-dim);";
-      empty.textContent = "Noch keine Organisation geladen.";
+      empty.textContent = tt("adm.cc1552");
       section.appendChild(empty);
       return section;
     }
@@ -2880,9 +2880,9 @@ class AdminView extends HTMLElement {
       table.style.cssText = "border-collapse:collapse;width:100%;";
       const thead = document.createElement("thead");
       thead.innerHTML = `<tr style="color:var(--omp-text-dim);text-align:left;">
-        <th style="padding:2px 8px;">Name</th>
-        <th style="padding:2px 8px;">ID</th>
-        <th style="padding:2px 8px;">Angelegt</th>
+        <th style="padding:2px 8px;">${tt("adm.49ee30")}</th>
+        <th style="padding:2px 8px;">${tt("adm.b718ad")}</th>
+        <th style="padding:2px 8px;">${tt("adm.2c51ef")}</th>
         <th style="padding:2px 8px;"></th>
       </tr>`;
       table.appendChild(thead);
@@ -2890,7 +2890,7 @@ class AdminView extends HTMLElement {
       for (const org of this.#organizations) {
         const tr = document.createElement("tr");
         tr.innerHTML = `
-          <td style="padding:2px 8px;">${org.id === "default" ? `${escapeHtml(org.name)} <span style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">(Standard)</span>` : escapeHtml(org.name)}</td>
+          <td style="padding:2px 8px;">${org.id === "default" ? `${escapeHtml(org.name)} <span style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">${tt("adm.312ccb")}</span>` : escapeHtml(org.name)}</td>
           <td style="padding:2px 8px;color:var(--omp-text-dim);font-family:ui-monospace,monospace;font-size:var(--omp-font-size-xs);">${escapeHtml(org.id)}</td>
           <td style="padding:2px 8px;color:var(--omp-text-dim);">${new Date(org.createdAt).toLocaleString()}</td>
         `;
@@ -2898,7 +2898,7 @@ class AdminView extends HTMLElement {
         actionsTd.style.cssText = "padding:2px 8px;text-align:right;";
         if (org.id !== "default") {
           const delBtn = document.createElement("button");
-          delBtn.textContent = "Löschen";
+          delBtn.textContent = tt("adm.1010b0");
           delBtn.className = "omp-btn-danger";
           delBtn.style.cssText = "font-size:11px;";
           delBtn.addEventListener("click", () => void this.#deleteOrganization(org));
@@ -2921,7 +2921,7 @@ class AdminView extends HTMLElement {
       "margin-bottom:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;";
 
     const nameInput = document.createElement("input");
-    nameInput.placeholder = "Name der Organisation";
+    nameInput.placeholder = tt("adm.90292d");
     nameInput.autocomplete = "off";
     nameInput.value = this.#newOrgName;
     nameInput.style.cssText = "flex:1;min-width:160px;";
@@ -2933,7 +2933,7 @@ class AdminView extends HTMLElement {
     });
 
     const createBtn = document.createElement("button");
-    createBtn.textContent = "Anlegen";
+    createBtn.textContent = tt("adm.6212ff");
     createBtn.style.cssText = "cursor:pointer;";
     createBtn.addEventListener("click", () => void this.#createOrganization());
 
@@ -2959,9 +2959,9 @@ class AdminView extends HTMLElement {
     heading.style.cssText = "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;";
     const title = document.createElement("span");
     title.className = "omp-h1";
-    title.textContent = `Storage-Backends (${this.#storageBackends.length})`;
+    title.textContent = tt("adm.a45bce", { p0: this.#storageBackends.length });
     const newBtn = document.createElement("button");
-    newBtn.textContent = this.#showStorageForm ? "Abbrechen" : "+ Neues Backend";
+    newBtn.textContent = this.#showStorageForm ? tt("adm.4b9727") : "+ Neues Backend";
     newBtn.style.cssText = "font-size:11px;cursor:pointer;";
     newBtn.addEventListener("click", () => {
       if (this.#showStorageForm) this.#closeStorageForm();
@@ -2973,8 +2973,8 @@ class AdminView extends HTMLElement {
     const hint = document.createElement("div");
     hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:var(--omp-space-2);";
     hint.textContent =
-      "Bestimmt, wo Asset-Dateien tatsächlich liegen (S3/MinIO). Mehrere Backends können gleichzeitig aktiv sein, " +
-      "Hinzufügen/Entfernen wirkt sofort, kein Neustart nötig. Nur Super-Admins (globales Admin-Recht) sehen diesen Tab.";
+      tt("adm.1033d2") +
+      tt("adm.5a8979");
     section.appendChild(hint);
 
     if (this.#storageFeatureDisabled) {
@@ -2983,13 +2983,9 @@ class AdminView extends HTMLElement {
         "border:1px solid var(--omp-border);border-radius:var(--omp-radius);padding:var(--omp-space-3);" +
         "color:var(--omp-text-dim);font-size:var(--omp-font-size-sm);";
       info.innerHTML = `
-        <div style="font-weight:600;color:var(--omp-text);margin-bottom:4px;">Noch nicht aktiviert</div>
-        <div>Diese Funktion braucht serverseitig <code>OMP_STORAGE_SECRET_KEY</code> — einen Base64-kodierten
-        32-Byte-Schlüssel, mit dem die Zugangsdaten der Backends verschlüsselt in der Datenbank abgelegt werden.
-        Dieser eine Schlüssel muss aus Sicherheitsgründen außerhalb der UI gesetzt werden (er verschlüsselt die
-        übrigen Geheimnisse, kann sich also nicht selbst verwalten) — alles Weitere läuft danach vollständig hier.</div>
-        <div style="margin-top:8px;">Erzeugen, z. B.: <code>openssl rand -base64 32</code>, dann als Umgebungsvariable
-        setzen und den Orchestrator neu starten.</div>
+        <div style="font-weight:600;color:var(--omp-text);margin-bottom:4px;">${tt("adm.074a2f")}</div>
+        <div>${tt("adm.027b77")} <code>${tt("adm.ee8dd8")}</code> ${tt("adm.73e569")}</div>
+        <div style="margin-top:8px;">${tt("adm.c2730d")} <code>${tt("adm.4aa4d5")}</code>${tt("adm.93d4c0")}</div>
       `;
       section.appendChild(info);
       return section;
@@ -3002,7 +2998,7 @@ class AdminView extends HTMLElement {
     if (this.#storageBackends.length === 0 && !this.#showStorageForm) {
       const empty = document.createElement("div");
       empty.style.cssText = "color:var(--omp-text-dim);";
-      empty.textContent = 'Noch kein Storage-Backend angelegt — mit "+ Neues Backend" das erste anlegen.';
+      empty.textContent = tt("adm.9534f2");
       section.appendChild(empty);
       return section;
     }
@@ -3012,13 +3008,13 @@ class AdminView extends HTMLElement {
       table.style.cssText = "border-collapse:collapse;width:100%;";
       const thead = document.createElement("thead");
       thead.innerHTML = `<tr style="color:var(--omp-text-dim);text-align:left;">
-        <th style="padding:2px 8px;">Name</th>
-        <th style="padding:2px 8px;">Endpoint</th>
-        <th style="padding:2px 8px;">Bucket</th>
-        <th style="padding:2px 8px;">Access Key</th>
-        <th style="padding:2px 8px;">SSL</th>
-        <th style="padding:2px 8px;">Status</th>
-        <th style="padding:2px 8px;">Angelegt</th>
+        <th style="padding:2px 8px;">${tt("adm.49ee30")}</th>
+        <th style="padding:2px 8px;">${tt("adm.2a6ba7")}</th>
+        <th style="padding:2px 8px;">${tt("adm.30edf7")}</th>
+        <th style="padding:2px 8px;">${tt("adm.2e3a68")}</th>
+        <th style="padding:2px 8px;">${tt("adm.ea52c3")}</th>
+        <th style="padding:2px 8px;">${tt("adm.ec53a8")}</th>
+        <th style="padding:2px 8px;">${tt("adm.2c51ef")}</th>
         <th style="padding:2px 8px;"></th>
       </tr>`;
       table.appendChild(thead);
@@ -3036,8 +3032,8 @@ class AdminView extends HTMLElement {
   #renderStorageRow(b: StorageBackend): HTMLElement {
     const tr = document.createElement("tr");
     const statusBadge = b.status === "active"
-      ? `<span style="color:var(--omp-preset);font-size:11px;font-weight:600;">aktiv</span>`
-      : `<span style="color:var(--omp-text-dim);font-size:11px;">deaktiviert</span>`;
+      ? `<span style="color:var(--omp-preset);font-size:11px;font-weight:600;">${tt("adm.b47c95")}</span>`
+      : `<span style="color:var(--omp-text-dim);font-size:11px;">${tt("adm.7c76fa")}</span>`;
     tr.innerHTML = `
       <td style="padding:2px 8px;font-weight:600;">${escapeHtml(b.name)}</td>
       <td style="padding:2px 8px;color:var(--omp-text-dim);word-break:break-all;">${escapeHtml(b.endpoint)}</td>
@@ -3051,22 +3047,22 @@ class AdminView extends HTMLElement {
     actionsTd.style.cssText = "padding:2px 8px;text-align:right;white-space:nowrap;";
 
     const editBtn = document.createElement("button");
-    editBtn.textContent = "Bearbeiten";
+    editBtn.textContent = tt("adm.5ad05d");
     editBtn.style.cssText = "font-size:11px;cursor:pointer;margin-right:4px;";
     editBtn.addEventListener("click", () => this.#openStorageForm(b));
     actionsTd.appendChild(editBtn);
 
     const lifecycleBtn = document.createElement("button");
-    lifecycleBtn.textContent = b.status === "active" ? "Deaktivieren" : "Reaktivieren";
+    lifecycleBtn.textContent = b.status === "active" ? tt("adm.5e3e07") : tt("adm.1a1a97");
     lifecycleBtn.title = b.status === "active"
-      ? "Nimmt keine neuen Uploads mehr an, liefert bestehende Dateien weiter aus"
-      : "Nimmt wieder neue Uploads an";
+      ? tt("adm.c0171a")
+      : tt("adm.9cf390");
     lifecycleBtn.style.cssText = "font-size:11px;cursor:pointer;margin-right:4px;";
     lifecycleBtn.addEventListener("click", () => void this.#setStorageBackendLifecycle(b, b.status === "active" ? "deprecated" : "active"));
     actionsTd.appendChild(lifecycleBtn);
 
     const delBtn = document.createElement("button");
-    delBtn.textContent = "Entfernen";
+    delBtn.textContent = tt("adm.513d30");
     delBtn.className = "omp-btn-danger";
     delBtn.style.cssText = "font-size:11px;";
     delBtn.addEventListener("click", () => void this.#deleteStorageBackend(b));
@@ -3132,13 +3128,13 @@ class AdminView extends HTMLElement {
     };
 
     grid.append(
-      field("Name *", textInput(f.name, "z. B. Primärer Media-Bucket", (v) => { f.name = v; invalidateTest(); })),
-      field("Provider *", textInput(f.provider, "minio / s3", (v) => { f.provider = v; invalidateTest(); }, { list: "omp-storage-provider-suggestions" })),
-      field("Endpoint *", textInput(f.endpoint, "z. B. 127.0.0.1:9000", (v) => { f.endpoint = v; invalidateTest(); })),
-      field("Bucket *", textInput(f.bucket, "z. B. omp-assets", (v) => { f.bucket = v; invalidateTest(); })),
-      field("Access Key *", textInput(f.accessKey, "", (v) => { f.accessKey = v; invalidateTest(); })),
-      field("Secret Key" + (this.#editingStorageBackend ? " (leer = unverändert)" : " *"),
-        textInput(f.secretKey, this.#editingStorageBackend ? "unverändert lassen" : "", (v) => { f.secretKey = v; invalidateTest(); }, { type: "password" })),
+      field(tt("adm.2688a5"), textInput(f.name, tt("adm.5fc938"), (v) => { f.name = v; invalidateTest(); })),
+      field(tt("adm.b13884"), textInput(f.provider, "minio / s3", (v) => { f.provider = v; invalidateTest(); }, { list: "omp-storage-provider-suggestions" })),
+      field(tt("adm.c35977"), textInput(f.endpoint, "z. B. 127.0.0.1:9000", (v) => { f.endpoint = v; invalidateTest(); })),
+      field(tt("adm.af0262"), textInput(f.bucket, tt("adm.f2129f"), (v) => { f.bucket = v; invalidateTest(); })),
+      field(tt("adm.3871a2"), textInput(f.accessKey, "", (v) => { f.accessKey = v; invalidateTest(); })),
+      field(tt("adm.5eb6bb") + (this.#editingStorageBackend ? tt("adm.f85e9e") : " *"),
+        textInput(f.secretKey, this.#editingStorageBackend ? tt("adm.2109fc") : "", (v) => { f.secretKey = v; invalidateTest(); }, { type: "password" })),
     );
     form.appendChild(grid);
 
@@ -3154,7 +3150,7 @@ class AdminView extends HTMLElement {
     const testRow = document.createElement("div");
     testRow.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:12px;";
     const testBtn = document.createElement("button");
-    testBtn.textContent = this.#storageTestState === "testing" ? "Testet…" : "Verbindung testen";
+    testBtn.textContent = this.#storageTestState === "testing" ? tt("adm.8264ad") : tt("adm.6a0795");
     testBtn.disabled = this.#storageTestState === "testing";
     testBtn.style.cssText = "cursor:pointer;";
     testBtn.addEventListener("click", () => void this.#testStorageConnection());
@@ -3177,20 +3173,20 @@ class AdminView extends HTMLElement {
     const actions = document.createElement("div");
     actions.style.cssText = "display:flex;justify-content:flex-end;gap:8px;margin-top:12px;";
     const cancelBtn = document.createElement("button");
-    cancelBtn.textContent = "Abbrechen";
+    cancelBtn.textContent = tt("adm.4b9727");
     cancelBtn.style.cssText = "cursor:pointer;";
     cancelBtn.addEventListener("click", () => this.#closeStorageForm());
     const saveBtn = document.createElement("button");
     saveBtn.className = "omp-btn-primary";
-    saveBtn.textContent = this.#editingStorageBackend ? "Speichern" : "Anlegen";
+    saveBtn.textContent = this.#editingStorageBackend ? tt("adm.b97d23") : tt("adm.6212ff");
     saveBtn.addEventListener("click", () => {
       if (!f.name.trim() || !f.provider.trim() || !f.endpoint.trim() || !f.bucket.trim() || !f.accessKey.trim()) {
-        this.#storageFormError = "Name, Provider, Endpoint, Bucket und Access Key sind erforderlich.";
+        this.#storageFormError = tt("adm.3149a3");
         this.#render();
         return;
       }
       if (!this.#editingStorageBackend && !f.secretKey) {
-        this.#storageFormError = "Secret Key ist beim Anlegen erforderlich.";
+        this.#storageFormError = tt("adm.7121c2");
         this.#render();
         return;
       }
@@ -3217,9 +3213,9 @@ class AdminView extends HTMLElement {
     heading.style.cssText = "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;";
     const title = document.createElement("span");
     title.className = "omp-h1";
-    title.textContent = `Gruppen (${this.#groups.length})`;
+    title.textContent = tt("adm.1265eb", { p0: this.#groups.length });
     const newBtn = document.createElement("button");
-    newBtn.textContent = this.#showGroupForm ? "Abbrechen" : "+ Neue Gruppe";
+    newBtn.textContent = this.#showGroupForm ? tt("adm.4b9727") : tt("adm.663258");
     newBtn.style.cssText = "font-size:11px;cursor:pointer;";
     newBtn.addEventListener("click", () => {
       this.#showGroupForm = !this.#showGroupForm;
@@ -3231,9 +3227,9 @@ class AdminView extends HTMLElement {
     const hint = document.createElement("div");
     hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:var(--omp-space-2);";
     hint.textContent =
-      "Bündelt Rechte für mehrere Nutzer: eine Rollenbindung auf eine Gruppe gilt für alle ihre Mitglieder. " +
-      'Trennt sich klar von "Organisationen" — die steuern Sichtbarkeit (wer sieht welche Workflows/Assets), ' +
-      "Gruppen steuern Rechte (wer darf was); beides bleibt unabhängig nebeneinander bestehen.";
+      tt("adm.022b83") +
+      tt("adm.06144f") +
+      tt("adm.1d455d");
     section.appendChild(hint);
 
     if (this.#showGroupForm) {
@@ -3243,7 +3239,7 @@ class AdminView extends HTMLElement {
     if (this.#groups.length === 0 && !this.#showGroupForm) {
       const empty = document.createElement("div");
       empty.style.cssText = "color:var(--omp-text-dim);";
-      empty.textContent = 'Noch keine Gruppe angelegt — mit "+ Neue Gruppe" die erste anlegen.';
+      empty.textContent = tt("adm.657888");
       section.appendChild(empty);
       return section;
     }
@@ -3262,7 +3258,7 @@ class AdminView extends HTMLElement {
       "margin-bottom:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;";
 
     const nameInput = document.createElement("input");
-    nameInput.placeholder = "Name der Gruppe";
+    nameInput.placeholder = tt("adm.916ea4");
     nameInput.autocomplete = "off";
     nameInput.value = this.#newGroupName;
     nameInput.style.cssText = "flex:1;min-width:140px;";
@@ -3271,7 +3267,7 @@ class AdminView extends HTMLElement {
     });
 
     const descInput = document.createElement("input");
-    descInput.placeholder = "Beschreibung (optional)";
+    descInput.placeholder = tt("adm.234de2");
     descInput.autocomplete = "off";
     descInput.value = this.#newGroupDescription;
     descInput.style.cssText = "flex:2;min-width:180px;";
@@ -3283,7 +3279,7 @@ class AdminView extends HTMLElement {
     });
 
     const createBtn = document.createElement("button");
-    createBtn.textContent = "Anlegen";
+    createBtn.textContent = tt("adm.6212ff");
     createBtn.style.cssText = "cursor:pointer;";
     createBtn.addEventListener("click", () => void this.#createGroup());
 
@@ -3306,14 +3302,14 @@ class AdminView extends HTMLElement {
       nameInput.style.cssText = "flex:1;min-width:140px;";
       const descInput = document.createElement("input");
       descInput.value = g.description ?? "";
-      descInput.placeholder = "Beschreibung";
+      descInput.placeholder = tt("adm.35bedb");
       descInput.style.cssText = "flex:2;min-width:180px;";
       const left = document.createElement("div");
       left.style.cssText = "display:flex;gap:6px;flex:1;";
       left.append(nameInput, descInput);
 
       const saveBtn = document.createElement("button");
-      saveBtn.textContent = "Speichern";
+      saveBtn.textContent = tt("adm.b97d23");
       saveBtn.style.cssText = "font-size:11px;cursor:pointer;";
       saveBtn.addEventListener("click", () => void this.#updateGroup(g, nameInput.value, descInput.value));
       const cancelBtn = document.createElement("button");
@@ -3337,7 +3333,7 @@ class AdminView extends HTMLElement {
     const actions = document.createElement("div");
     actions.style.cssText = "display:flex;gap:4px;flex-shrink:0;";
     const membersBtn = document.createElement("button");
-    membersBtn.textContent = this.#selectedGroupId === g.id ? "Mitglieder ▲" : "Mitglieder ▼";
+    membersBtn.textContent = this.#selectedGroupId === g.id ? tt("adm.ee5ce7") : tt("adm.be45f7");
     membersBtn.style.cssText = "font-size:11px;cursor:pointer;";
     membersBtn.addEventListener("click", () => {
       if (this.#selectedGroupId === g.id) {
@@ -3348,14 +3344,14 @@ class AdminView extends HTMLElement {
       }
     });
     const editBtn = document.createElement("button");
-    editBtn.textContent = "Bearbeiten";
+    editBtn.textContent = tt("adm.5ad05d");
     editBtn.style.cssText = "font-size:11px;cursor:pointer;";
     editBtn.addEventListener("click", () => {
       this.#editingGroup = g;
       this.#render();
     });
     const delBtn = document.createElement("button");
-    delBtn.textContent = "Löschen";
+    delBtn.textContent = tt("adm.1010b0");
     delBtn.className = "omp-btn-danger";
     delBtn.style.cssText = "font-size:11px;";
     delBtn.addEventListener("click", () => void this.#deleteGroup(g));
@@ -3376,13 +3372,13 @@ class AdminView extends HTMLElement {
 
     const heading = document.createElement("div");
     heading.style.cssText = "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);margin-bottom:4px;";
-    heading.textContent = `Mitglieder (${this.#groupMembers.length})`;
+    heading.textContent = tt("adm.6a7843", { p0: this.#groupMembers.length });
     panel.appendChild(heading);
 
     if (this.#groupMembers.length === 0) {
       const empty = document.createElement("div");
       empty.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:6px;";
-      empty.textContent = "Noch kein Mitglied.";
+      empty.textContent = tt("adm.638b34");
       panel.appendChild(empty);
     } else {
       for (const username of this.#groupMembers) {
@@ -3391,7 +3387,7 @@ class AdminView extends HTMLElement {
         const nameSpan = document.createElement("span");
         nameSpan.textContent = username;
         const rmBtn = document.createElement("button");
-        rmBtn.textContent = "Entfernen";
+        rmBtn.textContent = tt("adm.513d30");
         rmBtn.style.cssText = "font-size:11px;cursor:pointer;";
         rmBtn.addEventListener("click", () => void this.#removeGroupMember(g.id, username));
         row.append(nameSpan, rmBtn);
@@ -3402,7 +3398,7 @@ class AdminView extends HTMLElement {
     const addRow = document.createElement("div");
     addRow.style.cssText = "display:flex;gap:6px;margin-top:6px;";
     const userInput = document.createElement("input");
-    userInput.placeholder = "Nutzername";
+    userInput.placeholder = tt("adm.f5f8d4");
     userInput.value = this.#newGroupMemberUsername;
     userInput.style.cssText = "font-size:11px;flex:1;min-width:100px;";
     userInput.addEventListener("input", () => {
@@ -3412,7 +3408,7 @@ class AdminView extends HTMLElement {
       if (ev.key === "Enter") void this.#addGroupMember(g.id, userInput.value);
     });
     const addBtn = document.createElement("button");
-    addBtn.textContent = "+ Hinzufügen";
+    addBtn.textContent = tt("adm.e2d84f");
     addBtn.style.cssText = "font-size:11px;cursor:pointer;";
     addBtn.addEventListener("click", () => void this.#addGroupMember(g.id, userInput.value));
     addRow.append(userInput, addBtn);
@@ -3427,14 +3423,14 @@ class AdminView extends HTMLElement {
     if (groupBindings.length === 0) {
       const rightsHeading = document.createElement("div");
       rightsHeading.style.cssText = "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);margin:10px 0 4px;";
-      rightsHeading.textContent = "Rechte dieser Gruppe";
+      rightsHeading.textContent = tt("adm.ccdd47");
       panel.appendChild(rightsHeading);
       const empty = document.createElement("div");
       empty.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);";
-      empty.textContent = 'Noch keine — unten bei "Rollenbindungen" mit Subjekt-Typ "Gruppe" anlegen.';
+      empty.textContent = tt("adm.422405");
       panel.appendChild(empty);
     } else {
-      const rightsBox = this.#renderBindingGroup("Rechte dieser Gruppe", groupBindings, "scope");
+      const rightsBox = this.#renderBindingGroup(tt("adm.ccdd47"), groupBindings, "scope");
       rightsBox.style.marginTop = "10px";
       panel.appendChild(rightsBox);
     }
@@ -3451,14 +3447,14 @@ class AdminView extends HTMLElement {
       "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;gap:8px;";
     const title = document.createElement("span");
     title.className = "omp-h1";
-    title.textContent = `Rollenbindungen (${this.#bindings.length})`;
+    title.textContent = tt("adm.2578ee", { p0: this.#bindings.length });
 
     const right = document.createElement("div");
     right.style.cssText = "display:flex;gap:8px;align-items:center;";
     right.appendChild(this.#renderBindingsGroupToggle());
 
     const newBtn = document.createElement("button");
-    newBtn.textContent = this.#showBindingForm ? "Abbrechen" : "+ Neue Bindung";
+    newBtn.textContent = this.#showBindingForm ? tt("adm.4b9727") : tt("adm.473936");
     newBtn.style.cssText = "font-size:11px;cursor:pointer;";
     newBtn.addEventListener("click", () => {
       this.#showBindingForm = !this.#showBindingForm;
@@ -3477,8 +3473,8 @@ class AdminView extends HTMLElement {
     const hint = document.createElement("div");
     hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:var(--omp-space-2);";
     hint.textContent =
-      'Einzelne Bindungen anlegen/löschen (Subjekt: Nutzer ODER Gruppe). Für "was darf Nutzer X ' +
-      'insgesamt" (direkt + über alle Gruppen) im Tab "Nutzer" bei der Person auf "Rechte" klicken.';
+      tt("adm.aa6c6f") +
+      tt("adm.c4e6da");
     section.appendChild(hint);
 
     if (this.#showBindingForm) {
@@ -3488,7 +3484,7 @@ class AdminView extends HTMLElement {
     if (this.#bindings.length === 0 && !this.#showBindingForm) {
       const empty = document.createElement("div");
       empty.style.cssText = "color:var(--omp-text-dim);";
-      empty.textContent = "Noch keine Rollenbindung angelegt.";
+      empty.textContent = tt("adm.782a90");
       section.appendChild(empty);
       return section;
     }
@@ -3510,8 +3506,8 @@ class AdminView extends HTMLElement {
     const wrap = document.createElement("div");
     wrap.style.cssText = "display:flex;border:1px solid var(--omp-border);border-radius:var(--omp-radius);overflow:hidden;";
     const options: { value: "subject" | "node"; label: string }[] = [
-      { value: "subject", label: "Nach Nutzer" },
-      { value: "node", label: "Nach Node/Rolle" },
+      { value: "subject", label: tt("adm.18c4aa") },
+      { value: "node", label: tt("adm.d4bcb3") },
     ];
     for (const opt of options) {
       const btn = document.createElement("button");
@@ -3616,7 +3612,7 @@ class AdminView extends HTMLElement {
       const actionsTd = document.createElement("td");
       actionsTd.style.cssText = "padding:2px 8px;text-align:right;";
       const delBtn = document.createElement("button");
-      delBtn.textContent = "Löschen";
+      delBtn.textContent = tt("adm.1010b0");
       delBtn.className = "omp-btn-danger";
       delBtn.style.cssText = "font-size:11px;";
       delBtn.addEventListener("click", () => this.#deleteBinding(b));
@@ -3641,8 +3637,8 @@ class AdminView extends HTMLElement {
     dirToggle.style.cssText = "display:flex;gap:0;margin-bottom:6px;width:fit-content;" +
       "border:1px solid var(--omp-border);border-radius:var(--omp-radius);overflow:hidden;";
     const dirOptions: { value: "userFirst" | "nodeFirst"; label: string }[] = [
-      { value: "userFirst", label: "Nutzer → Node" },
-      { value: "nodeFirst", label: "Node → Nutzer" },
+      { value: "userFirst", label: tt("adm.e9cc81") },
+      { value: "nodeFirst", label: tt("adm.75894c") },
     ];
     for (const opt of dirOptions) {
       const btn = document.createElement("button");
@@ -3675,7 +3671,7 @@ class AdminView extends HTMLElement {
     const typeToggle = document.createElement("div");
     typeToggle.style.cssText = "display:flex;gap:0;width:fit-content;" +
       "border:1px solid var(--omp-border);border-radius:var(--omp-radius);overflow:hidden;";
-    for (const opt of [{ value: "user" as const, label: "Nutzer" }, { value: "group" as const, label: "Gruppe" }]) {
+    for (const opt of [{ value: "user" as const, label: tt("adm.8a940a") }, { value: "group" as const, label: tt("adm.3b77a5") }]) {
       const btn = document.createElement("button");
       btn.textContent = opt.label;
       const active = this.#newSubjectType === opt.value;
@@ -3695,7 +3691,7 @@ class AdminView extends HTMLElement {
 
     const subjectDatalistId = "omp-admin-user-datalist";
     const subjectInput = document.createElement("input");
-    subjectInput.placeholder = "Nutzername";
+    subjectInput.placeholder = tt("adm.f5f8d4");
     subjectInput.value = this.#newSubject;
     subjectInput.setAttribute("list", subjectDatalistId);
     subjectInput.style.cssText = "flex:1;min-width:100px;";
@@ -3714,7 +3710,7 @@ class AdminView extends HTMLElement {
     groupSelect.style.cssText = "flex:1;min-width:100px;";
     const noGroupOpt = document.createElement("option");
     noGroupOpt.value = "";
-    noGroupOpt.textContent = this.#groups.length ? "– Gruppe wählen –" : "– keine Gruppe vorhanden –";
+    noGroupOpt.textContent = this.#groups.length ? tt("adm.e5b1cd") : tt("adm.14a665");
     groupSelect.appendChild(noGroupOpt);
     for (const grp of this.#groups) {
       const opt = document.createElement("option");
@@ -3762,7 +3758,7 @@ class AdminView extends HTMLElement {
     const datalistId = "omp-admin-node-datalist";
     const selectedWorkflow = this.#workflows.find((wf) => wf.id === this.#newWorkflowId);
     const nodeInput = document.createElement("input");
-    nodeInput.placeholder = selectedWorkflow ? "Rollenname (* = ganzer Workflow)" : "Node-ID (* = alle Nodes)";
+    nodeInput.placeholder = selectedWorkflow ? tt("adm.3096f0") : tt("adm.3a7309");
     nodeInput.value = this.#newNodeId;
     nodeInput.setAttribute("list", datalistId);
     nodeInput.style.cssText = "flex:1;min-width:160px;";
@@ -3774,7 +3770,7 @@ class AdminView extends HTMLElement {
     datalist.id = datalistId;
     const anyOpt = document.createElement("option");
     anyOpt.value = "*";
-    anyOpt.label = selectedWorkflow ? "Ganzer Workflow" : "Alle Nodes";
+    anyOpt.label = selectedWorkflow ? tt("adm.e5c1c7") : tt("adm.a78fea");
     datalist.appendChild(anyOpt);
     if (selectedWorkflow) {
       for (const role of selectedWorkflow.definition.roles) {
@@ -3805,7 +3801,7 @@ class AdminView extends HTMLElement {
     });
 
     const createBtn = document.createElement("button");
-    createBtn.textContent = "Anlegen";
+    createBtn.textContent = tt("adm.6212ff");
     createBtn.style.cssText = "cursor:pointer;";
     createBtn.addEventListener("click", () => this.#createBinding());
 
@@ -3827,7 +3823,7 @@ class AdminView extends HTMLElement {
   // "<Workflow> (ganzer Workflow)" für eine Workflow-gescopte Bindung.
   #scopeLabel(b: RoleBinding): string {
     if (!b.workflowId) {
-      return b.nodeId === "*" ? "Alle Nodes" : this.#nodeLabel(b.nodeId);
+      return b.nodeId === "*" ? tt("adm.a78fea") : this.#nodeLabel(b.nodeId);
     }
     const wfName = this.#workflows.find((wf) => wf.id === b.workflowId)?.name ?? b.workflowId;
     return b.nodeId === "*" ? `${wfName} (ganzer Workflow)` : `${wfName} → ${b.nodeId}`;
@@ -3857,7 +3853,7 @@ class AdminView extends HTMLElement {
       "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;gap:var(--omp-space-3);flex-wrap:wrap;";
     const title = document.createElement("span");
     title.className = "omp-h1";
-    title.textContent = `Node-Katalog (${this.#catalog.length})`;
+    title.textContent = tt("adm.3dda54", { p0: this.#catalog.length });
     heading.appendChild(title);
 
     const controls = document.createElement("div");
@@ -3867,7 +3863,7 @@ class AdminView extends HTMLElement {
     const searchInput = document.createElement("input");
     searchInput.className = "omp-search-input";
     searchInput.type = "search";
-    searchInput.placeholder = "Suche nach Label, Typ, Beschreibung …";
+    searchInput.placeholder = tt("adm.2132be");
     searchInput.value = this.#catalogSearch;
     searchInput.style.cssText = "width:220px;";
     searchInput.addEventListener("input", () => {
@@ -3892,7 +3888,7 @@ class AdminView extends HTMLElement {
     const hint = document.createElement("div");
     hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:var(--omp-space-3);";
     hint.textContent =
-      "Importierte Microservices laufen als Podman-Container (OCI-Image) und durchlaufen vor der Aufnahme denselben Contract-Check wie `make contract` — ein Kandidat, der den Node-Contract nicht erfüllt, wird abgelehnt.";
+      tt("adm.438c04");
     section.appendChild(hint);
 
     const filtered = this.#filteredCatalog();
@@ -3905,8 +3901,8 @@ class AdminView extends HTMLElement {
       const empty = document.createElement("div");
       empty.className = "omp-empty";
       empty.textContent = this.#catalogSearch
-        ? "Keine Katalog-Einträge passen zur Suche."
-        : "Noch keine Katalog-Einträge.";
+        ? tt("adm.c7c031")
+        : tt("adm.f74d2d");
       section.appendChild(empty);
     }
 
@@ -3942,10 +3938,10 @@ class AdminView extends HTMLElement {
     modalHeading.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--omp-space-3);";
     const modalTitle = document.createElement("span");
     modalTitle.className = "omp-h1";
-    modalTitle.textContent = "Node/Microservice importieren";
+    modalTitle.textContent = tt("adm.d2dfcc");
     const closeBtn = document.createElement("button");
     closeBtn.textContent = "✕";
-    closeBtn.setAttribute("aria-label", "Schließen");
+    closeBtn.setAttribute("aria-label", tt("adm.8311b9"));
     closeBtn.addEventListener("click", () => this.#closeCatalogModal());
     modalHeading.append(modalTitle, closeBtn);
     modal.appendChild(modalHeading);
@@ -3971,7 +3967,7 @@ class AdminView extends HTMLElement {
     fileRow.style.cssText = "display:flex;align-items:center;gap:6px;";
     const fileLabel = document.createElement("span");
     fileLabel.style.cssText = "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);";
-    fileLabel.textContent = "Aus exportierter Datei vorbefüllen:";
+    fileLabel.textContent = tt("adm.2256dc");
     const fileInput = document.createElement("input");
     fileInput.type = "file";
     fileInput.accept = "application/json";
@@ -4004,26 +4000,26 @@ class AdminView extends HTMLElement {
     const fieldsRow = document.createElement("div");
     fieldsRow.style.cssText = "display:flex;gap:var(--omp-space-2);flex-wrap:wrap;";
     fieldsRow.append(
-      mkField("Typ", "z. B. omp-thirdparty-node", this.#newCatalogType, (v) => (this.#newCatalogType = v)),
-      mkField("Label", "Anzeigename", this.#newCatalogLabel, (v) => (this.#newCatalogLabel = v)),
-      mkField("Image", "registry/name:tag", this.#newCatalogImage, (v) => (this.#newCatalogImage = v), "220px"),
-      mkField("Version", "optional", this.#newCatalogVersion, (v) => (this.#newCatalogVersion = v), "100px"),
+      mkField(tt("adm.c2ea84"), tt("adm.7c9eea"), this.#newCatalogType, (v) => (this.#newCatalogType = v)),
+      mkField(tt("adm.b021df"), tt("adm.2eb6eb"), this.#newCatalogLabel, (v) => (this.#newCatalogLabel = v)),
+      mkField(tt("adm.be53a0"), "registry/name:tag", this.#newCatalogImage, (v) => (this.#newCatalogImage = v), "220px"),
+      mkField(tt("adm.34b6cd"), "optional", this.#newCatalogVersion, (v) => (this.#newCatalogVersion = v), "100px"),
     );
     form.appendChild(fieldsRow);
 
     const fieldsRow2 = document.createElement("div");
     fieldsRow2.style.cssText = "display:flex;gap:var(--omp-space-2);flex-wrap:wrap;";
     fieldsRow2.append(
-      mkField("Beschreibung", "optional", this.#newCatalogDescription, (v) => (this.#newCatalogDescription = v), "220px"),
-      mkField("Erwartete Ressourcen", "z. B. ~5% CPU · ~40 MB RAM", this.#newCatalogExpectedResources, (v) => (this.#newCatalogExpectedResources = v)),
-      mkField("Command-Override", "optional, Leerzeichen-getrennt", this.#newCatalogCommand, (v) => (this.#newCatalogCommand = v), "220px"),
+      mkField(tt("adm.35bedb"), "optional", this.#newCatalogDescription, (v) => (this.#newCatalogDescription = v), "220px"),
+      mkField(tt("adm.722ff0"), "z. B. ~5% CPU · ~40 MB RAM", this.#newCatalogExpectedResources, (v) => (this.#newCatalogExpectedResources = v)),
+      mkField(tt("adm.ea50f3"), tt("adm.6f865e"), this.#newCatalogCommand, (v) => (this.#newCatalogCommand = v), "220px"),
     );
     form.appendChild(fieldsRow2);
 
     const envWrap = document.createElement("label");
     envWrap.style.cssText = "display:flex;flex-direction:column;gap:2px;font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);";
     const envLabel = document.createElement("span");
-    envLabel.textContent = "Env (JSON-Objekt, optional)";
+    envLabel.textContent = tt("adm.47a997");
     envWrap.appendChild(envLabel);
     const envInput = document.createElement("textarea");
     envInput.rows = 3;
@@ -4037,7 +4033,7 @@ class AdminView extends HTMLElement {
 
     const importBtn = document.createElement("button");
     importBtn.className = "omp-btn-primary";
-    importBtn.textContent = "Importieren";
+    importBtn.textContent = tt("adm.5af5fb");
     importBtn.style.cssText = "align-self:flex-start;";
     importBtn.addEventListener("click", () => this.#importCatalogEntry());
     form.appendChild(importBtn);
@@ -4051,7 +4047,7 @@ class AdminView extends HTMLElement {
       "border:1px solid var(--omp-error);border-radius:var(--omp-radius);padding:var(--omp-space-2);margin-top:var(--omp-space-3);";
     const title = document.createElement("div");
     title.style.cssText = "font-weight:600;color:var(--omp-error);margin-bottom:var(--omp-space-2);";
-    title.textContent = "Import abgelehnt: Contract-Check nicht bestanden";
+    title.textContent = tt("adm.7003e3");
     box.appendChild(title);
     const table = document.createElement("table");
     table.style.cssText = "border-collapse:collapse;width:100%;font-size:var(--omp-font-size-xs);";
@@ -4084,7 +4080,7 @@ class AdminView extends HTMLElement {
     label.textContent = entry.label;
     const badge = document.createElement("span");
     badge.className = `omp-badge ${isImported ? "omp-badge-imported" : "omp-badge-builtin"}`;
-    badge.textContent = isImported ? "Importiert" : "Eingebaut";
+    badge.textContent = isImported ? tt("adm.e9e1f9") : tt("adm.5e4eb4");
     head.append(label, badge);
     card.appendChild(head);
 
@@ -4117,12 +4113,12 @@ class AdminView extends HTMLElement {
     const actions = document.createElement("div");
     actions.style.cssText = "display:flex;justify-content:flex-end;gap:var(--omp-space-2);margin-top:var(--omp-space-2);";
     const exportBtn = document.createElement("button");
-    exportBtn.textContent = "Export";
+    exportBtn.textContent = tt("adm.0095a9");
     exportBtn.addEventListener("click", () => this.#exportCatalogEntry(entry));
     actions.appendChild(exportBtn);
     if (isImported) {
       const delBtn = document.createElement("button");
-      delBtn.textContent = "Entfernen";
+      delBtn.textContent = tt("adm.513d30");
       delBtn.className = "omp-btn-danger";
       delBtn.addEventListener("click", () => this.#removeCatalogEntry(entry));
       actions.appendChild(delBtn);
@@ -4142,13 +4138,13 @@ class AdminView extends HTMLElement {
     // protokollierten Zeilen (Cursor-Pagination, "Mehr laden" lädt
     // weitere nach) — deshalb "geladen" statt einer nackten Zahl, die
     // wie ein Gesamtstand aussehen würde.
-    heading.textContent = `Audit-Log (${this.#audit.length} geladen)`;
+    heading.textContent = tt("adm.e6e18b", { p0: this.#audit.length });
     section.appendChild(heading);
 
     if (this.#audit.length === 0) {
       const empty = document.createElement("div");
       empty.style.cssText = "color:var(--omp-text-dim);";
-      empty.textContent = "Noch keine protokollierten Aktionen.";
+      empty.textContent = tt("adm.5f30db");
       section.appendChild(empty);
       return section;
     }
@@ -4168,17 +4164,17 @@ class AdminView extends HTMLElement {
     const table = document.createElement("table");
     table.style.cssText = "border-collapse:collapse;width:100%;";
     table.innerHTML = `<thead><tr style="color:var(--omp-text-dim);text-align:left;">
-      <th style="padding:2px 8px;">Zeit</th>
-      <th style="padding:2px 8px;">Nutzer</th>
-      <th style="padding:2px 8px;">Methode</th>
-      <th style="padding:2px 8px;">Pfad</th>
-      <th style="padding:2px 8px;">Status</th>
+      <th style="padding:2px 8px;">${tt("adm.718271")}</th>
+      <th style="padding:2px 8px;">${tt("adm.8a940a")}</th>
+      <th style="padding:2px 8px;">${tt("adm.41aa69")}</th>
+      <th style="padding:2px 8px;">${tt("adm.b6a791")}</th>
+      <th style="padding:2px 8px;">${tt("adm.ec53a8")}</th>
     </tr></thead><tbody>${rows}</tbody>`;
     section.appendChild(table);
 
     if (this.#auditHasMore) {
       const moreBtn = document.createElement("button");
-      moreBtn.textContent = this.#auditLoadingMore ? "Lädt …" : "Mehr laden";
+      moreBtn.textContent = this.#auditLoadingMore ? tt("adm.4446bb") : tt("adm.5cc9dd");
       moreBtn.disabled = this.#auditLoadingMore;
       moreBtn.style.cssText = "font-size:11px;cursor:pointer;margin-top:8px;";
       moreBtn.addEventListener("click", () => this.#loadMoreAudit());
@@ -4203,7 +4199,7 @@ class AdminView extends HTMLElement {
     const heading = document.createElement("div");
     heading.className = "omp-h1";
     heading.style.cssText = "margin-bottom:var(--omp-space-3);";
-    heading.textContent = `Diagnose (${this.#logs.length} geladen)`;
+    heading.textContent = tt("adm.56f489", { p0: this.#logs.length });
     section.appendChild(heading);
 
     section.appendChild(this.#renderLogFilterForm());
@@ -4213,8 +4209,8 @@ class AdminView extends HTMLElement {
       empty.style.cssText = "color:var(--omp-text-dim);";
       empty.textContent =
         this.#logsTraceIdFilter || this.#logsNodeIdFilter || this.#logsLevelFilter
-          ? "Keine Log-Zeilen für diesen Filter."
-          : "Noch keine zentralisierten Log-Zeilen.";
+          ? tt("adm.9a4c0a")
+          : tt("adm.51ff86");
       section.appendChild(empty);
       return section;
     }
@@ -4226,7 +4222,7 @@ class AdminView extends HTMLElement {
         <td style="padding:2px 8px;color:var(--omp-text-dim);white-space:nowrap;">${escapeHtml(new Date(e.occurredAt).toLocaleString())}</td>
         <td style="padding:2px 8px;color:${LOG_LEVEL_COLOR[e.level] ?? "var(--omp-text)"};text-transform:uppercase;font-size:11px;">${escapeHtml(e.level)}</td>
         <td style="padding:2px 8px;">${escapeHtml(e.nodeId || e.source)}</td>
-        <td style="padding:2px 8px;font-family:monospace;cursor:${e.traceId ? "pointer" : "default"};" data-role="log-trace-cell" data-trace-id="${escapeHtml(e.traceId ?? "")}" title="${e.traceId ? "Klicken, um nach dieser trace_id zu filtern: " + escapeHtml(e.traceId) : ""}">${traceShort}</td>
+        <td style="padding:2px 8px;font-family:monospace;cursor:${e.traceId ? "pointer" : "default"};" data-role="log-trace-cell" data-trace-id="${escapeHtml(e.traceId ?? "")}" title="${e.traceId ? tt("adm.36311b") + escapeHtml(e.traceId) : ""}">${traceShort}</td>
         <td style="padding:2px 8px;word-break:break-word;">${escapeHtml(e.message)}</td>
       </tr>`;
       })
@@ -4235,11 +4231,11 @@ class AdminView extends HTMLElement {
     const table = document.createElement("table");
     table.style.cssText = "border-collapse:collapse;width:100%;";
     table.innerHTML = `<thead><tr style="color:var(--omp-text-dim);text-align:left;">
-      <th style="padding:2px 8px;">Zeit</th>
-      <th style="padding:2px 8px;">Level</th>
-      <th style="padding:2px 8px;">Node</th>
-      <th style="padding:2px 8px;">Trace</th>
-      <th style="padding:2px 8px;">Nachricht</th>
+      <th style="padding:2px 8px;">${tt("adm.718271")}</th>
+      <th style="padding:2px 8px;">${tt("adm.a0db49")}</th>
+      <th style="padding:2px 8px;">${tt("adm.6c3a69")}</th>
+      <th style="padding:2px 8px;">${tt("adm.dd4ec0")}</th>
+      <th style="padding:2px 8px;">${tt("adm.d87d49")}</th>
     </tr></thead><tbody>${rows}</tbody>`;
     table.querySelectorAll('[data-role="log-trace-cell"]').forEach((cell) => {
       const traceId = cell.getAttribute("data-trace-id");
@@ -4250,7 +4246,7 @@ class AdminView extends HTMLElement {
 
     if (this.#logsHasMore) {
       const moreBtn = document.createElement("button");
-      moreBtn.textContent = this.#logsLoadingMore ? "Lädt …" : "Mehr laden";
+      moreBtn.textContent = this.#logsLoadingMore ? tt("adm.4446bb") : tt("adm.5cc9dd");
       moreBtn.disabled = this.#logsLoadingMore;
       moreBtn.style.cssText = "font-size:11px;cursor:pointer;margin-top:8px;";
       moreBtn.addEventListener("click", () => this.#loadMoreLogs());
@@ -4281,15 +4277,15 @@ class AdminView extends HTMLElement {
 
     const nodeInput = document.createElement("input");
     nodeInput.type = "text";
-    nodeInput.placeholder = "Node-ID";
+    nodeInput.placeholder = tt("adm.fb9f6f");
     nodeInput.value = this.#logsNodeIdFilter;
 
     const levelSelect = document.createElement("select");
     for (const [value, label] of [
-      ["", "Alle Level"],
-      ["error", "Error"],
-      ["warn", "Warn"],
-      ["info", "Info"],
+      ["", tt("adm.05e870")],
+      ["error", tt("adm.902b0d")],
+      ["warn", tt("adm.56525a")],
+      ["info", tt("adm.4059b0")],
     ]) {
       const opt = document.createElement("option");
       opt.value = value;
@@ -4298,18 +4294,18 @@ class AdminView extends HTMLElement {
       levelSelect.appendChild(opt);
     }
 
-    form.append(field("Trace-ID", traceInput), field("Node-ID", nodeInput), field("Level", levelSelect));
+    form.append(field(tt("adm.9cbd4a"), traceInput), field(tt("adm.fb9f6f"), nodeInput), field(tt("adm.a0db49"), levelSelect));
 
     const submitBtn = document.createElement("button");
     submitBtn.type = "submit";
-    submitBtn.textContent = "Filtern";
+    submitBtn.textContent = tt("adm.2b98bc");
     submitBtn.style.cssText = "font-size:11px;cursor:pointer;";
     form.appendChild(submitBtn);
 
     if (this.#logsTraceIdFilter || this.#logsNodeIdFilter || this.#logsLevelFilter) {
       const clearBtn = document.createElement("button");
       clearBtn.type = "button";
-      clearBtn.textContent = "Filter zurücksetzen";
+      clearBtn.textContent = tt("adm.cf743f");
       clearBtn.style.cssText = "font-size:11px;cursor:pointer;";
       clearBtn.addEventListener("click", () => this.#applyLogFilters("", "", ""));
       form.appendChild(clearBtn);
@@ -4342,9 +4338,9 @@ class AdminView extends HTMLElement {
       "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;";
     const backupTitle = document.createElement("span");
     backupTitle.className = "omp-h1";
-    backupTitle.textContent = `Backups (${this.#backups.length})`;
+    backupTitle.textContent = tt("adm.24f46f", { p0: this.#backups.length });
     const createBtn = document.createElement("button");
-    createBtn.textContent = this.#creatingBackup ? "Erstellt …" : "Backup jetzt erstellen";
+    createBtn.textContent = this.#creatingBackup ? tt("adm.97a791") : tt("adm.edb4fa");
     createBtn.disabled = this.#creatingBackup;
     createBtn.className = "omp-btn-primary";
     createBtn.style.cssText = "font-size:11px;cursor:pointer;";
@@ -4355,15 +4351,15 @@ class AdminView extends HTMLElement {
     const hint = document.createElement("div");
     hint.style.cssText = "color:var(--omp-text-dim);margin-bottom:var(--omp-space-3);";
     hint.textContent =
-      "Ein Backup ist ein vollständiger pg_dump der Orchestrator-Datenbank (Nutzer, Rollenbindungen, " +
-      "Audit-Log, Layouts, Snapshots, Workflows, Hosts) — komprimiert, sofort als Download. " +
-      "Dieselbe Rotation (14 neueste behalten) wie „make backup“.";
+      tt("adm.2b953c") +
+      tt("adm.1e8584") +
+      tt("adm.9349ee");
     section.appendChild(hint);
 
     if (this.#backups.length === 0) {
       const empty = document.createElement("div");
       empty.style.cssText = "color:var(--omp-text-dim);margin-bottom:var(--omp-space-4);";
-      empty.textContent = "Noch kein Backup vorhanden.";
+      empty.textContent = tt("adm.b86bfc");
       section.appendChild(empty);
     } else {
       const table = document.createElement("table");
@@ -4377,7 +4373,7 @@ class AdminView extends HTMLElement {
         const actionCell = document.createElement("td");
         actionCell.style.cssText = "padding:2px 8px;text-align:right;";
         const dlBtn = document.createElement("button");
-        dlBtn.textContent = "Herunterladen";
+        dlBtn.textContent = tt("adm.2099e6");
         dlBtn.style.cssText = "font-size:11px;cursor:pointer;";
         dlBtn.addEventListener("click", () => this.#downloadBackup(name));
         actionCell.appendChild(dlBtn);
@@ -4391,7 +4387,7 @@ class AdminView extends HTMLElement {
     const restoreHeading = document.createElement("div");
     restoreHeading.className = "omp-h1";
     restoreHeading.style.cssText = "margin-bottom:var(--omp-space-2);";
-    restoreHeading.textContent = "Restore";
+    restoreHeading.textContent = tt("adm.2bd339");
     section.appendChild(restoreHeading);
 
     const uploadRow = document.createElement("div");
@@ -4399,8 +4395,8 @@ class AdminView extends HTMLElement {
     const uploadLabel = document.createElement("span");
     uploadLabel.style.cssText = "font-size:11px;color:var(--omp-text-dim);";
     uploadLabel.textContent = this.#uploadingBackup
-      ? "Wird hochgeladen …"
-      : "Backup-Datei hochladen (statt aus der Liste oben zu wählen):";
+      ? tt("adm.150dcd")
+      : tt("adm.047e43");
     const uploadInput = document.createElement("input");
     uploadInput.type = "file";
     uploadInput.accept = ".gz,application/gzip";
@@ -4415,7 +4411,7 @@ class AdminView extends HTMLElement {
     if (this.#backups.length === 0) {
       const noBackups = document.createElement("div");
       noBackups.style.cssText = "color:var(--omp-text-dim);";
-      noBackups.textContent = "Noch kein Backup vorhanden — erst eines erstellen oder eine Datei oben hochladen.";
+      noBackups.textContent = tt("adm.aec2da");
       section.appendChild(noBackups);
       return section;
     }
@@ -4423,17 +4419,17 @@ class AdminView extends HTMLElement {
     const restoreHint = document.createElement("div");
     restoreHint.style.cssText = "color:var(--omp-text-dim);margin-bottom:var(--omp-space-2);white-space:pre-wrap;";
     restoreHint.textContent =
-      "ERSETZT den kompletten aktuellen Datenbankinhalt (Nutzer, Rollenbindungen, Audit-Log, " +
-      "Layouts, Snapshots, Workflows, Hosts) mit dem gewählten Stand — nicht rückgängig zu " +
-      "machen, außer durch ein weiteres Restore. Der Orchestrator ist während des Vorgangs " +
-      "(wenige Sekunden) nicht erreichbar, diese Seite lädt danach automatisch neu.";
+      tt("adm.2a2629") +
+      tt("adm.316a1c") +
+      tt("adm.46dc6f") +
+      tt("adm.4ec161");
     section.appendChild(restoreHint);
 
     const select = document.createElement("select");
     select.style.cssText = "margin-bottom:var(--omp-space-2);";
     const placeholderOpt = document.createElement("option");
     placeholderOpt.value = "";
-    placeholderOpt.textContent = "Backup wählen …";
+    placeholderOpt.textContent = tt("adm.2cfe4a");
     select.appendChild(placeholderOpt);
     for (const name of this.#backups) {
       const opt = document.createElement("option");
@@ -4452,7 +4448,7 @@ class AdminView extends HTMLElement {
     if (this.#restoreSelected) {
       const confirmLabel = document.createElement("div");
       confirmLabel.style.cssText = "color:var(--omp-text-dim);margin:var(--omp-space-2) 0 4px;";
-      confirmLabel.textContent = `Zur Bestätigung exakt eintippen: ${this.#restoreSelected}`;
+      confirmLabel.textContent = tt("adm.80c34c", { p0: this.#restoreSelected });
       section.appendChild(confirmLabel);
 
       const confirmRow = document.createElement("div");
@@ -4469,7 +4465,7 @@ class AdminView extends HTMLElement {
         restoreBtn.disabled = this.#restoreTyped !== this.#restoreSelected;
       });
       const restoreBtn: HTMLButtonElement = document.createElement("button");
-      restoreBtn.textContent = "Zurückspielen";
+      restoreBtn.textContent = tt("adm.c8ef6c");
       restoreBtn.className = "omp-btn-danger";
       restoreBtn.disabled = this.#restoreTyped !== this.#restoreSelected;
       restoreBtn.style.cssText = "font-size:11px;cursor:pointer;";
@@ -4487,13 +4483,13 @@ class AdminView extends HTMLElement {
     const title = document.createElement("div");
     title.className = "omp-h1";
     title.style.cssText = "margin-bottom:var(--omp-space-2);";
-    title.textContent = this.#restoring ? "Restore wird eingeleitet …" : "Server wird neu gestartet …";
+    title.textContent = this.#restoring ? tt("adm.42e0ae") : tt("adm.ea2f07");
     const detail = document.createElement("div");
     detail.style.cssText = "color:var(--omp-text-dim);";
     detail.textContent = this.#restoring
-      ? "Sende den Restore-Auftrag an den Supervisor."
-      : "Datenbank wird zurückgespielt, der Orchestrator startet danach automatisch neu — " +
-        "diese Seite lädt sich von selbst neu, sobald er wieder erreichbar ist.";
+      ? tt("adm.69d86c")
+      : tt("adm.e55e76") +
+        tt("adm.84e42d");
     wrap.append(title, detail);
     return wrap;
   }
@@ -4506,15 +4502,15 @@ class AdminView extends HTMLElement {
       "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;gap:var(--omp-space-2);";
     const title = document.createElement("span");
     title.className = "omp-h1";
-    title.textContent = `Cluster (${this.#cluster?.peers.length ?? 0} Mitglieder)`;
+    title.textContent = tt("adm.58518d", { p0: this.#cluster?.peers.length ?? 0 });
     const actions = document.createElement("div");
     actions.style.cssText = "display:flex;gap:6px;";
     const refreshBtn = document.createElement("button");
-    refreshBtn.textContent = "Aktualisieren";
+    refreshBtn.textContent = tt("adm.bf3cfc");
     refreshBtn.style.cssText = "font-size:11px;cursor:pointer;";
     refreshBtn.addEventListener("click", () => void this.#loadClusterStatus());
     const joinToggleBtn = document.createElement("button");
-    joinToggleBtn.textContent = this.#showClusterJoinForm ? "Abbrechen" : "+ Weiteren Orchestrator hinzufügen";
+    joinToggleBtn.textContent = this.#showClusterJoinForm ? tt("adm.4b9727") : tt("adm.6c359d");
     joinToggleBtn.className = this.#showClusterJoinForm ? "" : "omp-btn-primary";
     joinToggleBtn.style.cssText = "font-size:11px;cursor:pointer;";
     joinToggleBtn.addEventListener("click", () => {
@@ -4528,7 +4524,7 @@ class AdminView extends HTMLElement {
     if (!this.#cluster) {
       const empty = document.createElement("div");
       empty.style.cssText = "color:var(--omp-text-dim);";
-      empty.textContent = "Cluster-Status wird geladen …";
+      empty.textContent = tt("adm.3a035f");
       section.appendChild(empty);
       return section;
     }
@@ -4538,11 +4534,11 @@ class AdminView extends HTMLElement {
     statusCard.className = "omp-card";
     statusCard.style.cssText = "margin-bottom:var(--omp-space-3);display:flex;flex-wrap:wrap;gap:var(--omp-space-4);";
     const facts: [string, string][] = [
-      ["Diese Instanz", c.nodeId],
-      ["Zustand", c.isLeader ? "Leader" : c.state],
-      ["Term", String(c.term)],
-      ["Angewandter Log-Index", String(c.appliedIndex)],
-      ["Leader", c.leaderId ? (c.leaderId === c.nodeId ? `${c.leaderId} (diese Instanz)` : c.leaderId) : "unbekannt"],
+      [tt("adm.67691f"), c.nodeId],
+      [tt("adm.7f5acf"), c.isLeader ? tt("adm.5158a2") : c.state],
+      [tt("adm.cf5f30"), String(c.term)],
+      [tt("adm.2aeb64"), String(c.appliedIndex)],
+      [tt("adm.5158a2"), c.leaderId ? (c.leaderId === c.nodeId ? tt("adm.262954", { p0: c.leaderId }) : c.leaderId) : "unbekannt"],
     ];
     for (const [k, v] of facts) {
       const box = document.createElement("div");
@@ -4566,9 +4562,9 @@ class AdminView extends HTMLElement {
       table.style.cssText = "border-collapse:collapse;width:100%;";
       const thead = document.createElement("thead");
       thead.innerHTML = `<tr style="color:var(--omp-text-dim);text-align:left;">
-        <th style="padding:2px 8px;">Node-ID</th>
-        <th style="padding:2px 8px;">Raft-Adresse</th>
-        <th style="padding:2px 8px;">Rolle</th>
+        <th style="padding:2px 8px;">${tt("adm.fb9f6f")}</th>
+        <th style="padding:2px 8px;">${tt("adm.76d1d0")}</th>
+        <th style="padding:2px 8px;">${tt("adm.e897f3")}</th>
         <th style="padding:2px 8px;"></th>
       </tr>`;
       table.appendChild(thead);
@@ -4592,19 +4588,19 @@ class AdminView extends HTMLElement {
     const hint = document.createElement("div");
     hint.style.cssText = "color:var(--omp-text-dim);margin-bottom:var(--omp-space-2);";
     hint.textContent =
-      "Node-ID und Raft-Adresse der neuen Instanz eintragen, das Skript unten auf ihr ausführen, " +
-      "warten bis sie läuft (passiv, ohne Selbst-Bootstrap) — dann hier beitreten lassen.";
+      tt("adm.1771bd") +
+      tt("adm.13b8c8");
     form.appendChild(hint);
 
     const fieldsRow = document.createElement("div");
     fieldsRow.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;margin-bottom:var(--omp-space-2);";
 
     const nodeIdInput = document.createElement("input");
-    nodeIdInput.placeholder = "Node-ID, z. B. node-2";
+    nodeIdInput.placeholder = tt("adm.045fdc");
     nodeIdInput.value = this.#newClusterNodeId;
     nodeIdInput.style.cssText = "flex:1;min-width:120px;";
     const raftInput = document.createElement("input");
-    raftInput.placeholder = "Raft-Adresse, z. B. host-2:8300";
+    raftInput.placeholder = tt("adm.ca9750");
     raftInput.value = this.#newClusterRaftAddr;
     raftInput.style.cssText = "flex:1;min-width:160px;";
     const httpInput = document.createElement("input");
@@ -4643,14 +4639,14 @@ class AdminView extends HTMLElement {
     actions.style.cssText = "display:flex;justify-content:flex-end;gap:6px;";
     const copyBtn = document.createElement("button");
     copyBtn.type = "button";
-    copyBtn.textContent = "Skript kopieren";
+    copyBtn.textContent = tt("adm.c5ce55");
     copyBtn.style.cssText = "font-size:11px;cursor:pointer;";
     copyBtn.addEventListener("click", async () => {
       try {
         await navigator.clipboard.writeText(this.#buildClusterJoinSnippet());
-        copyBtn.textContent = "Kopiert!";
+        copyBtn.textContent = tt("adm.70dfc1");
         window.setTimeout(() => {
-          copyBtn.textContent = "Skript kopieren";
+          copyBtn.textContent = tt("adm.c5ce55");
         }, 1500);
       } catch {
         // Kein Clipboard-Zugriff — <pre> steht ohnehin zum manuellen Markieren da.
@@ -4658,7 +4654,7 @@ class AdminView extends HTMLElement {
     });
     const joinBtn = document.createElement("button");
     joinBtn.type = "button";
-    joinBtn.textContent = "Jetzt beitreten lassen";
+    joinBtn.textContent = tt("adm.5728d7");
     joinBtn.className = "omp-btn-primary";
     joinBtn.style.cssText = "font-size:11px;cursor:pointer;";
     joinBtn.addEventListener("click", () => void this.#joinClusterMember());
@@ -4678,7 +4674,7 @@ class AdminView extends HTMLElement {
       const badge = document.createElement("span");
       badge.className = "omp-badge omp-badge-running";
       badge.style.cssText = "margin-left:6px;";
-      badge.textContent = "Leader";
+      badge.textContent = tt("adm.5158a2");
       idTd.appendChild(badge);
     }
     tr.appendChild(idTd);
@@ -4696,7 +4692,7 @@ class AdminView extends HTMLElement {
     const actionsTd = document.createElement("td");
     actionsTd.style.cssText = "padding:2px 8px;text-align:right;";
     const delBtn = document.createElement("button");
-    delBtn.textContent = "Entfernen";
+    delBtn.textContent = tt("adm.513d30");
     delBtn.className = "omp-btn-danger";
     delBtn.style.cssText = "font-size:11px;";
     // Sichtbar gesperrt statt erst nach dem Klick abgewiesen — der
@@ -4704,7 +4700,7 @@ class AdminView extends HTMLElement {
     // rückgängig machen (s. #leaveClusterMember-Doku).
     if (peer.id === c.leaderId && c.peers.length <= 1) {
       delBtn.disabled = true;
-      delBtn.title = "Der letzte verbleibende Leader kann nicht entfernt werden.";
+      delBtn.title = tt("adm.d07366");
     }
     delBtn.addEventListener("click", () => void this.#leaveClusterMember(peer));
     actionsTd.appendChild(delBtn);
