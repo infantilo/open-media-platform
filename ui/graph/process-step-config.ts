@@ -13,6 +13,7 @@
 //
 // Die gesamte Fachlogik (Variablen-Katalog, Regel-Baukasten, Dauern,
 // Pflichtfelder) liegt DOM-frei in process-step-config-logic.ts.
+import { t as tt } from "../shell/i18n.ts";
 import { apiFetch } from "../shell/connection.ts";
 import { fetchFFmpegDetail, fetchFFmpegList } from "./ffmpeg-client.ts";
 import { showToast } from "../kit/omp-toast.ts";
@@ -254,7 +255,7 @@ function variableButton(
 ): HTMLButtonElement {
   const btn = h("button", "white-space:nowrap;", "{x} Variable");
   btn.type = "button";
-  btn.title = "Einen Wert aus dem Prozesslauf einsetzen (Start-Eingabe, Ergebnis eines vorherigen Schritts …)";
+  btn.title = tt("psc.a03494");
   btn.setAttribute("data-role", "variable-picker");
   btn.addEventListener("click", (ev) => {
     ev.preventDefault();
@@ -285,14 +286,14 @@ function openVariablePopover(anchor: HTMLElement, options: VariableOption[], onP
   pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 390))}px`;
   pop.style.top = `${Math.min(r.bottom + 4, window.innerHeight - 370)}px`;
 
-  const search = textInput("", "Suchen …");
+  const search = textInput("", tt("psc.98ceeb"));
   pop.appendChild(search);
   const list = h("div", "margin-top:4px;");
   pop.appendChild(list);
 
   const custom = h("div", "display:flex;gap:4px;margin-top:6px;padding-top:6px;border-top:1px solid var(--omp-border);");
-  const customInput = textInput("", "eigenes Eingabefeld, z. B. path");
-  const customBtn = h("button", "", "input.… einfügen");
+  const customInput = textInput("", tt("psc.3c50c3"));
+  const customBtn = h("button", "", tt("psc.b5e41b"));
   customBtn.type = "button";
   customBtn.addEventListener("click", () => {
     const k = customInput.value.trim();
@@ -302,14 +303,14 @@ function openVariablePopover(anchor: HTMLElement, options: VariableOption[], onP
   });
   custom.append(customInput, customBtn);
   pop.appendChild(custom);
-  pop.appendChild(h("div", HELP_CSS + "margin-top:4px;", "Start-Eingabe-Felder werden beim manuellen Start (JSON) oder vom auslösenden Ereignis geliefert."));
+  pop.appendChild(h("div", HELP_CSS + "margin-top:4px;", tt("psc.60a1f1")));
 
   const render = () => {
     list.replaceChildren();
     const q = search.value.trim().toLowerCase();
     let lastGroup = "";
     const shown = options.filter((o) => !q || o.label.toLowerCase().includes(q) || o.path.toLowerCase().includes(q));
-    if (shown.length === 0) list.appendChild(h("div", HELP_CSS, "Keine passenden Werte."));
+    if (shown.length === 0) list.appendChild(h("div", HELP_CSS, tt("psc.6e2c9a")));
     for (const o of shown) {
       if (o.group !== lastGroup) {
         list.appendChild(h("div", HELP_CSS + "margin-top:6px;text-transform:uppercase;letter-spacing:0.04em;", o.group));
@@ -384,7 +385,7 @@ function keyValueEditor(
     rows.push(entry);
     const rm = h("button", "", "✕");
     rm.type = "button";
-    rm.title = "Entfernen";
+    rm.title = tt("psc.513d30");
     rm.addEventListener("click", () => {
       rows.splice(rows.indexOf(entry), 1);
       line.remove();
@@ -413,7 +414,7 @@ function ruleEditor(expression: string, vars: VariableOption[], name: string): {
 
   const builder = h("div", "display:grid;grid-template-columns:2fr 1fr 1fr;gap:4px;");
   const varSel = select(
-    [{ value: "", label: "– Wert wählen –" }, ...vars.map((v) => ({ value: v.path, label: `${v.label} (${v.group})` }))],
+    [{ value: "", label: tt("psc.8fef4a") }, ...vars.map((v) => ({ value: v.path, label: `${v.label} (${v.group})` }))],
     parsed?.variable ?? "",
     `${name}-variable`,
   );
@@ -424,7 +425,7 @@ function ruleEditor(expression: string, vars: VariableOption[], name: string): {
     varSel.value = parsed.variable;
   }
   const opSel = select(RULE_OPERATORS.map((o) => ({ value: o.op, label: o.label })), parsed?.op ?? "==", `${name}-op`);
-  const valIn = textInput(parsed?.value ?? "", "Wert, z. B. approved oder 0", `${name}-value`);
+  const valIn = textInput(parsed?.value ?? "", tt("psc.edfa2f"), `${name}-value`);
   builder.append(varSel, opSel, valIn);
 
   const freeRow = h("div", "display:flex;gap:4px;");
@@ -438,14 +439,14 @@ function ruleEditor(expression: string, vars: VariableOption[], name: string): {
   const sync = () => {
     builder.style.display = free ? "none" : "grid";
     freeRow.style.display = free ? "flex" : "none";
-    toggle.textContent = free ? "Einfache Regel verwenden" : "Eigener Ausdruck (erweitert)";
+    toggle.textContent = free ? tt("psc.1c5e10") : tt("psc.d26d26");
   };
   toggle.addEventListener("click", () => {
     if (!free && varSel.value) freeIn.value = ruleToExpression({ variable: varSel.value, op: opSel.value, value: valIn.value });
     if (free) {
       const p = parseRule(freeIn.value);
       if (!p && freeIn.value.trim()) {
-        showToast("Dieser Ausdruck passt nicht in eine einfache Regel — bleibt als eigener Ausdruck.", { variant: "info" });
+        showToast(tt("psc.b8865a"), { variant: "info" });
         return;
       }
       if (p) {
@@ -475,12 +476,12 @@ function ruleEditor(expression: string, vars: VariableOption[], name: string): {
 function buildWait(cfg: Record<string, unknown>): FormPart {
   const el = h("div", "");
   const d = durationInput(typeof cfg.seconds === "number" ? cfg.seconds : undefined, "seconds");
-  el.appendChild(field("Wartezeit", d.el, "Danach geht der Ablauf automatisch weiter.", true));
+  el.appendChild(field(tt("psc.00760a"), d.el, tt("psc.b4b8e1"), true));
   return {
     el,
     read: () => {
       const s = d.read();
-      if (s === null) return { ok: false, error: "Wartezeit: keine gültige Zahl." };
+      if (s === null) return { ok: false, error: tt("psc.b950fb") };
       const out = { ...cfg };
       setOrDelete(out, "seconds", s);
       return { ok: true, config: out };
@@ -490,15 +491,15 @@ function buildWait(cfg: Record<string, unknown>): FormPart {
 
 function buildHumanTask(cfg: Record<string, unknown>, isApproval: boolean): FormPart {
   const el = h("div", "");
-  const title = textInput(String(cfg.title ?? ""), isApproval ? "z. B. Beitrag freigeben" : "z. B. Untertitel prüfen", "title");
+  const title = textInput(String(cfg.title ?? ""), isApproval ? tt("psc.60e9f0") : tt("psc.1f0172"), "title");
   const desc = h("textarea", "width:100%;box-sizing:border-box;resize:vertical;font-family:inherit;");
   desc.name = "description";
   desc.rows = 3;
   desc.value = String(cfg.description ?? "");
-  const assignee = textInput(String(cfg.assignee ?? ""), "leer = jeder darf übernehmen", "assignee");
+  const assignee = textInput(String(cfg.assignee ?? ""), tt("psc.9d735f"), "assignee");
   assignee.setAttribute("list", "omp-process-users");
   void loadUsersDatalist();
-  const role = textInput(String(cfg.role ?? ""), "optional, z. B. redaktion", "role");
+  const role = textInput(String(cfg.role ?? ""), tt("psc.01daf3"), "role");
   const prio = select(
     [
       { value: "low", label: "niedrig" },
@@ -510,17 +511,17 @@ function buildHumanTask(cfg: Record<string, unknown>, isApproval: boolean): Form
     "priority",
   );
   el.append(
-    field("Titel der Aufgabe", title, "Erscheint im Prozesse-Tab unter „Human Tasks“. Leer = Schrittname."),
-    field("Beschreibung / Anweisung", desc),
-    field("Zuständige Person", assignee),
-    field("Rolle", role),
-    field("Priorität", prio),
+    field(tt("psc.68dd6f"), title, tt("psc.01531f")),
+    field(tt("psc.49f6db"), desc),
+    field(tt("psc.c1ebd6"), assignee),
+    field(tt("psc.e897f3"), role),
+    field(tt("psc.c30f58"), prio),
   );
   if (isApproval) {
     el.appendChild(h(
       "div",
       HELP_CSS + "margin-top:8px;",
-      "Ergebnis: „freigegeben“, „abgelehnt“ oder „Änderungen angefordert“ — ziehe je Ergebnis eine Verbindung zum passenden nächsten Schritt.",
+      tt("psc.bea463"),
     ));
   }
   return {
@@ -564,17 +565,17 @@ function buildCondition(cfg: Record<string, unknown>, vars: VariableOption[]): F
   const trueL = textInput(String(cfg.trueLabel ?? ""), "true", "trueLabel");
   const falseL = textInput(String(cfg.falseLabel ?? ""), "false", "falseLabel");
   const labels = h("div", "display:grid;grid-template-columns:1fr 1fr;gap:8px;");
-  labels.append(field("Name des Ja-Wegs", trueL), field("Name des Nein-Wegs", falseL));
+  labels.append(field(tt("psc.ad8b47"), trueL), field(tt("psc.254c6b"), falseL));
   el.append(
-    field("Regel", rule.el, "Trifft die Regel zu, nimmt der Ablauf den Ja-Weg, sonst den Nein-Weg.", true),
+    field(tt("psc.9e5c87"), rule.el, tt("psc.9c21c3"), true),
     labels,
-    h("div", HELP_CSS + "margin-top:6px;", "Die Wege entstehen, indem du vom Ausgang dieses Schritts zum nächsten Schritt ziehst und den Weg auswählst."),
+    h("div", HELP_CSS + "margin-top:6px;", tt("psc.92f762")),
   );
   return {
     el,
     read: () => {
       const expression = rule.read();
-      if (!expression) return { ok: false, error: "Regel: bitte einen Wert wählen oder einen Ausdruck eingeben." };
+      if (!expression) return { ok: false, error: tt("psc.f07dc2") };
       const out = { ...cfg, expression };
       setOrDelete(out, "trueLabel", trueL.value.trim());
       setOrDelete(out, "falseLabel", falseL.value.trim());
@@ -590,17 +591,17 @@ function buildBranch(cfg: Record<string, unknown>, vars: VariableOption[]): Form
   const list = h("div", "");
   const addCase = (c: { expression?: string; label?: string } = {}) => {
     const box = h("div", "border:1px solid var(--omp-border);border-radius:4px;padding:6px;margin-top:6px;");
-    const label = textInput(c.label ?? "", "Name des Wegs, z. B. hd", "case-label");
+    const label = textInput(c.label ?? "", tt("psc.65e89f"), "case-label");
     const rule = ruleEditor(c.expression ?? "", vars, `case${rows.length}`);
     const entry = { label, rule };
     rows.push(entry);
-    const rm = h("button", "margin-top:4px;", "Fall entfernen");
+    const rm = h("button", "margin-top:4px;", tt("psc.cd850a"));
     rm.type = "button";
     rm.addEventListener("click", () => {
       rows.splice(rows.indexOf(entry), 1);
       box.remove();
     });
-    box.append(field("Weg", label), field("Wenn", rule.el), rm);
+    box.append(field("Weg", label), field(tt("psc.9242d7"), rule.el), rm);
     list.appendChild(box);
   };
   for (const c of cases) addCase(c);
@@ -609,12 +610,12 @@ function buildBranch(cfg: Record<string, unknown>, vars: VariableOption[]): Form
   add.type = "button";
   add.setAttribute("data-role", "branch-add-case");
   add.addEventListener("click", () => addCase());
-  const def = textInput(String(cfg.defaultLabel ?? ""), "optional, z. B. sonst", "defaultLabel");
+  const def = textInput(String(cfg.defaultLabel ?? ""), tt("psc.12a29c"), "defaultLabel");
   el.append(
-    h("div", HELP_CSS, "Die Fälle werden von oben nach unten geprüft; der erste zutreffende bestimmt den Weg."),
+    h("div", HELP_CSS, tt("psc.919f43")),
     list,
     add,
-    field("Weg, wenn kein Fall zutrifft", def, "Leer = der Prozess schlägt fehl, wenn kein Fall passt."),
+    field(tt("psc.22fd61"), def, tt("psc.f22388")),
   );
   return {
     el,
@@ -625,10 +626,10 @@ function buildBranch(cfg: Record<string, unknown>, vars: VariableOption[]): Form
         const expression = r.rule.read();
         const label = r.label.value.trim();
         if (!expression && !label) continue;
-        if (!expression || !label) return { ok: false, error: "Jeder Fall braucht einen Weg-Namen und eine Regel." };
+        if (!expression || !label) return { ok: false, error: tt("psc.31c191") };
         cs.push({ expression, label });
       }
-      if (cs.length === 0) return { ok: false, error: "Mindestens ein Fall ist nötig." };
+      if (cs.length === 0) return { ok: false, error: tt("psc.541b6d") };
       out.cases = cs;
       setOrDelete(out, "defaultLabel", def.value.trim());
       return { ok: true, config: out };
@@ -641,35 +642,35 @@ function buildServiceCall(cfg: Record<string, unknown>, vars: VariableOption[]):
   const method = select(["GET", "POST", "PUT", "PATCH", "DELETE"].map((m) => ({ value: m, label: m })), String(cfg.method ?? "GET"), "method");
   const url = templateInput(String(cfg.url ?? ""), "https://system.example/api/items/${input.assetId}", vars, "url");
   const headerPairs = flatStringObject(cfg.headers) ?? [];
-  const headers = keyValueEditor(headerPairs, { keyPlaceholder: "Header, z. B. Authorization", valuePlaceholder: "Wert", vars, name: "headers" });
+  const headers = keyValueEditor(headerPairs, { keyPlaceholder: tt("psc.f00a7d"), valuePlaceholder: tt("psc.5a597b"), vars, name: "headers" });
   const bodyPairs = flatStringObject(cfg.body);
   const bodyWrap = h("div", "");
   let bodyEditor: { read(): [string, string][] } | null = null;
   if (bodyPairs !== null) {
-    const kv = keyValueEditor(bodyPairs, { keyPlaceholder: "Feld", valuePlaceholder: "Wert (Text)", name: "body" });
+    const kv = keyValueEditor(bodyPairs, { keyPlaceholder: tt("psc.144d62"), valuePlaceholder: tt("psc.7b71ec"), name: "body" });
     bodyEditor = kv;
-    bodyWrap.appendChild(field("Gesendete Daten", kv.el, "Wird als JSON-Objekt gesendet (nur bei POST/PUT/PATCH). Verschachtelte Daten: „Erweitert (JSON)“."));
+    bodyWrap.appendChild(field(tt("psc.d38e8c"), kv.el, tt("psc.02fbcf")));
   } else {
-    bodyWrap.appendChild(h("div", HELP_CSS + "margin-top:8px;", "Gesendete Daten sind verschachtelt — bearbeitbar unter „Erweitert (JSON)“."));
+    bodyWrap.appendChild(h("div", HELP_CSS + "margin-top:8px;", tt("psc.decdc1")));
   }
   const syncBody = () => (bodyWrap.style.display = method.value === "GET" || method.value === "DELETE" ? "none" : "block");
   method.addEventListener("change", syncBody);
   syncBody();
   const timeout = durationInput(typeof cfg.timeoutSeconds === "number" ? cfg.timeoutSeconds : undefined);
   el.append(
-    field("Methode", method),
-    field("Adresse (URL)", url.el, "Mit „{x} Variable“ Werte aus dem Prozesslauf einsetzen.", true),
-    field("Header", headers.el),
+    field(tt("psc.41aa69"), method),
+    field(tt("psc.8f2cbd"), url.el, tt("psc.e6ea93"), true),
+    field(tt("psc.bf50d5"), headers.el),
     bodyWrap,
-    field("Zeitlimit für die Antwort", timeout.el, "Leer = 30 Sekunden."),
-    h("div", HELP_CSS + "margin-top:6px;", "Antworten außerhalb 200–299 gelten als Fehler (→ Wiederholung/Fehlerbehandlung unten)."),
+    field(tt("psc.755b1d"), timeout.el, tt("psc.fc9b98")),
+    h("div", HELP_CSS + "margin-top:6px;", tt("psc.61a248")),
   );
   return {
     el,
     read: () => {
-      if (!url.input.value.trim()) return { ok: false, error: "Adresse (URL) fehlt." };
+      if (!url.input.value.trim()) return { ok: false, error: tt("psc.d494fb") };
       const t = timeout.read();
-      if (t === null) return { ok: false, error: "Zeitlimit: keine gültige Zahl." };
+      if (t === null) return { ok: false, error: tt("psc.de6fc7") };
       const out = { ...cfg, url: url.input.value.trim() };
       setOrDelete(out, "method", method.value === "GET" ? undefined : method.value);
       setOrDelete(out, "headers", pairsToObject(headers.read()));
@@ -740,7 +741,7 @@ function rangeField(opt: FFOption, initial: string): RangeFieldElement {
 // wenigen Optionen wäre es nur Ballast.
 function ffmpegOptionsList(vars: VariableOption[]): { el: HTMLElement; setOptions(options: FFOption[], initialValues: Record<string, string>): void; read(): Record<string, string> } {
   const el = h("div", "margin-top:4px;");
-  const search = textInput("", "Optionen durchsuchen …");
+  const search = textInput("", tt("psc.81d089"));
   search.style.display = "none";
   const list = h("div", "max-height:340px;overflow:auto;margin-top:4px;");
   el.append(search, list);
@@ -782,7 +783,7 @@ function ffmpegOptionsList(vars: VariableOption[]): { el: HTMLElement; setOption
           control = s;
           read = () => s.value;
         } else if (kind === "number") {
-          const i = textInput(initial, opt.default ? `Standard: ${opt.default}` : "");
+          const i = textInput(initial, opt.default ? tt("psc.440a36", { p0: opt.default }) : "");
           i.inputMode = "decimal";
           control = i;
           read = () => i.value.trim();
@@ -790,7 +791,7 @@ function ffmpegOptionsList(vars: VariableOption[]): { el: HTMLElement; setOption
           control = rangeField(opt, initial);
           read = (control as RangeFieldElement).read;
         } else {
-          const t = templateInput(initial, opt.default ? `Standard: ${opt.default}` : "", vars);
+          const t = templateInput(initial, opt.default ? tt("psc.440a36", { p0: opt.default }) : "", vars);
           control = t.el;
           read = () => t.input.value.trim();
         }
@@ -826,7 +827,7 @@ function codecPicker(
   (async () => {
     const list = await fetchFFmpegList<FFCodecEntry>("encoders");
     const filtered = list.filter((c) => c.mediaType === mediaType);
-    sel.replaceChildren(new Option("– ffmpeg-Standard für den Container –", ""));
+    sel.replaceChildren(new Option(tt("psc.f86918"), ""));
     for (const c of filtered) sel.appendChild(new Option(`${c.name} — ${c.description}`, c.name));
   })();
   sel.addEventListener("change", () => void loadDetail());
@@ -851,7 +852,7 @@ function formatPicker(vars: VariableOption[], withOptions: boolean): { el: HTMLE
   (async () => {
     const list = await fetchFFmpegList<FFFormatEntry>("formats");
     const muxers = list.filter((f) => f.muxing);
-    sel.replaceChildren(new Option("– aus der Dateiendung ableiten –", ""));
+    sel.replaceChildren(new Option(tt("psc.a8f960"), ""));
     for (const f of muxers) sel.appendChild(new Option(`${f.name} — ${f.description}`, f.name));
   })();
   sel.addEventListener("change", () => void loadDetail());
@@ -915,7 +916,7 @@ function renderGenericFields(container: HTMLElement, fields: GenericScriptField[
         const heading = h("div", "font-weight:600;");
         const rowFieldsWrap = h("div", "");
         const readers = renderGenericFields(rowFieldsWrap, spec.itemFields, vars);
-        const rmBtn = h("button", "margin-top:4px;", "Entfernen");
+        const rmBtn = h("button", "margin-top:4px;", tt("psc.513d30"));
         rmBtn.type = "button";
         rmBtn.addEventListener("click", () => {
           if (rows.length <= minItems) return;
@@ -1005,14 +1006,14 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
   let filterPositions: Record<string, Point> | null = null;
   let filterComplex = "";
   let filterOutputLabels: string[] = [];
-  const filterSummary = h("div", HELP_CSS + "margin-top:2px;", "kein Filter gesetzt.");
-  const filterBtn = h("button", "margin-top:4px;", "Filter-Kette bearbeiten …");
+  const filterSummary = h("div", HELP_CSS + "margin-top:2px;", tt("psc.95b1db"));
+  const filterBtn = h("button", "margin-top:4px;", tt("psc.0a42fd"));
   filterBtn.type = "button";
-  const filterClearBtn = h("button", "margin-top:4px;margin-left:4px;", "Filter entfernen");
+  const filterClearBtn = h("button", "margin-top:4px;margin-left:4px;", tt("psc.a09a38"));
   filterClearBtn.type = "button";
   filterClearBtn.style.display = "none";
   const syncFilterSummary = () => {
-    filterSummary.textContent = filterComplex ? `Filter aktiv (${filterGraph?.nodes.filter((n) => n.kind === "filter").length ?? 0} Filter-Schritt(e)).` : "kein Filter gesetzt.";
+    filterSummary.textContent = filterComplex ? tt("psc.cb4d72", { p0: filterGraph?.nodes.filter((n) => n.kind === "filter").length ?? 0 }) : tt("psc.95b1db");
     filterClearBtn.style.display = filterComplex ? "" : "none";
   };
   filterBtn.addEventListener("click", () => {
@@ -1046,9 +1047,9 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
   // erhalten, damit ein erneutes Öffnen die letzte Matrix zeigt.
   let audioMatrixCells: AudioMatrixCell[] = [];
   let audioMatrixOutputCount = 2;
-  const matrixBtn = h("button", "margin-top:4px;margin-left:4px;", "Audio-Matrix bearbeiten …");
+  const matrixBtn = h("button", "margin-top:4px;margin-left:4px;", tt("psc.f15630"));
   matrixBtn.type = "button";
-  matrixBtn.title = "Quellkanäle aus dieser oder zusätzlichen Dateien grafisch auf Ausgangsspuren routen, mischen und verzögern.";
+  matrixBtn.title = tt("psc.3309b0");
   matrixBtn.addEventListener("click", () => {
     openAudioMatrixEditor(
       document.body,
@@ -1081,7 +1082,7 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
   const additionalInputs: { input: HTMLInputElement; row: HTMLElement }[] = [];
   const additionalInputsList = h("div", "");
   const addAdditionalInput = (value = "") => {
-    const t = templateInput(value, "${input.path} oder ein eigener Pfad", vars);
+    const t = templateInput(value, tt("psc.2668ce"), vars);
     const row = h("div", "display:flex;gap:4px;margin-top:4px;");
     const rm = h("button", "", "✕");
     rm.type = "button";
@@ -1120,7 +1121,7 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
   }
   const outputTrackRows: OutputTrackRow[] = [];
   const outputTracksList = h("div", "");
-  const renumberTracks = () => outputTrackRows.forEach((r, i) => (r.heading.textContent = `Ausgabespur ${i + 1}`));
+  const renumberTracks = () => outputTrackRows.forEach((r, i) => (r.heading.textContent = tt("psc.b2cbf0", { p0: i + 1 })));
   // Die Schnelleinfüge-Knöpfe je Zeile ("[label] einfügen") hängen vom
   // AKTUELLEN filterOutputLabels ab, das sich ändert, wann immer
   // Filter-Kette oder Audio-Matrix bearbeitet werden — jede Zeile
@@ -1142,13 +1143,13 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
   };
   const addOutputTrack = () => {
     const box = h("div", "border:1px solid var(--omp-border);border-radius:4px;padding:6px;margin-top:6px;");
-    const heading = h("div", "font-weight:600;", `Ausgabespur ${outputTrackRows.length + 1}`);
-    const source = templateInput("", "z. B. 0:a:0 — oder ein Label aus Filter-Kette/Audio-Matrix", vars);
+    const heading = h("div", "font-weight:600;", tt("psc.b2cbf0", { p0: outputTrackRows.length + 1 }));
+    const source = templateInput("", tt("psc.a56112"), vars);
     const quickLabels = h("div", "display:flex;flex-wrap:wrap;gap:4px;margin-top:2px;");
     const syncQuickLabels = () => {
       quickLabels.replaceChildren();
       for (const label of filterOutputLabels) {
-        const btn = h("button", "font-size:var(--omp-font-size-xs);", `[${label}] einfügen`);
+        const btn = h("button", "font-size:var(--omp-font-size-xs);", tt("psc.4b1725", { p0: label }));
         btn.type = "button";
         btn.addEventListener("click", () => {
           source.input.value = `[${label}]`;
@@ -1159,11 +1160,11 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
     };
     syncQuickLabels();
     quickLabelRefreshers.push(syncQuickLabels);
-    const mediaTypeSel = select([{ value: "audio", label: "Audio" }, { value: "video", label: "Video" }, { value: "subtitle", label: "Untertitel" }], "audio");
+    const mediaTypeSel = select([{ value: "audio", label: tt("psc.b22f04") }, { value: "video", label: tt("psc.34e2d1") }, { value: "subtitle", label: tt("psc.b5b672") }], "audio");
     const codecSel = select([{ value: "", label: "lade Codecs …" }], "");
     const optionsPanel = ffmpegOptionsList(vars);
-    const metadataEditor = keyValueEditor([], { keyPlaceholder: "z. B. title, language, …", valuePlaceholder: "Wert", name: `track-meta-${outputTrackRows.length}` });
-    const rm = h("button", "margin-top:4px;", "Spur entfernen");
+    const metadataEditor = keyValueEditor([], { keyPlaceholder: "z. B. title, language, …", valuePlaceholder: tt("psc.5a597b"), name: `track-meta-${outputTrackRows.length}` });
+    const rm = h("button", "margin-top:4px;", tt("psc.e9da74"));
     rm.type = "button";
     const entry: OutputTrackRow = { box, heading, source: source.input, mediaTypeSel, codecSel, optionsPanel, metadataEditor };
     mediaTypeSel.addEventListener("change", () => void loadTrackCodecs(entry));
@@ -1185,12 +1186,12 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
     });
     box.append(
       heading,
-      field("Quelle", source.el, "Roher Stream-Spezifizierer (z. B. 0:a:0 für Eingabedatei 0, erste Tonspur) oder ein Label aus Filter-Kette/Audio-Matrix (in eckigen Klammern).", true),
+      field(tt("psc.d3402e"), source.el, tt("psc.d0636b"), true),
       quickLabels,
-      field("Medientyp", mediaTypeSel),
-      field("Codec", codecSel, "Leer = ffmpeg-Standard."),
+      field(tt("psc.913302"), mediaTypeSel),
+      field(tt("psc.8ca990"), codecSel, tt("psc.8a0483")),
       optionsPanel.el,
-      field("Metadaten (optional)", metadataEditor.el, "Beliebige Schlüssel, z. B. title, language (ISO-639-2) — nicht auf title/language beschränkt."),
+      field(tt("psc.e8a64f"), metadataEditor.el, tt("psc.ae9836")),
       rm,
     );
     outputTrackRows.push(entry);
@@ -1205,36 +1206,36 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
   const simpleCodecNote = h(
     "div",
     HELP_CSS + "margin-top:4px;",
-    "Video-/Audio-Codec oben sind deaktiviert, solange unten mindestens eine Ausgabespur konfiguriert ist — die Ausgabespuren-Liste übernimmt die Zuordnung dann vollständig.",
+    tt("psc.095815"),
   );
   simpleCodecNote.style.display = "none";
-  const videoSection = section("Video");
-  const videoField = field("Video-Codec", video.el, "Leer = ffmpeg-Standard für den Container.");
-  const audioSection = section("Audio");
-  const audioField = field("Audio-Codec", audio.el, "Leer = ffmpeg-Standard für den Container.");
+  const videoSection = section(tt("psc.34e2d1"));
+  const videoField = field(tt("psc.2c6327"), video.el, tt("psc.24f9d3"));
+  const audioSection = section(tt("psc.b22f04"));
+  const audioField = field(tt("psc.16202d"), audio.el, tt("psc.24f9d3"));
   simpleCodecEls.push(videoSection, videoField, audioSection, audioField);
 
   el.append(
-    field("Eingabedatei", input.el, undefined, true),
-    field("Ausgabedatei", output.el, undefined, true),
-    field("Container erzwingen (optional)", fmt.el, "Leer = ffmpeg leitet ihn aus der Endung der Ausgabedatei ab."),
+    field(tt("psc.7ddbbe"), input.el, undefined, true),
+    field(tt("psc.8adabd"), output.el, undefined, true),
+    field(tt("psc.6bbca5"), fmt.el, tt("psc.74d4bd")),
     videoSection,
     videoField,
     audioSection,
     audioField,
     simpleCodecNote,
-    section("Filter (optional)"),
+    section(tt("psc.f92383")),
     filterSummary,
     filterBtn,
     matrixBtn,
     filterClearBtn,
     field(
-      "Weitere Eingabedateien",
+      tt("psc.99d757"),
       additionalInputsList,
-      "Nur nötig, wenn der Filter oben mehr als eine Quelle referenziert — Eingabedatei oben ist Index 0, hier Index 1, 2, ….",
+      tt("psc.82095d"),
     ),
     addAdditionalInputBtn,
-    section("Ausgabespuren (optional — für unabhängige Mehrfachspuren, z. B. mehrere Sprachfassungen)"),
+    section(tt("psc.5bfab8")),
     outputTracksList,
     addOutputTrackBtn,
   );
@@ -1243,17 +1244,17 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
     read: () => {
       const p = input.input.value.trim();
       const o = output.input.value.trim();
-      if (!p || !o) return { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." };
+      if (!p || !o) return { ok: false, error: tt("psc.9205c3") };
       const additionalPaths: string[] = [];
       for (const entry of additionalInputs) {
         const v = entry.input.value.trim();
-        if (!v) return { ok: false, error: "Eine weitere Eingabedatei ist leer." };
+        if (!v) return { ok: false, error: tt("psc.328a1f") };
         additionalPaths.push(v);
       }
       const outputTracks: OutputTrack[] = [];
       for (const row of outputTrackRows) {
         const src = row.source.value.trim();
-        if (!src) return { ok: false, error: "Jede Ausgabespur braucht eine Quelle." };
+        if (!src) return { ok: false, error: tt("psc.a3017d") };
         outputTracks.push({
           source: src,
           mediaType: row.mediaTypeSel.value as OutputTrack["mediaType"],
@@ -1317,21 +1318,21 @@ function buildScriptWizardConcat(vars: VariableOption[]): ScriptWizardForm {
   // bekommen (s. syncLosslessVisibility).
   const trimFieldsEls: HTMLElement[] = [];
   let losslessActive = () => false; // durch die Checkbox weiter unten ersetzt
-  const renumber = () => rows.forEach((r, i) => (r.heading.textContent = `Clip ${i + 1}`));
+  const renumber = () => rows.forEach((r, i) => (r.heading.textContent = tt("psc.6b4c3c", { p0: i + 1 })));
   const reorder = () => {
     list.replaceChildren(...rows.map((r) => r.box));
     renumber();
   };
   const addClip = () => {
     const box = h("div", "border:1px solid var(--omp-border);border-radius:4px;padding:6px;margin-top:6px;");
-    const heading = h("div", "font-weight:600;", `Clip ${rows.length + 1}`);
-    const path = templateInput("", "${input.path} oder ein eigener Pfad", vars);
-    const trimStart = textInput("", "leer = von Anfang an");
-    const trimEnd = textInput("", "leer = bis zum Ende");
+    const heading = h("div", "font-weight:600;", tt("psc.6b4c3c", { p0: rows.length + 1 }));
+    const path = templateInput("", tt("psc.2668ce"), vars);
+    const trimStart = textInput("", tt("psc.b153d1"));
+    const trimEnd = textInput("", tt("psc.c7c6db"));
     const btnRow = h("div", "display:flex;gap:4px;margin-top:4px;");
     const up = h("button", "", "↑");
     const down = h("button", "", "↓");
-    const rm = h("button", "", "Clip entfernen");
+    const rm = h("button", "", tt("psc.fb36dc"));
     up.type = down.type = rm.type = "button";
     const entry: ClipRow = { box, heading, path: path.input, trimStart, trimEnd };
     up.addEventListener("click", () => {
@@ -1353,11 +1354,11 @@ function buildScriptWizardConcat(vars: VariableOption[]): ScriptWizardForm {
       reorder();
     });
     btnRow.append(up, down, rm);
-    const trimStartField = field("Beschnitt Start (optional)", trimStart, "ffmpeg-Zeitangabe, z. B. 5 oder 00:00:05.5 — schneidet den Clip-Anfang weg.");
-    const trimEndField = field("Beschnitt Ende (optional)", trimEnd, "ffmpeg-Zeitangabe — schneidet den Clip ab hier weg.");
+    const trimStartField = field(tt("psc.e2eaea"), trimStart, tt("psc.4e75ed"));
+    const trimEndField = field(tt("psc.1f0b03"), trimEnd, tt("psc.410164"));
     trimStartField.style.display = trimEndField.style.display = losslessActive() ? "none" : "";
     trimFieldsEls.push(trimStartField, trimEndField);
-    box.append(heading, field("Quelldatei", path.el, undefined, true), trimStartField, trimEndField, btnRow);
+    box.append(heading, field(tt("psc.c3115f"), path.el, undefined, true), trimStartField, trimEndField, btnRow);
     rows.push(entry);
     reorder();
   };
@@ -1381,7 +1382,7 @@ function buildScriptWizardConcat(vars: VariableOption[]): ScriptWizardForm {
   const losslessNote = h(
     "div",
     HELP_CSS,
-    "Kein Beschnitt möglich, keine Codec-Wahl (bleibt exakt wie die Quellen) — nur zuverlässig für Container, die ffmpegs concat-Protokoll unterstützt (v. a. MPEG-TS/-PS, z. B. .ts-Dateien aus Zuspielungen). Bei inkompatiblen Quellen meldet ffmpeg beim Ausführen einen Fehler statt eine falsche Datei zu erzeugen.",
+    tt("psc.318be7"),
   );
   losslessNote.style.display = "none";
   const codecFieldsEls: HTMLElement[] = [];
@@ -1393,17 +1394,17 @@ function buildScriptWizardConcat(vars: VariableOption[]): ScriptWizardForm {
   };
   losslessCheckbox.addEventListener("change", syncLosslessVisibility);
 
-  const videoField = field("Video-Codec", video.el, "Alle Clips werden neu kodiert (Zusammenfügen per Filter, kein reiner Stream-Copy) — leer = ffmpeg-Standard.");
-  const audioField = field("Audio-Codec", audio.el);
+  const videoField = field(tt("psc.2c6327"), video.el, tt("psc.965445"));
+  const audioField = field(tt("psc.16202d"), audio.el);
   codecFieldsEls.push(videoField, audioField);
 
   el.append(
-    h("div", HELP_CSS + "margin-bottom:4px;", "Die Reihenfolge der Clips unten ist die Reihenfolge in der Ausgabedatei — mit ↑/↓ umsortieren."),
+    h("div", HELP_CSS + "margin-bottom:4px;", tt("psc.71259a")),
     list,
     addBtn,
-    field("Ausgabedatei", output.el, undefined, true),
-    field("Container erzwingen (optional)", fmt.el, "Leer = ffmpeg leitet ihn aus der Endung der Ausgabedatei ab."),
-    field("Verlustfrei (Stream-Copy, kein Neukodieren)", losslessCheckbox),
+    field(tt("psc.8adabd"), output.el, undefined, true),
+    field(tt("psc.6bbca5"), fmt.el, tt("psc.74d4bd")),
+    field(tt("psc.b81bfe"), losslessCheckbox),
     losslessNote,
     videoField,
     audioField,
@@ -1412,10 +1413,10 @@ function buildScriptWizardConcat(vars: VariableOption[]): ScriptWizardForm {
     el,
     read: () => {
       const o = output.input.value.trim();
-      if (!o) return { ok: false, error: "Ausgabedatei fehlt." };
-      if (rows.length < 2) return { ok: false, error: "Mindestens zwei Clips sind nötig." };
+      if (!o) return { ok: false, error: tt("psc.82b994") };
+      if (rows.length < 2) return { ok: false, error: tt("psc.9fd8eb") };
       for (const r of rows) {
-        if (!r.path.value.trim()) return { ok: false, error: "Jeder Clip braucht eine Quelldatei." };
+        if (!r.path.value.trim()) return { ok: false, error: tt("psc.aecc0d") };
       }
       const f = fmt.read();
       const v = video.read();
@@ -1456,7 +1457,7 @@ function buildScriptWizardOverlay(vars: VariableOption[]): ScriptWizardForm {
   const el = h("div", "");
   const input = templateInput("${input.path}", "${input.path}", vars);
   const output = templateInput("${input.outputPath}", "${input.outputPath}", vars);
-  const duration = textInput("60", "Gesamtdauer in Sekunden (für die Zeitleisten-Vorschau)");
+  const duration = textInput("60", tt("psc.07a093"));
   duration.inputMode = "decimal";
   const video = codecPicker("video", vars, false);
   const audio = codecPicker("audio", vars, false);
@@ -1479,7 +1480,7 @@ function buildScriptWizardOverlay(vars: VariableOption[]): ScriptWizardForm {
   }
   const rows: EventRow[] = [];
   const list = h("div", "");
-  const renumber = () => rows.forEach((r, i) => (r.heading.textContent = `Ereignis ${i + 1}`));
+  const renumber = () => rows.forEach((r, i) => (r.heading.textContent = tt("psc.4ff54c", { p0: i + 1 })));
   const redrawTimeline = () => {
     const total = Math.max(Number(duration.value) || 0, 0.001);
     for (const r of rows) {
@@ -1492,17 +1493,17 @@ function buildScriptWizardOverlay(vars: VariableOption[]): ScriptWizardForm {
   duration.addEventListener("input", redrawTimeline);
   const addEvent = () => {
     const box = h("div", "border:1px solid var(--omp-border);border-radius:4px;padding:6px;margin-top:6px;");
-    const heading = h("div", "font-weight:600;", `Ereignis ${rows.length + 1}`);
-    const kindSel = select([{ value: "text", label: "Text (z. B. Bauchbinde, Abspann-Credits)" }, { value: "image", label: "Bild (z. B. Senderlogo)" }], "text");
+    const heading = h("div", "font-weight:600;", tt("psc.4ff54c", { p0: rows.length + 1 }));
+    const kindSel = select([{ value: "text", label: tt("psc.6e4c80") }, { value: "image", label: tt("psc.fe1905") }], "text");
     const text = textInput("", "z. B. © Mein Sender 2026");
-    const imagePath = templateInput("", "${input.logoPath} oder ein eigener Pfad", vars);
-    const start = textInput("0", "Sekunden ab Anfang");
-    const end = textInput("5", "Sekunden ab Anfang");
+    const imagePath = templateInput("", tt("psc.d43301"), vars);
+    const start = textInput("0", tt("psc.d01e32"));
+    const end = textInput("5", tt("psc.d01e32"));
     start.inputMode = end.inputMode = "decimal";
-    const x = textInput("", "leer = mittig (Text) bzw. 0 (Bild)");
-    const y = textInput("", "leer = unten (Text) bzw. 0 (Bild)");
-    const textField = field("Text", text, "Doppelpunkt und Hochkomma werden automatisch escaped.");
-    const imageField = field("Bilddatei", imagePath.el, undefined, true);
+    const x = textInput("", tt("psc.28d341"));
+    const y = textInput("", tt("psc.c8421f"));
+    const textField = field(tt("psc.9dffbf"), text, tt("psc.ed95ac"));
+    const imageField = field(tt("psc.aa69ac"), imagePath.el, undefined, true);
     imageField.style.display = "none";
     const bar = h("div", "position:absolute;top:2px;bottom:2px;background:var(--omp-info);border-radius:2px;min-width:2px;");
     bar.title = "";
@@ -1516,7 +1517,7 @@ function buildScriptWizardOverlay(vars: VariableOption[]): ScriptWizardForm {
     syncKind();
     [start, end].forEach((i) => i.addEventListener("input", redrawTimeline));
     const btnRow = h("div", "display:flex;gap:4px;margin-top:4px;");
-    const rm = h("button", "", "Ereignis entfernen");
+    const rm = h("button", "", tt("psc.3795c7"));
     rm.type = "button";
     const entry: EventRow = { box, heading, kindSel, textInput: text, imagePath: imagePath.input, imageField, textField, start, end, x, y, bar };
     rm.addEventListener("click", () => {
@@ -1532,10 +1533,10 @@ function buildScriptWizardOverlay(vars: VariableOption[]): ScriptWizardForm {
       field("Art", kindSel),
       textField,
       imageField,
-      field("Start (Sekunden)", start, undefined, true),
-      field("Ende (Sekunden)", end, undefined, true),
-      field("Position X (optional)", x, "ffmpeg-Ausdruck, z. B. 10 oder (w-overlay_w)/2."),
-      field("Position Y (optional)", y, "ffmpeg-Ausdruck, z. B. 10 oder h-overlay_h-20."),
+      field(tt("psc.9563fc"), start, undefined, true),
+      field(tt("psc.5381b9"), end, undefined, true),
+      field(tt("psc.8ef81c"), x, tt("psc.8f4463")),
+      field(tt("psc.ec97a1"), y, tt("psc.edfec0")),
       btnRow,
     );
     rows.push(entry);
@@ -1548,12 +1549,12 @@ function buildScriptWizardOverlay(vars: VariableOption[]): ScriptWizardForm {
   addBtn.addEventListener("click", addEvent);
 
   el.append(
-    field("Eingabedatei (Video)", input.el, undefined, true),
-    field("Ausgabedatei", output.el, undefined, true),
-    field("Video-Codec", video.el, "Overlays erfordern eine Neukodierung des Bildes — leer = ffmpeg-Standard."),
-    field("Audio-Codec", audio.el, "Ton wird unverändert durchgereicht, falls vorhanden — Codec nur bei Bedarf setzen."),
-    field("Gesamtdauer (nur für die Zeitleisten-Vorschau)", duration),
-    h("div", HELP_CSS, "Zeitleiste (nicht ziehbar, nur zur Orientierung):"),
+    field(tt("psc.37ba1f"), input.el, undefined, true),
+    field(tt("psc.8adabd"), output.el, undefined, true),
+    field(tt("psc.2c6327"), video.el, tt("psc.406613")),
+    field(tt("psc.16202d"), audio.el, tt("psc.fc2ebc")),
+    field(tt("psc.f46020"), duration),
+    h("div", HELP_CSS, tt("psc.26d291")),
     timeline,
     list,
     addBtn,
@@ -1563,18 +1564,18 @@ function buildScriptWizardOverlay(vars: VariableOption[]): ScriptWizardForm {
     read: () => {
       const p = input.input.value.trim();
       const o = output.input.value.trim();
-      if (!p || !o) return { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." };
-      if (rows.length === 0) return { ok: false, error: "Mindestens ein Ereignis ist nötig." };
+      if (!p || !o) return { ok: false, error: tt("psc.9205c3") };
+      if (rows.length === 0) return { ok: false, error: tt("psc.4aaf16") };
       const events: OverlayEvent[] = [];
       for (const r of rows) {
         const s = Number(r.start.value);
         const e = Number(r.end.value);
-        if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return { ok: false, error: "Jedes Ereignis braucht eine gültige Start-/Endzeit (Ende > Start)." };
+        if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return { ok: false, error: tt("psc.5f5f22") };
         if (r.kindSel.value === "text") {
-          if (!r.textInput.value.trim()) return { ok: false, error: "Jedes Text-Ereignis braucht einen Text." };
+          if (!r.textInput.value.trim()) return { ok: false, error: tt("psc.9c9479") };
           events.push({ kind: "text", text: r.textInput.value, startSeconds: s, endSeconds: e, x: r.x.value.trim() || undefined, y: r.y.value.trim() || undefined });
         } else {
-          if (!r.imagePath.value.trim()) return { ok: false, error: "Jedes Bild-Ereignis braucht eine Bilddatei." };
+          if (!r.imagePath.value.trim()) return { ok: false, error: tt("psc.049b05") };
           events.push({ kind: "image", imagePath: r.imagePath.value.trim(), startSeconds: s, endSeconds: e, x: r.x.value.trim() || undefined, y: r.y.value.trim() || undefined });
         }
       }
@@ -1599,11 +1600,11 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
   // der garantierte Experten-/Fallback-Weg. ----------------------------
   const advancedWrap = h("div", "");
   const current = String(cfg.command ?? "");
-  const cmdOpts = [{ value: "", label: "– Werkzeug wählen –" }, ...commands.map((c) => ({ value: c, label: c }))];
-  if (current && !commands.includes(current)) cmdOpts.push({ value: current, label: `${current} (auf diesem Server nicht verfügbar!)` });
+  const cmdOpts = [{ value: "", label: tt("psc.6646ff") }, ...commands.map((c) => ({ value: c, label: c }))];
+  if (current && !commands.includes(current)) cmdOpts.push({ value: current, label: tt("psc.a59b9d", { p0: current }) });
   const cmd = select(cmdOpts, current, "command");
   const tpl = select(
-    [{ value: "", label: "– Vorlage übernehmen (optional) –" }, ...SCRIPT_TEMPLATES.filter((t) => commands.includes(t.command)).map((t) => ({ value: t.id, label: t.label }))],
+    [{ value: "", label: tt("psc.2c4740") }, ...SCRIPT_TEMPLATES.filter((t) => commands.includes(t.command)).map((t) => ({ value: t.id, label: t.label }))],
     "",
     "template",
   );
@@ -1642,7 +1643,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
       if (!isKnownValueFlag) continue;
       const v = validateArgValue(flag, argInputs[i].value.trim(), dynamicOptions, fetchedGlobalFlagDefs);
       if (!v.ok) {
-        argStatuses[i].textContent = `⚠ ${flag}: ${v.message ?? "ungültiger Wert"}`;
+        argStatuses[i].textContent = `⚠ ${flag}: ${v.message ?? tt("psc.d1762c")}`;
         argStatuses[i].style.display = "block";
         argInputs[i].style.borderColor = "var(--omp-error)";
       }
@@ -1700,7 +1701,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
 
   const addArg = (v = "") => {
     const line = h("div", "display:grid;grid-template-columns:1fr auto auto;gap:4px;margin-top:4px;");
-    const i = textInput(v, "Argument (z. B. -crf oder ein Wert)", "arg");
+    const i = textInput(v, tt("psc.574722"), "arg");
     i.style.fontFamily = "ui-monospace,monospace";
     argInputs.push(i);
     const status = h("div", "grid-column:1;font-size:var(--omp-font-size-xs);color:var(--omp-error);display:none;");
@@ -1740,7 +1741,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
   // ab, ohne beim Öffnen hunderte AVOption-Detailabfragen auf einmal
   // auszulösen (nur Listen sind vorab bekannt, Details erst on-demand
   // je angeklicktem Treffer — dasselbe Cache-Prinzip wie ffmpeg-client.ts).
-  const explorerToggle = h("button", "margin-top:8px;", "Parameter suchen …");
+  const explorerToggle = h("button", "margin-top:8px;", tt("psc.6940ee"));
   explorerToggle.type = "button";
   const explorerPanel = h("div", "margin-top:4px;border:1px solid var(--omp-border);border-radius:4px;padding:6px;display:none;");
   const explorerSearch = textInput("", "z. B. crf, libx264, scale, loglevel …");
@@ -1776,12 +1777,12 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     addArg().focus();
   };
   const updateExplorerIndexStatus = () => {
-    const globalPart = globalFlagsLoaded ? `${fetchedGlobalFlagDefs.length} globale Flags (-h full)` : "globale Flags laden …";
+    const globalPart = globalFlagsLoaded ? tt("psc.a6eb55", { p0: fetchedGlobalFlagDefs.length }) : "globale Flags laden …";
     const paramPart = fullOptionIndexReady
-      ? `${fullOptionIndex.length} Parameter`
+      ? tt("psc.345b00", { p0: fullOptionIndex.length })
       : fullOptionIndexStarted
-      ? `${fullOptionIndex.length} Parameter bisher (lädt weiter im Hintergrund)`
-      : "Parameter-Index lädt …";
+      ? tt("psc.a96ba4", { p0: fullOptionIndex.length })
+      : tt("psc.d79ecf");
     explorerIndexStatus.textContent = `${globalPart} · ${paramPart} durchsuchbar.`;
   };
   // Tastatur-Navigation über alle Top-Level-Treffer hinweg (Kapitel 25
@@ -1819,7 +1820,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     for (const m of searchEntries(q, globalEntries)) {
       const row = h("div", "padding:4px;cursor:pointer;border-bottom:1px solid var(--omp-border);");
       const head = h("div", "");
-      head.append(h("b", "", m.entry.value.name), categoryBadge("globales Flag"));
+      head.append(h("b", "", m.entry.value.name), categoryBadge(tt("psc.cbb958")));
       if (m.fuzzy) head.appendChild(categoryBadge("≈ Tippfehler?", "cue"));
       row.append(head, h("div", HELP_CSS, m.entry.value.description));
       const activate = () => insertGlobalFlag(m.entry.value.name);
@@ -1835,7 +1836,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     for (const m of searchEntries(q, fetchedEntries)) {
       const row = h("div", "padding:4px;cursor:pointer;border-bottom:1px solid var(--omp-border);");
       const head = h("div", "");
-      head.append(h("b", "", m.entry.value.name), categoryBadge("globales Flag, -h full"));
+      head.append(h("b", "", m.entry.value.name), categoryBadge(tt("psc.a0f383")));
       if (m.fuzzy) head.appendChild(categoryBadge("≈ Tippfehler?", "cue"));
       row.append(head, h("div", HELP_CSS, m.entry.value.description));
       const activate = () => insertGlobalFlag(m.entry.value.name);
@@ -1896,7 +1897,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
               });
               sub.appendChild(optRow);
             }
-            if (!detail?.options?.length) sub.appendChild(h("div", HELP_CSS, "keine Optionen"));
+            if (!detail?.options?.length) sub.appendChild(h("div", HELP_CSS, tt("psc.cbc4b0")));
           }
         } else {
           sub.style.display = "none";
@@ -1943,9 +1944,9 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
   });
   explorerPanel.append(
     field(
-      "Parameter suchen",
+      tt("psc.89cdb8"),
       explorerSearch,
-      "Durchsucht globale CLI-Flags (kuratiert + vollständig aus \"ffmpeg -h full\"), ALLE AVOptions aller Encoder/Decoder/Muxer/Demuxer/Filter dieses Servers (z. B. \"crf\" findet direkt libx264s -crf) sowie Werkzeug-/Filter-Namen selbst — Klick auf einen Treffer fügt ihn als Argument ein.",
+      tt("psc.8c458f"),
     ),
     explorerIndexStatus,
     explorerResults,
@@ -1955,25 +1956,25 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     if (!t) return;
     cmd.value = t.command;
     setArgs(t.args);
-    tplHelp.textContent = t.help + " Die Platzhalter input.path usw. per „{x} Variable“ durch echte Werte ersetzen oder beim Start mitgeben.";
+    tplHelp.textContent = t.help + tt("psc.cd6dbf");
   });
   const addBtn = h("button", "margin-top:4px;", "+ Argument");
   addBtn.type = "button";
   addBtn.addEventListener("click", () => addArg());
-  const pasteBtn = h("button", "margin-top:4px;margin-left:4px;", "Befehlszeile einfügen …");
+  const pasteBtn = h("button", "margin-top:4px;margin-left:4px;", tt("psc.a7b058"));
   pasteBtn.type = "button";
-  pasteBtn.title = "Eine komplette Argumentzeile einfügen (z. B. aus einer Anleitung) — wird an Leerzeichen getrennt, \"…\" hält zusammen.";
+  pasteBtn.title = tt("psc.e91a0f");
   pasteBtn.addEventListener("click", () => {
-    const line = window.prompt("Argumente (ohne Programmname):", "");
+    const line = window.prompt(tt("psc.4eb447"), "");
     if (line === null) return;
     const parts = line.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
     for (const p of parts) addArg(p.replace(/^["']|["']$/g, ""));
   });
   advancedWrap.append(
-    field("Werkzeug", cmd, commands.length ? `Auf diesem Server freigegeben: ${commands.join(", ")}.` : "Auf diesem Server ist kein Werkzeug freigegeben.", true),
-    field("Vorlage", tpl),
+    field(tt("psc.40c573"), cmd, commands.length ? tt("psc.819ee1", { p0: commands.join(", ") }) : tt("psc.8330a3"), true),
+    field(tt("psc.07411f"), tpl),
     tplHelp,
-    field("Argumente", argsList, "Je Zeile ein Argument — Leerzeichen innerhalb einer Zeile bleiben erhalten (kein Anführungszeichen-Problem). Bekannte Flags werden beim Tippen vorgeschlagen und ihr Wert geprüft."),
+    field(tt("psc.c9d7f8"), argsList, tt("psc.8584a0")),
     addBtn,
     pasteBtn,
     explorerToggle,
@@ -1987,7 +1988,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
   const intentHelp = h("div", HELP_CSS + "margin-top:2px;");
   const dynamicArea = h("div", "");
   let activeForm: ScriptWizardForm | null = null;
-  const previewLabel = h("div", HELP_CSS + "font-weight:600;margin-top:8px;", "Erzeugte Argumente (Vorschau):");
+  const previewLabel = h("div", HELP_CSS + "font-weight:600;margin-top:8px;", tt("psc.ffd103"));
   const preview = h("pre", "background:var(--omp-surface-raised);padding:6px;border-radius:4px;font-size:var(--omp-font-size-xs);white-space:pre-wrap;word-break:break-all;margin-top:2px;");
   const updatePreview = () => {
     if (!activeForm) return;
@@ -2023,9 +2024,9 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
   dynamicArea.addEventListener("input", updatePreview);
   dynamicArea.addEventListener("change", updatePreview);
   if (intentOptions.length === 0) {
-    wizardWrap.appendChild(h("div", HELP_CSS + "margin-top:8px;", "Auf diesem Server ist weder ffmpeg noch ffprobe freigegeben — der Assistent braucht mindestens eines von beiden."));
+    wizardWrap.appendChild(h("div", HELP_CSS + "margin-top:8px;", tt("psc.3ce979")));
   } else {
-    wizardWrap.append(field("Aufgabe", intentSel), intentHelp, dynamicArea, previewLabel, preview);
+    wizardWrap.append(field(tt("psc.8c5713"), intentSel), intentHelp, dynamicArea, previewLabel, preview);
     renderIntent();
   }
 
@@ -2035,7 +2036,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
   const syncMode = () => {
     wizardWrap.style.display = mode === "wizard" ? "block" : "none";
     advancedWrap.style.display = mode === "advanced" ? "block" : "none";
-    modeToggle.textContent = mode === "wizard" ? "Stattdessen rohe Argumente eingeben (Experten-Modus)" : "Stattdessen den Assistenten verwenden";
+    modeToggle.textContent = mode === "wizard" ? tt("psc.443b5b") : tt("psc.df82e3");
   };
   modeToggle.addEventListener("click", () => {
     mode = mode === "wizard" ? "advanced" : "wizard";
@@ -2045,21 +2046,21 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
   syncMode();
 
   const timeout = durationInput(typeof cfg.timeoutSeconds === "number" ? cfg.timeoutSeconds : undefined);
-  el.append(wizardWrap, advancedWrap, modeToggle, field("Zeitlimit", timeout.el, "Leer = 5 Minuten."));
+  el.append(wizardWrap, advancedWrap, modeToggle, field(tt("psc.31b5c0"), timeout.el, tt("psc.733355")));
 
   return {
     el,
     read: () => {
       const t = timeout.read();
-      if (t === null) return { ok: false, error: "Zeitlimit: keine gültige Zahl." };
+      if (t === null) return { ok: false, error: tt("psc.de6fc7") };
       if (mode === "advanced") {
-        if (!cmd.value) return { ok: false, error: "Werkzeug fehlt." };
+        if (!cmd.value) return { ok: false, error: tt("psc.305b37") };
         const out = { ...cfg, command: cmd.value };
         setOrDelete(out, "args", argInputs.map((i) => i.value).filter((v) => v !== ""));
         setOrDelete(out, "timeoutSeconds", t);
         return { ok: true, config: out };
       }
-      if (!activeForm) return { ok: false, error: "Aufgabe wählen." };
+      if (!activeForm) return { ok: false, error: tt("psc.05b4e5") };
       const r = activeForm.read();
       if (!r.ok) return { ok: false, error: r.error };
       const out = { ...cfg, command: r.command, args: r.args };
@@ -2083,7 +2084,7 @@ interface MethodSpec {
 function buildMediaFunction(cfg: Record<string, unknown>): FormPart {
   const el = h("div", "");
   const inst = select([{ value: "", label: "lade laufende Microservices …" }], "", "instanceId");
-  const meth = select([{ value: "", label: "– zuerst Microservice wählen –" }], "", "method");
+  const meth = select([{ value: "", label: tt("psc.d8e721") }], "", "method");
   const argsBox = h("div", "");
   const argsIn: Record<string, { input: HTMLInputElement | HTMLSelectElement; type: string }> = {};
   const origArgs = (cfg.args && typeof cfg.args === "object" && !Array.isArray(cfg.args)) ? cfg.args as Record<string, unknown> : {};
@@ -2096,7 +2097,7 @@ function buildMediaFunction(cfg: Record<string, unknown>): FormPart {
     const m = methods.find((x) => x.name === meth.value);
     if (!m) return;
     if (m.args.length === 0) {
-      argsBox.appendChild(h("div", HELP_CSS + "margin-top:8px;", "Diese Funktion braucht keine Angaben."));
+      argsBox.appendChild(h("div", HELP_CSS + "margin-top:8px;", tt("psc.1b1539")));
       return;
     }
     for (const a of m.args) {
@@ -2105,11 +2106,11 @@ function buildMediaFunction(cfg: Record<string, unknown>): FormPart {
       if (a.type === "boolean") {
         input = select([{ value: "true", label: "ja" }, { value: "false", label: "nein" }], prev === false ? "false" : "true");
       } else {
-        input = textInput(prev === undefined ? "" : String(prev), a.type === "number" ? "Zahl" : "Text");
+        input = textInput(prev === undefined ? "" : String(prev), a.type === "number" ? tt("psc.e9716b") : tt("psc.9dffbf"));
       }
       input.name = `arg-${a.name}`;
       argsIn[a.name] = { input, type: a.type };
-      argsBox.appendChild(field(a.name, input, `Typ: ${a.type}`));
+      argsBox.appendChild(field(a.name, input, tt("psc.074e19", { p0: a.type })));
     }
   };
 
@@ -2118,8 +2119,8 @@ function buildMediaFunction(cfg: Record<string, unknown>): FormPart {
     meth.replaceChildren();
     const node = nodes.find((n) => n.instance_id === inst.value);
     if (!node) {
-      meth.appendChild(new Option("– zuerst Microservice wählen –", ""));
-      if (cfg.method) meth.appendChild(new Option(`${cfg.method} (Microservice läuft gerade nicht)`, String(cfg.method)));
+      meth.appendChild(new Option(tt("psc.d8e721"), ""));
+      if (cfg.method) meth.appendChild(new Option(tt("psc.5d2bfb", { p0: cfg.method }), String(cfg.method)));
       meth.value = String(cfg.method ?? "");
       renderArgs();
       return;
@@ -2130,9 +2131,9 @@ function buildMediaFunction(cfg: Record<string, unknown>): FormPart {
     } catch {
       // s. u.
     }
-    meth.appendChild(new Option(methods.length ? "– Funktion wählen –" : "dieser Microservice bietet keine Funktionen an", ""));
+    meth.appendChild(new Option(methods.length ? tt("psc.5eea30") : tt("psc.6bf2f0"), ""));
     for (const m of methods) meth.appendChild(new Option(m.name, m.name));
-    if (cfg.method && !methods.some((m) => m.name === cfg.method)) meth.appendChild(new Option(`${cfg.method} (nicht mehr angeboten)`, String(cfg.method)));
+    if (cfg.method && !methods.some((m) => m.name === cfg.method)) meth.appendChild(new Option(tt("psc.edb0ba", { p0: cfg.method }), String(cfg.method)));
     meth.value = String(cfg.method ?? "");
     renderArgs();
   };
@@ -2144,10 +2145,10 @@ function buildMediaFunction(cfg: Record<string, unknown>): FormPart {
     } catch {
       nodes = [];
     }
-    inst.replaceChildren(new Option(nodes.length ? "– Microservice wählen –" : "keine laufenden Microservices gefunden", ""));
-    for (const n of nodes) inst.appendChild(new Option(`${n.label || n.instance_id}${n.online ? "" : " (offline)"}`, n.instance_id!));
+    inst.replaceChildren(new Option(nodes.length ? tt("psc.4bc1ca") : tt("psc.882bf5"), ""));
+    for (const n of nodes) inst.appendChild(new Option(`${n.label || n.instance_id}${n.online ? "" : tt("psc.e54b72")}`, n.instance_id!));
     if (cfg.instanceId && !nodes.some((n) => n.instance_id === cfg.instanceId)) {
-      inst.appendChild(new Option(`${cfg.instanceId} (läuft gerade nicht)`, String(cfg.instanceId)));
+      inst.appendChild(new Option(tt("psc.bd2472", { p0: cfg.instanceId }), String(cfg.instanceId)));
     }
     inst.value = String(cfg.instanceId ?? "");
     await loadMethods();
@@ -2156,14 +2157,14 @@ function buildMediaFunction(cfg: Record<string, unknown>): FormPart {
   meth.addEventListener("change", renderArgs);
 
   el.append(
-    field("Microservice", inst, "Nur laufende Instanzen werden angeboten. Der Prozess ruft genau diese Instanz auf.", true),
-    field("Funktion", meth, undefined, true),
+    field(tt("psc.b1a5f2"), inst, tt("psc.cf6708"), true),
+    field(tt("psc.b104f8"), meth, undefined, true),
     argsBox,
   );
   return {
     el,
     read: () => {
-      if (!inst.value || !meth.value) return { ok: false, error: "Microservice und Funktion wählen." };
+      if (!inst.value || !meth.value) return { ok: false, error: tt("psc.ce7b6e") };
       const out = { ...cfg, instanceId: inst.value, method: meth.value };
       const args: Record<string, unknown> = {};
       for (const [k, { input, type }] of Object.entries(argsIn)) {
@@ -2171,7 +2172,7 @@ function buildMediaFunction(cfg: Record<string, unknown>): FormPart {
         if (v === "") continue;
         if (type === "number") {
           const n = Number(v.replace(",", "."));
-          if (!Number.isFinite(n)) return { ok: false, error: `${k}: keine gültige Zahl.` };
+          if (!Number.isFinite(n)) return { ok: false, error: tt("psc.bb7773", { p0: k }) };
           args[k] = n;
         } else if (type === "boolean") args[k] = v === "true";
         else args[k] = v;
@@ -2187,23 +2188,23 @@ function buildMediaFunction(cfg: Record<string, unknown>): FormPart {
 function buildSubworkflow(cfg: Record<string, unknown>): FormPart {
   const el = h("div", "");
   const defSel = select([{ value: "", label: "lade Prozesse …" }], "", "processDefinitionId");
-  const verSel = select([{ value: "", label: "immer die neueste veröffentlichte Version" }], "", "processVersionId");
+  const verSel = select([{ value: "", label: tt("psc.249a28") }], "", "processVersionId");
   const inputPairs = flatStringObject(cfg.input);
-  const inputKv = inputPairs !== null ? keyValueEditor(inputPairs, { keyPlaceholder: "Feld", valuePlaceholder: "Wert (Text)", name: "subinput" }) : null;
+  const inputKv = inputPairs !== null ? keyValueEditor(inputPairs, { keyPlaceholder: tt("psc.144d62"), valuePlaceholder: tt("psc.7b71ec"), name: "subinput" }) : null;
   const loadVersions = async () => {
-    verSel.replaceChildren(new Option("immer die neueste veröffentlichte Version", ""));
+    verSel.replaceChildren(new Option(tt("psc.249a28"), ""));
     if (!defSel.value) return;
     try {
       const res = await apiFetch(`/api/v1/process-definitions/${defSel.value}/versions`);
       const versions = res.ok ? ((await res.json()) as { id: string; versionNumber: number; status: string }[]) : [];
       for (const v of versions.filter((v) => v.status === "published").sort((a, b) => b.versionNumber - a.versionNumber)) {
-        verSel.appendChild(new Option(`genau v${v.versionNumber}`, v.id));
+        verSel.appendChild(new Option(tt("psc.4b6924", { p0: v.versionNumber }), v.id));
       }
     } catch {
       // nur "neueste" anbieten
     }
     if (cfg.processVersionId && ![...verSel.options].some((o) => o.value === cfg.processVersionId)) {
-      verSel.appendChild(new Option("festgelegte Version (nicht mehr veröffentlicht)", String(cfg.processVersionId)));
+      verSel.appendChild(new Option(tt("psc.4d0aaf"), String(cfg.processVersionId)));
     }
     verSel.value = defSel.value === cfg.processDefinitionId ? String(cfg.processVersionId ?? "") : "";
   };
@@ -2215,19 +2216,19 @@ function buildSubworkflow(cfg: Record<string, unknown>): FormPart {
     } catch {
       // leer
     }
-    defSel.replaceChildren(new Option("– Prozess wählen –", ""));
+    defSel.replaceChildren(new Option(tt("psc.729570"), ""));
     for (const d of defs) defSel.appendChild(new Option(d.name, d.id));
     defSel.value = String(cfg.processDefinitionId ?? "");
     await loadVersions();
   })();
   defSel.addEventListener("change", () => void loadVersions());
-  el.append(field("Prozess", defSel, "Läuft als eigener Prozesslauf; dieser Schritt wartet, bis er fertig ist.", true), field("Version", verSel));
-  if (inputKv) el.appendChild(field("Start-Eingabe für den Unterprozess", inputKv.el));
-  else el.appendChild(h("div", HELP_CSS + "margin-top:8px;", "Die Start-Eingabe ist verschachtelt — bearbeitbar unter „Erweitert (JSON)“."));
+  el.append(field(tt("psc.d6e26f"), defSel, tt("psc.5d56b7"), true), field(tt("psc.34b6cd"), verSel));
+  if (inputKv) el.appendChild(field(tt("psc.96b30c"), inputKv.el));
+  else el.appendChild(h("div", HELP_CSS + "margin-top:8px;", tt("psc.be6e5d")));
   return {
     el,
     read: () => {
-      if (!defSel.value) return { ok: false, error: "Prozess wählen." };
+      if (!defSel.value) return { ok: false, error: tt("psc.78f7d8") };
       const out = { ...cfg, processDefinitionId: defSel.value };
       setOrDelete(out, "processVersionId", verSel.value);
       if (inputKv) setOrDelete(out, "input", pairsToObject(inputKv.read()));
@@ -2238,16 +2239,16 @@ function buildSubworkflow(cfg: Record<string, unknown>): FormPart {
 
 function buildNotification(cfg: Record<string, unknown>): FormPart {
   const el = h("div", "");
-  const subject = textInput(String(cfg.subject ?? ""), "z. B. omp.process.beitrag.fertig", "subject");
+  const subject = textInput(String(cfg.subject ?? ""), tt("psc.980d97"), "subject");
   const payloadPairs = flatStringObject(cfg.payload);
-  const kv = payloadPairs !== null ? keyValueEditor(payloadPairs, { keyPlaceholder: "Feld", valuePlaceholder: "Wert (Text)", name: "payload" }) : null;
-  el.append(field("Kanal (Subject)", subject, "Name, unter dem andere Systeme diese Nachricht abonnieren. Punkte trennen Ebenen.", true));
-  if (kv) el.appendChild(field("Inhalt", kv.el));
-  else el.appendChild(h("div", HELP_CSS + "margin-top:8px;", "Der Inhalt ist verschachtelt — bearbeitbar unter „Erweitert (JSON)“."));
+  const kv = payloadPairs !== null ? keyValueEditor(payloadPairs, { keyPlaceholder: tt("psc.144d62"), valuePlaceholder: tt("psc.7b71ec"), name: "payload" }) : null;
+  el.append(field(tt("psc.3a9d26"), subject, tt("psc.da13c4"), true));
+  if (kv) el.appendChild(field(tt("psc.c2df59"), kv.el));
+  else el.appendChild(h("div", HELP_CSS + "margin-top:8px;", tt("psc.16e638")));
   return {
     el,
     read: () => {
-      if (!subject.value.trim()) return { ok: false, error: "Kanal (Subject) fehlt." };
+      if (!subject.value.trim()) return { ok: false, error: tt("psc.8b8a99") };
       const out = { ...cfg, subject: subject.value.trim() };
       if (kv) setOrDelete(out, "payload", pairsToObject(kv.read()));
       return { ok: true, config: out };
@@ -2286,11 +2287,11 @@ function buildForm(step: DraftStep, ctx: StepConfigContext, vars: VariableOption
     case "notification":
       return buildNotification(cfg);
     case "parallel":
-      return buildInfoOnly("Keine Einstellungen nötig — verbinde diesen Schritt mit allen Schritten, die gleichzeitig laufen sollen.", cfg);
+      return buildInfoOnly(tt("psc.1a58bf"), cfg);
     case "join":
-      return buildInfoOnly("Keine Einstellungen nötig — der Ablauf geht weiter, sobald ALLE eingehenden Wege angekommen sind.", cfg);
+      return buildInfoOnly(tt("psc.3ee9be"), cfg);
     default:
-      return buildInfoOnly("Für diesen Schritt-Typ gibt es kein Formular — Einstellungen ggf. unter „Erweitert (JSON)“.", cfg);
+      return buildInfoOnly(tt("psc.7cc481"), cfg);
   }
 }
 
@@ -2312,8 +2313,8 @@ export function openStepConfigModal(host: HTMLElement, ctx: StepConfigContext, o
   title.className = "omp-h1";
   modal.append(title, h("div", HELP_CSS, info?.help ?? ""));
 
-  const nameInput = textInput(step.name ?? "", "z. B. Proxy erzeugen", "name");
-  modal.appendChild(field("Anzeigename", nameInput, "Erscheint auf der Kachel und im Variablen-Picker nachfolgender Schritte."));
+  const nameInput = textInput(step.name ?? "", tt("psc.441f14"), "name");
+  modal.appendChild(field(tt("psc.2eb6eb"), nameInput, tt("psc.f0ab2e")));
 
   const form = buildForm(step, ctx, vars);
   const formWrap = h("div", "");
@@ -2321,7 +2322,7 @@ export function openStepConfigModal(host: HTMLElement, ctx: StepConfigContext, o
   modal.appendChild(formWrap);
 
   // Fehlerbehandlung: Wiederholen / Zeitlimit / Kompensation.
-  const errSec = section("Wenn etwas schiefgeht");
+  const errSec = section(tt("psc.69794d"));
   const retryOn = h("input");
   retryOn.type = "checkbox";
   retryOn.name = "retry-enabled";
@@ -2337,33 +2338,33 @@ export function openStepConfigModal(host: HTMLElement, ctx: StepConfigContext, o
   growing.type = "checkbox";
   growing.checked = step.retry?.backoff === "exponential";
   const growLabel = h("label", "display:flex;align-items:center;gap:4px;margin-top:8px;");
-  growLabel.append(growing, document.createTextNode("Abstand jedes Mal verdoppeln"));
-  retryBox.append(field("Versuche insgesamt", attempts), field("Pause zwischen Versuchen", delay.el), growLabel);
+  growLabel.append(growing, document.createTextNode(tt("psc.d6ea9c")));
+  retryBox.append(field(tt("psc.cb3186"), attempts), field(tt("psc.877b38"), delay.el), growLabel);
   const retryLabel = h("label", "display:flex;align-items:center;gap:4px;margin-top:6px;");
-  retryLabel.append(retryOn, document.createTextNode("Bei Fehler automatisch wiederholen"));
+  retryLabel.append(retryOn, document.createTextNode(tt("psc.f39ab3")));
   const syncRetry = () => (retryBox.style.display = retryOn.checked ? "grid" : "none");
   retryOn.addEventListener("change", syncRetry);
   syncRetry();
 
   const timeout = durationInput(step.timeoutSeconds, "timeout");
   const comp = select(
-    [{ value: "", label: "– nichts rückgängig machen –" }, ...ctx.def.steps.filter((s) => s.id !== step.id).map((s) => ({ value: s.id, label: s.name || s.id }))],
+    [{ value: "", label: tt("psc.7abaf8") }, ...ctx.def.steps.filter((s) => s.id !== step.id).map((s) => ({ value: s.id, label: s.name || s.id }))],
     step.compensationStepId ?? "",
     "compensation",
   );
   errSec.append(
     retryLabel,
     retryBox,
-    field("Maximale Laufzeit dieses Schritts", timeout.el, "Leer = unbegrenzt. Bei Überschreitung gilt der Schritt als fehlgeschlagen."),
-    field("Rückgängig machen mit", comp, "Schlägt der Prozess später fehl, läuft dieser Schritt, um die Wirkung hier aufzuheben (z. B. Datei wieder löschen)."),
+    field(tt("psc.c288c7"), timeout.el, tt("psc.faa307")),
+    field(tt("psc.d8dc39"), comp, tt("psc.a92403")),
   );
   modal.appendChild(errSec);
 
   // Erweitert (JSON) — bewusst am Ende und zugeklappt.
   const adv = h("details", "margin-top:14px;");
-  const advSum = h("summary", "cursor:pointer;" + HELP_CSS, "Erweitert: Einstellungen als JSON");
+  const advSum = h("summary", "cursor:pointer;" + HELP_CSS, tt("psc.9b0008"));
   adv.appendChild(advSum);
-  const advNote = h("div", HELP_CSS + "margin:4px 0;", "Solange dieser Bereich geöffnet ist, gilt das JSON unten statt des Formulars.");
+  const advNote = h("div", HELP_CSS + "margin:4px 0;", tt("psc.3404a3"));
   const advArea = h("textarea", "width:100%;box-sizing:border-box;font-family:ui-monospace,monospace;font-size:var(--omp-font-size-xs);resize:vertical;");
   advArea.rows = 8;
   advArea.name = "advanced-json";
@@ -2390,9 +2391,9 @@ export function openStepConfigModal(host: HTMLElement, ctx: StepConfigContext, o
     "display:flex;justify-content:flex-end;gap:8px;margin-top:14px;position:sticky;bottom:calc(-1 * var(--omp-space-4, 16px));" +
       "background:var(--omp-surface);padding:8px 0;border-top:1px solid var(--omp-border);",
   );
-  const cancel = h("button", "", "Abbrechen");
+  const cancel = h("button", "", tt("psc.4b9727"));
   cancel.addEventListener("click", () => overlay.remove());
-  const save = h("button", "", "Übernehmen");
+  const save = h("button", "", tt("psc.bf8310"));
   save.className = "omp-btn-primary";
   save.setAttribute("data-role", "step-config-apply");
   save.addEventListener("click", () => {
@@ -2402,7 +2403,7 @@ export function openStepConfigModal(host: HTMLElement, ctx: StepConfigContext, o
         try {
           config = JSON.parse(advArea.value);
         } catch (err) {
-          showToast(`Ungültiges JSON: ${err instanceof Error ? err.message : String(err)}`, { variant: "error" });
+          showToast(tt("psc.291226", { p0: err instanceof Error ? err.message : String(err) }), { variant: "error" });
           return;
         }
       }
@@ -2419,11 +2420,11 @@ export function openStepConfigModal(host: HTMLElement, ctx: StepConfigContext, o
       const n = Number(attempts.value);
       const d = delay.read();
       if (!Number.isInteger(n) || n < 2) {
-        showToast("Versuche insgesamt: mindestens 2.", { variant: "error" });
+        showToast(tt("psc.51e448"), { variant: "error" });
         return;
       }
       if (d === null) {
-        showToast("Pause zwischen Versuchen: keine gültige Zahl.", { variant: "error" });
+        showToast(tt("psc.d0fee9"), { variant: "error" });
         return;
       }
       retry = { ...(step.retry ?? {}), maxAttempts: n, backoff: growing.checked ? "exponential" : "fixed" } as RetryPolicy;
@@ -2432,7 +2433,7 @@ export function openStepConfigModal(host: HTMLElement, ctx: StepConfigContext, o
     }
     const t = timeout.read();
     if (t === null) {
-      showToast("Maximale Laufzeit: keine gültige Zahl.", { variant: "error" });
+      showToast(tt("psc.3328a4"), { variant: "error" });
       return;
     }
     onApply({
