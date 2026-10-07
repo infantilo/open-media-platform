@@ -1539,6 +1539,13 @@ fn write_audio_loop(
             continue;
         };
 
+        if std::env::var("OMP_MXL_DEBUG").is_ok() {
+            let n = (bytes_per_channel / 4) as u64;
+            let jump = last_written.map(|l| this_index as i64 - (l + batch_size) as i64);
+            if n != batch_size || jump.is_some_and(|j| j != 0) {
+                eprintln!("MXLDBG audio batch n={n} (soll {batch_size}) index-Sprung={jump:?} pts={:?}", buffer.pts());
+            }
+        }
         match samples_writer.open_samples(this_index, batch_size as usize) {
             Ok(mut access) => {
                 for channel in 0..access.channels().min(channels) {

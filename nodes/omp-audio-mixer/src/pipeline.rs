@@ -367,6 +367,15 @@ fn buffer_tai(pad: &gst::Pad, pts: Option<gst::ClockTime>) -> Option<u64> {
     omp_mediaio::timebase::running_to_tai(running.nseconds(), base.nseconds(), clock.time().nseconds(), omp_mediaio::timebase::tai_now_ns())
 }
 
+/// Zusätzliche Wartezeit der Live-`audiomixer` auf verspätete Eingangspuffer (ns). Ohne sie füllt der
+/// Aggregator einen zu spät eintreffenden Block mit Stille und verwirft ihn danach — hörbare Aussetzer
+/// (Kap. 31, Messung 2026-10-07: ohne 0–4 Lücken je 90 s, mit 40 ms keine). Die Zeitstempel (und damit
+/// der MXL-Index) bleiben unverändert, nur die Auslieferung verzögert sich. `OMP_AUDIO_MIX_LATENCY_MS`
+/// überschreibt den Standard (40 ms).
+fn mixer_latency_ns() -> u64 {
+    std::env::var("OMP_AUDIO_MIX_LATENCY_MS").ok().and_then(|v| v.parse::<f64>().ok()).map_or(40_000_000, |ms| (ms * 1e6) as u64)
+}
+
 fn add_channel_branch(
     active: &mut ActivePipeline,
     context: &Arc<MxlContext>,
@@ -1012,6 +1021,7 @@ fn build(context: &Arc<MxlContext>, config: &Config, shared: &SharedMap) -> Resu
 
     let mixer = gst::ElementFactory::make("audiomixer")
         .name("mixer")
+        .property("latency", mixer_latency_ns())
         .build()
         .map_err(|e| format!("audiomixer: {e}"))?;
     // Master-Limiter (Kompressor-Kern aus `dsp.rs`, Pad-Probe) — startet
