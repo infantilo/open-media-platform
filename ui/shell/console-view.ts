@@ -6,6 +6,7 @@
 //
 // Bei genau einem Eintrag wird direkt dessen Bundle gezeigt; bei mehreren
 // eine schmale Tab-Leiste nur dieser Einträge (§14: "nie ein Graph").
+import { t } from "./i18n.ts";
 import "./upcoming.ts";
 import { mountUIBundle } from "./ui-bundle.ts";
 import { pickActiveEntry } from "./console-logic.ts";
@@ -78,7 +79,7 @@ export class ConsoleView extends HTMLElement {
       this.#panel.replaceChildren();
       const p = document.createElement("p");
       p.className = "omp-empty";
-      p.textContent = "Keine Konsole für diesen Nutzer zugewiesen.";
+      p.textContent = t("console.none");
       this.#panel.append(p, document.createElement("omp-upcoming-start"));
       return;
     }
@@ -124,7 +125,7 @@ export class ConsoleView extends HTMLElement {
     // sichtbar, dass gerade übernommen wird, statt kommentarlos zu
     // flackern.
     const loading = document.createElement("p");
-    loading.textContent = "Lädt …";
+    loading.textContent = t("console.loading");
     loading.style.cssText = "color:var(--omp-text-dim);";
     this.#panel.appendChild(loading);
 
@@ -160,7 +161,7 @@ export class ConsoleView extends HTMLElement {
       bundleContainer.replaceChildren();
       const p = document.createElement("p");
       p.style.cssText = "color:var(--omp-error);";
-      p.textContent = `UI-Bundle für "${entry.nodeLabel}" konnte nicht geladen werden.`;
+      p.textContent = t("console.bundleFailed", { node: entry.nodeLabel });
       bundleContainer.appendChild(p);
     }
   }

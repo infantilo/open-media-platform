@@ -16,6 +16,7 @@
 // Regieplatzes (festes Gerät/Browser), gleiches Muster wie die bereits
 // bestehende, lokal gespeicherte Parameter-Panel-Breite in
 // ui/graph/flow-canvas.ts.
+import { t } from "./i18n.ts";
 import "./upcoming.ts";
 import { mountUIBundle } from "./ui-bundle.ts";
 import type { ConsoleEntry } from "./console-view.ts";
@@ -82,7 +83,7 @@ export class ConsoleBoard extends HTMLElement {
 
     this.#emptyMessage = document.createElement("p");
     this.#emptyMessage.className = "omp-empty";
-    this.#emptyMessage.textContent = "Keine Konsole für diesen Nutzer zugewiesen.";
+    this.#emptyMessage.textContent = t("console.none");
     this.#emptyMessage.style.cssText = "padding:12px;display:none;";
     this.appendChild(this.#emptyMessage);
     // Countdown bis zum nächsten für den Nutzer geplanten Workflow-Start; blendet sich selbst aus.
@@ -92,8 +93,8 @@ export class ConsoleBoard extends HTMLElement {
     toolbar.style.cssText = "position:sticky;top:0;display:flex;justify-content:flex-end;padding:6px 6px 0 6px;z-index:1000000;pointer-events:none;";
     const arrangeBtn = document.createElement("button");
     arrangeBtn.type = "button";
-    arrangeBtn.textContent = "⊞ Alle anordnen";
-    arrangeBtn.title = "Alle Kacheln in einem Raster neu anordnen und ausklappen";
+    arrangeBtn.textContent = t("board.arrangeAll");
+    arrangeBtn.title = t("board.arrangeAllTitle");
     arrangeBtn.style.cssText =
       "pointer-events:auto;padding:4px 10px;border:1px solid var(--omp-border);border-radius:var(--omp-radius);" +
       "background:var(--omp-surface-raised);color:var(--omp-text);cursor:pointer;font-size:var(--omp-font-size-sm);box-shadow:0 1px 4px rgba(0,0,0,0.4);";
@@ -184,7 +185,7 @@ export class ConsoleBoard extends HTMLElement {
     this.#applyLayout(wrapper, this.#layouts[entry.nodeRoleId]);
 
     const header = document.createElement("div");
-    header.title = "Ziehen zum Verschieben";
+    header.title = t("board.dragMove");
     header.style.cssText =
       "cursor:move;padding:6px 10px;background:var(--omp-surface-raised);border-bottom:1px solid var(--omp-border);" +
       "display:flex;align-items:baseline;gap:6px;user-select:none;flex-shrink:0;" +
@@ -201,7 +202,7 @@ export class ConsoleBoard extends HTMLElement {
     if (entry.hostLabel) {
       const hostBadge = document.createElement("span");
       hostBadge.textContent = entry.hostLabel;
-      hostBadge.title = `Host: ${entry.hostLabel}`;
+      hostBadge.title = t("board.hostTitle", { host: entry.hostLabel });
       hostBadge.style.cssText =
         "font-size:10px;font-weight:normal;color:var(--omp-text-dim);background:var(--omp-surface);padding:1px 6px;" +
         "border-radius:8px;overflow:hidden;text-overflow:ellipsis;";
@@ -235,7 +236,7 @@ export class ConsoleBoard extends HTMLElement {
       "flex:1;min-height:0;overflow:auto;padding:8px;color:var(--omp-text);display:flex;flex-direction:column;gap:8px;";
 
     const resizeHandle = document.createElement("div");
-    resizeHandle.title = "Ziehen zum Skalieren";
+    resizeHandle.title = t("board.dragResize");
     resizeHandle.textContent = "◢";
     resizeHandle.style.cssText =
       "position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;" +
@@ -275,7 +276,7 @@ export class ConsoleBoard extends HTMLElement {
 
     content.replaceChildren();
     const loading = document.createElement("p");
-    loading.textContent = "Lädt …";
+    loading.textContent = t("console.loading");
     loading.style.cssText = "color:var(--omp-text-dim);margin:0;";
     content.appendChild(loading);
 
@@ -311,7 +312,7 @@ export class ConsoleBoard extends HTMLElement {
     if (!mounted) {
       bundleContainer.replaceChildren();
       const p = document.createElement("p");
-      p.textContent = `UI-Bundle für "${entry.nodeLabel}" konnte nicht geladen werden.`;
+      p.textContent = t("console.bundleFailed", { node: entry.nodeLabel });
       p.style.cssText = "margin:0;color:var(--omp-error);";
       bundleContainer.appendChild(p);
     }
@@ -344,9 +345,9 @@ export class ConsoleBoard extends HTMLElement {
     const layout = this.#layouts[roleId];
     if (!tile || !layout) return;
     tile.minimizeBtn.textContent = layout.minimized ? "▢" : "–";
-    tile.minimizeBtn.title = layout.minimized ? "Wiederherstellen" : "Minimieren";
+    tile.minimizeBtn.title = layout.minimized ? t("board.restore") : t("board.minimize");
     tile.maximizeBtn.textContent = tile.maximized ? "❐" : "▭";
-    tile.maximizeBtn.title = tile.maximized ? "Wiederherstellen" : "Maximieren";
+    tile.maximizeBtn.title = tile.maximized ? t("board.restore") : t("board.maximize");
     tile.maximizeBtn.disabled = !!layout.minimized;
     tile.maximizeBtn.style.opacity = layout.minimized ? "0.4" : "1";
     tile.content.style.display = layout.minimized ? "none" : "flex";

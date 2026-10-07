@@ -1,3 +1,4 @@
+import { t } from "./i18n.ts";
 // Reine Logik des Operator-Countdowns (ohne DOM, testbar).
 
 export interface UpcomingStart {
@@ -14,7 +15,7 @@ export function formatCountdown(ms: number): string {
   const m = Math.floor((total % 3600) / 60);
   const s = total % 60;
   const p = (n: number) => String(n).padStart(2, "0");
-  if (d > 0) return `${d} T ${p(h)}:${p(m)}:${p(s)}`;
+  if (d > 0) return `${d} ${t("up.dayShort")} ${p(h)}:${p(m)}:${p(s)}`;
   if (h > 0) return `${h}:${p(m)}:${p(s)}`;
   return `${p(m)}:${p(s)}`;
 }

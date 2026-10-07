@@ -2,6 +2,7 @@
 // Konsole bedienen können. Datenquelle: GET /api/v1/me/upcoming (nur Workflows,
 // die der Nutzer bedienen darf, frühester Start zuerst).
 
+import { dateLocale, t } from "./i18n.ts";
 import { apiFetch } from "./connection.ts";
 import { formatCountdown, pickNext, type UpcomingStart } from "./upcoming-logic.ts";
 
@@ -47,14 +48,14 @@ class UpcomingStartElement extends HTMLElement {
     this.replaceChildren();
     const name = document.createElement("div");
     name.style.cssText = "color:var(--omp-text-dim);";
-    name.textContent = remaining > 0 ? `Nächster Workflow: ${next.workflowName}` : `Workflow startet: ${next.workflowName}`;
+    name.textContent = t(remaining > 0 ? "up.next" : "up.starting", { name: next.workflowName });
     const clock = document.createElement("div");
     clock.className = "omp-countdown";
     clock.style.cssText = "font-size:28px;font-weight:600;font-variant-numeric:tabular-nums;margin:4px 0;";
-    clock.textContent = remaining > 0 ? formatCountdown(remaining) : "startet jetzt …";
+    clock.textContent = remaining > 0 ? formatCountdown(remaining) : t("up.now");
     const when = document.createElement("div");
     when.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);";
-    when.textContent = `geplant ${at.toLocaleString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })} Uhr`;
+    when.textContent = t("up.planned", { when: at.toLocaleString(dateLocale(), { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) });
     this.append(name, clock, when);
     // Beim Start erscheint die Konsole über den bestehenden Refresh (SSE node.added / 30-s-Poll).
   }

@@ -30343,3 +30343,18 @@ Sichtbarkeit: Operator-Konsole, Node-UIs, dann Admin-Inhalte), Texte aus
 Server-Fehlermeldungen und Node-Deskriptoren, Node-`bundle.js` (brauchen die
 Sprache vom Orchestrator), Handbücher. Pro-Nutzer-Sprache serverseitig wäre
 eine spätere Erweiterung.
+
+**Nachtrag (2026-10-07, Teil 2): Mehrsprachigkeit — Operator-Konsole + erste Node-UIs.**
+Migriert: Anmeldung (inkl. Sprachwahl), Operator-Shell (`shell.ts`:
+Workflow-Auswahl, „Kein aktiver Workflow"), `console-view.ts`,
+`console-board.ts`, Countdown (`upcoming*.ts`, Datumsformat nach Sprache).
+Node-Bundles: sie laufen als ES-Modul in der Shell-Seite und lesen die
+Sprache aus `document.documentElement.lang` — kein Orchestrator-Eingriff
+nötig; je Bundle ein eigenes Mini-`T()` (keine Shell-Imports in Bundles).
+Umgestellt: omp-viewer, omp-switcher (live DE/EN geprüft; Bundles sind
+per `include_str!` eingebettet → Neubau + neue Instanz nötig). **Offen:**
+omp-video-mixer-me (1800 Z.), omp-playout-automation (1400), omp-scope
+(Texte dienen z. T. als Schlüssel; Urteile wie „innerhalb …" kommen
+deutsch aus Rust), audio-monitor, mxf-player(-direct), multiviewer(-custom),
+ograf, media-library, webrtc-gateway, Audio-Mischer, kit-Komponenten
+(`omp-confirm`, `omp-toast`, `omp-source-selector`), übrige Shell-Views.

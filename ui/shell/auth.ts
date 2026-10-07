@@ -89,11 +89,10 @@ export function showLoginOverlay(root: HTMLElement, onSuccess: () => void) {
   brand.innerHTML =
     '<div class="omp-login-eyebrow">Open Media Platform</div>' +
     '<h1 class="omp-login-headline">Open <span class="c">· Modular</span><br><span class="v">· Interoperable</span></h1>' +
-    '<p class="omp-login-lead">Eine offene Plattform für softwaredefinierte Medien- und ' +
-    "Broadcast-Infrastrukturen – entwickelt für Interoperabilität, Flexibilität und " +
-    "die Anforderungen von morgen.</p>" +
+    '<p class="omp-login-lead">' +
+    t("login.lead") + "</p>" +
     '<div class="omp-login-rule"></div>' +
-    '<div class="omp-login-tag">Standards. Technologie. Freiheit.</div>' +
+    '<div class="omp-login-tag">' + t("login.tag") + "</div>" +
     '<div class="omp-login-chips">' +
     ["SDI", "ST 2110", "AES67", "MXL", "NMOS", "BPMN"].map((c) => `<span class="omp-login-chip">${c}</span>`).join("") +
     "</div>";
@@ -105,30 +104,30 @@ export function showLoginOverlay(root: HTMLElement, onSuccess: () => void) {
   form.className = "omp-login-card";
 
   const title = document.createElement("h2");
-  title.textContent = "Anmelden";
+  title.textContent = t("login.title");
   const sub = document.createElement("p");
   sub.className = "omp-login-sub";
-  sub.textContent = "Zugang zur Control Plane";
+  sub.textContent = t("login.sub");
 
   const userInput = document.createElement("input");
-  userInput.placeholder = "Nutzername";
+  userInput.placeholder = t("login.user");
   userInput.autocomplete = "username";
   const userLabel = document.createElement("label");
-  userLabel.append("Nutzername", userInput);
+  userLabel.append(t("login.user"), userInput);
 
   const passInput = document.createElement("input");
   passInput.type = "password";
-  passInput.placeholder = "Passwort";
+  passInput.placeholder = t("login.password");
   passInput.autocomplete = "current-password";
   const passLabel = document.createElement("label");
-  passLabel.append("Passwort", passInput);
+  passLabel.append(t("login.password"), passInput);
 
   const error = document.createElement("div");
   error.className = "omp-login-error";
 
   const submit = document.createElement("button");
   submit.type = "submit";
-  submit.textContent = "Anmelden";
+  submit.textContent = t("login.title");
   submit.className = "omp-btn-primary";
 
   const foot = document.createElement("div");
@@ -142,7 +141,10 @@ export function showLoginOverlay(root: HTMLElement, onSuccess: () => void) {
     firmware.title = formatFirmwareLong(info);
   });
 
-  form.append(title, sub, userLabel, passLabel, error, submit, foot, firmware);
+  const langRow = document.createElement("div");
+  langRow.style.cssText = "display:flex;justify-content:flex-end;";
+  langRow.appendChild(buildLangSelect());
+  form.append(title, sub, userLabel, passLabel, error, submit, foot, firmware, langRow);
   panel.append(form);
   overlay.append(brand, panel);
   root.replaceChildren(overlay);
@@ -155,7 +157,7 @@ export function showLoginOverlay(root: HTMLElement, onSuccess: () => void) {
       await login(userInput.value.trim(), passInput.value);
       onSuccess();
     } catch {
-      error.textContent = "Anmeldung fehlgeschlagen.";
+      error.textContent = t("login.failed");
     } finally {
       submit.disabled = false;
     }

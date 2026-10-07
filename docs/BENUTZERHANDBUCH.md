@@ -33,10 +33,12 @@ abläuft.
 Oben rechts (neben der Verbindungsanzeige) und im Nutzer-Widget unten rechts
 wechselt die Auswahl **DE/EN** die Oberfläche; die Seite lädt dabei neu. Die
 Wahl gilt pro Browser, ohne Wahl richtet sich die Sprache nach dem Browser
-(Deutsch, sonst Englisch). **Stand:** Navigationsleiste, Nutzer-Widget,
-Administration (Reiter) und der Tab „Signalweg" sind zweisprachig; alle
-übrigen Ansichten, die Node-Oberflächen und dieses Handbuch sind noch
-deutsch und werden schrittweise umgestellt.
+(Deutsch, sonst Englisch). **Stand:** Anmeldung, Navigationsleiste, Nutzer-Widget, Operator-Konsole
+(Workflow-Auswahl, Kacheln, Countdown), Administration (Reiter), der Tab
+„Signalweg" sowie die Node-Oberflächen von Viewer und Switcher sind
+zweisprachig; alle übrigen Ansichten, die übrigen Node-Oberflächen
+(Video-Mischer, Playout-Automation, Audio-Mischer, Scope u. a.) und dieses
+Handbuch sind noch deutsch und werden schrittweise umgestellt.
 
 ## 2. Der Flow Editor
 

@@ -18,6 +18,7 @@
 // das `customElements.define(...)` in console-view.ts stillschweigend
 // entfernen (per Browser-Test gefunden: `view.setEntries is not a
 // function`, weil das Custom Element nie registriert wurde).
+import { t } from "./i18n.ts";
 import "./upcoming.ts";
 import "./console-view.ts";
 import type { ConsoleView, ConsoleEntry } from "./console-view.ts";
@@ -94,7 +95,7 @@ async function fetchHostLabelsByInstanceId(): Promise<Map<string, string>> {
     const hosts = (await hostsRes.json()) as HostEntry[] | null;
     const hostLabelById = new Map((hosts ?? []).map((h) => [h.id, h.label]));
     for (const inst of instances ?? []) {
-      byInstance.set(inst.id, inst.hostId ? hostLabelById.get(inst.hostId) ?? inst.hostId : "Lokal");
+      byInstance.set(inst.id, inst.hostId ? hostLabelById.get(inst.hostId) ?? inst.hostId : t("op.hostLocal"));
     }
   } catch {
     // Best effort — eine fehlgeschlagene Anreicherung lässt die Konsole
@@ -303,14 +304,12 @@ function renderNoActiveConsole(root: HTMLElement) {
     "width:100%;height:100%;background:#181818;color:#eee;font-family:sans-serif;gap:16px;box-sizing:border-box;padding:24px;text-align:center;";
 
   const heading = document.createElement("h1");
-  heading.textContent = "Kein aktiver Workflow";
+  heading.textContent = t("op.noWorkflow.title");
   heading.style.cssText = "font-size:20px;font-weight:600;margin:0;";
   container.appendChild(heading);
 
   const message = document.createElement("p");
-  message.textContent =
-    "Du hast Bedienrechte für mindestens eine Rolle, aber aktuell läuft kein Workflow, der dazu passt. " +
-    "Sobald ein zugewiesener Workflow gestartet wird, erscheint er hier.";
+  message.textContent = t("op.noWorkflow.text");
   message.style.cssText = "max-width:420px;color:#aaa;font-size:13px;margin:0;";
   container.appendChild(message);
 
@@ -329,7 +328,7 @@ function renderNoActiveConsole(root: HTMLElement) {
   }, 10_000);
 
   const reloadBtn = document.createElement("button");
-  reloadBtn.textContent = "Neu laden";
+  reloadBtn.textContent = t("op.reload");
   reloadBtn.style.cssText =
     "padding:8px 20px;border:1px solid #444;border-radius:4px;background:#232323;color:#eee;cursor:pointer;";
   reloadBtn.addEventListener("click", () => location.reload());
@@ -350,7 +349,7 @@ function renderWorkflowPicker(root: HTMLElement, consoles: ConsoleEntry[], workf
     "width:100%;height:100%;background:#181818;color:#eee;font-family:sans-serif;gap:20px;box-sizing:border-box;padding:24px;";
 
   const heading = document.createElement("h1");
-  heading.textContent = "Workflow wählen";
+  heading.textContent = t("op.pickWorkflow");
   heading.style.cssText = "font-size:20px;font-weight:600;margin:0;";
   container.appendChild(heading);
 
@@ -373,7 +372,7 @@ function renderWorkflowPicker(root: HTMLElement, consoles: ConsoleEntry[], workf
 
     const sub = document.createElement("div");
     sub.style.cssText = "font-size:12px;color:#999;";
-    sub.textContent = `${entriesForWorkflow.length} Rolle${entriesForWorkflow.length === 1 ? "" : "n"}`;
+    sub.textContent = entriesForWorkflow.length === 1 ? t("op.roles.one") : t("op.roles.many", { n: entriesForWorkflow.length });
 
     tile.append(title, sub);
     grid.appendChild(tile);

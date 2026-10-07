@@ -543,3 +543,14 @@ behaupten.
 - `tools/contract-check/` — Quelltext, falls du verstehen willst, was
   genau geprüft wird.
 - `docs/HANDBUCH.md` — Dev-Stack starten/stoppen/troubleshooten.
+
+
+## Mehrsprachige Node-Oberfläche (de/en)
+
+Ein `ui/bundle.js` läuft als ES-Modul in der Shell-Seite und liest die
+Sprache aus `document.documentElement.lang` (setzt die Shell; "en" oder
+sonst Deutsch). Muster: ein kleines `T(key, {param})` mit je einem
+Wörterbuch für `de` und `en` am Dateianfang (Vorbild:
+`nodes/omp-viewer/ui/bundle.js`), Fallback Deutsch. Texte, die der Node-
+Backend-Code liefert (z. B. Urteile aus Messwerten), sind davon nicht
+betroffen und bleiben, wie sie sind.

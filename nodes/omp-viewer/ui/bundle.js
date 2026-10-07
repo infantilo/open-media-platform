@@ -1,3 +1,32 @@
+// i18n (de/en): Sprache aus <html lang> (setzt die Shell, ui/shell/i18n.ts),
+// Fallback Deutsch. Eigenes Mini-t(), weil Node-Bundles keine Shell-Imports nutzen.
+const T = (() => {
+  const D = {
+    de: {
+      "loadingPreview": "lade Vorschau …",
+      "notConnected": "nicht verbunden",
+      "frameRate": "Bildrate",
+      "fps": "{fps} Bilder/s",
+      "audioInputs": "Audio-Eingänge",
+      "addAudioInput": "+ Audio-Eingang"
+  },
+    en: {
+      "loadingPreview": "loading preview …",
+      "notConnected": "not connected",
+      "frameRate": "Frame rate",
+      "fps": "{fps} fps",
+      "audioInputs": "Audio inputs",
+      "addAudioInput": "+ Audio input"
+  },
+  };
+  const lang = document.documentElement.lang === "en" ? "en" : "de";
+  return (k, p) => {
+    let s = (D[lang] && D[lang][k]) ?? D.de[k] ?? k;
+    if (p) for (const x in p) s = s.split("{" + x + "}").join(p[x]);
+    return s;
+  };
+})();
+
 // Node-UI-Bundle des Viewers (UMSETZUNG.md C6, ARCHITECTURE.md §4.5):
 // zeigt den MJPEG-Preview-Stream als <img>. Bis K4 (docs/END-GOAL-
 // FEATURES.md Kapitel 10 Entscheidungssitzung Punkt 5) zeigte die Quelle
@@ -116,7 +145,7 @@ class OmpViewerPanel extends HTMLElement {
     this._labelInterval = setInterval(refreshLabel, 2000);
 
     const status = document.createElement("p");
-    status.textContent = "lade Vorschau …";
+    status.textContent = T("loadingPreview");
 
     // Vorschau-Bildrate (Nutzerauftrag 2026-09-03: "die fps ...
     // einstellbar in der UI, damit man auch ruckelfrei das Video
@@ -128,14 +157,14 @@ class OmpViewerPanel extends HTMLElement {
     const fpsRow = document.createElement("div");
     fpsRow.className = "fps-control";
     const fpsLabel = document.createElement("label");
-    fpsLabel.textContent = "Bildrate";
+    fpsLabel.textContent = T("frameRate");
     fpsLabel.htmlFor = "fps-select";
     const fpsSelect = document.createElement("select");
     fpsSelect.id = "fps-select";
     for (const fps of [1, 2, 5, 10, 15, 25]) {
       const opt = document.createElement("option");
       opt.value = String(fps);
-      opt.textContent = `${fps} Bilder/s`;
+      opt.textContent = T("fps", { fps });
       fpsSelect.appendChild(opt);
     }
     fpsRow.append(fpsLabel, fpsSelect);
@@ -143,11 +172,11 @@ class OmpViewerPanel extends HTMLElement {
     const audioSection = document.createElement("div");
     audioSection.className = "audio-inputs";
     const audioTitle = document.createElement("h4");
-    audioTitle.textContent = "Audio-Eingänge";
+    audioTitle.textContent = T("audioInputs");
     const rowsContainer = document.createElement("div");
     const addBtn = document.createElement("button");
     addBtn.className = "add-btn";
-    addBtn.textContent = "+ Audio-Eingang";
+    addBtn.textContent = T("addAudioInput");
     audioSection.append(audioTitle, rowsContainer, addBtn);
 
     shadow.append(style, wrap, status, fpsRow, audioSection);
@@ -164,7 +193,7 @@ class OmpViewerPanel extends HTMLElement {
     });
     img.addEventListener("error", () => {
       img.style.display = "none";
-      status.textContent = "nicht verbunden";
+      status.textContent = T("notConnected");
       status.style.display = "";
     });
     // Einzelbild-Polling statt `multipart/x-mixed-replace` (2026-08-21

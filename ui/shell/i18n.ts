@@ -75,6 +75,11 @@ export function t(key: I18nKey, params?: Record<string, string | number>): strin
   return s;
 }
 
+/** Locale für Datums-/Zeitformatierung passend zur Sprache. */
+export function dateLocale(): string {
+  return current === "de" ? "de-DE" : "en-GB";
+}
+
 /** Kleine Sprachauswahl (DE/EN) für Appbar und Nutzer-Widget. */
 export function buildLangSelect(): HTMLSelectElement {
   const sel = document.createElement("select");

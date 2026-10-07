@@ -1,3 +1,36 @@
+// i18n (de/en): Sprache aus <html lang> (setzt die Shell, ui/shell/i18n.ts),
+// Fallback Deutsch. Eigenes Mini-t(), weil Node-Bundles keine Shell-Imports nutzen.
+const T = (() => {
+  const D = {
+    de: {
+      "thumbnails": "Vorschaubilder",
+      "sources": "Quellen",
+      "mismatch": "Abweichendes Format: {format} — Switcher: {own}",
+      "noPicture": "kein Bild",
+      "black": "Schwarz",
+      "ownWorkflow": "Dieser Workflow",
+      "otherSources": "Andere Quellen",
+      "noSources": "keine Quellen entdeckt"
+  },
+    en: {
+      "thumbnails": "Thumbnails",
+      "sources": "Sources",
+      "mismatch": "Different format: {format} — switcher: {own}",
+      "noPicture": "no picture",
+      "black": "Black",
+      "ownWorkflow": "This workflow",
+      "otherSources": "Other sources",
+      "noSources": "no sources discovered"
+  },
+  };
+  const lang = document.documentElement.lang === "en" ? "en" : "de";
+  return (k, p) => {
+    let s = (D[lang] && D[lang][k]) ?? D.de[k] ?? k;
+    if (p) for (const x in p) s = s.split("{" + x + "}").join(p[x]);
+    return s;
+  };
+})();
+
 // Node-UI-Bundle des Switchers (UMSETZUNG.md C7, ARCHITECTURE.md §4.5):
 // ein Button pro entdeckter Quelle (aus dem readonly "inputs"-Parameter)
 // plus ein Schwarzbild-Button, aktiver Button hervorgehoben. Nutzt
@@ -110,13 +143,13 @@ class OmpSwitcherPanel extends HTMLElement {
     toolbar.className = "toolbar";
     const toolbarLabel = document.createElement("span");
     toolbarLabel.className = "toolbar-label";
-    toolbarLabel.textContent = "Quellen";
+    toolbarLabel.textContent = T("sources");
     const thumbsToggle = document.createElement("label");
     thumbsToggle.className = "thumbs-toggle";
     const thumbsCheckbox = document.createElement("input");
     thumbsCheckbox.type = "checkbox";
     thumbsCheckbox.checked = thumbsEnabled;
-    thumbsToggle.append(thumbsCheckbox, document.createTextNode("Vorschaubilder"));
+    thumbsToggle.append(thumbsCheckbox, document.createTextNode(T("thumbnails")));
     thumbsCheckbox.addEventListener("change", () => {
       thumbsEnabled = thumbsCheckbox.checked;
       localStorage.setItem(THUMBS_KEY, thumbsEnabled ? "1" : "0");
@@ -224,7 +257,7 @@ class OmpSwitcherPanel extends HTMLElement {
     // Formatabweichung (Nutzerwunsch 2026-09-30): Warnsymbol + Tooltip.
     const shownLabel = (input) => (input.mismatch ? `⚠ ${input.label}` : input.label);
     const setMismatchTitle = (btn, input) => {
-      if (input.mismatch) btn.title = `Abweichendes Format: ${input.format || "?"} — Switcher: ${input.ownFormat || "?"}`;
+      if (input.mismatch) btn.title = T("mismatch", { format: input.format || "?", own: input.ownFormat || "?" });
       else btn.removeAttribute("title");
     };
 
@@ -244,7 +277,7 @@ class OmpSwitcherPanel extends HTMLElement {
           img.style.display = "none"; // erst sichtbar, sobald das erste Bild wirklich geladen ist
           const noSignal = document.createElement("div");
           noSignal.className = "no-signal";
-          noSignal.textContent = "kein Bild";
+          noSignal.textContent = T("noPicture");
           // `.hidden` toggeln reicht hier NICHT: `.thumb .no-signal {
           // display:flex; }` (Klassen-Selektor) überstimmt die UA-Regel
           // `[hidden]{display:none}` (Attribut-Selektor) immer. Inline
@@ -256,7 +289,7 @@ class OmpSwitcherPanel extends HTMLElement {
         } else {
           const noSignal = document.createElement("div");
           noSignal.className = "no-signal";
-          noSignal.textContent = "kein Bild";
+          noSignal.textContent = T("noPicture");
           thumb.append(noSignal);
         }
         const label = document.createElement("div");
@@ -332,7 +365,7 @@ class OmpSwitcherPanel extends HTMLElement {
       appendButton("", () => {
         const blackBtn = document.createElement("omp-button");
         blackBtn.className = "source";
-        blackBtn.textContent = "Schwarz";
+        blackBtn.textContent = T("black");
         blackBtn.setAttribute("color", "onair");
         blackBtn.addEventListener("click", () => select(""));
         return blackBtn;
@@ -357,13 +390,13 @@ class OmpSwitcherPanel extends HTMLElement {
       if (own.length > 0 && rest.length > 0) {
         const ownLabel = document.createElement("div");
         ownLabel.className = "group-label";
-        ownLabel.textContent = "Dieser Workflow";
+        ownLabel.textContent = T("ownWorkflow");
         fragment.append(ownLabel);
         appendGroup(own);
 
         const restLabel = document.createElement("div");
         restLabel.className = "group-label";
-        restLabel.textContent = "Andere Quellen";
+        restLabel.textContent = T("otherSources");
         fragment.append(restLabel);
         appendGroup(rest);
       } else {
@@ -373,7 +406,7 @@ class OmpSwitcherPanel extends HTMLElement {
       if (inputs.length === 0) {
         const empty = document.createElement("p");
         empty.className = "empty";
-        empty.textContent = "keine Quellen entdeckt";
+        empty.textContent = T("noSources");
         fragment.append(empty);
       }
 
