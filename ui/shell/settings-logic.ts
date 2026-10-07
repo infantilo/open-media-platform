@@ -1,3 +1,4 @@
+import { t } from "./i18n.ts";
 // Reine Logik der Einstellungs-Ansicht (Kapitel 29) — ohne DOM, testbar.
 
 export interface OptionDef {
@@ -18,7 +19,7 @@ export interface OptionDef {
 }
 
 /** Optionen nach Gruppe, Reihenfolge der ersten Nennung bleibt erhalten. */
-export function groupOptions<T extends { group?: string }>(opts: readonly T[], fallback = "Allgemein"): [string, T[]][] {
+export function groupOptions<T extends { group?: string }>(opts: readonly T[], fallback = t("stl.0a6892")): [string, T[]][] {
   const groups = new Map<string, T[]>();
   for (const o of opts) {
     const g = o.group || fallback;
@@ -31,13 +32,13 @@ export function groupOptions<T extends { group?: string }>(opts: readonly T[], f
 /** Hinweistext unter dem Eingabefeld: Standard, Bereich, Pfadart. */
 export function hintFor(o: OptionDef): string {
   const parts: string[] = [];
-  if (o.default) parts.push(`Standard: ${o.default}`);
-  else parts.push("Standard: vom Node bestimmt");
+  if (o.default) parts.push(t("stl.440a36", { p0: o.default }));
+  else parts.push(t("stl.36a797"));
   if (o.min !== undefined || o.max !== undefined) {
-    parts.push(`erlaubt: ${o.min ?? "−∞"} bis ${o.max ?? "∞"}`);
+    parts.push(t("stl.cca832", { p0: o.min ?? "−∞", p1: o.max ?? "∞" }));
   }
-  if (o.type === "path") parts.push(o.pathKind === "file" ? "Datei" : "Verzeichnis");
-  if (o.type === "path" && o.mustExist) parts.push("muss existieren");
+  if (o.type === "path") parts.push(o.pathKind === "file" ? t("stl.e2aa67") : t("stl.6c4ca0"));
+  if (o.type === "path" && o.mustExist) parts.push(t("stl.b2780d"));
   return parts.join(" · ");
 }
 

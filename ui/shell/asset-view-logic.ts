@@ -1,3 +1,4 @@
+import { t as tt } from "./i18n.ts";
 // Reine Logik für <omp-asset-view> (Kapitel 21 Phase 6 Teil 3) — DOM-
 // frei, per `deno test` geprüft, gleiches Trennungsmuster wie
 // console-logic.ts/process-editor-logic.ts.
@@ -69,27 +70,27 @@ export interface LifecycleGraph {
 
 // B6: die sechs Metadaten-Kategorien, Reihenfolge = Anzeige-Reihenfolge.
 export const METADATA_CATEGORIES: { key: keyof AssetMetadata; label: string }[] = [
-  { key: "descriptive", label: "Beschreibend" },
-  { key: "editorial", label: "Redaktionell" },
-  { key: "technical", label: "Technisch" },
-  { key: "custom", label: "Eigene Felder" },
+  { key: "descriptive", label: tt("avl.093ab0") },
+  { key: "editorial", label: tt("avl.02822c") },
+  { key: "technical", label: tt("avl.c52083") },
+  { key: "custom", label: tt("avl.133411") },
   { key: "ai", label: "KI-generiert" },
-  { key: "system", label: "System" },
+  { key: "system", label: tt("avl.a45da9") },
 ];
 
 // Anzeige-Texte für den Asset-Lifecycle (B8). Unbekannte Zustände
 // (Backend erweitert, UI noch nicht) fallen auf den Rohwert zurück.
 export const ASSET_STATUS_LABEL: Record<string, string> = {
-  ingesting: "Eingang",
-  registered: "Registriert",
+  ingesting: tt("avl.4bf36f"),
+  registered: tt("avl.469b92"),
   processing: "In Verarbeitung",
-  ready: "Bereit",
-  in_review: "In Prüfung",
-  approved: "Freigegeben",
-  published: "Veröffentlicht",
-  archived: "Archiviert",
-  expired: "Abgelaufen",
-  deleted: "Gelöscht",
+  ready: tt("avl.379ee8"),
+  in_review: tt("avl.9b9437"),
+  approved: tt("avl.6bb8d0"),
+  published: tt("avl.18a0e4"),
+  archived: tt("avl.d11aee"),
+  expired: tt("avl.768a27"),
+  deleted: tt("avl.b74b71"),
 };
 
 export function statusLabel(status: string): string {
@@ -149,13 +150,13 @@ export function rowsToMetadata(rows: MetadataRows): { ok: true; metadata: AssetM
     for (const row of rows[cat] ?? []) {
       const k = row.key.trim();
       if (!k && !row.value.trim()) continue;
-      if (!k) return { ok: false, error: `${label}: Feld ohne Namen (Wert "${row.value}")` };
+      if (!k) return { ok: false, error: tt("avl.29cb3a", { p0: label, p1: row.value }) };
       if (k in obj) return { ok: false, error: `${label}: Feld "${k}" doppelt` };
       if (row.json) {
         try {
           obj[k] = JSON.parse(row.value);
         } catch {
-          return { ok: false, error: `${label}: Feld "${k}" ist kein gültiger Wert (JSON erwartet)` };
+          return { ok: false, error: tt("avl.70ac00", { p0: label, p1: k }) };
         }
       } else {
         obj[k] = row.value;
@@ -182,7 +183,7 @@ export function formatBytes(n: number | undefined): string {
 
 export function formatBitrate(bps: number | undefined): string {
   if (bps === undefined || bps === null) return "";
-  if (bps >= 1_000_000) return `${+(bps / 1_000_000).toFixed(1)} Mbit/s`;
+  if (bps >= 1_000_000) return tt("avl.d94f16", { p0: +(bps / 1_000_000).toFixed(1) });
   if (bps >= 1000) return `${+(bps / 1000).toFixed(0)} kbit/s`;
   return `${bps} bit/s`;
 }

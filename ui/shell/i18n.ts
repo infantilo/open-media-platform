@@ -27,6 +27,8 @@ function isLang(v: unknown): v is Lang {
 }
 
 function detect(): Lang {
+  // Ohne DOM (Tests, Tools): Deutsch als Quellsprache, unabhängig von der Rechner-Locale.
+  if (typeof document === "undefined") return "de";
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (isLang(saved)) return saved;

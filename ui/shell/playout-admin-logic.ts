@@ -1,3 +1,4 @@
+import { t as tt } from "./i18n.ts";
 // Reine Logik der Playout-Admin-Ansicht (Kapitel 27 / P7) — ohne DOM, testbar.
 
 export interface TriggerRecord {
@@ -23,15 +24,15 @@ export interface TriggerRule {
 }
 
 const STATUS_TEXT: Record<string, string> = {
-  published: "zugestellt, wartet auf Quittung",
-  scheduled: "geplant (Zielzeit)",
-  applied: "ausgeführt",
-  applied_late: "verspätet ausgeführt",
-  skipped_late: "verspätet übersprungen",
+  published: tt("pal.bcc372"),
+  scheduled: tt("pal.371fe9"),
+  applied: tt("pal.42d382"),
+  applied_late: tt("pal.468b4a"),
+  skipped_late: tt("pal.44500e"),
   failed: "fehlgeschlagen",
-  rejected: "abgelehnt (Ziel)",
-  denied: "verweigert (keine Regel)",
-  expired: "keine Quittung",
+  rejected: tt("pal.3681f2"),
+  denied: tt("pal.c6ac2b"),
+  expired: tt("pal.c4c5a4"),
 };
 
 export function statusText(s: string): string {
@@ -60,8 +61,8 @@ export function statusTone(s: string): "ok" | "warn" | "bad" | "neutral" {
 /** „channel:abc“ → „Channel National“, „group:regional“ → „Gruppe regional“, „*“ → „alle“. */
 export function describeSelector(sel: string, channelName: (id: string) => string): string {
   if (sel === "*") return "alle";
-  if (sel.startsWith("group:")) return `Gruppe ${sel.slice(6)}`;
-  if (sel.startsWith("channel:")) return `Channel ${channelName(sel.slice(8))}`;
+  if (sel.startsWith("group:")) return tt("pal.98a213", { p0: sel.slice(6) });
+  if (sel.startsWith("channel:")) return tt("pal.2849e8", { p0: channelName(sel.slice(8)) });
   return sel;
 }
 
@@ -114,11 +115,11 @@ export interface AsRunRow {
 }
 
 const KIND_TEXT: Record<string, string> = {
-  primary: "Event",
-  child: "Child Event",
-  warning: "Warnung",
-  trigger: "Trigger",
-  operator: "Bedienung",
+  primary: tt("pal.a4ecfc"),
+  child: tt("pal.e15d27"),
+  warning: tt("pal.d00803"),
+  trigger: tt("pal.f698f6"),
+  operator: tt("pal.eb2ead"),
 };
 
 export function asRunKindText(k: string): string {

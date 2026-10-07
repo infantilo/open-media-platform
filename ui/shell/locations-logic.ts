@@ -1,5 +1,6 @@
 // Reine Logik der Speicherort-Ansicht (ohne DOM, testbar).
 
+import { t } from "./i18n.ts";
 import { fmtBytes } from "./scheduler-logic.ts";
 
 export interface LocationItem {
@@ -18,9 +19,9 @@ export interface LocationItem {
 export function describeCheck(l: Pick<LocationItem, "check" | "checkError">): { ok: boolean; text: string } {
   if (l.checkError) return { ok: false, text: l.checkError };
   const c = l.check;
-  if (!c) return { ok: false, text: "nicht geprüft" };
+  if (!c) return { ok: false, text: t("ll.8ffe83") };
   if (!c.readable) return { ok: false, text: c.message };
-  const space = c.totalBytes ? ` · frei ${fmtBytes(c.freeBytes ?? 0)} von ${fmtBytes(c.totalBytes)}` : "";
-  return { ok: true, text: `lesbar, ${c.entries ?? 0} Einträge${space}` };
+  const space = c.totalBytes ? t("ll.1700cd", { p0: fmtBytes(c.freeBytes ?? 0), p1: fmtBytes(c.totalBytes) }) : "";
+  return { ok: true, text: t("ll.a1b35e", { p0: c.entries ?? 0, p1: space }) };
 }
 

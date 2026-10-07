@@ -1,3 +1,4 @@
+import { t as tt } from "./i18n.ts";
 // Audio-Ausgabe (Kapitel 27 / A5): Datenmodell des Dokuments `audio-rules` (Wire-Format identisch zu
 // orchestrator/internal/httpapi/audio_rules_handlers.go bzw. Rust-Crate `omp-audio-rules`) und die reine
 // Logik des Editors (ohne DOM, deshalb testbar).
@@ -17,16 +18,16 @@ export interface AudioRulesDoc {
   ruleSet: { rules: Rule[] };
 }
 
-export const LAYOUTS: [string, string][] = [["mono", "Mono"], ["stereo", "Stereo"], ["5.1", "5.1"], ["7.1", "7.1"], ["custom", "Eigene Kanäle"]];
+export const LAYOUTS: [string, string][] = [["mono", tt("arl.5d9b47")], ["stereo", tt("arl.bbc45d")], ["5.1", "5.1"], ["7.1", "7.1"], ["custom", tt("arl.2b2498")]];
 
 // Matrix-Prozessoren (Rust `processors::MATRIX_PROCESSORS`) mit verständlichen Namen.
 export const VIA_OPTIONS: [string, string][] = [
-  ["", "automatisch (gleiche Kanalzahl / Mono↔Stereo)"],
-  ["upmix51", "Upmix Stereo → 5.1"],
-  ["downmix", "Downmix 5.1 → Stereo"],
-  ["downmix-mono", "Downmix 5.1 → Mono"],
-  ["mono-to-stereo", "Mono → Stereo"],
-  ["stereo-to-mono", "Stereo → Mono"],
+  ["", tt("arl.d7444c")],
+  ["upmix51", tt("arl.1fe1be")],
+  ["downmix", tt("arl.a333b0")],
+  ["downmix-mono", tt("arl.75990f")],
+  ["mono-to-stereo", tt("arl.a99258")],
+  ["stereo-to-mono", tt("arl.df03f9")],
 ];
 
 const DEFAULT_CHANNELS: Record<string, string[]> = {
@@ -75,7 +76,7 @@ export function setBitExact(tags: string[] | undefined, on: boolean): string[] {
 /** Kurzform einer Quellvorgabe für Listen („Spur 1, 2“, „role:pt“, optional „über Upmix 5.1“). */
 export function specSummary(spec: SourceSpec | undefined): string {
   if (!spec) return "—";
-  const src = spec.tracks ? `Spur ${spec.tracks.map((n) => (n === 0 ? "–" : String(n))).join(", ")}` : spec.select ?? "?";
+  const src = spec.tracks ? tt("arl.d8b559", { p0: spec.tracks.map((n) => (n === 0 ? "–" : String(n))).join(", ") }) : spec.select ?? "?";
   const via = spec.via ? ` · ${VIA_OPTIONS.find(([v]) => v === spec.via)?.[1] ?? spec.via}` : "";
   return src + via;
 }
@@ -219,10 +220,10 @@ export function planRows(plan: AudioPlan, groupLabel: (id: string) => string): P
     g.matrix.forEach((row) => row.forEach((c, col) => { if (c) tracks.add(plan.src_channels[col].track); }));
     const mixed = g.matrix.some((row) => row.filter((c) => c).length > 1 || row.some((c) => c && c !== 1));
     const label = groupLabel(g.group);
-    if (g.failed) return { label, text: "Event würde NICHT gesendet (Regel „Fehler“)", tone: "failed" };
+    if (g.failed) return { label, text: tt("arl.c566d9"), tone: "failed" };
     if (g.silent) return { label, text: "still", tone: "silent" };
-    const src = `Spur ${[...tracks].sort((a, b) => a - b).join(", ")}${mixed ? " (gemischt/umgerechnet)" : ""}`;
-    return { label, text: g.rule ? `${src} · Ersatz per Regel „${g.rule}“` : src, tone: g.rule ? "rule" : "ok" };
+    const src = tt("arl.7e422e", { p0: [...tracks].sort((a, b) => a - b).join(", "), p1: mixed ? " (gemischt/umgerechnet)" : "" });
+    return { label, text: g.rule ? tt("arl.6f5349", { p0: src, p1: g.rule }) : src, tone: g.rule ? "rule" : "ok" };
   });
 }
 

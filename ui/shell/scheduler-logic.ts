@@ -1,3 +1,4 @@
+import { t as tt } from "./i18n.ts";
 // Reine Logik des Schedulers (ohne DOM): Zeitplan-Auswertung und
 // Ressourcen-Zeitachse. Getrennt von scheduler-view.ts, damit sie per
 // `deno test` prüfbar ist (Nutzerwunsch 2026-09-30: der Scheduler soll
@@ -369,7 +370,7 @@ export function computeTimeline(
         slot.cpuCores += mi.cpuCores;
         slot.rssBytes += mi.rssBytes;
       } else {
-        slot.unknown.push(`Manuell/${label}`);
+        slot.unknown.push(tt("sl.23c90e", { p0: label }));
       }
       const rx = mi.netRxMbps ?? 0;
       const tx = mi.netTxMbps ?? 0;
@@ -383,7 +384,7 @@ export function computeTimeline(
       if (mi.known || rx + tx > 0 || gpu > 0 || vram > 0) {
         slot.contribs.push({
           wfId: MANUAL_WF_ID,
-          wfName: "Manuell gestartet",
+          wfName: tt("sl.51279b"),
           role: label,
           cpuCores: mi.known ? mi.cpuCores : 0,
           rssBytes: mi.known ? mi.rssBytes : 0,
@@ -418,7 +419,7 @@ export function computeTimeline(
           if (rx > slot.netRxMbps || tx > slot.netTxMbps) {
             slot.netRxMbps = Math.max(slot.netRxMbps, rx);
             slot.netTxMbps = Math.max(slot.netTxMbps, tx);
-            slot.liveFloor.push("Netz");
+            slot.liveFloor.push(tt("sl.72ce72"));
           }
         }
         // GPU/VRAM hängen nicht an `live`: auch der lokale Host (ohne
@@ -568,7 +569,7 @@ export function findBottlenecks(model: ResourceModel, timeline: Timeline): Bottl
       const what: string[] = [];
       if (u.cpuLevel === "over") what.push("CPU");
       if (u.memLevel === "over") what.push("RAM");
-      if (u.netLevel === "over") what.push("Netz");
+      if (u.netLevel === "over") what.push(tt("sl.72ce72"));
       if (u.gpuLevel === "over") what.push("GPU");
       if (u.vramLevel === "over") what.push("VRAM");
       what.push(...u.ioOver);
@@ -618,8 +619,8 @@ export function fmtBytes(b: number): string {
 }
 
 export function fmtMbps(m: number): string {
-  if (m >= 1000) return `${(m / 1000).toFixed(m >= 10000 ? 0 : 1)} Gbit/s`;
-  return `${Math.round(m)} Mbit/s`;
+  if (m >= 1000) return tt("sl.501ffd", { p0: (m / 1000).toFixed(m >= 10000 ? 0 : 1) });
+  return tt("sl.d94f16", { p0: Math.round(m) });
 }
 
 export function fmtCores(c: number): string {

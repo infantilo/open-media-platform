@@ -1,3 +1,4 @@
+import { t } from "../shell/i18n.ts";
 // Grafische Audio-Routing-/Mix-/Verzögerungs-Matrix (UMSETZUNG.md
 // Kapitel 23, Schritt 3) — DOM-freie Kompilierung, per `deno test`
 // geprüft. Allgemeiner Baustein ("beliebige Quellkanäle auf beliebige
@@ -28,11 +29,11 @@ export interface ChannelLayoutDef {
 }
 
 export const CHANNEL_LAYOUTS: ChannelLayoutDef[] = [
-  { id: "mono", label: "Mono (1)", channelLabels: ["Mono"] },
-  { id: "stereo", label: "Stereo (2)", channelLabels: ["L", "R"] },
+  { id: "mono", label: t("aml.ec4721"), channelLabels: [t("aml.5d9b47")] },
+  { id: "stereo", label: t("aml.490585"), channelLabels: ["L", "R"] },
   { id: "5.1", label: "5.1 (6)", channelLabels: ["L", "R", "C", "LFE", "Ls", "Rs"] },
   { id: "7.1", label: "7.1 (8)", channelLabels: ["L", "R", "C", "LFE", "Lb", "Rb", "Ls", "Rs"] },
-  { id: "custom", label: "Eigene Anzahl …", channelLabels: [] },
+  { id: "custom", label: t("aml.64d485"), channelLabels: [] },
 ];
 
 export function channelLayoutById(id: string): ChannelLayoutDef | undefined {
@@ -48,7 +49,7 @@ export function channelLayoutChannelCount(id: ChannelLayoutId): number {
 // Layout-Größe) auf die alte "Kanal N"-Form zurück, nie ein leeres Label.
 export function channelLabel(layoutId: ChannelLayoutId, channelIndex: number): string {
   const label = channelLayoutById(layoutId)?.channelLabels[channelIndex];
-  return label ?? `Kanal ${channelIndex + 1}`;
+  return label ?? t("aml.935327", { p0: channelIndex + 1 });
 }
 
 export interface AudioMatrixSource {
@@ -160,10 +161,10 @@ export interface DownmixPreset {
 export const DOWNMIX_PRESETS: DownmixPreset[] = [
   {
     id: "mono-to-stereo",
-    label: "Mono → Stereo (dupliziert)",
+    label: t("aml.24354f"),
     fromLayout: "mono",
     outputCount: 2,
-    help: "Der eine Kanal geht unverändert (100%) auf beide Ausgangsspuren.",
+    help: t("aml.672b84"),
     routes: [
       { sourceChannelIndex: 0, outputOffset: 0, gainPercent: 100 },
       { sourceChannelIndex: 0, outputOffset: 1, gainPercent: 100 },
@@ -171,10 +172,10 @@ export const DOWNMIX_PRESETS: DownmixPreset[] = [
   },
   {
     id: "stereo-to-mono",
-    label: "Stereo → Mono (Summe, −3dB je Kanal)",
+    label: t("aml.f5f0a7"),
     fromLayout: "stereo",
     outputCount: 1,
-    help: "L und R werden mit je 70,7% (−3dB) auf eine Ausgangsspur summiert.",
+    help: t("aml.5284e1"),
     routes: [
       { sourceChannelIndex: 0, outputOffset: 0, gainPercent: 70.7 },
       { sourceChannelIndex: 1, outputOffset: 0, gainPercent: 70.7 },
@@ -185,7 +186,7 @@ export const DOWNMIX_PRESETS: DownmixPreset[] = [
     label: "5.1 → Stereo (ITU-Downmix, −3dB)",
     fromLayout: "5.1",
     outputCount: 2,
-    help: "L/R unverändert (100%), Center und der gleichseitige Surround-Kanal mit −3dB (70,7%) zugemischt. LFE bleibt bewusst unberücksichtigt (gängige Praxis) — bei Bedarf danach manuell ergänzen.",
+    help: t("aml.40faff"),
     routes: [
       { sourceChannelIndex: 0, outputOffset: 0, gainPercent: 100 }, // L -> Lo
       { sourceChannelIndex: 2, outputOffset: 0, gainPercent: 70.7 }, // C -> Lo
