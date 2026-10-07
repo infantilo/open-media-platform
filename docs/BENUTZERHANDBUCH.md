@@ -1038,7 +1038,7 @@ PAN, AUX, AUTOMIX, DUCK, AUTOMATION, SZENEN).
   Bild schaltet auf genau dem Frame, Ton am Sample; der Kanal-Player gibt das vorgeladene Datei-Item
   (`load` mit `hold`) so frei, dass erstes Bild und erster Ton exakt dort anliegen. `somMs`/`eomMs`
   im `load` begrenzen die Wiedergabe auf Start-/Endmarke. Einstellungen der Automation:
-  `OMP_PLAYOUT_TAKE_LEAD_MS` (Vorlauf, Standard 500, 0 = aus), `OMP_PLAYOUT_FRAMERATE` (Standard 25).
+  `OMP_PLAYOUT_TAKE_LEAD_MS` (Vorlauf, Standard 300, 0 = aus; unter 250 ms kommt das erste Bild einer frisch gestarteten Quelle zu spät), `OMP_PLAYOUT_FRAMERATE` (Standard 25).
 
 ## 10b. Handy-Kamera (WebRTC-Gateway)
 

@@ -1546,8 +1546,11 @@ fn attach_flip_probe(comp: &gst::Element, level: usize, frame_ns: u64) {
             let tai_now = omp_mediaio::timebase::tai_now_ns();
             if let Some(tai) = omp_mediaio::timebase::running_to_tai(running.nseconds(), base.nseconds(), clock.time().nseconds(), tai_now) {
                 let mut flips = FLIPS.lock().expect("lock poisoned");
-                // Dieses Ausgangsbild ist das letzte vor dem Zielbild (oder schon später: sofort).
-                if flips.get(&level).is_some_and(|j| tai + frame_ns + 1_000_000 >= j.at_tai_ns)
+                // Dieses Ausgangsbild ist das letzte vor dem Zielbild (oder schon später: sofort). Der Schreiber
+                // beschriftet ein Bild mit dem NÄCHSTEN Rasterindex (Rundung): das Zielbild ist das erste Ausgangsbild,
+                // dessen Zeit ≥ Bildgrenze − ½ Bild liegt — der Compositor-Takt hat eine beliebige Phase zum Raster
+                // (Messung 2026-10-07: bei Phase > 20 ms kam das Bild sonst ein Bild zu spät).
+                if flips.get(&level).is_some_and(|j| tai + frame_ns + frame_ns / 2 + 500_000 >= j.at_tai_ns)
                     && let Some(job) = flips.remove(&level)
                 {
                     match job.cut_to {

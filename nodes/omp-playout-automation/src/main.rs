@@ -2560,7 +2560,7 @@ fn take_on_targets(
 /// Standard 150; 0 = Funktion aus, Take sofort wie bisher). Muss die Laufzeit der folgenden
 /// Steuerbefehle (Ton → Bild) überdecken.
 fn take_lead_ms() -> f64 {
-    std::env::var("OMP_PLAYOUT_TAKE_LEAD_MS").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(500.0)
+    std::env::var("OMP_PLAYOUT_TAKE_LEAD_MS").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(300.0)
 }
 
 fn take_at_enabled() -> bool {
