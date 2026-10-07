@@ -69,6 +69,35 @@ type Option struct {
 	PathKind string `json:"pathKind,omitempty"`
 	// MustExist (nur path): fehlt der Pfad, ist das ein Fehler statt einer Warnung.
 	MustExist bool `json:"mustExist,omitempty"`
+	// I18n: optionale Übersetzungen der Anzeigetexte je Sprachcode ("en");
+	// ohne Eintrag gelten die (deutschen) Grundtexte oben.
+	I18n map[string]OptionText `json:"i18n,omitempty"`
+}
+
+// OptionText sind die übersetzbaren Anzeigetexte einer Option.
+type OptionText struct {
+	Label       string `json:"label,omitempty"`
+	Description string `json:"description,omitempty"`
+	Group       string `json:"group,omitempty"`
+}
+
+// Localized liefert die Option mit den Anzeigetexten der Sprache lang
+// (leere Felder der Übersetzung lassen den Grundtext stehen).
+func (o Option) Localized(lang string) Option {
+	t, ok := o.I18n[lang]
+	if !ok {
+		return o
+	}
+	if t.Label != "" {
+		o.Label = t.Label
+	}
+	if t.Description != "" {
+		o.Description = t.Description
+	}
+	if t.Group != "" {
+		o.Group = t.Group
+	}
+	return o
 }
 
 var (

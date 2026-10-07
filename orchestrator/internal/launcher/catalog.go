@@ -28,6 +28,32 @@ const (
 	runnerPodman  = "podman"
 )
 
+// CatalogText sind die übersetzbaren Anzeigetexte eines Katalog-Eintrags.
+type CatalogText struct {
+	Label             string `json:"label,omitempty"`
+	Description       string `json:"description,omitempty"`
+	ExpectedResources string `json:"expectedResources,omitempty"`
+}
+
+// Localized liefert den Eintrag mit den Anzeigetexten der Sprache lang
+// (leere Felder der Übersetzung lassen den Grundtext stehen).
+func (e CatalogEntry) Localized(lang string) CatalogEntry {
+	t, ok := e.I18n[lang]
+	if !ok {
+		return e
+	}
+	if t.Label != "" {
+		e.Label = t.Label
+	}
+	if t.Description != "" {
+		e.Description = t.Description
+	}
+	if t.ExpectedResources != "" {
+		e.ExpectedResources = t.ExpectedResources
+	}
+	return e
+}
+
 // CatalogEntry ist ein startbarer Node-Typ aus deploy/catalog.json
 // (UMSETZUNG.md C8). Command zeigt auf ein vorgebautes Binary
 // (`make nodes`) — der Launcher startet ausschließlich Katalog-
@@ -58,6 +84,9 @@ type CatalogEntry struct {
 	// Messwerte, keine handgepflegten Schätzungen — ein vorgezogenes
 	// striktes Schema wäre Wegwerf-Aufwand.
 	ExpectedResources string `json:"expectedResources,omitempty"`
+	// I18n: optionale Übersetzungen der Anzeigetexte je Sprachcode ("en");
+	// ohne Eintrag gelten die (deutschen) Grundtexte.
+	I18n map[string]CatalogText `json:"i18n,omitempty"`
 	// Version identifiziert diese Variante eines importierten Typs
 	// (§17 Teil 5, docs/END-GOAL-FEATURES.md §17.4) — leer für alle
 	// statischen `deploy/catalog.json`-Einträge (das Projekt versioniert

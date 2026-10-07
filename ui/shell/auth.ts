@@ -1,5 +1,5 @@
 import { fetchBuildInfo, formatFirmware, formatFirmwareLong } from "./version.ts";
-import { buildLangSelect, t } from "./i18n.ts";
+import { buildLangSelect, getLang, t } from "./i18n.ts";
 // Echte Anmeldung (ARCHITECTURE.md §12, UMSETZUNG.md D3 Teil 2) — löst
 // den bisherigen, trivial spoofbaren Stub-Nutzer (X-OMP-Stub-User-Header,
 // s. docs/decisions.md C13/D3 Teil 2) ab. Tokens sind Bearer-Tokens
@@ -35,9 +35,11 @@ function shouldAttachToken(url: string): boolean {
   window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.pathname : "";
     const token = getToken();
-    if (token && shouldAttachToken(url)) {
+    if (shouldAttachToken(url)) {
       const headers = new Headers(init?.headers);
-      headers.set("Authorization", `Bearer ${token}`);
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+      // Sprache für serverseitig lokalisierte Texte (Katalog, Node-Optionen).
+      headers.set("Accept-Language", getLang());
       init = { ...init, headers };
     }
     return originalFetch(input, init);

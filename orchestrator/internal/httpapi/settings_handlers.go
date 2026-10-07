@@ -93,8 +93,14 @@ func handleListNodeSettings(values NodeOptionValues, svc LauncherService) http.H
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			if lang := requestLang(r); lang != "" {
+				c = c.Localized(lang)
+			}
 			t := settingsNodeType{Type: c.Type, Label: c.Label, Options: make([]optionView, 0, len(schema)), Instances: []settingsInstance{}}
 			for _, o := range schema {
+				if lang := requestLang(r); lang != "" {
+					o = o.Localized(lang)
+				}
 				t.Options = append(t.Options, optionView{Option: o, Value: typeVals[o.Key]})
 			}
 			for _, in := range instances {
@@ -238,8 +244,8 @@ func handleListSystemSettings(store SystemSettingsStore, active config.Config, s
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"items":   runtimesettings.Items(&active, overrides),
-			"startup": runtimesettings.StartupInfo(active),
+			"items":   runtimesettings.ItemsLang(&active, overrides, requestLang(r)),
+			"startup": runtimesettings.StartupInfoLang(active, requestLang(r)),
 			"skipped": skipped,
 		})
 	}

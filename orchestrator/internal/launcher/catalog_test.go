@@ -124,3 +124,15 @@ func TestLoadCatalogInvalidJSONReturnsError(t *testing.T) {
 		t.Fatal("LoadCatalog() error = nil, want error for invalid JSON")
 	}
 }
+
+func TestCatalogEntryLocalized(t *testing.T) {
+	e := CatalogEntry{Type: "x", Label: "Kanal", Description: "Beschreibung", ExpectedResources: "gering",
+		I18n: map[string]CatalogText{"en": {Label: "Channel", Description: "Description"}}}
+	en := e.Localized("en")
+	if en.Label != "Channel" || en.Description != "Description" || en.ExpectedResources != "gering" {
+		t.Fatalf("en = %+v (leere Übersetzungsfelder müssen den Grundtext behalten)", en)
+	}
+	if got := e.Localized("de"); got.Label != "Kanal" {
+		t.Fatalf("de = %+v", got)
+	}
+}

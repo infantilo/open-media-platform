@@ -129,3 +129,15 @@ func TestShippedNodeOptionsAreValid(t *testing.T) {
 		t.Errorf("auffällig wenige Node-Typen: %d", len(m))
 	}
 }
+
+func TestOptionLocalized(t *testing.T) {
+	o := Option{Key: "OMP_X", Label: "Breite", Description: "Text", Group: "Netzwerk",
+		I18n: map[string]OptionText{"en": {Label: "Width", Group: "Network"}}}
+	en := o.Localized("en")
+	if en.Label != "Width" || en.Group != "Network" || en.Description != "Text" {
+		t.Fatalf("en = %+v", en)
+	}
+	if o.Localized("fr").Label != "Breite" {
+		t.Fatal("unbekannte Sprache muss den Grundtext liefern")
+	}
+}

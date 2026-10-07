@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/instancemigrate"
@@ -63,8 +64,25 @@ func mergeInstanceMetrics(list []launcher.Instance, hostMetrics HostMetricsReade
 // handleCatalog liefert GET /api/v1/catalog (UMSETZUNG.md C8).
 func handleCatalog(svc LauncherService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, svc.Catalog())
+		cat := svc.Catalog()
+		if lang := requestLang(r); lang != "" {
+			loc := make([]launcher.CatalogEntry, len(cat))
+			for i, e := range cat {
+				loc[i] = e.Localized(lang)
+			}
+			cat = loc
+		}
+		writeJSON(w, http.StatusOK, cat)
 	}
+}
+
+// requestLang liefert den Sprachcode aus Accept-Language ("en"), "" für die
+// Grundsprache Deutsch. Die UI sendet den Header bei jedem API-Aufruf.
+func requestLang(r *http.Request) string {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(r.Header.Get("Accept-Language"))), "en") {
+		return "en"
+	}
+	return ""
 }
 
 // handlePostCatalogEntry liefert POST /api/v1/catalog (§17 Teil 4,
