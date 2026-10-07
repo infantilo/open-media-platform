@@ -33,15 +33,18 @@ abläuft.
 Oben rechts (neben der Verbindungsanzeige) und im Nutzer-Widget unten rechts
 wechselt die Auswahl **DE/EN** die Oberfläche; die Seite lädt dabei neu. Die
 Wahl gilt pro Browser, ohne Wahl richtet sich die Sprache nach dem Browser
-(Deutsch, sonst Englisch). **Stand:** Die gesamte Orchestrator-Oberfläche (alle Tabs, Administration,
+(Deutsch, sonst Englisch).
+
+**Stand:** Die gesamte Orchestrator-Oberfläche (alle Tabs, Administration,
 Dialoge, Operator-Konsole) und alle Node-Oberflächen sind zweisprachig. Auch
 Node-Katalog, Node-Optionen und die Betriebswerte unter Einstellungen
-erscheinen in der gewählten Sprache. **Noch deutsch:** Texte, die der Server
-oder ein Node selbst erzeugt (z. B. Fehlermeldungen des Servers, das
-Trigger-Protokoll der Playout-Automation, Beschreibungen aus
-Node-Deskriptoren), Workflow-Vorlagen und Audio-Gruppennamen aus Ihren
-Daten, die Handbücher; die Handy-Seiten des WebRTC-Gateways (Kamera/Monitor) folgen der Browsersprache (oder `?lang=en`). Bekannte Server-Meldungen werden bei Englisch übersetzt, unbekannte bleiben deutsch. Die
-Handbücher.
+erscheinen in der gewählten Sprache; bekannte Meldungen des Servers
+(Fehler, Platzierungsgründe, Trigger-Protokoll) werden bei Englisch
+übersetzt, unbekannte bleiben deutsch. Die Handy-Seiten des WebRTC-Gateways
+(Kamera/Monitor) folgen der Browsersprache (oder `?lang=en`). **Noch
+deutsch:** Meldungen und Beschreibungen, die ein Node selbst erzeugt,
+Workflow-Namen/-Beschreibungen und Audio-Gruppennamen aus Ihren Daten sowie
+die Handbücher.
 
 ## 2. Der Flow Editor
 
