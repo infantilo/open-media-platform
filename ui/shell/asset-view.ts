@@ -340,7 +340,7 @@ class AssetView extends HTMLElement {
     } else if (res.status === 403) {
       showToast(tt("asset.22aa79", { p0: what }), { variant: "error" });
     } else {
-      showToast(`${what} fehlgeschlagen: ${text || res.status}`, { variant: "error" });
+      showToast(tt("misc.failedWith", { p0: what, p1: text || res.status }), { variant: "error" });
     }
     await this.#refresh();
     return conflict;

@@ -1979,4 +1979,8 @@ export const de = {
   "pscl.131bec": "mindestens ein Fall nötig",
   "pscl.a9dca0": "Prozess fehlt",
   "pscl.d60d5c": "Wartezeit fehlt",
+  "misc.failedWith": "{p0} fehlgeschlagen: {p1}",
+  "misc.wfSaveFailed": "Im Workflow speichern fehlgeschlagen: {p0}",
+  "misc.csvFailed": "CSV-Export fehlgeschlagen ({p0})",
+  "misc.failed": "fehlgeschlagen",
 };

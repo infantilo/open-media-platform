@@ -469,11 +469,11 @@ class WorkflowsView extends HTMLElement {
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        showToast(`${verb} fehlgeschlagen: ${await res.text()}`);
+        showToast(tt("misc.failedWith", { p0: verb, p1: await res.text() }));
         return;
       }
     } catch (err) {
-      showToast(`${verb} fehlgeschlagen: ${err}`);
+      showToast(tt("misc.failedWith", { p0: verb, p1: err }));
       return;
     }
     this.#resetForm();

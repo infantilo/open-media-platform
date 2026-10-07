@@ -1980,4 +1980,8 @@ export const en: Record<keyof typeof de, string> = {
   "pscl.131bec": "at least one case required",
   "pscl.a9dca0": "Process missing",
   "pscl.d60d5c": "Wait time missing",
+  "misc.failedWith": "{p0} failed: {p1}",
+  "misc.wfSaveFailed": "Saving into the workflow failed: {p0}",
+  "misc.csvFailed": "CSV export failed ({p0})",
+  "misc.failed": "failed",
 };

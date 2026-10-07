@@ -29,7 +29,7 @@ const STATUS_TEXT: Record<string, string> = {
   applied: tt("pal.42d382"),
   applied_late: tt("pal.468b4a"),
   skipped_late: tt("pal.44500e"),
-  failed: "fehlgeschlagen",
+  failed: tt("misc.failed"),
   rejected: tt("pal.3681f2"),
   denied: tt("pal.c6ac2b"),
   expired: tt("pal.c4c5a4"),

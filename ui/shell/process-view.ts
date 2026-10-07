@@ -432,7 +432,7 @@ class ProcessView extends HTMLElement {
   async #versionAction(versionId: string, action: "publish" | "deprecate" | "archive") {
     const res = await apiFetch(`/api/v1/process-versions/${versionId}/${action}`, { method: "POST" });
     if (!res.ok) {
-      showToast(`${action} fehlgeschlagen: ${await res.text()}`, { variant: "error" });
+      showToast(tt("misc.failedWith", { p0: action, p1: await res.text() }), { variant: "error" });
       return;
     }
     if (this.#selectedDefId) await this.#loadVersionsAndExecutions(this.#selectedDefId);
@@ -467,7 +467,7 @@ class ProcessView extends HTMLElement {
   async #executionAction(execId: string, action: "cancel" | "pause" | "resume") {
     const res = await apiFetch(`/api/v1/process-executions/${execId}/${action}`, { method: "POST" });
     if (!res.ok) {
-      showToast(`${action} fehlgeschlagen: ${await res.text()}`, { variant: "error" });
+      showToast(tt("misc.failedWith", { p0: action, p1: await res.text() }), { variant: "error" });
       return;
     }
     if (this.#selectedDefId) await this.#loadVersionsAndExecutions(this.#selectedDefId);

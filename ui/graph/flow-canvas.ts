@@ -2431,7 +2431,7 @@ export class FlowCanvas extends HTMLElement {
       });
       if (!res.ok) {
         const text = await res.text();
-        this.#showToast(`Im Workflow speichern fehlgeschlagen: ${text || res.status}`);
+        this.#showToast(tt("misc.wfSaveFailed", { p0: text || res.status }));
         return;
       }
       this.#workflowScopeExtraNodeIds = new Set();
@@ -2439,7 +2439,7 @@ export class FlowCanvas extends HTMLElement {
       this.#showToast(tt("flow.3fa58b"));
       await this.#queueFetchAndRender();
     } catch (err) {
-      this.#showToast(`Im Workflow speichern fehlgeschlagen: ${err}`);
+      this.#showToast(tt("misc.wfSaveFailed", { p0: err }));
     }
   }
 

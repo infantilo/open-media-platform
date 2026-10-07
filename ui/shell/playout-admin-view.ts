@@ -86,7 +86,7 @@ class PlayoutAdminView extends HTMLElement {
   async #downloadAsRunCsv() {
     const res = await apiFetch(`/api/v1/playout/channels/${encodeURIComponent(this.#asRunChannel)}/as-run?format=csv&limit=100000`);
     if (!res.ok) {
-      this.#error = `CSV-Export fehlgeschlagen (${res.status})`;
+      this.#error = tt("misc.csvFailed", { p0: res.status });
       this.#render();
       return;
     }

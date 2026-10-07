@@ -952,7 +952,7 @@ class SchedulerView extends HTMLElement {
       return h > 0 ? (m % 60 > 0 ? tt("sched.19706e", { p0: h, p1: m % 60 }) : `${h} h`) : `${m} min`;
     };
     const SRC: Record<string, string> = { manual: tt("sched.ed6c70"), schedule: tt("sched.6131ad"), adopted: tt("sched.96f435"), restored: tt("sched.e8da08") };
-    const END: Record<string, string> = { manual: tt("sched.d9d61d"), scheduled: tt("sched.58740c"), failed: "fehlgeschlagen", unknown: tt("sched.e98ab7") };
+    const END: Record<string, string> = { manual: tt("sched.d9d61d"), scheduled: tt("sched.58740c"), failed: tt("misc.failed"), unknown: tt("sched.e98ab7") };
     const place = (from: number, to: number) => {
       const a = Math.max(from, rangeStart), b = Math.min(to, rangeEnd);
       if (b <= a) return null;
