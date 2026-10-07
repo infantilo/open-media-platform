@@ -1335,6 +1335,12 @@ impl AudioMixerStore {
     /// (Cut = hart, Crossfade = `FOLLOW_CROSSFADE_MS`). Fader/Mute des Bedieners bleiben unberührt;
     /// Kanäle im Manual-Override oder mit Modus „off“ werden nicht angefasst.
     fn afv_follow(&self, node_id: &str, on: bool) {
+        self.afv_follow_at(node_id, on, 0);
+    }
+
+    /// Wie [`afv_follow`](Self::afv_follow), aber mit gemeinsamem Schaltzeitpunkt (`takeAt`,
+    /// TAI ns, Kap. 31.4): Tor und Rampe beginnen sample-genau an diesem Zeitpunkt (0 = sofort).
+    fn afv_follow_at(&self, node_id: &str, on: bool, at_tai_ns: u64) {
         let nodes = self.source_nodes();
         let hits: Vec<(String, bool)> = self
             .channels
@@ -1352,7 +1358,7 @@ impl AudioMixerStore {
             .map(|c| (c.id.clone(), c.follow_mode == "cut"))
             .collect();
         for (id, cut) in hits {
-            self.pipeline.set_afv(id, on, if cut { 0 } else { FOLLOW_CROSSFADE_MS });
+            self.pipeline.set_afv_at(id, on, if cut { 0 } else { FOLLOW_CROSSFADE_MS }, at_tai_ns);
         }
     }
 
@@ -1811,8 +1817,10 @@ impl AudioMixerStore {
             "setVideoContext" => {
                 let source = args.get("source").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
                 let active = args.get("active").and_then(Value::as_bool).ok_or(InvokeError::Unknown)?;
+                // Optional `takeAt` (TAI ns): gemeinsamer Schaltzeitpunkt mit dem Bildmischer (Kap. 31.4).
+                let at = args.get("takeAt").and_then(Value::as_u64).unwrap_or(0);
                 self.on_video_tally(source, active);
-                self.afv_follow(source, active);
+                self.afv_follow_at(source, active, at);
                 Ok(())
             }
             "captureScene" => {

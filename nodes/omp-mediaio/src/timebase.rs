@@ -21,6 +21,38 @@
 //! Reine Funktionen/Strukturen ohne GStreamer/MXL-Abhängigkeit, damit sie
 //! per Unit-Test prüfbar sind.
 
+/// Aktuelle TAI-Zeit in Nanosekunden (`CLOCK_TAI`, dieselbe Uhr wie
+/// `MxlContext::now_ns`/libmxl) — ohne MXL-Kontext nutzbar, z. B. für
+/// geplante Schaltzeitpunkte (`takeAt`, Kap. 31.4).
+pub fn tai_now_ns() -> u64 {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: `ts` ist ein gültiger, beschreibbarer timespec.
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_TAI, &mut ts) };
+    if rc != 0 {
+        return 0;
+    }
+    ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
+}
+
+/// Wartet (blockierend) bis `tai_ns - lead_ns` erreicht ist; liegt der
+/// Zeitpunkt schon in der Vergangenheit, kehrt es sofort zurück.
+pub fn sleep_until_tai(tai_ns: u64, lead_ns: u64) {
+    let target = tai_ns.saturating_sub(lead_ns);
+    loop {
+        let now = tai_now_ns();
+        if now >= target {
+            return;
+        }
+        let remaining = target - now;
+        // Grob schlafen, die letzten ~1,5 ms aktiv warten (Frame-Genauigkeit).
+        if remaining > 2_000_000 {
+            std::thread::sleep(std::time::Duration::from_nanos(remaining - 1_500_000));
+        } else {
+            std::hint::spin_loop();
+        }
+    }
+}
+
 /// Pipeline-Laufzeit eines Puffers → TAI-Nanosekunden.
 ///
 /// `base_time`/`clock_now` stammen von der Pipeline-Uhr (beliebiger Typ),

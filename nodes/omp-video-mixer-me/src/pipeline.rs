@@ -522,8 +522,39 @@ impl PipelineHandle {
         let _ = self.commands.send(Command::SelectPreset(level, sender_id));
     }
 
-    pub fn cut(&self, level: usize) {
-        let _ = self.commands.send(Command::Cut(level));
+    /// Gemeinsamer Schaltzeitpunkt (Kap. 31.4): `at_tai_ns` ist ein absoluter
+    /// TAI-Zeitpunkt (ns). Liegt er in der Zukunft, schaltet der Mischer erst dort
+    /// (abzüglich der Pipeline-Latenz `OMP_TAKE_LEAD_MS`, Standard 0); sonst sofort.
+    /// Die Wartezeit liegt in einem eigenen Thread — der Command-Thread bleibt frei.
+    fn send_at(&self, at_tai_ns: Option<u64>, cmd: Command) {
+        match at_tai_ns {
+            Some(at) if at > omp_mediaio::timebase::tai_now_ns() => {
+                let tx = self.commands.clone();
+                let lead_ns = std::env::var("OMP_TAKE_LEAD_MS")
+                    .ok()
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .map_or(0, |ms| (ms * 1e6) as u64);
+                std::thread::spawn(move || {
+                    omp_mediaio::timebase::sleep_until_tai(at, lead_ns);
+                    let _ = tx.send(cmd);
+                });
+            }
+            _ => {
+                let _ = self.commands.send(cmd);
+            }
+        }
+    }
+
+    pub fn cut_at(&self, level: usize, at_tai_ns: Option<u64>) {
+        self.send_at(at_tai_ns, Command::Cut(level));
+    }
+
+    pub fn take_at(&self, level: usize, sender_id: Option<String>, at_tai_ns: Option<u64>) {
+        self.send_at(at_tai_ns, Command::Take(level, sender_id));
+    }
+
+    pub fn auto_trans_at(&self, level: usize, at_tai_ns: Option<u64>) {
+        self.send_at(at_tai_ns, Command::AutoTrans(level));
     }
 
     /// PGM-Hot-Cut (K3-Teil-2, `docs/END-GOAL-FEATURES.md` §3.5 offene
@@ -535,10 +566,6 @@ impl PipelineHandle {
     /// PGM-„nur Anzeige"-Entscheidung vermeiden wollte).
     pub fn take(&self, level: usize, sender_id: Option<String>) {
         let _ = self.commands.send(Command::Take(level, sender_id));
-    }
-
-    pub fn auto_trans(&self, level: usize) {
-        let _ = self.commands.send(Command::AutoTrans(level));
     }
 
     /// Manueller T-Bar (`docs/END-GOAL-FEATURES.md` §3.4 Teil 2,

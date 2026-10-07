@@ -135,7 +135,7 @@ enum Command {
     SetChannelSource { id: String, source: ChannelSource },
     SetGain { id: String, db: f64 },
     SetMute { id: String, muted: bool },
-    SetAfv { id: String, open: bool, frames: u64 },
+    SetAfv { id: String, open: bool, frames: u64, at_tai_ns: u64 },
     SetProc { id: String, params: dsp::ProcParams },
     SetMasterLimiter { params: dsp::CompParams },
     SetPfl { id: String, enabled: bool },
@@ -198,8 +198,10 @@ impl PipelineHandle {
     }
 
     /// Audio-folgt-Video-Tor (Kap. 31.3): sample-genaue Rampe im Audio-Thread über `ramp_ms`.
-    pub fn set_afv(&self, id: String, open: bool, ramp_ms: u64) {
-        let _ = self.commands.send(Command::SetAfv { id, open, frames: ramp_ms * SAMPLE_RATE as u64 / 1000 });
+    /// Wie [`set_afv`](Self::set_afv), schaltet aber erst am Sample, das auf `at_tai_ns` fällt
+    /// (gemeinsamer Schaltzeitpunkt `takeAt`, Kap. 31.4; 0 = sofort).
+    pub fn set_afv_at(&self, id: String, open: bool, ramp_ms: u64, at_tai_ns: u64) {
+        let _ = self.commands.send(Command::SetAfv { id, open, frames: ramp_ms * SAMPLE_RATE as u64 / 1000, at_tai_ns });
     }
 
     pub fn set_mute(&self, id: String, muted: bool) {
@@ -350,6 +352,19 @@ impl Drop for ActivePipeline {
     }
 }
 
+/// TAI-Zeit (ns) des ersten Samples eines Buffers an `pad` (PTS → Laufzeit → TAI) — Grundlage
+/// des sample-genauen gemeinsamen Schaltzeitpunkts (`takeAt`, Kap. 31.4).
+fn buffer_tai(pad: &gst::Pad, pts: Option<gst::ClockTime>) -> Option<u64> {
+    let pts = pts?;
+    let ev = pad.sticky_event::<gst::event::Segment>(0)?;
+    let seg = ev.segment().clone().downcast::<gst::ClockTime>().ok()?;
+    let running = seg.to_running_time(pts)?;
+    let el = pad.parent_element()?;
+    let clock = el.clock()?;
+    let base = el.base_time()?;
+    omp_mediaio::timebase::running_to_tai(running.nseconds(), base.nseconds(), clock.time().nseconds(), omp_mediaio::timebase::tai_now_ns())
+}
+
 fn add_channel_branch(
     active: &mut ActivePipeline,
     context: &Arc<MxlContext>,
@@ -456,14 +471,15 @@ fn add_channel_branch(
         let shared = shared.clone();
         let stage = Mutex::new((dsp::FaderStage::new(), dsp::AfvGate::new(CHANNELS as usize), Vec::<f32>::new()));
         let pad = fader_el.static_pad("src").ok_or("fader: no src pad")?;
-        pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+        pad.add_probe(gst::PadProbeType::BUFFER, move |pad, info| {
             if let Some(gst::PadProbeData::Buffer(buffer)) = info.data.as_mut() {
                 let mut guard = stage.lock().expect("lock poisoned");
                 let (stage, afv, scratch) = &mut *guard;
                 let target = shared.main_gain();
+                let pts = buffer.pts();
                 with_f32_samples(buffer.make_mut(), scratch, |samples| {
                     stage.process(samples, target);
-                    afv.process(samples, &shared);
+                    afv.process_at(samples, &shared, &|| buffer_tai(pad, pts));
                 });
             }
             gst::PadProbeReturn::Ok
@@ -735,16 +751,17 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
         let stage = Mutex::new((dsp::FaderStage::with_channels(probe_ch), dsp::AfvGate::new(probe_ch), Vec::<f32>::new()));
         let shared = shared.clone();
         let pad = queue.static_pad("src").ok_or("send queue: no src pad")?;
-        pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+        pad.add_probe(gst::PadProbeType::BUFFER, move |pad, info| {
             if let Some(gst::PadProbeData::Buffer(buffer)) = info.data.as_mut() {
                 let mut guard = stage.lock().expect("lock poisoned");
                 let (stage, afv, scratch) = &mut *guard;
                 let target = send.target_gain(&shared);
                 let post = send.post.load(Ordering::Relaxed);
+                let pts = buffer.pts();
                 with_f32_samples(buffer.make_mut(), scratch, |samples| {
                     stage.process(samples, target);
                     if post {
-                        afv.process(samples, &shared);
+                        afv.process_at(samples, &shared, &|| buffer_tai(pad, pts));
                     }
                 });
             }
@@ -1315,8 +1332,8 @@ pub fn run(
             Ok(Command::SetGain { id, db }) => {
                 shared_for(&active, &id).fader_db.set(db as f32);
             }
-            Ok(Command::SetAfv { id, open, frames }) => {
-                shared_for(&active, &id).set_afv(open, frames);
+            Ok(Command::SetAfv { id, open, frames, at_tai_ns }) => {
+                shared_for(&active, &id).set_afv_at(open, frames, at_tai_ns);
             }
             Ok(Command::SetMute { id, muted }) => {
                 shared_for(&active, &id).muted.store(muted, Ordering::Relaxed);

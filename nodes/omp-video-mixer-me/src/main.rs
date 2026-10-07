@@ -747,6 +747,11 @@ fn level_get(store: &MixerStore, name: &str) -> Option<Value> {
     }
 }
 
+/// Optionaler gemeinsamer Schaltzeitpunkt (`takeAt`, Kap. 31.4): absoluter TAI-Zeitpunkt in ns.
+fn take_at_arg(args: &serde_json::Map<String, Value>) -> Option<u64> {
+    args.get("takeAt").and_then(Value::as_u64).filter(|v| *v > 0)
+}
+
 /// `invoke()`-Implementierung — s. `level_get`-Doku zur Level-Auflösung.
 /// `setOutputDelay` bleibt bewusst UNPRÄFIGIERT (s. `descriptor()`-Doku)
 /// und wirkt immer auf Ebene 0.
@@ -773,7 +778,7 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
             Ok(())
         }
         "crosspoint.cut" => {
-            store.pipeline.cut(level);
+            store.pipeline.cut_at(level, take_at_arg(args));
             Ok(())
         }
         "crosspoint.take" => {
@@ -782,11 +787,11 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
                 .and_then(Value::as_str)
                 .ok_or(InvokeError::Unknown)?;
             let selected = if sender_id.is_empty() { None } else { Some(sender_id.to_string()) };
-            store.pipeline.take(level, selected);
+            store.pipeline.take_at(level, selected, take_at_arg(args));
             Ok(())
         }
         "crosspoint.autoTrans" => {
-            store.pipeline.auto_trans(level);
+            store.pipeline.auto_trans_at(level, take_at_arg(args));
             Ok(())
         }
         // Bug 4: Rate-Wahl-Tasten (6f/12f/25f/50f) — wirkt erst auf den

@@ -740,6 +740,8 @@ pub struct ChannelShared {
     afv_target: AtomicF32,
     afv_frames: AtomicU64,
     afv_ver: AtomicU64,
+    /// Geplanter Schaltzeitpunkt (TAI ns, `takeAt`, Kap. 31.4); 0 = sofort.
+    afv_at: AtomicU64,
     /// Aux-Sends dieses Kanals (Schlüssel = Aux-ID).
     sends: std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<SendShared>>>,
 }
@@ -801,6 +803,7 @@ impl ChannelShared {
             afv_target: AtomicF32::new(1.0),
             afv_frames: AtomicU64::new(0),
             afv_ver: AtomicU64::new(0),
+            afv_at: AtomicU64::new(0),
             sends: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
@@ -847,9 +850,17 @@ impl ChannelShared {
     }
 
     /// AFV-Tor öffnen/schließen: `open` mit Rampe über `frames` Samples (0 = hart).
+    #[cfg(test)]
     pub fn set_afv(&self, open: bool, frames: u64) {
+        self.set_afv_at(open, frames, 0);
+    }
+
+    /// Wie [`set_afv`](Self::set_afv), aber erst ab dem Sample, das auf `at_tai_ns` (TAI) fällt
+    /// (0 = sofort). Der Audio-Thread rechnet den Zeitpunkt in einen Sample-Versatz im Buffer um.
+    pub fn set_afv_at(&self, open: bool, frames: u64, at_tai_ns: u64) {
         self.afv_target.set(if open { 1.0 } else { 0.0 });
         self.afv_frames.store(frames, Ordering::Relaxed);
+        self.afv_at.store(at_tai_ns, Ordering::Relaxed);
         self.afv_ver.fetch_add(1, Ordering::Release);
     }
 
@@ -931,32 +942,71 @@ pub struct AfvGate {
     target: f64,
     seen: u64,
     ch: usize,
+    /// Auftrag, der auf seinen TAI-Zeitpunkt wartet: (Zeitpunkt, Ziel, Rampen-Frames).
+    pending: Option<(u64, f64, u64)>,
 }
 
 impl AfvGate {
     pub fn new(ch: usize) -> Self {
-        AfvGate { cur: 1.0, step: 0.0, remaining: 0, target: 1.0, seen: 0, ch: ch.max(1) }
+        AfvGate { cur: 1.0, step: 0.0, remaining: 0, target: 1.0, seen: 0, ch: ch.max(1), pending: None }
     }
 
+    fn apply(&mut self, target: f64, frames: u64) {
+        self.target = target;
+        if frames == 0 {
+            self.cur = target;
+            self.remaining = 0;
+        } else {
+            self.remaining = frames;
+            self.step = (target - self.cur) / frames as f64;
+        }
+    }
+
+    #[cfg(test)]
     pub fn process(&mut self, buf: &mut [f32], shared: &ChannelShared) {
+        self.process_at(buf, shared, &|| None);
+    }
+
+    /// `buf_tai` liefert die TAI-Zeit des ersten Samples dieses Buffers (nur bei geplantem
+    /// Auftrag aufgerufen); `None` = unbekannt → Auftrag sofort ausführen.
+    pub fn process_at(&mut self, buf: &mut [f32], shared: &ChannelShared, buf_tai: &dyn Fn() -> Option<u64>) {
         let v = shared.afv_ver.load(Ordering::Acquire);
         if v != self.seen {
             self.seen = v;
-            self.target = shared.afv_target.get() as f64;
+            let target = shared.afv_target.get() as f64;
             let frames = shared.afv_frames.load(Ordering::Relaxed);
-            if frames == 0 {
-                self.cur = self.target;
-                self.remaining = 0;
+            let at = shared.afv_at.load(Ordering::Relaxed);
+            if at == 0 {
+                self.pending = None;
+                self.apply(target, frames);
             } else {
-                self.remaining = frames;
-                self.step = (self.target - self.cur) / frames as f64;
+                self.pending = Some((at, target, frames));
             }
         }
-        if self.remaining == 0 && (self.cur - 1.0).abs() < 1e-9 {
+        // Frame-Index im Buffer, ab dem der geplante Auftrag gilt.
+        let ch = self.ch;
+        let nframes = buf.len() / ch;
+        let mut apply_at: Option<(usize, f64, u64)> = None;
+        if let Some((at, target, frames)) = self.pending {
+            let off = match buf_tai() {
+                Some(t0) if at > t0 => ((at - t0) as u128 * 48_000 + 500_000_000) / 1_000_000_000,
+                _ => 0,
+            } as usize;
+            if off < nframes {
+                apply_at = Some((off, target, frames));
+                self.pending = None;
+            }
+        }
+        if apply_at.is_none() && self.remaining == 0 && (self.cur - 1.0).abs() < 1e-9 {
             return;
         }
-        let ch = self.ch;
-        for frame in buf.chunks_exact_mut(ch) {
+        for (i, frame) in buf.chunks_exact_mut(ch).enumerate() {
+            if let Some((off, target, frames)) = apply_at
+                && i == off
+            {
+                self.apply(target, frames);
+                apply_at = None;
+            }
             if self.remaining > 0 {
                 self.cur += self.step;
                 self.remaining -= 1;
@@ -1024,6 +1074,32 @@ mod afv_tests {
         let mut c = vec![1.0f32; 2 * 10];
         g.process(&mut c, &sh);
         assert!(c.iter().all(|s| *s == 1.0));
+    }
+
+    #[test]
+    fn afv_scheduled_cut_lands_on_exact_sample() {
+        let sh = ChannelShared::new();
+        let mut g = AfvGate::new(2);
+        // Buffer beginnt bei TAI 1_000_000 ns; Zeitpunkt = Sample 240 (5 ms später).
+        sh.set_afv_at(false, 0, 1_000_000 + 5_000_000);
+        let mut a = vec![1.0f32; 2 * 480];
+        g.process_at(&mut a, &sh, &|| Some(1_000_000));
+        assert_eq!(a[2 * 239], 1.0);
+        assert_eq!(a[2 * 240], 0.0);
+        assert_eq!(a[2 * 479 + 1], 0.0);
+    }
+
+    #[test]
+    fn afv_scheduled_in_later_buffer_waits_then_applies() {
+        let sh = ChannelShared::new();
+        let mut g = AfvGate::new(2);
+        sh.set_afv_at(false, 0, 30_000_000);
+        let mut a = vec![1.0f32; 2 * 480];
+        g.process_at(&mut a, &sh, &|| Some(0)); // 0..10 ms
+        assert!(a.iter().all(|s| *s == 1.0));
+        let mut b = vec![1.0f32; 2 * 480];
+        g.process_at(&mut b, &sh, &|| Some(30_000_000)); // genau am Zeitpunkt
+        assert!(b.iter().all(|s| *s == 0.0));
     }
 }
 
