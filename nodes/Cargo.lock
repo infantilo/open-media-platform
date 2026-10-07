@@ -1399,6 +1399,7 @@ name = "omp-audio-rules"
 version = "0.1.0"
 dependencies = [
  "ebur128",
+ "omp-mxf-mca",
  "serde",
  "serde_json",
  "ureq",

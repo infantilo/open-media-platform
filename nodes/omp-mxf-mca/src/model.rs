@@ -157,6 +157,8 @@ pub struct LabelSummary {
     pub name: Option<String>,
     /// Bedeutung laut Label-Dictionary (ST 428-12 / 2067-8), falls bekannt.
     pub meaning: Option<String>,
+    /// Symbol des Dictionary-Eintrags (z. B. `L`, `Ls`, `ST`) — unabhängig vom MCA Tag Symbol der Datei.
+    pub dictionary_symbol: Option<String>,
     pub dictionary_id: String,
     /// Effektive Items nach Vorrang (Kanal > SG > GSG).
     pub items: McaItems,
@@ -242,6 +244,7 @@ impl McaFile {
             symbol: l.tag_symbol.clone(),
             name: l.tag_name.clone().or_else(|| def.map(|d| d.name.to_string())),
             meaning: meaning(def, &l.dictionary_id),
+            dictionary_symbol: def.map(|d| d.symbol.to_string()).or_else(|| vocab::nsc_channel(&l.dictionary_id).map(|n| format!("NSC{n:03}"))),
             dictionary_id: ul_text(&l.dictionary_id),
             items,
         }

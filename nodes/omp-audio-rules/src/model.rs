@@ -268,6 +268,18 @@ pub struct AudioPlan {
     pub ok: bool,
 }
 
+/// Ergebnis von [`AudioSettings::mxf_source_probed`].
+#[derive(Debug, Clone)]
+pub struct ProbedSource {
+    pub source: SourceDesc,
+    /// Kurzer Hinweis, wenn MCA-Labels verwendet wurden.
+    pub note: Option<String>,
+    /// Prüfhinweise (Vokabular/Verweise) bzw. ignorierte Labels.
+    pub warnings: Vec<String>,
+    /// Aufgelöste MCA-Sicht der Datei (nur wenn Labels verwendet wurden).
+    pub mca: Option<omp_mxf_mca::McaSummary>,
+}
+
 /// Das gesamte, vom Orchestrator gespeicherte Einstellungsdokument.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AudioSettings {
@@ -287,8 +299,58 @@ impl AudioSettings {
         SourceDesc { kind, tracks: vec![SourceTrack { n: 1, layout: Layout::Stereo, channels: vec![], tags: vec!["role:pt".to_string()] }] }
     }
 
-    /// MXF-Datei mit `track_count` Spuren: Spurschema per Probe, sonst `pos:N`-Mono-Spuren.
+    /// MXF-Datei mit `track_count` Spuren: zuerst die MCA-Labels der Datei
+    /// (SMPTE ST 377-4/-41, s. `omp_mxf_mca::tags`), dann ein Spurschema per
+    /// Probe, sonst `pos:N`-Mono-Spuren. Meldungen gehen nach stderr.
     pub fn mxf_source(&self, track_count: u32, path: &str) -> SourceDesc {
+        let probed = self.mxf_source_probed(track_count, path);
+        if let Some(n) = &probed.note {
+            eprintln!("audio-rules: {n}");
+        }
+        for w in &probed.warnings {
+            eprintln!("audio-rules: MCA: {w}");
+        }
+        probed.source
+    }
+
+    /// Wie [`Self::mxf_source`], liefert zusätzlich Hinweise und die MCA-Sicht.
+    pub fn mxf_source_probed(&self, track_count: u32, path: &str) -> ProbedSource {
+        let mut warnings = Vec::new();
+        let mut note = None;
+        if let Ok(mca) = omp_mxf_mca::read::read_file(std::path::Path::new(path))
+            && !mca.is_empty()
+        {
+            let sum = mca.summarize();
+            let total = sum.channels.len() + sum.unlabeled_channels.len();
+            if total == track_count as usize {
+                let mut by_index: Vec<Option<&omp_mxf_mca::model::ChannelSummary>> = vec![None; total];
+                for c in &sum.channels {
+                    by_index[c.index] = Some(c);
+                }
+                let tracks = by_index
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        let n = i as u32 + 1;
+                        let mut tags = vec![format!("pos:{n}")];
+                        if let Some(c) = c {
+                            tags.extend(omp_mxf_mca::tags::channel_tags(c));
+                        }
+                        SourceTrack { n, layout: Layout::Mono, channels: vec![], tags }
+                    })
+                    .collect();
+                note = Some(format!("Datei trägt MCA-Labels ({} von {} Kanälen beschriftet) — sie ersetzen das Spurschema", sum.channels.len(), total));
+                warnings = sum.issues.clone();
+                return ProbedSource { source: SourceDesc { kind: SourceKind::File, tracks }, note, warnings, mca: Some(sum) };
+            }
+            warnings.push(format!("MCA-Labels beschreiben {total} Kanäle, die Datei liefert {track_count} Spuren — Labels werden ignoriert"));
+        }
+        let source = self.mxf_source_unlabeled(track_count, path);
+        ProbedSource { source, note, warnings, mca: None }
+    }
+
+    /// Spurschema per Probe, sonst `pos:N`-Mono-Spuren (ohne MCA-Labels).
+    pub fn mxf_source_unlabeled(&self, track_count: u32, path: &str) -> SourceDesc {
         let probe = ProbeInfo { format: "mxf".to_string(), track_count, path: path.to_string() };
         if let Some(schema) = crate::resolve::select_schema(&self.track_schemas, &probe) {
             return SourceDesc { kind: SourceKind::File, tracks: schema.tracks.clone() };
@@ -300,5 +362,71 @@ impl AudioSettings {
     /// Semantische Prüfung (s. [`crate::validate`]); leer = gültig.
     pub fn validate(&self) -> Vec<String> {
         crate::resolve::validate(&self.output_profile, &self.track_schemas, &self.mappings, &self.rule_set)
+    }
+}
+
+#[cfg(test)]
+mod mca_tests {
+    use super::*;
+    use omp_mxf_mca::keys::{self, label_ul};
+    use omp_mxf_mca::model::{LabelKind, SoundDescriptor};
+    use omp_mxf_mca::testkit::{Spec, build, channel, group, uid};
+
+    fn write(name: &str, spec: &Spec) -> String {
+        let p = std::env::temp_dir().join(format!("omp-audio-rules-mca-{}-{name}.mxf", std::process::id()));
+        std::fs::write(&p, build(spec)).unwrap();
+        p.to_string_lossy().into_owned()
+    }
+
+    fn doc() -> AudioSettings {
+        crate::defaults::default_settings()
+    }
+
+    fn stereo_pt_plus_ad() -> Spec {
+        let mut l = channel("chL", label_ul(1, 1, 0, 0), 1, 1, Some(20));
+        l.items.spoken_language = Some("de".into());
+        let mut sg = group(LabelKind::SoundfieldGroup, "sgST", label_ul(2, 0x20, 1, 0), 20, &[]);
+        sg.items.content = Some("PRM".into());
+        sg.items.use_class = Some("FCMP".into());
+        let r = channel("chR", label_ul(1, 2, 0, 0), 2, 2, Some(20));
+        let vin = channel("chVIN", label_ul(1, 0x0F, 0, 0), 1, 3, None);
+        Spec {
+            descriptors: vec![
+                SoundDescriptor { instance_uid: uid(0xD1), set_kind: keys::SET_WAVE_AUDIO_DESCRIPTOR, linked_track_id: Some(1), channel_count: 2, labels: vec![l, r, sg] },
+                SoundDescriptor { instance_uid: uid(0xD2), set_kind: keys::SET_WAVE_AUDIO_DESCRIPTOR, linked_track_id: Some(2), channel_count: 1, labels: vec![vin] },
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn mca_labels_replace_the_schema_and_feed_the_rules() {
+        let path = write("mca", &stereo_pt_plus_ad());
+        let p = doc().mxf_source_probed(3, &path);
+        assert!(p.note.is_some() && p.mca.is_some(), "{p:?}");
+        let tags = |n: usize| p.source.tracks[n].all_tags();
+        assert!(tags(0).contains(&"role:pt".to_string()) && tags(0).contains(&"ch:L".to_string()) && tags(0).contains(&"lang:de".to_string()), "{:?}", tags(0));
+        assert!(tags(1).contains(&"role:pt".to_string()) && tags(1).contains(&"ch:R".to_string()));
+        assert!(tags(2).contains(&"role:ad".to_string()));
+        // Der Plan der Standard-Ausgabegruppen wählt daraus Programmton (L/R) und Hörfilm (VIN).
+        let mapping = Mapping { id: "m".into(), label: String::new(), groups: [("ad".to_string(), SourceSpec { select: Some("role:ad".into()), ..Default::default() })].into_iter().collect() };
+        let plan = crate::resolve(&doc().output_profile, &p.source, Some(&mapping), &doc().rule_set);
+        let g = |id: &str| plan.groups.iter().find(|g| g.group == id).unwrap();
+        assert!(!g("pt").silent && !g("pt").failed, "{:?}", g("pt"));
+        assert!(!g("ad").silent, "{:?}", g("ad"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn mismatching_count_or_missing_labels_fall_back() {
+        let path = write("fallback", &stereo_pt_plus_ad());
+        let p = doc().mxf_source_probed(8, &path);
+        assert!(p.mca.is_none() && p.note.is_none());
+        assert!(p.warnings.iter().any(|w| w.contains("ignoriert")), "{:?}", p.warnings);
+        assert_eq!(p.source.tracks.len(), 8);
+        assert!(p.source.tracks[0].tags.contains(&"pos:1".to_string()));
+        let nothing = doc().mxf_source_probed(8, "/nicht/vorhanden.mxf");
+        assert_eq!(nothing.source.tracks.len(), 8);
+        let _ = std::fs::remove_file(path);
     }
 }

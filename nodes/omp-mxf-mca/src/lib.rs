@@ -8,6 +8,7 @@ pub mod model;
 pub mod mxf;
 pub mod plan_json;
 pub mod read;
+pub mod tags;
 pub mod vocab;
 
 pub use model::{McaFile, McaItems, McaLabel, McaSummary, SoundDescriptor};
