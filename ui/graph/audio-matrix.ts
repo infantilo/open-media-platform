@@ -11,6 +11,7 @@
 // genau demselben `{filterComplex, outputLabels}`-Paar wie der
 // Filter-Graph-Editor — beide sind austauschbare Bedienoberflächen für
 // dieselben zwei Felder in `ConvertInput` (process-step-config.ts).
+import { t } from "../shell/i18n.ts";
 import type { AudioMatrixCell, AudioMatrixSource, ChannelLayoutId } from "./audio-matrix-logic.ts";
 import { applyDownmixPreset, CHANNEL_LAYOUTS, channelLabel, channelLayoutChannelCount, compileAudioMatrix, downmixPresetsForLayout } from "./audio-matrix-logic.ts";
 import { showToast } from "../kit/omp-toast.ts";
@@ -43,7 +44,7 @@ export function openAudioMatrixEditor(
   // additionalInputPaths[k] wird Index k+1, exakt wie
   // ConvertInput.additionalInputPaths bereits funktioniert.
   const sources: AudioMatrixSource[] = [
-    { inputPath: primaryInputPath || "${input.path}", channelCount: 2, layout: "stereo", label: "Haupt-Eingabedatei" },
+    { inputPath: primaryInputPath || "${input.path}", channelCount: 2, layout: "stereo", label: t("am.cebd3b") },
     ...initialAdditionalSources.map((p): AudioMatrixSource => ({ inputPath: p, channelCount: 2, layout: "stereo" })),
   ];
   let outputCount = Math.max(initialOutputCount, 1);
@@ -63,10 +64,10 @@ export function openAudioMatrixEditor(
   panel.setAttribute("data-role", "audio-matrix-editor");
 
   const toolbar = h("div", "display:flex;align-items:center;gap:8px;padding:8px;border-bottom:1px solid var(--omp-border);flex-shrink:0;");
-  const title = h("div", "font-weight:600;flex:1;", "Audio-Matrix bearbeiten");
-  const cancelBtn = h("button", "", "Abbrechen");
+  const title = h("div", "font-weight:600;flex:1;", t("am.a081a7"));
+  const cancelBtn = h("button", "", t("am.4b9727"));
   cancelBtn.type = "button";
-  const applyBtn = h("button", "", "Übernehmen");
+  const applyBtn = h("button", "", t("am.bf8310"));
   applyBtn.type = "button";
   applyBtn.className = "omp-btn-primary";
   applyBtn.setAttribute("data-role", "audio-matrix-apply");
@@ -76,7 +77,7 @@ export function openAudioMatrixEditor(
   const help = h(
     "div",
     "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:8px;",
-    "Ordnet einzelne Quellkanäle (aus der Haupt-Eingabedatei oder zusätzlichen Dateien) beliebigen Ausgangsspuren zu — anteilig gemischt (%) und verzögert (ms). Eine Zelle mit Anteil 0 trägt nichts bei. Ausgangsspuren ohne jeden Beitrag werden nicht erzeugt.",
+    t("am.8a5d35"),
   );
   const sourcesSection = h("div", "");
   const outputControl = h("div", "display:flex;align-items:center;gap:8px;margin:10px 0;");
@@ -96,7 +97,7 @@ export function openAudioMatrixEditor(
   // unten.
   function buildLayoutControls(src: AudioMatrixSource, srcIdx: number): HTMLElement {
     const wrap = h("div", "display:flex;align-items:center;gap:6px;flex-wrap:wrap;");
-    wrap.appendChild(h("span", "font-size:var(--omp-font-size-xs);", "Kanal-Layout:"));
+    wrap.appendChild(h("span", "font-size:var(--omp-font-size-xs);", t("am.436760")));
     const layoutSelect = h("select", "");
     for (const def of CHANNEL_LAYOUTS) layoutSelect.appendChild(new Option(def.label, def.id));
     layoutSelect.value = src.layout ?? "custom";
@@ -159,13 +160,13 @@ export function openAudioMatrixEditor(
 
   function renderSources() {
     sourcesSection.replaceChildren();
-    sourcesSection.appendChild(h("div", "font-weight:600;margin-bottom:4px;", "Quellen"));
+    sourcesSection.appendChild(h("div", "font-weight:600;margin-bottom:4px;", t("am.754de8")));
 
     // Haupt-Eingabedatei — immer genau eine, nicht einklappbar/entfernbar,
     // kein Namensfeld (Anzeigename ist fest "Haupt-Eingabedatei").
     const primary = sources[0];
     const primaryRow = h("div", "display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap;");
-    primaryRow.appendChild(h("span", "min-width:140px;font-size:var(--omp-font-size-xs);font-weight:600;", primary.label ?? "Haupt-Eingabedatei"));
+    primaryRow.appendChild(h("span", "min-width:140px;font-size:var(--omp-font-size-xs);font-weight:600;", primary.label ?? t("am.cebd3b")));
     primaryRow.appendChild(h("span", "flex:1;font-family:ui-monospace,monospace;font-size:var(--omp-font-size-xs);", primary.inputPath));
     primaryRow.appendChild(buildLayoutControls(primary, 0));
     sourcesSection.appendChild(primaryRow);
@@ -181,12 +182,12 @@ export function openAudioMatrixEditor(
       const card = h("div", "border:1px solid var(--omp-border);border-radius:4px;margin-bottom:6px;overflow:hidden;");
       const collapsed = collapsedAux.has(i);
       const header = h("div", "display:flex;align-items:center;gap:6px;padding:4px 6px;background:var(--omp-surface-raised);cursor:pointer;");
-      header.title = collapsed ? "Ausklappen" : "Einklappen";
+      header.title = collapsed ? t("am.18dca7") : t("am.5f67b0");
       header.appendChild(h("span", "font-size:10px;width:10px;display:inline-block;flex-shrink:0;", collapsed ? "▸" : "▾"));
-      header.appendChild(h("span", "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);flex-shrink:0;", `Auxinput ${i}:`));
+      header.appendChild(h("span", "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);flex-shrink:0;", t("am.be7644", { p0: i })));
       const nameInput = h("input", "flex:1;min-width:80px;");
       nameInput.value = src.label ?? "";
-      nameInput.placeholder = `Zusatzquelle ${i} (Name optional)`;
+      nameInput.placeholder = t("am.90a9e7", { p0: i });
       nameInput.addEventListener("click", (ev) => ev.stopPropagation());
       nameInput.addEventListener("input", () => {
         src.label = nameInput.value.trim() || undefined;
@@ -195,7 +196,7 @@ export function openAudioMatrixEditor(
       header.appendChild(nameInput);
       const rm = h("button", "", "✕");
       rm.type = "button";
-      rm.title = "Diese Zusatzquelle entfernen";
+      rm.title = t("am.e649e0");
       rm.addEventListener("click", (ev) => {
         ev.stopPropagation();
         removeSource(i);
@@ -211,10 +212,10 @@ export function openAudioMatrixEditor(
       if (!collapsed) {
         const body = h("div", "padding:6px;display:flex;flex-direction:column;gap:6px;");
         const pathRow = h("div", "display:flex;align-items:center;gap:6px;");
-        pathRow.appendChild(h("span", "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);min-width:36px;", "Pfad:"));
+        pathRow.appendChild(h("span", "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);min-width:36px;", t("am.71a326")));
         const pathInput = h("input", "flex:1;");
         pathInput.value = src.inputPath;
-        pathInput.placeholder = "Pfad der zusätzlichen Quelldatei";
+        pathInput.placeholder = t("am.c799cf");
         pathInput.addEventListener("input", () => {
           src.inputPath = pathInput.value;
         });
@@ -237,7 +238,7 @@ export function openAudioMatrixEditor(
 
   function renderOutputControl() {
     outputControl.replaceChildren();
-    outputControl.append(h("span", "font-weight:600;", "Ausgangsspuren:"));
+    outputControl.append(h("span", "font-weight:600;", t("am.364ee0")));
     const countInput = h("input", "width:56px;");
     countInput.type = "number";
     countInput.min = "1";
@@ -269,8 +270,8 @@ export function openAudioMatrixEditor(
     const dlg = h("div", "width:300px;padding:14px;display:flex;flex-direction:column;gap:10px;box-sizing:border-box;");
     dlg.className = "omp-modal";
 
-    dlg.appendChild(h("div", "font-weight:600;font-size:var(--omp-font-size-md);", "Downmixer"));
-    dlg.appendChild(h("div", "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);", `${src.label ?? `Quelle ${srcIdx + 1}`} · ${chLabel} → Spur ${o + 1}`));
+    dlg.appendChild(h("div", "font-weight:600;font-size:var(--omp-font-size-md);", t("am.d65493")));
+    dlg.appendChild(h("div", "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);", `${src.label ?? t("am.0c5944", { p0: srcIdx + 1 })} · ${chLabel} → Spur ${o + 1}`));
 
     const gainReadout = h("div", "font-weight:600;text-align:center;font-size:var(--omp-font-size-lg);");
     const dbReadout = h("div", "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);text-align:center;");
@@ -305,7 +306,7 @@ export function openAudioMatrixEditor(
     });
 
     const delayRow = h("div", "display:flex;align-items:center;gap:6px;");
-    delayRow.append(h("span", "flex:1;", "Verzögerung:"));
+    delayRow.append(h("span", "flex:1;", t("am.8e0889")));
     const delayInput = h("input", "width:64px;text-align:right;");
     delayInput.type = "number";
     delayInput.min = "0";
@@ -314,12 +315,12 @@ export function openAudioMatrixEditor(
     delayRow.append(delayInput, h("span", "color:var(--omp-text-dim);", "ms"));
 
     const btnRow = h("div", "display:flex;justify-content:flex-end;gap:6px;margin-top:4px;");
-    const removeBtn = h("button", "margin-right:auto;", "Entfernen");
+    const removeBtn = h("button", "margin-right:auto;", t("am.513d30"));
     removeBtn.type = "button";
     removeBtn.style.display = existing ? "" : "none";
-    const dlgCancelBtn = h("button", "", "Abbrechen");
+    const dlgCancelBtn = h("button", "", t("am.4b9727"));
     dlgCancelBtn.type = "button";
-    const dlgApplyBtn = h("button", "", "Übernehmen");
+    const dlgApplyBtn = h("button", "", t("am.bf8310"));
     dlgApplyBtn.type = "button";
     dlgApplyBtn.className = "omp-btn-primary";
     removeBtn.addEventListener("click", () => {
@@ -351,9 +352,9 @@ export function openAudioMatrixEditor(
     tableWrap.replaceChildren();
     const table = h("table", "border-collapse:collapse;font-size:var(--omp-font-size-xs);");
     const thead = h("tr", "");
-    thead.appendChild(h("th", "border:1px solid var(--omp-border);padding:4px;position:sticky;left:0;background:var(--omp-surface);", "Quellkanal \\ Ausgangsspur"));
+    thead.appendChild(h("th", "border:1px solid var(--omp-border);padding:4px;position:sticky;left:0;background:var(--omp-surface);", t("am.d4157e")));
     for (let o = 0; o < outputCount; o++) {
-      thead.appendChild(h("th", "border:1px solid var(--omp-border);padding:4px;min-width:80px;", `Spur ${o + 1}`));
+      thead.appendChild(h("th", "border:1px solid var(--omp-border);padding:4px;min-width:80px;", t("am.d8b559", { p0: o + 1 })));
     }
     table.appendChild(thead);
 
@@ -363,7 +364,7 @@ export function openAudioMatrixEditor(
         const rowLabel = h(
           "td",
           "border:1px solid var(--omp-border);padding:4px;font-weight:600;position:sticky;left:0;background:var(--omp-surface);white-space:nowrap;",
-          `${src.label ?? `Quelle ${srcIdx + 1}`} · ${channelLabel(src.layout ?? "custom", ch)}`,
+          `${src.label ?? t("am.0c5944", { p0: srcIdx + 1 })} · ${channelLabel(src.layout ?? "custom", ch)}`,
         );
         tr.appendChild(rowLabel);
         for (let o = 0; o < outputCount; o++) {
@@ -376,7 +377,7 @@ export function openAudioMatrixEditor(
             existing ? `${existing.gainPercent}%${existing.delayMs > 0 ? ` +${existing.delayMs}ms` : ""}` : "+",
           );
           cellBtn.type = "button";
-          cellBtn.title = existing ? "Klicken zum Bearbeiten" : "Klicken zum Routen";
+          cellBtn.title = existing ? t("am.5ba81a") : t("am.9aa012");
           if (existing) {
             td.style.background = "color-mix(in srgb, var(--omp-info) 18%, transparent)";
           } else {
@@ -400,13 +401,13 @@ export function openAudioMatrixEditor(
   applyBtn.addEventListener("click", () => {
     for (let i = 1; i < sources.length; i++) {
       if (!sources[i].inputPath.trim()) {
-        showToast(`${sources[i].label ?? `Auxinput ${i}`}: Pfad fehlt.`, { variant: "error" });
+        showToast(t("am.5fe6a4", { p0: sources[i].label ?? t("am.550585", { p0: i }) }), { variant: "error" });
         return;
       }
     }
     const result = compileAudioMatrix({ sources, outputCount, cells: [...cells.values()] });
     if (result.outputLabels.length === 0) {
-      showToast("Mindestens eine Zelle mit Anteil > 0 wird gebraucht.", { variant: "error" });
+      showToast(t("am.7efd6f"), { variant: "error" });
       return;
     }
     onApply(result.additionalInputPaths, result.filterComplex, result.outputLabels, [...cells.values()], outputCount);

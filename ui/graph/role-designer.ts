@@ -27,6 +27,7 @@
 // derselbe Workflow lässt sich abwechselnd grafisch (Topologie) und
 // per Formular (Metadaten) bearbeiten, keine doppelte Formular-UI für
 // bereits vollständig vorhandene Felder.
+import { t } from "../shell/i18n.ts";
 import {
   defaultPosition,
   HEADER_HEIGHT,
@@ -148,10 +149,10 @@ function hostOptionStatus(host: HostEntry): { online: boolean; prefix: string; c
     prefix: online ? "● " : "○ ",
     color: online ? "" : "#e05252",
     title: online
-      ? "Host online"
+      ? t("rd.514366")
       : host.metrics
-        ? `Host offline — zuletzt gesehen ${new Date(host.metrics.receivedAt).toLocaleTimeString()}`
-        : "Host offline — keine Telemetrie empfangen",
+        ? t("rd.eda8d2", { p0: new Date(host.metrics.receivedAt).toLocaleTimeString() })
+        : t("rd.61ea4b"),
   };
 }
 
@@ -348,7 +349,7 @@ export class RoleDesigner extends HTMLElement {
           this.#connections = wf.definition.connections.map((c) => ({ ...c }));
         }
       } catch {
-        showToast("Workflow konnte nicht geladen werden.");
+        showToast(t("rd.cc1bd0"));
       }
     } else {
       this.#name = "";
@@ -479,14 +480,14 @@ export class RoleDesigner extends HTMLElement {
   async #removeRole(name: string) {
     const hasConnections = this.#connections.some((c) => c.fromRole === name || c.toRole === name);
     const hasStandbyRef = this.#roles.some((r) => r.standbyFor === name);
-    let message = `Rolle „${name}" wirklich entfernen?`;
+    let message = t("rd.e80be5", { p0: name });
     if (hasConnections || hasStandbyRef) {
-      const losses = [hasConnections && "ihre Verbindungen", hasStandbyRef && "eine Standby-Zuordnung darauf"]
+      const losses = [hasConnections && t("rd.14ab7f"), hasStandbyRef && t("rd.30eb50")]
         .filter((x): x is string => !!x)
-        .join(" und ");
-      message = `Rolle „${name}" wirklich entfernen? Dabei gehen auch ${losses} verloren.`;
+        .join(t("rd.7ada64"));
+      message = t("rd.62beac", { p0: name, p1: losses });
     }
-    if (!(await confirmDialog(message, { confirmLabel: "Entfernen" }))) return;
+    if (!(await confirmDialog(message, { confirmLabel: t("rd.513d30") }))) return;
     this.#pushUndo();
     const result = removeRole(this.#roles, this.#connections, name);
     this.#roles = result.roles;
@@ -500,7 +501,7 @@ export class RoleDesigner extends HTMLElement {
     this.#editingRoleName = null;
     if (!result.ok) {
       if (newName.trim() && newName.trim() !== oldName) {
-        showToast(`Name "${newName.trim()}" ist schon vergeben oder ungültig.`);
+        showToast(t("rd.a65046", { p0: newName.trim() }));
       }
       this.#render();
       return;
@@ -524,7 +525,7 @@ export class RoleDesigner extends HTMLElement {
   async #save() {
     const roles = this.#roles.filter((r) => r.name && r.nodeType);
     if (!this.#name || roles.length === 0) {
-      showToast("Name und mindestens eine Rolle sind nötig.");
+      showToast(t("rd.fb8aa5"));
       return;
     }
     const body = {
@@ -540,12 +541,12 @@ export class RoleDesigner extends HTMLElement {
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        showToast(`Speichern fehlgeschlagen: ${await res.text()}`);
+        showToast(t("rd.616d9c", { p0: await res.text() }));
         return;
       }
       this.dispatchEvent(new CustomEvent("designer-saved", { bubbles: true }));
     } catch (err) {
-      showToast(`Speichern fehlgeschlagen: ${err}`);
+      showToast(t("rd.616d9c", { p0: err }));
     } finally {
       this.#saving = false;
       this.#renderToolbar();
@@ -562,7 +563,7 @@ export class RoleDesigner extends HTMLElement {
     this.#toolbar.replaceChildren();
 
     const nameInput = document.createElement("input");
-    nameInput.placeholder = "Workflow-Name";
+    nameInput.placeholder = t("rd.b2d236");
     nameInput.value = this.#name;
     nameInput.style.cssText = "width:180px;";
     nameInput.addEventListener("input", () => {
@@ -571,7 +572,7 @@ export class RoleDesigner extends HTMLElement {
     this.#toolbar.appendChild(nameInput);
 
     const hostSelect = document.createElement("select");
-    hostSelect.title = "Ziel-Host für die nächste hinzugefügte Rolle (Klick oder Ziehen aus dem Katalog links).";
+    hostSelect.title = t("rd.dc352f");
     const localOpt = document.createElement("option");
     localOpt.value = "";
     localOpt.textContent = "(lokal)";
@@ -598,8 +599,8 @@ export class RoleDesigner extends HTMLElement {
     // die Katalog-Palette links (#renderPalette) — Klick dort tut
     // dasselbe (Standardposition), Ziehen zusätzlich mit Positionskontrolle.
     const undoBtn = document.createElement("button");
-    undoBtn.textContent = "↶ Rückgängig";
-    undoBtn.title = "Rückgängig (Strg+Z)";
+    undoBtn.textContent = t("rd.008897");
+    undoBtn.title = t("rd.281e1f");
     undoBtn.disabled = this.#undoStack.length === 0;
     undoBtn.addEventListener("click", () => this.#undo());
     this.#toolbar.appendChild(undoBtn);
@@ -607,7 +608,7 @@ export class RoleDesigner extends HTMLElement {
 
     const redoBtn = document.createElement("button");
     redoBtn.textContent = "↷ Wiederholen";
-    redoBtn.title = "Wiederholen (Strg+Y)";
+    redoBtn.title = t("rd.d84dd6");
     redoBtn.disabled = this.#redoStack.length === 0;
     redoBtn.addEventListener("click", () => this.#redo());
     this.#toolbar.appendChild(redoBtn);
@@ -620,20 +621,20 @@ export class RoleDesigner extends HTMLElement {
     const hint = document.createElement("span");
     hint.style.cssText = "color:#999;";
     hint.textContent =
-      "Ziehen: verschieben · vom Kreis rechts zum Kreis links ziehen: verbinden · " +
-      "Kante oder ✕ anklicken: entfernen · ✎ oder Doppelklick auf den Namen: umbenennen · " +
-      "Strg+Z/Strg+Y: rückgängig/wiederholen";
+      t("rd.c90d8d") +
+      t("rd.de5aed") +
+      t("rd.e743cd");
     this.#toolbar.appendChild(hint);
 
     const saveBtn = document.createElement("button");
-    saveBtn.textContent = this.#saving ? "Speichert …" : this.#workflowId ? "Speichern" : "Anlegen";
+    saveBtn.textContent = this.#saving ? t("rd.b55aba") : this.#workflowId ? t("rd.b97d23") : t("rd.6212ff");
     saveBtn.className = "omp-btn-primary";
     saveBtn.disabled = this.#saving;
     saveBtn.addEventListener("click", () => this.#save());
     this.#toolbar.appendChild(saveBtn);
 
     const closeBtn = document.createElement("button");
-    closeBtn.textContent = "Schließen";
+    closeBtn.textContent = t("rd.8311b9");
     closeBtn.addEventListener("click", () => this.#close());
     this.#toolbar.appendChild(closeBtn);
   }
@@ -658,13 +659,13 @@ export class RoleDesigner extends HTMLElement {
     this.#palette.replaceChildren();
 
     const heading = document.createElement("div");
-    heading.textContent = "Node-Katalog";
+    heading.textContent = t("rd.322f5f");
     heading.style.cssText = "font-size:12px;font-weight:600;margin-bottom:6px;color:#ddd;";
     this.#palette.appendChild(heading);
 
     if (this.#catalog.length === 0) {
       const empty = document.createElement("p");
-      empty.textContent = "Katalog wird geladen …";
+      empty.textContent = t("rd.0926c5");
       empty.style.cssText = "color:#999;font-size:11px;";
       this.#palette.appendChild(empty);
       return;
@@ -673,7 +674,7 @@ export class RoleDesigner extends HTMLElement {
     const searchInput = document.createElement("input");
     searchInput.setAttribute("data-role", "designer-palette-search");
     searchInput.type = "search";
-    searchInput.placeholder = "Suchen…";
+    searchInput.placeholder = t("rd.26fdfa");
     searchInput.value = this.#paletteFilterQuery;
     searchInput.style.cssText = "width:100%;box-sizing:border-box;margin-bottom:6px;font-size:11px;";
     searchInput.addEventListener("input", () => {
@@ -695,7 +696,7 @@ export class RoleDesigner extends HTMLElement {
 
     if (filtered.length === 0) {
       const empty = document.createElement("p");
-      empty.textContent = "Keine Treffer.";
+      empty.textContent = t("rd.c977e2");
       empty.style.cssText = "color:#999;font-size:11px;";
       this.#palette.appendChild(empty);
       return;
@@ -708,8 +709,8 @@ export class RoleDesigner extends HTMLElement {
       item.draggable = true;
       item.textContent = `+ ${entry.label}`;
       item.title =
-        `${entry.label} — auf die Fläche ziehen, um an einer bestimmten Position anzulegen, ` +
-        "oder klicken für die Standardposition.";
+        t("rd.da4ea0", { p0: entry.label }) +
+        t("rd.8e078a");
       item.style.cssText =
         "padding:4px 6px;margin-bottom:4px;border:1px solid #444;border-radius:3px;cursor:grab;" +
         "background:#2a2a2a;color:#ddd;font-size:11px;user-select:none;";
@@ -795,7 +796,7 @@ export class RoleDesigner extends HTMLElement {
     line.style.pointerEvents = "none";
 
     const title = document.createElementNS(SVG_NS, "title");
-    title.textContent = `${conn.fromRole} → ${conn.toRole} — anklicken zum Entfernen`;
+    title.textContent = t("rd.64b0b3", { p0: conn.fromRole, p1: conn.toRole });
     hitLine.appendChild(title);
 
     hitLine.addEventListener("pointerenter", () => line.setAttribute("stroke", "#8ec1ea"));
@@ -938,7 +939,7 @@ export class RoleDesigner extends HTMLElement {
       });
       const title = document.createElementNS(SVG_NS, "title");
       title.textContent =
-        "Doppelklick zum Umbenennen — dieser Name erscheint als Sender-/Crosspoint-Label (Nutzerwunsch 2026-07-30: sprechende Namen).";
+        t("rd.50a83a");
       nameText.appendChild(title);
       g.appendChild(nameText);
 
@@ -961,7 +962,7 @@ export class RoleDesigner extends HTMLElement {
         this.#render();
       });
       const renameTitle = document.createElementNS(SVG_NS, "title");
-      renameTitle.textContent = "Umbenennen";
+      renameTitle.textContent = t("rd.cd85cd");
       renameIcon.appendChild(renameTitle);
       g.appendChild(renameIcon);
     }
@@ -985,19 +986,19 @@ export class RoleDesigner extends HTMLElement {
     hostObject.setAttribute("height", String(HOST_ROW_HEIGHT));
     hostObject.addEventListener("pointerdown", (ev) => ev.stopPropagation());
     const hostSelect = document.createElement("select");
-    hostSelect.title = "Ziel-Host dieser Rolle.";
+    hostSelect.title = t("rd.d9e1ac");
     hostSelect.style.cssText =
       "width:100%;font-size:10px;background:#1e1e1e;color:#ddd;border:1px solid #444;box-sizing:border-box;";
     const hostLocalOpt = document.createElement("option");
     hostLocalOpt.value = "";
-    hostLocalOpt.textContent = "Host: (lokal)";
+    hostLocalOpt.textContent = t("rd.f60d6f");
     if (!role.hostId) hostLocalOpt.selected = true;
     hostSelect.appendChild(hostLocalOpt);
     for (const host of this.#hosts) {
       const opt = document.createElement("option");
       opt.value = host.id;
       const status = hostOptionStatus(host);
-      opt.textContent = `Host: ${status.prefix}${host.label}`;
+      opt.textContent = t("rd.ee4ff2", { p0: status.prefix, p1: host.label });
       opt.style.color = status.color;
       opt.title = status.title;
       if (host.id === role.hostId) opt.selected = true;
@@ -1010,7 +1011,7 @@ export class RoleDesigner extends HTMLElement {
     if (role.hostId && !this.#hosts.some((h) => h.id === role.hostId)) {
       const unknownOpt = document.createElement("option");
       unknownOpt.value = role.hostId;
-      unknownOpt.textContent = `Host: ${role.hostId} (nicht registriert)`;
+      unknownOpt.textContent = t("rd.3b742a", { p0: role.hostId });
       unknownOpt.selected = true;
       hostSelect.appendChild(unknownOpt);
     }
@@ -1034,12 +1035,12 @@ export class RoleDesigner extends HTMLElement {
     // Pointer-Interaktion unten).
     formatObject.addEventListener("pointerdown", (ev) => ev.stopPropagation());
     const formatSelect = document.createElement("select");
-    formatSelect.title = "Standard-Format dieser Rolle — leer lässt den Node bei seinem eigenen Default.";
+    formatSelect.title = t("rd.d48d37");
     formatSelect.style.cssText =
       "width:100%;font-size:10px;background:#1e1e1e;color:#ddd;border:1px solid #444;box-sizing:border-box;";
     const formatDefaultOpt = document.createElement("option");
     formatDefaultOpt.value = "";
-    formatDefaultOpt.textContent = "Format: Node-Standard";
+    formatDefaultOpt.textContent = t("rd.2c585c");
     formatSelect.appendChild(formatDefaultOpt);
     for (const name of STANDARD_FORMATS) {
       const opt = document.createElement("option");
@@ -1068,17 +1069,17 @@ export class RoleDesigner extends HTMLElement {
     standbyObject.setAttribute("height", String(STANDBY_ROW_HEIGHT));
     standbyObject.addEventListener("pointerdown", (ev) => ev.stopPropagation());
     const standbySelect = document.createElement("select");
-    standbySelect.title = "Warme Standby-Rolle für eine andere Rolle desselben Node-Typs — übernimmt automatisch, wenn die Primärrolle ausfällt (K7 Teil 4).";
+    standbySelect.title = t("rd.f53db2");
     standbySelect.style.cssText =
       "width:100%;font-size:10px;background:#1e1e1e;color:#ddd;border:1px solid #444;box-sizing:border-box;";
     const standbyNoneOpt = document.createElement("option");
     standbyNoneOpt.value = "";
-    standbyNoneOpt.textContent = "Standby für: —";
+    standbyNoneOpt.textContent = t("rd.7ce364");
     standbySelect.appendChild(standbyNoneOpt);
     for (const candidate of standbyCandidates(this.#roles, role)) {
       const opt = document.createElement("option");
       opt.value = candidate.name;
-      opt.textContent = `Standby für: ${candidate.name}`;
+      opt.textContent = t("rd.2238e9", { p0: candidate.name });
       if (candidate.name === role.standbyFor) opt.selected = true;
       standbySelect.appendChild(opt);
     }
@@ -1108,14 +1109,14 @@ export class RoleDesigner extends HTMLElement {
     placementWrap.style.cssText = "display:flex;gap:2px;width:100%;box-sizing:border-box;";
     const placementSelect = document.createElement("select");
     placementSelect.title =
-      "Placement-Eskalation bei Host-Überlast (D6 Teil 4) — advisory zeigt nur einen Alarm, auto-confirm-window/auto ziehen die Rolle automatisch auf einen gesunden Ausweichhost um.";
+      t("rd.b94a25");
     placementSelect.style.cssText =
       "flex:1;min-width:0;font-size:10px;background:#1e1e1e;color:#ddd;border:1px solid #444;box-sizing:border-box;";
     const windowInput = document.createElement("input");
     windowInput.type = "number";
     windowInput.min = "1";
     windowInput.placeholder = "30s";
-    windowInput.title = "Bestätigungsfenster in Sekunden, bevor die Migration ohne Eingriff automatisch ausgeführt wird (leer = 30s).";
+    windowInput.title = t("rd.a92c96");
     windowInput.style.cssText =
       "width:44px;font-size:10px;background:#1e1e1e;color:#ddd;border:1px solid #444;box-sizing:border-box;";
     windowInput.value = role.placement?.confirmWindowSeconds ? String(role.placement.confirmWindowSeconds) : "";
@@ -1129,9 +1130,9 @@ export class RoleDesigner extends HTMLElement {
       };
     });
     const placementOptions: Array<[string, string]> = [
-      ["", "Placement: advisory"],
-      ["auto-confirm-window", "Placement: auto (Bestätigung)"],
-      ["auto", "Placement: auto (sofort)"],
+      ["", t("rd.dfb4af")],
+      ["auto-confirm-window", t("rd.87c900")],
+      ["auto", t("rd.41cdd7")],
     ];
     for (const [value, label] of placementOptions) {
       const opt = document.createElement("option");
@@ -1173,7 +1174,7 @@ export class RoleDesigner extends HTMLElement {
       const mixerLevelsWrap = document.createElement("div");
       mixerLevelsWrap.style.cssText = "display:flex;align-items:center;gap:4px;width:100%;box-sizing:border-box;";
       const mixerLevelsLabel = document.createElement("span");
-      mixerLevelsLabel.textContent = "Ebenen:";
+      mixerLevelsLabel.textContent = t("rd.0a298f");
       mixerLevelsLabel.style.cssText = "font-size:10px;color:#999;white-space:nowrap;";
       const mixerLevelsInput = document.createElement("input");
       mixerLevelsInput.type = "number";
@@ -1181,7 +1182,7 @@ export class RoleDesigner extends HTMLElement {
       mixerLevelsInput.max = "8";
       mixerLevelsInput.placeholder = "1";
       mixerLevelsInput.title =
-        "Anzahl unabhängiger M/E-Ebenen dieses Mixers, jede mit eigenem PGM-Ausgang (z. B. für einen Studio-Monitor unabhängig vom Sende-PGM) — leer/1 = Node-eigener Default, nur beim Start wirksam.";
+        t("rd.0618c4");
       mixerLevelsInput.style.cssText =
         "width:40px;font-size:10px;background:#1e1e1e;color:#ddd;border:1px solid #444;box-sizing:border-box;";
       mixerLevelsInput.value = role.mixerLevels ? String(role.mixerLevels) : "";
@@ -1218,7 +1219,7 @@ export class RoleDesigner extends HTMLElement {
     if (role.nodeType === "omp-decklink") {
       const ioPortSelect = document.createElement("select");
       ioPortSelect.title =
-        "Physischer DeckLink-Port, den diese Rolle exklusiv belegt (D13 I/O-Karten-Claim) — legt device-number/Richtung beim Start fest. Ohne freien passenden Port lehnt der Orchestrator den Start ehrlich ab, statt mit dem eingebauten Default (device-number=0, Eingang) in einen Crash-Loop zu laufen. 'Nicht zugewiesen' behält genau dieses alte, ungeprüfte Default-Verhalten bei.";
+        t("rd.e7cb49");
       ioPortSelect.style.cssText =
         "width:100%;font-size:10px;background:#1e1e1e;color:#ddd;border:1px solid #444;box-sizing:border-box;";
       // Leere Option = kein Claim (unverändertes Alt-Verhalten, gleiche
@@ -1228,7 +1229,7 @@ export class RoleDesigner extends HTMLElement {
       // requiredIoPort===undefined haben — #addRole setzt es für NEUE
       // Rollen direkt auf "in", s. dortige Doku.
       const ioPortOptions: Array<[string, string]> = [
-        ["", "I/O-Port: nicht zugewiesen"],
+        ["", t("rd.59d216")],
         ["in", "I/O-Port: Eingang (SDI-In)"],
         ["out", "I/O-Port: Ausgang (SDI-Out)"],
       ];
@@ -1433,7 +1434,7 @@ export class RoleDesigner extends HTMLElement {
     }
     const result = addConnection(this.#connections, fromRole, toRole);
     if (!result.ok) {
-      showToast(fromRole === toRole ? "Eine Rolle kann sich nicht selbst verbinden." : "Diese Verbindung besteht bereits.");
+      showToast(fromRole === toRole ? t("rd.c1ae46") : t("rd.af7d46"));
     } else {
       this.#pushUndo();
     }

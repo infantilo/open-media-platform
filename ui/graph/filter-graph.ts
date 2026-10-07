@@ -12,6 +12,7 @@
 // neuen Zeichenbibliothek — Filter-Pads sind strukturell dasselbe wie
 // NMOS-Sender/Receiver-Ports (mehrere benannte Ein-/Ausgänge je
 // Kachel), nur die Bedeutung ist eine andere.
+import { t } from "../shell/i18n.ts";
 import {
   arrangeByFlow,
   type ArrangeEdge,
@@ -95,12 +96,12 @@ export function openFilterGraphEditor(
   panel.setAttribute("data-role", "filter-graph-editor");
 
   const toolbar = h("div", "display:flex;align-items:center;gap:8px;padding:8px;border-bottom:1px solid var(--omp-border);flex-shrink:0;");
-  const title = h("div", "font-weight:600;flex:1;", "Filter-Kette bearbeiten");
-  const arrangeBtn = h("button", "", "Automatisch anordnen");
+  const title = h("div", "font-weight:600;flex:1;", t("fg.10c6b6"));
+  const arrangeBtn = h("button", "", t("fg.3ce2cc"));
   arrangeBtn.type = "button";
-  const cancelBtn = h("button", "", "Abbrechen");
+  const cancelBtn = h("button", "", t("fg.4b9727"));
   cancelBtn.type = "button";
-  const applyBtn = h("button", "", "Übernehmen");
+  const applyBtn = h("button", "", t("fg.bf8310"));
   applyBtn.type = "button";
   applyBtn.className = "omp-btn-primary";
   applyBtn.setAttribute("data-role", "filter-graph-apply");
@@ -136,12 +137,12 @@ export function openFilterGraphEditor(
   addOutputBtn.addEventListener("click", () => {
     const id = nextId("out");
     const n = nodes.filter((x) => x.kind === "output").length + 1;
-    nodes.push({ id, kind: "output", label: `Ausgang ${n}` });
+    nodes.push({ id, kind: "output", label: t("fg.75f7d9", { p0: n }) });
     positions[id] = defaultNodePosition();
     render();
   });
   const filterSearch = h("input", "width:100%;box-sizing:border-box;margin-bottom:4px;");
-  filterSearch.placeholder = "Filter suchen …";
+  filterSearch.placeholder = t("fg.04f5e1");
   const filterList = h("div", "max-height:none;");
   let allFilters: FFFilterEntry[] = [];
   const renderFilterList = () => {
@@ -157,7 +158,7 @@ export function openFilterGraphEditor(
       item.addEventListener("click", () => addFilterNode(f));
       filterList.appendChild(item);
     }
-    if (shown.length === 0) filterList.appendChild(h("div", "font-size:11px;color:var(--omp-text-dim);", q ? "Kein Filter passt." : "lade Filter …"));
+    if (shown.length === 0) filterList.appendChild(h("div", "font-size:11px;color:var(--omp-text-dim);", q ? t("fg.f3a961") : "lade Filter …"));
   };
   filterSearch.addEventListener("input", renderFilterList);
   (async () => {
@@ -165,10 +166,10 @@ export function openFilterGraphEditor(
     renderFilterList();
   })();
   palette.append(
-    h("div", "font-weight:600;font-size:12px;margin-bottom:4px;", "Bausteine"),
+    h("div", "font-weight:600;font-size:12px;margin-bottom:4px;", t("fg.642d30")),
     addInputBtn,
     addOutputBtn,
-    h("div", "font-size:11px;color:var(--omp-text-dim);margin:6px 0 2px;", "Filter (aus echter ffmpeg-Liste):"),
+    h("div", "font-size:11px;color:var(--omp-text-dim);margin:6px 0 2px;", t("fg.5a3fe6")),
     filterSearch,
     filterList,
   );
@@ -253,7 +254,7 @@ export function openFilterGraphEditor(
     label.setAttribute("fill", "#fff");
     label.setAttribute("font-size", "11");
     label.style.pointerEvents = "none";
-    label.textContent = node.kind === "filter" ? (node.filterName ?? "") : node.kind === "input" ? "Eingang" : "Ausgang";
+    label.textContent = node.kind === "filter" ? (node.filterName ?? "") : node.kind === "input" ? t("fg.4bf36f") : t("fg.2b73e4");
     g.appendChild(label);
 
     const rm = svgEl("text");
@@ -284,7 +285,7 @@ export function openFilterGraphEditor(
     if (node.kind === "input" || node.kind === "output") {
       const li = h("input", "width:100%;box-sizing:border-box;font-size:10px;");
       li.value = node.label ?? "";
-      li.placeholder = node.kind === "input" ? "z. B. 0:v" : "Name (optional)";
+      li.placeholder = node.kind === "input" ? "z. B. 0:v" : t("fg.c45971");
       li.addEventListener("input", () => {
         node.label = li.value;
         renderEdgesOnly();
@@ -294,7 +295,7 @@ export function openFilterGraphEditor(
       const shape = parseFilterIO(node.filterIO ?? "");
       if (shape.inputs.dynamic) {
         const row = h("div", "display:flex;align-items:center;gap:3px;margin-bottom:2px;");
-        row.append(h("span", "", "Eingänge:"));
+        row.append(h("span", "", t("fg.8999d7")));
         const n = h("input", "width:36px;");
         n.type = "number";
         n.min = "1";
@@ -308,7 +309,7 @@ export function openFilterGraphEditor(
       }
       if (shape.outputs.dynamic) {
         const row = h("div", "display:flex;align-items:center;gap:3px;margin-bottom:2px;");
-        row.append(h("span", "", "Ausgänge:"));
+        row.append(h("span", "", t("fg.a2c1ed")));
         const n = h("input", "width:36px;");
         n.type = "number";
         n.min = "1";
@@ -360,7 +361,7 @@ export function openFilterGraphEditor(
             range.title = opt.description ?? "";
             const num = h("input", "width:44px;font-size:10px;");
             num.value = initial;
-            num.placeholder = opt.default ? `Standard: ${opt.default}` : "";
+            num.placeholder = opt.default ? t("fg.440a36", { p0: opt.default }) : "";
             range.addEventListener("input", () => {
               num.value = range.value;
               node.options = { ...node.options, [opt.name]: range.value };
@@ -374,7 +375,7 @@ export function openFilterGraphEditor(
             row.appendChild(wrap);
           } else {
             const input = h("input", "width:100%;box-sizing:border-box;font-size:10px;");
-            input.placeholder = opt.default ? `Standard: ${opt.default}` : "";
+            input.placeholder = opt.default ? t("fg.440a36", { p0: opt.default }) : "";
             input.value = node.options?.[opt.name] ?? "";
             input.title = opt.description ?? "";
             const setVal = () => {
@@ -386,7 +387,7 @@ export function openFilterGraphEditor(
           }
           fowrap.appendChild(row);
         }
-        if (defs.length === 0) fowrap.appendChild(h("div", "color:#999;", "keine Optionen"));
+        if (defs.length === 0) fowrap.appendChild(h("div", "color:#999;", t("fg.cbc4b0")));
       }
     }
     fo.appendChild(fowrap);

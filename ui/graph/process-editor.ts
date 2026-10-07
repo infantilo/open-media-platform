@@ -30,6 +30,7 @@
 // orchestrator/internal/process/validate.go) — wird stattdessen im
 // Konfigurations-Panel je Kachel als Dropdown gesetzt, optisch als
 // eigene, gepunktete Linie mitgezeichnet.
+import { t as tt } from "../shell/i18n.ts";
 import {
   arrangeByFlow,
   HEADER_HEIGHT,
@@ -82,24 +83,24 @@ const TILE_HEIGHT = HEADER_HEIGHT + TYPE_ROW_HEIGHT + ACTIONS_ROW_HEIGHT;
 // process-step-config-logic.ts (Nachtrag 270 — vorher englische
 // Fachbegriffe wie "Service Call"/"Condition").
 const PALETTE_GROUPS: { id: "action" | "flow" | "human"; label: string }[] = [
-  { id: "action", label: "Aktionen" },
-  { id: "human", label: "Menschen" },
-  { id: "flow", label: "Ablauf" },
+  { id: "action", label: tt("pe.872073") },
+  { id: "human", label: tt("pe.a0c169") },
+  { id: "flow", label: tt("pe.708dee") },
 ];
 
 // Asset-Status für Auslöser "Asset wechselt auf …" — Fallback, falls
 // GET /api/v1/asset-lifecycle nicht erreichbar ist.
 const ASSET_STATUS_LABEL: Record<string, string> = {
-  ingesting: "Eingang",
-  registered: "Registriert",
+  ingesting: tt("pe.4bf36f"),
+  registered: tt("pe.469b92"),
   processing: "In Verarbeitung",
-  ready: "Bereit",
-  in_review: "In Prüfung",
-  approved: "Freigegeben",
-  published: "Veröffentlicht",
-  archived: "Archiviert",
-  expired: "Abgelaufen",
-  deleted: "Gelöscht",
+  ready: tt("pe.379ee8"),
+  in_review: tt("pe.9b9437"),
+  approved: tt("pe.6bb8d0"),
+  published: tt("pe.18a0e4"),
+  archived: tt("pe.d11aee"),
+  expired: tt("pe.768a27"),
+  deleted: tt("pe.b74b71"),
 };
 
 type DragState =
@@ -276,7 +277,7 @@ export class ProcessEditor extends HTMLElement {
   }
 
   async #removeStep(id: string) {
-    const ok = await confirmDialog(`Schritt "${id}" wirklich entfernen? Verweise darauf (next/branches/compensation) werden mit entfernt.`);
+    const ok = await confirmDialog(tt("pe.2567e3", { p0: id }));
     if (!ok) return;
     this.#def = removeStep(this.#def, id);
     delete this.#positions[id];
@@ -287,7 +288,7 @@ export class ProcessEditor extends HTMLElement {
   #renameStep(oldId: string, newId: string) {
     const result = renameStepId(this.#def, oldId, newId);
     if (!result.ok) {
-      if (newId.trim() && newId.trim() !== oldId) showToast("Ungültige oder bereits vergebene Schritt-ID.", { variant: "error" });
+      if (newId.trim() && newId.trim() !== oldId) showToast(tt("pe.c0fdae"), { variant: "error" });
       this.#editingId = null;
       this.#render();
       return;
@@ -319,29 +320,29 @@ export class ProcessEditor extends HTMLElement {
 
     const title = document.createElement("span");
     title.style.cssText = "font-weight:600;white-space:nowrap;";
-    title.textContent = "Prozess-Ablauf";
+    title.textContent = tt("pe.f6f742");
     this.#toolbar.appendChild(title);
 
     const stats = document.createElement("span");
     stats.style.cssText = "color:#999;white-space:nowrap;";
-    stats.textContent = `${this.#def.steps.length} Schritte`;
+    stats.textContent = tt("pe.060d74", { p0: this.#def.steps.length });
     this.#toolbar.appendChild(stats);
 
     const trigBtn = document.createElement("button");
     const nTrig = (this.#def.triggers ?? []).length;
-    trigBtn.textContent = nTrig ? `⚡ Auslöser (${nTrig})` : "⚡ Auslöser: nur manuell";
-    trigBtn.title = "Festlegen, bei welchem Ereignis der Prozess automatisch startet";
+    trigBtn.textContent = nTrig ? tt("pe.b1ca0c", { p0: nTrig }) : tt("pe.5528e3");
+    trigBtn.title = tt("pe.c979b7");
     trigBtn.setAttribute("data-role", "process-editor-triggers");
     trigBtn.addEventListener("click", () => this.#openTriggersModal());
     this.#toolbar.appendChild(trigBtn);
 
     const arrangeBtn = document.createElement("button");
-    arrangeBtn.textContent = "Auto-Anordnen";
+    arrangeBtn.textContent = tt("pe.de024d");
     arrangeBtn.addEventListener("click", () => this.#autoArrange());
     this.#toolbar.appendChild(arrangeBtn);
 
     const reasonInput = document.createElement("input");
-    reasonInput.placeholder = "Änderungsgrund (optional)";
+    reasonInput.placeholder = tt("pe.7cf6d9");
     reasonInput.value = this.#changeReason;
     reasonInput.style.cssText = "width:220px;";
     reasonInput.addEventListener("input", () => {
@@ -352,19 +353,19 @@ export class ProcessEditor extends HTMLElement {
     const hint = document.createElement("span");
     hint.style.cssText = "color:#999;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
     hint.textContent =
-      "Doppelklick auf eine Kachel: einstellen · vom Kreis rechts auf eine Kachel ziehen: verbinden · " +
-      "Verbindung anklicken: entfernen";
+      tt("pe.d6ed5a") +
+      tt("pe.feebfd");
     this.#toolbar.appendChild(hint);
 
     const saveBtn = document.createElement("button");
     saveBtn.className = "omp-btn-primary";
-    saveBtn.textContent = "Speichern";
+    saveBtn.textContent = tt("pe.b97d23");
     saveBtn.setAttribute("data-role", "process-editor-save");
     saveBtn.addEventListener("click", () => this.dispatchEvent(new CustomEvent("process-editor-save")));
     this.#toolbar.appendChild(saveBtn);
 
     const closeBtn = document.createElement("button");
-    closeBtn.textContent = "Abbrechen";
+    closeBtn.textContent = tt("pe.4b9727");
     closeBtn.addEventListener("click", () => this.dispatchEvent(new CustomEvent("process-editor-cancel")));
     this.#toolbar.appendChild(closeBtn);
     this.#toolbar.querySelectorAll("button").forEach((b) => nowrap(b as HTMLElement));
@@ -375,11 +376,11 @@ export class ProcessEditor extends HTMLElement {
     this.#palette.replaceChildren();
 
     const heading = document.createElement("div");
-    heading.textContent = "Bausteine";
+    heading.textContent = tt("pe.642d30");
     heading.style.cssText = "font-size:12px;font-weight:600;margin-bottom:2px;";
     this.#palette.appendChild(heading);
     const sub = document.createElement("div");
-    sub.textContent = "Klicken oder auf die Fläche ziehen.";
+    sub.textContent = tt("pe.e4259d");
     sub.style.cssText = "font-size:10px;color:#999;margin-bottom:6px;";
     this.#palette.appendChild(sub);
 
@@ -389,7 +390,7 @@ export class ProcessEditor extends HTMLElement {
       item.setAttribute("data-role", "process-editor-palette-item");
       item.setAttribute("data-step-type", type);
       item.textContent = `+ ${stepTypeLabel(type)}`;
-      item.title = enabled ? (info?.help ?? "") : `${info?.help ?? ""} Auf diesem Server nicht ausführbar — ein Prozess mit diesem Baustein würde beim Erreichen des Schritts fehlschlagen.`;
+      item.title = enabled ? (info?.help ?? "") : tt("pe.0aed56", { p0: info?.help ?? "" });
       item.style.cssText =
         "padding:4px 6px;margin-bottom:4px;border:1px solid #444;border-radius:3px;" +
         "background:#2a2a2a;font-size:11px;user-select:none;" +
@@ -419,7 +420,7 @@ export class ProcessEditor extends HTMLElement {
       const det = document.createElement("details");
       det.style.cssText = "margin-top:10px;";
       const sum = document.createElement("summary");
-      sum.textContent = `Nicht verfügbar (${unavailable.length})`;
+      sum.textContent = tt("pe.d3a973", { p0: unavailable.length });
       sum.style.cssText = "font-size:10px;color:#999;cursor:pointer;";
       det.appendChild(sum);
       for (const t of unavailable) det.appendChild(makeItem(t, false));
@@ -498,9 +499,9 @@ export class ProcessEditor extends HTMLElement {
     const title = document.createElementNS(SVG_NS, "title");
     title.textContent =
       edge.kind === "next"
-        ? `${edge.from} → ${edge.to} (next) — anklicken zum Entfernen`
+        ? tt("pe.efe2f6", { p0: edge.from, p1: edge.to })
         : edge.kind === "branch"
-          ? `${edge.from} → ${edge.to} (branch: ${edge.label}) — anklicken zum Entfernen`
+          ? tt("pe.dd75f3", { p0: edge.from, p1: edge.to, p2: edge.label })
           : `${edge.from} → ${edge.to} (compensation)`;
     hitLine.appendChild(title);
 
@@ -648,7 +649,7 @@ export class ProcessEditor extends HTMLElement {
     typeText.setAttribute("font-size", "10");
     // Warnung direkt auf der Kachel statt erst beim Ausführen: nicht
     // ausführbarer Typ (rot) oder fehlende Pflichtangabe (orange).
-    const problem = !this.#isExecutable(step.type) ? "nicht ausführbar" : missingConfig(step);
+    const problem = !this.#isExecutable(step.type) ? tt("pe.6c6ab3") : missingConfig(step);
     typeText.setAttribute("fill", problem ? (this.#isExecutable(step.type) ? "#e0a75b" : "#e06b5b") : "#999");
     typeText.setAttribute("data-role", "process-step-status");
     typeText.textContent = problem ? `⚠ ${stepTypeLabel(step.type)}: ${problem}` : stepTypeLabel(step.type);
@@ -661,7 +662,7 @@ export class ProcessEditor extends HTMLElement {
       startBtn.setAttribute("y", String(HEADER_HEIGHT + TYPE_ROW_HEIGHT + 15));
       startBtn.setAttribute("fill", "#999");
       startBtn.setAttribute("font-size", "10");
-      startBtn.textContent = "☆ als Start setzen";
+      startBtn.textContent = tt("pe.b9de46");
       startBtn.style.cursor = "pointer";
       startBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
       startBtn.addEventListener("click", (ev) => {
@@ -767,10 +768,9 @@ export class ProcessEditor extends HTMLElement {
     modal.className = "omp-modal";
     modal.style.maxWidth = "560px";
     modal.setAttribute("data-role", "triggers-modal");
-    modal.innerHTML = `<div class="omp-h1">Automatisch starten, wenn …</div>
+    modal.innerHTML = `<div class="omp-h1">${tt("pe.c8a8be")}</div>
       <div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin:4px 0 8px;">
-        Ohne Auslöser startet der Prozess nur manuell („Starten“). Die Daten des Ereignisses stehen den Schritten als Start-Eingabe zur Verfügung (z. B. die Asset-ID).
-        Auslöser wirken erst, wenn die Version veröffentlicht ist.</div>`;
+        ${tt("pe.d4054d")}</div>`;
     const list = document.createElement("div");
     modal.appendChild(list);
 
@@ -779,7 +779,7 @@ export class ProcessEditor extends HTMLElement {
       if (triggers.length === 0) {
         const e = document.createElement("div");
         e.className = "omp-empty";
-        e.textContent = "Kein Auslöser — nur manueller Start.";
+        e.textContent = tt("pe.ff11ee");
         list.appendChild(e);
       }
       triggers.forEach((t, idx) => {
@@ -792,9 +792,9 @@ export class ProcessEditor extends HTMLElement {
         const known = triggerKindForSubject(kinds, t.subject ?? "");
         const custom = document.createElement("input");
         custom.name = "trigger-subject";
-        custom.placeholder = "eigenes Subject, z. B. omp.process.x.fertig";
+        custom.placeholder = tt("pe.7e436d");
         custom.style.cssText = "flex:1;min-width:0;font-family:ui-monospace,monospace;";
-        sel.appendChild(new Option("Eigenes Ereignis (erweitert) …", "__custom"));
+        sel.appendChild(new Option(tt("pe.083fea"), "__custom"));
         sel.value = known ? known.subject : "__custom";
         custom.value = known ? "" : t.subject ?? "";
         custom.style.display = known ? "none" : "block";
@@ -821,7 +821,7 @@ export class ProcessEditor extends HTMLElement {
     render();
 
     const add = document.createElement("button");
-    add.textContent = "+ Auslöser";
+    add.textContent = tt("pe.c481e8");
     add.setAttribute("data-role", "trigger-add");
     add.style.marginTop = "6px";
     add.addEventListener("click", () => {
@@ -833,15 +833,15 @@ export class ProcessEditor extends HTMLElement {
     const actions = document.createElement("div");
     actions.style.cssText = "display:flex;justify-content:flex-end;gap:8px;margin-top:12px;";
     const cancel = document.createElement("button");
-    cancel.textContent = "Abbrechen";
+    cancel.textContent = tt("pe.4b9727");
     cancel.addEventListener("click", () => overlay.remove());
     const ok = document.createElement("button");
     ok.className = "omp-btn-primary";
-    ok.textContent = "Übernehmen";
+    ok.textContent = tt("pe.bf8310");
     ok.setAttribute("data-role", "triggers-apply");
     ok.addEventListener("click", () => {
       if (triggers.some((t) => !t.subject)) {
-        showToast("Jeder Auslöser braucht ein Ereignis.", { variant: "error" });
+        showToast(tt("pe.9b9089"), { variant: "error" });
         return;
       }
       this.#def = { ...this.#def, triggers: triggers.length ? triggers : undefined };
@@ -877,7 +877,7 @@ export class ProcessEditor extends HTMLElement {
     const addBranch = (label: string) => {
       const result = addBranchConnection(this.#def, fromId, label, toId);
       if (!result.ok) {
-        showToast("Bitte einen Namen für den Weg angeben.", { variant: "error" });
+        showToast(tt("pe.889b4d"), { variant: "error" });
         return;
       }
       this.#def = result.def;
@@ -892,7 +892,7 @@ export class ProcessEditor extends HTMLElement {
     if (labels.length) {
       const hint = document.createElement("div");
       hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:6px;";
-      hint.textContent = "Welcher Weg führt hierher?";
+      hint.textContent = tt("pe.c99319");
       modal.appendChild(hint);
       for (const l of labels) {
         const b = document.createElement("button");
@@ -909,10 +909,10 @@ export class ProcessEditor extends HTMLElement {
     nextBtn.className = labels.length ? "" : "omp-btn-primary";
     nextBtn.style.cssText = "display:block;width:100%;margin-top:6px;text-align:left;";
     nextBtn.setAttribute("data-role", "edge-next");
-    nextBtn.textContent = labels.length ? "Immer (unabhängig vom Ergebnis)" : "Danach weiter mit diesem Schritt";
+    nextBtn.textContent = labels.length ? tt("pe.371e70") : tt("pe.87860e");
     nextBtn.addEventListener("click", () => {
       const result = addNextConnection(this.#def, fromId, toId);
-      if (!result.ok) showToast("Diese Verbindung besteht bereits.", { variant: "error" });
+      if (!result.ok) showToast(tt("pe.af7d46"), { variant: "error" });
       else this.#def = result.def;
       close();
       this.#render();
@@ -923,22 +923,22 @@ export class ProcessEditor extends HTMLElement {
     adv.style.cssText = "margin-top:10px;";
     const sum = document.createElement("summary");
     sum.style.cssText = "cursor:pointer;color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);";
-    sum.textContent = "Erweitert: eigener Weg-Name";
+    sum.textContent = tt("pe.7d870e");
     adv.appendChild(sum);
     const branchRow = document.createElement("div");
     branchRow.style.cssText = "display:flex;gap:6px;margin-top:6px;";
     const labelInput = document.createElement("input");
-    labelInput.placeholder = "Weg-Name";
+    labelInput.placeholder = tt("pe.9c9482");
     labelInput.style.cssText = "flex:1;";
     const branchBtn = document.createElement("button");
-    branchBtn.textContent = "Verbinden";
+    branchBtn.textContent = tt("pe.24e7ff");
     branchBtn.addEventListener("click", () => addBranch(labelInput.value));
     branchRow.append(labelInput, branchBtn);
     adv.appendChild(branchRow);
     modal.appendChild(adv);
 
     const cancelBtn = document.createElement("button");
-    cancelBtn.textContent = "Abbrechen";
+    cancelBtn.textContent = tt("pe.4b9727");
     cancelBtn.style.cssText = "display:block;margin-top:12px;";
     cancelBtn.addEventListener("click", close);
     modal.appendChild(cancelBtn);

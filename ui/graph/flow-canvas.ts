@@ -5,6 +5,7 @@
 // `deno test` geprüft) — dieses Modul bindet sie nur an DOM-/Fetch-/
 // EventSource-APIs.
 
+import { t as tt } from "../shell/i18n.ts";
 import { ghostEntriesForZone, type GhostEntry, type PlanInput, type StartPlan, zoneForStoppedWorkflow } from "../shell/workflow-plan-logic.ts";
 import {
   type ArrangeEdge,
@@ -111,7 +112,7 @@ function isHostOnline(metrics?: HostMetrics): boolean {
 // URN (vorher projekteigenes `urn:x-omp:transport:mxl`).
 const TRANSPORT_MXL = "urn:x-nmos:transport:mxl";
 const MXL_ZONE_WARNING_TITLE =
-  "MXL ist host-lokal — für Hostgrenzen ST-2110/SRT-Gateway (D4) einsetzen";
+  tt("flow.90e2ce");
 
 // Gleicher Storage-Key wie `auth.ts`s `TOKEN_KEY`/`connection.ts`s eigene
 // Kopie davon, absichtlich dupliziert statt eines gemeinsamen Imports
@@ -782,10 +783,10 @@ export class FlowCanvas extends HTMLElement {
         body: JSON.stringify(blob),
       });
       if (!response.ok) {
-        this.#showToast(`Layout konnte nicht gespeichert werden: ${response.status}`);
+        this.#showToast(tt("flow.616b70", { p0: response.status }));
       }
     } catch (err) {
-      this.#showToast(`Layout konnte nicht gespeichert werden: ${err}`);
+      this.#showToast(tt("flow.616b70", { p0: err }));
     }
   }
 
@@ -853,7 +854,7 @@ export class FlowCanvas extends HTMLElement {
     // spurlos bliebe — nicht nur den, der sie gestartet hat.
     if (parsed.type === "instance.crashed") {
       const inst = parsed.data as LauncherInstance;
-      this.#showToast(`${inst.label} abgestürzt: ${inst.crashMessage || "unbekannter Fehler"}`);
+      this.#showToast(tt("flow.6b0072", { p0: inst.label, p1: inst.crashMessage || tt("flow.49602e") }));
       void this.#renderPalette();
       return;
     }
@@ -865,7 +866,7 @@ export class FlowCanvas extends HTMLElement {
     // behobene Störung).
     if (parsed.type === "instance.restarted") {
       const inst = parsed.data as LauncherInstance;
-      this.#showToast(`${inst.label} automatisch neu gestartet (${inst.restartCount ?? "?"}. Neustart)`);
+      this.#showToast(tt("flow.a2865c", { p0: inst.label, p1: inst.restartCount ?? "?" }));
       void this.#renderPalette();
       return;
     }
@@ -879,8 +880,8 @@ export class FlowCanvas extends HTMLElement {
     // erfahren, DASS/WARUM gerade umgeschaltet wurde).
     if (parsed.type === "workflow.failover") {
       const ev = parsed.data as FailoverEvent;
-      const reason = ev.trigger === "host-offline" ? "Host nicht mehr erreichbar" : "Prozess-Absturz";
-      this.#showToast(`Rolle „${ev.role}" auf Standby umgeschaltet (${reason})`);
+      const reason = ev.trigger === "host-offline" ? tt("flow.879697") : tt("flow.08e5ad");
+      this.#showToast(tt("flow.20b36c", { p0: ev.role, p1: reason }));
     }
   }
 
@@ -1500,11 +1501,11 @@ export class FlowCanvas extends HTMLElement {
   // s. #zoneIdForGroup-Doku).
   #hostZones(tiles: TileSpec[]): { id: string; label: string; metrics?: HostMetrics }[] {
     const zones: { id: string; label: string; metrics?: HostMetrics }[] = [
-      { id: "local", label: "Orchestrator-Host (lokal)" },
+      { id: "local", label: tt("flow.b40ef3") },
       ...this.#paletteHosts.map((h) => ({ id: h.id, label: h.label, metrics: h.metrics })),
     ];
     if (tiles.some((t) => this.#zoneIdForTile(t) === "unassigned")) {
-      zones.push({ id: "unassigned", label: "Unzugeordnet" });
+      zones.push({ id: "unassigned", label: tt("flow.02d6ca") });
     }
     // Workflow-Kacheln (Kapitel 13 Teil 4) landen ebenfalls in der
     // "mixed"-Lane, wenn ihre Rollen auf uneinheitlichen Hosts laufen —
@@ -1514,7 +1515,7 @@ export class FlowCanvas extends HTMLElement {
       tiles.some((t) => this.#zoneIdForTile(t) === "mixed") ||
       this.#workflowsInScope().some((wf) => this.#zoneIdForWorkflow(wf) === "mixed")
     ) {
-      zones.push({ id: "mixed", label: "Gruppen über mehrere Hosts" });
+      zones.push({ id: "mixed", label: tt("flow.28a45c") });
     }
     return zones;
   }
@@ -1774,7 +1775,7 @@ export class FlowCanvas extends HTMLElement {
     await this.#queueFetchAndRender();
     const wf = this.#workflows.find((w) => w.id === workflowId);
     if (!wf) {
-      this.#showToast("Workflow nicht gefunden.");
+      this.#showToast(tt("flow.ef06dd"));
       return;
     }
     // Kapitel 12 Teil 1/orchestrator workflows.Service.Update(): erlaubt
@@ -1783,7 +1784,7 @@ export class FlowCanvas extends HTMLElement {
     // denen weder eine Vorlagen- noch eine Live-Ansicht sinnvoll wäre.
     const editable = wf.status === "stopped" || wf.status === "paused" || wf.status === "started";
     if (!editable) {
-      this.#showToast(`Workflow „${wf.name}" ist gerade „${wf.status}" — kurz warten und erneut versuchen.`);
+      this.#showToast(tt("flow.ea2b0e", { p0: wf.name, p1: wf.status }));
       return;
     }
     this.#workflowEditId = workflowId;
@@ -1839,7 +1840,7 @@ export class FlowCanvas extends HTMLElement {
   // wenn der Entwurf tatsächlich vom gespeicherten Stand abweicht.
   #confirmDiscardDraft(): boolean {
     if (!this.#isDraftDirty()) return true;
-    return confirm("Ungespeicherte Änderungen verwerfen?");
+    return confirm(tt("flow.a7431c"));
   }
 
   // Löst #workflowScopePendingInstanceIds gegen den aktuellen
@@ -2002,7 +2003,7 @@ export class FlowCanvas extends HTMLElement {
         this.#removeWorkflowConnection(conn.fromRole, conn.toRole);
       });
       const title = document.createElementNS(SVG_NS, "title");
-      title.textContent = "Verbindung trennen";
+      title.textContent = tt("flow.3a12ad");
       line.appendChild(title);
       this.#viewportGroup.appendChild(line);
     }
@@ -2124,8 +2125,8 @@ export class FlowCanvas extends HTMLElement {
     body.style.cursor = "pointer";
     const bodyTitle = document.createElementNS(SVG_NS, "title");
     bodyTitle.textContent = armed
-      ? "Zielrolle anklicken, um zu verbinden (oder hier klicken zum Abbrechen) — ziehen zum Verschieben"
-      : "Klicken, dann Zielrolle anklicken, um zu verbinden — ziehen zum Verschieben";
+      ? tt("flow.26927b")
+      : tt("flow.26ea5c");
     body.appendChild(bodyTitle);
     g.appendChild(body);
 
@@ -2160,7 +2161,7 @@ export class FlowCanvas extends HTMLElement {
       });
       const nameTitle = document.createElementNS(SVG_NS, "title");
       nameTitle.textContent =
-        "Doppelklick zum Umbenennen — dieser Name erscheint als Sender-/Crosspoint-Label (Nutzerwunsch 2026-07-30: sprechende Namen).";
+        tt("flow.50a83a");
       nameText.appendChild(nameTitle);
       g.appendChild(nameText);
     }
@@ -2184,7 +2185,7 @@ export class FlowCanvas extends HTMLElement {
     closeBtn.setAttribute("data-role", "remove-workflow-role");
     closeBtn.textContent = "×";
     const closeTitle = document.createElementNS(SVG_NS, "title");
-    closeTitle.textContent = "Rolle entfernen";
+    closeTitle.textContent = tt("flow.fc94ec");
     closeBtn.appendChild(closeTitle);
     closeBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
     closeBtn.addEventListener("click", (ev) => {
@@ -2246,7 +2247,7 @@ export class FlowCanvas extends HTMLElement {
   #removeWorkflowRole(roleName: string) {
     if (!this.#workflowEditDraft) return;
     if (this.#workflowEditDraft.roles.length <= 1) {
-      this.#showToast("Ein Workflow braucht mindestens eine Rolle.");
+      this.#showToast(tt("flow.19bea4"));
       return;
     }
     if (this.#connectFromRole === roleName) this.#connectFromRole = null;
@@ -2263,7 +2264,7 @@ export class FlowCanvas extends HTMLElement {
     const result = renameRole(this.#workflowEditDraft.roles, this.#workflowEditDraft.connections, oldName, newName);
     if (!result.ok) {
       if (newName.trim() && newName.trim() !== oldName) {
-        this.#showToast(`Name "${newName.trim()}" ist schon vergeben oder ungültig.`);
+        this.#showToast(tt("flow.a65046", { p0: newName.trim() }));
       }
       this.#render();
       return;
@@ -2284,7 +2285,7 @@ export class FlowCanvas extends HTMLElement {
   #addWorkflowConnection(fromRole: string, toRole: string) {
     this.#mutateWorkflowDraft((draft) => {
       if (draft.connections.some((c) => c.fromRole === fromRole && c.toRole === toRole)) {
-        this.#showToast("Verbindung besteht bereits.");
+        this.#showToast(tt("flow.50ba57"));
         return null;
       }
       return { ...draft, connections: [...draft.connections, { fromRole, toRole }] };
@@ -2316,10 +2317,10 @@ export class FlowCanvas extends HTMLElement {
       });
       if (!res.ok) {
         const text = await res.text();
-        this.#showToast(`Speichern fehlgeschlagen: ${text || res.status}`);
+        this.#showToast(tt("flow.616d9c", { p0: text || res.status }));
         return;
       }
-      this.#showToast("Workflow gespeichert.");
+      this.#showToast(tt("flow.00d76f"));
       await this.#queueFetchAndRender();
       // Entwurf gegen den frisch vom Server bestätigten Stand neu klonen
       // (statt einfach unverändert zu lassen) — sonst könnte #isDraftDirty
@@ -2329,7 +2330,7 @@ export class FlowCanvas extends HTMLElement {
       const refreshed = this.#workflows.find((w) => w.id === workflowId);
       if (refreshed) this.#workflowEditDraft = structuredClone(refreshed.definition);
     } catch (err) {
-      this.#showToast(`Speichern fehlgeschlagen: ${err}`);
+      this.#showToast(tt("flow.616d9c", { p0: err }));
     }
   }
 
@@ -2388,14 +2389,14 @@ export class FlowCanvas extends HTMLElement {
 
     if (missing.length > 0) {
       this.#showToast(
-        `Im Workflow speichern nicht möglich — ohne Launcher-Instanz (nicht über den Katalog gestartet): ${
+        tt("flow.b2892b", { p0: 
           missing.join(", ")
-        }`,
+         }),
       );
       return;
     }
     if (roles.length === 0) {
-      this.#showToast("Keine speicherbaren Nodes in diesem Workflow.");
+      this.#showToast(tt("flow.303686"));
       return;
     }
 
@@ -2435,7 +2436,7 @@ export class FlowCanvas extends HTMLElement {
       }
       this.#workflowScopeExtraNodeIds = new Set();
       this.#workflowScopePendingInstanceIds = new Set();
-      this.#showToast("Workflow gespeichert (wirkt beim nächsten Start).");
+      this.#showToast(tt("flow.3fa58b"));
       await this.#queueFetchAndRender();
     } catch (err) {
       this.#showToast(`Im Workflow speichern fehlgeschlagen: ${err}`);
@@ -2719,7 +2720,7 @@ export class FlowCanvas extends HTMLElement {
       // Kachel-Rand hinaus — gleiches Kürzungsmuster wie beim Titel oben
       // (truncateTileTitle), nur mit größerem Budget (kleinere Schrift,
       // 11px statt 12px).
-      const fullSubtitle = `${wf.status} — Doppelklick zum Bearbeiten`;
+      const fullSubtitle = tt("flow.224cb4", { p0: wf.status });
       subtitle.textContent = truncateTileTitle(fullSubtitle, 26);
       if (fullSubtitle.length > 26) {
         const subtitleTooltip = document.createElementNS(SVG_NS, "title");
@@ -2769,8 +2770,8 @@ export class FlowCanvas extends HTMLElement {
       const isLive = !!wf && !this.#isIdleWorkflow(wf);
       const label = document.createElement("span");
       label.textContent = isLive
-        ? `Bearbeiten (live): ${wf?.name ?? this.#workflowEditId}`
-        : `Bearbeiten: ${wf?.name ?? this.#workflowEditId}`;
+        ? tt("flow.010533", { p0: wf?.name ?? this.#workflowEditId })
+        : tt("flow.f3e350", { p0: wf?.name ?? this.#workflowEditId });
       this.#breadcrumbBar.appendChild(label);
 
       // Nutzerwunsch (2026-07-26): expliziter Speichern-Button statt
@@ -2789,19 +2790,19 @@ export class FlowCanvas extends HTMLElement {
       // #autoArrange() erkennt #workflowEditId selbst und verzweigt in
       // #autoArrangeWorkflowEdit() (live vs. pausiert/Entwurf).
       const arrangeBtn = document.createElement("button");
-      arrangeBtn.textContent = "Auto-Anordnen";
+      arrangeBtn.textContent = tt("flow.de024d");
       arrangeBtn.style.cssText = "margin-left:auto;font-size:var(--omp-font-size-xs);";
-      arrangeBtn.title = "Kacheln nach Signalfluss anordnen — Quellen links, Senken rechts.";
+      arrangeBtn.title = tt("flow.486700");
       arrangeBtn.addEventListener("click", () => this.#autoArrange());
       this.#breadcrumbBar.appendChild(arrangeBtn);
 
       const dirty = this.#isDraftDirty();
       const saveBtn = document.createElement("button");
-      saveBtn.textContent = isLive ? "Im Workflow speichern" : "Speichern";
+      saveBtn.textContent = isLive ? "Im Workflow speichern" : tt("flow.b97d23");
       if (dirty) saveBtn.className = "omp-btn-primary";
       saveBtn.style.cssText = "font-size:var(--omp-font-size-xs);";
       saveBtn.disabled = !dirty;
-      saveBtn.title = dirty ? "" : "Keine ungespeicherten Änderungen";
+      saveBtn.title = dirty ? "" : tt("flow.27e3d2");
       saveBtn.addEventListener("click", () => {
         if (isLive) this.#saveRunningWorkflowFromLiveTopology();
         else this.#saveWorkflowEditDraft();
@@ -2809,7 +2810,7 @@ export class FlowCanvas extends HTMLElement {
       this.#breadcrumbBar.appendChild(saveBtn);
 
       const exitBtn = document.createElement("button");
-      exitBtn.textContent = "Verlassen";
+      exitBtn.textContent = tt("flow.82f357");
       exitBtn.style.cssText = "font-size:11px;cursor:pointer;";
       exitBtn.addEventListener("click", () => this.#exitWorkflowEditScope());
       this.#breadcrumbBar.appendChild(exitBtn);
@@ -2834,7 +2835,7 @@ export class FlowCanvas extends HTMLElement {
     // beiden folgenden, nur innerhalb einer Gruppe sichtbaren Knöpfe)
     // zuverlässig an den rechten Rand, außerhalb der Palette-Spalte.
     const fitBtn = document.createElement("button");
-    fitBtn.textContent = "Alle einpassen";
+    fitBtn.textContent = tt("flow.05b4ea");
     fitBtn.style.cssText = "margin-left:auto;font-size:var(--omp-font-size-xs);";
     fitBtn.addEventListener("click", () => this.#fitAllToViewport());
     this.#breadcrumbBar.appendChild(fitBtn);
@@ -2847,13 +2848,13 @@ export class FlowCanvas extends HTMLElement {
     // unangetastet), der Button ist dort deaktiviert statt versteckt,
     // damit klar bleibt, dass die Funktion existiert.
     const arrangeBtn = document.createElement("button");
-    arrangeBtn.textContent = "Auto-Anordnen";
+    arrangeBtn.textContent = tt("flow.de024d");
     arrangeBtn.style.cssText = "font-size:var(--omp-font-size-xs);";
     const hostViewBlocksArrange = this.#hostViewEnabled && this.#scope === null;
     arrangeBtn.disabled = hostViewBlocksArrange;
     arrangeBtn.title = hostViewBlocksArrange
-      ? "In der Host-Ansicht bestimmen die Host-Zonen die Anordnung."
-      : "Kacheln nach Signalfluss anordnen — Quellen links, Senken rechts.";
+      ? tt("flow.9f38fa")
+      : tt("flow.486700");
     arrangeBtn.addEventListener("click", () => this.#autoArrange());
     this.#breadcrumbBar.appendChild(arrangeBtn);
 
@@ -2864,7 +2865,7 @@ export class FlowCanvas extends HTMLElement {
     if (this.#scope === null) {
       const hostViewBtn = document.createElement("button");
       hostViewBtn.setAttribute("data-role", "host-view-toggle");
-      hostViewBtn.textContent = this.#hostViewEnabled ? "Host-Ansicht: An" : "Host-Ansicht: Aus";
+      hostViewBtn.textContent = this.#hostViewEnabled ? tt("flow.981290") : tt("flow.7818c8");
       if (this.#hostViewEnabled) hostViewBtn.className = "omp-btn-primary";
       hostViewBtn.style.cssText = "font-size:var(--omp-font-size-xs);";
       hostViewBtn.addEventListener("click", () => this.#toggleHostView(!this.#hostViewEnabled));
@@ -2873,7 +2874,7 @@ export class FlowCanvas extends HTMLElement {
 
     if (this.#scope !== null) {
       const dissolveBtn = document.createElement("button");
-      dissolveBtn.textContent = "Gruppe auflösen";
+      dissolveBtn.textContent = tt("flow.5c618d");
       dissolveBtn.style.cssText = "font-size:11px;cursor:pointer;";
       dissolveBtn.addEventListener("click", () => this.#dissolveCurrentGroup());
       this.#breadcrumbBar.appendChild(dissolveBtn);
@@ -2881,7 +2882,7 @@ export class FlowCanvas extends HTMLElement {
       // Kapitel 12 Teil 2 (§12.3b): "die Brücke Editor ↔ Workflow" — eine
       // Gruppe (Regieplatz-Kandidat) als startbaren Workflow speichern.
       const saveAsWorkflowBtn = document.createElement("button");
-      saveAsWorkflowBtn.textContent = "Als Workflow speichern";
+      saveAsWorkflowBtn.textContent = tt("flow.1b8280");
       saveAsWorkflowBtn.style.cssText = "font-size:11px;cursor:pointer;";
       saveAsWorkflowBtn.addEventListener("click", () => this.#saveGroupAsWorkflow());
       this.#breadcrumbBar.appendChild(saveAsWorkflowBtn);
@@ -3037,7 +3038,7 @@ export class FlowCanvas extends HTMLElement {
   }
 
   #groupSelection() {
-    const label = prompt("Name der Gruppe:", "Neue Gruppe");
+    const label = prompt(tt("flow.566f18"), tt("flow.14466a"));
     if (!label) return;
 
     const items = this.#itemsAtScope();
@@ -3094,7 +3095,7 @@ export class FlowCanvas extends HTMLElement {
 
     const memberNodeIds = flattenMembers(this.#groupTree, this.#scope);
     if (memberNodeIds.length === 0) {
-      this.#showToast("Gruppe enthält keine Nodes.");
+      this.#showToast(tt("flow.ec7506"));
       return;
     }
 
@@ -3136,9 +3137,9 @@ export class FlowCanvas extends HTMLElement {
 
     if (missing.length > 0) {
       this.#showToast(
-        `Als Workflow speichern nicht möglich — ohne Launcher-Instanz (nicht über den Katalog gestartet): ${
+        tt("flow.2bd04d", { p0: 
           missing.join(", ")
-        }`,
+         }),
       );
       return;
     }
@@ -3183,7 +3184,7 @@ export class FlowCanvas extends HTMLElement {
         body: JSON.stringify({ name: group.label, definition: { roles, connections }, adoptRuntime }),
       });
       if (!res.ok) {
-        this.#showToast(`Als Workflow speichern fehlgeschlagen: ${await res.text()}`);
+        this.#showToast(tt("flow.dc80a2", { p0: await res.text() }));
         return;
       }
       const wf = (await res.json()) as { id: string };
@@ -3193,9 +3194,9 @@ export class FlowCanvas extends HTMLElement {
       this.#groupTree = setGroupWorkflowId(this.#groupTree, this.#scope, wf.id);
       this.#saveLayout();
       this.#render();
-      this.#showToast(`Workflow „${group.label}" angelegt und läuft bereits (aus der laufenden Gruppe übernommen).`);
+      this.#showToast(tt("flow.bec446", { p0: group.label }));
     } catch (err) {
-      this.#showToast(`Als Workflow speichern fehlgeschlagen: ${err}`);
+      this.#showToast(tt("flow.dc80a2", { p0: err }));
     }
   }
 
@@ -3342,10 +3343,10 @@ export class FlowCanvas extends HTMLElement {
         dot.textContent = "●";
         const dotTitle = document.createElementNS(SVG_NS, "title");
         dotTitle.textContent = hostOnline
-          ? "Host online"
+          ? tt("flow.514366")
           : zone.metrics
-            ? `Host offline — zuletzt gesehen ${new Date(zone.metrics.receivedAt).toLocaleTimeString()}`
-            : "Host offline — keine Telemetrie empfangen";
+            ? tt("flow.eda8d2", { p0: new Date(zone.metrics.receivedAt).toLocaleTimeString() })
+            : tt("flow.61ea4b");
         dot.appendChild(dotTitle);
         g.appendChild(dot);
         labelX = 22;
@@ -3376,8 +3377,8 @@ export class FlowCanvas extends HTMLElement {
         offlineText.setAttribute("fill", "#e05252");
         offlineText.setAttribute("font-size", "10");
         offlineText.textContent = zone.metrics
-          ? `Offline · zuletzt ${new Date(zone.metrics.receivedAt).toLocaleTimeString()}`
-          : "Offline · keine Telemetrie";
+          ? tt("flow.1efb39", { p0: new Date(zone.metrics.receivedAt).toLocaleTimeString() })
+          : tt("flow.7bb93c");
         g.appendChild(offlineText);
       } else if (zone.metrics && !collapsed) {
         const metricsText = document.createElementNS(SVG_NS, "text");
@@ -3410,7 +3411,7 @@ export class FlowCanvas extends HTMLElement {
         cap.setAttribute("y", String(y0 + 14));
         cap.setAttribute("fill", "#9aa0a6");
         cap.setAttribute("font-size", "10");
-        cap.textContent = "Geplant (nicht gestartet)";
+        cap.textContent = tt("flow.17b308");
         g.appendChild(cap);
         ghosts.forEach((e, i) => {
           const t = document.createElementNS(SVG_NS, "text");
@@ -3434,7 +3435,7 @@ export class FlowCanvas extends HTMLElement {
         countText.setAttribute("fill", "#9aa0a6");
         countText.setAttribute("font-size", "10");
         const totalCount = zoneTiles.length + zoneWorkflowTileIds.length;
-        countText.textContent = totalCount === 1 ? "1 Kachel" : `${totalCount} Kacheln`;
+        countText.textContent = totalCount === 1 ? "1 Kachel" : tt("flow.4d543b", { p0: totalCount });
         g.appendChild(countText);
       }
 
@@ -3454,7 +3455,7 @@ export class FlowCanvas extends HTMLElement {
       toggle.style.cursor = "pointer";
       toggle.textContent = collapsed ? "▸" : "▾";
       const toggleTitle = document.createElementNS(SVG_NS, "title");
-      toggleTitle.textContent = collapsed ? "Zone ausklappen" : "Zone einklappen";
+      toggleTitle.textContent = collapsed ? tt("flow.8f9c92") : tt("flow.f98ead");
       toggle.appendChild(toggleTitle);
       toggle.addEventListener("pointerdown", (ev) => {
         ev.stopPropagation();
@@ -3484,7 +3485,7 @@ export class FlowCanvas extends HTMLElement {
         }
       });
       const resizeTitle = document.createElementNS(SVG_NS, "title");
-      resizeTitle.textContent = "Breite ziehen";
+      resizeTitle.textContent = tt("flow.db1020");
       resizeHandle.appendChild(resizeTitle);
       resizeHandle.addEventListener("pointerdown", (ev) => {
         ev.stopPropagation();
@@ -3543,7 +3544,7 @@ export class FlowCanvas extends HTMLElement {
     body.setAttribute("stroke-width", traceHighlighted ? "4" : selected || onTally ? "3" : "2");
     if (traceHighlighted) {
       const traceTitle = document.createElementNS(SVG_NS, "title");
-      traceTitle.textContent = "Teil des gerade angezeigten Traces (Diagnose-Cockpit, ARCHITECTURE.md §25.3).";
+      traceTitle.textContent = tt("flow.abd1ab");
       g.appendChild(traceTitle);
     }
     if (selected) {
@@ -3556,7 +3557,7 @@ export class FlowCanvas extends HTMLElement {
       // halten.
       body.setAttribute("stroke-dasharray", "3 3");
       const standbyTitle = document.createElementNS(SVG_NS, "title");
-      standbyTitle.textContent = "Standby (warm) — übernimmt automatisch, wenn die Primärrolle ausfällt (K7 Teil 4).";
+      standbyTitle.textContent = tt("flow.25b847");
       body.appendChild(standbyTitle);
     }
     g.appendChild(body);
@@ -3608,7 +3609,7 @@ export class FlowCanvas extends HTMLElement {
       stopBtn.setAttribute("data-role", "stop-instance");
       stopBtn.textContent = "⏹";
       const stopTitle = document.createElementNS(SVG_NS, "title");
-      stopTitle.textContent = "Instanz stoppen";
+      stopTitle.textContent = tt("flow.0fb497");
       stopBtn.appendChild(stopTitle);
       stopBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
       stopBtn.addEventListener("click", (ev) => {
@@ -3633,7 +3634,7 @@ export class FlowCanvas extends HTMLElement {
       stopBtn.setAttribute("data-role", "stop-workflow");
       stopBtn.textContent = "⏹";
       const stopTitle = document.createElementNS(SVG_NS, "title");
-      stopTitle.textContent = "Workflow stoppen";
+      stopTitle.textContent = tt("flow.3c5208");
       stopBtn.appendChild(stopTitle);
       stopBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
       stopBtn.addEventListener("click", (ev) => {
@@ -3721,7 +3722,7 @@ export class FlowCanvas extends HTMLElement {
     const img = document.createElement("img");
     img.dataset.previewNodeId = nodeId;
     img.src = previewSnapshotUrl(nodeId);
-    img.alt = "Vorschau";
+    img.alt = tt("flow.a50d91");
     img.style.cssText = `display:none;width:${PREVIEW_WIDTH}px;height:${PREVIEW_HEIGHT}px;object-fit:cover;background:var(--omp-bg);border:1px solid var(--omp-border);border-radius:2px;`;
 
     // Nutzerfund 2026-08-21: ohne Sender (kein verbundener Edge) liefert
@@ -3732,7 +3733,7 @@ export class FlowCanvas extends HTMLElement {
     // setzt `img.src` alle 200ms neu, load/error toggeln dieselben zwei
     // Elemente bei jedem Poll erneut.
     const notConnected = document.createElement("div");
-    notConnected.textContent = "nicht verbunden";
+    notConnected.textContent = tt("flow.08fd3e");
     notConnected.style.cssText = `display:flex;align-items:center;justify-content:center;width:${PREVIEW_WIDTH}px;height:${PREVIEW_HEIGHT}px;background:var(--omp-bg);border:1px solid var(--omp-border);border-radius:2px;color:var(--omp-text-dim,#888);font-size:11px;`;
     img.addEventListener("load", () => {
       img.style.display = "block";
@@ -4203,7 +4204,7 @@ export class FlowCanvas extends HTMLElement {
       (z) => z.id !== currentZone && z.id !== "unassigned" && z.id !== "mixed",
     );
     if (targets.length === 0) {
-      this.#showToast("Kein anderer Host verfügbar.");
+      this.#showToast(tt("flow.7cfa62"));
       return;
     }
 
@@ -4268,8 +4269,8 @@ export class FlowCanvas extends HTMLElement {
   async #confirmAndMigrateInstance(instanceId: string, nodeLabel: string, targetZoneId: string) {
     const targetLabel = this.#hostZones(this.#rootZoneTiles()).find((z) => z.id === targetZoneId)?.label ?? targetZoneId;
     const confirmed = await confirmDialog(
-      `„${nodeLabel}" nach „${targetLabel}" verschieben? Die Instanz wird gestoppt und dort neu gestartet, bestehende Verbindungen werden nach Möglichkeit wiederhergestellt.`,
-      { confirmLabel: "Verschieben" },
+      tt("flow.3d4180", { p0: nodeLabel, p1: targetLabel }),
+      { confirmLabel: tt("flow.cc0806") },
     );
     if (!confirmed) return;
 
@@ -4281,10 +4282,10 @@ export class FlowCanvas extends HTMLElement {
       });
       if (!res.ok) {
         const text = await res.text();
-        this.#showToast(`Umzug fehlgeschlagen: ${text || res.status}`);
+        this.#showToast(tt("flow.f6dbd5", { p0: text || res.status }));
       }
     } catch (err) {
-      this.#showToast(`Umzug fehlgeschlagen: ${err}`);
+      this.#showToast(tt("flow.f6dbd5", { p0: err }));
     }
   }
 
@@ -4297,8 +4298,8 @@ export class FlowCanvas extends HTMLElement {
   async #confirmAndMigrateWorkflowRole(workflowId: string, role: string, nodeLabel: string, targetZoneId: string) {
     const targetLabel = this.#hostZones(this.#rootZoneTiles()).find((z) => z.id === targetZoneId)?.label ?? targetZoneId;
     const confirmed = await confirmDialog(
-      `Rolle „${nodeLabel}" nach „${targetLabel}" verschieben? Eine neue Instanz startet dort, Bedienzustand/Verbindungen werden übernommen — erst danach wird die alte Instanz gestoppt.`,
-      { confirmLabel: "Verschieben" },
+      tt("flow.e16d95", { p0: nodeLabel, p1: targetLabel }),
+      { confirmLabel: tt("flow.cc0806") },
     );
     if (!confirmed) return;
 
@@ -4313,10 +4314,10 @@ export class FlowCanvas extends HTMLElement {
       );
       if (!res.ok) {
         const text = await res.text();
-        this.#showToast(`Rollen-Umzug fehlgeschlagen: ${text || res.status}`);
+        this.#showToast(tt("flow.07f4ca", { p0: text || res.status }));
       }
     } catch (err) {
-      this.#showToast(`Rollen-Umzug fehlgeschlagen: ${err}`);
+      this.#showToast(tt("flow.07f4ca", { p0: err }));
     }
   }
 
@@ -4466,7 +4467,7 @@ export class FlowCanvas extends HTMLElement {
     const traceId = response.headers.get("X-OMP-Trace-Id");
     if (!traceId) return undefined;
     return {
-      label: "Diagnose öffnen",
+      label: tt("flow.c23a7f"),
       onClick: () => {
         this.dispatchEvent(new CustomEvent("omp-view-trace", { detail: traceId, bubbles: true, composed: true }));
         void this.#highlightTrace(traceId);
@@ -4483,12 +4484,12 @@ export class FlowCanvas extends HTMLElement {
       });
       if (!response.ok) {
         const text = await response.text();
-        this.#showToast(`Verbindung fehlgeschlagen: ${text || response.status}`, this.#traceToastAction(response));
+        this.#showToast(tt("flow.eeaf61", { p0: text || response.status }), this.#traceToastAction(response));
         return;
       }
       await this.#queueFetchAndRender();
     } catch (err) {
-      this.#showToast(`Verbindung fehlgeschlagen: ${err}`);
+      this.#showToast(tt("flow.eeaf61", { p0: err }));
     }
   }
 
@@ -4505,13 +4506,13 @@ export class FlowCanvas extends HTMLElement {
       });
       if (!response.ok) {
         const text = await response.text();
-        this.#showToast(`Trennen fehlgeschlagen: ${text || response.status}`, this.#traceToastAction(response));
+        this.#showToast(tt("flow.e6871e", { p0: text || response.status }), this.#traceToastAction(response));
         return;
       }
       this.#selectedEdgeId = null;
       await this.#queueFetchAndRender();
     } catch (err) {
-      this.#showToast(`Trennen fehlgeschlagen: ${err}`);
+      this.#showToast(tt("flow.e6871e", { p0: err }));
     }
   }
 
@@ -4558,7 +4559,7 @@ export class FlowCanvas extends HTMLElement {
     this.#panelContainer.style.display = "block";
     this.#panelContent.replaceChildren();
     const loading = document.createElement("p");
-    loading.textContent = "Lädt…";
+    loading.textContent = tt("flow.3b7344");
     this.#panelContent.appendChild(loading);
 
     const mounted = await mountUIBundle(this.#panelContent, `/api/v1/nodes/${nodeId}`);
@@ -4588,7 +4589,7 @@ export class FlowCanvas extends HTMLElement {
     const node = this.#graph.nodes.find((n) => n.id === nodeId);
     const roleId = node?.instanceId || nodeId; // s. orchestrator/internal/consoles/resolve.go NodeRoleID
     const operatorLink = document.createElement("a");
-    operatorLink.textContent = "Als Operator ansehen ↗";
+    operatorLink.textContent = tt("flow.c9533f");
     operatorLink.href = `/console/default/${encodeURIComponent(roleId)}`;
     operatorLink.target = "_blank";
     operatorLink.rel = "noopener";
@@ -4616,7 +4617,7 @@ export class FlowCanvas extends HTMLElement {
       this.#panelContent.replaceChildren();
       this.#panelContent.appendChild(this.#panelButtonBar(nodeId));
       const p = document.createElement("p");
-      p.textContent = `Descriptor konnte nicht geladen werden: ${err}`;
+      p.textContent = tt("flow.d7db68", { p0: err });
       this.#panelContent.appendChild(p);
       return;
     }
@@ -4729,7 +4730,7 @@ export class FlowCanvas extends HTMLElement {
       "margin:8px 0 14px 0;padding:8px;border:1px solid var(--omp-border,#444);border-radius:4px;";
 
     const label = document.createElement("label");
-    label.textContent = "Rollen-Zielformat";
+    label.textContent = tt("flow.6f8bd9");
     label.style.cssText = "display:block;margin-bottom:var(--omp-space-1);color:var(--omp-text-dim);";
     wrapper.appendChild(label);
 
@@ -4737,7 +4738,7 @@ export class FlowCanvas extends HTMLElement {
     select.style.cssText = "width:100%;";
     const defaultOpt = document.createElement("option");
     defaultOpt.value = "";
-    defaultOpt.textContent = "Node-Standard";
+    defaultOpt.textContent = tt("flow.386c76");
     select.appendChild(defaultOpt);
     for (const name of STANDARD_FORMATS) {
       const opt = document.createElement("option");
@@ -4749,11 +4750,11 @@ export class FlowCanvas extends HTMLElement {
     wrapper.appendChild(select);
 
     const applyBtn = document.createElement("button");
-    applyBtn.textContent = "Übernehmen (Node neu starten)";
+    applyBtn.textContent = tt("flow.c3d104");
     applyBtn.style.cssText = "display:block;margin-top:6px;cursor:pointer;";
     applyBtn.addEventListener("click", async () => {
       const confirmed = await confirmDialog(
-        `Rolle "${info.roleName}" mit neuem Format neu starten? Der Node ist dabei kurz nicht erreichbar, der Rest des Workflows läuft weiter.`,
+        tt("flow.dbf07d", { p0: info.roleName }),
       );
       if (!confirmed) return;
       applyBtn.disabled = true;
@@ -4767,12 +4768,12 @@ export class FlowCanvas extends HTMLElement {
           },
         );
         if (!res.ok) {
-          this.#showToast(`Neustart fehlgeschlagen: ${await res.text()}`);
+          this.#showToast(tt("flow.7b8028", { p0: await res.text() }));
         } else {
-          this.#showToast(`Rolle "${info.roleName}" wird mit neuem Format neu gestartet …`);
+          this.#showToast(tt("flow.459c64", { p0: info.roleName }));
         }
       } catch (err) {
-        this.#showToast(`Neustart fehlgeschlagen: ${err}`);
+        this.#showToast(tt("flow.7b8028", { p0: err }));
       } finally {
         applyBtn.disabled = false;
       }
@@ -4858,7 +4859,7 @@ export class FlowCanvas extends HTMLElement {
     if (syncSource) {
       const syncRow = document.createElement("div");
       syncRow.style.cssText = "font-size:11px;color:var(--omp-text-dim,#888);margin-top:6px;";
-      syncRow.textContent = `Sync-Quelle: ${syncSource}`;
+      syncRow.textContent = tt("flow.502f11", { p0: syncSource });
       wrapper.appendChild(syncRow);
     }
 
@@ -4877,9 +4878,9 @@ export class FlowCanvas extends HTMLElement {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ value: autoResetCheckbox.checked }),
       });
-      if (!res.ok) this.#showToast(`Auto-Reset ändern fehlgeschlagen: ${(await res.text()) || res.status}`);
+      if (!res.ok) this.#showToast(tt("flow.ab3278", { p0: (await res.text()) || res.status }));
     });
-    autoResetLabel.append(autoResetCheckbox, document.createTextNode("Auto-Reset"));
+    autoResetLabel.append(autoResetCheckbox, document.createTextNode(tt("flow.30f273")));
     controls.appendChild(autoResetLabel);
 
     const delayLabel = document.createElement("label");
@@ -4895,13 +4896,13 @@ export class FlowCanvas extends HTMLElement {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ value: Number(delayInput.value) || 0 }),
       });
-      if (!res.ok) this.#showToast(`Delay ändern fehlgeschlagen: ${(await res.text()) || res.status}`);
+      if (!res.ok) this.#showToast(tt("flow.68212a", { p0: (await res.text()) || res.status }));
     });
-    delayLabel.append(document.createTextNode("Delay (ms)"), delayInput);
+    delayLabel.append(document.createTextNode(tt("flow.7b2ec4")), delayInput);
     controls.appendChild(delayLabel);
 
     const resetBtn = document.createElement("button");
-    resetBtn.textContent = "Zähler zurücksetzen";
+    resetBtn.textContent = tt("flow.e4dd8e");
     resetBtn.style.cssText = "cursor:pointer;";
     resetBtn.addEventListener("click", async () => {
       try {
@@ -4909,12 +4910,12 @@ export class FlowCanvas extends HTMLElement {
           method: "POST",
         });
         if (!res.ok) {
-          this.#showToast(`Reset fehlgeschlagen: ${(await res.text()) || res.status}`);
+          this.#showToast(tt("flow.926b5a", { p0: (await res.text()) || res.status }));
           return;
         }
         await this.#renderGenericPanel(nodeId);
       } catch (err) {
-        this.#showToast(`Reset fehlgeschlagen: ${err}`);
+        this.#showToast(tt("flow.926b5a", { p0: err }));
       }
     });
     controls.appendChild(resetBtn);
@@ -5048,9 +5049,9 @@ export class FlowCanvas extends HTMLElement {
       });
       if (res.ok) return;
       const text = await res.text();
-      this.#showToast(`Parameter „${param.name}" fehlgeschlagen: ${text || res.status}`);
+      this.#showToast(tt("flow.418e13", { p0: param.name, p1: text || res.status }));
     } catch (err) {
-      this.#showToast(`Parameter „${param.name}" fehlgeschlagen: ${err}`);
+      this.#showToast(tt("flow.418e13", { p0: param.name, p1: err }));
     }
 
     const serverValue = await this.#fetchParamValue(nodeId, param.name);
@@ -5062,7 +5063,7 @@ export class FlowCanvas extends HTMLElement {
     if (method.args.length > 0) {
       body = {};
       for (const arg of method.args) {
-        const raw = prompt(`Wert für „${arg.name}" (${arg.type}):`);
+        const raw = prompt(tt("flow.a5a7f7", { p0: arg.name, p1: arg.type }));
         if (raw === null) return; // Abbruch
         body[arg.name] = arg.type === "number" ? Number(raw) : arg.type === "boolean" ? raw === "true" : raw;
       }
@@ -5076,12 +5077,12 @@ export class FlowCanvas extends HTMLElement {
       });
       if (!res.ok) {
         const text = await res.text();
-        this.#showToast(`Methode „${method.name}" fehlgeschlagen: ${text || res.status}`);
+        this.#showToast(tt("flow.f19b62", { p0: method.name, p1: text || res.status }));
         return;
       }
       await this.#renderGenericPanel(nodeId);
     } catch (err) {
-      this.#showToast(`Methode „${method.name}" fehlgeschlagen: ${err}`);
+      this.#showToast(tt("flow.f19b62", { p0: method.name, p1: err }));
     }
   }
 
@@ -5106,7 +5107,7 @@ export class FlowCanvas extends HTMLElement {
         for (const snap of snaps.filter((s) => !s.nodeIds || s.nodeIds.length === 0)) {
           const chip = document.createElement("button");
           chip.textContent = snap.label || snap.id.slice(0, 8);
-          chip.title = "Szene anwenden";
+          chip.title = tt("flow.1644b5");
           chip.style.cssText = "cursor:pointer;white-space:nowrap;flex-shrink:0;";
           chip.addEventListener("click", () => this.#applySnapshot(snap.id));
           list.appendChild(chip);
@@ -5124,19 +5125,19 @@ export class FlowCanvas extends HTMLElement {
     try {
       const res = await apiFetch(`/api/v1/snapshots/${id}/apply`, { method: "POST" });
       if (!res.ok) {
-        this.#showToast(`Snapshot anwenden fehlgeschlagen: ${res.status}`);
+        this.#showToast(tt("flow.0087f5", { p0: res.status }));
         return;
       }
       const result = (await res.json()) as ApplyResult;
       if (result.errors.length > 0) {
-        this.#showToast(`Snapshot mit ${result.errors.length} Fehler(n) angewendet`);
+        this.#showToast(tt("flow.28c94f", { p0: result.errors.length }));
       }
       await this.#queueFetchAndRender();
       if (this.#panelNodeId !== null) {
         await this.#openParameterPanel(this.#panelNodeId);
       }
     } catch (err) {
-      this.#showToast(`Snapshot anwenden fehlgeschlagen: ${err}`);
+      this.#showToast(tt("flow.0087f5", { p0: err }));
     }
   }
 
@@ -5205,7 +5206,7 @@ export class FlowCanvas extends HTMLElement {
     this.#palette.replaceChildren();
 
     const heading = document.createElement("div");
-    heading.textContent = "Node-Katalog";
+    heading.textContent = tt("flow.322f5f");
     heading.className = "omp-h1";
     heading.style.cssText = "font-size:var(--omp-font-size-md);margin-bottom:var(--omp-space-2);";
     this.#palette.appendChild(heading);
@@ -5215,7 +5216,7 @@ export class FlowCanvas extends HTMLElement {
 
     if (catalog.length === 0) {
       const empty = document.createElement("p");
-      empty.textContent = "Katalog leer.";
+      empty.textContent = tt("flow.191493");
       empty.className = "omp-empty";
       this.#palette.appendChild(empty);
       return;
@@ -5228,7 +5229,7 @@ export class FlowCanvas extends HTMLElement {
     searchInput.setAttribute("data-role", "palette-search");
     searchInput.className = "omp-search-input";
     searchInput.type = "search";
-    searchInput.placeholder = "Suchen…";
+    searchInput.placeholder = tt("flow.26fdfa");
     searchInput.value = this.#paletteFilterQuery;
     searchInput.style.cssText = "width:100%;box-sizing:border-box;";
     searchInput.addEventListener("input", () => {
@@ -5254,7 +5255,7 @@ export class FlowCanvas extends HTMLElement {
 
     if (filtered.length === 0) {
       const empty = document.createElement("p");
-      empty.textContent = "Keine Treffer.";
+      empty.textContent = tt("flow.c977e2");
       empty.className = "omp-empty";
       this.#palette.appendChild(empty);
       return;
@@ -5296,7 +5297,7 @@ export class FlowCanvas extends HTMLElement {
       let hostSelect: HTMLSelectElement | null = null;
       if (hosts.length > 0) {
         hostSelect = document.createElement("select");
-        hostSelect.title = "Zielhost";
+        hostSelect.title = tt("flow.ada9a7");
         hostSelect.style.cssText = "font-size:var(--omp-font-size-xs);max-width:90px;padding:2px 4px;";
         const localOpt = document.createElement("option");
         localOpt.value = "";
@@ -5311,13 +5312,13 @@ export class FlowCanvas extends HTMLElement {
           // Punktfarbe, weil <option>-Styling browserabhängig ist und
           // beim geschlossenen <select> ohnehin nicht mitgerendert wird.
           const online = isHostOnline(host.metrics);
-          opt.textContent = online ? `● ${host.label}` : `○ ${host.label} (offline)`;
+          opt.textContent = online ? `● ${host.label}` : tt("flow.390d13", { p0: host.label });
           opt.style.color = online ? "" : "#e05252";
           opt.title = online
-            ? "Host online"
+            ? tt("flow.514366")
             : host.metrics
-              ? `Host offline — zuletzt gesehen ${new Date(host.metrics.receivedAt).toLocaleTimeString()}`
-              : "Host offline — keine Telemetrie empfangen";
+              ? tt("flow.eda8d2", { p0: new Date(host.metrics.receivedAt).toLocaleTimeString() })
+              : tt("flow.61ea4b");
           hostSelect.appendChild(opt);
         }
         // Status auch am GESCHLOSSENEN Dropdown erkennbar machen (der
@@ -5348,7 +5349,7 @@ export class FlowCanvas extends HTMLElement {
       if (entry.type === "omp-decklink") {
         ioPortSelect = document.createElement("select");
         ioPortSelect.title =
-          "Physischer DeckLink-Port, den diese Instanz exklusiv belegt (D13 I/O-Karten-Claim). Ohne freien passenden Port lehnt der Orchestrator den Start ehrlich ab, statt mit dem eingebauten Default (device-number=0, Eingang) in einen Crash-Loop zu laufen.";
+          tt("flow.3a4eae");
         ioPortSelect.style.cssText = "font-size:var(--omp-font-size-xs);max-width:110px;padding:2px 4px;";
         const ioPortOptions: Array<[string, string]> = [
           ["in", "I/O-Port: Eingang"],
@@ -5449,14 +5450,14 @@ export class FlowCanvas extends HTMLElement {
       if (!res.ok) return;
       const profile = (await res.json()) as ProfileResponse;
       if (!profile.known) {
-        tag.textContent = "Bedarf unbekannt (erster Start dieses Typs)";
+        tag.textContent = tt("flow.b6057c");
         tag.style.color = "var(--omp-text-dim)";
         return;
       }
 
       const cpu = `${(profile.cpuAvg ?? 0).toFixed(0)}–${(profile.cpuMax ?? 0).toFixed(0)}% CPU`;
       const rss = `${((profile.rssAvg ?? 0) / 1024 / 1024).toFixed(0)} MB RAM`;
-      const fallbackNote = profile.fallback ? " (Typ-Schätzung, kein Wert für diesen Host)" : "";
+      const fallbackNote = profile.fallback ? tt("flow.bd6623") : "";
 
       const dotColor: Record<ProfileResponse["status"], string> = {
         ok: "#4caf50",
@@ -5516,7 +5517,7 @@ export class FlowCanvas extends HTMLElement {
     // CONTROLLER-Vorbild `supervisor.js:412`).
     if (inst.restartCount) {
       const restartTag = document.createElement("div");
-      restartTag.textContent = `↻ ${inst.restartCount}× automatisch neu gestartet`;
+      restartTag.textContent = tt("flow.3cfe9b", { p0: inst.restartCount });
       restartTag.style.cssText = "color:var(--omp-cue);font-size:var(--omp-font-size-xs);margin-top:1px;";
       row.appendChild(restartTag);
     }
@@ -5524,7 +5525,7 @@ export class FlowCanvas extends HTMLElement {
     if (inst.hostId) {
       const hostLabel = hosts.find((h) => h.id === inst.hostId)?.label || inst.hostId;
       const hostTag = document.createElement("div");
-      hostTag.textContent = `Host: ${hostLabel}`;
+      hostTag.textContent = tt("flow.f1da4b", { p0: hostLabel });
       hostTag.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);";
       row.appendChild(hostTag);
     }
@@ -5541,13 +5542,13 @@ export class FlowCanvas extends HTMLElement {
 
     if (inst.crashed) {
       const msg = document.createElement("div");
-      msg.textContent = inst.crashMessage || "Prozess abgestürzt";
+      msg.textContent = inst.crashMessage || tt("flow.03a35d");
       msg.style.cssText = "color:var(--omp-error);white-space:pre-wrap;word-break:break-word;margin-top:2px;";
       row.appendChild(msg);
     }
 
     const stopBtn = document.createElement("button");
-    stopBtn.textContent = inst.crashed ? "Entfernen" : "Stop";
+    stopBtn.textContent = inst.crashed ? tt("flow.513d30") : tt("flow.11a755");
     stopBtn.style.cssText = "font-size:var(--omp-font-size-xs);cursor:pointer;margin-top:3px;";
     stopBtn.className = "omp-btn-danger";
     stopBtn.addEventListener("click", () => this.#stopInstance(inst.id, inst.label));
@@ -5570,7 +5571,7 @@ export class FlowCanvas extends HTMLElement {
       });
       if (!res.ok) {
         const text = await res.text();
-        this.#showToast(`Start fehlgeschlagen: ${text || res.status}`);
+        this.#showToast(tt("flow.f6d6b4", { p0: text || res.status }));
         return;
       }
       // Kein #fetchAndRender() nötig: die Instanz registriert sich
@@ -5607,10 +5608,10 @@ export class FlowCanvas extends HTMLElement {
           this.#groupScopePendingInstances.set(inst.id, this.#scope);
         }
       }
-      this.#showToast(`${type} wird gestartet …`);
+      this.#showToast(tt("flow.f0052e", { p0: type }));
       await this.#renderPalette();
     } catch (err) {
-      this.#showToast(`Start fehlgeschlagen: ${err}`);
+      this.#showToast(tt("flow.f6d6b4", { p0: err }));
     }
   }
 
@@ -5621,14 +5622,14 @@ export class FlowCanvas extends HTMLElement {
   // #stopWorkflow oben (confirmDialog, "confirmLabel" statt der
   // englischen Default-Beschriftung).
   async #stopInstance(instanceId: string, label: string) {
-    if (!(await confirmDialog(`Instanz „${label}" wirklich stoppen?`, { confirmLabel: "Stoppen" }))) return;
+    if (!(await confirmDialog(tt("flow.cb1616", { p0: label }), { confirmLabel: tt("flow.4c4650") }))) return;
     try {
       const res = await apiFetch(`/api/v1/instances/${encodeURIComponent(instanceId)}`, {
         method: "DELETE",
       });
       if (!res.ok) {
         const text = await res.text();
-        this.#showToast(`Stop fehlgeschlagen: ${text || res.status}`);
+        this.#showToast(tt("flow.a271df", { p0: text || res.status }));
         return;
       }
       // Die Kachel verschwindet, sobald der Node aus der Registry
@@ -5638,10 +5639,10 @@ export class FlowCanvas extends HTMLElement {
       // Die Palette-Zeile dagegen entfernt DELETE serverseitig sofort aus
       // Launcher.instances (auch für eine bereits abgestürzte Instanz
       // ohne jede NMOS-Registrierung), deshalb hier direkt neu rendern.
-      this.#showToast("Instanz wird gestoppt …");
+      this.#showToast(tt("flow.f876c0"));
       await this.#renderPalette();
     } catch (err) {
-      this.#showToast(`Stop fehlgeschlagen: ${err}`);
+      this.#showToast(tt("flow.a271df", { p0: err }));
     }
   }
 
@@ -5652,7 +5653,7 @@ export class FlowCanvas extends HTMLElement {
   // wie workflows-view.ts#stopWorkflow (der Orchestrator wertet es nur
   // aus, wenn der Workflow selbst `settings.confirmStop` gesetzt hat).
   async #stopWorkflow(workflowId: string, label: string) {
-    if (!(await confirmDialog(`Workflow „${label}" wirklich stoppen?`, { confirmLabel: "Stoppen" }))) return;
+    if (!(await confirmDialog(tt("flow.b5f13f", { p0: label }), { confirmLabel: tt("flow.4c4650") }))) return;
     try {
       const res = await apiFetch(`/api/v1/workflows/${encodeURIComponent(workflowId)}/stop`, {
         method: "POST",
@@ -5661,12 +5662,12 @@ export class FlowCanvas extends HTMLElement {
       });
       if (!res.ok) {
         const text = await res.text();
-        this.#showToast(`Workflow-Stop fehlgeschlagen: ${text || res.status}`);
+        this.#showToast(tt("flow.f38594", { p0: text || res.status }));
         return;
       }
-      this.#showToast(`Workflow „${label}" wird gestoppt …`);
+      this.#showToast(tt("flow.75b57f", { p0: label }));
     } catch (err) {
-      this.#showToast(`Workflow-Stop fehlgeschlagen: ${err}`);
+      this.#showToast(tt("flow.f38594", { p0: err }));
     }
   }
 
