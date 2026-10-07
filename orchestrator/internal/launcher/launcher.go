@@ -369,6 +369,10 @@ type Launcher struct {
 	// Tests ersetzbar); localGPU ist der zuletzt gemessene Host-Pool.
 	gpuProbe func(context.Context) gpu.Result
 	localGPU *LocalGPUSample
+	// localHost: letzte Messung von CPU/RAM/Netz des lokalen Hosts (nur
+	// aus sampleLocalResources unter l.mu beschrieben).
+	localHost      *LocalHostSample
+	localHostState localHostState
 
 	// totalRestarts zählt jeden tatsächlichen automatischen Neustart
 	// (lokal wie remote, beide laufen durch recordRestartLocked) seit
@@ -740,6 +744,22 @@ func (l *Launcher) LocalGPU() *LocalGPUSample {
 	return &c
 }
 
+// LocalHost liefert die zuletzt gemessene Last des lokalen Hosts; nil =
+// noch nicht gemessen.
+func (l *Launcher) LocalHost() *LocalHostSample {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.localHost == nil {
+		return nil
+	}
+	c := *l.localHost
+	if c.Net != nil {
+		n := *c.Net
+		c.Net = &n
+	}
+	return &c
+}
+
 // TotalRestarts liefert die kumulative Anzahl automatischer Neustarts
 // (lokal + remote) seit Prozessstart (S8) — s. totalRestarts-Doku.
 func (l *Launcher) TotalRestarts() uint64 {
@@ -802,6 +822,8 @@ func (l *Launcher) sampleLocalResources() {
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	l.localHost = l.localHostState.sample(os.Getenv("OMP_LOCAL_NET_IFACE"))
 
 	if gres.Host != nil {
 		l.localGPU = &LocalGPUSample{Count: gres.Host.Count, UtilPercent: gres.Host.UtilPercent, MemUsed: gres.Host.MemUsed, MemTotal: gres.Host.MemTotal}

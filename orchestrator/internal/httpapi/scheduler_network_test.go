@@ -20,7 +20,8 @@ type fakeCatalog []launcher.CatalogEntry
 
 func (f fakeCatalog) List() []launcher.Instance { return nil }
 
-func (f fakeCatalog) LocalGPU() *launcher.LocalGPUSample { return nil }
+func (f fakeCatalog) LocalGPU() *launcher.LocalGPUSample   { return nil }
+func (f fakeCatalog) LocalHost() *launcher.LocalHostSample { return nil }
 
 func (f fakeCatalog) Catalog() []launcher.CatalogEntry { return f }
 

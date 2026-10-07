@@ -114,6 +114,8 @@ type LauncherService interface {
 	List() []launcher.Instance
 	// LocalGPU: zuletzt gemessene GPU des lokalen Hosts (nil = nicht gemessen).
 	LocalGPU() *launcher.LocalGPUSample
+	// LocalHost: zuletzt gemessene CPU/RAM/Netz-Last des lokalen Hosts.
+	LocalHost() *launcher.LocalHostSample
 	// Get (ARCHITECTURE.md §24.1, UMSETZUNG.md C16) — s.
 	// handleIssueServiceToken, das über das nur intern (json:"-")
 	// gehaltene launcher.Instance.LaunchSecret prüft, ob der Aufrufer

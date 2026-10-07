@@ -30282,3 +30282,12 @@ kleinste Metric), Name überschreibt, `off` deaktiviert — Muster wie
 `OMP_HOST_AGENT_GPU_INDEX`. Kehrt die frühere „explizit statt erkannt"-
 Entscheidung um; Hosts mit dedizierter 2110-NIC setzen die Variable.
 Test: `TestParseDefaultRouteIface`.
+
+**Nachtrag (2026-10-07, Teil 2): lokaler Host misst CPU/RAM/Netz.** Der
+„Orchestrator (lokal)" hatte keinen Host-Agent und damit weder Netz noch
+Live-Werte. `launcher/localhost.go` misst im bestehenden 5-s-Takt
+(`sampleLocalResources`) /proc/stat, /proc/meminfo und das Interface der
+Default-Route (`OMP_LOCAL_NET_IFACE`: leer/auto, Name, off);
+`/api/v1/scheduler/resources` liefert daraus `netLinkMbps` + `live` für den
+lokalen Host. Folge: der lokale Host bekommt jetzt auch einen CPU/RAM-
+Live-Boden im Scheduler wie die Agent-Hosts.

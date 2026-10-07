@@ -37,6 +37,7 @@ type CatalogReader interface {
 	Catalog() []launcher.CatalogEntry
 	List() []launcher.Instance
 	LocalGPU() *launcher.LocalGPUSample
+	LocalHost() *launcher.LocalHostSample
 }
 
 type schedResHost struct {
@@ -191,6 +192,19 @@ func handleSchedulerResources(
 		local.CapKnown = local.MemTotal > 0
 		local.IOPorts = ioCaps(ports, claims, "")
 		if catalog != nil {
+			if lh := catalog.LocalHost(); lh != nil {
+				live := &schedResHostLive{CPUPercent: lh.CPUPercent, MemPercent: lh.MemPercent}
+				if n := lh.Net; n != nil {
+					local.NetLinkMbps = n.LinkMbps
+					live.NetRxMbps = n.RxBytesPerSec * 8 / 1e6
+					live.NetTxMbps = n.TxBytesPerSec * 8 / 1e6
+					if n.LinkMbps > 0 {
+						v := (n.RxBytesPerSec + n.TxBytesPerSec) * 8 / (n.LinkMbps * 1e6) * 100
+						live.NetPercent = &v
+					}
+				}
+				local.Live = live
+			}
 			if lg := catalog.LocalGPU(); lg != nil {
 				local.GPU = &schedResGPU{Count: lg.Count, UtilPercent: lg.UtilPercent, MemUsedBytes: lg.MemUsed, MemTotalBytes: lg.MemTotal}
 			}
