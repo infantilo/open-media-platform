@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -302,5 +303,21 @@ func TestParseGPUSpec(t *testing.T) {
 		if (err != nil) != c.bad || (!c.bad && (idx != c.idx || en != c.enabled)) {
 			t.Errorf("ParseGPUSpec(%q) = %d,%v,%v", c.in, idx, en, err)
 		}
+	}
+}
+
+func TestParseDefaultRouteIface(t *testing.T) {
+	in := "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\n" +
+		"wlan0\t00000000\t0100A8C0\t0003\t0\t0\t600\t00000000\n" +
+		"eth0\t00000000\t0100A8C0\t0003\t0\t0\t100\t00000000\n" +
+		"eth0\t0000A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\n"
+	if got := parseDefaultRouteIface(strings.NewReader(in)); got != "eth0" {
+		t.Fatalf("got %q", got)
+	}
+	if got := parseDefaultRouteIface(strings.NewReader("Iface\n")); got != "" {
+		t.Fatalf("got %q", got)
+	}
+	if ResolveNetIface("off") != "" || ResolveNetIface("enp1s0") != "enp1s0" {
+		t.Fatal("explicit spec")
 	}
 }

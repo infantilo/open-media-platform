@@ -42,10 +42,10 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/infantilo/openmediaplatform/host-agent/internal/catalog"
-	"github.com/infantilo/openmediaplatform/nodeoptions"
 	"github.com/infantilo/openmediaplatform/host-agent/internal/commands"
 	"github.com/infantilo/openmediaplatform/host-agent/internal/state"
 	"github.com/infantilo/openmediaplatform/host-agent/internal/telemetry"
+	"github.com/infantilo/openmediaplatform/nodeoptions"
 )
 
 // defaultNatsURL zeigt auf den per `make up` gestarteten Drei-Knoten-
@@ -113,10 +113,9 @@ func main() {
 	catalogPath := envOr("OMP_HOST_AGENT_CATALOG_PATH", "")
 	ioPortsPath := envOr("OMP_HOST_AGENT_IO_PORTS_PATH", "")
 	// Netzwerk-Interface für die Bandbreiten-Telemetrie (Nutzerauftrag
-	// 2026-09-02) — bewusst kein Default/Auto-Erkennung, s.
-	// telemetry.NetSample-Doku. Leer = Netz-Telemetrie deaktiviert
-	// (Sample.Net bleibt nil), unverändertes Verhalten gegenüber vorher.
-	netIface := envOr("OMP_HOST_AGENT_NET_IFACE", "")
+	// 2026-09-02; seit 2026-10-07 automatisch): leer/"auto" = Interface der
+	// Default-Route, Name = dieses Interface, "off" = aus (Sample.Net nil).
+	netIface := telemetry.ResolveNetIface(envOr("OMP_HOST_AGENT_NET_IFACE", ""))
 	// GPU-Telemetrie (Nutzerauftrag 2026-09-17; seit 2026-10-01 automatisch):
 	// ohne OMP_HOST_AGENT_GPU_INDEX werden alle vom Treiber gemeldeten GPUs
 	// als Pool gemessen — ist keine da (kein nvidia-smi), bleibt Sample.Gpu
@@ -262,7 +261,7 @@ func main() {
 	if netIface != "" {
 		slog.Info("network bandwidth telemetry enabled", "iface", netIface)
 	} else {
-		slog.Info("network bandwidth telemetry disabled (OMP_HOST_AGENT_NET_IFACE unset)")
+		slog.Info("network bandwidth telemetry disabled (OMP_HOST_AGENT_NET_IFACE=off or no default route)")
 	}
 	if gpuEnabled {
 		probeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

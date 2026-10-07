@@ -12,6 +12,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -55,12 +56,9 @@ type Sample struct {
 // benannten Netzwerk-Interfaces (ARCHITECTURE.md §6.1: NIC-Auslastung ist
 // wie CPU/RAM eine kontinuierliche, teilbare Ressource, keine
 // diskret-exklusive wie ein I/O-Karten-Port — s. Erweiterung 2026-07-10
-// dort). Bewusst explizit konfiguriert statt automatisch erkannt (das
-// Default-Route-Interface ist auf einem Host mit dedizierter 2110-NIC
-// typischerweise NICHT die Management-Schnittstelle, über die der
-// Host-Agent selbst mit dem Orchestrator spricht) — exakt dasselbe
-// Prinzip wie beim I/O-Karten-Inventar (§6.1 Erweiterung 2026-07-10:
-// "host-agent-konfiguriert statt automatisch erkannt").
+// dort). Seit 2026-10-07 standardmäßig das Default-Route-Interface
+// (ResolveNetIface); auf Hosts mit dedizierter 2110-NIC per
+// OMP_HOST_AGENT_NET_IFACE explizit überschreiben.
 type NetSample struct {
 	Iface         string  `json:"iface"`
 	RxBytesPerSec float64 `json:"rxBytesPerSec"`
@@ -533,4 +531,48 @@ func (s *ProcessSampler) Prune(keep map[int]bool) {
 			delete(s.prev, pid)
 		}
 	}
+}
+
+// ResolveNetIface wertet OMP_HOST_AGENT_NET_IFACE aus (seit 2026-10-07
+// automatisch, Nutzerauftrag "Netzwerkbandbreite im Scheduler"): leer oder
+// "auto" = Interface der Default-Route, "off" = Netz-Telemetrie aus, alles
+// andere = dieses Interface explizit (überschreibt die Erkennung, z. B.
+// für eine dedizierte 2110-NIC). Leerer Rückgabewert = nicht gemessen.
+func ResolveNetIface(spec string) string {
+	switch s := strings.TrimSpace(spec); strings.ToLower(s) {
+	case "", "auto":
+		f, err := os.Open("/proc/net/route")
+		if err != nil {
+			return ""
+		}
+		defer f.Close()
+		return parseDefaultRouteIface(f)
+	case "off":
+		return ""
+	default:
+		return s
+	}
+}
+
+// parseDefaultRouteIface liefert das Interface mit der Default-Route
+// (Destination 00000000, Mask 00000000) und der kleinsten Metric aus dem
+// Format von /proc/net/route.
+func parseDefaultRouteIface(r io.Reader) string {
+	best, bestMetric := "", int64(-1)
+	sc := bufio.NewScanner(r)
+	sc.Scan() // Kopfzeile
+	for sc.Scan() {
+		f := strings.Fields(sc.Text())
+		if len(f) < 8 || f[1] != "00000000" || f[7] != "00000000" {
+			continue
+		}
+		m, err := strconv.ParseInt(f[6], 10, 64)
+		if err != nil {
+			continue
+		}
+		if bestMetric < 0 || m < bestMetric {
+			best, bestMetric = f[0], m
+		}
+	}
+	return best
 }

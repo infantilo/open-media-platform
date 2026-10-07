@@ -30271,3 +30271,14 @@ Die weitere Eingrenzung (rohes PCM statt AAC, Nachbau-Kette mit Taps vor dem Mux
 ## Nachtrag (2026-10-05, Ende 2): Tonlücken beim Aufnahmebeginn halbiert (Anlauf-Fenster der gemeinsamen Latenz)
 
 Ursache der Lücke direkt nach dem Start: der zuerst startende Leser (Audio, Anfangs-Latenz 20 ms) gab schon Blöcke aus, bevor der Video-Leser seine Latenz (120 ms) meldete — danach sprang die wirksame Latenz um ~100 ms, das ergab eine 50–60-ms-Lücke im Ton. **Fix:** `SharedLatency` hat ein Anlauf-Fenster (250 ms nach der ersten Anmeldung, `SHARED_LATENCY_SETTLE`): in dieser Zeit melden alle Leser nur ihre Anfangs-Latenz (`IndexPts::Settling`: nichts ausgeben, Leseindex auf „jetzt“ nachführen, damit der Verzug klein bleibt), danach laufen alle von Anfang an mit derselben größten Latenz. Gemessen mit dem Recorder (PCM, lückenbewusste Auswertung, 4 Läufe): Lücken je Aufnahme 2/2/4/2 → 1/1/2/2; A/V-Versatz Datei = Tap auf 0,2–0,4 ms unverändert. **Rest:** eine Lücke von 40 ms etwa 1–2 s nach Aufnahmebeginn — das Anwachsen der Video-Latenz um eine Periode (Verzugsspitzen beim Anlauf, `LatencyTracker::observe` Grow); bewusst nicht „weggepolstert“, weil jede zusätzliche Anfangs-Periode 40 ms Dauerlatenz kostet (Schrumpfen erst nach 30 s). Test `domain_settles_only_after_the_startup_window`; `omp-mediaio` 35 Tests grün.
+
+## Nachtrag (2026-10-07): NIC-Telemetrie automatisch (Default-Route)
+
+Nutzerhinweis: Der Scheduler zeigte keine Netzwerkbandbreite. Ursache: die
+Messung lief nur mit gesetztem `OMP_HOST_AGENT_NET_IFACE`, in keinem
+Startskript gesetzt → fail-open, keine Kapazität. Entscheidung (Nutzer,
+Variante 2): Standard = Interface der Default-Route (`/proc/net/route`,
+kleinste Metric), Name überschreibt, `off` deaktiviert — Muster wie
+`OMP_HOST_AGENT_GPU_INDEX`. Kehrt die frühere „explizit statt erkannt"-
+Entscheidung um; Hosts mit dedizierter 2110-NIC setzen die Variable.
+Test: `TestParseDefaultRouteIface`.

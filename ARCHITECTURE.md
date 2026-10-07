@@ -299,8 +299,10 @@ die vollständige Beschreibung) — Geräte-Inventar existiert jetzt
 (`internal/ioports`, host-agent-konfiguriert statt automatisch
 erkannt). **NIC-Bandbreite seit 2026-09-02 umgesetzt** (Nutzerauftrag
 "netzwerkbandbreite ... auch relevant"): Host-Agent misst Durchsatz/
-Link-Kapazität eines explizit konfigurierten Interfaces
-(`OMP_HOST_AGENT_NET_IFACE`, `host-agent/internal/telemetry.NetSample`),
+Link-Kapazität eines Interfaces — **seit 2026-10-07 automatisch** das der
+Default-Route, `OMP_HOST_AGENT_NET_IFACE=<name>` überschreibt (z. B.
+dedizierte 2110-NIC), `off` schaltet ab
+(`host-agent/internal/telemetry.ResolveNetIface`/`NetSample`),
 die Placement-Engine wertet sie als dritte kontinuierlich-teilbare
 Ressourcendimension neben CPU/RAM (`Thresholds.NetPercent`,
 `internal/placement.netUtilizationPercent`) — fail-open, wenn kein
