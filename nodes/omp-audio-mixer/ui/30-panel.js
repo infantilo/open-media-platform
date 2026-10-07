@@ -8,7 +8,7 @@ const PRESETS = [
   ["grid", "Grid"],
   ["touch", "Touch"],
 ];
-const DEFAULT_UI = { preset: "auto", mode: "mix", showFaders: null, columns: 0, meterSize: "m", selected: "", centerTab: "in", centerOpen: false, collapsed: {}, bySource: false };
+const DEFAULT_UI = { preset: "auto", mode: "mix", showFaders: null, columns: 0, meterSize: "m", selected: "", centerTab: "in", centerOpen: false, collapsed: {}, bySource: false, centerDismissed: false };
 
 const emptyState = () => ({ channels: [], groups: [], duckRules: [], auxBuses: [], auxFree: 0, scenes: [], contextRules: [], audioContext: { activeSources: [], activeScene: "" }, availableSources: [], availableNodes: [], masterLimiter: { enabled: false, thresholdDb: -6, ratio: 10, makeupDb: 0 } });
 
@@ -51,6 +51,7 @@ button{cursor:pointer}
 .root[data-layout=stacked] .center{border-left:0;border-top:1px solid var(--c-border);max-height:none}
 .root[data-layout=sheet] .center{position:fixed;left:0;right:0;bottom:0;max-height:72vh;z-index:40;border-top:2px solid var(--c-accent);border-left:0;border-radius:14px 14px 0 0;box-shadow:0 -8px 30px #000a;transform:translateY(0)}
 .root[data-center=closed] .center{display:none}
+.root[data-layout=side] .center{position:sticky;top:0;align-self:start}
 .center-inner{padding:8px 10px 14px}
 .chead2{display:flex;align-items:center;gap:6px;margin-bottom:6px}
 .ctitle{flex:1;font-weight:700;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -413,6 +414,7 @@ class MixerApp {
   }
   setMode(m) {
     this.ui.mode = m;
+    this.ui.centerDismissed = false;
     if (m === "operate") this.ui.centerOpen = false;
     this.saveUi();
     this.applyUiToToolbar();
@@ -459,10 +461,15 @@ class MixerApp {
     this.layout = layout;
     this.root.dataset.layout = layout;
     this.root.dataset.mode = this.ui.mode;
-    const open = layout === "side" ? this.ui.mode === "mix" || this.ui.centerOpen : this.ui.centerOpen || (layout === "stacked" && this.ui.mode === "mix");
-    this.root.dataset.center = open && this.state.channels.length ? "open" : "closed";
+    this.root.dataset.center = this.centerIsOpen() && this.state.channels.length ? "open" : "closed";
     this.applyLayoutVars();
     if (force || this.variantKey !== this.variantSig()) this.renderChannels(true);
+  }
+  /** Kanal-Editor sichtbar? Im Modus „Mix“ (Seite/gestapelt) standardmäßig ja — das ✕ schließt ihn trotzdem
+   *  (`centerDismissed`), bis wieder ein Kanal per SEL gewählt oder der Modus gewechselt wird. */
+  centerIsOpen() {
+    const forced = this.ui.mode === "mix" && !this.ui.centerDismissed && (this.layout === "side" || this.layout === "stacked");
+    return forced || this.ui.centerOpen;
   }
   variantSig() {
     return this.resolveVariant() + "|" + this.effectiveFaders() + "|" + this.ui.columns + "|" + this.ui.meterSize;
@@ -493,10 +500,7 @@ class MixerApp {
     const sel = this.cur();
     this.ctHandle.dataset.has = sel ? "1" : "0";
     this.ctHandle.textContent = sel ? `▲ ${sel.label} — Center Control` : "";
-    this.root.dataset.center = (() => {
-      const open = this.layout === "side" ? this.ui.mode === "mix" || this.ui.centerOpen : this.ui.centerOpen || (this.layout === "stacked" && this.ui.mode === "mix");
-      return open && this.state.channels.length ? "open" : "closed";
-    })();
+    this.root.dataset.center = this.centerIsOpen() && this.state.channels.length ? "open" : "closed";
   }
 
   // ───── Zustand ─────
@@ -685,11 +689,16 @@ class MixerApp {
   // ───── Auswahl / Navigation ─────
   select(id, { open = false, focus = false } = {}) {
     this.ui.selected = id;
-    if (open) this.ui.centerOpen = true;
+    if (open) {
+      this.ui.centerOpen = true;
+      this.ui.centerDismissed = false;
+    }
     this.saveUi();
     this.updateChannels();
     this.center.refresh();
     this.layoutNow();
+    // Editor ins Blickfeld holen (gestapeltes Layout: er liegt unter den Kanälen).
+    if (open) requestAnimationFrame(() => this.centerHost.scrollIntoView({ block: "nearest", behavior: "smooth" }));
     if (focus) this.center.tabBar.querySelector("[aria-selected=true]")?.focus();
     const ch = this.state.channels.find((c) => c.id === id);
     if (ch) this.announce(`Kanal ${ch.label} ausgewählt`);
@@ -703,6 +712,7 @@ class MixerApp {
   }
   closeCenter() {
     this.ui.centerOpen = false;
+    this.ui.centerDismissed = true;
     this.saveUi();
     this.layoutNow();
   }
@@ -717,7 +727,7 @@ class MixerApp {
       case "m": case "M": if (sel) this.toggleMute(sel.id); break;
       case "s": case "S": if (sel) this.togglePfl(sel.id); break;
       case "Enter": if (t && t.classList && t.classList.contains("name")) this.select(this.ui.selected, { open: true }); return;
-      case "Escape": if (this.ui.centerOpen) this.closeCenter(); break;
+      case "Escape": if (this.centerIsOpen()) this.closeCenter(); break;
       default: return;
     }
     e.preventDefault();
