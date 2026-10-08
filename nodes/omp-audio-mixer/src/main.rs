@@ -256,6 +256,8 @@ struct AuxState {
     built_channels: u32,
     /// Nur `kind == "group"`: Gruppenname (Tag `role.<group>` am Sender).
     group: String,
+    /// Anzeigereihenfolge der Ausgangsstreifen (aufsteigend; `moveAux` vergibt 0..n neu).
+    pos: i64,
 }
 
 /// Layout-Name → Kanalzahl der unterstützten diskreten Layouts (Kap. 31.1).
@@ -671,6 +673,14 @@ impl ParamStore for AudioMixerStore {
                     MethodArg { name: "layout".to_string(), kind: ParamType::String },
                     MethodArg { name: "group".to_string(), kind: ParamType::String },
                     MethodArg { name: "channels".to_string(), kind: ParamType::Number },
+                ],
+            },
+            // Reihenfolge der Ausgangsstreifen ändern; `toIndex` zählt in der Liste der aktiven Ausgänge.
+            MethodSpec {
+                name: "moveAux".to_string(),
+                args: vec![
+                    MethodArg { name: "auxId".to_string(), kind: ParamType::String },
+                    MethodArg { name: "toIndex".to_string(), kind: ParamType::Number },
                 ],
             },
             MethodSpec {
@@ -1354,6 +1364,7 @@ fn aux_json(a: &AuxState) -> Value {
         "id": a.id, "label": a.label, "active": a.active, "kind": a.kind,
         "exclude": a.exclude, "masterDb": a.master_db, "mute": a.muted,
         "channels": a.channels, "layout": channels_layout(a.channels), "group": a.group,
+        "pos": a.pos,
     })
 }
 
@@ -1576,6 +1587,9 @@ impl AudioMixerStore {
                         a.master_db = d.get("masterDb").and_then(Value::as_f64).unwrap_or(0.0);
                         a.muted = d.get("mute").and_then(Value::as_bool).unwrap_or(false);
                         a.group = d.get("group").and_then(Value::as_str).unwrap_or("").to_string();
+                        if let Some(p) = d.get("pos").and_then(Value::as_i64) {
+                            a.pos = p;
+                        }
                         let want = d.get("channels").and_then(Value::as_u64).map_or(2, |c| c as u32);
                         // Ein bereits gebauter Ausgang behält seine Kanalzahl.
                         if a.built_channels == 0 || a.built_channels == want {
@@ -1803,6 +1817,7 @@ impl AudioMixerStore {
                 if kind == "group" && aux.iter().any(|a| a.active && a.kind == "group" && a.group == group) {
                     return Err(InvokeError::Unknown); // je Gruppe nur ein Bus
                 }
+                let next_pos = aux.iter().map(|a| a.pos).max().unwrap_or(0) + 1;
                 // Slot mit passender (oder noch ungebauter) Kanalzahl.
                 let Some(slot) = aux.iter_mut().find(|a| !a.active && (a.built_channels == 0 || a.built_channels == channels)) else {
                     return Err(InvokeError::Unknown); // alle Slots belegt
@@ -1819,6 +1834,7 @@ impl AudioMixerStore {
                         },
                         str::to_string,
                     );
+                slot.pos = next_pos;
                 slot.active = true;
                 slot.channels = channels;
                 slot.built_channels = channels;
@@ -1835,6 +1851,20 @@ impl AudioMixerStore {
                     channels,
                     tags: bus_sender_tags(slot),
                 });
+                Ok(())
+            }
+            "moveAux" => {
+                let id = args.get("auxId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let to = args.get("toIndex").and_then(Value::as_f64).filter(|v| v.is_finite() && *v >= 0.0).ok_or(InvokeError::Unknown)? as usize;
+                let mut aux = self.aux.lock().expect("lock poisoned");
+                let mut order: Vec<usize> = (0..aux.len()).filter(|&i| aux[i].active).collect();
+                order.sort_by_key(|&i| (aux[i].pos, i));
+                let from = order.iter().position(|&i| aux[i].id == id).ok_or(InvokeError::Unknown)?;
+                let item = order.remove(from);
+                order.insert(to.min(order.len()), item);
+                for (n, i) in order.into_iter().enumerate() {
+                    aux[i].pos = n as i64;
+                }
                 Ok(())
             }
             "removeAux" => {
@@ -2861,6 +2891,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             channels: 2,
             built_channels: 0,
             group: String::new(),
+            pos: n as i64,
         })
         .collect();
     let pipeline_config = pipeline::Config {
@@ -3471,6 +3502,7 @@ mod tests {
             channels: 2,
             built_channels: 0,
             group: String::new(),
+            pos: 0,
         }
     }
 

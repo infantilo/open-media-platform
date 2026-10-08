@@ -650,8 +650,7 @@ class MixerApp {
   }
   /** Ausgangs-Sektion: Programm-Streifen + je Ausgang ein Streifen (Gruppen-Busse, dann Aux, dann N-1). */
   renderOutputs() {
-    const order = { group: 0, aux: 1, n1: 2 };
-    const buses = [...this.state.auxBuses].sort((a, b) => (order[a.kind] ?? 3) - (order[b.kind] ?? 3));
+    const buses = [...this.state.auxBuses].sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0));
     const ids = new Set(buses.map((b) => b.id));
     for (const [id, v] of this.outStrips) if (!ids.has(id)) { v.root.remove(); this.outStrips.delete(id); }
     for (const a of buses) if (!this.outStrips.has(a.id)) this.outStrips.set(a.id, new OutputStrip(this, a));
@@ -719,6 +718,20 @@ class MixerApp {
     const to = ids.indexOf(targetId);
     if (from < 0 || to < 0 || from === to) return;
     await this.moveChannelTo(fromId, to);
+  }
+  /** Ausgangsstreifen `fromId` an die Stelle von `targetId` setzen. */
+  async moveAuxBefore(fromId, targetId) {
+    const list = [...this.state.auxBuses].sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0));
+    const from = list.findIndex((a) => a.id === fromId);
+    const to = list.findIndex((a) => a.id === targetId);
+    if (from < 0 || to < 0 || from === to) return;
+    const [a] = list.splice(from, 1);
+    list.splice(to, 0, a);
+    list.forEach((x, i) => { x.pos = i; });
+    this.touchedAt = performance.now();
+    this.renderOutputs();
+    await this.cmd("moveAux", { auxId: fromId, toIndex: to });
+    this.poll();
   }
   async moveChannelTo(id, index) {
     const list = this.state.channels;

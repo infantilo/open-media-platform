@@ -50,7 +50,18 @@ class OutputStrip {
       if (n && n.trim()) app.cmd(`aux.${this.id}.setLabel`, { label: n.trim() }).then(() => app.poll());
     });
     this.kind = h("span", { class: "b outkind" });
-    this.head = h("div", { class: "chead" }, this.nameBtn);
+    // Reihenfolge ändern: Griff ziehen (wie bei den Kanalzügen).
+    this.grip = h("span", { class: "grip", draggable: "true", title: T("am1.e3f9d6"), "aria-hidden": "true", text: "⠿" });
+    this.grip.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/x-omp-aux", this.id); e.dataTransfer.effectAllowed = "move"; this.root.dataset.dragging = "1"; });
+    this.grip.addEventListener("dragend", () => { delete this.root.dataset.dragging; });
+    this.root.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("text/x-omp-aux")) { e.preventDefault(); this.root.dataset.dropTarget = "1"; } });
+    this.root.addEventListener("dragleave", () => { delete this.root.dataset.dropTarget; });
+    this.root.addEventListener("drop", (e) => {
+      delete this.root.dataset.dropTarget;
+      const from = e.dataTransfer.getData("text/x-omp-aux");
+      if (from && from !== this.id) { e.preventDefault(); app.moveAuxBefore(from, this.id); }
+    });
+    this.head = h("div", { class: "chead" }, this.grip, this.nameBtn);
     this.badges = h("div", { class: "badges" }, this.kind);
     this.meter = new Meter();
     this.meterWrap = h("div", { class: "meterwrap" }, this.meter.root);
