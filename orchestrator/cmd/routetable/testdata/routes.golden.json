@@ -1,0 +1,1490 @@
+[
+  {
+    "method": "ANY",
+    "path": "/",
+    "auth": "custom:spaFallback",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/audit-log",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/backup",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/backups",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/backups/upload",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/backups/{name}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/hosts/bootstrap-tokens",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/node-versions",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/node-versions/rescan",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/admin/node-versions/{name}/productive",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/node-versions/{name}/rollout",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/node-versions/{name}/rollout",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/node-versions/{name}/{id}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/restore",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/role-bindings",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/role-bindings",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/role-bindings/{id}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/settings/check-path",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/settings/nodes",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/admin/settings/nodes/{type}/{key}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/settings/system",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/admin/settings/system/{key}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/storage-locations",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/storage-locations",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/storage-locations/{id}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/admin/storage-locations/{id}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/updates",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/updates/restart-outdated",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/updates/upload",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/updates/{id}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/updates/{id}/apply",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/updates/{id}/distribute",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/alarms/acks",
+    "auth": "verb:Operate",
+    "when": "options.alarmAcks != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/alarms/acks",
+    "auth": "auth",
+    "when": "options.alarmAcks != nil",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/alarms/acks",
+    "auth": "verb:Operate",
+    "when": "options.alarmAcks != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/asset-lifecycle",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/asset-links/{id}",
+    "auth": "verb:Operate",
+    "when": "options.assetLinks != nil",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/asset-relationships",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/asset-relationships/{id}",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/asset-versions/{id}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/asset-versions/{id}/archive",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/asset-versions/{id}/links",
+    "auth": "auth",
+    "when": "options.assetLinks != nil",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/asset-versions/{id}/publish",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/asset-versions/{id}/representations",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/asset-versions/{id}/representations",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/asset-versions/{id}/upload-url",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/assets",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/assets",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/assets/search",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/assets/{id}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/assets/{id}/metadata",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/assets/{id}/relationships",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/assets/{id}/status",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/assets/{id}/versions",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/assets/{id}/versions",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/audio-rules",
+    "auth": "auth",
+    "domain": "audio-rules"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/audio-rules",
+    "auth": "verb:Admin",
+    "domain": "audio-rules"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/audio-rules/default",
+    "auth": "auth",
+    "domain": "audio-rules"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/audio-rules/simulate",
+    "auth": "auth",
+    "domain": "audio-rules"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/login",
+    "auth": "custom:handleLogin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/auth/users",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/users",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/auth/users/{name}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/auth/users/{name}/org",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/auth/users/{name}/password",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/users/{name}/revoke-sessions",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/auth/whoami",
+    "auth": "custom:handleWhoami",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/catalog",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/catalog",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/catalog/{type}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/cloud/costs",
+    "auth": "auth",
+    "domain": "cloud"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/cloud/estimate",
+    "auth": "auth",
+    "domain": "cloud"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/cloud/hosts",
+    "auth": "auth",
+    "domain": "cloud"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/cloud/hosts/{id}/release",
+    "auth": "verb:Admin",
+    "domain": "cloud"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/cloud/policies",
+    "auth": "auth",
+    "domain": "cloud"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/cloud/policies/{pool}",
+    "auth": "verb:Admin",
+    "domain": "cloud"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/cloud/pricing",
+    "auth": "auth",
+    "domain": "cloud"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/cloud/reservations",
+    "auth": "auth",
+    "domain": "cloud"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/cloud/reservations",
+    "auth": "verb:Admin",
+    "domain": "cloud"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/cloud/reservations/{id}",
+    "auth": "verb:Admin",
+    "domain": "cloud"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/cloud/suggestions",
+    "auth": "auth",
+    "domain": "cloud"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/cloud/suggestions/{id}",
+    "auth": "verb:Admin",
+    "domain": "cloud"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/cloud/suggestions/{id}/accept",
+    "auth": "verb:Admin",
+    "domain": "cloud"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/cluster/join",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/cluster/members/{id}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/cluster/status",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/collections",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/collections",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/collections/{id}",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/collections/{id}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/collections/{id}",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/collections/{id}/members",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/collections/{id}/members",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/collections/{id}/members/{assetId}",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/domain-audit-log",
+    "auth": "verb:Admin",
+    "when": "options.domainAuditR != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/events",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/graph",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/graph/edges",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/graph/edges/{id}",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/graph/network",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/groups",
+    "auth": "verb:Admin",
+    "when": "options.groups != nil",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/groups",
+    "auth": "verb:Admin",
+    "when": "options.groups != nil",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/groups/{id}",
+    "auth": "verb:Admin",
+    "when": "options.groups != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/groups/{id}",
+    "auth": "verb:Admin",
+    "when": "options.groups != nil",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/groups/{id}",
+    "auth": "verb:Admin",
+    "when": "options.groups != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/groups/{id}/members",
+    "auth": "verb:Admin",
+    "when": "options.groups != nil",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/groups/{id}/members",
+    "auth": "verb:Admin",
+    "when": "options.groups != nil",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/groups/{id}/members/{username}",
+    "auth": "verb:Admin",
+    "when": "options.groups != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/host-updates/{id}",
+    "auth": "custom:handleHostUpdateDownload",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/hosts",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/hosts/register",
+    "auth": "custom:handleRegisterHost",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/hosts/{id}/metrics/history",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/human-tasks",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/human-tasks/{id}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/human-tasks/{id}/assign",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/human-tasks/{id}/complete",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/info",
+    "auth": "none",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/instances",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/instances",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/instances/{id}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/instances/{id}/migrate",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/instances/{id}/service-token",
+    "auth": "custom:handleIssueServiceToken",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/layouts/{name}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/layouts/{name}",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/logs",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/me/consoles",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/me/upcoming",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/nodes",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/nodes/{id}/descriptor",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/nodes/{id}/invites",
+    "auth": "node-verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/nodes/{id}/invites",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/nodes/{id}/invites",
+    "auth": "node-verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/nodes/{id}/invites/qr",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/nodes/{id}/layouts",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/nodes/{id}/layouts",
+    "auth": "node-verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/nodes/{id}/layouts/{name}",
+    "auth": "node-verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/nodes/{id}/layouts/{name}/apply",
+    "auth": "node-verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/nodes/{id}/measurements",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/nodes/{id}/methods/{name}",
+    "auth": "node-verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/nodes/{id}/params/{name}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/nodes/{id}/params/{name}",
+    "auth": "node-verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/nodes/{id}/plugins",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/nodes/{id}/plugins/{name}",
+    "auth": "node-verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/nodes/{id}/state",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/nodes/{id}/state",
+    "auth": "node-verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/nodes/{id}/stream/{name}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/nodes/{id}/timeline/window",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/nodes/{id}/ui/bundle.js",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/nodes/{id}/ui/manifest.json",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/organizations",
+    "auth": "verb:Admin",
+    "when": "options.organizations != nil",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/organizations",
+    "auth": "verb:Admin",
+    "when": "options.organizations != nil",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/organizations/{id}",
+    "auth": "verb:Admin",
+    "when": "options.organizations != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/organizations/{id}",
+    "auth": "verb:Admin",
+    "when": "options.organizations != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/placement/advice",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/placement/migrations",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/placement/migrations/{workflowId}/{role}/cancel",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/placement/migrations/{workflowId}/{role}/confirm",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/playout/channels",
+    "auth": "auth",
+    "when": "options.playout != nil",
+    "domain": "playout"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/playout/channels",
+    "auth": "verb:Configure",
+    "when": "options.playout != nil",
+    "domain": "playout"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/playout/channels/{id}",
+    "auth": "verb:Configure",
+    "when": "options.playout != nil",
+    "domain": "playout"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/playout/channels/{id}",
+    "auth": "auth",
+    "when": "options.playout != nil",
+    "domain": "playout"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/playout/channels/{id}",
+    "auth": "verb:Configure",
+    "when": "options.playout != nil",
+    "domain": "playout"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/playout/channels/{id}/as-run",
+    "auth": "verb:View",
+    "when": "options.playout != nil \u0026\u0026 options.asrun != nil",
+    "domain": "playout"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/playout/channels/{id}/as-run",
+    "auth": "auth",
+    "when": "options.playout != nil \u0026\u0026 options.asrun != nil",
+    "domain": "playout"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/playout/channels/{id}/executions",
+    "auth": "auth",
+    "when": "options.playout != nil",
+    "domain": "playout"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/playout/channels/{id}/materialize",
+    "auth": "auth",
+    "when": "options.playout != nil \u0026\u0026 options.preflight != nil",
+    "domain": "playout"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/playout/channels/{id}/preflight",
+    "auth": "auth",
+    "when": "options.playout != nil \u0026\u0026 options.preflight != nil",
+    "domain": "playout"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/playout/channels/{id}/state",
+    "auth": "auth",
+    "when": "options.playout != nil",
+    "domain": "playout"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/playout/channels/{id}/state",
+    "auth": "auth",
+    "when": "options.playout != nil",
+    "domain": "playout"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/playout/channels/{id}/trigger-ack",
+    "auth": "auth",
+    "when": "options.playout != nil \u0026\u0026 options.triggerRouter != nil \u0026\u0026 options.triggerStore != nil",
+    "domain": "playout"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/playout/channels/{id}/triggers",
+    "auth": "auth",
+    "when": "options.playout != nil \u0026\u0026 options.triggerRouter != nil \u0026\u0026 options.triggerStore != nil",
+    "domain": "playout"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/playout/trigger-rules",
+    "auth": "verb:View",
+    "when": "options.playout != nil \u0026\u0026 options.triggerRouter != nil \u0026\u0026 options.triggerStore != nil",
+    "domain": "playout"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/playout/trigger-rules",
+    "auth": "verb:Configure",
+    "when": "options.playout != nil \u0026\u0026 options.triggerRouter != nil \u0026\u0026 options.triggerStore != nil",
+    "domain": "playout"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/playout/trigger-rules/{id}",
+    "auth": "verb:Configure",
+    "when": "options.playout != nil \u0026\u0026 options.triggerRouter != nil \u0026\u0026 options.triggerStore != nil",
+    "domain": "playout"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/playout/triggers",
+    "auth": "verb:View",
+    "when": "options.playout != nil \u0026\u0026 options.triggerRouter != nil \u0026\u0026 options.triggerStore != nil",
+    "domain": "playout"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/process-capabilities",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/process-definitions",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/process-definitions",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/process-definitions/{id}",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/process-definitions/{id}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/process-definitions/{id}",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/process-definitions/{id}/versions",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/process-definitions/{id}/versions",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/process-executions",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/process-executions",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/process-executions/{id}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/process-executions/{id}/asset-links",
+    "auth": "auth",
+    "when": "options.assetLinks != nil",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/process-executions/{id}/asset-links",
+    "auth": "verb:Operate",
+    "when": "options.assetLinks != nil",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/process-executions/{id}/cancel",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/process-executions/{id}/human-tasks",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/process-executions/{id}/pause",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/process-executions/{id}/resume",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/process-executions/{id}/steps",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/process-versions/{id}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/process-versions/{id}/archive",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/process-versions/{id}/deprecate",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/process-versions/{id}/publish",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/profiles",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/representations/{id}",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/representations/{id}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/representations/{id}/download-url",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/scheduler/resources",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/snapshots",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/snapshots",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/snapshots/{id}/apply",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/sources",
+    "auth": "auth",
+    "when": "options.sourceTags != nil",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/sources/{senderId}/tags",
+    "auth": "verb:Configure",
+    "when": "options.sourceTags != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/storage-backends",
+    "auth": "verb:Admin",
+    "when": "options.storageBackends != nil",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/storage-backends",
+    "auth": "verb:Admin",
+    "when": "options.storageBackends != nil",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/storage-backends/test",
+    "auth": "verb:Admin",
+    "when": "options.storageBackends != nil",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/storage-backends/{id}",
+    "auth": "verb:Admin",
+    "when": "options.storageBackends != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/storage-backends/{id}",
+    "auth": "verb:Admin",
+    "when": "options.storageBackends != nil",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/storage-backends/{id}",
+    "auth": "verb:Admin",
+    "when": "options.storageBackends != nil",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/storage-backends/{id}/deprecate",
+    "auth": "verb:Admin",
+    "when": "options.storageBackends != nil",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/storage-backends/{id}/reactivate",
+    "auth": "verb:Admin",
+    "when": "options.storageBackends != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tools/ffmpeg/capabilities",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tools/ffmpeg/decoders",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tools/ffmpeg/encoders",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tools/ffmpeg/filters",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tools/ffmpeg/formats",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tools/ffmpeg/global-options",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tools/ffmpeg/pix-fmts",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tools/ffmpeg/{kind}/{name}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/version",
+    "auth": "none",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/workflows",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/workflows",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/workflows/import",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/workflows/runs",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/workflows/{id}",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/workflows/{id}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/workflows/{id}",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/workflows/{id}/export",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/workflows/{id}/pause",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/workflows/{id}/plan",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/workflows/{id}/roles/{role}/migrate",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/workflows/{id}/roles/{role}/restart",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/workflows/{id}/start",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/workflows/{id}/stop",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/healthz",
+    "auth": "none",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/metrics",
+    "auth": "custom:handleMetrics",
+    "domain": "core"
+  }
+]

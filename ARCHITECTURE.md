@@ -4448,9 +4448,12 @@ Der Kern soll Nodes, Graph, Hosts, Placement, Workflows, Auth/Rechte und Betrieb
 - **Die Kopplung sitzt an den Nähten:** `httpapi/server.go` und `main.go` kennen jede Route und jeden Store einzeln
   (rund 25 Playout-Routen, 8 Cloud-Routen); die Migrationen (`0032`, `0033`, `0037`, `0038`, `0039`, `0040`) liegen im
   Kern; `/metrics` und die Alarm-Ansicht kennen `asrun`; die Shell importiert `playout-admin-view` und `cloud-view` fest.
-- **Der Kern hat Fachbegriffe gelernt:** die Playout-Rollenbindung (`0033`) in der Autorisierung, der hartkodierte Node-Typ
-  `omp-playout-automation` in `workflows` (`autotargets.go`, `service.go`), der Process-Schritt `materialize` (dieser ist
-  bereits über `processEngine.Register` registriert — das Muster, das wir verallgemeinern).
+- **Der Kern hat Fachbegriffe gelernt:** der hartkodierte Node-Typ `omp-playout-automation` und die Ableitung der
+  Automations-Ziele aus Player-/Mischer-Typen in `workflows` (`autotargets.go`, `service.go`), der Process-Schritt
+  `materialize` (dieser ist bereits über `processEngine.Register` registriert — das Muster, das wir verallgemeinern).
+  **Korrektur (36.1):** Die Autorisierung selbst kennt kein Playout; die Migration `0033` bindet nur einen Channel an eine
+  Workflow-Rolle. Eine generische Rechtebindung ist deshalb nicht nötig, die Rechte-Helfer des Kerns gehören zu den
+  Modul-Abhängigkeiten. Vollständige Inventur: `docs/ENTWURF-MODULE.md`.
 
 ### 28.2 Zwei Wege, und die Entscheidung dazwischen
 
@@ -4471,8 +4474,8 @@ Go kann Plugins nicht brauchbar zur Laufzeit laden (das Standard-`plugin`-Paket 
 |---|---|---|
 | Modul-Registry | jede Route/jeder Store einzeln in `server.go`/`main.go` | `Module`-Schnittstelle: `Name`, `Migrations`, `Mount(routes, deps)`, `Start(ctx)`, Quellen für Metriken/Alarme, UI-Manifest |
 | Migrationen | eine globale Nummernfolge im Kern | Kernmigrationen bleiben **unverändert** (bereits angewendet, nie umnummerieren); neue Modulmigrationen je Modul, Stand in `module_migrations` |
-| Rechte | Playout-spezifische Rollenbindung | generische Bindung (Objekttyp + ID), vorhandene Playout-Bindungen werden **datenerhaltend** übernommen |
-| Automations-Ziele | Node-Typ `omp-playout-automation` hartkodiert | Katalog-Eigenschaft („Automations-Ziel“) statt Namensvergleich |
+| Rechte | die Handler nutzen die Rechte-Helfer des Kerns | Teil der Modul-Abhängigkeiten (`Deps`), keine neue Bindung nötig (Korrektur 36.1) |
+| Automations-Ziele | Node-Typ `omp-playout-automation` und Player-/Mischer-Typen hartkodiert | Hook „Start-Umgebung einer Rolle ergänzen“, den das Playout-Modul bedient (oder Katalog-Hinweise) — Entscheidung in `docs/ENTWURF-MODULE.md` §5 |
 | Metriken/Alarme | Kern importiert `asrun` | Module liefern Quellen über eine Schnittstelle |
 | Shell | statische Importe von `playout-admin-view`/`cloud-view` | `GET /api/v1/modules` liefert Tabs/Bundles; die Shell lädt sie dynamisch |
 | Process-Schritte | `processEngine.Register(...)` | bleibt, wird Teil der Modulschnittstelle |
