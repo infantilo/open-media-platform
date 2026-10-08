@@ -76,6 +76,9 @@ struct RecorderStore {
     /// Abbruch ist kein sauberer Stopp, Betreiber sollen das als
     /// Störung sehen, nicht als neutrales `Inactive`.
     monitor: Arc<omp_node_sdk::Monitor>,
+    /// Label-Plan (JSON, `omp-mxf-mca::plan_json`) für die nächste `.mxf`-Aufnahme;
+    /// leer = keine MCA-Labels.
+    mca_plan: std::sync::Mutex<String>,
 }
 
 impl ParamStore for RecorderStore {
@@ -102,6 +105,13 @@ impl ParamStore for RecorderStore {
                 readonly: true,
             },
         ];
+        parameters.push(ParamSpec {
+            name: "record.mcaPlan".to_string(),
+            kind: ParamType::String,
+            unit: None,
+            range: None,
+            readonly: false,
+        });
         parameters.extend(self.monitor.param_specs("monitor"));
         let mut methods = vec![
             MethodSpec {
@@ -126,11 +136,17 @@ impl ParamStore for RecorderStore {
             "record.durationMs" => Some(serde_json::json!(self.pipeline.duration_ms())),
             // Keine Zähler-Quelle hier — leere Liste statt erfundener
             // Werte (s. `omp-srt-gateway::GatewayStore::get`).
+            "record.mcaPlan" => Some(serde_json::json!(self.mca_plan.lock().expect("lock poisoned").clone())),
             _ => self.monitor.get("monitor", name, None, Vec::new),
         }
     }
 
     fn set(&self, name: &str, value: Value) -> Result<(), SetError> {
+        if name == "record.mcaPlan" {
+            let text = value.as_str().ok_or(SetError::Unknown)?.to_string();
+            *self.mca_plan.lock().expect("lock poisoned") = text;
+            return Ok(());
+        }
         match self.monitor.set("monitor", name, &value) {
             Some(true) => Ok(()),
             Some(false) => Err(SetError::Unknown),
@@ -152,7 +168,7 @@ impl ParamStore for RecorderStore {
                     .get("fileName")
                     .and_then(Value::as_str)
                     .ok_or(InvokeError::Unknown)?;
-                match self.pipeline.start_recording(file_name.to_string()) {
+                match self.pipeline.start_recording(file_name.to_string(), Some(self.mca_plan.lock().expect("lock poisoned").clone())) {
                     Ok(()) => {
                         self.monitor.activate();
                         Ok(())
@@ -162,7 +178,7 @@ impl ParamStore for RecorderStore {
                         let delay = self.monitor.status_reporting_delay();
                         self.monitor.activity.observe(omp_node_sdk::HealthLevel::Unhealthy, delay, Some(&e));
                         self.monitor.content.observe(omp_node_sdk::HealthLevel::Unhealthy, delay, Some(&e));
-                        Err(InvokeError::Unknown)
+                        Err(InvokeError::Message(e))
                     }
                 }
             }
@@ -303,6 +319,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         video_connection,
         audio_connection,
         monitor: monitor.clone(),
+        mca_plan: std::sync::Mutex::new(String::new()),
     });
 
     let handle = omp_node_sdk::start(

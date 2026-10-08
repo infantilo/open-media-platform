@@ -1588,6 +1588,7 @@ dependencies = [
  "gstreamer",
  "gstreamer-app",
  "omp-mediaio",
+ "omp-mxf-mca",
  "omp-node-sdk",
  "serde_json",
  "tokio",

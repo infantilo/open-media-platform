@@ -291,8 +291,8 @@
     "runner": "process",
     "command": ["../nodes/target/debug/omp-recorder"],
     "env": {},
-    "description": "Nimmt eine per Kreuzschiene angeschlossene MXL-Quelle (Video/Audio) als Matroska-Datei auf. Ausschließlich MXL als Eingang, keine Capture-Karte.",
-    "i18n": { "en": {"description": "Records an MXL source (video/audio) connected via the crosspoint as a Matroska file. MXL is the only input, no capture card.", "expectedResources": "moderate during a recording (encoding), otherwise very low (no source subscribed)"} },
+    "description": "Nimmt eine per Kreuzschiene angeschlossene MXL-Quelle (Video/Audio) als Matroska-Datei auf; Dateiname auf .mxf = MXF (H.264 + PCM 24 Bit) mit optionalen MCA-Labels (Parameter record.mcaPlan). Ausschließlich MXL als Eingang, keine Capture-Karte.",
+    "i18n": { "en": {"description": "Records an MXL source (video/audio) connected via the crosspoint as a Matroska file; a .mxf file name gives MXF (H.264 + 24-bit PCM) with optional MCA labels (parameter record.mcaPlan). MXL is the only input, no capture card.", "expectedResources": "moderate during a recording (encoding), otherwise very low (no source subscribed)"} },
     "expectedResources": "moderat während einer Aufnahme (Encoding), sonst sehr gering (keine Quelle abonniert)"
   },
   {

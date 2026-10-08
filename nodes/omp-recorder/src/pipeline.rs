@@ -148,7 +148,7 @@ enum Command {
     DisconnectVideo,
     ConnectAudio(String),
     DisconnectAudio,
-    StartRecording(String, Sender<Result<(), String>>),
+    StartRecording(String, Option<String>, Sender<Result<(), String>>),
     StopRecording(Sender<Result<(), String>>),
 }
 
@@ -186,10 +186,10 @@ impl PipelineHandle {
     /// (`tiny_http`, ein Request nach dem anderen je Node-Prozess, s.
     /// `omp-node-sdk/src/server.rs`), ein kurzer Block hier ist also
     /// unbedenklich.
-    pub fn start_recording(&self, file_name: String) -> Result<(), String> {
+    pub fn start_recording(&self, file_name: String, mca_plan: Option<String>) -> Result<(), String> {
         let (reply_tx, reply_rx) = std::sync::mpsc::channel();
         self.commands
-            .send(Command::StartRecording(file_name, reply_tx))
+            .send(Command::StartRecording(file_name, mca_plan, reply_tx))
             .map_err(|_| "Pipeline-Thread nicht erreichbar".to_string())?;
         reply_rx
             .recv()
@@ -239,6 +239,14 @@ struct ActiveRecording {
     _video_input: Option<MxlVideoInput>,
     _audio_input: Option<MxlAudioInput>,
     _marker_tap: Option<MarkerTap>,
+    /// MXF-Ausgabe: Zieldatei + Label-Plan, der nach dem Finalisieren per Injektor
+    /// (`omp-mxf-mca`, Kap. 33.2) in die Datei geschrieben wird — `mxfmux` selbst
+    /// schreibt keine MCA-Sub-Descriptors.
+    mca: Option<(PathBuf, omp_mxf_mca::inject::Plan)>,
+}
+
+fn is_mxf(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("mxf"))
 }
 
 /// Nimmt einen vom Operator frei eingegebenen Dateinamen (`record.start`-
@@ -277,16 +285,23 @@ fn build(
     audio_flow_id: Option<&str>,
     media_dir: &str,
     file_name: &str,
+    mca_plan: Option<&str>,
     flowed: Arc<AtomicBool>,
 ) -> Result<ActiveRecording, String> {
     let target = safe_target_path(media_dir, file_name)?;
+    let mxf = is_mxf(&target);
+    let plan = match mca_plan.map(str::trim).filter(|p| !p.is_empty()) {
+        None => None,
+        Some(_) if !mxf => return Err("MCA-Labels brauchen eine .mxf-Zieldatei".to_string()),
+        Some(text) => Some(omp_mxf_mca::inject::Plan::from_json(text).map_err(|e| format!("MCA-Plan: {e}"))?),
+    };
 
     let pipeline = gst::Pipeline::new();
 
-    let muxer = gst::ElementFactory::make("matroskamux")
-        .property("streamable", true)
+    let muxer = gst::ElementFactory::make(if mxf { "mxfmux" } else { "matroskamux" });
+    let muxer = if mxf { muxer } else { muxer.property("streamable", true) }
         .build()
-        .map_err(|e| format!("matroskamux: {e}"))?;
+        .map_err(|e| format!("muxer: {e}"))?;
     let filesink = gst::ElementFactory::make("filesink")
         .property("location", target.to_string_lossy().to_string())
         .property("sync", false)
@@ -336,6 +351,11 @@ fn build(
             let queue = gst::ElementFactory::make("queue")
                 .build()
                 .map_err(|e| format!("queue (video): {e}"))?;
+            // mxfmux nimmt H.264 nur als Byte-Stream mit AU-Alignment.
+            let mxf_caps = gst::ElementFactory::make("capsfilter")
+                .property("caps", gst::Caps::builder("video/x-h264").field("stream-format", "byte-stream").field("alignment", "au").build())
+                .build()
+                .map_err(|e| format!("capsfilter (video): {e}"))?;
 
             pipeline
                 .add(&videoconvert)
@@ -343,12 +363,17 @@ fn build(
                 .and_then(|()| pipeline.add(&h264parse))
                 .and_then(|()| pipeline.add(&queue))
                 .map_err(|e| format!("add video branch: {e}"))?;
-            gst::Element::link_many([&input.tail, &videoconvert, &x264enc, &h264parse, &queue])
-                .map_err(|e| format!("link video branch: {e}"))?;
+            if mxf {
+                pipeline.add(&mxf_caps).map_err(|e| format!("add video caps: {e}"))?;
+                gst::Element::link_many([&input.tail, &videoconvert, &x264enc, &h264parse, &mxf_caps, &queue])
+            } else {
+                gst::Element::link_many([&input.tail, &videoconvert, &x264enc, &h264parse, &queue])
+            }
+            .map_err(|e| format!("link video branch: {e}"))?;
 
             let mux_pad = muxer
-                .request_pad_simple("video_%u")
-                .ok_or("matroskamux: request video pad failed")?;
+                .request_pad_simple(if mxf { "mpeg_video_sink_%u" } else { "video_%u" })
+                .ok_or("muxer: request video pad failed")?;
             queue
                 .static_pad("src")
                 .ok_or("queue (video): no src pad")?
@@ -373,7 +398,8 @@ fn build(
                 .map_err(|e| format!("audioresample: {e}"))?;
             // `OMP_RECORDER_RAW_AUDIO=1` (Diagnose): unkomprimierter PCM-Ton statt AAC — trennt
             // Encoder-/Dekoder-Vorlauf von echtem Versatz bei der A/V-Messung.
-            let raw_audio = std::env::var("OMP_RECORDER_RAW_AUDIO").is_ok_and(|v| v == "1");
+            // MXF (BWF-Audio) trägt immer unkomprimierten PCM (24 Bit), nie AAC.
+            let raw_audio = mxf || std::env::var("OMP_RECORDER_RAW_AUDIO").is_ok_and(|v| v == "1");
             let avenc_aac = gst::ElementFactory::make(if raw_audio { "identity" } else { "avenc_aac" })
                 .build()
                 .map_err(|e| format!("audio encoder: {e}"))?;
@@ -386,6 +412,10 @@ fn build(
             let queue = gst::ElementFactory::make("queue")
                 .build()
                 .map_err(|e| format!("queue (audio): {e}"))?;
+            let pcm_caps = gst::ElementFactory::make("capsfilter")
+                .property("caps", gst::Caps::builder("audio/x-raw").field("format", "S24LE").field("layout", "interleaved").build())
+                .build()
+                .map_err(|e| format!("capsfilter (audio): {e}"))?;
 
             pipeline
                 .add(&audioconvert)
@@ -394,19 +424,17 @@ fn build(
                 .and_then(|()| pipeline.add(&aacparse))
                 .and_then(|()| pipeline.add(&queue))
                 .map_err(|e| format!("add audio branch: {e}"))?;
-            gst::Element::link_many([
-                &input.tail,
-                &audioconvert,
-                &audioresample,
-                &avenc_aac,
-                &aacparse,
-                &queue,
-            ])
+            if mxf {
+                pipeline.add(&pcm_caps).map_err(|e| format!("add audio caps: {e}"))?;
+                gst::Element::link_many([&input.tail, &audioconvert, &audioresample, &pcm_caps, &queue])
+            } else {
+                gst::Element::link_many([&input.tail, &audioconvert, &audioresample, &avenc_aac, &aacparse, &queue])
+            }
             .map_err(|e| format!("link audio branch: {e}"))?;
 
             let mux_pad = muxer
-                .request_pad_simple("audio_%u")
-                .ok_or("matroskamux: request audio pad failed")?;
+                .request_pad_simple(if mxf { "bwf_audio_sink_%u" } else { "audio_%u" })
+                .ok_or("muxer: request audio pad failed")?;
             queue
                 .static_pad("src")
                 .ok_or("queue (audio): no src pad")?
@@ -429,6 +457,7 @@ fn build(
         _video_input: video_input,
         _audio_input: audio_input,
         _marker_tap: marker_tap,
+        mca: plan.map(|p| (target, p)),
     })
 }
 
@@ -555,7 +584,7 @@ pub fn run(
             Ok(Command::DisconnectVideo) => video_flow_id = None,
             Ok(Command::ConnectAudio(flow_id)) => audio_flow_id = Some(flow_id),
             Ok(Command::DisconnectAudio) => audio_flow_id = None,
-            Ok(Command::StartRecording(file_name, reply)) => {
+            Ok(Command::StartRecording(file_name, mca_plan, reply)) => {
                 let result = if active.is_some() {
                     Err("Aufnahme läuft bereits — erst record.stop".to_string())
                 } else if video_flow_id.is_none() && audio_flow_id.is_none() {
@@ -568,6 +597,7 @@ pub fn run(
                         audio_flow_id.as_deref(),
                         &config.media_dir,
                         &file_name,
+                        mca_plan.as_deref(),
                         flowed.clone(),
                     )
                 };
@@ -589,7 +619,13 @@ pub fn run(
                     let _ = reply.send(Err("keine laufende Aufnahme".to_string()));
                 }
                 Some(rec) => {
-                    let warning = stop_gracefully(&rec.pipeline);
+                    let mut warning = stop_gracefully(&rec.pipeline);
+                    if let Some((path, plan)) = &rec.mca {
+                        match omp_mxf_mca::inject::inject(path, path, plan) {
+                            Ok(r) => eprintln!("omp-recorder: {} MCA-Label(s) in {} geschrieben (in place: {})", r.labels_written, path.display(), r.in_place),
+                            Err(e) => warning = Some(format!("MCA-Labels nicht geschrieben ({}): {e}", path.display())),
+                        }
+                    }
                     freeze_duration(&started_at, &frozen_duration_ms);
                     *status.lock().expect("lock poisoned") = RecordStatus::Idle;
                     if let Some(w) = warning {
