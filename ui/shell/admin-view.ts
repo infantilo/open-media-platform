@@ -20,7 +20,6 @@
 // Reconnect-/Fallback-Pfad (AUDIT_POLL_FALLBACK_INTERVAL_MS).
 import { type I18nKey, t, t as tt } from "./i18n.ts";
 import "./settings-view.ts";
-import "./playout-admin-view.ts";
 import { ensureBundle, getModules } from "./modules-registry.ts";
 import { adminGroups, type AdminModuleGroup } from "./modules-logic.ts";
 import { getLang } from "./i18n.ts";
@@ -300,13 +299,6 @@ const ADMIN_SUB_TAB_GROUPS: { id: string; labelKey: I18nKey; tabs: { id: AdminTa
       { id: "cluster", labelKey: "admin.tab.cluster" },
     ],
   },
-  {
-    id: "playout",
-    labelKey: "admin.group.playout",
-    tabs: [
-      { id: "playout", labelKey: "admin.tab.playout" },
-    ],
-  },
 ];
 const SUB_TAB_BUTTON_BASE =
   "border:1px solid transparent;border-radius:var(--omp-radius);" +
@@ -529,7 +521,6 @@ class AdminView extends HTMLElement {
   // Einstellungs-Ansicht: dieselbe Instanz bei jedem Neuzeichnen, damit Eingaben erhalten bleiben.
   #settingsView: HTMLElement | null = null;
   #locationsView: HTMLElement | null = null;
-  #playoutView: HTMLElement | null = null;
   // Untertabs aus Modulen (GET /api/v1/modules), nach Gruppe; je Tab-ID das gecachte Element bzw. die Fehlermeldung.
   #moduleGroups: AdminModuleGroup[] = [];
   #moduleEls = new Map<string, HTMLElement>();
@@ -2441,10 +2432,6 @@ class AdminView extends HTMLElement {
         break;
       case "update":
         this.appendChild(this.#renderUpdateSection());
-        break;
-      case "playout":
-        this.#playoutView ??= document.createElement("omp-playout-admin");
-        this.appendChild(this.#playoutView);
         break;
       case "settings":
         this.#settingsView ??= document.createElement("omp-settings-view");

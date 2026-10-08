@@ -1,4 +1,4 @@
-package httpapi
+package playout
 
 import (
 	"context"
@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/asrun"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/playout"
-	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 )
 
 type fakeAsRun struct {
@@ -31,12 +31,6 @@ func (f *fakeAsRun) List(_ context.Context, _ asrun.Filter) ([]asrun.Record, err
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]asrun.Record(nil), f.recs...), nil
-}
-
-type nodeByID struct{ fakeNodeLister }
-
-func (nodeByID) Get(id string) (registry.NodeView, bool) {
-	return registry.NodeView{ID: id, InstanceID: "inst-1"}, true
 }
 
 func TestPostAsRunNeedsChannelAccessAndStoresRecords(t *testing.T) {
@@ -83,27 +77,43 @@ func TestGetAsRunJSONAndCSV(t *testing.T) {
 	}
 }
 
-func TestOperatorTapRecordsWhoDidWhatOnlyOnSuccess(t *testing.T) {
+// Der Beobachter schreibt jede manuelle Aktion an einem Automator-Node (Node → Instanz → Channel) ins As-Run.
+func TestOperatorObserverRecordsWhoDidWhat(t *testing.T) {
 	st := &fakeAsRun{}
-	o := &handlerOptions{asrun: st, playout: &fakePlayout{ch: playout.Channel{ID: "ch1"}}}
-	status := http.StatusOK
-	next := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status) }
-	h := asRunOperatorTap(next, o, nodeByID{})
-	call := func(method string) {
-		r := httptest.NewRequest("POST", "/api/v1/nodes/n1/methods/"+method, strings.NewReader(`{"itemId":"item7"}`))
-		r.SetPathValue("id", "n1")
-		r.SetPathValue("name", method)
-		h(httptest.NewRecorder(), r)
-	}
-	call("take")
-	call("irgendwas") // keine manuelle Aktion → nichts protokolliert
-	status = http.StatusBadGateway
-	call("next") // fehlgeschlagen → nichts protokolliert
+	m := &Module{playout: &fakePlayout{ch: playout.Channel{ID: "ch1"}}, asrun: st}
+	audit := &fakeAudit{}
+	obs := m.operatorObserver(audit)
+	req := httptest.NewRequest("POST", "/api/v1/nodes/n1/methods/take", nil)
+	obs(module.MethodCall{NodeID: "n1", InstanceID: "inst-1", Name: "take", Body: []byte(`{"itemId":"item7","assetJson":"{}"}`), Actor: "alice", Request: req})
+	obs(module.MethodCall{NodeID: "n1", InstanceID: "", Name: "take", Request: req}) // Node ohne Instanz → nichts
 	if len(st.recs) != 1 {
 		t.Fatalf("genau ein Eintrag erwartet: %+v", st.recs)
 	}
 	r := st.recs[0]
-	if r.Kind != asrun.KindOperator || r.Action != "take" || r.EventID != "item7" || st.ch != "ch1" {
+	if r.Kind != asrun.KindOperator || r.Action != "take" || r.EventID != "item7" || r.Operator != "alice" || st.ch != "ch1" {
 		t.Fatalf("Eintrag: %+v", r)
+	}
+	if strings.Contains(string(r.Detail), "assetJson") {
+		t.Fatalf("große JSON-Argumente gehören nicht ins Protokoll: %s", r.Detail)
+	}
+	if len(audit.entries) != 1 || audit.entries[0] != "alice/playout.channel/ch1/operator_take" {
+		t.Fatalf("Domänen-Audit: %v", audit.entries)
+	}
+}
+
+type fakeAudit struct{ entries []string }
+
+func (f *fakeAudit) Log(actor, objectType, objectID, action string, _ map[string]any) {
+	f.entries = append(f.entries, actor+"/"+objectType+"/"+objectID+"/"+action)
+}
+
+func TestOperatorActionsListCoversTheTransportActions(t *testing.T) {
+	for _, n := range []string{"take", "next", "cue", "stop", "load", "append", "cart.fire"} {
+		if !operatorActions[n] {
+			t.Errorf("%s fehlt in operatorActions", n)
+		}
+	}
+	if operatorActions["irgendwas"] {
+		t.Error("unbekannte Methoden dürfen nicht protokolliert werden")
 	}
 }

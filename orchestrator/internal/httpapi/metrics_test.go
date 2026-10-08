@@ -37,7 +37,7 @@ func TestHandleMetricsWellFormed(t *testing.T) {
 	counters.record(404)
 	counters.record(500)
 
-	h := handleMetrics(nodes, events, launcherSvc, counters)
+	h := handleMetrics(nodes, events, launcherSvc, counters, nil)
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 

@@ -110,6 +110,26 @@ type DomainAudit interface {
 	Log(actor, objectType, objectID, action string, details map[string]any)
 }
 
+type userKey struct{}
+
+// WithUser legt den Nutzernamen des angemeldeten Aufrufers im Kontext ab (setzt der Kern in seiner Rechteprüfung).
+func WithUser(ctx context.Context, username string) context.Context {
+	return context.WithValue(ctx, userKey{}, username)
+}
+
+// User liefert den angemeldeten Nutzer einer Anfrage; ok=false im Bootstrap-Modus (noch kein Nutzer angelegt) — Handler
+// behandeln das wie „kein spezifischer Nutzer“, nicht wie einen Fehler.
+func User(r *http.Request) (string, bool) {
+	u, ok := r.Context().Value(userKey{}).(string)
+	return u, ok
+}
+
+// Actor ist der Nutzername für Audit-Einträge ("" ohne angemeldeten Nutzer).
+func Actor(r *http.Request) string {
+	u, _ := User(r)
+	return u
+}
+
 // ErrNotFound: für den Schlüssel wurde nie etwas gespeichert (`NodeSettings.Get`).
 var ErrNotFound = errors.New("module: setting not found")
 
@@ -156,4 +176,6 @@ type Deps struct {
 	HostMetrics HostMetrics
 	Instances   Instances
 	Placement   Placement
+	// Hooks sind Beobachtungspunkte im Kern (z. B. erfolgreiche Methodenaufrufe an Nodes).
+	Hooks *Hooks
 }

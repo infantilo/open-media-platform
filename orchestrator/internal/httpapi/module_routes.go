@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"bytes"
+	"io"
 	"net/http"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
@@ -32,7 +34,7 @@ func (m moduleRoutes) Handle(pattern string, a module.Auth, h http.HandlerFunc) 
 
 // WithModules mountet die Module der Registry (nach den Kernrouten, vor dem Datei-Fallback).
 func WithModules(reg *module.Registry, deps module.Deps) HandlerOption {
-	return func(o *handlerOptions) { o.modules, o.moduleDeps = reg, deps }
+	return func(o *handlerOptions) { o.modules, o.moduleDeps, o.moduleHooks = reg, deps, deps.Hooks }
 }
 
 // handleModules: GET /api/v1/modules — Stand aller Module samt Oberfläche (Manifest für die Shell, Kapitel 36.3).
@@ -45,5 +47,33 @@ func handleModules(reg *module.Registry) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, reg.Info())
+	}
+}
+
+// methodObserverTap umschließt den Methoden-Proxy: nach einem erfolgreichen Aufruf (Status < 300) werden die Beobachter der
+// Module benachrichtigt (module.Hooks). Der Körper wird nur gelesen, wenn ein Beobachter den Methodennamen kennt; ein Beobachter
+// kann den Aufruf nie beeinflussen.
+func methodObserverTap(next http.HandlerFunc, hooks *module.Hooks, nodes NodeLister) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		if !hooks.WantsMethod(name) {
+			next(w, r)
+			return
+		}
+		var raw []byte
+		if r.Body != nil {
+			raw, _ = io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+			r.Body = io.NopCloser(bytes.NewReader(raw))
+		}
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next(rec, r)
+		if rec.status >= 300 {
+			return
+		}
+		node, ok := nodes.Get(r.PathValue("id"))
+		if !ok {
+			return
+		}
+		hooks.NotifyMethod(module.MethodCall{NodeID: r.PathValue("id"), InstanceID: node.InstanceID, Name: name, Body: raw, Actor: actorFromRequest(r), Request: r})
 	}
 }

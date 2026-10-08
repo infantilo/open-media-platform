@@ -1,4 +1,4 @@
-package httpapi
+package playout
 
 import (
 	"encoding/json"
@@ -33,10 +33,7 @@ func (f *fakePreflight) Start(spec materialize.Spec, _ string) (string, error) {
 
 func preflightFixture() (*fakePlayout, optLauncher, *memValues) {
 	svc := &fakePlayout{ch: playout.Channel{ID: "ch1", Name: "National", Instance: "inst-1"}}
-	l := optLauncher{fakeLauncherService: fakeLauncherService{
-		catalog:   []launcher.CatalogEntry{{Type: "omp-mxf-player", Label: "MXF"}},
-		instances: []launcher.Instance{{ID: "p1", Type: "omp-mxf-player", Label: "Player A", PID: 3}, {ID: "p2", Type: "omp-mxf-player", Label: "Player R", PID: 4, HostID: "h1"}},
-	}}
+	l := optLauncher{instances: []launcher.Instance{{ID: "p1", Type: "omp-mxf-player", Label: "Player A", PID: 3}, {ID: "p2", Type: "omp-mxf-player", Label: "Player R", PID: 4, HostID: "h1"}}}
 	return svc, l, &memValues{m: map[string]string{}}
 }
 

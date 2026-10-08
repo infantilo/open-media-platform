@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -370,7 +372,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Bewusst unauthentifiziert wie /healthz (Prometheus-Scraper senden
 	// üblicherweise keinen Bearer-Token; Netzwerk-Isolation ist hier die
 	// erwartete Absicherung, nicht Anwendungs-Auth) — s. metrics.go.
-	mux.HandleFunc("GET /metrics", handleMetrics(nodes, events, launcherSvc, reqCounters, options.asrunMetrics))
+	mux.HandleFunc("GET /metrics", handleMetrics(nodes, events, launcherSvc, reqCounters, moduleMetrics(options.modules)))
 
 	// Nachtrag 243: geteilter Quittier-/Maskierstand der Alarme. Lesen für
 	// jeden authentifizierten Nutzer, Ändern braucht "operate" (globaler
@@ -397,7 +399,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/nodes/{id}/descriptor", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/descriptor.json", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/params/{name}", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/params/{name}", nodeLogs)))
 	mux.HandleFunc("PATCH /api/v1/nodes/{id}/params/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/params/{name}", nodeLogs)))
-	mux.HandleFunc("POST /api/v1/nodes/{id}/methods/{name}", g.requireVerbOnNode(authz.VerbOperate, asRunOperatorTap(handleNodeProxy(nodes, nodeClient, "/methods/{name}", nodeLogs), &options, nodes)))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/methods/{name}", g.requireVerbOnNode(authz.VerbOperate, methodObserverTap(handleNodeProxy(nodes, nodeClient, "/methods/{name}", nodeLogs), options.moduleHooks, nodes)))
 	// Plugin-Host (ARCHITECTURE.md §24.4, UMSETZUNG.md C19) — reine
 	// Routenregistrierung, keine neue Proxy-Logik: derselbe generische
 	// handleNodeProxy wie bei params/methods, gleiche Auth-Abstufung
@@ -757,34 +759,6 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 		mux.HandleFunc("GET /api/v1/sources", g.requireAuth(handleListSources(nodes, options.sourceTags, workflowSvc.FindRoleForNode)))
 		mux.HandleFunc("PUT /api/v1/sources/{senderId}/tags", g.requireVerbGlobal(authz.VerbConfigure, handlePutSourceTags(nodes, options.sourceTags, options.domainAudit)))
 	}
-	if options.playout != nil {
-		mux.HandleFunc("GET /api/v1/playout/channels", g.requireAuth(handleListPlayoutChannels(options.playout, options.playoutRoles)))
-		mux.HandleFunc("POST /api/v1/playout/channels", g.requireVerbGlobal(authz.VerbConfigure, handleCreatePlayoutChannel(options.playout, options.domainAudit)))
-		mux.HandleFunc("GET /api/v1/playout/channels/{id}", g.requireAuth(handleGetPlayoutChannel(options.playout)))
-		mux.HandleFunc("PUT /api/v1/playout/channels/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleUpdatePlayoutChannel(options.playout, options.domainAudit)))
-		mux.HandleFunc("DELETE /api/v1/playout/channels/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleDeletePlayoutChannel(options.playout, options.domainAudit)))
-		mux.HandleFunc("GET /api/v1/playout/channels/{id}/state", g.requireAuth(handleGetPlayoutState(options.playout, authzStore, options.playoutRoles)))
-		mux.HandleFunc("PUT /api/v1/playout/channels/{id}/state", g.requireAuth(handlePutPlayoutState(options.playout, authzStore, options.playoutRoles)))
-		mux.HandleFunc("POST /api/v1/playout/channels/{id}/executions", g.requireAuth(handleRecordPlayoutExecution(options.playout, authzStore, options.playoutRoles)))
-		// Kapitel 27 / P8: Medien-Preflight und Materialisierung.
-		if options.preflight != nil {
-			mux.HandleFunc("POST /api/v1/playout/channels/{id}/preflight", g.requireAuth(handlePlayoutPreflight(options.preflight, options.playout, authzStore, options.playoutRoles, launcherSvc, options.nodeValues)))
-			mux.HandleFunc("POST /api/v1/playout/channels/{id}/materialize", g.requireAuth(handlePlayoutMaterialize(options.preflight, options.playout, authzStore, options.playoutRoles, launcherSvc, options.nodeValues, options.domainAudit)))
-		}
-		// Kapitel 27 / P7: Channel-Trigger (vermittelt, berechtigt, protokolliert).
-		if options.asrun != nil {
-			mux.HandleFunc("POST /api/v1/playout/channels/{id}/as-run", g.requireAuth(handlePostAsRun(options.asrun, options.playout, authzStore, options.playoutRoles)))
-			mux.HandleFunc("GET /api/v1/playout/channels/{id}/as-run", g.requireVerbGlobal(authz.VerbView, handleGetAsRun(options.asrun, options.playout)))
-		}
-		if options.triggerRouter != nil && options.triggerStore != nil {
-			mux.HandleFunc("POST /api/v1/playout/channels/{id}/triggers", g.requireAuth(handleSendChannelTrigger(options.triggerRouter, options.playout, authzStore, options.playoutRoles)))
-			mux.HandleFunc("POST /api/v1/playout/channels/{id}/trigger-ack", g.requireAuth(handleAckChannelTrigger(options.triggerRouter, options.playout, authzStore, options.playoutRoles)))
-			mux.HandleFunc("GET /api/v1/playout/triggers", g.requireVerbGlobal(authz.VerbView, handleListChannelTriggers(options.triggerStore)))
-			mux.HandleFunc("GET /api/v1/playout/trigger-rules", g.requireVerbGlobal(authz.VerbView, handleListTriggerRules(options.triggerStore)))
-			mux.HandleFunc("POST /api/v1/playout/trigger-rules", g.requireVerbGlobal(authz.VerbConfigure, handleAddTriggerRule(options.triggerStore, options.domainAudit)))
-			mux.HandleFunc("DELETE /api/v1/playout/trigger-rules/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleDeleteTriggerRule(options.triggerStore, options.domainAudit)))
-		}
-	}
 	if options.groups != nil {
 		mux.HandleFunc("GET /api/v1/groups", g.requireVerbGlobal(authz.VerbAdmin, handleListGroups(options.groups)))
 		mux.HandleFunc("POST /api/v1/groups", g.requireVerbGlobal(authz.VerbAdmin, handleCreateGroup(options.groups, options.domainAudit)))
@@ -917,4 +891,12 @@ func controlPlaneCheck(svc any) func(string) bool {
 		return c.IsControlPlaneNodeType
 	}
 	return func(string) bool { return false }
+}
+
+// moduleMetrics liefert die Metrikzeilen der gemounteten Module (nil ohne Registry).
+func moduleMetrics(reg *module.Registry) func(io.Writer) {
+	if reg == nil {
+		return nil
+	}
+	return reg.Metrics
 }

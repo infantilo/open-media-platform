@@ -1,14 +1,13 @@
-package httpapi
+package playout
 
 import (
-	"context"
 	"encoding/json"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/playout"
 )
@@ -69,7 +68,7 @@ func playoutReq(method, target, body, user string) *http.Request {
 	r := httptest.NewRequest(method, target, strings.NewReader(body))
 	r.SetPathValue("id", "ch1")
 	if user != "" {
-		r = r.WithContext(context.WithValue(r.Context(), principalContextKey{}, auth.Principal{Username: user}))
+		r = r.WithContext(module.WithUser(r.Context(), user))
 	}
 	return r
 }

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 )
 
 // Die Modul-Anbindung muss exakt dieselbe Rechteprüfung ergeben wie die direkte Verdrahtung im Kern: gleiche Anfragen
@@ -98,4 +100,55 @@ func (m uiModule) Name() string                           { return m.name }
 func (m uiModule) Mount(module.Routes, module.Deps) error { return nil }
 func (m uiModule) UI() []module.UITab {
 	return []module.UITab{{ID: "t", Placement: "main", Label: map[string]string{"de": "T"}, Element: "x-" + m.name, Bundle: "/b.js"}}
+}
+
+type nodeWithInstance struct{ fakeNodeLister }
+
+func (nodeWithInstance) Get(id string) (registry.NodeView, bool) {
+	return registry.NodeView{ID: id, InstanceID: "inst-" + id}, true
+}
+
+// Der Methoden-Beobachter-Mantel: nur bei gewünschtem Namen und Erfolg, der Körper bleibt für den Proxy lesbar.
+func TestMethodObserverTapNotifiesOnlyOnSuccessAndKeepsTheBody(t *testing.T) {
+	hooks := module.NewHooks()
+	var calls []module.MethodCall
+	hooks.OnNodeMethod([]string{"take"}, func(c module.MethodCall) { calls = append(calls, c) })
+	status := http.StatusOK
+	var seenBody string
+	next := func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		seenBody = string(b)
+		w.WriteHeader(status)
+	}
+	h := methodObserverTap(next, hooks, nodeWithInstance{})
+	call := func(name string) {
+		r := httptest.NewRequest("POST", "/api/v1/nodes/n1/methods/"+name, strings.NewReader(`{"itemId":"i7"}`))
+		r.SetPathValue("id", "n1")
+		r.SetPathValue("name", name)
+		h(httptest.NewRecorder(), r)
+	}
+	call("take")
+	if len(calls) != 1 || calls[0].InstanceID != "inst-n1" || calls[0].NodeID != "n1" || string(calls[0].Body) != `{"itemId":"i7"}` {
+		t.Fatalf("%+v", calls)
+	}
+	if seenBody != `{"itemId":"i7"}` {
+		t.Fatalf("der Proxy muss den Körper noch lesen können: %q", seenBody)
+	}
+	call("unbekannt") // kein Beobachter für den Namen → der Mantel liest nichts
+	if len(calls) != 1 {
+		t.Fatal("unwanted method observed")
+	}
+	status = http.StatusBadGateway
+	call("take") // fehlgeschlagen → nichts
+	if len(calls) != 1 {
+		t.Fatal("failed call observed")
+	}
+	// Ohne Hooks reicht der Mantel einfach durch.
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/x", nil)
+	r.SetPathValue("name", "take")
+	methodObserverTap(next, nil, nodeWithInstance{})(rec, r)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("%d", rec.Code)
+	}
 }

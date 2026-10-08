@@ -1,9 +1,7 @@
 // Admin → Playout (Kapitel 27 / P7): Channels (Gruppen, Zeitzone), Trigger-Regeln („wer darf wen
 // steuern“) und das Trigger-Protokoll samt Zustellzustand je Ziel (Spec §84, §162, §164, §165).
 
-import { dateLocale, t as tt } from "./i18n.ts";
-import { apiFetch } from "./connection.ts";
-import { confirmDialog } from "../kit/omp-confirm.ts";
+import { apiFetch, confirmDialog, dateLocale, t as tt } from "../host.ts";
 import {
   actualDurationMs, asRunKindText, asRunTone, deviationText, describeSelector, durationText, filterAsRun, groupByCorrelation, startDeviationMs, statusText, statusTone,
   type AsRunRow, type TriggerRecord, type TriggerRule,

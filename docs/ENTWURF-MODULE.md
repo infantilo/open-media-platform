@@ -130,3 +130,17 @@ Automations-Ziele und den Typ `omp-playout-automation` an; die Ableitung selbst 
 - **Einstellungsspeicher:** Module sprechen den generischen Schlüssel/Wert-Speicher über `module.NodeSettings` an und kennen weder
   `launcher` noch `httpapi`; „nie gespeichert“ ist `module.ErrNotFound`.
 - **Ladereihenfolge im Bundle:** Texte zuerst anmelden (`register.ts`), dann View/Logik importieren.
+
+## 10. Playout als Modul (36.8, umgesetzt)
+
+- **Zwei Wege für Kerndienste:** Querschnittsdienste, die viele Module brauchen (DB, Audit, Einstellungen, Hosts, Metriken, Hooks),
+  stehen in `module.Deps`. Dienste, die nur ein Modul braucht und die große Kernbausteine berühren (Preflight →
+  Process-Engine/Assets, Launcher-Sicht, Optionswerte), übergibt `main.go` dem Konstruktor des Moduls als `Services`. Dadurch wächst
+  `Deps` nicht mit jedem Fachmodul.
+- **Beobachtungspunkte statt Sonderfälle im Kern:** Der frühere `asRunOperatorTap` war ein Playout-Sonderfall mitten im Methoden-Proxy.
+  Jetzt gibt es einen generischen Beobachter (`Hooks.OnNodeMethod`); das Playout-Modul meldet sich mit den Namen der manuellen
+  Aktionen an.
+- **Nutzer in Modulen:** Der Kern legt den Nutzernamen zusätzlich über `module.WithUser` im Kontext ab; Module lesen ihn mit
+  `module.User/Actor` und brauchen weder `httpapi` noch das Principal-Objekt.
+- **Reihenfolge der Registrierung:** Workflow-Hooks (Automations-Ziele) werden vor dem Mounten angemeldet, weil der Workflow-Zeitplaner
+  früh laufen kann.

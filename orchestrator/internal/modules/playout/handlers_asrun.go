@@ -1,18 +1,15 @@
-package httpapi
+package playout
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/asrun"
-	"github.com/infantilo/openmediaplatform/orchestrator/internal/playout"
 )
 
 // As-Run-Protokoll der Playout-Automation (Kapitel 27 / P10, Spec §117–119).
@@ -24,11 +21,6 @@ import (
 type AsRunStore interface {
 	Upsert(ctx context.Context, channelID string, recs []asrun.Record) error
 	List(ctx context.Context, f asrun.Filter) ([]asrun.Record, error)
-}
-
-// WithAsRun aktiviert die As-Run-Routen, den Operator-Mitschnitt und die Kennzahlen unter /metrics.
-func WithAsRun(store AsRunStore, metrics *asrun.Metrics) HandlerOption {
-	return func(o *handlerOptions) { o.asrun, o.asrunMetrics = store, metrics }
 }
 
 // operatorActions sind die Node-Methoden, die als manueller Eingriff protokolliert werden.
@@ -115,53 +107,6 @@ func handleGetAsRun(store AsRunStore, svc PlayoutService) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, recs)
-	}
-}
-
-// asRunOperatorTap umschließt den Methoden-Proxy: nach einer erfolgreichen manuellen Aktion an einem
-// Automator-Node wird sie mit Benutzer, Aktion und Event im As-Run festgehalten (§119) und im
-// Domänen-Audit abgelegt. Fehlschläge am Protokoll beeinflussen die Aktion nie.
-func asRunOperatorTap(next http.HandlerFunc, o *handlerOptions, nodes NodeLister) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		name := r.PathValue("name")
-		if o.asrun == nil || o.playout == nil || !operatorActions[name] {
-			next(w, r)
-			return
-		}
-		var raw []byte
-		if r.Body != nil {
-			raw, _ = io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
-			r.Body = io.NopCloser(bytes.NewReader(raw))
-		}
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		next(rec, r)
-		if rec.status >= 300 {
-			return
-		}
-		node, ok := nodes.Get(r.PathValue("id"))
-		if !ok || node.InstanceID == "" {
-			return
-		}
-		ch, err := o.playout.ChannelByInstance(node.InstanceID)
-		if errors.Is(err, playout.ErrNotFound) && o.playoutRoles != nil {
-			if wf, role, found := o.playoutRoles.FindRoleForInstance(node.InstanceID); found {
-				ch, err = o.playout.ChannelByRole(wf, role)
-			}
-		}
-		if err != nil {
-			return // kein Playout-Channel an diesem Node
-		}
-		var args map[string]any
-		_ = json.Unmarshal(raw, &args)
-		eventID, _ := args["itemId"].(string)
-		actor := actorFromRequest(r)
-		now := time.Now().UTC()
-		detail, _ := json.Marshal(summarizeArgs(args))
-		_ = o.asrun.Upsert(context.WithoutCancel(r.Context()), ch.ID, []asrun.Record{{
-			Key: "op:" + strconv.FormatInt(now.UnixNano(), 36) + ":" + name, Kind: asrun.KindOperator, RecordedAt: now,
-			EventID: eventID, Operator: actor, Action: name, Detail: detail,
-		}})
-		logDomainAudit(o.domainAudit, actor, "playout.channel", ch.ID, "operator_"+name, map[string]any{"eventId": eventID})
 	}
 }
 

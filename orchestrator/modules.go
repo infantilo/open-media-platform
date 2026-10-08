@@ -11,12 +11,13 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	audiorulesmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/audiorules"
 	cloudmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/cloud"
+	playoutmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/playout"
 )
 
-// registerModules meldet die Module des Orchestrators an (UMSETZUNG.md Kapitel 36). Cloud ist umgezogen (36.6);
-// Audio-Ausgabe (36.7) und Playout (36.8) folgen.
-func registerModules(reg *module.Registry) {
-	for _, m := range []module.Module{cloudmod.New(), audiorulesmod.New()} {
+// registerModules meldet die Module des Orchestrators an (UMSETZUNG.md Kapitel 36). Cloud (36.6), Audio-Ausgabe (36.7) und
+// Playout (36.8) sind Module.
+func registerModules(reg *module.Registry, playoutSvc *playoutmod.Services) {
+	for _, m := range []module.Module{cloudmod.New(), playoutmod.New(playoutSvc), audiorulesmod.New()} {
 		if err := reg.Register(m); err != nil {
 			slog.Error("module registration failed", "module", m.Name(), "error", err)
 		}

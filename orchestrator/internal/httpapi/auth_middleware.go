@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	"net/http"
 	"strings"
 	"time"
@@ -76,6 +77,11 @@ type LoginRateLimiter interface {
 }
 
 type principalContextKey struct{}
+
+// withPrincipal legt den Nutzer im Kontext ab — für die eigenen Handler und (als Nutzername) für Module.
+func contextWithPrincipal(ctx context.Context, p auth.Principal) context.Context {
+	return module.WithUser(context.WithValue(ctx, principalContextKey{}, p), p.Username)
+}
 
 // principalFromContext liefert den authentifizierten Nutzer, den eine
 // der Middleware-Funktionen unten im Erfolgsfall im Request-Kontext
@@ -189,7 +195,7 @@ func (g *authGate) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if !bypass {
-			r = r.WithContext(context.WithValue(r.Context(), principalContextKey{}, p))
+			r = r.WithContext(contextWithPrincipal(r.Context(), p))
 		}
 		next(w, r)
 	}
@@ -243,7 +249,7 @@ func (g *authGate) requireVerbOnNode(minVerb authz.Verb, next http.HandlerFunc) 
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
-			r = r.WithContext(context.WithValue(r.Context(), principalContextKey{}, p))
+			r = r.WithContext(contextWithPrincipal(r.Context(), p))
 		}
 
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
@@ -277,7 +283,7 @@ func (g *authGate) requireVerbGlobal(minVerb authz.Verb, next http.HandlerFunc) 
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
-			r = r.WithContext(context.WithValue(r.Context(), principalContextKey{}, p))
+			r = r.WithContext(contextWithPrincipal(r.Context(), p))
 		}
 
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}

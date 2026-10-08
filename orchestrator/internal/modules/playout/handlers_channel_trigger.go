@@ -1,8 +1,9 @@
-package httpapi
+package playout
 
 import (
 	"encoding/json"
 	"errors"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	"net/http"
 	"strconv"
 
@@ -18,11 +19,6 @@ import (
 type ChannelTriggerService interface {
 	Send(origin playout.Channel, req channeltrigger.Request, by string) ([]channeltrigger.Delivery, error)
 	Ack(channelID, id, status, detail, by string) (channeltrigger.Record, error)
-}
-
-// WithChannelTriggers aktiviert die Trigger-Routen. Der Store liefert Regeln und Protokoll.
-func WithChannelTriggers(router ChannelTriggerService, store ChannelTriggerStore) HandlerOption {
-	return func(o *handlerOptions) { o.triggerRouter, o.triggerStore = router, store }
 }
 
 // ChannelTriggerStore: Regeln und Protokoll (*channeltrigger.Store).
@@ -56,7 +52,7 @@ func handleSendChannelTrigger(router ChannelTriggerService, svc PlayoutService, 
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		deliveries, err := router.Send(origin, req, actorFromRequest(r))
+		deliveries, err := router.Send(origin, req, module.Actor(r))
 		if err != nil {
 			writeTriggerError(w, err)
 			return
@@ -91,7 +87,7 @@ func handleAckChannelTrigger(router ChannelTriggerService, svc PlayoutService, a
 			http.Error(w, "id und status erforderlich", http.StatusBadRequest)
 			return
 		}
-		rec, err := router.Ack(ch.ID, body.ID, body.Status, body.Detail, actorFromRequest(r))
+		rec, err := router.Ack(ch.ID, body.ID, body.Status, body.Detail, module.Actor(r))
 		if err != nil {
 			writeTriggerError(w, err)
 			return
@@ -124,7 +120,7 @@ func handleListTriggerRules(store ChannelTriggerStore) http.HandlerFunc {
 	}
 }
 
-func handleAddTriggerRule(store ChannelTriggerStore, domainAudit DomainAuditLogger) http.HandlerFunc {
+func handleAddTriggerRule(store ChannelTriggerStore, domainAudit module.DomainAudit) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Origin string `json:"origin"`
@@ -134,23 +130,23 @@ func handleAddTriggerRule(store ChannelTriggerStore, domainAudit DomainAuditLogg
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		rule, err := store.AddRule(body.Origin, body.Target, actorFromRequest(r))
+		rule, err := store.AddRule(body.Origin, body.Target, module.Actor(r))
 		if err != nil {
 			writeTriggerError(w, err)
 			return
 		}
-		logDomainAudit(domainAudit, actorFromRequest(r), "channel_trigger_rule", rule.ID, "created", map[string]any{"origin": rule.Origin, "target": rule.Target})
+		logDomainAudit(domainAudit, module.Actor(r), "channel_trigger_rule", rule.ID, "created", map[string]any{"origin": rule.Origin, "target": rule.Target})
 		writeJSON(w, http.StatusCreated, rule)
 	}
 }
 
-func handleDeleteTriggerRule(store ChannelTriggerStore, domainAudit DomainAuditLogger) http.HandlerFunc {
+func handleDeleteTriggerRule(store ChannelTriggerStore, domainAudit module.DomainAudit) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := store.DeleteRule(r.PathValue("id")); err != nil {
 			writeTriggerError(w, err)
 			return
 		}
-		logDomainAudit(domainAudit, actorFromRequest(r), "channel_trigger_rule", r.PathValue("id"), "deleted", nil)
+		logDomainAudit(domainAudit, module.Actor(r), "channel_trigger_rule", r.PathValue("id"), "deleted", nil)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

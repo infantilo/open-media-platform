@@ -1,4 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
+import "./test-setup.ts"; // zuerst: Host-Schnittstelle + Texte
 import { describeSelector, groupByCorrelation, statusText, statusTone, type TriggerRecord } from "./playout-admin-logic.ts";
 
 const rec = (id: string, corr: string, target: string, at: string, o: Partial<TriggerRecord> = {}): TriggerRecord => ({

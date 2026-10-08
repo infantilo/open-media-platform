@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"encoding/json"
-	"github.com/infantilo/openmediaplatform/orchestrator/internal/asrun"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	"log/slog"
 	"net/http"
@@ -33,9 +32,7 @@ type handlerOptions struct {
 	storageBackends StorageBackendService
 	organizations   OrganizationService
 	groups          GroupService
-	playout         PlayoutService
 	sourceTags      SourceTagStore
-	playoutRoles    InstanceRoleResolver
 	ffmpegTools     FFmpegToolsService
 	updates         UpdateService
 	updateSup       UpdateSupervisor
@@ -45,12 +42,8 @@ type handlerOptions struct {
 	nodeValues      NodeOptionValues
 	locations       LocationStore
 	modules         *module.Registry
+	moduleHooks     *module.Hooks
 	moduleDeps      module.Deps
-	triggerRouter   ChannelTriggerService
-	asrun           AsRunStore
-	asrunMetrics    *asrun.Metrics
-	preflight       PreflightService
-	triggerStore    ChannelTriggerStore
 	systemSettings  SystemSettingsStore
 	startupSkipped  []string
 	workflowRuns    WorkflowRunReader
@@ -117,11 +110,6 @@ func WithOrganizations(svc OrganizationService) HandlerOption {
 // WithSourceTags verdrahtet den Tag-Overlay (Kapitel 27 / P4).
 func WithSourceTags(store SourceTagStore) HandlerOption {
 	return func(o *handlerOptions) { o.sourceTags = store }
-}
-
-// WithPlayout verdrahtet die Playout-Domäne (Kapitel 27 / P1a).
-func WithPlayout(svc PlayoutService, roles InstanceRoleResolver) HandlerOption {
-	return func(o *handlerOptions) { o.playout = svc; o.playoutRoles = roles }
 }
 
 func WithGroups(svc GroupService) HandlerOption {

@@ -1,4 +1,4 @@
-import { t as tt } from "./i18n.ts";
+import { t as tt } from "../host.ts";
 // Reine Logik der Playout-Admin-Ansicht (Kapitel 27 / P7) — ohne DOM, testbar.
 
 export interface TriggerRecord {

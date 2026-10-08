@@ -20,14 +20,12 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/alarmacks"
-	"github.com/infantilo/openmediaplatform/orchestrator/internal/asrun"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/asset"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/assetlinks"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/audit"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/backup"
-	"github.com/infantilo/openmediaplatform/orchestrator/internal/channeltrigger"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/cluster"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/consoles"
@@ -56,7 +54,6 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/organizations"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/outbox"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
-	"github.com/infantilo/openmediaplatform/orchestrator/internal/playout"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/process"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profiles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
@@ -330,7 +327,8 @@ func main() {
 	// Module (Kapitel 36): eigene Migrationen nach dem Kernschema. Ein Modul mit fehlgeschlagener Migration wird als
 	// `failed` markiert und nicht gemountet; der Kern startet trotzdem.
 	modules := module.NewRegistry(module.DisabledFromEnv()...)
-	registerModules(modules)
+	playoutSvc := &playoutmod.Services{}
+	registerModules(modules, playoutSvc)
 	if err := modules.Migrate(ctx, database); err != nil {
 		slog.Error("module migration failed (affected modules are not mounted)", "error", err)
 	}
@@ -980,43 +978,17 @@ func main() {
 	})
 	updateSvc := updates.New(cfg.UpdateDir, cfg.UpdatePubKeyFile, cfg.UpdateAllowUnsigned, runtime.GOOS+"/"+runtime.GOARCH, 0)
 
-	// Kapitel 27 / P7: Channel-Trigger — Zustellung per NATS, Wiederholung nur auf dem Cluster-Leader.
-	playoutStore := playout.NewStore(database)
-	triggerStore := channeltrigger.NewStore(database)
-	asrunMetrics := asrun.NewMetrics()
-	asrunStore := asrun.NewStore(database, asrunMetrics)
-	// As-Run-Protokoll: Aufbewahrung wie das Domänen-Audit (cfg.AuditRetentionDays), täglicher Lauf.
-	go func() {
-		t := time.NewTicker(24 * time.Hour)
-		defer t.Stop()
-		for {
-			if n, err := asrunStore.Prune(ctx, time.Now().AddDate(0, 0, -cfg.AuditRetentionDays)); err != nil {
-				slog.Warn("as-run: Bereinigung fehlgeschlagen", "error", err)
-			} else if n > 0 {
-				slog.Info("as-run: alte Einträge gelöscht", "count", n)
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-			}
-		}
-	}()
-	triggerRouter := &channeltrigger.Router{
-		OnApplied: asrunMetrics.ObserveTriggerLatency,
-		Store:     triggerStore, Channels: playoutStore,
-		Audit: func(actor, id, action string, d map[string]any) {
-			domainAuditStore.Log(actor, "channel_trigger", id, action, d)
-		},
+	// Dienste, die das Playout-Modul vom Kern braucht (Mount geschieht erst in NewHandler unten).
+	*playoutSvc = playoutmod.Services{
+		Authz: authzStore, Roles: workflowSvc, Preflight: preflightSvc, Launcher: launcherSvc, NodeValues: nodeOptionStore,
+		Nodes: store, RetentionDays: cfg.AuditRetentionDays,
 	}
 	if nc != nil {
-		triggerRouter.Pub = nc
+		playoutSvc.Publisher = nc
 	}
-	go runWhileLeader(ctx, clusterNode, triggerRouter.Run)
-
-	moduleDeps := module.Deps{DB: database, Audit: domainAuditStore, Settings: moduleSettings{nodeSettingsStore}, Actor: httpapi.ActorFromRequest,
+	moduleDeps := module.Deps{Hooks: module.NewHooks(), DB: database, Audit: domainAuditStore, Settings: moduleSettings{nodeSettingsStore}, Actor: httpapi.ActorFromRequest,
 		Hosts: hostStore, HostMetrics: hostMetricsTracker, Instances: moduleInstances{launcherSvc}, Placement: placementEngine}
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithPlayout(playoutStore, workflowSvc), httpapi.WithChannelTriggers(triggerRouter, triggerStore), httpapi.WithAsRun(asrunStore, asrunMetrics), httpapi.WithPreflight(preflightSvc), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithModules(modules, moduleDeps))
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithModules(modules, moduleDeps))
 
 	startModules(ctx, modules, moduleDeps, clusterNode)
 

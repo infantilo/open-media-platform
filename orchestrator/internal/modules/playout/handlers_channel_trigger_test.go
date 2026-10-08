@@ -1,4 +1,4 @@
-package httpapi
+package playout
 
 import (
 	"encoding/json"

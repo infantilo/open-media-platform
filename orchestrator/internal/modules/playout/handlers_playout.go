@@ -1,8 +1,9 @@
-package httpapi
+package playout
 
 import (
 	"encoding/json"
 	"errors"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	"io"
 	"net/http"
 	"strconv"
@@ -149,14 +150,14 @@ func handleGetPlayoutChannel(svc PlayoutService) http.HandlerFunc {
 	}
 }
 
-func handleCreatePlayoutChannel(svc PlayoutService, domainAudit DomainAuditLogger) http.HandlerFunc {
+func handleCreatePlayoutChannel(svc PlayoutService, domainAudit module.DomainAudit) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in playout.ChannelInput
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		actor := actorFromRequest(r)
+		actor := module.Actor(r)
 		ch, err := svc.CreateChannel(in, actor)
 		if err != nil {
 			writePlayoutError(w, err)
@@ -167,7 +168,7 @@ func handleCreatePlayoutChannel(svc PlayoutService, domainAudit DomainAuditLogge
 	}
 }
 
-func handleUpdatePlayoutChannel(svc PlayoutService, domainAudit DomainAuditLogger) http.HandlerFunc {
+func handleUpdatePlayoutChannel(svc PlayoutService, domainAudit module.DomainAudit) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in playout.ChannelInput
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -179,19 +180,19 @@ func handleUpdatePlayoutChannel(svc PlayoutService, domainAudit DomainAuditLogge
 			writePlayoutError(w, err)
 			return
 		}
-		logDomainAudit(domainAudit, actorFromRequest(r), "playout_channel", ch.ID, "updated", map[string]any{"name": ch.Name, "instanceId": ch.Instance})
+		logDomainAudit(domainAudit, module.Actor(r), "playout_channel", ch.ID, "updated", map[string]any{"name": ch.Name, "instanceId": ch.Instance})
 		writeJSON(w, http.StatusOK, ch)
 	}
 }
 
-func handleDeletePlayoutChannel(svc PlayoutService, domainAudit DomainAuditLogger) http.HandlerFunc {
+func handleDeletePlayoutChannel(svc PlayoutService, domainAudit module.DomainAudit) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if err := svc.DeleteChannel(id); err != nil {
 			writePlayoutError(w, err)
 			return
 		}
-		logDomainAudit(domainAudit, actorFromRequest(r), "playout_channel", id, "deleted", nil)
+		logDomainAudit(domainAudit, module.Actor(r), "playout_channel", id, "deleted", nil)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

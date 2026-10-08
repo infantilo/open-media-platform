@@ -1,8 +1,9 @@
-package httpapi
+package playout
 
 import (
 	"encoding/json"
 	"errors"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	"net/http"
 	"path/filepath"
 
@@ -19,11 +20,6 @@ type PreflightService interface {
 	Check(ref materialize.Ref, target materialize.Target, hosts materialize.HostPaths) materialize.Result
 	Resolve(ref materialize.Ref, target materialize.Target) (materialize.Spec, error)
 	Start(spec materialize.Spec, by string) (executionID string, err error)
-}
-
-// WithPreflight aktiviert die Preflight-Routen.
-func WithPreflight(p PreflightService) HandlerOption {
-	return func(o *handlerOptions) { o.preflight = p }
 }
 
 type preflightTarget struct {
@@ -130,7 +126,7 @@ func handlePlayoutPreflight(p PreflightService, svc PlayoutService, az verbCheck
 
 // handlePlayoutMaterialize: POST /api/v1/playout/channels/{id}/materialize — startet die Bereitstellung
 // als OMP-Prozess (Execution im Prozess-Bereich sichtbar). Idempotent: läuft schon ein Job, bleibt es dabei.
-func handlePlayoutMaterialize(p PreflightService, svc PlayoutService, az verbChecker, roles InstanceRoleResolver, launcher LauncherService, values NodeOptionValues, domainAudit DomainAuditLogger) http.HandlerFunc {
+func handlePlayoutMaterialize(p PreflightService, svc PlayoutService, az verbChecker, roles InstanceRoleResolver, launcher LauncherService, values NodeOptionValues, domainAudit module.DomainAudit) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ch, ok := channelAccess(svc, az, roles, w, r)
 		if !ok {
@@ -167,12 +163,12 @@ func handlePlayoutMaterialize(p PreflightService, svc PlayoutService, az verbChe
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		execID, err := p.Start(spec, actorFromRequest(r))
+		execID, err := p.Start(spec, module.Actor(r))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		logDomainAudit(domainAudit, actorFromRequest(r), "playout_materialize", spec.Key(), "started",
+		logDomainAudit(domainAudit, module.Actor(r), "playout_materialize", spec.Key(), "started",
 			map[string]any{"channel": ch.ID, "file": spec.FileName, "target": target.MediaDir, "execution": execID})
 		writeJSON(w, http.StatusAccepted, map[string]any{"executionId": execID, "started": true, "result": res})
 	}
