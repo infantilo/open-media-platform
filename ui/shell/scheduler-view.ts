@@ -31,6 +31,7 @@
 //   Anlegen direkt auf leerer Fläche — reduziert Aufwand deutlich, ohne
 //   Funktion zu verlieren (danach normal ziehbar).
 import { t as tt } from "./i18n.ts";
+import { suggestForLane, type CloudSuggestion, type CloudType } from "./scheduler-cloud-logic.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { showToast } from "../kit/omp-toast.ts";
 import {
@@ -192,6 +193,10 @@ class SchedulerView extends HTMLElement {
   // Bedarf je Rolle. Null, solange nicht geladen (dann keine Ressourcen-
   // Anzeige, der Rest funktioniert unverändert).
   #model: ResourceModel | null = null;
+  // Cloud-Anbieter (GET /api/v1/cloud/pricing): buchbare Typen; null = kein Anbieter konfiguriert (dann
+  // erscheinen keine Cloud-Vorschläge). Kostenvorberechnungen je Vorschlag (POST /api/v1/cloud/estimate).
+  #cloudTypes: CloudType[] | null = null;
+  #cloudEstimates = new Map<string, { state: "loading" } | { state: "error" } | { state: "ok"; total: number; currency: string }>();
   // Womit "Neu ziehen" auf einer leeren Fläche einen Zeitplan anlegt.
   #newKind: Schedule["kind"] = "once";
   // Live-Vorschau beim Ziehen: ersetzt die Zeitpläne EINES Workflows nur
@@ -242,14 +247,19 @@ class SchedulerView extends HTMLElement {
       const dates = this.#visibleDates();
       const runsFrom = startOfDay(dates[0]).toISOString();
       const runsTo = addDays(startOfDay(dates[dates.length - 1]), 1).toISOString();
-      const [res, resModel, resRuns] = await Promise.all([
+      const [res, resModel, resRuns, resCloud] = await Promise.all([
         apiFetch("/api/v1/workflows"),
         apiFetch("/api/v1/scheduler/resources").catch(() => null),
         apiFetch(`/api/v1/workflows/runs?from=${encodeURIComponent(runsFrom)}&to=${encodeURIComponent(runsTo)}`).catch(() => null),
+        apiFetch("/api/v1/cloud/pricing").catch(() => null),
       ]);
       if (!res.ok) return;
       this.#workflows = await res.json();
       if (resModel && resModel.ok) this.#model = (await resModel.json()) as ResourceModel;
+      if (resCloud && resCloud.ok) {
+        const c = (await resCloud.json()) as { configured?: boolean; instanceTypes?: CloudType[] };
+        this.#cloudTypes = c.configured && c.instanceTypes?.length ? c.instanceTypes : null;
+      }
       if (resRuns && resRuns.ok) {
         const body = (await resRuns.json()) as { trackingSince?: string; runs: RunRec[] };
         this.#runs = buildRunHistory(body.runs ?? [], body.trackingSince);
@@ -611,6 +621,44 @@ class SchedulerView extends HTMLElement {
     }
   }
 
+  // Eine Zeile "Cloud-Vorschlag": welche Hosts den Engpass auflösen würden, samt Kosten (Schätzung vom Server).
+  #cloudSuggestionLine(sg: CloudSuggestion, dates: Date[]): HTMLElement {
+    const key = JSON.stringify(sg.demands);
+    const line = document.createElement("div");
+    line.dataset.role = "cloud-suggestion";
+    line.style.cssText = "font-size:11px;margin-bottom:3px;color:var(--omp-text);";
+    const when = `${this.#slotLabel(dates, sg.fromIdx)}–${this.#slotLabel(dates, Math.min(sg.toIdx + 1, dates.length * (DAY_MINUTES / SNAP_MINUTES) - 1))}`;
+    const what = tt("cloud.suggest", { p0: when, p1: sg.peakHosts, p2: sg.type.name });
+    const est = this.#cloudEstimates.get(key);
+    let cost: string;
+    if (!est) {
+      this.#cloudEstimates.set(key, { state: "loading" });
+      cost = tt("cloud.calculating");
+      void this.#loadCloudEstimate(key, sg);
+    } else if (est.state === "loading") cost = tt("cloud.calculating");
+    else if (est.state === "error") cost = tt("cloud.costFailed");
+    else cost = tt("cloud.cost", { p0: est.total.toFixed(2), p1: est.currency });
+    line.textContent = `☁ ${what} — ${cost}`;
+    line.title = tt("cloud.hint");
+    return line;
+  }
+
+  async #loadCloudEstimate(key: string, sg: CloudSuggestion) {
+    try {
+      const res = await apiFetch("/api/v1/cloud/estimate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ demands: sg.demands }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const e = (await res.json()) as { total: number; currency: string };
+      this.#cloudEstimates.set(key, { state: "ok", total: e.total, currency: e.currency });
+    } catch {
+      this.#cloudEstimates.set(key, { state: "error" });
+    }
+    this.#repaintResources();
+  }
+
   #renderResources(dates: Date[], timeline: Timeline): HTMLElement {
     const box = document.createElement("div");
     box.dataset.role = "resources";
@@ -753,6 +801,10 @@ class SchedulerView extends HTMLElement {
         sum.textContent = "Im Ausschnitt nichts eingeplant — komplett frei.";
       }
       block.appendChild(sum);
+      if (isAuto && overIdx.length > 0 && this.#cloudTypes) {
+        const suggestions = suggestForLane(slots, cap, model.thresholds, this.#slotsFor(dates), SNAP_MINUTES, this.#cloudTypes);
+        for (const sg of suggestions) block.appendChild(this.#cloudSuggestionLine(sg, dates));
+      }
 
       const rows: { label: string; kind: "cpu" | "mem" | "net" | "gpu" | "vram" | "io"; key?: string }[] = [];
       if (cap.cpuCores > 0 || slots.some((s2) => s2.cpuCores > 0)) rows.push({ label: "CPU", kind: "cpu" });
