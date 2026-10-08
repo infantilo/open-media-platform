@@ -99,17 +99,37 @@ steuert (der Automator plant, die Audioverarbeitung macht der Mischer). `params`
 Kanal auf Stille, entstummen, einblenden; Stopp: ausblenden, stumm, Regel aus. Ein laufendes Voiceover mit
 höherer `priority` blockiert den Start eines niedrigeren. Ein `VOICEOVER` mit `method` bleibt ein freier Node-Befehl.
 
-**SCTE-35 (P9.2, §134):** `SCTE35` ist ein eigener Typ; Kodierung macht der Node `omp-scte35`
+**SCTE-35/-104 (P9.2, §134; Kapitel 37):** `SCTE35` ist ein eigener Typ; Kodierung macht der Node `omp-scte35`
 (Katalog „SCTE-35 Generator“), nicht der Playlist-Core. `target` = Label des Nodes, `params`:
 `{"action":"out","durationMs":30000,"autoReturn":true,"returnAtStop":true}` → Start `splice.out`
 (`splice_insert`, Out of Network, Dauer aus `params`/Kind-Dauer), Stopp `splice.in` mit derselben Event-ID;
 oder `{"action":"signal","typeId":52,"endTypeId":53,"upid":"…"}` → `time_signal` mit Segmentation Descriptor
 (0x34/0x35 Provider Placement Opportunity, 0x36/0x37 Distributor, 0x10/0x11 Programm, 0x22/0x23 Break).
-Der Node liefert den Abschnitt als Parameter `lastSection`/`lastBase64`/`history` und optional als rohes
-UDP-Datagramm (`OMP_SCTE35_UDP=host:port`). **Nicht enthalten:** Einbettung in einen MXL-ANC-Flow oder
-Transportstrom, Verschlüsselung, Komponenten-Splices, PTS-genaue Vorlaufplanung (immer „sofort“).
-**Klassifikation:** Item-Feld `adClass` (`block_start`, `block_end`, `commercial`, `promo`, leer = keine) —
-Metadaten (Anzeige, As-Run-`detail.adClass`), löst selbst nichts aus.
+Ein manuelles Kind sendet „sofort“; Vorlauf, ANC- und Transportstrom-Ausgabe und die automatische Block-Erkennung
+stehen im Abschnitt **Werbeblöcke** unten.
+
+**Werbeblöcke automatisch kennzeichnen (Kapitel 37, ARCHITECTURE.md §29):** Item-Feld `adClass`
+(`commercial`, `promo`, `block_start`, `block_end`, leer = keine). Mit `adBreakEnabled` (Standard **aus**, je Channel) und
+`adBreakTarget` (Label des `omp-scte35`-Nodes) leitet der Automator daraus Marker ab (`adBreakPreRollMs`, Standard 4000,
+mindestens 1000):
+- *Blockbildung:* `block_start` eröffnet, `block_end` schließt (inklusive); `commercial`/`promo` eröffnen, wenn kein Block offen ist;
+  ein Item ohne Klasse beendet den Block. Blockdauer = Summe der Item-Dauern (ist eine Dauer 0, entfällt die Dauer im Out).
+- *Marker:* das **Vorgänger-Item** sendet das **Out** (`splice_insert`, Dauer, Auto-Return) `Vorlauf` vor dem Schnitt, das **letzte Block-Item** das **In**
+  `Vorlauf` vor dem Ende. Fehlt ein Vorgänger mit fester Dauer, kommt das Out sofort mit dem ersten Block-Item. Wird ein offener Block
+  verlassen (Skip, Take, Stop), nimmt das nächste Item ihn zurück (`splice.cancel`, falls der Schnitt noch bevorstand, sonst `splice.in`).
+- *Genauigkeit:* bei aktiver Kennzeichnung schneidet der Auto-Advance **am nominalen Ende** (Schnitt + Dauer, auf Bildgrenzen) statt
+  um Taktverzug und `takeAt`-Vorlauf später; die Marker tragen den exakten Schnittzeitpunkt (`atTaiNs`). Ohne Kennzeichnung bleibt das Verhalten unverändert.
+- Die Marker sind synthetische Child Events (`SCTE35`, `auto: true`, IDs `ad-pre-…`, `ad-out-…`, `ad-in-…`, `ad-close-…`) und erscheinen mit Zustand und
+  Fehlerrichtlinie (Wiederholung 2×) in `childEvents`; der Parameter `adBlocks` liefert die erkannten Blöcke, `adBreaksOpen` die offenen.
+
+**Ausgabe des SCTE-Nodes (Kapitel 37):** Parameter `lastSection`/`lastBase64`/`history`; `OMP_SCTE35_UDP=host:port` (roher Abschnitt);
+`OMP_SCTE35_TS=udp://host:port` oder `srt://…` (Sidecar-Transportstrom: PAT/PMT, Stream-Typ 0x86, PID `OMP_SCTE35_PID`, Abschnitte
+`OMP_SCTE35_REPEAT`-mal im Abstand von 100 ms); `OMP_SCTE35_ANC=1` (SCTE 104 als `video/smpte291`-Daten-Flow in MXL, NMOS-Sender „… ANC (SCTE 104)“,
+`OMP_SCTE35_RATE`, `OMP_SCTE35_ANC_LINE`, `OMP_SCTE35_ANC_OFFSET_FRAMES`, `OMP_SCTE35_ANC_REPEAT`). Methoden: `splice.out`, `splice.in`, `splice.cancel`, `signal`
+mit `inMs` (Vorlauf) oder `atTaiNs` (absoluter Schnittzeitpunkt). **Nicht enthalten:** Verschlüsselung, Komponenten-Splices, `splice_schedule`, Empfang von
+104/35 als Auslöser, Einmischen in einen vorhandenen Programm-Transportstrom (Remux ist Sache der Gegenstelle). **Nicht getestet:** Gegenprüfung mit einem
+realen Inserter/Injector (geprüft ist gegen die Tabellen der Normen, `ffprobe` und das MXL-Werkzeug `mxl-data-probe`).
+**Klassifikation:** Item-Feld `adClass` ist außerdem Metadatum (Anzeige, As-Run-`detail.adClass`).
 
 **Untertitel (P9.4, §52):** `SUBTITLE` steuert die Untertitel-Engine des Grafik-Nodes (`omp-ograf`,
 Modul `subtitles.rs`): `params`: `{"track":"demo-de","offsetMs":0}`, `target` leer = aufgelöster Grafik-Node

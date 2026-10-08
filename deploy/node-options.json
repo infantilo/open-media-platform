@@ -1298,15 +1298,15 @@
       "i18n": {
         "en": {
           "label": "Pre-roll (ms)",
-          "description": "The out/in is sent this many milliseconds before the cut (default 4000).",
+          "description": "The out/in is sent this many milliseconds before the cut (default 4000, at least 1000).",
           "group": "Ad breaks"
         }
       },
       "label": "Vorlauf (ms)",
       "type": "int",
-      "description": "So viele Millisekunden vor dem Schnitt wird das Out bzw. In gesendet (Standard 4000).",
+      "description": "So viele Millisekunden vor dem Schnitt wird das Out bzw. In gesendet (Standard 4000, mindestens 1000).",
       "group": "Werbeblöcke",
-      "min": 0,
+      "min": 1000,
       "max": 60000
     }
   ],

@@ -16,6 +16,10 @@ use serde_json::{json, Value};
 
 use crate::children::ChildEvent;
 
+/// Kleinster wirksamer Vorlauf: das Out/In muss vor dem Auto-Advance des Items abgesetzt sein, der
+/// rund `takeAt`-Vorlauf (300 ms) plus Takt vor dem Ende anstößt.
+pub const MIN_PRE_ROLL_MS: u64 = 1000;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     pub enabled: bool,
@@ -105,8 +109,11 @@ fn scte_child(id: &str, target: &str, timing: &str, delay_ms: u64, params: Value
 
 /// Synthetische Marker-Kinder für das Item `idx`, das gerade auf Sendung geht.
 /// `open`: Schlüssel der Blöcke, deren Out schon gesendet wurde und deren In noch aussteht.
-/// `item_duration_ms`: Dauer des Items `idx`. `onair_utc_ms`: Beginn des Items (für den absoluten Schnittzeitpunkt).
-pub fn children_for(items: &[Item], idx: usize, open: &[String], s: &Settings, onair_utc_ms: i64) -> Vec<ChildEvent> {
+/// `onair_utc_ms`: Zeitpunkt, an dem das Item in der Automation auf Sendung ging (Bezug der relativen Child-Zeiten);
+/// `cut_utc_ms`: Zeitpunkt des tatsächlichen Schnitts (liegt `takeAt`-Vorlauf später; daraus ergibt sich das Ende
+/// des Items und damit der absolute Schnittzeitpunkt des nächsten); `cut_tai_ns`: derselbe Zeitpunkt in TAI-ns
+/// (0 = unbekannt) — der genaue Wert, der an den SCTE-Node geht.
+pub fn children_for(items: &[Item], idx: usize, open: &[String], s: &Settings, onair_utc_ms: i64, cut_utc_ms: i64, cut_tai_ns: u64) -> Vec<ChildEvent> {
     let mut out = Vec::new();
     if !s.active() || idx >= items.len() {
         return out;
@@ -115,6 +122,18 @@ pub fn children_for(items: &[Item], idx: usize, open: &[String], s: &Settings, o
     let here = all.iter().find(|b| b.first <= idx && idx <= b.last);
     let dur = items[idx].duration_ms;
     let t = s.target.as_str();
+    let pre = s.pre_roll_ms.max(MIN_PRE_ROLL_MS);
+    // Die relativen Child-Zeiten laufen ab `onair_utc_ms`, das Ende des Items liegt aber `cut − onair` später.
+    let shift = (cut_utc_ms - onair_utc_ms).max(0) as u64;
+    let end_utc_ms = cut_utc_ms + dur as i64;
+    // Zeitpunkte, an denen das nächste Item (bzw. der Block) schneidet.
+    let times = |mut p: Value| {
+        if cut_tai_ns != 0 {
+            p["cutAtTaiNs"] = json!(cut_tai_ns + dur * 1_000_000);
+        }
+        p
+    };
+    let delay = pre.saturating_sub(shift).min(dur);
 
     // 1. Ein offener Block, in dem dieses Item nicht liegt, wird sofort geschlossen (Abbruch, Skip, Stop).
     for key in open {
@@ -134,27 +153,30 @@ pub fn children_for(items: &[Item], idx: usize, open: &[String], s: &Settings, o
     if dur > 0
         && let Some(next) = all.iter().find(|b| b.first == idx + 1 && here.is_none_or(|h| h.key != b.key))
     {
-        let delay = s.pre_roll_ms.min(dur);
-        let mut p = json!({"action": "out", "blockKey": next.key, "autoReturn": true, "auto": true, "returnAtStop": false, "cutAtUtcMs": onair_utc_ms + dur as i64});
+        let mut p = json!({"action": "out", "blockKey": next.key, "autoReturn": true, "auto": true, "returnAtStop": false, "cutAtUtcMs": end_utc_ms});
         if let Some(d) = next.duration_ms {
             p["durationMs"] = json!(d);
         }
-        out.extend(scte_child(&format!("ad-pre-{}", next.key), t, "RELATIVE_TO_END", delay, p));
+        out.extend(scte_child(&format!("ad-pre-{}", next.key), t, "RELATIVE_TO_END", delay, times(p)));
     }
     // 4. Letztes Item eines Blocks: In `preRoll` vor dem Ende (nur mit fester Dauer).
     if let Some(b) = here.filter(|b| b.last == idx)
         && dur > 0
     {
-        let delay = s.pre_roll_ms.min(dur);
         out.extend(scte_child(
             &format!("ad-in-{}", b.key),
             t,
             "RELATIVE_TO_END",
             delay,
-            json!({"action": "in", "blockKey": b.key, "auto": true, "returnAtStop": false, "cutAtUtcMs": onair_utc_ms + dur as i64}),
+            times(json!({"action": "in", "blockKey": b.key, "auto": true, "returnAtStop": false, "cutAtUtcMs": end_utc_ms})),
         ));
     }
     out
+}
+
+/// Absoluter Schnittzeitpunkt (TAI ns), falls bekannt.
+pub fn cut_tai_ns(params: &Value) -> Option<u64> {
+    params.get("cutAtTaiNs").and_then(Value::as_u64).filter(|t| *t > 0)
 }
 
 /// Vorlauf in Millisekunden bis zum Schnitt (`cutAtUtcMs`), nie negativ; ohne Zeitpunkt der feste `leadMs`.
@@ -221,19 +243,21 @@ mod tests {
     #[test]
     fn disabled_or_unaddressed_produces_nothing() {
         let items = [it("x", "", 10_000), it("a", "commercial", 1000)];
-        assert!(children_for(&items, 0, &[], &Settings::default(), 0).is_empty());
-        assert!(children_for(&items, 0, &[], &Settings { enabled: true, ..Settings::default() }, 0).is_empty());
+        assert!(children_for(&items, 0, &[], &Settings::default(), 0, 0, 0).is_empty());
+        assert!(children_for(&items, 0, &[], &Settings { enabled: true, ..Settings::default() }, 0, 0, 0).is_empty());
     }
 
     #[test]
     fn the_predecessor_announces_the_block_pre_roll_before_its_end() {
         let items = [it("show", "", 60_000), it("s1", "commercial", 10_000), it("s2", "commercial", 20_000), it("show2", "", 60_000)];
-        let c = children_for(&items, 0, &[], &on(), 1_000_000);
+        let c = children_for(&items, 0, &[], &on(), 1_000_000, 1_000_300, 5_000_000_000);
         assert_eq!(ids(&c), vec!["ad-pre-s1"]);
-        assert_eq!(c[0].delay_ms, 4000);
+        assert_eq!(c[0].delay_ms, 3700, "4 s vor dem Schnitt = 300 ms Schnittvorlauf weniger vor dem Ende ab Sendebeginn");
         assert_eq!(c[0].params["blockKey"], "s1");
         assert_eq!(c[0].params["durationMs"], 30_000);
-        assert_eq!(c[0].params["cutAtUtcMs"], 1_060_000);
+        assert_eq!(c[0].params["cutAtUtcMs"], 1_060_300);
+        assert_eq!(c[0].params["cutAtTaiNs"], 5_000_000_000u64 + 60_000_000_000, "exakter Schnittzeitpunkt in TAI-ns für den SCTE-Node");
+        assert_eq!(cut_tai_ns(&c[0].params), Some(65_000_000_000));
         assert_eq!(c[0].params["returnAtStop"], false);
         assert!(c[0].validate().is_ok());
     }
@@ -241,28 +265,28 @@ mod tests {
     #[test]
     fn the_first_block_item_has_an_immediate_fallback_out_and_the_last_a_timed_in() {
         let items = [it("show", "", 60_000), it("s1", "commercial", 10_000), it("s2", "commercial", 20_000), it("show2", "", 60_000)];
-        let first = children_for(&items, 1, &[], &on(), 0);
+        let first = children_for(&items, 1, &[], &on(), 0, 0, 0);
         assert_eq!(ids(&first), vec!["ad-out-s1"]);
         assert_eq!(first[0].params["onlyIfClosed"], true);
-        let last = children_for(&items, 2, &[], &on(), 500);
+        let last = children_for(&items, 2, &[], &on(), 500, 800, 0);
         assert_eq!(ids(&last), vec!["ad-in-s1"]);
-        assert_eq!((last[0].delay_ms, last[0].params["cutAtUtcMs"].as_i64()), (4000, Some(20_500)));
+        assert_eq!((last[0].delay_ms, last[0].params["cutAtUtcMs"].as_i64()), (3700, Some(20_800)));
     }
 
     #[test]
     fn a_single_item_block_gets_out_and_in() {
         let items = [it("a", "commercial", 8000)];
-        assert_eq!(ids(&children_for(&items, 0, &[], &on(), 0)), vec!["ad-out-a", "ad-in-a"]);
+        assert_eq!(ids(&children_for(&items, 0, &[], &on(), 0, 0, 0)), vec!["ad-out-a", "ad-in-a"]);
         // Vorlauf wird auf die Itemdauer begrenzt
-        let c = children_for(&items, 0, &[], &Settings { pre_roll_ms: 20_000, ..on() }, 0);
+        let c = children_for(&items, 0, &[], &Settings { pre_roll_ms: 20_000, ..on() }, 0, 0, 0);
         assert_eq!(c[1].delay_ms, 8000);
     }
 
     #[test]
     fn no_timed_in_without_a_fixed_duration_but_the_next_item_closes_the_open_block() {
         let items = [it("a", "commercial", 0), it("x", "", 5000)];
-        assert_eq!(ids(&children_for(&items, 0, &[], &on(), 0)), vec!["ad-out-a"]);
-        let c = children_for(&items, 1, &["a".to_string()], &on(), 0);
+        assert_eq!(ids(&children_for(&items, 0, &[], &on(), 0, 0, 0)), vec!["ad-out-a"]);
+        let c = children_for(&items, 1, &["a".to_string()], &on(), 0, 0, 0);
         assert_eq!(ids(&c), vec!["ad-close-a"]);
         assert_eq!(c[0].params["action"], "close");
     }
@@ -270,20 +294,20 @@ mod tests {
     #[test]
     fn a_predecessor_without_a_fixed_duration_sends_nothing_ahead() {
         let items = [it("live", "", 0), it("a", "commercial", 5000)];
-        assert!(children_for(&items, 0, &[], &on(), 0).is_empty());
+        assert!(children_for(&items, 0, &[], &on(), 0, 0, 0).is_empty());
     }
 
     #[test]
     fn two_adjacent_blocks_send_in_and_the_next_out_from_the_same_item() {
         let items = [it("a", "block_start", 5000), it("e", "block_end", 5000), it("b", "block_start", 5000)];
-        let c = children_for(&items, 1, &[], &on(), 0);
+        let c = children_for(&items, 1, &[], &on(), 0, 0, 0);
         assert_eq!(ids(&c), vec!["ad-pre-b", "ad-in-a"]);
     }
 
     #[test]
     fn items_inside_a_block_do_not_repeat_the_block_start() {
         let items = [it("a", "commercial", 5000), it("b", "commercial", 5000), it("c", "commercial", 5000)];
-        assert!(children_for(&items, 1, &["a".to_string()], &on(), 0).is_empty());
+        assert!(children_for(&items, 1, &["a".to_string()], &on(), 0, 0, 0).is_empty());
     }
 
     #[test]

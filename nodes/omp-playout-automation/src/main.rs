@@ -791,6 +791,12 @@ struct AutomationState {
     onair_utc_ms: i64,
     /// Kapitel 37: automatische Werbeblock-Kennzeichnung (SCTE-35/-104), Standard aus.
     ad: adbreak::Settings,
+    /// Kapitel 37: TAI (ns) des tatsächlichen Schnitts des aktuellen Primary (Bildgrenze, 0 = unbekannt) und derselbe
+    /// Zeitpunkt in UTC-ms — Grundlage für den Schnittzeitpunkt des nächsten Items und der Marker.
+    cut_tai_ns: u64,
+    cut_utc_ms: i64,
+    /// Kapitel 37: vorgegebener Schaltzeitpunkt (TAI ns, nominales Ende des laufenden Items) nur für den Auto-Advance-Take.
+    take_at_hint_ns: Option<u64>,
     /// Kapitel 37: Werbeblöcke, deren Out gesendet wurde und deren In noch aussteht (Schlüssel = Block).
     ad_open: HashMap<String, AdOpen>,
 }
@@ -846,6 +852,9 @@ impl AutomationState {
             sources: Vec::new(),
             onair_utc_ms: 0,
             ad: adbreak::Settings::default(),
+            cut_tai_ns: 0,
+            cut_utc_ms: 0,
+            take_at_hint_ns: None,
             ad_open: HashMap::new(),
         }
     }
@@ -957,6 +966,8 @@ struct AutomationStore {
     persistence: persist::Persistence,
     /// Kapitel 27 / P9: laufende Voiceovers (`Label:Kanal`, Priorität).
     voiceovers_active: Mutex<Vec<(String, i64)>>,
+    /// Kapitel 37: Bildgrenze (TAI ns) des zuletzt verwendeten Schaltzeitpunkts; 0 = keiner.
+    last_take_at_ns: std::sync::atomic::AtomicU64,
     /// Kapitel 27 / P9.2: laufende SCTE-35-Events (`Label:Kind-ID` → Event-ID), damit der Stopp dieselbe ID trägt.
     scte35_events: Mutex<HashMap<String, u32>>,
     /// Kapitel 27 / P9.3: Plugin-Host des Node-SDK (Plugin `event-hooks`, s. `hooks.rs`).
@@ -1077,6 +1088,9 @@ impl AutomationStore {
         retire_children(state);
         state.child_epoch += 1;
         state.onair_utc_ms = chrono::Utc::now().timestamp_millis() - onair_since.elapsed().as_millis() as i64;
+        // Kapitel 37: der echte Schnitt liegt `takeAt` (Bildgrenze) — daran hängen Dauer und Marker.
+        state.cut_tai_ns = self.last_take_at_ns.swap(0, std::sync::atomic::Ordering::SeqCst);
+        state.cut_utc_ms = tai_ns_to_utc_ms(state.cut_tai_ns).unwrap_or(state.onair_utc_ms);
         asrun_primary_changed(state, item_id);
         for notice in plan_children(state, item_id, onair_since, None) {
             self.report(notice);
@@ -1196,6 +1210,10 @@ impl AutomationStore {
                 return Ok(());
             }
         }
+        // Kapitel 37: bei aktiver Werbeblock-Kennzeichnung fällt der Schnitt auf das nominale Ende des
+        // laufenden Items (Schnitt + Dauer) statt auf „jetzt + Vorlauf“ — so stimmt der angekündigte Zeitpunkt.
+        let leaving_duration_ms = state.playlist.current_index().and_then(|i| state.playlist.items().get(i)).and_then(|id| state.metadata.get(id)).map_or(0, |m| m.duration_ms);
+        let hint = (state.ad.active() && state.cut_tai_ns != 0 && leaving_duration_ms > 0).then(|| state.cut_tai_ns + leaving_duration_ms * 1_000_000);
         let Some(item_id) = state.playlist.advance() else {
             state.onair_since = None;
             state.asrun.end(chrono::Utc::now().timestamp_millis(), "COMPLETED", "Playlist-Ende");
@@ -1218,7 +1236,10 @@ impl AutomationStore {
             .ok_or("Ziel-Mixer nicht aufgelöst")?;
         let (transition, rate_frames) = item_transition(&state, &item_id);
 
-        let new_channel = take_on_targets(self, &state, &mixer_node_id, &meta, transition, rate_frames)?;
+        state.take_at_hint_ns = hint;
+        let taken = take_on_targets(self, &state, &mixer_node_id, &meta, transition, rate_frames);
+        state.take_at_hint_ns = None;
+        let new_channel = taken?;
         state.live_channel = new_channel;
         let onair_since = Instant::now();
         state.onair_since = Some(onair_since);
@@ -2555,7 +2576,7 @@ fn take_on_targets(
         .invoke("crosspoint.select", serde_json::json!({"senderId": sender_id}))
         .map_err(|e| format!("Mixer-crosspoint.select fehlgeschlagen: {e}"))?;
     // Kapitel 31.4: gemeinsamer Schaltzeitpunkt (TAI ns) für Bild- und Tonmischer; 0 = aus.
-    let take_at = take_at_ns();
+    let take_at = take_at_for(store, state);
     if take_at != 0 {
         schedule_audio_follow(store, state, &standby_node_id, take_at);
     }
@@ -2628,6 +2649,40 @@ fn snap_to_frame(tai_ns: u64, fps: f64) -> u64 {
     let frame_ns = 1e9 / fps;
     let idx = (tai_ns as f64 / frame_ns).ceil();
     (idx * frame_ns) as u64 + 500_000
+}
+
+/// Schaltzeitpunkt für diesen Take: mit Vorgabe (`take_at_hint_ns`, nur Auto-Advance bei aktiver
+/// Werbeblock-Kennzeichnung) das nominale Ende des laufenden Items — dadurch fällt der Schnitt auf
+/// den angekündigten Zeitpunkt statt um Taktverzug und Vorlauf später —, sonst jetzt + Vorlauf.
+fn take_at_for(store: &AutomationStore, state: &AutomationState) -> u64 {
+    let default = take_at_ns();
+    if default == 0 {
+        return 0;
+    }
+    let now = tai_now_ns();
+    let t = match state.take_at_hint_ns {
+        Some(h) if h > now + 100_000_000 && h < now + 3_000_000_000 => snap_to_frame(h, take_framerate()),
+        _ => default,
+    };
+    store.last_take_at_ns.store(t.saturating_sub(500_000), std::sync::atomic::Ordering::SeqCst);
+    if state.ad.active() {
+        let frame_ns = 1e9 / take_framerate();
+        eprintln!(
+            "omp-playout-automation: Schaltzeitpunkt takeAt={t} ns (Bild {}), {}",
+            (t as f64 / frame_ns).floor() as u64,
+            if state.take_at_hint_ns.is_some_and(|h| t >= h && t < h + 41_000_000) { "am nominalen Ende des Vorgängers" } else { "jetzt + Vorlauf" }
+        );
+    }
+    t
+}
+
+/// TAI-Zeitpunkt (ns) als UTC-ms; `None` bei 0.
+fn tai_ns_to_utc_ms(tai_ns: u64) -> Option<i64> {
+    let now_tai = tai_now_ns();
+    if tai_ns == 0 || now_tai == 0 {
+        return None;
+    }
+    Some(chrono::Utc::now().timestamp_millis() + (tai_ns as i64 - now_tai as i64) / 1_000_000)
 }
 
 fn take_at_ns() -> u64 {
@@ -2921,6 +2976,24 @@ fn plan_children(
     notices
 }
 
+/// Kapitel 37: erkannte Werbeblöcke der Playlist für die Anzeige (unabhängig davon, ob die Kennzeichnung an ist).
+fn ad_blocks_json(state: &AutomationState) -> Value {
+    let ids = state.playlist.items();
+    let items: Vec<adbreak::Item> = ids
+        .iter()
+        .map(|id| {
+            let m = state.metadata.get(id);
+            adbreak::Item { id: id.clone(), class: m.map(|m| m.media_ref.ad_class.clone()).unwrap_or_default(), duration_ms: m.map_or(0, |m| m.duration_ms) }
+        })
+        .collect();
+    Value::Array(
+        adbreak::blocks(&items)
+            .into_iter()
+            .map(|b| serde_json::json!({"key": b.key, "ids": ids[b.first..=b.last], "durationMs": b.duration_ms, "open": state.ad_open.contains_key(&b.key)}))
+            .collect(),
+    )
+}
+
 /// Kapitel 37: synthetische Marker-Kinder für das Item, das gerade auf Sendung geht (leer, wenn die
 /// Werbeblock-Kennzeichnung aus ist). Sie werden nicht in den Item-Metadaten gespeichert.
 fn ad_break_children(state: &AutomationState, item_id: &str) -> Vec<ChildEvent> {
@@ -2937,7 +3010,7 @@ fn ad_break_children(state: &AutomationState, item_id: &str) -> Vec<ChildEvent> 
         })
         .collect();
     let open: Vec<String> = state.ad_open.keys().cloned().collect();
-    adbreak::children_for(&items, idx, &open, &state.ad, state.onair_utc_ms)
+    adbreak::children_for(&items, idx, &open, &state.ad, state.onair_utc_ms, if state.cut_utc_ms != 0 { state.cut_utc_ms } else { state.onair_utc_ms }, state.cut_tai_ns)
 }
 
 /// Ist das Ziel eines Kindes gerade auflösbar? (Preflight/ARMED; für Node-
@@ -3038,8 +3111,12 @@ fn execute_scte35_block(
                 return Ok(()); // der Vorgänger hat das Out schon gesendet
             }
             let lead = adbreak::lead_ms(p, now);
+            let at_tai = adbreak::cut_tai_ns(p);
             let event_id = (now as u32 ^ key.bytes().fold(5381u32, |h, b| h.wrapping_mul(33) ^ b as u32)) & 0x7FFF_FFFF;
             let mut args = serde_json::json!({"eventId": event_id, "autoReturn": p.get("autoReturn").and_then(Value::as_bool).unwrap_or(true), "inMs": lead});
+            if let Some(at) = at_tai {
+                args["atTaiNs"] = serde_json::json!(at);
+            }
             if let Some(d) = p.get("durationMs").and_then(Value::as_u64) {
                 args["durationMs"] = serde_json::json!(d);
             }
@@ -3055,7 +3132,11 @@ fn execute_scte35_block(
                 invoke("splice.cancel", serde_json::json!({"eventId": open.event_id}))?;
             } else {
                 let lead = if action == "close" { 0 } else { adbreak::lead_ms(p, now) };
-                invoke("splice.in", serde_json::json!({"eventId": open.event_id, "inMs": lead}))?;
+                let mut args = serde_json::json!({"eventId": open.event_id, "inMs": lead});
+                if let (Some(at), "in") = (adbreak::cut_tai_ns(p), action) {
+                    args["atTaiNs"] = serde_json::json!(at);
+                }
+                invoke("splice.in", args)?;
             }
             state.lock().expect("lock poisoned").ad_open.remove(key);
             Ok(())
@@ -3353,10 +3434,11 @@ impl ParamStore for AutomationStore {
                 name: "adBreakPreRollMs".to_string(),
                 kind: ParamType::Number,
                 unit: Some("ms".to_string()),
-                range: Some(Range::Number { min: 0.0, max: 60000.0 }),
+                range: Some(Range::Number { min: 1000.0, max: 60000.0 }),
                 readonly: false,
             },
             ParamSpec { name: "adBreaksOpen".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec { name: "adBlocks".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             // Kapitel 27 / P8: Preflight-Fenster (Minuten) und Standard-Filler des Channels.
             ParamSpec {
                 name: "preflightWindowMin".to_string(),
@@ -3817,6 +3899,7 @@ impl ParamStore for AutomationStore {
             "adBreakTarget" => Some(serde_json::json!(state.ad.target)),
             "adBreakPreRollMs" => Some(serde_json::json!(state.ad.pre_roll_ms)),
             "adBreaksOpen" => Some(serde_json::json!(state.ad_open.keys().cloned().collect::<Vec<_>>())),
+            "adBlocks" => Some(ad_blocks_json(&state)),
             "preflightWindowMin" => Some(serde_json::json!(state.preflight_window_min)),
             "defaultFiller" => Some(serde_json::json!(state.default_filler)),
             "triggerLog" => Some(Value::Array(self.trigger_log.lock().expect("lock poisoned").iter().cloned().collect())),
@@ -3925,7 +4008,7 @@ impl ParamStore for AutomationStore {
             }
             "adBreakPreRollMs" => {
                 let v = value.as_f64().ok_or(SetError::Unknown)?;
-                if !(0.0..=60000.0).contains(&v) {
+                if !(1000.0..=60000.0).contains(&v) {
                     return Err(SetError::Unknown);
                 }
                 state.ad.pre_roll_ms = v as u64;
@@ -4493,7 +4576,24 @@ async fn auto_advance_loop(
                             .and_then(|id| state.metadata.get(id))
                             .map(|m| m.duration_ms)
                             .unwrap_or(0);
-                        if duration_ms > 0 && since.elapsed().as_millis() as u64 >= duration_ms {
+                        // Kapitel 37: mit aktiver Werbeblock-Kennzeichnung schneidet das nächste Item genau am nominalen
+                        // Ende (Schnitt + Dauer); der Wechsel wird dafür um Schnittvorlauf und Takt früher angestoßen.
+                        let early_ms = if state.ad.active()
+                            && state.cut_tai_ns != 0
+                            && state.playlist.peek_next().and_then(|id| state.metadata.get(id)).is_some_and(|m| m.start_type == StartType::Sequence)
+                        {
+                            (take_lead_ms() + ADVANCE_TICK.as_millis() as f64 + 50.0) as u64
+                        } else {
+                            0
+                        };
+                        let due = if early_ms > 0 {
+                            let end_tai = state.cut_tai_ns + duration_ms * 1_000_000;
+                            let now_tai = tai_now_ns();
+                            now_tai != 0 && now_tai + early_ms * 1_000_000 >= end_tai
+                        } else {
+                            since.elapsed().as_millis() as u64 >= duration_ms
+                        };
+                        if duration_ms > 0 && due {
                             AdvanceAction::PlaylistAdvance
                         } else {
                             AdvanceAction::None
@@ -5322,6 +5422,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         auth: auth.clone(),
         own_label: label.clone(),
         voiceovers_active: Mutex::new(Vec::new()),
+        last_take_at_ns: std::sync::atomic::AtomicU64::new(0),
         scte35_events: Mutex::new(HashMap::new()),
         plugins: {
             let p = Arc::new(omp_node_sdk::PluginRegistry::new());

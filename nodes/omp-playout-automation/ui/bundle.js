@@ -58,6 +58,19 @@ const T = (() => {
       "tgt.audio": "Audio-Mixer",
       "tgt.preflight": "Preflight-Vorlauf (min)",
       "tgt.filler": "Standard-Filler (Datei)",
+      "sec.ads": "Werbeblöcke (SCTE)",
+      "ad.enabled": "Werbeblöcke automatisch kennzeichnen",
+      "ad.target": "SCTE-Node",
+      "ad.preroll": "Vorlauf (ms)",
+      "ad.hint": "Aus der Klassifikation der Events (Spot, Promo, Block-Anfang/-Ende) werden SCTE-35/-104-Marker abgeleitet: Out am Blockanfang mit Gesamtdauer, In am Ende, Rücknahme bei Abbruch.",
+      "ad.open": "Block läuft",
+      "ed.adClass": "Werbe-Klasse",
+      "ed.adNone": "— keine —",
+      "ed.adCommercial": "Spot (commercial)",
+      "ed.adPromo": "Promo",
+      "ed.adStart": "Block-Anfang",
+      "ed.adEnd": "Block-Ende",
+      "adBlockTip": "Werbeblock {n}/{total}{dur}",
       "choose": "— wählen —",
       "emptyList": "Noch keine Events — „＋“ links legt das erste an.",
       "noSource": "(keine Quelle)",
@@ -334,6 +347,19 @@ const T = (() => {
       "tgt.audio": "Audio mixer",
       "tgt.preflight": "Preflight lead time (min)",
       "tgt.filler": "Default filler (file)",
+      "sec.ads": "Ad breaks (SCTE)",
+      "ad.enabled": "Mark ad breaks automatically",
+      "ad.target": "SCTE node",
+      "ad.preroll": "Pre-roll (ms)",
+      "ad.hint": "SCTE-35/-104 markers are derived from the event classification (spot, promo, block start/end): out at the block start with its total duration, in at the end, cancel on abort.",
+      "ad.open": "Break running",
+      "ed.adClass": "Ad class",
+      "ed.adNone": "— none —",
+      "ed.adCommercial": "Spot (commercial)",
+      "ed.adPromo": "Promo",
+      "ed.adStart": "Block start",
+      "ed.adEnd": "Block end",
+      "adBlockTip": "Ad break {n}/{total}{dur}",
       "choose": "— choose —",
       "emptyList": "No events yet — “＋” on the left creates the first one.",
       "noSource": "(no source)",
@@ -761,6 +787,9 @@ const STYLE = `
   .pl-row.onair { background: #17301c; border-left-color: var(--ok); }
   .pl-row.cued { background: #35290f; border-left-color: #d4a017; }
   .pl-row.fix { border-left-color: var(--acc); }
+  .pl-row.adb { box-shadow: inset -3px 0 0 #c8501e; }
+  .pl-row.adb-first { border-top: 1px solid #c8501e; } .pl-row.adb-last { border-bottom: 1px solid #c8501e; }
+  .pl-row.adb-open { box-shadow: inset -3px 0 0 #ff7a3a, inset 0 0 0 1px #ff7a3a55; }
   .pl-row.manual { border-left-color: #d4a017; }
   .pl-row.dragging { opacity: .45; }
   .pl-row.skipped { opacity: .55; }
@@ -834,6 +863,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
 
     // ---- Zustand --------------------------------------------------------
     let items = [];
+    let adBlocks = [];
     let assets = [];
     let childRuntime = [];
     let availableNodes = [];
@@ -938,6 +968,15 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     const selMix = mkTarget("targetMixerLabel");
     const selGfx = mkTarget("targetGraphicsLabel");
     const selAud = mkTarget("targetAudioMixerLabel");
+    const adEnabled = h("input", { type: "checkbox", id: "adEnabled", onchange: (e) => setParam("adBreakEnabled", e.target.checked) });
+    const selAd = mkTarget("adBreakTarget");
+    const adSec = h("details", { class: "sec" },
+      h("summary", {}, T("sec.ads")),
+      h("div", { class: "body targets" },
+        h("label", { style: "flex-direction:row;align-items:center;gap:6px" }, adEnabled, T("ad.enabled")),
+        h("label", {}, T("ad.target"), selAd),
+        h("label", {}, T("ad.preroll"), h("input", { type: "number", min: "1000", max: "60000", step: "100", id: "adPreRoll", onchange: (e) => setParam("adBreakPreRollMs", Math.max(1000, Number(e.target.value) || 1000)) })),
+        h("div", { class: "hint", style: "grid-column:1/-1" }, T("ad.hint"))));
     const targetsSec = h("details", { class: "sec" },
       h("summary", {}, T("sec.targets")),
       h("div", { class: "body targets" },
@@ -1129,7 +1168,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       h("summary", {}, T("sec.trigger")),
       h("div", { class: "body" }, h("div", { class: "ctrl" }, trEvent, trKind, trTarget, trItem, trAt, trLate, trSend), trLog));
 
-    shadow.append(h("style", {}, STYLE), head, nextFixEl, planWarnEl, banner, controlSec, playlistSec, cartsSec, triggerSec, targetsSec);
+    shadow.append(h("style", {}, STYLE), head, nextFixEl, planWarnEl, banner, controlSec, playlistSec, cartsSec, triggerSec, adSec, targetsSec);
     plMain.style.setProperty("--cols", "");
     applyCols();
     // Spalten-Template an die Zeilen weitergeben
@@ -1309,11 +1348,21 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         const isCued = it.id === cuedItemId;
         r.row.className = `pl-row pl-cols${isOn ? " onair" : isCued ? " cued" : ""}${selected.has(it.id) ? " sel" : ""}` +
           `${it.startType === "fixtime" ? " fix" : it.startType === "manual" ? " manual" : ""}`;
+        const blk = adBlocks.find((b) => b.ids.includes(it.id));
+        if (blk) {
+          const pos = blk.ids.indexOf(it.id);
+          r.row.classList.add("adb");
+          if (pos === 0) r.row.classList.add("adb-first");
+          if (pos === blk.ids.length - 1) r.row.classList.add("adb-last");
+          if (blk.open) r.row.classList.add("adb-open");
+          r.row.dataset.ad = it.adClass || "";
+        } else { r.row.classList.remove("adb", "adb-first", "adb-last", "adb-open"); delete r.row.dataset.ad; }
         r.num.textContent = String(i + 1);
         r.ico.textContent = srcIcon(it);
         r.dot.style.background = it.color || "transparent";
         r.text.textContent = it.label;
-        r.title.title = describe(it) + (it.note ? `\n${it.note}` : "");
+        r.title.title = describe(it) + (it.note ? `\n${it.note}` : "") +
+          (blk ? "\n" + T("adBlockTip", { n: blk.ids.indexOf(it.id) + 1, total: blk.ids.length, dur: blk.durationMs ? ` · ${tcFormat(blk.durationMs, TC_FPS)}` : "" }) + (blk.open ? ` · ${T("ad.open")}` : "") : "");
         r.dur.textContent = it.eventType === "HOLD" || it.eventType === "JUMP" ? "" : tcFormat(it.durationMs, TC_FPS);
         const plan = planById.get(it.id);
         const t = timeByIndex.get(i);
@@ -1518,7 +1567,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const isNew = !item;
       const onAir = !!item && item.id === currentItemId;
       const d = {
-        kind: mediaKindOf(item), label: item ? item.label : "", note: item?.note || "", icon: item?.icon || "", color: item?.color || "",
+        kind: mediaKindOf(item), label: item ? item.label : "", note: item?.note || "", adClass: item?.adClass || "", icon: item?.icon || "", color: item?.color || "",
         pattern: item?.pattern || "smpte", file: item?.file || "", senderId: item?.senderId || "",
         tags: item?.sourceSelector ? (item.sourceSelector.required || []).join(", ") : "", pref: item?.sourceSelector ? (item.sourceSelector.preferred || []).join(", ") : "",
         jumpTarget: item?.jumpTarget || "", assetId: item?.asset?.assetId || "", onMissing: item?.onMissing || "HOLD", fallbackFile: item?.fallbackFile || "",
@@ -1587,6 +1636,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         else if (d.kind === "file" || d.kind === "asset") f.append(h("div", { class: "hint" }, T("ed.durationHint")));
         if (onAir) f.append(h("div", { class: "hint" }, T("ed.onAirHint")));
         f.append(...field(T("ed.note"), bindText(d, "note", { placeholder: T("ed.notePh") })));
+        f.append(...field(T("ed.adClass"), bindSelect(d, "adClass", [["", T("ed.adNone")], ["commercial", T("ed.adCommercial")], ["promo", T("ed.adPromo")], ["block_start", T("ed.adStart")], ["block_end", T("ed.adEnd")]])));
         const color = h("input", { type: "color", value: d.color || "#4a90d9", oninput: (e) => { d.color = e.target.value; } });
         f.append(...field(T("ed.iconColor"), bindText(d, "icon", { placeholder: T("ed.emoji"), style: "width:80px" }), color,
           h("button", { onclick: () => { d.color = ""; color.value = "#4a90d9"; } }, T("ed.clearColor"))));
@@ -1783,7 +1833,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       };
 
       const buildPatch = () => {
-        const p = { label: d.label.trim(), note: d.note, icon: d.icon.trim(), color: d.color, startType: d.startType, transition: d.transition };
+        const p = { label: d.label.trim(), note: d.note, adClass: d.adClass || "", icon: d.icon.trim(), color: d.color, startType: d.startType, transition: d.transition };
         if (!p.label) throw new Error(T("ed.titleMissing"));
         if (d.startType === "fixtime") {
           const iso = parseStartInput(d.startLocal);
@@ -1976,7 +2026,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (dragging) return;
       const names = ["items", "currentItemId", "cuedItemId", "mode", "connected", "playheadPositionMs", "currentDurationMs", "assets", "activeCartId",
         "availableNodes", "targetPlayerALabel", "targetPlayerBLabel", "targetMixerLabel", "targetGraphicsLabel", "targetAudioMixerLabel", "liveChannel", "mediaLibrary", "audioPlans", "audioGroups", "audioMappings",
-        "availableSources", "channelName", "persistence", "schedule", "childEvents", "triggerLog", "channelId", "preflightWindowMin", "defaultFiller"];
+        "availableSources", "channelName", "persistence", "schedule", "childEvents", "triggerLog", "channelId", "preflightWindowMin", "defaultFiller", "adBreakEnabled", "adBreakTarget", "adBreakPreRollMs", "adBlocks"];
       const v = Object.fromEntries(await Promise.all(names.map(async (n) => [n, await getParam(n)])));
       if (dragging) return;
       items = v.items || [];
@@ -2058,6 +2108,12 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       fillTargets(selMix, availableNodes, v.targetMixerLabel);
       fillTargets(selGfx, availableNodes, v.targetGraphicsLabel);
       fillTargets(selAud, availableNodes, v.targetAudioMixerLabel);
+      adBlocks = Array.isArray(v.adBlocks) ? v.adBlocks : [];
+      fillTargets(selAd, availableNodes.filter((l) => /scte/i.test(l) || l === v.adBreakTarget), v.adBreakTarget);
+      const ae = shadow.getElementById("adEnabled");
+      if (ae && shadow.activeElement !== ae && v.adBreakEnabled !== undefined) ae.checked = !!v.adBreakEnabled;
+      const ap = shadow.getElementById("adPreRoll");
+      if (ap && shadow.activeElement !== ap && v.adBreakPreRollMs !== undefined) ap.value = v.adBreakPreRollMs;
       const pw = shadow.getElementById("preflightWin");
       if (pw && shadow.activeElement !== pw && v.preflightWindowMin !== undefined) pw.value = v.preflightWindowMin;
       const df = shadow.getElementById("defaultFiller");

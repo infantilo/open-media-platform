@@ -1307,6 +1307,18 @@ Am **Tonmischer** entstehen vier Ausgänge (Gruppen-Busse, je ein eigener Sender
 
 Die Gruppennamen und die Zuordnung „ORF komplett“ stehen in **Admin → Audio-Ausgabe** (globale Einstellung; die Gruppen „Dolby E“ bleibt unverändert vorhanden, wird im Demo-Mischer aber nicht verwendet).
 
+## 10d-3. Werbeblöcke kennzeichnen (SCTE-35 / SCTE-104)
+
+Wenn der Sendeweg wissen muss, wo ein Werbeblock beginnt und endet, leitet die Playout-Automation die Marker aus der Playlist ab.
+
+1. **Events klassifizieren:** Im Event-Editor (Reiter Allgemein) bei **Werbe-Klasse** *Spot (commercial)* oder *Promo* wählen — aufeinanderfolgende Spots/Promos bilden **einen Block**. Mit *Block-Anfang* / *Block-Ende* legst du Grenzen ausdrücklich fest; ein Event ohne Klasse beendet den Block. In der Playlist sind Block-Events am rechten Rand orange markiert; der Hinweistext nennt Position und Gesamtdauer (z. B. „Werbeblock 2/3 · 00:00:30:00“).
+2. **SCTE-Node starten:** Instanz *SCTE-35 Generator* anlegen. Unter **Admin → Einstellungen → omp-scte35** wählst du die Ausgabe: *SCTE 104 als ANC-Flow* (erscheint als NMOS-Sender „… ANC (SCTE 104)“ und lässt sich wie ein Videosignal verbinden, die Bildrate muss zum Video passen), *Transportstrom-Ziel* (`udp://host:port` oder `srt://…`) und/oder ein UDP-Ziel für den rohen Abschnitt.
+3. **Kennzeichnung einschalten:** Im Panel der Playout-Automation den Bereich **Werbeblöcke (SCTE)** öffnen, *Werbeblöcke automatisch kennzeichnen* anhaken, den SCTE-Node wählen und den **Vorlauf** einstellen (Standard 4000 ms, mindestens 1000 ms). Standard ist *aus*.
+
+**Was gesendet wird:** Das Event **vor** dem Block sendet das *Out* (mit Gesamtdauer und Auto-Return) um den Vorlauf vor dem Schnitt, das **letzte Block-Event** das *In* um den Vorlauf vor dem Ende. Beginnt der Block ohne Vorgänger (erstes Event, Sprung), kommt das *Out* sofort. Wird ein laufender Block verlassen (Skip, Take, Stop), nimmt die Automation ihn zurück. Bei eingeschalteter Kennzeichnung schneidet jedes Event genau an seinem nominalen Ende (kein Taktverzug). Die Marker erscheinen als Child Events `ad-pre-…`, `ad-out-…`, `ad-in-…`, `ad-close-…` und im Verlauf des SCTE-Nodes. Zum Ausprobieren kann man am SCTE-Node die Methoden `splice.out` / `splice.in` direkt aufrufen.
+
+**Grenzen:** Eine Gegenprüfung mit einem realen Inserter/Injector steht aus. Verschlüsselung, Komponenten-Splices und der Empfang von SCTE als Auslöser gibt es nicht. Test-Muster-Events erscheinen im Programmbild bis zu ~0,3 s nach dem Schnitt (bekannte Eigenschaft der Testmuster, Dateien sind bildgenau).
+
 ## 10e. Cloud-Ressourcen, Kosten und Autoscaling
 
 Der Tab **Cloud** zeigt, ob zusätzliche Rechenleistung in einer Cloud gemietet werden kann, was das kostet und wann das passiert. Ohne konfigurierten Anbieter steht dort nur ein Hinweis; alles läuft wie bisher lokal. Ein Anbieter wird vom Betreiber über Umgebungsvariablen eingerichtet (`docs/CLOUD-AWS.md`); zum Ausprobieren gibt es einen **Simulations-Anbieter** (`OMP_CLOUD_PROVIDER=mock`), der nichts mietet und nichts kostet.

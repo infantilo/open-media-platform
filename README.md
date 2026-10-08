@@ -379,6 +379,11 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
 - **omp-playout-automation** — playout automation (playlist-driven,
   Auto/Hold, Next/Next-Live/Stop, cart/interrupt assets; no pipeline of
   its own)
+- **omp-scte35** — SCTE-35 / SCTE-104 marker generator for ad breaks:
+  frame-accurate with pre-roll; outputs SCTE 104 as ANC (`video/smpte291`)
+  in an MXL data flow (NMOS sender), a sidecar transport stream
+  (UDP/SRT) and raw sections; the playout automation can mark ad breaks
+  automatically from the event classification
 - **omp-viewer** / **omp-multiviewer** — single-stream preview and
   auto-discovered multi-tile monitoring (with automatic low-res preview
   fan-out); as a role in a workflow the multiviewer shows only that

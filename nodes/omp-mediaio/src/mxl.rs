@@ -3608,13 +3608,19 @@ impl MxlDataOutput {
         self.context.instance.get_current_index(&self.rate)
     }
 
-    /// Grain-Index, in dem der Zeitpunkt `now + delay_ns` liegt (aufgerundet auf die nächste Bildgrenze).
+    /// Grain-Index der nächstgelegenen Bildgrenze zum Zeitpunkt `now + delay_ns`. Schnittzeitpunkte liegen
+    /// auf Bildgrenzen und kommen mit Rundungsrauschen (ms-Umrechnung, zwei Uhrablesungen) an: „nächste
+    /// Grenze“ statt „aufrunden“ verhindert, dass ein Rauschen von +1 ms ein Bild später schneidet.
     pub fn index_after_ns(&self, delay_ns: u64) -> u64 {
-        let target = self.context.now_ns().saturating_add(delay_ns);
+        self.index_at_ns(self.context.now_ns().saturating_add(delay_ns))
+    }
+
+    /// Wie [`Self::index_after_ns`], aber für einen absoluten MXL-Zeitpunkt (TAI ns) — ohne Laufzeitverlust
+    /// eines relativen Vorlaufs auf dem Weg zum Aufrufer.
+    pub fn index_at_ns(&self, target: u64) -> u64 {
         let idx = self.context.instance.timestamp_to_index(target, &self.rate).unwrap_or_else(|_| self.current_index());
-        // `timestamp_to_index` rundet ab; ein Zeitpunkt mitten im Bild gehört zur nächsten Grenze.
-        match self.context.instance.index_to_timestamp(idx, &self.rate) {
-            Ok(t) if t < target => idx + 1,
+        match (self.context.instance.index_to_timestamp(idx, &self.rate), self.context.instance.index_to_timestamp(idx + 1, &self.rate)) {
+            (Ok(a), Ok(b)) if target.abs_diff(b) < target.abs_diff(a) => idx + 1,
             _ => idx,
         }
     }

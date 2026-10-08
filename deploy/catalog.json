@@ -281,8 +281,8 @@
     "runner": "process",
     "command": ["../nodes/target/debug/omp-scte35"],
     "env": {},
-    "description": "Erzeugt SCTE-35-Abschnitte (splice_insert Out/In/Cancel, time_signal mit Segmentation Descriptor) für Werbeblöcke und Grenzen. Der Playout-Automator steuert ihn per Child Event SCTE35; Ausgabe als Parameter und optional UDP.",
-    "i18n": { "en": {"description": "Generates SCTE-35 sections (splice_insert out/in/cancel, time_signal with segmentation descriptor) for ad breaks and boundaries. The playout automator controls it via the child event SCTE35; output as a parameter and optionally UDP.", "expectedResources": "very low (no media processing)"} },
+    "description": "Erzeugt SCTE-35-Marker (splice_insert Out/In/Cancel, time_signal mit Segmentation Descriptor) und SCTE-104-Nachrichten für Werbeblöcke und Grenzen, mit Vorlauf (Pre-Roll). Ausgabe: Parameter/Verlauf, UDP, Sidecar-Transportstrom (UDP/SRT) und SCTE 104 als ANC (video/smpte291) in einem MXL-Daten-Flow (NMOS-Sender). Der Playout-Automator steuert ihn per Child Event SCTE35 oder kennzeichnet Werbeblöcke automatisch aus der Event-Klassifikation.",
+    "i18n": { "en": {"description": "Generates SCTE-35 markers (splice_insert out/in/cancel, time_signal with segmentation descriptor) and SCTE-104 messages for ad breaks and boundaries, with pre-roll. Output: parameter/history, UDP, sidecar transport stream (UDP/SRT) and SCTE 104 as ANC (video/smpte291) in an MXL data flow (NMOS sender). The playout automator controls it via the child event SCTE35 or marks ad breaks automatically from the event classification.", "expectedResources": "very low (no media processing)"} },
     "expectedResources": "sehr gering (keine Medienverarbeitung)"
   },
   {

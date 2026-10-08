@@ -986,3 +986,21 @@ mod next_link_tests {
         assert_eq!(next_link(r#"<http://r/q>; rel="first""#), None);
     }
 }
+
+#[cfg(test)]
+mod data_flow_tests {
+    use super::*;
+
+    #[test]
+    fn data_flow_serializes_as_an_ancillary_flow_with_did_sdid() {
+        let f = DataFlow::new("f", "ANC", "d", "s", 25, 1, vec![(0x41, 0x07)]);
+        let v = serde_json::to_value(FlowResource::Data(f)).unwrap();
+        assert_eq!(v["format"], "urn:x-nmos:format:data");
+        assert_eq!(v["media_type"], "video/smpte291");
+        assert_eq!(v["grain_rate"]["numerator"], 25);
+        assert_eq!(v["DID_SDID"][0]["DID"], "0x41");
+        assert_eq!(v["DID_SDID"][0]["SDID"], "0x07");
+        assert!(v.get("frame_width").is_none(), "keine Video-Felder");
+        assert_eq!(Source::new_data("s", "ANC", "d").format, FORMAT_DATA);
+    }
+}

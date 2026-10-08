@@ -4,7 +4,8 @@
 //!
 //! Methoden: `splice.out(durationMs?, eventId?, autoReturn?, inMs?)`, `splice.in(eventId, inMs?)`,
 //! `splice.cancel(eventId)`, `signal(typeId, eventId?, durationMs?, upid?, inMs?)`. `inMs` = Abstand
-//! bis zum Schnitt (Vorlauf); ohne `inMs` gilt der Marker als „sofort“.
+//! bis zum Schnitt (Vorlauf); `atTaiNs` = absoluter Schnittzeitpunkt (MXL-TAI, Vorrang vor `inMs`);
+//! ohne beides gilt der Marker als „sofort“.
 //!
 //! Ausgabewege (alle optional, Umgebungsvariablen):
 //! - Parameter `lastSection`/`lastBase64`/`history` (immer) und `OMP_SCTE35_UDP=host:port` (roher Abschnitt).
@@ -74,7 +75,7 @@ impl Scte35Store {
         args.get("eventId").and_then(Value::as_u64).map(|v| v as u32).unwrap_or_else(|| self.next_event_id.fetch_add(1, Ordering::Relaxed))
     }
 
-    fn emit(&self, cue: Cue) -> Result<(), InvokeError> {
+    fn emit(&self, cue: Cue, at_ns: Option<u64>) -> Result<(), InvokeError> {
         let section = cue.to_scte35(self.clock.now_90k()).map_err(|e| InvokeError::Message(format!("Kodierfehler: {e}")))?;
         // Jede erzeugte Zeile wird vor dem Ausliefern wieder geparst und geprüft.
         splice::parse(&section).map_err(|e| InvokeError::Message(format!("interner Kodierfehler: {e}")))?;
@@ -89,7 +90,7 @@ impl Scte35Store {
             t.send_section(section.clone());
             format!("PID {}", t.pid)
         });
-        let anc_note = self.anc.as_ref().map(|a| a.submit(&cue));
+        let anc_note = self.anc.as_ref().map(|a| a.submit(&cue, at_ns));
         let rec = json!({
             "at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "kind": cue.kind(), "eventId": cue.event_id(), "summary": cue.summary(), "leadMs": cue.lead_ms(),
@@ -125,10 +126,10 @@ impl ParamStore for Scte35Store {
                 ro("output"),
             ],
             methods: vec![
-                MethodSpec { name: "splice.out".to_string(), args: vec![n("durationMs"), n("eventId"), b("autoReturn"), n("inMs")] },
-                MethodSpec { name: "splice.in".to_string(), args: vec![n("eventId"), n("inMs")] },
+                MethodSpec { name: "splice.out".to_string(), args: vec![n("durationMs"), n("eventId"), b("autoReturn"), n("inMs"), n("atTaiNs")] },
+                MethodSpec { name: "splice.in".to_string(), args: vec![n("eventId"), n("inMs"), n("atTaiNs")] },
                 MethodSpec { name: "splice.cancel".to_string(), args: vec![n("eventId")] },
-                MethodSpec { name: "signal".to_string(), args: vec![n("typeId"), n("eventId"), n("durationMs"), t("upid"), n("inMs")] },
+                MethodSpec { name: "signal".to_string(), args: vec![n("typeId"), n("eventId"), n("durationMs"), t("upid"), n("inMs"), n("atTaiNs")] },
             ],
         }
     }
@@ -151,27 +152,33 @@ impl ParamStore for Scte35Store {
 
     fn invoke(&self, name: &str, args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
         let msg = |e: String| InvokeError::Message(e);
-        let lead = num(args, "inMs").unwrap_or(0);
+        // Absoluter Schnittzeitpunkt (`atTaiNs`, MXL-TAI) hat Vorrang vor dem relativen Vorlauf `inMs`: er geht auf
+        // dem Weg hierher nicht verloren (Laufzeit der Anfrage).
+        let at_ns = args.get("atTaiNs").and_then(|v| v.as_u64().or_else(|| v.as_f64().map(|f| f as u64))).filter(|a| *a > 0);
+        let lead = match at_ns {
+            Some(at) => at.saturating_sub(self.clock.now_ns()) / 1_000_000,
+            None => num(args, "inMs").unwrap_or(0),
+        };
         match name {
             "splice.out" => {
                 let id = self.event_id(args);
                 let duration = num(args, "durationMs").filter(|d| *d > 0);
                 let auto_return = args.get("autoReturn").and_then(Value::as_bool).unwrap_or(true);
-                self.emit(Cue::Out { event_id: id, duration_ms: duration, auto_return, lead_ms: lead })
+                self.emit(Cue::Out { event_id: id, duration_ms: duration, auto_return, lead_ms: lead }, at_ns)
             }
             "splice.in" => {
                 let id = num(args, "eventId").ok_or_else(|| msg("eventId fehlt (das Event, das beendet wird)".to_string()))? as u32;
-                self.emit(Cue::In { event_id: id, lead_ms: lead })
+                self.emit(Cue::In { event_id: id, lead_ms: lead }, at_ns)
             }
             "splice.cancel" => {
                 let id = num(args, "eventId").ok_or_else(|| msg("eventId fehlt".to_string()))? as u32;
-                self.emit(Cue::Cancel { event_id: id })
+                self.emit(Cue::Cancel { event_id: id }, None)
             }
             "signal" => {
                 let id = self.event_id(args);
                 let type_id = num(args, "typeId").filter(|t| *t <= 255).ok_or_else(|| msg("typeId (segmentation_type_id, 0…255) fehlt".to_string()))? as u8;
                 let upid = args.get("upid").and_then(Value::as_str).unwrap_or("").as_bytes().to_vec();
-                self.emit(Cue::Signal { event_id: id, type_id, duration_ms: num(args, "durationMs").filter(|d| *d > 0), upid, lead_ms: lead })
+                self.emit(Cue::Signal { event_id: id, type_id, duration_ms: num(args, "durationMs").filter(|d| *d > 0), upid, lead_ms: lead }, at_ns)
             }
             _ => Err(InvokeError::Unknown),
         }

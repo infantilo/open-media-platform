@@ -259,11 +259,15 @@ impl AncOutput {
         Ok(AncOutput { out, queue, msg_no: Default::default(), offset_frames, repeat: repeat.max(1), flow_id: flow_id.to_string() })
     }
 
-    /// Plant den Marker. Rückgabe: Beschreibung für die Anzeige.
-    pub fn submit(&self, cue: &Cue) -> String {
+    /// Plant den Marker. `at_ns`: absoluter Schnittzeitpunkt (MXL-TAI ns), sonst gilt der Vorlauf des Markers.
+    /// Rückgabe: Beschreibung für die Anzeige.
+    pub fn submit(&self, cue: &Cue, at_ns: Option<u64>) -> String {
         let period = self.out.period_ns();
         let cur = self.out.current_index();
-        let cut = (cue.lead_ms() > 0).then(|| self.out.index_after_ns(cue.lead_ms() * 1_000_000));
+        let cut = match at_ns {
+            Some(at) => Some(self.out.index_at_ns(at)),
+            None => (cue.lead_ms() > 0).then(|| self.out.index_after_ns(cue.lead_ms() * 1_000_000)),
+        };
         let p = plan(cur, cut, period, self.offset_frames);
         let msg_no = self.msg_no.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.queue.lock().expect("lock poisoned").push(Entry { cue: cue.clone(), cut_idx: p.cut_idx, next_idx: p.send_idx, sent: 0, total: self.repeat, msg_no });
