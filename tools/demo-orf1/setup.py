@@ -97,7 +97,7 @@ m("setChildren", {"itemId": items["Sendungskennung"]["id"], "childrenJson": json
     {"id": "logo", "type": "LOGO", "timing": "FULL_PRIMARY", "templateId": "top-left-digital-clock", "data": {}}])})
 m("setChildren", {"itemId": items["Live-Schalte"]["id"], "childrenJson": json.dumps([
     {"id": "lt", "type": "GRAPHIC", "timing": "RELATIVE_TO_START", "delayMs": 1000, "durationMs": 5000,
-     "templateId": "lower-third-material-design", "data": {"title": "ORF1 Live", "subtitle": "Schalte ins Studio"}}])})
+     "templateId": "lower-third-material-design", "data": {"name": "Studio Wien", "title": "Schalte ins Studio", "location": "ORF1 Live"}}])})
 # ORF-Audioprogrammgruppen: Stereo PT (1-2), 5.1 PT (3-8), Stereo OT (9-10), Stereo AD (11-12)
 m("updateItem", {"itemId": items["Magazin (MXF-Clip)"]["id"], "patchJson": json.dumps({"audioMapping": "orf-komplett"})})
 m("setTransition", {"itemId": items["Magazin (MXF-Clip)"]["id"], "transition": "mix", "transitionRateFrames": 12})

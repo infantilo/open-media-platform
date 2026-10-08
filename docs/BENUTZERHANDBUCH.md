@@ -1264,7 +1264,9 @@ Live-Quelle im Wechsel, mit den Übergängen Cut, Fade-Cut und Cut-Fade. Sie ble
 
 **Quellenwahl im Live-Event:** Der Typ **Live-Quelle** listet **alle** sichtbaren Videoquellen des Systems als „Node · Sender“ — auch Ausgänge anderer Workflows/Regieplätze und Geräte-Gateways (z. B. DeckLink, ST 2110); Offline-Quellen sind gekennzeichnet. **Live nach Tags** wählt dagegen per Tag; die Felder bieten dazu ein Dropdown „+ bekanntes Tag …“. Quellen auf anderen Hosts sind nur wählbar, wenn ihr Signal dort über ein Gateway im lokalen MXL-Bereich des Players ankommt.
 
-**Grafik-Children:** Bei den Typen Grafik/Logo/Branding wählt das Dropdown die Vorlage des Ziel-Grafikknotens (Ziel „Grafik“); die Daten werden mit den Vorgabewerten der Vorlage vorbelegt.
+**Grafik-Children:** Bei den Typen Grafik/Logo/Branding wählt das Dropdown die Vorlage des Ziel-Grafikknotens (Ziel „Grafik“); die Daten werden mit den Vorgabewerten der Vorlage vorbelegt. Unter den Auswahlfeldern erscheint der **Editor zur Vorlage**: ein Feld je Eintrag des Vorlagen-Schemas (Text, Zahl, Ja/Nein-Schalter, Auswahlliste, Farbwähler; Listen/Objekte als JSON), Pflichtfelder mit *.
+
+**Zeitangaben:** Dauer, Verzögerung und „Vor Ende“ werden als **HH:MM:SS.FF** eingegeben (auch „MM:SS.FF“ oder „SS.FF“; Bilder 00–24 bei 25 fps) und so auch in der Playlist angezeigt.
 
 **Live-Quelle in der Playlist:** Die Quelle wird per Tag (`source.live`) gewählt, nicht per Sender-ID; die
 Playlist funktioniert deshalb auch nach einem Neustart der Live-Quelle.

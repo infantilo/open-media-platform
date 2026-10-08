@@ -180,7 +180,7 @@ const T = (() => {
       "ed.ifMissing": "Wenn fehlt",
       "ed.fallbackFile": "Ersatzdatei",
       "ed.fallbackPh": "nur bei „Ersatzdatei“",
-      "ed.durationMs": "Dauer (ms)",
+      "ed.durationMs": "Dauer (HH:MM:SS.FF)",
       "ed.durationHint": "Die Dauer wird vom Ziel-Player aus der Datei ermittelt.",
       "ed.onAirHint": "Dieses Event läuft gerade: Medium und Dauer sind gesperrt, Titel/Timing/Child Events sind änderbar.",
       "ed.note": "Notiz",
@@ -220,6 +220,7 @@ const T = (() => {
       "ed.attempt": " (Versuch {n})",
       "ed.templateId": "Template-ID",
       "ed.chooseTemplate": "— Vorlage wählen —",
+      "ed.tplFields": "Felder der Vorlage „{name}“ ({n}); * = Pflichtfeld",
       "ed.noTemplates": "Keine Vorlagen vom Ziel-Grafikknoten gelesen (Ziel „Grafik“ prüfen) — ID von Hand eintragen.",
       "ed.dataJson": "Daten (JSON)",
       "ed.targetNode": "Ziel-Node",
@@ -237,8 +238,8 @@ const T = (() => {
       "ed.timingHdr": "Timing",
       "ed.mode": "Modus",
       "ed.clock": "Uhrzeit",
-      "ed.beforeEnd": "Vor Ende (ms)",
-      "ed.delay": "Delay (ms)",
+      "ed.beforeEnd": "Vor Ende (HH:MM:SS.FF)",
+      "ed.delay": "Verzögerung (HH:MM:SS.FF)",
       "ed.zeroUntilEnd": "0 = bis zum Ende des Primary",
       "ed.onErrors": "Bei Fehlern",
       "ed.policy": "Richtlinie",
@@ -455,7 +456,7 @@ const T = (() => {
       "ed.ifMissing": "If missing",
       "ed.fallbackFile": "Fallback file",
       "ed.fallbackPh": "only for “Fallback file”",
-      "ed.durationMs": "Duration (ms)",
+      "ed.durationMs": "Duration (HH:MM:SS.FF)",
       "ed.durationHint": "The duration is determined by the target player from the file.",
       "ed.onAirHint": "This event is on air: media and duration are locked; title, timing and child events can be changed.",
       "ed.note": "Note",
@@ -495,6 +496,7 @@ const T = (() => {
       "ed.attempt": " (attempt {n})",
       "ed.templateId": "Template ID",
       "ed.chooseTemplate": "— choose template —",
+      "ed.tplFields": "Fields of template \"{name}\" ({n}); * = required",
       "ed.noTemplates": "No templates read from the target graphics node (check the \"Graphics\" target) — enter the ID by hand.",
       "ed.dataJson": "Data (JSON)",
       "ed.targetNode": "Target node",
@@ -512,8 +514,8 @@ const T = (() => {
       "ed.timingHdr": "Timing",
       "ed.mode": "Mode",
       "ed.clock": "Time of day",
-      "ed.beforeEnd": "Before end (ms)",
-      "ed.delay": "Delay (ms)",
+      "ed.beforeEnd": "Before end (HH:MM:SS.FF)",
+      "ed.delay": "Delay (HH:MM:SS.FF)",
       "ed.zeroUntilEnd": "0 = until the end of the primary",
       "ed.onErrors": "On errors",
       "ed.policy": "Policy",
@@ -663,6 +665,22 @@ const MISSING_POLICIES = [
   ["FALLBACK", T("mp.fallback")], ["DEFAULT_FILLER", T("mp.filler")],
 ];
 const PATTERNS = ["smpte", "ball", "snow", "circular", "checkers-1", "solid-color"];
+const TC_FPS = 25;
+/** Millisekunden → "HH:MM:SS.FF" (volle Bilder, Rundung auf das Raster). */
+function tcFormat(ms, fps) {
+  const total = Math.max(0, Math.round((Number(ms) || 0) * fps / 1000));
+  const ff = total % fps, secs = Math.floor(total / fps);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(Math.floor(secs / 3600))}:${p(Math.floor(secs / 60) % 60)}:${p(secs % 60)}.${p(ff)}`;
+}
+/** "HH:MM:SS.FF" (auch "MM:SS.FF" oder "SS.FF") → Millisekunden; null bei ungültiger Eingabe. */
+function tcParse(str, fps) {
+  const m = /^\s*(?:(?:(\d+):)?(\d+):)?(\d+)[.:;,](\d+)\s*$/.exec(str || "");
+  if (!m) return null;
+  const [h2, mi, se, fr] = [Number(m[1] || 0), Number(m[2] || 0), Number(m[3]), Number(m[4])];
+  if (fr >= fps || (m[2] !== undefined && se >= 60) || (m[1] !== undefined && mi >= 60)) return null;
+  return Math.round(((h2 * 3600 + mi * 60 + se) * fps + fr) * 1000 / fps);
+}
 const MEDIA_KINDS = [
   ["pattern", T("mk.pattern")], ["file", T("mk.file")], ["asset", T("mk.asset")], ["image", T("mk.image")],
   ["live", T("mk.live")], ["liveselect", T("mk.liveselect")], ["hold", T("mk.hold")], ["jump", T("mk.jump")],
@@ -1296,7 +1314,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         r.dot.style.background = it.color || "transparent";
         r.text.textContent = it.label;
         r.title.title = describe(it) + (it.note ? `\n${it.note}` : "");
-        r.dur.textContent = it.eventType === "HOLD" || it.eventType === "JUMP" ? "" : `${(it.durationMs / 1000).toFixed(1)}s`;
+        r.dur.textContent = it.eventType === "HOLD" || it.eventType === "JUMP" ? "" : tcFormat(it.durationMs, TC_FPS);
         const plan = planById.get(it.id);
         const t = timeByIndex.get(i);
         const rel = t ? `${fmtMs(t.startMs)}–${fmtMs(t.endMs)}` : "";
@@ -1309,7 +1327,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           ...(warn ? plan.warnings.map((w) => `⚠ ${w}`) : []),
         ].filter(Boolean).join("\n");
         if (isOn && durationMs > 0) {
-          r.remTxt.textContent = `-${(Math.max(0, durationMs - playheadMs) / 1000).toFixed(1)}s`;
+          r.remTxt.textContent = `-${tcFormat(Math.max(0, durationMs - playheadMs), TC_FPS)}`;
           r.remBar.style.width = `${Math.min(100, (100 * playheadMs) / durationMs)}%`;
         } else { r.remTxt.textContent = ""; r.remBar.style.width = "0"; }
         // Verfügbarkeit / Bereitschaft
@@ -1378,10 +1396,10 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
 
     const timingText = (c) => {
       const t = c.timing || (c.relativeTo === "END" ? "RELATIVE_TO_END" : "RELATIVE_TO_START");
-      const d = c.durationMs ? `${(c.durationMs / 1000).toFixed(1)}s` : T("untilEnd");
+      const d = c.durationMs ? tcFormat(c.durationMs, TC_FPS) : T("untilEnd");
       if (t === "ABSOLUTE") return `${c.atUtc ? formatLocalStart(c.atUtc) : "?"} · ${d}`;
       if (t === "FULL_PRIMARY") return T("fullDuration");
-      return `${t === "RELATIVE_TO_END" ? "−" : "+"}${((c.delayMs || 0) / 1000).toFixed(1)}s · ${d}`;
+      return `${t === "RELATIVE_TO_END" ? "−" : "+"}${tcFormat(c.delayMs || 0, TC_FPS)} · ${d}`;
     };
 
     // Delete-Taste (Fokus im Panel, nicht in einem Eingabefeld)
@@ -1424,6 +1442,17 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     };
 
     // Formular-Helfer: Feld an ein Objekt binden
+    // Dauer-/Zeiteingaben als Timecode HH:MM:SS.FF (Bildraster TC_FPS); intern bleibt es Millisekunden.
+    const bindTc = (obj, key, attrs) => {
+      const inp = h("input", { type: "text", placeholder: "HH:MM:SS.FF", inputmode: "numeric", maxlength: "14", style: "width:120px;font-variant-numeric:tabular-nums", ...attrs, value: tcFormat(obj[key] || 0, TC_FPS) });
+      inp.addEventListener("input", () => {
+        const ms = tcParse(inp.value, TC_FPS);
+        if (ms === null) { inp.setAttribute("aria-invalid", "true"); inp.style.outline = "1px solid #e55"; return; }
+        inp.removeAttribute("aria-invalid"); inp.style.outline = ""; obj[key] = ms;
+      });
+      inp.addEventListener("blur", () => { inp.value = tcFormat(obj[key] || 0, TC_FPS); inp.removeAttribute("aria-invalid"); inp.style.outline = ""; });
+      return inp;
+    };
     const bindText = (obj, key, attrs) => h("input", { type: "text", ...attrs, value: obj[key] ?? "", oninput: (e) => { obj[key] = e.target.value; } });
     const bindNum = (obj, key, attrs) => h("input", { type: "number", min: "0", ...attrs, value: obj[key] ?? 0, oninput: (e) => { obj[key] = Number(e.target.value) || 0; } });
     const bindSelect = (obj, key, options, onchange) => {
@@ -1554,7 +1583,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
             break;
           default: break;
         }
-        if (durationEditable()) f.append(...field(T("ed.durationMs"), bindNum(d, "durationMs", dis)));
+        if (durationEditable()) f.append(...field(T("ed.durationMs"), bindTc(d, "durationMs", dis)));
         else if (d.kind === "file" || d.kind === "asset") f.append(h("div", { class: "hint" }, T("ed.durationHint")));
         if (onAir) f.append(h("div", { class: "hint" }, T("ed.onAirHint")));
         f.append(...field(T("ed.note"), bindText(d, "note", { placeholder: T("ed.notePh") })));
@@ -1616,6 +1645,45 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         return box;
       };
 
+      // Editor zur Vorlage: ein Feld je Eintrag in schema.properties, schreibt direkt in k.data.
+      const templateForm = (k, tpl, ctx) => {
+        const props = tpl.schema.properties;
+        const req = new Set(tpl.schema.required || []);
+        if (!k.data || typeof k.data !== "object" || Array.isArray(k.data)) k.data = {};
+        for (const [n, p] of Object.entries(props)) if (k.data[n] === undefined && p && p.default !== undefined) k.data[n] = p.default;
+        const box = h("div", { class: "form tpl-form" });
+        box.append(h("div", { class: "hint", text: T("ed.tplFields", { name: tpl.label || tpl.id, n: Object.keys(props).length }) }));
+        const set = (n, v) => { k.data[n] = v; };
+        for (const [n, p] of Object.entries(props)) {
+          const label = (p.title || n) + (req.has(n) ? " *" : "");
+          const tip = p.description || "";
+          let ctl;
+          if (Array.isArray(p.enum)) {
+            ctl = bindSelect(k.data, n, p.enum.map((e) => [String(e), String(e)]));
+            ctl.addEventListener("change", () => { set(n, p.type === "integer" || p.type === "number" ? Number(ctl.value) : ctl.value); });
+          } else if (p.type === "boolean") {
+            ctl = h("input", { type: "checkbox", onchange: (e) => set(n, e.target.checked) });
+            ctl.checked = !!k.data[n];
+          } else if (p.type === "integer" || p.type === "number") {
+            ctl = h("input", { type: "number", step: p.type === "integer" ? "1" : "any", oninput: (e) => { if (e.target.value !== "") set(n, Number(e.target.value)); } });
+            if (p.minimum !== undefined) ctl.min = p.minimum;
+            if (p.maximum !== undefined) ctl.max = p.maximum;
+            ctl.value = k.data[n] ?? "";
+          } else if (p.type === "array" || p.type === "object") {
+            ctl = h("textarea", { oninput: (e) => { try { set(n, JSON.parse(e.target.value)); e.target.style.outline = ""; } catch { e.target.style.outline = "1px solid #e55"; } } });
+            ctl.value = JSON.stringify(k.data[n] ?? (p.type === "array" ? [] : {}));
+          } else {
+            const isColor = /color/i.test(p.gddType || "") && /^#[0-9a-fA-F]{6}$/.test(String(k.data[n] ?? ""));
+            ctl = h("input", { type: isColor ? "color" : "text", oninput: (e) => set(n, e.target.value) });
+            if (p.maxLength) ctl.maxLength = p.maxLength;
+            ctl.value = k.data[n] ?? "";
+          }
+          if (tip) ctl.title = tip;
+          box.append(...field(label, ctl));
+        }
+        return box;
+      };
+
       const kidForm = (k, ctx) => {
         const f = h("div", { class: "form" });
         const rt = item && childRuntime.find((x) => x.itemId === item.id && x.id === k.id);
@@ -1634,18 +1702,18 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
             const opts = gfxTemplates.map((g) => [g.id, g.label && g.label !== g.id ? `${g.label} (${g.id})` : g.id]);
             if (k.templateId && !gfxTemplates.some((g) => g.id === k.templateId)) opts.unshift([k.templateId, k.templateId]);
             f.append(...field(T("ed.templateId"), bindSelect(k, "templateId", [["", T("ed.chooseTemplate")], ...opts], () => {
-              // Leere Daten mit den Vorgabewerten der Vorlage vorbelegen (Felder siehe schema.properties).
-              const g = gfxTemplates.find((x) => x.id === k.templateId);
-              const props = (g && g.schema && g.schema.properties) || {};
-              const defs = Object.fromEntries(Object.entries(props).filter(([, v]) => v && v.default !== undefined).map(([n, v]) => [n, v.default]));
-              if (!(k.data && Object.keys(k.data).length) && !k._dataText) k._dataText = Object.keys(defs).length ? JSON.stringify(defs) : "";
+              k.data = {}; // andere Vorlage = andere Felder; Vorgabewerte füllt das Formular
+              delete k._dataText;
               ctx.redraw();
             })));
           } else {
             f.append(...field(T("ed.templateId"), bindText(k, "templateId")));
             f.append(h("div", { class: "hint", text: T("ed.noTemplates") }));
           }
-          f.append(...jsonField(T("ed.dataJson"), "data", '{"name":"…"}'));
+          const tpl = gfxTemplates.find((x) => x.id === k.templateId);
+          const props = tpl && tpl.schema && tpl.schema.properties;
+          if (props && Object.keys(props).length) f.append(templateForm(k, tpl, ctx));
+          else f.append(...jsonField(T("ed.dataJson"), "data", '{"name":"…"}'));
         } else if (["NODE_COMMAND", "TRIGGER", "AUDIO", "VOICEOVER"].includes(t)) {
           const lbl = bindText(k, "target", { list: "pa-nodes", placeholder: T("ed.nodeLabelPh") });
           f.append(...field(T("ed.targetNode"), lbl, h("datalist", { id: "pa-nodes" }, ...availableNodes.map((n) => h("option", { value: n })))));
@@ -1678,9 +1746,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           const at = h("input", { type: "text", placeholder: T("ed.startPh"), value: k.atUtc ? new Date(k.atUtc).toLocaleString("sv-SE") : "", oninput: (e) => { k._atLocal = e.target.value; } });
           f.append(...field(T("ed.clock"), at));
         } else if (k.timing !== "FULL_PRIMARY") {
-          f.append(...field(k.timing === "RELATIVE_TO_END" ? T("ed.beforeEnd") : T("ed.delay"), bindNum(k, "delayMs")));
+          f.append(...field(k.timing === "RELATIVE_TO_END" ? T("ed.beforeEnd") : T("ed.delay"), bindTc(k, "delayMs")));
         }
-        if (k.timing !== "FULL_PRIMARY") f.append(...field(T("ed.durationMs"), bindNum(k, "durationMs", { title: T("ed.zeroUntilEnd") })));
+        if (k.timing !== "FULL_PRIMARY") f.append(...field(T("ed.durationMs"), bindTc(k, "durationMs", { title: T("ed.zeroUntilEnd") })));
         f.append(h("div", { class: "hint", style: "border-top:1px solid var(--bd);padding-top:6px" }, T("ed.onErrors")));
         f.append(...field(T("ed.policy"), bindSelect(k, "failurePolicy", FAIL_POLICIES, ctx.redraw)));
         if (k.failurePolicy === "RETRY") {
