@@ -159,6 +159,11 @@ counters, next to what the writer actually declares about the flow._
 <td width="33%"><img src="docs/screenshots/scheduler-ziehen.png" width="260"><br><sub>Dragging out a new schedule — the resource strips preview the effect live</sub></td>
 <td width="33%"><img src="docs/screenshots/system-update.png" width="260"><br><sub>System update: signed package upload, content review, version confirmation, automatic rollback</sub></td>
 </tr>
+<tr>
+<td width="33%"><img src="docs/screenshots/cloud.png" width="260"><br><sub>Cloud tab: estimated costs against the budget cap, a suggestion awaiting confirmation, rented hosts, reservations, action log and the autoscaling rules (simulation provider)</sub></td>
+<td width="33%"><img src="docs/screenshots/geraete-hub.png" width="260"><br><sub>Device hub: a sound card offered as an MXL source and as an output receiver, shown in the flow editor with the tile's ports</sub></td>
+<td width="33%"></td>
+</tr>
 </table>
 
 Full walkthroughs and context for every screen above are in

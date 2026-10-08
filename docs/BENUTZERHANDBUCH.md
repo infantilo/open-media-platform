@@ -1217,6 +1217,8 @@ oder Ersatzregel, oder still); die Playlist-Spalte „Audio“ markiert Ersatz u
 
 Der Node **Geräte-Hub** (Katalog: „Geräte-Hub“) erkennt die Kameras, Capture-Sticks und Audio-Schnittstellen, die direkt an diesem Rechner hängen (USB, aber auch eingebaute). Starte je Host eine Instanz; das Panel zeigt jedes Gerät mit Art, Anschluss, Fähigkeiten (z. B. „1920×1080 @ 30 YUY2“ oder „2 Kanäle, 48 kHz“) und einem Schalter **Anbieten**.
 
+![Geräte-Hub: eine Soundkarte als Quelle und als Ausgang, im Flow-Editor mit den Ports der Kachel](screenshots/geraete-hub.png)
+
 - **Anbieten einschalten:** Das Gerät erscheint als Quelle (MXL-Flow + NMOS-Sender) in der Kreuzschiene und kann wie jede andere Quelle verbunden werden. Der Status wechselt von *Aus* über *Startet …* auf *Sendet*.
 - **Standard ist aus.** Nichts wird ohne dein Zutun angeboten. Die Auswahl bleibt nach einem Neustart erhalten.
 - **Gerät abziehen:** Der Eintrag bleibt als *Nicht angesteckt* stehen; beim Wiederanstecken wird es automatisch wieder angeboten, mit derselben Sender-ID — Verbindungen in der Kreuzschiene bleiben gültig.
@@ -1288,6 +1290,8 @@ Szene aktiv (**— nur manuell —** schaltet das ab). Freie Mehrfach-Zuordnunge
 Der Tab **Cloud** zeigt, ob zusätzliche Rechenleistung in einer Cloud gemietet werden kann, was das kostet und wann das passiert. Ohne konfigurierten Anbieter steht dort nur ein Hinweis; alles läuft wie bisher lokal. Ein Anbieter wird vom Betreiber über Umgebungsvariablen eingerichtet (`docs/CLOUD-AWS.md`); zum Ausprobieren gibt es einen **Simulations-Anbieter** (`OMP_CLOUD_PROVIDER=mock`), der nichts mietet und nichts kostet.
 
 **Wichtig:** Alle Beträge sind **Schätzungen** aus Preisliste × Laufzeit — nicht die Abrechnung des Anbieters. Datentransfer und Speicher sind nicht enthalten.
+
+![Cloud-Tab: geschätzte Kosten gegen den Deckel, Vorschlag zur Bestätigung, gemietete Hosts, Reservierung, Aktionsprotokoll und Autoscaling-Regeln (Simulations-Anbieter)](screenshots/cloud.png)
 
 - **Kosten (geschätzt):** je Pool heute und im Monat: angefallen, Hochrechnung (laufende Hosts bis zum Ende der Periode) und der **Budgetdeckel**. Ist die Hochrechnung über dem Deckel, wird der Balken rot.
 - **Gemietete Hosts:** Zustand (startet → wartet auf Host-Agent → bereit → wird geleert → beendet). **Abbauen** sperrt neue Platzierungen auf dem Host und beendet ihn, sobald nichts mehr auf ihm läuft.
