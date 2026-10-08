@@ -4435,7 +4435,7 @@ Ablage der Zugangsdaten, Region(en), Instanztypen je Pool, welche Node-Typen/Wor
 cloudtauglich sind (Gateway-Pfad), Verhalten beim Abbau eines nicht verschiebbaren Hosts.
 
 
-## 28. Orchestrator-Module: Domänenfunktionen vom Kern trennen (Design 2026-10-09, UMSETZUNG.md Kapitel 36)
+## 28. Orchestrator-Module: Domänenfunktionen vom Kern trennen (Stufe 1 umgesetzt 2026-10-09, UMSETZUNG.md Kapitel 36)
 
 **Anlass (Nutzer 2026-10-09):** Playout-Funktionen (Channels, Trigger, As-Run, Audio-Ausgabe/Audio-Regeln, Preflight) und
 später die Cloud-Verwaltung (§27) sind keine Kernfunktion eines Orchestrators, stecken aber fest in dessen Verdrahtung.
@@ -4487,3 +4487,17 @@ im Betrieb), dann Audio-Ausgabe (Audio-Regeln), dann Channels/Trigger/As-Run/Pre
 Verhaltensänderung laufen: Vorher/Nachher-Vergleich der Routentabelle samt Rechtepflicht, unveränderte Daten, Live-Test
 gegen den echten Stack. Berührt werden Autorisierung und Migrationen — die empfindlichsten Stellen; deshalb ein Modul
 nach dem anderen und kein Umbau „in einem Zug“.
+
+### 28.5 Stand und Entscheidung zu Stufe 2 (36.9, 2026-10-09)
+
+**Umgesetzt (Stufe 1):** Cloud, Audio-Ausgabe und Playout sind Module (`internal/modules/*`, UI in `ui/modules/*`); `httpapi` und `workflows`
+hängen von keinem Domänen- oder Modulpaket mehr ab (`go list -deps`), die Routentabelle (240 Routen mit Rechtepflicht) ist nach allen
+drei Umzügen unverändert. Anleitung: `docs/MODULE-SCHREIBEN.md`.
+
+**Stufe 2 (eigenständige Dienste) — Empfehlung: jetzt nicht bauen.** Einen konkreten Grund gibt es bisher nicht: Die Module laufen sauber im
+selben Prozess, ein Ausfall bleibt dank Fehlerisolation auf das Modul beschränkt, und Stufe 2 kostete Identitätsweitergabe, HA/Leader-Gating,
+eigenen Speicher und Datenmigration. Sie lohnt, sobald eines davon eintritt: (a) ein Modul soll **unabhängig vom Orchestrator
+released/aktualisiert** werden, (b) ein Modul braucht **eigene Geheimnisse oder Abhängigkeiten**, die nicht im Orchestrator-Prozess liegen
+sollen (Kandidat: Cloud mit Zugangsdaten und Anbieter-Adapter), (c) ein **Absturz oder Ressourcenverbrauch** eines Moduls darf den
+Orchestrator nicht beeinflussen. Die Modulschnittstelle ist so geschnitten (schmale `Deps`/`Services`, Hooks statt Kernsonderfälle, eigene
+Stores), dass ein Modul später hinter einem `ext`-Proxy herausgelöst werden könnte, ohne den Kern erneut umzubauen. **Entscheidung beim Nutzer.**

@@ -65,6 +65,8 @@ Cluster setup wizards, workflows). Anyone is welcome to build their own
 nodes against the same NMOS-based contract; the orchestrator doesn't
 need to know or care what they do.
 
+Domain functions such as playout (channels, triggers, as-run), audio output rules and cloud capacity are **modules** of the orchestrator rather than core features: each registers its routes, background jobs, metrics and UI tab through a small interface, can be switched off with `OMP_MODULES_DISABLE`, and the core does not import any of them (`docs/MODULE-SCHREIBEN.md`).
+
 An essential part of the architecture is also the NMOS Control Framework (IS-12/IS-14). Each service describes its own parameters and capabilities. Therefore, the orchestrator doesn't need to know whether it's a video mixer, audio mixer, or a future node type. New components can be integrated without requiring any modifications to the orchestrator. This self-description capability is precisely what makes the platform scalable in the long term.
 
 Although the project is still in its early stages, the current version is already fully functional on my Chromebook. For me, this is important proof that modern broadcast architectures can initially be developed and validated with manageable resources.

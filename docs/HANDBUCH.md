@@ -754,9 +754,19 @@ Orchestrator-Eingriff nötig (Bedienung im Detail:
   `ARCHITECTURE.md` §15.1.
 
 
-### 9.6 Cloud-Hosts (Dienst des Orchestrators, kein Node)
+### 9.8 Cloud-Hosts (Modul des Orchestrators, kein Node)
 
 Der Orchestrator kann über einen **Provider-Adapter** Cloud-Hosts mieten (`OMP_CLOUD_PROVIDER=mock|aws`; Zugangsdaten und Konfiguration gehören in die Datei `deploy/dev/cloud.env` (Vorlage `cloud.env.example`, nicht im Repo, `chmod 600`), die `make start` liest — nie in Oberfläche oder Datenbank; Sicherheitsnetze in `docs/CLOUD-AWS.md`). Ein Cloud-Host ist ein gewöhnlicher Host (Host-Agent per Bootstrap-Token, Placement, Migration); neu sind nur Anlegen/Beenden und Kosten. Bausteine: Pools (Anbieter, Region, Instanztyp, min/max), Reservierungen („Kapazität von–bis“), Autoscaling-Regeln je Pool (Aus/Vorschlagen/Automatisch, harter Tages-/Monatsdeckel), Kostenvorberechnung und geschätzte Ist-Kosten, Draining-Abbau. API: `/api/v1/cloud/{pricing,estimate,hosts,costs,reservations,policies,suggestions}`; Bedienung: Tab **Cloud** (Benutzerhandbuch §10e). Die AWS-Anbindung ist ohne SDK gebaut und **noch nicht gegen echtes AWS getestet**; echte Starts sind standardmäßig gesperrt (nur Trockenlauf).
+
+
+### 9.9 Orchestrator-Module (Playout, Audio-Ausgabe, Cloud)
+
+Domänenfunktionen sind **Module** des Orchestrators, keine Kernfunktion: **Playout** (Channels, Trigger, As-Run, Preflight),
+**Audio-Ausgabe** (Audio-Regeln) und **Cloud** (§9.8). Jedes Modul bringt seine Routen, ggf. Hintergrundjobs, Kennzahlen und seine
+Oberfläche mit; `GET /api/v1/modules` zeigt Stand und Oberfläche (die Shell baut ihre Tabs daraus). Mit der Umgebungsvariable
+`OMP_MODULES_DISABLE=cloud,audio-rules` (Komma-Liste der Namen `cloud`, `playout`, `audio-rules`) lässt sich ein Modul abschalten:
+seine Routen antworten dann mit 404 und der Tab fehlt — der Kern (Nodes, Graph, Hosts, Workflows, Rechte) läuft unverändert. Ein Modul,
+dessen Start oder Migration scheitert, steht als `failed` im Manifest, die übrigen laufen weiter. Eigene Module: `docs/MODULE-SCHREIBEN.md`.
 
 ## 10. Mehr Kontext
 
