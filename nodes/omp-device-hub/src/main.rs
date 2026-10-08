@@ -3,6 +3,8 @@
 //! Erkennung, Parameter `devices` und die Schalter (persistent); das tatsächliche Anbieten
 //! als MXL-Flow/NMOS-Sender folgt in 34.3.
 
+mod uibundle;
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -99,6 +101,10 @@ impl ParamStore for HubStore {
             }
             _ => Err(InvokeError::Unknown),
         }
+    }
+
+    fn extra_route(&self, method: &str, path: &str, _body: &[u8]) -> Option<omp_node_sdk::RawResponse> {
+        uibundle::route(method, path)
     }
 }
 

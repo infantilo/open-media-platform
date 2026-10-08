@@ -383,6 +383,10 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   file, or to MXF (H.264 + 24-bit PCM) when the name ends in `.mxf`, with
   optional SMPTE ST 377-4/-41 MCA labels (`record.mcaPlan`); MXL-only
   input, no capture-card dependency
+- **omp-device-hub** — detects the host's local video (V4L2) and audio
+  (ALSA/USB) devices with a stable ID and capabilities; each device can be
+  switched on to be offered as an MXL flow + NMOS sender (default off, the
+  selection persists, a re-plugged device keeps its sender ID)
 - **omp-scaler** — scales/converts a connected MXL video source to a
   fixed target format; also one of two nodes that can absorb a
   workflow's declared output-delay compensation (see Status)

@@ -1213,6 +1213,16 @@ Ohne Wahl gilt für MXF-Dateien die Vorlage „Stereo“, sonst der Programmton 
 Event gecued oder auf Sendung ist, zeigt der Reiter den aufgelösten Plan (je Gruppe: welche Spuren,
 oder Ersatzregel, oder still); die Playlist-Spalte „Audio“ markiert Ersatz und Warnungen mit ⚠.
 
+## 10c-2. Lokale Geräte als Quelle anbieten (Geräte-Hub)
+
+Der Node **Geräte-Hub** (Katalog: „Geräte-Hub“) erkennt die Kameras, Capture-Sticks und Audio-Schnittstellen, die direkt an diesem Rechner hängen (USB, aber auch eingebaute). Starte je Host eine Instanz; das Panel zeigt jedes Gerät mit Art, Anschluss, Fähigkeiten (z. B. „1920×1080 @ 30 YUY2“ oder „2 Kanäle, 48 kHz“) und einem Schalter **Anbieten**.
+
+- **Anbieten einschalten:** Das Gerät erscheint als Quelle (MXL-Flow + NMOS-Sender) in der Kreuzschiene und kann wie jede andere Quelle verbunden werden. Der Status wechselt von *Aus* über *Startet …* auf *Sendet*.
+- **Standard ist aus.** Nichts wird ohne dein Zutun angeboten. Die Auswahl bleibt nach einem Neustart erhalten.
+- **Gerät abziehen:** Der Eintrag bleibt als *Nicht angesteckt* stehen; beim Wiederanstecken wird es automatisch wieder angeboten, mit derselben Sender-ID — Verbindungen in der Kreuzschiene bleiben gültig.
+- **Fehler:** Fällt eine Quelle aus (z. B. von einer anderen Anwendung belegt), steht *Fehler* mit der Meldung als Tooltip. Mit erneutem Schalten oder **Neu suchen** gibt es einen frischen Versuch.
+- **Format:** Video bis höchstens 1080p mit 25 Bildern/s (wenn das Gerät es kann), Audio mit der höchsten Kanalzahl des Geräts (bis 8) bei 48 kHz.
+
 ## 10d. Playout-Workflow „Playout MXF“ (Player, Mischer, Monitor)
 
 Der Workflow **Playout MXF** (Reiter Workflows, nach dem Anlegen im Zustand „gestoppt“) enthält:
