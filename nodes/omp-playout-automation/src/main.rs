@@ -479,10 +479,40 @@ fn item_is_available(m: &ItemMeta, media_library: &[String], available_sources: 
         ItemMedia::File { path } | ItemMedia::Image { path } => media_library.iter().any(|f| f == path),
         // Steuer-Events brauchen kein Medium.
         ItemMedia::Hold | ItemMedia::Jump { .. } => true,
-        ItemMedia::Live { sender_id } => available_sources
-            .iter()
-            .any(|s| s.get("senderId").and_then(Value::as_str) == Some(sender_id.as_str())),
+        ItemMedia::Live { sender_id } => {
+            available_sources.iter().any(|s| s.get("senderId").and_then(Value::as_str) == Some(sender_id.as_str()))
+                || sources.iter().any(|s| &s.sender_id == sender_id && s.online)
+        }
     }
+}
+
+/// Auswahlliste für Live-Events: ALLE sichtbaren Videoquellen des Orchestrators (jeder Workflow/Regieplatz,
+/// Geräte-Gateways wie DeckLink/ST 2110/SRT, Testquellen), nicht nur was der Kanal-Player selbst sieht.
+/// Anzeigename „Node · Sender“, Offline-Quellen gekennzeichnet; die Player-Liste bleibt als Ergänzung erhalten.
+fn selectable_live_sources(state: &AutomationState) -> Vec<Value> {
+    let mut out: Vec<Value> = state
+        .sources
+        .iter()
+        .filter(|s| s.visible && s.media_type == Some(omp_resolver::MediaType::Video) && !s.label.contains("Lowres"))
+        .map(|s| {
+            let name = if s.node_label.is_empty() || s.label.starts_with(&s.node_label) { s.label.clone() } else { format!("{} · {}", s.node_label, s.label) };
+            serde_json::json!({
+                "senderId": s.sender_id,
+                "label": if s.online { name } else { format!("{name} (offline)") },
+                "nodeLabel": s.node_label,
+                "workflowId": s.workflow_id,
+                "online": s.online,
+            })
+        })
+        .collect();
+    for extra in &state.available_sources {
+        let id = extra.get("senderId").and_then(Value::as_str);
+        if id.is_some() && !out.iter().any(|o| o.get("senderId").and_then(Value::as_str) == id) {
+            out.push(extra.clone());
+        }
+    }
+    out.sort_by(|a, b| a["label"].as_str().unwrap_or("").cmp(b["label"].as_str().unwrap_or("")));
+    out
 }
 
 /// Kapitel 6 Teil 3: "HH:MM:SS" (lokale Wanduhr, kein Datum) →
@@ -3696,7 +3726,7 @@ impl ParamStore for AutomationStore {
             )),
             "availableNodes" => Some(serde_json::json!(state.discovered_labels)),
             "mediaLibrary" => Some(serde_json::json!(state.media_library)),
-            "availableSources" => Some(serde_json::json!(state.available_sources)),
+            "availableSources" => Some(serde_json::json!(selectable_live_sources(&state))),
             "audioPlans" => Some(serde_json::json!({"a": state.audio_plan_a, "b": state.audio_plan_b})),
             "audioGroups" => Some(state.audio_groups.clone()),
             "audioMappings" => Some(state.audio_mappings.clone()),

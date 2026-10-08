@@ -219,6 +219,8 @@ const T = (() => {
       "ed.runtime": "Laufzeit: {state}{error}{attempt}",
       "ed.attempt": " (Versuch {n})",
       "ed.templateId": "Template-ID",
+      "ed.chooseTemplate": "— Vorlage wählen —",
+      "ed.noTemplates": "Keine Vorlagen vom Ziel-Grafikknoten gelesen (Ziel „Grafik“ prüfen) — ID von Hand eintragen.",
       "ed.dataJson": "Daten (JSON)",
       "ed.targetNode": "Ziel-Node",
       "ed.nodeLabelPh": "Node-Label",
@@ -492,6 +494,8 @@ const T = (() => {
       "ed.runtime": "Runtime: {state}{error}{attempt}",
       "ed.attempt": " (attempt {n})",
       "ed.templateId": "Template ID",
+      "ed.chooseTemplate": "— choose template —",
+      "ed.noTemplates": "No templates read from the target graphics node (check the \"Graphics\" target) — enter the ID by hand.",
       "ed.dataJson": "Data (JSON)",
       "ed.targetNode": "Target node",
       "ed.nodeLabelPh": "Node label",
@@ -1445,6 +1449,21 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     const splitTags = (t) => (t || "").split(",").map((x) => x.trim()).filter(Boolean);
 
     let availableSources = [];
+    // Grafik-Vorlagen des Ziel-OGraf-Nodes (targetGraphicsLabel) für die Auswahl bei Grafik-Children.
+    let gfxTemplates = [];
+    let gfxLabel = "";
+    let gfxAt = 0;
+    const loadGfxTemplates = async () => {
+      if (!gfxLabel || Date.now() - gfxAt < 10000) return;
+      gfxAt = Date.now();
+      try {
+        const nodes = await fetch("/api/v1/nodes").then((r) => (r.ok ? r.json() : []));
+        const g = nodes.find((n) => n.label === gfxLabel && n.online);
+        if (!g) { gfxTemplates = []; return; }
+        const res = await fetch(`/api/v1/nodes/${g.id}/params/templates`);
+        if (res.ok) gfxTemplates = ((await res.json()).value || []).slice().sort((a, b) => String(a.label || a.id).localeCompare(String(b.label || b.id)));
+      } catch { /* Auswahl bleibt leer, Texteingabe geht weiter */ }
+    };
     // Bekannte Tags aller Videoquellen (Tag → Quellennamen) für die Auswahl im Tag-Typ.
     let tagCatalog = [];
     let tagCatalogAt = 0;
@@ -1610,7 +1629,22 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           return field(label, ta);
         };
         if (["GRAPHIC", "LOGO", "CHANNEL_BRANDING"].includes(t)) {
-          f.append(...field(T("ed.templateId"), bindText(k, "templateId")));
+          if (gfxTemplates.length) {
+            // Auswahl der Vorlagen des Ziel-OGraf-Nodes; eine unbekannte, schon gesetzte ID bleibt wählbar.
+            const opts = gfxTemplates.map((g) => [g.id, g.label && g.label !== g.id ? `${g.label} (${g.id})` : g.id]);
+            if (k.templateId && !gfxTemplates.some((g) => g.id === k.templateId)) opts.unshift([k.templateId, k.templateId]);
+            f.append(...field(T("ed.templateId"), bindSelect(k, "templateId", [["", T("ed.chooseTemplate")], ...opts], () => {
+              // Leere Daten mit den Vorgabewerten der Vorlage vorbelegen (Felder siehe schema.properties).
+              const g = gfxTemplates.find((x) => x.id === k.templateId);
+              const props = (g && g.schema && g.schema.properties) || {};
+              const defs = Object.fromEntries(Object.entries(props).filter(([, v]) => v && v.default !== undefined).map(([n, v]) => [n, v.default]));
+              if (!(k.data && Object.keys(k.data).length) && !k._dataText) k._dataText = Object.keys(defs).length ? JSON.stringify(defs) : "";
+              ctx.redraw();
+            })));
+          } else {
+            f.append(...field(T("ed.templateId"), bindText(k, "templateId")));
+            f.append(h("div", { class: "hint", text: T("ed.noTemplates") }));
+          }
           f.append(...jsonField(T("ed.dataJson"), "data", '{"name":"…"}'));
         } else if (["NODE_COMMAND", "TRIGGER", "AUDIO", "VOICEOVER"].includes(t)) {
           const lbl = bindText(k, "target", { list: "pa-nodes", placeholder: T("ed.nodeLabelPh") });
@@ -1884,6 +1918,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       mediaLibrary = v.mediaLibrary || [];
       availableSources = v.availableSources || [];
       loadTagCatalog();
+      gfxLabel = v.targetGraphicsLabel || "";
+      loadGfxTemplates();
       channelId = v.channelId || "";
       audioPlans = (v.audioPlans && typeof v.audioPlans === "object") ? v.audioPlans : { a: null, b: null };
       audioGroups = Array.isArray(v.audioGroups) ? v.audioGroups : [];
