@@ -4501,3 +4501,61 @@ released/aktualisiert** werden, (b) ein Modul braucht **eigene Geheimnisse oder 
 sollen (Kandidat: Cloud mit Zugangsdaten und Anbieter-Adapter), (c) ein **Absturz oder Ressourcenverbrauch** eines Moduls darf den
 Orchestrator nicht beeinflussen. Die Modulschnittstelle ist so geschnitten (schmale `Deps`/`Services`, Hooks statt Kernsonderfälle, eigene
 Stores), dass ein Modul später hinter einem `ext`-Proxy herausgelöst werden könnte, ohne den Kern erneut umzubauen. **Entscheidung beim Nutzer.**
+
+
+## 29. SCTE-104/-35: Werbeblöcke kennzeichnen und ins Signal einbetten (Design 2026-10-08, UMSETZUNG.md Kapitel 37)
+
+**Ziel:** Der Playout-Automator erkennt Werbeblöcke aus der Klassifikation der Playlist-Items (`adClass`) und löst die Marker
+zeitgenau aus; der Node `omp-scte35` bringt sie als SCTE-104 in einen ANC-Flow (MXL, ST 2110-40-fähig) und als SCTE-35 in einen
+Transportstrom (UDP/SRT). Kein Herstellername, keine Gerätebindung.
+
+### 29.1 Aufgabenteilung
+
+| Ort | Aufgabe |
+|---|---|
+| `omp-playout-automation` (`adbreak.rs`) | Blockerkennung aus der Playlist, Plan der Marker (Out mit Dauer, In am Ende, Rücknahme bei Abbruch), Vorlauf (Pre-Roll). Keine Kodierung. |
+| `omp-scte35` | Kodierung (SCTE 35 `splice_info_section`, SCTE 104 `multiple_operation_message`), Zeitbezug, Ausgabewege. |
+| `omp-node-sdk` | Daten-Flow (`FlowSpec::Data`, IS-04-Format `data`, `video/smpte291`) damit der ANC-Sender in der Registry sichtbar und verbindbar ist. |
+
+### 29.2 Block-Regeln (Automator)
+- `block_start` eröffnet einen Block, `block_end` schließt ihn (inklusive); `commercial`/`promo` eröffnen einen Block, wenn keiner offen
+  ist; ein Item ohne Klasse beendet einen offenen Block (exklusive). Block-Schlüssel = ID des ersten Items.
+- Blockdauer = Summe der Item-Dauern; ist eine Dauer unbekannt (0, Live), gibt es keine Dauer im Out und kein planbares In —
+  das In folgt dann beim Wechsel auf das erste Nicht-Block-Item.
+- Out wird vom **Vorgänger** des Blocks mit `Pre-Roll` vor dessen Ende gesendet (kodiert als `inMs` = Abstand bis zum Schnitt), das
+  In vom letzten Block-Item analog. Fehlt ein Vorgänger (Block ist erstes Item, Sprung, Live-Vorgänger), kommt das Out sofort mit dem
+  ersten Block-Item (Pre-Roll 0).
+- Wird ein offener Block verlassen (Skip, Take eines anderen Items, Stop), sendet der Automator sofort ein In (Rücknahme).
+- Standard **aus** je Kanal; Parameter am Automator: `adBreakEnabled`, `adBreakTarget` (Label des `omp-scte35`-Nodes),
+  `adBreakPreRollMs` (Standard 4000). Die Marker sind synthetische Child Events (`SCTE35`, `auto: true`) und laufen durch dieselbe
+  Lebenszyklus-/Journal-/Wiederholungslogik wie manuelle.
+
+### 29.3 Zeitbezug
+Der Automator kennt den Schnittzeitpunkt (Primary-Start + Dauer) und übergibt `inMs` = Restzeit bis dahin. `omp-scte35` rechnet das auf
+(a) den **Grain-Index** des ANC-Flows (Bildraster, `get_current_index` + `inMs` → nächster Bildwechsel), (b) `pts_time` in 90 kHz
+(Uhr: MXL-TAI, sonst Systemzeit) und (c) `pre_roll_time` (ms) der 104-Nachricht. Systematische Verschiebung gegenüber dem Bild ist über
+`OMP_SCTE35_ANC_OFFSET_FRAMES` ausgleichbar.
+
+### 29.4 SCTE 104 → ANC
+- `multiple_operation_message` (`0xFFFF`, messageSize, Protokollversion 0, AS_index, message_number, DPI_PID_index, SCTE35_protocol_version 0,
+  Zeitstempel-Typ 0 = sofort, num_ops, Operationen). Operationen: `splice_request_data` 0x0101 (15 Byte: insert_type 1…5, event_id, unique_program_id,
+  pre_roll_time ms, break_duration in 1/10 s, avail_num, avails_expected, auto_return, not_an_entry), `time_signal_request_data` 0x0104
+  (pre_roll_time), `insert_segmentation_descriptor_request_data` 0x010B.
+- Abbildung auf VANC nach ST 2010: DID 0x41 / SDID 0x07, Type-2-Paket; erstes UDW = Payload Descriptor (`0x08` = ein Paket, Bit 2/1
+  Fortsetzung, Bit 0 Duplikat), danach die Nachrichtenbytes (max. 254 je Paket), 10-Bit-Wörter mit Parität.
+- ANC im MXL-Daten-Flow `video/smpte291`: Grain = RFC-8331-Nutzlast ab dem Length-Feld (Length, ANC_Count, F, reserviert, dann je Paket
+  C/Zeile/Offset/S/StreamNum, DID, SDID, DC, UDW, Prüfsumme, auf 32 Bit aufgefüllt), Grain-Größe fest 4096 Byte. Je Bild ein Grain
+  (leer, wenn nichts anliegt), damit der Flow durchgehend läuft. Wiederholung mit gesetztem Duplikat-Bit und um die Bildzeit verkürztem Pre-Roll.
+- Der Daten-Flow gehört zur Gruppe des Videos (`grouphint`), der Sender erscheint als eigener NMOS-Sender (Format `data`). Die
+  Übertragung zwischen Hosts übernimmt das 2110-/Fabrics-Gateway, soweit es Daten-Flows trägt (Lücke im Gateway wird in 37.5 geprüft und dokumentiert).
+
+### 29.5 SCTE 35 → Transportstrom
+Sidecar-Strom: PAT + PMT (Stream-Typ 0x86, PCR-PID 0x1FFF) und die `splice_info_section` auf einer festen PID (Standard 500), 188-Byte-Pakete
+mit Continuity Counter; PAT/PMT periodisch, `splice_null`-Herzschlag optional, Abschnitte mehrfach (Standard 3). Ausgabe über UDP oder SRT
+(GStreamer `appsrc ! udpsink|srtsink`). Das Einmischen in einen vorhandenen Programmstrom (Remux) ist Sache der Gegenstelle; für
+`mpegtsmux` gilt: Eigenschaft `scte-35-pid` plus Abschnitt als Ereignis (gst-mpegts) — kein Teil dieses Kapitels.
+
+### 29.6 Grenzen
+Keine Verschlüsselung, keine Komponenten-Splices, kein `splice_schedule`; Rückkanal (Empfang von 104/35 als Auslöser) nicht Teil dieses Kapitels.
+Die Byte-Layouts der 104-Operationen stützen sich auf die veröffentlichten Tabellen (SCTE 104 / ST 2010) und eine unabhängige Referenzimplementierung;
+eine Gegenprüfung mit einem realen Inserter/Injector steht aus und ist in der Doku als ungetestet vermerkt.
