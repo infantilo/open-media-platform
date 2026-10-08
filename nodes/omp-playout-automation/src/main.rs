@@ -3016,6 +3016,44 @@ fn execute_voiceover(store: &AutomationStore, child: &ChildEvent, stop: bool) ->
     first_err.map_or(Ok(()), Err)
 }
 
+/// Stellt den Downstream-Keyer des Ziel-Bildmischers auf Fill+Key des Ziel-Grafikknotens und schaltet ihn ein,
+/// damit eine gezeigte Grafik am Mischerausgang erscheint (ohne das blieb sie im OGraf-Node stehen, der Mischer
+/// kennt Fill/Key nur über den Keyer). Bestehende Einstellungen bleiben, wenn sie schon stimmen. Best effort:
+/// ein Fehler hier blockiert das Zeigen der Grafik nicht, steht aber im Log.
+fn ensure_mixer_keyer(store: &AutomationStore) {
+    let (mixer_id, gfx_label) = {
+        let st = store.state.lock().expect("lock poisoned");
+        (st.mixer_node_id.clone(), st.target_graphics_label.clone())
+    };
+    let (Some(mixer_id), false) = (mixer_id, gfx_label.is_empty()) else { return };
+    let mixer = store.proxy_client(mixer_id);
+    // keyer.inputs führt je Fill+Key-Gerät einen Eintrag, benannt nach dem Gerät des Grafikknotens.
+    let prefix = gfx_label.clone();
+    let fill = mixer.get_param("keyer.inputs").ok().and_then(|inputs| {
+        inputs.as_array()?.iter().find_map(|e| {
+            let label = e.get("label")?.as_str()?;
+            if !label.starts_with(&prefix) || label.contains("Lowres") {
+                return None;
+            }
+            e.get("senderId")?.as_str().map(str::to_string)
+        })
+    });
+    let Some(fill) = fill else {
+        eprintln!("omp-playout-automation: Keyer: Fill von „{gfx_label}\u{201c} nicht unter keyer.inputs des Mischers gefunden");
+        return;
+    };
+    if mixer.get_param("keyer.source").ok().and_then(|v| v.as_str().map(str::to_string)).as_deref() != Some(fill.as_str()) {
+        if let Err(e) = mixer.invoke("keyer.setSource", serde_json::json!({"senderId": fill})) {
+            eprintln!("omp-playout-automation: keyer.setSource fehlgeschlagen: {e}");
+        }
+    }
+    if mixer.get_param("keyer.enabled").ok().and_then(|v| v.as_bool()) != Some(true) {
+        if let Err(e) = mixer.invoke("keyer.setEnabled", serde_json::json!({"enabled": true})) {
+            eprintln!("omp-playout-automation: keyer.setEnabled fehlgeschlagen: {e}");
+        }
+    }
+}
+
 /// Führt Start oder Stopp eines Kindes aus (blockierend, `spawn_blocking`).
 /// Knoten-agnostisch: Grafik → `show`/`hide` am Grafik-Node, sonst der in
 /// `target`/`method` genannte Node-Befehl über denselben Proxy wie überall.
@@ -3033,6 +3071,7 @@ fn execute_child(
         return if stop {
             graphics.invoke("hide", serde_json::json!({})).map_err(|e| e.to_string())
         } else {
+            ensure_mixer_keyer(store);
             graphics
                 .invoke("show", serde_json::json!({"templateId": child.template_id, "data": child.data}))
                 .map_err(|e| e.to_string())
