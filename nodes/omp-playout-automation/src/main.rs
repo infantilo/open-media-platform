@@ -199,6 +199,8 @@ enum Transition {
     #[default]
     Cut,
     Mix,
+    /// V-Fade: das ausgehende Bild blendet auf Schwarz, dann blendet das neue auf (Mixer-Art `vfade`).
+    VFade,
     /// Ausgehendes Bild blendet auf Schwarz, dann steht das neue hart da (Mixer-Art `fadecut`).
     FadeCut,
     /// Hart auf Schwarz, das neue Bild blendet auf (Mixer-Art `cutfade`).
@@ -210,6 +212,7 @@ impl Transition {
         match s {
             "cut" => Some(Self::Cut),
             "mix" => Some(Self::Mix),
+            "vfade" | "v-fade" => Some(Self::VFade),
             "fadecut" | "fade-cut" => Some(Self::FadeCut),
             "cutfade" | "cut-fade" => Some(Self::CutFade),
             _ => None,
@@ -2530,10 +2533,11 @@ fn take_on_targets(
                 .invoke("crosspoint.cut", at_args(serde_json::json!({})))
                 .map_err(|e| format!("Mixer-crosspoint.cut fehlgeschlagen: {e}"))?;
         }
-        Transition::Mix | Transition::FadeCut | Transition::CutFade => {
+        Transition::Mix | Transition::VFade | Transition::FadeCut | Transition::CutFade => {
             // Art vor jeder Rampe setzen: der Mixer behält sie, ein späteres Mix-Event darf nicht in der
             // Art des vorigen Fade-Events laufen.
             let kind = match transition {
+                Transition::VFade => "vfade",
                 Transition::FadeCut => "fadecut",
                 Transition::CutFade => "cutfade",
                 _ => "mix",
@@ -5997,6 +6001,9 @@ mod patch_tests {
     fn fade_transitions_parse_and_serialize_by_name() {
         assert_eq!(Transition::parse("fadecut"), Some(Transition::FadeCut));
         assert_eq!(Transition::parse("fade-cut"), Some(Transition::FadeCut));
+        assert_eq!(Transition::parse("vfade"), Some(Transition::VFade));
+        assert_eq!(Transition::parse("v-fade"), Some(Transition::VFade));
+        assert_eq!(serde_json::to_value(Transition::VFade).unwrap(), "vfade");
         assert_eq!(Transition::parse("cutfade"), Some(Transition::CutFade));
         assert_eq!(Transition::parse("cut-fade"), Some(Transition::CutFade));
         assert_eq!(Transition::parse("nope"), None);

@@ -1258,6 +1258,7 @@ Live-Quelle im Wechsel, mit den Übergängen Cut, Fade-Cut und Cut-Fade. Sie ble
 |---|---|
 | Cut | harter Schnitt |
 | Mix | Überblendung (Dauer in Frames einstellbar) |
+| V-Fade | das bisherige Bild blendet über Schwarz aus, danach blendet das neue auf (Dauer in Frames einstellbar) |
 | Fade-Cut | das bisherige Bild blendet über die Dauer auf Schwarz, danach steht das neue hart da |
 | Cut-Fade | hart auf Schwarz, das neue Bild blendet über die Dauer auf |
 
@@ -1291,6 +1292,14 @@ Szene aktiv (**— nur manuell —** schaltet das ab). Freie Mehrfach-Zuordnunge
 - **Leistung:** Die Medien-Nodes laufen als Release-Build (`make nodes`), das Programmformat ist 720p25. Gemessen beim Kanal-Player mit einer 1080i-MPEG-2-Datei: Release spart nur etwa 5 % gegenüber Debug, weil die Arbeit in GStreamers C-Code läuft; 720p statt 1080p etwa 15 %. Den größten Teil kostet die Dekodierung des 1080i-Materials samt Deinterlacing. Mit der Umgebungsvariable `OMP_DEINTERLACE_METHOD` (`greedyh` Standard, `linear` oder `vfir` sparen rund ein Viertel der Rechenzeit) lässt sich die Methode ändern.
 - Läuft die Automation auf einem anderen Host als der Player, liest die Dateiauswahl die Dateien des
   Players (Kanal A); die Datei muss dort unter `OMP_MEDIA_DIR` liegen.
+
+## 10d-2. Demo-Kanal „ORF1“ mit den ORF-Audioprogrammgruppen
+
+`python3 tools/demo-orf1/setup.py --start` (bei vorhandener Demo zusätzlich `--recreate`) legt den Workflow **ORF1 Playout**, den Channel **ORF1** und eine Beispiel-Playlist an (Sendungskennung mit Uhr, Magazin-Clip, Live-Schalte mit Lower Third, zwei Werbeblöcke, Trailer).
+
+Am **Tonmischer** entstehen vier Ausgänge (Gruppen-Busse, je ein eigener Sender): **Stereo Programmton**, **5.1 Programmton**, **Stereo Originalton**, **Stereo Audiodescription**. Je Gruppe und Kanal-Player gibt es einen Kanalzug (Quelle = Gruppen-Sender des Players, folgt dem Bild, nicht auf dem Master) — im Programm hörbar ist immer nur der Player, der gerade sendet. Der Magazin-Clip `ORF-Demo-12ch.mxf` hat 12 Spuren (je Spur ein eigener Ton) und nutzt die Zuordnung **„ORF komplett“**: Spuren 1–2 Stereo-PT, 3–8 5.1-PT, 9–10 Stereo-OT, 11–12 Stereo-AD.
+
+Die Gruppennamen und die Zuordnung „ORF komplett“ stehen in **Admin → Audio-Ausgabe** (globale Einstellung; die Gruppen „Dolby E“ bleibt unverändert vorhanden, wird im Demo-Mischer aber nicht verwendet).
 
 ## 10e. Cloud-Ressourcen, Kosten und Autoscaling
 

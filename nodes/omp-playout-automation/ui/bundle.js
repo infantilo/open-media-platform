@@ -167,6 +167,8 @@ const T = (() => {
       "ed.liveSource": "Live-Quelle",
       "ed.chooseSource": "— Quelle wählen —",
       "ed.reqTags": "Pflicht-Tags",
+      "ed.resolvedTo": "Aufgelöst zu",
+      "ed.tagHint": "Die Quelle wird über Tags gewählt (Tags einer Quelle setzt du in der Quellenverwaltung). Für eine bestimmte Quelle aus der Liste oben bei „Typ“ „Live-Quelle“ wählen.",
       "ed.tagsPh": "z. B. video.camera, role.program",
       "ed.preferred": "bevorzugt",
       "ed.optional": "optional",
@@ -195,6 +197,7 @@ const T = (() => {
       "ed.rampPh": "Frames 1–250, leer = Mixer-Rate",
       "ed.transition": "Übergang",
       "ed.trMix": "⇄ Mix (Auto-Trans am Mixer)",
+      "ed.trVfade": "◐◑ V-Fade (ausblenden auf Schwarz, dann aufblenden)",
       "ed.trFadecut": "◐✂ Fade-Cut (ausblenden auf Schwarz, dann hart)",
       "ed.trCutfade": "✂◑ Cut-Fade (hart auf Schwarz, dann aufblenden)",
       "ed.audioMapping": "Audio-Zuordnung",
@@ -436,6 +439,8 @@ const T = (() => {
       "ed.liveSource": "Live source",
       "ed.chooseSource": "— choose source —",
       "ed.reqTags": "Required tags",
+      "ed.resolvedTo": "Resolved to",
+      "ed.tagHint": "The source is chosen by tags (set a source's tags in the source management). To pick a specific source from a list, choose the type \"Live source\" above.",
       "ed.tagsPh": "e.g. video.camera, role.program",
       "ed.preferred": "preferred",
       "ed.optional": "optional",
@@ -464,6 +469,7 @@ const T = (() => {
       "ed.rampPh": "Frames 1–250, empty = mixer rate",
       "ed.transition": "Transition",
       "ed.trMix": "⇄ Mix (auto-trans on the mixer)",
+      "ed.trVfade": "◐◑ V-Fade (fade to black, then fade in)",
       "ed.trFadecut": "◐✂ Fade-cut (fade to black, then hard)",
       "ed.trCutfade": "✂◑ Cut-fade (hard to black, then fade in)",
       "ed.audioMapping": "Audio mapping",
@@ -640,7 +646,7 @@ function h(tag, attrs, ...kids) {
   return el;
 }
 
-const TRANSITION_LABEL = { cut: "Cut", mix: "Mix", fadecut: "Fade-Cut", cutfade: "Cut-Fade" };
+const TRANSITION_LABEL = { cut: "Cut", mix: "Mix", vfade: "V-Fade", fadecut: "Fade-Cut", cutfade: "Cut-Fade" };
 const fmtMs = (ms) => {
   const s = Math.floor(ms / 1000);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
@@ -1484,6 +1490,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           case "liveselect":
             f.append(...field(T("ed.reqTags"), bindText(d, "tags", { placeholder: T("ed.tagsPh") })));
             f.append(...field(T("ed.preferred"), bindText(d, "pref", { placeholder: T("ed.optional") })));
+            f.append(...field(T("ed.resolvedTo"), h("span", { text: item?.resolvedLabel || T("noSource") })));
+            f.append(h("div", { class: "hint", text: T("ed.tagHint") }));
             break;
           case "jump":
             f.append(...field(T("ed.jumpTarget"), bindSelect(d, "jumpTarget", [["", T("ed.chooseEvent")], ...items.filter((x) => x.eventType !== "JUMP" && x.id !== item?.id).map((x) => [x.id, `${items.indexOf(x) + 1}. ${x.label}`])])));
@@ -1516,7 +1524,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         const rate = bindText(d, "rateFrames", { placeholder: T("ed.rampPh") });
         const rateRow = field(T("ed.ramp"), rate);
         const syncT = () => { rateRow.forEach((e) => { e.style.display = d.transition && d.transition !== "cut" ? "" : "none"; }); };
-        f.append(...field(T("ed.transition"), bindSelect(d, "transition", [["cut", "✂ Cut"], ["mix", T("ed.trMix")], ["fadecut", T("ed.trFadecut")], ["cutfade", T("ed.trCutfade")]], syncT)));
+        f.append(...field(T("ed.transition"), bindSelect(d, "transition", [["cut", "✂ Cut"], ["mix", T("ed.trMix")], ["vfade", T("ed.trVfade")], ["fadecut", T("ed.trFadecut")], ["cutfade", T("ed.trCutfade")]], syncT)));
         f.append(...rateRow);
         syncT();
         return f;
