@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/asrun"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	"log/slog"
 	"net/http"
 	"time"
@@ -45,6 +46,8 @@ type handlerOptions struct {
 	locations       LocationStore
 	cloud           CloudCosts
 	cloudControl    CloudControl
+	modules         *module.Registry
+	moduleDeps      module.Deps
 	cloudProvider   string
 	cloudRegion     string
 	triggerRouter   ChannelTriggerService

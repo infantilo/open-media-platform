@@ -78,7 +78,11 @@ Die Registry bietet: doppelte Namen ablehnen, Module in fester Reihenfolge laden
 (`OMP_MODULES_DISABLE=cloud,playout`), und den Start nicht still scheitern lassen (fehlerhaftes Modul → deutliche Meldung,
 Kern läuft weiter).
 
-## 5. Offene Fragen an den Nutzer (vor 36.2)
+## 5. Entscheidungen des Nutzers (2026-10-09)
+
+1. **404** für ein deaktiviertes Modul, der Tab fehlt. 2. Kernmigrationen `0032…0040` bleiben unangetastet im Kern, neue Modulmigrationen im Modul. 3. Automations-Ziele über einen **Hook** „Start-Umgebung einer Rolle ergänzen“ (36.5).
+
+Ursprüngliche Fragen (zur Nachvollziehbarkeit):
 
 1. **Abschalten:** Soll ein deaktiviertes Modul **keine** Routen registrieren (heute bei Playout so, bei Cloud antworten die
    Routen mit „nicht konfiguriert“) — oder soll die Schnittstelle bewusst 404 liefern? Vorschlag: einheitlich 404 und der Tab

@@ -338,24 +338,28 @@
     "method": "GET",
     "path": "/api/v1/audio-rules",
     "auth": "auth",
+    "when": "module:audio-rules",
     "domain": "audio-rules"
   },
   {
     "method": "PUT",
     "path": "/api/v1/audio-rules",
     "auth": "verb:Admin",
+    "when": "module:audio-rules",
     "domain": "audio-rules"
   },
   {
     "method": "GET",
     "path": "/api/v1/audio-rules/default",
     "auth": "auth",
+    "when": "module:audio-rules",
     "domain": "audio-rules"
   },
   {
     "method": "POST",
     "path": "/api/v1/audio-rules/simulate",
     "auth": "auth",
+    "when": "module:audio-rules",
     "domain": "audio-rules"
   },
   {
@@ -428,78 +432,91 @@
     "method": "GET",
     "path": "/api/v1/cloud/costs",
     "auth": "auth",
+    "when": "module:cloud",
     "domain": "cloud"
   },
   {
     "method": "POST",
     "path": "/api/v1/cloud/estimate",
     "auth": "auth",
+    "when": "module:cloud",
     "domain": "cloud"
   },
   {
     "method": "GET",
     "path": "/api/v1/cloud/hosts",
     "auth": "auth",
+    "when": "module:cloud",
     "domain": "cloud"
   },
   {
     "method": "POST",
     "path": "/api/v1/cloud/hosts/{id}/release",
     "auth": "verb:Admin",
+    "when": "module:cloud",
     "domain": "cloud"
   },
   {
     "method": "GET",
     "path": "/api/v1/cloud/policies",
     "auth": "auth",
+    "when": "module:cloud",
     "domain": "cloud"
   },
   {
     "method": "PUT",
     "path": "/api/v1/cloud/policies/{pool}",
     "auth": "verb:Admin",
+    "when": "module:cloud",
     "domain": "cloud"
   },
   {
     "method": "GET",
     "path": "/api/v1/cloud/pricing",
     "auth": "auth",
+    "when": "module:cloud",
     "domain": "cloud"
   },
   {
     "method": "GET",
     "path": "/api/v1/cloud/reservations",
     "auth": "auth",
+    "when": "module:cloud",
     "domain": "cloud"
   },
   {
     "method": "POST",
     "path": "/api/v1/cloud/reservations",
     "auth": "verb:Admin",
+    "when": "module:cloud",
     "domain": "cloud"
   },
   {
     "method": "DELETE",
     "path": "/api/v1/cloud/reservations/{id}",
     "auth": "verb:Admin",
+    "when": "module:cloud",
     "domain": "cloud"
   },
   {
     "method": "GET",
     "path": "/api/v1/cloud/suggestions",
     "auth": "auth",
+    "when": "module:cloud",
     "domain": "cloud"
   },
   {
     "method": "DELETE",
     "path": "/api/v1/cloud/suggestions/{id}",
     "auth": "verb:Admin",
+    "when": "module:cloud",
     "domain": "cloud"
   },
   {
     "method": "POST",
     "path": "/api/v1/cloud/suggestions/{id}/accept",
     "auth": "verb:Admin",
+    "when": "module:cloud",
     "domain": "cloud"
   },
   {
@@ -963,126 +980,126 @@
     "method": "GET",
     "path": "/api/v1/playout/channels",
     "auth": "auth",
-    "when": "options.playout != nil",
+    "when": "module:playout",
     "domain": "playout"
   },
   {
     "method": "POST",
     "path": "/api/v1/playout/channels",
     "auth": "verb:Configure",
-    "when": "options.playout != nil",
+    "when": "module:playout",
     "domain": "playout"
   },
   {
     "method": "DELETE",
     "path": "/api/v1/playout/channels/{id}",
     "auth": "verb:Configure",
-    "when": "options.playout != nil",
+    "when": "module:playout",
     "domain": "playout"
   },
   {
     "method": "GET",
     "path": "/api/v1/playout/channels/{id}",
     "auth": "auth",
-    "when": "options.playout != nil",
+    "when": "module:playout",
     "domain": "playout"
   },
   {
     "method": "PUT",
     "path": "/api/v1/playout/channels/{id}",
     "auth": "verb:Configure",
-    "when": "options.playout != nil",
+    "when": "module:playout",
     "domain": "playout"
   },
   {
     "method": "GET",
     "path": "/api/v1/playout/channels/{id}/as-run",
     "auth": "verb:View",
-    "when": "options.playout != nil \u0026\u0026 options.asrun != nil",
+    "when": "module:playout",
     "domain": "playout"
   },
   {
     "method": "POST",
     "path": "/api/v1/playout/channels/{id}/as-run",
     "auth": "auth",
-    "when": "options.playout != nil \u0026\u0026 options.asrun != nil",
+    "when": "module:playout",
     "domain": "playout"
   },
   {
     "method": "POST",
     "path": "/api/v1/playout/channels/{id}/executions",
     "auth": "auth",
-    "when": "options.playout != nil",
+    "when": "module:playout",
     "domain": "playout"
   },
   {
     "method": "POST",
     "path": "/api/v1/playout/channels/{id}/materialize",
     "auth": "auth",
-    "when": "options.playout != nil \u0026\u0026 options.preflight != nil",
+    "when": "module:playout",
     "domain": "playout"
   },
   {
     "method": "POST",
     "path": "/api/v1/playout/channels/{id}/preflight",
     "auth": "auth",
-    "when": "options.playout != nil \u0026\u0026 options.preflight != nil",
+    "when": "module:playout",
     "domain": "playout"
   },
   {
     "method": "GET",
     "path": "/api/v1/playout/channels/{id}/state",
     "auth": "auth",
-    "when": "options.playout != nil",
+    "when": "module:playout",
     "domain": "playout"
   },
   {
     "method": "PUT",
     "path": "/api/v1/playout/channels/{id}/state",
     "auth": "auth",
-    "when": "options.playout != nil",
+    "when": "module:playout",
     "domain": "playout"
   },
   {
     "method": "POST",
     "path": "/api/v1/playout/channels/{id}/trigger-ack",
     "auth": "auth",
-    "when": "options.playout != nil \u0026\u0026 options.triggerRouter != nil \u0026\u0026 options.triggerStore != nil",
+    "when": "module:playout",
     "domain": "playout"
   },
   {
     "method": "POST",
     "path": "/api/v1/playout/channels/{id}/triggers",
     "auth": "auth",
-    "when": "options.playout != nil \u0026\u0026 options.triggerRouter != nil \u0026\u0026 options.triggerStore != nil",
+    "when": "module:playout",
     "domain": "playout"
   },
   {
     "method": "GET",
     "path": "/api/v1/playout/trigger-rules",
     "auth": "verb:View",
-    "when": "options.playout != nil \u0026\u0026 options.triggerRouter != nil \u0026\u0026 options.triggerStore != nil",
+    "when": "module:playout",
     "domain": "playout"
   },
   {
     "method": "POST",
     "path": "/api/v1/playout/trigger-rules",
     "auth": "verb:Configure",
-    "when": "options.playout != nil \u0026\u0026 options.triggerRouter != nil \u0026\u0026 options.triggerStore != nil",
+    "when": "module:playout",
     "domain": "playout"
   },
   {
     "method": "DELETE",
     "path": "/api/v1/playout/trigger-rules/{id}",
     "auth": "verb:Configure",
-    "when": "options.playout != nil \u0026\u0026 options.triggerRouter != nil \u0026\u0026 options.triggerStore != nil",
+    "when": "module:playout",
     "domain": "playout"
   },
   {
     "method": "GET",
     "path": "/api/v1/playout/triggers",
     "auth": "verb:View",
-    "when": "options.playout != nil \u0026\u0026 options.triggerRouter != nil \u0026\u0026 options.triggerStore != nil",
+    "when": "module:playout",
     "domain": "playout"
   },
   {

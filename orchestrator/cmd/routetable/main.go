@@ -80,9 +80,75 @@ func authOf(fset *token.FileSet, h ast.Expr) string {
 	return "custom:" + expr(fset, call.Fun)
 }
 
-func collect(dir string) ([]Route, error) {
+// moduleAuthOf erkennt die Rechtepflicht einer Modulroute (`r.Handle(pattern, module.Verb(authz.VerbAdmin), h)`).
+func moduleAuthOf(fset *token.FileSet, e ast.Expr) (string, bool) {
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return "", false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	if id, ok := sel.X.(*ast.Ident); !ok || id.Name != "module" {
+		return "", false
+	}
+	verb := ""
+	if len(call.Args) > 0 {
+		verb = strings.TrimPrefix(expr(fset, call.Args[0]), "authz.Verb")
+	}
+	switch sel.Sel.Name {
+	case "Anonymous":
+		return "none", true
+	case "Authenticated":
+		return "auth", true
+	case "Verb":
+		return "verb:" + verb, true
+	case "VerbOnNode":
+		return "node-verb:" + verb, true
+	}
+	return "", false
+}
+
+// collect liest die Routen aus allen Verzeichnissen (Komma-getrennt; fehlende Verzeichnisse werden übersprungen).
+func collect(dirs string) ([]Route, error) {
+	var all []Route
+	for _, dir := range strings.Split(dirs, ",") {
+		if _, err := os.Stat(dir); err != nil {
+			continue
+		}
+		rs, err := collectDir(dir)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, rs...)
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].Path != all[j].Path {
+			return all[i].Path < all[j].Path
+		}
+		return all[i].Method < all[j].Method
+	})
+	return all, nil
+}
+
+func collectDir(dir string) ([]Route, error) {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
+	var pkgs = map[string]*ast.Package{}
+	// rekursiv: Module liegen in Unterverzeichnissen (internal/modules/<name>)
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return err
+		}
+		ps, err := parser.ParseDir(fset, path, func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
+		if err != nil {
+			return err
+		}
+		for n, p := range ps {
+			pkgs[path+"::"+n] = p
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -111,6 +177,22 @@ func collect(dir string) ([]Route, error) {
 						if !ok || (sel.Sel.Name != "HandleFunc" && sel.Sel.Name != "Handle") {
 							return true
 						}
+						// Modulroute: <routes>.Handle("METHOD /pfad", module.Authenticated(), handler)
+						if sel.Sel.Name == "Handle" && len(v.Args) == 3 {
+							if lit, ok := v.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+								if a, ok := moduleAuthOf(fset, v.Args[1]); ok {
+									pattern, _ := strconv.Unquote(lit.Value)
+									method, path := "ANY", pattern
+									if i := strings.Index(pattern, " "); i > 0 {
+										method, path = pattern[:i], pattern[i+1:]
+									}
+									pos := fset.Position(v.Pos())
+									routes = append(routes, Route{Method: method, Path: path, Auth: a, Domain: domainOf(path),
+										Source: fmt.Sprintf("%s:%d", filepath.Base(fname), pos.Line)})
+									return true
+								}
+							}
+						}
 						if id, ok := sel.X.(*ast.Ident); !ok || id.Name != "mux" || len(v.Args) < 2 {
 							return true
 						}
@@ -136,12 +218,13 @@ func collect(dir string) ([]Route, error) {
 			walk(f)
 		}
 	}
-	sort.Slice(routes, func(i, j int) bool {
-		if routes[i].Path != routes[j].Path {
-			return routes[i].Path < routes[j].Path
+	// Registrierungsbedingungen der Domänen-Routen sind Kernwissen über einzelne Stores (`options.playout != nil`) und
+	// ändern sich beim Umzug in ein Modul zwangsläufig; vergleichbar ist nur "Modul der Domäne ist aktiv".
+	for i := range routes {
+		if routes[i].Domain != "core" {
+			routes[i].When = "module:" + routes[i].Domain
 		}
-		return routes[i].Method < routes[j].Method
-	})
+	}
 	return routes, nil
 }
 
@@ -151,7 +234,7 @@ func key(r Route) string {
 }
 
 func main() {
-	dir := flag.String("dir", "internal/httpapi", "Verzeichnis mit den Routenregistrierungen")
+	dir := flag.String("dir", "internal/httpapi,internal/modules", "Verzeichnisse (Komma-getrennt, rekursiv) mit den Routenregistrierungen")
 	check := flag.String("check", "", "Golden-Datei: Abweichung → Exit 1")
 	strip := flag.Bool("strip-source", false, "Fundstellen weglassen (für die Golden-Datei)")
 	flag.Parse()
