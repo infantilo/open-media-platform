@@ -1,4 +1,4 @@
-package httpapi
+package audiorules
 
 import (
 	"bytes"
@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 )
 
 // Dynamische Audio-Zuordnung (docs/ENTWURF-AUDIO-REGELN.md, A2): ein
@@ -119,10 +119,10 @@ var (
 
 // handleGetAudioRules: für jeden authentifizierten Nutzer lesbar; Nodes holen
 // das Dokument beim Start per Service-Token. Ohne gespeicherten Stand: Standardwerte.
-func handleGetAudioRules(store NodeSettingsStore) http.HandlerFunc {
+func handleGetAudioRules(store module.NodeSettings) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		data, err := store.Get(audioRulesKey)
-		if errors.Is(err, launcher.ErrNodeSettingsNotFound) {
+		if errors.Is(err, module.ErrNotFound) {
 			data = defaultAudioRulesJSON
 		} else if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -145,7 +145,7 @@ func handleGetAudioRulesDefault() http.HandlerFunc {
 
 // handlePutAudioRules ersetzt das gesamte Dokument (admin-only, expliziter
 // Ganz-Speichern-Vorgang) nach Validierung.
-func handlePutAudioRules(store NodeSettingsStore) http.HandlerFunc {
+func handlePutAudioRules(store module.NodeSettings) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var doc audioRulesDoc
 		dec := json.NewDecoder(r.Body)
@@ -427,4 +427,10 @@ func handleSimulateAudioRules() http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(out.Bytes())
 	}
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
 }

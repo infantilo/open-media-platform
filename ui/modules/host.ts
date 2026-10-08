@@ -11,6 +11,7 @@ interface Host {
   showToast(message: string): void;
   dateLocale(): string;
   getLang(): "de" | "en";
+  confirmDialog(message: string, opts?: { confirmLabel?: string }): Promise<boolean>;
 }
 
 function host(): Host {
@@ -26,3 +27,4 @@ export const whoami = () => host().whoami();
 export const showToast = (message: string): void => host().showToast(message);
 export const dateLocale = (): string => host().dateLocale();
 export const getLang = (): "de" | "en" => host().getLang();
+export const confirmDialog = (message: string, opts?: { confirmLabel?: string }): Promise<boolean> => host().confirmDialog(message, opts);

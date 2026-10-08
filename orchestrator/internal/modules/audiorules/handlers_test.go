@@ -1,4 +1,4 @@
-package httpapi
+package audiorules
 
 import (
 	"encoding/json"
@@ -8,18 +8,18 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 )
 
-type memSettings struct{ m map[string]json.RawMessage }
+type memSettings struct{ m map[string][]byte }
 
-func (s *memSettings) Get(k string) (json.RawMessage, error) {
+func (s *memSettings) Get(k string) ([]byte, error) {
 	if v, ok := s.m[k]; ok {
 		return v, nil
 	}
-	return nil, launcher.ErrNodeSettingsNotFound
+	return nil, module.ErrNotFound
 }
-func (s *memSettings) Put(k string, v json.RawMessage) error { s.m[k] = v; return nil }
+func (s *memSettings) Put(k string, v []byte) error { s.m[k] = v; return nil }
 
 func TestDefaultAudioRulesDocumentIsValid(t *testing.T) {
 	var d audioRulesDoc
@@ -37,7 +37,7 @@ func TestDefaultAudioRulesDocumentIsValid(t *testing.T) {
 }
 
 func TestAudioRulesGetPutRoundtrip(t *testing.T) {
-	store := &memSettings{m: map[string]json.RawMessage{}}
+	store := &memSettings{m: map[string][]byte{}}
 	rec := httptest.NewRecorder()
 	handleGetAudioRules(store)(rec, httptest.NewRequest("GET", "/", nil))
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "surround51") {

@@ -1,4 +1,4 @@
-import { t as tt } from "./i18n.ts";
+import { t as tt } from "../host.ts";
 // Audio-Ausgabe (Kapitel 27 / A5): Datenmodell des Dokuments `audio-rules` (Wire-Format identisch zu
 // orchestrator/internal/httpapi/audio_rules_handlers.go bzw. Rust-Crate `omp-audio-rules`) und die reine
 // Logik des Editors (ohne DOM, deshalb testbar).

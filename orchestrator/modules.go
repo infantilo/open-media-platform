@@ -3,18 +3,20 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/cluster"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
+	audiorulesmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/audiorules"
 	cloudmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/cloud"
 )
 
 // registerModules meldet die Module des Orchestrators an (UMSETZUNG.md Kapitel 36). Cloud ist umgezogen (36.6);
 // Audio-Ausgabe (36.7) und Playout (36.8) folgen.
 func registerModules(reg *module.Registry) {
-	for _, m := range []module.Module{cloudmod.New()} {
+	for _, m := range []module.Module{cloudmod.New(), audiorulesmod.New()} {
 		if err := reg.Register(m); err != nil {
 			slog.Error("module registration failed", "module", m.Name(), "error", err)
 		}
@@ -26,6 +28,9 @@ type moduleSettings struct{ s *launcher.NodeSettingsStore }
 
 func (m moduleSettings) Get(key string) ([]byte, error) {
 	b, err := m.s.Get(key)
+	if errors.Is(err, launcher.ErrNodeSettingsNotFound) {
+		return nil, module.ErrNotFound
+	}
 	return []byte(b), err
 }
 func (m moduleSettings) Put(key string, data []byte) error {

@@ -131,7 +131,7 @@ mod tests {
     /// `OMP_UPDATE_DEFAULTS=1 cargo test -p omp-audio-rules defaults_json` schreibt die Datei neu.
     #[test]
     fn defaults_json_in_sync_with_orchestrator() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../orchestrator/internal/httpapi/audio_rules_default.json");
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../orchestrator/internal/modules/audiorules/audio_rules_default.json");
         let current = serde_json::to_string_pretty(&default_settings()).unwrap() + "\n";
         if std::env::var("OMP_UPDATE_DEFAULTS").is_ok() {
             std::fs::write(path, &current).unwrap();

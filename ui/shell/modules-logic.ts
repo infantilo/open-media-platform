@@ -5,6 +5,8 @@ export interface ModuleUITab {
   placement: string;
   after?: string;
   label: Record<string, string>;
+  /** Beschriftung der Admin-Gruppe (nur bei Placement "admin:<gruppe>"). */
+  group?: Record<string, string>;
   element: string;
   bundle: string;
 }
@@ -60,4 +62,43 @@ export function insertIndex(existingIds: string[], after: string | undefined): n
   }
   const admin = existingIds.indexOf("admin");
   return admin >= 0 ? admin : existingIds.length;
+}
+
+/** Ein Untertab der Administration, der aus einem Modul stammt. */
+export interface AdminModuleTab {
+  id: string;
+  module: string;
+  label: string;
+  element: string;
+  bundle: string;
+}
+
+export interface AdminModuleGroup {
+  id: string;
+  label: string;
+  tabs: AdminModuleTab[];
+}
+
+/**
+ * Admin-Untertabs aus dem Manifest, nach Gruppe zusammengefasst (Placement `admin:<gruppe>`). Nur gemountete Module zählen; die
+ * Gruppenbeschriftung stammt vom ersten Tab, der eine liefert (sonst die Gruppen-ID). Reihenfolge = Reihenfolge im Manifest.
+ */
+export function adminGroups(modules: ModuleInfo[], lang: string): AdminModuleGroup[] {
+  const groups = new Map<string, AdminModuleGroup>();
+  for (const m of modules) {
+    if (m.state !== "mounted") continue;
+    for (const u of m.ui ?? []) {
+      if (!u.placement.startsWith("admin:") || !u.element || !u.bundle) continue;
+      const gid = u.placement.slice("admin:".length);
+      if (!gid) continue;
+      let g = groups.get(gid);
+      if (!g) {
+        g = { id: gid, label: gid, tabs: [] };
+        groups.set(gid, g);
+      }
+      if (u.group && g.label === gid) g.label = pickLabel(u.group, lang, gid);
+      g.tabs.push({ id: `mod:${m.name}:${u.id}`, module: m.name, label: pickLabel(u.label, lang, u.id), element: u.element, bundle: u.bundle });
+    }
+  }
+  return [...groups.values()];
 }

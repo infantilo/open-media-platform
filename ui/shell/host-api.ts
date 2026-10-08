@@ -5,6 +5,7 @@ import { apiFetch } from "./connection.ts";
 import { whoami } from "./auth.ts";
 import { showToast } from "../kit/omp-toast.ts";
 import { addMessages, dateLocale, getLang, tLoose } from "./i18n.ts";
+import { confirmDialog } from "../kit/omp-confirm.ts";
 
 export interface HostApi {
   t: typeof tLoose;
@@ -14,8 +15,9 @@ export interface HostApi {
   showToast: typeof showToast;
   dateLocale: typeof dateLocale;
   getLang: typeof getLang;
+  confirmDialog: typeof confirmDialog;
 }
 
 export function exposeHostApi(): void {
-  (globalThis as unknown as { __omp: HostApi }).__omp = { t: tLoose, addMessages, apiFetch, whoami, showToast, dateLocale, getLang };
+  (globalThis as unknown as { __omp: HostApi }).__omp = { t: tLoose, addMessages, apiFetch, whoami, showToast, dateLocale, getLang, confirmDialog };
 }

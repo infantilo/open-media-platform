@@ -6,9 +6,7 @@
 // Schaltflächen (Zeile hinzufügen/löschen) zeichnen neu. Der Server prüft das Dokument erneut und
 // liefert Fehler zeilenweise zurück.
 
-import { t as tt } from "./i18n.ts";
-import { apiFetch } from "./connection.ts";
-import { confirmDialog } from "../kit/omp-confirm.ts";
+import { apiFetch, confirmDialog, t as tt } from "../host.ts";
 import {
   type Action, actionKind, type AudioRulesDoc, channelNames, cleanDoc, hasBitExact, joinTags, knownTags, LAYOUTS, type Mapping, monoTracks, moveItem,
   newRule, chainParam, planRows, simulatedSource, type AudioPlan, setChainParam, parseSourceText, parseTags, type Rule, setBitExact, type SourceSpec, sourceText, specSummary, toggleTrack, trackRowCount, type TrackSchema,

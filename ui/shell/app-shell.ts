@@ -23,8 +23,8 @@ import "./admin-view.ts";
 import { apiFetch, type ConnectionChangeDetail, type ConnectionState, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
 import { buildLangSelect, getLang, type I18nKey, t, t as tt } from "./i18n.ts";
-import { exposeHostApi } from "./host-api.ts";
-import { insertIndex, mainTabs, type ModuleInfo } from "./modules-logic.ts";
+import { ensureBundle, getModules } from "./modules-registry.ts";
+import { insertIndex, mainTabs } from "./modules-logic.ts";
 
 // Kern-Tabs haben feste IDs; Modul-Tabs `mod:<modul>:<tab>` (Kapitel 36.3).
 type TabId = string;
@@ -212,19 +212,12 @@ class AppShell extends HTMLElement {
   // Administration-Tab bleibt immer der letzte (#loadAdminTab hängt ihn an; Modul-Tabs werden davor eingefügt).
   async #loadModuleTabs() {
     try {
-      exposeHostApi();
-      const res = await apiFetch("/api/v1/modules");
-      if (!res.ok) return;
-      const tabs = mainTabs((await res.json()) as ModuleInfo[], getLang());
+      const tabs = mainTabs(await getModules(), getLang());
       for (const mt of tabs) {
         if (this.#tabs.some((x) => x.id === mt.id)) continue;
         const def: TabDef = { id: mt.id, label: mt.label, element: mt.element, bundle: mt.bundle };
-        try {
-          await import(/* webpackIgnore: true */ mt.bundle);
-        } catch (e) {
-          def.bundleError = String(e);
-          console.warn(`module ${mt.module}: bundle ${mt.bundle} failed to load`, e);
-        }
+        const err = await ensureBundle(mt.bundle);
+        if (err) def.bundleError = err;
         const at = insertIndex(this.#tabs.map((x) => x.id), mt.after);
         this.#tabs.splice(at, 0, def);
         const btn = this.#buildTabButton(def);

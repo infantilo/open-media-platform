@@ -122,3 +122,11 @@ Automations-Ziele und den Typ `omp-playout-automation` an; die Ableitung selbst 
 - **Rechtepflicht je Route ausschreiben** (`module.Verb(authz.VerbAdmin)` inline statt über eine Variable) — der Golden-Test liest sie so.
 - **Abschalten wirkt wie gewünscht:** Routen 404, Tab weg, Kern unberührt. Ein Modul ohne Konfiguration (kein Anbieter) bleibt gemountet
   und antwortet `configured:false` — der Unterschied „deaktiviert“ (404) gegen „nicht konfiguriert“ (Hinweis) ist bewusst.
+
+## 9. Audio-Ausgabe als Modul (36.7, umgesetzt)
+
+- **Admin-Untertabs:** Ein Modul liefert `placement: "admin:<gruppe>"` plus Gruppenbeschriftung; die Administration fügt den Tab in die
+  Kern-Gruppe gleicher ID ein oder legt eine neue Gruppe an. Fehlt das Modul, fehlt der Tab.
+- **Einstellungsspeicher:** Module sprechen den generischen Schlüssel/Wert-Speicher über `module.NodeSettings` an und kennen weder
+  `launcher` noch `httpapi`; „nie gespeichert“ ist `module.ErrNotFound`.
+- **Ladereihenfolge im Bundle:** Texte zuerst anmelden (`register.ts`), dann View/Logik importieren.

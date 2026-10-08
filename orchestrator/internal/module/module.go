@@ -9,6 +9,7 @@ package module
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"net/http"
 	"time"
@@ -55,6 +56,8 @@ type UITab struct {
 	After string `json:"after,omitempty"`
 	// Label: Beschriftung je Sprache ("de", "en"); fehlt die aktuelle Sprache, gilt "de", dann die ID.
 	Label map[string]string `json:"label"`
+	// Group: Beschriftung der Admin-Gruppe (nur bei Placement "admin:<gruppe>"); Module derselben Gruppe dürfen sie wiederholen.
+	Group map[string]string `json:"group,omitempty"`
 	// Element: Name des Custom Elements, das das Bundle registriert. Bundle: URL des ESM-Bundles.
 	Element string `json:"element"`
 	Bundle  string `json:"bundle"`
@@ -106,6 +109,9 @@ type Routes interface {
 type DomainAudit interface {
 	Log(actor, objectType, objectID, action string, details map[string]any)
 }
+
+// ErrNotFound: für den Schlüssel wurde nie etwas gespeichert (`NodeSettings.Get`).
+var ErrNotFound = errors.New("module: setting not found")
 
 // NodeSettings ist der generische Schlüssel/Wert-Speicher der Plattform.
 type NodeSettings interface {

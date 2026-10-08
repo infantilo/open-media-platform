@@ -21,7 +21,9 @@
 import { type I18nKey, t, t as tt } from "./i18n.ts";
 import "./settings-view.ts";
 import "./playout-admin-view.ts";
-import "./audio-rules-view.ts";
+import { ensureBundle, getModules } from "./modules-registry.ts";
+import { adminGroups, type AdminModuleGroup } from "./modules-logic.ts";
+import { getLang } from "./i18n.ts";
 import "./locations-view.ts";
 import { fetchBuildInfo, formatFirmwareLong } from "./version.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
@@ -274,7 +276,8 @@ interface UpdateOverview {
   supervisorError?: string;
 }
 
-type AdminTabId = "users" | "organizations" | "groups" | "bindings" | "catalog" | "storage" | "audit" | "diagnose" | "backup" | "update" | "nodeversions" | "settings" | "playout" | "audio" | "cluster";
+// Kern-Tabs haben feste IDs; Tabs aus Modulen `mod:<modul>:<tab>` (UMSETZUNG.md Kapitel 36.7).
+type AdminTabId = string;
 // Gruppiert (Nutzerhinweis 2026-10-07): "Playout" und "Audio-Ausgabe" gehören
 // zur Playout-Automation (Kapitel 27), nicht zur allgemeinen Plattform-Verwaltung.
 const ADMIN_SUB_TAB_GROUPS: { id: string; labelKey: I18nKey; tabs: { id: AdminTabId; labelKey: I18nKey }[] }[] = [
@@ -302,7 +305,6 @@ const ADMIN_SUB_TAB_GROUPS: { id: string; labelKey: I18nKey; tabs: { id: AdminTa
     labelKey: "admin.group.playout",
     tabs: [
       { id: "playout", labelKey: "admin.tab.playout" },
-      { id: "audio", labelKey: "admin.tab.audio" },
     ],
   },
 ];
@@ -528,7 +530,10 @@ class AdminView extends HTMLElement {
   #settingsView: HTMLElement | null = null;
   #locationsView: HTMLElement | null = null;
   #playoutView: HTMLElement | null = null;
-  #audioRulesView: HTMLElement | null = null;
+  // Untertabs aus Modulen (GET /api/v1/modules), nach Gruppe; je Tab-ID das gecachte Element bzw. die Fehlermeldung.
+  #moduleGroups: AdminModuleGroup[] = [];
+  #moduleEls = new Map<string, HTMLElement>();
+  #moduleErrors = new Map<string, string>();
 
   // Cluster-Sub-Tab (ARCHITECTURE.md §19.3, UMSETZUNG.md D12) — die
   // bisher UI-lose Raft-Status-/Join-/Leave-API bekommt hier eine
@@ -564,6 +569,7 @@ class AdminView extends HTMLElement {
     this.#loadUpdates();
     this.#loadNodeVersions();
     this.#loadClusterStatus();
+    void this.#loadModuleTabs();
     this.#auditPollHandle = window.setInterval(() => this.#loadAudit(), AUDIT_POLL_FALLBACK_INTERVAL_MS);
     this.#logPollHandle = window.setInterval(() => this.#loadLogs(), LOG_POLL_FALLBACK_INTERVAL_MS);
     connectionMonitor.addEventListener("sse-message", this.#onSseMessage);
@@ -2440,10 +2446,6 @@ class AdminView extends HTMLElement {
         this.#playoutView ??= document.createElement("omp-playout-admin");
         this.appendChild(this.#playoutView);
         break;
-      case "audio":
-        this.#audioRulesView ??= document.createElement("omp-audio-rules");
-        this.appendChild(this.#audioRulesView);
-        break;
       case "settings":
         this.#settingsView ??= document.createElement("omp-settings-view");
         this.appendChild(this.#settingsView);
@@ -2454,26 +2456,79 @@ class AdminView extends HTMLElement {
       case "cluster":
         this.appendChild(this.#renderClusterSection());
         break;
+      default:
+        this.appendChild(this.#renderModuleTab(this.#activeAdminTab));
     }
+  }
+
+  // Kapitel 36.7: Untertabs der Module kommen aus dem Manifest. Ein Modul, dessen Bundle nicht lädt, zeigt nur an seinem Tab
+  // eine Fehlermeldung.
+  async #loadModuleTabs() {
+    try {
+      const groups = adminGroups(await getModules(), getLang());
+      for (const g of groups) {
+        for (const tab of g.tabs) {
+          const err = await ensureBundle(tab.bundle);
+          if (err) this.#moduleErrors.set(tab.id, err);
+        }
+      }
+      this.#moduleGroups = groups;
+      this.#render();
+    } catch {
+      // ohne Manifest: keine Modul-Untertabs, die Administration bleibt voll nutzbar
+    }
+  }
+
+  #renderModuleTab(id: string): HTMLElement {
+    const tab = this.#moduleGroups.flatMap((g) => g.tabs).find((x) => x.id === id);
+    const box = document.createElement("div");
+    if (!tab) return box;
+    const err = this.#moduleErrors.get(id);
+    if (err) {
+      box.className = "omp-empty";
+      box.style.cssText = "color:var(--omp-error);padding:var(--omp-space-3);";
+      box.textContent = t("app.module.loadFailed", { name: tab.label });
+      box.title = err;
+      return box;
+    }
+    let el = this.#moduleEls.get(id);
+    if (!el) {
+      el = document.createElement(tab.element);
+      this.#moduleEls.set(id, el);
+    }
+    box.appendChild(el);
+    return box;
   }
 
   #renderTabBar(): HTMLElement {
     const bar = document.createElement("div");
     bar.setAttribute("data-role", "admin-sub-tabs");
     bar.style.cssText = "display:flex;flex-wrap:wrap;gap:var(--omp-space-2) var(--omp-space-4);margin-bottom:var(--omp-space-3);";
-    for (const group of ADMIN_SUB_TAB_GROUPS) {
+    // Kern-Gruppen plus Modul-Untertabs: gleiche Gruppen-ID → angehängt, neue Gruppe → eigene Box mit der Beschriftung des Moduls.
+    const groups: { id: string; label: string; tabs: { id: AdminTabId; label: string }[] }[] = ADMIN_SUB_TAB_GROUPS.map((g) => ({
+      id: g.id,
+      label: t(g.labelKey),
+      tabs: g.tabs.map((x) => ({ id: x.id, label: t(x.labelKey) })),
+    }));
+    for (const mg of this.#moduleGroups) {
+      const existing = groups.find((g) => g.id === mg.id);
+      const tabs = mg.tabs.map((x) => ({ id: x.id, label: x.label }));
+      if (existing) existing.tabs.push(...tabs);
+      else groups.push({ id: mg.id, label: mg.label, tabs });
+    }
+    for (const group of groups) {
       const box = document.createElement("div");
       box.setAttribute("data-group", group.id);
       box.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:var(--omp-space-2);";
       const label = document.createElement("span");
-      label.textContent = t(group.labelKey);
+      label.textContent = group.label;
       label.style.cssText =
         "font-size:var(--omp-font-size-xs);text-transform:uppercase;letter-spacing:0.05em;color:var(--omp-text-dim);";
       box.appendChild(label);
       for (const tab of group.tabs) {
         const btn = document.createElement("button");
         btn.type = "button";
-        btn.textContent = t(tab.labelKey);
+        btn.textContent = tab.label;
         btn.setAttribute("data-tab-id", tab.id);
         const isActive = tab.id === this.#activeAdminTab;
         btn.style.cssText =

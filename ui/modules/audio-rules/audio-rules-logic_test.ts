@@ -1,4 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
+import "./test-setup.ts"; // zuerst: Host-Schnittstelle + Texte (die Logik übersetzt schon beim Laden)
 import {
   type AudioRulesDoc, channelNames, cleanDoc, hasBitExact, monoTracks, moveItem, parseSourceText, parseTags, setBitExact, slug, sourceText, specSummary,
   toggleTrack, trackRowCount, uniqueId, chainParam, setChainParam, type SourceSpec, planRows, simulatedSource, type AudioPlan,
