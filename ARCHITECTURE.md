@@ -2406,7 +2406,12 @@ Multicast-fähigen LAN, WAN/Cloud über die Cloud-Gateway-Node/SRT-RIST).
    Konfiguration, keine Sonderintegration.
 4. **Metrics:** siehe §6.1-Erweiterung Punkt 1 (identischer Host-Agent,
    optionaler IMDSv2-Adapter, kein CloudWatch-Zwang).
-5. **Bewusst nicht gebaut:** kein AWS-SDK-Dependency im
+5. **Dynamische Bereitstellung (Nutzerauftrag 2026-10-08):** die Stufen 1–2
+   setzen voraus, dass ein Mensch Hosts anlegt. Das Hochfahren/Abbauen
+   zur Laufzeit, Kosten und Autoscaling beschreibt §27 (Provider-Adapter,
+   optional und austauschbar — die Regel „kein Cloud-SDK im Kern“ bleibt
+   erhalten, s. §27.2).
+6. **Bewusst nicht gebaut (Stand vor §27):** kein AWS-SDK-Dependency im
    Orchestrator-Kern, kein Terraform/CloudFormation-Modul als Teil dieses
    Projekts — Infrastruktur-Provisionierung ist Betreiber-Sache, das
    Projekt beginnt erst beim laufenden `omp-host-agent`, konsistent mit
@@ -4311,3 +4316,117 @@ bewusst offen — bräuchte eine neue "ffprobe auf einen vom Nutzer
 angegebenen Dateipfad"-Route, deren Sicherheitsabwägung (auch wenn
 dieselbe Fähigkeit über den bestehenden `script`-Schritt schon heute
 erreichbar ist) eine eigene Entscheidung verdient, s. UMSETZUNG.md 23.5.
+
+
+## 27. Cloud-Ressourcen dynamisch bereitstellen, Kosten, Autoscaling (Design 2026-10-08, UMSETZUNG.md Kapitel 35)
+
+**Anforderung (Nutzer 2026-10-08):** Der Scheduler soll Cloud-Ressourcen dynamisch
+anfordern/hochfahren können, bei Spitzenzeiten optional automatisch. Kosten müssen
+sichtbar sein (Ist-Kosten über die Abrechnungs-API des Anbieters), eine Vorberechnung
+ist erwünscht. **Entscheidungen:** Provider-Adapter mit AWS als erstem echten Adapter;
+Autoscaling mit Regeln und hartem Budgetdeckel, Standard AUS, Modus „vorschlagen“ oder
+„automatisch“.
+
+### 27.1 Einordnung in das Bestehende
+
+- Ein Cloud-Host ist **ein normaler Host** (§18): Host-Agent per Bootstrap-Token (§18.3),
+  Telemetrie, Placement (§6.1), Migration, Failover (§6.3). Neu ist nur, **wer ihn
+  anlegt und beendet** (heute ein Mensch) und **was er kostet**.
+- Das Placement bleibt unverändert; es bekommt höchstens ein zusätzliches Signal
+  „Host ist Cloud-Host und kostet“, das Rollen mit Cloud-Toleranz (§18.8) nutzen dürfen.
+- Die Kapazitätsvorschau (§16) und der Scheduler (`workflows/scheduler.go`) liefern die
+  vorausschauende Last; heute gibt es dort Zeitpläne und einen 15-Minuten-Forecast, aber
+  keinen Kalender-/Kapazitäts-Endpunkt — er entsteht in 35.3/35.4 als Grundlage der
+  Kostenvorberechnung.
+
+### 27.2 Provider-Schnittstelle (Paket `orchestrator/internal/cloud`)
+
+```
+CloudProvider
+  Name() string
+  Catalog(ctx, region)            → []InstanceType {Name, VCPU, MemGB, GPU, PricePerHour, Currency}
+  Launch(ctx, LaunchRequest)      → InstanceRef      // Typ, Region, User-Data (Bootstrap), Tags, Label
+  Describe(ctx, InstanceRef)      → State            // pending | running | stopping | terminated | unknown
+  Terminate(ctx, InstanceRef)
+  List(ctx, tagFilter)            → []InstanceRef    // Abgleich verwaister Instanzen
+  ActualCost(ctx, from, to, tag)  → CostReport       // vom Anbieter abgerechnet, mit Datenstand
+```
+
+- **Kern ohne Cloud-SDK** (§10 Punkt 4, §18.9): Der Mock-Adapter (35.2) ist Teil des
+  Kerns und hat keine Abhängigkeit. Der AWS-Adapter liegt hinter einem Go-Build-Tag
+  (`cloud_aws`), der Standard-Build enthält ihn nicht; ohne Zugangsdaten bleibt alles
+  lauffähig (Cloud-Ansicht zeigt „kein Anbieter konfiguriert“).
+- **Pools** (Konfiguration, kein Code): Name, Anbieter, Region, Instanztyp, `min`/`max`
+  Hosts, Bootstrap-Vorlage (User-Data mit einmaligem Bootstrap-Token je Host, §18.3),
+  Tags. Jede Cloud-Ressource wird mit `omp-deployment` und `omp-pool` getaggt — das ist
+  die Grundlage für Kostenzuordnung und für den Abgleich verwaister Instanzen.
+- **Zustandsautomat je gemietetem Host:** angefordert → bootet → Agent registriert →
+  bereit → leerlaufend → entlädt (Draining) → beendet; zusätzlich `fehlgeschlagen`.
+  Der Bootvorgang dauert Minuten — Zeitpläne rechnen einen **Vorlauf** ein.
+
+### 27.3 Kosten
+
+- **Vorberechnung (geschätzt):** Preis je Stunde (Provider-Preisliste oder manuell
+  gepflegt) × geplante Laufzeit. Eingang ist die Kapazitätsvorschau (§16): „Dieser
+  Zeitplan braucht von 11:00–14:00 zwei Hosts vom Typ X → ca. N €“. Sekundengenaue
+  Abrechnung wird mit Mindestlaufzeit modelliert, Datentransfer und Speicher werden **nicht**
+  geschätzt (ausdrücklich so ausgewiesen).
+- **Ist-Kosten:** über die Abrechnungs-API des Anbieters, nach Tag gefiltert. Diese Daten
+  kommen verzögert (bei AWS Cost Explorer typisch Stunden bis ein Tag) und die Abfrage kostet
+  selbst Geld — daher nur selten abfragen (höchstens täglich/auf Knopfdruck), Ergebnis
+  speichern und **immer mit Datenstand** anzeigen.
+- **Laufende Kosten sofort:** aus Laufzeit × Preis der eigenen Hosts-Tabelle („geschätzt, läuft“)
+  — das ist die Zahl, gegen die der Budgetdeckel prüft, nicht die verzögerte Abrechnung.
+- Schätzung und Abrechnung stehen in der UI **getrennt** und werden nie vermischt.
+
+### 27.4 Scheduler-Integration
+
+- Ein Zeitplan kann „Cloud-Kapazität von–bis bereitstellen“ (Pool, Anzahl) anfordern; der
+  Start wird um den Boot-Vorlauf vorgezogen, das Ende erst nach Entladen des Hosts.
+- Die Kapazitätsvorschau markiert einen Engpass und bietet „Cloud-Host dazunehmen“ samt
+  Kosten an; die Übernahme ist eine ausdrückliche Operator-Aktion (außer im Automatik-Modus).
+- Konsistent mit §16 Punkt 4: keine Reservierungssperre — der scharfe Check bleibt der Start.
+
+### 27.5 Autoscaling (Standard AUS)
+
+- **Auslöser:** (a) Zeitfenster aus dem Scheduler, (b) Placement-Engpass (kein Host nimmt
+  einen Start an oder Hosts über der Auslastungsschwelle länger als N Minuten), (c) manuell.
+- **Regelparameter:** Pool, `min`/`max`, Hochfahr-Verzögerung (Hysterese), Abkühlzeit,
+  Leerlaufzeit vor dem Abbau, **Budgetdeckel** (€/Tag und €/Monat), Modus
+  `vorschlagen` | `automatisch`.
+- **Budgetdeckel ist hart:** Ist die Summe aus bereits angefallenen und bis Periodenende
+  hochgerechneten laufenden Kosten über dem Deckel, wird nicht weiter hochgefahren; der
+  Operator bekommt einen Alarm. Der Deckel bremst nur **neue** Hosts — laufende Sendungen
+  werden nie wegen Kosten abgeschaltet (Betriebssicherheit vor Kosten).
+- **Abbau nur geordnet:** Host als „Draining“ markieren (kein neues Placement), laufende
+  Instanzen per Migration (`instancemigrate`) auf andere Hosts verschieben, erst bei leerem
+  Host beenden. Ein Host mit laufendem Workflow, der sich nicht verschieben lässt, bleibt
+  stehen und löst einen Hinweis aus.
+- **Sicherheitsnetze:** maximale Lebensdauer je Cloud-Host (danach Alarm/Abbau), täglicher
+  Abgleich Provider-Liste ↔ eigene Hosts (verwaiste, getaggte Instanzen melden), jede
+  Aktion mit Begründung im Audit-Log und als Ereignis auf dem Bus.
+
+### 27.6 Sicherheit
+
+- Zugangsdaten nie im Klartext in der Datenbank oder im Repo: Verweis auf Umgebungsvariable
+  oder Secret-Datei (wie die vorhandenen Schlüssel-Muster), Anzeige nur maskiert.
+- Minimale Rechte beim Anbieter: Start/Beenden/Beschreiben nur für Ressourcen mit dem
+  `omp-deployment`-Tag, Preis- und Kostenabfrage lesend. Das Bootstrap-Token je Host ist
+  einmalig und kurzlebig (§18.3).
+
+### 27.7 Medienpfad und Grenzen
+
+- MXL ist host-lokal (§6): Ein Cloud-Host führt **vollständige Workflows oder Rollen ohne
+  MXL-Verbindung zu anderen Hosts**. Der Medienaustausch zwischen Hosts läuft über Gateways
+  (SRT/RIST, §6.5/§18.8) — das Placement muss das bei Cloud-Kandidaten berücksichtigen
+  (35.4). Kein PTP/Multicast in der Cloud.
+- **Nicht Teil dieses Designs:** Infrastruktur-Provisionierung des Netzes (VPC, VPN,
+  Sicherheitsgruppen), Datenübertragungskosten, Spot-Instanzen, mehrere Anbieter gleichzeitig.
+- **Testbarkeit:** Mock-Adapter simuliert Bootzeit, Preise und Abrechnung vollständig lokal
+  (Host-Agent wird dabei lokal gestartet). Echte AWS-Läufe kosten Geld und erfolgen nur mit
+  ausdrücklicher Freigabe, mit kleinstem Instanztyp, kurz, mit Nachweis „alles beendet“.
+
+### 27.8 Offene Entscheidungen vor dem AWS-Adapter (35.6)
+
+Ablage der Zugangsdaten, Region(en), Instanztypen je Pool, welche Node-Typen/Workflows
+cloudtauglich sind (Gateway-Pfad), Verhalten beim Abbau eines nicht verschiebbaren Hosts.
