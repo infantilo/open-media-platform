@@ -75,6 +75,12 @@ type CostReport struct {
 // ErrNotFound: die Instanz kennt der Anbieter nicht (mehr).
 var ErrNotFound = errors.New("cloud: instance not found")
 
+// ErrSuggestionNotFound: der Vorschlag existiert nicht (mehr).
+var ErrSuggestionNotFound = errors.New("cloud: suggestion not found")
+
+// ErrBudget: der Budgetdeckel verbietet den Schritt.
+var ErrBudget = errors.New("cloud: budget cap")
+
 // Provider ist die Anbieter-Schnittstelle (§27.2).
 type Provider interface {
 	Name() string

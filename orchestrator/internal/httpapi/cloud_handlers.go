@@ -79,6 +79,12 @@ type CloudControl interface {
 	List(from, to time.Time) ([]cloud.Reservation, error)
 	Create(in cloud.ReservationInput, by string) (cloud.Reservation, error)
 	Delete(id string) error
+	Policy(pool string) (cloud.Policy, error)
+	SetPolicy(p cloud.Policy, by string) error
+	Suggestions() []cloud.Suggestion
+	Accept(ctx context.Context, id, by string) error
+	Dismiss(id string) bool
+	Costs(ctx context.Context) ([]cloud.PoolCosts, error)
 }
 
 // WithCloudControl aktiviert /api/v1/cloud/hosts und /api/v1/cloud/reservations*.
@@ -185,5 +191,120 @@ func WithAll(opts ...HandlerOption) HandlerOption {
 		for _, f := range opts {
 			f(o)
 		}
+	}
+}
+
+// handleListPolicies: GET /api/v1/cloud/policies — Autoscaling-Regeln aller Pools.
+func handleListPolicies(c CloudControl) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if c == nil {
+			writeJSON(w, http.StatusOK, []any{})
+			return
+		}
+		out := []cloud.Policy{}
+		for _, p := range c.Pools() {
+			pol, err := c.Policy(p.Name)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			out = append(out, pol)
+		}
+		writeJSON(w, http.StatusOK, out)
+	}
+}
+
+// handlePutPolicy: PUT /api/v1/cloud/policies/{pool} — Regeln setzen (Admin). Der Automatik-Modus braucht einen Budgetdeckel.
+func handlePutPolicy(c CloudControl, audit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if c == nil {
+			http.Error(w, "no cloud provider configured", http.StatusServiceUnavailable)
+			return
+		}
+		pol := cloud.DefaultPolicy(r.PathValue("pool"))
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&pol); err != nil {
+			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		pol.Pool = r.PathValue("pool")
+		if err := c.SetPolicy(pol, actorFromRequest(r)); err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, cloud.ErrPolicyValidation) {
+				status = http.StatusBadRequest
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		logDomainAudit(audit, actorFromRequest(r), "cloud_policy", pol.Pool, "updated",
+			map[string]any{"mode": pol.Mode, "dailyBudget": pol.DailyBudget, "monthlyBudget": pol.MonthlyBudget, "maxAutoHosts": pol.MaxAutoHosts})
+		writeJSON(w, http.StatusOK, pol)
+	}
+}
+
+// handleListSuggestions: GET /api/v1/cloud/suggestions.
+func handleListSuggestions(c CloudControl) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if c == nil {
+			writeJSON(w, http.StatusOK, []any{})
+			return
+		}
+		writeJSON(w, http.StatusOK, c.Suggestions())
+	}
+}
+
+// handleAcceptSuggestion: POST /api/v1/cloud/suggestions/{id}/accept (Admin).
+func handleAcceptSuggestion(c CloudControl, audit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if c == nil {
+			http.Error(w, "no cloud provider configured", http.StatusServiceUnavailable)
+			return
+		}
+		id := r.PathValue("id")
+		if err := c.Accept(r.Context(), id, actorFromRequest(r)); err != nil {
+			status := http.StatusBadRequest
+			switch {
+			case errors.Is(err, cloud.ErrSuggestionNotFound):
+				status = http.StatusNotFound
+			case errors.Is(err, cloud.ErrBudget):
+				status = http.StatusConflict
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		logDomainAudit(audit, actorFromRequest(r), "cloud_suggestion", id, "accepted", nil)
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handleDismissSuggestion: DELETE /api/v1/cloud/suggestions/{id} (Admin).
+func handleDismissSuggestion(c CloudControl, audit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if c == nil {
+			http.Error(w, "no cloud provider configured", http.StatusServiceUnavailable)
+			return
+		}
+		id := r.PathValue("id")
+		if !c.Dismiss(id) {
+			http.Error(w, cloud.ErrSuggestionNotFound.Error(), http.StatusNotFound)
+			return
+		}
+		logDomainAudit(audit, actorFromRequest(r), "cloud_suggestion", id, "dismissed", nil)
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handleCloudCosts: GET /api/v1/cloud/costs — geschätzte Kosten heute/Monat je Pool gegen den Deckel (keine Abrechnung).
+func handleCloudCosts(c CloudControl) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if c == nil {
+			writeJSON(w, http.StatusOK, []any{})
+			return
+		}
+		costs, err := c.Costs(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, http.StatusOK, costs)
 	}
 }

@@ -3,6 +3,7 @@ package cloud
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -80,6 +81,8 @@ type Manager struct {
 	now        func() time.Time
 	hosts      map[string]*Host
 	seq        int
+	store      HostStore
+	saved      map[string]Host
 }
 
 // NewManager legt einen Manager an. `deployment` markiert alle Ressourcen dieses Orchestrators.
@@ -87,7 +90,7 @@ func NewManager(p Provider, deployment string, pools []Pool, env Env, now func()
 	if now == nil {
 		now = time.Now
 	}
-	m := &Manager{provider: p, deployment: deployment, pools: map[string]Pool{}, env: env, now: now, hosts: map[string]*Host{}}
+	m := &Manager{provider: p, deployment: deployment, pools: map[string]Pool{}, env: env, now: now, hosts: map[string]*Host{}, saved: map[string]Host{}}
 	for _, pl := range pools {
 		if pl.BootTimeout == 0 {
 			pl.BootTimeout = 10 * time.Minute
@@ -98,6 +101,41 @@ func NewManager(p Provider, deployment string, pools []Pool, env Env, now func()
 }
 
 func active(h *Host) bool { return h.State != HostTerminated && h.State != HostFailed }
+
+// SetStore verdrahtet die Persistenz und lädt die bisher geführten Hosts (auch beendete: sie zählen weiter in die
+// Kostenbuchführung). Vor dem ersten Tick aufrufen.
+func (m *Manager) SetStore(s HostStore) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.store = s
+	list, err := s.LoadAll()
+	if err != nil {
+		return err
+	}
+	for _, h := range list {
+		h := h
+		m.hosts[h.ID] = &h
+		m.saved[h.ID] = h
+	}
+	return nil
+}
+
+// flush schreibt geänderte Hosts weg (Aufrufer hält m.mu). Fehler werden geloggt, nicht verschluckt.
+func (m *Manager) flush() {
+	if m.store == nil {
+		return
+	}
+	for id, h := range m.hosts {
+		if prev, ok := m.saved[id]; ok && prev == *h {
+			continue
+		}
+		if err := m.store.Save(*h); err != nil {
+			slog.Warn("cloud: saving host failed", "host", id, "error", err)
+			continue
+		}
+		m.saved[id] = *h
+	}
+}
 
 // Provision fordert einen neuen Host im Pool an (Max wird geprüft).
 func (m *Manager) Provision(ctx context.Context, poolName string) (Host, error) {
@@ -135,6 +173,7 @@ func (m *Manager) Provision(ctx context.Context, poolName string) (Host, error) 
 	}
 	h := &Host{ID: id, Pool: poolName, Ref: ref, InstanceType: pl.InstanceType, State: HostBooting, RequestedAt: m.now()}
 	m.hosts[id] = h
+	m.flush()
 	return *h, nil
 }
 
@@ -142,6 +181,7 @@ func (m *Manager) Provision(ctx context.Context, poolName string) (Host, error) 
 func (m *Manager) Release(ctx context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	defer m.flush()
 	h, ok := m.hosts[id]
 	if !ok {
 		return fmt.Errorf("cloud: unknown host %q", id)
@@ -183,6 +223,7 @@ func (m *Manager) fail(ctx context.Context, h *Host, why string) {
 func (m *Manager) Tick(ctx context.Context) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	defer m.flush()
 	now := m.now()
 	for _, h := range m.hosts {
 		pl := m.pools[h.Pool]
@@ -278,6 +319,7 @@ func (m *Manager) Reconcile(ctx context.Context) (ReconcileReport, error) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	defer m.flush()
 	var rep ReconcileReport
 	seen := map[string]bool{}
 	for _, in := range list {

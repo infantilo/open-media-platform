@@ -31,8 +31,18 @@ type PoolController struct {
 	// OnAction wird für jede Aktion gerufen (Audit-Log); darf nil sein.
 	OnAction func(Action)
 
-	mu  sync.Mutex
-	log []Action
+	// Autoscaling (35.5); alle drei dürfen nil sein (dann nur Reservierungen und Pool-Minimum).
+	Policies PolicyStore
+	// Load liefert die aktuelle Auslastung der Hosts (Durchschnitt); ok=false: unbekannt.
+	Load func() (LoadSample, bool)
+	// Prices liefert die Preisliste für Budgetprüfung und Kostenübersicht.
+	Prices func(ctx context.Context) (PriceBook, error)
+
+	mu          sync.Mutex
+	log         []Action
+	auto        map[string]*poolAuto
+	suggestions []Suggestion
+	sugSeq      int
 }
 
 const actionLogMax = 200
@@ -96,6 +106,9 @@ func (c *PoolController) Tick(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("cloud: reservations: %w", err)
 	}
+	for pool := range want {
+		c.applyAutoscale(ctx, pool, now, want)
+	}
 	hosts := c.Manager.Hosts()
 	pools := make([]string, 0, len(want))
 	for p := range want {
@@ -116,6 +129,10 @@ func (c *PoolController) Tick(ctx context.Context) error {
 		switch diff := want[pool] - len(alive); {
 		case diff > 0:
 			for i := 0; i < diff; i++ {
+				if ok, why := c.budgetOK(ctx, pool, now); !ok {
+					c.noteBudget(pool, now, why)
+					break
+				}
 				h, err := c.Manager.Provision(ctx, pool)
 				if err != nil {
 					slog.Warn("cloud: provision failed", "pool", pool, "error", err)

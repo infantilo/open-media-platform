@@ -93,10 +93,42 @@ func TestCloudPricingProviderFailureIs502(t *testing.T) {
 type fakeControl struct {
 	created []cloud.ReservationInput
 	deleted []string
+	policy  cloud.Policy
+	sugg    []cloud.Suggestion
+}
+
+func (f *fakeControl) Policy(pool string) (cloud.Policy, error) {
+	if f.policy.Pool == pool {
+		return f.policy, nil
+	}
+	return cloud.DefaultPolicy(pool), nil
+}
+func (f *fakeControl) SetPolicy(p cloud.Policy, _ string) error {
+	if p.Mode == cloud.ModeAuto && p.DailyBudget == 0 && p.MonthlyBudget == 0 {
+		return cloud.ErrPolicyValidation
+	}
+	f.policy = p
+	return nil
+}
+func (f *fakeControl) Suggestions() []cloud.Suggestion { return f.sugg }
+func (f *fakeControl) Accept(_ context.Context, id, _ string) error {
+	switch id {
+	case "nope":
+		return cloud.ErrSuggestionNotFound
+	case "poor":
+		return cloud.ErrBudget
+	}
+	return nil
+}
+func (f *fakeControl) Dismiss(id string) bool { return id == "s1" }
+func (f *fakeControl) Costs(context.Context) ([]cloud.PoolCosts, error) {
+	return []cloud.PoolCosts{{Pool: "burst", Currency: "EUR", Estimate: true}}, nil
 }
 
 func (f *fakeControl) Pools() []cloud.PoolInfo { return []cloud.PoolInfo{{Name: "burst", Max: 3}} }
-func (f *fakeControl) Hosts() []cloud.Host     { return []cloud.Host{{ID: "h1", Pool: "burst", State: cloud.HostReady}} }
+func (f *fakeControl) Hosts() []cloud.Host {
+	return []cloud.Host{{ID: "h1", Pool: "burst", State: cloud.HostReady}}
+}
 func (f *fakeControl) Actions() []cloud.Action { return nil }
 func (f *fakeControl) List(time.Time, time.Time) ([]cloud.Reservation, error) {
 	return []cloud.Reservation{{ID: "r1", Pool: "burst", HostCount: 2}}, nil
@@ -165,5 +197,62 @@ func TestCreateAndDeleteReservation(t *testing.T) {
 		if rec.Code != want {
 			t.Errorf("%s: %d want %d", id, rec.Code, want)
 		}
+	}
+}
+
+func TestPolicyEndpoints(t *testing.T) {
+	f := &fakeControl{}
+	rec := httptest.NewRecorder()
+	handleListPolicies(f)(rec, httptest.NewRequest("GET", "/", nil))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"mode":"off"`) {
+		t.Fatalf("default policy must be off: %d %s", rec.Code, rec.Body.String())
+	}
+	put := func(pool, body string) int {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("PUT", "/", strings.NewReader(body))
+		req.SetPathValue("pool", pool)
+		handlePutPolicy(f, nil)(rec, req)
+		return rec.Code
+	}
+	if c := put("burst", `{"mode":"auto"}`); c != http.StatusBadRequest {
+		t.Fatalf("auto without budget must be 400, got %d", c)
+	}
+	if c := put("burst", `{"mode":"auto","dailyBudget":50}`); c != http.StatusOK || f.policy.DailyBudget != 50 || f.policy.Pool != "burst" {
+		t.Fatalf("%d %+v", c, f.policy)
+	}
+	if c := put("burst", `{`); c != http.StatusBadRequest {
+		t.Fatal(c)
+	}
+}
+
+func TestSuggestionAndCostEndpoints(t *testing.T) {
+	f := &fakeControl{sugg: []cloud.Suggestion{{ID: "s1", Pool: "burst"}}}
+	rec := httptest.NewRecorder()
+	handleListSuggestions(f)(rec, httptest.NewRequest("GET", "/", nil))
+	if !strings.Contains(rec.Body.String(), `"s1"`) {
+		t.Fatal(rec.Body.String())
+	}
+	for id, want := range map[string]int{"ok": http.StatusNoContent, "nope": http.StatusNotFound, "poor": http.StatusConflict} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/", nil)
+		req.SetPathValue("id", id)
+		handleAcceptSuggestion(f, nil)(rec, req)
+		if rec.Code != want {
+			t.Errorf("accept %s: %d want %d", id, rec.Code, want)
+		}
+	}
+	for id, want := range map[string]int{"s1": http.StatusNoContent, "zz": http.StatusNotFound} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("DELETE", "/", nil)
+		req.SetPathValue("id", id)
+		handleDismissSuggestion(f, nil)(rec, req)
+		if rec.Code != want {
+			t.Errorf("dismiss %s: %d want %d", id, rec.Code, want)
+		}
+	}
+	rec = httptest.NewRecorder()
+	handleCloudCosts(f)(rec, httptest.NewRequest("GET", "/", nil))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"estimated":true`) {
+		t.Fatal(rec.Body.String())
 	}
 }
