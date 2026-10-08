@@ -168,6 +168,7 @@ const T = (() => {
       "ed.chooseSource": "— Quelle wählen —",
       "ed.reqTags": "Pflicht-Tags",
       "ed.resolvedTo": "Aufgelöst zu",
+      "ed.pickTag": "+ bekanntes Tag …",
       "ed.tagHint": "Die Quelle wird über Tags gewählt (Tags einer Quelle setzt du in der Quellenverwaltung). Für eine bestimmte Quelle aus der Liste oben bei „Typ“ „Live-Quelle“ wählen.",
       "ed.tagsPh": "z. B. video.camera, role.program",
       "ed.preferred": "bevorzugt",
@@ -440,6 +441,7 @@ const T = (() => {
       "ed.chooseSource": "— choose source —",
       "ed.reqTags": "Required tags",
       "ed.resolvedTo": "Resolved to",
+      "ed.pickTag": "+ known tag …",
       "ed.tagHint": "The source is chosen by tags (set a source's tags in the source management). To pick a specific source from a list, choose the type \"Live source\" above.",
       "ed.tagsPh": "e.g. video.camera, role.program",
       "ed.preferred": "preferred",
@@ -1443,6 +1445,24 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     const splitTags = (t) => (t || "").split(",").map((x) => x.trim()).filter(Boolean);
 
     let availableSources = [];
+    // Bekannte Tags aller Videoquellen (Tag → Quellennamen) für die Auswahl im Tag-Typ.
+    let tagCatalog = [];
+    let tagCatalogAt = 0;
+    const loadTagCatalog = async () => {
+      if (Date.now() - tagCatalogAt < 10000) return;
+      tagCatalogAt = Date.now();
+      try {
+        const res = await fetch("/api/v1/sources?mediaType=video");
+        if (!res.ok) return;
+        const by = new Map();
+        for (const src of await res.json()) for (const t of src.tags || []) {
+          const name = typeof t === "string" ? t : t.tag;
+          if (!by.has(name)) by.set(name, []);
+          by.get(name).push(src.label);
+        }
+        tagCatalog = [...by.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+      } catch { /* Auswahl bleibt leer, Texteingabe geht weiter */ }
+    };
 
     // ---- Event-Editor ----------------------------------------------------
     const newKid = (n) => ({ id: `c${n}`, type: "GRAPHIC", timing: "RELATIVE_TO_START", delayMs: 0, durationMs: 0, templateId: "", failurePolicy: "WARN" });
@@ -1488,8 +1508,20 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
             break;
           }
           case "liveselect":
-            f.append(...field(T("ed.reqTags"), bindText(d, "tags", { placeholder: T("ed.tagsPh") })));
-            f.append(...field(T("ed.preferred"), bindText(d, "pref", { placeholder: T("ed.optional") })));
+            // Textfeld + Auswahl bekannter Tags: Auswahl hängt das Tag an die kommagetrennte Liste an.
+            const tagRow = (key, ph) => {
+              const inp = bindText(d, key, { placeholder: ph });
+              const sel = h("select", { onchange: (e) => {
+                const t = e.target.value;
+                if (t && !splitTags(d[key]).includes(t)) d[key] = [...splitTags(d[key]), t].join(", ");
+                inp.value = d[key];
+                e.target.value = "";
+              } }, h("option", { value: "" }, T("ed.pickTag")),
+              ...tagCatalog.map(([t, names]) => h("option", { value: t }, `${t} (${names.join(", ")})`)));
+              return [inp, sel];
+            };
+            f.append(...field(T("ed.reqTags"), ...tagRow("tags", T("ed.tagsPh"))));
+            f.append(...field(T("ed.preferred"), ...tagRow("pref", T("ed.optional"))));
             f.append(...field(T("ed.resolvedTo"), h("span", { text: item?.resolvedLabel || T("noSource") })));
             f.append(h("div", { class: "hint", text: T("ed.tagHint") }));
             break;
@@ -1851,6 +1883,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       availableNodes = v.availableNodes || [];
       mediaLibrary = v.mediaLibrary || [];
       availableSources = v.availableSources || [];
+      loadTagCatalog();
       channelId = v.channelId || "";
       audioPlans = (v.audioPlans && typeof v.audioPlans === "object") ? v.audioPlans : { a: null, b: null };
       audioGroups = Array.isArray(v.audioGroups) ? v.audioGroups : [];
