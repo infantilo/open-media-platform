@@ -108,6 +108,7 @@ export const en: Record<keyof typeof de, string> = {
   "console.none": "No console assigned to this user.",
   "console.loading": "Loading …",
   "console.bundleFailed": "The UI bundle for \"{node}\" could not be loaded.",
+  "console.unavailable": "Service unavailable – the node is not responding.",
   "board.arrangeAll": "⊞ Arrange all",
   "board.arrangeAllTitle": "Rearrange all tiles in a grid and expand them",
   "board.dragMove": "Drag to move",

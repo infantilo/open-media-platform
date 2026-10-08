@@ -107,6 +107,7 @@ export const de = {
   "console.none": "Keine Konsole für diesen Nutzer zugewiesen.",
   "console.loading": "Lädt …",
   "console.bundleFailed": "UI-Bundle für \"{node}\" konnte nicht geladen werden.",
+  "console.unavailable": "Dienst nicht verfügbar – der Node antwortet nicht.",
   "board.arrangeAll": "⊞ Alle anordnen",
   "board.arrangeAllTitle": "Alle Kacheln in einem Raster neu anordnen und ausklappen",
   "board.dragMove": "Ziehen zum Verschieben",
