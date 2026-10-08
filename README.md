@@ -611,6 +611,8 @@ graphical audio matrix, timed overlays, lossless-capable concatenation,
 generic multi-track output mapping, and a fully searchable/validated
 expert mode) — both described in full under "What's in the box".
 
+**Local devices and cloud capacity** — Kapitel 34/35: the device hub offers a host's cameras, microphones and sound-card outputs to the MXL/NMOS world per device; the orchestrator can rent cloud hosts on demand (reservations from the scheduler, rule-based autoscaling behind a hard budget cap, cost pre-calculation). The cloud side is verified end to end with the simulation provider; the AWS adapter is built without an SDK and **has not been run against a real AWS account** (launching is dry-run only until explicitly enabled, see `docs/CLOUD-AWS.md`). Video capture from a real camera is likewise only covered by fixtures so far.
+
 **Observability** — a trace ID follows every IS-05 connect/disconnect
 and generic-proxy request end to end into one replicated log channel, a
 "Diagnose" tab in the Flow Editor tails it live and pivots a failed
