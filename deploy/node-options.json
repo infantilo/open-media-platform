@@ -1255,6 +1255,59 @@
       "type": "string",
       "description": "Zusätzlich zu stderr alle strukturierten Log-Zeilen (channelId, eventId, childEventId, sourceId, correlationId, triggerId) in diese Datei anhängen — durchsuchbar mit grep/jq. Leer = aus.",
       "group": "Betrieb"
+    },
+    {
+      "key": "OMP_PLAYOUT_ADBREAK",
+      "i18n": {
+        "en": {
+          "label": "Mark ad breaks automatically",
+          "description": "Derive SCTE markers (out/in) from the event classification (commercial/promo/block_start/block_end) and send them to the SCTE node. Default off (changeable at runtime in the panel).",
+          "group": "Ad breaks"
+        }
+      },
+      "label": "Werbeblöcke automatisch kennzeichnen",
+      "type": "enum",
+      "description": "Aus der Klassifikation der Events (commercial/promo/block_start/block_end) SCTE-Marker (Out/In) ableiten und an den SCTE-Node senden. Standard aus (zur Laufzeit im Panel änderbar).",
+      "group": "Werbeblöcke",
+      "default": "0",
+      "choices": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "1"
+        }
+      ]
+    },
+    {
+      "key": "OMP_PLAYOUT_ADBREAK_TARGET",
+      "i18n": {
+        "en": {
+          "label": "SCTE node target",
+          "description": "Label of the omp-scte35 instance that encodes and outputs the markers.",
+          "group": "Ad breaks"
+        }
+      },
+      "label": "Ziel SCTE-Node",
+      "type": "string",
+      "description": "Label der omp-scte35-Instanz, die die Marker kodiert und ausgibt.",
+      "group": "Werbeblöcke"
+    },
+    {
+      "key": "OMP_PLAYOUT_ADBREAK_PREROLL_MS",
+      "i18n": {
+        "en": {
+          "label": "Pre-roll (ms)",
+          "description": "The out/in is sent this many milliseconds before the cut (default 4000).",
+          "group": "Ad breaks"
+        }
+      },
+      "label": "Vorlauf (ms)",
+      "type": "int",
+      "description": "So viele Millisekunden vor dem Schnitt wird das Out bzw. In gesendet (Standard 4000).",
+      "group": "Werbeblöcke",
+      "min": 0,
+      "max": 60000
     }
   ],
   "omp-ograf": [
@@ -1360,6 +1413,137 @@
       "type": "string",
       "description": "Jeden erzeugten Abschnitt zusätzlich als rohes UDP-Datagramm an dieses Ziel senden. Leer = nur Parameter/Verlauf.",
       "group": "Ausgabe"
+    },
+    {
+      "key": "OMP_SCTE35_TS",
+      "i18n": {
+        "en": {
+          "label": "Transport stream target",
+          "description": "Send SCTE-35 as a sidecar transport stream (PAT/PMT + own PID): udp://host:port or srt://host:port?mode=caller. Empty = off.",
+          "group": "Output"
+        }
+      },
+      "label": "Transportstrom-Ziel",
+      "type": "string",
+      "description": "SCTE-35 als Sidecar-Transportstrom (PAT/PMT + eigene PID) senden: udp://host:port oder srt://host:port?mode=caller. Leer = aus.",
+      "group": "Ausgabe"
+    },
+    {
+      "key": "OMP_SCTE35_PID",
+      "i18n": {
+        "en": {
+          "label": "Transport stream PID",
+          "description": "PID of the SCTE-35 sections in the transport stream (default 500).",
+          "group": "Output"
+        }
+      },
+      "label": "Transportstrom-PID",
+      "type": "int",
+      "description": "PID der SCTE-35-Abschnitte im Transportstrom (Standard 500).",
+      "group": "Ausgabe",
+      "min": 32,
+      "max": 8190
+    },
+    {
+      "key": "OMP_SCTE35_REPEAT",
+      "i18n": {
+        "en": {
+          "label": "Repeats in the transport stream",
+          "description": "How often each section is sent, 100 ms apart (default 3).",
+          "group": "Output"
+        }
+      },
+      "label": "Wiederholungen im Transportstrom",
+      "type": "int",
+      "description": "Wie oft jeder Abschnitt im Abstand von 100 ms gesendet wird (Standard 3).",
+      "group": "Ausgabe",
+      "min": 1,
+      "max": 10
+    },
+    {
+      "key": "OMP_SCTE35_ANC",
+      "i18n": {
+        "en": {
+          "label": "SCTE 104 as ANC flow",
+          "description": "Write SCTE 104 as ancillary data (video/smpte291) into an MXL data flow; appears as the NMOS sender “ANC (SCTE 104)”.",
+          "group": "ANC"
+        }
+      },
+      "label": "SCTE 104 als ANC-Flow",
+      "type": "enum",
+      "description": "SCTE 104 als Ancillary-Daten (video/smpte291) in einen MXL-Daten-Flow schreiben; erscheint als NMOS-Sender „ANC (SCTE 104)“.",
+      "group": "ANC",
+      "default": "0",
+      "choices": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "1"
+        }
+      ]
+    },
+    {
+      "key": "OMP_SCTE35_RATE",
+      "i18n": {
+        "en": {
+          "label": "ANC frame rate",
+          "description": "Grain rate of the ANC flow, must match the video (e.g. 25/1, 30000/1001). Default 25/1.",
+          "group": "ANC"
+        }
+      },
+      "label": "ANC-Bildrate",
+      "type": "string",
+      "description": "Grain-Rate des ANC-Flows, muss zum Video passen (z. B. 25/1, 30000/1001). Standard 25/1.",
+      "group": "ANC"
+    },
+    {
+      "key": "OMP_SCTE35_ANC_LINE",
+      "i18n": {
+        "en": {
+          "label": "ANC line",
+          "description": "Video line carrying the ANC packet (default 9, VANC).",
+          "group": "ANC"
+        }
+      },
+      "label": "ANC-Zeile",
+      "type": "int",
+      "description": "Videozeile, in die das ANC-Paket gelegt wird (Standard 9, VANC).",
+      "group": "ANC",
+      "min": 1,
+      "max": 2047
+    },
+    {
+      "key": "OMP_SCTE35_ANC_OFFSET_FRAMES",
+      "i18n": {
+        "en": {
+          "label": "ANC offset (frames)",
+          "description": "Compensates a fixed shift between ANC and video index (negative = earlier). Default 0.",
+          "group": "ANC"
+        }
+      },
+      "label": "ANC-Versatz (Bilder)",
+      "type": "int",
+      "description": "Gleicht eine feste Verschiebung zwischen ANC- und Video-Index aus (negativ = früher). Standard 0.",
+      "group": "ANC",
+      "min": -50,
+      "max": 50
+    },
+    {
+      "key": "OMP_SCTE35_ANC_REPEAT",
+      "i18n": {
+        "en": {
+          "label": "ANC repeats",
+          "description": "How often each message is sent in consecutive frames (repeats carry the duplicate flag). Default 2.",
+          "group": "ANC"
+        }
+      },
+      "label": "ANC-Wiederholungen",
+      "type": "int",
+      "description": "Wie oft jede Nachricht in aufeinanderfolgenden Bildern gesendet wird (Wiederholungen mit gesetztem Duplikat-Bit). Standard 2.",
+      "group": "ANC",
+      "min": 1,
+      "max": 10
     }
   ]
 }

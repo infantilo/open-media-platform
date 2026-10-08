@@ -2975,7 +2975,8 @@ fn execute_scte35(store: &AutomationStore, child: &ChildEvent, stop: bool) -> Re
     let p = &child.params;
     let action = p.get("action").and_then(Value::as_str).unwrap_or("out");
     if let Some(block_key) = p.get("blockKey").and_then(Value::as_str) {
-        return execute_scte35_block(store, &client, child, block_key, action, stop);
+        let invoke = |method: &str, args: Value| client.invoke(method, args).map_err(|e| e.to_string());
+        return execute_scte35_block(&store.state, &invoke, child, block_key, action, stop, chrono::Utc::now().timestamp_millis());
     }
     let key = format!("{}:{}", child.target, child.id);
     if !stop {
@@ -3018,15 +3019,22 @@ fn execute_scte35(store: &AutomationStore, child: &ChildEvent, stop: bool) -> Re
 /// auch wenn sie von verschiedenen Items gesendet werden (Vorgänger sendet das Out, das letzte Block-Item
 /// das In). `close` räumt einen verlassenen Block auf: liegt der Schnitt noch in der Zukunft, wird das Out
 /// zurückgenommen (`splice.cancel`), sonst das In sofort gesendet.
-fn execute_scte35_block(store: &AutomationStore, client: &ProxyClient, child: &ChildEvent, key: &str, action: &str, stop: bool) -> Result<(), String> {
+fn execute_scte35_block(
+    state: &Mutex<AutomationState>,
+    invoke: &dyn Fn(&str, Value) -> Result<(), String>,
+    child: &ChildEvent,
+    key: &str,
+    action: &str,
+    stop: bool,
+    now: i64,
+) -> Result<(), String> {
     if stop {
         return Ok(());
     }
     let p = &child.params;
-    let now = chrono::Utc::now().timestamp_millis();
     match action {
         "out" => {
-            if p.get("onlyIfClosed").and_then(Value::as_bool).unwrap_or(false) && store.state.lock().expect("lock poisoned").ad_open.contains_key(key) {
+            if p.get("onlyIfClosed").and_then(Value::as_bool).unwrap_or(false) && state.lock().expect("lock poisoned").ad_open.contains_key(key) {
                 return Ok(()); // der Vorgänger hat das Out schon gesendet
             }
             let lead = adbreak::lead_ms(p, now);
@@ -3035,22 +3043,21 @@ fn execute_scte35_block(store: &AutomationStore, client: &ProxyClient, child: &C
             if let Some(d) = p.get("durationMs").and_then(Value::as_u64) {
                 args["durationMs"] = serde_json::json!(d);
             }
-            client.invoke("splice.out", args).map_err(|e| e.to_string())?;
+            invoke("splice.out", args)?;
             let cut = p.get("cutAtUtcMs").and_then(Value::as_i64).unwrap_or(now + lead as i64);
-            store.state.lock().expect("lock poisoned").ad_open.insert(key.to_string(), AdOpen { event_id, cut_at_utc_ms: cut });
+            state.lock().expect("lock poisoned").ad_open.insert(key.to_string(), AdOpen { event_id, cut_at_utc_ms: cut });
             Ok(())
         }
         "in" | "close" => {
-            let Some(open) = store.state.lock().expect("lock poisoned").ad_open.get(key).cloned() else { return Ok(()) };
+            let Some(open) = state.lock().expect("lock poisoned").ad_open.get(key).cloned() else { return Ok(()) };
             let cancel = action == "close" && open.cut_at_utc_ms > now + 200;
-            let result = if cancel {
-                client.invoke("splice.cancel", serde_json::json!({"eventId": open.event_id}))
+            if cancel {
+                invoke("splice.cancel", serde_json::json!({"eventId": open.event_id}))?;
             } else {
                 let lead = if action == "close" { 0 } else { adbreak::lead_ms(p, now) };
-                client.invoke("splice.in", serde_json::json!({"eventId": open.event_id, "inMs": lead}))
-            };
-            result.map_err(|e| e.to_string())?;
-            store.state.lock().expect("lock poisoned").ad_open.remove(key);
+                invoke("splice.in", serde_json::json!({"eventId": open.event_id, "inMs": lead}))?;
+            }
+            state.lock().expect("lock poisoned").ad_open.remove(key);
             Ok(())
         }
         other => Err(format!("SCTE35: action „{other}\u{201c} für Werbeblock unbekannt")),
@@ -6283,6 +6290,85 @@ mod patch_tests {
 #[cfg(test)]
 mod adbreak_plan_tests {
     use super::*;
+    use std::cell::RefCell;
+
+    fn marker(action: &str, key: &str, extra: Value) -> ChildEvent {
+        let mut params = serde_json::json!({"action": action, "blockKey": key, "auto": true});
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            params[k] = v;
+        }
+        serde_json::from_value(serde_json::json!({"id": format!("ad-{action}-{key}"), "type": "SCTE35", "target": "SCTE-35", "timing": "RELATIVE_TO_START", "params": params})).unwrap()
+    }
+
+    /// Führt eine Folge von Markern gegen einen aufzeichnenden Ersatz des SCTE-Nodes aus.
+    fn run(state: &Mutex<AutomationState>, steps: &[(ChildEvent, i64)]) -> Vec<(String, Value)> {
+        let calls = RefCell::new(Vec::new());
+        let invoke = |m: &str, a: Value| {
+            calls.borrow_mut().push((m.to_string(), a));
+            Ok(())
+        };
+        for (child, now) in steps {
+            let action = child.params["action"].as_str().unwrap().to_string();
+            let key = child.params["blockKey"].as_str().unwrap().to_string();
+            execute_scte35_block(state, &invoke, child, &key, &action, false, *now).unwrap();
+        }
+        calls.into_inner()
+    }
+
+    fn fresh() -> Mutex<AutomationState> {
+        Mutex::new(AutomationState::new(String::new(), String::new(), String::new(), String::new()))
+    }
+
+    #[test]
+    fn out_carries_the_lead_to_the_cut_and_the_block_duration_then_in_closes_it() {
+        let st = fresh();
+        let out = marker("out", "s1", serde_json::json!({"durationMs": 30_000, "cutAtUtcMs": 100_000}));
+        let inn = marker("in", "s1", serde_json::json!({"cutAtUtcMs": 130_000}));
+        let calls = run(&st, &[(out, 96_000), (inn, 126_000)]);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, "splice.out");
+        assert_eq!((calls[0].1["inMs"].as_u64(), calls[0].1["durationMs"].as_u64(), calls[0].1["autoReturn"].as_bool()), (Some(4000), Some(30_000), Some(true)));
+        assert_eq!(calls[1].0, "splice.in");
+        assert_eq!(calls[1].1["inMs"].as_u64(), Some(4000), "In 4 s vor dem Ende");
+        assert_eq!(calls[1].1["eventId"], calls[0].1["eventId"], "gleiche Event-ID für Out und In");
+        assert!(st.lock().unwrap().ad_open.is_empty(), "closed after the in");
+    }
+
+    #[test]
+    fn the_immediate_out_is_skipped_when_the_predecessor_already_sent_it() {
+        let st = fresh();
+        let pre = marker("out", "s1", serde_json::json!({"cutAtUtcMs": 100_000}));
+        let fallback = marker("out", "s1", serde_json::json!({"onlyIfClosed": true}));
+        let calls = run(&st, &[(pre, 96_000), (fallback, 100_000)]);
+        assert_eq!(calls.len(), 1, "no second out");
+        // ohne den Vorgänger-Marker sendet der Rückfall das Out sofort
+        let st = fresh();
+        let calls = run(&st, &[(marker("out", "s9", serde_json::json!({"onlyIfClosed": true})), 5)]);
+        assert_eq!((calls.len(), calls[0].1["inMs"].as_u64()), (1, Some(0)));
+    }
+
+    #[test]
+    fn close_cancels_a_block_whose_cut_has_not_happened_and_ends_one_that_has() {
+        let st = fresh();
+        let pre = marker("out", "s1", serde_json::json!({"cutAtUtcMs": 100_000}));
+        let close = marker("close", "s1", serde_json::json!({}));
+        let calls = run(&st, &[(pre.clone(), 96_000), (close.clone(), 97_000)]);
+        assert_eq!(calls[1].0, "splice.cancel", "operator left before the cut");
+        let st = fresh();
+        let calls = run(&st, &[(pre, 96_000), (close, 120_000)]);
+        assert_eq!((calls[1].0.as_str(), calls[1].1["inMs"].as_u64()), ("splice.in", Some(0)), "block was on air");
+        assert!(st.lock().unwrap().ad_open.is_empty());
+    }
+
+    #[test]
+    fn in_and_close_without_an_open_block_do_nothing_and_a_failed_out_stays_closed() {
+        let st = fresh();
+        assert!(run(&st, &[(marker("in", "x", serde_json::json!({})), 0), (marker("close", "x", serde_json::json!({})), 0)]).is_empty());
+        let fail = |_: &str, _: Value| -> Result<(), String> { Err("Node weg".to_string()) };
+        let c = marker("out", "s1", serde_json::json!({}));
+        assert!(execute_scte35_block(&st, &fail, &c, "s1", "out", false, 0).is_err());
+        assert!(st.lock().unwrap().ad_open.is_empty(), "retry/fallback can still send it");
+    }
 
     fn playlist(spec: &[(&str, &str, u64)]) -> AutomationState {
         let mut s = AutomationState::new(String::new(), String::new(), String::new(), String::new());
