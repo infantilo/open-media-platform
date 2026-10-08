@@ -58,6 +58,7 @@
 //! verlässliche Quelle für "was zeigt der Player gerade wirklich".
 
 mod asrun;
+mod adbreak;
 mod children;
 mod hooks;
 mod persist;
@@ -788,6 +789,18 @@ struct AutomationState {
     /// On-Air-Beginn des aktuellen Primary in UTC-ms (für ABSOLUTE-Kinder und
     /// den Journal-Schlüssel, der Neustarts überlebt).
     onair_utc_ms: i64,
+    /// Kapitel 37: automatische Werbeblock-Kennzeichnung (SCTE-35/-104), Standard aus.
+    ad: adbreak::Settings,
+    /// Kapitel 37: Werbeblöcke, deren Out gesendet wurde und deren In noch aussteht (Schlüssel = Block).
+    ad_open: HashMap<String, AdOpen>,
+}
+
+/// Ein gesendetes, noch nicht beendetes Werbeblock-Out (Kapitel 37).
+#[derive(Debug, Clone)]
+struct AdOpen {
+    event_id: u32,
+    /// Spleißpunkt in UTC-ms (für `close`: liegt er noch in der Zukunft, wird zurückgenommen statt beendet).
+    cut_at_utc_ms: i64,
 }
 
 impl AutomationState {
@@ -832,6 +845,8 @@ impl AutomationState {
             asrun: Default::default(),
             sources: Vec::new(),
             onair_utc_ms: 0,
+            ad: adbreak::Settings::default(),
+            ad_open: HashMap::new(),
         }
     }
 }
@@ -2801,14 +2816,19 @@ fn plan_children(
     saved: Option<&HashMap<String, ChildState>>,
 ) -> Vec<String> {
     let mut notices = Vec::new();
+    if !state.metadata.contains_key(item_id) {
+        return notices;
+    }
+    let auto = ad_break_children(state, item_id);
     let Some(meta) = state.metadata.get(item_id) else { return notices };
-    if meta.children.is_empty() {
+    if meta.children.is_empty() && auto.is_empty() {
         return notices;
     }
     let next_title = state.playlist.peek_next().and_then(|id| state.metadata.get(id)).map(|m| m.label.clone());
     let item_duration_ms = meta.duration_ms;
     let item_label = meta.label.clone();
-    let children = meta.children.clone();
+    let mut children = meta.children.clone();
+    children.extend(auto);
     let elapsed_ms = onair_since.elapsed().as_millis() as u64;
     for (n, original) in children.iter().enumerate() {
         let mut child = original.clone();
@@ -2901,6 +2921,25 @@ fn plan_children(
     notices
 }
 
+/// Kapitel 37: synthetische Marker-Kinder für das Item, das gerade auf Sendung geht (leer, wenn die
+/// Werbeblock-Kennzeichnung aus ist). Sie werden nicht in den Item-Metadaten gespeichert.
+fn ad_break_children(state: &AutomationState, item_id: &str) -> Vec<ChildEvent> {
+    if !state.ad.active() {
+        return Vec::new();
+    }
+    let ids = state.playlist.items();
+    let Some(idx) = ids.iter().position(|i| i == item_id) else { return Vec::new() };
+    let items: Vec<adbreak::Item> = ids
+        .iter()
+        .map(|id| {
+            let m = state.metadata.get(id);
+            adbreak::Item { id: id.clone(), class: m.map(|m| m.media_ref.ad_class.clone()).unwrap_or_default(), duration_ms: m.map_or(0, |m| m.duration_ms) }
+        })
+        .collect();
+    let open: Vec<String> = state.ad_open.keys().cloned().collect();
+    adbreak::children_for(&items, idx, &open, &state.ad, state.onair_utc_ms)
+}
+
 /// Ist das Ziel eines Kindes gerade auflösbar? (Preflight/ARMED; für Node-
 /// Befehle gegen die zuletzt entdeckten Node-Labels, für Grafik gegen den
 /// aufgelösten Grafik-Node, Webhooks sind immer „auflösbar“ — das Netz zeigt
@@ -2935,6 +2974,9 @@ fn execute_scte35(store: &AutomationStore, child: &ChildEvent, stop: bool) -> Re
     let client = store.proxy_client(node_id);
     let p = &child.params;
     let action = p.get("action").and_then(Value::as_str).unwrap_or("out");
+    if let Some(block_key) = p.get("blockKey").and_then(Value::as_str) {
+        return execute_scte35_block(store, &client, child, block_key, action, stop);
+    }
     let key = format!("{}:{}", child.target, child.id);
     if !stop {
         // Eindeutige, über Start und Stopp stabile Event-ID (31 Bit) aus Kind-ID und Zeit.
@@ -2969,6 +3011,49 @@ fn execute_scte35(store: &AutomationStore, child: &ChildEvent, stop: bool) -> Re
         client.invoke("splice.in", serde_json::json!({"eventId": id})).map_err(|e| e.to_string())
     } else {
         Ok(())
+    }
+}
+
+/// Kapitel 37: Marker eines Werbeblocks (`blockKey`). Out und In gehören über den Schlüssel zusammen,
+/// auch wenn sie von verschiedenen Items gesendet werden (Vorgänger sendet das Out, das letzte Block-Item
+/// das In). `close` räumt einen verlassenen Block auf: liegt der Schnitt noch in der Zukunft, wird das Out
+/// zurückgenommen (`splice.cancel`), sonst das In sofort gesendet.
+fn execute_scte35_block(store: &AutomationStore, client: &ProxyClient, child: &ChildEvent, key: &str, action: &str, stop: bool) -> Result<(), String> {
+    if stop {
+        return Ok(());
+    }
+    let p = &child.params;
+    let now = chrono::Utc::now().timestamp_millis();
+    match action {
+        "out" => {
+            if p.get("onlyIfClosed").and_then(Value::as_bool).unwrap_or(false) && store.state.lock().expect("lock poisoned").ad_open.contains_key(key) {
+                return Ok(()); // der Vorgänger hat das Out schon gesendet
+            }
+            let lead = adbreak::lead_ms(p, now);
+            let event_id = (now as u32 ^ key.bytes().fold(5381u32, |h, b| h.wrapping_mul(33) ^ b as u32)) & 0x7FFF_FFFF;
+            let mut args = serde_json::json!({"eventId": event_id, "autoReturn": p.get("autoReturn").and_then(Value::as_bool).unwrap_or(true), "inMs": lead});
+            if let Some(d) = p.get("durationMs").and_then(Value::as_u64) {
+                args["durationMs"] = serde_json::json!(d);
+            }
+            client.invoke("splice.out", args).map_err(|e| e.to_string())?;
+            let cut = p.get("cutAtUtcMs").and_then(Value::as_i64).unwrap_or(now + lead as i64);
+            store.state.lock().expect("lock poisoned").ad_open.insert(key.to_string(), AdOpen { event_id, cut_at_utc_ms: cut });
+            Ok(())
+        }
+        "in" | "close" => {
+            let Some(open) = store.state.lock().expect("lock poisoned").ad_open.get(key).cloned() else { return Ok(()) };
+            let cancel = action == "close" && open.cut_at_utc_ms > now + 200;
+            let result = if cancel {
+                client.invoke("splice.cancel", serde_json::json!({"eventId": open.event_id}))
+            } else {
+                let lead = if action == "close" { 0 } else { adbreak::lead_ms(p, now) };
+                client.invoke("splice.in", serde_json::json!({"eventId": open.event_id, "inMs": lead}))
+            };
+            result.map_err(|e| e.to_string())?;
+            store.state.lock().expect("lock poisoned").ad_open.remove(key);
+            Ok(())
+        }
+        other => Err(format!("SCTE35: action „{other}\u{201c} für Werbeblock unbekannt")),
     }
 }
 
@@ -3254,6 +3339,17 @@ impl ParamStore for AutomationStore {
                 readonly: false,
             },
             ParamSpec { name: "audioRouting".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            // Kapitel 37: automatische Werbeblock-Kennzeichnung (SCTE-35/-104 über `omp-scte35`).
+            ParamSpec { name: "adBreakEnabled".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: false },
+            ParamSpec { name: "adBreakTarget".to_string(), kind: ParamType::String, unit: None, range: None, readonly: false },
+            ParamSpec {
+                name: "adBreakPreRollMs".to_string(),
+                kind: ParamType::Number,
+                unit: Some("ms".to_string()),
+                range: Some(Range::Number { min: 0.0, max: 60000.0 }),
+                readonly: false,
+            },
+            ParamSpec { name: "adBreaksOpen".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             // Kapitel 27 / P8: Preflight-Fenster (Minuten) und Standard-Filler des Channels.
             ParamSpec {
                 name: "preflightWindowMin".to_string(),
@@ -3710,6 +3806,10 @@ impl ParamStore for AutomationStore {
             "targetGraphicsLabel" => Some(serde_json::json!(state.target_graphics_label)),
             "targetAudioMixerLabel" => Some(serde_json::json!(state.target_audio_mixer_label)),
             "audioRouting" => Some(serde_json::json!(self.audio_status.lock().expect("lock poisoned").clone())),
+            "adBreakEnabled" => Some(serde_json::json!(state.ad.enabled)),
+            "adBreakTarget" => Some(serde_json::json!(state.ad.target)),
+            "adBreakPreRollMs" => Some(serde_json::json!(state.ad.pre_roll_ms)),
+            "adBreaksOpen" => Some(serde_json::json!(state.ad_open.keys().cloned().collect::<Vec<_>>())),
             "preflightWindowMin" => Some(serde_json::json!(state.preflight_window_min)),
             "defaultFiller" => Some(serde_json::json!(state.default_filler)),
             "triggerLog" => Some(Value::Array(self.trigger_log.lock().expect("lock poisoned").iter().cloned().collect())),
@@ -3806,6 +3906,22 @@ impl ParamStore for AutomationStore {
             "targetGraphicsLabel" => {
                 state.target_graphics_label = value.as_str().unwrap_or_default().to_string();
                 state.graphics_node_id = None;
+                Ok(())
+            }
+            "adBreakEnabled" => {
+                state.ad.enabled = value.as_bool().ok_or(SetError::Unknown)?;
+                Ok(())
+            }
+            "adBreakTarget" => {
+                state.ad.target = value.as_str().unwrap_or_default().trim().to_string();
+                Ok(())
+            }
+            "adBreakPreRollMs" => {
+                let v = value.as_f64().ok_or(SetError::Unknown)?;
+                if !(0.0..=60000.0).contains(&v) {
+                    return Err(SetError::Unknown);
+                }
+                state.ad.pre_roll_ms = v as u64;
                 Ok(())
             }
             "preflightWindowMin" => {
@@ -5179,6 +5295,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
     // Vom Workflow-Start vorbelegt (Rollenname des Audiomischers), sonst leer.
     initial_state.target_audio_mixer_label = std::env::var("OMP_PLAYOUT_TARGET_AUDIO_MIXER_LABEL").unwrap_or_default();
+    // Kapitel 37: automatische Werbeblock-Kennzeichnung (Standard aus).
+    initial_state.ad = adbreak::Settings {
+        enabled: std::env::var("OMP_PLAYOUT_ADBREAK").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
+        target: std::env::var("OMP_PLAYOUT_ADBREAK_TARGET").unwrap_or_default().trim().to_string(),
+        pre_roll_ms: std::env::var("OMP_PLAYOUT_ADBREAK_PREROLL_MS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(4000),
+    };
     let state = Mutex::new(initial_state);
     let store = Arc::new(AutomationStore {
         audio_status: Mutex::new(String::new()),
@@ -6155,5 +6277,86 @@ mod patch_tests {
         let c = ChildEvent::graphic("t1", children::TimingMode::RelativeToStart, 1000, 0);
         apply_item_patch(&mut st, "a", None, None, None, None, None, ItemPatch { children: Some(vec![c]), ..Default::default() }).unwrap();
         assert_eq!(st.metadata["a"].children.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod adbreak_plan_tests {
+    use super::*;
+
+    fn playlist(spec: &[(&str, &str, u64)]) -> AutomationState {
+        let mut s = AutomationState::new(String::new(), String::new(), String::new(), String::new());
+        for (id, class, dur) in spec {
+            let mut media_ref: readiness::MediaRef = Default::default();
+            media_ref.ad_class = class.to_string();
+            s.metadata.insert(
+                id.to_string(),
+                ItemMeta {
+                    label: id.to_string(),
+                    media: ItemMedia::TestPattern { pattern: "smpte".to_string(), tone_frequency: 0.0 },
+                    duration_ms: *dur,
+                    start_type: StartType::Sequence,
+                    fixtime_hms: None,
+                    start_at_utc_ms: None,
+                    transition: Transition::Cut,
+                    transition_rate_frames: None,
+                    children: Vec::new(),
+                    audio: None,
+                    media_ref,
+                },
+            );
+            s.playlist.append(id.to_string());
+        }
+        s.ad = adbreak::Settings { enabled: true, target: "SCTE-35".to_string(), pre_roll_ms: 4000 };
+        s.discovered_labels = vec!["SCTE-35".to_string()];
+        s
+    }
+
+    fn runtime_ids(s: &AutomationState) -> Vec<String> {
+        s.child_runtime.iter().map(|r| r.child.id.clone()).collect()
+    }
+
+    #[test]
+    fn the_predecessor_schedules_the_out_before_its_end_and_arms_the_target() {
+        let mut s = playlist(&[("show", "", 60_000), ("s1", "commercial", 10_000), ("s2", "commercial", 20_000), ("show2", "", 60_000)]);
+        let now = Instant::now();
+        s.onair_utc_ms = 1_000_000;
+        let notices = plan_children(&mut s, "show", now, None);
+        assert!(notices.is_empty(), "{notices:?}");
+        assert_eq!(runtime_ids(&s), vec!["ad-pre-s1"]);
+        assert_eq!(s.child_runtime[0].state, ChildState::Armed);
+        let start = s.child_schedule.iter().find(|e| matches!(e.action, ChildAction::Start { .. })).expect("start scheduled");
+        assert_eq!((start.fire_at - now).as_millis(), 56_000, "4 s before the end of a 60 s item");
+        assert!(s.child_schedule.iter().all(|e| !matches!(e.action, ChildAction::Stop)), "auto markers need no stop");
+    }
+
+    #[test]
+    fn nothing_is_planned_when_the_feature_is_off_or_the_item_has_no_role() {
+        let mut s = playlist(&[("show", "", 60_000), ("s1", "commercial", 10_000)]);
+        s.ad.enabled = false;
+        plan_children(&mut s, "show", Instant::now(), None);
+        assert!(s.child_runtime.is_empty());
+        s.ad.enabled = true;
+        let mut s = playlist(&[("a", "", 1000), ("b", "", 1000)]);
+        plan_children(&mut s, "a", Instant::now(), None);
+        assert!(s.child_runtime.is_empty());
+    }
+
+    #[test]
+    fn leaving_an_open_block_schedules_an_immediate_close() {
+        let mut s = playlist(&[("s1", "commercial", 10_000), ("s2", "commercial", 10_000), ("show", "", 60_000)]);
+        s.ad_open.insert("s1".to_string(), AdOpen { event_id: 7, cut_at_utc_ms: 0 });
+        plan_children(&mut s, "show", Instant::now(), None);
+        assert_eq!(runtime_ids(&s), vec!["ad-close-s1"]);
+    }
+
+    #[test]
+    fn auto_children_survive_a_restart_reconstruction_without_firing_again() {
+        let mut s = playlist(&[("show", "", 60_000), ("s1", "commercial", 10_000)]);
+        let mut saved = HashMap::new();
+        saved.insert("ad-pre-s1".to_string(), ChildState::Completed);
+        plan_children(&mut s, "show", Instant::now(), Some(&saved));
+        assert_eq!(s.child_runtime[0].state, ChildState::Completed);
+        assert!(s.child_schedule.is_empty());
     }
 }

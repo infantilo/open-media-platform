@@ -236,7 +236,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         match output::AncOutput::start(ctx, &flow_id, &format!("{label} ANC"), rate, envn("OMP_SCTE35_ANC_LINE", 9) as u16, envn("OMP_SCTE35_ANC_OFFSET_FRAMES", 0), envn("OMP_SCTE35_ANC_REPEAT", 2) as u32) {
             Ok(a) => {
                 senders.push(SenderSpec {
-                    id: Some(flow_id.clone()),
                     transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
                     flow: Some(FlowSpec::Data { id: Some(flow_id.clone()), grain_rate_numerator: rate.0, grain_rate_denominator: rate.1, did_sdid: vec![(anc::DID_SCTE104, anc::SDID_SCTE104)] }),
                     label: Some(format!("{label} ANC (SCTE 104)")),

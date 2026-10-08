@@ -10,9 +10,10 @@
 //! `target` (Node-Label) + `method` + `params` ausdrücklich — dieselben
 //! IS-12/14-Methoden, die auch die Bedien-UIs aufrufen.
 //!
-//! **Bewusst NICHT unterstützt (kein Fake, Spec §275):** SUBTITLE, ROUTING,
-//! SOURCE, SCTE35, GPI. Dafür existiert in diesem System kein Ziel-Node; sie
-//! werden beim Setzen abgelehnt (`validate`) statt scheinbar zu laufen.
+//! **Bewusst NICHT unterstützt (kein Fake, Spec §275):** ROUTING, SOURCE, GPI. Dafür
+//! existiert in diesem System kein Ziel-Node; sie werden beim Setzen abgelehnt
+//! (`validate`) statt scheinbar zu laufen. (SUBTITLE und SCTE35 haben seit Kapitel 27 / P9
+//! bzw. 37 ihre Ziel-Nodes `omp-ograf` und `omp-scte35`.)
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -249,12 +250,17 @@ impl ChildEvent {
             }
             match self.params.get("action").and_then(Value::as_str).unwrap_or("out") {
                 "out" => {}
+                "in" | "close" => {
+                    if self.params.get("blockKey").and_then(Value::as_str).is_none_or(|k| k.trim().is_empty()) {
+                        return Err("SCTE35 in/close: params.blockKey (Schlüssel des Werbeblocks) fehlt".to_string());
+                    }
+                }
                 "signal" => {
                     if self.params.get("typeId").and_then(Value::as_u64).is_none_or(|t| t > 255) {
                         return Err("SCTE35 signal: params.typeId (segmentation_type_id 0…255) fehlt".to_string());
                     }
                 }
-                other => return Err(format!("SCTE35: action „{other}\u{201c} unbekannt (out | signal)")),
+                other => return Err(format!("SCTE35: action „{other}\u{201c} unbekannt (out | in | close | signal)")),
             }
         }
         if !self.kind.is_supported() {
