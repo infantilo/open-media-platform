@@ -794,6 +794,12 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/modules",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/nodes",
     "auth": "auth",
     "domain": "core"

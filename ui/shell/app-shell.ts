@@ -10,7 +10,6 @@
 import "../graph/flow-canvas.ts";
 import type { FlowCanvas } from "../graph/flow-canvas.ts";
 import "./hosts-view.ts";
-import "./cloud-view.ts";
 import "./workflows-view.ts";
 import "./process-view.ts";
 import "./asset-view.ts";
@@ -23,14 +22,22 @@ import "./scheduler-view.ts";
 import "./admin-view.ts";
 import { apiFetch, type ConnectionChangeDetail, type ConnectionState, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
-import { buildLangSelect, type I18nKey, t, t as tt } from "./i18n.ts";
+import { buildLangSelect, getLang, type I18nKey, t, t as tt } from "./i18n.ts";
+import { exposeHostApi } from "./host-api.ts";
+import { insertIndex, mainTabs, type ModuleInfo } from "./modules-logic.ts";
 
-type TabId = "flow" | "workflows" | "process" | "assets" | "hosts" | "cloud" | "instances" | "alarms" | "health" | "signal-path" | "scheduler" | "admin";
+// Kern-Tabs haben feste IDs; Modul-Tabs `mod:<modul>:<tab>` (Kapitel 36.3).
+type TabId = string;
 
 interface TabDef {
   id: TabId;
-  labelKey: I18nKey;
+  labelKey?: I18nKey;
+  /** Beschriftung eines Modul-Tabs (aus dem Manifest, schon in der aktuellen Sprache). */
+  label?: string;
   element: string;
+  /** Modul-Tab: ESM-Bundle, das das Element registriert; scheitert das Laden, zeigt der Tab eine Fehlermeldung. */
+  bundle?: string;
+  bundleError?: string;
 }
 
 const BASE_TABS: TabDef[] = [
@@ -45,8 +52,6 @@ const BASE_TABS: TabDef[] = [
   // beide Domänen gehören laut Aufgabenstellung eng zusammen.
   { id: "assets", labelKey: "app.tab.assets", element: "omp-asset-view" },
   { id: "hosts", labelKey: "app.tab.hosts", element: "omp-hosts-view" },
-  // Kapitel 35 (ARCHITECTURE.md §27): Cloud-Ressourcen, Kosten, Autoscaling — ohne Anbieter eine kurze Hinweisseite.
-  { id: "cloud", labelKey: "app.tab.cloud", element: "omp-cloud-view" },
   // §17 Teil 2 (docs/END-GOAL-FEATURES.md, 2026-07-19): "Laufende
   // Instanzen"-Tab — baut auf Kapitel 14 (Ressourcenwerte), kein neuer
   // Backend-Konsument.
@@ -167,6 +172,7 @@ class AppShell extends HTMLElement {
     this.#buildSkeleton();
     this.#switchTab("flow");
     this.#loadAdminTab();
+    void this.#loadModuleTabs();
     void this.#loadWorkflowOptions();
     // Bug 2 (2026-07-24): Einstiegspunkt vom Workflows-Tab in den
     // Flow-Editor-Bearbeiten-Modus (ui/graph/flow-canvas.ts
@@ -198,6 +204,35 @@ class AppShell extends HTMLElement {
     } catch {
       // Kein Administration-Tab ohne bestätigtes isAdmin — sicherer
       // Default, kein Rätselraten bei einem unerreichbaren Orchestrator.
+    }
+  }
+
+  // Kapitel 36.3: Tabs der Orchestrator-Module kommen aus GET /api/v1/modules statt aus fest verdrahteten Importen. Ein
+  // Modul, dessen Bundle nicht lädt, zeigt seinen Tab mit Fehlermeldung — die übrige Shell bleibt unberührt. Der
+  // Administration-Tab bleibt immer der letzte (#loadAdminTab hängt ihn an; Modul-Tabs werden davor eingefügt).
+  async #loadModuleTabs() {
+    try {
+      exposeHostApi();
+      const res = await apiFetch("/api/v1/modules");
+      if (!res.ok) return;
+      const tabs = mainTabs((await res.json()) as ModuleInfo[], getLang());
+      for (const mt of tabs) {
+        if (this.#tabs.some((x) => x.id === mt.id)) continue;
+        const def: TabDef = { id: mt.id, label: mt.label, element: mt.element, bundle: mt.bundle };
+        try {
+          await import(/* webpackIgnore: true */ mt.bundle);
+        } catch (e) {
+          def.bundleError = String(e);
+          console.warn(`module ${mt.module}: bundle ${mt.bundle} failed to load`, e);
+        }
+        const at = insertIndex(this.#tabs.map((x) => x.id), mt.after);
+        this.#tabs.splice(at, 0, def);
+        const btn = this.#buildTabButton(def);
+        this.#tabsWrap.insertBefore(btn, this.#tabsWrap.children[at] ?? null);
+        this.#styleTabButton(btn);
+      }
+    } catch {
+      // Manifest nicht erreichbar: keine Modul-Tabs; der Kern bleibt voll nutzbar.
     }
   }
 
@@ -321,7 +356,7 @@ class AppShell extends HTMLElement {
   #buildTabButton(tab: TabDef): HTMLButtonElement {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = t(tab.labelKey);
+    btn.textContent = tab.label ?? t(tab.labelKey as I18nKey);
     btn.setAttribute("data-tab-id", tab.id);
     btn.addEventListener("click", () => this.#switchTab(tab.id));
     return btn;
@@ -351,6 +386,15 @@ class AppShell extends HTMLElement {
     }
     const tab = this.#tabs.find((t) => t.id === id);
     if (!tab) return;
+    if (tab.bundleError) {
+      const msg = document.createElement("p");
+      msg.className = "omp-empty";
+      msg.style.cssText = "color:var(--omp-error);padding:var(--omp-space-3);";
+      msg.textContent = t("app.module.loadFailed", { name: tab.label ?? tab.id });
+      msg.title = tab.bundleError;
+      this.#contentEl.replaceChildren(msg);
+      return;
+    }
     this.#contentEl.replaceChildren(document.createElement(tab.element));
     // S6: eine zuvor getroffene Workflow-Auswahl auf den frisch
     // gemounteten Flow-Editor-Tab anwenden — die Kachel selbst hält

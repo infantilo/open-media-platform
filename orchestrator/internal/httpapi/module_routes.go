@@ -34,3 +34,16 @@ func (m moduleRoutes) Handle(pattern string, a module.Auth, h http.HandlerFunc) 
 func WithModules(reg *module.Registry, deps module.Deps) HandlerOption {
 	return func(o *handlerOptions) { o.modules, o.moduleDeps = reg, deps }
 }
+
+// handleModules: GET /api/v1/modules — Stand aller Module samt Oberfläche (Manifest für die Shell, Kapitel 36.3).
+// Für jede angemeldete Person: die Shell braucht es vor der Anmeldung nicht, die Tabs der Module verlangen ohnehin
+// ihre eigenen Rechte an den Routen.
+func handleModules(reg *module.Registry) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if reg == nil {
+			writeJSON(w, http.StatusOK, []module.Info{})
+			return
+		}
+		writeJSON(w, http.StatusOK, reg.Info())
+	}
+}

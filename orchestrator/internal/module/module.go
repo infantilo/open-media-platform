@@ -42,15 +42,20 @@ type Starter interface {
 	Start(ctx context.Context, d Deps) error
 }
 
-// UITab beschreibt einen Eintrag der Shell, den das Modul beisteuert (Kapitel 36.3).
+// UITab beschreibt einen Eintrag der Shell, den das Modul beisteuert (Kapitel 36.3). Die Shell kennt das Modul nicht:
+// sie liest die Tabs aus `GET /api/v1/modules`, lädt das ESM-Bundle und legt beim Aktivieren des Tabs das Custom Element an.
 type UITab struct {
-	// ID ist im Modul eindeutig; Zielort der Shell: "main" (Hauptleiste) oder "admin:<gruppe>" (Admin-Untertab).
-	ID        string `json:"id"`
+	// ID ist im Modul eindeutig.
+	ID string `json:"id"`
+	// Placement: "main" (Hauptleiste) oder "admin:<gruppe>" (Admin-Untertab, ab 36.7).
 	Placement string `json:"placement"`
-	// LabelKey ist ein i18n-Schlüssel der Shell; Element der Custom-Element-Name, Bundle die URL des ESM-Bundles.
-	LabelKey string `json:"labelKey"`
-	Element  string `json:"element"`
-	Bundle   string `json:"bundle"`
+	// After: ID eines vorhandenen Tabs, hinter den der neue gehört (leer = ans Ende, vor „Administration“).
+	After string `json:"after,omitempty"`
+	// Label: Beschriftung je Sprache ("de", "en"); fehlt die aktuelle Sprache, gilt "de", dann die ID.
+	Label map[string]string `json:"label"`
+	// Element: Name des Custom Elements, das das Bundle registriert. Bundle: URL des ESM-Bundles.
+	Element string `json:"element"`
+	Bundle  string `json:"bundle"`
 }
 
 // UIProvider: das Modul bringt Oberfläche mit.

@@ -3,16 +3,22 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/cluster"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
+	cloudmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/cloud"
 )
 
-// registerModules meldet die Module des Orchestrators an (UMSETZUNG.md Kapitel 36). Noch ohne Einträge: Cloud (36.6),
+// registerModules meldet die Module des Orchestrators an (UMSETZUNG.md Kapitel 36). Cloud (UI-Teil, 36.3; Rest 36.6),
 // Audio-Ausgabe (36.7) und Playout (36.8) ziehen schrittweise hierher um.
 func registerModules(reg *module.Registry) {
-	_ = reg // bewusst leer bis zum Pilotmodul
+	for _, m := range []module.Module{cloudmod.Module{}} {
+		if err := reg.Register(m); err != nil {
+			slog.Error("module registration failed", "module", m.Name(), "error", err)
+		}
+	}
 }
 
 // moduleSettings legt den generischen Einstellungsspeicher des Kerns hinter die Modul-Schnittstelle.

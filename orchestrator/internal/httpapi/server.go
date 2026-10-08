@@ -813,6 +813,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 		mux.HandleFunc("DELETE /api/v1/groups/{id}/members/{username}", g.requireVerbGlobal(authz.VerbAdmin, handleRemoveGroupMember(options.groups, options.domainAudit)))
 	}
 
+	mux.HandleFunc("GET /api/v1/modules", g.requireAuth(handleModules(options.modules)))
 	// Module (Kapitel 36): melden ihre Routen über die Registry an; abgeschaltete/fehlgeschlagene Module registrieren nichts
 	// (404). Ohne Registry (Tests) ändert sich nichts.
 	if options.modules != nil {

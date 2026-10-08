@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
@@ -68,4 +69,33 @@ func TestModuleRoutesAnonymousIsOpenAndUnknownKindIsNotOpen(t *testing.T) {
 			t.Errorf("%s: %d, want %d", path, rec.Code, want)
 		}
 	}
+}
+
+func TestHandleModulesListsStateAndUIOfMountedModules(t *testing.T) {
+	reg := module.NewRegistry("off")
+	_ = reg.Register(uiModule{name: "shown"})
+	_ = reg.Register(uiModule{name: "off"})
+	reg.Mount(moduleRoutes{mux: http.NewServeMux(), g: &authGate{auth: fakeAuthSvc{}, authz: fakeAuthzSvc{}, audit: &fakeAuditSvc{}, nodes: fakeNodeLister{}}}, module.Deps{})
+	rec := httptest.NewRecorder()
+	handleModules(reg)(rec, httptest.NewRequest(http.MethodGet, "/api/v1/modules", nil))
+	body := rec.Body.String()
+	if rec.Code != 200 || !strings.Contains(body, `"name":"shown","state":"mounted"`) || !strings.Contains(body, `"element":"x-shown"`) {
+		t.Fatalf("%d %s", rec.Code, body)
+	}
+	if !strings.Contains(body, `"name":"off","state":"disabled"`) || strings.Contains(body, "x-off") {
+		t.Fatalf("a disabled module is listed but contributes no UI: %s", body)
+	}
+	rec = httptest.NewRecorder()
+	handleModules(nil)(rec, httptest.NewRequest(http.MethodGet, "/api/v1/modules", nil))
+	if strings.TrimSpace(rec.Body.String()) != "[]" {
+		t.Fatalf("no registry → empty list, got %s", rec.Body.String())
+	}
+}
+
+type uiModule struct{ name string }
+
+func (m uiModule) Name() string                           { return m.name }
+func (m uiModule) Mount(module.Routes, module.Deps) error { return nil }
+func (m uiModule) UI() []module.UITab {
+	return []module.UITab{{ID: "t", Placement: "main", Label: map[string]string{"de": "T"}, Element: "x-" + m.name, Bundle: "/b.js"}}
 }

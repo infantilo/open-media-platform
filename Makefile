@@ -12,8 +12,10 @@ build: ui
 # selbst) — Browser können kein .ts ausführen; `deno bundle` übernimmt
 # das Stripping der Typen ohne Node/npm-Build-Toolchain.
 ui:
-	mkdir -p ui/dist
+	mkdir -p ui/dist/modules
 	deno bundle ui/shell/shell.ts -o ui/dist/shell.js
+	# Modul-Oberflächen (Kapitel 36.3): je ui/modules/<name>/index.ts ein eigenständiges Bundle ui/dist/modules/<name>.js
+	for f in ui/modules/*/index.ts; do n=$$(basename $$(dirname $$f)); deno bundle $$f -o ui/dist/modules/$$n.js || exit 1; done
 
 # Baut die per deploy/catalog.json vom Instanz-Launcher startbaren Node-
 # Binaries (UMSETZUNG.md C8) — separates Target von `build`, weil der

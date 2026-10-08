@@ -4,10 +4,7 @@
 // Bewusst ehrlich in der Darstellung: alle Beträge sind SCHÄTZUNGEN aus Preisliste × Laufzeit (nicht die Abrechnung des
 // Anbieters). Regel-Formulare werden explizit gespeichert ("Speichern", nicht je Klick) und beim Neuzeichnen durch den
 // Poll nicht überschrieben, solange sie sich im Bearbeiten befinden.
-import { t } from "./i18n.ts";
-import { apiFetch } from "./connection.ts";
-import { whoami } from "./auth.ts";
-import { showToast } from "../kit/omp-toast.ts";
+import { apiFetch, showToast, t, whoami } from "../host.ts";
 import { budgetBar, describeReason, fmtMoney, policyFromForm, policyToForm, reservationPayload, type Mode, type Policy, type PolicyForm } from "./cloud-logic.ts";
 
 interface CloudHost {
@@ -35,13 +32,13 @@ const POLL_MS = 5000;
 // Übersetzt Server-Begründungen (Code + Parameter) in die Oberfläche; unbekannte Codes zeigen den englischen Originaltext.
 function say(code: string | undefined, params: Record<string, unknown> | undefined, reason: string): string {
   return describeReason(code, params, reason, (key, p) => {
-    const text = t(key as "cloudv.title", p);
+    const text = t(key, p);
     return text === key ? undefined : text;
   }, (v, cur) => fmtMoney(v, cur));
 }
 function kindLabel(kind: string): string {
   const key = `cloudv.kind.${kind}`;
-  const text = t(key as "cloudv.title");
+  const text = t(key);
   return text === key ? kind : text;
 }
 const css = (s: string) => s;

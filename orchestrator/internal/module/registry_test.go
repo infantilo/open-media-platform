@@ -119,7 +119,7 @@ func TestMountOrderDisabledAndFailureIsolation(t *testing.T) {
 
 func TestInfoShowsUIOnlyForMountedModules(t *testing.T) {
 	r := NewRegistry("hidden")
-	_ = r.Register(&uiFake{fake{name: "shown", ui: []UITab{{ID: "t", Placement: "main", LabelKey: "k", Element: "x-y", Bundle: "/b.js"}}}})
+	_ = r.Register(&uiFake{fake{name: "shown", ui: []UITab{{ID: "t", Placement: "main", Label: map[string]string{"de": "k"}, Element: "x-y", Bundle: "/b.js"}}}})
 	_ = r.Register(&uiFake{fake{name: "hidden", ui: []UITab{{ID: "t2"}}}})
 	r.Mount(&rec{}, Deps{})
 	for _, i := range r.Info() {

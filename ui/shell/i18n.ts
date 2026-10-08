@@ -77,6 +77,21 @@ export function t(key: I18nKey, params?: Record<string, unknown>): string {
   return s;
 }
 
+/**
+ * Module bringen eigene Texte mit (UMSETZUNG.md Kapitel 36.3): `addMessages` ergänzt das Wörterbuch einer Sprache um die
+ * Schlüssel des Moduls. Kern-Schlüssel werden nie überschrieben (ein Modul kann dem Kern keine Texte ändern).
+ */
+export function addMessages(lang: Lang, dict: Record<string, string>): void {
+  for (const [k, v] of Object.entries(dict)) if (!(k in DICTS[lang])) DICTS[lang][k] = v;
+}
+
+/** Wie [[t]], aber mit beliebigem Schlüssel — für Module, deren Schlüssel nicht im Kern-Wörterbuch stehen. */
+export function tLoose(key: string, params?: Record<string, unknown>): string {
+  let s = DICTS[current][key] ?? DICTS.de[key] ?? key;
+  if (params) for (const [k, v] of Object.entries(params)) s = s.replaceAll(`{${k}}`, String(v));
+  return s;
+}
+
 /** Locale für Datums-/Zeitformatierung passend zur Sprache. */
 export function dateLocale(): string {
   return current === "de" ? "de-DE" : "en-GB";

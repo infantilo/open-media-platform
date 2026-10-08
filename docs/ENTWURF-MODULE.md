@@ -94,3 +94,15 @@ Ursprüngliche Fragen (zur Nachvollziehbarkeit):
    `workflows` liest nur diese. Alternative: die Ableitung wandert ins Playout-Modul und `workflows` bietet einen Hook
    „Start-Umgebung einer Rolle ergänzen“. Mein Vorschlag ist der Hook, weil er `workflows` ganz ohne Playout-Begriffe lässt.
 4. **Stufe 2** bleibt offen (Entscheidung nach dem Pilot 36.6).
+
+## 6. Oberfläche der Module (36.3, umgesetzt)
+
+- **Manifest:** `GET /api/v1/modules` liefert je Modul `state` (mounted/disabled/failed) und — nur für gemountete Module — die
+  UI-Einträge (`placement`, `after`, `label` je Sprache, `element`, `bundle`). Die Shell kennt kein Modul beim Namen.
+- **Bundles:** Jedes Modul hat ein eigenständiges ESM-Bundle (`ui/modules/<name>/index.ts` → `ui/dist/modules/<name>.js`, gebaut
+  von `make ui`). Es registriert sein Custom Element und meldet seine Texte über `addMessages` an.
+- **Host-Schnittstelle:** Sprache/Wörterbuch, Verbindungsüberwachung (`apiFetch`), Anmeldung (`whoami`) und Toasts sind
+  Singletons der Shell. Sie liegen unter `globalThis.__omp`; Module greifen über `ui/modules/host.ts` darauf zu und bündeln
+  keine zweite Kopie.
+- **Fehlerverhalten:** Lädt ein Bundle nicht, zeigt nur dessen Tab eine Fehlermeldung; ein abgeschaltetes Modul hat keinen Tab.
+- **Noch offen:** Admin-Untertabs (`placement: "admin:<gruppe>"`) — kommen mit dem ersten Modul, das sie braucht (Audio-Ausgabe, 36.7).
