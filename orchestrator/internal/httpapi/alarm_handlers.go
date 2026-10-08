@@ -43,6 +43,9 @@ type handlerOptions struct {
 	nodeVersions    NodeVersionStore
 	nodeValues      NodeOptionValues
 	locations       LocationStore
+	cloud           CloudCosts
+	cloudProvider   string
+	cloudRegion     string
 	triggerRouter   ChannelTriggerService
 	asrun           AsRunStore
 	asrunMetrics    *asrun.Metrics

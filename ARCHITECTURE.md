@@ -4336,7 +4336,7 @@ Autoscaling mit Regeln und hartem Budgetdeckel, Standard AUS, Modus „vorschlag
   „Host ist Cloud-Host und kostet“, das Rollen mit Cloud-Toleranz (§18.8) nutzen dürfen.
 - Die Kapazitätsvorschau (§16) und der Scheduler (`workflows/scheduler.go`) liefern die
   vorausschauende Last; heute gibt es dort Zeitpläne und einen 15-Minuten-Forecast, aber
-  keinen Kalender-/Kapazitäts-Endpunkt — er entsteht in 35.3/35.4 als Grundlage der
+  keinen Kalender-/Kapazitäts-Endpunkt. Korrektur 2026-10-08: das Ressourcenmodell liefert `GET /api/v1/scheduler/resources`, die Zeitachse rechnet der Scheduler-View im Frontend; 35.3/35.4 hängen sich als Grundlage der
   Kostenvorberechnung.
 
 ### 27.2 Provider-Schnittstelle (Paket `orchestrator/internal/cloud`)

@@ -527,6 +527,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/admin/settings/check-path", g.requireVerbGlobal(authz.VerbAdmin, handleCheckPath(launcherSvc)))
 	mux.HandleFunc("GET /api/v1/admin/settings/system", g.requireVerbGlobal(authz.VerbAdmin, handleListSystemSettings(options.systemSettings, cfg, options.startupSkipped)))
 	mux.HandleFunc("PUT /api/v1/admin/settings/system/{key}", g.requireVerbGlobal(authz.VerbAdmin, handleSetSystemSetting(options.systemSettings, cfg, options.domainAudit)))
+	mux.HandleFunc("GET /api/v1/cloud/pricing", g.requireAuth(handleCloudPricing(options.cloud, options.cloudProvider, options.cloudRegion)))
+	mux.HandleFunc("POST /api/v1/cloud/estimate", g.requireAuth(handleCloudEstimate(options.cloud)))
 	mux.HandleFunc("GET /api/v1/admin/storage-locations", g.requireVerbGlobal(authz.VerbAdmin, handleListLocations(options.locations, options.nodeValues, launcherSvc)))
 	mux.HandleFunc("POST /api/v1/admin/storage-locations", g.requireVerbGlobal(authz.VerbAdmin, handleCreateLocation(options.locations, launcherSvc, options.domainAudit)))
 	mux.HandleFunc("PUT /api/v1/admin/storage-locations/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleUpdateLocation(options.locations, options.domainAudit)))

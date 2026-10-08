@@ -28,6 +28,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/backup"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/channeltrigger"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/cloud"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/cluster"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/consoles"
@@ -1002,7 +1003,7 @@ func main() {
 	}
 	go runWhileLeader(ctx, clusterNode, triggerRouter.Run)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithPlayout(playoutStore, workflowSvc), httpapi.WithChannelTriggers(triggerRouter, triggerStore), httpapi.WithAsRun(asrunStore, asrunMetrics), httpapi.WithPreflight(preflightSvc), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)))
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithPlayout(playoutStore, workflowSvc), httpapi.WithChannelTriggers(triggerRouter, triggerStore), httpapi.WithAsRun(asrunStore, asrunMetrics), httpapi.WithPreflight(preflightSvc), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), cloudOption())
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,
@@ -1035,5 +1036,23 @@ func main() {
 			slog.Warn("graceful shutdown failed, forcing close", "error", err)
 			srv.Close()
 		}
+	}
+}
+
+// cloudOption schaltet die Cloud-Kostenendpunkte frei (ARCHITECTURE.md §27). Ohne
+// `OMP_CLOUD_PROVIDER` bleibt der Kern ohne Anbieter lauffähig (`configured:false`).
+// Derzeit gibt es nur den Simulations-Anbieter `mock`; echte Adapter folgen mit 35.6.
+func cloudOption() httpapi.HandlerOption {
+	switch name := os.Getenv("OMP_CLOUD_PROVIDER"); name {
+	case "":
+		return httpapi.WithCloud(nil, "", "")
+	case "mock":
+		return httpapi.WithCloud(&cloud.CostService{
+			Provider: cloud.NewMockProvider(), Region: "mock-region",
+			MinBilled: time.Minute, Lead: 5 * time.Minute, Teardown: 5 * time.Minute,
+		}, "mock", "mock-region")
+	default:
+		slog.Warn("unknown OMP_CLOUD_PROVIDER, cloud features off", "value", name)
+		return httpapi.WithCloud(nil, "", "")
 	}
 }
