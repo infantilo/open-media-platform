@@ -170,6 +170,8 @@ pub struct Parsed {
     pub immediate: Option<bool>,
     pub cancel: bool,
     pub segmentation_type_id: Option<u8>,
+    /// `pts_time` des Spleißpunkts (90 kHz), `None` = sofort bzw. nicht angegeben.
+    pub pts_90k: Option<u64>,
 }
 
 /// Prüft Länge und CRC und liest die wichtigsten Felder (für Tests und die Anzeige im Node).
@@ -187,7 +189,7 @@ pub fn parse(sec: &[u8]) -> Result<Parsed, String> {
     let cmd_len = (((sec[11] & 0x0F) as usize) << 8) | sec[12] as usize;
     let cmd_type = sec[13];
     let cmd = &sec[14..14 + cmd_len];
-    let mut p = Parsed { command_type: cmd_type, event_id: None, out_of_network: None, duration_ms: None, immediate: None, cancel: false, segmentation_type_id: None };
+    let mut p = Parsed { command_type: cmd_type, event_id: None, out_of_network: None, duration_ms: None, immediate: None, cancel: false, segmentation_type_id: None, pts_90k: None };
     if cmd_type == 0x05 {
         p.event_id = Some(u32::from_be_bytes([cmd[0], cmd[1], cmd[2], cmd[3]]));
         p.cancel = cmd[4] & 0x80 != 0;
@@ -197,7 +199,12 @@ pub fn parse(sec: &[u8]) -> Result<Parsed, String> {
             p.immediate = Some(f & 0x10 != 0);
             let mut i = 6;
             if f & 0x40 != 0 && f & 0x10 == 0 {
-                i += if cmd[i] & 0x80 != 0 { 5 } else { 1 };
+                if cmd[i] & 0x80 != 0 {
+                    p.pts_90k = Some(u64::from_be_bytes([0, 0, 0, cmd[i], cmd[i + 1], cmd[i + 2], cmd[i + 3], cmd[i + 4]]) & MAX_33);
+                    i += 5;
+                } else {
+                    i += 1;
+                }
             }
             if f & 0x20 != 0 {
                 let v = u64::from_be_bytes([0, 0, 0, cmd[i], cmd[i + 1], cmd[i + 2], cmd[i + 3], cmd[i + 4]]) & MAX_33;
@@ -206,6 +213,9 @@ pub fn parse(sec: &[u8]) -> Result<Parsed, String> {
         }
     }
     if cmd_type == 0x06 {
+        if cmd[0] & 0x80 != 0 {
+            p.pts_90k = Some(u64::from_be_bytes([0, 0, 0, cmd[0], cmd[1], cmd[2], cmd[3], cmd[4]]) & MAX_33);
+        }
         let desc_off = 14 + cmd_len;
         let dl = u16::from_be_bytes([sec[desc_off], sec[desc_off + 1]]) as usize;
         let d = &sec[desc_off + 2..desc_off + 2 + dl];
