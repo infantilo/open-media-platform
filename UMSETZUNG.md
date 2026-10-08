@@ -5123,3 +5123,31 @@ Ziel: MCA-Labels (Kanal-, Soundfield-Group-, Gruppen-Labels) aus MXF **lesen** (
 | 33.3 MXF-Player — **erledigt 2026-10-07** (Panel-Tabelle `mcaLabels`; Tags in `omp-audio-rules::mxf_source`, wirkt auch in channel-player/direct) | Labels beim Laden lesen → Tags der Audio-Regeln (`lang:`, `role:` aus Content/Use Class, `ch:`), Vorrang vor Spurschema; Anzeige im Panel | echte Datei mit injizierten Labels, Plan im Panel |
 | 33.4 Recorder — **erledigt 2026-10-08** (Endung `.mxf` → `mxfmux` mit H.264-Bytestream + PCM S24LE; Parameter `record.mcaPlan` (JSON wie `mxf-mca inject`) wird beim Start geprüft, nach EOS per `inject` in place/wachsend geschrieben; Fehler → Warnung, Datei bleibt) | aufgenommene Datei per `mxf-mca dump` prüfen. Geprüft: identische Elementkette per gst-launch → mxfmux-Datei, injiziert, `mxf-mca dump` zeigt 3 Labels, ffprobe liest h264 + pcm_s24le weiter. **Live (2026-10-08):** echter Recorder + omp-source über IS-05 verbunden, 8 s `.mxf` mit Plan aufgenommen → `mxf-mca dump` zeigt chL/chR/sgST, ffprobe h264 + pcm_s24le 8,08 s |
 | 33.5 UI/Handbuch/Katalog — **erledigt 2026-10-08** (README: Norm-Tabelle ST 377-4/-41 + Node-Beschreibungen; Handbuch §9, Benutzerhandbuch 10c, Katalog; `record.mcaPlan` im generischen Parameter-Panel als Textfeld) | | |
+
+
+## Kapitel 34: Lokale Geräte (USB Video/Audio) als MXL anbieten — `omp-device-hub` (Nutzerauftrag 2026-10-08)
+
+Entscheidung (Nutzer 2026-10-08): **ein Node je Host**, der alle lokalen Geräte erkennt; je Gerät ein Schalter „anbieten“ — erst dann entstehen MXL-Flow und NMOS-Sender. Kein Node je Gerät.
+
+| Schritt | Inhalt | Verifikation |
+|---|---|---|
+| 34.1 Erkennung (Bibliothek) | V4L2-Videogeräte (`/dev/video*`, nur Capture-Geräte, Formate/Auflösungen/Fps) und ALSA/USB-Audio (Karten, Kanalzahl, Raten); stabile Geräte-ID (USB-Pfad/Seriennummer, nicht `/dev/videoN`); Hotplug per Neuabfrage/udev. Recherche vor Code: v4l2-ctl/`gst-device-monitor` auf dieser Maschine | Unit-Tests mit Fixture-Ausgaben; echter Lauf mit vorhandenem Gerät (falls keins: Loopback/`v4l2loopback` oder `audiotestsrc`-Fake, ehrlich benennen) |
+| 34.2 Node `omp-device-hub` | Parameter `devices` (Liste mit ID, Art, Fähigkeiten, `offered`, Status), Methoden `setOffered {id,on}`, `rescan`; Zustand je Geräte-ID persistent (Neustart behält Auswahl); Standard: alles AUS | Node-Contract-Prüfung (`tools/contract-check`), Zustand überlebt Neustart |
+| 34.3 Anbieten | je aktiviertem Gerät: GStreamer-Quelle (`v4l2src`/`alsasrc`) → MXL-Writer (Muster `omp-source`/`omp-decklink`-Ingest), NMOS-Sender/Flow mit Tags (Gerätename, Host); Ausschalten entfernt Sender sauber; Gerät weg (abgezogen) → Sender unhealthy statt Absturz | echter Flow per `mxl-info`, im Viewer sichtbar, 15× an/aus (GStreamer-Races laut Memory), Abziehen simulieren |
+| 34.4 UI/Handbuch/Katalog | Panel mit Geräteliste und Schaltern; Katalogeintrag, Handbuch §9, Benutzerhandbuch, README im selben Arbeitsgang; Texte über `t()` | CDP-Klicktest |
+
+## Kapitel 35: Cloud-Ressourcen dynamisch + Kosten (Nutzerauftrag 2026-10-08)
+
+Entscheidungen (Nutzer 2026-10-08): **Provider-Adapter, AWS als erster Adapter**; **Autoscaling mit Regeln + hartem Budgetdeckel**, Standard AUS, Modus „vorschlagen“ oder „automatisch“. Bezug: ARCHITECTURE.md §16 (Kapazitätsplanung), §18.8/§18.9 (Cloud-Hosts; dort bisher „kein Cloud-SDK im Kern“ — Adapter bleibt deshalb austauschbare, optionale Schicht, Kern ohne Zugangsdaten voll lauffähig).
+
+| Schritt | Inhalt | Verifikation |
+|---|---|---|
+| 35.1 Design fortschreiben | ARCHITECTURE.md §18.9 anpassen: `CloudProvider`-Schnittstelle (Start, Stopp, Status, Preisliste, Ist-Kosten), Abgrenzung zu Placement/Host-Tracker, Sicherheit der Zugangsdaten (Secret-Store, minimale Rechte), Bootstrap über Cloud-Init (§18.3) | Review mit Nutzer |
+| 35.2 Mock-/Simulations-Adapter + Hostlebenszyklus | Orchestrator-Paket `cloud`: gemietete Hosts als Zustandsautomat (angefordert → bootet → Agent registriert → bereit → leerlaufend → beendet), Mock-Adapter ohne Konto | Tests; Host-Agent meldet sich nach „Start“ an (lokal simuliert) |
+| 35.3 Kostenmodell | Preisliste je Instanztyp/Region, Laufzeit × Preis, Kosten je Host/Workflow/Tag; **Vorberechnung** für geplante Workflows aus der Kapazitätsvorschau (§16) („dieser Zeitplan kostet ca. X €“); Ist-Kosten vom Provider, klar von Schätzung getrennt | Rechentests, Vorschau gegen bekannte Beispielpläne |
+| 35.4 Scheduler-Integration | Zeitplan kann „Cloud-Kapazität bereitstellen von–bis“ (Vorlauf für Boot einrechnen); Kapazitätsvorschau zeigt Engpass → „Cloud-Host dazunehmen“ als Vorschlag mit Kosten | UI-Klicktest, Konflikt-Beispiel löst sich auf |
+| 35.5 Autoscaling-Regeln | Auslöser (Zeitfenster, Placement-Engpass/Last), min/max Hosts, **Budgetdeckel € pro Tag/Monat** (stoppt weiteres Hochfahren), Abbau erst nach Leerlauf und Migration der Instanzen, Hysterese; Modus vorschlagen/automatisch; Standard AUS; jede Aktion im Audit-Log | Simulationsläufe mit Mock (Spitze → hoch, Deckel greift, Rückbau) |
+| 35.6 AWS-Adapter | EC2 Start/Stopp mit Cloud-Init-Bootstrap des Host-Agents, Preise über Pricing-API, Ist-Kosten über Cost-Explorer; **nur mit echtem Konto und ausdrücklicher Freigabe des Nutzers testen (kostet Geld)**, Deckel und Auto-Stopp als Sicherheitsnetz | manuell, kleinster Instanztyp, kurzer Lauf, danach Nachweis „alles beendet“ |
+| 35.7 UI/Handbuch | Cloud-Ansicht (Hosts, laufende Kosten, Prognose, Regeln, Budget), Hinweise im Scheduler; Handbuch/README | CDP-Klicktest |
+
+**Offene Fragen vor 35.6:** Zugangsdaten-Ablage, Region(en), welche Node-Typen cloudtauglich sind (kein PTP/Multicast, nur MXL lokal je Host → Cloud-Hosts brauchen Gateway/SRT zwischen Hosts, §18.8), Migration laufender Instanzen beim Rückbau.
