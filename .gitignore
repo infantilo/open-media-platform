@@ -30,6 +30,7 @@ build/
 # Storage-Backend-Masterschlüssel (Nachtrag 286) — echtes Geheimnis,
 # auto-generiert von deploy/dev/start-omp.sh, nie committen.
 /deploy/dev/storage-secret.env
+/deploy/dev/cloud.env
 
 # libfabric: geklonter/gebauter C-Kern für Kapitel 16 Teil 0 (MXL-native
 # Fabrics-Spike, docs/decisions.md Nachtrag 41/42) — Debians libfabric-dev

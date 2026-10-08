@@ -10,6 +10,22 @@ Ohne `OMP_CLOUD_AWS_ALLOW_LAUNCH=1` sendet der Adapter bei jedem Start nur `RunI
 prüft Rechte und Parameter, **startet aber nichts und es entstehen keine Kosten**. Erst mit dem Schalter werden
 echte Instanzen gestartet. Zusätzlich gelten Pool-Maximum, Budgetdeckel (Tag/Monat) und die Höchstlebensdauer.
 
+## Wo die Zugangsdaten hinterlegt werden
+
+Nur in der **Umgebung des Orchestrators** — nie in der Oberfläche, der Datenbank oder im Repo. Im Dev-Setup liest
+`make start` dafür die Datei **`deploy/dev/cloud.env`**, falls sie existiert:
+
+```bash
+cp deploy/dev/cloud.env.example deploy/dev/cloud.env
+chmod 600 deploy/dev/cloud.env       # enthält Geheimnisse; steht in der .gitignore
+$EDITOR deploy/dev/cloud.env         # Zeilen einkommentieren und ausfüllen
+make stop; make start                # liest die Datei (Meldung „Cloud-Konfiguration aus …“)
+```
+
+Ist die Datei für Gruppe/Andere lesbar, warnt der Start. `OMP_CLOUD_ENV_FILE=/anderer/pfad` verweist auf einen anderen
+Ort (z. B. außerhalb des Repos). Auf einem Produktionssystem setzt man dieselben Variablen im Dienst (z. B. systemd
+`EnvironmentFile=` mit Rechten 600 oder einem Secret-Store) — der Orchestrator liest sie nur aus der Umgebung.
+
 ## Konfiguration (Umgebung des Orchestrators)
 
 | Variable | Bedeutung |

@@ -69,6 +69,23 @@ fi
 # shellcheck disable=SC1090
 source "$STORAGE_SECRET_FILE"
 
+# Cloud-Konfiguration und -Zugangsdaten (Kapitel 35, docs/CLOUD-AWS.md): optional, nur wenn die Datei existiert —
+# ohne sie bleiben alle Cloud-Funktionen aus. Die Datei enthält Geheimnisse (AWS-Schlüssel): sie steht in der
+# .gitignore und sollte nur für den Besitzer lesbar sein (chmod 600). Muster wie mxl.env/storage-secret.env oben;
+# `OMP_CLOUD_ENV_FILE` verweist auf einen anderen Ort. Werte, die schon in der Umgebung stehen, bleiben gültig, wenn
+# die Datei sie nicht setzt.
+CLOUD_ENV_FILE="${OMP_CLOUD_ENV_FILE:-$ROOT_DIR/deploy/dev/cloud.env}"
+if [ -f "$CLOUD_ENV_FILE" ]; then
+  if [ -n "$(find "$CLOUD_ENV_FILE" -maxdepth 0 -perm /077 2>/dev/null)" ]; then
+    echo "WARNUNG: $CLOUD_ENV_FILE ist für Gruppe/Andere lesbar — Zugangsdaten schützen: chmod 600 $CLOUD_ENV_FILE" >&2
+  fi
+  echo "==> Cloud-Konfiguration aus $CLOUD_ENV_FILE"
+  set -a
+  # shellcheck disable=SC1090
+  source "$CLOUD_ENV_FILE"
+  set +a
+fi
+
 # /dev/shm ist tmpfs und überlebt einen Neustart/eine Bereinigung nicht
 # (docs/decisions.md, 2026-07-17) — ohne dieses Verzeichnis schlägt jeder
 # MXL-Node-Start mit "Domain path is not a directory" fehl, bis jemand es
