@@ -5184,3 +5184,26 @@ Kernmigrationen werden **nie umnummeriert oder verschoben**.
 **Risiken:** berührt Autorisierung und Migrationen (empfindlichste Stellen) — daher Golden-Vergleich und ein Modul pro Schritt;
 Playout ist produktionsnah — ein Fehler fällt sofort auf, darum erst nach dem Pilot und den Erweiterungspunkten; der Aufwand
 liegt bei mehreren Sitzungen, nicht bei einer.
+
+
+## Kapitel 37: SCTE-104/-35 — Werbeblöcke automatisch kennzeichnen und ins Signal einbetten (Nutzerauftrag 2026-10-08)
+
+Ausgangslage: `omp-scte35` (Kap. 27 P9.2) kodiert `splice_insert`/`time_signal`, der Child `SCTE35` löst ihn aus, Ergebnis nur
+als Parameter/UDP. Das Item-Feld `adClass` (`block_start`/`block_end`/`commercial`/`promo`) ist reine Metadaten. **Fehlt:**
+SCTE-104, Einbettung in ANC/TS, Automatik aus der Klassifikation, PTS-/Frame-genaue Vorlaufplanung (bisher immer „sofort“).
+
+Entscheidungen (Nutzer 2026-10-08): Ausgabewege **ST 2110-40 / MXL-ANC** und **MPEG-TS/SRT**; Kennzeichnung **automatisch aus
+der Klassifikation** (manuelle Children bleiben möglich). Kein Herstellername in Texten/Doku.
+
+| Schritt | Inhalt | Verifikation |
+|---|---|---|
+| 37.1 Recherche + Entwurf | Normen lesen (SCTE 104 `splice_request_data`/`multiple_operation_message`, ST 291 ANC-Paket DID 0x41/SDID 0x07, ST 2110-40/RFC 8331, SCTE 35 in TS-PID, Pre-Roll/`pre_roll_time`), Ist-Stand des ANC-Pfads in MXL/`omp-2110-gateway` prüfen; Entwurf in ARCHITECTURE.md fortschreiben, offene Fragen sammeln | Review durch Nutzer, kein Code |
+| 37.2 Blockerkennung (Automator) | Aus aufeinanderfolgenden `commercial`/`promo`-Items (bzw. `block_start`…`block_end`) einen Block bilden: Out am Blockanfang mit Gesamtdauer, In am Ende, Cancel bei Abbruch/Skip/Umplanung; Pre-Roll je Channel einstellbar; Standard AUS je Channel; erzeugte Events im Journal/As-Run | Go/Rust-Tests: Block mit 3 Spots, Lücke, Skip mitten im Block, Live-Einschub; Playlist-Vorschau zeigt Blockgrenzen |
+| 37.3 Zeitgenaue Auslösung | `pts_time`/Vorlauf statt „sofort“: Automator reicht geplante Zeit an `omp-scte35` (`takeAt`-Muster aus Kap. 31.4); Wiederholung (Reliability) konfigurierbar | Messung: Abweichung Marker ↔ Bildwechsel ≤ 1 Frame (E2E) |
+| 37.4 SCTE-104-Erzeugung | `scte104.rs`: `splice_request_data` / MOM kodieren (Out, In, Cancel, time_signal-Segmentation), Parser zur Gegenprüfung wie bei `splice.rs`; Rückumsetzung 104→35 für Tests | Rundlauf-Tests 35→104→35 mit Referenzvektoren aus der Norm |
+| 37.5 Einbettung ANC (MXL / ST 2110-40) | ANC-Paket aus 104 (ST 291) in einen ANC-Flow; im 2110-Gateway als -40-Sender, in MXL als Daten-Flow, soweit der Pfad es hergibt (sonst Lücke dokumentieren) | `tcpdump`/Parser zeigt Paket am erwarteten Frame; Gegenstelle liest es zurück |
+| 37.6 Einbettung MPEG-TS / SRT | SCTE-35 als eigene PID (`stream_type 0x86`) im Ausgang (`mpegtsmux` bzw. Gateway-Pipeline), PTS an Video gekoppelt | `ffprobe -show_streams` zeigt Daten-PID; `tsduck`/Parser liest Sektion |
+| 37.7 UI/Handbuch/Katalog | Channel-Einstellung (Pre-Roll, Ziel, Ausgabeweg), Blockanzeige im Playout-Editor, Test-Knopf „Out/In senden“; Texte über `t()` in de+en; Handbuch, Benutzerhandbuch, Katalogbeschreibung im selben Arbeitsgang | CDP-Klicktest; Schritte 37.2–37.6 in Doku |
+
+**Regeln:** ein Schritt pro Sitzung; Live-Test am echten Stack; nur kleine CPU-Tests. **Offen:** welcher Empfänger/Encoder
+auf Gegenseite zum Testen verfügbar ist, ob 104 auch eingehend (Empfangen → Automator-Trigger) gewünscht ist.
