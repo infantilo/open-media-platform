@@ -13,9 +13,12 @@ import (
 type Action struct {
 	At     time.Time `json:"at"`
 	Pool   string    `json:"pool"`
-	Kind   string    `json:"kind"` // provision | release | error
+	Kind   string    `json:"kind"` // provision | release | adopt | suggest | autoscale-up | autoscale-down | budget | error
 	HostID string    `json:"hostId,omitempty"`
-	Reason string    `json:"reason"`
+	// Reason ist der englische Text (Log, Audit); Code + Params erlauben der Oberfläche die Übersetzung.
+	Reason string         `json:"reason"`
+	Code   string         `json:"code,omitempty"`
+	Params map[string]any `json:"params,omitempty"`
 }
 
 // PoolController gleicht je Pool die Zahl der Hosts mit dem Soll ab: Mindestzahl des Pools und aktive
@@ -136,10 +139,10 @@ func (c *PoolController) Tick(ctx context.Context) error {
 				h, err := c.Manager.Provision(ctx, pool)
 				if err != nil {
 					slog.Warn("cloud: provision failed", "pool", pool, "error", err)
-					c.record(Action{At: now, Pool: pool, Kind: "error", Reason: "provision failed: " + err.Error()})
+					c.record(Action{At: now, Pool: pool, Kind: "error", Code: "provisionFailed", Params: map[string]any{"error": err.Error()}, Reason: "provision failed: " + err.Error()})
 					break
 				}
-				c.record(Action{At: now, Pool: pool, Kind: "provision", HostID: h.ID, Reason: fmt.Sprintf("desired %d, alive %d", want[pool], len(alive)+i)})
+				c.record(Action{At: now, Pool: pool, Kind: "provision", HostID: h.ID, Code: "provision", Params: map[string]any{"desired": want[pool], "alive": len(alive) + i}, Reason: fmt.Sprintf("desired %d, alive %d", want[pool], len(alive)+i)})
 			}
 		case diff < 0:
 			// Überzählig: zuerst Hosts, die noch gar nicht bereit sind, dann leerlaufende; Hosts mit Last bleiben.
@@ -161,10 +164,10 @@ func (c *PoolController) Tick(ctx context.Context) error {
 					break
 				}
 				if err := c.Manager.Release(ctx, h.ID); err != nil {
-					c.record(Action{At: now, Pool: pool, Kind: "error", HostID: h.ID, Reason: "release failed: " + err.Error()})
+					c.record(Action{At: now, Pool: pool, Kind: "error", HostID: h.ID, Code: "releaseFailed", Params: map[string]any{"error": err.Error()}, Reason: "release failed: " + err.Error()})
 					continue
 				}
-				c.record(Action{At: now, Pool: pool, Kind: "release", HostID: h.ID, Reason: fmt.Sprintf("desired %d, alive %d", want[pool], len(alive))})
+				c.record(Action{At: now, Pool: pool, Kind: "release", HostID: h.ID, Code: "release", Params: map[string]any{"desired": want[pool], "alive": len(alive)}, Reason: fmt.Sprintf("desired %d, alive %d", want[pool], len(alive))})
 				excess--
 			}
 		}
@@ -180,7 +183,7 @@ func (c *PoolController) Run(ctx context.Context, every time.Duration) {
 	} else if len(rep.Adopted) > 0 {
 		slog.Warn("cloud: adopted unknown instances", "hosts", rep.Adopted)
 		for _, id := range rep.Adopted {
-			c.record(Action{At: c.now(), Kind: "adopt", HostID: id, Reason: "instance with our tag was not known"})
+			c.record(Action{At: c.now(), Kind: "adopt", HostID: id, Code: "adopted", Reason: "instance with our tag was not known"})
 		}
 	}
 	t := time.NewTicker(every)

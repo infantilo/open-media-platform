@@ -16,12 +16,15 @@ type LoadSample struct {
 
 // Suggestion ist ein zur Bestätigung vorgeschlagener zusätzlicher Host (Modus `suggest`).
 type Suggestion struct {
-	ID         string    `json:"id"`
-	Pool       string    `json:"pool"`
-	CreatedAt  time.Time `json:"createdAt"`
-	Reason     string    `json:"reason"`
-	HourlyCost float64   `json:"hourlyCost,omitempty"`
-	Currency   string    `json:"currency,omitempty"`
+	ID        string    `json:"id"`
+	Pool      string    `json:"pool"`
+	CreatedAt time.Time `json:"createdAt"`
+	Reason    string    `json:"reason"`
+	// Code/Params: maschinenlesbare Begründung für die Übersetzung in der Oberfläche (Reason bleibt englisch).
+	Code       string         `json:"code,omitempty"`
+	Params     map[string]any `json:"params,omitempty"`
+	HourlyCost float64        `json:"hourlyCost,omitempty"`
+	Currency   string         `json:"currency,omitempty"`
 }
 
 type poolAuto struct {
@@ -33,6 +36,31 @@ type poolAuto struct {
 }
 
 const budgetNoteEvery = 10 * time.Minute
+
+// Why begründet eine Budget-Entscheidung maschinenlesbar (die Oberfläche übersetzt `Code` + `Params`) und als
+// englischer Text (Log, Audit, API-Fehler).
+type Why struct {
+	Code   string
+	Params map[string]any
+	Text   string
+}
+
+func loadParams(l LoadSample, after time.Duration) map[string]any {
+	p := map[string]any{"cpu": int(l.CPUPercent + 0.5), "mem": int(l.MemPercent + 0.5), "hosts": l.Hosts}
+	if after > 0 {
+		p["minutes"] = int(after.Minutes() + 0.5)
+	}
+	return p
+}
+
+// withWhy bettet eine Budget-Begründung in die Parameter einer anderen Aktion ein.
+func withWhy(w Why) map[string]any {
+	p := map[string]any{"why": w.Code}
+	for k, v := range w.Params {
+		p[k] = v
+	}
+	return p
+}
 
 func (c *PoolController) policy(pool string) Policy {
 	if c.Policies == nil {
@@ -65,7 +93,7 @@ func (c *PoolController) applyAutoscale(ctx context.Context, pool string, now ti
 	var acts []Action
 	// Budgetprüfung vor dem Sperren (sie liest Preise/Hosts und darf nicht unter c.mu laufen); sie bremst nur
 	// ZUSÄTZLICHE Hosts: ohne Spielraum wird das Ziel nicht erhöht (kein Vorhalten eines nie startenden Ziels).
-	budgetFree, budgetWhy := true, ""
+	budgetFree, budgetWhy := true, Why{}
 	if pol.Mode != ModeOff {
 		budgetFree, budgetWhy = c.budgetOK(ctx, pool, now)
 	}
@@ -101,22 +129,22 @@ func (c *PoolController) applyAutoscale(ctx context.Context, pool string, now ti
 		case high && cool && now.Sub(st.upSince) >= pol.UpAfter() && st.target < pol.MaxAutoHosts && !budgetFree:
 			if st.budgetNote.IsZero() || now.Sub(st.budgetNote) >= budgetNoteEvery {
 				st.budgetNote = now
-				acts = append(acts, Action{At: now, Pool: pool, Kind: "budget", Reason: "autoscale-up skipped: " + budgetWhy})
+				acts = append(acts, Action{At: now, Pool: pool, Kind: "budget", Code: "scaleUpSkipped", Params: withWhy(budgetWhy), Reason: "autoscale-up skipped: " + budgetWhy.Text})
 			}
 		case high && cool && now.Sub(st.upSince) >= pol.UpAfter() && st.target < pol.MaxAutoHosts:
 			if pol.Mode == ModeAuto {
 				st.target++
 				st.lastScale = now
-				acts = append(acts, Action{At: now, Pool: pool, Kind: "autoscale-up", Reason: reason + fmt.Sprintf(" ≥ threshold for %s", pol.UpAfter())})
+				acts = append(acts, Action{At: now, Pool: pool, Kind: "autoscale-up", Code: "scaleUpLoad", Params: loadParams(load, pol.UpAfter()), Reason: reason + fmt.Sprintf(" ≥ threshold for %s", pol.UpAfter())})
 			} else if !c.hasSuggestion(pool) {
 				c.sugSeq++
-				c.suggestions = append(c.suggestions, Suggestion{ID: fmt.Sprintf("sug-%d", c.sugSeq), Pool: pool, CreatedAt: now, Reason: reason})
-				acts = append(acts, Action{At: now, Pool: pool, Kind: "suggest", Reason: reason})
+				c.suggestions = append(c.suggestions, Suggestion{ID: fmt.Sprintf("sug-%d", c.sugSeq), Pool: pool, CreatedAt: now, Reason: reason, Code: "suggestLoad", Params: loadParams(load, 0)})
+				acts = append(acts, Action{At: now, Pool: pool, Kind: "suggest", Code: "suggestLoad", Params: loadParams(load, 0), Reason: reason})
 			}
 		case low && cool && now.Sub(st.downSince) >= pol.DownAfter() && st.target > 0:
 			st.target--
 			st.lastScale = now
-			acts = append(acts, Action{At: now, Pool: pool, Kind: "autoscale-down", Reason: reason + fmt.Sprintf(" below threshold for %s", pol.DownAfter())})
+			acts = append(acts, Action{At: now, Pool: pool, Kind: "autoscale-down", Code: "scaleDownLoad", Params: loadParams(load, pol.DownAfter()), Reason: reason + fmt.Sprintf(" below threshold for %s", pol.DownAfter())})
 		}
 	}
 	if pol.Mode != ModeSuggest {
@@ -195,7 +223,7 @@ func (c *PoolController) Accept(ctx context.Context, id, by string) error {
 	c.mu.Unlock()
 	pol := c.policy(sg.Pool)
 	if ok, why := c.budgetOK(ctx, sg.Pool, now); !ok {
-		return fmt.Errorf("%w: %s", ErrBudget, why)
+		return fmt.Errorf("%w: %s", ErrBudget, why.Text)
 	}
 	c.mu.Lock()
 	st := c.state(sg.Pool)
@@ -207,7 +235,7 @@ func (c *PoolController) Accept(ctx context.Context, id, by string) error {
 	st.lastScale = now
 	c.suggestions = append(c.suggestions[:idx], c.suggestions[idx+1:]...)
 	c.mu.Unlock()
-	c.record(Action{At: now, Pool: sg.Pool, Kind: "autoscale-up", Reason: "suggestion " + id + " accepted by " + by})
+	c.record(Action{At: now, Pool: sg.Pool, Kind: "autoscale-up", Code: "suggestionAccepted", Params: map[string]any{"id": id, "by": by}, Reason: "suggestion " + id + " accepted by " + by})
 	return nil
 }
 
@@ -286,38 +314,39 @@ func sortCosts(p []PoolCosts) {
 // budgetOK prüft, ob ein weiterer Host des Pools den Deckel (Tag/Monat) einhält: angefallene Kosten plus
 // Hochrechnung der laufenden Hosts plus der neue Host bis Periodenende. Ohne Deckel oder ohne Preisliste: erlaubt
 // (kein Deckel konfiguriert) bzw. verweigert (Preisliste fehlt, aber Deckel gesetzt — im Zweifel kein Geld ausgeben).
-func (c *PoolController) budgetOK(ctx context.Context, pool string, now time.Time) (bool, string) {
+func (c *PoolController) budgetOK(ctx context.Context, pool string, now time.Time) (bool, Why) {
 	pol := c.policy(pool)
 	if pol.DailyBudget <= 0 && pol.MonthlyBudget <= 0 {
-		return true, ""
+		return true, Why{}
 	}
 	if c.Prices == nil {
-		return false, "budget cap set but no price list available"
+		return false, Why{Code: "noPrices", Text: "budget cap set but no price list available"}
 	}
 	pb, err := c.Prices(ctx)
 	if err != nil {
-		return false, "budget cap set but prices unavailable: " + err.Error()
+		return false, Why{Code: "pricesUnavailable", Params: map[string]any{"error": err.Error()}, Text: "budget cap set but prices unavailable: " + err.Error()}
 	}
 	pl, ok := c.Manager.pools[pool]
 	if !ok {
-		return false, "unknown pool"
+		return false, Why{Code: "unknownPool", Text: "unknown pool"}
 	}
 	t, ok := pb.Types[pl.InstanceType]
 	if !ok {
-		return false, fmt.Sprintf("no price for instance type %q", pl.InstanceType)
+		return false, Why{Code: "noType", Params: map[string]any{"type": pl.InstanceType}, Text: fmt.Sprintf("no price for instance type %q", pl.InstanceType)}
 	}
 	hosts := c.poolHosts(pool)
 	dF, dT, mF, mT := periods(now)
-	check := func(label string, from, to time.Time, capv float64) (bool, string) {
+	check := func(label string, from, to time.Time, capv float64) (bool, Why) {
 		if capv <= 0 {
-			return true, ""
+			return true, Why{}
 		}
 		_, projected, _, _ := pb.Projection(hosts, from, to, now)
 		extra := t.PricePerHour * to.Sub(now).Hours()
 		if projected+extra > capv {
-			return false, fmt.Sprintf("%s budget cap %.2f %s would be exceeded (projected %.2f + new host %.2f)", label, capv, t.Currency, projected, extra)
+			return false, Why{Code: label + "Exceeded", Params: map[string]any{"cap": capv, "projected": projected, "extra": extra, "currency": t.Currency},
+				Text: fmt.Sprintf("%s budget cap %.2f %s would be exceeded (projected %.2f + new host %.2f)", label, capv, t.Currency, projected, extra)}
 		}
-		return true, ""
+		return true, Why{}
 	}
 	if ok, why := check("daily", dF, dT, pol.DailyBudget); !ok {
 		return false, why
@@ -326,7 +355,7 @@ func (c *PoolController) budgetOK(ctx context.Context, pool string, now time.Tim
 }
 
 // noteBudget protokolliert eine Budget-Blockade höchstens alle 10 Minuten je Pool (kein Log-Spam bei jedem Tick).
-func (c *PoolController) noteBudget(pool string, now time.Time, why string) {
+func (c *PoolController) noteBudget(pool string, now time.Time, why Why) {
 	c.mu.Lock()
 	st := c.state(pool)
 	due := st.budgetNote.IsZero() || now.Sub(st.budgetNote) >= budgetNoteEvery
@@ -335,6 +364,6 @@ func (c *PoolController) noteBudget(pool string, now time.Time, why string) {
 	}
 	c.mu.Unlock()
 	if due {
-		c.record(Action{At: now, Pool: pool, Kind: "budget", Reason: why})
+		c.record(Action{At: now, Pool: pool, Kind: "budget", Code: "budget." + why.Code, Params: why.Params, Reason: why.Text})
 	}
 }

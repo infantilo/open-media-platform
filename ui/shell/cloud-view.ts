@@ -8,7 +8,7 @@ import { t } from "./i18n.ts";
 import { apiFetch } from "./connection.ts";
 import { whoami } from "./auth.ts";
 import { showToast } from "../kit/omp-toast.ts";
-import { budgetBar, fmtMoney, policyFromForm, policyToForm, reservationPayload, type Mode, type Policy, type PolicyForm } from "./cloud-logic.ts";
+import { budgetBar, describeReason, fmtMoney, policyFromForm, policyToForm, reservationPayload, type Mode, type Policy, type PolicyForm } from "./cloud-logic.ts";
 
 interface CloudHost {
   id: string;
@@ -23,14 +23,27 @@ interface CloudHost {
   lifetimeExceeded?: boolean;
 }
 interface PoolInfo { name: string; instanceType: string; region: string; min: number; max: number }
-interface Action { at: string; pool: string; kind: string; hostId?: string; reason: string }
+interface Action { at: string; pool: string; kind: string; hostId?: string; reason: string; code?: string; params?: Record<string, unknown> }
 interface HostsResp { configured: boolean; pools: PoolInfo[]; hosts: CloudHost[]; actions: Action[] | null }
 interface Period { spent: number; projected: number; cap: number }
 interface PoolCosts { pool: string; currency: string; day: Period; month: Period; unpricedHosts?: string[] }
-interface Suggestion { id: string; pool: string; createdAt: string; reason: string }
+interface Suggestion { id: string; pool: string; createdAt: string; reason: string; code?: string; params?: Record<string, unknown> }
 interface Reservation { id: string; pool: string; hostCount: number; from: string; to: string; note?: string }
 
 const POLL_MS = 5000;
+
+// Übersetzt Server-Begründungen (Code + Parameter) in die Oberfläche; unbekannte Codes zeigen den englischen Originaltext.
+function say(code: string | undefined, params: Record<string, unknown> | undefined, reason: string): string {
+  return describeReason(code, params, reason, (key, p) => {
+    const text = t(key as "cloudv.title", p);
+    return text === key ? undefined : text;
+  }, (v, cur) => fmtMoney(v, cur));
+}
+function kindLabel(kind: string): string {
+  const key = `cloudv.kind.${kind}`;
+  const text = t(key as "cloudv.title");
+  return text === key ? kind : text;
+}
 const css = (s: string) => s;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, style = "", text = ""): HTMLElementTagNameMap[K] {
@@ -165,7 +178,7 @@ export class CloudView extends HTMLElement {
       for (const s of this.#sugg) {
         const row = el("div", "display:flex;gap:8px;align-items:center;margin-bottom:4px;");
         row.dataset.role = "suggestion";
-        row.append(el("span", "", t("cloudv.suggestLine", { p0: s.pool, p1: s.reason })));
+        row.append(el("span", "", t("cloudv.suggestLine", { p0: s.pool, p1: say(s.code, s.params, s.reason) })));
         if (this.#admin) {
           const ok = el("button", "", t("cloudv.accept"));
           ok.addEventListener("click", () => void this.#act(`/api/v1/cloud/suggestions/${encodeURIComponent(s.id)}/accept`, { method: "POST" }, "cloudv.done"));
@@ -224,7 +237,7 @@ export class CloudView extends HTMLElement {
     ac.append(el("h3", H, t("cloudv.actions")));
     const acts = (d.actions ?? []).slice(-15).reverse();
     if (acts.length === 0) ac.append(el("div", DIM, t("cloudv.noActions")));
-    for (const a of acts) ac.append(el("div", "margin-bottom:2px;" + (a.kind === "budget" || a.kind === "error" ? "color:var(--omp-error);" : ""), `${new Date(a.at).toLocaleTimeString()} · ${a.kind}${a.pool ? " · " + a.pool : ""} — ${a.reason}`));
+    for (const a of acts) ac.append(el("div", "margin-bottom:2px;" + (a.kind === "budget" || a.kind === "error" ? "color:var(--omp-error);" : ""), `${new Date(a.at).toLocaleTimeString()} · ${kindLabel(a.kind)}${a.pool ? " · " + a.pool : ""} — ${say(a.code, a.params, a.reason)}`));
     root.append(ac);
   }
 

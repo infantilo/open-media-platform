@@ -106,3 +106,37 @@ export function reservationPayload(pool: string, count: string, from: string, to
   if (Number.isNaN(f.getTime()) || Number.isNaN(t.getTime()) || t <= f) return { ok: false, error: "cloudv.err.time" };
   return { ok: true, body: { pool, hostCount: n, from: f.toISOString(), to: t.toISOString() } };
 }
+
+// ---- Übersetzung der Server-Begründungen (Aktionsprotokoll, Vorschläge) ----
+
+/** Übersetzer: liefert den Text zu einem Schlüssel oder `undefined`, wenn es ihn nicht gibt. */
+export type Lookup = (key: string, params: Record<string, string | number>) => string | undefined;
+
+const MONEY_FIELDS = ["cap", "projected", "extra"];
+
+/**
+ * Übersetzt eine Begründung des Servers (`code` + `params`) über `cloudv.act.<code>`. Unbekannter Code oder fehlender
+ * Schlüssel → der englische Originaltext `reason` (nichts geht verloren). Geldbeträge werden mit Währung formatiert;
+ * `why` (eingebettete Budget-Begründung) wird selbst übersetzt.
+ */
+export function describeReason(
+  code: string | undefined,
+  params: Record<string, unknown> | undefined,
+  reason: string,
+  lookup: Lookup,
+  money: (v: number, currency: string) => string,
+): string {
+  if (!code) return reason;
+  const p: Record<string, string | number> = {};
+  const cur = typeof params?.currency === "string" ? params.currency : "EUR";
+  for (const [k, v] of Object.entries(params ?? {})) {
+    if (MONEY_FIELDS.includes(k) && typeof v === "number") p[k] = money(v, cur);
+    else if (typeof v === "string" || typeof v === "number") p[k] = v;
+  }
+  if (typeof params?.why === "string") {
+    // Eingebettete Begründung ohne `why` erneut auflösen (sonst Endlosschleife).
+    const { why, ...inner } = params;
+    p.why = describeReason("budget." + why, inner, String(why), lookup, money);
+  }
+  return lookup(`cloudv.act.${code}`, p) ?? reason;
+}

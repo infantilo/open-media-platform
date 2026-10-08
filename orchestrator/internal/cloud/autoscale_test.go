@@ -321,3 +321,59 @@ func TestManagerPersistsAndRestoresHostsIncludingTerminated(t *testing.T) {
 		t.Fatalf("restored: %+v", got)
 	}
 }
+
+func TestActionsAndSuggestionsCarryTranslatableCodes(t *testing.T) {
+	p := autoPolicy()
+	p.Mode = ModeSuggest
+	s := newAS(t, p)
+	s.load.CPUPercent = 95
+	s.run(10, 30*time.Second)
+	sg := s.c.Suggestions()
+	if len(sg) != 1 || sg[0].Code != "suggestLoad" || sg[0].Params["cpu"] != 95 || sg[0].Params["hosts"] != 2 {
+		t.Fatalf("suggestion: %+v", sg)
+	}
+	if err := s.c.Accept(context.Background(), sg[0].ID, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	s.run(2, 30*time.Second)
+	byCode := map[string]Action{}
+	for _, a := range s.c.Actions() {
+		byCode[a.Code] = a
+	}
+	if a := byCode["suggestionAccepted"]; a.Params["by"] != "admin" {
+		t.Fatalf("%+v", a)
+	}
+	if a := byCode["provision"]; a.Kind != "provision" || a.Params["desired"] != 1 || a.Reason == "" {
+		t.Fatalf("%+v", a)
+	}
+}
+
+func TestBudgetActionsCarryCodeAndFigures(t *testing.T) {
+	p := autoPolicy()
+	p.DailyBudget = 3
+	s := newAS(t, p)
+	s.load.CPUPercent = 95
+	s.run(12, 30*time.Second)
+	var got Action
+	for _, a := range s.c.Actions() {
+		if a.Kind == "budget" {
+			got = a
+		}
+	}
+	if got.Code != "scaleUpSkipped" || got.Params["why"] != "dailyExceeded" || got.Params["cap"] != 3.0 || got.Params["currency"] != "EUR" {
+		t.Fatalf("%+v", got)
+	}
+	// Reservierung blockiert (ohne Autoscaling-Last) → Code der Budget-Blockade selbst.
+	s2 := newAS(t, p)
+	_, _ = s2.c.Reservations.(*memRes).Create(ReservationInput{Pool: "burst", HostCount: 1, From: s2.clk.now(), To: s2.clk.now().Add(time.Hour)}, "x")
+	s2.run(2, 30*time.Second)
+	found := false
+	for _, a := range s2.c.Actions() {
+		if a.Code == "budget.dailyExceeded" && a.Params["projected"] != nil && a.Params["cap"] == 3.0 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing budget.dailyExceeded: %+v", s2.c.Actions())
+	}
+}

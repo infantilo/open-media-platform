@@ -50,3 +50,37 @@ Deno.test("reservationPayload: gültig und fehlerhaft", () => {
   assertEquals(reservationPayload("burst", "1", "2026-10-08T12:00", "2026-10-08T10:00"), { ok: false, error: "cloudv.err.time" });
   assertEquals(reservationPayload("", "1", "2026-10-08T10:00", "2026-10-08T12:00"), { ok: false, error: "cloudv.err.count" });
 });
+
+import { describeReason } from "./cloud-logic.ts";
+
+const dict: Record<string, string> = {
+  "cloudv.act.provision": "Hoch (Soll {desired}, da {alive})",
+  "cloudv.act.budget.dailyExceeded": "Tagesdeckel {cap} (Hochrechnung {projected} + {extra})",
+  "cloudv.act.scaleUpSkipped": "Übersprungen: {why}",
+};
+const lookup = (key: string, params: Record<string, string | number>) => {
+  const tpl = dict[key];
+  if (tpl === undefined) return undefined;
+  return Object.entries(params).reduce((s, [k, v]) => s.replaceAll(`{${k}}`, String(v)), tpl);
+};
+const money = (v: number, c: string) => `${v.toFixed(2)} ${c}`;
+
+Deno.test("describeReason: Code + Parameter werden übersetzt, Geldbeträge formatiert", () => {
+  assertEquals(describeReason("provision", { desired: 2, alive: 1 }, "desired 2, alive 1", lookup, money), "Hoch (Soll 2, da 1)");
+  assertEquals(
+    describeReason("budget.dailyExceeded", { cap: 3, projected: 0.5, extra: 13.97, currency: "EUR" }, "x", lookup, money),
+    "Tagesdeckel 3.00 EUR (Hochrechnung 0.50 EUR + 13.97 EUR)",
+  );
+});
+
+Deno.test("describeReason: eingebettete Budget-Begründung wird mit übersetzt", () => {
+  assertEquals(
+    describeReason("scaleUpSkipped", { why: "dailyExceeded", cap: 3, projected: 0, extra: 1, currency: "EUR" }, "en", lookup, money),
+    "Übersprungen: Tagesdeckel 3.00 EUR (Hochrechnung 0.00 EUR + 1.00 EUR)",
+  );
+});
+
+Deno.test("describeReason: ohne Code oder ohne Schlüssel bleibt der englische Originaltext", () => {
+  assertEquals(describeReason(undefined, undefined, "plain english", lookup, money), "plain english");
+  assertEquals(describeReason("neuerCode", { a: 1 }, "fallback text", lookup, money), "fallback text");
+});
