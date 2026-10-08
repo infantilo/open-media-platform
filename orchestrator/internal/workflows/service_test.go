@@ -617,6 +617,7 @@ func TestStartProvisionsServiceBindingForControlPlaneRole(t *testing.T) {
 	l := &fakeLauncher{}
 	az := &fakeAuthzBinder{}
 	svc := &Service{store: newFakeStore(), nodes: nodes, graph: g, launcher: l, authz: az}
+	svc.RegisterControlPlaneType("omp-playout-automation") // der Kern kennt den Typ nicht mehr; das Playout-Modul meldet ihn an
 
 	def := Definition{
 		Roles: []Role{

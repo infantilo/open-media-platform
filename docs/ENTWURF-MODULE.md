@@ -106,3 +106,10 @@ Ursprüngliche Fragen (zur Nachvollziehbarkeit):
   keine zweite Kopie.
 - **Fehlerverhalten:** Lädt ein Bundle nicht, zeigt nur dessen Tab eine Fehlermeldung; ein abgeschaltetes Modul hat keinen Tab.
 - **Noch offen:** Admin-Untertabs (`placement: "admin:<gruppe>"`) — kommen mit dem ersten Modul, das sie braucht (Audio-Ausgabe, 36.7).
+
+## 7. Hooks im Workflow-Dienst (36.5, umgesetzt)
+
+`workflows.Service` hat zwei Erweiterungspunkte statt Playout-Wissen: **`RegisterRoleEnvHook`** (ergänzt die Start-Umgebung einer
+Rolle; Werte der Rolle/des Workflows gewinnen) und **`RegisterControlPlaneType`** (Node-Typen, deren Instanz beim Start eine
+Workflow-gescopte Bedienbindung und den Service-Token-Zugang bekommt). Das Playout-Modul (`internal/modules/playout`) meldet die
+Automations-Ziele und den Typ `omp-playout-automation` an; die Ableitung selbst ist unverändert.

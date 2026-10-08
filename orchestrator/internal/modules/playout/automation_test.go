@@ -1,9 +1,13 @@
-package workflows
+package playout
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
+)
 
 func TestAutomationTargetEnvDerivesTargetsFromRoles(t *testing.T) {
-	def := Definition{Roles: []Role{
+	def := workflows.Definition{Roles: []workflows.Role{
 		{Name: "Kanal A", NodeType: "omp-channel-player"},
 		{Name: "Kanal B", NodeType: "omp-channel-player"},
 		{Name: "Kanal C", NodeType: "omp-channel-player"},
@@ -12,7 +16,7 @@ func TestAutomationTargetEnvDerivesTargetsFromRoles(t *testing.T) {
 		{Name: "Tonmischer", NodeType: "omp-audio-mixer"},
 		{Name: "Auto", NodeType: "omp-playout-automation"},
 	}}
-	env := automationTargetEnv(def, def.Roles[6])
+	env := AutomationTargetEnv(def, def.Roles[6])
 	want := map[string]string{
 		"OMP_PLAYOUT_TARGET_PLAYER_A_LABEL":    "Kanal A",
 		"OMP_PLAYOUT_TARGET_PLAYER_B_LABEL":    "Kanal B",
@@ -27,22 +31,23 @@ func TestAutomationTargetEnvDerivesTargetsFromRoles(t *testing.T) {
 			t.Errorf("%s = %q, want %q", k, env[k], v)
 		}
 	}
-	if automationTargetEnv(def, def.Roles[0]) != nil {
+	if AutomationTargetEnv(def, def.Roles[0]) != nil {
 		t.Error("andere Rollen bekommen keine Ziele")
 	}
 }
 
-func TestWithAutomationTargetsKeepsExplicitValuesAndDoesNotMutate(t *testing.T) {
-	def := Definition{Roles: []Role{{Name: "A", NodeType: "omp-channel-player"}, {Name: "Auto", NodeType: "omp-playout-automation"}}}
-	base := map[string]string{"OMP_PLAYOUT_TARGET_PLAYER_A_LABEL": "von Hand", "X": "1"}
-	got := withAutomationTargets(base, def, def.Roles[1])
-	if got["OMP_PLAYOUT_TARGET_PLAYER_A_LABEL"] != "von Hand" || got["X"] != "1" {
-		t.Fatalf("explizite Werte müssen gewinnen: %v", got)
-	}
-	if len(base) != 2 {
-		t.Fatalf("base wurde verändert: %v", base)
-	}
-	if out := withAutomationTargets(base, Definition{}, Role{NodeType: "omp-source"}); len(out) != 2 {
-		t.Fatalf("Nicht-Automation: unverändert erwartet")
+type fakeSvc struct {
+	hooks []workflows.RoleEnvHook
+	types []string
+}
+
+func (f *fakeSvc) RegisterRoleEnvHook(h workflows.RoleEnvHook) { f.hooks = append(f.hooks, h) }
+func (f *fakeSvc) RegisterControlPlaneType(t string)           { f.types = append(f.types, t) }
+
+func TestRegisterAnnouncesHookAndControlPlaneType(t *testing.T) {
+	f := &fakeSvc{}
+	Register(f)
+	if len(f.hooks) != 1 || len(f.types) != 1 || f.types[0] != "omp-playout-automation" {
+		t.Fatalf("%+v", f)
 	}
 }

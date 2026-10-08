@@ -56,35 +56,6 @@ var crosspointByNodeType = map[string]crosspointMethod{
 	"omp-video-mixer-me": {Method: "crosspoint.take", Arg: "senderId", InputsParam: "crosspoint.inputs"},
 }
 
-// controlPlaneNodeTypes sind Node-Typen, die als Automatisations-/
-// Control-Plane-Instanz eines Workflows gelten und deshalb bei
-// Workflow-Start automatisch eine Workflow-gescopte VerbOperate-
-// Rollenbindung bekommen (ARCHITECTURE.md §24.1, UMSETZUNG.md C16) —
-// diese Instanz kann sich damit anschließend über
-// `POST /api/v1/instances/<id>/service-token` (ihr eigenes
-// OMP_LAUNCH_SECRET als Nachweis) ein Bearer-Token holen und den
-// generischen Proxy statt eines direkten Node-zu-Node-Zugriffs
-// ansprechen. Eine von Hand gepflegte Liste statt eines Katalog-
-// `category`-Felds (§13.5 ist bisher nur ARCHITECTURE.md-Beschreibung,
-// `launcher.CatalogEntry` hat dieses Feld noch nicht) — gleiches
-// Konventions-Muster wie `crosspointByNodeType` oben, direkt aus dem
-// tatsächlichen Node-Quelltext übernommen (nicht geraten, UMSETZUNG.md
-// §0 Punkt 6): `nodes/omp-playout-automation` ist heute der einzige
-// reine Control-Plane-Node, der andere Nodes fernsteuert.
-// IsControlPlaneNodeType meldet, ob nodeType als Automatisations-/
-// Control-Plane-Node gilt (s. controlPlaneNodeTypes-Doku) — exportiert,
-// damit ein manueller Katalog-Start (httpapi.handlePostInstance, kein
-// Workflow-Kontext) dieselbe Liste für sein eigenes, workflow-loses
-// Bindungs-Äquivalent nutzen kann (s. dortige Doku), statt sie ein
-// zweites Mal zu pflegen.
-func IsControlPlaneNodeType(nodeType string) bool {
-	return controlPlaneNodeTypes[nodeType]
-}
-
-var controlPlaneNodeTypes = map[string]bool{
-	"omp-playout-automation": true,
-}
-
 // registrationTimeout ist die Höchstdauer, die Start() auf das
 // Erscheinen aller provisionierten Rollen in der NMOS-Registry wartet,
 // bevor der Workflow als "failed" markiert wird — großzügig bemessen für
@@ -188,7 +159,7 @@ type EventPublisher interface {
 
 // AuthzBinder legt Rollenbindungen an (implementiert von *authz.Store,
 // ARCHITECTURE.md §24.1, UMSETZUNG.md C16) — Workflow-Start nutzt dies,
-// um jeder Control-Plane-Instanz (s. controlPlaneNodeTypes) automatisch
+// um jeder Control-Plane-Instanz (s. RegisterControlPlaneType) automatisch
 // eine Workflow-gescopte VerbOperate-Bindung zu geben. Darf nil sein
 // (z. B. bestehende Tests, die AuthZ nicht prüfen) — dann bleibt das
 // Provisionieren ersatzlos aus, gleiches Muster wie
@@ -283,6 +254,11 @@ type IOPortClaimer interface {
 // Service verwaltet Workflow-Definitionen und führt Bundle-Start/-Stop
 // aus (ARCHITECTURE.md §6.2, UMSETZUNG.md D7 Teil 1/Teil 2).
 type Service struct {
+	// Erweiterungspunkte (extension.go, Kapitel 36.5)
+	extMu        sync.RWMutex
+	envHooks     []RoleEnvHook
+	controlPlane map[string]bool
+
 	// runs/stopCause: Lauf-Historie (runs.go). stopCause merkt sich je
 	// Workflow, ob ein laufender Stop von Hand oder vom Zeitplan kam.
 	runs      RunRecorder
@@ -912,7 +888,7 @@ func (s *Service) runStart(wf Workflow, ioAssignments map[string]ioPortAssignmen
 		// OMP_ME_LEVELS — s. roleExtraEnv-Doku zur Begründung der neuen
 		// statt mutierten Map.
 		roleEnv := roleExtraEnv(extraEnv, role)
-		roleEnv = withAutomationTargets(roleEnv, wf.Definition, role)
+		roleEnv = s.withRoleHooks(roleEnv, wf.Definition, role)
 		roleEnv = withRoleSeed(roleEnv, wf.ID, role.Name)
 		// D13-Fix (2026-08-20, s. ioPortExtraEnv-Doku): der geclaimte
 		// physische Port muss an die Instanz weitergereicht werden, sonst
@@ -959,14 +935,14 @@ func (s *Service) runStart(wf Workflow, ioAssignments map[string]ioPortAssignmen
 		}
 
 		// ARCHITECTURE.md §24.1, UMSETZUNG.md C16: Control-Plane-Rollen
-		// (s. controlPlaneNodeTypes) bekommen sofort eine Workflow-
+		// (s. RegisterControlPlaneType) bekommen sofort eine Workflow-
 		// gescopte VerbOperate-Bindung auf ihre eigene Instanz-ID —
 		// best effort wie der Zwischenstand unten: ein Fehler hier
 		// bricht den Workflow-Start nicht ab (die Instanz läuft bereits
 		// und ist über den bisherigen Direktpfad weiter erreichbar,
 		// s. docs/decisions.md Nachtrag 81/C16 zur Migration), sie kann
 		// sich nur ohne Bindung kein Service-Token holen.
-		if s.authz != nil && controlPlaneNodeTypes[role.NodeType] {
+		if s.authz != nil && s.IsControlPlaneNodeType(role.NodeType) {
 			if _, err := s.authz.Create(inst.ID, wf.ID, authz.AnyNode, authz.VerbOperate); err != nil {
 				slog.Warn("workflows: failed to provision service-token role binding",
 					"workflow", wf.ID, "role", role.Name, "instance", inst.ID, "error", err)
@@ -1409,7 +1385,7 @@ func (s *Service) runRestartRole(wf Workflow, roleName string) {
 	// S. runStart-Aufrufstelle/roleExtraEnv-Doku: role.Format +
 	// role.MixerLevels (Nutzerwunsch 2026-08-14) additiv gemergt.
 	roleEnv := roleExtraEnv(extraEnv, role)
-	roleEnv = withAutomationTargets(roleEnv, wf.Definition, role)
+	roleEnv = s.withRoleHooks(roleEnv, wf.Definition, role)
 	roleEnv = withRoleSeed(roleEnv, wf.ID, role.Name)
 
 	resolvedHostID := role.HostID
@@ -1439,10 +1415,10 @@ func (s *Service) runRestartRole(wf Workflow, roleName string) {
 	wf.Runtime[roleName] = RoleRuntime{InstanceID: inst.ID, HostID: resolvedHostID}
 	// Spiegelbildlich zu runStart: die neue Instanz braucht ihre eigene
 	// Service-Token-Bindung, sonst verliert ein neugestarteter Control-
-	// Plane-Node (s. controlPlaneNodeTypes) nach RestartRole seinen Zugriff
+	// Plane-Node (s. RegisterControlPlaneType) nach RestartRole seinen Zugriff
 	// auf den generischen Proxy (die alte Bindung wurde oben gerade gezielt
 	// entfernt, sie zeigte auf die jetzt gestoppte Instanz-ID).
-	if s.authz != nil && controlPlaneNodeTypes[role.NodeType] {
+	if s.authz != nil && s.IsControlPlaneNodeType(role.NodeType) {
 		if _, err := s.authz.Create(inst.ID, wf.ID, authz.AnyNode, authz.VerbOperate); err != nil {
 			slog.Warn("workflows: RestartRole: failed to provision service-token role binding", "workflow", wf.ID, "role", roleName, "instance", inst.ID, "error", err)
 		}

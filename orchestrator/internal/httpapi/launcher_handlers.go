@@ -186,7 +186,7 @@ func handleListInstances(svc LauncherService, hostMetrics HostMetricsReader) htt
 // Dropdowns (Bild-/Audiomischer) sinnvoll benennbar.
 //
 // Live gefundener Bug (2026-08-07): ein per Katalog manuell gestarteter
-// Control-Plane-Node (workflows.IsControlPlaneNodeType, z. B.
+// Control-Plane-Node (Service.IsControlPlaneNodeType, z. B.
 // `omp-playout-automation`) bekam bislang GAR KEINE Rollenbindung —
 // diese entsteht bisher nur in workflows.Service.runStart, workflow-
 // gescopt auf `wf.ID`. Ohne Workflow-Kontext blieb sein Service-Token
@@ -221,7 +221,7 @@ func handleListInstances(svc LauncherService, hostMetrics HostMetricsReader) htt
 // `ioPortStore` darf nil sein (kein I/O-Port-Inventar konfiguriert) —
 // dann wird eine Anfrage MIT requiredIoPort ehrlich abgelehnt statt
 // still zu ignorieren (gleiche Regel wie am Workflow-Pfad).
-func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStore IOPortInventoryStore) http.HandlerFunc {
+func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStore IOPortInventoryStore, isControlPlane func(string) bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Type           string                       `json:"type"`
@@ -303,7 +303,7 @@ func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStor
 			}
 		}
 
-		if workflows.IsControlPlaneNodeType(body.Type) {
+		if isControlPlane(body.Type) {
 			if _, err := authzStore.Create(inst.ID, "", authz.AnyNode, authz.VerbOperate); err != nil {
 				slog.Warn("launcher: failed to provision service-token role binding for manually started instance",
 					"instance", inst.ID, "type", body.Type, "error", err)

@@ -1,4 +1,9 @@
-package workflows
+// Package playout ist das Playout-Modul des Orchestrators (UMSETZUNG.md Kapitel 36). Übergangsstand 36.5: bisher nur das
+// Wissen über die Playout-Automation (Automations-Ziele, Control-Plane-Typ), das früher in `workflows` stand; Channels,
+// Trigger, As-Run und Preflight folgen mit 36.8.
+package playout
+
+import "github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
 
 // Automations-Ziele automatisch aus den Rollen des Workflows ableiten.
 //
@@ -9,11 +14,12 @@ package workflows
 // erste Grafik. Nur eine Vorbelegung (Umgebungsvariablen beim Start) — der Bediener kann sie im Panel
 // jederzeit ändern. Standby-Rollen zählen nicht.
 
-const automationNodeType = "omp-playout-automation"
+// AutomationNodeType ist der Node-Typ der Playout-Automation (reiner Control-Plane-Node, steuert Player/Mischer fern).
+const AutomationNodeType = "omp-playout-automation"
 
-// automationTargetEnv liefert die Start-Umgebung für eine Automations-Rolle; für jede andere Rolle nil.
-func automationTargetEnv(def Definition, role Role) map[string]string {
-	if role.NodeType != automationNodeType {
+// AutomationTargetEnv liefert die Start-Umgebung für eine Automations-Rolle; für jede andere Rolle nil.
+func AutomationTargetEnv(def workflows.Definition, role workflows.Role) map[string]string {
+	if role.NodeType != AutomationNodeType {
 		return nil
 	}
 	env := map[string]string{}
@@ -50,19 +56,12 @@ func automationTargetEnv(def Definition, role Role) map[string]string {
 	return env
 }
 
-// withAutomationTargets ergänzt `base` um die Automations-Ziele (neue Map, `base` bleibt unverändert;
-// ausdrücklich gesetzte Werte in `base` gewinnen).
-func withAutomationTargets(base map[string]string, def Definition, role Role) map[string]string {
-	add := automationTargetEnv(def, role)
-	if add == nil {
-		return base
-	}
-	merged := make(map[string]string, len(base)+len(add))
-	for k, v := range add {
-		merged[k] = v
-	}
-	for k, v := range base {
-		merged[k] = v
-	}
-	return merged
+// Register hängt die Playout-Fachlichkeit an den Workflow-Dienst: Automations-Ziele als Start-Umgebung und der
+// Automations-Node als Control-Plane-Typ.
+func Register(svc interface {
+	RegisterRoleEnvHook(workflows.RoleEnvHook)
+	RegisterControlPlaneType(string)
+}) {
+	svc.RegisterRoleEnvHook(AutomationTargetEnv)
+	svc.RegisterControlPlaneType(AutomationNodeType)
 }

@@ -49,6 +49,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/materialize"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
+	playoutmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/playout"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeoptions"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeversions"
@@ -746,6 +747,9 @@ func main() {
 	// und prüft vor jedem Start die Ressourcenlage der Ziel-Hosts
 	// (placementEngine.CheckHost).
 	workflowSvc := workflows.NewService(workflows.NewStore(database), store, graphSvc, launcherSvc, hub, nodeHTTPClient, placementEngine, authzStore)
+	// Playout-Fachwissen im Workflow-Dienst (Automations-Ziele, Control-Plane-Typ) kommt über die Erweiterungspunkte der
+	// Modul-Schnittstelle (Kapitel 36.5), nicht mehr aus dem Kern.
+	playoutmod.Register(workflowSvc)
 	// Lauf-Historie (Scheduler: geplant vs. real) samt täglicher Bereinigung.
 	workflowRunStore := workflows.NewRunStore(database)
 	workflowSvc.SetRunRecorder(workflowRunStore)

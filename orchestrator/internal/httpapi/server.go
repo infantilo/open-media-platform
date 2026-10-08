@@ -470,7 +470,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/audio-rules/simulate", g.requireAuth(handleSimulateAudioRules()))
 	mux.HandleFunc("PUT /api/v1/audio-rules", g.requireVerbGlobal(authz.VerbAdmin, handlePutAudioRules(nodeSettingsStore)))
 	mux.HandleFunc("GET /api/v1/instances", g.requireAuth(handleListInstances(launcherSvc, hostMetrics)))
-	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, handlePostInstance(launcherSvc, authzStore, ioPortStore)))
+	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, handlePostInstance(launcherSvc, authzStore, ioPortStore, controlPlaneCheck(workflowSvc))))
 	mux.HandleFunc("DELETE /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteInstance(launcherSvc, ioPortStore)))
 	// Kapitel 13 Teil 3 (docs/END-GOAL-FEATURES.md §13.4) — Drag-Umzug
 	// im Flow-Editor für eigenständige (nicht Workflow-gebundene)
@@ -925,4 +925,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// controlPlaneCheck liefert das Prädikat „Node-Typ ist Control-Plane“ des Workflow-Dienstes; ohne Unterstützung (Tests,
+// einfache Fakes) gilt kein Typ als Control-Plane.
+func controlPlaneCheck(svc any) func(string) bool {
+	if c, ok := svc.(interface{ IsControlPlaneNodeType(string) bool }); ok {
+		return c.IsControlPlaneNodeType
+	}
+	return func(string) bool { return false }
 }
