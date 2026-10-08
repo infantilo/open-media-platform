@@ -694,3 +694,22 @@ func TestSelectHostForecastExtraLoadMakesHostUnattractive(t *testing.T) {
 		t.Fatalf("SelectHost().HostID = %q, want %q (forecast load should make h1 unattractive)", result.HostID, "h2")
 	}
 }
+
+func TestDrainingHostGetsNoNewPlacement(t *testing.T) {
+	// Zwei online Hosts; der geleerte wird übersprungen, auch wenn er bevorzugt ist.
+	hl := fakeHosts{hosts: []hosts.Host{{ID: "a"}, {ID: "b"}}}
+	mr := fakeMetrics{"a": {}, "b": {}}
+	e := NewEngine(hl, mr, fakeInstances{}, nil, testThresholds(), nil)
+	e.SetDraining("a", true)
+	if !e.IsDraining("a") || e.IsDraining("b") {
+		t.Fatal("flags")
+	}
+	r := e.SelectHost(PlacementRequest{NodeType: "x", PreferredHostID: "a"}, Occupancy{})
+	if r.HostID != "b" {
+		t.Fatalf("got %q (%s)", r.HostID, r.Reason)
+	}
+	e.SetDraining("a", false)
+	if r := e.SelectHost(PlacementRequest{NodeType: "x", PreferredHostID: "a"}, Occupancy{}); r.HostID != "a" {
+		t.Fatalf("after undrain got %q", r.HostID)
+	}
+}

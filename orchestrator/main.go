@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -1003,7 +1004,7 @@ func main() {
 	}
 	go runWhileLeader(ctx, clusterNode, triggerRouter.Run)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithPlayout(playoutStore, workflowSvc), httpapi.WithChannelTriggers(triggerRouter, triggerStore), httpapi.WithAsRun(asrunStore, asrunMetrics), httpapi.WithPreflight(preflightSvc), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), cloudOption())
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithPlayout(playoutStore, workflowSvc), httpapi.WithChannelTriggers(triggerRouter, triggerStore), httpapi.WithAsRun(asrunStore, asrunMetrics), httpapi.WithPreflight(preflightSvc), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithAll(cloudOptions(ctx, clusterNode, database, domainAuditStore)...))
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,
@@ -1039,20 +1040,37 @@ func main() {
 	}
 }
 
-// cloudOption schaltet die Cloud-Kostenendpunkte frei (ARCHITECTURE.md §27). Ohne
-// `OMP_CLOUD_PROVIDER` bleibt der Kern ohne Anbieter lauffähig (`configured:false`).
-// Derzeit gibt es nur den Simulations-Anbieter `mock`; echte Adapter folgen mit 35.6.
-func cloudOption() httpapi.HandlerOption {
+// cloudOptions schaltet die Cloud-Funktionen frei (ARCHITECTURE.md §27) und startet den Pool-Controller (nur
+// auf dem Raft-Leader). Ohne `OMP_CLOUD_PROVIDER` bleibt der Kern ohne Anbieter lauffähig (`configured:false`).
+// Derzeit gibt es nur den Simulations-Anbieter `mock` (mit simulierter Agent-Anmeldung — es entstehen keine
+// Einträge in der Host-Tabelle); echte Adapter folgen mit 35.6.
+func cloudOptions(ctx context.Context, node *cluster.Node, db *sql.DB, audit httpapi.DomainAuditLogger) []httpapi.HandlerOption {
 	switch name := os.Getenv("OMP_CLOUD_PROVIDER"); name {
 	case "":
-		return httpapi.WithCloud(nil, "", "")
+		return []httpapi.HandlerOption{httpapi.WithCloud(nil, "", ""), httpapi.WithCloudControl(nil)}
 	case "mock":
-		return httpapi.WithCloud(&cloud.CostService{
-			Provider: cloud.NewMockProvider(), Region: "mock-region",
-			MinBilled: time.Minute, Lead: 5 * time.Minute, Teardown: 5 * time.Minute,
-		}, "mock", "mock-region")
+		provider := cloud.NewMockProvider()
+		costs := &cloud.CostService{Provider: provider, Region: "mock-region", MinBilled: time.Minute, Lead: 5 * time.Minute, Teardown: 5 * time.Minute}
+		pools := []cloud.Pool{{
+			Name: "burst", Region: "mock-region", InstanceType: "m.medium", Min: 0, Max: 3,
+			UserDataTemplate: "OMP_HOST_AGENT_LABEL={{host}}\nOMP_HOST_AGENT_BOOTSTRAP_TOKEN={{token}}\n",
+			IdleAfter:        2 * time.Minute, MaxLifetime: 12 * time.Hour,
+		}}
+		env := cloud.NewSimEnv(time.Now, 20*time.Second)
+		mgr := cloud.NewManager(provider, "omp-dev", pools, env, time.Now)
+		store := cloud.NewSQLReservations(db)
+		ctrl := &cloud.PoolController{Manager: mgr, Reservations: store, Lead: 5 * time.Minute, Teardown: 5 * time.Minute,
+			OnAction: func(a cloud.Action) {
+				slog.Info("cloud action", "pool", a.Pool, "kind", a.Kind, "host", a.HostID, "reason", a.Reason)
+				if audit != nil && a.Kind != "error" {
+					audit.Log("cloud-controller", "cloud_host", a.HostID, a.Kind, map[string]any{"pool": a.Pool, "reason": a.Reason})
+				}
+			}}
+		go runWhileLeader(ctx, node, func(ctx context.Context) { ctrl.Run(ctx, 5*time.Second) })
+		svc := &cloud.Service{Manager: mgr, Controller: ctrl, Reservations: store}
+		return []httpapi.HandlerOption{httpapi.WithCloud(costs, "mock", "mock-region"), httpapi.WithCloudControl(svc)}
 	default:
 		slog.Warn("unknown OMP_CLOUD_PROVIDER, cloud features off", "value", name)
-		return httpapi.WithCloud(nil, "", "")
+		return []httpapi.HandlerOption{httpapi.WithCloud(nil, "", ""), httpapi.WithCloudControl(nil)}
 	}
 }

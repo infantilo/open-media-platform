@@ -196,6 +196,7 @@ class SchedulerView extends HTMLElement {
   // Cloud-Anbieter (GET /api/v1/cloud/pricing): buchbare Typen; null = kein Anbieter konfiguriert (dann
   // erscheinen keine Cloud-Vorschläge). Kostenvorberechnungen je Vorschlag (POST /api/v1/cloud/estimate).
   #cloudTypes: CloudType[] | null = null;
+  #cloudPools: { name: string; instanceType: string; max: number }[] = [];
   #cloudEstimates = new Map<string, { state: "loading" } | { state: "error" } | { state: "ok"; total: number; currency: string }>();
   // Womit "Neu ziehen" auf einer leeren Fläche einen Zeitplan anlegt.
   #newKind: Schedule["kind"] = "once";
@@ -247,11 +248,12 @@ class SchedulerView extends HTMLElement {
       const dates = this.#visibleDates();
       const runsFrom = startOfDay(dates[0]).toISOString();
       const runsTo = addDays(startOfDay(dates[dates.length - 1]), 1).toISOString();
-      const [res, resModel, resRuns, resCloud] = await Promise.all([
+      const [res, resModel, resRuns, resCloud, resPools] = await Promise.all([
         apiFetch("/api/v1/workflows"),
         apiFetch("/api/v1/scheduler/resources").catch(() => null),
         apiFetch(`/api/v1/workflows/runs?from=${encodeURIComponent(runsFrom)}&to=${encodeURIComponent(runsTo)}`).catch(() => null),
         apiFetch("/api/v1/cloud/pricing").catch(() => null),
+        apiFetch("/api/v1/cloud/hosts").catch(() => null),
       ]);
       if (!res.ok) return;
       this.#workflows = await res.json();
@@ -259,6 +261,10 @@ class SchedulerView extends HTMLElement {
       if (resCloud && resCloud.ok) {
         const c = (await resCloud.json()) as { configured?: boolean; instanceTypes?: CloudType[] };
         this.#cloudTypes = c.configured && c.instanceTypes?.length ? c.instanceTypes : null;
+      }
+      if (resPools && resPools.ok) {
+        const c = (await resPools.json()) as { pools?: { name: string; instanceType: string; max: number }[] };
+        this.#cloudPools = c.pools ?? [];
       }
       if (resRuns && resRuns.ok) {
         const body = (await resRuns.json()) as { trackingSince?: string; runs: RunRec[] };
@@ -638,9 +644,39 @@ class SchedulerView extends HTMLElement {
     } else if (est.state === "loading") cost = tt("cloud.calculating");
     else if (est.state === "error") cost = tt("cloud.costFailed");
     else cost = tt("cloud.cost", { p0: est.total.toFixed(2), p1: est.currency });
-    line.textContent = `☁ ${what} — ${cost}`;
-    line.title = tt("cloud.hint");
+    const text = document.createElement("span");
+    text.textContent = `☁ ${what} — ${cost}`;
+    text.title = tt("cloud.hint");
+    line.appendChild(text);
+    // Reservieren legt je Bedarfsabschnitt eine Reservierung im passenden Pool an; der Pool-Controller fährt die
+    // Hosts dann (um den Boot-Vorlauf früher) hoch und danach geordnet wieder ab. Kostet Geld → Rückfrage.
+    const pool = this.#cloudPools.find((p) => p.instanceType === sg.type.name && p.max >= sg.peakHosts);
+    if (pool) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = tt("cloud.reserve");
+      btn.style.cssText = "margin-left:8px;font-size:11px;cursor:pointer;";
+      btn.addEventListener("click", () => void this.#reserveCloud(sg, pool.name, cost));
+      line.appendChild(btn);
+    }
     return line;
+  }
+
+  async #reserveCloud(sg: CloudSuggestion, pool: string, cost: string) {
+    if (!window.confirm(tt("cloud.confirm", { p0: sg.peakHosts, p1: sg.type.name, p2: cost }))) return;
+    let failed = "";
+    for (const d of sg.demands) {
+      const res = await apiFetch("/api/v1/cloud/reservations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pool, hostCount: d.count, from: d.from, to: d.to, note: "scheduler" }),
+      });
+      if (!res.ok) {
+        failed = await res.text();
+        break;
+      }
+    }
+    showToast(failed ? tt("cloud.reserveFailed", { p0: failed }) : tt("cloud.reserved"));
   }
 
   async #loadCloudEstimate(key: string, sg: CloudSuggestion) {

@@ -89,3 +89,81 @@ func TestCloudPricingProviderFailureIs502(t *testing.T) {
 		t.Fatalf("%d", rec.Code)
 	}
 }
+
+type fakeControl struct {
+	created []cloud.ReservationInput
+	deleted []string
+}
+
+func (f *fakeControl) Pools() []cloud.PoolInfo { return []cloud.PoolInfo{{Name: "burst", Max: 3}} }
+func (f *fakeControl) Hosts() []cloud.Host     { return []cloud.Host{{ID: "h1", Pool: "burst", State: cloud.HostReady}} }
+func (f *fakeControl) Actions() []cloud.Action { return nil }
+func (f *fakeControl) List(time.Time, time.Time) ([]cloud.Reservation, error) {
+	return []cloud.Reservation{{ID: "r1", Pool: "burst", HostCount: 2}}, nil
+}
+func (f *fakeControl) Create(in cloud.ReservationInput, by string) (cloud.Reservation, error) {
+	if in.HostCount > 3 {
+		return cloud.Reservation{}, cloud.ErrReservationValidation
+	}
+	f.created = append(f.created, in)
+	return cloud.Reservation{ID: "r9", Pool: in.Pool, HostCount: in.HostCount, CreatedBy: by}, nil
+}
+func (f *fakeControl) Delete(id string) error {
+	if id == "nope" {
+		return cloud.ErrReservationNotFound
+	}
+	f.deleted = append(f.deleted, id)
+	return nil
+}
+
+func TestCloudHostsAndReservationsEndpoints(t *testing.T) {
+	f := &fakeControl{}
+	rec := httptest.NewRecorder()
+	handleCloudHosts(f)(rec, httptest.NewRequest("GET", "/", nil))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"configured":true`) || !strings.Contains(rec.Body.String(), `"h1"`) {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	handleCloudHosts(nil)(rec, httptest.NewRequest("GET", "/", nil))
+	if !strings.Contains(rec.Body.String(), `"configured":false`) {
+		t.Fatal(rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	handleListReservations(f)(rec, httptest.NewRequest("GET", "/?from=2026-10-08T00:00:00Z&to=2026-10-09T00:00:00Z", nil))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"r1"`) {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	handleListReservations(f)(rec, httptest.NewRequest("GET", "/?from=gestern", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatal(rec.Code)
+	}
+}
+
+func TestCreateAndDeleteReservation(t *testing.T) {
+	f := &fakeControl{}
+	rec := httptest.NewRecorder()
+	handleCreateReservation(f, nil)(rec, httptest.NewRequest("POST", "/", strings.NewReader(`{"pool":"burst","hostCount":2,"from":"2026-10-08T11:00:00Z","to":"2026-10-08T12:00:00Z"}`)))
+	if rec.Code != http.StatusCreated || len(f.created) != 1 {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	handleCreateReservation(f, nil)(rec, httptest.NewRequest("POST", "/", strings.NewReader(`{"pool":"burst","hostCount":9,"from":"2026-10-08T11:00:00Z","to":"2026-10-08T12:00:00Z"}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("validation must be 400, got %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	handleCreateReservation(nil, nil)(rec, httptest.NewRequest("POST", "/", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatal(rec.Code)
+	}
+	for id, want := range map[string]int{"r1": http.StatusNoContent, "nope": http.StatusNotFound} {
+		rec = httptest.NewRecorder()
+		req := httptest.NewRequest("DELETE", "/", nil)
+		req.SetPathValue("id", id)
+		handleDeleteReservation(f, nil)(rec, req)
+		if rec.Code != want {
+			t.Errorf("%s: %d want %d", id, rec.Code, want)
+		}
+	}
+}

@@ -218,6 +218,29 @@ type Engine struct {
 
 	mu     sync.RWMutex
 	advice map[string]Advice // hostID -> aktueller Alarm
+	// draining: Hosts, die geleert werden (Cloud-Abbau, ARCHITECTURE.md §27.5) — bekommen keine neue Last.
+	draining map[string]bool
+}
+
+// SetDraining sperrt bzw. entsperrt einen Host für neue Platzierungen. Laufende Instanzen bleiben unberührt.
+func (e *Engine) SetDraining(hostID string, on bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.draining == nil {
+		e.draining = map[string]bool{}
+	}
+	if on {
+		e.draining[hostID] = true
+	} else {
+		delete(e.draining, hostID)
+	}
+}
+
+// IsDraining meldet, ob der Host gerade geleert wird.
+func (e *Engine) IsDraining(hostID string) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.draining[hostID]
 }
 
 // SetAdviceObserver verdrahtet den Eskalations-Beobachter nach dem
@@ -552,7 +575,7 @@ func (e *Engine) SelectHost(req PlacementRequest, occ Occupancy) PlacementResult
 
 	var candidates []candidate
 	for _, h := range allHosts {
-		if !e.hostOnline(h.ID) {
+		if !e.hostOnline(h.ID) || e.IsDraining(h.ID) {
 			continue
 		}
 		s := e.scoreHost(h.ID, req.NodeType, occ.ExtraLoad[h.ID])

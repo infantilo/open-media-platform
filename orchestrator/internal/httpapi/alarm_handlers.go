@@ -44,6 +44,7 @@ type handlerOptions struct {
 	nodeValues      NodeOptionValues
 	locations       LocationStore
 	cloud           CloudCosts
+	cloudControl    CloudControl
 	cloudProvider   string
 	cloudRegion     string
 	triggerRouter   ChannelTriggerService
