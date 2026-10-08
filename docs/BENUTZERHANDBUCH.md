@@ -1178,6 +1178,8 @@ mit **Speichern**; **Auf Standard zurücksetzen** lädt die mitgelieferten ORF-W
 
 **MXF-Audiolabels (MCA):** Trägt eine MXF-Datei Labels nach SMPTE ST 377-4/-41 (Sprache, Inhalt wie PRM/DV, Soundfield-Gruppe), übernehmen die Player sie automatisch als Tags (`lang:`, `role:pt`/`role:ad`, `ch:`); im MXF-Player zeigt das Panel „MXF-Audiolabels“ sie je Playlist-Datei an.
 
+**MXF-Aufnahme mit Labels:** Der Recorder schreibt MXF (H.264 + PCM 24 Bit), wenn der Dateiname auf `.mxf` endet. Setzt man vor `record.start` den Parameter `record.mcaPlan` (JSON: `channels` mit `index`/`label`/`soundfieldGroup`, `soundfieldGroups` und `groups` mit `items` wie `content`, `useClass`, `spokenLanguage`), trägt der Recorder die Labels nach dem Stopp in die Datei ein; ein fehlerhafter Plan wird beim Start abgelehnt. Prüfen lässt sich das Ergebnis mit `mxf-mca dump <datei>`.
+
 1. **Ausgabegruppen** — jede Gruppe wird ein eigener Audio-Sender der Player (Standard:
    Programmton, Hörfilm/AD, Originalton, Dolby E, 5.1). Je Gruppe: ID, Name, Layout (Mono, Stereo,
    5.1, 7.1 oder eigene Kanalnamen), Tags (z. B. `role:pt`), „bit-exakt“ (nur reine 1:1-Auswahl,

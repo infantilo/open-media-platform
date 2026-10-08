@@ -33,6 +33,7 @@
 | SMPTE ST 2110-20/30 | Video/audio over IP | Conformant SDP, live-verified against real RTP traffic |
 | AES67 (Dante-compatible) | Audio interop over IP | SAP discovery, live-verified |
 | PTP (IEEE 1588) | Network timebase for the 2110 paths | Opt-in domain, verified live-synchronized across two network namespaces |
+| SMPTE ST 377-4 / ST 377-41 (MXF MCA) | Multichannel audio labeling in MXF (channel / soundfield-group / group labels, controlled vocabulary) | Own parser and injector (`omp-mxf-mca`); `omp-mxf-player` reads labels into the audio rules, `omp-recorder` writes them into `.mxf` recordings; round-trip checked against ffmpeg/GStreamer demuxers (no MCA reference file available yet) |
 | EBU R 37 | A/V lip-sync tolerance window | `omp-scope` measures real signals and scores them against it live |
 | EBU R 128 / ITU-R BS.1770 | Loudness & true peak | `omp-scope` computes both and gives a live compliance verdict |
 
@@ -364,6 +365,7 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   state; touch-capable responsive console (full/compact/dense/grid/touch);
   master limiter, solo/PFL, audio-follow-video (see docs/AUDIOMIXER-PLAN.md)
 - **omp-mxf-player** — MXF file player with program-group audio shuffle
+  and MXF MCA label reading (SMPTE ST 377-4/-41; labels drive the audio rules)
   (cued playback, plus live-MXL-source and real-file playlist items)
 - **omp-channel-player** — isel-free single-branch player for the
   playout automation channels (load-only, no playlist/cue-take)
@@ -378,7 +380,9 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
 - **omp-media-library** — file catalog with technical metadata
   (ffprobe) and mark-in/out segments
 - **omp-recorder** — records an MXL source (video/audio) to a Matroska
-  file; MXL-only input, no capture-card dependency
+  file, or to MXF (H.264 + 24-bit PCM) when the name ends in `.mxf`, with
+  optional SMPTE ST 377-4/-41 MCA labels (`record.mcaPlan`); MXL-only
+  input, no capture-card dependency
 - **omp-scaler** — scales/converts a connected MXL video source to a
   fixed target format; also one of two nodes that can absorb a
   workflow's declared output-delay compensation (see Status)
