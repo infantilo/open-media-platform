@@ -6,6 +6,7 @@
 //!   filtert außerdem Nicht-Capture-Knoten (z. B. UVC-Metadaten) heraus.
 pub mod caps;
 pub mod model;
+pub mod offer;
 pub mod state;
 pub mod sysfs;
 

@@ -1435,6 +1435,7 @@ name = "omp-device-hub"
 version = "0.1.0"
 dependencies = [
  "gstreamer",
+ "omp-mediaio",
  "omp-node-sdk",
  "serde",
  "serde_json",

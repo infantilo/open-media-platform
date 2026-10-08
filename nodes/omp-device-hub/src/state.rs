@@ -64,13 +64,25 @@ pub struct DeviceView {
     pub offered: bool,
     /// `false`: eingeschaltet, aber gerade nicht angesteckt.
     pub present: bool,
+    /// `off` | `starting` | `flowing` | `absent` | `error: <Meldung>` (vom Anbieter-Abgleich).
+    pub status: String,
 }
 
 /// Geräteliste für das Panel: erkannte Geräte plus eingeschaltete, aber fehlende.
-pub fn view(devices: &[Device], state: &Offered) -> Vec<DeviceView> {
+pub fn view(devices: &[Device], state: &Offered, status: &std::collections::HashMap<String, String>) -> Vec<DeviceView> {
+    let st = |id: &str, offered: bool, present: bool| {
+        status.get(id).cloned().unwrap_or_else(|| match (offered, present) {
+            (false, _) => "off".to_string(),
+            (true, false) => "absent".to_string(),
+            (true, true) => "starting".to_string(),
+        })
+    };
     let mut out: Vec<DeviceView> = devices
         .iter()
-        .map(|d| DeviceView { device: d.clone(), offered: state.is_offered(&d.id), present: true })
+        .map(|d| {
+            let offered = state.is_offered(&d.id);
+            DeviceView { device: d.clone(), offered, present: true, status: st(&d.id, offered, true) }
+        })
         .collect();
     for (id, r) in &state.offered {
         if !devices.iter().any(|d| &d.id == id) {
@@ -89,6 +101,7 @@ pub fn view(devices: &[Device], state: &Offered) -> Vec<DeviceView> {
                 },
                 offered: true,
                 present: false,
+                status: st(id, true, false),
             });
         }
     }
@@ -119,11 +132,11 @@ mod tests {
     fn default_is_all_off_and_toggle_works() {
         let devs = vec![dev("usb-a-v0", DeviceKind::Video)];
         let mut st = Offered::default();
-        assert!(!view(&devs, &st)[0].offered);
+        assert!(!view(&devs, &st, &Default::default())[0].offered);
         assert!(st.set("usb-a-v0", true, &devs));
-        assert!(view(&devs, &st)[0].offered);
+        assert!(view(&devs, &st, &Default::default())[0].offered);
         assert!(st.set("usb-a-v0", false, &devs));
-        assert!(!view(&devs, &st)[0].offered);
+        assert!(!view(&devs, &st, &Default::default())[0].offered);
     }
 
     #[test]
@@ -138,12 +151,13 @@ mod tests {
         let devs = vec![dev("usb-a-v0", DeviceKind::Video)];
         let mut st = Offered::default();
         st.set("usb-a-v0", true, &devs);
-        let v = view(&[], &st);
+        let v = view(&[], &st, &Default::default());
         assert_eq!(v.len(), 1);
         assert!(v[0].offered && !v[0].present);
+        assert_eq!(v[0].status, "absent");
         assert_eq!(v[0].device.name, "Name usb-a-v0");
         // Wiederanstecken: wieder present und weiterhin angeboten.
-        let v = view(&devs, &st);
+        let v = view(&devs, &st, &Default::default());
         assert!(v[0].offered && v[0].present);
     }
 
