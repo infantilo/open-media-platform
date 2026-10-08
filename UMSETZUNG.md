@@ -5155,3 +5155,32 @@ Entscheidungen (Nutzer 2026-10-08): **Provider-Adapter, AWS als erster Adapter**
 | 35.9 Servertexte der Cloud-Ansicht übersetzen (Nutzerwunsch 2026-10-08) — **erledigt 2026-10-08** | Aktionen und Vorschläge tragen jetzt zusätzlich `code` + `params` (der englische `reason` bleibt für Log/Audit/API-Fehler); die Oberfläche übersetzt über `cloudv.act.<code>` (de/en), formatiert Beträge mit Währung, bettet Budget-Begründungen ein und fällt bei unbekanntem Code auf den englischen Originaltext zurück; Aktionsarten (`Hochgefahren`, `Budget`, …) übersetzt | 2 neue Go-Tests (Codes/Parameter von Vorschlag, Annahme, Provision, Budget inkl. eingebetteter Begründung), 3 neue Deno-Tests (Übersetzung, Einbettung, Fallback — dabei eine Endlosrekursion bei eingebetteten Begründungen gefunden und behoben); live im neu gestarteten Orchestrator: Aktionsprotokoll und Vorschlag komplett deutsch, Screenshot `docs/screenshots/cloud.png` ersetzt |
 
 **Offene Fragen vor 35.6:** Zugangsdaten-Ablage, Region(en), welche Node-Typen cloudtauglich sind (kein PTP/Multicast, nur MXL lokal je Host → Cloud-Hosts brauchen Gateway/SRT zwischen Hosts, §18.8), Migration laufender Instanzen beim Rückbau.
+
+
+## Kapitel 36: Orchestrator-Module — Domänenfunktionen (Playout, Audio-Ausgabe, Cloud) vom Kern trennen (Nutzerauftrag 2026-10-09)
+
+Ziel: Der Orchestrator-Kern kennt Nodes, Graph, Hosts, Placement, Workflows, Auth/Rechte und Betrieb — **keine** Sende- oder
+Cloud-Fachlichkeit. Diese Funktionen werden zu **Modulen** (Stufe 1: im selben Binary, gleiche DB), die sich über eine
+Schnittstelle am Kern anmelden. Entwurf, Befund und die Abwägung gegen eigenständige Dienste: `ARCHITECTURE.md` §28.
+**Offene Entscheidung (Nutzer):** Stufe 2 (eigenständige Dienste hinter `/api/v1/ext/<name>`) nur bei konkretem Grund — wird
+nach dem Pilot (36.6) bzw. in 36.9 entschieden, nicht vorab. **Plan, noch kein Code.**
+
+Arbeitsregeln für dieses Kapitel: **keine Verhaltensänderung** pro Umzug (Vorher/Nachher-Routentabelle mit Rechtepflicht
+identisch, Datenbestand unverändert, Live-Test am echten Stack); ein Modul nach dem anderen; bereits angewendete
+Kernmigrationen werden **nie umnummeriert oder verschoben**.
+
+| Schritt | Inhalt | Verifikation |
+|---|---|---|
+| 36.1 Inventur + Entwurf | `docs/ENTWURF-MODULE.md`: vollständige Liste je Domäne — Routen (Methode, Pfad, Rechtepflicht), Tabellen, Hintergrundjobs, Metriken/Alarme, UI-Tabs, Importe in den Kern; Vorher-Snapshot der Routentabelle als Golden-Datei für den Vergleich | Golden-Datei aus dem laufenden Orchestrator erzeugt, Review mit Nutzer |
+| 36.2 Modulschnittstelle + Registry | `internal/module`: `Module` (Name, Migrationen, `Mount(Routen, Deps)` mit den Rechte-/Audit-/Ereignis-Helfern des Kerns, `Start(ctx)` leader-gegated, Metrik-/Alarmquellen, UI-Manifest); Modulmigrationen mit Stand in `module_migrations`; Kern lädt Module per Registrierung statt per Namen | Unit-Tests der Registry (Reihenfolge, doppelte Namen, Migration einmalig, fehlerhaftes Modul bricht den Start nicht still ab); Routentabelle unverändert |
+| 36.3 Shell: Tabs aus Manifest | `GET /api/v1/modules` liefert Tabs/Admin-Untertabs/Bundles; die Shell lädt sie dynamisch statt `import "./playout-admin-view.ts"`/`cloud-view.ts` | Deno-Tests; CDP-Klicktest: alle Tabs wie vorher, Modul ausgeschaltet → Tab fehlt, kein Fehler |
+| 36.4 Generische Rechtebindung | Objekttyp + ID statt Playout-Rollenbindung; **datenerhaltende** Übernahme der bestehenden Bindungen (Migration + Rückwärtskompatibilität der API für eine Übergangszeit) | Migrationstest mit gefülltem Altbestand, Rechteprüfung vor/nachher identisch (Tabelle Nutzer × Aktion) |
+| 36.5 Automations-Ziele aus dem Katalog | `autotargets.go`/`service.go`: Node-Typ-Vergleich durch Katalog-Eigenschaft ersetzen | Workflow-Tests unverändert grün, Playout-Workflow live gestartet |
+| 36.6 Pilot: Cloud als Modul | `internal/cloud` + Handler + `cloud_setup.go` hinter die Modulschnittstelle; Cloud-Migrationen `0039/0040` bleiben im Kern-Verlauf (angewendet), neue Cloud-Migrationen im Modul; Tab über Manifest | Routen-Vergleich identisch; Cloud-Ablauf live (Reservierung → Hosts → Abbau, Autoscaling, Budget); Modul weggelassen → Orchestrator startet, `configured:false` |
+| 36.7 Modul Audio-Ausgabe | Audio-Regeln/Ausgabegruppen (`audio_rules_handlers.go`, Standarddokument, Node-Einstellungen) als Modul | Regeln speichern/laden/simulieren live, Player übernimmt die Gruppen |
+| 36.8 Modul Playout | Channels, Zustand/Ausführungen, Trigger + Regeln, As-Run (+ Metriken/Alarme über die Quellen-Schnittstelle), Preflight/Materialize (Process-Schritt) | kompletter Playout-Ablauf live (Kanal anlegen, Trigger, As-Run, Preflight) wie in Kapitel 27; Daten unverändert |
+| 36.9 Abschluss | README/Handbuch/ARCHITECTURE; Rückblick: **Entscheidung Stufe 2** für einzelne Module (mit konkretem Grund) oder bewusst nicht; Erweiterungs-Anleitung „Eigenes Modul schreiben“ | Review mit Nutzer |
+
+**Risiken:** berührt Autorisierung und Migrationen (empfindlichste Stellen) — daher Golden-Vergleich und ein Modul pro Schritt;
+Playout ist produktionsnah — ein Fehler fällt sofort auf, darum erst nach dem Pilot und den Erweiterungspunkten; der Aufwand
+liegt bei mehreren Sitzungen, nicht bei einer.

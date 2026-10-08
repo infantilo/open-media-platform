@@ -4433,3 +4433,54 @@ CloudProvider
 
 Ablage der Zugangsdaten, Region(en), Instanztypen je Pool, welche Node-Typen/Workflows
 cloudtauglich sind (Gateway-Pfad), Verhalten beim Abbau eines nicht verschiebbaren Hosts.
+
+
+## 28. Orchestrator-Module: Domänenfunktionen vom Kern trennen (Design 2026-10-09, UMSETZUNG.md Kapitel 36)
+
+**Anlass (Nutzer 2026-10-09):** Playout-Funktionen (Channels, Trigger, As-Run, Audio-Ausgabe/Audio-Regeln, Preflight) und
+später die Cloud-Verwaltung (§27) sind keine Kernfunktion eines Orchestrators, stecken aber fest in dessen Verdrahtung.
+Der Kern soll Nodes, Graph, Hosts, Placement, Workflows, Auth/Rechte und Betrieb kennen — keine Sende- oder Cloud-Fachlichkeit.
+
+### 28.1 Befund (Stand 2026-10-09, am Code geprüft)
+
+- **Die Pakete sind schon entkoppelt:** `playout` importiert nur `statemachine`/`tracing`, `channeltrigger` nur `playout`,
+  `asrun` nichts, `cloud` nur `hosts`/`tracing`. Die Logik lässt sich leicht herauslösen.
+- **Die Kopplung sitzt an den Nähten:** `httpapi/server.go` und `main.go` kennen jede Route und jeden Store einzeln
+  (rund 25 Playout-Routen, 8 Cloud-Routen); die Migrationen (`0032`, `0033`, `0037`, `0038`, `0039`, `0040`) liegen im
+  Kern; `/metrics` und die Alarm-Ansicht kennen `asrun`; die Shell importiert `playout-admin-view` und `cloud-view` fest.
+- **Der Kern hat Fachbegriffe gelernt:** die Playout-Rollenbindung (`0033`) in der Autorisierung, der hartkodierte Node-Typ
+  `omp-playout-automation` in `workflows` (`autotargets.go`, `service.go`), der Process-Schritt `materialize` (dieser ist
+  bereits über `processEngine.Register` registriert — das Muster, das wir verallgemeinern).
+
+### 28.2 Zwei Wege, und die Entscheidung dazwischen
+
+Go kann Plugins nicht brauchbar zur Laufzeit laden (das Standard-`plugin`-Paket ist zu fragil). Daher:
+
+1. **Stufe 1 — Module im selben Binary** (vorgesehen, Kapitel 36): Ein Modul implementiert eine kleine Schnittstelle
+   (Routen, Migrationen, Hintergrundjobs, Metrik-/Alarmquellen, Shell-Tabs) und meldet sich bei einer Registry im Kern an.
+   Der Kern kennt kein Modul mehr beim Namen; ein Modul lässt sich beim Bauen weglassen. Gleicher Prozess, gleiche DB.
+2. **Stufe 2 — eigenständige Dienste** (nur bei konkretem Grund): wie die Nodes ein eigener Prozess; der Orchestrator
+   leitet `/api/v1/ext/<name>/…` weiter und reicht Identität/Mandant mit, die Oberfläche kommt über die vorhandene
+   ESM-Föderation (§4.5), Ereignisse über NATS. Das ist die echte Plugin-Architektur, kostet aber Identitätsweitergabe,
+   HA/Leader-Gating, eigenen Speicher und Datenmigration. Gründe dafür wären z. B. unabhängige Releases oder ein
+   Modul mit eigenen Geheimnissen/Abhängigkeiten (Cloud). **Entscheidung nach dem Pilot (36.6/36.9), nicht vorab.**
+
+### 28.3 Generische Erweiterungspunkte im Kern (ohne die verschiebt man nur Dateien)
+
+| Punkt | Heute | Soll |
+|---|---|---|
+| Modul-Registry | jede Route/jeder Store einzeln in `server.go`/`main.go` | `Module`-Schnittstelle: `Name`, `Migrations`, `Mount(routes, deps)`, `Start(ctx)`, Quellen für Metriken/Alarme, UI-Manifest |
+| Migrationen | eine globale Nummernfolge im Kern | Kernmigrationen bleiben **unverändert** (bereits angewendet, nie umnummerieren); neue Modulmigrationen je Modul, Stand in `module_migrations` |
+| Rechte | Playout-spezifische Rollenbindung | generische Bindung (Objekttyp + ID), vorhandene Playout-Bindungen werden **datenerhaltend** übernommen |
+| Automations-Ziele | Node-Typ `omp-playout-automation` hartkodiert | Katalog-Eigenschaft („Automations-Ziel“) statt Namensvergleich |
+| Metriken/Alarme | Kern importiert `asrun` | Module liefern Quellen über eine Schnittstelle |
+| Shell | statische Importe von `playout-admin-view`/`cloud-view` | `GET /api/v1/modules` liefert Tabs/Bundles; die Shell lädt sie dynamisch |
+| Process-Schritte | `processEngine.Register(...)` | bleibt, wird Teil der Modulschnittstelle |
+
+### 28.4 Reihenfolge und Risiko
+
+Erst die Erweiterungspunkte und ein **Pilotmodul** (Cloud: eigenes, am wenigsten verflochtenes Paket, keine Altdaten
+im Betrieb), dann Audio-Ausgabe (Audio-Regeln), dann Channels/Trigger/As-Run/Preflight. Jeder Umzug muss ohne
+Verhaltensänderung laufen: Vorher/Nachher-Vergleich der Routentabelle samt Rechtepflicht, unveränderte Daten, Live-Test
+gegen den echten Stack. Berührt werden Autorisierung und Migrationen — die empfindlichsten Stellen; deshalb ein Modul
+nach dem anderen und kein Umbau „in einem Zug“.
