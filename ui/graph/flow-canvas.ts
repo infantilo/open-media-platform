@@ -5382,7 +5382,12 @@ export class FlowCanvas extends HTMLElement {
           }
         }
         const requiredIoPort = ioPortSelect ? { cardType: "decklink", direction: ioPortSelect.value } : undefined;
-        this.#startInstance(entry.type, entry.version, hostSelect?.value || undefined, requiredIoPort);
+        // Sicherheitsabfrage (Nutzerwunsch 2026-10-09): versehentlicher
+        // Klick auf den Katalog-Button startete sofort einen Prozess.
+        void (async () => {
+          if (!(await confirmDialog(tt("flow.confirmStartNode", { p0: entry.type }), { confirmLabel: tt("flow.confirmStartLabel") }))) return;
+          await this.#startInstance(entry.type, entry.version, hostSelect?.value || undefined, requiredIoPort);
+        })();
       });
       row.appendChild(btn);
       card.appendChild(row);

@@ -521,7 +521,9 @@ class WorkflowsView extends HTMLElement {
     this.#render();
   }
 
-  async #startWorkflow(id: string) {
+  async #startWorkflow(wf: Workflow) {
+    if (!(await confirmDialog(tt("wf.confirmStart", { p0: wf.name }), { confirmLabel: tt("wf.confirmStartLabel") }))) return;
+    const id = wf.id;
     await apiFetch(`/api/v1/workflows/${id}/start`, { method: "POST" });
     await this.#poll();
   }
@@ -530,7 +532,9 @@ class WorkflowsView extends HTMLElement {
   // aus, wenn der Workflow settings.confirmStop gesetzt hat (D7 Teil 2),
   // sonst unverändertes Verhalten wie vor diesem Feld.
   async #stopWorkflow(wf: Workflow) {
-    if (wf.definition.settings?.confirmStop) {
+    // Immer nachfragen (Nutzerwunsch 2026-10-09), unabhängig von
+    // settings.confirmStop (das steuert nur die serverseitige Prüfung).
+    {
       const ok = await confirmDialog(tt("wf.b5f13f", { p0: wf.name }), { confirmLabel: tt("wf.4c4650") });
       if (!ok) return;
     }
@@ -669,7 +673,9 @@ class WorkflowsView extends HTMLElement {
     await this.#poll();
   }
 
-  async #deleteWorkflow(id: string) {
+  async #deleteWorkflow(wf: Workflow) {
+    if (!(await confirmDialog(tt("wf.confirmDelete", { p0: wf.name }), { confirmLabel: tt("wf.confirmDeleteLabel") }))) return;
+    const id = wf.id;
     try {
       const res = await apiFetch(`/api/v1/workflows/${id}`, { method: "DELETE" });
       if (!res.ok) {
@@ -1030,7 +1036,7 @@ class WorkflowsView extends HTMLElement {
     const startBtn = document.createElement("button");
     startBtn.textContent = wf.status === "paused" ? tt("wf.527daf") : tt("wf.a6122a");
     startBtn.disabled = !canStart;
-    startBtn.addEventListener("click", () => this.#startWorkflow(wf.id));
+    startBtn.addEventListener("click", () => this.#startWorkflow(wf));
     actions.appendChild(startBtn);
 
     const stopBtn = document.createElement("button");
@@ -1093,7 +1099,7 @@ class WorkflowsView extends HTMLElement {
     delBtn.className = "omp-btn-danger";
     delBtn.disabled = !isIdle;
     delBtn.title = isIdle ? "" : tt("wf.bc9ab0");
-    delBtn.addEventListener("click", () => this.#deleteWorkflow(wf.id));
+    delBtn.addEventListener("click", () => this.#deleteWorkflow(wf));
     actions.appendChild(delBtn);
 
     // Kapitel 12 Teil 3 (§12.3d): in jedem Zustand exportierbar (der

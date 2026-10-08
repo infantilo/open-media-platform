@@ -238,6 +238,8 @@ wirklich Bild/Ton fließt, prüfen die Health- und Scope-Ansichten.
 
 ## 4. Workflows
 
+> **Sicherheitsabfrage:** Manuelles Starten, Stoppen und Löschen eines Workflows sowie das manuelle Starten eines neuen Nodes aus dem Katalog fragen vor der Ausführung nach („Wirklich …?“). Erst „Starten“/„Stoppen“/„Löschen“ löst die Aktion aus; „Abbrechen“ oder Escape verwirft sie.
+
 Der Reiter **Workflows** verwaltet benannte, wiederverwendbare
 Kombinationen aus Node-Typen und Verbindungen — praktisch ein
 Vorlagen-System für „diese Sendung braucht immer dieselben Nodes in
