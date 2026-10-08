@@ -11,8 +11,10 @@ import (
 	"database/sql"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/hosts"
 )
 
 // Module ist die Mindestschnittstelle.
@@ -111,10 +113,41 @@ type NodeSettings interface {
 	Put(key string, data []byte) error
 }
 
+// Hosts ist die Host-Verwaltung des Kerns (registrierte Host-Agents, Bootstrap-Token für neue Hosts).
+type Hosts interface {
+	ListHosts() ([]hosts.Host, error)
+	CreateBootstrapToken(createdBy string, ttl time.Duration) (string, time.Time, error)
+}
+
+// HostMetrics liefert die zuletzt empfangene Telemetrie eines Hosts.
+type HostMetrics interface {
+	Get(hostID string) (hosts.Metrics, bool)
+}
+
+// Instances ist die Sicht auf die laufenden Instanzen.
+type Instances interface {
+	// CountOnHost zählt die Instanzen auf einem Host-Agent (hostID = Host-Agent-ID).
+	CountOnHost(hostID string) int
+	// LocalLoad: Auslastung des Orchestrator-Rechners selbst (ok=false: unbekannt).
+	LocalLoad() (cpuPercent, memPercent float64, ok bool)
+}
+
+// Placement steuert, wohin Last gelegt wird.
+type Placement interface {
+	// SetDraining sperrt/entsperrt einen Host für neue Platzierungen (laufende Instanzen bleiben).
+	SetDraining(hostID string, on bool)
+}
+
 // Deps ist, was ein Modul vom Kern bekommt — bewusst klein; weitere Abhängigkeiten kommen mit dem jeweiligen Umzug
-// (Hosts, Instanzen, Process-Schritte, …) als eigene schmale Schnittstellen, nie als Durchreichen des ganzen Kerns.
+// als eigene schmale Schnittstellen, nie als Durchreichen des ganzen Kerns.
 type Deps struct {
 	DB       *sql.DB
 	Audit    DomainAudit
 	Settings NodeSettings
+	// Actor liefert den Nutzernamen des angemeldeten Aufrufers einer Anfrage ("" im Bootstrap-Modus).
+	Actor       func(*http.Request) string
+	Hosts       Hosts
+	HostMetrics HostMetrics
+	Instances   Instances
+	Placement   Placement
 }

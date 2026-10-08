@@ -36,6 +36,9 @@ func logDomainAudit(logger DomainAuditLogger, actor, objectType, objectID, actio
 // actorFromRequest liefert den Nutzernamen des authentifizierten
 // Aufrufers für Domain-Audit-Einträge, "" im Bootstrap-Modus (noch kein
 // Nutzer angelegt) — s. principalFromContext-Doku.
+// ActorFromRequest ist die exportierte Fassung für Module (module.Deps.Actor).
+func ActorFromRequest(r *http.Request) string { return actorFromRequest(r) }
+
 func actorFromRequest(r *http.Request) string {
 	p, ok := principalFromContext(r)
 	if !ok {

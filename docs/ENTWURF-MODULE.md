@@ -113,3 +113,12 @@ Ursprüngliche Fragen (zur Nachvollziehbarkeit):
 Rolle; Werte der Rolle/des Workflows gewinnen) und **`RegisterControlPlaneType`** (Node-Typen, deren Instanz beim Start eine
 Workflow-gescopte Bedienbindung und den Service-Token-Zugang bekommt). Das Playout-Modul (`internal/modules/playout`) meldet die
 Automations-Ziele und den Typ `omp-playout-automation` an; die Ableitung selbst ist unverändert.
+
+## 8. Pilot Cloud (36.6, umgesetzt) — was sich bewährt hat und was auffiel
+
+- Der Umzug war mechanisch, weil die Fachlogik schon in `internal/cloud` stand: nur Routen, Konfiguration und Controller-Start zogen
+  in `internal/modules/cloud`. Der Kern kennt das Modul nicht mehr (`go list -deps`: `httpapi`/`workflows` ohne Modulpakete).
+- **`Deps` wächst pro Umzug um schmale Schnittstellen** (hier: Hosts, Metriken, Instanzen, Placement, Actor), nie um den ganzen Kern.
+- **Rechtepflicht je Route ausschreiben** (`module.Verb(authz.VerbAdmin)` inline statt über eine Variable) — der Golden-Test liest sie so.
+- **Abschalten wirkt wie gewünscht:** Routen 404, Tab weg, Kern unberührt. Ein Modul ohne Konfiguration (kein Anbieter) bleibt gemountet
+  und antwortet `configured:false` — der Unterschied „deaktiviert“ (404) gegen „nicht konfiguriert“ (Hinweis) ist bewusst.

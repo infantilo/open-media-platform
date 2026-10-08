@@ -1,4 +1,4 @@
-package httpapi
+package cloud
 
 import (
 	"context"
@@ -19,7 +19,7 @@ func mockCosts() *cloud.CostService {
 
 func TestCloudPricingUnconfiguredIsNotAnError(t *testing.T) {
 	rec := httptest.NewRecorder()
-	handleCloudPricing(nil, "", "")(rec, httptest.NewRequest("GET", "/api/v1/cloud/pricing", nil))
+	(&api{}).handleCloudPricing()(rec, httptest.NewRequest("GET", "/api/v1/cloud/pricing", nil))
 	var body map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &body)
 	if rec.Code != 200 || body["configured"] != false {
@@ -29,7 +29,7 @@ func TestCloudPricingUnconfiguredIsNotAnError(t *testing.T) {
 
 func TestCloudPricingListsTypes(t *testing.T) {
 	rec := httptest.NewRecorder()
-	handleCloudPricing(mockCosts(), "mock", "r")(rec, httptest.NewRequest("GET", "/api/v1/cloud/pricing", nil))
+	(&api{costs: mockCosts(), provider: "mock", region: "r"}).handleCloudPricing()(rec, httptest.NewRequest("GET", "/api/v1/cloud/pricing", nil))
 	var body struct {
 		Configured    bool                 `json:"configured"`
 		Provider      string               `json:"provider"`
@@ -44,7 +44,7 @@ func TestCloudPricingListsTypes(t *testing.T) {
 func TestCloudEstimateComputesCostAndFlagsEstimate(t *testing.T) {
 	body := `{"demands":[{"instanceType":"g.large","count":2,"from":"2026-10-08T11:00:00Z","to":"2026-10-08T14:00:00Z"}],"leadSeconds":300,"teardownSeconds":300}`
 	rec := httptest.NewRecorder()
-	handleCloudEstimate(mockCosts())(rec, httptest.NewRequest("POST", "/api/v1/cloud/estimate", strings.NewReader(body)))
+	(&api{costs: mockCosts()}).handleCloudEstimate()(rec, httptest.NewRequest("POST", "/api/v1/cloud/estimate", strings.NewReader(body)))
 	var est cloud.Estimate
 	if err := json.Unmarshal(rec.Body.Bytes(), &est); err != nil || rec.Code != 200 {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
@@ -69,7 +69,7 @@ func TestCloudEstimateErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		rec := httptest.NewRecorder()
-		handleCloudEstimate(tc.c)(rec, httptest.NewRequest("POST", "/", strings.NewReader(tc.body)))
+		(&api{costs: tc.c}).handleCloudEstimate()(rec, httptest.NewRequest("POST", "/", strings.NewReader(tc.body)))
 		if rec.Code != tc.code {
 			t.Errorf("%s: got %d want %d (%s)", tc.name, rec.Code, tc.code, rec.Body.String())
 		}
@@ -85,7 +85,7 @@ func (failingProvider) Catalog(context.Context, string) ([]cloud.InstanceType, e
 func TestCloudPricingProviderFailureIs502(t *testing.T) {
 	svc := &cloud.CostService{Provider: failingProvider{cloud.NewMockProvider()}, Region: "r"}
 	rec := httptest.NewRecorder()
-	handleCloudPricing(svc, "x", "r")(rec, httptest.NewRequest("GET", "/", nil))
+	(&api{costs: svc, provider: "x", region: "r"}).handleCloudPricing()(rec, httptest.NewRequest("GET", "/", nil))
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("%d", rec.Code)
 	}
@@ -158,22 +158,22 @@ func (f *fakeControl) Delete(id string) error {
 func TestCloudHostsAndReservationsEndpoints(t *testing.T) {
 	f := &fakeControl{}
 	rec := httptest.NewRecorder()
-	handleCloudHosts(f)(rec, httptest.NewRequest("GET", "/", nil))
+	(&api{control: f}).handleCloudHosts()(rec, httptest.NewRequest("GET", "/", nil))
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"configured":true`) || !strings.Contains(rec.Body.String(), `"h1"`) {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 	rec = httptest.NewRecorder()
-	handleCloudHosts(nil)(rec, httptest.NewRequest("GET", "/", nil))
+	(&api{}).handleCloudHosts()(rec, httptest.NewRequest("GET", "/", nil))
 	if !strings.Contains(rec.Body.String(), `"configured":false`) {
 		t.Fatal(rec.Body.String())
 	}
 	rec = httptest.NewRecorder()
-	handleListReservations(f)(rec, httptest.NewRequest("GET", "/?from=2026-10-08T00:00:00Z&to=2026-10-09T00:00:00Z", nil))
+	(&api{control: f}).handleListReservations()(rec, httptest.NewRequest("GET", "/?from=2026-10-08T00:00:00Z&to=2026-10-09T00:00:00Z", nil))
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"r1"`) {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 	rec = httptest.NewRecorder()
-	handleListReservations(f)(rec, httptest.NewRequest("GET", "/?from=gestern", nil))
+	(&api{control: f}).handleListReservations()(rec, httptest.NewRequest("GET", "/?from=gestern", nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatal(rec.Code)
 	}
@@ -182,17 +182,17 @@ func TestCloudHostsAndReservationsEndpoints(t *testing.T) {
 func TestCreateAndDeleteReservation(t *testing.T) {
 	f := &fakeControl{}
 	rec := httptest.NewRecorder()
-	handleCreateReservation(f, nil)(rec, httptest.NewRequest("POST", "/", strings.NewReader(`{"pool":"burst","hostCount":2,"from":"2026-10-08T11:00:00Z","to":"2026-10-08T12:00:00Z"}`)))
+	(&api{control: f}).handleCreateReservation()(rec, httptest.NewRequest("POST", "/", strings.NewReader(`{"pool":"burst","hostCount":2,"from":"2026-10-08T11:00:00Z","to":"2026-10-08T12:00:00Z"}`)))
 	if rec.Code != http.StatusCreated || len(f.created) != 1 {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 	rec = httptest.NewRecorder()
-	handleCreateReservation(f, nil)(rec, httptest.NewRequest("POST", "/", strings.NewReader(`{"pool":"burst","hostCount":9,"from":"2026-10-08T11:00:00Z","to":"2026-10-08T12:00:00Z"}`)))
+	(&api{control: f}).handleCreateReservation()(rec, httptest.NewRequest("POST", "/", strings.NewReader(`{"pool":"burst","hostCount":9,"from":"2026-10-08T11:00:00Z","to":"2026-10-08T12:00:00Z"}`)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("validation must be 400, got %d", rec.Code)
 	}
 	rec = httptest.NewRecorder()
-	handleCreateReservation(nil, nil)(rec, httptest.NewRequest("POST", "/", strings.NewReader(`{}`)))
+	(&api{}).handleCreateReservation()(rec, httptest.NewRequest("POST", "/", strings.NewReader(`{}`)))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatal(rec.Code)
 	}
@@ -200,7 +200,7 @@ func TestCreateAndDeleteReservation(t *testing.T) {
 		rec = httptest.NewRecorder()
 		req := httptest.NewRequest("DELETE", "/", nil)
 		req.SetPathValue("id", id)
-		handleDeleteReservation(f, nil)(rec, req)
+		(&api{control: f}).handleDeleteReservation()(rec, req)
 		if rec.Code != want {
 			t.Errorf("%s: %d want %d", id, rec.Code, want)
 		}
@@ -210,7 +210,7 @@ func TestCreateAndDeleteReservation(t *testing.T) {
 func TestPolicyEndpoints(t *testing.T) {
 	f := &fakeControl{}
 	rec := httptest.NewRecorder()
-	handleListPolicies(f)(rec, httptest.NewRequest("GET", "/", nil))
+	(&api{control: f}).handleListPolicies()(rec, httptest.NewRequest("GET", "/", nil))
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"mode":"off"`) {
 		t.Fatalf("default policy must be off: %d %s", rec.Code, rec.Body.String())
 	}
@@ -218,7 +218,7 @@ func TestPolicyEndpoints(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest("PUT", "/", strings.NewReader(body))
 		req.SetPathValue("pool", pool)
-		handlePutPolicy(f, nil)(rec, req)
+		(&api{control: f}).handlePutPolicy()(rec, req)
 		return rec.Code
 	}
 	if c := put("burst", `{"mode":"auto"}`); c != http.StatusBadRequest {
@@ -235,7 +235,7 @@ func TestPolicyEndpoints(t *testing.T) {
 func TestSuggestionAndCostEndpoints(t *testing.T) {
 	f := &fakeControl{sugg: []cloud.Suggestion{{ID: "s1", Pool: "burst"}}}
 	rec := httptest.NewRecorder()
-	handleListSuggestions(f)(rec, httptest.NewRequest("GET", "/", nil))
+	(&api{control: f}).handleListSuggestions()(rec, httptest.NewRequest("GET", "/", nil))
 	if !strings.Contains(rec.Body.String(), `"s1"`) {
 		t.Fatal(rec.Body.String())
 	}
@@ -243,7 +243,7 @@ func TestSuggestionAndCostEndpoints(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest("POST", "/", nil)
 		req.SetPathValue("id", id)
-		handleAcceptSuggestion(f, nil)(rec, req)
+		(&api{control: f}).handleAcceptSuggestion()(rec, req)
 		if rec.Code != want {
 			t.Errorf("accept %s: %d want %d", id, rec.Code, want)
 		}
@@ -252,13 +252,13 @@ func TestSuggestionAndCostEndpoints(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest("DELETE", "/", nil)
 		req.SetPathValue("id", id)
-		handleDismissSuggestion(f, nil)(rec, req)
+		(&api{control: f}).handleDismissSuggestion()(rec, req)
 		if rec.Code != want {
 			t.Errorf("dismiss %s: %d want %d", id, rec.Code, want)
 		}
 	}
 	rec = httptest.NewRecorder()
-	handleCloudCosts(f)(rec, httptest.NewRequest("GET", "/", nil))
+	(&api{control: f}).handleCloudCosts()(rec, httptest.NewRequest("GET", "/", nil))
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"estimated":true`) {
 		t.Fatal(rec.Body.String())
 	}
@@ -270,7 +270,7 @@ func TestReleaseHostEndpoint(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest("POST", "/", nil)
 		req.SetPathValue("id", id)
-		handleReleaseHost(f, nil)(rec, req)
+		(&api{control: f}).handleReleaseHost()(rec, req)
 		if rec.Code != want {
 			t.Errorf("%s: %d want %d", id, rec.Code, want)
 		}

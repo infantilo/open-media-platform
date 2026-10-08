@@ -1,4 +1,4 @@
-package httpapi
+package cloud
 
 import (
 	"context"
@@ -18,13 +18,10 @@ type CloudCosts interface {
 	Estimate(ctx context.Context, demands []cloud.Demand, lead, teardown time.Duration) (cloud.Estimate, error)
 }
 
-// WithCloud aktiviert /api/v1/cloud/pricing und /api/v1/cloud/estimate.
-func WithCloud(c CloudCosts, provider, region string) HandlerOption {
-	return func(o *handlerOptions) { o.cloud, o.cloudProvider, o.cloudRegion = c, provider, region }
-}
-
 // handleCloudPricing: GET /api/v1/cloud/pricing — buchbare Instanztypen mit Preis (Schätzbasis, keine Abrechnung).
-func handleCloudPricing(c CloudCosts, provider, region string) http.HandlerFunc {
+func (a *api) handleCloudPricing() http.HandlerFunc {
+	c, provider, region := a.costs, a.provider, a.region
+	_, _ = provider, region
 	return func(w http.ResponseWriter, r *http.Request) {
 		if c == nil {
 			writeJSON(w, http.StatusOK, map[string]any{"configured": false, "instanceTypes": []cloud.InstanceType{}})
@@ -46,7 +43,8 @@ type cloudEstimateRequest struct {
 }
 
 // handleCloudEstimate: POST /api/v1/cloud/estimate — Kostenvorberechnung für einen Hostbedarf.
-func handleCloudEstimate(c CloudCosts) http.HandlerFunc {
+func (a *api) handleCloudEstimate() http.HandlerFunc {
+	c := a.costs
 	return func(w http.ResponseWriter, r *http.Request) {
 		if c == nil {
 			http.Error(w, "no cloud provider configured", http.StatusServiceUnavailable)
@@ -88,13 +86,9 @@ type CloudControl interface {
 	Release(ctx context.Context, id string) error
 }
 
-// WithCloudControl aktiviert /api/v1/cloud/hosts und /api/v1/cloud/reservations*.
-func WithCloudControl(c CloudControl) HandlerOption {
-	return func(o *handlerOptions) { o.cloudControl = c }
-}
-
 // handleCloudHosts: GET /api/v1/cloud/hosts — gemietete Hosts, Pools und die letzten Controller-Aktionen.
-func handleCloudHosts(c CloudControl) http.HandlerFunc {
+func (a *api) handleCloudHosts() http.HandlerFunc {
+	c := a.control
 	return func(w http.ResponseWriter, r *http.Request) {
 		if c == nil {
 			writeJSON(w, http.StatusOK, map[string]any{"configured": false, "pools": []any{}, "hosts": []any{}, "actions": []any{}})
@@ -105,7 +99,8 @@ func handleCloudHosts(c CloudControl) http.HandlerFunc {
 }
 
 // handleListReservations: GET /api/v1/cloud/reservations?from=&to= (RFC 3339; Standard: gestern bis +60 Tage).
-func handleListReservations(c CloudControl) http.HandlerFunc {
+func (a *api) handleListReservations() http.HandlerFunc {
+	c := a.control
 	return func(w http.ResponseWriter, r *http.Request) {
 		if c == nil {
 			writeJSON(w, http.StatusOK, []any{})
@@ -139,7 +134,8 @@ func handleListReservations(c CloudControl) http.HandlerFunc {
 }
 
 // handleCreateReservation: POST /api/v1/cloud/reservations — Cloud-Kapazität von–bis anfordern.
-func handleCreateReservation(c CloudControl, audit DomainAuditLogger) http.HandlerFunc {
+func (a *api) handleCreateReservation() http.HandlerFunc {
+	c := a.control
 	return func(w http.ResponseWriter, r *http.Request) {
 		if c == nil {
 			http.Error(w, "no cloud provider configured", http.StatusServiceUnavailable)
@@ -150,7 +146,7 @@ func handleCreateReservation(c CloudControl, audit DomainAuditLogger) http.Handl
 			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		res, err := c.Create(in, actorFromRequest(r))
+		res, err := c.Create(in, a.actor(r))
 		if err != nil {
 			status := http.StatusInternalServerError
 			if errors.Is(err, cloud.ErrReservationValidation) {
@@ -159,14 +155,15 @@ func handleCreateReservation(c CloudControl, audit DomainAuditLogger) http.Handl
 			http.Error(w, err.Error(), status)
 			return
 		}
-		logDomainAudit(audit, actorFromRequest(r), "cloud_reservation", res.ID, "created",
+		a.log(a.actor(r), "cloud_reservation", res.ID, "created",
 			map[string]any{"pool": res.Pool, "hostCount": res.HostCount, "from": res.From, "to": res.To})
 		writeJSON(w, http.StatusCreated, res)
 	}
 }
 
 // handleDeleteReservation: DELETE /api/v1/cloud/reservations/{id}.
-func handleDeleteReservation(c CloudControl, audit DomainAuditLogger) http.HandlerFunc {
+func (a *api) handleDeleteReservation() http.HandlerFunc {
+	c := a.control
 	return func(w http.ResponseWriter, r *http.Request) {
 		if c == nil {
 			http.Error(w, "no cloud provider configured", http.StatusServiceUnavailable)
@@ -181,22 +178,14 @@ func handleDeleteReservation(c CloudControl, audit DomainAuditLogger) http.Handl
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		logDomainAudit(audit, actorFromRequest(r), "cloud_reservation", id, "deleted", nil)
+		a.log(a.actor(r), "cloud_reservation", id, "deleted", nil)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
-// WithAll fasst mehrere Optionen zu einer zusammen.
-func WithAll(opts ...HandlerOption) HandlerOption {
-	return func(o *handlerOptions) {
-		for _, f := range opts {
-			f(o)
-		}
-	}
-}
-
 // handleListPolicies: GET /api/v1/cloud/policies — Autoscaling-Regeln aller Pools.
-func handleListPolicies(c CloudControl) http.HandlerFunc {
+func (a *api) handleListPolicies() http.HandlerFunc {
+	c := a.control
 	return func(w http.ResponseWriter, r *http.Request) {
 		if c == nil {
 			writeJSON(w, http.StatusOK, []any{})
@@ -216,7 +205,8 @@ func handleListPolicies(c CloudControl) http.HandlerFunc {
 }
 
 // handlePutPolicy: PUT /api/v1/cloud/policies/{pool} — Regeln setzen (Admin). Der Automatik-Modus braucht einen Budgetdeckel.
-func handlePutPolicy(c CloudControl, audit DomainAuditLogger) http.HandlerFunc {
+func (a *api) handlePutPolicy() http.HandlerFunc {
+	c := a.control
 	return func(w http.ResponseWriter, r *http.Request) {
 		if c == nil {
 			http.Error(w, "no cloud provider configured", http.StatusServiceUnavailable)
@@ -228,7 +218,7 @@ func handlePutPolicy(c CloudControl, audit DomainAuditLogger) http.HandlerFunc {
 			return
 		}
 		pol.Pool = r.PathValue("pool")
-		if err := c.SetPolicy(pol, actorFromRequest(r)); err != nil {
+		if err := c.SetPolicy(pol, a.actor(r)); err != nil {
 			status := http.StatusInternalServerError
 			if errors.Is(err, cloud.ErrPolicyValidation) {
 				status = http.StatusBadRequest
@@ -236,14 +226,15 @@ func handlePutPolicy(c CloudControl, audit DomainAuditLogger) http.HandlerFunc {
 			http.Error(w, err.Error(), status)
 			return
 		}
-		logDomainAudit(audit, actorFromRequest(r), "cloud_policy", pol.Pool, "updated",
+		a.log(a.actor(r), "cloud_policy", pol.Pool, "updated",
 			map[string]any{"mode": pol.Mode, "dailyBudget": pol.DailyBudget, "monthlyBudget": pol.MonthlyBudget, "maxAutoHosts": pol.MaxAutoHosts})
 		writeJSON(w, http.StatusOK, pol)
 	}
 }
 
 // handleListSuggestions: GET /api/v1/cloud/suggestions.
-func handleListSuggestions(c CloudControl) http.HandlerFunc {
+func (a *api) handleListSuggestions() http.HandlerFunc {
+	c := a.control
 	return func(w http.ResponseWriter, r *http.Request) {
 		if c == nil {
 			writeJSON(w, http.StatusOK, []any{})
@@ -254,14 +245,15 @@ func handleListSuggestions(c CloudControl) http.HandlerFunc {
 }
 
 // handleAcceptSuggestion: POST /api/v1/cloud/suggestions/{id}/accept (Admin).
-func handleAcceptSuggestion(c CloudControl, audit DomainAuditLogger) http.HandlerFunc {
+func (a *api) handleAcceptSuggestion() http.HandlerFunc {
+	c := a.control
 	return func(w http.ResponseWriter, r *http.Request) {
 		if c == nil {
 			http.Error(w, "no cloud provider configured", http.StatusServiceUnavailable)
 			return
 		}
 		id := r.PathValue("id")
-		if err := c.Accept(r.Context(), id, actorFromRequest(r)); err != nil {
+		if err := c.Accept(r.Context(), id, a.actor(r)); err != nil {
 			status := http.StatusBadRequest
 			switch {
 			case errors.Is(err, cloud.ErrSuggestionNotFound):
@@ -272,13 +264,14 @@ func handleAcceptSuggestion(c CloudControl, audit DomainAuditLogger) http.Handle
 			http.Error(w, err.Error(), status)
 			return
 		}
-		logDomainAudit(audit, actorFromRequest(r), "cloud_suggestion", id, "accepted", nil)
+		a.log(a.actor(r), "cloud_suggestion", id, "accepted", nil)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
 // handleDismissSuggestion: DELETE /api/v1/cloud/suggestions/{id} (Admin).
-func handleDismissSuggestion(c CloudControl, audit DomainAuditLogger) http.HandlerFunc {
+func (a *api) handleDismissSuggestion() http.HandlerFunc {
+	c := a.control
 	return func(w http.ResponseWriter, r *http.Request) {
 		if c == nil {
 			http.Error(w, "no cloud provider configured", http.StatusServiceUnavailable)
@@ -289,13 +282,14 @@ func handleDismissSuggestion(c CloudControl, audit DomainAuditLogger) http.Handl
 			http.Error(w, cloud.ErrSuggestionNotFound.Error(), http.StatusNotFound)
 			return
 		}
-		logDomainAudit(audit, actorFromRequest(r), "cloud_suggestion", id, "dismissed", nil)
+		a.log(a.actor(r), "cloud_suggestion", id, "dismissed", nil)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
 // handleCloudCosts: GET /api/v1/cloud/costs — geschätzte Kosten heute/Monat je Pool gegen den Deckel (keine Abrechnung).
-func handleCloudCosts(c CloudControl) http.HandlerFunc {
+func (a *api) handleCloudCosts() http.HandlerFunc {
+	c := a.control
 	return func(w http.ResponseWriter, r *http.Request) {
 		if c == nil {
 			writeJSON(w, http.StatusOK, []any{})
@@ -312,7 +306,8 @@ func handleCloudCosts(c CloudControl) http.HandlerFunc {
 
 // handleReleaseHost: POST /api/v1/cloud/hosts/{id}/release — Host geordnet abbauen (Admin): Placement-Sperre, warten
 // bis er leer ist, dann beenden.
-func handleReleaseHost(c CloudControl, audit DomainAuditLogger) http.HandlerFunc {
+func (a *api) handleReleaseHost() http.HandlerFunc {
+	c := a.control
 	return func(w http.ResponseWriter, r *http.Request) {
 		if c == nil {
 			http.Error(w, "no cloud provider configured", http.StatusServiceUnavailable)
@@ -323,7 +318,7 @@ func handleReleaseHost(c CloudControl, audit DomainAuditLogger) http.HandlerFunc
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		logDomainAudit(audit, actorFromRequest(r), "cloud_host", id, "release-requested", nil)
+		a.log(a.actor(r), "cloud_host", id, "release-requested", nil)
 		w.WriteHeader(http.StatusAccepted)
 	}
 }
