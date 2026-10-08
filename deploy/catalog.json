@@ -301,8 +301,8 @@
     "runner": "process",
     "command": ["../nodes/target/debug/omp-device-hub"],
     "env": {},
-    "description": "Erkennt lokale Video- (V4L2) und Audio-Geräte (ALSA/USB) dieses Hosts mit stabiler Geräte-ID und Fähigkeiten; je Gerät lässt sich einschalten, ob es im DMF/MXL angeboten wird (Standard: aus, Auswahl bleibt über Neustarts erhalten).",
-    "i18n": { "en": {"description": "Detects the local video (V4L2) and audio (ALSA/USB) devices of this host with a stable device ID and capabilities; each device can be switched on or off for being offered in the DMF/MXL (default: off, the selection persists across restarts).", "expectedResources": "very low (polling the device list)"} },
+    "description": "Erkennt lokale Video- (V4L2) und Audio-Geräte (ALSA/USB) dieses Hosts mit stabiler Geräte-ID und Fähigkeiten; je Gerät lässt sich einschalten, ob es im DMF/MXL angeboten wird: Eingänge (Kamera, Mikrofon) als Quelle, Audio-Ausgänge (Kopfhörer/Lautsprecher der Soundkarte) als Empfänger, der beim Verbinden abspielt (Standard: aus, Auswahl bleibt über Neustarts erhalten).",
+    "i18n": { "en": {"description": "Detects the local video (V4L2) and audio (ALSA/USB) devices of this host with a stable device ID and capabilities; each device can be switched on or off for being offered in the DMF/MXL: inputs (camera, microphone) as a source, audio outputs (headphones/speakers of a sound card) as a receiver that plays once connected (default: off, the selection persists across restarts).", "expectedResources": "very low (polling the device list)"} },
     "expectedResources": "sehr gering (Abfrage der Geräteliste)"
   },
   {

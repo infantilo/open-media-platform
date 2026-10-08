@@ -4,7 +4,7 @@
 use gstreamer as gst;
 use gst::prelude::*;
 
-use crate::model::{AudioMode, Device, DeviceKind, VideoMode};
+use crate::model::{AudioMode, Device, DeviceKind, Direction, VideoMode};
 
 /// Ergänzt `devices` um Fähigkeiten. Video-Kandidaten, die der Anbieter nicht als
 /// Capture-Quelle kennt, werden entfernt (sofern der Anbieter überhaupt antwortet).
@@ -22,9 +22,11 @@ pub fn enrich(devices: &mut Vec<Device>) {
             }
         }
     }
-    // Audio: Kanäle/Raten kommen bei USB schon aus `/proc/asound`; ALSA-Anbieter bestätigt/ergänzt.
-    if let Some(found) = monitor("Audio/Source", "audio/x-raw") {
-        for d in devices.iter_mut().filter(|d| d.kind == DeviceKind::Audio) {
+    // Audio: Kanäle/Raten kommen bei USB schon aus `/proc/asound`; der ALSA-Anbieter bestätigt/ergänzt.
+    // Quellen (Capture) und Senken (Playback) haben getrennte Geräteklassen.
+    for (class, dir) in [("Audio/Source", Direction::Input), ("Audio/Sink", Direction::Output)] {
+        let Some(found) = monitor(class, "audio/x-raw") else { continue };
+        for d in devices.iter_mut().filter(|d| d.kind == DeviceKind::Audio && d.direction == dir) {
             let Some(card) = d.node.strip_prefix("hw:") else { continue };
             if let Some(f) = found.iter().find(|f| f.alsa_card.as_deref() == Some(card)) {
                 // Die Caps der Anbieter sind meist weit offen (1–32 Kanäle); nur der angegebene

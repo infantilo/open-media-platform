@@ -1221,6 +1221,7 @@ Der Node **Geräte-Hub** (Katalog: „Geräte-Hub“) erkennt die Kameras, Captu
 - **Standard ist aus.** Nichts wird ohne dein Zutun angeboten. Die Auswahl bleibt nach einem Neustart erhalten.
 - **Gerät abziehen:** Der Eintrag bleibt als *Nicht angesteckt* stehen; beim Wiederanstecken wird es automatisch wieder angeboten, mit derselben Sender-ID — Verbindungen in der Kreuzschiene bleiben gültig.
 - **Fehler:** Fällt eine Quelle aus (z. B. von einer anderen Anwendung belegt), steht *Fehler* mit der Meldung als Tooltip. Mit erneutem Schalten oder **Neu suchen** gibt es einen frischen Versuch.
+- **Audio-Ausgänge:** Hat eine Soundkarte einen Wiedergabeausgang (Kopfhörer, Lautsprecher, USB-Headset), steht sie zusätzlich als **Audio-Ausgang** in der Liste. Mit „Als Ausgang bereitstellen“ erscheint ein Empfänger in der Kreuzschiene; verbindest du eine Audioquelle damit, spielt sie über die Karte (Status *Wartet auf Verbindung* → *Sendet*). Trennst du die Verbindung, endet die Wiedergabe. Hat die Quelle mehr Kanäle als die Karte, wird heruntergemischt.
 - **Format:** Video bis höchstens 1080p mit 25 Bildern/s (wenn das Gerät es kann), Audio mit der höchsten Kanalzahl des Geräts (bis 8) bei 48 kHz.
 
 ## 10d. Playout-Workflow „Playout MXF“ (Player, Mischer, Monitor)

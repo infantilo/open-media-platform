@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Device, DeviceKind, Transport};
+use crate::model::{Device, DeviceKind, Direction, Transport};
 
 /// Was von einem eingeschalteten Gerät gemerkt wird, damit es auch in der Liste steht,
 /// solange es nicht angesteckt ist (und beim Wiederanstecken sofort wieder angeboten wird).
@@ -13,6 +13,8 @@ use crate::model::{Device, DeviceKind, Transport};
 pub struct Remembered {
     pub name: String,
     pub kind: DeviceKind,
+    #[serde(default)]
+    pub direction: Direction,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,7 +51,7 @@ impl Offered {
         }
         match devices.iter().find(|d| d.id == id) {
             Some(d) => {
-                self.offered.insert(id.to_string(), Remembered { name: d.name.clone(), kind: d.kind });
+                self.offered.insert(id.to_string(), Remembered { name: d.name.clone(), kind: d.kind, direction: d.direction });
                 true
             }
             None => self.offered.contains_key(id),
@@ -90,6 +92,7 @@ pub fn view(devices: &[Device], state: &Offered, status: &std::collections::Hash
                 device: Device {
                     id: id.clone(),
                     kind: r.kind,
+                    direction: r.direction,
                     name: r.name.clone(),
                     transport: if id.starts_with("usb-") { Transport::Usb } else { Transport::Other },
                     usb: None,
@@ -117,6 +120,7 @@ mod tests {
         Device {
             id: id.into(),
             kind,
+            direction: Direction::Input,
             name: format!("Name {id}"),
             transport: Transport::Usb,
             usb: None,

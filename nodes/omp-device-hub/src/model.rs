@@ -8,6 +8,16 @@ pub enum DeviceKind {
     Audio,
 }
 
+/// Richtung des Geräts aus Sicht der Plattform: `Input` = Quelle (Aufnahme → MXL), `Output` = Senke
+/// (MXL → Wiedergabe, z. B. Kopfhörerausgang einer Soundkarte).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Direction {
+    #[default]
+    Input,
+    Output,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Transport {
@@ -48,6 +58,8 @@ pub struct Device {
     /// Stabile ID, überlebt Neustart/Umnummerieren (`usb-<vid>:<pid>-<serial|buspfad>-v0` / `-a`).
     pub id: String,
     pub kind: DeviceKind,
+    #[serde(default)]
+    pub direction: Direction,
     pub name: String,
     pub transport: Transport,
     pub usb: Option<UsbInfo>,

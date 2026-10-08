@@ -3,16 +3,16 @@ const T = (() => {
   const D = {
     de: {
       title: "Lokale Geräte", none: "Keine Video- oder Audio-Geräte erkannt.", rescan: "Neu suchen",
-      offer: "Anbieten", video: "Video", audio: "Audio", usb: "USB", pci: "PCI", other: "Lokal",
+      offer: "Anbieten", offerOut: "Als Ausgang bereitstellen", video: "Video-Eingang", audio: "Audio-Eingang", audioOut: "Audio-Ausgang", waiting: "Wartet auf Verbindung", usb: "USB", pci: "PCI", other: "Lokal",
       off: "Aus", starting: "Startet …", flowing: "Sendet", absent: "Nicht angesteckt", error: "Fehler",
-      hint: "Ein Gerät wird erst als MXL-Flow und NMOS-Sender angeboten, wenn es eingeschaltet ist. Die Auswahl bleibt über Neustarts erhalten.",
+      hint: "Ein Eingang wird erst als MXL-Flow und NMOS-Sender angeboten, wenn er eingeschaltet ist; ein Ausgang erscheint dann als Empfänger in der Kreuzschiene und spielt, sobald eine Quelle verbunden ist. Die Auswahl bleibt über Neustarts erhalten.",
       ch: "Kanäle", failed: "Aktion fehlgeschlagen",
     },
     en: {
       title: "Local devices", none: "No video or audio devices detected.", rescan: "Rescan",
-      offer: "Offer", video: "Video", audio: "Audio", usb: "USB", pci: "PCI", other: "Local",
+      offer: "Offer", offerOut: "Provide as output", video: "Video input", audio: "Audio input", audioOut: "Audio output", waiting: "Waiting for connection", usb: "USB", pci: "PCI", other: "Local",
       off: "Off", starting: "Starting …", flowing: "Live", absent: "Not plugged in", error: "Error",
-      hint: "A device is only offered as an MXL flow and NMOS sender while it is switched on. The selection persists across restarts.",
+      hint: "An input is only offered as an MXL flow and NMOS sender while it is switched on; an output then appears as a receiver in the crosspoint and plays once a source is connected. The selection persists across restarts.",
       ch: "channels", failed: "Action failed",
     },
   };
@@ -46,7 +46,7 @@ class OmpDeviceHubPanel extends HTMLElement {
       .dev[data-offered="1"] { border-color: #3a7; }
       .name { font-weight: bold; } .sub { opacity: .65; grid-column: 2; }
       .badge { padding: 2px 8px; border-radius: 10px; background: #333; font-size: 11px; }
-      .badge.flowing { background: #1f6a3a; } .badge.error { background: #8a2a2a; } .badge.starting, .badge.absent { background: #6a5a1f; }
+      .badge.flowing { background: #1f6a3a; } .badge.error { background: #8a2a2a; } .badge.starting, .badge.absent, .badge.waiting { background: #6a5a1f; }
       .kind { font-size: 11px; opacity: .8; margin-right: 6px; }
       label.sw { display: flex; gap: 6px; align-items: center; cursor: pointer; }
       .empty { opacity: .65; padding: 12px 0; } .err { color: #e77; }
@@ -67,7 +67,7 @@ class OmpDeviceHubPanel extends HTMLElement {
       const el = document.createElement("div"); el.className = "dev"; el.dataset.id = d.id;
       const sw = document.createElement("label"); sw.className = "sw";
       const cb = document.createElement("input"); cb.type = "checkbox"; cb.setAttribute("aria-label", T("offer"));
-      const swText = document.createElement("span"); swText.textContent = T("offer");
+      const swText = document.createElement("span"); swText.textContent = d.direction === "output" ? T("offerOut") : T("offer");
       sw.append(cb, swText);
       const name = document.createElement("div"); name.className = "name";
       const kind = document.createElement("span"); kind.className = "kind";
@@ -88,7 +88,8 @@ class OmpDeviceHubPanel extends HTMLElement {
     const update = (r, d) => {
       r.el.dataset.offered = d.offered ? "1" : "0";
       if (document.activeElement !== r.cb && !r.cb.disabled) r.cb.checked = d.offered;
-      r.kind.textContent = `${T(d.kind)} · ${T(d.transport)}`;
+      const kindKey = d.kind === "audio" && d.direction === "output" ? "audioOut" : d.kind;
+      r.kind.textContent = `${T(kindKey)} · ${T(d.transport)}`;
       r.nameText.textContent = d.name;
       const k = statusKind(d.status);
       r.badge.className = `badge ${k}`;

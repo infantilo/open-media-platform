@@ -386,7 +386,9 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
 - **omp-device-hub** — detects the host's local video (V4L2) and audio
   (ALSA/USB) devices with a stable ID and capabilities; each device can be
   switched on to be offered as an MXL flow + NMOS sender (default off, the
-  selection persists, a re-plugged device keeps its sender ID)
+  selection persists, a re-plugged device keeps its sender ID); audio
+  outputs (sound-card playback) become an NMOS receiver that plays once
+  connected
 - **omp-scaler** — scales/converts a connected MXL video source to a
   fixed target format; also one of two nodes that can absorb a
   workflow's declared output-delay compensation (see Status)

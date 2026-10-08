@@ -10,7 +10,7 @@ pub mod offer;
 pub mod state;
 pub mod sysfs;
 
-pub use model::{AudioMode, Device, DeviceKind, Transport, UsbInfo, VideoMode};
+pub use model::{AudioMode, Device, DeviceKind, Direction, Transport, UsbInfo, VideoMode};
 
 /// Erkennt alle lokalen Capture-Geräte unter `root` (`/` im Normalbetrieb) und reichert sie
 /// mit GStreamer-Fähigkeiten an. Ist GStreamer nicht initialisierbar, bleiben die
@@ -19,6 +19,7 @@ pub use model::{AudioMode, Device, DeviceKind, Transport, UsbInfo, VideoMode};
 pub fn scan_candidates(root: &std::path::Path) -> Vec<Device> {
     let mut devices = sysfs::scan_video(root);
     devices.extend(sysfs::scan_audio(root));
+    devices.extend(sysfs::scan_playback(root));
     devices.sort_by(|a, b| a.id.cmp(&b.id));
     devices
 }
@@ -26,6 +27,7 @@ pub fn scan_candidates(root: &std::path::Path) -> Vec<Device> {
 pub fn scan(root: &std::path::Path) -> Vec<Device> {
     let mut devices = sysfs::scan_video(root);
     devices.extend(sysfs::scan_audio(root));
+    devices.extend(sysfs::scan_playback(root));
     caps::enrich(&mut devices);
     devices.sort_by(|a, b| a.id.cmp(&b.id));
     devices

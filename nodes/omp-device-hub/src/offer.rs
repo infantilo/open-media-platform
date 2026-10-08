@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use gst::prelude::*;
 use gstreamer as gst;
 use omp_mediaio::Output;
-use omp_mediaio::mxl::{MxlAudioOutput, MxlContext, MxlVideoOutput};
+use omp_mediaio::mxl::{MxlAudioInput, MxlAudioOutput, MxlContext, MxlVideoOutput};
 
 use crate::model::{Device, DeviceKind};
 
@@ -165,15 +165,83 @@ impl Drop for Offer {
     }
 }
 
+/// Wiedergabe eines MXL-Audio-Flows über die Soundkarte (Kap. 34.5): `MxlAudioInput → Wandlung → alsasink`.
+/// Entsteht, wenn der Empfänger des Ausgangs per IS-05 verbunden wird; Drop beendet die Pipeline.
+pub struct Playback {
+    pipeline: gst::Pipeline,
+    input: MxlAudioInput,
+    pub channels: u32,
+}
+
+impl Playback {
+    /// `test_sink`: statt der Karte ein `fakesink` (Test des Empfangs-/Verbindungs-Lebenszyklus ohne Gerät,
+    /// `OMP_DEVICE_HUB_TEST_SRC=1`).
+    pub fn start(ctx: Arc<MxlContext>, d: &Device, flow_id: &str, test_sink: bool) -> Result<Playback, String> {
+        gst::init().map_err(|e| e.to_string())?;
+        // Kanalzahl der Karte (Stereo, wenn unbekannt); der Wandler mischt den Flow darauf.
+        let channels = d.audio_modes.iter().map(|m| m.channels).max().unwrap_or(2).clamp(1, MAX_CHANNELS);
+        let pipeline = gst::Pipeline::new();
+        let input = MxlAudioInput::new(&pipeline, ctx, flow_id).map_err(|e| format!("MxlAudioInput({flow_id}): {e}"))?;
+        let queue = make("queue")?;
+        let convert = make("audioconvert")?;
+        let resample = make("audioresample")?;
+        let caps = gst::ElementFactory::make("capsfilter")
+            .property("caps", gst::Caps::builder("audio/x-raw").field("channels", channels as i32).build())
+            .build()
+            .map_err(|e| e.to_string())?;
+        let sink = if test_sink {
+            gst::ElementFactory::make("fakesink").property("sync", true).build().map_err(|e| e.to_string())?
+        } else {
+            gst::ElementFactory::make("alsasink")
+                .property("device", format!("plug{}", d.node))
+                .property("sync", true)
+                .build()
+                .map_err(|e| format!("alsasink: {e}"))?
+        };
+        pipeline.add_many([&queue, &convert, &resample, &caps, &sink]).map_err(|e| e.to_string())?;
+        gst::Element::link_many([&input.tail, &queue, &convert, &resample, &caps, &sink]).map_err(|e| format!("link: {e}"))?;
+        pipeline.set_state(gst::State::Playing).map_err(|e| format!("Wiedergabe startet nicht: {e}"))?;
+        Ok(Playback { pipeline, input, channels })
+    }
+
+    /// Fehlermeldung des Busses (z. B. Karte belegt oder abgezogen).
+    pub fn poll_error(&self) -> Option<String> {
+        let bus = self.pipeline.bus()?;
+        let msg = bus.pop_filtered(&[gst::MessageType::Error])?;
+        match msg.view() {
+            gst::MessageView::Error(e) => Some(e.error().to_string()),
+            _ => None,
+        }
+    }
+
+    /// `true`, sobald Samples des Flows gelesen wurden.
+    pub fn flowing(&self) -> bool {
+        self.input.flowed_handle().load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for Playback {
+    fn drop(&mut self) {
+        self.input.stop();
+        let _ = self.pipeline.set_state(gst::State::Null);
+    }
+}
+
+/// Stabile Empfänger-ID je Ausgangsgerät (wie bei den Sendern: nach dem Wiederanstecken derselbe Empfänger).
+pub fn receiver_id(device_id: &str) -> String {
+    omp_node_sdk::idgen::deterministic_v4(&format!("omp-device-hub:receiver:{device_id}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{AudioMode, Transport, VideoMode};
+    use crate::model::{AudioMode, Direction, Transport, VideoMode};
 
     fn dev(kind: DeviceKind) -> Device {
         Device {
             id: "usb-a-v0".into(),
             kind,
+            direction: Direction::Input,
             name: "x".into(),
             transport: Transport::Usb,
             usb: None,
@@ -203,6 +271,12 @@ mod tests {
         assert_eq!(choose_format(&d), Format::Audio { channels: 2 });
         d.audio_modes = vec![AudioMode { channels: 1, rates: vec![], formats: vec![] }, AudioMode { channels: 32, rates: vec![], formats: vec![] }];
         assert_eq!(choose_format(&d), Format::Audio { channels: 8 });
+    }
+
+    #[test]
+    fn receiver_ids_are_stable_and_distinct_from_sender_ids() {
+        assert_eq!(receiver_id("usb-a-o"), receiver_id("usb-a-o"));
+        assert_ne!(receiver_id("usb-a-o"), sender_id("usb-a-o"));
     }
 
     #[test]

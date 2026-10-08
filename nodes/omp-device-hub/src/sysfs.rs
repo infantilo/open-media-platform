@@ -2,7 +2,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::model::{AudioMode, Device, DeviceKind, Transport, UsbInfo};
+use crate::model::{AudioMode, Device, DeviceKind, Direction, Transport, UsbInfo};
 
 fn read(p: &Path) -> String {
     fs::read_to_string(p).map(|s| s.trim().to_string()).unwrap_or_default()
@@ -78,6 +78,7 @@ pub fn scan_video(root: &Path) -> Vec<Device> {
         out.push(Device {
             id,
             kind: DeviceKind::Video,
+            direction: Direction::Input,
             name,
             transport,
             usb,
@@ -91,15 +92,28 @@ pub fn scan_video(root: &Path) -> Vec<Device> {
     out
 }
 
-/// ALSA-Karten mit mindestens einem Capture-PCM (`/dev/snd/pcmC<n>D<m>c`).
+/// ALSA-Karten mit mindestens einem Capture-PCM (`/dev/snd/pcmC<n>D<m>c`) → Quellen.
 pub fn scan_audio(root: &Path) -> Vec<Device> {
+    scan_cards(root, Direction::Input)
+}
+
+/// ALSA-Karten mit mindestens einem Playback-PCM (`/dev/snd/pcmC<n>D<m>p`) → Senken (Ausgänge).
+pub fn scan_playback(root: &Path) -> Vec<Device> {
+    scan_cards(root, Direction::Output)
+}
+
+fn scan_cards(root: &Path, dir_kind: Direction) -> Vec<Device> {
     let class = root.join("sys/class/sound");
     let Ok(rd) = fs::read_dir(&class) else { return Vec::new() };
+    let (suffix, id_tail, header) = match dir_kind {
+        Direction::Input => ('c', "a", "Capture:"),
+        Direction::Output => ('p', "o", "Playback:"),
+    };
     let mut out = Vec::new();
     for e in rd.flatten() {
         let fname = e.file_name().to_string_lossy().into_owned();
         let Some(num) = fname.strip_prefix("card").and_then(|n| n.parse::<u32>().ok()) else { continue };
-        if !has_capture_pcm(root, num) {
+        if !has_pcm(root, num, suffix) {
             continue;
         }
         let dir = e.path();
@@ -109,18 +123,19 @@ pub fn scan_audio(root: &Path) -> Vec<Device> {
         let (transport, usb, id) = match usb_parent(&link, root) {
             Some(u) => {
                 let info = usb_info(&u);
-                let id = format!("{}-a", usb_id(&info));
+                let id = format!("{}-{id_tail}", usb_id(&info));
                 (Transport::Usb, Some(info), id)
             }
             None => {
                 let (t, base) = transport_of(&link);
-                (t, None, format!("{}-{base}-a", if t == Transport::Pci { "pci" } else { "dev" }))
+                (t, None, format!("{}-{base}-{id_tail}", if t == Transport::Pci { "pci" } else { "dev" }))
             }
         };
-        let audio_modes = parse_stream_capture(&read_stream(root, num));
+        let audio_modes = parse_stream(&read_stream(root, num), header);
         out.push(Device {
             id,
             kind: DeviceKind::Audio,
+            direction: dir_kind,
             name,
             transport,
             usb,
@@ -134,12 +149,12 @@ pub fn scan_audio(root: &Path) -> Vec<Device> {
     out
 }
 
-fn has_capture_pcm(root: &Path, card: u32) -> bool {
+fn has_pcm(root: &Path, card: u32, suffix: char) -> bool {
     let prefix = format!("pcmC{card}D");
     fs::read_dir(root.join("dev/snd"))
         .map(|rd| rd.flatten().any(|e| {
             let n = e.file_name().to_string_lossy().into_owned();
-            n.starts_with(&prefix) && n.ends_with('c')
+            n.starts_with(&prefix) && n.ends_with(suffix)
         }))
         .unwrap_or(false)
 }
@@ -167,9 +182,14 @@ fn read_stream(root: &Path, card: u32) -> String {
     names.iter().map(|n| read(&dir.join(n))).collect::<Vec<_>>().join("\n")
 }
 
-/// Liest aus dem Text von `/proc/asound/cardN/stream*` die Capture-Abschnitte: je Alt-Setting
-/// (`Format:`, `Channels:`, `Rates:`); gleiche Kanalzahl wird zusammengefasst.
+/// Capture-Abschnitte von `/proc/asound/cardN/stream*` (Quellen).
 pub fn parse_stream_capture(text: &str) -> Vec<AudioMode> {
+    parse_stream(text, "Capture:")
+}
+
+/// Liest aus dem Text von `/proc/asound/cardN/stream*` die Abschnitte unter `header` (`Capture:` bzw.
+/// `Playback:`): je Alt-Setting (`Format:`, `Channels:`, `Rates:`); gleiche Kanalzahl wird zusammengefasst.
+pub fn parse_stream(text: &str, header: &str) -> Vec<AudioMode> {
     let mut modes: Vec<AudioMode> = Vec::new();
     let mut in_capture = false;
     let mut cur = AudioMode { channels: 0, rates: Vec::new(), formats: Vec::new() };
@@ -177,7 +197,7 @@ pub fn parse_stream_capture(text: &str) -> Vec<AudioMode> {
         let t = line.trim();
         if t == "Capture:" || t == "Playback:" {
             commit(&mut cur, &mut modes);
-            in_capture = t == "Capture:";
+            in_capture = t == header;
         } else if in_capture {
             if let Some(v) = t.strip_prefix("Format:") {
                 // Ein neues Alt-Setting beginnt mit `Format:` (nach `Channels:`/`Rates:` des vorigen).
@@ -320,5 +340,35 @@ mod tests {
         assert_eq!(m.len(), 2);
         assert_eq!((m[0].channels, m[0].rates.clone(), m[0].formats.clone()), (1, vec![16000, 44100, 48000], vec!["S16_LE".to_string()]));
         assert_eq!((m[1].channels, m[1].rates.clone(), m[1].formats.clone()), (2, vec![48000, 96000], vec!["S24_3LE".to_string()]));
+    }
+
+    #[test]
+    fn playback_cards_are_outputs_with_own_id_and_playback_modes() {
+        let t = Tree::new("play");
+        t.usb("SN9");
+        // USB-Headset: Capture UND Playback → je ein Eintrag (Quelle -a, Senke -o).
+        t.w("sys/class/sound/card2/id", "Headset\n");
+        t.link("sys/class/sound/card2/device", "../../../devices/pci0000:00/0000:00:14.0/usb1/1-2/1-2:1.0");
+        t.w("dev/snd/pcmC2D0c", "");
+        t.w("dev/snd/pcmC2D0p", "");
+        t.w("proc/asound/cards", " 2 [Headset         ]: USB-Audio - Acme Headset\n                      Acme Headset at usb-0000:00:14.0-2\n");
+        t.w(
+            "proc/asound/card2/stream0",
+            "Acme Headset\n\nPlayback:\n  Interface 1\n    Altset 1\n    Format: S16_LE\n    Channels: 2\n    Rates: 44100, 48000\n\nCapture:\n  Interface 2\n    Altset 1\n    Format: S16_LE\n    Channels: 1\n    Rates: 16000\n",
+        );
+        // card3: nur Capture
+        t.w("sys/class/sound/card3/id", "Mic\n");
+        t.w("dev/snd/pcmC3D0c", "");
+        let out = scan_playback(&t.0);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "usb-046d:0825-SN9-o");
+        assert_eq!(out[0].direction, Direction::Output);
+        assert_eq!((out[0].audio_modes[0].channels, out[0].audio_modes[0].rates.clone()), (2, vec![44100, 48000]));
+        let inp = scan_audio(&t.0);
+        let ids: Vec<&str> = inp.iter().map(|d| d.id.as_str()).collect();
+        assert!(ids.contains(&"usb-046d:0825-SN9-a"), "{ids:?}");
+        let head = inp.iter().find(|d| d.id.ends_with("SN9-a")).unwrap();
+        assert_eq!(head.audio_modes[0].channels, 1);
+        assert_eq!(head.direction, Direction::Input);
     }
 }
