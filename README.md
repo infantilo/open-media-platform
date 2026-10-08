@@ -389,6 +389,7 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   selection persists, a re-plugged device keeps its sender ID); audio
   outputs (sound-card playback) become an NMOS receiver that plays once
   connected
+- **Cloud resources (orchestrator service)** — rent cloud hosts through a provider adapter (simulation provider and AWS, no cloud SDK), reserve capacity from–to, rule-based autoscaling (off by default; suggest or automatic) behind a hard daily/monthly budget cap, pre-calculated and accrued cost estimates; AWS launching is dry-run only until explicitly enabled (`docs/CLOUD-AWS.md`)
 - **omp-scaler** — scales/converts a connected MXL video source to a
   fixed target format; also one of two nodes that can absorb a
   workflow's declared output-delay compensation (see Status)

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -121,6 +122,12 @@ func (f *fakeControl) Accept(_ context.Context, id, _ string) error {
 	return nil
 }
 func (f *fakeControl) Dismiss(id string) bool { return id == "s1" }
+func (f *fakeControl) Release(_ context.Context, id string) error {
+	if id == "bad" {
+		return errors.New("already terminated")
+	}
+	return nil
+}
 func (f *fakeControl) Costs(context.Context) ([]cloud.PoolCosts, error) {
 	return []cloud.PoolCosts{{Pool: "burst", Currency: "EUR", Estimate: true}}, nil
 }
@@ -254,5 +261,18 @@ func TestSuggestionAndCostEndpoints(t *testing.T) {
 	handleCloudCosts(f)(rec, httptest.NewRequest("GET", "/", nil))
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"estimated":true`) {
 		t.Fatal(rec.Body.String())
+	}
+}
+
+func TestReleaseHostEndpoint(t *testing.T) {
+	f := &fakeControl{}
+	for id, want := range map[string]int{"h1": http.StatusAccepted, "bad": http.StatusBadRequest} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/", nil)
+		req.SetPathValue("id", id)
+		handleReleaseHost(f, nil)(rec, req)
+		if rec.Code != want {
+			t.Errorf("%s: %d want %d", id, rec.Code, want)
+		}
 	}
 }

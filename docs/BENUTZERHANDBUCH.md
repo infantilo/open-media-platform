@@ -1283,6 +1283,20 @@ Szene aktiv (**— nur manuell —** schaltet das ab). Freie Mehrfach-Zuordnunge
 - Läuft die Automation auf einem anderen Host als der Player, liest die Dateiauswahl die Dateien des
   Players (Kanal A); die Datei muss dort unter `OMP_MEDIA_DIR` liegen.
 
+## 10e. Cloud-Ressourcen, Kosten und Autoscaling
+
+Der Tab **Cloud** zeigt, ob zusätzliche Rechenleistung in einer Cloud gemietet werden kann, was das kostet und wann das passiert. Ohne konfigurierten Anbieter steht dort nur ein Hinweis; alles läuft wie bisher lokal. Ein Anbieter wird vom Betreiber über Umgebungsvariablen eingerichtet (`docs/CLOUD-AWS.md`); zum Ausprobieren gibt es einen **Simulations-Anbieter** (`OMP_CLOUD_PROVIDER=mock`), der nichts mietet und nichts kostet.
+
+**Wichtig:** Alle Beträge sind **Schätzungen** aus Preisliste × Laufzeit — nicht die Abrechnung des Anbieters. Datentransfer und Speicher sind nicht enthalten.
+
+- **Kosten (geschätzt):** je Pool heute und im Monat: angefallen, Hochrechnung (laufende Hosts bis zum Ende der Periode) und der **Budgetdeckel**. Ist die Hochrechnung über dem Deckel, wird der Balken rot.
+- **Gemietete Hosts:** Zustand (startet → wartet auf Host-Agent → bereit → wird geleert → beendet). **Abbauen** sperrt neue Platzierungen auf dem Host und beendet ihn, sobald nichts mehr auf ihm läuft.
+- **Kapazität reservieren:** Pool, Anzahl und Zeitraum wählen; **Kosten vorab** zeigt die Schätzung (inklusive Boot-Vorlauf und Abbau). Der Cloud-Host wird rechtzeitig vor dem Beginn hochgefahren und nach dem Ende geordnet abgebaut. Eine Reservierung ist eine Zusage, Geld auszugeben: es erscheint eine Rückfrage.
+- **Im Scheduler:** Läuft die Planung in einen Engpass (CPU/RAM/GPU), zeigt der Scheduler eine Zeile „☁ Cloud-Vorschlag … ca. X €“ mit **Reservieren**.
+- **Autoscaling-Regeln (je Pool):** Standard **Aus**. *Nur vorschlagen* erzeugt bei anhaltend hoher Auslastung einen Vorschlag, den du **annimmst oder verwirfst**. *Automatisch* fährt selbst hoch — dafür ist ein **Tages- oder Monatsdeckel Pflicht**. Hochgefahren wird erst nach anhaltender Überschreitung (Zeitangabe), mit Mindestabstand zwischen zwei Schritten und höchstens so vielen Zusatzhosts wie eingestellt. Abgebaut wird nach anhaltend niedriger Last, und nur Hosts, auf denen nichts mehr läuft.
+- **Der Budgetdeckel ist hart:** Er verhindert jedes weitere Hochfahren (auch Reservierungen), **schaltet aber nie eine laufende Sendung wegen Kosten ab**. Eine Blockade steht im Aktionsprotokoll. Der Deckel rechnet einen neuen Host bis zum Ende der Periode; ein Monatsdeckel am Monatsanfang kann deshalb früh greifen.
+- **Aktionsprotokoll:** jede Aktion des Controllers (hochfahren, abbauen, vorgeschlagen, Budget blockiert) mit Begründung; zusätzlich im Audit-Log.
+
 ## 11. Weiterführende Dokumente
 
 - [`HANDBUCH.md`](HANDBUCH.md) — Installation, `make`-Targets,

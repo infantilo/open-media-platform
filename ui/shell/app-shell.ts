@@ -10,6 +10,7 @@
 import "../graph/flow-canvas.ts";
 import type { FlowCanvas } from "../graph/flow-canvas.ts";
 import "./hosts-view.ts";
+import "./cloud-view.ts";
 import "./workflows-view.ts";
 import "./process-view.ts";
 import "./asset-view.ts";
@@ -24,7 +25,7 @@ import { apiFetch, type ConnectionChangeDetail, type ConnectionState, connection
 import { whoami } from "./auth.ts";
 import { buildLangSelect, type I18nKey, t, t as tt } from "./i18n.ts";
 
-type TabId = "flow" | "workflows" | "process" | "assets" | "hosts" | "instances" | "alarms" | "health" | "signal-path" | "scheduler" | "admin";
+type TabId = "flow" | "workflows" | "process" | "assets" | "hosts" | "cloud" | "instances" | "alarms" | "health" | "signal-path" | "scheduler" | "admin";
 
 interface TabDef {
   id: TabId;
@@ -44,6 +45,8 @@ const BASE_TABS: TabDef[] = [
   // beide Domänen gehören laut Aufgabenstellung eng zusammen.
   { id: "assets", labelKey: "app.tab.assets", element: "omp-asset-view" },
   { id: "hosts", labelKey: "app.tab.hosts", element: "omp-hosts-view" },
+  // Kapitel 35 (ARCHITECTURE.md §27): Cloud-Ressourcen, Kosten, Autoscaling — ohne Anbieter eine kurze Hinweisseite.
+  { id: "cloud", labelKey: "app.tab.cloud", element: "omp-cloud-view" },
   // §17 Teil 2 (docs/END-GOAL-FEATURES.md, 2026-07-19): "Laufende
   // Instanzen"-Tab — baut auf Kapitel 14 (Ressourcenwerte), kein neuer
   // Backend-Konsument.

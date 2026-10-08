@@ -530,6 +530,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/cloud/pricing", g.requireAuth(handleCloudPricing(options.cloud, options.cloudProvider, options.cloudRegion)))
 	mux.HandleFunc("POST /api/v1/cloud/estimate", g.requireAuth(handleCloudEstimate(options.cloud)))
 	mux.HandleFunc("GET /api/v1/cloud/hosts", g.requireAuth(handleCloudHosts(options.cloudControl)))
+	mux.HandleFunc("POST /api/v1/cloud/hosts/{id}/release", g.requireVerbGlobal(authz.VerbAdmin, handleReleaseHost(options.cloudControl, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/cloud/reservations", g.requireAuth(handleListReservations(options.cloudControl)))
 	mux.HandleFunc("POST /api/v1/cloud/reservations", g.requireVerbGlobal(authz.VerbAdmin, handleCreateReservation(options.cloudControl, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/cloud/policies", g.requireAuth(handleListPolicies(options.cloudControl)))

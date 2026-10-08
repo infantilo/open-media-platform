@@ -753,6 +753,11 @@ Orchestrator-Eingriff nötig (Bedienung im Detail:
   Start-Fehler statt stillem Teil-Ausgleich. Details:
   `ARCHITECTURE.md` §15.1.
 
+
+### 9.6 Cloud-Hosts (Dienst des Orchestrators, kein Node)
+
+Der Orchestrator kann über einen **Provider-Adapter** Cloud-Hosts mieten (`OMP_CLOUD_PROVIDER=mock|aws`, Konfiguration und Sicherheitsnetze in `docs/CLOUD-AWS.md`). Ein Cloud-Host ist ein gewöhnlicher Host (Host-Agent per Bootstrap-Token, Placement, Migration); neu sind nur Anlegen/Beenden und Kosten. Bausteine: Pools (Anbieter, Region, Instanztyp, min/max), Reservierungen („Kapazität von–bis“), Autoscaling-Regeln je Pool (Aus/Vorschlagen/Automatisch, harter Tages-/Monatsdeckel), Kostenvorberechnung und geschätzte Ist-Kosten, Draining-Abbau. API: `/api/v1/cloud/{pricing,estimate,hosts,costs,reservations,policies,suggestions}`; Bedienung: Tab **Cloud** (Benutzerhandbuch §10e). Die AWS-Anbindung ist ohne SDK gebaut und **noch nicht gegen echtes AWS getestet**; echte Starts sind standardmäßig gesperrt (nur Trockenlauf).
+
 ## 10. Mehr Kontext
 
 - Architektur/Konzepte: `ARCHITECTURE.md` (Referenzdokument, wird bei jeder

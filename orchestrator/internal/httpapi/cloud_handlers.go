@@ -85,6 +85,7 @@ type CloudControl interface {
 	Accept(ctx context.Context, id, by string) error
 	Dismiss(id string) bool
 	Costs(ctx context.Context) ([]cloud.PoolCosts, error)
+	Release(ctx context.Context, id string) error
 }
 
 // WithCloudControl aktiviert /api/v1/cloud/hosts und /api/v1/cloud/reservations*.
@@ -306,5 +307,23 @@ func handleCloudCosts(c CloudControl) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, costs)
+	}
+}
+
+// handleReleaseHost: POST /api/v1/cloud/hosts/{id}/release — Host geordnet abbauen (Admin): Placement-Sperre, warten
+// bis er leer ist, dann beenden.
+func handleReleaseHost(c CloudControl, audit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if c == nil {
+			http.Error(w, "no cloud provider configured", http.StatusServiceUnavailable)
+			return
+		}
+		id := r.PathValue("id")
+		if err := c.Release(r.Context(), id); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		logDomainAudit(audit, actorFromRequest(r), "cloud_host", id, "release-requested", nil)
+		w.WriteHeader(http.StatusAccepted)
 	}
 }
