@@ -9,6 +9,7 @@ pub const SDID_SCTE104: u8 = 0x07;
 pub const GRAIN_SIZE: usize = 4096;
 /// Nutzdaten (Nachrichtenbytes) je ANC-Paket: 255 Wörter minus Payload Descriptor.
 /// Kopf des Grains: Length(16) | ANC_Count(8) | F(2) | reserviert(22).
+#[allow(dead_code)]
 pub const HEADER_LEN: usize = 6;
 pub const MAX_MESSAGE_BYTES_PER_PACKET: usize = 254;
 
@@ -57,6 +58,7 @@ pub fn scte104_packets(message: &[u8], line: u16, offset: u16, duplicate: bool) 
         .collect()
 }
 
+#[cfg(test)]
 /// Setzt die Nachricht aus den Paketen (in Reihenfolge) wieder zusammen — Gegenstück für Prüfung und Tests.
 pub fn reassemble_scte104(packets: &[AncPacket]) -> Result<(Vec<u8>, bool), String> {
     let mut out = Vec::new();
@@ -160,11 +162,13 @@ pub fn mxl_grain(packets: &[AncPacket]) -> Result<Vec<u8>, String> {
     Ok(g)
 }
 
+#[cfg(test)]
 struct BitReader<'a> {
     d: &'a [u8],
     pos: usize,
 }
 
+#[cfg(test)]
 impl BitReader<'_> {
     fn get(&mut self, bits: usize) -> Result<u32, String> {
         if self.pos + bits > self.d.len() * 8 {
@@ -179,6 +183,7 @@ impl BitReader<'_> {
     }
 }
 
+#[cfg(test)]
 fn strip_parity(w: u16) -> Result<u8, String> {
     let v = (w & 0xFF) as u8;
     if with_parity(v) != w {
@@ -187,6 +192,7 @@ fn strip_parity(w: u16) -> Result<u8, String> {
     Ok(v)
 }
 
+#[cfg(test)]
 /// Liest einen Grain zurück (Prüfung: Length, ANC_Count, Parität, Prüfsumme). Gegenstück zu [`mxl_grain`].
 pub fn parse_mxl_grain(g: &[u8]) -> Result<Vec<AncPacket>, String> {
     if g.len() < HEADER_LEN {

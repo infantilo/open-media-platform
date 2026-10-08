@@ -1,15 +1,24 @@
-//! `omp-scte35` (Kapitel 27 / P9.2, Spec §134): SCTE-35-Generator als eigener Node. Der Playout-
-//! Automator plant (Child Event `SCTE35`), dieser Node kodiert und liefert die
-//! `splice_info_section` — nicht im Playlist-Core.
+//! `omp-scte35` (Kapitel 27 / P9.2, Kapitel 37): SCTE-35/-104-Generator als eigener Node. Der
+//! Playout-Automator plant (Child Event `SCTE35`, automatische Werbeblöcke), dieser Node kodiert und
+//! liefert den Marker — nicht im Playlist-Core.
 //!
-//! Methoden: `splice.out(durationMs?, eventId?, autoReturn?)`, `splice.in(eventId)`,
-//! `splice.cancel(eventId)`, `signal(typeId, eventId?, durationMs?, upid?)`.
-//! Ausgabe: Parameter `lastSection`/`lastBase64`/`history` und — wenn `OMP_SCTE35_UDP=host:port`
-//! gesetzt ist — der rohe Abschnitt als UDP-Datagramm. Eine Einbettung in einen MXL-ANC- oder
-//! Transportstrom-Ausgang ist NICHT Teil dieses Schritts (s. docs/PLAYOUT-AUTOMATION.md).
+//! Methoden: `splice.out(durationMs?, eventId?, autoReturn?, inMs?)`, `splice.in(eventId, inMs?)`,
+//! `splice.cancel(eventId)`, `signal(typeId, eventId?, durationMs?, upid?, inMs?)`. `inMs` = Abstand
+//! bis zum Schnitt (Vorlauf); ohne `inMs` gilt der Marker als „sofort“.
+//!
+//! Ausgabewege (alle optional, Umgebungsvariablen):
+//! - Parameter `lastSection`/`lastBase64`/`history` (immer) und `OMP_SCTE35_UDP=host:port` (roher Abschnitt).
+//! - `OMP_SCTE35_TS=udp://host:port|srt://…` (+ `OMP_SCTE35_PID`, `OMP_SCTE35_REPEAT`): Sidecar-Transportstrom.
+//! - `OMP_SCTE35_ANC=1`: SCTE 104 als ANC (`video/smpte291`) in einem MXL-Daten-Flow, als NMOS-Sender
+//!   sichtbar (`OMP_SCTE35_RATE=25/1`, `OMP_SCTE35_ANC_LINE`, `OMP_SCTE35_ANC_OFFSET_FRAMES`,
+//!   `OMP_SCTE35_ANC_REPEAT`, `OMP_SCTE35_FLOW_ID`).
+
+// Prüf-/Lesefunktionen (Parser) dienen Tests und Selbstprüfung.
+#![cfg_attr(not(test), allow(dead_code))]
 
 mod anc;
 mod cue;
+mod output;
 mod scte104;
 mod splice;
 mod ts;
@@ -19,7 +28,9 @@ use std::net::UdpSocket;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use omp_node_sdk::{Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType, SetError};
+use cue::Cue;
+use omp_node_sdk::node::FlowSpec;
+use omp_node_sdk::{Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType, SenderSpec, SetError};
 use serde_json::{json, Value};
 
 const HISTORY_MAX: usize = 50;
@@ -29,21 +40,42 @@ struct Scte35Store {
     next_event_id: AtomicU32,
     sent: AtomicU64,
     udp: Option<(UdpSocket, String)>,
+    clock: output::Clock,
+    ts: Option<output::TsOutput>,
+    anc: Option<output::AncOutput>,
+    /// Beschreibung der aktiven Ausgänge (Anzeige).
+    outputs: Vec<String>,
 }
 
 impl Scte35Store {
+    #[cfg(test)]
     fn new(udp_target: Option<String>) -> Self {
+        Self::with_outputs(udp_target, output::Clock::new(None), None, None)
+    }
+
+    fn with_outputs(udp_target: Option<String>, clock: output::Clock, ts: Option<output::TsOutput>, anc: Option<output::AncOutput>) -> Self {
         let udp = udp_target.filter(|t| !t.trim().is_empty()).and_then(|t| UdpSocket::bind("0.0.0.0:0").ok().map(|s| (s, t)));
         // Startwert aus der Uhr, damit Event-IDs nach Neustarts nicht kollidieren.
         let seed = (chrono::Utc::now().timestamp() as u32) & 0x00FF_FFFF;
-        Scte35Store { history: Mutex::new(VecDeque::new()), next_event_id: AtomicU32::new(seed.max(1)), sent: AtomicU64::new(0), udp }
+        let mut outputs = vec!["Parameter".to_string()];
+        if let Some((_, t)) = &udp {
+            outputs.push(format!("UDP → {t}"));
+        }
+        if let Some(t) = &ts {
+            outputs.push(format!("Transportstrom (PID {}) → {}", t.pid, t.uri));
+        }
+        if let Some(a) = &anc {
+            outputs.push(format!("ANC/SCTE 104 → MXL-Flow {}", a.flow_id));
+        }
+        Scte35Store { history: Mutex::new(VecDeque::new()), next_event_id: AtomicU32::new(seed.max(1)), sent: AtomicU64::new(0), udp, clock, ts, anc, outputs }
     }
 
     fn event_id(&self, args: &serde_json::Map<String, Value>) -> u32 {
         args.get("eventId").and_then(Value::as_u64).map(|v| v as u32).unwrap_or_else(|| self.next_event_id.fetch_add(1, Ordering::Relaxed))
     }
 
-    fn emit(&self, kind: &str, event_id: u32, section: Vec<u8>, summary: String) -> Result<(), InvokeError> {
+    fn emit(&self, cue: Cue) -> Result<(), InvokeError> {
+        let section = cue.to_scte35(self.clock.now_90k()).map_err(|e| InvokeError::Message(format!("Kodierfehler: {e}")))?;
         // Jede erzeugte Zeile wird vor dem Ausliefern wieder geparst und geprüft.
         splice::parse(&section).map_err(|e| InvokeError::Message(format!("interner Kodierfehler: {e}")))?;
         let mut udp_note = Value::Null;
@@ -53,12 +85,18 @@ impl Scte35Store {
                 Err(e) => json!(format!("UDP-Fehler: {e}")),
             };
         }
+        let ts_note = self.ts.as_ref().map(|t| {
+            t.send_section(section.clone());
+            format!("PID {}", t.pid)
+        });
+        let anc_note = self.anc.as_ref().map(|a| a.submit(&cue));
         let rec = json!({
             "at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "kind": kind, "eventId": event_id, "summary": summary,
+            "kind": cue.kind(), "eventId": cue.event_id(), "summary": cue.summary(), "leadMs": cue.lead_ms(),
             "hex": splice::to_hex(&section), "base64": splice::to_base64(&section), "udp": udp_note,
+            "ts": ts_note, "anc": anc_note,
         });
-        eprintln!("omp-scte35: {kind} eventId={event_id} {summary}");
+        eprintln!("omp-scte35: {} eventId={} {}", cue.kind(), cue.event_id(), cue.summary());
         let mut h = self.history.lock().expect("lock poisoned");
         h.push_front(rec);
         h.truncate(HISTORY_MAX);
@@ -87,10 +125,10 @@ impl ParamStore for Scte35Store {
                 ro("output"),
             ],
             methods: vec![
-                MethodSpec { name: "splice.out".to_string(), args: vec![n("durationMs"), n("eventId"), b("autoReturn")] },
-                MethodSpec { name: "splice.in".to_string(), args: vec![n("eventId")] },
+                MethodSpec { name: "splice.out".to_string(), args: vec![n("durationMs"), n("eventId"), b("autoReturn"), n("inMs")] },
+                MethodSpec { name: "splice.in".to_string(), args: vec![n("eventId"), n("inMs")] },
                 MethodSpec { name: "splice.cancel".to_string(), args: vec![n("eventId")] },
-                MethodSpec { name: "signal".to_string(), args: vec![n("typeId"), n("eventId"), n("durationMs"), t("upid")] },
+                MethodSpec { name: "signal".to_string(), args: vec![n("typeId"), n("eventId"), n("durationMs"), t("upid"), n("inMs")] },
             ],
         }
     }
@@ -102,10 +140,7 @@ impl ParamStore for Scte35Store {
             "lastBase64" => Some(json!(h.front().and_then(|r| r["base64"].as_str()).unwrap_or(""))),
             "history" => Some(Value::Array(h.iter().cloned().collect())),
             "eventsSent" => Some(json!(self.sent.load(Ordering::Relaxed))),
-            "output" => Some(json!(match &self.udp {
-                Some((_, t)) => format!("Parameter + UDP → {t}"),
-                None => "nur Parameter (OMP_SCTE35_UDP nicht gesetzt)".to_string(),
-            })),
+            "output" => Some(json!(self.outputs.join(" · "))),
             _ => None,
         }
     }
@@ -116,47 +151,112 @@ impl ParamStore for Scte35Store {
 
     fn invoke(&self, name: &str, args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
         let msg = |e: String| InvokeError::Message(e);
+        let lead = num(args, "inMs").unwrap_or(0);
         match name {
             "splice.out" => {
                 let id = self.event_id(args);
                 let duration = num(args, "durationMs").filter(|d| *d > 0);
                 let auto_return = args.get("autoReturn").and_then(Value::as_bool).unwrap_or(true);
-                let sec = splice::splice_insert(&splice::SpliceInsert { event_id: id, out_of_network: true, duration_ms: duration, auto_return, pts_90k: None, unique_program_id: 1, avail_num: 0, avails_expected: 0 }).map_err(msg)?;
-                self.emit("splice_insert OUT", id, sec, format!("Out of Network, Dauer {} ms, Auto-Return {}", duration.map_or("—".to_string(), |d| d.to_string()), auto_return))
+                self.emit(Cue::Out { event_id: id, duration_ms: duration, auto_return, lead_ms: lead })
             }
             "splice.in" => {
                 let id = num(args, "eventId").ok_or_else(|| msg("eventId fehlt (das Event, das beendet wird)".to_string()))? as u32;
-                let sec = splice::splice_insert(&splice::SpliceInsert { event_id: id, out_of_network: false, duration_ms: None, auto_return: false, pts_90k: None, unique_program_id: 1, avail_num: 0, avails_expected: 0 }).map_err(msg)?;
-                self.emit("splice_insert IN", id, sec, "Rückkehr ins Netz".to_string())
+                self.emit(Cue::In { event_id: id, lead_ms: lead })
             }
             "splice.cancel" => {
                 let id = num(args, "eventId").ok_or_else(|| msg("eventId fehlt".to_string()))? as u32;
-                self.emit("splice_insert CANCEL", id, splice::splice_cancel(id), "Event zurückgenommen".to_string())
+                self.emit(Cue::Cancel { event_id: id })
             }
             "signal" => {
                 let id = self.event_id(args);
                 let type_id = num(args, "typeId").filter(|t| *t <= 255).ok_or_else(|| msg("typeId (segmentation_type_id, 0…255) fehlt".to_string()))? as u8;
                 let upid = args.get("upid").and_then(Value::as_str).unwrap_or("").as_bytes().to_vec();
-                let sec = splice::time_signal(&splice::Segmentation { event_id: id, type_id, duration_ms: num(args, "durationMs").filter(|d| *d > 0), upid_type: if upid.is_empty() { 0 } else { 1 }, upid, segment_num: 1, segments_expected: 1, pts_90k: None }).map_err(msg)?;
-                self.emit("time_signal", id, sec, format!("segmentation_type_id 0x{type_id:02X}"))
+                self.emit(Cue::Signal { event_id: id, type_id, duration_ms: num(args, "durationMs").filter(|d| *d > 0), upid, lead_ms: lead })
             }
             _ => Err(InvokeError::Unknown),
         }
     }
 }
 
+/// Stabile, UUID-förmige Flow-ID aus dem Label (gleiche Instanz → gleiche ID, Verbindungen überleben Neustarts).
+fn stable_flow_id(seed: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let h = |salt: u8| {
+        let mut s = std::collections::hash_map::DefaultHasher::new();
+        (salt, seed).hash(&mut s);
+        s.finish()
+    };
+    let (a, b) = (h(1), h(2));
+    format!("{:08x}-{:04x}-4{:03x}-a{:03x}-{:012x}", (a >> 32) as u32, (a >> 16) as u16, a as u16 & 0xFFF, (b >> 52) as u16 & 0xFFF, b & 0xFFFF_FFFF_FFFF)
+}
+
+fn parse_rate(s: &str) -> Option<(u32, u32)> {
+    let (n, d) = s.split_once('/').unwrap_or((s, "1"));
+    let (n, d): (u32, u32) = (n.trim().parse().ok()?, d.trim().parse().ok()?);
+    (n > 0 && d > 0).then_some((n, d))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
-    let store = Arc::new(Scte35Store::new(std::env::var("OMP_SCTE35_UDP").ok()));
+    let label = env("OMP_LABEL", "SCTE-35");
+    let envn = |k: &str, d: i64| std::env::var(k).ok().and_then(|v| v.trim().parse::<i64>().ok()).unwrap_or(d);
+
+    // MXL-Kontext nur, wenn der ANC-Flow gewünscht ist (sonst kein libmxl nötig).
+    let want_anc = std::env::var("OMP_SCTE35_ANC").is_ok_and(|v| v == "1");
+    let mxl_ctx = if want_anc {
+        match omp_mediaio::mxl::MxlContext::new(&env("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl")) {
+            Ok(c) => Some(Arc::new(c)),
+            Err(e) => {
+                eprintln!("omp-scte35: ANC-Ausgang aus — MXL nicht verfügbar: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let clock = output::Clock::new(mxl_ctx.clone());
+
+    let ts_out = match std::env::var("OMP_SCTE35_TS").ok().filter(|u| !u.trim().is_empty()) {
+        Some(uri) => match output::TsOutput::start(&uri, envn("OMP_SCTE35_PID", 500) as u16, envn("OMP_SCTE35_REPEAT", 3) as u32) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                eprintln!("omp-scte35: Transportstrom-Ausgang aus — {e}");
+                None
+            }
+        },
+        None => None,
+    };
+
+    let mut senders = vec![];
+    let mut anc_out = None;
+    let rate = parse_rate(&env("OMP_SCTE35_RATE", "25/1")).unwrap_or((25, 1));
+    if let Some(ctx) = mxl_ctx {
+        let flow_id = std::env::var("OMP_SCTE35_FLOW_ID").ok().filter(|v| !v.is_empty()).unwrap_or_else(|| stable_flow_id(&format!("{label}:{}", env("OMP_INSTANCE_ID", ""))));
+        match output::AncOutput::start(ctx, &flow_id, &format!("{label} ANC"), rate, envn("OMP_SCTE35_ANC_LINE", 9) as u16, envn("OMP_SCTE35_ANC_OFFSET_FRAMES", 0), envn("OMP_SCTE35_ANC_REPEAT", 2) as u32) {
+            Ok(a) => {
+                senders.push(SenderSpec {
+                    id: Some(flow_id.clone()),
+                    transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
+                    flow: Some(FlowSpec::Data { id: Some(flow_id.clone()), grain_rate_numerator: rate.0, grain_rate_denominator: rate.1, did_sdid: vec![(anc::DID_SCTE104, anc::SDID_SCTE104)] }),
+                    label: Some(format!("{label} ANC (SCTE 104)")),
+                    ..Default::default()
+                });
+                anc_out = Some(a);
+            }
+            Err(e) => eprintln!("omp-scte35: ANC-Ausgang aus — {e}"),
+        }
+    }
+
+    let store = Arc::new(Scte35Store::with_outputs(std::env::var("OMP_SCTE35_UDP").ok(), clock, ts_out, anc_out));
     let _handle = omp_node_sdk::start(
         NodeConfig {
-            label: env("OMP_LABEL", "SCTE-35"),
+            label,
             host: env("OMP_HOST", "127.0.0.1"),
             port: std::env::var("OMP_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(0),
             registry_url: env("OMP_REGISTRY_URL", "http://127.0.0.1:8011"),
             nats_url: env("OMP_NATS_URL", "nats://127.0.0.1:4222"),
-            senders: vec![],
+            senders,
             receivers: vec![],
             instance_id: std::env::var("OMP_INSTANCE_ID").ok(),
             media_ready: omp_node_sdk::MediaReadySource::NotApplicable,

@@ -3548,3 +3548,95 @@ mod shared_latency_tests {
         assert_eq!(audio.update(20_000_000), 20_000_000);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Daten-/Ancillary-Ausgang (Kapitel 37)
+// ---------------------------------------------------------------------------
+
+/// Flow-Definition eines Ancillary-Daten-Flows (`video/smpte291`), Struktur wie
+/// `third_party/mxl/lib/tests/data/data_flow.json`.
+fn data_flow_def(flow_id: &str, label: &str, group: &str, rate_num: u32, rate_den: u32) -> String {
+    serde_json::json!({
+        "id": flow_id,
+        "label": label,
+        "description": format!("OpenMediaPlatform: {label}"),
+        "tags": { "urn:x-nmos:tag:grouphint/v1.0": [format!("{group}:Ancillary Data")] },
+        "format": "urn:x-nmos:format:data",
+        "parents": [],
+        "media_type": "video/smpte291",
+        "grain_rate": { "numerator": rate_num, "denominator": rate_den },
+    })
+    .to_string()
+}
+
+/// Schreiber für einen MXL-Daten-Flow (`video/smpte291`): ein Grain je Bildperiode, Index aus der
+/// MXL-TAI-Zeit. Die Aufrufer (z. B. `omp-scte35`) bilden die Grain-Nutzlast selbst.
+pub struct MxlDataOutput {
+    context: Arc<MxlContext>,
+    writer: Mutex<mxl::GrainWriter>,
+    rate: mxl_sys::Rational,
+    flow_id: String,
+}
+
+impl MxlDataOutput {
+    pub fn new(context: Arc<MxlContext>, flow_id: &str, label: &str, group: &str, rate_num: u32, rate_den: u32) -> Result<Self, String> {
+        let def = data_flow_def(flow_id, label, group, rate_num, rate_den);
+        let (writer, _info, was_created) = context.instance.create_flow_writer(&def, None).map_err(|e| format!("create_flow_writer(data): {e}"))?;
+        if !was_created {
+            eprintln!("omp-mediaio(mxl): reusing existing data flow {flow_id}");
+        }
+        let writer = writer.to_grain_writer().map_err(|e| format!("to_grain_writer(data): {e}"))?;
+        Ok(MxlDataOutput {
+            context,
+            writer: Mutex::new(writer),
+            rate: mxl_sys::Rational { numerator: rate_num as i64, denominator: rate_den as i64 },
+            flow_id: flow_id.to_string(),
+        })
+    }
+
+    pub fn flow_id(&self) -> &str {
+        &self.flow_id
+    }
+
+    /// Dauer einer Bildperiode in Nanosekunden.
+    pub fn period_ns(&self) -> u64 {
+        (1_000_000_000u128 * self.rate.denominator as u128 / self.rate.numerator as u128) as u64
+    }
+
+    /// Aktueller Grain-Index (TAI).
+    pub fn current_index(&self) -> u64 {
+        self.context.instance.get_current_index(&self.rate)
+    }
+
+    /// Grain-Index, in dem der Zeitpunkt `now + delay_ns` liegt (aufgerundet auf die nächste Bildgrenze).
+    pub fn index_after_ns(&self, delay_ns: u64) -> u64 {
+        let target = self.context.now_ns().saturating_add(delay_ns);
+        let idx = self.context.instance.timestamp_to_index(target, &self.rate).unwrap_or_else(|_| self.current_index());
+        // `timestamp_to_index` rundet ab; ein Zeitpunkt mitten im Bild gehört zur nächsten Grenze.
+        match self.context.instance.index_to_timestamp(idx, &self.rate) {
+            Ok(t) if t < target => idx + 1,
+            _ => idx,
+        }
+    }
+
+    /// Schläft bis zum Beginn des Grains `index`.
+    pub fn sleep_until_index(&self, index: u64) {
+        if let Ok(d) = self.context.instance.get_duration_until_index(index, &self.rate) {
+            self.context.instance.sleep_for(d);
+        }
+    }
+
+    /// Schreibt die Nutzlast als Grain `index` (kürzere Nutzlast wird mit Nullen aufgefüllt).
+    pub fn write_grain(&self, index: u64, payload: &[u8]) -> Result<(), String> {
+        let writer = self.writer.lock().map_err(|_| "Schreiber vergiftet".to_string())?;
+        let mut access = writer.open_grain(index).map_err(|e| format!("open_grain {index}: {e}"))?;
+        let total = access.total_slices();
+        let buf = access.payload_mut();
+        if payload.len() > buf.len() {
+            return Err(format!("Nutzlast {} Byte größer als der Grain ({})", payload.len(), buf.len()));
+        }
+        buf[..payload.len()].copy_from_slice(payload);
+        buf[payload.len()..].fill(0);
+        access.commit(total).map_err(|e| format!("commit {index}: {e}"))
+    }
+}

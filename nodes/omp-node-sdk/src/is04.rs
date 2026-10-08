@@ -26,6 +26,8 @@ pub const FORMAT_VIDEO: &str = "urn:x-nmos:format:video";
 /// (`UMSETZUNG.md` C11) filtert seine Quellen-Discovery per
 /// `get_flow_format()` darauf.
 pub const FORMAT_AUDIO: &str = "urn:x-nmos:format:audio";
+/// IS-04-Format für Ancillary-/Daten-Flows (`video/smpte291`, Kapitel 37).
+pub const FORMAT_DATA: &str = "urn:x-nmos:format:data";
 
 /// Transport-URN für MXL-Zero-Copy-Sender/-Receiver (`UMSETZUNG.md` C4).
 /// Seit AMWA BCP-007-03 v1.0.0 (2026-08-21, "NMOS Support for MXL") die
@@ -268,6 +270,11 @@ impl Source {
         }
     }
 
+    /// Daten-/Ancillary-Source (Kapitel 37: SCTE-104 als `video/smpte291`).
+    pub fn new_data(id: &str, label: &str, device_id: &str) -> Self {
+        Source { format: FORMAT_DATA.to_string(), ..Source::new_video(id, label, device_id) }
+    }
+
     /// `channel_count` erzeugt generische Kanal-Labels ("Channel 1", …) —
     /// reicht fürs Minimalausbau-Ziel (`UMSETZUNG.md` C11); ein Node mit
     /// echten benannten Kanälen (z. B. "L"/"R") kann `channels` später
@@ -459,7 +466,53 @@ impl AudioFlow {
     }
 }
 
-/// Video- oder Audio-Flow — `#[serde(untagged)]`, damit
+/// IS-04-v1.3-Flow für Ancillary-Daten nach `flow_sdianc_data.json` (`video/smpte291`,
+/// RFC 8331) — Kapitel 37 (SCTE-104 in MXL). `DID_SDID` benennt die enthaltenen Pakettypen.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataFlow {
+    pub id: String,
+    pub version: String,
+    pub label: String,
+    pub description: String,
+    pub tags: HashMap<String, Vec<String>>,
+    pub source_id: String,
+    pub device_id: String,
+    pub parents: Vec<String>,
+    pub grain_rate: GrainRate,
+    pub format: String,
+    pub media_type: String,
+    #[serde(rename = "DID_SDID")]
+    pub did_sdid: Vec<DidSdid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DidSdid {
+    #[serde(rename = "DID")]
+    pub did: String,
+    #[serde(rename = "SDID")]
+    pub sdid: String,
+}
+
+impl DataFlow {
+    pub fn new(id: &str, label: &str, device_id: &str, source_id: &str, rate_num: u32, rate_den: u32, did_sdid: Vec<(u8, u8)>) -> Self {
+        DataFlow {
+            id: id.to_string(),
+            version: now_version(),
+            label: label.to_string(),
+            description: String::new(),
+            tags: HashMap::new(),
+            source_id: source_id.to_string(),
+            device_id: device_id.to_string(),
+            parents: vec![],
+            grain_rate: GrainRate { numerator: rate_num, denominator: rate_den },
+            format: FORMAT_DATA.to_string(),
+            media_type: "video/smpte291".to_string(),
+            did_sdid: did_sdid.into_iter().map(|(d, s)| DidSdid { did: format!("0x{d:02X}"), sdid: format!("0x{s:02X}") }).collect(),
+        }
+    }
+}
+
+/// Video-, Audio- oder Daten-Flow — `#[serde(untagged)]`, damit
 /// `RegistryClient::register("flow", &resource)` exakt das jeweils
 /// innere Objekt sendet (kein zusätzlicher Enum-Diskriminator-Key, den
 /// nmos-cpps Schema nicht kennt).
@@ -468,6 +521,7 @@ impl AudioFlow {
 pub enum FlowResource {
     Video(Flow),
     Audio(AudioFlow),
+    Data(DataFlow),
 }
 
 /// Auflösung + Bildrate eines Video-Flows.
@@ -504,6 +558,7 @@ impl FlowResource {
         match self {
             FlowResource::Video(f) => &f.id,
             FlowResource::Audio(f) => &f.id,
+            FlowResource::Data(f) => &f.id,
         }
     }
 }

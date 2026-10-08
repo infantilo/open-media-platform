@@ -30,6 +30,16 @@ impl Cue {
         }
     }
 
+    /// Kopie mit anderem Vorlauf (Cancel hat keinen).
+    pub fn with_lead(&self, lead: u64) -> Cue {
+        let mut c = self.clone();
+        match &mut c {
+            Cue::Out { lead_ms, .. } | Cue::In { lead_ms, .. } | Cue::Signal { lead_ms, .. } => *lead_ms = lead,
+            Cue::Cancel { .. } => {}
+        }
+        c
+    }
+
     pub fn kind(&self) -> &'static str {
         match self {
             Cue::Out { .. } => "splice_insert OUT",

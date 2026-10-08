@@ -21,7 +21,7 @@ use serde_json::Value;
 
 use crate::health;
 use crate::is04::{
-    self, AudioFlow, Device, Flow, FlowResource, HeartbeatError, INSTANCE_TAG, NodeResource,
+    self, AudioFlow, DataFlow, Device, Flow, FlowResource, HeartbeatError, INSTANCE_TAG, NodeResource,
     Receiver, RegistryClient, Sender, Source,
 };
 use crate::server::{self, ParamStore};
@@ -128,6 +128,8 @@ pub enum FlowSpec {
         /// `None` verhält sich unverändert wie bisher (neue UUID).
         source_id: Option<String>,
     },
+    /// Ancillary-Daten (`video/smpte291`, Kapitel 37): Bildrate des Daten-Flows, `did_sdid` = enthaltene Pakettypen.
+    Data { id: Option<String>, grain_rate_numerator: u32, grain_rate_denominator: u32, did_sdid: Vec<(u8, u8)> },
 }
 
 impl FlowSpec {
@@ -135,6 +137,7 @@ impl FlowSpec {
         match self {
             FlowSpec::Video { id, .. } => id,
             FlowSpec::Audio { id, .. } => id,
+            FlowSpec::Data { id, .. } => id,
         }
     }
 }
@@ -388,6 +391,10 @@ fn build_sender_parts(
                             media_type,
                             *bit_depth,
                         )));
+                    }
+                    FlowSpec::Data { grain_rate_numerator, grain_rate_denominator, did_sdid, .. } => {
+                        source_out = Some(Source::new_data(&source_id, &label, device_id));
+                        flow_out = Some(FlowResource::Data(DataFlow::new(&flow_id, &label, device_id, &source_id, *grain_rate_numerator, *grain_rate_denominator, did_sdid.clone())));
                     }
                 }
                 sender.flow_id = Some(flow_id);

@@ -33,6 +33,7 @@ impl SpliceKind {
         }
     }
 
+    #[allow(dead_code)]
     pub fn from_byte(b: u8) -> Option<Self> {
         Some(match b {
             1 => SpliceKind::StartNormal,
