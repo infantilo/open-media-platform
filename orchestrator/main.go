@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -29,7 +28,6 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/backup"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/channeltrigger"
-	"github.com/infantilo/openmediaplatform/orchestrator/internal/cloud"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/cluster"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/consoles"
@@ -1004,7 +1002,7 @@ func main() {
 	}
 	go runWhileLeader(ctx, clusterNode, triggerRouter.Run)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithPlayout(playoutStore, workflowSvc), httpapi.WithChannelTriggers(triggerRouter, triggerStore), httpapi.WithAsRun(asrunStore, asrunMetrics), httpapi.WithPreflight(preflightSvc), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithAll(cloudOptions(ctx, clusterNode, database, domainAuditStore, clusterLoad(hostStore, hostMetricsTracker, launcherSvc))...))
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithPlayout(playoutStore, workflowSvc), httpapi.WithChannelTriggers(triggerRouter, triggerStore), httpapi.WithAsRun(asrunStore, asrunMetrics), httpapi.WithPreflight(preflightSvc), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithAll(cloudOptions(ctx, cloudDeps{Node: clusterNode, DB: database, Audit: domainAuditStore, Hosts: hostStore, Metrics: hostMetricsTracker, Launcher: launcherSvc, Placement: placementEngine})...))
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,
@@ -1037,82 +1035,5 @@ func main() {
 			slog.Warn("graceful shutdown failed, forcing close", "error", err)
 			srv.Close()
 		}
-	}
-}
-
-// cloudOptions schaltet die Cloud-Funktionen frei (ARCHITECTURE.md §27) und startet den Pool-Controller (nur
-// auf dem Raft-Leader). Ohne `OMP_CLOUD_PROVIDER` bleibt der Kern ohne Anbieter lauffähig (`configured:false`).
-// Derzeit gibt es nur den Simulations-Anbieter `mock` (mit simulierter Agent-Anmeldung — es entstehen keine
-// Einträge in der Host-Tabelle); echte Adapter folgen mit 35.6.
-func cloudOptions(ctx context.Context, node *cluster.Node, db *sql.DB, audit httpapi.DomainAuditLogger, load func() (cloud.LoadSample, bool)) []httpapi.HandlerOption {
-	switch name := os.Getenv("OMP_CLOUD_PROVIDER"); name {
-	case "":
-		return []httpapi.HandlerOption{httpapi.WithCloud(nil, "", ""), httpapi.WithCloudControl(nil)}
-	case "mock":
-		provider := cloud.NewMockProvider()
-		costs := &cloud.CostService{Provider: provider, Region: "mock-region", MinBilled: time.Minute, Lead: 5 * time.Minute, Teardown: 5 * time.Minute}
-		pools := []cloud.Pool{{
-			Name: "burst", Region: "mock-region", InstanceType: "m.medium", Min: 0, Max: 3,
-			UserDataTemplate: "OMP_HOST_AGENT_LABEL={{host}}\nOMP_HOST_AGENT_BOOTSTRAP_TOKEN={{token}}\n",
-			IdleAfter:        2 * time.Minute, MaxLifetime: 12 * time.Hour,
-		}}
-		env := cloud.NewSimEnv(time.Now, 20*time.Second)
-		mgr := cloud.NewManager(provider, "omp-dev", pools, env, time.Now)
-		store := cloud.NewSQLReservations(db)
-		policies := cloud.NewSQLPolicies(db)
-		if err := mgr.SetStore(cloud.NewSQLHosts(db)); err != nil {
-			slog.Warn("cloud: restoring hosts failed", "error", err)
-		}
-		ctrl := &cloud.PoolController{Manager: mgr, Reservations: store, Lead: 5 * time.Minute, Teardown: 5 * time.Minute,
-			Policies: policies, Load: load,
-			Prices: func(ctx context.Context) (cloud.PriceBook, error) {
-				types, err := costs.Types(ctx)
-				if err != nil {
-					return cloud.PriceBook{}, err
-				}
-				return cloud.NewPriceBook(types, time.Minute), nil
-			},
-			OnAction: func(a cloud.Action) {
-				slog.Info("cloud action", "pool", a.Pool, "kind", a.Kind, "host", a.HostID, "reason", a.Reason)
-				if audit != nil && a.Kind != "error" {
-					audit.Log("cloud-controller", "cloud_host", a.HostID, a.Kind, map[string]any{"pool": a.Pool, "reason": a.Reason})
-				}
-			}}
-		go runWhileLeader(ctx, node, func(ctx context.Context) { ctrl.Run(ctx, 5*time.Second) })
-		svc := &cloud.Service{Manager: mgr, Controller: ctrl, Reservations: store, Policies: policies}
-		return []httpapi.HandlerOption{httpapi.WithCloud(costs, "mock", "mock-region"), httpapi.WithCloudControl(svc)}
-	default:
-		slog.Warn("unknown OMP_CLOUD_PROVIDER, cloud features off", "value", name)
-		return []httpapi.HandlerOption{httpapi.WithCloud(nil, "", ""), httpapi.WithCloudControl(nil)}
-	}
-}
-
-// clusterLoad liefert die durchschnittliche Auslastung der erreichbaren Hosts (Host-Agents mit frischer Telemetrie
-// plus der lokale Orchestrator-Rechner) als Eingang des Cloud-Autoscalings. ok=false, solange nichts gemessen wird —
-// dann skaliert nichts (kein Raten).
-func clusterLoad(hostStore *hosts.Store, tracker *hosts.Tracker, launcherSvc *launcher.Launcher) func() (cloud.LoadSample, bool) {
-	return func() (cloud.LoadSample, bool) {
-		var cpu, mem float64
-		n := 0
-		if list, err := hostStore.ListHosts(); err == nil {
-			for _, h := range list {
-				m, ok := tracker.Get(h.ID)
-				if !ok || time.Since(m.ReceivedAt) >= placement.HostOnlineThreshold || m.Goodbye || m.MemTotalBytes == 0 {
-					continue
-				}
-				cpu += m.CPUPercent
-				mem += float64(m.MemUsedBytes) / float64(m.MemTotalBytes) * 100
-				n++
-			}
-		}
-		if lh := launcherSvc.LocalHost(); lh != nil {
-			cpu += lh.CPUPercent
-			mem += lh.MemPercent
-			n++
-		}
-		if n == 0 {
-			return cloud.LoadSample{}, false
-		}
-		return cloud.LoadSample{CPUPercent: cpu / float64(n), MemPercent: mem / float64(n), Hosts: n}, true
 	}
 }

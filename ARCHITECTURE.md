@@ -4352,10 +4352,13 @@ CloudProvider
   ActualCost(ctx, from, to, tag)  → CostReport       // vom Anbieter abgerechnet, mit Datenstand
 ```
 
-- **Kern ohne Cloud-SDK** (§10 Punkt 4, §18.9): Der Mock-Adapter (35.2) ist Teil des
-  Kerns und hat keine Abhängigkeit. Der AWS-Adapter liegt hinter einem Go-Build-Tag
-  (`cloud_aws`), der Standard-Build enthält ihn nicht; ohne Zugangsdaten bleibt alles
-  lauffähig (Cloud-Ansicht zeigt „kein Anbieter konfiguriert“).
+- **Kern ohne Cloud-SDK** (§10 Punkt 4, §18.9): Mock- und AWS-Adapter sind reiner Go-Code der
+  Standardbibliothek (der AWS-Adapter spricht EC2-/Pricing-/Cost-Explorer-HTTP direkt und
+  signiert selbst nach SigV4, `docs/CLOUD-AWS.md`) — **kein SDK, kein Build-Tag** nötig
+  (Entscheidung 2026-10-08, ersetzt die frühere Idee eines `cloud_aws`-Tags). Ohne
+  `OMP_CLOUD_PROVIDER` bleibt alles lauffähig (Cloud-Ansicht zeigt „kein Anbieter
+  konfiguriert“). Echte Starts sind zusätzlich durch `OMP_CLOUD_AWS_ALLOW_LAUNCH=1` gesichert
+  (sonst nur Trockenlauf).
 - **Pools** (Konfiguration, kein Code): Name, Anbieter, Region, Instanztyp, `min`/`max`
   Hosts, Bootstrap-Vorlage (User-Data mit einmaligem Bootstrap-Token je Host, §18.3),
   Tags. Jede Cloud-Ressource wird mit `omp-deployment` und `omp-pool` getaggt — das ist
