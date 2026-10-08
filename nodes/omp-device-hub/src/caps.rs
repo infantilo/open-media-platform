@@ -29,10 +29,8 @@ pub fn enrich(devices: &mut Vec<Device>) {
             if let Some(f) = found.iter().find(|f| f.alsa_card.as_deref() == Some(card)) {
                 // Die Caps der Anbieter sind meist weit offen (1–32 Kanäle); nur der angegebene
                 // Standardmodus des Geräts ist eine belastbare Angabe.
-                if d.audio_modes.is_empty() {
-                    if let Some((ch, rate)) = f.default_mode {
-                        d.audio_modes = vec![AudioMode { channels: ch, rates: vec![rate], formats: Vec::new() }];
-                    }
+                if let (true, Some((ch, rate))) = (d.audio_modes.is_empty(), f.default_mode) {
+                    d.audio_modes = vec![AudioMode { channels: ch, rates: vec![rate], formats: Vec::new() }];
                 }
                 d.caps_known = true;
             }
