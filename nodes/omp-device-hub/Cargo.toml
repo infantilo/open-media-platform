@@ -1,0 +1,13 @@
+[package]
+name = "omp-device-hub"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Kap. 34: lokale Geräte (V4L2-Video, ALSA/USB-Audio) erkennen und als MXL anbieten.
+# 34.1: reine Erkennung (sysfs/procfs, injizierbare Wurzel für Tests) + Fähigkeiten über
+# die GStreamer-Geräteanbieter; Binary `omp-device-scan` gibt das Ergebnis als JSON aus.
+[dependencies]
+gstreamer = "0.25.3"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
