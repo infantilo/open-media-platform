@@ -50,7 +50,42 @@ Deno.test("findPaths: Schleifen terminieren, kein Ziel = leer", () => {
     edges: [edge("a.s", "b.r"), edge("b.s", "a.r")],
   };
   assertEquals(findPaths(loop, { fromSender: "a.s", toNodeId: "z" }).paths.length, 0);
-  assertEquals(findPaths(g, { fromSender: "src.s1" }).paths.length, 0);
+  assertEquals(findPaths(g, {}).paths.length, 0); // weder Quelle noch Ziel
+});
+
+Deno.test("findPaths: nur Quelle — alle Ketten bis zum Ende, portgenau", () => {
+  const r = findPaths(g, { fromSender: "src.s1" });
+  // src.s1 → mix → out  und  src.s1 → alt → out
+  assertEquals(r.paths.map((p) => p.map((h) => h.toNode.id).join(">")).sort(), ["alt>out", "mix>out"]);
+  assertEquals(findPaths(g, { fromSender: "src.s2" }).paths.length, 0); // nichts angeschlossen
+  const via = findPaths(g, { fromSender: "src.s1", viaNodeId: "alt" });
+  assertEquals(via.paths.map((p) => p.map((h) => h.toNode.id).join(">")), ["alt>out"]);
+});
+
+Deno.test("findPaths: nur Ziel — alle Ketten zurück bis zum Ursprung, Fließrichtung", () => {
+  const r = findPaths(g, { toNodeId: "out" });
+  assertEquals(r.paths.map((p) => p.map((h) => h.fromNode.id + ">" + h.toNode.id).join(" ")).sort(), ["src>alt alt>out", "src>mix mix>out"]);
+  // genau ein Receiver-Port
+  const one = findPaths(g, { toReceiver: "out.r2" });
+  assertEquals(one.paths.length, 1);
+  assertEquals(one.paths[0][0].fromNode.id, "src");
+  assertEquals(one.paths[0][one.paths[0].length - 1].edge.toReceiver, "out.r2");
+  assertEquals(findPaths(g, { toNodeId: "src" }).paths.length, 0); // Quelle ohne Eingang
+  assertEquals(findPaths(g, { toNodeId: "out", viaNodeId: "mix" }).paths.length, 1);
+});
+
+Deno.test("findPaths: nur Quelle/nur Ziel — Verzweigung liefert je Zweig eine Kette, Schleifen terminieren", () => {
+  const fan: GraphData = {
+    nodes: [node("s", [], [["s.o", V]]), node("a", [["a.i", V]], [["a.o", V]]), node("b", [["b.i", V]], []), node("c", [["c.i", V]], [])],
+    edges: [edge("s.o", "a.i"), edge("a.o", "b.i"), edge("a.o", "c.i")],
+  };
+  assertEquals(findPaths(fan, { fromSender: "s.o" }).paths.map((p) => p.map((h) => h.toNode.id).join(">")).sort(), ["a>b", "a>c"]);
+  const loop: GraphData = {
+    nodes: [node("a", [["a.r", V]], [["a.s", V]]), node("b", [["b.r", V]], [["b.s", V]])],
+    edges: [edge("a.s", "b.r"), edge("b.s", "a.r")],
+  };
+  assertEquals(findPaths(loop, { fromSender: "a.s" }).paths.length, 1);
+  assertEquals(findPaths(loop, { toNodeId: "a" }).paths.length, 1);
 });
 
 Deno.test("diagnosePath: offline, Formatfehler, Host-Grenze, erste Fehlerstelle", () => {

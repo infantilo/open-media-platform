@@ -205,9 +205,14 @@ Der Tab **Signalweg** beantwortet die Frage „Läuft Quelle X wirklich bei
 Ziel Y an – und wo bricht es?". Er zeigt den **Ist-Zustand** (die aktuell
 aktiven Verbindungen), ändert aber nichts.
 
-1. **Quelle** wählen (ein Ausgang einer Node), **Ziel** wählen (eine Node
-   „jeder Eingang" oder ein bestimmter Eingang).
-2. Optional **über Node**: nur Wege, die durch diese Node laufen.
+1. **Quelle** wählen (ein Ausgang einer Node) und/oder **Ziel** wählen (eine
+   Node „jeder Eingang" oder ein bestimmter Eingang). **Es genügt eine
+   Seite:** nur die Quelle zeigt alle Ketten, die von ihr ausgehen (jede bis
+   zu ihrem letzten Glied); nur das Ziel zeigt alle Ketten, die dort
+   ankommen (jede zurück bis zu ihrem Ursprung). Sind beide gewählt, werden
+   die Wege dazwischen gezeigt.
+2. Optional **über Node**: nur Wege, die durch diese Node laufen (auch
+   zusammen mit nur einer Seite).
 3. Darunter erscheint jeder gefundene Weg als Kette aus Karten: Node mit
    Host und Online-Status, dazwischen die Verbindung mit Format und
    Transport (z. B. „Video · MXL").

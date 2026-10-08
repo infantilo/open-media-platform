@@ -17,6 +17,7 @@ import {
   type Hop,
   type Issue,
   linkNetNote,
+  type PathQuery,
   MAX_PATHS,
   type NodeContext,
   netDemandText,
@@ -172,16 +173,19 @@ class SignalPathView extends HTMLElement {
       out.innerHTML = `<div class="omp-empty">${t("sp.loading")}</div>`;
       return;
     }
-    if (!this.#from || !this.#to) {
+    // Quelle UND/ODER Ziel genügt: nur Quelle zeigt alles, was von ihr ausgeht; nur Ziel alles, was dort ankommt.
+    if (!this.#from && !this.#to) {
       out.innerHTML = `<div class="omp-empty">${t("sp.pick")}</div>`;
       return;
     }
-    const q = this.#to.startsWith("rx:")
-      ? { fromSender: this.#from, toReceiver: this.#to.slice(3), viaNodeId: this.#via || undefined }
-      : { fromSender: this.#from, toNodeId: this.#to.slice(5), viaNodeId: this.#via || undefined };
+    const q: PathQuery = { viaNodeId: this.#via || undefined };
+    if (this.#from) q.fromSender = this.#from;
+    if (this.#to.startsWith("rx:")) q.toReceiver = this.#to.slice(3);
+    else if (this.#to.startsWith("node:")) q.toNodeId = this.#to.slice(5);
     const res = findPaths(this.#graph, q);
     if (res.paths.length === 0) {
-      out.innerHTML = `<div class="omp-empty">${t(this.#via ? "sp.noPathVia" : "sp.noPath")}</div>`;
+      const key = this.#via ? "sp.noPathVia" : this.#from && this.#to ? "sp.noPath" : this.#from ? "sp.noDownstream" : "sp.noUpstream";
+      out.innerHTML = `<div class="omp-empty">${t(key)}</div>`;
       return;
     }
     const blocks = res.paths.map((p, i) => this.#renderPath(p, i, res.paths.length));

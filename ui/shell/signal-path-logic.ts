@@ -49,9 +49,12 @@ export interface Hop {
 }
 
 export interface PathQuery {
-  /** Sender-Port-ID der Quelle (portgenau). */
-  fromSender: string;
-  /** Ziel: ein bestimmter Receiver-Port ODER (toNodeId) irgendein Eingang der Node. */
+  /** Sender-Port-ID der Quelle (portgenau). Fehlt sie, werden alle Ketten gesucht, die am Ziel ankommen. */
+  fromSender?: string;
+  /**
+   * Ziel: ein bestimmter Receiver-Port ODER (toNodeId) irgendein Eingang der Node. Fehlt das Ziel, werden alle Ketten
+   * gesucht, die von der Quelle ausgehen (jede bis zu ihrem Ende).
+   */
   toReceiver?: string;
   toNodeId?: string;
   /** Optional: die Kette muss über diese Node laufen (auch Quelle/Ziel zählen). */
@@ -93,12 +96,17 @@ function buildIndex(g: GraphData): Index {
   return { nodeByPort, portById, edgesFromNode };
 }
 
-/** Findet alle einfachen Wege (keine Node doppelt) von der Quelle zum Ziel. */
+/**
+ * Findet alle einfachen Wege (keine Node doppelt). Sind Quelle UND Ziel gegeben: von der Quelle zum Ziel. Ist nur die
+ * Quelle gegeben: alle Ketten, die von ihr ausgehen, jede bis zum letzten Glied (Node ohne weitere Verbindung). Ist nur
+ * das Ziel gegeben: alle Ketten, die dort ankommen, jede zurück bis zu ihrem Ursprung (Node ohne eingehende Verbindung).
+ * Ohne beides: leer.
+ */
 export function findPaths(g: GraphData, q: PathQuery): PathResult {
   const idx = buildIndex(g);
-  const start = idx.nodeByPort.get(q.fromSender);
   const result: PathResult = { paths: [], truncated: false };
-  if (!start || (!q.toReceiver && !q.toNodeId)) return result;
+  const hasTarget = !!(q.toReceiver || q.toNodeId);
+  if (!q.fromSender && !hasTarget) return result;
 
   const toHop = (e: GraphEdge): Hop | null => {
     const fromNode = idx.nodeByPort.get(e.fromSender);
@@ -108,33 +116,76 @@ export function findPaths(g: GraphData, q: PathQuery): PathResult {
     if (!fromNode || !toNode || !sender || !receiver) return null;
     return { edge: e, fromNode, toNode, sender, receiver };
   };
+  const hopsAll = g.edges.map(toHop).filter((h): h is Hop => h !== null);
   const isTarget = (h: Hop) => q.toReceiver ? h.edge.toReceiver === q.toReceiver : h.toNode.id === q.toNodeId;
   const passesVia = (hops: Hop[]) =>
-    !q.viaNodeId || start.id === q.viaNodeId || hops.some((h) => h.toNode.id === q.viaNodeId);
-
-  const visited = new Set<string>([start.id]);
-  const hops: Hop[] = [];
-  const walk = (node: GraphNode) => {
-    for (const e of idx.edgesFromNode.get(node.id) ?? []) {
-      if (result.truncated) return;
-      if (hops.length === 0 && e.fromSender !== q.fromSender) continue;
-      const h = toHop(e);
-      if (!h || visited.has(h.toNode.id)) continue;
-      hops.push(h);
-      if (isTarget(h)) {
-        if (passesVia(hops)) {
-          if (result.paths.length >= MAX_PATHS) result.truncated = true;
-          else result.paths.push([...hops]);
-        }
-      } else if (hops.length < MAX_HOPS) {
-        visited.add(h.toNode.id);
-        walk(h.toNode);
-        visited.delete(h.toNode.id);
-      }
-      hops.pop();
-    }
+    !q.viaNodeId || hops[0].fromNode.id === q.viaNodeId || hops.some((h) => h.toNode.id === q.viaNodeId);
+  const push = (hops: Hop[]) => {
+    if (!passesVia(hops)) return;
+    if (result.paths.length >= MAX_PATHS) result.truncated = true;
+    else result.paths.push([...hops]);
   };
-  walk(start);
+
+  if (q.fromSender) {
+    const start = idx.nodeByPort.get(q.fromSender);
+    if (!start) return result;
+    const visited = new Set<string>([start.id]);
+    const hops: Hop[] = [];
+    const walk = (node: GraphNode) => {
+      let extended = false;
+      for (const e of idx.edgesFromNode.get(node.id) ?? []) {
+        if (result.truncated) return;
+        if (hops.length === 0 && e.fromSender !== q.fromSender) continue;
+        const h = toHop(e);
+        if (!h || visited.has(h.toNode.id)) continue;
+        extended = true;
+        hops.push(h);
+        if (hasTarget && isTarget(h)) {
+          push(hops);
+        } else if (hops.length < MAX_HOPS) {
+          visited.add(h.toNode.id);
+          walk(h.toNode);
+          visited.delete(h.toNode.id);
+        } else if (!hasTarget) {
+          push(hops); // Kette länger als MAX_HOPS: bis hierher zeigen
+        }
+        hops.pop();
+      }
+      // Nur Quelle gegeben: eine Kette endet, wo es nicht weitergeht (und mindestens ein Glied hat).
+      if (!hasTarget && !extended && hops.length > 0) push(hops);
+    };
+    walk(start);
+  } else {
+    // Nur Ziel: rückwärts von den Kanten ins Ziel bis zum Ursprung; Ausgabe in Fließrichtung.
+    const into = new Map<string, Hop[]>();
+    for (const h of hopsAll) into.set(h.toNode.id, [...(into.get(h.toNode.id) ?? []), h]);
+    const targetNodes = new Set<string>();
+    const first = hopsAll.filter(isTarget);
+    for (const h of first) targetNodes.add(h.toNode.id);
+    for (const startHop of first) {
+      const visited = new Set<string>([startHop.toNode.id, startHop.fromNode.id]);
+      const chain: Hop[] = [startHop]; // rückwärts: chain[0] ist das letzte Glied
+      const walkBack = (node: GraphNode) => {
+        let extended = false;
+        for (const h of into.get(node.id) ?? []) {
+          if (result.truncated) return;
+          if (visited.has(h.fromNode.id)) continue;
+          extended = true;
+          chain.push(h);
+          if (chain.length < MAX_HOPS) {
+            visited.add(h.fromNode.id);
+            walkBack(h.fromNode);
+            visited.delete(h.fromNode.id);
+          } else {
+            push([...chain].reverse());
+          }
+          chain.pop();
+        }
+        if (!extended) push([...chain].reverse());
+      };
+      walkBack(startHop.fromNode);
+    }
+  }
   result.paths.sort((a, b) => a.length - b.length);
   return result;
 }
