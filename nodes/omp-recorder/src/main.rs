@@ -7,6 +7,7 @@
 //! Encoder-Wahl in `pipeline.rs`.
 
 mod pipeline;
+mod uibundle;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -208,6 +209,9 @@ impl ParamStore for RecorderStore {
             content_type,
             body,
         };
+        if let Some(ui) = uibundle::route(method, path) {
+            return Some(ui);
+        }
         root_discovery(method, path)
             .or_else(|| {
                 list_ids(

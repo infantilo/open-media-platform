@@ -72,7 +72,7 @@ fn main() {
     h.connect_video(vid);
     h.connect_audio(aid);
     std::thread::sleep(Duration::from_millis(500));
-    h.start_recording("reccheck.mkv".into()).unwrap();
+    h.start_recording("reccheck.mkv".into(), None).unwrap();
     std::thread::sleep(Duration::from_secs(secs));
     println!("duration_ms={} flowed/media_ready={}", h.duration_ms(), h.media_ready());
     h.stop_recording().unwrap();
