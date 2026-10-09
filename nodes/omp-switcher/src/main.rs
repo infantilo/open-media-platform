@@ -135,7 +135,32 @@ impl ParamStore for SwitcherStore {
         Ok(())
     }
 
-    fn extra_route(&self, method: &str, path: &str, _body: &[u8]) -> Option<RawResponse> {
+    // GET/POST /state (wie omp-video-mixer-me): Bedienzustand für Workflow-Neustarts und den
+    // Instanz-Umzug einer Quelle — der Orchestrator tauscht die darin stehende Sender-ID gegen
+    // die neue aus und spielt den Zustand zurück, sonst verlöre der Switcher seine Quellenwahl.
+    fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        if method == "GET" && path == "/state" {
+            let active = self.active.lock().expect("lock poisoned").clone().unwrap_or_default();
+            let payload = serde_json::to_vec(&serde_json::json!({ "state": { "activeInput": active } }))
+                .unwrap_or_default();
+            return Some(RawResponse { status: 200, content_type: "application/json", body: payload });
+        }
+        if method == "POST" && path == "/state" {
+            let Ok(parsed) = serde_json::from_slice::<Value>(body) else {
+                return Some(RawResponse {
+                    status: 400,
+                    content_type: "application/json",
+                    body: br#"{"error":"invalid JSON body"}"#.to_vec(),
+                });
+            };
+            let wanted = parsed
+                .get("state")
+                .and_then(|s| s.get("activeInput"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            self.pipeline.select(if wanted.is_empty() { None } else { Some(wanted.to_string()) });
+            return Some(RawResponse { status: 200, content_type: "application/json", body: br#"{"ok":true}"#.to_vec() });
+        }
         uibundle::route(method, path)
     }
 }
