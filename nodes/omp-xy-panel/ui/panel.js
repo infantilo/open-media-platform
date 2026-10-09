@@ -24,6 +24,11 @@ const XY_T = (() => {
       byTag: "Tag", byOrder: "Reihenfolge", unmatched: "Ohne Partner", saveAsBouquet: "Als Bouquet speichern",
       choose: "— wählen —", saved: "Bouquet gespeichert.", removed: "Bouquet gelöscht.",
       loadError: "Daten konnten nicht geladen werden.", undo: "Rückgängig", undone: "Rückgängig gemacht ({n} Ziel(e))", undoFailed: "Rückgängig fehlgeschlagen: {detail}", needSelection: "Quell- und Ziel-Node wählen.",
+      composeBundle: "Bouquet zusammenstellen", recordRoutes: "Feste Schaltungen aufzeichnen", kindBundle: "Bündel",
+      bundling: "Bouquet: {n} Quelle(n) — Quellen anklicken (Reihenfolge = Kanalreihenfolge, nochmal klicken entfernt)",
+      modeOrder: "1:1 (nach Reihenfolge)", modeTags: "per Tag", targetNode: "Ziel-Node", mode: "Zuordnung",
+      pickTarget: "Ziel-Node wählen.", nothingToRoute: "Nichts zu schalten — Zuordnung prüfen.", moveUp: "Nach oben", moveDown: "Nach unten",
+      bundleN: "{n} Quellen", notMatched: "Ohne Partner",
     },
     en: {
       sources: "Sources", sinks: "Destinations", home: "Home", up: "Up one level",
@@ -44,6 +49,11 @@ const XY_T = (() => {
       byTag: "tag", byOrder: "order", unmatched: "Without partner", saveAsBouquet: "Save as bouquet",
       choose: "— choose —", saved: "Bouquet saved.", removed: "Bouquet deleted.",
       loadError: "Data could not be loaded.", undo: "Undo", undone: "Undone ({n} destination(s))", undoFailed: "Undo failed: {detail}", needSelection: "Choose source and destination node.",
+      composeBundle: "Compose bouquet", recordRoutes: "Record fixed routes", kindBundle: "bundle",
+      bundling: "Bouquet: {n} source(s) — click sources (order = channel order, click again to remove)",
+      modeOrder: "1:1 (by order)", modeTags: "by tag", targetNode: "Destination node", mode: "Mapping",
+      pickTarget: "Choose a destination node.", nothingToRoute: "Nothing to route — check the mapping.", moveUp: "Move up", moveDown: "Move down",
+      bundleN: "{n} sources", notMatched: "No partner",
     },
   };
   const lang = document.documentElement.lang === "en" ? "en" : "de";
@@ -109,7 +119,7 @@ input[type=search], select { font: inherit; color: inherit; background: var(--om
 .bar button.go { border-color: var(--omp-onair, #e53935); min-width: 96px; font-weight: 700; }
 .msg { min-height: 18px; font-size: var(--omp-font-size-sm, 12px); }
 .msg.err { color: var(--omp-error, #ef5350); }
-.rec { border-color: var(--omp-cue, #fb8c00); }
+.rec { border-color: var(--omp-cue, #fb8c00); position: static; }
 .rec .items { display: flex; flex-direction: column; gap: 4px; width: 100%; font-size: var(--omp-font-size-sm, 12px); }
 .rec .row { display: flex; gap: 8px; align-items: center; }
 .rec .row span { flex: 1; overflow-wrap: anywhere; }
@@ -126,6 +136,7 @@ input[type=search], select { font: inherit; color: inherit; background: var(--om
 .pairs .un { color: var(--omp-cue, #fb8c00); }
 .bq { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px; border: 1px solid var(--omp-border, #223049); border-radius: 6px; }
 .bq .nm { flex: 1 1 160px; }
+.bq .full { flex: 1 1 100%; }
 .bq .nm small { display: block; color: var(--omp-text-dim, #93a1ba); }
 @container (max-width: 760px) {
   .tabs { display: flex; }
@@ -174,6 +185,7 @@ class OmpXyPanel extends HTMLElement {
       auto: localStorage.getItem("omp-xy-auto") !== "0",
       tab: "src",
       draft: null, // null = aus, sonst [{from,to}]
+      bundle: null, // null = aus, sonst {items:[Quellpunkte], name, mode}
       modal: null,
       msg: "", msgErr: false, loaded: false,
     };
@@ -335,6 +347,11 @@ class OmpXyPanel extends HTMLElement {
     }
 
     function pick(kind, p) {
+      if (kind === "src" && st.bundle) {
+        const i = st.bundle.items.findIndex((x) => x.id === p.id);
+        if (i >= 0) st.bundle.items.splice(i, 1); else st.bundle.items.push(p);
+        render(); return;
+      }
       if (kind === "src") {
         st.selSrc = st.selSrc === p.id ? null : p.id;
         if (st.selSrc) {
@@ -356,7 +373,7 @@ class OmpXyPanel extends HTMLElement {
     shadow.append(root);
 
     function renderPoint(kind, p, routeOfSink, srcMap) {
-      const sel = kind === "src" ? st.selSrc === p.id : st.selDst === p.id;
+      const sel = kind === "src" ? (st.bundle ? st.bundle.items.some((x) => x.id === p.id) : st.selSrc === p.id) : st.selDst === p.id;
       const selSrcPt = bySrc().get(st.selSrc);
       let dim = false;
       if (kind === "dst" && selSrcPt) dim = !L.compatible(selSrcPt, p);
@@ -469,6 +486,36 @@ class OmpXyPanel extends HTMLElement {
         xyEl("button", { onclick: () => { st.draft = null; render(); } }, t("cancel")));
     }
 
+    function renderBundle() {
+      if (!st.bundle) return null;
+      const b = st.bundle;
+      const name = xyEl("input", { type: "search", placeholder: t("bouquetName"), "aria-label": t("bouquetName") });
+      name.value = b.name;
+      name.addEventListener("input", () => { b.name = name.value; });
+      const mode = xyEl("select", { "aria-label": t("mode") },
+        xyEl("option", { value: "order", text: t("modeOrder") }), xyEl("option", { value: "tags", text: t("modeTags") }));
+      mode.value = b.mode;
+      mode.addEventListener("change", () => { b.mode = mode.value; });
+      const move = (i, d) => { const j = i + d; if (j < 0 || j >= b.items.length) return; [b.items[i], b.items[j]] = [b.items[j], b.items[i]]; render(); };
+      return xyEl("div", { class: "bar rec" },
+        xyEl("div", { class: "txt" }, t("bundling", { n: b.items.length })),
+        xyEl("div", { class: "items" }, b.items.map((p, i) =>
+          xyEl("div", { class: "row" }, xyEl("span", { text: `${t(p.mediaType || "data")} · ${pointName(p)}` }),
+            xyEl("button", { "aria-label": t("moveUp"), title: t("moveUp"), disabled: i === 0, onclick: () => move(i, -1) }, "↑"),
+            xyEl("button", { "aria-label": t("moveDown"), title: t("moveDown"), disabled: i === b.items.length - 1, onclick: () => move(i, 1) }, "↓"),
+            xyEl("button", { "aria-label": t("delete"), onclick: () => { b.items.splice(i, 1); render(); } }, "✕")))),
+        name, mode,
+        xyEl("button", { disabled: !b.items.length, onclick: async () => {
+          const nm = b.name.trim();
+          if (!nm) { name.focus(); return; }
+          try {
+            await mutateBouquets((list) => [...list, L.bundleBouquet(nm, b.items, b.mode)]);
+            st.bundle = null; setMsg(t("saved")); render();
+          } catch (e) { setMsg(t("failed", { detail: e.message }), true); }
+        } }, t("saveBouquet")),
+        xyEl("button", { onclick: () => { st.bundle = null; render(); } }, t("cancel")));
+    }
+
     function nodeOptions(points, selected) {
       const seen = new Map();
       for (const p of points) if (!seen.has(p.nodeId)) seen.set(p.nodeId, st.names.get(p.nodeId) ?? L.stripInstanceId(p.nodeLabel));
@@ -532,11 +579,48 @@ class OmpXyPanel extends HTMLElement {
       showModal();
     }
 
+    /** Bündel-Zeile: Ziel-Node + Zuordnung wählen, Vorschau, Schalten. Auswahl je Bouquet bleibt beim Neuaufbau erhalten. */
+    const bundleSel = new Map();
+    function bundleEntry(b) {
+      const d = bundleSel.get(b.id) || { dst: "", mode: b.mode === "tags" ? "tags" : "order" };
+      bundleSel.set(b.id, d);
+      const kSel = nodeOptions(st.sinks, d.dst);
+      kSel.setAttribute("aria-label", t("targetNode"));
+      const mSel = xyEl("select", { "aria-label": t("mode") },
+        xyEl("option", { value: "order", text: t("modeOrder") }), xyEl("option", { value: "tags", text: t("modeTags") }));
+      mSel.value = d.mode;
+      kSel.addEventListener("change", () => { d.dst = kSel.value; showModal(); });
+      mSel.addEventListener("change", () => { d.mode = mSel.value; showModal(); });
+      const plan = d.dst ? L.planBundle(b, st.sources, st.sinks.filter((p) => p.nodeId === d.dst), d.mode) : null;
+      const pre = xyEl("div", { class: "pairs" });
+      if (!plan) pre.append(xyEl("div", { text: t("pickTarget") }));
+      else {
+        for (const r of plan.routes) pre.append(xyEl("div", { text: `${pointName(r.from)} → ${L.shortLabel(r.to, nodeName(r.to))}${r.tags.length ? "  (" + t("byTag") + ": " + r.tags.join(", ") + ")" : ""}` }));
+        for (const m of plan.missing) pre.append(xyEl("div", { class: "un", text: `${t("notMatched")}: ${m}` }));
+        if (!plan.routes.length && !plan.missing.length) pre.append(xyEl("div", { text: t("nothingToRoute") }));
+      }
+      return xyEl("div", { class: "bq" },
+        xyEl("div", { class: "nm" }, b.name, xyEl("small", { text: `${t("kindBundle")} · ${t("bundleN", { n: b.items.length })}: ${b.items.map((i) => t(i.mediaType || "data") + " " + i.label).join(", ")}` })),
+        xyEl("button", { onclick: async () => {
+          const done = await runRoutes(plan.routes);
+          const miss = [...plan.missing, ...done.bad];
+          st.modal = null; showModal();
+          setMsg(t("ranBouquet", { name: b.name, n: done.ok }) + (miss.length ? " — " + t("missingN", { n: miss.length, list: miss.join(", ") }) : ""), miss.length > 0);
+        }, class: "go", disabled: !(plan && plan.routes.length) }, t("run")),
+        xyEl("button", { onclick: async () => {
+          try { await mutateBouquets((l) => l.filter((x) => x.id !== b.id)); setMsg(t("removed")); showModal(); }
+          catch (e) { setMsg(t("failed", { detail: e.message }), true); }
+        } }, t("delete")),
+        xyEl("div", { class: "row full" }, kSel, mSel),
+        xyEl("div", { class: "full" }, pre));
+    }
+
     function openBouquetDialog() {
       st.modal = () => {
         const list = xyEl("div", { class: "pairs" });
         if (!st.bouquets.length) list.append(xyEl("div", { text: t("noBouquets") }));
         for (const b of st.bouquets) {
+          if (b.kind === "bundle") { list.append(bundleEntry(b)); continue; }
           const detail = b.kind === "routes" ? `${t("kindRoutes")} · ${t("routesN", { n: (b.routes || []).length })}` : `${t("kindTags")} · ${b.source.nodeLabel} → ${b.sink.nodeLabel}`;
           list.append(xyEl("div", { class: "bq" },
             xyEl("div", { class: "nm" }, b.name, xyEl("small", { text: detail })),
@@ -555,7 +639,8 @@ class OmpXyPanel extends HTMLElement {
         return xyEl("div", { class: "dlg", role: "dialog", "aria-label": t("bouquets") },
           xyEl("h3", { text: t("bouquets") }), list,
           xyEl("div", { class: "row btn" },
-            xyEl("button", { onclick: () => { st.draft = []; st.modal = null; showModal(); render(); } }, t("record")),
+            xyEl("button", { class: "go", onclick: () => { st.bundle = { items: [], name: "", mode: "order" }; st.tab = "src"; st.modal = null; showModal(); render(); } }, t("composeBundle")),
+            xyEl("button", { onclick: () => { st.draft = []; st.modal = null; showModal(); render(); } }, t("recordRoutes")),
             xyEl("button", { onclick: () => { st.modal = null; showModal(); } }, t("close"))));
       };
       showModal();
@@ -584,7 +669,7 @@ class OmpXyPanel extends HTMLElement {
         xyEl("div", { class: "grp" }, xyEl("button", { onclick: openBouquetDialog }, "▦ " + t("bouquets")), xyEl("button", { onclick: openTagDialog }, "# " + t("tagRouting"))),
         auto);
       const msg = xyEl("div", { id: "msg", class: "msg" + (st.msgErr ? " err" : ""), role: "status", "aria-live": "polite", text: st.msg });
-      root.replaceChildren(top, tabs, xyEl("div", { class: "cols" }, renderSide("src"), renderSide("dst")), ...(st.draft ? [renderDraft()] : []), renderBar(), msg);
+      root.replaceChildren(top, tabs, xyEl("div", { class: "cols" }, renderSide("src"), renderSide("dst")), ...(st.draft ? [renderDraft()] : []), ...(st.bundle ? [renderBundle()] : [renderBar()]), msg);
       if (keepFocus) {
         const inp = shadow.querySelector(`input[data-side="${keepFocus}"]`);
         if (inp) { inp.focus(); try { inp.setSelectionRange(caret, caret); } catch { /* egal */ } }

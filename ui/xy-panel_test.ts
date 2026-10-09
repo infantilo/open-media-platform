@@ -163,3 +163,71 @@ Deno.test("Instanz-Kurz-ID wird in der Anzeige weggelassen, gleichnamige Nodes b
   assertEquals(L.fullName(a, names.get("a")), "Source Sender 1");
   assertEquals(L.fullName(pt("x", "Kamera", "CAM 1"), "Kamera"), "Kamera · CAM 1");
 });
+
+// ---- Bündel-Bouquets (Video von X, Audio von Y …) ----------------------------
+const bq = (id: string, nodeId: string, label: string, mediaType: string, tags: string[] = [], online = true) =>
+  L.normSources([src(id, nodeId, label, mediaType, tags, online)])[0];
+const bs = (id: string, nodeId: string, label: string, mediaType: string, tags: string[] = []) =>
+  L.normSinks([snk(id, nodeId, label, mediaType, tags)])[0];
+
+const bundleSrc = [
+  bq("v1", "cam", "Bild", "video"),
+  bq("a1", "mix", "Ton L", "audio", ["lang.de"]),
+  bq("a2", "mix", "Ton R", "audio", ["lang.en"]),
+  bq("d1", "lone", "Daten", "data"),
+];
+const monitor = [
+  bs("mv", "com", "Video", "video"),
+  bs("ma1", "com", "Audio 1", "audio", ["lang.en"]),
+  bs("ma2", "com", "Audio 2", "audio", ["lang.de"]),
+  bs("md", "com", "Daten", "data"),
+];
+
+Deno.test("Bündel 1:1: Video→Video, n-tes Audio→n-tes Audio, Daten→Daten", () => {
+  const b = L.bundleBouquet("Paket", bundleSrc, "order");
+  const res = L.planBundle(b, bundleSrc, monitor);
+  assertEquals(res.missing, []);
+  assertEquals(res.routes.map((r: any) => [r.from.id, r.to.id]), [["v1", "mv"], ["a1", "ma1"], ["a2", "ma2"], ["d1", "md"]]);
+});
+
+Deno.test("Bündel per Tag: Audio mit Tag X → Audio-Empfänger mit Tag X, unabhängig von der Reihenfolge", () => {
+  const b = L.bundleBouquet("Paket", bundleSrc, "tags");
+  const res = L.planBundle(b, bundleSrc, monitor);
+  const m = Object.fromEntries(res.routes.map((r: any) => [r.from.id, r.to.id]));
+  assertEquals(m.a1, "ma2");
+  assertEquals(m.a2, "ma1");
+  // Video/Daten ohne gemeinsamen Tag bleiben ohne Partner und werden gemeldet.
+  assertEquals(res.missing, ["Kamera · Bild", "Einzelgänger · Daten"]);
+});
+
+Deno.test("Bündel: fehlende Quelle behält ihren Platz, Audio 2 rutscht nicht auf Audio 1", () => {
+  const b = L.bundleBouquet("Paket", bundleSrc, "order");
+  const without = bundleSrc.filter((p: any) => p.id !== "a1");
+  const res = L.planBundle(b, without, monitor);
+  assertEquals(res.routes.map((r: any) => [r.from.id, r.to.id]), [["v1", "mv"], ["a2", "ma2"], ["d1", "md"]]);
+  assertEquals(res.missing, ["Mischer · Ton L"]);
+});
+
+Deno.test("Bündel: Ziel mit zu wenigen Eingängen und Offline-Quellen werden gemeldet, nicht still übersprungen", () => {
+  const b = L.bundleBouquet("Paket", bundleSrc, "order");
+  const few = monitor.filter((p: any) => p.id !== "ma2");
+  assertEquals(L.planBundle(b, bundleSrc, few).missing, ["Mischer · Ton R"]);
+  const off = bundleSrc.map((p: any) => (p.id === "v1" ? { ...p, online: false } : p));
+  assertEquals(L.planBundle(b, off, monitor).missing, ["Kamera · Bild (offline)"]);
+});
+
+Deno.test("Bündel überlebt neue IDs und wird von parseBouquets akzeptiert", () => {
+  const b = L.bundleBouquet("Paket", bundleSrc, "order");
+  const reborn = bundleSrc.map((p: any) => ({ ...p, id: p.id + "-neu" }));
+  assertEquals(L.planBundle(b, reborn, monitor).routes.length, 4);
+  assertEquals(L.parseBouquets({ bouquets: [b, { ...b, id: "x", items: null }] }).length, 1);
+});
+
+Deno.test("Gleichnamige Nodes: Punktname behält die Kurz-ID, sonst nicht unterscheidbar", () => {
+  const pt = (nodeId: string, nodeLabel: string, label: string) => ({ nodeId, nodeLabel, label });
+  const b = pt("b", "Source (0a1b2c3d)", "Source (0a1b2c3d) Sender 1");
+  const c = pt("c", "Source (99887766)", "Source (99887766) Sender 1");
+  const names = L.nodeNames([b, c]);
+  assertEquals(L.fullName(b, names.get("b")), "Source (0a1b2c3d) Sender 1");
+  assertEquals(L.fullName(c, names.get("c")), "Source (99887766) Sender 1");
+});

@@ -60,9 +60,10 @@
 
   /** Voller Anzeigename "Node · Punkt" (Meldungen, Zielzeile). */
   function fullName(p, nodeName) {
-    const l = stripInstanceId(p.label);
     const n = nodeName === undefined ? stripInstanceId(p.nodeLabel) : nodeName;
-    return n && l.startsWith(stripInstanceId(n)) ? l : `${n} · ${l}`;
+    // Behält der Node-Name seine Kurz-ID (gleichnamige Nodes), muss sie auch im Punktnamen bleiben.
+    const l = n && stripInstanceId(n) !== n ? String(p.label ?? "") : stripInstanceId(p.label);
+    return n && l.startsWith(n) ? l : n && l.startsWith(stripInstanceId(n)) ? l : `${n} · ${l}`;
   }
 
   function groupPointsByNode(points) {
@@ -278,12 +279,13 @@
   }
 
   function describeRef(ref) {
-    return `${ref.nodeLabel} · ${ref.label}`;
+    const l = String(ref.label ?? "");
+    return l.startsWith(ref.nodeLabel) ? l : `${ref.nodeLabel} · ${l}`;
   }
 
   function parseBouquets(blob) {
     const list = blob && Array.isArray(blob.bouquets) ? blob.bouquets : [];
-    return list.filter((b) => b && typeof b.id === "string" && typeof b.name === "string" && (b.kind === "routes" || b.kind === "tags"));
+    return list.filter((b) => b && typeof b.id === "string" && typeof b.name === "string" && (b.kind === "routes" || b.kind === "tags" || (b.kind === "bundle" && Array.isArray(b.items))));
   }
 
   function newId() {
@@ -325,6 +327,58 @@
     return { routes, missing };
   }
 
+  /**
+   * Bündel: Quellen nach Medientyp (Video von X, Audio von Y, Daten von Z), die
+   * erst beim Schalten auf einen Ziel-Node verteilt werden. `mode` ist die
+   * Vorgabe ("order" = 1:1, "tags" = per Tag), beim Schalten überschreibbar.
+   */
+  function bundleBouquet(name, points, mode) {
+    return {
+      id: newId(), name, kind: "bundle", mode: mode === "tags" ? "tags" : "order",
+      items: points.map((p) => ({ ...refFor(p), mediaType: p.mediaType })),
+    };
+  }
+
+  /**
+   * Bündel → Schaltliste für die Senken EINES Ziel-Nodes (`sinks` schon gefiltert).
+   * "order": n-tes Element eines Medientyps → n-te Senke dieses Typs (Video→Video,
+   * erstes Audio→erstes Audio …). Der Platz zählt auch für nicht auffindbare Quellen,
+   * damit Audio 2 nicht auf Audio 1 rutscht. "tags": Senke gleichen Medientyps mit den
+   * meisten gemeinsamen Tags (ohne `media.*`), jede Senke höchstens einmal.
+   */
+  function planBundle(b, sources, sinks, mode) {
+    const how = (mode || b.mode) === "tags" ? "tags" : "order";
+    const routes = [];
+    const missing = [];
+    const slot = new Map();
+    const used = new Set();
+    for (const item of b.items || []) {
+      const from = resolveRef(item, sources);
+      const media = item.mediaType || (from && from.mediaType) || "";
+      const n = slot.get(media) || 0;
+      slot.set(media, n + 1);
+      if (!from) { missing.push(describeRef(item)); continue; }
+      if (!from.online) { missing.push(describeRef(item) + " (offline)"); continue; }
+      const cands = sinks.filter((s) => s.mediaType === media);
+      let to = null;
+      let tags = [];
+      if (how === "order") {
+        to = cands[n] || null;
+      } else {
+        let score = 0;
+        for (const s of cands) {
+          if (used.has(s.id)) continue;
+          const sh = sharedTags(from, s);
+          if (sh.length > score) { to = s; score = sh.length; tags = sh; }
+        }
+      }
+      if (!to || used.has(to.id)) { missing.push(describeRef(item)); continue; }
+      used.add(to.id);
+      routes.push({ from, to, reason: how === "tags" ? "tag" : "order", tags });
+    }
+    return { routes, missing };
+  }
+
   globalThis.OmpXyLogic = {
     ROOT,
     BOUQUET_LAYOUT,
@@ -351,6 +405,8 @@
     parseBouquets,
     routesBouquet,
     tagsBouquet,
+    bundleBouquet,
+    planBundle,
     resolveBouquet,
   };
 })();
