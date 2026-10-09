@@ -84,16 +84,21 @@ project](#related-project)
 ## Quickstart
 
 ```sh
-make preflight   # first install: checks tools, Podman, images, ports — and tells you how to fix each problem
-make start       # NATS + NMOS registry + orchestrator, see docs/HANDBUCH.md
+git clone <repo-url> OpenMediaPlatform && cd OpenMediaPlatform
+./install.sh --media --start   # installs prerequisites, builds everything, starts the stack
 ```
 
-`make start` runs the short form of the preflight check itself and stops
-with a clear message (cause + fix command for your distribution) instead
-of failing minutes later. Then open http://localhost:8000. Details/troubleshooting:
+Then open http://localhost:8000. `./install.sh --start` (without `--media`)
+installs only the core system (orchestrator, UI, database, message bus —
+no video/audio nodes) in about ten minutes. Run `make preflight` at any time
+to check the machine; it names the fix for every problem.
+
+Prerequisites, the complete **port/firewall table** (only TCP 8000 is needed on
+a single machine), who talks to whom, and manual installation:
+[`docs/INSTALLATION.md`](docs/INSTALLATION.md) (German). Troubleshooting:
 [`docs/HANDBUCH.md`](docs/HANDBUCH.md). User guide for the UI (with
 screenshots): [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
-(Both docs are in German — this README is the only English-language
+(The docs are in German — this README is the only English-language
 entry point so far.)
 
 ## Demo

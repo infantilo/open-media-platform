@@ -6,11 +6,13 @@ Hintergrund steht in `ARCHITECTURE.md`, der Implementierungsplan in
 
 ## 1. Voraussetzungen und Preflight-Prüfung
 
+> **Neuinstallation:** siehe `docs/INSTALLATION.md` (Ein-Befehl-Installer `./install.sh`, Port-/Firewall-Tabelle, Kommunikationswege). Dieses Handbuch beschreibt den Betrieb.
+
 - **Go** (aktuelle Version, siehe `docs/decisions.md` 2026-07-07)
 - **Deno** (für das UI-Bundle, kein Node/npm nötig)
 - **Podman** (rootless; startet NATS + NMOS-Registry + PostgreSQL als Container)
 - Standardwerkzeuge: `make`, `curl`, `openssl`, `git`
-- Empfohlen: mindestens 4 GB RAM (8 GB und mehr für Medien-Nodes), 10 GB
+- Empfohlen: mindestens 2 GB RAM für das Grundsystem (8 GB und mehr für Medien-Nodes), 10 GB
   freier Plattenplatz, Linux (x86_64 getestet)
 
 Nur für die Node-Contract-Demo-Services (`omp-source`/`-viewer`/
@@ -165,7 +167,7 @@ Solange kein Nutzer angelegt ist, läuft die GUI **ohne** Anmeldung
 (Auth ist deaktiviert, solange `UserCount()==0`,
 `ARCHITECTURE.md` §12) — praktisch relevant ist das nur auf einer
 komplett frischen Datenbank; auf dieser Dev-Maschine existiert bereits
-ein Nutzer (s. u.).
+ein Nutzer (s. u.). Auf einer **Neuinstallation** existiert dagegen noch keiner: sofort in Administration einen Admin anlegen.
 
 **Aktueller Dev-Standardnutzer** (Bootstrap-Admin mit Wildcard-
 `admin`-Rolle, angelegt bei der Umsetzung von Kapitel 11 Teil 1,
