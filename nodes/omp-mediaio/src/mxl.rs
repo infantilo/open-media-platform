@@ -19,6 +19,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
+/// Nach so langer Zeit ohne gelesenes Grain/Sample wird ein Reader neu geöffnet (s. read_loop).
+const STALE_READER_AFTER: Duration = Duration::from_secs(3);
+
 use gst::prelude::*;
 use gstreamer as gst;
 use gstreamer_app as gst_app;
@@ -2182,6 +2185,7 @@ fn read_loop(
     let latency_member = context.shared_latency.as_ref().map(|d| d.register());
     let mut last_pts: Option<u64> = None;
     let dbg = std::env::var("OMP_MXL_DEBUG").is_ok();
+    let mut last_ok = std::time::Instant::now();
     let mut st = [0u32; 8]; // ok, mismatch, skip, notplaying, toolate, tooearly, pusherr, other
     let mut st_t = std::time::Instant::now();
     while running.load(Ordering::Relaxed) {
@@ -2194,7 +2198,22 @@ fn read_loop(
         if let (Some(_), Some(g)) = (&member, &group) {
             sync_gate(context, g, grain_rate, index, running, &mut gate_stat);
         }
-        match grain_reader.as_ref().expect("grain_reader is Some outside the FLOW_INVALID branch").get_grain_non_blocking(index) {
+        // Stale-Reader-Wächter (Nutzerfund 2026-10-09: Viewer hinter dem Video-Mixer friert nach
+        // einem Quellumzug ein, Neu-Verbinden hilft): legt der Schreiber seine Flow-Dateien neu an
+        // (Mixer-Rebuild, gleiche Flow-ID), meldet der alte Mapping-Reader nicht zwingend
+        // FLOW_INVALID, sondern kann ewig OutOfRangeTooEarly liefern. Kam seit STALE_READER_AFTER
+        // kein einziges Grain an, wird der Reader daher wie bei FLOW_INVALID neu geöffnet (harmlos
+        // bei einer ohnehin ruhenden Quelle: ein Reopen alle paar Sekunden).
+        let read_result = if last_ok.elapsed() > STALE_READER_AFTER {
+            last_ok = std::time::Instant::now();
+            Err(mxl::Error::Unknown(mxl_sys::MXL_ERR_FLOW_INVALID))
+        } else {
+            grain_reader.as_ref().expect("grain_reader is Some outside the FLOW_INVALID branch").get_grain_non_blocking(index)
+        };
+        if read_result.is_ok() {
+            last_ok = std::time::Instant::now();
+        }
+        match read_result {
             Ok(grain) => {
                 // Veralteter Ringpuffer-Slot (Nachtrag 271): libmxl prüft
                 // in `getGrainImpl` nur, ob der Slot vollständig ist, NICHT
@@ -2761,12 +2780,23 @@ fn read_audio_loop(
     let mut latency: Option<crate::timebase::LatencyTracker> = None;
     let latency_member = context.shared_latency.as_ref().map(|d| d.register());
     let mut last_pts: Option<u64> = None;
+    let mut last_ok = std::time::Instant::now();
     while running.load(Ordering::Relaxed) {
         heartbeat.fetch_add(1, Ordering::Relaxed);
         if let (Some(_), Some(g)) = (&member, &context.sync_group) {
             sync_gate(context, g, sample_rate, index, running, &mut gate_stat);
         }
-        match samples_reader.as_ref().expect("samples_reader is Some outside the FLOW_INVALID branch").get_samples_non_blocking(index, batch_size as usize) {
+        // Stale-Reader-Wächter: s. read_loop (Video).
+        let read_result = if last_ok.elapsed() > STALE_READER_AFTER {
+            last_ok = std::time::Instant::now();
+            Err(mxl::Error::Unknown(mxl_sys::MXL_ERR_FLOW_INVALID))
+        } else {
+            samples_reader.as_ref().expect("samples_reader is Some outside the FLOW_INVALID branch").get_samples_non_blocking(index, batch_size as usize)
+        };
+        if read_result.is_ok() {
+            last_ok = std::time::Instant::now();
+        }
+        match read_result {
             Ok(data) => {
                 let pts = if timebase {
                     match index_pts(context, app_src, sample_rate, index, batch_ns, &mut latency, &mut last_pts, latency_member.as_ref()) {
