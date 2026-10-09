@@ -15,7 +15,7 @@ use omp_mediaio::preview;
 use omp_node_sdk::is04::TRANSPORT_MXL;
 use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
-    Descriptor, InvokeError, LatencyInfo, LatencyRange, MethodSpec, NodeConfig, ParamSpec,
+    Descriptor, InvokeError, LatencyInfo, LatencyRange, NodeConfig, ParamSpec,
     ParamStore, ParamType, Range, SenderSpec, SetError,
 };
 use pipeline::{CHANNELS, SAMPLE_RATE};
@@ -44,7 +44,6 @@ const DEFAULT_PATTERN: &str = "smpte";
 struct SourceStore {
     fps: Arc<Mutex<f64>>,
     flow_id: String,
-    lowres_flow_id: String,
     pattern: Arc<Mutex<String>>,
     pipeline: pipeline::PipelineHandle,
     /// Bugliste 2026-09-25 #6: volle URL des `preview::spawn()`-Servers
@@ -100,21 +99,6 @@ impl ParamStore for SourceStore {
                     range: None,
                     readonly: true,
                 },
-                // Kapitel 15 Teil 2 (docs/END-GOAL-FEATURES.md §15.4).
-                ParamSpec {
-                    name: "lowresFlowId".to_string(),
-                    kind: ParamType::String,
-                    unit: None,
-                    range: None,
-                    readonly: true,
-                },
-                ParamSpec {
-                    name: "lowresActive".to_string(),
-                    kind: ParamType::Boolean,
-                    unit: None,
-                    range: None,
-                    readonly: true,
-                },
                 // Bugliste 2026-09-25 #6: gleiches Muster/gleicher Name
                 // wie `omp-viewer`s `previewUrl` — `ui/shell/node-
                 // preview.ts`/das Switcher-UI-Bundle prüfen generisch auf
@@ -127,16 +111,7 @@ impl ParamStore for SourceStore {
                     readonly: true,
                 },
             ],
-            methods: vec![
-                MethodSpec {
-                    name: "activateLowresPreview".to_string(),
-                    args: vec![],
-                },
-                MethodSpec {
-                    name: "releaseLowresPreview".to_string(),
-                    args: vec![],
-                },
-            ],
+            methods: vec![],
         }
     }
 
@@ -144,8 +119,6 @@ impl ParamStore for SourceStore {
         match name {
             "fps" => Some(serde_json::json!(*self.fps.lock().expect("lock poisoned"))),
             "flowId" => Some(serde_json::json!(self.flow_id)),
-            "lowresFlowId" => Some(serde_json::json!(self.lowres_flow_id)),
-            "lowresActive" => Some(serde_json::json!(self.pipeline.lowres_preview_active())),
             "previewUrl" => Some(serde_json::json!(self.preview_url)),
             "pattern" => Some(serde_json::json!(
                 *self.pattern.lock().expect("lock poisoned")
@@ -175,14 +148,6 @@ impl ParamStore for SourceStore {
         _args: &serde_json::Map<String, Value>,
     ) -> Result<(), InvokeError> {
         match name {
-            "activateLowresPreview" => {
-                self.pipeline.activate_lowres_preview();
-                Ok(())
-            }
-            "releaseLowresPreview" => {
-                self.pipeline.release_lowres_preview();
-                Ok(())
-            }
             _ => Err(InvokeError::Unknown),
         }
     }
@@ -239,10 +204,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // als auch an die IS-04-Flow-Registrierung (`SenderSpec::flow`).
     let flow_id = omp_node_sdk::idgen::new_v4();
     let audio_flow_id = omp_node_sdk::idgen::new_v4();
-    // Kapitel 15 Teil 2 (docs/END-GOAL-FEATURES.md §15.4): zweiter,
-    // eigenständiger Lowres-MXL-Flow, referenzgezählt zu-/abschaltbar
-    // (docs/decisions.md Nachtrag 37).
-    let lowres_flow_id = omp_node_sdk::idgen::new_v4();
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -267,7 +228,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         domain,
         flow_id: flow_id.clone(),
         audio_flow_id: audio_flow_id.clone(),
-        lowres_flow_id: lowres_flow_id.clone(),
         label: label.clone(),
         initial_pattern,
         width,
@@ -302,7 +262,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let store: Arc<dyn ParamStore> = Arc::new(SourceStore {
         fps: fps.clone(),
         flow_id: flow_id.clone(),
-        lowres_flow_id: lowres_flow_id.clone(),
         pattern,
         pipeline: pipeline_handle,
         preview_url,
@@ -314,9 +273,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // "<group-name>:<role-in-group>" — laut Spec ein Sender-/Receiver-Tag
     // (nicht Flow/Source). `flow_id` (Highres-Flow-UUID) als Gruppenname:
     // stabil, pro Instanz eindeutig, kein zusätzlicher Bezeichner nötig.
-    let lowres_group_name = flow_id.clone();
     let highres_group_name = flow_id.clone();
-    let lowres_sender_label = format!("{label} Lowres");
 
     let handle = omp_node_sdk::start(
         NodeConfig {
@@ -345,22 +302,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         ),
                         ("urn:x-omp:tags".to_string(), vec!["source.live".to_string()]),
                     ]),
-                    ..Default::default()
-                },
-                SenderSpec {
-                    transport: Some(TRANSPORT_MXL.to_string()),
-                    flow: Some(FlowSpec::Video {
-                        id: Some(lowres_flow_id),
-                        frame_width: pipeline::LOWRES_WIDTH,
-                        frame_height: pipeline::LOWRES_HEIGHT,
-                        grain_rate_numerator: framerate_numerator,
-                        grain_rate_denominator: framerate_denominator,
-                    }),
-                    label: Some(lowres_sender_label),
-                    tags: HashMap::from([(
-                        "urn:x-nmos:tag:grouphint/v1.0".to_string(),
-                        vec![format!("{lowres_group_name}:low")],
-                    )]),
                     ..Default::default()
                 },
                 SenderSpec {
