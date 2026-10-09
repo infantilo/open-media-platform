@@ -472,6 +472,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/instances", g.requireAuth(handleListInstances(launcherSvc, hostMetrics)))
 	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, handlePostInstance(launcherSvc, authzStore, ioPortStore, controlPlaneCheck(workflowSvc))))
 	mux.HandleFunc("PATCH /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handlePatchInstance(launcherSvc, nodes, nodeClient)))
+	mux.HandleFunc("POST /api/v1/instances/{id}/restart", g.requireVerbGlobal(authz.VerbAdmin, handleRestartInstance(launcherSvc, workflowSvc, options.nodeValues)))
 	mux.HandleFunc("DELETE /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteInstance(launcherSvc, ioPortStore)))
 	// Kapitel 13 Teil 3 (docs/END-GOAL-FEATURES.md §13.4) — Drag-Umzug
 	// im Flow-Editor für eigenständige (nicht Workflow-gebundene)

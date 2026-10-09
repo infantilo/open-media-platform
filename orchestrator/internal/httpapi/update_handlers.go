@@ -356,6 +356,82 @@ type restartResult struct {
 	Mode       string `json:"mode"` // "workflow-role" | "standalone"
 	Ok         bool   `json:"ok"`
 	Error      string `json:"error,omitempty"`
+	// NewInstanceID: bei freistehenden Instanzen die neue ID (Stop + Start).
+	NewInstanceID string `json:"newInstanceId,omitempty"`
+}
+
+type roleRef struct{ workflowID, role string }
+
+// workflowRolesByInstance: Instanz-ID -> (Workflow, Rolle) für Rollen laufender Workflows.
+func workflowRolesByInstance(workflowSvc WorkflowService) map[string]roleRef {
+	roles := map[string]roleRef{}
+	if wfs, err := workflowSvc.List(); err == nil {
+		for _, wf := range wfs {
+			if wf.Status != workflows.StatusStarted {
+				continue
+			}
+			for role, rt := range wf.Runtime {
+				roles[rt.InstanceID] = roleRef{wf.ID, role}
+			}
+		}
+	}
+	return roles
+}
+
+// restartInstance startet eine Instanz neu: Workflow-Rollen über RestartRole (stabile
+// Node-/Device-IDs, Rollenzustand bleibt), freistehende per Stop + Start mit denselben
+// Angaben (die Instanz-ID ändert sich dabei, Instanz-Einstellungen wandern mit).
+func restartInstance(ctx context.Context, launcherSvc LauncherService, workflowSvc WorkflowService, nodeValues NodeOptionValues, roles map[string]roleRef, inst launcher.Instance) restartResult {
+	res := restartResult{InstanceID: inst.ID, Label: inst.Label}
+	if ref, ok := roles[inst.ID]; ok {
+		res.Mode = "workflow-role"
+		if err := workflowSvc.RestartRole(ctx, ref.workflowID, ref.role, "", nil); err != nil {
+			res.Error = err.Error()
+		} else {
+			res.Ok = true
+		}
+		return res
+	}
+	res.Mode = "standalone"
+	if err := launcherSvc.Stop(inst.ID); err != nil {
+		res.Error = "stoppen: " + err.Error()
+	} else if started, err := startKeepingOptions(launcherSvc, inst); err != nil {
+		res.Error = "starten: " + err.Error()
+	} else {
+		res.Ok = true
+		res.NewInstanceID = started.ID
+		if nodeValues != nil {
+			if err := nodeValues.MoveInstance(inst.ID, started.ID); err != nil {
+				slog.Warn("einstellungen: Instanz-Werte nicht übertragen", "from", inst.ID, "to", started.ID, "error", err)
+			}
+		}
+	}
+	return res
+}
+
+// handleRestartInstance: POST /api/v1/instances/{id}/restart {"confirm":true} — startet
+// eine einzelne Instanz neu (Nutzerwunsch 2026-10-09), Verfahren s. restartInstance.
+func handleRestartInstance(launcherSvc LauncherService, workflowSvc WorkflowService, nodeValues NodeOptionValues) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Confirm bool `json:"confirm"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || !body.Confirm {
+			http.Error(w, "Bestätigung erforderlich (confirm: true)", http.StatusBadRequest)
+			return
+		}
+		inst, ok := launcherSvc.Get(r.PathValue("id"))
+		if !ok {
+			http.Error(w, "unknown instance", http.StatusNotFound)
+			return
+		}
+		res := restartInstance(r.Context(), launcherSvc, workflowSvc, nodeValues, workflowRolesByInstance(workflowSvc), inst)
+		if !res.Ok {
+			http.Error(w, res.Error, http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+	}
 }
 
 // handleRestartOutdated: POST /api/v1/admin/updates/restart-outdated
@@ -388,50 +464,14 @@ func handleRestartOutdated(launcherSvc LauncherService, workflowSvc WorkflowServ
 		list := instancesWithOutdated(launcherSvc)
 		mergeInstanceMetrics(list, hostMetrics)
 
-		// Rollen laufender Workflows: Instanz-ID -> (Workflow, Rolle).
-		type roleRef struct{ workflowID, role string }
-		roles := map[string]roleRef{}
-		if wfs, err := workflowSvc.List(); err == nil {
-			for _, wf := range wfs {
-				if wf.Status != workflows.StatusStarted {
-					continue
-				}
-				for role, rt := range wf.Runtime {
-					roles[rt.InstanceID] = roleRef{wf.ID, role}
-				}
-			}
-		}
+		roles := workflowRolesByInstance(workflowSvc)
 
 		results := []restartResult{}
 		for _, inst := range list {
 			if !inst.Outdated || (len(want) > 0 && !want[inst.ID]) {
 				continue
 			}
-			res := restartResult{InstanceID: inst.ID, Label: inst.Label}
-			if ref, ok := roles[inst.ID]; ok {
-				res.Mode = "workflow-role"
-				if err := workflowSvc.RestartRole(r.Context(), ref.workflowID, ref.role, "", nil); err != nil {
-					res.Error = err.Error()
-				} else {
-					res.Ok = true
-				}
-			} else {
-				res.Mode = "standalone"
-				if err := launcherSvc.Stop(inst.ID); err != nil {
-					res.Error = "stoppen: " + err.Error()
-				} else if started, err := startKeepingOptions(launcherSvc, inst); err != nil {
-					res.Error = "starten: " + err.Error()
-				} else {
-					res.Ok = true
-					// Kapitel 29: Instanz-Einstellungen wandern auf die neue Instanz-ID mit.
-					if nodeValues != nil {
-						if err := nodeValues.MoveInstance(inst.ID, started.ID); err != nil {
-							slog.Warn("einstellungen: Instanz-Werte nicht übertragen", "from", inst.ID, "to", started.ID, "error", err)
-						}
-					}
-				}
-			}
-			results = append(results, res)
+			results = append(results, restartInstance(r.Context(), launcherSvc, workflowSvc, nodeValues, roles, inst))
 		}
 		okCount := 0
 		for _, res := range results {

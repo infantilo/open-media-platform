@@ -19,6 +19,7 @@
 import { t } from "./i18n.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
+import { showToast } from "../kit/omp-toast.ts";
 
 // Wire-Format identisch zu launcher.Instance (orchestrator/internal/
 // launcher/launcher.go) — eigene, lokale Deklaration statt eines
@@ -132,6 +133,27 @@ class InstancesView extends HTMLElement {
       this.querySelector<HTMLElement>("[data-edit]")?.focus();
       return;
     }
+    if (action === "restart") {
+      if (!inst) return;
+      if (!(await confirmDialog(t("inst.confirmRestart", { p0: inst.label }), { confirmLabel: t("inst.confirmRestartLabel") }))) return;
+      try {
+        const res = await apiFetch(`/api/v1/instances/${encodeURIComponent(id)}/restart`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ confirm: true }),
+        });
+        if (!res.ok) {
+          showToast(t("inst.restartFailed", { p0: (await res.text()) || res.status }));
+          return;
+        }
+        showToast(t("inst.restarted", { p0: inst.label }), { variant: "info" });
+      } catch (err) {
+        showToast(t("inst.restartFailed", { p0: String(err) }));
+        return;
+      }
+      this.#poll();
+      return;
+    }
     if (action === "cancel") {
       this.#editing = null;
       this.#render(this.#instances, this.#hosts);
@@ -149,13 +171,13 @@ class InstancesView extends HTMLElement {
           body: JSON.stringify({ label }),
         });
         if (!res.ok) {
-          alert(t("inst.renameFailed", { p0: (await res.text()) || res.status }));
+          showToast(t("inst.renameFailed", { p0: (await res.text()) || res.status }));
           return;
         }
         const out = (await res.json()) as { applied?: boolean };
-        if (out.applied === false) alert(t("inst.renameNotApplied"));
+        if (out.applied === false) showToast(t("inst.renameNotApplied"), { variant: "info", durationMs: 8000 });
       } catch (err) {
-        alert(t("inst.renameFailed", { p0: String(err) }));
+        showToast(t("inst.renameFailed", { p0: String(err) }));
         return;
       }
     } else if (action === "save-migrate") {
@@ -169,11 +191,11 @@ class InstancesView extends HTMLElement {
           body: JSON.stringify({ targetHostId: target }),
         });
         if (!res.ok) {
-          alert(t("inst.migrateFailed", { p0: (await res.text()) || res.status }));
+          showToast(t("inst.migrateFailed", { p0: (await res.text()) || res.status }));
           return;
         }
       } catch (err) {
-        alert(t("inst.migrateFailed", { p0: String(err) }));
+        showToast(t("inst.migrateFailed", { p0: String(err) }));
         return;
       }
     } else {
@@ -281,7 +303,7 @@ class InstancesView extends HTMLElement {
           <td style="padding:2px 8px;">${formatRss(inst.rssBytes)}</td>
           <td style="padding:2px 8px;color:var(--omp-text-dim);">${inst.pid}</td>
           <td style="padding:2px 8px;">${restarts}</td>
-          <td style="padding:2px 8px;white-space:nowrap;"><button data-action="rename" data-id="${escapeAttr(inst.id)}" title="${t("inst.renameTitle")}">${t("inst.rename")}</button> <button data-action="migrate" data-id="${escapeAttr(inst.id)}" title="${t("inst.migrateTitle")}">${t("inst.migrate")}</button></td>
+          <td style="padding:2px 8px;white-space:nowrap;"><button data-action="rename" data-id="${escapeAttr(inst.id)}" title="${t("inst.renameTitle")}">${t("inst.rename")}</button> <button data-action="restart" data-id="${escapeAttr(inst.id)}" title="${t("inst.restartTitle")}">${t("inst.restart")}</button> <button data-action="migrate" data-id="${escapeAttr(inst.id)}" title="${t("inst.migrateTitle")}">${t("inst.migrate")}</button></td>
         </tr>`;
       })
       .join("");

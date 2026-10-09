@@ -193,7 +193,7 @@ Ein Prozess, der abstürzt, wird automatisch neu gestartet (mit einer
 Bremse gegen Neustart-Schleifen) — die Neustarts-Spalte macht das
 sichtbar, ohne dass man die Logs durchsuchen muss.
 
-In der Spalte **Aktionen** hat jede Zeile zwei Knöpfe:
+In der Spalte **Aktionen** hat jede Zeile drei Knöpfe:
 
 - **Umbenennen** ändert den Anzeigenamen der laufenden Instanz — ohne
   Neustart und bei gleicher Instanz-ID. Der Node meldet den neuen Namen
@@ -201,6 +201,10 @@ In der Spalte **Aktionen** hat jede Zeile zwei Knöpfe:
   bleibt auch nach Neustarts erhalten. Läuft der Node noch mit einem
   älteren Programmstand ohne diese Funktion, gilt der Name erst ab dem
   nächsten Neustart (Hinweis erscheint).
+- **Neustart** beendet den Node-Prozess und startet ihn neu (nach Sicherheitsabfrage;
+  die Ausgabe dieser Instanz wird kurz unterbrochen). Rollen laufender Workflows
+  behalten ihre IDs; von Hand gestartete Instanzen bekommen eine neue Instanz-ID,
+  Name, Host und Einstellungen bleiben.
 - **Verschieben …** zieht die Instanz auf einen anderen Host (oder zurück auf
   „lokal"), nach einer Rückfrage.
 
