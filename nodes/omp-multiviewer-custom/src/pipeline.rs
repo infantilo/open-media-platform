@@ -64,6 +64,15 @@ const TALLY_COLOR_OFF: u32 = 0xFF3A3A3A;
 /// Broadcast-übliches Tally-Rot.
 const TALLY_COLOR_ON: u32 = 0xFFE53935;
 const PLACEHOLDER_COLOR: u32 = 0xFF1A1A1A;
+/// CPU-Optimierung 2026-10-09: Live-Kacheln werden nur mit dieser Rate aus
+/// MXL gelesen (`MxlVideoInput::max_fps`, Grains werden vor der Kopie
+/// verworfen); der Compositor wiederholt das letzte Bild bis zum nächsten.
+const TILE_MAX_FPS: i32 = 12;
+/// Statische Ebenen (Label, Platzhalter) brauchen kaum Bilder pro
+/// Sekunde, Tally-Rahmen nur genug für eine zügige Farbumschaltung.
+/// `videotestsrc` lief vorher mit seinem Default (30 fps, volle Kachelgröße).
+const STATIC_LAYER_FPS: i32 = 1;
+const TALLY_LAYER_FPS: i32 = 5;
 
 pub struct Config {
     pub domain: String,
@@ -208,6 +217,7 @@ fn build_tally_border(pipeline: &gst::Pipeline, comp: &gst::Element, pip: &Resol
             gst::Caps::builder("video/x-raw")
                 .field("width", pip.width as i32)
                 .field("height", pip.height as i32)
+                .field("framerate", gst::Fraction::new(TALLY_LAYER_FPS, 1))
                 .build(),
         )
         .build()
@@ -280,6 +290,7 @@ fn build_tile(
     if let Some(flow_id) = &pip.flow_id {
         let input = MxlVideoInput::new(pipeline, context.clone(), flow_id)
             .map_err(|e| format!("MxlVideoInput({}, pip {}): {e}", flow_id, pip.id))?;
+        input.max_fps.store(TILE_MAX_FPS, std::sync::atomic::Ordering::Relaxed);
         let videoconvert = gst::ElementFactory::make("videoconvert")
             .build()
             .map_err(|e| format!("videoconvert (pip {}): {e}", pip.id))?;
@@ -319,6 +330,7 @@ fn build_tile(
                 gst::Caps::builder("video/x-raw")
                     .field("width", inner_width as i32)
                     .field("height", video_height as i32)
+                    .field("framerate", gst::Fraction::new(STATIC_LAYER_FPS, 1))
                     .build(),
             )
             .build()
@@ -370,6 +382,7 @@ fn build_tile(
             gst::Caps::builder("video/x-raw")
                 .field("width", inner_width as i32)
                 .field("height", label_height as i32)
+                .field("framerate", gst::Fraction::new(STATIC_LAYER_FPS, 1))
                 .build(),
         )
         .build()
@@ -438,6 +451,10 @@ fn build(config: &Config, context: &Arc<MxlContext>, broadcaster: &Arc<Broadcast
                 // MJPEG-Zweig hat kein `videoconvert`, ein vom compositor
                 // gewähltes v210 blockierte ihn still.
                 .field("format", "I420")
+                // Ausgaberate fest: seit die Kacheln gedrosselt lesen
+                // (`TILE_MAX_FPS`) und statische Ebenen 1 fps liefern,
+                // würde der Compositor sonst der schnellsten Ebene folgen.
+                .field("framerate", gst::Fraction::new(PGM_FRAMERATE_NUMERATOR, PGM_FRAMERATE_DENOMINATOR))
                 .build(),
         )
         .build()

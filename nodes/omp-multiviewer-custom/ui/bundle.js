@@ -184,7 +184,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
           </label>
           <button class="add-pip">${T("mvc.f30ff5")}</button>
           <label class="keep-ratio-label" title="${T("mvc.3ee601")}">
-            <input type="checkbox" class="keep-ratio"> ${T("mvc.2fe42e")}
+            <input type="checkbox" class="keep-ratio" checked> ${T("mvc.2fe42e")}
           </label>
           <span class="spacer"></span>
           <span class="status"></span>
@@ -257,7 +257,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
     // für JEDEN Resize-Drag, solange aktiviert. Bewusst NICHT Teil von
     // `this._layout` — reine Editor-Sitzungseinstellung, kein
     // Node-Zustand, der mitgespeichert werden müsste.
-    this._keepAspectRatio = false;
+    this._keepAspectRatio = true; // Standard AN (Nutzerauftrag 2026-10-09); Checkbox ist `checked` vorbelegt
     this._el.keepRatio.addEventListener("change", () => {
       this._keepAspectRatio = this._el.keepRatio.checked;
     });

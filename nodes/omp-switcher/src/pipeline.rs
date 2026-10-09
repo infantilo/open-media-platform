@@ -210,6 +210,24 @@ impl Drop for ActivePipeline {
     }
 }
 
+/// Bildrate, mit der der Lese-Thread eines NICHT aktiven Eingangs noch
+/// Grains nach GStreamer kopiert (`MxlVideoInput::max_fps`). Überzählige
+/// Grains werden vor der Kopie verworfen, `videoconvert`/`videoscale` der
+/// Kette laufen also nur noch mit diesem Bruchteil (CPU-Optimierung
+/// 2026-10-09: vorher wurde jeder entdeckte Eingang mit voller Rate
+/// konvertiert, obwohl `input-selector` alle bis auf einen verwirft).
+/// Muss unter `SWAP_BLOCK_TIMEOUT` bleiben (≥ 3 Bilder/s), sonst feuert der
+/// Pad-Block-Probe von `swap_input_resolution` nicht rechtzeitig.
+const PARKED_FPS: i32 = 5;
+
+/// Aktiver Eingang volle Rate, alle anderen gedrosselt (`PARKED_FPS`).
+fn set_branch_rates(active: &ActivePipeline, selected: Option<&str>) {
+    for (id, branch) in &active.branches {
+        let fps = if Some(id.as_str()) == selected { 0 } else { PARKED_FPS };
+        branch.mxl_input.max_fps.store(fps, Ordering::Relaxed);
+    }
+}
+
 /// Wendet `selected` auf die laufende Pipeline an (fällt auf Schwarzbild
 /// zurück, wenn `selected` keinem aktuell bekannten `source_pads`-Eintrag
 /// entspricht) und liefert die tatsächlich aktiv geschaltete `senderId`
@@ -218,8 +236,12 @@ fn apply_selection(active: &ActivePipeline, selected: &Option<String>) -> Option
     let pad = selected
         .as_ref()
         .and_then(|id| active.source_pads.get(id).map(|pad| (id.clone(), pad)));
-    match pad {
+    let applied = match pad {
         Some((id, pad)) => {
+            // Zuerst volle Rate für den neuen Eingang, dann umschalten.
+            if let Some(b) = active.branches.get(&id) {
+                b.mxl_input.max_fps.store(0, Ordering::Relaxed);
+            }
             active.isel.set_property("active-pad", pad);
             Some(id)
         }
@@ -227,7 +249,9 @@ fn apply_selection(active: &ActivePipeline, selected: &Option<String>) -> Option
             active.isel.set_property("active-pad", &active.black_pad);
             None
         }
-    }
+    };
+    set_branch_rates(active, applied.as_deref());
+    applied
 }
 
 /// Entfernt zuvor per `pipeline.add()` hinzugefügte Elemente wieder
@@ -877,6 +901,9 @@ pub fn run(
                     // zeigen.
                     if let Some(new_id) = &sender_id
                         && let Some(input) = current_inputs.iter().find(|i| &i.sender_id == new_id) {
+                            if let Some(b) = p.branches.get(new_id) {
+                                b.mxl_input.max_fps.store(0, Ordering::Relaxed);
+                            }
                             let target = input.flow_id.clone();
                             let needs_swap = p.branches.get(new_id).is_some_and(|b| b.open_flow_id != target);
                             if needs_swap
@@ -917,7 +944,7 @@ pub fn run(
 
                     // 2. Jetzt erst tatsächlich umschalten.
                     let applied = apply_selection(p, &selected);
-                    let _ = tx.send(Event::ActiveChanged(applied));
+                    let _ = tx.send(Event::ActiveChanged(applied.clone()));
 
                     // 3. Vorherigen Eingang danach (best effort, PGM
                     // längst umgeschaltet) auf Lowres herunterstufen,
@@ -964,6 +991,8 @@ pub fn run(
                                             }
                                         }
                                 }
+                    // Frisch getauschte Zweige starten mit voller Rate.
+                    set_branch_rates(p, applied.as_deref());
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}

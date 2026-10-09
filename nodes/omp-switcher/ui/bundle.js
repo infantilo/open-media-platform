@@ -10,7 +10,10 @@ const T = (() => {
       "black": "Schwarz",
       "ownWorkflow": "Dieser Workflow",
       "otherSources": "Andere Quellen",
-      "noSources": "keine Quellen entdeckt"
+      "noSources": "keine Quellen entdeckt",
+      "back": "Zurück",
+      "scopeOwn": "Nur eigene Gruppe",
+      "scopeOwnTitle": "Nur Quellen der Gruppe/des Workflows anzeigen, in der dieser Switcher liegt (inkl. Untergruppen)"
   },
     en: {
       "thumbnails": "Thumbnails",
@@ -20,7 +23,10 @@ const T = (() => {
       "black": "Black",
       "ownWorkflow": "This workflow",
       "otherSources": "Other sources",
-      "noSources": "no sources discovered"
+      "noSources": "no sources discovered",
+      "back": "Back",
+      "scopeOwn": "Own group only",
+      "scopeOwnTitle": "Only show sources in the group/workflow this switcher belongs to (including subgroups)"
   },
   };
   const lang = document.documentElement.lang === "en" ? "en" : "de";
@@ -78,6 +84,21 @@ class OmpSwitcherPanel extends HTMLElement {
     const THUMBS_KEY = `omp-switcher-thumbs-${nodeId}`;
     const STREAM_TOKEN_KEY = "omp-auth-token";
     let thumbsEnabled = localStorage.getItem(THUMBS_KEY) === "1";
+    // Menü-Navigation (Workflows/Gruppen -> Untergruppen -> Quellen):
+    // aktueller Pfad (Schlüsselliste) und "nur eigene Gruppe" pro Switcher.
+    const NAV_KEY = `omp-switcher-nav-${nodeId}`;
+    const SCOPE_KEY = `omp-switcher-scope-${nodeId}`;
+    let scopeOwn = localStorage.getItem(SCOPE_KEY) === "1";
+    let navPath = [];
+    try {
+      const saved = JSON.parse(localStorage.getItem(NAV_KEY) || "[]");
+      if (Array.isArray(saved)) navPath = saved.filter((k) => typeof k === "string");
+    } catch { /* kaputter Eintrag -> Wurzel */ }
+    const setNavPath = (path) => {
+      navPath = path;
+      localStorage.setItem(NAV_KEY, JSON.stringify(path));
+      refresh();
+    };
 
     const style = document.createElement("style");
     style.textContent = `
@@ -133,6 +154,12 @@ class OmpSwitcherPanel extends HTMLElement {
         font-size: 10px; line-height: 1.2; white-space: nowrap; overflow: hidden;
         text-overflow: ellipsis; max-width: 100%;
       }
+      omp-button.folder { min-width: 92px; height: 40px; font-size: 11px; line-height: 1.15; padding: 0 6px; }
+      .navrow {
+        flex-basis: 100%; display: flex; align-items: center; gap: 8px;
+        font-size: var(--omp-font-size-xs, 11px); color: var(--omp-text-dim, #9aa0a6);
+      }
+      .crumb { font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       p.empty {
         font-size: var(--omp-font-size-xs, 11px); font-style: italic;
         color: var(--omp-text-dim, #9aa0a6); margin: 4px 0 0;
@@ -155,7 +182,24 @@ class OmpSwitcherPanel extends HTMLElement {
       localStorage.setItem(THUMBS_KEY, thumbsEnabled ? "1" : "0");
       refresh();
     });
-    toolbar.append(toolbarLabel, thumbsToggle);
+    const scopeToggle = document.createElement("label");
+    scopeToggle.className = "thumbs-toggle";
+    scopeToggle.title = T("scopeOwnTitle");
+    const scopeCheckbox = document.createElement("input");
+    scopeCheckbox.type = "checkbox";
+    scopeCheckbox.checked = scopeOwn;
+    scopeToggle.append(scopeCheckbox, document.createTextNode(T("scopeOwn")));
+    scopeCheckbox.addEventListener("change", () => {
+      scopeOwn = scopeCheckbox.checked;
+      localStorage.setItem(SCOPE_KEY, scopeOwn ? "1" : "0");
+      navPath = [];
+      localStorage.setItem(NAV_KEY, "[]");
+      refresh();
+    });
+    const toolbarRight = document.createElement("span");
+    toolbarRight.style.cssText = "display:flex;gap:12px;align-items:center";
+    toolbarRight.append(scopeToggle, thumbsToggle);
+    toolbar.append(toolbarLabel, toolbarRight);
 
     const buttons = document.createElement("div");
     buttons.className = "buttons";
@@ -177,10 +221,30 @@ class OmpSwitcherPanel extends HTMLElement {
     // Grundlage für die Vorschaubild-URLs — derselbe Node, der den
     // Sender veröffentlicht, liefert auch dessen `previewUrl`-Stream,
     // falls vorhanden).
+    // Gruppenbaum des Flow-Editors (Layout "default"): ändert sich selten,
+    // deshalb höchstens alle 10 s neu laden statt bei jedem 2-s-Poll.
+    let groupTreeCache = { at: 0, groups: {} };
+    const loadGroupTree = async () => {
+      if (Date.now() - groupTreeCache.at < 10000) return groupTreeCache.groups;
+      try {
+        const res = await fetch("/api/v1/layouts/default");
+        if (res.ok) {
+          const blob = await res.json();
+          groupTreeCache = { at: Date.now(), groups: blob.groups?.groups || {} };
+        } else {
+          groupTreeCache.at = Date.now();
+        }
+      } catch {
+        groupTreeCache.at = Date.now();
+      }
+      return groupTreeCache.groups;
+    };
+
     const senderWorkflowLabel = async () => {
-      const [graphRes, workflowsRes] = await Promise.all([
+      const [graphRes, workflowsRes, groupTree] = await Promise.all([
         fetch("/api/v1/graph"),
         fetch("/api/v1/workflows"),
+        loadGroupTree(),
       ]);
       const senderNodeId = new Map();
       if (graphRes.ok) {
@@ -189,26 +253,89 @@ class OmpSwitcherPanel extends HTMLElement {
           for (const out of n.outputs || []) senderNodeId.set(out.id, n.id);
         }
       }
-      const nodeWorkflow = new Map();
+      const workflowNodes = new Map(); // workflowId -> { label, nodeIds }
       let ownWorkflowId = null;
-      let workflowLabel = new Map();
       if (workflowsRes.ok) {
         const workflows = await workflowsRes.json();
         for (const wf of workflows) {
-          workflowLabel.set(wf.id, wf.definition?.title || wf.name);
+          const nodeIds = [];
           for (const role of Object.values(wf.runtime || {})) {
             if (!role.nodeId) continue;
-            nodeWorkflow.set(role.nodeId, wf.id);
+            nodeIds.push(role.nodeId);
             if (role.nodeId === nodeId) ownWorkflowId = wf.id;
           }
+          workflowNodes.set(wf.id, { label: wf.definition?.title || wf.name || wf.id, nodeIds });
         }
       }
-      const workflowBySender = new Map();
-      for (const [senderId, nId] of senderNodeId) {
-        const wfId = nodeWorkflow.get(nId);
-        if (wfId) workflowBySender.set(senderId, { id: wfId, label: workflowLabel.get(wfId) || wfId, own: wfId === ownWorkflowId });
+      return { senderNodeId, groupTree, workflowNodes, ownWorkflowId };
+    };
+
+    // Menübaum aus Gruppenbaum + Workflows. Ein Eintrag: { key, label,
+    // folders: [Eintrag], senders: [Input], own }. Leere Zweige entfallen.
+    const buildMenu = (inputs, ctx) => {
+      const { senderNodeId, groupTree, workflowNodes, ownWorkflowId } = ctx;
+      const byNode = new Map();
+      const unresolved = [];
+      for (const input of inputs) {
+        const nId = senderNodeId.get(input.senderId);
+        if (!nId) { unresolved.push(input); continue; }
+        if (!byNode.has(nId)) byNode.set(nId, []);
+        byNode.get(nId).push(input);
       }
-      return { workflowBySender, senderNodeId };
+      const used = new Set();
+      const sendersOf = (nodeIds) => {
+        const list = [];
+        for (const id of nodeIds) for (const input of byNode.get(id) || []) { list.push(input); used.add(input.senderId); }
+        return list;
+      };
+      const count = (e) => e.senders.length + e.folders.reduce((n, f) => n + f.count, 0);
+      const finish = (e) => { e.count = count(e); return e; };
+
+      let ownGroupId = null;
+      for (const g of Object.values(groupTree)) if ((g.nodeIds || []).includes(nodeId)) ownGroupId = g.id;
+      const groupEntry = (gid, seen) => {
+        const g = groupTree[gid];
+        if (!g || seen.has(gid)) return null;
+        seen.add(gid);
+        const folders = (g.groupIds || []).map((c) => groupEntry(c, seen)).filter((f) => f && f.count > 0);
+        const e = finish({ key: `g:${gid}`, label: g.label || gid, folders, senders: sendersOf(g.nodeIds || []), own: false });
+        // Eigener Zweig: enthält den Switcher selbst (direkt oder darunter).
+        e.own = gid === ownGroupId || folders.some((f) => f.own);
+        e.workflowId = g.workflowId;
+        return e;
+      };
+      const seen = new Set();
+      const roots = [];
+      for (const g of Object.values(groupTree)) {
+        if (g.parentId !== null && g.parentId !== undefined && groupTree[g.parentId]) continue;
+        const e = groupEntry(g.id, seen);
+        if (e && e.count > 0) roots.push(e);
+      }
+      const referenced = new Set(Object.values(groupTree).map((g) => g.workflowId).filter(Boolean));
+      for (const [wfId, wf] of workflowNodes) {
+        if (referenced.has(wfId)) continue;
+        const e = finish({ key: `w:${wfId}`, label: wf.label, folders: [], senders: sendersOf(wf.nodeIds), own: wfId === ownWorkflowId });
+        if (e.count > 0) roots.push(e);
+      }
+      const other = inputs.filter((i) => !used.has(i.senderId));
+      const rest = finish({ key: "o:", label: T("otherSources"), folders: [], senders: other, own: false });
+      if (rest.count > 0) roots.push(rest);
+      roots.sort((a, b) => (b.own ? 1 : 0) - (a.own ? 1 : 0));
+
+      // Optional nur der eigene Zweig (Gruppe bzw. Workflow des Switchers).
+      let scopeEntry = null;
+      if (scopeOwn) {
+        const find = (list) => {
+          for (const e of list) {
+            if (e.key === `g:${ownGroupId}`) return e;
+            const inner = find(e.folders);
+            if (inner) return inner;
+          }
+          return null;
+        };
+        scopeEntry = (ownGroupId && find(roots)) || roots.find((e) => e.key === `w:${ownWorkflowId}`) || null;
+      }
+      return scopeEntry ?? { key: "", label: T("sources"), folders: roots, senders: [], count: inputs.length };
     };
 
     // Vorschaubild-Snapshot-URL — identisches Muster zu `ui/shell/node-
@@ -326,18 +453,36 @@ class OmpSwitcherPanel extends HTMLElement {
     };
 
     const refresh = async () => {
-      const [inputsRes, activeRes, { workflowBySender, senderNodeId }] = await Promise.all([
+      if (document.hidden) return; // im Hintergrund-Tab nichts pollen
+      const [inputsRes, activeRes, ctx] = await Promise.all([
         fetch(`/api/v1/nodes/${nodeId}/params/inputs`),
         fetch(`/api/v1/nodes/${nodeId}/params/activeInput`),
         senderWorkflowLabel(),
       ]);
       if (!inputsRes.ok || !activeRes.ok) return;
+      const { senderNodeId } = ctx;
       const inputs = (await inputsRes.json()).value || [];
       const active = (await activeRes.json()).value || "";
 
-      // Bestehende Knöpfe per `senderId` einsammeln, BEVOR sie entfernt
-      // werden — wiederverwendbare Kandidaten für unten, statt eines
-      // pauschalen `buttons.innerHTML = ""`, das jedes Mal auch noch
+      // Menü-Ebene auflösen: navPath von der (ggf. eingegrenzten) Wurzel
+      // aus abgehen; verschwundene Schlüssel kappen den Pfad.
+      const menuRoot = buildMenu(inputs, ctx);
+      const trail = [menuRoot];
+      for (const key of navPath) {
+        const next = trail[trail.length - 1].folders.find((f) => f.key === key);
+        if (!next) break;
+        trail.push(next);
+      }
+      if (trail.length - 1 !== navPath.length) {
+        navPath = trail.slice(1).map((e) => e.key);
+        localStorage.setItem(NAV_KEY, JSON.stringify(navPath));
+      }
+      const level = trail[trail.length - 1];
+      const hasActive = (e) => e.senders.some((i) => i.senderId === active) || e.folders.some(hasActive);
+
+      // Bestehende Quellen-Knöpfe per `senderId` einsammeln, BEVOR sie
+      // entfernt werden — wiederverwendbare Kandidaten für unten, statt
+      // eines pauschalen `buttons.innerHTML = ""`, das jedes Mal auch noch
       // gültige Vorschaubild-`<img>`s zerstören würde.
       const existingButtons = new Map();
       for (const el of Array.from(buttons.children)) {
@@ -371,36 +516,40 @@ class OmpSwitcherPanel extends HTMLElement {
         return blackBtn;
       }, false, undefined, (btn) => btn).active = active === "";
 
-      const own = inputs.filter((i) => workflowBySender.get(i.senderId)?.own);
-      const rest = inputs.filter((i) => !workflowBySender.get(i.senderId)?.own);
-      const appendGroup = (list) => {
-        for (const input of list) {
-          const sourceNodeId = senderNodeId.get(input.senderId);
-          const wantsThumb = thumbsEnabled;
-          const btn = appendButton(
-            input.senderId,
-            () => makeInputButton(input, input.senderId === active, sourceNodeId),
-            wantsThumb,
-            sourceNodeId,
-            (reused) => updateInputButton(reused, input, sourceNodeId),
-          );
-          btn.active = input.senderId === active;
-        }
-      };
-      if (own.length > 0 && rest.length > 0) {
-        const ownLabel = document.createElement("div");
-        ownLabel.className = "group-label";
-        ownLabel.textContent = T("ownWorkflow");
-        fragment.append(ownLabel);
-        appendGroup(own);
+      // Zurück-/Breadcrumb-Zeile (nur unterhalb der Wurzel).
+      if (trail.length > 1) {
+        const row = document.createElement("div");
+        row.className = "navrow";
+        const back = document.createElement("omp-button");
+        back.className = "folder";
+        back.textContent = `◂ ${T("back")}`;
+        back.addEventListener("click", () => setNavPath(navPath.slice(0, -1)));
+        const crumb = document.createElement("span");
+        crumb.className = "crumb";
+        crumb.textContent = trail.map((e, i) => (i === 0 && !e.key ? T("sources") : e.label)).join(" › ");
+        row.append(back, crumb);
+        fragment.append(row);
+      }
 
-        const restLabel = document.createElement("div");
-        restLabel.className = "group-label";
-        restLabel.textContent = T("otherSources");
-        fragment.append(restLabel);
-        appendGroup(rest);
-      } else {
-        appendGroup(inputs);
+      for (const folder of level.folders) {
+        const btn = document.createElement("omp-button");
+        btn.className = "folder";
+        btn.textContent = `${hasActive(folder) ? "● " : ""}▸ ${folder.label} (${folder.count})`;
+        btn.addEventListener("click", () => setNavPath([...navPath, folder.key]));
+        fragment.append(btn);
+      }
+
+      for (const input of level.senders) {
+        const sourceNodeId = senderNodeId.get(input.senderId);
+        const wantsThumb = thumbsEnabled;
+        const btn = appendButton(
+          input.senderId,
+          () => makeInputButton(input, input.senderId === active, sourceNodeId),
+          wantsThumb,
+          sourceNodeId,
+          (reused) => updateInputButton(reused, input, sourceNodeId),
+        );
+        btn.active = input.senderId === active;
       }
 
       if (inputs.length === 0) {

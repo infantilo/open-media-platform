@@ -139,8 +139,8 @@
     "runner": "process",
     "command": ["../nodes/target/release/omp-switcher"],
     "env": {},
-    "description": "Einfacher Video-Umschalter zwischen automatisch entdeckten MXL-Quellen per Knopf — kein Programm-/Preset-Bus, kein Mischeffekt (Vorläufer von Video Mixer M/E).",
-    "i18n": { "en": {"description": "Simple video switcher between automatically discovered MXL sources at the push of a button — no programme/preset bus, no mix effect (predecessor of Video Mixer M/E).", "expectedResources": "low, grows with the number of inputs"} },
+    "description": "Einfacher Video-Umschalter zwischen automatisch entdeckten MXL-Quellen per Knopf (Menü: Workflows/Gruppen → Untergruppen → Quellen, optional nur eigene Gruppe) — kein Programm-/Preset-Bus, kein Mischeffekt (Vorläufer von Video Mixer M/E).",
+    "i18n": { "en": {"description": "Simple video switcher between automatically discovered MXL sources at the push of a button (menu: workflows/groups → subgroups → sources, optionally own group only) — no programme/preset bus, no mix effect (predecessor of Video Mixer M/E).", "expectedResources": "low, grows with the number of inputs"} },
     "expectedResources": "gering, wächst mit Eingangszahl"
   },
   {

@@ -33,7 +33,8 @@ use omp_node_sdk::health;
 use omp_node_sdk::is04::{self, RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
-    Descriptor, InvokeError, NodeConfig, ParamSpec, ParamStore, ParamType, RawResponse, SenderSpec, SetError,
+    Descriptor, InvokeError, NodeConfig, ParamSpec, ParamStore, ParamType, PeerClient, RawResponse, SenderSpec,
+    SetError, resolve_owning_node_href,
 };
 use pipeline::{DEFAULT_CANVAS_HEIGHT, DEFAULT_CANVAS_WIDTH, MIN_PIP_SIZE, PipelineHandle, ResolvedPip};
 use serde::{Deserialize, Serialize};
@@ -156,16 +157,38 @@ fn is_lowres_companion(s: &is04::Sender) -> bool {
         .unwrap_or(false)
 }
 
+/// Gruppenname eines Grouphint-Tags (`"<group>:<role>[:<scope>]"`) mit
+/// der gesuchten Rolle.
+fn grouphint_group<'a>(s: &'a is04::Sender, role: &str) -> Option<&'a str> {
+    s.tags.get(GROUPHINT_TAG)?.iter().find_map(|v| {
+        let mut parts = v.splitn(3, ':');
+        let group = parts.next()?;
+        (parts.next()? == role).then_some(group)
+    })
+}
+
 #[derive(Debug, Clone)]
 struct SourceInfo {
     sender_id: String,
     label: String,
     flow_id: String,
     device_id: String,
+    /// Lowres-Begleit-Sender derselben Grouphint-Gruppe (CPU-Optimierung
+    /// 2026-10-09: Kacheln lesen den kleinen Flow statt des Hochauflösenden,
+    /// s. `discovery_loop`). `None` = keiner vorhanden bzw. Aktivierung
+    /// fehlgeschlagen → Highres+Downscale wie zuvor.
+    lowres_sender_id: Option<String>,
+    lowres_flow_id: Option<String>,
 }
 
 fn discover_sources(registry: &RegistryClient, own_pgm_flow_id: &str) -> Result<Vec<SourceInfo>, String> {
     let senders = registry.list_senders().map_err(|e| e.to_string())?;
+    let mut lowres_by_group: HashMap<String, (String, String)> = HashMap::new();
+    for s in &senders {
+        if let (Some(flow_id), Some(group)) = (&s.flow_id, grouphint_group(s, "low")) {
+            lowres_by_group.insert(group.to_string(), (s.id.clone(), flow_id.clone()));
+        }
+    }
     let mut discovered = Vec::new();
     for s in &senders {
         if s.transport != TRANSPORT_MXL || is_lowres_companion(s) {
@@ -185,11 +208,19 @@ fn discover_sources(registry: &RegistryClient, own_pgm_flow_id: &str) -> Result<
         if !matches!(registry.get_flow_format(flow_id), Ok(format) if format == is04::FORMAT_VIDEO) {
             continue;
         }
+        let lowres = s
+            .tags
+            .get(GROUPHINT_TAG)
+            .and_then(|values| values.first())
+            .and_then(|v| v.split(':').next())
+            .and_then(|g| lowres_by_group.get(g).cloned());
         discovered.push(SourceInfo {
             sender_id: s.id.clone(),
             label: s.label.clone(),
             flow_id: flow_id.clone(),
             device_id: s.device_id.clone(),
+            lowres_sender_id: lowres.as_ref().map(|(id, _)| id.clone()),
+            lowres_flow_id: lowres.map(|(_, fid)| fid),
         });
     }
     Ok(discovered)
@@ -210,7 +241,7 @@ fn resolve_pips(layout: &Layout, sources: &[SourceInfo]) -> Vec<ResolvedPip> {
             let source = pip.sender_id.as_deref().and_then(|id| sources.iter().find(|s| s.sender_id == id));
             ResolvedPip {
                 id: pip.id.clone(),
-                flow_id: source.map(|s| s.flow_id.clone()),
+                flow_id: source.map(|s| s.lowres_flow_id.clone().unwrap_or_else(|| s.flow_id.clone())),
                 // Quellen-LABEL (s. ResolvedPip-Doku), nie die rohe
                 // senderId — Nutzerfund 2026-08-20.
                 source_label: source.map(|s| s.label.clone()),
@@ -668,13 +699,15 @@ async fn discovery_loop(
 ) {
     let registry = RegistryClient::new(registry_url.clone());
     let mut interval = tokio::time::interval(Duration::from_secs(2));
+    // lowres sender_id -> href des Quell-Nodes (aktiviert; s. unten)
+    let mut activated_lowres: HashMap<String, String> = HashMap::new();
 
     loop {
         interval.tick().await;
         let registry_for_poll = registry.clone();
         let pgm_flow_id_for_poll = pgm_flow_id.clone();
         let result = tokio::task::spawn_blocking(move || discover_sources(&registry_for_poll, &pgm_flow_id_for_poll)).await;
-        let discovered = match result {
+        let mut discovered = match result {
             Ok(Ok(discovered)) => discovered,
             Ok(Err(e)) => {
                 eprintln!("omp-multiviewer-custom: discovery poll failed: {e}");
@@ -685,6 +718,70 @@ async fn discovery_loop(
                 continue;
             }
         };
+        // Lowres-Begleiter nur für Quellen, die aktuell in einer Kachel
+        // liegen (wie omp-multiviewer): aktivieren, was gebraucht wird,
+        // den Rest freigeben. Schlägt eine Aktivierung fehl, liest genau
+        // diese Kachel weiter den Highres-Flow (Downscale in der Pipeline).
+        let used_senders: std::collections::HashSet<String> = layout
+            .lock()
+            .expect("lock poisoned")
+            .pips
+            .iter()
+            .filter_map(|p| p.sender_id.clone())
+            .collect();
+        for src in discovered.iter_mut() {
+            if !used_senders.contains(&src.sender_id) {
+                src.lowres_sender_id = None;
+                src.lowres_flow_id = None;
+            }
+        }
+        let wanted: std::collections::HashSet<&str> =
+            discovered.iter().filter_map(|i| i.lowres_sender_id.as_deref()).collect();
+        let stale: Vec<(String, String)> = activated_lowres
+            .iter()
+            .filter(|(id, _)| !wanted.contains(id.as_str()))
+            .map(|(id, href)| (id.clone(), href.clone()))
+            .collect();
+        for (lowres_id, href) in stale {
+            let r = tokio::task::spawn_blocking(move || PeerClient::new(href).invoke("releaseLowresPreview")).await;
+            if let Ok(Err(e)) = r {
+                eprintln!("omp-multiviewer-custom: releaseLowresPreview({lowres_id}) failed: {e}");
+            }
+            activated_lowres.remove(&lowres_id);
+        }
+        for src in discovered.iter_mut() {
+            let Some(lowres_id) = src.lowres_sender_id.clone() else { continue };
+            if activated_lowres.contains_key(&lowres_id) {
+                continue;
+            }
+            let reg = registry.clone();
+            let id_for_resolve = lowres_id.clone();
+            let href = tokio::task::spawn_blocking(move || resolve_owning_node_href(&reg, &id_for_resolve))
+                .await
+                .ok()
+                .flatten();
+            let activated = match href {
+                Some(href) => {
+                    let href_call = href.clone();
+                    match tokio::task::spawn_blocking(move || PeerClient::new(href_call).invoke("activateLowresPreview")).await {
+                        Ok(Ok(())) => {
+                            activated_lowres.insert(lowres_id.clone(), href);
+                            true
+                        }
+                        Ok(Err(e)) => {
+                            eprintln!("omp-multiviewer-custom: activateLowresPreview({lowres_id}) failed: {e}, Highres-Fallback");
+                            false
+                        }
+                        Err(_) => false,
+                    }
+                }
+                None => false,
+            };
+            if !activated {
+                src.lowres_sender_id = None;
+                src.lowres_flow_id = None;
+            }
+        }
         *sources.lock().expect("lock poisoned") = discovered.clone();
 
         let current_layout = layout.lock().expect("lock poisoned").clone();
@@ -794,7 +891,7 @@ mod tests {
     }
 
     fn source(sender_id: &str, flow_id: &str) -> SourceInfo {
-        SourceInfo { sender_id: sender_id.to_string(), label: "Label".to_string(), flow_id: flow_id.to_string(), device_id: "dev-1".to_string() }
+        SourceInfo { sender_id: sender_id.to_string(), label: "Label".to_string(), flow_id: flow_id.to_string(), device_id: "dev-1".to_string(), lowres_sender_id: None, lowres_flow_id: None }
     }
 
     #[test]
