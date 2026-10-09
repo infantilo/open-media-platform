@@ -70,6 +70,8 @@ type is04Receiver struct {
 	DeviceID  string `json:"device_id"`
 	Format    string `json:"format"`
 	Transport string `json:"transport"`
+	// Tags: IS-04-Receiver-Tags (Quelle der DiscoveredTags, s. OMPTagsTag).
+	Tags map[string][]string `json:"tags"`
 }
 
 type is04Flow struct {
@@ -156,4 +158,8 @@ type ReceiverView struct {
 	DeviceID  string `json:"device_id"`
 	Format    string `json:"format"`
 	Transport string `json:"transport,omitempty"`
+	// DiscoveredTags: Werte des IS-04-Receiver-Tags OMPTagsTag — semantische
+	// Tags der Senke (z. B. `audio.commentator`), Grundlage der tag-basierten
+	// Schaltung im X/Y-Panel.
+	DiscoveredTags []string `json:"discovered_tags,omitempty"`
 }

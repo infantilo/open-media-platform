@@ -1274,6 +1274,20 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/sinks",
+    "auth": "auth",
+    "when": "options.sourceTags != nil",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/sinks/{receiverId}/tags",
+    "auth": "verb:Configure",
+    "when": "options.sourceTags != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/snapshots",
     "auth": "auth",
     "domain": "core"

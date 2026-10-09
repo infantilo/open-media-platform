@@ -758,6 +758,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	if options.sourceTags != nil {
 		mux.HandleFunc("GET /api/v1/sources", g.requireAuth(handleListSources(nodes, options.sourceTags, workflowSvc.FindRoleForNode)))
 		mux.HandleFunc("PUT /api/v1/sources/{senderId}/tags", g.requireVerbGlobal(authz.VerbConfigure, handlePutSourceTags(nodes, options.sourceTags, options.domainAudit)))
+		mux.HandleFunc("GET /api/v1/sinks", g.requireAuth(handleListSinks(nodes, options.sourceTags, workflowSvc.FindRoleForNode)))
+		mux.HandleFunc("PUT /api/v1/sinks/{receiverId}/tags", g.requireVerbGlobal(authz.VerbConfigure, handlePutSinkTags(nodes, options.sourceTags, options.domainAudit)))
 	}
 	if options.groups != nil {
 		mux.HandleFunc("GET /api/v1/groups", g.requireVerbGlobal(authz.VerbAdmin, handleListGroups(options.groups)))

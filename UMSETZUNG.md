@@ -5209,3 +5209,30 @@ der Klassifikation** (manuelle Children bleiben möglich). Kein Herstellername i
 
 **Regeln:** ein Schritt pro Sitzung; Live-Test am echten Stack; nur kleine CPU-Tests. **Offen:** welcher Empfänger/Encoder
 auf Gegenseite zum Testen verfügbar ist, ob 104 auch eingehend (Empfangen → Automator-Trigger) gewünscht ist.
+
+## Kapitel 38: X/Y-Panel — jede Quelle auf jede Senke schalten (Nutzerauftrag 2026-10-09)
+
+Auftrag: Panel-Node mit Quellen- und Ziel-Seite, Home-/Hoch-Taste, in Home Menütasten für Workflows, Gruppen und nicht zugewiesene
+Nodes, darin verschachtelte Gruppen/Workflows und die Punkte der Ebene; optional Bouquet-Schaltung und tag-basierte Schaltung
+(Sender mit Tag „Kommentator“ → Empfänger mit demselben Tag), direktes Routing; Desktop **und** Mobil.
+
+Entscheidungen: (1) **Keine Schaltlogik im Backend** — Node `omp-xy-panel` ist reine Steuerebene (keine Ports, `NotApplicable`), die
+Oberfläche arbeitet gegen die Kern-API (`POST /api/v1/graph/edges`), damit Rechte/Audit/Schleifenschutz unverändert gelten.
+(2) Gruppenbaum aus dem Layout `default` (wie der Flow-Editor), Workflows aus `/api/v1/workflows`; ein Workflow, den eine Gruppe per
+`workflowId` referenziert, übernimmt deren Untergruppen. (3) **Tags auf beiden Seiten:** neu `GET /api/v1/sinks` + `PUT
+/api/v1/sinks/{receiverId}/tags` (Spiegel von `/sources`; Overlay im selben Speicher, Schlüssel mit Präfix `receiver:`, keine
+Migration), `registry.ReceiverView.DiscoveredTags`, SDK `ReceiverSpec.tags`. (4) Bouquets im Layout-Speicher `xy-bouquets` (global,
+Bezug über Node-ID/-Label + Portname, nicht über wechselnde Sender-IDs); Art „feste Schaltungen“ oder „per Tags“ (wertet beim Schalten
+aus). (5) Mobil über **Container-Abfragen** (Breite der Kachel, nicht des Fensters).
+
+| Schritt | Inhalt | Verifikation |
+|---|---|---|
+| 38.1 Senken-API + Receiver-Tags — **erledigt 2026-10-09** | `internal/httpapi/source_handlers.go` (`buildSinks`, `handleListSinks`, `handlePutSinkTags`), Registry (`is04Receiver.Tags`), SDK `ReceiverSpec.tags`, Golden-Routentabelle (+2 Routen: `GET` angemeldet, `PUT` global `configure`) | Go-Test `TestBuildSinksMergesTagsAndKeepsSenderKeysApart`; Routentabellen-Wächter; live: `/sinks` liefert Receiver mit abgeleiteten Tags, `PUT` setzt `role.commentator` (EXPLICIT) |
+| 38.2 Node + Oberfläche — **erledigt 2026-10-09** | `nodes/omp-xy-panel` (`ui/logic.js` reine Logik, `ui/panel.js` Custom Element, beides zu einem Bundle verkettet), Katalogeintrag | 14 Deno-Tests `ui/xy-panel_test.ts` (Ordnerbaum, verknüpfter Workflow, leere Ebenen, Filter, Kompatibilität, Tag-Paarung, Rest nach Reihenfolge, Offline, Bouquet-Auflösung nach Neustart, fehlende Punkte); alle 315 UI-Tests grün |
+| 38.3 Live-Test mit echten Klicks — **erledigt 2026-10-09** | CDP am echten Stack (Quelle, Viewer, Audio-Monitor, Panel): Quelle → Ziel schaltet (Kante vorhanden), inkompatibles Ziel gedimmt + Meldung statt Schaltung, Trennen, Tag-Dialog (Vorschau `Sender 2 → Receiver 1 (tag: role.commentator)`), Bouquet speichern/schalten/aufzeichnen (Aufzeichnung schaltet nicht), Layout `xy-bouquets` gespeichert; Kachelbreite 390 px: Reiter + Take-Leiste | Testdaten danach entfernt (Instanzen, Tags, Bouquets) |
+
+**Grenzen / offen:** (1) Der Flow-Editor-Rahmen der Shell hat selbst eine Mindestbreite (~1300 px); auf dem Handy bietet sich die
+Operator-Konsole (`/console/<workflow>/<rolle>`) an — nicht auf einem echten Gerät geprüft, nur mit schmaler Kachel. (2) Gruppen-/
+Workflow-Ebenen wurden nur per Unit-Test geprüft (im Live-Stack lief nichts in Gruppen/Workflows). (3) Tags für Ziele lassen sich nur
+per API setzen, keine Eingabemaske im Panel. (4) „Aktuelle Schaltung als Bouquet übernehmen“ gibt es nicht (nur Aufzeichnen und
+Tag-Regel). (5) Beim Neustart des Orchestrators für den Test wurde eine laufende `omp-scte35`-Instanz nicht wieder übernommen.

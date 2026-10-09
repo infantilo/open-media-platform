@@ -456,6 +456,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         transport: Some(TRANSPORT_MXL.to_string()),
                         media_types: Some(vec!["audio/float32".to_string()]),
                         label: Some(label),
+                        ..Default::default()
                     };
                     match handle.add_receiver(spec).await {
                         Ok(_) => {

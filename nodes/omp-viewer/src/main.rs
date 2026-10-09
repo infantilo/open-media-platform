@@ -328,6 +328,7 @@ async fn audio_input_worker(
                     transport: Some(TRANSPORT_MXL.to_string()),
                     media_types: Some(vec!["audio/float32".to_string()]),
                     label,
+                    ..Default::default()
                 };
                 match handle.add_receiver(spec).await {
                     Ok(receiver) => {

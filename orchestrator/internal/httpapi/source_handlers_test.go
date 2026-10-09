@@ -55,3 +55,33 @@ func TestSourceTagFilterRequiresAllTags(t *testing.T) {
 		t.Fatal("must require ALL tags")
 	}
 }
+
+func TestBuildSinksMergesTagsAndKeepsSenderKeysApart(t *testing.T) {
+	nodes := []registry.NodeView{{
+		ID: "n2", Label: "Kommentatorplatz", Online: true,
+		Receivers: []registry.ReceiverView{
+			{ID: "r-a", Label: "Audio", Format: "urn:x-nmos:format:audio", DiscoveredTags: []string{"role.program"}},
+			{ID: "r-v", Label: "Video", Format: "urn:x-nmos:format:video"},
+		},
+	}}
+	explicit := map[sourcetags.Key][]string{
+		{NodeID: "n2", SenderLabel: "receiver:Audio"}: {"role.commentator"},
+		{NodeID: "n2", SenderLabel: "Audio"}:          {"role.wrong"}, // Sender-Schlüssel gleichen Namens zählt nicht
+	}
+	got := buildSinks(nodes, explicit, func(id string) (string, string, string, bool) { return "wf", "Regie", "kommentar", true })
+	if len(got) != 2 {
+		t.Fatalf("len = %d", len(got))
+	}
+	a := got[0] // sortiert nach Label: Audio vor Video
+	want := []sourcetags.Tag{
+		{Tag: "media.audio", Origin: "DERIVED"},
+		{Tag: "role.commentator", Origin: "EXPLICIT"},
+		{Tag: "role.program", Origin: "DISCOVERED"},
+	}
+	if a.ReceiverID != "r-a" || a.MediaType != "audio" || a.Role != "kommentar" || !reflect.DeepEqual(a.Tags, want) {
+		t.Fatalf("audio sink = %+v", a)
+	}
+	if got[1].MediaType != "video" {
+		t.Fatalf("video sink = %+v", got[1])
+	}
+}

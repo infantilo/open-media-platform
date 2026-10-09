@@ -296,6 +296,16 @@
     "expectedResources": "moderat während einer Aufnahme (Encoding), sonst sehr gering (keine Quelle abonniert)"
   },
   {
+    "type": "omp-xy-panel",
+    "label": "X/Y-Panel (Kreuzschiene)",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-xy-panel"],
+    "env": {},
+    "description": "Bedienpanel, mit dem sich jede Quelle auf jede Senke schalten lässt: links Quellen, rechts Ziele, je mit Home- und Hoch-Taste durch Workflows, Gruppen (auch verschachtelt) und nicht zugewiesene Nodes. Optional Bouquets (mehrere Schaltungen mit einem Take) und tag-basierte Schaltung (z. B. Kommentator-Sender auf Kommentator-Empfänger). Für Desktop und Smartphone/Tablet ausgelegt; geschaltet wird über die Orchestrator-API (Rechte, Audit und Schleifenschutz gelten unverändert).",
+    "i18n": { "en": {"label": "X/Y panel (crosspoint)", "description": "Control panel for routing any source to any destination: sources on the left, destinations on the right, each with home and up buttons through workflows, groups (also nested) and unassigned nodes. Optionally bouquets (several routes with one take) and tag-based routing (e.g. commentator sender to commentator receiver). Designed for desktop and phone/tablet; routing goes through the orchestrator API (permissions, audit and loop protection apply unchanged).", "expectedResources": "very low (control plane only)"} },
+    "expectedResources": "sehr gering (nur Steuerebene)"
+  },
+  {
     "type": "omp-device-hub",
     "label": "Geräte-Hub",
     "runner": "process",

@@ -159,6 +159,10 @@ pub struct ReceiverSpec {
     /// S. `SenderSpec::label` — gleiche Begründung, gleiches Verhalten bei
     /// `None`.
     pub label: Option<String>,
+    /// IS-04-Tags der Senke (`is04::Receiver::tags` direkt durchgereicht),
+    /// z. B. `urn:x-omp:tags` = `["role.commentator"]` für die tag-basierte
+    /// Schaltung (X/Y-Panel). Leer (Default) verhält sich wie bisher.
+    pub tags: HashMap<String, Vec<String>>,
 }
 
 /// Bereitschafts-Quelle für das „media-ready"-Signal aus dem Node-Contract
@@ -419,6 +423,7 @@ fn build_receiver(
         .clone()
         .unwrap_or_else(|| format!("{node_label} Receiver {}", label_index + 1));
     let mut receiver = Receiver::new(id, &label, device_id);
+    receiver.tags = spec.tags.clone();
     if let Some(transport) = &spec.transport {
         receiver.transport = transport.clone();
     }

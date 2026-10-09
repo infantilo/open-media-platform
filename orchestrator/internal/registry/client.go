@@ -116,7 +116,7 @@ func (c *Client) fillSuspiciouslyEmptyDevices(ctx context.Context, views []NodeV
 			if err := c.getJSON(ctx, "receivers?device_id="+deviceID, &extraReceivers); err == nil {
 				for _, r := range extraReceivers {
 					views[ni].Receivers = append(views[ni].Receivers, ReceiverView{
-						ID: r.ID, Label: r.Label, DeviceID: r.DeviceID, Format: r.Format, Transport: r.Transport,
+						ID: r.ID, Label: r.Label, DeviceID: r.DeviceID, Format: r.Format, Transport: r.Transport, DiscoveredTags: r.Tags[OMPTagsTag],
 					})
 				}
 			}
@@ -249,11 +249,12 @@ func buildSnapshot(nodes []is04Node, devices []is04Device, senders []is04Sender,
 
 			for _, r := range receiversByDevice[d.ID] {
 				view.Receivers = append(view.Receivers, ReceiverView{
-					ID:        r.ID,
-					Label:     r.Label,
-					DeviceID:  r.DeviceID,
-					Format:    r.Format,
-					Transport: r.Transport,
+					ID:             r.ID,
+					Label:          r.Label,
+					DeviceID:       r.DeviceID,
+					Format:         r.Format,
+					Transport:      r.Transport,
+					DiscoveredTags: r.Tags[OMPTagsTag],
 				})
 			}
 		}

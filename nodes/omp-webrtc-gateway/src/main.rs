@@ -806,6 +806,7 @@ async fn run_monitor(common: Common) -> Result<(), Box<dyn std::error::Error + S
                     transport: Some(TRANSPORT_MXL.to_string()),
                     media_types: Some(vec!["audio/float32".to_string()]),
                     label: Some("Audio".to_string()),
+                    ..Default::default()
                 },
             ],
             instance_id,

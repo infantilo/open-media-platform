@@ -340,12 +340,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     transport: Some(TRANSPORT_MXL.to_string()),
                     media_types: Some(vec!["video/v210".to_string()]),
                     label: Some("Video".to_string()),
+                    ..Default::default()
                 },
                 ReceiverSpec {
                     id: Some(audio_receiver_id),
                     transport: Some(TRANSPORT_MXL.to_string()),
                     media_types: Some(vec!["audio/L24".to_string()]),
                     label: Some("Audio".to_string()),
+                    ..Default::default()
                 },
             ],
             instance_id,

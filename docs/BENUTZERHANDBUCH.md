@@ -1233,6 +1233,16 @@ Der Node **Geräte-Hub** (Katalog: „Geräte-Hub“) erkennt die Kameras, Captu
 - **Audio-Ausgänge:** Hat eine Soundkarte einen Wiedergabeausgang (Kopfhörer, Lautsprecher, USB-Headset), steht sie zusätzlich als **Audio-Ausgang** in der Liste. Mit „Als Ausgang bereitstellen“ erscheint ein Empfänger in der Kreuzschiene; verbindest du eine Audioquelle damit, spielt sie über die Karte (Status *Wartet auf Verbindung* → *Sendet*). Trennst du die Verbindung, endet die Wiedergabe. Hat die Quelle mehr Kanäle als die Karte, wird heruntergemischt.
 - **Format:** Video bis höchstens 1080p mit 25 Bildern/s (wenn das Gerät es kann), Audio mit der höchsten Kanalzahl des Geräts (bis 8) bei 48 kHz.
 
+## 10c-3. X/Y-Panel (jede Quelle auf jede Senke schalten)
+
+Der Node **X/Y-Panel (Kreuzschiene)** ist ein Bedienpanel ohne eigene Ports: Er zeigt links alle **Quellen** (Sender), rechts alle **Ziele** (Empfänger) und schaltet zwischen beliebigen kompatiblen Punkten. Starte eine Instanz und öffne ihre Kachel bzw. weise sie einer Operator-Rolle zu. Auf dem Smartphone und Tablet ordnet sich das Panel nach der Breite der Kachel an: Quellen und Ziele wechseln über zwei große Reiter, die Take-Leiste bleibt unten sichtbar.
+
+- **Navigation (je Seite getrennt):** Die **Home**-Taste (⌂) zeigt Menütasten für alle **Workflows**, **Gruppen** (wie im Flow-Editor angelegt) und **Nicht zugewiesen** (Nodes ohne Workflow und Gruppe). Ein Klick öffnet die Ebene: darin Untergruppen als Tasten und die Punkte der Nodes dieser Ebene. **↑** geht eine Ebene hoch; die Brotkrumen zeigen den Pfad. Leere Ebenen werden ausgeblendet.
+- **Filter:** Reiter *Alle/Video/Audio/Daten* und ein Suchfeld (Name, Node, Tag).
+- **Schalten:** Quelle antippen, Ziel antippen — fertig (Standard **Sofort schalten**). Ist die Option aus, schaltet erst **Take**. Die Quelle bleibt gewählt, so lässt sich eine Quelle schnell auf mehrere Ziele schalten. Nicht passende Ziele (anderer Medientyp) sind abgedunkelt. Ein geschaltetes Ziel zeigt „von …“; **Trennen** löst die Verbindung.
+- **Bouquets:** Mehrere Schaltungen mit einem Klick. *Bouquets → Bouquet aufzeichnen*: Quellen/Ziele wie gewohnt wählen (es wird nichts geschaltet, sondern gesammelt), Namen vergeben, **Speichern**. Im Dialog *Bouquets* schaltet **Schalten** alle Einträge; nicht mehr auffindbare Punkte werden namentlich gemeldet. Bouquets gelten für alle Nutzer und überstehen Neustarts (Bezug über Node und Portname, nicht über wechselnde IDs).
+- **Tag-Schaltung:** Quelle und Ziel tragen Tags (z. B. `role.commentator`). Im Dialog *Tag-Schaltung* wählst du einen Quell-Node und einen Ziel-Node; die **Vorschau** zeigt, welcher Sender zu welchem Empfänger passt (gemeinsamer Tag, gleicher Medientyp, die allgemeinen `media.*`-Tags zählen nicht). Optional „Rest nach Reihenfolge verbinden“. **Schalten** führt aus, **Als Bouquet speichern** merkt sich die Regel und wertet die Tags erst beim Schalten aus. Tags setzt du für Quellen über `PUT /api/v1/sources/{senderId}/tags`, für Ziele über `PUT /api/v1/sinks/{receiverId}/tags` (Recht *Konfigurieren*); ein Node kann sie auch selbst melden (IS-04-Tag `urn:x-omp:tags` am Sender bzw. Empfänger).
+
 ## 10d. Playout-Workflow „Playout MXF“ (Player, Mischer, Monitor)
 
 Der Workflow **Playout MXF** (Reiter Workflows, nach dem Anlegen im Zustand „gestoppt“) enthält:
