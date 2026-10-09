@@ -94,6 +94,22 @@ erzeugt im Hintergrund eine echte NMOS-IS-05-Verbindung — die Zielnode
 aktive Verbindung wird als farbige Linie zwischen den Kacheln
 dargestellt (im Screenshot oben: Source → Viewer, orange/aktiv).
 
+**Tags der Anschlüsse bearbeiten (🏷):** Der Knopf 🏷 im Kachelkopf öffnet
+einen Editor für die Tags der Ports dieser Kachel. Oben wählst du den
+Port aus (→ Ausgänge/Sender, ← Eingänge/Receiver). Darunter stehen deine
+eigenen Tags als Chips (mit × entfernen); neue Tags tippst du ein und
+bestätigst mit Enter oder „+“ (Format `domain.name`, z. B.
+`role.commentator`, Kleinbuchstaben, höchstens 32 je Port). Grau stehen
+die automatischen Tags: ⓘ aus Medientyp/Kanalzahl abgeleitet, ◌ vom Node
+gemeldet — sie lassen sich nicht ändern. Erst **Speichern** schreibt die
+Liste (ersetzt die bisherigen eigenen Tags des Ports); **Abbrechen**, Esc
+oder ein Klick daneben verwirft. Solange Änderungen ungespeichert sind,
+ist die Portwahl gesperrt. Benötigt das Recht *Konfigurieren*. Die Tags
+steuern tag-basierte Schaltungen (X/Y-Panel, Playout-Quelle „Live nach
+Tags“). Sie gelten pro Node und Port-Name: bei Workflow-Rollen bleiben
+sie über Neustarts erhalten, bei ad hoc gestarteten Instanzen gehen sie
+mit der Instanz verloren.
+
 ### 2.3 Layout
 
 „Alle einpassen" (oben rechts) zentriert und skaliert die Ansicht auf
@@ -166,14 +182,14 @@ Hostgrenzen-Übertragung ST 2110, den SRT-Gateway oder MXL-Fabrics
 (Abschnitt „Related project"/`HANDBUCH.md` §9.3) statt einer direkten
 MXL-Kante verwenden.
 
-**Begleiteter Host-Umzug per Drag:** eine **eigenständige** (nicht zu
-einem Workflow gehörende) Node-Kachel lässt sich bei aktiver Host-
-Ansicht in eine andere Zone ziehen. Landet sie dort, erscheint ein
-Bestätigungsdialog; nach Bestätigen wird die Instanz auf dem Zielhost
+**Begleiteter Host-Umzug per ⇄-Knopf:** an einer **eigenständigen** (nicht
+zu einem Workflow gehörenden) Node-Kachel erscheint bei aktiver Host-
+Ansicht der Knopf ⇄ im Kachelkopf. Er öffnet eine Liste der anderen
+Hosts; nach der Wahl erscheint ein Bestätigungsdialog; nach Bestätigen wird die Instanz auf dem Zielhost
 neu gestartet und ihre bestehenden Verbindungen werden automatisch neu
 hergestellt (Zuordnung über Port-Rolle, nicht über die alte ID, die
 sich beim Neustart ändert). Für Rollen innerhalb eines laufenden
-Workflows gibt es diese Drag-Funktion noch nicht — ein laufender
+Workflows gibt es diese Funktion in dieser Ansicht noch nicht — ein laufender
 Workflow zeigt sich in der Host-Ansicht immer als eine kollabierte
 Kachel (Abschnitt 2), einzelne Rollen erscheinen dort nicht individuell
 zonierbar. Die kollabierte Kachel selbst liegt aber in der zu ihren
@@ -1261,7 +1277,7 @@ Der Node **X/Y-Panel (Kreuzschiene)** ist ein Bedienpanel ohne eigene Ports: Er 
 - **Filter:** Reiter *Alle/Video/Audio/Daten* und ein Suchfeld (Name, Node, Tag).
 - **Schalten:** Quelle antippen, Ziel antippen — fertig (Standard **Sofort schalten**). Ist die Option aus, schaltet erst **Take**. Die Quelle bleibt gewählt, so lässt sich eine Quelle schnell auf mehrere Ziele schalten. Nicht passende Ziele (anderer Medientyp) sind abgedunkelt. Ein geschaltetes Ziel zeigt „von …“; **Trennen** löst die Verbindung.
 - **Bouquets:** Mehrere Schaltungen mit einem Klick. *Bouquets → Bouquet aufzeichnen*: Quellen/Ziele wie gewohnt wählen (es wird nichts geschaltet, sondern gesammelt), Namen vergeben, **Speichern**. Im Dialog *Bouquets* schaltet **Schalten** alle Einträge; nicht mehr auffindbare Punkte werden namentlich gemeldet. Bouquets gelten für alle Nutzer und überstehen Neustarts (Bezug über Node und Portname, nicht über wechselnde IDs).
-- **Tag-Schaltung:** Quelle und Ziel tragen Tags (z. B. `role.commentator`). Im Dialog *Tag-Schaltung* wählst du einen Quell-Node und einen Ziel-Node; die **Vorschau** zeigt, welcher Sender zu welchem Empfänger passt (gemeinsamer Tag, gleicher Medientyp, die allgemeinen `media.*`-Tags zählen nicht). Optional „Rest nach Reihenfolge verbinden“. **Schalten** führt aus, **Als Bouquet speichern** merkt sich die Regel und wertet die Tags erst beim Schalten aus. Tags setzt du für Quellen über `PUT /api/v1/sources/{senderId}/tags`, für Ziele über `PUT /api/v1/sinks/{receiverId}/tags` (Recht *Konfigurieren*); ein Node kann sie auch selbst melden (IS-04-Tag `urn:x-omp:tags` am Sender bzw. Empfänger).
+- **Tag-Schaltung:** Quelle und Ziel tragen Tags (z. B. `role.commentator`). Im Dialog *Tag-Schaltung* wählst du einen Quell-Node und einen Ziel-Node; die **Vorschau** zeigt, welcher Sender zu welchem Empfänger passt (gemeinsamer Tag, gleicher Medientyp, die allgemeinen `media.*`-Tags zählen nicht). Optional „Rest nach Reihenfolge verbinden“. **Schalten** führt aus, **Als Bouquet speichern** merkt sich die Regel und wertet die Tags erst beim Schalten aus. Tags setzt du im Flow-Editor über den Knopf 🏷 im Kachelkopf (Abschnitt 2.2) oder per API: für Quellen über `PUT /api/v1/sources/{senderId}/tags`, für Ziele über `PUT /api/v1/sinks/{receiverId}/tags` (Recht *Konfigurieren*); ein Node kann sie auch selbst melden (IS-04-Tag `urn:x-omp:tags` am Sender bzw. Empfänger).
 
 ## 10d. Playout-Workflow „Playout MXF“ (Player, Mischer, Monitor)
 
