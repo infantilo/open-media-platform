@@ -23,7 +23,7 @@ const XY_T = (() => {
       preview: "Vorschau", noPairs: "Keine Paarung gefunden — Tags an Quelle und Ziel prüfen.",
       byTag: "Tag", byOrder: "Reihenfolge", unmatched: "Ohne Partner", saveAsBouquet: "Als Bouquet speichern",
       choose: "— wählen —", saved: "Bouquet gespeichert.", removed: "Bouquet gelöscht.",
-      loadError: "Daten konnten nicht geladen werden.", needSelection: "Quell- und Ziel-Node wählen.",
+      loadError: "Daten konnten nicht geladen werden.", undo: "Rückgängig", undone: "Rückgängig gemacht ({n} Ziel(e))", undoFailed: "Rückgängig fehlgeschlagen: {detail}", needSelection: "Quell- und Ziel-Node wählen.",
     },
     en: {
       sources: "Sources", sinks: "Destinations", home: "Home", up: "Up one level",
@@ -43,7 +43,7 @@ const XY_T = (() => {
       preview: "Preview", noPairs: "No pairing found — check the tags on source and destination.",
       byTag: "tag", byOrder: "order", unmatched: "Without partner", saveAsBouquet: "Save as bouquet",
       choose: "— choose —", saved: "Bouquet saved.", removed: "Bouquet deleted.",
-      loadError: "Data could not be loaded.", needSelection: "Choose source and destination node.",
+      loadError: "Data could not be loaded.", undo: "Undo", undone: "Undone ({n} destination(s))", undoFailed: "Undo failed: {detail}", needSelection: "Choose source and destination node.",
     },
   };
   const lang = document.documentElement.lang === "en" ? "en" : "de";
@@ -267,6 +267,39 @@ class OmpXyPanel extends HTMLElement {
     const nodeName = (p) => st.names.get(p.nodeId) ?? L.stripInstanceId(p.nodeLabel);
     const pointName = (p) => L.fullName(p, nodeName(p));
 
+    // Undo (60 s): vor jeder Änderung den bisherigen Zustand der betroffenen Ziele merken.
+    const UNDO_MS = 60000;
+    const undoStack = []; // {at, prev:[{to, from|null}]}
+    function pushUndo(tos) {
+      const rm = L.routeMap(st.edges);
+      undoStack.push({ at: Date.now(), prev: tos.map((to) => ({ to, from: rm.get(to.id) ?? null })) });
+      updateUndo();
+    }
+    function liveUndo() {
+      while (undoStack.length && Date.now() - undoStack[0].at > UNDO_MS) undoStack.shift();
+      return undoStack[undoStack.length - 1];
+    }
+    function updateUndo() {
+      const b = shadow.getElementById("undo");
+      if (!b) return;
+      const e = liveUndo();
+      b.disabled = !e;
+      b.textContent = "↶ " + t("undo") + (e ? ` (${Math.max(0, Math.ceil((UNDO_MS - (Date.now() - e.at)) / 1000))})` : "");
+    }
+    async function doUndo() {
+      const e = liveUndo();
+      if (!e) { updateUndo(); return; }
+      undoStack.pop();
+      const bad = []; let n = 0;
+      for (const p of e.prev) {
+        try { if (p.from) await connect({ id: p.from }, p.to); else await disconnect(p.to); n++; }
+        catch (err) { bad.push(err.message); }
+      }
+      await refresh(false);
+      updateUndo();
+      if (bad.length) setMsg(t("undoFailed", { detail: bad.join("; ") }), true); else setMsg(t("undone", { n }));
+    }
+
     async function doTake(from, to) {
       if (!L.compatible(from, to)) { setMsg(t("incompatible"), true); return; }
       if (st.draft) {
@@ -274,6 +307,7 @@ class OmpXyPanel extends HTMLElement {
         st.selDst = null; render(); return;
       }
       try {
+        pushUndo([to]);
         await connect(from, to);
         setMsg(t("routed", { from: pointName(from), to: pointName(to) }));
         st.selDst = null;
@@ -282,6 +316,7 @@ class OmpXyPanel extends HTMLElement {
     }
     async function doDisconnect(to) {
       try {
+        pushUndo([to]);
         await disconnect(to);
         setMsg(t("disconnected", { to: pointName(to) }));
         st.selDst = null;
@@ -291,6 +326,7 @@ class OmpXyPanel extends HTMLElement {
     /** Mehrere Schaltungen nacheinander; Fehler einzeln sammeln statt abzubrechen. */
     async function runRoutes(routes) {
       let ok = 0; const bad = [];
+      if (routes.length) pushUndo(routes.map((r) => r.to));
       for (const r of routes) {
         try { await connect(r.from, r.to); ok++; } catch (e) { bad.push(`${pointName(r.to)} (${e.message})`); }
       }
@@ -373,7 +409,12 @@ class OmpXyPanel extends HTMLElement {
       const listHost = xyEl("div", { class: "list" });
       const renderList = () => {
         const f2 = L.filterPoints(all, { media: s.media, query: s.query });
-        const l2 = L.levelContents(st.model, s.path, L.groupPointsByNode(f2));
+        // Suche gilt über alle Ebenen: Treffer als flache Node-Liste, unabhängig von Ordner/Home.
+        const searching = s.query.trim() !== "";
+        const byNode = L.groupPointsByNode(f2);
+        const l2 = searching
+          ? { folders: [], nodes: [...byNode].map(([id, points]) => ({ id, label: points[0].nodeLabel, points })) }
+          : L.levelContents(st.model, s.path, byNode);
         listHost.replaceChildren();
         if (l2.folders.length) {
           listHost.append(xyEl("div", { class: "folders" }, l2.folders.map((f) =>
@@ -403,6 +444,7 @@ class OmpXyPanel extends HTMLElement {
       return xyEl("div", { class: "bar" }, txt,
         xyEl("button", { class: "go", disabled: !(src && dst), onclick: () => doTake(src, dst) }, t("take")),
         xyEl("button", { disabled: !connected, onclick: () => doDisconnect(dst) }, t("disconnect")),
+        xyEl("button", { id: "undo", disabled: !liveUndo(), onclick: doUndo }, "↶ " + t("undo")),
         xyEl("button", { disabled: !(src || dst), onclick: () => { st.selSrc = null; st.selDst = null; render(); }, title: t("clear") }, "✕"));
     }
 
@@ -553,7 +595,9 @@ class OmpXyPanel extends HTMLElement {
     this._restart = () => {
       clearInterval(this._poll);
       clearInterval(this._slow);
+      clearInterval(this._undoTick);
       this._poll = setInterval(() => refresh(false), 2000);
+      this._undoTick = setInterval(() => updateUndo(), 1000);
       this._slow = setInterval(() => refresh(true), 15000);
       refresh(true);
     };
@@ -563,6 +607,7 @@ class OmpXyPanel extends HTMLElement {
   disconnectedCallback() {
     clearInterval(this._poll);
     clearInterval(this._slow);
+    clearInterval(this._undoTick);
   }
 }
 
