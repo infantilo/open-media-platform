@@ -23,6 +23,7 @@ import {
   type SourceEntry,
   type SourceGroupNode,
   type SourceTreeNode,
+  stripInstanceId,
   visibleRows,
 } from "./source-selector-logic.ts";
 import { t, t as tt } from "../shell/i18n.ts";
@@ -199,7 +200,7 @@ export class OmpSourceSelector extends HTMLElement {
       text = `${raw?.label ?? this.#value}${raw ? "" : tt("kss.8b9c05")}`;
       missing = !raw;
     }
-    this.#labelEl.textContent = text;
+    this.#labelEl.textContent = stripInstanceId(text);
     this.#labelEl.title = text;
     this.#labelEl.classList.toggle("missing", missing);
   }
@@ -242,6 +243,7 @@ export class OmpSourceSelector extends HTMLElement {
       } else {
         const icon = n.entry.mediaType ? ICON[n.entry.mediaType] + " " : "";
         el.append(document.createTextNode(`${icon}${n.label}`));
+        if (n.entry.label !== n.label) el.title = n.entry.label;
         if (n.role) {
           const role = document.createElement("span");
           role.className = "role";

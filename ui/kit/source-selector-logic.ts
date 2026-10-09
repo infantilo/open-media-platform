@@ -107,10 +107,19 @@ export interface BuildOptions {
   excludeRoles?: string[];
 }
 
+/**
+ * Der Launcher hängt an Standard-Labels die Instanz-Kurz-ID an ("Source (3f2a1b9c)").
+ * Für den Operator ist sie nebensächlich → in der Anzeige weglassen (Tooltip/Suche
+ * behalten das volle Label). Nur ein genau 8-stelliges Hex-Token in Klammern.
+ */
+export function stripInstanceId(s: string): string {
+  return s.replace(/\s*\([0-9a-f]{8}\)/g, "");
+}
+
 const byLabel = (a: { label: string }, b: { label: string }) => a.label.localeCompare(b.label);
 
 function leaf(e: SourceEntry & { access: SourceAccess }, role?: string): SourceLeafNode {
-  return { type: "source", id: e.id, label: e.label, entry: e, selectable: e.access.selectable, role };
+  return { type: "source", id: e.id, label: stripInstanceId(e.label), entry: e, selectable: e.access.selectable, role };
 }
 
 /**
@@ -155,7 +164,7 @@ function nodeChildren(
     }
     const gh = parseGroupHint(list[0].groupHint)!;
     // Gruppenname ist bei OMP-eigenen Quellen eine Flow-UUID → nodeName bevorzugen.
-    const label = nodeName || gh.group;
+    const label = stripInstanceId(nodeName || gh.group);
     const children = list
       .map((m) => leaf(m, parseGroupHint(m.groupHint)?.role))
       .sort(mediaOrder);
@@ -186,8 +195,16 @@ function nodeGroups(
     } else loose.push(e);
   }
   const nodes: SourceGroupNode[] = [];
+  // Gleichnamige Nodes (ohne Kurz-ID nicht unterscheidbar) behalten sie.
+  const shortCount = new Map<string, number>();
+  for (const members of byNode.values()) {
+    const n = stripInstanceId(members[0].nodeName || "");
+    shortCount.set(n, (shortCount.get(n) ?? 0) + 1);
+  }
   for (const [nodeId, members] of byNode) {
-    const nodeName = members[0].nodeName || nodeId;
+    const rawName = members[0].nodeName || nodeId;
+    const short = stripInstanceId(rawName);
+    const nodeName = (shortCount.get(short) ?? 0) > 1 ? rawName : short;
     const id = `${idPrefix}/n:${nodeId}`;
     nodes.push({
       type: "group",

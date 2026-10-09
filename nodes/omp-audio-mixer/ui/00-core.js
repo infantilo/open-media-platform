@@ -18,6 +18,8 @@
 // ───────────────────────────── Helfer ─────────────────────────────
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+// Instanz-Kurz-ID ("Source (3f2a1b9c)") ist für den Operator nebensächlich → nur in der Anzeige weglassen.
+const shortLabel = (s) => String(s ?? "").replace(/\s*\([0-9a-f]{8}\)/g, "");
 const h = (tag, attrs, ...kids) => {
   const e = document.createElement(tag);
   if (attrs) {

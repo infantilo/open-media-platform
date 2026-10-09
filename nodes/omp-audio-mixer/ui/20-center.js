@@ -215,7 +215,7 @@ class CenterControl {
     const app = this.app;
     const root = h("div", { class: "ctab" });
     const src = this.section(T("am2.4bf36f"));
-    this.select(T("am2.d3402e"), () => [["", T("am2.3621e8")], ...app.state.availableSources.map((s) => [s.senderId, s.label])], (ch) => ch.source || "", (ch, v) => { ch.source = v; app.sendCh(ch.id, "setSource", { senderId: v }); }, src);
+    this.select(T("am2.d3402e"), () => [["", T("am2.3621e8")], ...app.state.availableSources.map((s) => [s.senderId, shortLabel(s.label)])], (ch) => ch.source || "", (ch, v) => { ch.source = v; app.sendCh(ch.id, "setSource", { senderId: v }); }, src);
     const g = this.grid();
     this.slider({ label: T("am2.d9a3ff"), min: -60, max: 12, step: 0.1, def: 0, unit: "dB", get: (ch) => ch.gainDb, set: (ch, v) => app.setGainLive(ch.id, v), fmt: (v) => fmtSigned(v) + " dB" }, g);
     this.toggle(T("am2.5a8536"), (ch) => ch.proc.phaseInvert, (ch, v) => { ch.proc.phaseInvert = v; app.sendCh(ch.id, "setPhase", { invert: v }); }, g);

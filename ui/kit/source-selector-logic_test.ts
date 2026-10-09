@@ -195,3 +195,9 @@ Deno.test("nur unassigned: Sektion und Node-Gruppen sind standardmäßig offen",
   const rows = visibleRows(tree, (g) => g.defaultOpen);
   assertEquals(rows.map((r) => r.node.id), ["sec:unassigned", "sec:unassigned/n:n", "a"]);
 });
+
+Deno.test("Instanz-Kurz-ID wird in Knotennamen und Blättern weggelassen", () => {
+  const tree = buildSourceTree([e("a", { nodeId: "n", nodeName: "Source (3f2a1b9c)", label: "Source (3f2a1b9c) Sender 1" })], {});
+  const rows = visibleRows(tree, () => true);
+  assertEquals(rows.slice(1).map((r) => r.node.label), ["Source", "Source Sender 1"]);
+});

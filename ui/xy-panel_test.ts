@@ -148,3 +148,18 @@ Deno.test("parseBouquets verwirft Unbrauchbares", () => {
   assertEquals(L.parseBouquets(null), []);
   assertEquals(L.parseBouquets({ bouquets: [{ id: "x", name: "n", kind: "routes" }, { id: 1 }, null, { id: "y", name: "m", kind: "?" }] }).length, 1);
 });
+
+Deno.test("Instanz-Kurz-ID wird in der Anzeige weggelassen, gleichnamige Nodes behalten sie", () => {
+  assertEquals(L.stripInstanceId("Source (3f2a1b9c) Sender 1"), "Source Sender 1");
+  assertEquals(L.stripInstanceId("Mischer (Regie)"), "Mischer (Regie)");
+  const pt = (nodeId: string, nodeLabel: string, label: string) => ({ nodeId, nodeLabel, label });
+  const a = pt("a", "Source (3f2a1b9c)", "Source (3f2a1b9c) Sender 1");
+  const b = pt("b", "Player (0a1b2c3d)", "Player (0a1b2c3d) Sender 1");
+  const c = pt("c", "Player (99887766)", "Player (99887766) Sender 1");
+  const names = L.nodeNames([a, b, c]);
+  assertEquals(names.get("a"), "Source");
+  assertEquals(names.get("b"), "Player (0a1b2c3d)");
+  assertEquals(L.shortLabel(a, names.get("a")), "Sender 1");
+  assertEquals(L.fullName(a, names.get("a")), "Source Sender 1");
+  assertEquals(L.fullName(pt("x", "Kamera", "CAM 1"), "Kamera"), "Kamera · CAM 1");
+});

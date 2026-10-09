@@ -96,6 +96,7 @@ input[type=search], select { font: inherit; color: inherit; background: var(--om
 .pt.video { border-left: 3px solid var(--omp-info, #2f8cff); }
 .pt.audio { border-left: 3px solid var(--omp-preset, #43a047); }
 .pt.data { border-left: 3px solid var(--omp-cue, #fb8c00); }
+.pt small.from { color: var(--omp-text, #eaf0fa); font-weight: 600; }
 .pt.sel { border-color: var(--omp-onair, #e53935); box-shadow: var(--omp-glow-onair, 0 0 6px 1px rgba(229,57,53,.6)); }
 .pt.live { background: color-mix(in srgb, var(--omp-preset, #43a047) 16%, var(--omp-surface-raised, #172033)); }
 .pt.dim { opacity: .35; }
@@ -164,6 +165,7 @@ class OmpXyPanel extends HTMLElement {
     const st = {
       sources: [], sinks: [], edges: [], nodes: [], groupTree: { groups: {} }, workflows: [], bouquets: [],
       model: L.buildModel({ nodes: [], groupTree: null, workflows: [] }),
+      names: new Map(), // nodeId → Anzeigename ohne Instanz-Kurz-ID
       side: {
         src: { path: [], media: "", query: "" },
         dst: { path: [], media: "", query: "" },
@@ -234,6 +236,7 @@ class OmpXyPanel extends HTMLElement {
         st.edges = graph.edges || [];
         st.sources = L.normSources(sources);
         st.sinks = L.normSinks(sinks);
+        st.names = L.nodeNames([...st.sources, ...st.sinks]);
         if (slow) {
           st.groupTree = (slow.layout && slow.layout.groups) || { groups: {} };
           st.workflows = Array.isArray(slow.workflows) ? slow.workflows : [];
@@ -261,7 +264,8 @@ class OmpXyPanel extends HTMLElement {
       const m = shadow.getElementById("msg");
       if (m) { m.textContent = text; m.className = "msg" + (err ? " err" : ""); }
     }
-    const pointName = (p) => `${p.nodeLabel} · ${p.label}`;
+    const nodeName = (p) => st.names.get(p.nodeId) ?? L.stripInstanceId(p.nodeLabel);
+    const pointName = (p) => L.fullName(p, nodeName(p));
 
     async function doTake(from, to) {
       if (!L.compatible(from, to)) { setMsg(t("incompatible"), true); return; }
@@ -320,13 +324,15 @@ class OmpXyPanel extends HTMLElement {
       const selSrcPt = bySrc().get(st.selSrc);
       let dim = false;
       if (kind === "dst" && selSrcPt) dim = !L.compatible(selSrcPt, p);
-      let sub = p.nodeLabel;
+      let sub = nodeName(p);
       let live = false;
+      let subTitle = "";
       if (kind === "dst") {
         const from = routeOfSink.get(p.id);
         if (from) {
           const s = srcMap.get(from);
-          sub = s ? t("liveFrom", { from: pointName(s) }) : t("liveFrom", { from: from.slice(0, 8) });
+          sub = "◄ " + (s ? pointName(s) : from.slice(0, 8));
+          subTitle = t("liveFrom", { from: s ? pointName(s) : from });
           live = true;
         } else sub = t("notRouted");
       } else if (st.selDst) {
@@ -335,10 +341,10 @@ class OmpXyPanel extends HTMLElement {
       }
       return xyEl("button", {
         class: ["pt", p.mediaType, sel ? "sel" : "", live ? "live" : "", dim ? "dim" : "", p.online ? "" : "off"].filter(Boolean).join(" "),
-        title: `${pointName(p)}${p.tags.length ? "\n" + p.tags.join(", ") : ""}${p.online ? "" : "\n" + t("offline")}`,
+        title: `${pointName(p)}${subTitle ? "\n" + subTitle : ""}${p.tags.length ? "\n" + p.tags.join(", ") : ""}${p.online ? "" : "\n" + t("offline")}`,
         "aria-pressed": sel ? "true" : "false",
         onclick: () => pick(kind, p),
-      }, xyEl("span", { class: "n", text: p.label }), xyEl("small", { text: sub }));
+      }, xyEl("span", { class: "n", text: L.shortLabel(p, nodeName(p)) }), xyEl("small", { class: live ? "from" : "", text: sub }));
     }
 
     function renderSide(kind) {
@@ -376,7 +382,7 @@ class OmpXyPanel extends HTMLElement {
         }
         for (const n of l2.nodes) {
           const det = xyEl("details", { class: "node", open: n.points.length <= 8 || s.query.trim() ? true : null },
-            xyEl("summary", { text: `${n.label} (${n.points.length})` }),
+            xyEl("summary", { text: `${st.names.get(n.id) ?? L.stripInstanceId(n.label)} (${n.points.length})` }),
             xyEl("div", { class: "points" }, n.points.map((p) => renderPoint(kind, p, routeOfSink, srcMap))));
           listHost.append(det);
         }
@@ -423,7 +429,7 @@ class OmpXyPanel extends HTMLElement {
 
     function nodeOptions(points, selected) {
       const seen = new Map();
-      for (const p of points) if (!seen.has(p.nodeId)) seen.set(p.nodeId, p.nodeLabel);
+      for (const p of points) if (!seen.has(p.nodeId)) seen.set(p.nodeId, st.names.get(p.nodeId) ?? L.stripInstanceId(p.nodeLabel));
       const sel = xyEl("select", {}, xyEl("option", { value: "", text: t("choose") }),
         [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1])).map(([id, label]) => xyEl("option", { value: id, text: label })));
       sel.value = selected || "";

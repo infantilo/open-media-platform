@@ -1,5 +1,7 @@
 // i18n (de/en): Sprache aus <html lang> (setzt die Shell, ui/shell/i18n.ts),
 // Fallback Deutsch. Eigenes Mini-t(), weil Node-Bundles keine Shell-Imports nutzen.
+// Instanz-Kurz-ID ("Source (3f2a1b9c)") ist für den Operator nebensächlich → nur in der Anzeige weglassen.
+const shortLabel = (s) => String(s ?? "").replace(/\s*\([0-9a-f]{8}\)/g, "");
 const T = (() => {
   const D = {
     de: {
@@ -1154,8 +1156,8 @@ class OmpVideoMixerMePanel extends HTMLElement {
             chip.className = "chip";
             const label = document.createElement("span");
             label.className = "label";
-            label.textContent = input ? input.label : "unbekannt";
-            label.title = senderId;
+            label.textContent = input ? shortLabel(input.label) : "unbekannt";
+            label.title = input ? input.label : senderId;
             const removeBtn = document.createElement("omp-button");
             removeBtn.textContent = "×";
             removeBtn.title = T("removeSource");
@@ -1209,7 +1211,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
           addRow.className = "row";
           const available = latestInputs
             .filter((i) => !latestPinned.includes(i.senderId))
-            .map((i) => ({ label: i.mismatch ? `⚠ ${i.label} (${i.format})` : i.label, senderId: i.senderId }));
+            .map((i) => ({ label: i.mismatch ? `⚠ ${shortLabel(i.label)} (${i.format})` : shortLabel(i.label), senderId: i.senderId }));
           const picker = buildSourceSelector(available, T("addSource"));
           picker.addEventListener("change", async () => {
             if (!picker.value) return;
@@ -1290,7 +1292,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         sourceField.className = "field";
         const sourceLabel = document.createElement("label");
         sourceLabel.textContent = T("source");
-        const pipInputEntries = latestInputs.map((i) => ({ label: i.mismatch ? `⚠ ${i.label} (${i.format})` : i.label, senderId: i.senderId }));
+        const pipInputEntries = latestInputs.map((i) => ({ label: i.mismatch ? `⚠ ${shortLabel(i.label)} (${i.format})` : shortLabel(i.label), senderId: i.senderId }));
         const sourceSelect = buildSourceSelector(pipInputEntries, T("black"));
         sourceSelect.value = draft.senderId;
         sourceSelect.addEventListener("change", () => (draft.senderId = sourceSelect.value));
@@ -1712,7 +1714,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         // nicht angeheftete Sonderfälle (aktuelles PGM/PST, Ebenen-Ausgänge) folgen dahinter.
         const pinRank = (id) => { const k = pinned.indexOf(id); return k < 0 ? Number.MAX_SAFE_INTEGER : k; };
         const visibleInputs = inputs.filter((i) => alwaysVisible.has(i.senderId)).sort((a, b) => pinRank(a.senderId) - pinRank(b.senderId));
-        const entries = [{ label: "BLK", senderId: "" }, ...visibleInputs.map((i) => ({ label: i.label, senderId: i.senderId, format: i.format, mixerFormat: i.mixerFormat, mismatch: !!i.mismatch }))];
+        const entries = [{ label: "BLK", senderId: "" }, ...visibleInputs.map((i) => ({ label: shortLabel(i.label), senderId: i.senderId, format: i.format, mixerFormat: i.mixerFormat, mismatch: !!i.mismatch }))];
         // Nur dieses eine Hinweis-Element gezielt ersetzen (statt eines
         // vollen `innerHTML = ""`), damit `renderBusRow`s wiederverwendete
         // Knöpfe/Bilder unangetastet bleiben.

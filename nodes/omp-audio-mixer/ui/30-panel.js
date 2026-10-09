@@ -781,7 +781,7 @@ class MixerApp {
     const st = this.state;
     this.srcBtn.setAttribute("aria-pressed", String(!!this.ui.bySource));
     // „Nach Quelle“ (Kap. 31.6): Sender-Label als Gruppenkopf, Kanäle ohne Quelle unter „Ohne Quelle“.
-    const srcLabel = (id) => ((st.availableSources || []).find((s) => s.senderId === id) || {}).label || id;
+    const srcLabel = (id) => shortLabel(((st.availableSources || []).find((s) => s.senderId === id) || {}).label || id);
     const viewGroups = this.ui.bySource
       ? [...new Set(st.channels.map((c) => c.source || ""))].filter(Boolean).map((id) => ({ id: "src:" + id, label: srcLabel(id), src: id }))
       : st.groups;

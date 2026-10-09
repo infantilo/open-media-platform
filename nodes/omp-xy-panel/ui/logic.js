@@ -31,6 +31,40 @@
     }));
   }
 
+  /**
+   * Der Launcher hängt an Standard-Labels die Instanz-Kurz-ID an ("Source (3f2a1b9c)").
+   * Für den Operator nebensächlich → nur in der Anzeige weglassen.
+   */
+  function stripInstanceId(s) {
+    return String(s ?? "").replace(/\s*\([0-9a-f]{8}\)/g, "");
+  }
+
+  /** nodeId → Anzeigename; gleichnamige Nodes behalten die Kurz-ID (sonst nicht unterscheidbar). */
+  function nodeNames(points) {
+    const raw = new Map();
+    for (const p of points) raw.set(p.nodeId, p.nodeLabel);
+    const count = new Map();
+    for (const l of raw.values()) { const k = stripInstanceId(l); count.set(k, (count.get(k) || 0) + 1); }
+    const out = new Map();
+    for (const [id, l] of raw) out.set(id, count.get(stripInstanceId(l)) > 1 ? l : stripInstanceId(l));
+    return out;
+  }
+
+  /** Punktname für Buttons: Node-Präfix entfällt, wenn das Label ihn ohnehin enthält. */
+  function shortLabel(p, nodeName) {
+    const l = stripInstanceId(p.label);
+    const n = stripInstanceId(nodeName);
+    if (n && l.startsWith(n) && l.length > n.length) return l.slice(n.length).trim() || l;
+    return l;
+  }
+
+  /** Voller Anzeigename "Node · Punkt" (Meldungen, Zielzeile). */
+  function fullName(p, nodeName) {
+    const l = stripInstanceId(p.label);
+    const n = nodeName === undefined ? stripInstanceId(p.nodeLabel) : nodeName;
+    return n && l.startsWith(stripInstanceId(n)) ? l : `${n} · ${l}`;
+  }
+
   function groupPointsByNode(points) {
     const m = new Map();
     for (const p of points) {
@@ -285,7 +319,7 @@
       if (src.length && snk.length) {
         const plan = planTagRoutes(src, snk, { fallbackOrder: b.fallbackOrder });
         routes.push(...plan.routes);
-        for (const u of plan.unmatched) missing.push(`${u.nodeLabel} · ${u.label}`);
+        for (const u of plan.unmatched) missing.push(fullName(u));
       }
     }
     return { routes, missing };
@@ -296,6 +330,10 @@
     BOUQUET_LAYOUT,
     normSources,
     normSinks,
+    stripInstanceId,
+    nodeNames,
+    shortLabel,
+    fullName,
     groupPointsByNode,
     flattenGroup,
     buildModel,
