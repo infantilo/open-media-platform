@@ -909,8 +909,8 @@ export class FlowCanvas extends HTMLElement {
     // Pan/Zoom-Koordinatenrechnung bleibt dadurch unverändert korrekt.
     svg.style.position = "absolute";
     svg.style.top = "0";
-    svg.style.left = "160px";
-    svg.style.width = "calc(100% - 160px)";
+    svg.style.left = "220px";
+    svg.style.width = "calc(100% - 220px)";
     svg.style.height = "100%";
 
     const viewportGroup = document.createElementNS(SVG_NS, "g");
@@ -935,7 +935,7 @@ export class FlowCanvas extends HTMLElement {
     const breadcrumb = document.createElement("div");
     breadcrumb.setAttribute("data-role", "breadcrumb");
     breadcrumb.style.cssText =
-      "position:absolute;top:0;left:160px;right:0;padding:var(--omp-space-2) var(--omp-space-3);" +
+      "position:absolute;top:0;left:220px;right:0;padding:var(--omp-space-2) var(--omp-space-3);" +
       "background:var(--omp-surface);color:var(--omp-text);font-family:var(--omp-font);font-size:var(--omp-font-size-sm);" +
       "display:flex;gap:var(--omp-space-2);align-items:center;z-index:10;border-bottom:1px solid var(--omp-border);";
 
@@ -982,7 +982,7 @@ export class FlowCanvas extends HTMLElement {
     palette.style.cssText =
       "position:absolute;top:0;left:0;bottom:0;width:220px;" +
       "background:var(--omp-surface);color:var(--omp-text);font-family:var(--omp-font);font-size:var(--omp-font-size-sm);" +
-      "padding:var(--omp-space-2);padding-top:36px;overflow-y:auto;" +
+      "padding:var(--omp-space-2);padding-top:0;overflow-y:auto;" +
       "z-index:10;border-right:1px solid var(--omp-border);box-sizing:border-box;";
 
     // Kontextmenü für den Host-Umzug (Bug 1, Nutzerentscheidung
@@ -5205,11 +5205,17 @@ export class FlowCanvas extends HTMLElement {
 
     this.#palette.replaceChildren();
 
+    // Titel + Suchfeld bleiben beim Scrollen der Liste stehen (sticky).
+    const header = document.createElement("div");
+    header.style.cssText =
+      "position:sticky;top:0;z-index:1;background:var(--omp-surface);padding-top:36px;padding-bottom:var(--omp-space-2);";
+    this.#palette.appendChild(header);
+
     const heading = document.createElement("div");
     heading.textContent = tt("flow.322f5f");
     heading.className = "omp-h1";
     heading.style.cssText = "font-size:var(--omp-font-size-md);margin-bottom:var(--omp-space-2);";
-    this.#palette.appendChild(heading);
+    header.appendChild(heading);
 
     const catalog = this.#paletteCatalog;
     if (catalog === null) return;
@@ -5224,7 +5230,7 @@ export class FlowCanvas extends HTMLElement {
 
     const searchWrap = document.createElement("span");
     searchWrap.className = "omp-search-wrap";
-    searchWrap.style.cssText = "display:block;margin-bottom:var(--omp-space-2);";
+    searchWrap.style.cssText = "display:block;";
     const searchInput = document.createElement("input");
     searchInput.setAttribute("data-role", "palette-search");
     searchInput.className = "omp-search-input";
@@ -5237,7 +5243,7 @@ export class FlowCanvas extends HTMLElement {
       this.#renderPaletteList();
     });
     searchWrap.appendChild(searchInput);
-    this.#palette.appendChild(searchWrap);
+    header.appendChild(searchWrap);
     if (searchWasFocused) {
       searchInput.focus();
       if (searchSelectionStart !== null) searchInput.setSelectionRange(searchSelectionStart, searchSelectionStart);
