@@ -221,6 +221,25 @@ export function findPaths(g: GraphData, q: PathQuery): PathResult {
   return result;
 }
 
+/**
+ * Schleife am Anfang der Kette: Speist eine Node der Kette (auch die letzte) den Anfang wieder ein, kommt hier kein
+ * Signal aus einer echten Quelle — die Suche bricht an dieser Stelle nur wegen der Schleife ab. Liefert die Node, die
+ * den Anfang der Kette speist, sonst null.
+ */
+export function loopFeeder(g: GraphData, path: Hop[]): GraphNode | null {
+  if (!path.length) return null;
+  const first = path[0].fromNode;
+  const inChain = new Set(path.map((h) => h.toNode.id));
+  const portNode = new Map<string, GraphNode>();
+  for (const n of g.nodes) for (const p of [...n.inputs, ...n.outputs]) portNode.set(p.id, n);
+  for (const e of g.edges) {
+    if (portNode.get(e.toReceiver)?.id !== first.id) continue;
+    const from = portNode.get(e.fromSender);
+    if (from && inChain.has(from.id)) return from;
+  }
+  return null;
+}
+
 export type IssueSeverity = "error" | "warn";
 
 export interface Issue {
@@ -286,9 +305,10 @@ export function transportName(t: string | undefined): string {
 }
 
 /** Prüft die Kette von vorn nach hinten; Ergebnis ist nach Position sortiert. */
-export function diagnosePath(path: Hop[], ctx: (nodeId: string) => NodeContext): Issue[] {
+export function diagnosePath(path: Hop[], ctx: (nodeId: string) => NodeContext, loopFrom?: GraphNode | null): Issue[] {
   const issues: Issue[] = [];
   const nodes = path.length ? [path[0].fromNode, ...path.map((h) => h.toNode)] : [];
+  if (loopFrom) issues.push({ severity: "error", position: 0, text: t("sp.issue.loop", { node: nodes[0].label, from: loopFrom.label }) });
   nodes.forEach((n, k) => {
     if (n.health !== "ok") issues.push({ severity: "error", position: 2 * k, text: t("sp.issue.offline", { node: n.label }) });
     if (ctx(n.id).crashed) issues.push({ severity: "error", position: 2 * k, text: t("sp.issue.crashed", { node: n.label }) });

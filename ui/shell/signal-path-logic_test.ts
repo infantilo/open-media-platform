@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { diagnosePath, findPaths, withImplicitFeeds, firstError, linkNetNote, netDemandText, type GraphData, type GraphNode } from "./signal-path-logic.ts";
+import { diagnosePath, findPaths, loopFeeder, withImplicitFeeds, firstError, linkNetNote, netDemandText, type GraphData, type GraphNode } from "./signal-path-logic.ts";
 import { setLang } from "./i18n.ts";
 
 setLang("de", false);
@@ -132,4 +132,17 @@ Deno.test("Switcher ohne Receiver: activeInput verlängert die Kette um virtuell
   assertEquals(p.length, 1);
   assertEquals(p[0].map((h) => h.fromNode.id), ["src", "sw"]);
   assertEquals(gg.nodes[1].inputs.length, 0); // Original unverändert
+});
+
+Deno.test("Schleife zweier Switcher wird als Fehler am Kettenanfang gemeldet", () => {
+  const gg: GraphData = {
+    nodes: [node("src", [], [["src.o", V]]), node("a", [], [["a.o", V]]), node("b", [], [["b.o", V]]), node("v", [["v.i", V]], [])],
+    edges: [edge("b.o", "v.i")],
+  };
+  const ext = withImplicitFeeds(gg, new Map([["a", "b.o"], ["b", "a.o"]]));
+  const p = findPaths(ext, { toNodeId: "v" }).paths[0];
+  assertEquals(p[0].fromNode.id, "a");
+  const issues = diagnosePath(p, () => ({}), loopFeeder(ext, p));
+  assertEquals(firstError(issues)?.position, 0);
+  assertEquals(loopFeeder(withImplicitFeeds(gg, new Map([["b", "src.o"]])), findPaths(withImplicitFeeds(gg, new Map([["b", "src.o"]])), { toNodeId: "v" }).paths[0]), null);
 });

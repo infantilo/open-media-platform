@@ -74,6 +74,7 @@ export const en: Record<keyof typeof de, string> = {
   "sp.netLink": "Network {demand}",
   "sp.localLink": "local, no network",
 
+  "sp.issue.loop": "Loop: {node} is fed by {from} – no signal from a real source",
   "sp.issue.offline": "{node} is offline",
   "sp.issue.crashed": "{node} has crashed",
   "sp.issue.formatMismatch": "Formats do not match: {from} → {to}",

@@ -73,6 +73,7 @@ export const de = {
   "sp.netLink": "Netz {demand}",
   "sp.localLink": "lokal, kein Netz",
 
+  "sp.issue.loop": "Schleife: {node} wird von {from} gespeist – es kommt kein Signal aus einer echten Quelle",
   "sp.issue.offline": "{node} ist offline",
   "sp.issue.crashed": "{node} ist abgestürzt",
   "sp.issue.formatMismatch": "Formate passen nicht: {from} → {to}",

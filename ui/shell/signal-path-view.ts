@@ -17,6 +17,7 @@ import {
   type Hop,
   type Issue,
   linkNetNote,
+  loopFeeder,
   type PathQuery,
   MAX_PATHS,
   type NodeContext,
@@ -213,7 +214,7 @@ class SignalPathView extends HTMLElement {
   }
 
   #renderPath(path: Hop[], index: number, total: number): string {
-    const issues = diagnosePath(path, this.#ctx);
+    const issues = diagnosePath(path, this.#ctx, loopFeeder(this.#graph, path));
     const err = firstError(issues);
     const nodes = [path[0].fromNode, ...path.map((h) => h.toNode)];
     const at = (pos: number): Issue[] => issues.filter((i) => i.position === pos);
