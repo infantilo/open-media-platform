@@ -548,6 +548,10 @@ fn build(config: &Config, context: &Arc<MxlContext>, broadcaster: &Arc<Broadcast
     )
     .map_err(|e| format!("MxlVideoOutput (pgm): {e}"))?;
     pgm_output.set_active(true);
+    // PGM nur bei Abnehmer (Nutzerauftrag 2026-10-09): ohne Leser Ventil zu.
+    pgm_output
+        .gate_on_consumers(context.clone(), &config.pgm_flow_id)
+        .map_err(|e| format!("gate pgm output: {e}"))?;
 
     pipeline
         .set_state(gst::State::Playing)

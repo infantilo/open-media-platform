@@ -388,6 +388,8 @@ fn video_caps(
 /// rechnet.
 pub struct MxlVideoOutput {
     valve: gst::Element,
+    /// Gesetzt von [`MxlVideoOutput::gate_on_consumers`], solange geparkt.
+    gate_parked: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
     flowed: Arc<AtomicBool>,
     // heartbeat (Bug-Klasse 2026-08-07, docs/decisions.md Nachtrag 123:
@@ -759,6 +761,7 @@ impl MxlVideoOutput {
 
         Ok(MxlVideoOutput {
             valve,
+            gate_parked: Arc::new(AtomicBool::new(false)),
             running,
             flowed,
             heartbeat,
@@ -1154,7 +1157,81 @@ impl Output for MxlVideoOutput {
     }
 }
 
+/// Tuning von [`MxlVideoOutput::gate_on_consumers`].
+const GATE_POLL: Duration = Duration::from_millis(500);
+/// Ein Leser gilt als aktiv, wenn `lastReadTime` jünger ist als dies.
+const GATE_CONSUMER_FRESH_NS: u64 = 3_000_000_000;
+/// So lange ohne Leser, bevor der Ausgang geparkt wird (Hysterese gegen
+/// kurze Lücken, z. B. Leser-Neustart).
+const GATE_IDLE_BEFORE_PARK_NS: u64 = 10_000_000_000;
+/// Geparkt: alle `GATE_PULSE_EVERY` wird das Ventil für `GATE_PULSE_LEN`
+/// geöffnet. MXL-Leser berühren die `access`-Datei (→ `lastReadTime`) nur
+/// nach einem ERFOLGREICHEN Grain-Read — ohne diese Impulse könnte ein neuer
+/// Leser gegen einen stillstehenden Schreiber nie lesen und der Ausgang
+/// würde nie wieder aktiviert.
+const GATE_PULSE_EVERY: Duration = Duration::from_secs(2);
+const GATE_PULSE_LEN: Duration = Duration::from_millis(500);
+
 impl MxlVideoOutput {
+    /// Aktiviert den Ausgang nur, solange jemand den Flow liest (MXL 1.1:
+    /// `FlowRuntimeInfo::lastReadTime`, vom Domain-Watcher des Schreibers aus
+    /// der `access`-Datei der Leser gepflegt). Ohne Leser wird das Ventil
+    /// (sitzt VOR Skalierung/Konvertierung) geschlossen und spart deren CPU;
+    /// kurze Impulse (`GATE_PULSE_*`) erlauben einem neuen Leser den Anlauf.
+    /// Der Aufrufer sollte vorher `set_active(true)` gesetzt haben; der
+    /// Thread endet mit dem Ausgang (`running`).
+    pub fn gate_on_consumers(&self, context: Arc<MxlContext>, flow_id: &str) -> Result<(), String> {
+        let reader = context
+            .instance
+            .create_flow_reader(flow_id)
+            .map_err(|e| format!("gate: create_flow_reader({flow_id}): {e}"))?
+            .to_grain_reader()
+            .map_err(|e| format!("gate: to_grain_reader: {e}"))?;
+        let valve = self.valve.clone();
+        let running = self.running.clone();
+        let parked = self.gate_parked.clone();
+        thread::spawn(move || {
+            let mut idle_since: Option<u64> = None;
+            let mut last_pulse = std::time::Instant::now();
+            let mut pulse_open_until: Option<std::time::Instant> = None;
+            while running.load(Ordering::Relaxed) {
+                thread::sleep(GATE_POLL);
+                let Ok(info) = reader.get_runtime_info() else { continue };
+                let now = context.instance.get_time();
+                let fresh = now.saturating_sub(info.lastReadTime) < GATE_CONSUMER_FRESH_NS;
+                if fresh {
+                    idle_since = None;
+                    pulse_open_until = None;
+                    if parked.swap(false, Ordering::Relaxed) {
+                        eprintln!("omp-mediaio(mxl): Leser erkannt, Ausgang aktiv");
+                    }
+                    valve.set_property("drop", false);
+                    continue;
+                }
+                let since = *idle_since.get_or_insert(now);
+                if now.saturating_sub(since) < GATE_IDLE_BEFORE_PARK_NS {
+                    continue;
+                }
+                if !parked.swap(true, Ordering::Relaxed) {
+                    eprintln!("omp-mediaio(mxl): kein Leser, Ausgang geparkt");
+                    valve.set_property("drop", true);
+                    last_pulse = std::time::Instant::now();
+                }
+                if let Some(until) = pulse_open_until {
+                    if std::time::Instant::now() >= until {
+                        valve.set_property("drop", true);
+                        pulse_open_until = None;
+                    }
+                } else if last_pulse.elapsed() >= GATE_PULSE_EVERY {
+                    valve.set_property("drop", false);
+                    pulse_open_until = Some(std::time::Instant::now() + GATE_PULSE_LEN);
+                    last_pulse = std::time::Instant::now();
+                }
+            }
+        });
+        Ok(())
+    }
+
     /// Eigenständiger, klonbarer Griff auf das "media-ready"-Flag
     /// (`ARCHITECTURE.md` §5 Punkt 6) — für Aufrufer, deren
     /// `MxlVideoOutput`-Instanz nicht über die gesamte Prozesslaufzeit
