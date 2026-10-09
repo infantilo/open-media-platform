@@ -106,8 +106,11 @@ func NewService(nodes NodeLister, launcherSvc LauncherService, graphSvc GraphSer
 // ALTEN Node eine Kante lief, und die (über den Neustart hinweg
 // stabile) ID am jeweils ANDEREN Ende.
 type edgeRef struct {
-	side        string // "input" oder "output", bezogen auf DIESE Node
-	index       int
+	side  string // "input" oder "output", bezogen auf DIESE Node
+	index int
+	// portID: ID des eigenen Ports der ALTEN Node. Bleibt sie über den Neustart gleich (Nodes
+	// mit deterministischen IDs, z. B. omp-device-hub), gewinnt sie gegenüber dem Index.
+	portID      string
 	otherPortID string
 }
 
@@ -163,6 +166,7 @@ func (s *Service) migrate(inst launcher.Instance, targetHostID string, edges []e
 	}
 
 	newNode = s.restoreOwnState(carry, newNode)
+	newNode = s.awaitEdgePorts(newNode, edges)
 	s.reconnect(context.Background(), newNode, edges)
 	s.moveOptions(oldInstanceID, newInst.ID)
 	s.restoreCarried(carry, newNode)
@@ -211,10 +215,10 @@ func (s *Service) captureEdges(ctx context.Context, oldNode registry.NodeView) [
 	var edges []edgeRef
 	for _, e := range g.Edges {
 		if idx, ok := outputIndex[e.FromSender]; ok {
-			edges = append(edges, edgeRef{side: "output", index: idx, otherPortID: e.ToReceiver})
+			edges = append(edges, edgeRef{side: "output", index: idx, portID: e.FromSender, otherPortID: e.ToReceiver})
 		}
 		if idx, ok := inputIndex[e.ToReceiver]; ok {
-			edges = append(edges, edgeRef{side: "input", index: idx, otherPortID: e.FromSender})
+			edges = append(edges, edgeRef{side: "input", index: idx, portID: e.ToReceiver, otherPortID: e.FromSender})
 		}
 	}
 	return edges
@@ -232,19 +236,33 @@ func (s *Service) reconnect(ctx context.Context, newNode registry.NodeView, edge
 		var fromSender, toReceiver string
 		switch e.side {
 		case "output":
-			if e.index >= len(newNode.Senders) {
+			idx := e.index
+			for i, sn := range newNode.Senders {
+				if e.portID != "" && sn.ID == e.portID {
+					idx = i
+					break
+				}
+			}
+			if idx >= len(newNode.Senders) {
 				slog.Warn("instancemigrate: reconnect skipped, node has fewer senders after restart",
-					"node", newNode.ID, "wantIndex", e.index, "have", len(newNode.Senders))
+					"node", newNode.ID, "wantIndex", idx, "have", len(newNode.Senders))
 				continue
 			}
-			fromSender, toReceiver = newNode.Senders[e.index].ID, e.otherPortID
+			fromSender, toReceiver = newNode.Senders[idx].ID, e.otherPortID
 		case "input":
-			if e.index >= len(newNode.Receivers) {
+			idx := e.index
+			for i, r := range newNode.Receivers {
+				if e.portID != "" && r.ID == e.portID {
+					idx = i
+					break
+				}
+			}
+			if idx >= len(newNode.Receivers) {
 				slog.Warn("instancemigrate: reconnect skipped, node has fewer receivers after restart",
-					"node", newNode.ID, "wantIndex", e.index, "have", len(newNode.Receivers))
+					"node", newNode.ID, "wantIndex", idx, "have", len(newNode.Receivers))
 				continue
 			}
-			fromSender, toReceiver = e.otherPortID, newNode.Receivers[e.index].ID
+			fromSender, toReceiver = e.otherPortID, newNode.Receivers[idx].ID
 		default:
 			continue
 		}
@@ -325,6 +343,7 @@ func (s *Service) RestartInPlace(ctx context.Context, oldInstanceID string) (Res
 		}
 		res.RolledBack, res.NewInstanceID = true, rb.ID
 		rbNode = s.restoreOwnState(carry, rbNode)
+		rbNode = s.awaitEdgePorts(rbNode, edges)
 		res.Reconnected = s.reconnectCounting(ctx, rbNode, edges)
 		s.moveOptions(oldInstanceID, rb.ID)
 		s.restoreCarried(carry, rbNode)
@@ -332,6 +351,7 @@ func (s *Service) RestartInPlace(ctx context.Context, oldInstanceID string) (Res
 	}
 	res.NewInstanceID = newInst.ID
 	newNode = s.restoreOwnState(carry, newNode)
+	newNode = s.awaitEdgePorts(newNode, edges)
 	res.Reconnected = s.reconnectCounting(ctx, newNode, edges)
 	s.moveOptions(oldInstanceID, newInst.ID)
 	s.restoreCarried(carry, newNode)

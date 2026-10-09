@@ -52,9 +52,6 @@ type carried struct {
 	// ownState: der eigene /state der migrierten Instanz (z. B. Quellenwahl eines Switchers,
 	// Programm/Preset eines Mixers) — Werte, die nicht als schreibbarer Parameter existieren.
 	ownState json.RawMessage
-	// receivers: Zahl der Receiver der alten Instanz — dynamisch angelegte (Viewer-Audio-Eingänge,
-	// Mischerkanäle) entstehen erst durch die Zustandswiederherstellung.
-	receivers int
 }
 
 func (s *Service) client() *http.Client {
@@ -66,7 +63,7 @@ func (s *Service) client() *http.Client {
 
 // captureCarried liest (VOR dem Stop) die Referenzen anderer Nodes und die eigenen Parameter.
 func (s *Service) captureCarried(oldNode registry.NodeView) carried {
-	c := carried{receivers: len(oldNode.Receivers)}
+	var c carried
 	toAlias := map[string]string{oldNode.ID: aliasNodePrefix}
 	for i, sn := range oldNode.Senders {
 		toAlias[sn.ID] = fmt.Sprintf("%s%d", aliasSenderPrefix, i)
@@ -125,14 +122,30 @@ func (s *Service) restoreOwnState(c carried, newNode registry.NodeView) registry
 	if err := s.postStateVerified(newNode.APIBaseURL, resolved); err != nil {
 		slog.Warn("instancemigrate: eigener Zustand nicht wiederhergestellt", "node", newNode.APIBaseURL, "error", err)
 	}
-	// Auf die dynamisch angelegten Receiver warten (Re-Registrierung in der Registry).
+	return newNode
+}
+
+// awaitEdgePorts wartet (bis 10 s), bis der neue Node so viele Sender/Receiver registriert hat, wie
+// die zu verkabelnden Kanten per Index brauchen — dynamisch angelegte Ports (Geräte eines
+// Device-Hubs, Viewer-Audio-Eingänge) erscheinen erst nach der Registrierung. Liefert den
+// aktuellen Node.
+func (s *Service) awaitEdgePorts(newNode registry.NodeView, edges []edgeRef) registry.NodeView {
+	needOut, needIn := 0, 0
+	for _, e := range edges {
+		if e.side == "output" && e.index+1 > needOut {
+			needOut = e.index + 1
+		}
+		if e.side == "input" && e.index+1 > needIn {
+			needIn = e.index + 1
+		}
+	}
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if n, ok := s.findNodeByInstance(newNode.InstanceID); ok {
 			newNode = n
-			if len(n.Receivers) >= c.receivers {
-				break
-			}
+		}
+		if len(newNode.Senders) >= needOut && len(newNode.Receivers) >= needIn {
+			break
 		}
 		time.Sleep(registrationPollInterval)
 	}
