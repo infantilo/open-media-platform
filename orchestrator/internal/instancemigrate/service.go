@@ -162,6 +162,7 @@ func (s *Service) migrate(inst launcher.Instance, targetHostID string, edges []e
 		return
 	}
 
+	newNode = s.restoreOwnState(carry, newNode)
 	s.reconnect(context.Background(), newNode, edges)
 	s.moveOptions(oldInstanceID, newInst.ID)
 	s.restoreCarried(carry, newNode)
@@ -323,12 +324,14 @@ func (s *Service) RestartInPlace(ctx context.Context, oldInstanceID string) (Res
 			return res, fmt.Errorf("neue Version fehlgeschlagen (%v) UND Rollback fehlgeschlagen: %w", err, rbErr)
 		}
 		res.RolledBack, res.NewInstanceID = true, rb.ID
+		rbNode = s.restoreOwnState(carry, rbNode)
 		res.Reconnected = s.reconnectCounting(ctx, rbNode, edges)
 		s.moveOptions(oldInstanceID, rb.ID)
 		s.restoreCarried(carry, rbNode)
 		return res, fmt.Errorf("neue Version fehlgeschlagen, auf bisherigen Stand zurückgerollt: %w", err)
 	}
 	res.NewInstanceID = newInst.ID
+	newNode = s.restoreOwnState(carry, newNode)
 	res.Reconnected = s.reconnectCounting(ctx, newNode, edges)
 	s.moveOptions(oldInstanceID, newInst.ID)
 	s.restoreCarried(carry, newNode)

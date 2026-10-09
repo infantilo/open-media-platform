@@ -286,6 +286,42 @@ impl ParamStore for ViewerStore {
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        // GET/POST /state: die dynamisch angelegten Audio-Eingänge (Labels). Der Orchestrator
+        // stellt sie bei einem Instanz-Umzug/-Neustart VOR dem Verkabeln wieder her, sonst fehlten
+        // die Receiver, auf die die Kanten zeigen.
+        if method == "GET" && path == "/state" {
+            let mut labels: Vec<String> = self
+                .audio_inputs
+                .lock()
+                .expect("lock poisoned")
+                .values()
+                .map(|e| e.label.clone())
+                .collect();
+            labels.sort();
+            let inputs: Vec<Value> = labels.into_iter().map(|l| serde_json::json!({ "label": l })).collect();
+            let payload = serde_json::to_vec(&serde_json::json!({ "state": { "audioInputs": inputs } })).unwrap_or_default();
+            return Some(RawResponse { status: 200, content_type: "application/json", body: payload });
+        }
+        if method == "POST" && path == "/state" {
+            let Ok(parsed) = serde_json::from_slice::<Value>(body) else {
+                return Some(RawResponse {
+                    status: 400,
+                    content_type: "application/json",
+                    body: br#"{"error":"invalid JSON body"}"#.to_vec(),
+                });
+            };
+            let wanted: Vec<String> = parsed
+                .get("state")
+                .and_then(|s| s.get("audioInputs"))
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(|e| e.get("label").and_then(Value::as_str).map(str::to_string)).collect())
+                .unwrap_or_default();
+            let existing = self.audio_inputs.lock().expect("lock poisoned").len();
+            for label in wanted.into_iter().skip(existing) {
+                let _ = self.commands.send(ViewerCommand::AddAudioInput { label: Some(label).filter(|l| !l.is_empty()) });
+            }
+            return Some(RawResponse { status: 200, content_type: "application/json", body: br#"{"ok":true}"#.to_vec() });
+        }
         if let Some((status, content_type, body)) = self.connection.handle(method, path, body) {
             return Some(RawResponse {
                 status,

@@ -52,6 +52,9 @@ type carried struct {
 	// ownState: der eigene /state der migrierten Instanz (z. B. Quellenwahl eines Switchers,
 	// Programm/Preset eines Mixers) — Werte, die nicht als schreibbarer Parameter existieren.
 	ownState json.RawMessage
+	// receivers: Zahl der Receiver der alten Instanz — dynamisch angelegte (Viewer-Audio-Eingänge,
+	// Mischerkanäle) entstehen erst durch die Zustandswiederherstellung.
+	receivers int
 }
 
 func (s *Service) client() *http.Client {
@@ -63,7 +66,7 @@ func (s *Service) client() *http.Client {
 
 // captureCarried liest (VOR dem Stop) die Referenzen anderer Nodes und die eigenen Parameter.
 func (s *Service) captureCarried(oldNode registry.NodeView) carried {
-	var c carried
+	c := carried{receivers: len(oldNode.Receivers)}
 	toAlias := map[string]string{oldNode.ID: aliasNodePrefix}
 	for i, sn := range oldNode.Senders {
 		toAlias[sn.ID] = fmt.Sprintf("%s%d", aliasSenderPrefix, i)
@@ -104,6 +107,38 @@ func (s *Service) captureCarried(oldNode registry.NodeView) carried {
 	return c
 }
 
+// restoreOwnState spielt den eigenen Zustand der neuen Instanz VOR dem Verkabeln zurück: Nodes mit
+// dynamischen Receivern (Viewer-Audio-Eingänge, Mischerkanäle) legen diese erst dadurch an, und die
+// Kanten referenzieren sie per Index. Liefert den danach aktuellen Node (mit allen Receivern).
+func (s *Service) restoreOwnState(c carried, newNode registry.NodeView) registry.NodeView {
+	if len(c.ownState) == 0 || newNode.APIBaseURL == "" {
+		return newNode
+	}
+	fromAlias := map[string]string{aliasNodePrefix: newNode.ID}
+	for i, sn := range newNode.Senders {
+		fromAlias[fmt.Sprintf("%s%d", aliasSenderPrefix, i)] = sn.ID
+	}
+	resolved, err := mapStrings(c.ownState, fromAlias)
+	if err != nil {
+		return newNode
+	}
+	if err := s.postStateVerified(newNode.APIBaseURL, resolved); err != nil {
+		slog.Warn("instancemigrate: eigener Zustand nicht wiederhergestellt", "node", newNode.APIBaseURL, "error", err)
+	}
+	// Auf die dynamisch angelegten Receiver warten (Re-Registrierung in der Registry).
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if n, ok := s.findNodeByInstance(newNode.InstanceID); ok {
+			newNode = n
+			if len(n.Receivers) >= c.receivers {
+				break
+			}
+		}
+		time.Sleep(registrationPollInterval)
+	}
+	return newNode
+}
+
 // restoreCarried spielt Parameter und Referenzen gegen die IDs der neuen Instanz zurück.
 func (s *Service) restoreCarried(c carried, newNode registry.NodeView) {
 	if newNode.APIBaseURL != "" {
@@ -116,13 +151,6 @@ func (s *Service) restoreCarried(c carried, newNode registry.NodeView) {
 	fromAlias := map[string]string{aliasNodePrefix: newNode.ID}
 	for i, sn := range newNode.Senders {
 		fromAlias[fmt.Sprintf("%s%d", aliasSenderPrefix, i)] = sn.ID
-	}
-	if len(c.ownState) > 0 && newNode.APIBaseURL != "" {
-		if resolved, err := mapStrings(c.ownState, fromAlias); err == nil {
-			if err := s.postStateVerified(newNode.APIBaseURL, resolved); err != nil {
-				slog.Warn("instancemigrate: eigener Zustand nicht wiederhergestellt", "node", newNode.APIBaseURL, "error", err)
-			}
-		}
 	}
 	for _, cs := range c.consumers {
 		resolved, err := mapStrings(cs.aliased, fromAlias)
