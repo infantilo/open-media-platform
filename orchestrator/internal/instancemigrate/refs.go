@@ -49,6 +49,9 @@ type consumerState struct {
 type carried struct {
 	consumers []consumerState
 	ownParams map[string]json.RawMessage
+	// ownState: der eigene /state der migrierten Instanz (z. B. Quellenwahl eines Switchers,
+	// Programm/Preset eines Mixers) — Werte, die nicht als schreibbarer Parameter existieren.
+	ownState json.RawMessage
 }
 
 func (s *Service) client() *http.Client {
@@ -91,6 +94,12 @@ func (s *Service) captureCarried(oldNode registry.NodeView) carried {
 	}
 	if oldNode.APIBaseURL != "" {
 		c.ownParams = s.captureParams(oldNode.APIBaseURL)
+		if raw, err := getJSON(s.client(), oldNode.APIBaseURL+"/state"); err == nil {
+			// Eigene IDs aliasieren (z. B. ein Mixer, der seine eigenen Ebenen referenziert).
+			if aliased, err := mapStrings(raw, toAlias); err == nil {
+				c.ownState = aliased
+			}
+		}
 	}
 	return c
 }
@@ -107,6 +116,13 @@ func (s *Service) restoreCarried(c carried, newNode registry.NodeView) {
 	fromAlias := map[string]string{aliasNodePrefix: newNode.ID}
 	for i, sn := range newNode.Senders {
 		fromAlias[fmt.Sprintf("%s%d", aliasSenderPrefix, i)] = sn.ID
+	}
+	if len(c.ownState) > 0 && newNode.APIBaseURL != "" {
+		if resolved, err := mapStrings(c.ownState, fromAlias); err == nil {
+			if err := s.postStateVerified(newNode.APIBaseURL, resolved); err != nil {
+				slog.Warn("instancemigrate: eigener Zustand nicht wiederhergestellt", "node", newNode.APIBaseURL, "error", err)
+			}
+		}
 	}
 	for _, cs := range c.consumers {
 		resolved, err := mapStrings(cs.aliased, fromAlias)
