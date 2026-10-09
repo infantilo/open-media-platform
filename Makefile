@@ -1,4 +1,4 @@
-.PHONY: preflight doctor update-keygen update-bundle build test check check-ci up down ci ui nodes contract start hosts stop status mtls-up mtls-down mtls-issue-certs nmos-registry-tls-up nmos-registry-tls-down nats-tls-up nats-tls-down backup restore proxy-up proxy-down soak
+.PHONY: preflight doctor update-keygen update-bundle build test check check-ci up down ci ui nodes contract start hosts stop status mtls-up mtls-down mtls-issue-certs nmos-registry-tls-up nmos-registry-tls-down nats-tls-up nats-tls-down backup restore proxy-up proxy-down soak clean-cache
 
 GO_MODULES := orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check tools/update-bundle host-agent supervisor update nodeoptions
 
@@ -547,5 +547,15 @@ minio-down:
 # CSV bis dahin bleibt gültig.
 soak:
 	@./deploy/dev/soak-omp.sh $(ARGS)
+
+# Gibt Plattenplatz frei: Cargo-Inkrementalstände (reine Build-Caches,
+# regenerierbar; meist der größte Posten) und ungetaggte Podman-Images.
+# Berührt weder Container, Volumes noch getaggte Images. Der nächste
+# Build ist einmalig etwas langsamer. Tieferes Aufräumen: `cargo clean`.
+clean-cache:
+	@df -h / | tail -1
+	rm -rf nodes/target/debug/incremental nodes/target/release/incremental
+	-podman image prune -f
+	@df -h / | tail -1
 
 ci: check
