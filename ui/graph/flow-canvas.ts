@@ -19,6 +19,7 @@ import {
   NODE_WIDTH,
   nodeHeight,
   PREVIEW_HEIGHT,
+  PREVIEW_RESERVED,
   PREVIEW_WIDTH,
   type Point,
   type PortSide,
@@ -57,6 +58,7 @@ import { apiFetch, connectionMonitor } from "../shell/connection.ts";
 import { STANDARD_FORMATS, uniqueRoleName } from "./roles.ts";
 import { renameRole } from "./role-designer-logic.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
+import { openPortTagEditor } from "./port-tag-editor.ts";
 import {
   bcp008ParamNames,
   bcp008StatusColor,
@@ -1000,7 +1002,8 @@ export class FlowCanvas extends HTMLElement {
 
     // Kontextmenü für den Host-Umzug (Bug 1, Nutzerentscheidung
     // 2026-08-14: Drag bleibt in der eigenen Zone geklemmt, Umzug läuft
-    // stattdessen über Rechtsklick auf eine Kachel, s.
+    // stattdessen über den ⇄-Knopf im Kachelkopf (seit 2026-10-09, vorher
+    // Rechtsklick), s.
     // #openHostMigrateMenu) — leichtgewichtiges HTML-Overlay statt
     // SVG-Untermenü, gleiches Grundprinzip wie Palette/Panel oben.
     const hostMigrateMenu = document.createElement("div");
@@ -3620,7 +3623,10 @@ export class FlowCanvas extends HTMLElement {
     // Titel bleibt über das `<title>`-Tooltip (Hover) erreichbar.
     const fullLabel = isGroup ? `▣ ${tile.label}` : tile.label;
     const hasStopButton = isGroup ? !!this.#groupTree.groups[tile.id]?.workflowId : !!tile.instanceId;
-    const titleMaxChars = hasStopButton ? 17 : 20;
+    const hasTagButton = !isGroup && tile.inputs.length + tile.outputs.length > 0;
+    // Host-Umzug per Knopf statt Kontextmenü (nur eigenständige Instanz-Kacheln in der Host-Ansicht).
+    const hasMigrateButton = !isGroup && !!tile.instanceId && this.#hostViewEnabled && this.#scope === null;
+    const titleMaxChars = (hasStopButton ? 17 : 20) - (hasTagButton ? 3 : 0) - (hasMigrateButton ? 3 : 0);
     const title = document.createElementNS(SVG_NS, "text");
     title.setAttribute("x", "8");
     title.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
@@ -3633,6 +3639,52 @@ export class FlowCanvas extends HTMLElement {
       title.appendChild(titleTooltip);
     }
     g.appendChild(title);
+
+    if (hasMigrateButton) {
+      const migBtn = document.createElementNS(SVG_NS, "text");
+      migBtn.setAttribute("x", String(NODE_WIDTH - (hasStopButton ? 26 : 8)));
+      migBtn.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
+      migBtn.setAttribute("text-anchor", "end");
+      migBtn.setAttribute("fill", "#c8c8c8");
+      migBtn.setAttribute("font-size", "12");
+      migBtn.style.cursor = "pointer";
+      migBtn.setAttribute("data-role", "migrate-instance");
+      migBtn.textContent = "⇄";
+      const migTitle = document.createElementNS(SVG_NS, "title");
+      migTitle.textContent = tt("flow.migrateButton");
+      migBtn.appendChild(migTitle);
+      migBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+      migBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        this.#openHostMigrateMenu(ev as MouseEvent, tile.id);
+      });
+      g.appendChild(migBtn);
+    }
+
+    // Tag-Editor (🏷): EXPLICIT-Tags der Ports dieser Kachel bearbeiten.
+    if (hasTagButton) {
+      const tagBtn = document.createElementNS(SVG_NS, "text");
+      tagBtn.setAttribute("x", String(NODE_WIDTH - (hasStopButton ? 26 : 8) - (hasMigrateButton ? 18 : 0)));
+      tagBtn.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
+      tagBtn.setAttribute("text-anchor", "end");
+      tagBtn.setAttribute("font-size", "12");
+      tagBtn.style.cursor = "pointer";
+      tagBtn.setAttribute("data-role", "edit-port-tags");
+      tagBtn.textContent = "🏷";
+      const tagTitle = document.createElementNS(SVG_NS, "title");
+      tagTitle.textContent = tt("portTags.button");
+      tagBtn.appendChild(tagTitle);
+      tagBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+      tagBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const targets = [
+          ...tile.outputs.map((p) => ({ side: "output" as const, portId: p.id, label: p.label })),
+          ...tile.inputs.map((p) => ({ side: "input" as const, portId: p.id, label: p.label })),
+        ];
+        void openPortTagEditor({ x: ev.clientX, y: ev.clientY }, targets, (m) => this.#showToast(m));
+      });
+      g.appendChild(tagBtn);
+    }
 
     // Stop-Control (UMSETZUNG.md C8): nur an Kacheln, deren Node einen
     // Instanz-Tag trägt — manuell gestartete/entdeckte Nodes (alle vor
@@ -3684,17 +3736,21 @@ export class FlowCanvas extends HTMLElement {
       g.appendChild(stopBtn);
     }
 
+    const reserved = tile.kind !== "group" && this.#hasPreviewById.get(tile.id) ? PREVIEW_RESERVED : 0;
     tile.inputs.forEach((port, i) => {
-      this.#renderPort(port, i, tile.inputs.length, "input", pos, height, g);
+      this.#renderPort(port, i, tile.inputs.length, "input", pos, height, g, reserved);
     });
     tile.outputs.forEach((port, i) => {
-      const circle = this.#renderPort(port, i, tile.outputs.length, "output", pos, height, g);
+      const circle = this.#renderPort(port, i, tile.outputs.length, "output", pos, height, g, reserved);
       circle.addEventListener("pointerdown", (ev) => this.#onOutputPortPointerDown(ev, port));
     });
 
     if (!isGroup) {
       const previewEl = this.#renderPreviewThumbnail(tile.id);
-      if (previewEl) g.appendChild(previewEl);
+      if (previewEl) {
+        previewEl.setAttribute("y", String(height - PREVIEW_HEIGHT - 4));
+        g.appendChild(previewEl);
+      }
     }
 
     g.addEventListener("pointerdown", (ev) => this.#onTilePointerDown(ev, tile.id));
@@ -3704,16 +3760,8 @@ export class FlowCanvas extends HTMLElement {
         this.#enterScope(tile.id);
       });
     }
-    // Umzug auf einen anderen Host: Rechtsklick statt Drag, s.
-    // #openHostMigrateMenu-Doku (Bug 1) — nur für eigenständige
-    // Instanz-Kacheln in der Host-Ansicht sinnvoll.
-    if (!isGroup && tile.instanceId && this.#hostViewEnabled && this.#scope === null) {
-      g.addEventListener("contextmenu", (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        this.#openHostMigrateMenu(ev as MouseEvent, tile.id);
-      });
-    }
+    // Umzug auf einen anderen Host: ⇄-Knopf im Kachelkopf statt Drag, s.
+    // #openHostMigrateMenu-Doku (Bug 1).
 
     return g;
   }
@@ -3754,7 +3802,7 @@ export class FlowCanvas extends HTMLElement {
 
     const fo = document.createElementNS(SVG_NS, "foreignObject");
     fo.setAttribute("x", "8");
-    fo.setAttribute("y", String(HEADER_HEIGHT + 4));
+    fo.setAttribute("y", "0");
     fo.setAttribute("width", String(PREVIEW_WIDTH));
     fo.setAttribute("height", String(PREVIEW_HEIGHT));
     fo.style.pointerEvents = "none"; // Ziehen/Auswählen der Kachel bleibt unverändert möglich.
@@ -3866,8 +3914,17 @@ export class FlowCanvas extends HTMLElement {
     nodePos: Point,
     height: number,
     parent: SVGGElement,
+    reservedBottom = 0,
   ): SVGCircleElement {
-    const world = portPosition(nodePos.x, nodePos.y, height, index, count, side);
+    const world = portPosition(
+      nodePos.x,
+      nodePos.y,
+      height,
+      index,
+      count,
+      side,
+      reservedBottom,
+    );
     const cx = world.x - nodePos.x;
     const cy = world.y - nodePos.y;
     const circle = document.createElementNS(SVG_NS, "circle");
@@ -3888,7 +3945,6 @@ export class FlowCanvas extends HTMLElement {
     const titleEl = document.createElementNS(SVG_NS, "title");
     titleEl.textContent = port.label;
     circle.appendChild(titleEl);
-
     // Immer sichtbares Kurz-Label (Nutzerfund 2026-07-16): bisher stand
     // der Port-Name nur im Hover-Tooltip — an einer Kachel mit mehreren
     // Ports desselben Typs (PGM/PST, Fill/Key) war von außen nicht
@@ -3983,7 +4039,15 @@ export class FlowCanvas extends HTMLElement {
   #portWorldPosition(loc: PortLocation): Point {
     const tilePos = this.#positions[loc.tileId] ?? { x: 0, y: 0 };
     const height = this.#tileHeightById.get(loc.tileId) ?? nodeHeight(0, 0);
-    return portPosition(tilePos.x, tilePos.y, height, loc.index, loc.count, loc.side);
+    return portPosition(
+      tilePos.x,
+      tilePos.y,
+      height,
+      loc.index,
+      loc.count,
+      loc.side,
+      this.#hasPreviewById.get(loc.tileId) ? PREVIEW_RESERVED : 0,
+    );
   }
 
   #findPortWorldPosition(portId: string): Point | null {
@@ -3993,6 +4057,8 @@ export class FlowCanvas extends HTMLElement {
 
   #onTilePointerDown(ev: PointerEvent, tileId: string) {
     ev.stopPropagation();
+    // Nur die linke Taste startet einen Drag.
+    if (ev.button !== 0) return;
     if (ev.shiftKey) {
       this.#toggleSelection(tileId);
       return;
@@ -4026,6 +4092,7 @@ export class FlowCanvas extends HTMLElement {
 
   #onOutputPortPointerDown(ev: PointerEvent, port: GraphPort) {
     ev.stopPropagation();
+    if (ev.button !== 0) return; // nur linke Taste verbindet
     this.#svg.setPointerCapture(ev.pointerId);
     const fromWorld = this.#findPortWorldPosition(port.id) ?? { x: 0, y: 0 };
     this.#drag = {
@@ -4212,8 +4279,8 @@ export class FlowCanvas extends HTMLElement {
   }
 
   // Kapitel 13 Teil 3 (§13.4: "Umzug"), Umsetzung seit Bug 1 (2026-08-14)
-  // per Rechtsklick statt Drag (s. #clampToOwnZone-Doku) — Rechtsklick auf
-  // eine Instanz-Kachel in der Host-Ansicht öffnet ein Kontextmenü mit
+  // per ⇄-Knopf statt Drag (s. #clampToOwnZone-Doku; früher Rechtsklick) — der Knopf an
+  // einer Instanz-Kachel in der Host-Ansicht öffnet ein Menü mit
   // allen anderen echten Hosts. Für eine eigenständige Instanz ruft die
   // Auswahl #confirmAndMigrateInstance() (wie zuvor der Drag-Pfad); für
   // eine Workflow-Rollen-Kachel (nur über die Workflow-Filter-Ansicht in

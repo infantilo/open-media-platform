@@ -66,6 +66,10 @@ export const MIN_BODY_HEIGHT = 40;
 export const PREVIEW_WIDTH = NODE_WIDTH - 16;
 export const PREVIEW_HEIGHT = Math.round((PREVIEW_WIDTH * 9) / 16);
 const PREVIEW_MARGIN = 4;
+/** Unten in der Kachel reservierter Platz der Inline-Vorschau; die Ports
+ * werden nur über den Bereich darüber verteilt (sonst überdeckt das Bild
+ * die Port-Labels). */
+export const PREVIEW_RESERVED = PREVIEW_HEIGHT + PREVIEW_MARGIN * 2;
 
 /** Höhe einer Kachel abhängig von der größeren Port-Anzahl (Input/Output)
  * plus, falls `hasPreview`, reserviertem Platz für die Inline-Vorschau. */
@@ -88,8 +92,9 @@ export function portPosition(
   index: number,
   count: number,
   side: PortSide,
+  reservedBottom = 0,
 ): Point {
-  const bodyHeight = nodeHeightValue - HEADER_HEIGHT;
+  const bodyHeight = nodeHeightValue - HEADER_HEIGHT - reservedBottom;
   const y = nodeY + HEADER_HEIGHT + (bodyHeight * (index + 1)) / (count + 1);
   const x = side === "input" ? nodeX : nodeX + NODE_WIDTH;
   return { x, y };
