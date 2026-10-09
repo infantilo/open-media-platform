@@ -240,7 +240,9 @@ pub fn build_mjpeg_branch(
     upstream_pad
         .link(&queue_sink)
         .map_err(|e| format!("link upstream to queue: {e:?}"))?;
-    gst::Element::link_many([&queue, &videoscale, &videorate, &caps, &jpegenc, &appsink])
+    // videorate VOR videoscale: überzählige Bilder (z. B. 25 -> 5 fps) werden
+    // verworfen, bevor sie aufwendig skaliert werden.
+    gst::Element::link_many([&queue, &videorate, &videoscale, &caps, &jpegenc, &appsink])
         .map_err(|e| format!("link mjpeg branch: {e}"))?;
 
     let app_sink: gst_app::AppSink = appsink

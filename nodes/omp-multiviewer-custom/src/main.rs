@@ -157,6 +157,10 @@ fn is_lowres_companion(s: &is04::Sender) -> bool {
         .unwrap_or(false)
 }
 
+/// Lowres-Flows (320x180) nur für Kacheln bis zu dieser Breite — größere
+/// Kacheln würden sichtbar aufgeblasen, dort bleibt Highres+Downscale.
+const LOWRES_MAX_TILE_WIDTH: u32 = 400;
+
 /// Gruppenname eines Grouphint-Tags (`"<group>:<role>[:<scope>]"`) mit
 /// der gesuchten Rolle.
 fn grouphint_group<'a>(s: &'a is04::Sender, role: &str) -> Option<&'a str> {
@@ -241,7 +245,10 @@ fn resolve_pips(layout: &Layout, sources: &[SourceInfo]) -> Vec<ResolvedPip> {
             let source = pip.sender_id.as_deref().and_then(|id| sources.iter().find(|s| s.sender_id == id));
             ResolvedPip {
                 id: pip.id.clone(),
-                flow_id: source.map(|s| s.lowres_flow_id.clone().unwrap_or_else(|| s.flow_id.clone())),
+                flow_id: source.map(|s| match &s.lowres_flow_id {
+                    Some(low) if pip.width <= LOWRES_MAX_TILE_WIDTH => low.clone(),
+                    _ => s.flow_id.clone(),
+                }),
                 // Quellen-LABEL (s. ResolvedPip-Doku), nie die rohe
                 // senderId — Nutzerfund 2026-08-20.
                 source_label: source.map(|s| s.label.clone()),
@@ -727,6 +734,7 @@ async fn discovery_loop(
             .expect("lock poisoned")
             .pips
             .iter()
+            .filter(|p| p.width <= LOWRES_MAX_TILE_WIDTH)
             .filter_map(|p| p.sender_id.clone())
             .collect();
         for src in discovered.iter_mut() {
