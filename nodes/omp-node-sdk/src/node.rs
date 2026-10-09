@@ -824,23 +824,69 @@ pub async fn run(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<(), B
     std::future::pending().await
 }
 
+/// Von `POST /label` (server.rs) gesetztes, noch nicht angewandtes neues Label
+/// (Nutzerwunsch 2026-10-09: Instanz umbenennen ohne Neustart). Die Heartbeat-
+/// Schleife holt es ab, benennt Node/Device/Sender/Receiver um und registriert neu.
+static PENDING_LABEL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+static LABEL_NOTIFY: std::sync::LazyLock<tokio::sync::Notify> =
+    std::sync::LazyLock::new(tokio::sync::Notify::new);
+
+/// Meldet ein neues Node-Label an die Heartbeat-Schleife (leere Labels ignoriert der Aufrufer).
+pub(crate) fn request_relabel(label: String) {
+    *PENDING_LABEL.lock().expect("lock poisoned") = Some(label);
+    LABEL_NOTIFY.notify_one();
+}
+
+/// Ersetzt den Präfix `old` durch `new` — Ressourcen-Labels sind `"<Node-Label> Device"`,
+/// `"<Node-Label> Sender 1"` usw.; explizit gesetzte Spec-Labels ohne diesen Präfix bleiben.
+fn relabel(s: &mut String, old: &str, new: &str) {
+    if let Some(rest) = s.strip_prefix(old) {
+        *s = format!("{new}{rest}");
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn heartbeat_loop(
     registry: RegistryClient,
     node_id: String,
-    node_res: NodeResource,
-    sources: Vec<Source>,
-    flows: Vec<FlowResource>,
-    senders: Vec<Sender>,
+    mut node_res: NodeResource,
+    mut sources: Vec<Source>,
+    mut flows: Vec<FlowResource>,
+    mut senders: Vec<Sender>,
     shared_receivers: Arc<std::sync::Mutex<RegisteredReceivers>>,
     publisher: Option<Arc<health::Publisher>>,
-    label: String,
+    mut label: String,
     media_ready: MediaReadySource,
     liveness: Arc<crate::liveness::LivenessMonitor>,
 ) {
     let mut interval = tokio::time::interval(HEARTBEAT_INTERVAL);
     loop {
-        interval.tick().await;
+        let mut force_register = false;
+        tokio::select! {
+            _ = interval.tick() => {}
+            _ = LABEL_NOTIFY.notified() => {}
+        }
+        let pending = PENDING_LABEL.lock().expect("lock poisoned").take();
+        if let Some(new_label) = pending {
+            if new_label != label {
+                relabel(&mut node_res.label, &label, &new_label);
+                for s in &mut sources { relabel(&mut s.label, &label, &new_label); }
+                for f in &mut flows { relabel(f.label_mut(), &label, &new_label); }
+                for s in &mut senders { relabel(&mut s.label, &label, &new_label); }
+                {
+                    let mut shared = shared_receivers.lock().expect("lock poisoned");
+                    relabel(&mut shared.device.label, &label, &new_label);
+                    for r in &mut shared.receivers { relabel(&mut r.label, &label, &new_label); }
+                    for extra in &mut shared.extra_senders {
+                        relabel(&mut extra.sender.label, &label, &new_label);
+                        if let Some(src) = extra.source.as_mut() { relabel(&mut src.label, &label, &new_label); }
+                        if let Some(fl) = extra.flow.as_mut() { relabel(fl.label_mut(), &label, &new_label); }
+                    }
+                }
+                label = new_label;
+                force_register = true;
+            }
+        }
 
         let registry_clone = registry.clone();
         let node_id_clone = node_id.clone();
@@ -865,8 +911,8 @@ async fn heartbeat_loop(
             (shared.device.clone(), shared.receivers.clone(), all_sources, all_flows, all_senders)
         };
         match heartbeat_result {
-            Ok(Ok(())) => {}
-            Ok(Err(HeartbeatError::NotRegistered)) => {
+            Ok(Ok(())) if !force_register => {}
+            Ok(Ok(())) | Ok(Err(HeartbeatError::NotRegistered)) => {
                 register_with_retry(
                     &registry,
                     &node_res,

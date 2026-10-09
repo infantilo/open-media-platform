@@ -158,6 +158,21 @@ fn handle(mut request: Request, store: &Arc<dyn ParamStore>) {
 }
 
 fn route(method: &Method, url: &str, body: &[u8], store: &Arc<dyn ParamStore>) -> ResponseBox {
+    // Instanz umbenennen ohne Neustart (orchestrator: PATCH /api/v1/instances/{id}).
+    if *method == Method::Post && url == "/label" {
+        let label = serde_json::from_slice::<Value>(body)
+            .ok()
+            .and_then(|v| v.get("label").and_then(|l| l.as_str()).map(|l| l.trim().to_string()))
+            .filter(|l| !l.is_empty());
+        return match label {
+            Some(label) => {
+                crate::node::request_relabel(label);
+                json_response(202, &serde_json::json!({"ok": true}))
+            }
+            None => error_response(400, "body must be {\"label\": \"<non-empty>\"}"),
+        };
+    }
+
     if *method == Method::Get && url == "/descriptor.json" {
         return json_response(200, &store.descriptor());
     }

@@ -80,7 +80,10 @@ In diesem Beispiel sind auf der Arbeitsfläche sichtbar:
 Im Node-Katalog links auf einen „+ <Node-Typ>"-Knopf klicken (z. B.
 „+ Source"). Die Instanz erscheint nach kurzer Zeit als neue Kachel auf
 der Arbeitsfläche und gleichzeitig im Katalogeintrag mit CPU-/RAM-Werten
-und einem „Stop"-Knopf.
+und einem „Stop"-Knopf. Neben dem Knopf steht ein Feld **„Name (optional)"**:
+Wer dort einen Namen einträgt, bekommt die Instanz unter diesem Namen
+(statt „Typ (Kurz-ID)") — er erscheint auch als Quellen-/Senken-Name in
+Kreuzschienen und Mischer-Auswahllisten. Die Instanz-ID bleibt davon unberührt.
 
 ### 2.2 Verbinden (Routing)
 
@@ -189,6 +192,19 @@ automatischer Neustarts nach einem Absturz:
 Ein Prozess, der abstürzt, wird automatisch neu gestartet (mit einer
 Bremse gegen Neustart-Schleifen) — die Neustarts-Spalte macht das
 sichtbar, ohne dass man die Logs durchsuchen muss.
+
+In der Spalte **Aktionen** hat jede Zeile zwei Knöpfe:
+
+- **Umbenennen** ändert den Anzeigenamen der laufenden Instanz — ohne
+  Neustart und bei gleicher Instanz-ID. Der Node meldet den neuen Namen
+  (samt seinen Sendern/Empfängern) innerhalb weniger Sekunden neu an; der Name
+  bleibt auch nach Neustarts erhalten. Läuft der Node noch mit einem
+  älteren Programmstand ohne diese Funktion, gilt der Name erst ab dem
+  nächsten Neustart (Hinweis erscheint).
+- **Verschieben …** zieht die Instanz auf einen anderen Host (oder zurück auf
+  „lokal"), nach einer Rückfrage.
+
+Beides ist Administratoren vorbehalten.
 
 Nach einem **System-Update** (Abschnitt 7, „System-Update") trägt eine
 Instanz das Kennzeichen **„veraltet"**, wenn ihr Programm durch das Update

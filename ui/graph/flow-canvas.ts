@@ -5379,6 +5379,14 @@ export class FlowCanvas extends HTMLElement {
       // #renderRunningWorkflowScope) ist es dagegen ein ganz normaler
       // Instanz-Start — #startInstance() selbst erkennt den offenen
       // Live-Scope und ordnet die neue Instanz dort zu.
+      // Optionaler Anzeigename (Nutzerwunsch 2026-10-09) — wird als label an POST /instances gereicht.
+      const nameInput = document.createElement("input");
+      nameInput.type = "text";
+      nameInput.placeholder = tt("flow.nameOptional");
+      nameInput.title = tt("flow.nameOptionalTitle");
+      nameInput.style.cssText = "font-size:var(--omp-font-size-xs);width:110px;padding:2px 4px;";
+      row.appendChild(nameInput);
+
       btn.addEventListener("click", () => {
         if (this.#workflowEditId) {
           const wf = this.#workflows.find((w) => w.id === this.#workflowEditId);
@@ -5392,7 +5400,8 @@ export class FlowCanvas extends HTMLElement {
         // Klick auf den Katalog-Button startete sofort einen Prozess.
         void (async () => {
           if (!(await confirmDialog(tt("flow.confirmStartNode", { p0: entry.type }), { confirmLabel: tt("flow.confirmStartLabel") }))) return;
-          await this.#startInstance(entry.type, entry.version, hostSelect?.value || undefined, requiredIoPort);
+          await this.#startInstance(entry.type, entry.version, hostSelect?.value || undefined, requiredIoPort, nameInput.value.trim() || undefined);
+          nameInput.value = "";
         })();
       });
       row.appendChild(btn);
@@ -5568,7 +5577,7 @@ export class FlowCanvas extends HTMLElement {
     return row;
   }
 
-  async #startInstance(type: string, version?: string, hostId?: string, requiredIoPort?: { cardType: string; direction: string }) {
+  async #startInstance(type: string, version?: string, hostId?: string, requiredIoPort?: { cardType: string; direction: string }, label?: string) {
     try {
       const res = await apiFetch("/api/v1/instances", {
         method: "POST",
@@ -5578,6 +5587,7 @@ export class FlowCanvas extends HTMLElement {
           ...(version ? { version } : {}),
           ...(hostId ? { hostId } : {}),
           ...(requiredIoPort ? { requiredIoPort } : {}),
+          ...(label ? { label } : {}),
         }),
       });
       if (!res.ok) {

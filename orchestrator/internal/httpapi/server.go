@@ -131,6 +131,8 @@ type LauncherService interface {
 	// Instanz-Optionen von optionsFrom — s. launcher.Launcher.StartPinned.
 	StartPinned(nodeType, version, hostID, customLabel string, extraEnv map[string]string, optionsFrom, pin string) (launcher.Instance, error)
 	Stop(id string) error
+	// Rename ändert das Label einer Instanz (ID bleibt) — s. handlePatchInstance.
+	Rename(id, label string) error
 	// TotalRestarts (S8, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — s.
 	// handleMetrics in metrics.go.
 	TotalRestarts() uint64
@@ -469,6 +471,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("DELETE /api/v1/catalog/{type}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteCatalogEntry(launcherSvc)))
 	mux.HandleFunc("GET /api/v1/instances", g.requireAuth(handleListInstances(launcherSvc, hostMetrics)))
 	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, handlePostInstance(launcherSvc, authzStore, ioPortStore, controlPlaneCheck(workflowSvc))))
+	mux.HandleFunc("PATCH /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handlePatchInstance(launcherSvc, nodes, nodeClient)))
 	mux.HandleFunc("DELETE /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteInstance(launcherSvc, ioPortStore)))
 	// Kapitel 13 Teil 3 (docs/END-GOAL-FEATURES.md §13.4) — Drag-Umzug
 	// im Flow-Editor für eigenständige (nicht Workflow-gebundene)

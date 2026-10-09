@@ -18,6 +18,7 @@
 // deckt hier nur den Status-Sprung (Crash/Neustart) zusätzlich ab.
 import { t } from "./i18n.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
+import { confirmDialog } from "../kit/omp-confirm.ts";
 
 // Wire-Format identisch zu launcher.Instance (orchestrator/internal/
 // launcher/launcher.go) — eigene, lokale Deklaration statt eines
@@ -73,6 +74,9 @@ class InstancesView extends HTMLElement {
   #instances: LauncherInstance[] = [];
   #owners = new Map<string, string>();
   #hosts: HostEntry[] = [];
+  // Zeile im Umbenennen-/Verschieben-Modus: solange gesetzt, rendert der Poll nicht neu
+  // (sonst würde die Eingabe alle 5 s verworfen).
+  #editing: { id: string; mode: "rename" | "migrate" } | null = null;
 
   connectedCallback() {
     this.style.cssText =
@@ -89,6 +93,7 @@ class InstancesView extends HTMLElement {
       // kein localStorage — Standardsortierung
     }
     this.addEventListener("click", this.#onHeaderClick);
+    this.addEventListener("keydown", this.#onKeyDown);
     this.#render([], []);
     this.#poll();
     this.#pollHandle = window.setInterval(() => this.#poll(), POLL_INTERVAL_MS);
@@ -96,6 +101,11 @@ class InstancesView extends HTMLElement {
   }
 
   #onHeaderClick = (ev: Event) => {
+    const btn = (ev.target as HTMLElement).closest<HTMLElement>("button[data-action]");
+    if (btn) {
+      void this.#onAction(btn.dataset.action!, btn.dataset.id!);
+      return;
+    }
     const th = (ev.target as HTMLElement).closest<HTMLElement>("th[data-sort]");
     if (!th) return;
     const key = th.dataset.sort as InstanceSortKey;
@@ -113,8 +123,75 @@ class InstancesView extends HTMLElement {
     this.#render(this.#instances, this.#hosts);
   };
 
+  async #onAction(action: string, id: string) {
+    const inst = this.#instances.find((i) => i.id === id);
+    if (action === "rename" || action === "migrate") {
+      this.#editing = { id, mode: action };
+      this.querySelector("[data-edit]")?.remove();
+      this.#render(this.#instances, this.#hosts);
+      this.querySelector<HTMLElement>("[data-edit]")?.focus();
+      return;
+    }
+    if (action === "cancel") {
+      this.#editing = null;
+      this.#render(this.#instances, this.#hosts);
+      return;
+    }
+    const field = this.querySelector<HTMLInputElement | HTMLSelectElement>("[data-edit]");
+    if (!inst || !field) return;
+    if (action === "save-rename") {
+      const label = field.value.trim();
+      if (!label) return;
+      try {
+        const res = await apiFetch(`/api/v1/instances/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ label }),
+        });
+        if (!res.ok) {
+          alert(t("inst.renameFailed", { p0: (await res.text()) || res.status }));
+          return;
+        }
+        const out = (await res.json()) as { applied?: boolean };
+        if (out.applied === false) alert(t("inst.renameNotApplied"));
+      } catch (err) {
+        alert(t("inst.renameFailed", { p0: String(err) }));
+        return;
+      }
+    } else if (action === "save-migrate") {
+      const target = field.value;
+      const targetLabel = target ? this.#hosts.find((h) => h.id === target)?.label || target : t("inst.localHost");
+      if (!(await confirmDialog(t("inst.confirmMigrate", { p0: inst.label, p1: targetLabel }), { confirmLabel: t("inst.confirmMigrateLabel") }))) return;
+      try {
+        const res = await apiFetch(`/api/v1/instances/${encodeURIComponent(id)}/migrate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ targetHostId: target }),
+        });
+        if (!res.ok) {
+          alert(t("inst.migrateFailed", { p0: (await res.text()) || res.status }));
+          return;
+        }
+      } catch (err) {
+        alert(t("inst.migrateFailed", { p0: String(err) }));
+        return;
+      }
+    } else {
+      return;
+    }
+    this.#editing = null;
+    this.#poll();
+  }
+
+  #onKeyDown = (ev: KeyboardEvent) => {
+    if (!this.#editing || !(ev.target as HTMLElement).matches?.("[data-edit]")) return;
+    if (ev.key === "Escape") void this.#onAction("cancel", this.#editing.id);
+    else if (ev.key === "Enter") void this.#onAction(this.#editing.mode === "rename" ? "save-rename" : "save-migrate", this.#editing.id);
+  };
+
   disconnectedCallback() {
     this.removeEventListener("click", this.#onHeaderClick);
+    this.removeEventListener("keydown", this.#onKeyDown);
     if (this.#pollHandle !== undefined) window.clearInterval(this.#pollHandle);
     connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
   }
@@ -158,6 +235,8 @@ class InstancesView extends HTMLElement {
   #render(instances: LauncherInstance[], hosts: HostEntry[]) {
     this.#instances = instances;
     this.#hosts = hosts;
+    // Offenes Eingabefeld nicht durch den Poll wegrendern (Daten oben sind bereits aktualisiert).
+    if (this.#editing && this.querySelector("[data-edit]")) return;
     // launcher.Launcher.List() iteriert eine Go-Map (keine Reihenfolge-
     // Garantie) — ohne eigene, stabile Sortierung (Spaltenwahl, Label/ID als
     // Tie-Breaker) würden Zeilen bei jedem Poll die Plätze tauschen.
@@ -171,6 +250,8 @@ class InstancesView extends HTMLElement {
 
     const rows = sorted
       .map((inst) => {
+        const editRename = this.#editing?.id === inst.id && this.#editing.mode === "rename";
+        const editMigrate = this.#editing?.id === inst.id && this.#editing.mode === "migrate";
         const hostLabel = inst.hostId ? hosts.find((h) => h.id === inst.hostId)?.label || inst.hostId : "lokal";
         const status = inst.crashed
           ? `<span class="omp-badge omp-badge-error">${t("inst.aba7a7")}</span>`
@@ -184,14 +265,23 @@ class InstancesView extends HTMLElement {
           ? `<div style="color:var(--omp-error);font-size:var(--omp-font-size-xs);white-space:pre-wrap;word-break:break-word;">${escapeHtml(inst.crashMessage || t("inst.03a35d"))}</div>`
           : "";
         return `<tr>
-          <td style="padding:2px 8px;">${escapeHtml(inst.label)}<div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">${escapeHtml(inst.type)}${inst.version ? ` (${escapeHtml(inst.version)})` : ""}</div>${crashLine}</td>
+          <td style="padding:2px 8px;">${
+            editRename
+              ? `<input data-edit value="${escapeAttr(inst.label)}" style="width:100%;box-sizing:border-box;" /><div style="margin-top:2px;"><button data-action="save-rename" data-id="${escapeAttr(inst.id)}">${t("inst.save")}</button> <button data-action="cancel" data-id="${escapeAttr(inst.id)}">${t("inst.cancel")}</button></div>`
+              : escapeHtml(inst.label)
+          }<div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">${escapeHtml(inst.type)}${inst.version ? ` (${escapeHtml(inst.version)})` : ""}</div>${crashLine}</td>
           <td style="padding:2px 8px;">${status}</td>
           <td style="padding:2px 8px;">${this.#owners.has(inst.id) ? escapeHtml(this.#owners.get(inst.id)!) : `<span style="color:var(--omp-text-dim);" title="${t("inst.93e356")}">–</span>`}</td>
-          <td style="padding:2px 8px;color:var(--omp-text-dim);">${escapeHtml(hostLabel)}</td>
+          <td style="padding:2px 8px;color:var(--omp-text-dim);">${
+            editMigrate
+              ? `<select data-edit><option value="">${t("inst.localHost")}</option>${hosts.map((h) => `<option value="${escapeAttr(h.id)}"${h.id === inst.hostId ? " selected" : ""}>${escapeHtml(h.label || h.id)}</option>`).join("")}</select><div style="margin-top:2px;"><button data-action="save-migrate" data-id="${escapeAttr(inst.id)}">${t("inst.migrate").replace(" …", "")}</button> <button data-action="cancel" data-id="${escapeAttr(inst.id)}">${t("inst.cancel")}</button></div>`
+              : escapeHtml(hostLabel)
+          }</td>
           <td style="padding:2px 8px;">${formatCpu(inst.cpuPercent)}</td>
           <td style="padding:2px 8px;">${formatRss(inst.rssBytes)}</td>
           <td style="padding:2px 8px;color:var(--omp-text-dim);">${inst.pid}</td>
           <td style="padding:2px 8px;">${restarts}</td>
+          <td style="padding:2px 8px;white-space:nowrap;"><button data-action="rename" data-id="${escapeAttr(inst.id)}" title="${t("inst.renameTitle")}">${t("inst.rename")}</button> <button data-action="migrate" data-id="${escapeAttr(inst.id)}" title="${t("inst.migrateTitle")}">${t("inst.migrate")}</button></td>
         </tr>`;
       })
       .join("");
@@ -211,12 +301,17 @@ class InstancesView extends HTMLElement {
                 ${th("ram", "RAM")}
                 ${th("pid", "PID")}
                 ${th("restarts", t("inst.974607"))}
+                <th style="padding:2px 8px;">${t("inst.actions")}</th>
               </tr></thead>
               <tbody>${rows}</tbody>
             </table>`
       }
     `;
   }
+}
+
+function escapeAttr(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
 function escapeHtml(s: string): string {

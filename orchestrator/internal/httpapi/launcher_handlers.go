@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -333,6 +334,63 @@ func handleDeleteInstance(svc LauncherService, ioPortStore IOPortInventoryStore)
 			}
 		}
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}
+
+// handlePatchInstance liefert PATCH /api/v1/instances/<id>: {"label": "..."}
+// benennt eine laufende Instanz um (Nutzerwunsch 2026-10-09). Die Instanz-ID
+// bleibt unverändert. Das Label wird im Launcher persistiert (gilt auch für
+// Neustarts) und — falls die Instanz bereits als Node registriert ist — per
+// POST /label an den Node gereicht, der seine NMOS-Ressourcen (Node, Device,
+// Sender, Receiver) umbenennt und neu registriert. Ist der Node (noch) nicht
+// erreichbar, bleibt das neue Label für den nächsten Start gespeichert und die
+// Antwort enthält "applied": false.
+func handlePatchInstance(svc LauncherService, nodes NodeLister, client *http.Client) http.HandlerFunc {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Label string `json:"label"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		label := strings.TrimSpace(body.Label)
+		if label == "" {
+			http.Error(w, "label must not be empty", http.StatusBadRequest)
+			return
+		}
+		id := r.PathValue("id")
+		if err := svc.Rename(id, label); err != nil {
+			writeLauncherError(w, err)
+			return
+		}
+		applied := false
+		for _, n := range nodes.List() {
+			if n.InstanceID != id || n.APIBaseURL == "" {
+				continue
+			}
+			payload, _ := json.Marshal(map[string]string{"label": label})
+			req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, n.APIBaseURL+"/label", bytes.NewReader(payload))
+			if err != nil {
+				break
+			}
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := client.Do(req)
+			if err != nil {
+				slog.Warn("launcher: rename: node unreachable", "instance", id, "error", err)
+				break
+			}
+			resp.Body.Close()
+			applied = resp.StatusCode/100 == 2
+			if !applied {
+				slog.Warn("launcher: rename: node rejected label (älterer Node ohne /label?)", "instance", id, "status", resp.StatusCode)
+			}
+			break
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "label": label, "applied": applied})
 	}
 }
 

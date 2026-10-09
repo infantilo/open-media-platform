@@ -766,6 +766,26 @@ func (l *Launcher) TotalRestarts() uint64 {
 	return l.totalRestarts.Load()
 }
 
+// Rename ändert das Anzeige-Label einer Instanz (Nutzerwunsch 2026-10-09). Die
+// Instanz-ID bleibt; das Label wird persistiert und bei jedem Neustart (Crash-Restart,
+// Re-Adoption) als OMP_LABEL wiederverwendet. Die laufende NMOS-Registrierung
+// aktualisiert der Aufrufer (httpapi.handlePatchInstance).
+func (l *Launcher) Rename(id, label string) error {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return errors.New("launcher: label must not be empty")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	inst, ok := l.instances[id]
+	if !ok {
+		return ErrUnknownInstance
+	}
+	inst.Label = label
+	l.instances[id] = inst
+	return l.persistInstanceLocked(id)
+}
+
 // Get liefert eine einzelne Instanz per ID (ARCHITECTURE.md §24.1,
 // UMSETZUNG.md C16) — u. a. für die Service-Token-Ausgabe, die
 // LaunchSecret braucht, das List() zwar mitliefert (kein json:"-" bei
@@ -1364,7 +1384,7 @@ func (l *Launcher) supervise(id, nodeType string, entry CatalogEntry, label stri
 		// Parameter (ARCHITECTURE.md §24.1) — dieselbe Instanz-ID
 		// behält über einen Crash-Neustart hinweg auch dasselbe Secret,
 		// kein neues Provisioning nötig.
-		newCmd, newStderrTail, err := l.execEntry(entry, id, label, beforeRestart.LaunchSecret, l.withOptions(nodeType, id, "", extraEnv))
+		newCmd, newStderrTail, err := l.execEntry(entry, id, beforeRestart.Label, beforeRestart.LaunchSecret, l.withOptions(nodeType, id, "", extraEnv))
 		if err != nil {
 			l.mu.Lock()
 			current, stillTracked := l.instances[id]
@@ -1474,7 +1494,7 @@ func (l *Launcher) supervisePodman(id, nodeType string, entry CatalogEntry, labe
 		}
 		l.mu.Unlock()
 
-		newContainerID, _, err := runPodmanEntry(entry, id, label, beforeRestart.LaunchSecret, l.withOptions(nodeType, id, "", extraEnv), l.registryURL, l.orchestratorURL, l.natsURL)
+		newContainerID, _, err := runPodmanEntry(entry, id, beforeRestart.Label, beforeRestart.LaunchSecret, l.withOptions(nodeType, id, "", extraEnv), l.registryURL, l.orchestratorURL, l.natsURL)
 		if err != nil {
 			l.mu.Lock()
 			current, stillTracked := l.instances[id]

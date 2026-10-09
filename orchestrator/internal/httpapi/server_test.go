@@ -269,6 +269,8 @@ func (f fakeLauncherService) Stop(id string) error {
 	return f.stopErr
 }
 
+func (f fakeLauncherService) Rename(id, label string) error { return f.stopErr }
+
 func (f fakeLauncherService) TotalRestarts() uint64 { return f.totalRestarts }
 
 func (f fakeLauncherService) ImportCatalogEntry(entry launcher.CatalogEntry) error {

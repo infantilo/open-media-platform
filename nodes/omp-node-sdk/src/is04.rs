@@ -554,6 +554,14 @@ pub struct FlowInfo {
 }
 
 impl FlowResource {
+    pub fn label_mut(&mut self) -> &mut String {
+        match self {
+            FlowResource::Video(f) => &mut f.label,
+            FlowResource::Audio(f) => &mut f.label,
+            FlowResource::Data(f) => &mut f.label,
+        }
+    }
+
     pub fn id(&self) -> &str {
         match self {
             FlowResource::Video(f) => &f.id,
