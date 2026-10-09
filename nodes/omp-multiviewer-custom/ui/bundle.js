@@ -140,7 +140,7 @@ const LOCALE = document.documentElement.lang === "en" ? "en-GB" : "de-DE";
 // ruckelig.
 //
 // Layout-Koordinaten sind Pixel der konfigurierten Leinwand
-// (canvasWidth/canvasHeight, Default 1920×1080) — die Editor-Fläche
+// (canvasWidth/canvasHeight, Default 1280×720) — die Editor-Fläche
 // selbst ist nur eine skalierte Voransicht (EDITOR_WIDTH fest, Höhe
 // ergibt sich aus dem Seitenverhältnis).
 
@@ -149,7 +149,7 @@ const MIN_PIP_SIZE = 32; // muss zu pipeline::MIN_PIP_SIZE passen (Rust-Konstant
 const RESIZE_HANDLE_PX = 14;
 
 function defaultLayout() {
-  return { canvasWidth: 1920, canvasHeight: 1080, pips: [] };
+  return { canvasWidth: 1280, canvasHeight: 720, pips: [] };
 }
 
 function newPipId() {

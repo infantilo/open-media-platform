@@ -44,8 +44,8 @@ use tokio::sync::oneshot;
 
 const PREVIEW_FPS: i32 = 5;
 const PREVIEW_JPEG_QUALITY: i32 = 70;
-pub const DEFAULT_CANVAS_WIDTH: u32 = 1920;
-pub const DEFAULT_CANVAS_HEIGHT: u32 = 1080;
+pub const DEFAULT_CANVAS_WIDTH: u32 = 1280;
+pub const DEFAULT_CANVAS_HEIGHT: u32 = 720;
 /// Framerate des optionalen PGM-MXL-Ausgangs (s. `Config::pgm_flow_id`-
 /// Doku) — bewusst fest, nicht an die MJPEG-Vorschau-Rate (`PREVIEW_FPS`,
 /// absichtlich gedrosselt fürs Browser-Bandbreitenbudget) gekoppelt: ein
