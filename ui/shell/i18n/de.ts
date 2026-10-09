@@ -82,6 +82,7 @@ export const de = {
   "sp.issue.netTooBig": "Netz: braucht {demand}, die Karte von {host} schafft nur {link} je Richtung",
   "sp.issue.netOverThreshold": "Netzkarte von {host} zu {percent} % belegt (Grenzwert {threshold} %)",
   "sp.anyInput": "{node} (jeder Eingang)",
+  "sp.activeInput": "Eingang (aktive Quelle)",
   "sp.format.video": "Video",
   "sp.format.audio": "Audio",
   "sp.format.data": "Daten",

@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { diagnosePath, findPaths, firstError, linkNetNote, netDemandText, type GraphData, type GraphNode } from "./signal-path-logic.ts";
+import { diagnosePath, findPaths, withImplicitFeeds, firstError, linkNetNote, netDemandText, type GraphData, type GraphNode } from "./signal-path-logic.ts";
 import { setLang } from "./i18n.ts";
 
 setLang("de", false);
@@ -119,4 +119,17 @@ Deno.test("Netz: Bedarf größer als Karte, Auslastung über Grenzwert, unbekann
   assertEquals(diagnosePath(p, ctx({ netTxMbps: 2000, hostNet: { measured: true, thresholdPercent: 85 } }))[0].severity, "warn");
   assertEquals(netDemandText({ netRxMbps: 2177.28, netEstimated: true }), "Rx ~2.2 Gbit/s");
   assertEquals(linkNetNote(p[0], () => ({ hostKey: "h" })), "lokal, kein Netz");
+});
+
+Deno.test("Switcher ohne Receiver: activeInput verlängert die Kette um virtuelle Kante", () => {
+  const gg: GraphData = {
+    nodes: [node("src", [], [["src.o", V]]), node("sw", [], [["sw.o", V]]), node("v", [["v.i", V]], [])],
+    edges: [edge("sw.o", "v.i")],
+  };
+  assertEquals(findPaths(gg, { toNodeId: "v" }).paths[0].length, 1);
+  const ext = withImplicitFeeds(gg, new Map([["sw", "src.o"], ["x", "src.o"], ["v", "gibt-es-nicht"]]));
+  const p = findPaths(ext, { toNodeId: "v" }).paths;
+  assertEquals(p.length, 1);
+  assertEquals(p[0].map((h) => h.fromNode.id), ["src", "sw"]);
+  assertEquals(gg.nodes[1].inputs.length, 0); // Original unverändert
 });

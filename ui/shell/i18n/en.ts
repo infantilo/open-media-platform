@@ -83,6 +83,7 @@ export const en: Record<keyof typeof de, string> = {
   "sp.issue.netTooBig": "Network: needs {demand}, the NIC on {host} only manages {link} per direction",
   "sp.issue.netOverThreshold": "NIC on {host} is {percent} % utilized (threshold {threshold} %)",
   "sp.anyInput": "{node} (any input)",
+  "sp.activeInput": "Input (active source)",
   "sp.format.video": "Video",
   "sp.format.audio": "Audio",
   "sp.format.data": "Data",

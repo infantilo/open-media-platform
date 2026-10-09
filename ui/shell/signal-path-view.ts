@@ -25,10 +25,12 @@ import {
   senderOptions,
   targetOptions,
   transportName,
+  withImplicitFeeds,
 } from "./signal-path-logic.ts";
 
 interface InstanceInfo {
   id: string;
+  type?: string;
   hostId?: string;
   crashed?: boolean;
 }
@@ -117,8 +119,9 @@ class SignalPathView extends HTMLElement {
       ]);
       this.#net = net.ok ? ((await net.json()) as NetInfo) : null;
       if (!g.ok) return;
-      this.#graph = (await g.json()) as GraphData;
+      const graph = (await g.json()) as GraphData;
       this.#instances = new Map(((inst.ok ? await inst.json() : []) as InstanceInfo[]).map((i) => [i.id, i]));
+      this.#graph = withImplicitFeeds(graph, await this.#implicitFeeds(graph));
       this.#hostLabels = new Map(((hosts.ok ? await hosts.json() : []) as { id: string; label: string }[]).map((h) => [h.id, h.label]));
       this.#loaded = true;
       this.#renderForm();
@@ -126,6 +129,22 @@ class SignalPathView extends HTMLElement {
     } catch {
       // Orchestrator kurzzeitig nicht erreichbar — nächster Poll holt es auf.
     }
+  }
+
+  /** Switcher: geschaltete Quelle (`activeInput`) je Node — sie haben keine NMOS-Receiver (siehe withImplicitFeeds). */
+  async #implicitFeeds(graph: GraphData): Promise<Map<string, string>> {
+    const feeds = new Map<string, string>();
+    await Promise.all(graph.nodes.map(async (n) => {
+      if (!n.instanceId || this.#instances.get(n.instanceId)?.type !== "omp-switcher") return;
+      try {
+        const r = await apiFetch(`/api/v1/nodes/${n.id}/params/activeInput`);
+        const v = r.ok ? ((await r.json()) as { value?: unknown }).value : undefined;
+        if (typeof v === "string" && v) feeds.set(n.id, v);
+      } catch {
+        // Node nicht erreichbar — Kette endet dort wie bisher.
+      }
+    }));
+    return feeds;
   }
 
   /** Optionen neu aufbauen, Auswahl behalten (solange sie noch existiert). */

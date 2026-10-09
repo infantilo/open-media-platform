@@ -61,6 +61,37 @@ export interface PathQuery {
   viaNodeId?: string;
 }
 
+/**
+ * Nodes wie der Switcher haben keine NMOS-Receiver (sie finden ihre Quellen selbst über die Registry), also auch keine
+ * IS-05-Kanten im Graph — die Kette bräche an ihnen ab. Aus dem Parameter `activeInput` (Sender-ID der gerade
+ * geschalteten Quelle) wird je Node ein virtueller Eingang samt aktiver Kante ergänzt. `feeds`: Node-ID → Sender-ID.
+ * Unbekannte oder selbstreferenzierende Sender werden ignoriert; der Graph selbst bleibt unverändert.
+ */
+export function withImplicitFeeds(g: GraphData, feeds: Map<string, string>): GraphData {
+  if (!feeds.size) return g;
+  const senders = new Map<string, GraphPort>();
+  for (const n of g.nodes) for (const p of n.outputs) senders.set(p.id, p);
+  const extraIn = new Map<string, GraphPort>();
+  const edges = [...g.edges];
+  for (const [nodeId, senderId] of feeds) {
+    const node = g.nodes.find((n) => n.id === nodeId);
+    const sender = senders.get(senderId);
+    if (!node || !sender || node.outputs.some((o) => o.id === senderId)) continue;
+    const port: GraphPort = {
+      id: `implicit:${nodeId}`,
+      label: t("sp.activeInput"),
+      format: sender.format,
+      transport: sender.transport,
+    };
+    extraIn.set(nodeId, port);
+    edges.push({ id: `implicit:${nodeId}:${senderId}`, fromSender: senderId, toReceiver: port.id, state: "active" });
+  }
+  return {
+    nodes: g.nodes.map((n) => (extraIn.has(n.id) ? { ...n, inputs: [...n.inputs, extraIn.get(n.id)!] } : n)),
+    edges,
+  };
+}
+
 export const MAX_PATHS = 20;
 export const MAX_HOPS = 12;
 
