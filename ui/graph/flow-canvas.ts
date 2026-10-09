@@ -152,6 +152,17 @@ function previewSnapshotUrl(nodeId: string): string {
 // dasselbe Bundle wie in der Vollbild-Konsole (`ui/shell/console-view.ts`),
 // nur zu eng eingefasst. Breiterer Default + Resize-Handle statt einer
 // zweiten, festen Zahl.
+const PALETTE_WIDTH_STORAGE_KEY = "omp.cataloguePaletteWidth";
+const PALETTE_WIDTH_DEFAULT = 220;
+const PALETTE_WIDTH_MIN = 160;
+const PALETTE_WIDTH_MAX = 600;
+
+function loadPaletteWidth(): number {
+  const raw = Number(localStorage.getItem(PALETTE_WIDTH_STORAGE_KEY));
+  if (Number.isFinite(raw) && raw >= PALETTE_WIDTH_MIN && raw <= PALETTE_WIDTH_MAX) return raw;
+  return PALETTE_WIDTH_DEFAULT;
+}
+
 const PANEL_WIDTH_STORAGE_KEY = "omp.parameterPanelWidth";
 const PANEL_WIDTH_DEFAULT = 420;
 const PANEL_WIDTH_MIN = 240;
@@ -898,6 +909,8 @@ export class FlowCanvas extends HTMLElement {
     this.style.display ||= "block";
     this.style.position ||= "relative";
 
+    // Breite der Katalog-Palette (per Ziehen am rechten Rand änderbar, persistiert).
+    this.style.setProperty("--omp-palette-w", `${loadPaletteWidth()}px`);
     const svg = document.createElementNS(SVG_NS, "svg");
     svg.style.touchAction = "none";
     svg.style.userSelect = "none";
@@ -909,8 +922,8 @@ export class FlowCanvas extends HTMLElement {
     // Pan/Zoom-Koordinatenrechnung bleibt dadurch unverändert korrekt.
     svg.style.position = "absolute";
     svg.style.top = "0";
-    svg.style.left = "220px";
-    svg.style.width = "calc(100% - 220px)";
+    svg.style.left = "var(--omp-palette-w)";
+    svg.style.width = "calc(100% - var(--omp-palette-w))";
     svg.style.height = "100%";
 
     const viewportGroup = document.createElementNS(SVG_NS, "g");
@@ -935,7 +948,7 @@ export class FlowCanvas extends HTMLElement {
     const breadcrumb = document.createElement("div");
     breadcrumb.setAttribute("data-role", "breadcrumb");
     breadcrumb.style.cssText =
-      "position:absolute;top:0;left:220px;right:0;padding:var(--omp-space-2) var(--omp-space-3);" +
+      "position:absolute;top:0;left:var(--omp-palette-w);right:0;padding:var(--omp-space-2) var(--omp-space-3);" +
       "background:var(--omp-surface);color:var(--omp-text);font-family:var(--omp-font);font-size:var(--omp-font-size-sm);" +
       "display:flex;gap:var(--omp-space-2);align-items:center;z-index:10;border-bottom:1px solid var(--omp-border);";
 
@@ -980,9 +993,9 @@ export class FlowCanvas extends HTMLElement {
     // waren bei 160px auf 9px-Schrift angewiesen, um überhaupt lesbar zu
     // bleiben; 220px erlaubt die normale --omp-font-size-xs-Stufe.
     palette.style.cssText =
-      "position:absolute;top:0;left:0;bottom:0;width:220px;" +
+      "position:absolute;top:0;left:0;bottom:0;width:var(--omp-palette-w);" +
       "background:var(--omp-surface);color:var(--omp-text);font-family:var(--omp-font);font-size:var(--omp-font-size-sm);" +
-      "padding:var(--omp-space-2);padding-top:0;overflow-y:auto;" +
+      "padding:var(--omp-space-2);padding-top:0;overflow-y:auto;overflow-x:hidden;" +
       "z-index:10;border-right:1px solid var(--omp-border);box-sizing:border-box;";
 
     // Kontextmenü für den Host-Umzug (Bug 1, Nutzerentscheidung
@@ -999,7 +1012,34 @@ export class FlowCanvas extends HTMLElement {
     hostMigrateMenu.className = "omp-popover";
     hostMigrateMenu.style.cssText = "position:fixed;display:none;min-width:160px;padding:4px 0;z-index:30;";
 
-    this.replaceChildren(svg, breadcrumb, panel, palette, snapshotBar, hostMigrateMenu);
+    // Eigenes Geschwister-Element (nicht Kind der Palette): deren Inhalt wird bei jedem
+    // Rendern per replaceChildren geleert.
+    const paletteResizeHandle = document.createElement("div");
+    paletteResizeHandle.setAttribute("data-role", "palette-resize-handle");
+    paletteResizeHandle.style.cssText =
+      "position:absolute;top:0;bottom:0;left:calc(var(--omp-palette-w) - 4px);width:8px;cursor:ew-resize;z-index:11;";
+    paletteResizeHandle.addEventListener("pointerdown", (ev) => {
+      ev.preventDefault();
+      const startX = ev.clientX;
+      const startW = palette.getBoundingClientRect().width;
+      paletteResizeHandle.setPointerCapture(ev.pointerId);
+      const move = (e: PointerEvent) => {
+        const w = Math.min(PALETTE_WIDTH_MAX, Math.max(PALETTE_WIDTH_MIN, startW + e.clientX - startX));
+        this.style.setProperty("--omp-palette-w", `${w}px`);
+      };
+      const end = (e: PointerEvent) => {
+        paletteResizeHandle.removeEventListener("pointermove", move);
+        paletteResizeHandle.removeEventListener("pointerup", end);
+        paletteResizeHandle.removeEventListener("pointercancel", end);
+        paletteResizeHandle.releasePointerCapture(e.pointerId);
+        localStorage.setItem(PALETTE_WIDTH_STORAGE_KEY, String(Math.round(palette.getBoundingClientRect().width)));
+      };
+      paletteResizeHandle.addEventListener("pointermove", move);
+      paletteResizeHandle.addEventListener("pointerup", end);
+      paletteResizeHandle.addEventListener("pointercancel", end);
+    });
+
+    this.replaceChildren(svg, breadcrumb, panel, palette, paletteResizeHandle, snapshotBar, hostMigrateMenu);
     this.#svg = svg;
     this.#viewportGroup = viewportGroup;
     this.#breadcrumbBar = breadcrumb;
@@ -5281,7 +5321,7 @@ export class FlowCanvas extends HTMLElement {
       card.style.cssText = "margin-bottom:var(--omp-space-2);";
 
       const row = document.createElement("div");
-      row.style.cssText = "display:flex;gap:4px;";
+      row.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;";
 
       const btn = document.createElement("button");
       // version (§17 Teil 5): mehrere importierte Versionen desselben
