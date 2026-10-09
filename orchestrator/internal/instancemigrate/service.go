@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
@@ -90,6 +91,8 @@ type Service struct {
 	launcher LauncherService
 	graph    GraphService
 	options  OptionMover
+	// httpClient für Zustandsabfragen an Nodes (nil = http.DefaultClient).
+	httpClient *http.Client
 }
 
 // SetOptionMover setzt den Speicher, dessen Instanz-Optionen bei RestartInPlace mitwandern.
@@ -129,20 +132,23 @@ func (s *Service) MigrateInstance(ctx context.Context, oldInstanceID, targetHost
 		return fmt.Errorf("%w: %q", ErrNotRegistered, oldInstanceID)
 	}
 	edges := s.captureEdges(ctx, oldNode)
+	carry := s.captureCarried(oldNode)
 
 	safego.Go("instancemigrate.migrate", func() {
-		s.migrate(oldInstanceID, inst.Type, inst.Label, targetHostID, edges)
+		s.migrate(inst, targetHostID, edges, carry)
 	})
 	return nil
 }
 
-func (s *Service) migrate(oldInstanceID, nodeType, label, targetHostID string, edges []edgeRef) {
+func (s *Service) migrate(inst launcher.Instance, targetHostID string, edges []edgeRef, carry carried) {
+	oldInstanceID, nodeType := inst.ID, inst.Type
 	if err := s.launcher.Stop(oldInstanceID); err != nil {
 		slog.Warn("instancemigrate: stop old instance failed", "instance", oldInstanceID, "error", err)
 		return
 	}
 
-	newInst, err := s.launcher.StartLabeled(nodeType, "", targetHostID, label, nil)
+	// Version, Label, ExtraEnv und Instanz-Optionen der alten Instanz übernehmen.
+	newInst, err := s.launcher.StartPinned(nodeType, inst.Version, targetHostID, inst.Label, inst.ExtraEnv, oldInstanceID, "")
 	if err != nil {
 		slog.Warn("instancemigrate: start on target host failed", "type", nodeType, "targetHost", targetHostID, "error", err)
 		return
@@ -157,6 +163,8 @@ func (s *Service) migrate(oldInstanceID, nodeType, label, targetHostID string, e
 	}
 
 	s.reconnect(context.Background(), newNode, edges)
+	s.moveOptions(oldInstanceID, newInst.ID)
+	s.restoreCarried(carry, newNode)
 	slog.Info("instancemigrate: migration completed", "oldInstance", oldInstanceID, "newInstance", newInst.ID, "targetHost", targetHostID)
 }
 
@@ -278,8 +286,10 @@ func (s *Service) RestartInPlace(ctx context.Context, oldInstanceID string) (Res
 	}
 	res := RestartResult{OldInstanceID: oldInstanceID}
 	var edges []edgeRef
+	var carry carried
 	if oldNode, ok := s.findNodeByInstance(oldInstanceID); ok {
 		edges = s.captureEdges(ctx, oldNode)
+		carry = s.captureCarried(oldNode)
 	}
 	oldPin := inst.NodeVersion
 	if oldPin == "" {
@@ -315,11 +325,13 @@ func (s *Service) RestartInPlace(ctx context.Context, oldInstanceID string) (Res
 		res.RolledBack, res.NewInstanceID = true, rb.ID
 		res.Reconnected = s.reconnectCounting(ctx, rbNode, edges)
 		s.moveOptions(oldInstanceID, rb.ID)
+		s.restoreCarried(carry, rbNode)
 		return res, fmt.Errorf("neue Version fehlgeschlagen, auf bisherigen Stand zurückgerollt: %w", err)
 	}
 	res.NewInstanceID = newInst.ID
 	res.Reconnected = s.reconnectCounting(ctx, newNode, edges)
 	s.moveOptions(oldInstanceID, newInst.ID)
+	s.restoreCarried(carry, newNode)
 	return res, nil
 }
 

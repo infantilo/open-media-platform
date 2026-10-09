@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/instancemigrate"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeversions"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/updates"
@@ -411,7 +412,7 @@ func restartInstance(ctx context.Context, launcherSvc LauncherService, workflowS
 
 // handleRestartInstance: POST /api/v1/instances/{id}/restart {"confirm":true} — startet
 // eine einzelne Instanz neu (Nutzerwunsch 2026-10-09), Verfahren s. restartInstance.
-func handleRestartInstance(launcherSvc LauncherService, workflowSvc WorkflowService, nodeValues NodeOptionValues) http.HandlerFunc {
+func handleRestartInstance(launcherSvc LauncherService, workflowSvc WorkflowService, nodeValues NodeOptionValues, migrator InstanceMigrator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Confirm bool `json:"confirm"`
@@ -425,7 +426,21 @@ func handleRestartInstance(launcherSvc LauncherService, workflowSvc WorkflowServ
 			http.Error(w, "unknown instance", http.StatusNotFound)
 			return
 		}
-		res := restartInstance(r.Context(), launcherSvc, workflowSvc, nodeValues, workflowRolesByInstance(workflowSvc), inst)
+		roles := workflowRolesByInstance(workflowSvc)
+		var res restartResult
+		// Freistehende Instanzen: RestartInPlace stellt zusätzlich Kanten, Referenzen anderer
+		// Nodes (Mischer-Quellen) und Parameter wieder her.
+		if restarter, ok := migrator.(interface {
+			RestartInPlace(ctx context.Context, id string) (instancemigrate.RestartResult, error)
+		}); ok && roles[inst.ID] == (roleRef{}) {
+			rr, err := restarter.RestartInPlace(r.Context(), inst.ID)
+			res = restartResult{InstanceID: inst.ID, Label: inst.Label, Mode: "standalone", Ok: err == nil, NewInstanceID: rr.NewInstanceID}
+			if err != nil {
+				res.Error = err.Error()
+			}
+		} else {
+			res = restartInstance(r.Context(), launcherSvc, workflowSvc, nodeValues, roles, inst)
+		}
 		if !res.Ok {
 			http.Error(w, res.Error, http.StatusInternalServerError)
 			return
