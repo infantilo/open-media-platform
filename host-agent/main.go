@@ -56,6 +56,30 @@ import (
 // kommagetrennte Liste selbst auf.
 const defaultNatsURL = "nats://localhost:4222,nats://localhost:4223,nats://localhost:4224"
 
+// defaultCatalogPath sucht den Katalog des OMP-Repos, wenn
+// OMP_HOST_AGENT_CATALOG_PATH nicht gesetzt ist: <Binary-Verzeichnis>/../deploy/
+// catalog.json (Binary liegt in bin/) bzw. ./deploy/catalog.json. Ohne Katalog
+// lehnt der Agent jeden Start-Befehl mit "unknown catalog type" ab — ein
+// leerer Katalog ist nur gewollt, wenn man ihn ausdrücklich so konfiguriert
+// (dann Variable auf einen nicht existierenden Pfad ist ein Fehler; leer
+// bleibt der Rückfall, falls nichts gefunden wird).
+func defaultCatalogPath() string {
+	var cands []string
+	if exe, err := os.Executable(); err == nil {
+		cands = append(cands, filepath.Join(filepath.Dir(exe), "..", "deploy", "catalog.json"))
+	}
+	cands = append(cands, filepath.Join("deploy", "catalog.json"))
+	for _, c := range cands {
+		if st, err := os.Stat(c); err == nil && !st.IsDir() {
+			if abs, err := filepath.Abs(c); err == nil {
+				return abs
+			}
+			return c
+		}
+	}
+	return ""
+}
+
 func envOr(key, fallback string) string {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
 		return v
@@ -110,7 +134,7 @@ func main() {
 	registryURL := envOr("OMP_REGISTRY_URL", "http://127.0.0.1:8010")
 	natsURL := envOr("OMP_NATS_URL", defaultNatsURL)
 	statePath := envOr("OMP_HOST_AGENT_STATE_FILE", ".omp-host-agent-state.json")
-	catalogPath := envOr("OMP_HOST_AGENT_CATALOG_PATH", "")
+	catalogPath := envOr("OMP_HOST_AGENT_CATALOG_PATH", defaultCatalogPath())
 	ioPortsPath := envOr("OMP_HOST_AGENT_IO_PORTS_PATH", "")
 	// Netzwerk-Interface für die Bandbreiten-Telemetrie (Nutzerauftrag
 	// 2026-09-02; seit 2026-10-07 automatisch): leer/"auto" = Interface der
