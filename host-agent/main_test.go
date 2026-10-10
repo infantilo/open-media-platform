@@ -58,3 +58,17 @@ func TestLoadIOPortsInvalidJSONErrors(t *testing.T) {
 		t.Fatal("loadIOPorts() error = nil, want error for invalid JSON")
 	}
 }
+
+func TestAdvertiseHost(t *testing.T) {
+	t.Setenv("OMP_HOST_AGENT_ADVERTISE_HOST", "")
+	if got := advertiseHost("http://localhost:8000"); got != "" {
+		t.Errorf("localhost orchestrator: got %q, want empty (keep loopback default)", got)
+	}
+	if got := advertiseHost("http://127.0.0.1:8000"); got != "" {
+		t.Errorf("loopback orchestrator: got %q, want empty", got)
+	}
+	t.Setenv("OMP_HOST_AGENT_ADVERTISE_HOST", "10.1.2.3")
+	if got := advertiseHost("http://localhost:8000"); got != "10.1.2.3" {
+		t.Errorf("override: got %q, want 10.1.2.3", got)
+	}
+}

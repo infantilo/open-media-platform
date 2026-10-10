@@ -29,7 +29,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -76,6 +78,36 @@ func defaultCatalogPath() string {
 			}
 			return c
 		}
+	}
+	return ""
+}
+
+// advertiseHost liefert die IP, unter der dieser Host für den Orchestrator
+// erreichbar ist: OMP_HOST_AGENT_ADVERTISE_HOST, sonst die ausgehende Adresse
+// Richtung Orchestrator (UDP-"Connect" sendet nichts). Läuft der Orchestrator
+// auf demselben Rechner (Loopback), bleibt es beim Node-Default 127.0.0.1 ("").
+func advertiseHost(orchestratorURL string) string {
+	if v := os.Getenv("OMP_HOST_AGENT_ADVERTISE_HOST"); v != "" {
+		return v
+	}
+	u, err := url.Parse(orchestratorURL)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	if ip := net.ParseIP(u.Hostname()); (ip != nil && ip.IsLoopback()) || u.Hostname() == "localhost" {
+		return ""
+	}
+	port := u.Port()
+	if port == "" {
+		port = "80"
+	}
+	c, err := net.Dial("udp", net.JoinHostPort(u.Hostname(), port))
+	if err != nil {
+		return ""
+	}
+	defer c.Close()
+	if a, ok := c.LocalAddr().(*net.UDPAddr); ok && !a.IP.IsLoopback() {
+		return a.IP.String()
 	}
 	return ""
 }
@@ -135,6 +167,17 @@ func main() {
 	natsURL := envOr("OMP_NATS_URL", defaultNatsURL)
 	statePath := envOr("OMP_HOST_AGENT_STATE_FILE", ".omp-host-agent-state.json")
 	catalogPath := envOr("OMP_HOST_AGENT_CATALOG_PATH", defaultCatalogPath())
+	// Registrierte Node-Adressen müssen für den Orchestrator erreichbar sein:
+	// Nodes melden sich mit OMP_HOST (Default 127.0.0.1) in der NMOS-Registry,
+	// der Orchestrator-Proxy ruft diese Adresse auf — auf einem entfernten Host
+	// ergäbe das 502 (Nutzerfund 2026-10-11). Kinder erben die Umgebung des
+	// Agents (commands.buildEnv), also hier einmal setzen.
+	if _, set := os.LookupEnv("OMP_HOST"); !set {
+		if h := advertiseHost(orchestratorURL); h != "" {
+			os.Setenv("OMP_HOST", h)
+			slog.Info("node advertise host", "OMP_HOST", h)
+		}
+	}
 	ioPortsPath := envOr("OMP_HOST_AGENT_IO_PORTS_PATH", "")
 	// Netzwerk-Interface für die Bandbreiten-Telemetrie (Nutzerauftrag
 	// 2026-09-02; seit 2026-10-07 automatisch): leer/"auto" = Interface der
