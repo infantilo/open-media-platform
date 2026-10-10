@@ -8,6 +8,7 @@
 # Der Dienst ruft start-omp.sh / stop-omp.sh auf (OHNE --all: Container und
 # Postgres-Daten bleiben beim Stoppen unangetastet, nur der Orchestrator endet).
 [Unit]
+StartLimitIntervalSec=0
 Description=OpenMediaPlatform (Orchestrator + Infrastruktur)
 After=network-online.target
 Wants=network-online.target
@@ -25,6 +26,10 @@ Environment=OMP_SKIP_PREFLIGHT=1
 ExecStart=/bin/bash -c '[ -f deploy/dev/mxl.env ] && . deploy/dev/mxl.env; exec deploy/dev/start-omp.sh'
 ExecStop=/bin/bash -c 'exec deploy/dev/stop-omp.sh'
 KillMode=process
+# Beim Kaltstart ist Postgres (Patroni) noch nicht bereit, der Orchestrator
+# beendet sich dann — der nächste Versuch (make up ist idempotent) klappt.
+Restart=on-failure
+RestartSec=20
 TimeoutStartSec=900
 TimeoutStopSec=60
 
