@@ -129,6 +129,19 @@ pub fn spawn(
     Ok((port, std::thread::spawn(move || accept_loop(server, store))))
 }
 
+/// Wie [`spawn`], aber mit TLS (selbst signiertes Zertifikat, s. `https.rs`) — gleiche Routen/Store.
+pub fn spawn_tls(
+    addr: &str,
+    store: Arc<dyn ParamStore>,
+    certificate: Vec<u8>,
+    private_key: Vec<u8>,
+) -> std::io::Result<(u16, std::thread::JoinHandle<()>)> {
+    let server = Server::https(addr, tiny_http::SslConfig { certificate, private_key })
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let port = server.server_addr().to_ip().map(|a| a.port()).unwrap_or(0);
+    Ok((port, std::thread::spawn(move || accept_loop(server, store))))
+}
+
 fn accept_loop(server: Server, store: Arc<dyn ParamStore>) {
     for request in server.incoming_requests() {
         handle(request, &store);
@@ -158,6 +171,9 @@ fn handle(mut request: Request, store: &Arc<dyn ParamStore>) {
 }
 
 fn route(method: &Method, url: &str, body: &[u8], store: &Arc<dyn ParamStore>) -> ResponseBox {
+    if *method == Method::Get && url == "/https-info" {
+        return json_response(200, &crate::https::info_json());
+    }
     // Instanz umbenennen ohne Neustart (orchestrator: PATCH /api/v1/instances/{id}).
     if *method == Method::Post && url == "/label" {
         let label = serde_json::from_slice::<Value>(body)

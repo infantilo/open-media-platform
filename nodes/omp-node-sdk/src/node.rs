@@ -690,7 +690,19 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
     // festen Port teilen müssten) — registriert wird deshalb erst nach
     // dem tatsächlichen Binden, mit dem wirklich belegten Port.
     let bind_addr = format!("0.0.0.0:{}", config.port);
-    let (actual_port, _server_handle) = server::spawn(&bind_addr, store)?;
+    let (actual_port, _server_handle) = server::spawn(&bind_addr, store.clone())?;
+    // Optional: zusätzlicher TLS-Listener (OMP_HTTPS=1), z. B. für die Handy-Kamera-Seite.
+    if crate::https::enabled() {
+        match crate::https::load_or_create_cert(&config.host)
+            .and_then(|(c, k)| server::spawn_tls("0.0.0.0:0", store, c, k).map_err(|e| e.to_string()))
+        {
+            Ok((https_port, _h)) => {
+                crate::https::set_bound(&config.host, https_port);
+                eprintln!("omp-node-sdk: HTTPS auf Port {https_port} (https://{}:{https_port})", config.host);
+            }
+            Err(e) => eprintln!("omp-node-sdk: HTTPS nicht verfügbar: {e}"),
+        }
+    }
 
     let mut node_res = NodeResource::new(&node_id, &config.label, &config.host, actual_port);
     if let Some(instance_id) = &config.instance_id {

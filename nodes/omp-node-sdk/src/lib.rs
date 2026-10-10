@@ -7,6 +7,7 @@
 //! kopierbarem Beispielcode — siehe `examples/hello_node.rs` für die
 //! minimale Nutzung.
 
+mod https;
 pub mod bcp008;
 pub mod buildinfo;
 pub mod channelmapping;

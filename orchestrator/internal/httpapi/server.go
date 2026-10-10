@@ -457,6 +457,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/nodes/{id}/invites", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/invites", nodeLogs)))
 	mux.HandleFunc("DELETE /api/v1/nodes/{id}/invites", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/invites", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/invites/qr", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/invites/qr", nodeLogs)))
+	// HTTPS-Adresse des Nodes (OMP_HTTPS=1, omp-node-sdk https.rs) — Handy-Kamera-Seite braucht HTTPS.
+	mux.HandleFunc("GET /api/v1/nodes/{id}/https-info", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/https-info", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/graph", g.requireAuth(handleGraph(graphSvc)))
 	mux.HandleFunc("GET /api/v1/graph/network", g.requireAuth(handleGraphNetwork(hostRegistry, hostMetrics, launcherSvc, placementThresholds)))
 	mux.HandleFunc("POST /api/v1/graph/edges", g.requireVerbGlobal(authz.VerbConfigure, handlePostGraphEdge(graphSvc)))

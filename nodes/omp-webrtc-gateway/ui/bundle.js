@@ -162,6 +162,7 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
     shadow.append(style, root);
 
     const baseUrlInput = root.querySelector("#base-url");
+    baseUrlInput.addEventListener("input", () => { baseUrlInput.dataset.edited = "1"; });
     const newLabelInput = root.querySelector("#new-label");
     const errorEl = root.querySelector("#error");
     const listEl = root.querySelector("#list");
@@ -227,6 +228,17 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
       if (self && self.api_base_url) {
         baseUrlInput.value = self.api_base_url;
         baseUrlSeeded = true;
+        // Handy-Browser erlauben Kamera/Mikrofon nur über HTTPS: hat der Node einen TLS-Listener
+        // (OMP_HTTPS=1, GET /https-info), dessen Adresse statt der Klartext-Adresse vorbelegen.
+        try {
+          const res = await api("/https-info");
+          if (res.ok) {
+            const info = await res.json();
+            if (info && info.enabled && info.url && !baseUrlInput.dataset.edited) baseUrlInput.value = info.url;
+          }
+        } catch (_) {
+          // älterer Node ohne /https-info — bei der Klartext-Adresse bleiben
+        }
       }
     };
 
@@ -383,10 +395,22 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
             });
             if (monRes.ok) {
               const monInvite = await monRes.json();
+              // Die Kamera-Seite läuft (bei HTTPS-Basis-URL) über https — der Monitor muss dann
+              // ebenfalls per https erreichbar sein (sonst blockt der Browser "mixed content").
+              let monitorBase = candidate.baseUrl;
+              try {
+                const hi = await fetch(`/api/v1/nodes/${retourNodeId}/https-info`);
+                if (hi.ok) {
+                  const info = await hi.json();
+                  if (info && info.enabled && info.url && /^https:/i.test(baseUrlInput.value.trim())) monitorBase = info.url;
+                }
+              } catch (_) {
+                // ältere Monitor-Node-Version ohne /https-info
+              }
               addPair({
                 token: invite.token,
                 monitorNodeId: retourNodeId,
-                monitorBase: candidate.baseUrl,
+                monitorBase,
                 monitorToken: monInvite.token,
               });
             } else {

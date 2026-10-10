@@ -1183,6 +1183,16 @@ ein beliebiges Bild aus dem Flow Editor als **Retourbild** zurück aufs Handy.
 4. Das Handy öffnet den Link, erlaubt Kamera/Mikrofon und tippt
    **Verbinden**.
 
+**HTTPS:** Handy-Browser erlauben Kamera und Mikrofon nur über HTTPS. Die
+Gateway-Nodes starten deshalb zusätzlich einen HTTPS-Port mit einem selbst
+signierten Zertifikat (`OMP_HTTPS=1`, im Katalog gesetzt; das Zertifikat liegt
+unter `.run/https/` und wird wiederverwendet). Das Feld **Basis-URL** im
+Einladungs-Panel ist automatisch auf diese `https://…`-Adresse vorbelegt,
+Link und QR-Code zeigen darauf. Das Handy zeigt **einmal** eine
+Zertifikatswarnung (bestätigen). Die TCP-Ports der Instanz müssen im LAN
+erreichbar sein; bei einem Retourbild nutzt der Link ebenfalls die HTTPS-Adresse
+des Monitor-Nodes.
+
 **Die Handy-Seite**
 
 - Im Look der Anmeldeseite (dunkles Navy, Cyan→Violett-Verlauf, Glas-Karte),
