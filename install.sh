@@ -43,18 +43,31 @@ elif have pacman;  then PM=pacman
 elif have zypper;  then PM=zypper
 else echo "Kein unterstützter Paketmanager (apt/dnf/pacman/zypper). Siehe docs/INSTALLATION.md, Abschnitt „Manuell“." >&2; exit 1; fi
 
-BASE_PKGS_apt="podman make curl openssl git ca-certificates unzip iproute2 uidmap slirp4netns"
-BASE_PKGS_dnf="podman make curl openssl git ca-certificates unzip iproute shadow-utils"
-BASE_PKGS_pacman="podman make curl openssl git ca-certificates unzip iproute2"
-BASE_PKGS_zypper="podman make curl openssl git ca-certificates unzip iproute2"
+BASE_PKGS_apt="podman make curl openssl git ca-certificates zip unzip tar iproute2 uidmap slirp4netns"
+BASE_PKGS_dnf="podman make curl openssl git ca-certificates zip unzip tar iproute shadow-utils"
+BASE_PKGS_pacman="podman make curl openssl git ca-certificates zip unzip tar iproute2"
+BASE_PKGS_zypper="podman make curl openssl git ca-certificates zip unzip tar iproute2"
 
-MEDIA_PKGS_apt="build-essential pkg-config cmake ninja-build bison flex clang libclang-dev ffmpeg libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-nice libnice-dev"
-MEDIA_PKGS_dnf="gcc gcc-c++ pkgconf-pkg-config cmake ninja-build bison flex clang clang-devel ffmpeg-free gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugins-ugly-free libnice-gstreamer1"
+MEDIA_PKGS_apt="build-essential pkg-config cmake ninja-build bison flex clang libclang-dev ffmpeg libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-nice libnice-dev"
+MEDIA_PKGS_dnf="gcc gcc-c++ pkgconf-pkg-config cmake ninja-build bison flex clang clang-devel ffmpeg-free gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-bad-free-devel gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugins-ugly-free libnice-devel libnice-gstreamer1"
 MEDIA_PKGS_pacman="base-devel pkgconf cmake ninja bison flex clang ffmpeg gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly libnice"
-MEDIA_PKGS_zypper="gcc gcc-c++ pkg-config cmake ninja bison flex clang libclang-devel ffmpeg gstreamer-devel gstreamer-plugins-base-devel gstreamer-plugins-good gstreamer-plugins-bad gstreamer-plugins-ugly"
+MEDIA_PKGS_zypper="gcc gcc-c++ pkg-config cmake ninja bison flex clang libclang-devel ffmpeg gstreamer-devel gstreamer-plugins-base-devel gstreamer-plugins-bad-devel gstreamer-plugins-good gstreamer-plugins-bad gstreamer-plugins-ugly"
 
 pkgs_var="BASE_PKGS_$PM"; PKGS="${!pkgs_var}"
 if [ "$MEDIA" = 1 ]; then m="MEDIA_PKGS_$PM"; PKGS="$PKGS ${!m}"; fi
+
+# ---- Vorab-Prüfung: Plattenplatz und RAM --------------------------------------------
+free_gb=$(( $(df -Pk "$ROOT_DIR" | awk 'NR==2 {print $4}') / 1024 / 1024 ))
+mem_gb=$(( $(awk '/^MemTotal:/ {print $2}' /proc/meminfo) / 1024 / 1024 ))
+NEED_GB=5; [ "$MEDIA" = 1 ] && NEED_GB=25
+if [ "$free_gb" -lt "$NEED_GB" ]; then
+  echo "Warnung: nur ${free_gb} GB frei in $ROOT_DIR — empfohlen sind mindestens ${NEED_GB} GB." >&2
+  [ "$YES" = 1 ] || { read -r -p "Trotzdem fortfahren? [j/N] " a; case "${a:-N}" in j|J) ;; *) exit 1 ;; esac; }
+fi
+if [ "$MEDIA" = 1 ] && [ "$mem_gb" -lt 6 ]; then
+  echo "Warnung: nur ${mem_gb} GB RAM — der Rust-/MXL-Build kann bei weniger als ~8 GB scheitern (ggf. Swap anlegen)." >&2
+  [ "$YES" = 1 ] || { read -r -p "Trotzdem fortfahren? [j/N] " a; case "${a:-N}" in j|J) ;; *) exit 1 ;; esac; }
+fi
 
 say "1/4 Systempakete ($PM)"
 echo "    $PKGS"
@@ -68,6 +81,11 @@ case "$PM" in
   pacman) run "sudo pacman -S --needed --noconfirm $PKGS" ;;
   zypper) run "sudo zypper --non-interactive install $PKGS" ;;
 esac
+
+hash -r   # frisch installierte Programme (git, zip, ...) sofort finden
+for t in git zip unzip tar curl; do
+  [ "$DRY" = 1 ] || have "$t" || { echo "Fehler: '$t' fehlt nach der Paketinstallation — Paketinstallation oben prüfen." >&2; exit 1; }
+done
 
 # rootless Podman braucht subuid/subgid
 if ! grep -q "^$(id -un):" /etc/subuid 2>/dev/null; then

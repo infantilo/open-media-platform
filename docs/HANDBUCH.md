@@ -270,9 +270,11 @@ Anmeldung des neuen `omp-host-agent` live. Details mit Screenshot:
 
 Kein vorgefertigtes Installations-Artefakt für `omp-host-agent`
 existiert bisher (kein curl-Installer) — das erzeugte Skript geht davon
-aus, dass die Binary bereits auf dem Zielhost liegt (`cd host-agent &&
-go build -o omp-host-agent .`, oder `bin/omp-host-agent` von dieser
-Maschine dorthin kopiert).
+aus, dass das OMP-Repo auf dem Zielhost liegt (`./install.sh --media`).
+Es baut den Agent selbst (`go build` läuft dabei **in** `host-agent/`,
+Ergebnis `bin/omp-host-agent`), lädt `deploy/dev/mxl.env` und setzt
+`OMP_HOST_AGENT_CATALOG_PATH` auf `deploy/catalog.json`. Ohne Katalog
+meldet der Agent „unknown catalog type … on this host“.
 
 ### 4.2 Orchestrator-Cluster einrichten (Wizard)
 

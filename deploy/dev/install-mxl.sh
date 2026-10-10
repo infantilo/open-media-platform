@@ -63,6 +63,10 @@ if ! command -v cmake >/dev/null || ! command -v bison >/dev/null || ! command -
   sudo apt-get update -y
   sudo apt-get install -y cmake build-essential pkg-config curl git ninja-build bison flex libclang-dev clang
 fi
+# vcpkg-Bootstrap braucht diese Werkzeuge (sonst „Could not find zip“)
+for t in zip unzip tar curl git; do
+  command -v "$t" >/dev/null || { echo "Fehler: '$t' fehlt — sudo apt-get install -y curl zip unzip tar git" >&2; exit 1; }
+done
 
 if ! command -v cargo >/dev/null; then
   echo "== Rust-Toolchain (rustup) =="
@@ -73,7 +77,14 @@ fi
 
 echo "== vcpkg (CMake-Preset erwartet \$HOME/vcpkg) =="
 if [ ! -x "$VCPKG_ROOT/vcpkg" ]; then
-  git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
+  if [ -d "$VCPKG_ROOT/.git" ]; then
+    echo "  vcpkg-Checkout vorhanden (Bootstrap war unvollständig) — nur Bootstrap wiederholen"
+  elif [ -e "$VCPKG_ROOT" ] && [ -n "$(ls -A "$VCPKG_ROOT" 2>/dev/null)" ]; then
+    echo "Fehler: $VCPKG_ROOT existiert, ist nicht leer und kein vcpkg-Checkout. Entfernen oder VCPKG_ROOT setzen." >&2
+    exit 1
+  else
+    git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
+  fi
   "$VCPKG_ROOT/bootstrap-vcpkg.sh" --disableMetrics
 fi
 
