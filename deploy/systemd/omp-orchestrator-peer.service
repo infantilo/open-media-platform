@@ -19,6 +19,8 @@ Environment=OMP_RAFT_LISTEN=192.168.0.61:8300
 Environment=OMP_RAFT_DATA_DIR=/home/adunkl/data/raft/node2
 Environment=OMP_CLUSTER_PEERS=node-1=192.168.0.60:8300,node2=192.168.0.61:8300
 Environment=OMP_ORCHESTRATOR_URL=http://192.168.0.61:8000
+# Adresse, unter der lokal gestartete Nodes für den anderen Orchestrator erreichbar sind
+Environment=OMP_HOST=192.168.0.61
 Environment=OMP_POSTGRES_URL=postgres://omp:omp@192.168.0.60:5432,192.168.0.60:5442,192.168.0.60:5452/omp?sslmode=disable&target_session_attrs=read-write
 Environment=OMP_NATS_URL=nats://192.168.0.60:4222,nats://192.168.0.60:4223,nats://192.168.0.60:4224
 Environment=OMP_REGISTRY_URL=http://192.168.0.60:8010
