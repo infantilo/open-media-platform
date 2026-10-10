@@ -324,6 +324,7 @@ func (e *Executor) start(req Request) Response {
 
 	stderrTail := newTailBuffer(crashStderrLines)
 	cmd := exec.Command(entry.Command[0], entry.Command[1:]...)
+	ensureMxlDomain()
 	cmd.Env = buildEnv(entry.Env, extra, req.InstanceID, req.Label, e.registryURL, e.natsURL, e.orchestratorURL, req.LaunchSecret)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = io.MultiWriter(os.Stderr, stderrTail)
@@ -444,6 +445,18 @@ func DecodeRequest(payload []byte) (Request, error) {
 func EncodeResponse(resp Response) []byte {
 	data, _ := json.Marshal(resp)
 	return data
+}
+
+// ensureMxlDomain legt das MXL-Domain-Verzeichnis an (liegt auf tmpfs
+// /dev/shm und ist nach jedem Reboot weg — ohne es scheitert jeder MXL-Node mit
+// "Failed to create MXL instance", Nutzerfund 2026-10-11; der Orchestrator-
+// Host legt es in start-omp.sh an, ein reiner Host-Agent bisher nicht).
+func ensureMxlDomain() {
+	dir := os.Getenv("OMP_MXL_DOMAIN")
+	if dir == "" {
+		dir = "/dev/shm/omp-mxl"
+	}
+	_ = os.MkdirAll(dir, 0o755)
 }
 
 // buildEnv — identische Logik zu orchestrator/internal/launcher.buildEnv
