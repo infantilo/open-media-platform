@@ -1,0 +1,27 @@
+# systemd-Dienst für den OMP-Host-Agent (entfernter Host).
+# Installation (als root), Pfade/Benutzer anpassen:
+#   sudo cp deploy/systemd/omp-host-agent.service /etc/systemd/system/
+#   sudo install -m 600 /dev/null /etc/omp-host-agent.env   # und füllen, s. u.
+#   sudo systemctl daemon-reload && sudo systemctl enable --now omp-host-agent
+# /etc/omp-host-agent.env (Beispiel):
+#   OMP_HOST_AGENT_LABEL=4001
+#   OMP_ORCHESTRATOR_URL=http://192.168.0.60:8000
+#   OMP_REGISTRY_URL=http://192.168.0.60:8010
+#   OMP_NATS_URL=nats://192.168.0.60:4222,nats://192.168.0.60:4223,nats://192.168.0.60:4224
+#   # nur beim allerersten Start (Registrierung): OMP_HOST_AGENT_BOOTSTRAP_TOKEN=...
+# Hinweis: Beim Stoppen/Neustarten des Dienstes werden die vom Agent gestarteten Nodes mit beendet.
+[Unit]
+Description=OpenMediaPlatform Host-Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=adunkl
+WorkingDirectory=/home/adunkl/open-media-platform
+EnvironmentFile=/etc/omp-host-agent.env
+ExecStart=/bin/bash -c '[ -f deploy/dev/mxl.env ] && . deploy/dev/mxl.env; exec ./bin/omp-host-agent'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
