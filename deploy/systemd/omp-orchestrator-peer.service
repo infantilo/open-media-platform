@@ -1,0 +1,34 @@
+# Zweiter Orchestrator (Raft-Cluster mit dem Hauptrechner), z. B. auf 192.168.0.61.
+# Nutzt die Infrastruktur des Hauptrechners (.60): NATS, Registry und Postgres
+# (über deploy/systemd/omp-pg-proxy@.socket). Beide Knoten starten mit derselben
+# Gründungsliste OMP_CLUSTER_PEERS (kein Join per API nötig). Wichtig: gleiche
+# Datei data/auth-jwt-secret und deploy/dev/storage-secret.env wie auf dem
+# Hauptrechner (sonst gelten Anmeldungen/Storage-Secrets nur auf einer Instanz).
+# Hinweis: Ein 2-Knoten-Raft hat kein Quorum, sobald ein Knoten fehlt.
+# Adressen/Benutzer/Pfade an die Site anpassen.
+[Unit]
+Description=OpenMediaPlatform Orchestrator (Cluster-Peer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=adunkl
+WorkingDirectory=/home/adunkl/open-media-platform
+Environment=OMP_NODE_ID=node2
+Environment=OMP_RAFT_LISTEN=192.168.0.61:8300
+Environment=OMP_RAFT_DATA_DIR=/home/adunkl/data/raft/node2
+Environment=OMP_CLUSTER_PEERS=node-1=192.168.0.60:8300,node2=192.168.0.61:8300
+Environment=OMP_ORCHESTRATOR_URL=http://192.168.0.61:8000
+Environment=OMP_POSTGRES_URL=postgres://omp:omp@192.168.0.60:5432,192.168.0.60:5442,192.168.0.60:5452/omp?sslmode=disable&target_session_attrs=read-write
+Environment=OMP_NATS_URL=nats://192.168.0.60:4222,nats://192.168.0.60:4223,nats://192.168.0.60:4224
+Environment=OMP_REGISTRY_URL=http://192.168.0.60:8010
+Environment=OMP_UI_DIR=/home/adunkl/open-media-platform/ui
+Environment=OMP_CATALOG_PATH=/home/adunkl/open-media-platform/deploy/catalog.json
+Environment=OMP_MXL_DOMAIN=/dev/shm/omp-mxl
+ExecStartPre=/bin/mkdir -p /dev/shm/omp-mxl
+ExecStart=/bin/bash -c '[ -f deploy/dev/mxl.env ] && . deploy/dev/mxl.env; . deploy/dev/storage-secret.env; exec ./bin/omp-orchestrator'
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
