@@ -6,6 +6,9 @@
 #   ./install.sh --media --start   danach gleich starten
 #   ./install.sh --dry-run     nur anzeigen, was getan würde
 #   ./install.sh --yes         keine Rückfragen
+#   ./install.sh --systemd     OMP beim Boot automatisch starten (systemd-Dienst "omp", Hauptrechner)
+#   ./install.sh --host-agent-service --orchestrator <IP> [--label NAME] [--token TOKEN]
+#                              diesen Rechner als zusätzlichen Host anbinden (Dienst "omp-host-agent")
 #
 # Was das Skript tut (und nur das):
 #   1. Systempakete per Paketmanager installieren (braucht sudo; fragt vorher)
@@ -17,14 +20,20 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MEDIA=0; START=0; DRY=0; YES=0
-for a in "$@"; do
+MEDIA=0; START=0; DRY=0; YES=0; SYSTEMD=0; AGENT_SVC=0; ORCH_IP=""; AGENT_LABEL=""; AGENT_TOKEN=""
+while [ $# -gt 0 ]; do
+  a="$1"; shift
   case "$a" in
+    --systemd) SYSTEMD=1 ;;
+    --host-agent-service) AGENT_SVC=1 ;;
+    --orchestrator) ORCH_IP="${1:-}"; shift || true ;;
+    --label) AGENT_LABEL="${1:-}"; shift || true ;;
+    --token) AGENT_TOKEN="${1:-}"; shift || true ;;
     --media) MEDIA=1 ;;
     --start) START=1 ;;
     --dry-run) DRY=1 ;;
     --yes|-y) YES=1 ;;
-    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unbekannte Option: $a (siehe --help)" >&2; exit 2 ;;
   esac
 done
@@ -132,6 +141,38 @@ fi
 # ./bin/omp-host-agent). go build muss IM Verzeichnis host-agent/ laufen.
 say "Host-Agent bauen (bin/omp-host-agent)"
 run "mkdir -p \"$ROOT_DIR/bin\" && (cd \"$ROOT_DIR/host-agent\" && go build -o ../bin/omp-host-agent .)"
+
+# ---- systemd-Dienste (optional) ------------------------------------------------------
+unit_install() { # Vorlage, Zielname
+  run "sed -e 's#@USER@#$(id -un)#g' -e 's#@ROOT@#$ROOT_DIR#g' -e 's#@UID@#$(id -u)#g' -e 's#@HOME@#$HOME#g' \"$ROOT_DIR/deploy/systemd/$1\" | sudo tee /etc/systemd/system/$2 >/dev/null"
+}
+if [ "$SYSTEMD" = 1 ]; then
+  say "systemd-Dienst: OMP beim Boot starten"
+  have systemctl || { echo "systemd nicht gefunden." >&2; exit 1; }
+  unit_install omp.service omp.service
+  # rootless Podman (NATS/Registry/Postgres) braucht ein Benutzer-Runtime-Verzeichnis ohne aktive Anmeldung
+  run "sudo loginctl enable-linger $(id -un)"
+  run "sudo systemctl daemon-reload && sudo systemctl enable omp"
+  echo "    Start jetzt: sudo systemctl start omp   (Log: journalctl -u omp, .run/orchestrator.log)"
+  echo "    Hinweis: Der Dienst baut nichts neu (OMP_SKIP_BUILD=1). Nach Codeänderungen einmal 'make start' bzw. bauen."
+fi
+if [ "$AGENT_SVC" = 1 ]; then
+  say "systemd-Dienst: Host-Agent (zusätzlicher Host)"
+  [ -n "$ORCH_IP" ] || { echo "--host-agent-service braucht --orchestrator <IP des Hauptrechners>" >&2; exit 2; }
+  [ -n "$AGENT_LABEL" ] || AGENT_LABEL="$(hostname -s)"
+  [ -x "$ROOT_DIR/bin/omp-host-agent" ] || [ "$DRY" = 1 ] || { echo "bin/omp-host-agent fehlt (wird oben gebaut, falls go vorhanden)." >&2; exit 1; }
+  envfile="OMP_HOST_AGENT_LABEL=$AGENT_LABEL
+OMP_ORCHESTRATOR_URL=http://$ORCH_IP:8000
+OMP_REGISTRY_URL=http://$ORCH_IP:8010
+OMP_NATS_URL=nats://$ORCH_IP:4222,nats://$ORCH_IP:4223,nats://$ORCH_IP:4224"
+  [ -z "$AGENT_TOKEN" ] || envfile="$envfile
+OMP_HOST_AGENT_BOOTSTRAP_TOKEN=$AGENT_TOKEN"
+  run "printf '%s\\n' \"$envfile\" | sudo tee /etc/omp-host-agent.env >/dev/null && sudo chmod 600 /etc/omp-host-agent.env"
+  unit_install omp-host-agent.service omp-host-agent.service
+  run "sudo systemctl daemon-reload && sudo systemctl enable --now omp-host-agent"
+  echo "    Erststart: einmalig ein Bootstrap-Token (UI → Hosts → Host hinzufügen) mit --token übergeben."
+  echo "    Medien-Nodes auf diesem Host: vorher ./install.sh --media. Log: journalctl -u omp-host-agent"
+fi
 
 # ---- Prüfung ------------------------------------------------------------------------
 say "4/4 Prüfung (make preflight)"

@@ -1,7 +1,8 @@
 # systemd-Dienst für den OMP-Hauptrechner (Orchestrator, Supervisor, NATS, Registry,
 # Postgres/etcd — alles, was `make start` startet). Rootless-Podman braucht dafür
 # ein Benutzer-Runtime-Verzeichnis:  sudo loginctl enable-linger <benutzer>
-# Installation (als root), Pfade/Benutzer anpassen:
+# Installation: ./install.sh --systemd  (ersetzt @USER@/@ROOT@/@UID@/@HOME@ und aktiviert den Dienst)
+# Von Hand (als root), Platzhalter @…@ ersetzen:
 #   sudo cp deploy/systemd/omp.service /etc/systemd/system/
 #   sudo loginctl enable-linger adunkl
 #   sudo systemctl daemon-reload && sudo systemctl enable --now omp
@@ -16,10 +17,10 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-User=adunkl
-WorkingDirectory=/home/adunkl/open-media-platform
-Environment=XDG_RUNTIME_DIR=/run/user/1000
-Environment=PATH=/usr/local/go/bin:/home/adunkl/.deno/bin:/home/adunkl/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+User=@USER@
+WorkingDirectory=@ROOT@
+Environment=XDG_RUNTIME_DIR=/run/user/@UID@
+Environment=PATH=/usr/local/go/bin:@HOME@/.deno/bin:@HOME@/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Beim Boot nichts neu bauen (fertige Binaries), Preflight überspringen.
 Environment=OMP_SKIP_BUILD=1
 Environment=OMP_SKIP_PREFLIGHT=1

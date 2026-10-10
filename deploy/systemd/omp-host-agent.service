@@ -1,5 +1,6 @@
 # systemd-Dienst für den OMP-Host-Agent (entfernter Host).
-# Installation (als root), Pfade/Benutzer anpassen:
+# Installation: ./install.sh --host-agent-service --orchestrator <IP>  (legt auch /etc/omp-host-agent.env an)
+# Von Hand (als root), Platzhalter @…@ ersetzen:
 #   sudo cp deploy/systemd/omp-host-agent.service /etc/systemd/system/
 #   sudo install -m 600 /dev/null /etc/omp-host-agent.env   # und füllen, s. u.
 #   sudo systemctl daemon-reload && sudo systemctl enable --now omp-host-agent
@@ -16,8 +17,8 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-User=adunkl
-WorkingDirectory=/home/adunkl/open-media-platform
+User=@USER@
+WorkingDirectory=@ROOT@
 EnvironmentFile=/etc/omp-host-agent.env
 ExecStart=/bin/bash -c '[ -f deploy/dev/mxl.env ] && . deploy/dev/mxl.env; exec ./bin/omp-host-agent'
 Restart=always

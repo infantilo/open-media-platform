@@ -167,6 +167,23 @@ im Netz.
 
 ---
 
+## 6a. Autostart beim Boot (systemd)
+
+```bash
+./install.sh --systemd                         # Hauptrechner: Container, Supervisor, Orchestrator starten beim Boot
+./install.sh --host-agent-service --orchestrator <IP-Hauptrechner> [--label NAME] [--token TOKEN]
+                                               # weiterer Rechner als Host (Dienst omp-host-agent)
+```
+
+- `--systemd` legt den Dienst `omp` an (Vorlage `deploy/systemd/omp.service`, Platzhalter werden ersetzt) und
+  aktiviert `loginctl enable-linger` für rootless Podman. Beim Kaltstart ist Postgres anfangs noch nicht bereit;
+  der Dienst wiederholt den Start selbst. Er baut nichts neu — nach Codeänderungen einmal `make start`.
+- Der Host-Agent braucht beim **ersten** Start ein Bootstrap-Token (UI → Hosts → Host hinzufügen), danach nicht mehr.
+  Auf dem Host vorher `./install.sh --media`, sonst gibt es keine Medien-Nodes.
+- Instanzen (Source, Viewer …), die vor einem Neustart liefen, werden nach dem Start automatisch wiederhergestellt.
+- Zweiter Orchestrator (Raft-Cluster, 2 Knoten = kein Quorum bei Ausfall!): Vorlagen `deploy/systemd/omp-orchestrator-peer.service`
+  und `omp-pg-proxy@.socket` (Postgres nur für den Peer freigeben); Adressen sind standortspezifisch und von Hand anzupassen.
+
 ## 6. Häufige Probleme
 
 | Meldung / Symptom | Ursache und Abhilfe |
@@ -183,6 +200,7 @@ im Netz.
 | Kein Raft-Leader (`state: Candidate`), nichts startet | Zweiter Orchestrator als Voter eingetragen, aber nicht erreichbar bzw. Leader lauscht nur auf `127.0.0.1:8300`. Für Cluster `OMP_RAFT_LISTEN=<IP>:8300` setzen; der Beitritt wird sonst abgelehnt. |
 | Host-Agent: `unknown catalog type … on this host` | Katalog nicht gefunden: Agent aus dem Repo starten (`./bin/omp-host-agent`) oder `OMP_HOST_AGENT_CATALOG_PATH=…/deploy/catalog.json` setzen. |
 | Node auf entferntem Host: UI zeigt 502 | Node meldete sich mit `127.0.0.1`. Der Host-Agent setzt `OMP_HOST` jetzt automatisch; Override: `OMP_HOST_AGENT_ADVERTISE_HOST`. |
+| Handy: Kamera lässt sich nicht freigeben (Seite ist `http://`) | Gateway-Nodes bieten HTTPS an (`OMP_HTTPS=1`, im Katalog gesetzt); im Einladungs-Panel ist die Basis-URL dann `https://…` vorbelegt. Instanz nach dem Update neu starten, Zertifikatswarnung am Handy einmal bestätigen. |
 | Weitere Hosts erscheinen nicht | Ports aus Abschnitt 4 (Mehrere Rechner) prüfen, Host-Agent-Log ansehen. |
 
 Logs: `.run/orchestrator.log`, `.run/supervisor.log`; Container: `podman logs omp-nats-1`, `podman logs omp-nmos-registry`.
