@@ -31,7 +31,7 @@ case "$cmd" in
     podman run -d --name "$(name "$port")" --restart=always --network=host \
       -v "$ROOT/.run/caddy-phone:/data" \
       docker.io/library/caddy:latest \
-      caddy reverse-proxy --from "https://$ip:$https" --to "127.0.0.1:$port" >/dev/null
+      caddy reverse-proxy --disable-redirects --from "https://$ip:$https" --to "127.0.0.1:$port" >/dev/null
     echo "Handy-Basis-URL: https://$ip:$https   (Node-Port $port, TCP $https freigeben)"
     ;;
   stop)
