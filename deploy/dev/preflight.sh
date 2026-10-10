@@ -294,6 +294,20 @@ else
   warn "'ss' nicht gefunden" "Port-Prüfung übersprungen" "$(install_hint ss)"
 fi
 
+# Podman 5 (pasta): veröffentlichte Ports antworten auf 127.0.0.1, setzen aber
+# Verbindungen über ::1 ("localhost" löst oft zuerst dorthin auf) zurück —
+# dann sieht der Orchestrator die NMOS-Registry nicht und kein Node startet.
+# Nur prüfbar, wenn die Registry bereits läuft.
+if command -v curl >/dev/null 2>&1 && curl -s -m 3 -o /dev/null "http://127.0.0.1:8010/x-nmos/query/v1.3/" 2>/dev/null; then
+  if curl -s -m 3 -o /dev/null "http://[::1]:8010/x-nmos/query/v1.3/" 2>/dev/null; then
+    ok "Registry über IPv6 (::1)" "erreichbar"
+  elif getent ahosts localhost 2>/dev/null | awk 'NR==1 {exit !($1=="::1")}'; then
+    warn "Registry über ::1 nicht erreichbar" "IPv4 geht, 'localhost' löst aber zuerst auf ::1 auf (Podman/pasta) — Dienste mit localhost-URL sehen die Registry nicht" "OMP_REGISTRY_URL=http://127.0.0.1:8010 setzen (OMP-Standard) und keine localhost-URLs für Registry/Container-Ports verwenden"
+  else
+    ok "Registry über IPv4" "erreichbar (::1 unbenutzt)"
+  fi
+fi
+
 # =============================================================================
 section "Konfiguration"
 
