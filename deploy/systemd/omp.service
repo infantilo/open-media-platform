@@ -1,0 +1,32 @@
+# systemd-Dienst für den OMP-Hauptrechner (Orchestrator, Supervisor, NATS, Registry,
+# Postgres/etcd — alles, was `make start` startet). Rootless-Podman braucht dafür
+# ein Benutzer-Runtime-Verzeichnis:  sudo loginctl enable-linger <benutzer>
+# Installation (als root), Pfade/Benutzer anpassen:
+#   sudo cp deploy/systemd/omp.service /etc/systemd/system/
+#   sudo loginctl enable-linger adunkl
+#   sudo systemctl daemon-reload && sudo systemctl enable --now omp
+# Der Dienst ruft start-omp.sh / stop-omp.sh auf (OHNE --all: Container und
+# Postgres-Daten bleiben beim Stoppen unangetastet, nur der Orchestrator endet).
+[Unit]
+Description=OpenMediaPlatform (Orchestrator + Infrastruktur)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=adunkl
+WorkingDirectory=/home/adunkl/open-media-platform
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=PATH=/usr/local/go/bin:/home/adunkl/.deno/bin:/home/adunkl/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Beim Boot nichts neu bauen (fertige Binaries), Preflight überspringen.
+Environment=OMP_SKIP_BUILD=1
+Environment=OMP_SKIP_PREFLIGHT=1
+ExecStart=/bin/bash -c '[ -f deploy/dev/mxl.env ] && . deploy/dev/mxl.env; exec deploy/dev/start-omp.sh'
+ExecStop=/bin/bash -c 'exec deploy/dev/stop-omp.sh'
+KillMode=process
+TimeoutStartSec=900
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target
