@@ -36,7 +36,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  make contract NODE_URL=http://localhost:9320")
 		os.Exit(2)
 	}
-	registryURL := getEnv("OMP_REGISTRY_URL", "http://localhost:8010")
+	registryURL := getEnv("OMP_REGISTRY_URL", "http://127.0.0.1:8010")
 
 	compiler := jsonschema.NewCompiler()
 	schema, err := compiler.Compile(checker.DefaultSchemaPath())

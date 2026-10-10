@@ -1174,7 +1174,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let label = env_or("OMP_LABEL", "VideoMixerME");
     let host = env_or("OMP_HOST", "127.0.0.1");
     let port: u16 = env_or("OMP_PORT", "9360").parse()?;
-    let registry_url = env_or("OMP_REGISTRY_URL", "http://localhost:8010");
+    let registry_url = env_or("OMP_REGISTRY_URL", "http://127.0.0.1:8010");
     let nats_url = env_or("OMP_NATS_URL", "nats://localhost:4222");
     let domain = env_or("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl");
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();

@@ -6,7 +6,7 @@
 # v1.3.x, APIs/schemas/{node,device,sender,receiver_video}.json) geprüft.
 set -euo pipefail
 
-REGISTRY_URL="${OMP_REGISTRY_URL:-http://localhost:8010}"
+REGISTRY_URL="${OMP_REGISTRY_URL:-http://127.0.0.1:8010}"
 API="$REGISTRY_URL/x-nmos/registration/v1.3"
 LABEL="${1:-Fake Node}"
 

@@ -19,7 +19,7 @@ type Client struct {
 }
 
 // NewClient erstellt einen Client für die Query-API unter baseURL (z. B.
-// "http://localhost:8010"), Version v1.3.
+// "http://127.0.0.1:8010"), Version v1.3.
 func NewClient(baseURL string, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient

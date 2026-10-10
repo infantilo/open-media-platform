@@ -38,7 +38,7 @@ wait_http() { for _ in $(seq 1 40); do curl -sf "$1" >/dev/null && return 0; sle
 
 wire() {
   local S V A R1 R2
-  S="$(curl -s "http://localhost:8010/x-nmos/query/v1.3/senders?paging.limit=100")"
+  S="$(curl -s "http://127.0.0.1:8010/x-nmos/query/v1.3/senders?paging.limit=100")"
   V="$(echo "$S" | python3 -c "import json,sys;print([x['id'] for x in json.load(sys.stdin) if x['label']=='Handy-Kamera Sender 1'][0])")"
   A="$(echo "$S" | python3 -c "import json,sys;print([x['id'] for x in json.load(sys.stdin) if x['label']=='Handy-Kamera Sender 2'][0])")"
   read -r R1 R2 <<<"$(curl -s localhost:9442/x-nmos/connection/v1.1/single/receivers/ | python3 -c "import json,sys;print(' '.join(x.strip('/') for x in json.load(sys.stdin)))")"
@@ -68,7 +68,7 @@ rm -rf "${OMP_MXL_DOMAIN:-/dev/shm/omp-mxl}"/* 2>/dev/null || true
 OMP_WEBRTC_PUBLIC_IP="${OMP_WEBRTC_PUBLIC_IP:-$HOST}" OMP_WEBRTC_ICE_PORT=9450 OMP_LABEL="Handy-Kamera" OMP_HOST=127.0.0.1 OMP_PORT=9440 setsid "$BIN" > "$RUN/camera.log" 2>&1 < /dev/null &
 OMP_WEBRTC_PUBLIC_IP="${OMP_WEBRTC_PUBLIC_IP:-$HOST}" OMP_WEBRTC_ICE_PORT=9452 OMP_WEBRTC_GATEWAY_DIRECTION=monitor OMP_LABEL="Handy-Monitor" OMP_HOST=127.0.0.1 OMP_PORT=9442 setsid "$BIN" > "$RUN/monitor.log" 2>&1 < /dev/null &
 wait_http http://127.0.0.1:9440/clock && wait_http http://127.0.0.1:9442/clock
-for _ in $(seq 1 40); do curl -s "http://localhost:8010/x-nmos/query/v1.3/senders?paging.limit=100" | grep -q "Handy-Kamera Sender 2" && break; sleep 0.5; done
+for _ in $(seq 1 40); do curl -s "http://127.0.0.1:8010/x-nmos/query/v1.3/senders?paging.limit=100" | grep -q "Handy-Kamera Sender 2" && break; sleep 0.5; done
 wire
 
 # Caddy: der Hostname/die IP ist beim Anlegen des Containers festgelegt (SAN

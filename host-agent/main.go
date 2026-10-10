@@ -107,7 +107,7 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
 	orchestratorURL := envOr("OMP_ORCHESTRATOR_URL", "http://localhost:8000")
-	registryURL := envOr("OMP_REGISTRY_URL", "http://localhost:8010")
+	registryURL := envOr("OMP_REGISTRY_URL", "http://127.0.0.1:8010")
 	natsURL := envOr("OMP_NATS_URL", defaultNatsURL)
 	statePath := envOr("OMP_HOST_AGENT_STATE_FILE", ".omp-host-agent-state.json")
 	catalogPath := envOr("OMP_HOST_AGENT_CATALOG_PATH", "")

@@ -82,7 +82,7 @@ update-bundle: ui nodes
 # Prüft den Node-Contract (ARCHITECTURE.md §5) gegen einen laufenden
 # Node (UMSETZUNG.md C9). NODE_URL erforderlich, z. B.:
 #   make contract NODE_URL=http://localhost:9320
-# OMP_REGISTRY_URL optional (Default http://localhost:8010) — falls
+# OMP_REGISTRY_URL optional (Default http://127.0.0.1:8010) — falls
 # gebraucht, vor dem Aufruf exportieren, nicht hier setzen (sonst würde
 # ein leerer Wert den Go-seitigen Fallback überschreiben).
 contract:

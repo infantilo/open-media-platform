@@ -23,8 +23,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Listen != ":8000" {
 		t.Errorf("Listen = %q, want %q", cfg.Listen, ":8000")
 	}
-	if cfg.RegistryURL != "http://localhost:8010" {
-		t.Errorf("RegistryURL = %q, want %q", cfg.RegistryURL, "http://localhost:8010")
+	if cfg.RegistryURL != "http://127.0.0.1:8010" {
+		t.Errorf("RegistryURL = %q, want %q", cfg.RegistryURL, "http://127.0.0.1:8010")
 	}
 	if cfg.NatsURL != defaultNatsURL {
 		t.Errorf("NatsURL = %q, want %q", cfg.NatsURL, defaultNatsURL)

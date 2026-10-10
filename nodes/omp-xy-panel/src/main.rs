@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let label = env_or("OMP_LABEL", "X/Y-Panel");
     let host = env_or("OMP_HOST", "127.0.0.1");
     let port: u16 = env_or("OMP_PORT", "9450").parse()?;
-    let registry_url = env_or("OMP_REGISTRY_URL", "http://localhost:8010");
+    let registry_url = env_or("OMP_REGISTRY_URL", "http://127.0.0.1:8010");
     let nats_url = env_or("OMP_NATS_URL", "nats://localhost:4222");
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
 

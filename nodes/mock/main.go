@@ -51,7 +51,7 @@ func main() {
 	uiBundle := flag.Bool("ui-bundle", false, "Beispiel-Node-UI-Bundle servieren (/ui/manifest.json, /ui/bundle.js) statt des generischen Descriptor-Panels")
 	flag.Parse()
 
-	registryURL := getEnv("OMP_REGISTRY_URL", "http://localhost:8010")
+	registryURL := getEnv("OMP_REGISTRY_URL", "http://127.0.0.1:8010")
 	natsURL := getEnv("OMP_NATS_URL", "nats://localhost:4222")
 	host := getEnv("OMP_MOCK_HOST", "127.0.0.1")
 

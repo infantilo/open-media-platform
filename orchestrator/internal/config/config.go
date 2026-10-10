@@ -279,7 +279,7 @@ func Load() Config {
 	return Config{
 		Listen:             getEnv("OMP_LISTEN", ":8000"),
 		OrchestratorURL:    getEnv("OMP_ORCHESTRATOR_URL", "http://localhost:8000"),
-		RegistryURL:        getEnv("OMP_REGISTRY_URL", "http://localhost:8010"),
+		RegistryURL:        getEnv("OMP_REGISTRY_URL", "http://127.0.0.1:8010"),
 		NatsURL:            getEnv("OMP_NATS_URL", defaultNatsURL),
 		UIDir:              getEnv("OMP_UI_DIR", "../ui"),
 		CatalogPath:        getEnv("OMP_CATALOG_PATH", "../deploy/catalog.json"),

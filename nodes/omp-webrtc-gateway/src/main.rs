@@ -252,7 +252,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ),
         host: env_or("OMP_HOST", "127.0.0.1"),
         port: env_or("OMP_PORT", if monitor { "9442" } else { "9440" }).parse()?,
-        registry_url: env_or("OMP_REGISTRY_URL", "http://localhost:8010"),
+        registry_url: env_or("OMP_REGISTRY_URL", "http://127.0.0.1:8010"),
         nats_url: env_or("OMP_NATS_URL", "nats://localhost:4222"),
         domain: env_or("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl"),
         instance_id: std::env::var("OMP_INSTANCE_ID").ok(),

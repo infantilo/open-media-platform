@@ -22,7 +22,7 @@ type Client struct {
 }
 
 // NewClient erstellt einen Registration-API-Client für baseURL (z. B.
-// "http://localhost:8010").
+// "http://127.0.0.1:8010").
 func NewClient(baseURL string) *Client {
 	return &Client{baseURL: baseURL, http: http.DefaultClient}
 }
