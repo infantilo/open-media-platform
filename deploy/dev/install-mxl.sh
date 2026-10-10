@@ -124,8 +124,21 @@ fi
 
 echo "== Build libmxl + Tools (CMake Preset: $MXL_PRESET) =="
 cd "$MXL_SRC_DIR"
-cmake --preset "$MXL_PRESET"
-cmake --build "build/$MXL_PRESET" --parallel "$(nproc)"
+# MXL baut standardmäßig für x86-64-v3 (AVX2). Auf CPUs ohne AVX2 — typisch:
+# VMs mit generischem QEMU-CPU-Modell — stürzt libmxl.so dann mit "Illegal
+# instruction" ab (Nutzerfund 2026-10-11, DomainWatcher-Konstruktor), jeder
+# MXL-Node crash-loopt. Deshalb Ziel-Architektur nach /proc/cpuinfo wählen
+# (Überschreiben: MXL_TARGET_ARCH=...).
+if [ -z "${MXL_TARGET_ARCH:-}" ] && [ "$(uname -m)" = "x86_64" ]; then
+  cpu_flags="$(grep -m1 '^flags' /proc/cpuinfo 2>/dev/null || true)"
+  has() { printf '%s\n' "$cpu_flags" | grep -qw "$1"; }
+  if has avx2 && has bmi2 && has fma && has movbe; then MXL_TARGET_ARCH="x86-64-v3"
+  elif has sse4_2 && has ssse3 && has popcnt; then MXL_TARGET_ARCH="x86-64-v2"
+  else MXL_TARGET_ARCH="x86-64"; fi
+  echo "  CPU-Ziel für libmxl: $MXL_TARGET_ARCH (nach /proc/cpuinfo)"
+fi
+cmake --preset "$MXL_PRESET" ${MXL_TARGET_ARCH:+-DMXL_TARGET_ARCH="$MXL_TARGET_ARCH"}
+cmake --build "build/$MXL_PRESET" --parallel "${MXL_BUILD_JOBS:-$(nproc)}"
 MXL_BUILD_DIR="$MXL_SRC_DIR/build/$MXL_PRESET"
 
 mkdir -p "$ROOT_DIR/deploy/dev"
