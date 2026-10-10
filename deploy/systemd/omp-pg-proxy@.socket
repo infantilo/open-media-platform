@@ -1,0 +1,16 @@
+# Postgres-Weiterleitung für einen zweiten Orchestrator (Cluster). Patroni lauscht
+# nur auf 127.0.0.1 (Daten liegen ohne Volume im Container — Container NICHT neu
+# anlegen). Diese Socket-Unit macht den Port %i auf der LAN-Adresse erreichbar und
+# lässt per IPAddressAllow nur den Peer durch. Adressen an die Site anpassen.
+# Aktivieren:  systemctl enable --now omp-pg-proxy@5432.socket omp-pg-proxy@5442.socket omp-pg-proxy@5452.socket
+[Unit]
+Description=OMP Postgres-Weiterleitung %i (nur Orchestrator-Peer)
+
+[Socket]
+ListenStream=192.168.0.60:%i
+FreeBind=yes
+IPAddressDeny=any
+IPAddressAllow=192.168.0.61 127.0.0.1
+
+[Install]
+WantedBy=sockets.target

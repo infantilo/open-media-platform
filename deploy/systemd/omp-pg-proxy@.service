@@ -1,0 +1,10 @@
+[Unit]
+Description=OMP Postgres-Weiterleitung %i
+Requires=omp-pg-proxy@%i.socket
+After=omp-pg-proxy@%i.socket
+
+[Service]
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:%i
+PrivateTmp=yes
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1
