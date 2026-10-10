@@ -178,6 +178,11 @@ im Netz.
 | Nodes starten nicht: `libmxl.so … cannot open shared object file` | MXL fehlt: `./install.sh --media` (oder `deploy/dev/install-mxl.sh`). |
 | Node-Liste in der Oberfläche leer | Medien-Nodes nicht gebaut: `make nodes` (oder `./install.sh --media`). |
 | Oberfläche zeigt Seite, aber leer / alte Version | Browser-Cache leeren; nach UI-Änderungen `make start` (baut neu). |
+| Node-Start: `Illegal instruction` (SIGILL), Crash-Loop | CPU ohne AVX2 (z. B. generisches QEMU-CPU-Modell): libmxl wurde für AVX2 gebaut. `deploy/dev/install-mxl.sh` erneut ausführen (wählt die Ziel-CPU nach `/proc/cpuinfo`, Override `MXL_TARGET_ARCH`), oder in der VM den CPU-Typ `host` wählen. |
+| Orchestrator sieht keine Nodes, `registry poll failed … connection reset` | `localhost` löst zu `::1` auf, Podman 5 (pasta) setzt diese Verbindungen zurück. Standard ist jetzt `http://127.0.0.1:8010`; eigene `OMP_REGISTRY_URL` ebenfalls mit `127.0.0.1`. `make preflight` meldet den Fall. |
+| Kein Raft-Leader (`state: Candidate`), nichts startet | Zweiter Orchestrator als Voter eingetragen, aber nicht erreichbar bzw. Leader lauscht nur auf `127.0.0.1:8300`. Für Cluster `OMP_RAFT_LISTEN=<IP>:8300` setzen; der Beitritt wird sonst abgelehnt. |
+| Host-Agent: `unknown catalog type … on this host` | Katalog nicht gefunden: Agent aus dem Repo starten (`./bin/omp-host-agent`) oder `OMP_HOST_AGENT_CATALOG_PATH=…/deploy/catalog.json` setzen. |
+| Node auf entferntem Host: UI zeigt 502 | Node meldete sich mit `127.0.0.1`. Der Host-Agent setzt `OMP_HOST` jetzt automatisch; Override: `OMP_HOST_AGENT_ADVERTISE_HOST`. |
 | Weitere Hosts erscheinen nicht | Ports aus Abschnitt 4 (Mehrere Rechner) prüfen, Host-Agent-Log ansehen. |
 
 Logs: `.run/orchestrator.log`, `.run/supervisor.log`; Container: `podman logs omp-nats-1`, `podman logs omp-nmos-registry`.

@@ -117,11 +117,21 @@ fi
 # ---- Medien-Nodes -----------------------------------------------------------------
 if [ "$MEDIA" = 1 ]; then
   say "3/4 MXL-Bibliothek und Medien-Nodes bauen (dauert, je nach Rechner 20–60 Minuten)"
+  if [ "$(uname -m)" = "x86_64" ] && ! grep -m1 '^flags' /proc/cpuinfo | grep -qw avx2; then
+    echo "    Hinweis: CPU ohne AVX2 (z. B. generisches QEMU-CPU-Modell) — libmxl wird automatisch für eine ältere"
+    echo "    Ziel-Architektur gebaut (sonst 'Illegal instruction' in jedem MXL-Node). Besser: VM-CPU-Typ 'host' wählen."
+  fi
   run "\"$ROOT_DIR/deploy/dev/install-mxl.sh\""
   run "make -C \"$ROOT_DIR\" nodes"
 else
   say "3/4 Medien-Nodes übersprungen (nachholen: ./install.sh --media)"
 fi
+
+# ---- Host-Agent (für entfernte Hosts im Cluster) ---------------------------------
+# bin/omp-host-agent wird vom Host-Assistenten der UI gebraucht (Skript startet
+# ./bin/omp-host-agent). go build muss IM Verzeichnis host-agent/ laufen.
+say "Host-Agent bauen (bin/omp-host-agent)"
+run "mkdir -p \"$ROOT_DIR/bin\" && (cd \"$ROOT_DIR/host-agent\" && go build -o ../bin/omp-host-agent .)"
 
 # ---- Prüfung ------------------------------------------------------------------------
 say "4/4 Prüfung (make preflight)"
@@ -138,6 +148,7 @@ Installation abgeschlossen. Nächste Schritte:
   source ~/.bashrc          # (oder neues Terminal) damit go/deno/cargo im PATH sind
   cd $ROOT_DIR && make start
   Browser: http://localhost:8000   (erster Start: Container-Images laden, einige Minuten)
-Ports/Firewall und Aufbau: docs/INSTALLATION.md
+Weiteren Rechner als Host anbinden: UI → Hosts → „Host hinzufügen“ (Skript auf dem Zielrechner im
+Repo-Verzeichnis ausführen; dort vorher ./install.sh --media). Ports/Firewall: docs/INSTALLATION.md
 EOF
 fi
