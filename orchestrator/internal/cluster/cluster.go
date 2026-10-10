@@ -36,6 +36,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -61,6 +62,26 @@ import (
 // manuelles Löschen des Raft-Datenverzeichnisses und ein Neustart als
 // frischer Ein-Knoten-Cluster. Dieser Fall wird hart abgelehnt, statt
 // ihn erst live scheitern zu lassen.
+// ErrLeaderRaftLoopback: der Leader lauscht/meldet sich nur auf einer
+// Loopback-Adresse (Default OMP_RAFT_LISTEN=127.0.0.1:8300), das beitretende
+// Mitglied liegt aber auf einem anderen Rechner — es könnte den Leader nie
+// erreichen, und ohne Quorum gäbe es danach gar keinen Leader mehr (Nutzerfund
+// 2026-10-10: Zwei-Knoten-Cluster, .60 ohne Leader, Nodes ließen sich nicht
+// mehr starten).
+var ErrLeaderRaftLoopback = errors.New("cluster: this instance's raft address is loopback-only; restart it with OMP_RAFT_LISTEN=<reachable-ip>:8300 before adding members on other hosts")
+
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 var ErrLastVoterIsLeader = errors.New("cluster: refusing to remove the last remaining member (would permanently break the cluster)")
 
 // transportMaxPool/transportTimeout sind Raft-Transport-Parameter ohne
@@ -392,6 +413,9 @@ func (n *Node) apply(cmd Command) error {
 func (n *Node) Join(nodeID, raftAddr, httpAddr string) error {
 	if !n.IsLeader() {
 		return raft.ErrNotLeader
+	}
+	if isLoopbackAddr(n.config.RaftAddr) && !isLoopbackAddr(raftAddr) {
+		return ErrLeaderRaftLoopback
 	}
 	future := n.raft.AddVoter(raft.ServerID(nodeID), raft.ServerAddress(raftAddr), 0, applyTimeout)
 	if err := future.Error(); err != nil {

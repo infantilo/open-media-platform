@@ -134,7 +134,7 @@ func forwardToLeader(clusterSvc ClusterService, w http.ResponseWriter, r *http.R
 // 409 gemeldet, alles andere bleibt 500. Kleine Hilfsfunktion statt
 // eines Sonderfalls in jedem Handler.
 func clusterErrorStatus(err error) int {
-	if errors.Is(err, raft.ErrNotLeader) || errors.Is(err, cluster.ErrLastVoterIsLeader) {
+	if errors.Is(err, raft.ErrNotLeader) || errors.Is(err, cluster.ErrLastVoterIsLeader) || errors.Is(err, cluster.ErrLeaderRaftLoopback) {
 		return http.StatusConflict
 	}
 	return http.StatusInternalServerError

@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"reflect"
@@ -440,4 +441,21 @@ func waitFor(timeout time.Duration, cond func() bool) bool {
 		time.Sleep(20 * time.Millisecond)
 	}
 	return cond()
+}
+
+func TestJoinRefusesRemoteMemberWhenLeaderIsLoopbackOnly(t *testing.T) {
+	leader, err := New(Config{NodeID: "leader", RaftAddr: freeTCPAddr(t), HTTPAddr: "http://127.0.0.1:9101", DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("New(leader) error = %v", err)
+	}
+	defer shutdownAll([]*Node{leader})
+	if !waitFor(10*time.Second, leader.IsLeader) {
+		t.Fatalf("solo leader never elected")
+	}
+	if err := leader.Join("remote", "192.168.0.61:8300", ""); !errors.Is(err, ErrLeaderRaftLoopback) {
+		t.Fatalf("Join(remote) error = %v, want ErrLeaderRaftLoopback", err)
+	}
+	if n := len(leader.Status().Peers); n != 1 {
+		t.Errorf("peers = %d, want 1 (Join must not have added the member)", n)
+	}
 }
