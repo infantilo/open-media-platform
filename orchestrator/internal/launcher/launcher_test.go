@@ -1413,3 +1413,46 @@ func TestLauncherSampleLocalGPU(t *testing.T) {
 		t.Errorf("LocalGPU = %+v", lg)
 	}
 }
+
+// TestRestoreLocalRestartsDeadInstanceUnderSameID — Reboot-Fall: eine persistierte, nicht mehr
+// laufende Instanz kommt mit derselben ID/demselben Label wieder; eine fremde Herkunft (anderer
+// Orchestrator im Cluster) bleibt unberührt.
+func TestRestoreLocalRestartsDeadInstanceUnderSameID(t *testing.T) {
+	disableAutoRestart(t)
+	store := newFakeInstanceStore()
+	_ = store.Put(Instance{ID: "mine-1", Type: "sleepy", Label: "Meine Quelle", PID: 999999999, Origin: "http://me:8000"})
+	_ = store.Put(Instance{ID: "legacy-1", Type: "sleepy", Label: "Alt ohne Origin", PID: 999999998})
+	_ = store.Put(Instance{ID: "other-1", Type: "sleepy", Label: "Fremd", PID: 999999997, Origin: "http://other:8000"})
+	_ = store.Put(Instance{ID: "crashed-1", Type: "sleepy", Label: "Abgestürzt", PID: 999999996, Crashed: true, Origin: "http://me:8000"})
+
+	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", store, nil, nil, testCatalogStore(t))
+	if got := l.List(); len(got) != 0 {
+		t.Fatalf("List() before restore = %+v, want empty", got)
+	}
+	l.SetOrchestratorURL("http://me:8000")
+	l.RestoreLocal()
+	defer func() { _ = l.Stop("mine-1"); _ = l.Stop("legacy-1") }()
+
+	byID := map[string]Instance{}
+	for _, in := range l.List() {
+		byID[in.ID] = in
+	}
+	for _, id := range []string{"mine-1", "legacy-1"} {
+		in, ok := byID[id]
+		if !ok || !processAlive(in.PID) || in.Crashed {
+			t.Errorf("instance %s not restored alive: %+v (found=%v)", id, in, ok)
+		}
+	}
+	if byID["mine-1"].Label != "Meine Quelle" {
+		t.Errorf("label = %q, want %q", byID["mine-1"].Label, "Meine Quelle")
+	}
+	if _, ok := byID["other-1"]; ok {
+		t.Errorf("foreign-origin instance must not be restored by this orchestrator")
+	}
+	if _, ok := byID["crashed-1"]; ok {
+		t.Errorf("crashed instance must not be restored")
+	}
+	if _, ok := store.data["other-1"]; !ok {
+		t.Errorf("foreign-origin row must stay in the store")
+	}
+}

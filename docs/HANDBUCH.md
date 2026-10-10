@@ -295,6 +295,13 @@ Aufruf mit eigenem `OMP_NODE_ID`/`OMP_RAFT_LISTEN`/`OMP_RAFT_DATA_DIR`/
 Postgres/NATS/Registry-Adressen unverändert lassen, nur die
 cluster-spezifischen Variablen sind pro Instanz eindeutig.
 
+**Neustart/Reboot:** Instanzen, die beim Beenden des Orchestrators bzw. des Rechners liefen
+(nicht abgestürzte Prozess-Nodes), werden nach dem Start unter ihrer alten ID wieder gestartet:
+lokale vom jeweiligen Orchestrator selbst (Feld `origin`, damit sich zwei Cluster-Orchestratoren
+nicht gegenseitig die Instanzen wegnehmen), Instanzen auf Host-Agents vom Cluster-Leader. Der Agent
+meldet eine noch laufende Instanz idempotent zurück; ist ein Host noch nicht erreichbar, versucht der
+Leader es bis zu 10 Minuten lang alle 10 s. Podman-Instanzen werden nicht automatisch wiederhergestellt.
+
 ## 5. Backup & Restore
 
 Der komplette Orchestrator-Zustand (Nutzer, Rollenbindungen, Audit-Log,

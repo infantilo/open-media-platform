@@ -233,6 +233,10 @@ type Instance struct {
 	// Prozess zuletzt (neu) gestartet wurde (Kapitel 29). Persistiert, damit „Neustart nötig“
 	// einen Orchestrator-Neustart überlebt; leer = ohne Optionen gestartet.
 	OptionsApplied string `json:"optionsApplied,omitempty"`
+	// Origin ist die Orchestrator-URL der Instanz, die diese lokal (HostID leer) gestartet hat.
+	// Im Cluster teilen sich mehrere Orchestratoren die instances-Tabelle; nur der Starter darf
+	// seine lokalen Instanzen nach einem Neustart/Reboot wiederherstellen (RestoreLocal).
+	Origin string `json:"origin,omitempty"`
 }
 
 // EventPublisher verteilt ein SSE-Event an alle verbundenen Flow-Editor-
@@ -353,6 +357,7 @@ type Launcher struct {
 
 	mu              sync.Mutex
 	instances       map[string]Instance
+	pendingRestore  []Instance // beim Laden nicht mehr laufende, nicht abgestürzte Instanzen (RestoreLocal/RestoreRemote)
 	importedCatalog map[string]CatalogEntry
 	restarts        map[string]*restartState
 
@@ -981,7 +986,7 @@ func (l *Launcher) startLocal(nodeType, version, customLabel string, extraEnv ma
 		return Instance{}, fmt.Errorf("launcher: start %s: %w", nodeType, err)
 	}
 
-	inst := Instance{OptionsApplied: l.appliedFor(id), ID: id, Type: nodeType, Label: label, PID: cmd.Process.Pid, ExtraEnv: extraEnv, Version: entry.Version, NodeVersion: nodeVersion, LaunchSecret: launchSecret}
+	inst := Instance{OptionsApplied: l.appliedFor(id), ID: id, Type: nodeType, Label: label, PID: cmd.Process.Pid, ExtraEnv: extraEnv, Version: entry.Version, NodeVersion: nodeVersion, LaunchSecret: launchSecret, Origin: l.orchestratorURL}
 
 	l.mu.Lock()
 	l.instances[id] = inst
@@ -1290,7 +1295,7 @@ func (l *Launcher) startPodmanLocal(nodeType string, entry CatalogEntry, id, lab
 		return Instance{}, fmt.Errorf("launcher: start %s: %w", nodeType, err)
 	}
 
-	inst := Instance{OptionsApplied: l.appliedFor(id), ID: id, Type: nodeType, Label: label, ContainerID: containerID, ExtraEnv: extraEnv, Version: entry.Version, LaunchSecret: launchSecret}
+	inst := Instance{OptionsApplied: l.appliedFor(id), ID: id, Type: nodeType, Label: label, ContainerID: containerID, ExtraEnv: extraEnv, Version: entry.Version, LaunchSecret: launchSecret, Origin: l.orchestratorURL}
 
 	l.mu.Lock()
 	l.instances[id] = inst
@@ -1997,7 +2002,16 @@ func (l *Launcher) loadState() {
 		}
 		if alive {
 			l.instances[inst.ID] = inst
-		} else if err := l.store.Delete(inst.ID); err != nil {
+			continue
+		}
+		// Nicht mehr laufend (Reboot/Absturz des Orchestrators): eine nicht abgestürzte Prozess-
+		// Instanz bleibt für die Wiederherstellung vorgemerkt (RestoreLocal/RestoreRemote), alles
+		// andere (abgestürzt, Podman) wird wie bisher verworfen.
+		if !inst.Crashed && inst.ContainerID == "" {
+			l.pendingRestore = append(l.pendingRestore, inst)
+			continue
+		}
+		if err := l.store.Delete(inst.ID); err != nil {
 			slog.Warn("launcher: failed to drop dead instance from persisted state", "id", inst.ID, "error", err)
 		}
 	}
@@ -2134,4 +2148,153 @@ func newInstanceID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b[:]), nil
+}
+
+// RestoreLocal startet die vor einem Neustart/Reboot laufenden lokalen Prozess-Instanzen unter
+// ihrer alten ID wieder (gleiche NMOS-IDs, Label, Optionen, Binärversion). Nur Instanzen, die
+// dieser Orchestrator selbst gestartet hat (Origin) — im Cluster gehören die übrigen dem Partner.
+// Aufruf einmal nach SetOrchestratorURL. Instanzen anderer Herkunft und entfernte Instanzen
+// bleiben vorgemerkt (RestoreRemote).
+func (l *Launcher) RestoreLocal() {
+	l.mu.Lock()
+	pending := l.pendingRestore
+	l.pendingRestore = nil
+	l.mu.Unlock()
+
+	var rest []Instance
+	for _, inst := range pending {
+		if inst.HostID != "" {
+			rest = append(rest, inst)
+			continue
+		}
+		if inst.Origin != "" && inst.Origin != l.orchestratorURL {
+			continue // gehört dem anderen Orchestrator, dessen Zeile bleibt unberührt
+		}
+		if err := l.respawnLocal(inst); err != nil {
+			slog.Warn("launcher: restore local instance failed", "id", inst.ID, "type", inst.Type, "error", err)
+			inst.Crashed = true
+			inst.CrashMessage = fmt.Sprintf("Wiederherstellung nach Neustart fehlgeschlagen: %v", err)
+			l.mu.Lock()
+			l.instances[inst.ID] = inst
+			_ = l.persistInstanceLocked(inst.ID)
+			l.mu.Unlock()
+			continue
+		}
+		slog.Info("launcher: restored local instance", "id", inst.ID, "type", inst.Type)
+	}
+	l.mu.Lock()
+	l.pendingRestore = rest
+	l.mu.Unlock()
+}
+
+func (l *Launcher) respawnLocal(inst Instance) error {
+	entry, err := l.resolveCatalogEntry(inst.Type, inst.Version)
+	if err != nil {
+		return err
+	}
+	if entry.Runner != runnerProcess {
+		return ErrUnsupportedRunner
+	}
+	entry, nodeVersion, err := l.applyBinary(entry, inst.NodeVersion)
+	if err != nil {
+		return err
+	}
+	secret, err := newInstanceID()
+	if err != nil {
+		return err
+	}
+	cmd, stderrTail, err := l.execEntry(entry, inst.ID, inst.Label, secret, l.withOptions(inst.Type, inst.ID, "", inst.ExtraEnv))
+	if err != nil {
+		return err
+	}
+	inst.PID = cmd.Process.Pid
+	inst.LaunchSecret = secret
+	inst.NodeVersion = nodeVersion
+	inst.Origin = l.orchestratorURL
+	inst.Crashed, inst.CrashMessage = false, ""
+	l.mu.Lock()
+	l.instances[inst.ID] = inst
+	if err := l.persistInstanceLocked(inst.ID); err != nil {
+		slog.Warn("launcher: failed to persist instance state", "error", err)
+	}
+	l.mu.Unlock()
+	id, typ, label, extra := inst.ID, inst.Type, inst.Label, inst.ExtraEnv
+	safego.Go("launcher.supervise", func() { l.supervise(id, typ, entry, label, extra, cmd, stderrTail) })
+	return nil
+}
+
+// RestoreRemote stellt vorgemerkte Instanzen auf Host-Agents wieder her (Kommando "start" mit der
+// alten Instanz-ID; der Agent meldet eine noch laufende Instanz idempotent zurück). Nur auf dem
+// Cluster-Leader aufrufen. Ist der Host noch nicht erreichbar (Reboot: Agent startet gerade),
+// wird bis zu restoreRemoteWindow lang alle restoreRemoteInterval wiederholt.
+func (l *Launcher) RestoreRemote() {
+	l.mu.Lock()
+	pending := l.pendingRestore
+	l.pendingRestore = nil
+	l.mu.Unlock()
+	for _, inst := range pending {
+		if inst.HostID == "" {
+			continue
+		}
+		inst := inst
+		safego.Go("launcher.restoreRemote", func() { l.restoreRemoteOne(inst) })
+	}
+}
+
+const (
+	restoreRemoteWindow   = 10 * time.Minute
+	restoreRemoteInterval = 10 * time.Second
+)
+
+func (l *Launcher) restoreRemoteOne(inst Instance) {
+	secret, err := newInstanceID()
+	if err != nil {
+		return
+	}
+	// Sofort sichtbar machen (Kachel mit „startet…“), statt erst nach dem ersten Erfolg.
+	l.mu.Lock()
+	l.instances[inst.ID] = inst
+	l.mu.Unlock()
+	deadline := time.Now().Add(restoreRemoteWindow)
+	var lastErr string
+	for {
+		l.mu.Lock()
+		_, tracked := l.instances[inst.ID]
+		l.mu.Unlock()
+		if !tracked {
+			return // Stop() während der Wiederholungen
+		}
+		resp, err := l.sendCommand(inst.HostID, remoteCommand{
+			Action: "start", Type: inst.Type, InstanceID: inst.ID, Label: inst.Label,
+			ExtraEnv: inst.ExtraEnv, Options: l.remoteOptions(inst.Type, inst.ID, "", inst.ExtraEnv),
+			LaunchSecret: secret,
+		})
+		if err == nil && resp.OK {
+			inst.PID = resp.PID
+			inst.LaunchSecret = secret
+			inst.Crashed, inst.CrashMessage = false, ""
+			l.mu.Lock()
+			l.instances[inst.ID] = inst
+			_ = l.persistInstanceLocked(inst.ID)
+			l.mu.Unlock()
+			slog.Info("launcher: restored remote instance", "id", inst.ID, "type", inst.Type, "host_id", inst.HostID)
+			return
+		}
+		if err != nil {
+			lastErr = err.Error()
+		} else {
+			lastErr = resp.Error
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(restoreRemoteInterval)
+	}
+	inst.Crashed = true
+	inst.CrashMessage = "Wiederherstellung nach Neustart fehlgeschlagen: " + lastErr
+	l.mu.Lock()
+	l.instances[inst.ID] = inst
+	_ = l.persistInstanceLocked(inst.ID)
+	l.mu.Unlock()
+	l.publishCrash(inst)
 }

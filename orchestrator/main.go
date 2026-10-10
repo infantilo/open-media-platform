@@ -541,6 +541,9 @@ func main() {
 	// um sich ein Service-Token zu holen und den generischen Proxy
 	// statt eines direkten Node-zu-Node-Zugriffs anzusprechen.
 	launcherSvc.SetOrchestratorURL(cfg.OrchestratorURL)
+	// Nach Neustart/Reboot die zuvor laufenden Instanzen wieder starten (lokale hier, Instanzen auf
+	// Host-Agents vom Cluster-Leader, s. unten).
+	launcherSvc.RestoreLocal()
 	// Kapitel 29: einstellbare Node-Optionen (Schema aus node-options.json neben dem Katalog,
 	// Werte aus Postgres). Fehlt die Datei, bleibt alles wie früher.
 	nodeOptionStore := nodeoptions.NewStore(database)
@@ -737,6 +740,10 @@ func main() {
 	// claimMigrationAttempt schützt nur innerhalb EINES Prozesses, nicht
 	// clusterweit).
 	go runWhileLeader(ctx, clusterNode, placementEngine.Run)
+	go runWhileLeader(ctx, clusterNode, func(ctx context.Context) {
+		launcherSvc.RestoreRemote()
+		<-ctx.Done()
+	})
 
 	// Workflow-Bereitstellung & -Verteilung (ARCHITECTURE.md §6.2,
 	// UMSETZUNG.md D7 Teil 1/Teil 2): bündelt mehrere launcherSvc.Start()-

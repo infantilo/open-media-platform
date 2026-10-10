@@ -304,6 +304,16 @@ func (e *Executor) start(req Request) Response {
 	if req.InstanceID == "" {
 		return Response{OK: false, Error: "instanceId required"}
 	}
+	// Idempotent: ein Orchestrator, der nach einem eigenen Neustart seine
+	// persistierten Instanzen wiederherstellt, schickt "start" auch für Instanzen,
+	// die hier noch laufen — nicht doppelt starten, sondern die laufende melden.
+	e.mu.Lock()
+	if ri, running := e.instances[req.InstanceID]; running && ri.cmd.Process != nil {
+		pid := ri.cmd.Process.Pid
+		e.mu.Unlock()
+		return Response{OK: true, PID: pid}
+	}
+	e.mu.Unlock()
 	for k := range req.ExtraEnv {
 		if !allowedExtraEnvKeys[k] {
 			return Response{OK: false, Error: fmt.Sprintf("extraEnv key %q not allowed", k)}
