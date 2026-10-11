@@ -69,7 +69,7 @@ Domain functions such as playout (channels, triggers, as-run), audio output rule
 
 An essential part of the architecture is also the NMOS Control Framework (IS-12/IS-14). Each service describes its own parameters and capabilities. Therefore, the orchestrator doesn't need to know whether it's a video mixer, audio mixer, or a future node type. New components can be integrated without requiring any modifications to the orchestrator. This self-description capability is precisely what makes the platform scalable in the long term.
 
-Although the project is still in its early stages, the current version is already fully functional on my Chromebook. For me, this is important proof that modern broadcast architectures can initially be developed and validated with manageable resources.
+Although the project is still in its early stages, the current version is already fully functional on my Chromebook. For me, this is important proof that modern broadcast architectures can initially be developed and validated with manageable resources. The installer has also been verified on a fresh **Proxmox** server (clean Debian 13 VM, installed and started with `install.sh`), i.e. beyond the development machine.
 
 I'm excited to see how this approach evolves and look forward to exchanging ideas with everyone involved in software-defined broadcast systems, open standards, or modern media architectures.
 
@@ -92,6 +92,11 @@ Then open http://localhost:8000. `./install.sh --start` (without `--media`)
 installs only the core system (orchestrator, UI, database, message bus —
 no video/audio nodes) in about ten minutes. Run `make preflight` at any time
 to check the machine; it names the fix for every problem.
+
+For an unattended main machine, `./install.sh --systemd` sets up
+autostart at boot, and `--host-agent-service` turns an additional machine
+into a host (agent as a systemd service); instances are restored under
+their old ID after a restart or reboot.
 
 Prerequisites, the complete **port/firewall table** (only TCP 8000 is needed on
 a single machine), who talks to whom, and manual installation:
@@ -263,9 +268,12 @@ Full walkthroughs and context for every screen above are in
   a zone per host (live CPU/RAM, fixed lanes, toggleable), a connection
   that crosses a host boundary while using host-local MXL is flagged
   automatically (dashed, with an explanation), zones are collapsible,
-  and dragging a standalone node's tile into another zone triggers a
-  guided move (stop, start on the target host, best-effort reconnect
-  of its existing connections) after a confirmation dialog.
+  and moving a node's tile to another zone (⇄ button, also for the
+  individual role tiles of a running workflow) triggers a guided move
+  after a confirmation dialog: stop, start on the target host, reconnect
+  of its existing connections, and carry over the instance's own state
+  (e.g. switcher source selection, mixer program) and the references
+  other nodes hold to it.
 
 **Operations**
 
@@ -390,9 +398,13 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   (UDP/SRT) and raw sections; the playout automation can mark ad breaks
   automatically from the event classification
 - **omp-viewer** / **omp-multiviewer** — single-stream preview and
-  auto-discovered multi-tile monitoring (with automatic low-res preview
-  fan-out); as a role in a workflow the multiviewer shows only that
+  auto-discovered multi-tile monitoring (with preview of every discovered
+  source); as a role in a workflow the multiviewer shows only that
   workflow's sources
+- **omp-xy-panel** — crosspoint panel (X/Y matrix) for operators: sinks
+  with tags, navigation by workflows/groups, bouquets (a bundle of
+  sources per media type), tag-based switching, 60-second undo; usable
+  on a phone
 - **omp-ograf** — EBU OGraf graphics overlay node (Fill+Key)
 - **omp-media-library** — file catalog with technical metadata
   (ffprobe) and mark-in/out segments
@@ -430,7 +442,8 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   cameras and phone/browser monitors to join the MXL fabric with zero
   install, catalog entries for both directions
   (`omp-webrtc-gateway-camera` ingest, `omp-webrtc-gateway-monitor`
-  playout). Connecting is invitation-only by design (a phone's browser
+  playout; optionally served over its own HTTPS listener with a
+  self-signed certificate, which phone browsers require for the camera). Connecting is invitation-only by design (a phone's browser
   is by definition on the open internet-facing side): an operator
   issues time-scoped invitation links/QR codes from the node's own UI,
   and WHIP/WHEP requests without a valid, unexpired invitation token
@@ -489,11 +502,8 @@ node has to satisfy.
 - A placement engine (overload alarm + target-host suggestion,
   configurable per workflow role between purely advisory, a
   confirmation window with automatic execution on expiry, or immediate
-  automatic execution) plus, since Kapitel 13, a manual guided move via
-  drag in the flow editor for standalone nodes (see above); the
-  equivalent for workflow roles exists in the orchestrator (reuses the
-  same make-before-break protocol) but has no UI trigger yet — see
-  "What OpenMediaPlatform does not do" below.
+  automatic execution) plus a manual guided move in the flow editor for
+  standalone nodes and workflow roles (see above).
 - Login-based user/role accounts (local, no external directory server
   required) gate who can wire the graph, launch instances, or
   administer hosts; every write access is captured in an audit log.
@@ -549,16 +559,6 @@ Being upfront about the current edges, not just the highlights:
 - **No NDI gateway, no proprietary Dante.** AES67 (which most Dante
   devices also speak) is supported via `omp-aes67-gateway`; native NDI
   and Dante's proprietary control protocol are not implemented.
-- **Workflow-role migration has no drag-to-move UI yet.** The backend
-  for moving a running workflow role to another host exists and is
-  tested (`POST /api/v1/workflows/{id}/roles/{role}/migrate`), and the
-  flow editor's host view now correctly places a running workflow's
-  collapsed tile in the zone matching where its roles actually run
-  (including a dedicated zone when roles are split across hosts) — but
-  it's still one collapsed tile, so there's no individual-role tile to
-  drag. Only standalone (non-workflow) node instances can be moved
-  today via drag-and-drop; migrating a workflow role needs the API
-  directly for now.
 - **NMOS grouphint not yet meaningful for video/audio pairs.** OMP's
   own flow definitions use each flow's own ID as the NMOS grouphint
   group name, so a source's video and audio flows never share a group
@@ -570,12 +570,14 @@ Being upfront about the current edges, not just the highlights:
   exist and are exercised by the test suite, but there has been no
   external penetration test or formal security review.
 - **Not production-hardened at broadcast scale.** This is a working
-  proof of concept, developed and demonstrated on a single laptop-class
-  machine (see below) — it has not been run in a real multi-day,
+  proof of concept, developed on a laptop-class
+  machine and installed on a Proxmox VM — it has not been run in a real multi-day,
   multi-operator broadcast production, and there is no commercial
   support offering.
-- **No mobile/tablet-optimized UI.** The web UI targets desktop
-  operator positions and engineering workstations.
+- **Mobile/tablet support is partial.** The main web UI targets desktop
+  operator positions and engineering workstations; touch layouts exist
+  for the audio mixer, the X/Y panel and the phone-camera pages, the
+  flow editor itself is not touch-optimized.
 - **No external identity provider.** User accounts are local to the
   orchestrator; there is no SSO/LDAP/OIDC integration.
 
@@ -652,9 +654,7 @@ fixed" actually looked in practice.
 **Open** (see "What OpenMediaPlatform does not do" above for the full,
 qualified list): RDMA hardware integration (`verbs`/EFA providers,
 pending hardware procurement), an NDI gateway, proprietary Dante
-(Dante in AES67 mode already runs via `omp-aes67-gateway`), a
-drag-to-move UI for the already-built workflow-role migration backend,
-the NMOS grouphint gap for video/audio pairs, and — within the ffmpeg
+(Dante in AES67 mode already runs via `omp-aes67-gateway`), the NMOS grouphint gap for video/audio pairs, and — within the ffmpeg
 assistant — keyframe-exact lossless concatenation with per-clip
 trimming (today's lossless mode covers whole, untrimmed clips; trimming
 still means re-encoding).
