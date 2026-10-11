@@ -58,6 +58,8 @@ pub struct Monitor {
     video_flowed: Arc<AtomicBool>,
     audio_flowed: Arc<AtomicBool>,
     session: Mutex<Option<Session>>,
+    /// x264enc der aktuellen WHEP-Sitzung (für Keyframe-Anforderung bei `connected`).
+    video_enc: Arc<Mutex<Option<gst::Element>>>,
     connection_state: Arc<Mutex<String>>,
     config: Config,
     pub heartbeat: Arc<AtomicU64>,
@@ -94,6 +96,16 @@ fn add_dummy_branch(pipeline: &gst::Pipeline, tee: &gst::Element) -> Result<(), 
         .link(&sink)
         .map_err(|e| format!("link dummy sink: {e}"))?;
     Ok(())
+}
+
+/// Fordert vom Encoder sofort einen IDR-Frame (mit SPS/PPS) an.
+fn request_keyframe(enc: &gst::Element) {
+    if let Some(pad) = enc.static_pad("src") {
+        let ev = gstreamer_video::UpstreamForceKeyUnitEvent::builder()
+            .all_headers(true)
+            .build();
+        pad.send_event(ev);
+    }
 }
 
 impl Monitor {
@@ -180,6 +192,7 @@ impl Monitor {
             video_flowed,
             audio_flowed,
             session: Mutex::new(None),
+            video_enc: Arc::new(Mutex::new(None)),
             connection_state: Arc::new(Mutex::new("none".to_string())),
             config,
             heartbeat,
@@ -345,9 +358,25 @@ impl Monitor {
             .map_err(|e| format!("webrtcbin sync: {e}"))?;
         {
             let state = self.connection_state.clone();
+            let enc_slot = self.video_enc.clone();
             webrtcbin.connect_notify(Some("connection-state"), move |el, _| {
                 let s = el.property::<gst_webrtc::WebRTCPeerConnectionState>("connection-state");
                 *state.lock().expect("lock poisoned") = format!("{s:?}").to_lowercase();
+                // Der Encoder läuft schon vor dem DTLS-Handshake; der erste
+                // IDR ging dann ins Leere und der Browser zeigte nur ein
+                // Bild und wartete bis zum nächsten regulären Keyframe.
+                // Sobald die Verbindung steht, sofort (und zur Sicherheit
+                // noch zweimal) einen neuen IDR anfordern.
+                if s == gst_webrtc::WebRTCPeerConnectionState::Connected
+                    && let Some(enc) = enc_slot.lock().expect("lock poisoned").clone()
+                {
+                    std::thread::spawn(move || {
+                        for delay_ms in [0u64, 400, 800] {
+                            std::thread::sleep(Duration::from_millis(delay_ms));
+                            request_keyframe(&enc);
+                        }
+                    });
+                }
             });
         }
         *self.session.lock().expect("lock poisoned") = Some(Session {
@@ -562,7 +591,14 @@ impl Monitor {
                 .map_err(|e| format!("queue: {e}"))?,
             make("videoconvert")?,
             make("videoscale")?,
-            make("videorate")?,
+            // skip-to-first: die Quelle liefert PTS = Pipeline-Laufzeit (Minuten),
+            // der Zweig beginnt aber live mit Segment 0 — ohne dies füllt
+            // videorate die Lücke mit Wiederholungen des ersten Bildes
+            // (Standbild ~30 s, dann Ruckeln, bis es aufgeholt hat).
+            gst::ElementFactory::make("videorate")
+                .property("skip-to-first", true)
+                .build()
+                .map_err(|e| format!("videorate: {e}"))?,
             gst::ElementFactory::make("capsfilter")
                 .property("caps", &raw_caps)
                 .build()
@@ -571,7 +607,7 @@ impl Monitor {
                 .property_from_str("tune", "zerolatency")
                 .property_from_str("speed-preset", "ultrafast")
                 .property("bitrate", c.bitrate_kbps)
-                .property("key-int-max", fps * 2)
+                .property("key-int-max", fps)
                 .property("bframes", 0u32)
                 .build()
                 .map_err(|e| format!("x264enc: {e}"))?,
@@ -621,6 +657,9 @@ impl Monitor {
             .field("clock-rate", 90000i32)
             .field("payload", pt as i32)
             .build();
+        if let Some(enc) = chain.iter().find(|e| e.name().starts_with("x264enc")) {
+            *self.video_enc.lock().expect("lock poisoned") = Some(enc.clone());
+        }
         self.add_chain(&chain, &self.video_tee, webrtcbin, &rtp_caps, mline)
     }
 
@@ -637,7 +676,11 @@ impl Monitor {
         let chain = vec![
             gst::ElementFactory::make("queue")
                 .property_from_str("leaky", "downstream")
-                .property("max-size-buffers", 8u32)
+                // Zeitbasiert (300 ms) statt 8 Puffer: bei kurzer CPU-Last
+                // verwarf die kleine Queue Opus-Blöcke → abgehacktes Audio.
+                .property("max-size-buffers", 0u32)
+                .property("max-size-bytes", 0u32)
+                .property("max-size-time", 300_000_000u64)
                 .build()
                 .map_err(|e| format!("queue: {e}"))?,
             make("audioconvert")?,
