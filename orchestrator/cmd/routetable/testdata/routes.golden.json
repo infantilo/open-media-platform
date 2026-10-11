@@ -751,8 +751,20 @@
     "domain": "core"
   },
   {
+    "method": "PATCH",
+    "path": "/api/v1/instances/{id}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
     "method": "POST",
     "path": "/api/v1/instances/{id}/migrate",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/instances/{id}/restart",
     "auth": "verb:Admin",
     "domain": "core"
   },
@@ -807,6 +819,12 @@
   {
     "method": "GET",
     "path": "/api/v1/nodes/{id}/descriptor",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/nodes/{id}/https-info",
     "auth": "auth",
     "domain": "core"
   },
