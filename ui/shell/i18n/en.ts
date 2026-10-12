@@ -1885,4 +1885,8 @@ export const en: Record<keyof typeof de, string> = {
   "portTags.button": "Edit port tags",
   "portTags.saveFirst": "Save or cancel before choosing another port",
   "flow.migrateButton": "Move to another host",
+  "anchor.noRemove": "The playout buffer is the fixed output of this workflow and cannot be removed.",
+  "anchor.tooltip": "Output anchor — fixed",
+  "anchor.depthLabel": "Buffer (ms)",
+  "anchor.depthTitle": "Buffer depth of this workflow in milliseconds (empty = 2500). The larger, the longer an outage upstream is bridged — and the more memory is used.",
 };

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profiles"
 )
@@ -125,6 +126,9 @@ func (s *Service) planFor(wf Workflow) StartPlan {
 			plan.Warnings = append(plan.Warnings, fmt.Sprintf("Host „%s“: Engpass beim Start — %s", h.Label, joinStrings(h.Over)))
 		}
 	}
+	if msg := missingAnchorWarning(wf.Definition, s.catalogEntries()); msg != "" {
+		plan.Warnings = append(plan.Warnings, msg)
+	}
 	types := make([]string, 0, len(unknownProfile))
 	for t := range unknownProfile {
 		types = append(types, t)
@@ -134,6 +138,44 @@ func (s *Service) planFor(wf Workflow) StartPlan {
 		plan.Warnings = append(plan.Warnings, fmt.Sprintf("Für den Node-Typ %s liegt noch kein Messprofil vor — der Bedarf ist unbekannt", t))
 	}
 	return plan
+}
+
+// catalogEntries liefert den Katalog des Launchers (leer, wenn keiner angeschlossen ist — Tests).
+func (s *Service) catalogEntries() []launcher.CatalogEntry {
+	if s.launcher == nil {
+		return nil
+	}
+	return s.launcher.Catalog()
+}
+
+// missingAnchorWarning (Kapitel 39.6): ein Workflow mit mindestens zwei Rollen, aber ohne Rolle eines
+// Ausgangs-Anker-Typs (`anchor:true` im Katalog, z. B. `omp-playout-buffer`), bekommt eine Warnung in der
+// Start-Vorschau — ohne Anker reißt der Ausgang bei jedem Ausfall davor ab. Leer = keine Warnung (auch wenn
+// der Katalog gar keinen Anker-Typ kennt).
+func missingAnchorWarning(def Definition, catalog []launcher.CatalogEntry) string {
+	if len(def.Roles) < 2 {
+		return ""
+	}
+	anchors := map[string]string{}
+	for _, e := range catalog {
+		if e.Anchor {
+			anchors[e.Type] = e.Label
+		}
+	}
+	if len(anchors) == 0 {
+		return ""
+	}
+	labels := make([]string, 0, len(anchors))
+	for _, r := range def.Roles {
+		if _, ok := anchors[r.NodeType]; ok {
+			return ""
+		}
+	}
+	for _, l := range anchors {
+		labels = append(labels, l)
+	}
+	sort.Strings(labels)
+	return fmt.Sprintf("Der Workflow hat keinen Ausgangs-Anker (%s) — fällt ein Node davor aus, reißt der Ausgang ab", joinStrings(labels))
 }
 
 func contains(list []string, s string) bool {

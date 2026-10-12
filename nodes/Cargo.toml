@@ -25,6 +25,7 @@ members = [
     "omp-media-library",
     "omp-scte35",
     "omp-recorder",
+    "omp-playout-buffer",
     "omp-scaler",
     "omp-audio-monitor",
     "omp-xy-panel",

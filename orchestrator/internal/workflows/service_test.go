@@ -2235,3 +2235,43 @@ func TestFindRoleForInstance(t *testing.T) {
 		t.Fatal("empty instance id must not match")
 	}
 }
+
+// Kapitel 39.6: eine unbeschriftete Verbindung auf einen Ausgangs-Anker verbindet Bild UND Ton.
+func TestApplyConnectionAnchorConnectsEveryMatchingFormat(t *testing.T) {
+	g := &fakeGraph{}
+	l := &fakeLauncher{catalog: []launcher.CatalogEntry{{Type: "anchor-type", Anchor: true}}}
+	svc := newTestService(newFakeStore(), nil, g, l)
+	from := registry.NodeView{Senders: []registry.SenderView{
+		{ID: "s-audio", Format: formatAudio, Label: "A"},
+		{ID: "s-video-lowres", Format: formatVideo, Label: "Src Lowres"},
+		{ID: "s-video", Format: formatVideo, Label: "Src"},
+	}}
+	to := registry.NodeView{Receivers: []registry.ReceiverView{
+		{ID: "r-video", Format: formatVideo, Label: "Video"},
+		{ID: "r-audio", Format: formatAudio, Label: "Audio"},
+	}}
+	if err := svc.applyConnection(context.Background(), Connection{FromRole: "a", ToRole: "b"}, from, to, "anchor-type"); err != nil {
+		t.Fatalf("applyConnection: %v", err)
+	}
+	want := []connectCall{{"s-video", "r-video"}, {"s-audio", "r-audio"}}
+	if len(g.calls) != 2 || g.calls[0] != want[0] || g.calls[1] != want[1] {
+		t.Fatalf("calls = %+v, want %+v", g.calls, want)
+	}
+	// Quelle ohne Ton: nur das Bild wird verbunden, kein Fehler
+	g.calls = nil
+	videoOnly := registry.NodeView{Senders: []registry.SenderView{{ID: "v", Format: formatVideo, Label: "V"}}}
+	if err := svc.applyConnection(context.Background(), Connection{FromRole: "a", ToRole: "b"}, videoOnly, to, "anchor-type"); err != nil {
+		t.Fatalf("applyConnection (video only): %v", err)
+	}
+	if len(g.calls) != 1 || g.calls[0] != (connectCall{"v", "r-video"}) {
+		t.Fatalf("calls = %+v, want only video", g.calls)
+	}
+	// Normaler Typ (kein Anker): unverändert nur der erste Receiver
+	g.calls = nil
+	if err := svc.applyConnection(context.Background(), Connection{FromRole: "a", ToRole: "b"}, from, to, "plain-type"); err != nil {
+		t.Fatalf("applyConnection (plain): %v", err)
+	}
+	if len(g.calls) != 1 {
+		t.Fatalf("plain type: calls = %+v, want exactly one", g.calls)
+	}
+}

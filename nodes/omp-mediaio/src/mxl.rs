@@ -266,6 +266,21 @@ impl MxlContext {
         self.instance.get_time()
     }
 
+    /// MXL-Zeit (TAI, ns) des Beginns von Grain-/Sample-Index `index` bei der Rate `num/den`
+    /// (Kapitel 39: Ausgabetakt, der exakt auf dem MXL-Raster liegt). `None` bei ungültiger Rate.
+    pub fn index_to_ns(&self, index: u64, num: u32, den: u32) -> Option<u64> {
+        self.instance
+            .index_to_timestamp(index, &mxl_sys::Rational { numerator: num as i64, denominator: den as i64 })
+            .ok()
+    }
+
+    /// Gegenstück zu [`Self::index_to_ns`]: Index, in dem die MXL-Zeit `ns` liegt.
+    pub fn ns_to_index(&self, ns: u64, num: u32, den: u32) -> Option<u64> {
+        self.instance
+            .timestamp_to_index(ns, &mxl_sys::Rational { numerator: num as i64, denominator: den as i64 })
+            .ok()
+    }
+
     /// Roh-JSON der `flow_def` eines Flows, wie der SCHREIBER sie in der
     /// Domain deklariert hat (`mxlGetFlowDef`). Bisher nur intern von
     /// [`MxlVideoInput::new`]/[`MxlAudioInput::new`] genutzt, um Caps

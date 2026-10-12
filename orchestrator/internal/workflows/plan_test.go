@@ -3,6 +3,7 @@ package workflows
 import (
 	"testing"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profiles"
 )
@@ -81,4 +82,25 @@ func containsSub(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestMissingAnchorWarning(t *testing.T) {
+	catalog := []launcher.CatalogEntry{
+		{Type: "omp-playout-buffer", Label: "Playout-Puffer", Anchor: true},
+		{Type: "omp-source", Label: "Source"},
+	}
+	two := Definition{Roles: []Role{{Name: "a", NodeType: "omp-source"}, {Name: "b", NodeType: "omp-source"}}}
+	if msg := missingAnchorWarning(two, catalog); msg == "" {
+		t.Fatal("ohne Anker-Rolle muss gewarnt werden")
+	}
+	withAnchor := Definition{Roles: []Role{{Name: "a", NodeType: "omp-source"}, {Name: "out", NodeType: "omp-playout-buffer"}}}
+	if msg := missingAnchorWarning(withAnchor, catalog); msg != "" {
+		t.Fatalf("mit Anker keine Warnung, war %q", msg)
+	}
+	if msg := missingAnchorWarning(Definition{Roles: []Role{{Name: "a", NodeType: "omp-source"}}}, catalog); msg != "" {
+		t.Fatalf("Ein-Rollen-Workflow ohne Warnung, war %q", msg)
+	}
+	if msg := missingAnchorWarning(two, []launcher.CatalogEntry{{Type: "omp-source"}}); msg != "" {
+		t.Fatalf("Katalog ohne Anker-Typ: keine Warnung, war %q", msg)
+	}
 }

@@ -44,6 +44,7 @@ import {
   addConnection,
   type DraftConnection,
   type DraftRole,
+  isAnchorRole,
   removeRole,
   renameRole,
   standbyCandidates,
@@ -110,6 +111,8 @@ const ANCHOR_RADIUS = 9;
 interface CatalogEntry {
   type: string;
   label: string;
+  // Ausgangs-Anker (Kapitel 39.6): Rollen dieses Typs sind nicht entfernbar.
+  anchor?: boolean;
 }
 
 // Nutzerauftrag 2026-09-21 ("role-designer.ts Host-Selects auch damit
@@ -478,6 +481,11 @@ export class RoleDesigner extends HTMLElement {
   // pauschal zu warnen (eine isolierte Rolle ohne Verbindungen/Standby-
   // Bezug braucht keine dramatische Formulierung).
   async #removeRole(name: string) {
+    const target = this.#roles.find((r) => r.name === name);
+    if (target && isAnchorRole(target, this.#catalog)) {
+      showToast(t("anchor.noRemove"));
+      return;
+    }
     const hasConnections = this.#connections.some((c) => c.fromRole === name || c.toRole === name);
     const hasStandbyRef = this.#roles.some((r) => r.standbyFor === name);
     let message = t("rd.e80be5", { p0: name });
@@ -1195,6 +1203,36 @@ export class RoleDesigner extends HTMLElement {
       mixerLevelsWrap.appendChild(mixerLevelsLabel);
       mixerLevelsWrap.appendChild(mixerLevelsInput);
       mixerLevelsObject.appendChild(mixerLevelsWrap);
+    } else if (isAnchorRole(role, this.#catalog)) {
+      // Ausgangs-Anker (Kapitel 39.6): Puffertiefe dieses Workflows (Role.Env OMP_BUFFER_MS).
+      const depthWrap = document.createElement("div");
+      depthWrap.style.cssText = "display:flex;align-items:center;gap:4px;width:100%;box-sizing:border-box;";
+      const depthLabel = document.createElement("span");
+      depthLabel.textContent = t("anchor.depthLabel");
+      depthLabel.style.cssText = "font-size:10px;color:#999;white-space:nowrap;";
+      const depthInput = document.createElement("input");
+      depthInput.type = "number";
+      depthInput.min = "100";
+      depthInput.max = "20000";
+      depthInput.step = "100";
+      depthInput.placeholder = "2500";
+      depthInput.title = t("anchor.depthTitle");
+      depthInput.setAttribute("data-role", "anchor-depth");
+      depthInput.style.cssText =
+        "width:64px;font-size:10px;background:#1e1e1e;color:#ddd;border:1px solid #444;box-sizing:border-box;";
+      depthInput.value = role.env?.OMP_BUFFER_MS ?? "";
+      depthInput.addEventListener("change", () => {
+        this.#pushUndo();
+        const n = parseInt(depthInput.value, 10);
+        const env = { ...(role.env ?? {}) };
+        if (Number.isFinite(n) && n >= 100) env.OMP_BUFFER_MS = String(Math.min(n, 20000));
+        else delete env.OMP_BUFFER_MS;
+        role.env = Object.keys(env).length > 0 ? env : undefined;
+        depthInput.value = role.env?.OMP_BUFFER_MS ?? "";
+      });
+      depthWrap.appendChild(depthLabel);
+      depthWrap.appendChild(depthInput);
+      mixerLevelsObject.appendChild(depthWrap);
     }
     g.appendChild(mixerLevelsObject);
 
@@ -1260,6 +1298,14 @@ export class RoleDesigner extends HTMLElement {
       ev.stopPropagation();
       void this.#removeRole(role.name);
     });
+    // Ausgangs-Anker (Kapitel 39.6): statt „×“ ein Schloss, Entfernen wird ohnehin abgelehnt.
+    if (isAnchorRole(role, this.#catalog)) {
+      removeBtn.textContent = "🔒";
+      removeBtn.setAttribute("fill", "#9aa");
+      const lockTitle = document.createElementNS(SVG_NS, "title");
+      lockTitle.textContent = t("anchor.tooltip");
+      removeBtn.appendChild(lockTitle);
+    }
     g.appendChild(removeBtn);
 
     // Nutzerfund 2026-08-13 ("Rollen-Editor muss intuitiver werden"):

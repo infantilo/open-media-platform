@@ -177,3 +177,33 @@ func TestStartAcceptsWorkflowCompensableViaDelay(t *testing.T) {
 		t.Fatalf("Start() error = %v, want nil (deficit is compensable via setOutputDelay)", err)
 	}
 }
+
+// Kapitel 39.4: Mit dem echten Katalogeintrag `omp-playout-buffer` (Ausgangs-Anker) landet der Ausgleich
+// IMMER am Puffer — er sitzt am Pfadende, der Scaler davor bleibt unverändert (kein Delay mehr am
+// funktionalen Node „als Ausgang“).
+func TestComputeDelayPlanPrefersPlayoutBufferAtPathEnd(t *testing.T) {
+	catalog, err := launcher.LoadCatalog("../../../deploy/catalog.json")
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	def := Definition{
+		Roles: []Role{
+			{Name: "src", NodeType: "omp-source"},
+			{Name: "scale", NodeType: "omp-scaler"},
+			{Name: "out", NodeType: "omp-playout-buffer"},
+		},
+		Connections: []Connection{
+			{FromRole: "src", ToRole: "scale"},
+			{FromRole: "scale", ToRole: "out"},
+		},
+		// Quelle 0 + Scaler 1 + Puffer 63 = 64 Bilder; Ziel 70 → Defizit 6 am Puffer.
+		Settings: Settings{TargetLatencyFrames: 70},
+	}
+	plan, err := computeDelayPlan(def, catalog)
+	if err != nil {
+		t.Fatalf("computeDelayPlan() error = %v", err)
+	}
+	if len(plan) != 1 || plan["out"] != 6 {
+		t.Fatalf("plan = %+v, want {out: 6}", plan)
+	}
+}

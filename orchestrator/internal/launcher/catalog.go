@@ -111,6 +111,11 @@ type CatalogEntry struct {
 	// Node-Typ ohne dieses Feld bleibt gültig, der Latenz-Budget-Rechner
 	// behandelt ihn dann als "Latenz unbekannt" (§15.2).
 	Latency *CatalogLatency `json:"latency,omitempty"`
+	// Anchor (Kapitel 39.6) markiert einen Ausgangs-Anker wie `omp-playout-buffer`: ein Node, der als
+	// festes Ende eines Workflow-Graphen gedacht ist. Rollen dieses Typs lassen sich im Editor nicht
+	// löschen; fehlt in einem Workflow jede Anker-Rolle, warnt die Start-Vorschau. Optional (Standard
+	// false) — ohne Feld unverändertes Verhalten.
+	Anchor bool `json:"anchor,omitempty"`
 	// Network deklariert, dass dieser Node-Typ Datenverkehr über die
 	// Netzwerkkarte des Hosts erzeugt (Gateways; MXL zwischen Nodes auf
 	// einem Host ist Shared Memory und belastet die NIC nicht). Grundlage

@@ -56,7 +56,7 @@ import {
 import { mountUIBundle } from "../shell/ui-bundle.ts";
 import { apiFetch, connectionMonitor } from "../shell/connection.ts";
 import { STANDARD_FORMATS, uniqueRoleName } from "./roles.ts";
-import { renameRole } from "./role-designer-logic.ts";
+import { isAnchorRole, renameRole } from "./role-designer-logic.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 import { openPortTagEditor } from "./port-tag-editor.ts";
 import {
@@ -325,6 +325,8 @@ interface CatalogEntry {
   // (unverändertes Verhalten seit §17 Teil 4) — gesetzt, wenn mehrere
   // Versionen desselben Typs parallel importiert wurden.
   version?: string;
+  // Ausgangs-Anker (Kapitel 39.6): Rollen dieses Typs sind im Workflow-Editor nicht entfernbar.
+  anchor?: boolean;
 }
 
 // FailoverEvent — Wire-Format identisch zum "workflow.failover"-SSE-Event
@@ -2229,6 +2231,12 @@ export class FlowCanvas extends HTMLElement {
     closeBtn.textContent = "×";
     const closeTitle = document.createElementNS(SVG_NS, "title");
     closeTitle.textContent = tt("flow.fc94ec");
+    // Ausgangs-Anker (Kapitel 39.6): Schloss statt „×“, Entfernen wird abgelehnt.
+    if (isAnchorRole(role, this.#paletteCatalog ?? [])) {
+      closeBtn.textContent = "🔒";
+      closeBtn.setAttribute("fill", "#9aa");
+      closeTitle.textContent = tt("anchor.tooltip");
+    }
     closeBtn.appendChild(closeTitle);
     closeBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
     closeBtn.addEventListener("click", (ev) => {
@@ -2289,6 +2297,11 @@ export class FlowCanvas extends HTMLElement {
 
   #removeWorkflowRole(roleName: string) {
     if (!this.#workflowEditDraft) return;
+    const target = this.#workflowEditDraft.roles.find((r) => r.name === roleName);
+    if (target && isAnchorRole(target, this.#paletteCatalog ?? [])) {
+      this.#showToast(tt("anchor.noRemove"));
+      return;
+    }
     if (this.#workflowEditDraft.roles.length <= 1) {
       this.#showToast(tt("flow.19bea4"));
       return;

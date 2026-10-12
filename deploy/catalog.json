@@ -327,6 +327,22 @@
     "latency": { "video": { "minLatencyFrames": 1, "maxLatencyFrames": 1 }, "supportsDelayCompensation": true }
   },
   {
+    "type": "omp-playout-buffer",
+    "label": "Playout-Puffer",
+    "anchor": true,
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-playout-buffer"],
+    "env": {},
+    "description": "Ausgangs-Anker am Ende eines Workflows: hält Bild und Ton um eine einstellbare Tiefe (Standard 2,5 s) zurück und schreibt sie als eigene, nie abreißende MXL-Flows im Zielformat. Fällt der Vorgänger aus (Absturz, Umschalten, Standby-Übernahme), läuft der Ausgang erst aus dem Puffer weiter, danach mit Standbild oder Schwarz und Stille — der nachgelagerte Sender (SRT/WebRTC/Aufzeichnung) bleibt verbunden. Zeitstempel werden neu und streng monoton vergeben; Bild und Ton bleiben nach jeder Wiederaufnahme lippensynchron. Speicher fest begrenzt.",
+    "i18n": { "en": {"description": "Output anchor at the end of a workflow: delays picture and sound by an adjustable depth (default 2.5 s) and writes them as its own, never-interrupted MXL flows in the target format. If the predecessor fails (crash, switch-over, standby takeover) the output first plays on from the buffer, then continues with a freeze frame or black and silence — the downstream sender (SRT/WebRTC/recording) stays connected. Timestamps are re-issued strictly monotonic; picture and sound stay lip-synchronous after every resume. Memory is hard-bounded.", "expectedResources": "memory ≈ depth × picture size (1080p25 at 2.5 s ≈ 0.4 GB), low CPU"} },
+    "expectedResources": "Speicher ≈ Tiefe × Bildgröße (1080p25 bei 2,5 s ≈ 0,4 GB), geringe CPU-Last",
+    "latency": {
+      "video": { "minLatencyFrames": 63, "maxLatencyFrames": 63 },
+      "audio": { "minLatencyFrames": 120000, "maxLatencyFrames": 120000 },
+      "supportsDelayCompensation": true
+    }
+  },
+  {
     "type": "omp-pipeline-controller",
     "label": "Pipeline Controller",
     "runner": "podman",

@@ -1392,6 +1392,42 @@ Der Tab **Cloud** zeigt, ob zusätzliche Rechenleistung in einer Cloud gemietet 
 - **Der Budgetdeckel ist hart:** Er verhindert jedes weitere Hochfahren (auch Reservierungen), **schaltet aber nie eine laufende Sendung wegen Kosten ab**. Eine Blockade steht im Aktionsprotokoll. Der Deckel rechnet einen neuen Host bis zum Ende der Periode; ein Monatsdeckel am Monatsanfang kann deshalb früh greifen.
 - **Aktionsprotokoll:** jede Aktion des Controllers (hochfahren, abbauen, vorgeschlagen, Budget blockiert) mit Begründung; zusätzlich im Audit-Log.
 
+## 10f. Playout-Puffer (Ausgangs-Anker eines Workflows)
+
+Der **Playout-Puffer** steht am Ende eines Workflows (vor Gateway, Aufzeichnung oder Viewer). Er hält Bild und Ton um eine
+einstellbare Zeit zurück und schreibt sie als eigene Flows weiter. Der Zweck: **Ausfälle davor sollen den Ausgang nicht
+abreißen** — ein abgestürzter oder umgeschalteter Node, eine Standby-Übernahme, ein Neustart.
+
+**Einbauen:** im Workflow-Designer „+ Playout-Puffer“ hinzufügen und die letzte Rolle auf ihn verbinden (eine Verbindung
+genügt, sie verbindet Bild **und** Ton). Die Rolle ist fest verankert (Schloss statt „×“) und nicht löschbar; im Feld
+**Puffer (ms)** steht die Tiefe dieses Workflows (leer = 2500). Fehlt der Puffer in einem Workflow, warnt die Start-Vorschau.
+Das Rollen-Format legt die Auflösung/Bildrate des Ausgangs fest wie bei Scaler und Quelle.
+
+**Das Panel** zeigt:
+
+* **Zustand:** *Vorlauf* (der Puffer füllt sich, der Ausgang zeigt Schwarz/Standbild), *Läuft* (Normalbetrieb, der Ausgang ist um die
+  Puffertiefe verzögert), *Überbrückung* (der Eingang liefert nichts mehr und der Puffer ist aufgebraucht — der Ausgang hält Standbild oder
+  Schwarz und sendet Stille, bis wieder genug neues Material da ist).
+* **Balken Bild/Ton/Speicher:** Füllstand gegen die Zieltiefe, belegter Speicher gegen die Obergrenze (orange ab 80 %, rot ab 95 %).
+* **Einstellungen** (mit „Übernehmen“): *Puffertiefe* (ms), *Wiederaufnahme nach* (ms; nach einem Ausfall, der länger als der Puffer
+  dauerte, wird erst nach so viel neuem Material wieder gesendet; leer = Puffertiefe), *Wiederauffüllen* (‰ der Abspielgeschwindigkeit),
+  *Bei Ausfall zeigen* (letztes Bild / Schwarz).
+* **Zähler:** Ausfälle, Wiederaufnahmen, Haltebilder, verworfene/übersprungene Bilder, neu ausgerichteter Ton, Zeitsprünge im Eingang, Eingang neu aufgebaut.
+
+**Was bei einem Ausfall passiert:** Ein Ausfall, der kürzer ist als die Puffertiefe, bleibt **unsichtbar** (das bereits gepufferte
+Material wird weitergesendet; danach springt das Bild über die Lücke). Dabei schrumpft die Verzögerung um die Ausfalldauer; der Puffer
+baut sie anschließend mit der *Wiederauffüll-Rate* (Standard 1 %: ein Bild doppelt je 100 Bilder, der Ton unmerklich gedehnt) wieder auf.
+Ein längerer Ausfall führt in die *Überbrückung*; der Ausgang bleibt dabei durchgehend am Leben (Bild- und Ton-Takt laufen weiter).
+Der Puffer baut einen still gewordenen Eingang selbst neu auf (nach 3 s ohne Daten, mit wachsender Wartezeit bis 4 s).
+
+**Delay-Ausgleich:** Setzt ein Workflow ein Ziel-Latenzbudget, weist der Orchestrator den Ausgleich dem Puffer zu (er sitzt am Pfadende);
+der Ausgleich wird zur Tiefe addiert, Bild und Ton verschieben sich gemeinsam.
+
+**Grenzen:** Der Puffer arbeitet auf unkomprimierten MXL-Frames; eine Variante auf komprimierten Paketen (SRT/WebRTC-Ausgang, Schnitt an
+Schlüsselbildern) ist nicht umgesetzt. Speicherbedarf ≈ Tiefe × Bildgröße (1080p25 bei 2,5 s ≈ 0,45 GiB), begrenzt durch die
+*Speichergrenze*. Die im Katalog hinterlegte Latenz (63 Bilder) gilt für 25 Bilder/s und die Standardtiefe. Ton-Kanalzahl und -Abtastrate
+sind pro Workflow fest (Standard 2 Kanäle, 48 kHz).
+
 ## 11. Weiterführende Dokumente
 
 - [`HANDBUCH.md`](HANDBUCH.md) — Installation, `make`-Targets,

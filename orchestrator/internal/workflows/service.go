@@ -1554,6 +1554,26 @@ const (
 // Behandlung mit fest `formatVideo` (`crosspointByNodeType` enthält
 // heute ausschließlich Video-Crosspoints, s. Map oben).
 func (s *Service) applyConnection(ctx context.Context, conn Connection, fromNode, toNode registry.NodeView, toRoleNodeType string) error {
+	// Ausgangs-Anker (Kapitel 39.6, z. B. omp-playout-buffer) haben je Medienart einen Receiver: eine
+	// Rollen-Verbindung ohne Port-Angabe verbindet jedes Format, für das der Sender der Quellrolle etwas hat
+	// (Bild UND Ton) — der Rollen-Designer kennt keine Ports und soll den Ton nicht vergessen können.
+	if conn.ToReceiver == "" && conn.FromSender == "" && len(toNode.Receivers) > 1 && s.isAnchorType(toRoleNodeType) {
+		connected := 0
+		for _, receiver := range toNode.Receivers {
+			sender, ok := findSender(fromNode, "", receiver.Format)
+			if !ok || sender.Format != receiver.Format {
+				continue // die Quelle hat dieses Format nicht (z. B. reine Bildquelle)
+			}
+			if err := s.graph.Connect(ctx, sender.ID, receiver.ID); err != nil {
+				return err
+			}
+			connected++
+		}
+		if connected == 0 {
+			return fmt.Errorf("connection %s -> %s: role %s has no sender matching any receiver of %s", conn.FromRole, conn.ToRole, conn.FromRole, conn.ToRole)
+		}
+		return nil
+	}
 	if len(toNode.Receivers) > 0 {
 		receiver, ok := findReceiver(toNode, conn.ToReceiver)
 		if !ok {
@@ -1581,6 +1601,19 @@ func (s *Service) applyConnection(ctx context.Context, conn Connection, fromNode
 	}
 
 	return fmt.Errorf("connection %s -> %s: role %s (%s) has neither a receiver nor a known crosspoint method", conn.FromRole, conn.ToRole, conn.ToRole, toRoleNodeType)
+}
+
+// isAnchorType: ob der Katalog den Node-Typ als Ausgangs-Anker (`anchor:true`) führt.
+func (s *Service) isAnchorType(nodeType string) bool {
+	if s.launcher == nil {
+		return false
+	}
+	for _, e := range s.launcher.Catalog() {
+		if e.Type == nodeType && e.Anchor {
+			return true
+		}
+	}
+	return false
 }
 
 // findSender wählt den Sender eines Nodes nach Label — leeres label

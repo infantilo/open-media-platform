@@ -428,6 +428,18 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   by blending via the `avvideofilter` GStreamer plugin —
   `docs/INSTALLATION.md` §9, incl. offline machines); also one of two nodes that can absorb a
   workflow's declared output-delay compensation (see Status)
+- **omp-playout-buffer** — the *output anchor* at the end of a workflow:
+  holds picture and sound back by an adjustable depth (default 2.5 s) and
+  writes them as its own, never-interrupted MXL flows. If the predecessor
+  fails (crash, source switch, hot-standby takeover) the output keeps
+  playing from the buffer, then continues with a freeze frame or black plus
+  silence, so the downstream sender (SRT/WebRTC/recording) stays connected;
+  timestamps are re-issued strictly monotonic and picture/sound keep their
+  original relationship across the splice (measured with the marker
+  source: within 1.8 ms). Memory is hard-bounded, the depth is rebuilt
+  after a bridged outage, and it absorbs the workflow's delay compensation
+  (`setOutputDelay`). Marked as `anchor` in the catalog: not removable in the
+  workflow editor, the start preview warns if a workflow has none
 - **omp-scope** — a passive measurement tap (taps a video and/or an
   audio flow, sends nothing itself): waveform/vectorscope, EBU R 128
   loudness with ITU-R BS.1770 true peak, held black/freeze/silence

@@ -34,6 +34,9 @@ export interface DraftRole {
   // Sonderfall im Wire-Format. undefined/0 = Node-eigener Default
   // (1 Ebene).
   mixerLevels?: number;
+  // env (Kapitel 39): Start-Umgebung der Rolle (Allowlist im Backend, workflows/formats.go allowedRoleEnv) —
+  // hier nur für die Puffertiefe (`OMP_BUFFER_MS`) des Ausgangs-Ankers gesetzt.
+  env?: Record<string, string>;
   // requiredIoPort (Nutzerauftrag 2026-08-20, im Anschluss an den
   // DeckLink-Crash-Loop-Fix): spiegelt orchestrator/internal/workflows/
   // types.go Role.RequiredIOPort — deklariert, dass diese Rolle für ihre
@@ -74,6 +77,16 @@ export function removeRole(
       .map((r) => (r.standbyFor === name ? { ...r, standbyFor: undefined } : r)),
     connections: connections.filter((c) => c.fromRole !== name && c.toRole !== name),
   };
+}
+
+// isAnchorRole (Kapitel 39.6): Rollen eines Ausgangs-Anker-Typs (Katalog-Feld `anchor`, z. B. der
+// Playout-Puffer) sind im Editor fest verankert und lassen sich nicht entfernen. Unbekannter Typ oder
+// Katalog ohne Feld = normale Rolle.
+export function isAnchorRole(
+  role: { nodeType: string },
+  catalog: { type: string; anchor?: boolean }[],
+): boolean {
+  return catalog.some((e) => e.type === role.nodeType && e.anchor === true);
 }
 
 // renameRole: Nutzerwunsch 2026-07-30 ("wir müssen in der Lage sein,

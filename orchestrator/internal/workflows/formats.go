@@ -119,6 +119,14 @@ func formatExtraEnv(name string) map[string]string {
 // Steuerzeichen). Muss zusätzlich in host-agent/internal/commands (allowedExtraEnvKeys) stehen.
 var allowedRoleEnv = map[string][]string{
 	"OMP_DEINTERLACE_METHOD": {"greedyh", "greedyl", "linear", "linearblend", "vfir", "tomsmocomp", "scalerbob"},
+	// Playout-Puffer (Kapitel 39): Tiefe/Wiederaufnahme/Speichergrenze in ms bzw. MiB (der Node begrenzt
+	// selbst), Haltebild-Modus, Kanalzahl des Ausgangs.
+	"OMP_BUFFER_MS":       nil,
+	"OMP_RESUME_MS":       nil,
+	"OMP_REFILL_PERMILLE": nil,
+	"OMP_BUFFER_MAX_MIB":  nil,
+	"OMP_AUDIO_CHANNELS":  nil,
+	"OMP_HOLD_MODE":       {"last", "black"},
 }
 
 // validateRoleEnv prüft Role.Env gegen die Allowlist.

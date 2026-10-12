@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { addConnection, removeRole, renameRole, standbyCandidates } from "./role-designer-logic.ts";
+import { addConnection, isAnchorRole, removeRole, renameRole, standbyCandidates } from "./role-designer-logic.ts";
 
 Deno.test("removeRole drops the role and any connection touching it", () => {
   const roles = [{ name: "quelle", nodeType: "omp-source" }, { name: "bild", nodeType: "omp-viewer" }];
@@ -144,4 +144,13 @@ Deno.test("standbyCandidates offers an unclaimed same-nodeType role even if an u
   ];
   const result = standbyCandidates(roles, roles[3]);
   assertEquals(result, [{ name: "free", nodeType: "omp-viewer" }]);
+});
+
+Deno.test("isAnchorRole recognises catalog anchor types only", () => {
+  const catalog = [{ type: "omp-playout-buffer", anchor: true }, { type: "omp-source" }, { type: "x", anchor: false }];
+  assertEquals(isAnchorRole({ nodeType: "omp-playout-buffer" }, catalog), true);
+  assertEquals(isAnchorRole({ nodeType: "omp-source" }, catalog), false);
+  assertEquals(isAnchorRole({ nodeType: "x" }, catalog), false);
+  assertEquals(isAnchorRole({ nodeType: "unknown" }, catalog), false);
+  assertEquals(isAnchorRole({ nodeType: "omp-playout-buffer" }, []), false);
 });

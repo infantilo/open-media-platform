@@ -4559,3 +4559,52 @@ mit Continuity Counter; PAT/PMT periodisch, `splice_null`-Herzschlag optional, A
 Keine Verschlüsselung, keine Komponenten-Splices, kein `splice_schedule`; Rückkanal (Empfang von 104/35 als Auslöser) nicht Teil dieses Kapitels.
 Die Byte-Layouts der 104-Operationen stützen sich auf die veröffentlichten Tabellen (SCTE 104 / ST 2010) und eine unabhängige Referenzimplementierung;
 eine Gegenprüfung mit einem realen Inserter/Injector steht aus und ist in der Doku als ungetestet vermerkt.
+
+## 30. Playout-Puffer: Ausgangs-Anker und Failover-Puffer (umgesetzt 2026-10-12, UMSETZUNG.md Kapitel 39)
+
+### 30.1 Zweck und Einordnung
+Der Verzögerungsausgleich (§15) lag bisher an funktionalen Nodes (Scaler, Mischer), die dadurch zum faktischen Ausgangsanker wurden; ein
+Ausfall davor riss den Ausgang ab. `omp-playout-buffer` ist der dafür vorgesehene Node: Anker am Graphenende (Katalog `anchor:true`),
+Failover-Puffer und Ausgangsverzögerung in einem. Im Workflow-Editor fest verankert (nicht löschbar), die Start-Vorschau warnt, wenn eine
+Rolle fehlt; eine Rollen-Verbindung auf einen Anker verbindet jedes Format, das die Quelle liefert (Bild und Ton).
+
+### 30.2 Aufbau
+* **Eingänge** (je Video/Audio eine eigene kleine Pipeline, jederzeit neu aufbaubar): `MxlVideoInput → videoscale → videoconvert →
+  videorate → v210 (Zielformat) → appsink`, `MxlAudioInput → audioconvert → audioresample → F32LE → appsink`. Jedes Bild/jeder Block wird in
+  eigenen Speicher kopiert (keine Pool-Puffer des Eingangs werden gehalten) und mit seiner **Ursprungszeit** (MXL-TAI-Meta) abgelegt.
+* **Ausgang** (dauerhaft, nie neu gebaut): `appsrc → MxlVideoOutput`, `appsrc → MxlAudioOutput`. Ein Ausgabe-Thread taktet **auf dem
+  MXL-Raster** (Bildindex → TAI-Zeit, Ton in 10-ms-Blöcken) und hängt die Tick-Zeit als Ursprungszeit an jeden Puffer: der Schreib-Index
+  ist exakt, unabhängig von Thread-Verzug und Kettenlatenz — Bild und Ton liegen auf demselben Raster.
+* **Logik** (`buffer.rs`, ohne GStreamer, 19 Tests): Ring (Bilder) und FIFO (Ton) mit harten Byte-Grenzen; Zustände `Fill` → `Run` →
+  `Hold`; Wiederaufnahme, Beschneiden, Wiederauffüllen, Tonausrichtung.
+
+### 30.3 Lebenszyklus und Failover
+`Fill`: Ausgang hält (Schwarz/Standbild, Stille), bis das älteste Bild `bufferMs` alt ist. `Run`: je Takt ein Bild aus dem Ring. Ist der
+Ring leer (Eingang weg, Puffer aufgebraucht), wird nach `Hold` gewechselt: Standbild (`holdMode=last`) oder Schwarz, Stille; Wiederaufnahme,
+wenn das älteste neue Bild `resumeMs` alt ist. Ein Ausfall kürzer als die Tiefe wird **ohne sichtbare Störung** überbrückt (der Ring wird
+einfach weiter abgespielt, danach springt die Ursprungszeit über die Lücke). Dabei schrumpft die Verzögerung um die Ausfalldauer; das
+**Wiederauffüllen** (`refillPermille`, Standard 10 ‰) baut sie wieder auf: Bild — gelegentlich das letzte Bild noch einmal, Ton — gleichmäßig
+eingefügte Mittelwerte (Tonhöhe ±1 %, keine Stille, kein Sprung); Hysterese: Start ab Defizit > max(3 Bilder, 10 % Ziel), Ende unter einem Bild.
+Aufholen nach Stau: ist das älteste Bild älter als Ziel + Toleranz, wird je Takt ein Bild übersprungen (der Ton folgt über die Ursprungszeit).
+
+### 30.4 Zeitstempel
+Eingangs-Zeitstempel werden nie durchgereicht. Der Ausgang bekommt eine eigene, streng monotone Zeitleiste (Raster-Index). Eingangs-Sprünge
+(rückwärts oder > 2,5 Bildabstände) werden gezählt (`tsJumps`); Bild und Ton werden über die **Ursprungszeit** zueinander ausgerichtet: je
+Tonblock wird die erwartete Zeit aus dem zuletzt gezeigten Bild + verstrichener Zeit berechnet, bei Abweichung > 30 ms (60 ms beim
+Wiederauffüllen) gezielt verworfen oder Stille eingefügt. Gemessen (Marker-Quelle, `examples/av_probe.rs`): Versatz Bild↔Ton am Ausgang = Versatz
+am Eingang auf 0,1 ms im Dauerbetrieb, nach Splice (Pause/Neustart/Standby-Übernahme) ≤ 1,8 ms Abweichung.
+
+### 30.5 Speicher
+Grenze Bild-Ring = min(1,5 × Tiefe + 2 Bilder, `OMP_BUFFER_MAX_MIB`), Ton-FIFO = 1,5 × Tiefe + 200 ms; beim Überlauf fällt das Älteste weg
+(`droppedFrames`). Messung 1080p25, 2,5 s: Ring 344 MB, Prozess 460 MiB RSS, ≈ 28 % eines Kerns. Die Grenzen folgen der wirksamen Tiefe
+(`bufferMs` + Delay-Ausgleich).
+
+### 30.6 Delay-Ausgleich
+Der Katalog deklariert `supportsDelayCompensation:true`; `setOutputDelay(frames)` wird zur Zieltiefe addiert (Bild und Ton gemeinsam — der
+MXL-Schreibpfad bleibt unberührt). Da der Puffer am Pfadende sitzt, weist `computeDelayPlan` („spätester delay-fähiger Node im Pfad“)
+den Ausgleich automatisch ihm zu.
+
+### 30.7 Grenzen / nicht umgesetzt
+Komprimierter Pfad (AU-Ring, Schnitt an IDR/IRAP, Parameter-Sätze) und Testbild als Haltebild sind nicht umgesetzt; Katalog-Latenz statisch für
+25 Bilder/s; Ton-Kanalzahl/Abtastrate fest je Workflow; Bildformat im Ring ist v210 (≈ 5,5 MB je 1080-Bild).
+

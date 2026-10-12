@@ -1884,4 +1884,8 @@ export const de = {
   "portTags.button": "Tags der Ports bearbeiten",
   "portTags.saveFirst": "Erst speichern oder abbrechen, bevor ein anderer Port gewählt wird",
   "flow.migrateButton": "Auf anderen Host verschieben",
+  "anchor.noRemove": "Der Playout-Puffer ist der feste Ausgang dieses Workflows und lässt sich nicht entfernen.",
+  "anchor.tooltip": "Ausgangs-Anker — fest verankert",
+  "anchor.depthLabel": "Puffer (ms)",
+  "anchor.depthTitle": "Puffertiefe dieses Workflows in Millisekunden (leer = 2500). Je größer, desto längere Ausfälle davor werden überbrückt — und desto mehr Speicher wird belegt.",
 };

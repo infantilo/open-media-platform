@@ -30447,3 +30447,21 @@ Binaries ohne fehlende Bibliotheken (`ldd`); alle 7 Images per `podman load` lad
 gegen leeren Stand (461 Pakete, keine Konflikte); Preflight ohne Go/Deno/Rust im Pfad. **Nicht geprüft:** echtes
 `sudo apt-get install` auf einem frischen Rechner, `make start` auf einem Rechner ohne Go, andere Distributionen.
 
+
+## 2026-10-12 — Playout-Puffer `omp-playout-buffer` (Kapitel 39): Ausgangs-Anker mit Failover-Puffer
+
+**Auftrag** (Datei „Neue Features.txt“, Feature 1): ein unveränderlicher Ausgangs-Node, der Ausfälle davor (Absturz, Umschalten, Standby,
+Umzug) überbrückt, Zeitstempel glättet und den nachgelagerten Sender nie abreißen lässt. Nutzerentscheidungen: Roh zuerst, Puffer als
+Teil des Workflows, Tiefe pro Workflow, Haltebild/Schwarz.
+**Entscheidungen:** (1) Ausgabe **auf dem MXL-Raster** mit der Tick-Zeit als Ursprungszeit-Meta statt Wanduhr-Pushen: ein erster Wurf
+(Wanduhr, Schreibpfad ohne Meta) gab 15,5 ms Bild↔Ton-Versatz gegenüber dem Eingang — die Videokette (videorate/convert) hat andere
+Latenz als die Audiokette; mit exaktem Index ist der Versatz 0,1 ms. (2) Ton folgt dem Bild über die **Ursprungszeit** (erwartete Zeit aus
+zuletzt gezeigtem Bild), nicht über Zähler: überlebt Lücken, Sprünge und Beschneiden. (3) Ein überbrückter Ausfall verkürzt die
+Verzögerung um die Ausfalldauer (das gepufferte Material wird ja abgespielt) → **elastisches Wiederauffüllen** (1 %, Hysterese 10 %)
+statt eines sichtbaren Standbilds. (4) Eingänge und Ausgang getrennt: nur die Eingänge werden bei Quellwechsel/Absturz neu gebaut, der
+Ausgang nie. (5) `setOutputDelay` addiert zur Tiefe statt den MXL-Schreibpfad (nur Video-Delay) zu benutzen → Bild und Ton gemeinsam.
+(6) Anker-Eigenschaft im Katalog (`anchor`), Rollen-Verbindung auf einen Anker verbindet jedes Format (Bild + Ton).
+**Befunde unterwegs:** `Role.Env` hat eine feste Allowlist (`allowedRoleEnv` + Host-Agent) — neue Schlüssel für den Puffer ergänzt; der
+Stall-Wächter baute anfangs wegen alter Zeitstempel alle 250 ms neu (Frist jetzt ab Neuaufbau, Wartezeit wächst bis 4 s); `omp-source`
+verschiebt nach einer Prozess-Pause seinen eigenen A/V-Versatz (~24 ms) — der Puffer gibt den Eingangs-Versatz 1:1 weiter.
+**Nicht umgesetzt:** komprimierter Pfad (Schritt 39.5), Testbild als Haltebild, Latenz im Katalog nur für 25 Bilder/s.
