@@ -5278,7 +5278,7 @@ Entwurf:
 7. **Dynamische Eingangsumschaltung:** Ein Eingang (NMOS-Receiver, IS-05), Umschalten durch den Orchestrator = Pfad 5; Methode
    `switchInput` nur als Debug.
 
-**Offene Entscheidungen für den Nutzer:** (a) Zuerst Roh-Strategie (A) allein, oder gleich auch (B)? (b) „Unveränderlich“ = im Editor
+**Entschieden (Nutzer 2026-10-12):** (a) **Roh (A) zuerst**, (B) später; (b) Puffer ist **Teil des Workflows** (Rolle im Workflow-Template, im Editor fest verankert/nicht löschbar; kein stilles Auto-Insert durch den Orchestrator — bei Workflows ohne Puffer Hinweis/Preflight-Warnung); (c) Zieltiefe **pro Workflow** (ein Parameter `bufferMs`); (d) Black-/Testbild-Quelle: noch offen, in 39.1 klären (Vorschlag: eingebettetes Schwarz, Testbild optional).
 fest verankert, oder auch vom Orchestrator beim Workflow-Start automatisch angefügt (Auto-Insert)? (c) Zieltiefe fest pro Workflow
 oder je Ausgangsweg (SRT 3 s, WebRTC 1 s)? (d) Black-/Testbild-Quelle: vorhandenes `omp-source`-Muster oder eingebettet?
 
@@ -5324,21 +5324,19 @@ Entwurf:
    Zustand, zwei Renderer; Offline/Fehler sichtbar auf den Tasten (gedimmt).
 7. **Linux:** udev-Regel + Doku (`make streamdeck-udev` optional); Firefox/Safari: Hinweis „nicht unterstützt“.
 
-**Offene Entscheidungen für den Nutzer:** (a) Welches Modell steht zum Testen bereit (bestimmt zuerst verifizierte Protokollvariante;
-ohne Gerät nur Unit-Tests + Emulator/Mock-`HIDDevice`)? (b) Dial-/LCD-Streifen (Plus) in der ersten Runde oder nur Tasten? (c) udev
-automatisch einrichten oder Doku? (d) Rechte: darf ein Operator ohne `configure` alle Aktionen auslösen, die er am Bildschirm hat
-(Annahme: ja, gleiche Proxy-API)?
+**Entschieden (Nutzer 2026-10-12):** (a) Testgeräte: **Stream Deck XL** (32 Tasten) und **Stream Deck +** (8 Tasten, 4 Dials, LCD-Streifen) sind verfügbar; (b) **Dials und LCD-Streifen gleich dabei** (Plus-Protokoll: Dial-Drehen/-Drücken, Touch-Streifen, Streifen-Bild je Dial); (c) **udev automatisch** (`make streamdeck-udev` bzw. im Installer, Regel `hidraw` + `uaccess`/Gruppe, Neuanstecken nötig); (d) Rechte: Operator darf alles, was er am Bildschirm darf (gleiche Proxy-API). **Browser-Simulator:** ja, machbar — ein virtuelles Gerät hinter derselben Transport-Schnittstelle (`HIDDevice`-Attrappe), das die gesendeten Tasten-/Streifenbilder in einer Seite (`/streamdeck-sim`) darstellt und Klicks/Mausrad als Input-Reports zurückgibt; gleiche Modelltabelle (XL, +, MK.2, Mini wählbar). Nutzen: Entwicklung/CI-Tests und Vorführung ohne Gerät; **ersetzt keinen Test am echten Gerät** (Bildformat/Chunking nur dort verifizierbar).
+
 
 | Schritt | Inhalt | Verifikation |
 |---|---|---|
 | 40.1 Recherche + Entwurf | `streamdeck.js` lesen, Modell-/Protokolltabelle verifizieren (offizielle Protokollbeschreibungen, nicht aus dem Gedächtnis), Adapter-Schnittstelle in `docs/` festlegen | Review durch Nutzer, kein Code |
-| 40.2 Transport + Modelltabelle | `transport.ts`, `models.ts`; Mock-`HIDDevice` für Tests | Deno-Tests: Chunk-Header/Segmentierung je Modell, Eingabe-Dekodierung; **mit Gerät:** Testraster erscheint, Tasten melden Index, Trennen/Wiedereinstecken, Berechtigung abgelehnt = Meldung |
+| 40.2 Transport + Modelltabelle + Simulator | `transport.ts`, `models.ts` (XL + Plus zuerst), Mock-`HIDDevice`, Browser-Simulator `/streamdeck-sim` (Tasten, Dials, Streifen) | Deno-Tests: Chunk-Header/Segmentierung je Modell, Eingabe-Dekodierung; **mit Gerät:** Testraster erscheint, Tasten melden Index, Trennen/Wiedereinstecken, Berechtigung abgelehnt = Meldung |
 | 40.3 Render-Engine | Canvas/SVG → JPEG/BMP, Rotation/Spiegelung je Modell, Fingerprint + Debounce | Tests: Fingerprint verhindert Resend; Gerät: 32 Tasten Aktualisierung < 100 ms spürbar flüssig |
 | 40.4 Broker + Kopfzeile + Auto-Raster | Fokus/Tabs/Blättern, Descriptor-Auto-Raster, Anbindung an `console-board.ts` | Deno-Tests Layoutkomposition (mehr Tabs als Tasten, Blättern); live: 3 Kacheln → 3 Tabs, Taste = Parameteraufruf (per Proxy-Log beobachtbar) |
 | 40.5 Video-Mixer-Adapter | PGM/PRE/Take/Cut/Auto/Transition/PIP | Live-E2E: Tastenfolge schaltet PGM exakt wie Mausklick; Tastenfarben folgen Zustand |
 | 40.6 Audio-Mixer-Adapter | Kanäle blättern, Mute/Solo/Select, Dials, EQ/Dynamics/Routing-Seiten | Live: Kanalpegel/Mute ändern sich; > Spalten Kanäle erreichbar |
 | 40.7 X/Y-Panel-Adapter | Quellen-/Zielreihen, Take, Ebenen | Live: Schaltung erzeugt Kante in der Kern-API |
-| 40.8 Doku/Handbuch/udev | BENUTZERHANDBUCH, HANDBUCH §9, README, udev-Regel, i18n de/en | CDP-Klicktest Verbindungs-Dialog |
+| 40.8 Doku/Handbuch/udev | BENUTZERHANDBUCH, HANDBUCH §9, README, automatische udev-Regel (`make streamdeck-udev` + `install.sh`), i18n de/en | CDP-Klicktest Verbindungs-Dialog |
 
 **Regeln:** ein Schritt pro Sitzung; ohne physisches Gerät nur bis zur Mock-Grenze als „erledigt“ markieren, Rest ausdrücklich als
 „nicht am Gerät geprüft“ vermerken; kein Herstellername in Katalog-/UI-Texten außer der Gerätebezeichnung in der Doku (Nutzerregel:
