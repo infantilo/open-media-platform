@@ -5238,3 +5238,108 @@ Operator-Konsole (`/console/<workflow>/<rolle>`) an — nicht auf einem echten G
 Workflow-Ebenen wurden nur per Unit-Test geprüft (im Live-Stack lief nichts in Gruppen/Workflows). (3) Tags für Ziele lassen sich nur
 per API setzen, keine Eingabemaske im Panel. (4) „Aktuelle Schaltung als Bouquet übernehmen“ gibt es nicht (nur Aufzeichnen und
 Tag-Regel). (5) Beim Neustart des Orchestrators für den Test wurde eine laufende `omp-scte35`-Instanz nicht wieder übernommen.
+
+## Kapitel 39: Playout-Puffer-Senke `omp-playout-buffer` — Failover-Puffer am Ende des Graphen (Nutzerauftrag 2026-10-12, „Neue Features.txt“ Feature 1)
+
+Ausgangslage: Der Verzögerungsausgleich (D8, `setOutputDelay`, ARCHITECTURE.md §15) wird heute einem funktionalen Node
+(Scaler/Mischer) aufgebürdet, der dadurch zum faktischen Ausgangsanker wird. Ein Ausfall davor (Crash, Re-Routing, Hot-Standby
+K7-T4, Pod-Umzug) reißt den Ausgang ab. Ziel: ein eigener, am Graphenende **fest verankerter** Node, der Lücken überbrückt und
+Zeitstempel glättet.
+
+**Anpassung an den OMP-Stack (Vorlage ist sprachneutral/Python formuliert):** Rust + GStreamer wie die übrigen Nodes; Transport
+zwischen Nodes ist MXL (**unkomprimierte** Frames/Grains), komprimierte Pakete gibt es erst in den Gateways (SRT/WebRTC/RTMP).
+Daher zwei Strategien in einem Node: **(A) Roh (Standard):** MXL-Ein → Ring → MXL-Aus; **(B) Komprimiert:** Ring aus
+Zugriffseinheiten (AU) vor dem Gateway-Encoder-Ausgang, Splice nur an IDR/IRAP. Speicher-Effizienz-Schwerpunkt auf (B); (A) ist
+der einfache, zuerst zu bauende Fall (jedes Bild ist „Schlüsselbild“).
+
+Entwurf:
+1. **Ring/Puffer:** feste Zieltiefe `bufferMs` (Standard 2500, 500–10000), Erzeuger = Leser-Task (MXL-Grain-Lesen bzw. AU-Eingang),
+   Verbraucher = Ausgabetakt auf **eigener Uhr** (MXL-TAI-Index bzw. Wanduhr-Takt), nie vom Eingang getrieben. Auffüllphase
+   (Pre-Roll) bis Zieltiefe, dann konstante Verzögerung; Drift wird durch sanftes Dehnen/Raffen (Auslassen/Wiederholen einzelner
+   Bilder, Audio resample) auf die Zieltiefe zurückgeführt, nicht durch Sprünge.
+2. **Speicherbegrenzung:** harte Obergrenze in Bytes **und** Bildern (`maxBytes`, aus Format berechnet, Standard Zieltiefe × 1,5);
+   bei (A) vorallokierter Pool fester Bildgröße (kein Wachstum), bei (B) Pool + Verwerfen **ganzer GOPs ab ältestem**, nie
+   einzelner P-Frames; Zähler/Metriken `bufferFillMs`, `bufferBytes`, `dropped`, `underruns`.
+3. **Lückenfüllung:** Heartbeat/Daten-Timeout (`holdAfterMs`, Standard 2 Ausgabebilder) → Zustand `HOLD`: (A) letztes Bild
+   wiederholen (Wahl `holdMode`: `last` | `black` | `testpattern`), Audio **Stille** im selben Takt; (B) letzte IDR-GOP-Standbild
+   wiederholen oder vorkodiertes Schwarz-IDR + stille AAC-/Opus-Pakete. Nach Gap-Dauer > `holdMaxMs` nur Zustand/Alarm, Ausgang
+   bleibt am Leben (Zweck: Sink nicht trennen). Der Puffer **leert** sich dabei (Pre-Roll-Reserve verbraucht) — Wiederauffüllen
+   danach über Schritt 4.
+4. **Zeitstempel (PTS/DTS)-Glättung:** Ausgangszeit = eigene monotone Zeitleiste `out_ts += frame_duration`; Eingangs-Zeitstempel
+   werden nur als **Offset-Differenz** verwendet (`offset = out_ts − in_ts` beim Splice). Sprünge/Rückwärtsläufe > Schwelle
+   (`tsJumpMs`) → Offset neu setzen, kein Ausgangssprung. DTS ≤ PTS und strikt monoton (B-Frames: Reihenfolge der AU, nicht PTS-
+   Sortierung der Ausgabe). Audio-Zeitleiste über Sample-Zähler (kein Zeitstempel-Driften).
+5. **Splice/Failover-Wiederaufnahme:** Eingang wird beim Wiedererscheinen erst **verworfen bis zum nächsten Schlüsselbild**
+   (B: IDR/IRAP, vorher Parameter-Sätze SPS/PPS/VPS merken und voranstellen; A: sofort), Audio an Videogrenze ausgerichtet;
+   Quelle wechseln = neuer Offset, nahtlos an der Ausgabe. Hot-Standby-Übernahme nutzt denselben Pfad (kein Sonderfall).
+6. **Unveränderlich/Anker:** Katalog-Flag `anchor: true` — genau ein Puffer pro Ausgangsweg, im Flow-Editor nicht löschbar/verschiebbar
+   innerhalb des Workflow-Templates (Verhalten wie die „Rolle“ im Workflow); `setOutputDelay`/Latenzdeklaration wandert vom Scaler
+   hierher (`LatencyDeclaration` = `bufferMs` fest, Delay-Ausgleich setzt den Rest auf die Zieltiefe).
+7. **Dynamische Eingangsumschaltung:** Ein Eingang (NMOS-Receiver, IS-05), Umschalten durch den Orchestrator = Pfad 5; Methode
+   `switchInput` nur als Debug.
+
+**Offene Entscheidungen für den Nutzer:** (a) Zuerst Roh-Strategie (A) allein, oder gleich auch (B)? (b) „Unveränderlich“ = im Editor
+fest verankert, oder auch vom Orchestrator beim Workflow-Start automatisch angefügt (Auto-Insert)? (c) Zieltiefe fest pro Workflow
+oder je Ausgangsweg (SRT 3 s, WebRTC 1 s)? (d) Black-/Testbild-Quelle: vorhandenes `omp-source`-Muster oder eingebettet?
+
+| Schritt | Inhalt | Verifikation |
+|---|---|---|
+| 39.1 Recherche + Entwurf | MXL-Leser/-Schreiber (`omp-mediaio`), D8 `setOutputDelay`/`compute_write_index`, GStreamer-Muster in PIPELINE CONTROLLER (`MasterPipeline.js`); ARCHITECTURE.md neuer Abschnitt, Entscheidungen (a)–(d) | Review durch Nutzer, kein Code |
+| 39.2 Reine Logik (`buffer.rs`) | Ring/Pool, Zustandsautomat `FILL/RUN/HOLD/RESYNC`, Zeitleiste/Offset-Glättung, Splice-Entscheidung, Byte-Grenze — ohne GStreamer, rein testbar | Tests: konstante Tiefe, Gap 3 s ohne Ausgangslücke, Zeitsprung ± 10 s → Ausgang monoton, Rückwärts-PTS, Speichergrenze bei 10 min Dauerlast (Zähler flach), Verwerfen bis Keyframe |
+| 39.3 Roh-Pfad (A) im Node | Node `omp-playout-buffer`, MXL ein/aus, Takt auf TAI, Audio-Stille, `holdMode`, Parameter/Metriken, SDK-Contract | Live: Quelle → Puffer → Viewer; Quelle stoppen/Neustart: Ausgang läuft durchgehend, Bildsprung nur beim Wiedereintritt; Fill ≈ `bufferMs`; Frame-Zähler am Ausgang lückenlos (`mxl-info`) |
+| 39.4 Delay-Umzug | Latenzdeklaration + `setOutputDelay` auf den Puffer, Scaler/Mischer-Anker entfernt, Golden-Test Delay-Plan | Go-Tests `computeDelayPlan`; A/B-Skew-Messung wie D8 Teil 3 |
+| 39.5 Komprimierter Pfad (B) | AU-Ring vor SRT-/WebRTC-Gateway-Ausgang, IDR-Splice, Parameter-Satz-Wiederholung, GOP-weises Verwerfen | SRT-Empfänger (`srtsrc`/`ffprobe`) sieht beim Upstream-Kill keine Verbindungstrennung, keine Artefakte nach Wiederaufnahme, PTS/DTS monoton (`ffprobe -show_packets`) |
+| 39.6 Editor/Orchestrator | Anker-Flag im Katalog, Auto-Insert/Schutz laut (b), Hot-Standby-Test (K7-T4) mit Puffer | Live: Standby-Beförderung ohne Ausgangs-Abriss; Flow-Editor-Klicktest (kein Löschen) |
+| 39.7 UI/Handbuch/Katalog | Panel mit Füllstand/Zustand, Node-Optionen, Katalogtexte, BENUTZERHANDBUCH, HANDBUCH §9, README | CDP-Klicktest, i18n de/en |
+
+**Regeln:** ein Schritt pro Sitzung; Live-Test am echten Stack; nur kleine CPU-Tests; neue UI-Texte über `t()`.
+
+## Kapitel 40: Stream Deck per WebHID als Operator-Bedienpult (Nutzerauftrag 2026-10-12, „Neue Features.txt“ Feature 2; vertieft `docs/END-GOAL-FEATURES.md` Kap. 8/K8)
+
+Ausgangslage: K8 ist nur als Konzept beschrieben (kein Code in OMP). Referenz: `/home/infantilo/PIPELINE CONTROLLER/streamdeck.js`
+(WebHID, Modelltabelle, Bildchunking, Render-Debounce/Fingerprint) — Muster übernehmen, nicht Code kopieren. Neu gegenüber K8:
+**mehrere Node-UIs gleichzeitig** (Konsole = Kacheln in `console-board.ts`) und **dynamische, scrollbare Layouts**.
+
+Entwurf:
+1. **Broker in der Shell** (`ui/shell/streamdeck/`): `transport.ts` (WebHID, Modelltabelle MK.2/XL/Plus/Neo/Mini, Chunking,
+   Helligkeit, Wiederverbinden über `navigator.hid` `connect`/`disconnect`, Ablehnung der Berechtigung abfangen), `render.ts`
+   (Canvas → JPEG/BMP je Modell, Fingerprint-Cache, 50–100 ms Debounce, nur geänderte Tasten senden), `broker.ts`
+   (Fokus-Verwaltung, Layout-Komposition, Eingabe-Verteilung). Das Gerät hält ausschließlich die Shell (ein Tab).
+2. **Feste Kopfzeile:** Taste 0 = Home/Zurück, übrige Tasten der obersten Reihe = **Tabs der geöffneten Node-UIs** (Kachel-Titel,
+   Farbe/Icon aus Katalog; mehr Tabs als Tasten → Blättern über Rand-Tasten). Immer präsent; Tab-Wechsel ändert nur das Layout
+   ab Zeile 2 (und hebt die Kachel am Bildschirm hervor/bringt sie nach vorn).
+3. **Node-Adapter statt Hartverdrahtung:** jedes Node-UI-Bundle darf ein Objekt `streamDeck` an die Shell melden
+   (`mountUIBundle`-Kontext, Muster `registerPage`): `getLayout(ctx) → { keys[], dials[], strips[] }`, `onKey(i, down)`,
+   `onDial(i, delta | press)`, Ereignis `requestRelayout()` bei Zustandsänderung. Kein iFrame (die Bundles sind Custom Elements im
+   selben Dokument) → direkte Funktionsaufrufe/`CustomEvent`s statt `postMessage`; falls später sandboxed: gleiche Nachrichtenform.
+   Nodes ohne Adapter fallen auf ein **Auto-Raster aus dem Descriptor** zurück (K8 Teil 1).
+4. **Seiten je Node (alles dynamisch, Spalten-/Reihenzahl aus dem Modell):**
+   - Video-Mixer M/E: Zeile PGM, Zeile PRE (n Quellen, blättern bei > Spalten), Take/Cut/Auto, Transition-Typ, PIP-Presets (Toggle).
+   - Audio-Mixer: Kanalstreifen über die Spalten (Fader/Poti = Dials bei Plus, sonst Tasten Mute/Solo/Select, blättern bei mehr
+     Kanälen als Spalten); gewählter Kanal → Unterseiten EQ / Dynamics / Routing (Potis = Parameter, Tasten = Bypass/Wahl).
+   - X/Y-Panel: Quellenreihe + Zielreihe, Take, Blättern, Ebenen-Navigation (Workflow/Gruppe), Bouquets.
+5. **Eingabe-Verteilung:** Input-Report → Broker → aktiver Tab-Adapter (nie an inaktive); Dial-Drehung gedrosselt/zusammengefasst
+   (keine Flut gegen die Proxy-API), Tastendruck löst **denselben** Methodenaufruf aus wie der Mausklick (kein eigener Backend-Pfad).
+6. **Zustand zurück auf die Tasten:** Adapter rendert aus demselben Zustand wie das Bildschirm-UI (on-air/preset-Tokens) — ein
+   Zustand, zwei Renderer; Offline/Fehler sichtbar auf den Tasten (gedimmt).
+7. **Linux:** udev-Regel + Doku (`make streamdeck-udev` optional); Firefox/Safari: Hinweis „nicht unterstützt“.
+
+**Offene Entscheidungen für den Nutzer:** (a) Welches Modell steht zum Testen bereit (bestimmt zuerst verifizierte Protokollvariante;
+ohne Gerät nur Unit-Tests + Emulator/Mock-`HIDDevice`)? (b) Dial-/LCD-Streifen (Plus) in der ersten Runde oder nur Tasten? (c) udev
+automatisch einrichten oder Doku? (d) Rechte: darf ein Operator ohne `configure` alle Aktionen auslösen, die er am Bildschirm hat
+(Annahme: ja, gleiche Proxy-API)?
+
+| Schritt | Inhalt | Verifikation |
+|---|---|---|
+| 40.1 Recherche + Entwurf | `streamdeck.js` lesen, Modell-/Protokolltabelle verifizieren (offizielle Protokollbeschreibungen, nicht aus dem Gedächtnis), Adapter-Schnittstelle in `docs/` festlegen | Review durch Nutzer, kein Code |
+| 40.2 Transport + Modelltabelle | `transport.ts`, `models.ts`; Mock-`HIDDevice` für Tests | Deno-Tests: Chunk-Header/Segmentierung je Modell, Eingabe-Dekodierung; **mit Gerät:** Testraster erscheint, Tasten melden Index, Trennen/Wiedereinstecken, Berechtigung abgelehnt = Meldung |
+| 40.3 Render-Engine | Canvas/SVG → JPEG/BMP, Rotation/Spiegelung je Modell, Fingerprint + Debounce | Tests: Fingerprint verhindert Resend; Gerät: 32 Tasten Aktualisierung < 100 ms spürbar flüssig |
+| 40.4 Broker + Kopfzeile + Auto-Raster | Fokus/Tabs/Blättern, Descriptor-Auto-Raster, Anbindung an `console-board.ts` | Deno-Tests Layoutkomposition (mehr Tabs als Tasten, Blättern); live: 3 Kacheln → 3 Tabs, Taste = Parameteraufruf (per Proxy-Log beobachtbar) |
+| 40.5 Video-Mixer-Adapter | PGM/PRE/Take/Cut/Auto/Transition/PIP | Live-E2E: Tastenfolge schaltet PGM exakt wie Mausklick; Tastenfarben folgen Zustand |
+| 40.6 Audio-Mixer-Adapter | Kanäle blättern, Mute/Solo/Select, Dials, EQ/Dynamics/Routing-Seiten | Live: Kanalpegel/Mute ändern sich; > Spalten Kanäle erreichbar |
+| 40.7 X/Y-Panel-Adapter | Quellen-/Zielreihen, Take, Ebenen | Live: Schaltung erzeugt Kante in der Kern-API |
+| 40.8 Doku/Handbuch/udev | BENUTZERHANDBUCH, HANDBUCH §9, README, udev-Regel, i18n de/en | CDP-Klicktest Verbindungs-Dialog |
+
+**Regeln:** ein Schritt pro Sitzung; ohne physisches Gerät nur bis zur Mock-Grenze als „erledigt“ markieren, Rest ausdrücklich als
+„nicht am Gerät geprüft“ vermerken; kein Herstellername in Katalog-/UI-Texten außer der Gerätebezeichnung in der Doku (Nutzerregel:
+sonst keine Produktnamen).
