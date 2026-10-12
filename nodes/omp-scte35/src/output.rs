@@ -385,4 +385,38 @@ mod tests {
         assert!(TsOutput::start("udp://127.0.0.1:9", ts::PMT_PID, 1).is_err());
         assert!(TsOutput::start("ftp://x", 500, 1).is_err());
     }
+
+    /// Gegenprüfung des SRT-Wegs gegen einen echten Empfänger (GStreamer `srtsrc` als Listener, Mitschnitt, Parser).
+    /// `cargo test -p omp-scte35 -- --ignored srt_sidecar` (braucht `gst-launch-1.0` mit SRT-Plugin).
+    #[test]
+    #[ignore]
+    fn srt_sidecar_reaches_a_real_receiver() {
+        let file = std::env::temp_dir().join(format!("omp-scte35-srt-{}.ts", std::process::id()));
+        let _ = std::fs::remove_file(&file);
+        let mut rx = std::process::Command::new("gst-launch-1.0")
+            .args(["-q", "-e", "srtsrc", "uri=srt://127.0.0.1:19761?mode=listener", "!", "filesink"])
+            .arg(format!("location={}", file.display()))
+            .spawn()
+            .expect("gst-launch-1.0");
+        std::thread::sleep(Duration::from_millis(1500));
+        let out = TsOutput::start("srt://127.0.0.1:19761?mode=caller", 500, 3).expect("srt start");
+        std::thread::sleep(Duration::from_millis(1500));
+        let cue = Cue::Out { event_id: 77, duration_ms: Some(30_000), auto_return: true, lead_ms: 2000 };
+        out.send_section(cue.to_scte35(0).unwrap());
+        std::thread::sleep(Duration::from_millis(1500));
+        drop(out);
+        let _ = std::process::Command::new("kill").args(["-INT", &rx.id().to_string()]).status(); // -e: EOS, filesink schreibt aus
+        std::thread::sleep(Duration::from_millis(800));
+        let _ = rx.kill();
+        let _ = rx.wait();
+        let data = std::fs::read(&file).expect("Mitschnitt");
+        let _ = std::fs::remove_file(&file);
+        assert_eq!(data.len() % ts::PACKET, 0, "ganze TS-Pakete");
+        let on_pid: Vec<&[u8]> = data.chunks(ts::PACKET).filter(|p| p[0] == 0x47 && (((p[1] & 0x1F) as u16) << 8 | p[2] as u16) == 500).collect();
+        assert!(!on_pid.is_empty(), "SCTE-35-PID kam an ({} Bytes empfangen)", data.len());
+        assert!(data.chunks(ts::PACKET).any(|p| p[1] & 0x1F == 0 && p[2] == 0), "PAT empfangen");
+        let sec = &on_pid[0][5..]; // pointer_field 0 + Abschnitt
+        assert_eq!(sec[0], 0xFC, "table_id splice_info_section");
+        eprintln!("SRT: {} Pakete auf PID 500, {} Bytes gesamt", on_pid.len(), data.len());
+    }
 }

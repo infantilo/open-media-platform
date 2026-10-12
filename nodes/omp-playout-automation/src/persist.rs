@@ -88,6 +88,17 @@ pub struct Snapshot {
     /// Kapitel 27 / P9.3: Zustand des Plugin-Hosts (Ereignis-Hooks: enabled + Konfiguration).
     #[serde(default)]
     pub plugins: serde_json::Value,
+    /// Kapitel 37: gesendete, noch nicht beendete Werbeblock-Outs (sonst bliebe nach einem Neustart
+    /// das Ende/die Rücknahme aus; alte Snapshots → leer).
+    #[serde(default)]
+    pub ad_open: Vec<SnapAdOpen>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnapAdOpen {
+    pub key: String,
+    pub event_id: u32,
+    pub cut_at_utc_ms: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -171,6 +182,15 @@ pub fn build_snapshot(state: &AutomationState, since_cache: &mut SinceCache, now
             .collect(),
         onair_utc_ms: state.onair_utc_ms,
         plugins: crate::hooks::capture(),
+        ad_open: {
+            let mut v: Vec<SnapAdOpen> = state
+                .ad_open
+                .iter()
+                .map(|(k, o)| SnapAdOpen { key: k.clone(), event_id: o.event_id, cut_at_utc_ms: o.cut_at_utc_ms })
+                .collect();
+            v.sort_by(|a, b| a.key.cmp(&b.key)); // stabile Reihenfolge: gleicher Zustand → gleiches JSON
+            v
+        },
     }
 }
 
@@ -219,6 +239,12 @@ pub fn apply_snapshot(state: &mut AutomationState, snap: Snapshot, now_utc_ms: i
             *cur = saved;
         }
     }
+
+    state.ad_open = snap
+        .ad_open
+        .into_iter()
+        .map(|o| (o.key, crate::AdOpen { event_id: o.event_id, cut_at_utc_ms: o.cut_at_utc_ms }))
+        .collect();
 
     state.last_live_item_id = snap.last_live_item_id.filter(|id| state.metadata.contains_key(id));
 
@@ -908,6 +934,24 @@ mod tests {
         assert_eq!(starts, ["c2"]);
         assert!(r.child_schedule.iter().any(|e| e.child_id == "c1" && e.action == crate::ChildAction::Stop));
         r.child_schedule.clear();
+    }
+
+    #[test]
+    fn open_ad_breaks_survive_restart_and_old_snapshots_load_without_them() {
+        let mut s = state_with_three_items();
+        s.ad_open.insert("blk1".to_string(), crate::AdOpen { event_id: 42, cut_at_utc_ms: 1_000 });
+        let mut cache = None;
+        let snap = build_snapshot(&s, &mut cache, 0);
+        let json = serde_json::to_string(&snap).unwrap();
+        let back: Snapshot = serde_json::from_str(&json).unwrap();
+        let mut fresh = AutomationState::new(String::new(), String::new(), String::new(), String::new());
+        apply_snapshot(&mut fresh, back, 0).unwrap();
+        let o = fresh.ad_open.get("blk1").expect("open block restored");
+        assert_eq!((o.event_id, o.cut_at_utc_ms), (42, 1_000));
+        let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        v.as_object_mut().unwrap().remove("ad_open");
+        let old: Snapshot = serde_json::from_value(v).unwrap();
+        assert!(old.ad_open.is_empty());
     }
 
     #[test]
