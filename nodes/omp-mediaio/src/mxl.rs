@@ -731,6 +731,9 @@ impl MxlVideoOutput {
             let avf = gst::ElementFactory::make("avvideofilter")
                 .property("filter-desc", framerate::blend_filter_desc(framerate_numerator, framerate_denominator))
                 .property("latency-input-frames", 1u32)
+                // libavfilter startet sonst mehrere Threads je Instanz (live gemessen: Scaler 640x360, 30→25: ~4x CPU
+                // gegenüber videorate); ein Thread reicht für `framerate`.
+                .property("threads", 1i32)
                 .build()
                 .map_err(|e| format!("avvideofilter: {e}"))?;
             pipeline

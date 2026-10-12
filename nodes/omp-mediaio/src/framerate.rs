@@ -52,7 +52,9 @@ impl RateMode {
 /// ersten Aufruf einmal auf stderr, wenn der Rückfall greift.
 pub fn avvideofilter_available() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| gst::ElementFactory::find("avvideofilter").is_some())
+    // `gst::init()` ist idempotent: die Prüfung läuft auch in `main()` vor dem Pipeline-Thread (Scaler),
+    // ohne Init paniert `ElementFactory::find` (live gefunden, nicht von den Tests erfasst).
+    *AVAILABLE.get_or_init(|| gst::init().is_ok() && gst::ElementFactory::find("avvideofilter").is_some())
 }
 
 /// Wie [`RateMode::effective`], meldet aber einmalig, wenn `Blend`
@@ -104,6 +106,13 @@ mod tests {
         assert!(same_rate(50, 2, 25, 1));
         assert!(!same_rate(30000, 1001, 30, 1));
         assert!(!same_rate(25, 0, 25, 1));
+    }
+
+    #[test]
+    fn availability_check_initialises_gstreamer_itself() {
+        // darf ohne vorheriges gst::init() nicht paniert (Scaler ruft es in main() davor auf)
+        let _ = avvideofilter_available();
+        let _ = resolve(RateMode::Blend);
     }
 
     #[test]
