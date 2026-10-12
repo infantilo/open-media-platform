@@ -321,8 +321,8 @@
     "runner": "process",
     "command": ["../nodes/target/release/omp-scaler"],
     "env": {},
-    "description": "Skaliert/konvertiert eine per Drag & Drop angeschlossene MXL-Videoquelle auf ein fest konfiguriertes Zielformat (Rollen-Format, s. Workflow-Einstellungen) und schreibt sie als zweiten MXL-Flow zurück — gleicht Auflösungs-/Framerate-Unterschiede zwischen Quellen und Zielen aus.",
-    "i18n": { "en": {"description": "Scales/converts an MXL video source connected via drag & drop to a fixed target format (role format, see workflow settings) and writes it back as a second MXL flow — compensates resolution/frame-rate differences between sources and destinations.", "expectedResources": "low, grows with the target resolution"} },
+    "description": "Skaliert/konvertiert eine per Drag & Drop angeschlossene MXL-Videoquelle auf ein fest konfiguriertes Zielformat (Rollen-Format, s. Workflow-Einstellungen) und schreibt sie als zweiten MXL-Flow zurück — gleicht Auflösungs-/Framerate-Unterschiede zwischen Quellen und Zielen aus. Optional mit Blend-Bildratenwandlung (Überblenden statt Verwerfen/Verdoppeln, braucht das GStreamer-Plugin avvideofilter).",
+    "i18n": { "en": {"description": "Scales/converts an MXL video source connected via drag & drop to a fixed target format (role format, see workflow settings) and writes it back as a second MXL flow — compensates resolution/frame-rate differences between sources and destinations. Optionally with blend frame-rate conversion (blending instead of dropping/duplicating frames, needs the GStreamer plugin avvideofilter).", "expectedResources": "low, grows with the target resolution"} },
     "expectedResources": "gering, wächst mit Zielauflösung",
     "latency": { "video": { "minLatencyFrames": 1, "maxLatencyFrames": 1 }, "supportsDelayCompensation": true }
   },

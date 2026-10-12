@@ -6,6 +6,8 @@
 #   ./install.sh --media --start   danach gleich starten
 #   ./install.sh --dry-run     nur anzeigen, was getan würde
 #   ./install.sh --yes         keine Rückfragen
+#   ./install.sh --media --avvideofilter-archive DATEI   Plugin für Blend-Bildratenwandlung aus Datei (ohne Internet)
+#   ./install.sh --media --no-avvideofilter              Plugin nicht installieren (Nodes nutzen videorate)
 #   ./install.sh --systemd     OMP beim Boot automatisch starten (systemd-Dienst "omp", Hauptrechner)
 #   ./install.sh --host-agent-service --orchestrator <IP> [--label NAME] [--token TOKEN]
 #                              diesen Rechner als zusätzlichen Host anbinden (Dienst "omp-host-agent")
@@ -13,14 +15,15 @@
 # Was das Skript tut (und nur das):
 #   1. Systempakete per Paketmanager installieren (braucht sudo; fragt vorher)
 #   2. Go, Deno (und mit --media: Rust) installieren, falls fehlend/zu alt — nach $HOME, ohne sudo
-#   3. mit --media: MXL-Bibliothek bauen (deploy/dev/install-mxl.sh) und Medien-Nodes bauen (make nodes)
+#   3. mit --media: MXL-Bibliothek bauen (deploy/dev/install-mxl.sh) und Medien-Nodes bauen (make nodes);
+#      dazu optional das GStreamer-Plugin avvideofilter (angepinnt, SHA256-geprüft; --no-avvideofilter lässt es weg)
 #   4. make preflight laufen lassen
 # Es öffnet KEINE Firewall-Ports und ändert keine Systemkonfiguration außer den Paketen.
 # Mehrfach aufrufbar: Vorhandenes wird übersprungen.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MEDIA=0; START=0; DRY=0; YES=0; SYSTEMD=0; AGENT_SVC=0; ORCH_IP=""; AGENT_LABEL=""; AGENT_TOKEN=""
+MEDIA=0; START=0; DRY=0; YES=0; SYSTEMD=0; AGENT_SVC=0; ORCH_IP=""; AGENT_LABEL=""; AGENT_TOKEN=""; AVF=1; AVF_ARCHIVE=""
 while [ $# -gt 0 ]; do
   a="$1"; shift
   case "$a" in
@@ -30,10 +33,12 @@ while [ $# -gt 0 ]; do
     --label) AGENT_LABEL="${1:-}"; shift || true ;;
     --token) AGENT_TOKEN="${1:-}"; shift || true ;;
     --media) MEDIA=1 ;;
+    --no-avvideofilter) AVF=0 ;;
+    --avvideofilter-archive) AVF_ARCHIVE="${1:-}"; shift || true ;;
     --start) START=1 ;;
     --dry-run) DRY=1 ;;
     --yes|-y) YES=1 ;;
-    -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unbekannte Option: $a (siehe --help)" >&2; exit 2 ;;
   esac
 done
@@ -132,6 +137,11 @@ if [ "$MEDIA" = 1 ]; then
   fi
   run "\"$ROOT_DIR/deploy/dev/install-mxl.sh\""
   run "make -C \"$ROOT_DIR\" nodes"
+  # Optional: Plugin für die Bildratenwandlung "blend" (Fehlschlag ist nicht kritisch, Nodes nutzen dann videorate).
+  if [ "$AVF" = 1 ]; then
+    say "3b/4 Plugin avvideofilter (Bildratenwandlung blend, optional)"
+    run "\"$ROOT_DIR/deploy/dev/install-avvideofilter.sh\"${AVF_ARCHIVE:+ --archive \"$AVF_ARCHIVE\"} || true"
+  fi
 else
   say "3/4 Medien-Nodes übersprungen (nachholen: ./install.sh --media)"
 fi

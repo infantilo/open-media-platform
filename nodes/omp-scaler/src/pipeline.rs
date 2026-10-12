@@ -38,6 +38,9 @@ pub struct Config {
     pub target_height: u32,
     pub target_framerate_numerator: u32,
     pub target_framerate_denominator: u32,
+    /// Gewünschte Bildratenwandlung (`OMP_FRAMERATE_CONVERSION`); ohne Plugin
+    /// `avvideofilter` fällt der Aufbau auf `videorate` zurück.
+    pub rate_mode: omp_mediaio::framerate::RateMode,
 }
 
 pub enum Event {
@@ -134,7 +137,18 @@ fn build(
     // Die eigentliche Skalierung/Framerate-Konvertierung passiert intern
     // in `MxlVideoOutput::new` (s. Moduldoku oben) — hier nur Ziel-
     // Auflösung/-Framerate übergeben.
-    let output = MxlVideoOutput::new(
+    // Gleiche Rate wie das Ziel: nichts zu wandeln — Blend würde nur ein Bild Latenz kosten.
+    let rate_mode = if omp_mediaio::framerate::same_rate(
+        input.framerate_numerator,
+        input.framerate_denominator,
+        config.target_framerate_numerator,
+        config.target_framerate_denominator,
+    ) {
+        omp_mediaio::framerate::RateMode::Videorate
+    } else {
+        config.rate_mode
+    };
+    let output = MxlVideoOutput::new_with_rate_mode(
         &pipeline,
         &queue,
         context.clone(),
@@ -145,6 +159,7 @@ fn build(
         config.target_framerate_numerator,
         config.target_framerate_denominator,
         output_delay,
+        rate_mode,
     )
     .map_err(|e| format!("MxlVideoOutput: {e}"))?;
     output.set_active(true);

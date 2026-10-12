@@ -19,6 +19,7 @@
 pub mod rtp;
 pub mod st2110;
 pub mod hwaccel;
+pub mod framerate;
 
 #[cfg(feature = "mxl")]
 pub mod mxl;

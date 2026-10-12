@@ -100,7 +100,11 @@ their old ID after a restart or reboot.
 
 Prerequisites, the complete **port/firewall table** (only TCP 8000 is needed on
 a single machine), who talks to whom, and manual installation:
-[`docs/INSTALLATION.md`](docs/INSTALLATION.md) (German). Troubleshooting:
+[`docs/INSTALLATION.md`](docs/INSTALLATION.md) (German). Machines **without
+internet access**: build a ready-made offline package (binaries, container
+images, system packages, plugin) on a connected machine and install it with one
+script — [`docs/OFFLINE-INSTALLATION.md`](docs/OFFLINE-INSTALLATION.md)
+(`deploy/offline/`). Troubleshooting:
 [`docs/HANDBUCH.md`](docs/HANDBUCH.md). User guide for the UI (with
 screenshots): [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
 (The docs are in German — this README is the only English-language
@@ -420,7 +424,9 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   connected
 - **Cloud resources (orchestrator service)** — rent cloud hosts through a provider adapter (simulation provider and AWS, no cloud SDK), reserve capacity from–to, rule-based autoscaling (off by default; suggest or automatic) behind a hard daily/monthly budget cap, pre-calculated and accrued cost estimates; AWS launching is dry-run only until explicitly enabled (`docs/CLOUD-AWS.md`)
 - **omp-scaler** — scales/converts a connected MXL video source to a
-  fixed target format; also one of two nodes that can absorb a
+  fixed target format (frame-rate conversion by `videorate`, or optionally
+  by blending via the `avvideofilter` GStreamer plugin —
+  `docs/INSTALLATION.md` §9, incl. offline machines); also one of two nodes that can absorb a
   workflow's declared output-delay compensation (see Status)
 - **omp-scope** — a passive measurement tap (taps a video and/or an
   audio flow, sends nothing itself): waveform/vectorscope, EBU R 128
@@ -666,6 +672,15 @@ components under `third_party/` (MXL, libfabric) are never committed
 to this repository (fetched at build time by `deploy/dev/install-mxl.sh`
 and friends) and keep their own upstream licenses (both Apache-2.0/
 BSD-or-GPLv2-compatible).
+
+The optional GStreamer plugin **`avvideofilter`** (frame-rate conversion by
+blending, `docs/INSTALLATION.md` §9) is a separate project by
+[emcodem](https://github.com/emcodem/avvideofilter), licensed LGPL-2.1-or-later
+and shipping its own FFmpeg. It is not part of this repository and not linked
+into OMP: the install scripts fetch a pinned, checksum-verified release (or take
+it from the offline package) and GStreamer loads it at run time. Many thanks to
+emcodem for the plugin and for the original integration proposal. Details and
+the other third-party components: [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
 
 ## Related project
 

@@ -64,7 +64,7 @@ update-keygen:
 # Build-Stempel für die Node-Binaries (nodes/omp-node-sdk/build.rs, Kapitel 28) —
 # als Target-Variable, gilt damit auch für die Voraussetzung `nodes`.
 update-bundle: export OMP_BUILD_VERSION := $(UPDATE_VERSION)
-update-bundle: export OMP_BUILD_COMMIT := $(shell git rev-parse --short HEAD)
+update-bundle: export OMP_BUILD_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null)
 update-bundle: export OMP_BUILD_AT := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 update-bundle: ui nodes
 	@[ -f "$(UPDATE_KEY)" ] || (echo "Signaturschlüssel $(UPDATE_KEY) fehlt — 'make update-keygen' oder UPDATE_KEY=... setzen." >&2; exit 1)

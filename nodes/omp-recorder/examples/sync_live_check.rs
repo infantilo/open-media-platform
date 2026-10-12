@@ -25,6 +25,11 @@ fn uuid(salt: u128) -> String {
 fn main() {
     gst::init().unwrap();
     let secs: u64 = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(6);
+    // Bildrate des Schreibers (`OMP_REC_FPS=30000/1001`, Standard 25/1) und Zieldatei
+    // (`OMP_REC_FILE=x.mxf` prüft den MXF-Pfad) — für die Frame-Rate-Prüfung der Aufnahme.
+    let fps = std::env::var("OMP_REC_FPS").unwrap_or_else(|_| "25/1".into());
+    let (fps_n, fps_d): (u32, u32) = fps.split_once('/').map(|(n, d)| (n.parse().unwrap(), d.parse().unwrap())).unwrap_or((25, 1));
+    let rec_file = std::env::var("OMP_REC_FILE").unwrap_or_else(|_| "reccheck.mkv".into());
     let domain = format!("/dev/shm/omp-mxl-reccheck-{}", std::process::id());
     let media = format!("/tmp/omp-reccheck-{}", std::process::id());
     std::fs::create_dir_all(&domain).unwrap();
@@ -38,7 +43,7 @@ fn main() {
     let asrc = gst_app::AppSrc::builder().is_live(true).format(gst::Format::Time)
         .caps(&gst::Caps::builder("audio/x-raw").field("format", "F32LE").field("rate", 48000i32).field("channels", 1i32).field("layout", "interleaved").build()).build();
     wp.add_many([&vsrc, &asrc]).unwrap();
-    let vout = MxlVideoOutput::new(&wp, vsrc.upcast_ref(), ctx.clone(), &vid, "rc-video", 320, 180, 25, 1, Arc::new(AtomicU64::new(0))).unwrap();
+    let vout = MxlVideoOutput::new(&wp, vsrc.upcast_ref(), ctx.clone(), &vid, "rc-video", 320, 180, fps_n, fps_d, Arc::new(AtomicU64::new(0))).unwrap();
     let aout = MxlAudioOutput::new(&wp, asrc.upcast_ref(), ctx.clone(), &aid, "rc-audio", 48000, 1).unwrap();
     omp_mediaio::Output::set_active(&vout, true);
     omp_mediaio::Output::set_active(&aout, true);
@@ -58,7 +63,7 @@ fn main() {
             }
         })
     };
-    let _f1 = feed(vsrc, 40.0, 320 * 180 * 3 / 2, 100);
+    let _f1 = feed(vsrc, 1000.0 * fps_d as f64 / fps_n as f64, 320 * 180 * 3 / 2, 100);
     let _f2 = feed(asrc, 10.0, 480 * 4, 0);
     std::thread::sleep(Duration::from_millis(1500));
 
@@ -72,13 +77,13 @@ fn main() {
     h.connect_video(vid);
     h.connect_audio(aid);
     std::thread::sleep(Duration::from_millis(500));
-    h.start_recording("reccheck.mkv".into(), None).unwrap();
+    h.start_recording(rec_file.clone(), None).unwrap();
     std::thread::sleep(Duration::from_secs(secs));
     println!("duration_ms={} flowed/media_ready={}", h.duration_ms(), h.media_ready());
     h.stop_recording().unwrap();
     shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
     let _ = th.join();
     wp.set_state(gst::State::Null).unwrap();
-    println!("file: {media}/reccheck.mkv");
+    println!("file: {media}/{rec_file}");
     let _ = std::fs::remove_dir_all(&domain);
 }

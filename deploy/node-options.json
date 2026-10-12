@@ -1403,6 +1403,23 @@
       "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
       "min": 1,
       "max": 100000
+    },
+    {
+      "key": "OMP_FRAMERATE_CONVERSION",
+      "i18n": { "en": {"label": "Frame rate conversion", "description": "videorate drops/duplicates frames (default). blend blends neighbouring frames (smoother, slightly more CPU, up to one input frame more delay; skipped when source and target rate are equal) and needs the optional GStreamer plugin avvideofilter — without it the node falls back to videorate (see docs/INSTALLATION.md, section 9). Plugin by emcodem (LGPL).", "group": "Frame rate conversion"} },
+      "label": "Bildratenwandlung",
+      "type": "enum",
+      "description": "videorate verwirft/verdoppelt Bilder (Standard). blend überblendet benachbarte Bilder (ruhigeres Bild, etwas mehr CPU, bis zu ein Eingangsbild mehr Verzögerung; bei gleicher Quell- und Zielrate entfällt die Stufe) und braucht das optionale GStreamer-Plugin avvideofilter — ohne es fällt der Node auf videorate zurück (s. docs/INSTALLATION.md, Abschnitt 9). Plugin von emcodem (LGPL).",
+      "default": "videorate",
+      "group": "Bildratenwandlung",
+      "choices": [
+        {
+          "value": "videorate"
+        },
+        {
+          "value": "blend"
+        }
+      ]
     }
   ],
   "omp-scte35": [

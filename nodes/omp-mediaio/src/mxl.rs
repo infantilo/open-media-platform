@@ -26,6 +26,7 @@ use gst::prelude::*;
 use gstreamer as gst;
 use gstreamer_app as gst_app;
 
+use crate::framerate::{self, RateMode};
 use crate::Output;
 
 /// Referenz-Caps-Name für `GstReferenceTimestampMeta` (ARCHITECTURE.md
@@ -438,6 +439,7 @@ impl MxlVideoOutput {
             output_delay,
             false,
             false,
+            RateMode::Videorate,
         )
     }
 
@@ -474,6 +476,7 @@ impl MxlVideoOutput {
             output_delay,
             false,
             true,
+            RateMode::Videorate,
         )
     }
 
@@ -514,6 +517,43 @@ impl MxlVideoOutput {
             output_delay,
             true,
             false,
+            RateMode::Videorate,
+        )
+    }
+
+    /// Wie [`Self::new`], aber mit wählbarer Bildratenwandlung
+    /// (`OMP_FRAMERATE_CONVERSION`, s. [`crate::framerate`]): `Blend` setzt vor
+    /// die Wandlung nach v210 das Plugin `avvideofilter` (FFmpeg-Filter
+    /// `framerate`, überblendet statt zu verwerfen/verdoppeln); fehlt es,
+    /// bleibt es bei `videorate`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_rate_mode(
+        pipeline: &gst::Pipeline,
+        upstream: &gst::Element,
+        context: Arc<MxlContext>,
+        flow_id: &str,
+        label: &str,
+        width: u32,
+        height: u32,
+        framerate_numerator: u32,
+        framerate_denominator: u32,
+        output_delay: Arc<AtomicU64>,
+        rate_mode: RateMode,
+    ) -> Result<Self, String> {
+        Self::new_impl(
+            pipeline,
+            upstream,
+            context,
+            flow_id,
+            label,
+            width,
+            height,
+            framerate_numerator,
+            framerate_denominator,
+            output_delay,
+            false,
+            false,
+            rate_mode,
         )
     }
 
@@ -543,7 +583,9 @@ impl MxlVideoOutput {
         // 13 Aufrufstellen, s. dortige Doku).
         paced: bool,
         rgba_hop: bool,
+        rate_mode: RateMode,
     ) -> Result<Self, String> {
+        let rate_mode = framerate::resolve(rate_mode);
         let videoconvert = gst::ElementFactory::make("videoconvert")
             .build()
             .map_err(|e| format!("videoconvert: {e}"))?;
@@ -672,10 +714,41 @@ impl MxlVideoOutput {
         } else {
             None
         };
+        // Blend-Stufe (nur wenn `avvideofilter` da ist): das Plugin kennt kein
+        // v210, deshalb VOR der Wandlung nach v210 in I422_10LE (gleiche
+        // Abtastung/Tiefe wie v210, verlustfrei). `latency-input-frames=1`:
+        // der FFmpeg-Filter `framerate` braucht für jedes Ratenpaar genau
+        // ein Eingangsbild Vorlauf (README des Plugins). Das nachfolgende
+        // `videorate` bleibt als Sicherung (Lückenbegrenzung, Taktung).
+        let blend: Option<[gst::Element; 3]> = if rate_mode == RateMode::Blend {
+            let to_i422 = gst::ElementFactory::make("videoconvert")
+                .build()
+                .map_err(|e| format!("videoconvert (blend): {e}"))?;
+            let i422 = gst::ElementFactory::make("capsfilter")
+                .property("caps", gst::Caps::builder("video/x-raw").field("format", "I422_10LE").build())
+                .build()
+                .map_err(|e| format!("capsfilter (blend): {e}"))?;
+            let avf = gst::ElementFactory::make("avvideofilter")
+                .property("filter-desc", framerate::blend_filter_desc(framerate_numerator, framerate_denominator))
+                .property("latency-input-frames", 1u32)
+                .build()
+                .map_err(|e| format!("avvideofilter: {e}"))?;
+            pipeline
+                .add(&to_i422)
+                .and_then(|()| pipeline.add(&i422))
+                .and_then(|()| pipeline.add(&avf))
+                .map_err(|e| format!("add blend stage: {e}"))?;
+            Some([to_i422, i422, avf])
+        } else {
+            None
+        };
         let mut chain: Vec<&gst::Element> = vec![upstream, &valve, &videoscale];
         if let Some((a, b)) = &hop {
             chain.push(a);
             chain.push(b);
+        }
+        if let Some(stage) = &blend {
+            chain.extend(stage.iter());
         }
         chain.extend([&videoconvert, &videorate, &caps, &appsink]);
         gst::Element::link_many(chain).map_err(|e| format!("link mxl output chain: {e}"))?;
@@ -698,6 +771,12 @@ impl MxlVideoOutput {
             }
             if let Some((a, b)) = &hop {
                 for el in [a, b] {
+                    let _ = el.set_state(gst::State::Null);
+                    let _ = pipeline.remove(el);
+                }
+            }
+            if let Some(stage) = &blend {
+                for el in stage {
                     let _ = el.set_state(gst::State::Null);
                     let _ = pipeline.remove(el);
                 }
@@ -1728,6 +1807,10 @@ pub struct MxlVideoInput {
     /// zu RGBA läuft danach auf der vollen Zielgröße.
     pub width: u32,
     pub height: u32,
+    /// Bildrate des gelesenen Flows (`grain_rate` der Flow-Definition) — damit ein
+    /// Aufrufer prüfen kann, ob überhaupt eine Ratenwandlung nötig ist.
+    pub framerate_numerator: u32,
+    pub framerate_denominator: u32,
     running: Arc<AtomicBool>,
     flowed: Arc<AtomicBool>,
     /// S. `MxlVideoOutput::heartbeat`.
@@ -2031,6 +2114,8 @@ impl MxlVideoInput {
             tail: videorate,
             width,
             height,
+            framerate_numerator: framerate_numerator as u32,
+            framerate_denominator: framerate_denominator as u32,
             running,
             flowed,
             heartbeat,

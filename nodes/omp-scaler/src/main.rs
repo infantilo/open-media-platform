@@ -69,6 +69,8 @@ struct ScalerStore {
     target_height: u32,
     target_framerate_numerator: u32,
     target_framerate_denominator: u32,
+    /// Wirksame Bildratenwandlung (`videorate`/`blend`, nach Plugin-Prüfung).
+    rate_mode: omp_mediaio::framerate::RateMode,
     connection: Arc<ReceiverConnection<ScalerControl>>,
     // pipeline (D8 Teil 3): eigener Klon nur für `invoke("setOutputDelay")`
     // — `ScalerControl` hält den anderen für IS-05-Connect/Disconnect.
@@ -94,7 +96,20 @@ impl ParamStore for ScalerStore {
             // MXL-Origin-Index unverändert durch (s. Latenz-Kommentar oben),
             // "Ausgangs-Grain(N) = Eingangs-Grain(N) + D" gilt hier direkt.
             latency: Some(LatencyInfo {
-                video: Some(LatencyRange { min_latency_frames: 1, max_latency_frames: 1 }),
+                // Blend: der FFmpeg-Filter `framerate` braucht ein Eingangsbild Vorlauf
+                // (`latency-input-frames=1`). Gemessen (`examples/rate_check.rs`,
+                // `OMP_RC_MODE=latency`, Blitzbild-Laufzeit gegenüber `videorate`):
+                // 30→25 +9 ms, 60→25 +13 ms, 25→50 +43 ms; bei gleicher Rate entfällt
+                // die Stufe (+0 ms). Obergrenze = 1 Eingangsbild der langsamsten
+                // üblichen Quelle (24 fps) in Zielbildern.
+                video: Some(LatencyRange {
+                    min_latency_frames: 1,
+                    max_latency_frames: if self.rate_mode == omp_mediaio::framerate::RateMode::Blend {
+                        1 + (self.target_framerate_numerator as f64 / self.target_framerate_denominator.max(1) as f64 / 24.0).ceil() as u32
+                    } else {
+                        1
+                    },
+                }),
                 audio: None,
                 data: None,
                 supports_delay_compensation: true,
@@ -135,6 +150,13 @@ impl ParamStore for ScalerStore {
                     range: None,
                     readonly: true,
                 },
+                ParamSpec {
+                    name: "frameRateConversion".to_string(),
+                    kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
             ],
             methods: vec![MethodSpec {
                 name: "setOutputDelay".to_string(),
@@ -158,6 +180,7 @@ impl ParamStore for ScalerStore {
                 "{}/{}",
                 self.target_framerate_numerator, self.target_framerate_denominator
             ))),
+            "frameRateConversion" => Some(serde_json::json!(self.rate_mode.name())),
             _ => None,
         }
     }
@@ -238,6 +261,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let target_height: u32 = env_or("OMP_HEIGHT", "").parse().unwrap_or(480);
     let target_framerate_numerator: u32 = env_or("OMP_FRAMERATE_NUM", "").parse().unwrap_or(25);
     let target_framerate_denominator: u32 = env_or("OMP_FRAMERATE_DEN", "").parse().unwrap_or(1);
+    // Bildratenwandlung: `videorate` (Standard) oder `blend` (Plugin
+    // `avvideofilter`, überblendet statt zu verwerfen/verdoppeln). `rate_mode`
+    // ist der Wunsch, `rate_mode_effective` das, was wirklich läuft.
+    let rate_mode = omp_mediaio::framerate::RateMode::from_env();
+    let rate_mode_effective = omp_mediaio::framerate::resolve(rate_mode);
     // Vom Instanz-Launcher gesetzt (`UMSETZUNG.md` C8), sonst leer bei
     // manuellem Start.
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
@@ -262,6 +290,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         target_height,
         target_framerate_numerator,
         target_framerate_denominator,
+        rate_mode,
     };
     let pipeline_shutdown = shutdown.clone();
     let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
@@ -303,6 +332,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         target_height,
         target_framerate_numerator,
         target_framerate_denominator,
+        rate_mode: rate_mode_effective,
         connection,
         pipeline: delay_pipeline,
     });

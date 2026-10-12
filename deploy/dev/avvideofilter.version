@@ -1,0 +1,6 @@
+# Angepinnte Version des GStreamer-Plugins "avvideofilter" (Bildratenwandlung "blend").
+# Quelle: https://github.com/emcodem/avvideofilter (LGPL-2.1-or-later, bringt ein eigenes FFmpeg mit).
+# Update = diese drei Zeilen ändern (Hash steht in der .sha256-Datei des Release).
+AVF_VERSION=v0.1.2
+AVF_ASSET=avvideofilter-linux-amd64-glibc2.35-gst1.20.tar.gz
+AVF_SHA256=5a0a128d1033d9e8f76756c1840a7be08e1da94db04b14230bfcd9fed6d2d5ea

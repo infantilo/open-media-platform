@@ -13,6 +13,9 @@ RUN_DIR="$ROOT_DIR/.run"
 PID_FILE="$RUN_DIR/orchestrator.pid"
 LOG_FILE="$RUN_DIR/orchestrator.log"
 BIN="$ROOT_DIR/bin/omp-orchestrator"
+# Offline-Paket (deploy/offline/install-offline.sh) legt diese Marke an: fertig gebaute Binaries, kein Go/Deno/Rust
+# auf diesem Rechner — nie aus dem Quellcode bauen (der Preflight läuft trotzdem).
+PREBUILT=0; [ -f "$ROOT_DIR/.offline-install" ] && PREBUILT=1
 
 mkdir -p "$RUN_DIR" "$ROOT_DIR/bin"
 
@@ -126,8 +129,8 @@ echo "==> Supervisor (Backup/Restore-Unterbau)"
 # SYSTEM-UPDATE.md): das Update hat fertige Binaries + UI-Bundle
 # eingespielt — NICHT aus dem Quellcode neu bauen (das würde den
 # eingespielten Stand überschreiben und braucht Go/Deno auf dem Server).
-if [ "${OMP_SKIP_BUILD:-}" = "1" ] && [ -x "$BIN" ]; then
-  echo "==> Bauen übersprungen (OMP_SKIP_BUILD=1, fertige Binaries)"
+if { [ "${OMP_SKIP_BUILD:-}" = "1" ] || [ "$PREBUILT" = 1 ]; } && [ -x "$BIN" ]; then
+  echo "==> Bauen übersprungen (fertige Binaries$([ "$PREBUILT" = 1 ] && echo ", Offline-Paket"))"
 else
   echo "==> UI-Bundle bauen"
   make -C "$ROOT_DIR" ui

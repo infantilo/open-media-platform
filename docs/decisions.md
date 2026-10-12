@@ -30399,3 +30399,51 @@ Klartext (http.Error, Trigger-Protokoll, Plan-Warnungen, Descriptor-Texte),
 WebRTC-Handy-Seiten (`camera.html`/`monitor.html`), Handbücher.
 Stolperstein: viele Katalog-Typen starten `target/debug/…`-Binaries — für
 Live-Tests von Bundle-Änderungen das passende Profil bauen.
+
+## 2026-10-12 — Blend-Bildratenwandlung (Plugin avvideofilter), Scaler-Option, Installer-/Offline-Weg
+
+Anlass: Haralds Plugin `avvideofilter` (GStreamer-Wrapper um FFmpeg-Filter, Issue
+`pipeline-controller#2`) überblendet bei der Bildratenwandlung, statt Bilder zu verwerfen/verdoppeln.
+**Gemessen (720p, `gst-launch`):** 25→30 mit `videorate` = 25 doppelte Bilder je 150, mit Blend 0, aber ~2× CPU;
+Herunterrechnen (30/60/29,97→25) bildzahl- und CPU-gleich. Bildzahlen stimmten in allen Fällen.
+**Umsetzung:** `omp-mediaio::framerate` (`RateMode`, Plugin-Prüfung einmal je Prozess, Rückfall auf `videorate` mit
+einmaliger Warnung); `MxlVideoOutput::new_with_rate_mode` setzt bei `Blend` VOR der Wandlung nach v210
+`videoconvert ! I422_10LE ! avvideofilter(framerate=fps=N/D, latency-input-frames=1)` ein (das Plugin kennt kein v210);
+das nachfolgende `videorate` bleibt als Sicherung. Alle anderen Aufrufer unverändert (`videorate`). `omp-scaler`:
+`OMP_FRAMERATE_CONVERSION` (Node-Option, enum), Parameter `frameRateConversion` (wirksamer Modus), Latenz bei Blend
+`1 + ⌈Zielrate/24⌉` Bilder deklariert.
+**Live geprüft** (`nodes/omp-scaler/examples/rate_check.rs`, echte Scaler-Pipeline, Luma-Sägezahn): 29,97→25 videorate
+201 Bilder/8 s, 1 Duplikat, 0 % Zwischenwerte; blend 200 Bilder/8 s, 0 Duplikate, 80 % Zwischenwerte; 25→25 blend =
+unverändert (0 %); ohne Plugin Rückfall auf videorate mit Warnung.
+**Recorder-Frage (Haralds Aufnahmefehler):** gilt für OMP nicht — `MxlVideoInput` setzt die Rate aus `grain_rate`.
+Nachgewiesen mit der echten Recorder-Pipeline (`omp-recorder/examples/sync_live_check.rs`, jetzt per `OMP_REC_FPS`/
+`OMP_REC_FILE` parametrierbar): MXF 25, 30000/1001, 30 und MKV 50 fps wurden mit exakt der Quellrate aufgenommen.
+**Installation:** Plugin wird nicht ins Repo eingecheckt; `deploy/dev/install-avvideofilter.sh` lädt die in
+`deploy/dev/avvideofilter.version` angepinnte Version (SHA256-geprüft) nach `~/.local/share/gstreamer-1.0/plugins`,
+prüft glibc ≥ 2.35/GStreamer ≥ 1.20, ist optional (Fehlschlag bricht `install.sh` nicht ab). Offline: `--archive`
+bzw. `deploy/dev/vendor/` (gitignored). `make preflight` meldet das Plugin als optional. Anleitung:
+`docs/INSTALLATION.md` §9. Offen: Latenzmessung, weitere Nodes (Mixer-Zweige bewusst nicht — keine Caps-Änderung im
+Signalweg), Haralds Rückmeldung zu stabilen Release-Dateinamen.
+**Nachtrag Latenz (2026-10-12):** Blitzbild-Laufzeit Scaler (`rate_check`, `OMP_RC_MODE=latency`, Median), Blend minus `videorate`: 25→25 +49 ms (deshalb bei gleicher Rate Stufe ausgelassen → +2 ms, Rauschen), 30→25 +9 ms, 60→25 +13 ms, 25→50 +43 ms. Entspricht einem Eingangsbild Vorlauf. A/V-Sync-Auswirkung (Audio läuft nicht durch die Stufe) bleibt beim Latenzbudget/Delay-Ausgleich des Workflows.
+
+## 2026-10-12 — Offline-Paket (`deploy/offline/`), Installer ohne Internet
+
+Anlass: Rechner ohne Internet. Entscheidung: **fertig gebautes Paket** statt Bauen auf dem Zielrechner (Rust-/MXL-Build,
+Go-Module, Container-Pulls brauchen alle Netz und 20–60 min). `make-offline-bundle.sh` (Build-Rechner mit Netz, gleiche
+Distribution/Release/Architektur) packt Repo-Stand + Binaries (aus `catalog.json`, Debug-Symbole entfernt), UI, libmxl, 7
+Container-Images (`podman save`), Systempakete (apt) und das Plugin avvideofilter samt `SHA256SUMS`/`MANIFEST.json`;
+`install-offline.sh` prüft Summen und Zielrechner, installiert, schreibt `mxl.env`, lädt Images, legt die Marke
+`.offline-install` an. Die Marke lässt `start-omp.sh`/`start-supervisor.sh` nie bauen und den Preflight Go/Deno/Rust
+als „nicht nötig“ werten (der Preflight läuft weiterhin).
+**Funde beim Test:** (1) Alle `.deb` blind mit `apt install ./*.deb` zu installieren scheitert an einander ausschließenden
+Alternativen (`libqt5gui5`/`-gles`) — jetzt lokales apt-Verzeichnis (`Packages`-Index) und Installation der Programme
+per Name; (2) `apt-cache depends --recurse` zieht alle Alternativen (561 Pakete/≈1 GB) — der Bau beschneidet per
+`apt-get --simulate` gegen leeren dpkg-Stand auf die nötigen (≈460/250 MB) und macht eine Gegenprobe; (3) **Bug im
+Beschneiden:** `echo "$needed" | grep -qx` unter `set -o pipefail` lieferte per SIGPIPE Status 141, nötige Pakete
+(tar, debconf) wurden verworfen — Here-String statt Pipe; (4) `gst-inspect-1.0 --exists <plugin>` vergleicht ohne
+`--atleast-version` gegen die GStreamer-Version (Preflight meldete avvideofilter fälschlich als fehlend).
+**Geprüft:** Paketbau ohne Fehler (≈780 MB); Installer in einem Netz-losen Namensraum (`unshare -n`) bis zum Ende;
+Binaries ohne fehlende Bibliotheken (`ldd`); alle 7 Images per `podman load` ladbar; apt-Auflösung der 20 Zielpakete
+gegen leeren Stand (461 Pakete, keine Konflikte); Preflight ohne Go/Deno/Rust im Pfad. **Nicht geprüft:** echtes
+`sudo apt-get install` auf einem frischen Rechner, `make start` auf einem Rechner ohne Go, andere Distributionen.
+

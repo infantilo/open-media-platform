@@ -49,6 +49,7 @@ Das Installationsskript erledigt das (apt, dnf, pacman, zypper). Zum Nachlesen o
 **Hardware (Richtwerte)**: Grundsystem ≥ 2 GB RAM; mit Medien-Bausteinen 8 GB und 4+ Kerne;
 ≥ 10 GB freier Plattenplatz (Container-Images, Rust-Build).
 **Internet** wird beim ersten Start und Build gebraucht (Container-Images, Go-/Rust-Abhängigkeiten, MXL-Quellen).
+**Ohne Internet** auf dem Zielrechner: fertig gebautes Offline-Paket — `docs/OFFLINE-INSTALLATION.md` (auch für das optionale Plugin `avvideofilter`, §9).
 
 **Prüfen**: `make preflight` kontrolliert alles (Werkzeuge, Podman, Images, belegte Ports, GStreamer, MXL) und nennt zu
 jedem Problem den Befehl zur Behebung. `make start` ruft die Kurzform selbst auf.
@@ -235,3 +236,84 @@ make down              # entfernt die Container — ebenfalls inkl. Postgres-Dat
 ```
 
 Vorher sichern: Oberfläche → Administration → Backup (siehe `docs/HANDBUCH.md` §5).
+
+---
+
+## 9. Optional: Blend-Bildratenwandlung (Plugin `avvideofilter`)
+
+Normalerweise wandelt OMP Bildraten mit GStreamers `videorate`: Bilder werden **verworfen oder verdoppelt**
+(z. B. 25 → 30 fps: jedes sechste Bild doppelt, was bei Schwenks ruckelt). Mit dem optionalen Plugin
+**`avvideofilter`** (Fremdprojekt von emcodem, <https://github.com/emcodem/avvideofilter>, LGPL-2.1+, bringt ein
+eigenes FFmpeg mit) kann ein Node stattdessen **überblenden** (FFmpeg-Filter `framerate`).
+Plugin und die ursprüngliche Integration stammen von **emcodem** (Vorschlag im Issue `pipeline-controller#2`); Lizenz- und
+Herkunftsangaben: `THIRD-PARTY-NOTICES.md`.
+
+**Wo es wirkt:** aktuell im **Scaler** (`omp-scaler`), Einstellung **Bildratenwandlung** = `blend`
+(Umgebungsvariable `OMP_FRAMERATE_CONVERSION=blend`). Bei gleicher Quell- und Zielrate bleibt das Bild unverändert.
+Preview, Multiviewer und alle anderen Nodes behalten `videorate`.
+
+**Kosten (Richtwerte, 720p, gemessen):** beim Herunterrechnen (60→25, 30→25) praktisch gleich teuer wie `videorate`;
+beim Hochrechnen (25→30) etwa doppelte CPU. **Latenz** (gemessen, Blitzbild-Laufzeit gegenüber `videorate`, `nodes/omp-scaler/examples/rate_check.rs`): 30→25 fps +9 ms,
+60→25 fps +13 ms, 25→50 fps +43 ms — der Filter braucht ein Eingangsbild Vorlauf. Bei **gleicher** Quell- und Zielrate
+wird die Stufe ausgelassen (+0 ms). Der Scaler meldet dem Latenzbudget bei `blend` als Obergrenze `1 + ⌈Zielrate/24⌉` Bilder
+(25 fps: 3, 50 fps: 4).
+
+**Ohne das Plugin ändert sich nichts:** Ist es nicht installiert oder auf dem System nicht ladbar, schreibt der Node
+einmal eine Warnung ins Log und läuft mit `videorate` weiter; der Parameter `frameRateConversion` zeigt, was wirklich
+läuft.
+
+**Voraussetzungen:** Linux x86_64, glibc ≥ 2.35 (Debian 12+, Ubuntu 22.04+), GStreamer ≥ 1.20.
+
+### 9.1 Mit Internet
+
+`./install.sh --media` installiert das Plugin automatisch mit (Version und SHA256 sind in
+`deploy/dev/avvideofilter.version` fest angepinnt; `--no-avvideofilter` lässt es weg). Nachträglich oder einzeln:
+
+```sh
+./deploy/dev/install-avvideofilter.sh           # lädt, prüft SHA256, installiert
+./deploy/dev/install-avvideofilter.sh --check   # wird es geladen?
+```
+
+Ziel ist `~/.local/share/gstreamer-1.0/plugins` — dort findet GStreamer es ohne weitere Einstellung. Nodes, die vor
+der Installation liefen, müssen **neu gestartet** werden (Plugin-Prüfung einmal je Prozess).
+
+### 9.2 Rechner ohne Internetzugang
+
+Das Plugin ist ein einzelnes, rund 10 MB großes Archiv. Auf einem Rechner **mit** Internet (oder Datenträger):
+
+1. Archiv holen (Dateiname und Version stehen in `deploy/dev/avvideofilter.version`):
+
+   ```sh
+   curl -fLO https://github.com/emcodem/avvideofilter/releases/download/v0.1.2/avvideofilter-linux-amd64-glibc2.35-gst1.20.tar.gz
+   sha256sum avvideofilter-linux-amd64-glibc2.35-gst1.20.tar.gz
+   # muss 5a0a128d1033d9e8f76756c1840a7be08e1da94db04b14230bfcd9fed6d2d5ea ergeben
+   ```
+
+2. Per USB-Stick/`scp` auf den Zielrechner bringen.
+3. Dort **eine** der drei Möglichkeiten:
+
+   ```sh
+   # a) Archiv beim Installieren angeben
+   ./install.sh --media --avvideofilter-archive /pfad/avvideofilter-linux-amd64-glibc2.35-gst1.20.tar.gz
+   # b) nachträglich, nur das Plugin
+   ./deploy/dev/install-avvideofilter.sh --archive /pfad/avvideofilter-linux-amd64-glibc2.35-gst1.20.tar.gz
+   # c) Archiv nur ablegen — wird automatisch gefunden (auch von install.sh)
+   mkdir -p deploy/dev/vendor && cp avvideofilter-*.tar.gz deploy/dev/vendor/
+   ```
+
+4. Prüfen: `./deploy/dev/install-avvideofilter.sh --check` (oder `make preflight`), dann die betroffenen Nodes
+   neu starten und im Scaler **Bildratenwandlung = blend** einstellen; der Parameter `frameRateConversion`
+   muss `blend` zeigen (steht dort `videorate`, fehlt das Plugin oder ist nicht ladbar).
+
+Das Archiv wird **immer** gegen den angepinnten SHA256 geprüft; bei Abweichung wird nichts installiert (Exit 2).
+Beim Hash-Test wird auch eine ältere/neuere Version abgelehnt — für ein Update erst `avvideofilter.version` anpassen.
+Ohne Internet braucht das Plugin sonst nichts nach (kein Nachladen zur Laufzeit). Die Offline-Installation des
+**gesamten Systems** (Container-Images, Systempakete, fertige Binaries, dieses Plugin inklusive) steht in
+`docs/OFFLINE-INSTALLATION.md`; dort wird das Plugin automatisch aus dem Paket installiert.
+
+**Lizenz-Hinweis:** Plugin und das enthaltene FFmpeg sind LGPL-2.1-or-later; die Lizenztexte liegen im Archiv
+(`COPYING`, `avvideofilter-ffmpeg/`) und werden mit installiert. OMP selbst linkt das Plugin nicht, sondern lädt es
+zur Laufzeit über GStreamer.
+
+**Entfernen:** `rm -rf ~/.local/share/gstreamer-1.0/plugins/{libgstavvideofilter.so,avvideofilter-ffmpeg}`;
+GStreamer-Registry bei Bedarf mit `rm ~/.cache/gstreamer-1.0/registry.*.bin` neu aufbauen lassen.

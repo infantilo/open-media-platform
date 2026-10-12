@@ -185,8 +185,13 @@ need_tool curl "Health-Checks beim Start" && ok "curl"
 need_tool openssl "erzeugt beim ersten Start den Schlüssel für Storage-Backends" && ok "openssl"
 need_tool git "Versionsstempel/Updates" warn && ok "git"
 
+# Offline-Paket: fertig gebaute Binaries, Go/Deno/Rust werden nicht gebraucht (deploy/offline/install-offline.sh)
+PREBUILT=0; [ -f "$ROOT_DIR/.offline-install" ] && PREBUILT=1
+
 # Go
-if command -v go >/dev/null 2>&1; then
+if [ "$PREBUILT" = 1 ] && ! command -v go >/dev/null 2>&1; then
+  ok "Go" "nicht nötig (Offline-Paket mit fertigen Binaries)"
+elif command -v go >/dev/null 2>&1; then
   go_have="$(go env GOVERSION 2>/dev/null | sed 's/^go//')"
   go_need="$(awk '/^go [0-9]/ {print $2; exit}' "$ROOT_DIR/orchestrator/go.mod" 2>/dev/null)"
   if [ -n "$go_have" ] && [ -n "$go_need" ] && ! version_ge "$go_have" "$go_need"; then
@@ -203,7 +208,9 @@ else
 fi
 
 # Deno
-if command -v deno >/dev/null 2>&1; then
+if [ "$PREBUILT" = 1 ] && ! command -v deno >/dev/null 2>&1; then
+  ok "Deno" "nicht nötig (Offline-Paket mit fertigen Binaries)"
+elif command -v deno >/dev/null 2>&1; then
   ok "Deno" "$(deno --version 2>/dev/null | head -n1 | awk '{print $2}')"
 else
   err "Deno nicht gefunden" "baut das UI-Bundle (kein Node/npm nötig)" "Deno installieren: curl -fsSL https://deno.land/install.sh | sh"
@@ -341,11 +348,15 @@ section "Medien-Nodes (Rust, GStreamer, MXL) — optional, nur für Video/Audio"
 if command -v cargo >/dev/null 2>&1 && command -v rustc >/dev/null 2>&1; then
   rv="$(rustc --version | awk '{print $2}')"
   if version_ge "$rv" "1.85.0"; then ok "Rust" "$rv"; else err "Rust zu alt" "$rv — Edition 2024 braucht mindestens 1.85" "rustup update stable"; fi
+elif [ "$PREBUILT" = 1 ]; then
+  ok "Rust" "nicht nötig (Offline-Paket mit fertigen Binaries)"
 else
   warn "Rust/Cargo nicht gefunden" "baut die Medien-Nodes (make nodes)" "Rust installieren: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
 fi
 
-if command -v pkg-config >/dev/null 2>&1; then
+if [ "$PREBUILT" = 1 ]; then
+  ok "GStreamer-Entwicklungsbibliotheken" "nicht nötig (Offline-Paket mit fertigen Binaries)"
+elif command -v pkg-config >/dev/null 2>&1; then
   missing_pc=()
   for m in gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-pbutils-1.0 gstreamer-net-1.0; do
     pkg-config --exists "$m" 2>/dev/null || missing_pc+=("$m")
@@ -378,6 +389,13 @@ if command -v gst-inspect-1.0 >/dev/null 2>&1; then
   opt_check srtsrc "SRT-Gateway"
   opt_check rtpvrawpay "ST-2110-Gateway"
   opt_check matroskamux "Recorder (Matroska)"
+  # Plugin für die Bildratenwandlung "blend" (Fremdplugin, nicht im Paketmanager): ohne es laufen alle Nodes mit videorate.
+  # --atleast-version nötig: ohne vergleicht gst-inspect gegen die GStreamer-Version (0.1.x < 1.x → "fehlt")
+  if gst-inspect-1.0 --exists --atleast-version=0.0.1 avvideofilter 2>/dev/null; then
+    ok "GStreamer-Plugin avvideofilter" "Bildratenwandlung blend verfügbar"
+  else
+    warn "GStreamer-Plugin avvideofilter fehlt" "optional — nur für OMP_FRAMERATE_CONVERSION=blend (Scaler); ohne läuft videorate" "./deploy/dev/install-avvideofilter.sh   (offline: --archive DATEI, docs/INSTALLATION.md §9)"
+  fi
 else
   warn "gst-inspect-1.0 nicht gefunden" "GStreamer-Laufzeit fehlt oder ist nicht installiert" "$(install_hint gst)"
 fi

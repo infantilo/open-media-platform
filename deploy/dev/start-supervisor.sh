@@ -14,6 +14,7 @@ RUN_DIR="$ROOT_DIR/.run"
 PID_FILE="$RUN_DIR/supervisor.pid"
 LOG_FILE="$RUN_DIR/supervisor.log"
 BIN="$ROOT_DIR/bin/omp-supervisor"
+PREBUILT=0; [ -f "$ROOT_DIR/.offline-install" ] && PREBUILT=1   # Offline-Paket: nie bauen (s. start-omp.sh)
 LISTEN="${OMP_SUPERVISOR_LISTEN:-127.0.0.1:8091}"
 
 mkdir -p "$RUN_DIR" "$ROOT_DIR/bin"
@@ -34,7 +35,7 @@ if curl -fs "http://$LISTEN/status" > /dev/null 2>&1; then
   exit 1
 fi
 
-if [ "${OMP_SKIP_BUILD:-}" = "1" ] && [ -x "$BIN" ]; then
+if { [ "${OMP_SKIP_BUILD:-}" = "1" ] || [ "$PREBUILT" = 1 ]; } && [ -x "$BIN" ]; then
   echo "==> Bauen übersprungen (OMP_SKIP_BUILD=1, fertiges Binary)"
 else
   echo "==> Supervisor-Binary bauen"
