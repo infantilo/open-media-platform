@@ -14,25 +14,33 @@ Deno.test("Punktname: Node-Präfix und Instanz-ID entfallen", () => {
   assertEquals(pointName(pt("x", "Cam")), "Cam");
 });
 
-Deno.test("XL: Quellenzeile, Zielzeile, Steuerzeile; Auswahl-/Routenfarben, Kompatibilität", () => {
-  const l = layoutXy(state({ selSrc: "s1", routes: { r1: "s1", r2: "s3" } }), 8, 3, 0, 0);
-  assertEquals(l.keys[0].slice(0, 4).map((k) => k?.label), ["Sender 1", "Cam", "Ton", undefined]);
-  assertEquals(l.keys[0][0]?.state, "preset");
-  assertEquals(l.keys[1][0]?.state, "onair"); // r1 hängt an der gewählten Quelle
-  assertEquals(l.keys[1][0]?.sub, "Sender 1");
-  assertEquals(l.keys[1][1]?.dim, true); // Audio-Ziel passt nicht zu Video-Quelle
-  assertEquals(l.keys[1][1]?.sub, "Ton");
-  assertEquals(l.keys[2].slice(0, 4).map((k) => k?.label), ["TAKE", "AUTO", "Medium", "Trennen"]);
-  assertEquals(l.act[0][1], { t: "src", id: "s2" });
-  assertEquals(l.act[1][0], { t: "dst", id: "r1" });
+Deno.test("XL 9×4: Quellen links, Steuerspalte Mitte, Ziele rechts; Kategorien-Zeile; Farben, Kompatibilität", () => {
+  const l = layoutXy(state({ selSrc: "s1", routes: { r1: "s1", r2: "s3" } }), 9, 4, 0, 0);
+  assertEquals(l.keys[0].slice(0, 4).map((k) => k?.label), ["Alle", "source", "cam", "mic"]);
+  assertEquals(l.keys[0][0]?.state, "preset"); // „Alle“ gewählt
+  assertEquals(l.keys[1].slice(0, 4).map((k) => k?.label), ["source", "cam", "mic", undefined]);
+  assertEquals(l.keys[1][0]?.state, "preset");
+  assertEquals(l.keys[0].slice(5).map((k) => k?.label), ["Alle", "viewer", "mon", undefined]);
+  assertEquals(l.keys[1][5]?.state, "onair"); // r1 hängt an der gewählten Quelle
+  assertEquals(l.keys[1][5]?.sub, "source");
+  assertEquals(l.keys[1][6]?.dim, true); // Audio-Ziel passt nicht zu Video-Quelle
+  assertEquals(l.keys[1][6]?.sub, "mic");
+  assertEquals([0, 1, 2, 3].map((r) => l.keys[r][4]?.label), ["TAKE", "Trennen", "AUTO", "Medium"]);
+  assertEquals(l.act[1][1], { t: "src", id: "s2" });
+  assertEquals(l.act[1][5], { t: "dst", id: "r1" });
   assertEquals(l.pages, 1);
 });
 
-Deno.test("Medienfilter und Versatz", () => {
-  const l = layoutXy(state({ media: "audio" }), 8, 3, 0, 0);
-  assertEquals(l.keys[0][0]?.label, "Ton");
-  assertEquals(l.keys[0][1], null);
-  assertEquals(layoutXy(state({ srcOff: 1 }), 8, 3, 0, 0).keys[0][0]?.label, "Cam");
+Deno.test("Kategorie filtert Quellen; Medienfilter und Versatz (4×1 Seiten-Layout)", () => {
+  const l = layoutXy(state({ srcCat: "cam" }), 9, 4, 0, 0);
+  assertEquals(l.keys[1][0]?.label, "cam");
+  assertEquals(l.keys[1][1], null);
+  assertEquals(l.keys[0][1]?.state, "off");
+  assertEquals(l.keys[0][2]?.state, "preset");
+  const m = layoutXy(state({ media: "audio" }), 4, 1, 0, 0);
+  assertEquals(m.keys[0][0]?.label, "Ton");
+  assertEquals(m.keys[0][1], null);
+  assertEquals(layoutXy(state({ srcOff: 1 }), 4, 1, 0, 0).keys[0][0]?.label, "Cam");
 });
 
 Deno.test("„+“ (1×4): Seiten Quellen / Ziele / Steuerung, Dial-Anzeigen", () => {
@@ -62,7 +70,7 @@ function rig() {
     disconnect: (t) => (calls.push(`DELETE ${t}`), Promise.resolve()),
   };
   const a = xyPanelAdapter(io);
-  const ctx = { cols: 8, rows: 3, dials: 0, page: 0 };
+  const ctx = { cols: 9, rows: 4, dials: 0, page: 0 };
   const tick = () => new Promise((r) => setTimeout(r, 10));
   return { a, calls, ctx, tick };
 }
@@ -71,12 +79,12 @@ Deno.test("Adapter: Quelle + Ziel → Kante (AUTO), Ziel wird freigegeben; inkom
   const { a, calls, ctx, tick } = rig();
   await a.refresh!();
   a.getLayout(ctx);
-  a.onKey(0, 1, true); await tick(); // Quelle s2 (Video)
+  a.onKey(1, 1, true); await tick(); // Quelle s2 (Video)
   a.getLayout(ctx);
-  a.onKey(1, 1, true); await tick(); // Ziel r2 (Audio) → inkompatibel
+  a.onKey(1, 6, true); await tick(); // Ziel r2 (Audio) → inkompatibel
   assertEquals(calls, []);
   a.getLayout(ctx);
-  a.onKey(1, 0, true); await tick(); // Ziel r1 (Video) → schalten
+  a.onKey(1, 5, true); await tick(); // Ziel r1 (Video) → schalten
   assertEquals(calls, ["POST s2->r1"]);
 });
 
@@ -84,14 +92,14 @@ Deno.test("Adapter: AUTO aus → erst TAKE schaltet; Trennen löscht die Kante d
   const { a, calls, ctx, tick } = rig();
   await a.refresh!();
   const L = () => a.getLayout(ctx);
-  L(); a.onKey(2, 1, true); await tick(); // AUTO aus
-  L(); a.onKey(0, 0, true); await tick(); // Quelle s1
-  L(); a.onKey(1, 0, true); await tick(); // Ziel r1
+  L(); a.onKey(2, 4, true); await tick(); // AUTO aus
+  L(); a.onKey(1, 0, true); await tick(); // Quelle s1
+  L(); a.onKey(1, 5, true); await tick(); // Ziel r1
   assertEquals(calls, []);
-  L(); a.onKey(2, 0, true); await tick(); // TAKE
+  L(); a.onKey(0, 4, true); await tick(); // TAKE
   assertEquals(calls, ["POST s1->r1"]);
-  L(); a.onKey(1, 0, true); await tick(); // Ziel neu wählen
-  L(); a.onKey(2, 3, true); await tick(); // Trennen
+  L(); a.onKey(1, 5, true); await tick(); // Ziel neu wählen
+  L(); a.onKey(1, 4, true); await tick(); // Trennen
   assertEquals(calls, ["POST s1->r1", "DELETE r1"]);
 });
 
@@ -114,11 +122,22 @@ Deno.test("Adapter: Ziel, das schon an der gewählten Quelle hängt, wird nur ge
   };
   const a = xyPanelAdapter(io);
   await a.refresh!();
-  const ctx = { cols: 8, rows: 3, dials: 0, page: 0 };
+  const ctx = { cols: 9, rows: 4, dials: 0, page: 0 };
   const tick = () => new Promise((r) => setTimeout(r, 10));
-  a.getLayout(ctx); a.onKey(0, 0, true); await tick(); // Quelle s1
-  a.getLayout(ctx); a.onKey(1, 0, true); await tick(); // r1 hängt schon an s1 → nur gewählt
+  a.getLayout(ctx); a.onKey(1, 0, true); await tick(); // Quelle s1
+  a.getLayout(ctx); a.onKey(1, 5, true); await tick(); // r1 hängt schon an s1 → nur gewählt
   assertEquals(calls, []);
-  a.getLayout(ctx); a.onKey(2, 3, true); await tick(); // Trennen
+  a.getLayout(ctx); a.onKey(1, 4, true); await tick(); // Trennen
   assertEquals(calls, ["DELETE r1"]);
+});
+
+Deno.test("Adapter: Kategorie-Taste filtert Quellen, „mehr“ blättert", async () => {
+  const { a, ctx, tick } = rig();
+  await a.refresh!();
+  a.getLayout(ctx); a.onKey(0, 2, true); await tick(); // Kategorie „cam“
+  const l = a.getLayout(ctx);
+  assertEquals(l.keys[1][0]?.label, "cam");
+  assertEquals(l.keys[1][1], null);
+  const small = layoutXy(state({ sources: Array.from({ length: 12 }, (_, i) => pt(`n${i}`, `P${i}`)) }), 5, 3, 0, 0);
+  assertEquals(small.keys[2][1]?.label, "mehr ▶"); // letzte Punktzelle der linken Seite
 });

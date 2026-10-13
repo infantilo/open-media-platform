@@ -28,7 +28,14 @@ export interface XyState {
   auto: boolean;
   srcOff: number;
   dstOff: number;
+  /** Kategorie (= Node-Name) je Seite; null/fehlt = alle */
+  srcCat?: string | null;
+  dstCat?: string | null;
+  srcCatOff?: number;
+  dstCatOff?: number;
 }
+
+export type Side = "src" | "dst";
 
 export type XyAction =
   | { t: "src"; id: string }
@@ -37,6 +44,8 @@ export type XyAction =
   | { t: "disc" }
   | { t: "auto" }
   | { t: "media" }
+  | { t: "cat"; side: Side; name: string | null }
+  | { t: "more"; side: Side; what: "cat" | "pt" }
   | { t: "scroll"; row: "src" | "dst"; dir: 1 | -1 };
 
 const strip = (s: string) => String(s ?? "").replace(/\s*\([0-9a-f]{8}\)/g, "");
@@ -60,6 +69,30 @@ export function stepSelection(pts: Point[], cur: string | null, delta: number): 
   const i = pts.findIndex((p) => p.id === cur);
   const n = i < 0 ? (delta > 0 ? 0 : pts.length - 1) : Math.min(pts.length - 1, Math.max(0, i + (delta > 0 ? 1 : -1)));
   return pts[n].id;
+}
+
+export const nodeOf = (p: Point) => strip(p.nodeLabel).replace(/^omp-/, "") || "?";
+
+/** Kategorien einer Seite: Node-Namen in Reihenfolge des ersten Auftretens. */
+export function categories(pts: Point[]): string[] {
+  return [...new Set(pts.map(nodeOf))];
+}
+
+/** Punkte nach Medium und Kategorie gefiltert. */
+export function filtered(pts: Point[], media: Media, cat: string | null | undefined): Point[] {
+  return visible(pts, media).filter((p) => !cat || nodeOf(p) === cat);
+}
+
+/** Tastentext: hat der Node nur einen Punkt auf dieser Seite, zählt der Node-Name („Viewer“ statt „Receiver 1“). */
+export function keyName(p: Point, all: Point[]): string {
+  return all.filter((x) => nodeOf(x) === nodeOf(p)).length === 1 ? nodeOf(p) : pointName(p);
+}
+
+/** Schaltflächen-Spalte (Mitte) im Spaltenlayout. */
+export function columnControls(s: XyState): { key: KeyDef; act: XyAction }[] {
+  const c = controlList(s);
+  const by = (l: string) => c.find((x) => x.key.label === l)!;
+  return [by("TAKE"), by("Trennen"), by("AUTO"), by("Medium")];
 }
 
 export interface XyLayout extends AdapterLayout {
@@ -88,7 +121,81 @@ function plan(ctrls: number, cols: number, rows: number, reserve: boolean) {
   return { cap, chunks, pages };
 }
 
+/** Quellen links, Kategorie-Zeile oben, Steuerspalte in der Mitte, Ziele rechts. */
+function layoutColumns(s: XyState, cols: number, rows: number, dialCount: number): XyLayout {
+  const midC = Math.floor((cols - 1) / 2);
+  const w = { src: midC, dst: cols - 1 - midC };
+  const x0 = { src: 0, dst: midC + 1 };
+  const keys: (KeyDef | null)[][] = Array.from({ length: rows }, () => Array(cols).fill(null));
+  const act: (XyAction | null)[][] = Array.from({ length: rows }, () => Array(cols).fill(null));
+  const sel = s.sources.find((x) => x.id === s.selSrc);
+  const nameOf = new Map(s.sources.map((x) => [x.id, keyName(x, s.sources)]));
+
+  for (const side of ["src", "dst"] as Side[]) {
+    const all = side === "src" ? s.sources : s.sinks;
+    const cat = (side === "src" ? s.srcCat : s.dstCat) ?? null;
+    const catOff = (side === "src" ? s.srcCatOff : s.dstCatOff) ?? 0;
+    const off = side === "src" ? s.srcOff : s.dstOff;
+    const W = w[side], X = x0[side];
+    // Kategorie-Zeile: „Alle“ + je Node
+    const cats: (string | null)[] = [null, ...categories(visible(all, s.media))];
+    const catPer = cats.length > W ? Math.max(1, W - 1) : W;
+    const co = Math.min(catOff, Math.max(0, cats.length - 1));
+    cats.slice(co, co + catPer).forEach((name, i) => {
+      keys[0][X + i] = { label: name ?? "Alle", sub: "Kategorie", state: name === cat ? "preset" : "off" };
+      act[0][X + i] = { t: "cat", side, name };
+    });
+    if (cats.length > W) {
+      keys[0][X + W - 1] = { label: "mehr ▶", sub: "Kategorie" };
+      act[0][X + W - 1] = { t: "more", side, what: "cat" };
+    }
+    // Punkte
+    const pts = filtered(all, s.media, cat);
+    const cells = (rows - 1) * W;
+    const per = pts.length > cells ? Math.max(1, cells - 1) : cells;
+    const o = Math.min(off, Math.max(0, pts.length - 1));
+    pts.slice(o, o + per).forEach((pt, i) => {
+      const r = 1 + Math.floor(i / W), c = X + (i % W);
+      if (side === "src") {
+        keys[r][c] = { label: keyName(pt, all), sub: cat || keyName(pt, all) === nodeOf(pt) ? undefined : nodeOf(pt), state: pt.id === s.selSrc ? "preset" : "off", dim: !pt.online };
+      } else {
+        const from = s.routes[pt.id];
+        const routedFromSel = !!from && from === s.selSrc;
+        keys[r][c] = {
+          label: keyName(pt, all),
+          sub: from ? nameOf.get(from) ?? "?" : "—",
+          state: pt.id === s.selDst ? "cue" : routedFromSel ? "onair" : "off",
+          dim: !pt.online || (!!sel && !compatible(sel, pt)),
+        };
+      }
+      act[r][c] = { t: side, id: pt.id } as XyAction;
+    });
+    if (pts.length > cells) {
+      keys[rows - 1][X + W - 1] = { label: "mehr ▶", sub: `${Math.min(pts.length, o + per)}/${pts.length}` };
+      act[rows - 1][X + W - 1] = { t: "more", side, what: "pt" };
+    }
+  }
+  columnControls(s).slice(0, rows).forEach((it, r) => {
+    keys[r][midC] = it.key;
+    act[r][midC] = it.act;
+  });
+  return { keys, act, dials: dialsFor(s, dialCount), pages: 1 };
+}
+
+function dialsFor(s: XyState, dialCount: number): (DialDef | null)[] {
+  const dials: (DialDef | null)[] = [];
+  if (dialCount > 0) {
+    const ss = s.sources.find((x) => x.id === s.selSrc), sd = s.sinks.find((x) => x.id === s.selDst);
+    dials.push({ label: "Quelle", value: ss ? pointName(ss) : "–" });
+    if (dialCount > 1) dials.push({ label: "Ziel", value: sd ? pointName(sd) : "–" });
+    if (dialCount > 2) dials.push({ label: "Medium", value: MEDIA_LABEL[s.media] });
+    if (dialCount > 3) dials.push({ label: "AUTO", value: s.auto ? "an" : "aus", dim: !s.auto });
+  }
+  return dials;
+}
+
 export function layoutXy(s: XyState, cols: number, rows: number, dialCount: number, page: number): XyLayout {
+  if (cols >= 5 && rows >= 3) return layoutColumns(s, cols, rows, dialCount);
   const ctrls = controlList(s);
   let pl = plan(ctrls.length, cols, rows, false);
   const reserve = pl.pages > 1;
@@ -145,13 +252,6 @@ export function layoutXy(s: XyState, cols: number, rows: number, dialCount: numb
   else if (p === 1) dstRow(0);
   else ctrlRowsAt(0, 1, p - 2);
 
-  const dials: (DialDef | null)[] = [];
-  if (dialCount > 0) {
-    const ss = s.sources.find((x) => x.id === s.selSrc), sd = s.sinks.find((x) => x.id === s.selDst);
-    dials.push({ label: "Quelle", value: ss ? pointName(ss) : "–" });
-    if (dialCount > 1) dials.push({ label: "Ziel", value: sd ? pointName(sd) : "–" });
-    if (dialCount > 2) dials.push({ label: "Medium", value: MEDIA_LABEL[s.media] });
-    if (dialCount > 3) dials.push({ label: "AUTO", value: s.auto ? "an" : "aus", dim: !s.auto });
-  }
+  const dials = dialsFor(s, dialCount);
   return { keys, act, dials, pages: pl.pages };
 }

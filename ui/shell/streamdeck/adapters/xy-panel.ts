@@ -5,6 +5,7 @@ import type { AdapterLayout, LayoutContext, StreamDeckAdapter } from "../adapter
 import { apiFetch } from "../../connection.ts";
 import {
   compatible,
+  filtered,
   layoutXy,
   MEDIA_CYCLE,
   type Point,
@@ -99,7 +100,17 @@ export function xyPanelAdapter(io: XyIO): StreamDeckAdapter & { onChange: () => 
       } else if (x.t === "auto") st.auto = !st.auto;
       else if (x.t === "media") {
         st.media = MEDIA_CYCLE[(MEDIA_CYCLE.indexOf(st.media) + 1) % MEDIA_CYCLE.length];
-        st.srcOff = st.dstOff = 0;
+        st.srcOff = st.dstOff = st.srcCatOff = st.dstCatOff = 0;
+        st.srcCat = st.dstCat = null;
+      } else if (x.t === "cat") {
+        if (x.side === "src") (st.srcCat = x.name, st.srcOff = 0);
+        else (st.dstCat = x.name, st.dstOff = 0);
+      } else if (x.t === "more") {
+        const w = Math.max(1, Math.floor(((a.cols || 9) - 1) / 2));
+        const n = x.what === "cat" ? 1 + new Set(visible(x.side === "src" ? st.sources : st.sinks, st.media).map((p) => p.nodeLabel)).size : filtered(x.side === "src" ? st.sources : st.sinks, st.media, x.side === "src" ? st.srcCat : st.dstCat).length;
+        const key = (x.what === "cat" ? (x.side === "src" ? "srcCatOff" : "dstCatOff") : x.side === "src" ? "srcOff" : "dstOff") as "srcOff" | "dstOff" | "srcCatOff" | "dstCatOff";
+        const next = (st[key] ?? 0) + (x.what === "cat" ? Math.max(1, w - 1) : Math.max(1, (a.rows - 1) * w - 1));
+        st[key] = next >= n ? 0 : next;
       } else if (x.t === "scroll") {
         const n = x.row === "src" ? visible(st.sources, st.media).length : visible(st.sinks, st.media).length;
         const step = Math.max(1, (a.cols || 8) - 1);
@@ -114,10 +125,12 @@ export function xyPanelAdapter(io: XyIO): StreamDeckAdapter & { onChange: () => 
 
   const a = {
     cols: 0,
+    rows: 0,
     onChange: () => {},
     onError: (_e: unknown) => {},
     getLayout(ctx: LayoutContext): AdapterLayout {
       a.cols = ctx.cols;
+      a.rows = ctx.rows;
       last = layoutXy(st, ctx.cols, ctx.rows, ctx.dials, ctx.page);
       return last;
     },
@@ -127,8 +140,8 @@ export function xyPanelAdapter(io: XyIO): StreamDeckAdapter & { onChange: () => 
       if (x) void run(x);
     },
     onDial(i: number, delta: number) {
-      if (i === 0) st.selSrc = stepSelection(visible(st.sources, st.media), st.selSrc, delta);
-      else if (i === 1) st.selDst = stepSelection(visible(st.sinks, st.media), st.selDst, delta);
+      if (i === 0) st.selSrc = stepSelection(filtered(st.sources, st.media, st.srcCat), st.selSrc, delta);
+      else if (i === 1) st.selDst = stepSelection(filtered(st.sinks, st.media, st.dstCat), st.selDst, delta);
       else if (i === 2) void run({ t: "media" });
       a.onChange();
     },

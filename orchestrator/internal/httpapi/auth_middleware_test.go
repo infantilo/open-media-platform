@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
@@ -367,5 +368,36 @@ func TestRequireVerbOnNodeNilWorkflowsFieldSkipsWorkflowCheck(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 (nil workflows field must not panic, no workflow-scope match possible)", rec.Code)
+	}
+}
+
+func TestRequireVerbOnReceiverAllowsOperatorViaWorkflowRole(t *testing.T) {
+	g := &authGate{
+		auth:      fakeAuthSvc{userCount: 1, principal: auth.Principal{UserID: "u1", Username: "operator1"}},
+		authz:     fakeAuthzSvc{allowed: false, workflowAllowed: true},
+		audit:     &fakeAuditSvc{},
+		nodes:     fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", Receivers: []registry.ReceiverView{{ID: "rx-1"}}}}},
+		workflows: &fakeWorkflowRoleFinder{workflowID: "wf", role: "viewer", found: true},
+	}
+	post := func(to string) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/graph/edges", strings.NewReader(`{"from":"tx","to":"`+to+`"}`))
+		req.Header.Set("Authorization", "Bearer valid-token")
+		rec := httptest.NewRecorder()
+		g.requireVerbOnReceiver(authz.VerbOperate, okHandler)(rec, req)
+		return rec.Code
+	}
+	if c := post("rx-1"); c != http.StatusOK {
+		t.Fatalf("Ziel im eigenen Workflow: status = %d, want 200", c)
+	}
+	if c := post("rx-unknown"); c != http.StatusForbidden {
+		t.Fatalf("unbekanntes Ziel: status = %d, want 403", c)
+	}
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/graph/edges/rx-1", nil)
+	req.SetPathValue("id", "rx-1")
+	req.Header.Set("Authorization", "Bearer valid-token")
+	rec := httptest.NewRecorder()
+	g.requireVerbOnReceiver(authz.VerbOperate, okHandler)(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE: status = %d, want 200", rec.Code)
 	}
 }

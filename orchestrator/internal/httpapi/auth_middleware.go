@@ -1,8 +1,11 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -256,6 +259,75 @@ func (g *authGate) requireVerbOnNode(minVerb authz.Verb, next http.HandlerFunc) 
 		next(rec, r)
 		if !bypass && r.Method != http.MethodGet {
 			g.audit.Log(p.Username, r.Method, r.URL.Path, nodeRoleID, rec.status)
+		}
+	}
+}
+
+// requireVerbOnReceiver schaltet Graph-Kanten: erlaubt ist, wer global
+// `configure` hat (Engineering) ODER `minVerb` (operate) auf dem Node des
+// Ziel-Receivers besitzt — per Node-/Instanz-Bindung oder Workflow-Rolle,
+// wie requireVerbOnNode. So darf ein Operator in seinem Workflow schalten
+// (X/Y-Panel, Stream Deck), aber keine Ziele fremder Workflows.
+// Ziel-Receiver: POST-Body {"to"} bzw. Pfad {id}.
+func (g *authGate) requireVerbOnReceiver(minVerb authz.Verb, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p, bypass, ok := g.authenticate(r)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		auditNode := ""
+		if !bypass {
+			allowed, err := g.authz.Check(p.Username, authz.AnyNode, authz.VerbConfigure)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if !allowed {
+				receiverID := r.PathValue("id")
+				if r.Method == http.MethodPost {
+					raw, rerr := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+					if rerr != nil {
+						http.Error(w, "invalid body", http.StatusBadRequest)
+						return
+					}
+					r.Body = io.NopCloser(bytes.NewReader(raw))
+					var b struct {
+						To string `json:"to"`
+					}
+					_ = json.Unmarshal(raw, &b)
+					receiverID = b.To
+				}
+				for _, n := range g.nodes.List() {
+					for _, rc := range n.Receivers {
+						if rc.ID != receiverID {
+							continue
+						}
+						auditNode = consoles.NodeRoleID(consoles.NodeInfo{ID: n.ID, InstanceID: n.InstanceID})
+						allowed, err = g.authz.Check(p.Username, auditNode, minVerb)
+						if err == nil && !allowed && g.workflows != nil {
+							if wfID, _, role, found := g.workflows.FindRoleForNode(n.ID); found {
+								allowed, err = g.authz.CheckWorkflow(p.Username, wfID, role, minVerb)
+							}
+						}
+						if err != nil {
+							http.Error(w, err.Error(), http.StatusInternalServerError)
+							return
+						}
+					}
+				}
+			}
+			if !allowed {
+				g.audit.Log(p.Username, r.Method, r.URL.Path, auditNode, http.StatusForbidden)
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			r = r.WithContext(contextWithPrincipal(r.Context(), p))
+		}
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next(rec, r)
+		if !bypass && r.Method != http.MethodGet {
+			g.audit.Log(p.Username, r.Method, r.URL.Path, auditNode, rec.status)
 		}
 	}
 }
