@@ -31,11 +31,15 @@ Deno.test("mehr Tabs als Tasten: Blättertaste, Seiten, richtiger Ausschnitt", (
   assertEquals(composeLayout(XL, tabs(10), null, 9, null, 0).presses[1], { kind: "tab", id: "t6" });
 });
 
-Deno.test("Home zeigt alle Tabs als Auswahl unter der Kopfzeile", () => {
+Deno.test("Home: Tabs stehen nur in der Kopfzeile, darunter nur der Überlauf", () => {
   const c = composeLayout(XL, tabs(3), null, 0, null, 0);
   assertEquals(c.keys[0]?.state, "preset");
-  assertEquals(c.presses[8], { kind: "tab", id: "t0" });
-  assertEquals(c.presses[10], { kind: "tab", id: "t2" });
+  assertEquals(c.presses.slice(8).every((p) => p.kind === "none"), true); // nichts doppelt
+  // 10 Tabs, Kopfzeile Seite 1 zeigt t0–t5 → unten t6–t9
+  const o = composeLayout(XL, tabs(10), null, 0, null, 0);
+  assertEquals(o.presses[8], { kind: "tab", id: "t6" });
+  assertEquals(o.presses[11], { kind: "tab", id: "t9" });
+  assertEquals(o.presses[12], { kind: "none" });
 });
 
 Deno.test("Inhalt: Zellen ab Zeile 1, Seitentaste überschreibt letzte Taste", () => {

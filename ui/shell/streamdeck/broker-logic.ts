@@ -63,8 +63,9 @@ export function composeLayout(
   let contentPages = 1;
   let dials: (DialDef | null)[] = [];
   if (active === null) {
-    // Home: alle Tabs als große Auswahl
-    tabs.slice(0, cols * contentRows).forEach((tab, i) => {
+    // Home: nur Tabs, die in der Kopfzeile (aktuelle Seite) keinen Platz haben — sonst doppelt.
+    const shown = new Set(tabs.slice(tp * slots, tp * slots + slots).map((x) => x.id));
+    tabs.filter((x) => !shown.has(x.id)).slice(0, cols * contentRows).forEach((tab, i) => {
       const idx = cols + i;
       keys[idx] = { label: tab.label, state: "off" };
       presses[idx] = { kind: "tab", id: tab.id };

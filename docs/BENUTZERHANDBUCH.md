@@ -1444,7 +1444,7 @@ im Browser-Dialog das Gerät wählen. Nach dem ersten Freigeben verbindet sich d
 (Berechtigung abgelehnt, Browser ohne WebHID, Modell nicht unterstützt, Gerät belegt) erscheinen im Panel. **Simulator starten** zeigt
 ein virtuelles Gerät im Browser (zum Ausprobieren ohne Hardware); **Testraster senden** und **Render-Test** prüfen das Gerät.
 
-**Aufbau:** Die oberste Tastenreihe ist immer gleich: Taste 1 **Home** (Übersicht aller geöffneten Node-Oberflächen), danach je geöffneter
+**Aufbau:** Die oberste Tastenreihe ist immer gleich: Taste 1 **Home** (Startseite; die Tabs stehen nur in dieser Reihe, bei Überlauf zusätzlich darunter), danach je geöffneter
 Kachel ein **Tab** (aktiver Tab grün; mehr Tabs als Tasten → letzte Taste „⇄“ blättert). Ein Tabwechsel am Gerät holt die Kachel am
 Bildschirm nach vorn und umgekehrt. Alles darunter gehört dem aktiven Tab. Ist eine Seite zu klein, belegt die **letzte Taste unten rechts**
 „⇄ n/m“ zum Blättern (am „+“ auch Wischen am Streifen).
