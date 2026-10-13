@@ -328,6 +328,15 @@ struct ChannelBranch {
     /// `elements` — Grundlage des weichen Quellenwechsels (`finish_swap`).
     tail: gst::Element,
     input_len: usize,
+    /// Crossfade-Mischer am Kanaleingang (entsteht beim ersten weichen Quellenwechsel und bleibt dann bestehen).
+    xf: Option<InputXfade>,
+}
+
+/// `audiomixer` am Kanaleingang: während eines Quellenwechsels laufen alte und neue Quelle hier zusammen und werden
+/// überblendet; im Normalbetrieb hängt nur die aktuelle Quelle an `cur_pad`.
+struct InputXfade {
+    mixer: gst::Element,
+    cur_pad: gst::Pad,
 }
 
 struct ActivePipeline {
@@ -727,6 +736,7 @@ fn add_channel_branch(
             _external_input: external_input,
             tail: source_tail,
             input_len,
+            xf: None,
         },
     );
     // Nach einem Quellwechsel (Zweig neu gebaut) bereits eingeschaltete
@@ -970,9 +980,9 @@ fn stage_swap(
     done: Sender<Result<(), String>>,
 ) -> Result<StagedSwap, String> {
     let branch = active.channels.get(id).ok_or_else(|| format!("channel {id} not found"))?;
-    if branch._external_input.is_none() || branch.wide.is_some() {
-        return Err("channel input is not hot-swappable (internal or multichannel source)".to_string());
-    }
+    let Some(old_channels) = branch._external_input.as_ref().map(|i| i.channels) else {
+        return Err("channel input is not hot-swappable (internal test tone)".to_string());
+    };
     let input = MxlAudioInput::new_unsynced(&active.pipeline, context.clone(), flow_id)
         .map_err(|e| format!("MxlAudioInput (swap {id}, flow {flow_id}): {e}"))?;
     let cleanup = |input: &MxlAudioInput| {
@@ -982,9 +992,9 @@ fn stage_swap(
             let _ = active.pipeline.remove(el);
         }
     };
-    if input.channels > CHANNELS {
+    if input.channels != old_channels {
         cleanup(&input);
-        return Err("new source has more than two channels".to_string());
+        return Err(format!("channel count differs ({old_channels} -> {})", input.channels));
     }
     let hold = gst::ElementFactory::make("fakesink")
         .property("sync", false)
@@ -1028,14 +1038,32 @@ fn finish_swap(active: &mut ActivePipeline, staged: StagedSwap) -> Result<(), (S
     }
 }
 
+/// Dauer der Überblendung zwischen alter und neuer Quelle und Anzahl der Lautstärke-Stufen (je Stufe ein 10-ms-Puffer).
+const XFADE_DURATION: Duration = Duration::from_millis(120);
+const XFADE_STEPS: u32 = 20;
+
 fn relink_input(active: &mut ActivePipeline, staged: &StagedSwap) -> Result<(), String> {
     let id = staged.id.as_str();
     let branch = active.channels.get_mut(id).ok_or_else(|| format!("channel {id} vanished"))?;
-    let old_src = branch.tail.static_pad("src").ok_or("old tail: no src pad")?;
-    let convert_sink = old_src.peer().ok_or("old tail is not linked")?;
     let new_src = staged.input.tail.static_pad("src").ok_or("new tail: no src pad")?;
     let hold_sink = staged.hold.static_pad("sink").ok_or("hold sink: no sink pad")?;
 
+    // Überblend-Mischer VOR dem Sperren anlegen und hochfahren: der Zustandswechsel darf den Strom nicht aufhalten.
+    let mut prepared_xf: Option<gst::Element> = None;
+    if branch.xf.is_none() {
+        let mixer = gst::ElementFactory::make("audiomixer")
+            .name(format!("xf-{id}"))
+            .property("latency", 15_000_000u64)
+            .build()
+            .map_err(|e| format!("audiomixer (xf, {id}): {e}"))?;
+        // Ohne `first` beginnt die Ausgabe bei Zeit 0 und füllt bis zur aktuellen Laufzeit mit Stille.
+        mixer.set_property_from_str("start-time-selection", "first");
+        active.pipeline.add(&mixer).map_err(|e| format!("add xf mixer: {e}"))?;
+        mixer.sync_state_with_parent().map_err(|e| format!("sync xf mixer: {e}"))?;
+        prepared_xf = Some(mixer);
+    }
+
+    // Neuer Eingang: kurz sperren, von der Haltesenke lösen.
     let (btx, brx) = std::sync::mpsc::channel::<()>();
     let tx_new = btx.clone();
     let p_new = new_src
@@ -1044,32 +1072,101 @@ fn relink_input(active: &mut ActivePipeline, staged: &StagedSwap) -> Result<(), 
             gst::PadProbeReturn::Ok
         })
         .ok_or("block probe (new) failed")?;
-    let p_old = old_src.add_probe(gst::PadProbeType::BLOCK_DOWNSTREAM, move |_, _| {
-        let _ = btx.send(());
-        gst::PadProbeReturn::Ok
-    });
-    // Die neue Quelle liefert (geprüft), muss also sperren. Die alte darf stumm/tot sein — dann nicht warten.
+    let mut p_old: Option<(gst::Pad, gst::PadProbeId)> = None;
+    let first_swap = branch.xf.is_none();
+    if first_swap && let Some(old_src) = branch.tail.static_pad("src") {
+        let tx_old = btx.clone();
+        p_old = old_src
+            .add_probe(gst::PadProbeType::BLOCK_DOWNSTREAM, move |_, _| {
+                let _ = tx_old.send(());
+                gst::PadProbeReturn::Ok
+            })
+            .map(|p| (old_src, p));
+    }
     let new_blocked = brx.recv_timeout(Duration::from_millis(500)).is_ok();
-    let _ = brx.recv_timeout(Duration::from_millis(100));
-    let result = (|| -> Result<(), String> {
-        if !new_blocked {
-            return Err("new input pad did not block".to_string());
+    if p_old.is_some() {
+        let _ = brx.recv_timeout(Duration::from_millis(100)); // alte Quelle darf stumm sein
+    }
+    let unblock = |p_new: gst::PadProbeId, p_old: Option<(gst::Pad, gst::PadProbeId)>| {
+        new_src.remove_probe(p_new);
+        if let Some((pad, p)) = p_old {
+            pad.remove_probe(p);
         }
+    };
+    let drop_prepared = |m: Option<gst::Element>| {
+        if let Some(m) = m {
+            let _ = m.set_state(gst::State::Null);
+            let _ = active.pipeline.remove(&m);
+        }
+    };
+    if !new_blocked {
+        unblock(p_new, p_old);
+        drop_prepared(prepared_xf.take());
+        return Err("new input pad did not block".to_string());
+    }
+
+    // Crossfade-Mischer am Kanaleingang bereitstellen (erster Wechsel) bzw. weiterverwenden.
+    let linked = (|| -> Result<(gst::Pad, gst::Pad), String> {
         new_src.unlink(&hold_sink).map_err(|e| format!("unlink hold sink: {e}"))?;
-        old_src.unlink(&convert_sink).map_err(|e| format!("unlink old input: {e}"))?;
-        new_src.link(&convert_sink).map(|_| ()).map_err(|e| format!("link new input: {e:?}"))
-    })();
-    new_src.remove_probe(p_new);
-    if let Some(p) = p_old {
-        old_src.remove_probe(p);
-    }
-    if let Err(e) = result {
-        // Rückweg: alte Quelle wieder an convert, falls sie ausgehängt wurde.
-        if old_src.peer().is_none() {
-            let _ = old_src.link(&convert_sink);
+        if let Some(xf) = branch.xf.as_ref() {
+            let new_pad = xf.mixer.request_pad_simple("sink_%u").ok_or("xf: request sink pad failed")?;
+            new_pad.set_property("volume", 0.0f64);
+            new_src.link(&new_pad).map_err(|e| format!("link new input to xf: {e:?}"))?;
+            return Ok((xf.cur_pad.clone(), new_pad));
         }
-        return Err(e);
+        let old_src = branch.tail.static_pad("src").ok_or("old tail: no src pad")?;
+        let convert_sink = old_src.peer().ok_or("old tail is not linked")?;
+        let mixer = prepared_xf.take().ok_or("xf mixer not prepared")?;
+        let mixer_src = mixer.static_pad("src").ok_or("xf: no src pad")?;
+        let old_pad = mixer.request_pad_simple("sink_%u").ok_or("xf: request sink pad failed")?;
+        old_pad.set_property("volume", 1.0f64);
+        let new_pad = mixer.request_pad_simple("sink_%u").ok_or("xf: request sink pad failed")?;
+        new_pad.set_property("volume", 0.0f64);
+        old_src.unlink(&convert_sink).map_err(|e| format!("unlink old input: {e}"))?;
+        let relink = (|| -> Result<(), String> {
+            mixer_src.link(&convert_sink).map(|_| ()).map_err(|e| format!("link xf to channel: {e:?}"))?;
+            old_src.link(&old_pad).map(|_| ()).map_err(|e| format!("link old input to xf: {e:?}"))?;
+            new_src.link(&new_pad).map(|_| ()).map_err(|e| format!("link new input to xf: {e:?}"))
+        })();
+        if let Err(e) = relink {
+            // Rückweg: alter Zustand (alte Quelle direkt an den Kanal).
+            let _ = mixer_src.unlink(&convert_sink);
+            let _ = old_src.unlink(&old_pad);
+            let _ = old_src.link(&convert_sink);
+            let _ = mixer.set_state(gst::State::Null);
+            let _ = active.pipeline.remove(&mixer);
+            return Err(e);
+        }
+        branch.elements.push(mixer.clone());
+        branch.xf = Some(InputXfade { mixer, cur_pad: old_pad.clone() });
+        Ok((old_pad, new_pad))
+    })();
+    let (old_pad, new_pad) = match linked {
+        Ok(p) => p,
+        Err(e) => {
+            unblock(p_new, p_old);
+            drop_prepared(prepared_xf.take());
+            // Quelle wieder an die Haltesenke, falls losgelöst — die Aufräumung übernimmt der Aufrufer.
+            if new_src.peer().is_none() {
+                let _ = new_src.link(&hold_sink);
+            }
+            return Err(e);
+        }
+    };
+    unblock(p_new, p_old);
+
+    // Überblenden: neue Quelle hoch, alte runter (linear — dieselbe Quelle kommt von der neuen Instanz).
+    let step = XFADE_DURATION / XFADE_STEPS;
+    for i in 1..=XFADE_STEPS {
+        let t = f64::from(i) / f64::from(XFADE_STEPS);
+        new_pad.set_property("volume", t);
+        old_pad.set_property("volume", 1.0 - t);
+        std::thread::sleep(step);
     }
+    let xf = branch.xf.as_mut().ok_or("xf vanished")?;
+    xf.mixer.release_request_pad(&old_pad);
+    xf.cur_pad = new_pad;
+
     let _ = active.pipeline.remove(&staged.hold);
     let _ = staged.hold.set_state(gst::State::Null);
     // Alte Eingangselemente entfernen (der Lese-Thread stoppt beim Drop des alten `MxlAudioInput`).
