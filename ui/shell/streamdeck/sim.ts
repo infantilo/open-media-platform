@@ -71,9 +71,15 @@ export class StreamDeckSim extends HTMLElement {
     $("off").onclick = () => void this.#stop();
     ($("br") as HTMLInputElement).oninput = (e) => void this.#dev?.setBrightness(+(e.target as HTMLInputElement).value);
     this.#setStatus(null);
+    if (this.hasAttribute("broker")) {
+      this.#offErr = deckSession.onError((e) => (this.#err.textContent = e instanceof Error ? e.message : String(e)));
+    }
   }
 
+  #offErr: (() => void) | null = null;
+
   disconnectedCallback() {
+    this.#offErr?.();
     void this.#stop();
   }
 

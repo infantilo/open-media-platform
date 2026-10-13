@@ -17,6 +17,7 @@ class DeckSession {
   #dev: DeckDevice | null = null;
   #hotplug = false;
   #listeners = new Set<() => void>();
+  #errListeners = new Set<(e: unknown) => void>();
   /** Die Konsole hängt hier ein: Gerät hat Tab gewählt → Kachel nach vorn. */
   focusRequest: (id: string | null) => void = () => {};
 
@@ -29,6 +30,11 @@ class DeckSession {
   onChange(cb: () => void) {
     this.#listeners.add(cb);
     return () => this.#listeners.delete(cb);
+  }
+  /** Fehler des Brokers/der Adapter (z. B. 403 beim Schalten) für die Anzeige. */
+  onError(cb: (e: unknown) => void) {
+    this.#errListeners.add(cb);
+    return () => this.#errListeners.delete(cb);
   }
   #emit() {
     for (const l of this.#listeners) l();
@@ -55,6 +61,10 @@ class DeckSession {
     if (dev) {
       const b = new DeckBroker(dev);
       b.onFocusRequest = (id) => this.focusRequest(id);
+      b.onError = (e) => {
+        console.warn("[streamdeck]", e);
+        for (const l of this.#errListeners) l(e);
+      };
       for (const [id, r] of this.#reg) b.attach(id, r.label, r.el, r.nodeId);
       this.#broker = b;
       this.#installHotplug();
