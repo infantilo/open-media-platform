@@ -34,6 +34,8 @@ import { hasPreviewUrl, bundleOwnsPreview, mountNodePreview, type MountedPreview
 
 const FALLBACK_CONTAINER_WIDTH = 1200;
 const FALLBACK_CONTAINER_HEIGHT = 800;
+// Höhe des Knopfstreifens oben (Alle anordnen / Stream Deck): Kacheln beginnen darunter und werden nicht überdeckt.
+const TOOLBAR_HEIGHT = 36;
 // Titelleisten-Höhe im eingeklappten Zustand (Kapitel 24) — muss zur
 // tatsächlichen Header-Höhe passen (padding 6px*2 + Zeilenhöhe ~16px).
 const MINIMIZED_HEIGHT = 30;
@@ -92,7 +94,7 @@ export class ConsoleBoard extends HTMLElement {
     this.appendChild(document.createElement("omp-upcoming-start"));
 
     const toolbar = document.createElement("div");
-    toolbar.style.cssText = "position:sticky;top:0;display:flex;justify-content:flex-end;padding:6px 6px 0 6px;z-index:1000000;pointer-events:none;";
+    toolbar.style.cssText = `position:sticky;top:0;display:flex;justify-content:flex-end;align-items:center;box-sizing:border-box;height:${TOOLBAR_HEIGHT}px;padding:0 6px;z-index:1000000;pointer-events:none;`;
     const arrangeBtn = document.createElement("button");
     arrangeBtn.type = "button";
     arrangeBtn.textContent = t("board.arrangeAll");
@@ -334,7 +336,7 @@ export class ConsoleBoard extends HTMLElement {
 
   #applyLayout(wrapper: HTMLDivElement, layout: TileLayout) {
     wrapper.style.left = `${layout.x}px`;
-    wrapper.style.top = `${layout.y}px`;
+    wrapper.style.top = `${layout.y + TOOLBAR_HEIGHT}px`;
     wrapper.style.width = `${layout.width}px`;
     wrapper.style.height = layout.minimized ? `${MINIMIZED_HEIGHT}px` : `${layout.height}px`;
     wrapper.style.zIndex = String(layout.zIndex ?? 0);
@@ -403,9 +405,9 @@ export class ConsoleBoard extends HTMLElement {
     const tile = this.#tiles.get(roleId);
     if (!tile) return;
     tile.wrapper.style.left = "0px";
-    tile.wrapper.style.top = "0px";
+    tile.wrapper.style.top = `${TOOLBAR_HEIGHT}px`;
     tile.wrapper.style.width = `${this.clientWidth || FALLBACK_CONTAINER_WIDTH}px`;
-    tile.wrapper.style.height = `${this.clientHeight || FALLBACK_CONTAINER_HEIGHT}px`;
+    tile.wrapper.style.height = `${(this.clientHeight || FALLBACK_CONTAINER_HEIGHT) - TOOLBAR_HEIGHT}px`;
   }
 
   // "Alle anordnen" (Nutzerwunsch, Kapitel 24): setzt jede sichtbare
@@ -414,7 +416,7 @@ export class ConsoleBoard extends HTMLElement {
   #retileAll() {
     if (this.#maximizedRoleId) this.#toggleMaximize(this.#maximizedRoleId);
     const roleIds = this.#entries.map((e) => e.nodeRoleId);
-    const grid = computeTileGridLayout(roleIds.length, this.clientWidth || FALLBACK_CONTAINER_WIDTH, this.clientHeight || FALLBACK_CONTAINER_HEIGHT);
+    const grid = computeTileGridLayout(roleIds.length, this.clientWidth || FALLBACK_CONTAINER_WIDTH, (this.clientHeight || FALLBACK_CONTAINER_HEIGHT) - TOOLBAR_HEIGHT);
     roleIds.forEach((roleId, i) => {
       const layout = this.#layouts[roleId];
       const tile = this.#tiles.get(roleId);
