@@ -26,6 +26,8 @@ h2{margin:0 0 12px}
 .strip canvas{display:block;width:100%;height:100%}
 .dials{display:flex;gap:12px;margin-top:8px}
 .dial{width:64px;height:64px;border-radius:50%;border:3px solid #556;background:#222;display:flex;align-items:center;justify-content:center;cursor:pointer;user-select:none}
+#fit{width:100%;overflow:hidden}
+#stage{width:max-content;transform-origin:0 0}
 .err{color:var(--omp-error,#e55);margin:8px 0;min-height:1.2em}
 pre{background:#111;padding:8px;height:110px;margin:0;overflow:auto;border-radius:6px;box-sizing:border-box;font-size:11px}
 h3{margin:12px 0 4px;font-size:13px}
@@ -57,13 +59,15 @@ export class StreamDeckSim extends HTMLElement {
         <span id="status"></span>
       </div>
       <div class="err" id="err"></div>
-      <div id="stage"></div>
+      <div id="fit"><div id="stage"></div></div>
       <h3>${t("sd.log")}</h3><pre id="log"></pre>`;
     const $ = (id: string) => this.#root.getElementById(id)!;
     this.#status = $("status");
     this.#err = $("err");
     this.#logEl = $("log");
     this.#stage = $("stage");
+    this.#ro = new ResizeObserver(() => this.#fitStage());
+    this.#ro.observe($("fit"));
     this.#model = $("model") as HTMLSelectElement;
     $("sim").onclick = () => void this.#startSim();
     $("real").onclick = () => void this.#startReal();
@@ -79,7 +83,20 @@ export class StreamDeckSim extends HTMLElement {
 
   #offErr: (() => void) | null = null;
 
+  #ro?: ResizeObserver;
+
+  /** Skaliert die Bühne auf die verfügbare Breite (kein waagerechtes Scrollen, z. B. „+ XL“ mit 1200 px Streifen). */
+  #fitStage() {
+    const fit = this.#root.getElementById("fit") as HTMLElement | null;
+    if (!fit) return;
+    const natW = this.#stage.scrollWidth, natH = this.#stage.scrollHeight;
+    const scale = natW > 0 ? Math.min(1, fit.clientWidth / natW) : 1;
+    this.#stage.style.transform = scale < 1 ? `scale(${scale})` : "";
+    fit.style.height = natH ? `${Math.ceil(natH * scale)}px` : "";
+  }
+
   disconnectedCallback() {
+    this.#ro?.disconnect();
     this.#offErr?.();
     void this.#stop();
   }
@@ -246,6 +263,7 @@ export class StreamDeckSim extends HTMLElement {
         }
       });
     };
+    this.#fitStage();
   }
 }
 

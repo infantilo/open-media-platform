@@ -12,7 +12,7 @@ export function createDeckToggle(buttonStyle: string): { button: HTMLButtonEleme
   button.style.cssText = buttonStyle;
   const panel = document.createElement("div");
   panel.style.cssText =
-    "display:none;position:fixed;right:12px;bottom:12px;max-width:min(94vw,1000px);max-height:80vh;overflow:auto;" +
+    "display:none;position:fixed;right:12px;bottom:12px;width:fit-content;max-width:96vw;max-height:80vh;overflow:auto;" +
     "z-index:1000001;background:var(--omp-surface);border:1px solid var(--omp-border);border-radius:var(--omp-radius);box-shadow:0 4px 16px rgba(0,0,0,0.6);";
   button.addEventListener("click", () => {
     if (panel.style.display === "none") {
