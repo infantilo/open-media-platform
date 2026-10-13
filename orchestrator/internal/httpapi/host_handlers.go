@@ -3,8 +3,11 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"runtime"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/hosts"
@@ -282,5 +285,38 @@ func handleHostMetricsHistory(history HostHistoryReader) http.HandlerFunc {
 			win = hosts.HistoryWindow{Resolution: "raw"}
 		}
 		writeJSON(w, http.StatusOK, win)
+	}
+}
+
+// handleLocalHost ist GET /api/v1/hosts/local: der Host, auf dem der Orchestrator
+// selbst läuft (kein Host-Agent, nicht in der Registry). Gleiche Form wie ein
+// Eintrag aus GET /api/v1/hosts, damit die Host-Übersicht ihn mit anzeigen kann;
+// `id` ist leer wie die `HostId` lokal gestarteter Instanzen.
+func handleLocalHost(catalog CatalogReader) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		hostname, _ := os.Hostname()
+		resp := hostResponse{
+			ID:           "",
+			Label:        "Orchestrator (lokal)",
+			Hostname:     hostname,
+			Capabilities: json.RawMessage(fmt.Sprintf(`{"os":%q,"arch":%q,"numCPU":%d}`, runtime.GOOS, runtime.GOARCH, runtime.NumCPU())),
+			RegisteredAt: time.Time{},
+		}
+		if catalog != nil {
+			if lh := catalog.LocalHost(); lh != nil {
+				total := localMemTotal()
+				m := hosts.Metrics{
+					CPUPercent:    lh.CPUPercent,
+					MemTotalBytes: total,
+					MemUsedBytes:  uint64(lh.MemPercent / 100 * float64(total)),
+					ReceivedAt:    time.Now(),
+				}
+				if n := lh.Net; n != nil {
+					m.Net = &hosts.NetMetrics{Iface: n.Iface, RxBytesPerSec: n.RxBytesPerSec, TxBytesPerSec: n.TxBytesPerSec, LinkMbps: n.LinkMbps}
+				}
+				resp.Metrics = &m
+			}
+		}
+		writeJSON(w, http.StatusOK, resp)
 	}
 }

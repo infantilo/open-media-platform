@@ -309,6 +309,11 @@ class HostsView extends HTMLElement {
       ]);
       if (!hostsRes.ok) return;
       const hosts = (await hostsRes.json()) as HostEntry[];
+      // Der Host des Orchestrators selbst steht nicht in der Registry (kein Host-Agent) — mit anzeigen.
+      try {
+        const localRes = await apiFetch("/api/v1/hosts/local");
+        if (localRes.ok) hosts.unshift((await localRes.json()) as HostEntry);
+      } catch { /* ältere Orchestrator-Version ohne den Endpunkt */ }
       const advice = adviceRes.ok ? ((await adviceRes.json()) as PlacementAdvice[]) : [];
       const pending = pendingRes.ok ? ((await pendingRes.json()) as PendingMigration[]) : [];
       const history = await this.#fetchHistory(hosts);
@@ -355,6 +360,7 @@ class HostsView extends HTMLElement {
   async #fetchHistory(hosts: HostEntry[]): Promise<Map<string, HistoryWindow>> {
     const entries = await Promise.all(
       hosts.map(async (h): Promise<[string, HistoryWindow] | undefined> => {
+        if (!h.id) return undefined; // lokaler Host: keine Verlaufsdaten
         try {
           const res = await apiFetch(`/api/v1/hosts/${encodeURIComponent(h.id)}/metrics/history?window=1h`);
           if (!res.ok) return undefined;
