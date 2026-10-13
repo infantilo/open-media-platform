@@ -8,6 +8,7 @@ import {
   type AudioState,
   type Chan,
   layoutAudioMixer,
+  EXTRA_PROPS,
   MODE_PARAMS,
   nudged,
 } from "./audio-mixer-logic.ts";
@@ -66,7 +67,7 @@ export function audioMixerAdapter(io: MixerIO): StreamDeckAdapter & { onChange: 
       for (const c of st.channels) props.set(c.id, [...BASE_PROPS]);
       if (st.sel && st.mode !== "mix") {
         const m = MODE_PARAMS[st.mode];
-        props.set(st.sel, [...BASE_PROPS, ...m.params.map((p) => p.prop), ...m.toggles.map((t) => t.prop)]);
+        props.set(st.sel, [...BASE_PROPS, ...m.params.map((p) => p.prop), ...m.toggles.map((t) => t.prop), ...(st.mode === "pan" ? [] : EXTRA_PROPS[st.mode])]);
       }
       let changed = false;
       await Promise.all([...props].flatMap(([id, ps]) => ps.map(async (p) => {

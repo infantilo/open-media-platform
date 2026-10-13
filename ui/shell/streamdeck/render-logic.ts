@@ -1,6 +1,7 @@
 // Render-Engine, reine Logik (Kap. 40.3): Fingerprint-Cache + Debounce.
 // Rasterisierung (Canvas → JPEG) und Gerät sind injiziert → ohne DOM testbar.
 
+import type { PlotSlice } from "./plot-logic.ts";
 import type { DeckModel, Rotation } from "./models.ts";
 import { keyCount } from "./models.ts";
 
@@ -15,6 +16,8 @@ export interface KeyDef {
   color?: string;
   /** Gedimmt (offline/inaktiv). */
   dim?: boolean;
+  /** Statt Beschriftung: Ausschnitt einer Kurve (EQ/Dynamik) über mehrere Tasten. */
+  plot?: PlotSlice;
 }
 
 export interface DialDef {
@@ -23,6 +26,8 @@ export interface DialDef {
   /** Füllstand 0..1 (Balken); fehlt → keiner. */
   fill?: number;
   dim?: boolean;
+  /** Kurve als Hintergrund dieses Dial-Felds (Streifen). */
+  plot?: PlotSlice;
 }
 
 /** Schreibziel (Teilmenge von `DeckDevice`). */

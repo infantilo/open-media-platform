@@ -2,6 +2,7 @@
 // `--omp-*`-Tokens (design-tokens.css), Drehung je Modell, Text mit Umbruch.
 
 import { type DeckModel, type Rotation, rotatedSize, rotationMatrix } from "./models.ts";
+import { drawPlotSlice, type Palette } from "./plot-draw.ts";
 import type { DialDef, KeyDef, KeyState, Rasterizer } from "./render-logic.ts";
 
 const STATE_TOKEN: Record<KeyState, string> = {
@@ -120,6 +121,17 @@ async function toJpeg(c: OffscreenCanvas): Promise<Uint8Array> {
   return new Uint8Array(await b.arrayBuffer());
 }
 
+function palette(): Palette {
+  return {
+    bg: resolveColor("--omp-surface"),
+    grid: "rgba(255,255,255,0.12)",
+    dim: resolveColor("--omp-text-dim"),
+    line: resolveColor("--omp-text"),
+    accent: resolveColor("--omp-accent-cyan"),
+    text: resolveColor("--omp-text"),
+  };
+}
+
 export function drawKey(def: KeyDef | null, m: DeckModel): OffscreenCanvas {
   const s = m.keySize;
   const c = new OffscreenCanvas(s, s);
@@ -128,6 +140,12 @@ export function drawKey(def: KeyDef | null, m: DeckModel): OffscreenCanvas {
   g.fillStyle = resolveColor("--omp-bg");
   g.fillRect(0, 0, s, s);
   if (!def) return c;
+  if (def.plot) { // Kurven-Ausschnitt statt Taste
+    g.fillStyle = resolveColor("--omp-surface");
+    g.fillRect(0, 0, s, s);
+    drawPlotSlice(g, def.plot, s, s, palette());
+    return c;
+  }
   const accent = def.color ? resolveColor(def.color) : def.state ? resolveColor(STATE_TOKEN[def.state]) : "";
   const lit = def.state === "onair" || def.state === "preset" || def.state === "cue" || def.state === "error";
   g.fillStyle = lit && accent ? accent : resolveColor("--omp-surface-raised");
@@ -177,6 +195,7 @@ export function drawDial(def: DialDef | null, w: number, h: number, rotation: Ro
   g.fillStyle = resolveColor("--omp-surface");
   g.fillRect(0, 0, w, h);
   if (!def) return c;
+  if (def.plot) drawPlotSlice(g, def.plot, w, h, palette(), 0.6);
   g.textAlign = "center";
   g.textBaseline = "middle";
   g.fillStyle = resolveColor("--omp-text-dim");

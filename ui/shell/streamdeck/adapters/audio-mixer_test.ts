@@ -47,7 +47,7 @@ Deno.test("„+“ (1 Zeile, 4 Dials): Gain-Dials folgen der Kanalseite, Druck =
 Deno.test("Detailseite EQ: Modustasten, Parameter, Bypass, −/+ , Dials", () => {
   const s = st(2, { sel: "c1", mode: "eq", focus: 1, values: { "c1.eqLow": 3, "c1.eqMid": -2.5, "c1.eqBypass": true } });
   const l = layoutAudioMixer(s, 8, 3, 0, 0);
-  assertEquals(row(l, 0), "◀ Mix | EQ | Dynamik | Pan | · | · | · | ·");
+  assertEquals(row(l, 0).split(" | ").slice(0, 5).join(" | "), "◀ Mix | EQ | Dynamik | Pan | ·"); // rechts davon: Kurvenblock
   assertEquals(l.keys[0][0]?.sub, "Kanal 2");
   assertEquals(l.keys[0][1]?.state, "preset");
   assertEquals(l.keys[1][0]?.sub, "3 dB");

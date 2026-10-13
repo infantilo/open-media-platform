@@ -1453,7 +1453,8 @@ Bildschirm nach vorn und umgekehrt. Alles darunter gehört dem aktiven Tab. Ist 
   Rate (weiter) und die PIP-Voreinstellungen (Umschalter). Kleinere Geräte zeigen PGM/PRE/Steuerung nacheinander als Seiten. Nur die Master-Ebene.
 * **Audio-Mixer:** je Kanal eine Spalte mit **MUTE**, **PFL** und **SELECT** (Pegel in dB auf der SELECT-Taste). SELECT am
   Kanal öffnet mit **einem Druck** die Detailseiten **EQ** (4 Bänder, Bypass), **Dynamik** (Kompressor, Gate) und **Pan** (Phase, Hauptmix);
-  Parameter anwählen und mit −/+/−−/++ ändern. Am „+“ stellen die **Dials** den Pegel bzw. den Detail-Parameter, Drücken = Mute bzw. Schalter.
+  Parameter anwählen und mit −/+/−−/++ ändern. Rechts neben den Tasten (XL, + XL) bzw. auf dem Touch-Streifen („+“, + XL) zeigt eine **Kurve** den
+  EQ-Frequenzgang (Bandpunkte, fokussiertes Band hell) bzw. die Dynamik-Kennlinie (Kompressor, Gate-Schwelle gestrichelt); sie folgt den Werten live. Am „+“ stellen die **Dials** den Pegel bzw. den Detail-Parameter, Drücken = Mute bzw. Schalter.
 * **X/Y-Panel:** Zeile 1 Quellen, Zeile 2 Ziele (zeigt die aktuell geschaltete Quelle), Zeile 3 **TAKE**, **AUTO** (schaltet sofort bei Auswahl beider Seiten),
   **Medium** (Alle/Video/Audio/Daten), **Trennen** und Blättern. Unpassende Medien sind gedimmt. Am „+“ wählen die Dials Quelle und Ziel, Drücken auf das Ziel-Dial schaltet.
   Schalten verlangt wie am Bildschirm das Recht zum Konfigurieren; ohne es meldet das Panel „forbidden“.

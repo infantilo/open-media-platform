@@ -5,6 +5,7 @@
 
 import type { AdapterLayout } from "../adapter.ts";
 import type { DialDef, KeyDef } from "../render-logic.ts";
+import { type PlotSpec, widthToQ } from "../plot-logic.ts";
 
 export type Mode = "mix" | "eq" | "dyn" | "pan";
 
@@ -76,6 +77,12 @@ export const MODE_PARAMS: Record<Exclude<Mode, "mix">, { params: ParamDef[]; tog
   },
 };
 
+/** Zusätzlich je Modus gelesene Parameter (nur für die Kurvenanzeige). */
+export const EXTRA_PROPS: Record<"eq" | "dyn", string[]> = {
+  eq: ["eqHpEnabled", "eqHpFreq", ...["Low", "Mid", "Mid2", "High"].flatMap((b) => [`eq${b}Freq`, `eq${b}Width`])],
+  dyn: ["compKnee"],
+};
+
 export const GAIN: Omit<ParamDef, "set" | "label"> = { prop: "gain", min: -60, max: 12, step: 0.5, unit: "dB" };
 
 export const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -92,6 +99,43 @@ export function fmt(v: unknown, unit: string): string {
 }
 
 export const chShort = (c: Chan) => c.label.replace(/^omp-/, "").replace(/\s+Sender\s*\d+$/i, "") || c.id;
+
+const EQ_DEF: [string, "low" | "peak" | "high", number, number][] = [
+  ["Low", "low", 100, 200],
+  ["Mid", "peak", 1000, 1000],
+  ["Mid2", "peak", 3500, 3500],
+  ["High", "high", 8000, 4000],
+];
+
+/** Kurven-Beschreibung für EQ/Dynamik aus den gelesenen Werten (Standardwerte, wo noch nichts gelesen). */
+export function plotSpec(s: AudioState, id: string, mode: Mode, focus: number): PlotSpec | null {
+  const n = (prop: string, d: number) => num(s, id, prop) ?? d;
+  if (mode === "eq") {
+    return {
+      kind: "eq",
+      bypass: bool(s, id, "eqBypass"),
+      hp: bool(s, id, "eqHpEnabled") ? n("eqHpFreq", 80) : null,
+      bands: EQ_DEF.map(([b, kind, f0, w0]) => {
+        const f = n(`eq${b}Freq`, f0);
+        return { kind, f, q: widthToQ(f, n(`eq${b}Width`, w0)), g: n(`eq${b}`, 0) };
+      }),
+      focus,
+    };
+  }
+  if (mode === "dyn") {
+    return {
+      kind: "dyn",
+      on: bool(s, id, "compEnabled"),
+      thr: n("compThreshold", 0),
+      ratio: n("compRatio", 1),
+      makeup: n("compMakeup", 0),
+      knee: n("compKnee", 0),
+      gateOn: bool(s, id, "gateEnabled"),
+      gateThr: n("gateThreshold", -90),
+    };
+  }
+  return null;
+}
 
 export interface AudioLayout extends AdapterLayout {
   act: (AudioAction | null)[][];
@@ -160,6 +204,20 @@ export function layoutAudioMixer(s: AudioState, cols: number, rows: number, dial
       dials.push({ label: p.label, value: fmt(cur, p.unit), fill: cur === undefined ? undefined : (cur - p.min) / (p.max - p.min) });
       dialAct.push({ id: sel.id, p, press: m.toggles[i] ? { t: "call", id: sel.id, ...m.toggles[i].set(!bool(s, sel.id, m.toggles[i].prop)) } : undefined });
     });
+    const spec = plotSpec(s, sel.id, s.mode, focus);
+    if (spec) {
+      // Kurve: Block rechts neben den Bedientasten (XL / + XL) …
+      const start = m.params.length + m.toggles.length;
+      const cw = Math.min(4, cols - start);
+      if (rows >= 3 && cw >= 2) {
+        for (let r = 0; r < 3; r++) for (let c = 0; c < cw; c++) keys[r][start + c] = { plot: { spec, cx: c, cy: r, cw, ch: 3 } };
+      }
+      // … und auf dem Touch-Streifen unter den Dials („+“, „+ XL“).
+      for (let i = 0; i < dialCount; i++) {
+        const plot = { spec, cx: i, cy: 0, cw: dialCount, ch: 1 };
+        dials[i] = dials[i] ? { ...dials[i]!, plot } : { label: "", value: "", plot };
+      }
+    }
     return { keys, act, dials, dialAct, pages: rows === 2 ? 2 : 1 };
   }
 
