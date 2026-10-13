@@ -249,3 +249,85 @@ Deno.test("Adapter: Bouquet schaltet, Rückgängig stellt zurück; Bündel brauc
   assertEquals(String((errs[0] as Error).message).includes("Ziel wählen"), true);
   a.dispose?.();
 });
+
+// ---- Ebenen per Dial, Bouquet aufzeichnen -------------------------------------
+
+const lvlIo = (extra: Partial<XyIO> = {}, canSave = false): XyIO => ({
+  load: () => Promise.resolve({
+    sources: [np("s1", "Cam 1", "cam", "Kamera"), np("s2", "Mix PGM", "mix", "Mischer")],
+    sinks: [np("r1", "Monitor", "mon", "Monitor")],
+    routes: {}, nodes: lvlNodes, groupTree: lvlTree, workflows: [], bouquets: [], canSave,
+  }),
+  connect: () => Promise.resolve(),
+  disconnect: () => Promise.resolve(),
+  ...extra,
+});
+const tick2 = () => new Promise((r) => setTimeout(r, 15));
+
+Deno.test("„+ XL“ (6 Dials): Dial 5/6 wählen Ebenen je Seite, Druck öffnet den Ordner", async () => {
+  const a = xyPanelAdapter(lvlIo());
+  await a.refresh?.();
+  const ctx = { cols: 9, rows: 3, dials: 6, page: 0 };
+  assertEquals(a.getLayout(ctx).dials!.map((d) => `${d?.label}=${d?.value}`).slice(4), ["Ebene Q=Alle", "Ebene Z=Alle"]);
+  a.onDial!(4, 1); // Cursor auf den ersten Ordner
+  assertEquals(a.getLayout(ctx).dials![4]?.value, "Studio");
+  a.onDialPress!(4, true);
+  await tick2();
+  const l = a.getLayout(ctx);
+  assertEquals(l.keys[0][0]?.label, "↑ Hoch"); // Quellseite steht jetzt im Ordner
+  assertEquals(l.dials![4]?.value, "↑ Hoch");
+  assertEquals(l.keys[0][5]?.label, "Alle"); // Zielseite unverändert
+});
+
+Deno.test("„+“ (4 Dials): Dial-3-Druck schaltet in den Ebenen-Modus, Dial 1/2 steuern dann die Ebenen", async () => {
+  const a = xyPanelAdapter(lvlIo());
+  await a.refresh?.();
+  const ctx = { cols: 4, rows: 1, dials: 4, page: 0 };
+  a.onDialPress!(2, true);
+  const d = a.getLayout(ctx).dials!;
+  assertEquals(d.map((x) => `${x?.label}=${x?.value}`).slice(0, 3), ["Ebene Q=Alle", "Ebene Z=Alle", "Modus=Ebene"]);
+  a.onDial!(0, 1);
+  a.onDialPress!(0, true);
+  await tick2();
+  assertEquals(a.getLayout(ctx).dials![0]?.value, "↑ Hoch");
+  a.onDialPress!(2, true); // zurück in den Auswahlmodus
+  assertEquals(a.getLayout(ctx).dials![0]?.label, "Quelle");
+});
+
+Deno.test("Bouquet aufzeichnen: Take sammelt, Speichern legt ein Bouquet an, Verwerfen löscht", async () => {
+  const saved: unknown[] = [];
+  const connects: string[] = [];
+  const a = xyPanelAdapter(lvlIo({ saveBouquet: (b) => { saved.push(b); return Promise.resolve(); }, connect: (f, t) => { connects.push(f + t); return Promise.resolve(); } }, true));
+  await a.refresh?.();
+  const ctx = (page: number) => ({ cols: 9, rows: 3, dials: 0, page });
+  assertEquals(a.getLayout(ctx(0)).pages, 2); // Bouquet-Seite auch ohne Bouquets (zum Aufzeichnen)
+  const p1 = a.getLayout(ctx(1));
+  assertEquals(p1.keys[0][1]?.label, "● Aufzeichnen");
+  a.onKey(0, 1, true);
+  await tick2();
+  assertEquals(a.getLayout(ctx(1)).keys[0][1]?.label, "■ Speichern");
+  // Quelle + Ziel (AUTO) → gesammelt, nichts geschaltet
+  a.getLayout(ctx(0));
+  a.onKey(1, 0, true); await tick2(); // erste Quelle (Spalte 0)
+  a.onKey(1, 5, true); await tick2(); // erstes Ziel (Spalte 5)
+  assertEquals(connects, []);
+  assertEquals(a.getLayout(ctx(1)).keys[0][1]?.sub, "1 Schaltung(en)");
+  a.onKey(0, 1, true); // Speichern
+  await tick2();
+  assertEquals(saved.length, 1);
+  // deno-lint-ignore no-explicit-any
+  const b = saved[0] as any;
+  assertEquals([b.kind, b.routes.length], ["routes", 1]);
+  assertEquals(a.getLayout(ctx(1)).keys[0][1]?.label, "● Aufzeichnen"); // Aufzeichnung beendet
+  // Verwerfen
+  a.onKey(0, 1, true); await tick2();
+  a.getLayout(ctx(1)); // der Broker legt nach jeder Änderung neu aus
+  a.onKey(0, 2, true); await tick2();
+  assertEquals(a.getLayout(ctx(1)).keys[0][1]?.label, "● Aufzeichnen");
+});
+
+Deno.test("Ohne Recht zum Speichern: keine Aufzeichnen-Tasten, keine leere Bouquet-Seite", async () => {
+  const a = xyPanelAdapter(lvlIo({ saveBouquet: () => Promise.resolve() }, false));
+  await a.refresh?.();
+  assertEquals(a.getLayout({ cols: 9, rows: 3, dials: 0, page: 0 }).pages, 1);
+});

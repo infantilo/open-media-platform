@@ -7,6 +7,7 @@ import {
   type Bouquet,
   compatible,
   layoutXy,
+  levelEntry,
   MEDIA_CYCLE,
   type Point,
   sideList,
@@ -31,10 +32,14 @@ export interface XyLoad {
   groupTree?: unknown;
   workflows?: unknown[];
   bouquets?: Bouquet[];
+  /** Darf der Nutzer Bouquets speichern (`configure`)? */
+  canSave?: boolean;
 }
 
 export interface XyIO {
   load(): Promise<XyLoad>;
+  /** Hängt ein Bouquet an die gespeicherte Liste (frisch lesen, anhängen, schreiben). */
+  saveBouquet?(b: Bouquet): Promise<void>;
   connect(from: string, to: string): Promise<void>;
   disconnect(to: string): Promise<void>;
 }
@@ -78,23 +83,25 @@ export function coreIO(panelId = ""): XyIO {
       return null;
     }
   };
-  let slow: { at: number; groupTree: unknown; workflows: unknown[]; bouquets: Bouquet[] } | null = null;
+  let slow: { at: number; groupTree: unknown; workflows: unknown[]; bouquets: Bouquet[]; canSave: boolean } | null = null;
   return {
     async load() {
       const [graph, sources, sinks] = await Promise.all([jget("/api/v1/graph"), jget("/api/v1/sources"), jget("/api/v1/sinks")]);
       const routes: Record<string, string> = {};
       for (const e of graph.edges || []) routes[e.toReceiver] = e.fromSender;
       if (!slow || Date.now() - slow.at > SLOW_MS) {
-        const [layout, workflows, bq] = await Promise.all([
+        const [layout, workflows, bq, me] = await Promise.all([
           jgetOpt("/api/v1/layouts/default"),
           jgetOpt("/api/v1/workflows"),
           jgetOpt("/api/v1/layouts/xy-bouquets"),
+          jgetOpt("/api/v1/auth/whoami"),
         ]);
         slow = {
           at: Date.now(),
           groupTree: (layout && layout.groups) || { groups: {} },
           workflows: Array.isArray(workflows) ? workflows : [],
           bouquets: L()?.parseBouquets(bq) ?? [],
+          canSave: !!me && (me.canConfigure ?? me.isAdmin) === true,
         };
       }
       return {
@@ -105,7 +112,19 @@ export function coreIO(panelId = ""): XyIO {
         groupTree: slow.groupTree,
         workflows: slow.workflows,
         bouquets: slow.bouquets,
+        canSave: slow.canSave,
       };
+    },
+    async saveBouquet(b) {
+      const blob = (await jgetOpt("/api/v1/layouts/xy-bouquets")) ?? { version: 1, bouquets: [] };
+      const list = Array.isArray(blob.bouquets) ? blob.bouquets : [];
+      const r = await apiFetch("/api/v1/layouts/xy-bouquets", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...blob, version: blob.version ?? 1, bouquets: [...list, b] }),
+      });
+      if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
+      slow = null; // nächste Aktualisierung liest die Liste neu
     },
     async connect(from, to) {
       const r = await apiFetch("/api/v1/graph/edges", {
@@ -143,6 +162,12 @@ export function xyPanelAdapter(io: XyIO): StreamDeckAdapter & { onChange: () => 
     const from = st.sources.find((x) => x.id === st.selSrc), to = st.sinks.find((x) => x.id === st.selDst);
     if (!from || !to) return;
     if (!compatible(from, to)) return;
+    if (st.draft) {
+      // Aufzeichnung: Schaltung sammeln statt schalten (wie das Panel).
+      if (!st.draft.some((d) => d.from.id === from.id && d.to.id === to.id)) st.draft.push({ from, to });
+      st.selDst = null;
+      return;
+    }
     pushUndo([to.id]);
     await io.connect(from.id, to.id);
     st.selDst = null; // wie das Panel: Ziel nach dem Schalten freigeben
@@ -181,6 +206,16 @@ export function xyPanelAdapter(io: XyIO): StreamDeckAdapter & { onChange: () => 
     if (bad.length || plan.missing.length) {
       a.onError(new Error(`${b.name}: ${ok} geschaltet, nicht auffindbar/nicht schaltbar: ${[...plan.missing, ...bad].join("; ")}`));
     }
+  }
+
+  async function saveDraft() {
+    const d = st.draft;
+    if (!d || !d.length || !io.saveBouquet) return;
+    const now = new Date();
+    const name = `Deck ${now.toLocaleTimeString("de-DE", { hour12: false })}`;
+    await io.saveBouquet(L().routesBouquet(name, d.map(({ from, to }) => ({ from: withTags(from), to: withTags(to) }))));
+    st.draft = null;
+    await a.refresh();
   }
 
   async function doUndo() {
@@ -235,6 +270,9 @@ export function xyPanelAdapter(io: XyIO): StreamDeckAdapter & { onChange: () => 
         setSide(x.side, path.slice(0, -1));
       } else if (x.t === "bq") await runBouquet(x.id);
       else if (x.t === "undo") await doUndo();
+      else if (x.t === "rec") st.draft = [];
+      else if (x.t === "recDrop") st.draft = null;
+      else if (x.t === "recSave") await saveDraft();
       else if (x.t === "more") {
         const w = Math.max(1, Math.floor(((a.cols || 9) - 1) / 2));
         const n = x.what === "cat" ? topEntries(st, x.side).length : sideList(st, x.side).length;
@@ -263,11 +301,13 @@ export function xyPanelAdapter(io: XyIO): StreamDeckAdapter & { onChange: () => 
   const a = {
     cols: 0,
     rows: 0,
+    dials: 0,
     onChange: () => {},
     onError: (_e: unknown) => {},
     getLayout(ctx: LayoutContext): AdapterLayout {
       a.cols = ctx.cols;
       a.rows = ctx.rows;
+      a.dials = ctx.dials;
       st.undoSecs = undoSecs();
       last = layoutXy(st, ctx.cols, ctx.rows, ctx.dials, ctx.page);
       return last;
@@ -278,6 +318,15 @@ export function xyPanelAdapter(io: XyIO): StreamDeckAdapter & { onChange: () => 
       if (x) void run(x);
     },
     onDial(i: number, delta: number) {
+      // Ebenen: eigene Dials (4/5 am „+ XL“) oder Ebenen-Modus (Dial 1/2 am „+“)
+      const side = i === 4 ? "src" : i === 5 ? "dst" : st.levelMode && i < 2 ? (i === 0 ? "src" : "dst") : null;
+      if (side) {
+        const n = topEntries(st, side).length;
+        const key = side === "src" ? "srcCur" : "dstCur";
+        st[key] = Math.min(Math.max(0, n - 1), Math.max(0, (st[key] ?? 0) + (delta > 0 ? 1 : -1)));
+        a.onChange();
+        return;
+      }
       if (i === 0) st.selSrc = stepSelection(sideList(st, "src"), st.selSrc, delta);
       else if (i === 1) st.selDst = stepSelection(sideList(st, "dst"), st.selDst, delta);
       else if (i === 2) void run({ t: "media" });
@@ -285,8 +334,19 @@ export function xyPanelAdapter(io: XyIO): StreamDeckAdapter & { onChange: () => 
     },
     onDialPress(i: number, down: boolean) {
       if (!down) return;
-      if (i === 1) void run({ t: "take" });
-      else if (i === 3) void run({ t: "auto" });
+      const side = i === 4 ? "src" : i === 5 ? "dst" : st.levelMode && i < 2 ? (i === 0 ? "src" : "dst") : null;
+      if (side) {
+        const e = levelEntry(st, side);
+        if (e) {
+          if (side === "src") st.srcCur = 0;
+          else st.dstCur = 0;
+          void run(e.act);
+        }
+      } else if (i === 1) void run({ t: "take" });
+      else if (i === 2 && a.dials < 6) {
+        st.levelMode = !st.levelMode; // „+“: Dial 1/2 zwischen Auswahl und Ebenen umschalten
+        a.onChange();
+      } else if (i === 3) void run({ t: "auto" });
     },
     dispose() {
       clearTimeout(lastRunTimer);
@@ -304,6 +364,7 @@ export function xyPanelAdapter(io: XyIO): StreamDeckAdapter & { onChange: () => 
           st.dstPath = validPath(st.model, st.dstPath ?? []);
         }
         st.bouquets = d.bouquets ?? [];
+        st.canSaveBouquets = d.canSave === true && !!io.saveBouquet;
         if (st.selSrc && !st.sources.some((x) => x.id === st.selSrc)) st.selSrc = null;
         if (st.selDst && !st.sinks.some((x) => x.id === st.selDst)) st.selDst = null;
         a.onChange();

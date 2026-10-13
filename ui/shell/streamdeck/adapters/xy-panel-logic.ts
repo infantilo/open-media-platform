@@ -56,6 +56,14 @@ export interface XyState {
   undoSecs?: number;
   /** Zuletzt geschaltetes Bouquet (Anzeige): ID, Anzahl geschaltet, Anzahl Fehler. */
   lastRun?: { id: string; ok: number; bad: number } | null;
+  /** Ebenen-Cursor der Dials (Index in `topEntries`) je Seite; `levelMode`: Dial 1/2 steuern die Ebenen („+“ ohne Zusatz-Dials). */
+  srcCur?: number;
+  dstCur?: number;
+  levelMode?: boolean;
+  /** Aufzeichnung eines Bouquets: gesammelte Schaltungen statt sofort zu schalten; null/fehlt = aus. */
+  draft?: { from: Point; to: Point }[] | null;
+  /** true: Speichern möglich (Recht `configure` + Schnittstelle) → Bouquet-Seite auch ohne vorhandene Bouquets, Aufzeichnen-Tasten. */
+  canSaveBouquets?: boolean;
 }
 
 export type Side = "src" | "dst";
@@ -73,6 +81,9 @@ export type XyAction =
   | { t: "up"; side: Side }
   | { t: "bq"; id: string }
   | { t: "undo" }
+  | { t: "rec" }
+  | { t: "recSave" }
+  | { t: "recDrop" }
   | { t: "scroll"; row: "src" | "dst"; dir: 1 | -1 };
 
 const strip = (s: string) => String(s ?? "").replace(/\s*\([0-9a-f]{8}\)/g, "");
@@ -129,7 +140,7 @@ export interface XyLayout extends AdapterLayout {
 export function controlList(s: XyState): { key: KeyDef; act: XyAction }[] {
   const canTake = !!s.selSrc && !!s.selDst;
   return [
-    { key: { label: "TAKE", state: canTake ? "onair" : "off", dim: !canTake }, act: { t: "take" } },
+    { key: { label: "TAKE", sub: s.draft ? `● ${s.draft.length}` : undefined, state: canTake ? "onair" : "off", dim: !canTake }, act: { t: "take" } },
     { key: { label: "AUTO", sub: s.auto ? "an" : "aus", state: s.auto ? "preset" : "off" }, act: { t: "auto" } },
     { key: { label: "Medium", sub: MEDIA_LABEL[s.media] }, act: { t: "media" } },
     { key: { label: "Trennen", dim: !s.selDst }, act: { t: "disc" } },
@@ -279,22 +290,41 @@ function layoutColumns(s: XyState, cols: number, rows: number, dialCount: number
 
 // ---- Bouquet-Seiten ----------------------------------------------------------
 
-/** Plätze je Bouquet-Seite: alle Tasten außer „Seite weiter“ (unten rechts) und „Rückgängig“ (oben links). */
-export const bouquetCapacity = (cols: number, rows: number) => Math.max(1, cols * rows - 2);
-export const bouquetPages = (s: XyState, cols: number, rows: number) => ((s.bouquets?.length ?? 0) ? Math.ceil((s.bouquets!.length) / bouquetCapacity(cols, rows)) : 0);
+/** Aufzeichnen-Tasten brauchen Platz: ab 8 Tasten (alle außer Mini/„+“-Streifenmodelle mit 1 Zeile). */
+const hasRecCells = (s: XyState, cols: number, rows: number) => s.canSaveBouquets === true && cols * rows >= 8;
+/** Plätze je Bouquet-Seite: ohne „Seite weiter“ (unten rechts), „Rückgängig“ (0,0) und ggf. Aufzeichnen/Speichern/Verwerfen (0,1)/(0,2). */
+export const bouquetCapacity = (s: XyState, cols: number, rows: number) => Math.max(1, cols * rows - (hasRecCells(s, cols, rows) ? 4 : 2));
+export const bouquetPages = (s: XyState, cols: number, rows: number) => {
+  const n = s.bouquets?.length ?? 0;
+  // Zum Aufzeichnen muss die Bouquet-Seite auch ohne vorhandene Bouquets erreichbar sein.
+  return n ? Math.ceil(n / bouquetCapacity(s, cols, rows)) : hasRecCells(s, cols, rows) ? 1 : 0;
+};
 
 function bouquetLayout(s: XyState, cols: number, rows: number, dialCount: number, bqPage: number, pages: number): XyLayout {
   const keys: (KeyDef | null)[][] = Array.from({ length: rows }, () => Array(cols).fill(null));
   const act: (XyAction | null)[][] = Array.from({ length: rows }, () => Array(cols).fill(null));
-  const cap = bouquetCapacity(cols, rows);
+  const cap = bouquetCapacity(s, cols, rows);
+  const rec = hasRecCells(s, cols, rows);
   const list = s.bouquets ?? [];
   const hasDst = !!s.sinks.find((x) => x.id === s.selDst);
   keys[0][0] = { label: "↶ Zurück", sub: s.undoSecs ? `${s.undoSecs} s` : undefined, dim: !s.undoSecs };
   act[0][0] = { t: "undo" };
+  if (rec) {
+    if (s.draft) {
+      keys[0][1] = { label: "■ Speichern", sub: `${s.draft.length} Schaltung(en)`, state: "onair", dim: !s.draft.length };
+      act[0][1] = { t: "recSave" };
+      keys[0][2] = { label: "✕ Verwerfen" };
+      act[0][2] = { t: "recDrop" };
+    } else {
+      keys[0][1] = { label: "● Aufzeichnen", sub: "Take sammelt" };
+      act[0][1] = { t: "rec" };
+    }
+  }
+  const skip = (r: number, c: number) => (r === 0 && (c === 0 || (rec && c <= 2))) || (r === rows - 1 && c === cols - 1);
   let n = 0;
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      if ((r === 0 && c === 0) || (r === rows - 1 && c === cols - 1)) continue;
+      if (skip(r, c)) continue;
       const b = list[bqPage * cap + n++];
       if (!b) continue;
       const run = s.lastRun && s.lastRun.id === b.id ? s.lastRun : null;
@@ -311,14 +341,32 @@ function bouquetLayout(s: XyState, cols: number, rows: number, dialCount: number
   return { keys, act, dials: dialsFor(s, dialCount), pages };
 }
 
+/** Eintrag unter dem Ebenen-Cursor der Seite (Cursor wird auf die Liste begrenzt). */
+export function levelEntry(s: XyState, side: Side): { key: KeyDef; act: XyAction; index: number; count: number } | null {
+  const list = topEntries(s, side);
+  if (!list.length) return null;
+  const i = Math.min(Math.max(0, (side === "src" ? s.srcCur : s.dstCur) ?? 0), list.length - 1);
+  return { ...list[i], index: i, count: list.length };
+}
+
 function dialsFor(s: XyState, dialCount: number): (DialDef | null)[] {
   const dials: (DialDef | null)[] = [];
   if (dialCount > 0) {
     const ss = s.sources.find((x) => x.id === s.selSrc), sd = s.sinks.find((x) => x.id === s.selDst);
-    dials.push({ label: "Quelle", value: ss ? pointName(ss) : "–" });
-    if (dialCount > 1) dials.push({ label: "Ziel", value: sd ? pointName(sd) : "–" });
-    if (dialCount > 2) dials.push({ label: "Medium", value: MEDIA_LABEL[s.media] });
+    const lv = (side: Side, label: string): DialDef => {
+      const e = levelEntry(s, side);
+      return { label, value: e ? String(e.key.label) : "–", fill: e && e.count > 1 ? (e.index + 1) / e.count : undefined };
+    };
+    // Ebenen-Modus („+“ mit 4 Dials): Dial 1/2 steuern die Ebenen, Dial 3 zeigt den Modus.
+    dials.push(s.levelMode ? lv("src", "Ebene Q") : { label: "Quelle", value: ss ? pointName(ss) : "–" });
+    if (dialCount > 1) dials.push(s.levelMode ? lv("dst", "Ebene Z") : { label: "Ziel", value: sd ? pointName(sd) : "–" });
+    if (dialCount > 2) dials.push(s.levelMode ? { label: "Modus", value: "Ebene" } : { label: "Medium", value: MEDIA_LABEL[s.media] });
     if (dialCount > 3) dials.push({ label: "AUTO", value: s.auto ? "an" : "aus", dim: !s.auto });
+    // „+ XL“ (6 Dials): eigene Ebenen-Dials
+    if (dialCount > 5) {
+      dials.push(lv("src", "Ebene Q"));
+      dials.push(lv("dst", "Ebene Z"));
+    }
   }
   return dials;
 }
