@@ -209,6 +209,13 @@ Weitere Fehlerbilder: `docs/HANDBUCH.md` §8.
 
 ---
 
+### Stream Deck am Bedienplatz (optional)
+
+Ein **Stream Deck** wird vom **Browser** am Bedienplatz-Rechner gesteuert (WebHID, Chrome/Edge, `localhost` oder `https://`) — nicht vom OMP-Server. Unter
+Linux braucht der Benutzer dort Zugriff auf das HID-Gerät: `./install.sh --streamdeck-udev` (oder `make streamdeck-udev`, Vorschau mit
+`ARGS=--dry-run`, entfernen mit `ARGS=--remove`) legt dafür eine udev-Regel an (sudo); danach das Gerät einmal abziehen und wieder anstecken, die
+Herstellersoftware **schließen**. Verbinden und Belegung: `docs/BENUTZERHANDBUCH.md` §10g.
+
 ## 7. Manuelle Installation (ohne `install.sh`)
 
 ```sh

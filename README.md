@@ -442,10 +442,14 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   workflow editor, the start preview warns if a workflow has none
 - **Stream Deck control surface (browser, WebHID)** — a connected Stream Deck (XL, +, + XL, 15-key family) operates the node UIs of the operator
   console: top row = Home + one tab per open node, the rest belongs to the active node. Dedicated pages for the video mixer (PGM/PRE/CUT/AUTO/DSK/PIP),
-  the audio mixer (mute/PFL/select, EQ/dynamics/pan, dials on the "+") and the X/Y panel (take/auto/disconnect); every other node gets an
-  automatic grid from its descriptor. A key press calls exactly what the on-screen button calls; key colours follow the same state. A
-  browser simulator (`/streamdeck-sim`) works without hardware; Linux needs a udev rule on the operator PC (`make streamdeck-udev`).
-  Verified against the simulator and the real stack; not yet tried on the physical device
+  the audio mixer (mute/PFL/select, EQ/dynamics/pan with a live **EQ curve and compressor curve** across keys or the touch strip, dials on the "+" / "+ XL"),
+  the graphics node (OGraf: preset keys, take / take out / continue, on-air keys in red) and the X/Y panel (take/auto/disconnect); every other node
+  gets an automatic grid from its descriptor. A key press calls exactly what the on-screen button calls; key colours follow the same state. Key text wraps
+  and auto-sizes. A browser simulator (`/streamdeck-sim`, screenshots in the user manual §10g) works without hardware; Linux needs a udev rule on the operator PC
+  (`make streamdeck-udev`). Own nodes (also AI-built microservices) get a Stream Deck layout by a descriptor-only grid or by a `streamDeck` property on their UI element
+  (`docs/NODE-TUTORIAL.md`, "Stream-Deck-Belegung"). Verified against the simulator and the real stack; not yet tried on the physical device
+
+  ![Stream Deck XL (simulator): OGraf page with one graphic on air](docs/screenshots/streamdeck-xl-ograf-onair.png)
 - **omp-scope** — a passive measurement tap (taps a video and/or an
   audio flow, sends nothing itself): waveform/vectorscope, EBU R 128
   loudness with ITU-R BS.1770 true peak, held black/freeze/silence

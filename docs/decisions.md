@@ -30465,3 +30465,20 @@ Ausgang nie. (5) `setOutputDelay` addiert zur Tiefe statt den MXL-Schreibpfad (n
 Stall-Wächter baute anfangs wegen alter Zeitstempel alle 250 ms neu (Frist jetzt ab Neuaufbau, Wartezeit wächst bis 4 s); `omp-source`
 verschiebt nach einer Prozess-Pause seinen eigenen A/V-Versatz (~24 ms) — der Puffer gibt den Eingangs-Versatz 1:1 weiter.
 **Nicht umgesetzt:** komprimierter Pfad (Schritt 39.5), Testbild als Haltebild, Latenz im Katalog nur für 25 Bilder/s.
+
+## 2026-10-13 — Stream Deck als Browser-Bedienpult (Kapitel 40)
+
+**Auftrag** (Datei „Neue Features.txt“, Feature 2): Stream Deck (XL, „+“ vorhanden; später „+ XL“) ohne Hersteller-Treiber als Bedienpult der
+Operator-Konsole. **Entscheidungen:** (1) **WebHID im Browser**, kein Server-Dienst: das Gerät hängt am Bedienplatz-Rechner, die Taste ruft dieselbe
+Proxy-API auf wie der Mausklick (gleiche Rechte, gleiche Fehler); udev-Regel deshalb nur auf Anforderung (`--streamdeck-udev`), nicht im Standard-Install.
+(2) **Adapter in drei Stufen**: Eigenschaft `streamDeck` am Custom Element (auch für Fremd-Nodes ohne Repo-Zugriff) → testbare Shell-Fabrik nach
+Elementname → Auto-Raster aus dem Descriptor. (3) Layout-Logik als **reine Funktionen** mit Deno-Tests; das Bundle des Video-Mixers bietet nur
+`deckApi` (Zustand/Aufruf), weil sein Zustand in Closures eines Rust-eingebetteten Skripts liegt. (4) Render: Fingerprint je Taste, 60 ms Debounce,
+paralleles Rastern, serielles Senden (32 Tasten 154 ms im Headless-Test). (5) **Bilddrehung als Modelleigenschaft** (`rotation` 0/90/180):
+XL/15-Tasten 180°, „+“ keine, „+ XL“ 90° gegen den Uhrzeigersinn (auch Streifen-Teilbilder, Koordinaten bleiben logisch). (6) SELECT am Audio-Mixer
+öffnet die Detailseiten mit einem Druck; EQ-/Dynamik-Kurve als `plot` über mehrere Tasten bzw. den Streifen. (7) Home zeigt Tabs nicht doppelt.
+**Befunde unterwegs:** „Als Operator ansehen“ aktivierte die vorgewählte Rolle bei jedem 30-s-Refresh neu (Kachel neu geladen → Tab fiel auf Home) — behoben
+in `pickActiveEntry`; Kanten schalten verlangt `configure` global (reiner Operator → 403 am Panel wie am Deck); Resolver `consoles` vergleicht `subject`
+mit dem **Benutzernamen**; der 1,5-s-Takt stapelte bei hängenden Anfragen (Browser-Verbindungslimit) — jetzt nicht gestapelt, 8-s-Limit.
+**Nicht am Gerät geprüft:** Bilddrehung „+“/„+ XL“, USB-Dauer, Wiederverbinden, Dial-Drehsinn, Reset/Logo. **Nicht umgesetzt:** Feldwerte der Grafik am Deck,
+X/Y-Ebenen, T-Bar/Wipes, Pegelanzeige auf Tasten, Neo/Mini/MK.1, mehrere Geräte.

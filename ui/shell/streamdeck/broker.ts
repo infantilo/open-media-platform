@@ -158,12 +158,23 @@ export class DeckBroker {
     for (const [i, d] of this.#dials.take()) act?.adapter?.onDial?.(i, d);
   }
 
+  #refreshing = false;
+
   async #refresh() {
+    // Nicht stapeln: hängt eine Anfrage (Verbindungslimit des Browsers, langsamer Node), kommt der nächste Takt nicht obendrauf.
+    if (this.#refreshing) return;
     const act = this.#active ? this.#tabs.get(this.#active) : undefined;
+    this.#refreshing = true;
     try {
-      await act?.adapter?.refresh?.();
+      // Höchstens 8 s warten, damit eine hängende Anfrage den Takt nicht dauerhaft blockiert.
+      await Promise.race([
+        Promise.resolve(act?.adapter?.refresh?.()),
+        new Promise<void>((res) => setTimeout(res, 8000)),
+      ]);
     } catch (e) {
       this.onError(e);
+    } finally {
+      this.#refreshing = false;
     }
   }
 

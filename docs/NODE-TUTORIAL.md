@@ -22,7 +22,8 @@ du `omp_node_sdk::run()`/`start()` aufrufst:
    [`ParamStore`](../nodes/omp-node-sdk/src/server.rs)-Trait, SDK liefert
    ihn über `GET /descriptor.json` aus.
 3. **`/ui/manifest.json` + `/ui/bundle.js`** — optional, nur falls dein
-   Node eine eigene UI mitbringt (§4.5, hier nicht behandelt).
+   Node eine eigene UI mitbringt (§4.5; Kurzanleitung unten:
+   [„Eigene Bedienoberfläche“](#eigene-bedienoberfläche-uibundlejs)).
 4. **Media-I/O über MXL/ST 2110** — nur relevant, wenn dein Node
    tatsächlich Audio/Video verarbeitet (Schritt 4 unten).
 5. **Eigenständiger, unabhängig neustartbarer Prozess** — dein `main()`.
@@ -446,6 +447,13 @@ sinnvoll sind — das musst du liefern. Vor dem Prompt kurz festlegen:
    das generische Parameter-Panel (Default, kein Zusatzaufwand).
 6. **Weg 1 oder Weg 2** (oben) — und bei Weg 2 zusätzlich die Zielsprache/
    das Ziel-Framework.
+7. **Bedienung am Stream Deck?** Soll der Node auch am Stream Deck
+   (Hardware-Pult, `docs/BENUTZERHANDBUCH.md` §10g) bedienbar sein, sag der KI
+   *welche Funktionen auf Tasten* gehören (z. B. „Take, Take Out, Continue,
+   Vorlagenwahl“), *welche Zustände auf der Taste sichtbar sein müssen*
+   (z. B. „läuft = rot“) und ob Drehregler (Dials) etwas einstellen sollen.
+   Wie das technisch geht, steht im Abschnitt
+   [„Stream-Deck-Belegung“](#stream-deck-belegung-für-einen-eigenen-node).
 
 ### Beispiel-Prompt (Weg 1, natives Rust-Crate)
 
@@ -529,6 +537,217 @@ tatsächliche Abnahme, nicht die Selbsteinschätzung der KI — beide
 Beispiel-Prompts enden deshalb bewusst mit der Aufforderung, das Ergebnis
 selbst gegen den echten Check laufen zu lassen, statt "PASS" zu
 behaupten.
+
+## Eigene Bedienoberfläche (`ui/bundle.js`)
+
+Ein Node ohne eigene Oberfläche bekommt automatisch das **generische
+Parameter-Panel** aus dem Descriptor (jeder Parameter ein Regler/Schalter,
+jede Methode ein Knopf). Reicht das nicht (Beispiele: Videomischer,
+Grafik-Steuerung, Audiomischer), liefert der Node selbst eine Oberfläche aus:
+
+- `GET /ui/manifest.json` → `{"name": "omp-meinnode-panel", "version": "0.1.0", "tag": "omp-meinnode-panel"}`
+  (optional `"ownsPreview": true`, wenn die Oberfläche das Vorschaubild
+  selbst groß zeigt).
+- `GET /ui/bundle.js` → ein **ES-Modul**, das ein **Custom Element** mit genau
+  diesem Tag-Namen definiert (`customElements.define("omp-meinnode-panel", …)`).
+
+Die Shell lädt das Modul, legt das Element an und setzt das Attribut
+`node-id` (die NMOS-Node-ID). Alle Aufrufe gehen über den Orchestrator-Proxy
+`/api/v1/nodes/<node-id>/…` — **dieselben** Endpunkte wie bei jedem anderen
+Aufrufer: `GET /params/<name>`, `PATCH /params/<name>` (Body `{"value": …}`),
+`POST /methods/<name>` (Body = Argumente als JSON). Sprache und Farben
+kommen aus der Shell (`document.documentElement.lang`, CSS-Variablen
+`--omp-*` aus `ui/design-tokens.css`) — keine festen Hex-Farben verwenden.
+
+Im Rust-SDK bindet man die zwei Dateien mit `include_str!` ein und liefert sie
+aus `route()` aus (Muster: `nodes/omp-ograf/src/uibundle.rs`) — **nach jeder
+Änderung am Bundle neu bauen**, sonst läuft die alte Fassung. Ein Container-Node
+(Weg 2) liefert die beiden Pfade einfach als statische Dateien aus.
+
+Minimalbeispiel:
+
+```js
+// ui/bundle.js
+class MeinPanel extends HTMLElement {
+  connectedCallback() {
+    this.nodeId = this.getAttribute("node-id");
+    const root = this.attachShadow({ mode: "open" });
+    const btn = document.createElement("button");
+    btn.textContent = "Start";
+    btn.onclick = () =>
+      fetch(`/api/v1/nodes/${this.nodeId}/methods/start`, { method: "POST" });
+    root.append(btn);
+  }
+}
+customElements.define("omp-meinnode-panel", MeinPanel);
+```
+
+Hinweise aus der Praxis: Zustand alle 1–2 s per `GET /params/…` nachladen
+(und/oder Ereignisse aus `/api/v1/events` nutzen); nach jeder Änderung des
+Bundles `node --check ui/bundle.js` laufen lassen (ein Backtick in einem
+CSS-Kommentar innerhalb eines Template-Literals zerstört sonst das ganze
+Bundle); Texte in Deutsch **und** Englisch (s. Abschnitt „Mehrsprachige
+Node-Oberfläche“ unten).
+
+## Stream-Deck-Belegung für einen eigenen Node
+
+Die Operator-Konsole kann ein **Stream Deck** (XL, +, + XL, 15-Tasten-Modelle)
+als Hardware-Pult betreiben (`docs/BENUTZERHANDBUCH.md` §10g,
+`docs/ENTWURF-STREAMDECK.md`). Das Gerät hängt am **Browser** (WebHID), nicht am
+Node: Eine Taste ruft dieselbe Proxy-API auf wie ein Mausklick. Ein Node
+braucht deshalb **keinen Treiber und keinen USB-Code** — er entscheidet nur,
+*was auf den Tasten steht und was sie auslösen*. Es gibt drei Stufen, vom
+einfachsten zum aufwendigsten:
+
+![Stream Deck XL mit dem OGraf-Adapter: Vorlagen als Tasten, Steuerzeile unten, eine Grafik on air](screenshots/streamdeck-xl-ograf-onair.png)
+
+### Stufe 0 — nichts tun: das Auto-Raster
+
+Hat ein Node keinen eigenen Adapter, erzeugt die Shell ein Raster **aus dem
+Descriptor** (`GET /descriptor.json`):
+
+| Descriptor | Wird am Deck |
+|---|---|
+| schreibbarer Parameter `boolean` | **Umschalter-Taste** (an = rot) |
+| schreibbarer Parameter `enum` mit `values` | **Taste, die den nächsten Wert wählt** (Wert steht darunter) |
+| Methode **ohne Argumente** | **Starttaste** (▶) |
+| schreibbarer `number` mit `min`/`max` | **Dial** (nur „+“ / „+ XL“; Schrittweite ≈ 1 % des Bereichs) |
+| `readonly`-Parameter, Methoden mit Argumenten | nicht belegt |
+
+Wer einen Node mit einer KI bauen lässt und Stream-Deck-Bedienung will, aber
+keine eigene Belegung braucht, **entwirft den Descriptor deshalb deckfreundlich**:
+sprechende Parameternamen (`mute`, `take`, `fadeTime`), Wertebereiche bei
+Zahlen, für jede Aktion, die auf eine Taste soll, eine **Methode ohne Argumente**
+(z. B. `take`, `takeOut`, `continue`) statt einer Methode mit Pflichtargument, und
+Zustände als `readonly`-Parameter (wegen der Anzeige auf der Bildschirm-UI).
+
+### Stufe 1 — Eigenschaft `streamDeck` am Custom Element (auch für Container-Nodes)
+
+Für eine **richtige Belegung** (Vorlagenraster, Statusfarben, Blättern) stellt das
+Custom Element der eigenen Oberfläche (oben) die Eigenschaft `streamDeck`
+bereit. Das geht in **jedem** Node mit eigenem `bundle.js`, auch bei Weg 2 —
+ohne Zugriff auf dieses Repo. Die Shell fragt sie ab, sobald der Tab am Gerät
+aktiv wird:
+
+```js
+class MeinPanel extends HTMLElement {
+  // … connectedCallback wie oben …
+
+  get streamDeck() {
+    if (this._deck) return this._deck;
+    const el = this;
+    const call = (m, body) =>
+      fetch(`/api/v1/nodes/${el.nodeId}/methods/${m}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
+      });
+    const deck = {
+      onChange: () => {},        // die Shell setzt diese Funktion; bei Änderungen aufrufen
+      onError: (e) => {},        // die Shell setzt sie; Fehler melden statt schlucken
+      running: false,
+      // ctx: { cols, rows (Zeilen UNTER der Kopfzeile), dials, page }
+      getLayout(ctx) {
+        const keys = Array.from({ length: ctx.rows }, () => Array(ctx.cols).fill(null));
+        keys[0][0] = { label: "START", state: deck.running ? "onair" : "preset" };
+        keys[0][1] = { label: "STOP", sub: deck.running ? "läuft" : "", dim: !deck.running };
+        return { keys, dials: [{ label: "Pegel", value: "−6 dB", fill: 0.7 }], pages: 1 };
+      },
+      onKey(row, col, down) {
+        if (!down) return;                        // nur Tastendruck, nicht Loslassen
+        if (row === 0 && col === 0) call("start").catch(deck.onError);
+        if (row === 0 && col === 1) call("stop").catch(deck.onError);
+      },
+      onDial(i, delta) { /* delta = zusammengefasste Raststellungen, + = rechts */ },
+      onDialPress(i, down) {},
+      async refresh() {           // alle ~1,5 s, nur solange der Tab aktiv ist
+        const r = await fetch(`/api/v1/nodes/${el.nodeId}/params/running`);
+        deck.running = (await r.json()).value === true;
+        deck.onChange();
+      },
+    };
+    return (this._deck = deck);
+  }
+}
+```
+
+Die Schnittstelle (`ui/shell/streamdeck/adapter.ts`):
+
+- **`getLayout(ctx) → { keys, dials?, pages? }`** — `keys[zeile][spalte]` ist
+  `null` (leer) oder eine Tastenbeschreibung; `ctx.rows` zählt nur die Zeilen
+  **unter** der Kopfzeile (Home + Tabs gehören der Shell). Die Größe
+  kommt vom Gerät: nie feste Indizes annehmen, immer aus `ctx.cols/rows`
+  rechnen (XL: 8×3 Inhalt, „+ XL“: 9×3, „+“: 4×1 plus 4 Dials, 15 Tasten: 5×2).
+  `pages > 1` → die Shell belegt die **letzte Taste** unten rechts mit „⇄ n/m“;
+  der Adapter bekommt die aktuelle Seite in `ctx.page` und lässt diese Zelle frei.
+- **Taste** (`KeyDef`): `label` (kurz — der Text bricht um und wird bei Bedarf
+  kleiner), `sub` (kleine Zeile unten, z. B. Wert/„ON AIR“), `icon` (ein Zeichen
+  oben, z. B. „▶“), `state` (`"onair"` rot, `"preset"` grün, `"cue"` orange,
+  `"error"` Warnrot, `"off"` neutral — **Farben nie selbst wählen**, die kommen
+  aus den Design-Tokens), `dim` (gedimmt/nicht bedienbar).
+  Eine Taste, die nicht sinnvoll bedienbar ist, wird gedimmt, nicht entfernt.
+- **Dial** (`DialDef`, Anzeige im Touch-Streifen): `label`, `value` (fertig
+  formatierter Text), optional `fill` 0…1 (Balken), `dim`.
+- **`onKey(zeile, spalte, down)`**, **`onDial(i, delta)`**,
+  **`onDialPress(i, down)`** — Eingaben. Immer die **gleiche** Proxy-API wie die
+  Bildschirm-UI aufrufen (nie am Node vorbei); Fehler an `onError` geben.
+- **`refresh()`** — Zustand holen, danach `onChange()`. Die Shell ruft es etwa alle
+  1,5 s für den **aktiven** Tab auf (nicht gestapelt, mit 8-s-Zeitlimit).
+  Daten, die die Bildschirm-UI ohnehin lädt, nicht doppelt abfragen.
+- Zusätzlich darf das Element das DOM-Ereignis `omp-streamdeck-relayout`
+  (`bubbles: true`) auslösen, wenn sich sein Zustand ändert (Variante, wenn das
+  Bundle seinen Zustand selbst hält).
+
+Regeln: Texte kurz (Tasten sind 72–120 px groß), keine Hersteller-/Produktnamen
+in Beschriftungen, keine Farben/Hex-Werte, Text zweisprachig wie die übrige UI,
+Aktionen **idempotent** (zweimal „Take“ darf nichts kaputt machen). Rechte
+gelten wie bei der Maus: wer am Bildschirm nur ansehen darf, bekommt am Deck
+dieselbe 403-Meldung.
+
+### Stufe 2 — Adapter in der Shell (nur für Nodes in diesem Repo)
+
+Komplexe Belegungen (Mischer: Kanalstreifen, Detailseiten, Kurven) liegen als
+**testbare Logik in der Shell**: `ui/shell/streamdeck/adapters/<node>-logic.ts`
+(reine Funktion `layout(state, cols, rows, dials, page)` + Aktionstabelle,
+Deno-Test ohne Browser), `<node>.ts` (Zustand holen, Aktionen ausführen) und ein
+Eintrag in `adapters/index.ts` (Fabrik nach dem Elementnamen, z. B.
+`"omp-ograf-panel"`). Vorbild ist der OGraf-Adapter (`ograf-logic.ts`,
+`ograf.ts`, `ograf_test.ts`, ~250 Zeilen). Kurven (EQ/Dynamik) sind als
+`KeyDef.plot`/`DialDef.plot` über mehrere Tasten bzw. den Touch-Streifen
+möglich (`plot-logic.ts`, `plot-draw.ts`).
+
+![Audio-Mixer-Detailseite EQ am + XL: Kurve über Tasten und Touch-Streifen](screenshots/streamdeck-plusxl-audio-eq.png)
+
+### Ausprobieren ohne Gerät
+
+Die Konsole hat unten rechts (Board) bzw. unten links (Einzelansicht) den Knopf
+**Stream Deck**; darin **Simulator starten** und ein Modell wählen
+(XL, „+“, „+ XL“). Der Simulator zeigt die gerenderten Tastenbilder und gibt
+Klicks/Mausrad/Streifen als echte Geräteeingaben zurück — derselbe Weg wie am
+Gerät. Die Seite `/streamdeck-sim` ist dieselbe Komponente ohne Konsole. Für
+den Test eines **echten Geräts** (Drehung der Bilder, USB-Dauer) siehe
+`docs/BENUTZERHANDBUCH.md` §10g.
+
+### Prompt-Zusatz für die KI (Stream Deck)
+
+```
+Zusätzlich soll der Node am Stream Deck bedienbar sein. Lies dazu
+`docs/NODE-TUTORIAL.md`, Abschnitt „Stream-Deck-Belegung für einen eigenen
+Node“, und `ui/shell/streamdeck/adapter.ts`.
+
+Tasten (Zeile für Zeile, wie sie auf einem 8×3-Raster stehen sollen):
+- [z. B. Zeile 1: je Vorlage eine Taste (Name), gewählte Vorlage grün, laufende rot]
+- [z. B. Zeile 3: TAKE, TAKE OUT, CONTINUE, ALLE AUS; gedimmt, wenn nicht möglich]
+Zustände auf der Taste: [z. B. „on air = rot, Schritt n/m als Untertitel“].
+Dials („+“/„+ XL“): [z. B. Dial 1 wählt die Vorlage, Druck auf Dial 2 = Take].
+Welche Methode/welcher Parameter hinter jeder Taste liegt: [Liste].
+
+Umsetzung: [Weg 1: Adapter nach Stufe 2 mit Deno-Test nach dem Muster der
+OGraf-Dateien. / Weg 2: Eigenschaft `streamDeck` am Custom Element nach Stufe 1.]
+Nur die Proxy-API des Orchestrators verwenden, keine Hersteller- oder
+Produktnamen in Texten, Farben nur über `state`. Prüfe das Ergebnis im
+Simulator (Konsole → Stream Deck → Simulator starten) für XL, „+“ und „+ XL“.
+```
+
 
 ## Weiterführend
 

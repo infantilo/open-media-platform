@@ -1,6 +1,6 @@
 # Entwurf Kap. 40 — Stream Deck per WebHID (Schritt 40.1, 2026-10-13)
 
-Stand: Recherche + Schnittstellenfestlegung, **kein Code**. Plan: `UMSETZUNG.md` Kap. 40; Konzept: `END-GOAL-FEATURES.md` Kap. 8 (K8).
+Stand 40.1 (2026-10-13): Recherche + Schnittstellenfestlegung. **Umgesetzt** in Kap. 40.2–40.11 — Endstand in §7. Plan: `UMSETZUNG.md` Kap. 40; Konzept: `END-GOAL-FEATURES.md` Kap. 8 (K8).
 
 ## 1. Protokoll (belegt aus der offiziellen HID-Beschreibung des Herstellers, öffentliche HID-Dokumentation, abgerufen 2026-10-13)
 
@@ -92,3 +92,15 @@ Eingaben gehen nur an den aktiven Tab-Adapter.
 Die Adapter-Auflösung hat jetzt drei Stufen (`ui/shell/streamdeck/adapters/index.ts`): (1) das Element bringt selbst eine Eigenschaft `streamDeck` mit (§3, bleibt möglich);
 (2) das Bundle bietet nur `deckApi` ({ `state()`, `call(method, body)` }) plus das Relayout-Ereignis, und die Shell hält eine **Fabrik nach Elementname** mit Layout/Eingabe;
 (3) sonst Auto-Raster. Grund für (2): Bundle-Zustand liegt in Closures eines Rust-eingebetteten Skripts — die Layout-Logik gehört in die testbare Shell, das Bundle bleibt klein.
+
+## 7. Endstand der Umsetzung (Kap. 40.2–40.11, 2026-10-13)
+
+- **Modelle:** XL, XL 2022, 15-Tasten-Familie, „+“, „+ XL“ (`0x00C6`: 9×4, 112 px, 6 Dials, Streifen 1200×100, 90° gegen den Uhrzeigersinn; Quelle: Hersteller-HID-Seite).
+  Die Drehung ist eine Modelleigenschaft (`rotation` 0/90/180) für Tastenbilder **und** Streifen-Teilbilder; Teilbild-Koordinaten bleiben logisch.
+- **Adapter** (`ui/shell/streamdeck/adapters/`): Video-Mixer (`deckApi` im Bundle), Audio-Mixer (Mix-Seite, EQ/Dynamik/Pan; SELECT öffnet mit einem Druck;
+  Kurven über Tasten/Streifen), **OGraf** (Presets, TAKE/TAKE OUT/CONTINUE/ALLE AUS, On-Air rot), X/Y-Panel; sonst Auto-Raster. Auflösung: §6.
+- **Kopfzeile:** Home + Tabs; Home zeigt Tabs nicht doppelt (nur Überlauf darunter). **Text:** Umbruch und automatische Schriftgröße, „…“ nur im Notfall.
+- **Takt:** `refresh()` des aktiven Tabs alle 1,5 s, nicht gestapelt, 8-s-Limit; Änderungen über `onChange`/`omp-streamdeck-relayout`.
+- **Simulator** (`/streamdeck-sim`, im Konsolen-Panel) skaliert auf die Fensterbreite; Screenshots in `docs/screenshots/streamdeck-*.png`.
+- **Offen am Gerät:** Drehung „+“/„+ XL“ (Pfeil im Testraster oben?), USB-Dauer, Wiederverbinden, Dial-Drehsinn, Reset/Logo, udev auf dem Bedienrechner.
+- **Eigene Nodes:** Belegung per Descriptor (Auto-Raster) oder `streamDeck`-Eigenschaft — Anleitung samt KI-Prompt in `docs/NODE-TUTORIAL.md`.

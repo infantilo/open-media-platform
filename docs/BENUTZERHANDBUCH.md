@@ -986,9 +986,11 @@ und Stelle auf die reine Titelleiste zusammen, bleibt weiter verschiebbar
 gesamten sichtbaren Konsolenbereich; Maximieren einer anderen Kachel
 stellt die vorherige automatisch wieder her, es ist stets höchstens eine
 Kachel gleichzeitig maximiert). Ein Klick auf eine Kachel holt sie vor
-alle anderen. Oben rechts sorgt **„⊞ Alle anordnen"** dafür, dass alle
+alle anderen. In einem eigenen **Knopfstreifen** oberhalb der Kacheln (er
+überdeckt keine Fensterknöpfe) sorgt **„⊞ Alle anordnen"** dafür, dass alle
 Kacheln wieder in einem übersichtlichen Raster erscheinen und
-minimierte Kacheln dabei wieder aufklappen. Position, Größe,
+minimierte Kacheln dabei wieder aufklappen; daneben öffnet **„Stream Deck"**
+das Stream-Deck-Panel (Abschnitt 10g). Position, Größe,
 Minimiert-Zustand und Reihenfolge werden pro Regieplatz im Browser
 gespeichert und bleiben über einen Seiten-Reload hinweg erhalten —
 passend zu einem fest installierten Regieplatz-Bildschirm, an dem stets
@@ -1430,45 +1432,87 @@ sind pro Workflow fest (Standard 2 Kanäle, 48 kHz).
 
 ## 10g. Stream Deck als Bedienpult (Tasten, Dials, Streifen)
 
-Ein angeschlossenes **Stream Deck** (getestet vorgesehen: XL mit 32 Tasten, „+“ mit 8 Tasten, 4 Dials und Touch-Streifen sowie „+ XL“ mit 36 Tasten, 6 Dials und Touch-Streifen) bedient
-dieselben Node-Oberflächen wie die Maus — jede Taste ruft genau den Befehl auf, den auch der Bildschirmknopf auslöst, und zeigt denselben
-Zustand (on-air rot, Preset grün, Cue orange).
+Ein angeschlossenes **Stream Deck** bedient dieselben Node-Oberflächen wie die Maus — jede Taste ruft genau den Befehl auf, den auch der
+Bildschirmknopf auslöst, und zeigt denselben Zustand (on-air rot, Preset grün, Cue orange). Unterstützt sind **XL** (8×4 Tasten), **„+“**
+(4×2 Tasten, 4 Dials, Touch-Streifen), **„+ XL“** (9×4 Tasten, 6 Dials, Touch-Streifen) und die 15-Tasten-Modelle. Die Screenshots
+unten stammen aus dem **Simulator** mit dem Workflow „MINI REGIEPLATZ“ (Bildmischer, Audiomischer, Grafik, Quellen, Viewer, Audio-Monitor,
+Kamera-Gateway) — die Tasten zeigen, was ein echtes Gerät zeigt.
+
+![Operator-Konsole mit dem Workflow MINI REGIEPLATZ: acht Kacheln, oben rechts „Alle anordnen“ und „Stream Deck“](screenshots/operator-konsole-mini.png)
 
 **Voraussetzungen:** Chrome oder Edge am Desktop (Firefox/Safari bieten kein WebHID), die Seite über `https://` oder `localhost`,
 die Herstellersoftware des Geräts **geschlossen** (sie hält das Gerät exklusiv). Unter Linux einmalig am Bedienplatz-Rechner
 (dort, wo das Gerät steckt und der Browser läuft — nicht zwingend der OMP-Server):
 `make streamdeck-udev` (oder `./install.sh --streamdeck-udev`), danach das Gerät einmal abziehen und wieder anstecken.
 
-**Verbinden:** in der Operator-Konsole unten rechts bzw. (eine Rolle) unten links auf **Stream Deck** klicken → **Echtes Gerät verbinden**,
-im Browser-Dialog das Gerät wählen. Nach dem ersten Freigeben verbindet sich das Gerät beim Wiederanstecken selbst. Fehler
-(Berechtigung abgelehnt, Browser ohne WebHID, Modell nicht unterstützt, Gerät belegt) erscheinen im Panel. **Simulator starten** zeigt
-ein virtuelles Gerät im Browser (zum Ausprobieren ohne Hardware); **Testraster senden** und **Render-Test** prüfen das Gerät.
+**Verbinden:** in der Operator-Konsole auf **Stream Deck** klicken (Kachel-Ansicht: im Knopfstreifen oben rechts neben „Alle anordnen“;
+Einzelansicht mit einer Rolle: unten links) → **Echtes Gerät verbinden**, im Browser-Dialog das Gerät wählen. Nach dem ersten Freigeben
+verbindet sich das Gerät beim Wiederanstecken selbst. Fehler (Berechtigung abgelehnt, Browser ohne WebHID, Modell nicht unterstützt, Gerät
+belegt) erscheinen im Panel. **Simulator starten** zeigt ein virtuelles Gerät im Browser (zum Ausprobieren ohne Hardware; Modell im Menü wählen,
+das Bild passt sich der Fensterbreite an); **Testraster senden** (Pfeil nach oben + Nummer je Taste — damit sieht man, ob die Bilder richtig herum
+stehen) und **Render-Test** prüfen das Gerät.
 
-**Aufbau:** Die oberste Tastenreihe ist immer gleich: Taste 1 **Home** (Startseite; die Tabs stehen nur in dieser Reihe, bei Überlauf zusätzlich darunter), danach je geöffneter
-Kachel ein **Tab** (aktiver Tab grün; mehr Tabs als Tasten → letzte Taste „⇄“ blättert). Ein Tabwechsel am Gerät holt die Kachel am
-Bildschirm nach vorn und umgekehrt. Alles darunter gehört dem aktiven Tab. Ist eine Seite zu klein, belegt die **letzte Taste unten rechts**
-„⇄ n/m“ zum Blättern (am „+“ auch Wischen am Streifen).
+![Stream-Deck-Panel (Simulator, XL) über der Konsole; der Tab „video-mixer-me“ ist aktiv](screenshots/streamdeck-konsole.png)
 
-* **Video-Mixer M/E:** Zeile 1 = **PGM** (direkt auf Sendung), Zeile 2 = **PRE** (Vorschau), Zeile 3 = **CUT**, **AUTO**, **DSK**, Übergangstyp (weiter),
-  Rate (weiter) und die PIP-Voreinstellungen (Umschalter). Kleinere Geräte zeigen PGM/PRE/Steuerung nacheinander als Seiten. Nur die Master-Ebene.
-* **Audio-Mixer:** je Kanal eine Spalte mit **MUTE**, **PFL** und **SELECT** (Pegel in dB auf der SELECT-Taste). SELECT am
-  Kanal öffnet mit **einem Druck** die Detailseiten **EQ** (4 Bänder, Bypass), **Dynamik** (Kompressor, Gate) und **Pan** (Phase, Hauptmix);
-  Parameter anwählen und mit −/+/−−/++ ändern. Rechts neben den Tasten (XL, + XL) bzw. auf dem Touch-Streifen („+“, + XL) zeigt eine **Kurve** den
-  EQ-Frequenzgang (Bandpunkte, fokussiertes Band hell) bzw. die Dynamik-Kennlinie (Kompressor, Gate-Schwelle gestrichelt); sie folgt den Werten live. Am „+“ stellen die **Dials** den Pegel bzw. den Detail-Parameter, Drücken = Mute bzw. Schalter.
-* **X/Y-Panel:** Zeile 1 Quellen, Zeile 2 Ziele (zeigt die aktuell geschaltete Quelle), Zeile 3 **TAKE**, **AUTO** (schaltet sofort bei Auswahl beider Seiten),
-  **Medium** (Alle/Video/Audio/Daten), **Trennen** und Blättern. Unpassende Medien sind gedimmt. Am „+“ wählen die Dials Quelle und Ziel, Drücken auf das Ziel-Dial schaltet.
-  Schalten verlangt wie am Bildschirm das Recht zum Konfigurieren; ohne es meldet das Panel „forbidden“.
-* **Grafik (OGraf):** die Vorlagen („Presets“) als Tasten oben — Drücken wählt die Vorlage (grün), **on air stehende Grafiken sind rot** mit „ON AIR“ (bei mehrstufigen
-  Vorlagen mit Schritt „2/3“). Untere Zeile: **TAKE** (zeigt die gewählte Vorlage mit ihren Standardwerten), **TAKE OUT** (blendet die gewählte aus),
-  **CONTINUE** (nächster Schritt, zeigt „2/3“) und **ALLE AUS** (blendet alles aus, zeigt die Anzahl on air). Viele Vorlagen blättern über „⇄ n/m“.
-  Am „+“ / „+ XL“: erste Seite = Steuertasten, danach die Presets; Dial 1 wählt die Vorlage, Dial-Druck auf Dial 2 = TAKE/OUT, Dial 3 = CONTINUE, Dial 5 = ALLE AUS;
-  die Anzeigen zeigen Auswahl und die Namen der Grafiken on air. Feldwerte lassen sich am Gerät nicht bearbeiten (am Bildschirm vorbereiten ist nicht nötig:
-  TAKE nimmt die Standardwerte).
-* **Alle anderen Nodes:** ein **Auto-Raster** — jeder schreibbare Ein/Aus-Parameter und jede Auswahl wird eine Taste, Methoden ohne Argumente eine Starttaste,
-  Zahlen mit Bereich werden am „+“ zu Dials.
+**Aufbau:** Die oberste Tastenreihe ist immer gleich: Taste 1 **Home** (Startseite; die Tabs stehen nur in dieser Reihe, bei Überlauf
+zusätzlich darunter), danach je geöffneter Kachel ein **Tab** (aktiver Tab grün; mehr Tabs als Tasten → letzte Taste „⇄“ blättert). Ein
+Tabwechsel am Gerät holt die Kachel am Bildschirm nach vorn und umgekehrt. Alles darunter gehört dem aktiven Tab. Ist eine Seite zu klein,
+belegt die **letzte Taste unten rechts** „⇄ n/m“ zum Blättern (am „+“ / „+ XL“ auch Wischen am Streifen). Tastentexte brechen um und
+werden bei langen Namen kleiner; nur wenn auch die kleinste Schrift nicht reicht, wird mit „…“ gekürzt.
 
-**Grenzen:** ein Gerät je Browser-Sitzung; Neo, Mini und Ur-Modell sind nicht eingebaut. Pegelanzeigen gibt es nicht auf den Tasten.
-Das Gerät wird nur im geöffneten Browser-Tab bedient (kein Hintergrunddienst).
+![Startseite (Home) am XL: alle geöffneten Node-Oberflächen als Tabs in der obersten Reihe](screenshots/streamdeck-xl-home.png)
+
+### Video-Mixer M/E
+
+Zeile 1 = **PGM** (direkt auf Sendung, rot), Zeile 2 = **PRE** (Vorschau, grün), Zeile 3 = **CUT**, **AUTO**, **DSK**, Übergangstyp (weiter),
+Rate (weiter) und die PIP-Voreinstellungen (Umschalter). Kleinere Geräte zeigen PGM/PRE/Steuerung nacheinander als Seiten. Nur die Master-Ebene.
+
+![Video-Mixer am XL: PGM, PRE und die Steuerzeile](screenshots/streamdeck-xl-videomixer.png)
+
+### Audio-Mixer
+
+Je Kanal eine Spalte mit **MUTE**, **PFL** und **SELECT** (Pegel in dB auf der SELECT-Taste). SELECT öffnet mit **einem Druck** die Detailseiten
+des Kanals: **EQ** (4 Bänder, Bypass), **Dynamik** (Kompressor, Gate) und **Pan** (Phase, Hauptmix); „◀ Mix“ führt zurück. Parameter anwählen und mit
+−/+/−−/++ ändern. Am „+“ und „+ XL“ stellen die **Dials** den Pegel bzw. den Detail-Parameter, Drücken = Mute bzw. Schalter.
+
+![Audio-Mixer am XL, Mix-Seite: MUTE, PFL und SELECT je Kanal](screenshots/streamdeck-xl-audiomixer.png)
+
+Rechts neben den Bedientasten (XL, + XL) bzw. auf dem Touch-Streifen („+“, + XL) zeigt eine **Kurve** den EQ-Frequenzgang (Punkte = Bänder,
+das fokussierte Band ist ausgefüllt, bei Bypass grau) bzw. die Dynamik-Kennlinie (Kompressor mit Schwelle, Verhältnis, Knie und Makeup; die
+Gate-Schwelle gestrichelt). Die Kurve folgt den Werten live.
+
+![EQ-Seite am XL: Kurve über 3×3 Tasten](screenshots/streamdeck-xl-audio-eq.png)
+![Dynamik-Seite am XL: Kompressor-Kennlinie](screenshots/streamdeck-xl-audio-dyn.png)
+![EQ-Seite am + XL: Kurve über 4×3 Tasten und zusätzlich auf dem Touch-Streifen mit den Dial-Werten](screenshots/streamdeck-plusxl-audio-eq.png)
+![EQ-Seite am „+“: Kurve hinter den vier Dial-Anzeigen](screenshots/streamdeck-plus-audio-eq.png)
+
+### Grafik (OGraf)
+
+Die Vorlagen („Presets“) stehen als Tasten oben — Drücken wählt die Vorlage (grün); **on air stehende Grafiken sind rot** und tragen „ON AIR“
+(bei mehrstufigen Vorlagen mit Schritt „2/3“). Untere Zeile: **TAKE** (zeigt die gewählte Vorlage mit ihren Standardwerten), **TAKE OUT**
+(blendet die gewählte aus), **CONTINUE** (nächster Schritt, zeigt „2/3“) und **ALLE AUS** (blendet alles aus, zeigt die Anzahl on air).
+Viele Vorlagen blättern über „⇄ n/m“. Am „+“ / „+ XL“ liegen die Steuertasten auf der ersten Seite, danach die Presets; Dial 1 wählt die
+Vorlage, Drücken auf Dial 2 = TAKE bzw. TAKE OUT, Dial 3 = CONTINUE, Dial 5 = ALLE AUS; die Anzeigen zeigen Auswahl und die Namen der laufenden
+Grafiken. Feldwerte (Texte der Grafik) lassen sich am Gerät nicht bearbeiten — TAKE nimmt die Standardwerte der Vorlage.
+
+![OGraf am XL: eine Grafik steht on air (rot), TAKE OUT und ALLE AUS sind scharf](screenshots/streamdeck-xl-ograf-onair.png)
+![OGraf am + XL: Presets, Steuerzeile und Dial-Anzeigen](screenshots/streamdeck-plusxl-ograf.png)
+
+### X/Y-Panel (Kreuzschiene)
+
+Zeile 1 Quellen, Zeile 2 Ziele (zeigt die aktuell geschaltete Quelle), Zeile 3 **TAKE**, **AUTO** (schaltet sofort bei Auswahl beider Seiten),
+**Medium** (Alle/Video/Audio/Daten), **Trennen** und Blättern. Unpassende Medien sind gedimmt. Am „+“ wählen die Dials Quelle und Ziel, Drücken auf
+das Ziel-Dial schaltet. Schalten verlangt wie am Bildschirm das Recht zum Konfigurieren; ohne es meldet das Panel „forbidden“.
+
+### Alle anderen Nodes
+
+Ein **Auto-Raster** aus dem Descriptor — jeder schreibbare Ein/Aus-Parameter und jede Auswahl wird eine Taste, Methoden ohne Argumente eine
+Starttaste, Zahlen mit Bereich werden am „+“ / „+ XL“ zu Dials. Eigene Nodes bekommen mit wenig Aufwand eine richtige Belegung:
+[`NODE-TUTORIAL.md`](NODE-TUTORIAL.md), Abschnitt „Stream-Deck-Belegung für einen eigenen Node“.
+
+**Grenzen:** ein Gerät je Browser-Sitzung; Neo, Mini und Ur-Modell sind nicht eingebaut. Pegelanzeigen gibt es nicht auf den Tasten. Das Gerät
+wird nur im geöffneten Browser-Tab bedient (kein Hintergrunddienst). **Noch nicht am echten Gerät geprüft** (nur Simulator und echter Stack): Drehung
+der Bilder beim „+“ und „+ XL“, USB-Dauer, Wiederverbinden, Dial-Drehsinn — Prüfliste am Ende von `UMSETZUNG.md`.
 
 ## 11. Weiterführende Dokumente
 
