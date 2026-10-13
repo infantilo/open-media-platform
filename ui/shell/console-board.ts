@@ -19,7 +19,6 @@
 import { t } from "./i18n.ts";
 import "./upcoming.ts";
 import { mountUIBundleEl } from "./ui-bundle.ts";
-import { createDeckToggle } from "./streamdeck/panel.ts";
 import { deckSession } from "./streamdeck/session.ts";
 import type { ConsoleEntry } from "./console-view.ts";
 import {
@@ -105,10 +104,6 @@ export class ConsoleBoard extends HTMLElement {
     arrangeBtn.addEventListener("click", () => this.#retileAll());
     toolbar.appendChild(arrangeBtn);
 
-    // Stream Deck (Kap. 40.4): Verbindung/Simulator in einem einklappbaren Panel.
-    const deck = createDeckToggle(arrangeBtn.style.cssText + "margin-left:6px;");
-    toolbar.appendChild(deck.button);
-    this.appendChild(deck.panel);
     deckSession.focusRequest = (id) => {
       if (id !== null && this.#tiles.has(id)) this.#bringToFront(id);
     };
@@ -126,6 +121,8 @@ export class ConsoleBoard extends HTMLElement {
 
   disconnectedCallback() {
     this.#resizeObserver?.disconnect();
+    // Das Gerät gehört der App (bleibt beim Tab-Wechsel verbunden), die Kacheln dieser Ansicht nicht.
+    for (const id of this.#tiles.keys()) deckSession.unregisterTab(id);
   }
 
   // Muss vor dem ersten setEntries()-Aufruf gesetzt sein — bestimmt den

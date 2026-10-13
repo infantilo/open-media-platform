@@ -8,6 +8,7 @@
 // Ansicht gemountet (shell.ts) — Console-Ansicht (§14) bleibt unverändert
 // Vollfläche ohne jede Chrome, wie schon vor diesem Schritt.
 import "../graph/flow-canvas.ts";
+import { createDeckToggle } from "./streamdeck/panel.ts";
 import type { FlowCanvas } from "../graph/flow-canvas.ts";
 import "./hosts-view.ts";
 import "./workflows-view.ts";
@@ -324,6 +325,14 @@ class AppShell extends HTMLElement {
     pill.style.cssText = "font-size:var(--omp-font-size-xs);";
     this.#pillEl = pill;
     right.appendChild(pill);
+    // Stream Deck (Kap. 40): Verbindung/Simulator gehört der App, nicht einer Ansicht — das Gerät bleibt
+    // beim Tab-Wechsel verbunden (Konsole ⇄ Flow-Editor), die Tabs des Brokers wechseln mit der Ansicht.
+    const deck = createDeckToggle(
+      "padding:2px 8px;border:1px solid var(--omp-border);border-radius:var(--omp-radius);" +
+        "background:var(--omp-surface-raised);color:var(--omp-text);cursor:pointer;font-size:var(--omp-font-size-xs);",
+    );
+    deck.button.setAttribute("data-role", "deck-toggle");
+    right.appendChild(deck.button);
     right.appendChild(buildLangSelect());
 
     bar.append(left, right);
@@ -341,7 +350,7 @@ class AppShell extends HTMLElement {
     const alertBar = document.createElement("omp-alert-bar");
     alertBar.addEventListener("omp-open-alarms", () => this.#switchTab("alarms"));
 
-    this.replaceChildren(bar, banner, content, alertBar);
+    this.replaceChildren(bar, banner, content, alertBar, deck.panel);
     this.#bannerEl = banner;
     this.#contentEl = content;
   }

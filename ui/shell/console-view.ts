@@ -9,7 +9,6 @@
 import { t } from "./i18n.ts";
 import "./upcoming.ts";
 import { mountUIBundleEl } from "./ui-bundle.ts";
-import { createDeckToggle } from "./streamdeck/panel.ts";
 import { deckSession } from "./streamdeck/session.ts";
 import { pickActiveEntry } from "./console-logic.ts";
 import { hasPreviewUrl, bundleOwnsPreview, mountNodePreview, type MountedPreview } from "./node-preview.ts";
@@ -34,6 +33,10 @@ export interface ConsoleEntry {
 
 export class ConsoleView extends HTMLElement {
   #entries: ConsoleEntry[] = [];
+
+  disconnectedCallback() {
+    for (const e of this.#entries) deckSession.unregisterTab(e.nodeRoleId);
+  }
   #activeNodeRoleId: string | null = null;
   #tabs!: HTMLDivElement;
   #panel!: HTMLDivElement;
@@ -57,13 +60,8 @@ export class ConsoleView extends HTMLElement {
     this.#panel = document.createElement("div");
     this.#panel.style.cssText = "flex:1;min-height:0;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:12px;";
 
-    // Stream Deck (Kap. 40.4): kleiner Knopf unten links (oben säßen Mixer-Bedienelemente), Panel schwebt.
-    const deck = createDeckToggle(
-      "position:fixed;left:8px;bottom:8px;z-index:5;opacity:0.75;padding:4px 10px;border:1px solid var(--omp-border);" +
-        "border-radius:var(--omp-radius);background:var(--omp-surface-raised);color:var(--omp-text);cursor:pointer;font-size:var(--omp-font-size-sm);",
-    );
     this.style.position = "relative";
-    this.append(this.#tabs, this.#panel, deck.button, deck.panel);
+    this.append(this.#tabs, this.#panel);
     deckSession.focusRequest = (id) => {
       if (id !== null && id !== this.#activeNodeRoleId && this.#entries.some((e) => e.nodeRoleId === id)) void this.#activate(id);
     };

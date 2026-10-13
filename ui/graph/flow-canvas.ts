@@ -699,7 +699,7 @@ export class FlowCanvas extends HTMLElement {
 
   connectedCallback() {
     void whoami().then((w) => {
-      if (this.isConnected && w.canConfigure) deckSession.registerTab("flow-editor", "Flow", this, "");
+      if (this.isConnected && (w.canConfigure ?? w.isAdmin)) deckSession.registerTab("flow-editor", "Flow", this, "");
     }).catch(() => {});
     this.#buildSkeleton();
     document.addEventListener("keydown", this.#onKeyDown);
