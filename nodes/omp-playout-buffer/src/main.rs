@@ -1,5 +1,5 @@
-//! omp-playout-buffer (Kapitel 39): Failover-Puffer am Ende eines Workflow-Graphen. Liest einen
-//! MXL-Video- und einen MXL-Audio-Flow, hält eine konfigurierbare Tiefe (`bufferMs`, Standard 2,5 s)
+//! omp-playout-buffer (Kapitel 39): Failover-Puffer am Ende eines Workflow-Graphen. Liest einen oder
+//! mehrere MXL-Video- und MXL-Audio-Flows (Spuren, Anzahl zur Laufzeit änderbar), hält eine konfigurierbare Tiefe (`bufferMs`, Standard 2,5 s)
 //! vor und schreibt beides als eigene, nie abreißende MXL-Flows im festen Zielformat. Fällt der
 //! Vorgänger aus (Absturz, Umschalten, Standby-Übernahme), läuft der Ausgang erst aus dem Puffer,
 //! danach mit Standbild/Schwarz und Stille weiter — und setzt an der Wiederaufnahme mit neu
@@ -31,6 +31,8 @@ struct BufferReceiverControl {
     registry: RegistryClient,
     pipeline: pipeline::PipelineHandle,
     is_video: bool,
+    /// Spur (Index innerhalb von Bild bzw. Ton).
+    track: usize,
     connected_flow_id: Arc<Mutex<String>>,
 }
 
@@ -42,9 +44,9 @@ impl ReceiverControl for BufferReceiverControl {
                     Some(flow_id) => {
                         *self.connected_flow_id.lock().expect("lock poisoned") = flow_id.clone();
                         if self.is_video {
-                            self.pipeline.connect_video(flow_id);
+                            self.pipeline.connect_video(self.track, flow_id);
                         } else {
-                            self.pipeline.connect_audio(flow_id);
+                            self.pipeline.connect_audio(self.track, flow_id);
                         }
                     }
                     None => eprintln!("omp-playout-buffer: sender {sender_id} has no flow_id"),
@@ -54,23 +56,128 @@ impl ReceiverControl for BufferReceiverControl {
             _ => {
                 self.connected_flow_id.lock().expect("lock poisoned").clear();
                 if self.is_video {
-                    self.pipeline.disconnect_video();
+                    self.pipeline.disconnect_video(self.track);
                 } else {
-                    self.pipeline.disconnect_audio();
+                    self.pipeline.disconnect_audio(self.track);
                 }
             }
         }
     }
 }
 
+/// Obergrenzen der Spurzahl (Speicher wächst mit der Bildspurzahl: je Spur ein eigener Ring).
+const MAX_VIDEO_TRACKS: usize = 8;
+const MAX_AUDIO_TRACKS: usize = 16;
+
+/// Laufzeit-Daten einer Spur (Bild oder Ton): NMOS-Receiver (Eingang) + -Sender (Ausgang).
+struct TrackRt {
+    receiver_id: String,
+    sender_id: String,
+    /// Ausgangs-Flow.
+    flow_id: String,
+    connection: Arc<ReceiverConnection<BufferReceiverControl>>,
+    connected_flow_id: Arc<Mutex<String>>,
+}
+
+#[derive(Default)]
+struct Tracks {
+    video: Vec<TrackRt>,
+    audio: Vec<TrackRt>,
+}
+
+/// Vorab vergebene IDs einer Spur (Receiver, Sender, Ausgangs-Flow).
+struct TrackIds {
+    receiver: String,
+    sender: String,
+    flow: String,
+}
+
+fn new_ids() -> TrackIds {
+    TrackIds {
+        receiver: omp_node_sdk::idgen::new_v4(),
+        sender: omp_node_sdk::idgen::new_v4(),
+        flow: omp_node_sdk::idgen::new_v4(),
+    }
+}
+
+fn make_track(ids: TrackIds, is_video: bool, track: usize, registry: &RegistryClient, pipeline: &pipeline::PipelineHandle) -> TrackRt {
+    let connected = Arc::new(Mutex::new(String::new()));
+    let connection = Arc::new(ReceiverConnection::new(
+        ids.receiver.clone(),
+        BufferReceiverControl {
+            registry: registry.clone(),
+            pipeline: pipeline.clone(),
+            is_video,
+            track,
+            connected_flow_id: connected.clone(),
+        },
+    ));
+    TrackRt { receiver_id: ids.receiver, sender_id: ids.sender, flow_id: ids.flow, connection, connected_flow_id: connected }
+}
+
+/// Spurname wie im Flow-Editor: „Video“, „Video 2“, …
+fn track_name(kind: &str, index: usize) -> String {
+    if index == 0 { kind.to_string() } else { format!("{kind} {}", index + 1) }
+}
+
+#[derive(Clone)]
+struct Format {
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+    sample_rate: u32,
+    channels: u32,
+}
+
+fn sender_spec(t: &TrackRt, is_video: bool, index: usize, f: &Format) -> SenderSpec {
+    SenderSpec {
+        id: Some(t.sender_id.clone()),
+        transport: Some(TRANSPORT_MXL.to_string()),
+        flow: Some(if is_video {
+            FlowSpec::Video {
+                id: Some(t.flow_id.clone()),
+                frame_width: f.width,
+                frame_height: f.height,
+                grain_rate_numerator: f.fps_num,
+                grain_rate_denominator: f.fps_den,
+            }
+        } else {
+            FlowSpec::Audio {
+                id: Some(t.flow_id.clone()),
+                sample_rate_numerator: f.sample_rate,
+                channel_count: f.channels,
+                media_type: "audio/float32".to_string(),
+                bit_depth: 32,
+                source_id: None,
+            }
+        }),
+        label: Some(track_name(if is_video { "Video" } else { "Audio" }, index)),
+        ..Default::default()
+    }
+}
+
+fn receiver_spec(t: &TrackRt, is_video: bool, index: usize) -> ReceiverSpec {
+    ReceiverSpec {
+        id: Some(t.receiver_id.clone()),
+        transport: Some(TRANSPORT_MXL.to_string()),
+        media_types: Some(vec![if is_video { "video/v210" } else { "audio/float32" }.to_string()]),
+        label: Some(track_name(if is_video { "Video" } else { "Audio" }, index)),
+        ..Default::default()
+    }
+}
+
+/// Befehle von `BufferStore::set`/`POST /state` (synchroner HTTP-Kontext) an den async Worker — NMOS-
+/// Registrierung ist async (siehe `omp-viewer`, `ViewerCommand`).
+enum TrackCommand {
+    /// Neue Spurzahl; `None` = unverändert.
+    Set { video: Option<usize>, audio: Option<usize> },
+}
+
 struct BufferStore {
     pipeline: pipeline::PipelineHandle,
-    video_connection: Arc<ReceiverConnection<BufferReceiverControl>>,
-    audio_connection: Arc<ReceiverConnection<BufferReceiverControl>>,
-    connected_video: Arc<Mutex<String>>,
-    connected_audio: Arc<Mutex<String>>,
-    video_flow_id: String,
-    audio_flow_id: String,
+    tracks: Arc<Mutex<Tracks>>,
+    commands: tokio::sync::mpsc::UnboundedSender<TrackCommand>,
     format: String,
     fps_num: u32,
     fps_den: u32,
@@ -82,6 +189,42 @@ fn ro(name: &str, kind: ParamType, unit: Option<&str>) -> ParamSpec {
 }
 
 impl BufferStore {
+    fn first_connected(&self, video: bool) -> String {
+        let t = self.tracks.lock().expect("lock poisoned");
+        let list = if video { &t.video } else { &t.audio };
+        list.first().map(|x| x.connected_flow_id.lock().expect("lock poisoned").clone()).unwrap_or_default()
+    }
+
+    fn first_flow(&self, video: bool) -> String {
+        let t = self.tracks.lock().expect("lock poisoned");
+        let list = if video { &t.video } else { &t.audio };
+        list.first().map(|x| x.flow_id.clone()).unwrap_or_default()
+    }
+
+    /// Je Spur: Name, Flows und Messwerte (für das Panel).
+    fn track_json(&self, video: bool, status: &[pipeline::TrackStatus]) -> Value {
+        let t = self.tracks.lock().expect("lock poisoned");
+        let list = if video { &t.video } else { &t.audio };
+        let kind = if video { "Video" } else { "Audio" };
+        Value::Array(
+            status
+                .iter()
+                .enumerate()
+                .map(|(i, st)| {
+                    let rt = list.get(i);
+                    serde_json::json!({
+                        "name": track_name(kind, i),
+                        "flowId": rt.map(|r| r.flow_id.clone()).unwrap_or_default(),
+                        "connectedFlowId": rt.map(|r| r.connected_flow_id.lock().expect("lock poisoned").clone()).unwrap_or_default(),
+                        "connected": st.connected, "fillMs": st.fill_ms, "frames": st.frames, "bytes": st.bytes,
+                        "inCount": st.in_count, "outCount": st.out_count, "rebuilds": st.rebuilds,
+                        "originPct": st.origin_ts_pct, "ageMs": st.input_age_ms,
+                    })
+                })
+                .collect(),
+        )
+    }
+
     fn period_ms(&self) -> f64 {
         1000.0 * self.fps_den as f64 / self.fps_num.max(1) as f64
     }
@@ -122,6 +265,20 @@ impl ParamStore for BufferStore {
                 kind: ParamType::Enum,
                 unit: None,
                 range: Some(Range::Enum { values: vec!["last".to_string(), "black".to_string()] }),
+                readonly: false,
+            },
+            ParamSpec {
+                name: "videoTracks".to_string(),
+                kind: ParamType::Number,
+                unit: None,
+                range: Some(Range::Number { min: 1.0, max: MAX_VIDEO_TRACKS as f64 }),
+                readonly: false,
+            },
+            ParamSpec {
+                name: "audioTracks".to_string(),
+                kind: ParamType::Number,
+                unit: None,
+                range: Some(Range::Number { min: 1.0, max: MAX_AUDIO_TRACKS as f64 }),
                 readonly: false,
             },
         ];
@@ -222,10 +379,13 @@ impl ParamStore for BufferStore {
             "inputRebuilds" => j(s.rebuilds_video + s.rebuilds_audio),
             "videoInputAgeMs" => j(s.video_input_age_ms),
             "audioInputAgeMs" => j(s.audio_input_age_ms),
-            "connectedVideoFlowId" => Some(serde_json::json!(*self.connected_video.lock().expect("lock poisoned"))),
-            "connectedAudioFlowId" => Some(serde_json::json!(*self.connected_audio.lock().expect("lock poisoned"))),
-            "targetVideoFlowId" => Some(serde_json::json!(self.video_flow_id)),
-            "targetAudioFlowId" => Some(serde_json::json!(self.audio_flow_id)),
+            "videoTracks" => j(self.pipeline.track_counts().0 as u64),
+            "audioTracks" => j(self.pipeline.track_counts().1 as u64),
+            // Spur 1 (Kurzform für Ein-Spur-Nutzer); alle Spuren stehen im `status`.
+            "connectedVideoFlowId" => Some(serde_json::json!(self.first_connected(true))),
+            "connectedAudioFlowId" => Some(serde_json::json!(self.first_connected(false))),
+            "targetVideoFlowId" => Some(serde_json::json!(self.first_flow(true))),
+            "targetAudioFlowId" => Some(serde_json::json!(self.first_flow(false))),
             "format" => Some(serde_json::json!(self.format)),
             // Alle Messwerte in einem Aufruf (JSON-Text) — das Panel fragt einmal je Sekunde nur dies ab.
             "status" => Some(serde_json::json!(
@@ -242,8 +402,10 @@ impl ParamStore for BufferStore {
                     "originTsAudioPct": s.audio_origin_ts_pct, "inputRebuilds": s.rebuilds_video + s.rebuilds_audio,
                     "videoInputAgeMs": s.video_input_age_ms, "audioInputAgeMs": s.audio_input_age_ms,
                     "delayFrames": self.pipeline.delay_frames(),
-                    "videoConnected": !self.connected_video.lock().expect("lock poisoned").is_empty(),
-                    "audioConnected": !self.connected_audio.lock().expect("lock poisoned").is_empty(),
+                    "videoConnected": s.video_tracks.iter().any(|t| t.connected),
+                    "audioConnected": s.audio_tracks.iter().any(|t| t.connected),
+                    "videoTracks": self.track_json(true, &s.video_tracks),
+                    "audioTracks": self.track_json(false, &s.audio_tracks),
                 })
                 .to_string()
             )),
@@ -278,6 +440,22 @@ impl ParamStore for BufferStore {
                 self.pipeline.set_refill_permille(v as u32);
                 Ok(())
             }
+            "videoTracks" => {
+                let n = num()? as usize;
+                if !(1..=MAX_VIDEO_TRACKS).contains(&n) {
+                    return Err(SetError::Unknown);
+                }
+                let _ = self.commands.send(TrackCommand::Set { video: Some(n), audio: None });
+                Ok(())
+            }
+            "audioTracks" => {
+                let n = num()? as usize;
+                if !(1..=MAX_AUDIO_TRACKS).contains(&n) {
+                    return Err(SetError::Unknown);
+                }
+                let _ = self.commands.send(TrackCommand::Set { video: None, audio: Some(n) });
+                Ok(())
+            }
             "holdMode" => {
                 let mode = value.as_str().and_then(buffer::HoldMode::parse).ok_or(SetError::Unknown)?;
                 self.pipeline.set_hold_mode(mode);
@@ -310,32 +488,126 @@ impl ParamStore for BufferStore {
         if let Some(ui) = uibundle::route(method, path) {
             return Some(ui);
         }
+        // GET/POST /state: Spurzahl (der Orchestrator stellt sie bei Umzug/Neustart VOR dem Verkabeln wieder
+        // her, sonst fehlten die Receiver, auf die die Kanten zeigen).
+        if method == "GET" && path == "/state" {
+            let (v, a) = self.pipeline.track_counts();
+            let payload = serde_json::to_vec(&serde_json::json!({ "state": { "videoTracks": v, "audioTracks": a } }))
+                .unwrap_or_default();
+            return Some(RawResponse { status: 200, content_type: "application/json", body: payload });
+        }
+        if method == "POST" && path == "/state" {
+            let Ok(parsed) = serde_json::from_slice::<Value>(body) else {
+                return Some(RawResponse {
+                    status: 400,
+                    content_type: "application/json",
+                    body: br#"{"error":"invalid JSON body"}"#.to_vec(),
+                });
+            };
+            let get = |k: &str| {
+                parsed
+                    .get("state")
+                    .and_then(|s| s.get(k))
+                    .and_then(Value::as_u64)
+                    .map(|n| n as usize)
+            };
+            let _ = self.commands.send(TrackCommand::Set { video: get("videoTracks"), audio: get("audioTracks") });
+            return Some(RawResponse { status: 200, content_type: "application/json", body: br#"{"ok":true}"#.to_vec() });
+        }
+        let (ids, conns): (Vec<String>, Vec<Arc<ReceiverConnection<BufferReceiverControl>>>) = {
+            let t = self.tracks.lock().expect("lock poisoned");
+            t.video.iter().chain(t.audio.iter()).map(|x| (x.receiver_id.clone(), x.connection.clone())).unzip()
+        };
+        let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
         root_discovery(method, path)
-            .or_else(|| list_ids(method, path, "receivers", &[self.video_connection.id(), self.audio_connection.id()]))
+            .or_else(|| list_ids(method, path, "receivers", &id_refs))
             .or_else(|| bulk_discovery(method, path))
             .or_else(|| {
                 bulk_patch(method, path, "receivers", body, |id, params| {
-                    if self.video_connection.id() == id {
-                        Some(self.video_connection.patch_staged(params).0)
-                    } else if self.audio_connection.id() == id {
-                        Some(self.audio_connection.patch_staged(params).0)
-                    } else {
-                        None
-                    }
+                    conns.iter().find(|c| c.id() == id).map(|c| c.patch_staged(params).0)
                 })
             })
             .or_else(|| bulk_patch(method, path, "senders", body, |_, _| None))
-            .or_else(|| self.video_connection.handle(method, path, body))
-            .or_else(|| self.audio_connection.handle(method, path, body))
+            .or_else(|| conns.iter().find_map(|c| c.handle(method, path, body)))
             .map(to_raw)
     }
 
     fn extra_options(&self, path: &str) -> Option<Vec<&'static str>> {
-        self.video_connection
-            .cors_methods(path)
-            .or_else(|| self.audio_connection.cors_methods(path))
+        let conns: Vec<Arc<ReceiverConnection<BufferReceiverControl>>> = {
+            let t = self.tracks.lock().expect("lock poisoned");
+            t.video.iter().chain(t.audio.iter()).map(|x| x.connection.clone()).collect()
+        };
+        conns
+            .iter()
+            .find_map(|c| c.cors_methods(path))
             .or_else(|| bulk_cors_methods(path, "senders"))
             .or_else(|| bulk_cors_methods(path, "receivers"))
+    }
+}
+
+/// Verarbeitet `TrackCommand`s: Spurzahl ändern = NMOS-Sender/-Receiver an- bzw. abmelden und die Pipeline
+/// anpassen. Läuft als Task auf dem `current_thread`-Runtime von `main()`.
+async fn track_worker(
+    mut commands: tokio::sync::mpsc::UnboundedReceiver<TrackCommand>,
+    handle: omp_node_sdk::NodeHandle,
+    tracks: Arc<Mutex<Tracks>>,
+    registry: RegistryClient,
+    pipeline: pipeline::PipelineHandle,
+    format: Format,
+) {
+    while let Some(TrackCommand::Set { video, audio }) = commands.recv().await {
+        let (cur_v, cur_a) = {
+            let t = tracks.lock().expect("lock poisoned");
+            (t.video.len(), t.audio.len())
+        };
+        let nv = video.unwrap_or(cur_v).clamp(1, MAX_VIDEO_TRACKS);
+        let na = audio.unwrap_or(cur_a).clamp(1, MAX_AUDIO_TRACKS);
+        if (nv, na) == (cur_v, cur_a) {
+            continue;
+        }
+        // 1) Wegfallende Spuren: aus der Liste nehmen, dann NMOS abmelden.
+        let (removed_v, removed_a, new_v, new_a, vflows, aflows) = {
+            let mut t = tracks.lock().expect("lock poisoned");
+            let keep_v = nv.min(t.video.len());
+            let removed_v: Vec<TrackRt> = t.video.drain(keep_v..).collect();
+            let keep_a = na.min(t.audio.len());
+            let removed_a: Vec<TrackRt> = t.audio.drain(keep_a..).collect();
+            let (mut new_v, mut new_a) = (Vec::new(), Vec::new());
+            while t.video.len() < nv {
+                let i = t.video.len();
+                let rt = make_track(new_ids(), true, i, &registry, &pipeline);
+                new_v.push((i, sender_spec(&rt, true, i, &format), receiver_spec(&rt, true, i)));
+                t.video.push(rt);
+            }
+            while t.audio.len() < na {
+                let i = t.audio.len();
+                let rt = make_track(new_ids(), false, i, &registry, &pipeline);
+                new_a.push((i, sender_spec(&rt, false, i, &format), receiver_spec(&rt, false, i)));
+                t.audio.push(rt);
+            }
+            let vflows: Vec<String> = t.video.iter().map(|x| x.flow_id.clone()).collect();
+            let aflows: Vec<String> = t.audio.iter().map(|x| x.flow_id.clone()).collect();
+            (removed_v, removed_a, new_v, new_a, vflows, aflows)
+        };
+        for r in removed_v.iter().chain(removed_a.iter()) {
+            if let Err(e) = handle.remove_sender(&r.sender_id).await {
+                eprintln!("omp-playout-buffer: remove sender failed: {e}");
+            }
+            if let Err(e) = handle.remove_receiver(&r.receiver_id).await {
+                eprintln!("omp-playout-buffer: remove receiver failed: {e}");
+            }
+        }
+        // 2) Pipeline (Ein-/Ausgänge, Puffer), damit die MXL-Flows existieren, bevor sie angemeldet werden.
+        pipeline.set_tracks(vflows, aflows);
+        // 3) Neue Spuren anmelden.
+        for (_, sender, receiver) in new_v.into_iter().chain(new_a) {
+            if let Err(e) = handle.add_sender(sender).await {
+                eprintln!("omp-playout-buffer: add sender failed: {e}");
+            }
+            if let Err(e) = handle.add_receiver(receiver).await {
+                eprintln!("omp-playout-buffer: add receiver failed: {e}");
+            }
+        }
     }
 }
 
@@ -369,10 +641,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let refill_permille: u32 = env_num("OMP_REFILL_PERMILLE", 10u32).min(100);
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
 
-    let video_receiver_id = omp_node_sdk::idgen::new_v4();
-    let audio_receiver_id = omp_node_sdk::idgen::new_v4();
-    let video_flow_id = omp_node_sdk::idgen::new_v4();
-    let audio_flow_id = omp_node_sdk::idgen::new_v4();
+    let video_track_count: usize = env_num("OMP_VIDEO_TRACKS", 1usize).clamp(1, MAX_VIDEO_TRACKS);
+    let audio_track_count: usize = env_num("OMP_AUDIO_TRACKS", 1usize).clamp(1, MAX_AUDIO_TRACKS);
+    let video_ids: Vec<TrackIds> = (0..video_track_count).map(|_| new_ids()).collect();
+    let audio_ids: Vec<TrackIds> = (0..audio_track_count).map(|_| new_ids()).collect();
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -381,8 +653,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pipeline_config = pipeline::Config {
         domain,
         label: label.clone(),
-        video_flow_id: video_flow_id.clone(),
-        audio_flow_id: audio_flow_id.clone(),
+        video_flow_ids: video_ids.iter().map(|i| i.flow.clone()).collect(),
+        audio_flow_ids: audio_ids.iter().map(|i| i.flow.clone()).collect(),
         width,
         height,
         fps_num,
@@ -415,36 +687,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let registry = RegistryClient::new(registry_url.clone());
-    let connected_video = Arc::new(Mutex::new(String::new()));
-    let connected_audio = Arc::new(Mutex::new(String::new()));
-    let video_connection = Arc::new(ReceiverConnection::new(
-        video_receiver_id.clone(),
-        BufferReceiverControl {
-            registry: registry.clone(),
-            pipeline: pipeline_handle.clone(),
-            is_video: true,
-            connected_flow_id: connected_video.clone(),
-        },
-    ));
-    let audio_connection = Arc::new(ReceiverConnection::new(
-        audio_receiver_id.clone(),
-        BufferReceiverControl {
-            registry,
-            pipeline: pipeline_handle.clone(),
-            is_video: false,
-            connected_flow_id: connected_audio.clone(),
-        },
-    ));
+    let tracks = Arc::new(Mutex::new(Tracks {
+        video: video_ids.into_iter().enumerate().map(|(i, ids)| make_track(ids, true, i, &registry, &pipeline_handle)).collect(),
+        audio: audio_ids.into_iter().enumerate().map(|(i, ids)| make_track(ids, false, i, &registry, &pipeline_handle)).collect(),
+    }));
+    let fmt = Format { width, height, fps_num, fps_den, sample_rate, channels };
+    let (senders, receivers) = {
+        let t = tracks.lock().expect("lock poisoned");
+        let mut senders = Vec::new();
+        let mut receivers = Vec::new();
+        for (i, r) in t.video.iter().enumerate() {
+            senders.push(sender_spec(r, true, i, &fmt));
+            receivers.push(receiver_spec(r, true, i));
+        }
+        for (i, r) in t.audio.iter().enumerate() {
+            senders.push(sender_spec(r, false, i, &fmt));
+            receivers.push(receiver_spec(r, false, i));
+        }
+        (senders, receivers)
+    };
+    let (track_tx, track_rx) = tokio::sync::mpsc::unbounded_channel::<TrackCommand>();
 
     let media_ready_pipeline = pipeline_handle.clone();
+    let worker_pipeline = pipeline_handle.clone();
     let store: Arc<dyn ParamStore> = Arc::new(BufferStore {
         pipeline: pipeline_handle,
-        video_connection,
-        audio_connection,
-        connected_video,
-        connected_audio,
-        video_flow_id: video_flow_id.clone(),
-        audio_flow_id: audio_flow_id.clone(),
+        tracks: tracks.clone(),
+        commands: track_tx,
         format: format!("{width}x{height}@{fps_num}/{fps_den} {sample_rate} Hz x{channels}"),
         fps_num,
         fps_den,
@@ -458,49 +727,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             port,
             registry_url,
             nats_url,
-            senders: vec![
-                SenderSpec {
-                    transport: Some(TRANSPORT_MXL.to_string()),
-                    flow: Some(FlowSpec::Video {
-                        id: Some(video_flow_id),
-                        frame_width: width,
-                        frame_height: height,
-                        grain_rate_numerator: fps_num,
-                        grain_rate_denominator: fps_den,
-                    }),
-                    label: Some("Video".to_string()),
-                    ..Default::default()
-                },
-                SenderSpec {
-                    transport: Some(TRANSPORT_MXL.to_string()),
-                    flow: Some(FlowSpec::Audio {
-                        id: Some(audio_flow_id),
-                        sample_rate_numerator: sample_rate,
-                        channel_count: channels,
-                        media_type: "audio/float32".to_string(),
-                        bit_depth: 32,
-                        source_id: None,
-                    }),
-                    label: Some("Audio".to_string()),
-                    ..Default::default()
-                },
-            ],
-            receivers: vec![
-                ReceiverSpec {
-                    id: Some(video_receiver_id),
-                    transport: Some(TRANSPORT_MXL.to_string()),
-                    media_types: Some(vec!["video/v210".to_string()]),
-                    label: Some("Video".to_string()),
-                    ..Default::default()
-                },
-                ReceiverSpec {
-                    id: Some(audio_receiver_id),
-                    transport: Some(TRANSPORT_MXL.to_string()),
-                    media_types: Some(vec!["audio/float32".to_string()]),
-                    label: Some("Audio".to_string()),
-                    ..Default::default()
-                },
-            ],
+            senders,
+            receivers,
             instance_id,
             // Der Ausgang schreibt von Anfang an (Schwarz/Stille, solange nichts anliegt) — wie ein Mischer.
             media_ready: omp_node_sdk::MediaReadySource::Probe(Arc::new(move || media_ready_pipeline.media_ready())),
@@ -513,6 +741,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     handle.register_worker("inputs", pipeline_heartbeat);
     handle.register_worker("output", output_heartbeat);
 
+    let worker = track_worker(track_rx, handle.clone(), tracks, registry, worker_pipeline, fmt);
     let events = async {
         while let Some(event) = rx.recv().await {
             match event {
@@ -527,6 +756,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             eprintln!("omp-playout-buffer: shutdown requested");
+        }
+        _ = worker => {
+            eprintln!("omp-playout-buffer: track worker ended");
         }
         _ = events => {
             eprintln!("omp-playout-buffer: pipeline thread ended");

@@ -2,11 +2,13 @@
 //!
 //! **Zwei getrennte Seiten, die sich nie gegenseitig neu aufbauen:**
 //!
-//! * *Ausgang* (dauerhaft, wird nie neu gebaut): `appsrc → MxlVideoOutput` und `appsrc → MxlAudioOutput`
-//!   im festen Zielformat. Ein Ausgabe-Thread (`output_loop`) taktet auf eigener Uhr ein Bild je Bildtakt
-//!   und einen 10-ms-Tonblock je Tonschritt aus [`Playout`] — auch wenn gar kein Eingang verbunden ist
-//!   (dann Schwarz + Stille), damit der nachgelagerte Sink nie abreißt.
-//! * *Eingänge* (je Video und Audio eine eigene kleine Pipeline, dürfen jederzeit sterben/neu entstehen):
+//! * *Ausgang* (dauerhaft, wird nie neu gebaut): je Spur eine kleine Pipeline `appsrc → MxlVideoOutput`
+//!   bzw. `appsrc → MxlAudioOutput` im festen Zielformat. Ein Ausgabe-Thread (`output_loop`) taktet auf
+//!   eigener Uhr ein Bild je Bildtakt und einen 10-ms-Tonblock je Tonschritt aus [`Playout`] — für **alle**
+//!   Spuren im Gleichtakt, auch wenn gar kein Eingang verbunden ist (dann Schwarz + Stille), damit der
+//!   nachgelagerte Sink nie abreißt. Die Spurzahl (Bild und Ton getrennt) ist zur Laufzeit änderbar
+//!   ([`PipelineHandle::set_tracks`]); bestehende Spuren laufen dabei unberührt weiter.
+//! * *Eingänge* (je Spur eine eigene kleine Pipeline, dürfen jederzeit sterben/neu entstehen):
 //!   `MxlVideoInput → videoscale → videoconvert → videorate → v210-Zielformat → appsink` bzw.
 //!   `MxlAudioInput → audioconvert → audioresample → F32LE-Zielformat → appsink`. Der `appsink`-Callback
 //!   kopiert jedes Bild/jeden Block in einen eigenen Speicher (keine Pool-Buffer des Eingangs werden
@@ -42,8 +44,9 @@ const RETRY_MAX_MS: u64 = 4_000;
 pub struct Config {
     pub domain: String,
     pub label: String,
-    pub video_flow_id: String,
-    pub audio_flow_id: String,
+    /// Ausgangs-Flow je Bildspur / Tonspur (Länge = Anfangs-Spurzahl, mindestens 1).
+    pub video_flow_ids: Vec<String>,
+    pub audio_flow_ids: Vec<String>,
     pub width: u32,
     pub height: u32,
     pub fps_num: u32,
@@ -55,7 +58,7 @@ pub struct Config {
     pub hold_mode: HoldMode,
     /// Wiederauffüll-Rate in ‰ (0 = aus, Standard 10 = 1 %).
     pub refill_permille: u32,
-    /// Harte Obergrenze des Bild-Rings in MiB (Schutz gegen versehentlich riesige Zieltiefen).
+    /// Harte Obergrenze **je Bildspur** in MiB (Schutz gegen versehentlich riesige Zieltiefen).
     pub max_video_mib: u64,
 }
 
@@ -64,10 +67,12 @@ pub enum Event {
 }
 
 enum Command {
-    ConnectVideo(String),
-    DisconnectVideo,
-    ConnectAudio(String),
-    DisconnectAudio,
+    ConnectVideo(usize, String),
+    DisconnectVideo(usize),
+    ConnectAudio(usize, String),
+    DisconnectAudio(usize),
+    /// Neue Spurzahl: die Listen sind die Ausgangs-Flow-IDs je Spur (Länge = Spurzahl).
+    Resize(Vec<String>, Vec<String>),
 }
 
 /// Bildpuffer: referenzgezählt, damit „Bild halten“ nichts kopiert.
@@ -80,27 +85,32 @@ impl AsRef<[u8]> for Frame {
     }
 }
 
+/// Zähler einer Spur (Eingang) — der Eingangs-Callback hält einen eigenen `Arc`, braucht also keine Sperre.
+#[derive(Default)]
+struct TrackCounters {
+    selected: AtomicBool,
+    in_count: AtomicU64,
+    ts_origin: AtomicU64,
+    ts_arrival: AtomicU64,
+    out_count: AtomicU64,
+    rebuilds: AtomicU64,
+    /// Millisekunden seit `start` des letzten Eingangsbildes/-blocks (0 = noch nie).
+    last_in_ms: AtomicU64,
+}
+
 #[derive(Default)]
 struct Counters {
-    video_in: AtomicU64,
-    audio_in: AtomicU64,
-    video_ts_origin: AtomicU64,
-    video_ts_arrival: AtomicU64,
-    audio_ts_origin: AtomicU64,
-    audio_ts_arrival: AtomicU64,
     video_out: AtomicU64,
     audio_out: AtomicU64,
-    rebuilds_video: AtomicU64,
-    rebuilds_audio: AtomicU64,
-    /// Millisekunden seit `start` des letzten Eingangsbildes/-blocks (0 = noch nie).
-    last_video_in_ms: AtomicU64,
-    last_audio_in_ms: AtomicU64,
 }
 
 struct Shared {
     context: Arc<MxlContext>,
     playout: Mutex<Playout<Frame>>,
     counters: Counters,
+    vtracks: Mutex<Vec<Arc<TrackCounters>>>,
+    atracks: Mutex<Vec<Arc<TrackCounters>>>,
+    outputs: Mutex<Outputs>,
     start: Instant,
     black: Frame,
     frame_bytes: usize,
@@ -113,8 +123,6 @@ struct Shared {
     buffer_ms: AtomicU64,
     delay_frames: AtomicU64,
     max_video_bytes_hard: usize,
-    video_selected: AtomicBool,
-    audio_selected: AtomicBool,
 }
 
 impl Shared {
@@ -127,7 +135,7 @@ impl Shared {
         self.buffer_ms.load(Ordering::Relaxed) * 1_000_000 + self.delay_frames.load(Ordering::Relaxed) * self.period_ns
     }
 
-    /// Speichergrenzen aus der Zieltiefe: Bild-Ring = 1,5 × Tiefe + 2 Bilder (mind.), Ton ebenso.
+    /// Speichergrenzen **je Spur** aus der Zieltiefe: Bild-Ring = 1,5 × Tiefe + 2 Bilder (mind.), Ton ebenso.
     fn limits_for(&self, target_ns: u64) -> (usize, usize) {
         let frames = (target_ns as f64 * 1.5 / self.period_ns as f64).ceil() as usize + 2;
         let video = (frames * self.frame_bytes).min(self.max_video_bytes_hard);
@@ -143,6 +151,21 @@ impl Shared {
         p.set_target(target);
         p.set_limits(v, a);
     }
+}
+
+/// Anzeige-Werte einer Spur.
+#[derive(Clone, Debug, Default)]
+pub struct TrackStatus {
+    pub connected: bool,
+    pub fill_ms: u64,
+    /// Bilder im Ring (nur Bildspur).
+    pub frames: usize,
+    pub bytes: usize,
+    pub in_count: u64,
+    pub out_count: u64,
+    pub rebuilds: u64,
+    pub origin_ts_pct: u64,
+    pub input_age_ms: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -170,6 +193,7 @@ pub struct Snapshot {
     pub refill_samples: u64,
     pub video_ts_jumps: u64,
     pub audio_ts_jumps: u64,
+    /// Summen über alle Spuren.
     pub video_in: u64,
     pub audio_in: u64,
     pub video_out: u64,
@@ -178,8 +202,11 @@ pub struct Snapshot {
     pub audio_origin_ts_pct: u64,
     pub rebuilds_video: u64,
     pub rebuilds_audio: u64,
+    /// Älteste Stille über alle verbundenen Spuren.
     pub video_input_age_ms: u64,
     pub audio_input_age_ms: u64,
+    pub video_tracks: Vec<TrackStatus>,
+    pub audio_tracks: Vec<TrackStatus>,
 }
 
 /// Griff für den async Node-Lifecycle.
@@ -190,36 +217,52 @@ pub struct PipelineHandle {
 }
 
 impl PipelineHandle {
-    pub fn connect_video(&self, flow_id: String) {
-        self.shared.video_selected.store(true, Ordering::Relaxed);
-        self.sync_connected();
-        let _ = self.commands.send(Command::ConnectVideo(flow_id));
+    fn video_track(&self, track: usize) -> Option<Arc<TrackCounters>> {
+        self.shared.vtracks.lock().expect("lock poisoned").get(track).cloned()
     }
 
-    pub fn disconnect_video(&self) {
-        self.shared.video_selected.store(false, Ordering::Relaxed);
-        self.sync_connected();
-        let _ = self.commands.send(Command::DisconnectVideo);
+    fn audio_track(&self, track: usize) -> Option<Arc<TrackCounters>> {
+        self.shared.atracks.lock().expect("lock poisoned").get(track).cloned()
     }
 
-    pub fn connect_audio(&self, flow_id: String) {
-        self.shared.audio_selected.store(true, Ordering::Relaxed);
-        self.sync_connected();
-        let _ = self.commands.send(Command::ConnectAudio(flow_id));
+    pub fn connect_video(&self, track: usize, flow_id: String) {
+        let Some(c) = self.video_track(track) else { return };
+        c.selected.store(true, Ordering::Relaxed);
+        self.shared.playout.lock().expect("lock poisoned").set_video_connected(track, true);
+        let _ = self.commands.send(Command::ConnectVideo(track, flow_id));
     }
 
-    pub fn disconnect_audio(&self) {
-        self.shared.audio_selected.store(false, Ordering::Relaxed);
-        self.sync_connected();
-        let _ = self.commands.send(Command::DisconnectAudio);
+    pub fn disconnect_video(&self, track: usize) {
+        let Some(c) = self.video_track(track) else { return };
+        c.selected.store(false, Ordering::Relaxed);
+        self.shared.playout.lock().expect("lock poisoned").set_video_connected(track, false);
+        let _ = self.commands.send(Command::DisconnectVideo(track));
     }
 
-    fn sync_connected(&self) {
-        let s = &self.shared;
-        s.playout
-            .lock()
-            .expect("lock poisoned")
-            .set_connected(s.video_selected.load(Ordering::Relaxed), s.audio_selected.load(Ordering::Relaxed));
+    pub fn connect_audio(&self, track: usize, flow_id: String) {
+        let Some(c) = self.audio_track(track) else { return };
+        c.selected.store(true, Ordering::Relaxed);
+        self.shared.playout.lock().expect("lock poisoned").set_audio_connected(track, true);
+        let _ = self.commands.send(Command::ConnectAudio(track, flow_id));
+    }
+
+    pub fn disconnect_audio(&self, track: usize) {
+        let Some(c) = self.audio_track(track) else { return };
+        c.selected.store(false, Ordering::Relaxed);
+        self.shared.playout.lock().expect("lock poisoned").set_audio_connected(track, false);
+        let _ = self.commands.send(Command::DisconnectAudio(track));
+    }
+
+    /// Spurzahl zur Laufzeit ändern: die Listen sind die Ausgangs-Flow-IDs je Spur (Länge = neue Spurzahl,
+    /// mindestens je 1). Bestehende Spuren behalten Eingang, Ausgang und Puffer; neue starten leer (Schwarz /
+    /// Stille am Ausgang), wegfallende geben Eingang, Ausgang und Speicher frei.
+    pub fn set_tracks(&self, video_flow_ids: Vec<String>, audio_flow_ids: Vec<String>) {
+        let _ = self.commands.send(Command::Resize(video_flow_ids, audio_flow_ids));
+    }
+
+    /// Aktuelle Spurzahl (Bild, Ton).
+    pub fn track_counts(&self) -> (usize, usize) {
+        (self.shared.vtracks.lock().expect("lock poisoned").len(), self.shared.atracks.lock().expect("lock poisoned").len())
     }
 
     pub fn buffer_ms(&self) -> u64 {
@@ -274,12 +317,29 @@ impl PipelineHandle {
     pub fn snapshot(&self) -> Snapshot {
         let s = &self.shared;
         let now = s.context.now_ns();
+        let vt: Vec<Arc<TrackCounters>> = s.vtracks.lock().expect("lock poisoned").clone();
+        let at: Vec<Arc<TrackCounters>> = s.atracks.lock().expect("lock poisoned").clone();
         let p = s.playout.lock().expect("lock poisoned");
         let c = &s.counters;
         let pct = |origin: u64, arrival: u64| (origin * 100).checked_div(origin + arrival).unwrap_or(0);
         let age = |last: u64| {
             if last == 0 { 0 } else { s.now_ms().saturating_sub(last) }
         };
+        let status = |t: &TrackCounters, fill: buffer::TrackFill| TrackStatus {
+            connected: fill.connected,
+            fill_ms: fill.fill_ms,
+            frames: fill.frames,
+            bytes: fill.bytes,
+            in_count: t.in_count.load(Ordering::Relaxed),
+            out_count: t.out_count.load(Ordering::Relaxed),
+            rebuilds: t.rebuilds.load(Ordering::Relaxed),
+            origin_ts_pct: pct(t.ts_origin.load(Ordering::Relaxed), t.ts_arrival.load(Ordering::Relaxed)),
+            input_age_ms: age(t.last_in_ms.load(Ordering::Relaxed)),
+        };
+        let video_tracks: Vec<TrackStatus> = vt.iter().enumerate().map(|(i, t)| status(t, p.video_track_fill(i))).collect();
+        let audio_tracks: Vec<TrackStatus> = at.iter().enumerate().map(|(i, t)| status(t, p.audio_track_fill(i))).collect();
+        let sum = |ts: &[Arc<TrackCounters>], f: fn(&TrackCounters) -> &AtomicU64| ts.iter().map(|t| f(t).load(Ordering::Relaxed)).sum::<u64>();
+        let oldest = |tr: &[TrackStatus]| tr.iter().filter(|t| t.connected).map(|t| t.input_age_ms).max().unwrap_or(0);
         Snapshot {
             state: p.state().as_str(),
             video_frames: p.video_len(),
@@ -287,7 +347,7 @@ impl PipelineHandle {
             audio_fill_ms: p.audio_fill_ms(),
             front_age_ms: p.front_age_ms(now),
             buffer_bytes: p.video_bytes() + p.audio_bytes(),
-            max_bytes: p.config().max_video_bytes + p.config().max_audio_bytes,
+            max_bytes: p.config().max_video_bytes * vt.len() + p.config().max_audio_bytes * at.len(),
             target_ms: p.config().target_ns / 1_000_000,
             dropped_video: p.stats.dropped_video,
             dropped_audio_bytes: p.stats.dropped_audio_bytes,
@@ -304,16 +364,18 @@ impl PipelineHandle {
             refill_samples: p.stats.refill_samples,
             video_ts_jumps: p.stats.video_ts_jumps,
             audio_ts_jumps: p.stats.audio_ts_jumps,
-            video_in: c.video_in.load(Ordering::Relaxed),
-            audio_in: c.audio_in.load(Ordering::Relaxed),
+            video_in: sum(&vt, |t| &t.in_count),
+            audio_in: sum(&at, |t| &t.in_count),
             video_out: c.video_out.load(Ordering::Relaxed),
             audio_out: c.audio_out.load(Ordering::Relaxed),
-            video_origin_ts_pct: pct(c.video_ts_origin.load(Ordering::Relaxed), c.video_ts_arrival.load(Ordering::Relaxed)),
-            audio_origin_ts_pct: pct(c.audio_ts_origin.load(Ordering::Relaxed), c.audio_ts_arrival.load(Ordering::Relaxed)),
-            rebuilds_video: c.rebuilds_video.load(Ordering::Relaxed),
-            rebuilds_audio: c.rebuilds_audio.load(Ordering::Relaxed),
-            video_input_age_ms: age(c.last_video_in_ms.load(Ordering::Relaxed)),
-            audio_input_age_ms: age(c.last_audio_in_ms.load(Ordering::Relaxed)),
+            video_origin_ts_pct: pct(sum(&vt, |t| &t.ts_origin), sum(&vt, |t| &t.ts_arrival)),
+            audio_origin_ts_pct: pct(sum(&at, |t| &t.ts_origin), sum(&at, |t| &t.ts_arrival)),
+            rebuilds_video: sum(&vt, |t| &t.rebuilds),
+            rebuilds_audio: sum(&at, |t| &t.rebuilds),
+            video_input_age_ms: oldest(&video_tracks),
+            audio_input_age_ms: oldest(&audio_tracks),
+            video_tracks,
+            audio_tracks,
         }
     }
 }
@@ -350,7 +412,13 @@ fn origin_ts(buffer: &gst::BufferRef, reference: &gst::Caps) -> Option<u64> {
     Some(meta.timestamp().nseconds())
 }
 
-fn build_video_input(shared: &Arc<Shared>, cfg: &Config, flow_id: &str) -> Result<InVideo, String> {
+fn build_video_input(
+    shared: &Arc<Shared>,
+    cfg: &Config,
+    track: usize,
+    counters: Arc<TrackCounters>,
+    flow_id: &str,
+) -> Result<InVideo, String> {
     let pipeline = gst::Pipeline::new();
     let input = MxlVideoInput::new_unsynced(&pipeline, shared.context.clone(), flow_id)?;
     let mk = |name: &str| gst::ElementFactory::make(name).build().map_err(|e| format!("{name}: {e}"));
@@ -390,19 +458,19 @@ fn build_video_input(shared: &Arc<Shared>, cfg: &Config, flow_id: &str) -> Resul
                 let Ok(map) = buffer.map_readable() else { return Ok(gst::FlowSuccess::Ok) };
                 let ts = match origin_ts(buffer, &reference) {
                     Some(t) => {
-                        sh.counters.video_ts_origin.fetch_add(1, Ordering::Relaxed);
+                        counters.ts_origin.fetch_add(1, Ordering::Relaxed);
                         t
                     }
                     None => {
-                        sh.counters.video_ts_arrival.fetch_add(1, Ordering::Relaxed);
+                        counters.ts_arrival.fetch_add(1, Ordering::Relaxed);
                         sh.context.now_ns()
                     }
                 };
                 let data = Frame(Arc::new(map.as_slice().to_vec()));
                 let len = data.0.len();
-                sh.counters.video_in.fetch_add(1, Ordering::Relaxed);
-                sh.counters.last_video_in_ms.store(sh.now_ms(), Ordering::Relaxed);
-                sh.playout.lock().expect("lock poisoned").push_video(ts, len, data);
+                counters.in_count.fetch_add(1, Ordering::Relaxed);
+                counters.last_in_ms.store(sh.now_ms(), Ordering::Relaxed);
+                sh.playout.lock().expect("lock poisoned").push_video_to(track, ts, len, data);
                 Ok(gst::FlowSuccess::Ok)
             })
             .build(),
@@ -412,7 +480,13 @@ fn build_video_input(shared: &Arc<Shared>, cfg: &Config, flow_id: &str) -> Resul
     Ok(InVideo { pipeline, _input: input })
 }
 
-fn build_audio_input(shared: &Arc<Shared>, cfg: &Config, flow_id: &str) -> Result<InAudio, String> {
+fn build_audio_input(
+    shared: &Arc<Shared>,
+    cfg: &Config,
+    track: usize,
+    counters: Arc<TrackCounters>,
+    flow_id: &str,
+) -> Result<InAudio, String> {
     let pipeline = gst::Pipeline::new();
     let input = MxlAudioInput::new_unsynced(&pipeline, shared.context.clone(), flow_id)?;
     let mk = |name: &str| gst::ElementFactory::make(name).build().map_err(|e| format!("{name}: {e}"));
@@ -451,19 +525,19 @@ fn build_audio_input(shared: &Arc<Shared>, cfg: &Config, flow_id: &str) -> Resul
                 let bytes = map.as_slice().to_vec();
                 let (ts, exact) = match origin_ts(buffer, &reference) {
                     Some(t) => {
-                        sh.counters.audio_ts_origin.fetch_add(1, Ordering::Relaxed);
+                        counters.ts_origin.fetch_add(1, Ordering::Relaxed);
                         (t, true)
                     }
                     None => {
-                        sh.counters.audio_ts_arrival.fetch_add(1, Ordering::Relaxed);
+                        counters.ts_arrival.fetch_add(1, Ordering::Relaxed);
                         // Ankunft = Ende des Blocks → Beginn = Ankunft − Dauer.
                         let dur = bytes.len() as u64 / bpf * 1_000_000_000 / rate;
                         (sh.context.now_ns().saturating_sub(dur), false)
                     }
                 };
-                sh.counters.audio_in.fetch_add(1, Ordering::Relaxed);
-                sh.counters.last_audio_in_ms.store(sh.now_ms(), Ordering::Relaxed);
-                sh.playout.lock().expect("lock poisoned").push_audio(ts, exact, bytes);
+                counters.in_count.fetch_add(1, Ordering::Relaxed);
+                counters.last_in_ms.store(sh.now_ms(), Ordering::Relaxed);
+                sh.playout.lock().expect("lock poisoned").push_audio_to(track, ts, exact, bytes);
                 Ok(gst::FlowSuccess::Ok)
             })
             .build(),
@@ -473,23 +547,60 @@ fn build_audio_input(shared: &Arc<Shared>, cfg: &Config, flow_id: &str) -> Resul
     Ok(InAudio { pipeline, _input: input })
 }
 
+
 // ---- Ausgang -------------------------------------------------------------------------------------
 
-struct OutputSide {
+/// Ausgang einer Spur: eigene kleine Pipeline `appsrc → Mxl*Output`.
+struct OutTrack {
     pipeline: gst::Pipeline,
-    video_src: gst_app::AppSrc,
-    audio_src: gst_app::AppSrc,
-    _video_out: MxlVideoOutput,
-    _audio_out: MxlAudioOutput,
+    src: gst_app::AppSrc,
+    counters: Arc<TrackCounters>,
+    /// Ursprungszeit (TAI-ns) ↔ Pipeline-Laufzeit beim Bau: PTS = Laufzeit₀ + (Tick-Zeit − Zeit₀) →
+    /// streng monoton, lückenlos.
+    t0_ns: u64,
+    start_running: gst::ClockTime,
+    /// Hält den MXL-Schreiber am Leben.
+    _writer: Box<dyn std::any::Any + Send>,
 }
 
-impl Drop for OutputSide {
+impl OutTrack {
+    fn pts_of(&self, ts: u64) -> gst::ClockTime {
+        self.start_running + gst::ClockTime::from_nseconds(ts.saturating_sub(self.t0_ns))
+    }
+}
+
+impl Drop for OutTrack {
     fn drop(&mut self) {
         let _ = self.pipeline.set_state(gst::State::Null);
     }
 }
 
-fn build_output(shared: &Arc<Shared>, cfg: &Config) -> Result<OutputSide, String> {
+/// Ausgänge aller Spuren (`None` = Aufbau dieser Spur fehlgeschlagen; der Index bleibt belegt).
+#[derive(Default)]
+struct Outputs {
+    video: Vec<Option<OutTrack>>,
+    audio: Vec<Option<OutTrack>>,
+}
+
+fn running_time(pipeline: &gst::Pipeline) -> gst::ClockTime {
+    pipeline
+        .clock()
+        .zip(pipeline.base_time())
+        .map(|(c, b)| c.time().saturating_sub(b))
+        .unwrap_or(gst::ClockTime::ZERO)
+}
+
+fn track_label(base: &str, kind: &str, index: usize) -> String {
+    if index == 0 { base.to_string() } else { format!("{base} {kind} {}", index + 1) }
+}
+
+fn build_video_output(
+    shared: &Arc<Shared>,
+    cfg: &Config,
+    index: usize,
+    flow_id: &str,
+    counters: Arc<TrackCounters>,
+) -> Result<OutTrack, String> {
     let pipeline = gst::Pipeline::new();
     let video_src = gst_app::AppSrc::builder()
         .is_live(true)
@@ -507,6 +618,40 @@ fn build_output(shared: &Arc<Shared>, cfg: &Config) -> Result<OutputSide, String
         .build();
     video_src.set_property_from_str("leaky-type", "downstream");
     video_src.set_property("max-buffers", 8u64);
+    pipeline.add(video_src.upcast_ref::<gst::Element>()).map_err(|e| format!("add appsrc: {e}"))?;
+    let video_out = MxlVideoOutput::new(
+        &pipeline,
+        video_src.upcast_ref::<gst::Element>(),
+        shared.context.clone(),
+        flow_id,
+        &track_label(&cfg.label, "Video", index),
+        cfg.width,
+        cfg.height,
+        cfg.fps_num,
+        cfg.fps_den,
+        Arc::new(AtomicU64::new(0)),
+    )
+    .map_err(|e| format!("MxlVideoOutput: {e}"))?;
+    video_out.set_active(true);
+    pipeline.set_state(gst::State::Playing).map_err(|e| format!("playing: {e}"))?;
+    Ok(OutTrack {
+        start_running: running_time(&pipeline),
+        t0_ns: shared.context.now_ns(),
+        pipeline,
+        src: video_src,
+        counters,
+        _writer: Box::new(video_out),
+    })
+}
+
+fn build_audio_output(
+    shared: &Arc<Shared>,
+    cfg: &Config,
+    index: usize,
+    flow_id: &str,
+    counters: Arc<TrackCounters>,
+) -> Result<OutTrack, String> {
+    let pipeline = gst::Pipeline::new();
     let mut audio_caps = gst::Caps::builder("audio/x-raw")
         .field("format", "F32LE")
         .field("rate", cfg.sample_rate as i32)
@@ -524,37 +669,27 @@ fn build_output(shared: &Arc<Shared>, cfg: &Config) -> Result<OutputSide, String
         .build();
     audio_src.set_property_from_str("leaky-type", "downstream");
     audio_src.set_property("max-buffers", 100u64);
-    pipeline
-        .add_many([video_src.upcast_ref::<gst::Element>(), audio_src.upcast_ref::<gst::Element>()])
-        .map_err(|e| format!("add appsrc: {e}"))?;
-
-    let video_out = MxlVideoOutput::new(
-        &pipeline,
-        video_src.upcast_ref::<gst::Element>(),
-        shared.context.clone(),
-        &cfg.video_flow_id,
-        &cfg.label,
-        cfg.width,
-        cfg.height,
-        cfg.fps_num,
-        cfg.fps_den,
-        Arc::new(AtomicU64::new(0)),
-    )
-    .map_err(|e| format!("MxlVideoOutput: {e}"))?;
-    video_out.set_active(true);
+    pipeline.add(audio_src.upcast_ref::<gst::Element>()).map_err(|e| format!("add appsrc: {e}"))?;
     let audio_out = MxlAudioOutput::new(
         &pipeline,
         audio_src.upcast_ref::<gst::Element>(),
         shared.context.clone(),
-        &cfg.audio_flow_id,
-        &cfg.label,
+        flow_id,
+        &track_label(&cfg.label, "Audio", index),
         cfg.sample_rate,
         cfg.channels,
     )
     .map_err(|e| format!("MxlAudioOutput: {e}"))?;
     audio_out.set_active(true);
     pipeline.set_state(gst::State::Playing).map_err(|e| format!("playing: {e}"))?;
-    Ok(OutputSide { pipeline, video_src, audio_src, _video_out: video_out, _audio_out: audio_out })
+    Ok(OutTrack {
+        start_running: running_time(&pipeline),
+        t0_ns: shared.context.now_ns(),
+        pipeline,
+        src: audio_src,
+        counters,
+        _writer: Box::new(audio_out),
+    })
 }
 
 /// Hängt die Ursprungszeit an einen Ausgabepuffer: der MXL-Schreibpfad nimmt sie als Schreib-Index
@@ -568,8 +703,9 @@ fn stamp_origin(buf: &mut gst::Buffer, ts_ns: u64, reference: &gst::Caps) {
 
 /// Ausgabe-Takt: ein Bild je Bildraster-Index, ein Block je 10 ms — beides **auf dem MXL-Raster** (Index →
 /// TAI-Zeit), nie vom Eingang getrieben. Die Tick-Zeit (nicht die Wanduhr beim Aufwachen) geht in die
-/// Pufferlogik und als Ursprungszeit an den Schreibpfad, sodass Bild und Ton exakt gleich zeitlich liegen.
-fn output_loop(shared: Arc<Shared>, out: OutputSide, shutdown: Arc<AtomicBool>, heartbeat: Arc<AtomicU64>) {
+/// Pufferlogik und als Ursprungszeit an den Schreibpfad, sodass Bild und Ton (und alle Spuren) exakt gleich
+/// zeitlich liegen.
+fn output_loop(shared: Arc<Shared>, shutdown: Arc<AtomicBool>, heartbeat: Arc<AtomicU64>) {
     let ctx = shared.context.clone();
     let (fps_num, fps_den) = (shared.fps_num, shared.fps_den);
     let rate = shared.sample_rate;
@@ -579,36 +715,34 @@ fn output_loop(shared: Arc<Shared>, out: OutputSide, shutdown: Arc<AtomicBool>, 
     // Erste Takte kurz in der Zukunft, Audio auf Blockgrenze (Vielfaches von `block_samples`).
     let mut kv = ctx.ns_to_index(now0 + 100_000_000, fps_num, fps_den).unwrap_or(0) + 1;
     let mut ka = ctx.ns_to_index(now0 + 100_000_000, rate, 1).unwrap_or(0).div_ceil(block_samples) * block_samples;
-    let tv0 = ctx.index_to_ns(kv, fps_num, fps_den).unwrap_or(now0);
-    // Gemeinsame Startzeit auf der Pipeline-Uhr (Laufzeit), damit Bild und Ton dieselbe Zeitleiste teilen;
-    // PTS = Laufzeit + (Tick-Zeit − erste Tick-Zeit) → streng monoton, lückenlos.
-    let start_running = out
-        .pipeline
-        .clock()
-        .zip(out.pipeline.base_time())
-        .map(|(c, b)| c.time().saturating_sub(b))
-        .unwrap_or(gst::ClockTime::ZERO);
-    let pts_of = |ts: u64| start_running + gst::ClockTime::from_nseconds(ts.saturating_sub(tv0));
     let mut tv = ctx.index_to_ns(kv, fps_num, fps_den).unwrap_or(now0);
     let mut ta = ctx.index_to_ns(ka, rate, 1).unwrap_or(now0);
     while !shutdown.load(Ordering::Relaxed) {
         heartbeat.fetch_add(1, Ordering::Relaxed);
         let now = ctx.now_ns();
         if now >= tv {
-            let decision = shared.playout.lock().expect("lock poisoned").tick_video(tv);
-            let frame = match decision {
-                VideoOut::Frame(f) | VideoOut::Repeat(f) => f,
-                VideoOut::Black => shared.black.clone(),
-            };
-            let mut buf = gst::Buffer::from_slice(frame);
-            if let Some(b) = buf.get_mut() {
-                b.set_pts(pts_of(tv));
-                b.set_duration(gst::ClockTime::from_nseconds(shared.period_ns));
+            let decisions = shared.playout.lock().expect("lock poisoned").tick_video_all(tv);
+            let mut outs = shared.outputs.lock().expect("lock poisoned");
+            for (i, decision) in decisions.into_iter().enumerate() {
+                let Some(Some(out)) = outs.video.get_mut(i) else { continue };
+                let frame = match decision {
+                    VideoOut::Frame(f) | VideoOut::Repeat(f) => f,
+                    VideoOut::Black => shared.black.clone(),
+                };
+                let mut buf = gst::Buffer::from_slice(frame);
+                if let Some(b) = buf.get_mut() {
+                    b.set_pts(out.pts_of(tv));
+                    b.set_duration(gst::ClockTime::from_nseconds(shared.period_ns));
+                }
+                stamp_origin(&mut buf, tv, &reference);
+                if out.src.push_buffer(buf).is_ok() {
+                    out.counters.out_count.fetch_add(1, Ordering::Relaxed);
+                    if i == 0 {
+                        shared.counters.video_out.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
             }
-            stamp_origin(&mut buf, tv, &reference);
-            if out.video_src.push_buffer(buf).is_ok() {
-                shared.counters.video_out.fetch_add(1, Ordering::Relaxed);
-            }
+            drop(outs);
             kv += 1;
             // Bei längerem Stillstand (Prozess angehalten) neu aufsetzen statt aufzuholen.
             if now > tv + shared.period_ns * 5 {
@@ -617,16 +751,24 @@ fn output_loop(shared: Arc<Shared>, out: OutputSide, shutdown: Arc<AtomicBool>, 
             tv = ctx.index_to_ns(kv, fps_num, fps_den).unwrap_or(tv + shared.period_ns);
         }
         if now >= ta {
-            let (bytes, _silent) = shared.playout.lock().expect("lock poisoned").tick_audio(ta, block_samples as usize);
-            let mut buf = gst::Buffer::from_mut_slice(bytes);
-            if let Some(b) = buf.get_mut() {
-                b.set_pts(pts_of(ta));
-                b.set_duration(gst::ClockTime::from_mseconds(AUDIO_BLOCK_MS));
+            let blocks = shared.playout.lock().expect("lock poisoned").tick_audio_all(ta, block_samples as usize);
+            let mut outs = shared.outputs.lock().expect("lock poisoned");
+            for (i, (bytes, _silent)) in blocks.into_iter().enumerate() {
+                let Some(Some(out)) = outs.audio.get_mut(i) else { continue };
+                let mut buf = gst::Buffer::from_mut_slice(bytes);
+                if let Some(b) = buf.get_mut() {
+                    b.set_pts(out.pts_of(ta));
+                    b.set_duration(gst::ClockTime::from_mseconds(AUDIO_BLOCK_MS));
+                }
+                stamp_origin(&mut buf, ta, &reference);
+                if out.src.push_buffer(buf).is_ok() {
+                    out.counters.out_count.fetch_add(1, Ordering::Relaxed);
+                    if i == 0 {
+                        shared.counters.audio_out.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
             }
-            stamp_origin(&mut buf, ta, &reference);
-            if out.audio_src.push_buffer(buf).is_ok() {
-                shared.counters.audio_out.fetch_add(1, Ordering::Relaxed);
-            }
+            drop(outs);
             ka += block_samples;
             if now > ta + 20 * AUDIO_BLOCK_MS * 1_000_000 {
                 ka = ctx.ns_to_index(now, rate, 1).unwrap_or(ka).div_ceil(block_samples) * block_samples;
@@ -639,11 +781,133 @@ fn output_loop(shared: Arc<Shared>, out: OutputSide, shutdown: Arc<AtomicBool>, 
             std::thread::sleep(Duration::from_nanos((next - now).min(5_000_000)));
         }
     }
-    let _ = out.video_src.end_of_stream();
-    let _ = out.audio_src.end_of_stream();
+    let outs = shared.outputs.lock().expect("lock poisoned");
+    for o in outs.video.iter().chain(outs.audio.iter()).flatten() {
+        let _ = o.src.end_of_stream();
+    }
 }
 
-/// Läuft auf einem eigenen Thread: baut den Ausgang, startet den Takt-Thread und verwaltet die Eingänge.
+// ---- Eingangs-Verwaltung -------------------------------------------------------------------------
+
+/// Verwaltungszustand eines Eingangs (eine Spur).
+struct Slot<I> {
+    input: Option<I>,
+    want: Option<String>,
+    last_try: Instant,
+    /// Wartezeit bis zum nächsten Neuaufbau eines still gewordenen Eingangs: verdoppelt sich bei jedem
+    /// erfolglosen Versuch (bis `RETRY_MAX_MS`) und springt zurück, sobald wieder Daten kommen — ein
+    /// dauerhaft toter Vorgänger soll nicht alle 3 s eine Pipeline bauen und abreißen.
+    gap: u64,
+    seen: u64,
+}
+
+impl<I> Slot<I> {
+    fn new() -> Self {
+        Slot { input: None, want: None, last_try: Instant::now() - Duration::from_millis(RETRY_MS), gap: RETRY_MS, seen: 0 }
+    }
+
+    fn connect(&mut self, flow_id: String) {
+        self.input = None;
+        self.want = Some(flow_id);
+        self.gap = RETRY_MS;
+        self.last_try = Instant::now() - Duration::from_millis(self.gap);
+    }
+
+    fn disconnect(&mut self) {
+        self.input = None;
+        self.want = None;
+    }
+
+    /// Wächter + Wiederaufbau: verbunden, aber seit `STALL_MS` nichts gekommen → Eingang neu aufbauen.
+    fn service(
+        &mut self,
+        shared: &Shared,
+        c: &TrackCounters,
+        tx: &UnboundedSender<Event>,
+        what: &str,
+        build: impl FnOnce(&str) -> Result<I, String>,
+    ) {
+        let last = c.last_in_ms.load(Ordering::Relaxed);
+        if last != self.seen {
+            self.seen = last;
+            self.gap = RETRY_MS;
+        }
+        // Stille = Zeit seit den letzten Daten, höchstens aber seit dem letzten Neuaufbau: ein frisch
+        // gebauter Eingang bekommt die volle Frist, statt wegen alter Zeitstempel sofort wieder zu fallen.
+        let since_ms = self.last_try.elapsed().as_millis() as u64;
+        let quiet = if last == 0 { since_ms } else { shared.now_ms().saturating_sub(last).min(since_ms) };
+        if self.input.is_some() && self.want.is_some() && quiet > STALL_MS {
+            self.input = None;
+            c.rebuilds.fetch_add(1, Ordering::Relaxed);
+            self.gap = (self.gap * 2).min(RETRY_MAX_MS);
+            self.last_try = Instant::now();
+        }
+        if self.input.is_none()
+            && let Some(f) = self.want.clone()
+            && self.last_try.elapsed() >= Duration::from_millis(self.gap)
+        {
+            self.last_try = Instant::now();
+            match build(&f) {
+                Ok(i) => self.input = Some(i),
+                Err(e) => {
+                    self.gap = (self.gap * 2).min(RETRY_MAX_MS);
+                    let _ = tx.send(Event::Error(format!("{what} input {f}: {e}")));
+                }
+            }
+        }
+    }
+}
+
+/// Spurzahl anpassen (läuft auf dem Eingangs-Thread; siehe [`PipelineHandle::set_tracks`]).
+fn resize(
+    shared: &Arc<Shared>,
+    config: &Config,
+    tx: &UnboundedSender<Event>,
+    video_flows: &[String],
+    audio_flows: &[String],
+    vslots: &mut Vec<Slot<InVideo>>,
+    aslots: &mut Vec<Slot<InAudio>>,
+) {
+    let (nv, na) = (video_flows.len().max(1), audio_flows.len().max(1));
+    // Wegfallende Spuren zuerst: Ausgang und Eingang schließen, dann die Pufferlogik verkleinern.
+    {
+        let mut o = shared.outputs.lock().expect("lock poisoned");
+        o.video.truncate(nv);
+        o.audio.truncate(na);
+    }
+    vslots.truncate(nv);
+    aslots.truncate(na);
+    shared.vtracks.lock().expect("lock poisoned").truncate(nv);
+    shared.atracks.lock().expect("lock poisoned").truncate(na);
+    shared.playout.lock().expect("lock poisoned").set_tracks(nv, na);
+    // Neue Spuren: Zähler, Slot, Ausgang (ein fehlgeschlagener Ausgang belegt den Index trotzdem).
+    while vslots.len() < nv {
+        let i = vslots.len();
+        let counters = Arc::new(TrackCounters::default());
+        shared.vtracks.lock().expect("lock poisoned").push(counters.clone());
+        vslots.push(Slot::new());
+        let out = build_video_output(shared, config, i, &video_flows[i], counters)
+            .map_err(|e| {
+                let _ = tx.send(Event::Error(format!("video output {}: {e}", i + 1)));
+            })
+            .ok();
+        shared.outputs.lock().expect("lock poisoned").video.push(out);
+    }
+    while aslots.len() < na {
+        let i = aslots.len();
+        let counters = Arc::new(TrackCounters::default());
+        shared.atracks.lock().expect("lock poisoned").push(counters.clone());
+        aslots.push(Slot::new());
+        let out = build_audio_output(shared, config, i, &audio_flows[i], counters)
+            .map_err(|e| {
+                let _ = tx.send(Event::Error(format!("audio output {}: {e}", i + 1)));
+            })
+            .ok();
+        shared.outputs.lock().expect("lock poisoned").audio.push(out);
+    }
+}
+
+/// Läuft auf einem eigenen Thread: baut die Ausgänge, startet den Takt-Thread und verwaltet die Eingänge.
 pub fn run(
     config: Config,
     tx: UnboundedSender<Event>,
@@ -685,6 +949,9 @@ pub fn run(
         context: context.clone(),
         playout: Mutex::new(Playout::new(pcfg, period_ns)),
         counters: Counters::default(),
+        vtracks: Mutex::new(Vec::new()),
+        atracks: Mutex::new(Vec::new()),
+        outputs: Mutex::new(Outputs::default()),
         start: Instant::now(),
         black: Frame(Arc::new(buffer::black_v210(config.width, config.height))),
         frame_bytes,
@@ -696,125 +963,72 @@ pub fn run(
         buffer_ms: AtomicU64::new(config.buffer_ms),
         delay_frames: AtomicU64::new(0),
         max_video_bytes_hard: hard,
-        video_selected: AtomicBool::new(false),
-        audio_selected: AtomicBool::new(false),
     });
     shared.apply_target();
 
-    let out = match build_output(&shared, &config) {
-        Ok(o) => o,
-        Err(e) => {
-            let _ = tx.send(Event::Error(e.clone()));
-            let _ = ready.send(Err(e));
+    let mut vslots: Vec<Slot<InVideo>> = Vec::new();
+    let mut aslots: Vec<Slot<InAudio>> = Vec::new();
+    resize(&shared, &config, &tx, &config.video_flow_ids, &config.audio_flow_ids, &mut vslots, &mut aslots);
+    // Die ersten Ausgänge müssen stehen — sonst gibt es keinen Node.
+    {
+        let o = shared.outputs.lock().expect("lock poisoned");
+        if o.video.iter().chain(o.audio.iter()).any(Option::is_none) {
+            drop(o);
+            let msg = "output setup failed".to_string();
+            let _ = ready.send(Err(msg));
             return;
         }
-    };
+    }
     let out_shared = shared.clone();
     let out_shutdown = shutdown.clone();
-    let out_thread = std::thread::spawn(move || output_loop(out_shared, out, out_shutdown, output_heartbeat));
+    let out_thread = std::thread::spawn(move || output_loop(out_shared, out_shutdown, output_heartbeat));
 
     let (commands_tx, commands_rx): (Sender<Command>, Receiver<Command>) = std::sync::mpsc::channel();
     let _ = ready.send(Ok(PipelineHandle { commands: commands_tx, shared: shared.clone() }));
 
-    let mut video: Option<InVideo> = None;
-    let mut audio: Option<InAudio> = None;
-    let mut want_video: Option<String> = None;
-    let mut want_audio: Option<String> = None;
-    let mut last_try_v = Instant::now() - Duration::from_millis(RETRY_MS);
-    let mut last_try_a = Instant::now() - Duration::from_millis(RETRY_MS);
-    // Wartezeit bis zum nächsten Neuaufbau eines still gewordenen Eingangs: verdoppelt sich bei jedem erfolglosen
-    // Versuch (bis `RETRY_MAX_MS`) und springt zurück, sobald wieder Daten kommen — ein dauerhaft toter Vorgänger
-    // soll nicht alle 3 s eine Pipeline bauen und abreißen.
-    let (mut gap_v, mut gap_a) = (RETRY_MS, RETRY_MS);
-    let (mut seen_v, mut seen_a) = (0u64, 0u64);
     loop {
         heartbeat.fetch_add(1, Ordering::Relaxed);
         if shutdown.load(Ordering::Relaxed) {
             break;
         }
         match commands_rx.recv_timeout(Duration::from_millis(250)) {
-            Ok(Command::ConnectVideo(f)) => {
-                video = None;
-                want_video = Some(f);
-                gap_v = RETRY_MS;
-                last_try_v = Instant::now() - Duration::from_millis(gap_v);
+            Ok(Command::ConnectVideo(i, f)) => {
+                if let Some(s) = vslots.get_mut(i) {
+                    s.connect(f);
+                }
             }
-            Ok(Command::DisconnectVideo) => {
-                video = None;
-                want_video = None;
+            Ok(Command::DisconnectVideo(i)) => {
+                if let Some(s) = vslots.get_mut(i) {
+                    s.disconnect();
+                }
             }
-            Ok(Command::ConnectAudio(f)) => {
-                audio = None;
-                want_audio = Some(f);
-                gap_a = RETRY_MS;
-                last_try_a = Instant::now() - Duration::from_millis(gap_a);
+            Ok(Command::ConnectAudio(i, f)) => {
+                if let Some(s) = aslots.get_mut(i) {
+                    s.connect(f);
+                }
             }
-            Ok(Command::DisconnectAudio) => {
-                audio = None;
-                want_audio = None;
+            Ok(Command::DisconnectAudio(i)) => {
+                if let Some(s) = aslots.get_mut(i) {
+                    s.disconnect();
+                }
             }
+            Ok(Command::Resize(vf, af)) => resize(&shared, &config, &tx, &vf, &af, &mut vslots, &mut aslots),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
-        // Wächter: verbunden, aber seit STALL_MS nichts gekommen → Eingang neu aufbauen.
-        let c = &shared.counters;
-        let stalled = |last: u64, since: Instant| {
-            // Stille = Zeit seit den letzten Daten, höchstens aber seit dem letzten Neuaufbau (`since`): ein frisch
-            // gebauter Eingang bekommt die volle Frist, statt wegen alter Zeitstempel sofort wieder zu fallen.
-            let since_ms = since.elapsed().as_millis() as u64;
-            let quiet = if last == 0 { since_ms } else { shared.now_ms().saturating_sub(last).min(since_ms) };
-            quiet > STALL_MS
-        };
-        let (lv, la) = (c.last_video_in_ms.load(Ordering::Relaxed), c.last_audio_in_ms.load(Ordering::Relaxed));
-        if lv != seen_v {
-            seen_v = lv;
-            gap_v = RETRY_MS;
+        let vcounters: Vec<Arc<TrackCounters>> = shared.vtracks.lock().expect("lock poisoned").clone();
+        let acounters: Vec<Arc<TrackCounters>> = shared.atracks.lock().expect("lock poisoned").clone();
+        for (i, slot) in vslots.iter_mut().enumerate() {
+            let Some(c) = vcounters.get(i) else { continue };
+            slot.service(&shared, c, &tx, "video", |f| build_video_input(&shared, &config, i, c.clone(), f));
         }
-        if la != seen_a {
-            seen_a = la;
-            gap_a = RETRY_MS;
-        }
-        if video.is_some() && want_video.is_some() && stalled(lv, last_try_v) {
-            video = None;
-            c.rebuilds_video.fetch_add(1, Ordering::Relaxed);
-            gap_v = (gap_v * 2).min(RETRY_MAX_MS);
-            last_try_v = Instant::now() - Duration::from_millis(0);
-        }
-        if audio.is_some() && want_audio.is_some() && stalled(la, last_try_a) {
-            audio = None;
-            c.rebuilds_audio.fetch_add(1, Ordering::Relaxed);
-            gap_a = (gap_a * 2).min(RETRY_MAX_MS);
-            last_try_a = Instant::now() - Duration::from_millis(0);
-        }
-        if video.is_none()
-            && let Some(f) = want_video.clone()
-            && last_try_v.elapsed() >= Duration::from_millis(gap_v)
-        {
-            last_try_v = Instant::now();
-            match build_video_input(&shared, &config, &f) {
-                Ok(v) => video = Some(v),
-                Err(e) => {
-                    gap_v = (gap_v * 2).min(RETRY_MAX_MS);
-                    let _ = tx.send(Event::Error(format!("video input {f}: {e}")));
-                }
-            }
-        }
-        if audio.is_none()
-            && let Some(f) = want_audio.clone()
-            && last_try_a.elapsed() >= Duration::from_millis(gap_a)
-        {
-            last_try_a = Instant::now();
-            match build_audio_input(&shared, &config, &f) {
-                Ok(a) => audio = Some(a),
-                Err(e) => {
-                    gap_a = (gap_a * 2).min(RETRY_MAX_MS);
-                    let _ = tx.send(Event::Error(format!("audio input {f}: {e}")));
-                }
-            }
+        for (i, slot) in aslots.iter_mut().enumerate() {
+            let Some(c) = acounters.get(i) else { continue };
+            slot.service(&shared, c, &tx, "audio", |f| build_audio_input(&shared, &config, i, c.clone(), f));
         }
     }
-    drop(video);
-    drop(audio);
+    drop(vslots);
+    drop(aslots);
     shutdown.store(true, Ordering::Relaxed);
     let _ = out_thread.join();
 }

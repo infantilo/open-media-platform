@@ -143,22 +143,58 @@ pub struct Stats {
     pub refill_samples: u64,
 }
 
+/// Eine Bildspur: eigener Ring, eigenes Haltebild.
+struct VTrack<V> {
+    ring: VecDeque<VItem<V>>,
+    bytes: usize,
+    last: Option<V>,
+    connected: bool,
+    prev_ts: Option<u64>,
+}
+
+impl<V> VTrack<V> {
+    fn new() -> Self {
+        VTrack { ring: VecDeque::new(), bytes: 0, last: None, connected: false, prev_ts: None }
+    }
+}
+
+/// Eine Tonspur: eigene FIFO, eigene Lesestelle.
+struct ATrack {
+    fifo: VecDeque<AItem>,
+    bytes: usize,
+    /// Ursprungszeit des nächsten auszugebenden Samples; `None` = noch nicht ausgerichtet.
+    play: Option<u64>,
+    connected: bool,
+    prev_end: Option<u64>,
+}
+
+impl ATrack {
+    fn new() -> Self {
+        ATrack { fifo: VecDeque::new(), bytes: 0, play: None, connected: false, prev_end: None }
+    }
+}
+
+/// Füllstand einer Spur (Anzeige).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TrackFill {
+    pub connected: bool,
+    pub fill_ms: u64,
+    /// Bilder (nur Bildspur).
+    pub frames: usize,
+    pub bytes: usize,
+}
+
+/// Ein Puffer mit beliebig vielen Bild- und Tonspuren. Alle Spuren teilen Zustand (`Fill/Run/Hold`) und
+/// Takt; die **Leitspur** (erste verbundene Bildspur mit Material, sonst erste Tonspur) bestimmt Vorlauf und
+/// Wiederaufnahme, alle anderen Spuren richten sich über die Ursprungszeit nach ihr aus. Spur 0 jeder Art
+/// existiert immer; weitere kommen/gehen über [`Playout::set_tracks`].
 pub struct Playout<V: Clone> {
     cfg: Config,
     state: State,
-    video: VecDeque<VItem<V>>,
-    video_bytes: usize,
-    audio: VecDeque<AItem>,
-    audio_bytes: usize,
-    last_video: Option<V>,
-    /// (Ursprungszeit des zuletzt gezeigten frischen Bildes, Ausgabezeit dieses Taktes).
+    vtracks: Vec<VTrack<V>>,
+    atracks: Vec<ATrack>,
+    /// (Ursprungszeit des zuletzt gezeigten frischen Leitbildes, Ausgabezeit dieses Taktes).
     v_anchor: Option<(u64, u64)>,
-    /// Ursprungszeit des nächsten auszugebenden Samples; `None` = noch nicht ausgerichtet.
-    audio_play: Option<u64>,
-    video_connected: bool,
-    audio_connected: bool,
-    prev_video_ts: Option<u64>,
-    prev_audio_end: Option<u64>,
     video_period_ns: u64,
     /// Wiederauffüllen läuft (Hysterese, s. `update_refill`).
     refilling: bool,
@@ -172,17 +208,9 @@ impl<V: Clone> Playout<V> {
         Playout {
             cfg,
             state: State::Fill,
-            video: VecDeque::new(),
-            video_bytes: 0,
-            audio: VecDeque::new(),
-            audio_bytes: 0,
-            last_video: None,
+            vtracks: vec![VTrack::new()],
+            atracks: vec![ATrack::new()],
             v_anchor: None,
-            audio_play: None,
-            video_connected: false,
-            audio_connected: false,
-            prev_video_ts: None,
-            prev_audio_end: None,
             video_period_ns: video_period_ns.max(1),
             refilling: false,
             acc_v: 0,
@@ -199,16 +227,41 @@ impl<V: Clone> Playout<V> {
         &self.cfg
     }
 
+    #[cfg(test)]
+    pub fn video_tracks(&self) -> usize {
+        self.vtracks.len()
+    }
+
+    #[cfg(test)]
+    pub fn audio_tracks(&self) -> usize {
+        self.atracks.len()
+    }
+
+    /// Spurzahl ändern (mindestens je eine). Neue Spuren starten leer und unverbunden; entfernte Spuren
+    /// geben ihren Speicher frei. Der Zustand bleibt — die Leitspur wird bei Bedarf neu bestimmt.
+    pub fn set_tracks(&mut self, video: usize, audio: usize) {
+        let (video, audio) = (video.max(1), audio.max(1));
+        self.vtracks.truncate(video);
+        while self.vtracks.len() < video {
+            self.vtracks.push(VTrack::new());
+        }
+        self.atracks.truncate(audio);
+        while self.atracks.len() < audio {
+            self.atracks.push(ATrack::new());
+        }
+    }
+
+    /// Alle Bilder der Spuren (Summe).
     pub fn video_len(&self) -> usize {
-        self.video.len()
+        self.vtracks.iter().map(|t| t.ring.len()).sum()
     }
 
     pub fn video_bytes(&self) -> usize {
-        self.video_bytes
+        self.vtracks.iter().map(|t| t.bytes).sum()
     }
 
     pub fn audio_bytes(&self) -> usize {
-        self.audio_bytes
+        self.atracks.iter().map(|t| t.bytes).sum()
     }
 
     fn bpf(&self) -> usize {
@@ -219,17 +272,43 @@ impl<V: Clone> Playout<V> {
         s2n(self.cfg.sample_rate, samples)
     }
 
-    /// Gepufferte Bildtiefe in ms (Anzahl × Bildabstand).
+    fn vfill_ms(&self, t: &VTrack<V>) -> u64 {
+        t.ring.len() as u64 * self.video_period_ns / 1_000_000
+    }
+
+    fn afill_ms(&self, t: &ATrack) -> u64 {
+        self.samples_to_ns((t.bytes / self.bpf()) as u64) / 1_000_000
+    }
+
+    /// Gepufferte Bildtiefe in ms (Anzahl × Bildabstand) — größter Wert über alle Bildspuren.
     pub fn video_fill_ms(&self) -> u64 {
-        self.video.len() as u64 * self.video_period_ns / 1_000_000
+        self.vtracks.iter().map(|t| self.vfill_ms(t)).max().unwrap_or(0)
     }
 
-    /// Gepufferte Tondauer in ms.
+    /// Gepufferte Tondauer in ms — größter Wert über alle Tonspuren.
     pub fn audio_fill_ms(&self) -> u64 {
-        self.samples_to_ns((self.audio_bytes / self.bpf()) as u64) / 1_000_000
+        self.atracks.iter().map(|t| self.afill_ms(t)).max().unwrap_or(0)
     }
 
-    /// Alter (ms) des ältesten wartenden Bildes bzw. (ohne Bild-Eingang) Tonblocks.
+    pub fn video_track_fill(&self, i: usize) -> TrackFill {
+        self.vtracks.get(i).map_or_else(TrackFill::default, |t| TrackFill {
+            connected: t.connected,
+            fill_ms: self.vfill_ms(t),
+            frames: t.ring.len(),
+            bytes: t.bytes,
+        })
+    }
+
+    pub fn audio_track_fill(&self, i: usize) -> TrackFill {
+        self.atracks.get(i).map_or_else(TrackFill::default, |t| TrackFill {
+            connected: t.connected,
+            fill_ms: self.afill_ms(t),
+            frames: 0,
+            bytes: t.bytes,
+        })
+    }
+
+    /// Alter (ms) des ältesten wartenden Bildes bzw. (ohne Bild-Eingang) Tonblocks der Leitspur.
     pub fn front_age_ms(&self, now: u64) -> u64 {
         self.master_front_ts().map_or(0, |ts| now.saturating_sub(ts) / 1_000_000)
     }
@@ -271,9 +350,31 @@ impl<V: Clone> Playout<V> {
         }
     }
 
+    /// Spur 0 (Bild/Ton) als verbunden/getrennt markieren (Kurzform für den Ein-Spur-Betrieb).
+    #[cfg(test)]
     pub fn set_connected(&mut self, video: bool, audio: bool) {
-        self.video_connected = video;
-        self.audio_connected = audio;
+        self.set_video_connected(0, video);
+        self.set_audio_connected(0, audio);
+    }
+
+    pub fn set_video_connected(&mut self, track: usize, connected: bool) {
+        if let Some(t) = self.vtracks.get_mut(track) {
+            t.connected = connected;
+        }
+    }
+
+    pub fn set_audio_connected(&mut self, track: usize, connected: bool) {
+        if let Some(t) = self.atracks.get_mut(track) {
+            t.connected = connected;
+        }
+    }
+
+    fn video_connected(&self) -> bool {
+        self.vtracks.iter().any(|t| t.connected)
+    }
+
+    fn audio_connected(&self) -> bool {
+        self.atracks.iter().any(|t| t.connected)
     }
 
     /// Zieltiefe ändern (Parameter `bufferMs` bzw. Delay-Ausgleich). Wachsende Tiefe = erneuter Vorlauf
@@ -283,7 +384,9 @@ impl<V: Clone> Playout<V> {
         self.cfg.target_ns = target_ns;
         if grow && self.state == State::Run {
             self.state = State::Fill;
-            self.audio_play = None;
+            for t in &mut self.atracks {
+                t.play = None;
+            }
         }
     }
 
@@ -295,40 +398,59 @@ impl<V: Clone> Playout<V> {
         self.cfg.hold_mode = mode;
     }
 
+    /// Grenzen **je Spur**.
     pub fn set_limits(&mut self, max_video_bytes: usize, max_audio_bytes: usize) {
         self.cfg.max_video_bytes = max_video_bytes;
         self.cfg.max_audio_bytes = max_audio_bytes;
-        self.enforce_video_limit();
-        self.enforce_audio_limit();
+        for i in 0..self.vtracks.len() {
+            self.enforce_video_limit(i);
+        }
+        for i in 0..self.atracks.len() {
+            self.enforce_audio_limit(i);
+        }
     }
 
     // ---- Eingang ---------------------------------------------------------------------------------
 
+    #[cfg(test)]
     pub fn push_video(&mut self, ts: u64, len: usize, data: V) {
-        if let Some(prev) = self.prev_video_ts {
+        self.push_video_to(0, ts, len, data);
+    }
+
+    pub fn push_video_to(&mut self, track: usize, ts: u64, len: usize, data: V) {
+        let period = self.video_period_ns;
+        let Some(t) = self.vtracks.get_mut(track) else { return };
+        if let Some(prev) = t.prev_ts {
             // Sprung = rückwärts oder mehr als 2,5 Bildabstände Lücke (Quellwechsel/Neustart).
-            if ts < prev || ts - prev > self.video_period_ns * 5 / 2 {
+            if ts < prev || ts - prev > period * 5 / 2 {
                 self.stats.video_ts_jumps += 1;
             }
         }
-        self.prev_video_ts = Some(ts);
-        self.video.push_back(VItem { ts, len, data });
-        self.video_bytes += len;
-        self.enforce_video_limit();
+        t.prev_ts = Some(ts);
+        t.ring.push_back(VItem { ts, len, data });
+        t.bytes += len;
+        self.enforce_video_limit(track);
     }
 
-    fn enforce_video_limit(&mut self) {
+    fn enforce_video_limit(&mut self, track: usize) {
+        let max = self.cfg.max_video_bytes;
+        let Some(t) = self.vtracks.get_mut(track) else { return };
         // Mindestens ein Bild bleibt stehen, sonst könnte eine zu kleine Grenze den Ring leeren.
-        while self.video_bytes > self.cfg.max_video_bytes && self.video.len() > 1 {
-            if let Some(old) = self.video.pop_front() {
-                self.video_bytes -= old.len;
+        while t.bytes > max && t.ring.len() > 1 {
+            if let Some(old) = t.ring.pop_front() {
+                t.bytes -= old.len;
                 self.stats.dropped_video += 1;
             }
         }
     }
 
     /// `ts` = Ursprungszeit des ersten Samples, `exact` = stammt aus dem Ursprung (sonst Ankunftszeit).
+    #[cfg(test)]
     pub fn push_audio(&mut self, ts: u64, exact: bool, data: Vec<u8>) {
+        self.push_audio_to(0, ts, exact, data);
+    }
+
+    pub fn push_audio_to(&mut self, track: usize, ts: u64, exact: bool, data: Vec<u8>) {
         let bpf = self.bpf();
         let data = {
             let mut d = data;
@@ -339,23 +461,27 @@ impl<V: Clone> Playout<V> {
             return;
         }
         let samples = (data.len() / bpf) as u64;
+        let block_ns = self.samples_to_ns(samples);
         let tol = if exact { AUDIO_EXACT_TOL_NS } else { AUDIO_ARRIVAL_TOL_NS };
-        if let Some(prev_end) = self.prev_audio_end
-            && ts.abs_diff(prev_end) > tol.max(self.samples_to_ns(samples))
+        let Some(t) = self.atracks.get_mut(track) else { return };
+        if let Some(prev_end) = t.prev_end
+            && ts.abs_diff(prev_end) > tol.max(block_ns)
         {
             self.stats.audio_ts_jumps += 1;
         }
-        self.prev_audio_end = Some(ts + self.samples_to_ns(samples));
-        self.audio_bytes += data.len();
-        self.audio.push_back(AItem { ts, exact, data, off: 0 });
-        self.enforce_audio_limit();
+        t.prev_end = Some(ts + block_ns);
+        t.bytes += data.len();
+        t.fifo.push_back(AItem { ts, exact, data, off: 0 });
+        self.enforce_audio_limit(track);
     }
 
-    fn enforce_audio_limit(&mut self) {
-        while self.audio_bytes > self.cfg.max_audio_bytes && self.audio.len() > 1 {
-            if let Some(old) = self.audio.pop_front() {
+    fn enforce_audio_limit(&mut self, track: usize) {
+        let max = self.cfg.max_audio_bytes;
+        let Some(t) = self.atracks.get_mut(track) else { return };
+        while t.bytes > max && t.fifo.len() > 1 {
+            if let Some(old) = t.fifo.pop_front() {
                 let remaining = old.data.len() - old.off;
-                self.audio_bytes -= remaining;
+                t.bytes -= remaining;
                 self.stats.dropped_audio_bytes += remaining as u64;
             }
         }
@@ -363,11 +489,20 @@ impl<V: Clone> Playout<V> {
 
     // ---- Zustand ---------------------------------------------------------------------------------
 
+    /// Leitspur Bild: erste verbundene Bildspur mit Material.
+    fn master_video(&self) -> Option<usize> {
+        self.vtracks.iter().position(|t| t.connected && !t.ring.is_empty())
+    }
+
+    fn master_audio(&self) -> Option<usize> {
+        self.atracks.iter().position(|t| t.connected && !t.fifo.is_empty())
+    }
+
     fn master_front_ts(&self) -> Option<u64> {
-        if self.video_connected {
-            self.video.front().map(|v| v.ts)
-        } else if self.audio_connected {
-            self.audio.front().map(|a| a.ts)
+        if self.video_connected() {
+            self.master_video().and_then(|i| self.vtracks[i].ring.front()).map(|v| v.ts)
+        } else if self.audio_connected() {
+            self.master_audio().and_then(|i| self.atracks[i].fifo.front()).map(|a| a.ts)
         } else {
             None
         }
@@ -390,7 +525,10 @@ impl<V: Clone> Playout<V> {
                     }
                     self.state = State::Run;
                     // Ton richtet sich beim ersten Takt neu nach dem Bild aus.
-                    self.audio_play = if self.video_connected { None } else { Some(ts) };
+                    let video = self.video_connected();
+                    for t in &mut self.atracks {
+                        t.play = if video { None } else { Some(ts) };
+                    }
                     self.v_anchor = None;
                 }
             }
@@ -398,7 +536,9 @@ impl<V: Clone> Playout<V> {
                 if front.is_none() {
                     self.state = State::Hold;
                     self.stats.underruns += 1;
-                    self.audio_play = None;
+                    for t in &mut self.atracks {
+                        t.play = None;
+                    }
                 }
             }
         }
@@ -406,106 +546,136 @@ impl<V: Clone> Playout<V> {
 
     // ---- Ausgang ---------------------------------------------------------------------------------
 
-    fn idle_video(&mut self) -> VideoOut<V> {
-        self.stats.hold_ticks += 1;
-        match (self.cfg.hold_mode, &self.last_video) {
+    /// Ersatzbild einer Spur (ohne Zählung).
+    fn filler(&self, track: usize) -> VideoOut<V> {
+        match (self.cfg.hold_mode, self.vtracks.get(track).and_then(|t| t.last.as_ref())) {
             (HoldMode::Last, Some(v)) => VideoOut::Repeat(v.clone()),
             _ => VideoOut::Black,
         }
     }
 
-    /// Ein Bildtakt. `now` = aktuelle Zeit in derselben Epoche wie die Ursprungszeiten (MXL-TAI).
-    pub fn tick_video(&mut self, now: u64) -> VideoOut<V> {
-        self.update_state(now);
-        if self.state != State::Run {
-            return self.idle_video();
-        }
-        // Aufholen: ist das älteste Bild deutlich älter als Ziel + Toleranz, ein Bild überspringen.
-        if self.video_connected
-            && self.video.len() > 1
-            && let Some(front) = self.video.front()
-            && now.saturating_sub(front.ts) > self.cfg.target_ns + self.cfg.slack_ns
-            && let Some(old) = self.video.pop_front()
-        {
-            self.video_bytes -= old.len;
-            self.stats.trimmed_video += 1;
-        }
-        self.update_refill(now);
-        if self.refilling && self.video_connected && !self.video.is_empty() {
-            // Wiederauffüllen: in `refill_ppm` Millionstel der Takte das letzte Bild noch einmal zeigen,
-            // statt ein neues aus dem Ring zu nehmen — der Ring wächst dadurch um ein Bild.
-            self.acc_v += self.cfg.refill_ppm as u64;
-            if self.acc_v >= 1_000_000 && self.last_video.is_some() {
-                self.acc_v -= 1_000_000;
-                self.stats.refill_frames += 1;
-                return match self.last_video.clone() {
-                    Some(v) => VideoOut::Repeat(v),
-                    None => VideoOut::Black,
-                };
-            }
-        }
-        match self.video.pop_front() {
-            Some(item) => {
-                self.video_bytes -= item.len;
-                self.v_anchor = Some((item.ts, now));
-                self.last_video = Some(item.data.clone());
-                VideoOut::Frame(item.data)
-            }
-            None => {
-                // Ohne Bild-Eingang (reiner Ton) ist ein leerer Ring der Normalfall.
-                if self.video_connected {
-                    self.state = State::Hold;
-                    self.stats.underruns += 1;
-                    self.audio_play = None;
-                }
-                self.idle_video()
-            }
-        }
+    fn idle_video_all(&mut self) -> Vec<VideoOut<V>> {
+        self.stats.hold_ticks += 1;
+        (0..self.vtracks.len()).map(|i| self.filler(i)).collect()
     }
 
-    /// Ein Tonblock mit `frames` Samples je Kanal (Stille, wo nichts zu senden ist).
-    /// Rückgabe: Daten (interleaved F32LE) und ob der Block (teilweise) Stille ist.
-    pub fn tick_audio(&mut self, now: u64, frames: usize) -> (Vec<u8>, bool) {
+    /// Ein Bildtakt, nur Spur 0 (Ein-Spur-Betrieb, Tests).
+    #[cfg(test)]
+    pub fn tick_video(&mut self, now: u64) -> VideoOut<V> {
+        self.tick_video_all(now).swap_remove(0)
+    }
+
+    /// Ein Bildtakt für **alle** Bildspuren (Index = Spur). `now` = aktuelle Zeit in derselben Epoche wie
+    /// die Ursprungszeiten (MXL-TAI).
+    pub fn tick_video_all(&mut self, now: u64) -> Vec<VideoOut<V>> {
         self.update_state(now);
-        if !self.video_connected {
+        if self.state != State::Run {
+            return self.idle_video_all();
+        }
+        let mut outs: Vec<Option<VideoOut<V>>> = (0..self.vtracks.len()).map(|_| None).collect();
+        let master = self.master_video();
+        if let Some(m) = master {
+            // Aufholen: ist das älteste Bild deutlich älter als Ziel + Toleranz, ein Bild überspringen.
+            let t = &mut self.vtracks[m];
+            if t.ring.len() > 1
+                && let Some(front) = t.ring.front()
+                && now.saturating_sub(front.ts) > self.cfg.target_ns + self.cfg.slack_ns
+                && let Some(old) = t.ring.pop_front()
+            {
+                t.bytes -= old.len;
+                self.stats.trimmed_video += 1;
+            }
+        }
+        self.update_refill(now);
+        if let Some(m) = master {
+            let mut done = false;
+            if self.refilling {
+                // Wiederauffüllen: in `refill_ppm` Millionstel der Takte das letzte Bild noch einmal zeigen,
+                // statt ein neues aus dem Ring zu nehmen — der Ring wächst dadurch um ein Bild.
+                self.acc_v += self.cfg.refill_ppm as u64;
+                if self.acc_v >= 1_000_000 && self.vtracks[m].last.is_some() {
+                    self.acc_v -= 1_000_000;
+                    self.stats.refill_frames += 1;
+                    outs[m] = Some(self.filler(m));
+                    done = true;
+                }
+            }
+            if !done && let Some(item) = self.vtracks[m].ring.pop_front() {
+                let t = &mut self.vtracks[m];
+                t.bytes -= item.len;
+                self.v_anchor = Some((item.ts, now));
+                t.last = Some(item.data.clone());
+                outs[m] = Some(VideoOut::Frame(item.data));
+            }
+        } else if self.video_connected() {
+            // Bild-Eingang verbunden, aber kein Material mehr → Überbrückung.
+            self.state = State::Hold;
+            self.stats.underruns += 1;
+            for t in &mut self.atracks {
+                t.play = None;
+            }
+            return self.idle_video_all();
+        }
+        // Übrige Spuren: das Bild, dessen Ursprungszeit dem zuletzt gezeigten Leitbild am nächsten kommt.
+        let target = self.v_anchor.map(|(ts, _)| ts);
+        let half = self.video_period_ns / 2;
+        for i in 0..self.vtracks.len() {
+            if outs[i].is_some() {
+                continue;
+            }
+            let Some(target) = target else { continue };
+            let t = &mut self.vtracks[i];
+            // Veraltetes (ein jüngeres liegt ebenfalls noch vor dem Ziel) lautlos verwerfen.
+            while t.ring.len() > 1 && t.ring.get(1).is_some_and(|n| n.ts <= target + half) {
+                if let Some(old) = t.ring.pop_front() {
+                    t.bytes -= old.len;
+                }
+            }
+            if t.ring.front().is_some_and(|f| f.ts <= target + half)
+                && let Some(item) = t.ring.pop_front()
+            {
+                t.bytes -= item.len;
+                t.last = Some(item.data.clone());
+                outs[i] = Some(VideoOut::Frame(item.data));
+            }
+        }
+        (0..outs.len()).map(|i| outs[i].take().unwrap_or_else(|| self.filler(i))).collect()
+    }
+
+    /// Ein Tonblock mit `frames` Samples je Kanal, nur Spur 0 (Ein-Spur-Betrieb, Tests).
+    #[cfg(test)]
+    pub fn tick_audio(&mut self, now: u64, frames: usize) -> (Vec<u8>, bool) {
+        self.tick_audio_all(now, frames).swap_remove(0)
+    }
+
+    /// Ein Tonblock für **alle** Tonspuren (Stille, wo nichts zu senden ist).
+    /// Rückgabe je Spur: Daten (interleaved F32LE) und ob der Block (teilweise) Stille ist.
+    pub fn tick_audio_all(&mut self, now: u64, frames: usize) -> Vec<(Vec<u8>, bool)> {
+        self.update_state(now);
+        let video = self.video_connected();
+        if !video {
             self.update_refill(now);
         }
         let bpf = self.bpf();
-        let mut out = vec![0u8; frames * bpf];
+        let n = self.atracks.len();
         if self.state != State::Run {
             self.stats.silent_blocks += 1;
             // Beim Vorlauf/Hold darf sich der Tonpuffer nicht über die Grenze hinaus aufstauen:
             // die Grenze (`max_audio_bytes`) erzwingt `push_audio`.
-            return (out, true);
+            return (0..n).map(|_| (vec![0u8; frames * bpf], true)).collect();
         }
         // Erwartete Ursprungszeit am Ton-Ausgang aus dem Bild ableiten.
-        let expected = if self.video_connected {
-            self.v_anchor.map(|(ts, at)| ts + now.saturating_sub(at))
-        } else {
-            None
-        };
-        if self.video_connected && expected.is_none() {
+        let expected = if video { self.v_anchor.map(|(ts, at)| ts + now.saturating_sub(at)) } else { None };
+        if video && expected.is_none() {
             // Bild-Anker fehlt noch (erster Takt nach Run-Beginn): Ton wartet auf das erste Bild.
             self.stats.silent_blocks += 1;
-            return (out, true);
+            return (0..n).map(|_| (vec![0u8; frames * bpf], true)).collect();
         }
+        // Ohne Bild folgen alle Tonspuren der Lesestelle der Leit-Tonspur (alle laufen im Gleichschritt).
+        let audio_only_ref = if video { None } else { self.master_audio().and_then(|m| self.atracks[m].play) };
+        let expected = expected.or(audio_only_ref);
         // Beim Wiederauffüllen läuft der Ton absichtlich bis zu ein Bild hinter der Bildzeit her (s. Moduldoku).
         let seek_tol = if self.refilling { 2 * SEEK_TOLERANCE_NS } else { SEEK_TOLERANCE_NS };
-        match (expected, self.audio_play) {
-            (Some(e), None) => self.seek_audio(e),
-            (Some(e), Some(p)) if p.abs_diff(e) > seek_tol => self.seek_audio(e),
-            (None, None) => {
-                if let Some(a) = self.audio.front() {
-                    self.audio_play = Some(a.ts);
-                }
-            }
-            _ => {}
-        }
-        let rate = self.cfg.sample_rate;
-        let Some(mut play) = self.audio_play else {
-            self.stats.silent_blocks += 1;
-            return (out, true);
-        };
         // Wiederauffüllen: `k` Zwischenwerte einfügen, also nur `frames - k` Samples aus dem Puffer nehmen.
         let k = if self.refilling && self.cfg.refill_ppm > 0 {
             self.acc_a += frames as u64 * self.cfg.refill_ppm as u64;
@@ -515,92 +685,131 @@ impl<V: Clone> Playout<V> {
         } else {
             0
         };
-        let want = frames - k;
-        let mut silent = false;
-        let mut written = 0usize; // in Samples
-        while written < want {
-            let Some(front) = self.audio.front_mut() else {
-                silent = true;
-                // Ohne Daten läuft die Lesestelle mit (Stille), bleibt aber an der Zeitleiste.
-                play += s2n(rate, (want - written) as u64);
-                break;
-            };
-            let tol = if front.exact { AUDIO_EXACT_TOL_NS } else { AUDIO_ARRIVAL_TOL_NS };
-            if front.ts > play + tol {
-                // Lücke im Material: Stille bis zum Beginn der Daten.
-                let gap = ((front.ts - play) as u128 * rate as u128 / 1_000_000_000) as usize;
-                let n = gap.min(want - written).max(1);
-                silent = true;
-                self.stats.audio_gap_samples += n as u64;
-                written += n;
-                play += (n as u128 * 1_000_000_000 / rate as u128) as u64;
-                continue;
-            }
-            if front.ts + tol < play {
-                // Daten liegen hinter der Lesestelle: Überstehendes verwerfen.
-                let behind = ((play - front.ts) as u128 * rate as u128 / 1_000_000_000) as usize;
-                let avail = (front.data.len() - front.off) / bpf;
-                let skip = behind.min(avail).max(1);
-                front.off += skip * bpf;
-                front.ts += (skip as u128 * 1_000_000_000 / rate as u128) as u64;
-                self.audio_bytes -= skip * bpf;
-                self.stats.audio_skipped_samples += skip as u64;
-                if front.off >= front.data.len() {
-                    self.audio.pop_front();
-                }
-                continue;
-            }
-            let avail = (front.data.len() - front.off) / bpf;
-            let n = avail.min(want - written);
-            let src = &front.data[front.off..front.off + n * bpf];
-            out[written * bpf..(written + n) * bpf].copy_from_slice(src);
-            front.off += n * bpf;
-            let adv = (n as u128 * 1_000_000_000 / rate as u128) as u64;
-            front.ts += adv;
-            self.audio_bytes -= n * bpf;
-            written += n;
-            play += adv;
-            if front.off >= front.data.len() {
-                self.audio.pop_front();
-            }
-        }
-        self.audio_play = Some(play);
-        if silent {
+        let (rate, channels) = (self.cfg.sample_rate, self.cfg.channels.max(1) as usize);
+        let mut any_silent = false;
+        let outs = self
+            .atracks
+            .iter_mut()
+            .map(|t| {
+                let (data, silent) = render_audio_track(t, &mut self.stats, rate, channels, expected, seek_tol, frames, k);
+                any_silent |= silent;
+                (data, silent)
+            })
+            .collect();
+        if any_silent {
             self.stats.silent_blocks += 1;
         }
-        if k > 0 {
-            out = stretch_block(&out[..want * bpf], want, k, self.cfg.channels.max(1) as usize);
-            self.stats.refill_samples += k as u64;
-        }
-        (out, silent)
+        outs
     }
+}
 
-    /// Lesestelle auf Ursprungszeit `e` setzen: älteres Material verwerfen.
-    fn seek_audio(&mut self, e: u64) {
-        let bpf = self.bpf();
-        let rate = self.cfg.sample_rate;
-        self.stats.audio_seeks += 1;
-        while let Some(front) = self.audio.front_mut() {
-            let n = ((front.data.len() - front.off) / bpf) as u64;
-            let end = front.ts + s2n(rate, n);
-            if end <= e {
-                let remaining = front.data.len() - front.off;
-                self.audio_bytes -= remaining;
-                self.stats.audio_skipped_samples += n;
-                self.audio.pop_front();
-                continue;
+/// Ein Tonblock einer Spur ab ihrer Lesestelle `t.play` (ausgerichtet auf `expected`, falls bekannt).
+#[allow(clippy::too_many_arguments)]
+fn render_audio_track(
+    t: &mut ATrack,
+    stats: &mut Stats,
+    rate: u32,
+    ch: usize,
+    expected: Option<u64>,
+    seek_tol: u64,
+    frames: usize,
+    k: usize,
+) -> (Vec<u8>, bool) {
+    let bpf = ch * 4;
+    let mut out = vec![0u8; frames * bpf];
+    match (expected, t.play) {
+        (Some(e), None) => seek_audio(t, stats, rate, bpf, e),
+        (Some(e), Some(p)) if p.abs_diff(e) > seek_tol => seek_audio(t, stats, rate, bpf, e),
+        (None, None) => {
+            if let Some(a) = t.fifo.front() {
+                t.play = Some(a.ts);
             }
-            if front.ts < e {
-                let skip = n2s(rate, e - front.ts).min(n) as usize;
-                front.off += skip * bpf;
-                front.ts += s2n(rate, skip as u64);
-                self.audio_bytes -= skip * bpf;
-                self.stats.audio_skipped_samples += skip as u64;
-            }
-            break;
         }
-        self.audio_play = Some(e);
+        _ => {}
     }
+    let Some(mut play) = t.play else {
+        return (out, true);
+    };
+    let want = frames - k;
+    let mut silent = false;
+    let mut written = 0usize; // in Samples
+    while written < want {
+        let Some(front) = t.fifo.front_mut() else {
+            silent = true;
+            // Ohne Daten läuft die Lesestelle mit (Stille), bleibt aber an der Zeitleiste.
+            play += s2n(rate, (want - written) as u64);
+            break;
+        };
+        let tol = if front.exact { AUDIO_EXACT_TOL_NS } else { AUDIO_ARRIVAL_TOL_NS };
+        if front.ts > play + tol {
+            // Lücke im Material: Stille bis zum Beginn der Daten.
+            let gap = ((front.ts - play) as u128 * rate as u128 / 1_000_000_000) as usize;
+            let n = gap.min(want - written).max(1);
+            silent = true;
+            stats.audio_gap_samples += n as u64;
+            written += n;
+            play += (n as u128 * 1_000_000_000 / rate as u128) as u64;
+            continue;
+        }
+        if front.ts + tol < play {
+            // Daten liegen hinter der Lesestelle: Überstehendes verwerfen.
+            let behind = ((play - front.ts) as u128 * rate as u128 / 1_000_000_000) as usize;
+            let avail = (front.data.len() - front.off) / bpf;
+            let skip = behind.min(avail).max(1);
+            front.off += skip * bpf;
+            front.ts += (skip as u128 * 1_000_000_000 / rate as u128) as u64;
+            t.bytes -= skip * bpf;
+            stats.audio_skipped_samples += skip as u64;
+            if front.off >= front.data.len() {
+                t.fifo.pop_front();
+            }
+            continue;
+        }
+        let avail = (front.data.len() - front.off) / bpf;
+        let n = avail.min(want - written);
+        let src = &front.data[front.off..front.off + n * bpf];
+        out[written * bpf..(written + n) * bpf].copy_from_slice(src);
+        front.off += n * bpf;
+        let adv = (n as u128 * 1_000_000_000 / rate as u128) as u64;
+        front.ts += adv;
+        t.bytes -= n * bpf;
+        written += n;
+        play += adv;
+        if front.off >= front.data.len() {
+            t.fifo.pop_front();
+        }
+    }
+    t.play = Some(play);
+    if k > 0 {
+        out = stretch_block(&out[..want * bpf], want, k, ch);
+        stats.refill_samples += k as u64;
+    }
+    (out, silent)
+}
+
+/// Lesestelle einer Spur auf Ursprungszeit `e` setzen: älteres Material verwerfen.
+fn seek_audio(t: &mut ATrack, stats: &mut Stats, rate: u32, bpf: usize, e: u64) {
+    stats.audio_seeks += 1;
+    while let Some(front) = t.fifo.front_mut() {
+        let n = ((front.data.len() - front.off) / bpf) as u64;
+        let end = front.ts + s2n(rate, n);
+        if end <= e {
+            let remaining = front.data.len() - front.off;
+            t.bytes -= remaining;
+            stats.audio_skipped_samples += n;
+            t.fifo.pop_front();
+            continue;
+        }
+        if front.ts < e {
+            let skip = n2s(rate, e - front.ts).min(n) as usize;
+            front.off += skip * bpf;
+            front.ts += s2n(rate, skip as u64);
+            t.bytes -= skip * bpf;
+            stats.audio_skipped_samples += skip as u64;
+        }
+        break;
+    }
+    t.play = Some(e);
 }
 
 /// Dehnt einen Tonblock um `k` Zwischenwerte (je Kanal Mittel der Nachbarn), gleichmäßig verteilt — die Tonhöhe
@@ -1088,5 +1297,135 @@ mod tests {
             assert!(w[1] >= w[0], "monoton: {} → {}", w[0], w[1]);
             assert!(w[1] - w[0] < 0.004, "keine Sprünge: {}", w[1] - w[0]);
         }
+    }
+
+    // ---- mehrere Spuren ------------------------------------------------------------------------
+
+    /// Zwei Bild- und zwei Tonspuren, gleiche Ursprungszeiten; Bildspur 1 trägt Wert + 1000, Tonspur 1 Tag 2.0.
+    fn feed_multi(p: &mut Playout<u64>, from: u64, ms: u64) {
+        let mut t = from;
+        while t < from + ms * MS {
+            if (t - from).is_multiple_of(PERIOD) {
+                p.push_video_to(0, t, 10, t / MS);
+                p.push_video_to(1, t, 10, t / MS + 1000);
+            }
+            p.push_audio_to(0, t, true, ablock(t, 1.0));
+            p.push_audio_to(1, t, true, ablock(t, 2.0));
+            t += 10 * MS;
+        }
+    }
+
+    fn multi(target_ms: u64) -> Playout<u64> {
+        let mut p = Playout::new(cfg(target_ms), PERIOD);
+        p.set_tracks(2, 2);
+        p.set_video_connected(0, true);
+        p.set_video_connected(1, true);
+        p.set_audio_connected(0, true);
+        p.set_audio_connected(1, true);
+        p
+    }
+
+    #[test]
+    fn parallel_video_tracks_stay_frame_aligned() {
+        let mut p = multi(400);
+        feed_multi(&mut p, 0, 2000);
+        let mut checked = 0;
+        let mut t = 1000 * MS;
+        while t < 1800 * MS {
+            let outs = p.tick_video_all(t);
+            if p.state() == State::Run
+                && let (VideoOut::Frame(a), VideoOut::Frame(b)) = (&outs[0], &outs[1])
+            {
+                assert_eq!(*b, *a + 1000, "Spuren laufen auseinander bei t={}", t / MS);
+                checked += 1;
+            }
+            t += PERIOD;
+        }
+        assert!(checked > 10, "zu wenige gemeinsame Bilder: {checked}");
+    }
+
+    #[test]
+    fn late_video_track_catches_up_by_origin_time() {
+        let mut p = multi(400);
+        // Spur 1 liefert zunächst nichts, Spur 0 läuft.
+        let mut t = 0;
+        while t < 1000 * MS {
+            if t.is_multiple_of(PERIOD) {
+                p.push_video_to(0, t, 10, t / MS);
+            }
+            t += 10 * MS;
+        }
+        p.set_video_connected(1, false);
+        // Spur 1 kommt dazu: ihre Bilder tragen dieselbe Ursprungszeitleiste weiter.
+        p.set_video_connected(1, true);
+        let mut t = 1000 * MS;
+        while t < 2000 * MS {
+            if t.is_multiple_of(PERIOD) {
+                p.push_video_to(0, t, 10, t / MS);
+                p.push_video_to(1, t, 10, t / MS + 1000);
+            }
+            t += 10 * MS;
+        }
+        let mut t = 1000 * MS;
+        let mut paired = 0;
+        while t < 1900 * MS {
+            let outs = p.tick_video_all(t);
+            if let (VideoOut::Frame(a), VideoOut::Frame(b)) = (&outs[0], &outs[1])
+                && *b == *a + 1000
+            {
+                paired += 1;
+            }
+            t += PERIOD;
+        }
+        assert!(paired > 5, "Spur 1 hat sich nicht ausgerichtet: {paired}");
+    }
+
+    #[test]
+    fn parallel_audio_tracks_carry_their_own_samples() {
+        let mut p = multi(400);
+        feed_multi(&mut p, 0, 2000);
+        let mut t = 0;
+        let mut seen = 0;
+        while t < 1800 * MS {
+            if t.is_multiple_of(PERIOD) {
+                p.tick_video_all(t);
+            }
+            let outs = p.tick_audio_all(t, 480);
+            if p.state() == State::Run && t > 1000 * MS {
+                let first = |b: &Vec<u8>| f32::from_le_bytes(b[0..4].try_into().unwrap());
+                assert_eq!(first(&outs[0].0), 1.0);
+                assert_eq!(first(&outs[1].0), 2.0);
+                assert!(!outs[0].1 && !outs[1].1);
+                seen += 1;
+            }
+            t += 10 * MS;
+        }
+        assert!(seen > 20);
+    }
+
+    #[test]
+    fn shrinking_tracks_frees_memory_and_keeps_track_zero() {
+        let mut p = multi(400);
+        feed_multi(&mut p, 0, 300);
+        let before = p.video_bytes() + p.audio_bytes();
+        p.set_tracks(1, 1);
+        assert_eq!((p.video_tracks(), p.audio_tracks()), (1, 1));
+        assert!(p.video_bytes() + p.audio_bytes() < before);
+        p.set_tracks(0, 0);
+        assert_eq!((p.video_tracks(), p.audio_tracks()), (1, 1), "Spur 0 bleibt immer");
+    }
+
+    #[test]
+    fn dead_master_track_hands_over_to_next_video_track() {
+        let mut p = multi(200);
+        feed_multi(&mut p, 0, 1000);
+        let _ = p.tick_video_all(1000 * MS);
+        assert_eq!(p.state(), State::Run);
+        // Spur 0 liefert nichts mehr, Spur 1 hat noch Material → kein Hold, Leitspur wechselt.
+        p.vtracks[0].ring.clear();
+        p.vtracks[0].bytes = 0;
+        let outs = p.tick_video_all(1040 * MS);
+        assert_eq!(p.state(), State::Run);
+        assert!(matches!(outs[1], VideoOut::Frame(_)));
     }
 }

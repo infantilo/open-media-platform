@@ -16,6 +16,7 @@ const T = (() => {
       counters: "Zähler", underruns: "Aufgebraucht (Ausfälle)", resumes: "Wiederaufnahmen", holdTicks: "Haltebilder", dropped: "Verworfen (Speichergrenze)",
       trimmed: "Aufgeholt (übersprungen)", seeks: "Ton neu ausgerichtet", jumps: "Zeitsprünge im Eingang", rebuilds: "Eingang neu aufgebaut",
       origin: "Zeitstempel aus Ursprung", delay: "Delay-Ausgleich (Bilder)", ms: "ms",
+      videoTracks: "Bildspuren", audioTracks: "Tonspuren", tracks: "Spuren", connected: "verbunden", free: "frei",
       refillPermille: "Wiederauffüllen (‰)", refilling: "baut Tiefe wieder auf", refillFrames: "Haltebilder beim Auffüllen",
     },
     en: {
@@ -32,6 +33,7 @@ const T = (() => {
       counters: "Counters", underruns: "Used up (outages)", resumes: "Resumes", holdTicks: "Held pictures", dropped: "Dropped (memory limit)",
       trimmed: "Caught up (skipped)", seeks: "Sound re-aligned", jumps: "Input time jumps", rebuilds: "Input rebuilt",
       origin: "Timestamps from origin", delay: "Delay compensation (frames)", ms: "ms",
+      videoTracks: "Picture tracks", audioTracks: "Sound tracks", tracks: "Tracks", connected: "connected", free: "free",
       refillPermille: "Refill (‰)", refilling: "rebuilding depth", refillFrames: "Held pictures while refilling",
     },
   };
@@ -85,15 +87,18 @@ class OmpPlayoutBufferPanel extends HTMLElement {
     const bufIn = el("input"); bufIn.type = "number"; bufIn.min = 100; bufIn.max = 20000; bufIn.step = 100; bufIn.style.width = "90px";
     const resIn = el("input"); resIn.type = "number"; resIn.min = 0; resIn.max = 20000; resIn.step = 100; resIn.style.width = "90px";
     const refIn = el("input"); refIn.type = "number"; refIn.min = 0; refIn.max = 100; refIn.step = 1; refIn.style.width = "70px";
+    const vtIn = el("input"); vtIn.type = "number"; vtIn.min = 1; vtIn.max = 8; vtIn.step = 1; vtIn.style.width = "60px";
+    const atIn = el("input"); atIn.type = "number"; atIn.min = 1; atIn.max = 16; atIn.step = 1; atIn.style.width = "60px";
     const holdSel = el("select");
     for (const v of ["last", "black"]) { const o = el("option", "", T(v)); o.value = v; holdSel.append(o); }
     const applyBtn = el("button", "", T("apply"));
     const msg = el("span", "hint");
     const lab = (text, input) => { const l = el("label"); l.append(el("span", "hint", text), input); return l; };
-    const form = el("div", "row"); form.append(lab(T("bufferMs"), bufIn), lab(T("resumeMs"), resIn), lab(T("refillPermille"), refIn), lab(T("holdMode"), holdSel), applyBtn, msg);
+    const form = el("div", "row"); form.append(lab(T("bufferMs"), bufIn), lab(T("resumeMs"), resIn), lab(T("refillPermille"), refIn), lab(T("holdMode"), holdSel), lab(T("videoTracks"), vtIn), lab(T("audioTracks"), atIn), applyBtn, msg);
     const table = el("table");
+    const trackTable = el("table");
 
-    root.append(top, barRow(T("video"), vBar), barRow(T("audio"), aBar), barRow(T("memory"), mBar), inputsEl,
+    root.append(top, barRow(T("video"), vBar), barRow(T("audio"), aBar), barRow(T("memory"), mBar), inputsEl, Object.assign(el("h4", "", T("tracks")), {}), trackTable,
       Object.assign(el("h4", "", T("settings")), {}), form, Object.assign(el("h4", "", T("counters")), {}), table);
 
     const base = `/api/v1/nodes/${nodeId}/params/`;
@@ -101,13 +106,15 @@ class OmpPlayoutBufferPanel extends HTMLElement {
     const setParam = (n, v) => fetch(base + encodeURIComponent(n), { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ value: v }) });
 
     let editing = false;
-    for (const i of [bufIn, resIn, refIn, holdSel]) i.addEventListener("focus", () => { editing = true; });
+    for (const i of [bufIn, resIn, refIn, holdSel, vtIn, atIn]) i.addEventListener("focus", () => { editing = true; });
     applyBtn.addEventListener("click", async () => {
       const results = await Promise.all([
         setParam("bufferMs", Number(bufIn.value)),
         setParam("resumeMs", Number(resIn.value)),
         setParam("refillPermille", Number(refIn.value)),
         setParam("holdMode", holdSel.value),
+        setParam("videoTracks", Number(vtIn.value)),
+        setParam("audioTracks", Number(atIn.value)),
       ]);
       msg.textContent = results.every((r) => r.ok) ? T("saved") : T("failed");
       editing = false;
@@ -135,13 +142,24 @@ class OmpPlayoutBufferPanel extends HTMLElement {
       parts.push(s.videoConnected ? `${T("video")}: ${T("age")} ${s.videoInputAgeMs} ${T("ms")}` : T("noVideo"));
       parts.push(s.audioConnected ? `${T("audio")}: ${T("age")} ${s.audioInputAgeMs} ${T("ms")}` : T("noAudio"));
       inputsEl.textContent = T("inputs") + ": " + parts.join(" · ");
+      trackTable.replaceChildren();
+      for (const [kind, list] of [["video", s.videoTracks || []], ["audio", s.audioTracks || []]]) {
+        for (const t of list) {
+          const tr = el("tr");
+          tr.append(el("td", "", t.name), el("td", "", t.connected ? `${T("connected")} · ${T("age")} ${t.ageMs} ${T("ms")}` : T("free")),
+            el("td", "v", `${t.fillMs} ${T("ms")}`), el("td", "v", fmtBytes(t.bytes || 0)));
+          trackTable.append(tr);
+        }
+      }
       table.replaceChildren();
       const add = (k, v) => { const tr = el("tr"); tr.append(el("td", "", k), el("td", "v", String(v))); table.append(tr); };
       for (const [label, key] of counterRows) add(T(label), s[key]);
       add(T("origin"), `${s.originTsVideoPct}% / ${s.originTsAudioPct}%`);
       add(T("delay"), s.delayFrames);
       if (fillForm || !editing) {
-        const [b, r, h, f] = await Promise.all([getParam("bufferMs"), getParam("resumeMs"), getParam("holdMode"), getParam("refillPermille")]);
+        const [b, r, h, f, vt, at] = await Promise.all([getParam("bufferMs"), getParam("resumeMs"), getParam("holdMode"), getParam("refillPermille"), getParam("videoTracks"), getParam("audioTracks")]);
+        if (document.activeElement !== vtIn && vt != null) vtIn.value = vt;
+        if (document.activeElement !== atIn && at != null) atIn.value = at;
         if (document.activeElement !== bufIn && b != null) bufIn.value = b;
         if (document.activeElement !== resIn && r != null) resIn.value = r;
         if (document.activeElement !== holdSel && h) holdSel.value = h;
