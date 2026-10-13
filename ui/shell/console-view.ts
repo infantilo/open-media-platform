@@ -8,7 +8,9 @@
 // eine schmale Tab-Leiste nur dieser Einträge (§14: "nie ein Graph").
 import { t } from "./i18n.ts";
 import "./upcoming.ts";
-import { mountUIBundle } from "./ui-bundle.ts";
+import { mountUIBundleEl } from "./ui-bundle.ts";
+import { createDeckToggle } from "./streamdeck/panel.ts";
+import { deckSession } from "./streamdeck/session.ts";
 import { pickActiveEntry } from "./console-logic.ts";
 import { hasPreviewUrl, bundleOwnsPreview, mountNodePreview, type MountedPreview } from "./node-preview.ts";
 
@@ -55,7 +57,16 @@ export class ConsoleView extends HTMLElement {
     this.#panel = document.createElement("div");
     this.#panel.style.cssText = "flex:1;min-height:0;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:12px;";
 
-    this.append(this.#tabs, this.#panel);
+    // Stream Deck (Kap. 40.4): kleiner Knopf unten links (oben säßen Mixer-Bedienelemente), Panel schwebt.
+    const deck = createDeckToggle(
+      "position:fixed;left:8px;bottom:8px;z-index:5;opacity:0.75;padding:4px 10px;border:1px solid var(--omp-border);" +
+        "border-radius:var(--omp-radius);background:var(--omp-surface-raised);color:var(--omp-text);cursor:pointer;font-size:var(--omp-font-size-sm);",
+    );
+    this.style.position = "relative";
+    this.append(this.#tabs, this.#panel, deck.button, deck.panel);
+    deckSession.focusRequest = (id) => {
+      if (id !== null && id !== this.#activeNodeRoleId && this.#entries.some((e) => e.nodeRoleId === id)) void this.#activate(id);
+    };
   }
 
   // Setzt die Konsolen-Liste dieses Nutzers (aus /api/v1/me/consoles) und
@@ -156,7 +167,12 @@ export class ConsoleView extends HTMLElement {
     bundleContainer.style.cssText = "flex:1;min-height:0;";
     this.#panel.appendChild(bundleContainer);
 
-    const mounted = await mountUIBundle(bundleContainer, entry.uiBundleUrl);
+    const mountedEl = await mountUIBundleEl(bundleContainer, entry.uiBundleUrl);
+    // Stream Deck: nur der aktive Node ist eingebunden → ein Tab; frühere abmelden.
+    for (const e of this.#entries) if (e.nodeRoleId !== entry.nodeRoleId) deckSession.unregisterTab(e.nodeRoleId);
+    if (mountedEl) deckSession.registerTab(entry.nodeRoleId, entry.nodeLabel, mountedEl, entry.uiBundleUrl.split("/").pop() ?? "");
+    else deckSession.unregisterTab(entry.nodeRoleId);
+    const mounted = mountedEl !== null;
     if (!mounted) {
       bundleContainer.replaceChildren();
       const p = document.createElement("p");

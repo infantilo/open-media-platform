@@ -19,7 +19,7 @@
 import { t } from "./i18n.ts";
 import "./upcoming.ts";
 import { mountUIBundleEl } from "./ui-bundle.ts";
-import "./streamdeck/sim.ts";
+import { createDeckToggle } from "./streamdeck/panel.ts";
 import { deckSession } from "./streamdeck/session.ts";
 import type { ConsoleEntry } from "./console-view.ts";
 import {
@@ -104,26 +104,9 @@ export class ConsoleBoard extends HTMLElement {
     toolbar.appendChild(arrangeBtn);
 
     // Stream Deck (Kap. 40.4): Verbindung/Simulator in einem einklappbaren Panel.
-    const deckBtn = document.createElement("button");
-    deckBtn.type = "button";
-    deckBtn.textContent = t("board.streamDeck");
-    deckBtn.style.cssText = arrangeBtn.style.cssText + "margin-left:6px;";
-    const deckPanel = document.createElement("div");
-    deckPanel.style.cssText =
-      "display:none;position:fixed;right:12px;bottom:12px;max-width:min(94vw,1000px);max-height:80vh;overflow:auto;" +
-      "z-index:1000001;background:var(--omp-surface);border:1px solid var(--omp-border);border-radius:var(--omp-radius);box-shadow:0 4px 16px rgba(0,0,0,0.6);";
-    deckBtn.addEventListener("click", () => {
-      if (deckPanel.style.display === "none") {
-        if (!deckPanel.firstChild) {
-          const sim = document.createElement("omp-streamdeck-sim");
-          sim.setAttribute("broker", "");
-          deckPanel.appendChild(sim);
-        }
-        deckPanel.style.display = "block";
-      } else deckPanel.style.display = "none";
-    });
-    toolbar.appendChild(deckBtn);
-    this.appendChild(deckPanel);
+    const deck = createDeckToggle(arrangeBtn.style.cssText + "margin-left:6px;");
+    toolbar.appendChild(deck.button);
+    this.appendChild(deck.panel);
     deckSession.focusRequest = (id) => {
       if (id !== null && this.#tiles.has(id)) this.#bringToFront(id);
     };

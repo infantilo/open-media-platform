@@ -19,7 +19,7 @@ export interface NodeIO {
   descriptor(): Promise<Descriptor>;
   getParam(name: string): Promise<unknown>;
   setParam(name: string, value: unknown): Promise<void>;
-  call(name: string): Promise<void>;
+  call(name: string, body?: Record<string, unknown>): Promise<void>;
 }
 
 export function proxyIO(nodeId: string): NodeIO {
@@ -44,8 +44,12 @@ export function proxyIO(nodeId: string): NodeIO {
       });
       if (!r.ok) throw new Error(`set ${name} ${r.status}`);
     },
-    async call(name) {
-      const r = await apiFetch(`${base}/methods/${name}`, { method: "POST" });
+    async call(name, body) {
+      const r = await apiFetch(`${base}/methods/${name}`, {
+        method: "POST",
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
       if (!r.ok) throw new Error(`call ${name} ${r.status}`);
     },
   };

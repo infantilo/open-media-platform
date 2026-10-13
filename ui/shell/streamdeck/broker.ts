@@ -89,8 +89,15 @@ export class DeckBroker {
   }
 
   #resolveAdapter(t: Tab): StreamDeckAdapter {
-    const own = adapterFor(t.el);
-    if (own) return own;
+    const own = adapterFor(t.el, t.nodeId);
+    if (own) {
+      const w = own as StreamDeckAdapter & { onChange?: () => void; onError?: (e: unknown) => void };
+      if ("onChange" in w) w.onChange = () => this.relayout();
+      if ("onError" in w) w.onError = (e) => this.onError(e);
+      // Erste Werte sofort holen (ohne auf den Refresh-Takt zu warten).
+      void Promise.resolve(own.refresh?.()).catch((e) => this.onError(e));
+      return own;
+    }
     const a = new AutoRasterAdapter(proxyIO(t.nodeId));
     a.onChange = () => this.relayout();
     a.onError = (e) => this.onError(e);

@@ -1,18 +1,22 @@
-// Adapter-Auflösung (Kap. 40.4/40.5): eigener `streamDeck`-Adapter des Elements
-// → shell-seitige Fabrik nach Elementname (Bundle bietet `deckApi`) → keiner
-// (Broker nimmt dann das Auto-Raster).
+// Adapter-Auflösung (Kap. 40.4–40.6): eigener `streamDeck`-Adapter des Elements
+// → shell-seitige Fabrik nach Elementname (Video-Mixer: Bundle bietet `deckApi`;
+// Audio-Mixer: reine Proxy-API) → keiner (Broker nimmt dann das Auto-Raster).
 
 import { adapterOf, type StreamDeckAdapter } from "../adapter.ts";
+import { proxyIO } from "../autoraster.ts";
+import { audioMixerAdapter } from "./audio-mixer.ts";
 import { videoMixerAdapter, type VideoMixerApi } from "./video-mixer.ts";
 
-const FACTORIES: Record<string, ((api: never) => StreamDeckAdapter) | undefined> = {
-  "omp-video-mixer-me-panel": videoMixerAdapter as (api: never) => StreamDeckAdapter,
+type Factory = (el: Element, nodeId: string) => StreamDeckAdapter | null;
+
+const FACTORIES: Record<string, Factory | undefined> = {
+  "omp-video-mixer-me-panel": (el) => {
+    const api = (el as unknown as { deckApi?: VideoMixerApi }).deckApi;
+    return api ? videoMixerAdapter(api) : null;
+  },
+  "omp-audio-mixer-panel": (_el, nodeId) => audioMixerAdapter(proxyIO(nodeId)),
 };
 
-export function adapterFor(el: Element): StreamDeckAdapter | null {
-  const own = adapterOf(el);
-  if (own) return own;
-  const f = FACTORIES[el.localName];
-  const api = (el as unknown as { deckApi?: VideoMixerApi }).deckApi;
-  return f && api ? f(api as never) : null;
+export function adapterFor(el: Element, nodeId: string): StreamDeckAdapter | null {
+  return adapterOf(el) ?? FACTORIES[el.localName]?.(el, nodeId) ?? null;
 }
