@@ -5331,7 +5331,7 @@ Entwurf:
 
 | Schritt | Inhalt | Verifikation |
 |---|---|---|
-| 40.1 Recherche + Entwurf | `streamdeck.js` lesen, Modell-/Protokolltabelle verifizieren (offizielle Protokollbeschreibungen, nicht aus dem Gedächtnis), Adapter-Schnittstelle in `docs/` festlegen | Review durch Nutzer, kein Code |
+| 40.1 Recherche + Entwurf — **erledigt 2026-10-13** (Ergebnis: `docs/ENTWURF-STREAMDECK.md`; Protokoll aus der offiziellen HID-Beschreibung, 2 Abweichungen zur Vorlage am Gerät zu klären: Drehung bei „+“, Reset) | `streamdeck.js` lesen, Modell-/Protokolltabelle verifizieren (offizielle Protokollbeschreibungen, nicht aus dem Gedächtnis), Adapter-Schnittstelle in `docs/` festlegen | Review durch Nutzer, kein Code |
 | 40.2 Transport + Modelltabelle + Simulator | `transport.ts`, `models.ts` (XL + Plus zuerst), Mock-`HIDDevice`, Browser-Simulator `/streamdeck-sim` (Tasten, Dials, Streifen) | Deno-Tests: Chunk-Header/Segmentierung je Modell, Eingabe-Dekodierung; **mit Gerät:** Testraster erscheint, Tasten melden Index, Trennen/Wiedereinstecken, Berechtigung abgelehnt = Meldung |
 | 40.3 Render-Engine | Canvas/SVG → JPEG/BMP, Rotation/Spiegelung je Modell, Fingerprint + Debounce | Tests: Fingerprint verhindert Resend; Gerät: 32 Tasten Aktualisierung < 100 ms spürbar flüssig |
 | 40.4 Broker + Kopfzeile + Auto-Raster | Fokus/Tabs/Blättern, Descriptor-Auto-Raster, Anbindung an `console-board.ts` | Deno-Tests Layoutkomposition (mehr Tabs als Tasten, Blättern); live: 3 Kacheln → 3 Tabs, Taste = Parameteraufruf (per Proxy-Log beobachtbar) |
