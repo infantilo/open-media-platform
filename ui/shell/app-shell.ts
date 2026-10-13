@@ -23,7 +23,7 @@ import "./scheduler-view.ts";
 import "./admin-view.ts";
 import { apiFetch, type ConnectionChangeDetail, type ConnectionState, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
-import { buildLangSelect, getLang, type I18nKey, t, t as tt } from "./i18n.ts";
+import { getLang, type I18nKey, t, t as tt } from "./i18n.ts";
 import { ensureBundle, getModules } from "./modules-registry.ts";
 import { insertIndex, mainTabs } from "./modules-logic.ts";
 
@@ -334,7 +334,6 @@ class AppShell extends HTMLElement {
     );
     deck.button.setAttribute("data-role", "deck-toggle");
     right.appendChild(deck.button);
-    right.appendChild(buildLangSelect());
 
     bar.append(left, right);
 
