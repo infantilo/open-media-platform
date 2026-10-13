@@ -26,8 +26,9 @@ h2{margin:0 0 12px}
 .strip canvas{display:block;width:100%;height:100%}
 .dials{display:flex;gap:12px;margin-top:8px}
 .dial{width:64px;height:64px;border-radius:50%;border:3px solid #556;background:#222;display:flex;align-items:center;justify-content:center;cursor:pointer;user-select:none}
-.err{color:var(--omp-error,#e55);margin:8px 0}
-pre{background:#111;padding:8px;max-height:200px;overflow:auto;border-radius:6px}
+.err{color:var(--omp-error,#e55);margin:8px 0;min-height:1.2em}
+pre{background:#111;padding:8px;height:110px;margin:0;overflow:auto;border-radius:6px;box-sizing:border-box;font-size:11px}
+h3{margin:12px 0 4px;font-size:13px}
 `;
 
 export class StreamDeckSim extends HTMLElement {
