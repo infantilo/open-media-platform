@@ -796,7 +796,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 // Orchestrator kennt diese Routen sonst nicht.
 func spaFallback(uiDir string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/console/") {
+		if strings.HasPrefix(r.URL.Path, "/console/") || r.URL.Path == "/streamdeck-sim" {
 			http.ServeFile(w, r, uiDir+"/index.html")
 			return
 		}

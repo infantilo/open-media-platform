@@ -25,6 +25,8 @@ import type { ConsoleView, ConsoleEntry } from "./console-view.ts";
 // Gleicher Grund wie beim console-view.ts-Import oben (sonst optimiert der
 // Bundler das customElements.define(...) in console-board.ts weg).
 import "./console-board.ts";
+// Test-/Simulator-Seite Stream Deck (Kap. 40.2); Seiteneffekt-Import wie oben.
+import "./streamdeck/sim.ts";
 import type { ConsoleBoard } from "./console-board.ts";
 import { whoami, showLoginOverlay, buildUserWidget } from "./auth.ts";
 import { installListenService } from "./listen.ts";
@@ -387,6 +389,12 @@ async function boot() {
 
   // Abhör-Dienst gehört der Shell, nicht dem Panel (s. listen.ts).
   installListenService();
+
+  // Kap. 40.2: Stream-Deck-Test/Simulator, Seite ohne Konsolen-Kontext.
+  if (location.pathname === "/streamdeck-sim") {
+    root.replaceChildren(document.createElement("omp-streamdeck-sim"));
+    return;
+  }
 
   const { authRequired, authenticated, username } = await whoami();
 
