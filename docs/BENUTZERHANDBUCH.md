@@ -1422,6 +1422,13 @@ baut sie anschließend mit der *Wiederauffüll-Rate* (Standard 1 %: ein Bild dop
 Ein längerer Ausfall führt in die *Überbrückung*; der Ausgang bleibt dabei durchgehend am Leben (Bild- und Ton-Takt laufen weiter).
 Der Puffer baut einen still gewordenen Eingang selbst neu auf (nach 3 s ohne Daten, mit wachsender Wartezeit bis 4 s).
 
+**Mehrere Spuren:** Mit *Bildspuren* (1–8) und *Tonspuren* (1–16) — Startwert `OMP_VIDEO_TRACKS`/`OMP_AUDIO_TRACKS`, zur Laufzeit im Panel
+änderbar — bekommt der Puffer je Spur einen eigenen Empfänger und Sender („Video“, „Video 2“, …; „Audio“, „Audio 2“, …). Alle Spuren laufen
+im selben Takt und mit derselben Tiefe, Bild und Ton bleiben zueinander ausgerichtet; jede Spur hat ihren eigenen Ring (Speicher wächst mit der
+Bildspurzahl). Eine unverbundene Spur zeigt Haltebild/Schwarz bzw. Stille, ohne die anderen zu stören; fällt die Quelle einer Spur aus, läuft nur
+diese aus ihrem Puffer. Das Panel listet alle Spuren (Verbindung, Füllstand, Speicher). Beim Verkleinern der Spurzahl wird der Speicher der
+entfernten Spuren sofort frei; Spur 1 bleibt immer.
+
 **Delay-Ausgleich:** Setzt ein Workflow ein Ziel-Latenzbudget, weist der Orchestrator den Ausgleich dem Puffer zu (er sitzt am Pfadende);
 der Ausgleich wird zur Tiefe addiert, Bild und Ton verschieben sich gemeinsam.
 

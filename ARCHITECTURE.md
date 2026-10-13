@@ -4604,6 +4604,11 @@ Der Katalog deklariert `supportsDelayCompensation:true`; `setOutputDelay(frames)
 MXL-Schreibpfad bleibt unberührt). Da der Puffer am Pfadende sitzt, weist `computeDelayPlan` („spätester delay-fähiger Node im Pfad“)
 den Ausgleich automatisch ihm zu.
 
+### 30.6a Mehrere Spuren (2026-10-13)
+Bild- (1–8) und Tonspuren (1–16) sind zur Laufzeit änderbar (`videoTracks`/`audioTracks`, Start `OMP_VIDEO_TRACKS`/`OMP_AUDIO_TRACKS`). Je Spur ein
+NMOS-Receiver/-Sender und ein eigener Ring/FIFO; ein gemeinsamer Zustandsautomat (Fill/Run/Hold) und ein gemeinsamer Takt halten alle Spuren
+bildgenau gleich; die Leitspur (erste verbundene) bestimmt die Ausrichtung des Tons. Spuren ohne Eingang geben Haltebild/Stille aus.
+
 ### 30.7 Grenzen / nicht umgesetzt
 Komprimierter Pfad (AU-Ring, Schnitt an IDR/IRAP, Parameter-Sätze) und Testbild als Haltebild sind nicht umgesetzt; Katalog-Latenz statisch für
 25 Bilder/s; Ton-Kanalzahl/Abtastrate fest je Workflow; Bildformat im Ring ist v210 (≈ 5,5 MB je 1080-Bild).
