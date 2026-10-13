@@ -782,6 +782,16 @@ Oberfläche mit; `GET /api/v1/modules` zeigt Stand und Oberfläche (die Shell ba
 seine Routen antworten dann mit 404 und der Tab fehlt — der Kern (Nodes, Graph, Hosts, Workflows, Rechte) läuft unverändert. Ein Modul,
 dessen Start oder Migration scheitert, steht als `failed` im Manifest, die übrigen laufen weiter. Eigene Module: `docs/MODULE-SCHREIBEN.md`.
 
+### 9.10 Stream Deck (WebHID, Browser-Bedienpult)
+
+Rein clientseitig (`ui/shell/streamdeck/`), kein Server-Anteil: `models.ts` (Modelltabelle), `protocol.ts` (Chunking/Dekodierung), `transport.ts`
+(WebHID, `HidLike`-Schnittstelle — der Simulator `sim-device.ts` erfüllt sie ebenfalls), `render*.ts`/`draw.ts` (Fingerprint + Debounce, Canvas → JPEG),
+`broker*.ts` (Tabs, Kopfzeile, Eingabeverteilung), `session.ts` (Tab-Register der Konsole, Wiederverbinden), `adapters/` (Video-Mixer, Audio-Mixer,
+X/Y-Panel; sonst `autoraster*.ts`). Eigene Adapter: Element mit Eigenschaft `streamDeck` (`StreamDeckAdapter`, `adapter.ts`) und Ereignis
+`omp-streamdeck-relayout`, oder Fabrik in `adapters/index.ts`. Entwurf/Protokolltabelle: `docs/ENTWURF-STREAMDECK.md`.
+Linux: udev-Regel auf dem **Bedienplatz-Rechner** (`make streamdeck-udev [ARGS=--dry-run|--remove]`, `deploy/dev/streamdeck-udev.sh`,
+`./install.sh --streamdeck-udev`). Testseite/Simulator: `/streamdeck-sim` (Orchestrator-Route; eingebettet im Panel der Konsole).
+
 ## 10. Mehr Kontext
 
 - Architektur/Konzepte: `ARCHITECTURE.md` (Referenzdokument, wird bei jeder

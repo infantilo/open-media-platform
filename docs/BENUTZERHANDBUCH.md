@@ -1428,6 +1428,41 @@ Schlüsselbildern) ist nicht umgesetzt. Speicherbedarf ≈ Tiefe × Bildgröße 
 *Speichergrenze*. Die im Katalog hinterlegte Latenz (63 Bilder) gilt für 25 Bilder/s und die Standardtiefe. Ton-Kanalzahl und -Abtastrate
 sind pro Workflow fest (Standard 2 Kanäle, 48 kHz).
 
+## 10g. Stream Deck als Bedienpult (Tasten, Dials, Streifen)
+
+Ein angeschlossenes **Stream Deck** (getestet vorgesehen: XL mit 32 Tasten und „+“ mit 8 Tasten, 4 Dials und Touch-Streifen) bedient
+dieselben Node-Oberflächen wie die Maus — jede Taste ruft genau den Befehl auf, den auch der Bildschirmknopf auslöst, und zeigt denselben
+Zustand (on-air rot, Preset grün, Cue orange).
+
+**Voraussetzungen:** Chrome oder Edge am Desktop (Firefox/Safari bieten kein WebHID), die Seite über `https://` oder `localhost`,
+die Herstellersoftware des Geräts **geschlossen** (sie hält das Gerät exklusiv). Unter Linux einmalig am Bedienplatz-Rechner
+(dort, wo das Gerät steckt und der Browser läuft — nicht zwingend der OMP-Server):
+`make streamdeck-udev` (oder `./install.sh --streamdeck-udev`), danach das Gerät einmal abziehen und wieder anstecken.
+
+**Verbinden:** in der Operator-Konsole unten rechts bzw. (eine Rolle) unten links auf **Stream Deck** klicken → **Echtes Gerät verbinden**,
+im Browser-Dialog das Gerät wählen. Nach dem ersten Freigeben verbindet sich das Gerät beim Wiederanstecken selbst. Fehler
+(Berechtigung abgelehnt, Browser ohne WebHID, Modell nicht unterstützt, Gerät belegt) erscheinen im Panel. **Simulator starten** zeigt
+ein virtuelles Gerät im Browser (zum Ausprobieren ohne Hardware); **Testraster senden** und **Render-Test** prüfen das Gerät.
+
+**Aufbau:** Die oberste Tastenreihe ist immer gleich: Taste 1 **Home** (Übersicht aller geöffneten Node-Oberflächen), danach je geöffneter
+Kachel ein **Tab** (aktiver Tab grün; mehr Tabs als Tasten → letzte Taste „⇄“ blättert). Ein Tabwechsel am Gerät holt die Kachel am
+Bildschirm nach vorn und umgekehrt. Alles darunter gehört dem aktiven Tab. Ist eine Seite zu klein, belegt die **letzte Taste unten rechts**
+„⇄ n/m“ zum Blättern (am „+“ auch Wischen am Streifen).
+
+* **Video-Mixer M/E:** Zeile 1 = **PGM** (direkt auf Sendung), Zeile 2 = **PRE** (Vorschau), Zeile 3 = **CUT**, **AUTO**, **DSK**, Übergangstyp (weiter),
+  Rate (weiter) und die PIP-Voreinstellungen (Umschalter). Kleinere Geräte zeigen PGM/PRE/Steuerung nacheinander als Seiten. Nur die Master-Ebene.
+* **Audio-Mixer:** je Kanal eine Spalte mit **MUTE**, **PFL** und **SELECT** (Pegel in dB auf der SELECT-Taste). SELECT auf den
+  gewählten Kanal **nochmals** öffnet die Detailseiten **EQ** (4 Bänder, Bypass), **Dynamik** (Kompressor, Gate) und **Pan** (Phase, Hauptmix);
+  Parameter anwählen und mit −/+/−−/++ ändern. Am „+“ stellen die **Dials** den Pegel bzw. den Detail-Parameter, Drücken = Mute bzw. Schalter.
+* **X/Y-Panel:** Zeile 1 Quellen, Zeile 2 Ziele (zeigt die aktuell geschaltete Quelle), Zeile 3 **TAKE**, **AUTO** (schaltet sofort bei Auswahl beider Seiten),
+  **Medium** (Alle/Video/Audio/Daten), **Trennen** und Blättern. Unpassende Medien sind gedimmt. Am „+“ wählen die Dials Quelle und Ziel, Drücken auf das Ziel-Dial schaltet.
+  Schalten verlangt wie am Bildschirm das Recht zum Konfigurieren; ohne es meldet das Panel „forbidden“.
+* **Alle anderen Nodes:** ein **Auto-Raster** — jeder schreibbare Ein/Aus-Parameter und jede Auswahl wird eine Taste, Methoden ohne Argumente eine Starttaste,
+  Zahlen mit Bereich werden am „+“ zu Dials.
+
+**Grenzen:** ein Gerät je Browser-Sitzung; Neo, Mini und Ur-Modell sind nicht eingebaut. Pegelanzeigen gibt es nicht auf den Tasten.
+Das Gerät wird nur im geöffneten Browser-Tab bedient (kein Hintergrunddienst).
+
 ## 11. Weiterführende Dokumente
 
 - [`HANDBUCH.md`](HANDBUCH.md) — Installation, `make`-Targets,

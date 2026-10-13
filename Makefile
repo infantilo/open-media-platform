@@ -1,4 +1,4 @@
-.PHONY: preflight doctor update-keygen update-bundle build test check check-ci up down ci ui nodes contract start hosts stop status mtls-up mtls-down mtls-issue-certs nmos-registry-tls-up nmos-registry-tls-down nats-tls-up nats-tls-down backup restore proxy-up proxy-down soak clean-cache
+.PHONY: streamdeck-udev preflight doctor update-keygen update-bundle build test check check-ci up down ci ui nodes contract start hosts stop status mtls-up mtls-down mtls-issue-certs nmos-registry-tls-up nmos-registry-tls-down nats-tls-up nats-tls-down backup restore proxy-up proxy-down soak clean-cache
 
 GO_MODULES := orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check tools/update-bundle host-agent supervisor update nodeoptions
 
@@ -287,6 +287,11 @@ down:
 # Orchestrator im Hintergrund starten, auf /healthz warten.
 start:
 	@./deploy/dev/start-omp.sh
+
+# Stream Deck per WebHID (Kapitel 40): udev-Regel auf dem Rechner, an dem das Gerät steckt (sudo).
+# `make streamdeck-udev ARGS=--dry-run` zeigt nur an; `ARGS=--remove` entfernt die Regel.
+streamdeck-udev:
+	@./deploy/dev/streamdeck-udev.sh $(ARGS)
 
 # Simulierte Multi-Host-Konfiguration (Nutzerfrage 2026-08-14, "wie
 # starte ich das nächste Mal in der aktuellen Multi-Host-Konfiguration"):

@@ -2,7 +2,7 @@
 
 Stand: Recherche + Schnittstellenfestlegung, **kein Code**. Plan: `UMSETZUNG.md` Kap. 40; Konzept: `END-GOAL-FEATURES.md` Kap. 8 (K8).
 
-## 1. Protokoll (belegt aus der offiziellen HID-Beschreibung des Herstellers, `docs.elgato.com/streamdeck/hid/*`, abgerufen 2026-10-13)
+## 1. Protokoll (belegt aus der offiziellen HID-Beschreibung des Herstellers, öffentliche HID-Dokumentation, abgerufen 2026-10-13)
 
 Allgemein: Vendor-ID `0x0FD9`. Mehrbyte-Felder **little-endian**. Input-Report max. 512 B, Output-Report max. 1024 B
 (Host füllt mit 0 auf), Feature-Report max. 32 B. Die Seiten nennen **keine** feste Chunk-Größe; `1024 − 8` Byte Kopf = **1016 B Nutzdaten**

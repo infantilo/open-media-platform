@@ -9,6 +9,8 @@
 #   ./install.sh --media --avvideofilter-archive DATEI   Plugin für Blend-Bildratenwandlung aus Datei (ohne Internet)
 #   ./install.sh --media --no-avvideofilter              Plugin nicht installieren (Nodes nutzen videorate)
 #   ./install.sh --systemd     OMP beim Boot automatisch starten (systemd-Dienst "omp", Hauptrechner)
+#   ./install.sh --streamdeck-udev   udev-Regel für das Stream Deck (WebHID im Browser) installieren — gehört auf den
+#                              Bedienplatz-Rechner, an dem das Gerät steckt (docs/BENUTZERHANDBUCH.md §10g)
 #   ./install.sh --host-agent-service --orchestrator <IP> [--label NAME] [--token TOKEN]
 #                              diesen Rechner als zusätzlichen Host anbinden (Dienst "omp-host-agent")
 #
@@ -23,11 +25,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MEDIA=0; START=0; DRY=0; YES=0; SYSTEMD=0; AGENT_SVC=0; ORCH_IP=""; AGENT_LABEL=""; AGENT_TOKEN=""; AVF=1; AVF_ARCHIVE=""
+MEDIA=0; START=0; DRY=0; YES=0; SYSTEMD=0; STREAMDECK=0; AGENT_SVC=0; ORCH_IP=""; AGENT_LABEL=""; AGENT_TOKEN=""; AVF=1; AVF_ARCHIVE=""
 while [ $# -gt 0 ]; do
   a="$1"; shift
   case "$a" in
     --systemd) SYSTEMD=1 ;;
+    --streamdeck-udev) STREAMDECK=1 ;;
     --host-agent-service) AGENT_SVC=1 ;;
     --orchestrator) ORCH_IP="${1:-}"; shift || true ;;
     --label) AGENT_LABEL="${1:-}"; shift || true ;;
@@ -182,6 +185,11 @@ OMP_HOST_AGENT_BOOTSTRAP_TOKEN=$AGENT_TOKEN"
   run "sudo systemctl daemon-reload && sudo systemctl enable --now omp-host-agent"
   echo "    Erststart: einmalig ein Bootstrap-Token (UI → Hosts → Host hinzufügen) mit --token übergeben."
   echo "    Medien-Nodes auf diesem Host: vorher ./install.sh --media. Log: journalctl -u omp-host-agent"
+fi
+
+if [ "$STREAMDECK" = 1 ]; then
+  say "Stream Deck: udev-Regel"
+  run "\"$ROOT_DIR/deploy/dev/streamdeck-udev.sh\""
 fi
 
 # ---- Prüfung ------------------------------------------------------------------------
