@@ -140,3 +140,33 @@ export function describeReason(
   }
   return lookup(`cloudv.act.${code}`, p) ?? reason;
 }
+
+// Beispieldaten der Cloud-Seite, solange kein Anbieter eingerichtet ist (rein lokal erzeugt, nie vom Server).
+export function demoCloud(now: Date, tr: (key: string) => string) {
+  const at = (minAgo: number) => new Date(now.getTime() - minAgo * 60000).toISOString();
+  const ahead = (h: number) => new Date(now.getTime() + h * 3600000).toISOString();
+  return {
+    hosts: {
+      configured: true,
+      pools: [{ name: "burst", instanceType: "m.large", region: "demo-region", min: 0, max: 3 }],
+      hosts: [
+        { id: "demo-1", pool: "burst", instanceType: "m.large", state: "ready", requestedAt: at(95), readyAt: at(90) },
+        { id: "demo-2", pool: "burst", instanceType: "m.large", state: "waiting-agent", requestedAt: at(3) },
+      ],
+      actions: [
+        { at: at(150), pool: "burst", kind: "release", hostId: "demo-0", reason: tr("cloudv.demo.release") },
+        { at: at(95), pool: "burst", kind: "provision", hostId: "demo-1", reason: tr("cloudv.demo.provision") },
+        { at: at(40), pool: "burst", kind: "suggest", reason: tr("cloudv.demo.suggest") },
+        { at: at(3), pool: "burst", kind: "provision", hostId: "demo-2", reason: tr("cloudv.demo.provision") },
+      ],
+    },
+    costs: [{
+      pool: "burst",
+      currency: "EUR",
+      day: { spent: 3.4, projected: 8.2, cap: 20 },
+      month: { spent: 61.8, projected: 142.5, cap: 200 },
+    }],
+    suggestions: [{ id: "demo-s1", pool: "burst", createdAt: at(1), reason: tr("cloudv.demo.suggest") }],
+    reservations: [{ id: "demo-r1", pool: "burst", hostCount: 2, from: ahead(20), to: ahead(24), note: tr("cloudv.demo.note") }],
+  };
+}

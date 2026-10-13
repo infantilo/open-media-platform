@@ -1380,7 +1380,7 @@ Wenn der Sendeweg wissen muss, wo ein Werbeblock beginnt und endet, leitet die P
 
 ## 10e. Cloud-Ressourcen, Kosten und Autoscaling
 
-Der Tab **Cloud** zeigt, ob zusätzliche Rechenleistung in einer Cloud gemietet werden kann, was das kostet und wann das passiert. Ohne konfigurierten Anbieter steht dort nur ein Hinweis; alles läuft wie bisher lokal. Ein Anbieter wird vom Betreiber über Umgebungsvariablen eingerichtet (`docs/CLOUD-AWS.md`); zum Ausprobieren gibt es einen **Simulations-Anbieter** (`OMP_CLOUD_PROVIDER=mock`), der nichts mietet und nichts kostet.
+Der Tab **Cloud** zeigt, ob zusätzliche Rechenleistung in einer Cloud gemietet werden kann, was das kostet und wann das passiert. Ohne konfigurierten Anbieter zeigt der Tab eine **Demo-Seite mit Beispieldaten** (deutlich als „DEMO“ gekennzeichnet, nur lesend, nichts wird gemietet oder abgerechnet); alles läuft wie bisher lokal. Ein Anbieter wird vom Betreiber über Umgebungsvariablen eingerichtet (`docs/CLOUD-AWS.md`); zum Ausprobieren gibt es einen **Simulations-Anbieter** (`OMP_CLOUD_PROVIDER=mock`), der nichts mietet und nichts kostet.
 
 **Wichtig:** Alle Beträge sind **Schätzungen** aus Preisliste × Laufzeit — nicht die Abrechnung des Anbieters. Datentransfer und Speicher sind nicht enthalten.
 

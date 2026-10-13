@@ -87,6 +87,11 @@ export const messages: Record<"de" | "en", Record<string, string>> = {
     "cloudv.act.budget.noPrices": "Deckel gesetzt, aber keine Preisliste verfügbar",
     "cloudv.act.budget.pricesUnavailable": "Deckel gesetzt, Preise nicht abrufbar: {error}",
     "cloudv.act.budget.noType": "Kein Preis für den Instanztyp {type}",
+    "cloudv.demoBanner": "DEMO — Beispieldaten. Es ist kein Cloud-Anbieter eingerichtet (Umgebungsvariable OMP_CLOUD_PROVIDER, siehe docs/CLOUD-AWS.md); nichts davon ist echt, nichts wird gemietet oder abgerechnet.",
+    "cloudv.demo.suggest": "Auslastung seit 10 Minuten über 85 % CPU — einen weiteren Host hochfahren?",
+    "cloudv.demo.provision": "Host für die Reservierung „Abendsendung“ hochgefahren",
+    "cloudv.demo.release": "Host nach 15 Minuten Leerlauf freigegeben",
+    "cloudv.demo.note": "Abendsendung",
     "cloudv.act.budget.unknownPool": "Unbekannter Pool"
   },
   "en": {
@@ -176,6 +181,11 @@ export const messages: Record<"de" | "en", Record<string, string>> = {
     "cloudv.act.budget.noPrices": "Cap set but no price list available",
     "cloudv.act.budget.pricesUnavailable": "Cap set, prices unavailable: {error}",
     "cloudv.act.budget.noType": "No price for instance type {type}",
+    "cloudv.demoBanner": "DEMO — sample data. No cloud provider is set up (environment variable OMP_CLOUD_PROVIDER, see docs/CLOUD-AWS.md); none of this is real, nothing is rented or billed.",
+    "cloudv.demo.suggest": "CPU load above 85 % for 10 minutes — start another host?",
+    "cloudv.demo.provision": "Host started for the reservation “Evening show”",
+    "cloudv.demo.release": "Host released after 15 minutes idle",
+    "cloudv.demo.note": "Evening show",
     "cloudv.act.budget.unknownPool": "Unknown pool"
   }
 };

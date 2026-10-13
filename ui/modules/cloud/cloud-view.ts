@@ -5,7 +5,7 @@
 // Anbieters). Regel-Formulare werden explizit gespeichert ("Speichern", nicht je Klick) und beim Neuzeichnen durch den
 // Poll nicht überschrieben, solange sie sich im Bearbeiten befinden.
 import { apiFetch, showToast, t, whoami } from "../host.ts";
-import { budgetBar, describeReason, fmtMoney, policyFromForm, policyToForm, reservationPayload, type Mode, type Policy, type PolicyForm } from "./cloud-logic.ts";
+import { budgetBar, demoCloud, describeReason, fmtMoney, policyFromForm, policyToForm, reservationPayload, type Mode, type Policy, type PolicyForm } from "./cloud-logic.ts";
 
 interface CloudHost {
   id: string;
@@ -63,6 +63,7 @@ export class CloudView extends HTMLElement {
   #sugg: Suggestion[] = [];
   #resv: Reservation[] = [];
   #policies: Policy[] = [];
+  #demo = false; // kein Anbieter eingerichtet: Beispieldaten, nur lesend
   #live!: HTMLDivElement; // vom Poll neu gezeichnete Bereiche
   #editors!: HTMLDivElement; // Regel- und Reservierungsformulare (bleiben beim Poll stehen)
   #editorKey = "";
@@ -103,11 +104,22 @@ export class CloudView extends HTMLElement {
       this.#get<Reservation[]>("/api/v1/cloud/reservations", []),
       this.#get<Policy[]>("/api/v1/cloud/policies", []),
     ]);
-    this.#data = data;
-    this.#costs = costs ?? [];
-    this.#sugg = sugg ?? [];
-    this.#resv = resv ?? [];
-    this.#policies = pol ?? [];
+    this.#demo = !!data && !data.configured;
+    if (this.#demo) {
+      // Kein Anbieter: die Seite mit Beispieldaten zeigen (rein lokal, nichts wird gelesen/geschrieben/abgerechnet).
+      const d = demoCloud(new Date(), (k) => t(k as "cloudv.demo.note"));
+      this.#data = d.hosts;
+      this.#costs = d.costs;
+      this.#sugg = d.suggestions;
+      this.#resv = d.reservations;
+      this.#policies = [];
+    } else {
+      this.#data = data;
+      this.#costs = costs ?? [];
+      this.#sugg = sugg ?? [];
+      this.#resv = resv ?? [];
+      this.#policies = pol ?? [];
+    }
     this.#renderLive();
     this.#renderEditors();
   }
@@ -132,14 +144,20 @@ export class CloudView extends HTMLElement {
     const d = this.#data;
     const root = this.#live;
     root.replaceChildren();
-    if (!d || !d.configured) {
+    if (!d || (!d.configured && !this.#demo)) {
       const c = el("div", CARD);
       c.append(el("h3", H, t("cloudv.title")), el("div", DIM, t("cloudv.notConfigured")));
       root.append(c);
       return;
     }
     const head = el("div", CARD);
-    head.append(el("h3", H, t("cloudv.title")), el("div", DIM, t("cloudv.estimateNote")));
+    head.append(el("h3", H, t("cloudv.title")));
+    if (this.#demo) {
+      const b = el("div", "padding:8px 10px;margin-bottom:8px;border:1px solid var(--omp-cue);border-radius:var(--omp-radius);background:rgba(255,183,77,0.12);font-weight:600;", t("cloudv.demoBanner"));
+      b.dataset.role = "demo-banner";
+      head.append(b);
+    }
+    head.append(el("div", DIM, t("cloudv.estimateNote")));
     root.append(head);
 
     // Kosten je Pool gegen den Deckel
@@ -176,7 +194,7 @@ export class CloudView extends HTMLElement {
         const row = el("div", "display:flex;gap:8px;align-items:center;margin-bottom:4px;");
         row.dataset.role = "suggestion";
         row.append(el("span", "", t("cloudv.suggestLine", { p0: s.pool, p1: say(s.code, s.params, s.reason) })));
-        if (this.#admin) {
+        if (this.#admin && !this.#demo) {
           const ok = el("button", "", t("cloudv.accept"));
           ok.addEventListener("click", () => void this.#act(`/api/v1/cloud/suggestions/${encodeURIComponent(s.id)}/accept`, { method: "POST" }, "cloudv.done"));
           const no = el("button", "", t("cloudv.dismiss"));
@@ -199,7 +217,7 @@ export class CloudView extends HTMLElement {
       row.append(el("span", "font-weight:600;", h.id), el("span", DIM, `${h.pool} · ${h.instanceType}`), el("span", "", t(`cloudv.state.${h.state}` as "cloudv.state.ready")));
       if (h.lifetimeExceeded) row.append(el("span", "color:var(--omp-error);", t("cloudv.lifetime")));
       if (h.adopted) row.append(el("span", DIM, t("cloudv.adopted")));
-      if (this.#admin && h.state !== "draining") {
+      if (this.#admin && !this.#demo && h.state !== "draining") {
         const b = el("button", "", t("cloudv.release"));
         b.addEventListener("click", () => {
           if (window.confirm(t("cloudv.releaseConfirm", { p0: h.id }))) void this.#act(`/api/v1/cloud/hosts/${encodeURIComponent(h.id)}/release`, { method: "POST" }, "cloudv.done");
@@ -220,7 +238,7 @@ export class CloudView extends HTMLElement {
       const row = el("div", "display:flex;gap:10px;align-items:center;margin-bottom:4px;");
       row.dataset.role = "reservation";
       row.append(el("span", "", t("cloudv.reservationLine", { p0: r.pool, p1: r.hostCount, p2: new Date(r.from).toLocaleString(), p3: new Date(r.to).toLocaleString() })));
-      if (this.#admin) {
+      if (this.#admin && !this.#demo) {
         const b = el("button", "", t("cloudv.delete"));
         b.addEventListener("click", () => void this.#act(`/api/v1/cloud/reservations/${encodeURIComponent(r.id)}`, { method: "DELETE" }, "cloudv.done"));
         row.append(b);
@@ -241,12 +259,12 @@ export class CloudView extends HTMLElement {
   // Formulare nur neu aufbauen, wenn sich die Pool-Liste/Rechte ändern oder nach dem Speichern — nicht bei jedem Poll.
   #renderEditors() {
     const d = this.#data;
-    const key = JSON.stringify([d?.configured, d?.pools.map((p) => p.name), this.#admin, this.#policies.map((p) => p.pool)]);
+    const key = JSON.stringify([d?.configured, this.#demo, d?.pools.map((p) => p.name), this.#admin, this.#policies.map((p) => p.pool)]);
     if (key === this.#editorKey) return;
     this.#editorKey = key;
     const root = this.#editors;
     root.replaceChildren();
-    if (!d?.configured || !this.#admin) return;
+    if (!d?.configured || this.#demo || !this.#admin) return;
 
     const pc = el("div", CARD);
     pc.append(el("h3", H, t("cloudv.policies")), el("div", DIM + "margin-bottom:8px;", t("cloudv.policyNote")));
