@@ -1,5 +1,5 @@
 import { assertEquals, assertThrows } from "jsr:@std/assert";
-import { modelForPid, MODELS } from "./models.ts";
+import { modelForPid, MODELS, rotatedSize, rotationMatrix, unrotationMatrix } from "./models.ts";
 import {
   encodeDialPress,
   encodeDialTurn,
@@ -24,7 +24,7 @@ function blob(n: number): Uint8Array {
 }
 
 Deno.test("Modelltabelle: Raster/Bildgröße je Modell", () => {
-  assertEquals([XL.cols, XL.rows, XL.keySize, XL.rotate180], [8, 4, 96, true]);
+  assertEquals([XL.cols, XL.rows, XL.keySize, XL.rotation], [8, 4, 96, 180]);
   assertEquals([PLUS.cols, PLUS.rows, PLUS.keySize, PLUS.dials], [4, 2, 120, 4]);
   assertEquals(new Set(MODELS.map((m) => m.pid)).size, MODELS.length);
   assertEquals(modelForPid(0x0063), undefined); // Mini: nicht in v1
@@ -132,4 +132,28 @@ Deno.test("DeckDevice.open: unbekanntes Modell und fehlgeschlagenes Öffnen", as
   fail.open = () => Promise.reject(new Error("x"));
   try { await DeckDevice.open(fail); } catch (e) { msg = (e as Error).message; }
   assertEquals(msg, "open-failed");
+});
+
+Deno.test("Stream Deck + XL: 9×4 Tasten, 6 Dials, Drehung 90° gegen den Uhrzeigersinn", () => {
+  const m = modelForPid(0x00c6)!;
+  assertEquals([m.cols, m.rows, m.keySize, m.dials, m.rotation], [9, 4, 112, 6, 90]);
+  assertEquals(m.strip, { w: 1200, h: 100 });
+  // Logische Ecke oben links → unten links des hochgeladenen Bilds (CCW).
+  const [a, b, c, d, e, f] = rotationMatrix(90, 112, 112);
+  assertEquals([a * 0 + c * 0 + e, b * 0 + d * 0 + f], [0, 112]);
+  assertEquals(rotatedSize(90, 200, 100), [100, 200]);
+  // Rotation und Umkehrung heben sich auf (Punkt (30,10) im 200×100-Streifen).
+  const [ra, rb, rc, rd, re, rf] = rotationMatrix(90, 200, 100);
+  const [x, y] = [ra * 30 + rc * 10 + re, rb * 30 + rd * 10 + rf];
+  const [ua, ub, uc, ud, ue, uf] = unrotationMatrix(90, 200, 100);
+  assertEquals([ua * x + uc * y + ue, ub * x + ud * y + uf], [30, 10]);
+});
+
+Deno.test("Stream Deck + XL: Eingabe-Dekodierung (36 Tasten, 6 Dials)", () => {
+  const m = modelForPid(0x00c6)!;
+  const dec = new InputDecoder(m);
+  const keys = new Set([35]);
+  assertEquals(dec.decode(encodeKeyState(m, keys)).map((e) => e.kind), ["key"]);
+  const turn = dec.decode(encodeDialTurn(m, 5, -3));
+  assertEquals(turn[0], { kind: "dialTurn", index: 5, delta: -3 });
 });

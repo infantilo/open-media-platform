@@ -5348,3 +5348,4 @@ sonst keine Produktnamen).
 (1) Drehung der Tastenbilder beim „+“ (Hersteller: keine, Vorlage: 180°), (2) JPEG-Format/Chunking und USB-Dauer für 32 Tasten (Ziel < 100 ms), (3) Wiederverbinden beim Wiederanstecken
 (`session.ts`, nur im Code), (4) Dial-Drehsinn und Streifen-Gesten, (5) Reset/Logo beim Öffnen/Schließen, (6) udev auf dem Bedienrechner.
 
+**Nachtrag 40.9 (2026-10-13): Stream Deck + XL** — Modell `0x00C6` (9×4 Tasten 112 px, 6 Dials, Streifen 1200×100) nach offizieller HID-Seite aufgenommen. Neu: allgemeine Bilddrehung `rotation: 0|90|180` statt `rotate180` (+ XL: 90° gegen den Uhrzeigersinn auch für Streifen-Teilbilder; Rasterer/Testraster/Simulator drehen mit, Simulator dreht zur Anzeige zurück); 2 neue Tests (385 grün). Adapter sind raster-/dialgenerisch, keine Anpassung nötig. **Nicht am Gerät geprüft:** Drehrichtung (Pfeil im Testraster oben?), Streifen-Teilbild gedreht, 36 Tasten USB-Dauer.

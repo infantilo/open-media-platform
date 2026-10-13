@@ -5,6 +5,27 @@
 
 export const VENDOR_ID = 0x0fd9;
 
+export type Rotation = 0 | 90 | 180;
+
+/** Canvas-Matrix [a,b,c,d,e,f]: logisches Bild (w×h) → hochzuladendes, gedrehtes Bild (90°: h×w). */
+export function rotationMatrix(r: Rotation, w: number, h: number): [number, number, number, number, number, number] {
+  if (r === 180) return [-1, 0, 0, -1, w, h];
+  if (r === 90) return [0, -1, 1, 0, 0, w];
+  return [1, 0, 0, 1, 0, 0];
+}
+
+/** Umkehrung (Anzeige im Simulator): gedrehtes Bild → logische Lage (w×h). */
+export function unrotationMatrix(r: Rotation, w: number, h: number): [number, number, number, number, number, number] {
+  if (r === 180) return [-1, 0, 0, -1, w, h];
+  if (r === 90) return [0, 1, -1, 0, w, 0];
+  return [1, 0, 0, 1, 0, 0];
+}
+
+/** Abmessungen des hochzuladenden Bilds. */
+export function rotatedSize(r: Rotation, w: number, h: number): [number, number] {
+  return r === 90 ? [h, w] : [w, h];
+}
+
 export interface DeckModel {
   pid: number;
   name: string;
@@ -12,16 +33,16 @@ export interface DeckModel {
   rows: number;
   /** Kantenlänge eines Tastenbilds in Pixeln (JPEG, quadratisch). */
   keySize: number;
-  /** Bild vor dem Senden um 180° drehen (laut Hersteller XL/15-Tasten). */
-  rotate180: boolean;
+  /** Bild vor dem Senden drehen (Grad gegen den Uhrzeigersinn; XL/15-Tasten 180°, „+ XL“ 90°). */
+  rotation: Rotation;
   /** Anzahl Dials (nur „+“). */
   dials: number;
   /** Touch-Streifen (nur „+“): logische Größe in Pixeln. */
   strip?: { w: number; h: number };
 }
 
-const key15 = { cols: 5, rows: 3, keySize: 72, rotate180: true, dials: 0 } as const;
-const xl = { cols: 8, rows: 4, keySize: 96, rotate180: true, dials: 0 } as const;
+const key15 = { cols: 5, rows: 3, keySize: 72, rotation: 180, dials: 0 } as const;
+const xl = { cols: 8, rows: 4, keySize: 96, rotation: 180, dials: 0 } as const;
 
 export const MODELS: readonly DeckModel[] = [
   { pid: 0x006c, name: "Stream Deck XL", ...xl },
@@ -36,9 +57,21 @@ export const MODELS: readonly DeckModel[] = [
     rows: 2,
     keySize: 120,
     // Hersteller: „keine Drehung“; Vorlage dreht. Am Gerät zu klären (40.2-Gerätetest).
-    rotate180: false,
+    rotation: 0,
     dials: 4,
     strip: { w: 800, h: 100 },
+  },
+  {
+    // Hersteller-HID-Seite „Stream Deck + XL“ (2026-10-13): 9×4 Tasten 112 px, 6 Dials,
+    // Streifen 1200×100; alle Bilder (Tasten, Streifen) 90° gegen den Uhrzeigersinn gedreht.
+    pid: 0x00c6,
+    name: "Stream Deck + XL",
+    cols: 9,
+    rows: 4,
+    keySize: 112,
+    rotation: 90,
+    dials: 6,
+    strip: { w: 1200, h: 100 },
   },
 ];
 

@@ -5,7 +5,7 @@
 // Simulator ersetzt den Test am Gerät nicht (Bildformat/Chunking nur dort).
 
 import { t, type I18nKey } from "../i18n.ts";
-import { keyCount, MODELS } from "./models.ts";
+import { keyCount, MODELS, unrotationMatrix } from "./models.ts";
 import { SimHid } from "./sim-device.ts";
 import { sendTestGrid } from "./testgrid.ts";
 import { deckSession } from "./session.ts";
@@ -226,17 +226,23 @@ export class StreamDeckSim extends HTMLElement {
       void createImageBitmap(blob).then((bmp) => {
         if (img.kind === "key") {
           const g = canvases[img.index]?.getContext("2d");
-          // Drehung wie am Gerät: Modelle mit rotate180 sind bereits gedreht gesendet → zurückdrehen zur Anzeige.
+          // Drehung wie am Gerät: Bilder sind bereits gedreht gesendet → zurückdrehen zur Anzeige.
           if (g) {
             g.save();
-            if (m.rotate180) {
-              g.translate(m.keySize, m.keySize);
-              g.rotate(Math.PI);
-            }
+            g.transform(...unrotationMatrix(m.rotation, m.keySize, m.keySize));
             g.drawImage(bmp, 0, 0);
             g.restore();
           }
-        } else stripCanvas?.getContext("2d")?.drawImage(bmp, img.x, img.y, img.w, img.h);
+        } else {
+          const g = stripCanvas?.getContext("2d");
+          if (g) {
+            g.save();
+            g.translate(img.x, img.y);
+            g.transform(...unrotationMatrix(m.rotation, img.w, img.h));
+            g.drawImage(bmp, 0, 0);
+            g.restore();
+          }
+        }
       });
     };
   }

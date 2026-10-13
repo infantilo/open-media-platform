@@ -1,7 +1,7 @@
 // Render-Engine, reine Logik (Kap. 40.3): Fingerprint-Cache + Debounce.
 // Rasterisierung (Canvas → JPEG) und Gerät sind injiziert → ohne DOM testbar.
 
-import type { DeckModel } from "./models.ts";
+import type { DeckModel, Rotation } from "./models.ts";
 import { keyCount } from "./models.ts";
 
 export type KeyState = "onair" | "preset" | "cue" | "off" | "error";
@@ -34,7 +34,7 @@ export interface RenderTarget {
 
 export interface Rasterizer {
   key(def: KeyDef | null, model: DeckModel): Promise<Uint8Array>;
-  dial(def: DialDef | null, w: number, h: number): Promise<Uint8Array>;
+  dial(def: DialDef | null, w: number, h: number, rotation?: Rotation): Promise<Uint8Array>;
 }
 
 export interface RenderOptions {
@@ -129,7 +129,7 @@ export class DeckRenderer {
         const w = strip.w / this.#dials.length;
         for (let i = 0; i < this.#dials.length; i++) {
           const fp = fingerprint(this.#dials[i]);
-          if (fp !== this.#sentDials[i]) dialJobs.push({ i, fp, w, h: strip.h, jpeg: this.raster.dial(this.#dials[i], w, strip.h) });
+          if (fp !== this.#sentDials[i]) dialJobs.push({ i, fp, w, h: strip.h, jpeg: this.raster.dial(this.#dials[i], w, strip.h, model.rotation) });
         }
       }
       // Fehlgeschlagene Raster-Versprechen sollen nicht als „unhandled“ enden.

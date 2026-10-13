@@ -1,7 +1,7 @@
 // Canvas-Rasterizer (Kap. 40.3): KeyDef/DialDef → JPEG. Farben aus den
 // `--omp-*`-Tokens (design-tokens.css), Drehung je Modell, Text mit Umbruch.
 
-import type { DeckModel } from "./models.ts";
+import { type DeckModel, type Rotation, rotatedSize, rotationMatrix } from "./models.ts";
 import type { DialDef, KeyDef, KeyState, Rasterizer } from "./render-logic.ts";
 
 const STATE_TOKEN: Record<KeyState, string> = {
@@ -68,10 +68,7 @@ export function drawKey(def: KeyDef | null, m: DeckModel): OffscreenCanvas {
   const s = m.keySize;
   const c = new OffscreenCanvas(s, s);
   const g = c.getContext("2d")!;
-  if (m.rotate180) {
-    g.translate(s, s);
-    g.rotate(Math.PI);
-  }
+  g.setTransform(...rotationMatrix(m.rotation, s, s));
   g.fillStyle = resolveColor("--omp-bg");
   g.fillRect(0, 0, s, s);
   if (!def) return c;
@@ -112,9 +109,11 @@ export function drawKey(def: KeyDef | null, m: DeckModel): OffscreenCanvas {
   return c;
 }
 
-export function drawDial(def: DialDef | null, w: number, h: number): OffscreenCanvas {
-  const c = new OffscreenCanvas(w, h);
+export function drawDial(def: DialDef | null, w: number, h: number, rotation: Rotation = 0): OffscreenCanvas {
+  const [cw, ch] = rotatedSize(rotation, w, h);
+  const c = new OffscreenCanvas(cw, ch);
   const g = c.getContext("2d")!;
+  g.setTransform(...rotationMatrix(rotation, w, h));
   g.fillStyle = resolveColor("--omp-surface");
   g.fillRect(0, 0, w, h);
   if (!def) return c;
@@ -142,5 +141,5 @@ export function drawDial(def: DialDef | null, w: number, h: number): OffscreenCa
 
 export const canvasRasterizer: Rasterizer = {
   key: (d, m) => toJpeg(drawKey(d, m)),
-  dial: (d, w, h) => toJpeg(drawDial(d, w, h)),
+  dial: (d, w, h, rot) => toJpeg(drawDial(d, w, h, rot)),
 };

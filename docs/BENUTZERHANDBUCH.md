@@ -1430,7 +1430,7 @@ sind pro Workflow fest (Standard 2 Kanäle, 48 kHz).
 
 ## 10g. Stream Deck als Bedienpult (Tasten, Dials, Streifen)
 
-Ein angeschlossenes **Stream Deck** (getestet vorgesehen: XL mit 32 Tasten und „+“ mit 8 Tasten, 4 Dials und Touch-Streifen) bedient
+Ein angeschlossenes **Stream Deck** (getestet vorgesehen: XL mit 32 Tasten, „+“ mit 8 Tasten, 4 Dials und Touch-Streifen sowie „+ XL“ mit 36 Tasten, 6 Dials und Touch-Streifen) bedient
 dieselben Node-Oberflächen wie die Maus — jede Taste ruft genau den Befehl auf, den auch der Bildschirmknopf auslöst, und zeigt denselben
 Zustand (on-air rot, Preset grün, Cue orange).
 

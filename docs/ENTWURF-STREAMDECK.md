@@ -17,6 +17,7 @@ je Chunk (so auch in der Vorlage `streamdeck.js:1045`).
 | XL 2022 (v2) | `0x008F` | 8×4 | 96×96 JPEG | 180° | |
 | 15-Tasten-Familie (2019 / MK.2 / MK.2 Scissor) | `0x006D` / `0x0080` / `0x00A5` | 5×3 | 72×72 JPEG | 180° | `0x0080`, `0x00A5` fehlen in der Vorlagentabelle |
 | **+** | `0x0084` | 4×2 | 120×120 JPEG | **keine** | 4 Dials, Touch-Streifen 800×100 (LCD 800×480) |
+| **+ XL** (Nachtrag 2026-10-13) | `0x00C6` | 9×4 | 112×112 JPEG | **90° gegen den Uhrzeigersinn** (Tasten und Streifen) | 6 Dials, Streifen 1200×100 (LCD 1280×800); Befehle/Offsets wie „+“ (Taste 0x07, Streifen teilweise 0x0C), Eingabe-Berichte identisch aufgebaut; Teilbild-Koordinaten logisch (ohne Drehung), das JPEG selbst ist gedreht |
 | Neo / Mini / MK.1 | `0x009A` / `0x0063`,`0x0090` / `0x0060` | — | — | — | **nicht in v1**; Seiten `…/stream-deck-neo`, `…/mini` vor Aufnahme lesen |
 
 Eingabe (Report-ID 1, im WebHID-Puffer: `d[0]`=Kommando, `d[1..2]`=Länge, Nutzdaten ab `d[3]`):
