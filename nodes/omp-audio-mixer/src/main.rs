@@ -25,7 +25,7 @@ mod rules;
 mod uibundle;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -463,6 +463,8 @@ struct DiscoveredAudioSource {
 }
 
 struct AudioMixerStore {
+    /// Angekündigte, noch nicht abgeschlossene Quellenwechsel (`POST /handover`, Host-Wartung).
+    handover_pending: Arc<AtomicUsize>,
     channels: Arc<Mutex<Vec<ChannelState>>>,
     available_sources: Arc<Mutex<Vec<DiscoveredAudioSource>>>,
     next_seq: Arc<AtomicU64>,
@@ -530,6 +532,14 @@ impl ParamStore for AudioMixerStore {
         let channels = self.channels.lock().expect("lock poisoned");
 
         let mut parameters = vec![
+            // Make-before-break (Host-Wartung): true, solange angekündigte Quellenwechsel noch laufen.
+            ParamSpec {
+                name: "handoverPending".to_string(),
+                kind: ParamType::Boolean,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
             // JSON-Array [{id,label}], gleiche Array-Ausnahme wie
             // "crosspoint.inputs" bei omp-video-mixer-me (C10).
             ParamSpec {
@@ -1109,6 +1119,9 @@ impl ParamStore for AudioMixerStore {
     }
 
     fn get(&self, name: &str) -> Option<Value> {
+        if name == "handoverPending" {
+            return Some(serde_json::json!(self.handover_pending.load(Ordering::Acquire) > 0));
+        }
         if name == "levelsUrl" {
             return Some(serde_json::json!(self.levels_url));
         }
@@ -1253,6 +1266,33 @@ impl ParamStore for AudioMixerStore {
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        // POST /handover {"replacements":[{"old":"<senderId>","new":"<senderId>"}]}: ein Quell-Umzug (Host-Wartung)
+        // ersetzt Sender `old` durch `new`. Jeder Kanal auf `old` wird ohne Unterbrechung auf `new` umgehängt,
+        // sobald `new` Audio liefert. Fortschritt: Parameter `handoverPending`.
+        if method == "POST" && path == "/handover" {
+            let pairs: Vec<(String, String)> = serde_json::from_slice::<Value>(body)
+                .ok()
+                .and_then(|v| v.get("replacements").and_then(Value::as_array).cloned())
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|r| Some((r.get("old")?.as_str()?.to_string(), r.get("new")?.as_str()?.to_string())))
+                .collect();
+            for (old, new) in pairs {
+                // Nur Kanäle auf `old` sind betroffen — sonst nichts zu übergeben (z. B. ein Video-Sender).
+                let affected = old != new && self.channels.lock().expect("lock poisoned").iter().any(|c| c.source == old);
+                if !affected {
+                    continue;
+                }
+                self.handover_pending.fetch_add(1, Ordering::AcqRel);
+                let (channels, sources, pipeline, pending) =
+                    (self.channels.clone(), self.available_sources.clone(), self.pipeline.clone(), self.handover_pending.clone());
+                std::thread::spawn(move || {
+                    run_source_handover(&channels, &sources, &pipeline, &old, &new);
+                    pending.fetch_sub(1, Ordering::AcqRel);
+                });
+            }
+            return Some(RawResponse { status: 200, content_type: "application/json", body: br#"{"ok":true}"#.to_vec() });
+        }
         if method == "GET" && path == "/state" {
             let state = self.capture_state();
             let payload = serde_json::to_vec(&serde_json::json!({ "state": state })).unwrap_or_default();
@@ -2976,6 +3016,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let available_nodes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
     let store_concrete = Arc::new(AudioMixerStore {
+        handover_pending: Arc::new(AtomicUsize::new(0)),
         channels: channels.clone(),
         available_sources: available_sources.clone(),
         next_seq: Arc::new(AtomicU64::new(1)),
@@ -3424,6 +3465,54 @@ async fn routing_loop(store: Arc<AudioMixerStore>, orchestrator_url: String, aut
         if active {
             let st = store.clone();
             let _ = tokio::task::spawn_blocking(move || st.reapply_routing()).await;
+        }
+    }
+}
+
+/// Wartet auf die neue Quelle und hängt jeden Kanal auf `old` weich auf `new` um. Schlägt der weiche Wechsel fehl,
+/// wird der Kanal klassisch (Zweig neu aufgebaut) auf `new` gestellt — besser eine kurze Lücke als Dauerstille.
+fn run_source_handover(
+    channels: &Arc<Mutex<Vec<ChannelState>>>,
+    sources: &Arc<Mutex<Vec<DiscoveredAudioSource>>>,
+    pipeline: &PipelineHandle,
+    old: &str,
+    new: &str,
+) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let flow_id = loop {
+        if let Some(f) = sources.lock().expect("lock poisoned").iter().find(|s| s.sender_id == new).map(|s| s.flow_id.clone()) {
+            break f;
+        }
+        if std::time::Instant::now() >= deadline {
+            eprintln!("omp-audio-mixer: handover {old} -> {new}: new source never appeared, giving up");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    let ids: Vec<String> = channels.lock().expect("lock poisoned").iter().filter(|c| c.source == old).map(|c| c.id.clone()).collect();
+    for id in ids {
+        let (tx, rx) = std::sync::mpsc::channel();
+        pipeline.swap_channel_input(id.clone(), flow_id.clone(), tx);
+        let result = rx.recv_timeout(Duration::from_secs(15)).unwrap_or_else(|_| Err("swap timed out".to_string()));
+        let mut chans = channels.lock().expect("lock poisoned");
+        let Some(ch) = chans.iter_mut().find(|c| c.id == id) else { continue };
+        if ch.source != old {
+            continue; // zwischenzeitlich vom Bediener umgestellt
+        }
+        match result {
+            Ok(()) => {
+                ch.source = new.to_string();
+                eprintln!("omp-audio-mixer: channel {id}: input {old} -> {new} (make-before-break)");
+            }
+            Err(e) => {
+                eprintln!("omp-audio-mixer: channel {id}: soft swap failed ({e}), falling back to rebuilding the branch");
+                ch.source = new.to_string();
+                pipeline.set_channel_source(id.clone(), pipeline::ChannelSource::External { flow_id: flow_id.clone() });
+                pipeline.set_gain(id.clone(), ch.gain_db);
+                pipeline.set_mute(id.clone(), ch.mute);
+                pipeline.set_pfl(id.clone(), ch.pfl);
+                pipeline.set_proc(id.clone(), ch.proc);
+            }
         }
     }
 }

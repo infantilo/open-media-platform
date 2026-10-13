@@ -135,6 +135,9 @@ enum Command {
     AddChannel { id: String, source: ChannelSource },
     RemoveChannel(String),
     SetChannelSource { id: String, source: ChannelSource },
+    /// Make-before-break am Kanaleingang (Host-Wartung): neue externe Quelle läuft erst auf einer Haltesenke
+    /// mit, dann wird der Kanal ohne Unterbrechung der DSP-Kette umgehängt. `done` meldet das Ergebnis.
+    SwapInput { id: String, flow_id: String, done: Sender<Result<(), String>> },
     SetGain { id: String, db: f64 },
     SetMute { id: String, muted: bool },
     SetAfv { id: String, open: bool, frames: u64, at_tai_ns: u64 },
@@ -200,6 +203,11 @@ impl PipelineHandle {
         let _ = self
             .commands
             .send(Command::SetChannelSource { id, source });
+    }
+
+    /// Weicher Quellenwechsel eines Kanals (s. `Command::SwapInput`). Das Ergebnis kommt über `done`.
+    pub fn swap_channel_input(&self, id: String, flow_id: String, done: Sender<Result<(), String>>) {
+        let _ = self.commands.send(Command::SwapInput { id, flow_id, done });
     }
 
     pub fn set_gain(&self, id: String, db: f64) {
@@ -316,6 +324,10 @@ struct ChannelBranch {
     /// Hält den Lese-Thread einer externen Quelle am Leben (`Drop`
     /// stoppt ihn) — `None` beim internen Testton.
     _external_input: Option<MxlAudioInput>,
+    /// Letztes Element der Quelle (verlinkt auf `convert`) und Anzahl der führenden Quell-Elemente in
+    /// `elements` — Grundlage des weichen Quellenwechsels (`finish_swap`).
+    tail: gst::Element,
+    input_len: usize,
 }
 
 struct ActivePipeline {
@@ -471,6 +483,8 @@ fn add_channel_branch(
         }
     };
 
+    let input_len = elements.len();
+    let source_tail = tail.clone();
     let convert = gst::ElementFactory::make("audioconvert")
         .build()
         .map_err(|e| format!("audioconvert ({id}): {e}"))?;
@@ -711,6 +725,8 @@ fn add_channel_branch(
             wide,
             sends: HashMap::new(),
             _external_input: external_input,
+            tail: source_tail,
+            input_len,
         },
     );
     // Nach einem Quellwechsel (Zweig neu gebaut) bereits eingeschaltete
@@ -921,6 +937,157 @@ fn drop_send_branch(pipeline: &gst::Pipeline, aux_mixer: Option<&gst::Element>, 
         let _ = el.set_state(gst::State::Null);
         let _ = pipeline.remove(el);
     }
+}
+
+/// Ein vorbereiteter Quellenwechsel: neuer Eingang läuft bereits (an einer Haltesenke), wartet auf Bildfluss.
+struct StagedSwap {
+    id: String,
+    input: MxlAudioInput,
+    hold: gst::Element,
+    since: std::time::Instant,
+    done: Sender<Result<(), String>>,
+}
+
+/// Maximale Wartezeit, bis die neue Quelle Audio liefert.
+const SWAP_FLOW_TIMEOUT: Duration = Duration::from_secs(8);
+
+fn discard_staged(active: &ActivePipeline, staged: StagedSwap) {
+    staged.input.stop();
+    let _ = staged.hold.set_state(gst::State::Null);
+    let _ = active.pipeline.remove(&staged.hold);
+    for el in &staged.input.elements {
+        let _ = el.set_state(gst::State::Null);
+        let _ = active.pipeline.remove(el);
+    }
+}
+
+/// Phase 1: neuen Eingang bauen und an eine Haltesenke hängen (dort läuft er warm mit, bis er Daten liefert).
+fn stage_swap(
+    active: &ActivePipeline,
+    context: &Arc<MxlContext>,
+    id: &str,
+    flow_id: &str,
+    done: Sender<Result<(), String>>,
+) -> Result<StagedSwap, String> {
+    let branch = active.channels.get(id).ok_or_else(|| format!("channel {id} not found"))?;
+    if branch._external_input.is_none() || branch.wide.is_some() {
+        return Err("channel input is not hot-swappable (internal or multichannel source)".to_string());
+    }
+    let input = MxlAudioInput::new_unsynced(&active.pipeline, context.clone(), flow_id)
+        .map_err(|e| format!("MxlAudioInput (swap {id}, flow {flow_id}): {e}"))?;
+    let cleanup = |input: &MxlAudioInput| {
+        input.stop();
+        for el in &input.elements {
+            let _ = el.set_state(gst::State::Null);
+            let _ = active.pipeline.remove(el);
+        }
+    };
+    if input.channels > CHANNELS {
+        cleanup(&input);
+        return Err("new source has more than two channels".to_string());
+    }
+    let hold = gst::ElementFactory::make("fakesink")
+        .property("sync", false)
+        .property("async", false)
+        .build()
+        .map_err(|e| format!("fakesink (swap {id}): {e}"))?;
+    if let Err(e) = active.pipeline.add(&hold) {
+        cleanup(&input);
+        return Err(format!("add hold sink (swap {id}): {e}"));
+    }
+    if let Err(e) = gst::Element::link(&input.tail, &hold) {
+        let _ = active.pipeline.remove(&hold);
+        cleanup(&input);
+        return Err(format!("link new input to hold sink (swap {id}): {e}"));
+    }
+    // Senke zuerst, Quelle zuletzt (s. Kommentar in `add_channel_branch`).
+    let order: Vec<&gst::Element> = std::iter::once(&hold).chain(input.elements.iter().rev()).collect();
+    for el in order {
+        if let Err(e) = el.sync_state_with_parent() {
+            let _ = hold.set_state(gst::State::Null);
+            let _ = active.pipeline.remove(&hold);
+            cleanup(&input);
+            return Err(format!("sync_state_with_parent (swap {id}): {e}"));
+        }
+    }
+    Ok(StagedSwap { id: id.to_string(), input, hold, since: std::time::Instant::now(), done })
+}
+
+/// Phase 2: beide Pads kurz sperren, Quelle umhängen, alte Eingangselemente entfernen. Der Rest des Kanals
+/// (Verarbeitung, Fader, PFL, Sends, Pegel) bleibt unberührt.
+fn finish_swap(active: &mut ActivePipeline, staged: StagedSwap) -> Result<(), (String, StagedSwap)> {
+    match relink_input(active, &staged) {
+        Ok(()) => {
+            // Der neue Eingang gehört jetzt dem Kanalzweig (hält seinen Lese-Thread am Leben).
+            if let Some(branch) = active.channels.get_mut(staged.id.as_str()) {
+                branch._external_input = Some(staged.input);
+            }
+            Ok(())
+        }
+        Err(e) => Err((e, staged)),
+    }
+}
+
+fn relink_input(active: &mut ActivePipeline, staged: &StagedSwap) -> Result<(), String> {
+    let id = staged.id.as_str();
+    let branch = active.channels.get_mut(id).ok_or_else(|| format!("channel {id} vanished"))?;
+    let old_src = branch.tail.static_pad("src").ok_or("old tail: no src pad")?;
+    let convert_sink = old_src.peer().ok_or("old tail is not linked")?;
+    let new_src = staged.input.tail.static_pad("src").ok_or("new tail: no src pad")?;
+    let hold_sink = staged.hold.static_pad("sink").ok_or("hold sink: no sink pad")?;
+
+    let (btx, brx) = std::sync::mpsc::channel::<()>();
+    let tx_new = btx.clone();
+    let p_new = new_src
+        .add_probe(gst::PadProbeType::BLOCK_DOWNSTREAM, move |_, _| {
+            let _ = tx_new.send(());
+            gst::PadProbeReturn::Ok
+        })
+        .ok_or("block probe (new) failed")?;
+    let p_old = old_src.add_probe(gst::PadProbeType::BLOCK_DOWNSTREAM, move |_, _| {
+        let _ = btx.send(());
+        gst::PadProbeReturn::Ok
+    });
+    // Die neue Quelle liefert (geprüft), muss also sperren. Die alte darf stumm/tot sein — dann nicht warten.
+    let new_blocked = brx.recv_timeout(Duration::from_millis(500)).is_ok();
+    let _ = brx.recv_timeout(Duration::from_millis(100));
+    let result = (|| -> Result<(), String> {
+        if !new_blocked {
+            return Err("new input pad did not block".to_string());
+        }
+        new_src.unlink(&hold_sink).map_err(|e| format!("unlink hold sink: {e}"))?;
+        old_src.unlink(&convert_sink).map_err(|e| format!("unlink old input: {e}"))?;
+        new_src.link(&convert_sink).map(|_| ()).map_err(|e| format!("link new input: {e:?}"))
+    })();
+    new_src.remove_probe(p_new);
+    if let Some(p) = p_old {
+        old_src.remove_probe(p);
+    }
+    if let Err(e) = result {
+        // Rückweg: alte Quelle wieder an convert, falls sie ausgehängt wurde.
+        if old_src.peer().is_none() {
+            let _ = old_src.link(&convert_sink);
+        }
+        return Err(e);
+    }
+    let _ = active.pipeline.remove(&staged.hold);
+    let _ = staged.hold.set_state(gst::State::Null);
+    // Alte Eingangselemente entfernen (der Lese-Thread stoppt beim Drop des alten `MxlAudioInput`).
+    let n = branch.input_len.min(branch.elements.len());
+    let old_elements: Vec<gst::Element> = branch.elements.drain(0..n).collect();
+    if let Some(old) = branch._external_input.take() {
+        old.stop();
+    }
+    for el in &old_elements {
+        let _ = el.set_state(gst::State::Null);
+        let _ = active.pipeline.remove(el);
+    }
+    branch.tail = staged.input.tail.clone();
+    branch.input_len = staged.input.elements.len();
+    for (i, el) in staged.input.elements.iter().enumerate() {
+        branch.elements.insert(i, el.clone());
+    }
+    Ok(())
 }
 
 fn shared_for(active: &ActivePipeline, id: &str) -> Arc<dsp::ChannelShared> {
@@ -1326,6 +1493,8 @@ pub fn run(
     // die gewünschte, noch nicht erfolgreich gebaute `(id, source)`-
     // Zuordnung für den Timeout-Retry unten.
     let mut pending_channels: HashMap<String, ChannelSource> = HashMap::new();
+    // Vorbereitete weiche Quellenwechsel (`Command::SwapInput`), warten auf Datenfluss der neuen Quelle.
+    let mut staged_swaps: Vec<StagedSwap> = Vec::new();
 
     let mut last_dsp_report = std::time::Instant::now();
     loop {
@@ -1368,7 +1537,41 @@ pub fn run(
         // (`LEVEL_INTERVAL_NS`), ein Kommando-Wartezyklus drainiert die
         // Bus-Queue gleich mit (unten) statt einen zweiten Loop/Thread
         // dafür zu brauchen.
+        let mut i = 0;
+        while i < staged_swaps.len() {
+            let flowed = staged_swaps[i].input.flowed_handle().load(Ordering::Relaxed);
+            let gone = !active.channels.contains_key(&staged_swaps[i].id);
+            if !(flowed || gone || staged_swaps[i].since.elapsed() >= SWAP_FLOW_TIMEOUT) {
+                i += 1;
+                continue;
+            }
+            let staged = staged_swaps.remove(i);
+            if gone {
+                let _ = staged.done.send(Err("channel removed during swap".to_string()));
+                discard_staged(&active, staged);
+            } else if !flowed {
+                let _ = staged.done.send(Err("new source does not deliver audio".to_string()));
+                discard_staged(&active, staged);
+            } else {
+                let done = staged.done.clone();
+                match finish_swap(&mut active, staged) {
+                    Ok(()) => {
+                        let _ = done.send(Ok(()));
+                    }
+                    Err((e, staged)) => {
+                        let _ = done.send(Err(e));
+                        discard_staged(&active, staged);
+                    }
+                }
+            }
+        }
         match commands_rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(Command::SwapInput { id, flow_id, done }) => match stage_swap(&active, &context, &id, &flow_id, done.clone()) {
+                Ok(staged) => staged_swaps.push(staged),
+                Err(e) => {
+                    let _ = done.send(Err(e));
+                }
+            },
             Ok(Command::AddChannel { id, source }) => {
                 match add_channel_branch(&mut active, &context, &id, &source) {
                     Ok(()) => {
