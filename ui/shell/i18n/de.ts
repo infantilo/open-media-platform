@@ -1904,4 +1904,5 @@ export const de = {
   "sd.err.unsupported-model": "Dieses Stream-Deck-Modell wird noch nicht unterstützt.",
   "sd.err.open-failed": "Das Gerät ließ sich nicht öffnen (hält ein anderes Programm es? udev-Regel gesetzt?).",
   "sd.renderTest": "Render-Test",
+  "board.streamDeck": "Stream Deck",
 };

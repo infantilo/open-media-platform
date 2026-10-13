@@ -67,11 +67,17 @@ function watchAvailability(container: HTMLElement, el: HTMLElement, apiBase: str
 }
 
 export async function mountUIBundle(container: HTMLElement, apiBase: string): Promise<boolean> {
+  return (await mountUIBundleEl(container, apiBase)) !== null;
+}
+
+// Wie mountUIBundle, liefert aber das Custom Element (Kap. 40.4: der
+// Stream-Deck-Broker liest daran die optionale `streamDeck`-Eigenschaft).
+export async function mountUIBundleEl(container: HTMLElement, apiBase: string): Promise<HTMLElement | null> {
   try {
     const res = await fetch(`${apiBase}/ui/manifest.json`);
-    if (!res.ok) return false;
+    if (!res.ok) return null;
     const manifest = (await res.json()) as { tag?: string };
-    if (!manifest.tag) return false;
+    if (!manifest.tag) return null;
 
     const token = localStorage.getItem(TOKEN_KEY);
     const bundleUrl = token
@@ -85,8 +91,8 @@ export async function mountUIBundle(container: HTMLElement, apiBase: string): Pr
     el.setAttribute("node-id", nodeId);
     container.appendChild(el);
     watchAvailability(container, el, apiBase);
-    return true;
+    return el;
   } catch {
-    return false;
+    return null;
   }
 }

@@ -8,6 +8,7 @@ import { t, type I18nKey } from "../i18n.ts";
 import { keyCount, MODELS } from "./models.ts";
 import { SimHid } from "./sim-device.ts";
 import { sendTestGrid } from "./testgrid.ts";
+import { deckSession } from "./session.ts";
 import { canvasRasterizer } from "./draw.ts";
 import { DeckRenderer, type KeyDef, type KeyState } from "./render-logic.ts";
 import { connectWithPrompt, type DeckDevice } from "./transport.ts";
@@ -83,6 +84,7 @@ export class StreamDeckSim extends HTMLElement {
   async #stop() {
     this.#unsub?.();
     this.#unsub = null;
+    if (this.hasAttribute("broker")) deckSession.setDevice(null);
     await this.#dev?.close();
     this.#dev = null;
     this.#sim = null;
@@ -100,7 +102,7 @@ export class StreamDeckSim extends HTMLElement {
     const { DeckDevice } = await import("./transport.ts");
     this.#attach(await DeckDevice.open(sim));
     this.#buildSimStage(sim);
-    await sendTestGrid(this.#dev!);
+    if (!this.hasAttribute("broker")) await sendTestGrid(this.#dev!);
   }
 
   async #startReal() {
@@ -113,7 +115,7 @@ export class StreamDeckSim extends HTMLElement {
     }
     this.#attach(r.device);
     await r.device.setBrightness(70);
-    await sendTestGrid(r.device);
+    if (!this.hasAttribute("broker")) await sendTestGrid(r.device);
   }
 
   /** Render-Engine-Test: Tasten mit Zuständen, dann identisch (0 gesendet), dann 1 Änderung. */
@@ -147,6 +149,8 @@ export class StreamDeckSim extends HTMLElement {
 
   #attach(dev: DeckDevice) {
     this.#dev = dev;
+    // Eingebettet in die Konsole (Attribut `broker`): das Gerät gehört dem Broker.
+    if (this.hasAttribute("broker")) deckSession.setDevice(dev);
     this.#setStatus(dev.model.name);
     this.#unsub = dev.onEvent((e) => this.#note(e));
   }

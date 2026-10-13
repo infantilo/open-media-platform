@@ -18,7 +18,9 @@
 // ui/graph/flow-canvas.ts.
 import { t } from "./i18n.ts";
 import "./upcoming.ts";
-import { mountUIBundle } from "./ui-bundle.ts";
+import { mountUIBundleEl } from "./ui-bundle.ts";
+import "./streamdeck/sim.ts";
+import { deckSession } from "./streamdeck/session.ts";
 import type { ConsoleEntry } from "./console-view.ts";
 import {
   computeTileGridLayout,
@@ -100,6 +102,31 @@ export class ConsoleBoard extends HTMLElement {
       "background:var(--omp-surface-raised);color:var(--omp-text);cursor:pointer;font-size:var(--omp-font-size-sm);box-shadow:0 1px 4px rgba(0,0,0,0.4);";
     arrangeBtn.addEventListener("click", () => this.#retileAll());
     toolbar.appendChild(arrangeBtn);
+
+    // Stream Deck (Kap. 40.4): Verbindung/Simulator in einem einklappbaren Panel.
+    const deckBtn = document.createElement("button");
+    deckBtn.type = "button";
+    deckBtn.textContent = t("board.streamDeck");
+    deckBtn.style.cssText = arrangeBtn.style.cssText + "margin-left:6px;";
+    const deckPanel = document.createElement("div");
+    deckPanel.style.cssText =
+      "display:none;position:fixed;right:12px;bottom:12px;max-width:min(94vw,1000px);max-height:80vh;overflow:auto;" +
+      "z-index:1000001;background:var(--omp-surface);border:1px solid var(--omp-border);border-radius:var(--omp-radius);box-shadow:0 4px 16px rgba(0,0,0,0.6);";
+    deckBtn.addEventListener("click", () => {
+      if (deckPanel.style.display === "none") {
+        if (!deckPanel.firstChild) {
+          const sim = document.createElement("omp-streamdeck-sim");
+          sim.setAttribute("broker", "");
+          deckPanel.appendChild(sim);
+        }
+        deckPanel.style.display = "block";
+      } else deckPanel.style.display = "none";
+    });
+    toolbar.appendChild(deckBtn);
+    this.appendChild(deckPanel);
+    deckSession.focusRequest = (id) => {
+      if (id !== null && this.#tiles.has(id)) this.#bringToFront(id);
+    };
     this.appendChild(toolbar);
 
     // Maximierte Kachel muss bei Board-Größenänderung (z. B. Browserfenster
@@ -158,6 +185,7 @@ export class ConsoleBoard extends HTMLElement {
       const tile = this.#tiles.get(roleId);
       tile?.previewHandle?.dispose();
       tile?.wrapper.remove();
+      deckSession.unregisterTab(roleId);
       this.#tiles.delete(roleId);
       delete this.#layouts[roleId];
     }
@@ -308,8 +336,11 @@ export class ConsoleBoard extends HTMLElement {
     bundleContainer.style.cssText = "flex:1;min-height:0;";
     content.appendChild(bundleContainer);
 
-    const mounted = await mountUIBundle(bundleContainer, entry.uiBundleUrl);
-    if (!mounted) {
+    const mountedEl = await mountUIBundleEl(bundleContainer, entry.uiBundleUrl);
+    // Stream Deck (Kap. 40.4): geöffnete Node-UI = Tab am Gerät.
+    if (mountedEl) deckSession.registerTab(entry.nodeRoleId, entry.nodeLabel, mountedEl, entry.uiBundleUrl.split("/").pop() ?? "");
+    else deckSession.unregisterTab(entry.nodeRoleId);
+    if (!mountedEl) {
       bundleContainer.replaceChildren();
       const p = document.createElement("p");
       p.textContent = t("console.bundleFailed", { node: entry.nodeLabel });
@@ -337,6 +368,7 @@ export class ConsoleBoard extends HTMLElement {
     layout.zIndex = this.#nextZIndex++;
     tile.wrapper.style.zIndex = String(layout.zIndex);
     this.#topRoleId = roleId;
+    deckSession.focusFromScreen(roleId);
     this.#saveLayouts();
   }
 

@@ -1905,4 +1905,5 @@ export const en: Record<keyof typeof de, string> = {
   "sd.err.unsupported-model": "This Stream Deck model is not supported yet.",
   "sd.err.open-failed": "The device could not be opened (is another program holding it? udev rule set?).",
   "sd.renderTest": "Render test",
+  "board.streamDeck": "Stream Deck",
 };
