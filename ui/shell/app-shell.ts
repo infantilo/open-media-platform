@@ -287,7 +287,8 @@ class AppShell extends HTMLElement {
       "font-family:var(--omp-font);color:var(--omp-text);";
 
     const left = document.createElement("div");
-    left.style.cssText = "display:flex;align-items:center;gap:var(--omp-space-4);";
+    // min-width:0 + scrollbare Tab-Leiste: bei schmalem Fenster bleibt die rechte Gruppe (Stream Deck, Sprache) sichtbar.
+    left.style.cssText = "display:flex;align-items:center;gap:var(--omp-space-4);flex:1 1 auto;min-width:0;";
 
     const brand = document.createElement("span");
     brand.textContent = "OpenMediaPlatform";
@@ -297,7 +298,7 @@ class AppShell extends HTMLElement {
 
     const tabsWrap = document.createElement("div");
     tabsWrap.setAttribute("data-role", "app-tabs");
-    tabsWrap.style.cssText = "display:flex;gap:var(--omp-space-1);";
+    tabsWrap.style.cssText = "display:flex;gap:var(--omp-space-1);min-width:0;overflow-x:auto;scrollbar-width:thin;";
     this.#tabsWrap = tabsWrap;
     for (const tab of this.#tabs) {
       tabsWrap.appendChild(this.#buildTabButton(tab));
@@ -305,7 +306,7 @@ class AppShell extends HTMLElement {
     left.append(brand, tabsWrap);
 
     const right = document.createElement("div");
-    right.style.cssText = "display:flex;align-items:center;gap:var(--omp-space-3);";
+    right.style.cssText = "display:flex;align-items:center;gap:var(--omp-space-3);flex:0 0 auto;margin-left:var(--omp-space-3);";
 
     // S6: Workflow-Auswahl in der App-Bar — wirkt nur auf den Flow-
     // Editor-Tab (s. #switchTab/FlowCanvas.setWorkflowFilter), bleibt
@@ -328,7 +329,7 @@ class AppShell extends HTMLElement {
     // Stream Deck (Kap. 40): Verbindung/Simulator gehört der App, nicht einer Ansicht — das Gerät bleibt
     // beim Tab-Wechsel verbunden (Konsole ⇄ Flow-Editor), die Tabs des Brokers wechseln mit der Ansicht.
     const deck = createDeckToggle(
-      "padding:2px 8px;border:1px solid var(--omp-border);border-radius:var(--omp-radius);" +
+      "white-space:nowrap;padding:2px 8px;border:1px solid var(--omp-border);border-radius:var(--omp-radius);" +
         "background:var(--omp-surface-raised);color:var(--omp-text);cursor:pointer;font-size:var(--omp-font-size-xs);",
     );
     deck.button.setAttribute("data-role", "deck-toggle");
