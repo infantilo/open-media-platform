@@ -286,7 +286,7 @@ impl Pipeline {
         let mxl_audio_output = MxlAudioOutput::new(
             &pipeline,
             &audioconvert,
-            mxl_context,
+            mxl_context.clone(),
             &config.audio_flow_id,
             &config.label,
             SAMPLE_RATE,
@@ -308,6 +308,22 @@ impl Pipeline {
             gst::PadProbeReturn::Ok
         });
 
+        // A/V-Versatz: Bild-PTS liegen sonst beliebig zum MXL-Bildraster und werden beim
+        // Schreiben bis zu einem Bild verschoben, Ton (Sample-genau) nicht → bis ~40 ms
+        // Ton-Vorlauf. Laufzeit 0 auf den nächsten Rasterpunkt legen: Bild- und Ton-PTS
+        // treffen dann exakt das Raster (40 ms = Vielfaches von 1/48000 s).
+        if let Some(grid) = mxl_context.index_to_ns(
+            mxl_context.ns_to_index(mxl_context.now_ns(), config.framerate_numerator, config.framerate_denominator).unwrap_or(0) + 1,
+            config.framerate_numerator,
+            config.framerate_denominator,
+        ) {
+            let tai_now = mxl_context.now_ns();
+            let clock = gst::SystemClock::obtain();
+            if grid > tai_now {
+                pipeline.set_start_time(gst::ClockTime::NONE);
+                pipeline.set_base_time(clock.time().unwrap_or(gst::ClockTime::ZERO) + gst::ClockTime::from_nseconds(grid - tai_now));
+            }
+        }
         pipeline
             .set_state(gst::State::Playing)
             .map_err(|e| PipelineError(format!("set state playing: {e}")))?;
