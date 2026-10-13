@@ -343,7 +343,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	for _, opt := range opts {
 		opt(&options)
 	}
-	g := &authGate{auth: authSvc, authz: authzStore, audit: auditLogger, nodes: nodes, workflows: workflowSvc}
+	g := &authGate{auth: authSvc, authz: authzStore, audit: auditLogger, nodes: nodes, workflows: workflowSvc, layouts: layoutStore}
 
 	// Kapitel 13 Teil 3 (docs/END-GOAL-FEATURES.md §13.4) — braucht
 	// keinen eigenen NewHandler-Parameter: nodes/launcherSvc/graphSvc

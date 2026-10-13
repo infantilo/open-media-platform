@@ -92,7 +92,7 @@ func handleWhoami(authSvc AuthService, authzStore AuthzChecker) http.HandlerFunc
 			return
 		}
 		if count == 0 {
-			writeJSON(w, http.StatusOK, map[string]any{"authRequired": false, "authenticated": false, "isAdmin": true})
+			writeJSON(w, http.StatusOK, map[string]any{"authRequired": false, "authenticated": false, "isAdmin": true, "canConfigure": true})
 			return
 		}
 		token, present := bearerToken(r)
@@ -109,8 +109,12 @@ func handleWhoami(authSvc AuthService, authzStore AuthzChecker) http.HandlerFunc
 		if err != nil {
 			isAdmin = false
 		}
+		canConfigure, err := authzStore.Check(p.Username, authz.AnyNode, authz.VerbConfigure)
+		if err != nil {
+			canConfigure = false
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"authRequired": true, "authenticated": true, "username": p.Username, "isAdmin": isAdmin,
+			"authRequired": true, "authenticated": true, "username": p.Username, "isAdmin": isAdmin, "canConfigure": canConfigure,
 		})
 	}
 }

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -399,5 +400,52 @@ func TestRequireVerbOnReceiverAllowsOperatorViaWorkflowRole(t *testing.T) {
 	g.requireVerbOnReceiver(authz.VerbOperate, okHandler)(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("DELETE: status = %d, want 200", rec.Code)
+	}
+}
+
+// panelAuthz erlaubt nur `operate` auf genau einem Node (dem Panel).
+type panelAuthz struct {
+	fakeAuthzSvc
+	node string
+}
+
+func (p panelAuthz) Check(_, nodeID string, v authz.Verb) (bool, error) {
+	return nodeID == p.node && v == authz.VerbOperate, nil
+}
+
+type grantLayouts struct{ doc string }
+
+func (l grantLayouts) Get(string) (json.RawMessage, error) { return json.RawMessage(l.doc), nil }
+func (l grantLayouts) Put(string, json.RawMessage) error   { return nil }
+
+func TestRequireVerbOnReceiverPanelGrant(t *testing.T) {
+	mk := func(doc string) *authGate {
+		return &authGate{
+			auth:    fakeAuthSvc{userCount: 1, principal: auth.Principal{UserID: "u1", Username: "operator1"}},
+			authz:   panelAuthz{node: "inst-panel"},
+			audit:   &fakeAuditSvc{},
+			nodes:   fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", Receivers: []registry.ReceiverView{{ID: "rx-1"}}}, {ID: "panel-node", InstanceID: "inst-panel"}}},
+			layouts: grantLayouts{doc: doc},
+		}
+	}
+	post := func(g *authGate, panel string) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/graph/edges", strings.NewReader(`{"from":"tx","to":"rx-1"}`))
+		req.Header.Set("Authorization", "Bearer valid-token")
+		if panel != "" {
+			req.Header.Set("X-OMP-Panel", panel)
+		}
+		rec := httptest.NewRecorder()
+		g.requireVerbOnReceiver(authz.VerbOperate, okHandler)(rec, req)
+		return rec.Code
+	}
+	granted := mk(`{"grants":{"inst-panel":true}}`)
+	if c := post(granted, "inst-panel"); c != http.StatusOK {
+		t.Fatalf("freigegebenes Panel: status = %d, want 200", c)
+	}
+	if c := post(granted, ""); c != http.StatusForbidden {
+		t.Fatalf("ohne Panel-Header: status = %d, want 403", c)
+	}
+	if c := post(mk(`{"grants":{}}`), "inst-panel"); c != http.StatusForbidden {
+		t.Fatalf("Panel nicht freigegeben: status = %d, want 403", c)
 	}
 }

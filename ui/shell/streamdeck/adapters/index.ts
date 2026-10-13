@@ -17,7 +17,7 @@ const FACTORIES: Record<string, Factory | undefined> = {
     const api = (el as unknown as { deckApi?: VideoMixerApi }).deckApi;
     return api ? videoMixerAdapter(api) : null;
   },
-  "omp-xy-panel": () => xyPanelAdapter(coreIO()),
+  "omp-xy-panel": (_el, nodeId) => xyPanelAdapter(coreIO(nodeId)),
   "omp-ograf-panel": (_el, nodeId) => ografAdapter(proxyIO(nodeId)),
   "omp-device-hub-panel": (_el, nodeId) => deviceHubAdapter(proxyIO(nodeId)),
   "omp-audio-mixer-panel": (_el, nodeId) => audioMixerAdapter(proxyIO(nodeId)),

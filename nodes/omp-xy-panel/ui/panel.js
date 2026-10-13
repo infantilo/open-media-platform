@@ -29,6 +29,7 @@ const XY_T = (() => {
       modeOrder: "1:1 (nach Reihenfolge)", modeTags: "per Tag", targetNode: "Ziel-Node", mode: "Zuordnung",
       pickTarget: "Ziel-Node wählen.", nothingToRoute: "Nichts zu schalten — Zuordnung prüfen.", moveUp: "Nach oben", moveDown: "Nach unten",
       bundleN: "{n} Quellen", notMatched: "Ohne Partner",
+      grant: "Schalten über dieses Panel freigeben", grantHint: "Nutzer/Gruppen mit Bedienrecht (operate) auf diesem Panel dürfen darüber beliebige Ziele schalten.", grantFailed: "Freigabe konnte nicht gespeichert werden: {detail}",
     },
     en: {
       sources: "Sources", sinks: "Destinations", home: "Home", up: "Up one level",
@@ -54,6 +55,7 @@ const XY_T = (() => {
       modeOrder: "1:1 (by order)", modeTags: "by tag", targetNode: "Destination node", mode: "Mapping",
       pickTarget: "Choose a destination node.", nothingToRoute: "Nothing to route — check the mapping.", moveUp: "Move up", moveDown: "Move down",
       bundleN: "{n} sources", notMatched: "No partner",
+      grant: "Allow routing via this panel", grantHint: "Users/groups with operate rights on this panel may route any destination through it.", grantFailed: "Could not save the permission: {detail}",
     },
   };
   const lang = document.documentElement.lang === "en" ? "en" : "de";
@@ -203,15 +205,33 @@ class OmpXyPanel extends HTMLElement {
     const jgetOpt = async (url) => {
       try { const r = await fetch(url); return r.ok ? await r.json() : null; } catch { return null; }
     };
+    const panelId = this.getAttribute("node-id") || "";
+    const panelHdr = () => (panelId ? { "X-OMP-Panel": panelId } : {});
+    const GRANTS = "xy-panel-grants";
+    async function loadGrant() {
+      const me = await jgetOpt("/api/v1/auth/whoami");
+      if (!me || !me.canConfigure || !panelId) return { can: false, on: false };
+      const doc = (await jgetOpt(`/api/v1/layouts/${GRANTS}`)) || {};
+      return { can: true, on: !!(doc.grants && doc.grants[panelId]) };
+    }
+    async function saveGrant(on) {
+      const doc = (await jgetOpt(`/api/v1/layouts/${GRANTS}`)) || {};
+      const grants = { ...(doc.grants || {}) };
+      if (on) grants[panelId] = true; else delete grants[panelId];
+      const r = await fetch(`/api/v1/layouts/${GRANTS}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ grants }),
+      });
+      if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
+    }
     async function connect(from, to) {
       const r = await fetch("/api/v1/graph/edges", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json", ...panelHdr() },
         body: JSON.stringify({ from: from.id, to: to.id }),
       });
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
     }
     async function disconnect(to) {
-      const r = await fetch(`/api/v1/graph/edges/${encodeURIComponent(to.id)}`, { method: "DELETE" });
+      const r = await fetch(`/api/v1/graph/edges/${encodeURIComponent(to.id)}`, { method: "DELETE", headers: panelHdr() });
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
     }
     async function loadBouquets() {
@@ -665,9 +685,18 @@ class OmpXyPanel extends HTMLElement {
         st.auto = e.target.checked; localStorage.setItem("omp-xy-auto", st.auto ? "1" : "0");
       } }), t("autoTake"));
       auto.firstChild.checked = st.auto;
+      let grantUi = null;
+      if (st.grant && st.grant.can) {
+        const cb = xyEl("input", { type: "checkbox", onchange: async (e) => {
+          try { await saveGrant(e.target.checked); st.grant.on = e.target.checked; }
+          catch (err) { e.target.checked = !e.target.checked; st.msg = t("grantFailed", { detail: String(err.message || err) }); st.msgErr = true; render(); }
+        } });
+        cb.checked = st.grant.on;
+        grantUi = xyEl("label", { class: "auto", title: t("grantHint") }, cb, t("grant"));
+      }
       const top = xyEl("div", { class: "top" },
         xyEl("div", { class: "grp" }, xyEl("button", { onclick: openBouquetDialog }, "▦ " + t("bouquets")), xyEl("button", { onclick: openTagDialog }, "# " + t("tagRouting"))),
-        auto);
+        ...(grantUi ? [grantUi] : []), auto);
       const msg = xyEl("div", { id: "msg", class: "msg" + (st.msgErr ? " err" : ""), role: "status", "aria-live": "polite", text: st.msg });
       root.replaceChildren(top, tabs, xyEl("div", { class: "cols" }, renderSide("src"), renderSide("dst")), ...(st.draft ? [renderDraft()] : []), ...(st.bundle ? [renderBundle()] : [renderBar()]), msg);
       if (keepFocus) {
@@ -676,6 +705,7 @@ class OmpXyPanel extends HTMLElement {
       }
     }
 
+    loadGrant().then((g) => { st.grant = g; render(); }).catch(() => {});
     render();
     this._restart = () => {
       clearInterval(this._poll);

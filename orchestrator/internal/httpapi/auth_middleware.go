@@ -104,6 +104,30 @@ type authGate struct {
 	audit     AuditLogger
 	nodes     NodeLister
 	workflows WorkflowRoleFinder // Kapitel 12 Teil 4 — darf nil sein (Tests)
+	layouts   LayoutStore        // Panel-Freigaben (xy-panel-grants) — darf nil sein (Tests)
+}
+
+// panelGrantsLayout ist der Layout-Name, unter dem die Panel-Freigaben liegen:
+// {"grants": {"<Panel-Instanz-ID>": true}}. Schreiben darf nur `configure`
+// (PUT /api/v1/layouts/{name}); Operatoren können sie lesen, aber nicht ändern.
+const panelGrantsLayout = "xy-panel-grants"
+
+// panelGranted meldet, ob das X/Y-Panel panelID zum Schalten freigegeben ist.
+func (g *authGate) panelGranted(panelRole string) bool {
+	if g.layouts == nil {
+		return false
+	}
+	raw, err := g.layouts.Get(panelGrantsLayout)
+	if err != nil || len(raw) == 0 {
+		return false
+	}
+	var doc struct {
+		Grants map[string]bool `json:"grants"`
+	}
+	if json.Unmarshal(raw, &doc) != nil {
+		return false
+	}
+	return doc.Grants[panelRole]
 }
 
 // queryTokenAllowedPath meldet, ob r.URL.Path einer der wenigen Routen
@@ -313,6 +337,32 @@ func (g *authGate) requireVerbOnReceiver(minVerb authz.Verb, next http.HandlerFu
 						if err != nil {
 							http.Error(w, err.Error(), http.StatusInternalServerError)
 							return
+						}
+					}
+				}
+				// Panel-Freigabe: das X/Y-Panel (Header X-OMP-Panel) ist zum
+				// Schalten freigegeben UND der Nutzer hat `minVerb` auf dem
+				// Panel-Node (Node-Bindung, auch über Gruppen).
+				if !allowed {
+					if panelID := r.Header.Get("X-OMP-Panel"); panelID != "" {
+						for _, n := range g.nodes.List() {
+							if n.ID != panelID && n.InstanceID != panelID {
+								continue
+							}
+							role := consoles.NodeRoleID(consoles.NodeInfo{ID: n.ID, InstanceID: n.InstanceID})
+							if !g.panelGranted(role) {
+								break
+							}
+							ok, perr := g.authz.Check(p.Username, role, minVerb)
+							if perr != nil {
+								http.Error(w, perr.Error(), http.StatusInternalServerError)
+								return
+							}
+							if ok {
+								allowed = true
+								auditNode = role
+							}
+							break
 						}
 					}
 				}

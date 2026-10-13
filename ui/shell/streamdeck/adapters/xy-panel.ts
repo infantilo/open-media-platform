@@ -32,7 +32,8 @@ interface RawPoint {
   online?: boolean;
 }
 
-export function coreIO(): XyIO {
+export function coreIO(panelId = ""): XyIO {
+  const panelHdr: Record<string, string> = panelId ? { "X-OMP-Panel": panelId } : {};
   const jget = async (u: string) => {
     const r = await apiFetch(u);
     if (!r.ok) throw new Error(`${u}: ${r.status}`);
@@ -56,13 +57,13 @@ export function coreIO(): XyIO {
     async connect(from, to) {
       const r = await apiFetch("/api/v1/graph/edges", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...panelHdr },
         body: JSON.stringify({ from, to }),
       });
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
     },
     async disconnect(to) {
-      const r = await apiFetch(`/api/v1/graph/edges/${encodeURIComponent(to)}`, { method: "DELETE" });
+      const r = await apiFetch(`/api/v1/graph/edges/${encodeURIComponent(to)}`, { method: "DELETE", headers: panelHdr });
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
     },
   };
