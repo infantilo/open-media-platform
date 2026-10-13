@@ -1457,6 +1457,12 @@ Bildschirm nach vorn und umgekehrt. Alles darunter gehört dem aktiven Tab. Ist 
 * **X/Y-Panel:** Zeile 1 Quellen, Zeile 2 Ziele (zeigt die aktuell geschaltete Quelle), Zeile 3 **TAKE**, **AUTO** (schaltet sofort bei Auswahl beider Seiten),
   **Medium** (Alle/Video/Audio/Daten), **Trennen** und Blättern. Unpassende Medien sind gedimmt. Am „+“ wählen die Dials Quelle und Ziel, Drücken auf das Ziel-Dial schaltet.
   Schalten verlangt wie am Bildschirm das Recht zum Konfigurieren; ohne es meldet das Panel „forbidden“.
+* **Grafik (OGraf):** die Vorlagen („Presets“) als Tasten oben — Drücken wählt die Vorlage (grün), **on air stehende Grafiken sind rot** mit „ON AIR“ (bei mehrstufigen
+  Vorlagen mit Schritt „2/3“). Untere Zeile: **TAKE** (zeigt die gewählte Vorlage mit ihren Standardwerten), **TAKE OUT** (blendet die gewählte aus),
+  **CONTINUE** (nächster Schritt, zeigt „2/3“) und **ALLE AUS** (blendet alles aus, zeigt die Anzahl on air). Viele Vorlagen blättern über „⇄ n/m“.
+  Am „+“ / „+ XL“: erste Seite = Steuertasten, danach die Presets; Dial 1 wählt die Vorlage, Dial-Druck auf Dial 2 = TAKE/OUT, Dial 3 = CONTINUE, Dial 5 = ALLE AUS;
+  die Anzeigen zeigen Auswahl und die Namen der Grafiken on air. Feldwerte lassen sich am Gerät nicht bearbeiten (am Bildschirm vorbereiten ist nicht nötig:
+  TAKE nimmt die Standardwerte).
 * **Alle anderen Nodes:** ein **Auto-Raster** — jeder schreibbare Ein/Aus-Parameter und jede Auswahl wird eine Taste, Methoden ohne Argumente eine Starttaste,
   Zahlen mit Bereich werden am „+“ zu Dials.
 
