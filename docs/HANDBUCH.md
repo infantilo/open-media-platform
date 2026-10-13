@@ -796,6 +796,8 @@ Rein clientseitig (`ui/shell/streamdeck/`), kein Server-Anteil. Modelle (Herstel
 | `broker*.ts`, `session.ts` | Kopfzeile (Home + Tabs), Eingabeverteilung, 1,5-s-Takt `refresh()` (nicht gestapelt, 8-s-Limit), Tab-Register der Konsole, Wiederverbinden |
 | `adapters/` | `video-mixer`, `audio-mixer`, `ograf`, `xy-panel` (je `*-logic.ts` + Deno-Test); sonst `autoraster*.ts` |
 
+**X/Y-Adapter (`adapters/xy-panel*.ts`):** Ab 5 Spalten × 3 Zeilen Spaltenlayout (Quellen links, Steuerspalte Mitte, Ziele rechts; oberste Zeile je Seite = Kategorien „Alle“ + je Node, „mehr ▶“ zum Blättern), darunter das Seitenlayout (Quellen/Ziele/Steuerung) ohne Kategorien. Schalten über `POST/DELETE /api/v1/graph/edges`; der Kern verlangt dafür `operate` auf dem Node des Ziel-Receivers (Node-Bindung oder Workflow-Rolle) oder global `configure` (`requireVerbOnReceiver`, `orchestrator/internal/httpapi/auth_middleware.go`).
+
 Adapter-Auflösung (3 Stufen, `adapters/index.ts`): Eigenschaft `streamDeck` am Element des Node-UI-Bundles → Fabrik nach Elementname in der Shell → Auto-Raster
 aus dem Descriptor. **Eigene/fremde Nodes:** `docs/NODE-TUTORIAL.md`, Abschnitt „Stream-Deck-Belegung für einen eigenen Node“.
 Linux: udev-Regel auf dem **Bedienplatz-Rechner** (`make streamdeck-udev [ARGS=--dry-run|--remove]`, `deploy/dev/streamdeck-udev.sh`,

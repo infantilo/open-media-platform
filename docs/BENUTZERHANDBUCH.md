@@ -1515,9 +1515,25 @@ Geräte, Ein- und Ausgänge sowie Fehler.
 
 ### X/Y-Panel (Kreuzschiene)
 
-Zeile 1 Quellen, Zeile 2 Ziele (zeigt die aktuell geschaltete Quelle), Zeile 3 **TAKE**, **AUTO** (schaltet sofort bei Auswahl beider Seiten),
-**Medium** (Alle/Video/Audio/Daten), **Trennen** und Blättern. Unpassende Medien sind gedimmt. Am „+“ wählen die Dials Quelle und Ziel, Drücken auf
-das Ziel-Dial schaltet. Schalten verlangt wie am Bildschirm das Recht zum Konfigurieren; ohne es meldet das Panel „forbidden“.
+**Große Decks** (XL, „+ XL“, ab 5 Spalten und 3 Zeilen): Quellen **links**, Ziele **rechts**, die Bedientasten in der **mittleren Spalte**
+(von oben: **TAKE**, **Trennen**, **AUTO**, **Medium**).
+
+- **Kategorien:** Die oberste Zeile jeder Seite zeigt **Alle** und je einen Node als Kategorie. Ein Druck filtert die Punkte darunter auf diesen
+  Node, die gewählte Kategorie ist hervorgehoben. Passen nicht alle Kategorien in die Zeile, blättert **mehr ▶** weiter.
+- **Punkte:** Darunter stehen die Quellen bzw. Ziele der Kategorie. Hat ein Node nur einen Punkt, trägt die Taste den **Node-Namen** (z. B.
+  „viewer“), sonst den Punktnamen mit dem Node als Zusatzzeile. Ziele zeigen die aktuell geschaltete Quelle; die zur gewählten Quelle passenden
+  Ziele sind hell, unpassende Medien gedimmt, ein Ziel an der gewählten Quelle rot. Reicht der Platz nicht, blättert **mehr ▶** (letzte Taste
+  der Seite, mit Zähler).
+- **Schalten:** Quelle drücken, Ziel drücken — bei **AUTO an** (Standard) wird sofort geschaltet, sonst erst mit **TAKE**. **Trennen** löst das
+  gewählte Ziel. **Medium** wechselt Alle/Video/Audio/Daten und setzt beide Kategorien auf „Alle“ zurück.
+- **Dials („+“, „+ XL“):** Dial 1 wählt die Quelle, Dial 2 das Ziel (jeweils innerhalb der gewählten Kategorie), Dial 3 das Medium; Drücken auf
+  Dial 2 schaltet (TAKE), Drücken auf Dial 4 wechselt AUTO.
+
+**Kleine Decks** (z. B. „+“ mit einer Tastenzeile) haben keine Spalten: Seiten **Quellen**, **Ziele** und **Steuerung** (TAKE, AUTO, Medium,
+Trennen, Blättern), ohne Kategorien.
+
+**Rechte:** Schalten und Trennen verlangt wie am Bildschirm mindestens **operate** auf dem Node des Ziels (Node-Bindung oder Workflow-Rolle,
+z. B. der eigene Workflow) oder global **configure**; sonst meldet das Panel „forbidden“.
 
 ### Alle anderen Nodes
 
