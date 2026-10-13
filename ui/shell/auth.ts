@@ -54,6 +54,8 @@ export interface WhoamiResponse {
   // admin-Verb ODER im Bootstrap-Modus (noch kein Nutzer angelegt) —
   // steuert, ob app-shell.ts den Administration-Tab zeigt.
   isAdmin?: boolean;
+  // true bei global `configure` (Engineering) — Stream-Deck-Anbindung des Flow-Editors.
+  canConfigure?: boolean;
 }
 
 export async function whoami(): Promise<WhoamiResponse> {

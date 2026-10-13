@@ -55,6 +55,10 @@ import {
 } from "./controls.ts";
 import { mountUIBundle } from "../shell/ui-bundle.ts";
 import { apiFetch, connectionMonitor } from "../shell/connection.ts";
+import { whoami } from "../shell/auth.ts";
+import { deckSession } from "../shell/streamdeck/session.ts";
+import type { StreamDeckAdapter } from "../shell/streamdeck/adapter.ts";
+import { coreIO, xyPanelAdapter } from "../shell/streamdeck/adapters/xy-panel.ts";
 import { STANDARD_FORMATS, uniqueRoleName } from "./roles.ts";
 import { isAnchorRole, renameRole } from "./role-designer-logic.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
@@ -685,7 +689,18 @@ export class FlowCanvas extends HTMLElement {
     }
   };
 
+  // Stream-Deck-Anbindung des Engineering-Arbeitsplatzes: Kreuzschiene
+  // (Quelle → Ziel) über die Kern-API, dieselben Tasten wie am X/Y-Panel.
+  // Nur für Nutzer mit `configure`; der Tab heißt „Flow“.
+  #deckAdapter: (StreamDeckAdapter & { onChange: () => void; onError: (e: unknown) => void }) | null = null;
+  get streamDeck(): StreamDeckAdapter {
+    return (this.#deckAdapter ??= xyPanelAdapter(coreIO()));
+  }
+
   connectedCallback() {
+    void whoami().then((w) => {
+      if (this.isConnected && w.canConfigure) deckSession.registerTab("flow-editor", "Flow", this, "");
+    }).catch(() => {});
     this.#buildSkeleton();
     document.addEventListener("keydown", this.#onKeyDown);
     this.#init();
@@ -699,6 +714,7 @@ export class FlowCanvas extends HTMLElement {
   }
 
   disconnectedCallback() {
+    deckSession.unregisterTab("flow-editor");
     document.removeEventListener("keydown", this.#onKeyDown);
     connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
     clearTimeout(this.#viewportSaveTimer);
