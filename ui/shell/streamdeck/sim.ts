@@ -8,6 +8,8 @@ import { t, type I18nKey } from "../i18n.ts";
 import { keyCount, MODELS } from "./models.ts";
 import { SimHid } from "./sim-device.ts";
 import { sendTestGrid } from "./testgrid.ts";
+import { canvasRasterizer } from "./draw.ts";
+import { DeckRenderer, type KeyDef, type KeyState } from "./render-logic.ts";
 import { connectWithPrompt, type DeckDevice } from "./transport.ts";
 import type { DeckEvent } from "./protocol.ts";
 
@@ -47,6 +49,7 @@ export class StreamDeckSim extends HTMLElement {
         <button id="sim">${t("sd.simulate")}</button>
         <button id="real">${t("sd.connectReal")}</button>
         <button id="grid">${t("sd.sendGrid")}</button>
+        <button id="rt">${t("sd.renderTest")}</button>
         <label>${t("sd.brightness")} <input id="br" type="range" min="0" max="100" value="70"></label>
         <button id="off">${t("sd.disconnect")}</button>
         <span id="status"></span>
@@ -63,6 +66,7 @@ export class StreamDeckSim extends HTMLElement {
     $("sim").onclick = () => void this.#startSim();
     $("real").onclick = () => void this.#startReal();
     $("grid").onclick = () => this.#dev && void sendTestGrid(this.#dev);
+    $("rt").onclick = () => this.#dev && void this.#renderTest(this.#dev);
     $("off").onclick = () => void this.#stop();
     ($("br") as HTMLInputElement).oninput = (e) => void this.#dev?.setBrightness(+(e.target as HTMLInputElement).value);
     this.#setStatus(null);
@@ -110,6 +114,35 @@ export class StreamDeckSim extends HTMLElement {
     this.#attach(r.device);
     await r.device.setBrightness(70);
     await sendTestGrid(r.device);
+  }
+
+  /** Render-Engine-Test: Tasten mit Zuständen, dann identisch (0 gesendet), dann 1 Änderung. */
+  async #renderTest(dev: DeckDevice) {
+    const r = new DeckRenderer(dev, canvasRasterizer, { onError: (e) => (this.#err.textContent = String(e)) });
+    const states: KeyState[] = ["onair", "preset", "cue", "off", "error"];
+    const keys = (n: number): KeyDef[] =>
+      Array.from({ length: dev.model.cols * dev.model.rows }, (_, i) => ({
+        label: i === 0 ? "Kamera 1 lang" : `Q${i + 1}`,
+        sub: i % 3 === 0 ? "PGM" : undefined,
+        icon: i % 4 === 1 ? "▶" : undefined,
+        state: states[(i + n) % states.length],
+        dim: i === 7,
+      }));
+    const dials = Array.from({ length: dev.model.dials }, (_, i) => ({ label: `Kanal ${i + 1}`, value: `${-6 * i} dB`, fill: 0.2 + 0.2 * i }));
+    const run = async (name: string, k: KeyDef[]) => {
+      const before = r.stats.keyImages + r.stats.stripImages;
+      const t0 = performance.now();
+      r.set(k, dials);
+      await r.flushNow();
+      this.#log.unshift(`${name}: ${r.stats.keyImages + r.stats.stripImages - before} Bilder, ${Math.round(performance.now() - t0)} ms`);
+      this.#logEl.textContent = this.#log.join("\n");
+    };
+    await run("alles", keys(0));
+    await run("identisch", keys(0));
+    const k = keys(0);
+    k[2] = { ...k[2], label: "geändert" };
+    await run("eine Taste", k);
+    await run("alle Zustände", keys(1));
   }
 
   #attach(dev: DeckDevice) {
