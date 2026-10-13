@@ -78,6 +78,25 @@ export OMP_NATS_TLS_CA_FILE="${OMP_NATS_TLS_CA_FILE:-$ROOT_DIR/.run/mtls/root_ca
 # sie lokal auf dem Host). Ohne Datei lehnt der Agent jedes Paket ab.
 export OMP_UPDATE_PUBKEY_FILE="${OMP_UPDATE_PUBKEY_FILE:-$ROOT_DIR/.run/update-trusted.pub}"
 
+# Selbstheilung (Nutzerfund 2026-10-13): Hat der Orchestrator die Hosts
+# vergessen (DB geleert/neu aufgesetzt), melden sich Agents mit altem
+# state.json nur still "already registered" und fehlen in Host-Liste und
+# Flow-Editor. Daher: kennt der Orchestrator die Host-ID nicht, wird
+# state.json (Backup .bak) verworfen und per Bootstrap-Token neu
+# registriert (Admin-Login wie soak-omp.sh: OMP_USER/OMP_PASSWORD).
+# Ist der Orchestrator nicht erreichbar/Login fehlt, bleibt alles wie bisher.
+BASE_URL="${OMP_BASE_URL:-http://localhost:8000}"
+ADMIN_TOKEN=""
+KNOWN_HOSTS=""
+if login_resp=$(curl -sS -m 5 -X POST "$BASE_URL/api/v1/auth/login" \
+    -H 'Content-Type: application/json' \
+    -d "{\"username\":\"${OMP_USER:-admin}\",\"password\":\"${OMP_PASSWORD:-adminpass123}\"}" 2>/dev/null); then
+  ADMIN_TOKEN=$(echo "$login_resp" | grep -o '"token":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+fi
+if [ -n "$ADMIN_TOKEN" ]; then
+  KNOWN_HOSTS=$(curl -sS -m 5 -H "Authorization: Bearer $ADMIN_TOKEN" "$BASE_URL/api/v1/hosts" 2>/dev/null || true)
+fi
+
 for entry in "${HOSTS[@]}"; do
   dir="${entry%%:*}"
   label="${entry#*:}"
@@ -87,12 +106,36 @@ for entry in "${HOSTS[@]}"; do
   STATE_FILE="$RUN_DIR/state.json"
   mkdir -p "$RUN_DIR"
 
+  # Orchestrator-Host-Liste erreichbar (JSON-Array), aber Host-ID fehlt?
+  if [ -f "$STATE_FILE" ] && [ -n "$ADMIN_TOKEN" ] && [[ "$KNOWN_HOSTS" == \[* ]]; then
+    known_id=$(grep -o '"hostId":"[^"]*"' "$STATE_FILE" | cut -d'"' -f4 || true)
+    if [ -n "$known_id" ] && ! grep -qF "\"id\":\"$known_id\"" <<<"$KNOWN_HOSTS"; then
+      echo "==> $label ($dir): Orchestrator kennt Host $known_id nicht — neu registrieren"
+      if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+        kill "$(cat "$PID_FILE")" 2>/dev/null || true
+        sleep 1
+      fi
+      cp "$STATE_FILE" "$STATE_FILE.bak-$(date +%Y%m%d%H%M%S)"
+      rm -f "$STATE_FILE"
+    fi
+  fi
+  if [ ! -f "$STATE_FILE" ] && [ -z "${OMP_HOST_AGENT_BOOTSTRAP_TOKEN:-}" ] && [ -n "$ADMIN_TOKEN" ]; then
+    # Token ist einmalig — je Host ein eigener.
+    AGENT_TOKEN=$(curl -sS -m 5 -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+      -H 'Content-Type: application/json' -d '{}' \
+      "$BASE_URL/api/v1/admin/hosts/bootstrap-tokens" 2>/dev/null \
+      | grep -o '"token":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+  else
+    AGENT_TOKEN="${OMP_HOST_AGENT_BOOTSTRAP_TOKEN:-}"
+  fi
+
   if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
     echo "Host-Agent $label ($dir) läuft bereits (PID $(cat "$PID_FILE"))."
     continue
   fi
 
   echo "==> Host-Agent $label ($dir) starten"
+  OMP_HOST_AGENT_BOOTSTRAP_TOKEN="$AGENT_TOKEN" \
   OMP_HOST_AGENT_STATE_FILE="$STATE_FILE" \
   OMP_HOST_AGENT_LABEL="$label" \
   OMP_HOST_AGENT_CATALOG_PATH="$CATALOG" \
