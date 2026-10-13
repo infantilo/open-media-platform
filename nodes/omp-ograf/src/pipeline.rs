@@ -257,6 +257,20 @@ fn gray8_caps(width: u32, height: u32) -> gst::Caps {
 /// 0`. `Pipeline::build` prüft das vorab und bricht mit einer klaren
 /// Fehlermeldung ab statt stillschweigend ein verzerrtes Bild zu
 /// erzeugen.
+/// Meldet, wann die Key-Brücke einen vollständig transparenten Frame
+/// weitergegeben hat. Das Pausieren nach `hide` wartet darauf: die Brücke
+/// (Alpha-Extraktion, vor allem im Debug-Build) hängt dem Fill-Zweig
+/// hinterher, ein fester Zeitpuffer ließ den Key-Flow auf dem letzten
+/// SICHTBAREN Bild einfrieren (Nutzerfund 2026-10-13: „Take out cleart den
+/// Ausgang nicht“, Fill war leer, Key blieb stehen).
+#[derive(Default)]
+struct BlankProbe {
+    /// Nur während des Wartens nach `hide` gesetzt (die Prüfung kostet einen Bildlauf).
+    want: AtomicBool,
+    /// Anzahl der weitergegebenen vollständig transparenten Frames seit Start.
+    seen: AtomicU64,
+}
+
 fn spawn_alpha_key_bridge(
     pipeline: &gst::Pipeline,
     tee: &gst::Element,
@@ -264,6 +278,7 @@ fn spawn_alpha_key_bridge(
     height: u32,
     running: Arc<AtomicBool>,
     heartbeat: Arc<AtomicU64>,
+    blank: Arc<BlankProbe>,
 ) -> Result<gst::Element, PipelineError> {
     let queue = gst::ElementFactory::make("queue")
         .build()
@@ -373,6 +388,7 @@ fn spawn_alpha_key_bridge(
             // pro Element eliminieren (eine einzige Längenprüfung durch
             // `chunks_exact` selbst statt einer pro Zugriff wie bei der
             // vorherigen Index-Schleife `bgra[i * 4 + 3]`).
+            let is_blank = blank.want.load(Ordering::Relaxed) && bgra.chunks_exact(4).all(|px| px[3] == 0);
             let pts = buffer.pts();
             // Unveränderter Frame (stehende Grafik): die Alpha-Ebene des
             // vorigen Frames wiederverwenden statt neu zu berechnen.
@@ -393,6 +409,9 @@ fn spawn_alpha_key_bridge(
                 out.set_pts(pts);
             }
             let _ = app_src.push_buffer(out_buffer);
+            if is_blank {
+                blank.seen.fetch_add(1, Ordering::SeqCst);
+            }
         }
     });
 
@@ -407,6 +426,7 @@ struct Pipeline {
     /// S. `spawn_alpha_key_bridge` — für `PipelineHandle::
     /// key_bridge_heartbeat_handle` (docs/decisions.md Nachtrag 132).
     key_bridge_heartbeat: Arc<AtomicU64>,
+    key_blank: Arc<BlankProbe>,
     _mxl_fill: MxlVideoOutput,
     _mxl_key: MxlVideoOutput,
     lowres_output: Arc<MxlVideoOutput>,
@@ -545,6 +565,7 @@ impl Pipeline {
 
         let key_bridge_running = Arc::new(AtomicBool::new(true));
         let key_bridge_heartbeat = Arc::new(AtomicU64::new(0));
+        let key_blank = Arc::new(BlankProbe::default());
         let key_appsrc = spawn_alpha_key_bridge(
             &pipeline,
             &tee,
@@ -552,6 +573,7 @@ impl Pipeline {
             config.height,
             key_bridge_running.clone(),
             key_bridge_heartbeat.clone(),
+            key_blank.clone(),
         )?;
         let (key_convert_head, key_convert) =
             dedupe_convert(&pipeline, "key", v210_caps(config.width, config.height))?;
@@ -631,6 +653,7 @@ impl Pipeline {
             page_ready,
             key_bridge_running,
             key_bridge_heartbeat,
+            key_blank,
             _mxl_fill: mxl_fill,
             _mxl_key: mxl_key,
             lowres_output,
@@ -897,6 +920,17 @@ pub fn run(
                         pipeline.run_javascript(&format!("window.omp.continue({}, {})", js_str(layer_id), step));
                     }
                     Command::Hide { layer_id } => {
+                        // Erst pausieren, wenn KEINE Ebene mehr sichtbar ist —
+                        // bleibt eine andere on air, muss weiter gerendert werden.
+                        let will_pause = match layer_id {
+                            Some(id) => on_air.len() == usize::from(on_air.contains(id)),
+                            None => true,
+                        };
+                        let probing = !keepalive && rendering && will_pause;
+                        let seen0 = pipeline.key_blank.seen.load(Ordering::SeqCst);
+                        if probing {
+                            pipeline.key_blank.want.store(true, Ordering::SeqCst);
+                        }
                         match layer_id {
                             Some(id) => {
                                 on_air.remove(id);
@@ -907,19 +941,22 @@ pub fn run(
                                 pipeline.run_javascript("window.omp.hide()");
                             }
                         }
-                        // Erst pausieren, wenn KEINE Ebene mehr sichtbar ist —
-                        // bleibt eine andere on air, muss weiter gerendert werden.
                         if !keepalive && rendering && on_air.is_empty() {
-                            // Gnadenfrist, damit `wpesrc` den jetzt
-                            // versteckten Zustand mindestens einmal
-                            // wirklich rendert und dieser Frame durch
-                            // Tee/alle Branches durchläuft, BEVOR wir
-                            // pausieren — sonst friert der MXL-Flow auf
-                            // dem letzten SICHTBAREN Bild ein statt auf
-                            // einem leeren/transparenten (deutlich mehr
-                            // als die üblichen ~40ms/Frame bei 25fps,
-                            // damit das unter Last/Konkurrenz zuverlässig
-                            // durchläuft).
+                            // Warten, bis `wpesrc` den versteckten Zustand
+                            // gerendert hat UND die Key-Brücke (Alpha-
+                            // Extraktion, hängt dem Fill-Zweig hinterher) einen
+                            // vollständig transparenten Frame weitergegeben
+                            // hat — sonst friert der Key-Flow auf dem letzten
+                            // SICHTBAREN Bild ein statt auf einem leeren
+                            // (Auslauf-Animationen, langsame Debug-Builds).
+                            // Obergrenze 3 s, danach trotzdem pausieren.
+                            let t0 = std::time::Instant::now();
+                            while pipeline.key_blank.seen.load(Ordering::SeqCst) == seen0 && t0.elapsed() < Duration::from_secs(3) {
+                                thread::sleep(Duration::from_millis(20));
+                            }
+                            pipeline.key_blank.want.store(false, Ordering::SeqCst);
+                            // Gnadenfrist, damit der leere Frame noch durch
+                            // Tee/Branches und die MXL-Schreiber läuft.
                             thread::sleep(Duration::from_millis(300));
                             if let Err(e) = transition_pipeline(&pipeline.pipeline, gst::State::Paused, 5) {
                                 let _ = tx.send(Event::Error(format!("Paused nach Hide fehlgeschlagen: {e}")));
