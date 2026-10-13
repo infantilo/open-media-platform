@@ -85,3 +85,9 @@ Eingaben gehen nur an den aktiven Tab-Adapter.
 - Plus-Streifen-Touch (Tap = Dial-Auswahl, Flick = Seite blättern) — in 40.2 nur dekodieren, Belegung in 40.4.
 - Mehrere Geräte gleichzeitig: v1 = ein Gerät (Transport-Liste aber als Array angelegt, damit XL + **+** später gemeinsam laufen können).
 - Neo/Mini/MK.1 bewusst ausgelassen (nicht im Besitz, Protokoll nicht verifiziert).
+
+## 6. Änderung beim Bau (40.5)
+
+Die Adapter-Auflösung hat jetzt drei Stufen (`ui/shell/streamdeck/adapters/index.ts`): (1) das Element bringt selbst eine Eigenschaft `streamDeck` mit (§3, bleibt möglich);
+(2) das Bundle bietet nur `deckApi` ({ `state()`, `call(method, body)` }) plus das Relayout-Ereignis, und die Shell hält eine **Fabrik nach Elementname** mit Layout/Eingabe;
+(3) sonst Auto-Raster. Grund für (2): Bundle-Zustand liegt in Closures eines Rust-eingebetteten Skripts — die Layout-Logik gehört in die testbare Shell, das Bundle bleibt klein.

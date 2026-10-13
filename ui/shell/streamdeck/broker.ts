@@ -3,7 +3,8 @@
 // an den aktiven Adapter. Zustand kommt aus dem Adapter (= aus dem
 // Bildschirm-UI): ein Zustand, zwei Renderer.
 
-import { adapterOf, RELAYOUT_EVENT, type StreamDeckAdapter } from "./adapter.ts";
+import { RELAYOUT_EVENT, type StreamDeckAdapter } from "./adapter.ts";
+import { adapterFor } from "./adapters/index.ts";
 import { AutoRasterAdapter, proxyIO } from "./autoraster.ts";
 import { composeLayout, type Composed, DialCoalescer, type TabInfo } from "./broker-logic.ts";
 import { canvasRasterizer } from "./draw.ts";
@@ -88,7 +89,7 @@ export class DeckBroker {
   }
 
   #resolveAdapter(t: Tab): StreamDeckAdapter {
-    const own = adapterOf(t.el);
+    const own = adapterFor(t.el);
     if (own) return own;
     const a = new AutoRasterAdapter(proxyIO(t.nodeId));
     a.onChange = () => this.relayout();

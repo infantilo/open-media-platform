@@ -1637,6 +1637,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         pipRow.append(pipAddBtn);
       };
 
+      let latestTransType = "mix";
       const refresh = async (workflowOwnSenderIds, otherLevelSenderIds, senderNodeId) => {
         lastWorkflowOwnSenderIds = workflowOwnSenderIds;
         lastOtherLevelSenderIds = otherLevelSenderIds;
@@ -1675,6 +1676,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const transitionPosition = transitionPositionRes.ok ? (await transitionPositionRes.json()).value || 0 : 0;
         if (transTypeRes.ok) {
           const type = (await transTypeRes.json()).value;
+          latestTransType = type;
           if (kindButtons.has(type)) setKindActive(type);
         }
         if (transRateFrames > 0) {
@@ -1730,7 +1732,28 @@ class OmpVideoMixerMePanel extends HTMLElement {
         renderBusRow(call, pstButtons, entries, workflowOwnSenderIds, false, preset, "preset", levelOutputSenderIds, senderNodeId);
 
         keyerBtn.active = keyerEnabled;
+
+        // Stream Deck (Kap. 40.5): nur die Master-Ebene; die Shell baut daraus
+        // Tasten (ui/shell/streamdeck/adapters/video-mixer*.ts).
+        if (level === 0) {
+          this._deckState = {
+            entries: entries.map((e) => ({ label: e.label, senderId: e.senderId })),
+            program,
+            preset,
+            keyer: keyerEnabled,
+            pipEnabled: latestPipEnabled,
+            pipPresets: (latestPipPresets || []).map((p) => ({ id: p.id, name: p.name || p.id })),
+            activePip: latestActivePipPresetId,
+            transType: latestTransType,
+            transRate: transRateFrames,
+          };
+          this.dispatchEvent(new CustomEvent("omp-streamdeck-relayout", { bubbles: true }));
+        }
       };
+
+      if (level === 0) {
+        this.deckApi = { state: () => this._deckState || null, call: (method, body) => call(method, body) };
+      }
 
       return { bankRow, refresh };
     };
