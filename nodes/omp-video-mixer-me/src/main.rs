@@ -268,6 +268,14 @@ impl ParamStore for MixerStore {
             }),
             parameters: (0..level_count(self))
                 .flat_map(|level| level_param_specs(level_count(self), level))
+                // Make-before-break (Host-Wartung): true, solange angekündigte Quellenwechsel noch laufen.
+                .chain(std::iter::once(ParamSpec {
+                    name: "handoverPending".to_string(),
+                    kind: ParamType::Boolean,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                }))
                 .chain(self.monitor.param_specs("monitor"))
                 .collect(),
             methods: (0..level_count(self))
@@ -293,6 +301,9 @@ impl ParamStore for MixerStore {
     }
 
     fn get(&self, name: &str) -> Option<Value> {
+        if name == "handoverPending" {
+            return Some(serde_json::json!(self.pipeline.handover_pending()));
+        }
         level_get(self, name).or_else(|| self.monitor.get("monitor", name, None, Vec::new))
     }
 
@@ -330,6 +341,20 @@ impl ParamStore for MixerStore {
                 }
             };
             self.restore_state(&state);
+            return Some(RawResponse { status: 200, content_type: "application/json", body: br#"{"ok":true}"#.to_vec() });
+        }
+        // POST /handover {"replacements":[{"old":"<senderId>","new":"<senderId>"}]}: ein Quell-Umzug (Host-Wartung)
+        // ersetzt Sender `old` durch `new`. Der Mischer hält `new` warm und übernimmt Programm/Preset von `old`,
+        // sobald `new` Bilder liefert — erst danach verschwindet `old`. Fortschritt: Parameter `handoverPending`.
+        if method == "POST" && path == "/handover" {
+            let pairs: Vec<(String, String)> = serde_json::from_slice::<Value>(body)
+                .ok()
+                .and_then(|v| v.get("replacements").and_then(Value::as_array).cloned())
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|r| Some((r.get("old")?.as_str()?.to_string(), r.get("new")?.as_str()?.to_string())))
+                .collect();
+            self.pipeline.replace_inputs(pairs);
             return Some(RawResponse { status: 200, content_type: "application/json", body: br#"{"ok":true}"#.to_vec() });
         }
         uibundle::route(method, path)

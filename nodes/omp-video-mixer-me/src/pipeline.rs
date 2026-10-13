@@ -105,8 +105,8 @@
 //! wechselt erst am Ende des Fades (`spawn_autotrans`) auf den neuen
 //! Eingang.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -446,6 +446,9 @@ enum Command {
     /// Nach dem Einlaufen des Vordergrund-Zweigs: Bild von Hintergrund auf Vordergrund zurücklegen.
     FlipSettle(usize, Option<String>),
     SetInputs(Vec<DiscoveredInput>),
+    /// Make-before-break bei einem Quellen-Umzug: (alter Sender, neuer Sender)-Paare. Der neue Zweig wird warm
+    /// gehalten und übernimmt Programm/Preset des alten, sobald er Bilder liefert; erst danach verschwindet der alte.
+    ReplaceInputs(Vec<(String, String)>),
     SelectPreset(usize, Option<String>),
     Cut(usize),
     Take(usize, Option<String>),
@@ -492,9 +495,25 @@ pub struct PipelineHandle {
     /// `crosspoint.transType`: wie `trans_rate_ms` ein atomarer Store,
     /// gelesen beim Start von AUTO bzw. bei jedem T-Bar-Schritt.
     trans_kind: Vec<Arc<AtomicU8>>,
+    /// Anzahl angekündigter, noch nicht abgeschlossener Quellenwechsel (`replace_inputs`).
+    handover_pending: Arc<AtomicUsize>,
 }
 
 impl PipelineHandle {
+    /// Kündigt Quellenwechsel an (Host-Wartung). Zählt sofort hoch, damit `handover_pending()` ohne Race
+    /// schon vor der Verarbeitung im Pipeline-Thread `true` meldet.
+    pub fn replace_inputs(&self, pairs: Vec<(String, String)>) {
+        if pairs.is_empty() {
+            return;
+        }
+        self.handover_pending.fetch_add(pairs.len(), Ordering::AcqRel);
+        let _ = self.commands.send(Command::ReplaceInputs(pairs));
+    }
+
+    pub fn handover_pending(&self) -> bool {
+        self.handover_pending.load(Ordering::Acquire) > 0
+    }
+
     /// "media-ready" (ARCHITECTURE.md §5 Punkt 6, UMSETZUNG.md D5-prep-2): der
     /// Programm-Ausgang produziert immer etwas (mindestens Schwarzbild),
     /// wird also i. d. R. kurz nach jedem (Re-)Build `true`. Bei mehreren
@@ -1156,6 +1175,9 @@ fn build_source_branch(
     width: u32,
     height: u32,
     hwaccel: omp_mediaio::hwaccel::HwAccel,
+    // `false` beim Hinzufügen in eine LAUFENDE Pipeline (add_input_live): der Reader wird erst nach den
+    // Abgriffen aktiviert, damit der `tee` seine Request-Pads vor dem ersten Puffer hat (s. Tee-Race-Notiz).
+    activate_now: bool,
 ) -> Result<SourceBranch, String> {
     // `new_unsynced()` statt `new()` (`docs/decisions.md` Nachtrag 272,
     // gleicher Fix wie bereits in `omp-switcher::pipeline::build_branch`
@@ -1262,7 +1284,7 @@ fn build_source_branch(
     // Abgriffe (`allow-not-linked: true`, die kommen erst in
     // `tap_source_branch`), nur `appsrc`s EIGENE Kette bis hierhin darf
     // beim Aktivieren keine Lücke mehr haben.
-    if let Err(e) = mxl_input.activate() {
+    if activate_now && let Err(e) = mxl_input.activate() {
         remove_elements(pipeline, &elements);
         remove_elements(pipeline, &[tee]);
         remove_mxl_video_input(pipeline, mxl_input);
@@ -1381,6 +1403,7 @@ fn build_one_input(
     width: u32,
     height: u32,
     hwaccel: omp_mediaio::hwaccel::HwAccel,
+    activate_now: bool,
 ) -> Result<(Vec<gst::Pad>, Vec<gst::Pad>, SourceBranch), String> {
     let mut branch = build_source_branch(
         pipeline,
@@ -1391,6 +1414,7 @@ fn build_one_input(
         width,
         height,
         hwaccel,
+        activate_now,
     )?;
 
     // Rollback-Hilfe: alle bereits erfolgreich angeforderten (isel, pad)
@@ -1492,6 +1516,9 @@ struct ActivePipeline {
     /// Eingang, unabhängig von der Ebenen-Anzahl — s. `SourceBranch`-Doku.
     _branches: HashMap<String, SourceBranch>,
     levels: Vec<LevelPipeline>,
+    /// Nächster freier `sink_N`-Index der Selektoren (Eingänge werden zur Laufzeit hinzugefügt/entfernt,
+    /// der Zähler wird nie wiederverwendet).
+    next_pad_index: usize,
 }
 
 impl Drop for ActivePipeline {
@@ -1608,12 +1635,14 @@ fn is_active_pad(isel: &gst::Element, pad: Option<&gst::Pad>) -> bool {
 /// also unmittelbar nach jedem Kommando (`SelectPreset` öffnet das Gate
 /// binnen eines Bildes), höchstens 500 ms nach Änderungen aus dem
 /// Auto-Transition-Thread.
-fn refresh_source_gates(p: &ActivePipeline, last_used: &mut HashMap<String, Instant>) {
+fn refresh_source_gates(p: &ActivePipeline, last_used: &mut HashMap<String, Instant>, pinned: &HashSet<&str>) {
     let now = Instant::now();
     for (id, branch) in &p._branches {
-        let in_use = p.levels.iter().any(|lvl| {
-            is_active_pad(&lvl.isel, lvl.source_pads_fg.get(id)) || is_active_pad(&lvl.isel_bg, lvl.source_pads_bg.get(id))
-        });
+        // `pinned`: Ersatz-Quellen einer laufenden Übergabe bleiben warm, damit der Wechsel ein laufendes Bild vorfindet.
+        let in_use = pinned.contains(id.as_str())
+            || p.levels.iter().any(|lvl| {
+                is_active_pad(&lvl.isel, lvl.source_pads_fg.get(id)) || is_active_pad(&lvl.isel_bg, lvl.source_pads_bg.get(id))
+            });
         let seen = last_used.entry(id.clone()).or_insert(now);
         if in_use {
             *seen = now;
@@ -2103,7 +2132,7 @@ fn build(
     let mut warnings = Vec::new();
     for (i, input) in inputs.iter().enumerate() {
         let pad_index = i + 1;
-        match build_one_input(&pipeline, context, &isels, &isel_bgs, input, pad_index, config.width, config.height, config.hwaccel) {
+        match build_one_input(&pipeline, context, &isels, &isel_bgs, input, pad_index, config.width, config.height, config.hwaccel, true) {
             Ok((fg_pads, bg_pads, branch)) => {
                 for (level_idx, pad) in fg_pads.into_iter().enumerate() {
                     source_pads_fg[level_idx].insert(input.sender_id.clone(), pad);
@@ -2154,9 +2183,187 @@ fn build(
             pipeline,
             _branches: branches,
             levels,
+            next_pad_index: inputs.len() + 1,
         },
         warnings,
     ))
+}
+
+/// Fügt einen Eingang in die LAUFENDE Pipeline ein (kein Rebuild, PGM läuft unberührt weiter): neuer
+/// Reader + Konvertierung + Abgriffe auf alle Ebenen; der Reader startet erst nach den Abgriffen.
+fn add_input_live(
+    p: &mut ActivePipeline,
+    context: &Arc<MxlContext>,
+    input: &DiscoveredInput,
+    width: u32,
+    height: u32,
+    hwaccel: omp_mediaio::hwaccel::HwAccel,
+) -> Result<(), String> {
+    let isels: Vec<gst::Element> = p.levels.iter().map(|l| l.isel.clone()).collect();
+    let isel_bgs: Vec<gst::Element> = p.levels.iter().map(|l| l.isel_bg.clone()).collect();
+    let pad_index = p.next_pad_index;
+    p.next_pad_index += 1;
+    let (fg_pads, bg_pads, branch) =
+        build_one_input(&p.pipeline, context, &isels, &isel_bgs, input, pad_index, width, height, hwaccel, false)?;
+    if let Err(e) = branch.mxl_input.activate() {
+        for (isel, pad) in isels.iter().zip(&fg_pads) {
+            isel.release_request_pad(pad);
+        }
+        for (isel_bg, pad) in isel_bgs.iter().zip(&bg_pads) {
+            isel_bg.release_request_pad(pad);
+        }
+        teardown_source_branch(&p.pipeline, branch);
+        return Err(format!("activate MxlVideoInput (live input {}): {e}", input.sender_id));
+    }
+    for (lvl, pad) in p.levels.iter_mut().zip(fg_pads) {
+        lvl.source_pads_fg.insert(input.sender_id.clone(), pad);
+    }
+    for (lvl, pad) in p.levels.iter_mut().zip(bg_pads) {
+        lvl.source_pads_bg.insert(input.sender_id.clone(), pad);
+    }
+    p._branches.insert(input.sender_id.clone(), branch);
+    Ok(())
+}
+
+/// Entfernt einen Eingang aus der laufenden Pipeline. Ist er gerade auf einem Selektor aktiv, wird dieser
+/// zuerst auf Schwarz gestellt (der Aufrufer führt `program` nach, s. `drop_input_everywhere`).
+fn remove_input_live(p: &mut ActivePipeline, sender_id: &str) {
+    for lvl in p.levels.iter_mut() {
+        if let Some(pad) = lvl.source_pads_fg.remove(sender_id) {
+            if is_active_pad(&lvl.isel, Some(&pad)) {
+                lvl.isel.set_property("active-pad", &lvl.black_pad_fg);
+            }
+            lvl.isel.release_request_pad(&pad);
+        }
+        if let Some(pad) = lvl.source_pads_bg.remove(sender_id) {
+            if is_active_pad(&lvl.isel_bg, Some(&pad)) {
+                lvl.isel_bg.set_property("active-pad", &lvl.black_pad_bg);
+            }
+            lvl.isel_bg.release_request_pad(&pad);
+        }
+    }
+    if let Some(branch) = p._branches.remove(sender_id) {
+        teardown_source_branch(&p.pipeline, branch);
+    }
+}
+
+/// Wie lange auf den ersten Bildfluss einer Ersatz-Quelle gewartet wird, bevor die Übergabe aufgegeben wird.
+const HANDOVER_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Angekündigter Quellenwechsel (Host-Wartung): `new` löst `old` ab, sobald `new` Bilder liefert.
+struct Handover {
+    old: String,
+    new: String,
+    since: Instant,
+}
+
+/// Stellt alle Ebenen, auf denen `sender_id` Programm ist, auf Schwarz und führt `program` nach
+/// (der Eingang verschwindet). Preset bleibt unangetastet, wie beim früheren Voll-Rebuild.
+fn drop_input_everywhere(
+    p: &mut ActivePipeline,
+    sender_id: &str,
+    program: &mut [Option<String>],
+    tx: &UnboundedSender<Event>,
+) {
+    for (level_idx, lvl) in p.levels.iter().enumerate() {
+        if program[level_idx].as_deref() == Some(sender_id) {
+            switch_isel(&lvl.isel, &lvl.source_pads_fg, &lvl.black_pad_fg, &None);
+            switch_isel(&lvl.isel_bg, &lvl.source_pads_bg, &lvl.black_pad_bg, &None);
+            let previous = program[level_idx].take();
+            let _ = tx.send(Event::ProgramChanged { level: level_idx, previous, current: None });
+        }
+    }
+    remove_input_live(p, sender_id);
+}
+
+/// Führt angekündigte Quellenwechsel aus, sobald die Ersatz-Quelle Bilder liefert (oder das Zeitlimit läuft).
+/// Programm/Preset des alten Eingangs gehen dabei auf den neuen über — auf einem bereits laufenden Pad,
+/// also ohne Schwarz-/Standbild-Lücke. `fading`: laufende Überblendungen werden nicht angefasst, die
+/// Übergabe wartet dann bis zur nächsten Runde.
+fn process_handovers(
+    p: &mut ActivePipeline,
+    handovers: &mut Vec<Handover>,
+    zombies: &mut HashSet<String>,
+    program: &mut [Option<String>],
+    preset: &mut [Option<String>],
+    fading: bool,
+    pending: &AtomicUsize,
+    tx: &UnboundedSender<Event>,
+) {
+    if handovers.is_empty() {
+        return;
+    }
+    let mut done: Vec<usize> = Vec::new();
+    for (i, h) in handovers.iter().enumerate() {
+        let new_flowing = p._branches.get(&h.new).is_some_and(|b| b.mxl_input.flowed_handle().load(Ordering::Relaxed));
+        let timed_out = h.since.elapsed() >= HANDOVER_TIMEOUT;
+        if !(new_flowing || timed_out) || (new_flowing && fading) {
+            continue;
+        }
+        if new_flowing {
+            for (level_idx, lvl) in p.levels.iter().enumerate() {
+                if program[level_idx].as_deref() == Some(h.old.as_str()) {
+                    let target = Some(h.new.clone());
+                    switch_isel(&lvl.isel, &lvl.source_pads_fg, &lvl.black_pad_fg, &target);
+                    switch_isel(&lvl.isel_bg, &lvl.source_pads_bg, &lvl.black_pad_bg, &target);
+                    let previous = program[level_idx].replace(h.new.clone());
+                    let _ = tx.send(Event::ProgramChanged { level: level_idx, previous, current: Some(h.new.clone()) });
+                }
+                if preset[level_idx].as_deref() == Some(h.old.as_str()) {
+                    preset[level_idx] = Some(h.new.clone());
+                    let _ = tx.send(Event::PresetChanged { level: level_idx, preset: preset[level_idx].clone() });
+                }
+            }
+            let _ = tx.send(Event::Info(format!("input {} übernimmt von {} (Make-before-break)", h.new, h.old)));
+        } else {
+            let _ = tx.send(Event::Error(format!("Quellenwechsel {} -> {}: neue Quelle liefert nicht, Übergabe aufgegeben", h.old, h.new)));
+        }
+        done.push(i);
+    }
+    for i in done.into_iter().rev() {
+        let h = handovers.remove(i);
+        pending.fetch_sub(1, Ordering::AcqRel);
+        if zombies.remove(&h.old) {
+            drop_input_everywhere(p, &h.old, program, tx);
+        }
+    }
+}
+
+/// Wendet eine Änderung der Eingangsmenge auf die LAUFENDE Pipeline an (Zweige hinzufügen/entfernen statt
+/// Voll-Rebuild — PGM wird nicht unterbrochen). Rückgabe: Warnungen; nicht lesbare neue Eingänge landen in `missing`.
+#[allow(clippy::too_many_arguments)]
+fn apply_input_delta(
+    p: &mut ActivePipeline,
+    context: &Arc<MxlContext>,
+    config: &Config,
+    old: &[DiscoveredInput],
+    new: &[DiscoveredInput],
+    keep: &HashSet<String>,
+    zombies: &mut HashSet<String>,
+    program: &mut [Option<String>],
+    missing: &mut Vec<String>,
+    tx: &UnboundedSender<Event>,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for gone in old.iter().filter(|o| !new.iter().any(|n| n.sender_id == o.sender_id)) {
+        missing.retain(|m| m != &gone.sender_id);
+        if keep.contains(&gone.sender_id) && p._branches.contains_key(&gone.sender_id) {
+            zombies.insert(gone.sender_id.clone());
+        } else {
+            drop_input_everywhere(p, &gone.sender_id, program, tx);
+        }
+    }
+    for added in new.iter().filter(|n| !old.iter().any(|o| o.sender_id == n.sender_id)) {
+        zombies.remove(&added.sender_id);
+        if p._branches.contains_key(&added.sender_id) {
+            continue;
+        }
+        if let Err(e) = add_input_live(p, context, added, config.width, config.height, config.hwaccel) {
+            warnings.push(format!("input {} ({}) übersprungen: {e}", added.sender_id, added.label));
+            missing.push(added.sender_id.clone());
+        }
+    }
+    warnings
 }
 
 fn inputs_changed(current: &[DiscoveredInput], new: &[DiscoveredInput]) -> bool {
@@ -2351,6 +2558,10 @@ pub fn run(
     let pip_anim_gen: Vec<Arc<AtomicU64>> = (0..level_count).map(|_| Arc::new(AtomicU64::new(0))).collect();
 
     // Art der gerade laufenden manuellen T-Bar-Session je Ebene (s. `SetTransitionPosition`).
+    let handover_pending = Arc::new(AtomicUsize::new(0));
+    let mut handovers: Vec<Handover> = Vec::new();
+    // Eingänge, die aus der Discovery verschwunden sind, aber für eine laufende Übergabe noch gebraucht werden.
+    let mut zombies: HashSet<String> = HashSet::new();
     let mut drag_kinds: Vec<TransKind> = vec![TransKind::Mix; level_count];
     let mut current_inputs: Vec<DiscoveredInput> = Vec::new();
     let mut keyfill_inputs: Vec<DiscoveredKeyFill> = Vec::new();
@@ -2394,6 +2605,7 @@ pub fn run(
         output_delays: output_delays.clone(),
         trans_rate_ms: trans_rate_ms.clone(),
         trans_kind: trans_kind.clone(),
+        handover_pending: handover_pending.clone(),
     }));
 
     /// Wartet auf einen laufenden Transition-Thread, falls vorhanden —
@@ -2480,11 +2692,17 @@ pub fn run(
         if shutdown.load(Ordering::Relaxed) {
             break;
         }
+        if let Some(p) = active.as_mut() {
+            let any_fading = fading.iter().any(|f| f.load(Ordering::Acquire));
+            process_handovers(p, &mut handovers, &mut zombies, &mut program, &mut preset, any_fading, &handover_pending, &tx);
+        }
         if let Some(p) = &active {
-            refresh_source_gates(p, &mut gate_last_used);
+            let pinned: HashSet<&str> = handovers.iter().map(|h| h.new.as_str()).collect();
+            refresh_source_gates(p, &mut gate_last_used, &pinned);
         }
 
-        let received = match commands_rx.recv_timeout(Duration::from_millis(500)) {
+        let wait = if handovers.is_empty() { Duration::from_millis(500) } else { Duration::from_millis(40) };
+        let received = match commands_rx.recv_timeout(wait) {
             Ok(Command::At(at, inner)) => {
                 // Geplanter Take/Cut/Mix (Kap. 31.4): Zielquelle jetzt im Hintergrund-Zweig bereitstellen und
                 // den Wechsel am Compositor auf das Bild `takeAt` scharf schalten. Ohne aktive Pipeline oder
@@ -2561,6 +2779,22 @@ pub fn run(
             }
             Ok(Command::SetInputs(inputs)) => {
                 if inputs_changed(&current_inputs, &inputs) {
+                    // Inkrementell, wenn keine Keyer-/PIP-Quelle betroffen ist: Zweige hinzufügen/entfernen, PGM läuft
+                    // ununterbrochen weiter. Sonst (und ohne aktive Pipeline) der bisherige Voll-Rebuild.
+                    let gone_used_elsewhere = current_inputs
+                        .iter()
+                        .filter(|o| !inputs.iter().any(|n| n.sender_id == o.sender_id))
+                        .any(|o| pip_sources.iter().any(|s| s.as_deref() == Some(o.sender_id.as_str())));
+                    if let (Some(p), false) = (active.as_mut(), gone_used_elsewhere) {
+                        let keep: HashSet<String> = handovers.iter().map(|h| h.old.clone()).collect();
+                        let warnings = apply_input_delta(p, &context, &config, &current_inputs, &inputs, &keep, &mut zombies, &mut program, &mut missing_inputs, &tx);
+                        for w in warnings {
+                            let _ = tx.send(Event::Error(w));
+                        }
+                        current_inputs = inputs;
+                        report_missing_inputs(&monitor, &missing_inputs);
+                        continue;
+                    }
                     current_inputs = inputs;
                     join_all_fades(&fade_threads, &fading);
                     active = None;
@@ -2604,6 +2838,19 @@ pub fn run(
                             }
                         }
                     }
+                }
+            }
+            Ok(Command::ReplaceInputs(pairs)) => {
+                for (old, new) in pairs {
+                    // Nichts zu übergeben, wenn `old` kein Eingang dieses Mischers ist (z. B. ein Audio-Sender
+                    // derselben Quelle) oder alt == neu.
+                    let known = current_inputs.iter().any(|i| i.sender_id == old)
+                        || active.as_ref().is_some_and(|a| a._branches.contains_key(&old));
+                    if old == new || !known {
+                        handover_pending.fetch_sub(1, Ordering::AcqRel);
+                        continue;
+                    }
+                    handovers.push(Handover { old, new, since: Instant::now() });
                 }
             }
             Ok(Command::SetKeyFillInputs(inputs)) => {
@@ -3060,62 +3307,30 @@ pub fn run(
                 // wird hier versucht, bis es klappt oder sich die
                 // Sender-ID-Menge ändert (dann übernimmt der `SetInputs`-
                 // Zweig oben).
-                if !missing_inputs.is_empty() && fading.iter().all(|f| !f.load(Ordering::Acquire)) {
-                    join_all_fades(&fade_threads, &fading);
-                    active = None;
-                    std::thread::sleep(OLD_WRITER_DRAIN);
-                    match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_sources, &pip_sources, &output_delays) {
-                        Ok((p, warnings)) => {
-                            for w in warnings {
-                                let _ = tx.send(Event::Error(w));
-                            }
-                            reapply_all_levels(&p, &mut program, &dve_box, &keyer_enabled, &pip_enabled, &tx);
-                            let still_missing = p
-                                .levels
-                                .first()
-                                .map(|l| missing_input_ids(&current_inputs, &l.source_pads_fg))
-                                .unwrap_or_default();
-                            // s. `Event::Info`-Doku: der Gegenpart zur
-                            // "übersprungen"-Warnung fehlte bisher komplett
-                            // — ohne dies sah ein auf rohes stdout
-                            // schauender Operator nach einem erfolgreichen
-                            // Retry nie einen Hinweis, dass der Eingang
-                            // wieder lebt (letzte Log-Zeile blieb für den
-                            // Rest der Pipeline-Lebensdauer der Fehler).
-                            for id in &missing_inputs {
-                                if !still_missing.contains(id) {
-                                    if let Some(input) = current_inputs.iter().find(|i| &i.sender_id == id) {
-                                        let _ = tx.send(Event::Info(format!(
-                                            "input {} ({}) wieder verfügbar (Flow jetzt lesbar)",
-                                            input.sender_id, input.label
-                                        )));
-                                    }
-                                }
-                            }
-                            missing_inputs = still_missing;
-                            report_missing_inputs(&monitor, &missing_inputs);
-                            update_flowed(&flowed_slot, &p);
-                            active = Some(p);
+                if !missing_inputs.is_empty()
+                    && fading.iter().all(|f| !f.load(Ordering::Acquire))
+                    && let Some(p) = active.as_mut()
+                {
+                    // Inkrementell nachladen statt Voll-Rebuild: ein spät entstehender Flow (z. B. Kanal-Player beim
+                    // ersten `load`) darf PGM nicht unterbrechen.
+                    let mut still_missing = Vec::new();
+                    for id in std::mem::take(&mut missing_inputs) {
+                        let Some(input) = current_inputs.iter().find(|i| i.sender_id == id).cloned() else { continue };
+                        if p._branches.contains_key(&id) {
+                            continue;
                         }
-                        Err(e) => {
-                            let _ = tx.send(Event::Error(format!(
-                                "missing-input retry rebuild failed: {e} — falling back to black"
-                            )));
-                            match build(&context, &config, &[], &keyfill_inputs, &keyer_sources, &pip_sources, &output_delays) {
-                                Ok((p, _warnings)) => {
-                                    reset_all_levels_to_black(&p, &mut program, &mut preset, &dve_box, &tx);
-                                    update_flowed(&flowed_slot, &p);
-                                    active = Some(p);
-                                }
-                                Err(e2) => {
-                                    let _ = tx.send(Event::Error(format!(
-                                        "fallback black-only build also failed: {e2}"
-                                    )));
-                                    break;
-                                }
+                        match add_input_live(p, &context, &input, config.width, config.height, config.hwaccel) {
+                            Ok(()) => {
+                                let _ = tx.send(Event::Info(format!(
+                                    "input {} ({}) wieder verfügbar (Flow jetzt lesbar)",
+                                    input.sender_id, input.label
+                                )));
                             }
+                            Err(_) => still_missing.push(id),
                         }
                     }
+                    missing_inputs = still_missing;
+                    report_missing_inputs(&monitor, &missing_inputs);
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,

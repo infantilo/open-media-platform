@@ -192,6 +192,15 @@ impl ParamStore for ViewerStore {
                     }),
                     readonly: false,
                 },
+                // Make-before-break (Host-Wartung): `true`, solange eine neu gewählte Quelle noch nicht
+                // nachweislich liefert. Der Orchestrator wartet darauf, bevor er die alte Quelle stoppt.
+                ParamSpec {
+                    name: "handoverPending".to_string(),
+                    kind: ParamType::Boolean,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
                 // JSON-Array [{id,label}] — die aktuell angelegten
                 // Audio-Eingänge (2026-08-06, dynamische Eingangszahl).
                 ParamSpec {
@@ -228,6 +237,7 @@ impl ParamStore for ViewerStore {
             "previewUrl" => Some(serde_json::json!(self.preview_url)),
             "previewFps" => Some(serde_json::json!(self.pipeline.preview_fps())),
             "levelsUrl" => Some(serde_json::json!(self.levels_url)),
+            "handoverPending" => Some(serde_json::json!(self.pipeline.handover_pending())),
             "audioInputs" => Some(serde_json::json!(
                 self.audio_inputs
                     .lock()

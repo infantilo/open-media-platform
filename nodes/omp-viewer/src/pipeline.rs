@@ -17,7 +17,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gst::prelude::*;
 use gstreamer as gst;
@@ -65,6 +65,9 @@ pub struct PipelineHandle {
     commands: Sender<Command>,
     flowed: Arc<AtomicBool>,
     preview_fps: Arc<AtomicI32>,
+    /// Make-before-break beim Quellwechsel: `true`, ab `connect()` bis die neue Pipeline nachweislich
+    /// liefert (oder aufgegeben wurde). Der Orchestrator wartet darauf, bevor er die alte Quelle stoppt.
+    handover_pending: Arc<AtomicBool>,
 }
 
 impl PipelineHandle {
@@ -74,11 +77,13 @@ impl PipelineHandle {
     /// engeren Sinn, nur zur Anzeige.
     pub fn connect(&self, flow_id: String, label: String) {
         self.flowed.store(false, Ordering::Relaxed);
+        self.handover_pending.store(true, Ordering::Relaxed);
         let _ = self.commands.send(Command::Connect(flow_id, label));
     }
 
     pub fn disconnect(&self) {
         self.flowed.store(false, Ordering::Relaxed);
+        self.handover_pending.store(false, Ordering::Relaxed);
         let _ = self.commands.send(Command::Disconnect);
     }
 
@@ -108,6 +113,10 @@ impl PipelineHandle {
     /// D5-prep-2). `false` sowohl vor dem ersten `connect()` als auch direkt
     /// nach einem Quellwechsel, bis der neue Input nachweislich liefert
     /// (s. `connect()`/`disconnect()` oben, die das Flag zurücksetzen).
+    pub fn handover_pending(&self) -> bool {
+        self.handover_pending.load(Ordering::Relaxed)
+    }
+
     pub fn media_ready(&self) -> bool {
         self.flowed.load(Ordering::Relaxed)
     }
@@ -122,6 +131,9 @@ struct ActivePipeline {
     /// den Zweig ab-/wieder aufzubauen (s. dortige Doku für die
     /// Root-Cause-Analyse, warum Ab-/Wiederaufbau die falsche Wahl war).
     mjpeg_caps: gst::Element,
+    /// Nur die "live" Pipeline darf Bilder an den Broadcaster geben: eine im Hintergrund vorbereitete
+    /// (Make-before-break) bleibt stumm, bis sie die alte ablöst.
+    live: Arc<AtomicBool>,
 }
 
 impl Drop for ActivePipeline {
@@ -196,6 +208,7 @@ fn build(
     sink_element: Option<&str>,
     flowed: Arc<AtomicBool>,
     preview_fps_live: &Arc<AtomicI32>,
+    live_initial: bool,
 ) -> Result<ActivePipeline, String> {
     let preview_fps = preview_fps_live.load(Ordering::Relaxed);
     let pipeline = gst::Pipeline::new();
@@ -273,6 +286,17 @@ fn build(
 
     // Reihenfolge aus `preview::build_mjpeg_branch`s Rückgabe:
     // [queue, videoscale, videorate, caps, jpegenc, appsink].
+    let live = Arc::new(AtomicBool::new(live_initial));
+    if let Some(pad) = mjpeg_elements.first().and_then(|q| q.static_pad("sink")) {
+        let live_probe = live.clone();
+        pad.add_probe(gst::PadProbeType::BUFFER, move |_, _| {
+            if live_probe.load(Ordering::Relaxed) {
+                gst::PadProbeReturn::Ok
+            } else {
+                gst::PadProbeReturn::Drop
+            }
+        });
+    }
     let mjpeg_caps = mjpeg_elements
         .into_iter()
         .nth(3)
@@ -282,6 +306,7 @@ fn build(
         pipeline,
         _input: input,
         mjpeg_caps,
+        live,
     })
 }
 
@@ -349,13 +374,18 @@ pub fn run(
         std::sync::mpsc::channel();
     let flowed = Arc::new(AtomicBool::new(false));
     let preview_fps = Arc::new(AtomicI32::new(PREVIEW_FPS_DEFAULT));
+    let handover_pending = Arc::new(AtomicBool::new(false));
     let _ = ready.send(Ok(PipelineHandle {
         commands: commands_tx,
         flowed: flowed.clone(),
         preview_fps: preview_fps.clone(),
+        handover_pending: handover_pending.clone(),
     }));
 
     let mut active: Option<ActivePipeline> = None;
+    // Make-before-break: die neue Pipeline wird im Hintergrund aufgebaut (stumm) und löst die alte erst ab,
+    // wenn sie nachweislich Bilder liefert — kein Schwarzbild/Standbild-Loch beim Quellwechsel.
+    let mut staging: Option<Staging> = None;
     // Ein per `try_recv()` beim Bündeln (s. `SetPreviewFps`-Zweig unten)
     // vorgezogenes Nicht-`SetPreviewFps`-Kommando — wird in der NÄCHSTEN
     // Schleifeniteration zuerst verarbeitet, damit die Reihenfolge
@@ -383,28 +413,30 @@ pub fn run(
         if shutdown.load(Ordering::Relaxed) {
             break;
         }
+        promote_staging(&mut staging, &mut active, &flowed, &handover_pending, &preview_fps);
         let command = match pending.take() {
             Some(cmd) => Ok(cmd),
-            None => commands_rx.recv_timeout(Duration::from_millis(500)),
+            None => commands_rx.recv_timeout(Duration::from_millis(if staging.is_some() { 20 } else { 500 })),
         };
         match command {
             Ok(Command::Connect(flow_id, label)) => {
-                // Alte Pipeline zuerst abbauen (Drop stoppt Reader-Thread
-                // + setzt State Null), bevor die neue denselben
-                // MxlContext für einen neuen Reader nutzt.
-                active = None;
+                staging = None;
+                retry_target = None;
+                // Erster Connect (keine aktive Pipeline): sofort live. Sonst im Hintergrund vorbereiten
+                // und erst bei nachgewiesenem Bildfluss übernehmen (promote_staging).
+                let local_flowed = Arc::new(AtomicBool::new(false));
                 match build(
                     &context,
                     &flow_id,
                     &label,
                     &broadcaster,
                     config.sink_element.as_deref(),
-                    flowed.clone(),
+                    local_flowed.clone(),
                     &preview_fps,
+                    active.is_none(),
                 ) {
                     Ok(p) => {
-                        active = Some(p);
-                        retry_target = None;
+                        staging = Some(Staging { pipeline: p, flowed: local_flowed, since: Instant::now() });
                     }
                     Err(e) => {
                         let _ = tx.send(Event::Error(format!("connect {flow_id} failed: {e}")));
@@ -413,6 +445,7 @@ pub fn run(
                 }
             }
             Ok(Command::Disconnect) => {
+                staging = None;
                 active = None;
                 retry_target = None;
                 broadcaster.reset();
@@ -454,25 +487,66 @@ pub fn run(
                 // tick` (main.rs) erholt den BCP-008-Status ohnehin
                 // automatisch, sobald `flowed` durch die Pad-Probe in
                 // `build()` wahr wird.
-                if active.is_none()
+                if staging.is_none()
                     && let Some((flow_id, label)) = retry_target.clone()
-                    && let Ok(p) = build(
+                {
+                    let local_flowed = Arc::new(AtomicBool::new(false));
+                    if let Ok(p) = build(
                         &context,
                         &flow_id,
                         &label,
                         &broadcaster,
                         config.sink_element.as_deref(),
-                        flowed.clone(),
+                        local_flowed.clone(),
                         &preview_fps,
-                    )
-                {
-                    active = Some(p);
-                    retry_target = None;
+                        active.is_none(),
+                    ) {
+                        staging = Some(Staging { pipeline: p, flowed: local_flowed, since: Instant::now() });
+                        retry_target = None;
+                    }
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
 
+    drop(staging);
     drop(active);
+}
+
+/// Eine im Hintergrund aufgebaute Pipeline, die die aktive noch nicht abgelöst hat.
+struct Staging {
+    pipeline: ActivePipeline,
+    flowed: Arc<AtomicBool>,
+    since: Instant,
+}
+
+/// Maximale Wartezeit auf den ersten Bildfluss der neuen Quelle; danach wird trotzdem umgeschaltet
+/// (der Bediener hat die neue Quelle gewählt — entspricht dem früheren Verhalten bei toter Quelle).
+const STAGING_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Löst die aktive Pipeline durch die vorbereitete ab, sobald diese Bilder liefert (oder das Zeitlimit läuft).
+/// Reihenfolge: neue live schalten, dann alte stumm, dann alte abbauen — nie ein Moment ohne Bildquelle.
+fn promote_staging(
+    staging: &mut Option<Staging>,
+    active: &mut Option<ActivePipeline>,
+    flowed: &Arc<AtomicBool>,
+    handover_pending: &Arc<AtomicBool>,
+    preview_fps: &Arc<AtomicI32>,
+) {
+    let ready = staging
+        .as_ref()
+        .is_some_and(|s| s.flowed.load(Ordering::Relaxed) || s.since.elapsed() >= STAGING_TIMEOUT);
+    if !ready {
+        return;
+    }
+    let Some(mut s) = staging.take() else { return };
+    rebuild_mjpeg_branch(&mut s.pipeline, preview_fps.load(Ordering::Relaxed));
+    s.pipeline.live.store(true, Ordering::Relaxed);
+    if let Some(old) = active.as_ref() {
+        old.live.store(false, Ordering::Relaxed);
+    }
+    *active = Some(s.pipeline); // alte Pipeline wird hier abgebaut
+    flowed.store(s.flowed.load(Ordering::Relaxed), Ordering::Relaxed);
+    handover_pending.store(false, Ordering::Relaxed);
 }

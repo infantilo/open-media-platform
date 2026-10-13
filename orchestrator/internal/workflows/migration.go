@@ -661,6 +661,15 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 		return
 	}
 
+	// Schritt 5b: Verbraucher (Viewer, Bildmischer, ...) vollziehen den Quellenwechsel weich — erst wenn sie
+	// nachweislich auf die neue Instanz umgeschaltet haben und Bild/Ton laufen, darf die alte stoppen.
+	s.awaitHandover(wf, role, oldNodeID, node.ID)
+	if _, ok := s.stillBacks(wf.ID, role, newInst.ID); !ok {
+		slog.Info("workflows: executeMigration: role superseded during handover, leaving old instance running",
+			"workflow", wf.ID, "role", role)
+		return
+	}
+
 	// Schritt 6: erst JETZT die alte Instanz stoppen — der eigentliche
 	// "Break"-Schritt, bewusst zuletzt. Der ALTE I/O-Port-Claim wird
 	// erst hier freigegeben (gezielt per ReleasePort, nicht per
