@@ -28,3 +28,12 @@ Deno.test("pickActiveEntry: active role no longer present falls back to the firs
 Deno.test("pickActiveEntry: active role no longer present and no entries left returns null", () => {
   assertEquals(pickActiveEntry([], "role-a", a.uiBundleUrl), null);
 });
+
+Deno.test("pickActiveEntry: Vorwahl auf die bereits aktive, unveränderte Rolle remountet beim Refresh nicht", () => {
+  assertEquals(pickActiveEntry([a, b], "role-a", a.uiBundleUrl, "role-a"), null);
+});
+
+Deno.test("pickActiveEntry: Vorwahl auf die aktive Rolle mit neuer Node-ID remountet weiterhin", () => {
+  const aRestarted = { nodeRoleId: "role-a", uiBundleUrl: "/api/v1/nodes/node-a-2" };
+  assertEquals(pickActiveEntry([aRestarted, b], "role-a", a.uiBundleUrl, "role-a"), "role-a");
+});

@@ -33,7 +33,12 @@ export function pickActiveEntry<T extends ConsoleEntryLike>(
   const preselected = preselectNodeRoleId
     ? entries.find((e) => e.nodeRoleId === preselectNodeRoleId)
     : undefined;
-  if (preselected) return preselected.nodeRoleId;
+  if (preselected) {
+    // Die Vorwahl gilt nur beim Wechsel: ist die Rolle schon aktiv und unverändert, nichts tun
+    // (sonst remountet jeder Poll/SSE-Refresh die Kachel — Bundle lädt neu, Stream-Deck-Tab fällt auf Home).
+    if (preselected.nodeRoleId === activeNodeRoleId && preselected.uiBundleUrl === previousUrl) return null;
+    return preselected.nodeRoleId;
+  }
 
   const stillValidEntry = entries.find((e) => e.nodeRoleId === activeNodeRoleId);
   if (!stillValidEntry) return entries.length > 0 ? entries[0].nodeRoleId : null;
