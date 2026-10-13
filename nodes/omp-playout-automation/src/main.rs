@@ -2492,7 +2492,7 @@ fn load_onto_channel(store: &AutomationStore, node_id: &str, meta: &ItemMeta, ho
         .proxy_client(node_id.to_string())
         .invoke("load", {
             let mut args = load_args(meta);
-            if hold && matches!(meta.media, ItemMedia::File { .. }) {
+            if hold && matches!(meta.media, ItemMedia::File { .. } | ItemMedia::TestPattern { .. } | ItemMedia::Image { .. }) {
                 args["hold"] = serde_json::json!(true);
             }
             args
@@ -2562,7 +2562,7 @@ fn take_on_targets(
         }
     }
     let (standby_node_id, standby_label) = standby_target(state)?;
-    let held = take_at_enabled() && matches!(meta.media, ItemMedia::File { .. });
+    let held = take_at_enabled() && matches!(meta.media, ItemMedia::File { .. } | ItemMedia::TestPattern { .. } | ItemMedia::Image { .. });
     load_onto_channel(store, &standby_node_id, meta, held)?;
 
     let mixer = store.proxy_client(mixer_node_id.to_string());

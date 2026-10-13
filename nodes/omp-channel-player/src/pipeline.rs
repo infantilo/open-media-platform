@@ -144,7 +144,8 @@ pub enum Event {
 }
 
 enum Command {
-    Load(Item),
+    /// Mit `Some(ack)`: Der Aufrufer wartet, bis der Aufbau (inkl. Preroll) fertig oder gescheitert ist.
+    Load(Item, Option<std::sync::mpsc::Sender<()>>),
     /// Gehaltene Pipeline auf TAI-Zeitpunkt (ns) freigeben; 0 = sofort.
     PlayAt(u64),
 }
@@ -201,8 +202,16 @@ impl PipelineHandle {
         let _ = self.events.send(LoopEvent::Cmd(Command::PlayAt(at_tai_ns)));
     }
 
+    /// Gehaltene Items (`hold`) warten, bis die Pipeline im Preroll steht (höchstens 10 s): der
+    /// Aufrufer legt den Schaltzeitpunkt (`takeAt`) erst danach fest — die Aufbauzeit (Dekoder-
+    /// Laden, Kaltstart) darf den Take nicht verspäten. Andere Items laden asynchron wie bisher.
     pub fn load(&self, item: Item) {
-        let _ = self.events.send(LoopEvent::Cmd(Command::Load(item)));
+        let wait = item.timing.hold;
+        let (ack_tx, ack_rx) = std::sync::mpsc::channel();
+        let _ = self.events.send(LoopEvent::Cmd(Command::Load(item, wait.then_some(ack_tx))));
+        if wait {
+            let _ = ack_rx.recv_timeout(std::time::Duration::from_secs(10));
+        }
     }
 
     pub fn current_label(&self) -> String {
@@ -278,9 +287,9 @@ fn set_enum_property_checked(el: &gst::Element, prop: &str, nick: &str) -> Resul
 /// Aufrufer den `caps`-Tail direkt an `MxlVideoOutput::new_paced`
 /// weiter). Auch als "schwarz"-Fallback für `ItemSource::Live` ohne
 /// gefundenen Video-Begleiter verwendet.
-fn build_testpattern_video(pipeline: &gst::Pipeline, pattern: &str, width: u32, height: u32) -> Result<gst::Element, String> {
+fn build_testpattern_video(pipeline: &gst::Pipeline, pattern: &str, width: u32, height: u32, live: bool) -> Result<gst::Element, String> {
     let src = gst::ElementFactory::make("videotestsrc")
-        .property("is-live", true)
+        .property("is-live", live)
         .build()
         .map_err(|e| format!("videotestsrc: {e}"))?;
     set_enum_property_checked(&src, "pattern", pattern)?;
@@ -306,9 +315,9 @@ fn build_testpattern_video(pipeline: &gst::Pipeline, pattern: &str, width: u32, 
 /// `TestPattern`-Audiozweig — aus `omp-player::build_audio_branch`
 /// übernommen, ohne isel-Sink-Pad-Link. Auch als "still"-Fallback für
 /// `ItemSource::Live` ohne gefundenen Audio-Begleiter verwendet.
-fn build_testpattern_audio(pipeline: &gst::Pipeline, tone_freq: f64) -> Result<gst::Element, String> {
+fn build_testpattern_audio(pipeline: &gst::Pipeline, tone_freq: f64, live: bool) -> Result<gst::Element, String> {
     let src = gst::ElementFactory::make("audiotestsrc")
-        .property("is-live", true)
+        .property("is-live", live)
         .property("freq", tone_freq.max(1.0))
         .property("volume", if tone_freq > 0.0 { 0.3 } else { 0.0 })
         .build()
@@ -756,8 +765,9 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
 
     let (video_tail, audio_tail) = match &item.source {
         ItemSource::TestPattern { pattern, tone_freq } => {
-            let v = build_testpattern_video(&pipeline, pattern, config.width, config.height)?;
-            let a = build_testpattern_audio(&pipeline, *tone_freq)?;
+            // Mit `hold` nicht live: Quelle prerollt in PAUSED wie eine Datei und kann auf `playAt` exakt starten.
+            let v = build_testpattern_video(&pipeline, pattern, config.width, config.height, !item.timing.hold)?;
+            let a = build_testpattern_audio(&pipeline, *tone_freq, !item.timing.hold)?;
             (v, a)
         }
         ItemSource::File { path } => {
@@ -778,7 +788,7 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
             let uri = gst::glib::filename_to_uri(path, None).map_err(|e| format!("filename_to_uri({path}): {e}"))?;
             let (_src, v) = build_image_file(&pipeline, uri.as_str(), config.width, config.height)?;
             // Standbild ohne Ton: Stille (kein eigener Audio-Strom im Bild).
-            let a = build_testpattern_audio(&pipeline, 0.0)?;
+            let a = build_testpattern_audio(&pipeline, 0.0, !item.timing.hold)?;
             (v, a)
         }
         ItemSource::Live { video_flow_id, audio_flow_id } => {
@@ -787,14 +797,14 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
                     let (tail, input) = build_live_video(&pipeline, context.clone(), flow_id, config.width, config.height)?;
                     (tail, Some(input))
                 }
-                None => (build_testpattern_video(&pipeline, EMPTY_PATTERN, config.width, config.height)?, None),
+                None => (build_testpattern_video(&pipeline, EMPTY_PATTERN, config.width, config.height, true)?, None),
             };
             let (a, ma) = match audio_flow_id {
                 Some(flow_id) => {
                     let (tail, input) = build_live_audio(&pipeline, context.clone(), flow_id)?;
                     (tail, Some(input))
                 }
-                None => (build_testpattern_audio(&pipeline, EMPTY_TONE_FREQ)?, None),
+                None => (build_testpattern_audio(&pipeline, EMPTY_TONE_FREQ, true)?, None),
             };
             mxl_video_input = mv;
             mxl_audio_input = ma;
@@ -843,7 +853,7 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
     }
     let audio_flowed = mxl_audio_outputs.first().ok_or("kein Audio-Ausgang (Ausgabeprofil ohne Zielgruppen)")?.flowed_handle();
 
-    let held = item.timing.hold && matches!(item.source, ItemSource::File { .. });
+    let held = item.timing.hold && matches!(item.source, ItemSource::File { .. } | ItemSource::TestPattern { .. } | ItemSource::Image { .. });
     let wants_seek = matches!(item.source, ItemSource::File { .. }) && (item.timing.som_ms.is_some() || item.timing.eom_ms.is_some());
     if held || wants_seek {
         // Erst PAUSED (Preroll: erstes Bild + erster Ton stehen bereit), dann ggf. SOM/EOM-Seek.
@@ -997,12 +1007,17 @@ pub fn run(config: Config, tx: UnboundedSender<Event>, ready: oneshot::Sender<Re
                     }
                 }
             }
-            Ok(LoopEvent::Cmd(Command::Load(item))) => {
+            Ok(LoopEvent::Cmd(Command::Load(item, ack))) => {
+                let t_cmd = std::time::Instant::now();
                 if let Some(a) = active.take() {
                     a.teardown();
                 }
                 position_ms.store(0, Ordering::Relaxed);
                 duration_ms.store(item.duration_hint_ms.unwrap_or(0), Ordering::Relaxed);
+                let t_load = std::time::Instant::now();
+                if std::env::var_os("OMP_LOAD_TIMING").is_some() {
+                    eprintln!("omp-channel-player: teardown {} ms", t_cmd.elapsed().as_millis());
+                }
                 match build(&config, &item, tx.clone(), event_tx.clone(), audio_plan.clone()) {
                     Ok(p) => {
                         let mut s = shared.lock().expect("lock poisoned");
@@ -1012,6 +1027,9 @@ pub fn run(config: Config, tx: UnboundedSender<Event>, ready: oneshot::Sender<Re
                         s.audio_flowed = p.audio_flowed.clone();
                         s.gate = p.gate.clone();
                         drop(s);
+                        if std::env::var_os("OMP_LOAD_TIMING").is_some() {
+                            eprintln!("omp-channel-player: load '{}' aufgebaut in {} ms (hold={})", item.label, t_load.elapsed().as_millis(), p.held);
+                        }
                         active = Some(p);
                         current_item = Some(item);
                     }
@@ -1019,6 +1037,9 @@ pub fn run(config: Config, tx: UnboundedSender<Event>, ready: oneshot::Sender<Re
                         let _ = tx.send(Event::Error(format!("load failed: {e}")));
                         current_item = None;
                     }
+                }
+                if let Some(ack) = ack {
+                    let _ = ack.send(());
                 }
             }
             Ok(LoopEvent::Cmd(Command::PlayAt(at))) => {

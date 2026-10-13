@@ -201,7 +201,7 @@ impl ParamStore for PlayerStore {
                             source: pipeline::ItemSource::Image { path: abs.to_string_lossy().to_string() },
                             duration_hint_ms: duration_ms_arg,
                             audio_mapping: audio_mapping.clone(),
-                            timing: Default::default(),
+                            timing: pipeline::Timing { hold: args.get("hold").and_then(Value::as_bool).unwrap_or(false), ..Default::default() },
                         });
                         return Ok(());
                     }
@@ -227,7 +227,7 @@ impl ParamStore for PlayerStore {
                     source: pipeline::ItemSource::TestPattern { pattern, tone_freq },
                     duration_hint_ms: duration_ms_arg,
                     audio_mapping,
-                    timing: Default::default(),
+                    timing: pipeline::Timing { hold: args.get("hold").and_then(Value::as_bool).unwrap_or(false), ..Default::default() },
                 });
                 Ok(())
             }
