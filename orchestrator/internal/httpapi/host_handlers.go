@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"bytes"
+	"io"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/hosts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/ioports"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/maintenance"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
 
@@ -66,6 +69,7 @@ type HostRegistry interface {
 	ConsumeBootstrapToken(token string) error
 	CreateHost(label, hostname string, capabilities []byte) (hosts.Host, error)
 	ListHosts() ([]hosts.Host, error)
+	DeleteHost(id string) error
 }
 
 // HostMetricsReader liefert die zuletzt per NATS empfangene Telemetrie
@@ -192,6 +196,37 @@ func handleRegisterHost(registry HostRegistry, ioPortStore IOPortInventoryStore,
 	}
 }
 
+// hostOnlineWindow entspricht HOST_ONLINE_THRESHOLD_MS in hosts-view.ts.
+const hostOnlineWindow = 15 * time.Second
+
+// handleDeleteHost ist DELETE /api/v1/admin/hosts/{id} — admin-only. Entfernt
+// einen (offline gegangenen) Host aus der Registry; ein Host mit frischer
+// Telemetrie wird mit 409 abgelehnt (sein Agent würde sich ohnehin nicht
+// abmelden, und laufende Instanzen blieben verwaist).
+func handleDeleteHost(registry HostRegistry, metrics HostMetricsReader, events EventSubscriber) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if m, ok := metrics.Get(id); ok && time.Since(m.ReceivedAt) < hostOnlineWindow {
+			http.Error(w, "host is online", http.StatusConflict)
+			return
+		}
+		if err := registry.DeleteHost(id); err != nil {
+			if errors.Is(err, hosts.ErrHostNotFound) {
+				http.Error(w, "host not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if events != nil {
+			if data, err := json.Marshal(map[string]string{"hostId": id}); err == nil {
+				events.Broadcast(sse.Event{Type: "host.removed", Data: data})
+			}
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 type hostResponse struct {
 	ID           string          `json:"id"`
 	Label        string          `json:"label"`
@@ -204,6 +239,75 @@ type hostResponse struct {
 	// Inventar gemeldet hat (unverändertes Verhalten vor D13).
 	IOPorts      []ioports.Port  `json:"ioPorts,omitempty"`
 	IOPortClaims []ioports.Claim `json:"ioPortClaims,omitempty"`
+	// Maintenance ist gesetzt, solange der Host im Wartungsmodus ist.
+	Maintenance *maintenance.Status `json:"maintenance,omitempty"`
+}
+
+// MaintenanceService schaltet den Wartungsmodus eines Hosts (implementiert von *maintenance.Manager).
+type MaintenanceService interface {
+	Enter(hostID string) error
+	Leave(hostID string) error
+	Status(hostID string) (maintenance.Status, bool)
+}
+
+// WithMaintenance aktiviert die Wartungsmodus-Endpunkte; ohne sie bleiben sie inaktiv.
+func WithMaintenance(m MaintenanceService) HandlerOption {
+	return func(o *handlerOptions) { o.maintenance = m }
+}
+
+// blockMaintenanceHost lehnt Anfragen ab, die einen Host im Wartungsmodus als Ziel nennen (409): field ist der
+// JSON-Schlüssel des Zielhosts im Body ("hostId" bzw. "targetHostId"). Der Body bleibt für next lesbar.
+func blockMaintenanceHost(maint MaintenanceService, field string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if maint != nil && r.Body != nil {
+			raw, err := io.ReadAll(r.Body)
+			if err == nil {
+				r.Body = io.NopCloser(bytes.NewReader(raw))
+				var m map[string]json.RawMessage
+				var id string
+				if json.Unmarshal(raw, &m) == nil && json.Unmarshal(m[field], &id) == nil && id != "" {
+					if _, on := maint.Status(id); on {
+						http.Error(w, "target host is in maintenance mode", http.StatusConflict)
+						return
+					}
+				}
+			}
+		}
+		next(w, r)
+	}
+}
+
+// handleSetMaintenance ist POST (on=true) bzw. DELETE (on=false) /api/v1/admin/hosts/{id}/maintenance — admin-only.
+// POST ist asynchron (202): die Evakuierung läuft im Hintergrund, der Stand steht in GET /api/v1/hosts.
+func handleSetMaintenance(registry HostRegistry, maint MaintenanceService, on bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if maint == nil {
+			http.Error(w, "maintenance mode not available", http.StatusNotImplemented)
+			return
+		}
+		id := r.PathValue("id")
+		known := false
+		if all, err := registry.ListHosts(); err == nil {
+			for _, h := range all {
+				known = known || h.ID == id
+			}
+		}
+		if !known {
+			http.Error(w, "host not found", http.StatusNotFound)
+			return
+		}
+		var err error
+		if on {
+			err = maint.Enter(id)
+		} else {
+			err = maint.Leave(id)
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}
 }
 
 // handleListHosts ist GET /api/v1/hosts (ARCHITECTURE.md §18.7:
@@ -211,7 +315,7 @@ type hostResponse struct {
 // (view-artig, wie die übrigen Bestandslisten-Endpunkte). ioPortStore
 // darf nil sein (z. B. Tests) — dann bleiben IOPorts/IOPortClaims leer,
 // sonst unverändertes Verhalten.
-func handleListHosts(registry HostRegistry, metrics HostMetricsReader, ioPortStore IOPortInventoryStore) http.HandlerFunc {
+func handleListHosts(registry HostRegistry, metrics HostMetricsReader, ioPortStore IOPortInventoryStore, maint MaintenanceService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		all, err := registry.ListHosts()
 		if err != nil {
@@ -243,6 +347,11 @@ func handleListHosts(registry HostRegistry, metrics HostMetricsReader, ioPortSto
 			}
 			if m, ok := metrics.Get(h.ID); ok {
 				out[i].Metrics = &m
+			}
+			if maint != nil && h.MaintenanceSince != nil {
+				if st, ok := maint.Status(h.ID); ok {
+					out[i].Maintenance = &st
+				}
 			}
 			for _, p := range allPorts {
 				if p.HostID == h.ID {

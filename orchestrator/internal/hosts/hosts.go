@@ -27,6 +27,8 @@ type Host struct {
 	Hostname     string
 	Capabilities []byte // opakes JSON, s. db/migrations/0003_hosts.sql
 	RegisteredAt time.Time
+	// MaintenanceSince ist gesetzt, solange der Host im Wartungsmodus ist.
+	MaintenanceSince *time.Time
 }
 
 // Metrics ist die zuletzt über NATS empfangene Telemetrie eines Hosts —

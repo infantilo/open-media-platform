@@ -41,6 +41,7 @@ type handlerOptions struct {
 	nodeVersions    NodeVersionStore
 	nodeValues      NodeOptionValues
 	locations       LocationStore
+	maintenance     MaintenanceService
 	modules         *module.Registry
 	moduleHooks     *module.Hooks
 	moduleDeps      module.Deps

@@ -220,6 +220,8 @@ type Engine struct {
 	advice map[string]Advice // hostID -> aktueller Alarm
 	// draining: Hosts, die geleert werden (Cloud-Abbau, ARCHITECTURE.md §27.5) — bekommen keine neue Last.
 	draining map[string]bool
+	// maintenance: Hosts im Wartungsmodus (internal/maintenance) — wie draining gesperrt, aber unabhängig vom Cloud-Abbau.
+	maintenance map[string]bool
 }
 
 // SetDraining sperrt bzw. entsperrt einen Host für neue Platzierungen. Laufende Instanzen bleiben unberührt.
@@ -240,7 +242,21 @@ func (e *Engine) SetDraining(hostID string, on bool) {
 func (e *Engine) IsDraining(hostID string) bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.draining[hostID]
+	return e.draining[hostID] || e.maintenance[hostID]
+}
+
+// SetMaintenance sperrt bzw. entsperrt einen Host im Wartungsmodus für neue Platzierungen und als Migrationsziel.
+func (e *Engine) SetMaintenance(hostID string, on bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.maintenance == nil {
+		e.maintenance = map[string]bool{}
+	}
+	if on {
+		e.maintenance[hostID] = true
+	} else {
+		delete(e.maintenance, hostID)
+	}
 }
 
 // SetAdviceObserver verdrahtet den Eskalations-Beobachter nach dem
@@ -812,7 +828,7 @@ func (e *Engine) healthiestAlternative(candidates []scored, excludeID string) (s
 	var best scored
 	found := false
 	for _, c := range candidates {
-		if c.host.ID == excludeID {
+		if c.host.ID == excludeID || e.IsDraining(c.host.ID) {
 			continue
 		}
 		if c.m.CPUPercent > e.thresholds.HealthyCPUPercent || c.memPercent > e.thresholds.HealthyMemPercent {

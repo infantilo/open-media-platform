@@ -472,14 +472,14 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/catalog", g.requireVerbGlobal(authz.VerbAdmin, handlePostCatalogEntry(launcherSvc)))
 	mux.HandleFunc("DELETE /api/v1/catalog/{type}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteCatalogEntry(launcherSvc)))
 	mux.HandleFunc("GET /api/v1/instances", g.requireAuth(handleListInstances(launcherSvc, hostMetrics)))
-	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, handlePostInstance(launcherSvc, authzStore, ioPortStore, controlPlaneCheck(workflowSvc))))
+	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, blockMaintenanceHost(options.maintenance, "hostId", handlePostInstance(launcherSvc, authzStore, ioPortStore, controlPlaneCheck(workflowSvc)))))
 	mux.HandleFunc("PATCH /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handlePatchInstance(launcherSvc, nodes, nodeClient)))
 	mux.HandleFunc("POST /api/v1/instances/{id}/restart", g.requireVerbGlobal(authz.VerbAdmin, handleRestartInstance(launcherSvc, workflowSvc, options.nodeValues, instanceMigrateSvc)))
 	mux.HandleFunc("DELETE /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteInstance(launcherSvc, ioPortStore)))
 	// Kapitel 13 Teil 3 (docs/END-GOAL-FEATURES.md §13.4) — Drag-Umzug
 	// im Flow-Editor für eigenständige (nicht Workflow-gebundene)
 	// Instanzen, s. instancemigrate.Service.MigrateInstance-Doku.
-	mux.HandleFunc("POST /api/v1/instances/{id}/migrate", g.requireVerbGlobal(authz.VerbAdmin, handleMigrateInstance(instanceMigrateSvc)))
+	mux.HandleFunc("POST /api/v1/instances/{id}/migrate", g.requireVerbGlobal(authz.VerbAdmin, blockMaintenanceHost(options.maintenance, "targetHostId", handleMigrateInstance(instanceMigrateSvc))))
 	mux.HandleFunc("GET /api/v1/me/upcoming", g.requireAuth(handleMeUpcoming(workflowSvc, authzStore, time.Now)))
 	mux.HandleFunc("GET /api/v1/me/consoles", g.requireAuth(handleMeConsoles(nodes, consoleResolver)))
 
@@ -544,8 +544,11 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).
 	// /register bewusst außerhalb von authGate — s. handleRegisterHost.
 	mux.HandleFunc("POST /api/v1/admin/hosts/bootstrap-tokens", g.requireVerbGlobal(authz.VerbAdmin, handleCreateBootstrapToken(hostRegistry)))
+	mux.HandleFunc("DELETE /api/v1/admin/hosts/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteHost(hostRegistry, hostMetrics, events)))
+	mux.HandleFunc("POST /api/v1/admin/hosts/{id}/maintenance", g.requireVerbGlobal(authz.VerbAdmin, handleSetMaintenance(hostRegistry, options.maintenance, true)))
+	mux.HandleFunc("DELETE /api/v1/admin/hosts/{id}/maintenance", g.requireVerbGlobal(authz.VerbAdmin, handleSetMaintenance(hostRegistry, options.maintenance, false)))
 	mux.HandleFunc("POST /api/v1/hosts/register", handleRegisterHost(hostRegistry, ioPortStore, events))
-	mux.HandleFunc("GET /api/v1/hosts", g.requireAuth(handleListHosts(hostRegistry, hostMetrics, ioPortStore)))
+	mux.HandleFunc("GET /api/v1/hosts", g.requireAuth(handleListHosts(hostRegistry, hostMetrics, ioPortStore, options.maintenance)))
 	mux.HandleFunc("GET /api/v1/hosts/local", g.requireAuth(handleLocalHost(launcherSvc)))
 	// Orchestrator-Cluster (ARCHITECTURE.md §19.3, UMSETZUNG.md D12 Teil 1).
 	mux.HandleFunc("GET /api/v1/cluster/status", g.requireAuth(handleClusterStatus(clusterSvc)))
@@ -589,7 +592,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/workflows/{id}/stop", g.requireVerbGlobal(authz.VerbAdmin, handleStopWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/pause", g.requireVerbGlobal(authz.VerbAdmin, handlePauseWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/roles/{role}/restart", g.requireVerbGlobal(authz.VerbAdmin, handleRestartWorkflowRole(workflowSvc)))
-	mux.HandleFunc("POST /api/v1/workflows/{id}/roles/{role}/migrate", g.requireVerbGlobal(authz.VerbAdmin, handleMigrateWorkflowRole(workflowSvc)))
+	mux.HandleFunc("POST /api/v1/workflows/{id}/roles/{role}/migrate", g.requireVerbGlobal(authz.VerbAdmin, blockMaintenanceHost(options.maintenance, "targetHostId", handleMigrateWorkflowRole(workflowSvc))))
 	// requireVerbGlobal(VerbConfigure) statt requireAuth (Nutzerwunsch
 	// 2026-07-28): der optionale ?includeBindings=true-Parameter (s.
 	// handleExportWorkflow) hängt Nutzernamen+Rechte anderer Nutzer an —

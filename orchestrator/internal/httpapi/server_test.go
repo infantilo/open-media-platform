@@ -507,6 +507,7 @@ type fakeHostRegistry struct {
 	createErr   error
 	list        []hosts.Host
 	listErr     error
+	deleteErr   error
 }
 
 func (f fakeHostRegistry) CreateBootstrapToken(createdBy string, ttl time.Duration) (string, time.Time, error) {
@@ -520,6 +521,8 @@ func (f fakeHostRegistry) CreateHost(label, hostname string, capabilities []byte
 }
 
 func (f fakeHostRegistry) ListHosts() ([]hosts.Host, error) { return f.list, f.listErr }
+
+func (f fakeHostRegistry) DeleteHost(id string) error { return f.deleteErr }
 
 // fakeHostMetrics ist ein Test-Double für HostMetricsReader.
 type fakeHostMetrics struct {

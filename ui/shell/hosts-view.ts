@@ -17,6 +17,8 @@ import { t, t as tt } from "./i18n.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
 import { openHostWizard } from "./host-wizard.ts";
+import { confirmDialog } from "../kit/omp-confirm.ts";
+import { showToast } from "../kit/omp-toast.ts";
 
 // netMetrics fehlt (statt eines Nullwert-Objekts), wenn der Host-Agent
 // kein Interface für die Bandbreiten-Telemetrie konfiguriert hat
@@ -57,6 +59,17 @@ interface HostEntry {
   hostname: string;
   registeredAt: string;
   metrics?: HostMetrics;
+  maintenance?: MaintenanceStatus;
+}
+
+// Spiegelt maintenance.Status (orchestrator/internal/maintenance).
+interface MaintenanceItem { kind: string; instanceId: string; label?: string; reason?: string }
+interface MaintenanceStatus {
+  state: "evacuating" | "drained" | "blocked";
+  total: number;
+  moved: number;
+  failed?: MaintenanceItem[];
+  remaining?: MaintenanceItem[];
 }
 
 // Kapitel 14 Teil 1 (docs/END-GOAL-FEATURES.md §14.4): Sparkline +
@@ -135,6 +148,8 @@ const HOST_METRICS_SUBJECT_SUFFIX = ".metrics";
 function isRefreshEvent(type: string): boolean {
   if (
     type === "host.registered" ||
+    type === "host.removed" ||
+    type === "host.maintenance" ||
     type === "placement.advice" ||
     // D6 Teil 4: "workflow.migration" deckt sowohl neu geplante als auch
     // bestätigte/abgelaufene/abgebrochene/abgeschlossene Migrationen ab —
@@ -274,6 +289,16 @@ class HostsView extends HTMLElement {
       openHostWizard();
       return;
     }
+    const maintTarget = (ev.target as HTMLElement)?.closest<HTMLElement>("[data-action='maintenance']");
+    if (maintTarget) {
+      void this.#toggleMaintenance(maintTarget.dataset.hostId ?? "", maintTarget.dataset.hostLabel ?? "", maintTarget.dataset.on === "1");
+      return;
+    }
+    const removeTarget = (ev.target as HTMLElement)?.closest<HTMLElement>("[data-action='remove-host']");
+    if (removeTarget) {
+      void this.#removeHost(removeTarget.dataset.hostId ?? "", removeTarget.dataset.hostLabel ?? "");
+      return;
+    }
     const target = (ev.target as HTMLElement)?.closest<HTMLElement>("[data-migration-action]");
     if (!target) return;
     const workflowId = target.dataset.workflowId ?? "";
@@ -282,6 +307,21 @@ class HostsView extends HTMLElement {
     if (target.dataset.migrationAction === "confirm") this.#confirmMigration(workflowId, role);
     else if (target.dataset.migrationAction === "cancel") this.#cancelMigration(workflowId, role);
   };
+
+  async #toggleMaintenance(id: string, label: string, on: boolean) {
+    if (!id) return;
+    if (on && !(await confirmDialog(t("hosts.maintConfirm", { p0: label }), { confirmLabel: t("hosts.maintOn") }))) return;
+    const res = await apiFetch(`/api/v1/admin/hosts/${encodeURIComponent(id)}/maintenance`, { method: on ? "POST" : "DELETE" });
+    if (!res.ok) showToast(t("hosts.removeFailed", { p0: (await res.text()).trim() }), { variant: "error" });
+    this.#poll();
+  }
+
+  async #removeHost(id: string, label: string) {
+    if (!id || !(await confirmDialog(t("hosts.removeConfirm", { p0: label }), { confirmLabel: t("hosts.remove") }))) return;
+    const res = await apiFetch(`/api/v1/admin/hosts/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!res.ok) showToast(t("hosts.removeFailed", { p0: (await res.text()).trim() }), { variant: "error" });
+    this.#poll();
+  }
 
   disconnectedCallback() {
     if (this.#pollHandle !== undefined) window.clearInterval(this.#pollHandle);
@@ -412,9 +452,23 @@ class HostsView extends HTMLElement {
         };">
           <span style="color:${online ? "#4caf50" : "#e05252"};font-size:11px;line-height:1;">●</span>${online ? t("hosts.54f664") : t("hosts.8d9da4")}
         </span>`;
+        const mt = h.maintenance;
+        const maintBadge = mt
+          ? (() => {
+              const list = [...(mt.failed ?? []), ...(mt.remaining ?? [])].map((i) => `${i.label || i.instanceId}${i.reason ? ` (${i.reason})` : ""}`);
+              const text =
+                mt.state === "evacuating"
+                  ? t("hosts.maintEvacuating", { p0: mt.moved, p1: mt.total })
+                  : mt.state === "drained"
+                    ? t("hosts.maintDrained")
+                    : t("hosts.maintBlocked", { p0: (mt.remaining ?? []).length });
+              const color = mt.state === "drained" ? "#4caf50" : mt.state === "blocked" ? "#e0a030" : "#4a90e2";
+              return `<div title="${escapeHtml(list.join("\n"))}" style="color:${color};font-size:11px;white-space:nowrap;">🛠 ${escapeHtml(text)}</div>`;
+            })()
+          : "";
         const rowTint = online ? "" : "background:rgba(224,82,82,0.08);";
         return `<tr style="${rowTint}">
-          <td style="padding:2px 8px;">${status}</td>
+          <td style="padding:2px 8px;">${status}${maintBadge}</td>
           <td style="padding:2px 8px;">${escapeHtml(h.label)}</td>
           <td style="padding:2px 8px;color:var(--omp-text-dim);">${escapeHtml(h.hostname)}</td>
           <td style="padding:2px 8px;">${cpu}</td>
@@ -424,6 +478,15 @@ class HostsView extends HTMLElement {
           <td style="padding:2px 8px;">${spark}</td>
           <td style="padding:2px 8px;white-space:nowrap;">${minAvgMax}</td>
           <td style="padding:2px 8px;color:var(--omp-text-dim);">${seen}</td>
+          <td style="padding:2px 8px;white-space:nowrap;">${
+            this.#isAdmin && h.id
+              ? `<button type="button" data-action="maintenance" data-on="${h.maintenance ? "0" : "1"}" data-host-id="${escapeHtml(h.id)}" data-host-label="${escapeHtml(h.label)}" style="font-size:11px;padding:2px 8px;cursor:pointer;">${h.maintenance ? t("hosts.maintOff") : t("hosts.maintOn")}</button> `
+              : ""
+          }${
+            this.#isAdmin && !online && h.id
+              ? `<button type="button" data-action="remove-host" data-host-id="${escapeHtml(h.id)}" data-host-label="${escapeHtml(h.label)}" title="${escapeHtml(t("hosts.remove"))}" style="font-size:11px;padding:2px 8px;cursor:pointer;">${t("hosts.remove")}</button>`
+              : ""
+          }</td>
         </tr>`;
       })
       .join("");
@@ -483,6 +546,7 @@ class HostsView extends HTMLElement {
                 <th style="padding:2px 8px;">${t("hosts.25850a")}</th>
                 <th style="padding:2px 8px;">${t("hosts.be62a5")}</th>
                 <th style="padding:2px 8px;">${t("hosts.4d62c2")}</th>
+                <th></th>
               </tr></thead>
               <tbody>${rows}</tbody>
             </table>`

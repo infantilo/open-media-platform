@@ -42,6 +42,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/ioports"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/maintenance"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/locations"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
@@ -822,6 +823,9 @@ func main() {
 	// existiert erst ab hier), gleiches Nachträglich-Verdrahtungsmuster
 	// wie SetRestartObserver/SetFailoverObserver oben.
 	placementEngine.SetAdviceObserver(workflowSvc)
+	// Wartungsmodus für Hosts: Sperre + Make-before-break-Evakuierung (internal/maintenance).
+	maintenanceMgr := maintenance.NewManager(hostStore, placementEngine, workflowSvc, maintenanceInstances{launcherSvc}, hub)
+	maintenanceMgr.Restore()
 
 	// D7 Teil 2 (ARCHITECTURE.md §6.2 Punkt 1): führt Start/Stop-
 	// Zeitpläne aus, unabhängig vom HTTP-Handler.
@@ -995,7 +999,7 @@ func main() {
 	}
 	moduleDeps := module.Deps{Hooks: module.NewHooks(), DB: database, Audit: domainAuditStore, Settings: moduleSettings{nodeSettingsStore}, Actor: httpapi.ActorFromRequest,
 		Hosts: hostStore, HostMetrics: hostMetricsTracker, Instances: moduleInstances{launcherSvc}, Placement: placementEngine}
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithModules(modules, moduleDeps))
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithModules(modules, moduleDeps))
 
 	startModules(ctx, modules, moduleDeps, clusterNode)
 
@@ -1031,4 +1035,17 @@ func main() {
 			srv.Close()
 		}
 	}
+}
+
+// maintenanceInstances liefert dem Wartungsmodus die auf einem Host laufenden Instanzen.
+type maintenanceInstances struct{ l *launcher.Launcher }
+
+func (m maintenanceInstances) ListOnHost(hostID string) []maintenance.Item {
+	var out []maintenance.Item
+	for _, inst := range m.l.List() {
+		if inst.HostID == hostID {
+			out = append(out, maintenance.Item{Kind: "instance", InstanceID: inst.ID, Label: inst.Label})
+		}
+	}
+	return out
 }

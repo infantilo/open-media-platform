@@ -97,7 +97,7 @@ func (s *Store) CreateHost(label, hostname string, capabilities []byte) (Host, e
 
 // ListHosts liefert alle registrierten Hosts, neueste zuerst.
 func (s *Store) ListHosts() ([]Host, error) {
-	rows, err := s.db.Query(`SELECT id, label, hostname, capabilities, registered_at FROM hosts ORDER BY registered_at DESC`)
+	rows, err := s.db.Query(`SELECT id, label, hostname, capabilities, registered_at, maintenance_since FROM hosts ORDER BY registered_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -106,12 +106,62 @@ func (s *Store) ListHosts() ([]Host, error) {
 	hosts := []Host{}
 	for rows.Next() {
 		var h Host
-		if err := rows.Scan(&h.ID, &h.Label, &h.Hostname, &h.Capabilities, &h.RegisteredAt); err != nil {
+		if err := rows.Scan(&h.ID, &h.Label, &h.Hostname, &h.Capabilities, &h.RegisteredAt, &h.MaintenanceSince); err != nil {
 			return nil, err
 		}
 		hosts = append(hosts, h)
 	}
 	return hosts, rows.Err()
+}
+
+// SetMaintenance setzt bzw. löscht das Wartungs-Flag eines Hosts.
+func (s *Store) SetMaintenance(id string, on bool) error {
+	q := `UPDATE hosts SET maintenance_since = NULL WHERE id = $1`
+	if on {
+		q = `UPDATE hosts SET maintenance_since = COALESCE(maintenance_since, now()) WHERE id = $1`
+	}
+	res, err := s.db.Exec(q, id)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return ErrHostNotFound
+	}
+	return nil
+}
+
+// MaintenanceHosts liefert die IDs aller Hosts im Wartungsmodus.
+func (s *Store) MaintenanceHosts() ([]string, error) {
+	rows, err := s.db.Query(`SELECT id FROM hosts WHERE maintenance_since IS NOT NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// ErrHostNotFound wird von DeleteHost geliefert, wenn die ID unbekannt ist.
+var ErrHostNotFound = errors.New("hosts: host not found")
+
+// DeleteHost entfernt einen registrierten Host. Sein I/O-Karten-Inventar und
+// dessen Belegungen verschwinden per ON DELETE CASCADE (0015_io_ports.sql).
+func (s *Store) DeleteHost(id string) error {
+	res, err := s.db.Exec(`DELETE FROM hosts WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return ErrHostNotFound
+	}
+	return nil
 }
 
 func hashToken(token string) string {

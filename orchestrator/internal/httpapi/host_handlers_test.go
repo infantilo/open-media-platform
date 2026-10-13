@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"encoding/json"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/maintenance"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -114,7 +116,7 @@ func TestHandleListHostsMergesMetrics(t *testing.T) {
 	metrics := fakeHostMetrics{byHost: map[string]hosts.Metrics{
 		"host-1": {CPUPercent: 12.5, MemUsedBytes: 100, MemTotalBytes: 1000},
 	}}
-	h := handleListHosts(registry, metrics, nil)
+	h := handleListHosts(registry, metrics, nil, nil)
 
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest(http.MethodGet, "/api/v1/hosts", nil))
@@ -197,5 +199,57 @@ func TestHandleHostMetricsHistoryInvalidWindowFallsBackToDefault(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (invalid window silently falls back)", rec.Code)
+	}
+}
+
+func TestHandleDeleteHost(t *testing.T) {
+	online := fakeHostMetrics{byHost: map[string]hosts.Metrics{"on": {ReceivedAt: time.Now()}}}
+	cases := []struct {
+		name, id string
+		reg      fakeHostRegistry
+		want     int
+	}{
+		{"offline host removed", "off", fakeHostRegistry{}, http.StatusNoContent},
+		{"online host refused", "on", fakeHostRegistry{}, http.StatusConflict},
+		{"unknown host", "x", fakeHostRegistry{deleteErr: hosts.ErrHostNotFound}, http.StatusNotFound},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/hosts/"+c.id, nil)
+		req.SetPathValue("id", c.id)
+		rec := httptest.NewRecorder()
+		handleDeleteHost(c.reg, online, nil)(rec, req)
+		if rec.Code != c.want {
+			t.Errorf("%s: status = %d, want %d", c.name, rec.Code, c.want)
+		}
+	}
+}
+
+type fakeMaint struct{ on map[string]bool }
+
+func (f fakeMaint) Enter(string) error { return nil }
+func (f fakeMaint) Leave(string) error { return nil }
+func (f fakeMaint) Status(id string) (maintenance.Status, bool) {
+	return maintenance.Status{}, f.on[id]
+}
+
+func TestBlockMaintenanceHost(t *testing.T) {
+	m := fakeMaint{on: map[string]bool{"wartung": true}}
+	called := 0
+	h := blockMaintenanceHost(m, "hostId", func(w http.ResponseWriter, r *http.Request) {
+		called++
+		b, _ := io.ReadAll(r.Body)
+		if len(b) == 0 {
+			t.Error("body must stay readable")
+		}
+	})
+	for body, want := range map[string]int{`{"hostId":"wartung"}`: http.StatusConflict, `{"hostId":"frei"}`: http.StatusOK, `{}`: http.StatusOK} {
+		rec := httptest.NewRecorder()
+		h(rec, httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body)))
+		if rec.Code != want {
+			t.Errorf("%s: status = %d, want %d", body, rec.Code, want)
+		}
+	}
+	if called != 2 {
+		t.Errorf("next called %d times, want 2", called)
 	}
 }
