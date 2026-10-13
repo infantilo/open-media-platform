@@ -2973,6 +2973,36 @@ export class FlowCanvas extends HTMLElement {
   // Gruppen die Bounding-Box durch Kind-Positionen verzerrt, die auf
   // dieser Ebene gar nicht gerendert werden.
   #fitAllToViewport() {
+    // Host-Ansicht am Root: über ALLE Zonen (Hosts) einpassen, nicht nur
+    // auf die Kacheln der lokalen Zone — Bounding-Box = Lane-Rahmen.
+    if (this.#hostViewEnabled && this.#scope === null && !this.#workflowEditId) {
+      const tiles = this.#rootZoneTiles();
+      const zones = this.#hostZones(tiles);
+      const offsets = this.#laneOffsets(tiles);
+      const last = zones[zones.length - 1];
+      const rect = this.#svg.getBoundingClientRect();
+      if (last && rect.width > 0 && rect.height > 0) {
+        const minX = HOST_ZONE_MARGIN;
+        const maxX = offsets.get(last.id)! + this.#laneWidth(last.id);
+        let maxY = 0;
+        for (const z of zones) {
+          const b = this.#collapsedZoneIds.has(z.id)
+            ? HOST_ZONE_HEADER_HEIGHT + HOST_ZONE_MARGIN * 2
+            : this.#zoneContentBottom(z.id, tiles);
+          maxY = Math.max(maxY, b);
+        }
+        const pad = 24;
+        const scale = Math.min(1, (rect.width - 2 * pad) / (maxX - minX), (rect.height - 2 * pad) / maxY);
+        this.#viewport = {
+          x: rect.width / 2 - ((minX + maxX) / 2) * scale,
+          y: pad,
+          scale,
+        };
+        this.#applyViewportTransform();
+        this.#saveLayout();
+        return;
+      }
+    }
     const ids = this.#itemsAtScope();
     this.#viewport = this.#fitViewportToIds([...ids.nodeIds, ...ids.groupIds]);
     this.#applyViewportTransform();
