@@ -85,11 +85,11 @@ export function audioMixerAdapter(io: MixerIO): StreamDeckAdapter & { onChange: 
   async function run(x: AudioAction) {
     try {
       if (x.t === "select") {
-        if (st.sel === x.id) {
-          st.mode = "eq";
-          st.focus = 0;
-          await a.refresh();
-        } else st.sel = x.id;
+        // Ein Druck öffnet direkt die Detailseiten (EQ); „◀ Mix“ führt zurück.
+        st.sel = x.id;
+        st.mode = "eq";
+        st.focus = 0;
+        await a.refresh();
       } else if (x.t === "mode") {
         st.mode = x.mode;
         st.focus = 0;

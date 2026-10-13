@@ -81,7 +81,7 @@ Deno.test("Schrittrechnung: Rasterung und Grenzen", () => {
   assertEquals(MODE_PARAMS.pan.params[0].set(0.25), { method: "setPan", body: { pan: 0.25 } });
 });
 
-Deno.test("Adapter: Tastendruck → channel.<id>.<methode> mit Argumenten; Select zweimal → Detail", async () => {
+Deno.test("Adapter: Tastendruck → channel.<id>.<methode> mit Argumenten; Select einmal → Detail", async () => {
   const calls: unknown[] = [];
   const params: Record<string, unknown> = { channels: JSON.stringify(chans(2)), "channel.c0.gain": -3, "channel.c0.mute": false, "channel.c1.mute": true };
   const io: MixerIO = {
@@ -97,10 +97,7 @@ Deno.test("Adapter: Tastendruck → channel.<id>.<methode> mit Argumenten; Selec
   a.onKey(0, 0, true); a.onKey(0, 0, false);
   await new Promise((r) => setTimeout(r, 10));
   assertEquals(calls, [["channel.c0.setMute", { muted: true }]]);
-  a.onKey(2, 0, true); // wählen
-  await new Promise((r) => setTimeout(r, 10));
-  assertEquals(a.getLayout(ctx).keys[2][0]?.state, "preset");
-  a.onKey(2, 0, true); // nochmal → Detail
+  a.onKey(2, 0, true); // ein Druck → Detail
   await new Promise((r) => setTimeout(r, 20));
   assertEquals(a.getLayout(ctx).keys[0][0]?.label, "◀ Mix");
   calls.length = 0;
