@@ -59,6 +59,62 @@ function wrap(g: OffscreenCanvasRenderingContext2D, text: string, maxW: number, 
   });
 }
 
+type Ctx = OffscreenCanvasRenderingContext2D;
+
+/** Umbruch an Wortgrenzen; zu lange Wörter werden zeichenweise getrennt (ohne Auslassungspunkte). */
+function wrapHard(g: Ctx, text: string, maxW: number): string[] {
+  const lines: string[] = [];
+  let cur = "";
+  const push = () => {
+    if (cur) lines.push(cur);
+    cur = "";
+  };
+  for (const w of text.split(/\s+/).filter(Boolean)) {
+    const next = cur ? `${cur} ${w}` : w;
+    if (g.measureText(next).width <= maxW) {
+      cur = next;
+      continue;
+    }
+    push();
+    if (g.measureText(w).width <= maxW) {
+      cur = w;
+      continue;
+    }
+    for (const ch of w) { // überlanges Wort
+      if (g.measureText(cur + ch).width > maxW && cur) push();
+      cur += ch;
+    }
+  }
+  push();
+  return lines;
+}
+
+/** Größte Schrift (maxFs…minFs), bei der der umbrochene Text in die Box passt; sonst kleinste mit „…“ in der letzten Zeile. */
+function fitText(g: Ctx, text: string, maxW: number, maxH: number, maxFs: number, minFs: number, weight: string): { lines: string[]; fs: number } {
+  let lines: string[] = [];
+  let fs = maxFs;
+  // 1. Durchgang: größte Schrift, bei der kein Wort getrennt werden muss; 2.: Wörter zeichenweise trennen.
+  for (const noSplit of [true, false]) {
+    for (fs = maxFs; fs >= minFs; fs -= 1) {
+      g.font = `${weight} ${fs}px sans-serif`;
+      if (noSplit && text.split(/\s+/).some((w) => g.measureText(w).width > maxW)) continue;
+      lines = wrapHard(g, text, maxW);
+      if (lines.length * fs * 1.12 <= maxH) return { lines, fs };
+    }
+  }
+  fs = minFs;
+  g.font = `${weight} ${fs}px sans-serif`;
+  lines = wrapHard(g, text, maxW);
+  const n = Math.max(1, Math.floor(maxH / (fs * 1.12)));
+  if (lines.length > n) {
+    lines.length = n;
+    let l = lines[n - 1];
+    while (l.length > 1 && g.measureText(`${l}…`).width > maxW) l = l.slice(0, -1);
+    lines[n - 1] = `${l}…`;
+  }
+  return { lines, fs };
+}
+
 async function toJpeg(c: OffscreenCanvas): Promise<Uint8Array> {
   const b = await c.convertToBlob({ type: "image/jpeg", quality: 0.92 });
   return new Uint8Array(await b.arrayBuffer());
@@ -83,24 +139,28 @@ export function drawKey(def: KeyDef | null, m: DeckModel): OffscreenCanvas {
   g.textAlign = "center";
   g.textBaseline = "middle";
   g.fillStyle = resolveColor("--omp-text");
-  let y = s * 0.5;
+  g.fillStyle = resolveColor("--omp-text");
+  const maxW = s - 10;
+  let top = 6;
+  let bottom = s - 6;
   if (def.icon) {
-    g.font = `${Math.round(s * 0.34)}px sans-serif`;
-    g.fillText(def.icon, s / 2, s * 0.3);
-    y = s * 0.66;
+    g.font = `${Math.round(s * 0.3)}px sans-serif`;
+    g.fillText(def.icon, s / 2, top + s * 0.16);
+    top += s * 0.3;
+  }
+  if (def.sub) {
+    const sub = fitText(g, def.sub, maxW, s * 0.2, Math.round(s * 0.15), Math.round(s * 0.1), "");
+    g.fillStyle = lit ? "rgba(255,255,255,0.85)" : resolveColor("--omp-text-dim");
+    const lh = sub.fs * 1.12;
+    sub.lines.forEach((l, i) => g.fillText(l, s / 2, bottom - (sub.lines.length - i - 0.5) * lh));
+    bottom -= sub.lines.length * lh + 2;
   }
   if (def.label) {
-    const fs = Math.round(s * (def.icon ? 0.17 : 0.2));
-    g.font = `bold ${fs}px sans-serif`;
-    const lines = wrap(g, def.label, s - 10, def.icon ? 2 : 3);
-    const top = y - ((lines.length - 1) * fs * 1.1) / 2 - (def.sub ? fs * 0.5 : 0);
-    lines.forEach((l, i) => g.fillText(l, s / 2, top + i * fs * 1.1));
-    if (def.sub) {
-      g.font = `${Math.round(s * 0.14)}px sans-serif`;
-      g.fillStyle = lit ? "rgba(255,255,255,0.85)" : resolveColor("--omp-text-dim");
-      const sub = wrap(g, def.sub, s - 10, 1)[0] ?? "";
-      g.fillText(sub, s / 2, top + lines.length * fs * 1.1 + fs * 0.1);
-    }
+    g.fillStyle = resolveColor("--omp-text");
+    const lab = fitText(g, def.label, maxW, Math.max(s * 0.2, bottom - top), Math.round(s * (def.icon ? 0.19 : 0.24)), Math.round(s * 0.11), "bold");
+    const lh = lab.fs * 1.12;
+    const y0 = top + (bottom - top - lab.lines.length * lh) / 2 + lh / 2;
+    lab.lines.forEach((l, i) => g.fillText(l, s / 2, y0 + i * lh));
   }
   if (def.dim) {
     g.fillStyle = "rgba(0,0,0,0.6)";
