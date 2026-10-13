@@ -141,3 +141,111 @@ Deno.test("Adapter: Kategorie-Taste filtert Quellen, „mehr“ blättert", asyn
   const small = layoutXy(state({ sources: Array.from({ length: 12 }, (_, i) => pt(`n${i}`, `P${i}`)) }), 5, 3, 0, 0);
   assertEquals(small.keys[2][1]?.label, "mehr ▶"); // letzte Punktzelle der linken Seite
 });
+
+// ---- Ebenen und Bouquets (Kap. 40.7 Folge) ------------------------------------
+
+import "../../../../nodes/omp-xy-panel/ui/logic.js";
+// deno-lint-ignore no-explicit-any
+const OL = (globalThis as any).OmpXyLogic;
+
+const np = (id: string, label: string, nodeId: string, nodeLabel: string, media = "video"): Point => ({ id, label, nodeLabel, nodeId, mediaType: media, online: true, tags: [] });
+const lvlNodes = [
+  { id: "cam", label: "Kamera" },
+  { id: "mix", label: "Mischer" },
+  { id: "mon", label: "Monitor" },
+  { id: "lone", label: "Einzel" },
+];
+const lvlTree = {
+  groups: {
+    g1: { id: "g1", label: "Studio", parentId: null, nodeIds: ["cam"], groupIds: ["g2"] },
+    g2: { id: "g2", label: "Regie", parentId: "g1", nodeIds: ["mix"], groupIds: [] },
+  },
+};
+const lvlState = (over: Partial<XyState> = {}): XyState => ({
+  sources: [np("s1", "Cam 1", "cam", "Kamera"), np("s2", "Mix PGM", "mix", "Mischer"), np("s3", "Einzel", "lone", "Einzel")],
+  sinks: [np("r1", "Monitor", "mon", "Monitor"), np("r2", "Mix In", "mix", "Mischer")],
+  routes: {}, selSrc: null, selDst: null, media: "", auto: true, srcOff: 0, dstOff: 0,
+  srcPath: [], dstPath: [], model: OL.buildModel({ nodes: lvlNodes, groupTree: lvlTree, workflows: [] }), ...over,
+});
+
+Deno.test("Ebenen: Home zeigt Alle + Ordner; Ordner begrenzt die Punkte rekursiv", () => {
+  const home = layoutXy(lvlState(), 9, 4, 0, 0);
+  assertEquals(home.keys[0].slice(0, 3).map((k) => k?.label), ["Alle", "Studio", "Nicht zugewiesen"]);
+  assertEquals(home.act[0][1], { t: "folder", side: "src", id: "grp:g1" });
+  assertEquals(home.keys[1].slice(0, 4).map((k) => k?.label), ["Kamera", "Mischer", "Einzel", undefined]); // Home = alle (Tastentext = Node-Name bei einem Punkt)
+  const inG1 = layoutXy(lvlState({ srcPath: ["grp:g1"] }), 9, 4, 0, 0);
+  assertEquals(inG1.keys[0].slice(0, 4).map((k) => k?.label), ["↑ Hoch", "Studio", "Regie", "Kamera"]);
+  assertEquals(inG1.keys[0][1]?.state, "preset"); // ganzer Ordner
+  assertEquals(inG1.keys[1].slice(0, 3).map((k) => k?.label), ["Kamera", "Mischer", undefined]); // inkl. Untergruppe Regie
+  const inG2 = layoutXy(lvlState({ srcPath: ["grp:g1", "grp:g2"] }), 9, 4, 0, 0);
+  assertEquals(inG2.keys[1].slice(0, 2).map((k) => k?.label), ["Mischer", undefined]);
+  assertEquals(inG2.act[0][0], { t: "up", side: "src" });
+});
+
+Deno.test("Ebenen: ohne Ordner (nur ‚Nicht zugewiesen‘) bleibt die Node-Kategorie-Zeile", () => {
+  const s = lvlState({ model: OL.buildModel({ nodes: lvlNodes, groupTree: { groups: {} }, workflows: [] }) });
+  const l = layoutXy(s, 9, 4, 0, 0);
+  assertEquals(l.keys[0].slice(0, 4).map((k) => k?.label), ["Alle", "Kamera", "Mischer", "Einzel"]);
+});
+
+const bq = (id: string, name: string, kind = "routes", extra = {}) => ({ id, name, kind, routes: [], ...extra });
+
+Deno.test("Bouquets: eigene Seiten hinter dem Kreuzschienen-Seite, Seitentaste bleibt frei, Rückgängig oben links", () => {
+  const s = lvlState({ bouquets: [bq("b1", "Morgen"), bq("b2", "Abend", "tags")], undoSecs: 42 });
+  const p0 = layoutXy(s, 9, 4, 0, 0);
+  assertEquals(p0.pages, 2);
+  assertEquals(p0.keys[3][8], null); // unten rechts frei für „Seite weiter“
+  const p1 = layoutXy(s, 9, 4, 0, 1);
+  assertEquals(p1.keys[0][0]?.label, "↶ Zurück");
+  assertEquals(p1.keys[0][0]?.sub, "42 s");
+  assertEquals(p1.keys[0][1]?.label, "Morgen");
+  assertEquals(p1.keys[0][2]?.sub, "per Tags");
+  assertEquals(p1.act[0][1], { t: "bq", id: "b1" });
+  assertEquals(p1.keys[3][8], null);
+  // keine Bouquets → eine Seite wie bisher
+  assertEquals(layoutXy(lvlState(), 9, 4, 0, 0).pages, 1);
+});
+
+Deno.test("Bouquets: kleine Decks hängen die Bouquet-Seiten an die Seiten der Kreuzschiene an", () => {
+  const s = lvlState({ bouquets: [bq("b1", "Morgen")] });
+  const l0 = layoutXy(s, 4, 1, 0, 0);
+  const total = l0.pages ?? 1;
+  const last = layoutXy(s, 4, 1, 0, total - 1);
+  assertEquals(last.keys[0][0]?.label, "↶ Zurück");
+  assertEquals(last.keys[0][1]?.label, "Morgen");
+});
+
+Deno.test("Adapter: Bouquet schaltet, Rückgängig stellt zurück; Bündel braucht ein Ziel", async () => {
+  const calls: string[] = [];
+  const src = [np("s1", "Cam 1", "cam", "Kamera"), np("s2", "Cam 2", "cam", "Kamera")];
+  const snk = [np("r1", "Monitor", "mon", "Monitor"), np("r2", "Mix In", "mix", "Mischer")];
+  const routes: Record<string, string> = { r1: "s2" };
+  const b1 = OL.routesBouquet("Test", [{ from: src[0], to: snk[0] }, { from: src[0], to: snk[1] }]);
+  const bundle = OL.bundleBouquet("Bündel", [src[0]], "order");
+  const io: XyIO = {
+    load: () => Promise.resolve({ sources: src, sinks: snk, routes: { ...routes }, nodes: lvlNodes, groupTree: { groups: {} }, workflows: [], bouquets: [b1, bundle] }),
+    connect: (f, t) => { calls.push(`+${f}>${t}`); routes[t] = f; return Promise.resolve(); },
+    disconnect: (t) => { calls.push(`-${t}`); delete routes[t]; return Promise.resolve(); },
+  };
+  const errs: unknown[] = [];
+  const a = xyPanelAdapter(io);
+  a.onError = (e) => errs.push(e);
+  await a.refresh?.();
+  a.getLayout({ cols: 9, rows: 3, dials: 0, page: 1 }); // rows ohne Kopfzeile
+  const k = (page: number) => a.getLayout({ cols: 9, rows: 3, dials: 0, page });
+  k(1);
+  a.onKey(0, 1, true); // Bouquet „Test“
+  await new Promise((r) => setTimeout(r, 20));
+  assertEquals(calls, ["+s1>r1", "+s1>r2"]);
+  const after = k(1);
+  assertEquals(after.keys[0][1]?.state, "onair");
+  a.onKey(0, 0, true); // Rückgängig
+  await new Promise((r) => setTimeout(r, 20));
+  assertEquals(calls.slice(2), ["+s2>r1", "-r2"]);
+  // Bündel ohne Ziel: Fehlermeldung, nichts geschaltet
+  a.onKey(0, 2, true);
+  await new Promise((r) => setTimeout(r, 20));
+  assertEquals(calls.length, 4);
+  assertEquals(String((errs[0] as Error).message).includes("Ziel wählen"), true);
+  a.dispose?.();
+});
