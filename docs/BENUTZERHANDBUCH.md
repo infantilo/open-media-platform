@@ -1505,6 +1505,14 @@ Grafiken. Feldwerte (Texte der Grafik) lassen sich am Gerät nicht bearbeiten �
 ![OGraf am XL: eine Grafik steht on air (rot), TAKE OUT und ALLE AUS sind scharf](screenshots/streamdeck-xl-ograf-onair.png)
 ![OGraf am + XL: Presets, Steuerzeile und Dial-Anzeigen](screenshots/streamdeck-plusxl-ograf.png)
 
+### Geräte-Hub (Ein-/Ausgangsgeräte)
+
+Je erkanntem Ein- oder Ausgangsgerät (Kamera, Capture-Karte, Audio-Ein-/Ausgang) eine Taste: **grün = EIN** (Gerät wird angeboten bzw. als
+Ausgang bereitgestellt), **grau = AUS**, **rot** bei einem Gerätefehler, gedimmt wenn das Gerät gerade fehlt. Die Beschriftung zeigt Name sowie
+„Video/Audio Ein/Aus · EIN/AUS“; Drücken schaltet um (wie der Schalter im Panel, das Ergebnis bestätigt der Hub nach wenigen Sekunden). Die erste
+Taste **NEU SUCHEN** startet die Geräteerkennung. Viele Geräte blättern über „⇄ n/m“; die Dials am „+“ zeigen die Zahl der angebotenen
+Geräte, Ein- und Ausgänge sowie Fehler.
+
 ### X/Y-Panel (Kreuzschiene)
 
 Zeile 1 Quellen, Zeile 2 Ziele (zeigt die aktuell geschaltete Quelle), Zeile 3 **TAKE**, **AUTO** (schaltet sofort bei Auswahl beider Seiten),

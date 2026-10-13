@@ -98,7 +98,7 @@ Die Adapter-Auflösung hat jetzt drei Stufen (`ui/shell/streamdeck/adapters/inde
 - **Modelle:** XL, XL 2022, 15-Tasten-Familie, „+“, „+ XL“ (`0x00C6`: 9×4, 112 px, 6 Dials, Streifen 1200×100, 90° gegen den Uhrzeigersinn; Quelle: Hersteller-HID-Seite).
   Die Drehung ist eine Modelleigenschaft (`rotation` 0/90/180) für Tastenbilder **und** Streifen-Teilbilder; Teilbild-Koordinaten bleiben logisch.
 - **Adapter** (`ui/shell/streamdeck/adapters/`): Video-Mixer (`deckApi` im Bundle), Audio-Mixer (Mix-Seite, EQ/Dynamik/Pan; SELECT öffnet mit einem Druck;
-  Kurven über Tasten/Streifen), **OGraf** (Presets, TAKE/TAKE OUT/CONTINUE/ALLE AUS, On-Air rot), X/Y-Panel; sonst Auto-Raster. Auflösung: §6.
+  Kurven über Tasten/Streifen), **OGraf** (Presets, TAKE/TAKE OUT/CONTINUE/ALLE AUS, On-Air rot), X/Y-Panel, **Geräte-Hub** (EIN/AUS-Taste je Ein-/Ausgangsgerät + NEU SUCHEN); sonst Auto-Raster. Auflösung: §6.
 - **Kopfzeile:** Home + Tabs; Home zeigt Tabs nicht doppelt (nur Überlauf darunter). **Text:** Umbruch und automatische Schriftgröße, „…“ nur im Notfall.
 - **Takt:** `refresh()` des aktiven Tabs alle 1,5 s, nicht gestapelt, 8-s-Limit; Änderungen über `onChange`/`omp-streamdeck-relayout`.
 - **Simulator** (`/streamdeck-sim`, im Konsolen-Panel) skaliert auf die Fensterbreite; Screenshots in `docs/screenshots/streamdeck-*.png`.

@@ -5,6 +5,7 @@
 import { adapterOf, type StreamDeckAdapter } from "../adapter.ts";
 import { proxyIO } from "../autoraster.ts";
 import { audioMixerAdapter } from "./audio-mixer.ts";
+import { deviceHubAdapter } from "./device-hub.ts";
 import { ografAdapter } from "./ograf.ts";
 import { coreIO, xyPanelAdapter } from "./xy-panel.ts";
 import { videoMixerAdapter, type VideoMixerApi } from "./video-mixer.ts";
@@ -18,6 +19,7 @@ const FACTORIES: Record<string, Factory | undefined> = {
   },
   "omp-xy-panel": () => xyPanelAdapter(coreIO()),
   "omp-ograf-panel": (_el, nodeId) => ografAdapter(proxyIO(nodeId)),
+  "omp-device-hub-panel": (_el, nodeId) => deviceHubAdapter(proxyIO(nodeId)),
   "omp-audio-mixer-panel": (_el, nodeId) => audioMixerAdapter(proxyIO(nodeId)),
 };
 
