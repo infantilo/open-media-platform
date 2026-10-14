@@ -53,3 +53,4 @@ build/
 
 # Offline-Archive (z. B. avvideofilter-*.tar.gz), von Hand abgelegt: docs/INSTALLATION.md §9
 /deploy/dev/vendor/
+/tools/update-bundle/update-bundle
