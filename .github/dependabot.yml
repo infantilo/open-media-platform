@@ -1,0 +1,29 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directories:
+      - /orchestrator
+      - /nodes/mock
+      - /tools/contract-check
+      - /tools/nmos-conformance-check
+      - /tools/update-bundle
+      - /host-agent
+      - /supervisor
+      - /update
+      - /nodeoptions
+    schedule:
+      interval: weekly
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: cargo
+    directory: /nodes
+    schedule:
+      interval: weekly
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

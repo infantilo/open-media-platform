@@ -596,8 +596,13 @@ Being upfront about the current edges, not just the highlights:
   a group. Inside OMP, the X/Y panel's "all ports" button routes a whole
   node's video and audio together (by shared tags, otherwise 1:1).
 - **No independent security audit.** Auth, mTLS, and audit logging
-  exist and are exercised by the test suite, but there has been no
-  external penetration test or formal security review.
+  exist and are exercised by the test suite. Automated scanning runs on
+  GitHub (CodeQL for Go and TypeScript, `govulncheck`, `cargo audit`,
+  Dependabot; Secret Scanning with push protection is a repository
+  setting), but there has been no external penetration test or formal
+  manual security review. Scanners find known vulnerability classes and
+  vulnerable dependencies, not logic flaws in auth, mTLS or the
+  permission model.
 - **Not production-hardened at broadcast scale.** This is a working
   proof of concept, developed on a laptop-class
   machine and installed on a Proxmox VM — it has not been run in a real multi-day,
