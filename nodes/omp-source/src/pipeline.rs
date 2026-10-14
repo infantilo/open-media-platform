@@ -312,14 +312,19 @@ impl Pipeline {
         // Schreiben bis zu einem Bild verschoben, Ton (Sample-genau) nicht → bis ~40 ms
         // Ton-Vorlauf. Laufzeit 0 auf den nächsten Rasterpunkt legen: Bild- und Ton-PTS
         // treffen dann exakt das Raster (40 ms = Vielfaches von 1/48000 s).
+        // ACHTUNG: derzeit AUS (nur mit OMP_SOURCE_GRID_BASETIME=1). Gemessen 2026-10-14: mit diesem
+        // Block liefert der Source nach ~1 s keine Bilder mehr (0 fps, Flow ungültig) — Ursache offen.
+        let grid_basetime = std::env::var("OMP_SOURCE_GRID_BASETIME").is_ok_and(|v| v == "1");
         if let Some(grid) = mxl_context.index_to_ns(
             mxl_context.ns_to_index(mxl_context.now_ns(), config.framerate_numerator, config.framerate_denominator).unwrap_or(0) + 1,
             config.framerate_numerator,
             config.framerate_denominator,
         ) {
             let tai_now = mxl_context.now_ns();
-            let clock = gst::SystemClock::obtain();
-            if grid > tai_now {
+            // Die Uhr der PIPELINE (nicht blind die Systemuhr): sonst steht die Laufzeit falsch und
+            // der Live-Source liefert nichts mehr (gemessen: 0 fps).
+            let clock = pipeline.pipeline_clock();
+            if grid_basetime && grid > tai_now {
                 pipeline.set_start_time(gst::ClockTime::NONE);
                 pipeline.set_base_time(clock.time() + gst::ClockTime::from_nseconds(grid - tai_now));
             }
