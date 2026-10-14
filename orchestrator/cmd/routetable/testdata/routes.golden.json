@@ -42,6 +42,24 @@
     "domain": "core"
   },
   {
+    "method": "DELETE",
+    "path": "/api/v1/admin/hosts/{id}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/hosts/{id}/maintenance",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/hosts/{id}/maintenance",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
     "method": "GET",
     "path": "/api/v1/admin/node-versions",
     "auth": "verb:Admin",
@@ -607,13 +625,13 @@
   {
     "method": "POST",
     "path": "/api/v1/graph/edges",
-    "auth": "verb:Configure",
+    "auth": "custom:g.requireVerbOnReceiver",
     "domain": "core"
   },
   {
     "method": "DELETE",
     "path": "/api/v1/graph/edges/{id}",
-    "auth": "verb:Configure",
+    "auth": "custom:g.requireVerbOnReceiver",
     "domain": "core"
   },
   {
@@ -687,6 +705,12 @@
   {
     "method": "GET",
     "path": "/api/v1/hosts",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/hosts/local",
     "auth": "auth",
     "domain": "core"
   },
