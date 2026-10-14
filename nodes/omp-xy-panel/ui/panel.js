@@ -9,7 +9,7 @@ const XY_T = (() => {
       sources: "Quellen", sinks: "Ziele", home: "Home", up: "Eine Ebene hoch",
       unassigned: "Nicht zugewiesen", all: "Alle", video: "Video", audio: "Audio", data: "Daten",
       search: "Suchen (Name, Node, Tag) …", empty: "Nichts auf dieser Ebene.", offline: "offline",
-      take: "Take", disconnect: "Trennen", clear: "Auswahl aufheben", autoTake: "Sofort schalten",
+      take: "Take", nodeAll: "Alle Ports", nodeAllTip: "Ganzen Node wählen: Video und Audio gemeinsam schalten (nach Tags, sonst 1:1)", nodeRouted: "{n} Verbindungen geschaltet ({tag} nach Tags, {order} 1:1)", nodeNoPairs: "Keine passenden Ports zwischen {from} und {to}.", disconnect: "Trennen", clear: "Auswahl aufheben", autoTake: "Sofort schalten",
       noSource: "keine Quelle gewählt", noSink: "kein Ziel gewählt", from: "Quelle", to: "Ziel",
       routed: "{from} → {to} geschaltet", disconnected: "{to} getrennt",
       failed: "Schalten fehlgeschlagen: {detail}", incompatible: "Quelle und Ziel passen nicht zusammen (Medientyp).",
@@ -35,7 +35,7 @@ const XY_T = (() => {
       sources: "Sources", sinks: "Destinations", home: "Home", up: "Up one level",
       unassigned: "Unassigned", all: "All", video: "Video", audio: "Audio", data: "Data",
       search: "Search (name, node, tag) …", empty: "Nothing at this level.", offline: "offline",
-      take: "Take", disconnect: "Disconnect", clear: "Clear selection", autoTake: "Switch immediately",
+      take: "Take", nodeAll: "All ports", nodeAllTip: "Select the whole node: route video and audio together (by tags, otherwise 1:1)", nodeRouted: "{n} connections routed ({tag} by tags, {order} 1:1)", nodeNoPairs: "No matching ports between {from} and {to}.", disconnect: "Disconnect", clear: "Clear selection", autoTake: "Switch immediately",
       noSource: "no source selected", noSink: "no destination selected", from: "Source", to: "Destination",
       routed: "{from} → {to} routed", disconnected: "{to} disconnected",
       failed: "Routing failed: {detail}", incompatible: "Source and destination do not match (media type).",
@@ -80,6 +80,8 @@ input[type=search], select { font: inherit; color: inherit; background: var(--om
 .root { display: flex; flex-direction: column; gap: 8px; min-height: 320px; }
 .top { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
 .top .grp { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.nodeall { font-size: 11px; padding: 1px 8px; margin-left: 6px; }
+.nodeall.sel { outline: 2px solid currentColor; }
 .auto { display: flex; gap: 6px; align-items: center; min-height: 36px; }
 .tabs { display: none; gap: 8px; }
 .tabs button { flex: 1; min-height: 44px; }
@@ -183,7 +185,7 @@ class OmpXyPanel extends HTMLElement {
         src: { path: [], media: "", query: "" },
         dst: { path: [], media: "", query: "" },
       },
-      selSrc: null, selDst: null,
+      selSrc: null, selDst: null, selSrcNode: null, selDstNode: null,
       auto: localStorage.getItem("omp-xy-auto") !== "0",
       tab: "src",
       draft: null, // null = aus, sonst [{from,to}]
@@ -277,6 +279,8 @@ class OmpXyPanel extends HTMLElement {
         st.model = L.buildModel({ nodes: st.nodes, groupTree: st.groupTree, workflows: st.workflows });
         // Auswahl verwerfen, wenn der Punkt verschwunden ist; Pfade auf gültige Ordner kürzen.
         if (st.selSrc && !bySrc().has(st.selSrc)) st.selSrc = null;
+        if (st.selSrcNode && !st.sources.some((x) => x.nodeId === st.selSrcNode)) st.selSrcNode = null;
+        if (st.selDstNode && !st.sinks.some((x) => x.nodeId === st.selDstNode)) st.selDstNode = null;
         if (st.selDst && !byDst().has(st.selDst)) st.selDst = null;
         for (const s of [st.side.src, st.side.dst]) {
           const ok = s.path.findIndex((f) => !st.model.folders.has(f));
@@ -366,7 +370,38 @@ class OmpXyPanel extends HTMLElement {
       return { ok, bad };
     }
 
+    /** Ganzer Node → ganzer Node: Ports gleichen Medientyps nach gemeinsamen Tags, sonst der Reihe nach 1:1. */
+    async function doNodeTake(srcNode, dstNode) {
+      const srcs = st.sources.filter((x) => x.nodeId === srcNode);
+      const dsts = st.sinks.filter((x) => x.nodeId === dstNode);
+      const plan = L.planTagRoutes(srcs, dsts, { fallbackOrder: true });
+      const from = nodeNameById(srcNode), to = nodeNameById(dstNode);
+      if (!plan.routes.length) { setMsg(t("nodeNoPairs", { from, to }), true); return; }
+      const { ok, bad } = await runRoutes(plan.routes);
+      st.selDstNode = null;
+      if (bad.length) setMsg(t("failed", { detail: bad.join("; ") }), true);
+      else setMsg(t("nodeRouted", { n: ok, tag: plan.routes.filter((r) => r.reason === "tag").length, order: plan.routes.filter((r) => r.reason === "order").length }));
+      render();
+    }
+    function nodeNameById(id) {
+      const p = st.sources.find((x) => x.nodeId === id) || st.sinks.find((x) => x.nodeId === id);
+      return st.names.get(id) ?? L.stripInstanceId(p ? p.nodeLabel : id);
+    }
+    function pickNode(kind, id) {
+      if (kind === "src") {
+        st.selSrcNode = st.selSrcNode === id ? null : id; st.selSrc = null;
+        if (st.selSrcNode && st.selDstNode && st.auto) { doNodeTake(st.selSrcNode, st.selDstNode); return; }
+        if (st.selSrcNode) st.tab = "dst";
+      } else {
+        st.selDstNode = st.selDstNode === id ? null : id; st.selDst = null;
+        if (st.selDstNode && st.selSrcNode && st.auto) { doNodeTake(st.selSrcNode, st.selDstNode); return; }
+        if (st.selDstNode && !st.selSrcNode) setMsg(t("pickSourceFirst"));
+      }
+      render();
+    }
+
     function pick(kind, p) {
+      if (kind === "src") st.selSrcNode = null; else st.selDstNode = null;
       if (kind === "src" && st.bundle) {
         const i = st.bundle.items.findIndex((x) => x.id === p.id);
         if (i >= 0) st.bundle.items.splice(i, 1); else st.bundle.items.push(p);
@@ -459,8 +494,12 @@ class OmpXyPanel extends HTMLElement {
               xyEl("span", { text: L.folderLabel(f, t) }), xyEl("small", { text: String(f.count) })))));
         }
         for (const n of l2.nodes) {
+          const nsel = (kind === "src" ? st.selSrcNode : st.selDstNode) === n.id;
           const det = xyEl("details", { class: "node", open: n.points.length <= 8 || s.query.trim() ? true : null },
-            xyEl("summary", { text: `${st.names.get(n.id) ?? L.stripInstanceId(n.label)} (${n.points.length})` }),
+            xyEl("summary", {},
+              `${st.names.get(n.id) ?? L.stripInstanceId(n.label)} (${n.points.length}) `,
+              n.points.length > 1 ? xyEl("button", { class: "nodeall" + (nsel ? " sel" : ""), title: t("nodeAllTip"), "aria-pressed": nsel ? "true" : "false",
+                onclick: (e) => { e.preventDefault(); e.stopPropagation(); pickNode(kind, n.id); } }, "⇉ " + t("nodeAll")) : ""),
             xyEl("div", { class: "points" }, n.points.map((p) => renderPoint(kind, p, routeOfSink, srcMap))));
           listHost.append(det);
         }
@@ -474,15 +513,16 @@ class OmpXyPanel extends HTMLElement {
       const src = bySrc().get(st.selSrc);
       const dst = byDst().get(st.selDst);
       const connected = dst && L.routeMap(st.edges).has(dst.id);
+      const nodeMode = st.selSrcNode && st.selDstNode;
       const txt = xyEl("div", { class: "txt" },
-        xyEl("span", {}, t("from") + ": "), src ? xyEl("b", { text: pointName(src) }) : xyEl("i", { text: t("noSource") }),
+        xyEl("span", {}, t("from") + ": "), src ? xyEl("b", { text: pointName(src) }) : st.selSrcNode ? xyEl("b", { text: "⇉ " + nodeNameById(st.selSrcNode) }) : xyEl("i", { text: t("noSource") }),
         "  →  ",
-        xyEl("span", {}, t("to") + ": "), dst ? xyEl("b", { text: pointName(dst) }) : xyEl("i", { text: t("noSink") }));
+        xyEl("span", {}, t("to") + ": "), dst ? xyEl("b", { text: pointName(dst) }) : st.selDstNode ? xyEl("b", { text: "⇉ " + nodeNameById(st.selDstNode) }) : xyEl("i", { text: t("noSink") }));
       return xyEl("div", { class: "bar" }, txt,
-        xyEl("button", { class: "go", disabled: !(src && dst), onclick: () => doTake(src, dst) }, t("take")),
+        xyEl("button", { class: "go", disabled: !(nodeMode || (src && dst)), onclick: () => nodeMode ? doNodeTake(st.selSrcNode, st.selDstNode) : doTake(src, dst) }, t("take")),
         xyEl("button", { disabled: !connected, onclick: () => doDisconnect(dst) }, t("disconnect")),
         xyEl("button", { id: "undo", disabled: !liveUndo(), onclick: doUndo }, "↶ " + t("undo")),
-        xyEl("button", { disabled: !(src || dst), onclick: () => { st.selSrc = null; st.selDst = null; render(); }, title: t("clear") }, "✕"));
+        xyEl("button", { disabled: !(src || dst || st.selSrcNode || st.selDstNode), onclick: () => { st.selSrc = null; st.selDst = null; st.selSrcNode = null; st.selDstNode = null; render(); }, title: t("clear") }, "✕"));
     }
 
     function renderDraft() {

@@ -407,7 +407,8 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   workflow's sources
 - **omp-xy-panel** — crosspoint panel (X/Y matrix) for operators: sinks
   with tags, navigation by workflows/groups, bouquets (a bundle of
-  sources per media type), tag-based switching, 60-second undo; usable
+  sources per media type), tag-based switching, whole-node routing
+  (video+audio in one step, by tags or 1:1), 60-second undo; usable
   on a phone
 - **omp-ograf** — EBU OGraf graphics overlay node (Fill+Key)
 - **omp-media-library** — file catalog with technical metadata
@@ -587,13 +588,13 @@ Being upfront about the current edges, not just the highlights:
 - **No NDI gateway, no proprietary Dante.** AES67 (which most Dante
   devices also speak) is supported via `omp-aes67-gateway`; native NDI
   and Dante's proprietary control protocol are not implemented.
-- **NMOS grouphint not yet meaningful for video/audio pairs.** OMP's
-  own flow definitions use each flow's own ID as the NMOS grouphint
-  group name, so a source's video and audio flows never share a group
-  — which is exactly what that tag is for (a foreign controller can't
-  currently use it to recognize them as a pair). (The MXL writer clock
-  drift `omp-scope` originally found alongside this — see "What's in
-  the box" above — has since been root-caused and fixed.)
+- **NMOS grouphint only meaningful for `omp-source` video/audio pairs.**
+  `omp-source` tags its video and audio senders with one shared group
+  name (`<group>:high` / `<group>:audio`), so foreign controllers can
+  recognize them as a pair. Other nodes' flow definitions still use each
+  flow's own ID as the group name, so their video and audio never share
+  a group. Inside OMP, the X/Y panel's "all ports" button routes a whole
+  node's video and audio together (by shared tags, otherwise 1:1).
 - **No independent security audit.** Auth, mTLS, and audit logging
   exist and are exercised by the test suite, but there has been no
   external penetration test or formal security review.
