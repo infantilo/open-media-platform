@@ -1141,6 +1141,7 @@ export class RoleDesigner extends HTMLElement {
       ["", t("rd.dfb4af")],
       ["auto-confirm-window", t("rd.87c900")],
       ["auto", t("rd.41cdd7")],
+      ["pinned", t("rd.placementPinned")],
     ];
     for (const [value, label] of placementOptions) {
       const opt = document.createElement("option");

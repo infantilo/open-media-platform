@@ -2013,7 +2013,7 @@ func validate(def Definition) error {
 	// eigener Sonderfall nötig.
 	for _, r := range def.Roles {
 		switch esc := r.PlacementEscalation(); esc {
-		case EscalationAdvisory, EscalationAutoConfirmWindow, EscalationAuto:
+		case EscalationAdvisory, EscalationAutoConfirmWindow, EscalationAuto, EscalationPinned:
 		default:
 			return fmt.Errorf("%w: role %q has unknown placement escalation %q", ErrValidation, r.Name, esc)
 		}

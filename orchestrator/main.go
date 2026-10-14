@@ -1045,9 +1045,19 @@ type maintenanceInstances struct{ l *launcher.Launcher }
 
 func (m maintenanceInstances) ListOnHost(hostID string) []maintenance.Item {
 	var out []maintenance.Item
+	bound := map[string]bool{}
+	for _, e := range m.l.Catalog() {
+		if e.HostBound {
+			bound[e.Type] = true
+		}
+	}
 	for _, inst := range m.l.List() {
 		if inst.HostID == hostID {
-			out = append(out, maintenance.Item{Kind: "instance", InstanceID: inst.ID, Label: inst.Label})
+			reason := maintenance.ReasonStandalone
+			if bound[inst.Type] {
+				reason = maintenance.ReasonHostBound
+			}
+			out = append(out, maintenance.Item{Kind: "instance", InstanceID: inst.ID, Label: inst.Label, Reason: reason})
 		}
 	}
 	return out

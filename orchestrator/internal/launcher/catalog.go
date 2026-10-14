@@ -97,6 +97,9 @@ type CatalogEntry struct {
 	// dürfen parallel im Katalog stehen — Identität ist das Paar
 	// (Type, Version), s. Launcher.ImportCatalogEntry/findEntry.
 	Version string `json:"version,omitempty"`
+	// HostBound: der Node-Typ braucht Hardware an seinem Host (z. B. DeckLink-Karte, USB-Gerät) und
+	// darf nie automatisch umgezogen werden (Wartungsmodus, Überlast-Eskalation).
+	HostBound bool `json:"hostBound,omitempty"`
 	// Latency (D8 Teil 1/2, ARCHITECTURE.md §15.1 Punkt 1/2) spiegelt
 	// omp_node_sdk::LatencyInfo (nodes/omp-node-sdk/src/descriptor.rs) —
 	// von Hand gepflegt parallel zur Rust-Konstante im jeweiligen Node,

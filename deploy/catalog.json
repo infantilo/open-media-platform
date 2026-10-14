@@ -12,6 +12,7 @@
   },
   {
     "type": "omp-decklink",
+    "hostBound": true,
     "label": "DeckLink",
     "runner": "process",
     "command": ["../nodes/target/debug/omp-decklink"],
@@ -307,6 +308,7 @@
   },
   {
     "type": "omp-device-hub",
+    "hostBound": true,
     "label": "Geräte-Hub",
     "runner": "process",
     "command": ["../nodes/target/debug/omp-device-hub"],

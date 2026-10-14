@@ -169,7 +169,25 @@ const (
 	EscalationAdvisory          = "advisory"
 	EscalationAutoConfirmWindow = "auto-confirm-window"
 	EscalationAuto              = "auto"
+	// EscalationPinned: an Host/Hardware gebunden (z. B. DeckLink-Karte, USB-Gerät) — die Rolle wird nie
+	// automatisch umgezogen (weder Überlast-Eskalation noch Wartungsmodus); nur der Alarm bleibt.
+	EscalationPinned = "pinned"
 )
+
+// roleHostBound: Rolle darf nicht automatisch umziehen — ausdrücklich gesetzt (Escalation "pinned"),
+// durch einen exklusiven I/O-Port (RequiredIOPort) oder weil der Katalog den Node-Typ als
+// hostgebunden führt (CatalogEntry.HostBound, z. B. omp-decklink).
+func (s *Service) roleHostBound(r Role) bool {
+	if r.PlacementEscalation() == EscalationPinned || r.RequiredIOPort != nil {
+		return true
+	}
+	for _, e := range s.launcher.Catalog() {
+		if e.Type == r.NodeType && e.HostBound {
+			return true
+		}
+	}
+	return false
+}
 
 // DefaultConfirmWindowSeconds gilt, wenn Escalation=="auto-confirm-window"
 // und ConfirmWindowSeconds==0 — 30s, wie in §6.1 als Beispielwert

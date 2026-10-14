@@ -263,6 +263,10 @@ func (s *Service) considerMigration(instanceID, sourceHostID, targetHostID, targ
 		s.releaseMigrationClaim(instanceID)
 		return
 	}
+	if s.roleHostBound(r) { // Hardware-/Host-Bindung: nie automatisch umziehen, nur Alarm
+		s.releaseMigrationClaim(instanceID)
+		return
+	}
 	switch r.PlacementEscalation() {
 	case EscalationAuto:
 		s.executeMigration(wf.ID, role, instanceID, targetHostID, "overload")

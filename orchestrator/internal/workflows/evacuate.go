@@ -75,6 +75,10 @@ func (s *Service) EvacuateHost(ctx context.Context, hostID string, onStep func(m
 			fail(it, "kein Placement verfügbar")
 			continue
 		}
+		if s.roleHostBound(roleDef) {
+			fail(it, maintenance.ReasonHostBound)
+			continue
+		}
 		res := s.resources.SelectHost(placement.PlacementRequest{
 			NodeType: roleDef.NodeType, AffinityGroup: roleDef.AffinityGroup, RedundancyGroup: roleDef.RedundancyGroup,
 		}, s.buildOccupancy(time.Now()))

@@ -35,6 +35,14 @@ type Item struct {
 	Reason     string `json:"reason,omitempty"`
 }
 
+// ReasonStandalone: eigenständige Instanz ohne Workflow — kein Make-before-break-Umzug möglich,
+// nur manuell per Stop-dann-Start (POST /api/v1/instances/{id}/migrate). Die UI übersetzt den Code.
+const ReasonStandalone = "standalone"
+
+// ReasonHostBound: Rolle/Instanz ist an Hardware dieses Hosts gebunden (Katalog hostBound, Escalation
+// "pinned" oder exklusiver I/O-Port) und wird nie automatisch umgezogen.
+const ReasonHostBound = "hostBound"
+
 // Step meldet den Fortschritt einer laufenden Evakuierung.
 type Step struct {
 	Total  int

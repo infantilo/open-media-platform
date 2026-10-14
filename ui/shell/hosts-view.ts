@@ -13,7 +13,7 @@
 // (POLL_FALLBACK_INTERVAL_MS). Über apiFetch() (connection.ts), damit
 // ein Fehlschlag den geteilten ConnectionMonitor auf "degraded" setzt
 // statt still zu bleiben.
-import { t, t as tt } from "./i18n.ts";
+import { t, t as tt, tLoose } from "./i18n.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
 import { openHostWizard } from "./host-wizard.ts";
@@ -294,6 +294,11 @@ class HostsView extends HTMLElement {
       void this.#toggleMaintenance(maintTarget.dataset.hostId ?? "", maintTarget.dataset.hostLabel ?? "", maintTarget.dataset.on === "1");
       return;
     }
+    const moveTarget = (ev.target as HTMLElement)?.closest<HTMLElement>("[data-action='move-instance']");
+    if (moveTarget) {
+      void this.#moveInstanceDialog(moveTarget.dataset);
+      return;
+    }
     const removeTarget = (ev.target as HTMLElement)?.closest<HTMLElement>("[data-action='remove-host']");
     if (removeTarget) {
       void this.#removeHost(removeTarget.dataset.hostId ?? "", removeTarget.dataset.hostLabel ?? "");
@@ -313,6 +318,76 @@ class HostsView extends HTMLElement {
     if (on && !(await confirmDialog(t("hosts.maintConfirm", { p0: label }), { confirmLabel: t("hosts.maintOn") }))) return;
     const res = await apiFetch(`/api/v1/admin/hosts/${encodeURIComponent(id)}/maintenance`, { method: on ? "POST" : "DELETE" });
     if (!res.ok) showToast(t("hosts.removeFailed", { p0: (await res.text()).trim() }), { variant: "error" });
+    this.#poll();
+  }
+
+  // Popup: Zielhost wählen, dann verschieben (Stop-dann-Start, kurze Unterbrechung).
+  async #moveInstanceDialog(d: DOMStringMap) {
+    const id = decodeURIComponent(d.instanceId ?? "");
+    if (!id) return;
+    const label = decodeURIComponent(d.instanceLabel ?? "") || id;
+    let targets: { id: string; label: string }[] = [];
+    try {
+      targets = JSON.parse(decodeURIComponent(d.targets ?? "[]"));
+    } catch {
+      return;
+    }
+    const chosen = await new Promise<{ id: string; label: string } | null>((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.style.cssText = "position:fixed;inset:0;z-index:3000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.5);font-family:var(--omp-font,system-ui,sans-serif);font-size:var(--omp-font-size-sm,12px);";
+      const box = document.createElement("div");
+      box.style.cssText = "background:var(--omp-surface,#24272b);color:var(--omp-text,#e8eaed);border:1px solid var(--omp-border,#3a3f45);border-radius:var(--omp-radius,6px);padding:16px;max-width:380px;box-shadow:0 4px 16px rgba(0,0,0,0.4);";
+      const title = document.createElement("div");
+      title.style.cssText = "font-weight:600;margin-bottom:8px;";
+      title.textContent = t("hosts.maintMoveDialogTitle", { p0: label });
+      const info = document.createElement("div");
+      info.style.cssText = "margin-bottom:12px;color:var(--omp-text-dim);";
+      info.textContent = t("hosts.maintMoveDialogInfo");
+      const select = document.createElement("select");
+      select.style.cssText = "width:100%;margin-bottom:12px;";
+      for (const tg of targets) {
+        const opt = document.createElement("option");
+        opt.value = tg.id;
+        opt.textContent = tg.label;
+        select.appendChild(opt);
+      }
+      const actions = document.createElement("div");
+      actions.style.cssText = "display:flex;justify-content:flex-end;gap:8px;";
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.textContent = t("hosts.maintMoveCancel");
+      const ok = document.createElement("button");
+      ok.type = "button";
+      ok.className = "omp-btn-primary";
+      ok.textContent = t("hosts.maintMoveBtn");
+      const close = (v: { id: string; label: string } | null) => {
+        document.removeEventListener("keydown", onKey, true);
+        overlay.remove();
+        resolve(v);
+      };
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === "Escape") close(null);
+      };
+      cancel.addEventListener("click", () => close(null));
+      ok.addEventListener("click", () => close(targets.find((tg) => tg.id === select.value) ?? null));
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) close(null);
+      });
+      document.addEventListener("keydown", onKey, true);
+      actions.append(cancel, ok);
+      box.append(title, info, select, actions);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      select.focus();
+    });
+    if (!chosen) return;
+    const res = await apiFetch(`/api/v1/instances/${encodeURIComponent(id)}/migrate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetHostId: chosen.id }),
+    });
+    if (!res.ok) showToast(t("hosts.maintMoveFailed", { p0: (await res.text()).trim() }), { variant: "error" });
+    else showToast(t("hosts.maintMoveStarted", { p0: label }));
     this.#poll();
   }
 
@@ -463,7 +538,26 @@ class HostsView extends HTMLElement {
                     ? t("hosts.maintDrained")
                     : t("hosts.maintBlocked", { p0: (mt.remaining ?? []).length });
               const color = mt.state === "drained" ? "#4caf50" : mt.state === "blocked" ? "#e0a030" : "#4a90e2";
-              return `<div title="${escapeHtml(list.join("\n"))}" style="color:${color};font-size:11px;white-space:nowrap;">🛠 ${escapeHtml(text)}</div>`;
+              // Verbleibende eigenständige Instanzen: Grund + Verschieben-Knöpfe
+              // je möglichem Zielhost (Stop-dann-Start, kurze Unterbrechung).
+              const targets = [
+                ...hosts.filter((o) => o.id && o.id !== h.id && !o.maintenance && isHostOnline(o.metrics)).map((o) => ({ id: o.id, label: o.label })),
+                { id: "", label: t("hosts.maintLocal") },
+              ];
+              const items = (mt.remaining ?? [])
+                .filter((i) => i.kind === "instance")
+                .map((i) => {
+                  const reason = i.reason ? tLoose(`hosts.maintReason.${i.reason}`) : "";
+                  // escapeHtml lässt Anführungszeichen stehen (innerHTML) — für Attributwerte daher URL-kodieren.
+                  const targetsJson = encodeURIComponent(JSON.stringify(targets));
+                  const buttons =
+                    this.#isAdmin && i.reason !== "hostBound"
+                      ? `<button type="button" data-action="move-instance" data-instance-id="${encodeURIComponent(i.instanceId)}" data-instance-label="${encodeURIComponent(i.label || i.instanceId)}" data-targets="${targetsJson}" style="font-size:10px;padding:1px 6px;margin-left:6px;cursor:pointer;">${escapeHtml(t("hosts.maintMoveBtn"))}</button>`
+                      : "";
+                  return `<div style="font-size:10px;color:var(--omp-text-dim);white-space:nowrap;">• ${escapeHtml(i.label || i.instanceId)}${reason ? ` — ${escapeHtml(reason)}` : ""}${buttons}</div>`;
+                })
+                .join("");
+              return `<div title="${escapeHtml(list.join("\n"))}" style="color:${color};font-size:11px;white-space:nowrap;">🛠 ${escapeHtml(text)}</div>${items}`;
             })()
           : "";
         const rowTint = online ? "" : "background:rgba(224,82,82,0.08);";

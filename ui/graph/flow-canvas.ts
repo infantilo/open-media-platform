@@ -5,7 +5,7 @@
 // `deno test` geprüft) — dieses Modul bindet sie nur an DOM-/Fetch-/
 // EventSource-APIs.
 
-import { t as tt } from "../shell/i18n.ts";
+import { t as tt, tLoose } from "../shell/i18n.ts";
 import { ghostEntriesForZone, type GhostEntry, type PlanInput, type StartPlan, zoneForStoppedWorkflow } from "../shell/workflow-plan-logic.ts";
 import {
   type ArrangeEdge,
@@ -402,6 +402,14 @@ interface HostEntry {
     moved: number;
     remaining?: { instanceId: string; label?: string; reason?: string }[];
   };
+}
+
+// Grund-Codes des Wartungsmodus -> Text (Backend liefert nur den Code).
+function maintReasonText(reason?: string): string {
+  if (!reason) return "";
+  const key = `hosts.maintReason.${reason}`;
+  const text = tLoose(key);
+  return text === key ? reason : text;
 }
 
 type HostMaintenance = NonNullable<HostEntry["maintenance"]>;
@@ -3557,7 +3565,7 @@ export class FlowCanvas extends HTMLElement {
         maintText.setAttribute("font-size", "10");
         maintText.textContent = `🛠 ${text}`;
         const maintTitle = document.createElementNS(SVG_NS, "title");
-        maintTitle.textContent = (maint.remaining ?? []).map((i) => `${i.label || i.instanceId}${i.reason ? ` (${i.reason})` : ""}`).join("\n");
+        maintTitle.textContent = (maint.remaining ?? []).map((i) => `${i.label || i.instanceId}${i.reason ? ` (${maintReasonText(i.reason)})` : ""}`).join("\n");
         maintText.appendChild(maintTitle);
         g.appendChild(maintText);
       }
