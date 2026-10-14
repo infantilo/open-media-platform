@@ -110,7 +110,7 @@ func withRoleSeed(env map[string]string, workflowID, roleName string) map[string
 func (s *Service) captureRoleState(wf Workflow) {
 	senderToAlias := s.buildSenderAliasIndex(wf)
 	for role := range wf.Runtime {
-		s.captureOneRoleState(wf, role, senderToAlias)
+		s.captureRoleStateMode(wf, role, senderToAlias, captureAuto)
 	}
 }
 
@@ -148,6 +148,14 @@ type roleStateEnvelope struct {
 	Kind   string                     `json:"__kind,omitempty"`
 	Blob   json.RawMessage            `json:"__blob,omitempty"`
 	Params map[string]json.RawMessage `json:"__params,omitempty"`
+	// Pinned: beim expliziten "Im Workflow speichern" eines laufenden
+	// Workflows festgeschriebener Startzustand (Nutzerwunsch 2026-10-14:
+	// "Quelle ändern, speichern, Quelle wieder ändern, stoppen — nach dem
+	// Neustart soll der GESPEICHERTE Stand gelten"). Periodische Sicherung
+	// und Stop überschreiben einen gepinnten Eintrag nicht; ein Workflow,
+	// der nie gespeichert wurde, behält das Verhalten "letzter Stand vor
+	// Stop". Update() eines gestoppten Workflows leert alles inkl. Pins.
+	Pinned bool `json:"__pinned,omitempty"`
 }
 
 // captureOneRoleState ist der pro-Rolle-Kern von captureRoleState,
@@ -159,6 +167,42 @@ type roleStateEnvelope struct {
 // Aufrufer einmal pro Workflow gebaut (buildSenderAliasIndex braucht einen
 // vollständigen Registry-Scan, nicht pro Rolle wiederholen).
 func (s *Service) captureOneRoleState(wf Workflow, role string, senderToAlias map[string]string) {
+	s.captureRoleStateMode(wf, role, senderToAlias, captureTransfer)
+}
+
+// captureMode steuert, wie captureRoleStateMode mit gepinnten Einträgen
+// umgeht (s. roleStateEnvelope.Pinned).
+type captureMode int
+
+const (
+	// captureTransfer: aktuellen Stand erfassen und ungepinnt speichern
+	// (Failover/Migration/Rollen-Neustart: der laufende Zustand muss auf
+	// die neue Instanz übergehen).
+	captureTransfer captureMode = iota
+	// captureAuto: Stop/periodische Sicherung — gepinnte Rollen überspringen.
+	captureAuto
+	// capturePin: Speichern im Editor — erfassen und festschreiben.
+	capturePin
+)
+
+// pinRoleState schreibt den aktuellen Stand aller Rollen als gepinnten
+// Startzustand fest (Update() eines laufenden Workflows).
+func (s *Service) pinRoleState(wf Workflow) {
+	senderToAlias := s.buildSenderAliasIndex(wf)
+	for role := range wf.Runtime {
+		s.captureRoleStateMode(wf, role, senderToAlias, capturePin)
+	}
+}
+
+func (s *Service) captureRoleStateMode(wf Workflow, role string, senderToAlias map[string]string, mode captureMode) {
+	if mode == captureAuto {
+		if saved, err := s.store.GetRoleState(wf.ID); err == nil {
+			var cur roleStateEnvelope
+			if raw, ok := saved[role]; ok && json.Unmarshal(raw, &cur) == nil && cur.Pinned {
+				return
+			}
+		}
+	}
 	node, ok := s.nodeForRole(wf, role)
 	if !ok || node.APIBaseURL == "" {
 		return
@@ -182,6 +226,7 @@ func (s *Service) captureOneRoleState(wf Workflow, role string, senderToAlias ma
 		env = roleStateEnvelope{Kind: roleStateKindParams, Params: params}
 	}
 
+	env.Pinned = mode == capturePin
 	raw, err := json.Marshal(env)
 	if err != nil {
 		slog.Warn("workflows: failed to marshal role state envelope", "workflow", wf.ID, "role", role, "error", err)

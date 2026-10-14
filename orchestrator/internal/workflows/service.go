@@ -647,7 +647,7 @@ func (s *Service) Update(id, name string, def Definition) (Workflow, error) {
 		// verwerfen, sondern jetzt frisch erfassen (Nutzerfund
 		// 2026-10-14: Quellen vergaßen ihr Testbild nach "Im Workflow
 		// speichern", weil das Leeren hier den Stop-Snapshot ersetzte).
-		go s.captureRoleState(wf) // HTTP pro Rolle: PUT nicht blockieren
+		go s.pinRoleState(wf) // HTTP pro Rolle: PUT nicht blockieren
 	} else if err := s.store.ClearRoleState(id); err != nil {
 		slog.Warn("workflows: failed to clear role state after update", "workflow", id, "error", err)
 	}
