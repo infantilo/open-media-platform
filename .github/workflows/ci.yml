@@ -197,7 +197,7 @@ jobs:
 
       - name: Ergebnisse als Artefakt sichern
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: amwa-nmos-testing-results
           path: nmos-results/
