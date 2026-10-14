@@ -394,7 +394,17 @@ interface HostEntry {
   id: string;
   label: string;
   metrics?: HostMetrics;
+  // Wartungsmodus (Kapitel 41, spiegelt maintenance.Status) — gesetzt,
+  // solange der Host im Wartungsmodus ist; Zonen-Kopf zeigt es an.
+  maintenance?: {
+    state: "evacuating" | "drained" | "blocked";
+    total: number;
+    moved: number;
+    remaining?: { instanceId: string; label?: string; reason?: string }[];
+  };
 }
+
+type HostMaintenance = NonNullable<HostEntry["maintenance"]>;
 
 // ProfileResponse — Wire-Format identisch zu httpapi.profileResponse
 // (Kapitel 14 Teil 3, docs/END-GOAL-FEATURES.md §14.3d). known=false
@@ -868,7 +878,7 @@ export class FlowCanvas extends HTMLElement {
     // Thema). Reine CPU/RAM-Ticks (alle 5s pro Host) bekommen dagegen
     // den leichtgewichtigen Pfad, damit nicht bei jedem Tick Katalog +
     // Instanzen unnötig neu geholt werden.
-    if (parsed.type === "host.registered") {
+    if (parsed.type === "host.registered" || parsed.type === "host.maintenance") {
       void this.#renderPalette();
       return;
     }
@@ -1560,10 +1570,10 @@ export class FlowCanvas extends HTMLElement {
   // "Unzugeordnet", zuletzt "Gruppen über mehrere Hosts" (Nutzerfund
   // 2026-08-12: Gruppen-Kacheln mit uneinheitlichen Mitglieder-Zonen,
   // s. #zoneIdForGroup-Doku).
-  #hostZones(tiles: TileSpec[]): { id: string; label: string; metrics?: HostMetrics }[] {
-    const zones: { id: string; label: string; metrics?: HostMetrics }[] = [
+  #hostZones(tiles: TileSpec[]): { id: string; label: string; metrics?: HostMetrics; maintenance?: HostMaintenance }[] {
+    const zones: { id: string; label: string; metrics?: HostMetrics; maintenance?: HostMaintenance }[] = [
       { id: "local", label: tt("flow.b40ef3") },
-      ...this.#paletteHosts.map((h) => ({ id: h.id, label: h.label, metrics: h.metrics })),
+      ...this.#paletteHosts.map((h) => ({ id: h.id, label: h.label, metrics: h.metrics, maintenance: h.maintenance })),
     ];
     if (tiles.some((t) => this.#zoneIdForTile(t) === "unassigned")) {
       zones.push({ id: "unassigned", label: tt("flow.02d6ca") });
@@ -3447,8 +3457,10 @@ export class FlowCanvas extends HTMLElement {
       rect.setAttribute("height", String(bottom));
       rect.setAttribute("rx", "6");
       rect.setAttribute("fill", "#26282b");
-      rect.setAttribute("stroke", hostOnline ? "#3a3d42" : "#c0392b");
-      rect.setAttribute("stroke-width", hostOnline ? "1" : "2");
+      const maint = isRealHost ? zone.maintenance : undefined;
+      rect.setAttribute("stroke", !hostOnline ? "#c0392b" : maint ? "#e0a030" : "#3a3d42");
+      rect.setAttribute("stroke-width", hostOnline && !maint ? "1" : "2");
+      if (maint) rect.setAttribute("stroke-dasharray", "6 4");
       g.appendChild(rect);
 
       const header = document.createElementNS(SVG_NS, "rect");
@@ -3457,7 +3469,7 @@ export class FlowCanvas extends HTMLElement {
       header.setAttribute("width", String(laneWidth));
       header.setAttribute("height", String(HOST_ZONE_HEADER_HEIGHT));
       header.setAttribute("rx", "6");
-      header.setAttribute("fill", hostOnline ? "#2f3237" : "#3a2323");
+      header.setAttribute("fill", !hostOnline ? "#3a2323" : maint ? "#3a3220" : "#2f3237");
       g.appendChild(header);
 
       // Online-Punkt (§13.3) nur für echte Hosts (Metriken kommen per
@@ -3517,7 +3529,7 @@ export class FlowCanvas extends HTMLElement {
           ? tt("flow.1efb39", { p0: new Date(zone.metrics.receivedAt).toLocaleTimeString() })
           : tt("flow.7bb93c");
         g.appendChild(offlineText);
-      } else if (zone.metrics && !collapsed) {
+      } else if (zone.metrics && !collapsed && !maint) {
         const metricsText = document.createElementNS(SVG_NS, "text");
         metricsText.setAttribute("x", String(labelX));
         metricsText.setAttribute("y", "34");
@@ -3527,6 +3539,45 @@ export class FlowCanvas extends HTMLElement {
         metricsText.textContent =
           `CPU ${zone.metrics.cpuPercent.toFixed(0)}% · RAM ${gb(zone.metrics.memUsedBytes)}/${gb(zone.metrics.memTotalBytes)} GB`;
         g.appendChild(metricsText);
+      }
+
+      // Wartungsmodus (Nutzerwunsch 2026-10-14): Zustand im Zonen-Kopf, wie
+      // das Abzeichen in der Hosts-Ansicht (hosts-view.ts, gleiche Texte).
+      if (maint && !collapsed && hostOnline) {
+        const text =
+          maint.state === "evacuating"
+            ? tt("hosts.maintEvacuating", { p0: maint.moved, p1: maint.total })
+            : maint.state === "drained"
+              ? tt("hosts.maintDrained")
+              : tt("hosts.maintBlocked", { p0: (maint.remaining ?? []).length });
+        const maintText = document.createElementNS(SVG_NS, "text");
+        maintText.setAttribute("x", String(labelX));
+        maintText.setAttribute("y", "34");
+        maintText.setAttribute("fill", maint.state === "drained" ? "#4caf50" : maint.state === "blocked" ? "#e0a030" : "#4a90e2");
+        maintText.setAttribute("font-size", "10");
+        maintText.textContent = `🛠 ${text}`;
+        const maintTitle = document.createElementNS(SVG_NS, "title");
+        maintTitle.textContent = (maint.remaining ?? []).map((i) => `${i.label || i.instanceId}${i.reason ? ` (${i.reason})` : ""}`).join("\n");
+        maintText.appendChild(maintTitle);
+        g.appendChild(maintText);
+      }
+
+      // Großes Banner im Rahmen (Nutzerwunsch 2026-10-14) — auch bei
+      // zugeklappter Zone nicht nötig, dort zeigt der Rahmen es schon.
+      if (maint && !collapsed) {
+        const word = tt("hosts.maintBanner");
+        const size = Math.max(12, Math.min(30, Math.floor((laneWidth - 20) / (word.length * 0.75))));
+        const banner = document.createElementNS(SVG_NS, "text");
+        banner.setAttribute("x", String(laneWidth / 2));
+        banner.setAttribute("y", String(HOST_ZONE_HEADER_HEIGHT + 12 + size));
+        banner.setAttribute("text-anchor", "middle");
+        banner.setAttribute("fill", "#e0a030");
+        banner.setAttribute("fill-opacity", "0.45");
+        banner.setAttribute("font-size", String(size));
+        banner.setAttribute("font-weight", "700");
+        banner.setAttribute("letter-spacing", "2");
+        banner.textContent = word;
+        g.appendChild(banner);
       }
 
       const ghosts = collapsed ? [] : this.#ghostsForZone(zone.id);

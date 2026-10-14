@@ -177,6 +177,7 @@ export const en: Record<keyof typeof de, string> = {
   "hosts.maintEvacuating": "Maintenance: draining ({p0}/{p1})",
   "hosts.maintDrained": "Maintenance: empty",
   "hosts.maintBlocked": "Maintenance: {p0} not movable",
+  "hosts.maintBanner": "MAINTENANCE",
   "hosts.removeConfirm": "Remove host {p0} from the registry? Its host agent must re-register with a new token.",
   "hosts.removeFailed": "Removal failed: {p0}",
   "hosts.080196": "Hosts ({p0})",

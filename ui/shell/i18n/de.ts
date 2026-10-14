@@ -176,6 +176,7 @@ export const de = {
   "hosts.maintEvacuating": "Wartung: wird geleert ({p0}/{p1})",
   "hosts.maintDrained": "Wartung: leer",
   "hosts.maintBlocked": "Wartung: {p0} nicht verschiebbar",
+  "hosts.maintBanner": "WARTUNG",
   "hosts.removeConfirm": "Host „{p0}“ aus der Registry entfernen? Sein Host-Agent muss sich neu mit einem Token registrieren.",
   "hosts.removeFailed": "Entfernen fehlgeschlagen: {p0}",
   "hosts.080196": "Hosts ({p0})",
