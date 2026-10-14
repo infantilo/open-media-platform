@@ -1255,6 +1255,26 @@ des Monitor-Nodes.
 - Fehler beim Verbinden (Kamera nicht erlaubt, Einladung ungültig, Server
   nicht erreichbar) erscheinen als gut sichtbarer Hinweis im Startbildschirm.
 
+**Feste HTTPS-Ports (Portweiterleitung, z. B. Crostini/ChromeOS):** Im Katalog
+ist der HTTPS-Port fest auf **9443** (Handy-Kamera) bzw. **9444** (Handy-Monitor)
+gesetzt (`OMP_HTTPS_PORT`). So bleibt eine einmal eingerichtete Weiterleitung
+gültig. Ist der Port belegt (zweite Instanz), nimmt der Node einen freien Port
+und schreibt das ins Log. Zusätzlich muss der WebRTC-UDP-Port erreichbar sein
+(`OMP_WEBRTC_ICE_PORT`, `OMP_WEBRTC_PUBLIC_IP`).
+
+**Tally (ON AIR):** Wird die Kamera von einem Auslöser auf Sendung geschaltet,
+zeigt die Handy-Seite einen roten Rahmen mit „ON AIR“ und dem Namen des
+Auslösers; das Handy vibriert beim Wechsel. Auslöser sind Bildmischer
+(Programm), Switcher (aktiver Eingang) und Nodes mit Receivern, die als
+**Tally-Geber** arbeiten (Option „Als Tally-Geber arbeiten“,
+`OMP_TALLY_GIVER=1`, derzeit ST-2110-Ausgangs-Gateway): jede darauf
+aufgeschaltete Quelle gilt als „auf Sendung“, solange die Verbindung besteht.
+An der Kamera lässt sich mit der Option **Tally-Auslöser**
+(`OMP_TALLY_SOURCES`, Node-Namen oder -IDs, kommagetrennt) einschränken,
+wessen Tally zählt; leer = jeder. Das Tally bleibt an, solange mindestens ein
+zugelassener Auslöser „an“ meldet. Die Seite fragt es per `GET /tally`
+(mit Einladungstoken) ab; im Flow-Editor färbt dasselbe Ereignis die Kachel.
+
 **CPU-Last und Empfehlung:** Das Gateway dekodiert das Handy-Bild in
 Software. Wähle deshalb nach Möglichkeit **1280×720 bei 25–30 fps**;
 1080p oder 50/60 fps verdoppeln den Aufwand. Der Viewer rechnet seine
