@@ -259,10 +259,13 @@ struct OutputControl {
     /// geber für "dieser Sender ist jetzt inaktiv" (BCP-008-02s
     /// `overallStatus`/`transmissionStatus`/`essenceStatus`-Sonderfall).
     monitor: Arc<omp_node_sdk::Monitor>,
+    /// Tally-Geber (`OMP_TALLY_GIVER=1`): die aufgeschaltete Quelle gilt als "auf Sendung".
+    tally: Arc<omp_node_sdk::tally_giver::TallyGiver>,
 }
 
 impl ReceiverControl for OutputControl {
     fn apply(&self, resource: &ReceiverResource) {
+        self.tally.set("video", resource.sender_id.as_deref().filter(|_| resource.master_enable));
         match (&resource.sender_id, resource.master_enable) {
             (Some(sender_id), true) => match self.registry.get_sender(sender_id) {
                 Ok(sender) => match sender.flow_id {
@@ -297,10 +300,12 @@ struct AudioOutputControl {
     registry: RegistryClient,
     pipeline: pipeline::AudioOutputPipelineHandle,
     connected_flow_id: Arc<Mutex<String>>,
+    tally: Arc<omp_node_sdk::tally_giver::TallyGiver>,
 }
 
 impl ReceiverControl for AudioOutputControl {
     fn apply(&self, resource: &ReceiverResource) {
+        self.tally.set("audio", resource.sender_id.as_deref().filter(|_| resource.master_enable));
         match (&resource.sender_id, resource.master_enable) {
             (Some(sender_id), true) => match self.registry.get_sender(sender_id) {
                 Ok(sender) => match sender.flow_id {
@@ -862,6 +867,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let connected_flow_id = Arc::new(Mutex::new(String::new()));
             let connected_audio_flow_id = Arc::new(Mutex::new(String::new()));
             let registry = RegistryClient::new(registry_url.clone());
+            let tally_giver = omp_node_sdk::tally_giver::TallyGiver::from_env(&registry_url);
             let monitor = Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Sender));
             // Startzustand `Inactive` (noch kein IS-05-Connect erfolgt) —
             // anders als bei Ingest kein sofortiges `activate()` hier,
@@ -882,6 +888,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     pipeline: pipeline_handle,
                     connected_flow_id: connected_flow_id.clone(),
                     monitor: monitor.clone(),
+                    tally: tally_giver.clone(),
                 },
             ));
             let audio_connection = Arc::new(ReceiverConnection::new(
@@ -890,6 +897,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     registry,
                     pipeline: audio_pipeline_handle.clone(),
                     connected_flow_id: connected_audio_flow_id.clone(),
+                    tally: tally_giver.clone(),
                 },
             ));
 
@@ -984,6 +992,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             // Nachtrag 130/131).
             handle.register_worker("pipeline", pipeline_heartbeat);
             handle.register_worker("audio-pipeline", audio_pipeline_heartbeat);
+            tally_giver.attach(handle.clone());
 
             run_event_loop(handle, &mut events_rx, shutdown, vec![pipeline_thread, audio_pipeline_thread]).await;
         }

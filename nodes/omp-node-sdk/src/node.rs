@@ -301,7 +301,7 @@ impl NodeHandle {
             eprintln!("omp-node-sdk: tally dropped (no nats connection): {target_node_id} on={on}");
             return;
         };
-        if let Err(e) = publisher.publish_tally(target_node_id, on).await {
+        if let Err(e) = publisher.publish_tally(target_node_id, on, Some(&self.node_id)).await {
             eprintln!("omp-node-sdk: tally publish failed: {e}");
         }
     }
@@ -693,9 +693,18 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
     let (actual_port, _server_handle) = server::spawn(&bind_addr, store.clone())?;
     // Optional: zusätzlicher TLS-Listener (OMP_HTTPS=1), z. B. für die Handy-Kamera-Seite.
     if crate::https::enabled() {
-        match crate::https::load_or_create_cert(&config.host)
-            .and_then(|(c, k)| server::spawn_tls("0.0.0.0:0", store, c, k).map_err(|e| e.to_string()))
-        {
+        // `OMP_HTTPS_PORT` = fester TLS-Port (für Portweiterleitung, z. B. Crostini→ChromeOS);
+        // ist er belegt (zweite Instanz), fällt der Node auf einen freien Port zurück.
+        let fixed_port: u16 = std::env::var("OMP_HTTPS_PORT").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+        match crate::https::load_or_create_cert(&config.host).and_then(|(c, k)| {
+            if fixed_port != 0 {
+                match server::spawn_tls(&format!("0.0.0.0:{fixed_port}"), store.clone(), c.clone(), k.clone()) {
+                    Ok(r) => return Ok(r),
+                    Err(e) => eprintln!("omp-node-sdk: HTTPS-Port {fixed_port} nicht bindbar ({e}), nehme freien Port"),
+                }
+            }
+            server::spawn_tls("0.0.0.0:0", store, c, k).map_err(|e| e.to_string())
+        }) {
             Ok((https_port, _h)) => {
                 crate::https::set_bound(&config.host, https_port);
                 eprintln!("omp-node-sdk: HTTPS auf Port {https_port} (https://{}:{https_port})", config.host);

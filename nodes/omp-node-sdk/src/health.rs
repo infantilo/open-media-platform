@@ -51,6 +51,20 @@ pub struct Alert {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tally {
     pub on: bool,
+    /// Auslöser: Node-ID des Publishers (Mischer, Switcher, Gateway …).
+    /// Optional und abwärtskompatibel — ältere Publisher senden nur `on`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub src: Option<String>,
+}
+
+/// Vollständiges Tally-Ereignis aus [`TallySubscription::next_event`].
+#[derive(Debug, Clone)]
+pub struct TallyEvent {
+    /// Node, dessen Kachel/Kamera getallyt wird (Subject-Suffix).
+    pub target: String,
+    pub on: bool,
+    /// Auslösender Node, falls der Publisher ihn mitgesendet hat.
+    pub src: Option<String>,
 }
 
 /// Auf `omp.player.<node_id>.itemEnded` veröffentlicht (K2-Teil-1,
@@ -224,9 +238,9 @@ impl Publisher {
     /// (Operator erwartet sofortiges visuelles Feedback im Graph), kein
     /// periodischer Herzschlag, der einen verzögerten Publish von selbst
     /// aufholen würde.
-    pub async fn publish_tally(&self, node_id: &str, on: bool) -> Result<(), PublishError> {
+    pub async fn publish_tally(&self, node_id: &str, on: bool, src: Option<&str>) -> Result<(), PublishError> {
         let subject = format!("omp.tally.{node_id}");
-        let payload = serde_json::to_vec(&Tally { on }).map_err(PublishError::Encode)?;
+        let payload = serde_json::to_vec(&Tally { on, src: src.map(str::to_string) }).map_err(PublishError::Encode)?;
         self.client
             .publish(subject, payload.into())
             .await
@@ -314,6 +328,20 @@ pub struct TallySubscription {
 }
 
 impl TallySubscription {
+    /// Wie [`Self::next`], aber inklusive des auslösenden Nodes (`src`).
+    pub async fn next_event(&mut self) -> Option<TallyEvent> {
+        loop {
+            let msg = self.subscriber.next().await?;
+            let Some(target) = msg.subject.as_str().strip_prefix("omp.tally.") else {
+                continue;
+            };
+            let Ok(tally) = serde_json::from_slice::<Tally>(&msg.payload) else {
+                continue;
+            };
+            return Some(TallyEvent { target: target.to_string(), on: tally.on, src: tally.src });
+        }
+    }
+
     /// Liefert das nächste Tally-Event als `(node_id, on)`, extrahiert aus
     /// Subject (`omp.tally.<node_id>`) und Body (`{"on": bool}`).
     /// Überspringt Nachrichten, die nicht zum erwarteten Schema passen

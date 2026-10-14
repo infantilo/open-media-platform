@@ -21,6 +21,7 @@ pub mod node;
 pub mod peer;
 pub mod plugins;
 pub mod server;
+pub mod tally_giver;
 pub mod transports;
 
 pub use bcp008::{HealthLevel, Monitor, MonitorKind};

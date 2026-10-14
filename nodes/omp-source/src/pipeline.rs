@@ -321,7 +321,7 @@ impl Pipeline {
             let clock = gst::SystemClock::obtain();
             if grid > tai_now {
                 pipeline.set_start_time(gst::ClockTime::NONE);
-                pipeline.set_base_time(clock.time().unwrap_or(gst::ClockTime::ZERO) + gst::ClockTime::from_nseconds(grid - tai_now));
+                pipeline.set_base_time(clock.time() + gst::ClockTime::from_nseconds(grid - tai_now));
             }
         }
         pipeline

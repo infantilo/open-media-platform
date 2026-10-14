@@ -275,8 +275,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Nachtrag 130/131).
     handle.register_worker("pipeline", pipeline_heartbeat);
 
+    let tally_inputs = inputs.clone();
+    let tally_registry = registry_url.clone();
     let discovery = discovery_loop(registry_url, sender_id, pipeline_handle, inputs);
 
+    // Tally (`omp.tally.<quell-node-id>`, Absender = dieser Node): der Switcher meldet seinen
+    // aktiven Eingang wie der Bildmischer sein Programm (Nutzerwunsch 2026-10-14).
+    let mut tally_prev: Option<String> = None;
+    let tally_cache: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
     let events = async {
         while let Some(event) = rx.recv().await {
             match event {
@@ -285,7 +291,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     handle.publish_alert(message).await;
                 }
                 pipeline::Event::ActiveChanged(sender_id) => {
-                    *active.lock().expect("lock poisoned") = sender_id;
+                    *active.lock().expect("lock poisoned") = sender_id.clone();
+                    if sender_id != tally_prev {
+                        let device_of = |sid: &Option<String>| {
+                            let sid = sid.as_deref()?;
+                            tally_inputs
+                                .lock()
+                                .expect("lock poisoned")
+                                .iter()
+                                .find(|i| i.sender_id == sid)
+                                .map(|i| i.device_id.clone())
+                        };
+                        for (sid, on) in [(tally_prev.clone(), false), (sender_id.clone(), true)] {
+                            let Some(device_id) = device_of(&sid) else { continue };
+                            // Eigener Task mit Timeout: die Registry-Auflösung darf die Event-Schleife
+                            // nie blockieren (gleiche Lehre wie `omp-video-mixer-me`).
+                            let (h, reg_url, cache) = (handle.clone(), tally_registry.clone(), tally_cache.clone());
+                            tokio::spawn(async move {
+                                let work = async {
+                                    let cached = cache.lock().expect("lock poisoned").get(&device_id).cloned();
+                                    let node_id = match cached {
+                                        Some(n) => n,
+                                        None => {
+                                            let reg = RegistryClient::new(reg_url);
+                                            let d = device_id.clone();
+                                            let Ok(Ok(dev)) = tokio::task::spawn_blocking(move || reg.get_device(&d)).await else { return };
+                                            cache.lock().expect("lock poisoned").insert(device_id, dev.node_id.clone());
+                                            dev.node_id
+                                        }
+                                    };
+                                    h.publish_tally(&node_id, on).await;
+                                };
+                                let _ = tokio::time::timeout(Duration::from_secs(3), work).await;
+                            });
+                        }
+                        tally_prev = sender_id;
+                    }
                 }
             }
         }
@@ -386,6 +427,7 @@ fn discover(registry: &RegistryClient, own_sender_id: &str) -> Result<Vec<Discov
         discovered.push(DiscoveredInput {
             format: info.video,
             sender_id: s.id.clone(),
+            device_id: s.device_id.clone(),
             label: s.label.clone(),
             flow_id: flow_id.clone(),
             lowres_sender_id: lowres.as_ref().map(|(id, _)| id.clone()),

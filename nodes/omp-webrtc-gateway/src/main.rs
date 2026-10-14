@@ -21,6 +21,7 @@ mod ice;
 mod invite;
 mod monitor;
 mod pipeline;
+mod tally;
 mod uibundle;
 
 use std::sync::{Arc, Mutex};
@@ -65,6 +66,8 @@ struct CameraStore {
     // trennen, wenn der widerrufene Token tatsächlich zur laufenden
     // Sitzung gehört (nicht z. B. zu einer bereits ersetzten/beendeten).
     active_token: Mutex<Option<String>>,
+    /// Tally für die Sendeseite (`GET /tally`).
+    tally: Arc<tally::TallyState>,
     /// Handy-Sendeseite mit den Betriebswerten des Gateways als vorgewählte
     /// Auflösung/Bildrate (einmal beim Start gebaut).
     camera_page: Vec<u8>,
@@ -169,7 +172,12 @@ impl ParamStore for CameraStore {
                     .to_string()
                     .into_bytes(),
             }),
-            (_, "/whip") if !self.invites.is_valid(invite::token_from_query(path)) => {
+            ("GET", "/tally") if self.invites.is_valid(invite::token_from_query(path)) => Some(RawResponse {
+                status: 200,
+                content_type: "application/json",
+                body: self.tally.json().to_string().into_bytes(),
+            }),
+            (_, "/whip" | "/tally") if !self.invites.is_valid(invite::token_from_query(path)) => {
                 // Einladungspflicht (Nutzerwunsch 2026-09-23, "security!")
                 // — s. invite.rs-Moduldoku: kein Fallback auf das alte,
                 // offene Verhalten, auch nicht bei leerem Einladungssatz.
@@ -306,7 +314,11 @@ async fn run_camera(common: Common) -> Result<(), Box<dyn std::error::Error + Se
     let media_ready_gateway = gateway.clone();
     let heartbeat = gateway.heartbeat.clone();
 
+    let tally_state = tally::TallyState::new(&env_or("OMP_TALLY_SOURCES", ""));
+    let tally_nats = nats_url.clone();
+    let tally_registry = registry_url.clone();
     let store: Arc<dyn ParamStore> = Arc::new(CameraStore {
+        tally: tally_state.clone(),
         flow_id: flow_id.clone(),
         audio_flow_id: audio_flow_id.clone(),
         gateway: gateway.clone(),
@@ -371,6 +383,8 @@ async fn run_camera(common: Common) -> Result<(), Box<dyn std::error::Error + Se
     )
     .await?;
     handle.register_worker("pipeline", heartbeat);
+    tally_state.set_node_id(&handle.node_id);
+    tokio::spawn(tally::run(tally_state, tally_nats, tally_registry));
 
     let events = async {
         while let Some(event) = rx.recv().await {

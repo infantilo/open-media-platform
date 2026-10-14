@@ -89,6 +89,12 @@
   .tile-label { position:absolute; bottom:8px; left:10px; font-size:11px; font-weight:600; letter-spacing:.06em; color:#fff;
                 background:rgba(6,9,18,.7); padding:2px 9px; border-radius:10px; pointer-events:none; }
 
+  /* Tally: roter Vollbild-Rahmen + "ON AIR", solange ein Auslöser (Mischer/Switcher) diese Kamera sendet. */
+  #tallyFrame { position:fixed; inset:0; z-index:50; pointer-events:none; display:none; border:10px solid var(--onair);
+                box-shadow:inset 0 0 40px 6px rgba(229,57,53,.55); }
+  #tallyFrame.on { display:block; }
+  #tallyFrame span { position:absolute; top:10px; right:12px; background:var(--onair); color:#fff; font-weight:800;
+                     letter-spacing:.1em; padding:4px 14px; border-radius:6px; font-size:15px; }
   #live .row { display:flex; gap:10px; margin-top:12px; }
   #live .row > button { flex:1; }
 
@@ -142,6 +148,7 @@
 </div>
 
 <!-- Nach dem Verbinden: Kamera + Retourbild halb/halb, Tap zum Vergrößern (Nutzerauftrag 2026-09-24). -->
+<div id="tallyFrame"><span id="tallyText">ON AIR</span></div>
 <div id="live">
   <div id="tiles" class="single">
     <div class="tile" data-role="cam">
@@ -474,6 +481,7 @@ async function start() {
     $('latRow').hidden = !measure;
     try { wakeLock = await navigator.wakeLock?.request('screen'); } catch (_) {}
     pollTimer = setInterval(pollStats, 500);
+    startTally();
   } catch (e) {
     showConnectError(friendlyConnectError(e), e.message || String(e));
     await stop(true);
@@ -590,7 +598,32 @@ async function pollStats() {
   } catch (_) {}
 }
 
+// Tally: der Node meldet per GET /tally, ob ein Auslöser (Bildmischer/Switcher) diese Kamera gerade sendet.
+let tallyTimer = null;
+function setTally(on, sources) {
+  $('tallyFrame').classList.toggle('on', !!on);
+  $('tallyText').textContent = 'ON AIR' + (sources && sources.length ? ' · ' + sources.join(', ') : '');
+  try { if (navigator.vibrate && on !== setTally.last) navigator.vibrate(on ? [120] : [40, 60, 40]); } catch (_) {}
+  setTally.last = !!on;
+}
+function startTally() {
+  stopTally();
+  const poll = async () => {
+    try {
+      const r = await fetch('/tally?token=' + encodeURIComponent(inviteToken), { cache: 'no-store' });
+      if (r.ok) { const j = await r.json(); setTally(j.on, j.sources); }
+    } catch (_) { /* Netzhänger: letzten Zustand behalten */ }
+  };
+  poll();
+  tallyTimer = setInterval(poll, 400);
+}
+function stopTally() {
+  if (tallyTimer) { clearInterval(tallyTimer); tallyTimer = null; }
+  setTally(false);
+}
+
 async function stop(quiet) {
+  stopTally();
   drawing = false;
   clearInterval(pollTimer);
   if (disconnectGraceTimer) { clearTimeout(disconnectGraceTimer); disconnectGraceTimer = null; }

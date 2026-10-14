@@ -89,6 +89,8 @@ pub struct Config {
 #[derive(Debug, Clone)]
 pub struct DiscoveredInput {
     pub sender_id: String,
+    /// Device des Senders — für die Auflösung zum Quell-Node (Tally).
+    pub device_id: String,
     pub label: String,
     pub flow_id: String,
     /// Auflösung/Bildrate des Quell-Flows laut Registry (Formatabweichungs-

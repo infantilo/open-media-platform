@@ -407,6 +407,14 @@
       "group": "Zeit",
       "min": 0,
       "max": 127
+    },
+    {
+      "key": "OMP_TALLY_GIVER",
+      "i18n": { "en": {"label": "Act as tally source", "description": "1 = every source patched onto this gateway counts as on air: its node gets tally (red tile, red frame on phone cameras) while connected.", "group": "Tally"} },
+      "label": "Als Tally-Geber arbeiten",
+      "type": "string",
+      "description": "1 = jede auf dieses Gateway aufgeschaltete Quelle gilt als auf Sendung: ihr Node bekommt Tally (rote Kachel, roter Rahmen an Handy-Kameras), solange sie verbunden ist.",
+      "group": "Tally"
     }
   ],
   "omp-srt-gateway-uplink": [
@@ -861,6 +869,14 @@
       "type": "host",
       "description": "Adresse, die Browsern als Kandidat gemeldet wird (hinter NAT).",
       "group": "Netzwerk"
+    },
+    {
+      "key": "OMP_TALLY_SOURCES",
+      "i18n": { "en": {"label": "Tally sources", "description": "Nodes whose tally lights the on-air frame on the phone page: node names or IDs, comma-separated (e.g. a video mixer and a switcher). Empty = any node that reports tally for this camera.", "group": "Tally"} },
+      "label": "Tally-Auslöser",
+      "type": "string",
+      "description": "Nodes, deren Tally den On-Air-Rahmen auf der Handy-Seite einschaltet: Node-Namen oder -IDs, kommagetrennt (z. B. ein Bildmischer und ein Switcher). Leer = jeder Node, der Tally für diese Kamera meldet.",
+      "group": "Tally"
     }
   ],
   "omp-webrtc-gateway-monitor": [
