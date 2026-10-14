@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"reflect"
 	"time"
 )
@@ -633,4 +634,52 @@ func patchParamValue(ctx context.Context, client *http.Client, apiBaseURL, name 
 		return fmt.Errorf("workflows: unexpected status %d from PATCH %s/params/%s", resp.StatusCode, apiBaseURL, name)
 	}
 	return nil
+}
+
+// defaultRoleStateBackupInterval: Takt der periodischen Sicherung laufender
+// Workflows (Nutzerwunsch 2026-10-14: Bedienzustand, z. B. das Testbild einer
+// Quelle, soll auch ohne sauberen Stop — Absturz, `make stop` — erhalten
+// bleiben). OMP_ROLE_STATE_BACKUP_INTERVAL überschreibt (Go-Duration, "0" =
+// aus).
+const defaultRoleStateBackupInterval = 60 * time.Second
+
+func roleStateBackupInterval() time.Duration {
+	v := os.Getenv("OMP_ROLE_STATE_BACKUP_INTERVAL")
+	if v == "" {
+		return defaultRoleStateBackupInterval
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		slog.Warn("workflows: invalid OMP_ROLE_STATE_BACKUP_INTERVAL, using default", "value", v)
+		return defaultRoleStateBackupInterval
+	}
+	return d
+}
+
+// RunRoleStateBackup sichert bis ctx endet periodisch den Bedienzustand aller
+// Rollen jedes Workflows im Status "started" (captureRoleState, best effort).
+func (s *Service) RunRoleStateBackup(ctx context.Context) {
+	interval := roleStateBackupInterval()
+	if interval == 0 {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			wfs, err := s.store.List()
+			if err != nil {
+				slog.Warn("workflows: role state backup: list failed", "error", err)
+				continue
+			}
+			for _, wf := range wfs {
+				if wf.Status == StatusStarted {
+					s.captureRoleState(wf)
+				}
+			}
+		}
+	}
 }

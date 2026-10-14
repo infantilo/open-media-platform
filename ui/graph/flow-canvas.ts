@@ -1892,6 +1892,23 @@ export class FlowCanvas extends HTMLElement {
   #isDraftDirty(): boolean {
     if (this.#workflowScopeExtraNodeIds.size > 0) return true;
     const wf = this.#workflows.find((w) => w.id === this.#workflowEditId);
+    if (wf && !this.#workflowEditDraft && !this.#isIdleWorkflow(wf)) {
+      // Laufender Workflow: auch eine neue/entfernte Verbindung ist
+      // ungespeichert (Nutzerfund 2026-10-14: Button blieb deaktiviert,
+      // die Verkabelung kam nach jedem Neustart in alter Form zurück).
+      const roleNameByNodeId = new Map<string, string>();
+      for (const [roleName, rt] of Object.entries(wf.runtime ?? {})) {
+        if (rt.nodeId) roleNameByNodeId.set(rt.nodeId, roleName);
+      }
+      if (roleNameByNodeId.size === 0) return false;
+      const key = (c: { fromRole: string; fromSender?: string; toRole: string; toReceiver?: string }) =>
+        [c.fromRole, c.fromSender ?? "", c.toRole, c.toReceiver ?? ""].join("\u0000");
+      const live = new Set(this.#liveConnections(roleNameByNodeId).map(key));
+      const saved = new Set((wf.definition?.connections ?? []).map(key));
+      if (live.size !== saved.size) return true;
+      for (const k of live) if (!saved.has(k)) return true;
+      return false;
+    }
     if (!wf || !this.#workflowEditDraft) return false;
     return JSON.stringify(this.#workflowEditDraft) !== JSON.stringify(wf.definition);
   }
@@ -2420,6 +2437,36 @@ export class FlowCanvas extends HTMLElement {
   // die neue Definition per Konstruktion exakt dem entspricht, was
   // gerade läuft; sie wirkt erst beim NÄCHSTEN Start, nicht rückwirkend
   // auf die laufenden Prozesse.
+  // Live-Kanten zwischen Workflow-Rollen als Definition.connections.
+  // Gleiche fromSender/toReceiver-Logik wie #saveGroupAsWorkflow: nur
+  // gesetzt, wenn die jeweilige Node mehr als einen Port auf dieser
+  // Seite hat (s. dortige ausführliche Begründung).
+  #liveConnections(
+    roleNameByNodeId: Map<string, string>,
+  ): { fromRole: string; fromSender?: string; toRole: string; toReceiver?: string }[] {
+    const portOwner = new Map<string, { nodeId: string; label: string; siblingCount: number }>();
+    for (const node of this.#graph.nodes) {
+      for (const p of node.outputs) portOwner.set(p.id, { nodeId: node.id, label: p.label, siblingCount: node.outputs.length });
+      for (const p of node.inputs) portOwner.set(p.id, { nodeId: node.id, label: p.label, siblingCount: node.inputs.length });
+    }
+    const connections: { fromRole: string; fromSender?: string; toRole: string; toReceiver?: string }[] = [];
+    for (const edge of this.#graph.edges) {
+      const from = portOwner.get(edge.fromSender);
+      const to = portOwner.get(edge.toReceiver);
+      if (!from || !to) continue;
+      const fromRole = roleNameByNodeId.get(from.nodeId);
+      const toRole = roleNameByNodeId.get(to.nodeId);
+      if (!fromRole || !toRole) continue;
+      connections.push({
+        fromRole,
+        fromSender: from.siblingCount > 1 ? from.label : undefined,
+        toRole,
+        toReceiver: to.siblingCount > 1 ? to.label : undefined,
+      });
+    }
+    return connections;
+  }
+
   async #saveRunningWorkflowFromLiveTopology() {
     const workflowId = this.#workflowEditId;
     const wf = this.#workflows.find((w) => w.id === workflowId);
@@ -2472,27 +2519,15 @@ export class FlowCanvas extends HTMLElement {
       return;
     }
 
-    // Gleiche fromSender/toReceiver-Logik wie #saveGroupAsWorkflow: nur
-    // gesetzt, wenn die jeweilige Node mehr als einen Port auf dieser
-    // Seite hat (s. dortige ausführliche Begründung).
-    const portOwner = new Map<string, { nodeId: string; label: string; siblingCount: number }>();
-    for (const node of this.#graph.nodes) {
-      for (const p of node.outputs) portOwner.set(p.id, { nodeId: node.id, label: p.label, siblingCount: node.outputs.length });
-      for (const p of node.inputs) portOwner.set(p.id, { nodeId: node.id, label: p.label, siblingCount: node.inputs.length });
-    }
+    const connections = this.#liveConnections(roleNameByNodeId);
 
-    const connections: { fromRole: string; fromSender?: string; toRole: string; toReceiver?: string }[] = [];
-    for (const edge of this.#graph.edges) {
-      const from = portOwner.get(edge.fromSender);
-      const to = portOwner.get(edge.toReceiver);
-      if (!from || !to) continue;
-      if (!memberIds.has(from.nodeId) || !memberIds.has(to.nodeId)) continue;
-      connections.push({
-        fromRole: roleNameByNodeId.get(from.nodeId)!,
-        fromSender: from.siblingCount > 1 ? from.label : undefined,
-        toRole: roleNameByNodeId.get(to.nodeId)!,
-        toReceiver: to.siblingCount > 1 ? to.label : undefined,
-      });
+    // Bereits bekannte Rollen behalten alle übrigen Felder (Format,
+    // MixerLevels, Env, Placement …) — nur Name/Typ/Host kommen aus dem
+    // Live-Stand.
+    const existingRoles = new Map((wf.definition?.roles ?? []).map((r) => [r.name, r]));
+    for (let i = 0; i < roles.length; i++) {
+      const prev = existingRoles.get(roles[i].name);
+      if (prev) roles[i] = { ...prev, ...roles[i] };
     }
 
     try {

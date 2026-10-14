@@ -813,6 +813,9 @@ func main() {
 	// oben) bzw. aus dem von Natur aus single-owner lokalen
 	// os/exec-Supervise-Pfad.
 	go runWhileLeader(ctx, clusterNode, workflowSvc.RunFailoverWatcher)
+	// Periodische Sicherung des Bedienzustands laufender Workflows
+	// (OMP_ROLE_STATE_BACKUP_INTERVAL, Default 60s, "0" = aus).
+	go runWhileLeader(ctx, clusterNode, workflowSvc.RunRoleStateBackup)
 
 	// D6 Teil 4 (ARCHITECTURE.md §6.1 Erweiterung 2026-07-13 Punkt 2):
 	// automatisierte Placement-Eskalation (auto-confirm-window/auto) —

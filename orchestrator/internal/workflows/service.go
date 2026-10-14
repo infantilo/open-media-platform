@@ -629,6 +629,7 @@ func (s *Service) Update(id, name string, def Definition) (Workflow, error) {
 	if wf.Status != StatusStopped && wf.Status != StatusPaused && wf.Status != StatusStarted {
 		return Workflow{}, ErrNotStopped
 	}
+	wasStarted := wf.Status == StatusStarted
 	wf.Name = name
 	wf.Definition = def
 	wf.UpdatedAt = time.Now()
@@ -640,7 +641,14 @@ func (s *Service) Update(id, name string, def Definition) (Workflow, error) {
 	// zur ALTEN Topologie (Rollen-Positionen/Verkabelung, s. state.go
 	// senderAliasPrefix-Doku) — best effort, kein Abbruch des im Kern
 	// bereits erfolgreichen Updates, falls das Leeren selbst fehlschlägt.
-	if err := s.store.ClearRoleState(id); err != nil {
+	if wasStarted {
+		// Laufender Workflow: Rollen/Positionen sind per Konstruktion
+		// unverändert (Live-Stand als Definition) — Zustand nicht
+		// verwerfen, sondern jetzt frisch erfassen (Nutzerfund
+		// 2026-10-14: Quellen vergaßen ihr Testbild nach "Im Workflow
+		// speichern", weil das Leeren hier den Stop-Snapshot ersetzte).
+		go s.captureRoleState(wf) // HTTP pro Rolle: PUT nicht blockieren
+	} else if err := s.store.ClearRoleState(id); err != nil {
 		slog.Warn("workflows: failed to clear role state after update", "workflow", id, "error", err)
 	}
 	s.publish(wf)
