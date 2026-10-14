@@ -30499,3 +30499,18 @@ Workflows leert weiterhin alles. (3) `RunRoleStateBackup` (leader-gated, Default
 Stand; ohne Speichern den letzten Stand vor Stop; periodische Sicherung schreibt ohne Stop/Speichern in die DB. **Nicht im Browser geprüft:**
 Aktivwerden des Speichern-Buttons bei neuer Verbindung (Nutzer bestätigte: Verbindungen werden gespeichert).
 
+## 2026-10-14 — Wartungsmodus: Grund, Verschieben-Dialog, Hardware-Bindung (`hostBound`)
+
+**Auftrag (Nutzerfund):** Regie-Host-B im Wartungsmodus meldete seine `omp-source` als „nicht verschiebbar“ — ohne Grund, ohne Weg. Dazu: Nodes mit
+besonderer Hardware (DeckLink, USB) dürfen nie automatisch umziehen, einstellbar. **Entscheidungen:** (1) `maintenance.Item.Reason` trägt einen **Code**
+(`standalone`, `hostBound`), die UI übersetzt (`hosts.maintReason.*`, Fallback roher Text; Rollen-Fehlschläge aus `EvacuateHost` bleiben deutscher Freitext).
+(2) Eigenständige Instanzen: **ein** Knopf „Verschieben …“ je Instanz mit Popup (Zielhost-Dropdown) statt eines Knopfs je Host; nutzt
+`POST /api/v1/instances/{id}/migrate` (Stop-dann-Start, `instancemigrate` trägt Parameter und Mischer-Referenzen mit). (3) Bindung: `CatalogEntry.HostBound` (Typ-Default),
+neue Placement-Stufe `pinned` je Rolle (im bestehenden Dropdown des Rollen-Designers — keine neue Zeile im festen SVG-Layout), `RequiredIOPort` zählt immer;
+`Service.roleHostBound` wird von `EvacuateHost` und `considerMigration` geprüft. Manuelles Verschieben und Standby-Failover bleiben bewusst frei (ausdrückliche
+Bediener-/Konfigurationsentscheidung). (4) Flow-Editor: Wartungsstatus, gestrichelter Rahmen und Banner in der Host-Zone (`HostEntry.maintenance`, SSE `host.maintenance`).
+**Befunde unterwegs:** `escapeHtml` (Text→innerHTML) lässt Anführungszeichen stehen — JSON in `data-*`-Attributen brach den Dialog; Attributwerte werden URL-kodiert.
+Die Hosts-Liste enthält bereits eine synthetische lokale Zeile (id leer) → lokales Ziel doppelt, jetzt gefiltert. **Live geprüft** (Headless-Chromium, eigene Test-Instanzen
+auf Regie-Host-B): Gründe, Knopf nur bei `standalone`, Dialog, tatsächlicher Umzug nach Regie-Host-A. **Nicht live geprüft:** Sperre gebundener Workflow-Rollen
+(nur Go-Test `TestRoleHostBound`).
+
