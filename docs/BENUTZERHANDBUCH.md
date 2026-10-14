@@ -1252,6 +1252,12 @@ des Monitor-Nodes.
   Anzeige „Live“, **Verbindung trennen** und ein aufklappbares **Status**-Feld
   mit Verbindungszustand und Latenz. Die optionale **Latenzmessung**
   blendet einen Zeitstempel-Streifen ins Bild ein.
+- **Monitor-Seite (Retourbild einzeln):** Ein Tipp auf das Videobild schaltet
+  **Vollbild** um — nur das Video, randlos, ohne Overlays, Badge oder Texte
+  (Seitenverhältnis bleibt erhalten, ggf. schwarze Balken). Erneuter Tipp oder
+  die Zurück-Geste beendet das Vollbild. Auf Geräten ohne Fullscreen-API
+  (z. B. iOS) füllt das Bild die ganze Seite; die Browserleiste kann dort
+  sichtbar bleiben.
 - Fehler beim Verbinden (Kamera nicht erlaubt, Einladung ungültig, Server
   nicht erreichbar) erscheinen als gut sichtbarer Hinweis im Startbildschirm.
 
