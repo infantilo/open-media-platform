@@ -155,8 +155,17 @@ func TestChecksumAndSizeMismatchFailAndLeaveNoFile(t *testing.T) {
 			t.Fatalf("%s: unvollständige/falsche Datei darf nicht als fertig im Medienverzeichnis liegen", name)
 		}
 		// Wiederholung ist möglich (neuer Job).
-		if j := m.Ensure(spec); j.State != "running" && j.State != "failed" {
+		j := m.Ensure(spec)
+		if j.State != "running" && j.State != "failed" {
 			t.Fatalf("%s: %+v", name, j)
+		}
+		// Den Wiederholungs-Job zu Ende laufen lassen: sonst schreibt er noch in
+		// das Temp-Verzeichnis, während dessen Aufräumen läuft (flaky "directory not empty").
+		for i := 0; i < 500; i++ {
+			if cur, ok := m.Get(spec.Key()); !ok || cur.State != "running" {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
 	}
 }

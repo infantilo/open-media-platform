@@ -24,6 +24,7 @@ jobs:
         if: matrix.language == 'go'
         with:
           go-version: "1.26"
+          check-latest: true
 
       # Rust ist bewusst nicht dabei: der Workspace haengt an
       # third_party/mxl (lokal gebaut, auf dem Runner nicht vorhanden,
