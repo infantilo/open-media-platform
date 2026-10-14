@@ -14,6 +14,13 @@
   h1 { font-size:18px; margin:4px 0 12px; }
   .screen { position:relative; background:#000; border-radius:8px; overflow:hidden; aspect-ratio:16/9; }
   video { width:100%; height:100%; object-fit:contain; display:block; }
+  .screen { cursor:pointer; }
+  /* Vollbild per Tipp aufs Bild: nur das Video, randlos, keine Overlays/Texte. */
+  body.fs { padding:0; max-width:none; overflow:hidden; background:#000; }
+  body.fs > :not(.screen) { display:none !important; }
+  body.fs .screen { position:fixed; inset:0; width:100vw; height:100vh; height:100dvh; aspect-ratio:auto;
+                    border-radius:0; z-index:1000; background:#000; }
+  body.fs .badge { display:none; }
   .badge { position:absolute; top:8px; left:8px; padding:2px 10px; border-radius:12px; font-size:13px;
            font-weight:600; background:#000a; }
   .badge.live { color:#fff; background:var(--err); }
@@ -244,6 +251,20 @@ async function stop(quiet) {
   $('conn').textContent = '–'; setBadge();
   if (!quiet) log('gestoppt');
 }
+
+// Vollbild: Tipp/Klick aufs Bild schaltet um (Fullscreen-API, sonst CSS-Vollbild als Rückfall, z. B. iOS).
+function setFs(on) {
+  document.body.classList.toggle('fs', on);
+  if (on) {
+    try { const p = document.documentElement.requestFullscreen?.({ navigationUI: 'hide' }); p && p.catch(() => {}); } catch (_) {}
+    try { screen.orientation?.lock?.('landscape').catch(() => {}); } catch (_) {}
+  } else {
+    try { if (document.fullscreenElement) document.exitFullscreen(); } catch (_) {}
+    try { screen.orientation?.unlock?.(); } catch (_) {}
+  }
+}
+document.querySelector('.screen').onclick = () => setFs(!document.body.classList.contains('fs'));
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) setFs(false); });
 
 $('start').onclick = start;
 $('stop').onclick = () => stop(false);
