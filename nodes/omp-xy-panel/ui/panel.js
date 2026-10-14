@@ -9,7 +9,7 @@ const XY_T = (() => {
       sources: "Quellen", sinks: "Ziele", home: "Home", up: "Eine Ebene hoch",
       unassigned: "Nicht zugewiesen", all: "Alle", video: "Video", audio: "Audio", data: "Daten",
       search: "Suchen (Name, Node, Tag) …", empty: "Nichts auf dieser Ebene.", offline: "offline",
-      take: "Take", nodeAll: "Alle Ports", nodeAllTip: "Ganzen Node wählen: Video und Audio gemeinsam schalten (nach Tags, sonst 1:1)", nodeRouted: "{n} Verbindungen geschaltet ({tag} nach Tags, {order} 1:1)", nodeNoPairs: "Keine passenden Ports zwischen {from} und {to}.", disconnect: "Trennen", clear: "Auswahl aufheben", autoTake: "Sofort schalten",
+      take: "Take", nodeAll: "Alle Ports", nodeAllTip: "Ganzen Node wählen: Video und Audio gemeinsam schalten (nach Tags, sonst 1:1)", nodeRouted: "{n} Verbindungen geschaltet ({tag} nach Tags, {order} 1:1)", nodeNoPairs: "Keine passenden Ports zwischen {from} und {to}.", disconnect: "Trennen", clear: "Auswahl aufheben", autoTake: "Sofort schalten", nodeModeTags: "Nach Tags, sonst 1:1", nodeModeTagsOnly: "Nur nach Tags", nodeModeOrder: "Nur 1:1 (Reihenfolge)", nodeModeLabel: "Zuordnung der Ports",
       noSource: "keine Quelle gewählt", noSink: "kein Ziel gewählt", from: "Quelle", to: "Ziel",
       routed: "{from} → {to} geschaltet", disconnected: "{to} getrennt",
       failed: "Schalten fehlgeschlagen: {detail}", incompatible: "Quelle und Ziel passen nicht zusammen (Medientyp).",
@@ -35,7 +35,7 @@ const XY_T = (() => {
       sources: "Sources", sinks: "Destinations", home: "Home", up: "Up one level",
       unassigned: "Unassigned", all: "All", video: "Video", audio: "Audio", data: "Data",
       search: "Search (name, node, tag) …", empty: "Nothing at this level.", offline: "offline",
-      take: "Take", nodeAll: "All ports", nodeAllTip: "Select the whole node: route video and audio together (by tags, otherwise 1:1)", nodeRouted: "{n} connections routed ({tag} by tags, {order} 1:1)", nodeNoPairs: "No matching ports between {from} and {to}.", disconnect: "Disconnect", clear: "Clear selection", autoTake: "Switch immediately",
+      take: "Take", nodeAll: "All ports", nodeAllTip: "Select the whole node: route video and audio together (by tags, otherwise 1:1)", nodeRouted: "{n} connections routed ({tag} by tags, {order} 1:1)", nodeNoPairs: "No matching ports between {from} and {to}.", disconnect: "Disconnect", clear: "Clear selection", autoTake: "Switch immediately", nodeModeTags: "By tags, otherwise 1:1", nodeModeTagsOnly: "By tags only", nodeModeOrder: "1:1 only (by order)", nodeModeLabel: "Port mapping",
       noSource: "no source selected", noSink: "no destination selected", from: "Source", to: "Destination",
       routed: "{from} → {to} routed", disconnected: "{to} disconnected",
       failed: "Routing failed: {detail}", incompatible: "Source and destination do not match (media type).",
@@ -187,6 +187,7 @@ class OmpXyPanel extends HTMLElement {
       },
       selSrc: null, selDst: null, selSrcNode: null, selDstNode: null,
       auto: localStorage.getItem("omp-xy-auto") !== "0",
+      nodeMode: ["tags", "tagsOnly", "order"].includes(localStorage.getItem("omp-xy-nodemode")) ? localStorage.getItem("omp-xy-nodemode") : "tags",
       tab: "src",
       draft: null, // null = aus, sonst [{from,to}]
       bundle: null, // null = aus, sonst {items:[Quellpunkte], name, mode}
@@ -370,11 +371,11 @@ class OmpXyPanel extends HTMLElement {
       return { ok, bad };
     }
 
-    /** Ganzer Node → ganzer Node: Ports gleichen Medientyps nach gemeinsamen Tags, sonst der Reihe nach 1:1. */
+    /** Ganzer Node → ganzer Node: Ports gleichen Medientyps nach gemeinsamen Tags, je nach st.nodeMode mit 1:1-Rückfall oder nur 1:1. */
     async function doNodeTake(srcNode, dstNode) {
       const srcs = st.sources.filter((x) => x.nodeId === srcNode);
       const dsts = st.sinks.filter((x) => x.nodeId === dstNode);
-      const plan = L.planTagRoutes(srcs, dsts, { fallbackOrder: true });
+      const plan = L.planTagRoutes(srcs, dsts, { fallbackOrder: st.nodeMode === "tags", byTags: st.nodeMode !== "order" });
       const from = nodeNameById(srcNode), to = nodeNameById(dstNode);
       if (!plan.routes.length) { setMsg(t("nodeNoPairs", { from, to }), true); return; }
       const { ok, bad } = await runRoutes(plan.routes);
@@ -518,7 +519,12 @@ class OmpXyPanel extends HTMLElement {
         xyEl("span", {}, t("from") + ": "), src ? xyEl("b", { text: pointName(src) }) : st.selSrcNode ? xyEl("b", { text: "⇉ " + nodeNameById(st.selSrcNode) }) : xyEl("i", { text: t("noSource") }),
         "  →  ",
         xyEl("span", {}, t("to") + ": "), dst ? xyEl("b", { text: pointName(dst) }) : st.selDstNode ? xyEl("b", { text: "⇉ " + nodeNameById(st.selDstNode) }) : xyEl("i", { text: t("noSink") }));
-      return xyEl("div", { class: "bar" }, txt,
+      const nodeModeSel = (st.selSrcNode || st.selDstNode) ? xyEl("select", { "aria-label": t("nodeModeLabel"), title: t("nodeModeLabel"), onchange: (e) => {
+        st.nodeMode = e.target.value;
+        try { localStorage.setItem("omp-xy-nodemode", st.nodeMode); } catch { /* ignorieren */ }
+      } }, xyEl("option", { value: "tags", text: t("nodeModeTags") }), xyEl("option", { value: "tagsOnly", text: t("nodeModeTagsOnly") }), xyEl("option", { value: "order", text: t("nodeModeOrder") })) : null;
+      if (nodeModeSel) nodeModeSel.value = st.nodeMode;
+      return xyEl("div", { class: "bar" }, txt, ...(nodeModeSel ? [nodeModeSel] : []),
         xyEl("button", { class: "go", disabled: !(nodeMode || (src && dst)), onclick: () => nodeMode ? doNodeTake(st.selSrcNode, st.selDstNode) : doTake(src, dst) }, t("take")),
         xyEl("button", { disabled: !connected, onclick: () => doDisconnect(dst) }, t("disconnect")),
         xyEl("button", { id: "undo", disabled: !liveUndo(), onclick: doUndo }, "↶ " + t("undo")),

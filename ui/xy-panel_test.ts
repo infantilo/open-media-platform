@@ -114,6 +114,14 @@ Deno.test("Rest nach Reihenfolge nur mit Option, nur gleicher Medientyp", () => 
   assertEquals(plan.unmatched, []);
 });
 
+Deno.test("byTags:false paart nur nach Reihenfolge und Medientyp, ignoriert Tags", () => {
+  const plan = L.planTagRoutes(nodeSrc, nodeSnk, { byTags: false });
+  assertEquals(plan.routes.every((r: { reason: string }) => r.reason === "order"), true);
+  const audio = plan.routes.filter((r: { to: { mediaType: string } }) => r.to.mediaType === "audio").map((r: { from: { id: string }; to: { id: string } }) => `${r.from.id}>${r.to.id}`);
+  assertEquals(audio, ["c>r-p", "p>r-c"]); // Reihenfolge, bewusst NICHT die Tag-Treffer
+  assertEquals(plan.unmatched, []);
+});
+
 Deno.test("Offline-Quellen werden nie gepaart", () => {
   const off = L.normSources([src("c", "cam", "Kommentar", "audio", ["role.commentator"], false)]);
   const plan = L.planTagRoutes(off, nodeSnk);

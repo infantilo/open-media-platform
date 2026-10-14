@@ -222,9 +222,10 @@
    * Tag-basierte Paarung: je Senke die Quelle gleichen Medientyps mit den
    * meisten gemeinsamen Tags (mindestens 1). Mit `fallbackOrder` werden
    * unpaarige Senken der Reihe nach mit noch unbenutzten Quellen gleichen
-   * Medientyps verbunden. Offline-Quellen werden nie gewählt.
+   * Medientyps verbunden. Mit `byTags: false` wird nur nach Reihenfolge
+   * gepaart (1:1). Offline-Quellen werden nie gewählt.
    */
-  function planTagRoutes(sources, sinks, { fallbackOrder = false } = {}) {
+  function planTagRoutes(sources, sinks, { fallbackOrder = false, byTags = true } = {}) {
     const routes = [];
     const unmatched = [];
     const used = new Set();
@@ -232,7 +233,7 @@
     for (const sink of sinks) {
       let best = null;
       let bestScore = 0;
-      for (const s of live) {
+      for (const s of byTags ? live : []) {
         if (!s.mediaType || s.mediaType !== sink.mediaType) continue;
         const n = sharedTags(s, sink).length;
         if (n === 0) continue;
@@ -248,7 +249,7 @@
         unmatched.push(sink);
       }
     }
-    if (!fallbackOrder) return { routes, unmatched };
+    if (!fallbackOrder && byTags) return { routes, unmatched };
     const stillUnmatched = [];
     for (const sink of unmatched) {
       const cand = live.find((s) => !used.has(s.id) && s.mediaType && s.mediaType === sink.mediaType);
