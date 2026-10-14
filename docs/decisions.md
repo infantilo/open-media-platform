@@ -30482,3 +30482,20 @@ in `pickActiveEntry`; Kanten schalten verlangt `configure` global (reiner Operat
 mit dem **Benutzernamen**; der 1,5-s-Takt stapelte bei hängenden Anfragen (Browser-Verbindungslimit) — jetzt nicht gestapelt, 8-s-Limit.
 **Nicht am Gerät geprüft:** Bilddrehung „+“/„+ XL“, USB-Dauer, Wiederverbinden, Dial-Drehsinn, Reset/Logo. **Nicht umgesetzt:** Feldwerte der Grafik am Deck,
 X/Y-Ebenen, T-Bar/Wipes, Pegelanzeige auf Tasten, Neo/Mini/MK.1, mehrere Geräte.
+
+## 2026-10-14 — Workflow speichern: Verbindungen, Startzustand, periodische Sicherung
+
+**Auftrag (Nutzerfund):** Änderungen an einem laufenden Workflow (neue Verbindung) ließen sich nicht speichern und kamen nach jedem Neustart in
+alter Form zurück; Quellen merkten sich ihr Testbild nicht. **Ursachen:** (1) `#isDraftDirty()` kannte für laufende Workflows nur neue
+Extra-Nodes — der Speichern-Button blieb bei geänderten Verbindungen deaktiviert. (2) `Service.Update()` leerte den `role_state` bei **jedem**
+Speichern, auch bei laufendem Workflow; der beim Stop erfasste Zustand ging verloren. Außerdem verwarf das Live-Speichern alle Rollenfelder außer
+Name/Typ/Host (Format, MixerLevels, Env, Placement).
+**Entscheidungen:** (1) Dirty-Erkennung vergleicht die Live-Kanten (`#liveConnections`) mit `definition.connections` als Menge. (2) `Update()` eines
+**laufenden** Workflows erfasst den Zustand neu (asynchron) und **pinnt** ihn (`__pinned` in `roleStateEnvelope`); Stop und periodische Sicherung
+überspringen gepinnte Rollen (`captureAuto`). Nie gespeicherte Workflows behalten „letzter Stand vor Stop" (Nachtrag 91 Punkt 4). Failover/
+Migration/Rollen-Neustart erfassen ungepinnt (`captureTransfer`) — der laufende Stand muss auf die neue Instanz. `Update()` eines gestoppten
+Workflows leert weiterhin alles. (3) `RunRoleStateBackup` (leader-gated, Default 60 s, `OMP_ROLE_STATE_BACKUP_INTERVAL`, `0` = aus).
+**Live geprüft** (eigener Test-Workflow, Quelle+Viewer): Quelle ändern → speichern → wieder ändern → stoppen → starten ergibt den gespeicherten
+Stand; ohne Speichern den letzten Stand vor Stop; periodische Sicherung schreibt ohne Stop/Speichern in die DB. **Nicht im Browser geprüft:**
+Aktivwerden des Speichern-Buttons bei neuer Verbindung (Nutzer bestätigte: Verbindungen werden gespeichert).
+

@@ -324,6 +324,37 @@ Platzierung laut Plan-Vorschau). Es ist eine Vorschau: dort läuft noch nichts.
 Der Block verschwindet, sobald der Workflow läuft und seine
 echten Kacheln in den Zonen stehen.
 
+### 4.0 Laufenden Workflow ändern und Startzustand speichern
+
+Doppelklick auf einen laufenden Workflow öffnet ihn im Flow Editor. Dort
+kannst du Nodes hinzufügen, verschieben und neu verbinden. **„Im Workflow
+speichern"** (Breadcrumb-Leiste) wird aktiv, sobald sich etwas gegenüber
+der gespeicherten Definition geändert hat — neue Nodes **oder** neue bzw.
+entfernte Verbindungen. Beim Speichern gilt:
+
+- Die Verkabelung wird als Definition übernommen und kommt bei jedem
+  Neustart des Workflows wieder. Weitere Rolleneinstellungen (Format,
+  Mischerebenen, Umgebung, Platzierung) bleiben erhalten.
+- Der **aktuelle Bedienzustand aller Rollen** (z. B. das Testbild einer
+  Quelle, Mischer-Einstellungen) wird als **Startzustand festgeschrieben**.
+  Stellst du danach etwas um und stoppst den Workflow, startet er beim
+  nächsten Mal trotzdem wieder mit dem **gespeicherten** Stand.
+- Ein Workflow, den du nie so gespeichert hast, startet mit dem **letzten
+  Stand vor dem Stoppen**.
+- Wird eine einzelne Rolle neu gestartet, auf einen anderen Host verschoben
+  oder übernimmt ihr Standby, geht der laufende Stand auf die neue Instanz
+  über; die Festschreibung gilt für diese Rolle dann nicht mehr. Wer den
+  Startzustand wieder festlegen will, speichert erneut.
+- Wird ein **gestoppter** Workflow bearbeitet und gespeichert, wird der
+  gemerkte Bedienzustand verworfen, weil sich die Verkabelung geändert
+  haben kann.
+
+Zusätzlich sichert der Orchestrator den Bedienzustand laufender Workflows
+**alle 60 Sekunden** (nicht festgeschriebene Rollen), damit er auch nach
+einem Absturz oder hartem Beenden der Nodes nicht verloren ist. Das
+Intervall steuert die Umgebungsvariable `OMP_ROLE_STATE_BACKUP_INTERVAL`
+(Go-Dauer, z. B. `30s`; `0` schaltet die Sicherung aus).
+
 ### 4.1 Hot-Standby (Redundanz für kritische Rollen)
 
 Im Rollen-Designer bietet jede Rolle ein zusätzliches Dropdown „Standby
