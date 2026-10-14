@@ -29,7 +29,7 @@ jobs:
       # Rust ist bewusst nicht dabei: der Workspace haengt an
       # third_party/mxl (lokal gebaut, auf dem Runner nicht vorhanden,
       # siehe ci.yml). Rust-Abhaengigkeiten deckt security.yml (cargo audit) ab.
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.language == 'go' && 'manual' || 'none' }}
@@ -42,6 +42,6 @@ jobs:
             (cd "$m" && go build ./...)
           done
 
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@v4
         with:
           category: /language:${{ matrix.language }}
