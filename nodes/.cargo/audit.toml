@@ -1,0 +1,18 @@
+# Bewusst akzeptierte Funde (Begruendung je Eintrag). Alles andere muss gruen sein.
+#
+# Diese Funde (plus die zwei Unmaintained-Warnungen) stammen aus tiny_http 0.12.0 mit Feature `ssl-rustls`
+# (omp-node-sdk/src/server.rs `spawn_tls`): tiny_http ist in 0.12.0 die
+# aktuelle Version und haengt fest an rustls 0.20 / ring 0.16 — es gibt keinen
+# Upstream-Fix. Der TLS-Server ist der Parameter-/Health-Endpunkt eines Nodes
+# im Cluster-Netz (mTLS-Umgebung, nicht fuer das offene Internet gedacht).
+# Abhilfe auf Dauer: tiny_http-TLS durch einen eigenen Acceptor mit rustls >=0.23
+# ersetzen (offen, siehe docs/decisions.md 2026-10-14).
+[advisories]
+ignore = [
+  # rustls 0.20: complete_io kann bei praeparierter Netz-Eingabe endlos laufen
+  # (DoS eines einzelnen Node-Threads). Echtes, akzeptiertes Restrisiko.
+  "RUSTSEC-2024-0336",
+  # ring 0.16: AES-Funktionen paniken nur bei aktivierten Overflow-Checks —
+  # Release-Builds haben sie aus.
+  "RUSTSEC-2025-0009",
+]

@@ -271,7 +271,7 @@ export function ruleToExpression(r: Rule): string {
 // Rückweg: nur exakt die vom Baukasten erzeugte Form — alles andere ist
 // ein frei geschriebener Ausdruck und bleibt im Freitext-Modus.
 export function parseRule(expression: string): Rule | null {
-  const ops = RULE_OPERATORS.map((o) => o.op).sort((a, b) => b.length - a.length).map((o) => o.replace(/[=!<>]/g, "\\$&"));
+  const ops = RULE_OPERATORS.map((o) => o.op).sort((a, b) => b.length - a.length).map((o) => o.replace(/[\\^$.*+?()[\]{}|=!<>]/g, "\\$&"));
   const m = new RegExp(`^\\s*([A-Za-z_][\\w.\\[\\]"-]*)\\s+(${ops.join("|")})\\s+(.+?)\\s*$`).exec(expression);
   if (!m) return null;
   const [, variable, op, lit] = m;
