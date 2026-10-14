@@ -489,4 +489,6 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
   }
 }
 
-customElements.define("omp-webrtc-gateway-panel", OmpWebrtcGatewayPanel);
+if (!customElements.get("omp-webrtc-gateway-panel")) {
+  customElements.define("omp-webrtc-gateway-panel", OmpWebrtcGatewayPanel);
+}
