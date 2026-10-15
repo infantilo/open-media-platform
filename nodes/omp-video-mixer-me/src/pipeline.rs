@@ -495,6 +495,12 @@ pub struct PipelineHandle {
     /// `crosspoint.transType`: wie `trans_rate_ms` ein atomarer Store,
     /// gelesen beim Start von AUTO bzw. bei jedem T-Bar-Schritt.
     trans_kind: Vec<Arc<AtomicU8>>,
+    /// Option je Ebene (Nutzerwunsch 2026-10-15): nach CUT, AUTO und einem
+    /// abgeschlossenen T-Bar-Zug wird das bisherige Programm zum neuen
+    /// Preset (PGM/PST tauschen, wie "flip-flop" am Hardware-Pult). Ein
+    /// Hot-Take auf dem PGM-Bus und geplante (`takeAt`) Wechsel lassen
+    /// das Preset unverändert.
+    swap_on_transition: Vec<Arc<AtomicBool>>,
     /// Anzahl angekündigter, noch nicht abgeschlossener Quellenwechsel (`replace_inputs`).
     handover_pending: Arc<AtomicUsize>,
 }
@@ -611,6 +617,13 @@ impl PipelineHandle {
     pub fn set_trans_kind(&self, level: usize, kind: TransKind) {
         if let Some(k) = self.trans_kind.get(level) {
             k.store(kind.to_u8(), Ordering::Relaxed);
+        }
+    }
+
+    /// `crosspoint.setSwapOnTransition`: PGM/PST nach CUT/AUTO/T-Bar tauschen.
+    pub fn set_swap_on_transition(&self, level: usize, on: bool) {
+        if let Some(f) = self.swap_on_transition.get(level) {
+            f.store(on, Ordering::Relaxed);
         }
     }
 
@@ -2465,6 +2478,24 @@ fn apply_transition_frame(t: &TransPads, kind: TransKind, pos: f64) {
 
 /// Endzustand nach einer abgeschlossenen Überblendung: neues Bild
 /// vollflächig oben an Position 0, ausgehendes Bild ausgeblendet.
+/// Option "PGM/PST nach Übergang tauschen" (`PipelineHandle::
+/// set_swap_on_transition`): das bisherige Programm wird zum Preset.
+fn swap_preset_after_transition(
+    flags: &[Arc<AtomicBool>],
+    level: usize,
+    previous: Option<String>,
+    preset: &mut [Option<String>],
+    tx: &tokio::sync::mpsc::UnboundedSender<Event>,
+) {
+    if !flags.get(level).is_some_and(|f| f.load(Ordering::Relaxed)) {
+        return;
+    }
+    if let Some(p) = preset.get_mut(level) {
+        *p = previous;
+        let _ = tx.send(Event::PresetChanged { level, preset: p.clone() });
+    }
+}
+
 fn finish_transition(t: &TransPads) {
     reset_positions(t);
     t.fg.set_property("alpha", 1.0f64);
@@ -2553,6 +2584,7 @@ pub fn run(
         .collect();
 
     let trans_kind: Vec<Arc<AtomicU8>> = (0..level_count).map(|_| Arc::new(AtomicU8::new(TransKind::Mix.to_u8()))).collect();
+    let swap_on_transition: Vec<Arc<AtomicBool>> = (0..level_count).map(|_| Arc::new(AtomicBool::new(false))).collect();
     // Generationszähler je Ebene für PIP-Fahrten: jede neue Box-/PIP-Änderung
     // erhöht ihn und bricht damit eine laufende Fahrt ab.
     let pip_anim_gen: Vec<Arc<AtomicU64>> = (0..level_count).map(|_| Arc::new(AtomicU64::new(0))).collect();
@@ -2605,6 +2637,7 @@ pub fn run(
         output_delays: output_delays.clone(),
         trans_rate_ms: trans_rate_ms.clone(),
         trans_kind: trans_kind.clone(),
+        swap_on_transition: swap_on_transition.clone(),
         handover_pending: handover_pending.clone(),
     }));
 
@@ -2976,6 +3009,7 @@ pub fn run(
                     fading.get(level),
                 ) {
                     let previous = prog.clone();
+                    let swap_prev = previous.clone();
                     let applied = switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, pre);
                     p.comp_fg_pad.set_property("alpha", 1.0f64);
                     p.comp_bg_pad.set_property("alpha", 0.0f64);
@@ -3002,6 +3036,7 @@ pub fn run(
                     // `spawn_autotrans`-Doku) — CUT ersetzt einen
                     // eventuell mitten geparkten manuellen Zug.
                     let _ = tx.send(Event::TransitionPositionChanged { level, position: 0.0 });
+                    swap_preset_after_transition(&swap_on_transition, level, swap_prev, &mut preset, &tx);
                 }
             }
             Ok(Command::Take(level, sender_id)) => {
@@ -3052,6 +3087,7 @@ pub fn run(
                         continue;
                     }
                     let previous = prog.clone();
+                    let swap_prev = previous.clone();
                     // Programm-Zustand gilt sofort als gewechselt (Tally
                     // reagiert im Moment des Auslösens, Moduldoku) — die
                     // sichtbare Überblendung läuft danach asynchron.
@@ -3095,6 +3131,7 @@ pub fn run(
                         previous,
                         current: prog.clone(),
                     });
+                    swap_preset_after_transition(&swap_on_transition, level, swap_prev, &mut preset, &tx);
                 }
             }
             // Manueller T-Bar (`docs/END-GOAL-FEATURES.md` §3.4 Teil 2,
@@ -3178,10 +3215,12 @@ pub fn run(
                         // die Ruheposition 0 für den nächsten Zug.
                         switch_isel(&p.isel_bg, &p.source_pads_bg, &p.black_pad_bg, pre);
                         let previous = prog.clone();
+                        let swap_prev = previous.clone();
                         *prog = pre.clone();
                         fading_l.store(false, Ordering::Release);
                         let _ = tx.send(Event::ProgramChanged { level, previous, current: prog.clone() });
                         let _ = tx.send(Event::TransitionPositionChanged { level, position: 0.0 });
+                        swap_preset_after_transition(&swap_on_transition, level, swap_prev, &mut preset, &tx);
                     } else {
                         if pos <= 0.0 {
                             // Sauberer Abbruch: zurück auf 0 gezogen, bevor

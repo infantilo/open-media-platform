@@ -15,6 +15,8 @@ const T = (() => {
       "sources": "Quellen",
       "sourcesTitle": "Quellen anpinnen/entfernen, DSK-Quelle wählen",
       "pipAddTitle": "Neues PIP-Preset anlegen",
+      "swapLabel": "⇄ PGM/PST",
+      "swapTitle": "Nach CUT/AUTO/T-Bar tauschen PGM und PST: das bisherige Programm wird zum Preset (Hot-Take auf PGM lässt das Preset unverändert)",
       "kindMix": "Überblendung",
       "kindVfade": "Über Schwarz (ausgehendes Bild blendet ab, neues auf)",
       "kindFadecut": "Ausgehendes Bild blendet auf Schwarz, dann steht das neue hart da",
@@ -87,6 +89,8 @@ const T = (() => {
       "sources": "Sources",
       "sourcesTitle": "Pin/remove sources, choose DSK source",
       "pipAddTitle": "Create a new PIP preset",
+      "swapLabel": "⇄ PGM/PST",
+      "swapTitle": "After CUT/AUTO/T-bar, PGM and PST swap: the previous programme becomes the preset (a hot take on PGM leaves the preset unchanged)",
       "kindMix": "Dissolve",
       "kindVfade": "Via black (outgoing picture fades out, new one fades in)",
       "kindFadecut": "Outgoing picture fades to black, then the new one cuts in",
@@ -498,26 +502,28 @@ class OmpVideoMixerMePanel extends HTMLElement {
       /* Konsole verschmolzen (s. Moduldoku): EINE Liste von Bank-Reihen
          statt N einzelner Kartenwidgets. */
       .console-list { display: flex; flex-direction: column; }
-      .bank-row { display: flex; gap: var(--omp-space-2, 8px); padding: var(--omp-space-2, 8px) 0; }
-      .bank-row + .bank-row { border-top: 1px solid var(--omp-border, #2e3338); margin-top: var(--omp-space-1, 4px); }
+      .bank-row { display: flex; gap: 6px; padding: 4px 0; }
+      .bank-row + .bank-row { border-top: 1px solid var(--omp-border, #2e3338); margin-top: 2px; }
       .bank-gutter {
         width: 14px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
         font-size: 10px; font-weight: 700; color: var(--omp-text-dim, #9aa0a6);
       }
-      .bank-content { flex: 1; min-width: 0; }
+      .bank-content { flex: 1; min-width: 0; container-type: inline-size; }
 
-      .console { display: grid; grid-template-columns: 1fr 116px; gap: var(--omp-space-3, 12px); }
-      .buses { display: flex; flex-direction: column; gap: var(--omp-space-2, 8px); min-width: 0; }
-      .bus-row { display: flex; align-items: flex-start; gap: 8px; }
+      .console { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 8px; }
+      .buses { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+      .bus-row { display: flex; align-items: flex-start; gap: 4px; }
       .bus-label {
-        width: 30px; flex-shrink: 0; padding-top: 8px; font-size: var(--omp-font-size-xs, 11px);
+        width: 26px; flex-shrink: 0; padding-top: 7px; font-size: var(--omp-font-size-xs, 11px);
         color: var(--omp-text-dim, #9aa0a6); text-transform: uppercase; font-weight: 700;
         letter-spacing: 0.04em;
       }
-      .bus-buttons { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 5px; min-width: 0; }
+      .bus-buttons { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 4px; min-width: 0; }
       .bus-buttons omp-button {
-        width: 68px; height: 34px; font-size: 10px; line-height: 1.15;
+        min-width: 60px; width: auto; height: 30px; font-size: 10px; line-height: 1.15;
       }
+      .bus-buttons omp-button::part(button), .toolbar-row omp-button::part(button),
+      .rate-row omp-button::part(button), .transition omp-button::part(button) { padding: 0 6px; }
       /* Bugliste 2026-09-25 #6: Vorschaubild-Karte statt reiner Text-
          Pille — der Operator "drückt auf das Bild" (Nutzerwunsch). */
       .bus-buttons omp-button.with-thumb { width: 88px; height: auto; padding: 0 !important; }
@@ -538,17 +544,17 @@ class OmpVideoMixerMePanel extends HTMLElement {
       .thumbs-toggle {
         display: flex; align-items: center; gap: 5px; cursor: pointer;
         color: var(--omp-text-dim, #9aa0a6); font-size: var(--omp-font-size-xs, 11px);
-        user-select: none; margin-bottom: var(--omp-space-2, 8px);
+        user-select: none; margin-bottom: 2px;
       }
       .thumbs-toggle input { width: 14px; height: 14px; accent-color: var(--omp-info, #4285f4); cursor: pointer; }
       .bus-buttons .group-label {
-        flex-basis: 100%; font-size: 9px; font-weight: 700; letter-spacing: 0.08em;
+        align-self: center; font-size: 8px; font-weight: 700; letter-spacing: 0.06em;
         text-transform: uppercase; color: var(--omp-text-dim, #9aa0a6);
-        margin: 6px 0 -1px; padding-left: 2px;
+        margin: 0 0 0 4px; padding-left: 3px;
         border-left: 2px solid var(--omp-border, #2e3338);
       }
-      .bus-buttons .group-label:first-child { margin-top: 0; }
-      .bus-buttons p.empty { flex-basis: 100%; margin: 2px 0 3px; }
+      .bus-buttons .group-label:first-child { margin-left: 0; }
+      .bus-buttons p.empty { align-self: center; margin: 0 0 0 4px; }
 
       /* Kompakte Werkzeugleiste (Nutzerauftrag 2026-09-04: "kompakter,
          touch-tauglicher") — ersetzt die frühere Inline-SRC-Reihe +
@@ -556,40 +562,56 @@ class OmpVideoMixerMePanel extends HTMLElement {
          Pin/Unpin+DSK-Dialog), der DSK-Toggle selbst, und die
          Rate-Wahl. */
       .toolbar-row {
-        margin-top: var(--omp-space-1, 4px);
-        padding-top: var(--omp-space-2, 8px);
+        padding-top: 4px;
         border-top: 1px solid var(--omp-border, #2e3338);
-        display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+        display: flex; gap: 4px; align-items: center; flex-wrap: wrap;
       }
-      .toolbar-row omp-button { height: 36px; }
-      .toolbar-row .sources-btn { padding: 0 var(--omp-space-3, 12px) !important; width: auto !important; font-size: 10px; }
-      .toolbar-row .dsk-btn { padding: 0 var(--omp-space-3, 12px) !important; width: auto !important; font-size: 10px; }
+      .toolbar-row omp-button { height: 30px; }
+      .toolbar-row .sources-btn { padding: 0 8px !important; width: auto !important; font-size: 10px; }
+      .toolbar-row .dsk-btn { padding: 0 8px !important; width: auto !important; font-size: 10px; }
       .rate-row { display: flex; gap: 4px; }
-      .rate-row omp-button { width: 32px; height: 28px; font-size: 10px; }
+      .rate-row omp-button { width: 30px; height: 26px; font-size: 10px; }
 
       /* Dynamische PIP-Preset-Reihe (Nutzerauftrag 2026-09-04, ersetzt
          den vormals einzelnen PIP-Button) — je Preset ein "Mixer"-Knopf
          + ein kleiner Stift zum Bearbeiten, plus "+" für ein neues. */
-      .pip-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+      .pip-row { display: contents; }
       .pip-chip { display: inline-flex; align-items: center; gap: 2px; }
       .pip-chip omp-button.pip-name {
-        min-width: 60px; max-width: 120px; height: 36px; font-size: 10px;
+        min-width: 48px; max-width: 110px; height: 30px; font-size: 10px;
         padding: 0 8px !important; width: auto !important;
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       }
-      .pip-chip omp-button.pip-edit { width: 26px !important; height: 26px !important; font-size: 11px; padding: 0; }
-      .pip-row omp-button.pip-add { width: 36px !important; height: 36px !important; font-size: 16px; padding: 0; }
+      .pip-chip omp-button.pip-edit { width: 24px !important; height: 24px !important; font-size: 11px; padding: 0; }
+      .pip-row omp-button.pip-add { width: 30px !important; height: 30px !important; font-size: 16px; padding: 0; }
 
+      /* Übergangsblock kompakt (Nutzerauftrag 2026-10-15: "viel kompakter,
+         vor allem auf kleineren Bildschirmen"): breit = schmale Spalte
+         rechts (CUT|AUTO nebeneinander, kurzer T-Bar, Typ-Tasten in
+         dichten Reihen); schmal (Container < 520px) = unter den Bussen,
+         T-Bar links neben CUT/AUTO + Typ-Tasten. */
       .transition {
-        display: flex; flex-direction: column; align-items: center; gap: var(--omp-space-2, 8px);
-        border-left: 1px solid var(--omp-border, #2e3338); padding-left: var(--omp-space-3, 12px);
+        display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; align-content: start; min-width: 0;
+        border-left: 1px solid var(--omp-border, #2e3338); padding-left: 8px;
       }
-      .transition omp-button.cut { width: 100%; }
-      .transition omp-button.auto { width: 100%; }
-      .mix-wipe { display: flex; gap: 4px; width: 100%; }
-      .mix-wipe omp-button { flex: 1 1 0; min-width: 0; height: 26px; font-size: 10px; }
-      .mix-wipe omp-button::part(button) { padding: 0 2px; }
-      .wipe-caption { font-size: 9px; letter-spacing: 0.08em; color: var(--omp-text-dim, #9aa0a6); text-align: center; margin-top: 2px; }
+      .transition omp-button.cut, .transition omp-button.auto { width: 100%; height: 34px; }
+      .transition omp-fader { grid-column: 1 / -1; justify-self: center; height: 84px; }
+      .mix-wipe { grid-column: 1 / -1; display: flex; gap: 2px; width: 100%; }
+      .mix-wipe omp-button { flex: 1 1 0; min-width: 0; height: 24px; font-size: 9px; }
+      .mix-wipe omp-button { min-width: 0; }
+      .mix-wipe omp-button::part(button) { padding: 0 1px; }
+      .transition .swap-btn { grid-column: 1 / -1; height: 24px; font-size: 9px; }
+      .wipe-caption { grid-column: 1 / -1; font-size: 8px; line-height: 1; letter-spacing: 0.08em; color: var(--omp-text-dim, #9aa0a6); text-align: center; }
+      @container (max-width: 520px) {
+        .console { grid-template-columns: 1fr; gap: 4px; }
+        .transition {
+          grid-template-columns: 44px repeat(2, minmax(0, 1fr)); border-left: 0; padding-left: 0;
+          border-top: 1px solid var(--omp-border, #2e3338); padding-top: 4px;
+        }
+        .transition omp-fader { grid-column: 1; grid-row: 1 / span 6; height: 138px; }
+        .transition omp-button.cut, .transition omp-button.auto { grid-column: auto; }
+        .mix-wipe, .wipe-caption, .transition .swap-btn { grid-column: 2 / -1; }
+      }
       p.empty {
         font-size: var(--omp-font-size-xs, 11px); font-style: italic;
         color: var(--omp-text-dim, #9aa0a6); margin: 0;
@@ -657,9 +679,10 @@ class OmpVideoMixerMePanel extends HTMLElement {
       const method = isProgram ? "crosspoint.take" : "crosspoint.select";
       btn.addEventListener("click", () => call(method, { senderId }));
 
-      // Kein Vorschaubild für BLK (`senderId === ""`, nichts anzuzeigen)
-      // — bleibt immer die kompakte Text-Pille, s. Moduldoku oben.
-      if (thumbsEnabled && senderId) {
+      // BLK (`senderId === ""`) hat kein Bild, bekommt aber bei aktiven
+      // Vorschaubildern dieselbe Karte (schwarze Fläche ohne Text), damit
+      // alle Tasten der Reihe gleich groß sind (Nutzerwunsch 2026-10-15).
+      if (thumbsEnabled) {
         btn.className = "with-thumb";
         const thumb = document.createElement("div");
         thumb.className = "bus-thumb";
@@ -679,7 +702,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
           noSignal.style.display = "none";
           void loadPreviewImage(img, noSignal, previewSnapshotUrl(sourceNodeId));
           thumb.append(img, noSignal);
-        } else {
+        } else if (senderId) {
           const noSignal = document.createElement("div");
           noSignal.className = "no-signal";
           noSignal.textContent = T("noPicture");
@@ -703,7 +726,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
     // `loadPreviewImage` oben für den zweiten, 2026-09-28 gefundenen
     // Teil desselben Symptoms — der eigentliche Lade-Zwischenzustand).
     const updateBusButton = (btn, label, senderId, sourceNodeId) => {
-      const wantsThumb = thumbsEnabled && !!senderId;
+      const wantsThumb = thumbsEnabled;
       if (wantsThumb) {
         const img = btn.querySelector("img");
         const noSignal = btn.querySelector(".no-signal");
@@ -773,7 +796,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
       const appendEntry = (entry) => {
         const sourceNodeId = senderNodeId?.get(entry.senderId);
         const reused = existingButtons.get(entry.senderId);
-        const wantsThumb = thumbsEnabled && !!entry.senderId;
+        const wantsThumb = thumbsEnabled;
         const hasImg = !!reused?.querySelector("img");
         const reusable = reused
           && reused.classList.contains("with-thumb") === wantsThumb
@@ -978,7 +1001,8 @@ class OmpVideoMixerMePanel extends HTMLElement {
       pipAddBtn.textContent = "+";
       pipAddBtn.title = T("pipAddTitle");
 
-      buses.append(pgmRow, pstRow, toolbarRow, pipRow);
+      toolbarRow.append(pipRow); // PIP-Presets in derselben Zeile (kompakt)
+      buses.append(pgmRow, pstRow, toolbarRow);
 
       const transition = document.createElement("div");
       transition.className = "transition";
@@ -1018,9 +1042,9 @@ class OmpVideoMixerMePanel extends HTMLElement {
       mixWipe.className = "mix-wipe";
       mixWipe.append(
         makeKindButton("mix", "MIX", T("kindMix")),
-        makeKindButton("vfade", "V-FADE", T("kindVfade")),
-        makeKindButton("fadecut", "FADE-CUT", T("kindFadecut")),
-        makeKindButton("cutfade", "CUT-FADE", T("kindCutfade")),
+        makeKindButton("vfade", "V-FD", T("kindVfade")),
+        makeKindButton("fadecut", "F→C", T("kindFadecut")),
+        makeKindButton("cutfade", "C→F", T("kindCutfade")),
       );
       // Slide: neues Bild fährt über das alte; Push: es schiebt das alte hinaus.
       // Pfeil = Bewegungsrichtung. Bewusst keine Crop-Wipes (s. pipeline.rs-Moduldoku).
@@ -1043,7 +1067,18 @@ class OmpVideoMixerMePanel extends HTMLElement {
       const slideRow = makeKindRow("SLIDE", "slide", T("slideWhat"));
       const pushRow = makeKindRow("PUSH", "push", T("pushWhat"));
       setKindActive("mix");
-      transition.append(cutBtn, autoBtn, tBar, mixWipe, ...slideRow, ...pushRow);
+      // Option "PGM/PST nach Übergang tauschen" (Nutzerwunsch 2026-10-15),
+      // serverseitig je Ebene (`crosspoint.swapOnTransition`).
+      const swapBtn = document.createElement("omp-button");
+      swapBtn.className = "swap-btn";
+      swapBtn.textContent = T("swapLabel");
+      swapBtn.title = T("swapTitle");
+      swapBtn.setAttribute("color", "cue");
+      swapBtn.addEventListener("click", () => {
+        swapBtn.active = !swapBtn.active;
+        call("crosspoint.setSwapOnTransition", { enabled: swapBtn.active });
+      });
+      transition.append(cutBtn, autoBtn, tBar, mixWipe, ...slideRow, ...pushRow, swapBtn);
 
       console_.append(buses, transition);
       content.append(console_);
@@ -1645,7 +1680,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const [
           inputsRes, programRes, presetRes, keyerRes, keyerInputsRes, keyerSourceRes,
           pipEnabledRes, pipPresetsRes, pipActivePresetRes, pinnedRes, transRateRes, transitionPositionRes,
-          transTypeRes,
+          transTypeRes, swapRes,
         ] = await Promise.all([
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.inputs")}`),
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.programInput")}`),
@@ -1660,6 +1695,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.transRate")}`),
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.transitionPosition")}`),
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.transType")}`),
+          fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.swapOnTransition")}`),
         ]);
         if (!inputsRes.ok || !programRes.ok || !presetRes.ok) return;
         const inputs = (await inputsRes.json()).value || [];
@@ -1674,6 +1710,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const pinned = pinnedRes.ok ? (await pinnedRes.json()).value || [] : [];
         const transRateFrames = transRateRes.ok ? (await transRateRes.json()).value || 0 : 0;
         const transitionPosition = transitionPositionRes.ok ? (await transitionPositionRes.json()).value || 0 : 0;
+        if (swapRes.ok) swapBtn.active = (await swapRes.json()).value === true;
         if (transTypeRes.ok) {
           const type = (await transTypeRes.json()).value;
           latestTransType = type;
@@ -1763,7 +1800,10 @@ class OmpVideoMixerMePanel extends HTMLElement {
 
     const consoleList = document.createElement("div");
     consoleList.className = "console-list";
-    for (const b of banks) consoleList.append(b.bankRow);
+    // Hauptebene (Ebene 1) wie am Hardware-Pult UNTEN, weitere Ebenen
+    // aufsteigend darüber (Nutzerwunsch 2026-10-15) — nur die Anzeige-
+    // Reihenfolge, Ebenen-Nummern/Logik unverändert.
+    for (const b of [...banks].reverse()) consoleList.append(b.bankRow);
     const thumbsToggle = document.createElement("label");
     thumbsToggle.className = "thumbs-toggle";
     const thumbsCheckbox = document.createElement("input");

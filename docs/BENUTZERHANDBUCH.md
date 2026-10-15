@@ -996,6 +996,12 @@ bedienberechtigt:
   sich einen Quellen-Pool, und die Ausgänge der anderen Ebenen stehen
   als feste Quellen-Tasten zur Verfügung. Die Änderung wirkt beim
   (Neu-)Start des Nodes.
+  Die Hauptebene (Ebene 1) steht unten, weitere Ebenen aufsteigend
+  darüber. Der Schalter **⇄ PGM/PST** im Übergangsblock (je Ebene,
+  Parameter `crosspoint.swapOnTransition`) tauscht nach CUT, AUTO und
+  abgeschlossenem T-Bar-Zug PGM und PST: das bisherige Programm wird
+  zum Preset. Ein Hot-Take auf dem PGM-Bus und zeitgeplante Wechsel
+  (`takeAt`) lassen das Preset unverändert.
 - **Grafik** — Vorlage auswählen (Suchfeld + Dropdown), Formularfelder
   befüllen, „▶ Ein"/„■ Aus" schaltet die Grafik auf Sendung (im
   Screenshot bereits aktiv: „On Air: Hello Lower Third").

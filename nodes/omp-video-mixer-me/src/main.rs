@@ -167,6 +167,9 @@ struct MixerStore {
     /// eigentliche Umrechnung/Anwendung läuft über
     /// `pipeline::PipelineHandle::set_trans_rate`.
     trans_rate: PerLevel<i32>,
+    /// `crosspoint.swapOnTransition`: PGM/PST nach CUT/AUTO/T-Bar tauschen
+    /// (Buchführung fürs `get()`, Wirkung in `pipeline.rs`).
+    swap_on_transition: PerLevel<bool>,
     /// `crosspoint.transType` (`TransKind::name`), Buchführung fürs `get()`.
     trans_kind: PerLevel<TransKind>,
     /// Manueller T-Bar (`docs/END-GOAL-FEATURES.md` §3.4 Teil 2,
@@ -456,6 +459,13 @@ fn level_param_specs(level_count: usize, level: usize) -> Vec<ParamSpec> {
             readonly: true,
         },
         ParamSpec {
+            name: n("crosspoint.swapOnTransition"),
+            kind: ParamType::Boolean,
+            unit: None,
+            range: None,
+            readonly: true,
+        },
+        ParamSpec {
             name: n("crosspoint.transType"),
             kind: ParamType::String,
             unit: None,
@@ -612,6 +622,10 @@ fn level_method_specs(level_count: usize, level: usize) -> Vec<MethodSpec> {
             args: vec![MethodArg { name: "type".to_string(), kind: ParamType::String }],
         },
         MethodSpec {
+            name: n("crosspoint.setSwapOnTransition"),
+            args: vec![MethodArg { name: "enabled".to_string(), kind: ParamType::Boolean }],
+        },
+        MethodSpec {
             name: n("crosspoint.setTransRate"),
             args: vec![MethodArg {
                 name: "frames".to_string(),
@@ -749,6 +763,9 @@ fn level_get(store: &MixerStore, name: &str) -> Option<Value> {
         "crosspoint.transRate" => Some(serde_json::json!(
             *store.trans_rate[level].lock().expect("lock poisoned")
         )),
+        "crosspoint.swapOnTransition" => Some(serde_json::json!(
+            *store.swap_on_transition[level].lock().expect("lock poisoned")
+        )),
         "crosspoint.transType" => Some(serde_json::json!(
             store.trans_kind[level].lock().expect("lock poisoned").name()
         )),
@@ -839,6 +856,12 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
                 .ok_or(InvokeError::Unknown)?;
             *store.trans_kind[level].lock().expect("lock poisoned") = kind;
             store.pipeline.set_trans_kind(level, kind);
+            Ok(())
+        }
+        "crosspoint.setSwapOnTransition" => {
+            let on = args.get("enabled").and_then(Value::as_bool).ok_or(InvokeError::Unknown)?;
+            *store.swap_on_transition[level].lock().expect("lock poisoned") = on;
+            store.pipeline.set_swap_on_transition(level, on);
             Ok(())
         }
         "crosspoint.setTransRate" => {
@@ -1083,6 +1106,7 @@ impl MixerStore {
             "pinnedSenderIds": self.pinned[level].lock().expect("lock poisoned").clone(),
             "transRateFrames": *self.trans_rate[level].lock().expect("lock poisoned"),
             "transType": self.trans_kind[level].lock().expect("lock poisoned").name(),
+            "swapOnTransition": *self.swap_on_transition[level].lock().expect("lock poisoned"),
             // PIP-Presets (Nutzerauftrag 2026-09-04): ein Mixer-Snapshot
             // nimmt die selbst angelegten Presets mit, sonst würde ein
             // Restore die "Mixer"-Buttons der UI wieder verschwinden
@@ -1151,6 +1175,10 @@ impl MixerStore {
             let frames = frames as i32;
             *self.trans_rate[level].lock().expect("lock poisoned") = frames;
             self.pipeline.set_trans_rate(level, frames as u32);
+        }
+        if let Some(on) = doc.get("swapOnTransition").and_then(Value::as_bool) {
+            *self.swap_on_transition[level].lock().expect("lock poisoned") = on;
+            self.pipeline.set_swap_on_transition(level, on);
         }
         if let Some(kind) = doc.get("transType").and_then(Value::as_str).and_then(TransKind::from_name) {
             *self.trans_kind[level].lock().expect("lock poisoned") = kind;
@@ -1275,6 +1303,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pinned: PerLevel<Vec<String>> = (0..level_count).map(|_| Arc::new(Mutex::new(Vec::new()))).collect();
     let trans_rate: PerLevel<i32> =
         (0..level_count).map(|_| Arc::new(Mutex::new(DEFAULT_TRANS_RATE_FRAMES as i32))).collect();
+    let swap_on_transition: PerLevel<bool> = (0..level_count).map(|_| Arc::new(Mutex::new(false))).collect();
     let transition_position: PerLevel<f64> = (0..level_count).map(|_| Arc::new(Mutex::new(0.0))).collect();
     let trans_kind: PerLevel<TransKind> = (0..level_count).map(|_| Arc::new(Mutex::new(TransKind::Mix))).collect();
     let pip_presets: PerLevel<Vec<PipPreset>> = (0..level_count).map(|_| Arc::new(Mutex::new(Vec::new()))).collect();
@@ -1296,6 +1325,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         pip_source: pip_source.clone(),
         pinned: pinned.clone(),
         trans_rate: trans_rate.clone(),
+        swap_on_transition: swap_on_transition.clone(),
         trans_kind: trans_kind.clone(),
         transition_position: transition_position.clone(),
         pip_presets: pip_presets.clone(),
