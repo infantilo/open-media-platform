@@ -15,4 +15,10 @@ ignore = [
   # ring 0.16: AES-Funktionen paniken nur bei aktivierten Overflow-Checks —
   # Release-Builds haben sie aus.
   "RUSTSEC-2025-0009",
+  # rustls 0.20 (CLIENT-Seite): ein unauthentisiertes ServerHello kann spaetere
+  # Verbindungen auf klassischen Schluesselaustausch statt X25519MLKEM768
+  # herabstufen. rustls 0.20 kennt gar keinen hybriden PQ-Austausch, und
+  # tiny_http nutzt es nur als TLS-SERVER — nicht betroffen. Alle uebrigen
+  # rustls-Funde sind durch 0.23.46 (async-nats/tokio-rustls) behoben.
+  "RUSTSEC-2026-0349",
 ]
