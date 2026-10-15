@@ -379,7 +379,9 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   channels 3+4 onto program audio via the standard API)
 - **omp-switcher** — simple video switcher between auto-discovered
   sources (no program/preset bus)
-- **omp-video-mixer-me** — video mixer (1 M/E with cut, crossfade,
+- **omp-video-mixer-me** — video mixer (configurable number of M/E
+  levels via `OMP_ME_LEVELS`, default 1; each level with its own
+  program/preset bus and output, shared source pool; cut, crossfade,
   picture-in-picture, downstream keyer)
 - **omp-audio-mixer** — broadcast audio console: per-channel HPF + 4-band
   EQ, compressor (attack/release/knee/GR), gate/expander, delay, pan, phase;
