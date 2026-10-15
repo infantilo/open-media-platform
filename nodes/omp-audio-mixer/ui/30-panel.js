@@ -269,6 +269,58 @@ button{cursor:pointer}
 .root[data-layout=sheet][data-center=closed] .cthandle[data-has="1"]{display:block}
 .root[data-layout=sheet][data-center=closed] .channels{padding-bottom:70px}
 .root[data-layout=sheet] .channels{max-height:none;padding-bottom:90px}
+/* ───── Kompakt-Pass (Nutzerwunsch 2026-10-15: "kompakter, vor allem auf
+   kleineren Bildschirmen/Laptop/Mobil") — nur Abstände, Zughöhen und
+   Zeilenumbrüche, keine Strukturänderung. Steht bewusst am Ende, damit es
+   die Varianten-Regeln oben überstimmt. ───── */
+:host{--hit:28px;font-size:12px}
+@media (pointer:coarse){:host{--hit:44px;--thumb:24px;font-size:13px}}
+.toolbar{gap:4px 8px;padding:4px 8px}
+.tgrp{gap:2px}
+.tb{padding:0 8px}
+.master{gap:6px}
+.master .mm{width:120px;height:10px}
+.channels{padding:6px}
+.gbody{gap:5px}
+.ch{padding:4px;gap:3px;border-radius:6px}
+.chead{gap:4px}
+.badges{gap:2px;min-height:0}
+.routes{flex:1 1 auto}
+.b{padding:2px 4px}
+.rt{padding:2px 5px;min-height:18px}
+.btns{gap:3px}
+.channels{--strip-w:84px}
+.channels[data-variant=compact]{--strip-w:72px}
+.channels[data-meter=s]{--strip-h:clamp(110px,20vh,170px)}
+.channels[data-meter=m]{--strip-h:clamp(140px,28vh,240px)}
+.channels[data-meter=l]{--strip-h:clamp(200px,38vh,360px)}
+.channels[data-variant=gridf][data-meter=s]{--strip-h:clamp(100px,16vh,140px)}
+.channels[data-variant=gridf][data-meter=m]{--strip-h:clamp(120px,22vh,190px)}
+.channels[data-variant=gridf][data-meter=l]{--strip-h:clamp(160px,30vh,260px)}
+.channels[data-variant=dense] .gbody{--cell-min:112px}
+.channels[data-variant=grid] .gbody,.channels[data-variant=gridf] .gbody{--cell-min:112px}
+.channels[data-variant=touch] .ch,.channels[data-variant=touchf] .ch{--hit:44px;--thumb:30px;padding:6px}
+.sec{padding:0 0 2px}
+.sec-out,.sec-grp{margin-top:2px}
+.sechead{padding:4px 8px 0;gap:8px}
+.sechead h2{font-size:12px}
+.newout{margin:2px 8px 6px;padding:6px;gap:6px}
+.group{margin-bottom:6px}
+.ghead{margin:0 0 3px}
+.root{min-height:200px}
+.root[data-layout=side] .body{grid-template-columns:minmax(0,1fr) minmax(300px,360px)}
+.center-inner{padding:6px 8px 10px}
+.csec{margin:6px 0;padding:8px}
+.csec h3{margin:0 0 4px}
+.cgrid{gap:6px 10px}
+.eqplot{height:170px}
+.tab{padding:0 9px}
+@media (max-width:640px){
+  .sechead .hint,.sechead .sub{display:none}
+  .toolbar{padding:3px 6px}
+  .channels{padding:4px}
+  .ch{padding:3px}
+}
 `;
 
 class MixerApp {
