@@ -989,6 +989,13 @@ bedienberechtigt:
   Tasten, CUT/AUTO für harte bzw. weiche Umschaltung, DSK
   (Downstream-Keyer, hier aktiv/rot, mit der Grafik als Fill+Key-Quelle
   über das KEY-Dropdown) und PIP (Bild-im-Bild als eigener Layer).
+  Die Anzahl der Mischerebenen (M/E-Bänke, 1–8, Standard 1) stellt man
+  im Workflow-Editor an der Rolle ein („Mischerebenen“) oder als
+  Node-Option „Mix/Effekt-Ebenen“ (`OMP_ME_LEVELS`). Jede Ebene hat
+  eigenen Programm-/Preset-Bus und eigenen Ausgang; alle Ebenen teilen
+  sich einen Quellen-Pool, und die Ausgänge der anderen Ebenen stehen
+  als feste Quellen-Tasten zur Verfügung. Die Änderung wirkt beim
+  (Neu-)Start des Nodes.
 - **Grafik** — Vorlage auswählen (Suchfeld + Dropdown), Formularfelder
   befüllen, „▶ Ein"/„■ Aus" schaltet die Grafik auf Sendung (im
   Screenshot bereits aktiv: „On Air: Hello Lower Third").
