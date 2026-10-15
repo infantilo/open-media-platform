@@ -1011,9 +1011,10 @@ kein Host-Label.
 
 Jede Kachel verhält sich wie ein echtes Fenster: Titelleiste zum
 Verschieben (Ziehen), ein Anfasser unten rechts zum Skalieren, sowie in
-der Titelleiste zwei Knöpfe zum **Minimieren** (klappt die Kachel an Ort
-und Stelle auf die reine Titelleiste zusammen, bleibt weiter verschiebbar
-— erneuter Klick stellt sie wieder her) und **Maximieren** (füllt den
+der Titelleiste zwei Knöpfe zum **Minimieren** (die Kachel verschwindet und
+liegt als Chip in der **Taskleiste** am unteren Rand der Konsole — Klick
+auf den Chip stellt sie wieder her; die Leiste lässt rechts Platz für
+Abmelden/Sprache) und **Maximieren** (füllt den
 gesamten sichtbaren Konsolenbereich; Maximieren einer anderen Kachel
 stellt die vorherige automatisch wieder her, es ist stets höchstens eine
 Kachel gleichzeitig maximiert). Ein Klick auf eine Kachel holt sie vor
@@ -1028,6 +1029,18 @@ passend zu einem fest installierten Regieplatz-Bildschirm, an dem stets
 derselbe Browser läuft (maximiert startet dagegen nie automatisch wieder
 — das ist eine vorübergehende Fokus-Aktion, keine dauerhafte
 Layout-Entscheidung).
+
+**Vorschau (👁):** Nodes mit Vorschaubild (z. B. Quelle) zeigen es in der
+Kachel nur auf Wunsch — der Schalter 👁 in der Titelleiste blendet die
+Live-Vorschau ein oder aus (Standard: aus, wird je Kachel gespeichert).
+Nodes ohne eigene Bedienoberfläche (z. B. Quelle) zeigen den Hinweis
+„Dieser Node hat keine eigene Bedienoberfläche."
+
+**Layouts speichern:** Im Knopfstreifen speichert **💾** die aktuelle
+Fensteranordnung (Position, Größe, offen/minimiert, Vorschau) unter einem
+Namen; das Auswahlfeld **„Layouts …"** wendet ein gespeichertes Layout an,
+**🗑** löscht eines (Namensabfrage). Layouts gelten je Benutzer und
+Workflow und liegen im Browser (nicht auf dem Server).
 
 Ohne eine zugewiesene Playout-Automation-Rolle steuert ein Operator rein
 manuell (Cut/Auto, Kreuzschiene, DSK/PIP) statt über eine Playlist —

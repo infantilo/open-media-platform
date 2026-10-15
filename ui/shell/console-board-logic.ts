@@ -25,6 +25,24 @@ export interface TileLayout {
   // `zIndex` ebenso (zuletzt fokussierte Kachel bleibt vorne).
   minimized?: boolean;
   zIndex?: number;
+  // Live-Vorschau in der Kachel: nur auf Wunsch (Standard aus, Nutzerwunsch 2026-10-15).
+  preview?: boolean;
+}
+
+// Benannte Layouts (Nutzerwunsch 2026-10-15): Momentaufnahme der Kachel-Zustände
+// (offen/minimiert, Position, Größe, Vorschau) je Rolle.
+export type LayoutPreset = Record<string, TileLayout>;
+
+// Überträgt ein gespeichertes Layout auf die aktuell vorhandenen Rollen;
+// Rollen ohne Eintrag im Preset behalten ihren Zustand, fremde Rollen im
+// Preset werden verworfen. zIndex bleibt der aktuelle (keine Vor-Reihenfolge-Sprünge).
+export function applyPreset(current: Record<string, TileLayout>, preset: LayoutPreset): Record<string, TileLayout> {
+  const result: Record<string, TileLayout> = {};
+  for (const [roleId, cur] of Object.entries(current)) {
+    const p = preset[roleId];
+    result[roleId] = p ? { ...p, zIndex: cur.zIndex } : cur;
+  }
+  return result;
 }
 
 // Referenzgröße angelehnt an das bestehende ~280px-Parameter-Panel

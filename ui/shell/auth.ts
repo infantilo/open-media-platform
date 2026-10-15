@@ -203,6 +203,7 @@ const USER_WIDGET_GAP_PX = 6;
 // liefert index.html für "/" ohnehin aus).
 export function buildUserWidget(username: string, homeHref?: string): HTMLElement {
   const widget = document.createElement("div");
+  widget.dataset.ompUserWidget = "1";
   widget.style.cssText =
     "position:fixed;bottom:var(--omp-space-2);right:var(--omp-space-2);z-index:1000;" +
     "font-family:var(--omp-font);font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);" +

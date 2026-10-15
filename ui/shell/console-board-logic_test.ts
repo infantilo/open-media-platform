@@ -142,3 +142,14 @@ Deno.test("computeTileGridLayout: never shrinks a tile below the minimum size, e
     assertEquals(l.height >= MIN_TILE_HEIGHT, true);
   }
 });
+
+Deno.test("applyPreset: überträgt Zustand, behält zIndex, ignoriert fremde Rollen", async () => {
+  const { applyPreset } = await import("./console-board-logic.ts");
+  const cur = { a: { x: 0, y: 0, width: 300, height: 200, zIndex: 5 }, b: { x: 1, y: 1, width: 300, height: 200, zIndex: 2 } };
+  const res = applyPreset(cur, {
+    a: { x: 50, y: 60, width: 400, height: 250, minimized: true, preview: true, zIndex: 99 },
+    gone: { x: 0, y: 0, width: 1, height: 1 },
+  });
+  if (res.a.x !== 50 || !res.a.minimized || !res.a.preview || res.a.zIndex !== 5) throw new Error("a falsch");
+  if (res.b !== cur.b || "gone" in res) throw new Error("b/gone falsch");
+});

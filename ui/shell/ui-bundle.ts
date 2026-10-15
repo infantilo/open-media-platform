@@ -96,3 +96,16 @@ export async function mountUIBundleEl(container: HTMLElement, apiBase: string): 
     return null;
   }
 }
+
+// Hat der Node überhaupt ein UI-Bundle (Manifest vorhanden)? Unterscheidet
+// "kein Bundle" (z. B. omp-source, kein Fehler) von "Bundle lädt nicht".
+export async function hasUIBundle(apiBase: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${apiBase}/ui/manifest.json`);
+    if (!res.ok) return false;
+    const manifest = (await res.json()) as { tag?: string };
+    return !!manifest.tag;
+  } catch {
+    return false;
+  }
+}

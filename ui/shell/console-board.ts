@@ -18,11 +18,14 @@
 // ui/graph/flow-canvas.ts.
 import { t } from "./i18n.ts";
 import "./upcoming.ts";
-import { mountUIBundleEl } from "./ui-bundle.ts";
+import { mountUIBundleEl, hasUIBundle } from "./ui-bundle.ts";
+import { whoami } from "./auth.ts";
 import { deckSession } from "./streamdeck/session.ts";
 import type { ConsoleEntry } from "./console-view.ts";
 import {
+  applyPreset,
   computeTileGridLayout,
+  type LayoutPreset,
   diffEntries,
   reconcileLayouts,
   MIN_TILE_HEIGHT,
@@ -35,9 +38,6 @@ const FALLBACK_CONTAINER_WIDTH = 1200;
 const FALLBACK_CONTAINER_HEIGHT = 800;
 // Höhe des Knopfstreifens oben (Alle anordnen / Stream Deck): Kacheln beginnen darunter und werden nicht überdeckt.
 const TOOLBAR_HEIGHT = 36;
-// Titelleisten-Höhe im eingeklappten Zustand (Kapitel 24) — muss zur
-// tatsächlichen Header-Höhe passen (padding 6px*2 + Zeilenhöhe ~16px).
-const MINIMIZED_HEIGHT = 30;
 
 interface Tile {
   wrapper: HTMLDivElement;
@@ -45,6 +45,9 @@ interface Tile {
   resizeHandle: HTMLDivElement;
   minimizeBtn: HTMLButtonElement;
   maximizeBtn: HTMLButtonElement;
+  previewBtn: HTMLButtonElement;
+  // Node liefert ein previewUrl-Bild (Schalter nur dann sichtbar); Vorschau selbst nur auf Wunsch.
+  canPreview: boolean;
   previewHandle?: MountedPreview;
   // Nur im Speicher (Kapitel 24, 2026-09-28): Maximieren ist eine
   // vorübergehende Fokus-Aktion, keine dauerhafte Layout-Entscheidung wie
@@ -73,6 +76,9 @@ export class ConsoleBoard extends HTMLElement {
   // Node-UI-Bundles) — #bringToFront feuert auf jedes Pointerdown in der
   // Kachel, nicht nur beim Ziehen.
   #topRoleId: string | null = null;
+  #taskbar!: HTMLDivElement;
+  #presetSelect!: HTMLSelectElement;
+  #username = "";
 
   connectedCallback() {
     // Nutzerauftrag 2026-09-02 ("Console nach demselben Muster"): eigene
@@ -102,7 +108,43 @@ export class ConsoleBoard extends HTMLElement {
       "pointer-events:auto;padding:4px 10px;border:1px solid var(--omp-border);border-radius:var(--omp-radius);" +
       "background:var(--omp-surface-raised);color:var(--omp-text);cursor:pointer;font-size:var(--omp-font-size-sm);box-shadow:0 1px 4px rgba(0,0,0,0.4);";
     arrangeBtn.addEventListener("click", () => this.#retileAll());
-    toolbar.appendChild(arrangeBtn);
+    const btnCss =
+      "pointer-events:auto;padding:4px 10px;border:1px solid var(--omp-border);border-radius:var(--omp-radius);" +
+      "background:var(--omp-surface-raised);color:var(--omp-text);cursor:pointer;font-size:var(--omp-font-size-sm);box-shadow:0 1px 4px rgba(0,0,0,0.4);margin-left:6px;";
+    this.#presetSelect = document.createElement("select");
+    this.#presetSelect.style.cssText = btnCss;
+    this.#presetSelect.addEventListener("change", () => {
+      const name = this.#presetSelect.value;
+      if (name) this.#applyNamedPreset(name);
+      this.#presetSelect.value = "";
+    });
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.textContent = "💾";
+    saveBtn.title = t("board.layoutSaveTitle");
+    saveBtn.style.cssText = btnCss;
+    saveBtn.addEventListener("click", () => this.#saveNamedPreset());
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.textContent = "🗑";
+    delBtn.title = t("board.layoutDelete");
+    delBtn.style.cssText = btnCss;
+    delBtn.addEventListener("click", () => this.#deleteNamedPreset());
+    toolbar.append(this.#presetSelect, saveBtn, delBtn, arrangeBtn);
+    arrangeBtn.style.marginLeft = "6px";
+    // Layouts gelten je Nutzer + Workflow (Browser-lokal, s. Moduldoku).
+    whoami().then((w) => {
+      this.#username = w.username ?? "";
+      this.#refreshPresetSelect();
+    }).catch(() => {});
+
+    this.#taskbar = document.createElement("div");
+    this.#taskbar.setAttribute("aria-label", t("board.taskbar"));
+    this.#taskbar.style.cssText =
+      "position:absolute;left:0;right:0;display:none;gap:6px;align-items:center;box-sizing:border-box;height:34px;padding:0 8px;" +
+      "background:var(--omp-surface-raised);border-top:1px solid var(--omp-border);z-index:1000001;overflow-x:auto;";
+    this.appendChild(this.#taskbar);
+    this.addEventListener("scroll", () => this.#positionTaskbar());
 
     deckSession.focusRequest = (id) => {
       if (id !== null && this.#tiles.has(id)) this.#bringToFront(id);
@@ -114,6 +156,7 @@ export class ConsoleBoard extends HTMLElement {
     // exakt ausfüllen — gleiches ResizeObserver-Muster wie bei der
     // Alert-Leiste-/User-Widget-Überlappung (Kapitel 21).
     this.#resizeObserver = new ResizeObserver(() => {
+      this.#positionTaskbar();
       if (this.#maximizedRoleId) this.#applyMaximizedSize(this.#maximizedRoleId);
     });
     this.#resizeObserver.observe(this);
@@ -131,6 +174,101 @@ export class ConsoleBoard extends HTMLElement {
   setWorkflowId(id: string) {
     this.#workflowId = id;
     this.#layouts = this.#loadLayouts();
+    this.#refreshPresetSelect();
+  }
+
+  // Taskleiste klebt unten am sichtbaren Ausschnitt (Board scrollt, Kacheln sind absolut).
+  #positionTaskbar() {
+    if (!this.#taskbar) return;
+    this.#taskbar.style.top = `${this.scrollTop + this.clientHeight - 34}px`;
+    // Rechts Platz für das feste Benutzer-Widget (Abmelden) lassen.
+    const w = document.querySelector<HTMLElement>("[data-omp-user-widget]");
+    const r = this.getBoundingClientRect();
+    const overlap = w ? Math.max(0, r.right - w.getBoundingClientRect().left + 8) : 0;
+    this.#taskbar.style.right = `${overlap}px`;
+  }
+
+  #renderTaskbar() {
+    if (!this.#taskbar) return;
+    this.#taskbar.replaceChildren();
+    for (const e of this.#entries) {
+      if (!this.#layouts[e.nodeRoleId]?.minimized) continue;
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.textContent = e.nodeLabel;
+      chip.title = t("board.restore");
+      chip.style.cssText =
+        "flex-shrink:0;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px 12px;" +
+        "border:1px solid var(--omp-border);border-radius:var(--omp-radius);background:var(--omp-surface);" +
+        "color:var(--omp-text);cursor:pointer;font-size:var(--omp-font-size-sm);";
+      chip.addEventListener("click", () => this.#toggleMinimize(e.nodeRoleId));
+      this.#taskbar.appendChild(chip);
+    }
+    this.#taskbar.style.display = this.#taskbar.childElementCount > 0 ? "flex" : "none";
+    this.#positionTaskbar();
+    // Widget wird ggf. erst nach dem Board eingehängt.
+    setTimeout(() => this.#positionTaskbar(), 300);
+  }
+
+  // ---- Benannte Layouts (je Nutzer + Workflow, localStorage) ----
+  #presetKey(): string {
+    return `omp-console-board-presets:${this.#username}:${this.#workflowId ?? "default"}`;
+  }
+
+  #loadPresets(): Record<string, LayoutPreset> {
+    try {
+      return JSON.parse(localStorage.getItem(this.#presetKey()) ?? "{}") as Record<string, LayoutPreset>;
+    } catch {
+      return {};
+    }
+  }
+
+  #refreshPresetSelect() {
+    if (!this.#presetSelect) return;
+    this.#presetSelect.replaceChildren(new Option(t("board.layouts"), ""));
+    for (const name of Object.keys(this.#loadPresets()).sort()) this.#presetSelect.add(new Option(name, name));
+    this.#presetSelect.value = "";
+  }
+
+  #saveNamedPreset() {
+    const name = prompt(t("board.layoutName"))?.trim();
+    if (!name) return;
+    const presets = this.#loadPresets();
+    presets[name] = structuredClone(this.#layouts);
+    try {
+      localStorage.setItem(this.#presetKey(), JSON.stringify(presets));
+    } catch {}
+    this.#refreshPresetSelect();
+  }
+
+  #deleteNamedPreset() {
+    const presets = this.#loadPresets();
+    const names = Object.keys(presets).sort();
+    if (names.length === 0) return;
+    const name = prompt(`${t("board.layoutDelete")}:\n${names.join("\n")}`, names[0])?.trim();
+    if (!name || !(name in presets)) return;
+    if (!confirm(t("board.layoutConfirmDelete", { name }))) return;
+    delete presets[name];
+    try {
+      localStorage.setItem(this.#presetKey(), JSON.stringify(presets));
+    } catch {}
+    this.#refreshPresetSelect();
+  }
+
+  #applyNamedPreset(name: string) {
+    const preset = this.#loadPresets()[name];
+    if (!preset) return;
+    if (this.#maximizedRoleId) this.#toggleMaximize(this.#maximizedRoleId);
+    this.#layouts = applyPreset(this.#layouts, preset);
+    for (const [roleId, tile] of this.#tiles) {
+      const layout = this.#layouts[roleId];
+      if (!layout) continue;
+      this.#applyLayout(tile.wrapper, layout);
+      this.#updateWindowButtons(roleId);
+      this.#syncPreview(roleId);
+    }
+    this.#saveLayouts();
+    this.#renderTaskbar();
   }
 
   #storageKey(): string {
@@ -172,6 +310,7 @@ export class ConsoleBoard extends HTMLElement {
       delete this.#layouts[roleId];
     }
     if (diff.toUnmount.length > 0) this.#saveLayouts();
+    queueMicrotask(() => this.#renderTaskbar());
 
     this.#emptyMessage.style.display = entries.length === 0 ? "block" : "none";
 
@@ -179,6 +318,7 @@ export class ConsoleBoard extends HTMLElement {
       this.#layouts = reconcileLayouts(entries, this.#layouts, this.clientWidth || FALLBACK_CONTAINER_WIDTH);
       this.#saveLayouts();
       await Promise.all(diff.toMount.map((entry) => this.#mountTile(entry)));
+      this.#renderTaskbar();
     }
 
     if (diff.toRemount.length > 0) {
@@ -227,6 +367,21 @@ export class ConsoleBoard extends HTMLElement {
     const windowButtonStyle =
       "flex-shrink:0;width:18px;height:18px;line-height:16px;padding:0;border:1px solid var(--omp-border);" +
       "border-radius:3px;background:var(--omp-surface);color:var(--omp-text-dim);cursor:pointer;font-size:11px;";
+    const previewBtn = document.createElement("button");
+    previewBtn.type = "button";
+    previewBtn.textContent = "👁";
+    previewBtn.title = t("board.previewTitle");
+    previewBtn.style.cssText = windowButtonStyle + "display:none;";
+    previewBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+    previewBtn.addEventListener("click", () => {
+      const l = this.#layouts[entry.nodeRoleId];
+      if (!l) return;
+      l.preview = !l.preview;
+      this.#saveLayouts();
+      this.#syncPreview(entry.nodeRoleId);
+    });
+    header.appendChild(previewBtn);
+
     const minimizeBtn = document.createElement("button");
     minimizeBtn.type = "button";
     minimizeBtn.style.cssText = windowButtonStyle;
@@ -261,7 +416,7 @@ export class ConsoleBoard extends HTMLElement {
     // anhält.
     wrapper.addEventListener("pointerdown", () => this.#bringToFront(entry.nodeRoleId), { capture: true });
     this.appendChild(wrapper);
-    this.#tiles.set(entry.nodeRoleId, { wrapper, content, resizeHandle, minimizeBtn, maximizeBtn, maximized: false });
+    this.#tiles.set(entry.nodeRoleId, { wrapper, content, resizeHandle, minimizeBtn, maximizeBtn, previewBtn, canPreview: false, maximized: false });
     this.#bringToFront(entry.nodeRoleId);
     this.#updateWindowButtons(entry.nodeRoleId);
 
@@ -306,13 +461,12 @@ export class ConsoleBoard extends HTMLElement {
     ]);
     content.replaceChildren();
 
-    let previewHandle: MountedPreview | undefined;
-    if (showsPreview && !ownsPreview) {
-      previewHandle = mountNodePreview(entry.uiBundleUrl);
-      content.appendChild(previewHandle.element);
-    }
     const tile = this.#tiles.get(entry.nodeRoleId);
-    if (tile) tile.previewHandle = previewHandle;
+    if (tile) {
+      tile.previewHandle = undefined;
+      tile.canPreview = showsPreview && !ownsPreview;
+    }
+    this.#syncPreview(entry.nodeRoleId);
 
     const bundleContainer = document.createElement("div");
     bundleContainer.style.cssText = "flex:1;min-height:0;";
@@ -325,9 +479,35 @@ export class ConsoleBoard extends HTMLElement {
     if (!mountedEl) {
       bundleContainer.replaceChildren();
       const p = document.createElement("p");
-      p.textContent = t("console.bundleFailed", { node: entry.nodeLabel });
+      // Kein Bundle (z. B. omp-source) ist kein Fehler.
+      const noUi = !(await hasUIBundle(entry.uiBundleUrl));
+      p.textContent = noUi ? t("board.noUi") : t("console.bundleFailed", { node: entry.nodeLabel });
+      if (noUi) {
+        p.style.cssText = "margin:0;color:var(--omp-text-dim);";
+        bundleContainer.appendChild(p);
+        return;
+      }
       p.style.cssText = "margin:0;color:var(--omp-error);";
       bundleContainer.appendChild(p);
+    }
+  }
+
+  // Vorschau nur bei Bedarf einhängen (Standard aus); Schalter nur sichtbar, wenn der Node ein Bild liefert.
+  #syncPreview(roleId: string) {
+    const tile = this.#tiles.get(roleId);
+    const entry = this.#entries.find((e) => e.nodeRoleId === roleId);
+    const layout = this.#layouts[roleId];
+    if (!tile || !entry || !layout) return;
+    const want = tile.canPreview && !!layout.preview;
+    tile.previewBtn.style.display = tile.canPreview ? "" : "none";
+    tile.previewBtn.style.opacity = want ? "1" : "0.5";
+    if (want && !tile.previewHandle) {
+      tile.previewHandle = mountNodePreview(entry.uiBundleUrl);
+      tile.content.prepend(tile.previewHandle.element);
+    } else if (!want && tile.previewHandle) {
+      tile.previewHandle.dispose();
+      tile.previewHandle.element.remove();
+      tile.previewHandle = undefined;
     }
   }
 
@@ -335,7 +515,9 @@ export class ConsoleBoard extends HTMLElement {
     wrapper.style.left = `${layout.x}px`;
     wrapper.style.top = `${layout.y + TOOLBAR_HEIGHT}px`;
     wrapper.style.width = `${layout.width}px`;
-    wrapper.style.height = layout.minimized ? `${MINIMIZED_HEIGHT}px` : `${layout.height}px`;
+    wrapper.style.height = `${layout.height}px`;
+    // Minimierte Fenster verschwinden und liegen als Chip in der Taskleiste unten.
+    wrapper.style.display = layout.minimized ? "none" : "flex";
     wrapper.style.zIndex = String(layout.zIndex ?? 0);
   }
 
@@ -378,6 +560,7 @@ export class ConsoleBoard extends HTMLElement {
     this.#updateWindowButtons(roleId);
     this.#saveLayouts();
     if (!layout.minimized) this.#bringToFront(roleId);
+    this.#renderTaskbar();
   }
 
   #toggleMaximize(roleId: string) {
@@ -423,6 +606,7 @@ export class ConsoleBoard extends HTMLElement {
       this.#updateWindowButtons(roleId);
     });
     this.#saveLayouts();
+    this.#renderTaskbar();
   }
 
   // Pointer-Capture auf dem Element selbst (Titelleiste bzw. Resize-Griff)
