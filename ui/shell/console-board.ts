@@ -16,6 +16,8 @@
 // Regieplatzes (festes Gerät/Browser), gleiches Muster wie die bereits
 // bestehende, lokal gespeicherte Parameter-Panel-Breite in
 // ui/graph/flow-canvas.ts.
+import { confirmDialog } from "../kit/omp-confirm.ts";
+import { layoutDialog } from "./layout-dialog.ts";
 import { t } from "./i18n.ts";
 import "./upcoming.ts";
 import { mountUIBundleEl, hasUIBundle } from "./ui-bundle.ts";
@@ -59,6 +61,9 @@ export class ConsoleBoard extends HTMLElement {
   #workflowId: string | null = null;
   #entries: ConsoleEntry[] = [];
   #layouts: Record<string, TileLayout> = {};
+  // Gespeicherter Kachel-Zustand je Rollen-Label (der Rollenname im Workflow): die
+  // nodeRoleId (Instanz-ID) wechselt bei jedem Workflow-Neustart, das Label nicht.
+  #stored: LayoutPreset = {};
   #tiles = new Map<string, Tile>();
   #emptyMessage!: HTMLParagraphElement;
   // Laufender Zähler für z-index/Vor-Reihenfolge (Kapitel 24) — beim Laden
@@ -173,7 +178,8 @@ export class ConsoleBoard extends HTMLElement {
   // da unterschiedliche Workflows unterschiedliche Rollen-Sätze haben).
   setWorkflowId(id: string) {
     this.#workflowId = id;
-    this.#layouts = this.#loadLayouts();
+    this.#layouts = {};
+    this.#stored = this.#loadStored();
     this.#refreshPresetSelect();
   }
 
@@ -223,6 +229,26 @@ export class ConsoleBoard extends HTMLElement {
     }
   }
 
+  // Layouts werden unter dem Rollen-Label (= Rollenname im Workflow) abgelegt: die
+  // nodeRoleId ist die Instanz-ID und ändert sich bei jedem Workflow-Neustart.
+  #presetByLabel(byRole: Record<string, TileLayout>): LayoutPreset {
+    const out: LayoutPreset = {};
+    for (const [roleId, layout] of Object.entries(byRole)) {
+      const label = this.#entries.find((e) => e.nodeRoleId === roleId)?.nodeLabel ?? roleId;
+      out[label] = structuredClone(layout);
+    }
+    return out;
+  }
+
+  #presetByRole(byLabel: LayoutPreset): LayoutPreset {
+    const out: LayoutPreset = {};
+    for (const e of this.#entries) {
+      const l = byLabel[e.nodeLabel] ?? byLabel[e.nodeRoleId];
+      if (l) out[e.nodeRoleId] = l;
+    }
+    return out;
+  }
+
   #refreshPresetSelect() {
     if (!this.#presetSelect) return;
     this.#presetSelect.replaceChildren(new Option(t("board.layouts"), ""));
@@ -230,24 +256,33 @@ export class ConsoleBoard extends HTMLElement {
     this.#presetSelect.value = "";
   }
 
-  #saveNamedPreset() {
-    const name = prompt(t("board.layoutName"))?.trim();
-    if (!name) return;
+  async #saveNamedPreset() {
     const presets = this.#loadPresets();
-    presets[name] = structuredClone(this.#layouts);
+    const name = (await layoutDialog({
+      title: t("board.layoutName"),
+      confirmLabel: t("board.layoutSaveConfirm"),
+      suggestions: Object.keys(presets).sort(),
+    }))?.trim();
+    if (!name) return;
+    presets[name] = this.#presetByLabel(this.#layouts);
     try {
       localStorage.setItem(this.#presetKey(), JSON.stringify(presets));
     } catch {}
     this.#refreshPresetSelect();
   }
 
-  #deleteNamedPreset() {
+  async #deleteNamedPreset() {
     const presets = this.#loadPresets();
     const names = Object.keys(presets).sort();
     if (names.length === 0) return;
-    const name = prompt(`${t("board.layoutDelete")}:\n${names.join("\n")}`, names[0])?.trim();
+    const name = await layoutDialog({
+      title: t("board.layoutDelete"),
+      confirmLabel: t("kit.delete"),
+      danger: true,
+      choices: names,
+    });
     if (!name || !(name in presets)) return;
-    if (!confirm(t("board.layoutConfirmDelete", { name }))) return;
+    if (!(await confirmDialog(t("board.layoutConfirmDelete", { name }), { confirmLabel: t("kit.delete") }))) return;
     delete presets[name];
     try {
       localStorage.setItem(this.#presetKey(), JSON.stringify(presets));
@@ -259,7 +294,7 @@ export class ConsoleBoard extends HTMLElement {
     const preset = this.#loadPresets()[name];
     if (!preset) return;
     if (this.#maximizedRoleId) this.#toggleMaximize(this.#maximizedRoleId);
-    this.#layouts = applyPreset(this.#layouts, preset);
+    this.#layouts = applyPreset(this.#layouts, this.#presetByRole(preset));
     for (const [roleId, tile] of this.#tiles) {
       const layout = this.#layouts[roleId];
       if (!layout) continue;
@@ -275,21 +310,35 @@ export class ConsoleBoard extends HTMLElement {
     return `omp-console-board-layout:${this.#workflowId ?? "default"}`;
   }
 
-  #loadLayouts(): Record<string, TileLayout> {
-    let layouts: Record<string, TileLayout> = {};
+  #loadStored(): LayoutPreset {
+    let stored: LayoutPreset = {};
     try {
       const raw = localStorage.getItem(this.#storageKey());
-      layouts = raw ? (JSON.parse(raw) as Record<string, TileLayout>) : {};
+      stored = raw ? (JSON.parse(raw) as LayoutPreset) : {};
     } catch {
-      layouts = {};
+      stored = {};
     }
-    const maxZ = Math.max(0, ...Object.values(layouts).map((l) => l.zIndex ?? 0));
+    const maxZ = Math.max(0, ...Object.values(stored).map((l) => l.zIndex ?? 0));
     this.#nextZIndex = maxZ + 1;
-    return layouts;
+    return stored;
+  }
+
+  // Übernimmt für neu eingehängte Rollen den gespeicherten Zustand (nach Label,
+  // ersatzweise nach Instanz-ID wie in älteren Speicherständen).
+  #seedFromStored(entries: ConsoleEntry[]) {
+    for (const e of entries) {
+      if (this.#layouts[e.nodeRoleId]) continue;
+      const l = this.#stored[e.nodeLabel] ?? this.#stored[e.nodeRoleId];
+      if (l) this.#layouts[e.nodeRoleId] = structuredClone(l);
+    }
   }
 
   #saveLayouts() {
-    localStorage.setItem(this.#storageKey(), JSON.stringify(this.#layouts));
+    // Nicht mehr laufende Rollen behalten ihren Eintrag, damit er nach Stop/Neustart wieder greift.
+    this.#stored = { ...this.#stored, ...this.#presetByLabel(this.#layouts) };
+    try {
+      localStorage.setItem(this.#storageKey(), JSON.stringify(this.#stored));
+    } catch {}
   }
 
   // Zweiter Parameter (preselectNodeRoleId) existiert nur, damit dieselbe
@@ -315,6 +364,7 @@ export class ConsoleBoard extends HTMLElement {
     this.#emptyMessage.style.display = entries.length === 0 ? "block" : "none";
 
     if (diff.toMount.length > 0) {
+      this.#seedFromStored(diff.toMount);
       this.#layouts = reconcileLayouts(entries, this.#layouts, this.clientWidth || FALLBACK_CONTAINER_WIDTH);
       this.#saveLayouts();
       await Promise.all(diff.toMount.map((entry) => this.#mountTile(entry)));

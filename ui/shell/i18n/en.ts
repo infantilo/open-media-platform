@@ -134,6 +134,7 @@ export const en: Record<keyof typeof de, string> = {
   "board.layouts": "Layouts …",
   "board.layoutSave": "Save layout",
   "board.layoutSaveTitle": "Save the current window arrangement under a name",
+  "board.layoutSaveConfirm": "Save",
   "board.layoutDelete": "Delete layout",
   "board.layoutName": "Layout name:",
   "board.layoutConfirmDelete": "Delete layout \"{name}\"?",

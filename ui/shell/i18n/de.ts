@@ -133,6 +133,7 @@ export const de = {
   "board.layouts": "Layouts …",
   "board.layoutSave": "Layout speichern",
   "board.layoutSaveTitle": "Aktuelle Fensteranordnung unter einem Namen speichern",
+  "board.layoutSaveConfirm": "Speichern",
   "board.layoutDelete": "Layout löschen",
   "board.layoutName": "Name des Layouts:",
   "board.layoutConfirmDelete": "Layout \"{name}\" löschen?",
