@@ -11,6 +11,8 @@ import {
   laneCapacity,
   levelOf,
   occurrenceMinutes,
+  pairScheduleEvents,
+  ownLaneId,
   type ResourceModel,
   type Schedule,
   slotUtilization,
@@ -362,4 +364,105 @@ Deno.test("plannedWindowFor: geplanter Start/Stop zu einem echten Lauf", () => {
   const w = plannedWindowFor(s, at(2026, 10, 1, 9, 2));
   assertEquals([w.start?.getHours(), w.stop?.getHours()], [9, 12]);
   assertEquals(plannedWindowFor([], at(2026, 10, 1, 9)).stop, null);
+});
+
+Deno.test("pairScheduleEvents: täglicher Lauf über Mitternacht ist ein Paar (Stop am Folgetag)", () => {
+  const pairs = pairScheduleEvents([daily("start", "22:00"), daily("stop", "02:00")], at(2026, 10, 16, 0), 1);
+  // Paare mit Start gestern 22:00 (-1) → Stop heute 02:00 und Start heute 22:00 → Stop morgen 02:00
+  const key = pairs.map((p) => `${p.start?.dayOffset}@${p.start?.minutes}→${p.stop?.dayOffset}@${p.stop?.minutes}`).sort();
+  assertEquals(key, ["-1@1320→0@120", "0@1320→1@120"]);
+});
+
+Deno.test("pairScheduleEvents: einmalig über zwei Tage = ein Paar, kein '?'-Rest", () => {
+  const once = (action: "start" | "stop", d: Date): Schedule => ({ id: crypto.randomUUID(), kind: "once", action, at: d.toISOString() });
+  const pairs = pairScheduleEvents([once("start", at(2026, 10, 16, 23)), once("stop", at(2026, 10, 17, 1))], at(2026, 10, 16, 0), 1);
+  assertEquals(pairs.length, 1);
+  assertEquals([pairs[0].start?.dayOffset, pairs[0].stop?.dayOffset], [0, 1]);
+});
+
+Deno.test("pairScheduleEvents: zwei Fenster pro Tag bleiben getrennte Paare", () => {
+  const pairs = pairScheduleEvents([daily("start", "08:00"), daily("stop", "10:00"), daily("start", "12:00"), daily("stop", "14:00")], at(2026, 10, 16, 0), 1);
+  assertEquals(pairs.length, 2);
+  assertEquals(pairs.every((p) => p.start && p.stop && p.start.dayOffset === 0 && p.stop.dayOffset === 0), true);
+});
+
+Deno.test("Hosts derselben Maschine: Kapazität zählt einmal, Last landet in einer Lane", () => {
+  const m: ResourceModel = {
+    thresholds: { cpu: 85, mem: 90 },
+    hosts: [
+      { id: "", label: "lokal", local: true, online: true, machine: "penguin", numCpu: 8, memTotalBytes: 8 * GB, capacityKnown: true },
+      { id: "a", label: "A", online: true, machine: "penguin", numCpu: 8, memTotalBytes: 8 * GB, capacityKnown: true },
+      { id: "b", label: "B", online: true, machine: "penguin", numCpu: 8, memTotalBytes: 8 * GB, capacityKnown: true },
+    ],
+    workflows: [1, 2, 3, 4].map((i) => ({
+      id: `w${i}`, name: `W${i}`, status: "stopped",
+      roles: [{ name: "r", nodeType: "m", cpuCores: 2, cpuAvgCores: 1, rssBytes: GB, known: true }],
+    })),
+  };
+  assertEquals(laneCapacity(m, AUTO_LANE).cpuCores, 8);
+  const scheds = new Map<string, Schedule[]>(m.workflows.map((w) => [w.id, [daily("start", "09:00"), daily("stop", "10:00")]]));
+  const tl = computeTimeline(m, scheds, slotsOfDay(at(2026, 10, 2, 0)), 30, at(2026, 10, 1, 6));
+  const u = slotUtilization(tl.get(AUTO_LANE)![19], laneCapacity(m, AUTO_LANE), m.thresholds);
+  assertEquals(u.cpuLevel, "over"); // 4 × 2 Kerne = 8 von 8 > 85 %
+});
+
+Deno.test("Geteilte Maschine: eigene Lane je Host zeigt nur die festgelegte Last gegen die Maschinenkapazität", () => {
+  const m: ResourceModel = {
+    thresholds: { cpu: 85, mem: 90 },
+    hosts: [
+      { id: "a", label: "A", online: true, machine: "pc", numCpu: 8, memTotalBytes: 8 * GB, capacityKnown: true },
+      { id: "b", label: "B", online: true, machine: "pc", numCpu: 8, memTotalBytes: 8 * GB, capacityKnown: true },
+    ],
+    workflows: [{
+      id: "w", name: "W", status: "stopped",
+      roles: [
+        { name: "r1", nodeType: "m", hostId: "a", cpuCores: 2, cpuAvgCores: 1, rssBytes: GB, known: true },
+        { name: "r2", nodeType: "m", hostId: "b", cpuCores: 3, cpuAvgCores: 1, rssBytes: GB, known: true },
+      ],
+    }],
+  };
+  const scheds = new Map<string, Schedule[]>([["w", [daily("start", "09:00"), daily("stop", "10:00")]]]);
+  const tl = computeTimeline(m, scheds, slotsOfDay(at(2026, 10, 2, 0)), 30, at(2026, 10, 1, 6));
+  assertEquals(tl.get("a")![19].cpuCores, 5); // Maschine gesamt
+  assertEquals(tl.get(ownLaneId("a"))![19].cpuCores, 2);
+  assertEquals(tl.get(ownLaneId("b"))![19].cpuCores, 3);
+  assertEquals(laneCapacity(m, ownLaneId("b")).cpuCores, 8); // gemeinsame Maschine, nicht 16
+});
+
+const placeModel = (running: boolean): ResourceModel => ({
+  thresholds: { cpu: 85, mem: 90 },
+  hosts: [
+    { id: "", label: "lokal", local: true, online: true, numCpu: 4, memTotalBytes: 8 * GB, capacityKnown: true },
+    { id: "a", label: "A", online: true, numCpu: 8, memTotalBytes: 8 * GB, capacityKnown: true },
+    { id: "b", label: "B", online: true, numCpu: 8, memTotalBytes: 8 * GB, capacityKnown: true },
+    { id: "c", label: "C", online: true, maintenance: true, numCpu: 8, memTotalBytes: 8 * GB, capacityKnown: true },
+  ],
+  workflows: [1, 2].map((n) => ({
+    id: `w${n}`, name: `W${n}`, status: running && n === 1 ? "started" : "stopped",
+    roles: [{ name: "r", nodeType: "m", cpuCores: 2, cpuAvgCores: 1, rssBytes: GB, known: true, ...(running && n === 1 ? { running: true, runtimeHostId: "b" } : {}) }],
+  })),
+});
+
+Deno.test("Prognose: Rollen ohne Host verteilen sich auf Remote-Hosts, nie auf Wartungs-Host oder lokal", () => {
+  const m = placeModel(false);
+  const scheds = new Map<string, Schedule[]>(m.workflows.map((w) => [w.id, [daily("start", "09:00"), daily("stop", "10:00")]]));
+  const tl = computeTimeline(m, scheds, slotsOfDay(at(2026, 10, 2, 0)), 30, at(2026, 10, 1, 6));
+  assertEquals(tl.get("a")![19].cpuCores, 2);
+  assertEquals(tl.get("b")![19].cpuCores, 2);
+  assertEquals(tl.get("c")![19].cpuCores, 0);
+  assertEquals(tl.get("")![19].cpuCores, 0);
+  assertEquals(tl.get(AUTO_LANE)![19].cpuCores, 4); // Summe bleibt für Cloud-Vorschläge
+});
+
+Deno.test("Laufender Workflow zählt auf dem tatsächlichen Host bis zum Stop; danach Prognose", () => {
+  const m = placeModel(true);
+  const now = at(2026, 10, 2, 9, 10);
+  const scheds = new Map<string, Schedule[]>(m.workflows.map((w) => [w.id, [daily("start", "09:00"), daily("stop", "10:00")]]));
+  const tl = computeTimeline(m, scheds, slotsOfDay(at(2026, 10, 2, 0)), 30, now);
+  assertEquals(tl.get("b")![18].cpuCores >= 2, true); // w1 läuft auf b (Jetzt-Slot 09:00)
+  assertEquals(tl.get("b")![19].cpuCores, 2); // und bis zum Stop weiter (09:30)
+  assertEquals(tl.get(AUTO_LANE)![18].cpuCores, 2); // nur w2 ist noch ohne Host
+  // Am nächsten Tag beginnt ein neuer Lauf → Prognose (w1 wieder frei platziert)
+  const tl2 = computeTimeline(m, scheds, slotsOfDay(at(2026, 10, 3, 0)), 30, now);
+  assertEquals(tl2.get(AUTO_LANE)![19].cpuCores, 4);
 });

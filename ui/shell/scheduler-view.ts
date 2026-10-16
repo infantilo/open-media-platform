@@ -50,10 +50,18 @@ import {
   type RunHistory,
   type RunRec,
   isOver,
+  hostOfLane,
+  isOwnLane,
   laneCapacity,
+  machineAliases,
+  ownLaneHosts,
+  ownLaneId,
+  machineSiblings,
   type Level,
   type LaneSlot,
   occurrenceMinutes,
+  pairScheduleEvents,
+  type PairEnd,
   type ResHost,
   type ResourceModel,
   sameCalendarDate,
@@ -145,35 +153,8 @@ interface Bar {
 }
 
 function buildBarsForDates(schedules: Schedule[], dates: Date[]): Bar[] {
-  const bars: Bar[] = [];
-  dates.forEach((date, dateIndex) => {
-    const instances: Instance[] = [];
-    for (const s of schedules) {
-      const m = occurrenceMinutes(s, date);
-      if (m !== null) instances.push({ schedule: s, minutes: m, dateIndex });
-    }
-    const used = new Set<string>();
-    for (const inst of instances) {
-      if (used.has(inst.schedule.id) || inst.schedule.action !== "start") continue;
-      const partner = instances.find(
-        (o) =>
-          !used.has(o.schedule.id) &&
-          o.schedule.id !== inst.schedule.id &&
-          o.schedule.action === "stop" &&
-          o.schedule.kind === inst.schedule.kind &&
-          (inst.schedule.kind !== "weekly" || o.schedule.weekday === inst.schedule.weekday),
-      );
-      used.add(inst.schedule.id);
-      if (partner) used.add(partner.schedule.id);
-      bars.push({ start: inst, stop: partner });
-    }
-    for (const inst of instances) {
-      if (used.has(inst.schedule.id)) continue;
-      used.add(inst.schedule.id);
-      bars.push({ stop: inst });
-    }
-  });
-  return bars;
+  const toInst = (e: PairEnd | undefined): Instance | undefined => (e ? { schedule: e.schedule, minutes: e.minutes, dateIndex: e.dayOffset } : undefined);
+  return pairScheduleEvents(schedules, dates[0], dates.length).map((pr) => ({ start: toInst(pr.start), stop: toInst(pr.stop) }));
 }
 
 type DragMode = "move" | "resize-start" | "resize-stop";
@@ -577,12 +558,9 @@ class SchedulerView extends HTMLElement {
     if (bottlenecks.length === 0) return;
     const laneLabel = (id: string) => (id === AUTO_LANE ? tt("sched.880a4f") : model.hosts.find((h) => h.id === id)?.label ?? id);
     for (const mw of model.workflows) {
-      const lanes = new Set(mw.roles.map((r) => (r.hostId && timeline.has(r.hostId) ? r.hostId : AUTO_LANE)));
       const perSlot = new Map<number, string[]>();
       for (const b of bottlenecks) {
-        if (!lanes.has(b.laneId)) continue;
-        const slot = timeline.get(b.laneId)![b.slotIndex];
-        if (!slot.contribs.some((c) => c.wfId === mw.id)) continue; // läuft in diesem Slot gar nicht
+        if (!b.wfIds.includes(mw.id)) continue; // trägt in diesem Slot auf dieser Lane nichts bei
         const arr = perSlot.get(b.slotIndex) ?? [];
         arr.push(`${laneLabel(b.laneId)}: ${b.what.join(", ")}`);
         perSlot.set(b.slotIndex, arr);
@@ -747,16 +725,30 @@ class SchedulerView extends HTMLElement {
     hint.style.cssText = "font-size:10px;color:var(--omp-text-dim);margin-bottom:6px;";
     hint.textContent =
       tt("sched.0c6e43") +
-      tt("sched.449b97");
+      tt("sched.449b97") +
+      tt("sched.placementHint");
     box.appendChild(hint);
 
-    const laneIds = [...model.hosts.map((h) => h.id), AUTO_LANE];
+    const ownHosts = ownLaneHosts(model);
+    // Je Maschine: erst die Summen-Lane, direkt darunter die einzelnen Hosts.
+    const alias = machineAliases(model);
+    const laneIds = [
+      ...model.hosts.flatMap((h) =>
+        (alias.get(h.id) ?? h.id) !== h.id
+          ? []
+          : [h.id, ...ownHosts.filter((o) => (alias.get(o.id) ?? o.id) === h.id).map((o) => ownLaneId(o.id))]
+      ),
+      AUTO_LANE,
+    ];
     const now = new Date();
     for (const laneId of laneIds) {
       const slots = timeline.get(laneId);
       if (!slots) continue;
+      // Weitere Host-Einträge derselben Maschine laufen in der Lane des ersten.
+      if (laneId !== AUTO_LANE && !isOwnLane(laneId) && (alias.get(laneId) ?? laneId) !== laneId) continue;
       const cap = laneCapacity(model, laneId);
-      const host: ResHost | undefined = model.hosts.find((h) => h.id === laneId);
+      const host: ResHost | undefined = model.hosts.find((h) => h.id === hostOfLane(laneId));
+      const own = isOwnLane(laneId);
       const isAuto = laneId === AUTO_LANE;
 
       const anyDemand = slots.some((sl) => sl.cpuCores > 0 || sl.rssBytes > 0 || sl.netRxMbps > 0 || sl.netTxMbps > 0 || sl.gpuPercent > 0 || sl.gpuMemBytes > 0 || Object.keys(sl.io).length > 0 || sl.unknown.length > 0);
@@ -772,7 +764,12 @@ class SchedulerView extends HTMLElement {
       bh.style.cssText = "display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;margin-bottom:3px;";
       const name = document.createElement("span");
       name.style.cssText = "font-weight:600;";
-      name.textContent = isAuto ? tt("sched.569499") : host!.label;
+      name.textContent = isAuto
+        ? tt("sched.569499")
+        : own
+        ? tt("sched.ownLane", { p0: host!.label })
+        : [host!.label, ...machineSiblings(model, laneId).map((h) => h.label)].join(" + ");
+      if (own) name.style.cssText += "font-weight:500;padding-left:14px;";
       bh.appendChild(name);
       const capTxt = document.createElement("span");
       capTxt.style.cssText = "color:var(--omp-text-dim);font-size:11px;";
@@ -1193,21 +1190,38 @@ class SchedulerView extends HTMLElement {
   #renderBar(wf: Workflow, bar: Bar, dateCount: number, totalMinutes: number): HTMLElement {
     const startAbs = bar.start ? bar.start.dateIndex * DAY_MINUTES + bar.start.minutes : undefined;
     const stopAbs = bar.stop ? bar.stop.dateIndex * DAY_MINUTES + bar.stop.minutes : undefined;
-    const left = startAbs ?? Math.max(0, (stopAbs ?? 0) - MIN_DURATION_MINUTES);
-    const right = stopAbs ?? Math.min(totalMinutes, (startAbs ?? 0) + MIN_DURATION_MINUTES);
+    const fullLeft = startAbs ?? (stopAbs ?? 0) - MIN_DURATION_MINUTES;
+    const fullRight = stopAbs ?? (startAbs ?? 0) + MIN_DURATION_MINUTES;
+    // Über die Ränder der Ansicht hinausreichende Balken (Tageswechsel) am
+    // Rand beschneiden und dort mit einem Pfeil als "geht weiter" markieren.
+    const left = Math.max(0, fullLeft);
+    const right = Math.min(totalMinutes, fullRight);
+    const contLeft = fullLeft < 0;
+    const contRight = fullRight > totalMinutes;
+    // Tageswechsel innerhalb des Balkens (Stop an einem späteren Tag als Start).
+    const dayShift = bar.start && bar.stop ? bar.stop.dateIndex - bar.start.dateIndex : 0;
+    // Ziehen nur bei Balken, die vollständig im Ausschnitt liegen und den Tag
+    // nicht wechseln — für alles andere bleibt der Doppelklick-Editor.
+    const draggable = !contLeft && !contRight && dayShift === 0;
 
     const el = document.createElement("div");
     const isPartial = !bar.start || !bar.stop;
+    el.dataset.role = "bar";
+    if (contLeft || contRight || dayShift > 0) el.dataset.overnight = "1";
     el.style.cssText =
       `position:absolute;top:${(ROW_HEIGHT_PX - BAR_HEIGHT_PX) / 2}px;height:${BAR_HEIGHT_PX}px;` +
       `left:${(left / totalMinutes) * 100}%;width:${((right - left) / totalMinutes) * 100}%;` +
       `background:${isPartial ? "rgba(224,160,32,0.55)" : "rgba(91,155,213,0.7)"};` +
-      `border:1px solid ${isPartial ? "var(--omp-cue)" : "var(--omp-info)"};border-radius:3px;cursor:grab;` +
+      `border:1px solid ${isPartial ? "var(--omp-cue)" : "var(--omp-info)"};border-radius:3px;cursor:${draggable ? "grab" : "pointer"};` +
+      (contLeft ? "border-left-style:dashed;border-top-left-radius:0;border-bottom-left-radius:0;" : "") +
+      (contRight ? "border-right-style:dashed;border-top-right-radius:0;border-bottom-right-radius:0;" : "") +
       "box-sizing:border-box;display:flex;align-items:center;justify-content:center;overflow:hidden;";
+    const dayTag = (n: number) => (n > 0 ? ` (+${n})` : n < 0 ? ` (${n})` : "");
     el.title =
       (bar.start ? tt("sched.71a8aa", { p0: fmtMinutes(bar.start.minutes) }) : tt("sched.9ed479")) +
       " – " +
-      (bar.stop ? tt("sched.c1e806", { p0: fmtMinutes(bar.stop.minutes) }) : tt("sched.a3a320"));
+      (bar.stop ? tt("sched.c1e806", { p0: fmtMinutes(bar.stop.minutes) }) : tt("sched.a3a320")) +
+      (dayShift > 0 ? ` ${dayTag(dayShift)}` : "");
     // Ressourcen-Engpass in der Laufzeit dieses Balkens? (roter Rand + Grund)
     const over = this.#wfOver.get(wf.id);
     if (over && right > left) {
@@ -1224,7 +1238,10 @@ class SchedulerView extends HTMLElement {
 
     const timeLabel = document.createElement("span");
     timeLabel.style.cssText = "font-size:9px;color:var(--omp-text);pointer-events:none;white-space:nowrap;";
-    timeLabel.textContent = `${bar.start ? fmtMinutes(bar.start.minutes) : "?"}–${bar.stop ? fmtMinutes(bar.stop.minutes) : "?"}`;
+    timeLabel.textContent =
+      (contLeft ? "◀ " : "") +
+      `${bar.start ? fmtMinutes(bar.start.minutes) : "?"}–${bar.stop ? fmtMinutes(bar.stop.minutes) : "?"}${dayShift > 0 ? ` +${dayShift}` : ""}` +
+      (contRight ? " ▶" : "");
     el.appendChild(timeLabel);
 
     // Touch-Fund 2026-09-07: `display:none` bis `pointerenter` machte den
@@ -1248,7 +1265,10 @@ class SchedulerView extends HTMLElement {
     el.addEventListener("pointerenter", () => (delBtn.style.opacity = "1"));
     el.addEventListener("pointerleave", () => (delBtn.style.opacity = "0.6"));
 
-    el.addEventListener("pointerdown", (ev) => this.#startDrag(ev, el, wf, bar, dateCount, totalMinutes, left, right));
+    el.addEventListener("pointerdown", (ev) => {
+      if (draggable) this.#startDrag(ev, el, wf, bar, dateCount, totalMinutes, left, right);
+      else ev.stopPropagation(); // sonst startet das Neu-Ziehen der Spur unter dem Balken
+    });
     // Doppelklick: exakte HH:MM-Eingabe wie im alten Formular
     // (workflows-view.ts #renderScheduleRow) — Ziehen ist ungenau
     // (30-Min-Snapping), für exakte Zeiten bleibt das Tippen die

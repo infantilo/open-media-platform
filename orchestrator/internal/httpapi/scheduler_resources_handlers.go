@@ -41,15 +41,21 @@ type CatalogReader interface {
 }
 
 type schedResHost struct {
-	ID       string            `json:"id"`
-	Label    string            `json:"label"`
-	Local    bool              `json:"local,omitempty"`
-	Online   bool              `json:"online"`
-	NumCPU   int               `json:"numCpu"`
-	MemTotal uint64            `json:"memTotalBytes"`
-	Live     *schedResHostLive `json:"live,omitempty"`
-	IOPorts  []schedResIOCap   `json:"ioPorts,omitempty"`
-	CapKnown bool              `json:"capacityKnown"`
+	ID     string `json:"id"`
+	Label  string `json:"label"`
+	Local  bool   `json:"local,omitempty"`
+	Online bool   `json:"online"`
+	// Machine: Hostname der physischen/virtuellen Maschine. Mehrere Host-
+	// Einträge mit gleichem Machine teilen sich dieselben Kerne und denselben
+	// RAM — der Scheduler zählt die Kapazität nur einmal.
+	Machine string `json:"machine,omitempty"`
+	// Maintenance: Host im Wartungsmodus — die Platzierung wählt ihn nicht.
+	Maintenance bool              `json:"maintenance,omitempty"`
+	NumCPU      int               `json:"numCpu"`
+	MemTotal    uint64            `json:"memTotalBytes"`
+	Live        *schedResHostLive `json:"live,omitempty"`
+	IOPorts     []schedResIOCap   `json:"ioPorts,omitempty"`
+	CapKnown    bool              `json:"capacityKnown"`
 	// NetLinkMbps: vom Host-Agent gemeldete Link-Geschwindigkeit der
 	// konfigurierten NIC (je Richtung, vollduplex). Fehlt, wenn keine NIC
 	// konfiguriert ist oder der Treiber sie nicht meldet.
@@ -107,6 +113,10 @@ type schedResRole struct {
 	GPUKnown   bool    `json:"gpuKnown,omitempty"`
 	// VRAM-Maximum aus dem Profil (harte Grenze, konservativ).
 	GPUMemBytes uint64 `json:"gpuMemBytes,omitempty"`
+	// Running/RuntimeHostID: die Rolle läuft gerade (Workflow gestartet) auf
+	// diesem Host ("" = lokal) — die tatsächlich gewählte Platzierung.
+	Running       bool   `json:"running,omitempty"`
+	RuntimeHostID string `json:"runtimeHostId,omitempty"`
 }
 
 type schedIO struct {
@@ -188,7 +198,7 @@ func handleSchedulerResources(
 
 		// Lokaler Host (der Orchestrator selbst, HostID leer): kein Host-Agent,
 		// Kapazität direkt aus dem Betriebssystem.
-		local := schedResHost{ID: "", Label: "Orchestrator (lokal)", Local: true, Online: true, NumCPU: runtime.NumCPU(), MemTotal: localMemTotal()}
+		local := schedResHost{ID: "", Label: "Orchestrator (lokal)", Local: true, Online: true, Machine: localHostname(), NumCPU: runtime.NumCPU(), MemTotal: localMemTotal()}
 		local.CapKnown = local.MemTotal > 0
 		local.IOPorts = ioCaps(ports, claims, "")
 		if catalog != nil {
@@ -217,7 +227,7 @@ func handleSchedulerResources(
 			return
 		}
 		for _, h := range all {
-			sh := schedResHost{ID: h.ID, Label: h.Label}
+			sh := schedResHost{ID: h.ID, Label: h.Label, Machine: h.Hostname, Maintenance: h.MaintenanceSince != nil}
 			var caps struct {
 				NumCPU int `json:"numCPU"`
 			}
@@ -270,6 +280,9 @@ func handleSchedulerResources(
 				sr := schedResRole{Name: role.Name, NodeType: role.NodeType, HostID: role.HostID}
 				if role.RequiredIOPort != nil {
 					sr.IOPort = &schedIO{CardType: role.RequiredIOPort.CardType, Direction: role.RequiredIOPort.Direction}
+				}
+				if rt, ok := wf.Runtime[role.Name]; ok && rt.InstanceID != "" {
+					sr.Running, sr.RuntimeHostID = true, rt.HostID
 				}
 				if rn, has := computeRoleNetwork(catalog, wf.Definition, role); has {
 					sr.NetRxMbps, sr.NetTxMbps, sr.NetEstimated = rn.RxMbps, rn.TxMbps, rn.Estimated
@@ -440,6 +453,11 @@ func sortIOCaps(c []schedResIOCap) {
 			c[j], c[j-1] = c[j-1], c[j]
 		}
 	}
+}
+
+func localHostname() string {
+	n, _ := os.Hostname()
+	return n
 }
 
 // localMemTotal liest MemTotal aus /proc/meminfo (Linux), 0 wenn unbekannt.

@@ -89,6 +89,57 @@ export function eventsBetween(schedules: Schedule[], from: Date, to: Date): Sche
 
 const LOOKBACK_DAYS = 8;
 
+export interface PairEnd {
+  schedule: Schedule;
+  dayOffset: number; // Tage relativ zum ersten sichtbaren Tag (kann <0 oder >= Anzahl sein)
+  minutes: number; // Minute des Tages
+}
+
+export interface SchedulePair {
+  start?: PairEnd;
+  stop?: PairEnd;
+}
+
+// Paart Start- und Stop-Ereignisse über Tagesgrenzen hinweg: jeder Start
+// gehört zum zeitlich nächsten Stop (wie activeAt: das letzte Ereignis
+// entscheidet). Ein Lauf 22:00 → 02:00 ist damit EIN Paar, egal ob der
+// Zeitplan täglich, wöchentlich oder einmalig ist. Geliefert werden nur
+// Paare, die den sichtbaren Bereich [0, dayCount) Tage berühren.
+export function pairScheduleEvents(schedules: Schedule[], firstDay: Date, dayCount: number, minDurationMinutes = 30): SchedulePair[] {
+  const evs: { abs: number; end: PairEnd; action: "start" | "stop" }[] = [];
+  for (let off = -LOOKBACK_DAYS; off < dayCount + LOOKBACK_DAYS; off++) {
+    const day = addDays(firstDay, off);
+    for (const s of schedules) {
+      const m = occurrenceMinutes(s, day);
+      if (m === null) continue;
+      evs.push({ abs: off * DAY_MINUTES + m, end: { schedule: s, dayOffset: off, minutes: m }, action: s.action });
+    }
+  }
+  // Gleiche Minute: erst Stop, dann Start (Neustart statt Nullsekunden-Lauf).
+  evs.sort((a, b) => a.abs - b.abs || (a.action === b.action ? 0 : a.action === "stop" ? -1 : 1));
+  const total = dayCount * DAY_MINUTES;
+  const out: SchedulePair[] = [];
+  const emit = (pr: SchedulePair) => {
+    const a = pr.start ? pr.start.dayOffset * DAY_MINUTES + pr.start.minutes : pr.stop!.dayOffset * DAY_MINUTES + pr.stop!.minutes - minDurationMinutes;
+    const b = pr.stop ? pr.stop.dayOffset * DAY_MINUTES + pr.stop.minutes : a + minDurationMinutes;
+    if (b > 0 && a < total) out.push(pr);
+  };
+  let pending: PairEnd | null = null;
+  for (const e of evs) {
+    if (e.action === "start") {
+      if (pending) emit({ start: pending });
+      pending = e.end;
+    } else if (pending) {
+      emit({ start: pending, stop: e.end });
+      pending = null;
+    } else {
+      emit({ stop: e.end });
+    }
+  }
+  if (pending) emit({ start: pending });
+  return out;
+}
+
 // Läuft der Workflow zum Zeitpunkt t? Vergangenheit/Gegenwart rein aus dem
 // Zeitplan (letztes Ereignis davor entscheidet, bis zu 8 Tage zurück);
 // Zukunft: Ereignisse NACH jetzt entscheiden, gibt es keine bis t, bleibt
@@ -120,6 +171,11 @@ export interface ResHost {
   label: string;
   local?: boolean;
   online: boolean;
+  // Wartungsmodus: die Platzierung wählt den Host nicht.
+  maintenance?: boolean;
+  // Hostname der Maschine: Einträge mit gleichem Wert laufen auf derselben
+  // Hardware und teilen Kerne/RAM (Kapazität zählt nur einmal).
+  machine?: string;
   numCpu: number;
   memTotalBytes: number;
   capacityKnown: boolean;
@@ -156,6 +212,9 @@ export interface ResRole {
   gpuKnown?: boolean;
   // VRAM-Maximum aus dem Profil in Bytes (0/fehlt = nie gemessen).
   gpuMemBytes?: number;
+  // Die Rolle läuft gerade (Workflow gestartet) auf runtimeHostId ("" = lokal).
+  running?: boolean;
+  runtimeHostId?: string;
 }
 
 export interface ResWorkflow {
@@ -291,6 +350,44 @@ export interface LaneSlot {
 
 export type Timeline = Map<string, LaneSlot[]>;
 
+// Host-ID -> Host-ID der kanonischen Lane derselben Maschine (erster Eintrag
+// mit gleichem Hostnamen). Hosts ohne Hostnamen stehen für sich.
+export function machineAliases(model: ResourceModel): Map<string, string> {
+  const first = new Map<string, string>();
+  const alias = new Map<string, string>();
+  for (const h of model.hosts) {
+    const key = h.machine ? h.machine : null;
+    if (key === null) {
+      alias.set(h.id, h.id);
+      continue;
+    }
+    if (!first.has(key)) first.set(key, h.id);
+    alias.set(h.id, first.get(key)!);
+  }
+  return alias;
+}
+
+// Eigene Lane je Host einer Maschine mit mehreren Host-Einträgen: zeigt nur die
+// auf diesen Host festgelegte Last (gegen die gemeinsame Maschinenkapazität).
+export const OWN_PREFIX = "own:";
+export const ownLaneId = (hostId: string): string => OWN_PREFIX + hostId;
+export const isOwnLane = (laneId: string): boolean => laneId.startsWith(OWN_PREFIX);
+export const hostOfLane = (laneId: string): string => (isOwnLane(laneId) ? laneId.slice(OWN_PREFIX.length) : laneId);
+
+// Hosts, für die eine eigene Lane angezeigt wird (Maschine mit >1 Eintrag).
+export function ownLaneHosts(model: ResourceModel): ResHost[] {
+  const alias = machineAliases(model);
+  const count = new Map<string, number>();
+  for (const h of model.hosts) count.set(alias.get(h.id) ?? h.id, (count.get(alias.get(h.id) ?? h.id) ?? 0) + 1);
+  return model.hosts.filter((h) => (count.get(alias.get(h.id) ?? h.id) ?? 0) > 1);
+}
+
+// Die weiteren Host-Einträge derselben Maschine (für die Beschriftung).
+export function machineSiblings(model: ResourceModel, hostId: string): ResHost[] {
+  const alias = machineAliases(model);
+  return model.hosts.filter((h) => h.id !== hostId && alias.get(h.id) === hostId);
+}
+
 function emptySlot(): LaneSlot {
   return { cpuCores: 0, rssBytes: 0, netRxMbps: 0, netTxMbps: 0, netEstimated: false, gpuPercent: 0, gpuMemBytes: 0, io: {}, contribs: [], unknown: [], liveFloor: [] };
 }
@@ -302,6 +399,17 @@ export function ioKey(cardType: string, direction: string): string {
 // Berechnet je Lane (Host-ID bzw. AUTO_LANE für Rollen ohne Host-
 // Festlegung) und je Zeit-Slot die geplante Last. slotMinutes ist die
 // Slot-Breite; enthält ein Slot "jetzt", wird bei jetzt ausgewertet.
+// Gehört der Zeitpunkt t zum gerade laufenden Lauf des Workflows? Der Lauf
+// endet am ersten geplanten Stop nach jetzt; begonnen hat er laut Aufzeichnung
+// (ohne Aufzeichnung: schon immer).
+export function isInCurrentRun(schedules: Schedule[], runs: RunHistory | undefined, wfId: string, t: Date, now: Date): boolean {
+  const open = (runs?.byWf.get(wfId) ?? []).find((iv) => iv.end === null);
+  if (open && t.getTime() < open.start) return false;
+  if (t.getTime() <= now.getTime()) return true;
+  const stop = eventsBetween(schedules, new Date(now.getTime() + 1), t).find((e) => e.action === "stop");
+  return !stop;
+}
+
 export function computeTimeline(
   model: ResourceModel,
   schedulesByWf: Map<string, Schedule[]>,
@@ -313,45 +421,117 @@ export function computeTimeline(
   const lanes: Timeline = new Map();
   const laneIds = [AUTO_LANE, ...model.hosts.map((h) => h.id)];
   for (const id of laneIds) lanes.set(id, slots.map(() => emptySlot()));
+  const alias = machineAliases(model);
+  const canon = (id: string): string => alias.get(id) ?? id;
+  const ownHosts = new Set(ownLaneHosts(model).map((h) => h.id));
+  for (const id of ownHosts) lanes.set(ownLaneId(id), slots.map(() => emptySlot()));
+  // Alle Slots, in die die Last einer auf hostId festgelegten Rolle/Instanz
+  // zählt: Maschinen-/Host-Lane plus (bei geteilter Maschine) die eigene Lane.
+  const targets = (laneId: string, hostId: string | undefined, i: number): LaneSlot[] => {
+    const out = [lanes.get(laneId)![i]];
+    if (hostId !== undefined && ownHosts.has(hostId)) out.push(lanes.get(ownLaneId(hostId))![i]);
+    return out;
+  };
+
+  // Prognose der Platzierung (wie placement.SelectHost): erreichbare Remote-
+  // Hosts ohne Wartungsmodus, nur ohne solche der lokale Host. Pro Maschine
+  // zählt jeder Host-Eintrag einzeln (die Platzierung kennt nur Einträge).
+  const candidates = model.hosts.filter((h) => !h.local && h.id !== "" && h.online && !h.maintenance);
+  const fallbackHost = model.hosts.find((h) => h.local)?.id ?? "";
+  const laneOf = (hostId: string): string => (lanes.has(hostId) ? canon(hostId) : AUTO_LANE);
 
   slots.forEach((slotStart, i) => {
     const slotEnd = slotStart.getTime() + slotMinutes * 60000;
     const at = slotStart.getTime() <= now.getTime() && now.getTime() < slotEnd ? now : slotStart;
+    const addRoleTo = (slot: LaneSlot, wf: ResWorkflow, role: ResRole) => {
+      if (role.known) {
+        slot.cpuCores += role.cpuCores;
+        slot.rssBytes += role.rssBytes;
+      } else {
+        slot.unknown.push(`${wf.name}/${role.name}`);
+      }
+      if (role.ioPort) {
+        const k = ioKey(role.ioPort.cardType, role.ioPort.direction);
+        slot.io[k] = (slot.io[k] ?? 0) + 1;
+      }
+      const rx = role.netRxMbps ?? 0;
+      const tx = role.netTxMbps ?? 0;
+      slot.netRxMbps += rx;
+      slot.netTxMbps += tx;
+      const gpu = role.gpuKnown ? role.gpuPercent ?? 0 : 0;
+      const vram = role.gpuMemBytes ?? 0;
+      slot.gpuPercent += gpu;
+      slot.gpuMemBytes += vram;
+      if (rx + tx > 0 && role.netEstimated) slot.netEstimated = true;
+      if (role.known || rx + tx > 0 || gpu > 0 || vram > 0) {
+        slot.contribs.push({
+          wfId: wf.id,
+          wfName: wf.name,
+          role: role.name,
+          cpuCores: role.known ? role.cpuCores : 0,
+          rssBytes: role.known ? role.rssBytes : 0,
+          netRxMbps: rx,
+          netTxMbps: tx,
+          gpuPercent: gpu,
+          gpuMemBytes: vram,
+        });
+      }
+    };
+    // Last einer Rolle/Instanz mit bekanntem Host: Maschinen-/Host-Lane plus
+    // (bei geteilter Maschine) die eigene Lane des Hosts.
+    const placeOn = (hostId: string, wf: ResWorkflow, role: ResRole) => {
+      for (const slot of targets(laneOf(hostId), hostId, i)) addRoleTo(slot, wf, role);
+    };
+    const pending: { wf: ResWorkflow; role: ResRole }[] = [];
     for (const wf of model.workflows) {
       const schedules = schedulesByWf.get(wf.id) ?? [];
       // Vergangenheit: was tatsächlich lief (Aufzeichnung) schlägt den Plan —
       // z. B. ein vorzeitig von Hand beendeter Lauf belegt danach nichts mehr.
       const real = at.getTime() < now.getTime() ? runActiveAt(runs, wf.id, at.getTime(), now.getTime()) : null;
       if (!(real ?? activeAt(schedules, wf.status, at, now))) continue;
+      // Gehört dieser Slot zum gerade laufenden Lauf? Dann ist der Host der
+      // tatsächlich gewählte; sonst startet der Lauf erst später (Prognose).
+      const inCurrentRun = wf.status === "started" && isInCurrentRun(schedules, runs, wf.id, at, now);
       for (const role of wf.roles) {
-        const laneId = role.hostId && lanes.has(role.hostId) ? role.hostId : AUTO_LANE;
-        const slot = lanes.get(laneId)![i];
-        if (role.known) {
-          slot.cpuCores += role.cpuCores;
-          slot.rssBytes += role.rssBytes;
+        if (role.hostId && lanes.has(role.hostId)) {
+          placeOn(role.hostId, wf, role);
+        } else if (inCurrentRun && role.running && lanes.has(role.runtimeHostId ?? "")) {
+          placeOn(role.runtimeHostId ?? "", wf, role);
         } else {
-          slot.unknown.push(`${wf.name}/${role.name}`);
+          // Summe aller Rollen ohne feste Platzierung (Grundlage der Cloud-Vorschläge).
+          addRoleTo(lanes.get(AUTO_LANE)![i], wf, role);
+          pending.push({ wf, role });
         }
-        if (role.ioPort) {
-          const k = ioKey(role.ioPort.cardType, role.ioPort.direction);
-          slot.io[k] = (slot.io[k] ?? 0) + 1;
+      }
+    }
+    // Von Hand gestartete Instanzen laufen endlos weiter (bis jemand sie
+    // stoppt) — in jedem Slot auf dem Host, auf dem sie tatsächlich laufen.
+    for (const mi of model.manualInstances ?? []) {
+      const laneId = lanes.has(mi.hostId ?? "") ? canon(mi.hostId ?? "") : AUTO_LANE;
+      for (const slot of targets(laneId, laneId === AUTO_LANE ? undefined : mi.hostId ?? "", i)) {
+        const label = `${mi.label || mi.nodeType}`;
+        if (mi.known) {
+          slot.cpuCores += mi.cpuCores;
+          slot.rssBytes += mi.rssBytes;
+        } else {
+          slot.unknown.push(tt("sl.23c90e", { p0: label }));
         }
-        const rx = role.netRxMbps ?? 0;
-        const tx = role.netTxMbps ?? 0;
+        const rx = mi.netRxMbps ?? 0;
+        const tx = mi.netTxMbps ?? 0;
         slot.netRxMbps += rx;
         slot.netTxMbps += tx;
-        const gpu = role.gpuKnown ? role.gpuPercent ?? 0 : 0;
-        const vram = role.gpuMemBytes ?? 0;
+        const gpu = mi.gpuKnown ? mi.gpuPercent ?? 0 : 0;
+        const vram = mi.gpuMemBytes ?? 0;
         slot.gpuPercent += gpu;
         slot.gpuMemBytes += vram;
-        if (rx + tx > 0 && role.netEstimated) slot.netEstimated = true;
-        if (role.known || rx + tx > 0 || gpu > 0 || vram > 0) {
+        if (rx + tx > 0 && mi.netEstimated) slot.netEstimated = true;
+        if (mi.known || rx + tx > 0 || gpu > 0 || vram > 0) {
           slot.contribs.push({
-            wfId: wf.id,
-            wfName: wf.name,
-            role: role.name,
-            cpuCores: role.known ? role.cpuCores : 0,
-            rssBytes: role.known ? role.rssBytes : 0,
+            wfId: MANUAL_WF_ID,
+            wfName: tt("sl.51279b"),
+            role: label,
+            cpuCores: mi.known ? mi.cpuCores : 0,
+            rssBytes: mi.known ? mi.rssBytes : 0,
             netRxMbps: rx,
             netTxMbps: tx,
             gpuPercent: gpu,
@@ -360,47 +540,27 @@ export function computeTimeline(
         }
       }
     }
-    // Von Hand gestartete Instanzen laufen endlos weiter (bis jemand sie
-    // stoppt) — in jedem Slot auf dem Host, auf dem sie tatsächlich laufen.
-    for (const mi of model.manualInstances ?? []) {
-      const laneId = lanes.has(mi.hostId ?? "") ? (mi.hostId ?? "") : AUTO_LANE;
-      const slot = lanes.get(laneId)![i];
-      const label = `${mi.label || mi.nodeType}`;
-      if (mi.known) {
-        slot.cpuCores += mi.cpuCores;
-        slot.rssBytes += mi.rssBytes;
-      } else {
-        slot.unknown.push(tt("sl.23c90e", { p0: label }));
+    // Prognose für Rollen ohne Host: der Reihe nach auf den Kandidaten mit der
+    // niedrigsten geplanten CPU-Auslastung (wie die Platzierung beim Start).
+    for (const { wf, role } of pending) {
+      let best: ResHost | undefined;
+      let bestLoad = Infinity;
+      for (const h of candidates) {
+        const own = ownHosts.has(h.id) ? lanes.get(ownLaneId(h.id))![i] : lanes.get(canon(h.id))![i];
+        const load = h.numCpu > 0 ? own.cpuCores / h.numCpu : own.cpuCores;
+        if (load < bestLoad) {
+          best = h;
+          bestLoad = load;
+        }
       }
-      const rx = mi.netRxMbps ?? 0;
-      const tx = mi.netTxMbps ?? 0;
-      slot.netRxMbps += rx;
-      slot.netTxMbps += tx;
-      const gpu = mi.gpuKnown ? mi.gpuPercent ?? 0 : 0;
-      const vram = mi.gpuMemBytes ?? 0;
-      slot.gpuPercent += gpu;
-      slot.gpuMemBytes += vram;
-      if (rx + tx > 0 && mi.netEstimated) slot.netEstimated = true;
-      if (mi.known || rx + tx > 0 || gpu > 0 || vram > 0) {
-        slot.contribs.push({
-          wfId: MANUAL_WF_ID,
-          wfName: tt("sl.51279b"),
-          role: label,
-          cpuCores: mi.known ? mi.cpuCores : 0,
-          rssBytes: mi.known ? mi.rssBytes : 0,
-          netRxMbps: rx,
-          netTxMbps: tx,
-          gpuPercent: gpu,
-          gpuMemBytes: vram,
-        });
-      }
+      for (const slot of targets(laneOf(best ? best.id : fallbackHost), best ? best.id : fallbackHost, i)) addRoleTo(slot, wf, role);
     }
     // Der "Jetzt"-Slot nimmt die tatsächlich gemessene Host-Auslastung als
     // Untergrenze: liegt die Messung über der Planung (nicht verwaltete
     // Last, unterschätzte Profile), gilt die Messung.
     if (at === now) {
       for (const h of model.hosts) {
-        if (!lanes.has(h.id)) continue;
+        if (!lanes.has(h.id) || canon(h.id) !== h.id) continue;
         const slot = lanes.get(h.id)![i];
         const live = h.live;
         if (live && h.capacityKnown) {
@@ -454,7 +614,16 @@ export interface Capacity {
 // Hosts (inkl. lokalem) zusammen — dorthin platziert der Orchestrator
 // Rollen ohne Host-Festlegung.
 export function laneCapacity(model: ResourceModel, laneId: string): Capacity {
-  const hosts = laneId === AUTO_LANE ? model.hosts.filter((h) => h.online) : model.hosts.filter((h) => h.id === laneId);
+  if (isOwnLane(laneId)) laneId = hostOfLane(laneId);
+  const alias = machineAliases(model);
+  // Mehrere Host-Einträge auf derselben Maschine zählen nur einmal.
+  const seen = new Set<string>();
+  const hosts = (laneId === AUTO_LANE ? model.hosts.filter((h) => h.online && !h.maintenance) : model.hosts.filter((h) => h.id === laneId)).filter((h) => {
+    const c = alias.get(h.id) ?? h.id;
+    if (seen.has(c)) return false;
+    seen.add(c);
+    return true;
+  });
   const cap: Capacity = { cpuCores: 0, memBytes: 0, netMbps: 0, gpuPercent: 0, vramBytes: 0, io: {} };
   for (const h of hosts) {
     if (h.capacityKnown) {
@@ -558,11 +727,14 @@ export interface Bottleneck {
   laneId: string;
   slotIndex: number;
   what: string[]; // "CPU", "RAM", "decklink/in"
+  // Workflows, die in diesem Slot auf dieser Lane Last beitragen.
+  wfIds: string[];
 }
 
 export function findBottlenecks(model: ResourceModel, timeline: Timeline): Bottleneck[] {
   const out: Bottleneck[] = [];
   for (const [laneId, slots] of timeline) {
+    if (isOwnLane(laneId)) continue; // Teilmenge der Maschinen-Lane
     const cap = laneCapacity(model, laneId);
     slots.forEach((slot, slotIndex) => {
       const u = slotUtilization(slot, cap, model.thresholds);
@@ -573,7 +745,7 @@ export function findBottlenecks(model: ResourceModel, timeline: Timeline): Bottl
       if (u.gpuLevel === "over") what.push("GPU");
       if (u.vramLevel === "over") what.push("VRAM");
       what.push(...u.ioOver);
-      if (what.length > 0) out.push({ laneId, slotIndex, what });
+      if (what.length > 0) out.push({ laneId, slotIndex, what, wfIds: [...new Set(slot.contribs.map((c) => c.wfId))] });
     });
   }
   return out;
