@@ -1411,13 +1411,14 @@ fn build_one_input(
     context: &Arc<MxlContext>,
     isels: &[gst::Element],
     isel_bgs: &[gst::Element],
+    isel_pips: &[gst::Element],
     input: &DiscoveredInput,
     pad_index: usize,
     width: u32,
     height: u32,
     hwaccel: omp_mediaio::hwaccel::HwAccel,
     activate_now: bool,
-) -> Result<(Vec<gst::Pad>, Vec<gst::Pad>, SourceBranch), String> {
+) -> Result<(Vec<gst::Pad>, Vec<gst::Pad>, Vec<gst::Pad>, SourceBranch), String> {
     let mut branch = build_source_branch(
         pipeline,
         context,
@@ -1434,7 +1435,7 @@ fn build_one_input(
     // -Paare, damit ein Fehlschlag auf einer SPÄTEREN Ebene die bereits
     // erfolgreich verlinkten früheren Ebenen sauber wieder freigibt,
     // statt sie an einem halbfertigen `branch` verwaist zu lassen.
-    let mut requested: Vec<(&gst::Element, gst::Pad)> = Vec::with_capacity(isels.len() + isel_bgs.len());
+    let mut requested: Vec<(&gst::Element, gst::Pad)> = Vec::with_capacity(isels.len() + isel_bgs.len() + isel_pips.len());
     let fail = |branch: SourceBranch, requested: Vec<(&gst::Element, gst::Pad)>, err: String| {
         for (sel, pad) in requested {
             sel.release_request_pad(&pad);
@@ -1471,7 +1472,22 @@ fn build_one_input(
         bg_pads.push(bg_pad);
     }
 
-    Ok((fg_pads, bg_pads, branch))
+    // PIP-Selektor je Ebene (live umschaltbar, kein Rebuild): ein weiterer Abgriff derselben Quelle.
+    let mut pip_pads = Vec::with_capacity(isel_pips.len());
+    for (level_idx, isel_pip) in isel_pips.iter().enumerate() {
+        let pip_pad = match isel_pip.request_pad_simple(&format!("sink_{pad_index}")) {
+            Some(p) => p,
+            None => return fail(branch, requested, format!("isel_pip[{level_idx}]: request sink_{pad_index} failed")),
+        };
+        if let Err(e) = tap_source_branch(pipeline, &mut branch, &format!("input-{pad_index}-pip{level_idx}"), &pip_pad) {
+            isel_pip.release_request_pad(&pip_pad);
+            return fail(branch, requested, e);
+        }
+        requested.push((isel_pip, pip_pad.clone()));
+        pip_pads.push(pip_pad);
+    }
+
+    Ok((fg_pads, bg_pads, pip_pads, branch))
 }
 
 /// Eine unabhängige M/E-Bank (Nutzerwunsch 2026-08-14, "dynamische Anzahl
@@ -1489,6 +1505,10 @@ struct LevelPipeline {
     black_pad_bg: gst::Pad,
     source_pads_fg: HashMap<String, gst::Pad>,
     source_pads_bg: HashMap<String, gst::Pad>,
+    /// PIP-Selektor: wählt die PIP-Quelle live (`SetPipSource`), folgt bei "pst:N" dem Preset der Ebene N.
+    isel_pip: gst::Element,
+    black_pad_pip: gst::Pad,
+    source_pads_pip: HashMap<String, gst::Pad>,
     comp_fg_pad: gst::Pad,
     comp_bg_pad: gst::Pad,
     comp_keyer_pad: gst::Pad,
@@ -1503,10 +1523,6 @@ struct LevelPipeline {
     /// `MxlVideoInput`s am Leben, sonst stirbt ihr `read_loop`-Thread
     /// beim `Drop` (s. `build_keyfill_tail`).
     _keyer_keyfill: Option<(MxlVideoInput, MxlVideoInput)>,
-    /// `Some` nur, wenn PIP gerade eine echte Quelle liest (statt des
-    /// Schwarzbild-Fallbacks) — hält deren `MxlVideoInput` am Leben,
-    /// gleicher Grund wie `_keyer_keyfill`.
-    _pip_input: Option<MxlVideoInput>,
     flowed: Arc<AtomicBool>,
 }
 
@@ -1610,6 +1626,66 @@ fn attach_flip_probe(comp: &gst::Element, level: usize, frame_ns: u64) {
     });
 }
 
+/// Aufgelöste PIP-Quelle einer Ebene: "pst:N" (1-basierte Ebene N) folgt dem Preset-Bus dieser Ebene,
+/// alles andere ist eine Sender-ID.
+fn pip_target(source: &Option<String>, preset: &[Option<String>]) -> Option<String> {
+    let id = source.as_ref()?;
+    match id.strip_prefix("pst:") {
+        Some(n) => n.parse::<usize>().ok().and_then(|n| n.checked_sub(1)).and_then(|i| preset.get(i).cloned().flatten()),
+        None => Some(id.clone()),
+    }
+}
+
+/// Schleifenschutz: zeigt `sender` (direkt oder über andere Ebenen) auf das Ausgangsbild der Ebene `level`?
+/// Ein Ebenen-Ausgang ist ein Eingang, dessen Flow der PGM-Flow einer Ebene ist; seine Abhängigkeiten sind
+/// Programm, Preset und PIP-Quelle dieser Ebene.
+fn feeds_level(
+    sender: &str,
+    level: usize,
+    config: &Config,
+    inputs: &[DiscoveredInput],
+    program: &[Option<String>],
+    preset: &[Option<String>],
+    pip_sources: &[Option<String>],
+    visited: &mut HashSet<usize>,
+) -> bool {
+    let Some(input) = inputs.iter().find(|i| i.sender_id == sender) else { return false };
+    let Some(j) = config.flow_ids.iter().position(|f| *f == input.flow_id) else { return false };
+    if j == level {
+        return true;
+    }
+    if !visited.insert(j) {
+        return false;
+    }
+    let deps = [program.get(j).cloned().flatten(), preset.get(j).cloned().flatten(), pip_target(pip_sources.get(j).unwrap_or(&None), preset)];
+    deps.iter().flatten().any(|d| feeds_level(d, level, config, inputs, program, preset, pip_sources, visited))
+}
+
+/// Stellt je Ebene den PIP-Selektor auf die aufgelöste Quelle (Schwarz bei unbekannter Quelle oder Schleife).
+/// Billig genug für jede Schleifenrunde: schaltet nur, wenn sich etwas geändert hat.
+fn apply_pip_sources(
+    p: &ActivePipeline,
+    config: &Config,
+    inputs: &[DiscoveredInput],
+    program: &[Option<String>],
+    preset: &[Option<String>],
+    pip_sources: &[Option<String>],
+) {
+    for (level, lvl) in p.levels.iter().enumerate() {
+        let target = pip_target(&pip_sources[level], preset).filter(|id| {
+            !feeds_level(id, level, config, inputs, program, preset, pip_sources, &mut HashSet::new())
+        });
+        let want = target.as_ref().and_then(|id| lvl.source_pads_pip.get(id));
+        let ok = match want {
+            Some(pad) => is_active_pad(&lvl.isel_pip, Some(pad)),
+            None => is_active_pad(&lvl.isel_pip, Some(&lvl.black_pad_pip)),
+        };
+        if !ok {
+            lvl.isel_pip.set_property("active-pad", want.unwrap_or(&lvl.black_pad_pip));
+        }
+    }
+}
+
 fn switch_isel(isel: &gst::Element, pads: &HashMap<String, gst::Pad>, black: &gst::Pad, selected: &Option<String>) -> Option<String> {
     let pad = selected
         .as_ref()
@@ -1654,7 +1730,9 @@ fn refresh_source_gates(p: &ActivePipeline, last_used: &mut HashMap<String, Inst
         // `pinned`: Ersatz-Quellen einer laufenden Übergabe bleiben warm, damit der Wechsel ein laufendes Bild vorfindet.
         let in_use = pinned.contains(id.as_str())
             || p.levels.iter().any(|lvl| {
-                is_active_pad(&lvl.isel, lvl.source_pads_fg.get(id)) || is_active_pad(&lvl.isel_bg, lvl.source_pads_bg.get(id))
+                is_active_pad(&lvl.isel, lvl.source_pads_fg.get(id))
+                    || is_active_pad(&lvl.isel_bg, lvl.source_pads_bg.get(id))
+                    || is_active_pad(&lvl.isel_pip, lvl.source_pads_pip.get(id))
             });
         let seen = last_used.entry(id.clone()).or_insert(now);
         if in_use {
@@ -1725,55 +1803,6 @@ fn apply_dve_box(pad: &gst::Pad, box_: &DveBox) {
     pad.set_property("height", box_.height);
 }
 
-/// Baut den Zuspieler für den PIP-Layer (comp.sink_3, s. Moduldoku "PIP
-/// als eigenständiger Layer") — ein einzelner normalisierter Video-Zweig
-/// wie fg/bg, **kein** Fill+Key-Paar wie beim Keyer: PIP zeigt ein
-/// normales, undurchsichtiges Bild aus einer frei wählbaren Crosspoint-
-/// Quelle (`crosspoint.inputs`, nicht `keyer.inputs` — jede entdeckte
-/// Quelle ist als PIP-Bild geeignet, nicht nur Fill+Key-Paare). Ohne
-/// gewählte Quelle ein Schwarzbild-Fallback, damit ein aktiviertes PIP
-/// ohne Quelle eine leere schwarze Box zeigt statt den Build scheitern
-/// zu lassen — gleiches Prinzip wie der Keyer ohne gewählte Fill+Key-
-/// Quelle (dort Testfarbe statt Schwarz, da dort schon vor dieser
-/// Änderung eine synthetische Quelle existierte).
-fn build_pip_tail(
-    pipeline: &gst::Pipeline,
-    context: &Arc<MxlContext>,
-    pip_source_input: Option<&DiscoveredInput>,
-    width: u32,
-    height: u32,
-    hwaccel: omp_mediaio::hwaccel::HwAccel,
-    shared_black: &gst::Element,
-) -> Result<(gst::Element, Option<MxlVideoInput>), String> {
-    match pip_source_input {
-        Some(input) => {
-            // `new_unsynced()` + `activate()` erst nach vollständiger
-            // Verlinkung (`docs/decisions.md` Nachtrag 272, s. Doku bei
-            // `build_source_branch`) — gleicher Bug wäre hier sonst
-            // ebenso möglich (PIP-Quelle friert dauerhaft ein).
-            let mxl_input = MxlVideoInput::new_unsynced(pipeline, context.clone(), &input.flow_id)
-                .map_err(|e| format!("MxlVideoInput(pip, {}): {e}", input.sender_id))?;
-            let (caps, _elements) = build_normalized_branch(
-                pipeline,
-                &mxl_input.tail,
-                "pip",
-                width,
-                height,
-                Some((mxl_input.width, mxl_input.height)),
-                hwaccel,
-            )?;
-            mxl_input
-                .activate()
-                .map_err(|e| format!("activate MxlVideoInput(pip, {}): {e}", input.sender_id))?;
-            Ok((caps, Some(mxl_input)))
-        }
-        None => {
-            // Geteiltes Schwarzbild der Ebene (`build()`), keine eigene Quelle.
-            let (caps, _elements) = build_synthetic_branch(pipeline, shared_black, "pip-black", width, height)?;
-            Ok((caps, None))
-        }
-    }
-}
 
 /// Alles, was eine M/E-Ebene braucht, AUSSER den angezapften Quellen
 /// (`source_pads_fg`/`source_pads_bg`) — Zwischenstand von `build()`s
@@ -1786,15 +1815,16 @@ fn build_pip_tail(
 struct PartialLevel {
     isel: gst::Element,
     isel_bg: gst::Element,
+    isel_pip: gst::Element,
     black_pad_fg: gst::Pad,
     black_pad_bg: gst::Pad,
+    black_pad_pip: gst::Pad,
     comp_fg_pad: gst::Pad,
     comp_bg_pad: gst::Pad,
     comp_keyer_pad: gst::Pad,
     comp_pip_pad: gst::Pad,
     mxl_output: MxlVideoOutput,
     keyer_keyfill: Option<(MxlVideoInput, MxlVideoInput)>,
-    pip_input: Option<MxlVideoInput>,
     flowed: Arc<AtomicBool>,
 }
 
@@ -1813,7 +1843,6 @@ fn build(
     // Reihenfolge/Länge wie `config.flow_ids` — Länge 1 entspricht dem
     // unveränderten Vor-Ebenen-Verhalten.
     keyer_sources: &[Option<String>],
-    pip_sources: &[Option<String>],
     output_delays: &[Arc<AtomicU64>],
 ) -> Result<(ActivePipeline, Vec<String>), String> {
     let level_count = config.flow_ids.len();
@@ -1827,6 +1856,8 @@ fn build(
     //    zweite Element mit demselben Namen ab.
     let mut isels = Vec::with_capacity(level_count);
     let mut isel_bgs = Vec::with_capacity(level_count);
+    let mut isel_pips = Vec::with_capacity(level_count);
+    let mut black_pads_pip = Vec::with_capacity(level_count);
     let mut black_pads_fg = Vec::with_capacity(level_count);
     // Je Ebene EIN geteiltes Schwarzbild (`tee`) für fg, bg und PIP-Fallback.
     let mut black_tees: Vec<gst::Element> = Vec::with_capacity(level_count);
@@ -1842,9 +1873,15 @@ fn build(
             .property("sync-streams", false)
             .build()
             .map_err(|e| format!("input-selector (bg, level {level_idx}): {e}"))?;
+        let isel_pip = gst::ElementFactory::make("input-selector")
+            .name(format!("isel_pip_l{level_idx}"))
+            .property("sync-streams", false)
+            .build()
+            .map_err(|e| format!("input-selector (pip, level {level_idx}): {e}"))?;
         pipeline
             .add(&isel)
             .and_then(|()| pipeline.add(&isel_bg))
+            .and_then(|()| pipeline.add(&isel_pip))
             .map_err(|e| format!("add isel (level {level_idx}): {e}"))?;
 
         // ── Schwarzbild-Fallback, auf beiden Selektoren (fg + bg)
@@ -1885,6 +1922,13 @@ fn build(
             config.width,
             config.height,
         )?;
+        let (black_caps_pip, _) = build_synthetic_branch(
+            &pipeline,
+            &black_tee,
+            &format!("black-pip-l{level_idx}"),
+            config.width,
+            config.height,
+        )?;
         black_tees.push(black_tee);
 
         let black_pad_fg = isel
@@ -1903,6 +1947,18 @@ fn build(
             .ok_or("black-bg capsfilter: no src pad")?
             .link(&black_pad_bg)
             .map_err(|e| format!("link black-bg to isel_bg (level {level_idx}): {e}"))?;
+
+        let black_pad_pip = isel_pip
+            .request_pad_simple("sink_0")
+            .ok_or_else(|| format!("isel_pip: request sink_0 failed (level {level_idx})"))?;
+        black_caps_pip
+            .static_pad("src")
+            .ok_or("black-pip capsfilter: no src pad")?
+            .link(&black_pad_pip)
+            .map_err(|e| format!("link black-pip to isel_pip (level {level_idx}): {e}"))?;
+        isel_pip.set_property("active-pad", &black_pad_pip);
+        isel_pips.push(isel_pip);
+        black_pads_pip.push(black_pad_pip);
 
         isels.push(isel);
         isel_bgs.push(isel_bg);
@@ -1928,6 +1984,7 @@ fn build(
     for level_idx in 0..level_count {
         let isel = isels[level_idx].clone();
         let isel_bg = isel_bgs[level_idx].clone();
+        let isel_pip = isel_pips[level_idx].clone();
 
         let comp = gst::ElementFactory::make("compositor")
             .name(format!("comp_l{level_idx}"))
@@ -2069,17 +2126,14 @@ fn build(
         //    Box-Geometrie kommt vom Aufrufer nach dem Build via
         //    `apply_dve_box` (dieselbe Funktion, die vorher `comp_fg_pad`
         //    traf).
-        let pip_source_input = pip_sources[level_idx].as_ref().and_then(|id| inputs.iter().find(|i| &i.sender_id == id));
-        let (pip_caps, pip_input) =
-            build_pip_tail(&pipeline, context, pip_source_input, config.width, config.height, config.hwaccel, &black_tees[level_idx])?;
         let comp_pip_pad = comp
             .request_pad_simple("sink_3")
             .ok_or_else(|| format!("comp: request sink_3 (pip) failed (level {level_idx})"))?;
         comp_pip_pad.set_property("zorder", 4u32);
         comp_pip_pad.set_property("alpha", 0.0f64);
-        pip_caps
+        isel_pip
             .static_pad("src")
-            .ok_or("pip capsfilter: no src pad")?
+            .ok_or("isel_pip: no src pad")?
             .link(&comp_pip_pad)
             .map_err(|e| format!("link pip to comp.sink_3 (level {level_idx}): {e}"))?;
 
@@ -2115,15 +2169,16 @@ fn build(
         partial_levels.push(PartialLevel {
             isel,
             isel_bg,
+            isel_pip,
             black_pad_fg: black_pads_fg[level_idx].clone(),
             black_pad_bg: black_pads_bg[level_idx].clone(),
+            black_pad_pip: black_pads_pip[level_idx].clone(),
             comp_fg_pad,
             comp_bg_pad,
             comp_keyer_pad,
             comp_pip_pad,
             mxl_output,
             keyer_keyfill,
-            pip_input,
             flowed,
         });
     }
@@ -2141,12 +2196,17 @@ fn build(
         (0..level_count).map(|_| HashMap::with_capacity(inputs.len())).collect();
     let mut source_pads_bg: Vec<HashMap<String, gst::Pad>> =
         (0..level_count).map(|_| HashMap::with_capacity(inputs.len())).collect();
+    let mut source_pads_pip: Vec<HashMap<String, gst::Pad>> =
+        (0..level_count).map(|_| HashMap::with_capacity(inputs.len())).collect();
     let mut branches = HashMap::with_capacity(inputs.len());
     let mut warnings = Vec::new();
     for (i, input) in inputs.iter().enumerate() {
         let pad_index = i + 1;
-        match build_one_input(&pipeline, context, &isels, &isel_bgs, input, pad_index, config.width, config.height, config.hwaccel, true) {
-            Ok((fg_pads, bg_pads, branch)) => {
+        match build_one_input(&pipeline, context, &isels, &isel_bgs, &isel_pips, input, pad_index, config.width, config.height, config.hwaccel, true) {
+            Ok((fg_pads, bg_pads, pip_pads, branch)) => {
+                for (level_idx, pad) in pip_pads.into_iter().enumerate() {
+                    source_pads_pip[level_idx].insert(input.sender_id.clone(), pad);
+                }
                 for (level_idx, pad) in fg_pads.into_iter().enumerate() {
                     source_pads_fg[level_idx].insert(input.sender_id.clone(), pad);
                 }
@@ -2172,6 +2232,9 @@ fn build(
         levels.push(LevelPipeline {
             isel: partial.isel,
             isel_bg: partial.isel_bg,
+            isel_pip: partial.isel_pip,
+            black_pad_pip: partial.black_pad_pip,
+            source_pads_pip: std::mem::take(&mut source_pads_pip[level_idx]),
             black_pad_fg: partial.black_pad_fg,
             black_pad_bg: partial.black_pad_bg,
             source_pads_fg: std::mem::take(&mut source_pads_fg[level_idx]),
@@ -2182,7 +2245,6 @@ fn build(
             comp_pip_pad: partial.comp_pip_pad,
             _mxl_output: partial.mxl_output,
             _keyer_keyfill: partial.keyer_keyfill,
-            _pip_input: partial.pip_input,
             flowed: partial.flowed,
         });
     }
@@ -2216,14 +2278,18 @@ fn add_input_live(
     let isel_bgs: Vec<gst::Element> = p.levels.iter().map(|l| l.isel_bg.clone()).collect();
     let pad_index = p.next_pad_index;
     p.next_pad_index += 1;
-    let (fg_pads, bg_pads, branch) =
-        build_one_input(&p.pipeline, context, &isels, &isel_bgs, input, pad_index, width, height, hwaccel, false)?;
+    let isel_pips: Vec<gst::Element> = p.levels.iter().map(|l| l.isel_pip.clone()).collect();
+    let (fg_pads, bg_pads, pip_pads, branch) =
+        build_one_input(&p.pipeline, context, &isels, &isel_bgs, &isel_pips, input, pad_index, width, height, hwaccel, false)?;
     if let Err(e) = branch.mxl_input.activate() {
         for (isel, pad) in isels.iter().zip(&fg_pads) {
             isel.release_request_pad(pad);
         }
         for (isel_bg, pad) in isel_bgs.iter().zip(&bg_pads) {
             isel_bg.release_request_pad(pad);
+        }
+        for (isel_pip, pad) in isel_pips.iter().zip(&pip_pads) {
+            isel_pip.release_request_pad(pad);
         }
         teardown_source_branch(&p.pipeline, branch);
         return Err(format!("activate MxlVideoInput (live input {}): {e}", input.sender_id));
@@ -2233,6 +2299,9 @@ fn add_input_live(
     }
     for (lvl, pad) in p.levels.iter_mut().zip(bg_pads) {
         lvl.source_pads_bg.insert(input.sender_id.clone(), pad);
+    }
+    for (lvl, pad) in p.levels.iter_mut().zip(pip_pads) {
+        lvl.source_pads_pip.insert(input.sender_id.clone(), pad);
     }
     p._branches.insert(input.sender_id.clone(), branch);
     Ok(())
@@ -2253,6 +2322,12 @@ fn remove_input_live(p: &mut ActivePipeline, sender_id: &str) {
                 lvl.isel_bg.set_property("active-pad", &lvl.black_pad_bg);
             }
             lvl.isel_bg.release_request_pad(&pad);
+        }
+        if let Some(pad) = lvl.source_pads_pip.remove(sender_id) {
+            if is_active_pad(&lvl.isel_pip, Some(&pad)) {
+                lvl.isel_pip.set_property("active-pad", &lvl.black_pad_pip);
+            }
+            lvl.isel_pip.release_request_pad(&pad);
         }
     }
     if let Some(branch) = p._branches.remove(sender_id) {
@@ -2599,7 +2674,7 @@ pub fn run(
     let mut keyfill_inputs: Vec<DiscoveredKeyFill> = Vec::new();
     let mut keyer_sources: Vec<Option<String>> = vec![None; level_count];
     let mut pip_sources: Vec<Option<String>> = vec![None; level_count];
-    let mut active = match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_sources, &pip_sources, &output_delays) {
+    let mut active = match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_sources, &output_delays) {
         Ok((p, _warnings)) => {
             *flowed_slot.lock().expect("lock poisoned") = p.levels.iter().map(|l| Some(l.flowed.clone())).collect();
             Some(p)
@@ -2730,6 +2805,9 @@ pub fn run(
             process_handovers(p, &mut handovers, &mut zombies, &mut program, &mut preset, any_fading, &handover_pending, &tx);
         }
         if let Some(p) = &active {
+            apply_pip_sources(p, &config, &current_inputs, &program, &preset, &pip_sources);
+        }
+        if let Some(p) = &active {
             let pinned: HashSet<&str> = handovers.iter().map(|h| h.new.as_str()).collect();
             refresh_source_gates(p, &mut gate_last_used, &pinned);
         }
@@ -2814,10 +2892,7 @@ pub fn run(
                 if inputs_changed(&current_inputs, &inputs) {
                     // Inkrementell, wenn keine Keyer-/PIP-Quelle betroffen ist: Zweige hinzufügen/entfernen, PGM läuft
                     // ununterbrochen weiter. Sonst (und ohne aktive Pipeline) der bisherige Voll-Rebuild.
-                    let gone_used_elsewhere = current_inputs
-                        .iter()
-                        .filter(|o| !inputs.iter().any(|n| n.sender_id == o.sender_id))
-                        .any(|o| pip_sources.iter().any(|s| s.as_deref() == Some(o.sender_id.as_str())));
+                    let gone_used_elsewhere = false;
                     if let (Some(p), false) = (active.as_mut(), gone_used_elsewhere) {
                         let keep: HashSet<String> = handovers.iter().map(|h| h.old.clone()).collect();
                         let warnings = apply_input_delta(p, &context, &config, &current_inputs, &inputs, &keep, &mut zombies, &mut program, &mut missing_inputs, &tx);
@@ -2832,7 +2907,7 @@ pub fn run(
                     join_all_fades(&fade_threads, &fading);
                     active = None;
                     std::thread::sleep(OLD_WRITER_DRAIN);
-                    match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_sources, &pip_sources, &output_delays) {
+                    match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_sources, &output_delays) {
                         Ok((p, warnings)) => {
                             for w in warnings {
                                 let _ = tx.send(Event::Error(w));
@@ -2856,7 +2931,7 @@ pub fn run(
                                 "rebuild with {} inputs failed: {e} — falling back to black",
                                 current_inputs.len()
                             )));
-                            match build(&context, &config, &[], &keyfill_inputs, &keyer_sources, &pip_sources, &output_delays) {
+                            match build(&context, &config, &[], &keyfill_inputs, &keyer_sources, &output_delays) {
                                 Ok((p, _warnings)) => {
                                     reset_all_levels_to_black(&p, &mut program, &mut preset, &dve_box, &tx);
                                     update_flowed(&flowed_slot, &p);
@@ -2912,7 +2987,7 @@ pub fn run(
                 join_all_fades(&fade_threads, &fading);
                 active = None;
                 std::thread::sleep(OLD_WRITER_DRAIN);
-                match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_sources, &pip_sources, &output_delays) {
+                match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_sources, &output_delays) {
                     Ok((p, warnings)) => {
                         for w in warnings {
                             let _ = tx.send(Event::Error(w));
@@ -2925,7 +3000,7 @@ pub fn run(
                         let _ = tx.send(Event::Error(format!(
                             "keyer source rebuild failed: {e} — falling back to black"
                         )));
-                        match build(&context, &config, &[], &keyfill_inputs, &keyer_sources, &pip_sources, &output_delays) {
+                        match build(&context, &config, &[], &keyfill_inputs, &keyer_sources, &output_delays) {
                             Ok((p, _warnings)) => {
                                 reset_all_levels_to_black(&p, &mut program, &mut preset, &dve_box, &tx);
                                 update_flowed(&flowed_slot, &p);
@@ -2948,38 +3023,9 @@ pub fn run(
             // `MxlVideoInput`-Verbindung entsteht), nur ohne Fill+Key-Paar.
             // Gleiche Cross-Ebenen-Einschränkung wie dort.
             Ok(Command::SetPipSource(level, source)) if pip_sources.get(level).is_some_and(|s| *s != source) => {
+                // Live am PIP-Selektor umschalten (kein Rebuild, PGM läuft ungestört); "pst:N" folgt dem Preset der Ebene N
+                // (s. `apply_pip_sources`, läuft in jeder Schleifenrunde).
                 pip_sources[level] = source;
-                join_all_fades(&fade_threads, &fading);
-                active = None;
-                std::thread::sleep(OLD_WRITER_DRAIN);
-                match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_sources, &pip_sources, &output_delays) {
-                    Ok((p, warnings)) => {
-                        for w in warnings {
-                            let _ = tx.send(Event::Error(w));
-                        }
-                        reapply_all_levels(&p, &mut program, &dve_box, &keyer_enabled, &pip_enabled, &tx);
-                        update_flowed(&flowed_slot, &p);
-                        active = Some(p);
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Event::Error(format!(
-                            "pip source rebuild failed: {e} — falling back to black"
-                        )));
-                        match build(&context, &config, &[], &keyfill_inputs, &keyer_sources, &pip_sources, &output_delays) {
-                            Ok((p, _warnings)) => {
-                                reset_all_levels_to_black(&p, &mut program, &mut preset, &dve_box, &tx);
-                                update_flowed(&flowed_slot, &p);
-                                active = Some(p);
-                            }
-                            Err(e2) => {
-                                let _ = tx.send(Event::Error(format!(
-                                    "fallback black-only build also failed: {e2}"
-                                )));
-                                break;
-                            }
-                        }
-                    }
-                }
             }
             Ok(Command::SetPipSource(..)) => {}
             Ok(Command::SelectPreset(level, sender_id)) => {
@@ -3517,5 +3563,58 @@ mod letterbox_tests {
         let ((x0, x1), (y0, y1)) = run(1920, 800);
         assert!(x0 <= 1 && x1 >= 1278);
         assert!((y0 as i32 - 93).abs() <= 3 && (719 - y1 as i32 - 93).abs() <= 3, "{y0} {y1}");
+    }
+}
+
+#[cfg(test)]
+mod pip_loop_tests {
+    use super::*;
+
+    fn input(sender: &str, flow: &str) -> DiscoveredInput {
+        DiscoveredInput { sender_id: sender.into(), label: sender.into(), flow_id: flow.into(), device_id: String::new(), format: None }
+    }
+
+    fn config() -> Config {
+        Config {
+            domain: String::new(),
+            flow_ids: vec!["f1".into(), "f2".into()],
+            label: String::new(),
+            width: 1280,
+            height: 720,
+            hwaccel: omp_mediaio::hwaccel::HwAccel::default(),
+        }
+    }
+
+    #[test]
+    fn pst_source_resolves_to_the_preset_of_that_level() {
+        let preset = vec![Some("a".to_string()), None];
+        assert_eq!(pip_target(&Some("pst:1".into()), &preset), Some("a".to_string()));
+        assert_eq!(pip_target(&Some("pst:2".into()), &preset), None);
+        assert_eq!(pip_target(&Some("pst:9".into()), &preset), None);
+        assert_eq!(pip_target(&Some("x".into()), &preset), Some("x".to_string()));
+        assert_eq!(pip_target(&None, &preset), None);
+    }
+
+    #[test]
+    fn own_level_output_is_a_loop_directly_and_via_another_level() {
+        let inputs = vec![input("cam", "c"), input("pgm1", "f1"), input("pgm2", "f2")];
+        let program = vec![None, None];
+        let preset = vec![None, None];
+        let pip = vec![None, None];
+        let cfg = config();
+        // Ebene 1 zeigt den eigenen Ausgang: Schleife.
+        assert!(feeds_level("pgm1", 0, &cfg, &inputs, &program, &preset, &pip, &mut HashSet::new()));
+        // Kamera: keine Schleife.
+        assert!(!feeds_level("cam", 0, &cfg, &inputs, &program, &preset, &pip, &mut HashSet::new()));
+        // Ebene 2 zeigt andere Ebene (pgm2), die selbst nichts von Ebene 1 nutzt: erlaubt.
+        assert!(!feeds_level("pgm2", 0, &cfg, &inputs, &program, &preset, &pip, &mut HashSet::new()));
+        // Ebene 2 hat Ebene 1 als Programm: pgm2 -> pgm1 -> Schleife für Ebene 1.
+        let program = vec![None, Some("pgm1".to_string())];
+        assert!(feeds_level("pgm2", 0, &cfg, &inputs, &program, &preset, &pip, &mut HashSet::new()));
+        // ... auch über die PIP-Quelle von Ebene 2 ("pst:1" mit Preset pgm1).
+        let program = vec![None, None];
+        let preset = vec![Some("pgm1".to_string()), None];
+        let pip = vec![None, Some("pst:1".to_string())];
+        assert!(feeds_level("pgm2", 0, &cfg, &inputs, &program, &preset, &pip, &mut HashSet::new()));
     }
 }

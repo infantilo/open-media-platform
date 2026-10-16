@@ -51,6 +51,8 @@ const T = (() => {
       "noPicture": "kein Bild",
       "mismatch": "Abweichendes Format: {format} — Mixer: {own}",
       "takeAnyway": "Trotzdem schalten",
+      "pstOfLevel": "PST Ebene {n}",
+      "pstGroup": "Mischer-Preset (folgt dem Preset-Bus)",
       "sourceProblem": "Quelle meldet ein Problem: {text}",
       "confirmTake": "Die Quelle „{label}“ meldet ein Problem: {text} — Trotzdem auf Programm schalten?",
       "mixerLevels": "Mischerebenen",
@@ -128,6 +130,8 @@ const T = (() => {
       "noPicture": "no picture",
       "mismatch": "Different format: {format} — mixer: {own}",
       "takeAnyway": "Take anyway",
+      "pstOfLevel": "PST level {n}",
+      "pstGroup": "Mixer preset (follows the preset bus)",
       "sourceProblem": "Source reports a problem: {text}",
       "confirmTake": "The source \"{label}\" reports a problem: {text} — Take it to program anyway?",
       "mixerLevels": "Mixer levels",
@@ -852,11 +856,13 @@ class OmpVideoMixerMePanel extends HTMLElement {
       el.accepts = ["video"];
       el.excludeRoles = ["low"];
       // Sofort mit Label-only-Einträgen (kein "nicht verfügbar"-Flackern), dann mit Metadaten.
-      el.entries = entries.map((e) => ({ id: e.senderId, label: e.label }));
+      // Virtuelle Quellen (`virtual`): vom Mischer selbst aufgelöst (z. B. "pst:N" = Preset-Bus der Ebene N), nicht im Katalog.
+      const virt = (e, wf) => ({ id: e.senderId, label: e.label, mediaType: "video", nodeId: "omp-virtual", nodeName: T("pstGroup"), workflowId: wf });
+      el.entries = entries.map((e) => (e.virtual ? virt(e) : { id: e.senderId, label: e.label }));
       sourceCatalog().then((catalog) => {
         const byId = new Map(catalog.entries.map((c) => [c.id, c]));
         el.currentWorkflowId = catalog.currentWorkflowId;
-        el.entries = entries.map((e) => ({ ...(byId.get(e.senderId) || { id: e.senderId }), label: e.label }));
+        el.entries = entries.map((e) => (e.virtual ? virt(e, catalog.currentWorkflowId) : { ...(byId.get(e.senderId) || { id: e.senderId }), label: e.label }));
       });
       return el;
     };
@@ -1424,7 +1430,8 @@ class OmpVideoMixerMePanel extends HTMLElement {
         sourceField.className = "field";
         const sourceLabel = document.createElement("label");
         sourceLabel.textContent = T("source");
-        const pipInputEntries = latestInputs.map((i) => ({ label: i.mismatch ? `⚠ ${shortLabel(i.label)} (${i.format})` : shortLabel(i.label), senderId: i.senderId }));
+        const pstEntries = Array.from({ length: levelCount }, (_, k) => ({ senderId: `pst:${k + 1}`, label: levelCount > 1 ? T("pstOfLevel", { n: k + 1 }) : "PST", virtual: true }));
+        const pipInputEntries = pstEntries.concat(latestInputs.map((i) => ({ label: i.mismatch ? `⚠ ${shortLabel(i.label)} (${i.format})` : shortLabel(i.label), senderId: i.senderId })));
         const sourceSelect = buildSourceSelector(pipInputEntries, T("black"));
         sourceSelect.value = draft.senderId;
         sourceSelect.addEventListener("change", () => (draft.senderId = sourceSelect.value));
