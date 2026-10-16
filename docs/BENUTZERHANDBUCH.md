@@ -242,7 +242,10 @@ Ziel Y an – und wo bricht es?". Er zeigt den **Ist-Zustand** (die aktuell
 aktiven Verbindungen), ändert aber nichts.
 
 1. **Quelle** wählen (ein Ausgang einer Node) und/oder **Ziel** wählen (eine
-   Node „jeder Eingang" oder ein bestimmter Eingang). **Es genügt eine
+   Node „jeder Eingang" oder ein bestimmter Eingang). Die drei Felder
+   sind **Suchfelder**: Klick öffnet die ganze Liste, Tippen filtert (alle
+   Suchwörter müssen im Namen vorkommen, z. B. „mixer pgm"), Pfeiltasten +
+   Enter wählen, Esc bricht ab, × bzw. ein leeres Feld löscht die Auswahl. **Es genügt eine
    Seite:** nur die Quelle zeigt alle Ketten, die von ihr ausgehen (jede bis
    zu ihrem letzten Glied); nur das Ziel zeigt alle Ketten, die dort
    ankommen (jede zurück bis zu ihrem Ursprung). Sind beide gewählt, werden
@@ -252,11 +255,23 @@ aktiven Verbindungen), ändert aber nichts.
 3. Darunter erscheint jeder gefundene Weg als Kette aus Karten: Node mit
    Host und Online-Status, dazwischen die Verbindung mit Format und
    Transport (z. B. „Video · MXL").
+   Bildmischer und Umschalter haben keine eigenen Eingangs-Verbindungen;
+   ihre gerade geschaltete Programmquelle wird als Eingang ergänzt, die
+   Kette läuft also bis zur eigentlichen Quelle weiter.
 
 Die Kopfzeile jedes Wegs sagt „in Ordnung", „mit Hinweisen" oder nennt die
 **erste Fehlerstelle** (rot umrandet): Node offline oder abgestürzt,
 Formate passen nicht (z. B. Audio → Video), MXL über Hostgrenzen
 (Gateway nötig). Orange sind Hinweise, z. B. unterschiedliche Transporte.
+**Meldungen der Nodes (BCP-008):** zusätzlich liest der Signalweg den
+Status jeder Node. Meldet sie „Unhealthy" (rot) oder „PartiallyHealthy"
+(orange), steht ihre Begründung an dieser Stelle der Kette — z. B. beim
+Handy-Gateway „keine Sendesitzung: das Handy ist nicht verbunden" bzw.
+„Sitzung steht, aber es kommen keine Bilder an", beim Handy-Monitor
+„Handy nicht verbunden" oder „keine Quelle verbunden". Dafür melden das
+Kamera-Gateway (als Sender) und der Handy-Monitor (als Empfänger) jetzt
+BCP-008; ein Gateway ohne Handy steht deshalb auch im Health-Dashboard
+rot.
 
 **Bandbreite:** Eine einzelne Verbindung wird nicht gemessen. Zwischen Nodes
 auf demselben Host steht „lokal, kein Netz" (MXL läuft über Shared Memory).
@@ -1027,25 +1042,42 @@ bedienberechtigt:
   sich einen Quellen-Pool, und die Ausgänge der anderen Ebenen stehen
   als feste Quellen-Tasten zur Verfügung. Die Änderung wirkt beim
   (Neu-)Start des Nodes.
-  **Freeze:** „❄ FREEZE" nimmt das aktuelle Programmbild der Ebene als
-  Standbild auf. Beliebig viele Freezes sind möglich; jeder erscheint
-  sofort als angeheftete Quelle („Freeze: Freeze 1") auf PGM/PST und in
-  der PIP-/Keyer-Auswahl und bleibt über einen Neustart erhalten
-  (Ablage unter `~/.local/share/omp/mixer-freezes/<Label>/`, anderes
-  Verzeichnis per `OMP_FREEZE_DIR`). Umbenennen und Löschen im Dialog
-  „Quellen & DSK" unter „Freezes". **PIP-Quelle:** wird live umgeschaltet
-  (kein Neuaufbau, das Programmbild läuft ungestört weiter). Neben den
-  Quellen und den PGM-Ausgängen der *anderen* Ebenen steht der
-  Preset-Bus jeder Ebene (auch der eigenen) als „PST Ebene N" zur
-  Verfügung — das PIP folgt dann dem, was dort gerade vorgewählt ist.
-  Schleifen (eine Quelle, die direkt oder über andere Ebenen das eigene
-  Ausgangsbild enthält) schaltet der Mischer im PIP auf Schwarz.
   Die Hauptebene (Ebene 1) steht unten, weitere Ebenen aufsteigend
   darüber. Der Schalter **⇄ PGM/PST** im Übergangsblock (je Ebene,
   Parameter `crosspoint.swapOnTransition`) tauscht nach CUT, AUTO und
   abgeschlossenem T-Bar-Zug PGM und PST: das bisherige Programm wird
   zum Preset. Ein Hot-Take auf dem PGM-Bus und zeitgeplante Wechsel
   (`takeAt`) lassen das Preset unverändert.
+  **Aufbau einer Ebene:** links die Busse PGM und PST (BLK zuerst, dann
+  die angehefteten Quellen); darunter eine Leiste in drei Gruppen —
+  **Quellen** (Dialog „Quellen & DSK" zum Anheften/Verwalten), **DSK**
+  und **PIP-Szenen**. DSK und jede PIP-Szene sehen aus wie
+  Quellentasten (mit „Thumbnails“ als Karte, sonst als Pille); bei einer
+  PIP-Szene zeigt die Karte eine Miniatur: Rahmen = Bild, grüne Fläche =
+  Haltposition, gestrichelt = Start/Ende der Fahrt. „Neue Szene" legt
+  eine weitere an, ✎ bearbeitet. Rechts die Übergangseinheit: CUT/AUTO,
+  darunter die **Rampendauer** (6/12/25/50 Bilder), T-Bar,
+  Übergangsart, ⇄ PGM/PST und ❄ FREEZE.
+  **Quellen mit Problem:** meldet die Node einer Quelle über ihren
+  Status (BCP-008) „Unhealthy", trägt ihre Taste ein ⛔ und einen roten
+  Rand (PartiallyHealthy: ⚠, gelb); der Tooltip nennt den Grund (z. B.
+  „keine Sendesitzung: das Handy ist nicht verbunden"). Ein Take einer
+  solchen Quelle auf PGM fragt per Dialog nach.
+  **Freeze:** „❄ FREEZE" nimmt das aktuelle Programmbild der Ebene als
+  Standbild auf. Beliebig viele Freezes sind möglich; jeder erscheint
+  sofort als angeheftete Quelle („Freeze: Freeze 1") auf PGM/PST und in
+  der PIP-/Keyer-Auswahl und bleibt über einen Neustart erhalten
+  (Ablage unter `~/.local/share/omp/mixer-freezes/<Label>/`, anderes
+  Verzeichnis per `OMP_FREEZE_DIR`). Umbenennen und Löschen im Dialog
+  „Quellen & DSK" unter „Freezes". Ändert sich die Mischer-Auflösung,
+  werden alte Freezes übersprungen (bleiben aber auf der Platte).
+  **PIP-Quelle:** wird live umgeschaltet (kein Neuaufbau, das
+  Programmbild läuft ungestört weiter). Neben den Quellen und den
+  PGM-Ausgängen der *anderen* Ebenen steht der Preset-Bus jeder Ebene
+  (auch der eigenen) als „PST Ebene N" zur Verfügung — das PIP folgt
+  dann dem, was dort gerade vorgewählt ist. Schleifen (eine Quelle, die
+  direkt oder über andere Ebenen das eigene Ausgangsbild enthält)
+  schaltet der Mischer im PIP auf Schwarz.
 - **Grafik** — Vorlage auswählen (Suchfeld + Dropdown), Formularfelder
   befüllen, „▶ Ein"/„■ Aus" schaltet die Grafik auf Sendung (im
   Screenshot bereits aktiv: „On Air: Hello Lower Third").
