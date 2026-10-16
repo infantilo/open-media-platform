@@ -1,6 +1,47 @@
 // i18n (de/en): Sprache aus <html lang> (setzt die Shell, ui/shell/i18n.ts),
 // Fallback Deutsch. Eigenes Mini-t(), weil Node-Bundles keine Shell-Imports nutzen.
 // Instanz-Kurz-ID ("Source (3f2a1b9c)") ist für den Operator nebensächlich → nur in der Anzeige weglassen.
+// Bestätigung immer über das Kit-Element <omp-confirm> (nie window.confirm/alert/prompt); ohne Element: ablehnen.
+const confirmDialog = (message, confirmLabel) => new Promise((resolve) => {
+  if (!customElements.get("omp-confirm")) return resolve(false);
+  const el = document.createElement("omp-confirm");
+  el.textContent = message;
+  if (confirmLabel) el.setAttribute("confirm-label", confirmLabel);
+  el.addEventListener("resolve", (ev) => { resolve(ev.detail); el.remove(); }, { once: true });
+  document.body.appendChild(el);
+});
+// Texteingabe als Modal (nie window.prompt): löst mit dem Text oder null (Abbrechen/Esc/Hintergrund) auf.
+const promptDialog = (title, initial, okLabel, cancelLabel) => new Promise((resolve) => {
+  let done = false;
+  const finish = (v) => { if (!done) { done = true; resolve(v); } };
+  const { bodyEl, close } = openModal(title, { onClose: () => finish(null) });
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = initial || "";
+  input.style.cssText = "width:100%;box-sizing:border-box;";
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex;gap:8px;justify-content:flex-end;";
+  const cancel = document.createElement("omp-button");
+  cancel.textContent = cancelLabel;
+  cancel.addEventListener("click", () => close());
+  const ok = document.createElement("omp-button");
+  ok.textContent = okLabel;
+  const submit = () => { const v = input.value.trim(); if (!v) return; finish(v); close(); };
+  ok.addEventListener("click", submit);
+  input.addEventListener("keydown", (ev) => { if (ev.key === "Enter") submit(); });
+  row.append(cancel, ok);
+  bodyEl.append(input, row);
+  input.focus();
+  input.select();
+});
+// Fehlermeldung als <omp-toast> (nie window.alert).
+const toastError = (message) => {
+  const el = document.createElement("omp-toast");
+  el.setAttribute("data-role", "toast");
+  el.textContent = message;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 6000);
+};
 const shortLabel = (s) => String(s ?? "").replace(/\s*\([0-9a-f]{8}\)/g, "");
 const T = (() => {
   const D = {
@@ -9,8 +50,9 @@ const T = (() => {
       "closeAria": "Schließen",
       "noPicture": "kein Bild",
       "mismatch": "Abweichendes Format: {format} — Mixer: {own}",
+      "takeAnyway": "Trotzdem schalten",
       "sourceProblem": "Quelle meldet ein Problem: {text}",
-      "confirmTake": "Die Quelle „{label}“ meldet ein Problem:\n{text}\n\nTrotzdem auf Programm schalten?",
+      "confirmTake": "Die Quelle „{label}“ meldet ein Problem: {text} — Trotzdem auf Programm schalten?",
       "mixerLevels": "Mischerebenen",
       "ownWorkflow": "Dieser Workflow",
       "otherSources": "Andere Quellen",
@@ -85,8 +127,9 @@ const T = (() => {
       "closeAria": "Close",
       "noPicture": "no picture",
       "mismatch": "Different format: {format} — mixer: {own}",
+      "takeAnyway": "Take anyway",
       "sourceProblem": "Source reports a problem: {text}",
-      "confirmTake": "The source \"{label}\" reports a problem:\n{text}\n\nTake it to program anyway?",
+      "confirmTake": "The source \"{label}\" reports a problem: {text} — Take it to program anyway?",
       "mixerLevels": "Mixer levels",
       "ownWorkflow": "This workflow",
       "otherSources": "Other sources",
@@ -722,9 +765,9 @@ class OmpVideoMixerMePanel extends HTMLElement {
     const makeBusButton = (call, label, senderId, isProgram, sourceNodeId) => {
       const btn = document.createElement("omp-button");
       const method = isProgram ? "crosspoint.take" : "crosspoint.select";
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", async () => {
         const h = isProgram && sourceNodeId ? sourceHealth.get(sourceNodeId) : null;
-        if (h && h.severity === "error" && !window.confirm(T("confirmTake", { label: shortLabel(label).replace(/^[⛔⚠] /, ""), text: h.text }))) return;
+        if (h && h.severity === "error" && !(await confirmDialog(T("confirmTake", { label: shortLabel(label).replace(/^[⛔⚠] /, ""), text: h.text }), T("takeAnyway")))) return;
         call(method, { senderId });
       });
 
@@ -1631,7 +1674,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
           const deleteBtn = document.createElement("omp-button");
           deleteBtn.textContent = T("delete");
           deleteBtn.addEventListener("click", async () => {
-            if (!confirm(T("confirmDelete", { name: preset.name }))) return;
+            if (!(await confirmDialog(T("confirmDelete", { name: preset.name }), T("delete")))) return;
             await call("pip.deletePreset", { id: preset.id });
             close();
           });
@@ -1937,7 +1980,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
       // Node-Standard zurückgesetzt.
       applyBtn.addEventListener("click", async () => {
         const n = Math.max(1, Math.min(8, parseInt(input.value, 10) || 1));
-        const ok = confirm(T("confirmRestart", { role: roleInfo.roleName, n }));
+        const ok = await confirmDialog(T("confirmRestart", { role: roleInfo.roleName, n }), T("apply"));
         if (!ok) return;
         applyBtn.setAttribute("disabled", "");
         try {
@@ -1949,9 +1992,9 @@ class OmpVideoMixerMePanel extends HTMLElement {
               body: JSON.stringify({ format: roleInfo.format, mixerLevels: n }),
             },
           );
-          if (!res.ok) alert(T("restartFailed", { err: await res.text() }));
+          if (!res.ok) toastError(T("restartFailed", { err: await res.text() }));
         } catch (err) {
-          alert(T("restartFailed", { err }));
+          toastError(T("restartFailed", { err }));
         } finally {
           applyBtn.removeAttribute("disabled");
         }
@@ -2005,7 +2048,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
     };
 
     presetSaveBtn.addEventListener("click", async () => {
-      const label = prompt(T("promptName"), T("newPresetName"));
+      const label = await promptDialog(T("promptName"), T("newPresetName"), T("apply"), T("cancel"));
       if (!label) return;
       await fetch("/api/v1/snapshots", {
         method: "POST",
