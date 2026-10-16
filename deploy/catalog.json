@@ -170,7 +170,7 @@
     "runner": "process",
     "command": ["../nodes/target/release/omp-video-mixer-me"],
     "env": {},
-    "description": "Vollwertiger M/E-Bildmischer mit 1–8 Mischerebenen (Option „Mix/Effekt-Ebenen“ bzw. `OMP_ME_LEVELS`, je Ebene eigener Ausgang, gemeinsamer Quellen-Pool): Programm-/Preset-Bus, Cut/Auto-Transition (optional framegenau zum gemeinsamen Schaltzeitpunkt takeAt), DVE-Kanal, Keyer, Tally-Signalisierung.",
+    "description": "Vollwertiger M/E-Bildmischer mit 1–8 Mischerebenen (Option „Mix/Effekt-Ebenen“ bzw. `OMP_ME_LEVELS`, je Ebene eigener Ausgang, gemeinsamer Quellen-Pool): Programm-/Preset-Bus, Cut/Auto-Transition (optional framegenau zum gemeinsamen Schaltzeitpunkt takeAt), DVE-Kanal, Keyer, PIP (Quelle live umschaltbar, auch Preset-Bus der Ebenen), Freezes (beliebig viele Standbilder des PGM, wie Quellen aufrufbar), Tally-Signalisierung.",
     "i18n": { "en": {"description": "Full M/E video mixer with 1–8 mix levels (option Mix/effect levels (`OMP_ME_LEVELS`), one output per level, shared source pool): programme/preset bus, cut/auto transition (optionally frame-accurate at the shared switch time takeAt), DVE channel, keyer, tally signalling.", "expectedResources": "moderate, grows with the number of inputs/previews"} },
     "expectedResources": "moderat, wächst mit Eingangszahl/Vorschauen",
     "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 2 }, "supportsDelayCompensation": true }

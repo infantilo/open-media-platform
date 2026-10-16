@@ -1027,6 +1027,19 @@ bedienberechtigt:
   sich einen Quellen-Pool, und die Ausgänge der anderen Ebenen stehen
   als feste Quellen-Tasten zur Verfügung. Die Änderung wirkt beim
   (Neu-)Start des Nodes.
+  **Freeze:** „❄ FREEZE" nimmt das aktuelle Programmbild der Ebene als
+  Standbild auf. Beliebig viele Freezes sind möglich; jeder erscheint
+  sofort als angeheftete Quelle („Freeze: Freeze 1") auf PGM/PST und in
+  der PIP-/Keyer-Auswahl und bleibt über einen Neustart erhalten
+  (Ablage unter `~/.local/share/omp/mixer-freezes/<Label>/`, anderes
+  Verzeichnis per `OMP_FREEZE_DIR`). Umbenennen und Löschen im Dialog
+  „Quellen & DSK" unter „Freezes". **PIP-Quelle:** wird live umgeschaltet
+  (kein Neuaufbau, das Programmbild läuft ungestört weiter). Neben den
+  Quellen und den PGM-Ausgängen der *anderen* Ebenen steht der
+  Preset-Bus jeder Ebene (auch der eigenen) als „PST Ebene N" zur
+  Verfügung — das PIP folgt dann dem, was dort gerade vorgewählt ist.
+  Schleifen (eine Quelle, die direkt oder über andere Ebenen das eigene
+  Ausgangsbild enthält) schaltet der Mischer im PIP auf Schwarz.
   Die Hauptebene (Ebene 1) steht unten, weitere Ebenen aufsteigend
   darüber. Der Schalter **⇄ PGM/PST** im Übergangsblock (je Ebene,
   Parameter `crosspoint.swapOnTransition`) tauscht nach CUT, AUTO und
