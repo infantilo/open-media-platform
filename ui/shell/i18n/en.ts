@@ -150,6 +150,7 @@ export const en: Record<keyof typeof de, string> = {
   "up.dayShort": "d",
 
   "kit.cancel": "Cancel",
+  "kit.ok": "OK",
   "kit.delete": "Delete",
   "kit.searchPlaceholder": "🔍 Search sources …",
   "kit.searchAria": "Search sources",

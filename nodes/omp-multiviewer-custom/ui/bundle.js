@@ -431,7 +431,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
       this._setStatus(T("mvc.e7452a"), "error");
       return;
     }
-    if (!confirm(T("mvc.2e04c4", { p0: name }))) return;
+    if (!(await confirmDialog(T("mvc.2e04c4", { p0: name })))) return;
     this._setStatus(T("mvc.ca71a2"), "");
     try {
       const res = await fetch(`/api/v1/nodes/${this._nodeId}/layouts/${encodeURIComponent(name)}`, { method: "DELETE" });
@@ -479,7 +479,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
       this._setStatus(T("mvc.885464"), "error");
       return;
     }
-    if (this._savedLayouts.some((l) => l.name === name) && !confirm(T("mvc.0c6337", { p0: name }))) {
+    if (this._savedLayouts.some((l) => l.name === name) && !(await confirmDialog(T("mvc.0c6337", { p0: name })))) {
       return;
     }
     await this._postNamedLayout(name, this._layout);
@@ -537,7 +537,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
       return;
     }
     const suggestedName = (doc && doc.name) || file.name.replace(/\.multiviewer-layout\.json$|\.json$/i, "");
-    const name = prompt(T("mvc.75338e"), suggestedName);
+    const name = await promptDialog(T("mvc.75338e"), suggestedName);
     if (!name || !name.trim()) return;
     await this._postNamedLayout(name.trim(), layout);
   }
@@ -866,4 +866,27 @@ function cssEscape(s) {
 // erscheint "sources" als roher JSON-String, s. main.rs `readonly:true`).
 if (!customElements.get("omp-multiviewer-custom-panel")) {
   customElements.define("omp-multiviewer-custom-panel", OmpMultiviewerCustomPanel);
+}
+
+// Bestätigung/Texteingabe über die Kit-Elemente <omp-confirm>/<omp-prompt> der Shell (nie window.confirm/prompt/alert).
+// Ohne die Elemente (Bundle außerhalb der Shell): ablehnen bzw. abbrechen.
+function confirmDialog(message, confirmLabel) {
+  return new Promise((resolve) => {
+    if (!customElements.get("omp-confirm")) return resolve(false);
+    const el = document.createElement("omp-confirm");
+    el.textContent = message;
+    if (confirmLabel) el.setAttribute("confirm-label", confirmLabel);
+    el.addEventListener("resolve", (ev) => { resolve(ev.detail); el.remove(); }, { once: true });
+    document.body.appendChild(el);
+  });
+}
+function promptDialog(message, initial) {
+  return new Promise((resolve) => {
+    if (!customElements.get("omp-prompt")) return resolve(null);
+    const el = document.createElement("omp-prompt");
+    el.textContent = message;
+    if (initial) el.setAttribute("value", initial);
+    el.addEventListener("resolve", (ev) => { resolve(ev.detail); el.remove(); }, { once: true });
+    document.body.appendChild(el);
+  });
 }

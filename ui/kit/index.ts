@@ -12,4 +12,5 @@ import "./omp-meter.ts";
 import "./omp-panel-section.ts";
 import "./omp-toast.ts";
 import "./omp-confirm.ts";
+import "./omp-prompt.ts";
 import "./omp-source-selector.ts";

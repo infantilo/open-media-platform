@@ -102,7 +102,7 @@ const LOCALE = document.documentElement.lang === "en" ? "en-GB" : "de-DE";
 // TS-Import möglich) kann das global registrierte `<omp-confirm>`
 // trotzdem verwenden, sobald die Shell geladen hat (`ui/kit/index.ts`).
 function confirmDialog(message, confirmLabel) {
-  if (!customElements.get("omp-confirm")) return Promise.resolve(window.confirm(message));
+  if (!customElements.get("omp-confirm")) return Promise.resolve(false); // nie window.confirm
   return new Promise((resolve) => {
     const el = document.createElement("omp-confirm");
     el.textContent = message;

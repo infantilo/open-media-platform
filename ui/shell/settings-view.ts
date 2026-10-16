@@ -3,6 +3,7 @@
 // Explizites Speichern je Zeile (kein Schreiben bei jedem Tastendruck).
 
 import { t as tr, t as tt } from "./i18n.ts";
+import { confirmDialog } from "../kit/omp-confirm.ts";
 import { apiFetch } from "./connection.ts";
 import {
   effectiveValue, groupOptions, hintFor, inputKind, isDirty, type OptionDef, type SystemItem,
@@ -117,7 +118,7 @@ class SettingsView extends HTMLElement {
     if (!r.ok && o.type === "path" && !instanceId && !force && /existiert nicht|nicht zugreifbar|Verzeichnis|Datei/.test(this.#error)) {
       // Pfad fehlt auf DIESEM Rechner (Orchestrator) — evtl. nur auf einem Remote-Host vorhanden.
       const msg = this.#error;
-      if (confirm(tr("sett.808dfe", { p0: msg }))) {
+      if (await confirmDialog(tr("sett.808dfe", { p0: msg }), { confirmLabel: tr("kit.ok") })) {
         await this.#saveNode(t, o, value, instanceId, true);
         return;
       }

@@ -31,6 +31,7 @@
 //   Anlegen direkt auf leerer Fläche — reduziert Aufwand deutlich, ohne
 //   Funktion zu verlieren (danach normal ziehbar).
 import { t as tt } from "./i18n.ts";
+import { confirmDialog } from "../kit/omp-confirm.ts";
 import { suggestForLane, type CloudSuggestion, type CloudType } from "./scheduler-cloud-logic.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { showToast } from "../kit/omp-toast.ts";
@@ -641,7 +642,7 @@ class SchedulerView extends HTMLElement {
   }
 
   async #reserveCloud(sg: CloudSuggestion, pool: string, cost: string) {
-    if (!window.confirm(tt("cloud.confirm", { p0: sg.peakHosts, p1: sg.type.name, p2: cost }))) return;
+    if (!(await confirmDialog(tt("cloud.confirm", { p0: sg.peakHosts, p1: sg.type.name, p2: cost }), { confirmLabel: tt("kit.ok") }))) return;
     let failed = "";
     for (const d of sg.demands) {
       const res = await apiFetch("/api/v1/cloud/reservations", {

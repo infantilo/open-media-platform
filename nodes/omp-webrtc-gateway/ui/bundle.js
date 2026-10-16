@@ -4,6 +4,7 @@ const T = (() => {
   const D = {
     de: {
         "x.retourTile": "+ Retourbild",
+        "x.disconnect": "Trennen",
         "x.retourLbl": "{p0} (Retour)",
         "wrb.ada5c5": "Basis-URL fürs Handy\n        ",
         "wrb.36b01a": "Retourbild-Node (optional)\n          ",
@@ -28,6 +29,7 @@ const T = (() => {
     },
     en: {
         "x.retourTile": "+ Return feed",
+        "x.disconnect": "Disconnect",
         "x.retourLbl": "{p0} (return)",
         "wrb.ada5c5": "Base URL for the phone\n        ",
         "wrb.36b01a": "Return-feed node (optional)\n          ",
@@ -440,9 +442,8 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
     // (`invite::route`) ist `disconnect=true` ohnehin ein No-Op, falls der
     // Token gar nicht (mehr) zur aktiven Sitzung gehört.
     const revoke = async (token) => {
-      const alsoDisconnect = window.confirm(
-        T("wrb.e78478")
-      );
+      // „Trennen“ = Verbindung sofort beenden; Abbrechen/Esc = nur den Token widerrufen (wie bisher „Abbrechen“).
+      const alsoDisconnect = await confirmDialog(T("wrb.e78478"), T("x.disconnect"));
       const disconnectQuery = alsoDisconnect ? "&disconnect=true" : "";
       const res = await api(`/invites?token=${encodeURIComponent(token)}${disconnectQuery}`, { method: "DELETE" });
       if (!res.ok) {
@@ -491,4 +492,27 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
 
 if (!customElements.get("omp-webrtc-gateway-panel")) {
   customElements.define("omp-webrtc-gateway-panel", OmpWebrtcGatewayPanel);
+}
+
+// Bestätigung/Texteingabe über die Kit-Elemente <omp-confirm>/<omp-prompt> der Shell (nie window.confirm/prompt/alert).
+// Ohne die Elemente (Bundle außerhalb der Shell): ablehnen bzw. abbrechen.
+function confirmDialog(message, confirmLabel) {
+  return new Promise((resolve) => {
+    if (!customElements.get("omp-confirm")) return resolve(false);
+    const el = document.createElement("omp-confirm");
+    el.textContent = message;
+    if (confirmLabel) el.setAttribute("confirm-label", confirmLabel);
+    el.addEventListener("resolve", (ev) => { resolve(ev.detail); el.remove(); }, { once: true });
+    document.body.appendChild(el);
+  });
+}
+function promptDialog(message, initial) {
+  return new Promise((resolve) => {
+    if (!customElements.get("omp-prompt")) return resolve(null);
+    const el = document.createElement("omp-prompt");
+    el.textContent = message;
+    if (initial) el.setAttribute("value", initial);
+    el.addEventListener("resolve", (ev) => { resolve(ev.detail); el.remove(); }, { once: true });
+    document.body.appendChild(el);
+  });
 }

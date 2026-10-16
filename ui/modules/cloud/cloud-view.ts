@@ -4,7 +4,7 @@
 // Bewusst ehrlich in der Darstellung: alle Beträge sind SCHÄTZUNGEN aus Preisliste × Laufzeit (nicht die Abrechnung des
 // Anbieters). Regel-Formulare werden explizit gespeichert ("Speichern", nicht je Klick) und beim Neuzeichnen durch den
 // Poll nicht überschrieben, solange sie sich im Bearbeiten befinden.
-import { apiFetch, showToast, t, whoami } from "../host.ts";
+import { apiFetch, confirmDialog, showToast, t, whoami } from "../host.ts";
 import { budgetBar, demoCloud, describeReason, fmtMoney, policyFromForm, policyToForm, reservationPayload, type Mode, type Policy, type PolicyForm } from "./cloud-logic.ts";
 
 interface CloudHost {
@@ -219,8 +219,8 @@ export class CloudView extends HTMLElement {
       if (h.adopted) row.append(el("span", DIM, t("cloudv.adopted")));
       if (this.#admin && !this.#demo && h.state !== "draining") {
         const b = el("button", "", t("cloudv.release"));
-        b.addEventListener("click", () => {
-          if (window.confirm(t("cloudv.releaseConfirm", { p0: h.id }))) void this.#act(`/api/v1/cloud/hosts/${encodeURIComponent(h.id)}/release`, { method: "POST" }, "cloudv.done");
+        b.addEventListener("click", async () => {
+          if (await confirmDialog(t("cloudv.releaseConfirm", { p0: h.id }), { confirmLabel: t("cloudv.release") })) void this.#act(`/api/v1/cloud/hosts/${encodeURIComponent(h.id)}/release`, { method: "POST" }, "cloudv.done");
         });
         row.append(b);
       }
@@ -313,7 +313,7 @@ export class CloudView extends HTMLElement {
     save.addEventListener("click", async () => {
       const p = reservationPayload(pool.value, count.value, from.value, to.value);
       if (!p.ok) return void showToast(t(p.error as "cloudv.err.count"));
-      if (!window.confirm(t("cloudv.reserveConfirm", { p0: p.body.hostCount, p1: pool.value }))) return;
+      if (!(await confirmDialog(t("cloudv.reserveConfirm", { p0: p.body.hostCount, p1: pool.value }), { confirmLabel: t("cloudv.reserve") }))) return;
       await this.#act("/api/v1/cloud/reservations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...p.body, note: "ui" }) }, "cloudv.done");
     });
     const line = el("div", "display:flex;gap:8px;align-items:center;flex-wrap:wrap;");

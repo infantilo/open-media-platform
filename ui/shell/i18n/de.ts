@@ -149,6 +149,7 @@ export const de = {
   "up.dayShort": "T",
 
   "kit.cancel": "Abbrechen",
+  "kit.ok": "OK",
   "kit.delete": "Löschen",
   "kit.searchPlaceholder": "🔍 Quellen suchen …",
   "kit.searchAria": "Quellen suchen",

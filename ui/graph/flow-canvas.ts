@@ -6,6 +6,7 @@
 // EventSource-APIs.
 
 import { t as tt, tLoose } from "../shell/i18n.ts";
+import { promptDialog } from "../kit/omp-prompt.ts";
 import { ghostEntriesForZone, type GhostEntry, type PlanInput, type StartPlan, zoneForStoppedWorkflow } from "../shell/workflow-plan-logic.ts";
 import {
   type ArrangeEdge,
@@ -1850,7 +1851,7 @@ export class FlowCanvas extends HTMLElement {
   // ganz gleich ob #workflows schon gefüllt war oder nicht.
   async enterWorkflowEditScope(workflowId: string) {
     if (this.#workflowEditId === workflowId) return; // bereits offen
-    if (this.#workflowEditId !== null && !this.#confirmDiscardDraft()) return;
+    if (this.#workflowEditId !== null && !(await this.#confirmDiscardDraft())) return;
     await this.#queueFetchAndRender();
     const wf = this.#workflows.find((w) => w.id === workflowId);
     if (!wf) {
@@ -1883,8 +1884,8 @@ export class FlowCanvas extends HTMLElement {
     this.#render();
   }
 
-  #exitWorkflowEditScope() {
-    if (!this.#confirmDiscardDraft()) return;
+  async #exitWorkflowEditScope() {
+    if (!(await this.#confirmDiscardDraft())) return;
     this.#workflowEditId = null;
     this.#workflowEditDraft = null;
     this.#workflowScopeExtraNodeIds = new Set();
@@ -1934,9 +1935,9 @@ export class FlowCanvas extends HTMLElement {
   // Nutzerwunsch (2026-07-26): kein stilles Verwerfen ungespeicherter
   // Änderungen beim Verlassen des Bearbeiten-Modus — nur nachfragen,
   // wenn der Entwurf tatsächlich vom gespeicherten Stand abweicht.
-  #confirmDiscardDraft(): boolean {
+  async #confirmDiscardDraft(): Promise<boolean> {
     if (!this.#isDraftDirty()) return true;
-    return confirm(tt("flow.a7431c"));
+    return await confirmDialog(tt("flow.a7431c"), { confirmLabel: tt("kit.ok") });
   }
 
   // Löst #workflowScopePendingInstanceIds gegen den aktuellen
@@ -3192,8 +3193,8 @@ export class FlowCanvas extends HTMLElement {
     this.#render();
   }
 
-  #groupSelection() {
-    const label = prompt(tt("flow.566f18"), tt("flow.14466a"));
+  async #groupSelection() {
+    const label = await promptDialog(tt("flow.566f18"), { initial: tt("flow.14466a"), okLabel: tt("kit.ok") });
     if (!label) return;
 
     const items = this.#itemsAtScope();
@@ -5323,7 +5324,7 @@ export class FlowCanvas extends HTMLElement {
     if (method.args.length > 0) {
       body = {};
       for (const arg of method.args) {
-        const raw = prompt(tt("flow.a5a7f7", { p0: arg.name, p1: arg.type }));
+        const raw = await promptDialog(tt("flow.a5a7f7", { p0: arg.name, p1: arg.type }), { okLabel: tt("kit.ok") });
         if (raw === null) return; // Abbruch
         body[arg.name] = arg.type === "number" ? Number(raw) : arg.type === "boolean" ? raw === "true" : raw;
       }

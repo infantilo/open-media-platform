@@ -13,6 +13,7 @@
 // bewusst dokumentierte Übergangslösung, s. dortiger docs/decisions.md-
 // Nachtrag 266, jetzt ersetzt.
 import { t as tt } from "./i18n.ts";
+import { promptDialog } from "../kit/omp-prompt.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
 import { showToast } from "../kit/omp-toast.ts";
@@ -1187,15 +1188,11 @@ class ProcessView extends HTMLElement {
     return row;
   }
 
-  // Ein einzeiliger Kommentar-Prompt statt eines eigenen Modals — die
-  // Entscheidung selbst (approved/rejected/changes_requested) steht
-  // bereits fest (per Button gewählt), nur der optionale Kommentar
-  // braucht noch Eingabe. window.confirm/prompt sind hier bewusst
-  // pragmatisch statt eines vierten Modal-Typs für eine einzelne
-  // Textzeile — gleiche Abwägung wie z. B. admin-view.ts' einfache
-  // Lösch-Bestätigungen.
-  #promptDecision(task: HumanTask, status: "approved" | "rejected" | "changes_requested") {
-    const comment = window.prompt(tt("proc.8435ef"), "") ?? "";
+  // Ein einzeiliger Kommentar-Dialog (promptDialog) — die Entscheidung selbst (approved/rejected/changes_requested)
+  // steht bereits fest (per Button gewählt), nur der optionale Kommentar braucht noch Eingabe. Abbrechen bricht ab.
+  async #promptDecision(task: HumanTask, status: "approved" | "rejected" | "changes_requested") {
+    const comment = await promptDialog(tt("proc.8435ef"), { okLabel: tt("kit.ok") });
+    if (comment === null) return;
     void this.#completeTask(task.id, task.rowVersion, status, status, comment);
   }
 

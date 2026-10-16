@@ -14,6 +14,7 @@
 // Die gesamte Fachlogik (Variablen-Katalog, Regel-Baukasten, Dauern,
 // Pflichtfelder) liegt DOM-frei in process-step-config-logic.ts.
 import { t as tt } from "../shell/i18n.ts";
+import { promptDialog } from "../kit/omp-prompt.ts";
 import { apiFetch } from "../shell/connection.ts";
 import { fetchFFmpegDetail, fetchFFmpegList } from "./ffmpeg-client.ts";
 import { showToast } from "../kit/omp-toast.ts";
@@ -1964,8 +1965,8 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
   const pasteBtn = h("button", "margin-top:4px;margin-left:4px;", tt("psc.a7b058"));
   pasteBtn.type = "button";
   pasteBtn.title = tt("psc.e91a0f");
-  pasteBtn.addEventListener("click", () => {
-    const line = window.prompt(tt("psc.4eb447"), "");
+  pasteBtn.addEventListener("click", async () => {
+    const line = await promptDialog(tt("psc.4eb447"), { okLabel: tt("kit.ok") });
     if (line === null) return;
     const parts = line.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
     for (const p of parts) addArg(p.replace(/^["']|["']$/g, ""));

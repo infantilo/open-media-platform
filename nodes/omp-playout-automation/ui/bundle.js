@@ -614,7 +614,7 @@ function confirmDialog(message, confirmLabel) {
   if (!customElements.get("omp-confirm")) {
     // Fallback für einen (in der Praxis nicht vorkommenden) Stand-
     // alone-Aufruf dieses Bundles außerhalb der Shell.
-    return Promise.resolve(window.confirm(message));
+    return Promise.resolve(false); // nie window.confirm
   }
   return new Promise((resolve) => {
     const el = document.createElement("omp-confirm");
