@@ -906,7 +906,7 @@ und Host-Agent, nur `runner:"process"`):
 ```
 
 `cpus` (taskset-Liste), `policy` (`other`|`fifo`|`rr`), `priority` (1–90, nur
-fifo/rr), `nice` (−20…19, nur ohne fifo/rr). Umgesetzt als Wrapper
+fifo/rr), `nice` (−20…19, relativ zur Priorität des startenden Dienstes, nur ohne fifo/rr). Umgesetzt als Wrapper
 `chrt`/`taskset`/`nice` vor dem Binary; die PID bleibt die des Nodes, Pinning
 gilt ab dem ersten Thread. Nicht anwendbare Teile (CPU existiert auf diesem
 Host nicht, `LimitRTPRIO`/`LimitNICE` fehlen, Werkzeug fehlt) werden mit einer
