@@ -810,7 +810,216 @@ Linux: udev-Regel auf dem **Bedienplatz-Rechner** (`make streamdeck-udev [ARGS=-
 `./install.sh --streamdeck-udev`; siehe auch `docs/INSTALLATION.md` §6). Testseite/Simulator: `/streamdeck-sim` (Orchestrator-Route; eingebettet im Panel der Konsole).
 Der Simulator skaliert auf die Fensterbreite. Tests: `cd ui && deno test -A shell/streamdeck`.
 
-## 10. Mehr Kontext
+## 10. Echtzeit-Betrieb (deterministisches Timing, Host-Tuning)
+
+OMP selbst setzt **keine** Echtzeit-Prioritäten, Affinitäten oder Speichersperren;
+das Timing hängt vom Betriebssystem ab (GStreamer-Streaming-Threads, MXL-Lesen/
+Schreiben, Netzwerk-Interrupts). Dieses Kapitel beschreibt, was man am Host
+einstellt, damit Ausgänge ohne Aussetzer, Frame-Drops oder Jitter laufen.
+Reihenfolge nach Wirkung: **(1) BIOS, (2) Kernel-Bootparameter, (3) CPU-Aufteilung,
+(4) Interrupts/NIC, (5) Prioritäten der Dienste, (6) Speicher, (7) Zeitbasis,
+(8) Messen.** Schritte 1–4 und 6–8 bringen den größten Teil; harte
+SCHED_FIFO-Prioritäten (5) sind optional und bei Fehlern gefährlich.
+
+> **Wichtig:** Nichts davon ist im Repo automatisiert oder auf der
+> Zielhardware gemessen. Jede Änderung einzeln einführen und mit §10.8 belegen.
+> Ein Referenz-Setup „Proxmox + RT-Kernel" wurde noch nicht getestet.
+
+### 10.1 BIOS/UEFI
+
+- C-States tief aus (C-State-Limit C1 oder „Maximum Performance"), Package-C-States aus
+- Frequenz fest: Governor `performance`, Turbo nach Wahl (für Determinismus eher aus), SpeedStep/Cool'n'Quiet aus
+- Hyper-Threading/SMT: für harte Echtzeit aus oder die Schwester-Threads der Medien-Kerne mit isolieren
+- Energiesparen von PCIe (ASPM), „Memory Power Saving" aus
+- System Management Interrupts (SMI) minimieren (Hersteller-Option „Legacy USB", „Platform Firmware Performance" deaktivieren)
+- VT-x/VT-d (IOMMU) an, wenn VMs oder PCIe-Passthrough gebraucht werden
+- Auf Mehr-Sockel-Systemen: NUMA an, Medien-Nodes und NIC auf **demselben** Knoten halten
+
+### 10.2 Kernel (Proxmox-Host)
+
+Drei Stufen, aufsteigend im Aufwand:
+
+1. **Standard-pve-Kernel mit Voll-Preemption** (empfohlen als Start; kein
+   Paketwechsel): Der pve-Kernel ist `PREEMPT_DYNAMIC`, der Modus lässt sich per
+   Bootparameter wählen. In `/etc/default/grub` (oder `/etc/kernel/cmdline`
+   bei systemd-boot/ZFS-Root, danach `proxmox-boot-tool refresh`):
+   `preempt=full threadirqs`
+2. **Debian-RT-Kernel** (`PREEMPT_RT`, seit Kernel 6.12 im Hauptzweig):
+   `apt install linux-image-rt-amd64` (Debian 13), danach im Bootmenü wählen.
+   Einschränkungen auf Proxmox: Der RT-Kernel ist von Proxmox **nicht
+   unterstützt**; ZFS/DKMS-Module (z. B. NVIDIA, Mellanox-OFED) müssen zum
+   Kernel passen, KVM funktioniert, ist aber im RT-Betrieb deutlich weniger
+   durchsatzstark. Nur wählen, wenn Stufe 1 + CPU-Isolierung nicht reicht.
+3. **Eigenes Gerät nur für OMP**: Läuft OMP direkt auf Debian 13 (ohne
+   Proxmox, siehe `docs/INSTALLATION.md`), ist der RT-Kernel unproblematisch.
+   Für harten Sendebetrieb ist das der einfachere Weg.
+
+Prüfen: `uname -v` zeigt `PREEMPT_RT` bzw. `PREEMPT_DYNAMIC`; `cat /sys/kernel/debug/sched/preempt` zeigt `(full)`.
+
+### 10.3 CPU-Aufteilung (Pinning, Isolierung)
+
+Idee: wenige „Haushalts"-Kerne (Betriebssystem, Orchestrator, Datenbank, UI,
+Interrupts) und dedizierte Medien-Kerne, auf denen nichts anderes läuft.
+Beispiel 16 Kerne (0–15): Haushalt 0–3, Medien 4–15.
+
+Bootparameter (zusätzlich zu §10.2):
+
+```
+isolcpus=managed_irq,domain,4-15 nohz_full=4-15 rcu_nocbs=4-15 \
+rcu_nocb_poll irqaffinity=0-3 skew_tick=1 \
+intel_pstate=disable processor.max_cstate=1 intel_idle.max_cstate=0 \
+nosoftlockup tsc=reliable
+```
+
+(`intel_*` nur für Intel; bei AMD `amd_pstate=passive` bzw. weglassen.)
+
+Dienste auf die Kerne legen (systemd, vererbt sich auf alle Kindprozesse – also
+auch auf die Nodes, die Orchestrator bzw. Host-Agent starten):
+
+```ini
+# /etc/systemd/system/omp-host-agent.service.d/rt.conf   (Medien-Host)
+[Service]
+CPUAffinity=4-15
+Nice=-10
+LimitMEMLOCK=infinity
+LimitRTPRIO=95
+LimitNICE=-15
+
+# /etc/systemd/system/omp.service.d/rt.conf              (Hauptrechner, Orchestrator/DB/NATS)
+[Service]
+CPUAffinity=0-3
+```
+
+`systemctl daemon-reload && systemctl restart omp-host-agent`. Hinweis: Der
+Neustart des Agents beendet seine Nodes (siehe Kopfkommentar der Unit) – nur
+in einem Wartungsfenster. Auch System-Dienste (`system.slice`, `user.slice`,
+`init.scope`) auf Haushalt festnageln: `/etc/systemd/system.conf` →
+`CPUAffinity=0-3`.
+
+Pro Node gezielt (z. B. nur Mischer und Ausgang auf eigene Kerne): im Betrieb
+`taskset -a -cp 4-7 <pid>` bzw. beim Start `taskset -c 4-7 …`. Es gibt
+(noch) keine Katalog-Option dafür – wer das braucht, meldet es als Wunsch.
+
+### 10.4 Interrupts und Netzwerkkarte
+
+- `irqbalance` abschalten (`systemctl disable --now irqbalance`), IRQs von Hand:
+  `for i in /proc/irq/*/smp_affinity_list; do echo 0-3 > $i 2>/dev/null; done`;
+  die Queues der Medien-NIC bewusst auf **einen** nahen Kern legen
+  (`/proc/interrupts` zeigt Namen, z. B. `eth1-TxRx-0`).
+- NIC: `ethtool -C eth1 adaptive-rx off rx-usecs 0 tx-usecs 0` (keine
+  Interrupt-Coalescing-Verzögerung), Ringe groß genug
+  (`ethtool -G eth1 rx 4096 tx 4096`), Energiesparen aus
+  (`ethtool --set-eee eth1 eee off`), LRO/GRO für Echtzeit-Medien ggf. aus.
+- Getrennte NIC (oder VLAN + QoS) für Medien und für Verwaltung/Datenbank;
+  Medienverkehr mit DSCP EF/AF41 markieren, am Switch priorisieren.
+- Für ST 2110/PTP: Karte mit Hardware-Zeitstempel (`ethtool -T eth1` zeigt
+  `hardware-transmit/receive`), Switch mit PTP-Boundary-/Transparent-Clock.
+- Firewall-Verbindungsverfolgung (`conntrack`) für Medienports umgehen
+  (`NOTRACK`), sie kostet Zeit pro Paket.
+
+### 10.5 Thread-Prioritäten (optional, mit Vorsicht)
+
+- **Reichen oft schon**: Pinning + `Nice=-10` (§10.3) + isolierte Kerne.
+  Auf isolierten Kernen konkurriert ohnehin niemand.
+- **SCHED_FIFO** für die zeitkritischen Threads (Ausgangsknoten, Mischer):
+  `chrt -f -p 50 <tid>` je Thread (`ps -L -p <pid> -o tid,comm`), nie 99
+  (reserviert für Kernel-Watchdog/Migration). Reihenfolge: Interrupt-Threads
+  (`irq/…`, mit `threadirqs`) 80–90 > Medien-NIC-Threads 60 > OMP-Streaming-
+  Threads 40–50 > alles andere normal. Setzt man `CPUSchedulingPolicy=fifo` +
+  `CPUSchedulingPriority=40` in einem Drop-in, gilt das für **alle**
+  Kindprozesse inkl. Datenbank/Orchestrator – nur bei dedizierter Medien-Maschine
+  und mit Haushaltskernen (sonst Aushungern des Systems). Alternative:
+  `CPUSchedulingResetOnFork=yes` im Drop-in und die Nodes einzeln per `chrt` anheben.
+- **Gefahr**: Ein FIFO-Thread in einer Endlosschleife blockiert seinen Kern
+  vollständig. Deshalb Haushaltskerne frei halten und `kernel.sched_rt_runtime_us`
+  bei dem Standard 950000 belassen (die letzten 5 % gehören dem normalen
+  Scheduler und halten SSH erreichbar).
+- GStreamer hebt manche Threads über `rtkit` (nur wenn installiert) an; auf
+  gepinnten Systemen ist das unnötig und unvorhersehbar – ggf. `rtkit` entfernen.
+
+### 10.6 Speicher
+
+- `vm.swappiness=0` und Swap aus (`swapoff -a`, Eintrag in `/etc/fstab`
+  entfernen); kein Zram. Auf Proxmox kein RAM-Ballooning für OMP-VMs.
+- Transparente Hugepages aus: `transparent_hugepage=never` (Bootparameter).
+  Wer Hugepages für VMs will, reserviert sie statisch: `hugepagesz=1G hugepages=16`.
+- `LimitMEMLOCK=infinity` (siehe §10.3), damit Medienprozesse Speicher sperren
+  können; die MXL-Domain liegt unter `/dev/shm` (tmpfs im RAM) – bei NUMA auf
+  den Medienknoten legen und genügend Größe im Mount (`size=`) vorsehen.
+- `vm.min_free_kbytes` auf ca. 1 GiB setzen, damit der Kernel nicht unter
+  Druck in Direct-Reclaim gerät; `vm.dirty_ratio=5`, `vm.dirty_background_ratio=2`
+  (Plattenaufnahmen stören sonst Echtzeit-Threads).
+- Kein NUMA-Balancing: `kernel.numa_balancing=0`.
+
+### 10.7 Zeitbasis und Hintergrundlast
+
+- Uhren: NTP genügt für Verwaltung (`chrony`); für ST 2110/AES67 echtes PTP
+  (`ptp4l` + `phc2sys -s eth1 -c CLOCK_REALTIME`), siehe `OMP_PTP_DOMAIN`
+  (`docs/decisions.md`, Kap. 19 Teil 2). Nicht gleichzeitig mit NTP-Steppen
+  auf derselben Uhr arbeiten (`makestep` für Medien-Hosts aus).
+- Kein Hintergrund-Lärm auf den Medienkernen: `fstrim.timer`, `apt-daily*`,
+  `unattended-upgrades`, Virenscanner, Backup-Läufe und `make`-/`cargo`-
+  Builds nur in Sendepausen oder auf den Haushaltskernen.
+- Container-Dienste (Postgres, NATS, Registry) per `--cpuset-cpus=0-3` auf
+  die Haushaltskerne (Quadlet: `PodmanArgs=--cpuset-cpus=0-3`).
+- Energieverwaltung: `cpupower frequency-set -g performance`,
+  `tuned-adm profile realtime-virtual-host` (Host) bzw. `realtime-virtual-guest` (VM)
+  übernimmt viele der Einstellungen oben in einem Schritt.
+
+### 10.8 Proxmox: VM oder LXC?
+
+- **VM (KVM)**: `cpu: host`, vCPUs fest auf Host-Kerne legen
+  (`qm set <id> --affinity 4-11`), `numa: 1`, Speicher fest (`balloon: 0`,
+  optional Hugepages `hugepages: 1024`), VirtIO-Netz mit `queues=` ≥ 2 oder
+  besser NIC per **PCIe/SR-IOV-Passthrough** (umgeht Host-Switch, liefert
+  Hardware-Zeitstempel). Im Gast gelten dieselben Bootparameter (§10.2–10.3).
+  Der Gast ist nur so deterministisch wie sein Host: den Host mit
+  `isolcpus` freihalten, damit nichts anderes auf den VM-Kernen läuft.
+- **LXC**: teilt den Host-Kernel (RT-Kernel wirkt direkt, kein
+  Virtualisierungs-Jitter). CPU per `lxc.cgroup2.cpuset.cpus: 4-15`,
+  Mehr Rechte: `lxc.prlimit.rtprio: 95`, `lxc.prlimit.memlock: unlimited`,
+  Gerätezugriff auf `/dev/shm`-MXL-Domain und `/dev/dri` (GPU) bewusst
+  durchreichen. Für harte Echtzeit meist die bessere Wahl gegenüber VM.
+- Eine VM/Container pro Aufgabe ist okay, aber Orchestrator/Postgres und
+  Medien-Nodes **nicht** auf denselben Kernen.
+
+### 10.9 Messen und Abnehmen
+
+Ohne Messung ist alles Vermutung. Immer unter realer Last (alle Kanäle des
+Zielworkflows laufen, Browser mit Konsole offen):
+
+```
+apt install rt-tests linux-perf
+# Latenz des Scheduler auf einem Medienkern, 30 min:
+cyclictest -m -S -p 90 -i 200 -h 400 -D 30m --affinity 4-15
+# Hardware-/Firmware-Störungen (SMI) aufdecken:
+hwlat_detector  bzw.  cd /sys/kernel/tracing && echo hwlat > current_tracer
+# Wer läuft auf den Medienkernen?
+ps -eLo psr,pid,tid,cls,rtprio,ni,comm | awk '$1>=4' | sort -n
+cat /proc/interrupts      # Zähler der Medienkerne dürfen kaum wachsen
+```
+
+Richtwerte (Abnahme): `cyclictest` Maximum **< 50 µs** (RT-Kernel, isoliert)
+bzw. < 200 µs (pve-Kernel mit `preempt=full`); keine SMI-Ausschläge > 20 µs.
+Dann in OMP selbst: `make soak` bzw. die Alarme (Kap. 6 im Benutzerhandbuch) über
+24 h beobachten – Zähler für Frame-Drops/Underruns des Ausgangs-Nodes
+müssen bei 0 bleiben. Bei Ausreißern: `perf sched record` / `trace-cmd`
+zeigen, welcher Thread den Kern belegt hat.
+
+### 10.10 Checkliste „perfekt laufen"
+
+- [ ] BIOS: C-States/Turbo/ASPM/SMI wie §10.1, Firmware aktuell
+- [ ] Kernel mit `preempt=full` oder RT (§10.2), `threadirqs`
+- [ ] Haushalts-/Medienkerne getrennt, `isolcpus`/`nohz_full`/`rcu_nocbs` (§10.3)
+- [ ] `irqbalance` aus, IRQs gepinnt, NIC ohne Coalescing (§10.4)
+- [ ] Dienste per `CPUAffinity`/`Nice` platziert, ggf. FIFO einzeln (§10.3, §10.5)
+- [ ] Swap aus, THP aus, `LimitMEMLOCK=infinity`, Hugepages nach Bedarf (§10.6)
+- [ ] PTP/chrony sauber, kein Lärm auf Medienkernen (§10.7)
+- [ ] Getrennte NIC/VLAN für Medien, DSCP + Switch-QoS, ggf. SR-IOV (§10.4, §10.8)
+- [ ] `cyclictest` + 24-h-Soak unter Last bestanden und protokolliert (§10.9)
+- [ ] Netzteil/USV, Kühlung (Thermal-Throttling zerstört Determinismus), Server-Hardware mit ECC
+
+## 11. Mehr Kontext
 
 - Architektur/Konzepte: `ARCHITECTURE.md` (Referenzdokument, wird bei jeder
   größeren Entscheidung fortgeschrieben)
