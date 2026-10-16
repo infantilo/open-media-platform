@@ -198,6 +198,7 @@ func (s *Service) promoteStandby(wf Workflow, primaryRole, standbyRole, trigger 
 	// Zuordnung zur DB-Wahrheit, GENAU wie ein normaler Restart-Zyklus
 	// (rewireAfterRestart) seine InstanceID von Anfang an unverändert
 	// lässt — ab hier gilt für stillBacks dieselbe Grundannahme.
+	s.markUnrestored(wf.ID, primaryRole)
 	wf.UpdatedAt = time.Now()
 	if err := s.store.UpdateRuntime(wf); err != nil {
 		slog.Warn("workflows: promoteStandby: early commit failed", "workflow", wf.ID, "error", err)

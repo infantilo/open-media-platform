@@ -607,6 +607,7 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 	// promoteStandby, s. dortige Doku).
 	senderToAlias := s.buildSenderAliasIndex(wf)
 	s.captureOneRoleState(wf, role, senderToAlias)
+	s.markUnrestored(wf.ID, role)
 
 	// Schritt 5 (Teil 1): Runtime auf die neue Instanz umschreiben und
 	// sofort committen — macht die neue Zuordnung zur DB-Wahrheit, bevor

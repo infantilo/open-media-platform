@@ -263,13 +263,17 @@ type Service struct {
 	// Workflow, ob ein laufender Stop von Hand oder vom Zeitplan kam.
 	runs      RunRecorder
 	stopCause sync.Map
-	store     workflowStore
-	nodes     NodeLister
-	graph     GraphService
-	launcher  Launcher
-	events    EventPublisher
-	methods   methodInvoker
-	resources ResourcePrecheck
+	// unrestored: Rollen, deren gespeicherter Zustand noch nicht wieder
+	// eingespielt ist (state.go, Unrestored-Schutz).
+	unrestoredMu sync.Mutex
+	unrestored   map[string]int
+	store        workflowStore
+	nodes        NodeLister
+	graph        GraphService
+	launcher     Launcher
+	events       EventPublisher
+	methods      methodInvoker
+	resources    ResourcePrecheck
 	// httpClient: derselbe ggf. mTLS-fähige Client wie methods, hier
 	// zusätzlich direkt gehalten, weil state.go (getNodeState/
 	// postNodeState) den rohen JSON-Body des Node-eigenen /state-
@@ -641,6 +645,7 @@ func (s *Service) Update(id, name string, def Definition) (Workflow, error) {
 	// zur ALTEN Topologie (Rollen-Positionen/Verkabelung, s. state.go
 	// senderAliasPrefix-Doku) — best effort, kein Abbruch des im Kern
 	// bereits erfolgreichen Updates, falls das Leeren selbst fehlschlägt.
+	s.clearUnrestoredWorkflow(id)
 	if wasStarted {
 		// Laufender Workflow: Rollen/Positionen sind per Konstruktion
 		// unverändert (Live-Stand als Definition) — Zustand nicht
@@ -842,6 +847,7 @@ func ioAssignmentRoles(assignments map[string]ioPortAssignment) []string {
 // hier würde den gerade erst geclaimten Port auf dem falschen Host
 // zurücklassen.
 func (s *Service) runStart(wf Workflow, ioAssignments map[string]ioPortAssignment) {
+	s.markSavedRolesUnrestored(wf.ID)
 	ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout)
 	defer cancel()
 
@@ -1371,6 +1377,7 @@ func (s *Service) runRestartRole(wf Workflow, roleName string) {
 	// selbst schon der Grund des Absturzes).
 	senderToAlias := s.buildSenderAliasIndex(wf)
 	s.captureOneRoleState(wf, roleName, senderToAlias)
+	s.markUnrestored(wf.ID, roleName)
 
 	if oldRuntime, hadOld := wf.Runtime[roleName]; hadOld && oldRuntime.InstanceID != "" {
 		if err := s.launcher.Stop(oldRuntime.InstanceID); err != nil {
@@ -1798,6 +1805,7 @@ func (s *Service) runStop(wf Workflow, targetStatus string) {
 	// erfassen, bevor ihr Prozess gestoppt wird — danach ist der Node
 	// weg und hat nichts mehr zu befragen.
 	s.captureRoleState(wf)
+	s.clearUnrestoredWorkflow(wf.ID)
 
 	// D13 (ARCHITECTURE.md §6.1 Erweiterung 2026-07-10): I/O-Port-Claims
 	// freigeben — über Definition.Roles statt nur wf.Runtime, damit auch

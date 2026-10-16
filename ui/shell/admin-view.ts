@@ -20,6 +20,7 @@
 // Reconnect-/Fallback-Pfad (AUDIT_POLL_FALLBACK_INTERVAL_MS).
 import { type I18nKey, t, t as tt } from "./i18n.ts";
 import "./settings-view.ts";
+import { PermissionsEditor } from "./permissions-editor.ts";
 import { ensureBundle, getModules } from "./modules-registry.ts";
 import { adminGroups, type AdminModuleGroup } from "./modules-logic.ts";
 import { getLang } from "./i18n.ts";
@@ -369,6 +370,9 @@ class AdminView extends HTMLElement {
   #logPollHandle: number | undefined;
   #nodes: NodeEntry[] = [];
   #workflows: WorkflowSummary[] = [];
+  #processes: { id: string; name: string; category?: string }[] = [];
+  // Langlebig: Suche/Auswahl des Rechte-Editors überleben #render()-Aufrufe.
+  #permEditor = new PermissionsEditor(() => this.#loadBindings());
   #error = "";
   #showUserForm = false;
   #newUsername = "";
@@ -424,26 +428,6 @@ class AdminView extends HTMLElement {
   #groupMembers: string[] = [];
   #newGroupMemberUsername = "";
 
-  #showBindingForm = false;
-  #newSubject = "";
-  // subjectType des Anlage-Formulars — "user" (Default, Freitext-
-  // Nutzername) oder "group" (Auswahl aus #groups).
-  #newSubjectType: "user" | "group" = "user";
-  #newNodeId = "*";
-  #newVerb = "operate";
-  // Kapitel 12 Teil 4: "" = global/Node-gescoped (unverändertes
-  // Verhalten), sonst die Workflow-ID — schaltet das Node-ID-Feld unten
-  // von "Instanz-ID" auf "Rollenname" um.
-  #newWorkflowId = "";
-  // Nutzerwunsch 2026-09-11: Rollenbindungen aus beiden Richtungen
-  // bedienbar machen. Backend/API sind bereits richtungsneutral (jede
-  // Bindung trägt Subject UND NodeID gleichermaßen) — reine UI-Ergänzung:
-  // #bindingsGroupBy steuert die Anzeige (Liste gruppiert nach Nutzer
-  // ODER nach Node/Rolle), #newBindingDirection nur die Feld-Reihenfolge
-  // im Anlage-Formular (Nutzer zuerst vs. Node zuerst) — #createBinding
-  // selbst ist davon unabhängig, s. dort.
-  #bindingsGroupBy: "subject" | "node" = "subject";
-  #newBindingDirection: "userFirst" | "nodeFirst" = "userFirst";
   #auditPollHandle: number | undefined;
 
   // §17 Teil 4/5 Import/Export-UI (Nutzerwunsch: "node/microservice
@@ -555,6 +539,7 @@ class AdminView extends HTMLElement {
     this.#loadLogs();
     this.#loadNodes();
     this.#loadWorkflows();
+    this.#loadProcesses();
     this.#loadCatalog();
     this.#loadBackups();
     this.#loadUpdates();
@@ -1124,14 +1109,10 @@ class AdminView extends HTMLElement {
       const res = await apiFetch("/api/v1/nodes");
       if (res.ok) {
         this.#nodes = await res.json();
-        // Nur neu rendern, wenn die Node-Datalist tatsächlich gerade
-        // sichtbar ist — sonst kein Grund, ein evtl. offenes
-        // Nutzer-Formular anzufassen.
-        if (this.#showBindingForm) this.#render();
+        if (this.#activeAdminTab === "bindings") this.#render();
       }
     } catch {
-      // Node-Liste ist nur eine Eingabehilfe für das Bindungs-Formular,
-      // kein Hard-Requirement.
+      // Node-Liste ist nur eine Eingabehilfe für den Rechte-Editor.
     }
   }
 
@@ -1143,7 +1124,21 @@ class AdminView extends HTMLElement {
       const res = await apiFetch("/api/v1/workflows");
       if (res.ok) {
         this.#workflows = await res.json();
-        if (this.#showBindingForm) this.#render();
+        if (this.#activeAdminTab === "bindings") this.#render();
+      }
+    } catch {
+      // s. o.
+    }
+  }
+
+  // Prozess-Definitionen als wählbarer Rechte-Bereich (Rechte-Editor).
+  async #loadProcesses() {
+    try {
+      const res = await apiFetch("/api/v1/process-definitions");
+      if (res.ok) {
+        const list = await res.json();
+        this.#processes = Array.isArray(list) ? list : [];
+        if (this.#activeAdminTab === "bindings") this.#render();
       }
     } catch {
       // s. o.
@@ -1222,32 +1217,6 @@ class AdminView extends HTMLElement {
     this.#resetTarget = null;
     this.#resetPassword = "";
     this.#render();
-  }
-
-  async #createBinding() {
-    if (!this.#newSubject || !this.#newNodeId) return;
-    const res = await apiFetch("/api/v1/admin/role-bindings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        subject: this.#newSubject,
-        subjectType: this.#newSubjectType,
-        workflowId: this.#newWorkflowId || undefined,
-        nodeId: this.#newNodeId,
-        verb: this.#newVerb,
-      }),
-    });
-    if (!res.ok) {
-      this.#error = tt("adm.f397bc", { p0: await res.text() });
-      this.#render();
-      return;
-    }
-    this.#error = "";
-    this.#newSubject = "";
-    this.#newWorkflowId = "";
-    this.#newNodeId = "*";
-    this.#showBindingForm = false;
-    await this.#loadBindings();
   }
 
   async #deleteBinding(binding: RoleBinding) {
@@ -2411,7 +2380,16 @@ class AdminView extends HTMLElement {
         this.appendChild(this.#renderGroupsSection());
         break;
       case "bindings":
-        this.appendChild(this.#renderBindingsSection());
+        this.#permEditor.setData({
+          users: this.#users,
+          groups: this.#groups,
+          groupMembers: this.#allGroupMembers,
+          bindings: this.#bindings,
+          nodes: this.#nodes,
+          workflows: this.#workflows,
+          processes: this.#processes,
+        });
+        this.appendChild(this.#permEditor.el);
         break;
       case "catalog":
         this.appendChild(this.#renderCatalogSection());
@@ -3480,96 +3458,6 @@ class AdminView extends HTMLElement {
     return panel;
   }
 
-  #renderBindingsSection(): HTMLElement {
-    const section = document.createElement("div");
-    section.style.cssText = "margin-bottom:var(--omp-space-4);";
-
-    const heading = document.createElement("div");
-    heading.style.cssText =
-      "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;gap:8px;";
-    const title = document.createElement("span");
-    title.className = "omp-h1";
-    title.textContent = tt("adm.2578ee", { p0: this.#bindings.length });
-
-    const right = document.createElement("div");
-    right.style.cssText = "display:flex;gap:8px;align-items:center;";
-    right.appendChild(this.#renderBindingsGroupToggle());
-
-    const newBtn = document.createElement("button");
-    newBtn.textContent = this.#showBindingForm ? tt("adm.4b9727") : tt("adm.473936");
-    newBtn.style.cssText = "font-size:11px;cursor:pointer;";
-    newBtn.addEventListener("click", () => {
-      this.#showBindingForm = !this.#showBindingForm;
-      this.#render();
-    });
-    right.appendChild(newBtn);
-
-    heading.append(title, right);
-    section.appendChild(heading);
-
-    // Nutzerfund 2026-09-24: dieser Tab bleibt das rohe CRUD-Werkzeug
-    // (jede einzelne Bindung anlegen/löschen) — für "was hat Nutzer X
-    // insgesamt" (inkl. über Gruppen geerbt) verweist der Hinweis gezielt
-    // auf die neue, zusammenfassende Ansicht statt dass man hier selbst
-    // Nutzer- und Gruppen-Bindungen im Kopf zusammenrechnen muss.
-    const hint = document.createElement("div");
-    hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:var(--omp-space-2);";
-    hint.textContent =
-      tt("adm.aa6c6f") +
-      tt("adm.c4e6da");
-    section.appendChild(hint);
-
-    if (this.#showBindingForm) {
-      section.appendChild(this.#renderBindingForm());
-    }
-
-    if (this.#bindings.length === 0 && !this.#showBindingForm) {
-      const empty = document.createElement("div");
-      empty.style.cssText = "color:var(--omp-text-dim);";
-      empty.textContent = tt("adm.782a90");
-      section.appendChild(empty);
-      return section;
-    }
-
-    if (this.#bindings.length > 0) {
-      section.appendChild(
-        this.#bindingsGroupBy === "node" ? this.#renderBindingsByNode() : this.#renderBindingsBySubject(),
-      );
-    }
-
-    return section;
-  }
-
-  // Nutzerwunsch 2026-09-11 (§12.3e-Folge): Umschalter zwischen "Nach
-  // Nutzer" (Standard, entspricht dem bisherigen Verhalten) und "Nach
-  // Node/Rolle" — dieselben #bindings, nur anders gruppiert, kein
-  // Reload nötig.
-  #renderBindingsGroupToggle(): HTMLElement {
-    const wrap = document.createElement("div");
-    wrap.style.cssText = "display:flex;border:1px solid var(--omp-border);border-radius:var(--omp-radius);overflow:hidden;";
-    const options: { value: "subject" | "node"; label: string }[] = [
-      { value: "subject", label: tt("adm.18c4aa") },
-      { value: "node", label: tt("adm.d4bcb3") },
-    ];
-    for (const opt of options) {
-      const btn = document.createElement("button");
-      btn.textContent = opt.label;
-      const active = this.#bindingsGroupBy === opt.value;
-      btn.style.cssText =
-        "font-size:11px;cursor:pointer;border:none;border-radius:0;padding:4px 8px;" +
-        (active
-          ? "background:var(--omp-surface-raised);color:var(--omp-text);"
-          : "background:transparent;color:var(--omp-text-dim);");
-      btn.addEventListener("click", () => {
-        if (this.#bindingsGroupBy === opt.value) return;
-        this.#bindingsGroupBy = opt.value;
-        this.#render();
-      });
-      wrap.appendChild(btn);
-    }
-    return wrap;
-  }
-
   // Gruppiert nach Nutzer: pro Nutzer eine Überschrift, darunter alle
   // Bereiche/Rechte, die dieser Nutzer hat — Blickrichtung "Nutzer
   // auswählen, dann sehen/zuweisen, worauf er zugreifen darf".
@@ -3583,44 +3471,6 @@ class AdminView extends HTMLElement {
     if (b.subjectType !== "group") return b.subject;
     const name = this.#groups.find((g) => g.id === b.subject)?.name ?? b.subject;
     return `👥 ${name}`;
-  }
-
-  #renderBindingsBySubject(): HTMLElement {
-    const wrap = document.createElement("div");
-    const bySubject = new Map<string, { label: string; bindings: RoleBinding[] }>();
-    for (const b of this.#bindings) {
-      const key = `${b.subjectType}:${b.subject}`;
-      if (!bySubject.has(key)) bySubject.set(key, { label: this.#subjectLabel(b), bindings: [] });
-      bySubject.get(key)!.bindings.push(b);
-    }
-    const keys = [...bySubject.keys()].sort((a, b) => bySubject.get(a)!.label.localeCompare(bySubject.get(b)!.label));
-    for (const key of keys) {
-      const entry = bySubject.get(key)!;
-      wrap.appendChild(this.#renderBindingGroup(entry.label, entry.bindings, "scope"));
-    }
-    return wrap;
-  }
-
-  // Gruppiert nach Node/Rolle: pro Node (bzw. Workflow→Rolle) eine
-  // Überschrift, darunter alle Nutzer mit Zugriff darauf — Blickrichtung
-  // "Node auswählen, dann sehen/zuweisen, welche Nutzer zugreifen dürfen"
-  // (bisher fehlende Richtung, Nutzerwunsch 2026-09-11).
-  #renderBindingsByNode(): HTMLElement {
-    const wrap = document.createElement("div");
-    const byScope = new Map<string, RoleBinding[]>();
-    for (const b of this.#bindings) {
-      const key = `${b.workflowId ?? ""}::${b.nodeId}`;
-      if (!byScope.has(key)) byScope.set(key, []);
-      byScope.get(key)!.push(b);
-    }
-    const keys = [...byScope.keys()].sort((a, b) =>
-      this.#scopeLabel(byScope.get(a)![0]).localeCompare(this.#scopeLabel(byScope.get(b)![0])),
-    );
-    for (const key of keys) {
-      const group = byScope.get(key)!;
-      wrap.appendChild(this.#renderBindingGroup(this.#scopeLabel(group[0]), group, "subject"));
-    }
-    return wrap;
   }
 
   // columnKind bestimmt nur, welches Feld in der ersten Spalte steht
@@ -3666,193 +3516,6 @@ class AdminView extends HTMLElement {
     table.appendChild(tbody);
     box.appendChild(table);
     return box;
-  }
-
-  #renderBindingForm(): HTMLElement {
-    const wrap = document.createElement("div");
-
-    // Nutzerwunsch 2026-09-11: Anlage-Formular aus beiden Richtungen
-    // bedienbar — reine Feld-Reihenfolge, #createBinding() selbst nimmt
-    // in jeder Reihenfolge dieselben drei Werte (subject/scope/verb)
-    // entgegen, s. dort.
-    const dirToggle = document.createElement("div");
-    dirToggle.style.cssText = "display:flex;gap:0;margin-bottom:6px;width:fit-content;" +
-      "border:1px solid var(--omp-border);border-radius:var(--omp-radius);overflow:hidden;";
-    const dirOptions: { value: "userFirst" | "nodeFirst"; label: string }[] = [
-      { value: "userFirst", label: tt("adm.e9cc81") },
-      { value: "nodeFirst", label: tt("adm.75894c") },
-    ];
-    for (const opt of dirOptions) {
-      const btn = document.createElement("button");
-      btn.textContent = opt.label;
-      const active = this.#newBindingDirection === opt.value;
-      btn.style.cssText =
-        "font-size:11px;cursor:pointer;border:none;border-radius:0;padding:4px 8px;" +
-        (active
-          ? "background:var(--omp-surface-raised);color:var(--omp-text);"
-          : "background:transparent;color:var(--omp-text-dim);");
-      btn.addEventListener("click", () => {
-        if (this.#newBindingDirection === opt.value) return;
-        this.#newBindingDirection = opt.value;
-        this.#render();
-      });
-      dirToggle.appendChild(btn);
-    }
-    wrap.appendChild(dirToggle);
-
-    const form = document.createElement("div");
-    form.style.cssText =
-      "border:1px solid var(--omp-border);border-radius:var(--omp-radius);padding:8px;" +
-      "margin-bottom:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;";
-    wrap.appendChild(form);
-
-    // Subject-Typ-Umschalter (Nutzerauftrag 2026-09-24: gruppenbasierte
-    // Rechteverwaltung) — "Nutzer" (unverändertes Freitext-Verhalten mit
-    // Vorschlagsliste) oder "Gruppe" (Auswahl aus #groups statt Freitext,
-    // eine erfundene Gruppen-ID ergäbe keine wirksame Bindung).
-    const typeToggle = document.createElement("div");
-    typeToggle.style.cssText = "display:flex;gap:0;width:fit-content;" +
-      "border:1px solid var(--omp-border);border-radius:var(--omp-radius);overflow:hidden;";
-    for (const opt of [{ value: "user" as const, label: tt("adm.8a940a") }, { value: "group" as const, label: tt("adm.3b77a5") }]) {
-      const btn = document.createElement("button");
-      btn.textContent = opt.label;
-      const active = this.#newSubjectType === opt.value;
-      btn.style.cssText =
-        "font-size:11px;cursor:pointer;border:none;border-radius:0;padding:4px 8px;" +
-        (active ? "background:var(--omp-surface-raised);color:var(--omp-text);" : "background:transparent;color:var(--omp-text-dim);");
-      btn.addEventListener("click", () => {
-        if (this.#newSubjectType === opt.value) return;
-        this.#newSubjectType = opt.value;
-        this.#newSubject = "";
-        this.#render();
-      });
-      typeToggle.appendChild(btn);
-    }
-    wrap.insertBefore(typeToggle, form);
-    typeToggle.style.marginBottom = "6px";
-
-    const subjectDatalistId = "omp-admin-user-datalist";
-    const subjectInput = document.createElement("input");
-    subjectInput.placeholder = tt("adm.f5f8d4");
-    subjectInput.value = this.#newSubject;
-    subjectInput.setAttribute("list", subjectDatalistId);
-    subjectInput.style.cssText = "flex:1;min-width:100px;";
-    subjectInput.addEventListener("input", () => {
-      this.#newSubject = subjectInput.value;
-    });
-    const subjectDatalist = document.createElement("datalist");
-    subjectDatalist.id = subjectDatalistId;
-    for (const u of this.#users) {
-      const opt = document.createElement("option");
-      opt.value = u.username;
-      subjectDatalist.appendChild(opt);
-    }
-
-    const groupSelect = document.createElement("select");
-    groupSelect.style.cssText = "flex:1;min-width:100px;";
-    const noGroupOpt = document.createElement("option");
-    noGroupOpt.value = "";
-    noGroupOpt.textContent = this.#groups.length ? tt("adm.e5b1cd") : tt("adm.14a665");
-    groupSelect.appendChild(noGroupOpt);
-    for (const grp of this.#groups) {
-      const opt = document.createElement("option");
-      opt.value = grp.id;
-      opt.textContent = grp.name;
-      if (grp.id === this.#newSubject) opt.selected = true;
-      groupSelect.appendChild(opt);
-    }
-    groupSelect.addEventListener("change", () => {
-      this.#newSubject = groupSelect.value;
-    });
-
-    // subjectField: je nach Typ entweder [Freitext-Input + Datalist]
-    // oder [Auswahl-Select] — an derselben Stelle im Formular eingesetzt,
-    // egal in welcher Richtung (userFirst/nodeFirst, s. o.).
-    const subjectField: HTMLElement[] = this.#newSubjectType === "group" ? [groupSelect] : [subjectInput, subjectDatalist];
-
-    // Kapitel 12 Teil 4 (§12.3e): Scope-Auswahl — tt("y.global") ist das
-    // unveränderte Vor-Kapitel-12-Teil-4-Verhalten (Node-ID/Instanz-ID
-    // unten), ein gewählter Workflow schaltet das Feld darunter auf
-    // Rollennamen um (stabil über Rollen-Neustarts, anders als eine
-    // Instanz-ID).
-    const workflowSelect = document.createElement("select");
-    workflowSelect.style.cssText = "min-width:140px;";
-    const globalOpt = document.createElement("option");
-    globalOpt.value = "";
-    globalOpt.textContent = tt("y.global");
-    workflowSelect.appendChild(globalOpt);
-    for (const wf of this.#workflows) {
-      const opt = document.createElement("option");
-      opt.value = wf.id;
-      opt.textContent = wf.name;
-      if (wf.id === this.#newWorkflowId) opt.selected = true;
-      workflowSelect.appendChild(opt);
-    }
-    workflowSelect.addEventListener("change", () => {
-      this.#newWorkflowId = workflowSelect.value;
-      // Ein Rollenname aus dem alten Scope ergibt im neuen keinen Sinn
-      // (oder umgekehrt) — auf den jeweiligen "alle"-Default zurücksetzen
-      // statt einen ungültigen Wert stehen zu lassen.
-      this.#newNodeId = "*";
-      this.#render();
-    });
-
-    const datalistId = "omp-admin-node-datalist";
-    const selectedWorkflow = this.#workflows.find((wf) => wf.id === this.#newWorkflowId);
-    const nodeInput = document.createElement("input");
-    nodeInput.placeholder = selectedWorkflow ? tt("adm.3096f0") : tt("adm.3a7309");
-    nodeInput.value = this.#newNodeId;
-    nodeInput.setAttribute("list", datalistId);
-    nodeInput.style.cssText = "flex:1;min-width:160px;";
-    nodeInput.addEventListener("input", () => {
-      this.#newNodeId = nodeInput.value;
-    });
-
-    const datalist = document.createElement("datalist");
-    datalist.id = datalistId;
-    const anyOpt = document.createElement("option");
-    anyOpt.value = "*";
-    anyOpt.label = selectedWorkflow ? tt("adm.e5c1c7") : tt("adm.a78fea");
-    datalist.appendChild(anyOpt);
-    if (selectedWorkflow) {
-      for (const role of selectedWorkflow.definition.roles) {
-        const opt = document.createElement("option");
-        opt.value = role.name;
-        opt.label = `${role.name} (${role.nodeType})`;
-        datalist.appendChild(opt);
-      }
-    } else {
-      for (const n of this.#nodes) {
-        const opt = document.createElement("option");
-        opt.value = n.instanceId || n.id;
-        opt.label = n.label;
-        datalist.appendChild(opt);
-      }
-    }
-
-    const verbSelect = document.createElement("select");
-    for (const v of VERBS) {
-      const opt = document.createElement("option");
-      opt.value = v;
-      opt.textContent = VERB_LABEL[v];
-      if (v === this.#newVerb) opt.selected = true;
-      verbSelect.appendChild(opt);
-    }
-    verbSelect.addEventListener("change", () => {
-      this.#newVerb = verbSelect.value;
-    });
-
-    const createBtn = document.createElement("button");
-    createBtn.textContent = tt("adm.6212ff");
-    createBtn.style.cssText = "cursor:pointer;";
-    createBtn.addEventListener("click", () => this.#createBinding());
-
-    if (this.#newBindingDirection === "nodeFirst") {
-      form.append(workflowSelect, nodeInput, datalist, ...subjectField, verbSelect, createBtn);
-    } else {
-      form.append(...subjectField, workflowSelect, nodeInput, datalist, verbSelect, createBtn);
-    }
-    return wrap;
   }
 
   #nodeLabel(nodeId: string): string {

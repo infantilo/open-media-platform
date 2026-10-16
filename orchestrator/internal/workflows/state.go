@@ -195,6 +195,16 @@ func (s *Service) pinRoleState(wf Workflow) {
 }
 
 func (s *Service) captureRoleStateMode(wf Workflow, role string, senderToAlias map[string]string, mode captureMode) {
+	if mode == capturePin {
+		s.clearUnrestored(wf.ID, role)
+	} else if s.isUnrestored(wf.ID, role) {
+		// Die Rolle läuft, hat ihren gespeicherten Zustand aber noch nicht
+		// (erfolgreich) zurückbekommen: ihr aktueller Stand ist leer/
+		// Standard. Ihn zu speichern würde den guten Zustand überschreiben
+		// (Nutzerfund 2026-10-16: Quellbuttons/Kanäle von Bild- und
+		// Tonmischer weg nach Start/Stop/Umzug).
+		return
+	}
 	if mode == captureAuto {
 		if saved, err := s.store.GetRoleState(wf.ID); err == nil {
 			var cur roleStateEnvelope
@@ -343,6 +353,14 @@ func (s *Service) restoreRoleState(wf Workflow) {
 // Alias im Blob enthalten, z. B. reine DVE-Box-/Enabled-Flags ohne
 // Sender-Bezug) verifiziert nicht extra — ein einzelner POST reicht.
 func (s *Service) restoreOneRoleState(wf Workflow, role string, raw json.RawMessage) error {
+	err := s.restoreOneRoleStateTry(wf, role, raw)
+	if err == nil {
+		s.clearUnrestored(wf.ID, role)
+	}
+	return err
+}
+
+func (s *Service) restoreOneRoleStateTry(wf Workflow, role string, raw json.RawMessage) error {
 	var lastErr error
 	for attempt := 1; attempt <= restoreStateRetries; attempt++ {
 		if attempt > 1 {
@@ -681,6 +699,105 @@ func patchParamValue(ctx context.Context, client *http.Client, apiBaseURL, name 
 	return nil
 }
 
+// Unrestored-Schutz (Nutzerfund 2026-10-16: "immer wieder verliert der
+// Bildmischer/Audiomischer/die Quelle nach Start/Stop/Host-Umzug ihre
+// Einstellungen"). Ursache: zwischen dem Start einer Rolle und der
+// (erfolgreichen) Wiederherstellung ihres Zustands ist der Node leer. Die
+// periodische Sicherung, ein Stop oder eine Migration in diesem Fenster —
+// oder nach einer endgültig gescheiterten Wiederherstellung ("did not
+// stick", Rolle nicht registriert) — speicherte den leeren Stand über den
+// guten. Solange eine Rolle als "unrestored" markiert ist, erfassen
+// Stop/Backup/Transfer sie nicht; nur ein ausdrückliches Speichern (Pin)
+// hebt die Markierung auf. Die Backup-Runde versucht die Wiederherstellung
+// erneut und gibt nach maxUnrestoredRetries Runden auf.
+const maxUnrestoredRetries = 3
+
+func unrestoredKey(wfID, role string) string { return wfID + "\x00" + role }
+
+func (s *Service) markUnrestored(wfID string, roles ...string) {
+	s.unrestoredMu.Lock()
+	defer s.unrestoredMu.Unlock()
+	if s.unrestored == nil {
+		s.unrestored = map[string]int{}
+	}
+	for _, r := range roles {
+		s.unrestored[unrestoredKey(wfID, r)] = 0
+	}
+}
+
+func (s *Service) isUnrestored(wfID, role string) bool {
+	s.unrestoredMu.Lock()
+	defer s.unrestoredMu.Unlock()
+	_, ok := s.unrestored[unrestoredKey(wfID, role)]
+	return ok
+}
+
+func (s *Service) clearUnrestored(wfID, role string) {
+	s.unrestoredMu.Lock()
+	defer s.unrestoredMu.Unlock()
+	delete(s.unrestored, unrestoredKey(wfID, role))
+}
+
+func (s *Service) clearUnrestoredWorkflow(wfID string) {
+	s.unrestoredMu.Lock()
+	defer s.unrestoredMu.Unlock()
+	prefix := wfID + "\x00"
+	for k := range s.unrestored {
+		if len(k) > len(prefix) && k[:len(prefix)] == prefix {
+			delete(s.unrestored, k)
+		}
+	}
+}
+
+// markSavedRolesUnrestored markiert alle Rollen, für die ein gespeicherter
+// Zustand existiert, als noch nicht wiederhergestellt.
+func (s *Service) markSavedRolesUnrestored(wfID string) {
+	saved, err := s.store.GetRoleState(wfID)
+	if err != nil {
+		return
+	}
+	for role := range saved {
+		s.markUnrestored(wfID, role)
+	}
+}
+
+// retryUnrestored versucht für laufende Rollen mit ausstehender
+// Wiederherstellung einen weiteren Durchlauf; nach maxUnrestoredRetries
+// erfolglosen Runden wird die Markierung verworfen (der Node nimmt den
+// Zustand offenbar nicht an — dann soll der Ist-Stand wieder gesichert werden).
+func (s *Service) retryUnrestored(wf Workflow) {
+	saved, err := s.store.GetRoleState(wf.ID)
+	if err != nil {
+		return
+	}
+	for role := range wf.Runtime {
+		if !s.isUnrestored(wf.ID, role) {
+			continue
+		}
+		raw, ok := saved[role]
+		if !ok {
+			s.clearUnrestored(wf.ID, role)
+			continue
+		}
+		if err := s.restoreOneRoleState(wf, role, raw); err == nil {
+			continue
+		} else {
+			slog.Warn("workflows: role state restore retry failed", "workflow", wf.ID, "role", role, "error", err)
+		}
+		s.unrestoredMu.Lock()
+		k := unrestoredKey(wf.ID, role)
+		if n, ok := s.unrestored[k]; ok {
+			if n+1 >= maxUnrestoredRetries {
+				delete(s.unrestored, k)
+				slog.Warn("workflows: giving up restoring role state", "workflow", wf.ID, "role", role)
+			} else {
+				s.unrestored[k] = n + 1
+			}
+		}
+		s.unrestoredMu.Unlock()
+	}
+}
+
 // defaultRoleStateBackupInterval: Takt der periodischen Sicherung laufender
 // Workflows (Nutzerwunsch 2026-10-14: Bedienzustand, z. B. das Testbild einer
 // Quelle, soll auch ohne sauberen Stop — Absturz, `make stop` — erhalten
@@ -722,6 +839,7 @@ func (s *Service) RunRoleStateBackup(ctx context.Context) {
 			}
 			for _, wf := range wfs {
 				if wf.Status == StatusStarted {
+					s.retryUnrestored(wf)
 					s.captureRoleState(wf)
 				}
 			}

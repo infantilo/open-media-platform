@@ -644,15 +644,31 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         .as_deref()
         .map(|seed| crate::idgen::deterministic_v4(&format!("device:{seed}")))
         .unwrap_or_else(crate::idgen::new_v4);
+    // Sender-/Receiver-IDs mit Seed ebenfalls stabil (Nutzerfund 2026-10-16:
+    // Bild-/Tonmischer verlieren Quellbuttons, weil gespeicherte Zustände
+    // Sender-IDs fremder Rollen/Workflows referenzieren, die bei jedem Start
+    // neu gewürfelt wurden). Index = Position in der SenderSpec-Liste.
     let sender_ids: Vec<String> = config
         .senders
         .iter()
-        .map(|spec| spec.id.clone().unwrap_or_else(crate::idgen::new_v4))
+        .enumerate()
+        .map(|(i, spec)| {
+            spec.id.clone().unwrap_or_else(|| match role_seed.as_deref() {
+                Some(seed) => crate::idgen::deterministic_v4(&format!("sender:{seed}:{i}")),
+                None => crate::idgen::new_v4(),
+            })
+        })
         .collect();
     let receiver_ids: Vec<String> = config
         .receivers
         .iter()
-        .map(|spec| spec.id.clone().unwrap_or_else(crate::idgen::new_v4))
+        .enumerate()
+        .map(|(i, spec)| {
+            spec.id.clone().unwrap_or_else(|| match role_seed.as_deref() {
+                Some(seed) => crate::idgen::deterministic_v4(&format!("receiver:{seed}:{i}")),
+                None => crate::idgen::new_v4(),
+            })
+        })
         .collect();
 
     let device_res = Device::new(

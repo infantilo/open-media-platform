@@ -821,15 +821,24 @@ untereinander):
 ![Administration: Nutzer, Rollenbindungen, Node-Katalog, Audit-Log](screenshots/administration.png)
 
 - **Nutzer** — anlegen, Passwort zurücksetzen, löschen.
-- **Rollenbindungen** — verknüpfen einen Nutzer mit einem Rechtebereich
-  (`Alle Nodes`, eine einzelne Node-ID, oder — wie im Screenshot bei
-  „operator1" — ein ganzer Workflow) und einem Recht (`Bedienen` <
-  `Konfigurieren` < `Administrieren`). Ein Nutzer ohne passende
-  Bindung sieht die entsprechende Aktion in der Oberfläche gar nicht
-  erst als Option. Die kryptischen Nutzernamen in den übrigen Zeilen
-  des Screenshots sind Service-Token-Bindungen, die der Orchestrator
-  automatisch für Control-Plane-Nodes wie `omp-playout-automation`
-  anlegt (dessen Instanz-ID als Subject) — keine echten Personenkonten.
+- **Rechte** (früher „Rollenbindungen") — ein Editor mit Suche, in zwei
+  Blickrichtungen:
+  - **Wer?** — links Nutzer und Gruppen wählen, rechts steht, worauf sie
+    dürfen (nach Art gruppiert), mit den über Gruppen geerbten Rechten.
+  - **Worauf?** — links einen Bereich wählen (global, Workflow, einzelne
+    Workflow-Rolle, Node, Prozess), rechts steht, wer darauf darf.
+  Das Suchfeld oben findet Nutzer, Gruppen, Nodes, Workflows, Rollen und
+  Prozesse; ein Nutzer taucht auch dann auf, wenn der Suchbegriff nur in
+  einem seiner Bereiche vorkommt. Unten „Recht hinzufügen": Art filtern,
+  im Suchfeld wählen, Recht (`Ansehen` < `Bedienen` < `Konfigurieren` <
+  `Administrieren`) einstellen, „Hinzufügen". Pro Nutzer/Gruppe und
+  Bereich gibt es genau ein Recht; Ändern, Hinzufügen und Entfernen
+  wirken sofort. Ein Prozess-Recht erlaubt Start, Abbruch, Pause und
+  Veröffentlichung nur dieses einen Prozesses (bzw. dessen Bearbeiten
+  mit `Konfigurieren`), ohne globale Rechte. Die kryptischen
+  Nutzernamen in den Service-Token-Bindungen legt der Orchestrator
+  automatisch für Control-Plane-Nodes wie `omp-playout-automation` an
+  (dessen Instanz-ID als Subject) — keine echten Personenkonten.
 - **Node-Katalog: Import/Export** — jeder eingebaute Node-Typ ist hier
   als Referenz exportierbar; „+ Node/Microservice importieren"
   (Abschnitt „Related project"/`HANDBUCH.md`) nimmt zusätzlich
