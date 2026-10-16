@@ -42,6 +42,8 @@ interface NetInfo {
   hosts: Record<string, { label: string; linkMbps?: number; percent?: number; measured: boolean }>;
 }
 
+type ProblemList = NonNullable<NodeContext["problems"]>;
+
 const POLL_INTERVAL_MS = 5000;
 const REFRESH_EVENT_TYPES = new Set(["edge.added", "edge.removed", "instance.crashed", "instance.restarted", "lost-events"]);
 
@@ -59,6 +61,8 @@ class SignalPathView extends HTMLElement {
   #instances = new Map<string, InstanceInfo>();
   #hostLabels = new Map<string, string>();
   #net: NetInfo | null = null;
+  #problems = new Map<string, ProblemList>();
+  #noMonitorTypes = new Set<string>();
   #from = "";
   #to = "";
   #via = "";
@@ -75,30 +79,149 @@ class SignalPathView extends HTMLElement {
         ${t("sp.intro")}
       </div>
       <div id="form" style="display:flex;flex-wrap:wrap;gap:var(--omp-space-3);align-items:flex-end;margin-bottom:var(--omp-space-4);">
-        <label style="display:flex;flex-direction:column;gap:2px;">${t("sp.source")}<select id="from" style="min-width:260px;"></select></label>
-        <label style="display:flex;flex-direction:column;gap:2px;">${t("sp.target")}<select id="to" style="min-width:260px;"></select></label>
-        <label style="display:flex;flex-direction:column;gap:2px;">${t("sp.via")}<select id="via" style="min-width:220px;"></select></label>
+        ${(["from", "to", "via"] as const).map((f) => `
+        <label style="display:flex;flex-direction:column;gap:2px;">${t(f === "from" ? "sp.source" : f === "to" ? "sp.target" : "sp.via")}
+          <span class="cb" data-f="${f}" style="position:relative;display:block;min-width:${f === "via" ? 220 : 260}px;">
+            <input type="text" autocomplete="off" spellcheck="false" style="width:100%;box-sizing:border-box;padding-right:22px;">
+            <span class="cb-x" title="${esc(t("sp.clear"))}" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);cursor:pointer;color:var(--omp-text-dim);display:none;">×</span>
+            <div class="cb-list" style="display:none;position:absolute;z-index:50;left:0;right:0;top:100%;max-height:320px;overflow-y:auto;background:var(--omp-surface);border:1px solid var(--omp-border, #888);box-shadow:0 4px 12px rgba(0,0,0,.35);"></div>
+          </span>
+        </label>`).join("")}
       </div>
       <div id="result"></div>`;
-    this.addEventListener("change", this.#onChange);
+    this.addEventListener("input", this.#onInput);
+    this.addEventListener("focusin", this.#onFocusIn);
+    this.addEventListener("focusout", this.#onFocusOut);
+    this.addEventListener("keydown", this.#onKey);
+    this.addEventListener("mousedown", this.#onMouseDown);
     this.#poll();
     this.#pollHandle = window.setInterval(() => this.#poll(), POLL_INTERVAL_MS);
     connectionMonitor.addEventListener("sse-message", this.#onSseMessage);
   }
 
   disconnectedCallback() {
-    this.removeEventListener("change", this.#onChange);
+    this.removeEventListener("input", this.#onInput);
+    this.removeEventListener("focusin", this.#onFocusIn);
+    this.removeEventListener("focusout", this.#onFocusOut);
+    this.removeEventListener("keydown", this.#onKey);
+    this.removeEventListener("mousedown", this.#onMouseDown);
     if (this.#pollHandle !== undefined) window.clearInterval(this.#pollHandle);
     connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
   }
 
-  #onChange = (ev: Event) => {
-    const t = ev.target as HTMLSelectElement;
-    if (t.id === "from") this.#from = t.value;
-    else if (t.id === "to") this.#to = t.value;
-    else if (t.id === "via") this.#via = t.value;
-    else return;
+  // --- Such-Auswahl (Combobox): tippen filtert (alle Suchwörter müssen im Namen vorkommen) ---
+  #opts: Record<string, { value: string; label: string }[]> = { from: [], to: [], via: [] };
+  #active = -1;
+
+  #cb(f: string) {
+    const root = this.querySelector<HTMLElement>(`.cb[data-f="${f}"]`)!;
+    return { root, input: root.querySelector("input")!, list: root.querySelector<HTMLElement>(".cb-list")!, x: root.querySelector<HTMLElement>(".cb-x")! };
+  }
+  #get(f: string): string {
+    return f === "from" ? this.#from : f === "to" ? this.#to : this.#via;
+  }
+  #set(f: string, v: string) {
+    if (f === "from") this.#from = v;
+    else if (f === "to") this.#to = v;
+    else this.#via = v;
+  }
+  #labelOf(f: string): string {
+    const v = this.#get(f);
+    return this.#opts[f].find((o) => o.value === v)?.label ?? "";
+  }
+  #syncInput(f: string) {
+    const { input, x } = this.#cb(f);
+    if (document.activeElement !== input) input.value = this.#labelOf(f);
+    x.style.display = this.#get(f) ? "block" : "none";
+  }
+  #matches(f: string, query: string) {
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    return this.#opts[f].filter((o) => {
+      const l = o.label.toLowerCase();
+      return words.every((w) => l.includes(w));
+    });
+  }
+  #openList(f: string, query: string) {
+    const { list } = this.#cb(f);
+    const hits = this.#matches(f, query).slice(0, 200);
+    this.#active = hits.length ? 0 : -1;
+    list.innerHTML = hits.length
+      ? hits.map((o, i) => `<div class="cb-item" data-v="${esc(o.value)}" style="padding:4px 8px;cursor:pointer;${i === 0 ? "background:var(--omp-hover, rgba(128,128,128,.3));" : ""}">${esc(o.label)}</div>`).join("")
+      : `<div style="padding:4px 8px;color:var(--omp-text-dim);">${esc(t("sp.noMatch"))}</div>`;
+    list.style.display = "block";
+  }
+  #closeList(f: string) {
+    this.#cb(f).list.style.display = "none";
+    this.#syncInput(f);
+  }
+  #highlight(f: string, delta: number) {
+    const items = [...this.#cb(f).list.querySelectorAll<HTMLElement>(".cb-item")];
+    if (!items.length) return;
+    this.#active = (this.#active + delta + items.length) % items.length;
+    items.forEach((el, i) => {
+      el.style.background = i === this.#active ? "var(--omp-hover, rgba(128,128,128,.3))" : "";
+      if (i === this.#active) el.scrollIntoView({ block: "nearest" });
+    });
+  }
+  #pick(f: string, v: string) {
+    this.#set(f, v);
+    this.#cb(f).input.value = this.#labelOf(f); // vor blur, sonst deutet focusout das leere Feld als „löschen“
+    this.#closeList(f);
+    this.#cb(f).input.blur();
     this.#renderResult();
+  }
+  #field(ev: Event): string | null {
+    return (ev.target as HTMLElement).closest<HTMLElement>(".cb")?.dataset.f ?? null;
+  }
+  #onInput = (ev: Event) => {
+    const f = this.#field(ev);
+    if (f) this.#openList(f, (ev.target as HTMLInputElement).value);
+  };
+  #onFocusIn = (ev: Event) => {
+    const f = this.#field(ev);
+    if (!f || (ev.target as HTMLElement).tagName !== "INPUT") return;
+    (ev.target as HTMLInputElement).select();
+    this.#openList(f, "");
+  };
+  #onFocusOut = (ev: Event) => {
+    const f = this.#field(ev);
+    if (!f) return;
+    // Leeres Feld = Auswahl löschen; sonst zurück auf die gewählte Beschriftung.
+    if (!(ev.target as HTMLInputElement).value.trim() && this.#get(f)) {
+      this.#set(f, "");
+      this.#renderResult();
+    }
+    this.#closeList(f);
+  };
+  #onKey = (ev: KeyboardEvent) => {
+    const f = this.#field(ev);
+    if (!f) return;
+    const list = this.#cb(f).list;
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      ev.preventDefault();
+      if (list.style.display === "none") this.#openList(f, "");
+      else this.#highlight(f, ev.key === "ArrowDown" ? 1 : -1);
+    } else if (ev.key === "Enter") {
+      const el = list.querySelectorAll<HTMLElement>(".cb-item")[this.#active];
+      if (el) this.#pick(f, el.dataset.v ?? "");
+    } else if (ev.key === "Escape") {
+      this.#cb(f).input.blur();
+    }
+  };
+  #onMouseDown = (ev: MouseEvent) => {
+    const el = ev.target as HTMLElement;
+    const f = this.#field(ev);
+    if (!f) return;
+    if (el.classList.contains("cb-item")) {
+      ev.preventDefault();
+      this.#pick(f, el.dataset.v ?? "");
+    } else if (el.classList.contains("cb-x")) {
+      ev.preventDefault();
+      this.#set(f, "");
+      this.#cb(f).input.value = "";
+      this.#syncInput(f);
+      this.#renderResult();
+    }
   };
 
   #onSseMessage = (ev: Event) => {
@@ -122,7 +245,9 @@ class SignalPathView extends HTMLElement {
       if (!g.ok) return;
       const graph = (await g.json()) as GraphData;
       this.#instances = new Map(((inst.ok ? await inst.json() : []) as InstanceInfo[]).map((i) => [i.id, i]));
-      this.#graph = withImplicitFeeds(graph, await this.#implicitFeeds(graph));
+      const [feeds, problems] = await Promise.all([this.#implicitFeeds(graph), this.#runtimeProblems(graph)]);
+      this.#problems = problems;
+      this.#graph = withImplicitFeeds(graph, feeds);
       this.#hostLabels = new Map(((hosts.ok ? await hosts.json() : []) as { id: string; label: string }[]).map((h) => [h.id, h.label]));
       this.#loaded = true;
       this.#renderForm();
@@ -132,39 +257,90 @@ class SignalPathView extends HTMLElement {
     }
   }
 
-  /** Switcher: geschaltete Quelle (`activeInput`) je Node — sie haben keine NMOS-Receiver (siehe withImplicitFeeds). */
-  async #implicitFeeds(graph: GraphData): Promise<Map<string, string>> {
-    const feeds = new Map<string, string>();
-    await Promise.all(graph.nodes.map(async (n) => {
-      if (!n.instanceId || this.#instances.get(n.instanceId)?.type !== "omp-switcher") return;
+  /**
+   * Switcher (`activeInput`) und Video-Mixer M/E (`crosspoint.programInput`, bei mehreren Ebenen `levelN.`-präfigiert)
+   * haben keine IS-05-Kanten zu ihren Quellen — die geschaltete Quelle wird als virtueller Eingang ergänzt (withImplicitFeeds).
+   */
+  async #implicitFeeds(graph: GraphData): Promise<Map<string, string[]>> {
+    const feeds = new Map<string, string[]>();
+    const read = async (nodeId: string, param: string): Promise<string> => {
       try {
-        const r = await apiFetch(`/api/v1/nodes/${n.id}/params/activeInput`);
+        const r = await apiFetch(`/api/v1/nodes/${nodeId}/params/${param}`);
         const v = r.ok ? ((await r.json()) as { value?: unknown }).value : undefined;
-        if (typeof v === "string" && v) feeds.set(n.id, v);
+        return typeof v === "string" ? v : "";
       } catch {
-        // Node nicht erreichbar — Kette endet dort wie bisher.
+        return ""; // Node nicht erreichbar — Kette endet dort wie bisher.
       }
+    };
+    await Promise.all(graph.nodes.map(async (n) => {
+      const type = n.instanceId ? this.#instances.get(n.instanceId)?.type : undefined;
+      let params: string[] = [];
+      if (type === "omp-switcher") params = ["activeInput"];
+      else if (type === "omp-video-mixer-me") {
+        const pgm = n.outputs.length;
+        params = pgm <= 1 ? ["crosspoint.programInput"] : n.outputs.map((_, i) => `level${i + 1}.crosspoint.programInput`);
+      } else return;
+      const ids = (await Promise.all(params.map((p) => read(n.id, p)))).filter(Boolean);
+      if (ids.length) feeds.set(n.id, [...new Set(ids)]);
     }));
     return feeds;
   }
 
+  /**
+   * Laufzeit-Probleme aus dem BCP-008-Status der Nodes (`monitor.overallStatus` + Meldung): Handy-Gateway ohne
+   * Sitzung/Bilder, Mischer mit nicht lesbaren Eingängen, Karten ohne Signal usw. Nodes ohne Monitor werden je Typ
+   * einmal erkannt und danach nicht mehr abgefragt.
+   */
+  async #runtimeProblems(graph: GraphData): Promise<Map<string, ProblemList>> {
+    const out = new Map<string, ProblemList>();
+    const read = async (nodeId: string, param: string): Promise<unknown> => {
+      try {
+        const r = await apiFetch(`/api/v1/nodes/${nodeId}/params/${param}`);
+        return r.ok ? ((await r.json()) as { value?: unknown }).value : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+    await Promise.all(graph.nodes.map(async (n) => {
+      const inst = n.instanceId ? this.#instances.get(n.instanceId) : undefined;
+      if (!inst || inst.crashed || (inst.type && this.#noMonitorTypes.has(inst.type))) return;
+      const status = await read(n.id, "monitor.overallStatus");
+      if (typeof status !== "string") {
+        if (inst.type) this.#noMonitorTypes.add(inst.type);
+        return;
+      }
+      if (status !== "Unhealthy" && status !== "PartiallyHealthy") return;
+      // Die Gesamtmeldung ist oft leer — dann die Meldungen der schlechten Teilbereiche (Sitzung, Bild, Link …) nehmen.
+      const texts: string[] = [];
+      const overall = await read(n.id, "monitor.overallStatusMessage");
+      if (typeof overall === "string" && overall) texts.push(overall);
+      else {
+        await Promise.all(["transmission", "connection", "essence", "stream", "link"].map(async (d) => {
+          const st = await read(n.id, `monitor.${d}Status`);
+          if (st === undefined || st === "Healthy" || st === "AllUp" || st === "Inactive" || st === "NotUsed") return;
+          const m = await read(n.id, `monitor.${d}StatusMessage`);
+          if (typeof m === "string" && m && !texts.includes(m)) texts.push(m);
+        }));
+      }
+      out.set(n.id, [{
+        severity: status === "Unhealthy" ? "error" : "warn",
+        text: t("sp.issue.monitor", { node: n.label, text: texts.join("; ") || status }),
+      }]);
+    }));
+    return out;
+  }
+
   /** Optionen neu aufbauen, Auswahl behalten (solange sie noch existiert). */
   #renderForm() {
-    const fill = (id: string, current: string, opts: { value: string; label: string }[], empty: string) => {
-      const sel = this.querySelector<HTMLSelectElement>(`#${id}`)!;
-      const list = [{ value: "", label: empty }, ...opts];
-      const sig = list.map((o) => o.value + "|" + o.label).join("\n");
-      if (sel.dataset.sig !== sig) {
-        sel.innerHTML = list.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("");
-        sel.dataset.sig = sig;
-      }
-      const keep = list.some((o) => o.value === current) ? current : "";
-      sel.value = keep;
-      return keep;
-    };
-    this.#from = fill("from", this.#from, senderOptions(this.#graph).map((o) => ({ value: o.id, label: o.label })), t("sp.chooseSource"));
-    this.#to = fill("to", this.#to, targetOptions(this.#graph), t("sp.chooseTarget"));
-    this.#via = fill("via", this.#via, nodeOptions(this.#graph).map((o) => ({ value: o.id, label: o.label })), t("sp.noVia"));
+    this.#opts.from = senderOptions(this.#graph).map((o) => ({ value: o.id, label: o.label }));
+    this.#opts.to = targetOptions(this.#graph);
+    this.#opts.via = nodeOptions(this.#graph).map((o) => ({ value: o.id, label: o.label }));
+    const ph = { from: "sp.chooseSource", to: "sp.chooseTarget", via: "sp.noVia" } as const;
+    for (const f of ["from", "to", "via"] as const) {
+      if (this.#get(f) && !this.#opts[f].some((o) => o.value === this.#get(f))) this.#set(f, "");
+      this.#cb(f).input.placeholder = t(ph[f]);
+      this.#syncInput(f);
+    }
   }
 
   #ctx = (nodeId: string): NodeContext => {
@@ -172,6 +348,7 @@ class SignalPathView extends HTMLElement {
     const inst = node?.instanceId ? this.#instances.get(node.instanceId) : undefined;
     if (!inst) return {};
     const ctx: NodeContext = {
+      problems: this.#problems.get(nodeId),
       hostKey: inst.hostId ?? "",
       hostLabel: inst.hostId ? this.#hostLabels.get(inst.hostId) || inst.hostId : t("sp.hostLocal"),
       crashed: inst.crashed,

@@ -195,6 +195,8 @@ pub struct Gateway {
     pub heartbeat: Arc<AtomicU64>,
     shutdown: Arc<AtomicBool>,
     latency: Arc<LatencyStats>,
+    /// Anzahl der bisher am Video-Ausgang angekommenen Bilder (für den BCP-008-Sender-Monitor).
+    frames: Arc<AtomicU64>,
 }
 
 impl Gateway {
@@ -253,6 +255,15 @@ impl Gateway {
             .set_state(gst::State::Playing)
             .map_err(|e| format!("set state playing: {e}"))?;
 
+        let frames = Arc::new(AtomicU64::new(0));
+        if let Some(pad) = video_tail.static_pad("src") {
+            let frames = frames.clone();
+            pad.add_probe(gst::PadProbeType::BUFFER, move |_, _| {
+                frames.fetch_add(1, Ordering::Relaxed);
+                gst::PadProbeReturn::Ok
+            });
+        }
+
         let shutdown = Arc::new(AtomicBool::new(false));
         let heartbeat = Arc::new(AtomicU64::new(0));
 
@@ -294,7 +305,12 @@ impl Gateway {
             heartbeat,
             shutdown,
             latency: Arc::new(LatencyStats::default()),
+            frames,
         }))
+    }
+
+    pub fn frames(&self) -> u64 {
+        self.frames.load(Ordering::Relaxed)
     }
 
     pub fn media_ready(&self) -> bool {

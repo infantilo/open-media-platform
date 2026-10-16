@@ -71,6 +71,38 @@ struct CameraStore {
     /// Handy-Sendeseite mit den Betriebswerten des Gateways als vorgewählte
     /// Auflösung/Bildrate (einmal beim Start gebaut).
     camera_page: Vec<u8>,
+    /// AMWA BCP-008-02 (Sender-Status): keine Sendesitzung bzw. keine Bilder → `Unhealthy` (s. `spawn_camera_monitor_tick`).
+    monitor: Arc<omp_node_sdk::Monitor>,
+}
+
+/// BCP-008-02-Tick der Kamera-Richtung (1 s): `transmissionStatus` folgt der WHIP-Sitzung (ohne Handy-Verbindung
+/// `Unhealthy`), `essenceStatus` zusätzlich dem Bildfluss (Sitzung steht, aber seit dem letzten Tick kein Bild →
+/// `Unhealthy`). Der Signalweg liest daraus „Gateway liefert kein Bild“.
+fn spawn_camera_monitor_tick(monitor: Arc<omp_node_sdk::Monitor>, gateway: Arc<pipeline::Gateway>) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(1));
+        let mut last_frames = gateway.frames();
+        loop {
+            ticker.tick().await;
+            let delay = monitor.status_reporting_delay();
+            let frames = gateway.frames();
+            let flowing = frames != last_frames;
+            last_frames = frames;
+            let connected = gateway.connection_state() == "connected";
+            let ok = omp_node_sdk::HealthLevel::Healthy;
+            let bad = omp_node_sdk::HealthLevel::Unhealthy;
+            monitor.activity.observe(
+                if connected { ok } else { bad },
+                delay,
+                Some("keine Sendesitzung: das Handy ist nicht verbunden"),
+            );
+            monitor.content.observe(
+                if connected && flowing { ok } else { bad },
+                delay,
+                Some(if connected { "Sitzung steht, aber es kommen keine Bilder an" } else { "keine Sendesitzung, daher kein Bild" }),
+            );
+        }
+    });
 }
 
 impl ParamStore for CameraStore {
@@ -82,9 +114,7 @@ impl ParamStore for CameraStore {
             range: None,
             readonly: true,
         };
-        Descriptor {
-            latency: None,
-            parameters: vec![
+        let mut parameters = vec![
                 ro("flowId", ParamType::String),
                 ro("audioFlowId", ParamType::String),
                 ro("whipEndpoint", ParamType::String),
@@ -98,9 +128,9 @@ impl ParamStore for CameraStore {
                 ro("e2eLatencyMs", ParamType::Number),
                 ro("e2eLatencyLastMs", ParamType::Number),
                 ro("e2eLatencyMaxMs", ParamType::Number),
-            ],
-            methods: vec![],
-        }
+        ];
+        parameters.extend(self.monitor.param_specs("monitor"));
+        Descriptor { latency: None, parameters, methods: self.monitor.method_specs("monitor") }
     }
 
     fn get(&self, name: &str) -> Option<Value> {
@@ -122,7 +152,7 @@ impl ParamStore for CameraStore {
             "e2eLatencyMaxMs" => Some(latency_value(
                 self.gateway.latency_stats().map(|(_, _, max)| max),
             )),
-            _ => None,
+            _ => self.monitor.get("monitor", name, None, Vec::new),
         }
     }
 
@@ -132,16 +162,19 @@ impl ParamStore for CameraStore {
             | "jitterbufferMs" | "e2eLatencyMs" | "e2eLatencyLastMs" | "e2eLatencyMaxMs" => {
                 Err(SetError::ReadOnly)
             }
-            _ => Err(SetError::Unknown),
+            _ => match self.monitor.set("monitor", name, &_value) {
+                Some(true) => Ok(()),
+                _ => Err(SetError::Unknown),
+            },
         }
     }
 
     fn invoke(
         &self,
-        _name: &str,
+        name: &str,
         _args: &serde_json::Map<String, Value>,
     ) -> Result<(), InvokeError> {
-        Err(InvokeError::Unknown)
+        if self.monitor.invoke("monitor", name) { Ok(()) } else { Err(InvokeError::Unknown) }
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
@@ -317,7 +350,11 @@ async fn run_camera(common: Common) -> Result<(), Box<dyn std::error::Error + Se
     let tally_state = tally::TallyState::new(&env_or("OMP_TALLY_SOURCES", ""));
     let tally_nats = nats_url.clone();
     let tally_registry = registry_url.clone();
+    let monitor = Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Sender));
+    monitor.activate();
+    spawn_camera_monitor_tick(monitor.clone(), gateway.clone());
     let store: Arc<dyn ParamStore> = Arc::new(CameraStore {
+        monitor,
         tally: tally_state.clone(),
         flow_id: flow_id.clone(),
         audio_flow_id: audio_flow_id.clone(),
@@ -546,6 +583,35 @@ struct MonitorStore {
     // S. `CameraStore::active_token`-Doku (Bugliste 2026-09-25 #1) — hier
     // für die WHEP-Monitor-Sitzung (Retourbild) statt WHIP-Kamera.
     active_token: Mutex<Option<String>>,
+    /// AMWA BCP-008-01 (Receiver-Status), s. `spawn_monitor_direction_tick`.
+    bcp: Arc<omp_node_sdk::Monitor>,
+}
+
+/// BCP-008-Tick der Monitor-Richtung (1 s): `connectionStatus` = ist eine Quelle (MXL-Flow) verbunden; `streamStatus` =
+/// Handy-Sitzung steht UND es sind Bilder von der Quelle angekommen. Der Signalweg zeigt daraus „Handy-Monitor ohne Bild“.
+fn spawn_monitor_direction_tick(
+    bcp: Arc<omp_node_sdk::Monitor>,
+    monitor: Arc<monitor::Monitor>,
+    connected_video: Arc<Mutex<String>>,
+) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            ticker.tick().await;
+            let delay = bcp.status_reporting_delay();
+            let ok = omp_node_sdk::HealthLevel::Healthy;
+            let bad = omp_node_sdk::HealthLevel::Unhealthy;
+            let source = !connected_video.lock().expect("lock poisoned").is_empty();
+            let session = monitor.connection_state() == "connected";
+            let flowing = monitor.media_ready();
+            bcp.activity.observe(if source { ok } else { bad }, delay, Some("keine Quelle am Handy-Monitor verbunden"));
+            bcp.content.observe(
+                if session && flowing { ok } else { bad },
+                delay,
+                Some(if !session { "Handy nicht verbunden, das Retourbild geht nirgends hin" } else { "Handy verbunden, aber von der Quelle kommen keine Bilder" }),
+            );
+        }
+    });
 }
 
 impl ParamStore for MonitorStore {
@@ -557,9 +623,7 @@ impl ParamStore for MonitorStore {
             range: None,
             readonly: true,
         };
-        Descriptor {
-            latency: None,
-            parameters: vec![
+        let mut parameters = vec![
                 ro("direction", ParamType::String),
                 ro("whepEndpoint", ParamType::String),
                 ro("connectionState", ParamType::String),
@@ -570,9 +634,9 @@ impl ParamStore for MonitorStore {
                 ro("audioFlowing", ParamType::Boolean),
                 ro("bitrateKbps", ParamType::Number),
                 ro("syncGate", ParamType::String),
-            ],
-            methods: vec![],
-        }
+        ];
+        parameters.extend(self.bcp.param_specs("monitor"));
+        Descriptor { latency: None, parameters, methods: self.bcp.method_specs("monitor") }
     }
 
     fn get(&self, name: &str) -> Option<Value> {
@@ -593,7 +657,7 @@ impl ParamStore for MonitorStore {
             "audioFlowing" => Some(serde_json::json!(self.monitor.audio_flowed())),
             "bitrateKbps" => Some(serde_json::json!(self.monitor.bitrate_kbps())),
             "syncGate" => Some(serde_json::json!(self.monitor.sync_gate())),
-            _ => None,
+            _ => self.bcp.get("monitor", name, None, Vec::new),
         }
     }
 
@@ -603,16 +667,19 @@ impl ParamStore for MonitorStore {
             | "audioFlowId" | "videoFlowing" | "audioFlowing" | "bitrateKbps" | "syncGate" => {
                 Err(SetError::ReadOnly)
             }
-            _ => Err(SetError::Unknown),
+            _ => match self.bcp.set("monitor", name, &_value) {
+                Some(true) => Ok(()),
+                _ => Err(SetError::Unknown),
+            },
         }
     }
 
     fn invoke(
         &self,
-        _name: &str,
+        name: &str,
         _args: &serde_json::Map<String, Value>,
     ) -> Result<(), InvokeError> {
-        Err(InvokeError::Unknown)
+        if self.bcp.invoke("monitor", name) { Ok(()) } else { Err(InvokeError::Unknown) }
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
@@ -790,7 +857,11 @@ async fn run_monitor(common: Common) -> Result<(), Box<dyn std::error::Error + S
         },
     ));
 
+    let bcp = Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Receiver));
+    bcp.activate();
+    spawn_monitor_direction_tick(bcp.clone(), monitor.clone(), connected_video.clone());
     let store: Arc<dyn ParamStore> = Arc::new(MonitorStore {
+        bcp,
         monitor: monitor.clone(),
         video_connection,
         audio_connection,

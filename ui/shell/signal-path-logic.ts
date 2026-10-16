@@ -67,27 +67,30 @@ export interface PathQuery {
  * geschalteten Quelle) wird je Node ein virtueller Eingang samt aktiver Kante ergänzt. `feeds`: Node-ID → Sender-ID.
  * Unbekannte oder selbstreferenzierende Sender werden ignoriert; der Graph selbst bleibt unverändert.
  */
-export function withImplicitFeeds(g: GraphData, feeds: Map<string, string>): GraphData {
+export function withImplicitFeeds(g: GraphData, feeds: Map<string, string | string[]>): GraphData {
   if (!feeds.size) return g;
   const senders = new Map<string, GraphPort>();
   for (const n of g.nodes) for (const p of n.outputs) senders.set(p.id, p);
-  const extraIn = new Map<string, GraphPort>();
+  const extraIn = new Map<string, GraphPort[]>();
   const edges = [...g.edges];
-  for (const [nodeId, senderId] of feeds) {
+  for (const [nodeId, feed] of feeds) {
     const node = g.nodes.find((n) => n.id === nodeId);
-    const sender = senders.get(senderId);
-    if (!node || !sender || node.outputs.some((o) => o.id === senderId)) continue;
-    const port: GraphPort = {
-      id: `implicit:${nodeId}`,
-      label: t("sp.activeInput"),
-      format: sender.format,
-      transport: sender.transport,
-    };
-    extraIn.set(nodeId, port);
-    edges.push({ id: `implicit:${nodeId}:${senderId}`, fromSender: senderId, toReceiver: port.id, state: "active" });
+    if (!node) continue;
+    for (const senderId of Array.isArray(feed) ? feed : [feed]) {
+      const sender = senders.get(senderId);
+      if (!sender || node.outputs.some((o) => o.id === senderId)) continue;
+      const port: GraphPort = {
+        id: `implicit:${nodeId}:${senderId}`,
+        label: t("sp.activeInput"),
+        format: sender.format,
+        transport: sender.transport,
+      };
+      extraIn.set(nodeId, [...(extraIn.get(nodeId) ?? []), port]);
+      edges.push({ id: `implicit:${nodeId}:${senderId}`, fromSender: senderId, toReceiver: port.id, state: "active" });
+    }
   }
   return {
-    nodes: g.nodes.map((n) => (extraIn.has(n.id) ? { ...n, inputs: [...n.inputs, extraIn.get(n.id)!] } : n)),
+    nodes: g.nodes.map((n) => (extraIn.has(n.id) ? { ...n, inputs: [...n.inputs, ...extraIn.get(n.id)!] } : n)),
     edges,
   };
 }
@@ -254,6 +257,8 @@ export interface NodeContext {
   hostLabel?: string;
   hostKey?: string; // "" = lokaler Host, undefined = unbekannt
   crashed?: boolean;
+  /** Laufzeit-Probleme der Node aus ihrem BCP-008-Status (z. B. Handy-Gateway ohne Sitzung), schon als Klartext. */
+  problems?: { severity: IssueSeverity; text: string }[];
   /** Berechneter Netzbedarf der Node in Mbit/s (nur Nodes mit Netzverkehr, z. B. Gateways). */
   netRxMbps?: number;
   netTxMbps?: number;
@@ -312,6 +317,7 @@ export function diagnosePath(path: Hop[], ctx: (nodeId: string) => NodeContext, 
   nodes.forEach((n, k) => {
     if (n.health !== "ok") issues.push({ severity: "error", position: 2 * k, text: t("sp.issue.offline", { node: n.label }) });
     if (ctx(n.id).crashed) issues.push({ severity: "error", position: 2 * k, text: t("sp.issue.crashed", { node: n.label }) });
+    for (const p of ctx(n.id).problems ?? []) issues.push({ severity: p.severity, position: 2 * k, text: p.text });
   });
   nodes.forEach((n, k) => {
     const c = ctx(n.id);
