@@ -26,6 +26,7 @@
 //! sind damit nach §11.1 Punkt 3 („Custom-Klassen nur für das
 //! domänen-Eigene") korrekt, kein Standard wird dupliziert.
 
+mod freeze;
 mod pipeline;
 mod uibundle;
 
@@ -186,6 +187,8 @@ struct MixerStore {
     /// die UI-Anzeige, welcher "Mixer"-Button gerade leuchten soll.
     active_pip_preset: PerLevel<Option<String>>,
     pipeline: pipeline::PipelineHandle,
+    /// Freezes (Standbilder des PGM, wie Quellen aufrufbar), s. `freeze.rs`.
+    freezes: Arc<freeze::Freezes>,
     /// AMWA BCP-008-01 (NMOS Receiver Status Monitoring, `docs/
     /// decisions.md` BCP-008-Nachtrag) — informell wie bei `omp-srt-
     /// gateway`: die Crosspoint-Eingänge sind fremde NMOS-Sender, keine
@@ -279,6 +282,13 @@ impl ParamStore for MixerStore {
                     range: None,
                     readonly: true,
                 }))
+                .chain(std::iter::once(ParamSpec {
+                    name: "freeze.list".to_string(),
+                    kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                }))
                 .chain(self.monitor.param_specs("monitor"))
                 .collect(),
             methods: (0..level_count(self))
@@ -298,6 +308,19 @@ impl ParamStore for MixerStore {
                         kind: ParamType::Number,
                     }],
                 }))
+                .chain([
+                    MethodSpec {
+                        name: "freeze.delete".to_string(),
+                        args: vec![MethodArg { name: "id".to_string(), kind: ParamType::String }],
+                    },
+                    MethodSpec {
+                        name: "freeze.rename".to_string(),
+                        args: vec![
+                            MethodArg { name: "id".to_string(), kind: ParamType::String },
+                            MethodArg { name: "name".to_string(), kind: ParamType::String },
+                        ],
+                    },
+                ])
                 .chain(self.monitor.method_specs("monitor"))
                 .collect(),
         }
@@ -306,6 +329,9 @@ impl ParamStore for MixerStore {
     fn get(&self, name: &str) -> Option<Value> {
         if name == "handoverPending" {
             return Some(serde_json::json!(self.pipeline.handover_pending()));
+        }
+        if name == "freeze.list" {
+            return Some(self.freezes.list_json());
         }
         level_get(self, name).or_else(|| self.monitor.get("monitor", name, None, Vec::new))
     }
@@ -673,6 +699,11 @@ fn level_method_specs(level_count: usize, level: usize) -> Vec<MethodSpec> {
             name: n("pip.applyPreset"),
             args: vec![MethodArg { name: "id".to_string(), kind: ParamType::String }],
         },
+        // Freeze: aktuelles PGM-Bild dieser Ebene als Standbild aufnehmen (Name optional).
+        MethodSpec {
+            name: n("freeze.capture"),
+            args: vec![MethodArg { name: "name".to_string(), kind: ParamType::String }],
+        },
     ]
 }
 
@@ -816,8 +847,22 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
         store.pipeline.set_output_delay(0, frames);
         return Ok(());
     }
+    if name == "freeze.delete" {
+        let id = args.get("id").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+        return if store.freezes.delete(id) { Ok(()) } else { Err(InvokeError::Unknown) };
+    }
+    if name == "freeze.rename" {
+        let id = args.get("id").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+        let new_name = args.get("name").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+        return if store.freezes.rename(id, new_name) { Ok(()) } else { Err(InvokeError::Unknown) };
+    }
     let (level, base) = parse_level(name, level_count(store)).ok_or(InvokeError::Unknown)?;
     match base {
+        "freeze.capture" => {
+            let name = args.get("name").and_then(Value::as_str).map(str::to_string);
+            store.freezes.capture(level, name);
+            Ok(())
+        }
         "crosspoint.select" => {
             let sender_id = args
                 .get("senderId")
@@ -1260,6 +1305,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // warum das kein bloßer `ElementFactory::find`-Check ist), nicht pro
     // Pipeline-Neuaufbau.
     let hwaccel = omp_mediaio::hwaccel::HwAccel::probe();
+    let stills: pipeline::StillStore = Arc::new(Mutex::new(HashMap::new()));
 
     let pipeline_config = pipeline::Config {
         domain,
@@ -1268,6 +1314,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         width,
         height,
         hwaccel,
+        stills: stills.clone(),
     };
     let pipeline_shutdown = shutdown.clone();
     let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
@@ -1310,7 +1357,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let active_pip_preset: PerLevel<Option<String>> =
         (0..level_count).map(|_| Arc::new(Mutex::new(None))).collect();
 
+    // Freezes liegen je Mischer-Label im Datenverzeichnis (Instanz-IDs wechseln bei jedem Workflow-Start).
+    let freeze_dir = std::env::var("OMP_FREEZE_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| {
+        let base = std::env::var("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|_| std::env::var("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share")))
+            .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        let safe: String = label.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+        base.join("omp").join("mixer-freezes").join(safe)
+    });
+    let freezes = freeze::Freezes::load(freeze_dir, width, height, stills.clone(), inputs.clone(), pipeline_handle.clone(), pinned.clone());
     let store: Arc<dyn ParamStore> = Arc::new(MixerStore {
+        freezes: freezes.clone(),
         width,
         height,
         inputs: inputs.clone(),
@@ -1394,7 +1452,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         registry_url.clone(),
         sender_ids,
         pipeline_handle,
-        inputs.clone(),
+        freezes.clone(),
         keyfill_inputs,
     );
 
@@ -1410,6 +1468,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         keyer_enabled,
         pip_enabled,
         transition_position,
+        freezes,
     );
 
     tokio::select! {
@@ -1534,9 +1593,18 @@ async fn handle_events(
     keyer_enabled: PerLevel<bool>,
     pip_enabled: PerLevel<bool>,
     transition_position: PerLevel<f64>,
+    freezes: Arc<freeze::Freezes>,
 ) {
     while let Some(event) = rx.recv().await {
         match event {
+            pipeline::Event::FreezeCaptured { id, result } => {
+                let f = freezes.clone();
+                let message = tokio::task::spawn_blocking(move || f.on_captured(&id, result)).await.ok().flatten();
+                if let Some(m) = message {
+                    eprintln!("omp-video-mixer-me: {m}");
+                    handle.publish_alert(m).await;
+                }
+            }
             pipeline::Event::Error(message) => {
                 eprintln!("omp-video-mixer-me: pipeline error: {message}");
                 handle.publish_alert(message).await;
@@ -1555,6 +1623,7 @@ async fn handle_events(
                         .iter()
                         .find(|i| i.sender_id == sender_id)
                         .map(|i| i.device_id.clone())
+                        .filter(|d| !d.is_empty()) // Freezes haben kein Gerät/keine Tally-Node
                 };
                 // Nutzerwunsch 2026-08-14 ("mehrere Mischerebenen"):
                 // Tally-AUS für `prev_sender` nur, wenn KEINE andere
@@ -1740,7 +1809,7 @@ async fn discovery_loop(
     registry_url: String,
     own_sender_ids: Vec<String>,
     pipeline: pipeline::PipelineHandle,
-    inputs: Arc<Mutex<Vec<DiscoveredInput>>>,
+    freezes: Arc<freeze::Freezes>,
     keyfill_inputs: Arc<Mutex<Vec<DiscoveredKeyFill>>>,
 ) {
     let registry = RegistryClient::new(registry_url);
@@ -1767,8 +1836,8 @@ async fn discovery_loop(
         *keyfill_inputs.lock().expect("lock poisoned") = discovered_keyfill.clone();
         pipeline.set_keyfill_inputs(discovered_keyfill);
 
-        *inputs.lock().expect("lock poisoned") = discovered.clone();
-        pipeline.set_inputs(discovered);
+        // Registry-Quellen + Freezes (Standbilder) zusammen als Eingänge.
+        freezes.publish(Some(discovered));
     }
 }
 

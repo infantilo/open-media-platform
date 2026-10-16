@@ -323,7 +323,22 @@ pub struct Config {
     /// (`omp_mediaio::hwaccel::HwAccel::probe()` in `main.rs`), hier nur
     /// durchgereicht — kein wiederholter Selbsttest pro Pipeline-Aufbau.
     pub hwaccel: omp_mediaio::hwaccel::HwAccel,
+    /// Freeze-Speicher (s. `StillStore`).
+    pub stills: StillStore,
 }
+
+/// Standbild ("Freeze") eines PGM-Bildes: RGBA in Mischer-Auflösung, Zeile für Zeile ohne Padding.
+pub struct Still {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// Geteilter Speicher aller Freezes (Schlüssel = Freeze-ID); `main.rs` lädt/speichert, die Pipeline liest.
+pub type StillStore = Arc<Mutex<HashMap<String, Arc<Still>>>>;
+
+/// Präfix von Flow-/Sender-ID eines Freezes: `freeze:<id>`. So erscheint ein Freeze wie eine normale Quelle.
+pub const FREEZE_PREFIX: &str = "freeze:";
 
 #[derive(Debug, Clone)]
 pub struct DiscoveredInput {
@@ -388,6 +403,8 @@ impl Default for DveBox {
 
 pub enum Event {
     Error(String),
+    /// Ergebnis von `capture_freeze`: Standbild liegt (Ok) im `StillStore` oder der Grund (Err).
+    FreezeCaptured { id: String, result: Result<(), String> },
     /// Positives Gegenstück zu `Error` für den Missing-Input-Retry
     /// (Nachtrag 2026-09-13, Root-Cause-Session "mixer recovery bug"):
     /// der Retry-Erfolg selbst wurde bisher NIRGENDS geloggt — nur der
@@ -464,6 +481,8 @@ enum Command {
     SetKeyerSource(usize, Option<String>),
     SetPipEnabled(usize, bool),
     SetPipSource(usize, Option<String>),
+    /// Freeze: letztes PGM-Bild der Ebene als Standbild unter dieser ID im `StillStore` ablegen.
+    CaptureFreeze(usize, String),
     /// PIP-Fahrt (Nutzerauftrag 2026-09-29): setzt die Box sofort auf
     /// `from`, fährt in `duration_ms` (Ease in/out) nach `to`; mit
     /// `then_disable` wird PIP am Ende ausgeschaltet.
@@ -673,6 +692,11 @@ impl PipelineHandle {
     /// `sender_id` wählt eine beliebige Crosspoint-Quelle (`crosspoint.
     /// inputs`, kein Fill+Key-Paar nötig — PIP zeigt ein normales Bild),
     /// `None` schaltet auf den Schwarzbild-Fallback zurück.
+    /// Nimmt das aktuelle PGM-Bild der Ebene als Standbild `id` auf (Ergebnis kommt als `Event::FreezeCaptured`).
+    pub fn capture_freeze(&self, level: usize, id: String) {
+        let _ = self.commands.send(Command::CaptureFreeze(level, id));
+    }
+
     pub fn set_pip_source(&self, level: usize, sender_id: Option<String>) {
         let _ = self.commands.send(Command::SetPipSource(level, sender_id));
     }
@@ -1133,7 +1157,9 @@ fn remove_mxl_video_input(pipeline: &gst::Pipeline, mxl_input: MxlVideoInput) {
 /// gesamte Lebensdauer in Highres (s. Moduldoku "Kapitel 15 Teil 3
 /// (Rest 2) rückgebaut") — kein Hot-Swap-Ziel mehr.
 struct SourceBranch {
-    mxl_input: MxlVideoInput,
+    /// `None` bei einem Freeze (`feeder` liefert dort die Bilder).
+    mxl_input: Option<MxlVideoInput>,
+    feeder: Option<StillFeeder>,
     /// CPU-Gate (s. `refresh_source_gates`): `false` = Puffer dieses Eingangs
     /// werden direkt hinter dem `MxlVideoInput` verworfen, bevor die teure
     /// Konvertierung/Skalierung läuft. Nur ein Pad-Probe-Flag — kein
@@ -1305,12 +1331,109 @@ fn build_source_branch(
     }
 
     Ok(SourceBranch {
-        mxl_input,
+        mxl_input: Some(mxl_input),
+        feeder: None,
         gate,
         chain_elements: elements,
         tee,
         taps: Vec::new(),
     })
+}
+
+/// Liefert das Standbild eines Freezes als Live-Quelle: 25 B/s dasselbe Bild (Puffer-Kopien teilen den Speicher).
+/// Folgt dem CPU-Gate wie ein MXL-Eingang (geschlossen = kein Bild gepusht).
+struct StillFeeder {
+    appsrc: gstreamer_app::AppSrc,
+    buffer: gst::Buffer,
+    stop: Arc<AtomicBool>,
+    started: AtomicBool,
+    gate: Arc<AtomicBool>,
+}
+
+impl StillFeeder {
+    fn start(&self) {
+        if self.started.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let appsrc = self.appsrc.clone();
+        let buffer = self.buffer.clone();
+        let stop = self.stop.clone();
+        let gate = self.gate.clone();
+        std::thread::spawn(move || {
+            let period = Duration::from_nanos(1_000_000_000 * FRAMERATE_DENOMINATOR as u64 / FRAMERATE_NUMERATOR as u64);
+            let mut next = Instant::now();
+            while !stop.load(Ordering::Relaxed) {
+                if gate.load(Ordering::Relaxed) {
+                    let mut b = buffer.copy();
+                    if let Some(m) = b.get_mut() {
+                        m.set_duration(gst::ClockTime::from_nseconds(period.as_nanos() as u64));
+                    }
+                    if appsrc.push_buffer(b).is_err() {
+                        break;
+                    }
+                }
+                next += period;
+                let now = Instant::now();
+                if next > now {
+                    std::thread::sleep(next - now);
+                } else {
+                    next = now;
+                }
+            }
+        });
+    }
+}
+
+/// Baut den `SourceBranch` eines Freezes: `appsrc` (RGBA, Mischer-Auflösung) → `tee`, der Feeder startet erst mit
+/// `activate_now` bzw. nach den Abgriffen (`add_input_live`), wie der MXL-Reader (Tee-Race-Notiz oben).
+fn build_still_branch(
+    pipeline: &gst::Pipeline,
+    still: &Still,
+    name_suffix: &str,
+    width: u32,
+    height: u32,
+    activate_now: bool,
+) -> Result<SourceBranch, String> {
+    if still.width != width || still.height != height || still.rgba.len() != (width * height * 4) as usize {
+        return Err(format!("Freeze hat {}x{}, der Mischer {}x{}", still.width, still.height, width, height));
+    }
+    let appsrc = gstreamer_app::AppSrc::builder()
+        .caps(&rgba_caps(width, height))
+        .is_live(true)
+        .format(gst::Format::Time)
+        .do_timestamp(true)
+        .block(false)
+        .build();
+    let tee = gst::ElementFactory::make("tee")
+        .property("allow-not-linked", true)
+        .build()
+        .map_err(|e| format!("tee ({name_suffix}): {e}"))?;
+    let src_el: gst::Element = appsrc.clone().upcast();
+    pipeline.add(&src_el).map_err(|e| format!("add freeze appsrc ({name_suffix}): {e}"))?;
+    if let Err(e) = pipeline.add(&tee) {
+        remove_elements(pipeline, &[src_el]);
+        return Err(format!("add tee ({name_suffix}): {e}"));
+    }
+    let linked = gst::Element::link(&src_el, &tee)
+        .map_err(|e| format!("link freeze appsrc->tee ({name_suffix}): {e}"))
+        .and_then(|()| tee.sync_state_with_parent().map_err(|e| format!("sync tee ({name_suffix}): {e}")))
+        .and_then(|()| src_el.sync_state_with_parent().map_err(|e| format!("sync freeze appsrc ({name_suffix}): {e}")));
+    if let Err(e) = linked {
+        remove_elements(pipeline, &[src_el, tee]);
+        return Err(e);
+    }
+    let gate = Arc::new(AtomicBool::new(true));
+    let feeder = StillFeeder {
+        appsrc,
+        buffer: gst::Buffer::from_slice(still.rgba.clone()),
+        stop: Arc::new(AtomicBool::new(false)),
+        started: AtomicBool::new(false),
+        gate: gate.clone(),
+    };
+    if activate_now {
+        feeder.start();
+    }
+    Ok(SourceBranch { mxl_input: None, feeder: Some(feeder), gate, chain_elements: vec![src_el], tee, taps: Vec::new() })
 }
 
 /// Baut den Elemente-Satz eines `SourceBranch`s vollständig ab (Gegenstück
@@ -1326,9 +1449,15 @@ fn teardown_source_branch(pipeline: &gst::Pipeline, branch: SourceBranch) {
     // Element, s. `build_source_branch`) — kein doppelter Eintrag nötig,
     // `remove_elements` verträgt ohnehin ein bereits entferntes Element
     // (stiller No-Op, `let _ = pipeline.remove(el)`).
+    if let Some(feeder) = &branch.feeder {
+        feeder.stop.store(true, Ordering::Relaxed);
+        std::thread::sleep(Duration::from_millis(50));
+    }
     remove_elements(pipeline, &branch.chain_elements);
     remove_elements(pipeline, &[branch.tee]);
-    remove_mxl_video_input(pipeline, branch.mxl_input);
+    if let Some(mxl_input) = branch.mxl_input {
+        remove_mxl_video_input(pipeline, mxl_input);
+    }
 }
 
 /// Zapft `branch` per neuem `tee`-Src-Pad für genau einen Verbraucher an
@@ -1418,18 +1547,24 @@ fn build_one_input(
     height: u32,
     hwaccel: omp_mediaio::hwaccel::HwAccel,
     activate_now: bool,
+    stills: &StillStore,
 ) -> Result<(Vec<gst::Pad>, Vec<gst::Pad>, Vec<gst::Pad>, SourceBranch), String> {
-    let mut branch = build_source_branch(
-        pipeline,
-        context,
-        &input.flow_id,
-        &input.sender_id,
-        &format!("input-{pad_index}"),
-        width,
-        height,
-        hwaccel,
-        activate_now,
-    )?;
+    let mut branch = if let Some(id) = input.flow_id.strip_prefix(FREEZE_PREFIX) {
+        let still = stills.lock().expect("lock poisoned").get(id).cloned().ok_or_else(|| format!("Freeze {id} nicht im Speicher"))?;
+        build_still_branch(pipeline, &still, &format!("input-{pad_index}"), width, height, activate_now)?
+    } else {
+        build_source_branch(
+            pipeline,
+            context,
+            &input.flow_id,
+            &input.sender_id,
+            &format!("input-{pad_index}"),
+            width,
+            height,
+            hwaccel,
+            activate_now,
+        )?
+    };
 
     // Rollback-Hilfe: alle bereits erfolgreich angeforderten (isel, pad)
     // -Paare, damit ein Fehlschlag auf einer SPÄTEREN Ebene die bereits
@@ -1524,6 +1659,8 @@ struct LevelPipeline {
     /// beim `Drop` (s. `build_keyfill_tail`).
     _keyer_keyfill: Option<(MxlVideoInput, MxlVideoInput)>,
     flowed: Arc<AtomicBool>,
+    /// Letztes PGM-Bild (Quelle für Freezes).
+    last_frame: Arc<Mutex<Option<gst::Sample>>>,
 }
 
 /// Der volle gebaute Pipeline-Zustand: EIN geteiltes `gst::Pipeline`-
@@ -1624,6 +1761,24 @@ fn attach_flip_probe(comp: &gst::Element, level: usize, frame_ns: u64) {
         }
         gst::PadProbeReturn::Ok
     });
+}
+
+/// Kopiert das letzte PGM-Bild der Ebene als RGBA-Standbild (Mischer-Auflösung, ohne Zeilen-Padding).
+fn capture_still(lvl: &LevelPipeline, width: u32, height: u32) -> Result<Still, String> {
+    let sample = lvl.last_frame.lock().expect("lock poisoned").clone().ok_or("noch kein Bild am Ausgang")?;
+    let caps = sample.caps().ok_or("Bild ohne Caps")?;
+    let st = caps.structure(0).ok_or("Caps ohne Struktur")?;
+    let fmt = st.get::<&str>("format").unwrap_or("?");
+    let (w, h) = (st.get::<i32>("width").unwrap_or(0) as u32, st.get::<i32>("height").unwrap_or(0) as u32);
+    if fmt != "RGBA" || w != width || h != height {
+        return Err(format!("Ausgangsbild ist {fmt} {w}x{h}, erwartet RGBA {width}x{height}"));
+    }
+    let buffer = sample.buffer().ok_or("Bild ohne Puffer")?;
+    let map = buffer.map_readable().map_err(|e| format!("Puffer nicht lesbar: {e}"))?;
+    if map.len() != (width * height * 4) as usize {
+        return Err(format!("Ausgangsbild hat {} Bytes, erwartet {}", map.len(), width * height * 4));
+    }
+    Ok(Still { width, height, rgba: map.as_slice().to_vec() })
 }
 
 /// Aufgelöste PIP-Quelle einer Ebene: "pst:N" (1-basierte Ebene N) folgt dem Preset-Bus dieser Ebene,
@@ -1826,6 +1981,7 @@ struct PartialLevel {
     mxl_output: MxlVideoOutput,
     keyer_keyfill: Option<(MxlVideoInput, MxlVideoInput)>,
     flowed: Arc<AtomicBool>,
+    last_frame: Arc<Mutex<Option<gst::Sample>>>,
 }
 
 /// Baut die Mixer-Pipeline. Ein einzelner kaputter Eingang (z. B. ein
@@ -2149,6 +2305,18 @@ fn build(
         if let Some(pad) = comp_out_caps.static_pad("src") {
             dbg_probe(&pad, format!("{}/comp-out{level_idx}", pipeline.name()));
         }
+        // Letztes PGM-Bild dieser Ebene (nur eine Referenz, kein Kopieren) — Quelle für `freeze.capture`.
+        let last_frame: Arc<Mutex<Option<gst::Sample>>> = Arc::new(Mutex::new(None));
+        if let Some(pad) = comp_out_caps.static_pad("src") {
+            let slot = last_frame.clone();
+            let caps_pad = pad.clone();
+            pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+                if let (Some(buf), Some(caps)) = (info.buffer(), caps_pad.current_caps()) {
+                    *slot.lock().expect("lock poisoned") = Some(gst::Sample::builder().buffer(buf).caps(&caps).build());
+                }
+                gst::PadProbeReturn::Ok
+            });
+        }
 
         let mxl_output = MxlVideoOutput::new_from_rgba(
             &pipeline,
@@ -2180,6 +2348,7 @@ fn build(
             mxl_output,
             keyer_keyfill,
             flowed,
+            last_frame,
         });
     }
 
@@ -2202,7 +2371,7 @@ fn build(
     let mut warnings = Vec::new();
     for (i, input) in inputs.iter().enumerate() {
         let pad_index = i + 1;
-        match build_one_input(&pipeline, context, &isels, &isel_bgs, &isel_pips, input, pad_index, config.width, config.height, config.hwaccel, true) {
+        match build_one_input(&pipeline, context, &isels, &isel_bgs, &isel_pips, input, pad_index, config.width, config.height, config.hwaccel, true, &config.stills) {
             Ok((fg_pads, bg_pads, pip_pads, branch)) => {
                 for (level_idx, pad) in pip_pads.into_iter().enumerate() {
                     source_pads_pip[level_idx].insert(input.sender_id.clone(), pad);
@@ -2246,6 +2415,7 @@ fn build(
             _mxl_output: partial.mxl_output,
             _keyer_keyfill: partial.keyer_keyfill,
             flowed: partial.flowed,
+            last_frame: partial.last_frame,
         });
     }
 
@@ -2273,6 +2443,7 @@ fn add_input_live(
     width: u32,
     height: u32,
     hwaccel: omp_mediaio::hwaccel::HwAccel,
+    stills: &StillStore,
 ) -> Result<(), String> {
     let isels: Vec<gst::Element> = p.levels.iter().map(|l| l.isel.clone()).collect();
     let isel_bgs: Vec<gst::Element> = p.levels.iter().map(|l| l.isel_bg.clone()).collect();
@@ -2280,8 +2451,11 @@ fn add_input_live(
     p.next_pad_index += 1;
     let isel_pips: Vec<gst::Element> = p.levels.iter().map(|l| l.isel_pip.clone()).collect();
     let (fg_pads, bg_pads, pip_pads, branch) =
-        build_one_input(&p.pipeline, context, &isels, &isel_bgs, &isel_pips, input, pad_index, width, height, hwaccel, false)?;
-    if let Err(e) = branch.mxl_input.activate() {
+        build_one_input(&p.pipeline, context, &isels, &isel_bgs, &isel_pips, input, pad_index, width, height, hwaccel, false, stills)?;
+    if let Some(feeder) = &branch.feeder {
+        feeder.start();
+    }
+    if let Err(e) = branch.mxl_input.as_ref().map_or(Ok(()), |m| m.activate()) {
         for (isel, pad) in isels.iter().zip(&fg_pads) {
             isel.release_request_pad(pad);
         }
@@ -2302,6 +2476,10 @@ fn add_input_live(
     }
     for (lvl, pad) in p.levels.iter_mut().zip(pip_pads) {
         lvl.source_pads_pip.insert(input.sender_id.clone(), pad);
+    }
+    // Freeze: Feeder erst jetzt starten (nach allen Abgriffen), s. `build_still_branch`.
+    if let Some(feeder) = &branch.feeder {
+        feeder.start();
     }
     p._branches.insert(input.sender_id.clone(), branch);
     Ok(())
@@ -2383,7 +2561,7 @@ fn process_handovers(
     }
     let mut done: Vec<usize> = Vec::new();
     for (i, h) in handovers.iter().enumerate() {
-        let new_flowing = p._branches.get(&h.new).is_some_and(|b| b.mxl_input.flowed_handle().load(Ordering::Relaxed));
+        let new_flowing = p._branches.get(&h.new).is_some_and(|b| b.mxl_input.as_ref().is_some_and(|m| m.flowed_handle().load(Ordering::Relaxed)));
         let timed_out = h.since.elapsed() >= HANDOVER_TIMEOUT;
         if !(new_flowing || timed_out) || (new_flowing && fading) {
             continue;
@@ -2446,7 +2624,7 @@ fn apply_input_delta(
         if p._branches.contains_key(&added.sender_id) {
             continue;
         }
-        if let Err(e) = add_input_live(p, context, added, config.width, config.height, config.hwaccel) {
+        if let Err(e) = add_input_live(p, context, added, config.width, config.height, config.hwaccel, &config.stills) {
             warnings.push(format!("input {} ({}) übersprungen: {e}", added.sender_id, added.label));
             missing.push(added.sender_id.clone());
         }
@@ -3028,6 +3206,15 @@ pub fn run(
                 pip_sources[level] = source;
             }
             Ok(Command::SetPipSource(..)) => {}
+            Ok(Command::CaptureFreeze(level, id)) => {
+                let result = match active.as_ref().and_then(|p| p.levels.get(level)) {
+                    Some(lvl) => capture_still(lvl, config.width, config.height).map(|still| {
+                        config.stills.lock().expect("lock poisoned").insert(id.clone(), Arc::new(still));
+                    }),
+                    None => Err("keine aktive Pipeline".to_string()),
+                };
+                let _ = tx.send(Event::FreezeCaptured { id, result });
+            }
             Ok(Command::SelectPreset(level, sender_id)) => {
                 // Reine Metadaten-Änderung, bewusst ohne Pipeline-
                 // Seiteneffekt: `isel_bg` bleibt bis zu `cut()`/
@@ -3404,7 +3591,7 @@ pub fn run(
                         if p._branches.contains_key(&id) {
                             continue;
                         }
-                        match add_input_live(p, &context, &input, config.width, config.height, config.hwaccel) {
+                        match add_input_live(p, &context, &input, config.width, config.height, config.hwaccel, &config.stills) {
                             Ok(()) => {
                                 let _ = tx.send(Event::Info(format!(
                                     "input {} ({}) wieder verfügbar (Flow jetzt lesbar)",
@@ -3582,6 +3769,7 @@ mod pip_loop_tests {
             width: 1280,
             height: 720,
             hwaccel: omp_mediaio::hwaccel::HwAccel::default(),
+            stills: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

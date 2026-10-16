@@ -51,6 +51,13 @@ const T = (() => {
       "noPicture": "kein Bild",
       "mismatch": "Abweichendes Format: {format} — Mixer: {own}",
       "takeAnyway": "Trotzdem schalten",
+      "freezeLabel": "❄ FREEZE",
+      "freezeTitle": "Aktuelles PGM-Bild als Standbild aufnehmen (erscheint als Quelle, auch für PIP)",
+      "freezes": "Freezes (Standbilder)",
+      "noFreezes": "Noch keine Freezes — mit ❄ FREEZE das PGM-Bild aufnehmen.",
+      "rename": "Umbenennen",
+      "freezeName": "Name des Freezes",
+      "confirmDeleteFreeze": "Freeze „{name}“ löschen?",
       "pstOfLevel": "PST Ebene {n}",
       "pstGroup": "Mischer-Preset (folgt dem Preset-Bus)",
       "sourceProblem": "Quelle meldet ein Problem: {text}",
@@ -130,6 +137,13 @@ const T = (() => {
       "noPicture": "no picture",
       "mismatch": "Different format: {format} — mixer: {own}",
       "takeAnyway": "Take anyway",
+      "freezeLabel": "❄ FREEZE",
+      "freezeTitle": "Capture the current program picture as a still (appears as a source, also for PIP)",
+      "freezes": "Freezes (stills)",
+      "noFreezes": "No freezes yet — use ❄ FREEZE to capture the program picture.",
+      "rename": "Rename",
+      "freezeName": "Freeze name",
+      "confirmDeleteFreeze": "Delete freeze \"{name}\"?",
       "pstOfLevel": "PST level {n}",
       "pstGroup": "Mixer preset (follows the preset bus)",
       "sourceProblem": "Source reports a problem: {text}",
@@ -1028,6 +1042,15 @@ class OmpVideoMixerMePanel extends HTMLElement {
     const buildBank = (level) => {
       const prefixed = (base) => (levelCount > 1 ? `level${level + 1}.${base}` : base);
 
+      // Nicht ebenen-präfigierte Methoden (Freeze verwalten) — gelten für den ganzen Mischer.
+      const callGlobal = async (method, body) => {
+        await fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body || {}),
+        });
+        await refresh(lastWorkflowOwnSenderIds, lastOtherLevelSenderIds, lastSenderNodeId);
+      };
       const call = (method, body) =>
         fetch(`/api/v1/nodes/${nodeId}/methods/${prefixed(method)}`, {
           method: "POST",
@@ -1181,7 +1204,13 @@ class OmpVideoMixerMePanel extends HTMLElement {
         swapBtn.active = !swapBtn.active;
         call("crosspoint.setSwapOnTransition", { enabled: swapBtn.active });
       });
-      transition.append(cutBtn, autoBtn, tBar, mixWipe, ...slideRow, ...pushRow, swapBtn);
+      // Freeze: aktuelles PGM-Bild dieser Ebene als Standbild aufnehmen; erscheint als angeheftete Quelle.
+      const freezeBtn = document.createElement("omp-button");
+      freezeBtn.className = "swap-btn";
+      freezeBtn.textContent = T("freezeLabel");
+      freezeBtn.title = T("freezeTitle");
+      freezeBtn.addEventListener("click", () => call("freeze.capture", {}));
+      transition.append(cutBtn, autoBtn, tBar, mixWipe, ...slideRow, ...pushRow, swapBtn, freezeBtn);
 
       console_.append(buses, transition);
       content.append(console_);
@@ -1262,6 +1291,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
       let latestPipPresets = [];
       let latestActivePipPresetId = "";
       let latestPipEnabled = false;
+      let latestFreezes = [];
       let lastWorkflowOwnSenderIds = new Set();
       let lastOtherLevelSenderIds = new Set();
       let lastSenderNodeId = new Map();
@@ -1376,7 +1406,51 @@ class OmpVideoMixerMePanel extends HTMLElement {
         });
         dskSection.append(dskLabel, dskSelect);
 
-        bodyEl.append(pinnedSection, dskSection);
+        const freezeSection = document.createElement("div");
+        freezeSection.className = "field";
+        const freezeLabel = document.createElement("label");
+        freezeLabel.textContent = T("freezes");
+        const freezeList = document.createElement("div");
+        freezeList.className = "list";
+        freezeSection.append(freezeLabel, freezeList);
+        const renderFreezeList = () => {
+          freezeList.innerHTML = "";
+          if (latestFreezes.length === 0) {
+            const hint = document.createElement("p");
+            hint.className = "empty";
+            hint.textContent = T("noFreezes");
+            freezeList.append(hint);
+          }
+          for (const fz of latestFreezes) {
+            const chip = document.createElement("div");
+            chip.className = "chip";
+            const label = document.createElement("span");
+            label.className = "label";
+            label.textContent = fz.name;
+            const renameBtn = document.createElement("omp-button");
+            renameBtn.textContent = "✎";
+            renameBtn.title = T("rename");
+            renameBtn.addEventListener("click", async () => {
+              const name = await promptDialog(T("freezeName"), fz.name, T("apply"), T("cancel"));
+              if (!name) return;
+              await callGlobal("freeze.rename", { id: fz.id, name });
+              renderFreezeList();
+            });
+            const delBtn = document.createElement("omp-button");
+            delBtn.textContent = "×";
+            delBtn.title = T("delete");
+            delBtn.addEventListener("click", async () => {
+              if (!(await confirmDialog(T("confirmDeleteFreeze", { name: fz.name }), T("delete")))) return;
+              await callGlobal("freeze.delete", { id: fz.id });
+              renderFreezeList();
+            });
+            chip.append(label, renameBtn, delBtn);
+            freezeList.append(chip);
+          }
+        };
+        renderFreezeList();
+
+        bodyEl.append(pinnedSection, freezeSection, dskSection);
       });
 
       // PIP-Editor (Nutzerauftrag 2026-09-04, s. Moduldoku) — `preset`
@@ -1802,6 +1876,10 @@ class OmpVideoMixerMePanel extends HTMLElement {
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.swapOnTransition")}`),
         ]);
         if (!inputsRes.ok || !programRes.ok || !presetRes.ok) return;
+        try {
+          const fr = await fetch(`/api/v1/nodes/${nodeId}/params/freeze.list`);
+          if (fr.ok) latestFreezes = (await fr.json()).value || [];
+        } catch { /* Liste bleibt, wie sie war */ }
         const inputs = (await inputsRes.json()).value || [];
         const program = (await programRes.json()).value || "";
         const preset = (await presetRes.json()).value || "";
