@@ -1103,7 +1103,10 @@ class SchedulerView extends HTMLElement {
       "width:140px;flex:0 0 140px;font-size:12px;padding-right:6px;display:flex;align-items:center;" +
       "gap:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
     label.title = wf.name;
-    label.textContent = wf.name;
+    const labelText = document.createElement("span");
+    labelText.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;";
+    labelText.textContent = wf.name;
+    label.appendChild(labelText);
     row.appendChild(label);
 
     const track = document.createElement("div");
@@ -1136,14 +1139,14 @@ class SchedulerView extends HTMLElement {
     const addBtn = document.createElement("button");
     addBtn.textContent = "+";
     addBtn.title = tt("sched.162657");
-    addBtn.style.cssText =
-      "position:absolute;right:2px;top:50%;transform:translateY(-50%);font-size:10px;cursor:pointer;" +
-      "opacity:0.5;padding:1px 5px;";
+    // In der Namensspalte statt auf der Zeitspur: dort lag der Knopf über den
+    // Balken (und deren Löschen-Knopf), wenn sie bis zum rechten Rand reichen.
+    addBtn.style.cssText = "flex:0 0 auto;font-size:10px;cursor:pointer;opacity:0.6;padding:1px 5px;";
     addBtn.addEventListener("click", (ev) => {
       ev.stopPropagation();
       this.#openAddMenu(wf, addBtn);
     });
-    track.appendChild(addBtn);
+    label.appendChild(addBtn);
 
     row.appendChild(track);
     return row;
@@ -1159,11 +1162,8 @@ class SchedulerView extends HTMLElement {
     menu.style.cssText = "position:absolute;padding:4px;z-index:10;display:flex;flex-direction:column;gap:2px;";
     const rect = anchor.getBoundingClientRect();
     const hostRect = this.getBoundingClientRect();
-    // Am RECHTEN statt linken Rand des "+"-Knopfs verankern (wächst nach
-    // links): der Knopf sitzt selbst nahe dem rechten Zeilenrand, ein
-    // linksbündiges Menü würde regelmäßig über den rechten Bildschirmrand
-    // hinauswachsen.
-    menu.style.right = `${hostRect.right - rect.right}px`;
+    // Der Knopf sitzt in der Namensspalte links: Menü linksbündig darunter.
+    menu.style.left = `${Math.max(0, rect.left - hostRect.left)}px`;
     menu.style.top = `${rect.bottom - hostRect.top + 2}px`;
 
     (["daily", "weekly", "once"] as const).forEach((kind) => {
