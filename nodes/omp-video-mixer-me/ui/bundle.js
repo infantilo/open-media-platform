@@ -51,6 +51,9 @@ const T = (() => {
       "noPicture": "kein Bild",
       "mismatch": "Abweichendes Format: {format} — Mixer: {own}",
       "takeAnyway": "Trotzdem schalten",
+      "groupSources": "Quellen",
+      "groupPip": "PIP-Szenen",
+      "pipNew": "Neue Szene",
       "freezeLabel": "❄ FREEZE",
       "freezeTitle": "Aktuelles PGM-Bild als Standbild aufnehmen (erscheint als Quelle, auch für PIP)",
       "freezes": "Freezes (Standbilder)",
@@ -137,6 +140,9 @@ const T = (() => {
       "noPicture": "no picture",
       "mismatch": "Different format: {format} — mixer: {own}",
       "takeAnyway": "Take anyway",
+      "groupSources": "Sources",
+      "groupPip": "PIP scenes",
+      "pipNew": "New scene",
       "freezeLabel": "❄ FREEZE",
       "freezeTitle": "Capture the current program picture as a still (appears as a source, also for PIP)",
       "freezes": "Freezes (stills)",
@@ -619,7 +625,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         border-left: 2px solid var(--omp-border, #2e3338);
       }
       .bus-buttons .group-label:first-child { margin-left: 0; }
-      .bus-buttons p.empty { align-self: center; margin: 0 0 0 4px; }
+      .bus-buttons p.empty { align-self: center; margin: 0 0 0 4px; order: 99; } /* Hinweis hinter BLK, nicht davor */
 
       /* Kompakte Werkzeugleiste (Nutzerauftrag 2026-09-04: "kompakter,
          touch-tauglicher") — ersetzt die frühere Inline-SRC-Reihe +
@@ -629,26 +635,38 @@ class OmpVideoMixerMePanel extends HTMLElement {
       .toolbar-row {
         padding-top: 4px;
         border-top: 1px solid var(--omp-border, #2e3338);
-        display: flex; gap: 4px; align-items: center; flex-wrap: wrap;
+        display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap;
       }
-      .toolbar-row omp-button { height: 30px; }
-      .toolbar-row .sources-btn { padding: 0 8px !important; width: auto !important; font-size: 10px; }
-      .toolbar-row .dsk-btn { padding: 0 8px !important; width: auto !important; font-size: 10px; }
-      .rate-row { display: flex; gap: 4px; }
-      .rate-row omp-button { width: 30px; height: 26px; font-size: 10px; }
+      /* Drei klar getrennte Gruppen mit Überschrift: Quellen | DSK | PIP-Szenen. */
+      .tool-group { display: flex; flex-direction: column; gap: 3px; }
+      .tool-group + .tool-group { border-left: 1px solid var(--omp-border, #2e3338); padding-left: 12px; }
+      .tool-label {
+        font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+        color: var(--omp-text-dim, #9aa0a6);
+      }
+      .tool-items { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px; }
+      /* DSK, PIP-Szenen und "+" sehen aus wie Quellentasten (Pille bzw. Vorschaukarte). */
+      .tool-items omp-button.card { min-width: 60px; width: auto; height: 30px; font-size: 10px; line-height: 1.15; }
+      .tool-items omp-button.card::part(button) { padding: 0 6px; }
+      .tool-items omp-button.card.with-thumb { width: 88px; height: auto; padding: 0 !important; }
+      .tool-items omp-button.card.with-thumb::part(button) { flex-direction: column; padding: 3px !important; gap: 3px; }
+      .tool-items omp-button.sources-btn { height: 30px; padding: 0 8px !important; width: auto !important; font-size: 10px; }
+      .card-thumb-text {
+        position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+        font-size: 11px; font-weight: 700; color: var(--omp-text-dim, #9aa0a6); letter-spacing: 0.04em;
+      }
+      .pip-box { position: absolute; box-sizing: border-box; border: 1px solid var(--omp-preset, #43a047); background: rgba(67,160,71,0.45); }
+      .pip-box.ghost { background: transparent; border-style: dashed; opacity: 0.8; }
+      .rate-row { grid-column: 1 / -1; display: flex; gap: 2px; width: 100%; }
+      .rate-row omp-button { flex: 1 1 0; min-width: 0; height: 24px; font-size: 10px; }
+      .rate-row omp-button::part(button) { padding: 0 1px; }
 
       /* Dynamische PIP-Preset-Reihe (Nutzerauftrag 2026-09-04, ersetzt
          den vormals einzelnen PIP-Button) — je Preset ein "Mixer"-Knopf
          + ein kleiner Stift zum Bearbeiten, plus "+" für ein neues. */
       .pip-row { display: contents; }
-      .pip-chip { display: inline-flex; align-items: center; gap: 2px; }
-      .pip-chip omp-button.pip-name {
-        min-width: 48px; max-width: 110px; height: 30px; font-size: 10px;
-        padding: 0 8px !important; width: auto !important;
-        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-      }
-      .pip-chip omp-button.pip-edit { width: 24px !important; height: 24px !important; font-size: 11px; padding: 0; }
-      .pip-row omp-button.pip-add { width: 30px !important; height: 30px !important; font-size: 16px; padding: 0; }
+      .pip-chip { display: inline-flex; align-items: flex-start; gap: 2px; }
+      .pip-chip omp-button.pip-edit { width: 22px !important; height: 22px !important; font-size: 11px; padding: 0; }
 
       /* Übergangsblock kompakt (Nutzerauftrag 2026-10-15: "viel kompakter,
          vor allem auf kleineren Bildschirmen"): breit = schmale Spalte
@@ -673,9 +691,9 @@ class OmpVideoMixerMePanel extends HTMLElement {
           grid-template-columns: 44px repeat(2, minmax(0, 1fr)); border-left: 0; padding-left: 0;
           border-top: 1px solid var(--omp-border, #2e3338); padding-top: 4px;
         }
-        .transition omp-fader { grid-column: 1; grid-row: 1 / span 6; height: 138px; }
+        .transition omp-fader { grid-column: 1; grid-row: 1 / span 7; height: 150px; }
         .transition omp-button.cut, .transition omp-button.auto { grid-column: auto; }
-        .mix-wipe, .wipe-caption, .transition .swap-btn { grid-column: 2 / -1; }
+        .mix-wipe, .wipe-caption, .rate-row, .transition .swap-btn { grid-column: 2 / -1; }
       }
       p.empty {
         font-size: var(--omp-font-size-xs, 11px); font-style: italic;
@@ -778,6 +796,30 @@ class OmpVideoMixerMePanel extends HTMLElement {
           sourceHealth.set(id, { severity: status === "Unhealthy" ? "error" : "warn", text: texts.join("; ") || status });
         })();
       }
+    };
+
+    // Gemeinsame Optik für Quellentaste, DSK und PIP-Szenen: mit Vorschau-Option eine Karte (Thumb + Name), sonst Pille.
+    const paintCard = (btn, label, thumbContent) => {
+      btn.textContent = "";
+      if (thumbsEnabled) {
+        btn.classList.add("with-thumb");
+        const thumb = document.createElement("div");
+        thumb.className = "bus-thumb";
+        if (thumbContent) thumb.append(thumbContent);
+        const lab = document.createElement("div");
+        lab.className = "bus-thumb-label";
+        lab.textContent = label;
+        btn.append(thumb, lab);
+      } else {
+        btn.classList.remove("with-thumb");
+        btn.textContent = label;
+      }
+    };
+    const cardText = (text) => {
+      const d = document.createElement("div");
+      d.className = "card-thumb-text";
+      d.textContent = text;
+      return d;
     };
 
     const makeBusButton = (call, label, senderId, isProgram, sourceNodeId) => {
@@ -1113,21 +1155,33 @@ class OmpVideoMixerMePanel extends HTMLElement {
       sourcesBtn.textContent = T("sources");
       sourcesBtn.title = T("sourcesTitle");
       const keyerBtn = document.createElement("omp-button");
-      keyerBtn.className = "dsk-btn";
-      keyerBtn.textContent = "DSK";
+      keyerBtn.className = "card dsk-btn";
       keyerBtn.setAttribute("color", "onair");
-      const rateRow = document.createElement("div");
+      const rateRow = document.createElement("div"); // Rampendauer-Tasten wohnen in der Übergangseinheit
       rateRow.className = "rate-row";
-      toolbarRow.append(sourcesBtn, keyerBtn, rateRow);
+      const toolGroup = (labelText, ...items) => {
+        const g = document.createElement("div");
+        g.className = "tool-group";
+        const l = document.createElement("span");
+        l.className = "tool-label";
+        l.textContent = labelText;
+        const box = document.createElement("div");
+        box.className = "tool-items";
+        box.append(...items);
+        g.append(l, box);
+        return [g, box];
+      };
 
       const pipRow = document.createElement("div");
       pipRow.className = "pip-row";
       const pipAddBtn = document.createElement("omp-button");
-      pipAddBtn.className = "pip-add";
-      pipAddBtn.textContent = "+";
+      pipAddBtn.className = "card pip-add";
       pipAddBtn.title = T("pipAddTitle");
 
-      toolbarRow.append(pipRow); // PIP-Presets in derselben Zeile (kompakt)
+      const [sourcesGroup] = toolGroup(T("groupSources"), sourcesBtn);
+      const [dskGroup] = toolGroup("DSK", keyerBtn);
+      const [pipGroup] = toolGroup(T("groupPip"), pipRow);
+      toolbarRow.append(sourcesGroup, dskGroup, pipGroup);
       buses.append(pgmRow, pstRow, toolbarRow);
 
       const transition = document.createElement("div");
@@ -1210,7 +1264,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
       freezeBtn.textContent = T("freezeLabel");
       freezeBtn.title = T("freezeTitle");
       freezeBtn.addEventListener("click", () => call("freeze.capture", {}));
-      transition.append(cutBtn, autoBtn, tBar, mixWipe, ...slideRow, ...pushRow, swapBtn, freezeBtn);
+      transition.append(cutBtn, autoBtn, rateRow, tBar, mixWipe, ...slideRow, ...pushRow, swapBtn, freezeBtn);
 
       console_.append(buses, transition);
       content.append(console_);
@@ -1824,14 +1878,39 @@ class OmpVideoMixerMePanel extends HTMLElement {
 
       pipAddBtn.addEventListener("click", () => openPipEditor(null));
 
+      // Mischer-Auflösung für die Szenen-Miniatur (aus dem Formattext der Quellen, sonst 1280x720).
+      const mixerSize = () => {
+        const m = /(\d+)\D+(\d+)/.exec(latestInputs.find((i) => i.mixerFormat)?.mixerFormat || "");
+        return m ? { w: +m[1], h: +m[2] } : { w: 1280, h: 720 };
+      };
+      // Miniatur einer PIP-Szene: Rahmen = Bild, grüne Fläche = Haltposition, gestrichelt = Start/Ende der Fahrt.
+      const pipSceneThumb = (preset) => {
+        const { w, h } = mixerSize();
+        const wrap = document.createElement("div");
+        wrap.style.cssText = "position:absolute;inset:0;";
+        const addBox = (b, ghost) => {
+          if (!b) return;
+          const el = document.createElement("div");
+          el.className = ghost ? "pip-box ghost" : "pip-box";
+          el.style.left = `${(b.x / w) * 100}%`;
+          el.style.top = `${(b.y / h) * 100}%`;
+          el.style.width = `${(b.width / w) * 100}%`;
+          el.style.height = `${(b.height / h) * 100}%`;
+          wrap.append(el);
+        };
+        addBox(preset.start, true);
+        addBox(preset.end, true);
+        addBox(preset.box, false);
+        return wrap;
+      };
       const renderPipRow = () => {
         pipRow.innerHTML = "";
         for (const preset of latestPipPresets) {
           const chip = document.createElement("span");
           chip.className = "pip-chip";
           const nameBtn = document.createElement("omp-button");
-          nameBtn.className = "pip-name";
-          nameBtn.textContent = preset.name;
+          nameBtn.className = "card pip-name";
+          paintCard(nameBtn, preset.name, pipSceneThumb(preset));
           const isActive = latestPipEnabled && preset.id === latestActivePipPresetId;
           nameBtn.active = isActive;
           nameBtn.setAttribute("color", "preset");
@@ -1847,6 +1926,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
           chip.append(nameBtn, editBtn);
           pipRow.append(chip);
         }
+        paintCard(pipAddBtn, T("pipNew"), cardText("+"));
         pipRow.append(pipAddBtn);
       };
 
@@ -1952,6 +2032,10 @@ class OmpVideoMixerMePanel extends HTMLElement {
         renderBusRow(call, pstButtons, entries, workflowOwnSenderIds, false, preset, "preset", levelOutputSenderIds, senderNodeId);
 
         keyerBtn.active = keyerEnabled;
+        {
+          const ks = latestInputs.find((i) => i.senderId === latestKeyerSource);
+          paintCard(keyerBtn, "DSK", cardText(ks ? shortLabel(ks.label) : "–"));
+        }
 
         // Stream Deck (Kap. 40.5): nur die Master-Ebene; die Shell baut daraus
         // Tasten (ui/shell/streamdeck/adapters/video-mixer*.ts).
