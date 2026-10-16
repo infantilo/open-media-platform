@@ -24,11 +24,11 @@ const CSS = `
    greift design-tokens.css' button/input-Reset nicht. */
 :where(.omp-listen) button { font-family:var(--omp-font); font-size:var(--omp-font-size-xs); color:var(--omp-text);
   background:var(--omp-surface-raised); border:1px solid var(--omp-border); border-radius:var(--omp-radius);
-  padding:4px 8px; cursor:pointer; }
+  padding:2px 7px; cursor:pointer; }
 :where(.omp-listen) button:hover { border-color:var(--omp-text-dim); }
 :where(.omp-listen) select, :where(.omp-listen) input:not([type=range]) { font-family:var(--omp-font);
   font-size:var(--omp-font-size-sm); color:var(--omp-text); background:#060912; border:1px solid var(--omp-border);
-  border-radius:var(--omp-radius); padding:5px 8px; }
+  border-radius:var(--omp-radius); padding:3px 6px; }
 :where(.omp-listen) .omp-btn-primary { background:linear-gradient(90deg,#0fb8e6,#2f8cff 55%,#8b5cf6); border-color:transparent; color:#fff; font-weight:600; }
 .omp-listen { color:var(--omp-text-dim); }
 .omp-listen { position:fixed; left:var(--omp-space-2); bottom:var(--omp-space-2); z-index:1000; display:none;
@@ -39,24 +39,24 @@ const CSS = `
   box-shadow:0 2px 8px rgba(0,0,0,.3); }
 .omp-listen-bar .title { color:var(--omp-text); font-weight:700; letter-spacing:.04em; }
 .omp-listen-src { max-width:190px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--omp-accent-cyan); }
-.omp-listen-panel { display:none; flex-direction:column; gap:14px; width:340px; box-sizing:border-box; padding:18px;
-  border-radius:16px; border:1px solid rgba(110,150,255,.22);
+.omp-listen-panel { display:none; flex-direction:column; gap:7px; width:280px; box-sizing:border-box; padding:10px;
+  border-radius:10px; border:1px solid rgba(110,150,255,.22);
   background:linear-gradient(180deg,rgba(20,29,48,.98),rgba(8,12,22,.99));
   box-shadow:0 24px 70px rgba(0,0,0,.6),0 0 50px rgba(47,140,255,.1),inset 0 1px 0 rgba(255,255,255,.06); }
 .omp-listen.open .omp-listen-panel { display:flex; }
 .omp-listen.embedded { position:static; display:block; }
-.omp-listen-panel.embedded { display:flex; width:auto; box-shadow:none; border-radius:10px; }
+.omp-listen-panel.embedded { display:flex; width:auto; padding:8px; gap:6px; box-shadow:none; border-radius:10px; }
 .omp-listen-sec { font-size:10px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:var(--omp-text-dim); }
-.omp-listen-knobwrap { display:flex; flex-direction:column; align-items:center; gap:4px; }
-.omp-listen-knob { width:150px; height:150px; touch-action:none; cursor:grab; outline:none; user-select:none; }
+.omp-listen-knobwrap { display:flex; flex-direction:column; align-items:center; gap:2px; }
+.omp-listen-knob { width:88px; height:88px; touch-action:none; cursor:grab; outline:none; user-select:none; }
 .omp-listen-knob:focus-visible { filter:drop-shadow(0 0 6px rgba(25,211,243,.6)); }
 .omp-listen-knob:active { cursor:grabbing; }
-.omp-listen-db { font-size:20px; font-weight:700; color:var(--omp-text); font-variant-numeric:tabular-nums; margin-top:-20px; pointer-events:none; }
+.omp-listen-db { font-size:13px; font-weight:700; color:var(--omp-text); font-variant-numeric:tabular-nums; margin-top:-12px; pointer-events:none; }
 .omp-listen-meters { display:flex; flex-direction:column; gap:3px; width:100%; }
-.omp-listen-meters div { height:5px; border-radius:3px; background:#050810; overflow:hidden; }
+.omp-listen-meters div { height:4px; border-radius:3px; background:#050810; overflow:hidden; }
 .omp-listen-meters i { display:block; height:100%; width:0; background:var(--omp-accent-gradient); }
-.omp-listen-presets { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
-.omp-listen-preset { min-height:44px; padding:6px 4px; border-radius:8px; font-size:11px; font-weight:600; line-height:1.15;
+.omp-listen-presets { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; }
+.omp-listen-preset { min-height:28px; padding:2px 4px; border-radius:6px; font-size:11px; font-weight:600; line-height:1.15;
   overflow:hidden; background:linear-gradient(180deg,var(--omp-metal-light),var(--omp-metal-mid)); }
 .omp-listen-preset.empty { background:transparent; border-style:dashed; color:var(--omp-text-disabled); font-weight:400; }
 .omp-listen-preset.live { color:#fff; border-color:var(--omp-accent-cyan);
@@ -64,12 +64,12 @@ const CSS = `
 .omp-listen-preset.assigning { border-color:var(--omp-cue); color:var(--omp-cue); animation:omp-pulse 1s infinite; }
 .omp-listen-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .omp-listen-seg { display:flex; }
-.omp-listen-seg button { border-radius:0; padding:4px 10px; }
+.omp-listen-seg button { border-radius:0; padding:2px 8px; }
 .omp-listen-seg button:first-child { border-radius:6px 0 0 6px; }
 .omp-listen-seg button:last-child { border-radius:0 6px 6px 0; }
 .omp-listen-seg button + button { margin-left:-1px; }
 .omp-listen button.on { color:var(--omp-accent-cyan); border-color:var(--omp-accent-cyan); background:rgba(25,211,243,.1); }
-.omp-listen input[type=range] { padding:0; width:110px; }
+.omp-listen input[type=range] { padding:0; width:80px; }
 .omp-listen-hint { font-size:10px; color:var(--omp-text-disabled); }
 `;
 
@@ -205,7 +205,7 @@ function buildControls(service: ListenService): { panel: HTMLElement; repaint: (
   // Inline-Editor statt Browser-Prompt: Quelle wählen, Beschriftung, Speichern/Leeren.
   const editor = document.createElement("div");
   editor.style.cssText =
-    "display:none;flex-direction:column;gap:6px;padding:10px;border-radius:8px;" +
+    "display:none;flex-direction:column;gap:4px;padding:6px;border-radius:8px;" +
     "border:1px solid var(--omp-cue);background:rgba(251,140,0,.06);";
   const edTitle = document.createElement("div");
   edTitle.className = "omp-listen-sec";
