@@ -30,6 +30,7 @@ import "./streamdeck/sim.ts";
 import type { ConsoleBoard } from "./console-board.ts";
 import { whoami, showLoginOverlay, buildUserWidget } from "./auth.ts";
 import { installListenService } from "./listen.ts";
+import { createDeckToggle } from "./streamdeck/panel.ts";
 import { connectionMonitor } from "./connection.ts";
 // Reiner Seiteneffekt-Import (registriert nur customElements.define) —
 // gleicher Grund wie beim console-view.ts-Fall oben. app-shell.ts
@@ -286,7 +287,19 @@ async function renderShell(root: HTMLElement, username: string | null): Promise<
   }
 
   if (username) {
-    document.body.appendChild(buildUserWidget(username, homeHref));
+    const widget = buildUserWidget(username, homeHref);
+    // Die Engineering-Ansicht (omp-app-shell) hat den Stream-Deck-Knopf in der App-Leiste; reine
+    // Operator-Ansichten haben keine App-Leiste, dort sitzt er im Benutzer-Widget.
+    if (!root.querySelector("omp-app-shell")) {
+      const deck = createDeckToggle(
+        "font-size:var(--omp-font-size-xs);padding:2px var(--omp-space-2);border:1px solid var(--omp-border);" +
+          "border-radius:var(--omp-radius);background:var(--omp-surface-raised);color:var(--omp-text);cursor:pointer;",
+      );
+      deck.button.setAttribute("data-role", "deck-toggle");
+      widget.insertBefore(deck.button, widget.firstChild);
+      document.body.appendChild(deck.panel);
+    }
+    document.body.appendChild(widget);
   }
   return homeHref;
 }
