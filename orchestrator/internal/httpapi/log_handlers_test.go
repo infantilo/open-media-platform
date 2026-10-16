@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
@@ -44,7 +45,7 @@ func TestHandleListLogsParsesTraceIDFilter(t *testing.T) {
 	handleListLogs(reader)(rec, req)
 
 	want := logbus.Filter{TraceID: "abc123", NodeID: "node-1", HostID: "host-1", Level: "warn", Before: 42, Limit: 10}
-	if reader.lastFilter != want {
+	if !reflect.DeepEqual(reader.lastFilter, want) {
 		t.Errorf("Query() filter = %+v, want %+v", reader.lastFilter, want)
 	}
 }

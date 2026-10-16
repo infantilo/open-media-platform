@@ -2,7 +2,10 @@ package httpapi
 
 import (
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
 )
@@ -18,6 +21,54 @@ const (
 // UMSETZUNG.md D19 — implementiert von *logbus.Store).
 type LogReader interface {
 	Query(f logbus.Filter) ([]logbus.Entry, error)
+}
+
+// LogSummarizer ist die optionale Erweiterung um gruppierte Meldungen
+// (implementiert von *logbus.Store).
+type LogSummarizer interface {
+	Summary(f logbus.Filter, limit int) ([]logbus.Group, error)
+}
+
+// logFilterFromQuery liest die gemeinsamen Filter-Parameter:
+// traceId, nodeId, hostId, level (auch kommagetrennt), q, since, until, msgKey.
+func logFilterFromQuery(q url.Values) logbus.Filter {
+	f := logbus.Filter{
+		TraceID: q.Get("traceId"),
+		NodeID:  q.Get("nodeId"),
+		HostID:  q.Get("hostId"),
+		Query:   q.Get("q"),
+		MsgKey:  q.Get("msgKey"),
+	}
+	if lv := q.Get("level"); strings.Contains(lv, ",") {
+		f.Levels = strings.Split(lv, ",")
+	} else {
+		f.Level = lv
+	}
+	if v, err := time.Parse(time.RFC3339, q.Get("since")); err == nil {
+		f.Since = v
+	}
+	if v, err := time.Parse(time.RFC3339, q.Get("until")); err == nil {
+		f.Until = v
+	}
+	return f
+}
+
+// handleLogSummary liefert GET /api/v1/logs/summary — gleichartige Meldungen
+// gruppiert (Anzahl, erstes/letztes Auftreten, betroffene Nodes).
+func handleLogSummary(reader LogReader) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sum, ok := reader.(LogSummarizer)
+		if !ok {
+			http.Error(w, "summary not supported", http.StatusNotImplemented)
+			return
+		}
+		groups, err := sum.Summary(logFilterFromQuery(r.URL.Query()), 100)
+		if err != nil {
+			http.Error(w, "failed to summarize logs", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, groups)
+	}
 }
 
 // handleListLogs liefert GET /api/v1/logs — admin-only (gleiches Gate
@@ -46,14 +97,9 @@ func handleListLogs(reader LogReader) http.HandlerFunc {
 			limit = maxLogLimit
 		}
 
-		entries, err := reader.Query(logbus.Filter{
-			TraceID: q.Get("traceId"),
-			NodeID:  q.Get("nodeId"),
-			HostID:  q.Get("hostId"),
-			Level:   q.Get("level"),
-			Before:  before,
-			Limit:   limit,
-		})
+		f := logFilterFromQuery(q)
+		f.Before, f.Limit = before, limit
+		entries, err := reader.Query(f)
 		if err != nil {
 			http.Error(w, "failed to query logs", http.StatusInternalServerError)
 			return

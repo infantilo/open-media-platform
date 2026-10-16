@@ -146,3 +146,44 @@ func TestPurgeOlderThanDeletesOldRows(t *testing.T) {
 		t.Fatalf("Query() after purge = %+v, want only \"fresh\"", remaining)
 	}
 }
+
+func TestQueryTextLevelsAndSummaryGrouping(t *testing.T) {
+	database := dbtest.Open(t)
+	cleanLogs(t, database)
+	store := NewStore(database, nil)
+
+	_ = store.Insert(Entry{Level: "warn", Message: "node proxy call failed (GET /params/gain): dial tcp 127.0.0.1:41199: refused", NodeID: "node-a", Source: "orchestrator"})
+	_ = store.Insert(Entry{Level: "error", Message: "node proxy call failed (GET /params/gain): dial tcp 127.0.0.1:39283: refused", NodeID: "node-b", Source: "orchestrator"})
+	_ = store.Insert(Entry{Level: "warn", Message: "something else", Source: "orchestrator"})
+
+	es, err := store.Query(Filter{Query: "PROXY CALL", Levels: []string{"error", "warn"}})
+	if err != nil || len(es) != 2 {
+		t.Fatalf("text+levels query = %d entries, err %v, want 2", len(es), err)
+	}
+	es, _ = store.Query(Filter{Query: "100%"})
+	if len(es) != 0 {
+		t.Errorf("LIKE wildcard must be escaped, got %d entries", len(es))
+	}
+
+	groups, err := store.Summary(Filter{}, 10)
+	if err != nil {
+		t.Fatalf("Summary() error = %v", err)
+	}
+	if len(groups) != 2 {
+		t.Fatalf("Summary() = %d groups, want 2 (ports/ids normalised)", len(groups))
+	}
+	var proxy Group
+	for _, g := range groups {
+		if g.Count == 2 {
+			proxy = g
+		}
+	}
+	if proxy.Count != 2 || proxy.Level != "error" || len(proxy.NodeIDs) != 2 {
+		t.Fatalf("proxy group = %+v, want count 2, level error, 2 nodes", proxy)
+	}
+	// MsgKey führt von der Gruppe zurück zu den Einzelmeldungen.
+	es, _ = store.Query(Filter{MsgKey: proxy.Key})
+	if len(es) != 2 {
+		t.Errorf("Query(MsgKey) = %d entries, want 2", len(es))
+	}
+}

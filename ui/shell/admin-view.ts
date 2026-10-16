@@ -22,6 +22,7 @@ import { type I18nKey, t, t as tt } from "./i18n.ts";
 import "./settings-view.ts";
 import { PermissionsEditor } from "./permissions-editor.ts";
 import { AuditPanel } from "./audit-panel.ts";
+import { DiagnosePanel } from "./diagnose-panel.ts";
 import { ensureBundle, getModules } from "./modules-registry.ts";
 import { adminGroups, type AdminModuleGroup } from "./modules-logic.ts";
 import { getLang } from "./i18n.ts";
@@ -73,20 +74,6 @@ interface WorkflowSummary {
   id: string;
   name: string;
   definition: { roles: { name: string; nodeType: string }[] };
-}
-
-// LogEntry — Wire-Format identisch zu orchestrator/internal/
-// logbus::Entry (ARCHITECTURE.md §25.2, UMSETZUNG.md D19).
-interface LogEntry {
-  id: number;
-  occurredAt: string;
-  level: string;
-  message: string;
-  traceId?: string;
-  spanId?: string;
-  nodeId?: string;
-  hostId?: string;
-  source: string;
 }
 
 interface NodeEntry {
@@ -197,14 +184,6 @@ const AUDIT_REFRESH_EVENT_TYPES = new Set(["audit.appended", "lost-events"]);
 // Oberfläche dafür gab).
 const LOG_POLL_FALLBACK_INTERVAL_MS = 30000;
 const LOG_REFRESH_EVENT_TYPES = new Set(["log.appended", "lost-events"]);
-const LOG_PAGE_LIMIT = 50; // <= httpapi's maxLogLimit (500)
-
-const LOG_LEVEL_COLOR: Record<string, string> = {
-  error: "var(--omp-error)",
-  warn: "#e0a020",
-  info: "var(--omp-text-dim)",
-};
-
 const VERBS = ["view", "operate", "configure", "admin"] as const;
 
 const VERB_LABEL: Record<string, string> = {
@@ -334,20 +313,11 @@ class AdminView extends HTMLElement {
   #users: UserEntry[] = [];
   #bindings: RoleBinding[] = [];
   #auditPanel = new AuditPanel();
-  // Diagnose-Cockpit (ARCHITECTURE.md §25.3, UMSETZUNG.md D20) — gleiche
-  // Cursor-Pagination/SSE-Refresh-Struktur wie #audit oben, zusätzlich
-  // drei client-seitig gehaltene Filter (Trace-ID/Node-ID/Level), die
-  // #loadLogs() als Query-Parameter an GET /api/v1/logs anhängt.
-  // #logsTraceIdFilter wird auch von außen gesetzt (showTrace(), von
-  // app-shell.ts nach einem "omp-view-trace"-Event aus dem Flow Editor
-  // aufgerufen — ein fehlgeschlagener IS-05-Connect trägt seine
-  // trace_id bereits im Response-Header).
-  #logs: LogEntry[] = [];
-  #logsHasMore = false;
-  #logsLoadingMore = false;
-  #logsTraceIdFilter = "";
-  #logsNodeIdFilter = "";
-  #logsLevelFilter = "";
+  // Diagnose-Cockpit (ARCHITECTURE.md §25.3, UMSETZUNG.md D20): eigenes Panel
+  // mit eigenen Filtern. showTrace() wird von app-shell.ts nach einem
+  // "omp-view-trace"-Event aus dem Flow Editor aufgerufen — ein
+  // fehlgeschlagener IS-05-Connect trägt seine trace_id im Response-Header.
+  #diagnosePanel = new DiagnosePanel();
   #logPollHandle: number | undefined;
   #nodes: NodeEntry[] = [];
   #workflows: WorkflowSummary[] = [];
@@ -546,10 +516,7 @@ class AdminView extends HTMLElement {
   // gleiches Cross-Komponenten-Musters wie FlowCanvas.setWorkflowFilter.
   showTrace(traceId: string) {
     this.#activeAdminTab = "diagnose";
-    this.#logsTraceIdFilter = traceId;
-    this.#logsNodeIdFilter = "";
-    this.#logsLevelFilter = "";
-    this.#loadLogs();
+    this.#diagnosePanel.showTrace(traceId);
     this.#render();
   }
 
@@ -561,19 +528,7 @@ class AdminView extends HTMLElement {
       return;
     }
     if (AUDIT_REFRESH_EVENT_TYPES.has(parsed.type)) this.#loadAudit();
-    // Ein Filter (Trace-ID/Node-ID/Level) ist aktiv gesetzte Nutzerabsicht
-    // ("zeig mir genau diesen Ausschnitt") — ein Live-Refresh würde ihn
-    // sonst mit der ungefilterten neuesten Seite überschreiben. Kein
-    // Datenverlust: der Filter selbst bleibt bestehen, ein manuelles Neu-
-    // Anwenden (Feld erneut abschicken) holt neue Zeilen nach.
-    if (
-      LOG_REFRESH_EVENT_TYPES.has(parsed.type) &&
-      !this.#logsTraceIdFilter &&
-      !this.#logsNodeIdFilter &&
-      !this.#logsLevelFilter
-    ) {
-      this.#loadLogs();
-    }
+    if (LOG_REFRESH_EVENT_TYPES.has(parsed.type)) this.#loadLogs();
   };
 
   async #loadOrganizations() {
@@ -995,57 +950,9 @@ class AdminView extends HTMLElement {
     await this.#auditPanel.refresh();
   }
 
-  // ARCHITECTURE.md §25.2/§25.3 (UMSETZUNG.md D20) — s. #loadAudit-Doku
-  // für dieselbe Cursor-/Refresh-Logik, hier zusätzlich mit den drei
-  // Filtern aus GET /api/v1/logs (alle optional, leer = keine
-  // Einschränkung, s. httpapi/log_handlers.go).
-  #logsQuery(extra: Record<string, string>): string {
-    const params = new URLSearchParams(extra);
-    if (this.#logsTraceIdFilter) params.set("traceId", this.#logsTraceIdFilter);
-    if (this.#logsNodeIdFilter) params.set("nodeId", this.#logsNodeIdFilter);
-    if (this.#logsLevelFilter) params.set("level", this.#logsLevelFilter);
-    return params.toString();
-  }
-
+  // Lädt die Diagnose-Ansicht neu (Filter bleiben erhalten).
   async #loadLogs() {
-    try {
-      const res = await apiFetch(`/api/v1/logs?${this.#logsQuery({ limit: String(LOG_PAGE_LIMIT) })}`);
-      if (res.ok) {
-        const page: LogEntry[] = await res.json();
-        this.#logs = page;
-        this.#logsHasMore = page.length === LOG_PAGE_LIMIT;
-        this.#render();
-      }
-    } catch {
-      // Orchestrator kurzzeitig nicht erreichbar — nächster Poll/SSE-Refresh holt es auf.
-    }
-  }
-
-  async #loadMoreLogs() {
-    if (this.#logsLoadingMore || this.#logs.length === 0) return;
-    this.#logsLoadingMore = true;
-    this.#render();
-    try {
-      const oldestID = this.#logs[this.#logs.length - 1].id;
-      const res = await apiFetch(`/api/v1/logs?${this.#logsQuery({ before: String(oldestID), limit: String(LOG_PAGE_LIMIT) })}`);
-      if (res.ok) {
-        const page: LogEntry[] = await res.json();
-        this.#logs = [...this.#logs, ...page];
-        this.#logsHasMore = page.length === LOG_PAGE_LIMIT;
-      }
-    } catch {
-      // Nächster Klick versucht es erneut.
-    } finally {
-      this.#logsLoadingMore = false;
-      this.#render();
-    }
-  }
-
-  #applyLogFilters(traceId: string, nodeId: string, level: string) {
-    this.#logsTraceIdFilter = traceId.trim();
-    this.#logsNodeIdFilter = nodeId.trim();
-    this.#logsLevelFilter = level;
-    this.#loadLogs();
+    await this.#diagnosePanel.refresh();
   }
 
   async #loadNodes() {
@@ -2354,7 +2261,8 @@ class AdminView extends HTMLElement {
         this.appendChild(this.#auditPanel.el);
         break;
       case "diagnose":
-        this.appendChild(this.#renderDiagnoseSection());
+        this.#diagnosePanel.setContext({ nodes: this.#nodes });
+        this.appendChild(this.#diagnosePanel.el);
         break;
       case "backup":
         this.appendChild(this.#renderBackupSection());
@@ -3782,141 +3690,6 @@ class AdminView extends HTMLElement {
     card.appendChild(actions);
 
     return card;
-  }
-
-  // ARCHITECTURE.md §25.3 (UMSETZUNG.md D20) — das Diagnose-Cockpit:
-  // Rohdaten-Ansicht auf GET /api/v1/logs (D19), mit den drei Filtern
-  // als Formular statt einer vollen Query-Sprache (reicht für "was ist
-  // bei DIESER trace_id/diesem Node/auf diesem Level passiert",
-  // §25-Anforderung). Ein gesetzter Trace-Filter macht aus der sonst
-  // reinen Live-Tabelle bereits die geforderte "Trace-Waterfall"-Sicht
-  // (alle Zeilen EINER Operation, chronologisch — Sortierung kommt
-  // fertig sortiert vom Server, `ORDER BY id DESC`), ohne dass dafür
-  // eine eigene Zeitleisten-Grafik nötig wäre.
-  #renderDiagnoseSection(): HTMLElement {
-    const section = document.createElement("div");
-
-    const heading = document.createElement("div");
-    heading.className = "omp-h1";
-    heading.style.cssText = "margin-bottom:var(--omp-space-3);";
-    heading.textContent = tt("adm.56f489", { p0: this.#logs.length });
-    section.appendChild(heading);
-
-    section.appendChild(this.#renderLogFilterForm());
-
-    if (this.#logs.length === 0) {
-      const empty = document.createElement("div");
-      empty.style.cssText = "color:var(--omp-text-dim);";
-      empty.textContent =
-        this.#logsTraceIdFilter || this.#logsNodeIdFilter || this.#logsLevelFilter
-          ? tt("adm.9a4c0a")
-          : tt("adm.51ff86");
-      section.appendChild(empty);
-      return section;
-    }
-
-    const rows = this.#logs
-      .map((e) => {
-        const traceShort = e.traceId ? escapeHtml(e.traceId.slice(0, 8)) : "";
-        return `<tr>
-        <td style="padding:2px 8px;color:var(--omp-text-dim);white-space:nowrap;">${escapeHtml(new Date(e.occurredAt).toLocaleString())}</td>
-        <td style="padding:2px 8px;color:${LOG_LEVEL_COLOR[e.level] ?? "var(--omp-text)"};text-transform:uppercase;font-size:11px;">${escapeHtml(e.level)}</td>
-        <td style="padding:2px 8px;">${escapeHtml(e.nodeId || e.source)}</td>
-        <td style="padding:2px 8px;font-family:monospace;cursor:${e.traceId ? "pointer" : "default"};" data-role="log-trace-cell" data-trace-id="${escapeHtml(e.traceId ?? "")}" title="${e.traceId ? tt("adm.36311b") + escapeHtml(e.traceId) : ""}">${traceShort}</td>
-        <td style="padding:2px 8px;word-break:break-word;">${escapeHtml(e.message)}</td>
-      </tr>`;
-      })
-      .join("");
-
-    const table = document.createElement("table");
-    table.style.cssText = "border-collapse:collapse;width:100%;";
-    table.innerHTML = `<thead><tr style="color:var(--omp-text-dim);text-align:left;">
-      <th style="padding:2px 8px;">${tt("adm.718271")}</th>
-      <th style="padding:2px 8px;">${tt("adm.a0db49")}</th>
-      <th style="padding:2px 8px;">${tt("adm.6c3a69")}</th>
-      <th style="padding:2px 8px;">${tt("adm.dd4ec0")}</th>
-      <th style="padding:2px 8px;">${tt("adm.d87d49")}</th>
-    </tr></thead><tbody>${rows}</tbody>`;
-    table.querySelectorAll('[data-role="log-trace-cell"]').forEach((cell) => {
-      const traceId = cell.getAttribute("data-trace-id");
-      if (!traceId) return;
-      cell.addEventListener("click", () => this.showTrace(traceId));
-    });
-    section.appendChild(table);
-
-    if (this.#logsHasMore) {
-      const moreBtn = document.createElement("button");
-      moreBtn.textContent = this.#logsLoadingMore ? tt("adm.4446bb") : tt("adm.5cc9dd");
-      moreBtn.disabled = this.#logsLoadingMore;
-      moreBtn.style.cssText = "font-size:11px;cursor:pointer;margin-top:8px;";
-      moreBtn.addEventListener("click", () => this.#loadMoreLogs());
-      section.appendChild(moreBtn);
-    }
-
-    return section;
-  }
-
-  #renderLogFilterForm(): HTMLElement {
-    const form = document.createElement("form");
-    form.style.cssText = "display:flex;gap:var(--omp-space-2);align-items:flex-end;margin-bottom:var(--omp-space-3);flex-wrap:wrap;";
-
-    const field = (labelText: string, input: HTMLInputElement | HTMLSelectElement) => {
-      const wrap = document.createElement("label");
-      wrap.style.cssText = "display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--omp-text-dim);";
-      const span = document.createElement("span");
-      span.textContent = labelText;
-      input.style.cssText = "font-family:var(--omp-font);font-size:var(--omp-font-size-sm);padding:4px 6px;";
-      wrap.append(span, input);
-      return wrap;
-    };
-
-    const traceInput = document.createElement("input");
-    traceInput.type = "text";
-    traceInput.placeholder = "z. B. 7f66dab3…";
-    traceInput.value = this.#logsTraceIdFilter;
-
-    const nodeInput = document.createElement("input");
-    nodeInput.type = "text";
-    nodeInput.placeholder = tt("adm.fb9f6f");
-    nodeInput.value = this.#logsNodeIdFilter;
-
-    const levelSelect = document.createElement("select");
-    for (const [value, label] of [
-      ["", tt("adm.05e870")],
-      ["error", tt("adm.902b0d")],
-      ["warn", tt("adm.56525a")],
-      ["info", tt("adm.4059b0")],
-    ]) {
-      const opt = document.createElement("option");
-      opt.value = value;
-      opt.textContent = label;
-      opt.selected = value === this.#logsLevelFilter;
-      levelSelect.appendChild(opt);
-    }
-
-    form.append(field(tt("adm.9cbd4a"), traceInput), field(tt("adm.fb9f6f"), nodeInput), field(tt("adm.a0db49"), levelSelect));
-
-    const submitBtn = document.createElement("button");
-    submitBtn.type = "submit";
-    submitBtn.textContent = tt("adm.2b98bc");
-    submitBtn.style.cssText = "font-size:11px;cursor:pointer;";
-    form.appendChild(submitBtn);
-
-    if (this.#logsTraceIdFilter || this.#logsNodeIdFilter || this.#logsLevelFilter) {
-      const clearBtn = document.createElement("button");
-      clearBtn.type = "button";
-      clearBtn.textContent = tt("adm.cf743f");
-      clearBtn.style.cssText = "font-size:11px;cursor:pointer;";
-      clearBtn.addEventListener("click", () => this.#applyLogFilters("", "", ""));
-      form.appendChild(clearBtn);
-    }
-
-    form.addEventListener("submit", (ev) => {
-      ev.preventDefault();
-      this.#applyLogFilters(traceInput.value, nodeInput.value, levelSelect.value);
-    });
-
-    return form;
   }
 
   // Nutzerwunsch 2026-08-13: Backup und Restore sind beide voll

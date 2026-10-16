@@ -504,6 +504,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Log-Kanal, gleiches Admin-Gate wie das Audit-Log (Log-Zeilen legen
 	// node-/host-übergreifende Betriebsdetails offen).
 	mux.HandleFunc("GET /api/v1/logs", g.requireVerbGlobal(authz.VerbAdmin, handleListLogs(logReader)))
+	mux.HandleFunc("GET /api/v1/logs/summary", g.requireVerbGlobal(authz.VerbAdmin, handleLogSummary(logReader)))
 	// Nutzerwunsch 2026-08-13: Backup/Restore über das Browser-UI.
 	// VerbAdmin (nicht Configure) — gleiche Einstufung wie Rollenbindungen/
 	// Bootstrap-Tokens, ein vollständiger DB-Dump ist mindestens so

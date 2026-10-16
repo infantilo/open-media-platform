@@ -858,6 +858,17 @@ untereinander):
   ausgeblendet, weil sie das Log sonst fluten; „Alle“ blendet sie ein.
   „Ältere laden“ blättert innerhalb des Filters, „Als CSV exportieren“
   speichert die geladenen Zeilen.
+- **Diagnose** — „Was läuft schief, und wo?“ in zwei Ansichten.
+  *Probleme* fasst gleichartige Meldungen zusammen (Anzahl, zuletzt,
+  betroffene Nodes); bekannte Meldungen tragen eine Erklärung und einen
+  Hinweis, ob sie harmlos sind (z. B. „Sender-Seite nicht ansprechbar
+  (404)“). „Einzelmeldungen anzeigen“ springt mit dem passenden Filter in
+  die Ansicht *Meldungen* (jede Zeile, ein Klick zeigt Quelle, Host und
+  „Alle Schritte dieses Vorgangs“). Filter: Suche im Meldungstext, Stufe
+  (Fehler/Warnungen/Info), Node, Zeitraum; aktive Eingrenzungen stehen
+  als Chips zum Entfernen unter der Leiste. Aus dem Flow Editor führt ein
+  fehlgeschlagener Verbindungsversuch direkt auf die Schritte seines
+  Vorgangs.
 - **Backup/Restore** — „Backup jetzt erstellen“ erstellt sofort einen
   Download; Restore verlangt, den gewählten Dateinamen exakt
   einzutippen (Bestätigung), ersetzt danach den kompletten

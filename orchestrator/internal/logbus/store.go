@@ -74,6 +74,114 @@ type Filter struct {
 	Level   string
 	Before  int64
 	Limit   int
+	// Levels: mehrere Stufen (ODER); ersetzt Level, wenn gesetzt.
+	Levels []string
+	// Query: Teilstring in der Meldung (ohne Groß-/Kleinschreibung).
+	Query string
+	// Since/Until: Zeitfenster [Since, Until).
+	Since, Until time.Time
+	// MsgKey: nur Meldungen, deren normalisierte Form (s. msgKeyExpr) so lautet.
+	MsgKey string
+}
+
+// msgKeyExpr normalisiert eine Meldung, damit gleichartige zusammenfallen:
+// UUIDs, Hex-IDs und Zahlen werden zu "#". ("node proxy call failed (GET
+// /params/x): dial tcp 127.0.0.1:41199 …" ist dann dieselbe Meldung für
+// jeden Node und jeden Port.)
+const msgKeyExpr = `regexp_replace(left(message, 300), '[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}|[0-9a-fA-F]{12,}|[0-9]+', '#', 'g')`
+
+func (f Filter) where() (string, []any) {
+	clauses := []string{"($1 = 0 OR id < $1)"}
+	args := []any{f.Before}
+	add := func(format string, v any) {
+		args = append(args, v)
+		clauses = append(clauses, fmt.Sprintf(format, len(args)))
+	}
+	eq := func(column, value string) {
+		if value != "" {
+			add(column+" = $%d", value)
+		}
+	}
+	eq("trace_id", f.TraceID)
+	eq("node_id", f.NodeID)
+	eq("host_id", f.HostID)
+	if len(f.Levels) > 0 {
+		add("level = ANY(string_to_array($%d, ','))", strings.Join(f.Levels, ","))
+	} else {
+		eq("level", f.Level)
+	}
+	if f.Query != "" {
+		r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+		add("message ILIKE $%d", "%"+r.Replace(f.Query)+"%")
+	}
+	if !f.Since.IsZero() {
+		add("occurred_at >= $%d", f.Since)
+	}
+	if !f.Until.IsZero() {
+		add("occurred_at < $%d", f.Until)
+	}
+	if f.MsgKey != "" {
+		add(msgKeyExpr+" = $%d", f.MsgKey)
+	}
+	return strings.Join(clauses, " AND "), args
+}
+
+// Group fasst gleichartige Meldungen zusammen (Summary).
+type Group struct {
+	Key     string    `json:"key"`
+	Level   string    `json:"level"` // schwerste Stufe der Gruppe
+	Count   int64     `json:"count"`
+	First   time.Time `json:"first"`
+	Last    time.Time `json:"last"`
+	Example string    `json:"example"` // jüngste Meldung im Wortlaut
+	NodeIDs []string  `json:"nodeIds"` // betroffene Nodes (höchstens 20)
+}
+
+// Summary liefert gleichartige Meldungen gruppiert, zuletzt aufgetretene zuerst.
+func (s *Store) Summary(f Filter, limit int) ([]Group, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	f.Before = 0
+	where, args := f.where()
+	args = append(args, limit)
+	q := fmt.Sprintf(`
+		SELECT `+msgKeyExpr+` AS k,
+		       CASE WHEN bool_or(level = 'error') THEN 'error' WHEN bool_or(level = 'warn') THEN 'warn' ELSE max(level) END,
+		       count(*), min(occurred_at), max(occurred_at),
+		       (array_agg(message ORDER BY id DESC))[1],
+		       coalesce((array_agg(DISTINCT node_id) FILTER (WHERE node_id IS NOT NULL AND node_id <> ''))[1:20], '{}')
+		FROM logs WHERE %s GROUP BY k ORDER BY max(occurred_at) DESC LIMIT $%d`, where, len(args))
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Group{}
+	for rows.Next() {
+		var g Group
+		var nodes []byte
+		if err := rows.Scan(&g.Key, &g.Level, &g.Count, &g.First, &g.Last, &g.Example, &nodes); err != nil {
+			return nil, err
+		}
+		g.NodeIDs = parsePgTextArray(string(nodes))
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+// parsePgTextArray liest ein einfaches Postgres-Text-Array ({a,b,"c d"}).
+func parsePgTextArray(s string) []string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(strings.TrimSuffix(s, "}"), "{")
+	if s == "" {
+		return []string{}
+	}
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		out = append(out, strings.Trim(p, `"`))
+	}
+	return out
 }
 
 // Query liefert Einträge neueste zuerst, gefiltert nach den gesetzten
@@ -84,26 +192,14 @@ func (s *Store) Query(f Filter) ([]Entry, error) {
 	if f.Limit <= 0 {
 		f.Limit = 200
 	}
-	clauses := []string{"($1 = 0 OR id < $1)"}
-	args := []any{f.Before}
-	addFilter := func(column, value string) {
-		if value == "" {
-			return
-		}
-		args = append(args, value)
-		clauses = append(clauses, fmt.Sprintf("%s = $%d", column, len(args)))
-	}
-	addFilter("trace_id", f.TraceID)
-	addFilter("node_id", f.NodeID)
-	addFilter("host_id", f.HostID)
-	addFilter("level", f.Level)
+	where, args := f.where()
 	args = append(args, f.Limit)
 
 	query := fmt.Sprintf(
 		`SELECT id, occurred_at, level, message, coalesce(trace_id, ''), coalesce(span_id, ''),
 		        coalesce(node_id, ''), coalesce(host_id, ''), source
 		 FROM logs WHERE %s ORDER BY id DESC LIMIT $%d`,
-		strings.Join(clauses, " AND "), len(args))
+		where, len(args))
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
