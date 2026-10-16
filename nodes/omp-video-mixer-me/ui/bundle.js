@@ -9,6 +9,8 @@ const T = (() => {
       "closeAria": "Schließen",
       "noPicture": "kein Bild",
       "mismatch": "Abweichendes Format: {format} — Mixer: {own}",
+      "sourceProblem": "Quelle meldet ein Problem: {text}",
+      "confirmTake": "Die Quelle „{label}“ meldet ein Problem:\n{text}\n\nTrotzdem auf Programm schalten?",
       "mixerLevels": "Mischerebenen",
       "ownWorkflow": "Dieser Workflow",
       "otherSources": "Andere Quellen",
@@ -83,6 +85,8 @@ const T = (() => {
       "closeAria": "Close",
       "noPicture": "no picture",
       "mismatch": "Different format: {format} — mixer: {own}",
+      "sourceProblem": "Source reports a problem: {text}",
+      "confirmTake": "The source \"{label}\" reports a problem:\n{text}\n\nTake it to program anyway?",
       "mixerLevels": "Mixer levels",
       "ownWorkflow": "This workflow",
       "otherSources": "Other sources",
@@ -674,10 +678,55 @@ class OmpVideoMixerMePanel extends HTMLElement {
     // Geteilte, ebenenunabhängige Hilfsfunktionen — je einmal definiert,
     // von jeder Bank (buildBank unten) mit ihrem eigenen `call()`
     // aufgerufen, statt N-fach dupliziert zu werden.
+    // Quellen-Gesundheit (BCP-008 `monitor.overallStatus` der Quell-Node): Taste markieren, PGM-Take nachfragen.
+    // Cache je Node; Nodes ohne Monitor werden nur selten erneut gefragt.
+    const sourceHealth = new Map(); // nodeId -> { severity: "error"|"warn", text } | null
+    const sourceHealthAt = new Map(); // nodeId -> { at, hasMonitor }
+    const touchSourceHealth = (nodeIds) => {
+      for (const id of nodeIds) {
+        if (!id || id === nodeId) continue;
+        const seen = sourceHealthAt.get(id);
+        if (seen && Date.now() - seen.at < (seen.hasMonitor ? 5000 : 60000)) continue;
+        sourceHealthAt.set(id, { at: Date.now(), hasMonitor: seen ? seen.hasMonitor : true });
+        void (async () => {
+          const read = async (p) => {
+            try {
+              const r = await fetch(`/api/v1/nodes/${id}/params/${p}`);
+              return r.ok ? (await r.json()).value : undefined;
+            } catch { return undefined; }
+          };
+          const status = await read("monitor.overallStatus");
+          if (typeof status !== "string") {
+            sourceHealthAt.set(id, { at: Date.now(), hasMonitor: false });
+            sourceHealth.delete(id);
+            return;
+          }
+          sourceHealthAt.set(id, { at: Date.now(), hasMonitor: true });
+          if (status !== "Unhealthy" && status !== "PartiallyHealthy") { sourceHealth.set(id, null); return; }
+          const texts = [];
+          const overall = await read("monitor.overallStatusMessage");
+          if (typeof overall === "string" && overall) texts.push(overall);
+          else {
+            await Promise.all(["transmission", "connection", "essence", "stream", "link"].map(async (d) => {
+              const st = await read(`monitor.${d}Status`);
+              if (st === undefined || ["Healthy", "AllUp", "Inactive", "NotUsed"].includes(st)) return;
+              const m = await read(`monitor.${d}StatusMessage`);
+              if (typeof m === "string" && m && !texts.includes(m)) texts.push(m);
+            }));
+          }
+          sourceHealth.set(id, { severity: status === "Unhealthy" ? "error" : "warn", text: texts.join("; ") || status });
+        })();
+      }
+    };
+
     const makeBusButton = (call, label, senderId, isProgram, sourceNodeId) => {
       const btn = document.createElement("omp-button");
       const method = isProgram ? "crosspoint.take" : "crosspoint.select";
-      btn.addEventListener("click", () => call(method, { senderId }));
+      btn.addEventListener("click", () => {
+        const h = isProgram && sourceNodeId ? sourceHealth.get(sourceNodeId) : null;
+        if (h && h.severity === "error" && !window.confirm(T("confirmTake", { label: shortLabel(label).replace(/^[⛔⚠] /, ""), text: h.text }))) return;
+        call(method, { senderId });
+      });
 
       // BLK (`senderId === ""`) hat kein Bild, bekommt aber bei aktiven
       // Vorschaubildern dieselbe Karte (schwarze Fläche ohne Text), damit
@@ -803,12 +852,17 @@ class OmpVideoMixerMePanel extends HTMLElement {
           && hasImg === !!(wantsThumb && sourceNodeId);
         // Formatabweichung (Nutzerwunsch 2026-09-30): Quelle hat andere
         // Auflösung/Bildrate als der Mixer — Warnsymbol + Tooltip.
-        const shownLabel = entry.mismatch ? `⚠ ${entry.label}` : entry.label;
+        const health = sourceNodeId ? sourceHealth.get(sourceNodeId) : null;
+        const shownLabel = health ? `${health.severity === "error" ? "⛔" : "⚠"} ${entry.label}` : entry.mismatch ? `⚠ ${entry.label}` : entry.label;
         const btn = reusable
           ? updateBusButton(reused, shownLabel, entry.senderId, sourceNodeId)
           : makeBusButton(call, shownLabel, entry.senderId, isProgram, sourceNodeId);
-        if (entry.mismatch) btn.title = T("mismatch", { format: entry.format || "?", own: entry.mixerFormat || "?" });
+        const tips = [];
+        if (health) tips.push(T("sourceProblem", { text: health.text }));
+        if (entry.mismatch) tips.push(T("mismatch", { format: entry.format || "?", own: entry.mixerFormat || "?" }));
+        if (tips.length) btn.title = tips.join("\n");
         else btn.removeAttribute("title");
+        btn.style.boxShadow = health ? `inset 0 0 0 2px ${health.severity === "error" ? "#e74c3c" : "#e0a030"}` : "";
         if (reused) existingButtons.delete(entry.senderId);
         btn.dataset.senderId = entry.senderId;
         btn.active = entry.senderId === activeId;
@@ -1753,6 +1807,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         // nicht angeheftete Sonderfälle (aktuelles PGM/PST, Ebenen-Ausgänge) folgen dahinter.
         const pinRank = (id) => { const k = pinned.indexOf(id); return k < 0 ? Number.MAX_SAFE_INTEGER : k; };
         const visibleInputs = inputs.filter((i) => alwaysVisible.has(i.senderId)).sort((a, b) => pinRank(a.senderId) - pinRank(b.senderId));
+        touchSourceHealth(visibleInputs.map((i) => senderNodeId?.get(i.senderId)));
         const entries = [{ label: "BLK", senderId: "" }, ...visibleInputs.map((i) => ({ label: shortLabel(i.label), senderId: i.senderId, format: i.format, mixerFormat: i.mixerFormat, mismatch: !!i.mismatch }))];
         // Nur dieses eine Hinweis-Element gezielt ersetzen (statt eines
         // vollen `innerHTML = ""`), damit `renderBusRow`s wiederverwendete

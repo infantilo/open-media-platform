@@ -44,6 +44,7 @@ interface NetInfo {
 
 type ProblemList = NonNullable<NodeContext["problems"]>;
 
+const NO_MONITOR_RETRY_MS = 30000;
 const POLL_INTERVAL_MS = 5000;
 const REFRESH_EVENT_TYPES = new Set(["edge.added", "edge.removed", "instance.crashed", "instance.restarted", "lost-events"]);
 
@@ -62,7 +63,7 @@ class SignalPathView extends HTMLElement {
   #hostLabels = new Map<string, string>();
   #net: NetInfo | null = null;
   #problems = new Map<string, ProblemList>();
-  #noMonitorTypes = new Set<string>();
+  #noMonitorTypes = new Map<string, number>(); // Typ → Zeitpunkt der letzten Fehlanzeige
   #from = "";
   #to = "";
   #via = "";
@@ -289,7 +290,7 @@ class SignalPathView extends HTMLElement {
   /**
    * Laufzeit-Probleme aus dem BCP-008-Status der Nodes (`monitor.overallStatus` + Meldung): Handy-Gateway ohne
    * Sitzung/Bilder, Mischer mit nicht lesbaren Eingängen, Karten ohne Signal usw. Nodes ohne Monitor werden je Typ
-   * einmal erkannt und danach nicht mehr abgefragt.
+   * erkannt und für 30 s nicht erneut abgefragt.
    */
   async #runtimeProblems(graph: GraphData): Promise<Map<string, ProblemList>> {
     const out = new Map<string, ProblemList>();
@@ -303,10 +304,10 @@ class SignalPathView extends HTMLElement {
     };
     await Promise.all(graph.nodes.map(async (n) => {
       const inst = n.instanceId ? this.#instances.get(n.instanceId) : undefined;
-      if (!inst || inst.crashed || (inst.type && this.#noMonitorTypes.has(inst.type))) return;
+      if (!inst || inst.crashed || (inst.type && Date.now() - (this.#noMonitorTypes.get(inst.type) ?? 0) < NO_MONITOR_RETRY_MS)) return;
       const status = await read(n.id, "monitor.overallStatus");
       if (typeof status !== "string") {
-        if (inst.type) this.#noMonitorTypes.add(inst.type);
+        if (inst.type) this.#noMonitorTypes.set(inst.type, Date.now()); // kurz nicht erreichbar (Neustart) darf nicht dauerhaft blind machen
         return;
       }
       if (status !== "Unhealthy" && status !== "PartiallyHealthy") return;
