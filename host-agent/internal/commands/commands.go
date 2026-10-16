@@ -340,7 +340,8 @@ func (e *Executor) start(req Request) Response {
 	}
 
 	stderrTail := newTailBuffer(crashStderrLines)
-	cmd := exec.Command(entry.Command[0], entry.Command[1:]...)
+	argv := wrapRealtime(entry.Type, toCatalogRealtime(entry.Realtime), entry.Command)
+	cmd := exec.Command(argv[0], argv[1:]...)
 	ensureMxlDomain()
 	cmd.Env = buildEnv(entry.Env, extra, req.InstanceID, req.Label, e.registryURL, e.natsURL, e.orchestratorURL, req.LaunchSecret)
 	cmd.Stdout = os.Stdout

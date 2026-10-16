@@ -151,6 +151,8 @@ type CatalogEntry struct {
 	// Default false: wie MxlAccess ein bewusster Opt-in, kein globales
 	// Verhalten für jeden Podman-Import.
 	ExtraPort bool `json:"extraPort,omitempty"`
+	// Realtime (Handbuch Kap. 10): CPU-Pinning/Priorität des Prozesses (nur runner:"process").
+	Realtime *CatalogRealtime `json:"realtime,omitempty"`
 }
 
 // CatalogNetwork beschreibt den NIC-Bedarf eines Node-Typs. Direction ist

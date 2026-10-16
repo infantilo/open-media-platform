@@ -53,6 +53,16 @@ type Entry struct {
 	Command []string          `json:"command"`
 	Image   string            `json:"image,omitempty"`
 	Env     map[string]string `json:"env"`
+	// Realtime: CPU-Pinning/Priorität (Handbuch Kap. 10), s. commands/realtime.go.
+	Realtime *Realtime `json:"realtime,omitempty"`
+}
+
+// Realtime spiegelt launcher.CatalogRealtime.
+type Realtime struct {
+	Cpus     string `json:"cpus,omitempty"`
+	Policy   string `json:"policy,omitempty"`
+	Priority int    `json:"priority,omitempty"`
+	Nice     int    `json:"nice,omitempty"`
 }
 
 // Load liest und validiert die Katalog-Datei unter path — leerer/

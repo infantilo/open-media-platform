@@ -896,9 +896,25 @@ in einem Wartungsfenster. Auch System-Dienste (`system.slice`, `user.slice`,
 `init.scope`) auf Haushalt festnageln: `/etc/systemd/system.conf` →
 `CPUAffinity=0-3`.
 
-Pro Node gezielt (z. B. nur Mischer und Ausgang auf eigene Kerne): im Betrieb
-`taskset -a -cp 4-7 <pid>` bzw. beim Start `taskset -c 4-7 …`. Es gibt
-(noch) keine Katalog-Option dafür – wer das braucht, meldet es als Wunsch.
+Pro Node gezielt (z. B. nur Mischer und Ausgang auf eigene Kerne): optionales
+Katalog-Feld `realtime` am Eintrag in `deploy/catalog.json` (gilt für Orchestrator
+und Host-Agent, nur `runner:"process"`):
+
+```json
+"realtime": { "cpus": "4-7", "policy": "fifo", "priority": 40 }
+"realtime": { "cpus": "8,10-11", "nice": -10 }
+```
+
+`cpus` (taskset-Liste), `policy` (`other`|`fifo`|`rr`), `priority` (1–90, nur
+fifo/rr), `nice` (−20…19, nur ohne fifo/rr). Umgesetzt als Wrapper
+`chrt`/`taskset`/`nice` vor dem Binary; die PID bleibt die des Nodes, Pinning
+gilt ab dem ersten Thread. Nicht anwendbare Teile (CPU existiert auf diesem
+Host nicht, `LimitRTPRIO`/`LimitNICE` fehlen, Werkzeug fehlt) werden mit einer
+Warnung im Log weggelassen – die Instanz startet dann ungepinnt. Kerne sind
+je Host verschieden: bei unterschiedlich großen Hosts den Eintrag nur dort
+setzen, wo er passt, oder auf jedem Host `OMP_RT_DISABLE=1` setzen, der ihn
+nicht nutzen soll. Wirkt auf neu gestartete Instanzen, nicht auf laufende.
+Podman-Einträge (`runner:"podman"`) sind ausgenommen (dort `--cpuset-cpus`).
 
 ### 10.4 Interrupts und Netzwerkkarte
 
