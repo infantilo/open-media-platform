@@ -16,7 +16,8 @@ Deno.test("XL (3 Inhaltszeilen): PGM, PRE, Steuerung; Zustandsfarben", () => {
   assertEquals(l.keys[0][2]?.state, "onair"); // s1 = Q1 auf PGM
   assertEquals(l.keys[1][3]?.state, "preset"); // s2 = Q2 auf PRE
   assertEquals(l.keys[0][3]?.state, "off");
-  assertEquals(lbl(l, 2), "CUT,AUTO,DSK,Übergang,Rate,·,·,·");
+  assertEquals(lbl(l, 2), "CUT,AUTO,DSK,Übergang,Rate,FREEZE,·,·");
+  assertEquals(l.act[2][5], { method: "freeze.capture" });
   assertEquals(l.act[0][1], { method: "crosspoint.take", body: { senderId: "s0" } });
   assertEquals(l.act[1][1], { method: "crosspoint.select", body: { senderId: "s0" } });
   assertEquals(l.act[2][0], { method: "crosspoint.cut" });
@@ -29,9 +30,9 @@ Deno.test("Steuertasten: DSK-Umschalten, Übergangstyp/Rate weiterschalten, PIP-
   assertEquals(l.act[2][3], { method: "crosspoint.setTransType", body: { type: "cutfade" } });
   assertEquals(l.keys[2][3]?.sub, "FADE-CUT");
   assertEquals(l.act[2][4], { method: "crosspoint.setTransRate", body: { frames: 6 } }); // 50 → 6
-  assertEquals(l.act[2][5], { method: "pip.applyPreset", body: { id: "p1" } });
-  assertEquals(l.keys[2][6]?.state, "cue");
-  assertEquals(l.act[2][6], { method: "pip.setEnabled", body: { enabled: false } });
+  assertEquals(l.act[2][6], { method: "pip.applyPreset", body: { id: "p1" } });
+  assertEquals(l.keys[2][7]?.state, "cue");
+  assertEquals(l.act[2][7], { method: "pip.setEnabled", body: { enabled: false } });
 });
 
 Deno.test("mehr Quellen als Spalten: Seiten, letzte Zelle bleibt frei, Seite 2 zeigt den Rest", () => {
@@ -47,12 +48,12 @@ Deno.test("mehr Quellen als Spalten: Seiten, letzte Zelle bleibt frei, Seite 2 z
 Deno.test("„+“ (1 Zeile × 4): PGM-Seiten, PRE-Seiten, dann Steuerung", () => {
   const s = state(2); // 3 Einträge ≤ 4 Spalten, aber Seiten > 1 → cap 3
   const l = (p: number) => layoutVideoMixer(s, 4, 1, p);
-  assertEquals(l(0).pages, 2 * 1 + 2); // PGM, PRE, 2 Steuer-Chunks (5 Tasten, cap 3)
+  assertEquals(l(0).pages, 2 * 1 + 2); // PGM, PRE, 2 Steuer-Chunks (6 Tasten, cap 3)
   assertEquals(lbl(l(0), 0), "BLK,Q0,Q1,·");
   assertEquals(l(0).keys[0][0]?.sub, "PGM");
   assertEquals(l(1).keys[0][0]?.sub, "PRE");
   assertEquals(lbl(l(2), 0), "CUT,AUTO,DSK,·");
-  assertEquals(lbl(l(3), 0), "Übergang,Rate,·,·");
+  assertEquals(lbl(l(3), 0), "Übergang,Rate,FREEZE,·");
 });
 
 Deno.test("2 Zeilen (15-Tasten-Pult, 5 Spalten): PGM+PRE auf einer Seite", () => {
@@ -72,6 +73,21 @@ Deno.test("Adapter: Tastendruck ruft die Methode auf (nur beim Drücken), leerer
   a.getLayout({ cols: 8, rows: 3, dials: 0, page: 0 });
   a.onKey(0, 2, true); a.onKey(0, 2, false); a.onKey(1, 1, true); a.onKey(2, 0, true); a.onKey(0, 7, true);
   assertEquals(calls, [["crosspoint.take", { senderId: "s1" }], ["crosspoint.select", { senderId: "s0" }], ["crosspoint.cut", undefined]]);
+});
+
+Deno.test("Quelle mit Problem: rot bzw. „!“; auf dem Bus bleibt dessen Farbe, Hinweis im Untertitel", () => {
+  const s = state(3, { program: "s1" });
+  s.entries[1].problem = "error"; // Q0, nicht auf Sendung
+  s.entries[2].problem = "error"; // Q1 = PGM
+  s.entries[3].problem = "warn"; // Q2
+  const l = layoutVideoMixer(s, 8, 3, 0);
+  assertEquals(l.keys[0][1]?.state, "error");
+  assertEquals(l.keys[0][1]?.sub, "PGM ✖");
+  assertEquals(l.keys[0][2]?.state, "onair");
+  assertEquals(l.keys[0][2]?.sub, "PGM ✖");
+  assertEquals(l.keys[0][3]?.state, "off");
+  assertEquals(l.keys[0][3]?.sub, "PGM !");
+  assertEquals(l.keys[1][1]?.sub, "PRE ✖");
 });
 
 Deno.test("Tastentitel kürzen", () => {

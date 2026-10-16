@@ -2041,7 +2041,10 @@ class OmpVideoMixerMePanel extends HTMLElement {
         // Tasten (ui/shell/streamdeck/adapters/video-mixer*.ts).
         if (level === 0) {
           this._deckState = {
-            entries: entries.map((e) => ({ label: e.label, senderId: e.senderId })),
+            entries: entries.map((e) => {
+              const h = e.senderId ? sourceHealth.get(senderNodeId?.get(e.senderId)) : null;
+              return { label: e.label, senderId: e.senderId, problem: h ? h.severity : undefined };
+            }),
             program,
             preset,
             keyer: keyerEnabled,

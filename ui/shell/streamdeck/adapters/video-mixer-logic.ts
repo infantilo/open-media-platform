@@ -1,12 +1,13 @@
 // Video-Mixer-M/E-Adapter, reine Logik (Kap. 40.5): PGM-/PRE-Zeilen aus den
-// Quellen, Steuerzeile (CUT, AUTO, DSK, Typ, Rate, PIP-Presets). Aufrufe sind
+// Quellen, Steuerzeile (CUT, AUTO, DSK, Typ, Rate, FREEZE, PIP-Presets). Aufrufe sind
 // dieselben Methoden wie bei den Bildschirm-Tasten des Bundles.
 
 import type { AdapterLayout } from "../adapter.ts";
 import type { KeyDef } from "../render-logic.ts";
 
 export interface MixerState {
-  entries: { label: string; senderId: string }[]; // inkl. BLK (senderId "")
+  /** inkl. BLK (senderId ""); `problem` = Status der Quell-Node (BCP-008): "error" = Unhealthy, "warn" = PartiallyHealthy. */
+  entries: { label: string; senderId: string; problem?: "error" | "warn" }[];
   program: string;
   preset: string;
   keyer: boolean;
@@ -66,6 +67,8 @@ export function controlItems(s: MixerState): { key: KeyDef; act: MixerAction }[]
       key: { label: "Rate", sub: s.transRate ? `${s.transRate} f` : "–" },
       act: { method: "crosspoint.setTransRate", body: { frames: TRANS_RATES[(TRANS_RATES.indexOf(s.transRate as never) + 1) % TRANS_RATES.length] } },
     },
+    // Standbild des PGM-Bildes aufnehmen; es erscheint danach als angeheftete Quelle (auch als Taste).
+    { key: { label: "FREEZE", sub: "Standbild" }, act: { method: "freeze.capture" } },
   ];
   for (const p of s.pipPresets) {
     const on = s.pipEnabled && s.activePip === p.id;
@@ -91,7 +94,15 @@ export function layoutVideoMixer(s: MixerState, cols: number, rows: number, page
     const slice = s.entries.slice(sp * pl.srcCap, sp * pl.srcCap + pl.srcCap);
     slice.forEach((e, c) => {
       const cur = bus === "pgm" ? s.program : s.preset;
-      keys[r][c] = { label: deckLabel(e.label) || "BLK", sub: bus.toUpperCase(), state: e.senderId === cur ? (bus === "pgm" ? "onair" : "preset") : "off" };
+      const live = e.senderId === cur;
+      // Quelle mit Problem: Taste rot (error) bzw. Zusatz „!“ (warn); liegt sie gerade auf dem Bus, bleibt dessen Farbe,
+      // damit „auf Sendung“ erkennbar bleibt — der Hinweis steht dann im Untertitel.
+      const flag = e.problem ? (e.problem === "error" ? " ✖" : " !") : "";
+      keys[r][c] = {
+        label: deckLabel(e.label) || "BLK",
+        sub: bus.toUpperCase() + flag,
+        state: live ? (bus === "pgm" ? "onair" : "preset") : e.problem === "error" ? "error" : "off",
+      };
       act[r][c] = { method: bus === "pgm" ? "crosspoint.take" : "crosspoint.select", body: { senderId: e.senderId } };
     });
   };

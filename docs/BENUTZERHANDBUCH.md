@@ -1644,7 +1644,7 @@ werden bei langen Namen kleiner; nur wenn auch die kleinste Schrift nicht reicht
 ### Video-Mixer M/E
 
 Zeile 1 = **PGM** (direkt auf Sendung, rot), Zeile 2 = **PRE** (Vorschau, grün), Zeile 3 = **CUT**, **AUTO**, **DSK**, Übergangstyp (weiter),
-Rate (weiter) und die PIP-Voreinstellungen (Umschalter). Kleinere Geräte zeigen PGM/PRE/Steuerung nacheinander als Seiten. Nur die Master-Ebene.
+Rate (weiter), **FREEZE** (nimmt das aktuelle Programmbild als Standbild auf; es erscheint danach als eigene Quellentaste in PGM/PRE) und die PIP-Voreinstellungen (Umschalter). Quellen, deren Node einen Fehler meldet, sind rot (Untertitel „✖“); bei einer Warnung steht „!“ im Untertitel; liegt die Quelle gerade auf dem Bus, bleibt dessen Farbe. Die Tasten sperren nicht — wer eine rote Quelle drückt, schaltet sie (am Bildschirm fragt der Mischer dagegen nach). Kleinere Geräte zeigen PGM/PRE/Steuerung nacheinander als Seiten. Nur die Master-Ebene.
 
 ![Video-Mixer am XL: PGM, PRE und die Steuerzeile](screenshots/streamdeck-xl-videomixer.png)
 
