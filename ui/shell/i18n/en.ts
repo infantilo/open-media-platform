@@ -1896,6 +1896,7 @@ export const en: Record<keyof typeof de, string> = {
   "sched.ownLane": "{p0} — own share (shared machine)",
   "sched.sharedMachine": "Shared machine: ",
   "sched.placementHint": " Running workflows count on the host they actually run on; planned roles without a fixed host are assigned to the host placement will most likely choose at start (lowest load, excluding hosts in maintenance) — a forecast.",
+  "sched.editOk": "OK",
   "y.bottleneck": "⚠ Bottleneck: {p0}{p1}",
   "y.resBottleneck": "\n⚠ Resource bottleneck: {p0}",
   "y.stdOpt": "— Default{p0} —",

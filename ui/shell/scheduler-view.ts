@@ -1294,11 +1294,10 @@ class SchedulerView extends HTMLElement {
     panel.style.left = `${Math.min(Math.max(0, rect.left - hostRect.left), hostRect.width - 160)}px`;
     panel.style.top = `${rect.bottom - hostRect.top + this.scrollTop + 2}px`;
 
-    // Lokale, veränderbare Kopie — jede Feldänderung speichert sofort
-    // (gleiche "committed on change"-Konvention wie beim Drag), operiert
-    // aber auf einer Kopie, damit ein Zwischen-Poll während des Tippens
-    // (selten, aber möglich) nicht mit einer halb bearbeiteten Referenz
-    // kollidiert.
+    // Lokale, veränderbare Kopie: Änderungen wirken erst mit "OK" (ein PUT),
+    // "Abbrechen", Escape oder ein Klick daneben verwerfen sie — ein
+    // Zwischen-Poll kollidiert so auch nicht mit einer halb bearbeiteten
+    // Referenz.
     const schedules = (wf.definition.schedules ?? []).map((s) => ({ ...s }));
 
     const addRow = (label: string, inst: Instance | undefined) => {
@@ -1324,7 +1323,6 @@ class SchedulerView extends HTMLElement {
         });
         weekdaySelect.addEventListener("change", () => {
           target.weekday = Number(weekdaySelect.value);
-          void this.#persist(wf, schedules);
         });
         row.appendChild(weekdaySelect);
       }
@@ -1335,7 +1333,6 @@ class SchedulerView extends HTMLElement {
         dt.value = target.at ? toDatetimeLocalValue(target.at) : "";
         dt.addEventListener("change", () => {
           target.at = dt.value ? new Date(dt.value).toISOString() : undefined;
-          void this.#persist(wf, schedules);
         });
         row.appendChild(dt);
       } else {
@@ -1344,7 +1341,6 @@ class SchedulerView extends HTMLElement {
         time.value = target.timeOfDay ?? "";
         time.addEventListener("change", () => {
           target.timeOfDay = time.value || undefined;
-          void this.#persist(wf, schedules);
         });
         row.appendChild(time);
       }
@@ -1355,12 +1351,48 @@ class SchedulerView extends HTMLElement {
     addRow(tt("sched.a6122a"), bar.start);
     addRow(tt("sched.11a755"), bar.stop);
 
+    const close = () => {
+      document.removeEventListener("pointerdown", closeOnOutside, true);
+      panel.removeEventListener("keydown", onKey);
+      this.#closePopover(panel);
+    };
+    const commit = () => {
+      // Die Eingabefelder melden "change" erst beim Verlassen — Enter im Feld
+      // kommt davor an, deshalb Werte hier nicht aus dem Modell, sondern über
+      // ein erzwungenes change-Ereignis übernehmen.
+      panel.querySelectorAll("input,select").forEach((el) => el.dispatchEvent(new Event("change")));
+      close();
+      void this.#persist(wf, schedules);
+    };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        commit();
+      } else if (ev.key === "Escape") {
+        ev.preventDefault();
+        close();
+      }
+    };
+    const buttons = document.createElement("div");
+    buttons.style.cssText = "display:flex;justify-content:flex-end;gap:6px;margin-top:2px;";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.dataset.role = "time-editor-cancel";
+    cancelBtn.textContent = tt("kit.cancel");
+    cancelBtn.style.cursor = "pointer";
+    cancelBtn.addEventListener("click", close);
+    const okBtn = document.createElement("button");
+    okBtn.dataset.role = "time-editor-ok";
+    okBtn.textContent = tt("sched.editOk");
+    okBtn.className = "omp-btn-primary";
+    okBtn.style.cursor = "pointer";
+    okBtn.addEventListener("click", commit);
+    buttons.append(cancelBtn, okBtn);
+    panel.appendChild(buttons);
+    panel.addEventListener("keydown", onKey);
+
     this.appendChild(panel);
     const closeOnOutside = (ev: MouseEvent) => {
-      if (!panel.contains(ev.target as Node)) {
-        document.removeEventListener("pointerdown", closeOnOutside, true);
-        this.#closePopover(panel);
-      }
+      if (!panel.contains(ev.target as Node)) close(); // Klick daneben = Abbrechen
     };
     window.setTimeout(() => document.addEventListener("pointerdown", closeOnOutside, true), 0);
   }

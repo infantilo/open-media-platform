@@ -1895,6 +1895,7 @@ export const de = {
   "sched.ownLane": "{p0} — eigener Anteil (gemeinsame Maschine)",
   "sched.sharedMachine": "Gemeinsame Maschine: ",
   "sched.placementHint": " Laufende Workflows zählen auf dem Host, auf dem sie tatsächlich laufen; geplante Rollen ohne Host-Festlegung werden dem Host zugeordnet, den die Platzierung beim Start voraussichtlich wählt (geringste Auslastung, ohne Hosts im Wartungsmodus) — eine Prognose.",
+  "sched.editOk": "OK",
   "y.bottleneck": "⚠ Engpass: {p0}{p1}",
   "y.resBottleneck": "\n⚠ Ressourcen-Engpass: {p0}",
   "y.stdOpt": "— Standard{p0} —",
