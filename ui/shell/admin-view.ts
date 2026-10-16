@@ -21,6 +21,7 @@
 import { type I18nKey, t, t as tt } from "./i18n.ts";
 import "./settings-view.ts";
 import { PermissionsEditor } from "./permissions-editor.ts";
+import { AuditPanel } from "./audit-panel.ts";
 import { ensureBundle, getModules } from "./modules-registry.ts";
 import { adminGroups, type AdminModuleGroup } from "./modules-logic.ts";
 import { getLang } from "./i18n.ts";
@@ -72,16 +73,6 @@ interface WorkflowSummary {
   id: string;
   name: string;
   definition: { roles: { name: string; nodeType: string }[] };
-}
-
-interface AuditEntry {
-  id: number;
-  occurredAt: string;
-  username: string;
-  method: string;
-  path: string;
-  nodeId?: string;
-  status: number;
 }
 
 // LogEntry — Wire-Format identisch zu orchestrator/internal/
@@ -199,11 +190,6 @@ interface AdmissionResult {
 
 const AUDIT_POLL_FALLBACK_INTERVAL_MS = 30000;
 const AUDIT_REFRESH_EVENT_TYPES = new Set(["audit.appended", "lost-events"]);
-// AUDIT_PAGE_LIMIT (S5, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) —
-// muss <= server.go's maxAuditLogLimit (200) sein, sonst kappt der
-// Server ohnehin; als eigene Konstante statt einer Magic Number an
-// beiden Aufrufstellen unten (#loadAudit/#loadMoreAudit).
-const AUDIT_PAGE_LIMIT = 50;
 
 // ARCHITECTURE.md §25.3 (UMSETZUNG.md D20) — gleiches SSE-first-Muster
 // wie beim Audit-Log: logbus.Store.Insert broadcastet "log.appended"
@@ -347,12 +333,7 @@ class AdminView extends HTMLElement {
   #activeAdminTab: AdminTabId = "users";
   #users: UserEntry[] = [];
   #bindings: RoleBinding[] = [];
-  #audit: AuditEntry[] = [];
-  // S5: true, solange die letzte geladene Seite genau AUDIT_PAGE_LIMIT
-  // Einträge enthielt — dann könnte eine weitere Seite existieren
-  // (kein zusätzlicher COUNT(*) nötig, s. audit.Store.List-Doku).
-  #auditHasMore = false;
-  #auditLoadingMore = false;
+  #auditPanel = new AuditPanel();
   // Diagnose-Cockpit (ARCHITECTURE.md §25.3, UMSETZUNG.md D20) — gleiche
   // Cursor-Pagination/SSE-Refresh-Struktur wie #audit oben, zusätzlich
   // drei client-seitig gehaltene Filter (Trace-ID/Node-ID/Level), die
@@ -1009,46 +990,9 @@ class AdminView extends HTMLElement {
     }
   }
 
-  // S5: lädt immer die erste (neueste) Seite und ersetzt #audit
-  // komplett — der richtige Reflex bei "audit.appended"/"lost-events"
-  // (neue Zeile(n) seit dem letzten Stand) und beim Fallback-Poll,
-  // nicht bei "Mehr laden" (das hängt an, s. #loadMoreAudit).
+  // Lädt die erste Seite des Audit-Panels neu (Filter bleiben erhalten).
   async #loadAudit() {
-    try {
-      const res = await apiFetch(`/api/v1/admin/audit-log?limit=${AUDIT_PAGE_LIMIT}`);
-      if (res.ok) {
-        const page: AuditEntry[] = await res.json();
-        this.#audit = page;
-        this.#auditHasMore = page.length === AUDIT_PAGE_LIMIT;
-        this.#render();
-      }
-    } catch {
-      // s.o.
-    }
-  }
-
-  // S5: "Mehr laden" — hängt die nächste Seite an, per Cursor (kleinste
-  // bisher geladene ID) statt eines Offsets (robust gegen neue Zeilen,
-  // die zwischen zwei Klicks dazukommen — die verschieben einen
-  // Offset, nicht aber die Cursor-ID).
-  async #loadMoreAudit() {
-    if (this.#auditLoadingMore || this.#audit.length === 0) return;
-    this.#auditLoadingMore = true;
-    this.#render();
-    try {
-      const oldestID = this.#audit[this.#audit.length - 1].id;
-      const res = await apiFetch(`/api/v1/admin/audit-log?before=${oldestID}&limit=${AUDIT_PAGE_LIMIT}`);
-      if (res.ok) {
-        const page: AuditEntry[] = await res.json();
-        this.#audit = [...this.#audit, ...page];
-        this.#auditHasMore = page.length === AUDIT_PAGE_LIMIT;
-      }
-    } catch {
-      // Nächster Klick versucht es erneut — kein Retry-Automatismus nötig.
-    } finally {
-      this.#auditLoadingMore = false;
-      this.#render();
-    }
+    await this.#auditPanel.refresh();
   }
 
   // ARCHITECTURE.md §25.2/§25.3 (UMSETZUNG.md D20) — s. #loadAudit-Doku
@@ -2400,7 +2344,14 @@ class AdminView extends HTMLElement {
         this.appendChild(this.#locationsView);
         break;
       case "audit":
-        this.appendChild(this.#renderAuditSection());
+        this.#auditPanel.setContext({
+          users: this.#users.map((u) => u.username),
+          nodes: this.#nodes,
+          workflows: this.#workflows,
+          processes: this.#processes,
+          groups: this.#groups,
+        });
+        this.appendChild(this.#auditPanel.el);
         break;
       case "diagnose":
         this.appendChild(this.#renderDiagnoseSection());
@@ -3831,62 +3782,6 @@ class AdminView extends HTMLElement {
     card.appendChild(actions);
 
     return card;
-  }
-
-  #renderAuditSection(): HTMLElement {
-    const section = document.createElement("div");
-
-    const heading = document.createElement("div");
-    heading.className = "omp-h1";
-    heading.style.cssText = "margin-bottom:var(--omp-space-3);";
-    // S5: die Zahl ist die Anzahl geladener, nicht aller je
-    // protokollierten Zeilen (Cursor-Pagination, "Mehr laden" lädt
-    // weitere nach) — deshalb "geladen" statt einer nackten Zahl, die
-    // wie ein Gesamtstand aussehen würde.
-    heading.textContent = tt("adm.e6e18b", { p0: this.#audit.length });
-    section.appendChild(heading);
-
-    if (this.#audit.length === 0) {
-      const empty = document.createElement("div");
-      empty.style.cssText = "color:var(--omp-text-dim);";
-      empty.textContent = tt("adm.5f30db");
-      section.appendChild(empty);
-      return section;
-    }
-
-    const rows = this.#audit
-      .map(
-        (e) => `<tr>
-        <td style="padding:2px 8px;color:var(--omp-text-dim);white-space:nowrap;">${escapeHtml(new Date(e.occurredAt).toLocaleString())}</td>
-        <td style="padding:2px 8px;">${escapeHtml(e.username)}</td>
-        <td style="padding:2px 8px;">${escapeHtml(e.method)}</td>
-        <td style="padding:2px 8px;color:var(--omp-text-dim);word-break:break-all;">${escapeHtml(e.path)}</td>
-        <td style="padding:2px 8px;color:${e.status >= 400 ? "var(--omp-error)" : "var(--omp-text)"};">${e.status}</td>
-      </tr>`,
-      )
-      .join("");
-
-    const table = document.createElement("table");
-    table.style.cssText = "border-collapse:collapse;width:100%;";
-    table.innerHTML = `<thead><tr style="color:var(--omp-text-dim);text-align:left;">
-      <th style="padding:2px 8px;">${tt("adm.718271")}</th>
-      <th style="padding:2px 8px;">${tt("adm.8a940a")}</th>
-      <th style="padding:2px 8px;">${tt("adm.41aa69")}</th>
-      <th style="padding:2px 8px;">${tt("adm.b6a791")}</th>
-      <th style="padding:2px 8px;">${tt("adm.ec53a8")}</th>
-    </tr></thead><tbody>${rows}</tbody>`;
-    section.appendChild(table);
-
-    if (this.#auditHasMore) {
-      const moreBtn = document.createElement("button");
-      moreBtn.textContent = this.#auditLoadingMore ? tt("adm.4446bb") : tt("adm.5cc9dd");
-      moreBtn.disabled = this.#auditLoadingMore;
-      moreBtn.style.cssText = "font-size:11px;cursor:pointer;margin-top:8px;";
-      moreBtn.addEventListener("click", () => this.#loadMoreAudit());
-      section.appendChild(moreBtn);
-    }
-
-    return section;
   }
 
   // ARCHITECTURE.md §25.3 (UMSETZUNG.md D20) — das Diagnose-Cockpit:

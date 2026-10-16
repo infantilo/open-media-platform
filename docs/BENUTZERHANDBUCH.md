@@ -844,9 +844,20 @@ untereinander):
   (Abschnitt „Related project"/`HANDBUCH.md`) nimmt zusätzlich
   containerisierte Drittanbieter-Microservices auf, nach demselben
   Contract-Check wie eingebaute Nodes.
-- **Audit-Log** — jede schreibende Anfrage (wer, wann, welcher
-  API-Pfad, welcher HTTP-Status) — auch fehlgeschlagene Versuche (rot
-  markierte Statuscodes) bleiben sichtbar.
+- **Audit-Log** — zeigt in Klartext, wer wann was geändert hat („anna
+  Workflow Studio gestartet“, „admin Recht vergeben“), nach Tagen
+  gruppiert. Protokolliert wird jede schreibende Anfrage, auch
+  fehlgeschlagene (rotes Etikett mit Grund, z. B. „keine Berechtigung“);
+  ein Klick auf eine Zeile zeigt Methode, Pfad und Status. Filter, die der
+  Server anwendet: Suche (findet Nutzer sowie Namen von Nodes, Workflows,
+  Prozessen und Gruppen), Nutzer, Ergebnis (alle/erfolgreich/Fehlschläge),
+  Zeitraum (Stunde bis Alles) und Bereiche als Schaltflächen (Anmeldungen,
+  Nutzer, Rechte & Gruppen, Workflows, Instanzen & Hosts, Verbindungen,
+  Prozesse, Medien, System). „Bedienung“ (Schnitte, Fader, Parameter) und
+  das automatische Speichern des Ansichts-Layouts sind standardmäßig
+  ausgeblendet, weil sie das Log sonst fluten; „Alle“ blendet sie ein.
+  „Ältere laden“ blättert innerhalb des Filters, „Als CSV exportieren“
+  speichert die geladenen Zeilen.
 - **Backup/Restore** — „Backup jetzt erstellen“ erstellt sofort einen
   Download; Restore verlangt, den gewählten Dateinamen exakt
   einzutippen (Bestätigung), ersetzt danach den kompletten

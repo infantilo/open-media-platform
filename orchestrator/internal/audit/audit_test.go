@@ -233,3 +233,44 @@ func TestPurgeOlderThanZeroOrNegativeIsNoOp(t *testing.T) {
 		t.Error("row was deleted despite retentionDays=0 (should be a no-op)")
 	}
 }
+
+func TestListFilteredByUserResultTermsAndExclude(t *testing.T) {
+	database := testDB(t)
+	store := NewStore(database, nil)
+	u := "test-audit-filter-user"
+	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM audit_log WHERE username = $1`, u) })
+
+	store.Log(u, "POST", "/api/v1/workflows/wf-abc/start", "", 200)
+	store.Log(u, "POST", "/api/v1/workflows/wf-abc/stop", "", 403)
+	store.Log(u, "PATCH", "/api/v1/nodes/n1/params/gain", "inst-kamera", 200)
+
+	count := func(f Filter) int {
+		f.User, f.Limit = u, 100
+		es, err := store.ListFiltered(f)
+		if err != nil {
+			t.Fatalf("ListFiltered() error = %v", err)
+		}
+		return len(es)
+	}
+	if got := count(Filter{}); got != 3 {
+		t.Errorf("no filter: got %d, want 3", got)
+	}
+	if got := count(Filter{Result: "failed"}); got != 1 {
+		t.Errorf("failed: got %d, want 1", got)
+	}
+	if got := count(Filter{Result: "ok"}); got != 2 {
+		t.Errorf("ok: got %d, want 2", got)
+	}
+	if got := count(Filter{Terms: []string{"wf-abc"}}); got != 2 {
+		t.Errorf("term wf-abc: got %d, want 2", got)
+	}
+	if got := count(Filter{Terms: []string{"KAMERA"}}); got != 1 {
+		t.Errorf("term on node id, case-insensitive: got %d, want 1", got)
+	}
+	if got := count(Filter{ExcludeLike: []string{"/api/v1/nodes/%"}}); got != 2 {
+		t.Errorf("exclude nodes: got %d, want 2", got)
+	}
+	if got := count(Filter{Terms: []string{"100%"}}); got != 0 {
+		t.Errorf("LIKE wildcard must be escaped: got %d, want 0", got)
+	}
+}

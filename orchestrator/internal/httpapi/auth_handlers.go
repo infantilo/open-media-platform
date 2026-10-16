@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/audit"
@@ -20,6 +21,12 @@ import (
 // SKALIERUNG-24-7.md) — before == 0 liefert die erste Seite.
 type AuditReader interface {
 	List(before int64, limit int) ([]audit.Entry, error)
+}
+
+// AuditFilterReader ist die optionale Erweiterung von AuditReader um
+// Filter (implementiert von *audit.Store).
+type AuditFilterReader interface {
+	ListFiltered(f audit.Filter) ([]audit.Entry, error)
 }
 
 type loginRequest struct {
@@ -537,7 +544,28 @@ func handleListAuditLog(reader AuditReader) http.HandlerFunc {
 			limit = maxAuditLogLimit
 		}
 
-		entries, err := reader.List(before, limit)
+		q := r.URL.Query()
+		var entries []audit.Entry
+		var err error
+		if fr, ok := reader.(AuditFilterReader); ok {
+			f := audit.Filter{Before: before, Limit: limit, User: q.Get("user"), Result: q.Get("result")}
+			if v, e := time.Parse(time.RFC3339, q.Get("since")); e == nil {
+				f.Since = v
+			}
+			if v, e := time.Parse(time.RFC3339, q.Get("until")); e == nil {
+				f.Until = v
+			}
+			// Trennzeichen U+001F: Begriffe und Muster dürfen Kommas enthalten.
+			if v := q.Get("terms"); v != "" {
+				f.Terms = strings.Split(v, "\x1f")
+			}
+			if v := q.Get("exclude"); v != "" {
+				f.ExcludeLike = strings.Split(v, "\x1f")
+			}
+			entries, err = fr.ListFiltered(f)
+		} else {
+			entries, err = reader.List(before, limit)
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
