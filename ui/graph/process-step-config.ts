@@ -47,6 +47,7 @@ import {
   type GlobalFlagDef,
   globalOptionEntryToFlagDef,
   insertionText,
+  numberOrTemplate,
   optionHelpText,
   optionRangeBounds,
   type OutputTrack,
@@ -351,6 +352,54 @@ function templateInput(value: string, placeholder: string, vars: VariableOption[
   const input = textInput(value, placeholder, name);
   row.append(input, variableButton(vars, "template", () => input));
   return { el: row, input };
+}
+
+// Ein Steuerelement (Dropdown, Regler, Ja/Nein), dessen Wert sich per
+// "{x} Variable" durch einen Wert eines Vorgängerschritts ersetzen lässt
+// (z. B. Breite aus der ffprobe-Ausgabe). Im Variablenmodus steht
+// "${…}" im Textfeld; "↺ Wert wählen" kehrt zum Steuerelement zurück.
+// Startet automatisch im Variablenmodus, wenn der gespeicherte Wert ein
+// "${…}" enthält.
+function bindable(
+  control: HTMLElement,
+  readControl: () => string,
+  initial: string,
+  vars: VariableOption[],
+): { el: HTMLElement; read(): string } {
+  const row = h("div", "display:flex;gap:4px;align-items:center;");
+  const ctlWrap = h("div", "flex:1;min-width:0;");
+  ctlWrap.appendChild(control);
+  const varInput = textInput("", tt("psc.var.active"));
+  varInput.style.fontFamily = "ui-monospace,monospace";
+  varInput.style.flex = "1";
+  varInput.style.display = "none";
+  varInput.setAttribute("data-role", "bound-variable");
+  const back = h("button", "white-space:nowrap;display:none;", tt("psc.var.back"));
+  back.type = "button";
+  back.title = tt("psc.var.back.title");
+  let varMode = false;
+  const setMode = (on: boolean) => {
+    varMode = on;
+    ctlWrap.style.display = on ? "none" : "";
+    varInput.style.display = on ? "" : "none";
+    back.style.display = on ? "" : "none";
+  };
+  const pick = variableButton(vars, "template", () => varInput, () => {
+    setMode(true);
+    varInput.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  back.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    varInput.value = "";
+    setMode(false);
+    control.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  if (initial.includes("${")) {
+    varInput.value = initial;
+    setMode(true);
+  }
+  row.append(ctlWrap, varInput, pick, back);
+  return { el: row, read: () => (varMode ? varInput.value.trim() : readControl()) };
 }
 
 // ---- Dauer-Eingabe ----------------------------------------------------------------------------
@@ -701,10 +750,11 @@ function buildServiceCall(cfg: Record<string, unknown>, vars: VariableOption[]):
 // unberührt (kein künstlich erzwungener Wert, gleiches Prinzip wie beim
 // Freitext-"number"-Feld: leer gelassen → ffmpegs eigener Standard) —
 // `touched` hält das fest, `read()` liefert dann "" statt eines Werts.
-type RangeFieldElement = HTMLElement & { read(): string };
+type RangeFieldElement = HTMLElement & { read(): string; set(v: string): void };
 
-function rangeField(opt: FFOption, initial: string): RangeFieldElement {
+function rangeField(opt: FFOption, initial: string, stepOverride?: number): RangeFieldElement {
   const bounds = optionRangeBounds(opt)!;
+  if (stepOverride) bounds.step = stepOverride;
   const defaultNum = Number(opt.default);
   const startNum = initial !== "" ? Number(initial) : Number.isFinite(defaultNum) && defaultNum >= bounds.min && defaultNum <= bounds.max ? defaultNum : bounds.min;
   let touched = initial !== "";
@@ -732,7 +782,35 @@ function rangeField(opt: FFOption, initial: string): RangeFieldElement {
 
   wrap.append(range, numberOut);
   wrap.read = () => (touched ? numberOut.value.trim() : "");
+  wrap.set = (v: string) => {
+    numberOut.value = v;
+    const n = Number(v);
+    if (v !== "" && Number.isFinite(n)) range.value = String(Math.min(bounds.max, Math.max(bounds.min, n)));
+    touched = v !== "";
+  };
   return wrap;
+}
+
+// Dropdown / Ja-Nein / Regler passend zur AVOption (Auswahlliste → Dropdown,
+// boolean → ja/nein, Zahl mit Min+Max → Regler). null für freie Zahl/Text.
+// `set` übernimmt einen von außen getippten Wert zurück ins Steuerelement.
+const NUMERIC_FIELD_TYPES = new Set(["int", "int64", "float", "double", "rational"]);
+
+function makeOptionControl(opt: FFOption, initial: string, stepOverride?: number): { el: HTMLElement; read(): string; set(v: string): void } | null {
+  const kind = ffOptionControlKind(opt);
+  if (kind === "select" || kind === "checkbox") {
+    const options =
+      kind === "select"
+        ? (opt.choices ?? []).map((c) => ({ value: c.value || c.name, label: c.description ? `${c.name} — ${c.description}` : c.name }))
+        : [{ value: "true", label: tt("psc.yes") }, { value: "false", label: tt("psc.no") }];
+    const sel = select([{ value: "", label: tt("psc.default") }, ...options], initial);
+    return { el: sel, read: () => sel.value, set: (v) => (sel.value = options.some((o) => o.value === v) ? v : "") };
+  }
+  if (kind === "range") {
+    const r = rangeField(opt, initial, stepOverride);
+    return { el: r, read: r.read, set: r.set };
+  }
+  return null;
 }
 
 // Rendert die AVOptions eines Encoders/Muxers als Formularfelder (Art
@@ -768,31 +846,18 @@ function ffmpegOptionsList(vars: VariableOption[]): { el: HTMLElement; setOption
       search.style.display = options.length > 12 ? "" : "none";
       search.value = "";
       for (const opt of options) {
-        const kind = ffOptionControlKind(opt);
         const initial = initialValues[opt.name] ?? "";
         let control: HTMLElement;
         let read: () => string;
-        if (kind === "select") {
-          const s = select(
-            [{ value: "", label: "– ffmpeg-Standard –" }, ...(opt.choices ?? []).map((c) => ({ value: c.value || c.name, label: c.description ? `${c.name} — ${c.description}` : c.name }))],
-            initial,
-          );
-          control = s;
-          read = () => s.value;
-        } else if (kind === "checkbox") {
-          const s = select([{ value: "", label: "– ffmpeg-Standard –" }, { value: "true", label: "ja" }, { value: "false", label: "nein" }], initial);
-          control = s;
-          read = () => s.value;
-        } else if (kind === "number") {
-          const i = textInput(initial, opt.default ? tt("psc.440a36", { p0: opt.default }) : "");
-          i.inputMode = "decimal";
-          control = i;
-          read = () => i.value.trim();
-        } else if (kind === "range") {
-          control = rangeField(opt, initial);
-          read = (control as RangeFieldElement).read;
+        const typed = makeOptionControl(opt, initial);
+        if (typed) {
+          const b = bindable(typed.el, typed.read, initial, vars);
+          control = b.el;
+          read = b.read;
         } else {
+          // Freie Zahl / Text: Eingabefeld mit Variablen-Knopf.
           const t = templateInput(initial, opt.default ? tt("psc.440a36", { p0: opt.default }) : "", vars);
+          if (NUMERIC_FIELD_TYPES.has(opt.type)) t.input.inputMode = "decimal";
           control = t.el;
           read = () => t.input.value.trim();
         }
@@ -952,10 +1017,25 @@ function renderGenericFields(container: HTMLElement, fields: GenericScriptField[
       control = t.el;
       scalarReaders[spec.id] = () => t.input.value.trim();
     } else if (spec.kind === "text") {
-      const i = textInput(spec.defaultValue ?? "", spec.placeholder ?? "");
-      if (spec.numeric) i.inputMode = "numeric";
-      control = i;
-      scalarReaders[spec.id] = () => i.value.trim();
+      const initial = spec.defaultValue ?? "";
+      let typed: { el: HTMLElement; read(): string } | null = null;
+      if (spec.choices) {
+        const sel = select(spec.choices, initial);
+        typed = { el: sel, read: () => sel.value };
+      } else if (spec.numeric && spec.min !== undefined && spec.max !== undefined) {
+        const r = rangeField({ name: spec.id, type: spec.integer ? "int" : "double", flags: "", min: String(spec.min), max: String(spec.max), default: initial }, initial, spec.step);
+        typed = { el: r, read: r.read };
+      }
+      if (typed) {
+        const b = bindable(typed.el, typed.read, initial, vars);
+        control = b.el;
+        scalarReaders[spec.id] = b.read;
+      } else {
+        const t = templateInput(initial, spec.placeholder ?? "", vars);
+        if (spec.numeric) t.input.inputMode = "decimal";
+        control = t.el;
+        scalarReaders[spec.id] = () => t.input.value.trim();
+      }
     } else if (spec.kind === "codec-picker") {
       const cp = codecPicker(spec.mediaType, vars, spec.withOptions ?? true);
       control = cp.el;
@@ -1328,8 +1408,10 @@ function buildScriptWizardConcat(vars: VariableOption[]): ScriptWizardForm {
     const box = h("div", "border:1px solid var(--omp-border);border-radius:4px;padding:6px;margin-top:6px;");
     const heading = h("div", "font-weight:600;", tt("psc.6b4c3c", { p0: rows.length + 1 }));
     const path = templateInput("", tt("psc.2668ce"), vars);
-    const trimStart = textInput("", tt("psc.b153d1"));
-    const trimEnd = textInput("", tt("psc.c7c6db"));
+    const trimStartT = templateInput("", tt("psc.b153d1"), vars);
+    const trimEndT = templateInput("", tt("psc.c7c6db"), vars);
+    const trimStart = trimStartT.input;
+    const trimEnd = trimEndT.input;
     const btnRow = h("div", "display:flex;gap:4px;margin-top:4px;");
     const up = h("button", "", "↑");
     const down = h("button", "", "↓");
@@ -1355,8 +1437,8 @@ function buildScriptWizardConcat(vars: VariableOption[]): ScriptWizardForm {
       reorder();
     });
     btnRow.append(up, down, rm);
-    const trimStartField = field(tt("psc.e2eaea"), trimStart, tt("psc.4e75ed"));
-    const trimEndField = field(tt("psc.1f0b03"), trimEnd, tt("psc.410164"));
+    const trimStartField = field(tt("psc.e2eaea"), trimStartT.el, tt("psc.4e75ed"));
+    const trimEndField = field(tt("psc.1f0b03"), trimEndT.el, tt("psc.410164"));
     trimStartField.style.display = trimEndField.style.display = losslessActive() ? "none" : "";
     trimFieldsEls.push(trimStartField, trimEndField);
     box.append(heading, field(tt("psc.c3115f"), path.el, undefined, true), trimStartField, trimEndField, btnRow);
@@ -1498,11 +1580,15 @@ function buildScriptWizardOverlay(vars: VariableOption[]): ScriptWizardForm {
     const kindSel = select([{ value: "text", label: tt("psc.6e4c80") }, { value: "image", label: tt("psc.fe1905") }], "text");
     const text = textInput("", "z. B. © Mein Sender 2026");
     const imagePath = templateInput("", tt("psc.d43301"), vars);
-    const start = textInput("0", tt("psc.d01e32"));
-    const end = textInput("5", tt("psc.d01e32"));
+    const startT = templateInput("0", tt("psc.d01e32"), vars);
+    const endT = templateInput("5", tt("psc.d01e32"), vars);
+    const start = startT.input;
+    const end = endT.input;
     start.inputMode = end.inputMode = "decimal";
-    const x = textInput("", tt("psc.28d341"));
-    const y = textInput("", tt("psc.c8421f"));
+    const xT = templateInput("", tt("psc.28d341"), vars);
+    const yT = templateInput("", tt("psc.c8421f"), vars);
+    const x = xT.input;
+    const y = yT.input;
     const textField = field(tt("psc.9dffbf"), text, tt("psc.ed95ac"));
     const imageField = field(tt("psc.aa69ac"), imagePath.el, undefined, true);
     imageField.style.display = "none";
@@ -1534,10 +1620,10 @@ function buildScriptWizardOverlay(vars: VariableOption[]): ScriptWizardForm {
       field("Art", kindSel),
       textField,
       imageField,
-      field(tt("psc.9563fc"), start, undefined, true),
-      field(tt("psc.5381b9"), end, undefined, true),
-      field(tt("psc.8ef81c"), x, tt("psc.8f4463")),
-      field(tt("psc.ec97a1"), y, tt("psc.edfec0")),
+      field(tt("psc.9563fc"), startT.el, undefined, true),
+      field(tt("psc.5381b9"), endT.el, undefined, true),
+      field(tt("psc.8ef81c"), xT.el, tt("psc.8f4463")),
+      field(tt("psc.ec97a1"), yT.el, tt("psc.edfec0")),
       btnRow,
     );
     rows.push(entry);
@@ -1569,9 +1655,9 @@ function buildScriptWizardOverlay(vars: VariableOption[]): ScriptWizardForm {
       if (rows.length === 0) return { ok: false, error: tt("psc.4aaf16") };
       const events: OverlayEvent[] = [];
       for (const r of rows) {
-        const s = Number(r.start.value);
-        const e = Number(r.end.value);
-        if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return { ok: false, error: tt("psc.5f5f22") };
+        const s = numberOrTemplate(r.start.value);
+        const e = numberOrTemplate(r.end.value);
+        if (s === null || e === null || (typeof s === "number" && typeof e === "number" && e <= s)) return { ok: false, error: tt("psc.5f5f22") };
         if (r.kindSel.value === "text") {
           if (!r.textInput.value.trim()) return { ok: false, error: tt("psc.9c9479") };
           events.push({ kind: "text", text: r.textInput.value, startSeconds: s, endSeconds: e, x: r.x.value.trim() || undefined, y: r.y.value.trim() || undefined });
@@ -1613,6 +1699,49 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
   const argsList = h("div", "");
   const argInputs: HTMLInputElement[] = [];
   const argStatuses: HTMLElement[] = [];
+  // Typisiertes Hilfs-Steuerelement (Dropdown/Ja-Nein/Regler) unter einer
+  // Wertzeile, sobald die Zeile davor ein bekanntes Flag ist — schreibt in
+  // die Textzeile und liest von ihr zurück; die Textzeile bleibt maßgeblich
+  // (Freitext und "${…}"-Variablen gehen weiter).
+  const argHelpers: HTMLElement[] = [];
+  const helperKeys: string[] = [];
+  let syncingHelper = false;
+  const valueControlFor = (flag: string, initial: string) => {
+    const dyn = dynamicOptions.get(flag);
+    if (dyn) return makeOptionControl(dyn, initial);
+    const g = lookupGlobalFlag(flag);
+    if (g?.type === "select" && g.choices) {
+      return makeOptionControl({ name: flag, type: "string", flags: "", choices: g.choices.map((c) => ({ name: c })) }, initial);
+    }
+    return null;
+  };
+  const refreshHelpers = () => {
+    argInputs.forEach((inp, i) => {
+      const flag = i > 0 ? argInputs[i - 1].value.trim() : "";
+      const key = flag.startsWith("-") && (dynamicOptions.has(flag) || lookupGlobalFlag(flag)) ? flag : "";
+      const box = argHelpers[i];
+      if (!box) return;
+      const ctl = key && helperKeys[i] !== key ? valueControlFor(key, inp.value.trim()) : null;
+      if (helperKeys[i] === key) {
+        return;
+      }
+      helperKeys[i] = key;
+      box.replaceChildren();
+      if (!ctl) return;
+      const sync = () => {
+        syncingHelper = true;
+        inp.value = ctl.read();
+        inp.dispatchEvent(new Event("input", { bubbles: true }));
+        syncingHelper = false;
+      };
+      ctl.el.addEventListener("change", sync);
+      ctl.el.addEventListener("input", sync);
+      inp.addEventListener("input", () => {
+        if (!syncingHelper) ctl.set(inp.value.trim());
+      });
+      box.appendChild(ctl.el);
+    });
+  };
 
   // ---- Pro-Modus: Validierung + Autovervollständigung (Kapitel 23,
   // Schritt 5) -----------------------------------------------------
@@ -1707,9 +1836,13 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     argInputs.push(i);
     const status = h("div", "grid-column:1;font-size:var(--omp-font-size-xs);color:var(--omp-error);display:none;");
     argStatuses.push(status);
+    const helperBox = h("div", "grid-column:1;");
+    argHelpers.push(helperBox);
+    helperKeys.push("");
     i.addEventListener("input", () => {
-      openAutocomplete(i);
+      if (!syncingHelper) openAutocomplete(i);
       revalidateArgs();
+      refreshHelpers();
     });
     i.addEventListener("blur", () => window.setTimeout(closeAutocomplete, 150));
     const rm = h("button", "", "✕");
@@ -1718,18 +1851,27 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
       const idx = argInputs.indexOf(i);
       argInputs.splice(idx, 1);
       argStatuses.splice(idx, 1);
+      argHelpers.splice(idx, 1);
+      helperKeys.splice(idx, 1);
       line.remove();
       status.remove();
+      helperBox.remove();
+      helperKeys.fill("");
+      argHelpers.forEach((b) => b.replaceChildren());
       revalidateArgs();
+      refreshHelpers();
     });
     line.append(i, variableButton(vars, "template", () => i), rm);
-    argsList.append(line, status);
+    argsList.append(line, status, helperBox);
     revalidateArgs();
+    refreshHelpers();
     return i;
   };
   const setArgs = (args: string[]) => {
     argInputs.length = 0;
     argStatuses.length = 0;
+    argHelpers.length = 0;
+    helperKeys.length = 0;
     argsList.replaceChildren();
     for (const a of args) addArg(a);
   };
@@ -2082,12 +2224,12 @@ interface MethodSpec {
   args: { name: string; type: string }[];
 }
 
-function buildMediaFunction(cfg: Record<string, unknown>): FormPart {
+function buildMediaFunction(cfg: Record<string, unknown>, vars: VariableOption[]): FormPart {
   const el = h("div", "");
   const inst = select([{ value: "", label: "lade laufende Microservices …" }], "", "instanceId");
   const meth = select([{ value: "", label: tt("psc.d8e721") }], "", "method");
   const argsBox = h("div", "");
-  const argsIn: Record<string, { input: HTMLInputElement | HTMLSelectElement; type: string }> = {};
+  const argsIn: Record<string, { read(): string; type: string }> = {};
   const origArgs = (cfg.args && typeof cfg.args === "object" && !Array.isArray(cfg.args)) ? cfg.args as Record<string, unknown> : {};
   let methods: MethodSpec[] = [];
   let nodes: NodeInfo[] = [];
@@ -2103,15 +2245,21 @@ function buildMediaFunction(cfg: Record<string, unknown>): FormPart {
     }
     for (const a of m.args) {
       const prev = origArgs[a.name];
-      let input: HTMLInputElement | HTMLSelectElement;
+      let control: HTMLElement;
+      let read: () => string;
       if (a.type === "boolean") {
-        input = select([{ value: "true", label: "ja" }, { value: "false", label: "nein" }], prev === false ? "false" : "true");
+        const sel = select([{ value: "true", label: tt("psc.yes") }, { value: "false", label: tt("psc.no") }], prev === false ? "false" : "true");
+        sel.name = `arg-${a.name}`;
+        const b = bindable(sel, () => sel.value, typeof prev === "string" ? prev : "", vars);
+        control = b.el;
+        read = b.read;
       } else {
-        input = textInput(prev === undefined ? "" : String(prev), a.type === "number" ? tt("psc.e9716b") : tt("psc.9dffbf"));
+        const t = templateInput(prev === undefined ? "" : String(prev), a.type === "number" ? tt("psc.e9716b") : tt("psc.9dffbf"), vars, `arg-${a.name}`);
+        control = t.el;
+        read = () => t.input.value.trim();
       }
-      input.name = `arg-${a.name}`;
-      argsIn[a.name] = { input, type: a.type };
-      argsBox.appendChild(field(a.name, input, tt("psc.074e19", { p0: a.type })));
+      argsIn[a.name] = { read, type: a.type };
+      argsBox.appendChild(field(a.name, control, tt("psc.074e19", { p0: a.type })));
     }
   };
 
@@ -2168,10 +2316,11 @@ function buildMediaFunction(cfg: Record<string, unknown>): FormPart {
       if (!inst.value || !meth.value) return { ok: false, error: tt("psc.ce7b6e") };
       const out = { ...cfg, instanceId: inst.value, method: meth.value };
       const args: Record<string, unknown> = {};
-      for (const [k, { input, type }] of Object.entries(argsIn)) {
-        const v = input.value.trim();
+      for (const [k, { read, type }] of Object.entries(argsIn)) {
+        const v = read();
         if (v === "") continue;
-        if (type === "number") {
+        if (v.includes("${")) args[k] = v; // Variable: wird zur Laufzeit eingesetzt
+        else if (type === "number") {
           const n = Number(v.replace(",", "."));
           if (!Number.isFinite(n)) return { ok: false, error: tt("psc.bb7773", { p0: k }) };
           args[k] = n;
@@ -2282,7 +2431,7 @@ function buildForm(step: DraftStep, ctx: StepConfigContext, vars: VariableOption
     case "script":
       return buildScript(cfg, vars, ctx.scriptCommands);
     case "media_function":
-      return buildMediaFunction(cfg);
+      return buildMediaFunction(cfg, vars);
     case "subworkflow":
       return buildSubworkflow(cfg);
     case "notification":

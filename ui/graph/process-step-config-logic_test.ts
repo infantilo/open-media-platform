@@ -21,6 +21,7 @@ import {
   isFuzzyMatch,
   levenshteinDistance,
   missingConfig,
+  numberOrTemplate,
   optionEntriesToArgs,
   optionHelpText,
   optionRangeBounds,
@@ -736,4 +737,45 @@ Deno.test("searchEntries: empty query returns no results, limit truncates the co
   ];
   assertEquals(searchEntries("", entries), []);
   assertEquals(searchEntries("a", entries, 2).length, 2);
+});
+
+Deno.test("ffprobe step offers parsed probe values to following steps; other scripts do not", () => {
+  const d: DraftDefinition = {
+    startStepId: "probe",
+    steps: [
+      { id: "probe", type: "script", config: { command: "ffprobe", args: [] }, next: ["thumb"] },
+      { id: "thumb", type: "script", config: { command: "ffmpeg" } },
+    ],
+  };
+  const paths = variableOptions(d, "thumb", []).map((o) => o.path);
+  assertEquals(paths.includes("outputs.probe.json.format.duration"), true);
+  assertEquals(paths.includes('first(filter(outputs.probe.json.streams, #.codec_type == "video"))?.width ?? ""'), true);
+  assertEquals(paths.includes('len(filter(outputs.probe.json.streams, #.codec_type == "audio"))'), true);
+  const d2: DraftDefinition = { startStepId: "a", steps: [{ id: "a", type: "script", config: { command: "ffmpeg" }, next: ["b"] }, { id: "b", type: "wait" }] };
+  assertEquals(variableOptions(d2, "b", []).some((o) => o.path.includes(".json.")), false);
+});
+
+Deno.test("numberOrTemplate / validateArgValue accept ${…} placeholders but still reject bad literals", () => {
+  assertEquals(numberOrTemplate("12"), 12);
+  assertEquals(numberOrTemplate(" -2.5 "), -2.5);
+  assertEquals(numberOrTemplate("${outputs.p.json.format.duration}"), "${outputs.p.json.format.duration}");
+  assertEquals(numberOrTemplate("abc"), null);
+  assertEquals(numberOrTemplate(""), null);
+  assertEquals(validateArgValue("-loglevel", "${input.level}").ok, true);
+  assertEquals(validateArgValue("-loglevel", "nonsense").ok, false);
+});
+
+Deno.test("generic tasks: numeric fields with bounds carry min/max and accept placeholders in toArgs", () => {
+  const loud = genericScriptTaskById("loudnorm")!;
+  const lufs = loud.fields.find((f) => f.id === "targetLufs");
+  assertEquals(lufs?.kind === "text" && lufs.min === -70 && lufs.max === -5, true);
+  const r = loud.toArgs({
+    scalars: { inputPath: "in", outputPath: "out", targetLufs: "${input.lufs}", truePeak: "-2", loudnessRange: "7" },
+    pickers: { audio: { options: {} } },
+    groups: {},
+  });
+  assertEquals(r.ok, true);
+  if (r.ok) assertEquals(r.args.some((a) => a.includes("I=${input.lufs}")), true);
+  const bad = loud.toArgs({ scalars: { inputPath: "in", outputPath: "out", targetLufs: "x", truePeak: "-2", loudnessRange: "7" }, pickers: {}, groups: {} });
+  assertEquals(bad.ok, false);
 });

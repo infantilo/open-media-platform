@@ -57,6 +57,46 @@ export function stepTypeLabel(type: string): string {
 export interface OutputField {
   path: string; // relativ zu outputs.<stepId>
   label: string;
+  // Ausdruck statt einfachem Pfad (z. B. "erster Videostream"): bekommt
+  // den Basispfad `outputs.<id>` und liefert den vollständigen Ausdruck.
+  expr?: (base: string) => string;
+}
+
+// ffprobe-Werte, die ein Folgeschritt direkt wählen kann. Der Script-
+// Executor legt stdout als `json` ab, wenn es JSON ist (executors.go:
+// scriptOutput.JSON) — Grundlage ist das Standard-Probe-Kommando des
+// Assistenten (`-print_format json -show_format -show_streams`).
+// `?.` + `?? ""` machen fehlende Streams (kein Video, keine Tonspur) zu
+// leerem Text statt zu einem Auswertungsfehler.
+const probeVideo = (key: string) => (base: string) => `first(filter(${base}.json.streams, #.codec_type == "video"))?.${key} ?? ""`;
+const probeAudio = (key: string) => (base: string) => `first(filter(${base}.json.streams, #.codec_type == "audio"))?.${key} ?? ""`;
+
+export function ffprobeOutputFields(): OutputField[] {
+  return [
+    { path: "json.format.duration", label: tt("pscl.pr.duration"), expr: (b) => `${b}.json.format.duration` },
+    { path: "json.format.size", label: tt("pscl.pr.size"), expr: (b) => `${b}.json.format.size` },
+    { path: "json.format.bit_rate", label: tt("pscl.pr.bitrate"), expr: (b) => `${b}.json.format.bit_rate` },
+    { path: "json.format.format_name", label: tt("pscl.pr.container"), expr: (b) => `${b}.json.format.format_name` },
+    { path: "json.format.tags.timecode", label: tt("pscl.pr.timecode"), expr: (b) => `${b}.json.format.tags?.timecode ?? ""` },
+    { path: "video.codec_name", label: tt("pscl.pr.vcodec"), expr: probeVideo("codec_name") },
+    { path: "video.width", label: tt("pscl.pr.width"), expr: probeVideo("width") },
+    { path: "video.height", label: tt("pscl.pr.height"), expr: probeVideo("height") },
+    { path: "video.r_frame_rate", label: tt("pscl.pr.fps"), expr: probeVideo("r_frame_rate") },
+    { path: "video.field_order", label: tt("pscl.pr.fieldorder"), expr: probeVideo("field_order") },
+    { path: "video.pix_fmt", label: tt("pscl.pr.pixfmt"), expr: probeVideo("pix_fmt") },
+    { path: "video.duration", label: tt("pscl.pr.vduration"), expr: probeVideo("duration") },
+    { path: "video.start_time", label: tt("pscl.pr.vstart"), expr: probeVideo("start_time") },
+    { path: "audio.codec_name", label: tt("pscl.pr.acodec"), expr: probeAudio("codec_name") },
+    { path: "audio.sample_rate", label: tt("pscl.pr.samplerate"), expr: probeAudio("sample_rate") },
+    { path: "audio.channels", label: tt("pscl.pr.channels"), expr: probeAudio("channels") },
+    { path: "audio.count", label: tt("pscl.pr.audiocount"), expr: (b) => `len(filter(${b}.json.streams, #.codec_type == "audio"))` },
+    { path: "streams.count", label: tt("pscl.pr.streamcount"), expr: (b) => `len(${b}.json.streams)` },
+  ];
+}
+
+export function isFFprobeStep(step: DraftStep): boolean {
+  const cfg = step.config as { command?: unknown } | undefined;
+  return step.type === "script" && cfg?.command === "ffprobe";
 }
 
 export function outputFieldsFor(step: DraftStep): OutputField[] {
@@ -71,6 +111,7 @@ export function outputFieldsFor(step: DraftStep): OutputField[] {
         { path: "exitCode", label: tt("pscl.0d3958") },
         { path: "stdout", label: tt("pscl.b65498") },
         { path: "stderr", label: tt("pscl.daeec0") },
+        ...(isFFprobeStep(step) ? ffprobeOutputFields() : []),
       ];
     case "human_task":
     case "approval":
@@ -215,8 +256,9 @@ export function variableOptions(def: DraftDefinition, stepId: string, triggerFie
     const step = def.steps.find((s) => s.id === id)!;
     const name = step.name || id;
     for (const f of outputFieldsFor(step)) {
+      const base = member("outputs", id);
       out.push({
-        path: f.path ? member(member("outputs", id), f.path) : member("outputs", id),
+        path: f.expr ? f.expr(base) : f.path ? member(base, f.path) : base,
         label: f.label,
         group: tt("pscl.0ac1be", { p0: name, p1: stepTypeLabel(step.type) }),
       });
@@ -498,6 +540,14 @@ export interface GenericScriptTextField extends GenericScriptFieldBase {
   defaultValue?: string;
   placeholder?: string;
   numeric?: boolean;
+  // Feste Auswahl → Dropdown; Zahl mit min+max → Schieberegler; beides
+  // bleibt per "{x} Variable" durch einen Wert eines Vorgängerschritts
+  // ersetzbar (dann steht "${…}" im Wert, s. isTemplateValue).
+  choices?: { value: string; label: string }[];
+  min?: number;
+  max?: number;
+  step?: number;
+  integer?: boolean;
 }
 
 export interface GenericScriptCodecPickerField extends GenericScriptFieldBase {
@@ -548,6 +598,21 @@ export interface GenericScriptFormValues {
   groups: Record<string, GenericScriptFormValues[]>;
 }
 
+// Ein Wert mit "${…}" wird erst zur Laufzeit aufgelöst (Variable aus einem
+// Vorgängerschritt) — Zahlen-/Bereichsprüfungen dürfen ihn nicht ablehnen.
+export function isTemplateValue(v: string | undefined): boolean {
+  return v !== undefined && v.includes("${");
+}
+
+// Zahl oder Platzhalter → Wert für die Argumentliste; sonst null.
+export function numberOrTemplate(v: string | undefined): number | string | null {
+  const t = (v ?? "").trim();
+  if (t === "") return null;
+  if (isTemplateValue(t)) return t;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+
 export type GenericScriptArgsResult = { ok: true; args: string[] } | { ok: false; error: string };
 
 export interface GenericScriptTask {
@@ -575,14 +640,14 @@ export const GENERIC_SCRIPT_TASKS: GenericScriptTask[] = [
       { kind: "template-text", id: "inputPath", label: tt("pscl.7ddbbe"), required: true, defaultValue: "${input.path}" },
       { kind: "template-text", id: "outputPath", label: tt("pscl.70f1da"), required: true, defaultValue: "${input.thumbnailPath}" },
       { kind: "text", id: "atTime", label: tt("pscl.a0ef65"), defaultValue: "00:00:05", placeholder: "hh:mm:ss", help: "hh:mm:ss, z. B. 00:00:05." },
-      { kind: "text", id: "widthPixels", label: tt("pscl.86b066"), defaultValue: "480", placeholder: tt("pscl.08822b"), numeric: true, help: tt("pscl.969a03") },
+      { kind: "text", id: "widthPixels", label: tt("pscl.86b066"), defaultValue: "480", placeholder: tt("pscl.08822b"), numeric: true, integer: true, min: 16, max: 7680, help: tt("pscl.969a03") },
     ],
     toArgs: (v) => {
       const p = v.scalars.inputPath?.trim();
       const o = v.scalars.outputPath?.trim();
-      const w = Number(v.scalars.widthPixels);
+      const w = numberOrTemplate(v.scalars.widthPixels);
       if (!p || !o) return { ok: false, error: tt("pscl.9205c3") };
-      if (!Number.isFinite(w) || w <= 0) return { ok: false, error: tt("pscl.f6dd2b") };
+      if (w === null || (typeof w === "number" && w <= 0)) return { ok: false, error: tt("pscl.f6dd2b") };
       return { ok: true, args: buildThumbnailArgs({ inputPath: p, outputPath: o, atTime: v.scalars.atTime?.trim() || "00:00:05", widthPixels: w }) };
     },
   },
@@ -614,22 +679,25 @@ export const GENERIC_SCRIPT_TASKS: GenericScriptTask[] = [
         label: tt("pscl.0b9820"),
         defaultValue: "-23",
         numeric: true,
+        min: -70,
+        max: -5,
+        step: 1,
         help: tt("pscl.85ee17"),
       },
-      { kind: "text", id: "truePeak", label: tt("pscl.475054"), defaultValue: "-2", numeric: true, help: tt("pscl.d7f1ac") },
-      { kind: "text", id: "loudnessRange", label: tt("pscl.0c605b"), defaultValue: "7", numeric: true },
+      { kind: "text", id: "truePeak", label: tt("pscl.475054"), defaultValue: "-2", numeric: true, min: -9, max: 0, step: 0.1, help: tt("pscl.d7f1ac") },
+      { kind: "text", id: "loudnessRange", label: tt("pscl.0c605b"), defaultValue: "7", numeric: true, integer: true, min: 1, max: 50 },
       { kind: "codec-picker", id: "audio", mediaType: "audio", label: tt("pscl.16202d"), help: tt("pscl.749393") },
     ],
     toArgs: (v) => {
       const p = v.scalars.inputPath?.trim();
       const o = v.scalars.outputPath?.trim();
       if (!p || !o) return { ok: false, error: tt("pscl.9205c3") };
-      const lufs = Number(v.scalars.targetLufs);
-      const tp = Number(v.scalars.truePeak);
-      const lra = Number(v.scalars.loudnessRange);
-      if (!Number.isFinite(lufs)) return { ok: false, error: tt("pscl.738fb5") };
-      if (!Number.isFinite(tp)) return { ok: false, error: tt("pscl.b46f8d") };
-      if (!Number.isFinite(lra) || lra <= 0) return { ok: false, error: tt("pscl.b2cee1") };
+      const lufs = numberOrTemplate(v.scalars.targetLufs);
+      const tp = numberOrTemplate(v.scalars.truePeak);
+      const lra = numberOrTemplate(v.scalars.loudnessRange);
+      if (lufs === null) return { ok: false, error: tt("pscl.738fb5") };
+      if (tp === null) return { ok: false, error: tt("pscl.b46f8d") };
+      if (lra === null || (typeof lra === "number" && lra <= 0)) return { ok: false, error: tt("pscl.b2cee1") };
       const a = v.pickers.audio;
       return {
         ok: true,
@@ -666,7 +734,7 @@ export const GENERIC_SCRIPT_TASKS: GenericScriptTask[] = [
         defaultValue: "${input.outputDir}",
         help: tt("pscl.94a565"),
       },
-      { kind: "text", id: "segmentSeconds", label: tt("pscl.c93db4"), defaultValue: "6", numeric: true },
+      { kind: "text", id: "segmentSeconds", label: tt("pscl.c93db4"), defaultValue: "6", numeric: true, integer: true, min: 1, max: 60 },
       {
         kind: "group",
         id: "renditions",
@@ -677,10 +745,10 @@ export const GENERIC_SCRIPT_TASKS: GenericScriptTask[] = [
         itemLabel: (i) => tt("pscl.475096", { p0: i + 1 }),
         itemFields: [
           { kind: "text", id: "label", label: tt("pscl.49ee30"), defaultValue: "", placeholder: "z. B. 1080p", required: true },
-          { kind: "text", id: "width", label: tt("pscl.9a9491"), defaultValue: "1280", numeric: true, required: true },
-          { kind: "text", id: "height", label: tt("pscl.cd2da5"), defaultValue: "720", numeric: true, required: true },
-          { kind: "text", id: "videoBitrateKbps", label: tt("pscl.64153c"), defaultValue: "2500", numeric: true, required: true },
-          { kind: "text", id: "audioBitrateKbps", label: tt("pscl.45845d"), defaultValue: "128", numeric: true, required: true },
+          { kind: "text", id: "width", label: tt("pscl.9a9491"), defaultValue: "1280", numeric: true, integer: true, min: 16, max: 7680, required: true },
+          { kind: "text", id: "height", label: tt("pscl.cd2da5"), defaultValue: "720", numeric: true, integer: true, min: 16, max: 4320, required: true },
+          { kind: "text", id: "videoBitrateKbps", label: tt("pscl.64153c"), defaultValue: "2500", numeric: true, integer: true, min: 100, max: 50000, required: true },
+          { kind: "text", id: "audioBitrateKbps", label: tt("pscl.45845d"), defaultValue: "128", numeric: true, integer: true, min: 32, max: 512, required: true },
         ],
       },
     ],
@@ -688,22 +756,22 @@ export const GENERIC_SCRIPT_TASKS: GenericScriptTask[] = [
       const p = v.scalars.inputPath?.trim();
       const dir = v.scalars.outputDir?.trim();
       if (!p || !dir) return { ok: false, error: tt("pscl.d99ff6") };
-      const seg = Number(v.scalars.segmentSeconds);
-      if (!Number.isFinite(seg) || seg <= 0) return { ok: false, error: tt("pscl.98a492") };
+      const seg = numberOrTemplate(v.scalars.segmentSeconds);
+      if (seg === null || (typeof seg === "number" && seg <= 0)) return { ok: false, error: tt("pscl.98a492") };
       const rows = v.groups.renditions ?? [];
       if (rows.length === 0) return { ok: false, error: tt("pscl.138685") };
       const renditions: HlsRendition[] = [];
       for (const row of rows) {
         const label = row.scalars.label?.trim();
-        const width = Number(row.scalars.width);
-        const height = Number(row.scalars.height);
-        const videoBitrateKbps = Number(row.scalars.videoBitrateKbps);
-        const audioBitrateKbps = Number(row.scalars.audioBitrateKbps);
+        const width = numberOrTemplate(row.scalars.width);
+        const height = numberOrTemplate(row.scalars.height);
+        const videoBitrateKbps = numberOrTemplate(row.scalars.videoBitrateKbps);
+        const audioBitrateKbps = numberOrTemplate(row.scalars.audioBitrateKbps);
         if (!label) return { ok: false, error: tt("pscl.cf38a8") };
         if (!/^[A-Za-z0-9-]+$/.test(label)) return { ok: false, error: tt("pscl.d1865d", { p0: label }) };
-        if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) return { ok: false, error: tt("pscl.67d2c0", { p0: label }) };
-        if (!Number.isFinite(videoBitrateKbps) || videoBitrateKbps <= 0) return { ok: false, error: tt("pscl.754226", { p0: label }) };
-        if (!Number.isFinite(audioBitrateKbps) || audioBitrateKbps <= 0) return { ok: false, error: tt("pscl.202bf1", { p0: label }) };
+        if (width === null || height === null || (typeof width === "number" && width <= 0) || (typeof height === "number" && height <= 0)) return { ok: false, error: tt("pscl.67d2c0", { p0: label }) };
+        if (videoBitrateKbps === null || (typeof videoBitrateKbps === "number" && videoBitrateKbps <= 0)) return { ok: false, error: tt("pscl.754226", { p0: label }) };
+        if (audioBitrateKbps === null || (typeof audioBitrateKbps === "number" && audioBitrateKbps <= 0)) return { ok: false, error: tt("pscl.202bf1", { p0: label }) };
         renditions.push({ label, width, height, videoBitrateKbps, audioBitrateKbps });
       }
       const labels = renditions.map((r) => r.label);
@@ -968,7 +1036,7 @@ export interface ThumbnailInput {
   inputPath: string;
   outputPath: string;
   atTime: string;
-  widthPixels: number;
+  widthPixels: number | string;
 }
 
 export function buildThumbnailArgs(input: ThumbnailInput): string[] {
@@ -1067,8 +1135,8 @@ function escapeDrawtextValue(v: string): string {
 export interface OverlayTextEvent {
   kind: "text";
   text: string;
-  startSeconds: number;
-  endSeconds: number;
+  startSeconds: number | string;
+  endSeconds: number | string;
   x?: string;
   y?: string;
   fontSize?: number;
@@ -1078,8 +1146,8 @@ export interface OverlayTextEvent {
 export interface OverlayImageEvent {
   kind: "image";
   imagePath: string;
-  startSeconds: number;
-  endSeconds: number;
+  startSeconds: number | string;
+  endSeconds: number | string;
   x?: string;
   y?: string;
 }
@@ -1147,9 +1215,9 @@ export function buildOverlayArgs(input: OverlayInput): string[] {
 export interface LoudnormInput {
   inputPath: string;
   outputPath: string;
-  targetLufs: number;
-  truePeakDb: number;
-  loudnessRangeLu: number;
+  targetLufs: number | string;
+  truePeakDb: number | string;
+  loudnessRangeLu: number | string;
   audioCodec?: string;
   audioOptions?: Record<string, string>;
 }
@@ -1186,16 +1254,16 @@ export function buildRemuxCopyArgs(input: RemuxCopyInput): string[] {
 // braucht, nutzt den Filter-Graph-Builder/Experten-Modus.
 export interface HlsRendition {
   label: string; // wird 1:1 als HLS-Variant-Name UND %v-Verzeichnisname verwendet
-  width: number;
-  height: number;
-  videoBitrateKbps: number;
-  audioBitrateKbps: number;
+  width: number | string;
+  height: number | string;
+  videoBitrateKbps: number | string;
+  audioBitrateKbps: number | string;
 }
 
 export interface HlsLadderInput {
   inputPath: string;
   outputDir: string;
-  segmentSeconds: number;
+  segmentSeconds: number | string;
   renditions: HlsRendition[];
 }
 
@@ -1325,6 +1393,8 @@ export interface ArgValidation {
 // jedes gültige ffmpeg-Flag ist hier oder in ffmpegtools erfasst),
 // nur bekannte Flags werden tatsächlich geprüft.
 export function validateArgValue(flag: string, value: string, dynamicOptions?: Map<string, FFOption>, globalOverrides?: GlobalFlagDef[]): ArgValidation {
+  // "${…}" wird erst zur Laufzeit aufgelöst — nicht gegen Bereich/Auswahl prüfbar.
+  if (isTemplateValue(value)) return { ok: true };
   const dynamic = dynamicOptions?.get(flag);
   if (dynamic) {
     if (value === "") return { ok: true };

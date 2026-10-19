@@ -561,6 +561,20 @@ rechts deren Versionen, Ausführungen und offene Aufgaben.
   Asset-ID), Ergebnisse vorheriger Schritte (z. B. „Ausgabe (stdout)“
   von „Metadaten lesen“) und Angaben zum Prozesslauf. Angeboten werden
   nur Schritte, die vor diesem Schritt garantiert gelaufen sind.
+  Folgt ein Schritt auf **„Technische Metadaten auslesen“** (ffprobe),
+  stehen dessen Messwerte einzeln zur Wahl — Dauer, Dateigröße,
+  Container, Start-Timecode, Bildbreite/-höhe, Bildrate, Halbbild-
+  Reihenfolge, Pixelformat, Video-/Audio-Codec, Abtastrate, Anzahl
+  Tonspuren und Streams — ohne dass das Ergebnis von Hand zerlegt
+  werden muss (technisch: `outputs.<Schritt>.json…`).
+  **Dropdowns, Regler und Ja/Nein-Felder** haben denselben Knopf: ein
+  Klick ersetzt die Auswahl durch eine Variable (z. B. Breite des
+  Vorschaubilds = Breite aus der Probe); „↺ Wert wählen“ kehrt zur
+  Auswahl zurück. Das gilt auch für die Argumente von Node-Funktionen.
+  Im Experten-Modus (Rohargumente) erscheint unter dem Wert eines
+  bekannten Flags automatisch eine Auswahlliste, ein Ja/Nein-Feld oder
+  ein Regler (Bereich aus ffmpeg), die mit der Textzeile
+  synchron bleiben.
 - **Verbinden:** vom Kreis rechts an einer Kachel auf die nächste Kachel
   ziehen. Bei „Wenn … dann“, „Verteiler“ und „Freigabe“ fragt der
   Editor, welcher Weg dorthin führt (z. B. „Ja“/„Nein“ oder

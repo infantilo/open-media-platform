@@ -598,12 +598,70 @@ func newMediaFunctionExecutor(resolver NodeResolver, invoker methodInvoker) Step
 		if !ok {
 			return nil, fmt.Errorf("process: step %q: media function instance %q not found or offline", step.ID, cfg.InstanceID)
 		}
-		out, err := invoker.Invoke(ctx, baseURL, cfg.Method, cfg.Args)
+		args, err := interpolateJSONArgs(mediaFunctionEval, exprVars(ec), cfg.Args)
+		if err != nil {
+			return nil, fmt.Errorf("process: step %q: resolve args: %w", step.ID, err)
+		}
+		out, err := invoker.Invoke(ctx, baseURL, cfg.Method, args)
 		if err != nil {
 			return nil, fmt.Errorf("process: step %q: %w", step.ID, err)
 		}
 		return out, nil
 	})
+}
+
+// mediaFunctionEval: Evaluator ist zustandslos (expr.go), ein
+// gemeinsamer genügt.
+var mediaFunctionEval = &Evaluator{}
+
+// interpolateJSONArgs ersetzt "${…}" in String-Werten der Methoden-
+// Argumente (beliebig verschachtelt). Besteht ein String NUR aus einem
+// Ausdruck, bleibt dessen Typ erhalten (Zahl bleibt Zahl, bool bleibt
+// bool) — sonst würde ein Node-Argument vom Typ number einen Text
+// bekommen; eingebettete Ausdrücke ergeben Text.
+func interpolateJSONArgs(eval *Evaluator, vars map[string]any, raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 || !strings.Contains(string(raw), "${") {
+		return raw, nil
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, err
+	}
+	out, err := interpolateValue(eval, vars, v)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(out)
+}
+
+func interpolateValue(eval *Evaluator, vars map[string]any, v any) (any, error) {
+	switch t := v.(type) {
+	case string:
+		if strings.HasPrefix(t, "${") && strings.HasSuffix(t, "}") && matchExprEnd(t, 2) == len(t)-1 {
+			return eval.Eval(t[2:len(t)-1], vars)
+		}
+		return interpolate(eval, vars, t)
+	case map[string]any:
+		for k, e := range t {
+			r, err := interpolateValue(eval, vars, e)
+			if err != nil {
+				return nil, err
+			}
+			t[k] = r
+		}
+		return t, nil
+	case []any:
+		for i, e := range t {
+			r, err := interpolateValue(eval, vars, e)
+			if err != nil {
+				return nil, err
+			}
+			t[i] = r
+		}
+		return t, nil
+	default:
+		return v, nil
+	}
 }
 
 // NewMediaFunctionExecutor ist der exportierte Regelfall-Konstruktor —
@@ -637,6 +695,12 @@ type scriptOutput struct {
 	ExitCode int    `json:"exitCode"`
 	Stdout   string `json:"stdout,omitempty"`
 	Stderr   string `json:"stderr,omitempty"`
+	// JSON ist stdout, WENN es als JSON-Objekt/-Array lesbar ist (z. B.
+	// `ffprobe -print_format json`) — damit Folgeschritte einzelne Werte
+	// (`outputs.<id>.json.format.duration`) direkt als Variable nutzen
+	// können, statt stdout selbst zerlegen zu müssen. Fehlt, wenn stdout
+	// leer, kein JSON oder wegen der Größenbegrenzung abgeschnitten ist.
+	JSON any `json:"json,omitempty"`
 }
 
 const defaultScriptTimeout = 5 * time.Minute
@@ -694,6 +758,7 @@ func NewScriptExecutor(allowedCommands map[string]string, eval *Evaluator) StepE
 			Stdout:   stdout.String(),
 			Stderr:   stderr.String(),
 		}
+		out.JSON = parseStdoutJSON(out.Stdout)
 		raw, marshalErr := json.Marshal(out)
 		if marshalErr != nil {
 			return nil, fmt.Errorf("process: step %q: marshal script output: %w", step.ID, marshalErr)
@@ -707,6 +772,21 @@ func NewScriptExecutor(allowedCommands map[string]string, eval *Evaluator) StepE
 		}
 		return raw, nil
 	})
+}
+
+// parseStdoutJSON liefert stdout als JSON-Objekt/-Array, sonst nil.
+// Skalare (z. B. eine nackte Zahl) zählen bewusst nicht: sie wären als
+// "json" keine Struktur, aus der man Felder wählen könnte.
+func parseStdoutJSON(stdout string) any {
+	t := strings.TrimSpace(stdout)
+	if t == "" || (t[0] != '{' && t[0] != '[') {
+		return nil
+	}
+	var v any
+	if err := json.Unmarshal([]byte(t), &v); err != nil {
+		return nil
+	}
+	return v
 }
 
 // resolveScriptArg löst ein einzelnes Script-Argument auf — s.

@@ -341,3 +341,61 @@ func TestServiceCallInterpolatesURLAndHeaders(t *testing.T) {
 		t.Fatalf("path/header = %q/%q, want /assets/a42 / id=a42", gotPath, gotHeader)
 	}
 }
+
+func TestParseStdoutJSON(t *testing.T) {
+	if parseStdoutJSON("") != nil || parseStdoutJSON("hello") != nil || parseStdoutJSON("42") != nil || parseStdoutJSON(`{"a":`) != nil {
+		t.Fatal("non-JSON / scalar / truncated stdout must yield nil")
+	}
+	if parseStdoutJSON("  {\"a\":1}\n") == nil || parseStdoutJSON("[1,2]") == nil {
+		t.Fatal("object/array stdout must be parsed")
+	}
+}
+
+// Die vom Prozess-Editor angebotenen ffprobe-Variablen müssen sich gegen
+// ein echtes ffprobe-JSON auswerten lassen — auch ohne Videostream
+// (optionale Verkettung `?.`) ohne Fehler.
+func TestInterpolateFFprobeJSONVariables(t *testing.T) {
+	eval, err := NewEvaluator()
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := `{"streams":[{"codec_type":"video","codec_name":"mpeg2video","width":1920,"height":1080,"r_frame_rate":"25/1"},` +
+		`{"codec_type":"audio","channels":1},{"codec_type":"audio","channels":1}],"format":{"duration":"19.960000"}}`
+	vars := map[string]any{"outputs": map[string]any{"probe": map[string]any{"json": parseStdoutJSON(probe)}}}
+	cases := map[string]string{
+		`${outputs.probe.json.format.duration}`:                                                       "19.960000",
+		`${first(filter(outputs.probe.json.streams, #.codec_type == "video"))?.width}`:                "1920",
+		`${first(filter(outputs.probe.json.streams, #.codec_type == "video"))?.r_frame_rate}`:         "25/1",
+		`${len(filter(outputs.probe.json.streams, #.codec_type == "audio"))}`:                         "2",
+		`${first(filter(outputs.probe.json.streams, #.codec_type == "subtitle"))?.codec_name ?? ""}`: "",
+	}
+	for in, want := range cases {
+		got, err := interpolate(eval, vars, in)
+		if err != nil || got != want {
+			t.Errorf("interpolate(%s) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+}
+
+func TestInterpolateJSONArgsKeepsTypes(t *testing.T) {
+	vars := map[string]any{"input": map[string]any{"w": float64(1920), "name": "x"}}
+	raw := json.RawMessage(`{"width":"${input.w}","label":"clip-${input.name}","n":{"a":["${input.name}"]},"plain":5}`)
+	out, err := interpolateJSONArgs(&Evaluator{}, vars, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["width"] != float64(1920) || got["label"] != "clip-x" || got["plain"] != float64(5) {
+		t.Fatalf("unexpected args: %s", out)
+	}
+	if a := got["n"].(map[string]any)["a"].([]any); a[0] != "x" {
+		t.Fatalf("nested not resolved: %s", out)
+	}
+	same, _ := interpolateJSONArgs(&Evaluator{}, vars, json.RawMessage(`{"a":1}`))
+	if string(same) != `{"a":1}` {
+		t.Fatalf("args without placeholders must pass through unchanged, got %s", same)
+	}
+}
