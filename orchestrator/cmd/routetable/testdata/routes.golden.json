@@ -818,6 +818,12 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/logs/summary",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/me/consoles",
     "auth": "auth",
     "domain": "core"
@@ -1171,7 +1177,7 @@
   {
     "method": "DELETE",
     "path": "/api/v1/process-definitions/{id}",
-    "auth": "verb:Configure",
+    "auth": "custom:g.requireVerbOnProcess",
     "domain": "core"
   },
   {
@@ -1183,7 +1189,7 @@
   {
     "method": "PUT",
     "path": "/api/v1/process-definitions/{id}",
-    "auth": "verb:Configure",
+    "auth": "custom:g.requireVerbOnProcess",
     "domain": "core"
   },
   {
@@ -1195,7 +1201,7 @@
   {
     "method": "POST",
     "path": "/api/v1/process-definitions/{id}/versions",
-    "auth": "verb:Configure",
+    "auth": "custom:g.requireVerbOnProcess",
     "domain": "core"
   },
   {
@@ -1207,7 +1213,7 @@
   {
     "method": "POST",
     "path": "/api/v1/process-executions",
-    "auth": "verb:Admin",
+    "auth": "custom:g.requireVerbOnProcess",
     "domain": "core"
   },
   {
@@ -1233,7 +1239,7 @@
   {
     "method": "POST",
     "path": "/api/v1/process-executions/{id}/cancel",
-    "auth": "verb:Admin",
+    "auth": "custom:g.requireVerbOnProcess",
     "domain": "core"
   },
   {
@@ -1245,13 +1251,13 @@
   {
     "method": "POST",
     "path": "/api/v1/process-executions/{id}/pause",
-    "auth": "verb:Admin",
+    "auth": "custom:g.requireVerbOnProcess",
     "domain": "core"
   },
   {
     "method": "POST",
     "path": "/api/v1/process-executions/{id}/resume",
-    "auth": "verb:Admin",
+    "auth": "custom:g.requireVerbOnProcess",
     "domain": "core"
   },
   {
@@ -1269,19 +1275,19 @@
   {
     "method": "POST",
     "path": "/api/v1/process-versions/{id}/archive",
-    "auth": "verb:Admin",
+    "auth": "custom:g.requireVerbOnProcess",
     "domain": "core"
   },
   {
     "method": "POST",
     "path": "/api/v1/process-versions/{id}/deprecate",
-    "auth": "verb:Admin",
+    "auth": "custom:g.requireVerbOnProcess",
     "domain": "core"
   },
   {
     "method": "POST",
     "path": "/api/v1/process-versions/{id}/publish",
-    "auth": "verb:Admin",
+    "auth": "custom:g.requireVerbOnProcess",
     "domain": "core"
   },
   {
