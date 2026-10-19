@@ -53,11 +53,20 @@ class IngestView extends HTMLElement {
   #windowH = 24;
   #stateFilter = "";
   #timer = 0;
+  #pendingRender = false;
+  #focusHooked = false;
   #loaded = false;
   #root = el("div");
 
   connectedCallback() {
-    this.style.cssText = "display:block;padding:12px 16px;";
+    if (!this.#focusHooked) {
+      this.#focusHooked = true;
+      this.addEventListener("focusout", () => {
+        if (this.#pendingRender) setTimeout(() => this.#pendingRender && void this.#refresh(), 0);
+      });
+    }
+    // unten Platz für die feste Fußleiste/Alarmleiste, sonst liegen die letzten Bedienelemente darunter
+    this.style.cssText = "display:block;padding:12px 16px 96px;";
     if (!this.#loaded) {
       this.#loaded = true;
       void this.#init();
@@ -94,6 +103,13 @@ class IngestView extends HTMLElement {
     const [cap, sch] = await Promise.all([api<Capacity>("GET", `/capacity?from=${from.toISOString()}&to=${to.toISOString()}`), api<{ schedules: any[] }>("GET", "/schedules")]);
     if (cap.ok) this.#cap = { ...cap.data, jobs: cap.data.jobs ?? [], problems: cap.data.problems ?? [], hosts: (cap.data.hosts ?? []).map((h) => ({ ...h, usage: h.usage ?? [], warnings: h.warnings ?? [] })) };
     if (sch.ok) this.#schedules = sch.data.schedules ?? [];
+    // Neuzeichnen schließt ein geöffnetes Dropdown / nimmt dem Eingabefeld den Fokus → währenddessen zurückstellen
+    const a = document.activeElement;
+    if (a && this.#root.contains(a) && (a.tagName === "SELECT" || a.tagName === "INPUT")) {
+      this.#pendingRender = true;
+      return;
+    }
+    this.#pendingRender = false;
     this.#render();
   }
 

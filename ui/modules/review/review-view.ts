@@ -1,7 +1,8 @@
 // Tab „Eingang“ (Kapitel 43): Arbeitsliste neu eingegangener Medien-Assets → Detailansicht (QC-Bericht, Review & Conform, Verlauf).
 import { dateLocale, showToast, t as tt, whoami } from "../host.ts";
 import { call, errText } from "./api.ts";
-import { askText, type Config, type Me, ReviewDetail } from "./detail.ts";
+import { type Config, type Me, ReviewDetail } from "./detail.ts";
+import { openReviewSettingsForm } from "./settings-form.ts";
 import { formatBytes, type Item, qcBadge, stateBadge } from "./review-logic.ts";
 import { timecodeOf } from "./timecode.ts";
 
@@ -37,7 +38,8 @@ class ReviewView extends HTMLElement {
   #error = "";
 
   connectedCallback() {
-    this.style.cssText = "display:block;padding:12px 16px;";
+    // unten Platz für die feste Fuß-/Alarmleiste
+    this.style.cssText = "display:block;padding:12px 16px 96px;";
     if (this.#loaded) {
       this.#start();
       return;
@@ -244,22 +246,16 @@ class ReviewView extends HTMLElement {
   async #settingsDialog() {
     const r = await call<Config>("GET", "/config");
     if (!r.ok) return;
-    const text = await askText(tt("rv.settings"), tt("rv.settings.hint"), tt("rv.save"), JSON.stringify(r.data, null, 2));
-    if (text === null) return;
-    let body: unknown;
-    try {
-      body = JSON.parse(text);
-    } catch {
-      showToast(tt("rv.settings.badjson"));
-      return;
-    }
-    const res = await call("PUT", "/config", body);
-    if (!res.ok) {
-      showToast(errText(res.data) || tt("rv.err.generic"));
-      return;
-    }
-    this.#cfg = res.data as unknown as Config;
-    showToast(tt("rv.saved"));
+    openReviewSettingsForm({
+      config: r.data as unknown as Record<string, unknown>,
+      save: async (c) => {
+        const res = await call("PUT", "/config", c);
+        if (!res.ok) return { ok: false, message: errText(res.data) || tt("rv.err.generic") };
+        this.#cfg = res.data as unknown as Config;
+        showToast(tt("rv.saved"));
+        return { ok: true, message: "" };
+      },
+    });
   }
 }
 

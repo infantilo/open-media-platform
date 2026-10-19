@@ -106,3 +106,20 @@ Deno.test("Messwerte gegen Grenzwerte; Zustandsfarben", () => {
   assertEquals(stateBadge("qc_failed_to_run").includes("error"), true);
   assertEquals(stateBadge("awaiting_review").includes("cue"), true);
 });
+
+import { idFrom, joinList, moveItem, splitList, validateReviewConfig } from "./settings-logic.ts";
+
+Deno.test("Eingangs-Einstellungen: Listen, IDs, Reihenfolge", () => {
+  assertEquals(splitList("a, b\n c ,,"), ["a", "b", "c"]);
+  assertEquals(joinList(["x", "y"]), "x, y");
+  assertEquals(idFrom("Schlagworte Über", ["schlagworte-uber"]), "schlagworte-uber-2");
+  assertEquals(moveItem([1, 2, 3], 0, 1), [2, 1, 3]);
+  assertEquals(moveItem([1, 2, 3], 0, -1), [1, 2, 3]);
+});
+
+Deno.test("Eingangs-Einstellungen: Prüfung", () => {
+  const ok = { approvalMode: "single", defaultQcProfile: "a", qcProfiles: { a: { id: "a", expect: { frameRate: "25/1" } } }, metadataFields: [{ id: "t", type: "text" }] };
+  assertEquals(validateReviewConfig(ok), []);
+  const bad = { approvalMode: "x", defaultQcProfile: "z", qcProfiles: { a: { id: "a", name: "A", expect: { frameRate: "abc" } } }, metadataFields: [{ id: "t", type: "select", values: [] }, { id: "t", type: "text" }] };
+  assertEquals(validateReviewConfig(bad).map((x) => x.key), ["rv.cfg.err.mode", "rv.cfg.err.default", "rv.cfg.err.rate", "rv.cfg.err.values", "rv.cfg.err.fieldid"]);
+});

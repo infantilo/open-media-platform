@@ -862,7 +862,7 @@ Originaldatei wird dabei nie verändert.
 - **Änderungen anderer:** Hat jemand anderes zwischenzeitlich gespeichert oder ist die Quelldatei neu, erscheint ein Hinweis: „Aktuellen Stand laden“ oder
   „trotzdem speichern“ (überschreibt ausdrücklich). Ungespeicherte Änderungen werden beim Verlassen nachgefragt.
 - **Verlauf:** Alle Aktionen (wer, was, wann, Zustand von → nach) und die Conform-Revisionen.
-- **Einstellungen** (Administratoren): QC-Profile (Schwellen, Anlieferprofil), Segmentregeln, Freigabemodus, Metadatenformular, Importverzeichnis, Proxy-Qualität — als JSON; der Server prüft vor dem Speichern.
+- **Einstellungen** (Administratoren): Formular mit den Abschnitten *Freigabe und Prüfung* (Modus, Selbstfreigabe), *Segmentregeln*, *Qualitätskontrolle* (Standardprofil, parallele Prüfungen, Profile mit Schwellen für Schwarzbild, Standbild, Stille, Lautheit, Übersteuerung, Bild/Ton-Versatz und Erwartungen an die Datei; Profile duplizieren/entfernen), *Prüfkopie*, *Metadatenformular* (Felder anlegen, sortieren, Typ, Pflicht, erlaubte Werte) und *Import*. Eingaben werden vor dem Speichern geprüft; der Server prüft zusätzlich.
   Das Modul lässt sich mit `OMP_MODULES_DISABLE=review` abschalten; Proxys liegen unter `OMP_REVIEW_DIR` (Standard `data/review`).
 
 ## 5d. Aufnahmen (geplante Live-Aufnahme)

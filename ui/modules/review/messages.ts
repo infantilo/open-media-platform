@@ -1,6 +1,454 @@
 // Texte des Moduls „Eingang / Review“ (Kapitel 43) — gehören dem Modul, nicht dem Kern-Wörterbuch.
 // Deutsch und Englisch stehen je Schlüssel nebeneinander in der Tabelle unten und werden daraus abgeleitet.
 const TABLE: Record<string, [string, string]> = {
+  "rv.cfg.approval": [
+    "Freigabe und Prüfung",
+    "Approval and review"
+  ],
+  "rv.cfg.approval.hint": [
+    "Wer eine Datei freigeben darf und wann sie geprüft werden darf.",
+    "Who may approve a file and when it may be reviewed."
+  ],
+  "rv.cfg.mode": [
+    "Freigabemodus",
+    "Approval mode"
+  ],
+  "rv.cfg.mode.help": [
+    "Gilt für neue Einreichungen.",
+    "Applies to new submissions."
+  ],
+  "rv.cfg.mode.none": [
+    "Keine Freigabe (Einreichen genügt)",
+    "No approval (submitting is enough)"
+  ],
+  "rv.cfg.mode.single": [
+    "Eine Freigabe",
+    "Single approval"
+  ],
+  "rv.cfg.mode.dual": [
+    "Zwei Personen (Vier-Augen-Prinzip)",
+    "Two people (four-eyes)"
+  ],
+  "rv.cfg.selfapprove": [
+    "Einreicher darf selbst freigeben",
+    "Submitter may approve their own work"
+  ],
+  "rv.cfg.selfapprove.help": [
+    "Nur relevant beim Vier-Augen-Prinzip.",
+    "Only relevant with four-eyes approval."
+  ],
+  "rv.cfg.review.running": [
+    "Prüfung schon während der QC erlauben",
+    "Allow review while QC is still running"
+  ],
+  "rv.cfg.review.fail": [
+    "Prüfung erlauben, wenn die QC nicht ausführbar war",
+    "Allow review when QC could not run"
+  ],
+  "rv.cfg.review.fail.help": [
+    "Die Datei gilt dann als ungeprüft, nicht als fehlerfrei.",
+    "The file then counts as unchecked, not as free of defects."
+  ],
+  "rv.cfg.segments": [
+    "Segmentregeln",
+    "Segment rules"
+  ],
+  "rv.cfg.segments.hint": [
+    "Regeln für die Schnittliste (Conform).",
+    "Rules for the conform segment list."
+  ],
+  "rv.cfg.minseg": [
+    "Kürzestes Segment",
+    "Shortest segment"
+  ],
+  "rv.cfg.frames": [
+    "Bilder",
+    "frames"
+  ],
+  "rv.cfg.overlap": [
+    "Überlappende Segmente erlauben",
+    "Allow overlapping segments"
+  ],
+  "rv.cfg.gaps": [
+    "Lücken zwischen Segmenten erlauben",
+    "Allow gaps between segments"
+  ],
+  "rv.cfg.qc": [
+    "Qualitätskontrolle (QC)",
+    "Quality control (QC)"
+  ],
+  "rv.cfg.qc.hint": [
+    "Automatische Prüfung jeder Datei mit festen, nachvollziehbaren Schwellen.",
+    "Automatic check of every file against fixed, traceable thresholds."
+  ],
+  "rv.cfg.qc.default": [
+    "Standardprofil",
+    "Default profile"
+  ],
+  "rv.cfg.qc.workers": [
+    "Gleichzeitige Prüfungen",
+    "Simultaneous checks"
+  ],
+  "rv.cfg.qc.workers.help": [
+    "1–4; jede belegt CPU.",
+    "1–4; each uses CPU."
+  ],
+  "rv.cfg.qc.auto": [
+    "Neue Dateien automatisch prüfen",
+    "Check new files automatically"
+  ],
+  "rv.cfg.qc.auto.help": [
+    "Sonst startet die QC nur auf Anforderung.",
+    "Otherwise QC only starts on request."
+  ],
+  "rv.cfg.qc.profiles": [
+    "QC-Profile",
+    "QC profiles"
+  ],
+  "rv.cfg.p.name": [
+    "Bezeichnung",
+    "Name"
+  ],
+  "rv.cfg.p.version": [
+    "Version",
+    "Version"
+  ],
+  "rv.cfg.p.version.help": [
+    "Erhöhen, wenn Schwellen geändert werden — Befunde nennen die Version.",
+    "Increase when thresholds change — findings cite the version."
+  ],
+  "rv.cfg.p.timeout": [
+    "Zeitlimit je Prüfung",
+    "Time limit per check"
+  ],
+  "rv.cfg.p.dup": [
+    "Duplizieren",
+    "Duplicate"
+  ],
+  "rv.cfg.p.copy": [
+    "Kopie",
+    "copy"
+  ],
+  "rv.cfg.p.remove.q": [
+    "QC-Profil „{p0}“ entfernen?",
+    "Remove QC profile “{p0}”?"
+  ],
+  "rv.cfg.black": [
+    "Schwarzbild",
+    "Black frames"
+  ],
+  "rv.cfg.freeze": [
+    "Standbild",
+    "Frozen picture"
+  ],
+  "rv.cfg.silence": [
+    "Stille",
+    "Silence"
+  ],
+  "rv.cfg.t.mindur": [
+    "Mindestdauer",
+    "Minimum duration"
+  ],
+  "rv.cfg.t.warn": [
+    "Warnung ab",
+    "Warn above"
+  ],
+  "rv.cfg.t.fail": [
+    "Fehler ab",
+    "Fail above"
+  ],
+  "rv.cfg.t.head": [
+    "Anfang ignorieren",
+    "Ignore at start"
+  ],
+  "rv.cfg.t.tail": [
+    "Ende ignorieren",
+    "Ignore at end"
+  ],
+  "rv.cfg.t.pix": [
+    "Schwarzpegel",
+    "Black level"
+  ],
+  "rv.cfg.t.noise": [
+    "Schwelle",
+    "Threshold"
+  ],
+  "rv.cfg.loud": [
+    "Lautheit prüfen (EBU R128)",
+    "Check loudness (EBU R128)"
+  ],
+  "rv.cfg.loud.limits": [
+    "Lautheit",
+    "Loudness"
+  ],
+  "rv.cfg.t.target": [
+    "Zielwert",
+    "Target"
+  ],
+  "rv.cfg.t.warntol": [
+    "Warnung ab Abweichung",
+    "Warn at deviation"
+  ],
+  "rv.cfg.t.failtol": [
+    "Fehler ab Abweichung",
+    "Fail at deviation"
+  ],
+  "rv.cfg.t.truepeak": [
+    "Höchster True Peak",
+    "Maximum true peak"
+  ],
+  "rv.cfg.t.lra": [
+    "Höchster Lautheitsumfang",
+    "Maximum loudness range"
+  ],
+  "rv.cfg.t.clip": [
+    "Übersteuerung ab",
+    "Clipping from"
+  ],
+  "rv.cfg.t.clip.help": [
+    "Sample-Spitze ab diesem Pegel = Verdacht.",
+    "Sample peak from this level = suspected."
+  ],
+  "rv.cfg.t.startoff": [
+    "Höchster Startversatz Bild/Ton",
+    "Maximum A/V start offset"
+  ],
+  "rv.cfg.t.durmis": [
+    "Höchste Längendifferenz Bild/Ton",
+    "Maximum A/V length mismatch"
+  ],
+  "rv.cfg.t.maxaudio": [
+    "Höchstzahl analysierter Tonspuren",
+    "Maximum analyzed audio tracks"
+  ],
+  "rv.cfg.t.maxaudio.help": [
+    "Begrenzt Analysezeit bei vielen Spuren.",
+    "Limits analysis time with many tracks."
+  ],
+  "rv.cfg.expect": [
+    "Erwartungen an die Datei",
+    "Expectations for the file"
+  ],
+  "rv.cfg.expect.help": [
+    "Leere Felder werden nicht geprüft.",
+    "Empty fields are not checked."
+  ],
+  "rv.cfg.e.width": [
+    "Breite",
+    "Width"
+  ],
+  "rv.cfg.e.height": [
+    "Höhe",
+    "Height"
+  ],
+  "rv.cfg.e.rate": [
+    "Bildrate",
+    "Frame rate"
+  ],
+  "rv.cfg.e.order": [
+    "Halbbilder",
+    "Field order"
+  ],
+  "rv.cfg.e.order.none": [
+    "nicht prüfen",
+    "do not check"
+  ],
+  "rv.cfg.e.order.progressive": [
+    "Vollbilder",
+    "Progressive"
+  ],
+  "rv.cfg.e.order.tt": [
+    "Interlaced, oberes Halbbild zuerst",
+    "Interlaced, top field first"
+  ],
+  "rv.cfg.e.order.bb": [
+    "Interlaced, unteres Halbbild zuerst",
+    "Interlaced, bottom field first"
+  ],
+  "rv.cfg.e.order.any": [
+    "Beliebig interlaced",
+    "Any interlaced"
+  ],
+  "rv.cfg.e.codecs": [
+    "Erlaubte Videocodecs",
+    "Allowed video codecs"
+  ],
+  "rv.cfg.e.codecs.help": [
+    "Kommagetrennt, z. B. mpeg2video, h264.",
+    "Comma separated, e.g. mpeg2video, h264."
+  ],
+  "rv.cfg.e.container": [
+    "Container enthält",
+    "Container contains"
+  ],
+  "rv.cfg.e.container.help": [
+    "Teil des Formatnamens, z. B. mxf.",
+    "Part of the format name, e.g. mxf."
+  ],
+  "rv.cfg.e.tracks": [
+    "Mindestzahl Tonspuren",
+    "Minimum audio tracks"
+  ],
+  "rv.cfg.e.rate.audio": [
+    "Abtastrate",
+    "Sample rate"
+  ],
+  "rv.cfg.e.bits": [
+    "Mindest-Bittiefe",
+    "Minimum bit depth"
+  ],
+  "rv.cfg.e.captions": [
+    "Untertitel-/Datenstrom erwartet",
+    "Caption/data stream expected"
+  ],
+  "rv.cfg.proxy": [
+    "Prüfkopie (Proxy)",
+    "Review proxy"
+  ],
+  "rv.cfg.proxy.hint": [
+    "Kleine Kopie für den Player; die Originaldatei bleibt unverändert.",
+    "Small copy for the player; the original file stays unchanged."
+  ],
+  "rv.cfg.proxy.height": [
+    "Bildhöhe",
+    "Picture height"
+  ],
+  "rv.cfg.proxy.crf": [
+    "Qualität (CRF)",
+    "Quality (CRF)"
+  ],
+  "rv.cfg.proxy.crf.help": [
+    "Kleiner = besser und größer; 10–40.",
+    "Lower = better and larger; 10–40."
+  ],
+  "rv.cfg.proxy.audio": [
+    "Höchstzahl Tonspuren",
+    "Maximum audio tracks"
+  ],
+  "rv.cfg.meta": [
+    "Metadatenformular",
+    "Metadata form"
+  ],
+  "rv.cfg.meta.hint": [
+    "Felder, die bei der Prüfung ausgefüllt werden. Die Reihenfolge entspricht dem Formular.",
+    "Fields filled in during review. The order matches the form."
+  ],
+  "rv.cfg.f.label": [
+    "Bezeichnung",
+    "Label"
+  ],
+  "rv.cfg.f.type": [
+    "Feldtyp",
+    "Field type"
+  ],
+  "rv.cfg.f.max": [
+    "Höchstlänge / -anzahl",
+    "Maximum length / count"
+  ],
+  "rv.cfg.f.max.help": [
+    "Zeichen bzw. Anzahl Schlagworte.",
+    "Characters or number of tags."
+  ],
+  "rv.cfg.f.values": [
+    "Erlaubte Werte",
+    "Allowed values"
+  ],
+  "rv.cfg.f.values.help": [
+    "Kommagetrennt.",
+    "Comma separated."
+  ],
+  "rv.cfg.f.required": [
+    "Pflichtfeld",
+    "Required"
+  ],
+  "rv.cfg.f.segment": [
+    "Gilt je Segment statt je Datei",
+    "Applies per segment instead of per file"
+  ],
+  "rv.cfg.f.add": [
+    "Feld hinzufügen",
+    "Add field"
+  ],
+  "rv.cfg.f.new": [
+    "Neues Feld",
+    "New field"
+  ],
+  "rv.cfg.f.remove.q": [
+    "Feld „{p0}“ entfernen?",
+    "Remove field “{p0}”?"
+  ],
+  "rv.cfg.ft.text": [
+    "Text",
+    "Text"
+  ],
+  "rv.cfg.ft.longtext": [
+    "Langer Text",
+    "Long text"
+  ],
+  "rv.cfg.ft.select": [
+    "Auswahl",
+    "Single choice"
+  ],
+  "rv.cfg.ft.multiselect": [
+    "Mehrfachauswahl",
+    "Multiple choice"
+  ],
+  "rv.cfg.ft.tags": [
+    "Schlagworte",
+    "Tags"
+  ],
+  "rv.cfg.ft.date": [
+    "Datum",
+    "Date"
+  ],
+  "rv.cfg.ft.number": [
+    "Zahl",
+    "Number"
+  ],
+  "rv.cfg.import": [
+    "Import",
+    "Import"
+  ],
+  "rv.cfg.import.hint": [
+    "Dateien aus einem Ordner direkt in den Eingang übernehmen.",
+    "Take files from a folder directly into intake."
+  ],
+  "rv.cfg.import.dir": [
+    "Importordner",
+    "Import folder"
+  ],
+  "rv.cfg.import.dir.help": [
+    "Leer = Import abgeschaltet.",
+    "Empty = import disabled."
+  ],
+  "rv.cfg.remove": [
+    "Entfernen",
+    "Remove"
+  ],
+  "rv.cfg.err.mode": [
+    "Freigabemodus ungültig.",
+    "Invalid approval mode."
+  ],
+  "rv.cfg.err.noprofile": [
+    "Mindestens ein QC-Profil wird gebraucht.",
+    "At least one QC profile is required."
+  ],
+  "rv.cfg.err.default": [
+    "Das Standardprofil existiert nicht.",
+    "The default profile does not exist."
+  ],
+  "rv.cfg.err.rate": [
+    "QC-Profil „{p0}“: Bildrate muss wie 25/1 oder 25 aussehen.",
+    "QC profile “{p0}”: frame rate must look like 25/1 or 25."
+  ],
+  "rv.cfg.err.fieldid": [
+    "Metadatenfeld „{p0}“ hat keine eindeutige Kennung.",
+    "Metadata field “{p0}” has no unique id."
+  ],
+  "rv.cfg.err.values": [
+    "Metadatenfeld „{p0}“: Auswahlfeld braucht erlaubte Werte.",
+    "Metadata field “{p0}”: choice field needs allowed values."
+  ],
   "rv.title": [
     "Eingang",
     "Intake"
@@ -50,12 +498,8 @@ const TABLE: Record<string, [string, string]> = {
     "Settings"
   ],
   "rv.settings.hint": [
-    "Konfiguration des Eingangs als JSON (QC-Profile, Segmentregeln, Freigabemodus, Metadatenformular, Importverzeichnis). Der Server prüft sie vor dem Speichern.",
-    "Intake configuration as JSON (QC profiles, segment rules, approval mode, metadata form, import directory). The server validates it before saving."
-  ],
-  "rv.settings.badjson": [
-    "Kein gültiges JSON.",
-    "Not valid JSON."
+    "Einstellungen des Eingangs: Freigabe, Segmentregeln, QC-Profile mit Schwellen, Prüfkopie, Metadatenformular und Importordner. Änderungen gelten für neue Prüfungen; der Server prüft vor dem Speichern.",
+    "Intake settings: approval, segment rules, QC profiles with thresholds, review proxy, metadata form and import folder. Changes apply to new checks; the server validates before saving."
   ],
   "rv.f.todo": [
     "Zu prüfen (frei)",
