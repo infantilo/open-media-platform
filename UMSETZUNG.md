@@ -5385,3 +5385,14 @@ Plan und Entscheidungen: `docs/PLAN-LIVE-INGEST-UND-FILE-QC.md`; Architektur, Ze
 - **Bewusst nicht gebaut / offen:** siehe ENTWURF-FILE-QC.md §12 (MXF-Strukturvalidierung ST 377, Objektspeicher-Materialisierung, physisches Trimmen, Brücke zu `omp-media-library`, feldgenaue Wiedergabe, SSE).
 - **Verifikation:** `go test ./internal/modules/review` (ffmpeg + Postgres nötig), `deno test ui/modules/review`, Browser-Messung in Chromium (angezeigtes Bild aus dem `<video>` per Burn-in = Ziel; Stichprobe inkl. GOP-Grenzen; Rückwärts-Shuttle).
 - **Änderungen am Kern:** `queryTokenAllowedPath` erlaubt `?access_token=` zusätzlich für `GET /api/v1/review/media/…` (Allowlist + Test); Host-Schnittstelle der Modul-UIs um `authToken` erweitert; Routen-Golden aktualisiert.
+
+
+## Kapitel 42: Geplante Live-Aufnahme mit Ressourcenplanung (Nutzerauftrag 2026-10-19, „Live Ingest.txt“)
+
+Entwurf, Entscheidung (hybrid), Grenzen: **`docs/ENTWURF-INGEST.md`**; Bedienung: `BENUTZERHANDBUCH.md` §5d; Plan: `docs/PLAN-LIVE-INGEST-UND-FILE-QC.md`.
+
+- **Umgesetzt (2026-10-19, lokal, getestet und live mit echten Nodes geprüft):** Modul `internal/modules/ingest` (Zeitplan mit IANA-Zeitzone/Wiederholung/Zeitumstellung, sieben typisierte Zulassungsgründe über Zeitfenster je Ressourcenart, atomare Reservierung per Advisory-Lock,
+  Auftragslebenszyklus mit Ereignisprotokoll, Idempotenzschlüssel, Wiederanlauf/Übernahme nach Neustart, Verspätungs- und Wiederholungsrichtlinien, Sicherung von Teilaufnahmen, Konvertierung ohne Verlust der Aufnahme, Messwerte je Profil, Metriken, API inkl. Trockenlauf)
+  und UI-Modul `ui/modules/ingest` (Tab „Aufnahmen“: Probleme vorhergesagt/aktuell/fehlgeschlagen, Zeitleiste, Kapazität je Ressource, Formular mit Live-Prüfung). Asset-Übergabe an den Eingang (Kap. 43) live bestätigt.
+- **Offen:** siehe ENTWURF-INGEST.md §8 (Remote-Host-Speicher, CPU/RAM-Messung, Cloud, Integration in den Scheduler-Tab, SSE).
+- **Messung:** Startabweichung 639 ms bei 45 s Vorlauf und 20 s Vorwärmzeit (echter `omp-recorder`); Neustart des Orchestrators mitten in einer Aufnahme verlor nichts.

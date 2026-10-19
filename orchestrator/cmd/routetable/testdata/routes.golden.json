@@ -757,6 +757,108 @@
     "domain": "core"
   },
   {
+    "method": "POST",
+    "path": "/api/v1/ingest/adhoc",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/ingest/capacity",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/ingest/config",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/ingest/config",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/ingest/jobs",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/ingest/jobs/{id}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/ingest/jobs/{id}/cancel",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/ingest/jobs/{id}/readmit",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/ingest/jobs/{id}/reschedule",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/ingest/plan",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/ingest/schedules",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/ingest/schedules",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/ingest/schedules/{id}",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/ingest/schedules/{id}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/ingest/schedules/{id}",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/ingest/schedules/{id}/preview",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/ingest/sources",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
     "method": "GET",
     "path": "/api/v1/instances",
     "auth": "auth",

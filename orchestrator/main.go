@@ -42,12 +42,13 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/ioports"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
-	"github.com/infantilo/openmediaplatform/orchestrator/internal/maintenance"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/locations"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/maintenance"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/materialize"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
+	ingestmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/ingest"
 	playoutmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/playout"
 	reviewmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/review"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
@@ -330,8 +331,9 @@ func main() {
 	// `failed` markiert und nicht gemountet; der Kern startet trotzdem.
 	modules := module.NewRegistry(module.DisabledFromEnv()...)
 	playoutSvc := &playoutmod.Services{}
-	reviewMod := reviewmod.New(nil) // der Asset-Store folgt weiter unten (assetStore), vor dem Mounten der Routen
-	registerModules(modules, playoutSvc, reviewMod)
+	reviewMod := reviewmod.New(nil)                  // der Asset-Store folgt weiter unten (assetStore), vor dem Mounten der Routen
+	ingestMod := ingestmod.New(ingestmod.Services{}) // Kern-Dienste folgen weiter unten (vor dem Mounten der Routen)
+	registerModules(modules, playoutSvc, reviewMod, ingestMod)
 	if err := modules.Migrate(ctx, database); err != nil {
 		slog.Error("module migration failed (affected modules are not mounted)", "error", err)
 	}
@@ -866,6 +868,8 @@ func main() {
 	outboxStore := outbox.NewStore(database)
 	assetStore := asset.NewStore(database, asset.WithOutbox(outboxStore))
 	reviewMod.Assets = assetStore
+	ingestFFmpeg, _ := exec.LookPath("ffmpeg")
+	ingestMod.S = ingestmod.Services{Assets: assetStore, Launcher: launcherSvc, Nodes: store, Graph: graphSvc, FFmpeg: ingestFFmpeg}
 	processStore := process.NewStore(database)
 	// EventPublisher = nc direkt (erfüllt process.EventPublisher: Publish
 	// (subject string, payload []byte) error) — "workflow -> event"

@@ -1,6 +1,6 @@
 # Plan: Geplanter Live-Ingest (Kap. 42) und File-QC / Review / Conform (Kap. 43)
 
-Stand 2026-10-19 (Kapitel 43 umgesetzt, siehe `docs/ENTWURF-FILE-QC.md`; Kapitel 42 offen). Quellen: `Live Ingest.txt`, `File QC.txt` (Aufgabentexte, Verzeichnis oberhalb des Repos).
+Stand 2026-10-19 (Kapitel 43 umgesetzt, siehe `docs/ENTWURF-FILE-QC.md`; Kapitel 42 umgesetzt, siehe `docs/ENTWURF-INGEST.md`). Quellen: `Live Ingest.txt`, `File QC.txt` (Aufgabentexte, Verzeichnis oberhalb des Repos).
 Dieser Plan ist **Bestandsaufnahme + Entscheidungen + Schrittfolge**. Es wurde noch kein Code geändert.
 Alle Aussagen unter „Bestand" sind gegen die Dateien geprüft (Stichproben, keine Vollanalyse); was nicht
 geprüft ist, steht unter „Vor Beginn zu klären".

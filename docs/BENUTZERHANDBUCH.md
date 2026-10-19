@@ -865,6 +865,26 @@ Originaldatei wird dabei nie verändert.
 - **Einstellungen** (Administratoren): QC-Profile (Schwellen, Anlieferprofil), Segmentregeln, Freigabemodus, Metadatenformular, Importverzeichnis, Proxy-Qualität — als JSON; der Server prüft vor dem Speichern.
   Das Modul lässt sich mit `OMP_MODULES_DISABLE=review` abschalten; Proxys liegen unter `OMP_REVIEW_DIR` (Standard `data/review`).
 
+## 5d. Aufnahmen (geplante Live-Aufnahme)
+
+Der Tab **Aufnahmen** plant Aufnahmen von Live-Quellen (MXL-Sender): einmalig oder wiederkehrend, mit Zeitzone, Priorität und Richtlinien. Eine fertige Aufnahme wird als Asset registriert und erscheint im Tab
+**Eingang** (QC, Review). Das System prüft **vorher**, ob die Aufnahme machbar ist — nicht erst beim Start.
+
+- **＋ Zeitplan / ＋ Einzelaufnahme:** Name, Quelle (Node mit Sendern), Aufnahmeprofil, **Zeitzone** und Beginn als Ortszeit, Dauer (h:mm), Wiederholung (täglich/wöchentlich mit Wochentagen/monatlich, bis/Anzahl),
+  Priorität 0–9, „Wenn die Quelle fehlt“ (warten / begrenzt warten / sofort fehlschlagen — die Aufnahme endet immer zur geplanten Zeit), Versuche bei Abbruch, bevorzugter Host, Zielordner und Dateiname.
+  Unter dem Formular zeigt die **Live-Prüfung** bei jeder Eingabe, ob die Aufnahme zugelassen würde — samt Gründen und frühestem möglichem Start, ohne etwas zu speichern.
+- **Probleme** (oben): *VORHERGESAGT* = ein Engpass, der noch nicht eingetreten ist (mit Ursache, Zeitraum, beteiligten Aufträgen und empfohlener Maßnahme); *AKTUELL* = wartet gerade auf Quelle/Host;
+  *FEHLGESCHLAGEN* = tatsächlich gescheitert (Stufe und Grund; „Aufnahme gesichert“, wenn eine Datei erhalten blieb). Gründe: Quellenkonflikt, harter Ressourcenmangel, vorübergehend belegt, Funktion fehlt,
+  Speicher/Durchsatz reicht nicht, Kapazitätswarnung, unsichere Schätzung.
+- **Zeitleiste:** je Host eine Spur, Aufträge nach Zustand gefärbt, überlappende gestapelt; nicht zugelassene in der gestreiften Spur „Nicht zugelassen“. Klick öffnet Verlauf und Gründe; ⏱ in der Liste kennzeichnet eine
+  Zeitumstellung (Uhrzeit existiert nicht → Start danach; Uhrzeit doppelt → die erste zählt).
+- **Kapazität je Ressourcenart:** Rekorder, Konverter, CPU, Speicher, Schreibdurchsatz, Speicherplatz, Netz, MXL-Speicher — jede mit eigener Grenze (bewusst keine Gesamtprozentzahl). Balken = bereits reservierte Nutzung im Zeitraum,
+  gestrichelt = Warnschwelle, rechts Spitze/Grenze.
+- **Laufende Aufnahmen werden nie automatisch unterbrochen.** Eine Zeitplanänderung ersetzt nur künftige Aufträge. „Abbrechen (laufend)“ beendet bewusst; die bisherige Aufnahme wird gesichert und als Asset registriert.
+  Stürzt ein Rekorder ab, wird die Teilaufnahme gesichert und (je nach Versuchen) der Rest der Zeit neu aufgenommen. Der Orchestrator darf währenddessen neu starten — die Aufnahme läuft weiter und wird übernommen.
+- **Einstellungen** (Administratoren, JSON): Profile (Dateiendung, Bedarf je Ressource, optionale Konvertierung), Hostbudgets, Vorwärmzeit, Zulassungsregeln (Reserve für hohe Priorität, Quellenlimit), Medienverzeichnis.
+  Messwerte aus abgeschlossenen Aufnahmen ersetzen Standardwerte automatisch („gemessen“ vor „konfiguriert“ vor „Standard“).
+
 ## 6. Alarme
 
 Der Reiter **Alarme** sammelt an einer Stelle, was operative
