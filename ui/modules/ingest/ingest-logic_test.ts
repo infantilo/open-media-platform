@@ -112,3 +112,34 @@ Deno.test("Aktionen je Zustand und Stundenmarken", () => {
   const t = ticks(Date.parse("2026-10-20T00:00:00Z"), Date.parse("2026-10-20T06:00:00Z"));
   assertEquals(t.length >= 5, true);
 });
+
+import { cloneConfig, type IngestConfig, joinArgs, newProfileId, numOrUndef, splitArgs, validateConfig } from "./settings-logic.ts";
+
+Deno.test("Einstellungen: Argumentzeile ↔ Liste, Anführungszeichen bleiben erhalten", () => {
+  assertEquals(splitArgs(`-c:v libx264 "a b"`), ["-c:v", "libx264", "a b"]);
+  assertEquals(splitArgs('-vf "scale=1280:-2" -an'), ["-vf", "scale=1280:-2", "-an"]);
+  assertEquals(joinArgs(["-vf", "scale=1280:-2", "-metadata", "a b"]), '-vf scale=1280:-2 -metadata "a b"');
+  assertEquals(splitArgs(joinArgs(["x", "a b", ""])), ["x", "a b", ""]);
+});
+
+Deno.test("Einstellungen: Profil-ID, Zahlenfelder", () => {
+  assertEquals(newProfileId("MP4 Proxy – klein", []), "mp4-proxy-klein");
+  assertEquals(newProfileId("Ärger", ["arger"]), "arger-2");
+  assertEquals(numOrUndef(""), undefined);
+  assertEquals(numOrUndef("1,5"), 1.5);
+  assertEquals(numOrUndef("abc"), undefined);
+});
+
+Deno.test("Einstellungen: Prüfung meldet Endung, Nachbearbeitung, negativen Bedarf", () => {
+  const ok: IngestConfig = {
+    profiles: { a: { id: "a", label: "A", ext: ".mxf" } },
+    defaultBudget: {}, hostBudgets: {}, rules: {}, leadTimeS: 45, maxStartDeviationS: 10, horizonHours: 48, mediaDir: "data", defaultLate: {}, defaultRetry: {},
+  };
+  assertEquals(validateConfig(ok), []);
+  const bad = cloneConfig(ok);
+  bad.profiles.a.ext = "mxf";
+  bad.profiles.a.convert = { ext: ".mp4", args: [] };
+  bad.profiles.a.demand = { cpu_cores: -1 };
+  bad.leadTimeS = 5000;
+  assertEquals(validateConfig(bad).map((x) => x.key), ["ing.cfg.err.lead", "ing.cfg.err.ext", "ing.cfg.err.convert", "ing.cfg.err.demand"]);
+});

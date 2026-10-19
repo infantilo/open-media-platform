@@ -882,7 +882,7 @@ Der Tab **Aufnahmen** plant Aufnahmen von Live-Quellen (MXL-Sender): einmalig od
   gestrichelt = Warnschwelle, rechts Spitze/Grenze.
 - **Laufende Aufnahmen werden nie automatisch unterbrochen.** Eine Zeitplanänderung ersetzt nur künftige Aufträge. „Abbrechen (laufend)“ beendet bewusst; die bisherige Aufnahme wird gesichert und als Asset registriert.
   Stürzt ein Rekorder ab, wird die Teilaufnahme gesichert und (je nach Versuchen) der Rest der Zeit neu aufgenommen. Der Orchestrator darf währenddessen neu starten — die Aufnahme läuft weiter und wird übernommen.
-- **Einstellungen** (Administratoren, JSON): Profile (Dateiendung, Bedarf je Ressource, optionale Konvertierung), Hostbudgets, Vorwärmzeit, Zulassungsregeln (Reserve für hohe Priorität, Quellenlimit), Medienverzeichnis.
+- **Einstellungen** (Administratoren): Formular mit fünf Abschnitten — *Allgemein* (Vorwärmzeit, Ziel der Startabweichung, Planungshorizont, Zielordner), *Standard-Richtlinien* (Verhalten bei fehlender Quelle, Versuche, Pausen), *Zulassungsregeln* (Quellenlimit, Reserve je Ressource ab Priorität, Verdrängungsvorschlag), *Grenzen je Rechner* (Standard und Abweichungen je Rechner, Warnschwelle, Funktionen) und *Aufnahmeprofile* (Dateiformat per Auswahl, erwarteter Bedarf je Ressource — leer = gemessen/Standard —, optionale Konvertierung mit ffmpeg-Argumenten). Eingaben werden vor dem Speichern geprüft; der Server prüft zusätzlich.
   Messwerte aus abgeschlossenen Aufnahmen ersetzen Standardwerte automatisch („gemessen“ vor „konfiguriert“ vor „Standard“).
 
 ## 6. Alarme

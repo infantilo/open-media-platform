@@ -1300,6 +1300,7 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
   simpleCodecEls.push(videoSection, videoField, audioSection, audioField);
 
   el.append(
+    section(tt("psc.sec.files")),
     field(tt("psc.7ddbbe"), input.el, undefined, true),
     field(tt("psc.8adabd"), output.el, undefined, true),
     field(tt("psc.6bbca5"), fmt.el, tt("psc.74d4bd")),
@@ -1485,9 +1486,11 @@ function buildScriptWizardConcat(vars: VariableOption[]): ScriptWizardForm {
   codecFieldsEls.push(videoField, audioField);
 
   el.append(
+    section(tt("psc.sec.clips")),
     h("div", HELP_CSS + "margin-bottom:4px;", tt("psc.71259a")),
     list,
     addBtn,
+    section(tt("psc.sec.result")),
     field(tt("psc.8adabd"), output.el, undefined, true),
     field(tt("psc.6bbca5"), fmt.el, tt("psc.74d4bd")),
     field(tt("psc.b81bfe"), losslessCheckbox),
@@ -1639,11 +1642,14 @@ function buildScriptWizardOverlay(vars: VariableOption[]): ScriptWizardForm {
   addBtn.addEventListener("click", addEvent);
 
   el.append(
+    section(tt("psc.sec.files")),
     field(tt("psc.37ba1f"), input.el, undefined, true),
     field(tt("psc.8adabd"), output.el, undefined, true),
+    section(tt("psc.sec.encoding")),
     field(tt("psc.2c6327"), video.el, tt("psc.406613")),
     field(tt("psc.16202d"), audio.el, tt("psc.fc2ebc")),
     field(tt("psc.f46020"), duration),
+    section(tt("psc.sec.events")),
     h("div", HELP_CSS, tt("psc.26d291")),
     timeline,
     list,
@@ -1737,12 +1743,22 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
         inp.dispatchEvent(new Event("input", { bubbles: true }));
         syncingHelper = false;
       };
+      // Das Textfeld bleibt nur sichtbar, wenn der Wert vom Steuerelement nicht abgebildet wird (Variable, Freitext) —
+      // sonst stünde derselbe Wert doppelt da (Textfeld über dem Dropdown).
+      const line = lineEls.get(inp)?.[0];
+      const syncVisibility = () => {
+        const v = inp.value.trim();
+        inp.style.display = !v.includes("${") && ctl.read() === v ? "none" : "";
+      };
       ctl.el.addEventListener("change", sync);
       ctl.el.addEventListener("input", sync);
       inp.addEventListener("input", () => {
         if (!syncingHelper) ctl.set(inp.value.trim());
+        syncVisibility();
       });
       box.appendChild(ctl.el);
+      if (line) line.insertBefore(box, line.firstChild);
+      syncVisibility();
     });
   };
 

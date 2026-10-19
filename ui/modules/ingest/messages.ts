@@ -1,5 +1,273 @@
 // Texte des Moduls „Aufnahme“ (Kapitel 42). Deutsch und Englisch stehen je Schlüssel nebeneinander.
 const TABLE: Record<string, [string, string]> = {
+  "ing.unit.min": [
+    "min",
+    "min"
+  ],
+  "ing.cfg.remove": [
+    "Entfernen",
+    "Remove"
+  ],
+  "ing.cfg.general": [
+    "Allgemein",
+    "General"
+  ],
+  "ing.cfg.general.hint": [
+    "Zeiten der Aufnahmeplanung und Speicherort.",
+    "Timing of recording planning and storage location."
+  ],
+  "ing.cfg.lead": [
+    "Vorwärmzeit",
+    "Lead time"
+  ],
+  "ing.cfg.lead.help": [
+    "So lange vor dem Beginn wird der Rekorder gestartet und verbunden.",
+    "The recorder is started and connected this long before the start."
+  ],
+  "ing.cfg.dev": [
+    "Ziel der Startabweichung",
+    "Start deviation target"
+  ],
+  "ing.cfg.dev.help": [
+    "Größere Abweichungen werden als Warnung gemeldet.",
+    "Larger deviations are reported as a warning."
+  ],
+  "ing.cfg.horizon": [
+    "Planungshorizont",
+    "Planning horizon"
+  ],
+  "ing.cfg.horizon.help": [
+    "So weit im Voraus werden Zeitpläne zu Aufträgen und reserviert.",
+    "Schedules are turned into jobs and reserved this far ahead."
+  ],
+  "ing.cfg.media": [
+    "Zielordner der Aufnahmen",
+    "Recording folder"
+  ],
+  "ing.cfg.media.help": [
+    "Ordner, in den der Rekorder schreibt.",
+    "Folder the recorder writes to."
+  ],
+  "ing.cfg.policy": [
+    "Standard-Richtlinien",
+    "Default policies"
+  ],
+  "ing.cfg.policy.hint": [
+    "Gelten für Zeitpläne, die nichts Eigenes festlegen.",
+    "Apply to schedules that do not set their own."
+  ],
+  "ing.cfg.late": [
+    "Wenn die Quelle fehlt",
+    "If the source is missing"
+  ],
+  "ing.cfg.late.help": [
+    "Verhalten zum geplanten Beginn.",
+    "Behavior at the planned start."
+  ],
+  "ing.cfg.late.wait": [
+    "Warten, Aufnahme endet zur geplanten Zeit",
+    "Wait; recording ends at the planned time"
+  ],
+  "ing.cfg.late.delay": [
+    "Begrenzt warten",
+    "Wait for a limited time"
+  ],
+  "ing.cfg.late.fail": [
+    "Sofort fehlschlagen",
+    "Fail immediately"
+  ],
+  "ing.cfg.late.max": [
+    "Längste Wartezeit",
+    "Longest wait"
+  ],
+  "ing.cfg.retry.n": [
+    "Versuche je Auftrag",
+    "Attempts per job"
+  ],
+  "ing.cfg.retry.n.help": [
+    "Inklusive des ersten Versuchs.",
+    "Including the first attempt."
+  ],
+  "ing.cfg.retry.b": [
+    "Pause zwischen Versuchen",
+    "Pause between attempts"
+  ],
+  "ing.cfg.retry.r": [
+    "Mindest-Restzeit für Neustart",
+    "Minimum remaining time to restart"
+  ],
+  "ing.cfg.retry.r.help": [
+    "Bleibt weniger Zeit, wird nach einem Abbruch nicht neu gestartet.",
+    "With less time left, a restart after an abort is not attempted."
+  ],
+  "ing.cfg.rules": [
+    "Zulassungsregeln",
+    "Admission rules"
+  ],
+  "ing.cfg.rules.hint": [
+    "Regeln, nach denen Aufträge angenommen oder abgelehnt werden.",
+    "Rules deciding whether jobs are accepted or rejected."
+  ],
+  "ing.cfg.srclimit": [
+    "Aufnahmen je Quelle gleichzeitig",
+    "Simultaneous recordings per source"
+  ],
+  "ing.cfg.srclimit.help": [
+    "Mehr gleichzeitige Aufnahmen derselben Quelle werden abgelehnt.",
+    "More simultaneous recordings of the same source are rejected."
+  ],
+  "ing.cfg.resprio": [
+    "Reserve ab Priorität",
+    "Reserve from priority"
+  ],
+  "ing.cfg.resprio.help": [
+    "Aufträge unterhalb dieser Priorität dürfen die Reserve nicht belegen.",
+    "Jobs below this priority may not use the reserve."
+  ],
+  "ing.cfg.respct": [
+    "Reserve je Ressource (Anteil, der nur wichtigen Aufträgen bleibt)",
+    "Reserve per resource (share kept for important jobs only)"
+  ],
+  "ing.cfg.preempt": [
+    "Verdrängung vorschlagen (laufende Aufnahmen werden nie automatisch unterbrochen)",
+    "Suggest preemption (running recordings are never interrupted automatically)"
+  ],
+  "ing.cfg.budgets": [
+    "Grenzen je Rechner",
+    "Limits per machine"
+  ],
+  "ing.cfg.budgets.hint": [
+    "Wie viel von jeder Ressource Aufnahmen höchstens belegen dürfen. Leer = keine eigene Grenze.",
+    "How much of each resource recordings may use at most. Empty = no own limit."
+  ],
+  "ing.cfg.budget.default": [
+    "Standard für alle Rechner",
+    "Default for all machines"
+  ],
+  "ing.cfg.budget.hosts": [
+    "Abweichungen je Rechner",
+    "Per-machine overrides"
+  ],
+  "ing.cfg.budget.host": [
+    "Rechner: {p0}",
+    "Machine: {p0}"
+  ],
+  "ing.cfg.budget.add": [
+    "Abweichung hinzufügen",
+    "Add override"
+  ],
+  "ing.cfg.host.local": [
+    "Dieser Rechner (lokal)",
+    "This machine (local)"
+  ],
+  "ing.cfg.soft": [
+    "Warnschwelle",
+    "Warning threshold"
+  ],
+  "ing.cfg.soft.help": [
+    "Ab diesem Anteil der Grenze erscheint eine Warnung.",
+    "From this share of the limit a warning is shown."
+  ],
+  "ing.cfg.functions": [
+    "Funktionen:",
+    "Functions:"
+  ],
+  "ing.cfg.fn.recorder": [
+    "Aufnehmen",
+    "Record"
+  ],
+  "ing.cfg.fn.converter": [
+    "Konvertieren",
+    "Convert"
+  ],
+  "ing.cfg.profiles": [
+    "Aufnahmeprofile",
+    "Recording profiles"
+  ],
+  "ing.cfg.profiles.hint": [
+    "Ein Profil legt Dateiformat, erwarteten Bedarf und eine optionale Nachbearbeitung fest.",
+    "A profile sets file format, expected demand and an optional post-processing step."
+  ],
+  "ing.cfg.p.label": [
+    "Bezeichnung",
+    "Name"
+  ],
+  "ing.cfg.p.format": [
+    "Dateiformat",
+    "File format"
+  ],
+  "ing.cfg.p.format.help": [
+    "MXF enthält H.264 und 24-Bit-PCM-Ton.",
+    "MXF contains H.264 and 24-bit PCM audio."
+  ],
+  "ing.cfg.fmt.other": [
+    "Andere Endung …",
+    "Other extension …"
+  ],
+  "ing.cfg.p.demand": [
+    "Erwarteter Bedarf je Aufnahme",
+    "Expected demand per recording"
+  ],
+  "ing.cfg.p.auto": [
+    "automatisch",
+    "automatic"
+  ],
+  "ing.cfg.p.demand.help": [
+    "Leere Felder: gemessene Werte früherer Aufnahmen, sonst vorsichtige Standardwerte.",
+    "Empty fields: values measured from earlier recordings, otherwise cautious defaults."
+  ],
+  "ing.cfg.p.convert": [
+    "Nach der Aufnahme konvertieren",
+    "Convert after recording"
+  ],
+  "ing.cfg.c.ext": [
+    "Endung der Ausgabe",
+    "Output extension"
+  ],
+  "ing.cfg.c.args": [
+    "ffmpeg-Argumente",
+    "ffmpeg arguments"
+  ],
+  "ing.cfg.c.args.help": [
+    "Zwischen Eingabe und Ausgabedatei; Leerzeichen trennen, Anführungszeichen gruppieren.",
+    "Between input and output file; spaces separate, quotes group."
+  ],
+  "ing.cfg.p.add": [
+    "Profil hinzufügen",
+    "Add profile"
+  ],
+  "ing.cfg.p.new": [
+    "Neues Profil",
+    "New profile"
+  ],
+  "ing.cfg.p.remove.q": [
+    "Profil „{p0}“ entfernen? Bestehende Zeitpläne mit diesem Profil werden danach abgelehnt.",
+    "Remove profile “{p0}”? Existing schedules using it will be rejected afterwards."
+  ],
+  "ing.cfg.err.lead": [
+    "Vorwärmzeit muss zwischen 0 und 3600 s liegen.",
+    "Lead time must be between 0 and 3600 s."
+  ],
+  "ing.cfg.err.horizon": [
+    "Planungshorizont muss zwischen 1 und 720 h liegen.",
+    "Planning horizon must be between 1 and 720 h."
+  ],
+  "ing.cfg.err.noprofile": [
+    "Mindestens ein Profil wird gebraucht.",
+    "At least one profile is required."
+  ],
+  "ing.cfg.err.ext": [
+    "Profil „{p0}“: Dateiendung ungültig (Punkt und 2–5 Zeichen, z. B. .mxf).",
+    "Profile “{p0}”: invalid extension (dot plus 2–5 characters, e.g. .mxf)."
+  ],
+  "ing.cfg.err.convert": [
+    "Profil „{p0}“: Nachbearbeitung braucht eine gültige Endung und Argumente.",
+    "Profile “{p0}”: post-processing needs a valid extension and arguments."
+  ],
+  "ing.cfg.err.demand": [
+    "Profil „{p0}“: Bedarf darf nicht negativ sein.",
+    "Profile “{p0}”: demand must not be negative."
+  ],
   "ing.title": [
     "Aufnahmen",
     "Recordings"
@@ -29,12 +297,8 @@ const TABLE: Record<string, [string, string]> = {
     "Settings"
   ],
   "ing.settings.hint": [
-    "Konfiguration der Aufnahme als JSON: Profile (Bedarf, Format, Nachbearbeitung), Hostbudgets je Ressource, Vorwärmzeit, Zulassungsregeln. Der Server prüft vor dem Speichern.",
-    "Recording configuration as JSON: profiles (demand, format, post-processing), host budgets per resource, lead time, admission rules. The server validates before saving."
-  ],
-  "ing.badjson": [
-    "Kein gültiges JSON.",
-    "Not valid JSON."
+    "Einstellungen der Aufnahme: Formate (Profile), Grenzen je Rechner, Vorwärmzeit und Zulassungsregeln. Änderungen wirken auf neue Planungen; der Server prüft vor dem Speichern.",
+    "Recording settings: formats (profiles), limits per machine, lead time and admission rules. Changes apply to new planning; the server validates before saving."
   ],
   "ing.save": [
     "Speichern",

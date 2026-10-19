@@ -2,6 +2,8 @@
 // Engpässe mit Ursache und Gegenmaßnahme (vorhergesagt ≠ tatsächlich fehlgeschlagen), Aufträge, Zeitpläne.
 import { apiFetch, confirmDialog, dateLocale, showToast, t as tt, whoami } from "../host.ts";
 import { openScheduleForm } from "./schedule-form.ts";
+import { openSettingsForm } from "./settings-form.ts";
+import type { IngestConfig } from "./settings-logic.ts";
 import {
   actionKey, canAbort, canCancel, fmtDuration, fmtInZone, groupLanes, type HostView, isRunning, isTerminal, type Job, layoutBars, RESOURCE_UNITS, resourceLevel, stateColor, ticks,
   usageSeries, type Verdict,
@@ -503,42 +505,17 @@ class IngestView extends HTMLElement {
   async #settings() {
     const r = await api("GET", "/config");
     if (!r.ok) return;
-    const overlay = el("div");
-    overlay.className = "omp-modal-overlay";
-    overlay.style.zIndex = "3000";
-    const m = el("div", "max-width:760px;");
-    m.className = "omp-modal";
-    const ta = el("textarea", "width:100%;box-sizing:border-box;min-height:380px;font-family:var(--omp-font-mono);font-size:12px;") as HTMLTextAreaElement;
-    ta.value = JSON.stringify(r.data, null, 2);
-    const row = el("div", "display:flex;gap:8px;justify-content:flex-end;margin-top:8px;");
-    const cancel = el("button", "", tt("ing.close"));
-    const save = el("button", "", tt("ing.save"));
-    save.className = "omp-btn-primary";
-    cancel.addEventListener("click", () => overlay.remove());
-    save.addEventListener("click", async () => {
-      let body: unknown;
-      try {
-        body = JSON.parse(ta.value);
-      } catch {
-        showToast(tt("ing.badjson"));
-        return;
-      }
-      const x = await api("PUT", "/config", body);
-      if (!x.ok) {
-        showToast(errText(x.data) || tt("ing.err"));
-        return;
-      }
-      this.#profiles = (x.data.profiles ?? {}) as Profiles;
-      overlay.remove();
-      showToast(tt("ing.saved"));
-      void this.#refresh();
+    openSettingsForm({
+      config: r.data as unknown as IngestConfig,
+      hosts: (this.#cap?.hosts ?? []).map((h) => ({ id: h.id, label: h.label })),
+      save: async (c) => {
+        const x = await api("PUT", "/config", c);
+        if (!x.ok) return { ok: false, message: errText(x.data) || tt("ing.err") };
+        this.#profiles = (x.data.profiles ?? {}) as Profiles;
+        void this.#refresh();
+        return { ok: true, message: "" };
+      },
     });
-    const h1 = el("div", "margin-bottom:4px;", tt("ing.settings"));
-    h1.className = "omp-h1";
-    m.append(h1, el("div", "font-size:12px;color:var(--omp-text-dim);margin-bottom:6px;", tt("ing.settings.hint")), ta, row);
-    row.append(cancel, save);
-    overlay.append(m);
-    document.body.append(overlay);
   }
 }
 
