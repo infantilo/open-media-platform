@@ -21,7 +21,7 @@ const (
 )
 
 func (*Module) Features() []module.FeatureDef {
-	g := map[string]string{"de": "Aufnahmen", "en": "Recordings"}
+	g := map[string]string{"de": "Stream Ingest", "en": "Stream ingest"}
 	f := func(id, de, en, dde, den string) module.FeatureDef {
 		return module.FeatureDef{ID: id, Label: map[string]string{"de": de, "en": en}, Description: map[string]string{"de": dde, "en": den}, Group: g}
 	}
@@ -39,7 +39,7 @@ func (*Module) Features() []module.FeatureDef {
 // Tiles: die Kachel „Aufnahmen“ des Arbeitsplatzes (dieselbe Ansicht wie der Tab, die Server-Rechte beschränken den Inhalt).
 func (*Module) Tiles() []module.UITile {
 	return []module.UITile{{
-		ID: "recordings", Label: map[string]string{"de": "Aufnahmen", "en": "Recordings"},
+		ID: "recordings", Label: map[string]string{"de": "Stream Ingest", "en": "Stream ingest"},
 		Needs:   []string{"ingest.*"},
 		Element: "omp-ingest-view", Bundle: "/dist/modules/ingest.js",
 	}}

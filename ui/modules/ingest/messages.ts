@@ -421,8 +421,8 @@ const TABLE: Record<string, [string, string]> = {
     "Profile “{p0}”: demand must not be negative."
   ],
   "ing.title": [
-    "Aufnahmen",
-    "Recordings"
+    "Stream Ingest",
+    "Stream ingest"
   ],
   "ing.loading": [
     "Lade …",
@@ -737,8 +737,8 @@ const TABLE: Record<string, [string, string]> = {
     "Still not admitted."
   ],
   "ing.open.asset": [
-    "Im Eingang öffnen",
-    "Open in Intake"
+    "In der File Eingangskontrolle öffnen",
+    "Open in file intake control"
   ],
   "ing.freq.once": [
     "einmalig",

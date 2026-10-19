@@ -19,7 +19,7 @@ const (
 )
 
 func (*Module) Features() []module.FeatureDef {
-	g := map[string]string{"de": "Eingang (File-QC)", "en": "Intake (file QC)"}
+	g := map[string]string{"de": "File Eingangskontrolle", "en": "File intake control"}
 	f := func(id, de, en, dde, den string) module.FeatureDef {
 		return module.FeatureDef{ID: id, Label: map[string]string{"de": de, "en": en}, Description: map[string]string{"de": dde, "en": den}, Group: g}
 	}
@@ -36,7 +36,7 @@ func (*Module) Features() []module.FeatureDef {
 // Tiles: die Kachel „Eingang“ des Arbeitsplatzes (dieselbe Ansicht wie der Tab, die Server-Rechte beschränken den Inhalt).
 func (*Module) Tiles() []module.UITile {
 	return []module.UITile{{
-		ID: "intake", Label: map[string]string{"de": "Eingang (File-QC)", "en": "Intake (file QC)"},
+		ID: "intake", Label: map[string]string{"de": "File Eingangskontrolle", "en": "File intake control"},
 		Needs:   []string{"review.*"},
 		Element: "omp-review-view", Bundle: "/dist/modules/review.js",
 	}}

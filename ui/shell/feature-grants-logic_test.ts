@@ -4,13 +4,13 @@ import { coveringGrant, type FeatureDef, type FeatureGrant, planToggle, planTogg
 const defs: FeatureDef[] = [
   { id: "ingest.view", label: { de: "A" }, group: { de: "Aufnahmen", en: "Recordings" } },
   { id: "ingest.schedule.create", label: { de: "B" }, group: { de: "Aufnahmen", en: "Recordings" } },
-  { id: "review.work", label: { de: "C" }, group: { de: "Eingang" } },
+  { id: "review.work", label: { de: "C" }, group: { de: "File Eingangskontrolle" } },
 ];
 const g = (id: string, feature: string): FeatureGrant => ({ id, subjectType: "user", subject: "anna", feature });
 
 Deno.test("sectionsOf gruppiert nach Modul und wählt die Sprache", () => {
   const s = sectionsOf(defs, "en");
-  assertEquals(s.map((x) => [x.module, x.title, x.items.length]), [["ingest", "Recordings", 2], ["review", "Eingang", 1]]);
+  assertEquals(s.map((x) => [x.module, x.title, x.items.length]), [["ingest", "Recordings", 2], ["review", "File Eingangskontrolle", 1]]);
 });
 
 Deno.test("coveringGrant: exakt vor Muster", () => {

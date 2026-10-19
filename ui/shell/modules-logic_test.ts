@@ -50,10 +50,10 @@ Deno.test("workTiles: nur gemountete Module, nur Kacheln mit passendem Recht, Sp
   const mods = [
     { name: "ingest", state: "mounted" as const, tiles: [tile] },
     { name: "off", state: "disabled" as const, tiles: [{ ...tile, id: "x" }] },
-    { name: "review", state: "mounted" as const, tiles: [{ ...tile, id: "intake", label: { de: "Eingang" }, needs: ["review.*"] }, { ...tile, id: "kaputt", element: "" }] },
+    { name: "review", state: "mounted" as const, tiles: [{ ...tile, id: "intake", label: { de: "File Eingangskontrolle" }, needs: ["review.*"] }, { ...tile, id: "kaputt", element: "" }] },
   ];
   const onlyIngest = (needs: string[]) => needs.includes("ingest.*");
   assertEquals(workTiles(mods, "en", onlyIngest).map((x) => [x.id, x.label]), [["ingest:recordings", "Recordings"]]);
-  assertEquals(workTiles(mods, "en", () => true).map((x) => [x.id, x.label]), [["ingest:recordings", "Recordings"], ["review:intake", "Eingang"]]);
+  assertEquals(workTiles(mods, "en", () => true).map((x) => [x.id, x.label]), [["ingest:recordings", "Recordings"], ["review:intake", "File Eingangskontrolle"]]);
   assertEquals(workTiles(mods, "de", () => false), []);
 });

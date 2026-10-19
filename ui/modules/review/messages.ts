@@ -502,8 +502,8 @@ const TABLE: Record<string, [string, string]> = {
     "Metadata field “{p0}”: choice field needs allowed values."
   ],
   "rv.title": [
-    "Eingang",
-    "Intake"
+    "File Eingangskontrolle",
+    "File intake control"
   ],
   "rv.search": [
     "Suchen (Datei, Titel, ID) …",

@@ -148,7 +148,7 @@ func (m *Module) Mount(r module.Routes, d module.Deps) error {
 func (*Module) UI() []module.UITab {
 	return []module.UITab{{
 		ID: "review", Placement: "main", After: "assets",
-		Label:   map[string]string{"de": "Eingang", "en": "Intake"},
+		Label:   map[string]string{"de": "File Eingangskontrolle", "en": "File intake control"},
 		Element: "omp-review-view", Bundle: "/dist/modules/review.js",
 	}}
 }

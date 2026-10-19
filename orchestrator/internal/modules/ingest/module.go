@@ -200,7 +200,7 @@ func (m *Module) Mount(r module.Routes, d module.Deps) error {
 func (*Module) UI() []module.UITab {
 	return []module.UITab{{
 		ID: "ingest", Placement: "main", After: "scheduler",
-		Label:   map[string]string{"de": "Aufnahmen", "en": "Recordings"},
+		Label:   map[string]string{"de": "Stream Ingest", "en": "Stream ingest"},
 		Element: "omp-ingest-view", Bundle: "/dist/modules/ingest.js",
 	}}
 }
