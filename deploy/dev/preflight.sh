@@ -268,7 +268,14 @@ section "Ports"
 # Erwartete Belegung durch OMP selbst erkennen: laufen die OMP-Container/der
 # Orchestrator bereits, ist die Belegung gewollt und kein Fehler.
 omp_running=0
-if command -v podman >/dev/null 2>&1 && podman ps --format '{{.Names}}' 2>/dev/null | grep -q '^omp-'; then omp_running=1; fi
+if command -v podman >/dev/null 2>&1; then
+  # Mehrere Versuche: ein einzelnes `podman ps` liefert direkt nach `make stop` gelegentlich kurz nichts
+  # (Podman-Sperre/Neustart des Events-Loggers) — dann wären alle eigenen Infrastruktur-Ports fälschlich „belegt“.
+  for _ in 1 2 3; do
+    if podman ps --format '{{.Names}}' 2>/dev/null | grep -q '^omp-'; then omp_running=1; break; fi
+    sleep 1
+  done
+fi
 orch_running=0
 if curl -fs -m 2 http://localhost:8000/healthz >/dev/null 2>&1; then orch_running=1; fi
 
@@ -286,6 +293,8 @@ if command -v ss >/dev/null 2>&1; then
     case "$port:$name" in
       8000:Orchestrator|8091:Supervisor) [ "$orch_running" = "1" ] && continue ;;
     esac
+    # Der Supervisor überlebt `make stop` absichtlich (start-supervisor.sh ist idempotent).
+    [ "$port" = "8091" ] && [ "${proc:-}" = "omp-supervisor" ] && continue
     if [ "$omp_running" = "1" ]; then
       case "${proc:-}" in
         ""|nats-server|etcd|postgres|patroni|conmon|rootlessport|slirp4netns|pasta|omp-*|nmos-cpp-*) continue ;;
