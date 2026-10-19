@@ -604,6 +604,13 @@ rechts deren Versionen, Ausführungen und offene Aufgaben.
 
 ### 5a.1 Datei-Werkzeug (ffmpeg/ffprobe): der Assistent
 
+Oben schaltet ein Umschalter zwischen **Assistent** und **Experte (Argumente)** — beide gleichwertig. Der Assistent ist in
+Abschnitte gegliedert (1 Aufgabe · 2 Einstellungen · 3 Befehl als lesbare Vorschau, ein Flag samt Wert je Zeile); das Zeitlimit liegt
+unter „Weitere Einstellungen“. Im **Experten-Modus** öffnet „+ Argument“ sofort die Auswahl aller Flags und Optionen (durchsuchbar,
+auch Encoder-/Format-/Filter-Optionen, mit Beschreibung); ein Klick erzeugt eine **Karte aus Flag und Wert** mit passendem Eingabefeld
+(Auswahlliste, Ja/Nein, Regler oder Text mit „{x} Variable“). „Freitext-Argument“ bleibt für alles, was in der Liste fehlt.
+Gespeichert wird weiterhin die flache Argumentliste.
+
 Beim Datei-Werkzeug öffnet der Doppelklick standardmäßig den
 **Assistenten** — ein Formular mit echten, von diesem Server
 tatsächlich unterstützten Werten (Container, Codecs, Filter samt

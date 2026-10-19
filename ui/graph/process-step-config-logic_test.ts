@@ -22,6 +22,9 @@ import {
   levenshteinDistance,
   missingConfig,
   numberOrTemplate,
+  pairArgs,
+  flattenPairs,
+  formatCommand,
   optionEntriesToArgs,
   optionHelpText,
   optionRangeBounds,
@@ -778,4 +781,24 @@ Deno.test("generic tasks: numeric fields with bounds carry min/max and accept pl
   if (r.ok) assertEquals(r.args.some((a) => a.includes("I=${input.lufs}")), true);
   const bad = loud.toArgs({ scalars: { inputPath: "in", outputPath: "out", targetLufs: "x", truePeak: "-2", loudnessRange: "7" }, pickers: {}, groups: {} });
   assertEquals(bad.ok, false);
+});
+
+Deno.test("Argumentpaare: Zerlegung und verlustfreie Rückführung, Zahlen sind Werte, boolesche Flags ohne Wert", () => {
+  const bool = (f: string) => f === "-y" || f === "-an";
+  const args = ["-y", "-i", "in.mxf", "-af", "loudnorm=I=-23", "-crf", "-1", "-an", "-c:v", "libx264", "out.mp4", "-f", "null", "-"];
+  const pairs = pairArgs(args, bool);
+  assertEquals(pairs, [
+    { flag: "-y" }, { flag: "-i", value: "in.mxf" }, { flag: "-af", value: "loudnorm=I=-23" }, { flag: "-crf", value: "-1" }, { flag: "-an" },
+    { flag: "-c:v", value: "libx264" }, { value: "out.mp4" }, { flag: "-f", value: "null" }, { value: "-" },
+  ]);
+  assertEquals(flattenPairs(pairs), args);
+  assertEquals(pairArgs(["-ss", "${input.start}", "-i", "x"], bool)[0], { flag: "-ss", value: "${input.start}" });
+  assertEquals(pairArgs(["-loglevel"], bool), [{ flag: "-loglevel" }]); // Flag am Ende ohne Wert bleibt erhalten
+  assertEquals(flattenPairs(pairArgs([], bool)), []);
+});
+
+Deno.test("Befehlsvorschau: ein Paar je Zeile, Werte mit Leerzeichen gequotet", () => {
+  const s = formatCommand("ffmpeg", ["-y", "-i", "/a b/in.mxf", "-vf", "scale=-2:540", "out.mp4"], (f) => f === "-y");
+  assertEquals(s, "ffmpeg \\\n  -y \\\n  -i '/a b/in.mxf' \\\n  -vf scale=-2:540 \\\n  out.mp4");
+  assertEquals(formatCommand("ffprobe", [], () => false), "ffprobe");
 });

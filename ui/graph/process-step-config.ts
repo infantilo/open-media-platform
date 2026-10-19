@@ -49,6 +49,9 @@ import {
   insertionText,
   numberOrTemplate,
   optionHelpText,
+  pairArgs,
+  flattenPairs,
+  formatCommand,
   optionRangeBounds,
   type OutputTrack,
   type OverlayEvent,
@@ -1829,9 +1832,34 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     document.body.appendChild(box);
   };
 
-  const addArg = (v = "") => {
+  // Je Eingabefeld die zugehörigen Zeilenelemente (zum Entfernen) und der Partner (Flag ↔ Wert eines Paares).
+  const lineEls = new Map<HTMLInputElement, HTMLElement[]>();
+  const partner = new Map<HTMLInputElement, HTMLInputElement>();
+  const removeInput = (i: HTMLInputElement) => {
+    const idx = argInputs.indexOf(i);
+    if (idx < 0) return;
+    argInputs.splice(idx, 1);
+    argStatuses.splice(idx, 1);
+    argHelpers.splice(idx, 1);
+    helperKeys.splice(idx, 1);
+    lineEls.get(i)?.forEach((e) => e.remove());
+    lineEls.delete(i);
+    const other = partner.get(i);
+    partner.delete(i);
+    if (other) {
+      partner.delete(other);
+      removeInput(other);
+    }
+  };
+  const afterRemove = () => {
+    helperKeys.fill("");
+    argHelpers.forEach((b) => b.replaceChildren());
+    revalidateArgs();
+    refreshHelpers();
+  };
+  const addArg = (v = "", container: HTMLElement = argsList, placeholder = tt("psc.574722")) => {
     const line = h("div", "display:grid;grid-template-columns:1fr auto auto;gap:4px;margin-top:4px;");
-    const i = textInput(v, tt("psc.574722"), "arg");
+    const i = textInput(v, placeholder, "arg");
     i.style.fontFamily = "ui-monospace,monospace";
     argInputs.push(i);
     const status = h("div", "grid-column:1;font-size:var(--omp-font-size-xs);color:var(--omp-error);display:none;");
@@ -1847,33 +1875,53 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     i.addEventListener("blur", () => window.setTimeout(closeAutocomplete, 150));
     const rm = h("button", "", "✕");
     rm.type = "button";
+    rm.title = tt("psc.pair.remove");
     rm.addEventListener("click", () => {
-      const idx = argInputs.indexOf(i);
-      argInputs.splice(idx, 1);
-      argStatuses.splice(idx, 1);
-      argHelpers.splice(idx, 1);
-      helperKeys.splice(idx, 1);
-      line.remove();
-      status.remove();
-      helperBox.remove();
-      helperKeys.fill("");
-      argHelpers.forEach((b) => b.replaceChildren());
-      revalidateArgs();
-      refreshHelpers();
+      removeInput(i);
+      afterRemove();
     });
     line.append(i, variableButton(vars, "template", () => i), rm);
-    argsList.append(line, status, helperBox);
+    container.append(line, status, helperBox);
+    lineEls.set(i, [line, status, helperBox]);
     revalidateArgs();
     refreshHelpers();
     return i;
+  };
+  // Ein zusammengehöriges Flag/Wert-Paar als Karte: Flag (fest/Freitext), darunter das zum Flag passende Wertfeld
+  // (Dropdown / Ja-Nein / Regler / Text mit Variablen-Knopf), darunter Beschreibung, Bereich und Standardwert.
+  const addPair = (flag: string, value: string, help = ""): { flag: HTMLInputElement; value: HTMLInputElement | null } => {
+    const card = h("div", "border:1px solid var(--omp-border);border-radius:6px;padding:4px 8px 6px;margin-top:6px;background:var(--omp-surface);");
+    card.setAttribute("data-role", "arg-pair");
+    argsList.append(card);
+    const f = addArg(flag, card, tt("psc.pair.flag"));
+    f.style.fontWeight = "600";
+    let v: HTMLInputElement | null = null;
+    const def = lookupGlobalFlag(flag);
+    const takesNoValue = def?.type === "boolean";
+    if (!takesNoValue) {
+      v = addArg(value, card, tt("psc.pair.value"));
+      partner.set(f, v);
+      partner.set(v, f);
+    }
+    // Hilfe nach den Zeilen (letztes Kind), damit sie unter dem Wertfeld steht
+    const info = help || (dynamicOptions.get(flag) ? optionHelpText(dynamicOptions.get(flag)!) : def?.description ?? "");
+    if (info) card.append(h("div", HELP_CSS + "margin-top:4px;", info));
+    const cardEls = [card];
+    lineEls.get(f)!.push(...cardEls);
+    return { flag: f, value: v };
   };
   const setArgs = (args: string[]) => {
     argInputs.length = 0;
     argStatuses.length = 0;
     argHelpers.length = 0;
     helperKeys.length = 0;
+    lineEls.clear();
+    partner.clear();
     argsList.replaceChildren();
-    for (const a of args) addArg(a);
+    for (const p of pairArgs(args, (f) => lookupGlobalFlag(f)?.type === "boolean")) {
+      if (p.flag === undefined) addArg(p.value ?? "");
+      else addPair(p.flag, p.value ?? "");
+    }
   };
   setArgs(Array.isArray(cfg.args) ? (cfg.args as string[]) : []);
 
@@ -1884,9 +1932,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
   // ab, ohne beim Öffnen hunderte AVOption-Detailabfragen auf einmal
   // auszulösen (nur Listen sind vorab bekannt, Details erst on-demand
   // je angeklicktem Treffer — dasselbe Cache-Prinzip wie ffmpeg-client.ts).
-  const explorerToggle = h("button", "margin-top:8px;", tt("psc.6940ee"));
-  explorerToggle.type = "button";
-  const explorerPanel = h("div", "margin-top:4px;border:1px solid var(--omp-border);border-radius:4px;padding:6px;display:none;");
+    const explorerPanel = h("div", "margin-top:4px;border:1px solid var(--omp-border);border-radius:4px;padding:6px;display:none;");
   const explorerSearch = textInput("", "z. B. crf, libx264, scale, loglevel …");
   const explorerIndexStatus = h("div", HELP_CSS + "margin-top:2px;");
   const explorerResults = h("div", "max-height:260px;overflow:auto;margin-top:4px;");
@@ -1910,14 +1956,16 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
   };
   const kindLabel: Record<string, string> = { encoder: "Encoder", decoder: "Decoder", muxer: "Muxer/Container", demuxer: "Demuxer", filter: "Filter" };
   const insertGlobalFlag = (name: string) => {
-    addArg(name);
-    const def = lookupGlobalFlag(name);
-    if (def && def.type !== "boolean") addArg().focus();
+    const p = addPair(name, "");
+    (p.value ?? p.flag).focus();
+    closeExplorer();
   };
   const insertOption = (flagName: string, opt: FFOption) => {
     dynamicOptions.set(flagName, opt);
-    addArg(flagName);
-    addArg().focus();
+    const p = addPair(flagName, "", optionHelpText(opt));
+    (p.value ?? p.flag).focus();
+    refreshHelpers();
+    closeExplorer();
   };
   const updateExplorerIndexStatus = () => {
     const globalPart = globalFlagsLoaded ? tt("psc.a6eb55", { p0: fetchedGlobalFlagDefs.length }) : "globale Flags laden …";
@@ -1957,7 +2005,21 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     explorerResults.replaceChildren();
     navigableRows = [];
     activeIndex = -1;
-    if (!q) return;
+    if (!q) {
+      // Ohne Suchbegriff: die häufigsten Flags zum Durchblättern (statt einer leeren Liste)
+      explorerResults.append(h("div", HELP_CSS + "margin-bottom:4px;", tt("psc.pair.browse")));
+      for (const f of GLOBAL_FFMPEG_FLAGS) {
+        const row = h("div", "padding:4px;cursor:pointer;border-bottom:1px solid var(--omp-border);");
+        const head = h("div", "");
+        head.append(h("b", "font-family:ui-monospace,monospace;", f.name), categoryBadge(f.type === "boolean" ? tt("psc.pair.nov") : f.type === "select" ? tt("psc.pair.sel") : f.type === "time" ? tt("psc.pair.time") : f.type === "number" ? tt("psc.pair.num") : tt("psc.pair.text")));
+        row.append(head, h("div", HELP_CSS, f.description));
+        const activate = () => insertGlobalFlag(f.name);
+        row.addEventListener("click", activate);
+        addNavigableRow(row, activate);
+        explorerResults.appendChild(row);
+      }
+      return;
+    }
 
     const globalEntries = GLOBAL_FFMPEG_FLAGS.map((f) => ({ name: f.name, description: f.description, value: f }));
     for (const m of searchEntries(q, globalEntries)) {
@@ -2070,21 +2132,24 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
       void runExplorerSearch();
     }
   });
-  explorerToggle.addEventListener("click", () => {
-    const opening = explorerPanel.style.display === "none";
-    explorerPanel.style.display = opening ? "block" : "none";
-    if (opening) {
+  const closeExplorer = () => {
+    explorerPanel.style.display = "none";
+    explorerSearch.value = "";
+  };
+  const openExplorer = () => {
+    explorerPanel.style.display = "block";
+    updateExplorerIndexStatus();
+    void ensureGlobalFlags(() => {
       updateExplorerIndexStatus();
-      void ensureGlobalFlags(() => {
-        updateExplorerIndexStatus();
-        void runExplorerSearch();
-      });
-      void ensureFullOptionIndex(() => {
-        updateExplorerIndexStatus();
-        void runExplorerSearch();
-      });
-    }
-  });
+      void runExplorerSearch();
+    });
+    void ensureFullOptionIndex(() => {
+      updateExplorerIndexStatus();
+      void runExplorerSearch();
+    });
+    void runExplorerSearch();
+    explorerSearch.focus();
+  };
   explorerPanel.append(
     field(
       tt("psc.89cdb8"),
@@ -2101,9 +2166,15 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     setArgs(t.args);
     tplHelp.textContent = t.help + tt("psc.cd6dbf");
   });
-  const addBtn = h("button", "margin-top:4px;", tt("y.addArg"));
+  const addBtn = h("button", "margin-top:6px;", tt("y.addArg"));
   addBtn.type = "button";
-  addBtn.addEventListener("click", () => addArg());
+  addBtn.title = tt("psc.pair.add.hint");
+  addBtn.setAttribute("data-role", "add-arg");
+  addBtn.addEventListener("click", () => (explorerPanel.style.display === "none" ? openExplorer() : closeExplorer()));
+  const freeBtn = h("button", "margin-top:6px;margin-left:4px;", tt("psc.pair.free"));
+  freeBtn.type = "button";
+  freeBtn.title = tt("psc.pair.free.hint");
+  freeBtn.addEventListener("click", () => addArg().focus());
   const pasteBtn = h("button", "margin-top:4px;margin-left:4px;", tt("psc.a7b058"));
   pasteBtn.type = "button";
   pasteBtn.title = tt("psc.e91a0f");
@@ -2111,7 +2182,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     const line = await promptDialog(tt("psc.4eb447"), { okLabel: tt("kit.ok") });
     if (line === null) return;
     const parts = line.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
-    for (const p of parts) addArg(p.replace(/^["']|["']$/g, ""));
+    setArgs([...flattenPairs(pairArgs(argInputs.map((x) => x.value), (f) => lookupGlobalFlag(f)?.type === "boolean")), ...parts.map((x) => x.replace(/^["']|["']$/g, ""))]);
   });
   advancedWrap.append(
     field(tt("psc.40c573"), cmd, commands.length ? tt("psc.819ee1", { p0: commands.join(", ") }) : tt("psc.8330a3"), true),
@@ -2119,8 +2190,8 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     tplHelp,
     field(tt("psc.c9d7f8"), argsList, tt("psc.8584a0")),
     addBtn,
+    freeBtn,
     pasteBtn,
-    explorerToggle,
     explorerPanel,
   );
 
@@ -2131,13 +2202,24 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
   const intentHelp = h("div", HELP_CSS + "margin-top:2px;");
   const dynamicArea = h("div", "");
   let activeForm: ScriptWizardForm | null = null;
-  const previewLabel = h("div", HELP_CSS + "font-weight:600;margin-top:8px;", tt("psc.ffd103"));
-  const preview = h("pre", "background:var(--omp-surface-raised);padding:6px;border-radius:4px;font-size:var(--omp-font-size-xs);white-space:pre-wrap;word-break:break-all;margin-top:2px;");
+  const sectionHead = (n: number, text: string) => h("div", "font-weight:600;margin-top:14px;padding-top:8px;border-top:1px solid var(--omp-border);", `${n} · ${text}`);
+  const PREVIEW_CSS = "background:var(--omp-surface-raised);padding:8px;border-radius:4px;font:var(--omp-font-size-xs) ui-monospace,monospace;white-space:pre-wrap;word-break:break-all;margin-top:4px;";
+  const noValue = (f: string) => lookupGlobalFlag(f)?.type === "boolean";
+  const preview = h("pre", PREVIEW_CSS);
+  preview.setAttribute("data-role", "command-preview");
   const updatePreview = () => {
     if (!activeForm) return;
     const r = activeForm.read();
-    preview.textContent = r.ok ? `${r.command} ${r.args.join(" ")}` : `(${r.error})`;
+    preview.textContent = r.ok ? formatCommand(r.command, r.args, noValue) : `(${r.error})`;
   };
+  const expertPreview = h("pre", PREVIEW_CSS);
+  expertPreview.setAttribute("data-role", "expert-preview");
+  const updateExpertPreview = () => {
+    expertPreview.textContent = cmd.value ? formatCommand(cmd.value, argInputs.map((i) => i.value).filter((v) => v !== ""), noValue) : "";
+  };
+  argsList.addEventListener("input", updateExpertPreview);
+  cmd.addEventListener("change", updateExpertPreview);
+  new MutationObserver(updateExpertPreview).observe(argsList, { childList: true, subtree: true });
   const renderIntent = () => {
     dynamicArea.replaceChildren();
     const intent = SCRIPT_INTENTS.find((i) => i.id === intentSel.value);
@@ -2169,27 +2251,46 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
   if (intentOptions.length === 0) {
     wizardWrap.appendChild(h("div", HELP_CSS + "margin-top:8px;", tt("psc.3ce979")));
   } else {
-    wizardWrap.append(field(tt("psc.8c5713"), intentSel), intentHelp, dynamicArea, previewLabel, preview);
+    wizardWrap.append(sectionHead(1, tt("psc.8c5713")), field(tt("psc.8c5713"), intentSel), intentHelp, sectionHead(2, tt("psc.sec.settings")), dynamicArea, sectionHead(3, tt("psc.sec.command")), preview);
     renderIntent();
   }
 
-  // ---- Moduswechsel -----------------------------------------------------
-  const modeToggle = h("button", "margin-top:10px;");
-  modeToggle.type = "button";
+  // ---- Moduswechsel: gleichwertige Umschaltung oben (Assistent | Experte) ----------------------------
+  const switchBar = h("div", "display:inline-flex;border:1px solid var(--omp-border);border-radius:6px;overflow:hidden;margin-top:6px;");
+  const wizBtn = h("button", "padding:4px 14px;border:0;border-radius:0;", tt("psc.mode.wizard"));
+  const expBtn = h("button", "padding:4px 14px;border:0;border-radius:0;", tt("psc.mode.expert"));
+  wizBtn.type = expBtn.type = "button";
+  wizBtn.setAttribute("data-role", "mode-wizard");
+  expBtn.setAttribute("data-role", "mode-expert");
+  wizBtn.title = tt("psc.mode.wizard.hint");
+  expBtn.title = tt("psc.mode.expert.hint");
+  switchBar.append(wizBtn, expBtn);
   const syncMode = () => {
     wizardWrap.style.display = mode === "wizard" ? "block" : "none";
     advancedWrap.style.display = mode === "advanced" ? "block" : "none";
-    modeToggle.textContent = mode === "wizard" ? tt("psc.443b5b") : tt("psc.df82e3");
+    wizBtn.style.background = mode === "wizard" ? "var(--omp-surface-raised)" : "";
+    wizBtn.style.fontWeight = mode === "wizard" ? "700" : "400";
+    expBtn.style.background = mode === "advanced" ? "var(--omp-surface-raised)" : "";
+    expBtn.style.fontWeight = mode === "advanced" ? "700" : "400";
+    if (mode === "advanced") updateExpertPreview();
   };
-  modeToggle.addEventListener("click", () => {
-    mode = mode === "wizard" ? "advanced" : "wizard";
+  wizBtn.addEventListener("click", () => {
+    if (intentOptions.length === 0) return;
+    mode = "wizard";
     syncMode();
   });
+  expBtn.addEventListener("click", () => {
+    mode = "advanced";
+    syncMode();
+  });
+  advancedWrap.append(h("div", "font-weight:600;margin-top:14px;padding-top:8px;border-top:1px solid var(--omp-border);", tt("psc.sec.command")), expertPreview);
   if (intentOptions.length === 0) mode = "advanced";
   syncMode();
 
   const timeout = durationInput(typeof cfg.timeoutSeconds === "number" ? cfg.timeoutSeconds : undefined);
-  el.append(wizardWrap, advancedWrap, modeToggle, field(tt("psc.31b5c0"), timeout.el, tt("psc.733355")));
+  const more = h("details", "margin-top:12px;border-top:1px solid var(--omp-border);padding-top:8px;");
+  more.append(h("summary", "cursor:pointer;font-weight:600;", tt("psc.sec.more")), field(tt("psc.31b5c0"), timeout.el, tt("psc.733355")));
+  el.append(switchBar, wizardWrap, advancedWrap, more);
 
   return {
     el,

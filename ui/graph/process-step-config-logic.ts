@@ -1561,3 +1561,52 @@ export function missingConfig(step: DraftStep): string | null {
       return null;
   }
 }
+
+// ---- Argumentliste als Flag/Wert-Paare (Experten-Modus, Befehlsvorschau) ---------------------------------------------------
+//
+// Gespeichert wird weiterhin eine FLACHE Liste von Zeichenketten (Kompatibilität mit bestehenden Schritten). Die Oberfläche zeigt
+// zusammengehörige Flag/Wert-Paare; diese Funktionen zerlegen und fügen die Liste verlustfrei wieder zusammen.
+
+export interface ArgPair {
+  flag?: string; // fehlt bei losen Argumenten (z. B. Dateinamen)
+  value?: string; // fehlt bei Flags ohne Wert (-y)
+}
+
+/** Ist das Token ein Flag? „-23“/„-0.5“ sind Zahlen (Werte), „-“ allein (stdout) ist ein Wert. */
+export function isFlagToken(t: string): boolean {
+  return t.length > 1 && t.startsWith("-") && !/^-\d+(\.\d+)?$/.test(t) && !t.includes("${");
+}
+
+export function pairArgs(args: string[], takesNoValue: (flag: string) => boolean): ArgPair[] {
+  const out: ArgPair[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (!isFlagToken(a)) {
+      out.push({ value: a });
+      continue;
+    }
+    if (takesNoValue(a) || i + 1 >= args.length || isFlagToken(args[i + 1])) {
+      out.push({ flag: a });
+      continue;
+    }
+    out.push({ flag: a, value: args[i + 1] });
+    i++;
+  }
+  return out;
+}
+
+export function flattenPairs(pairs: ArgPair[]): string[] {
+  const out: string[] = [];
+  for (const p of pairs) {
+    if (p.flag !== undefined) out.push(p.flag);
+    if (p.value !== undefined) out.push(p.value);
+  }
+  return out;
+}
+
+/** Lesbare Befehlsvorschau: je Paar eine Zeile, Zeilenumbruch mit „\“ (kopierbar in eine Shell, Leerzeichen in Werten werden gequotet). */
+export function formatCommand(command: string, args: string[], takesNoValue: (flag: string) => boolean): string {
+  const q = (s: string) => (/[\s"'$&|;<>()*?]/.test(s) && !/^\$\{[^}]*\}$/.test(s) ? `'${s.replace(/'/g, "'\\''")}'` : s);
+  const lines = pairArgs(args, takesNoValue).map((p) => [p.flag, p.value].filter((x) => x !== undefined).map((x) => q(x as string)).join(" "));
+  return [command, ...lines].join(" \\\n  ");
+}
