@@ -49,6 +49,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/materialize"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	playoutmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/playout"
+	reviewmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/review"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeoptions"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeversions"
@@ -329,7 +330,8 @@ func main() {
 	// `failed` markiert und nicht gemountet; der Kern startet trotzdem.
 	modules := module.NewRegistry(module.DisabledFromEnv()...)
 	playoutSvc := &playoutmod.Services{}
-	registerModules(modules, playoutSvc)
+	reviewMod := reviewmod.New(nil) // der Asset-Store folgt weiter unten (assetStore), vor dem Mounten der Routen
+	registerModules(modules, playoutSvc, reviewMod)
 	if err := modules.Migrate(ctx, database); err != nil {
 		slog.Error("module migration failed (affected modules are not mounted)", "error", err)
 	}
@@ -863,6 +865,7 @@ func main() {
 	// Aufrufer CreateAsset/UpdateAssetStatus/... rief).
 	outboxStore := outbox.NewStore(database)
 	assetStore := asset.NewStore(database, asset.WithOutbox(outboxStore))
+	reviewMod.Assets = assetStore
 	processStore := process.NewStore(database)
 	// EventPublisher = nc direkt (erfüllt process.EventPublisher: Publish
 	// (subject string, payload []byte) error) — "workflow -> event"

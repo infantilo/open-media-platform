@@ -7,11 +7,12 @@ interface Host {
   t(key: string, params?: Params): string;
   addMessages(lang: "de" | "en", dict: Record<string, string>): void;
   apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
-  whoami(): Promise<{ authRequired: boolean; authenticated: boolean; isAdmin?: boolean }>;
+  whoami(): Promise<{ authRequired: boolean; authenticated: boolean; isAdmin?: boolean; canConfigure?: boolean; username?: string }>;
   showToast(message: string): void;
   dateLocale(): string;
   getLang(): "de" | "en";
   confirmDialog(message: string, opts?: { confirmLabel?: string }): Promise<boolean>;
+  authToken(): string | null;
 }
 
 function host(): Host {
@@ -27,4 +28,5 @@ export const whoami = () => host().whoami();
 export const showToast = (message: string): void => host().showToast(message);
 export const dateLocale = (): string => host().dateLocale();
 export const getLang = (): "de" | "en" => host().getLang();
+export const authToken = (): string | null => host().authToken();
 export const confirmDialog = (message: string, opts?: { confirmLabel?: string }): Promise<boolean> => host().confirmDialog(message, opts);

@@ -140,6 +140,8 @@ func (g *authGate) panelGranted(panelRole string) bool {
 //     ui/shell/ui-bundle.ts).
 //   - GET /api/v1/nodes/<id>/stream/<name> (Node-Stream-Proxy, K4 —
 //     MJPEG-Vorschau/Level-SSE je nach Stream-Typ, aus demselben Grund).
+//   - GET /api/v1/review/media/<asset>/proxy und …/frame/<n> (Kapitel 43: <video>/<img> im
+//     Review-Player, gleicher Grund; nur lesend).
 //   - GET /api/v1/nodes/<id>/invites/qr (omp-webrtc-gateway-Bedienober-
 //     fläche, Nachtrag 278: QR-Code als <img src=...>, live gefunden —
 //     "kaputtes Bild"-Symptom war exakt dieselbe fehlende
@@ -154,6 +156,11 @@ func (g *authGate) panelGranted(panelRole string) bool {
 // eigene Header"-Bedürfnis: hier ergänzen.
 func queryTokenAllowedPath(path string) bool {
 	if path == "/api/v1/events" {
+		return true
+	}
+	// Review-Player (Kapitel 43): <video src>/<img src> können keinen Authorization-Header senden. Nur die lesenden
+	// Medien-Routen (Proxy mit Range-Unterstützung, Einzelbild) — alle anderen Review-Routen bleiben beim Header.
+	if strings.HasPrefix(path, "/api/v1/review/media/") {
 		return true
 	}
 	if !strings.HasPrefix(path, "/api/v1/nodes/") {

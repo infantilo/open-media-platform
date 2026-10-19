@@ -2,7 +2,7 @@
 // dürfen die Singletons der Shell (Sprache/Wörterbuch, Verbindungsüberwachung, Anmeldung) nicht doppelt bündeln. Die Shell
 // legt sie deshalb vor dem Laden der Bundles unter `globalThis.__omp` ab; Module greifen über `ui/modules/host.ts` darauf zu.
 import { apiFetch } from "./connection.ts";
-import { whoami } from "./auth.ts";
+import { getToken, whoami } from "./auth.ts";
 import { showToast } from "../kit/omp-toast.ts";
 import { addMessages, dateLocale, getLang, tLoose } from "./i18n.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
@@ -16,8 +16,10 @@ export interface HostApi {
   dateLocale: typeof dateLocale;
   getLang: typeof getLang;
   confirmDialog: typeof confirmDialog;
+  /** Sitzungstoken für Medien-URLs (<video>/<img> können keinen Authorization-Header senden, Kapitel 43). */
+  authToken: typeof getToken;
 }
 
 export function exposeHostApi(): void {
-  (globalThis as unknown as { __omp: HostApi }).__omp = { t: tLoose, addMessages, apiFetch, whoami, showToast, dateLocale, getLang, confirmDialog };
+  (globalThis as unknown as { __omp: HostApi }).__omp = { t: tLoose, addMessages, apiFetch, whoami, showToast, dateLocale, getLang, confirmDialog, authToken: getToken };
 }

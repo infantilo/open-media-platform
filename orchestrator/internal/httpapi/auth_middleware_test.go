@@ -122,6 +122,11 @@ func TestBearerTokenQueryParamAllowlist(t *testing.T) {
 		// über echten fetch() mit Authorization-Header, braucht den
 		// Fallback nicht und soll ihn auch nicht bekommen).
 		{"/api/v1/nodes/inst-1/invites", false},
+		// Review-Player (Kapitel 43): nur die lesenden Medien-Routen.
+		{"/api/v1/review/media/a1/proxy", true},
+		{"/api/v1/review/media/a1/frame/10.jpg", true},
+		{"/api/v1/review/items/a1/claim", false},
+		{"/api/v1/review/config", false},
 		{"/api/v1/instances", false},
 		{"/api/v1/nodes/inst-1/params/gain", false},
 		{"/api/v1/admin/audit-log", false},

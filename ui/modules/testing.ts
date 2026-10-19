@@ -15,5 +15,6 @@ export function installHost(messages: Record<"de" | "en", Record<string, string>
     whoami: () => Promise.resolve({ authRequired: false, authenticated: false }),
     showToast: () => {},
     confirmDialog: () => Promise.resolve(true),
+    authToken: () => null,
   };
 }

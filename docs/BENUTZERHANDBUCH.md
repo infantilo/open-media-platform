@@ -824,6 +824,40 @@ Daraus ergibt sich:
   „Storage" als eigenes Backend eintragen — auch das aktuell nur als
   Backend, noch ohne Browser-Upload-Knopf im Assets-Tab.
 
+## 5c. Eingang (Datei-QC, Review, Conform, Metadaten)
+
+Der Tab **Eingang** ist die Arbeitsliste für neu eingegangene Medien-Assets. Jede Datei durchläuft automatisch eine technische **QC-Analyse**;
+danach übernimmt eine Person sie, prüft sie im Player, legt **Segmente** an, erfasst **Metadaten** und reicht sie zur **Freigabe** ein. Die
+Originaldatei wird dabei nie verändert.
+
+- **Liste:** Ansichten „Zu prüfen (frei)“, „Meine“, „QC wartet/läuft/fehlgeschlagen“, „In Bearbeitung“, „Zur Freigabe“, „Freigegeben“, „Archiviert“.
+  Doppelklick oder „Öffnen“ zeigt die Detailansicht. Mit dem Recht *Konfigurieren* gibt es **Datei importieren** (Dateien aus dem Importverzeichnis
+  der Einstellungen); neu eingehende Assets mit lokaler Datei erscheinen automatisch.
+- **QC-Bericht:** Gesamtstatus (Bestanden / Warnungen / Fehler / **Unvollständig**), Zähler, Regelsatz, Werkzeugversionen. Befunde lassen sich nach
+  Kategorie, Ergebnis, Schwere und Text filtern und aufklappen (Messwert gegen Grenzwert, Werkzeug, Zeitpunkt). „▶ Timecode“ springt im Player an die Stelle.
+  „QC wiederholen“ (optional mit anderem Profil) erzeugt einen neuen Bericht — die früheren bleiben im Auswahlfeld „Berichte“. Export als JSON (vollständig) oder CSV.
+  Technische Stream-Metadaten stehen unten aufklappbar.
+- **Wichtig zu verstehen:** „**QC nicht ausführbar**“ (rot, mit Grund) heißt, dass die Analyse nicht laufen konnte — es gibt dann *kein* Urteil über die Datei.
+  Ein Befund „Fehler“ dagegen heißt, dass die Analyse lief und ein Problem in der Datei fand. Die Analyse ist eine Probe plus Inhaltsprüfung mit ffmpeg/ffprobe,
+  **keine** Strukturvalidierung nach MXF-Standards.
+- **Übernehmen:** schließt gleichzeitige Bearbeitung aus (wer zuerst kommt). „Zurückgeben“ gibt frei (der Entwurf bleibt), mit dem Recht *Konfigurieren* auch
+  „Neu zuweisen“ und „Zwangsfreigabe“. Ist die QC noch nicht fertig, kann je nach Einstellung nicht übernommen werden.
+- **Review & Conform:** Links der Player mit dem **Review-Proxy** (Kennzeichnung „PROXY“ — nicht die Originaldatei; Bild n des Proxys ist Bild n der Datei).
+  Bedienung: ←/→ ein Bild (Umschalt ±10, Strg ±1 s), Leertaste Wiedergabe/Pause, **Stopp** = anhalten und zum Startpunkt zurück, **Jog** (Ziehen oder Mausrad:
+  Einzelbilder) und **Shuttle** (Regler oder J/K/L: −8× … +8×; rückwärts über Einzelbild-Sprünge, nicht jedes Bild wird gezeigt), Timecode-Feld (Taste G),
+  I/O setzen In/Out (**Out ist exklusiv**: das aktuelle Bild ist das letzte enthaltene), Alt+I/Alt+O springen hin, `[` `]` springen zu Segmentgrenzen, N legt ein Segment aus
+  den Marken an. Befunde der QC erscheinen als rote/orange Marker auf der Zeitleiste.
+  Rechts: **Nutzbarer Bereich**, **Segmente** (Name, In, Out exklusiv, Reihenfolge, Beschreibung; „▶“ spielt den Bereich), danach die **Metadaten** (Pflichtfelder mit *;
+  Felder und Auswahllisten stellt der Administrator ein). Überlappungen/Lücken meldet die Oberfläche sofort, wenn die Einstellungen sie verbieten.
+- **Speichern/Einreichen:** „Entwurf speichern“ sichert den Stand jederzeit (auch unvollständig). „Einreichen“ prüft vollständig (Pflichtfelder, mindestens ein Segment).
+  Je nach Freigabemodus (Einstellung: keiner / eine Person / Vier-Augen) entscheidet danach jemand mit dem Recht *Konfigurieren* mit **Freigeben** oder **Ablehnen** (Begründung Pflicht).
+  Erst mit der Freigabe gehen die redaktionellen Metadaten ins Asset. Abgelehnte oder freigegebene Assets lassen sich mit „Neue Revision“ erneut bearbeiten.
+- **Änderungen anderer:** Hat jemand anderes zwischenzeitlich gespeichert oder ist die Quelldatei neu, erscheint ein Hinweis: „Aktuellen Stand laden“ oder
+  „trotzdem speichern“ (überschreibt ausdrücklich). Ungespeicherte Änderungen werden beim Verlassen nachgefragt.
+- **Verlauf:** Alle Aktionen (wer, was, wann, Zustand von → nach) und die Conform-Revisionen.
+- **Einstellungen** (Administratoren): QC-Profile (Schwellen, Anlieferprofil), Segmentregeln, Freigabemodus, Metadatenformular, Importverzeichnis, Proxy-Qualität — als JSON; der Server prüft vor dem Speichern.
+  Das Modul lässt sich mit `OMP_MODULES_DISABLE=review` abschalten; Proxys liegen unter `OMP_REVIEW_DIR` (Standard `data/review`).
+
 ## 6. Alarme
 
 Der Reiter **Alarme** sammelt an einer Stelle, was operative

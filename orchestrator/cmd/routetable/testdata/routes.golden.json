@@ -1316,6 +1316,198 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/review/config",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/review/config",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/review/import",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/review/import/files",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/review/items",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/review/items/{id}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/review/items/{id}/approve",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/review/items/{id}/archive",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/review/items/{id}/claim",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/review/items/{id}/conform",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/review/items/{id}/conform",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/review/items/{id}/conforms",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/review/items/{id}/force-release",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/review/items/{id}/history",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/review/items/{id}/proxy",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/review/items/{id}/proxy",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/review/items/{id}/qc",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/review/items/{id}/qc/jobs",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/review/items/{id}/qc/reports",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/review/items/{id}/reassign",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/review/items/{id}/reject",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/review/items/{id}/release",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/review/items/{id}/revise",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/review/items/{id}/submit",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/review/items/{id}/timecode",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/review/items/{id}/unarchive",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/review/items/{id}/withdraw",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/review/media/{id}/frame/{n}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/review/media/{id}/proxy",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/review/qc/reports/{rid}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/review/qc/reports/{rid}/export",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/review/register",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/scheduler/resources",
     "auth": "auth",
     "domain": "core"
