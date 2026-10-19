@@ -65,8 +65,8 @@ class IngestView extends HTMLElement {
         if (this.#pendingRender) setTimeout(() => this.#pendingRender && void this.#refresh(), 0);
       });
     }
-    // unten Platz für die feste Fußleiste/Alarmleiste, sonst liegen die letzten Bedienelemente darunter
-    this.style.cssText = "display:block;padding:12px 16px 96px;";
+    // eigener Scrollbereich: nur die Ansicht scrollt, die Alarmleiste darunter bleibt stehen
+    this.style.cssText = "display:block;box-sizing:border-box;width:100%;height:100%;overflow-y:auto;padding:12px 16px;";
     if (!this.#loaded) {
       this.#loaded = true;
       void this.#init();

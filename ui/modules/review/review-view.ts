@@ -38,8 +38,8 @@ class ReviewView extends HTMLElement {
   #error = "";
 
   connectedCallback() {
-    // unten Platz für die feste Fuß-/Alarmleiste
-    this.style.cssText = "display:block;padding:12px 16px 96px;";
+    // eigener Scrollbereich: nur die Ansicht scrollt, die Alarmleiste darunter bleibt stehen
+    this.style.cssText = "display:block;box-sizing:border-box;width:100%;height:100%;overflow-y:auto;padding:12px 16px;";
     if (this.#loaded) {
       this.#start();
       return;
