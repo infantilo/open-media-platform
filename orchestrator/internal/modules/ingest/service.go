@@ -150,6 +150,9 @@ type ScheduleInput struct {
 	Retry     RetryPolicy    `json:"retry"`
 	Late      LatePolicy     `json:"late"`
 	HostPref  string         `json:"hostPref"`
+	// Owner/OwnerGroup: verantwortliche Person bzw. Gruppe (Kapitel 44); beide leer = bei Neuanlage der Ersteller, bei Änderung unverändert.
+	Owner      string `json:"owner"`
+	OwnerGroup string `json:"ownerGroup"`
 }
 
 var safeName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
@@ -169,6 +172,10 @@ func (s *Service) validate(in *ScheduleInput) error {
 	}
 	if err := in.Spec.Validate(); err != nil {
 		p = append(p, err.Error())
+	}
+	in.Owner, in.OwnerGroup = strings.TrimSpace(in.Owner), strings.TrimSpace(in.OwnerGroup)
+	if len(in.Owner) > 100 || len(in.OwnerGroup) > 100 {
+		p = append(p, "Verantwortliche(r) zu lang")
 	}
 	if in.Priority != nil && (*in.Priority < 0 || *in.Priority > 9) {
 		p = append(p, "Priorität muss 0–9 sein")
@@ -194,7 +201,10 @@ func (s *Service) validate(in *ScheduleInput) error {
 func (s *Service) toSchedule(in ScheduleInput, actor string) Schedule {
 	cfg := s.Cfg()
 	sc := Schedule{Name: in.Name, Enabled: true, Source: in.Source, Spec: in.Spec, ProfileID: in.ProfileID, Storage: in.Storage, Metadata: in.Metadata, Priority: 5,
-		Retry: in.Retry, Late: in.Late, HostPref: in.HostPref, CreatedBy: actor}
+		Retry: in.Retry, Late: in.Late, HostPref: in.HostPref, CreatedBy: actor, Owner: in.Owner, OwnerGroup: in.OwnerGroup}
+	if sc.Owner == "" && sc.OwnerGroup == "" {
+		sc.Owner = actor
+	}
 	if in.Enabled != nil {
 		sc.Enabled = *in.Enabled
 	}
@@ -234,13 +244,16 @@ func (s *Service) UpdateSchedule(ctx context.Context, id string, in ScheduleInpu
 		return old, err
 	}
 	n := s.toSchedule(in, old.CreatedBy)
+	if in.Owner == "" && in.OwnerGroup == "" {
+		n.Owner, n.OwnerGroup = old.Owner, old.OwnerGroup
+	}
 	n.ID = id
 	sc, err := s.St.UpdateSchedule(ctx, n, expectedRev)
 	if err != nil {
 		return sc, err
 	}
 	s.audit(actor, id, "schedule_updated", map[string]any{"revision": sc.Revision})
-	s.dropFutureJobs(ctx, id, "Zeitplan geändert", actor)
+	s.refreshFutureJobs(ctx, sc, "Zeitplan geändert")
 	_, _ = s.Materialize(ctx, sc)
 	return sc, nil
 }
@@ -259,6 +272,48 @@ func (s *Service) CancelSchedule(ctx context.Context, id, actor string, abortRun
 	}
 	s.audit(actor, id, "schedule_cancelled", nil)
 	return nil
+}
+
+// refreshFutureJobs gleicht die noch nicht gestarteten Aufträge nach einer Änderung des Zeitplans ab: Vorkommen, die es weiter gibt
+// (gleicher Schlüssel), werden an Ort und Stelle aktualisiert und neu zugelassen — **nicht** abgebrochen, sonst bliebe der Auftrag wegen
+// des Idempotenzschlüssels für immer abgebrochen (z. B. wenn nur der Name oder die Verantwortlichen geändert wurden); Vorkommen, die
+// entfallen (Zeit, Wiederholung, deaktiviert), werden abgebrochen. Neue Vorkommen legt danach Materialize an.
+func (s *Service) refreshFutureJobs(ctx context.Context, sc Schedule, why string) {
+	jobs, err := s.St.ListJobs(ctx, JobFilter{ScheduleID: sc.ID, States: []string{StBlocked, StScheduled, StWaiting}})
+	if err != nil {
+		return
+	}
+	keep := map[string]Occurrence{}
+	if sc.Enabled && sc.Cancelled == nil {
+		cfg, now := s.Cfg(), s.now()
+		if occ, err := Occurrences(sc.Spec, now.Add(-time.Minute), now.Add(time.Duration(cfg.HorizonHours)*time.Hour)); err == nil {
+			for _, o := range occ {
+				keep[IdempotencyKey(sc.ID, o)] = o
+			}
+		}
+	}
+	for _, j := range jobs {
+		o, stays := keep[j.Key]
+		_, err := s.St.Mutate(ctx, j.ID, -1, why, func(x *Job) (map[string]any, error) {
+			if !stays {
+				x.State, x.Error = StCancelled, ""
+				return nil, nil
+			}
+			x.Name, x.PlannedStart, x.PlannedEnd, x.TZ, x.Shifted, x.Ambiguous = sc.Name, o.Start, o.End, sc.Spec.TZ, o.Shifted, o.Ambiguous
+			x.MaxAttempts, x.Priority, x.Source, x.ProfileID, x.HostPref = sc.Retry.MaxAttempts, sc.Priority, sc.Source, sc.ProfileID, sc.HostPref
+			x.Storage, x.Metadata, x.Late, x.Owner, x.OwnerGroup = sc.Storage, sc.Metadata, sc.Late, sc.Owner, sc.OwnerGroup
+			return nil, nil
+		})
+		if err != nil {
+			s.log().Warn("Auftrag nicht aktualisiert", "job", j.ID, "error", err)
+			continue
+		}
+		if stays && j.State != StWaiting {
+			if _, _, err := s.Admit(ctx, j.ID); err != nil && !isStateErr(err) {
+				s.log().Warn("Neuzulassung fehlgeschlagen", "job", j.ID, "error", err)
+			}
+		}
+	}
 }
 
 func (s *Service) dropFutureJobs(ctx context.Context, scheduleID, why, actor string) {
@@ -292,7 +347,7 @@ func (s *Service) Materialize(ctx context.Context, sc Schedule) (int, error) {
 	for _, o := range occ {
 		j, isNew, err := s.St.CreateJob(ctx, Job{ScheduleID: sc.ID, Key: IdempotencyKey(sc.ID, o), Name: sc.Name, PlannedStart: o.Start, PlannedEnd: o.End, TZ: sc.Spec.TZ,
 			Shifted: o.Shifted, Ambiguous: o.Ambiguous, MaxAttempts: sc.Retry.MaxAttempts, Priority: sc.Priority, Source: sc.Source, ProfileID: sc.ProfileID, HostPref: sc.HostPref,
-			Storage: sc.Storage, Metadata: sc.Metadata, Late: sc.Late, CreatedBy: sc.CreatedBy})
+			Storage: sc.Storage, Metadata: sc.Metadata, Late: sc.Late, CreatedBy: sc.CreatedBy, Owner: sc.Owner, OwnerGroup: sc.OwnerGroup})
 		if err != nil {
 			return created, err
 		}
@@ -337,17 +392,19 @@ func (s *Service) MaterializeAll(ctx context.Context) {
 
 // AdHocInput: einmalige Aufnahme ohne Zeitplan.
 type AdHocInput struct {
-	Name      string         `json:"name"`
-	Source    Source         `json:"source"`
-	Start     *time.Time     `json:"start"` // leer = jetzt
-	DurationS int64          `json:"durationS"`
-	ProfileID string         `json:"profileId"`
-	Storage   Storage        `json:"storage"`
-	Metadata  map[string]any `json:"metadata"`
-	Priority  *int           `json:"priority"`
-	Late      LatePolicy     `json:"late"`
-	Retry     RetryPolicy    `json:"retry"`
-	HostPref  string         `json:"hostPref"`
+	Name       string         `json:"name"`
+	Source     Source         `json:"source"`
+	Start      *time.Time     `json:"start"` // leer = jetzt
+	DurationS  int64          `json:"durationS"`
+	ProfileID  string         `json:"profileId"`
+	Storage    Storage        `json:"storage"`
+	Metadata   map[string]any `json:"metadata"`
+	Priority   *int           `json:"priority"`
+	Late       LatePolicy     `json:"late"`
+	Retry      RetryPolicy    `json:"retry"`
+	HostPref   string         `json:"hostPref"`
+	Owner      string         `json:"owner"`
+	OwnerGroup string         `json:"ownerGroup"`
 }
 
 func (s *Service) CreateAdHoc(ctx context.Context, in AdHocInput, actor string) (Job, Decision, error) {
@@ -355,13 +412,13 @@ func (s *Service) CreateAdHoc(ctx context.Context, in AdHocInput, actor string) 
 	if in.Start != nil {
 		start = in.Start.UTC()
 	}
-	si := ScheduleInput{Name: in.Name, Source: in.Source, Spec: Spec{TZ: "UTC", StartLocal: start.Format(localLayout), DurationS: in.DurationS}, ProfileID: in.ProfileID, Storage: in.Storage, Priority: in.Priority, Late: in.Late, Retry: in.Retry, HostPref: in.HostPref}
+	si := ScheduleInput{Name: in.Name, Source: in.Source, Spec: Spec{TZ: "UTC", StartLocal: start.Format(localLayout), DurationS: in.DurationS}, ProfileID: in.ProfileID, Storage: in.Storage, Priority: in.Priority, Late: in.Late, Retry: in.Retry, HostPref: in.HostPref, Owner: in.Owner, OwnerGroup: in.OwnerGroup}
 	if err := s.validate(&si); err != nil {
 		return Job{}, Decision{}, err
 	}
 	sc := s.toSchedule(si, actor)
 	j, _, err := s.St.CreateJob(ctx, Job{Key: "adhoc|" + newID(), Name: sc.Name, PlannedStart: start.Truncate(time.Second), PlannedEnd: start.Truncate(time.Second).Add(time.Duration(in.DurationS) * time.Second), TZ: "UTC",
-		MaxAttempts: sc.Retry.MaxAttempts, Priority: sc.Priority, Source: in.Source, ProfileID: in.ProfileID, HostPref: in.HostPref, Storage: in.Storage, Metadata: in.Metadata, Late: sc.Late, CreatedBy: actor})
+		MaxAttempts: sc.Retry.MaxAttempts, Priority: sc.Priority, Source: in.Source, ProfileID: in.ProfileID, HostPref: in.HostPref, Storage: in.Storage, Metadata: in.Metadata, Late: sc.Late, CreatedBy: actor, Owner: sc.Owner, OwnerGroup: sc.OwnerGroup})
 	if err != nil {
 		return j, Decision{}, err
 	}

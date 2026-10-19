@@ -98,10 +98,13 @@ type Schedule struct {
 	Retry     RetryPolicy    `json:"retry"`
 	Late      LatePolicy     `json:"late"`
 	HostPref  string         `json:"hostPref,omitempty"`
-	CreatedBy string         `json:"createdBy,omitempty"`
-	CreatedAt time.Time      `json:"createdAt"`
-	UpdatedAt time.Time      `json:"updatedAt"`
-	Cancelled *time.Time     `json:"cancelledAt,omitempty"`
+	// Owner/OwnerGroup: Verantwortliche Person bzw. Gruppe (Kapitel 44); Aufträge erben sie.
+	Owner      string     `json:"owner,omitempty"`
+	OwnerGroup string     `json:"ownerGroup,omitempty"`
+	CreatedBy  string     `json:"createdBy,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	UpdatedAt  time.Time  `json:"updatedAt"`
+	Cancelled  *time.Time `json:"cancelledAt,omitempty"`
 }
 
 // Job: ein konkretes Vorkommen.
@@ -139,6 +142,8 @@ type Job struct {
 	Metadata      map[string]any  `json:"metadata,omitempty"`
 	Late          LatePolicy      `json:"late"`
 	Revision      int             `json:"revision"`
+	Owner         string          `json:"owner,omitempty"`
+	OwnerGroup    string          `json:"ownerGroup,omitempty"`
 	CreatedBy     string          `json:"createdBy,omitempty"`
 	CreatedAt     time.Time       `json:"createdAt"`
 	UpdatedAt     time.Time       `json:"updatedAt"`

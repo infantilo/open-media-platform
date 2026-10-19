@@ -8,6 +8,11 @@ export interface Item {
   title?: string;
   state: string;
   assignee?: string;
+  /** Zuweisung (Kapitel 44): wer die Datei prüfen soll, bis wann. */
+  assignedTo?: string;
+  assignedGroup?: string;
+  dueAt?: string;
+  assignedBy?: string;
   revision: number;
   qcStatus?: string;
   qcFailCount: number;
@@ -292,3 +297,34 @@ export function formatBytes(n: number | undefined): string {
 
 /** Zustände, in denen ein Bearbeiter Änderungen speichern darf. */
 export const EDITABLE_STATES = ["in_review", "conforming"];
+
+/** Wem ist die Datei zugewiesen? „anna“, „Gruppe nachtschicht“, beides oder leer. */
+export function assignmentLabel(it: Pick<Item, "assignedTo" | "assignedGroup">, groupWord: string, groupName: (id: string) => string = (id) => id): string {
+  const parts: string[] = [];
+  if (it.assignedTo) parts.push(it.assignedTo);
+  if (it.assignedGroup) parts.push(`${groupWord} ${groupName(it.assignedGroup)}`);
+  return parts.join(" · ");
+}
+
+/** Frist überschritten (nur für noch offene Dateien sinnvoll — das entscheidet der Aufrufer)? */
+export function isOverdue(dueAt: string | undefined, nowMs: number): boolean {
+  if (!dueAt) return false;
+  const at = Date.parse(dueAt);
+  return Number.isFinite(at) && at < nowMs;
+}
+
+/** `datetime-local`-Wert (Ortszeit) → ISO-Zeit (UTC); leer/ungültig → undefined. */
+export function localInputToIso(v: string): string | undefined {
+  if (!v) return undefined;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
+}
+
+/** ISO-Zeit → `datetime-local`-Wert in Ortszeit (für das Eingabefeld). */
+export function isoToLocalInput(iso: string | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}

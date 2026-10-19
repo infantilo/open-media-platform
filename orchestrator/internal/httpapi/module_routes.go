@@ -26,6 +26,8 @@ func (m moduleRoutes) Handle(pattern string, a module.Auth, h http.HandlerFunc) 
 		m.mux.HandleFunc(pattern, m.g.requireVerbGlobal(a.Verb, h))
 	case module.AuthVerbOnNode:
 		m.mux.HandleFunc(pattern, m.g.requireVerbOnNode(a.Verb, h))
+	case module.AuthFeature:
+		m.mux.HandleFunc(pattern, m.g.requireFeature(a.Features, h))
 	default:
 		// Unbekannte Rechtepflicht: sicherheitshalber wie "Admin" behandeln statt offen zu lassen.
 		m.mux.HandleFunc(pattern, m.g.requireVerbGlobal(authz.VerbAdmin, h))

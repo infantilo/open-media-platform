@@ -6,6 +6,7 @@ import { getToken, whoami } from "./auth.ts";
 import { showToast } from "../kit/omp-toast.ts";
 import { addMessages, dateLocale, getLang, tLoose } from "./i18n.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
+import { getDirectory, getMyFeatures } from "./features-api.ts";
 
 export interface HostApi {
   t: typeof tLoose;
@@ -18,8 +19,12 @@ export interface HostApi {
   confirmDialog: typeof confirmDialog;
   /** Sitzungstoken für Medien-URLs (<video>/<img> können keinen Authorization-Header senden, Kapitel 43). */
   authToken: typeof getToken;
+  /** Funktionsrechte der angemeldeten Person (Kapitel 44). */
+  features: typeof getMyFeatures;
+  /** Nutzer und Gruppen zum Zuweisen. */
+  directory: typeof getDirectory;
 }
 
 export function exposeHostApi(): void {
-  (globalThis as unknown as { __omp: HostApi }).__omp = { t: tLoose, addMessages, apiFetch, whoami, showToast, dateLocale, getLang, confirmDialog, authToken: getToken };
+  (globalThis as unknown as { __omp: HostApi }).__omp = { t: tLoose, addMessages, apiFetch, whoami, showToast, dateLocale, getLang, confirmDialog, authToken: getToken, features: getMyFeatures, directory: getDirectory };
 }

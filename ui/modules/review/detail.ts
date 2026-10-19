@@ -1,10 +1,11 @@
 // Detailansicht eines Eingangs-Assets: QC-Bericht, Review & Conform (Player + Editor), Verlauf.
 import { confirmDialog, dateLocale, showToast, t as tt } from "../host.ts";
+import { type Directory, groupName } from "../../kit/features.ts";
 import { call, errText, mediaUrl } from "./api.ts";
 import { ConformPanel, type Draft, type MetaField } from "./conform-panel.ts";
 import { type Job, QcPanel, type Report } from "./qc-panel.ts";
 import { ReviewPlayer } from "./player.ts";
-import { EDITABLE_STATES, type Item, type Policy, qcBadge, type Segment, stateBadge, toServerSegments } from "./review-logic.ts";
+import { assignmentLabel, EDITABLE_STATES, isOverdue, isoToLocalInput, type Item, localInputToIso, type Policy, qcBadge, type Segment, stateBadge, toServerSegments } from "./review-logic.ts";
 import { timecodeOf } from "./timecode.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, css = "", text = ""): HTMLElementTagNameMap[K] {
@@ -18,6 +19,10 @@ export interface Me {
   username: string;
   canConfigure: boolean;
   isAdmin: boolean;
+  /** Funktionsrecht der Person (Kapitel 44), z. B. `review.approve`. */
+  can: (feature: string) => boolean;
+  /** Nutzer und Gruppen zum Zuweisen (null: nicht sichtbar). */
+  dir: Directory | null;
 }
 
 export interface Config {
@@ -93,6 +98,62 @@ export function askText(title: string, label: string, confirmLabel: string, init
     overlay.append(m);
     document.body.append(overlay);
     ta.focus();
+  });
+}
+
+/** Zuweisung erfassen: Person, Gruppe, Frist. Alles leer = Zuweisung aufheben. */
+export function askAssign(initial: { user: string; group: string; dueAt?: string }, dir: Directory | null): Promise<{ user: string; group: string; dueAt?: string } | null> {
+  return new Promise((resolve) => {
+    const overlay = el("div");
+    overlay.className = "omp-modal-overlay";
+    overlay.style.zIndex = "3000";
+    const m = el("div", "max-width:460px;");
+    m.className = "omp-modal";
+    const h1 = el("div", "margin-bottom:6px;", tt("rv.assign.title"));
+    h1.className = "omp-h1";
+    const field = (label: string, input: HTMLElement): HTMLElement => {
+      const w = el("label", "display:flex;flex-direction:column;gap:2px;margin-top:8px;font-size:12px;color:var(--omp-text-dim);");
+      w.append(label, input);
+      return w;
+    };
+    const pick = (none: string, options: [string, string][], current: string, role: string): HTMLSelectElement => {
+      const s = el("select", "box-sizing:border-box;width:100%;") as HTMLSelectElement;
+      s.dataset.role = role;
+      const list: [string, string][] = [["", none], ...options];
+      if (current && !options.some(([v]) => v === current)) list.push([current, current]); // z. B. gelöschte Person/Gruppe nicht still verlieren
+      for (const [v, l] of list) {
+        const o = el("option", "", l);
+        o.value = v;
+        s.append(o);
+      }
+      s.value = current;
+      return s;
+    };
+    const user = pick(tt("rv.assign.nobody"), (dir?.users ?? []).map((u) => [u.username, u.username]), initial.user, "assign-user");
+    const group = pick(tt("rv.assign.nogroup"), (dir?.groups ?? []).map((g) => [g.id, g.name]), initial.group, "assign-group");
+    const due = el("input", "box-sizing:border-box;width:100%;") as HTMLInputElement;
+    due.type = "datetime-local";
+    due.value = isoToLocalInput(initial.dueAt);
+    due.dataset.role = "assign-due";
+    const row = el("div", "display:flex;gap:8px;justify-content:flex-end;margin-top:12px;");
+    const cancel = el("button", "", tt("rv.cancel"));
+    const ok = el("button", "", tt("rv.act.assign"));
+    ok.className = "omp-btn-primary";
+    ok.dataset.role = "assign-ok";
+    const done = (v: { user: string; group: string; dueAt?: string } | null) => {
+      overlay.remove();
+      resolve(v);
+    };
+    cancel.addEventListener("click", () => done(null));
+    ok.addEventListener("click", () => done({ user: user.value, group: group.value, dueAt: localInputToIso(due.value) }));
+    overlay.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") done(null);
+    });
+    row.append(cancel, ok);
+    m.append(h1, el("div", "font-size:12px;color:var(--omp-text-dim);", tt("rv.assign.hint")), field(tt("rv.assign.user"), user), field(tt("rv.assign.group"), group), field(tt("rv.assign.due"), due), row);
+    overlay.append(m);
+    document.body.append(overlay);
+    user.focus();
   });
 }
 
@@ -282,7 +343,7 @@ export class ReviewDetail {
   #qcCtx() {
     return {
       item: this.#d!.item,
-      canOperate: true,
+      canOperate: this.#me.can("review.qc.run"),
       profiles: Object.keys(this.#cfg.qcProfiles),
       defaultProfile: this.#cfg.defaultQcProfile,
       goto: (f: number) => {
@@ -332,6 +393,18 @@ export class ReviewDetail {
     h.append(st);
     if (it.qcStatus) h.append(el("span", qcBadge(it.qcStatus), "QC: " + tt("rv.qc.overall." + it.qcStatus)));
     h.append(el("span", "color:var(--omp-text-dim);font-size:12px;", it.assignee ? tt("rv.assignee", { p0: it.assignee }) : tt("rv.unassigned")));
+    const assigned = assignmentLabel(it, tt("rv.group"), (id) => groupName(this.#me.dir, id));
+    if (assigned || it.dueAt) {
+      const open = it.state !== "approved" && it.state !== "archived";
+      const late = open && isOverdue(it.dueAt, Date.now());
+      const chip = el(
+        "span",
+        `font-size:12px;border:1px solid ${late ? "var(--omp-error)" : "var(--omp-border)"};color:${late ? "var(--omp-error)" : "var(--omp-text-dim)"};border-radius:10px;padding:1px 8px;`,
+        [assigned ? tt("rv.assignedTo", { p0: assigned }) : "", it.dueAt ? tt("rv.due", { p0: new Date(it.dueAt).toLocaleString(dateLocale()) }) : ""].filter(Boolean).join(" · "),
+      );
+      chip.dataset.role = "assignment";
+      h.append(chip);
+    }
     h.append(el("span", "color:var(--omp-text-dim);font-size:11px;", `rev ${it.revision}`));
     h.append(el("span", "flex:1;"));
     const add = (label: string, fn: () => void, cls = "", role = "", disabled = false): void => {
@@ -349,14 +422,14 @@ export class ReviewDetail {
       case "awaiting_qc":
       case "qc_running":
       case "qc_failed_to_run":
-        if (!it.assignee) add(tt("rv.act.claim"), () => void this.#act("claim", {}, tt("rv.claimed")), "omp-btn-primary", "claim", !d.policy.claimable);
+        if (!it.assignee && this.#me.can("review.work")) add(tt("rv.act.claim"), () => void this.#act("claim", {}, tt("rv.claimed")), "omp-btn-primary", "claim", !d.policy.claimable);
         break;
       case "approved":
         add(tt("rv.act.revise"), () => void this.#act("revise"), "", "revise");
-        if (this.#me.canConfigure) add(tt("rv.act.archive"), () => void this.#act("archive"), "", "archive");
+        if (this.#me.can("review.approve")) add(tt("rv.act.archive"), () => void this.#act("archive"), "", "archive");
         break;
       case "archived":
-        if (this.#me.canConfigure) add(tt("rv.act.unarchive"), () => void this.#act("unarchive"));
+        if (this.#me.can("review.approve")) add(tt("rv.act.unarchive"), () => void this.#act("unarchive"));
         break;
     }
     if (it.state === "rejected" && it.assignee === "") {
@@ -374,7 +447,7 @@ export class ReviewDetail {
       }, "", "release");
     }
     if (it.state === "ready_for_approval") {
-      if (this.#me.canConfigure) {
+      if (this.#me.can("review.approve")) {
         add(tt("rv.act.approve"), () => void this.#act("approve", { note: "" }, tt("rv.approved")), "omp-btn-primary", "approve");
         add(tt("rv.act.reject"), async () => {
           const reason = await askText(tt("rv.reject.title"), tt("rv.reject.reason"), tt("rv.act.reject"));
@@ -383,12 +456,18 @@ export class ReviewDetail {
       }
       if (mine) add(tt("rv.act.withdraw"), () => void this.#act("withdraw"), "", "withdraw");
     }
-    if (it.assignee && !mine && this.#me.canConfigure && EDITABLE_STATES.includes(it.state)) {
+    if (it.assignee && !mine && this.#me.can("review.assign") && EDITABLE_STATES.includes(it.state)) {
       add(tt("rv.act.reassign"), async () => {
         const to = await askText(tt("rv.reassign.title"), tt("rv.reassign.to"), tt("rv.act.reassign"), this.#me.username);
         if (to && to.trim()) await this.#act("reassign", { to: to.trim() });
       }, "", "reassign");
       add(tt("rv.act.forcerelease"), () => void this.#act("force-release"), "", "force-release");
+    }
+    if (this.#me.can("review.assign") && it.state !== "approved" && it.state !== "archived") {
+      add(tt("rv.act.assign"), async () => {
+        const r = await askAssign({ user: it.assignedTo ?? "", group: it.assignedGroup ?? "", dueAt: it.dueAt }, this.#me.dir);
+        if (r) await this.#act("assign", r);
+      }, "", "assign");
     }
     // Tabs
     const tabs = el("div", "display:flex;gap:2px;width:100%;margin-top:6px;");

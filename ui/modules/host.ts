@@ -1,6 +1,8 @@
 // Zugriff der Modul-Oberflächen auf die Shell (UMSETZUNG.md Kapitel 36.3). Bewusst dünne Funktionen, die erst beim
 // Aufruf auf `globalThis.__omp` zugreifen (die Shell setzt es vor dem Laden der Bundles, s. shell/host-api.ts) — so
 // bündelt kein Modul eine zweite Kopie von Sprache, Verbindungsüberwachung oder Anmeldung.
+import type { Directory, FeatureSet } from "../kit/features.ts";
+
 type Params = Record<string, unknown>;
 
 interface Host {
@@ -13,6 +15,8 @@ interface Host {
   getLang(): "de" | "en";
   confirmDialog(message: string, opts?: { confirmLabel?: string }): Promise<boolean>;
   authToken(): string | null;
+  features(force?: boolean): Promise<FeatureSet | null>;
+  directory(force?: boolean): Promise<Directory | null>;
 }
 
 function host(): Host {
@@ -30,3 +34,9 @@ export const dateLocale = (): string => host().dateLocale();
 export const getLang = (): "de" | "en" => host().getLang();
 export const authToken = (): string | null => host().authToken();
 export const confirmDialog = (message: string, opts?: { confirmLabel?: string }): Promise<boolean> => host().confirmDialog(message, opts);
+
+/** Funktionsrechte der angemeldeten Person (null, wenn nicht abrufbar). */
+export const features = (force?: boolean): Promise<FeatureSet | null> => host().features(force);
+
+/** Nutzer und Gruppen zum Auswählen von Verantwortlichen (null, wenn die Person sie nicht sehen darf). */
+export const directory = (force?: boolean): Promise<Directory | null> => host().directory(force);

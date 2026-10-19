@@ -201,7 +201,7 @@ const USER_WIDGET_GAP_PX = 6;
 // Ziel. Echte `<a>`-Navigation statt SPA-Routing (gleiches Muster wie
 // die Kacheln selbst, s. renderWorkflowPicker-Doku: der Orchestrator
 // liefert index.html für "/" ohnehin aus).
-export function buildUserWidget(username: string, homeHref?: string): HTMLElement {
+export function buildUserWidget(username: string, homeHref?: string, workstation = false): HTMLElement {
   const widget = document.createElement("div");
   widget.dataset.ompUserWidget = "1";
   widget.style.cssText =
@@ -218,8 +218,9 @@ export function buildUserWidget(username: string, homeHref?: string): HTMLElemen
   if (homeHref) {
     const homeLink = document.createElement("a");
     homeLink.href = homeHref;
-    homeLink.textContent = t("auth.switchWorkflow");
-    homeLink.title = t("auth.switchWorkflowTitle");
+    homeLink.textContent = t(workstation ? "auth.home" : "auth.switchWorkflow");
+    homeLink.title = t(workstation ? "auth.homeTitle" : "auth.switchWorkflowTitle");
+    homeLink.dataset.role = "home-link";
     homeLink.style.cssText =
       "font-size:var(--omp-font-size-xs);padding:2px var(--omp-space-2);text-decoration:none;" +
       "color:var(--omp-text);border:1px solid var(--omp-border);border-radius:var(--omp-radius);";

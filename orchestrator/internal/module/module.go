@@ -85,6 +85,8 @@ const (
 	AuthVerbGlobal
 	// AuthVerbOnNode: mindestens `Verb` auf der Node, die in der Route steht (`{id}`).
 	AuthVerbOnNode
+	// AuthFeature: eines der Funktionsrechte in `Features` (Kapitel 44); globales `configure` deckt jedes ab.
+	AuthFeature
 )
 
 // Auth beschreibt die Rechtepflicht einer Route. Die Konstruktoren sind die einzige Schreibweise (auch das
@@ -92,12 +94,17 @@ const (
 type Auth struct {
 	Kind AuthKind
 	Verb authz.Verb
+	// Features: bei AuthFeature die Funktionsrechte, von denen **eines** genügt.
+	Features []string
 }
 
 func Anonymous() Auth              { return Auth{Kind: AuthAnonymous} }
 func Authenticated() Auth          { return Auth{Kind: AuthAuthenticated} }
 func Verb(v authz.Verb) Auth       { return Auth{Kind: AuthVerbGlobal, Verb: v} }
 func VerbOnNode(v authz.Verb) Auth { return Auth{Kind: AuthVerbOnNode, Verb: v} }
+
+// Feature verlangt das Funktionsrecht `id` (s. FeatureProvider); bei mehreren genügt eines davon.
+func Feature(ids ...string) Auth { return Auth{Kind: AuthFeature, Features: ids} }
 
 // Routes nimmt die Routen eines Moduls entgegen; die Umsetzung (httpapi) hängt die Rechteprüfung des Kerns davor.
 // `pattern` hat die Form von `http.ServeMux` ("GET /api/v1/cloud/hosts").
@@ -164,6 +171,14 @@ type Placement interface {
 	SetDraining(hostID string, on bool)
 }
 
+// Access ist die Rechte-Sicht des Kerns für Module (Kapitel 44): Funktionsrechte und Gruppenmitgliedschaft der anfragenden Person.
+type Access interface {
+	// Can: hat die Person der Anfrage das Funktionsrecht? Im Bootstrap-Modus (noch kein Nutzer) immer ja.
+	Can(r *http.Request, feature string) bool
+	// Identity: die Person der Anfrage samt Gruppen und Rechteprüfung (für Aufgaben und Zuständigkeit).
+	Identity(r *http.Request) Identity
+}
+
 // Deps ist, was ein Modul vom Kern bekommt — bewusst klein; weitere Abhängigkeiten kommen mit dem jeweiligen Umzug
 // als eigene schmale Schnittstellen, nie als Durchreichen des ganzen Kerns.
 type Deps struct {
@@ -178,4 +193,6 @@ type Deps struct {
 	Placement   Placement
 	// Hooks sind Beobachtungspunkte im Kern (z. B. erfolgreiche Methodenaufrufe an Nodes).
 	Hooks *Hooks
+	// Access: Funktionsrechte und Gruppen der anfragenden Person (nil in Tests ohne Rechte-Speicher).
+	Access Access
 }

@@ -4,8 +4,23 @@ import "github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 
 // Migrations: Tabellen des Ingest-Moduls (Version 1 = Kapitel 42). Nie nachträglich ändern — neue Version anhängen.
 func (*Module) Migrations() []module.Migration {
-	return []module.Migration{{Version: 1, Name: "ingest-schedules-jobs-reservations", SQL: schemaV1}}
+	return []module.Migration{
+		{Version: 1, Name: "ingest-schedules-jobs-reservations", SQL: schemaV1},
+		{Version: 2, Name: "ingest-owner", SQL: schemaV2},
+	}
 }
+
+// schemaV2 (Kapitel 44): Verantwortliche — eine Person und/oder eine Gruppe je Zeitplan; Aufträge erben sie.
+// Bestehende Zeilen: Verantwortlich ist, wer sie angelegt hat.
+const schemaV2 = `
+ALTER TABLE ingest_schedules ADD COLUMN IF NOT EXISTS owner TEXT NOT NULL DEFAULT '';
+ALTER TABLE ingest_schedules ADD COLUMN IF NOT EXISTS owner_group TEXT NOT NULL DEFAULT '';
+ALTER TABLE ingest_jobs ADD COLUMN IF NOT EXISTS owner TEXT NOT NULL DEFAULT '';
+ALTER TABLE ingest_jobs ADD COLUMN IF NOT EXISTS owner_group TEXT NOT NULL DEFAULT '';
+UPDATE ingest_schedules SET owner = created_by WHERE owner = '' AND owner_group = '';
+UPDATE ingest_jobs SET owner = created_by WHERE owner = '' AND owner_group = '';
+CREATE INDEX IF NOT EXISTS ingest_jobs_owner_idx ON ingest_jobs (owner, planned_start);
+`
 
 const schemaV1 = `
 CREATE TABLE IF NOT EXISTS ingest_schedules (

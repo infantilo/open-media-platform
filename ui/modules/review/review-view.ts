@@ -1,9 +1,10 @@
 // Tab „Eingang“ (Kapitel 43): Arbeitsliste neu eingegangener Medien-Assets → Detailansicht (QC-Bericht, Review & Conform, Verlauf).
-import { dateLocale, showToast, t as tt, whoami } from "../host.ts";
+import { dateLocale, directory, features, showToast, t as tt, whoami } from "../host.ts";
+import { type Directory, groupName, hasFeature } from "../../kit/features.ts";
 import { call, errText } from "./api.ts";
 import { type Config, type Me, ReviewDetail } from "./detail.ts";
 import { openReviewSettingsForm } from "./settings-form.ts";
-import { formatBytes, type Item, qcBadge, stateBadge } from "./review-logic.ts";
+import { assignmentLabel, formatBytes, isOverdue, type Item, qcBadge, stateBadge } from "./review-logic.ts";
 import { timecodeOf } from "./timecode.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, css = "", text = ""): HTMLElementTagNameMap[K] {
@@ -17,6 +18,7 @@ const FILTERS: [string, string, string][] = [
   // id, Anzeige, Abfrage
   ["todo", "rv.f.todo", "state=awaiting_review,rejected&assignee=free"],
   ["all", "rv.f.all", ""],
+  ["tasks", "rv.f.tasks", "assignee=mine"],
   ["mine", "rv.f.mine", "assignee=me"],
   ["qc", "rv.f.qc", "state=awaiting_qc,qc_running,qc_failed_to_run"],
   ["busy", "rv.f.busy", "state=in_review,conforming"],
@@ -26,7 +28,7 @@ const FILTERS: [string, string, string][] = [
 ];
 
 class ReviewView extends HTMLElement {
-  #me: Me = { username: "local", canConfigure: false, isAdmin: false };
+  #me: Me = { username: "local", canConfigure: false, isAdmin: false, can: () => false, dir: null };
   #cfg: Config | null = null;
   #filter = "todo";
   #query = "";
@@ -54,12 +56,16 @@ class ReviewView extends HTMLElement {
 
   async #init() {
     const w = await whoami();
-    this.#me = { username: w.username || "local", canConfigure: !!(w.canConfigure ?? w.isAdmin), isAdmin: !!w.isAdmin };
+    const [feats, dir] = await Promise.all([features(), directory()]);
+    this.#me = { username: w.username || "local", canConfigure: !!(w.canConfigure ?? w.isAdmin), isAdmin: !!w.isAdmin, can: (f) => hasFeature(feats, f), dir: dir as Directory | null };
     const c = await call<Config>("GET", "/config");
     if (c.ok) this.#cfg = c.data;
     else this.#error = errText(c.data as unknown as Record<string, unknown>) || tt("rv.err.generic");
     this.#renderShell();
     this.#start();
+    // Aufgabenliste des Arbeitsplatzes: `focus-ref` öffnet die Datei direkt (Kapitel 44).
+    const ref = this.getAttribute("focus-ref");
+    if (ref && this.#cfg) this.#open(ref);
   }
 
   #start() {
@@ -98,7 +104,7 @@ class ReviewView extends HTMLElement {
     refresh.title = tt("rv.refresh");
     refresh.addEventListener("click", () => void this.#refresh());
     bar.append(sel, q, refresh);
-    if (this.#me.canConfigure) {
+    if (this.#me.can("review.import")) {
       const imp = el("button", "padding:3px 10px;", tt("rv.import"));
       imp.dataset.role = "import";
       imp.addEventListener("click", () => void this.#importDialog());
@@ -139,7 +145,7 @@ class ReviewView extends HTMLElement {
     }
     const tb = el("table", "width:100%;border-collapse:collapse;font-size:13px;");
     const head = el("tr", "text-align:left;color:var(--omp-text-dim);font-size:11px;text-transform:uppercase;letter-spacing:.05em;");
-    for (const h of ["rv.col.file", "rv.col.state", "rv.col.qc", "rv.col.assignee", "rv.col.duration", "rv.col.format", "rv.col.size", "rv.col.received", ""]) head.append(el("th", "padding:4px 8px;font-weight:500;", h ? tt(h) : ""));
+    for (const h of ["rv.col.file", "rv.col.state", "rv.col.qc", "rv.col.assignee", "rv.col.assigned", "rv.col.duration", "rv.col.format", "rv.col.size", "rv.col.received", ""]) head.append(el("th", "padding:4px 8px;font-weight:500;", h ? tt(h) : ""));
     tb.append(head);
     for (const it of this.#items) {
       const tr = el("tr", "border-top:1px solid var(--omp-border);cursor:pointer;");
@@ -161,6 +167,7 @@ class ReviewView extends HTMLElement {
         td(el("span", stateBadge(it.state), tt("rv.state." + it.state))),
         td(it.qcStatus ? el("span", qcBadge(it.qcStatus), `${tt("rv.qc.overall." + it.qcStatus)}${it.qcFailCount ? ` · ${it.qcFailCount}✖` : ""}${it.qcWarnCount ? ` · ${it.qcWarnCount}▲` : ""}`) : el("span", "color:var(--omp-text-dim);", "—")),
         td(it.assignee || "—", it.assignee === this.#me.username ? "font-weight:600;" : "color:var(--omp-text-dim);"),
+        td(this.#assignedCell(it)),
         td(dur, "font-family:var(--omp-font-mono);"),
         td(it.format || "—"),
         td(formatBytes(it.sizeBytes)),
@@ -178,6 +185,16 @@ class ReviewView extends HTMLElement {
       tb.append(tr);
     }
     this.#list.append(tb);
+  }
+
+  #assignedCell(it: Item): HTMLElement {
+    const label = assignmentLabel(it, tt("rv.group"), (id) => groupName(this.#me.dir, id));
+    const open = it.state !== "approved" && it.state !== "archived";
+    const late = open && isOverdue(it.dueAt, Date.now());
+    const box = el("div");
+    box.append(el("div", "font-size:12px;color:var(--omp-text-dim);", label || "—"));
+    if (it.dueAt) box.append(el("div", `font-size:11px;${late ? "color:var(--omp-error);font-weight:600;" : "color:var(--omp-text-dim);"}`, `${late ? "⚠ " : ""}${new Date(it.dueAt).toLocaleString(dateLocale())}`));
+    return box;
   }
 
   #open(id: string) {

@@ -5,7 +5,8 @@
 //                → sehen und setzen, wer darauf darf
 // Ein Recht je Subjekt und Bereich; Ändern/Hinzufügen/Entfernen wirkt sofort
 // (kein Speichern-Knopf, jede Zeile ist ein eigener Server-Aufruf).
-import { t } from "./i18n.ts";
+import { getLang, t } from "./i18n.ts";
+import { coveringGrant, type FeatureDef, type FeatureGrant, grantsOf, planToggle, planToggleModule, sectionsOf, type TogglePlan } from "./feature-grants-logic.ts";
 import { apiFetch } from "./connection.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 import {
@@ -45,6 +46,9 @@ export interface PermData {
   nodes: NodeLike[];
   workflows: WorkflowLike[];
   processes: ProcessLike[];
+  /** Funktionsrechte (Kapitel 44): Katalog der Module und Vergaben. */
+  features?: FeatureDef[];
+  featureGrants?: FeatureGrant[];
 }
 
 type Mode = "subject" | "resource";
@@ -394,6 +398,8 @@ export class PermissionsEditor {
       }
     }
 
+    this.#renderFeatureSection(d, ref);
+
     // Hinzufügen: Bereich suchen.
     const kinds = [{ value: "all", label: t("perm.kind.all") }, ...SCOPE_KINDS.map((k) => ({ value: k as string, label: this.#kindLabel(k) }))];
     const items: PickItem[] = opts.map((o) => ({ key: o.key, kind: o.kind, title: o.title, subtitle: o.subtitle, search: o.search, payload: o }));
@@ -403,6 +409,76 @@ export class PermissionsEditor {
         return this.#set(ref, o.workflowId, o.nodeId, verb);
       }),
     );
+  }
+
+  // ---- Funktionsrechte (Kapitel 44) --------------------------------------
+
+  // Je Modul eine Gruppe von Schaltern. Ein Haken wirkt sofort (wie die Verben oben); „Alle Rechte des Moduls“ vergibt `modul.*`.
+  // Geerbte Rechte aus Gruppen stehen ausgegraut mit Gruppenname daneben — geändert wird sie bei der Gruppe.
+  #renderFeatureSection(d: HTMLElement, ref: SubjectRef) {
+    const defs = this.#data.features ?? [];
+    const box = el("div", "margin-top:16px;padding-top:10px;border-top:1px solid var(--omp-border);");
+    box.appendChild(el("div", "font-weight:600;", t("perm.feat.title")));
+    box.appendChild(el("div", "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin:2px 0 6px;", t("perm.feat.hint")));
+    d.appendChild(box);
+    if (defs.length === 0) {
+      box.appendChild(el("div", "color:var(--omp-text-dim);padding:4px 0;", t("perm.feat.none")));
+      return;
+    }
+    const grants = this.#data.featureGrants ?? [];
+    const own = grantsOf(grants, ref.type, ref.id);
+    const groupGrants = ref.type === "user" ? this.#userGroups(ref.id).flatMap((g) => grantsOf(grants, "group", g.id).map((x) => ({ g, x }))) : [];
+    const lang = getLang();
+    const adminAll = ref.type === "user" && this.#data.users.find((u) => u.username === ref.id)?.isAdmin;
+    for (const sec of sectionsOf(defs, lang)) {
+      const head = el("div", "display:flex;gap:8px;align-items:center;margin-top:8px;");
+      head.appendChild(el("span", "flex:1;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--omp-text-dim);", sec.title));
+      const allOn = own.some((x) => x.feature === `${sec.module}.*`);
+      const allBtn = el("label", "font-size:11px;display:inline-flex;gap:4px;align-items:center;cursor:pointer;");
+      const allBox = el("input");
+      allBox.type = "checkbox";
+      allBox.checked = allOn;
+      allBox.disabled = this.#busy;
+      allBox.addEventListener("change", () => void this.#applyFeaturePlan(ref, planToggleModule(own, sec.module, allBox.checked)));
+      allBtn.append(allBox, t("perm.feat.all"));
+      head.appendChild(allBtn);
+      box.appendChild(head);
+      for (const f of sec.items) {
+        const cover = coveringGrant(own, f.id);
+        const viaGroup = groupGrants.find(({ x }) => coveringGrant([x], f.id));
+        const viaPattern = cover !== undefined && cover.feature !== f.id;
+        const row = el("label", "display:flex;gap:8px;align-items:flex-start;padding:3px 0;border-bottom:1px solid var(--omp-border);cursor:pointer;");
+        const cb = el("input", "margin-top:3px;");
+        cb.type = "checkbox";
+        cb.checked = cover !== undefined || viaGroup !== undefined || adminAll === true;
+        cb.disabled = this.#busy || viaPattern || (viaGroup !== undefined && cover === undefined) || adminAll === true;
+        cb.addEventListener("change", () => void this.#applyFeaturePlan(ref, planToggle(own, f.id, cb.checked)));
+        const text = el("div", "flex:1;min-width:0;");
+        text.appendChild(el("div", "", f.label[lang] || f.label.de || f.id));
+        const desc = f.description?.[lang] || f.description?.de || "";
+        const note = viaPattern ? t("perm.feat.viaAll") : viaGroup && cover === undefined ? t("perm.feat.viaGroup", { p0: viaGroup.g.name }) : adminAll ? t("perm.feat.viaAdmin") : "";
+        text.appendChild(el("div", "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);", [desc, note].filter(Boolean).join(" · ")));
+        row.append(cb, text);
+        box.appendChild(row);
+      }
+    }
+  }
+
+  #applyFeaturePlan(ref: SubjectRef, plan: TogglePlan): Promise<void> {
+    return this.#call(async () => {
+      if (plan.create) {
+        const res = await apiFetch("/api/v1/admin/feature-grants", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ subjectType: ref.type, subject: ref.id, feature: plan.create }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+      }
+      for (const id of plan.deleteIds) {
+        const res = await apiFetch(`/api/v1/admin/feature-grants/${encodeURIComponent(id)}`, { method: "DELETE" });
+        if (!res.ok && res.status !== 404) throw new Error(await res.text());
+      }
+    });
   }
 
   #renderResourceDetail(d: HTMLElement) {

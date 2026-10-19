@@ -1,6 +1,58 @@
 // Texte des Moduls „Eingang / Review“ (Kapitel 43) — gehören dem Modul, nicht dem Kern-Wörterbuch.
 // Deutsch und Englisch stehen je Schlüssel nebeneinander in der Tabelle unten und werden daraus abgeleitet.
 const TABLE: Record<string, [string, string]> = {
+  "rv.f.tasks": [
+    "Meine Aufgaben",
+    "My tasks"
+  ],
+  "rv.col.assigned": [
+    "Zugewiesen / Frist",
+    "Assigned / due"
+  ],
+  "rv.group": [
+    "Gruppe",
+    "group"
+  ],
+  "rv.assignedTo": [
+    "Zugewiesen: {p0}",
+    "Assigned to: {p0}"
+  ],
+  "rv.due": [
+    "Frist {p0}",
+    "due {p0}"
+  ],
+  "rv.act.assign": [
+    "Zuweisen …",
+    "Assign …"
+  ],
+  "rv.assign.title": [
+    "Prüfaufgabe zuweisen",
+    "Assign review task"
+  ],
+  "rv.assign.hint": [
+    "Wer die Datei prüfen soll. Eine Person, eine Gruppe oder beides; eine Gruppenaufgabe kann jedes Mitglied übernehmen. Alles leer hebt die Zuweisung auf.",
+    "Who should check the file. A person, a group or both; any member can take a group task. Leaving everything empty removes the assignment."
+  ],
+  "rv.assign.user": [
+    "Person",
+    "Person"
+  ],
+  "rv.assign.nobody": [
+    "— niemand —",
+    "— nobody —"
+  ],
+  "rv.assign.group": [
+    "Gruppe",
+    "Group"
+  ],
+  "rv.assign.nogroup": [
+    "— keine Gruppe —",
+    "— no group —"
+  ],
+  "rv.assign.due": [
+    "Frist",
+    "Due"
+  ],
   "rv.cfg.approval": [
     "Freigabe und Prüfung",
     "Approval and review"

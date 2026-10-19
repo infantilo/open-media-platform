@@ -123,3 +123,20 @@ Deno.test("Eingangs-Einstellungen: Prüfung", () => {
   const bad = { approvalMode: "x", defaultQcProfile: "z", qcProfiles: { a: { id: "a", name: "A", expect: { frameRate: "abc" } } }, metadataFields: [{ id: "t", type: "select", values: [] }, { id: "t", type: "text" }] };
   assertEquals(validateReviewConfig(bad).map((x) => x.key), ["rv.cfg.err.mode", "rv.cfg.err.default", "rv.cfg.err.rate", "rv.cfg.err.values", "rv.cfg.err.fieldid"]);
 });
+
+Deno.test("assignmentLabel / isOverdue / datetime-local", async () => {
+  const { assignmentLabel, isOverdue, isoToLocalInput, localInputToIso } = await import("./review-logic.ts");
+  assertEquals(assignmentLabel({ assignedTo: "anna", assignedGroup: "nacht" }, "Gruppe"), "anna · Gruppe nacht");
+  assertEquals(assignmentLabel({}, "Gruppe"), "");
+  assertEquals(isOverdue("2026-10-19T10:00:00Z", Date.parse("2026-10-19T11:00:00Z")), true);
+  assertEquals(isOverdue(undefined, 0), false);
+  assertEquals(localInputToIso(""), undefined);
+  assertEquals(localInputToIso("kaputt"), undefined);
+  const iso = localInputToIso("2026-10-19T13:30");
+  assertEquals(isoToLocalInput(iso), "2026-10-19T13:30");
+});
+
+Deno.test("assignmentLabel zeigt Gruppennamen statt IDs", async () => {
+  const { assignmentLabel } = await import("./review-logic.ts");
+  assertEquals(assignmentLabel({ assignedGroup: "g1" }, "Gruppe", () => "Nachtschicht"), "Gruppe Nachtschicht");
+});

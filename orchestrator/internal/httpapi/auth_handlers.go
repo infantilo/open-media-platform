@@ -289,6 +289,11 @@ func handleDeleteUser(authSvc AuthService, authzStore AuthzChecker, groupSvc Gro
 		if err := authzStore.DeleteBySubject(name); err != nil {
 			slog.Warn("auth: failed to clean up role bindings after user delete", "user", name, "error", err)
 		}
+		if fs, ok := authzStore.(featureStore); ok {
+			if err := fs.DeleteFeatureGrantsBySubject(authz.SubjectTypeUser, name); err != nil {
+				slog.Warn("auth: failed to clean up feature grants after user delete", "user", name, "error", err)
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

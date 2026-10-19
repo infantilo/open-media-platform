@@ -29,6 +29,9 @@ type Info struct {
 	State State   `json:"state"`
 	Error string  `json:"error,omitempty"`
 	UI    []UITab `json:"ui,omitempty"`
+	// Tiles: Kacheln der Operator-Konsole; Features: deklarierte Funktionsrechte (Kapitel 44).
+	Tiles    []UITile     `json:"tiles,omitempty"`
+	Features []FeatureDef `json:"features,omitempty"`
 }
 
 type entry struct {
@@ -169,6 +172,14 @@ func (r *Registry) Info() []Info {
 		if u, ok := e.m.(UIProvider); ok && e.state == StateMounted {
 			in.UI = u.UI()
 		}
+		if e.state == StateMounted {
+			if tp, ok := e.m.(TileProvider); ok {
+				in.Tiles = tp.Tiles()
+			}
+			if fp, ok := e.m.(FeatureProvider); ok {
+				in.Features = fp.Features()
+			}
+		}
 		out = append(out, in)
 	}
 	return out
@@ -259,4 +270,42 @@ func migrateModule(ctx context.Context, conn *sql.Conn, name string, ms []Migrat
 		}
 	}
 	return nil
+}
+
+// Features liefert den Katalog aller Funktionsrechte der gemounteten Module.
+func (r *Registry) Features() []FeatureDef {
+	var out []FeatureDef
+	for _, in := range r.Info() {
+		out = append(out, in.Features...)
+	}
+	return out
+}
+
+// Tasks sammelt die Aufgaben eines Nutzers aus allen gemounteten Modulen. Ein Modul, das scheitert, verdirbt nicht die
+// anderen: sein Fehler steht in `errs` (Modulname → Meldung).
+func (r *Registry) Tasks(ctx context.Context, who Identity) (tasks []Task, errs map[string]string) {
+	tasks = []Task{}
+	for _, in := range r.Info() {
+		if in.State != StateMounted {
+			continue
+		}
+		tp, ok := r.entry(in.Name).m.(TaskProvider)
+		if !ok {
+			continue
+		}
+		var got []Task
+		err := safely(func() (e error) { got, e = tp.Tasks(ctx, who); return })
+		if err != nil {
+			if errs == nil {
+				errs = map[string]string{}
+			}
+			errs[in.Name] = err.Error()
+			continue
+		}
+		for i := range got {
+			got[i].Module = in.Name
+		}
+		tasks = append(tasks, got...)
+	}
+	return tasks, errs
 }

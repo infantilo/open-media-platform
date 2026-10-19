@@ -4,8 +4,22 @@ import "github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 
 // Migrations: Tabellen des Review-Moduls (Version 1 = Kapitel 43). Nie nachträglich ändern — neue Version anhängen.
 func (*Module) Migrations() []module.Migration {
-	return []module.Migration{{Version: 1, Name: "review-qc-conform", SQL: schemaV1}}
+	return []module.Migration{
+		{Version: 1, Name: "review-qc-conform", SQL: schemaV1},
+		{Version: 2, Name: "review-assignment", SQL: schemaV2},
+	}
 }
+
+// schemaV2 (Kapitel 44): Zuweisung einer Prüfaufgabe an eine Person oder Gruppe, mit Frist. Unabhängig vom Bearbeiter (`assignee`):
+// der ist, wer die Datei gerade übernommen hat; die Zuweisung sagt, wer sie bearbeiten soll.
+const schemaV2 = `
+ALTER TABLE review_items ADD COLUMN IF NOT EXISTS assigned_to TEXT NOT NULL DEFAULT '';
+ALTER TABLE review_items ADD COLUMN IF NOT EXISTS assigned_group TEXT NOT NULL DEFAULT '';
+ALTER TABLE review_items ADD COLUMN IF NOT EXISTS due_at TIMESTAMPTZ;
+ALTER TABLE review_items ADD COLUMN IF NOT EXISTS assigned_by TEXT NOT NULL DEFAULT '';
+ALTER TABLE review_items ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS review_items_assigned_idx ON review_items (assigned_to, state);
+`
 
 const schemaV1 = `
 CREATE TABLE IF NOT EXISTS review_items (

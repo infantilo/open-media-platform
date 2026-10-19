@@ -5396,3 +5396,31 @@ Entwurf, Entscheidung (hybrid), Grenzen: **`docs/ENTWURF-INGEST.md`**; Bedienung
   und UI-Modul `ui/modules/ingest` (Tab „Aufnahmen“: Probleme vorhergesagt/aktuell/fehlgeschlagen, Zeitleiste, Kapazität je Ressource, Formular mit Live-Prüfung). Asset-Übergabe an den Eingang (Kap. 43) live bestätigt.
 - **Offen:** siehe ENTWURF-INGEST.md §8 (Remote-Host-Speicher, CPU/RAM-Messung, Cloud, Integration in den Scheduler-Tab, SSE).
 - **Messung:** Startabweichung 639 ms bei 45 s Vorlauf und 20 s Vorwärmzeit (echter `omp-recorder`); Neustart des Orchestrators mitten in einer Aufnahme verlor nichts.
+
+
+## Kapitel 44: Funktionsrechte, Verantwortliche und Arbeitsplatz für Aufnahmen und Eingang (Nutzerauftrag 2026-10-19)
+
+Auftrag: Rechteverwaltung für Aufnahmen und Eingang erweitern; ein Operator mit Recht, Aufnahmen/Zeitpläne anzulegen oder File-QC zu machen, sieht das auf seiner Startseite (Kacheln) samt
+Aufgabenliste (welche Dateien/Aufgaben ihm zugewiesen sind). Entschieden (Nutzer): Feature-Rechte statt gröberer Verben; Kacheln auf der Operator-Startseite neben der Workflow-Auswahl; Aufgaben =
+QC-Dateien (zugewiesen/übernommen) + Aufnahmen (Verantwortlicher) + Zuweisung an Gruppen + Fristen/Hinweis.
+
+- **Funktionsrechte (Kern):** Tabelle `feature_grants` (Migration 0042), Vergabe an Nutzer **oder Gruppe**; `authz.Store.HasFeature` (globales `configure` deckt alles; Muster `modul.*` / `*`),
+  `FeaturePatterns`, `GroupsOf`. Module deklarieren Rechte per `module.FeatureProvider` (Katalog `GET /api/v1/features`), Routen verlangen sie per `module.Feature("a", "b")` (eines genügt);
+  Gate `requireFeature` (401/403, Audit, Bootstrap-Modus offen). Verwaltung `GET/POST/DELETE /api/v1/admin/feature-grants` (Admin, Domänen-Audit), `GET /api/v1/me/features` (+ Gruppen),
+  `GET /api/v1/directory` (Nutzer/Gruppen zum Auswählen, nur mit mindestens einem Funktionsrecht). Aufräumen beim Löschen von Nutzer/Gruppe. `module.Deps.Access` gibt Modulen Rechte + Gruppen der Anfrage.
+- **Aufnahmen:** `ingest.view`, `.schedule.create`, `.schedule.edit`, `.adhoc.create`, `.job.control`, `.assign`, `.manage_all`. Migration v2: `owner`/`owner_group` an Zeitplan und Auftrag (Altdaten: Ersteller).
+  Bearbeiten/Steuern nur als Verantwortliche(r) (persönlich oder über Gruppe) oder mit `manage_all`; Verantwortliche festlegen nur mit `assign` (sich selbst darf jede(r)); ohne `view` nur eigene Zeitpläne,
+  Aufträge, Zeitleiste, Probleme (Hostauslastung bleibt). **Nebenbefund behoben:** eine Zeitplanänderung ohne geänderte Zeit brach künftige Aufträge dauerhaft ab (Idempotenzschlüssel) —
+  `refreshFutureJobs` aktualisiert bestehende Vorkommen jetzt an Ort und Stelle und lässt sie neu zu.
+- **Eingang:** `review.view`, `.qc.run`, `.work`, `.approve`, `.assign`, `.import`. Migration v2: `assigned_to`/`assigned_group`/`due_at`/`assigned_by`. `POST …/assign` (Person/Gruppe/Frist),
+  `ClaimAs` prüft die Zuweisung (Person: nur sie; Gruppe: Mitglieder; `assign` darf immer; Freigabe → Gruppenaufgabe fällt in den Pool zurück). Ohne `view` nur zugewiesene/eigene Dateien
+  (+ bei `approve` die eingereichten); Filter `assignee=mine`. Die bisherigen Verben (`operate`/`configure`) gelten für diese Routen **nicht mehr** — nur `configure` global deckt alles ab.
+- **Aufgaben:** `module.TaskProvider` je Modul, aggregiert in `GET /api/v1/me/tasks` (Zustand, Frist, überfällig, Problemcode, Zuständige, „übernehmbar“).
+- **Oberfläche:** Rechte-Editor (Admin → Rechte) mit Funktionsrechten je Modul (Schalter, Modul-weit, geerbt aus Gruppen); Arbeitsplatz-Startseite `omp-operator-home` (Workflows/Countdown, Werkzeug-Kacheln mit
+  Zahlen, Aufgabenliste, Klick öffnet per `focus-ref` direkt), Kachel-Ansicht `/?tile=<modul>:<kachel>`, Aufgaben-Badge im Benutzer-Widget; Ansichten „Aufnahmen“/„Eingang“ blenden Knöpfe nach Rechten aus,
+  Verantwortlich-Felder, Zuweisen-Dialog, Spalten/Filter „Meine“. Host-Schnittstelle der Modul-UIs um `features()`/`directory()` erweitert.
+- **Verifikation:** Go (`authz`, `httpapi`, `modules/ingest`, `modules/review`, Routen-Golden mit `feature:`-Pflicht), Deno (`kit/features`, `shell/feature-grants-logic`, `task-logic`, `modules-logic`, Review-Logik);
+  **live** gegen einen eigenen Orchestrator (Wegwerf-Postgres/NATS, Browser): Operator mit nur `review.work`+`review.qc.run` sieht nur die Kachel Eingang, die Gruppenaufgabe samt „überfällig“, Badge, öffnet sie per Klick direkt,
+  übernimmt sie; Operator mit Aufnahme-Rechten sieht Kachel „Aufnahmen“, eigene Aufnahme in der Liste, kein Verantwortlich-Feld; Fremde: 403 bei Anlegen/Ändern/Beenden/Abbrechen und leere Listen.
+- **Bewusst offen:** Ressourcen-Einschränkung der Rechte (nur bestimmte Quellen/Profile); Benachrichtigung außerhalb des Browsers (E-Mail/Push); Fristen für Aufnahmen sind der Start der Aufnahme (keine eigene Frist);
+  Operatoren ohne `view` sehen nicht zugewiesene Dateien nicht (Gruppenzuweisung ist der Weg zum „freien Pool“); eine Gruppenzuweisung nennt nur die Gruppen-ID (Anzeige löst den Namen auf).

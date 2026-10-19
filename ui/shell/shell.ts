@@ -29,6 +29,9 @@ import "./console-board.ts";
 import "./streamdeck/sim.ts";
 import type { ConsoleBoard } from "./console-board.ts";
 import { whoami, showLoginOverlay, buildUserWidget } from "./auth.ts";
+import { attachTaskBadge, loadWorkTiles, renderTileView } from "./operator-home.ts";
+import type { OperatorHome } from "./operator-home.ts";
+import type { WorkTile } from "./modules-logic.ts";
 import { installListenService } from "./listen.ts";
 import { createDeckToggle } from "./streamdeck/panel.ts";
 import { connectionMonitor } from "./connection.ts";
@@ -207,7 +210,14 @@ function watchConsoleEntries(
   window.setInterval(() => void refresh(), CONSOLE_POLL_FALLBACK_INTERVAL_MS);
 }
 
-async function renderShell(root: HTMLElement, username: string | null): Promise<string | undefined> {
+interface ShellContext {
+  homeHref?: string;
+  /** Arbeitsplatz-Modus (Kapitel 44): Home-Knopf heißt „Arbeitsplatz“, das Widget zeigt das Aufgaben-Badge. */
+  workstation: boolean;
+  tiles: WorkTile[];
+}
+
+async function renderShell(root: HTMLElement, username: string | null): Promise<ShellContext> {
   const kioskMatch = KIOSK_ROUTE.exec(location.pathname);
   const workflowMatch = kioskMatch ? null : WORKFLOW_CONSOLE_ROUTE.exec(location.pathname);
   const { hasEngineeringAccess, hasOperateBindings, consoles } = await fetchConsoles();
@@ -219,6 +229,12 @@ async function renderShell(root: HTMLElement, username: string | null): Promise<
   // <role>) wissen muss, ob ein Zurück-Ziel existiert.
   const workflowIds = [...new Set(consoles.map((c) => c.workflowId))];
   let homeHref: string | undefined;
+  // Kapitel 44: Arbeitsplatz-Kacheln (Aufnahmen, Eingang/QC …) für Personen ohne Engineering-Zugang, die dafür
+  // Funktionsrechte haben. Engineering-Nutzer haben dieselben Ansichten als Tabs in der App-Leiste.
+  const tiles: WorkTile[] = hasEngineeringAccess ? [] : await loadWorkTiles().catch(() => []);
+  const workstation = tiles.length > 0;
+  const tileId = new URLSearchParams(location.search).get("tile");
+  const activeTile = tileId ? tiles.find((x) => x.id === tileId) : undefined;
 
   if (kioskMatch) {
     const [, , nodeRoleId] = kioskMatch;
@@ -227,7 +243,16 @@ async function renderShell(root: HTMLElement, username: string | null): Promise<
     root.replaceChildren(view);
     await view.setEntries(selectEntries(consoles), nodeRoleId);
     watchConsoleEntries(view, selectEntries, nodeRoleId);
-    if (workflowIds.length > 1) homeHref = "/";
+    if (workflowIds.length > 1 || workstation) homeHref = "/";
+  } else if (workstation && !workflowMatch) {
+    if (activeTile) {
+      await renderTileView(root, activeTile, new URLSearchParams(location.search).get("ref"));
+    } else {
+      const home = document.createElement("omp-operator-home") as OperatorHome;
+      root.replaceChildren(home);
+      home.setup(consoles, tiles);
+    }
+    homeHref = activeTile ? "/" : undefined;
   } else if (hasEngineeringAccess || (!hasOperateBindings && consoles.length === 0)) {
     // Kein Rollenbindungs-Treffer überhaupt (typischerweise: noch keine
     // Rollenbindungen angelegt) fällt bewusst auf Engineering zurück —
@@ -265,7 +290,7 @@ async function renderShell(root: HTMLElement, username: string | null): Promise<
       root.replaceChildren(host);
       await host.setEntries(selectEntries(consoles));
       watchConsoleEntries(host, selectEntries);
-      if (workflowIds.length > 1) homeHref = "/";
+      if (workflowIds.length > 1 || workstation) homeHref = "/";
     } else if (workflowIds.length <= 1) {
       // Genau ein (oder gar kein) Workflow unter den zugewiesenen
       // Rollen — die Auswahl-Kachel wäre ein unnötiger Umweg zu genau
@@ -287,7 +312,8 @@ async function renderShell(root: HTMLElement, username: string | null): Promise<
   }
 
   if (username) {
-    const widget = buildUserWidget(username, homeHref);
+    const widget = buildUserWidget(username, homeHref, workstation);
+    attachTaskBadge(widget, tiles);
     // Die Engineering-Ansicht (omp-app-shell) hat den Stream-Deck-Knopf in der App-Leiste; reine
     // Operator-Ansichten haben keine App-Leiste, dort sitzt er im Benutzer-Widget.
     if (!root.querySelector("omp-app-shell")) {
@@ -301,7 +327,7 @@ async function renderShell(root: HTMLElement, username: string | null): Promise<
     }
     document.body.appendChild(widget);
   }
-  return homeHref;
+  return { homeHref, workstation, tiles };
 }
 
 // Bugfix 2026-07-27: eigener Leerzustand für einen reinen Operator mit
@@ -413,12 +439,16 @@ async function boot() {
 
   if (authRequired && !authenticated) {
     showLoginOverlay(root, () => {
-      renderShell(root, null).then((homeHref) => {
+      renderShell(root, null).then(({ homeHref, workstation, tiles }) => {
         // Nutzername erst nach dem Login bekannt — ein zweiter,
         // günstiger whoami()-Aufruf statt den Login-Response-Body
         // durchzureichen, hält showLoginOverlay von Shell-Kenntnis frei.
         whoami().then(({ username }) => {
-          if (username) document.body.appendChild(buildUserWidget(username, homeHref));
+          if (username) {
+            const widget = buildUserWidget(username, homeHref, workstation);
+            attachTaskBadge(widget, tiles);
+            document.body.appendChild(widget);
+          }
         });
       });
     });

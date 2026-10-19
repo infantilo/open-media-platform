@@ -303,3 +303,107 @@ func mustNewID(t *testing.T) string {
 	}
 	return id
 }
+
+func TestFeatureMatches(t *testing.T) {
+	for _, c := range []struct {
+		grant, want string
+		ok          bool
+	}{
+		{"ingest.schedule.create", "ingest.schedule.create", true},
+		{"ingest.*", "ingest.schedule.create", true},
+		{"ingest.*", "review.work", false},
+		{"ingest.*", "ingest", false},
+		{"*", "review.work", true},
+		{"ingest.schedule", "ingest.schedule.create", false},
+	} {
+		if got := FeatureMatches(c.grant, c.want); got != c.ok {
+			t.Errorf("FeatureMatches(%q,%q)=%v want %v", c.grant, c.want, got, c.ok)
+		}
+	}
+	for f, want := range map[string]bool{"ingest.schedule.create": true, "ingest.*": true, "*": true, "": false, "Ingest.x": false, "ingest.": false, "in*gest": false, "a b": false} {
+		if validFeatureName(f) != want {
+			t.Errorf("validFeatureName(%q) want %v", f, want)
+		}
+	}
+}
+
+func TestFeatureGrantsUserGroupAndConfigure(t *testing.T) {
+	database := testDB(t)
+	store := NewStore(database)
+	user := "feat-user-" + mustNewID(t)
+	other := "feat-other-" + mustNewID(t)
+	admin := "feat-admin-" + mustNewID(t)
+	group := "feat-group-" + mustNewID(t)
+	t.Cleanup(func() {
+		_, _ = database.Exec(`DELETE FROM feature_grants WHERE subject IN ($1,$2,$3,$4)`, user, other, admin, group)
+		_, _ = database.Exec(`DELETE FROM role_bindings WHERE subject = $1`, admin)
+		_, _ = database.Exec(`DELETE FROM group_members WHERE group_id = $1`, group)
+		_, _ = database.Exec(`DELETE FROM groups WHERE id = $1`, group)
+	})
+	if ok, err := store.HasFeature(user, "ingest.schedule.create"); err != nil || ok {
+		t.Fatalf("ohne Vergabe: %v %v", ok, err)
+	}
+	g1, err := store.CreateFeatureGrant("user", user, "ingest.schedule.create", "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g2, err := store.CreateFeatureGrant("user", user, "ingest.schedule.create", "root"); err != nil || g2.ID != g1.ID {
+		t.Fatalf("doppelte Vergabe muss idempotent sein: %v %+v", err, g2)
+	}
+	if _, err := store.CreateFeatureGrant("user", user, "In valid", "root"); err != ErrFeatureValidation {
+		t.Fatalf("ungültiger Name: %v", err)
+	}
+	if _, err := store.CreateFeatureGrant("team", user, "a.b", "root"); err != ErrFeatureValidation {
+		t.Fatalf("ungültiger Typ: %v", err)
+	}
+	if ok, _ := store.HasFeature(user, "ingest.schedule.create"); !ok {
+		t.Fatal("direkte Vergabe wirkt nicht")
+	}
+	if ok, _ := store.HasFeature(user, "ingest.job.control"); ok {
+		t.Fatal("Vergabe darf nicht auf andere Rechte durchschlagen")
+	}
+	if ok, _ := store.HasFeature(other, "ingest.schedule.create"); ok {
+		t.Fatal("Vergabe an einen anderen Nutzer")
+	}
+	// Gruppe
+	if _, err := database.Exec(`INSERT INTO groups (id, name, created_by) VALUES ($1,$1,'t')`, group); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateFeatureGrant("group", group, "review.*", "root"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := store.HasFeature(other, "review.work"); ok {
+		t.Fatal("Nicht-Mitglied")
+	}
+	if _, err := database.Exec(`INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'x')`, mustNewID(t), other); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM users WHERE username = $1`, other) })
+	if _, err := database.Exec(`INSERT INTO group_members (group_id, username) VALUES ($1,$2)`, group, other); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := store.HasFeature(other, "review.work"); !ok {
+		t.Fatal("Gruppenvergabe wirkt nicht")
+	}
+	// Globales configure deckt alles ab
+	if _, err := store.Create(admin, "", AnyNode, VerbConfigure); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := store.HasFeature(admin, "irgendein.recht"); !ok {
+		t.Fatal("configure muss alle Funktionsrechte abdecken")
+	}
+	pats, all, err := store.FeaturePatterns(admin)
+	if err != nil || !all || pats != nil {
+		t.Fatalf("FeaturePatterns admin: %v %v %v", pats, all, err)
+	}
+	// Widerruf
+	if err := store.DeleteFeatureGrant(g1.ID); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := store.HasFeature(user, "ingest.schedule.create"); ok {
+		t.Fatal("Widerruf wirkt nicht")
+	}
+	if err := store.DeleteFeatureGrant(g1.ID); err != ErrFeatureNotFound {
+		t.Fatalf("zweiter Widerruf: %v", err)
+	}
+}

@@ -34,22 +34,26 @@ func (s *memSettings) Put(k string, v []byte) error { s.m[k] = v; return nil }
 type hEnv struct {
 	*ienv
 	routes fakeRoutes
+	user   string // angemeldeter Nutzer der Testaufrufe (Standard „alice“)
+	m      *Module
 }
 
-func newHEnv(t *testing.T) *hEnv {
+func newHEnv(t *testing.T) *hEnv { return newHEnvWith(t, nil) }
+
+func newHEnvWith(t *testing.T, acc module.Access) *hEnv {
 	e := newIEnv(t, nil)
 	m := &Module{S: Services{Assets: e.svc.Assets, Runtime: e.rt}}
 	rts := fakeRoutes{}
 	set := &memSettings{m: map[string][]byte{}}
 	raw, _ := json.Marshal(*e.cfg)
 	set.m[settingsKey] = raw
-	if err := m.Mount(rts, module.Deps{DB: e.svc.St.db, Settings: set, Audit: nopAudit{}}); err != nil {
+	if err := m.Mount(rts, module.Deps{DB: e.svc.St.db, Settings: set, Audit: nopAudit{}, Access: acc}); err != nil {
 		t.Fatal(err)
 	}
 	// Dienst des Moduls mit der Testuhr/-laufzeit verdrahten
 	m.svc.Now, m.svc.Runtime = e.svc.Now, e.rt
 	m.svc.Hosts = e.svc.Hosts
-	return &hEnv{ienv: e, routes: rts}
+	return &hEnv{ienv: e, routes: rts, user: "alice", m: m}
 }
 
 func (h *hEnv) call(t *testing.T, method, path string, body any) *httptest.ResponseRecorder {
@@ -90,7 +94,7 @@ func (h *hEnv) call(t *testing.T, method, path string, body any) *httptest.Respo
 		for k, v := range vals {
 			req.SetPathValue(k, v)
 		}
-		req = req.WithContext(module.WithUser(context.Background(), "alice"))
+		req = req.WithContext(module.WithUser(context.Background(), h.user))
 		rec := httptest.NewRecorder()
 		rt.h(rec, req)
 		return rec
@@ -122,9 +126,23 @@ func TestRoutePermissionsAreStrict(t *testing.T) {
 	if rt := h.routes["PUT /api/v1/ingest/config"]; string(rt.auth.Verb) != "admin" {
 		t.Errorf("config: %+v", rt.auth)
 	}
-	for _, p := range []string{"POST /api/v1/ingest/schedules", "POST /api/v1/ingest/adhoc", "POST /api/v1/ingest/jobs/{id}/cancel"} {
-		if rt := h.routes[p]; string(rt.auth.Verb) != "operate" {
+	for p, feat := range map[string]string{"POST /api/v1/ingest/schedules": FeatScheduleCreate, "POST /api/v1/ingest/adhoc": FeatAdhoc,
+		"POST /api/v1/ingest/jobs/{id}/cancel": FeatJobControl, "PUT /api/v1/ingest/schedules/{id}": FeatScheduleEdit} {
+		if rt := h.routes[p]; rt.auth.Kind != module.AuthFeature || strings.Join(rt.auth.Features, "|") != feat {
 			t.Errorf("%s: %+v", p, rt.auth)
+		}
+	}
+	used := map[string]bool{}
+	for _, rt := range h.routes {
+		if rt.auth.Kind == module.AuthFeature {
+			for _, f := range rt.auth.Features {
+				used[f] = true
+			}
+		}
+	}
+	for _, f := range (*Module)(nil).Features() {
+		if f.ID != FeatView && f.ID != FeatAssign && f.ID != FeatManageAll && !used[f.ID] {
+			t.Errorf("Funktionsrecht %s wird von keiner Route verlangt", f.ID)
 		}
 	}
 }

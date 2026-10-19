@@ -42,13 +42,13 @@ func mj(v any) []byte {
 
 // ---- Zeitpläne ---------------------------------------------------------------------------------------------------
 
-const schedCols = `id, name, enabled, revision, source, spec, profile_id, storage, metadata, priority, retry, late, host_pref, created_by, created_at, updated_at, cancelled_at`
+const schedCols = `id, name, enabled, revision, source, spec, profile_id, storage, metadata, priority, retry, late, host_pref, created_by, created_at, updated_at, cancelled_at, owner, owner_group`
 
 func scanSchedule(r interface{ Scan(...any) error }) (Schedule, error) {
 	var s Schedule
 	var src, spec, stor, meta, retry, late []byte
 	var canc sql.NullTime
-	err := r.Scan(&s.ID, &s.Name, &s.Enabled, &s.Revision, &src, &spec, &s.ProfileID, &stor, &meta, &s.Priority, &retry, &late, &s.HostPref, &s.CreatedBy, &s.CreatedAt, &s.UpdatedAt, &canc)
+	err := r.Scan(&s.ID, &s.Name, &s.Enabled, &s.Revision, &src, &spec, &s.ProfileID, &stor, &meta, &s.Priority, &retry, &late, &s.HostPref, &s.CreatedBy, &s.CreatedAt, &s.UpdatedAt, &canc, &s.Owner, &s.OwnerGroup)
 	if err != nil {
 		return s, err
 	}
@@ -68,9 +68,9 @@ func scanSchedule(r interface{ Scan(...any) error }) (Schedule, error) {
 func (s *Store) CreateSchedule(ctx context.Context, sc Schedule) (Schedule, error) {
 	sc.ID = newID()
 	sc.Revision = 1
-	_, err := s.db.ExecContext(ctx, `INSERT INTO ingest_schedules (id, name, enabled, revision, source, spec, profile_id, storage, metadata, priority, retry, late, host_pref, created_by)
-		VALUES ($1,$2,$3,1,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-		sc.ID, sc.Name, sc.Enabled, mj(sc.Source), mj(sc.Spec), sc.ProfileID, mj(sc.Storage), mj(orEmpty(sc.Metadata)), sc.Priority, mj(sc.Retry), mj(sc.Late), sc.HostPref, sc.CreatedBy)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO ingest_schedules (id, name, enabled, revision, source, spec, profile_id, storage, metadata, priority, retry, late, host_pref, created_by, owner, owner_group)
+		VALUES ($1,$2,$3,1,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+		sc.ID, sc.Name, sc.Enabled, mj(sc.Source), mj(sc.Spec), sc.ProfileID, mj(sc.Storage), mj(orEmpty(sc.Metadata)), sc.Priority, mj(sc.Retry), mj(sc.Late), sc.HostPref, sc.CreatedBy, sc.Owner, sc.OwnerGroup)
 	if err != nil {
 		return sc, err
 	}
@@ -115,9 +115,9 @@ func (s *Store) ListSchedules(ctx context.Context, includeCancelled bool) ([]Sch
 
 // UpdateSchedule ersetzt die Felder (optimistisch über Revision).
 func (s *Store) UpdateSchedule(ctx context.Context, sc Schedule, expectedRev int) (Schedule, error) {
-	res, err := s.db.ExecContext(ctx, `UPDATE ingest_schedules SET name=$2, enabled=$3, source=$4, spec=$5, profile_id=$6, storage=$7, metadata=$8, priority=$9, retry=$10, late=$11, host_pref=$12,
+	res, err := s.db.ExecContext(ctx, `UPDATE ingest_schedules SET name=$2, enabled=$3, source=$4, spec=$5, profile_id=$6, storage=$7, metadata=$8, priority=$9, retry=$10, late=$11, host_pref=$12, owner=$14, owner_group=$15,
 		revision=revision+1, updated_at=now() WHERE id=$1 AND revision=$13 AND cancelled_at IS NULL`,
-		sc.ID, sc.Name, sc.Enabled, mj(sc.Source), mj(sc.Spec), sc.ProfileID, mj(sc.Storage), mj(orEmpty(sc.Metadata)), sc.Priority, mj(sc.Retry), mj(sc.Late), sc.HostPref, expectedRev)
+		sc.ID, sc.Name, sc.Enabled, mj(sc.Source), mj(sc.Spec), sc.ProfileID, mj(sc.Storage), mj(orEmpty(sc.Metadata)), sc.Priority, mj(sc.Retry), mj(sc.Late), sc.HostPref, expectedRev, sc.Owner, sc.OwnerGroup)
 	if err != nil {
 		return sc, err
 	}
@@ -144,7 +144,7 @@ func (s *Store) CancelSchedule(ctx context.Context, id string) error {
 // ---- Aufträge ----------------------------------------------------------------------------------------------------
 
 const jobCols = `id, schedule_id, idempotency_key, name, planned_start, planned_end, tz, shifted, ambiguous, state, state_since, attempt, max_attempts, priority, source, profile_id, host_pref, host_id, instance_id,
- file_rel, file_path, asset_id, actual_start, actual_end, start_deviation_ms, error, failed_stage, verdicts, earliest_start, storage, metadata, late, revision, created_by, created_at, updated_at`
+ file_rel, file_path, asset_id, actual_start, actual_end, start_deviation_ms, error, failed_stage, verdicts, earliest_start, storage, metadata, late, revision, created_by, created_at, updated_at, owner, owner_group`
 
 func scanJob(r interface{ Scan(...any) error }) (Job, error) {
 	var j Job
@@ -152,7 +152,7 @@ func scanJob(r interface{ Scan(...any) error }) (Job, error) {
 	var as, ae, es sql.NullTime
 	var dev sql.NullInt64
 	err := r.Scan(&j.ID, &j.ScheduleID, &j.Key, &j.Name, &j.PlannedStart, &j.PlannedEnd, &j.TZ, &j.Shifted, &j.Ambiguous, &j.State, &j.StateSince, &j.Attempt, &j.MaxAttempts, &j.Priority, &src, &j.ProfileID, &j.HostPref, &j.HostID, &j.InstanceID,
-		&j.FileRel, &j.FilePath, &j.AssetID, &as, &ae, &dev, &j.Error, &j.FailedStage, &verd, &es, &stor, &meta, &late, &j.Revision, &j.CreatedBy, &j.CreatedAt, &j.UpdatedAt)
+		&j.FileRel, &j.FilePath, &j.AssetID, &as, &ae, &dev, &j.Error, &j.FailedStage, &verd, &es, &stor, &meta, &late, &j.Revision, &j.CreatedBy, &j.CreatedAt, &j.UpdatedAt, &j.Owner, &j.OwnerGroup)
 	if err != nil {
 		return j, err
 	}
@@ -241,9 +241,9 @@ func (s *Store) ListJobs(ctx context.Context, f JobFilter) ([]Job, error) {
 func (s *Store) CreateJob(ctx context.Context, j Job) (Job, bool, error) {
 	j.ID = newID()
 	res, err := s.db.ExecContext(ctx, `INSERT INTO ingest_jobs (id, schedule_id, idempotency_key, occurrence_index, name, planned_start, planned_end, tz, shifted, ambiguous, state, max_attempts, priority, source, source_key, profile_id,
-		host_pref, storage, metadata, late, created_by) VALUES ($1,$2,$3,0,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) ON CONFLICT (idempotency_key) DO NOTHING`,
+		host_pref, storage, metadata, late, created_by, owner, owner_group) VALUES ($1,$2,$3,0,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) ON CONFLICT (idempotency_key) DO NOTHING`,
 		j.ID, j.ScheduleID, j.Key, j.Name, j.PlannedStart, j.PlannedEnd, j.TZ, j.Shifted, j.Ambiguous, StBlocked, j.MaxAttempts, j.Priority, mj(j.Source), j.Source.Key(), j.ProfileID,
-		j.HostPref, mj(j.Storage), mj(orEmpty(j.Metadata)), mj(j.Late), j.CreatedBy)
+		j.HostPref, mj(j.Storage), mj(orEmpty(j.Metadata)), mj(j.Late), j.CreatedBy, j.Owner, j.OwnerGroup)
 	if err != nil {
 		return j, false, err
 	}
@@ -343,9 +343,9 @@ func (s *Store) Mutate(ctx context.Context, id string, expectedRev int, msg stri
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE ingest_jobs SET name=$2, planned_start=$3, planned_end=$4, state=$5, state_since=$6, attempt=$7, max_attempts=$8, priority=$9, source=$10, source_key=$11, profile_id=$12,
 		host_pref=$13, host_id=$14, instance_id=$15, file_rel=$16, file_path=$17, asset_id=$18, actual_start=$19, actual_end=$20, start_deviation_ms=$21, error=$22, failed_stage=$23, verdicts=$24, earliest_start=$25,
-		storage=$26, metadata=$27, late=$28, revision=revision+1, updated_at=now() WHERE id=$1`,
+		storage=$26, metadata=$27, late=$28, owner=$29, owner_group=$30, shifted=$31, ambiguous=$32, tz=$33, revision=revision+1, updated_at=now() WHERE id=$1`,
 		j.ID, j.Name, j.PlannedStart, j.PlannedEnd, j.State, j.StateSince, j.Attempt, j.MaxAttempts, j.Priority, mj(j.Source), j.Source.Key(), j.ProfileID, j.HostPref, j.HostID, j.InstanceID, j.FileRel, j.FilePath, j.AssetID,
-		as, ae, dev, j.Error, j.FailedStage, verd, es, mj(j.Storage), mj(orEmpty(j.Metadata)), mj(j.Late)); err != nil {
+		as, ae, dev, j.Error, j.FailedStage, verd, es, mj(j.Storage), mj(orEmpty(j.Metadata)), mj(j.Late), j.Owner, j.OwnerGroup, j.Shifted, j.Ambiguous, j.TZ); err != nil {
 		return j, err
 	}
 	if msg != "" || j.State != before {

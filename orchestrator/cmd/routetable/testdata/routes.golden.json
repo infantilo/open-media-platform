@@ -36,6 +36,24 @@
     "domain": "core"
   },
   {
+    "method": "GET",
+    "path": "/api/v1/admin/feature-grants",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/feature-grants",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/feature-grants/{id}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
     "method": "POST",
     "path": "/api/v1/admin/hosts/bootstrap-tokens",
     "auth": "verb:Admin",
@@ -605,6 +623,12 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/directory",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/domain-audit-log",
     "auth": "verb:Admin",
     "when": "options.domainAuditR != nil",
@@ -613,6 +637,12 @@
   {
     "method": "GET",
     "path": "/api/v1/events",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/features",
     "auth": "auth",
     "domain": "core"
   },
@@ -759,7 +789,7 @@
   {
     "method": "POST",
     "path": "/api/v1/ingest/adhoc",
-    "auth": "verb:Operate",
+    "auth": "feature:ingest.adhoc.create",
     "domain": "core"
   },
   {
@@ -795,19 +825,19 @@
   {
     "method": "POST",
     "path": "/api/v1/ingest/jobs/{id}/cancel",
-    "auth": "verb:Operate",
+    "auth": "feature:ingest.job.control",
     "domain": "core"
   },
   {
     "method": "POST",
     "path": "/api/v1/ingest/jobs/{id}/readmit",
-    "auth": "verb:Operate",
+    "auth": "feature:ingest.job.control",
     "domain": "core"
   },
   {
     "method": "POST",
     "path": "/api/v1/ingest/jobs/{id}/reschedule",
-    "auth": "verb:Operate",
+    "auth": "feature:ingest.job.control",
     "domain": "core"
   },
   {
@@ -825,13 +855,13 @@
   {
     "method": "POST",
     "path": "/api/v1/ingest/schedules",
-    "auth": "verb:Operate",
+    "auth": "feature:ingest.schedule.create",
     "domain": "core"
   },
   {
     "method": "DELETE",
     "path": "/api/v1/ingest/schedules/{id}",
-    "auth": "verb:Operate",
+    "auth": "feature:ingest.schedule.edit",
     "domain": "core"
   },
   {
@@ -843,7 +873,7 @@
   {
     "method": "PUT",
     "path": "/api/v1/ingest/schedules/{id}",
-    "auth": "verb:Operate",
+    "auth": "feature:ingest.schedule.edit",
     "domain": "core"
   },
   {
@@ -927,6 +957,18 @@
   {
     "method": "GET",
     "path": "/api/v1/me/consoles",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/me/features",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/me/tasks",
     "auth": "auth",
     "domain": "core"
   },
@@ -1431,13 +1473,13 @@
   {
     "method": "POST",
     "path": "/api/v1/review/import",
-    "auth": "verb:Configure",
+    "auth": "feature:review.import",
     "domain": "core"
   },
   {
     "method": "GET",
     "path": "/api/v1/review/import/files",
-    "auth": "verb:Configure",
+    "auth": "feature:review.import",
     "domain": "core"
   },
   {
@@ -1455,19 +1497,25 @@
   {
     "method": "POST",
     "path": "/api/v1/review/items/{id}/approve",
-    "auth": "verb:Configure",
+    "auth": "feature:review.approve",
     "domain": "core"
   },
   {
     "method": "POST",
     "path": "/api/v1/review/items/{id}/archive",
-    "auth": "verb:Configure",
+    "auth": "feature:review.approve",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/review/items/{id}/assign",
+    "auth": "feature:review.assign",
     "domain": "core"
   },
   {
     "method": "POST",
     "path": "/api/v1/review/items/{id}/claim",
-    "auth": "verb:Operate",
+    "auth": "feature:review.work",
     "domain": "core"
   },
   {
@@ -1479,7 +1527,7 @@
   {
     "method": "PUT",
     "path": "/api/v1/review/items/{id}/conform",
-    "auth": "verb:Operate",
+    "auth": "feature:review.work",
     "domain": "core"
   },
   {
@@ -1491,7 +1539,7 @@
   {
     "method": "POST",
     "path": "/api/v1/review/items/{id}/force-release",
-    "auth": "verb:Configure",
+    "auth": "feature:review.assign",
     "domain": "core"
   },
   {
@@ -1509,13 +1557,13 @@
   {
     "method": "POST",
     "path": "/api/v1/review/items/{id}/proxy",
-    "auth": "verb:Operate",
+    "auth": "feature:review.work|review.qc.run",
     "domain": "core"
   },
   {
     "method": "POST",
     "path": "/api/v1/review/items/{id}/qc",
-    "auth": "verb:Operate",
+    "auth": "feature:review.qc.run",
     "domain": "core"
   },
   {
@@ -1533,31 +1581,31 @@
   {
     "method": "POST",
     "path": "/api/v1/review/items/{id}/reassign",
-    "auth": "verb:Configure",
+    "auth": "feature:review.assign",
     "domain": "core"
   },
   {
     "method": "POST",
     "path": "/api/v1/review/items/{id}/reject",
-    "auth": "verb:Configure",
+    "auth": "feature:review.approve",
     "domain": "core"
   },
   {
     "method": "POST",
     "path": "/api/v1/review/items/{id}/release",
-    "auth": "verb:Operate",
+    "auth": "feature:review.work",
     "domain": "core"
   },
   {
     "method": "POST",
     "path": "/api/v1/review/items/{id}/revise",
-    "auth": "verb:Operate",
+    "auth": "feature:review.work",
     "domain": "core"
   },
   {
     "method": "POST",
     "path": "/api/v1/review/items/{id}/submit",
-    "auth": "verb:Operate",
+    "auth": "feature:review.work",
     "domain": "core"
   },
   {
@@ -1569,13 +1617,13 @@
   {
     "method": "POST",
     "path": "/api/v1/review/items/{id}/unarchive",
-    "auth": "verb:Configure",
+    "auth": "feature:review.approve",
     "domain": "core"
   },
   {
     "method": "POST",
     "path": "/api/v1/review/items/{id}/withdraw",
-    "auth": "verb:Operate",
+    "auth": "feature:review.work",
     "domain": "core"
   },
   {
@@ -1605,7 +1653,7 @@
   {
     "method": "POST",
     "path": "/api/v1/review/register",
-    "auth": "verb:Configure",
+    "auth": "feature:review.import",
     "domain": "core"
   },
   {

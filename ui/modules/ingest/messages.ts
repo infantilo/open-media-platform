@@ -1,5 +1,37 @@
 // Texte des Moduls „Aufnahme“ (Kapitel 42). Deutsch und Englisch stehen je Schlüssel nebeneinander.
 const TABLE: Record<string, [string, string]> = {
+  "ing.col.owner": [
+    "Verantwortlich",
+    "Responsible"
+  ],
+  "ing.group": [
+    "Gruppe",
+    "group"
+  ],
+  "ing.f.mine": [
+    "Meine",
+    "Mine"
+  ],
+  "ing.f.owner": [
+    "Verantwortlich (Person)",
+    "Responsible (person)"
+  ],
+  "ing.f.owner.me": [
+    "— ich selbst —",
+    "— myself —"
+  ],
+  "ing.f.owner.hint": [
+    "Sieht die Aufnahme in seiner Aufgabenliste und darf sie steuern.",
+    "Sees the recording in their task list and may control it."
+  ],
+  "ing.f.ownerGroup": [
+    "Verantwortlich (Gruppe)",
+    "Responsible (group)"
+  ],
+  "ing.f.ownerGroup.none": [
+    "— keine Gruppe —",
+    "— no group —"
+  ],
   "ing.unit.min": [
     "min",
     "min"

@@ -481,6 +481,13 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Instanzen, s. instancemigrate.Service.MigrateInstance-Doku.
 	mux.HandleFunc("POST /api/v1/instances/{id}/migrate", g.requireVerbGlobal(authz.VerbAdmin, blockMaintenanceHost(options.maintenance, "targetHostId", handleMigrateInstance(instanceMigrateSvc))))
 	mux.HandleFunc("GET /api/v1/me/upcoming", g.requireAuth(handleMeUpcoming(workflowSvc, authzStore, time.Now)))
+	mux.HandleFunc("GET /api/v1/features", g.requireAuth(handleListFeatures(options.modules)))
+	mux.HandleFunc("GET /api/v1/me/features", g.requireAuth(handleMeFeatures(authzStore)))
+	mux.HandleFunc("GET /api/v1/directory", g.requireAuth(handleDirectory(authSvc, options.groups, authzStore)))
+	mux.HandleFunc("GET /api/v1/me/tasks", g.requireAuth(handleMeTasks(options.modules, authzStore)))
+	mux.HandleFunc("GET /api/v1/admin/feature-grants", g.requireVerbGlobal(authz.VerbAdmin, handleListFeatureGrants(authzStore)))
+	mux.HandleFunc("POST /api/v1/admin/feature-grants", g.requireVerbGlobal(authz.VerbAdmin, handleCreateFeatureGrant(authzStore, options.domainAudit)))
+	mux.HandleFunc("DELETE /api/v1/admin/feature-grants/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteFeatureGrant(authzStore, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/me/consoles", g.requireAuth(handleMeConsoles(nodes, consoleResolver)))
 
 	// Service-Token-Ausgabe für Control-Plane-Instanzen (ARCHITECTURE.md

@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { adminGroups, insertIndex, mainTabs, pickLabel, type ModuleInfo } from "./modules-logic.ts";
+import { adminGroups, insertIndex, mainTabs, pickLabel, type ModuleInfo, workTiles } from "./modules-logic.ts";
 
 const tab = (id: string, extra: Record<string, unknown> = {}) => ({ id, placement: "main", label: { de: "Cloud", en: "Cloud EN" }, element: "x-" + id, bundle: "/b.js", ...extra });
 
@@ -43,4 +43,17 @@ Deno.test("adminGroups: nach Gruppe zusammengefasst, Beschriftung vom ersten Tab
   assertEquals(g[0].id, "playout");
   assertEquals(g[0].label, "Playout EN");
   assertEquals(g[0].tabs.map((x) => x.id + "=" + x.label), ["mod:audio-rules:audio=Audio output", "mod:playout:channels=Playout"]);
+});
+
+Deno.test("workTiles: nur gemountete Module, nur Kacheln mit passendem Recht, Sprache mit Rückfall", () => {
+  const tile = { id: "recordings", label: { de: "Aufnahmen", en: "Recordings" }, needs: ["ingest.*"], element: "omp-ingest-view", bundle: "/dist/modules/ingest.js" };
+  const mods = [
+    { name: "ingest", state: "mounted" as const, tiles: [tile] },
+    { name: "off", state: "disabled" as const, tiles: [{ ...tile, id: "x" }] },
+    { name: "review", state: "mounted" as const, tiles: [{ ...tile, id: "intake", label: { de: "Eingang" }, needs: ["review.*"] }, { ...tile, id: "kaputt", element: "" }] },
+  ];
+  const onlyIngest = (needs: string[]) => needs.includes("ingest.*");
+  assertEquals(workTiles(mods, "en", onlyIngest).map((x) => [x.id, x.label]), [["ingest:recordings", "Recordings"]]);
+  assertEquals(workTiles(mods, "en", () => true).map((x) => [x.id, x.label]), [["ingest:recordings", "Recordings"], ["review:intake", "Eingang"]]);
+  assertEquals(workTiles(mods, "de", () => false), []);
 });

@@ -73,14 +73,20 @@ const (
 
 // Item ist ein Asset in der Arbeitsliste.
 type Item struct {
-	AssetID         string          `json:"assetId"`
-	SourceVersionID string          `json:"sourceVersionId"`
-	SourceRepID     string          `json:"sourceRepresentationId"`
-	FileName        string          `json:"fileName"`
-	Title           string          `json:"title,omitempty"`
-	SourceRev       string          `json:"sourceRev"`
-	State           string          `json:"state"`
-	Assignee        string          `json:"assignee,omitempty"`
+	AssetID         string `json:"assetId"`
+	SourceVersionID string `json:"sourceVersionId"`
+	SourceRepID     string `json:"sourceRepresentationId"`
+	FileName        string `json:"fileName"`
+	Title           string `json:"title,omitempty"`
+	SourceRev       string `json:"sourceRev"`
+	State           string `json:"state"`
+	Assignee        string `json:"assignee,omitempty"`
+	// Zuweisung (Kapitel 44): wer die Datei prüfen soll (Person und/oder Gruppe), bis wann, von wem eingetragen.
+	AssignedTo      string          `json:"assignedTo,omitempty"`
+	AssignedGroup   string          `json:"assignedGroup,omitempty"`
+	DueAt           *time.Time      `json:"dueAt,omitempty"`
+	AssignedBy      string          `json:"assignedBy,omitempty"`
+	AssignedAt      *time.Time      `json:"assignedAt,omitempty"`
 	ClaimedAt       *time.Time      `json:"claimedAt,omitempty"`
 	Revision        int64           `json:"revision"`
 	QCStatus        string          `json:"qcStatus,omitempty"`

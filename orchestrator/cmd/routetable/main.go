@@ -97,6 +97,13 @@ func moduleAuthOf(fset *token.FileSet, e ast.Expr) (string, bool) {
 	if len(call.Args) > 0 {
 		verb = strings.TrimPrefix(expr(fset, call.Args[0]), "authz.Verb")
 	}
+	if sel.Sel.Name == "Feature" {
+		var ids []string
+		for _, a := range call.Args {
+			ids = append(ids, strings.Trim(expr(fset, a), `"`))
+		}
+		return "feature:" + strings.Join(ids, "|"), true
+	}
 	switch sel.Sel.Name {
 	case "Anonymous":
 		return "none", true

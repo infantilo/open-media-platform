@@ -1,6 +1,7 @@
 // Formular „Zeitplan / Einzelaufnahme“ mit Live-Prüfung: Während der Eingabe läuft ein Trockenlauf der Zulassung (POST /plan) — Engpässe,
 // Quellkonflikte und der früheste mögliche Start sind sichtbar, **bevor** gespeichert wird.
 import { dateLocale, showToast, t as tt } from "../host.ts";
+import type { Directory } from "../../kit/features.ts";
 import { emptyForm, type FormProblem, type FormState, formToPayload, fmtDuration, fmtInZone, planPayload, validateForm, type Verdict, WEEKDAYS, zonedToUtc } from "./ingest-logic.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, css = "", text = ""): HTMLElementTagNameMap[K] {
@@ -20,6 +21,9 @@ export interface FormOptions {
   adhoc: boolean;
   call: Call;
   done: () => void;
+  /** Darf die Person Verantwortliche festlegen (Kapitel 44)? Sonst fehlt das Feld und der Server setzt/behält sie. */
+  canAssign?: boolean;
+  directory?: Directory | null;
 }
 
 const ZONES = ["Europe/Berlin", "Europe/Vienna", "Europe/Zurich", "Europe/London", "UTC", "America/New_York", "America/Los_Angeles", "Asia/Tokyo"];
@@ -221,6 +225,31 @@ export function openScheduleForm(o: FormOptions): void {
   grid.append(field(tt("ing.f.dir"), input("dir", "text", "nachrichten"), false, tt("ing.f.dir.hint")));
   grid.append(field(tt("ing.f.template"), input("template", "text", "{name}_{date}_{time}"), false, tt("ing.f.template.hint")));
   grid.append(field(tt("ing.f.desc"), input("description"), true));
+  // Verantwortliche (Kapitel 44): Person und/oder Gruppe; leer = bei Neuanlage der Ersteller, bei Änderung unverändert.
+  let owner: string = o.existing?.owner ?? "";
+  let ownerGroup: string = o.existing?.ownerGroup ?? "";
+  if (o.canAssign) {
+    const pick = (none: string, options: [string, string][], current: string, role: string, set: (v: string) => void): HTMLSelectElement => {
+      const s = el("select") as HTMLSelectElement;
+      s.dataset.field = role;
+      const list: [string, string][] = [["", none], ...options];
+      if (current && !options.some(([v]) => v === current)) list.push([current, current]);
+      for (const [v, l] of list) {
+        const op = el("option", "", l);
+        op.value = v;
+        s.append(op);
+      }
+      s.value = current;
+      s.addEventListener("change", () => set(s.value));
+      return s;
+    };
+    const users = (o.directory?.users ?? []).map((u) => [u.username, u.username] as [string, string]);
+    const groups = (o.directory?.groups ?? []).map((g) => [g.id, g.name] as [string, string]);
+    grid.append(
+      field(tt("ing.f.owner"), pick(tt("ing.f.owner.me"), users, owner, "owner", (v) => (owner = v)), false, tt("ing.f.owner.hint")),
+      field(tt("ing.f.ownerGroup"), pick(tt("ing.f.ownerGroup.none"), groups, ownerGroup, "ownerGroup", (v) => (ownerGroup = v))),
+    );
+  }
   m.append(grid, check, errBox);
 
   const row = el("div", "display:flex;gap:8px;justify-content:flex-end;margin-top:10px;");
@@ -238,10 +267,14 @@ export function openScheduleForm(o: FormOptions): void {
     }
     errBox.textContent = "";
     const payload = formToPayload(f) as Record<string, any>;
+    if (o.canAssign) {
+      payload.owner = owner;
+      payload.ownerGroup = ownerGroup;
+    }
     let r;
     if (o.adhoc) {
       const start = zonedToUtc(f.startLocal, f.tz);
-      r = await o.call("POST", "/adhoc", { name: payload.name, source: payload.source, start: start?.toISOString(), durationS: payload.spec.durationS, profileId: payload.profileId, priority: payload.priority, late: payload.late, retry: payload.retry, hostPref: payload.hostPref, storage: payload.storage, metadata: payload.metadata });
+      r = await o.call("POST", "/adhoc", { name: payload.name, source: payload.source, start: start?.toISOString(), durationS: payload.spec.durationS, profileId: payload.profileId, priority: payload.priority, late: payload.late, retry: payload.retry, hostPref: payload.hostPref, storage: payload.storage, metadata: payload.metadata, owner: payload.owner, ownerGroup: payload.ownerGroup });
     } else if (o.existing) {
       r = await o.call("PUT", `/schedules/${o.existing.id}`, { ...payload, expectedRevision: o.existing.revision });
     } else {

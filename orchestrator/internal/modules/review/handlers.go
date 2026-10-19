@@ -23,6 +23,7 @@ type api struct {
 	svc      *Service
 	m        *Module
 	settings module.NodeSettings
+	access   module.Access // Funktionsrechte/Gruppen (nil in Tests: alles erlaubt)
 }
 
 // actorOf: angemeldeter Nutzer; ohne eingerichtete Benutzerverwaltung (Bootstrap-Modus) „local“, damit Übernehmen/Speichern
@@ -92,9 +93,15 @@ func (a *api) listItems() http.HandlerFunc {
 			f.Assignee = actorOf(r)
 		case "free":
 			f.Free = true
+		case "mine": // alles, was mir (oder meiner Gruppe) zugewiesen ist oder was ich bearbeite
+			who := a.identity(r)
+			f.Scope = &Scope{User: who.User, Groups: who.Groups}
 		}
 		if n, err := strconv.Atoi(q.Get("limit")); err == nil {
 			f.Limit = n
+		}
+		if f.Scope == nil {
+			f.Scope = a.scopeFor(r)
 		}
 		items, err := a.svc.St.ListItems(r.Context(), f)
 		if err != nil {
@@ -115,6 +122,10 @@ func (a *api) getItem() http.HandlerFunc {
 		it, err := a.svc.St.GetItem(ctx, id)
 		if err != nil {
 			a.writeErr(w, err, nil)
+			return
+		}
+		if !a.visible(r, it) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "Die Datei ist Ihnen nicht zugewiesen (Recht „Alle Dateien sehen“ fehlt)"})
 			return
 		}
 		jobs, _ := a.svc.St.ListJobs(ctx, id, 1)
@@ -185,7 +196,13 @@ func (a *api) respondItem(w http.ResponseWriter, r *http.Request, it Item, err e
 
 func (a *api) claim() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		it, err := a.svc.Claim(r.Context(), r.PathValue("id"), actorOf(r))
+		var groups []string
+		override := true
+		if a.access != nil {
+			who := a.access.Identity(r)
+			groups, override = who.Groups, who.Has(FeatAssign)
+		}
+		it, err := a.svc.ClaimAs(r.Context(), r.PathValue("id"), actorOf(r), groups, override)
 		a.respondItem(w, r, it, err)
 	}
 }
@@ -208,6 +225,25 @@ func (a *api) reassign() http.HandlerFunc {
 			return
 		}
 		it, err := a.svc.Reassign(r.Context(), r.PathValue("id"), actorOf(r), b.To, b.ExpectedRevision)
+		a.respondItem(w, r, it, err)
+	}
+}
+
+type assignBody struct {
+	ExpectedRevision int64      `json:"expectedRevision"`
+	User             string     `json:"user"`
+	Group            string     `json:"group"`
+	DueAt            *time.Time `json:"dueAt"`
+}
+
+// assign: POST /items/{id}/assign — Prüfaufgabe einer Person/Gruppe zuweisen (leer = aufheben), mit Frist.
+func (a *api) assign() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var b assignBody
+		if !readBody(w, r, &b) {
+			return
+		}
+		it, err := a.svc.AssignTask(r.Context(), r.PathValue("id"), actorOf(r), b.User, b.Group, b.DueAt, b.ExpectedRevision)
 		a.respondItem(w, r, it, err)
 	}
 }

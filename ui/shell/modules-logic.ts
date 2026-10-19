@@ -11,11 +11,47 @@ export interface ModuleUITab {
   bundle: string;
 }
 
+/** Kachel des Arbeitsplatzes (Kapitel 44): erscheint, wenn die Person mindestens eines der Rechte in `needs` hat. */
+export interface ModuleUITile {
+  id: string;
+  label: Record<string, string>;
+  needs: string[];
+  element: string;
+  bundle: string;
+}
+
 export interface ModuleInfo {
   name: string;
   state: "registered" | "mounted" | "disabled" | "failed";
   error?: string;
   ui?: ModuleUITab[];
+  tiles?: ModuleUITile[];
+}
+
+/** Eine Kachel des Arbeitsplatzes, die einem Modul gehört. */
+export interface WorkTile {
+  /** `<modul>:<kachel>` — steht in der Adresse (`/?tile=…`). */
+  id: string;
+  module: string;
+  label: string;
+  element: string;
+  bundle: string;
+}
+
+/**
+ * Kacheln des Arbeitsplatzes aus dem Manifest: nur gemountete Module, nur Kacheln, für die die Person ein Recht hat
+ * (`has` entscheidet über die Muster in `needs`). Ungültige Einträge werden übersprungen.
+ */
+export function workTiles(modules: ModuleInfo[], lang: string, has: (needs: string[]) => boolean): WorkTile[] {
+  const out: WorkTile[] = [];
+  for (const m of modules) {
+    if (m.state !== "mounted") continue;
+    for (const x of m.tiles ?? []) {
+      if (!x.element || !x.bundle || !has(x.needs ?? [])) continue;
+      out.push({ id: `${m.name}:${x.id}`, module: m.name, label: pickLabel(x.label, lang, x.id), element: x.element, bundle: x.bundle });
+    }
+  }
+  return out;
 }
 
 /** Ein Tab der Hauptleiste, der aus einem Modul stammt. */

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/cluster"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
@@ -64,4 +66,44 @@ func (m moduleInstances) LocalLoad() (cpu, mem float64, ok bool) {
 		return 0, 0, false
 	}
 	return lh.CPUPercent, lh.MemPercent, true
+}
+
+// moduleAccess legt den Rechte-Speicher hinter die Zugriffs-Sicht der Modul-Schnittstelle (Kapitel 44).
+type moduleAccess struct{ s *authz.Store }
+
+func (a moduleAccess) identityOf(user string) module.Identity {
+	id := module.Identity{User: user, Has: func(string) bool { return false }}
+	groups, err := a.s.GroupsOf(user)
+	if err != nil {
+		slog.Warn("access: Gruppen nicht lesbar", "user", user, "error", err)
+	}
+	id.Groups = groups
+	patterns, all, err := a.s.FeaturePatterns(user)
+	if err != nil {
+		slog.Warn("access: Funktionsrechte nicht lesbar", "user", user, "error", err)
+	}
+	id.Has = func(f string) bool {
+		if all {
+			return true
+		}
+		for _, p := range patterns {
+			if authz.FeatureMatches(p, f) {
+				return true
+			}
+		}
+		return false
+	}
+	return id
+}
+
+func (a moduleAccess) Identity(r *http.Request) module.Identity {
+	user, ok := module.User(r)
+	if !ok || user == "" { // Bootstrap-Modus: kein Nutzer, alles erlaubt
+		return module.Identity{Has: func(string) bool { return true }}
+	}
+	return a.identityOf(user)
+}
+
+func (a moduleAccess) Can(r *http.Request, feature string) bool {
+	return a.Identity(r).Has(feature)
 }

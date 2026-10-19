@@ -838,8 +838,9 @@ danach übernimmt eine Person sie, prüft sie im Player, legt **Segmente** an, e
 Originaldatei wird dabei nie verändert.
 
 - **Liste:** Ansichten „Zu prüfen (frei)“, „Meine“, „QC wartet/läuft/fehlgeschlagen“, „In Bearbeitung“, „Zur Freigabe“, „Freigegeben“, „Archiviert“.
-  Doppelklick oder „Öffnen“ zeigt die Detailansicht. Mit dem Recht *Konfigurieren* gibt es **Datei importieren** (Dateien aus dem Importverzeichnis
-  der Einstellungen); neu eingehende Assets mit lokaler Datei erscheinen automatisch.
+  Doppelklick oder „Öffnen“ zeigt die Detailansicht. Mit dem Funktionsrecht *Dateien importieren* gibt es **Datei importieren** (Dateien aus dem Importverzeichnis
+  der Einstellungen); neu eingehende Assets mit lokaler Datei erscheinen automatisch. „Meine Aufgaben“ zeigt, was einem selbst oder der eigenen Gruppe zugewiesen ist.
+  Wer das Recht *Alle Dateien sehen* nicht hat, sieht in der Liste nur Dateien, die ihm oder seiner Gruppe zugewiesen sind oder die er bearbeitet (bei *Freigeben und ablehnen* zusätzlich die zur Freigabe eingereichten).
 - **QC-Bericht:** Gesamtstatus (Bestanden / Warnungen / Fehler / **Unvollständig**), Zähler, Regelsatz, Werkzeugversionen. Befunde lassen sich nach
   Kategorie, Ergebnis, Schwere und Text filtern und aufklappen (Messwert gegen Grenzwert, Werkzeug, Zeitpunkt). „▶ Timecode“ springt im Player an die Stelle.
   „QC wiederholen“ (optional mit anderem Profil) erzeugt einen neuen Bericht — die früheren bleiben im Auswahlfeld „Berichte“. Export als JSON (vollständig) oder CSV.
@@ -847,8 +848,9 @@ Originaldatei wird dabei nie verändert.
 - **Wichtig zu verstehen:** „**QC nicht ausführbar**“ (rot, mit Grund) heißt, dass die Analyse nicht laufen konnte — es gibt dann *kein* Urteil über die Datei.
   Ein Befund „Fehler“ dagegen heißt, dass die Analyse lief und ein Problem in der Datei fand. Die Analyse ist eine Probe plus Inhaltsprüfung mit ffmpeg/ffprobe,
   **keine** Strukturvalidierung nach MXF-Standards.
-- **Übernehmen:** schließt gleichzeitige Bearbeitung aus (wer zuerst kommt). „Zurückgeben“ gibt frei (der Entwurf bleibt), mit dem Recht *Konfigurieren* auch
-  „Neu zuweisen“ und „Zwangsfreigabe“. Ist die QC noch nicht fertig, kann je nach Einstellung nicht übernommen werden.
+- **Übernehmen:** schließt gleichzeitige Bearbeitung aus (wer zuerst kommt). „Zurückgeben“ gibt frei (der Entwurf bleibt), mit dem Recht *Aufgaben zuweisen* auch
+  „Zuweisen …“ (Person und/oder Gruppe, mit **Frist**), „Neu zuweisen“ und „Zwangsfreigabe“. Eine einer Person zugewiesene Datei übernimmt nur diese Person, eine einer Gruppe
+  zugewiesene jedes Mitglied (nach „Zurückgeben“ liegt sie wieder im Pool der Gruppe); *Aufgaben zuweisen* darf immer übernehmen. Ist die QC noch nicht fertig, kann je nach Einstellung nicht übernommen werden.
 - **Review & Conform:** Links der Player mit dem **Review-Proxy** (Kennzeichnung „PROXY“ — nicht die Originaldatei; Bild n des Proxys ist Bild n der Datei).
   Bedienung: ←/→ ein Bild (Umschalt ±10, Strg ±1 s), Leertaste Wiedergabe/Pause, **Stopp** = anhalten und zum Startpunkt zurück, **Jog** (Ziehen oder Mausrad:
   Einzelbilder) und **Shuttle** (Regler oder J/K/L: −8× … +8×; rückwärts über Einzelbild-Sprünge, nicht jedes Bild wird gezeigt), Timecode-Feld (Taste G),
@@ -857,7 +859,7 @@ Originaldatei wird dabei nie verändert.
   Rechts: **Nutzbarer Bereich**, **Segmente** (Name, In, Out exklusiv, Reihenfolge, Beschreibung; „▶“ spielt den Bereich), danach die **Metadaten** (Pflichtfelder mit *;
   Felder und Auswahllisten stellt der Administrator ein). Überlappungen/Lücken meldet die Oberfläche sofort, wenn die Einstellungen sie verbieten.
 - **Speichern/Einreichen:** „Entwurf speichern“ sichert den Stand jederzeit (auch unvollständig). „Einreichen“ prüft vollständig (Pflichtfelder, mindestens ein Segment).
-  Je nach Freigabemodus (Einstellung: keiner / eine Person / Vier-Augen) entscheidet danach jemand mit dem Recht *Konfigurieren* mit **Freigeben** oder **Ablehnen** (Begründung Pflicht).
+  Je nach Freigabemodus (Einstellung: keiner / eine Person / Vier-Augen) entscheidet danach jemand mit dem Recht *Freigeben und ablehnen* mit **Freigeben** oder **Ablehnen** (Begründung Pflicht).
   Erst mit der Freigabe gehen die redaktionellen Metadaten ins Asset. Abgelehnte oder freigegebene Assets lassen sich mit „Neue Revision“ erneut bearbeiten.
 - **Änderungen anderer:** Hat jemand anderes zwischenzeitlich gespeichert oder ist die Quelldatei neu, erscheint ein Hinweis: „Aktuellen Stand laden“ oder
   „trotzdem speichern“ (überschreibt ausdrücklich). Ungespeicherte Änderungen werden beim Verlassen nachgefragt.
@@ -873,6 +875,9 @@ Der Tab **Aufnahmen** plant Aufnahmen von Live-Quellen (MXL-Sender): einmalig od
 - **＋ Zeitplan / ＋ Einzelaufnahme:** Name, Quelle (Node mit Sendern), Aufnahmeprofil, **Zeitzone** und Beginn als Ortszeit, Dauer (h:mm), Wiederholung (täglich/wöchentlich mit Wochentagen/monatlich, bis/Anzahl),
   Priorität 0–9, „Wenn die Quelle fehlt“ (warten / begrenzt warten / sofort fehlschlagen — die Aufnahme endet immer zur geplanten Zeit), Versuche bei Abbruch, bevorzugter Host, Zielordner und Dateiname.
   Unter dem Formular zeigt die **Live-Prüfung** bei jeder Eingabe, ob die Aufnahme zugelassen würde — samt Gründen und frühestem möglichem Start, ohne etwas zu speichern.
+- **Verantwortliche:** Jeder Zeitplan und jede Einzelaufnahme hat eine verantwortliche Person und/oder Gruppe (Standard: wer sie anlegt; ändern darf nur, wer das Recht *Verantwortliche
+  festlegen* hat). Aufträge erben sie. Verantwortliche sehen die Aufnahme in ihrer Aufgabenliste und dürfen sie bearbeiten bzw. steuern; Fremde nur mit *Fremde Aufnahmen bearbeiten*.
+  Wer *Alle Aufnahmen sehen* nicht hat, sieht in Listen, Zeitleiste und Problemen nur die eigenen (die Auslastung der Hosts bleibt sichtbar). Filter „Meine“ in der Auftragsliste.
 - **Probleme** (oben): *VORHERGESAGT* = ein Engpass, der noch nicht eingetreten ist (mit Ursache, Zeitraum, beteiligten Aufträgen und empfohlener Maßnahme); *AKTUELL* = wartet gerade auf Quelle/Host;
   *FEHLGESCHLAGEN* = tatsächlich gescheitert (Stufe und Grund; „Aufnahme gesichert“, wenn eine Datei erhalten blieb). Gründe: Quellenkonflikt, harter Ressourcenmangel, vorübergehend belegt, Funktion fehlt,
   Speicher/Durchsatz reicht nicht, Kapazitätswarnung, unsichere Schätzung.
@@ -923,7 +928,10 @@ untereinander):
   im Suchfeld wählen, Recht (`Ansehen` < `Bedienen` < `Konfigurieren` <
   `Administrieren`) einstellen, „Hinzufügen". Pro Nutzer/Gruppe und
   Bereich gibt es genau ein Recht; Ändern, Hinzufügen und Entfernen
-  wirken sofort. Ein Prozess-Recht erlaubt Start, Abbruch, Pause und
+  wirken sofort. Darunter stehen die **Funktionsrechte**: je Modul einzelne Funktionen
+  (z. B. *Zeitpläne anlegen*, *QC durchführen*, *Freigeben und ablehnen*) als Schalter für Nutzer **und** Gruppen; „Alle Rechte des Moduls“ vergibt sie gebündelt,
+  über Gruppen geerbte stehen ausgegraut. Wer global *Konfigurieren* hat, darf alle Funktionen ohnehin. Ohne Vergabe darf ein Operator
+  weder Aufnahmen anlegen noch Dateien prüfen — auch nicht mit dem Recht *Bedienen*. Ein Prozess-Recht erlaubt Start, Abbruch, Pause und
   Veröffentlichung nur dieses einen Prozesses (bzw. dessen Bearbeiten
   mit `Konfigurieren`), ohne globale Rechte. Die kryptischen
   Nutzernamen in den Service-Token-Bindungen legt der Orchestrator
@@ -1092,6 +1100,13 @@ Kachel-Liste den gewünschten Workflow — jede Kachel nennt den
 Workflow-Namen und die Anzahl der darin zugewiesenen Rollen:
 
 ![Workflow wählen: zwei zugewiesene Workflows als Kacheln](screenshots/regieplatz-auswahl.png)
+
+**Arbeitsplatz:** Hat ein Operator (ohne Konfigurationsrecht) Funktionsrechte der Module *Aufnahmen* oder *Eingang*, ist seine Startseite der **Arbeitsplatz**: oben die
+Workflows zum Wechseln bzw. der Countdown bis zum nächsten Start, darunter die **Werkzeuge** (Kacheln „Aufnahmen“ und „Eingang (File-QC)“ — jede nur mit passendem Recht;
+je Kachel die Zahl offener Aufgaben und Probleme) und die **Aufgabenliste**: zugewiesene QC-Dateien, eigene und Gruppen-Aufgaben („übernehmbar“) sowie die eigenen Aufnahmen mit
+Stand, Zuständigen und Frist; Überfälliges und Fehlgeschlagenes steht oben in Rot. Ein Klick auf eine Aufgabe öffnet die Datei bzw. Aufnahme direkt. Im Benutzer-Widget unten rechts
+zeigt ein rotes „⚠ n Aufgaben“, solange etwas Aufmerksamkeit braucht — in jeder Ansicht, auch in der Konsole; „🏠 Arbeitsplatz“ führt zurück. Auch ein Operator
+ohne jeden Workflow (nur mit solchen Rechten) landet hier statt im Flow Editor.
 
 Sobald einem Operator **mehr als eine** Rolle in einem Workflow zusteht,
 zeigt die Konsole alle zugewiesenen Node-Oberflächen gleichzeitig als

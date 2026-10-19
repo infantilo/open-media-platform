@@ -19,6 +19,7 @@ type api struct {
 	m        *Module
 	settings module.NodeSettings
 	nodes    NodeLister
+	access   module.Access // Funktionsrechte/Gruppen (nil in Tests: alles erlaubt)
 }
 
 func actorOf(r *http.Request) string {
@@ -73,6 +74,9 @@ func (a *api) listSchedules() http.HandlerFunc {
 			a.writeErr(w, err)
 			return
 		}
+		if !a.canSeeAll(r) || r.URL.Query().Get("mine") == "1" {
+			s = a.ownSchedules(r, s)
+		}
 		if s == nil {
 			s = []Schedule{}
 		}
@@ -84,6 +88,10 @@ func (a *api) createSchedule() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in ScheduleInput
 		if !readBody(w, r, &in) {
+			return
+		}
+		if !a.mayAssign(r, in.Owner, in.OwnerGroup) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "Verantwortliche festlegen darf nur, wer das Recht „Verantwortliche festlegen“ hat"})
 			return
 		}
 		sc, err := a.svc.CreateSchedule(r.Context(), in, actorOf(r))
@@ -103,6 +111,10 @@ func (a *api) getSchedule() http.HandlerFunc {
 			a.writeErr(w, err)
 			return
 		}
+		if !a.canSeeAll(r) && !a.mayAct(r, sc.Owner, sc.OwnerGroup) {
+			a.forbidOthers(w)
+			return
+		}
 		jobs, _ := a.svc.St.ListJobs(r.Context(), JobFilter{ScheduleID: sc.ID, Limit: 100})
 		writeJSON(w, 200, map[string]any{"schedule": sc, "jobs": jobs})
 	}
@@ -119,6 +131,14 @@ func (a *api) updateSchedule() http.HandlerFunc {
 		if !readBody(w, r, &in) {
 			return
 		}
+		if !a.checkSchedule(w, r, r.PathValue("id")) {
+			return
+		}
+		if old, e := a.svc.St.GetSchedule(r.Context(), r.PathValue("id")); e == nil && (in.Owner != old.Owner || in.OwnerGroup != old.OwnerGroup) &&
+			(in.Owner != "" || in.OwnerGroup != "") && !a.mayAssign(r, in.Owner, in.OwnerGroup) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "Verantwortliche ändern darf nur, wer das Recht „Verantwortliche festlegen“ hat"})
+			return
+		}
 		sc, err := a.svc.UpdateSchedule(r.Context(), r.PathValue("id"), in.ScheduleInput, in.ExpectedRevision, actorOf(r))
 		if err != nil {
 			a.writeErr(w, err)
@@ -130,6 +150,9 @@ func (a *api) updateSchedule() http.HandlerFunc {
 
 func (a *api) deleteSchedule() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !a.checkSchedule(w, r, r.PathValue("id")) {
+			return
+		}
 		abort := r.URL.Query().Get("abort") == "1"
 		if err := a.svc.CancelSchedule(r.Context(), r.PathValue("id"), actorOf(r), abort); err != nil {
 			a.writeErr(w, err)
@@ -180,6 +203,9 @@ func (a *api) listJobs() http.HandlerFunc {
 			a.writeErr(w, err)
 			return
 		}
+		if !a.canSeeAll(r) || q.Get("mine") == "1" {
+			jobs = a.ownJobs(r, jobs)
+		}
 		if jobs == nil {
 			jobs = []Job{}
 		}
@@ -192,6 +218,10 @@ func (a *api) getJob() http.HandlerFunc {
 		j, err := a.svc.St.GetJob(r.Context(), r.PathValue("id"))
 		if err != nil {
 			a.writeErr(w, err)
+			return
+		}
+		if !a.canSeeAll(r) && !a.mayAct(r, j.Owner, j.OwnerGroup) {
+			a.forbidOthers(w)
 			return
 		}
 		ev, _ := a.svc.St.Events(r.Context(), j.ID)
@@ -222,6 +252,9 @@ func (a *api) cancelJob() http.HandlerFunc {
 		if !readBody(w, r, &in) {
 			return
 		}
+		if !a.checkJob(w, r, r.PathValue("id")) {
+			return
+		}
 		j, err := a.svc.CancelJob(r.Context(), r.PathValue("id"), actorOf(r), in.Abort, in.rev())
 		if err != nil {
 			a.writeErr(w, err)
@@ -241,6 +274,9 @@ func (a *api) rescheduleJob() http.HandlerFunc {
 			a.writeErr(w, &ValidationError{Problems: []string{"Startzeit fehlt"}})
 			return
 		}
+		if !a.checkJob(w, r, r.PathValue("id")) {
+			return
+		}
 		d, j, err := a.svc.RescheduleJob(r.Context(), r.PathValue("id"), actorOf(r), *in.Start, in.DurationS, in.rev())
 		if err != nil {
 			a.writeErr(w, err)
@@ -252,6 +288,9 @@ func (a *api) rescheduleJob() http.HandlerFunc {
 
 func (a *api) readmit() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !a.checkJob(w, r, r.PathValue("id")) {
+			return
+		}
 		d, j, err := a.svc.Admit(r.Context(), r.PathValue("id"))
 		if err != nil {
 			a.writeErr(w, err)
@@ -265,6 +304,10 @@ func (a *api) adhoc() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in AdHocInput
 		if !readBody(w, r, &in) {
+			return
+		}
+		if !a.mayAssign(r, in.Owner, in.OwnerGroup) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "Verantwortliche festlegen darf nur, wer das Recht „Verantwortliche festlegen“ hat"})
 			return
 		}
 		j, d, err := a.svc.CreateAdHoc(r.Context(), in, actorOf(r))
@@ -366,6 +409,9 @@ func (a *api) capacity() http.HandlerFunc {
 			hv = append(hv, v)
 		}
 		jobs, _ := a.svc.St.ListJobs(ctx, JobFilter{States: []string{StBlocked, StScheduled, StWaiting, StStarting, StRecording, StFinalizing, StProcessing}, From: &from, To: &to, Limit: 500})
+		if !a.canSeeAll(r) { // ohne „alle sehen“: nur die eigenen Aufträge (die Auslastung der Hosts bleibt sichtbar)
+			jobs = a.ownJobs(r, jobs)
+		}
 		if jobs == nil {
 			jobs = []Job{}
 		}

@@ -73,19 +73,29 @@ func newID() string { return tracing.NewID() }
 
 const itemCols = `i.asset_id, i.source_version_id, i.source_rep_id, i.file_name, COALESCE(a.title,''), i.source_rev, i.size_bytes, i.format,
  i.ingest_job, i.state, i.assignee, i.claimed_at, i.revision, i.qc_status, i.qc_fail_count, i.qc_warn_count, i.qc_report_id, i.timeline,
- i.approval_mode, COALESCE((SELECT MAX(revision) FROM conform_revisions c WHERE c.asset_id=i.asset_id AND c.state <> 'draft'),0), i.created_at, i.updated_at`
+ i.approval_mode, COALESCE((SELECT MAX(revision) FROM conform_revisions c WHERE c.asset_id=i.asset_id AND c.state <> 'draft'),0), i.created_at, i.updated_at,
+ i.assigned_to, i.assigned_group, i.due_at, i.assigned_by, i.assigned_at`
 
 const itemFrom = ` FROM review_items i LEFT JOIN assets a ON a.id = i.asset_id`
 
 func scanItem(r interface{ Scan(...any) error }) (Item, error) {
 	var it Item
-	var claimed sql.NullTime
+	var claimed, due, assignedAt sql.NullTime
 	var tl []byte
 	err := r.Scan(&it.AssetID, &it.SourceVersionID, &it.SourceRepID, &it.FileName, &it.Title, &it.SourceRev, &it.SizeBytes, &it.Format,
 		&it.IngestJob, &it.State, &it.Assignee, &claimed, &it.Revision, &it.QCStatus, &it.QCFail, &it.QCWarn, &it.QCReportID, &tl,
-		&it.ApprovalMode, &it.ConformRevision, &it.CreatedAt, &it.UpdatedAt)
+		&it.ApprovalMode, &it.ConformRevision, &it.CreatedAt, &it.UpdatedAt,
+		&it.AssignedTo, &it.AssignedGroup, &due, &it.AssignedBy, &assignedAt)
 	if err != nil {
 		return it, err
+	}
+	if due.Valid {
+		t := due.Time
+		it.DueAt = &t
+	}
+	if assignedAt.Valid {
+		t := assignedAt.Time
+		it.AssignedAt = &t
 	}
 	if claimed.Valid {
 		t := claimed.Time
@@ -116,6 +126,16 @@ type ListFilter struct {
 	Free     bool   // nur nicht zugewiesene
 	Query    string
 	Limit    int
+	// Scope beschränkt die Liste auf das, was die Person sehen darf (nil = alles).
+	Scope *Scope
+}
+
+// Scope: Sicht einer Person ohne das Recht „review.view“ — eigene Bearbeitung, eigene oder Gruppen-Zuweisung, bei Freigabe-Recht die
+// zur Freigabe eingereichten Dateien.
+type Scope struct {
+	User     string
+	Groups   []string
+	Approver bool
 }
 
 func (s *Store) ListItems(ctx context.Context, f ListFilter) ([]Item, error) {
@@ -133,6 +153,15 @@ func (s *Store) ListItems(ctx context.Context, f ListFilter) ([]Item, error) {
 	}
 	if f.Free {
 		where = append(where, "i.assignee = ''")
+	}
+	if sc := f.Scope; sc != nil {
+		args = append(args, sc.User, pgArray(sc.Groups))
+		n := len(args)
+		cond := fmt.Sprintf("i.assignee = $%d OR i.assigned_to = $%d OR (i.assigned_group <> '' AND i.assigned_group = ANY($%d::text[]))", n-1, n-1, n)
+		if sc.Approver {
+			cond += " OR i.state = 'ready_for_approval'"
+		}
+		where = append(where, "("+cond+")")
 	}
 	if q := strings.TrimSpace(f.Query); q != "" {
 		args = append(args, "%"+q+"%", q)
@@ -280,8 +309,10 @@ func (s *Store) withItem(ctx context.Context, assetID string, expectedRev int64,
 		claimed = *it.ClaimedAt
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE review_items SET state=$2, assignee=$3, claimed_at=$4, revision=revision+1, qc_status=$5, qc_fail_count=$6, qc_warn_count=$7,
-		qc_report_id=$8, timeline=$9, source_rev=$10, size_bytes=$11, source_version_id=$12, source_rep_id=$13, file_name=$14, format=$15, approval_mode=$16, updated_at=now() WHERE asset_id=$1`,
-		it.AssetID, it.State, it.Assignee, claimed, it.QCStatus, it.QCFail, it.QCWarn, it.QCReportID, tl, it.SourceRev, it.SizeBytes, it.SourceVersionID, it.SourceRepID, it.FileName, it.Format, it.ApprovalMode); err != nil {
+		qc_report_id=$8, timeline=$9, source_rev=$10, size_bytes=$11, source_version_id=$12, source_rep_id=$13, file_name=$14, format=$15, approval_mode=$16,
+		assigned_to=$17, assigned_group=$18, due_at=$19, assigned_by=$20, assigned_at=$21, updated_at=now() WHERE asset_id=$1`,
+		it.AssetID, it.State, it.Assignee, claimed, it.QCStatus, it.QCFail, it.QCWarn, it.QCReportID, tl, it.SourceRev, it.SizeBytes, it.SourceVersionID, it.SourceRepID, it.FileName, it.Format, it.ApprovalMode,
+		it.AssignedTo, it.AssignedGroup, it.DueAt, it.AssignedBy, it.AssignedAt); err != nil {
 		return it, err
 	}
 	if action != "" {

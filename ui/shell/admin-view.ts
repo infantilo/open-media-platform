@@ -21,6 +21,7 @@
 import { type I18nKey, t, t as tt } from "./i18n.ts";
 import "./settings-view.ts";
 import { PermissionsEditor } from "./permissions-editor.ts";
+import type { FeatureDef, FeatureGrant } from "./feature-grants-logic.ts";
 import { AuditPanel } from "./audit-panel.ts";
 import { DiagnosePanel } from "./diagnose-panel.ts";
 import { ensureBundle, getModules } from "./modules-registry.ts";
@@ -312,6 +313,9 @@ class AdminView extends HTMLElement {
   #activeAdminTab: AdminTabId = "users";
   #users: UserEntry[] = [];
   #bindings: RoleBinding[] = [];
+  // Funktionsrechte (Kapitel 44): Katalog der Module und die Vergaben.
+  #features: FeatureDef[] = [];
+  #featureGrants: FeatureGrant[] = [];
   #auditPanel = new AuditPanel();
   // Diagnose-Cockpit (ARCHITECTURE.md §25.3, UMSETZUNG.md D20): eigenes Panel
   // mit eigenen Filtern. showTrace() wird von app-shell.ts nach einem
@@ -938,8 +942,11 @@ class AdminView extends HTMLElement {
       const res = await apiFetch("/api/v1/admin/role-bindings");
       if (res.ok) {
         this.#bindings = await res.json();
-        this.#render();
       }
+      const [fr, gr] = await Promise.all([apiFetch("/api/v1/features"), apiFetch("/api/v1/admin/feature-grants")]);
+      if (fr.ok) this.#features = await fr.json();
+      if (gr.ok) this.#featureGrants = await gr.json();
+      this.#render();
     } catch {
       // s.o.
     }
@@ -2239,6 +2246,8 @@ class AdminView extends HTMLElement {
           nodes: this.#nodes,
           workflows: this.#workflows,
           processes: this.#processes,
+          features: this.#features,
+          featureGrants: this.#featureGrants,
         });
         this.appendChild(this.#permEditor.el);
         break;

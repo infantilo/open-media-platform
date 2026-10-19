@@ -123,15 +123,33 @@ func TestRoutePermissionsAreDeclaredStrictly(t *testing.T) {
 	}
 	// Freigabe/Neuzuweisung/Konfiguration brauchen mehr als „operate“
 	need := map[string]string{
-		"POST /api/v1/review/items/{id}/approve": "configure", "POST /api/v1/review/items/{id}/reject": "configure",
-		"POST /api/v1/review/items/{id}/reassign": "configure", "POST /api/v1/review/items/{id}/force-release": "configure",
-		"PUT /api/v1/review/config": "admin", "POST /api/v1/review/import": "configure",
-		"POST /api/v1/review/items/{id}/claim": "operate", "PUT /api/v1/review/items/{id}/conform": "operate",
+		"POST /api/v1/review/items/{id}/approve": "review.approve", "POST /api/v1/review/items/{id}/reject": "review.approve",
+		"POST /api/v1/review/items/{id}/reassign": "review.assign", "POST /api/v1/review/items/{id}/force-release": "review.assign",
+		"POST /api/v1/review/items/{id}/assign": "review.assign", "POST /api/v1/review/import": "review.import",
+		"POST /api/v1/review/items/{id}/claim": "review.work", "PUT /api/v1/review/items/{id}/conform": "review.work",
+		"POST /api/v1/review/items/{id}/qc": "review.qc.run", "POST /api/v1/review/items/{id}/proxy": "review.work|review.qc.run",
 	}
-	for pat, verb := range need {
+	for pat, feat := range need {
 		rt, ok := h.routes[pat]
-		if !ok || rt.auth.Kind != module.AuthVerbGlobal || string(rt.auth.Verb) != verb {
-			t.Errorf("%s: erwartet Verb %s, ist %+v", pat, verb, rt.auth)
+		if !ok || rt.auth.Kind != module.AuthFeature || strings.Join(rt.auth.Features, "|") != feat {
+			t.Errorf("%s: erwartet Funktionsrecht %s, ist %+v", pat, feat, rt.auth)
+		}
+	}
+	if rt := h.routes["PUT /api/v1/review/config"]; rt.auth.Kind != module.AuthVerbGlobal || string(rt.auth.Verb) != "admin" {
+		t.Errorf("config: %+v", rt.auth)
+	}
+	// Jedes deklarierte Funktionsrecht wird auch von einer Route verlangt (keine toten Rechte).
+	used := map[string]bool{}
+	for _, rt := range h.routes {
+		if rt.auth.Kind == module.AuthFeature {
+			for _, f := range rt.auth.Features {
+				used[f] = true
+			}
+		}
+	}
+	for _, f := range (*Module)(nil).Features() {
+		if f.ID != FeatView && !used[f.ID] {
+			t.Errorf("Funktionsrecht %s wird von keiner Route verlangt", f.ID)
 		}
 	}
 }

@@ -425,6 +425,12 @@ func (s *Service) claimableStates() []string {
 // Claim: Asset zur Bearbeitung übernehmen. Atomar über die Zeilensperre: zwei gleichzeitige Claims → genau einer gewinnt, der
 // andere bekommt ErrClaimed. Ein erneuter Claim durch denselben Nutzer ist idempotent.
 func (s *Service) Claim(ctx context.Context, assetID, actor string) (Item, error) {
+	return s.ClaimAs(ctx, assetID, actor, nil, true)
+}
+
+// ClaimAs wie Claim, aber mit Zuweisungsprüfung (Kapitel 44): eine einer Person zugewiesene Datei übernimmt nur diese Person, eine einer
+// Gruppe zugewiesene nur deren Mitglieder; `override` (Recht „Zuweisen“) darf immer. Nicht zugewiesene Dateien kann jede(r) mit dem Recht übernehmen.
+func (s *Service) ClaimAs(ctx context.Context, assetID, actor string, groups []string, override bool) (Item, error) {
 	if actor == "" {
 		return Item{}, ErrForbidden
 	}
@@ -439,8 +445,14 @@ func (s *Service) Claim(ctx context.Context, assetID, actor string) (Item, error
 		if !contains(allowed, i.State) {
 			return "", nil, fmt.Errorf("%w: Zustand %s", ErrState, i.State)
 		}
+		if !override && !mayClaim(*i, actor, groups) {
+			return "", nil, fmt.Errorf("%w: Die Datei ist %s zugewiesen", ErrForbidden, assignedLabel(*i))
+		}
 		now := s.now()
 		i.Assignee, i.ClaimedAt, i.State = actor, &now, StateInReview
+		if i.AssignedTo == "" {
+			i.AssignedTo = actor // wer übernimmt, ist ab jetzt auch der Zugewiesene
+		}
 		if err := ensureDraft(context.Background(), tx, i, actor); err != nil {
 			return "", nil, err
 		}
@@ -467,6 +479,9 @@ func (s *Service) Release(ctx context.Context, assetID, actor string, privileged
 			return "", nil, fmt.Errorf("%w: Zustand %s", ErrState, i.State)
 		}
 		i.Assignee, i.ClaimedAt, i.State = "", nil, StateAwaitingReview
+		if i.AssignedGroup != "" && i.AssignedTo == prev {
+			i.AssignedTo = "" // Gruppenaufgabe: zurück in den Pool der Gruppe
+		}
 		return "released", map[string]any{"previous": prev}, nil
 	}, actor)
 }
@@ -482,9 +497,59 @@ func (s *Service) Reassign(ctx context.Context, assetID, actor, to string, expec
 		}
 		prev := i.Assignee
 		now := s.now()
-		i.Assignee, i.ClaimedAt = to, &now
+		i.Assignee, i.ClaimedAt, i.AssignedTo = to, &now, to
 		return "reassigned", map[string]any{"from": prev, "to": to}, nil
 	}, actor)
+}
+
+// AssignTask weist die Prüfaufgabe einer Person und/oder Gruppe zu (leer = Zuweisung aufheben) und setzt optional eine Frist.
+// Die Übernahme (Bearbeiter) bleibt unberührt: eine bereits übernommene Datei behält ihren Bearbeiter.
+func (s *Service) AssignTask(ctx context.Context, assetID, actor, user, group string, due *time.Time, expectedRev int64) (Item, error) {
+	user, group = strings.TrimSpace(user), strings.TrimSpace(group)
+	if len(user) > 100 || len(group) > 100 {
+		return Item{}, fmt.Errorf("%w: Name zu lang", ErrValidation)
+	}
+	return s.St.withItem(ctx, assetID, expectedRev, func(tx *sql.Tx, i *Item) (string, map[string]any, error) {
+		if i.State == StateApproved || i.State == StateArchived {
+			return "", nil, fmt.Errorf("%w: Zustand %s", ErrState, i.State)
+		}
+		prev := map[string]any{"user": i.AssignedTo, "group": i.AssignedGroup}
+		now := s.now()
+		i.AssignedTo, i.AssignedGroup, i.DueAt = user, group, due
+		i.AssignedBy, i.AssignedAt = actor, &now
+		if user == "" && group == "" {
+			i.AssignedBy, i.AssignedAt = "", nil
+		}
+		return "assigned", map[string]any{"from": prev, "user": user, "group": group, "dueAt": due}, nil
+	}, actor)
+}
+
+func assignedLabel(i Item) string {
+	switch {
+	case i.AssignedTo != "" && i.AssignedGroup != "":
+		return i.AssignedTo + " / Gruppe " + i.AssignedGroup
+	case i.AssignedTo != "":
+		return i.AssignedTo
+	}
+	return "Gruppe " + i.AssignedGroup
+}
+
+// mayClaim: darf `actor` die Datei übernehmen, ohne das Zuweisungsrecht zu haben?
+func mayClaim(i Item, actor string, groups []string) bool {
+	if i.AssignedTo == "" && i.AssignedGroup == "" {
+		return true
+	}
+	if i.AssignedTo != "" && i.AssignedTo == actor {
+		return true
+	}
+	if i.AssignedGroup != "" && i.AssignedTo == "" {
+		for _, g := range groups {
+			if g == i.AssignedGroup {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Service) syncAssetStatus(assetID, from, to, actor string) {

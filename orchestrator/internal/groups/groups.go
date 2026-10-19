@@ -157,6 +157,10 @@ func (s *Store) Delete(id string, cascadeBindings bool) error {
 			return err
 		}
 	}
+	// Funktionsrechte (Kapitel 44) der Gruppe immer mit entfernen: ohne Gruppe sind sie wirkungslos, würden aber als Karteileiche stehen bleiben.
+	if _, err := s.db.Exec(`DELETE FROM feature_grants WHERE subject_type = 'group' AND subject = $1`, id); err != nil {
+		return err
+	}
 	res, err := s.db.Exec(`DELETE FROM groups WHERE id = $1`, id)
 	if err != nil {
 		return err

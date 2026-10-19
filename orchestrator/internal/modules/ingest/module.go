@@ -172,19 +172,19 @@ func diskFreeGB(dir string) float64 {
 
 func (m *Module) Mount(r module.Routes, d module.Deps) error {
 	svc := m.service(d)
-	a := &api{svc: svc, m: m, settings: d.Settings, nodes: m.S.Nodes}
+	a := &api{svc: svc, m: m, settings: d.Settings, nodes: m.S.Nodes, access: d.Access}
 	r.Handle("GET /api/v1/ingest/schedules", module.Authenticated(), a.listSchedules())
-	r.Handle("POST /api/v1/ingest/schedules", module.Verb(authz.VerbOperate), a.createSchedule())
+	r.Handle("POST /api/v1/ingest/schedules", module.Feature("ingest.schedule.create"), a.createSchedule())
 	r.Handle("GET /api/v1/ingest/schedules/{id}", module.Authenticated(), a.getSchedule())
-	r.Handle("PUT /api/v1/ingest/schedules/{id}", module.Verb(authz.VerbOperate), a.updateSchedule())
-	r.Handle("DELETE /api/v1/ingest/schedules/{id}", module.Verb(authz.VerbOperate), a.deleteSchedule())
+	r.Handle("PUT /api/v1/ingest/schedules/{id}", module.Feature("ingest.schedule.edit"), a.updateSchedule())
+	r.Handle("DELETE /api/v1/ingest/schedules/{id}", module.Feature("ingest.schedule.edit"), a.deleteSchedule())
 	r.Handle("GET /api/v1/ingest/schedules/{id}/preview", module.Authenticated(), a.previewSchedule())
 	r.Handle("GET /api/v1/ingest/jobs", module.Authenticated(), a.listJobs())
 	r.Handle("GET /api/v1/ingest/jobs/{id}", module.Authenticated(), a.getJob())
-	r.Handle("POST /api/v1/ingest/jobs/{id}/cancel", module.Verb(authz.VerbOperate), a.cancelJob())
-	r.Handle("POST /api/v1/ingest/jobs/{id}/reschedule", module.Verb(authz.VerbOperate), a.rescheduleJob())
-	r.Handle("POST /api/v1/ingest/jobs/{id}/readmit", module.Verb(authz.VerbOperate), a.readmit())
-	r.Handle("POST /api/v1/ingest/adhoc", module.Verb(authz.VerbOperate), a.adhoc())
+	r.Handle("POST /api/v1/ingest/jobs/{id}/cancel", module.Feature("ingest.job.control"), a.cancelJob())
+	r.Handle("POST /api/v1/ingest/jobs/{id}/reschedule", module.Feature("ingest.job.control"), a.rescheduleJob())
+	r.Handle("POST /api/v1/ingest/jobs/{id}/readmit", module.Feature("ingest.job.control"), a.readmit())
+	r.Handle("POST /api/v1/ingest/adhoc", module.Feature("ingest.adhoc.create"), a.adhoc())
 	r.Handle("POST /api/v1/ingest/plan", module.Authenticated(), a.plan())
 	r.Handle("GET /api/v1/ingest/capacity", module.Authenticated(), a.capacity())
 	r.Handle("GET /api/v1/ingest/sources", module.Authenticated(), a.sources())

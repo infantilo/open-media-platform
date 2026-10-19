@@ -49,6 +49,9 @@ export interface Job {
   verdicts?: Verdict[];
   earliestStart?: string;
   revision: number;
+  /** Verantwortliche Person bzw. Gruppe (Kapitel 44). */
+  owner?: string;
+  ownerGroup?: string;
 }
 
 export const STATE_ORDER = ["recording", "starting", "waiting_for_resources", "scheduled", "blocked", "finalizing", "processing", "completed", "failed", "cancelled"];

@@ -1,6 +1,7 @@
 // Tab „Aufnahmen“ (Kapitel 42): Zeitleiste geplanter Aufnahmen je Host, Kapazität **je Ressourcenart** über den Planungshorizont,
 // Engpässe mit Ursache und Gegenmaßnahme (vorhergesagt ≠ tatsächlich fehlgeschlagen), Aufträge, Zeitpläne.
-import { apiFetch, confirmDialog, dateLocale, showToast, t as tt, whoami } from "../host.ts";
+import { apiFetch, confirmDialog, dateLocale, directory, features, showToast, t as tt, whoami } from "../host.ts";
+import { type Directory, type FeatureSet, groupName, hasFeature, isMine } from "../../kit/features.ts";
 import { openScheduleForm } from "./schedule-form.ts";
 import { openSettingsForm } from "./settings-form.ts";
 import type { IngestConfig } from "./settings-logic.ts";
@@ -48,8 +49,11 @@ class IngestView extends HTMLElement {
   #cap: Capacity | null = null;
   #schedules: any[] = [];
   #profiles: Profiles = {};
-  #canEdit = false;
   #isAdmin = false;
+  // Funktionsrechte und Identität (Kapitel 44) — bestimmen, welche Knöpfe angeboten werden; durchgesetzt wird auf dem Server.
+  #me = "";
+  #feats: FeatureSet | null = null;
+  #dir: Directory | null = null;
   #windowH = 24;
   #stateFilter = "";
   #timer = 0;
@@ -81,12 +85,31 @@ class IngestView extends HTMLElement {
 
   async #init() {
     const w = await whoami();
-    this.#canEdit = !!(w.canConfigure ?? w.isAdmin ?? true);
     this.#isAdmin = !!w.isAdmin;
+    this.#me = w.username ?? "";
+    [this.#feats, this.#dir] = await Promise.all([features(), directory()]);
     const c = await api("GET", "/config");
     if (c.ok) this.#profiles = (c.data.profiles ?? {}) as Profiles;
     this.replaceChildren(this.#root);
     this.#start();
+    // Aufgabenliste des Arbeitsplatzes: `focus-ref` öffnet den Auftrag direkt (Kapitel 44).
+    const ref = this.getAttribute("focus-ref");
+    if (ref) void this.#jobDialog(ref);
+  }
+
+  // ---- Rechte (Kapitel 44) -------------------------------------------------------------------------------------------
+
+  #can(feature: string): boolean {
+    return hasFeature(this.#feats, feature);
+  }
+
+  /** Verantwortlich = persönlich oder über eine eigene Gruppe; „Fremde Aufnahmen bearbeiten“ hebt das auf. */
+  #mayAct(owner?: string, ownerGroup?: string): boolean {
+    return this.#can("ingest.manage_all") || isMine(this.#feats, this.#me, owner, ownerGroup);
+  }
+
+  #ownerLabel(owner?: string, ownerGroup?: string): string {
+    return [owner ?? "", ownerGroup ? `${tt("ing.group")} ${groupName(this.#dir, ownerGroup)}` : ""].filter(Boolean).join(" · ");
   }
 
   #start() {
@@ -119,14 +142,19 @@ class IngestView extends HTMLElement {
     root.dataset.role = "ingest-root";
     const bar = el("div", "display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px;");
     bar.append(el("h2", "margin:0 12px 0 0;font-size:16px;", tt("ing.title")));
-    const add = el("button", "padding:3px 12px;", "＋ " + tt("ing.new.schedule"));
-    add.className = "omp-btn-primary";
-    add.dataset.role = "new-schedule";
-    add.addEventListener("click", () => void this.#form(null, false));
-    const adhoc = el("button", "padding:3px 12px;", "＋ " + tt("ing.new.adhoc"));
-    adhoc.dataset.role = "new-adhoc";
-    adhoc.addEventListener("click", () => void this.#form(null, true));
-    bar.append(add, adhoc);
+    if (this.#can("ingest.schedule.create")) {
+      const add = el("button", "padding:3px 12px;", "＋ " + tt("ing.new.schedule"));
+      add.className = "omp-btn-primary";
+      add.dataset.role = "new-schedule";
+      add.addEventListener("click", () => void this.#form(null, false));
+      bar.append(add);
+    }
+    if (this.#can("ingest.adhoc.create")) {
+      const adhoc = el("button", "padding:3px 12px;", "＋ " + tt("ing.new.adhoc"));
+      adhoc.dataset.role = "new-adhoc";
+      adhoc.addEventListener("click", () => void this.#form(null, true));
+      bar.append(adhoc);
+    }
     const win = el("select") as HTMLSelectElement;
     for (const [l, h] of WINDOWS) {
       const o = el("option", "", l);
@@ -319,7 +347,7 @@ class IngestView extends HTMLElement {
     const head = el("div", "display:flex;gap:8px;align-items:center;margin-bottom:4px;");
     head.append(el("div", "font-weight:600;", tt("ing.jobs")));
     const f = el("select") as HTMLSelectElement;
-    for (const [v, k] of [["", "ing.f.all"], ["active", "ing.f.active"], ["upcoming", "ing.f.upcoming"], ["problem", "ing.f.problem"], ["done", "ing.f.done"]]) {
+    for (const [v, k] of [["", "ing.f.all"], ["mine", "ing.f.mine"], ["active", "ing.f.active"], ["upcoming", "ing.f.upcoming"], ["problem", "ing.f.problem"], ["done", "ing.f.done"]]) {
       const o = el("option", "", tt(k));
       o.value = v;
       f.append(o);
@@ -333,6 +361,8 @@ class IngestView extends HTMLElement {
     sec.append(head);
     const match = (j: Job): boolean => {
       switch (this.#stateFilter) {
+        case "mine":
+          return isMine(this.#feats, this.#me, j.owner, j.ownerGroup);
         case "active":
           return isRunning(j.state);
         case "upcoming":
@@ -348,7 +378,7 @@ class IngestView extends HTMLElement {
     const jobs = this.#cap!.jobs.filter(match);
     const tb = el("table", "width:100%;border-collapse:collapse;font-size:12px;");
     const hr = el("tr", "text-align:left;color:var(--omp-text-dim);font-size:10px;text-transform:uppercase;letter-spacing:.05em;");
-    for (const k of ["ing.col.name", "ing.col.when", "ing.col.dur", "ing.col.source", "ing.col.state", "ing.col.host", "ing.col.dev", ""]) hr.append(el("th", "padding:3px 6px;font-weight:500;", k ? tt(k) : ""));
+    for (const k of ["ing.col.name", "ing.col.when", "ing.col.dur", "ing.col.source", "ing.col.owner", "ing.col.state", "ing.col.host", "ing.col.dev", ""]) hr.append(el("th", "padding:3px 6px;font-weight:500;", k ? tt(k) : ""));
     tb.append(hr);
     for (const j of jobs.slice(0, 200)) {
       const tr = el("tr", "border-top:1px solid var(--omp-border);cursor:pointer;");
@@ -363,6 +393,7 @@ class IngestView extends HTMLElement {
         fmtInZone(j.plannedStart, j.tz, dateLocale()),
         fmtDuration(dur),
         j.source.label || j.source.instanceId || "—",
+        this.#ownerLabel(j.owner, j.ownerGroup) || "—",
         st,
         j.hostId || "—",
         j.startDeviationMs !== undefined ? `${(j.startDeviationMs / 1000).toFixed(1)} s` : "—",
@@ -376,7 +407,7 @@ class IngestView extends HTMLElement {
         }
       });
       const act = el("td", "padding:4px 6px;text-align:right;white-space:nowrap;");
-      if (canCancel(j.state) || canAbort(j.state)) {
+      if ((canCancel(j.state) || canAbort(j.state)) && this.#can("ingest.job.control") && this.#mayAct(j.owner, j.ownerGroup)) {
         const b = el("button", "padding:1px 8px;", canAbort(j.state) ? tt("ing.abort") : tt("ing.cancel"));
         b.dataset.role = "job-cancel";
         b.addEventListener("click", (e) => {
@@ -413,15 +444,20 @@ class IngestView extends HTMLElement {
     }
     const tb = el("table", "width:100%;border-collapse:collapse;font-size:12px;");
     const hr = el("tr", "text-align:left;color:var(--omp-text-dim);font-size:10px;text-transform:uppercase;");
-    for (const k of ["ing.col.name", "ing.col.rule", "ing.col.source", "ing.col.profile", "ing.col.prio", ""]) hr.append(el("th", "padding:3px 6px;font-weight:500;", k ? tt(k) : ""));
+    for (const k of ["ing.col.name", "ing.col.rule", "ing.col.source", "ing.col.profile", "ing.col.prio", "ing.col.owner", ""]) hr.append(el("th", "padding:3px 6px;font-weight:500;", k ? tt(k) : ""));
     tb.append(hr);
     for (const s of this.#schedules) {
       const tr = el("tr", "border-top:1px solid var(--omp-border);");
       tr.dataset.schedule = s.id;
       const rec = s.spec.recurrence?.freq ? tt("ing.freq." + s.spec.recurrence.freq) : tt("ing.freq.once");
       const rule = `${s.spec.startLocal.replace("T", " ")} ${s.spec.tz} · ${fmtDuration(s.spec.durationS)} · ${rec}`;
-      for (const c of [s.name, rule, s.source.label || s.source.instanceId, this.#profiles[s.profileId]?.label ?? s.profileId, String(s.priority)]) tr.append(el("td", "padding:4px 6px;", c));
+      for (const c of [s.name, rule, s.source.label || s.source.instanceId, this.#profiles[s.profileId]?.label ?? s.profileId, String(s.priority), this.#ownerLabel(s.owner, s.ownerGroup) || "—"]) tr.append(el("td", "padding:4px 6px;", c));
       const act = el("td", "padding:4px 6px;text-align:right;white-space:nowrap;");
+      if (!this.#can("ingest.schedule.edit") || !this.#mayAct(s.owner, s.ownerGroup)) {
+        tr.append(act);
+        tb.append(tr);
+        continue;
+      }
       const edit = el("button", "padding:1px 8px;margin-right:4px;", tt("ing.edit"));
       edit.dataset.role = "schedule-edit";
       edit.addEventListener("click", () => void this.#form(s, false));
@@ -450,6 +486,8 @@ class IngestView extends HTMLElement {
       adhoc,
       call: api,
       done: () => void this.#refresh(),
+      canAssign: this.#can("ingest.assign") || this.#can("ingest.manage_all"),
+      directory: this.#dir,
     });
   }
 
@@ -472,6 +510,7 @@ class IngestView extends HTMLElement {
     row(tt("ing.col.when"), `${fmtInZone(j.plannedStart, j.tz, dateLocale())} – ${fmtInZone(j.plannedEnd, j.tz, dateLocale(), false)} (${j.tz})`);
     row(tt("ing.col.source"), j.source.label || j.source.instanceId || "—");
     row(tt("ing.col.host"), j.hostId || "—");
+    row(tt("ing.col.owner"), this.#ownerLabel(j.owner, j.ownerGroup) || "—");
     row(tt("ing.attempt"), `${j.attempt} / ${j.maxAttempts}`);
     if (j.filePath) row(tt("ing.file"), j.filePath);
     if (j.assetId) row(tt("ing.asset"), j.assetId);
@@ -491,7 +530,7 @@ class IngestView extends HTMLElement {
     const row2 = el("div", "display:flex;gap:8px;justify-content:flex-end;margin-top:12px;");
     const close = el("button", "", tt("ing.close"));
     close.addEventListener("click", () => overlay.remove());
-    if (j.state === "blocked" || j.state === "scheduled") {
+    if ((j.state === "blocked" || j.state === "scheduled") && this.#can("ingest.job.control") && this.#mayAct(j.owner, j.ownerGroup)) {
       const re = el("button", "", tt("ing.readmit"));
       re.addEventListener("click", async () => {
         const x = await api<{ decision: { admit: boolean } }>("POST", `/jobs/${j.id}/readmit`);
@@ -505,8 +544,10 @@ class IngestView extends HTMLElement {
       const open = el("button", "", tt("ing.open.asset"));
       open.addEventListener("click", () => {
         overlay.remove();
-        const tab = [...document.querySelectorAll("button")].find((b) => /^(Eingang|Intake)$/.test(b.textContent?.trim() ?? ""));
-        tab?.click();
+        const tab = [...document.querySelectorAll("button")].find((b) => /^(Eingang|Intake)/.test(b.textContent?.trim() ?? ""));
+        // Engineering: Tab „Eingang“; Arbeitsplatz ohne Tab-Leiste: Kachel „Eingang“ mit der Datei öffnen
+        if (tab) tab.click();
+        else if (j.assetId) location.href = `/?tile=${encodeURIComponent("review:intake")}&ref=${encodeURIComponent(j.assetId)}`;
       });
       row2.append(open);
     }
