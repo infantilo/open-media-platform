@@ -3,6 +3,7 @@
 import { apiFetch, confirmDialog, dateLocale, directory, features, showToast, t as tt, whoami } from "../host.ts";
 import { type Directory, type FeatureSet, groupName, hasFeature, isMine } from "../../kit/features.ts";
 import { openScheduleForm } from "./schedule-form.ts";
+import { planSummary } from "./audio-plan-logic.ts";
 import { openSettingsForm } from "./settings-form.ts";
 import type { IngestConfig } from "./settings-logic.ts";
 import {
@@ -484,6 +485,7 @@ class IngestView extends HTMLElement {
       hosts: (this.#cap?.hosts ?? []).map((h) => ({ id: h.id, label: h.label })),
       existing,
       adhoc,
+      profileExt: Object.fromEntries(Object.entries((cfg.data.profiles ?? {}) as Record<string, { ext?: string }>).map(([id, p]) => [id, p.ext ?? ".mxf"])),
       call: api,
       done: () => void this.#refresh(),
       canAssign: this.#can("ingest.assign") || this.#can("ingest.manage_all"),
@@ -511,6 +513,8 @@ class IngestView extends HTMLElement {
     row(tt("ing.col.source"), j.source.label || j.source.instanceId || "—");
     row(tt("ing.col.host"), j.hostId || "—");
     row(tt("ing.col.owner"), this.#ownerLabel(j.owner, j.ownerGroup) || "—");
+    const ap = planSummary((j as { audio?: { inputs?: unknown[]; channels?: unknown[] } }).audio);
+    if (ap) row(tt("ing.ap.title"), tt("ing.ap.summary", { n: ap.channels, s: ap.sources }));
     row(tt("ing.attempt"), `${j.attempt} / ${j.maxAttempts}`);
     if (j.filePath) row(tt("ing.file"), j.filePath);
     if (j.assetId) row(tt("ing.asset"), j.assetId);

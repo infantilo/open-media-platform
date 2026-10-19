@@ -100,6 +100,7 @@ func (m *Module) service(d module.Deps) *Service {
 	}
 	s := &Service{St: NewStore(d.DB), Cfg: m.cfg.Get, Runtime: rt, Assets: m.S.Assets, Audit: d.Audit, FFmpeg: m.S.FFmpeg}
 	s.Hosts = func(ctx context.Context) []HostInfo { return hostInfos(ctx, d, s.Cfg().MediaDir) }
+	s.ChannelCount = m.channelCount
 	m.svc = s
 	return s
 }
@@ -109,13 +110,15 @@ type unavailableRuntime struct{}
 
 var errNoRuntime = fmt.Errorf("keine Laufzeit angebunden (Launcher fehlt)")
 
-func (unavailableRuntime) Prepare(context.Context, string, string, string, string) (Session, error) {
+func (unavailableRuntime) Prepare(context.Context, string, string, string, string, int) (Session, error) {
 	return Session{}, errNoRuntime
 }
-func (unavailableRuntime) Adopt(context.Context, string) (Session, bool)  { return Session{}, false }
-func (unavailableRuntime) ResolveSource(context.Context, Source) error    { return errNoRuntime }
-func (unavailableRuntime) Connect(context.Context, Session, Source) error { return errNoRuntime }
-func (unavailableRuntime) StartRecording(context.Context, Session, string, string) error {
+func (unavailableRuntime) Adopt(context.Context, string) (Session, bool) { return Session{}, false }
+func (unavailableRuntime) ResolveSource(context.Context, Source) error   { return errNoRuntime }
+func (unavailableRuntime) Connect(context.Context, Session, Source, *AudioPlan) error {
+	return errNoRuntime
+}
+func (unavailableRuntime) StartRecording(context.Context, Session, string, string, *AudioPlan) error {
 	return errNoRuntime
 }
 func (unavailableRuntime) Status(context.Context, Session) (string, int64, error) {
@@ -271,4 +274,26 @@ func (m *Module) WriteMetrics(w io.Writer) {
 	fmt.Fprintf(w, "# HELP omp_ingest_late_starts_total Starts über dem Abweichungs-Zielwert\n# TYPE omp_ingest_late_starts_total counter\nomp_ingest_late_starts_total %d\n", metrics.LateStarts.Load())
 	fmt.Fprintf(w, "# HELP omp_ingest_orphans_reaped_total Verwaiste Rekorder, die beendet wurden\n# TYPE omp_ingest_orphans_reaped_total counter\nomp_ingest_orphans_reaped_total %d\n", metrics.OrphansReaped.Load())
 	fmt.Fprintf(w, "# HELP omp_ingest_admission_rejected_total Zulassungen, die blockiert wurden\n# TYPE omp_ingest_admission_rejected_total counter\nomp_ingest_admission_rejected_total %d\n", metrics.AdmitRejected.Load())
+}
+
+// channelCount: Audio-Kanäle der Quelle laut Registry (ok=false, wenn die Quelle gerade nicht auffindbar ist oder die Zahl unbekannt bleibt).
+func (m *Module) channelCount(src Source) (int, bool) {
+	if m.S.Nodes == nil {
+		return 0, false
+	}
+	for _, n := range m.S.Nodes.List() {
+		if !n.Online || (src.InstanceID != "" && n.InstanceID != src.InstanceID) {
+			continue
+		}
+		for _, s := range n.Senders {
+			if !strings.Contains(s.Format, "audio") || s.ChannelCount <= 0 {
+				continue
+			}
+			if (src.SenderID != "" && s.ID != src.SenderID) || (src.SenderID == "" && src.SenderLabel != "" && s.Label != src.SenderLabel) {
+				continue
+			}
+			return s.ChannelCount, true
+		}
+	}
+	return 0, false
 }

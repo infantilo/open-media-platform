@@ -24,6 +24,8 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, css = "", text = ""):
 /** Kacheln des Arbeitsplatzes für die angemeldete Person (leer ohne Funktionsrechte). */
 export async function loadWorkTiles(): Promise<WorkTile[]> {
   const [mods, feats] = await Promise.all([getModules(), getMyFeatures(true)]);
+  // Wer alles darf (globales „configure“ bzw. Bootstrap-Modus ohne Nutzer), hat die Ansichten als Tabs — kein Arbeitsplatz.
+  if (feats?.all) return [];
   return workTiles(mods, getLang(), (needs) => hasAnyFeature(feats, needs));
 }
 

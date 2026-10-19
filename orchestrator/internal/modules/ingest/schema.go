@@ -7,8 +7,17 @@ func (*Module) Migrations() []module.Migration {
 	return []module.Migration{
 		{Version: 1, Name: "ingest-schedules-jobs-reservations", SQL: schemaV1},
 		{Version: 2, Name: "ingest-owner", SQL: schemaV2},
+		{Version: 3, Name: "ingest-audio-plan", SQL: schemaV3},
 	}
 }
+
+// schemaV3 (Kapitel 45): Kanalplan der Aufnahme (weitere Quellen + Zuordnung Quelle/Kanal → Ausgabekanal) an Zeitplan und Auftrag;
+// `extra_source_keys` = Schlüssel der weiteren Quellen (Zeilenumbruch-getrennt) für die Quellenkonflikt-Prüfung.
+const schemaV3 = `
+ALTER TABLE ingest_schedules ADD COLUMN IF NOT EXISTS audio_plan JSONB;
+ALTER TABLE ingest_jobs ADD COLUMN IF NOT EXISTS audio_plan JSONB;
+ALTER TABLE ingest_jobs ADD COLUMN IF NOT EXISTS extra_source_keys TEXT NOT NULL DEFAULT '';
+`
 
 // schemaV2 (Kapitel 44): Verantwortliche — eine Person und/oder eine Gruppe je Zeitplan; Aufträge erben sie.
 // Bestehende Zeilen: Verantwortlich ist, wer sie angelegt hat.

@@ -292,8 +292,8 @@
     "runner": "process",
     "command": ["../nodes/target/debug/omp-recorder"],
     "env": {},
-    "description": "Nimmt eine per Kreuzschiene angeschlossene MXL-Quelle (Video/Audio) als Matroska-Datei auf; Dateiname auf .mxf = MXF (H.264 + PCM 24 Bit) mit optionalen MCA-Labels (Parameter record.mcaPlan). Ausschließlich MXL als Eingang, keine Capture-Karte.",
-    "i18n": { "en": {"description": "Records an MXL source (video/audio) connected via the crosspoint as a Matroska file; a .mxf file name gives MXF (H.264 + 24-bit PCM) with optional MCA labels (parameter record.mcaPlan). MXL is the only input, no capture card.", "expectedResources": "moderate during a recording (encoding), otherwise very low (no source subscribed)"} },
+    "description": "Nimmt eine per Kreuzschiene angeschlossene MXL-Quelle (Video/Audio) als Matroska-Datei auf; Dateiname auf .mxf = MXF (H.264 + PCM 24 Bit) mit optionalen MCA-Labels (Parameter record.mcaPlan). Optionaler Kanalplan (Parameter record.audioPlan, Umgebung OMP_RECORDER_AUDIO_INPUTS = Zahl der Audio-Empfänger „Audio“, „Audio 2“ …): Kanäle mehrerer Quellen in beliebiger Reihenfolge auf die Ausgabekanäle der Datei, mit Gain und Stille. Ausschließlich MXL als Eingang, keine Capture-Karte.",
+    "i18n": { "en": {"description": "Records an MXL source (video/audio) connected via the crosspoint as a Matroska file; a .mxf file name gives MXF (H.264 + 24-bit PCM) with optional MCA labels (parameter record.mcaPlan). Optional channel plan (parameter record.audioPlan, environment OMP_RECORDER_AUDIO_INPUTS = number of audio receivers \"Audio\", \"Audio 2\" …): channels of several sources in any order onto the output channels of the file, with gain and silence. MXL is the only input, no capture card.", "expectedResources": "moderate during a recording (encoding), otherwise very low (no source subscribed)"} },
     "expectedResources": "moderat während einer Aufnahme (Encoding), sonst sehr gering (keine Quelle abonniert)"
   },
   {

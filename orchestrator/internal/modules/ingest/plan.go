@@ -79,8 +79,10 @@ type Demand struct {
 }
 
 type Request struct {
-	JobID    string
-	Source   string
+	JobID  string
+	Source string
+	// Extra: weitere Quellen des Kanalplans (Kapitel 45) — für jede gelten Konflikt und Limit wie für die Hauptquelle.
+	Extra    []string
 	Start    time.Time
 	End      time.Time
 	Priority int
@@ -94,6 +96,7 @@ type Booked struct {
 	JobID    string
 	Host     string
 	Source   string
+	Extra    []string
 	Start    time.Time
 	End      time.Time
 	Priority int
@@ -256,14 +259,41 @@ func diskUsed(host string, booked []Booked, now time.Time) float64 {
 	return sum
 }
 
-func sourceOverlaps(req Request, booked []Booked) []string {
+func (b Booked) uses(key string) bool {
+	if b.Source == key {
+		return true
+	}
+	for _, e := range b.Extra {
+		if e == key {
+			return true
+		}
+	}
+	return false
+}
+
+func sourceOverlaps(req Request, booked []Booked, key string) []string {
 	var jobs []string
 	for _, b := range booked {
-		if b.Source == req.Source && b.JobID != req.JobID && b.Start.Before(req.End) && b.End.After(req.Start) {
+		if b.uses(key) && b.JobID != req.JobID && b.Start.Before(req.End) && b.End.After(req.Start) {
 			jobs = append(jobs, b.JobID)
 		}
 	}
 	return jobs
+}
+
+// requestKeys: Hauptquelle + weitere Quellen ohne Doppelte.
+func requestKeys(req Request) []string {
+	keys := []string{req.Source}
+	for _, e := range req.Extra {
+		dup := false
+		for _, k := range keys {
+			dup = dup || k == e
+		}
+		if !dup {
+			keys = append(keys, e)
+		}
+	}
+	return keys
 }
 
 func tp(t time.Time) *time.Time { return &t }
@@ -295,11 +325,17 @@ func Plan(req Request, hosts []HostCap, booked []Booked, rules Rules, now time.T
 		return d
 	}
 	// Quelle
-	if jobs := sourceOverlaps(req, booked); len(jobs) >= rules.sourceLimit(req.Source) {
-		d.Verdicts = append(d.Verdicts, Verdict{Kind: VSourceConflict, Blocking: true, Jobs: jobs, From: tp(req.Start), To: tp(req.End),
-			Message: fmt.Sprintf("Quelle ist im Zeitraum bereits %d× vergeben (Limit %d)", len(jobs), rules.sourceLimit(req.Source)),
-			Action:  "Anderen Zeitraum wählen, ein Aufnahme-Ziel zusammenlegen oder das Quellenlimit erhöhen"})
-		return d
+	for n, key := range requestKeys(req) {
+		if jobs := sourceOverlaps(req, booked, key); len(jobs) >= rules.sourceLimit(key) {
+			who := "Quelle"
+			if n > 0 {
+				who = "Zusätzliche Audio-Quelle " + key
+			}
+			d.Verdicts = append(d.Verdicts, Verdict{Kind: VSourceConflict, Blocking: true, Jobs: jobs, From: tp(req.Start), To: tp(req.End),
+				Message: fmt.Sprintf("%s ist im Zeitraum bereits %d× vergeben (Limit %d)", who, len(jobs), rules.sourceLimit(key)),
+				Action:  "Anderen Zeitraum wählen, ein Aufnahme-Ziel zusammenlegen oder das Quellenlimit erhöhen"})
+			return d
+		}
 	}
 	// Kandidaten: Wunschhost zuerst, dann nach Belegung
 	cands := append([]HostCap(nil), hosts...)

@@ -42,16 +42,17 @@ func mj(v any) []byte {
 
 // ---- Zeitpläne ---------------------------------------------------------------------------------------------------
 
-const schedCols = `id, name, enabled, revision, source, spec, profile_id, storage, metadata, priority, retry, late, host_pref, created_by, created_at, updated_at, cancelled_at, owner, owner_group`
+const schedCols = `id, name, enabled, revision, source, spec, profile_id, storage, metadata, priority, retry, late, host_pref, created_by, created_at, updated_at, cancelled_at, owner, owner_group, audio_plan`
 
 func scanSchedule(r interface{ Scan(...any) error }) (Schedule, error) {
 	var s Schedule
-	var src, spec, stor, meta, retry, late []byte
+	var src, spec, stor, meta, retry, late, ap []byte
 	var canc sql.NullTime
-	err := r.Scan(&s.ID, &s.Name, &s.Enabled, &s.Revision, &src, &spec, &s.ProfileID, &stor, &meta, &s.Priority, &retry, &late, &s.HostPref, &s.CreatedBy, &s.CreatedAt, &s.UpdatedAt, &canc, &s.Owner, &s.OwnerGroup)
+	err := r.Scan(&s.ID, &s.Name, &s.Enabled, &s.Revision, &src, &spec, &s.ProfileID, &stor, &meta, &s.Priority, &retry, &late, &s.HostPref, &s.CreatedBy, &s.CreatedAt, &s.UpdatedAt, &canc, &s.Owner, &s.OwnerGroup, &ap)
 	if err != nil {
 		return s, err
 	}
+	s.Audio = decodeAudio(ap)
 	_ = json.Unmarshal(src, &s.Source)
 	_ = json.Unmarshal(spec, &s.Spec)
 	_ = json.Unmarshal(stor, &s.Storage)
@@ -68,13 +69,40 @@ func scanSchedule(r interface{ Scan(...any) error }) (Schedule, error) {
 func (s *Store) CreateSchedule(ctx context.Context, sc Schedule) (Schedule, error) {
 	sc.ID = newID()
 	sc.Revision = 1
-	_, err := s.db.ExecContext(ctx, `INSERT INTO ingest_schedules (id, name, enabled, revision, source, spec, profile_id, storage, metadata, priority, retry, late, host_pref, created_by, owner, owner_group)
-		VALUES ($1,$2,$3,1,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-		sc.ID, sc.Name, sc.Enabled, mj(sc.Source), mj(sc.Spec), sc.ProfileID, mj(sc.Storage), mj(orEmpty(sc.Metadata)), sc.Priority, mj(sc.Retry), mj(sc.Late), sc.HostPref, sc.CreatedBy, sc.Owner, sc.OwnerGroup)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO ingest_schedules (id, name, enabled, revision, source, spec, profile_id, storage, metadata, priority, retry, late, host_pref, created_by, owner, owner_group, audio_plan)
+		VALUES ($1,$2,$3,1,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+		sc.ID, sc.Name, sc.Enabled, mj(sc.Source), mj(sc.Spec), sc.ProfileID, mj(sc.Storage), mj(orEmpty(sc.Metadata)), sc.Priority, mj(sc.Retry), mj(sc.Late), sc.HostPref, sc.CreatedBy, sc.Owner, sc.OwnerGroup, encodeAudio(sc.Audio))
 	if err != nil {
 		return sc, err
 	}
 	return s.GetSchedule(ctx, sc.ID)
+}
+
+// encodeAudio/decodeAudio: JSONB-Spalte audio_plan (NULL = kein Plan).
+func encodeAudio(p *AudioPlan) any {
+	if p == nil {
+		return nil
+	}
+	b, _ := json.Marshal(p)
+	return b
+}
+
+func decodeAudio(raw []byte) *AudioPlan {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var p AudioPlan
+	if json.Unmarshal(raw, &p) != nil {
+		return nil
+	}
+	return &p
+}
+
+func splitKeys(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
 }
 
 func orEmpty(m map[string]any) map[string]any {
@@ -115,9 +143,9 @@ func (s *Store) ListSchedules(ctx context.Context, includeCancelled bool) ([]Sch
 
 // UpdateSchedule ersetzt die Felder (optimistisch über Revision).
 func (s *Store) UpdateSchedule(ctx context.Context, sc Schedule, expectedRev int) (Schedule, error) {
-	res, err := s.db.ExecContext(ctx, `UPDATE ingest_schedules SET name=$2, enabled=$3, source=$4, spec=$5, profile_id=$6, storage=$7, metadata=$8, priority=$9, retry=$10, late=$11, host_pref=$12, owner=$14, owner_group=$15,
+	res, err := s.db.ExecContext(ctx, `UPDATE ingest_schedules SET name=$2, enabled=$3, source=$4, spec=$5, profile_id=$6, storage=$7, metadata=$8, priority=$9, retry=$10, late=$11, host_pref=$12, owner=$14, owner_group=$15, audio_plan=$16,
 		revision=revision+1, updated_at=now() WHERE id=$1 AND revision=$13 AND cancelled_at IS NULL`,
-		sc.ID, sc.Name, sc.Enabled, mj(sc.Source), mj(sc.Spec), sc.ProfileID, mj(sc.Storage), mj(orEmpty(sc.Metadata)), sc.Priority, mj(sc.Retry), mj(sc.Late), sc.HostPref, expectedRev, sc.Owner, sc.OwnerGroup)
+		sc.ID, sc.Name, sc.Enabled, mj(sc.Source), mj(sc.Spec), sc.ProfileID, mj(sc.Storage), mj(orEmpty(sc.Metadata)), sc.Priority, mj(sc.Retry), mj(sc.Late), sc.HostPref, expectedRev, sc.Owner, sc.OwnerGroup, encodeAudio(sc.Audio))
 	if err != nil {
 		return sc, err
 	}
@@ -144,18 +172,19 @@ func (s *Store) CancelSchedule(ctx context.Context, id string) error {
 // ---- Aufträge ----------------------------------------------------------------------------------------------------
 
 const jobCols = `id, schedule_id, idempotency_key, name, planned_start, planned_end, tz, shifted, ambiguous, state, state_since, attempt, max_attempts, priority, source, profile_id, host_pref, host_id, instance_id,
- file_rel, file_path, asset_id, actual_start, actual_end, start_deviation_ms, error, failed_stage, verdicts, earliest_start, storage, metadata, late, revision, created_by, created_at, updated_at, owner, owner_group`
+ file_rel, file_path, asset_id, actual_start, actual_end, start_deviation_ms, error, failed_stage, verdicts, earliest_start, storage, metadata, late, revision, created_by, created_at, updated_at, owner, owner_group, audio_plan`
 
 func scanJob(r interface{ Scan(...any) error }) (Job, error) {
 	var j Job
-	var src, verd, stor, meta, late []byte
+	var src, verd, stor, meta, late, ap []byte
 	var as, ae, es sql.NullTime
 	var dev sql.NullInt64
 	err := r.Scan(&j.ID, &j.ScheduleID, &j.Key, &j.Name, &j.PlannedStart, &j.PlannedEnd, &j.TZ, &j.Shifted, &j.Ambiguous, &j.State, &j.StateSince, &j.Attempt, &j.MaxAttempts, &j.Priority, &src, &j.ProfileID, &j.HostPref, &j.HostID, &j.InstanceID,
-		&j.FileRel, &j.FilePath, &j.AssetID, &as, &ae, &dev, &j.Error, &j.FailedStage, &verd, &es, &stor, &meta, &late, &j.Revision, &j.CreatedBy, &j.CreatedAt, &j.UpdatedAt, &j.Owner, &j.OwnerGroup)
+		&j.FileRel, &j.FilePath, &j.AssetID, &as, &ae, &dev, &j.Error, &j.FailedStage, &verd, &es, &stor, &meta, &late, &j.Revision, &j.CreatedBy, &j.CreatedAt, &j.UpdatedAt, &j.Owner, &j.OwnerGroup, &ap)
 	if err != nil {
 		return j, err
 	}
+	j.Audio = decodeAudio(ap)
 	_ = json.Unmarshal(src, &j.Source)
 	_ = json.Unmarshal(verd, &j.Verdicts)
 	_ = json.Unmarshal(stor, &j.Storage)
@@ -241,9 +270,9 @@ func (s *Store) ListJobs(ctx context.Context, f JobFilter) ([]Job, error) {
 func (s *Store) CreateJob(ctx context.Context, j Job) (Job, bool, error) {
 	j.ID = newID()
 	res, err := s.db.ExecContext(ctx, `INSERT INTO ingest_jobs (id, schedule_id, idempotency_key, occurrence_index, name, planned_start, planned_end, tz, shifted, ambiguous, state, max_attempts, priority, source, source_key, profile_id,
-		host_pref, storage, metadata, late, created_by, owner, owner_group) VALUES ($1,$2,$3,0,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) ON CONFLICT (idempotency_key) DO NOTHING`,
+		host_pref, storage, metadata, late, created_by, owner, owner_group, audio_plan, extra_source_keys) VALUES ($1,$2,$3,0,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) ON CONFLICT (idempotency_key) DO NOTHING`,
 		j.ID, j.ScheduleID, j.Key, j.Name, j.PlannedStart, j.PlannedEnd, j.TZ, j.Shifted, j.Ambiguous, StBlocked, j.MaxAttempts, j.Priority, mj(j.Source), j.Source.Key(), j.ProfileID,
-		j.HostPref, mj(j.Storage), mj(orEmpty(j.Metadata)), mj(j.Late), j.CreatedBy, j.Owner, j.OwnerGroup)
+		j.HostPref, mj(j.Storage), mj(orEmpty(j.Metadata)), mj(j.Late), j.CreatedBy, j.Owner, j.OwnerGroup, encodeAudio(j.Audio), strings.Join(j.Audio.ExtraKeys(), "\n"))
 	if err != nil {
 		return j, false, err
 	}
@@ -343,9 +372,9 @@ func (s *Store) Mutate(ctx context.Context, id string, expectedRev int, msg stri
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE ingest_jobs SET name=$2, planned_start=$3, planned_end=$4, state=$5, state_since=$6, attempt=$7, max_attempts=$8, priority=$9, source=$10, source_key=$11, profile_id=$12,
 		host_pref=$13, host_id=$14, instance_id=$15, file_rel=$16, file_path=$17, asset_id=$18, actual_start=$19, actual_end=$20, start_deviation_ms=$21, error=$22, failed_stage=$23, verdicts=$24, earliest_start=$25,
-		storage=$26, metadata=$27, late=$28, owner=$29, owner_group=$30, shifted=$31, ambiguous=$32, tz=$33, revision=revision+1, updated_at=now() WHERE id=$1`,
+		storage=$26, metadata=$27, late=$28, owner=$29, owner_group=$30, shifted=$31, ambiguous=$32, tz=$33, audio_plan=$34, extra_source_keys=$35, revision=revision+1, updated_at=now() WHERE id=$1`,
 		j.ID, j.Name, j.PlannedStart, j.PlannedEnd, j.State, j.StateSince, j.Attempt, j.MaxAttempts, j.Priority, mj(j.Source), j.Source.Key(), j.ProfileID, j.HostPref, j.HostID, j.InstanceID, j.FileRel, j.FilePath, j.AssetID,
-		as, ae, dev, j.Error, j.FailedStage, verd, es, mj(j.Storage), mj(orEmpty(j.Metadata)), mj(j.Late), j.Owner, j.OwnerGroup, j.Shifted, j.Ambiguous, j.TZ); err != nil {
+		as, ae, dev, j.Error, j.FailedStage, verd, es, mj(j.Storage), mj(orEmpty(j.Metadata)), mj(j.Late), j.Owner, j.OwnerGroup, j.Shifted, j.Ambiguous, j.TZ, encodeAudio(j.Audio), strings.Join(j.Audio.ExtraKeys(), "\n")); err != nil {
 		return j, err
 	}
 	if msg != "" || j.State != before {
@@ -381,7 +410,7 @@ type Reservation struct {
 func loadBooked(ctx context.Context, q interface {
 	QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows, error)
 }, now time.Time, excludeJob string) ([]Booked, error) {
-	rows, err := q.QueryContext(ctx, `SELECT r.job_id, r.host_id, r.resource, r.amount, r.t_start, r.t_end, j.priority, j.source_key, j.state
+	rows, err := q.QueryContext(ctx, `SELECT r.job_id, r.host_id, r.resource, r.amount, r.t_start, r.t_end, j.priority, j.source_key, j.state, j.extra_source_keys
 		FROM ingest_reservations r JOIN ingest_jobs j ON j.id = r.job_id
 		WHERE r.state <> 'released' AND r.t_end > $1 AND r.job_id <> $2 ORDER BY r.job_id`, now, excludeJob)
 	if err != nil {
@@ -391,16 +420,16 @@ func loadBooked(ctx context.Context, q interface {
 	byJob := map[string]*Booked{}
 	var order []string
 	for rows.Next() {
-		var job, host, res, src, st string
+		var job, host, res, src, st, extra string
 		var amt float64
 		var ts, te time.Time
 		var prio int
-		if err := rows.Scan(&job, &host, &res, &amt, &ts, &te, &prio, &src, &st); err != nil {
+		if err := rows.Scan(&job, &host, &res, &amt, &ts, &te, &prio, &src, &st, &extra); err != nil {
 			return nil, err
 		}
 		b, ok := byJob[job]
 		if !ok {
-			b = &Booked{JobID: job, Host: host, Source: src, Start: ts, End: te, Priority: prio, Amount: map[string]float64{}, Active: st == StRecording || st == StStarting || st == StFinalizing || st == StProcessing}
+			b = &Booked{JobID: job, Host: host, Source: src, Extra: splitKeys(extra), Start: ts, End: te, Priority: prio, Amount: map[string]float64{}, Active: st == StRecording || st == StStarting || st == StFinalizing || st == StProcessing}
 			byJob[job] = b
 			order = append(order, job)
 		}
@@ -439,7 +468,7 @@ func (s *Store) Admit(ctx context.Context, jobID string, hosts []HostCap, demand
 	if err != nil {
 		return Decision{}, j, err
 	}
-	d := Plan(Request{JobID: jobID, Source: j.Source.Key(), Start: j.PlannedStart, End: j.PlannedEnd, Priority: j.Priority, Demand: demand, HostPref: j.HostPref, Needs: needs}, hosts, booked, rules, now)
+	d := Plan(Request{JobID: jobID, Source: j.Source.Key(), Extra: j.Audio.ExtraKeys(), Start: j.PlannedStart, End: j.PlannedEnd, Priority: j.Priority, Demand: demand, HostPref: j.HostPref, Needs: needs}, hosts, booked, rules, now)
 	before := j.State
 	if _, err := tx.ExecContext(ctx, `UPDATE ingest_reservations SET state='released' WHERE job_id=$1 AND state<>'released'`, jobID); err != nil {
 		return d, j, err

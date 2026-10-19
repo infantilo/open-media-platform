@@ -6,6 +6,7 @@
 //! Aufnahme-Lebenszyklus (`record.start`/`record.stop`) — Details/
 //! Encoder-Wahl in `pipeline.rs`.
 
+mod audio_plan;
 mod pipeline;
 mod uibundle;
 
@@ -31,6 +32,8 @@ struct RecorderReceiverControl {
     registry: RegistryClient,
     pipeline: pipeline::PipelineHandle,
     is_video: bool,
+    /// Nummer des Audio-Eingangs (0 = Hauptquelle); bei Video ohne Bedeutung.
+    audio_input: usize,
 }
 
 impl ReceiverControl for RecorderReceiverControl {
@@ -42,7 +45,7 @@ impl ReceiverControl for RecorderReceiverControl {
                         if self.is_video {
                             self.pipeline.connect_video(flow_id);
                         } else {
-                            self.pipeline.connect_audio(flow_id);
+                            self.pipeline.connect_audio(self.audio_input, flow_id);
                         }
                     }
                     None => eprintln!("omp-recorder: sender {sender_id} has no flow_id"),
@@ -53,7 +56,7 @@ impl ReceiverControl for RecorderReceiverControl {
                 if self.is_video {
                     self.pipeline.disconnect_video();
                 } else {
-                    self.pipeline.disconnect_audio();
+                    self.pipeline.disconnect_audio(self.audio_input);
                 }
             }
         }
@@ -63,7 +66,8 @@ impl ReceiverControl for RecorderReceiverControl {
 struct RecorderStore {
     pipeline: pipeline::PipelineHandle,
     video_connection: Arc<ReceiverConnection<RecorderReceiverControl>>,
-    audio_connection: Arc<ReceiverConnection<RecorderReceiverControl>>,
+    /// Audio-Receiver in Eingangsreihenfolge (Kapitel 45): 0 = Hauptquelle, weitere für zusätzliche Quellen.
+    audio_connections: Vec<Arc<ReceiverConnection<RecorderReceiverControl>>>,
     /// AMWA BCP-008-01 (NMOS Receiver Status Monitoring, `docs/
     /// decisions.md` BCP-008-Nachtrag) — Rekorder empfängt Inhalt zum
     /// Aufzeichnen, ist also der "Receiver". Anders als bei den
@@ -80,6 +84,16 @@ struct RecorderStore {
     /// Label-Plan (JSON, `omp-mxf-mca::plan_json`) für die nächste `.mxf`-Aufnahme;
     /// leer = keine MCA-Labels.
     mca_plan: std::sync::Mutex<String>,
+    /// Kanalplan (JSON, s. `audio_plan.rs`) für die nächste Aufnahme; leer = Ton der Hauptquelle unverändert.
+    audio_plan: std::sync::Mutex<String>,
+}
+
+impl RecorderStore {
+    fn receiver_ids(&self) -> Vec<&str> {
+        let mut v = vec![self.video_connection.id()];
+        v.extend(self.audio_connections.iter().map(|c| c.id()));
+        v
+    }
 }
 
 impl ParamStore for RecorderStore {
@@ -113,6 +127,13 @@ impl ParamStore for RecorderStore {
             range: None,
             readonly: false,
         });
+        parameters.push(ParamSpec {
+            name: "record.audioPlan".to_string(),
+            kind: ParamType::String,
+            unit: None,
+            range: None,
+            readonly: false,
+        });
         parameters.extend(self.monitor.param_specs("monitor"));
         let mut methods = vec![
             MethodSpec {
@@ -138,6 +159,7 @@ impl ParamStore for RecorderStore {
             // Keine Zähler-Quelle hier — leere Liste statt erfundener
             // Werte (s. `omp-srt-gateway::GatewayStore::get`).
             "record.mcaPlan" => Some(serde_json::json!(self.mca_plan.lock().expect("lock poisoned").clone())),
+            "record.audioPlan" => Some(serde_json::json!(self.audio_plan.lock().expect("lock poisoned").clone())),
             _ => self.monitor.get("monitor", name, None, Vec::new),
         }
     }
@@ -146,6 +168,13 @@ impl ParamStore for RecorderStore {
         if name == "record.mcaPlan" {
             let text = value.as_str().ok_or(SetError::Unknown)?.to_string();
             *self.mca_plan.lock().expect("lock poisoned") = text;
+            return Ok(());
+        }
+        if name == "record.audioPlan" {
+            let text = value.as_str().ok_or(SetError::Unknown)?.to_string();
+            // Früh ablehnen statt erst beim Start: ein ungültiger Plan soll nicht bis zur Sendezeit unbemerkt bleiben.
+            audio_plan::AudioPlan::parse(&text).map_err(|_| SetError::Unknown)?;
+            *self.audio_plan.lock().expect("lock poisoned") = text;
             return Ok(());
         }
         match self.monitor.set("monitor", name, &value) {
@@ -169,7 +198,7 @@ impl ParamStore for RecorderStore {
                     .get("fileName")
                     .and_then(Value::as_str)
                     .ok_or(InvokeError::Unknown)?;
-                match self.pipeline.start_recording(file_name.to_string(), Some(self.mca_plan.lock().expect("lock poisoned").clone())) {
+                match self.pipeline.start_recording(file_name.to_string(), Some(self.mca_plan.lock().expect("lock poisoned").clone()), Some(self.audio_plan.lock().expect("lock poisoned").clone())) {
                     Ok(()) => {
                         self.monitor.activate();
                         Ok(())
@@ -214,35 +243,28 @@ impl ParamStore for RecorderStore {
         }
         root_discovery(method, path)
             .or_else(|| {
-                list_ids(
-                    method,
-                    path,
-                    "receivers",
-                    &[self.video_connection.id(), self.audio_connection.id()],
-                )
+                list_ids(method, path, "receivers", &self.receiver_ids())
             })
             .or_else(|| bulk_discovery(method, path))
             .or_else(|| {
                 bulk_patch(method, path, "receivers", body, |id, params| {
                     if self.video_connection.id() == id {
                         Some(self.video_connection.patch_staged(params).0)
-                    } else if self.audio_connection.id() == id {
-                        Some(self.audio_connection.patch_staged(params).0)
                     } else {
-                        None
+                        self.audio_connections.iter().find(|c| c.id() == id).map(|c| c.patch_staged(params).0)
                     }
                 })
             })
             .or_else(|| bulk_patch(method, path, "senders", body, |_, _| None))
             .or_else(|| self.video_connection.handle(method, path, body))
-            .or_else(|| self.audio_connection.handle(method, path, body))
+            .or_else(|| self.audio_connections.iter().find_map(|c| c.handle(method, path, body)))
             .map(to_raw)
     }
 
     fn extra_options(&self, path: &str) -> Option<Vec<&'static str>> {
         self.video_connection
             .cors_methods(path)
-            .or_else(|| self.audio_connection.cors_methods(path))
+            .or_else(|| self.audio_connections.iter().find_map(|c| c.cors_methods(path)))
             .or_else(|| bulk_cors_methods(path, "senders"))
             .or_else(|| bulk_cors_methods(path, "receivers"))
     }
@@ -270,13 +292,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // die IS-05-Connection-Endpoints (ReceiverConnection) schon unter
     // der endgültigen ID verdrahtet sein müssen.
     let video_receiver_id = omp_node_sdk::idgen::new_v4();
-    let audio_receiver_id = omp_node_sdk::idgen::new_v4();
+    // Kapitel 45: mehrere Audio-Eingänge (Quellen) für den Kanalplan; Standard 1 wie bisher.
+    let audio_inputs: usize = env_or("OMP_RECORDER_AUDIO_INPUTS", "1").parse::<usize>().unwrap_or(1).clamp(1, 8);
+    let audio_receiver_ids: Vec<String> = (0..audio_inputs).map(|_| omp_node_sdk::idgen::new_v4()).collect();
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
     let shutdown = Arc::new(AtomicBool::new(false));
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
 
-    let pipeline_config = pipeline::Config { domain, media_dir };
+    let pipeline_config = pipeline::Config { domain, media_dir, audio_inputs };
     let pipeline_shutdown = shutdown.clone();
     let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
     let pipeline_heartbeat_thread = pipeline_heartbeat.clone();
@@ -303,16 +327,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             registry: registry.clone(),
             pipeline: pipeline_handle.clone(),
             is_video: true,
+            audio_input: 0,
         },
     ));
-    let audio_connection = Arc::new(ReceiverConnection::new(
-        audio_receiver_id.clone(),
-        RecorderReceiverControl {
-            registry,
-            pipeline: pipeline_handle.clone(),
-            is_video: false,
-        },
-    ));
+    let audio_connections: Vec<_> = audio_receiver_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| {
+            Arc::new(ReceiverConnection::new(
+                id.clone(),
+                RecorderReceiverControl { registry: registry.clone(), pipeline: pipeline_handle.clone(), is_video: false, audio_input: i },
+            ))
+        })
+        .collect();
 
     let media_ready_pipeline = pipeline_handle.clone();
     let monitor = Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Receiver));
@@ -321,9 +348,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let store: Arc<dyn ParamStore> = Arc::new(RecorderStore {
         pipeline: pipeline_handle,
         video_connection,
-        audio_connection,
+        audio_connections,
         monitor: monitor.clone(),
         mca_plan: std::sync::Mutex::new(String::new()),
+        audio_plan: std::sync::Mutex::new(String::new()),
     });
 
     let handle = omp_node_sdk::start(
@@ -334,22 +362,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             registry_url,
             nats_url,
             senders: vec![],
-            receivers: vec![
-                ReceiverSpec {
+            receivers: {
+                let mut r = vec![ReceiverSpec {
                     id: Some(video_receiver_id),
                     transport: Some(TRANSPORT_MXL.to_string()),
                     media_types: Some(vec!["video/v210".to_string()]),
                     label: Some("Video".to_string()),
                     ..Default::default()
-                },
-                ReceiverSpec {
-                    id: Some(audio_receiver_id),
-                    transport: Some(TRANSPORT_MXL.to_string()),
-                    media_types: Some(vec!["audio/L24".to_string()]),
-                    label: Some("Audio".to_string()),
-                    ..Default::default()
-                },
-            ],
+                }];
+                for (i, id) in audio_receiver_ids.iter().enumerate() {
+                    r.push(ReceiverSpec {
+                        id: Some(id.clone()),
+                        transport: Some(TRANSPORT_MXL.to_string()),
+                        media_types: Some(vec!["audio/L24".to_string()]),
+                        // „Audio“ bleibt der Name des ersten (Kompatibilität), weitere heißen „Audio 2“ …
+                        label: Some(if i == 0 { "Audio".to_string() } else { format!("Audio {}", i + 1) }),
+                        ..Default::default()
+                    });
+                }
+                r
+            },
             instance_id,
             // "media-ready" (ARCHITECTURE.md §5 Punkt 6): true, sobald
             // seit dem letzten `record.start` mindestens ein Buffer den

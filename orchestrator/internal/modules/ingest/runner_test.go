@@ -29,6 +29,12 @@ type simRuntime struct {
 	prepares    int
 	teardowns   []string
 	recordings  map[string]string // Instanz → Datei
+	// Kanalplan (Kapitel 45): was der Ablauf dem Rekorder mitgibt
+	audioInputs  int
+	connectedAud *AudioPlan
+	startedAud   *AudioPlan
+	resolved     []Source
+	extraDown    string // Label einer weiteren Quelle, die „fehlt“
 }
 
 type simInst struct {
@@ -41,9 +47,10 @@ func newSim(dir string) *simRuntime {
 	return &simRuntime{dir: dir, instances: map[string]*simInst{}, dieOnStatus: map[string]bool{}, recordings: map[string]string{}}
 }
 
-func (r *simRuntime) Prepare(ctx context.Context, jobID, hostID, label, mediaDir string) (Session, error) {
+func (r *simRuntime) Prepare(ctx context.Context, jobID, hostID, label, mediaDir string, audioInputs int) (Session, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.audioInputs = audioInputs
 	if r.prepareErr != nil {
 		return Session{}, r.prepareErr
 	}
@@ -68,21 +75,24 @@ func (r *simRuntime) Adopt(ctx context.Context, id string) (Session, bool) {
 func (r *simRuntime) ResolveSource(ctx context.Context, src Source) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.sourceDown {
+	r.resolved = append(r.resolved, src)
+	if r.sourceDown || (r.extraDown != "" && src.Label == r.extraDown) {
 		return ErrSourceUnavailable
 	}
 	return nil
 }
 
-func (r *simRuntime) Connect(ctx context.Context, s Session, src Source) error {
+func (r *simRuntime) Connect(ctx context.Context, s Session, src Source, audio *AudioPlan) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.connectedAud = audio
 	return r.connectErr
 }
 
-func (r *simRuntime) StartRecording(ctx context.Context, s Session, fileRel, mca string) error {
+func (r *simRuntime) StartRecording(ctx context.Context, s Session, fileRel, mca string, audio *AudioPlan) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.startedAud = audio
 	if r.startErr != nil {
 		return r.startErr
 	}

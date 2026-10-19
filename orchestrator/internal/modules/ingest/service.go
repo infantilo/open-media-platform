@@ -37,6 +37,8 @@ type Service struct {
 	Log     *slog.Logger
 	Now     func() time.Time
 	FFmpeg  string // für die Nachbearbeitung
+	// ChannelCount: Audio-Kanäle einer Quelle, wenn gerade bekannt (Kanalplan früh gegen die Wirklichkeit prüfen); darf nil sein.
+	ChannelCount func(Source) (int, bool)
 
 	mu       sync.Mutex
 	inflight map[string]bool
@@ -153,6 +155,8 @@ type ScheduleInput struct {
 	// Owner/OwnerGroup: verantwortliche Person bzw. Gruppe (Kapitel 44); beide leer = bei Neuanlage der Ersteller, bei Änderung unverändert.
 	Owner      string `json:"owner"`
 	OwnerGroup string `json:"ownerGroup"`
+	// Audio: Kanalplan (Kapitel 45); nil = Ton der Hauptquelle unverändert.
+	Audio *AudioPlan `json:"audio"`
 }
 
 var safeName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
@@ -173,6 +177,8 @@ func (s *Service) validate(in *ScheduleInput) error {
 	if err := in.Spec.Validate(); err != nil {
 		p = append(p, err.Error())
 	}
+	in.Audio = normalizeAudio(in.Audio)
+	p = append(p, validateAudio(in.Audio, in.Source, cfg.Profiles[in.ProfileID], s.ChannelCount)...)
 	in.Owner, in.OwnerGroup = strings.TrimSpace(in.Owner), strings.TrimSpace(in.OwnerGroup)
 	if len(in.Owner) > 100 || len(in.OwnerGroup) > 100 {
 		p = append(p, "Verantwortliche(r) zu lang")
@@ -201,7 +207,7 @@ func (s *Service) validate(in *ScheduleInput) error {
 func (s *Service) toSchedule(in ScheduleInput, actor string) Schedule {
 	cfg := s.Cfg()
 	sc := Schedule{Name: in.Name, Enabled: true, Source: in.Source, Spec: in.Spec, ProfileID: in.ProfileID, Storage: in.Storage, Metadata: in.Metadata, Priority: 5,
-		Retry: in.Retry, Late: in.Late, HostPref: in.HostPref, CreatedBy: actor, Owner: in.Owner, OwnerGroup: in.OwnerGroup}
+		Retry: in.Retry, Late: in.Late, HostPref: in.HostPref, CreatedBy: actor, Owner: in.Owner, OwnerGroup: in.OwnerGroup, Audio: in.Audio}
 	if sc.Owner == "" && sc.OwnerGroup == "" {
 		sc.Owner = actor
 	}
@@ -301,7 +307,7 @@ func (s *Service) refreshFutureJobs(ctx context.Context, sc Schedule, why string
 			}
 			x.Name, x.PlannedStart, x.PlannedEnd, x.TZ, x.Shifted, x.Ambiguous = sc.Name, o.Start, o.End, sc.Spec.TZ, o.Shifted, o.Ambiguous
 			x.MaxAttempts, x.Priority, x.Source, x.ProfileID, x.HostPref = sc.Retry.MaxAttempts, sc.Priority, sc.Source, sc.ProfileID, sc.HostPref
-			x.Storage, x.Metadata, x.Late, x.Owner, x.OwnerGroup = sc.Storage, sc.Metadata, sc.Late, sc.Owner, sc.OwnerGroup
+			x.Storage, x.Metadata, x.Late, x.Owner, x.OwnerGroup, x.Audio = sc.Storage, sc.Metadata, sc.Late, sc.Owner, sc.OwnerGroup, sc.Audio
 			return nil, nil
 		})
 		if err != nil {
@@ -347,7 +353,7 @@ func (s *Service) Materialize(ctx context.Context, sc Schedule) (int, error) {
 	for _, o := range occ {
 		j, isNew, err := s.St.CreateJob(ctx, Job{ScheduleID: sc.ID, Key: IdempotencyKey(sc.ID, o), Name: sc.Name, PlannedStart: o.Start, PlannedEnd: o.End, TZ: sc.Spec.TZ,
 			Shifted: o.Shifted, Ambiguous: o.Ambiguous, MaxAttempts: sc.Retry.MaxAttempts, Priority: sc.Priority, Source: sc.Source, ProfileID: sc.ProfileID, HostPref: sc.HostPref,
-			Storage: sc.Storage, Metadata: sc.Metadata, Late: sc.Late, CreatedBy: sc.CreatedBy, Owner: sc.Owner, OwnerGroup: sc.OwnerGroup})
+			Storage: sc.Storage, Metadata: sc.Metadata, Late: sc.Late, CreatedBy: sc.CreatedBy, Owner: sc.Owner, OwnerGroup: sc.OwnerGroup, Audio: sc.Audio})
 		if err != nil {
 			return created, err
 		}
@@ -405,6 +411,7 @@ type AdHocInput struct {
 	HostPref   string         `json:"hostPref"`
 	Owner      string         `json:"owner"`
 	OwnerGroup string         `json:"ownerGroup"`
+	Audio      *AudioPlan     `json:"audio"`
 }
 
 func (s *Service) CreateAdHoc(ctx context.Context, in AdHocInput, actor string) (Job, Decision, error) {
@@ -412,13 +419,13 @@ func (s *Service) CreateAdHoc(ctx context.Context, in AdHocInput, actor string) 
 	if in.Start != nil {
 		start = in.Start.UTC()
 	}
-	si := ScheduleInput{Name: in.Name, Source: in.Source, Spec: Spec{TZ: "UTC", StartLocal: start.Format(localLayout), DurationS: in.DurationS}, ProfileID: in.ProfileID, Storage: in.Storage, Priority: in.Priority, Late: in.Late, Retry: in.Retry, HostPref: in.HostPref, Owner: in.Owner, OwnerGroup: in.OwnerGroup}
+	si := ScheduleInput{Name: in.Name, Source: in.Source, Spec: Spec{TZ: "UTC", StartLocal: start.Format(localLayout), DurationS: in.DurationS}, ProfileID: in.ProfileID, Storage: in.Storage, Priority: in.Priority, Late: in.Late, Retry: in.Retry, HostPref: in.HostPref, Owner: in.Owner, OwnerGroup: in.OwnerGroup, Audio: in.Audio}
 	if err := s.validate(&si); err != nil {
 		return Job{}, Decision{}, err
 	}
 	sc := s.toSchedule(si, actor)
 	j, _, err := s.St.CreateJob(ctx, Job{Key: "adhoc|" + newID(), Name: sc.Name, PlannedStart: start.Truncate(time.Second), PlannedEnd: start.Truncate(time.Second).Add(time.Duration(in.DurationS) * time.Second), TZ: "UTC",
-		MaxAttempts: sc.Retry.MaxAttempts, Priority: sc.Priority, Source: in.Source, ProfileID: in.ProfileID, HostPref: in.HostPref, Storage: in.Storage, Metadata: in.Metadata, Late: sc.Late, CreatedBy: actor, Owner: sc.Owner, OwnerGroup: sc.OwnerGroup})
+		MaxAttempts: sc.Retry.MaxAttempts, Priority: sc.Priority, Source: in.Source, ProfileID: in.ProfileID, HostPref: in.HostPref, Storage: in.Storage, Metadata: in.Metadata, Late: sc.Late, CreatedBy: actor, Owner: sc.Owner, OwnerGroup: sc.OwnerGroup, Audio: sc.Audio})
 	if err != nil {
 		return j, Decision{}, err
 	}

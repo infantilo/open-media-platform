@@ -285,7 +285,12 @@ Full walkthroughs and context for every screen above are in
   converters, CPU, memory, disk throughput/space, network, MXL memory)
   over time windows, with typed reasons and the earliest possible start;
   running recordings are never interrupted, and an orchestrator restart
-  mid-recording loses nothing. Finished recordings become assets.
+  mid-recording loses nothing. Finished recordings become assets. An
+  optional **channel plan** maps channels of several sources (up to 8
+  audio inputs) onto the output channels of the file in any order, with
+  gain and silence (MXF up to 32 channels of 24-bit PCM) — checked against
+  the real source channel counts, with source conflicts and limits applied
+  to every source used.
 - **File intake (tab "Intake")**: every new file gets an automatic QC
   analysis (ffprobe/ffmpeg; "QC could not run" is kept apart from "QC
   found errors"), then a person takes it, reviews it in a frame-accurate
@@ -301,8 +306,7 @@ Full walkthroughs and context for every screen above are in
   due date. Operators land on a workstation page with their workflows,
   the tools they may use and a task list (overdue/failed first, with a
   warning badge everywhere). Not yet: restricting a right to specific
-  sources/profiles, multi-source recording and audio shuffling into the
-  recorded file's channel layout.
+  sources/profiles.
 
 **Operations**
 
@@ -442,8 +446,9 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   (ffprobe) and mark-in/out segments
 - **omp-recorder** — records an MXL source (video/audio) to a Matroska
   file, or to MXF (H.264 + 24-bit PCM) when the name ends in `.mxf`, with
-  optional SMPTE ST 377-4/-41 MCA labels (`record.mcaPlan`); MXL-only
-  input, no capture-card dependency
+  optional SMPTE ST 377-4/-41 MCA labels (`record.mcaPlan`) and an
+  optional channel plan across several audio inputs (`record.audioPlan`);
+  MXL-only input, no capture-card dependency
 - **omp-device-hub** — detects the host's local video (V4L2) and audio
   (ALSA/USB) devices with a stable ID and capabilities; each device can be
   switched on to be offered as an MXL flow + NMOS sender (default off, the

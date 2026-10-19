@@ -148,7 +148,7 @@ func (s *Service) prepareAndMaybeStart(ctx context.Context, j Job) {
 	now := s.now()
 	cfg := s.Cfg()
 	if j.InstanceID == "" {
-		sess, err := s.Runtime.Prepare(ctx, j.ID, hostRuntimeID(j.HostID), s.label(j), cfg.MediaDir)
+		sess, err := s.Runtime.Prepare(ctx, j.ID, hostRuntimeID(j.HostID), s.label(j), cfg.MediaDir, 1+len(j.Audio.inputs()))
 		if err != nil {
 			s.prepareFailed(ctx, j, "Rekorder nicht startbar: "+err.Error())
 			return
@@ -173,7 +173,13 @@ func (s *Service) prepareAndMaybeStart(ctx context.Context, j Job) {
 		s.sourceMissing(ctx, j, err)
 		return
 	}
-	if err := s.Runtime.Connect(ctx, sess, j.Source); err != nil {
+	for _, extra := range j.Audio.inputs() {
+		if err := s.Runtime.ResolveSource(ctx, extra); err != nil {
+			s.sourceMissing(ctx, j, fmt.Errorf("weitere Quelle %s: %w", extra.Label, err))
+			return
+		}
+	}
+	if err := s.Runtime.Connect(ctx, sess, j.Source, j.Audio); err != nil {
 		s.sourceMissing(ctx, j, err)
 		return
 	}
@@ -195,7 +201,7 @@ func (s *Service) prepareAndMaybeStart(ctx context.Context, j Job) {
 		return
 	}
 	p := cfg.Profiles[j.ProfileID]
-	if err := s.Runtime.StartRecording(ctx, sess, j.FileRel, p.McaPlan); err != nil {
+	if err := s.Runtime.StartRecording(ctx, sess, j.FileRel, p.McaPlan, j.Audio); err != nil {
 		s.recordingFailed(ctx, j, "Aufnahme nicht startbar: "+err.Error())
 		return
 	}
@@ -418,6 +424,9 @@ func (s *Service) registerAsset(ctx context.Context, j Job, partial bool) (strin
 		return "", err
 	}
 	md := asset.Metadata{System: map[string]any{"ingestJob": j.ID, "source": j.Source.Label, "profile": j.ProfileID, "plannedStart": j.PlannedStart, "recorded": true, "partial": partial, "versionId": v.ID}, Descriptive: j.Metadata}
+	if j.Audio != nil {
+		md.System["audioChannels"] = j.Audio.Layout()
+	}
 	if cur, err := s.Assets.GetAsset(a.ID); err == nil {
 		_, _ = s.Assets.UpdateAssetMetadata(a.ID, cur.RowVersion, md, "ingest")
 	}

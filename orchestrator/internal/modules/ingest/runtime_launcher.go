@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,7 +66,7 @@ func (r *LauncherRuntime) node(instanceID string) (registry.NodeView, bool) {
 	return registry.NodeView{}, false
 }
 
-func (r *LauncherRuntime) Prepare(ctx context.Context, jobID, hostID, label, mediaDir string) (Session, error) {
+func (r *LauncherRuntime) Prepare(ctx context.Context, jobID, hostID, label, mediaDir string, audioInputs int) (Session, error) {
 	var inst launcher.Instance
 	found := false
 	for _, in := range r.Launcher.List() {
@@ -75,7 +77,11 @@ func (r *LauncherRuntime) Prepare(ctx context.Context, jobID, hostID, label, med
 	}
 	if !found {
 		var err error
-		inst, err = r.Launcher.StartLabeled(r.recorderType(), "", hostID, label, map[string]string{"OMP_MEDIA_DIR": mediaDir})
+		env := map[string]string{"OMP_MEDIA_DIR": mediaDir}
+		if audioInputs > 1 {
+			env["OMP_RECORDER_AUDIO_INPUTS"] = strconv.Itoa(audioInputs)
+		}
+		inst, err = r.Launcher.StartLabeled(r.recorderType(), "", hostID, label, env)
 		if err != nil {
 			return Session{}, err
 		}
@@ -147,7 +153,7 @@ func (r *LauncherRuntime) ResolveSource(ctx context.Context, src Source) error {
 	return err
 }
 
-func (r *LauncherRuntime) Connect(ctx context.Context, s Session, src Source) error {
+func (r *LauncherRuntime) Connect(ctx context.Context, s Session, src Source, audio *AudioPlan) error {
 	rec, ok := r.node(s.InstanceID)
 	if !ok {
 		return fmt.Errorf("Rekorder nicht in der Registry")
@@ -156,13 +162,15 @@ func (r *LauncherRuntime) Connect(ctx context.Context, s Session, src Source) er
 	if err != nil {
 		return err
 	}
-	var vr, ar string
+	var vr string
+	ars := audioReceivers(rec.Receivers)
+	var ar string
+	if len(ars) > 0 {
+		ar = ars[0]
+	}
 	for _, rc := range rec.Receivers {
-		switch {
-		case strings.Contains(rc.Format, "video") && vr == "":
+		if strings.Contains(rc.Format, "video") && vr == "" {
 			vr = rc.ID
-		case strings.Contains(rc.Format, "audio") && ar == "":
-			ar = rc.ID
 		}
 	}
 	if vs != "" && vr != "" {
@@ -175,10 +183,56 @@ func (r *LauncherRuntime) Connect(ctx context.Context, s Session, src Source) er
 			return fmt.Errorf("Audio verbinden: %w", err)
 		}
 	}
-	if (vs == "" || vr == "") && (as == "" || ar == "") {
+	// weitere Quellen des Kanalplans: je eine auf „Audio 2“ …
+	if audio != nil {
+		for i, extra := range audio.Inputs {
+			_, xa, err := r.senders(extra)
+			if err != nil {
+				return fmt.Errorf("weitere Quelle %d: %w", i+1, err)
+			}
+			if xa == "" {
+				return fmt.Errorf("weitere Quelle %d hat keinen Audio-Sender", i+1)
+			}
+			if i+1 >= len(ars) {
+				return fmt.Errorf("Rekorder hat zu wenige Audio-Empfänger (%d) für %d Quellen", len(ars), len(audio.Inputs)+1)
+			}
+			if err := r.Graph.Connect(ctx, xa, ars[i+1]); err != nil {
+				return fmt.Errorf("weitere Quelle %d verbinden: %w", i+1, err)
+			}
+		}
+	}
+	if (vs == "" || vr == "") && (as == "" || ar == "") && !(audio != nil && len(audio.Inputs) > 0) {
 		return fmt.Errorf("keine passende Sender/Empfänger-Kombination")
 	}
 	return nil
+}
+
+// audioReceivers: Audio-Empfänger des Rekorders in Eingangsreihenfolge („Audio“, „Audio 2“, …) — nach Beschriftung, nicht nach
+// Registry-Reihenfolge (die ist nicht stabil).
+func audioReceivers(rs []registry.ReceiverView) []string {
+	type rv struct {
+		n  int
+		id string
+	}
+	var list []rv
+	for _, rc := range rs {
+		if !strings.Contains(rc.Format, "audio") {
+			continue
+		}
+		n := 1
+		if rest, ok := strings.CutPrefix(rc.Label, "Audio "); ok {
+			if v, err := strconv.Atoi(strings.TrimSpace(rest)); err == nil && v > 1 {
+				n = v
+			}
+		}
+		list = append(list, rv{n, rc.ID})
+	}
+	sort.SliceStable(list, func(i, j int) bool { return list[i].n < list[j].n })
+	out := make([]string, len(list))
+	for i, x := range list {
+		out[i] = x.id
+	}
+	return out
 }
 
 func (r *LauncherRuntime) do(ctx context.Context, method, url string, body any) ([]byte, int, error) {
@@ -204,7 +258,7 @@ func (r *LauncherRuntime) do(ctx context.Context, method, url string, body any) 
 	return buf.Bytes(), resp.StatusCode, nil
 }
 
-func (r *LauncherRuntime) StartRecording(ctx context.Context, s Session, fileRel, mcaPlan string) error {
+func (r *LauncherRuntime) StartRecording(ctx context.Context, s Session, fileRel, mcaPlan string, audio *AudioPlan) error {
 	n, ok := r.node(s.InstanceID)
 	if !ok {
 		return fmt.Errorf("Rekorder nicht erreichbar")
@@ -212,6 +266,11 @@ func (r *LauncherRuntime) StartRecording(ctx context.Context, s Session, fileRel
 	if mcaPlan != "" {
 		if _, code, err := r.do(ctx, http.MethodPatch, n.APIBaseURL+"/params/record.mcaPlan", map[string]any{"value": mcaPlan}); err != nil || code >= 300 {
 			return fmt.Errorf("MCA-Plan nicht setzbar (HTTP %d)", code)
+		}
+	}
+	if plan := audio.RecorderJSON(); plan != "" {
+		if b, code, err := r.do(ctx, http.MethodPatch, n.APIBaseURL+"/params/record.audioPlan", map[string]any{"value": plan}); err != nil || code >= 300 {
+			return fmt.Errorf("Kanalplan nicht setzbar (HTTP %d %s)", code, strings.TrimSpace(string(b)))
 		}
 	}
 	body, code, err := r.do(ctx, http.MethodPost, n.APIBaseURL+"/methods/record.start", map[string]any{"fileName": fileRel})

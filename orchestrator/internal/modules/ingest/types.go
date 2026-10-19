@@ -83,6 +83,54 @@ type Storage struct {
 	FileTemplate string `json:"fileTemplate,omitempty"`
 }
 
+// AudioChannel: ein Ausgabekanal der Aufnahmedatei. Input = Nummer der Audio-Quelle (0 = Hauptquelle, 1… = AudioPlan.Inputs), nil = Stille.
+type AudioChannel struct {
+	Input   *int    `json:"input"`
+	Channel int     `json:"channel"`
+	GainDb  float64 `json:"gainDb,omitempty"`
+	Label   string  `json:"label,omitempty"`
+}
+
+// AudioPlan (Kapitel 45): Kanalzuordnung der Aufnahme — Kanäle mehrerer Quellen in beliebiger Reihenfolge („Shuffling“), mit Gain und Stille.
+// Ohne Plan wird der Ton der Hauptquelle unverändert aufgenommen.
+type AudioPlan struct {
+	// Inputs: weitere Audio-Quellen (Eingang 1…); die Hauptquelle (Eingang 0) ist Schedule.Source.
+	Inputs   []Source       `json:"inputs,omitempty"`
+	Channels []AudioChannel `json:"channels"`
+}
+
+// ExtraKeys: Quellenschlüssel der weiteren Quellen (für Konflikte/Limits).
+func (p *AudioPlan) ExtraKeys() []string {
+	if p == nil {
+		return nil
+	}
+	var out []string
+	for _, s := range p.Inputs {
+		out = append(out, s.Key())
+	}
+	return out
+}
+
+// RecorderJSON: Kanalplan im Format des Rekorders (`record.audioPlan`).
+func (p *AudioPlan) RecorderJSON() string {
+	if p == nil || len(p.Channels) == 0 {
+		return ""
+	}
+	type ch struct {
+		Input   *int    `json:"input"`
+		Channel int     `json:"channel"`
+		GainDb  float64 `json:"gainDb"`
+	}
+	out := struct {
+		Channels []ch `json:"channels"`
+	}{}
+	for _, c := range p.Channels {
+		out.Channels = append(out.Channels, ch{c.Input, c.Channel, c.GainDb})
+	}
+	b, _ := json.Marshal(out)
+	return string(b)
+}
+
 // Schedule: ein (ggf. wiederkehrender) Aufnahmezeitplan.
 type Schedule struct {
 	ID        string         `json:"id"`
@@ -98,6 +146,8 @@ type Schedule struct {
 	Retry     RetryPolicy    `json:"retry"`
 	Late      LatePolicy     `json:"late"`
 	HostPref  string         `json:"hostPref,omitempty"`
+	// Audio: Kanalplan (Kapitel 45), nil = Ton der Hauptquelle unverändert.
+	Audio *AudioPlan `json:"audio,omitempty"`
 	// Owner/OwnerGroup: Verantwortliche Person bzw. Gruppe (Kapitel 44); Aufträge erben sie.
 	Owner      string     `json:"owner,omitempty"`
 	OwnerGroup string     `json:"ownerGroup,omitempty"`
@@ -142,6 +192,7 @@ type Job struct {
 	Metadata      map[string]any  `json:"metadata,omitempty"`
 	Late          LatePolicy      `json:"late"`
 	Revision      int             `json:"revision"`
+	Audio         *AudioPlan      `json:"audio,omitempty"`
 	Owner         string          `json:"owner,omitempty"`
 	OwnerGroup    string          `json:"ownerGroup,omitempty"`
 	CreatedBy     string          `json:"createdBy,omitempty"`

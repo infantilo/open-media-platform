@@ -887,8 +887,12 @@ Der Tab **Aufnahmen** plant Aufnahmen von Live-Quellen (MXL-Sender): einmalig od
   gestrichelt = Warnschwelle, rechts Spitze/Grenze.
 - **Laufende Aufnahmen werden nie automatisch unterbrochen.** Eine Zeitplanänderung ersetzt nur künftige Aufträge. „Abbrechen (laufend)“ beendet bewusst; die bisherige Aufnahme wird gesichert und als Asset registriert.
   Stürzt ein Rekorder ab, wird die Teilaufnahme gesichert und (je nach Versuchen) der Rest der Zeit neu aufgenommen. Der Orchestrator darf währenddessen neu starten — die Aufnahme läuft weiter und wird übernommen.
-- **Grenzen:** Eine Aufnahme zeichnet genau eine Quelle mit ihren vorhandenen Audiokanälen auf; ein Kanal-Mapping (Audio-Shuffling, mehrere Quellen in eine Datei) gibt es noch nicht — MCA-Labels
-  lassen sich nur für die vorhandene Kanalreihenfolge setzen (Node `omp-recorder`).
+- **Audio-Kanäle neu zuordnen (Kanalplan):** Im Formular unten schaltet „Audio-Kanäle neu zuordnen“ den Plan ein. Jede Zeile ist ein **Ausgabekanal** der Datei und nimmt einen **Kanal einer Quelle** auf — beliebige Reihenfolge
+  (↑/↓), mit Gain (−96…+24 dB), Bezeichnung oder **Stille**. „Weitere Quelle“ fügt bis zu sieben Quellen hinzu, von denen **nur der Ton** aufgenommen wird (Bild und Standardton kommen von der Hauptquelle); die Kanalzahl
+  jeder Quelle steht dabei. „Hauptquelle 1:1“ setzt alle Kanäle der Hauptquelle als Ausgangspunkt. Grenzen: MXF bis 32 Kanäle (PCM 24 Bit), andere Formate bis 8. Die Zulassung behandelt jede weitere Quelle wie die
+  Hauptquelle (Quellenkonflikt und Limit gelten auch für sie); fehlt eine beim Start, wartet die Aufnahme nach der Verspätungsrichtlinie. Die Kanalbelegung steht danach in den Asset-Metadaten (`audioChannels`). Ohne Plan wird der Ton der
+  Hauptquelle unverändert aufgenommen. Hinweis: Die Quellen werden über die gemeinsame MXL-Zeitbasis zusammengeführt; Latenzunterschiede zwischen verschiedenen Quellen werden nicht ausgeglichen.
+- **Grenzen:** MCA-Labels (Profil `mcaPlan`) beziehen sich auf die Ausgabekanäle der Datei; ein Kanalplan erzeugt sie nicht selbst. Eine Aufnahme hat genau ein Bild.
 - **Einstellungen** (Administratoren): Formular mit fünf Abschnitten — *Allgemein* (Vorwärmzeit, Ziel der Startabweichung, Planungshorizont, Zielordner), *Standard-Richtlinien* (Verhalten bei fehlender Quelle, Versuche, Pausen), *Zulassungsregeln* (Quellenlimit, Reserve je Ressource ab Priorität, Verdrängungsvorschlag), *Grenzen je Rechner* (Standard und Abweichungen je Rechner, Warnschwelle, Funktionen) und *Aufnahmeprofile* (Dateiformat per Auswahl, erwarteter Bedarf je Ressource — leer = gemessen/Standard —, optionale Konvertierung mit ffmpeg-Argumenten). Eingaben werden vor dem Speichern geprüft; der Server prüft zusätzlich.
   Messwerte aus abgeschlossenen Aufnahmen ersetzen Standardwerte automatisch („gemessen“ vor „konfiguriert“ vor „Standard“).
 

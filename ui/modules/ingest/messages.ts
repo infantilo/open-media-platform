@@ -1,5 +1,125 @@
 // Texte des Moduls „Aufnahme“ (Kapitel 42). Deutsch und Englisch stehen je Schlüssel nebeneinander.
 const TABLE: Record<string, [string, string]> = {
+  "ing.ap.title": [
+    "Audio-Kanäle neu zuordnen (mehrere Quellen, Shuffling)",
+    "Re-map audio channels (multiple sources, shuffling)"
+  ],
+  "ing.ap.hint.off": [
+    "Ohne Kanalplan wird der Ton der Hauptquelle unverändert mit allen Kanälen aufgenommen.",
+    "Without a channel plan the main source's audio is recorded unchanged with all its channels."
+  ],
+  "ing.ap.hint.on": [
+    "Jede Zeile ist ein Kanal der Aufnahmedatei und nimmt einen Kanal einer Quelle auf — beliebige Reihenfolge, Kanäle mehrerer Quellen, Gain oder Stille.",
+    "Each row is one channel of the recording file and takes one channel of a source — any order, channels of several sources, gain or silence."
+  ],
+  "ing.ap.main": [
+    "Hauptquelle",
+    "Main source"
+  ],
+  "ing.ap.source": [
+    "Quelle {n}",
+    "Source {n}"
+  ],
+  "ing.ap.sources": [
+    "Weitere Audio-Quellen (nur ihr Ton wird aufgenommen)",
+    "More audio sources (only their audio is recorded)"
+  ],
+  "ing.ap.addSource": [
+    "Weitere Quelle",
+    "Add source"
+  ],
+  "ing.ap.removeSource": [
+    "Quelle entfernen (ihre Kanäle werden still)",
+    "Remove source (its channels become silent)"
+  ],
+  "ing.ap.chn": [
+    "{n} Kanäle",
+    "{n} channels"
+  ],
+  "ing.ap.chn.unknown": [
+    "Kanäle unbekannt",
+    "channels unknown"
+  ],
+  "ing.ap.col.out": [
+    "Aus",
+    "Out"
+  ],
+  "ing.ap.col.src": [
+    "Quelle",
+    "Source"
+  ],
+  "ing.ap.col.ch": [
+    "Kanal",
+    "Channel"
+  ],
+  "ing.ap.col.gain": [
+    "Gain",
+    "Gain"
+  ],
+  "ing.ap.col.label": [
+    "Bezeichnung",
+    "Label"
+  ],
+  "ing.ap.silence": [
+    "— Stille —",
+    "— silence —"
+  ],
+  "ing.ap.label.ph": [
+    "z. B. Kommentar L",
+    "e.g. commentary L"
+  ],
+  "ing.ap.up": [
+    "Nach oben",
+    "Move up"
+  ],
+  "ing.ap.down": [
+    "Nach unten",
+    "Move down"
+  ],
+  "ing.ap.removeCh": [
+    "Ausgabekanal entfernen",
+    "Remove output channel"
+  ],
+  "ing.ap.addChannel": [
+    "Ausgabekanal",
+    "Output channel"
+  ],
+  "ing.ap.identity": [
+    "Hauptquelle 1:1",
+    "Main source 1:1"
+  ],
+  "ing.ap.identity.hint": [
+    "Alle Kanäle der Hauptquelle in ihrer Reihenfolge als Ausgangspunkt",
+    "All channels of the main source in their order as a starting point"
+  ],
+  "ing.ap.ok": [
+    "{n} Ausgabekanäle aus {s} Quelle(n)",
+    "{n} output channels from {s} source(s)"
+  ],
+  "ing.ap.p.none": [
+    "Der Kanalplan hat keine Ausgabekanäle.",
+    "The channel plan has no output channels."
+  ],
+  "ing.ap.p.tooMany": [
+    "Zu viele Ausgabekanäle (höchstens {max} bei diesem Profil).",
+    "Too many output channels (at most {max} for this profile)."
+  ],
+  "ing.ap.p.range": [
+    "Ausgabekanal {n}: Quelle {src} hat nur {cnt} Kanäle.",
+    "Output channel {n}: source {src} has only {cnt} channels."
+  ],
+  "ing.ap.p.gain": [
+    "Ausgabekanal {n}: Gain muss zwischen −96 und +24 dB liegen.",
+    "Output channel {n}: gain must be between −96 and +24 dB."
+  ],
+  "ing.ap.p.allSilent": [
+    "Mindestens ein Ausgabekanal braucht eine Quelle.",
+    "At least one output channel needs a source."
+  ],
+  "ing.ap.summary": [
+    "{n} Kanäle · {s} Quelle(n)",
+    "{n} channels · {s} source(s)"
+  ],
   "ing.col.owner": [
     "Verantwortlich",
     "Responsible"

@@ -349,7 +349,7 @@ func (a *api) plan() http.HandlerFunc {
 			a.writeErr(w, err)
 			return
 		}
-		d := Plan(Request{JobID: "plan", Source: in.Source.Key(), Start: start, End: start.Add(dur), Priority: prio, Demand: demand, HostPref: in.HostPref, Needs: []string{"recorder"}},
+		d := Plan(Request{JobID: "plan", Source: in.Source.Key(), Extra: in.Audio.ExtraKeys(), Start: start, End: start.Add(dur), Priority: prio, Demand: demand, HostPref: in.HostPref, Needs: []string{"recorder"}},
 			a.svc.CapacityHosts(r.Context()), booked, cfg.planRules(), now)
 		writeJSON(w, 200, map[string]any{"decision": d, "demand": demand})
 	}
@@ -445,6 +445,8 @@ func (a *api) sources() http.HandlerFunc {
 				ID     string `json:"id"`
 				Label  string `json:"label"`
 				Format string `json:"format"`
+				// ChannelCount: Audio-Kanäle (0 = unbekannt) — Grundlage der Kanalauswahl im Kanalplan.
+				ChannelCount int `json:"channelCount,omitempty"`
 			} `json:"senders"`
 		}
 		out := []src{}
@@ -456,10 +458,11 @@ func (a *api) sources() http.HandlerFunc {
 				s := src{InstanceID: n.InstanceID, NodeLabel: n.Label, Online: n.Online}
 				for _, sn := range n.Senders {
 					s.Senders = append(s.Senders, struct {
-						ID     string `json:"id"`
-						Label  string `json:"label"`
-						Format string `json:"format"`
-					}{sn.ID, sn.Label, sn.Format})
+						ID           string `json:"id"`
+						Label        string `json:"label"`
+						Format       string `json:"format"`
+						ChannelCount int    `json:"channelCount,omitempty"`
+					}{sn.ID, sn.Label, sn.Format, sn.ChannelCount})
 				}
 				out = append(out, s)
 			}

@@ -2,6 +2,8 @@
 // Quellkonflikte und der früheste mögliche Start sind sichtbar, **bevor** gespeichert wird.
 import { dateLocale, showToast, t as tt } from "../host.ts";
 import type { Directory } from "../../kit/features.ts";
+import { AudioPlanEditor, type SourceInfo } from "./audio-plan-editor.ts";
+import { type AudioPlanForm, planFromServer, planToPayload } from "./audio-plan-logic.ts";
 import { emptyForm, type FormProblem, type FormState, formToPayload, fmtDuration, fmtInZone, planPayload, validateForm, type Verdict, WEEKDAYS, zonedToUtc } from "./ingest-logic.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, css = "", text = ""): HTMLElementTagNameMap[K] {
@@ -14,11 +16,13 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, css = "", text = ""):
 type Call = (method: string, path: string, body?: unknown) => Promise<{ ok: boolean; status: number; data: Record<string, any> }>;
 
 export interface FormOptions {
-  sources: { instanceId: string; nodeLabel: string; online: boolean; senders: { id: string; label: string; format: string }[] }[];
+  sources: SourceInfo[];
   profiles: Record<string, { label: string }>;
   hosts: { id: string; label: string }[];
   existing: any | null;
   adhoc: boolean;
+  /** Dateiendung je Profil (bestimmt die Kanalgrenze des Kanalplans). */
+  profileExt?: Record<string, string>;
   call: Call;
   done: () => void;
   /** Darf die Person Verantwortliche festlegen (Kapitel 44)? Sonst fehlt das Feld und der Server setzt/behält sie. */
@@ -78,6 +82,8 @@ export function openScheduleForm(o: FormOptions): void {
     clearTimeout(timer);
     timer = setTimeout(async () => {
       const p = planPayload(f);
+      if (p && audio) (p as Record<string, unknown>).audio = planToPayload(audio);
+      apEditor.refresh();
       check.replaceChildren();
       if (!p) {
         check.append(el("span", "color:var(--omp-text-dim);", tt("ing.check.incomplete")));
@@ -225,6 +231,20 @@ export function openScheduleForm(o: FormOptions): void {
   grid.append(field(tt("ing.f.dir"), input("dir", "text", "nachrichten"), false, tt("ing.f.dir.hint")));
   grid.append(field(tt("ing.f.template"), input("template", "text", "{name}_{date}_{time}"), false, tt("ing.f.template.hint")));
   grid.append(field(tt("ing.f.desc"), input("description"), true));
+  // Kanalplan (Kapitel 45): mehrere Quellen, Kanäle umordnen, Gain, Stille
+  let audio: AudioPlanForm | null = planFromServer(o.existing?.audio);
+  const apEditor = new AudioPlanEditor({
+    sources: o.sources,
+    primaryKey: () => f.sourceKey,
+    primaryLabel: () => f.sourceLabel,
+    ext: () => o.profileExt?.[f.profileId] ?? ".mxf",
+    initial: audio,
+    onChange: (p) => {
+      audio = p;
+      runCheck();
+    },
+  });
+  grid.append(apEditor.el);
   // Verantwortliche (Kapitel 44): Person und/oder Gruppe; leer = bei Neuanlage der Ersteller, bei Änderung unverändert.
   let owner: string = o.existing?.owner ?? "";
   let ownerGroup: string = o.existing?.ownerGroup ?? "";
@@ -267,6 +287,12 @@ export function openScheduleForm(o: FormOptions): void {
     }
     errBox.textContent = "";
     const payload = formToPayload(f) as Record<string, any>;
+    const audioProblems = apEditor.problems();
+    if (audioProblems.length) {
+      errBox.textContent = audioProblems.join("\n");
+      return;
+    }
+    payload.audio = planToPayload(audio);
     if (o.canAssign) {
       payload.owner = owner;
       payload.ownerGroup = ownerGroup;
@@ -274,7 +300,7 @@ export function openScheduleForm(o: FormOptions): void {
     let r;
     if (o.adhoc) {
       const start = zonedToUtc(f.startLocal, f.tz);
-      r = await o.call("POST", "/adhoc", { name: payload.name, source: payload.source, start: start?.toISOString(), durationS: payload.spec.durationS, profileId: payload.profileId, priority: payload.priority, late: payload.late, retry: payload.retry, hostPref: payload.hostPref, storage: payload.storage, metadata: payload.metadata, owner: payload.owner, ownerGroup: payload.ownerGroup });
+      r = await o.call("POST", "/adhoc", { name: payload.name, source: payload.source, start: start?.toISOString(), durationS: payload.spec.durationS, profileId: payload.profileId, priority: payload.priority, late: payload.late, retry: payload.retry, hostPref: payload.hostPref, storage: payload.storage, metadata: payload.metadata, owner: payload.owner, ownerGroup: payload.ownerGroup, audio: payload.audio });
     } else if (o.existing) {
       r = await o.call("PUT", `/schedules/${o.existing.id}`, { ...payload, expectedRevision: o.existing.revision });
     } else {

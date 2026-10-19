@@ -3,8 +3,10 @@
 //! 48 kHz mono, korrekt etikettiert) — nimmt N Sekunden auf und gibt den
 //! Dateipfad aus. Mit/ohne Sync-Group (`OMP_MXL_SYNCGROUP=1` schaltet ein, Standard aus).
 //!   cargo run -p omp-recorder --example sync_live_check -- <sekunden>
-#[path = "../src/pipeline.rs"]
+#[path = "../src/audio_plan.rs"]
 #[allow(dead_code)]
+mod audio_plan;
+#[path = "../src/pipeline.rs"]
 mod pipeline;
 
 use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -70,14 +72,14 @@ fn main() {
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let shutdown = Arc::new(AtomicBool::new(false));
-    let cfg = pipeline::Config { domain: domain.clone(), media_dir: media.clone() };
+    let cfg = pipeline::Config { domain: domain.clone(), media_dir: media.clone(), audio_inputs: 1 };
     let sd = shutdown.clone();
     let th = std::thread::spawn(move || pipeline::run(cfg, tx, sd, ready_tx, Arc::new(AtomicU64::new(0))));
     let h = ready_rx.blocking_recv().unwrap().unwrap();
     h.connect_video(vid);
-    h.connect_audio(aid);
+    h.connect_audio(0, aid);
     std::thread::sleep(Duration::from_millis(500));
-    h.start_recording(rec_file.clone(), None).unwrap();
+    h.start_recording(rec_file.clone(), None, None).unwrap();
     std::thread::sleep(Duration::from_secs(secs));
     println!("duration_ms={} flowed/media_ready={}", h.duration_ms(), h.media_ready());
     h.stop_recording().unwrap();

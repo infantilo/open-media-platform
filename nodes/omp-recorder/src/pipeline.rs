@@ -31,6 +31,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::audio_plan::{self, AudioPlan};
 use gst::prelude::*;
 use gstreamer as gst;
 use omp_mediaio::mxl::{MxlAudioInput, MxlContext, MxlVideoInput};
@@ -116,6 +117,8 @@ impl Drop for MarkerTap {
 pub struct Config {
     pub domain: String,
     pub media_dir: String,
+    /// Anzahl der Audio-Receiver (Kapitel 45): Eingang 1 = Hauptquelle, weitere für zusätzliche Quellen im Kanalplan.
+    pub audio_inputs: usize,
 }
 
 pub enum Event {
@@ -146,9 +149,9 @@ impl RecordStatus {
 enum Command {
     ConnectVideo(String),
     DisconnectVideo,
-    ConnectAudio(String),
-    DisconnectAudio,
-    StartRecording(String, Option<String>, Sender<Result<(), String>>),
+    ConnectAudio(usize, String),
+    DisconnectAudio(usize),
+    StartRecording(String, Option<String>, Option<String>, Sender<Result<(), String>>),
     StopRecording(Sender<Result<(), String>>),
 }
 
@@ -173,12 +176,12 @@ impl PipelineHandle {
         let _ = self.commands.send(Command::DisconnectVideo);
     }
 
-    pub fn connect_audio(&self, flow_id: String) {
-        let _ = self.commands.send(Command::ConnectAudio(flow_id));
+    pub fn connect_audio(&self, input: usize, flow_id: String) {
+        let _ = self.commands.send(Command::ConnectAudio(input, flow_id));
     }
 
-    pub fn disconnect_audio(&self) {
-        let _ = self.commands.send(Command::DisconnectAudio);
+    pub fn disconnect_audio(&self, input: usize) {
+        let _ = self.commands.send(Command::DisconnectAudio(input));
     }
 
     /// Blockiert (Pipeline-Thread braucht nur wenige ms für den
@@ -186,10 +189,10 @@ impl PipelineHandle {
     /// (`tiny_http`, ein Request nach dem anderen je Node-Prozess, s.
     /// `omp-node-sdk/src/server.rs`), ein kurzer Block hier ist also
     /// unbedenklich.
-    pub fn start_recording(&self, file_name: String, mca_plan: Option<String>) -> Result<(), String> {
+    pub fn start_recording(&self, file_name: String, mca_plan: Option<String>, audio_plan: Option<String>) -> Result<(), String> {
         let (reply_tx, reply_rx) = std::sync::mpsc::channel();
         self.commands
-            .send(Command::StartRecording(file_name, mca_plan, reply_tx))
+            .send(Command::StartRecording(file_name, mca_plan, audio_plan, reply_tx))
             .map_err(|_| "Pipeline-Thread nicht erreichbar".to_string())?;
         reply_rx
             .recv()
@@ -237,7 +240,7 @@ struct ActiveRecording {
     // `MxlVideoInput`/`MxlAudioInput`-Doku in `omp-mediaio`) — nie
     // gelesen.
     _video_input: Option<MxlVideoInput>,
-    _audio_input: Option<MxlAudioInput>,
+    _audio_inputs: Vec<MxlAudioInput>,
     _marker_tap: Option<MarkerTap>,
     /// MXF-Ausgabe: Zieldatei + Label-Plan, der nach dem Finalisieren per Injektor
     /// (`omp-mxf-mca`, Kap. 33.2) in die Datei geschrieben wird — `mxfmux` selbst
@@ -282,10 +285,11 @@ fn safe_target_path(media_dir: &str, file_name: &str) -> Result<PathBuf, String>
 fn build(
     context: &Arc<MxlContext>,
     video_flow_id: Option<&str>,
-    audio_flow_id: Option<&str>,
+    audio_flow_ids: &[Option<String>],
     media_dir: &str,
     file_name: &str,
     mca_plan: Option<&str>,
+    audio_plan: Option<&str>,
     flowed: Arc<AtomicBool>,
 ) -> Result<ActiveRecording, String> {
     let target = safe_target_path(media_dir, file_name)?;
@@ -295,6 +299,8 @@ fn build(
         Some(_) if !mxf => return Err("MCA-Labels brauchen eine .mxf-Zieldatei".to_string()),
         Some(text) => Some(omp_mxf_mca::inject::Plan::from_json(text).map_err(|e| format!("MCA-Plan: {e}"))?),
     };
+
+    let audio_plan = AudioPlan::parse(audio_plan.unwrap_or(""))?;
 
     let pipeline = gst::Pipeline::new();
 
@@ -386,16 +392,38 @@ fn build(
         None => None,
     };
 
-    let audio_input = match audio_flow_id {
-        Some(flow_id) => {
-            let input = MxlAudioInput::new(&pipeline, context.clone(), flow_id)
-                .map_err(|e| format!("MxlAudioInput({flow_id}): {e}"))?;
-            let audioconvert = gst::ElementFactory::make("audioconvert")
-                .build()
-                .map_err(|e| format!("audioconvert: {e}"))?;
-            let audioresample = gst::ElementFactory::make("audioresample")
-                .build()
-                .map_err(|e| format!("audioresample: {e}"))?;
+    let mut audio_inputs: Vec<MxlAudioInput> = Vec::new();
+    {
+        // Eingänge öffnen: ohne Plan nur Eingang 1 (alle seine Kanäle, wie bisher), mit Plan alle im Plan verwendeten.
+        let wanted: Vec<usize> = match &audio_plan {
+            Some(p) => p.used_inputs(),
+            None => audio_flow_ids.first().and_then(|f| f.as_ref()).map(|_| vec![0]).unwrap_or_default(),
+        };
+        let mut opened: Vec<(usize, usize)> = Vec::new(); // (Eingangsnummer, Index in audio_inputs)
+        for i in &wanted {
+            let flow_id = audio_flow_ids
+                .get(*i)
+                .and_then(|f| f.as_deref())
+                .ok_or_else(|| format!("Audio-Eingang {} ist nicht verbunden", i + 1))?;
+            let input = MxlAudioInput::new(&pipeline, context.clone(), flow_id).map_err(|e| format!("MxlAudioInput({flow_id}): {e}"))?;
+            opened.push((*i, audio_inputs.len()));
+            audio_inputs.push(input);
+        }
+        if !audio_inputs.is_empty() {
+            let audio_tail = match &audio_plan {
+                Some(plan) => {
+                    plan.validate(&|i| opened.iter().find(|(n, _)| *n == i).map(|(_, k)| audio_inputs[*k].channels))?;
+                    let ins: Vec<(usize, gst::Element, u32)> =
+                        opened.iter().map(|(n, k)| (*n, audio_inputs[*k].tail.clone(), audio_inputs[*k].channels)).collect();
+                    if !mxf && plan.channels.len() > 8 {
+                        return Err("Mehr als 8 Ausgabekanäle gehen nur in .mxf (AAC in Matroska: höchstens 8)".to_string());
+                    }
+                    audio_plan::build_matrix_graph(&pipeline, plan, &ins)?
+                }
+                None => audio_inputs[0].tail.clone(),
+            };
+            let audioconvert = gst::ElementFactory::make("audioconvert").build().map_err(|e| format!("audioconvert: {e}"))?;
+            let audioresample = gst::ElementFactory::make("audioresample").build().map_err(|e| format!("audioresample: {e}"))?;
             // `OMP_RECORDER_RAW_AUDIO=1` (Diagnose): unkomprimierter PCM-Ton statt AAC — trennt
             // Encoder-/Dekoder-Vorlauf von echtem Versatz bei der A/V-Messung.
             // MXF (BWF-Audio) trägt immer unkomprimierten PCM (24 Bit), nie AAC.
@@ -426,9 +454,9 @@ fn build(
                 .map_err(|e| format!("add audio branch: {e}"))?;
             if mxf {
                 pipeline.add(&pcm_caps).map_err(|e| format!("add audio caps: {e}"))?;
-                gst::Element::link_many([&input.tail, &audioconvert, &audioresample, &pcm_caps, &queue])
+                gst::Element::link_many([&audio_tail, &audioconvert, &audioresample, &pcm_caps, &queue])
             } else {
-                gst::Element::link_many([&input.tail, &audioconvert, &audioresample, &avenc_aac, &aacparse, &queue])
+                gst::Element::link_many([&audio_tail, &audioconvert, &audioresample, &avenc_aac, &aacparse, &queue])
             }
             .map_err(|e| format!("link audio branch: {e}"))?;
 
@@ -442,20 +470,18 @@ fn build(
                 .map_err(|e| format!("link audio queue to muxer: {e}"))?;
 
             arm_flowed_probe(&queue.static_pad("src").expect("queue has src pad"));
-            Some(input)
         }
-        None => None,
-    };
+    }
 
     pipeline
         .set_state(gst::State::Playing)
         .map_err(|e| format!("set state playing: {e}"))?;
 
-    let marker_tap = MarkerTap::attach(video_input.as_ref().map(|i| &i.tail), audio_input.as_ref().map(|i| &i.tail));
+    let marker_tap = MarkerTap::attach(video_input.as_ref().map(|i| &i.tail), audio_inputs.first().map(|i| &i.tail));
     Ok(ActiveRecording {
         pipeline,
         _video_input: video_input,
-        _audio_input: audio_input,
+        _audio_inputs: audio_inputs,
         _marker_tap: marker_tap,
         mca: plan.map(|p| (target, p)),
     })
@@ -552,7 +578,7 @@ pub fn run(
     }));
 
     let mut video_flow_id: Option<String> = None;
-    let mut audio_flow_id: Option<String> = None;
+    let mut audio_flow_ids: Vec<Option<String>> = vec![None; config.audio_inputs.max(1)];
     let mut active: Option<ActiveRecording> = None;
 
     let freeze_duration = |started_at: &Mutex<Option<Instant>>, frozen: &AtomicU64| {
@@ -582,22 +608,31 @@ pub fn run(
         match commands_rx.recv_timeout(COMMAND_POLL_INTERVAL) {
             Ok(Command::ConnectVideo(flow_id)) => video_flow_id = Some(flow_id),
             Ok(Command::DisconnectVideo) => video_flow_id = None,
-            Ok(Command::ConnectAudio(flow_id)) => audio_flow_id = Some(flow_id),
-            Ok(Command::DisconnectAudio) => audio_flow_id = None,
-            Ok(Command::StartRecording(file_name, mca_plan, reply)) => {
+            Ok(Command::ConnectAudio(i, flow_id)) => {
+                if let Some(slot) = audio_flow_ids.get_mut(i) {
+                    *slot = Some(flow_id);
+                }
+            }
+            Ok(Command::DisconnectAudio(i)) => {
+                if let Some(slot) = audio_flow_ids.get_mut(i) {
+                    *slot = None;
+                }
+            }
+            Ok(Command::StartRecording(file_name, mca_plan, audio_plan, reply)) => {
                 let result = if active.is_some() {
                     Err("Aufnahme läuft bereits — erst record.stop".to_string())
-                } else if video_flow_id.is_none() && audio_flow_id.is_none() {
+                } else if video_flow_id.is_none() && audio_flow_ids.iter().all(Option::is_none) {
                     Err("keine Quelle verbunden (Video-/Audio-Receiver)".to_string())
                 } else {
                     flowed.store(false, Ordering::Relaxed);
                     build(
                         &context,
                         video_flow_id.as_deref(),
-                        audio_flow_id.as_deref(),
+                        &audio_flow_ids,
                         &config.media_dir,
                         &file_name,
                         mca_plan.as_deref(),
+                        audio_plan.as_deref(),
                         flowed.clone(),
                     )
                 };
