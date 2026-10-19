@@ -265,3 +265,31 @@ func TestResolveFallsBackToStubWorkflowWhenNodeBelongsToNoWorkflow(t *testing.T)
 		t.Fatalf("Consoles = %+v, want one entry falling back to StubWorkflowID", result.Consoles)
 	}
 }
+
+type fakeGroupLoader struct {
+	fakeBindingLoader
+	groups []string
+}
+
+func (f fakeGroupLoader) GroupsOf(string) ([]string, error) { return f.groups, nil }
+
+// Eine operate-Bindung auf eine Gruppe gilt für ihre Mitglieder (nicht für andere).
+func TestResolveGroupBindingAppliesToMembersOnly(t *testing.T) {
+	b := fakeBindingLoader{bindings: []authz.Binding{
+		{Subject: "g1", SubjectType: authz.SubjectTypeGroup, WorkflowID: "wf-1", NodeID: "mixer", Verb: authz.VerbOperate},
+	}}
+	member, err := NewResolver(fakeGroupLoader{b, []string{"g1"}}, nil).Resolve("operator1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !member.HasOperateBindings {
+		t.Errorf("Mitglied: HasOperateBindings = false, want true")
+	}
+	other, err := NewResolver(fakeGroupLoader{b, []string{"g2"}}, nil).Resolve("operator1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.HasOperateBindings {
+		t.Errorf("Nichtmitglied: HasOperateBindings = true, want false")
+	}
+}

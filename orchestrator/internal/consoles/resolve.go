@@ -84,6 +84,12 @@ type BindingLoader interface {
 
 // Resolver löst Rollenbindungen für den authentifizierten Nutzer
 // (username, s. internal/auth) gegen die aktuell bekannten Nodes auf.
+// GroupLister ist die optionale Fähigkeit des Rechte-Speichers (implementiert von *authz.Store), die Gruppen eines
+// Nutzers zu nennen. Ohne sie zählen nur direkte Bindungen.
+type GroupLister interface {
+	GroupsOf(username string) ([]string, error)
+}
+
 type Resolver struct {
 	store     BindingLoader
 	workflows WorkflowRoleFinder
@@ -121,6 +127,18 @@ func (r *Resolver) Resolve(username string, nodes []NodeInfo) (Result, error) {
 		return Result{}, err
 	}
 
+	// Bindungen auf Gruppen gelten für jedes Mitglied (Nutzerauftrag 2026-09-24, wie authz.Store.Check).
+	groups := map[string]bool{}
+	if gl, ok := r.store.(GroupLister); ok {
+		ids, err := gl.GroupsOf(username)
+		if err != nil {
+			return Result{}, err
+		}
+		for _, id := range ids {
+			groups[id] = true
+		}
+	}
+
 	seen := make(map[string]bool, len(nodes))
 	// `Consoles` explizit als leerer (nicht nil) Slice initialisiert:
 	// `encoding/json` serialisiert einen nil-Slice als `null`, nicht `[]`
@@ -128,7 +146,11 @@ func (r *Resolver) Resolve(username string, nodes []NodeInfo) (Result, error) {
 	// dass Client-Code das nicht verlässlich selbst abfängt.
 	result := Result{Consoles: []ConsoleEntry{}}
 	for _, b := range bindings {
-		if b.Subject != username {
+		if b.SubjectType == authz.SubjectTypeGroup {
+			if !groups[b.Subject] {
+				continue
+			}
+		} else if b.Subject != username {
 			continue
 		}
 		if b.Verb == authz.VerbConfigure || b.Verb == authz.VerbAdmin {

@@ -342,17 +342,8 @@ class AdminView extends HTMLElement {
   #showOrgForm = false;
   #newOrgName = "";
   #orgChangeTarget: string | null = null;
-  // Rechte-Übersicht je Nutzer (Nutzerfund 2026-09-24: "rollenbindung,
-  // gruppen (in rollenbindung), gruppen und organisation... extrem
-  // unübersichtlich... es muss immer klar sichtbar sein welcher user
-  // welche rechte hat") — #rightsExpandedUsername ist wie
-  // #selectedGroupId ein einzelner Toggle-Zustand (kein Set: es soll
-  // immer nur ein Panel gleichzeitig offen sein, damit die Seite nicht
-  // ausufert), #renderUserRightsPanel löst ihn zu direkten UND über
-  // Gruppenmitgliedschaft geerbten Bindungen auf. #allGroupMembers cacht
-  // die Mitgliederlisten ALLER Gruppen (nicht nur der in der
-  // Gruppen-Unteransicht gerade aufgeklappten), s. #loadAllGroupMembers.
-  #rightsExpandedUsername: string | null = null;
+  // #allGroupMembers cacht die Mitgliederlisten ALLER Gruppen (nicht nur der in der Gruppen-Unteransicht gerade
+  // aufgeklappten) für den Rechte-Editor, s. #loadAllGroupMembers.
   #allGroupMembers: Map<string, string[]> = new Map();
 
   // Storage-Backends (Nutzerauftrag 2026-09-24). Formularwerte liegen
@@ -620,10 +611,9 @@ class AdminView extends HTMLElement {
   }
 
   // Lädt die Mitgliederliste JEDER Gruppe einmal im Hintergrund (nicht nur
-  // der gerade in der Gruppen-Unteransicht aufgeklappten) — die
-  // Rechte-Übersicht je Nutzer (#renderUserRightsPanel) muss für JEDEN
-  // Nutzer wissen können, in welchen Gruppen er Mitglied ist, ohne dass
-  // jede Nutzer-Zeile das einzeln nachladen müsste. Gruppenzahl ist im
+  // der gerade in der Gruppen-Unteransicht aufgeklappten) — der Rechte-Editor muss
+  // für JEDEN Nutzer wissen, in welchen Gruppen er Mitglied ist, ohne dass
+  // jede Zeile das einzeln nachladen müsste. Gruppenzahl ist im
   // Admin-Kontext klein genug, ein paralleler Fetch aller Mitgliederlisten
   // fällt nicht ins Gewicht (kein serverseitiges GroupsForUser-Äquivalent
   // über HTTP vorhanden, s. groups.Store.GroupsForUser-Doku — nur
@@ -2400,18 +2390,6 @@ class AdminView extends HTMLElement {
     heading.append(title, newBtn);
     section.appendChild(heading);
 
-    // Nutzerfund 2026-09-24 ("es muss immer klar sichtbar sein welcher
-    // user welche rechte hat"): zeigt auf einen Blick, wo diese Ansicht
-    // hinführt, statt dass man erst "Rollenbindungen"/"Gruppen" einzeln
-    // durchsuchen und im Kopf zusammenrechnen muss.
-    const hint = document.createElement("div");
-    hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:var(--omp-space-2);";
-    hint.textContent =
-      tt("adm.a9e8b4") +
-      tt("adm.e2e8f7") +
-      tt("adm.7bb70b");
-    section.appendChild(hint);
-
     if (this.#showUserForm) {
       section.appendChild(this.#renderUserForm());
     }
@@ -2442,87 +2420,9 @@ class AdminView extends HTMLElement {
       }
       table.appendChild(tbody);
       section.appendChild(table);
-
-      const expanded = this.#users.find((u) => u.username === this.#rightsExpandedUsername);
-      if (expanded) section.appendChild(this.#renderUserRightsPanel(expanded));
     }
 
     return section;
-  }
-
-  // Alle Gruppen, in denen username Mitglied ist — löst #allGroupMembers
-  // (Cache aller Gruppen-Mitgliederlisten) gegen #groups auf.
-  #userGroups(username: string): Group[] {
-    return this.#groups.filter((g) => (this.#allGroupMembers.get(g.id) ?? []).includes(username));
-  }
-
-  // Alle Rollenbindungen, deren Subjekt diese eine Gruppe ist — Gegenstück
-  // zu #userDirectBindings, beide zusammen ergeben die vollständigen
-  // effektiven Rechte eines Nutzers (s. #renderUserRightsPanel).
-  #groupBindings(groupId: string): RoleBinding[] {
-    return this.#bindings.filter((b) => b.subjectType === "group" && b.subject === groupId);
-  }
-
-  #userDirectBindings(username: string): RoleBinding[] {
-    return this.#bindings.filter((b) => b.subjectType === "user" && b.subject === username);
-  }
-
-  // Rechte-Übersicht (Nutzerfund 2026-09-24): fasst zusammen, was heute
-  // auf drei Unteransichten verteilt ist (Rollenbindungen nach Nutzer,
-  // Rollenbindungen nach Gruppe, Gruppenmitgliedschaft) — direkte
-  // Bindungen UND alle über Gruppenmitgliedschaft geerbten, mit
-  // funktionierendem Löschen-Button (reuse #renderBindingGroup), damit
-  // diese Ansicht nicht nur informiert, sondern auch der Ort ist, an dem
-  // man ein überflüssiges Recht gleich entfernen kann.
-  #renderUserRightsPanel(u: UserEntry): HTMLElement {
-    const panel = document.createElement("div");
-    panel.style.cssText =
-      "margin:4px 0 var(--omp-space-3) 0;padding:10px 12px;border:1px solid var(--omp-border);" +
-      "border-radius:var(--omp-radius);background:var(--omp-surface-raised);";
-
-    const heading = document.createElement("div");
-    heading.style.cssText = "font-weight:600;margin-bottom:6px;";
-    heading.textContent = tt("adm.4820a0", { p0: u.username });
-    panel.appendChild(heading);
-
-    if (u.isAdmin) {
-      const note = document.createElement("div");
-      note.style.cssText = "color:var(--omp-preset);font-size:var(--omp-font-size-xs);margin-bottom:6px;";
-      note.textContent = tt("adm.64b2a5");
-      panel.appendChild(note);
-    }
-
-    const direct = this.#userDirectBindings(u.username);
-    if (direct.length > 0) {
-      panel.appendChild(this.#renderBindingGroup(tt("adm.65f9b0"), direct, "scope"));
-    }
-
-    const groups = this.#userGroups(u.username);
-    let anyGroupRights = false;
-    for (const g of groups) {
-      const bindings = this.#groupBindings(g.id);
-      if (bindings.length === 0) continue;
-      anyGroupRights = true;
-      panel.appendChild(this.#renderBindingGroup(tt("adm.5241aa", { p0: g.name }), bindings, "scope"));
-    }
-
-    if (groups.length > 0 && !anyGroupRights) {
-      const note = document.createElement("div");
-      note.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:4px;";
-      note.textContent = tt("adm.89d043", { p0: groups.map((g) => g.name).join(", ") });
-      panel.appendChild(note);
-    }
-
-    if (!u.isAdmin && direct.length === 0 && !anyGroupRights) {
-      const note = document.createElement("div");
-      note.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);";
-      note.textContent =
-        tt("adm.1f9d88") +
-        tt("adm.1e5016");
-      panel.appendChild(note);
-    }
-
-    return panel;
   }
 
   #renderUserForm(): HTMLElement {
@@ -2688,16 +2588,6 @@ class AdminView extends HTMLElement {
       return tr;
     }
 
-    const rightsBtn = document.createElement("button");
-    const rightsOpen = this.#rightsExpandedUsername === u.username;
-    rightsBtn.textContent = rightsOpen ? tt("adm.a294ab") : tt("adm.ae7313");
-    rightsBtn.title = tt("adm.927eb5");
-    rightsBtn.style.cssText = "font-size:11px;cursor:pointer;margin-right:4px;";
-    rightsBtn.addEventListener("click", () => {
-      this.#rightsExpandedUsername = rightsOpen ? null : u.username;
-      this.#render();
-    });
-
     const resetBtn = document.createElement("button");
     resetBtn.textContent = tt("adm.3e45af");
     resetBtn.style.cssText = "font-size:11px;cursor:pointer;margin-right:4px;";
@@ -2714,7 +2604,7 @@ class AdminView extends HTMLElement {
     delBtn.style.cssText = "font-size:11px;";
     delBtn.addEventListener("click", () => this.#deleteUser(u.username));
 
-    actionsTd.append(rightsBtn, resetBtn, delBtn);
+    actionsTd.append(resetBtn, delBtn);
     tr.appendChild(actionsTd);
     return tr;
   }
@@ -3285,15 +3175,23 @@ class AdminView extends HTMLElement {
 
     const addRow = document.createElement("div");
     addRow.style.cssText = "display:flex;gap:6px;margin-top:6px;";
-    const userInput = document.createElement("input");
-    userInput.placeholder = tt("adm.f5f8d4");
-    userInput.value = this.#newGroupMemberUsername;
+    // Auswahl statt Freitext: nur Nutzer, die noch nicht Mitglied sind.
+    const userInput = document.createElement("select");
     userInput.style.cssText = "font-size:11px;flex:1;min-width:100px;";
-    userInput.addEventListener("input", () => {
+    const candidates = this.#users.filter((u) => !this.#groupMembers.includes(u.username));
+    const ph = document.createElement("option");
+    ph.value = "";
+    ph.textContent = tt("adm.f5f8d4");
+    userInput.appendChild(ph);
+    for (const u of candidates) {
+      const o = document.createElement("option");
+      o.value = u.username;
+      o.textContent = u.username;
+      userInput.appendChild(o);
+    }
+    userInput.value = candidates.some((u) => u.username === this.#newGroupMemberUsername) ? this.#newGroupMemberUsername : "";
+    userInput.addEventListener("change", () => {
       this.#newGroupMemberUsername = userInput.value;
-    });
-    userInput.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter") void this.#addGroupMember(g.id, userInput.value);
     });
     const addBtn = document.createElement("button");
     addBtn.textContent = tt("adm.e2d84f");
@@ -3302,26 +3200,6 @@ class AdminView extends HTMLElement {
     addRow.append(userInput, addBtn);
     panel.appendChild(addRow);
 
-    // Nutzerfund 2026-09-24: die Rechte einer Gruppe direkt hier zeigen,
-    // statt dass man dafür in den Rollenbindungen-Tab wechseln und dort
-    // per Auge nach "👥 <dieser Gruppenname>" suchen muss — derselbe
-    // Reuse von #renderBindingGroup wie in #renderUserRightsPanel, inkl.
-    // funktionierendem Löschen-Button.
-    const groupBindings = this.#groupBindings(g.id);
-    if (groupBindings.length === 0) {
-      const rightsHeading = document.createElement("div");
-      rightsHeading.style.cssText = "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);margin:10px 0 4px;";
-      rightsHeading.textContent = tt("adm.ccdd47");
-      panel.appendChild(rightsHeading);
-      const empty = document.createElement("div");
-      empty.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);";
-      empty.textContent = tt("adm.422405");
-      panel.appendChild(empty);
-    } else {
-      const rightsBox = this.#renderBindingGroup(tt("adm.ccdd47"), groupBindings, "scope");
-      rightsBox.style.marginTop = "10px";
-      panel.appendChild(rightsBox);
-    }
 
     return panel;
   }
@@ -3339,51 +3217,6 @@ class AdminView extends HTMLElement {
     if (b.subjectType !== "group") return b.subject;
     const name = this.#groups.find((g) => g.id === b.subject)?.name ?? b.subject;
     return `👥 ${name}`;
-  }
-
-  // columnKind bestimmt nur, welches Feld in der ersten Spalte steht
-  // (das jeweils NICHT in der Gruppenüberschrift stehende) — Rest der
-  // Zeile (Recht, Löschen-Button) ist in beiden Blickrichtungen gleich.
-  #renderBindingGroup(headerLabel: string, bindings: RoleBinding[], columnKind: "scope" | "subject"): HTMLElement {
-    const box = document.createElement("div");
-    box.style.cssText = "margin-bottom:10px;";
-
-    const header = document.createElement("div");
-    header.textContent = headerLabel;
-    header.style.cssText = "font-weight:600;margin-bottom:2px;";
-    box.appendChild(header);
-
-    const table = document.createElement("table");
-    table.style.cssText = "border-collapse:collapse;width:100%;margin-bottom:4px;";
-    const tbody = document.createElement("tbody");
-    for (const b of bindings) {
-      const tr = document.createElement("tr");
-
-      const labelTd = document.createElement("td");
-      labelTd.style.cssText = "padding:2px 8px 2px 16px;color:var(--omp-text-dim);";
-      labelTd.textContent = columnKind === "scope" ? this.#scopeLabel(b) : this.#subjectLabel(b);
-      tr.appendChild(labelTd);
-
-      const verbTd = document.createElement("td");
-      verbTd.style.cssText = "padding:2px 8px;";
-      verbTd.textContent = VERB_LABEL[b.verb] ?? b.verb;
-      tr.appendChild(verbTd);
-
-      const actionsTd = document.createElement("td");
-      actionsTd.style.cssText = "padding:2px 8px;text-align:right;";
-      const delBtn = document.createElement("button");
-      delBtn.textContent = tt("adm.1010b0");
-      delBtn.className = "omp-btn-danger";
-      delBtn.style.cssText = "font-size:11px;";
-      delBtn.addEventListener("click", () => this.#deleteBinding(b));
-      actionsTd.appendChild(delBtn);
-      tr.appendChild(actionsTd);
-
-      tbody.appendChild(tr);
-    }
-    table.appendChild(tbody);
-    box.appendChild(table);
-    return box;
   }
 
   #nodeLabel(nodeId: string): string {

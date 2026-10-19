@@ -1574,7 +1574,7 @@ export const en: Record<keyof typeof de, string> = {
   "adm.638b34": "No member yet.",
   "adm.e2d84f": "+ Add",
   "adm.ccdd47": "Rights of this group",
-  "adm.422405": "None yet — create one below under “Role bindings” with subject type “Group”.",
+  "adm.422405": "None yet — assign them under Admin → Permissions for the group.",
   "adm.2578ee": "Role bindings ({p0})",
   "adm.473936": "+ New binding",
   "adm.aa6c6f": "Create/delete individual bindings (subject: user OR group). For “what may user X ",

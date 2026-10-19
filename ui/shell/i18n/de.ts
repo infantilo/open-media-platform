@@ -1573,7 +1573,7 @@ export const de = {
   "adm.638b34": "Noch kein Mitglied.",
   "adm.e2d84f": "+ Hinzufügen",
   "adm.ccdd47": "Rechte dieser Gruppe",
-  "adm.422405": "Noch keine — unten bei \"Rollenbindungen\" mit Subjekt-Typ \"Gruppe\" anlegen.",
+  "adm.422405": "Noch keine — unter Admin → Rechte bei der Gruppe vergeben.",
   "adm.2578ee": "Rollenbindungen ({p0})",
   "adm.473936": "+ Neue Bindung",
   "adm.aa6c6f": "Einzelne Bindungen anlegen/löschen (Subjekt: Nutzer ODER Gruppe). Für \"was darf Nutzer X ",
