@@ -279,6 +279,31 @@ Full walkthroughs and context for every screen above are in
   (e.g. switcher source selection, mixer program) and the references
   other nodes hold to it.
 
+- **Scheduled live recording (tab "Recordings")**: one-off or recurring
+  recordings of MXL sources with IANA time zone and DST handling.
+  Admission is checked *before* the start, per resource kind (recorders,
+  converters, CPU, memory, disk throughput/space, network, MXL memory)
+  over time windows, with typed reasons and the earliest possible start;
+  running recordings are never interrupted, and an orchestrator restart
+  mid-recording loses nothing. Finished recordings become assets.
+- **File intake (tab "Intake")**: every new file gets an automatic QC
+  analysis (ffprobe/ffmpeg; "QC could not run" is kept apart from "QC
+  found errors"), then a person takes it, reviews it in a frame-accurate
+  player on a verified proxy, sets segments ([in, out), out exclusive) and
+  metadata, and submits it for approval (none / single / four-eyes). The
+  original file is never modified. This is a probe plus content checks,
+  not an MXF structure validation.
+- **Feature rights, responsibility and a workstation for operators**:
+  modules declare named rights (e.g. create schedules, run QC, approve),
+  granted to users or groups in Administration → Permissions (global
+  *Configure* still covers everything). Recordings have a responsible
+  person/group; intake files can be assigned to a person or group with a
+  due date. Operators land on a workstation page with their workflows,
+  the tools they may use and a task list (overdue/failed first, with a
+  warning badge everywhere). Not yet: restricting a right to specific
+  sources/profiles, multi-source recording and audio shuffling into the
+  recorded file's channel layout.
+
 **Operations**
 
 - **System update from the browser**: an admin uploads a signed update
