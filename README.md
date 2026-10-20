@@ -703,6 +703,18 @@ expert mode) — both described in full under "What's in the box".
 
 **Local devices and cloud capacity** — Kapitel 34/35: the device hub offers a host's cameras, microphones and sound-card outputs to the MXL/NMOS world per device; the orchestrator can rent cloud hosts on demand (reservations from the scheduler, rule-based autoscaling behind a hard budget cap, cost pre-calculation). The cloud side is verified end to end with the simulation provider; the AWS adapter is built without an SDK and **has not been run against a real AWS account** (launching is dry-run only until explicitly enabled, see `docs/CLOUD-AWS.md`). Video capture from a real camera is likewise only covered by fixtures so far.
 
+**Control-plane load behaviour** — measured with `tools/loadtest/`: 150
+stored workflows, 20 concurrent operators changing parameters through the
+orchestrator, 40 open event streams and 14 read clients on one dev machine
+(single host, one real node, load generator on the same machine). After the
+2026-10 optimisation pass (workflow-role index instead of a full workflow
+scan per permission check, short-lived auth cache, batched asynchronous audit
+writes, bounded DB pool, parallel registry poll, events serialised once) the
+orchestrator sustained ~670 requests/s overall (~510 parameter changes/s)
+with a median latency of 33 ms for a parameter change, versus ~106 requests/s
+and 376 ms before. Not covered: several real hosts, hundreds of live nodes
+(the registry poll still re-reads the full inventory every 2 s), media paths.
+
 **Observability** — a trace ID follows every IS-05 connect/disconnect
 and generic-proxy request end to end into one replicated log channel, a
 "Diagnose" tab in the Flow Editor tails it live and pivots a failed
