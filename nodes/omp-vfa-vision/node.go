@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/nodes/omp-vfa-vision/internal/health"
@@ -23,7 +26,10 @@ var uiFiles embed.FS
 func serveNode(ctx context.Context, natsURL string) {
 	label := env("OMP_LABEL", "Gesichtserkennung")
 	host := env("OMP_HOST", "127.0.0.1")
-	port := envInt("OMP_PORT", 9461)
+	port := 9461
+	if n, err := strconv.Atoi(os.Getenv("OMP_PORT")); err == nil && n >= 0 {
+		port = n
+	}
 	registryURL := env("OMP_REGISTRY_URL", "http://127.0.0.1:8010")
 
 	mux := http.NewServeMux()
@@ -73,9 +79,16 @@ func serveNode(ctx context.Context, natsURL string) {
 			_, _ = w.Write(b)
 		})
 	}
-	srv := &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: mux}
+	// OMP_PORT=0 (Launcher): freien Port wählen und den echten melden.
+	ln, lerr := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if lerr != nil {
+		slog.Error("listen", "error", lerr)
+		os.Exit(1)
+	}
+	port = ln.Addr().(*net.TCPAddr).Port
+	srv := &http.Server{Handler: mux}
 	go func() {
-		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+		if err := srv.Serve(ln); err != http.ErrServerClosed {
 			slog.Error("http", "error", err)
 		}
 	}()

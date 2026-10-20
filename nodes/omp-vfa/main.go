@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -53,9 +54,16 @@ func main() {
 
 	mux := http.NewServeMux()
 	registerAPI(mux, svc)
-	srv := &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: cors(mux)}
+	// OMP_PORT=0 (Launcher): freien Port wählen und den echten melden.
+	ln, lerr := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if lerr != nil {
+		slog.Error("listen", "error", lerr)
+		os.Exit(1)
+	}
+	port = ln.Addr().(*net.TCPAddr).Port
+	srv := &http.Server{Handler: cors(mux)}
 	go func() {
-		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+		if err := srv.Serve(ln); err != http.ErrServerClosed {
 			slog.Error("http", "error", err)
 		}
 	}()

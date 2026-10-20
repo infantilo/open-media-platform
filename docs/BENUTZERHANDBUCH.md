@@ -1579,7 +1579,7 @@ Der Node **X/Y-Panel (Kreuzschiene)** ist ein Bedienpanel ohne eigene Ports: Er 
 
 ## 10c-4. Video folgt Audio (Kamera schaltet auf den Sprecher)
 
-Für Studios mit mehreren Kameras und mehreren Personen: Wer spricht, wird im Bild gezeigt. Dazu gehören zwei Dienste, die Sie über den Katalog starten: **Video folgt Audio** (Bedienung und Schaltlogik) und **Gesichtserkennung (Video folgt Audio)** (zählt Gesichter je Kamera, erkennt keine Personen). Beide gehören in denselben Workflow wie Bild- und Tonmischer.
+Für Studios mit mehreren Kameras und mehreren Personen: Wer spricht, wird im Bild gezeigt. Dazu gehören zwei Dienste, die Sie über den Katalog starten: **Video folgt Audio** (Bedienung und Schaltlogik) und **Gesichtserkennung (Video folgt Audio)** (zählt Gesichter je Kamera, erkennt keine Personen). Beide gehören in denselben Workflow wie Bild- und Tonmischer. Erscheint eine Kachel nicht im Flow-Editor, hilft ein Neustart der Instanz (löschen und neu aus dem Katalog starten); beide Dienste wählen ihren Port beim Start selbst.
 
 **Einrichtung in drei Schritten (Kachel „Video folgt Audio“):**
 
