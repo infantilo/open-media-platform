@@ -65,7 +65,7 @@ func main() {
 	if id := env("OMP_INSTANCE_ID", ""); id != "" {
 		node.Tags["urn:x-omp:instance"] = []string{id}
 	}
-	device := is04.NewDevice(deviceID, label+" Device", nodeID, nil, nil)
+	device := is04.NewDevice(deviceID, label+" Device", nodeID, []string{}, []string{})
 	reg := is04.NewClient(registryURL)
 	register := func(ctx context.Context) error {
 		if err := reg.Register(ctx, "node", node); err != nil {

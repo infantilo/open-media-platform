@@ -67,7 +67,7 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("omp-vfa-vision läuft", "intervall", interval, "sim", sim)
-	<-ctx.Done()
+	serveNode(ctx, natsURL)
 	wg.Wait()
 	set.stopAll()
 }
