@@ -58,6 +58,7 @@ func (s *cameraSet) apply(want map[string]string) {
 			rc.cancel()
 			<-rc.done
 			delete(s.running, id)
+			status.remove(id)
 			slog.Info("kamera entfernt", "camera", id)
 		}
 	}
@@ -68,6 +69,7 @@ func (s *cameraSet) apply(want map[string]string) {
 		cctx, cancel := context.WithCancel(s.ctx)
 		rc := &runningCam{url: url, cancel: cancel, done: make(chan struct{})}
 		s.running[id] = rc
+		status.add(id, url)
 		go func() {
 			defer close(rc.done)
 			runCamera(cctx, s.nc, s.det, id, newPreviewSource(url), s.interval)

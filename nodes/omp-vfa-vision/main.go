@@ -90,10 +90,12 @@ func runCamera(ctx context.Context, nc *nats.Conn, det *Detector, id string, src
 			var faces []Face
 			if faces, err = det.DetectJPEG(data); err == nil {
 				failing = false
+				status.report(id, faces, nil)
 				publish(nc, State{CameraID: id, Faces: faces})
 				continue
 			}
 		}
+		status.report(id, nil, err)
 		if !failing {
 			slog.Warn("kamera ohne Bild", "camera", id, "error", err)
 			failing = true
