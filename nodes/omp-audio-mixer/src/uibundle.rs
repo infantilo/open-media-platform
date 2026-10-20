@@ -22,6 +22,8 @@ const BUNDLE: &str = concat!(
     "\n",
     include_str!("../ui/22-outputs.js"),
     "\n",
+    include_str!("../ui/23-follow.js"),
+    "\n",
     include_str!("../ui/30-panel.js"),
 );
 

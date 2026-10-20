@@ -297,6 +297,26 @@
     "expectedResources": "moderat während einer Aufnahme (Encoding), sonst sehr gering (keine Quelle abonniert)"
   },
   {
+    "type": "omp-vfa",
+    "label": "Video folgt Audio",
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-vfa"],
+    "env": {},
+    "description": "Schaltet den Bildmischer automatisch auf die Kamera, die die gerade sprechende Person zeigt. Einrichtung in drei Schritten: Bild- und Tonmischer wählen, Kameras und Personen anlegen, pro Person kurz „Einrichten“ (die Person spricht, die Kameras schlagen ihre Gesichter vor, ein Klick bestätigt). Bei Stille optional Totale. Braucht den Dienst „Gesichtserkennung (Video folgt Audio)“.",
+    "i18n": { "en": {"label": "Video follows audio", "description": "Automatically cuts the video mixer to the camera that shows the person currently speaking. Set up in three steps: choose video and audio mixer, add cameras and people, then briefly \"Set up\" each person (the person speaks, the cameras propose their faces, one click confirms). Optional wide shot on silence. Needs the service \"Face detection (video follows audio)\".", "expectedResources": "very low (control plane only)"} },
+    "expectedResources": "sehr gering (nur Steuerebene)"
+  },
+  {
+    "type": "omp-vfa-vision",
+    "label": "Gesichtserkennung (Video folgt Audio)",
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-vfa-vision"],
+    "env": {},
+    "description": "Zählt Gesichter je Kamera und meldet Position und Größe an „Video folgt Audio“ – ohne Personen zu identifizieren. Liest die Vorschaubilder der Kameras (alle 300 ms), reines Go ohne GPU. Die Kameras gibt „Video folgt Audio“ automatisch vor.",
+    "i18n": { "en": {"label": "Face detection (video follows audio)", "description": "Counts faces per camera and reports position and size to \"Video follows audio\" – without identifying anyone. Reads the cameras' preview images (every 300 ms), pure Go, no GPU. The cameras are provided by \"Video follows audio\" automatically.", "expectedResources": "low (about 5 % of a core per camera)"} },
+    "expectedResources": "gering (ca. 5 % eines Kerns je Kamera)"
+  },
+  {
     "type": "omp-xy-panel",
     "label": "X/Y-Panel (Kreuzschiene)",
     "runner": "process",

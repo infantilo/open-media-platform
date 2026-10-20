@@ -247,6 +247,12 @@ button{cursor:pointer}
 .ppuck{position:absolute;width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;background:var(--c-air);border:2px solid #fff;box-shadow:0 0 8px #0008;pointer-events:none}
 .panbox{flex:1 1 100%}
 .pctl{display:flex;flex-direction:column;gap:8px;min-width:220px;flex:1 1 220px}.tog.mini{padding:0 6px;min-height:20px}
+.afvcards{display:grid;gap:10px;margin-top:10px}
+.afvcard{border:1px solid var(--c-border);border-radius:8px;padding:10px}
+.afvhead{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.afvdot{color:var(--c-dim)}.afvdot[data-on="1"]{color:var(--c-air)}
+.afvchips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.chipbtn[aria-pressed="false"]{opacity:.6;border-style:dashed}
 .modal .acts{display:flex;gap:8px;margin-top:14px;justify-content:flex-end}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 .toastbar{padding:6px 12px;color:var(--c-dim);font-size:12px}
@@ -402,6 +408,7 @@ class MixerApp {
     this.sceneSaveBtn = h("button", { class: "tb", type: "button", text: T("x.saveScene"), title: T("am5.b82be3"), onclick: () => { const n = window.prompt(T("am5.b07796"), ""); if (n && n.trim()) this.cmd("captureScene", { label: n.trim(), includeProcessing: false }).then(() => { this.announce(T("am5.d718c3", { p0: n.trim() })); this.poll(); }); } });
     this.srcBtn = h("button", { class: "tb", type: "button", "aria-pressed": "false", text: T("am5.a7c93e"), title: T("am5.62a232"), onclick: () => { this.ui.bySource = !this.ui.bySource; this.srcBtn.setAttribute("aria-pressed", String(this.ui.bySource)); this.saveUi(); this.lastSig = ""; this.renderChannels(); } });
     this.outBtn = h("button", { class: "tb", type: "button", text: T("am5.31561f"), title: T("am5.8f4bcb"), onclick: () => this.openOutputs() });
+    this.followBtn = h("button", { class: "tb", type: "button", text: tf("x.afvBtn"), title: tf("x.afvBtnTip"), onclick: () => this.openFollow() });
     this.groupBtn = h("button", { class: "tb", type: "button", text: T("am5.eb7c90"), title: T("am5.902db1"), onclick: () => this.syncGroupChannels() });
     this.masterMeter = new Meter();
     this.masterMeter.root.className = "meter mm";
@@ -434,7 +441,7 @@ class MixerApp {
     this.outStrips = new Map();
     this.newOut = buildNewOutputCard(this);
     const secHead = (title, sub, ...btns) => h("header", { class: "sechead" }, h("h2", { text: title }), h("span", { class: "hint", text: sub }), h("span", { class: "spacer" }), ...btns);
-    this.secIn = h("div", { class: "sec sec-in" }, secHead(T("am5.47a809"), T("am5.6a5ccc"), this.srcBtn, this.groupBtn, this.addBtn), this.channelsEl);
+    this.secIn = h("div", { class: "sec sec-in" }, secHead(T("am5.47a809"), T("am5.6a5ccc"), this.srcBtn, this.followBtn, this.groupBtn, this.addBtn), this.channelsEl);
     this.groupsEl = h("section", { class: "channels grps", "aria-label": T("am5.5fa3d3") });
     this.grpStrips = new Map();
     this.secGrp = h("div", { class: "sec sec-grp" }, secHead(T("am5.e1e914"), T("am5.fcd947")), this.groupsEl);
@@ -584,6 +591,7 @@ class MixerApp {
     this.renderGroups();
     this.renderOutputs();
     if (this.outputs && this.outputs.isOpen) this.outputs.render();
+    if (this.follow && this.follow.isOpen) this.follow.render();
     this.updateMasterUi();
     this.center.refresh();
     this.layoutNow();
@@ -681,6 +689,10 @@ class MixerApp {
     const l = Object.assign(this.state.masterLimiter, patch);
     this.sendNow("setMasterLimiter", { enabled: l.enabled, thresholdDb: l.thresholdDb, ratio: l.ratio, makeupDb: l.makeupDb }, "limiter");
     this.updateMasterUi();
+  }
+  openFollow() {
+    this.follow = this.follow || new FollowDialog(this);
+    this.follow.open();
   }
   openOutputs() {
     this.outputs = this.outputs || new OutputsDialog(this);

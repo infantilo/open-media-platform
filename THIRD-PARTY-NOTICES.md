@@ -14,6 +14,13 @@ of this repository's source**; they are fetched at install/build time or loaded 
 | How it is used | Not linked into OMP. Loaded at run time through GStreamer if present; without it OMP falls back to `videorate`. Installed by `./install.sh --media`, by `deploy/dev/install-avvideofilter.sh`, or from the offline package (`docs/OFFLINE-INSTALLATION.md`) |
 | Credit | The plugin, its FFmpeg integration and the first integration into PIPELINE CONTROLLER (pipeline-controller issue #2) are emcodem's work; OMP reuses the plugin and the idea of the optional, fall-back-safe `blend` mode |
 
+## Pigo (face detection in `omp-vfa-vision`)
+
+| | |
+|---|---|
+| Project | [github.com/esimov/pigo](https://github.com/esimov/pigo) (Endre Simo), MIT License |
+| Use | Pure-Go Pico cascade classifier (library) and the pre-trained `facefinder` cascade, embedded in the binary (`nodes/omp-vfa-vision/cascade/facefinder`); the test image `testdata/sample.jpg` is the library's own sample |
+
 ## MXL and libfabric
 
 Vendored under `third_party/` at build time by `deploy/dev/install-mxl.sh` (never committed); upstream licenses apply

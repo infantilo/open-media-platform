@@ -370,7 +370,7 @@ Object.assign(CenterControl.prototype, {
     fl("AFV An-Pegel", "onLevelDb", -60, 12, 0.5, "dB");
     fl("AFV Aus-Pegel", "offLevelDb", -60, 12, 0.5, "dB");
     fl(T("am3.e11a39"), "transitionMs", 0, 5000, 50, "ms");
-    root.append(this.section(T("am3.b3b0de"), top, rows, h("div", { class: "rows" }, h("div", { class: "row" }, add, addDefault)), status), this.section(T("am3.41c69b"), afv));
+    root.append(this.section(T("am3.b3b0de"), top, rows, h("div", { class: "rows" }, h("div", { class: "row" }, add, addDefault)), status), this.advanced(T("am3.41c69b"), afv));
     return root;
   },
 

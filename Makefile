@@ -1,6 +1,6 @@
 .PHONY: streamdeck-udev preflight doctor update-keygen update-bundle build test check check-ci up down ci ui nodes contract start hosts stop status mtls-up mtls-down mtls-issue-certs nmos-registry-tls-up nmos-registry-tls-down nats-tls-up nats-tls-down backup restore proxy-up proxy-down soak clean-cache
 
-GO_MODULES := orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check tools/update-bundle host-agent supervisor update nodeoptions
+GO_MODULES := orchestrator nodes/mock nodes/omp-vfa nodes/omp-vfa-vision tools/contract-check tools/nmos-conformance-check tools/update-bundle host-agent supervisor update nodeoptions
 
 build: ui
 	$(foreach m,$(GO_MODULES),cd $(m) && go build ./... && cd $(CURDIR) &&) true
@@ -32,6 +32,10 @@ MEDIA_NODES := omp-channel-player omp-video-mixer-me omp-audio-mixer omp-audio-m
 nodes:
 	cd nodes && cargo build --workspace --bins $(foreach n,$(MEDIA_NODES),--exclude $(n))
 	cd nodes && cargo build --release $(foreach n,$(MEDIA_NODES),-p $(n))
+	# Go-Nodes (Video folgt Audio, Kapitel 46): reines Go, landen neben den Rust-Binaries
+	mkdir -p nodes/target/release
+	cd nodes/omp-vfa && go build -o ../target/release/omp-vfa .
+	cd nodes/omp-vfa-vision && go build -o ../target/release/omp-vfa-vision .
 
 # Prüft, ob dieser Rechner alles hat, was OpenMediaPlatform braucht
 # (Werkzeuge, Podman, Container-Images, Ports, GStreamer/MXL für die Medien-

@@ -1406,6 +1406,14 @@ PAN, AUX, AUTOMIX, DUCK, AUTOMATION, SZENEN).
   Plakette **AFV ●** (Quelle im Programm, Tor offen) bzw. **AFV ○** (gestrichelt, Tor zu). Die
   Schaltfläche **Nach Quelle** in der Werkzeugleiste gruppiert die Kanäle je Quelle (Sender-Name als
   Gruppenkopf) statt je Mischgruppe; die Wahl wird im Browser gemerkt.
+- **Ton folgt Bild – einfach (Kap. 46.5)**: Der Knopf **Ton folgt Bild** über den Kanälen öffnet
+  eine Karte je Videoquelle: „Wenn **Kamera A** im Bild ist, sind offen: …“. Die Kanäle der Quelle
+  sind als Schaltflächen aufgeführt (✓ = gehört dazu); ein Klick fügt hinzu oder nimmt weg. **Hart**
+  oder **Weich** (Crossfade) gilt für die ganze Karte, der Punkt vor „Wenn“ leuchtet, solange die
+  Quelle im Programm des Bildmischers ist. **Automatisch aus den Quellen** ordnet in einem Klick
+  jeden Kanal der Videoquelle zu, aus der sein Ton kommt; weitere Quellen kommen über **Videoquelle
+  hinzufügen …**. Pegel, Stumm-Variante und Override bleiben unter **Center Control → AUTOMATION →
+  Audio folgt Video (AFV)** (eingeklappt) einstellbar. Ein Kanal gehört zu genau einer Karte.
 - **Gemeinsamer Schaltzeitpunkt (`takeAt`, Kap. 31.4/31.5)**: Die Playout-Automation gibt bei jedem
   Take einen absoluten TAI-Zeitpunkt (ns, auf das Bildraster gerundet) an Bildmischer
   (`crosspoint.cut/take/autoTrans`), Tonmischer (`setVideoContext`) und Kanal-Player (`playAt`) weiter.
@@ -1568,6 +1576,20 @@ Der Node **X/Y-Panel (Kreuzschiene)** ist ein Bedienpanel ohne eigene Ports: Er 
 - **Bouquets (Bündel):** Ein Bouquet ist ein Bündel von Quellen, z. B. Video von Quelle X, Audio von Quelle Y, Daten von Quelle Z. *Bouquets → Bouquet zusammenstellen*: Quellen links anklicken (nochmal klicken entfernt sie, ↑/↓ ändert die Reihenfolge der Kanäle), Namen und Zuordnung wählen, **Speichern**. Im Dialog *Bouquets* wählst du beim Bündel den **Ziel-Node** (z. B. den Monitor-Eingang) und die **Zuordnung**: *1:1* (Video→Video, erstes Audio→erster Audio-Eingang, zweites Audio→zweiter …, Daten→Daten) oder *per Tag* (Audio-Sender mit Tag X → Audio-Empfänger mit Tag X). Die Vorschau zeigt vorab, was wohin geschaltet wird und was keinen Partner hat (fehlende oder offline Quellen, zu wenige Eingänge); **Schalten** führt aus. Fällt eine Quelle aus, behalten die übrigen ihren Platz.
 - **Bouquets (feste Schaltungen):** Mehrere Schaltungen mit einem Klick. *Bouquets → Feste Schaltungen aufzeichnen*: Quellen/Ziele wie gewohnt wählen (es wird nichts geschaltet, sondern gesammelt), Namen vergeben, **Speichern**. Im Dialog *Bouquets* schaltet **Schalten** alle Einträge; nicht mehr auffindbare Punkte werden namentlich gemeldet. Bouquets gelten für alle Nutzer und überstehen Neustarts (Bezug über Node und Portname, nicht über wechselnde IDs).
 - **Tag-Schaltung:** Quelle und Ziel tragen Tags (z. B. `role.commentator`). Im Dialog *Tag-Schaltung* wählst du einen Quell-Node und einen Ziel-Node; die **Vorschau** zeigt, welcher Sender zu welchem Empfänger passt (gemeinsamer Tag, gleicher Medientyp, die allgemeinen `media.*`-Tags zählen nicht). Optional „Rest nach Reihenfolge verbinden“. **Schalten** führt aus, **Als Bouquet speichern** merkt sich die Regel und wertet die Tags erst beim Schalten aus. Tags setzt du im Flow-Editor über den Knopf 🏷 im Kachelkopf (Abschnitt 2.2) oder per API: für Quellen über `PUT /api/v1/sources/{senderId}/tags`, für Ziele über `PUT /api/v1/sinks/{receiverId}/tags` (Recht *Konfigurieren*); ein Node kann sie auch selbst melden (IS-04-Tag `urn:x-omp:tags` am Sender bzw. Empfänger).
+
+## 10c-4. Video folgt Audio (Kamera schaltet auf den Sprecher)
+
+Für Studios mit mehreren Kameras und mehreren Personen: Wer spricht, wird im Bild gezeigt. Dazu gehören zwei Dienste, die Sie über den Katalog starten: **Video folgt Audio** (Bedienung und Schaltlogik) und **Gesichtserkennung (Video folgt Audio)** (zählt Gesichter je Kamera, erkennt keine Personen). Beide gehören in denselben Workflow wie Bild- und Tonmischer.
+
+**Einrichtung in drei Schritten (Kachel „Video folgt Audio“):**
+
+1. **Geräte:** Bildmischer und Tonmischer wählen, **+ Kamera hinzufügen** und je Kamera den Kamera-Node wählen. Optional eine **Totale bei Stille** (springt nach einigen Sekunden ohne Sprecher dorthin).
+2. **Personen:** **+ Person**, Namen eintragen, das **Mikrofon** (Kanal des Tonmischers) wählen und **Einrichten** drücken. Die Person spricht jetzt ca. 5 Sekunden. Danach zeigt die Kachel je Kamera ein Vorschaubild mit gelben Rahmen um die gesehenen Gesichter; der wahrscheinlichste Treffer ist grün vorgewählt. Ein Klick auf ein anderes Gesicht ändert die Wahl, eine Kamera ohne die Person lässt sich abwählen. **Übernehmen** speichert („✓ bereit: Kamera 1, Kamera 2“).
+3. **Schalter:** Der große Schalter **Video folgt Audio: AN** startet den Automatismus.
+
+**Was passiert:** Spricht eine Person länger als die Reaktionszeit (Standard 0,7 s), schaltet der Bildmischer hart auf die erste Kamera, die sie an ihrem Platz zeigt. Ein Bild bleibt mindestens 2,5 s stehen, sodass nichts flattert. Oben steht jederzeit, welche Kamera auf Sendung ist und wer spricht; die Pegelbalken der Personen zeigen, ob das Mikrofon gehört wird. Unter **Feineinstellungen** liegen Sprechschwelle (dBFS), Reaktionszeit, Mindestdauer und die Zeit bis zur Totalen.
+
+**Hinweise:** Die Gesichtserkennung liest die Vorschaubilder der Kamera-Nodes und braucht dafür keine Einstellung (die Kachel gibt die Kameras vor). Sie arbeitet auf CPU (ca. 5 % eines Kerns je Kamera). Die Schaltlogik braucht – wie die Playout-Automation – ein Service-Token; beim ersten Einsatz nach einem Update den Orchestrator einmal neu starten. Der Bildmischer muss die Kameras als Eingänge haben (Verbindungen im Flow-Editor).
 
 ## 10d. Playout-Workflow „Playout MXF“ (Player, Mischer, Monitor)
 

@@ -768,6 +768,8 @@ func main() {
 	// Playout-Fachwissen im Workflow-Dienst (Automations-Ziele, Control-Plane-Typ) kommt über die Erweiterungspunkte der
 	// Modul-Schnittstelle (Kapitel 36.5), nicht mehr aus dem Kern.
 	playoutmod.Register(workflowSvc)
+	// Video folgt Audio (Kapitel 46) steuert Bild- und Tonmischer fern und braucht wie die Automation ein Service-Token.
+	workflowSvc.RegisterControlPlaneType("omp-vfa")
 	// Lauf-Historie (Scheduler: geplant vs. real) samt täglicher Bereinigung.
 	workflowRunStore := workflows.NewRunStore(database)
 	workflowSvc.SetRunRecorder(workflowRunStore)

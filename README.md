@@ -441,6 +441,13 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   auto-discovered multi-tile monitoring (with preview of every discovered
   source); as a role in a workflow the multiviewer shows only that
   workflow's sources
+- **omp-vfa** / **omp-vfa-vision** — video follows audio: the face
+  detection service (pure Go, no CGO) reports faces per camera from the
+  camera previews, and the control node cuts the video mixer to the camera
+  that shows the person currently speaking. Set up in three steps with a
+  one-click "Set up" per person (the person speaks, the cameras propose
+  their faces). The audio mixer gained a simple "Audio follows video"
+  dialog (one card per video source, channels assigned by click).
 - **omp-xy-panel** — crosspoint panel (X/Y matrix) for operators: sinks
   with tags, navigation by workflows/groups, bouquets (a bundle of
   sources per media type), tag-based switching, whole-node routing
