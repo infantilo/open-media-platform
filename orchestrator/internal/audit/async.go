@@ -2,6 +2,9 @@ package audit
 
 import "log/slog"
 
+// maxBatch: höchstens so viele Einträge pro INSERT.
+const maxBatch = 200
+
 type logJob struct {
 	username, method, path, nodeID string
 	status                         int
@@ -20,8 +23,19 @@ type AsyncLogger struct {
 func NewAsyncLogger(store *Store, buffer int) *AsyncLogger {
 	a := &AsyncLogger{store: store, jobs: make(chan logJob, buffer)}
 	go func() {
+		batch := make([]logJob, 0, maxBatch)
 		for j := range a.jobs {
-			a.store.Log(j.username, j.method, j.path, j.nodeID, j.status)
+			batch = append(batch[:0], j)
+		drain:
+			for len(batch) < maxBatch {
+				select {
+				case n := <-a.jobs:
+					batch = append(batch, n)
+				default:
+					break drain
+				}
+			}
+			a.store.logBatch(batch)
 		}
 	}()
 	return a

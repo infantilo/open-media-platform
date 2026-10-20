@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -77,6 +78,36 @@ func (s *Store) Log(username, method, path, nodeID string, status int) {
 	// graph.Service.publish): das Admin-Tab lädt bei Empfang einmal
 	// GET /api/v1/admin/audit-log neu statt den Eintrag aus dem
 	// Event-Payload zu rekonstruieren.
+	if s.events != nil {
+		s.events.Broadcast(sse.Event{Type: "audit.appended", Data: json.RawMessage("null")})
+	}
+}
+
+// logBatch schreibt mehrere Einträge mit einem einzigen INSERT und löst nur
+// ein "audit.appended"-Event aus (Durchsatz bei vielen Schreibzugriffen).
+func (s *Store) logBatch(jobs []logJob) {
+	if len(jobs) == 0 {
+		return
+	}
+	var sb strings.Builder
+	args := make([]any, 0, len(jobs)*5)
+	sb.WriteString(`INSERT INTO audit_log (username, method, path, node_id, status) VALUES `)
+	for i, j := range jobs {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		n := i * 5
+		fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d)", n+1, n+2, n+3, n+4, n+5)
+		var nodeIDArg any
+		if j.nodeID != "" {
+			nodeIDArg = j.nodeID
+		}
+		args = append(args, j.username, j.method, j.path, nodeIDArg, j.status)
+	}
+	if _, err := s.db.Exec(sb.String(), args...); err != nil {
+		slog.Warn("audit log batch write failed", "error", err, "entries", len(jobs))
+		return
+	}
 	if s.events != nil {
 		s.events.Broadcast(sse.Event{Type: "audit.appended", Data: json.RawMessage("null")})
 	}
