@@ -14,6 +14,18 @@ import (
 type Event struct {
 	Type string          `json:"type"`
 	Data json.RawMessage `json:"data"`
+
+	// wire hält die einmalig (in Broadcast) serialisierte JSON-Form, damit
+	// nicht jeder verbundene Client dasselbe Event erneut marshalt.
+	wire []byte
+}
+
+// Wire liefert die JSON-Form des Events (vorberechnet, falls vom Hub verteilt).
+func (e Event) Wire() ([]byte, error) {
+	if e.wire != nil {
+		return e.wire, nil
+	}
+	return json.Marshal(e)
 }
 
 // lostEventsEvent wird einem Client zugestellt, sobald wieder Platz in
@@ -78,6 +90,9 @@ func (h *Hub) unsubscribe(ch chan Event) {
 // — merkt sich das aber (dropped), um dem Client bei der nächsten
 // Gelegenheit lostEventsEvent zuzustellen (S2, s. Feld-Kommentar oben).
 func (h *Hub) Broadcast(e Event) {
+	if w, err := json.Marshal(e); err == nil {
+		e.wire = w
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for ch := range h.clients {

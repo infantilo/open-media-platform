@@ -33,8 +33,11 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -67,6 +70,11 @@ func Connect(dsn string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("db: open: %w", err)
 	}
+	// Pool-Grenzen: ohne Limit öffnet jede parallele Anfrage eine eigene
+	// Verbindung und kann Postgres' max_connections (Standard 100) ausreizen.
+	db.SetMaxOpenConns(envInt("OMP_DB_MAX_OPEN_CONNS", 40))
+	db.SetMaxIdleConns(envInt("OMP_DB_MAX_IDLE_CONNS", 10))
+	db.SetConnMaxIdleTime(5 * time.Minute)
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("db: ping: %w", err)
@@ -154,4 +162,11 @@ func Migrate(db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+func envInt(name string, def int) int {
+	if v, err := strconv.Atoi(os.Getenv(name)); err == nil && v > 0 {
+		return v
+	}
+	return def
 }

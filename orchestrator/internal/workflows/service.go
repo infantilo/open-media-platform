@@ -424,6 +424,20 @@ func (s *Service) Get(id string) (Workflow, error) {
 	return s.store.Get(id)
 }
 
+// roleIndex nutzt den gecachten Index des echten Stores; Test-Fakes ohne
+// roleIndex bauen ihn pro Aufruf aus List() (bisheriges Verhalten).
+func (s *Service) roleIndex() (*roleIndex, error) {
+	if st, ok := s.store.(interface{ roleIndex() (*roleIndex, error) }); ok {
+		return st.roleIndex()
+	}
+	tmp := &Store{}
+	wfs, err := s.store.List()
+	if err != nil {
+		return nil, err
+	}
+	return tmp.buildRoleIndex(wfs), nil
+}
+
 // FindRoleForNode löst auf, ob nodeID aktuell eine Rolle in einem
 // Workflow erfüllt (Kapitel 12 Teil 4, docs/END-GOAL-FEATURES.md
 // §12.3e: Workflow-Scope-AuthZ) — genutzt von httpapi.requireVerbOnNode
@@ -437,22 +451,15 @@ func (s *Service) Get(id string) (Workflow, error) {
 // Metadaten); die Operator-Konsolen-Auswahl (Kapitel 12 Teil 5) zeigt
 // diesen Wert als Kachel-Beschriftung.
 func (s *Service) FindRoleForNode(nodeID string) (workflowID, workflowName, role string, ok bool) {
-	wfs, err := s.store.List()
+	idx, err := s.roleIndex()
 	if err != nil {
 		return "", "", "", false
 	}
-	for _, wf := range wfs {
-		for r, rt := range wf.Runtime {
-			if rt.NodeID == nodeID {
-				label := wf.Definition.Title
-				if label == "" {
-					label = wf.Name
-				}
-				return wf.ID, label, r, true
-			}
-		}
+	ref, found := idx.byNode[nodeID]
+	if !found {
+		return "", "", "", false
 	}
-	return "", "", "", false
+	return ref.workflowID, ref.label, ref.role, true
 }
 
 // FindRoleForInstance liefert Workflow und Rolle, die die Instanz gerade
@@ -463,18 +470,15 @@ func (s *Service) FindRoleForInstance(instanceID string) (workflowID, role strin
 	if instanceID == "" {
 		return "", "", false
 	}
-	wfs, err := s.store.List()
+	idx, err := s.roleIndex()
 	if err != nil {
 		return "", "", false
 	}
-	for _, wf := range wfs {
-		for r, rt := range wf.Runtime {
-			if rt.InstanceID == instanceID {
-				return wf.ID, r, true
-			}
-		}
+	ref, found := idx.byInstance[instanceID]
+	if !found {
+		return "", "", false
 	}
-	return "", "", false
+	return ref.workflowID, ref.role, true
 }
 
 // Delete entfernt einen Workflow — nur im Zustand "stopped" (kein

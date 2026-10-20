@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 )
 
@@ -16,6 +17,31 @@ var ErrInvalidCredentials = errors.New("auth: invalid credentials")
 type Service struct {
 	store  *Store
 	signer *Signer
+
+	cacheMu   sync.Mutex
+	countAt   time.Time
+	countVal  int
+	userCache map[string]cachedUser
+}
+
+// authCacheTTL: so lange gelten UserCount und Nutzerzeile (Epoch/OrgID) aus
+// dem Speicher — jede Request-Authentifizierung kostete vorher 2 DB-
+// Roundtrips. Mutationen dieses Prozesses (Anlegen, Löschen, Passwort,
+// Widerruf, Org-Wechsel) verwerfen den Cache sofort; die TTL begrenzt nur
+// die Verzögerung bei Änderungen durch einen anderen Orchestrator.
+const authCacheTTL = 2 * time.Second
+
+type cachedUser struct {
+	u  User
+	ok bool
+	at time.Time
+}
+
+func (s *Service) invalidateCache() {
+	s.cacheMu.Lock()
+	s.countAt = time.Time{}
+	s.userCache = nil
+	s.cacheMu.Unlock()
 }
 
 // NewService erstellt einen Service gegen store, Tokens signiert mit
@@ -26,7 +52,43 @@ func NewService(store *Store, jwtSecret []byte) *Service {
 
 // UserCount liefert die Anzahl angelegter Nutzer (0 = Bootstrap-Modus).
 func (s *Service) UserCount(ctx context.Context) (int, error) {
-	return s.store.Count(ctx)
+	s.cacheMu.Lock()
+	if time.Since(s.countAt) < authCacheTTL {
+		n := s.countVal
+		s.cacheMu.Unlock()
+		return n, nil
+	}
+	s.cacheMu.Unlock()
+	n, err := s.store.Count(ctx)
+	if err != nil {
+		return 0, err
+	}
+	s.cacheMu.Lock()
+	s.countVal, s.countAt = n, time.Now()
+	s.cacheMu.Unlock()
+	return n, nil
+}
+
+// cachedByUsername ist ByUsername mit kurzem Cache (nur für Authenticate;
+// Login liest bewusst frisch).
+func (s *Service) cachedByUsername(ctx context.Context, username string) (User, bool, error) {
+	s.cacheMu.Lock()
+	if c, hit := s.userCache[username]; hit && time.Since(c.at) < authCacheTTL {
+		s.cacheMu.Unlock()
+		return c.u, c.ok, nil
+	}
+	s.cacheMu.Unlock()
+	u, ok, err := s.store.ByUsername(ctx, username)
+	if err != nil {
+		return User{}, false, err
+	}
+	s.cacheMu.Lock()
+	if s.userCache == nil || len(s.userCache) > 4096 {
+		s.userCache = map[string]cachedUser{}
+	}
+	s.userCache[username] = cachedUser{u: u, ok: ok, at: time.Now()}
+	s.cacheMu.Unlock()
+	return u, ok, nil
 }
 
 // DefaultOrgID spiegelt organizations.DefaultOrgID (bewusst dupliziert
@@ -49,6 +111,7 @@ func (s *Service) CreateUser(ctx context.Context, username, password, orgID stri
 	if orgID == "" {
 		orgID = DefaultOrgID
 	}
+	defer s.invalidateCache()
 	return s.store.Create(ctx, username, hash, orgID)
 }
 
@@ -59,6 +122,7 @@ func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
 
 // DeleteUser entfernt einen Nutzer per Nutzername.
 func (s *Service) DeleteUser(ctx context.Context, username string) error {
+	defer s.invalidateCache()
 	return s.store.Delete(ctx, username)
 }
 
@@ -78,6 +142,7 @@ func (s *Service) SetPassword(ctx context.Context, username, password string) er
 	if err != nil {
 		return err
 	}
+	defer s.invalidateCache()
 	if err := s.store.SetPasswordHash(ctx, username, hash); err != nil {
 		return err
 	}
@@ -91,6 +156,7 @@ func (s *Service) UpdateUserOrg(ctx context.Context, username, orgID string) err
 	if orgID == "" {
 		orgID = DefaultOrgID
 	}
+	defer s.invalidateCache()
 	return s.store.UpdateOrg(ctx, username, orgID)
 }
 
@@ -129,7 +195,7 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Principal, er
 	if err != nil {
 		return Principal{}, err
 	}
-	u, ok, err := s.store.ByUsername(ctx, p.Username)
+	u, ok, err := s.cachedByUsername(ctx, p.Username)
 	if err != nil {
 		return Principal{}, err
 	}
@@ -151,6 +217,7 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Principal, er
 // "an allen Geräten abmelden"-Admin-Eingriff bei Verdacht auf ein
 // geleaktes Token, unabhängig von einem Passwort-Wechsel.
 func (s *Service) RevokeSessions(ctx context.Context, username string) error {
+	defer s.invalidateCache()
 	return s.store.RevokeSessions(ctx, username)
 }
 

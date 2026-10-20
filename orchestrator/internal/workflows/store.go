@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"sync"
+	"time"
 )
 
 // ErrNotFound wird geliefert, wenn kein Workflow mit dieser ID existiert.
@@ -14,6 +16,69 @@ var ErrNotFound = errors.New("workflows: not found")
 // gleiches Muster wie internal/snapshots.Store.
 type Store struct {
 	db *sql.DB
+
+	idxMu sync.Mutex
+	idx   *roleIndex
+}
+
+// roleIndexTTL begrenzt, wie lange der Rollen-Index ohne eigenen Schreibzugriff
+// gilt (Schreibzugriffe dieses Prozesses verwerfen ihn sofort; die TTL fängt
+// nur Änderungen durch andere Orchestrator-Instanzen ab).
+const roleIndexTTL = 3 * time.Second
+
+type roleRef struct {
+	workflowID, label, role, instanceID string
+}
+
+// roleIndex bildet Node-ID und Instanz-ID auf (Workflow, Rolle) ab — ersetzt
+// den früheren Voll-Scan aller Workflows pro Berechtigungsprüfung.
+type roleIndex struct {
+	byNode     map[string]roleRef
+	byInstance map[string]roleRef
+	builtAt    time.Time
+}
+
+func (s *Store) buildRoleIndex(wfs []Workflow) *roleIndex {
+	idx := &roleIndex{byNode: map[string]roleRef{}, byInstance: map[string]roleRef{}, builtAt: time.Now()}
+	for _, wf := range wfs {
+		label := wf.Definition.Title
+		if label == "" {
+			label = wf.Name
+		}
+		for r, rt := range wf.Runtime {
+			ref := roleRef{workflowID: wf.ID, label: label, role: r, instanceID: rt.InstanceID}
+			if rt.NodeID != "" {
+				idx.byNode[rt.NodeID] = ref
+			}
+			if rt.InstanceID != "" {
+				idx.byInstance[rt.InstanceID] = ref
+			}
+		}
+	}
+	return idx
+}
+
+func (s *Store) invalidateRoleIndex() {
+	s.idxMu.Lock()
+	s.idx = nil
+	s.idxMu.Unlock()
+}
+
+// roleIndex liefert den (ggf. neu aufgebauten) Index. Der Index wird unter
+// idxMu gebaut, damit parallele Aufrufer nicht alle gleichzeitig List() lesen.
+func (s *Store) roleIndex() (*roleIndex, error) {
+	s.idxMu.Lock()
+	defer s.idxMu.Unlock()
+	if s.idx != nil && time.Since(s.idx.builtAt) < roleIndexTTL {
+		return s.idx, nil
+	}
+	wfs, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	idx := s.buildRoleIndex(wfs)
+	s.idx = idx
+	return idx, nil
 }
 
 // NewStore erstellt einen Store auf der gegebenen, bereits migrierten
@@ -24,6 +89,7 @@ func NewStore(database *sql.DB) *Store {
 
 // Put speichert (oder überschreibt) einen Workflow.
 func (s *Store) Put(wf Workflow) error {
+	defer s.invalidateRoleIndex()
 	data, err := json.Marshal(wf)
 	if err != nil {
 		return err
@@ -94,6 +160,7 @@ func (s *Store) List() ([]Workflow, error) {
 // Delete entfernt einen Workflow. Kein Fehler, wenn er nicht existiert
 // (idempotent, gleiches Muster wie launcher.Stop bei unbekannter ID).
 func (s *Store) Delete(id string) error {
+	defer s.invalidateRoleIndex()
 	_, err := s.db.Exec(`DELETE FROM workflows WHERE id = $1`, id)
 	return err
 }
@@ -112,6 +179,7 @@ func (s *Store) Delete(id string) error {
 // eine neue Definition (inkl. schedules) die gewollte, vom Nutzer
 // stammende Änderung.
 func (s *Store) UpdateRuntime(wf Workflow) error {
+	defer s.invalidateRoleIndex()
 	data, err := json.Marshal(wf)
 	if err != nil {
 		return err

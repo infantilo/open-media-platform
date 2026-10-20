@@ -140,6 +140,12 @@ func (r *Resolver) Resolve(username string, nodes []NodeInfo) (Result, error) {
 	}
 
 	seen := make(map[string]bool, len(nodes))
+	// Workflow-Rolle je Node einmal auflösen, nicht je (Bindung × Node).
+	type wfRole struct {
+		id, name, role string
+		ok             bool
+	}
+	roleOf := make(map[string]wfRole, len(nodes))
 	// `Consoles` explizit als leerer (nicht nil) Slice initialisiert:
 	// `encoding/json` serialisiert einen nil-Slice als `null`, nicht `[]`
 	// — ein per Browser-Test gefundener Bug in `ui/shell/shell.ts` zeigte,
@@ -173,7 +179,12 @@ func (r *Resolver) Resolve(username string, nodes []NodeInfo) (Result, error) {
 
 			workflowID, workflowName, role, hasWorkflow := "", "", "", false
 			if r.workflows != nil {
-				workflowID, workflowName, role, hasWorkflow = r.workflows.FindRoleForNode(n.ID)
+				wr, cached := roleOf[n.ID]
+				if !cached {
+					wr.id, wr.name, wr.role, wr.ok = r.workflows.FindRoleForNode(n.ID)
+					roleOf[n.ID] = wr
+				}
+				workflowID, workflowName, role, hasWorkflow = wr.id, wr.name, wr.role, wr.ok
 			}
 
 			var matches bool

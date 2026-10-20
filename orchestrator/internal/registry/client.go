@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Client fragt die Standard-IS-04-Query-API einer NMOS-Registry ab. Er
@@ -16,7 +19,21 @@ import (
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
+
+	// emptyChecked merkt sich Devices, deren gezielte Nachfrage (s.
+	// fillSuspiciouslyEmptyDevices) leer blieb — Control-Plane-Nodes haben
+	// dauerhaft weder Sender noch Receiver und wurden sonst in JEDEM Poll
+	// mit zwei Zusatzrequests abgefragt.
+	emptyMu      sync.Mutex
+	emptyChecked map[string]time.Time
 }
+
+// emptyRecheckAfter: wie lange ein als leer bestätigtes Device nicht erneut
+// gezielt abgefragt wird.
+const emptyRecheckAfter = 10 * time.Second
+
+// fetchParallelism begrenzt gleichzeitige Query-API-Requests je Poll.
+const fetchParallelism = 8
 
 // NewClient erstellt einen Client für die Query-API unter baseURL (z. B.
 // "http://127.0.0.1:8010"), Version v1.3.
@@ -36,6 +53,8 @@ func (c *Client) FetchSnapshot(ctx context.Context) ([]NodeView, error) {
 	var receivers []is04Receiver
 	var flows []is04Flow
 
+	var wg sync.WaitGroup
+	errs := make(chan error, 5)
 	for _, f := range []struct {
 		path string
 		dst  any
@@ -46,9 +65,25 @@ func (c *Client) FetchSnapshot(ctx context.Context) ([]NodeView, error) {
 		{"receivers", &receivers},
 		{"flows", &flows},
 	} {
-		if err := c.getJSON(ctx, f.path, f.dst); err != nil {
-			return nil, fmt.Errorf("fetch %s: %w", f.path, err)
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := c.getJSON(ctx, f.path, f.dst); err != nil {
+				errs <- fmt.Errorf("fetch %s: %w", f.path, err)
+			}
+		}()
+	}
+	// sources parallel zu den fünf Pflichtlisten (nicht fatal, s. u.).
+	var sources []is04Source
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = c.getJSON(ctx, "sources", &sources)
+	}()
+	wg.Wait()
+	close(errs)
+	if err := <-errs; err != nil {
+		return nil, err
 	}
 
 	flowFormat := make(map[string]string, len(flows))
@@ -58,9 +93,6 @@ func (c *Client) FetchSnapshot(ctx context.Context) ([]NodeView, error) {
 
 	// Kapitel 27 / P4: Audio-Kanalanzahl je Sender über Flow → Source. Nicht
 	// fatal: ohne Sources bleibt ChannelCount 0 (nur abgeleitete Tags fehlen).
-	var sources []is04Source
-	_ = c.getJSON(ctx, "sources", &sources)
-
 	views := buildSnapshot(nodes, devices, senders, receivers, flows)
 	applyChannelCounts(views, flows, sources)
 
@@ -94,32 +126,81 @@ func (c *Client) FetchSnapshot(ctx context.Context) ([]NodeView, error) {
 // zusätzlicher Fehlerpfad für den ohnehin schon dokumentiert unzuverlässigen
 // Bulk-Endpunkt.
 func (c *Client) fillSuspiciouslyEmptyDevices(ctx context.Context, views []NodeView, flowFormat map[string]string) {
+	type target struct{ ni, di int }
+	type extra struct {
+		senders   []is04Sender
+		receivers []is04Receiver
+		sOK, rOK  bool
+	}
+
+	now := time.Now()
+	var targets []target
+	present := map[string]bool{}
+	c.emptyMu.Lock()
 	for ni := range views {
 		for di := range views[ni].Devices {
 			deviceID := views[ni].Devices[di].ID
+			present[deviceID] = true
 			if hasSenderOrReceiverFor(views[ni], deviceID) {
+				delete(c.emptyChecked, deviceID)
 				continue
 			}
-
-			var extraSenders []is04Sender
-			if err := c.getJSON(ctx, "senders?device_id="+deviceID, &extraSenders); err == nil {
-				for _, s := range extraSenders {
-					format := ""
-					if s.FlowID != nil {
-						format = flowFormat[*s.FlowID]
-					}
-					views[ni].Senders = append(views[ni].Senders, newSenderView(s, format))
-				}
+			if at, ok := c.emptyChecked[deviceID]; ok && now.Sub(at) < emptyRecheckAfter {
+				continue
 			}
+			targets = append(targets, target{ni, di})
+		}
+	}
+	for id := range c.emptyChecked {
+		if !present[id] {
+			delete(c.emptyChecked, id)
+		}
+	}
+	c.emptyMu.Unlock()
+	if len(targets) == 0 {
+		return
+	}
 
-			var extraReceivers []is04Receiver
-			if err := c.getJSON(ctx, "receivers?device_id="+deviceID, &extraReceivers); err == nil {
-				for _, r := range extraReceivers {
-					views[ni].Receivers = append(views[ni].Receivers, ReceiverView{
-						ID: r.ID, Label: r.Label, DeviceID: r.DeviceID, Format: r.Format, Transport: r.Transport, DiscoveredTags: r.Tags[OMPTagsTag],
-					})
-				}
+	results := make([]extra, len(targets))
+	sem := make(chan struct{}, fetchParallelism)
+	var wg sync.WaitGroup
+	for i, t := range targets {
+		deviceID := views[t.ni].Devices[t.di].ID
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			r := &results[i]
+			r.sOK = c.getJSON(ctx, "senders?device_id="+deviceID, &r.senders) == nil
+			r.rOK = c.getJSON(ctx, "receivers?device_id="+deviceID, &r.receivers) == nil
+		}()
+	}
+	wg.Wait()
+
+	c.emptyMu.Lock()
+	defer c.emptyMu.Unlock()
+	if c.emptyChecked == nil {
+		c.emptyChecked = map[string]time.Time{}
+	}
+	for i, t := range targets {
+		deviceID := views[t.ni].Devices[t.di].ID
+		r := results[i]
+		for _, s := range r.senders {
+			format := ""
+			if s.FlowID != nil {
+				format = flowFormat[*s.FlowID]
 			}
+			views[t.ni].Senders = append(views[t.ni].Senders, newSenderView(s, format))
+		}
+		for _, rc := range r.receivers {
+			views[t.ni].Receivers = append(views[t.ni].Receivers, ReceiverView{
+				ID: rc.ID, Label: rc.Label, DeviceID: rc.DeviceID, Format: rc.Format, Transport: rc.Transport, DiscoveredTags: rc.Tags[OMPTagsTag],
+			})
+		}
+		if r.sOK && r.rOK && len(r.senders) == 0 && len(r.receivers) == 0 {
+			c.emptyChecked[deviceID] = now
+		} else {
+			delete(c.emptyChecked, deviceID)
 		}
 	}
 }
@@ -162,14 +243,18 @@ func (c *Client) getJSON(ctx context.Context, resource string, dst any) error {
 		all = append(all, items...)
 		url = next
 	}
-	if all == nil {
-		all = []json.RawMessage{}
+	// Seiten direkt zu einem JSON-Array zusammensetzen (statt die RawMessages
+	// erst neu zu marshalen).
+	var buf bytes.Buffer
+	buf.WriteByte('[')
+	for i, it := range all {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.Write(it)
 	}
-	b, err := json.Marshal(all)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(b, dst)
+	buf.WriteByte(']')
+	return json.Unmarshal(buf.Bytes(), dst)
 }
 
 var linkNextRe = regexp.MustCompile(`<([^>]+)>\s*;\s*rel="next"`)

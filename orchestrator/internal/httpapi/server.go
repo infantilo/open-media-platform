@@ -887,7 +887,7 @@ func handleEvents(events EventSubscriber) http.HandlerFunc {
 				if !ok {
 					return
 				}
-				data, err := json.Marshal(ev)
+				data, err := ev.Wire()
 				if err != nil {
 					continue
 				}
