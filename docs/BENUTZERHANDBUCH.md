@@ -831,11 +831,13 @@ Daraus ergibt sich:
   „Storage" als eigenes Backend eintragen — auch das aktuell nur als
   Backend, noch ohne Browser-Upload-Knopf im Assets-Tab.
 
-## 5c. Eingang (Datei-QC, Review, Conform, Metadaten)
+## 5c. File Eingangskontrolle (Datei-QC, Review, Conform, Metadaten)
 
-Der Tab **Eingang** ist die Arbeitsliste für neu eingegangene Medien-Assets. Jede Datei durchläuft automatisch eine technische **QC-Analyse**;
+Der Tab **File Eingangskontrolle** ist die Arbeitsliste für neu eingegangene Medien-Assets. Jede Datei durchläuft automatisch eine technische **QC-Analyse**;
 danach übernimmt eine Person sie, prüft sie im Player, legt **Segmente** an, erfasst **Metadaten** und reicht sie zur **Freigabe** ein. Die
 Originaldatei wird dabei nie verändert.
+
+![File Eingangskontrolle: Arbeitsliste mit Zustand, QC-Ergebnis, Dauer und Format](screenshots/file-eingangskontrolle-liste.png)
 
 - **Liste:** Ansichten „Zu prüfen (frei)“, „Meine“, „QC wartet/läuft/fehlgeschlagen“, „In Bearbeitung“, „Zur Freigabe“, „Freigegeben“, „Archiviert“.
   Doppelklick oder „Öffnen“ zeigt die Detailansicht. Mit dem Funktionsrecht *Dateien importieren* gibt es **Datei importieren** (Dateien aus dem Importverzeichnis
@@ -845,6 +847,9 @@ Originaldatei wird dabei nie verändert.
   Kategorie, Ergebnis, Schwere und Text filtern und aufklappen (Messwert gegen Grenzwert, Werkzeug, Zeitpunkt). „▶ Timecode“ springt im Player an die Stelle.
   „QC wiederholen“ (optional mit anderem Profil) erzeugt einen neuen Bericht — die früheren bleiben im Auswahlfeld „Berichte“. Export als JSON (vollständig) oder CSV.
   Technische Stream-Metadaten stehen unten aufklappbar.
+
+  ![QC-Bericht einer Datei: ein Fehler (Lautheit), zwei Warnungen, 17 bestanden; Filter, Wiederholen und Export](screenshots/file-eingangskontrolle-qc.png)
+
 - **Wichtig zu verstehen:** „**QC nicht ausführbar**“ (rot, mit Grund) heißt, dass die Analyse nicht laufen konnte — es gibt dann *kein* Urteil über die Datei.
   Ein Befund „Fehler“ dagegen heißt, dass die Analyse lief und ein Problem in der Datei fand. Die Analyse ist eine Probe plus Inhaltsprüfung mit ffmpeg/ffprobe,
   **keine** Strukturvalidierung nach MXF-Standards.
@@ -867,14 +872,18 @@ Originaldatei wird dabei nie verändert.
 - **Einstellungen** (Administratoren): Formular mit den Abschnitten *Freigabe und Prüfung* (Modus, Selbstfreigabe), *Segmentregeln*, *Qualitätskontrolle* (Standardprofil, parallele Prüfungen, Profile mit Schwellen für Schwarzbild, Standbild, Stille, Lautheit, Übersteuerung, Bild/Ton-Versatz und Erwartungen an die Datei; Profile duplizieren/entfernen), *Prüfkopie*, *Metadatenformular* (Felder anlegen, sortieren, Typ, Pflicht, erlaubte Werte) und *Import*. Eingaben werden vor dem Speichern geprüft; der Server prüft zusätzlich.
   Das Modul lässt sich mit `OMP_MODULES_DISABLE=review` abschalten; Proxys liegen unter `OMP_REVIEW_DIR` (Standard `data/review`).
 
-## 5d. Aufnahmen (geplante Live-Aufnahme)
+## 5d. Stream Ingest (geplante Live-Aufnahme)
 
-Der Tab **Aufnahmen** plant Aufnahmen von Live-Quellen (MXL-Sender): einmalig oder wiederkehrend, mit Zeitzone, Priorität und Richtlinien. Eine fertige Aufnahme wird als Asset registriert und erscheint im Tab
-**Eingang** (QC, Review). Das System prüft **vorher**, ob die Aufnahme machbar ist — nicht erst beim Start.
+Der Tab **Stream Ingest** plant Aufnahmen von Live-Quellen (MXL-Sender): einmalig oder wiederkehrend, mit Zeitzone, Priorität und Richtlinien. Eine fertige Aufnahme wird als Asset registriert und erscheint im Tab
+**File Eingangskontrolle** (QC, Review). Das System prüft **vorher**, ob die Aufnahme machbar ist — nicht erst beim Start.
+
+![Stream Ingest: Zeitleiste je Host, Kapazität je Ressourcenart, Aufträge und Zeitpläne](screenshots/stream-ingest.png)
 
 - **＋ Zeitplan / ＋ Einzelaufnahme:** Name, Quelle (Node mit Sendern), Aufnahmeprofil, **Zeitzone** und Beginn als Ortszeit, Dauer (h:mm), Wiederholung (täglich/wöchentlich mit Wochentagen/monatlich, bis/Anzahl),
   Priorität 0–9, „Wenn die Quelle fehlt“ (warten / begrenzt warten / sofort fehlschlagen — die Aufnahme endet immer zur geplanten Zeit), Versuche bei Abbruch, bevorzugter Host, Zielordner und Dateiname.
   Unter dem Formular zeigt die **Live-Prüfung** bei jeder Eingabe, ob die Aufnahme zugelassen würde — samt Gründen und frühestem möglichem Start, ohne etwas zu speichern.
+
+  ![Dialog „Zeitplan“: Live-Prüfung unten meldet „Machbar auf Host local“ samt Hinweis auf unsichere Bedarfsschätzung](screenshots/stream-ingest-zeitplan.png)
 - **Verantwortliche:** Jeder Zeitplan und jede Einzelaufnahme hat eine verantwortliche Person und/oder Gruppe (Standard: wer sie anlegt; ändern darf nur, wer das Recht *Verantwortliche
   festlegen* hat). Aufträge erben sie. Verantwortliche sehen die Aufnahme in ihrer Aufgabenliste und dürfen sie bearbeiten bzw. steuern; Fremde nur mit *Fremde Aufnahmen bearbeiten*.
   Wer *Alle Aufnahmen sehen* nicht hat, sieht in Listen, Zeitleiste und Problemen nur die eigenen (die Auslastung der Hosts bleibt sichtbar). Filter „Meine“ in der Auftragsliste.
@@ -1107,8 +1116,8 @@ Workflow-Namen und die Anzahl der darin zugewiesenen Rollen:
 
 ![Workflow wählen: zwei zugewiesene Workflows als Kacheln](screenshots/regieplatz-auswahl.png)
 
-**Arbeitsplatz:** Hat ein Operator (ohne Konfigurationsrecht) Funktionsrechte der Module *Aufnahmen* oder *Eingang*, ist seine Startseite der **Arbeitsplatz**: oben die
-Workflows zum Wechseln bzw. der Countdown bis zum nächsten Start, darunter die **Werkzeuge** (Kacheln „Aufnahmen“ und „Eingang (File-QC)“ — jede nur mit passendem Recht;
+**Arbeitsplatz:** Hat ein Operator (ohne Konfigurationsrecht) Funktionsrechte der Module *Stream Ingest* oder *File Eingangskontrolle*, ist seine Startseite der **Arbeitsplatz**: oben die
+Workflows zum Wechseln bzw. der Countdown bis zum nächsten Start, darunter die **Werkzeuge** (Kacheln „Stream Ingest“ und „File Eingangskontrolle“ — jede nur mit passendem Recht;
 je Kachel die Zahl offener Aufgaben und Probleme) und die **Aufgabenliste**: zugewiesene QC-Dateien, eigene und Gruppen-Aufgaben („übernehmbar“) sowie die eigenen Aufnahmen mit
 Stand, Zuständigen und Frist; Überfälliges und Fehlgeschlagenes steht oben in Rot. Ein Klick auf eine Aufgabe öffnet die Datei bzw. Aufnahme direkt. Im Benutzer-Widget unten rechts
 zeigt ein rotes „⚠ n Aufgaben“, solange etwas Aufmerksamkeit braucht — in jeder Ansicht, auch in der Konsole; „🏠 Arbeitsplatz“ führt zurück. Auch ein Operator

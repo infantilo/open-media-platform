@@ -178,7 +178,12 @@ counters, next to what the writer actually declares about the flow._
 <tr>
 <td width="33%"><img src="docs/screenshots/cloud.png" width="260"><br><sub>Cloud tab: estimated costs against the budget cap, a suggestion awaiting confirmation, rented hosts, reservations, action log and the autoscaling rules (simulation provider)</sub></td>
 <td width="33%"><img src="docs/screenshots/geraete-hub.png" width="260"><br><sub>Device hub: a sound card offered as an MXL source and as an output receiver, shown in the flow editor with the tile's ports</sub></td>
-<td width="33%"></td>
+<td width="33%"><img src="docs/screenshots/stream-ingest.png" width="260"><br><sub>Stream ingest: planned recordings on a timeline per host, capacity per resource kind (bars = reserved use, dashed = warning threshold), job list and schedules</sub></td>
+</tr>
+<tr>
+<td width="33%"><img src="docs/screenshots/stream-ingest-zeitplan.png" width="260"><br><sub>Stream ingest, new schedule: the live check says whether the recording would be admitted — with reasons — before anything is saved</sub></td>
+<td width="33%"><img src="docs/screenshots/file-eingangskontrolle-liste.png" width="260"><br><sub>File intake control: work list of incoming files with state, QC result, assignee/due date and duration</sub></td>
+<td width="33%"><img src="docs/screenshots/file-eingangskontrolle-qc.png" width="260"><br><sub>File intake control, QC report: one failure, two warnings, 17 passed — filterable by category, result and severity, exportable as JSON/CSV</sub></td>
 </tr>
 </table>
 
@@ -279,7 +284,7 @@ Full walkthroughs and context for every screen above are in
   (e.g. switcher source selection, mixer program) and the references
   other nodes hold to it.
 
-- **Scheduled live recording (tab "Recordings")**: one-off or recurring
+- **Scheduled live recording (tab "Stream ingest")**: one-off or recurring
   recordings of MXL sources with IANA time zone and DST handling.
   Admission is checked *before* the start, per resource kind (recorders,
   converters, CPU, memory, disk throughput/space, network, MXL memory)
@@ -291,7 +296,7 @@ Full walkthroughs and context for every screen above are in
   gain and silence (MXF up to 32 channels of 24-bit PCM) — checked against
   the real source channel counts, with source conflicts and limits applied
   to every source used.
-- **File intake (tab "Intake")**: every new file gets an automatic QC
+- **File intake control (tab "File intake control")**: every new file gets an automatic QC
   analysis (ffprobe/ffmpeg; "QC could not run" is kept apart from "QC
   found errors"), then a person takes it, reviews it in a frame-accurate
   player on a verified proxy, sets segments ([in, out), out exclusive) and
