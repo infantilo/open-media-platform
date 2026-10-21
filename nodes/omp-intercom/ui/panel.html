@@ -52,6 +52,7 @@ h2{font-size:14px;color:var(--mute);margin:18px 0 8px;font-weight:600;text-trans
 <header>
   <span class="dot" id="conn" title=""></span>
   <h1 id="me">Intercom</h1>
+  <button id="dnd" class="toggle" aria-pressed="false" hidden></button>
   <button id="mute" class="toggle" aria-pressed="false" hidden></button>
 </header>
 <div id="banner" role="status"></div>
@@ -72,17 +73,17 @@ h2{font-size:14px;color:var(--mute);margin:18px 0 8px;font-weight:600;text-trans
 (() => {
   const L = (navigator.language || 'de').startsWith('de') ? 'de' : 'en';
   const T = {
-    de: {intro:'Mikrofon und Kopfhörer bereithalten.', go:'Verbinden', mute:'Mikrofon', muted:'Mikrofon stumm', talk:'Sprechen', hold:'Halten = sprechen, Tippen = rasten', listen:'Hören', level:'Pegel', pan:'Lage', solo:'Solo', people:'Teilnehmer', call:'Rufen', all:'Alle rufen', hint:'Tasten 1–9: Kanal sprechen (halten) · M: Mikrofon stumm', offline:'offline', forced:'Mikrofon gesperrt', onair:'ON AIR', ring:'Ruf von', reconnect:'Verbindung verloren – verbinde neu …', noaudio:'Kein Mikrofonzugriff', badtoken:'Zugang ungültig oder abgelaufen', secure:'Mikrofon braucht HTTPS oder localhost.', speaking:'spricht'},
-    en: {intro:'Have your microphone and headphones ready.', go:'Connect', mute:'Microphone', muted:'Microphone muted', talk:'Talk', hold:'Hold = talk, tap = latch', listen:'Listen', level:'Level', pan:'Pan', solo:'Solo', people:'Parties', call:'Call', all:'Call all', hint:'Keys 1–9: talk on channel (hold) · M: mute microphone', offline:'offline', forced:'Microphone locked', onair:'ON AIR', ring:'Call from', reconnect:'Connection lost – reconnecting …', noaudio:'No microphone access', badtoken:'Access invalid or expired', secure:'The microphone needs HTTPS or localhost.', speaking:'speaking'}
+    de: {intro:'Mikrofon und Kopfhörer bereithalten.', go:'Verbinden', mute:'Mikrofon', dnd:'Nicht stören', busy:'ist nicht erreichbar (Nicht stören)', reply:'Antworten', muted:'Mikrofon stumm', talk:'Sprechen', hold:'Halten = sprechen, Tippen = rasten', listen:'Hören', level:'Pegel', pan:'Lage', solo:'Solo', people:'Teilnehmer', call:'Rufen', all:'Alle rufen', hint:'Tasten 1–9: Kanal sprechen (halten) · M: Mikrofon stumm', offline:'offline', forced:'Mikrofon gesperrt', onair:'ON AIR', ring:'Ruf von', reconnect:'Verbindung verloren – verbinde neu …', noaudio:'Kein Mikrofonzugriff', badtoken:'Zugang ungültig oder abgelaufen', secure:'Mikrofon braucht HTTPS oder localhost.', speaking:'spricht'},
+    en: {intro:'Have your microphone and headphones ready.', go:'Connect', mute:'Microphone', dnd:'Do not disturb', busy:'is not available (do not disturb)', reply:'Reply', muted:'Microphone muted', talk:'Talk', hold:'Hold = talk, tap = latch', listen:'Listen', level:'Level', pan:'Pan', solo:'Solo', people:'Parties', call:'Call', all:'Call all', hint:'Keys 1–9: talk on channel (hold) · M: mute microphone', offline:'offline', forced:'Microphone locked', onair:'ON AIR', ring:'Call from', reconnect:'Connection lost – reconnecting …', noaudio:'No microphone access', badtoken:'Access invalid or expired', secure:'The microphone needs HTTPS or localhost.', speaking:'speaking'}
   }[L];
   const $ = id => document.getElementById(id);
   const q = new URLSearchParams(location.search);
   const token = q.get('token') || '';
   document.documentElement.lang = L;
-  $('intro').textContent = T.intro; $('go').textContent = T.go; $('mute').textContent = T.mute;
+  $('intro').textContent = T.intro; $('go').textContent = T.go; $('mute').textContent = T.mute; $('dnd').textContent = T.dnd;
   $('h-people').textContent = T.people; $('hint').textContent = T.hint;
 
-  let pc = null, dc = null, stream = null, state = null, closing = false, retry = 0;
+  let pc = null, dc = null, stream = null, state = null, closing = false, retry = 0, pingTimer = 0, lastRing = null;
   const latched = new Set();     // per Tippen eingerastete Kanäle
   const callOn = new Set();       // laufende Rufe (Teilnehmer-IDs)
   const send = o => { if (dc && dc.readyState === 'open') dc.send(JSON.stringify(o)); };
@@ -96,6 +97,7 @@ h2{font-size:14px;color:var(--mute);margin:18px 0 8px;font-weight:600;text-trans
     dc = pc.createDataChannel('ctl');
     dc.onmessage = ev => { try { onMsg(JSON.parse(ev.data)); } catch (e) {} };
     dc.onopen = () => { banner(''); retry = 0; };
+    clearInterval(pingTimer); pingTimer = setInterval(() => send({ t: 'ping' }), 2000);
     pc.ontrack = ev => { $('out').srcObject = ev.streams[0] || new MediaStream([ev.track]); $('out').play().catch(() => {}); };
     pc.onconnectionstatechange = () => {
       const s = pc.connectionState;
@@ -126,10 +128,11 @@ h2{font-size:14px;color:var(--mute);margin:18px 0 8px;font-weight:600;text-trans
       stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
     } catch (e) { $('err').textContent = T.noaudio + ': ' + e.message; return; }
     try { await connect(); } catch (e) { $('err').textContent = e.message; return; }
-    $('start').hidden = true; $('app').hidden = false; $('mute').hidden = false;
+    $('start').hidden = true; $('app').hidden = false; $('mute').hidden = false; $('dnd').hidden = false;
   };
 
   $('mute').onclick = () => { if (state && !state.me.forced) send({ t: 'mute', on: !state.me.muted }); };
+  $('dnd').onclick = () => { if (state) send({ t: 'dnd', on: !state.me.dnd }); };
 
   let beepCtx = null;
   function beep() {
@@ -138,7 +141,8 @@ h2{font-size:14px;color:var(--mute);margin:18px 0 8px;font-weight:600;text-trans
   }
   function onMsg(m) {
     if (m.t === 'state') { state = m; render(); }
-    else if (m.t === 'ring') { beep(); if (navigator.vibrate) navigator.vibrate([200, 100, 200]); banner(T.ring + ' ' + m.name); setTimeout(() => banner(''), 4000);
+    else if (m.t === 'busy') { banner(m.name + ' ' + T.busy); setTimeout(() => banner(''), 3000); }
+    else if (m.t === 'ring') { beep(); if (navigator.vibrate) navigator.vibrate([200, 100, 200]); lastRing = m; banner(T.ring + ' ' + m.name); setTimeout(() => banner(''), 4000);
       document.querySelectorAll('.chan.call').forEach(e => { e.classList.remove('ring'); void e.offsetWidth; e.classList.add('ring'); }); }
   }
 
@@ -166,6 +170,7 @@ h2{font-size:14px;color:var(--mute);margin:18px 0 8px;font-weight:600;text-trans
     $('me').textContent = me.name + (me.on_air ? ' · ' + T.onair : '');
     const mb = $('mute'); mb.textContent = me.forced ? T.forced : (me.muted ? T.muted : T.mute);
     mb.setAttribute('aria-pressed', String(me.muted || me.forced)); mb.disabled = !!me.forced;
+    const db = $('dnd'); db.setAttribute('aria-pressed', String(!!me.dnd));
     $('mic').style.width = Math.max(0, Math.min(100, (me.mic_db + 60) / 60 * 100)) + '%';
     const root = $('chans');
     const ids = state.channels.map(c => c.id);
@@ -211,13 +216,21 @@ h2{font-size:14px;color:var(--mute);margin:18px 0 8px;font-weight:600;text-trans
       b.title = T.call; return b;
     };
     state.parties.filter(p => p.id !== me.id).forEach(p => {
-      const b = mk(p.name, p.id, !p.online || me.forced, p.speaking ? 'speak' : (p.online ? 'on' : ''), callOn.has(p.id));
+      const b = mk(p.name + (p.dnd ? ' ⊘' : ''), p.id, !p.online || me.forced, p.speaking ? 'speak' : (p.online ? 'on' : ''), callOn.has(p.id));
       let held = false;
       b.addEventListener('pointerdown', ev => { ev.preventDefault(); b.setPointerCapture(ev.pointerId); held = true; callOn.add(p.id); send({ t: 'call', to: [p.id], on: true }); });
       const stop = () => { if (!held) return; held = false; callOn.delete(p.id); send({ t: 'call', on: false }); };
       b.addEventListener('pointerup', stop); b.addEventListener('pointercancel', stop);
       people.appendChild(b);
     });
+    if (lastRing && state.parties.some(p => p.id === lastRing.from && p.online)) {
+      const b = mk(T.reply + ': ' + lastRing.name, lastRing.from, me.forced, 'on', callOn.has(lastRing.from));
+      const to = lastRing.from; let held = false;
+      b.addEventListener('pointerdown', ev => { ev.preventDefault(); b.setPointerCapture(ev.pointerId); held = true; callOn.add(to); send({ t: 'call', to: [to], on: true }); });
+      const stop = () => { if (!held) return; held = false; callOn.delete(to); send({ t: 'call', on: false }); };
+      b.addEventListener('pointerup', stop); b.addEventListener('pointercancel', stop);
+      people.prepend(b);
+    }
     if (me.force) {
       const b = mk(T.all, 'all', me.forced, 'on', callOn.has('all'));
       b.addEventListener('pointerdown', ev => { ev.preventDefault(); b.setPointerCapture(ev.pointerId); callOn.add('all'); send({ t: 'call', to: 'all', on: true }); });
@@ -239,7 +252,7 @@ h2{font-size:14px;color:var(--mute);margin:18px 0 8px;font-weight:600;text-trans
     const n = parseInt(ev.key, 10);
     if (keysDown.has(n)) { keysDown.delete(n); if (state && state.channels[n - 1]) send({ t: 'talk', ch: state.channels[n - 1].id, on: false }); }
   });
-  addEventListener('pagehide', () => { closing = true; try { navigator.sendBeacon && 0; } catch (e) {} });
+  addEventListener('pagehide', () => { closing = true; });
 })();
 </script>
 </body>

@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::mix::{Channel, ChannelId, Engine, FRAME, Party, PartyId, Route, Vox};
+use crate::mxl_io::MxlIo;
 use crate::peer::Peer;
 
 /// Kanal-IDs ab diesem Wert sind ad hoc entstandene Rufe (Direkt-/Gruppen-/Alle-Ruf).
@@ -30,6 +31,10 @@ pub struct PartyInfo {
     pub force: bool,
     /// Mikrofon wird gesperrt, solange `onAir` gesetzt ist (Studio-Lautsprecher, Kamerakanal …).
     pub onair_lock: bool,
+    /// MXL-Programmeingang (1-basiert, 0 = keiner): speist diesen Teilnehmer statt eines Mikrofons.
+    pub mxl_in: usize,
+    /// MXL-Ausgang (1-basiert, 0 = keiner): trägt das Hörsignal dieses Teilnehmers.
+    pub mxl_out: usize,
 }
 
 struct Call {
@@ -49,8 +54,17 @@ pub struct Core {
     pub channels: BTreeMap<ChannelId, ChanInfo>,
     pub parties: BTreeMap<PartyId, PartyInfo>,
     pub sessions: BTreeMap<PartyId, Arc<Peer>>,
+    generations: BTreeMap<PartyId, u64>,
+    next_generation: u64,
+    last_seen: BTreeMap<PartyId, Instant>,
+    pub mxl: Option<Arc<MxlIo>>,
+    dnd: BTreeSet<PartyId>,
+    pending_busy: Vec<(PartyId, PartyId)>, // (Anrufer, besetzter Teilnehmer)
+    replaced: BTreeMap<PartyId, Arc<Peer>>,
     calls: BTreeMap<ChannelId, Call>,
     pub on_air: bool,
+    air_manual: bool,
+    air_tally: bool,
     speakers: BTreeMap<ChannelId, Vec<PartyId>>,
     speaking: BTreeSet<PartyId>,
     pending_rings: Vec<(PartyId, PartyId)>, // (an, von)
@@ -77,8 +91,17 @@ impl Core {
             channels: BTreeMap::new(),
             parties: BTreeMap::new(),
             sessions: BTreeMap::new(),
+            generations: BTreeMap::new(),
+            next_generation: 1,
+            last_seen: BTreeMap::new(),
+            mxl: None,
+            dnd: BTreeSet::new(),
+            pending_busy: Vec::new(),
+            replaced: BTreeMap::new(),
             calls: BTreeMap::new(),
             on_air: false,
+            air_manual: false,
+            air_tally: false,
             speakers: BTreeMap::new(),
             speaking: BTreeSet::new(),
             pending_rings: Vec::new(),
@@ -122,6 +145,8 @@ impl Core {
                     kind: if s(p, "kind").is_empty() { "human".into() } else { s(p, "kind") },
                     force: p.get("force").and_then(Value::as_bool).unwrap_or(false),
                     onair_lock: p.get("onair_lock").and_then(Value::as_bool).unwrap_or(false),
+                    mxl_in: num(p, "mxl_in", 0.0).max(0.0) as usize,
+                    mxl_out: num(p, "mxl_out", 0.0).max(0.0) as usize,
                 },
             );
             let ep = self.engine.parties.entry(id).or_insert_with(Party::default);
@@ -146,6 +171,10 @@ impl Core {
                 let route = ep.route_mut(ch);
                 route.talk_allowed = r.get("talk").and_then(Value::as_bool).unwrap_or(false);
                 route.listen = r.get("listen").and_then(Value::as_bool).unwrap_or(false);
+                // Programmquellen und Anbindungen haben keine Taste: ihr Sprechweg ist immer offen.
+                if matches!(s(p, "kind").as_str(), "program" | "port") {
+                    route.talk_key = route.talk_allowed;
+                }
                 if fresh {
                     route.level = num(&r, "level", 1.0) as f32;
                     route.pan = num(&r, "pan", 0.0) as f32;
@@ -154,6 +183,15 @@ impl Core {
             }
             // Nicht mehr konfigurierte Kanalrouten entfernen (Rufkanäle bleiben).
             ep.routes.retain(|ch, _| configured.contains(ch) || *ch >= CALL_BASE);
+        }
+        for (kind, pick) in [("mxl_in", 0usize), ("mxl_out", 1usize)] {
+            let mut used = BTreeSet::new();
+            for (id, p) in &new_parties {
+                let slot = if pick == 0 { p.mxl_in } else { p.mxl_out };
+                if slot > 0 && !used.insert(slot) {
+                    return Err(format!("{kind} {slot} doppelt (Teilnehmer {id})"));
+                }
+            }
         }
         self.engine.parties.retain(|id, _| new_parties.contains_key(id));
         self.engine.channels.retain(|id, _| new_channels.contains_key(id) || *id >= CALL_BASE);
@@ -194,7 +232,7 @@ impl Core {
                     .map(|(ch, r)| json!({"ch": ch, "talk": r.talk_allowed, "listen": r.listen, "level": r.level, "pan": r.pan}))
                     .collect();
                 json!({"id": id, "name": info.name, "kind": info.kind, "priority": ep.priority, "force": info.force,
-                       "onair_lock": info.onair_lock, "routes": routes})
+                       "onair_lock": info.onair_lock, "mxl_in": info.mxl_in, "mxl_out": info.mxl_out, "routes": routes})
             })
             .collect();
         json!({"channels": channels, "parties": parties})
@@ -207,10 +245,25 @@ impl Core {
         self.parties.iter().find(|(_, p)| p.token == token).map(|(id, _)| *id)
     }
 
+    /// Manuelle Vorgabe (Parameter `onAir`).
     pub fn set_on_air(&mut self, on: bool) {
-        self.on_air = on;
-        self.apply_locks();
-        self.dirty = true;
+        self.air_manual = on;
+        self.refresh_air();
+    }
+
+    /// Vorgabe aus dem Tally-Bus.
+    pub fn set_tally_air(&mut self, on: bool) {
+        self.air_tally = on;
+        self.refresh_air();
+    }
+
+    fn refresh_air(&mut self) {
+        let on = self.air_manual || self.air_tally;
+        if on != self.on_air {
+            self.on_air = on;
+            self.apply_locks();
+            self.dirty = true;
+        }
     }
 
     fn apply_locks(&mut self) {
@@ -239,16 +292,50 @@ impl Core {
         if let Some(p) = self.sessions.remove(&id) {
             p.close();
         }
+        self.generations.remove(&id);
+        self.reset_runtime(id);
+    }
+
+    /// Setzt den flüchtigen Zustand eines Teilnehmers zurück: Sprechtasten, Rufe, Solo.
+    pub fn reset_runtime(&mut self, id: PartyId) {
+        self.dnd.remove(&id);
         if let Some(ep) = self.engine.parties.get_mut(&id) {
             for r in ep.routes.values_mut() {
                 r.talk_key = false;
             }
+            ep.solo.clear();
         }
         self.call(id, &[], false);
         self.dirty = true;
     }
 
+    /// Trägt eine neue Sitzung ein und liefert ihre Generationsnummer; eine ersetzte Sitzung wird für `take_replaced` gemerkt.
+    pub fn register_session(&mut self, id: PartyId, peer: Arc<Peer>) -> u64 {
+        let gen_id = self.next_generation;
+        self.next_generation += 1;
+        if let Some(old) = self.sessions.insert(id, peer) {
+            self.replaced.insert(id, old);
+        }
+        self.generations.insert(id, gen_id);
+        self.last_seen.insert(id, Instant::now());
+        self.dirty = true;
+        gen_id
+    }
+
+    pub fn take_replaced(&mut self, id: PartyId) -> Option<Arc<Peer>> {
+        self.replaced.remove(&id)
+    }
+
+    pub fn session_generation(&self, id: PartyId) -> Option<u64> {
+        self.generations.get(&id).copied()
+    }
+
     fn online(&self, id: PartyId) -> bool {
+        if let (Some(info), Some(io)) = (self.parties.get(&id), self.mxl.as_ref()) {
+            if matches!(info.kind.as_str(), "program" | "port") {
+                return (info.mxl_in > 0 && io.input_flowed(info.mxl_in - 1)) || (info.mxl_out > 0 && info.mxl_in == 0);
+            }
+        }
         self.sessions.get(&id).map(|p| p.connected()).unwrap_or(false)
     }
 
@@ -256,6 +343,10 @@ impl Core {
     /// stillschweigend ignoriert (der nächste Zustand korrigiert die Anzeige).
     pub fn command(&mut self, who: PartyId, msg: &Value) {
         let kind = s(msg, "t");
+        self.last_seen.insert(who, Instant::now());
+        if kind == "ping" {
+            return;
+        }
         let ch = msg.get("ch").and_then(Value::as_u64).map(|c| c as ChannelId);
         let on = msg.get("on").and_then(Value::as_bool);
         match (kind.as_str(), on) {
@@ -319,6 +410,13 @@ impl Core {
                 }
             }
             ("mute", _, Some(on)) => party.muted = on,
+            ("dnd", _, Some(on)) => {
+                if on {
+                    self.dnd.insert(who);
+                } else {
+                    self.dnd.remove(&who);
+                }
+            }
             ("mic_gain", _, _) => party.mic_gain = num(msg, "v", 1.0).clamp(0.0, 4.0) as f32,
             ("out_gain", _, _) => party.out_gain = num(msg, "v", 1.0).clamp(0.0, 2.0) as f32,
             _ => return,
@@ -331,8 +429,17 @@ impl Core {
     pub fn call(&mut self, from: PartyId, to: &[PartyId], on: bool) {
         let id = CALL_BASE + from;
         if on {
-            let targets: Vec<PartyId> = to.iter().copied().filter(|t| *t != from && self.engine.parties.contains_key(t)).collect();
+            let caller_force = self.parties.get(&from).map(|p| p.force).unwrap_or(false);
+            let mut targets: Vec<PartyId> = Vec::new();
+            for t in to.iter().copied().filter(|t| *t != from && self.engine.parties.contains_key(t)) {
+                if self.dnd.contains(&t) && !caller_force {
+                    self.pending_busy.push((from, t));
+                    continue;
+                }
+                targets.push(t);
+            }
             if targets.is_empty() {
+                self.dirty = true;
                 return;
             }
             self.engine.channels.entry(id).or_insert_with(Channel::default);
@@ -406,13 +513,14 @@ impl Core {
             .parties
             .iter()
             .filter(|(_, p)| p.kind != "program")
-            .map(|(pid, p)| json!({"id": pid, "name": p.name, "kind": p.kind, "online": self.online(*pid), "speaking": self.speaking.contains(pid)}))
+            .map(|(pid, p)| json!({"id": pid, "name": p.name, "kind": p.kind, "online": self.online(*pid), "speaking": self.speaking.contains(pid), "dnd": self.dnd.contains(pid)}))
             .collect();
         Some(json!({
             "t": "state",
             "me": {"id": id, "name": info.name, "muted": ep.muted, "forced": ep.forced_mute, "force": info.force,
                    "mic_gain": ep.mic_gain, "out_gain": ep.out_gain,
-                   "mic_db": self.engine.mic_db(id), "speaking": self.speaking.contains(&id), "on_air": self.on_air},
+                   "mic_db": self.engine.mic_db(id), "speaking": self.speaking.contains(&id), "on_air": self.on_air,
+                   "dnd": self.dnd.contains(&id)},
             "channels": channels,
             "parties": parties,
         }))
@@ -426,10 +534,24 @@ impl Core {
                 inputs.insert(*id, frame);
             }
         }
+        if let Some(io) = &self.mxl {
+            for (id, info) in &self.parties {
+                if info.mxl_in > 0 && !inputs.contains_key(id) {
+                    if let Some(frame) = io.pull_input(info.mxl_in - 1) {
+                        inputs.insert(*id, frame);
+                    }
+                }
+            }
+        }
         let (outs, report) = self.engine.process(&inputs);
         for (id, out) in &outs {
             if let Some(peer) = self.sessions.get(id) {
                 peer.push_frame(&out.left[..FRAME], &out.right[..FRAME]);
+            }
+            if let (Some(io), Some(info)) = (&self.mxl, self.parties.get(id)) {
+                if info.mxl_out > 0 {
+                    io.push_output(info.mxl_out - 1, &out.left[..FRAME], &out.right[..FRAME]);
+                }
             }
         }
         let speaking: BTreeSet<PartyId> = self.engine.parties.keys().copied().filter(|p| self.engine.is_speaking(*p)).collect();
@@ -443,12 +565,19 @@ impl Core {
         if self.dirty || n % 5 == 0 {
             self.dirty = false;
             let rings = std::mem::take(&mut self.pending_rings);
+            let busy = std::mem::take(&mut self.pending_busy);
             for (id, peer) in &self.sessions {
                 if !peer.connected() {
                     continue;
                 }
                 if let Some(state) = self.state_for(*id) {
                     peer.send_text(&state.to_string());
+                }
+                for (caller, who) in &busy {
+                    if caller == id {
+                        let name = self.parties.get(who).map(|p| p.name.clone()).unwrap_or_default();
+                        peer.send_text(&json!({"t": "busy", "party": who, "name": name}).to_string());
+                    }
                 }
                 for (to, from) in &rings {
                     if to == id {
@@ -462,10 +591,17 @@ impl Core {
 
     /// Entfernt Sitzungen, deren Verbindung endgültig weg ist (damit Teilnehmer „offline“ werden).
     fn reap(&mut self) {
+        // Tot: Verbindung gescheitert/geschlossen — oder der Browser meldet sich seit 8 s nicht mehr (Tab zu, Seite hängt):
+        // das Panel schickt alle 2 s einen Ping über den Datenkanal.
+        let silent = Duration::from_secs(8);
         let dead: Vec<PartyId> = self
             .sessions
             .iter()
-            .filter(|(_, p)| matches!(p.state().as_str(), "failed" | "closed" | "disconnected") && p.created.elapsed() > Duration::from_secs(2))
+            .filter(|(id, p)| {
+                let gone = matches!(p.state().as_str(), "failed" | "closed" | "disconnected") && p.created.elapsed() > Duration::from_secs(2);
+                let quiet = p.created.elapsed() > silent && self.last_seen.get(id).map(|t| t.elapsed() > silent).unwrap_or(true);
+                gone || quiet
+            })
             .map(|(id, _)| *id)
             .collect();
         for id in dead {
@@ -589,6 +725,19 @@ mod tests {
     }
 
     #[test]
+    fn on_air_is_manual_or_tally_and_both_must_clear() {
+        let mut c = Core::new();
+        c.apply_config(&cfg()).unwrap();
+        c.set_tally_air(true);
+        assert!(c.engine.parties[&2].forced_mute);
+        c.set_on_air(true);
+        c.set_tally_air(false);
+        assert!(c.engine.parties[&2].forced_mute, "manuell hält weiter");
+        c.set_on_air(false);
+        assert!(!c.engine.parties[&2].forced_mute);
+    }
+
+    #[test]
     fn call_creates_temporary_channel_and_removes_it() {
         let mut c = Core::new();
         c.apply_config(&cfg()).unwrap();
@@ -601,6 +750,20 @@ mod tests {
         assert!(c.engine.parties[&1].routes.get(&id).is_none());
         assert!(c.engine.parties[&3].routes.get(&id).is_none());
         assert!(!c.engine.channels.contains_key(&id));
+    }
+
+    #[test]
+    fn do_not_disturb_blocks_calls_except_from_force_parties_and_reports_busy() {
+        let mut c = Core::new();
+        c.apply_config(&cfg()).unwrap();
+        c.command(3, &json!({"t": "dnd", "on": true}));
+        c.command(2, &json!({"t": "call", "to": [3], "on": true}));
+        assert!(!c.engine.channels.contains_key(&(CALL_BASE + 2)), "kein Ruf an Teilnehmer im Ruhemodus");
+        assert_eq!(c.pending_busy, vec![(2, 3)]);
+        c.command(1, &json!({"t": "call", "to": [3], "on": true}));
+        assert!(c.engine.parties[&3].routes[&(CALL_BASE + 1)].listen, "force-Teilnehmer dürfen durch");
+        c.command(3, &json!({"t": "dnd", "on": false}));
+        assert!(!c.state_for(3).unwrap()["me"]["dnd"].as_bool().unwrap());
     }
 
     #[test]

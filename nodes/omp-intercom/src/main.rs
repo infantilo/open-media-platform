@@ -8,15 +8,20 @@
 mod hub;
 mod ice;
 mod mix;
+mod mxl_io;
 mod peer;
+mod tally;
 mod uibundle;
 
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
+use omp_node_sdk::connection::{bulk_cors_methods, bulk_discovery, bulk_patch, list_ids, root_discovery, ReceiverConnection};
+use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
+use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
     Descriptor, InvokeError, MediaReadySource, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType, RawResponse,
-    SetError,
+    ReceiverSpec, SenderSpec, SetError,
 };
 use serde_json::{Value, json};
 
@@ -40,6 +45,8 @@ struct Store {
     config_file: Option<String>,
     // Serialisiert gleichzeitige Angebote desselben Teilnehmers.
     offer_lock: Mutex<()>,
+    /// IS-05-Steuerung der Programm-Eingänge (leer ohne MXL).
+    inputs: Vec<Arc<ReceiverConnection<mxl_io::InputControl>>>,
 }
 
 fn text(status: u16, body: impl Into<String>) -> RawResponse {
@@ -73,12 +80,26 @@ impl Store {
         let on_open: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             hub_open.core.lock().expect("lock poisoned").mark_dirty();
         });
-        match peer::Peer::answer(sdp, self.latency_ms, on_message, on_open) {
+        let hub_close = self.hub.clone();
+        let generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let gen_close = generation.clone();
+        let on_close: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            // Nur beenden, wenn diese Sitzung noch die aktuelle ist (eine neue Sitzung desselben Teilnehmers bleibt).
+            let mut core = hub_close.core.lock().expect("lock poisoned");
+            let id = gen_close.load(Ordering::Relaxed);
+            if core.session_generation(who) == Some(id) {
+                core.end_session(who);
+            }
+        });
+        match peer::Peer::answer(sdp, self.latency_ms, on_message, on_open, on_close) {
             Ok((peer, answer)) => {
                 let old = {
                     let mut core = self.hub.core.lock().expect("lock poisoned");
-                    core.mark_dirty();
-                    core.sessions.insert(who, peer)
+                    // Eine neue Sitzung beginnt sauber: keine Sprechtasten/Rufe aus der alten.
+                    core.reset_runtime(who);
+                    let id = core.register_session(who, peer);
+                    generation.store(id, Ordering::Relaxed);
+                    core.take_replaced(who)
                 };
                 if let Some(old) = old {
                     old.close();
@@ -108,6 +129,33 @@ impl Store {
         }
     }
 
+    /// IS-05-Verbindungs-API der Programm-Eingänge (Muster `omp-audio-monitor`, hier mehrere Receiver).
+    fn connection_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        if self.inputs.is_empty() {
+            return None;
+        }
+        let to_raw = |(status, content_type, body)| RawResponse { status, content_type, body };
+        if let Some(r) = root_discovery(method, path) {
+            return Some(to_raw(r));
+        }
+        let ids: Vec<&str> = self.inputs.iter().map(|c| c.id()).collect();
+        if let Some(r) = list_ids(method, path, "receivers", &ids) {
+            return Some(to_raw(r));
+        }
+        if let Some(r) = bulk_discovery(method, path) {
+            return Some(to_raw(r));
+        }
+        if let Some(r) = bulk_patch(method, path, "receivers", body, |id, params| {
+            self.inputs.iter().find(|c| c.id() == id).map(|c| c.patch_staged(params).0)
+        }) {
+            return Some(to_raw(r));
+        }
+        if let Some(r) = bulk_patch(method, path, "senders", body, |_, _| None) {
+            return Some(to_raw(r));
+        }
+        self.inputs.iter().find_map(|c| c.handle(method, path, body)).map(to_raw)
+    }
+
     fn status_json(&self) -> Value {
         let core = self.hub.core.lock().expect("lock poisoned");
         let parties: Vec<Value> = core
@@ -127,6 +175,10 @@ impl Store {
         json!({
             "parties": parties,
             "on_air": core.on_air,
+            "mxl": core.mxl.as_ref().map(|io| json!({
+                "inputs": (0..io.input_count()).map(|i| json!({"slot": i + 1, "flow": io.input_flow(i), "flowing": io.input_flowed(i)})).collect::<Vec<_>>(),
+                "outputs": (0..io.output_count()).map(|i| json!({"slot": i + 1, "flow": io.output_flow(i)})).collect::<Vec<_>>(),
+            })),
             "ticks": self.hub.stats.ticks.load(Ordering::Relaxed),
             "late_ticks": self.hub.stats.late_ticks.load(Ordering::Relaxed),
             "max_tick_us": self.hub.stats.max_tick_us.load(Ordering::Relaxed),
@@ -145,6 +197,8 @@ impl ParamStore for Store {
             methods: vec![
                 MethodSpec { name: "forceMute".into(), args: vec![MethodArg { name: "party".into(), kind: ParamType::Number }, MethodArg { name: "on".into(), kind: ParamType::Boolean }] },
                 MethodSpec { name: "resetStats".into(), args: vec![] },
+                // Fernbedienung einer Sprechstelle (Stream Deck): dieselben Befehle wie der Datenkanal des Panels (JSON-Text).
+                MethodSpec { name: "panelCommand".into(), args: vec![MethodArg { name: "party".into(), kind: ParamType::Number }, MethodArg { name: "cmd".into(), kind: ParamType::String }] },
             ],
         }
     }
@@ -157,7 +211,11 @@ impl ParamStore for Store {
             "partiesOnline" => Some(json!(core.sessions.values().filter(|s| s.connected()).count())),
             "lateTicks" => Some(json!(self.hub.stats.late_ticks.load(Ordering::Relaxed))),
             "maxTickUs" => Some(json!(self.hub.stats.max_tick_us.load(Ordering::Relaxed))),
-            _ => None,
+            // `deck.<Teilnehmer-ID>`: Zustand dieser Sprechstelle wie im Panel (Stream Deck, Anzeigen).
+            other => {
+                let id: u32 = other.strip_prefix("deck.")?.parse().ok()?;
+                core.state_for(id)
+            }
         }
     }
 
@@ -180,6 +238,17 @@ impl ParamStore for Store {
                 let on = args.get("on").and_then(Value::as_bool).unwrap_or(true);
                 let mut core = self.hub.core.lock().expect("lock poisoned");
                 core.force_mute(party, on).map_err(InvokeError::Message)
+            }
+            "panelCommand" => {
+                let party = args.get("party").and_then(Value::as_u64).ok_or(InvokeError::Message("party fehlt".into()))? as u32;
+                let cmd = args.get("cmd").and_then(Value::as_str).ok_or(InvokeError::Message("cmd fehlt".into()))?;
+                let v: Value = serde_json::from_str(cmd).map_err(|e| InvokeError::Message(format!("cmd kein JSON: {e}")))?;
+                let mut core = self.hub.core.lock().expect("lock poisoned");
+                if !core.parties.contains_key(&party) {
+                    return Err(InvokeError::Message(format!("unbekannter Teilnehmer {party}")));
+                }
+                core.command(party, &v);
+                Ok(())
             }
             "resetStats" => {
                 self.hub.stats.late_ticks.store(0, Ordering::Relaxed);
@@ -214,7 +283,7 @@ impl ParamStore for Store {
             ("GET", "/config") => Some(json_resp(200, self.hub.core.lock().expect("lock poisoned").config_json())),
             ("PUT", "/config") => Some(self.put_config(body)),
             ("GET", "/status") => Some(json_resp(200, self.status_json())),
-            _ => uibundle::route(method, bare),
+            _ => self.connection_route(method, path, body).or_else(|| uibundle::route(method, bare)),
         }
     }
 
@@ -222,7 +291,12 @@ impl ParamStore for Store {
         match path.split('?').next().unwrap_or(path) {
             "/offer" => Some(vec!["POST", "DELETE"]),
             "/config" => Some(vec!["GET", "PUT"]),
-            _ => None,
+            _ => self
+                .inputs
+                .iter()
+                .find_map(|c| c.cors_methods(path))
+                .or_else(|| bulk_cors_methods(path, "senders"))
+                .or_else(|| bulk_cors_methods(path, "receivers")),
         }
     }
 }
@@ -252,7 +326,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     hub.spawn_clock();
     let ticks = hub.stats.ticks.clone();
 
-    let store: Arc<dyn ParamStore> = Arc::new(Store { hub, latency_ms, config_file, offer_lock: Mutex::new(()) });
+    // MXL-Programmeingänge und Kanalmix-Ausgänge (fehlt libmxl/die Domain, läuft der Node ohne).
+    let domain = env_or("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl");
+    let n_in: usize = env_or("OMP_INTERCOM_PROGRAM_INPUTS", "2").parse()?;
+    let n_out: usize = env_or("OMP_INTERCOM_MIX_OUTPUTS", "2").parse()?;
+    let out_flow_ids: Vec<String> = (0..n_out).map(|_| omp_node_sdk::idgen::new_v4()).collect();
+    let io = if n_in + n_out == 0 {
+        None
+    } else {
+        match mxl_io::MxlIo::new(&domain, n_in, &out_flow_ids) {
+            Ok(io) => Some(io),
+            Err(e) => {
+                eprintln!("omp-intercom: MXL nicht verfügbar ({e}) — Betrieb ohne Programmeingänge und Mix-Ausgänge");
+                None
+            }
+        }
+    };
+    hub.core.lock().expect("lock poisoned").mxl = io.clone();
+    let mut receiver_specs = Vec::new();
+    let mut sender_specs = Vec::new();
+    let mut inputs = Vec::new();
+    if let Some(io) = &io {
+        for slot in 0..io.input_count() {
+            let id = omp_node_sdk::idgen::new_v4();
+            inputs.push(Arc::new(ReceiverConnection::new(
+                id.clone(),
+                mxl_io::InputControl { io: io.clone(), slot, registry: RegistryClient::new(registry_url.clone()) },
+            )));
+            receiver_specs.push(ReceiverSpec {
+                id: Some(id),
+                label: Some(format!("Programm {}", slot + 1)),
+                transport: Some(TRANSPORT_MXL.to_string()),
+                media_types: Some(vec!["audio/float32".to_string()]),
+                ..Default::default()
+            });
+        }
+        for (slot, flow_id) in out_flow_ids.iter().enumerate() {
+            sender_specs.push(SenderSpec {
+                label: Some(format!("Intercom Mix {}", slot + 1)),
+                transport: Some(TRANSPORT_MXL.to_string()),
+                flow: Some(FlowSpec::Audio {
+                    id: Some(flow_id.clone()),
+                    sample_rate_numerator: 48_000,
+                    channel_count: 2,
+                    media_type: "audio/float32".to_string(),
+                    bit_depth: 32,
+                    source_id: None,
+                }),
+                ..Default::default()
+            });
+        }
+    }
+
+    let tally_hub = hub.clone();
+    let tally_nats = nats_url.clone();
+    let tally_registry = registry_url.clone();
+    let store: Arc<dyn ParamStore> = Arc::new(Store { hub, latency_ms, config_file, offer_lock: Mutex::new(()), inputs });
     let handle = omp_node_sdk::start(
         NodeConfig {
             label,
@@ -260,8 +389,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             port,
             registry_url,
             nats_url,
-            senders: vec![],
-            receivers: vec![],
+            senders: sender_specs,
+            receivers: receiver_specs,
             instance_id: std::env::var("OMP_INSTANCE_ID").ok(),
             media_ready: MediaReadySource::NotApplicable,
         },
@@ -269,6 +398,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     )
     .await?;
     handle.register_worker("clock", ticks);
+    tokio::spawn(tally::run(tally_hub, tally::TriggerFilter::new(&env_or("OMP_INTERCOM_ONAIR_SOURCES", "")), tally_nats, tally_registry));
     tokio::signal::ctrl_c().await?;
     eprintln!("omp-intercom: shutdown requested");
     Ok(())

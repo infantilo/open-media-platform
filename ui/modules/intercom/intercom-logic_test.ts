@@ -81,3 +81,17 @@ Deno.test("Gast-Zuordnungen und Änderungserkennung", () => {
   b.channels[0].name = "B";
   assertEquals(sameConfig(a, b), false);
 });
+
+Deno.test("MXL-Anschlüsse: 0 und Anschlüsse bei Menschen werden entfernt", () => {
+  const c: Config = {
+    channels: [],
+    parties: [
+      { id: 1, name: "Prog", kind: "program", mxl_in: 1, mxl_out: 0, routes: [] },
+      { id: 2, name: "Mensch", kind: "human", mxl_in: 3, routes: [] },
+    ],
+  };
+  const o = cleanConfig(c);
+  assertEquals(o.parties[0].mxl_in, 1);
+  assertEquals("mxl_out" in o.parties[0], false);
+  assertEquals("mxl_in" in o.parties[1], false);
+});

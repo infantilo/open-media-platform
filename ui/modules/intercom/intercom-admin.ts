@@ -294,6 +294,27 @@ class IntercomAdmin extends HTMLElement {
     card.append(head);
 
     const human = (p.kind ?? "human") === "human" || p.kind === "seat";
+    if (p.kind === "program" || p.kind === "port") {
+      const slot = (label: string, value: number | undefined, set: (n: number) => void): HTMLElement => {
+        const i = el("input", "padding:3px 6px;width:70px;");
+        i.type = "number";
+        i.min = "0";
+        i.max = "16";
+        i.value = String(value ?? 0);
+        i.addEventListener("input", () => {
+          set(Number(i.value));
+          this.#touch();
+        });
+        return field(label, i);
+      };
+      const ports = el("div", "display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;align-items:flex-end;");
+      ports.append(
+        slot(tt("icom.party.mxlIn"), p.mxl_in, (n) => (p.mxl_in = n)),
+        slot(tt("icom.party.mxlOut"), p.mxl_out, (n) => (p.mxl_out = n)),
+        el("span", DIM + "font-size:12px;", tt("icom.party.mxlHint")),
+      );
+      card.append(ports);
+    }
     const flags = el("div", "display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;");
     flags.append(check(tt("icom.party.force"), !!p.force, (v) => { p.force = v; this.#touch(); }), check(tt("icom.party.onairLock"), !!p.onair_lock, (v) => { p.onair_lock = v; this.#touch(); }));
     if (human) flags.append(check(tt("icom.party.open"), !!p.open, (v) => { p.open = v; this.#touch(); }));

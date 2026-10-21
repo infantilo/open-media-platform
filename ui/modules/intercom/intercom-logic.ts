@@ -26,6 +26,8 @@ export interface Party {
   users?: string[];
   groups?: string[];
   open?: boolean;
+  mxl_in?: number;
+  mxl_out?: number;
   routes: Route[];
 }
 export interface Guest {
@@ -100,6 +102,12 @@ export function cleanConfig(cfg: Config): Config {
     const q: Party = { ...p, name: p.name.trim(), routes: p.routes.filter((r) => r.talk || r.listen).sort((a, b) => a.ch - b.ch) };
     if (!q.users?.length) delete q.users;
     if (!q.groups?.length) delete q.groups;
+    if (!q.mxl_in) delete q.mxl_in;
+    if (!q.mxl_out) delete q.mxl_out;
+    if (q.kind !== "program" && q.kind !== "port") {
+      delete q.mxl_in;
+      delete q.mxl_out;
+    }
     return q;
   });
   delete out.guests; // Gäste verwaltet der Server über eigene Endpunkte

@@ -86,6 +86,7 @@ impl Peer {
         latency_ms: u32,
         on_message: Arc<dyn Fn(String) + Send + Sync>,
         on_open: Arc<dyn Fn() + Send + Sync>,
+        on_close: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<(Arc<Peer>, String), String> {
         let pt = payload_type(offer_sdp, "opus").ok_or("Angebot enthält kein Opus")?;
         let offer = gst_sdp::SDPMessage::parse_buffer(offer_sdp.as_bytes()).map_err(|_| "ungültiges SDP".to_string())?;
@@ -193,6 +194,10 @@ impl Peer {
                 });
                 let on_open = on_open.clone();
                 dc.connect_on_open(move |_| on_open());
+                // Schließt der Browser (Tab zu, Seite verlassen), endet der Datenkanal sofort — viel früher als der
+                // ICE-Verbindungstest (~30 s). Danach dürfen keine Sprechtasten oder Rufe hängen bleiben.
+                let on_close = on_close.clone();
+                dc.connect_on_close(move |_| on_close());
                 *channel.lock().expect("lock poisoned") = Some(dc);
                 None
             });
@@ -254,10 +259,10 @@ impl Peer {
         let mut t = self.trim.lock().expect("lock poisoned");
         t.min_rest = t.min_rest.min(q.len());
         t.ticks += 1;
-        if t.ticks >= 50 {
-            // Ein Rest von mehr als ~7 ms über eine volle Sekunde ist ungenutzte Latenz.
-            if t.min_rest > 320 {
-                let cut = t.min_rest - 160;
+        if t.ticks >= 25 {
+            // Ein Rest von mehr als ~3 ms über eine halbe Sekunde ist ungenutzte Latenz.
+            if t.min_rest > 160 {
+                let cut = t.min_rest - 80;
                 q.drain(..cut);
                 self.dropped.fetch_add(cut as u64, Ordering::Relaxed);
             }
@@ -384,12 +389,21 @@ fn attach_receive(
 
     let inbox = inbox.clone();
     let rx_samples = rx_samples.clone();
+    let debug_rx = std::env::var("OMP_INTERCOM_DEBUG_RX").is_ok();
+    let t_start = Instant::now();
+    let counter = std::sync::atomic::AtomicU64::new(0);
     sink.set_callbacks(
         gst_app::AppSinkCallbacks::builder()
             .new_sample(move |s| {
                 let sample = s.pull_sample().map_err(|_| gst::FlowError::Eos)?;
                 let buf = sample.buffer().ok_or(gst::FlowError::Error)?;
                 let map = buf.map_readable().map_err(|_| gst::FlowError::Error)?;
+                if debug_rx {
+                    let n = counter.fetch_add(1, Ordering::Relaxed);
+                    if (200..320).contains(&n) {
+                        eprintln!("RX {:>8.1} ms  {} samples", t_start.elapsed().as_secs_f64() * 1000.0, map.len() / 4);
+                    }
+                }
                 let mut q = inbox.lock().expect("lock poisoned");
                 for c in map.as_slice().chunks_exact(4) {
                     q.push_back(f32::from_le_bytes([c[0], c[1], c[2], c[3]]));

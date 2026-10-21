@@ -57,6 +57,9 @@ type Party struct {
 	Routes  []Route  `json:"routes"`
 	Vox     *Vox     `json:"vox,omitempty"`
 	MicGain *float64 `json:"mic_gain,omitempty"`
+	// MxlIn/MxlOut: Programmeingang bzw. Mix-Ausgang des Nodes (1-basiert, 0 = keiner), für Arten „program“ und „port“.
+	MxlIn  int `json:"mxl_in,omitempty"`
+	MxlOut int `json:"mxl_out,omitempty"`
 	// Token wird nur serverseitig vergeben und nie über die Konfigurations-API ausgeliefert.
 	Token string `json:"token,omitempty"`
 }
@@ -153,6 +156,7 @@ func (c Config) Validate() error {
 	}
 	ids := map[int]bool{}
 	pnames := map[string]bool{}
+	usedIn, usedOut := map[int]string{}, map[int]string{}
 	for _, pt := range c.Parties {
 		if pt.ID <= 0 || pt.ID >= GuestBase {
 			p = append(p, fmt.Sprintf("Teilnehmer %q: ID %d ungültig (1…%d)", pt.Name, pt.ID, GuestBase-1))
@@ -180,6 +184,25 @@ func (c Config) Validate() error {
 			p = append(p, fmt.Sprintf("Teilnehmer %q: Sprachaktivierung außerhalb des Bereichs", pt.Name))
 		}
 		validRoutes(fmt.Sprintf("Teilnehmer %q", pt.Name), pt.Routes, channels, &p)
+		if pt.MxlIn < 0 || pt.MxlIn > 16 || pt.MxlOut < 0 || pt.MxlOut > 16 {
+			p = append(p, fmt.Sprintf("Teilnehmer %q: MXL-Anschluss außerhalb 0…16", pt.Name))
+		}
+		if (pt.MxlIn > 0 || pt.MxlOut > 0) && pt.Kind != "program" && pt.Kind != "port" {
+			p = append(p, fmt.Sprintf("Teilnehmer %q: MXL-Anschluss nur bei Art „Programmquelle“ oder „Anbindung“", pt.Name))
+		}
+		for _, d := range []struct {
+			n    int
+			used map[int]string
+			what string
+		}{{pt.MxlIn, usedIn, "Programmeingang"}, {pt.MxlOut, usedOut, "Mix-Ausgang"}} {
+			if d.n == 0 {
+				continue
+			}
+			if other, dup := d.used[d.n]; dup {
+				p = append(p, fmt.Sprintf("%s %d doppelt belegt (%q und %q)", d.what, d.n, other, pt.Name))
+			}
+			d.used[d.n] = pt.Name
+		}
 	}
 	for _, g := range c.Guests {
 		if g.ID < GuestBase {
@@ -280,6 +303,12 @@ func (c Config) NodeConfig(now time.Time) map[string]any {
 		}
 		if p.MicGain != nil {
 			m["mic_gain"] = *p.MicGain
+		}
+		if p.MxlIn > 0 {
+			m["mxl_in"] = p.MxlIn
+		}
+		if p.MxlOut > 0 {
+			m["mxl_out"] = p.MxlOut
 		}
 		parties = append(parties, m)
 	}

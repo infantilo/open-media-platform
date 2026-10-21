@@ -57,6 +57,32 @@ func TestValidateAcceptsSampleAndCollectsAllProblems(t *testing.T) {
 	}
 }
 
+func TestMxlPortsValidatedAndPassedToNode(t *testing.T) {
+	c := sample()
+	c.Parties[3].MxlIn = 1
+	c.Parties = append(c.Parties, Party{ID: 5, Name: "Studiolautsprecher", Kind: "port", MxlOut: 2, Routes: []Route{{Ch: 1, Listen: true}}})
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	doc, _ := json.Marshal(c.WithTokens(Config{}).NodeConfig(time.Now()))
+	if !strings.Contains(string(doc), `"mxl_in":1`) || !strings.Contains(string(doc), `"mxl_out":2`) {
+		t.Fatalf("Anschlüsse fehlen: %s", doc)
+	}
+	bad := sample()
+	bad.Parties[3].MxlIn = 1
+	bad.Parties = append(bad.Parties, Party{ID: 5, Name: "Zweiter", Kind: "program", MxlIn: 1, Routes: []Route{}}, Party{ID: 6, Name: "Mensch", MxlOut: 1, Routes: []Route{}}, Party{ID: 7, Name: "Zuviel", Kind: "port", MxlIn: 99})
+	err := bad.Validate()
+	if err == nil {
+		t.Fatal("Fehler erwartet")
+	}
+	joined := strings.Join(err.(*ValidationError).Problems, "|")
+	for _, want := range []string{"doppelt belegt", "nur bei Art", "außerhalb 0…16"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("%q fehlt in %q", want, joined)
+		}
+	}
+}
+
 func TestTokensAreServerSideAndStable(t *testing.T) {
 	c1 := sample().WithTokens(Config{})
 	for _, p := range c1.Parties {

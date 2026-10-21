@@ -1592,5 +1592,72 @@
       "min": 1,
       "max": 10
     }
+  ],
+  "omp-intercom": [
+    {
+      "key": "OMP_INTERCOM_ONAIR_SOURCES",
+      "i18n": {
+        "en": {
+          "label": "On-air triggers",
+          "description": "Names or IDs of nodes (comma), e.g. the video mixer: as soon as one has a source on programme the studio counts as on air and parties with \"microphone locked while on air\" are muted. Empty = only the parameter \"onAir\" by hand.",
+          "group": "On air"
+        }
+      },
+      "label": "On-Air-Auslöser",
+      "type": "string",
+      "description": "Namen oder IDs der Nodes (Komma), z. B. der Bildmischer: sobald einer davon eine Quelle auf Programm hat, gilt das Studio als On Air und Teilnehmer mit „Mikrofon gesperrt bei On Air“ werden stumm. Leer = nur der Parameter „onAir“ von Hand.",
+      "group": "On Air"
+    },
+    {
+      "key": "OMP_INTERCOM_PROGRAM_INPUTS",
+      "i18n": {
+        "en": {
+          "label": "Programme inputs",
+          "description": "Number of MXL inputs (IS-05 receivers \"Programme n\") for programme audio/IFB and links.",
+          "group": "Ports"
+        }
+      },
+      "label": "Programm-Eingänge",
+      "type": "int",
+      "description": "Anzahl der MXL-Eingänge (IS-05-Receiver „Programm n“) für Programmton/IFB und Anbindungen.",
+      "group": "Anschlüsse",
+      "default": "2",
+      "min": 0,
+      "max": 16
+    },
+    {
+      "key": "OMP_INTERCOM_MIX_OUTPUTS",
+      "i18n": {
+        "en": {
+          "label": "Mix outputs",
+          "description": "Number of MXL senders \"Intercom Mix n\" (what a party hears, e.g. for a studio loudspeaker or a recording).",
+          "group": "Ports"
+        }
+      },
+      "label": "Mix-Ausgänge",
+      "type": "int",
+      "description": "Anzahl der MXL-Sender „Intercom Mix n“ (Hörsignal eines Teilnehmers, z. B. für Studiolautsprecher oder Aufnahme).",
+      "group": "Anschlüsse",
+      "default": "2",
+      "min": 0,
+      "max": 16
+    },
+    {
+      "key": "OMP_INTERCOM_LATENCY_MS",
+      "i18n": {
+        "en": {
+          "label": "Jitter buffer (ms)",
+          "description": "Receive buffer per station. Smaller = less delay but more sensitive to Wi-Fi jitter. Default 40.",
+          "group": "Network"
+        }
+      },
+      "label": "Jitter-Puffer (ms)",
+      "type": "int",
+      "description": "Empfangspuffer je Sprechstelle. Kleiner = weniger Verzögerung, aber empfindlicher gegen WLAN-Jitter. Standard 40.",
+      "group": "Netzwerk",
+      "default": "40",
+      "min": 0,
+      "max": 200
+    }
   ]
 }

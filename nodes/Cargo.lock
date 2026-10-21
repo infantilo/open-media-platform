@@ -1466,6 +1466,7 @@ dependencies = [
  "gstreamer-app",
  "gstreamer-sdp",
  "gstreamer-webrtc",
+ "omp-mediaio",
  "omp-node-sdk",
  "qrcode",
  "serde_json",
