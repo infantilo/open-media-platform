@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -385,6 +386,31 @@ func TestMetricsFromNodeStatus(t *testing.T) {
 	empty.WriteMetrics(&e)
 	if e.Len() != 0 {
 		t.Error("ohne Dienst keine Zeilen")
+	}
+}
+
+func TestPanelURLUsesPlainHTTPWhenBrowserAndNodeAreOnTheSameMachine(t *testing.T) {
+	node := newFakeNode(t, true) // HTTPS wäre verfügbar, soll aber nicht gewählt werden
+	s := testService(t, node)
+	port := strings.TrimPrefix(node.URL, "http://127.0.0.1:")
+	for _, host := range []string{"localhost:8000", "127.0.0.1:8000", "localhost", "[::1]:8000"} {
+		u, err := s.PanelURL(context.Background(), host, "tok")
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := strings.Split(strings.TrimSuffix(strings.TrimPrefix(host, "["), "]"), ":")[0]
+		if host == "[::1]:8000" {
+			name = "::1"
+		}
+		want := "http://" + net.JoinHostPort(name, port) + "/panel?token=tok"
+		if u != want {
+			t.Errorf("%s: %s, erwartet %s", host, u, want)
+		}
+	}
+	// Von einem anderen Rechner aus bleibt es HTTPS.
+	u, _ := s.PanelURL(context.Background(), "regie.example:8000", "tok")
+	if !strings.HasPrefix(u, "https://regie.example:9445/") {
+		t.Errorf("entfernt: %s", u)
 	}
 }
 

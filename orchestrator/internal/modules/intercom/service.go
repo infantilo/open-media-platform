@@ -298,6 +298,14 @@ func (s *Service) Run(ctx context.Context) {
 	}
 }
 
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
+}
+
 // PanelURL baut den Link zum Panel eines Teilnehmers auf dem ersten erreichbaren Intercom-Node. `requestHost` ist der Name,
 // unter dem die anfragende Person den Orchestrator erreicht (für Nodes, die nur auf localhost lauschen).
 func (s *Service) PanelURL(ctx context.Context, requestHost, token string) (string, error) {
@@ -310,12 +318,19 @@ func (s *Service) PanelURL(ctx context.Context, requestHost, token string) (stri
 		return "", err
 	}
 	host := base.Hostname()
-	if ip := net.ParseIP(host); host == "localhost" || (ip != nil && ip.IsLoopback()) {
-		if h, _, err := net.SplitHostPort(requestHost); err == nil {
-			host = h
-		} else if requestHost != "" {
-			host = requestHost
-		}
+	nodeLoopback := isLoopback(host)
+	reqHost := requestHost
+	if h, _, err := net.SplitHostPort(requestHost); err == nil {
+		reqHost = h
+	}
+	// Browser und Node auf demselben Rechner (Anfrage über localhost): einfaches HTTP über den normalen Node-Port. `localhost`
+	// gilt für das Mikrofon als sicherer Kontext, die Zertifikats-Rückfrage des selbst signierten HTTPS entfällt.
+	if nodeLoopback && isLoopback(reqHost) {
+		u := url.URL{Scheme: "http", Host: net.JoinHostPort(reqHost, base.Port()), Path: "/panel", RawQuery: "token=" + url.QueryEscape(token)}
+		return u.String(), nil
+	}
+	if nodeLoopback && reqHost != "" {
+		host = reqHost
 	}
 	scheme, port := "http", base.Port()
 	if req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(nodes[0].APIBaseURL, "/")+"/https-info", nil); err == nil {
