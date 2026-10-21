@@ -35,6 +35,7 @@ members = [
     "omp-audio-rules",
     "omp-mxf-mca",
     "omp-device-hub",
+    "omp-intercom",
 ]
 
 # Eigener Rust-Code mit Pixel-Schleifen (v210-Packen/Alpha-Key-Extraktion in

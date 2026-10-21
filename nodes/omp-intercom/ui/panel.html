@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#14171c">
+<title>Intercom</title>
+<style>
+:root{--bg:#f4f5f7;--panel:#fff;--ink:#16191d;--mute:#6a7380;--line:#d9dde3;--accent:#1f6feb;--talk:#d1242f;--ok:#1a7f37;--warn:#bf8700;--key:#e9ecf0}
+@media (prefers-color-scheme:dark){:root{--bg:#14171c;--panel:#1d2128;--ink:#e8ebef;--mute:#8d97a5;--line:#2c323b;--accent:#4c8dff;--talk:#ff4d57;--ok:#3fb950;--warn:#d4a72c;--key:#272d36}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.35 system-ui,sans-serif;touch-action:manipulation}
+body{padding:env(safe-area-inset-top) 16px env(safe-area-inset-bottom);max-width:720px;margin:0 auto}
+header{display:flex;align-items:center;gap:12px;padding:12px 0;position:sticky;top:0;background:var(--bg);z-index:3}
+header h1{font-size:18px;margin:0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--mute);flex:none}
+.dot.on{background:var(--ok)}.dot.bad{background:var(--talk)}.dot.speak{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 35%,transparent)}
+button{font:inherit;color:inherit;border:1px solid var(--line);background:var(--key);border-radius:10px;padding:10px 14px;min-height:44px;cursor:pointer;user-select:none;-webkit-user-select:none;touch-action:none}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.toggle[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff}
+#mute[aria-pressed=true]{background:var(--talk);border-color:var(--talk);color:#fff}
+.meter{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-bottom:8px}
+.meter i{display:block;height:100%;width:0;background:var(--ok);transition:width .08s}
+#banner{display:none;margin:0 0 12px;padding:10px 12px;border-radius:10px;background:var(--warn);color:#000}
+#banner.show{display:block}
+#start{display:flex;flex-direction:column;gap:12px;align-items:flex-start;padding:24px 0}
+#start button{background:var(--accent);color:#fff;border-color:var(--accent);padding:14px 22px;font-size:18px;touch-action:manipulation}
+#err{color:var(--talk)}
+.chan{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:12px;border-left:6px solid var(--cc,var(--accent))}
+.chan.ring{animation:ring .5s 6}
+@keyframes ring{50%{background:color-mix(in srgb,var(--warn) 40%,var(--panel))}}
+.chan .top{display:flex;align-items:center;gap:10px}
+.chan .name{font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.chan .who{color:var(--mute);font-size:14px;min-height:20px;margin:6px 0 8px}
+.chan .who b{color:var(--ok)}
+.talk{width:100%;min-height:64px;font-size:18px;font-weight:600}
+.talk[aria-pressed=true]{background:var(--talk);border-color:var(--talk);color:#fff}
+.talk[disabled]{opacity:.45}
+.row{display:flex;gap:10px;align-items:center;margin-top:10px}
+.row label{font-size:13px;color:var(--mute);width:56px;flex:none}
+input[type=range]{flex:1;min-width:0;height:32px}
+h2{font-size:14px;color:var(--mute);margin:18px 0 8px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.people{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.person{display:flex;align-items:center;gap:8px;text-align:left;width:100%}
+.person[aria-pressed=true]{background:var(--talk);border-color:var(--talk);color:#fff}
+.person[disabled]{opacity:.45}
+.hint{color:var(--mute);font-size:13px;margin:16px 0}
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="conn" title=""></span>
+  <h1 id="me">Intercom</h1>
+  <button id="mute" class="toggle" aria-pressed="false" hidden></button>
+</header>
+<div id="banner" role="status"></div>
+<div id="start">
+  <div id="intro"></div>
+  <button id="go"></button>
+  <div id="err" role="alert"></div>
+</div>
+<main id="app" hidden>
+  <div class="meter" aria-hidden="true"><i id="mic"></i></div>
+  <section id="chans"></section>
+  <h2 id="h-people"></h2>
+  <section class="people" id="people"></section>
+  <p class="hint" id="hint"></p>
+</main>
+<audio id="out" autoplay playsinline></audio>
+<script>
+(() => {
+  const L = (navigator.language || 'de').startsWith('de') ? 'de' : 'en';
+  const T = {
+    de: {intro:'Mikrofon und Kopfhörer bereithalten.', go:'Verbinden', mute:'Mikrofon', muted:'Mikrofon stumm', talk:'Sprechen', hold:'Halten = sprechen, Tippen = rasten', listen:'Hören', level:'Pegel', pan:'Lage', solo:'Solo', people:'Teilnehmer', call:'Rufen', all:'Alle rufen', hint:'Tasten 1–9: Kanal sprechen (halten) · M: Mikrofon stumm', offline:'offline', forced:'Mikrofon gesperrt', onair:'ON AIR', ring:'Ruf von', reconnect:'Verbindung verloren – verbinde neu …', noaudio:'Kein Mikrofonzugriff', badtoken:'Zugang ungültig oder abgelaufen', secure:'Mikrofon braucht HTTPS oder localhost.', speaking:'spricht'},
+    en: {intro:'Have your microphone and headphones ready.', go:'Connect', mute:'Microphone', muted:'Microphone muted', talk:'Talk', hold:'Hold = talk, tap = latch', listen:'Listen', level:'Level', pan:'Pan', solo:'Solo', people:'Parties', call:'Call', all:'Call all', hint:'Keys 1–9: talk on channel (hold) · M: mute microphone', offline:'offline', forced:'Microphone locked', onair:'ON AIR', ring:'Call from', reconnect:'Connection lost – reconnecting …', noaudio:'No microphone access', badtoken:'Access invalid or expired', secure:'The microphone needs HTTPS or localhost.', speaking:'speaking'}
+  }[L];
+  const $ = id => document.getElementById(id);
+  const q = new URLSearchParams(location.search);
+  const token = q.get('token') || '';
+  document.documentElement.lang = L;
+  $('intro').textContent = T.intro; $('go').textContent = T.go; $('mute').textContent = T.mute;
+  $('h-people').textContent = T.people; $('hint').textContent = T.hint;
+
+  let pc = null, dc = null, stream = null, state = null, closing = false, retry = 0;
+  const latched = new Set();     // per Tippen eingerastete Kanäle
+  const callOn = new Set();       // laufende Rufe (Teilnehmer-IDs)
+  const send = o => { if (dc && dc.readyState === 'open') dc.send(JSON.stringify(o)); };
+  window.__ic = { get state() { return state; }, get pc() { return pc; }, send };
+
+  function banner(text) { const b = $('banner'); b.textContent = text || ''; b.classList.toggle('show', !!text); }
+
+  async function connect() {
+    if (pc) { try { pc.close(); } catch (e) {} }
+    pc = new RTCPeerConnection({ iceServers: [] });
+    dc = pc.createDataChannel('ctl');
+    dc.onmessage = ev => { try { onMsg(JSON.parse(ev.data)); } catch (e) {} };
+    dc.onopen = () => { banner(''); retry = 0; };
+    pc.ontrack = ev => { $('out').srcObject = ev.streams[0] || new MediaStream([ev.track]); $('out').play().catch(() => {}); };
+    pc.onconnectionstatechange = () => {
+      const s = pc.connectionState;
+      $('conn').className = 'dot ' + (s === 'connected' ? 'on' : (s === 'failed' || s === 'closed' ? 'bad' : ''));
+      $('conn').title = s;
+      if ((s === 'failed' || s === 'disconnected' || s === 'closed') && !closing) {
+        banner(T.reconnect);
+        setTimeout(() => { if (!closing && pc && pc.connectionState !== 'connected') connect().catch(() => {}); }, Math.min(5000, 800 * ++retry));
+      }
+    };
+    stream.getAudioTracks().forEach(t => pc.addTrack(t, stream));
+    await pc.setLocalDescription(await pc.createOffer());
+    await new Promise(res => {
+      if (pc.iceGatheringState === 'complete') return res();
+      const t = setTimeout(res, 3000);
+      pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); } });
+    });
+    const r = await fetch('offer?token=' + encodeURIComponent(token), { method: 'POST', headers: { 'content-type': 'application/sdp' }, body: pc.localDescription.sdp });
+    if (r.status === 401) { closing = true; throw new Error(T.badtoken); }
+    if (!r.ok) throw new Error(await r.text());
+    await pc.setRemoteDescription({ type: 'answer', sdp: await r.text() });
+  }
+
+  $('go').onclick = async () => {
+    $('err').textContent = '';
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('err').textContent = T.secure; return; }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
+    } catch (e) { $('err').textContent = T.noaudio + ': ' + e.message; return; }
+    try { await connect(); } catch (e) { $('err').textContent = e.message; return; }
+    $('start').hidden = true; $('app').hidden = false; $('mute').hidden = false;
+  };
+
+  $('mute').onclick = () => { if (state && !state.me.forced) send({ t: 'mute', on: !state.me.muted }); };
+
+  let beepCtx = null;
+  function beep() {
+    try { beepCtx = beepCtx || new AudioContext(); const o = beepCtx.createOscillator(), g = beepCtx.createGain();
+      o.frequency.value = 880; g.gain.value = 0.12; o.connect(g); g.connect(beepCtx.destination); o.start(); o.stop(beepCtx.currentTime + 0.25); } catch (e) {}
+  }
+  function onMsg(m) {
+    if (m.t === 'state') { state = m; render(); }
+    else if (m.t === 'ring') { beep(); if (navigator.vibrate) navigator.vibrate([200, 100, 200]); banner(T.ring + ' ' + m.name); setTimeout(() => banner(''), 4000);
+      document.querySelectorAll('.chan.call').forEach(e => { e.classList.remove('ring'); void e.offsetWidth; e.classList.add('ring'); }); }
+  }
+
+  const nameOf = id => (state.parties.find(p => p.id === id) || {}).name || '?';
+
+  function talkButton(c, el) {
+    let down = 0;
+    const set = on => send({ t: 'talk', ch: c.id, on });
+    el.addEventListener('pointerdown', ev => {
+      ev.preventDefault(); el.setPointerCapture(ev.pointerId);
+      if (latched.has(c.id)) { latched.delete(c.id); set(false); down = 0; return; }
+      down = performance.now(); set(true);
+    });
+    el.addEventListener('pointerup', () => {
+      if (!down) return;
+      if (performance.now() - down < 250) latched.add(c.id); else set(false);
+      down = 0;
+    });
+    el.addEventListener('pointercancel', () => { if (down) { down = 0; set(false); } });
+  }
+
+  const built = new Map();   // Kanal-ID → Elemente (damit Regler beim Ziehen nicht neu gebaut werden)
+  function render() {
+    const me = state.me;
+    $('me').textContent = me.name + (me.on_air ? ' · ' + T.onair : '');
+    const mb = $('mute'); mb.textContent = me.forced ? T.forced : (me.muted ? T.muted : T.mute);
+    mb.setAttribute('aria-pressed', String(me.muted || me.forced)); mb.disabled = !!me.forced;
+    $('mic').style.width = Math.max(0, Math.min(100, (me.mic_db + 60) / 60 * 100)) + '%';
+    const root = $('chans');
+    const ids = state.channels.map(c => c.id);
+    for (const [id, e] of built) if (!ids.includes(id)) { e.root.remove(); built.delete(id); latched.delete(id); }
+    state.channels.forEach((c, idx) => {
+      let e = built.get(c.id);
+      if (!e) {
+        const rootEl = document.createElement('div'); rootEl.className = 'chan' + (c.kind === 'call' ? ' call' : '');
+        rootEl.innerHTML = '<div class="top"><span class="name"></span><button class="toggle listen"></button><button class="toggle solo"></button></div><div class="who"></div>' +
+          '<button class="talk"></button><div class="row lvl"><label></label><input type="range" min="0" max="150" step="1"></div><div class="row pan"><label></label><input type="range" min="-100" max="100" step="5"></div>';
+        e = { root: rootEl, name: rootEl.querySelector('.name'), listen: rootEl.querySelector('.listen'), solo: rootEl.querySelector('.solo'), who: rootEl.querySelector('.who'),
+              talk: rootEl.querySelector('.talk'), lvl: rootEl.querySelector('.lvl input'), pan: rootEl.querySelector('.pan input'), act: null };
+        rootEl.querySelector('.lvl label').textContent = T.level; rootEl.querySelector('.pan label').textContent = T.pan;
+        e.listen.textContent = T.listen; e.solo.textContent = T.solo;
+        e.listen.onclick = () => send({ t: 'listen', ch: c.id, on: !e.cur.listen_on });
+        e.solo.onclick = () => send({ t: 'solo', ch: c.id, on: !e.cur.solo });
+        e.lvl.oninput = () => send({ t: 'level', ch: c.id, v: e.lvl.value / 100 });
+        e.pan.oninput = () => send({ t: 'pan', ch: c.id, v: e.pan.value / 100 });
+        talkButton(c, e.talk);
+        built.set(c.id, e); root.appendChild(rootEl);
+      }
+      e.cur = c;
+      e.root.style.setProperty('--cc', c.color || 'var(--accent)');
+      const keyHint = idx < 9 ? ' [' + (idx + 1) + ']' : '';
+      e.name.textContent = c.name + keyHint;
+      e.listen.setAttribute('aria-pressed', String(c.listen_on)); e.listen.hidden = !c.listen;
+      e.solo.setAttribute('aria-pressed', String(c.solo)); e.solo.hidden = !c.listen;
+      const sp = c.speakers.filter(id => id !== me.id).map(nameOf);
+      e.who.innerHTML = sp.length ? '<b>' + sp.map(s => s.replace(/</g, '&lt;')).join(', ') + '</b> ' + T.speaking : '&nbsp;';
+      e.talk.textContent = c.talk_allowed ? T.talk + (c.talk ? ' …' : '') : '—';
+      e.talk.title = T.hold; e.talk.disabled = !c.talk_allowed || me.forced;
+      e.talk.setAttribute('aria-pressed', String(c.talk));
+      if (document.activeElement !== e.lvl) e.lvl.value = Math.round(c.level * 100);
+      if (document.activeElement !== e.pan) e.pan.value = Math.round(c.pan * 100);
+      e.root.querySelector('.lvl').hidden = !c.listen; e.root.querySelector('.pan').hidden = !c.listen;
+      e.root.style.order = c.kind === 'call' ? -1 : idx;
+    });
+    // Teilnehmer + Rufen
+    const people = $('people'); people.innerHTML = '';
+    const mk = (label, key, disabled, cls, on) => {
+      const b = document.createElement('button'); b.className = 'person'; b.disabled = disabled; b.setAttribute('aria-pressed', String(on));
+      b.innerHTML = '<span class="dot ' + cls + '"></span><span></span>'; b.lastChild.textContent = label;
+      b.title = T.call; return b;
+    };
+    state.parties.filter(p => p.id !== me.id).forEach(p => {
+      const b = mk(p.name, p.id, !p.online || me.forced, p.speaking ? 'speak' : (p.online ? 'on' : ''), callOn.has(p.id));
+      let held = false;
+      b.addEventListener('pointerdown', ev => { ev.preventDefault(); b.setPointerCapture(ev.pointerId); held = true; callOn.add(p.id); send({ t: 'call', to: [p.id], on: true }); });
+      const stop = () => { if (!held) return; held = false; callOn.delete(p.id); send({ t: 'call', on: false }); };
+      b.addEventListener('pointerup', stop); b.addEventListener('pointercancel', stop);
+      people.appendChild(b);
+    });
+    if (me.force) {
+      const b = mk(T.all, 'all', me.forced, 'on', callOn.has('all'));
+      b.addEventListener('pointerdown', ev => { ev.preventDefault(); b.setPointerCapture(ev.pointerId); callOn.add('all'); send({ t: 'call', to: 'all', on: true }); });
+      const stop = () => { if (!callOn.has('all')) return; callOn.delete('all'); send({ t: 'call', on: false }); };
+      b.addEventListener('pointerup', stop); b.addEventListener('pointercancel', stop);
+      people.prepend(b);
+    }
+  }
+
+  // Tastatur: 1–9 = Kanal sprechen (halten), M = Stumm
+  const keysDown = new Set();
+  addEventListener('keydown', ev => {
+    if (!state || ev.repeat || ev.target.tagName === 'INPUT') return;
+    if (ev.key === 'm' || ev.key === 'M') { $('mute').click(); return; }
+    const n = parseInt(ev.key, 10);
+    if (n >= 1 && n <= 9 && state.channels[n - 1] && !keysDown.has(n)) { keysDown.add(n); send({ t: 'talk', ch: state.channels[n - 1].id, on: true }); }
+  });
+  addEventListener('keyup', ev => {
+    const n = parseInt(ev.key, 10);
+    if (keysDown.has(n)) { keysDown.delete(n); if (state && state.channels[n - 1]) send({ t: 'talk', ch: state.channels[n - 1].id, on: false }); }
+  });
+  addEventListener('pagehide', () => { closing = true; try { navigator.sendBeacon && 0; } catch (e) {} });
+})();
+</script>
+</body>
+</html>

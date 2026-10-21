@@ -1,0 +1,15 @@
+[package]
+name = "omp-intercom"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+gstreamer = "0.25.3"
+gstreamer-app = "0.25"
+gstreamer-sdp = "0.25"
+gstreamer-webrtc = { version = "0.25", features = ["v1_22"] }
+omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
+qrcode = { version = "0.14.1", default-features = false }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "sync", "time"] }

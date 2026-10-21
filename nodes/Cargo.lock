@@ -1459,6 +1459,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-intercom"
+version = "0.1.0"
+dependencies = [
+ "gstreamer",
+ "gstreamer-app",
+ "gstreamer-sdp",
+ "gstreamer-webrtc",
+ "omp-node-sdk",
+ "qrcode",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "omp-media-library"
 version = "0.1.0"
 dependencies = [

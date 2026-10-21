@@ -5449,3 +5449,68 @@ Entscheidungen (Nutzer 2026-10-20): (1) Entscheidungslogik als **eigener Go-Node
 | 46.3 Entscheidungslogik — **erledigt 2026-10-20** (`internal/engine`: Sprecher = lautester Mikrofonkanal über Schwelle, Haltezeit 700 ms, Mindestdauer 2,5 s, erste bestätigte Einstellung mit sichtbarem Gesicht, Totale nach Stille; offen: Mehrfachsprecher/Überlappung ohne Sonderregel, `takeAt`-Zeitpunkt nicht genutzt) | Sprecher (Pegel + Haltezeit gegen Flattern) → Kamera mit größtem/zentriertem Gesicht der Person → Bildmischer `crosspoint.cut/take` (optional `takeAt`); Mindest-Standzeit, Rückfall auf Totale bei Stille/Mehrfachsprecher | Szenario-Test mit simulierten Zuständen |
 | 46.4 Einrichtungs-UI — **erledigt 2026-10-20** (`ui/bundle.js`, E2E im Browser mit echter Gesichtserkennung auf Beispielbild + Orchestrator-Attrappe + eigenem NATS: anlegen → Einrichten → Auswahl → AN → Sprecher → `crosspoint.select`/`cut`; **nicht** gegen echte Kameras/Mischer geprüft) | Personenkarten: Name → Mikrofon wählen → „Person spricht jetzt“ → Kameravorschläge mit Gesichtsrahmen → Klick bestätigt; ein großer Hauptschalter „VfA an/aus“ | CDP-Klicktest |
 | 46.5 Tonmischer: AFV-Gruppen einfach — **erledigt 2026-10-20** (`ui/23-follow.js`: Knopf „Ton folgt Bild“, Karte je Videoquelle, Kanäle per Klick, Hart/Weich, „Automatisch aus den Quellen“, Live-Punkt; Altbestand eingeklappt; geprüft im Browser gegen Zustandsattrappe; Rust-Build siehe unten) | Statt Dropdowns je Kanal: Gruppenkarten „Wenn *Quelle* im Bild → diese Kanäle offen“ (Kanäle per Klick/Ziehen zuordnen, Cut/Weich als zwei Knöpfe, Standardpegel ohne Slider); Altbestand migriert | CDP-Klicktest, Screenshot |
+
+## Kapitel 47: Intercom — Gruppenrufe, Muting, virtuelle Sprechstellen (Nutzerauftrag 2026-10-21, **Plan, nichts umgesetzt**)
+
+Ziel: vollständige Intercom-Lösung in OMP — Sprechverbindungen zwischen Regie, Technik, Kameras, Studio und Gästen, bedienbar im Browser (auch am Handy), am Stream Deck und über Hardware-Anbindung (AES67/MXL), vollständig in Orchestrator-Rechte, Workflows und Tally eingebunden.
+
+### Begriffe
+
+| Begriff | Bedeutung |
+|---|---|
+| **Teilnehmer** (Party) | Ein Endpunkt mit *einem* Mikrofoneingang und *einem* Hörausgang (Mono, Opus 48 kHz). Mensch am Browser-Panel, Studio-Lautsprecher, Kamera-Rückkanal, Aufnahme, Brücke zu anderem Standort. |
+| **Kanal** | Gemeinsame Sprechleitung (Partyline), z. B. „Regie“, „Technik“, „Kamera“, „Studio“. Je Teilnehmer und Kanal: **Sprechen** (T), **Hören** (L), Pegel, Pan. |
+| **Ruf** | Temporärer Kanal: Direktruf (1:1), Gruppenruf (ad hoc aus Auswahl), Alle-Ruf. Entsteht beim Tastendruck, endet beim Loslassen. |
+| **IFB** | Programmton + Unterbrechung: Programm (MXL-Audio) wird gedämpft, solange jemand in den IFB spricht. |
+| **Panel** | Bedienoberfläche eines Teilnehmers: Seiten mit Tasten (Sprechen/Hören/Ruf/Mute) + Pegelregler. Ein Teilnehmer darf mehrere Panels gleichzeitig haben (Browser + Stream Deck). |
+| **Virtuelle Sprechstelle** | Teilnehmer **ohne eigenes Gerät**: (a) Software-Panel im Browser/Handy (kein Beltpack nötig), (b) *Rollenplatz* „Kamera 2“, auf den sich Personen anmelden (Hot-Desking), (c) *kopflose* Stellen: MXL-Audio rein/raus (Studiolautsprecher, Aufnahme, Programmton-Einspeisung). |
+
+### Architektur-Entscheidungen (Empfehlung, vor Schritt 47.1 vom Nutzer zu bestätigen)
+
+1. **Eigener Rust-Node `omp-intercom`** (Muster `omp-webrtc-gateway`/`omp-audio-mixer`), nicht im Tonmischer: Dessen Struktur sind feste Kanalstreifen/Busse; Intercom ist eine dynamische N×M-Matrix mit Teilnehmern, die kommen und gehen.
+2. **Mischen in eigenem Code, nicht in GStreamer-Elementen.** GStreamer nur am Rand (je Teilnehmer *statische* Pipeline: `webrtcbin` ⇄ Opus ⇄ `appsink`/`appsrc`). Die Matrix ist reine Daten → Pegel-/Routenänderungen sind Zahlenänderungen, keine Pipeline-Umbauten. *Grund:* dynamische Zweige/Tee-Pads in GStreamer waren hier mehrfach Quelle von Races (Memory „fünf Races im Tonmischer“); Intercom ändert Routen ständig.
+3. **Mix-minus ohne N²-Aufwand:** je Kanal c ein Summenpuffer `S_c = Σ_p T(p,c)·g_p,c·mic_p`; Ausgang für Teilnehmer P = `Σ_c L(P,c)·(S_c − T(P,c)·g_P,c·mic_P)`. P hört sich nie selbst; Aufwand O(N·C) je 20-ms-Frame.
+4. **Transport: WebRTC (Opus, Mono, 20 ms)**, ein bidirektionaler Peer je Panel; Signalisierung wie WHIP (`POST /offer` → SDP-Answer) mit Bearer-/Einladungs-Token. Ziel Mund-zu-Ohr **< 120 ms im LAN**. Echo-/Rauschunterdrückung über die Browser-Vorverarbeitung (`getUserMedia`-Constraints), kein Server-DSP-Zusatzpaket (Minimal-Dependency-Regel).
+5. **Konfiguration im Orchestrator-Modul `intercom`** (Kap. 36: DB, Rechte, Audit, Einstellungen), **Echtzeit im Node**. Der Node ist nach Neustart aus dem Modul rekonstruierbar (kein eigener Dauerzustand); Panels verbinden sich selbständig neu.
+6. **Rechte:** Funktionsrechte (Kap. 44) `intercom.use` (Panel nutzen), `intercom.admin` (Kanäle/Teilnehmer/Templates), `intercom.force` (andere stummschalten, Alle-Ruf, Priorität); zusätzlich **Kanal-ACL** je Nutzer/Gruppe: darf hören / darf sprechen.
+7. **Mikrofon im Browser braucht einen sicheren Kontext (HTTPS oder localhost).** Vor 47.2 prüfen, wie die Kamera-Seite (`camera.html`) das im Mehr-Host-Betrieb löst, und denselben Weg nehmen.
+
+### Funktionsumfang
+
+- **Kanäle:** Partyline, Gruppenruf (ad hoc oder gespeichert), Direktruf, Alle-Ruf, Konferenz mit Moderator, IFB. Kanal-Vorlagen je Workflow (z. B. „Studio A“ legt Regie/Technik/Kamera/Studio an und räumt beim Beenden auf).
+- **Sprechen:** Halten (PTT), Rasten (Tipp = an, Tipp = aus), Doppeltipp = Dauer, optional Sprachaktivierung (VOX) mit Schwelle/Haltezeit. Tastenkürzel am Desktop (Leertaste, Ziffern je Kanal).
+- **Muting:** Mikrofon stumm (lokal, serverseitig durchgesetzt), Hören je Kanal stumm, Solo-Hören, **Zwangs-Stumm** durch Berechtigte, **Mikrofonsperre** (z. B. Studio-Lautsprecher/Kamerakanal gesperrt solange *On Air* laut Tally/Playout). Alle Stummschaltungen sind in der Oberfläche sichtbar (nie „heimlich“ stumm).
+- **Anzeige:** Wer ist online, wer spricht (je Kanal, Sprecher-Erkennung auf dem Server), Pegelanzeigen, Verbindungsqualität, Ruflicht/Rufton mit Quittung, „Bitte nicht stören“, Priorität (höhere Priorität dämpft andere im Kanal).
+- **Hörkomfort:** Pegel je Kanal, Stereo-Pan je Kanal (Kanäle links/rechts trennen), Begrenzer am Ausgang, Programm-Mithören mit Dämpfung beim Sprechen anderer.
+- **Virtuelle Sprechstellen:** Panel-Editor (Tasten, Seiten, Farben, Reihenfolge; **explizites Speichern**), Vorlagen je Rolle, mehrere Panels je Teilnehmer, Rollenplätze mit Anmeldung („ich bin Kamera 2“), **Gast-Einladung** per Link/QR mit Ablauf und Kanalbeschränkung (Muster `invite.rs`).
+- **Anbindungen:** Programmton aus MXL-Flows (IS-05-Receiver im Node, sichtbar im Flow-Editor), Kanalmix als MXL-Sender (Studiolautsprecher, Aufnahme), Stream-Deck-Adapter (Kap. 40: Tasten = Sprechen/Hören/Ruf, Dials = Pegel), AES67-Gegenstellen über `omp-aes67-gateway`, optional SIP-Gateway (Telefon-Gäste) und Standort-Trunk zwischen zwei `omp-intercom`.
+
+### Schritte (je ≈ 1 Sitzung; Reihenfolge einhalten)
+
+| Schritt | Inhalt | Verifikation |
+|---|---|---|
+| 47.1 Spike (Go/No-Go) | `webrtcbin` bidirektional mit Opus gegen headless Chromium (`--use-fake-device-for-media-stream --use-file-for-fake-audio-capture`), Latenz messen; HTTPS-Frage (Architektur-Entscheidung 7) klären; Ergebnis in `docs/decisions.md` | Mund-zu-Ohr < 120 ms (LAN) gemessen, Dauerlauf 10 min ohne Aussetzer |
+| 47.2 Mix-Kern (reine Bibliothek, ohne GStreamer) | Matrix T/L, Kanal-Summen, Mix-minus, Pegel/Pan, Ducking (IFB/Priorität), Begrenzer, Sprecher-Erkennung | `cargo test`: Mix-minus = kein Selbstecho (Eigenschaftstest über zufällige Matrizen), Ducking-Zeitverhalten, Goldvektoren, 100 Teilnehmer × 20 Kanäle in < 10 % eines Kerns je 20-ms-Frame |
+| 47.3 Transport | Peer-Endpunkt: Angebot/Antwort, Opus-Ein/Ausgang an den Mix-Kern, Jitter-Puffer, Paketverlust-Verdeckung, Wiederverbinden, Token-Prüfung (sicher per Default: ohne Token niemand) | Test mit zwei Chromium-Peers: A spricht, B hört, A nicht; Verbindungsabbruch → automatisch wieder da |
+| 47.4 Node-Gerüst | IS-04/Health/Descriptor (`status`, Teilnehmer, Kanäle) + Methoden (`talk`, `listen`, `mute`, `setLevel`, `call`, `forceMute`), Zustand per SSE (Sprecher, Pegel), Katalog + Control-Plane-Typ (**Orchestrator-Neustart nötig, vorher fragen**) | Service-Test gegen Orchestrator-Attrappe; Node im Flow-Editor sichtbar |
+| 47.5 Orchestrator-Modul `intercom` | Migration (Teilnehmer, Kanäle, Mitgliedschaften T/L, Panels, Vorlagen, Gast-Einladungen), REST, Funktionsrechte + Kanal-ACL, Audit (wer hat wen zwangs-stumm geschaltet), Rekonstruktion des Nodes nach Neustart | `go test` mit Test-Postgres (`internal/dbtest`), Rechte-Matrix-Test, Neustart-Test |
+| 47.6 Web-Panel | Custom Element `omp-intercom-panel` (Touch- und Desktop-tauglich, als Vollbildseite am Handy nutzbar): Sprech-/Hörtasten, Rasten/Halten, Pegel, Mute, Wer-spricht, Seiten; Texte über `t()` in `de.ts`/`en.ts`; Dialoge nur `omp-confirm`/`omp-toast` | CDP-Klicktest inkl. echter Maus-/Tastaturereignisse; Screenshot Handybreite + Desktop |
+| 47.7 Panel-Editor + Rollenplätze + Gäste | Editor mit Speichern/Verwerfen, Vorlagen je Rolle, Rollenplatz-Anmeldung, Gast-Link/QR mit Ablauf, mehrere Panels je Teilnehmer | CDP-Klicktest: Panel bauen → speichern → als Zielperson laden; abgelaufene Einladung wird abgelehnt |
+| 47.8 Rufe | Direktruf, Gruppenruf ad hoc, Alle-Ruf, Ruflicht/Rufton + Quittung, Priorität, „Bitte nicht stören“, Antworttaste | Szenariotest mit 4 simulierten Peers; Priorität dämpft wie erwartet |
+| 47.9 IFB + Programm + On-Air-Sperre | IS-05-Receiver für MXL-Audio, IFB-Ducking, Kanalmix als MXL-Sender (Studiolautsprecher/Aufnahme), Mikrofonsperre aus Tally/Playout-Ereignissen (NATS) | E2E: Programmton → IFB, Sprecher dämpft; On-Air → gesperrter Kanal stumm, danach frei |
+| 47.10 Stream Deck + Hardware-Brücken | `streamDeck`-Adapter (Kap. 40), Port-Teilnehmer für AES67/MXL-Ein-/Ausgänge; **offen/optional:** SIP-Gateway, Standort-Trunk | Adapter-Layouttest; Gerätetest nur durch Nutzer |
+| 47.11 Betrieb | Telemetrie (Latenz, Verlust, Teilnehmerzahl), Alarme, optionale Aufzeichnung eines Kanals (Recorder, Kap. 42), Platzierung im Cluster, **kleiner** Lasttest (wenige Peers, `nice`, ~10 s), Handbuch (BENUTZERHANDBUCH, HANDBUCH §9), Katalogbeschreibung, README **im selben Arbeitsgang** | Alle Nachweise im Handbuch; kein Herstellername irgendwo |
+
+### Offene Entscheidungen (Standard in Klammern gilt, bis der Nutzer anders entscheidet)
+
+1. SIP-Gateway im ersten Wurf? (**nein**, nach 47.10 als eigenes Kapitel)
+2. Stereo-Pan je Kanal von Anfang an? (**ja**, Kosten im Mix-Kern gering)
+3. Aufzeichnung der Gespräche? (**nein standardmäßig**; nur ausdrücklich je Kanal, mit Hinweis im Panel — Datenschutz)
+4. Eigener Node je Standort oder ein zentraler? (**ein Node je Standort**, Trunk später)
+
+### Risiken
+
+- Browser-Mikrofon nur im sicheren Kontext (Architektur-Entscheidung 7) — früh klären, sonst Panel unbenutzbar im LAN ohne Zertifikat.
+- Echo bei Lautsprecher-Teilnehmern: Mix-minus verhindert Selbstecho des Teilnehmers, nicht akustische Rückkopplung im Raum → Mikrofonsperre/Dämpfung beim Studio-Lautsprecher fest einplanen.
+- Jitter über WLAN/Handy: feste Puffergröße 40 ms als Standard, einstellbar; Verlust-Verdeckung statt Aussetzer.
+- Sicherheit: Einladungen und Panel-Verbindungen nie offen (Muster `invite.rs`); Zwangs-Stumm/Alle-Ruf nur mit `intercom.force`, immer im Audit.

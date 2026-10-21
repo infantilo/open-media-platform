@@ -30514,3 +30514,18 @@ Die Hosts-Liste enthält bereits eine synthetische lokale Zeile (id leer) → lo
 auf Regie-Host-B): Gründe, Knopf nur bei `standalone`, Dialog, tatsächlicher Umzug nach Regie-Host-A. **Nicht live geprüft:** Sperre gebundener Workflow-Rollen
 (nur Go-Test `TestRoleHostBound`).
 
+
+## 2026-10-21 — Intercom (Kap. 47.1): Spike WebRTC/Opus bidirektional — GO
+
+**Frage:** Trägt `webrtcbin` (GStreamer 1.22) bidirektionales Opus + Datenkanal gegen einen Browser mit der geforderten Latenz?
+**Ergebnis:** ja. Browser-Offerer (Mikrofon + Datenkanal `ctl`) → Node antwortet `sendrecv`; Mix-Kern in eigenem Code (kein dynamisches GStreamer-Routing).
+Gemessen mit headless Chromium (3 Tabs, Rechner unter Last, Load ≈ 3,6): Referenz „Browser-Loopback ohne Node“ 228 ms Median (WebAudio + Chromium-WebRTC + Messverfahren),
+über den Node 244 ms → **Node-Strecke ≈ 16 ms** (Ziel < 120 ms). Absolute Mund-zu-Ohr-Zeit wird von Browser und Audiogerät bestimmt, nicht vom Node.
+**Fallen (alle gefunden, nicht raten):**
+1. `opusenc` (1.22) nimmt nur S16LE → `audioconvert` vor `opusenc`; der Mix-Kern bleibt Float.
+2. Ein eigener `request_pad_simple("sink_%u")` neben `add-transceiver` erzeugt einen **zweiten Transceiver**; die Antwort nutzt den ersten, der Sendezweig hängt am falschen → kein Ton zum Browser,
+   keine Fehlermeldung. Richtig: nur `add-transceiver(sendrecv)` und den Payloader in `pad-added` (Richtung Sink) verbinden.
+3. Datenkanal: `gstreamer-webrtc` braucht Feature `v1_22` für `WebRTCDataChannel`; `send_string` ist veraltet → `send_string_full`.
+4. RTP-Zeitstempel aus dem Takt-Thread (`do-timestamp`) lassen den Browser-Jitterpuffer anwachsen → feste 20-ms-Zeitstempel selbst setzen.
+5. Der Eingangspuffer leert sich nach einem Burst nie von allein → Minimum-Fenster (1 s) kürzt den Rest.
+**HTTPS:** Browser-Mikrofon braucht sicheren Kontext; gelöst durch `OMP_HTTPS=1` des Node-SDK (selbst signiertes Zertifikat, wie die Kamera-Seite).
