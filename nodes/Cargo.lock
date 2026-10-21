@@ -1468,7 +1468,6 @@ dependencies = [
  "gstreamer-webrtc",
  "omp-mediaio",
  "omp-node-sdk",
- "qrcode",
  "serde_json",
  "tokio",
 ]
