@@ -379,5 +379,26 @@
       "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 },
       "audio": { "minLatencyFrames": 0, "maxLatencyFrames": 0 }
     }
+  },
+  {
+    "type": "omp-intercom",
+    "label": "Intercom",
+    "runner": "process",
+    "command": [
+      "../nodes/target/release/omp-intercom"
+    ],
+    "env": {
+      "OMP_HTTPS": "1",
+      "OMP_HTTPS_PORT": "9445"
+    },
+    "description": "Sprechverbindungen zwischen Regie, Technik, Kameras, Studio und Gästen: Partyline-Kanäle, Direkt-, Gruppen- und Alle-Ruf, IFB (Programmton mit Unterbrechung), Stummschaltung (auch erzwungen) und Mikrofonsperre bei On Air. Bedient wird im Browser (auch am Handy): jede Person öffnet ihre Sprechstelle über die Kachel „Intercom“ der Operator-Konsole, Gäste per Link. Kanäle, Teilnehmer und Rechte werden unter Administration → Produktion → Intercom eingerichtet; der Node selbst braucht keine Einstellung. Mischt alle 20 ms mit Mix-minus (niemand hört sich selbst). Für das Mikrofon im Browser läuft der Node mit HTTPS (selbst signiertes Zertifikat, einmal bestätigen).",
+    "i18n": {
+      "en": {
+        "label": "Intercom",
+        "description": "Voice communication between control room, engineering, cameras, studio and guests: party-line channels, direct, group and all calls, IFB (programme audio with interrupt), muting (also forced) and microphone lock while on air. Operated in the browser (also on a phone): everyone opens their own station through the \"Intercom\" tile of the operator console, guests via a link. Channels, parties and rights are set up under Administration → Production → Intercom; the node itself needs no settings. Mixes every 20 ms with mix-minus (nobody hears themselves). For the browser microphone the node runs with HTTPS (self-signed certificate, confirm once).",
+        "expectedResources": "low (a few percent of one core for dozens of participants)"
+      }
+    },
+    "expectedResources": "gering (wenige Prozent eines Kerns bei dutzenden Teilnehmern)"
   }
 ]

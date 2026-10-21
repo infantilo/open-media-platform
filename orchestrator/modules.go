@@ -14,14 +14,15 @@ import (
 	audiorulesmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/audiorules"
 	cloudmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/cloud"
 	ingestmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/ingest"
+	intercommod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/intercom"
 	playoutmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/playout"
 	reviewmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/review"
 )
 
 // registerModules meldet die Module des Orchestrators an (UMSETZUNG.md Kapitel 36). Cloud (36.6), Audio-Ausgabe (36.7),
-// Playout (36.8) und Eingang/Review (Kapitel 43) sind Module.
-func registerModules(reg *module.Registry, playoutSvc *playoutmod.Services, reviewMod *reviewmod.Module, ingestMod *ingestmod.Module) {
-	for _, m := range []module.Module{cloudmod.New(), playoutmod.New(playoutSvc), audiorulesmod.New(), reviewMod, ingestMod} {
+// Playout (36.8), Eingang/Review (Kapitel 43) und Intercom (Kapitel 47) sind Module.
+func registerModules(reg *module.Registry, playoutSvc *playoutmod.Services, reviewMod *reviewmod.Module, ingestMod *ingestmod.Module, intercomMod *intercommod.Module) {
+	for _, m := range []module.Module{cloudmod.New(), playoutmod.New(playoutSvc), audiorulesmod.New(), reviewMod, ingestMod, intercomMod} {
 		if err := reg.Register(m); err != nil {
 			slog.Error("module registration failed", "module", m.Name(), "error", err)
 		}

@@ -28,7 +28,7 @@ ui:
 # beim Kanal-Player (1080i-MXF → 720p25): 146 % Debug vs. 138 % Release (docs/
 # decisions.md Nachtrag 163 kam für den Mischer zum selben Schluss). Der größere
 # Hebel sind Ausgabeformat (720p statt 1080p) und die Deinterlace-Methode.
-MEDIA_NODES := omp-channel-player omp-video-mixer-me omp-audio-mixer omp-audio-monitor omp-viewer omp-playout-automation omp-source omp-mxf-player omp-mxf-player-direct omp-webrtc-gateway omp-multiviewer omp-scaler omp-switcher omp-playout-buffer
+MEDIA_NODES := omp-channel-player omp-video-mixer-me omp-audio-mixer omp-audio-monitor omp-viewer omp-playout-automation omp-source omp-mxf-player omp-mxf-player-direct omp-webrtc-gateway omp-multiviewer omp-scaler omp-switcher omp-playout-buffer omp-intercom
 nodes:
 	cd nodes && cargo build --workspace --bins $(foreach n,$(MEDIA_NODES),--exclude $(n))
 	cd nodes && cargo build --release $(foreach n,$(MEDIA_NODES),-p $(n))

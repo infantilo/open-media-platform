@@ -49,6 +49,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/materialize"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	ingestmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/ingest"
+	intercommod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/intercom"
 	playoutmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/playout"
 	reviewmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/review"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
@@ -333,7 +334,8 @@ func main() {
 	playoutSvc := &playoutmod.Services{}
 	reviewMod := reviewmod.New(nil)                  // der Asset-Store folgt weiter unten (assetStore), vor dem Mounten der Routen
 	ingestMod := ingestmod.New(ingestmod.Services{}) // Kern-Dienste folgen weiter unten (vor dem Mounten der Routen)
-	registerModules(modules, playoutSvc, reviewMod, ingestMod)
+	intercomMod := intercommod.New(intercommod.Services{}) // Registry und Launcher folgen weiter unten
+	registerModules(modules, playoutSvc, reviewMod, ingestMod, intercomMod)
 	if err := modules.Migrate(ctx, database); err != nil {
 		slog.Error("module migration failed (affected modules are not mounted)", "error", err)
 	}
@@ -880,6 +882,7 @@ func main() {
 	reviewMod.Assets = assetStore
 	ingestFFmpeg, _ := exec.LookPath("ffmpeg")
 	ingestMod.S = ingestmod.Services{Assets: assetStore, Launcher: launcherSvc, Nodes: store, Graph: graphSvc, FFmpeg: ingestFFmpeg}
+	intercomMod.S = intercommod.Services{Nodes: store, Instances: launcherSvc}
 	processStore := process.NewStore(database)
 	// EventPublisher = nc direkt (erfüllt process.EventPublisher: Publish
 	// (subject string, payload []byte) error) — "workflow -> event"
