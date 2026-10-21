@@ -60,6 +60,9 @@ type Party struct {
 	// MxlIn/MxlOut: Programmeingang bzw. Mix-Ausgang des Nodes (1-basiert, 0 = keiner), für Arten „program“ und „port“.
 	MxlIn  int `json:"mxl_in,omitempty"`
 	MxlOut int `json:"mxl_out,omitempty"`
+	// Layout: eigenes Panel-Layout; Template: ID einer Vorlage (gilt, wenn kein eigenes Layout gesetzt ist).
+	Layout   *Layout `json:"layout,omitempty"`
+	Template int     `json:"template,omitempty"`
 	// Token wird nur serverseitig vergeben und nie über die Konfigurations-API ausgeliefert.
 	Token string `json:"token,omitempty"`
 }
@@ -74,10 +77,43 @@ type Guest struct {
 	CreatedBy string    `json:"created_by,omitempty"`
 }
 
+// Key ist eine Taste im Panel-Layout. Typen: "channel" (Kanal, Stil "strip" = volle Karte oder "key" = kompakte Taste),
+// "call" (Teilnehmer rufen), "all" (Alle-Ruf), "reply" (Antworten), "mute", "dnd".
+type Key struct {
+	Type  string `json:"type"`
+	Ch    int    `json:"ch,omitempty"`
+	Party int    `json:"party,omitempty"`
+	Label string `json:"label,omitempty"`
+	Style string `json:"style,omitempty"`
+}
+
+type Page struct {
+	Name string `json:"name"`
+	Keys []Key  `json:"keys"`
+}
+
+// Layout ordnet die Tasten eines Panels auf Seiten. Fehlt es, zeigt das Panel alle zugeteilten Kanäle der Reihe nach.
+type Layout struct {
+	Pages []Page `json:"pages"`
+}
+
+// Template ist eine benannte Vorlage für Layouts (z. B. „Kamera“, „Regie“); Teilnehmer verweisen darauf.
+type Template struct {
+	ID     int    `json:"id"`
+	Name   string `json:"name"`
+	Layout Layout `json:"layout"`
+}
+
+const (
+	maxPages       = 8
+	maxKeysPerPage = 48
+)
+
 type Config struct {
-	Channels []Channel `json:"channels"`
-	Parties  []Party   `json:"parties"`
-	Guests   []Guest   `json:"guests,omitempty"`
+	Channels  []Channel  `json:"channels"`
+	Parties   []Party    `json:"parties"`
+	Templates []Template `json:"templates,omitempty"`
+	Guests    []Guest    `json:"guests,omitempty"`
 }
 
 // ValidationError sammelt alle Probleme auf einmal (die Oberfläche zeigt sie gemeinsam).
@@ -123,6 +159,45 @@ func validRoutes(owner string, routes []Route, channels map[int]bool, p *[]strin
 		}
 		if r.Level < 0 || r.Level > 2 {
 			*p = append(*p, fmt.Sprintf("%s: Pegel bei Kanal %d außerhalb 0…2", owner, r.Ch))
+		}
+	}
+}
+
+func validLayout(owner string, l Layout, channels, parties map[int]bool, p *[]string) {
+	if len(l.Pages) == 0 {
+		*p = append(*p, fmt.Sprintf("%s: Layout ohne Seite", owner))
+	}
+	if len(l.Pages) > maxPages {
+		*p = append(*p, fmt.Sprintf("%s: mehr als %d Seiten", owner, maxPages))
+	}
+	for i, pg := range l.Pages {
+		if len(pg.Keys) > maxKeysPerPage {
+			*p = append(*p, fmt.Sprintf("%s: Seite %d hat mehr als %d Tasten", owner, i+1, maxKeysPerPage))
+		}
+		if len(pg.Name) > 40 {
+			*p = append(*p, fmt.Sprintf("%s: Seitenname %d zu lang", owner, i+1))
+		}
+		for j, k := range pg.Keys {
+			at := fmt.Sprintf("%s, Seite %d, Taste %d", owner, i+1, j+1)
+			if len(k.Label) > 40 {
+				*p = append(*p, at+": Beschriftung zu lang")
+			}
+			switch k.Type {
+			case "channel":
+				if !channels[k.Ch] {
+					*p = append(*p, fmt.Sprintf("%s: unbekannter Kanal %d", at, k.Ch))
+				}
+				if k.Style != "" && k.Style != "strip" && k.Style != "key" {
+					*p = append(*p, fmt.Sprintf("%s: Stil %q unbekannt", at, k.Style))
+				}
+			case "call":
+				if !parties[k.Party] {
+					*p = append(*p, fmt.Sprintf("%s: unbekannter Teilnehmer %d", at, k.Party))
+				}
+			case "all", "reply", "mute", "dnd":
+			default:
+				*p = append(*p, fmt.Sprintf("%s: Tastenart %q unbekannt", at, k.Type))
+			}
 		}
 	}
 }
@@ -202,6 +277,25 @@ func (c Config) Validate() error {
 				p = append(p, fmt.Sprintf("%s %d doppelt belegt (%q und %q)", d.what, d.n, other, pt.Name))
 			}
 			d.used[d.n] = pt.Name
+		}
+	}
+	tmpl := map[int]bool{}
+	for _, t := range c.Templates {
+		if t.ID <= 0 || tmpl[t.ID] {
+			p = append(p, fmt.Sprintf("Vorlage %q: ID %d ungültig oder doppelt", t.Name, t.ID))
+		}
+		tmpl[t.ID] = true
+		if strings.TrimSpace(t.Name) == "" {
+			p = append(p, fmt.Sprintf("Vorlage %d ohne Namen", t.ID))
+		}
+		validLayout(fmt.Sprintf("Vorlage %q", t.Name), t.Layout, channels, ids, &p)
+	}
+	for _, pt := range c.Parties {
+		if pt.Template != 0 && !tmpl[pt.Template] {
+			p = append(p, fmt.Sprintf("Teilnehmer %q: unbekannte Vorlage %d", pt.Name, pt.Template))
+		}
+		if pt.Layout != nil {
+			validLayout(fmt.Sprintf("Teilnehmer %q", pt.Name), *pt.Layout, channels, ids, &p)
 		}
 	}
 	for _, g := range c.Guests {
@@ -304,6 +398,9 @@ func (c Config) NodeConfig(now time.Time) map[string]any {
 		if p.MicGain != nil {
 			m["mic_gain"] = *p.MicGain
 		}
+		if l := c.EffectiveLayout(p); l != nil {
+			m["layout"] = l
+		}
 		if p.MxlIn > 0 {
 			m["mxl_in"] = p.MxlIn
 		}
@@ -316,6 +413,20 @@ func (c Config) NodeConfig(now time.Time) map[string]any {
 		parties = append(parties, map[string]any{"id": g.ID, "name": g.Name, "kind": "human", "token": g.Token, "routes": routes(g.Routes)})
 	}
 	return map[string]any{"channels": channels, "parties": parties}
+}
+
+// EffectiveLayout: das eigene Layout des Teilnehmers, sonst das seiner Vorlage, sonst nil (Standardansicht).
+func (c Config) EffectiveLayout(p Party) *Layout {
+	if p.Layout != nil && len(p.Layout.Pages) > 0 {
+		return p.Layout
+	}
+	for _, t := range c.Templates {
+		if t.ID == p.Template && len(t.Layout.Pages) > 0 {
+			l := t.Layout
+			return &l
+		}
+	}
+	return nil
 }
 
 // PartiesFor liefert die Teilnehmer, deren Panel die Person öffnen darf.

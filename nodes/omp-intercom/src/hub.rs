@@ -36,6 +36,8 @@ pub struct PartyInfo {
     pub mxl_in: usize,
     /// MXL-Ausgang (1-basiert, 0 = keiner): trägt das Hörsignal dieses Teilnehmers.
     pub mxl_out: usize,
+    /// Panel-Layout (Seiten mit Tasten) wie vom Orchestrator geliefert; `None` = Standardansicht.
+    pub layout: Option<Value>,
 }
 
 struct Call {
@@ -155,6 +157,11 @@ impl Core {
                     onair_lock: p.get("onair_lock").and_then(Value::as_bool).unwrap_or(false),
                     mxl_in: num(p, "mxl_in", 0.0).max(0.0) as usize,
                     mxl_out: num(p, "mxl_out", 0.0).max(0.0) as usize,
+                    layout: match p.get("layout") {
+                        Some(l) if l.get("pages").and_then(Value::as_array).is_some() => Some(l.clone()),
+                        Some(Value::Null) | None => None,
+                        Some(_) => return Err(format!("Teilnehmer {id}: layout braucht ein Feld pages")),
+                    },
                 },
             );
             let ep = self.engine.parties.entry(id).or_insert_with(Party::default);
@@ -240,7 +247,7 @@ impl Core {
                     .map(|(ch, r)| json!({"ch": ch, "talk": r.talk_allowed, "listen": r.listen, "level": r.level, "pan": r.pan}))
                     .collect();
                 json!({"id": id, "name": info.name, "kind": info.kind, "priority": ep.priority, "force": info.force,
-                       "onair_lock": info.onair_lock, "mxl_in": info.mxl_in, "mxl_out": info.mxl_out, "routes": routes})
+                       "onair_lock": info.onair_lock, "mxl_in": info.mxl_in, "mxl_out": info.mxl_out, "layout": info.layout, "routes": routes})
             })
             .collect();
         json!({"channels": channels, "parties": parties})
@@ -537,6 +544,7 @@ impl Core {
                    "dnd": self.dnd.contains(&id)},
             "channels": channels,
             "parties": parties,
+            "layout": info.layout,
         }))
     }
 
@@ -796,6 +804,20 @@ mod tests {
         assert!(c.engine.parties[&3].routes[&(CALL_BASE + 1)].listen, "force-Teilnehmer dürfen durch");
         c.command(3, &json!({"t": "dnd", "on": false}));
         assert!(!c.state_for(3).unwrap()["me"]["dnd"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn layout_is_kept_sent_in_state_and_validated() {
+        let mut c = Core::new();
+        let mut cf = cfg();
+        cf["parties"][0]["layout"] = json!({"pages": [{"name": "A", "keys": [{"type": "channel", "ch": 1}]}]});
+        c.apply_config(&cf).unwrap();
+        assert_eq!(c.state_for(1).unwrap()["layout"]["pages"][0]["name"], "A");
+        assert!(c.state_for(2).unwrap()["layout"].is_null(), "ohne Layout: Standardansicht");
+        assert_eq!(c.config_json()["parties"][0]["layout"]["pages"][0]["name"], "A");
+        let mut bad = cfg();
+        bad["parties"][0]["layout"] = json!({"nope": 1});
+        assert!(c.apply_config(&bad).is_err());
     }
 
     #[test]

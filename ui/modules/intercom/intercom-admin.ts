@@ -2,7 +2,9 @@
 // Explizites Speichern (Entwurf lokal, ein PUT); Gäste und Zugangslinks laufen über eigene Endpunkte und wirken sofort.
 
 import { apiFetch, confirmDialog, dateLocale, directory, showToast, t as tt } from "../host.ts";
+import { layoutEditor } from "./intercom-layout-editor.ts";
 import {
+  addTemplate, layoutFromAssignment, layoutMode, removeTemplate,
   addChannel, addParty, cleanConfig, clone, type Config, type Guest, getRoute, guestRoutes, localProblems, type Party, type PartyKind, removeChannel,
   removeParty, sameConfig, setRoute, splitList,
 } from "./intercom-logic.ts";
@@ -161,7 +163,7 @@ class IntercomAdmin extends HTMLElement {
     st.append(el("h3", H, tt("icom.status")), el("div", "", ""));
     this.append(st);
 
-    this.append(this.#channelsBox(), this.#partiesBox(), this.#guestsBox());
+    this.append(this.#channelsBox(), this.#partiesBox(), this.#templatesBox(), this.#guestsBox());
     this.#renderStatus();
   }
 
@@ -347,6 +349,8 @@ class IntercomAdmin extends HTMLElement {
       card.append(who);
     }
 
+    if (human) card.append(this.#layoutSection(p));
+
     const m = el("div", "margin-top:10px;");
     m.append(el("div", "font-size:11px;letter-spacing:.05em;text-transform:uppercase;" + DIM, tt("icom.matrix")));
     const grid = el("div", "display:grid;grid-template-columns:minmax(120px,1fr) auto auto;gap:4px 16px;align-items:center;margin-top:4px;max-width:420px;");
@@ -368,6 +372,92 @@ class IntercomAdmin extends HTMLElement {
     m.append(grid);
     card.append(m);
     return card;
+  }
+
+  #layoutSection(p: Party): HTMLElement {
+    const box = el("div", "margin-top:10px;");
+    box.dataset.role = "layout";
+    box.append(el("div", "font-size:11px;letter-spacing:.05em;text-transform:uppercase;" + DIM, tt("icom.layout")), el("div", "font-size:12px;" + DIM, tt("icom.layout.hint")));
+    const row = el("div", "display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px;");
+    const mode = layoutMode(p);
+    const sel = el("select", "padding:3px 6px;");
+    for (const m of ["default", "template", "own"] as const) {
+      const o = el("option", "", tt(`icom.layout.mode.${m}` as never));
+      o.value = m;
+      if (m === "template" && !(this.#draft.templates ?? []).length) {
+        o.disabled = true;
+        o.textContent += ` (${tt("icom.layout.noTemplates")})`;
+      }
+      sel.append(o);
+    }
+    sel.value = mode;
+    sel.addEventListener("change", () => {
+      const m = sel.value as "default" | "template" | "own";
+      if (m === "default") {
+        delete p.layout;
+        delete p.template;
+      } else if (m === "template") {
+        delete p.layout;
+        p.template = (this.#draft.templates ?? [])[0]?.id;
+      } else {
+        delete p.template;
+        p.layout ??= layoutFromAssignment(p, this.#draft);
+      }
+      this.#render();
+    });
+    row.append(sel);
+    if (mode === "template") {
+      const ts = el("select", "padding:3px 6px;");
+      for (const t of this.#draft.templates ?? []) {
+        const o = el("option", "", t.name || `#${t.id}`);
+        o.value = String(t.id);
+        ts.append(o);
+      }
+      ts.value = String(p.template);
+      ts.addEventListener("change", () => {
+        p.template = Number(ts.value);
+        this.#touch();
+      });
+      row.append(ts);
+    }
+    if (mode === "own") {
+      row.append(btn(tt("icom.layout.fromAssignment"), async () => {
+        if (!(await confirmDialog(tt("icom.layout.fromAssignmentConfirm", { p0: p.name })))) return;
+        p.layout = layoutFromAssignment(p, this.#draft);
+        this.#render();
+      }));
+    }
+    box.append(row);
+    if (mode === "own" && p.layout) box.append(layoutEditor(p.layout, this.#draft, () => this.#touch(), () => this.#render()));
+    return box;
+  }
+
+  #templatesBox(): HTMLElement {
+    const box = el("div", BOX);
+    box.dataset.role = "templates";
+    box.append(el("h3", H, tt("icom.templates")), el("div", DIM + "font-size:12px;margin-bottom:8px;", tt("icom.templatesHint")));
+    const list = this.#draft.templates ?? [];
+    if (list.length === 0) box.append(el("div", DIM + "padding:6px 0;", tt("icom.noTemplates")));
+    for (const t of list) {
+      const card = el("div", "border:1px solid var(--omp-border);border-radius:6px;padding:10px;margin-bottom:10px;");
+      card.dataset.template = String(t.id);
+      const head = el("div", "display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;");
+      const users = this.#draft.parties.filter((p) => p.template === t.id && !p.layout).map((p) => p.name || `#${p.id}`);
+      head.append(field(tt("icom.template.name"), textInput(t.name, (v) => { t.name = v; this.#touch(); }, "200px")));
+      if (users.length) head.append(el("span", DIM + "font-size:12px;", tt("icom.template.usedBy", { p0: users.join(", ") })));
+      head.append(btn("✕", async () => {
+        if (!(await confirmDialog(tt("icom.template.removeConfirm", { p0: t.name || `#${t.id}` })))) return;
+        removeTemplate(this.#draft, t.id);
+        this.#render();
+      }, tt("icom.template.remove")));
+      card.append(head, layoutEditor(t.layout, this.#draft, () => this.#touch(), () => this.#render()));
+      box.append(card);
+    }
+    box.append(btn(tt("icom.template.add"), () => {
+      addTemplate(this.#draft, "");
+      this.#render();
+    }));
+    return box;
   }
 
   #guestsBox(): HTMLElement {

@@ -40,6 +40,16 @@ button.toggle[aria-pressed=true]{background:var(--accent);border-color:var(--acc
 .row{display:flex;gap:10px;align-items:center;margin-top:10px}
 .row label{font-size:13px;color:var(--mute);width:56px;flex:none}
 input[type=range]{flex:1;min-width:0;height:32px}
+nav#pages{display:flex;gap:8px;margin:0 0 12px;overflow-x:auto}
+nav#pages button{flex:none}
+nav#pages button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff}
+.keygrid{align-items:start;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-bottom:12px}
+.ckey{display:flex;flex-direction:column;gap:4px;border-left:6px solid var(--cc,var(--accent));border-radius:10px;background:var(--panel);padding:6px}
+.ckey .talk{min-height:72px;font-size:16px}
+.ckey .sub{font-size:12px;color:var(--mute);min-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ckey .sub b{color:var(--ok)}
+.ckey .mini{min-height:32px;padding:4px 8px;font-size:12px}
+.stripcol{margin-bottom:0}
 h2{font-size:14px;color:var(--mute);margin:18px 0 8px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
 .people{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
 .person{display:flex;align-items:center;gap:8px;text-align:left;width:100%}
@@ -63,9 +73,8 @@ h2{font-size:14px;color:var(--mute);margin:18px 0 8px;font-weight:600;text-trans
 </div>
 <main id="app" hidden>
   <div class="meter" aria-hidden="true"><i id="mic"></i></div>
+  <nav id="pages" aria-label="Seiten"></nav>
   <section id="chans"></section>
-  <h2 id="h-people"></h2>
-  <section class="people" id="people"></section>
   <p class="hint" id="hint"></p>
 </main>
 <audio id="out" autoplay playsinline></audio>
@@ -81,7 +90,7 @@ h2{font-size:14px;color:var(--mute);margin:18px 0 8px;font-weight:600;text-trans
   const token = q.get('token') || '';
   document.documentElement.lang = L;
   $('intro').textContent = T.intro; $('go').textContent = T.go; $('mute').textContent = T.mute; $('dnd').textContent = T.dnd;
-  $('h-people').textContent = T.people; $('hint').textContent = T.hint;
+  $('hint').textContent = T.hint;
 
   let pc = null, dc = null, stream = null, state = null, closing = false, retry = 0, pingTimer = 0, lastRing = null;
   const latched = new Set();     // per Tippen eingerastete Kanäle
@@ -147,97 +156,169 @@ h2{font-size:14px;color:var(--mute);margin:18px 0 8px;font-weight:600;text-trans
   }
 
   const nameOf = id => (state.parties.find(p => p.id === id) || {}).name || '?';
+  const esc = t => String(t).replace(/</g, '&lt;');
 
-  function talkButton(c, el) {
+  function talkButton(chId, el) {
     let down = 0;
-    const set = on => send({ t: 'talk', ch: c.id, on });
+    const set = on => send({ t: 'talk', ch: chId, on });
     el.addEventListener('pointerdown', ev => {
       ev.preventDefault(); el.setPointerCapture(ev.pointerId);
-      if (latched.has(c.id)) { latched.delete(c.id); set(false); down = 0; return; }
+      if (latched.has(chId)) { latched.delete(chId); set(false); down = 0; return; }
       down = performance.now(); set(true);
     });
     el.addEventListener('pointerup', () => {
       if (!down) return;
-      if (performance.now() - down < 250) latched.add(c.id); else set(false);
+      if (performance.now() - down < 250) latched.add(chId); else set(false);
       down = 0;
     });
     el.addEventListener('pointercancel', () => { if (down) { down = 0; set(false); } });
   }
 
-  const built = new Map();   // Kanal-ID → Elemente (damit Regler beim Ziehen nicht neu gebaut werden)
+  // Halten-Taste (Rufen): drückt = an, loslassen = aus.
+  function holdButton(el, start, stop) {
+    let held = false;
+    el.addEventListener('pointerdown', ev => { ev.preventDefault(); el.setPointerCapture(ev.pointerId); held = true; start(); });
+    const end = () => { if (!held) return; held = false; stop(); };
+    el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
+  }
+
+  // ---- Layout: Seiten mit Tasten. Ohne Layout: alle Kanäle als Karten, danach Rufen/Alle ----
+  let pageIdx = 0;
+  const defaultLayout = () => {
+    const keys = [];
+    if (state.me.force) keys.push({ type: 'all' });
+    for (const c of state.channels.filter(c => c.kind !== 'call')) keys.push({ type: 'channel', ch: c.id, style: 'strip' });
+    keys.push({ type: 'reply' });
+    for (const p of state.parties) if (p.id !== state.me.id) keys.push({ type: 'call', party: p.id });
+    return { pages: [{ name: '', keys }] };
+  };
+  const layoutOf = () => (state.layout && state.layout.pages && state.layout.pages.length ? state.layout : defaultLayout());
+  // Eingehende Rufe zeigt jedes Layout oben, auch wenn der Kanal nicht darin vorkommt.
+  const callChannels = () => state.channels.filter(c => c.kind === 'call');
+  const chanById = id => state.channels.find(c => c.id === id);
+  const currentKeys = () => {
+    const lay = layoutOf(); pageIdx = Math.min(pageIdx, lay.pages.length - 1);
+    return lay.pages[pageIdx].keys;
+  };
+  // Kanäle der aktuellen Seite in Reihenfolge (für Ziffern 1–9)
+  const pageChannels = () => [...callChannels(), ...currentKeys().filter(k => k.type === 'channel' && chanById(k.ch)).map(k => chanById(k.ch))];
+
+  let sig = '', cells = [];
+  function makeStrip(c) {
+    const rootEl = document.createElement('div'); rootEl.className = 'chan' + (c.kind === 'call' ? ' call' : '');
+    rootEl.innerHTML = '<div class="top"><span class="name"></span><button class="toggle listen"></button><button class="toggle solo"></button></div><div class="who"></div>' +
+      '<button class="talk"></button><div class="row lvl"><label></label><input type="range" min="0" max="150" step="1"></div><div class="row pan"><label></label><input type="range" min="-100" max="100" step="5"></div>';
+    const e = { name: rootEl.querySelector('.name'), listen: rootEl.querySelector('.listen'), solo: rootEl.querySelector('.solo'), who: rootEl.querySelector('.who'),
+      talk: rootEl.querySelector('.talk'), lvl: rootEl.querySelector('.lvl input'), pan: rootEl.querySelector('.pan input') };
+    rootEl.querySelector('.lvl label').textContent = T.level; rootEl.querySelector('.pan label').textContent = T.pan;
+    e.listen.textContent = T.listen; e.solo.textContent = T.solo;
+    e.listen.onclick = () => send({ t: 'listen', ch: c.id, on: !chanById(c.id).listen_on });
+    e.solo.onclick = () => send({ t: 'solo', ch: c.id, on: !chanById(c.id).solo });
+    e.lvl.oninput = () => send({ t: 'level', ch: c.id, v: e.lvl.value / 100 });
+    e.pan.oninput = () => send({ t: 'pan', ch: c.id, v: e.pan.value / 100 });
+    talkButton(c.id, e.talk);
+    return { el: rootEl, update(label) {
+      const me = state.me, cc = chanById(c.id); if (!cc) return;
+      rootEl.style.setProperty('--cc', cc.color || 'var(--accent)');
+      e.name.textContent = (label || cc.name) + hintFor(cc.id);
+      e.listen.setAttribute('aria-pressed', String(cc.listen_on)); e.listen.hidden = !cc.listen;
+      e.solo.setAttribute('aria-pressed', String(cc.solo)); e.solo.hidden = !cc.listen;
+      const sp = cc.speakers.filter(id => id !== me.id).map(nameOf);
+      e.who.innerHTML = sp.length ? '<b>' + sp.map(esc).join(', ') + '</b> ' + T.speaking : '&nbsp;';
+      e.talk.textContent = cc.talk_allowed ? T.talk + (cc.talk ? ' …' : '') : '—';
+      e.talk.title = T.hold; e.talk.disabled = !cc.talk_allowed || me.forced; e.talk.setAttribute('aria-pressed', String(cc.talk));
+      if (document.activeElement !== e.lvl) e.lvl.value = Math.round(cc.level * 100);
+      if (document.activeElement !== e.pan) e.pan.value = Math.round(cc.pan * 100);
+      rootEl.querySelector('.lvl').hidden = !cc.listen; rootEl.querySelector('.pan').hidden = !cc.listen;
+    } };
+  }
+  const hintFor = id => { const i = pageChannels().findIndex(c => c.id === id); return i >= 0 && i < 9 ? ' [' + (i + 1) + ']' : ''; };
+  function makeChannelKey(c) {
+    const el = document.createElement('div'); el.className = 'ckey';
+    el.innerHTML = '<button class="talk"></button><div class="sub"></div><button class="toggle mini"></button>';
+    const talk = el.querySelector('.talk'), sub = el.querySelector('.sub'), listen = el.querySelector('.mini');
+    listen.textContent = T.listen; listen.onclick = () => send({ t: 'listen', ch: c.id, on: !chanById(c.id).listen_on });
+    talkButton(c.id, talk);
+    return { el, update(label) {
+      const me = state.me, cc = chanById(c.id); if (!cc) return;
+      el.style.setProperty('--cc', cc.color || 'var(--accent)');
+      talk.textContent = (label || cc.name) + hintFor(cc.id) + (cc.talk ? ' …' : '');
+      talk.disabled = !cc.talk_allowed || me.forced; talk.setAttribute('aria-pressed', String(cc.talk)); talk.title = T.hold;
+      const sp = cc.speakers.filter(id => id !== me.id).map(nameOf);
+      sub.innerHTML = sp.length ? '<b>' + sp.map(esc).join(', ') + '</b>' : '&nbsp;';
+      listen.hidden = !cc.listen; listen.setAttribute('aria-pressed', String(cc.listen_on));
+    } };
+  }
+  function makeSimple(onUpdate, wire) {
+    const b = document.createElement('button'); b.className = 'person'; b.innerHTML = '<span class="dot"></span><span></span>';
+    wire(b);
+    return { el: b, update(label) { onUpdate(b, b.lastChild, b.firstChild, label); } };
+  }
+  function makeCell(k) {
+    const me = () => state.me;
+    switch (k.type) {
+      case 'channel': {
+        const c = chanById(k.ch); if (!c) return null;
+        return { cell: k.style === 'key' ? makeChannelKey(c) : makeStrip(c), strip: k.style !== 'key', label: k.label };
+      }
+      case 'call': {
+        if (!state.parties.some(p => p.id === k.party)) return null;
+        return { label: k.label, cell: makeSimple((b, t, d, label) => {
+          const p = state.parties.find(x => x.id === k.party); if (!p) return;
+          b.disabled = !p.online || me().forced; b.setAttribute('aria-pressed', String(callOn.has(k.party)));
+          d.className = 'dot ' + (p.speaking ? 'speak' : (p.online ? 'on' : '')); t.textContent = (label || p.name) + (p.dnd ? ' ⊘' : ''); b.title = T.call;
+        }, b => holdButton(b, () => { callOn.add(k.party); send({ t: 'call', to: [k.party], on: true }); }, () => { callOn.delete(k.party); send({ t: 'call', on: false }); })) };
+      }
+      case 'all':
+        if (!me().force) return null;
+        return { label: k.label, cell: makeSimple((b, t, d, label) => { b.disabled = !!me().forced; b.setAttribute('aria-pressed', String(callOn.has('all'))); d.className = 'dot on'; t.textContent = label || T.all; },
+          b => holdButton(b, () => { callOn.add('all'); send({ t: 'call', to: 'all', on: true }); }, () => { callOn.delete('all'); send({ t: 'call', on: false }); })) };
+      case 'reply':
+        return { label: k.label, cell: makeSimple((b, t, d, label) => {
+          const r = lastRing && state.parties.some(p => p.id === lastRing.from && p.online);
+          b.hidden = !r; if (!r) return;
+          b.disabled = !!me().forced; b.setAttribute('aria-pressed', String(callOn.has(lastRing.from))); d.className = 'dot on'; t.textContent = (label || T.reply) + ': ' + lastRing.name;
+        }, b => holdButton(b, () => { if (lastRing) { callOn.add(lastRing.from); send({ t: 'call', to: [lastRing.from], on: true }); } }, () => { if (lastRing) callOn.delete(lastRing.from); send({ t: 'call', on: false }); })) };
+      case 'mute':
+        return { label: k.label, cell: makeSimple((b, t, d, label) => { b.disabled = !!me().forced; b.setAttribute('aria-pressed', String(me().muted || me().forced)); d.className = 'dot ' + (me().muted || me().forced ? 'bad' : 'on'); t.textContent = label || (me().forced ? T.forced : me().muted ? T.muted : T.mute); },
+          b => { b.onclick = () => $('mute').click(); }) };
+      case 'dnd':
+        return { label: k.label, cell: makeSimple((b, t, d, label) => { b.setAttribute('aria-pressed', String(!!me().dnd)); d.className = 'dot ' + (me().dnd ? 'bad' : ''); t.textContent = label || T.dnd; },
+          b => { b.onclick = () => $('dnd').click(); }) };
+    }
+    return null;
+  }
+
+  function rebuild() {
+    const root = $('chans'); root.replaceChildren(); cells = []; latched.clear();
+    const lay = layoutOf();
+    const nav = $('pages'); nav.replaceChildren(); nav.hidden = lay.pages.length < 2;
+    lay.pages.forEach((pg, i) => { const b = document.createElement('button'); b.textContent = pg.name || String(i + 1); b.setAttribute('aria-pressed', String(i === pageIdx));
+      b.onclick = () => { pageIdx = i; sessionStorage.setItem('ic-page', String(i)); sig = ''; render(); }; nav.append(b); });
+    // Eingehende Rufe ganz oben
+    const calls = document.createElement('div'); root.append(calls);
+    for (const c of callChannels()) { const m = makeStrip(c); calls.append(m.el); cells.push({ cell: m, label: '' }); }
+    let grid = null, col = null;
+    for (const k of currentKeys()) {
+      const m = makeCell(k); if (!m) continue;
+      if (m.strip) { grid = null; if (!col) { col = document.createElement('div'); col.className = 'stripcol'; root.append(col); } col.append(m.cell.el); }
+      else { col = null; if (!grid) { grid = document.createElement('div'); grid.className = 'keygrid'; root.append(grid); } grid.append(m.cell.el); }
+      cells.push(m);
+    }
+  }
+
   function render() {
     const me = state.me;
     $('me').textContent = me.name + (me.on_air ? ' · ' + T.onair : '');
     const mb = $('mute'); mb.textContent = me.forced ? T.forced : (me.muted ? T.muted : T.mute);
     mb.setAttribute('aria-pressed', String(me.muted || me.forced)); mb.disabled = !!me.forced;
-    const db = $('dnd'); db.setAttribute('aria-pressed', String(!!me.dnd));
+    $('dnd').setAttribute('aria-pressed', String(!!me.dnd));
     $('mic').style.width = Math.max(0, Math.min(100, (me.mic_db + 60) / 60 * 100)) + '%';
-    const root = $('chans');
-    const ids = state.channels.map(c => c.id);
-    for (const [id, e] of built) if (!ids.includes(id)) { e.root.remove(); built.delete(id); latched.delete(id); }
-    state.channels.forEach((c, idx) => {
-      let e = built.get(c.id);
-      if (!e) {
-        const rootEl = document.createElement('div'); rootEl.className = 'chan' + (c.kind === 'call' ? ' call' : '');
-        rootEl.innerHTML = '<div class="top"><span class="name"></span><button class="toggle listen"></button><button class="toggle solo"></button></div><div class="who"></div>' +
-          '<button class="talk"></button><div class="row lvl"><label></label><input type="range" min="0" max="150" step="1"></div><div class="row pan"><label></label><input type="range" min="-100" max="100" step="5"></div>';
-        e = { root: rootEl, name: rootEl.querySelector('.name'), listen: rootEl.querySelector('.listen'), solo: rootEl.querySelector('.solo'), who: rootEl.querySelector('.who'),
-              talk: rootEl.querySelector('.talk'), lvl: rootEl.querySelector('.lvl input'), pan: rootEl.querySelector('.pan input'), act: null };
-        rootEl.querySelector('.lvl label').textContent = T.level; rootEl.querySelector('.pan label').textContent = T.pan;
-        e.listen.textContent = T.listen; e.solo.textContent = T.solo;
-        e.listen.onclick = () => send({ t: 'listen', ch: c.id, on: !e.cur.listen_on });
-        e.solo.onclick = () => send({ t: 'solo', ch: c.id, on: !e.cur.solo });
-        e.lvl.oninput = () => send({ t: 'level', ch: c.id, v: e.lvl.value / 100 });
-        e.pan.oninput = () => send({ t: 'pan', ch: c.id, v: e.pan.value / 100 });
-        talkButton(c, e.talk);
-        built.set(c.id, e); root.appendChild(rootEl);
-      }
-      e.cur = c;
-      e.root.style.setProperty('--cc', c.color || 'var(--accent)');
-      const keyHint = idx < 9 ? ' [' + (idx + 1) + ']' : '';
-      e.name.textContent = c.name + keyHint;
-      e.listen.setAttribute('aria-pressed', String(c.listen_on)); e.listen.hidden = !c.listen;
-      e.solo.setAttribute('aria-pressed', String(c.solo)); e.solo.hidden = !c.listen;
-      const sp = c.speakers.filter(id => id !== me.id).map(nameOf);
-      e.who.innerHTML = sp.length ? '<b>' + sp.map(s => s.replace(/</g, '&lt;')).join(', ') + '</b> ' + T.speaking : '&nbsp;';
-      e.talk.textContent = c.talk_allowed ? T.talk + (c.talk ? ' …' : '') : '—';
-      e.talk.title = T.hold; e.talk.disabled = !c.talk_allowed || me.forced;
-      e.talk.setAttribute('aria-pressed', String(c.talk));
-      if (document.activeElement !== e.lvl) e.lvl.value = Math.round(c.level * 100);
-      if (document.activeElement !== e.pan) e.pan.value = Math.round(c.pan * 100);
-      e.root.querySelector('.lvl').hidden = !c.listen; e.root.querySelector('.pan').hidden = !c.listen;
-      e.root.style.order = c.kind === 'call' ? -1 : idx;
-    });
-    // Teilnehmer + Rufen
-    const people = $('people'); people.innerHTML = '';
-    const mk = (label, key, disabled, cls, on) => {
-      const b = document.createElement('button'); b.className = 'person'; b.disabled = disabled; b.setAttribute('aria-pressed', String(on));
-      b.innerHTML = '<span class="dot ' + cls + '"></span><span></span>'; b.lastChild.textContent = label;
-      b.title = T.call; return b;
-    };
-    state.parties.filter(p => p.id !== me.id).forEach(p => {
-      const b = mk(p.name + (p.dnd ? ' ⊘' : ''), p.id, !p.online || me.forced, p.speaking ? 'speak' : (p.online ? 'on' : ''), callOn.has(p.id));
-      let held = false;
-      b.addEventListener('pointerdown', ev => { ev.preventDefault(); b.setPointerCapture(ev.pointerId); held = true; callOn.add(p.id); send({ t: 'call', to: [p.id], on: true }); });
-      const stop = () => { if (!held) return; held = false; callOn.delete(p.id); send({ t: 'call', on: false }); };
-      b.addEventListener('pointerup', stop); b.addEventListener('pointercancel', stop);
-      people.appendChild(b);
-    });
-    if (lastRing && state.parties.some(p => p.id === lastRing.from && p.online)) {
-      const b = mk(T.reply + ': ' + lastRing.name, lastRing.from, me.forced, 'on', callOn.has(lastRing.from));
-      const to = lastRing.from; let held = false;
-      b.addEventListener('pointerdown', ev => { ev.preventDefault(); b.setPointerCapture(ev.pointerId); held = true; callOn.add(to); send({ t: 'call', to: [to], on: true }); });
-      const stop = () => { if (!held) return; held = false; callOn.delete(to); send({ t: 'call', on: false }); };
-      b.addEventListener('pointerup', stop); b.addEventListener('pointercancel', stop);
-      people.prepend(b);
-    }
-    if (me.force) {
-      const b = mk(T.all, 'all', me.forced, 'on', callOn.has('all'));
-      b.addEventListener('pointerdown', ev => { ev.preventDefault(); b.setPointerCapture(ev.pointerId); callOn.add('all'); send({ t: 'call', to: 'all', on: true }); });
-      const stop = () => { if (!callOn.has('all')) return; callOn.delete('all'); send({ t: 'call', on: false }); };
-      b.addEventListener('pointerup', stop); b.addEventListener('pointercancel', stop);
-      people.prepend(b);
-    }
+    if (!sig) pageIdx = Math.max(0, Number(sessionStorage.getItem('ic-page') || 0));
+    // Neu aufbauen nur, wenn sich Aufbau ändert (Layout, Kanäle, Teilnehmer, Antwort-Taste) — nicht bei Pegeln/Zuständen.
+    const s2 = JSON.stringify([state.layout, pageIdx, state.channels.map(c => c.id), state.parties.map(p => p.id), me.force, !!lastRing]);
+    if (s2 !== sig) { sig = s2; rebuild(); }
+    for (const c of cells) c.cell.update(c.label);
   }
 
   // Tastatur: 1–9 = Kanal sprechen (halten), M = Stumm
@@ -246,11 +327,11 @@ h2{font-size:14px;color:var(--mute);margin:18px 0 8px;font-weight:600;text-trans
     if (!state || ev.repeat || ev.target.tagName === 'INPUT') return;
     if (ev.key === 'm' || ev.key === 'M') { $('mute').click(); return; }
     const n = parseInt(ev.key, 10);
-    if (n >= 1 && n <= 9 && state.channels[n - 1] && !keysDown.has(n)) { keysDown.add(n); send({ t: 'talk', ch: state.channels[n - 1].id, on: true }); }
+    const pc2 = pageChannels(); if (n >= 1 && n <= 9 && pc2[n - 1] && !keysDown.has(n)) { keysDown.add(n); send({ t: 'talk', ch: pc2[n - 1].id, on: true }); }
   });
   addEventListener('keyup', ev => {
     const n = parseInt(ev.key, 10);
-    if (keysDown.has(n)) { keysDown.delete(n); if (state && state.channels[n - 1]) send({ t: 'talk', ch: state.channels[n - 1].id, on: false }); }
+    if (keysDown.has(n)) { keysDown.delete(n); const pc2 = state ? pageChannels() : []; if (pc2[n - 1]) send({ t: 'talk', ch: pc2[n - 1].id, on: false }); }
   });
   addEventListener('pagehide', () => { closing = true; });
 })();

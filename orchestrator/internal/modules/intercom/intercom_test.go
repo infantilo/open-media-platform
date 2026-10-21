@@ -83,6 +83,48 @@ func TestMxlPortsValidatedAndPassedToNode(t *testing.T) {
 	}
 }
 
+func TestLayoutValidationTemplatesAndEffectiveLayout(t *testing.T) {
+	c := sample()
+	c.Templates = []Template{{ID: 1, Name: "Kamera", Layout: Layout{Pages: []Page{{Name: "Haupt", Keys: []Key{{Type: "channel", Ch: 1, Style: "key"}, {Type: "call", Party: 1, Label: "Regie"}, {Type: "mute"}, {Type: "dnd"}, {Type: "all"}, {Type: "reply"}}}}}}}
+	c.Parties[1].Template = 1
+	own := Layout{Pages: []Page{{Name: "Eigen", Keys: []Key{{Type: "channel", Ch: 2}}}}}
+	c.Parties[0].Layout = &own
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if l := c.EffectiveLayout(c.Parties[0]); l == nil || l.Pages[0].Name != "Eigen" {
+		t.Fatalf("eigenes Layout gewinnt: %+v", l)
+	}
+	if l := c.EffectiveLayout(c.Parties[1]); l == nil || l.Pages[0].Name != "Haupt" {
+		t.Fatalf("Vorlage: %+v", l)
+	}
+	if c.EffectiveLayout(c.Parties[2]) != nil {
+		t.Fatal("ohne Layout und Vorlage: Standardansicht (nil)")
+	}
+	doc, _ := json.Marshal(c.WithTokens(Config{}).NodeConfig(time.Now()))
+	if !strings.Contains(string(doc), `"layout"`) || !strings.Contains(string(doc), `"Haupt"`) {
+		t.Fatalf("Layout fehlt am Node: %s", doc)
+	}
+	bad := sample()
+	bad.Templates = []Template{{ID: 1, Name: "", Layout: Layout{}}, {ID: 1, Name: "X", Layout: Layout{Pages: []Page{{Keys: []Key{{Type: "channel", Ch: 99}, {Type: "call", Party: 99}, {Type: "wat"}, {Type: "channel", Ch: 1, Style: "x"}}}}}}}
+	bad.Parties[0].Template = 7
+	var keys []Key
+	for i := 0; i < 49; i++ {
+		keys = append(keys, Key{Type: "mute"})
+	}
+	bad.Parties[1].Layout = &Layout{Pages: []Page{{Keys: keys}}}
+	err := bad.Validate()
+	if err == nil {
+		t.Fatal("Fehler erwartet")
+	}
+	joined := strings.Join(err.(*ValidationError).Problems, "|")
+	for _, want := range []string{"ohne Namen", "doppelt", "Layout ohne Seite", "unbekannter Kanal 99", "unbekannter Teilnehmer 99", "Tastenart", "Stil", "unbekannte Vorlage 7", "mehr als 48"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("%q fehlt in %q", want, joined)
+		}
+	}
+}
+
 func TestTokensAreServerSideAndStable(t *testing.T) {
 	c1 := sample().WithTokens(Config{})
 	for _, p := range c1.Parties {
