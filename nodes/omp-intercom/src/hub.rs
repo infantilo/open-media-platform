@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use crate::mix::{Channel, ChannelId, Engine, FRAME, Party, PartyId, Route, Vox};
+use crate::mix::{Channel, ChannelId, Engine, FRAME, Out, Party, PartyId, Route, Vox};
+use crate::encpool::EncoderPool;
 use crate::mxl_io::MxlIo;
 use crate::peer::Peer;
 
@@ -47,6 +48,9 @@ pub struct Stats {
     pub ticks: Arc<AtomicU64>,
     pub late_ticks: AtomicU64,
     pub max_tick_us: AtomicU64,
+    /// Summe der Durchlaufzeiten (µs) — Mittel = tick_total_us / ticks.
+    pub tick_total_us: AtomicU64,
+    pub engine_total_us: AtomicU64,
 }
 
 pub struct Core {
@@ -58,6 +62,8 @@ pub struct Core {
     next_generation: u64,
     last_seen: BTreeMap<PartyId, Instant>,
     pub mxl: Option<Arc<MxlIo>>,
+    pool: EncoderPool,
+    silent_run: BTreeMap<PartyId, u32>,
     dnd: BTreeSet<PartyId>,
     pending_busy: Vec<(PartyId, PartyId)>, // (Anrufer, besetzter Teilnehmer)
     replaced: BTreeMap<PartyId, Arc<Peer>>,
@@ -95,6 +101,8 @@ impl Core {
             next_generation: 1,
             last_seen: BTreeMap::new(),
             mxl: None,
+            pool: EncoderPool::default(),
+            silent_run: BTreeMap::new(),
             dnd: BTreeSet::new(),
             pending_busy: Vec::new(),
             replaced: BTreeMap::new(),
@@ -276,6 +284,10 @@ impl Core {
         }
     }
 
+    pub fn encoder_count(&self) -> usize {
+        self.pool.count()
+    }
+
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
     }
@@ -293,6 +305,8 @@ impl Core {
             p.close();
         }
         self.generations.remove(&id);
+        self.silent_run.remove(&id);
+        self.pool.forget(id);
         self.reset_runtime(id);
     }
 
@@ -527,7 +541,7 @@ impl Core {
     }
 
     /// Ein Takt: Eingänge holen, mischen, Ausgänge senden. Alle 5 Takte (oder bei Änderung) Zustand an die Panels.
-    fn tick(&mut self, n: u64) {
+    fn tick(&mut self, n: u64, stats: &Stats) {
         let mut inputs = BTreeMap::new();
         for (id, peer) in &self.sessions {
             if let Some(frame) = peer.pull_frame() {
@@ -543,11 +557,28 @@ impl Core {
                 }
             }
         }
+        let t_engine = Instant::now();
         let (outs, report) = self.engine.process(&inputs);
+        stats.engine_total_us.fetch_add(t_engine.elapsed().as_micros() as u64, Ordering::Relaxed);
+        // Webrtc-Hörer: Stille wird nach 240 Nachlauf nicht mehr kodiert/gesendet; gleiche Signale teilen einen Encoder.
+        let mut audible: BTreeMap<PartyId, &Out> = BTreeMap::new();
         for (id, out) in &outs {
-            if let Some(peer) = self.sessions.get(id) {
-                peer.push_frame(&out.left[..FRAME], &out.right[..FRAME]);
+            if self.sessions.get(id).map(|p| p.connected()).unwrap_or(false) {
+                let silent = out.left.iter().chain(out.right.iter()).all(|v| v.abs() < 1e-4);
+                let run = self.silent_run.entry(*id).or_insert(0);
+                if silent {
+                    *run += 1;
+                    if *run > 12 {
+                        continue;
+                    }
+                } else {
+                    *run = 0;
+                }
+                audible.insert(*id, out);
             }
+        }
+        self.pool.feed(&audible, &self.sessions);
+        for (id, out) in &outs {
             if let (Some(io), Some(info)) = (&self.mxl, self.parties.get(id)) {
                 if info.mxl_out > 0 {
                     io.push_output(info.mxl_out - 1, &out.left[..FRAME], &out.right[..FRAME]);
@@ -636,13 +667,14 @@ impl Hub {
                     let t0 = Instant::now();
                     {
                         let mut core = hub.core.lock().expect("lock poisoned");
-                        core.tick(n);
+                        core.tick(n, &hub.stats);
                         if n % 25 == 0 {
                             core.reap();
                         }
                     }
                     let us = t0.elapsed().as_micros() as u64;
                     hub.stats.max_tick_us.fetch_max(us, Ordering::Relaxed);
+                    hub.stats.tick_total_us.fetch_add(us, Ordering::Relaxed);
                     hub.stats.ticks.fetch_add(1, Ordering::Relaxed);
                     n += 1;
                 }

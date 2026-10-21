@@ -5,6 +5,7 @@
 //! Konfiguration (Teilnehmer, Kanäle, Rechte) kommt per `PUT /config` (Orchestrator-Modul `intercom`)
 //! oder aus `OMP_INTERCOM_CONFIG` (Datei) beim Start.
 
+mod encpool;
 mod hub;
 mod ice;
 mod mix;
@@ -179,9 +180,12 @@ impl Store {
                 "inputs": (0..io.input_count()).map(|i| json!({"slot": i + 1, "flow": io.input_flow(i), "flowing": io.input_flowed(i)})).collect::<Vec<_>>(),
                 "outputs": (0..io.output_count()).map(|i| json!({"slot": i + 1, "flow": io.output_flow(i)})).collect::<Vec<_>>(),
             })),
+            "encoders": core.encoder_count(),
             "ticks": self.hub.stats.ticks.load(Ordering::Relaxed),
             "late_ticks": self.hub.stats.late_ticks.load(Ordering::Relaxed),
             "max_tick_us": self.hub.stats.max_tick_us.load(Ordering::Relaxed),
+            "tick_total_us": self.hub.stats.tick_total_us.load(Ordering::Relaxed),
+            "engine_total_us": self.hub.stats.engine_total_us.load(Ordering::Relaxed),
         })
     }
 }
@@ -379,6 +383,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     let tally_hub = hub.clone();
+    let alert_hub = hub.clone();
     let tally_nats = nats_url.clone();
     let tally_registry = registry_url.clone();
     let store: Arc<dyn ParamStore> = Arc::new(Store { hub, latency_ms, config_file, offer_lock: Mutex::new(()), inputs });
@@ -398,6 +403,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     )
     .await?;
     handle.register_worker("clock", ticks);
+    // Alarm, wenn der 20-ms-Takt wiederholt verspätet läuft (Rechner überlastet): hörbar als Knacksen/Aussetzer.
+    let alert_hub = alert_hub;
+    let alert_handle = handle.clone();
+    tokio::spawn(async move {
+        let mut last = 0u64;
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+        loop {
+            interval.tick().await;
+            let late = alert_hub.stats.late_ticks.load(Ordering::Relaxed);
+            if late.saturating_sub(last) >= 10 {
+                alert_handle.publish_alert(format!("Intercom: Mischtakt verspätet ({} Takte in 10 s) — Rechner überlastet?", late - last)).await;
+            }
+            last = late;
+        }
+    });
     tokio::spawn(tally::run(tally_hub, tally::TriggerFilter::new(&env_or("OMP_INTERCOM_ONAIR_SOURCES", "")), tally_nats, tally_registry));
     tokio::signal::ctrl_c().await?;
     eprintln!("omp-intercom: shutdown requested");

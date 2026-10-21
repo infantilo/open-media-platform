@@ -30529,3 +30529,13 @@ Gemessen mit headless Chromium (3 Tabs, Rechner unter Last, Load ≈ 3,6): Refer
 4. RTP-Zeitstempel aus dem Takt-Thread (`do-timestamp`) lassen den Browser-Jitterpuffer anwachsen → feste 20-ms-Zeitstempel selbst setzen.
 5. Der Eingangspuffer leert sich nach einem Burst nie von allein → Minimum-Fenster (1 s) kürzt den Rest.
 **HTTPS:** Browser-Mikrofon braucht sicheren Kontext; gelöst durch `OMP_HTTPS=1` des Node-SDK (selbst signiertes Zertifikat, wie die Kamera-Seite).
+
+## 2026-10-21 — Intercom (Kap. 47): Auslastung und Latenz, Maßnahmen
+
+**Messung (Laptop 1,8 GHz, unter Last, headless Chromium):** 4 Teilnehmer, einer spricht: 70 % eines Kerns. Pro-Thread-Aufschlüsselung (`tools/intercom-e2e/threads.sh`):
+fast alles in den `appsrc`-Sendethreads (Opus-Kodierung + SRTP je Hörer). Opus allein ≈ 3–5 % je Stream (`gst-launch`-Messung; Complexity 10 → 4 spart nur ≈ 2 Punkte).
+**Maßnahmen:** (1) Stille wird nach 240 ms Nachlauf weder kodiert noch gesendet; (2) **gemeinsame Encoder** je exakt gleichem Hörsignal (`encpool.rs`, klebrige Zuordnung) — in einer Partyline hören alle Zuhörer dasselbe;
+(3) Browser-DTX (`usedtx=1` in der Antwort) — ruhende Mikrofone kosten keine Decoder-CPU; (4) Complexity 4. Ergebnis ≈ 35 %. Die Aussetzer-Zählung unterscheidet dafür Sendepause (DTX) von echtem Leerlaufen.
+**Latenz:** Eingangspuffer kommt paarweise (2 × 20 ms) — Chromium sendet unter Last gebündelt; der Rest-Puffer wird per Minimum-Fenster (0,5 s) gekürzt. Die Messwerte schwanken zwischen Läufen stark (16–140 ms Node-Anteil),
+weil Chromium und Node auf demselben unter Last stehenden Rechner laufen. **Belastbar nur auf echter Hardware messen** (Handy + Kopfhörer, getrennter Server).
+**Nicht gemacht (bewusst):** Mono-Kodierung für mittige Hörer (Sprung zwischen Mono/Stereo mitten im Strom), Aufzeichnung, SIP, Trunk.

@@ -5,6 +5,10 @@ package intercom
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 )
@@ -63,4 +67,43 @@ func (*Module) Tiles() []module.UITile {
 		Needs:   []string{FeatUse},
 		Element: "omp-intercom-tile", Bundle: "/dist/modules/intercom.js",
 	}}
+}
+
+// WriteMetrics: Kennzahlen aus dem Status des Intercom-Nodes für GET /metrics (ohne laufenden Node: nichts).
+func (m *Module) WriteMetrics(w io.Writer) {
+	m.mu.Lock()
+	svc := m.svc
+	m.mu.Unlock()
+	if svc == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	raw, err := svc.Status(ctx)
+	if err != nil {
+		return
+	}
+	var st struct {
+		Parties []struct {
+			Online    bool  `json:"online"`
+			Underruns int64 `json:"underruns"`
+		} `json:"parties"`
+		LateTicks int64 `json:"late_ticks"`
+		MaxTickUS int64 `json:"max_tick_us"`
+	}
+	if json.Unmarshal(raw, &st) != nil {
+		return
+	}
+	var online, under int64
+	for _, p := range st.Parties {
+		if p.Online {
+			online++
+		}
+		under += p.Underruns
+	}
+	fmt.Fprintf(w, "# HELP omp_intercom_parties Intercom-Teilnehmer\n# TYPE omp_intercom_parties gauge\n")
+	fmt.Fprintf(w, "omp_intercom_parties{state=\"online\"} %d\nomp_intercom_parties{state=\"total\"} %d\n", online, len(st.Parties))
+	fmt.Fprintf(w, "# HELP omp_intercom_late_ticks_total Verspätete 20-ms-Mischtakte\n# TYPE omp_intercom_late_ticks_total counter\nomp_intercom_late_ticks_total %d\n", st.LateTicks)
+	fmt.Fprintf(w, "# HELP omp_intercom_max_tick_seconds Längster Mischdurchlauf\n# TYPE omp_intercom_max_tick_seconds gauge\nomp_intercom_max_tick_seconds %g\n", float64(st.MaxTickUS)/1e6)
+	fmt.Fprintf(w, "# HELP omp_intercom_underruns_total Eingangspuffer leer beim Abholen (Aussetzer)\n# TYPE omp_intercom_underruns_total counter\nomp_intercom_underruns_total %d\n", under)
 }

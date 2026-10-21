@@ -28,7 +28,9 @@ pub struct Peer {
     state: Arc<Mutex<String>>,
     channel: Arc<Mutex<Option<gst_webrtc::WebRTCDataChannel>>>,
     pub rx_samples: Arc<AtomicU64>,
+    /// Echte Aussetzer: der Eingangspuffer lief mitten im Sprechen leer. Stille-Lücken (DTX) zählen nicht.
     pub underruns: AtomicU64,
+    was_active: std::sync::atomic::AtomicBool,
     pub dropped: Arc<AtomicU64>,
     /// Mittlere Füllung des Eingangspuffers beim Abholen in Mikrosekunden Audio (gleitend).
     pub ring_us: AtomicU64,
@@ -99,36 +101,23 @@ impl Peer {
             .map_err(|e| format!("webrtcbin: {e}"))?;
         crate::ice::configure(&webrtcbin);
 
-        // Sendezweig: appsrc (Stereo F32) → Opus → RTP → webrtcbin.
-        let src_caps = gst::Caps::builder("audio/x-raw")
-            .field("format", "F32LE")
-            .field("layout", "interleaved")
-            .field("rate", 48_000i32)
-            .field("channels", 2i32)
-            .field("channel-mask", gst::Bitmask::new(0x3))
-            .build();
+        // Sendezweig: appsrc (fertige Opus-Pakete) → RTP → webrtcbin.
+        let src_caps = gst::Caps::builder("audio/x-opus").field("rate", 48_000i32).field("channels", 2i32).field("channel-mapping-family", 0i32).build();
         let appsrc = gst_app::AppSrc::builder()
             .caps(&src_caps)
             .format(gst::Format::Time)
             .is_live(true)
             .do_timestamp(false)
-            .max_bytes((FRAME * 2 * 4 * 6) as u64)
+            .max_bytes(16 * 1024)
             .build();
         appsrc.set_property_from_str("leaky-type", "downstream");
-        // opusenc (GStreamer 1.22) nimmt nur S16LE: Wandlung hier, der Mix-Kern bleibt Float.
-        let conv_out = make("audioconvert")?;
-        let enc = make("opusenc")?;
-        enc.set_property("bitrate", 48_000i32);
-        enc.set_property_from_str("frame-size", "20");
-        enc.set_property_from_str("audio-type", "voice");
-        enc.set_property("inband-fec", true);
-        enc.set_property("packet-loss-percentage", 5i32);
+        // Die Opus-Kodierung macht der gemeinsame Encoder-Pool (encpool.rs); hier kommen fertige Opus-Pakete an.
         let pay = make("rtpopuspay")?;
         pay.set_property("pt", pt);
         pipeline
-            .add_many([appsrc.upcast_ref::<gst::Element>(), &conv_out, &enc, &pay, &webrtcbin])
+            .add_many([appsrc.upcast_ref::<gst::Element>(), &pay, &webrtcbin])
             .map_err(|e| format!("pipeline add: {e}"))?;
-        gst::Element::link_many([appsrc.upcast_ref::<gst::Element>(), &conv_out, &enc, &pay]).map_err(|e| format!("link: {e}"))?;
+        gst::Element::link_many([appsrc.upcast_ref::<gst::Element>(), &pay]).map_err(|e| format!("link: {e}"))?;
 
         // Sendrecv-Transceiver VOR dem Angebot, damit die Antwort `sendrecv` wird.
         let rtp_caps = gst::Caps::builder("application/x-rtp")
@@ -137,6 +126,8 @@ impl Peer {
             .field("clock-rate", 48_000i32)
             .field("payload", pt as i32)
             .field("encoding-params", "2")
+            // Der Browser darf bei Stille aufhören zu senden (DTX): ein ruhendes Mikrofon kostet dann keine Decoder-CPU.
+            .field("usedtx", "1")
             .build();
         let _tr = webrtcbin.emit_by_name::<gst_webrtc::WebRTCRTPTransceiver>(
             "add-transceiver",
@@ -213,6 +204,7 @@ impl Peer {
             channel,
             rx_samples,
             underruns: AtomicU64::new(0),
+            was_active: std::sync::atomic::AtomicBool::new(false),
             dropped,
             ring_us: AtomicU64::new(0),
             trim: Mutex::new(TrimState { ticks: 0, min_rest: usize::MAX }),
@@ -242,7 +234,8 @@ impl Peer {
     pub fn pull_frame(&self) -> Option<Vec<f32>> {
         let mut q = self.inbox.lock().expect("lock poisoned");
         if q.len() < FRAME {
-            if self.connected() {
+            // Einmal je Unterbrechung zählen, und nur, wenn zuvor gesprochen wurde (sonst ist es nur Sendepause).
+            if self.connected() && self.was_active.swap(false, Ordering::Relaxed) {
                 self.underruns.fetch_add(1, Ordering::Relaxed);
             }
             return None;
@@ -256,6 +249,7 @@ impl Peer {
             self.dropped.fetch_add(excess as u64, Ordering::Relaxed);
         }
         let frame: Vec<f32> = q.drain(..FRAME).collect();
+        self.was_active.store(frame.iter().any(|v| v.abs() > 1e-4), Ordering::Relaxed);
         let mut t = self.trim.lock().expect("lock poisoned");
         t.min_rest = t.min_rest.min(q.len());
         t.ticks += 1;
@@ -272,32 +266,29 @@ impl Peer {
         Some(frame)
     }
 
-    /// Ein Stereo-Frame zum Teilnehmer.
-    pub fn push_frame(&self, left: &[f32], right: &[f32]) {
+    /// Ein fertig kodiertes Opus-Paket (20 ms) zum Teilnehmer. Zeitstempel setzt jeder Peer selbst (regelmäßige 20-ms-Schritte,
+    /// unabhängig vom Jitter des Taktthreads — sonst deutet der Browser den Takt-Jitter als Netzjitter).
+    pub fn push_encoded(&self, packet: &gst::BufferRef) {
         if !self.connected() {
             return;
         }
-        let mut bytes = Vec::with_capacity(FRAME * 8);
-        for i in 0..FRAME {
-            bytes.extend_from_slice(&left[i].to_le_bytes());
-            bytes.extend_from_slice(&right[i].to_le_bytes());
-        }
-        let mut buffer = gst::Buffer::from_slice(bytes);
+        let mut buffer = packet.copy();
         {
             let now_ns = self.pipeline.current_running_time().map(|t| t.nseconds()).unwrap_or(0);
             let mut c = self.out_clock.lock().expect("lock poisoned");
             let step = 20_000_000u64;
             let base = *c.base_ns.get_or_insert(now_ns);
             let mut pts = base + c.n * step;
-            // Bei einem Stau oder einer Lücke (> 3 Takte Abweichung) neu aufsetzen statt aufzuholen.
+            // Nach Stille (nichts gesendet), Stau oder Lücke (> 3 Takte Abweichung) neu aufsetzen statt aufzuholen.
             if pts + 3 * step < now_ns || pts > now_ns + 3 * step {
                 c.base_ns = Some(now_ns);
                 c.n = 0;
                 pts = now_ns;
             }
             c.n += 1;
-            let b = buffer.get_mut().expect("neuer Puffer");
+            let b = buffer.get_mut().expect("neue Kopie");
             b.set_pts(gst::ClockTime::from_nseconds(pts));
+            b.set_dts(gst::ClockTime::from_nseconds(pts));
             b.set_duration(gst::ClockTime::from_nseconds(step));
         }
         let _ = self.appsrc.push_buffer(buffer);

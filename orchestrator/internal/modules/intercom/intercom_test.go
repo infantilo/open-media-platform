@@ -322,6 +322,30 @@ func TestPanelURLUsesHTTPSPortAndRequestHostForLoopback(t *testing.T) {
 	}
 }
 
+func TestMetricsFromNodeStatus(t *testing.T) {
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"parties":[{"online":true,"underruns":3},{"online":false,"underruns":2}],"late_ticks":4,"max_tick_us":2500}`))
+	}))
+	defer node.Close()
+	nv := registry.NodeView{ID: "n1", Label: "Intercom", Online: true, APIBaseURL: node.URL}
+	m := New(Services{Nodes: nodes{nv}, Instances: insts{}, HTTP: node.Client()})
+	m.service(module.Deps{Settings: &memSettings{m: map[string][]byte{}}})
+	var b strings.Builder
+	m.WriteMetrics(&b)
+	out := b.String()
+	for _, want := range []string{`omp_intercom_parties{state="online"} 1`, `omp_intercom_parties{state="total"} 2`, "omp_intercom_late_ticks_total 4", "omp_intercom_max_tick_seconds 0.0025", "omp_intercom_underruns_total 5"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("%q fehlt in:\n%s", want, out)
+		}
+	}
+	empty := New(Services{})
+	var e strings.Builder
+	empty.WriteMetrics(&e)
+	if e.Len() != 0 {
+		t.Error("ohne Dienst keine Zeilen")
+	}
+}
+
 func TestNoNodeGivesClearError(t *testing.T) {
 	m := New(Services{Nodes: nodes{}, Instances: insts{}})
 	s := m.service(module.Deps{Settings: &memSettings{m: map[string][]byte{}}})

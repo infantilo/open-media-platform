@@ -441,6 +441,13 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   auto-discovered multi-tile monitoring (with preview of every discovered
   source); as a role in a workflow the multiviewer shows only that
   workflow's sources
+- **omp-intercom** — complete intercom: party-line channels, direct, group
+  and all calls, IFB (programme audio that ducks while someone speaks), mute
+  and forced mute, microphone lock while on air, guest links, seats for
+  hot-desking. Mix-minus mixing in a dedicated 20 ms engine, browser panels
+  over WebRTC/Opus (also on phones), MXL programme inputs and mix outputs
+  (studio loudspeaker, recording), Stream Deck remote control, orchestrator
+  module for channels, parties and rights.
 - **omp-vfa** / **omp-vfa-vision** — video follows audio: the face
   detection service (pure Go, no CGO) reports faces per camera from the
   camera previews, and the control node cuts the video mixer to the camera

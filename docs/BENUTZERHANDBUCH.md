@@ -1591,6 +1591,35 @@ Für Studios mit mehreren Kameras und mehreren Personen: Wer spricht, wird im Bi
 
 **Hinweise:** Die Gesichtserkennung liest die Vorschaubilder der Kamera-Nodes und braucht dafür keine Einstellung (die Kachel gibt die Kameras vor). Sie arbeitet auf CPU (ca. 5 % eines Kerns je Kamera). Die Schaltlogik braucht – wie die Playout-Automation – ein Service-Token; beim ersten Einsatz nach einem Update den Orchestrator einmal neu starten. Der Bildmischer muss die Kameras als Eingänge haben (Verbindungen im Flow-Editor).
 
+## 10c-5. Intercom (Sprechverbindungen für Regie, Technik, Kameras, Studio und Gäste)
+
+Das Intercom verbindet Menschen untereinander: **Kanäle** sind gemeinsame Sprechleitungen (z. B. „Regie“, „Technik“, „Kamera“), jede **Sprechstelle** hört und spricht in den Kanälen, die ihr zugeteilt sind. Niemand hört sich selbst. Bedient wird im Browser – am Rechner wie am Handy, ohne zusätzliche Software.
+
+**Einmal einrichten (Administration → Produktion → Intercom):**
+
+1. Dienst **Intercom** über den Katalog starten (Reiter Instanzen). Er braucht keine weitere Einstellung; für das Mikrofon im Browser läuft er mit HTTPS (selbst signiertes Zertifikat, einmal bestätigen).
+2. **Kanäle** anlegen. Ein Kanal der Art **IFB** führt Programmton, der um einen einstellbaren Wert gedämpft wird, sobald jemand hineinspricht.
+3. **Teilnehmer** anlegen: eine **Person** (öffnet ihr Panel mit dem eigenen Konto), ein **Rollenplatz** (z. B. „Kamera 2“, an dem sich jeder mit dem Recht „Intercom nutzen“ anmelden darf), eine **Programmquelle** oder eine **Anbindung** (Hardware/MXL, s. u.). Je Teilnehmer in der Matrix festlegen, in welchen Kanälen er **sprechen** und **hören** darf. **Priorität** (0–9): Spricht jemand mit höherer Priorität, werden niedrigere im selben Kanal um 12 dB gedämpft. **Darf andere stumm schalten und Alle-Ruf auslösen** gehört nur an Regieplätze. **Mikrofon gesperrt, solange On Air** schaltet Studiolautsprecher und ähnliche Plätze während der Sendung stumm.
+4. **Speichern** – erst damit gilt die Änderung (**Verwerfen** stellt den gespeicherten Stand her). Mit dem Recht „Intercom nutzen“ (Administration → Rechte) öffnet jede Person ihr Panel über die Kachel **Intercom** der Operator-Konsole.
+
+**Das Panel:**
+
+- Je Kanal eine Karte mit großer Sprechtaste: **Halten** = sprechen, solange gedrückt; **kurz tippen** = rasten (noch einmal tippen beendet). Am Rechner: Ziffern 1–9 halten = Kanal sprechen, **M** = Mikrofon stumm.
+- **Hören** schaltet einen Kanal weg, **Solo** hört nur diesen Kanal, **Pegel** und **Lage** (links/rechts) stellen die Mischung für Kopfhörer ein. Unter dem Kanal steht, wer gerade spricht.
+- **Mikrofon** (oben rechts) schaltet stumm. Ist das Mikrofon gesperrt (On Air oder durch die Regie), steht das ausdrücklich dort – ein Mikrofon ist nie heimlich stumm. **Nicht stören** hält Rufe fern (Regieplätze dürfen trotzdem durch).
+- **Rufen**: Beim Teilnehmer gedrückt halten, um ihn direkt anzusprechen – auch ohne gemeinsamen Kanal. Der Angerufene hört einen Rufton, sieht den Namen und kann mit **Antworten** zurückrufen. Ist er auf „Nicht stören“, meldet das Panel „nicht erreichbar“. **Alle rufen** (nur Regieplätze) spricht jeden Teilnehmer an.
+- Bricht die Verbindung ab, verbindet das Panel selbständig neu; eine neu geöffnete Sprechstelle startet immer ohne hängende Sprechtaste.
+
+**Gäste:** Unter **Gäste** Namen, Gültigkeit und Kanäle wählen und **Gast-Link erzeugen**. Der Link funktioniert ohne Konto, endet von selbst und lässt sich vorher **sperren**. Für Gäste außerhalb des Hauses muss der Intercom-Port (HTTPS, Standard 9445) von außen erreichbar sein (Portweiterleitung, wie bei der Handy-Kamera).
+
+**Programmton und Studiolautsprecher (MXL):** Der Dienst bietet **Programm n**-Eingänge (IS-05-Receiver, im Flow-Editor verbinden) und **Intercom Mix n**-Ausgänge (MXL-Sender). Ein Teilnehmer der Art **Programmquelle** mit „Programmeingang Nr.“ speist den verbundenen Programmton in seine Kanäle (mit einem IFB-Kanal wird er gedämpft, sobald jemand spricht). Ein Teilnehmer der Art **Anbindung** mit „Mix-Ausgang Nr.“ gibt aus, was er hört – z. B. an einen Studiolautsprecher oder eine Aufnahme. Anzahl der Ein-/Ausgänge: Start-Optionen des Dienstes.
+
+**On Air:** Der Parameter **onAir** des Dienstes (von Hand oder von der Automation) und die Start-Option **On-Air-Auslöser** (Namen von Nodes, z. B. der Bildmischer: sobald einer eine Quelle im Programm hat) sperren die Mikrofone aller Teilnehmer mit „Mikrofon gesperrt, solange On Air“.
+
+**Stream Deck:** Im Dienst-Panel der Konsole fernbedient ein Stream Deck die eigene Sprechstelle: Tasten für Mikrofon, Nicht stören, Rasten, Kanäle (halten = sprechen), Rufe und Hören; Drehgeber stellen Pegel. Das Mikrofon bleibt im Browser-Panel – dieses muss geöffnet und verbunden sein.
+
+**Hinweise:** Auslastung: Kodiert wird je *verschiedenem* Hörsignal, nicht je Hörer (alle Zuhörer einer Partyline teilen einen Encoder), Stille wird nicht gesendet. Gemessen auf einem 1,8-GHz-Laptop unter Last: etwa 7 % eines Kerns je angemeldetem Teilnehmer; ein Server ist deutlich schneller. Die Verzögerung im Haus hängt vor allem von Browser und Audiogerät ab (Kopfhörer am Gerät, kein Lautsprecher). Gespräche werden **nicht aufgezeichnet**. Kennzahlen unter `GET /metrics` (`omp_intercom_*`); bei überlastetem Rechner meldet der Dienst einen Alarm.
+
 ## 10d. Playout-Workflow „Playout MXF“ (Player, Mischer, Monitor)
 
 Der Workflow **Playout MXF** (Reiter Workflows, nach dem Anlegen im Zustand „gestoppt“) enthält:
