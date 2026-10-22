@@ -1,11 +1,18 @@
-// Intercom-Adapter fürs Stream Deck (Kapitel 47.10): holt den Zustand der eigenen Sprechstelle (`deck.<id>`) über die
-// Proxy-API und schickt Tasten als `panelCommand`. Gedrückt halten = sprechen (PTT) oder, im Rasten-Betrieb, umschalten.
+// Stream-Deck-Adapter des Intercoms (Kapitel 47.10, ab Kapitel 49 Teil der Intercom-Oberfläche, nicht der Shell): holt den
+// Zustand der eigenen Sprechstelle über die Vertragsrolle `deck.state` und schickt Tasten über `deck.command`. Gedrückt
+// halten = sprechen (PTT) oder, im Rasten-Betrieb, umschalten. Die Shell kennt nur die Schnittstelle `streamDeck` eines
+// Elements (shell/streamdeck/adapter.ts), nie dieses Produkt.
 
-import type { AdapterLayout, LayoutContext, StreamDeckAdapter } from "../adapter.ts";
-import type { NodeIO } from "../autoraster.ts";
-import { type Cmd, type DeckState, layoutIntercom, type IntercomLayout, nudgedLevel } from "./intercom-logic.ts";
+import type { AdapterLayout, LayoutContext, StreamDeckAdapter } from "../../../shell/streamdeck/adapter.ts";
+import { type Cmd, type DeckState, layoutIntercom, type IntercomLayout, nudgedLevel } from "./logic.ts";
 
-export function intercomAdapter(io: NodeIO, getParty: () => number | null): StreamDeckAdapter & { onChange: () => void; onError: (e: unknown) => void } {
+/** Zugriff auf die Rollen `deck.state` / `deck.command` des Intercom-Dienstes. */
+export interface DeckIO {
+  state(party: number): Promise<DeckState>;
+  command(party: number, cmd: Cmd): Promise<void>;
+}
+
+export function intercomAdapter(io: DeckIO, getParty: () => number | null): StreamDeckAdapter & { onChange: () => void; onError: (e: unknown) => void } {
   let st: DeckState | null = null;
   let last: IntercomLayout | null = null;
   let latch = false;
@@ -40,8 +47,7 @@ export function intercomAdapter(io: NodeIO, getParty: () => number | null): Stre
       const party = getParty();
       if (party == null) return;
       try {
-        const v = await io.getParam(`deck.${party}`);
-        st = (typeof v === "string" ? JSON.parse(v) : v) as DeckState;
+        st = await io.state(party);
         a.onChange();
       } catch (e) {
         a.onError(e);
@@ -53,7 +59,7 @@ export function intercomAdapter(io: NodeIO, getParty: () => number | null): Stre
     const party = getParty();
     if (party == null) return;
     try {
-      await io.call("panelCommand", { party, cmd: JSON.stringify(cmd) });
+      await io.command(party, cmd);
       await a.refresh();
     } catch (e) {
       a.onError(e);

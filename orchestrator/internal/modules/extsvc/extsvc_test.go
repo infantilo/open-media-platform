@@ -82,7 +82,7 @@ func testManifest(importable bool) Manifest {
 			{Method: "GET", Path: "/things", Features: []string{"demo.use", "demo.admin"}},
 			{Method: "PUT", Path: "/things/{id}", Features: []string{"demo.admin"}},
 		},
-		UI:     []module.UITab{{ID: "demo", Placement: "admin:production", Label: map[string]string{"de": "Demo"}, Element: "omp-demo", Bundle: "/dist/modules/demo.js"}},
+		UI:     []module.UITab{{ID: "demo", Placement: "admin:production", Label: map[string]string{"de": "Demo"}, Element: "omp-demo", Bundle: "admin.js"}},
 		Tiles:  []module.UITile{{ID: "demo", Needs: []string{"demo.use"}, Element: "omp-demo-tile", Bundle: "/dist/modules/demo.js"}},
 		Import: &ImportDef{SettingsKey: "demo.legacy", Path: "/import", Importable: importable},
 		Backup: "/backup",
@@ -116,6 +116,12 @@ func newRig(t *testing.T, acc fakeAccess, importable bool) *rig {
 			b, _ := io.ReadAll(q.Body)
 			r.imported <- string(b)
 			io.WriteString(w, `{"ok":true}`)
+			return
+		case "/service/ui/admin.js":
+			io.WriteString(w, "export const x=1;")
+			return
+		case "/service/ui/nix.js":
+			http.NotFound(w, q)
 			return
 		case "/service/backup":
 			io.WriteString(w, `{"stand":1}`)
@@ -400,5 +406,141 @@ func TestEmptyServiceIsRestoredFromBackupEvenAfterTheLegacyImport(t *testing.T) 
 	}
 	if len(r.audit.log) != 1 || r.audit.log[0].action != "restore" {
 		t.Errorf("Audit: %+v", r.audit.log)
+	}
+}
+
+func TestRelativeBundlesAreServedByTheServiceAndPlatformBundlesStay(t *testing.T) {
+	acc := fakeAccess{features: map[string]bool{"demo.use": true}, user: "bob"}
+	r := newRig(t, acc, false)
+	ui, tiles := r.mod.UI(), r.mod.Tiles()
+	if len(ui) != 1 || ui[0].Bundle != "/api/v1/ext/demo/_ui/admin.js" {
+		t.Errorf("Dienst-Bundle: %+v", ui)
+	}
+	if len(tiles) != 1 || tiles[0].Bundle != "/dist/modules/demo.js" {
+		t.Errorf("Plattform-Bundle bleibt: %+v", tiles)
+	}
+	// ohne Anmeldung ladbar (import() sendet keinen Header), aber nur Dateien unter ui/
+	req, _ := http.NewRequest("GET", getenv(t)+"/api/v1/ext/demo/_ui/admin.js", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || string(b) != "export const x=1;" || !strings.Contains(resp.Header.Get("Content-Type"), "javascript") {
+		t.Errorf("Asset: %d %q %q", resp.StatusCode, b, resp.Header.Get("Content-Type"))
+	}
+	for _, bad := range []string{"/api/v1/ext/demo/_ui/nix.js", "/api/v1/ext/demo/_ui/..%2f..%2fconfig"} {
+		resp, _ := http.Get(getenv(t) + bad)
+		resp.Body.Close()
+		if resp.StatusCode != 404 {
+			t.Errorf("%s: %d", bad, resp.StatusCode)
+		}
+	}
+}
+
+func TestContractChecks(t *testing.T) {
+	ok := func() Manifest {
+		m := testManifest(false)
+		m.Kind = "intercom"
+		m.Features = []module.FeatureDef{{ID: "demo.use"}}
+		m.Routes = []RouteDef{
+			{Method: "GET", Path: "/panels", Features: []string{"demo.use"}, Role: "panels"},
+			{Method: "GET", Path: "/status", Features: []string{"demo.use"}, Role: "status"},
+			{Method: "GET", Path: "/deck/{party}", Features: []string{"demo.use"}, Role: "deck.state"},
+			{Method: "POST", Path: "/deck/{party}/command", Features: []string{"demo.use"}, Role: "deck.command"},
+		}
+		m.Name = "acme-intercom"
+		m.Features[0].ID = "acme-intercom.use"
+		for i := range m.Routes {
+			m.Routes[i].Features = []string{"acme-intercom.use"}
+		}
+		m.Import, m.Backup = nil, ""
+		return m
+	}
+	if err := ok().Validate(); err != nil {
+		t.Fatalf("ein vertragstreues Fremdprodukt muss gültig sein: %v", err)
+	}
+	cases := map[string]func(*Manifest){
+		"Pflichtrolle fehlt": func(m *Manifest) { m.Routes = m.Routes[1:] },
+		"falsche Methode":    func(m *Manifest) { m.Routes[0].Method = "POST" },
+		"Platzhalter fehlt":  func(m *Manifest) { m.Routes[2].Path = "/deck" },
+		"fremde Rolle":       func(m *Manifest) { m.Routes[0].Role = "gibtsnicht" },
+		"Rolle doppelt":      func(m *Manifest) { m.Routes[1].Role = "panels" },
+		"Rolle ohne Typ":     func(m *Manifest) { m.Kind = "" },
+	}
+	for name, mutate := range cases {
+		m := ok()
+		m.Routes = append([]RouteDef(nil), m.Routes...)
+		mutate(&m)
+		if m.Validate() == nil {
+			t.Errorf("%s: Vertragsverletzung nicht erkannt", name)
+		}
+	}
+	m := ok()
+	m.Kind = "unbekannter-typ"
+	for i := range m.Routes {
+		m.Routes[i].Role = ""
+	}
+	if err := m.Validate(); err != nil {
+		t.Errorf("unbekannter Typ ohne Rollen ist ein Dienst ohne Vertrag: %v", err)
+	}
+}
+
+func TestDiscoveryListsKindAndRolesWithoutProductNames(t *testing.T) {
+	acc := fakeAccess{features: map[string]bool{"demo.use": true}, user: "bob"}
+	r := newRig(t, acc, false)
+	r.mod.mu.Lock()
+	mf := r.mod.cached["demo"]
+	mf.Kind = "intercom"
+	mf.Routes = []RouteDef{
+		{Method: "GET", Path: "/panels", Features: []string{"demo.use"}, Role: "panels"},
+		{Method: "GET", Path: "/status", Features: []string{"demo.admin"}, Role: "status"},
+	}
+	r.mod.cached["demo"] = mf
+	r.mod.mu.Unlock()
+	code, body := r.do(t, "GET", "/api/v1/ext", "")
+	if code != 200 {
+		t.Fatalf("%d %s", code, body)
+	}
+	var got []Summary
+	if err := json.Unmarshal([]byte(body), &got); err != nil || len(got) != 1 {
+		t.Fatalf("%v %s", err, body)
+	}
+	s := got[0]
+	if s.Kind != "intercom" || !s.Live || s.Roles["panels"].Path != "/panels" {
+		t.Errorf("Eintrag: %+v", s)
+	}
+	if _, has := s.Roles["status"]; has {
+		t.Error("Rollen ohne Recht der Person werden nicht angeboten")
+	}
+}
+
+func TestCheckShapeForTheIntercomContract(t *testing.T) {
+	good := map[string]string{
+		"panels":     `{"panels":[{"party_id":1,"name":"A","url":"http://x"}]}`,
+		"status":     `{"parties":[{"id":1,"name":"A","online":false}],"extra":1}`,
+		"deck.state": `{"me":{"id":1,"muted":false,"forced":false},"channels":[],"parties":[]}`,
+	}
+	for role, body := range good {
+		if err := CheckShape("intercom", role, []byte(body)); err != nil {
+			t.Errorf("%s: %v", role, err)
+		}
+	}
+	bad := map[string]string{
+		"panels":     `{"panels":[{"name":"A"}]}`,
+		"status":     `{"parties":[{"id":1}]}`,
+		"deck.state": `{"me":{"id":1},"channels":[],"parties":[]}`,
+	}
+	for role, body := range bad {
+		if CheckShape("intercom", role, []byte(body)) == nil {
+			t.Errorf("%s: Formfehler nicht erkannt", role)
+		}
+	}
+	if CheckShape("intercom", "panels", []byte(`[]`)) == nil {
+		t.Error("kein Objekt")
+	}
+	if CheckShape("anderer-typ", "panels", []byte(`{}`)) != nil {
+		t.Error("Typ ohne Formvorgabe")
 	}
 }

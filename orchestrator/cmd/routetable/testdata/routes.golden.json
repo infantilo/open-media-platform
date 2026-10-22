@@ -641,6 +641,18 @@
     "domain": "core"
   },
   {
+    "method": "GET",
+    "path": "/api/v1/ext",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/ext/{svc}/_ui/{file...}",
+    "auth": "none",
+    "domain": "core"
+  },
+  {
     "method": "DELETE",
     "path": "/api/v1/ext/{svc}/{rest...}",
     "auth": "auth",

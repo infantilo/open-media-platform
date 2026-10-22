@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { type DeckState, itemsFor, layoutIntercom, nudgedLevel } from "./intercom-logic.ts";
+import { type DeckState, itemsFor, layoutIntercom, nudgedLevel } from "./logic.ts";
 
 const state = (over: Partial<DeckState["me"]> = {}): DeckState => ({
   me: { id: 1, muted: false, forced: false, force: false, ...over },

@@ -165,6 +165,14 @@ impl Store {
         json!({"id": g.id, "name": g.name, "expires": admin::format_rfc3339(g.expires), "url": url, "routes": g.routes})
     }
 
+    /// Darf die Person diese Sprechstelle fernbedienen (Rolle `deck.*`)? Admins und Bootstrap alle, sonst nur die eigenen.
+    fn may_control(&self, who: &service::Identity, party: u32) -> bool {
+        if who.can(service::FEAT_ADMIN) && who.is_bootstrap() {
+            return true;
+        }
+        self.admin.lock().expect("lock poisoned").cfg.parties_for(&who.user, &who.groups).iter().any(|p| p.id == party)
+    }
+
     /// Eine Dienst-Anfrage (Pfad ohne `/service`): Geheimnis prüfen, Aktion ausführen, Audit-Hinweis als Header zurückgeben.
     fn service_call(&self, req: &RouteRequest, path: &str) -> (RawResponse, Vec<(String, String)>) {
         let reply = |r: RawResponse| (r, Vec::new());
@@ -209,6 +217,29 @@ impl Store {
                     },
                     Err(e) => reply(Self::admin_err(e)),
                 }
+            }
+            service::Op::Ui(file) => match uibundle::asset(&file) {
+                Some(js) => reply(RawResponse { status: 200, content_type: "text/javascript; charset=utf-8", body: js.as_bytes().to_vec() }),
+                None => reply(text(404, "not found")),
+            },
+            service::Op::DeckState(id) | service::Op::DeckCommand(id) if !self.may_control(&who, id) => {
+                reply(json_resp(403, json!({"error": "diese Sprechstelle darfst du nicht bedienen"})))
+            }
+            service::Op::DeckState(id) => match self.hub.core.lock().expect("lock poisoned").state_for(id) {
+                Some(v) => reply(json_resp(200, v)),
+                None => reply(json_resp(404, json!({"error": "unbekannter Teilnehmer"}))),
+            },
+            service::Op::DeckCommand(id) => {
+                let v = match body_json() {
+                    Ok(v) => v,
+                    Err(r) => return reply(r),
+                };
+                let mut core = self.hub.core.lock().expect("lock poisoned");
+                if !core.parties.contains_key(&id) {
+                    return reply(json_resp(404, json!({"error": "unbekannter Teilnehmer"})));
+                }
+                core.command(id, &v);
+                reply(json_resp(200, json!({"ok": true})))
             }
             service::Op::Backup => reply(json_resp(200, serde_json::to_value(&self.admin.lock().expect("lock poisoned").cfg).unwrap_or(Value::Null))),
             service::Op::Rotate(id) => {
@@ -362,8 +393,6 @@ impl ParamStore for Store {
             methods: vec![
                 MethodSpec { name: "forceMute".into(), args: vec![MethodArg { name: "party".into(), kind: ParamType::Number }, MethodArg { name: "on".into(), kind: ParamType::Boolean }] },
                 MethodSpec { name: "resetStats".into(), args: vec![] },
-                // Fernbedienung einer Sprechstelle (Stream Deck): dieselben Befehle wie der Datenkanal des Panels (JSON-Text).
-                MethodSpec { name: "panelCommand".into(), args: vec![MethodArg { name: "party".into(), kind: ParamType::Number }, MethodArg { name: "cmd".into(), kind: ParamType::String }] },
             ],
         }
     }
@@ -376,11 +405,7 @@ impl ParamStore for Store {
             "partiesOnline" => Some(json!(core.sessions.values().filter(|s| s.connected()).count())),
             "lateTicks" => Some(json!(self.hub.stats.late_ticks.load(Ordering::Relaxed))),
             "maxTickUs" => Some(json!(self.hub.stats.max_tick_us.load(Ordering::Relaxed))),
-            // `deck.<Teilnehmer-ID>`: Zustand dieser Sprechstelle wie im Panel (Stream Deck, Anzeigen).
-            other => {
-                let id: u32 = other.strip_prefix("deck.")?.parse().ok()?;
-                core.state_for(id)
-            }
+            _ => None, // Zustand einer Sprechstelle: Vertragsrolle `deck.state` (Dienst-Route, mit Rechteprüfung)
         }
     }
 
@@ -403,17 +428,6 @@ impl ParamStore for Store {
                 let on = args.get("on").and_then(Value::as_bool).unwrap_or(true);
                 let mut core = self.hub.core.lock().expect("lock poisoned");
                 core.force_mute(party, on).map_err(InvokeError::Message)
-            }
-            "panelCommand" => {
-                let party = args.get("party").and_then(Value::as_u64).ok_or(InvokeError::Message("party fehlt".into()))? as u32;
-                let cmd = args.get("cmd").and_then(Value::as_str).ok_or(InvokeError::Message("cmd fehlt".into()))?;
-                let v: Value = serde_json::from_str(cmd).map_err(|e| InvokeError::Message(format!("cmd kein JSON: {e}")))?;
-                let mut core = self.hub.core.lock().expect("lock poisoned");
-                if !core.parties.contains_key(&party) {
-                    return Err(InvokeError::Message(format!("unbekannter Teilnehmer {party}")));
-                }
-                core.command(party, &v);
-                Ok(())
             }
             "resetStats" => {
                 self.hub.stats.late_ticks.store(0, Ordering::Relaxed);

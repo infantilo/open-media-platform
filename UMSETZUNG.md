@@ -5583,3 +5583,22 @@ Entscheidungen des Nutzers: Standards der „Offenen Entscheidungen“ gelten (k
 
 **Nicht live geprüft:** der Orchestrator mit dem Gateway gegen den echten Stack (Neustart ausstehend, nur Go-Tests und Node-Tests mit curl); Host-Agent-Hosts (Token in der Agent-Umgebung); Browser-Klicktest der Einrichtung über den neuen Pfad (nur Mock-Test `tools/intercom-e2e/admin-ui.mjs` mit angepasstem Pfad).
 
+
+## Kapitel 49: Austauschbare Fachdienste — Vertrag statt Produkt (Nutzerauftrag 2026-10-22, **umgesetzt für das Intercom 2026-10-22, lokal, Orchestrator-Neustart nötig**)
+
+**Anlass/Grundsatz:** „Wir dürfen nie monolithisch werden. Wenn wir später einen neuen Bildmischer wollen, können wir den von Firma X/Y nehmen statt unseres — das soll überall möglich sein, auch beim Intercom.“ Folge: Plattform-Code (Orchestrator, Shell) darf **kein Produkt beim Namen kennen**, sondern nur einen **Diensttyp mit Rollen** (Vertrag), den jede Implementierung bedient.
+
+**Bestandsaufnahme (nach Kapitel 48):** Orchestrator schon produktfrei (nur das generische Gateway). Noch fest an unser Intercom gebunden: (1) Einrichtungs-Ansicht/Kachel nur aus unserem `ui/dist` ladbar, (2) Stream-Deck-Adapter in der Shell (`adapters/intercom*.ts`, feste Namen `deck.<id>`/`panelCommand`), (3) kein dokumentierter Vertrag.
+
+| Schritt | Stand |
+|---|---|
+| 49.1 Vertrag + Typ/Rollen im Manifest | **erledigt**: `docs/CONTRACT-INTERCOM.md`; Manifest `kind` + `routes[].role`; `extsvc/contracts.go` (Tabelle Typ → Rollen mit Methode/Platzhalterzahl/Pflicht), `Validate` lehnt Vertragsverletzungen ab (Pflichtrolle fehlt, falsche Methode, fremde/doppelte Rolle); unbekannter Typ = Dienst ohne Vertrag. `GET /api/v1/ext` listet Dienste mit Typ, Rollen (nur mit Recht der Person) und Laufzustand — Clients suchen so, nie per Produktname. |
+| 49.2 Oberfläche kommt vom Dienst | **erledigt**: Manifest-Bundles ohne `/` sind Dateien des Dienstes (`<base>/ui/<datei>`, Gateway: `GET /api/v1/ext/<name>/_ui/<datei>`, ohne Anmeldung wie `/dist`, kein `..`). Intercom-Node bettet `ui/admin.js` ein (Einrichtung + Kachel); `make ui` baut und kopiert es (eingecheckte Kopie, damit `cargo build` ohne deno läuft). |
+| 49.3 Stream Deck über den Vertrag | **erledigt**: Rollen `deck.state`/`deck.command` (Node: `/service/deck/{party}[/command]`, Rechteprüfung: nur eigene Sprechstellen bzw. Admin/Bootstrap alle — vorher konnte jeder mit `operate` jede Sprechstelle steuern). Adapter + Logik + Test aus der Shell nach `ui/modules/intercom/deck/` verschoben; das Panel-Element (`ui/modules/intercom/panel.ts`, gebaut nach `nodes/omp-intercom/ui/bundle.js`) stellt die Eigenschaft `streamDeck` bereit und findet den Dienst über Typ/Rolle. Shell enthält **kein** Intercom mehr. |
+| 49.4 Prüfwerkzeug | **erledigt**: `orchestrator/cmd/serviceconformance` (Manifest, Vertrag, Antwortformen via `extsvc.CheckShape`, Routen ohne Token gesperrt, unbekannte Route 404, Oberfläche auslieferbar, optional `-mutate`); gegen `omp-intercom` bestanden. |
+| 49.5 Doku | **erledigt**: Vertrag, `docs/MODULE-SCHREIBEN.md` (Typ/Rollen), ARCHITECTURE §28.5. |
+
+**Folgen/Grenzen:** Die Host-Schnittstelle der Shell (`globalThis.__omp`) ist damit Teil des UI-Vertrags für Dienst-Bundles. Rechte-IDs tragen den Dienstnamen (`<name>.use`); beim Wechsel auf ein Fremdprodukt müssen Vergaben übertragen werden (im Vertrag vermerkt). **Nicht** umgesetzt: gleiche Prüfung für Bildmischer, Tonmischer, Playout (eigene Bestandsaufnahme — dort hängt die Plattform viel stärker an Produktdetails, z. B. Parameter-Namen in Shell-Adaptern `video-mixer.ts`/`audio-mixer.ts`); Vertrag für die Medien-Ebene (NMOS/MXL) ist ohnehin herstellerneutral.
+
+**Rollout:** Orchestrator neu starten (Gateway: `kind`, `_ui`, Discovery), danach Intercom-Node neu starten (neue Oberfläche, Rollen). Bis dahin liefert das laufende Gateway das alte Manifest mit `/dist`-Bundle weiter.
+

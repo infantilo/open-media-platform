@@ -12,7 +12,10 @@ import (
 // wissen muss. Alles, was nicht im Manifest steht, ist verboten (Routen ohne Eintrag antworten mit 404).
 type Manifest struct {
 	// Name ist eindeutig und stabil (`/api/v1/ext/<Name>/…`).
-	Name    string `json:"name"`
+	Name string `json:"name"`
+	// Kind: Diensttyp (Vertrag, z. B. "intercom"); die Rollen der Routen (`RouteDef.Role`) folgen diesem Vertrag
+	// (contracts.go). Ohne Typ: Dienst ohne Vertrag.
+	Kind    string `json:"kind,omitempty"`
 	Version int    `json:"version"`
 	// Base: Pfadpräfix der Dienst-Routen am Node (z. B. "/service").
 	Base string `json:"base"`
@@ -36,6 +39,8 @@ type RouteDef struct {
 	Method   string   `json:"method"`
 	Path     string   `json:"path"`
 	Features []string `json:"features"`
+	// Role: Rolle im Vertrag des Diensttyps (z. B. "panels"); Clients finden die Route über Typ und Rolle.
+	Role string `json:"role,omitempty"`
 }
 
 // ImportDef: `SettingsKey` im Einstellungsspeicher wird einmal per POST an `Path` des Dienstes gegeben, sobald der Dienst
@@ -88,14 +93,17 @@ func (m Manifest) Validate() error {
 		}
 	}
 	for _, t := range m.UI {
-		if t.Element == "" || t.Bundle == "" || !strings.HasPrefix(t.Bundle, "/") {
-			return fmt.Errorf("UI-Tab %q ohne Element/Bundle", t.ID)
+		if t.Element == "" || !validBundle(t.Bundle) {
+			return fmt.Errorf("UI-Tab %q ohne Element/gültiges Bundle", t.ID)
 		}
 	}
 	for _, t := range m.Tiles {
-		if t.Element == "" || t.Bundle == "" || !strings.HasPrefix(t.Bundle, "/") {
-			return fmt.Errorf("Kachel %q ohne Element/Bundle", t.ID)
+		if t.Element == "" || !validBundle(t.Bundle) {
+			return fmt.Errorf("Kachel %q ohne Element/gültiges Bundle", t.ID)
 		}
+	}
+	if err := m.CheckContract(); err != nil {
+		return err
 	}
 	if m.Metrics != "" && !strings.HasPrefix(m.Metrics, "/") {
 		return fmt.Errorf("Metrikpfad %q ungültig", m.Metrics)
@@ -107,6 +115,23 @@ func (m Manifest) Validate() error {
 		return fmt.Errorf("Sicherungspfad %q ungültig", m.Backup)
 	}
 	return nil
+}
+
+// validBundle: ein Pfad der Plattform (`/dist/…`) oder, ohne führenden Schrägstrich, eine Datei, die der Dienst selbst
+// ausliefert (`admin.js` → `/api/v1/ext/<name>/_ui/admin.js`).
+func validBundle(b string) bool {
+	if b == "" || strings.Contains(b, "..") || strings.Contains(b, "?") || strings.Contains(b, "//") || strings.Contains(b, "\\") {
+		return false
+	}
+	return true
+}
+
+// BundleURL macht aus dem Bundle-Eintrag die URL, die der Browser lädt.
+func (m Manifest) BundleURL(b string) string {
+	if strings.HasPrefix(b, "/") {
+		return b
+	}
+	return "/api/v1/ext/" + m.Name + "/_ui/" + b
 }
 
 // match prüft, ob `path` zur Muster-Route passt (`{x}` = genau ein nicht leeres Segment).

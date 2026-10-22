@@ -28,6 +28,11 @@ pub enum Op {
     Panels,
     Status,
     Metrics,
+    /// Datei der Dienst-Oberfläche (Bundle der Einrichtung/Kachel).
+    Ui(String),
+    /// Vertragsrolle `deck.state` / `deck.command`: Zustand bzw. Befehl einer Sprechstelle (Stream Deck, Anzeigen).
+    DeckState(u32),
+    DeckCommand(u32),
     /// Nur für den Orchestrator (einmaliger Import der Altkonfiguration), nicht im Manifest, nicht über das Gateway.
     Import,
     /// Nur für den Orchestrator: vollständige Konfiguration samt Token als Sicherungskopie (landet in dessen Datenbank).
@@ -48,6 +53,9 @@ pub fn route(method: &str, path: &str) -> Option<Op> {
         ("GET", ["panels"]) => Op::Panels,
         ("GET", ["status"]) => Op::Status,
         ("GET", ["metrics"]) => Op::Metrics,
+        ("GET", ["ui", file]) if !file.contains("..") => Op::Ui((*file).to_string()),
+        ("GET", ["deck", p]) => Op::DeckState(id(p)?),
+        ("POST", ["deck", p, "command"]) => Op::DeckCommand(id(p)?),
         ("POST", ["import"]) => Op::Import,
         ("GET", ["backup"]) => Op::Backup,
         _ => return None,
@@ -161,8 +169,11 @@ fn l(de: &str, en: &str) -> Value {
 pub fn manifest(importable: bool) -> Value {
     let grp = l("Intercom", "Intercom");
     let route = |method: &str, path: &str, features: &[&str]| json!({"method": method, "path": path, "features": features});
+    // Route mit Rolle im Vertrag des Diensttyps „intercom“ (docs/CONTRACT-INTERCOM.md).
+    let role = |method: &str, path: &str, features: &[&str], role: &str| json!({"method": method, "path": path, "features": features, "role": role});
     json!({
         "name": "intercom",
+        "kind": "intercom",
         "version": 1,
         "base": "/service",
         "features": [
@@ -178,17 +189,19 @@ pub fn manifest(importable: bool) -> Value {
             route("GET", "/guests", &[FEAT_ADMIN]),
             route("POST", "/guests", &[FEAT_ADMIN]),
             route("DELETE", "/guests/{id}", &[FEAT_ADMIN]),
-            route("GET", "/panels", &[FEAT_USE, FEAT_ADMIN]),
-            route("GET", "/status", &[FEAT_USE, FEAT_ADMIN]),
+            role("GET", "/panels", &[FEAT_USE, FEAT_ADMIN], "panels"),
+            role("GET", "/status", &[FEAT_USE, FEAT_ADMIN], "status"),
+            role("GET", "/deck/{party}", &[FEAT_USE, FEAT_ADMIN], "deck.state"),
+            role("POST", "/deck/{party}/command", &[FEAT_USE, FEAT_ADMIN], "deck.command"),
         ],
         "ui": [{
             "id": "intercom", "placement": "admin:production",
             "group": l("Produktion", "Production"), "label": l("Intercom", "Intercom"),
-            "element": "omp-intercom-admin", "bundle": "/dist/modules/intercom.js",
+            "element": "omp-intercom-admin", "bundle": "admin.js",
         }],
         "tiles": [{
             "id": "intercom", "label": l("Intercom", "Intercom"), "needs": [FEAT_USE],
-            "element": "omp-intercom-tile", "bundle": "/dist/modules/intercom.js",
+            "element": "omp-intercom-tile", "bundle": "admin.js",
         }],
         "metrics": "/metrics",
         // Altdaten, die das Gateway einmalig übernimmt (Einstellungsspeicher des Orchestrators → Datei des Dienstes).
@@ -211,6 +224,11 @@ mod tests {
         assert_eq!(route("DELETE", "/guests/100001"), Some(Op::DeleteGuest(100001)));
         assert_eq!(route("POST", "/guests"), Some(Op::CreateGuest));
         assert_eq!(route("DELETE", "/guests/abc"), None);
+        assert_eq!(route("GET", "/ui/admin.js"), Some(Op::Ui("admin.js".into())));
+        assert_eq!(route("GET", "/ui/..%2fx"), None, "kein Ausbruch aus ui/");
+        assert_eq!(route("GET", "/deck/3"), Some(Op::DeckState(3)));
+        assert_eq!(route("POST", "/deck/3/command"), Some(Op::DeckCommand(3)));
+        assert_eq!(route("POST", "/deck/x/command"), None);
         assert_eq!(route("DELETE", "/config"), None);
         assert_eq!(route("GET", "/parties/7/rotate-token"), None);
     }
@@ -219,7 +237,7 @@ mod tests {
     fn manifest_routes_are_all_served_and_import_is_not_exposed() {
         let m = manifest(true);
         for r in m["routes"].as_array().unwrap() {
-            let path = r["path"].as_str().unwrap().replace("{id}", "5");
+            let path = r["path"].as_str().unwrap().replace("{id}", "5").replace("{party}", "5");
             assert!(route(r["method"].as_str().unwrap(), &path).is_some(), "Route {r} nicht umgesetzt");
             assert!(!r["features"].as_array().unwrap().is_empty(), "jede Route verlangt ein Recht");
         }
@@ -227,6 +245,9 @@ mod tests {
         assert_eq!(route("GET", "/backup"), Some(Op::Backup));
         assert_eq!(m["backup"], "/backup");
         assert_eq!(m["import"]["importable"], true);
+        assert_eq!(m["kind"], "intercom");
+        let roles: Vec<&str> = m["routes"].as_array().unwrap().iter().filter_map(|r| r["role"].as_str()).collect();
+        assert_eq!(roles, ["panels", "status", "deck.state", "deck.command"]);
         let ids: Vec<&str> = m["features"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
         assert_eq!(ids, [FEAT_USE, FEAT_ADMIN]);
     }

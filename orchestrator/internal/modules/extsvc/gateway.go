@@ -110,6 +110,8 @@ func (m *Module) Mount(r module.Routes, d module.Deps) error {
 	m.d, m.mounted = d, true
 	m.mu.Unlock()
 	m.loadCache()
+	r.Handle("GET /api/v1/ext", module.Authenticated(), m.discover)
+	r.Handle("GET /api/v1/ext/{svc}/_ui/{file...}", module.Anonymous(), m.serveUI)
 	r.Handle("GET /api/v1/ext/{svc}/{rest...}", module.Authenticated(), m.serve)
 	r.Handle("POST /api/v1/ext/{svc}/{rest...}", module.Authenticated(), m.serve)
 	r.Handle("PUT /api/v1/ext/{svc}/{rest...}", module.Authenticated(), m.serve)
@@ -314,7 +316,10 @@ func (m *Module) Features() []module.FeatureDef {
 func (m *Module) UI() []module.UITab {
 	var out []module.UITab
 	for _, mf := range m.manifests() {
-		out = append(out, mf.UI...)
+		for _, t := range mf.UI {
+			t.Bundle = mf.BundleURL(t.Bundle)
+			out = append(out, t)
+		}
 	}
 	return out
 }
@@ -322,7 +327,10 @@ func (m *Module) UI() []module.UITab {
 func (m *Module) Tiles() []module.UITile {
 	var out []module.UITile
 	for _, mf := range m.manifests() {
-		out = append(out, mf.Tiles...)
+		for _, t := range mf.Tiles {
+			t.Bundle = mf.BundleURL(t.Bundle)
+			out = append(out, t)
+		}
 	}
 	return out
 }
@@ -639,3 +647,70 @@ func (m *Module) importLegacy(ctx context.Context) {
 
 // RefreshForTest führt einen Abgleich sofort und synchron aus (für Tests außerhalb des Pakets).
 func (m *Module) RefreshForTest(ctx context.Context) { m.refresh(ctx) }
+
+// ---------- Entdeckung für Clients, Oberfläche des Dienstes ----------
+
+// Summary: ein Dienst, wie ihn Clients sehen (Typ und Rollen statt Produktname).
+type Summary struct {
+	Name string `json:"name"`
+	Kind string `json:"kind,omitempty"`
+	Live bool   `json:"live"`
+	// Roles: Rolle → Route (Methode und Pfad relativ zum Dienst; unter `/api/v1/ext/<name>` aufrufbar).
+	Roles map[string]RoleRoute `json:"roles,omitempty"`
+}
+
+type RoleRoute struct {
+	Method string `json:"method"`
+	Path   string `json:"path"`
+}
+
+// discover: GET /api/v1/ext — alle bekannten Dienste mit Typ, Rollen und Laufzustand. Die Stream-Deck-Anbindung und andere
+// Clients suchen darüber einen Dienst eines Typs (z. B. "intercom"), ohne den Produktnamen zu kennen.
+func (m *Module) discover(w http.ResponseWriter, r *http.Request) {
+	mfs := m.manifests()
+	m.mu.Lock()
+	liveNames := map[string]bool{}
+	for n := range m.live {
+		liveNames[n] = true
+	}
+	m.mu.Unlock()
+	out := make([]Summary, 0, len(mfs))
+	for _, mf := range mfs {
+		s := Summary{Name: mf.Name, Kind: mf.Kind, Live: liveNames[mf.Name], Roles: map[string]RoleRoute{}}
+		for _, rt := range mf.Routes {
+			if rt.Role != "" && m.can(r, rt.Features) {
+				s.Roles[rt.Role] = RoleRoute{Method: rt.Method, Path: rt.Path}
+			}
+		}
+		out = append(out, s)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// serveUI liefert Dateien aus der Oberfläche des Dienstes (Bundles der Admin-Tabs und Kacheln). Ohne Anmeldung, wie die
+// Bundles der Plattform: der Browser lädt sie per `import()` ohne Header; sie enthalten nur Code, keine Daten.
+func (m *Module) serveUI(w http.ResponseWriter, r *http.Request) {
+	name, file := r.PathValue("svc"), r.PathValue("file")
+	if file == "" || strings.Contains(file, "..") || strings.Contains(file, "\\") {
+		http.NotFound(w, r)
+		return
+	}
+	l, ok := m.pick(name)
+	if !ok {
+		http.Error(w, "Dienst läuft nicht", http.StatusServiceUnavailable)
+		return
+	}
+	resp, err := m.callNode(r.Context(), l, http.MethodGet, "/ui/"+file, nil, nil)
+	if err != nil {
+		http.Error(w, "Dienst nicht erreichbar", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = io.Copy(w, io.LimitReader(resp.Body, 8<<20))
+}

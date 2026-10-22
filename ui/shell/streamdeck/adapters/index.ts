@@ -1,12 +1,12 @@
 // Adapter-Auflösung (Kap. 40.4–40.6): eigener `streamDeck`-Adapter des Elements
 // → shell-seitige Fabrik nach Elementname (Video-Mixer: Bundle bietet `deckApi`;
-// Audio-Mixer: reine Proxy-API; X/Y-Panel: Kern-API Quellen/Senken/Graph) → keiner (Broker nimmt dann das Auto-Raster).
+// Audio-Mixer: reine Proxy-API; X/Y-Panel: Kern-API Quellen/Senken/Graph; Dienste wie das Intercom bringen ihren Adapter
+// selbst mit: Eigenschaft `streamDeck` ihres Elements) → keiner (Broker nimmt dann das Auto-Raster).
 
 import { adapterOf, type StreamDeckAdapter } from "../adapter.ts";
 import { proxyIO } from "../autoraster.ts";
 import { audioMixerAdapter } from "./audio-mixer.ts";
 import { deviceHubAdapter } from "./device-hub.ts";
-import { intercomAdapter } from "./intercom.ts";
 import { ografAdapter } from "./ograf.ts";
 import { coreIO, xyPanelAdapter } from "./xy-panel.ts";
 import { videoMixerAdapter, type VideoMixerApi } from "./video-mixer.ts";
@@ -22,8 +22,6 @@ const FACTORIES: Record<string, Factory | undefined> = {
   "omp-ograf-panel": (_el, nodeId) => ografAdapter(proxyIO(nodeId)),
   "omp-device-hub-panel": (_el, nodeId) => deviceHubAdapter(proxyIO(nodeId)),
   "omp-audio-mixer-panel": (_el, nodeId) => audioMixerAdapter(proxyIO(nodeId)),
-  // Intercom (Kap. 47.10): das Panel-Element nennt per `deckParty` die eigene Sprechstelle.
-  "omp-intercom-panel": (el, nodeId) => intercomAdapter(proxyIO(nodeId), () => (el as unknown as { deckParty?: number | null }).deckParty ?? null),
 };
 
 export function adapterFor(el: Element, nodeId: string): StreamDeckAdapter | null {
