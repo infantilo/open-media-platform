@@ -275,7 +275,7 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
       const self = nodes.find((n) => n.id === nodeId);
       const selfInstance = self && self.instance_id ? instances.find((i) => i.id === self.instance_id) : null;
       const isCamera = selfInstance && selfInstance.type === "omp-webrtc-gateway-camera";
-      retourRow.hidden = !isCamera;
+      if (retourRow.hidden === !!isCamera) retourRow.hidden = !isCamera;
       if (!isCamera) {
         monitorCandidates = [];
         void updateIntercomPicker(false);
@@ -290,11 +290,16 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
         .filter(Boolean);
 
       void updateIntercomPicker(true);
-      const prevValue = retourSelect.value;
-      retourSelect.innerHTML = "";
-      retourSelect.add(new Option(T("wrb.470692"), ""));
-      for (const c of monitorCandidates) retourSelect.add(new Option(c.label, c.nodeId));
-      if (monitorCandidates.some((c) => c.nodeId === prevValue)) retourSelect.value = prevValue;
+      // Nur bei geänderter Liste neu aufbauen: ein Neuaufbau alle 5 s schloss ein geöffnetes Auswahlfeld und verlor die Auswahl.
+      const retourSig = JSON.stringify(monitorCandidates.map((c) => [c.nodeId, c.label]));
+      if (retourSig !== retourSelect.dataset.sig) {
+        retourSelect.dataset.sig = retourSig;
+        const prevValue = retourSelect.value;
+        retourSelect.innerHTML = "";
+        retourSelect.add(new Option(T("wrb.470692"), ""));
+        for (const c of monitorCandidates) retourSelect.add(new Option(c.label, c.nodeId));
+        if (monitorCandidates.some((c) => c.nodeId === prevValue)) retourSelect.value = prevValue;
+      }
     };
 
     // Intercom-Paarung (Kapitel 50): den Intercom-Dienst über Typ und Rolle finden (nie über einen Produktnamen,
@@ -311,32 +316,41 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
       });
     };
     const updateIntercomPicker = async (isCamera) => {
+      // Sichtbarkeit nur einmal am Ende setzen (erst verstecken, dann zeigen ließ die Zeile bei jedem Poll flackern).
+      let show = false;
       intercom = null;
-      icRow.hidden = true;
-      if (!isCamera) return;
       try {
-        const r = await fetch("/api/v1/ext");
-        if (!r.ok) return;
-        const found = (await r.json()).find((s) => s.kind === "intercom" && s.live && s.roles && s.roles["guest.create"] && s.roles.channels);
-        if (!found) return;
-        intercom = found;
-        const cr = await icCall("channels");
-        if (!cr.ok) {
-          intercom = null;
-          return;
+        if (isCamera) {
+          const r = await fetch("/api/v1/ext");
+          const found = r.ok
+            ? (await r.json()).find((s) => s.kind === "intercom" && s.live && s.roles && s.roles["guest.create"] && s.roles.channels)
+            : null;
+          if (found) {
+            intercom = found;
+            const cr = await icCall("channels");
+            if (cr.ok) {
+              const channels = ((await cr.json()).channels || []).filter((c) => c.kind !== "ifb"); // IFB: Programmton mit Unterbrechung, kein Sprechkanal für Gäste
+              const sig = JSON.stringify(channels.map((c) => [c.id, c.name]));
+              if (sig !== icChannels.dataset.sig) { // nur bei geänderter Liste neu aufbauen (Auswahl bleibt)
+                icChannels.dataset.sig = sig;
+                const keep = new Set([...icChannels.selectedOptions].map((o) => o.value));
+                icChannels.innerHTML = "";
+                for (const c of channels) {
+                  const o = new Option(c.name, String(c.id));
+                  o.selected = keep.has(String(c.id));
+                  icChannels.add(o);
+                }
+              }
+              show = true;
+            } else {
+              intercom = null;
+            }
+          }
         }
-        const keep = new Set([...icChannels.selectedOptions].map((o) => o.value));
-        icChannels.innerHTML = "";
-        for (const c of (await cr.json()).channels || []) {
-          if (c.kind === "ifb") continue; // IFB ist Programmton mit Unterbrechung, kein Sprechkanal für Gäste
-          const o = new Option(c.name, String(c.id));
-          o.selected = keep.has(String(c.id));
-          icChannels.add(o);
-        }
-        icRow.hidden = false;
       } catch (_) {
         intercom = null; // ohne Intercom-Dienst läuft das Panel unverändert
       }
+      if (icRow.hidden === show) icRow.hidden = !show;
     };
 
     const inviteLink = (token) => {
@@ -350,7 +364,13 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
       return url;
     };
 
+    // Die Liste wird alle 5 s abgefragt, aber nur neu gezeichnet, wenn sich etwas geändert hat (sonst flackern die QR-Codes
+    // und die Seite „refresht“ ständig).
+    let lastRenderSig = "";
     const render = (invites) => {
+      const sig = JSON.stringify([invites, loadPairs(), baseUrlInput.value]);
+      if (sig === lastRenderSig) return;
+      lastRenderSig = sig;
       listEl.innerHTML = "";
       if (invites.length === 0) {
         const p = document.createElement("p");
