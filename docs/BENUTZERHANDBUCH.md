@@ -1604,7 +1604,7 @@ Das Intercom verbindet Menschen untereinander: **Kanäle** sind gemeinsame Sprec
 
 **Das Panel:**
 
-- Je Kanal eine Karte mit großer Sprechtaste: **Halten** = sprechen, solange gedrückt; **kurz tippen** = rasten (noch einmal tippen beendet). Am Rechner: Ziffern 1–9 halten = Kanal sprechen, **M** = Mikrofon stumm.
+- Je Kanal eine Karte mit großer Sprechtaste: **Halten** = sprechen, **nur solange gedrückt** — Loslassen beendet es sofort; auf dem Handy öffnet ein langer Druck kein System-Menü. Wer lieber rasten möchte, schaltet oben **Rasten** ein: dann schaltet ein kurzer Tipp das Sprechen an und der nächste aus. Am Rechner: Ziffern 1–9 halten = Kanal sprechen, **M** = Mikrofon stumm.
 - **Hören** schaltet einen Kanal weg, **Solo** hört nur diesen Kanal, **Pegel** und **Lage** (links/rechts) stellen die Mischung für Kopfhörer ein. Unter dem Kanal steht, wer gerade spricht.
 - **Mikrofon** (oben rechts) schaltet stumm. Ist das Mikrofon gesperrt (On Air oder durch die Regie), steht das ausdrücklich dort – ein Mikrofon ist nie heimlich stumm. **Nicht stören** hält Rufe fern (Regieplätze dürfen trotzdem durch).
 - **Rufen**: Beim Teilnehmer gedrückt halten, um ihn direkt anzusprechen – auch ohne gemeinsamen Kanal. Der Angerufene hört einen Rufton, sieht den Namen und kann mit **Antworten** zurückrufen. Ist er auf „Nicht stören“, meldet das Panel „nicht erreichbar“. **Alle rufen** (nur Regieplätze) spricht jeden Teilnehmer an.

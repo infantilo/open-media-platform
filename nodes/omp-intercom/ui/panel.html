@@ -8,7 +8,8 @@
 <style>
 :root{--bg:#080c16;--panel:#0f1522;--raised:#172033;--ink:#eaf0fa;--mute:#93a1ba;--line:#223049;--accent:#19d3f3;--talk:#e53935;--ok:#43a047;--warn:#fb8c00;
 --hi:#565d66;--m-light:#3d434b;--m-mid:#2b2f34;--m-dark:#1a1c1f;--glow:0 0 8px 1px rgba(229,57,53,.65);--font:system-ui,-apple-system,"Segoe UI",sans-serif}
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+img,a{-webkit-user-drag:none}
 [hidden]{display:none!important}
 html,body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.3 var(--font);touch-action:manipulation}
 body{padding:env(safe-area-inset-top) 10px env(safe-area-inset-bottom);max-width:980px;margin:0 auto}
@@ -74,6 +75,7 @@ html.embed .grid{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8
 <header>
   <span class="dot" id="conn" title=""></span>
   <h1 id="me">Intercom</h1>
+  <button id="latch" class="hb" aria-pressed="false" hidden></button>
   <button id="dnd" class="hb" aria-pressed="false" hidden></button>
   <button id="mute" class="hb" aria-pressed="false" hidden></button>
 </header>
@@ -94,15 +96,15 @@ html.embed .grid{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8
 (() => {
   const L = (navigator.language || 'de').startsWith('de') ? 'de' : 'en';
   const T = {
-    de: {intro:'Mikrofon und Kopfhörer bereithalten.', go:'Verbinden', mute:'Mikrofon', dnd:'Nicht stören', busy:'ist nicht erreichbar (Nicht stören)', reply:'Antworten', muted:'Mikrofon stumm', talk:'Sprechen', hold:'Halten = sprechen, Tippen = rasten', listen:'Hören', level:'Pegel', pan:'Lage', solo:'Solo', people:'Teilnehmer', call:'Rufen', all:'Alle rufen', hint:'Tasten 1–9: Kanal sprechen (halten) · M: Mikrofon stumm', offline:'offline', forced:'Mikrofon gesperrt', onair:'ON AIR', ring:'Ruf von', reconnect:'Verbindung verloren – verbinde neu …', noaudio:'Kein Mikrofonzugriff', badtoken:'Zugang ungültig oder abgelaufen', secure:'Mikrofon braucht HTTPS oder localhost.', speaking:'spricht'},
-    en: {intro:'Have your microphone and headphones ready.', go:'Connect', mute:'Microphone', dnd:'Do not disturb', busy:'is not available (do not disturb)', reply:'Reply', muted:'Microphone muted', talk:'Talk', hold:'Hold = talk, tap = latch', listen:'Listen', level:'Level', pan:'Pan', solo:'Solo', people:'Parties', call:'Call', all:'Call all', hint:'Keys 1–9: talk on channel (hold) · M: mute microphone', offline:'offline', forced:'Microphone locked', onair:'ON AIR', ring:'Call from', reconnect:'Connection lost – reconnecting …', noaudio:'No microphone access', badtoken:'Access invalid or expired', secure:'The microphone needs HTTPS or localhost.', speaking:'speaking'}
+    de: {intro:'Mikrofon und Kopfhörer bereithalten.', go:'Verbinden', mute:'Mikrofon', dnd:'Nicht stören', busy:'ist nicht erreichbar (Nicht stören)', reply:'Antworten', muted:'Mikrofon stumm', talk:'Sprechen', hold:'Halten = sprechen (loslassen beendet)', latch:'Rasten', latchTitle:'Rasten: Tippen schaltet das Sprechen ein und beim nächsten Tippen aus. Aus (Standard): nur sprechen, solange gedrückt.', listen:'Hören', level:'Pegel', pan:'Lage', solo:'Solo', people:'Teilnehmer', call:'Rufen', all:'Alle rufen', hint:'Tasten 1–9: Kanal sprechen (halten) · M: Mikrofon stumm', offline:'offline', forced:'Mikrofon gesperrt', onair:'ON AIR', ring:'Ruf von', reconnect:'Verbindung verloren – verbinde neu …', noaudio:'Kein Mikrofonzugriff', badtoken:'Zugang ungültig oder abgelaufen', secure:'Mikrofon braucht HTTPS oder localhost.', speaking:'spricht'},
+    en: {intro:'Have your microphone and headphones ready.', go:'Connect', mute:'Microphone', dnd:'Do not disturb', busy:'is not available (do not disturb)', reply:'Reply', muted:'Microphone muted', talk:'Talk', hold:'Hold = talk (release ends it)', latch:'Latch', latchTitle:'Latch: a tap turns talking on, the next tap off. Off (default): talk only while pressed.', listen:'Listen', level:'Level', pan:'Pan', solo:'Solo', people:'Parties', call:'Call', all:'Call all', hint:'Keys 1–9: talk on channel (hold) · M: mute microphone', offline:'offline', forced:'Microphone locked', onair:'ON AIR', ring:'Call from', reconnect:'Connection lost – reconnecting …', noaudio:'No microphone access', badtoken:'Access invalid or expired', secure:'The microphone needs HTTPS or localhost.', speaking:'speaking'}
   }[L];
   const $ = id => document.getElementById(id);
   const q = new URLSearchParams(location.search);
   const token = q.get('token') || '';
   document.documentElement.lang = L;
   if (q.get('embed')) document.documentElement.classList.add('embed');
-  $('intro').textContent = T.intro; $('go').textContent = T.go; $('mute').textContent = T.mute; $('dnd').textContent = T.dnd;
+  $('intro').textContent = T.intro; $('go').textContent = T.go; $('mute').textContent = T.mute; $('dnd').textContent = T.dnd; $('latch').textContent = T.latch; $('latch').title = T.latchTitle;
   $('hint').textContent = T.hint;
 
   let pc = null, dc = null, stream = null, state = null, closing = false, retry = 0, pingTimer = 0, lastRing = null;
@@ -150,7 +152,7 @@ html.embed .grid{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8
       stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
     } catch (e) { $('err').textContent = T.noaudio + ': ' + e.message; return; }
     try { await connect(); } catch (e) { $('err').textContent = e.message; return; }
-    $('start').hidden = true; $('app').hidden = false; $('mute').hidden = false; $('dnd').hidden = false;
+    $('start').hidden = true; $('app').hidden = false; $('mute').hidden = false; $('dnd').hidden = false; $('latch').hidden = false;
   };
 
   $('mute').onclick = () => { if (state && !state.me.forced) send({ t: 'mute', on: !state.me.muted }); };
@@ -171,28 +173,32 @@ html.embed .grid{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8
   const nameOf = id => (state.parties.find(p => p.id === id) || {}).name || '?';
   const esc = t => String(t).replace(/</g, '&lt;');
 
+  // Sprechen nur, solange gedrückt ist (Standard). „Rasten“ (Kopfzeile) schaltet auf Tippen = an/aus um.
+  let latchMode = false;
+  try { latchMode = localStorage.getItem('ic-latch') === '1'; } catch (e) {}
+  const releasers = new Set(); // alles, was gerade gehalten wird — wird bei Fokusverlust/Kontextmenü losgelassen
+  const releaseAll = () => { [...releasers].forEach(f => f()); };
   function talkButton(chId, el) {
     let down = 0;
     const set = on => send({ t: 'talk', ch: chId, on });
+    const release = () => { if (!down) return; const dur = performance.now() - down; down = 0; releasers.delete(abort); if (latchMode && dur < 250) latched.add(chId); else set(false); };
+    const abort = () => { if (!down) return; down = 0; releasers.delete(release); set(false); };
     el.addEventListener('pointerdown', ev => {
       ev.preventDefault(); el.setPointerCapture(ev.pointerId);
       if (latched.has(chId)) { latched.delete(chId); set(false); down = 0; return; }
-      down = performance.now(); set(true);
+      down = performance.now(); releasers.add(abort); set(true);
     });
-    el.addEventListener('pointerup', () => {
-      if (!down) return;
-      if (performance.now() - down < 250) latched.add(chId); else set(false);
-      down = 0;
-    });
-    el.addEventListener('pointercancel', () => { if (down) { down = 0; set(false); } });
+    el.addEventListener('pointerup', release);
+    el.addEventListener('pointercancel', abort);
+    el.addEventListener('lostpointercapture', abort);
   }
 
   // Halten-Taste (Rufen): drückt = an, loslassen = aus.
   function holdButton(el, start, stop) {
     let held = false;
-    el.addEventListener('pointerdown', ev => { ev.preventDefault(); el.setPointerCapture(ev.pointerId); held = true; start(); });
-    const end = () => { if (!held) return; held = false; stop(); };
-    el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
+    const end = () => { if (!held) return; held = false; releasers.delete(end); stop(); };
+    el.addEventListener('pointerdown', ev => { ev.preventDefault(); el.setPointerCapture(ev.pointerId); held = true; releasers.add(end); start(); });
+    el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end); el.addEventListener('lostpointercapture', end);
   }
 
   // ---- Layout: Seiten mit Tasten. Ohne Layout: alle Kanäle als Karten, danach Rufen/Alle ----
@@ -358,7 +364,18 @@ html.embed .grid{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8
     const n = parseInt(ev.key, 10);
     if (keysDown.has(n)) { keysDown.delete(n); const pc2 = state ? pageChannels() : []; if (pc2[n - 1]) send({ t: 'talk', ch: pc2[n - 1].id, on: false }); }
   });
-  addEventListener('pagehide', () => { closing = true; });
+  addEventListener('pagehide', () => { closing = true; releaseAll(); });
+  // Kein System-Menü beim langen Druck (Handy: Kontextmenü/Textauswahl), und nichts bleibt hängen, wenn die Seite den Fokus verliert.
+  addEventListener('contextmenu', ev => { ev.preventDefault(); releaseAll(); });
+  addEventListener('blur', releaseAll);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
+  const paintLatch = () => { $('latch').setAttribute('aria-pressed', String(latchMode)); };
+  $('latch').onclick = () => {
+    latchMode = !latchMode; try { localStorage.setItem('ic-latch', latchMode ? '1' : '0'); } catch (e) {}
+    if (!latchMode) { for (const id of [...latched]) { latched.delete(id); send({ t: 'talk', ch: id, on: false }); } }
+    paintLatch();
+  };
+  paintLatch();
 })();
 </script>
 </body>
