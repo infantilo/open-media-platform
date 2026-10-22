@@ -62,6 +62,12 @@ nav#pages button[aria-pressed=true]{transform:none}
 .knob span{font-size:9px;line-height:1;color:var(--mute);margin-top:1px;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}
 .knob.drag span{color:var(--accent)}
 .hint{color:var(--mute);font-size:11px;margin:12px 0}
+/* Eingebettet (z. B. in der Handy-Kamera-Seite, ?embed=1): kompakter, ohne Tastenhinweis */
+html.embed body{padding:0 4px;max-width:none}
+html.embed header{padding:4px 0}
+html.embed #start{padding:8px 0;gap:8px}
+html.embed .hint{display:none}
+html.embed .grid{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px 6px}
 </style>
 </head>
 <body>
@@ -95,6 +101,7 @@ nav#pages button[aria-pressed=true]{transform:none}
   const q = new URLSearchParams(location.search);
   const token = q.get('token') || '';
   document.documentElement.lang = L;
+  if (q.get('embed')) document.documentElement.classList.add('embed');
   $('intro').textContent = T.intro; $('go').textContent = T.go; $('mute').textContent = T.mute; $('dnd').textContent = T.dnd;
   $('hint').textContent = T.hint;
 

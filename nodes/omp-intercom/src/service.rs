@@ -5,6 +5,8 @@ use serde_json::{Value, json};
 
 pub const FEAT_USE: &str = "intercom.use";
 pub const FEAT_ADMIN: &str = "intercom.admin";
+/// Gast-Zugänge ausstellen und widerrufen (z. B. beim Einladen einer Handy-Kamera), ohne die Einrichtung zu verwalten.
+pub const FEAT_GUEST: &str = "intercom.guest";
 
 /// Header, die das Gateway setzt. Der Node vertraut ihnen nur mit gültigem Dienst-Geheimnis.
 pub const H_TOKEN: &str = "x-omp-service-token";
@@ -22,6 +24,8 @@ pub enum Op {
     GetConfig,
     PutConfig,
     Rotate(u32),
+    /// Vertragsrolle `channels`: Kanäle zur Auswahl (z. B. beim Einladen).
+    Channels,
     ListGuests,
     CreateGuest,
     DeleteGuest(u32),
@@ -47,6 +51,7 @@ pub fn route(method: &str, path: &str) -> Option<Op> {
         ("GET", ["config"]) => Op::GetConfig,
         ("PUT", ["config"]) => Op::PutConfig,
         ("POST", ["parties", p, "rotate-token"]) => Op::Rotate(id(p)?),
+        ("GET", ["channels"]) => Op::Channels,
         ("GET", ["guests"]) => Op::ListGuests,
         ("POST", ["guests"]) => Op::CreateGuest,
         ("DELETE", ["guests", g]) => Op::DeleteGuest(id(g)?),
@@ -179,6 +184,8 @@ pub fn manifest(importable: bool) -> Value {
         "features": [
             {"id": FEAT_USE, "group": grp, "label": l("Intercom nutzen", "Use intercom"),
              "description": l("Eigene Sprechstelle (Panel) öffnen und sprechen/hören.", "Open the own intercom panel and talk/listen.")},
+            {"id": FEAT_GUEST, "group": grp, "label": l("Intercom-Gäste einladen", "Invite intercom guests"),
+             "description": l("Befristete Gast-Zugänge ausstellen und widerrufen (z. B. für eine Handy-Kamera).", "Issue and revoke time-limited guest access (e.g. for a phone camera).")},
             {"id": FEAT_ADMIN, "group": grp, "label": l("Intercom einrichten", "Configure intercom"),
              "description": l("Kanäle, Teilnehmer, Rollenplätze und Gast-Zugänge verwalten.", "Manage channels, parties, seats and guest access.")},
         ],
@@ -187,8 +194,9 @@ pub fn manifest(importable: bool) -> Value {
             route("PUT", "/config", &[FEAT_ADMIN]),
             route("POST", "/parties/{id}/rotate-token", &[FEAT_ADMIN]),
             route("GET", "/guests", &[FEAT_ADMIN]),
-            route("POST", "/guests", &[FEAT_ADMIN]),
-            route("DELETE", "/guests/{id}", &[FEAT_ADMIN]),
+            role("POST", "/guests", &[FEAT_ADMIN, FEAT_GUEST], "guest.create"),
+            role("DELETE", "/guests/{id}", &[FEAT_ADMIN, FEAT_GUEST], "guest.revoke"),
+            role("GET", "/channels", &[FEAT_USE, FEAT_ADMIN, FEAT_GUEST], "channels"),
             role("GET", "/panels", &[FEAT_USE, FEAT_ADMIN], "panels"),
             role("GET", "/status", &[FEAT_USE, FEAT_ADMIN], "status"),
             role("GET", "/deck/{party}", &[FEAT_USE, FEAT_ADMIN], "deck.state"),
@@ -226,6 +234,7 @@ mod tests {
         assert_eq!(route("DELETE", "/guests/abc"), None);
         assert_eq!(route("GET", "/ui/admin.js"), Some(Op::Ui("admin.js".into())));
         assert_eq!(route("GET", "/ui/..%2fx"), None, "kein Ausbruch aus ui/");
+        assert_eq!(route("GET", "/channels"), Some(Op::Channels));
         assert_eq!(route("GET", "/deck/3"), Some(Op::DeckState(3)));
         assert_eq!(route("POST", "/deck/3/command"), Some(Op::DeckCommand(3)));
         assert_eq!(route("POST", "/deck/x/command"), None);
@@ -247,9 +256,9 @@ mod tests {
         assert_eq!(m["import"]["importable"], true);
         assert_eq!(m["kind"], "intercom");
         let roles: Vec<&str> = m["routes"].as_array().unwrap().iter().filter_map(|r| r["role"].as_str()).collect();
-        assert_eq!(roles, ["panels", "status", "deck.state", "deck.command"]);
+        assert_eq!(roles, ["guest.create", "guest.revoke", "channels", "panels", "status", "deck.state", "deck.command"]);
         let ids: Vec<&str> = m["features"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
-        assert_eq!(ids, [FEAT_USE, FEAT_ADMIN]);
+        assert_eq!(ids, [FEAT_USE, FEAT_GUEST, FEAT_ADMIN]);
     }
 
     #[test]

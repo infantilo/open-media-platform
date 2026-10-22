@@ -22,6 +22,9 @@ Funktionsrechte mit Präfix `<name>.` und die Routen mit **Rollen** (§2).
 | `status` | `GET /status` | ja | Betriebszustand (wer ist online) |
 | `deck.state` | `GET /deck/{party}` | nein | Zustand **einer** Sprechstelle für Anzeigen/Stream Deck |
 | `deck.command` | `POST /deck/{party}/command` | nein | Befehl an eine Sprechstelle |
+| `channels` | `GET /channels` | nein | Kanäle zur Auswahl (z. B. beim Einladen einer Handy-Kamera) |
+| `guest.create` | `POST /guests` | nein | befristeten Gast-Zugang ausstellen |
+| `guest.revoke` | `DELETE /guests/{id}` | nein | Gast-Zugang widerrufen |
 
 Die Pfade wählt die Implementierung; maßgeblich sind Rolle, Methode und die Anzahl der Platzhalter (`{party}` = Teilnehmer-ID).
 Clients finden die Route über `GET /api/v1/ext` (Typ `intercom`, `roles`), nie über einen festen Pfad oder Namen.
@@ -36,6 +39,10 @@ Clients finden die Route über `GET /api/v1/ext` (Typ `intercom`, `roles`), nie 
   "online":true,"speaking":false,"dnd":false}]}`.
 * `deck.command`: Körper = ein Befehl als JSON-Objekt mit Feld `t`: `talk {ch,on}`, `listen {ch,on}`, `level {ch,v}` (0…1,5),
   `pan {ch,v}` (−1…1), `solo {ch,on}`, `mute {on}`, `dnd {on}`, `call {to:[id…]|"all",on}`.
+* `channels`: `{"channels":[{"id":1,"name":"Regie","kind":"party"}]}` (`kind`: `party` | `ifb`).
+* `guest.create`: Körper `{"name":"Kamera 2","ttl_minutes":720,"routes":[{"ch":1,"talk":true,"listen":true}]}`, Antwort
+  `{"id":100000,"url":"https://…/panel?token=…","expires":"…","routes":[…]}` — die `url` öffnet eine Sprechstelle ohne Konto.
+  Sie darf mit `?embed=1` kompakt eingebettet werden (iframe, `allow="microphone; autoplay"`). Rechte: `<name>.guest` oder `.admin`.
 * Rechte: `deck.*` nur für Sprechstellen, die die Person bedienen darf (eigene bzw. mit Administrationsrecht alle).
 
 ## 3. Sicherheit (gilt für jeden Dienst)

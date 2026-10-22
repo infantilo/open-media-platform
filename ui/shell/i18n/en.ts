@@ -879,6 +879,7 @@ export const en: Record<keyof typeof de, string> = {
   "flow.f98ead": "Collapse zone",
   "flow.db1020": "Drag to resize",
   "flow.abd1ab": "Part of the currently shown trace (diagnostics cockpit, ARCHITECTURE.md §25.3).",
+  "flow.tallyFrom": "On air via: {p0}",
   "flow.25b847": "Standby (warm) — takes over automatically if the primary role fails (K7 part 4).",
   "flow.0fb497": "Stop instance",
   "flow.3c5208": "Stop workflow",

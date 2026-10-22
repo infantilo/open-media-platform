@@ -4,6 +4,11 @@ const T = (() => {
   const D = {
     de: {
         "x.retourTile": "+ Retourbild",
+        "x.icTile": "+ Intercom",
+        "x.icLabel": "Intercom mitsenden (optional)",
+        "x.icNone": "Kein Intercom",
+        "x.icHint": "Stellt einen befristeten Gast-Zugang aus (12 Stunden) und hängt die Sprechstelle an den Link; die Kamera-Seite zeigt sie unter dem Bild. Beim Widerrufen der Einladung wird der Zugang mit widerrufen.",
+        "x.icFail": "Intercom-Zugang konnte nicht angelegt werden: {p0}",
         "x.disconnect": "Trennen",
         "x.retourLbl": "{p0} (Retour)",
         "wrb.ada5c5": "Basis-URL fürs Handy\n        ",
@@ -29,6 +34,11 @@ const T = (() => {
     },
     en: {
         "x.retourTile": "+ Return feed",
+        "x.icTile": "+ Intercom",
+        "x.icLabel": "Include intercom (optional)",
+        "x.icNone": "No intercom",
+        "x.icHint": "Issues a time-limited guest access (12 hours) and attaches the station to the link; the camera page shows it below the picture. Revoking the invitation also revokes the access.",
+        "x.icFail": "Intercom access could not be created: {p0}",
         "x.disconnect": "Disconnect",
         "x.retourLbl": "{p0} (return)",
         "wrb.ada5c5": "Base URL for the phone\n        ",
@@ -154,6 +164,12 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
         </label>
         <div class="hint">${T("wrb.6e77cd")}</div>
       </div>
+      <div class="retour-row" id="ic-row" hidden>
+        <label>${T("x.icLabel")}
+          <select id="ic-channels" multiple size="3"></select>
+        </label>
+        <div class="hint">${T("x.icHint")}</div>
+      </div>
       <div class="add-row">
         <input type="text" id="new-label" placeholder="${T("wrb.028124")}">
         <button id="add">${T("wrb.5c3fbe")}</button>
@@ -170,6 +186,8 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
     const listEl = root.querySelector("#list");
     const retourRow = root.querySelector("#retour-row");
     const retourSelect = root.querySelector("#retour-node");
+    const icRow = root.querySelector("#ic-row");
+    const icChannels = root.querySelector("#ic-channels");
 
     const api = (path, opts) => fetch(`/api/v1/nodes/${nodeId}${path}`, opts);
 
@@ -260,6 +278,7 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
       retourRow.hidden = !isCamera;
       if (!isCamera) {
         monitorCandidates = [];
+        void updateIntercomPicker(false);
         return;
       }
       monitorCandidates = instances
@@ -270,6 +289,7 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
         })
         .filter(Boolean);
 
+      void updateIntercomPicker(true);
       const prevValue = retourSelect.value;
       retourSelect.innerHTML = "";
       retourSelect.add(new Option(T("wrb.470692"), ""));
@@ -277,12 +297,55 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
       if (monitorCandidates.some((c) => c.nodeId === prevValue)) retourSelect.value = prevValue;
     };
 
+    // Intercom-Paarung (Kapitel 50): den Intercom-Dienst über Typ und Rolle finden (nie über einen Produktnamen,
+    // docs/CONTRACT-INTERCOM.md) — nur auf einer KAMERA-Instanz und nur, wenn die Person Gäste einladen darf.
+    let intercom = null; // { name, roles }
+    const icCall = (role, params, body) => {
+      const rt = intercom.roles[role];
+      let path = rt.path;
+      for (const [k, v] of Object.entries(params || {})) path = path.replace(`{${k}}`, encodeURIComponent(String(v)));
+      return fetch(`/api/v1/ext/${intercom.name}${path}`, {
+        method: rt.method,
+        headers: body === undefined ? {} : { "Content-Type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    };
+    const updateIntercomPicker = async (isCamera) => {
+      intercom = null;
+      icRow.hidden = true;
+      if (!isCamera) return;
+      try {
+        const r = await fetch("/api/v1/ext");
+        if (!r.ok) return;
+        const found = (await r.json()).find((s) => s.kind === "intercom" && s.live && s.roles && s.roles["guest.create"] && s.roles.channels);
+        if (!found) return;
+        intercom = found;
+        const cr = await icCall("channels");
+        if (!cr.ok) {
+          intercom = null;
+          return;
+        }
+        const keep = new Set([...icChannels.selectedOptions].map((o) => o.value));
+        icChannels.innerHTML = "";
+        for (const c of (await cr.json()).channels || []) {
+          if (c.kind === "ifb") continue; // IFB ist Programmton mit Unterbrechung, kein Sprechkanal für Gäste
+          const o = new Option(c.name, String(c.id));
+          o.selected = keep.has(String(c.id));
+          icChannels.add(o);
+        }
+        icRow.hidden = false;
+      } catch (_) {
+        intercom = null; // ohne Intercom-Dienst läuft das Panel unverändert
+      }
+    };
+
     const inviteLink = (token) => {
       const base = baseUrlInput.value.trim().replace(/\/+$/, "");
       let url = `${base}/?token=${encodeURIComponent(token)}`;
       const pair = findPair(token);
       if (pair) {
-        url += `&monitorBase=${encodeURIComponent(pair.monitorBase)}&monitorToken=${encodeURIComponent(pair.monitorToken)}`;
+        if (pair.monitorBase) url += `&monitorBase=${encodeURIComponent(pair.monitorBase)}&monitorToken=${encodeURIComponent(pair.monitorToken)}`;
+        if (pair.icUrl) url += `&icUrl=${encodeURIComponent(pair.icUrl)}`;
       }
       return url;
     };
@@ -320,7 +383,7 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
         if (pair) {
           const retourDiv = document.createElement("div");
           retourDiv.className = "retour";
-          retourDiv.textContent = T("x.retourTile");
+          retourDiv.textContent = [pair.monitorBase ? T("x.retourTile") : "", pair.icUrl ? T("x.icTile") : ""].filter(Boolean).join(" ");
           meta.append(retourDiv);
         }
 
@@ -426,6 +489,29 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
         }
       }
 
+      // Intercom: Gast-Zugang ausstellen (Rolle guest.create) und die Sprechstelle an den Link hängen.
+      const icIds = intercom ? [...icChannels.selectedOptions].map((o) => Number(o.value)) : [];
+      if (intercom && icIds.length > 0) {
+        try {
+          const gr = await icCall("guest.create", {}, {
+            name: label || "Kamera",
+            ttl_minutes: 12 * 60,
+            routes: icIds.map((ch) => ({ ch, talk: true, listen: true })),
+          });
+          if (gr.ok) {
+            const guest = await gr.json();
+            let pair = findPair(invite.token);
+            if (!pair) pair = { token: invite.token };
+            else removePair(invite.token);
+            addPair({ ...pair, icService: intercom.name, icGuestId: guest.id, icUrl: guest.url });
+          } else {
+            showError(T("x.icFail", { p0: gr.status }));
+          }
+        } catch (e) {
+          showError(T("x.icFail", { p0: String(e) }));
+        }
+      }
+
       newLabelInput.value = "";
       await refresh();
     };
@@ -451,9 +537,16 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
         return;
       }
       const pair = findPair(token);
+      if (pair && pair.icGuestId && intercom) {
+        try {
+          await icCall("guest.revoke", { id: pair.icGuestId });
+        } catch {
+          // Best effort: ein verwaister Gast-Zugang läuft nach 12 Stunden von selbst ab.
+        }
+      }
       if (pair) {
         try {
-          await fetch(
+          if (pair.monitorNodeId) await fetch(
             `/api/v1/nodes/${pair.monitorNodeId}/invites?token=${encodeURIComponent(pair.monitorToken)}${disconnectQuery}`,
             { method: "DELETE" }
           );

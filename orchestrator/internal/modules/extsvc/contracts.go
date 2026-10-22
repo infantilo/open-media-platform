@@ -32,6 +32,10 @@ var Contracts = map[string]Contract{
 		"status":       {Method: "GET", Params: 0, Required: true},
 		"deck.state":   {Method: "GET", Params: 1},
 		"deck.command": {Method: "POST", Params: 1},
+		// Gäste (Kapitel 50, z. B. Handy-Kamera): Kanäle zur Auswahl, befristeten Zugang ausstellen/widerrufen.
+		"channels":     {Method: "GET", Params: 0},
+		"guest.create": {Method: "POST", Params: 0},
+		"guest.revoke": {Method: "DELETE", Params: 1},
 	},
 }
 
@@ -134,6 +138,19 @@ func CheckShape(kind, role string, body []byte) error {
 				return err
 			}
 		}
+	case "channels":
+		list, ok := v["channels"].([]any)
+		if !ok {
+			return fmt.Errorf("Feld \"channels\" (Liste) fehlt")
+		}
+		for i, e := range list {
+			o, _ := e.(map[string]any)
+			if err := need(o, fmt.Sprintf("channels[%d]", i), "id", "name"); err != nil {
+				return err
+			}
+		}
+	case "guest.create":
+		return need(v, "Gast", "id", "url", "expires")
 	case "deck.state":
 		if err := need(v, "Zustand", "me", "channels", "parties"); err != nil {
 			return err

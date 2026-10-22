@@ -89,6 +89,14 @@
   .tile-label { position:absolute; bottom:8px; left:10px; font-size:11px; font-weight:600; letter-spacing:.06em; color:#fff;
                 background:rgba(6,9,18,.7); padding:2px 9px; border-radius:10px; pointer-events:none; }
 
+  /* Intercom (eingebettetes Panel der Sprechstelle, ?icUrl=…) */
+  #icBox { margin:10px 12px; padding:8px; border:1px solid rgba(25,211,243,.25); border-radius:12px; background:rgba(6,9,18,.55); }
+  #icBox[hidden] { display:none; }
+  #icBox .icHead { display:flex; justify-content:space-between; align-items:center; font-size:12px; font-weight:700;
+                   letter-spacing:.06em; text-transform:uppercase; color:#cfe9ff; margin-bottom:6px; }
+  #icBox a { font-size:12px; font-weight:400; text-transform:none; letter-spacing:0; color:#19d3f3; }
+  #icFrame { width:100%; height:240px; border:0; border-radius:8px; background:#080c16; }
+
   /* Tally: roter Vollbild-Rahmen + "ON AIR", solange ein Auslöser (Mischer/Switcher) diese Kamera sendet. */
   #tallyFrame { position:fixed; inset:0; z-index:50; pointer-events:none; display:none; border:10px solid var(--onair);
                 box-shadow:inset 0 0 40px 6px rgba(229,57,53,.55); }
@@ -166,6 +174,10 @@
     <button id="stop" class="stop">Verbindung trennen</button>
     <button id="toggleStatus">Status</button>
   </div>
+  <div id="icBox" hidden>
+    <div class="icHead"><span id="icTitle">Intercom</span><a id="icOpen" target="_blank" rel="noopener">In neuem Tab öffnen</a></div>
+    <iframe id="icFrame" title="Intercom" allow="microphone; autoplay"></iframe>
+  </div>
   <div id="statusPanel">
     <div class="stats" id="stats">
       <div>Verbindung Kamera: <b id="conn" style="font-size:inherit">–</b></div>
@@ -192,6 +204,9 @@ const T = (() => {
         "pcam.b8bc7e": "Verbindung zum Server fehlgeschlagen (Code {p0}). Bitte erneut versuchen oder die Regie kontaktieren.",
         "pcam.9662ed": "Verbindung fehlgeschlagen. Bitte erneut versuchen oder die Regie kontaktieren.",
         "pcam.cd856c": "Diese Einladung bringt auch ein Retourbild mit — nach dem Verbinden erscheinen Kamera- und Retourbild nebeneinander.",
+        "pcam.icHint": "Diese Einladung bringt auch das Intercom mit — gesprochen wird dort; „Ton senden“ ist deshalb aus (das Handy-Mikrofon kann nur einer nutzen).",
+        "pcam.icTitle": "Intercom",
+        "pcam.icOpen": "In neuem Tab öffnen",
         "pcam.21da36": "Uhrenversatz {p0} ms (RTT {p1} ms) — Messfehler ≈ ±{p2} ms",
         "pcam.968f4f": "Kamera ",
         "pcam.77361b": "Kamera: ",
@@ -216,6 +231,9 @@ const T = (() => {
         "pcam.b8bc7e": "Connection to the server failed (code {p0}). Please try again or contact the control room.",
         "pcam.9662ed": "Connection failed. Please try again or contact the control room.",
         "pcam.cd856c": "This invitation also brings a return feed — after connecting, camera and return feed appear side by side.",
+        "pcam.icHint": "This invitation also brings the intercom — you talk there; “Send audio” is therefore off (the phone microphone can only be used by one).",
+        "pcam.icTitle": "Intercom",
+        "pcam.icOpen": "Open in new tab",
         "pcam.21da36": "Clock offset {p0} ms (RTT {p1} ms) — measurement error ≈ ±{p2} ms",
         "pcam.968f4f": "Camera ",
         "pcam.77361b": "Camera: ",
@@ -241,7 +259,7 @@ const T = (() => {
 // Statische Texte der Seite (Markup) per exaktem Textvergleich übersetzen.
 (() => {
   if (LANG !== "en") return;
-  const MAP = {"Auflösung": "Resolution", "Bereit": "Ready", "Bildrate": "Frame rate", "Kamera": "Camera", "Latenz Glas→Decoder:": "Latency glass→decoder:", "Latenz messen (Zeitstempel im Bild)": "Measure latency (timestamp in picture)", "Retourbild": "Return feed", "Standards. Technologie. Freiheit.": "Standards. Technology. Freedom.", "Status": "Status", "Ton senden": "Send audio", "Verbinden": "Connect", "Verbindung Kamera:": "Connection camera:", "Verbindung Retourbild:": "Connection return feed:", "Verbindung trennen": "Disconnect", "· Zuspielung": "· Contribution", "(Ø · max": "(avg · max", "ms)": "ms)"};
+  const MAP = {"Auflösung": "Resolution", "Bereit": "Ready", "Bildrate": "Frame rate", "Kamera": "Camera", "Latenz Glas→Decoder:": "Latency glass→decoder:", "Latenz messen (Zeitstempel im Bild)": "Measure latency (timestamp in picture)", "Retourbild": "Return feed", "In neuem Tab öffnen": "Open in new tab", "Standards. Technologie. Freiheit.": "Standards. Technology. Freedom.", "Status": "Status", "Ton senden": "Send audio", "Verbinden": "Connect", "Verbindung Kamera:": "Connection camera:", "Verbindung Retourbild:": "Connection return feed:", "Verbindung trennen": "Disconnect", "· Zuspielung": "· Contribution", "(Ø · max": "(avg · max", "ms)": "ms)"};
   document.documentElement.lang = "en";
   document.title = "OMP Camera";
   const walk = (n) => {
@@ -334,6 +352,11 @@ const whipUrl = '/whip' + (inviteToken ? '?token=' + encodeURIComponent(inviteTo
 const monitorBase = (params.get('monitorBase') || '').trim().replace(/\/+$/, '');
 const monitorToken = params.get('monitorToken') || '';
 const hasRetour = !!(monitorBase && monitorToken);
+// Intercom-Paarung (Kapitel 50): ein kombinierter Einladungslink trägt zusätzlich die URL der Sprechstelle (`icUrl`, Gast-
+// Zugang des Intercom-Dienstes). Sie wird nach dem Verbinden als kompaktes Panel eingebettet (?embed=1). Fehlt sie, läuft die
+// Seite unverändert.
+const icUrl = (params.get('icUrl') || '').trim();
+const hasIntercom = /^https?:\/\/[^\s]+$/i.test(icUrl);
 const whepUrl = hasRetour ? monitorBase + '/whep?token=' + encodeURIComponent(monitorToken) : '';
 
 let pc = null, camStream = null, sendStream = null, wakeLock = null, drawing = false, pollTimer = null;
@@ -343,9 +366,9 @@ let clockOffset = 0;
 // die Kulanzfrist nach `disconnected`, s. `connect()`s `onconnectionstatechange`.
 let disconnectGraceTimer = null;
 
-$('setupHint').textContent = hasRetour
-  ? T("pcam.cd856c")
-  : '';
+$('setupHint').textContent = [hasRetour ? T("pcam.cd856c") : '', hasIntercom ? T("pcam.icHint") : ''].filter(Boolean).join(' ');
+// Das Handy-Mikrofon kann nur eine Anwendung belegen: mit Intercom spricht man dort, die Kamera sendet nur Bild.
+if (hasIntercom) $('audio').checked = false;
 
 // ---- Uhrenabgleich (Messmodus): Versatz Handy-Uhr -> Server-Uhr, kleinste RTT gewinnt ----
 async function syncClock() {
@@ -477,6 +500,12 @@ async function start() {
     $('retourTile').hidden = !hasRetour;
     $('retourConnRow').hidden = !hasRetour;
     $('camLabel').hidden = !hasRetour; // nur bei zwei Kacheln braucht es Beschriftung, sonst eindeutig
+    if (hasIntercom) {
+      const ic = icUrl + (icUrl.includes('?') ? '&' : '?') + 'embed=1';
+      $('icFrame').src = ic;
+      $('icOpen').href = icUrl;
+      $('icBox').hidden = false;
+    }
     setLayout('split');
     $('latRow').hidden = !measure;
     try { wakeLock = await navigator.wakeLock?.request('screen'); } catch (_) {}
@@ -631,6 +660,7 @@ async function stop(quiet) {
   if (pc) { pc.close(); pc = null; }
   if (retourPc) { retourPc.close(); retourPc = null; }
   $('retourVideo').srcObject = null;
+  $('icFrame').src = 'about:blank'; $('icBox').hidden = true;
   for (const s of [camStream, sendStream]) s && s.getTracks().forEach((t) => t.stop());
   camStream = sendStream = null;
   try { await wakeLock?.release(); } catch (_) {}

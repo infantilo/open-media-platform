@@ -113,7 +113,7 @@ func main() {
 
 	// Rollen: Antworten in der Form des Vertrags.
 	partyID := *party
-	for _, role := range []string{"panels", "status", "deck.state", "deck.command"} {
+	for _, role := range []string{"panels", "status", "channels", "deck.state", "deck.command"} {
 		var rt *extsvc.RouteDef
 		for i := range mf.Routes {
 			if mf.Routes[i].Role == role {

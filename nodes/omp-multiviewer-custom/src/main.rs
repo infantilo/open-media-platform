@@ -723,7 +723,11 @@ async fn tally_loop(nats_url: String, pipeline: PipelineHandle, pip_node_ids: Ar
             return;
         }
     };
-    while let Some((node_id, on)) = subscription.next().await {
+    // Kapitel 51: mehrere Geber je Quelle — Gesamtzustand statt „letzter Geber gewinnt“.
+    let mut board = health::TallyBoard::new();
+    while let Some(event) = subscription.next_event().await {
+        let Some(on) = board.apply(&event) else { continue };
+        let node_id = event.target;
         let matching: Vec<String> = pip_node_ids
             .lock()
             .expect("lock poisoned")

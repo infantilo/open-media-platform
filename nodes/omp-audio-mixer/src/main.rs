@@ -3268,7 +3268,12 @@ async fn audio_follow_video_loop(
     // `fading`-Sperre, hier pro Kanal statt global).
     let ramp_generation: Arc<Mutex<HashMap<String, u64>>> = Arc::new(Mutex::new(HashMap::new()));
 
-    while let Some((node_id, on)) = subscription.next().await {
+    // Kapitel 51: je Quelle mehrere Geber möglich (z. B. zwei Bildmischer) — nur der Gesamtzustand zählt, ein „off“ eines
+    // Gebers darf die Quelle nicht abschalten, solange ein anderer sie noch auf Sendung hat.
+    let mut board = health::TallyBoard::new();
+    while let Some(event) = subscription.next_event().await {
+        let Some(on) = board.apply(&event) else { continue };
+        let node_id = event.target;
         // Video→Audio-Kontext (Kapitel 26): Quelle aktiv → Audio-Szene und
         // Automations-Ereignisse. Läuft zusätzlich zum bestehenden
         // Audio-Follow-Video (Mute/Crossfade je Kanal) und ersetzt es nicht.

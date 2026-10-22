@@ -544,3 +544,18 @@ func TestCheckShapeForTheIntercomContract(t *testing.T) {
 		t.Error("Typ ohne Formvorgabe")
 	}
 }
+
+func TestCheckShapeForGuestRoles(t *testing.T) {
+	if err := CheckShape("intercom", "channels", []byte(`{"channels":[{"id":1,"name":"Regie"}]}`)); err != nil {
+		t.Error(err)
+	}
+	if CheckShape("intercom", "channels", []byte(`{"channels":[{"name":"x"}]}`)) == nil {
+		t.Error("Kanal ohne id")
+	}
+	if err := CheckShape("intercom", "guest.create", []byte(`{"id":100000,"url":"https://x/panel?token=t","expires":"2026-10-22T20:00:00Z"}`)); err != nil {
+		t.Error(err)
+	}
+	if CheckShape("intercom", "guest.create", []byte(`{"id":1}`)) == nil {
+		t.Error("Gast ohne url")
+	}
+}

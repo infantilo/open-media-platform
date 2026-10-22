@@ -5,6 +5,7 @@
 // `deno test` geprüft) — dieses Modul bindet sie nur an DOM-/Fetch-/
 // EventSource-APIs.
 
+import { TallyBoard, tallyLabel } from "./tally-logic.ts";
 import { t as tt, tLoose } from "../shell/i18n.ts";
 import { promptDialog } from "../kit/omp-prompt.ts";
 import { ghostEntriesForZone, type GhostEntry, type PlanInput, type StartPlan, zoneForStoppedWorkflow } from "../shell/workflow-plan-logic.ts";
@@ -577,7 +578,8 @@ export class FlowCanvas extends HTMLElement {
   // `renameRole`-Doku in role-designer-logic.ts): Rollenkachel im
   // Bearbeiten-Modus, deren Name gerade per Doppelklick umbenannt wird.
   #editingWorkflowRoleName: string | null = null;
-  #tally: Record<string, boolean> = {};
+  /** Tally je Quelle und Geber (Kapitel 51): mehrere Mischer können dieselbe Quelle auf Sendung haben. */
+  #tally = new TallyBoard();
   // ARCHITECTURE.md §25.3 (UMSETZUNG.md D20) — s. #highlightTrace-Doku.
   #traceHighlightNodeIds: Set<string> | null = null;
   #drag: DragState | null = null;
@@ -858,6 +860,11 @@ export class FlowCanvas extends HTMLElement {
     }
 
     if (GRAPH_REFRESH_EVENT_TYPES.has(parsed.type)) {
+      // Ein entfernter Node als Tally-Geber meldet nicht mehr „off“ — seine Einträge fallen weg (sonst bliebe die Quelle rot).
+      if (parsed.type === "node.removed") {
+        const id = (parsed.data as { id?: string; nodeId?: string } | null)?.id ?? (parsed.data as { nodeId?: string } | null)?.nodeId;
+        if (id && this.#tally.dropGiver(id)) this.#render();
+      }
       this.#scheduleGraphRefresh();
       // Live-Fund 2026-09-11 (beim Verifizieren des #arrangeIntoLanes-
       // Fixes oben): eine frisch erschienene Instanz braucht ihre
@@ -878,8 +885,8 @@ export class FlowCanvas extends HTMLElement {
 
     if (parsed.type.startsWith(TALLY_EVENT_PREFIX)) {
       const nodeId = parsed.type.slice(TALLY_EVENT_PREFIX.length);
-      const on = (parsed.data as { on?: boolean } | null)?.on === true;
-      this.#setTally(nodeId, on);
+      const data = parsed.data as { on?: boolean; src?: string } | null;
+      this.#setTally(nodeId, data?.on === true, data?.src);
       return;
     }
 
@@ -937,13 +944,11 @@ export class FlowCanvas extends HTMLElement {
     }
   }
 
-  #setTally(nodeId: string, on: boolean) {
-    if (on) {
-      this.#tally[nodeId] = true;
-    } else {
-      delete this.#tally[nodeId];
-    }
-    this.#render();
+  #setTally(nodeId: string, on: boolean, src?: string | null) {
+    // Neu zeichnen auch, wenn nur die Geberliste wechselt (Anzahl/Tooltip), nicht nur der Gesamtzustand.
+    const before = this.#tally.givers(nodeId).join(",");
+    this.#tally.apply(nodeId, on, src);
+    if (this.#tally.givers(nodeId).join(",") !== before) this.#render();
   }
 
   #buildSkeleton() {
@@ -3697,7 +3702,7 @@ export class FlowCanvas extends HTMLElement {
     const pos = this.#positions[tile.id] ?? { x: 0, y: 0 };
     const height = this.#tileHeightById.get(tile.id) ?? nodeHeight(tile.inputs.length, tile.outputs.length);
     const selected = this.#selectedIds.has(tile.id);
-    const onTally = this.#tally[tile.id] === true;
+    const onTally = this.#tally.isOn(tile.id);
     const isGroup = tile.kind === "group";
     // ARCHITECTURE.md §25.3 (UMSETZUNG.md D20) — "Blast-Radius"-
     // Hervorhebung hat höchste Priorität (auch über Auswahl/Tally): sie
@@ -3888,6 +3893,25 @@ export class FlowCanvas extends HTMLElement {
         previewEl.setAttribute("y", String(height - PREVIEW_HEIGHT - 4));
         g.appendChild(previewEl);
       }
+    }
+
+    if (onTally) {
+      // Kapitel 51: wer hat die Quelle auf Sendung? Mitte der Kachel: „PGM“ bzw. „PGM ×2“, Geber im Tooltip.
+      const { badge, tooltip } = tallyLabel(this.#tally.givers(tile.id), (id) => this.#graph.nodes.find((n) => n.id === id)?.label);
+      const tag = document.createElementNS(SVG_NS, "text");
+      tag.setAttribute("x", String(NODE_WIDTH / 2));
+      tag.setAttribute("y", String(HEADER_HEIGHT + 14));
+      tag.setAttribute("text-anchor", "middle");
+      tag.setAttribute("font-size", "10");
+      tag.setAttribute("font-weight", "bold");
+      tag.setAttribute("fill", "#ffb4b4");
+      tag.textContent = `● ${badge}`;
+      if (tooltip) {
+        const tip = document.createElementNS(SVG_NS, "title");
+        tip.textContent = tt("flow.tallyFrom", { p0: tooltip });
+        tag.appendChild(tip);
+      }
+      g.appendChild(tag);
     }
 
     g.addEventListener("pointerdown", (ev) => this.#onTilePointerDown(ev, tile.id));

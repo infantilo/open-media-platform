@@ -67,6 +67,117 @@ pub struct TallyEvent {
     pub src: Option<String>,
 }
 
+/// Sammelt Tally-Ereignisse **je Geber** (Kapitel 51): eine Quelle kann von mehreren Gebern (z. B. zwei Bildmischern)
+/// gleichzeitig auf Sendung geschaltet sein. Sie gilt als „on“, solange mindestens ein Geber „on“ gemeldet hat — meldet ein
+/// Geber „off“, während ein anderer noch „on“ ist, bleibt sie an. Ereignisse ohne Geber (ältere Publisher) zählen als ein
+/// gemeinsamer, namenloser Geber.
+#[derive(Debug, Default)]
+pub struct TallyBoard {
+    givers: std::collections::HashMap<String, std::collections::BTreeSet<String>>,
+    /// Quellen, über die schon einmal etwas gemeldet wurde: das erste Ereignis ist immer eine Änderung (ein Konsument kennt
+    /// den Zustand der Quelle noch nicht — z. B. ein „off“ nach dem Neustart des Audiomischers muss ankommen).
+    seen: std::collections::HashSet<String>,
+}
+
+impl TallyBoard {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Übernimmt ein Ereignis. `Some(on)`, wenn sich der **Gesamtzustand** der Quelle geändert hat (erster Geber an /
+    /// letzter Geber aus), sonst `None` — Aufrufer müssen nur dann reagieren.
+    pub fn apply(&mut self, ev: &TallyEvent) -> Option<bool> {
+        let was = self.is_on(&ev.target);
+        let set = self.givers.entry(ev.target.clone()).or_default();
+        let giver = ev.src.clone().unwrap_or_default();
+        if ev.on {
+            set.insert(giver);
+        } else {
+            set.remove(&giver);
+        }
+        if set.is_empty() {
+            self.givers.remove(&ev.target);
+        }
+        let now = self.is_on(&ev.target);
+        let first = self.seen.insert(ev.target.clone());
+        (first || now != was).then_some(now)
+    }
+
+    pub fn is_on(&self, target: &str) -> bool {
+        self.givers.get(target).is_some_and(|s| !s.is_empty())
+    }
+
+    /// Geber, die die Quelle gerade auf Sendung haben (Node-IDs; `""` = unbekannter Geber), sortiert.
+    pub fn givers(&self, target: &str) -> Vec<String> {
+        self.givers.get(target).map(|s| s.iter().cloned().collect()).unwrap_or_default()
+    }
+
+    /// Ein Geber ist verschwunden (Node beendet, ohne „off“ zu senden): alle seine Einträge entfernen. Liefert die Quellen,
+    /// deren Gesamtzustand dadurch auf „off“ fiel.
+    pub fn drop_giver(&mut self, giver: &str) -> Vec<String> {
+        let mut went_off = Vec::new();
+        self.givers.retain(|target, set| {
+            if set.remove(giver) && set.is_empty() {
+                went_off.push(target.clone());
+            }
+            !set.is_empty()
+        });
+        went_off
+    }
+}
+
+#[cfg(test)]
+mod tally_board_tests {
+    use super::*;
+
+    fn ev(target: &str, on: bool, src: Option<&str>) -> TallyEvent {
+        TallyEvent { target: target.into(), on, src: src.map(str::to_string) }
+    }
+
+    #[test]
+    fn two_givers_one_source_stays_on_until_the_last_one_drops() {
+        let mut b = TallyBoard::new();
+        assert_eq!(b.apply(&ev("cam", true, Some("mixA"))), Some(true));
+        assert_eq!(b.apply(&ev("cam", true, Some("mixB"))), None, "schon an: keine Änderung");
+        assert_eq!(b.givers("cam"), ["mixA", "mixB"]);
+        assert_eq!(b.apply(&ev("cam", false, Some("mixA"))), None, "mixB hält die Quelle noch auf Sendung");
+        assert!(b.is_on("cam"));
+        assert_eq!(b.apply(&ev("cam", false, Some("mixB"))), Some(false));
+        assert!(!b.is_on("cam"));
+        assert!(b.givers("cam").is_empty());
+    }
+
+    #[test]
+    fn repeated_events_and_unknown_off_are_harmless() {
+        let mut b = TallyBoard::new();
+        assert_eq!(b.apply(&ev("cam", false, Some("x"))), Some(false), "erste Meldung zu einer Quelle kommt immer an");
+        assert_eq!(b.apply(&ev("cam", false, Some("x"))), None);
+        assert_eq!(b.apply(&ev("cam", true, Some("x"))), Some(true));
+        assert_eq!(b.apply(&ev("cam", true, Some("x"))), None);
+    }
+
+    #[test]
+    fn publishers_without_giver_count_as_one_anonymous_giver() {
+        let mut b = TallyBoard::new();
+        assert_eq!(b.apply(&ev("cam", true, None)), Some(true));
+        assert_eq!(b.apply(&ev("cam", true, Some("mixB"))), None);
+        assert_eq!(b.apply(&ev("cam", false, None)), None);
+        assert_eq!(b.givers("cam"), ["mixB"]);
+    }
+
+    #[test]
+    fn sources_are_independent_and_a_vanished_giver_is_dropped() {
+        let mut b = TallyBoard::new();
+        b.apply(&ev("cam1", true, Some("mixA")));
+        b.apply(&ev("cam2", true, Some("mixA")));
+        b.apply(&ev("cam2", true, Some("mixB")));
+        let mut off = b.drop_giver("mixA");
+        off.sort();
+        assert_eq!(off, ["cam1"], "cam2 bleibt durch mixB an");
+        assert!(!b.is_on("cam1") && b.is_on("cam2"));
+    }
+}
+
 /// Auf `omp.player.<node_id>.itemEnded` veröffentlicht (K2-Teil-1,
 /// `docs/END-GOAL-FEATURES.md` §2.3 "EOS wird erstklassig") — ein
 /// `omp-player`-Node meldet damit, dass die Essenz des zuletzt genommenen

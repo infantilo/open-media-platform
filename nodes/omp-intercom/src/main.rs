@@ -252,6 +252,16 @@ impl Store {
                     Err(e) => reply(Self::admin_err(e)),
                 }
             }
+            service::Op::Channels => {
+                let adm = self.admin.lock().expect("lock poisoned");
+                let list: Vec<Value> = adm
+                    .cfg
+                    .channels
+                    .iter()
+                    .map(|c| json!({"id": c.id, "name": c.name, "kind": if c.kind.is_empty() { "party" } else { c.kind.as_str() }, "color": c.color}))
+                    .collect();
+                reply(json_resp(200, json!({"channels": list})))
+            }
             service::Op::ListGuests => {
                 let adm = self.admin.lock().expect("lock poisoned");
                 let out: Vec<Value> = adm.cfg.active_guests(admin::now_secs()).into_iter().map(|g| Self::guest_out(req, g)).collect();

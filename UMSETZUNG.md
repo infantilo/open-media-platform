@@ -5602,3 +5602,26 @@ Entscheidungen des Nutzers: Standards der „Offenen Entscheidungen“ gelten (k
 
 **Rollout:** Orchestrator neu starten (Gateway: `kind`, `_ui`, Discovery), danach Intercom-Node neu starten (neue Oberfläche, Rollen). Bis dahin liefert das laufende Gateway das alte Manifest mit `/dist`-Bundle weiter.
 
+
+## Kapitel 50: Intercom in der Handy-Kamera-Seite (Nutzerauftrag 2026-10-22, **umgesetzt, lokal; Orchestrator + Nodes neu starten**)
+
+**Wunsch:** Wer mit dem Handy als Kamera sendet, soll auch das Intercom nutzen können („wie würde das gehen?“).
+
+**Lösung:** Die Kamera-Einladung (Link/QR) trägt zusätzlich den Zugang zu einer Intercom-Sprechstelle (`icUrl`), ganz wie das bestehende Retourbild (`monitorBase`/`monitorToken`). Die Kamera-Seite (`omp-webrtc-gateway/src/camera.html`) bettet nach dem Verbinden das **kompakte Panel** (`/panel?token=…&embed=1`) darunter ein. Alles läuft über den Intercom-**Vertrag** (Kapitel 49), nie über einen Produktnamen: der Einladungsdialog findet den Dienst über `GET /api/v1/ext` (Typ `intercom`, Rollen `channels` und `guest.create`), wählt Kanäle (IFB ausgenommen), stellt einen **befristeten Gast-Zugang** (12 h) aus und widerruft ihn mit der Einladung (`guest.revoke`).
+
+| Schritt | Stand |
+|---|---|
+| 50.1 Vertrag erweitert | **erledigt**: Rollen `channels`, `guest.create`, `guest.revoke` (Contracts, `CheckShape`, `serviceconformance`); neues Funktionsrecht `intercom.guest` („Intercom-Gäste einladen“, ohne Einrichtungsrecht); Node-Route `GET /service/channels`; Panel-Modus `?embed=1` (kompakt). |
+| 50.2 Kamera-Seite | **erledigt**: `icUrl` → Intercom-Kasten mit Panel-iframe (Mikrofon erlaubt) + „In neuem Tab öffnen“; „Ton senden“ wird mit Intercom **abgewählt** (das Handy-Mikrofon kann nur eine Anwendung belegen); beim Trennen wird das Panel entladen. Ohne `icUrl` unverändert. |
+| 50.3 Einladungsdialog | **erledigt** (`omp-webrtc-gateway/ui/bundle.js`): Mehrfachauswahl „Intercom mitsenden“ (nur auf Kamera-Instanzen, nur wenn ein laufender Intercom-Dienst die Rollen anbietet), Link bekommt `&icUrl=…`, Widerruf entfernt den Gast; Paarung wie beim Retourbild im `localStorage` dieses Browsers. |
+
+**Geprüft:** Intercom-Node + Kamera-Gateway als eigene Prozesse, Headless-Chromium mit Fake-Kamera: Seite mit `icUrl` → „Ton senden“ aus, Hinweis sichtbar, nach dem Verbinden Panel eingebettet (Screenshot), Kanalliste/Gast-Zugang per Dienst-API. **Nicht geprüft (echtes Handy nötig):** Mikrofon in iOS/Android-iframe bei gleichzeitiger Kamera; Zertifikat des Intercom-Ports (anderer Port als die Kamera-Seite — bei selbst signiertem HTTPS muss es einmal bestätigt werden, sonst bleibt der Rahmen leer → Link „In neuem Tab öffnen“); der ganze Weg über Orchestrator/Gateway im Browser (Einladungsdialog).
+
+## Kapitel 51: Tally mit mehreren Gebern (Nutzerfrage 2026-10-22, **umgesetzt, lokal**)
+
+**Frage:** Kennen wir den Tally-Geber, und was, wenn eine Quelle von mehreren Gebern (zwei Bildmischer) auf Sendung ist?
+
+**Befund:** Der Geber steht auf dem Bus (`omp.tally.<quelle>` = `{on, src}`, `src` = Node des Gebers; `NodeHandle::publish_tally` setzt ihn). Handy-Kamera-Seite und Intercom werteten ihn schon je Geber aus. **Fehler** bei Konsumenten, die `src` ignorierten („letztes Ereignis gewinnt“): Flow-Editor-Kachel, Audiomischer (Audio folgt Video) und Multiviewer — meldete Mischer A „off“, während Mischer B die Quelle noch sendete, wurde sie dunkel bzw. das Audio schaltete ab. Die Anzeige nannte den Geber nirgends.
+
+**Umsetzung:** `omp_node_sdk::health::TallyBoard` (Rust) und `ui/graph/tally-logic.ts` (TypeScript): Zustand je Quelle **und Geber**, „on“ solange mindestens ein Geber „on“ gemeldet hat; Ereignisse ohne Geber zählen als ein namenloser Geber; die erste Meldung zu einer Quelle kommt immer an (ein „off“ nach Neustart des Audiomischers); `drop_giver` für verschwundene Geber. Audiomischer und Multiviewer reagieren nur auf Änderungen des Gesamtzustands. Flow-Editor: Kachel zeigt „● PGM“ bzw. „● PGM ×2“ mittig, Tooltip „Auf Sendung durch: <Geber>“; ein entfernter Node (`node.removed`) fällt als Geber heraus. Tests: 4 Rust-, 4 Deno-Tests. **Nicht live geprüft** (kein zweiter Mischer im Stack); Audiomischer/Multiviewer brauchen Neustart der Instanzen.
+

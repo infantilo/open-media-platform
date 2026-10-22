@@ -878,6 +878,7 @@ export const de = {
   "flow.f98ead": "Zone einklappen",
   "flow.db1020": "Breite ziehen",
   "flow.abd1ab": "Teil des gerade angezeigten Traces (Diagnose-Cockpit, ARCHITECTURE.md §25.3).",
+  "flow.tallyFrom": "Auf Sendung durch: {p0}",
   "flow.25b847": "Standby (warm) — übernimmt automatisch, wenn die Primärrolle ausfällt (K7 Teil 4).",
   "flow.0fb497": "Instanz stoppen",
   "flow.3c5208": "Workflow stoppen",
