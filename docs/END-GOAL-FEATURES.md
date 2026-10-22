@@ -4286,3 +4286,85 @@ aufgeräumt (Prozesse beendet, Container gestoppt, MXL-Flows entfernt).
 Muster, keine neuen. **Nicht Teil dieser Runde** (unverändert seit
 20.3): Host-Inventar/Placement-Claim-Release (§6.1), Interlace-Modi,
 PTP-Kartentakt als Pipeline-Clock. **Phase:** `UMSETZUNG.md` D10 Teil 2.
+
+### 20.5 DeckLink IP: Recherche und Korrektur (2026-10-22)
+
+> Nutzerhinweis: DeckLink-IP-Karten sind Duplex. Recherche gegen das DeckLink
+> SDK Manual (März 2026), die Blackmagic-Produktseite und die Desktop-Video-
+> Notizen.
+
+**Korrektur zu 20.1:** Der dortige Satz „Netzwerk-Transportparameter einer
+IP-Karte sind nicht zugänglich“ galt nur für den GStreamer-Weg und ist als
+Gesamtaussage **überholt**. Seit SDK/Desktop Video 16 gibt es dafür eigene
+SDK-Schnittstellen (unten); GStreamers `decklink`-Plugin (gst-plugins-bad,
+hier 1.22.0, Header-Stand SDK 11.x) kennt sie weiterhin nicht.
+
+**Modelle (Produktseite):** DeckLink IP HD (RJ45, 2 Kanäle, bis 1080p60),
+IP HD Optical (SFP), IP/SDI HD (RJ45 + 3G-SDI + Ref-Ausgang), IP 100G (2× QSFP,
+bis 8 UHD-Kanäle, 2160p60, IP10-Codec). Standards: ST 2110-20/-21/-30/-40, PTP,
+**NMOS IS-04/IS-05**. Alle Modelle erfassen und geben **gleichzeitig** aus
+(Duplex); `bmdDuplexFull` = „simultaneous playback and capture“
+(SDK-Handbuch 3.60).
+
+**Architektur der Karte (wichtig für unseren Zuschnitt):**
+- Die Karte betreibt einen **eigenen IP-Stack**; der Host hat für den
+  Medienport **keine** Netzwerkschnittstelle. Bild und Ton kommen wie bei SDI
+  über PCIe in die normale Capture-/Playback-API (`IDeckLinkInput`/
+  `IDeckLinkOutput`) — also über dieselben GStreamer-Elemente
+  `decklinkvideosrc`/`-sink`, `decklinkaudiosrc`/`-sink`.
+- Der 2110-Teil (Multicast, SDP, PTP) läuft **auf der Karte**. Deshalb ist
+  `omp-2110-gateway` (Software-2110 über die Host-NIC) für diese Karten
+  **nicht** der richtige Weg und wird nicht umgebaut; er bleibt für Hosts ohne
+  2110-Hardware.
+- Ansteuern der 2110-Flows geht auf zwei Wegen: (1) **NMOS** — die Karte
+  registriert sich selbst als IS-04-Node (Registry per mDNS oder, ab Desktop
+  Video 16.4, **manuell eingetragene Registry-Adresse**) und nimmt IS-05-
+  Verbindungen an; das SDK-Handbuch nennt ausdrücklich, dass sich dasselbe
+  „mit einem handelsüblichen NMOS-Controller“ erreichen lässt. (2) **SDK**:
+  `IDeckLinkIPExtensions` → `GetDeckLinkIPFlowIterator`/`GetIPFlowByID` →
+  `IDeckLinkIPFlow` (je Flow `Enable`/`Disable`); Attribute
+  `bmdDeckLinkIPFlowDirection` (Input/Output), `…Type` (Video/Audio/
+  Ancillary), Status `bmdDeckLinkIPFlowSDP` (SDP, das die Karte sendet),
+  Einstellung `bmdDeckLinkIPFlowPeerSDP` (SDP der Gegenstelle, ≤ 1000 Byte).
+  Senderseite: SDP erst lesen, **nachdem** die Wiedergabe über
+  `IDeckLinkOutput` aktiviert wurde; Empfängerseite: Peer-SDP schreiben,
+  **bevor** die Erfassung über `IDeckLinkInput` startet. Laut einer
+  Drittbibliothek (pydecklink, nicht offiziell) meldet die Karte bei einer
+  abgelehnten SDP trotzdem Erfolg und behält die alte — nach dem Schreiben
+  zurücklesen. Änderungen kommen als Benachrichtigung `bmdIPFlowStatusChanged`/
+  `bmdIPFlowSettingChanged`.
+- Netz-/PTP-Konfiguration je Ethernet-Anschluss und gerätweit über
+  `IDeckLinkConfiguration`: `bmdDeckLinkConfigParamEthernetUseDHCP`,
+  `…StaticLocalIPAddress/SubnetMask/GatewayIPAddress/PrimaryDNS`,
+  Ausgangsadressen je Essenz (`…VideoOutputAddress`, `…AudioOutputAddress`,
+  `…AncillaryOutputAddress`), `bmdDeckLinkConfigEthernetPTPDomain/Priority1/
+  Priority2/FollowerOnly/UseUDPEncapsulation/LogAnnounceInterval`,
+  `…UseManualNMOSRegistry` + `…NMOSRegistryAddress`,
+  `…AudioOutputChannelOrder`. Status: `bmdDeckLinkStatusParamEthernetLink/
+  LinkMbps/LocalIPAddress/SubnetMask`, `…EthernetPTPGrandmasterIdentity`,
+  `…EthernetCurrentNMOSRegistry`, Statistik (PTP-Lock-Verluste, DPLL-Fehler,
+  Pakete/Verluste je Anschluss, Temperatur, Optikmodul).
+- Treiber: Desktop Video ≥ 16.0 (aktuell 16.4, August 2026) mit Kernelmodul
+  und `libDeckLinkAPI.so`. Das SDK ist frei, aber hinter einer Anmeldung bei
+  Blackmagic — es lässt sich nicht automatisch herunterladen und wird nicht
+  ins Repository kopiert.
+
+**Duplex — was sich im Code ändert:** `omp-decklink` ging bisher davon aus,
+dieselbe Karte könne nicht zugleich von einer Ingest- und einer Output-Instanz
+belegt werden. Das gilt nur für Half-Duplex-Profile. Für IP-Karten und SDI-
+Profile `*-full` ist je **eine Instanz pro Richtung auf derselben Karte** der
+vorgesehene Betrieb (beide öffnen dieselbe Karte; GStreamer teilt das Gerät
+zwischen Quelle und Senke). Neu: `OMP_DECKLINK_PERSISTENT_ID` (stabile
+Karten-ID, Vorrang vor der Gerätenummer — bei mehreren Karten sonst von der
+Enumerationsreihenfolge abhängig) und `OMP_DECKLINK_PROFILE` (GStreamer-Enum
+`GstDecklinkProfileId`, gegen die Liste geprüft; `default` ändert nichts).
+Beides gilt für alle vier Elemente und steht im Optionen-Katalog.
+**Nicht getestet** (keine Karte auf dieser Maschine): nur Build, Unit-Tests und
+die Ablehnung ungültiger Werte.
+
+**Noch nicht gebaut (Entscheidung offen):** (a) Konfig-/Status-Zugang über das
+SDK (IP-Adresse, PTP-Domain, Registry-Adresse, Link/PTP-Lock) als optionale
+C++-Schicht gegen die SDK-Header (Pfad zur Build-Zeit, keine Header im Repo);
+(b) Kartenstatus im Node (`ptpLocked`, `linkMbps`, Grandmaster); (c) 2110-
+Verbindungen der Karte über den vorhandenen IS-05-Flow-Editor, sobald die Karte
+in unserer Registry steht (Registry-Adresse an der Karte eintragen).
