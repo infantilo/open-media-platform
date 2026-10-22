@@ -92,9 +92,17 @@ fn detector_alive(sh: &ChannelShared, now: u64) -> bool {
 
 fn resolve<'a>(cfg: &'a EngineConfig, sel: &str) -> Vec<&'a str> {
     if let Some(g) = sel.strip_prefix("group:") {
-        cfg.chans.iter().filter(|c| c.group == g).map(|c| c.id.as_str()).collect()
+        cfg.chans
+            .iter()
+            .filter(|c| c.group == g)
+            .map(|c| c.id.as_str())
+            .collect()
     } else {
-        cfg.chans.iter().filter(|c| c.id == sel).map(|c| c.id.as_str()).collect()
+        cfg.chans
+            .iter()
+            .filter(|c| c.id == sel)
+            .map(|c| c.id.as_str())
+            .collect()
     }
 }
 
@@ -122,31 +130,56 @@ impl EngineState {
         shared: &HashMap<String, Arc<ChannelShared>>,
     ) -> Vec<rules::Event> {
         // Gruppen-Fader/-Mute + Lebenszeichen.
-        let group_of = |id: &str| cfg.chans.iter().find(|c| c.id == id).map(|c| c.group.as_str()).unwrap_or("");
+        let group_of = |id: &str| {
+            cfg.chans
+                .iter()
+                .find(|c| c.id == id)
+                .map(|c| c.group.as_str())
+                .unwrap_or("")
+        };
         for (id, sh) in shared {
             let g = cfg.groups.iter().find(|g| g.id == group_of(id));
             sh.group_db.set(g.map_or(0.0, |g| g.gain_db as f32));
-            sh.group_muted.store(g.is_some_and(|g| g.muted), Ordering::Relaxed);
-            sh.main_route.store(cfg.chans.iter().find(|c| &c.id == id).is_none_or(|c| c.routed), Ordering::Relaxed);
+            sh.group_muted
+                .store(g.is_some_and(|g| g.muted), Ordering::Relaxed);
+            sh.main_route.store(
+                cfg.chans
+                    .iter()
+                    .find(|c| &c.id == id)
+                    .is_none_or(|c| c.routed),
+                Ordering::Relaxed,
+            );
             sh.engine_beat_ms.store(now, Ordering::Relaxed);
         }
 
         // ───── AutoMix je Gruppe ─────
         let mut covered: HashSet<&str> = HashSet::new();
-        self.automix.retain(|gid, _| cfg.groups.iter().any(|g| &g.id == gid && g.automix.enabled));
+        self.automix
+            .retain(|gid, _| cfg.groups.iter().any(|g| &g.id == gid && g.automix.enabled));
         for g in cfg.groups.iter().filter(|g| g.automix.enabled) {
-            let members: Vec<&ChanCfg> = cfg.chans.iter().filter(|c| c.group == g.id && shared.contains_key(&c.id)).collect();
+            let members: Vec<&ChanCfg> = cfg
+                .chans
+                .iter()
+                .filter(|c| c.group == g.id && shared.contains_key(&c.id))
+                .collect();
             let ins: Vec<(String, AutoMixIn)> = members
                 .iter()
                 .map(|c| {
                     let sh = &shared[&c.id];
                     let alive = detector_alive(sh, now);
-                    let participate =
-                        c.am_enabled && !c.manual && alive && !sh.muted.load(Ordering::Relaxed) && !g.muted;
+                    let participate = c.am_enabled
+                        && !c.manual
+                        && alive
+                        && !sh.muted.load(Ordering::Relaxed)
+                        && !g.muted;
                     (
                         c.id.clone(),
                         AutoMixIn {
-                            level_db: if alive { detector_db(sh, g.automix.detector) } else { SILENCE_DB },
+                            level_db: if alive {
+                                detector_db(sh, g.automix.detector)
+                            } else {
+                                SILENCE_DB
+                            },
                             weight: c.weight,
                             priority: c.priority,
                             sensitivity_db: c.sensitivity_db,
@@ -167,14 +200,22 @@ impl EngineState {
                 continue;
             }
             // Kein aktives AutoMix: Anteil sanft (τ 100 ms) auf 0 dB.
-            let cur = *self.free_auto.entry(id.clone()).or_insert(sh.auto_db.get() as f64);
-            let next = if cur.abs() < 0.01 { 0.0 } else { cur * (-dt_ms / 100.0).exp() };
+            let cur = *self
+                .free_auto
+                .entry(id.clone())
+                .or_insert(sh.auto_db.get() as f64);
+            let next = if cur.abs() < 0.01 {
+                0.0
+            } else {
+                cur * (-dt_ms / 100.0).exp()
+            };
             self.free_auto.insert(id.clone(), next);
             sh.auto_db.set(next as f32);
         }
 
         // ───── Ducking je Regel ─────
-        self.ducks.retain(|rid, _| cfg.ducks.iter().any(|d| &d.id == rid));
+        self.ducks
+            .retain(|rid, _| cfg.ducks.iter().any(|d| &d.id == rid));
         self.duck_cur.retain(|id, _| shared.contains_key(id));
         let mut acc: HashMap<&str, Vec<(f64, f64)>> = HashMap::new();
         for rule in &cfg.ducks {
@@ -182,7 +223,9 @@ impl EngineState {
             let mut key_level = SILENCE_DB;
             if rule.enabled {
                 for k in &keys {
-                    let (Some(sh), Some(c)) = (shared.get(*k), cfg.chans.iter().find(|c| c.id == *k)) else {
+                    let (Some(sh), Some(c)) =
+                        (shared.get(*k), cfg.chans.iter().find(|c| c.id == *k))
+                    else {
                         continue;
                     };
                     // Nur hörbare Keys: stumm (Kanal/Gruppe) oder Detektor tot → kein Signal.
@@ -190,7 +233,9 @@ impl EngineState {
                     if sh.muted.load(Ordering::Relaxed) || group_muted || !detector_alive(sh, now) {
                         continue;
                     }
-                    let lvl = detector_db(sh, rule.params.detector) + sh.fader_db.get() as f64 + sh.group_db.get() as f64;
+                    let lvl = detector_db(sh, rule.params.detector)
+                        + sh.fader_db.get() as f64
+                        + sh.group_db.get() as f64;
                     key_level = key_level.max(lvl);
                 }
             }
@@ -201,7 +246,9 @@ impl EngineState {
                     if keys.contains(&t) {
                         continue; // ein Kanal ducked sich nicht selbst
                     }
-                    let Some(c) = cfg.chans.iter().find(|c| c.id == t) else { continue };
+                    let Some(c) = cfg.chans.iter().find(|c| c.id == t) else {
+                        continue;
+                    };
                     if c.duckable && !c.manual {
                         acc.entry(t).or_default().push((gain, rule.params.max_db));
                     }
@@ -215,7 +262,11 @@ impl EngineState {
                 sum.max(floor)
             });
             let cur = self.duck_cur.entry(id.clone()).or_insert(0.0);
-            *cur = if (v - *cur).abs() < 0.05 { v } else { *cur + (v - *cur) * (1.0 - (-dt_ms / 80.0).exp()) };
+            *cur = if (v - *cur).abs() < 0.05 {
+                v
+            } else {
+                *cur + (v - *cur) * (1.0 - (-dt_ms / 80.0).exp())
+            };
             sh.duck_db.set(*cur as f32);
         }
 
@@ -236,7 +287,10 @@ impl EngineState {
                 effective_db: sh.effective_db(),
             });
             sh.on_air.store(air, Ordering::Relaxed);
-            events.extend(self.tracker.update(id, muted || group_muted, sh.fader_db.get() as f64));
+            events.extend(
+                self.tracker
+                    .update(id, muted || group_muted, sh.fader_db.get() as f64),
+            );
         }
         events
     }
@@ -255,7 +309,8 @@ pub fn spawn(
         while !shutdown.load(Ordering::Relaxed) {
             heartbeat.fetch_add(1, Ordering::Relaxed);
             let cfg = config.lock().expect("lock poisoned").clone();
-            let snapshot: HashMap<String, Arc<ChannelShared>> = shared.lock().expect("lock poisoned").clone();
+            let snapshot: HashMap<String, Arc<ChannelShared>> =
+                shared.lock().expect("lock poisoned").clone();
             for ev in state.tick(TICK_MS, dsp::now_ms(), &cfg, &snapshot) {
                 let _ = events.send(ev);
             }
@@ -288,7 +343,12 @@ mod tests {
             .iter()
             .map(|(id, db)| {
                 let sh = Arc::new(ChannelShared::new());
-                for a in [&sh.meters.speech_db, &sh.meters.rms_db, &sh.meters.short_db, &sh.meters.peak_db] {
+                for a in [
+                    &sh.meters.speech_db,
+                    &sh.meters.rms_db,
+                    &sh.meters.short_db,
+                    &sh.meters.peak_db,
+                ] {
                     a.set(*db);
                 }
                 (id.to_string(), sh)
@@ -302,7 +362,12 @@ mod tests {
         }
     }
 
-    fn run(st: &mut EngineState, cfg: &EngineConfig, shared: &HashMap<String, Arc<ChannelShared>>, ms: u32) {
+    fn run(
+        st: &mut EngineState,
+        cfg: &EngineConfig,
+        shared: &HashMap<String, Arc<ChannelShared>>,
+        ms: u32,
+    ) {
         for _ in 0..(ms / 10) {
             touch(shared);
             st.tick(10.0, dsp::now_ms(), cfg, shared);
@@ -315,7 +380,10 @@ mod tests {
                 id: "studio".into(),
                 gain_db: 0.0,
                 muted: false,
-                automix: AutoMixParams { enabled: true, ..AutoMixParams::default() },
+                automix: AutoMixParams {
+                    enabled: true,
+                    ..AutoMixParams::default()
+                },
             }],
             chans,
             ducks: vec![],
@@ -358,7 +426,11 @@ mod tests {
     #[test]
     fn automix_in_engine_attenuates_quiet_mics_only_in_group() {
         let shared = shared_with(&[("m1", -20.0), ("m2", -55.0), ("stadium", -10.0)]);
-        let cfg = automix_cfg(vec![chan("m1", "studio"), chan("m2", "studio"), chan("stadium", "")]);
+        let cfg = automix_cfg(vec![
+            chan("m1", "studio"),
+            chan("m2", "studio"),
+            chan("stadium", ""),
+        ]);
         let mut st = EngineState::default();
         run(&mut st, &cfg, &shared, 4000);
         assert!(shared["m1"].auto_db.get() > -1.0);
@@ -379,7 +451,10 @@ mod tests {
         cfg.chans[1].manual = true;
         run(&mut st, &cfg, &shared, 4000);
         assert!(shared["m2"].auto_db.get().abs() < 0.2, "manual → 0 dB");
-        assert!(shared["m1"].auto_db.get() > -0.5, "m1 bekommt den vollen Anteil");
+        assert!(
+            shared["m1"].auto_db.get() > -0.5,
+            "m1 bekommt den vollen Anteil"
+        );
     }
 
     #[test]
@@ -391,12 +466,18 @@ mod tests {
         assert!(shared["m2"].auto_db.get() < -10.0);
         // Detektoren melden sich nicht mehr (kein touch).
         for sh in shared.values() {
-            sh.meters.updated_ms.store(dsp::now_ms().saturating_sub(5000), Ordering::Relaxed);
+            sh.meters
+                .updated_ms
+                .store(dsp::now_ms().saturating_sub(5000), Ordering::Relaxed);
         }
         for _ in 0..500 {
             st.tick(10.0, dsp::now_ms(), &cfg, &shared);
         }
-        assert!(shared["m2"].auto_db.get().abs() < 0.3, "{}", shared["m2"].auto_db.get());
+        assert!(
+            shared["m2"].auto_db.get().abs() < 0.3,
+            "{}",
+            shared["m2"].auto_db.get()
+        );
     }
 
     #[test]
@@ -435,7 +516,11 @@ mod tests {
         run(&mut st, &cfg, &shared, 3000);
         assert!((shared["atmo"].duck_db.get() - -8.0).abs() < 0.5);
         assert_eq!(shared["music"].duck_db.get(), 0.0);
-        assert_eq!(shared["comm"].duck_db.get(), 0.0, "Key ducked sich nicht selbst");
+        assert_eq!(
+            shared["comm"].duck_db.get(),
+            0.0,
+            "Key ducked sich nicht selbst"
+        );
         assert_eq!(shared["atmo"].fader_db.get(), 0.0, "Fader unangetastet");
         // Kommentator verstummt → Atmo kommt langsam zurück.
         shared["comm"].meters.speech_db.set(-90.0);
@@ -452,11 +537,19 @@ mod tests {
         shared["comm"].muted.store(true, Ordering::Relaxed);
         let mut st = EngineState::default();
         run(&mut st, &cfg, &shared, 2000);
-        assert_eq!(shared["atmo"].duck_db.get(), 0.0, "stummer Key löst nichts aus");
+        assert_eq!(
+            shared["atmo"].duck_db.get(),
+            0.0,
+            "stummer Key löst nichts aus"
+        );
         shared["comm"].muted.store(false, Ordering::Relaxed);
         cfg.chans[1].manual = true;
         run(&mut st, &cfg, &shared, 2000);
-        assert_eq!(shared["atmo"].duck_db.get(), 0.0, "Manual-Kanal wird nicht geduckt");
+        assert_eq!(
+            shared["atmo"].duck_db.get(),
+            0.0,
+            "Manual-Kanal wird nicht geduckt"
+        );
         cfg.chans[1].manual = false;
         cfg.ducks[0].enabled = false;
         run(&mut st, &cfg, &shared, 200);
@@ -497,7 +590,9 @@ mod tests {
         run(&mut st, &cfg, &shared, 3000);
         assert!(shared["atmo"].duck_db.get() < -7.0 && shared["music"].duck_db.get() < -7.0);
         // Engine stirbt: Beat wird alt → Fader-Stufe ignoriert die Anteile.
-        shared["atmo"].engine_beat_ms.store(dsp::now_ms().saturating_sub(5000), Ordering::Relaxed);
+        shared["atmo"]
+            .engine_beat_ms
+            .store(dsp::now_ms().saturating_sub(5000), Ordering::Relaxed);
         assert!((dsp::lin_to_db(shared["atmo"].total_gain())).abs() < 1e-3);
     }
 }

@@ -1417,6 +1417,11 @@ global im Dialog **⚙ Szenen & Automation** der Kopfleiste.
   jeden Kanal der Videoquelle zu, aus der sein Ton kommt; weitere Quellen kommen über **Videoquelle
   hinzufügen …**. Pegel, Stumm-Variante und Override bleiben unter **Center Control → AUTOMATION →
   Audio folgt Video (AFV)** (eingeklappt) einstellbar. Ein Kanal gehört zu genau einer Karte.
+  **Folgt Bildmischer:** Oben im Dialog legst du fest, welchen Bildmischern/Switchern der Tonmischer folgt
+  (**Alle** = jeder, wie bisher; sonst nur die angehakten). Angeboten werden die Geber, die schon Tally
+  gesendet haben. Jede Karte kann das überschreiben (**wie oben** / **Alle** / bestimmte Geber) — wichtig,
+  sobald mehrere Workflows mit eigenen Bildmischern laufen. Die Auswahl wird mit dem Mischer-Zustand
+  (Presets) gesichert. Das manuelle `setVideoContext`/`takeAt` des Bildmischers ist davon nicht betroffen.
 - **Gemeinsamer Schaltzeitpunkt (`takeAt`, Kap. 31.4/31.5)**: Die Playout-Automation gibt bei jedem
   Take einen absoluten TAI-Zeitpunkt (ns, auf das Bildraster gerundet) an Bildmischer
   (`crosspoint.cut/take/autoTrans`), Tonmischer (`setVideoContext`) und Kanal-Player (`playAt`) weiter.

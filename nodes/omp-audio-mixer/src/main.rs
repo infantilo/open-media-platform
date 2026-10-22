@@ -492,6 +492,12 @@ struct AudioMixerStore {
     /// Audio-Szenen und Video→Audio-Kontext (Kapitel 26).
     scenes: Mutex<Vec<SceneState>>,
     contexts: Mutex<Vec<ContextRule>>,
+    /// „Ton folgt Bild“: Welchen Gebern (Bildmischer/Switcher, Node-IDs) folgt der Mischer? Global + Überschreibung je Videoquelle.
+    tally_filter: Mutex<TallyFilter>,
+    /// Geber, die tatsächlich Tally gesendet haben (Auswahlliste der UI).
+    tally_givers: Mutex<std::collections::BTreeSet<String>>,
+    /// Weckt die Tally-Schleife, wenn sich der Filter ändert (Zustand neu bewerten).
+    tally_notify: tokio::sync::Notify,
     audio_ctx: Mutex<AudioContext>,
     /// Ereignisse für die Automations-Regeln (Engine, Szenen, Video-Tally).
     events_tx: std::sync::mpsc::Sender<rules::Event>,
@@ -696,6 +702,13 @@ impl ParamStore for AudioMixerStore {
             MethodSpec {
                 name: "removeAux".to_string(),
                 args: vec![MethodArg { name: "auxId".to_string(), kind: ParamType::String }],
+            },
+            MethodSpec {
+                name: "setTallyFilter".to_string(),
+                args: vec![
+                    MethodArg { name: "source".to_string(), kind: ParamType::String },
+                    MethodArg { name: "givers".to_string(), kind: ParamType::String },
+                ],
             },
             MethodSpec {
                 name: "setVideoContext".to_string(),
@@ -1551,6 +1564,7 @@ impl AudioMixerStore {
             "scenes": self.scenes.lock().expect("lock poisoned").iter()
                 .map(|s| serde_json::json!({"id": s.id, "label": s.label, "doc": s.doc})).collect::<Vec<_>>(),
             "contextRules": self.contexts.lock().expect("lock poisoned").iter().map(ContextRule::to_json).collect::<Vec<_>>(),
+            "tallyFilter": self.tally_filter.lock().expect("lock poisoned").to_json(),
             "auxBuses": self.aux.lock().expect("lock poisoned").iter().filter(|a| a.active).map(aux_json).collect::<Vec<_>>(),
             "masterLimiter": {
                 "enabled": ml.enabled, "thresholdDb": ml.threshold_db,
@@ -1612,6 +1626,10 @@ impl AudioMixerStore {
             .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(ContextRule::from_json).collect())
             .unwrap_or_default();
+        if let Some(t) = doc.get("tallyFilter") {
+            *self.tally_filter.lock().expect("lock poisoned") = TallyFilter::from_json(t);
+            self.tally_notify.notify_one();
+        }
 
         // Aux-Busse abgleichen (fehlender Schlüssel in Alt-Presets → alle aus).
         {
@@ -1964,6 +1982,32 @@ impl AudioMixerStore {
                 let at = args.get("takeAt").and_then(Value::as_u64).unwrap_or(0);
                 self.on_video_tally(source, active);
                 self.afv_follow_at(source, active, at);
+                Ok(())
+            }
+            // „Ton folgt Bild“: welchen Gebern folgt der Mischer? `source` leer = global; sonst Überschreibung für diese
+            // Videoquelle. `givers`: Komma-Liste von Node-IDs, `*` = alle, leer = global (bei source) bzw. alle (global).
+            "setTallyFilter" => {
+                let source = args.get("source").and_then(Value::as_str).unwrap_or("").to_string();
+                let givers: Vec<String> = args
+                    .get("givers")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|g| !g.is_empty())
+                    .map(String::from)
+                    .collect();
+                {
+                    let mut f = self.tally_filter.lock().expect("lock poisoned");
+                    if source.is_empty() {
+                        f.global = givers;
+                    } else if givers.is_empty() {
+                        f.by_source.remove(&source);
+                    } else {
+                        f.by_source.insert(source, givers);
+                    }
+                }
+                self.tally_notify.notify_one();
                 Ok(())
             }
             "captureScene" => {
@@ -2558,6 +2602,8 @@ impl AudioMixerStore {
                 .map(|s| serde_json::json!({"id": s.id, "label": s.label})).collect::<Vec<_>>(),
             "contextRules": self.contexts.lock().expect("lock poisoned").iter().map(ContextRule::to_json).collect::<Vec<_>>(),
             "audioContext": {"activeSources": ctx.active_sources, "activeScene": ctx.active_scene},
+            "tallyFilter": self.tally_filter.lock().expect("lock poisoned").to_json(),
+            "tallyGivers": self.tally_givers.lock().expect("lock poisoned").iter().cloned().collect::<Vec<_>>(),
             "availableSources": self.available_sources.lock().expect("lock poisoned").iter()
                 .map(|s| serde_json::json!({"senderId": s.sender_id, "label": s.label})).collect::<Vec<_>>(),
             "availableNodes": *self.available_nodes.lock().expect("lock poisoned"),
@@ -3032,6 +3078,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         node_label: label.clone(),
         scenes: Mutex::new(Vec::new()),
         contexts: Mutex::new(Vec::new()),
+        tally_filter: Mutex::new(TallyFilter::default()),
+        tally_givers: Mutex::new(Default::default()),
+        tally_notify: tokio::sync::Notify::new(),
         audio_ctx: Mutex::new(AudioContext::default()),
         events_tx: rule_events_tx,
         media_status,
@@ -3243,6 +3292,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
+/// Auswahl der Geber, deren Tally der Mischer beachtet. Leer = alle (bisheriges Verhalten).
+/// Je Videoquelle kann die globale Auswahl überschrieben werden; `["*"]` = dort ausdrücklich alle.
+#[derive(Debug, Clone, Default)]
+struct TallyFilter {
+    global: Vec<String>,
+    by_source: HashMap<String, Vec<String>>,
+}
+
+impl TallyFilter {
+    /// Erlaubte Geber für `source`; `None` = alle.
+    fn allowed(&self, source: &str) -> Option<&[String]> {
+        let list = self.by_source.get(source).unwrap_or(&self.global);
+        if list.is_empty() || list.iter().any(|g| g == "*") { None } else { Some(list) }
+    }
+
+    fn to_json(&self) -> Value {
+        serde_json::json!({"global": self.global, "bySource": self.by_source})
+    }
+
+    fn from_json(v: &Value) -> Self {
+        let strs = |x: &Value| -> Vec<String> {
+            x.as_array().map(|a| a.iter().filter_map(|e| e.as_str().map(String::from)).collect()).unwrap_or_default()
+        };
+        Self {
+            global: v.get("global").map(strs).unwrap_or_default(),
+            by_source: v
+                .get("bySource")
+                .and_then(Value::as_object)
+                .map(|o| o.iter().map(|(k, x)| (k.clone(), strs(x))).collect())
+                .unwrap_or_default(),
+        }
+    }
+}
+
 /// Audio-Follow-Video (`UMSETZUNG.md` C11, `ARCHITECTURE.md` §13.2):
 /// abonniert den Tally-Bus, den `omp-video-mixer-me` (C10) bei jedem
 /// Crosspoint-Wechsel bespielt, und schaltet passend konfigurierte Kanäle
@@ -3271,131 +3354,166 @@ async fn audio_follow_video_loop(
     // Kapitel 51: je Quelle mehrere Geber möglich (z. B. zwei Bildmischer) — nur der Gesamtzustand zählt, ein „off“ eines
     // Gebers darf die Quelle nicht abschalten, solange ein anderer sie noch auf Sendung hat.
     let mut board = health::TallyBoard::new();
-    while let Some(event) = subscription.next_event().await {
-        let Some(on) = board.apply(&event) else { continue };
-        let node_id = event.target;
-        // Video→Audio-Kontext (Kapitel 26): Quelle aktiv → Audio-Szene und
-        // Automations-Ereignisse. Läuft zusätzlich zum bestehenden
-        // Audio-Follow-Video (Mute/Crossfade je Kanal) und ersetzt es nicht.
-        store.on_video_tally(&node_id, on);
-        store.afv_follow(&node_id, on);
-        let source_nodes = store.source_nodes();
-        let matches: Vec<(String, String, bool, f64, f64, u64)> = {
-            let channels = channels.lock().expect("lock poisoned");
-            channels
-                .iter()
-                .filter(|c| {
-                    let target = if c.follow_target.is_empty() {
-                        source_nodes.get(&c.source).map_or("", String::as_str)
-                    } else {
-                        c.follow_target.as_str()
-                    };
-                    !c.follow_use_mute && !c.override_enabled && c.follow_mode != "off" && !target.is_empty() && target == node_id
-                })
-                .map(|c| {
-                    (
-                        c.id.clone(),
-                        c.follow_mode.clone(),
-                        c.follow_use_mute,
-                        c.follow_on_level_db,
-                        c.follow_off_level_db,
-                        c.follow_transition_ms,
-                    )
-                })
-                .collect()
-        };
-
-        for (channel_id, follow_mode, follow_use_mute, follow_on_level_db, follow_off_level_db, follow_transition_ms) in matches {
-            if follow_mode == "cut" {
-                if follow_use_mute {
-                    // Unverändertes Verhalten vor §4.6 Punkt 3: echte
-                    // Stille über den GStreamer-`mute`-Pad, Gain bleibt
-                    // unangetastet (der reguläre Fader bleibt maßgeblich).
-                    let target_mute = !on;
-                    {
-                        let mut channels = channels.lock().expect("lock poisoned");
-                        if let Some(ch) = channels.iter_mut().find(|c| c.id == channel_id) {
-                            ch.mute = target_mute;
-                        }
-                    }
-                    pipeline.set_mute(channel_id.clone(), target_mute);
-                } else {
-                    // Hörbarer "Aus"-Zustand: AFV übernimmt den Gain
-                    // eigenständig (der reguläre Fader wird ignoriert,
-                    // s. ChannelState::follow_use_mute-Doku), nie
-                    // stummschalten.
-                    pipeline.set_mute(channel_id.clone(), false);
-                    pipeline.set_gain(
-                        channel_id.clone(),
-                        if on { follow_on_level_db } else { follow_off_level_db },
-                    );
+    // Zuletzt wirksamer Zustand je Quelle (nach Geber-Filter): nur Änderungen lösen etwas aus. Ein erstes Ereignis ist immer
+    // eine Änderung (z. B. „off“ nach dem Neustart muss ankommen).
+    let mut effective: HashMap<String, bool> = HashMap::new();
+    let effective_on = |board: &health::TallyBoard, target: &str| -> bool {
+        let givers = board.givers(target);
+        let filter = store.tally_filter.lock().expect("lock poisoned");
+        match filter.allowed(target) {
+            None => !givers.is_empty(),
+            // Unbekannter Geber (älterer Publisher ohne `src`) lässt sich nicht filtern → zählt immer.
+            Some(list) => givers.iter().any(|g| g.is_empty() || list.contains(g)),
+        }
+    };
+    loop {
+        let changes: Vec<(String, bool)> = tokio::select! {
+            ev = subscription.next_event() => {
+                let Some(event) = ev else { break };
+                if let Some(src) = event.src.as_ref().filter(|s| !s.is_empty()) {
+                    store.tally_givers.lock().expect("lock poisoned").insert(src.clone());
                 }
-                continue;
+                board.apply(&event);
+                let on = effective_on(&board, &event.target);
+                if effective.insert(event.target.clone(), on) == Some(on) { continue; }
+                vec![(event.target, on)]
             }
-
-            // "crossfade": Gain über die Transition-Zeit rampen statt hart
-            // stummschalten — sanfteres Auf-/Abblenden beim Kamera-
-            // /Quellwechsel. Läuft als eigener Tokio-Task (nur
-            // Command-Sends, kein direkter GStreamer-Objektzugriff nötig
-            // wie bei C10s Thread-Rampe, deshalb hier async statt
-            // `std::thread`).
-            let generation = {
-                let mut gens = ramp_generation.lock().expect("lock poisoned");
-                let g = gens.entry(channel_id.clone()).or_insert(0);
-                *g += 1;
-                *g
+            // Filter geändert: alle bekannten Quellen neu bewerten.
+            _ = store.tally_notify.notified() => {
+                let targets: Vec<String> = effective.keys().cloned().collect();
+                targets
+                    .into_iter()
+                    .filter_map(|t| {
+                        let on = effective_on(&board, &t);
+                        (effective.insert(t.clone(), on) != Some(on)).then_some((t, on))
+                    })
+                    .collect()
+            }
+        };
+        for (node_id, on) in changes {
+            // Video→Audio-Kontext (Kapitel 26): Quelle aktiv → Audio-Szene und
+            // Automations-Ereignisse. Läuft zusätzlich zum bestehenden
+            // Audio-Follow-Video (Mute/Crossfade je Kanal) und ersetzt es nicht.
+            store.on_video_tally(&node_id, on);
+            store.afv_follow(&node_id, on);
+            let source_nodes = store.source_nodes();
+            let matches: Vec<(String, String, bool, f64, f64, u64)> = {
+                let channels = channels.lock().expect("lock poisoned");
+                channels
+                    .iter()
+                    .filter(|c| {
+                        let target = if c.follow_target.is_empty() {
+                            source_nodes.get(&c.source).map_or("", String::as_str)
+                        } else {
+                            c.follow_target.as_str()
+                        };
+                        !c.follow_use_mute && !c.override_enabled && c.follow_mode != "off" && !target.is_empty() && target == node_id
+                    })
+                    .map(|c| {
+                        (
+                            c.id.clone(),
+                            c.follow_mode.clone(),
+                            c.follow_use_mute,
+                            c.follow_on_level_db,
+                            c.follow_off_level_db,
+                            c.follow_transition_ms,
+                        )
+                    })
+                    .collect()
             };
-            let pipeline = pipeline.clone();
-            let channels = channels.clone();
-            let ramp_generation = ramp_generation.clone();
-            let channel_id_task = channel_id.clone();
-            tokio::spawn(async move {
-                // §4.6 Nachtrag Punkt 3: bei `follow_use_mute == false`
-                // rampt die Rampe zwischen den eigenständigen AFV-Pegeln
-                // (`follow_on_level_db`/`follow_off_level_db`) statt
-                // zwischen Mute und dem regulären Kanal-Fader — `mute`
-                // bleibt in dem Fall durchgehend `false`. Bei
-                // `follow_use_mute == true` unverändertes Verhalten vor
-                // diesem Schritt: Rampe zwischen -60dB und dem aktuellen
-                // Fader (`gain_db`), feste `FOLLOW_CROSSFADE_MS`-Dauer.
-                let (from, to, duration_ms) = if follow_use_mute {
-                    let base_db = {
-                        let ch = channels.lock().expect("lock poisoned");
-                        ch.iter()
-                            .find(|c| c.id == channel_id_task)
-                            .map(|c| c.gain_db)
-                            .unwrap_or(0.0)
-                    };
-                    pipeline.set_mute(channel_id_task.clone(), false);
-                    (if on { -60.0 } else { base_db }, if on { base_db } else { -60.0 }, FOLLOW_CROSSFADE_MS)
-                } else {
-                    (
-                        if on { follow_off_level_db } else { follow_on_level_db },
-                        if on { follow_on_level_db } else { follow_off_level_db },
-                        follow_transition_ms,
-                    )
-                };
-                for step in 1..=FOLLOW_CROSSFADE_STEPS {
-                    if *ramp_generation
-                        .lock()
-                        .expect("lock poisoned")
-                        .get(&channel_id_task)
-                        .unwrap_or(&0)
-                        != generation
-                    {
-                        return; // von einer neueren Rampe überholt
+
+            for (channel_id, follow_mode, follow_use_mute, follow_on_level_db, follow_off_level_db, follow_transition_ms) in matches {
+                if follow_mode == "cut" {
+                    if follow_use_mute {
+                        // Unverändertes Verhalten vor §4.6 Punkt 3: echte
+                        // Stille über den GStreamer-`mute`-Pad, Gain bleibt
+                        // unangetastet (der reguläre Fader bleibt maßgeblich).
+                        let target_mute = !on;
+                        {
+                            let mut channels = channels.lock().expect("lock poisoned");
+                            if let Some(ch) = channels.iter_mut().find(|c| c.id == channel_id) {
+                                ch.mute = target_mute;
+                            }
+                        }
+                        pipeline.set_mute(channel_id.clone(), target_mute);
+                    } else {
+                        // Hörbarer "Aus"-Zustand: AFV übernimmt den Gain
+                        // eigenständig (der reguläre Fader wird ignoriert,
+                        // s. ChannelState::follow_use_mute-Doku), nie
+                        // stummschalten.
+                        pipeline.set_mute(channel_id.clone(), false);
+                        pipeline.set_gain(
+                            channel_id.clone(),
+                            if on { follow_on_level_db } else { follow_off_level_db },
+                        );
                     }
-                    let t = step as f64 / FOLLOW_CROSSFADE_STEPS as f64;
-                    pipeline.set_gain(channel_id_task.clone(), from + (to - from) * t);
-                    tokio::time::sleep(tokio::time::Duration::from_millis(
-                        duration_ms / FOLLOW_CROSSFADE_STEPS,
-                    ))
-                    .await;
+                    continue;
                 }
-                if follow_use_mute && !on {
-                    pipeline.set_mute(channel_id_task, true);
-                }
-            });
+
+                // "crossfade": Gain über die Transition-Zeit rampen statt hart
+                // stummschalten — sanfteres Auf-/Abblenden beim Kamera-
+                // /Quellwechsel. Läuft als eigener Tokio-Task (nur
+                // Command-Sends, kein direkter GStreamer-Objektzugriff nötig
+                // wie bei C10s Thread-Rampe, deshalb hier async statt
+                // `std::thread`).
+                let generation = {
+                    let mut gens = ramp_generation.lock().expect("lock poisoned");
+                    let g = gens.entry(channel_id.clone()).or_insert(0);
+                    *g += 1;
+                    *g
+                };
+                let pipeline = pipeline.clone();
+                let channels = channels.clone();
+                let ramp_generation = ramp_generation.clone();
+                let channel_id_task = channel_id.clone();
+                tokio::spawn(async move {
+                    // §4.6 Nachtrag Punkt 3: bei `follow_use_mute == false`
+                    // rampt die Rampe zwischen den eigenständigen AFV-Pegeln
+                    // (`follow_on_level_db`/`follow_off_level_db`) statt
+                    // zwischen Mute und dem regulären Kanal-Fader — `mute`
+                    // bleibt in dem Fall durchgehend `false`. Bei
+                    // `follow_use_mute == true` unverändertes Verhalten vor
+                    // diesem Schritt: Rampe zwischen -60dB und dem aktuellen
+                    // Fader (`gain_db`), feste `FOLLOW_CROSSFADE_MS`-Dauer.
+                    let (from, to, duration_ms) = if follow_use_mute {
+                        let base_db = {
+                            let ch = channels.lock().expect("lock poisoned");
+                            ch.iter()
+                                .find(|c| c.id == channel_id_task)
+                                .map(|c| c.gain_db)
+                                .unwrap_or(0.0)
+                        };
+                        pipeline.set_mute(channel_id_task.clone(), false);
+                        (if on { -60.0 } else { base_db }, if on { base_db } else { -60.0 }, FOLLOW_CROSSFADE_MS)
+                    } else {
+                        (
+                            if on { follow_off_level_db } else { follow_on_level_db },
+                            if on { follow_on_level_db } else { follow_off_level_db },
+                            follow_transition_ms,
+                        )
+                    };
+                    for step in 1..=FOLLOW_CROSSFADE_STEPS {
+                        if *ramp_generation
+                            .lock()
+                            .expect("lock poisoned")
+                            .get(&channel_id_task)
+                            .unwrap_or(&0)
+                            != generation
+                        {
+                            return; // von einer neueren Rampe überholt
+                        }
+                        let t = step as f64 / FOLLOW_CROSSFADE_STEPS as f64;
+                        pipeline.set_gain(channel_id_task.clone(), from + (to - from) * t);
+                        tokio::time::sleep(tokio::time::Duration::from_millis(
+                            duration_ms / FOLLOW_CROSSFADE_STEPS,
+                        ))
+                        .await;
+                    }
+                    if follow_use_mute && !on {
+                        pipeline.set_mute(channel_id_task, true);
+                    }
+                });
+            }
         }
     }
 }
@@ -3580,6 +3698,22 @@ async fn discovery_loop(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tally_filter_global_override_and_json() {
+        let mut f = super::TallyFilter::default();
+        assert!(f.allowed("cam1").is_none(), "leer = alle");
+        f.global = vec!["mixerA".into()];
+        assert_eq!(f.allowed("cam1"), Some(&["mixerA".to_string()][..]));
+        f.by_source.insert("cam1".into(), vec!["*".into()]);
+        assert!(f.allowed("cam1").is_none(), "Überschreibung * = alle");
+        f.by_source.insert("cam2".into(), vec!["mixerB".into()]);
+        assert_eq!(f.allowed("cam2"), Some(&["mixerB".to_string()][..]));
+        assert_eq!(f.allowed("cam3"), Some(&["mixerA".to_string()][..]), "ohne Überschreibung gilt global");
+        let g = super::TallyFilter::from_json(&f.to_json());
+        assert_eq!(g.global, f.global);
+        assert_eq!(g.by_source, f.by_source);
+    }
+
     use super::*;
 
     fn aux(kind: &str, exclude: &str, active: bool) -> AuxState {

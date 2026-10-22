@@ -69,7 +69,9 @@ pub struct Plan {
 impl Plan {
     /// Kanäle, die wegen eines Konflikts nicht angewendet werden dürfen.
     pub fn in_conflict(&self, channel: &str) -> bool {
-        self.conflicts.iter().any(|c| c.channels.iter().any(|ch| ch == channel))
+        self.conflicts
+            .iter()
+            .any(|c| c.channels.iter().any(|ch| ch == channel))
     }
 }
 
@@ -84,10 +86,18 @@ fn selector_for(rule: &TagRule, ctx: &SourceContext) -> Selector {
     }
 }
 
-fn by_rule(rule: &TagRule, ctx: &SourceContext, sources: &[Source], what: &str) -> (Option<String>, String, Option<String>) {
+fn by_rule(
+    rule: &TagRule,
+    ctx: &SourceContext,
+    sources: &[Source],
+    what: &str,
+) -> (Option<String>, String, Option<String>) {
     let res = resolve(&selector_for(rule, ctx), sources);
     let warning = if res.selected_id.is_none() {
-        Some(format!("{what}: keine Quelle erfüllt {}", rule.required.join(", ")))
+        Some(format!(
+            "{what}: keine Quelle erfüllt {}",
+            rule.required.join(", ")
+        ))
     } else if res.ambiguous {
         Some(format!("{what}: mehrere Quellen passen gleich gut"))
     } else {
@@ -98,7 +108,11 @@ fn by_rule(rule: &TagRule, ctx: &SourceContext, sources: &[Source], what: &str) 
 
 /// Plant die Zuordnung aller Kanäle mit Erwartung bzw. Event-Override.
 /// `expects`: Kanal → Erwartung (nur Kanäle, die der Mixer kennt).
-pub fn plan(expects: &BTreeMap<String, TagRule>, active: &ActiveContext, sources: &[Source]) -> Plan {
+pub fn plan(
+    expects: &BTreeMap<String, TagRule>,
+    active: &ActiveContext,
+    sources: &[Source],
+) -> Plan {
     let ctx = &active.context;
     // Der Kontext ist hier ein HARTER Filter (der Resolver nutzt ihn nur als Rang):
     // ein Kanal darf nie still auf Audio einer fremden Quelle springen.
@@ -125,16 +139,31 @@ pub fn plan(expects: &BTreeMap<String, TagRule>, active: &ActiveContext, sources
                     sender_id: None,
                     origin: Origin::Event,
                     explain: format!("Event wählt „{id}“, die Quelle bietet es nicht an"),
-                    warning: Some(format!("Audio „{id}“ wird von dieser Quelle nicht angeboten")),
+                    warning: Some(format!(
+                        "Audio „{id}“ wird von dieser Quelle nicht angeboten"
+                    )),
                 },
             },
             Some(AudioChoice::Tags(rule)) => {
                 let (sender_id, explain, warning) = by_rule(rule, ctx, sources, "Event-Tags");
-                Assignment { channel: ch.clone(), sender_id, origin: Origin::Event, explain, warning }
+                Assignment {
+                    channel: ch.clone(),
+                    sender_id,
+                    origin: Origin::Event,
+                    explain,
+                    warning,
+                }
             }
             None => {
-                let (sender_id, explain, warning) = by_rule(&expects[ch], ctx, sources, "Kanal-Erwartung");
-                Assignment { channel: ch.clone(), sender_id, origin: Origin::ChannelExpectation, explain, warning }
+                let (sender_id, explain, warning) =
+                    by_rule(&expects[ch], ctx, sources, "Kanal-Erwartung");
+                Assignment {
+                    channel: ch.clone(),
+                    sender_id,
+                    origin: Origin::ChannelExpectation,
+                    explain,
+                    warning,
+                }
             }
         };
         assignments.push(a);
@@ -149,9 +178,15 @@ pub fn plan(expects: &BTreeMap<String, TagRule>, active: &ActiveContext, sources
     let conflicts = by_sender
         .into_iter()
         .filter(|(_, ch)| ch.len() > 1)
-        .map(|(id, channels)| Conflict { sender_id: id.to_string(), channels })
+        .map(|(id, channels)| Conflict {
+            sender_id: id.to_string(),
+            channels,
+        })
         .collect();
-    Plan { assignments, conflicts }
+    Plan {
+        assignments,
+        conflicts,
+    }
 }
 
 /// Laufzeitzustand des Routings (Mixer-weit, hinter einem Mutex).
@@ -174,7 +209,12 @@ pub struct RoutingState {
 
 impl RoutingState {
     pub fn expects_json(&self) -> Value {
-        Value::Object(self.expects.iter().map(|(k, r)| (k.clone(), serde_json::to_value(r).unwrap_or(Value::Null))).collect())
+        Value::Object(
+            self.expects
+                .iter()
+                .map(|(k, r)| (k.clone(), serde_json::to_value(r).unwrap_or(Value::Null)))
+                .collect(),
+        )
     }
 
     pub fn view(&self) -> Value {
@@ -193,7 +233,11 @@ impl RoutingState {
 /// `{"required":[…],"preferred":[…],"forbidden":[…]}` → Regel; leer = keine Erwartung.
 pub fn parse_rule(v: &Value) -> Option<TagRule> {
     let rule: TagRule = serde_json::from_value(v.clone()).ok()?;
-    if rule == TagRule::default() { None } else { Some(rule) }
+    if rule == TagRule::default() {
+        None
+    } else {
+        Some(rule)
+    }
 }
 
 #[cfg(test)]
@@ -214,18 +258,30 @@ mod tests {
             online: true,
             visible: true,
             selectable: true,
-            tags: tags.iter().map(|t| SourceTag { tag: t.to_string(), origin: TagOrigin::Explicit }).collect(),
+            tags: tags
+                .iter()
+                .map(|t| SourceTag {
+                    tag: t.to_string(),
+                    origin: TagOrigin::Explicit,
+                })
+                .collect(),
         }
     }
 
     fn rule(required: &[&str]) -> TagRule {
-        TagRule { required: required.iter().map(|s| s.to_string()).collect(), ..Default::default() }
+        TagRule {
+            required: required.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
     }
 
     fn ctx(node: &str) -> ActiveContext {
         ActiveContext {
             label: node.to_string(),
-            context: SourceContext { node_id: node.to_string(), group: String::new() },
+            context: SourceContext {
+                node_id: node.to_string(),
+                group: String::new(),
+            },
             overrides: BTreeMap::new(),
         }
     }
@@ -240,7 +296,10 @@ mod tests {
 
     #[test]
     fn channels_follow_their_expectation_within_the_context() {
-        let expects = BTreeMap::from([("ch1".to_string(), rule(&["role.program"])), ("ch2".to_string(), rule(&["role.commentator"]))]);
+        let expects = BTreeMap::from([
+            ("ch1".to_string(), rule(&["role.program"])),
+            ("ch2".to_string(), rule(&["role.commentator"])),
+        ]);
         let p = plan(&expects, &ctx("x"), &sources());
         assert_eq!(p.assignments[0].sender_id.as_deref(), Some("x-prog"));
         assert_eq!(p.assignments[1].sender_id.as_deref(), Some("x-comm"));
@@ -248,7 +307,10 @@ mod tests {
         // Anderer Kontext: dieselben Kanäle, andere Quellen — nie die fremde.
         let p = plan(&expects, &ctx("y"), &sources());
         assert_eq!(p.assignments[0].sender_id.as_deref(), Some("y-prog"));
-        assert_eq!(p.assignments[1].sender_id, None, "Y hat keinen Kommentator: nichts, kein stiller Ersatz");
+        assert_eq!(
+            p.assignments[1].sender_id, None,
+            "Y hat keinen Kommentator: nichts, kein stiller Ersatz"
+        );
         assert!(p.assignments[1].warning.is_some());
     }
 
@@ -256,7 +318,12 @@ mod tests {
     fn event_override_beats_channel_expectation() {
         let expects = BTreeMap::from([("ch1".to_string(), rule(&["role.program"]))]);
         let mut a = ctx("x");
-        a.overrides.insert("ch1".to_string(), AudioChoice::Capability { id: "commentator".to_string() });
+        a.overrides.insert(
+            "ch1".to_string(),
+            AudioChoice::Capability {
+                id: "commentator".to_string(),
+            },
+        );
         let p = plan(&expects, &a, &sources());
         assert_eq!(p.assignments[0].sender_id.as_deref(), Some("x-comm"));
         assert_eq!(p.assignments[0].origin, Origin::Event);
@@ -266,16 +333,30 @@ mod tests {
     fn failed_event_override_does_not_fall_back_silently() {
         let expects = BTreeMap::from([("ch1".to_string(), rule(&["role.program"]))]);
         let mut a = ctx("x");
-        a.overrides.insert("ch1".to_string(), AudioChoice::Capability { id: "international".to_string() });
+        a.overrides.insert(
+            "ch1".to_string(),
+            AudioChoice::Capability {
+                id: "international".to_string(),
+            },
+        );
         let p = plan(&expects, &a, &sources());
         assert_eq!(p.assignments[0].sender_id, None);
-        assert!(p.assignments[0].warning.as_deref().unwrap().contains("international"));
+        assert!(
+            p.assignments[0]
+                .warning
+                .as_deref()
+                .unwrap()
+                .contains("international")
+        );
     }
 
     #[test]
     fn override_without_channel_expectation_still_applies() {
         let mut a = ctx("x");
-        a.overrides.insert("ch9".to_string(), AudioChoice::Tags(rule(&["role.commentator"])));
+        a.overrides.insert(
+            "ch9".to_string(),
+            AudioChoice::Tags(rule(&["role.commentator"])),
+        );
         let p = plan(&BTreeMap::new(), &a, &sources());
         assert_eq!(p.assignments.len(), 1);
         assert_eq!(p.assignments[0].sender_id.as_deref(), Some("x-comm"));
@@ -283,7 +364,10 @@ mod tests {
 
     #[test]
     fn two_channels_expecting_the_same_source_are_a_conflict() {
-        let expects = BTreeMap::from([("ch1".to_string(), rule(&["role.program"])), ("ch2".to_string(), rule(&["role.program"]))]);
+        let expects = BTreeMap::from([
+            ("ch1".to_string(), rule(&["role.program"])),
+            ("ch2".to_string(), rule(&["role.program"])),
+        ]);
         let p = plan(&expects, &ctx("x"), &sources());
         assert_eq!(p.conflicts.len(), 1);
         assert_eq!(p.conflicts[0].channels, vec!["ch1", "ch2"]);
@@ -302,6 +386,9 @@ mod tests {
     #[test]
     fn parse_rule_treats_empty_as_none() {
         assert_eq!(parse_rule(&serde_json::json!({})), None);
-        assert_eq!(parse_rule(&serde_json::json!({"required": ["role.program"]})), Some(rule(&["role.program"])));
+        assert_eq!(
+            parse_rule(&serde_json::json!({"required": ["role.program"]})),
+            Some(rule(&["role.program"]))
+        );
     }
 }

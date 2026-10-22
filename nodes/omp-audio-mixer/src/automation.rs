@@ -135,10 +135,16 @@ impl AutoMixEngine {
     }
 
     /// Ein Schritt über die Mitglieder einer Gruppe. Rückgabe: (id, Gain dB ≤ 0).
-    pub fn step(&mut self, dt_ms: f64, p: &AutoMixParams, ins: &[(String, AutoMixIn)]) -> Vec<(String, f64)> {
+    pub fn step(
+        &mut self,
+        dt_ms: f64,
+        p: &AutoMixParams,
+        ins: &[(String, AutoMixIn)],
+    ) -> Vec<(String, f64)> {
         // Zustände ausgeschiedener Mitglieder verwerfen.
         self.chans.retain(|id, _| ins.iter().any(|(i, _)| i == id));
-        self.last_share.retain(|id, _| ins.iter().any(|(i, _)| i == id));
+        self.last_share
+            .retain(|id, _| ins.iter().any(|(i, _)| i == id));
 
         let weighted = |i: &AutoMixIn| -> f64 {
             if !i.participate || i.level_db < i.sensitivity_db {
@@ -150,7 +156,10 @@ impl AutoMixEngine {
         };
         let mut levels: Vec<f64> = Vec::with_capacity(ins.len());
         for (id, i) in ins {
-            let c = self.chans.entry(id.clone()).or_insert_with(|| AmChan { fresh: true, ..Default::default() });
+            let c = self.chans.entry(id.clone()).or_insert_with(|| AmChan {
+                fresh: true,
+                ..Default::default()
+            });
             let w = weighted(i);
             if !i.participate {
                 c.held = 0.0;
@@ -185,7 +194,10 @@ impl AutoMixEngine {
                 let s = if !i.participate {
                     0.0
                 } else if frozen {
-                    self.last_share.get(id).copied().unwrap_or(1.0 / n_active as f64)
+                    self.last_share
+                        .get(id)
+                        .copied()
+                        .unwrap_or(1.0 / n_active as f64)
                 } else {
                     1.0 / n_active as f64
                 };
@@ -334,7 +346,11 @@ impl DuckEngine {
         }
         let depth = p.amount_db.min(0.0).max(p.max_db.min(0.0));
         let target = if self.open { depth } else { 0.0 };
-        let tau = if target < self.gain_db { p.attack_ms } else { p.release_ms };
+        let tau = if target < self.gain_db {
+            p.attack_ms
+        } else {
+            p.release_ms
+        };
         self.gain_db = approach(self.gain_db, target, dt_ms, tau);
         if self.gain_db > -0.01 && target == 0.0 {
             self.gain_db = 0.0;
@@ -357,13 +373,24 @@ mod tests {
             .map(|(i, l)| {
                 (
                     format!("m{i}"),
-                    AutoMixIn { level_db: *l, weight: 1.0, priority: 0, sensitivity_db: -60.0, participate: true },
+                    AutoMixIn {
+                        level_db: *l,
+                        weight: 1.0,
+                        priority: 0,
+                        sensitivity_db: -60.0,
+                        participate: true,
+                    },
                 )
             })
             .collect()
     }
 
-    fn run(e: &mut AutoMixEngine, p: &AutoMixParams, inputs: &[(String, AutoMixIn)], ms: f64) -> Vec<f64> {
+    fn run(
+        e: &mut AutoMixEngine,
+        p: &AutoMixParams,
+        inputs: &[(String, AutoMixIn)],
+        ms: f64,
+    ) -> Vec<f64> {
         let mut out = vec![];
         for _ in 0..(ms / DT) as usize {
             out = e.step(DT, p, inputs).into_iter().map(|(_, g)| g).collect();
@@ -452,12 +479,19 @@ mod tests {
         for _ in 0..300 {
             e.step(DT, &p, &swapped);
         }
-        assert!(e.gain_db("m0") < mid - 2.0 && e.gain_db("m0") < -12.0, "release {mid} → {}", e.gain_db("m0"));
+        assert!(
+            e.gain_db("m0") < mid - 2.0 && e.gain_db("m0") < -12.0,
+            "release {mid} → {}",
+            e.gain_db("m0")
+        );
     }
 
     #[test]
     fn weight_and_priority_shift_the_decision() {
-        let p = AutoMixParams { max_atten_db: -40.0, ..AutoMixParams::default() };
+        let p = AutoMixParams {
+            max_atten_db: -40.0,
+            ..AutoMixParams::default()
+        };
         let mut a = ins(&[-20.0, -20.0]);
         a[0].1.priority = 2; // Host
         let mut e = AutoMixEngine::default();
@@ -543,11 +577,19 @@ mod tests {
 
     #[test]
     fn duck_reaches_amount_and_never_exceeds_max() {
-        let p = DuckParams { amount_db: -8.0, max_db: -20.0, ..DuckParams::default() };
+        let p = DuckParams {
+            amount_db: -8.0,
+            max_db: -20.0,
+            ..DuckParams::default()
+        };
         let mut e = DuckEngine::default();
         let g = duck_run(&mut e, &p, -20.0, 3000.0);
         assert!((g - -8.0).abs() < 0.3, "{g}");
-        let p = DuckParams { amount_db: -30.0, max_db: -12.0, ..DuckParams::default() };
+        let p = DuckParams {
+            amount_db: -30.0,
+            max_db: -12.0,
+            ..DuckParams::default()
+        };
         let mut e = DuckEngine::default();
         let g = duck_run(&mut e, &p, -20.0, 5000.0);
         assert!((-12.0 - 1e-6..-11.0).contains(&g), "{g}");
@@ -569,7 +611,12 @@ mod tests {
 
     #[test]
     fn duck_hysteresis_keeps_ducking_between_thresholds() {
-        let p = DuckParams { threshold_db: -38.0, hysteresis_db: 6.0, hold_ms: 0.0, ..DuckParams::default() };
+        let p = DuckParams {
+            threshold_db: -38.0,
+            hysteresis_db: 6.0,
+            hold_ms: 0.0,
+            ..DuckParams::default()
+        };
         let mut e = DuckEngine::default();
         duck_run(&mut e, &p, -30.0, 1000.0);
         assert!(e.is_ducking());
@@ -582,7 +629,11 @@ mod tests {
 
     #[test]
     fn duck_hold_then_slow_release_without_jumps() {
-        let p = DuckParams { hold_ms: 400.0, release_ms: 1500.0, ..DuckParams::default() };
+        let p = DuckParams {
+            hold_ms: 400.0,
+            release_ms: 1500.0,
+            ..DuckParams::default()
+        };
         let mut e = DuckEngine::default();
         duck_run(&mut e, &p, -20.0, 3000.0);
         let ducked = e.gain_db();
@@ -603,7 +654,11 @@ mod tests {
 
     #[test]
     fn duck_attack_is_gradual() {
-        let p = DuckParams { attack_ms: 200.0, min_trigger_ms: 0.0, ..DuckParams::default() };
+        let p = DuckParams {
+            attack_ms: 200.0,
+            min_trigger_ms: 0.0,
+            ..DuckParams::default()
+        };
         let mut e = DuckEngine::default();
         let g = duck_run(&mut e, &p, -20.0, 50.0);
         assert!(g > -4.0, "kein harter Sprung: {g}");

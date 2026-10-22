@@ -72,7 +72,10 @@ struct Biquad {
 
 impl Biquad {
     fn identity() -> Self {
-        Biquad { b0: 1.0, ..Default::default() }
+        Biquad {
+            b0: 1.0,
+            ..Default::default()
+        }
     }
 
     /// RBJ-Audio-EQ-Cookbook.
@@ -84,9 +87,14 @@ impl Biquad {
         let alpha = sw / (2.0 * q);
         let a = 10f64.powf(gain_db / 40.0);
         let (b0, b1, b2, a0, a1, a2) = match kind {
-            FilterKind::HighPass => {
-                ((1.0 + cw) / 2.0, -(1.0 + cw), (1.0 + cw) / 2.0, 1.0 + alpha, -2.0 * cw, 1.0 - alpha)
-            }
+            FilterKind::HighPass => (
+                (1.0 + cw) / 2.0,
+                -(1.0 + cw),
+                (1.0 + cw) / 2.0,
+                1.0 + alpha,
+                -2.0 * cw,
+                1.0 - alpha,
+            ),
             FilterKind::Peak => (
                 1.0 + alpha * a,
                 -2.0 * cw,
@@ -169,17 +177,37 @@ impl Default for EqParams {
             hp_enabled: false,
             hp_freq: 80.0,
             bands: [
-                EqBandParams { freq: 100.0, q: bandwidth_to_q(100.0, 200.0), gain_db: 0.0 },
-                EqBandParams { freq: 1000.0, q: bandwidth_to_q(1000.0, 1000.0), gain_db: 0.0 },
-                EqBandParams { freq: 3500.0, q: 1.0, gain_db: 0.0 },
-                EqBandParams { freq: 8000.0, q: bandwidth_to_q(8000.0, 4000.0), gain_db: 0.0 },
+                EqBandParams {
+                    freq: 100.0,
+                    q: bandwidth_to_q(100.0, 200.0),
+                    gain_db: 0.0,
+                },
+                EqBandParams {
+                    freq: 1000.0,
+                    q: bandwidth_to_q(1000.0, 1000.0),
+                    gain_db: 0.0,
+                },
+                EqBandParams {
+                    freq: 3500.0,
+                    q: 1.0,
+                    gain_db: 0.0,
+                },
+                EqBandParams {
+                    freq: 8000.0,
+                    q: bandwidth_to_q(8000.0, 4000.0),
+                    gain_db: 0.0,
+                },
             ],
         }
     }
 }
 
-const BAND_KINDS: [FilterKind; EQ_BANDS] =
-    [FilterKind::LowShelf, FilterKind::Peak, FilterKind::Peak, FilterKind::HighShelf];
+const BAND_KINDS: [FilterKind; EQ_BANDS] = [
+    FilterKind::LowShelf,
+    FilterKind::Peak,
+    FilterKind::Peak,
+    FilterKind::HighShelf,
+];
 
 struct Eq {
     params: EqParams,
@@ -202,7 +230,8 @@ impl Eq {
 
     fn set(&mut self, p: EqParams) {
         self.params = p;
-        self.hp.set(FilterKind::HighPass, p.hp_freq, FRAC_1_SQRT_2, 0.0);
+        self.hp
+            .set(FilterKind::HighPass, p.hp_freq, FRAC_1_SQRT_2, 0.0);
         for (i, b) in p.bands.iter().enumerate() {
             self.bands[i].set(BAND_KINDS[i], b.freq, b.q, b.gain_db);
             // Flache Bänder überspringen (Gain 0 dB = exakt neutral).
@@ -295,7 +324,11 @@ impl Compressor {
 
     /// Statische Kennlinie (Soft-Knee nach Giannoulis/Massberg/Reiss).
     fn static_gain_db(&self, level_db: f64) -> f64 {
-        let (t, r, w) = (self.p.threshold_db, self.p.ratio.max(1.0), self.p.knee_db.max(0.0));
+        let (t, r, w) = (
+            self.p.threshold_db,
+            self.p.ratio.max(1.0),
+            self.p.knee_db.max(0.0),
+        );
         let over = level_db - t;
         let out = if 2.0 * over < -w {
             level_db
@@ -326,7 +359,11 @@ impl Compressor {
             lin_to_db(l.abs().max(r.abs()))
         };
         let target = self.static_gain_db(level);
-        let k = if target < self.gr_db { self.att } else { self.rel };
+        let k = if target < self.gr_db {
+            self.att
+        } else {
+            self.rel
+        };
         self.gr_db = k * self.gr_db + (1.0 - k) * target;
         db_to_lin(self.gr_db + self.p.makeup_db)
     }
@@ -374,7 +411,15 @@ struct Gate {
 
 impl Gate {
     fn new() -> Self {
-        let mut g = Gate { p: GateParams::default(), att: 0.0, rel: 0.0, env: 0.0, open: true, hold_left: 0.0, gain_db: 0.0 };
+        let mut g = Gate {
+            p: GateParams::default(),
+            att: 0.0,
+            rel: 0.0,
+            env: 0.0,
+            open: true,
+            hold_left: 0.0,
+            gain_db: 0.0,
+        };
         g.set(GateParams::default());
         g
     }
@@ -397,7 +442,11 @@ impl Gate {
         }
         // Peak-Hüllkurve mit schnellem Anstieg und langsamem Abfall.
         let x = l.abs().max(r.abs());
-        self.env = if x > self.env { x } else { self.env * 0.9995 + x * 0.0005 };
+        self.env = if x > self.env {
+            x
+        } else {
+            self.env * 0.9995 + x * 0.0005
+        };
         let level = lin_to_db(self.env);
         let thr = self.p.threshold_db;
         if level > thr {
@@ -419,7 +468,11 @@ impl Gate {
             ((level - thr) * (self.p.ratio.max(1.0) - 1.0)).clamp(range, 0.0)
         };
         // Öffnen = Attack (Gain steigt), Schließen = Release.
-        let k = if target > self.gain_db { self.att } else { self.rel };
+        let k = if target > self.gain_db {
+            self.att
+        } else {
+            self.rel
+        };
         self.gain_db = k * self.gain_db + (1.0 - k) * target;
         db_to_lin(self.gain_db)
     }
@@ -442,7 +495,15 @@ const DELAY_XFADE: usize = 480;
 impl Delay {
     fn new() -> Self {
         let cap = (MAX_DELAY_MS * 0.001 * FS) as usize + 2;
-        Delay { buf: vec![0.0; cap * CH], cap, pos: 0, cur: 0, tgt: 0, xfade: 0, enabled: false }
+        Delay {
+            buf: vec![0.0; cap * CH],
+            cap,
+            pos: 0,
+            cur: 0,
+            tgt: 0,
+            xfade: 0,
+            enabled: false,
+        }
     }
 
     fn set(&mut self, enabled: bool, ms: f64) {
@@ -539,7 +600,13 @@ pub fn now_ms() -> u64 {
 impl Meters {
     pub fn new() -> Self {
         let m = Meters::default();
-        for a in [&m.peak_db, &m.rms_db, &m.short_db, &m.speech_db, &m.post_rms_db] {
+        for a in [
+            &m.peak_db,
+            &m.rms_db,
+            &m.short_db,
+            &m.speech_db,
+            &m.post_rms_db,
+        ] {
             a.set(-120.0);
         }
         m
@@ -683,7 +750,9 @@ impl ProcStage {
             let g_comp = self.comp.frame(l2, r2);
             min_gate = min_gate.min(self.gate.gain_db);
             min_comp = min_comp.min(self.comp.gr_db);
-            let out = self.delay.frame([(l2 * g_comp) as f32, (r2 * g_comp) as f32]);
+            let out = self
+                .delay
+                .frame([(l2 * g_comp) as f32, (r2 * g_comp) as f32]);
             gl += dl;
             gr += dr;
             let (ol, or) = (out[0] as f64 * gl, out[1] as f64 * gr);
@@ -695,10 +764,18 @@ impl ProcStage {
         self.pan_r = tr;
         let nf = frames as f64;
         meters.peak_db.set(lin_to_db(peak) as f32);
-        meters.rms_db.set(lin_to_db((self.det.sq_fast).sqrt()) as f32);
-        meters.short_db.set(lin_to_db((self.det.sq_short).sqrt()) as f32);
-        meters.speech_db.set(lin_to_db((self.det.sq_speech).sqrt()) as f32);
-        meters.post_rms_db.set(lin_to_db((sum_post / nf).sqrt()) as f32);
+        meters
+            .rms_db
+            .set(lin_to_db((self.det.sq_fast).sqrt()) as f32);
+        meters
+            .short_db
+            .set(lin_to_db((self.det.sq_short).sqrt()) as f32);
+        meters
+            .speech_db
+            .set(lin_to_db((self.det.sq_speech).sqrt()) as f32);
+        meters
+            .post_rms_db
+            .set(lin_to_db((sum_post / nf).sqrt()) as f32);
         let _ = sum_pre;
         meters.comp_gr_db.set(min_comp as f32);
         meters.gate_gr_db.set(min_gate as f32);
@@ -780,7 +857,12 @@ pub const PAN_LFE_OFF_DB: f64 = -60.0;
 impl Default for PanParams {
     /// Entspricht der früheren Abbildung per `audioconvert`: L→FL, R→FR, sonst still.
     fn default() -> Self {
-        PanParams { x: 0.0, y: 1.0, center: 0.0, lfe_db: PAN_LFE_OFF_DB }
+        PanParams {
+            x: 0.0,
+            y: 1.0,
+            center: 0.0,
+            lfe_db: PAN_LFE_OFF_DB,
+        }
     }
 }
 
@@ -802,11 +884,23 @@ pub fn pan_matrix(out: u32, p: &PanParams) -> Vec<Vec<f64>> {
     let p = p.clamped();
     let theta = (1.0 - p.y) / 2.0 * std::f64::consts::FRAC_PI_2;
     let (front, rear) = (theta.cos(), theta.sin());
-    let gl = if p.x <= 0.0 { 1.0 } else { (p.x * std::f64::consts::FRAC_PI_2).cos() };
-    let gr = if p.x >= 0.0 { 1.0 } else { (-p.x * std::f64::consts::FRAC_PI_2).cos() };
+    let gl = if p.x <= 0.0 {
+        1.0
+    } else {
+        (p.x * std::f64::consts::FRAC_PI_2).cos()
+    };
+    let gr = if p.x >= 0.0 {
+        1.0
+    } else {
+        (-p.x * std::f64::consts::FRAC_PI_2).cos()
+    };
     let c = p.center;
     let h = std::f64::consts::FRAC_1_SQRT_2;
-    let lfe = if p.lfe_db <= PAN_LFE_OFF_DB + 0.01 { 0.0 } else { db_to_lin(p.lfe_db) * 0.5 };
+    let lfe = if p.lfe_db <= PAN_LFE_OFF_DB + 0.01 {
+        0.0
+    } else {
+        db_to_lin(p.lfe_db) * 0.5
+    };
     let mut m = vec![
         vec![front * gl * (1.0 - c), 0.0],
         vec![0.0, front * gr * (1.0 - c)],
@@ -828,7 +922,18 @@ pub fn pan_matrix(out: u32, p: &PanParams) -> Vec<Vec<f64>> {
 
 /// `audiomixmatrix`-Syntax (`<<a,b>,<c,d>>`) für [`pan_matrix`].
 pub fn matrix_to_gst_string(m: &[Vec<f64>]) -> String {
-    let rows: Vec<String> = m.iter().map(|r| format!("<{}>", r.iter().map(|v| format!("(double){v:.6}")).collect::<Vec<_>>().join(","))).collect();
+    let rows: Vec<String> = m
+        .iter()
+        .map(|r| {
+            format!(
+                "<{}>",
+                r.iter()
+                    .map(|v| format!("(double){v:.6}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        })
+        .collect();
     format!("<{}>", rows.join(","))
 }
 
@@ -857,7 +962,11 @@ impl SendShared {
         if !self.enabled.load(Ordering::Relaxed) {
             return 0.0;
         }
-        let post = if self.post.load(Ordering::Relaxed) { ch.total_gain() } else { 1.0 };
+        let post = if self.post.load(Ordering::Relaxed) {
+            ch.total_gain()
+        } else {
+            1.0
+        };
         db_to_lin(self.level_db.get() as f64) * post
     }
 }
@@ -955,7 +1064,11 @@ impl ChannelShared {
     /// Gain Richtung Programm-Bus: wie [`total_gain`](Self::total_gain),
     /// aber 0 ohne Programm-Routing.
     pub fn main_gain(&self) -> f64 {
-        if self.main_route.load(Ordering::Relaxed) { self.total_gain() } else { 0.0 }
+        if self.main_route.load(Ordering::Relaxed) {
+            self.total_gain()
+        } else {
+            0.0
+        }
     }
 
     /// Effektiver Pegel (dB) im Programm vor dem Routing: Fader + Gruppe +
@@ -973,7 +1086,8 @@ impl ChannelShared {
         }
         let mut db = self.fader_db.get() as f64;
         if self.engine_alive() {
-            db += self.group_db.get() as f64 + self.auto_db.get() as f64 + self.duck_db.get() as f64;
+            db +=
+                self.group_db.get() as f64 + self.auto_db.get() as f64 + self.duck_db.get() as f64;
         }
         db_to_lin(db)
     }
@@ -995,7 +1109,10 @@ impl FaderStage {
     }
 
     pub fn with_channels(ch: usize) -> Self {
-        FaderStage { last: 1.0, ch: ch.max(1) }
+        FaderStage {
+            last: 1.0,
+            ch: ch.max(1),
+        }
     }
 
     /// Rampt linear über den Buffer vom letzten zum neuen Gesamtgain
@@ -1036,7 +1153,15 @@ pub struct AfvGate {
 
 impl AfvGate {
     pub fn new(ch: usize) -> Self {
-        AfvGate { cur: 1.0, step: 0.0, remaining: 0, target: 1.0, seen: 0, ch: ch.max(1), pending: None }
+        AfvGate {
+            cur: 1.0,
+            step: 0.0,
+            remaining: 0,
+            target: 1.0,
+            seen: 0,
+            ch: ch.max(1),
+            pending: None,
+        }
     }
 
     fn apply(&mut self, target: f64, frames: u64) {
@@ -1057,7 +1182,12 @@ impl AfvGate {
 
     /// `buf_tai` liefert die TAI-Zeit des ersten Samples dieses Buffers (nur bei geplantem
     /// Auftrag aufgerufen); `None` = unbekannt → Auftrag sofort ausführen.
-    pub fn process_at(&mut self, buf: &mut [f32], shared: &ChannelShared, buf_tai: &dyn Fn() -> Option<u64>) {
+    pub fn process_at(
+        &mut self,
+        buf: &mut [f32],
+        shared: &ChannelShared,
+        buf_tai: &dyn Fn() -> Option<u64>,
+    ) {
         let v = shared.afv_ver.load(Ordering::Acquire);
         if v != self.seen {
             self.seen = v;
@@ -1117,7 +1247,10 @@ pub struct MasterStage {
 
 impl MasterStage {
     pub fn new() -> Self {
-        MasterStage { comp: Compressor::new(), params: CompParams::default() }
+        MasterStage {
+            comp: Compressor::new(),
+            params: CompParams::default(),
+        }
     }
     pub fn set(&mut self, p: CompParams) {
         if p != self.params {
@@ -1154,33 +1287,70 @@ mod pan_tests {
 
     #[test]
     fn rear_position_moves_signal_to_rear_with_constant_power() {
-        let m = pan_matrix(6, &PanParams { y: -1.0, ..PanParams::default() });
-        assert!(m[0][0].abs() < 1e-9 && (m[4][0] - 1.0).abs() < 1e-9 && (m[5][1] - 1.0).abs() < 1e-9);
-        let mid = pan_matrix(6, &PanParams { y: 0.0, ..PanParams::default() });
+        let m = pan_matrix(
+            6,
+            &PanParams {
+                y: -1.0,
+                ..PanParams::default()
+            },
+        );
+        assert!(
+            m[0][0].abs() < 1e-9 && (m[4][0] - 1.0).abs() < 1e-9 && (m[5][1] - 1.0).abs() < 1e-9
+        );
+        let mid = pan_matrix(
+            6,
+            &PanParams {
+                y: 0.0,
+                ..PanParams::default()
+            },
+        );
         let power = mid[0][0].powi(2) + mid[4][0].powi(2);
         assert!((power - 1.0).abs() < 1e-9, "front²+rear² = {power}");
     }
 
     #[test]
     fn center_and_lfe_and_seven_one_layout() {
-        let m = pan_matrix(8, &PanParams { center: 1.0, lfe_db: 0.0, y: 0.0, x: 0.0 });
+        let m = pan_matrix(
+            8,
+            &PanParams {
+                center: 1.0,
+                lfe_db: 0.0,
+                y: 0.0,
+                x: 0.0,
+            },
+        );
         assert_eq!(m.len(), 8);
-        assert!(m[0][0].abs() < 1e-9, "mit center=1 kein Direktanteil auf FL");
+        assert!(
+            m[0][0].abs() < 1e-9,
+            "mit center=1 kein Direktanteil auf FL"
+        );
         assert!(m[2][0] > 0.4 && (m[2][0] - m[2][1]).abs() < 1e-9);
         assert!((m[3][0] - 0.5).abs() < 1e-9, "LFE 0 dB = halbe Summe");
         let rear_power: f64 = [4, 6].iter().map(|&r| m[r][0].powi(2)).sum();
-        assert!((rear_power - 0.5).abs() < 1e-9, "Rear+Side teilen sich den Rear-Anteil: {rear_power}");
+        assert!(
+            (rear_power - 0.5).abs() < 1e-9,
+            "Rear+Side teilen sich den Rear-Anteil: {rear_power}"
+        );
     }
 
     #[test]
     fn balance_attenuates_the_far_channel_only() {
-        let m = pan_matrix(6, &PanParams { x: 1.0, ..PanParams::default() });
+        let m = pan_matrix(
+            6,
+            &PanParams {
+                x: 1.0,
+                ..PanParams::default()
+            },
+        );
         assert!(m[0][0].abs() < 1e-9 && (m[1][1] - 1.0).abs() < 1e-9);
     }
 
     #[test]
     fn gst_string_has_double_cells() {
-        assert_eq!(matrix_to_gst_string(&[vec![1.0, 0.0], vec![0.0, 1.0]]), "<<(double)1.000000,(double)0.000000>,<(double)0.000000,(double)1.000000>>");
+        assert_eq!(
+            matrix_to_gst_string(&[vec![1.0, 0.0], vec![0.0, 1.0]]),
+            "<<(double)1.000000,(double)0.000000>,<(double)0.000000,(double)1.000000>>"
+        );
     }
 }
 
@@ -1203,7 +1373,10 @@ mod afv_tests {
         let mut b = vec![1.0f32; 2 * 150];
         g.process(&mut b, &sh);
         assert!(b[2 * 99].abs() < 1e-6, "Frame 200 = zu");
-        assert!(b[2 * 120].abs() < 1e-9 && b[2 * 149 + 1].abs() < 1e-9, "danach still");
+        assert!(
+            b[2 * 120].abs() < 1e-9 && b[2 * 149 + 1].abs() < 1e-9,
+            "danach still"
+        );
         sh.set_afv(true, 0);
         let mut c = vec![1.0f32; 2 * 10];
         g.process(&mut c, &sh);
@@ -1301,7 +1474,11 @@ mod tests {
         s.set_params(p);
         let flat = rms_db(&sine(1000.0, 0.1, 480, 0));
         let boosted = run(&mut s, 1000.0, 0.1);
-        assert!((boosted - flat - 9.0).abs() < 0.6, "boost {}", boosted - flat);
+        assert!(
+            (boosted - flat - 9.0).abs() < 0.6,
+            "boost {}",
+            boosted - flat
+        );
     }
 
     #[test]
@@ -1361,7 +1538,11 @@ mod tests {
         // Eingang −6 dB RMS, 14 dB über Threshold → bei 4:1 bleiben 3.5 dB → −16.5 dB.
         let out = rms_db(&last);
         assert!((out - (-16.5)).abs() < 1.0, "out {out}");
-        assert!(meters.comp_gr_db.get() < -9.0, "gr {}", meters.comp_gr_db.get());
+        assert!(
+            meters.comp_gr_db.get() < -9.0,
+            "gr {}",
+            meters.comp_gr_db.get()
+        );
     }
 
     #[test]
@@ -1416,13 +1597,22 @@ mod tests {
         let quiet_in = -60.0 - 3.0103;
         assert!((quiet - (quiet_in - 30.0)).abs() < 2.0, "quiet {quiet}");
         let loud = run(&mut s, 1000.0, 0.3);
-        assert!((loud - rms_db(&sine(1000.0, 0.3, 480, 0))).abs() < 0.5, "loud {loud}");
+        assert!(
+            (loud - rms_db(&sine(1000.0, 0.3, 480, 0))).abs() < 0.5,
+            "loud {loud}"
+        );
     }
 
     #[test]
     fn expander_is_gentler_than_gate() {
         let mut gp = ProcParams::default();
-        gp.gate = GateParams { enabled: true, threshold_db: -40.0, range_db: -40.0, ratio: 100.0, ..GateParams::default() };
+        gp.gate = GateParams {
+            enabled: true,
+            threshold_db: -40.0,
+            range_db: -40.0,
+            ratio: 100.0,
+            ..GateParams::default()
+        };
         let mut ep = gp;
         ep.gate.ratio = 1.5;
         let amp = db_to_lin(-50.0);
@@ -1538,7 +1728,10 @@ mod tests {
         assert_eq!(sh.main_gain(), 0.0, "nicht auf Programm geroutet");
         let send = SendShared::new();
         send.enabled.store(true, Ordering::Relaxed);
-        assert!((send.target_gain(&sh) - 1.0).abs() < 1e-9, "Post-Aux folgt weiter dem Fader");
+        assert!(
+            (send.target_gain(&sh) - 1.0).abs() < 1e-9,
+            "Post-Aux folgt weiter dem Fader"
+        );
         sh.muted.store(true, Ordering::Relaxed);
         assert_eq!(sh.effective_db(), -120.0);
     }
@@ -1557,10 +1750,19 @@ mod tests {
 
         let want = db_to_lin(-6.0);
         ch.fader_db.set(-20.0);
-        assert!((pre.target_gain(&ch) - want).abs() < 1e-9, "Pre unabhängig vom Fader");
-        assert!((post.target_gain(&ch) - want * db_to_lin(-20.0)).abs() < 1e-9, "Post folgt dem Fader");
+        assert!(
+            (pre.target_gain(&ch) - want).abs() < 1e-9,
+            "Pre unabhängig vom Fader"
+        );
+        assert!(
+            (post.target_gain(&ch) - want * db_to_lin(-20.0)).abs() < 1e-9,
+            "Post folgt dem Fader"
+        );
         ch.muted.store(true, Ordering::Relaxed);
-        assert!((pre.target_gain(&ch) - want).abs() < 1e-9, "Pre hört auch bei Mute");
+        assert!(
+            (pre.target_gain(&ch) - want).abs() < 1e-9,
+            "Pre hört auch bei Mute"
+        );
         assert_eq!(post.target_gain(&ch), 0.0, "Post stumm bei Mute");
         pre.enabled.store(false, Ordering::Relaxed);
         assert_eq!(pre.target_gain(&ch), 0.0);
@@ -1586,4 +1788,3 @@ mod tests {
         assert!(now_ms() - meters.updated_ms.load(Ordering::Relaxed) < 1000);
     }
 }
-

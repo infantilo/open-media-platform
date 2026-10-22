@@ -248,6 +248,8 @@ button{cursor:pointer}
 .panbox{flex:1 1 100%}
 .pctl{display:flex;flex-direction:column;gap:8px;min-width:220px;flex:1 1 220px}.tog.mini{padding:0 6px;min-height:20px}
 .gtabs{margin:10px 0 4px}
+.afvgivers{margin:8px 0;padding:8px;border:1px solid var(--c-border);border-radius:8px}
+.afvgiver{margin-top:8px;gap:6px}
 .afvcards{display:grid;gap:10px;margin-top:10px}
 .afvcard{border:1px solid var(--c-border);border-radius:8px;padding:10px}
 .afvhead{display:flex;align-items:center;gap:4px;flex-wrap:wrap}

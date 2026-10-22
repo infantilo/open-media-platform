@@ -54,16 +54,31 @@ impl OrchestratorAuth {
         *self.token.lock().expect("lock poisoned") = Some(token);
     }
     pub fn header(&self) -> Option<String> {
-        self.token.lock().expect("lock poisoned").as_ref().map(|t| format!("Bearer {t}"))
+        self.token
+            .lock()
+            .expect("lock poisoned")
+            .as_ref()
+            .map(|t| format!("Bearer {t}"))
     }
 }
 
-pub fn fetch_service_token(orchestrator_url: &str, instance_id: &str, launch_secret: &str) -> Result<String, String> {
-    let url = format!("{}/api/v1/instances/{}/service-token", orchestrator_url.trim_end_matches('/'), instance_id);
+pub fn fetch_service_token(
+    orchestrator_url: &str,
+    instance_id: &str,
+    launch_secret: &str,
+) -> Result<String, String> {
+    let url = format!(
+        "{}/api/v1/instances/{}/service-token",
+        orchestrator_url.trim_end_matches('/'),
+        instance_id
+    );
     match ureq::post(&url).send_json(serde_json::json!({ "launchSecret": launch_secret })) {
         Ok(mut resp) => {
             let body: Value = resp.body_mut().read_json().map_err(|e| e.to_string())?;
-            body.get("token").and_then(Value::as_str).map(str::to_string).ok_or_else(|| "kein token in Antwort".to_string())
+            body.get("token")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| "kein token in Antwort".to_string())
         }
         Err(ureq::Error::StatusCode(code)) => Err(format!("HTTP {code}")),
         Err(e) => Err(e.to_string()),
@@ -72,7 +87,10 @@ pub fn fetch_service_token(orchestrator_url: &str, instance_id: &str, launch_sec
 
 /// Wählt aus den Kandidaten einer Aktion den ersten, den das Ziel kennt.
 pub fn pick_method(action: Action, available: &[String]) -> Option<(&'static str, Value)> {
-    action.candidates().into_iter().find(|(name, _)| available.iter().any(|m| m == name))
+    action
+        .candidates()
+        .into_iter()
+        .find(|(name, _)| available.iter().any(|m| m == name))
 }
 
 pub struct MediaExecutor {
@@ -96,7 +114,12 @@ impl MediaExecutor {
     }
 
     fn resolve(&self, label: &str) -> Option<String> {
-        self.registry.list_nodes().ok()?.into_iter().find(|n| n.label == label).map(|n| n.id)
+        self.registry
+            .list_nodes()
+            .ok()?
+            .into_iter()
+            .find(|n| n.label == label)
+            .map(|n| n.id)
     }
 
     fn methods_of(&self, node_id: &str, auth: &str) -> Result<Vec<String>, String> {
@@ -105,7 +128,10 @@ impl MediaExecutor {
         {
             return Ok(m.clone());
         }
-        let url = format!("{}/api/v1/nodes/{}/descriptor", self.orchestrator_url, node_id);
+        let url = format!(
+            "{}/api/v1/nodes/{}/descriptor",
+            self.orchestrator_url, node_id
+        );
         let mut resp = ureq::get(&url)
             .config()
             .timeout_global(Some(CALL_TIMEOUT))
@@ -117,9 +143,16 @@ impl MediaExecutor {
         let methods: Vec<String> = body
             .get("methods")
             .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|m| m.get("name").and_then(Value::as_str).map(str::to_string)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| m.get("name").and_then(Value::as_str).map(str::to_string))
+                    .collect()
+            })
             .unwrap_or_default();
-        self.descriptors.lock().expect("lock poisoned").insert(node_id.to_string(), (methods.clone(), Instant::now()));
+        self.descriptors
+            .lock()
+            .expect("lock poisoned")
+            .insert(node_id.to_string(), (methods.clone(), Instant::now()));
         Ok(methods)
     }
 
@@ -127,22 +160,48 @@ impl MediaExecutor {
     pub fn run(&self, channel_id: &str, target: &str, action: Action, now_ms: u64) {
         let result = self.try_run(target, action);
         let st = match result {
-            Ok(method) => MediaStatus { action: action.as_str().into(), method, ok: true, error: String::new(), at_ms: now_ms },
+            Ok(method) => MediaStatus {
+                action: action.as_str().into(),
+                method,
+                ok: true,
+                error: String::new(),
+                at_ms: now_ms,
+            },
             Err(e) => {
-                eprintln!("omp-audio-mixer: Media-Automation {channel_id} → {target}/{}: {e}", action.as_str());
-                MediaStatus { action: action.as_str().into(), method: String::new(), ok: false, error: e, at_ms: now_ms }
+                eprintln!(
+                    "omp-audio-mixer: Media-Automation {channel_id} → {target}/{}: {e}",
+                    action.as_str()
+                );
+                MediaStatus {
+                    action: action.as_str().into(),
+                    method: String::new(),
+                    ok: false,
+                    error: e,
+                    at_ms: now_ms,
+                }
             }
         };
-        self.status.lock().expect("lock poisoned").insert(channel_id.to_string(), st);
+        self.status
+            .lock()
+            .expect("lock poisoned")
+            .insert(channel_id.to_string(), st);
     }
 
     fn try_run(&self, target: &str, action: Action) -> Result<String, String> {
-        let auth = self.auth.header().ok_or("kein Service-Token (Orchestrator nicht erreicht?)")?;
-        let node_id = self.resolve(target).ok_or_else(|| format!("Ziel \"{target}\" nicht gefunden"))?;
+        let auth = self
+            .auth
+            .header()
+            .ok_or("kein Service-Token (Orchestrator nicht erreicht?)")?;
+        let node_id = self
+            .resolve(target)
+            .ok_or_else(|| format!("Ziel \"{target}\" nicht gefunden"))?;
         let methods = self.methods_of(&node_id, &auth)?;
         let (method, args) = pick_method(action, &methods)
             .ok_or_else(|| format!("Ziel kennt keine passende Methode für {}", action.as_str()))?;
-        let url = format!("{}/api/v1/nodes/{}/methods/{}", self.orchestrator_url, node_id, method);
+        let url = format!(
+            "{}/api/v1/nodes/{}/methods/{}",
+            self.orchestrator_url, node_id, method
+        );
         match ureq::post(&url)
             .config()
             .timeout_global(Some(CALL_TIMEOUT))
@@ -171,8 +230,15 @@ mod tests {
         let direct = names(&["play", "stop", "load", "seek"]);
         assert_eq!(pick_method(Action::Play, &direct).unwrap().0, "play");
         assert_eq!(pick_method(Action::Stop, &direct).unwrap().0, "stop");
-        assert_eq!(pick_method(Action::Resume, &direct).unwrap().0, "play", "Resume fällt auf play zurück");
-        assert!(pick_method(Action::Pause, &direct).is_none(), "kein Pause → sicher: nichts tun");
+        assert_eq!(
+            pick_method(Action::Resume, &direct).unwrap().0,
+            "play",
+            "Resume fällt auf play zurück"
+        );
+        assert!(
+            pick_method(Action::Pause, &direct).is_none(),
+            "kein Pause → sicher: nichts tun"
+        );
         // omp-mxf-player: take/setRate
         let playlist = names(&["take", "cue", "setRate", "seek"]);
         assert_eq!(pick_method(Action::Play, &playlist).unwrap().0, "take");

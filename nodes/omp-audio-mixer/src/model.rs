@@ -31,10 +31,19 @@ pub struct DuckState {
     pub params: DuckParams,
 }
 
-fn num(args: &Map<String, Value>, key: &str, cur: f64, lo: f64, hi: f64) -> Result<f64, InvokeError> {
+fn num(
+    args: &Map<String, Value>,
+    key: &str,
+    cur: f64,
+    lo: f64,
+    hi: f64,
+) -> Result<f64, InvokeError> {
     match args.get(key) {
         None => Ok(cur),
-        Some(v) => v.as_f64().map(|x| x.clamp(lo, hi)).ok_or(InvokeError::Unknown),
+        Some(v) => v
+            .as_f64()
+            .map(|x| x.clamp(lo, hi))
+            .ok_or(InvokeError::Unknown),
     }
 }
 
@@ -48,7 +57,10 @@ fn flag(args: &Map<String, Value>, key: &str, cur: bool) -> Result<bool, InvokeE
 fn detector(args: &Map<String, Value>, cur: DetectorKind) -> Result<DetectorKind, InvokeError> {
     match args.get("detector") {
         None => Ok(cur),
-        Some(v) => v.as_str().and_then(DetectorKind::parse).ok_or(InvokeError::Unknown),
+        Some(v) => v
+            .as_str()
+            .and_then(DetectorKind::parse)
+            .ok_or(InvokeError::Unknown),
     }
 }
 
@@ -57,14 +69,24 @@ fn csv(args: &Map<String, Value>, key: &str, cur: &[String]) -> Result<Vec<Strin
         None => Ok(cur.to_vec()),
         Some(v) => {
             let s = v.as_str().ok_or(InvokeError::Unknown)?;
-            Ok(s.split(',').map(str::trim).filter(|x| !x.is_empty()).map(str::to_string).collect())
+            Ok(s.split(',')
+                .map(str::trim)
+                .filter(|x| !x.is_empty())
+                .map(str::to_string)
+                .collect())
         }
     }
 }
 
 impl GroupState {
     pub fn new(id: String, label: String) -> Self {
-        GroupState { id, label, gain_db: 0.0, muted: false, automix: AutoMixParams::default() }
+        GroupState {
+            id,
+            label,
+            gain_db: 0.0,
+            muted: false,
+            automix: AutoMixParams::default(),
+        }
     }
 
     pub fn to_json(&self) -> Value {
@@ -80,13 +102,22 @@ impl GroupState {
     /// Fehlende Felder → Defaults (Rückwärtskompatibilität).
     pub fn from_json(d: &Value) -> Option<Self> {
         let id = d.get("id")?.as_str()?.to_string();
-        let mut g = GroupState::new(id.clone(), d.get("label").and_then(Value::as_str).unwrap_or(&id).to_string());
+        let mut g = GroupState::new(
+            id.clone(),
+            d.get("label")
+                .and_then(Value::as_str)
+                .unwrap_or(&id)
+                .to_string(),
+        );
         let f = |k: &str, def: f64| d.get(k).and_then(Value::as_f64).unwrap_or(def);
         g.gain_db = f("gainDb", 0.0);
         g.muted = d.get("mute").and_then(Value::as_bool).unwrap_or(false);
         let def = AutoMixParams::default();
         g.automix = AutoMixParams {
-            enabled: d.get("autoMixEnabled").and_then(Value::as_bool).unwrap_or(false),
+            enabled: d
+                .get("autoMixEnabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             attack_ms: f("attackMs", def.attack_ms),
             hold_ms: f("holdMs", def.hold_ms),
             release_ms: f("releaseMs", def.release_ms),
@@ -104,7 +135,11 @@ impl GroupState {
     pub fn invoke(&mut self, method: &str, args: &Map<String, Value>) -> Result<(), InvokeError> {
         match method {
             "setLabel" => {
-                self.label = args.get("label").and_then(Value::as_str).ok_or(InvokeError::Unknown)?.to_string();
+                self.label = args
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .ok_or(InvokeError::Unknown)?
+                    .to_string();
             }
             "setGain" => self.gain_db = num(args, "db", self.gain_db, -60.0, 12.0)?,
             "setMute" => self.muted = flag(args, "muted", self.muted)?,
@@ -128,7 +163,14 @@ impl GroupState {
 
 impl DuckState {
     pub fn new(id: String, label: String) -> Self {
-        DuckState { id, label, enabled: false, keys: vec![], targets: vec![], params: DuckParams::default() }
+        DuckState {
+            id,
+            label,
+            enabled: false,
+            keys: vec![],
+            targets: vec![],
+            params: DuckParams::default(),
+        }
     }
 
     pub fn to_json(&self) -> Value {
@@ -145,12 +187,22 @@ impl DuckState {
 
     pub fn from_json(d: &Value) -> Option<Self> {
         let id = d.get("id")?.as_str()?.to_string();
-        let mut r = DuckState::new(id.clone(), d.get("label").and_then(Value::as_str).unwrap_or(&id).to_string());
+        let mut r = DuckState::new(
+            id.clone(),
+            d.get("label")
+                .and_then(Value::as_str)
+                .unwrap_or(&id)
+                .to_string(),
+        );
         r.enabled = d.get("enabled").and_then(Value::as_bool).unwrap_or(false);
         let list = |k: &str| -> Vec<String> {
             d.get(k)
                 .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
                 .unwrap_or_default()
         };
         r.keys = list("keys");
@@ -178,7 +230,11 @@ impl DuckState {
     pub fn invoke(&mut self, method: &str, args: &Map<String, Value>) -> Result<(), InvokeError> {
         match method {
             "setLabel" => {
-                self.label = args.get("label").and_then(Value::as_str).ok_or(InvokeError::Unknown)?.to_string();
+                self.label = args
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .ok_or(InvokeError::Unknown)?
+                    .to_string();
             }
             "set" => {
                 let p = self.params.clone();
@@ -214,9 +270,15 @@ mod tests {
     #[test]
     fn group_membership_state_roundtrips_and_keeps_defaults_for_missing_fields() {
         let mut g = GroupState::new("g1".into(), "Studio Mics".into());
-        g.invoke("setGain", &args(serde_json::json!({"db": -4.5}))).unwrap();
-        g.invoke("setMute", &args(serde_json::json!({"muted": true}))).unwrap();
-        g.invoke("setAutoMix", &args(serde_json::json!({"enabled": true, "maxAttenDb": -12, "detector": "rms"}))).unwrap();
+        g.invoke("setGain", &args(serde_json::json!({"db": -4.5})))
+            .unwrap();
+        g.invoke("setMute", &args(serde_json::json!({"muted": true})))
+            .unwrap();
+        g.invoke(
+            "setAutoMix",
+            &args(serde_json::json!({"enabled": true, "maxAttenDb": -12, "detector": "rms"})),
+        )
+        .unwrap();
         let back = GroupState::from_json(&g.to_json()).unwrap();
         assert_eq!(back.label, "Studio Mics");
         assert_eq!(back.gain_db, -4.5);
@@ -231,10 +293,20 @@ mod tests {
     #[test]
     fn group_invoke_validates_and_clamps() {
         let mut g = GroupState::new("g".into(), "G".into());
-        assert!(g.invoke("setGain", &args(serde_json::json!({"db": "laut"}))).is_err());
-        assert!(g.invoke("setAutoMix", &args(serde_json::json!({"detector": "magic"}))).is_err());
+        assert!(
+            g.invoke("setGain", &args(serde_json::json!({"db": "laut"})))
+                .is_err()
+        );
+        assert!(
+            g.invoke(
+                "setAutoMix",
+                &args(serde_json::json!({"detector": "magic"}))
+            )
+            .is_err()
+        );
         assert!(g.invoke("nope", &args(serde_json::json!({}))).is_err());
-        g.invoke("setGain", &args(serde_json::json!({"db": 99}))).unwrap();
+        g.invoke("setGain", &args(serde_json::json!({"db": 99})))
+            .unwrap();
         assert_eq!(g.gain_db, 12.0);
     }
 
@@ -253,7 +325,8 @@ mod tests {
         assert_eq!(back.params.amount_db, -10.0);
         assert_eq!(back.params.release_ms, 2500.0);
         // Teil-Update lässt Rest unverändert.
-        d.invoke("set", &args(serde_json::json!({"holdMs": 900}))).unwrap();
+        d.invoke("set", &args(serde_json::json!({"holdMs": 900})))
+            .unwrap();
         assert_eq!(d.params.amount_db, -10.0);
         assert_eq!(d.params.hold_ms, 900.0);
     }

@@ -50,9 +50,9 @@
 //! Punkt 3 korrekt, kein Standard wird dupliziert.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gst::prelude::*;
@@ -132,23 +132,70 @@ pub enum ChannelSource {
 
 #[allow(clippy::large_enum_variant)]
 enum Command {
-    AddChannel { id: String, source: ChannelSource },
+    AddChannel {
+        id: String,
+        source: ChannelSource,
+    },
     RemoveChannel(String),
-    SetChannelSource { id: String, source: ChannelSource },
+    SetChannelSource {
+        id: String,
+        source: ChannelSource,
+    },
     /// Make-before-break am Kanaleingang (Host-Wartung): neue externe Quelle läuft erst auf einer Haltesenke
     /// mit, dann wird der Kanal ohne Unterbrechung der DSP-Kette umgehängt. `done` meldet das Ergebnis.
-    SwapInput { id: String, flow_id: String, done: Sender<Result<(), String>> },
-    SetGain { id: String, db: f64 },
-    SetMute { id: String, muted: bool },
-    SetAfv { id: String, open: bool, frames: u64, at_tai_ns: u64 },
-    SetProc { id: String, params: dsp::ProcParams },
-    SetMasterLimiter { params: dsp::CompParams },
-    SetPfl { id: String, enabled: bool },
-    SetAuxActive { aux: String, active: bool, channels: u32 },
-    SetAuxMaster { aux: String, db: f64, muted: bool },
-    SetSend { channel: String, aux: String, enabled: bool, level_db: f64, post: bool },
+    SwapInput {
+        id: String,
+        flow_id: String,
+        done: Sender<Result<(), String>>,
+    },
+    SetGain {
+        id: String,
+        db: f64,
+    },
+    SetMute {
+        id: String,
+        muted: bool,
+    },
+    SetAfv {
+        id: String,
+        open: bool,
+        frames: u64,
+        at_tai_ns: u64,
+    },
+    SetProc {
+        id: String,
+        params: dsp::ProcParams,
+    },
+    SetMasterLimiter {
+        params: dsp::CompParams,
+    },
+    SetPfl {
+        id: String,
+        enabled: bool,
+    },
+    SetAuxActive {
+        aux: String,
+        active: bool,
+        channels: u32,
+    },
+    SetAuxMaster {
+        aux: String,
+        db: f64,
+        muted: bool,
+    },
+    SetSend {
+        channel: String,
+        aux: String,
+        enabled: bool,
+        level_db: f64,
+        post: bool,
+    },
     /// Surround-Panner eines Sends (Kap. 32.2).
-    SetSendPan { channel: String, aux: String, pan: dsp::PanParams },
+    SetSendPan {
+        channel: String,
+        aux: String,
+        pan: dsp::PanParams,
+    },
 }
 
 #[derive(Clone)]
@@ -169,7 +216,11 @@ impl PipelineHandle {
 
     /// Aux-Bus (Slot) ein-/ausschalten: öffnet/schließt den MXL-Ausgang.
     pub fn set_aux_active(&self, aux: String, active: bool, channels: u32) {
-        let _ = self.commands.send(Command::SetAuxActive { aux, active, channels });
+        let _ = self.commands.send(Command::SetAuxActive {
+            aux,
+            active,
+            channels,
+        });
     }
 
     pub fn set_aux_master(&self, aux: String, db: f64, muted: bool) {
@@ -178,12 +229,20 @@ impl PipelineHandle {
 
     /// Send eines Kanals auf einen Aux-Bus (Pre/Post-Fader, Pegel, an/aus).
     pub fn set_send(&self, channel: String, aux: String, enabled: bool, level_db: f64, post: bool) {
-        let _ = self.commands.send(Command::SetSend { channel, aux, enabled, level_db, post });
+        let _ = self.commands.send(Command::SetSend {
+            channel,
+            aux,
+            enabled,
+            level_db,
+            post,
+        });
     }
 
     /// Surround-Panner eines Sends auf einen 5.1-/7.1-Bus (Kap. 32.2).
     pub fn set_send_pan(&self, channel: String, aux: String, pan: dsp::PanParams) {
-        let _ = self.commands.send(Command::SetSendPan { channel, aux, pan });
+        let _ = self
+            .commands
+            .send(Command::SetSendPan { channel, aux, pan });
     }
 
     /// Kanal-DSP-Zustände für die Automations-Engine.
@@ -200,13 +259,16 @@ impl PipelineHandle {
     }
 
     pub fn set_channel_source(&self, id: String, source: ChannelSource) {
-        let _ = self
-            .commands
-            .send(Command::SetChannelSource { id, source });
+        let _ = self.commands.send(Command::SetChannelSource { id, source });
     }
 
     /// Weicher Quellenwechsel eines Kanals (s. `Command::SwapInput`). Das Ergebnis kommt über `done`.
-    pub fn swap_channel_input(&self, id: String, flow_id: String, done: Sender<Result<(), String>>) {
+    pub fn swap_channel_input(
+        &self,
+        id: String,
+        flow_id: String,
+        done: Sender<Result<(), String>>,
+    ) {
         let _ = self.commands.send(Command::SwapInput { id, flow_id, done });
     }
 
@@ -218,7 +280,12 @@ impl PipelineHandle {
     /// Wie [`set_afv`](Self::set_afv), schaltet aber erst am Sample, das auf `at_tai_ns` fällt
     /// (gemeinsamer Schaltzeitpunkt `takeAt`, Kap. 31.4; 0 = sofort).
     pub fn set_afv_at(&self, id: String, open: bool, ramp_ms: u64, at_tai_ns: u64) {
-        let _ = self.commands.send(Command::SetAfv { id, open, frames: ramp_ms * SAMPLE_RATE as u64 / 1000, at_tai_ns });
+        let _ = self.commands.send(Command::SetAfv {
+            id,
+            open,
+            frames: ramp_ms * SAMPLE_RATE as u64 / 1000,
+            at_tai_ns,
+        });
     }
 
     pub fn set_mute(&self, id: String, muted: bool) {
@@ -244,7 +311,6 @@ impl PipelineHandle {
     }
 }
 
-
 /// Bearbeitet einen F32LE-Buffer in place (nach `audioconvert`+Capsfilter
 /// garantiert interleaved Stereo). Byte-weise Umwandlung statt
 /// Zeiger-Umdeuten — kein `unsafe`, der Kopieraufwand (10 ms Audio) ist
@@ -255,7 +321,11 @@ fn with_f32_samples(buf: &mut gst::BufferRef, scratch: &mut Vec<f32>, f: impl Fn
     };
     let bytes = map.as_mut_slice();
     scratch.clear();
-    scratch.extend(bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])));
+    scratch.extend(
+        bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])),
+    );
     f(scratch);
     for (c, v) in bytes.chunks_exact_mut(4).zip(scratch.iter()) {
         c.copy_from_slice(&v.to_le_bytes());
@@ -392,7 +462,12 @@ fn buffer_tai(pad: &gst::Pad, pts: Option<gst::ClockTime>) -> Option<u64> {
     let el = pad.parent_element()?;
     let clock = el.clock()?;
     let base = el.base_time()?;
-    omp_mediaio::timebase::running_to_tai(running.nseconds(), base.nseconds(), clock.time().nseconds(), omp_mediaio::timebase::tai_now_ns())
+    omp_mediaio::timebase::running_to_tai(
+        running.nseconds(),
+        base.nseconds(),
+        clock.time().nseconds(),
+        omp_mediaio::timebase::tai_now_ns(),
+    )
 }
 
 /// Zusätzliche Wartezeit der Live-`audiomixer` auf verspätete Eingangspuffer (ns). Ohne sie füllt der
@@ -401,13 +476,18 @@ fn buffer_tai(pad: &gst::Pad, pts: Option<gst::ClockTime>) -> Option<u64> {
 /// der MXL-Index) bleiben unverändert, nur die Auslieferung verzögert sich. `OMP_AUDIO_MIX_LATENCY_MS`
 /// überschreibt den Standard (40 ms).
 fn mixer_latency_ns() -> u64 {
-    std::env::var("OMP_AUDIO_MIX_LATENCY_MS").ok().and_then(|v| v.parse::<f64>().ok()).map_or(40_000_000, |ms| (ms * 1e6) as u64)
+    std::env::var("OMP_AUDIO_MIX_LATENCY_MS")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .map_or(40_000_000, |ms| (ms * 1e6) as u64)
 }
 
 /// Gleitet die Mischmatrix eines Surround-Sends Block für Block (10 ms) auf die Zielwerte aus
 /// `SendShared::pan` — kein Knacken beim Ziehen des Joysticks, auch bei Sprüngen (≈ 30 ms).
 fn attach_pan_probe(matrix_el: &gst::Element, send: Arc<dsp::SendShared>, out: u32) {
-    let Some(pad) = matrix_el.static_pad("sink") else { return };
+    let Some(pad) = matrix_el.static_pad("sink") else {
+        return;
+    };
     let weak = matrix_el.downgrade();
     let start = dsp::pan_matrix(out, &send.pan());
     let state = Mutex::new((start.clone(), start, send.pan_ver.load(Ordering::Acquire)));
@@ -549,7 +629,11 @@ fn add_channel_branch(
         .map_err(|e| format!("identity/fader ({id}): {e}"))?;
     {
         let shared = shared.clone();
-        let stage = Mutex::new((dsp::FaderStage::new(), dsp::AfvGate::new(CHANNELS as usize), Vec::<f32>::new()));
+        let stage = Mutex::new((
+            dsp::FaderStage::new(),
+            dsp::AfvGate::new(CHANNELS as usize),
+            Vec::<f32>::new(),
+        ));
         let pad = fader_el.static_pad("src").ok_or("fader: no src pad")?;
         pad.add_probe(gst::PadProbeType::BUFFER, move |pad, info| {
             if let Some(gst::PadProbeData::Buffer(buffer)) = info.data.as_mut() {
@@ -583,7 +667,10 @@ fn add_channel_branch(
         .and_then(|()| active.pipeline.add(&fader_el))
         .and_then(|()| active.pipeline.add(&level))
         .map_err(|e| format!("add channel elements ({id}): {e}"))?;
-    let wide_channels = external_input.as_ref().map(|i| i.channels).filter(|c| *c > CHANNELS);
+    let wide_channels = external_input
+        .as_ref()
+        .map(|i| i.channels)
+        .filter(|c| *c > CHANNELS);
     let mut wide: Option<(gst::Element, u32)> = None;
     if let Some(n) = wide_channels {
         let wtee = gst::ElementFactory::make("tee")
@@ -611,10 +698,14 @@ fn add_channel_branch(
                 .build()
                 .map_err(|e| format!("capssetter (wide, {id}): {e}"))?
         } else {
-            let rows: Vec<String> = (0..2).map(|o| {
-                let cols: Vec<String> = (0..n).map(|i| format!("(double){}", u8::from(i == o))).collect();
-                format!("<{}>", cols.join(","))
-            }).collect();
+            let rows: Vec<String> = (0..2)
+                .map(|o| {
+                    let cols: Vec<String> = (0..n)
+                        .map(|i| format!("(double){}", u8::from(i == o)))
+                        .collect();
+                    format!("<{}>", cols.join(","))
+                })
+                .collect();
             let m = gst::ElementFactory::make("audiomixmatrix")
                 .name(format!("wide-fold-{id}"))
                 .property("in-channels", n)
@@ -626,8 +717,12 @@ fn add_channel_branch(
             m
         };
         let fold_el = fold.clone();
-        active.pipeline.add(&fold).map_err(|e| format!("add wide fold ({id}): {e}"))?;
-        gst::Element::link_many([&tail, &wtee, &wq, &fold, &convert]).map_err(|e| format!("link wide tap ({id}): {e}"))?;
+        active
+            .pipeline
+            .add(&fold)
+            .map_err(|e| format!("add wide fold ({id}): {e}"))?;
+        gst::Element::link_many([&tail, &wtee, &wq, &fold, &convert])
+            .map_err(|e| format!("link wide tap ({id}): {e}"))?;
         gst::Element::link_many([&convert, &resample, &caps, &proc_el, &level])
             .map_err(|e| format!("link channel chain ({id}): {e}"))?;
         elements.push(wtee.clone());
@@ -671,7 +766,8 @@ fn add_channel_branch(
         .and_then(|()| active.pipeline.add(&pfl_queue))
         .and_then(|()| active.pipeline.add(&pfl_gain))
         .map_err(|e| format!("add pfl elements ({id}): {e}"))?;
-    gst::Element::link_many([&level, &pfl_tee]).map_err(|e| format!("link level to pfl tee ({id}): {e}"))?;
+    gst::Element::link_many([&level, &pfl_tee])
+        .map_err(|e| format!("link level to pfl tee ({id}): {e}"))?;
     gst::Element::link_many([&pfl_tee, &main_queue, &fader_el])
         .map_err(|e| format!("link pfl tee to main queue ({id}): {e}"))?;
     gst::Element::link_many([&pfl_tee, &pfl_queue, &pfl_gain])
@@ -706,10 +802,18 @@ fn add_channel_branch(
     // nicht laufende Elemente; ein `basesrc` pausiert dann bei FLUSHING still
     // und dauerhaft — der Kanal liefert nie einen Buffer (zufällig 1 von 8
     // Kanälen, je länger die Kette, desto wahrscheinlicher).
-    let downstream_first: Vec<&gst::Element> = [&pfl_gain, &pfl_queue, &fader_el, &main_queue, &pfl_tee, &level, &proc_el]
-        .into_iter()
-        .chain(elements.iter().rev())
-        .collect();
+    let downstream_first: Vec<&gst::Element> = [
+        &pfl_gain,
+        &pfl_queue,
+        &fader_el,
+        &main_queue,
+        &pfl_tee,
+        &level,
+        &proc_el,
+    ]
+    .into_iter()
+    .chain(elements.iter().rev())
+    .collect();
     for el in downstream_first {
         el.sync_state_with_parent()
             .map_err(|e| format!("sync_state_with_parent ({id}): {e}"))?;
@@ -754,7 +858,11 @@ fn add_channel_branch(
 /// Folge) wird in einer Pad-Probe an der Queue angewandt, geglättet über
 /// `dsp::FaderStage`. Existiert der Kanalzweig oder der Aux-Slot (noch)
 /// nicht, passiert nichts — `add_channel_branch` holt es später nach.
-fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) -> Result<(), String> {
+fn ensure_send_branch(
+    active: &mut ActivePipeline,
+    ch_id: &str,
+    aux_id: &str,
+) -> Result<(), String> {
     let Some(aux) = active.aux.get(aux_id) else {
         return Ok(());
     };
@@ -768,13 +876,20 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
         return Ok(());
     }
     let send = shared.send(aux_id);
-    let wide_tee = branch.wide.as_ref().filter(|(_, n)| *n == bus_channels).map(|(t, _)| t.clone());
+    let wide_tee = branch
+        .wide
+        .as_ref()
+        .filter(|(_, n)| *n == bus_channels)
+        .map(|(t, _)| t.clone());
     let src_tee = wide_tee.clone().unwrap_or_else(|| branch.tee.clone());
     let queue = gst::ElementFactory::make("queue")
         .name(format!("send-{ch_id}-{aux_id}"))
         .build()
         .map_err(|e| format!("queue (send {ch_id}->{aux_id}): {e}"))?;
-    active.pipeline.add(&queue).map_err(|e| format!("add send queue: {e}"))?;
+    active
+        .pipeline
+        .add(&queue)
+        .map_err(|e| format!("add send queue: {e}"))?;
     // Bus mit anderer Kanalzahl als der (stereo) Kanalzweig: Abbildung per audioconvert.
     let mut adapt: Vec<gst::Element> = Vec::new();
     if wide_tee.is_some() {
@@ -803,11 +918,17 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
                 .name(format!("send-conv-{ch_id}-{aux_id}"))
                 .property("in-channels", CHANNELS)
                 .property("out-channels", bus_channels)
-                .property("channel-mask", if bus_channels == 6 { 0x3fu64 } else { 0x63fu64 })
+                .property(
+                    "channel-mask",
+                    if bus_channels == 6 { 0x3fu64 } else { 0x63fu64 },
+                )
                 .build()
                 .map_err(|e| format!("audiomixmatrix (send {ch_id}->{aux_id}): {e}"))?;
             m.set_property_from_str("mode", "manual");
-            m.set_property_from_str("matrix", &dsp::matrix_to_gst_string(&dsp::pan_matrix(bus_channels, &send.pan())));
+            m.set_property_from_str(
+                "matrix",
+                &dsp::matrix_to_gst_string(&dsp::pan_matrix(bus_channels, &send.pan())),
+            );
             pan_matrix_el = Some(m.clone());
             m
         } else if bus_channels == 1 {
@@ -818,7 +939,13 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
         } else {
             // Freie Kanalzahl (Layout custom): L/R auf Kanal 1/2, der Rest bleibt still.
             let rows: Vec<String> = (0..bus_channels)
-                .map(|o| format!("<(double){},(double){}>", u8::from(o == 0), u8::from(o == 1)))
+                .map(|o| {
+                    format!(
+                        "<(double){},(double){}>",
+                        u8::from(o == 0),
+                        u8::from(o == 1)
+                    )
+                })
                 .collect();
             let m = gst::ElementFactory::make("audiomixmatrix")
                 .name(format!("send-conv-{ch_id}-{aux_id}"))
@@ -836,7 +963,10 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
             .property("caps", bus_caps(bus_channels))
             .build()
             .map_err(|e| format!("capsfilter (send {ch_id}->{aux_id}): {e}"))?;
-        let added = active.pipeline.add(&conv).and_then(|()| active.pipeline.add(&caps));
+        let added = active
+            .pipeline
+            .add(&conv)
+            .and_then(|()| active.pipeline.add(&caps));
         if let Err(e) = added {
             let _ = active.pipeline.remove(&queue);
             return Err(format!("add send adapt: {e}"));
@@ -849,8 +979,16 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
 
     {
         let send = send.clone();
-        let probe_ch = if wide_tee.is_some() { bus_channels as usize } else { CHANNELS as usize };
-        let stage = Mutex::new((dsp::FaderStage::with_channels(probe_ch), dsp::AfvGate::new(probe_ch), Vec::<f32>::new()));
+        let probe_ch = if wide_tee.is_some() {
+            bus_channels as usize
+        } else {
+            CHANNELS as usize
+        };
+        let stage = Mutex::new((
+            dsp::FaderStage::with_channels(probe_ch),
+            dsp::AfvGate::new(probe_ch),
+            Vec::<f32>::new(),
+        ));
         let shared = shared.clone();
         let pad = queue.static_pad("src").ok_or("send queue: no src pad")?;
         pad.add_probe(gst::PadProbeType::BUFFER, move |pad, info| {
@@ -881,11 +1019,14 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
     //   4. Probe entfernen (Strom läuft weiter).
     let mut mixer_pad_slot: Option<gst::Pad> = None;
     let attempt = (|| -> Result<gst::Pad, String> {
-        let mixer_pad = aux_mixer.request_pad_simple("sink_%u").ok_or("aux mixer: request sink pad failed")?;
+        let mixer_pad = aux_mixer
+            .request_pad_simple("sink_%u")
+            .ok_or("aux mixer: request sink pad failed")?;
         mixer_pad_slot = Some(mixer_pad.clone());
         let mut chain: Vec<&gst::Element> = vec![&queue];
         chain.extend(adapt.iter());
-        gst::Element::link_many(chain.iter().copied()).map_err(|e| format!("link send adapt: {e}"))?;
+        gst::Element::link_many(chain.iter().copied())
+            .map_err(|e| format!("link send adapt: {e}"))?;
         chain
             .last()
             .and_then(|e| e.static_pad("src"))
@@ -893,7 +1034,8 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
             .link(&mixer_pad)
             .map_err(|e| format!("link send queue to aux mixer: {e}"))?;
         for el in chain.iter().rev() {
-            el.sync_state_with_parent().map_err(|e| format!("sync send chain: {e}"))?;
+            el.sync_state_with_parent()
+                .map_err(|e| format!("sync send chain: {e}"))?;
         }
 
         let tee_sink = src_tee.static_pad("sink").ok_or("tee: no sink pad")?;
@@ -906,7 +1048,9 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
         // Blockade fortfahren — der Kanal läuft dann ohnehin nicht.
         let _ = blocked_rx.recv_timeout(Duration::from_millis(500));
         let link_result = (|| -> Result<gst::Pad, String> {
-            let tee_pad = src_tee.request_pad_simple("src_%u").ok_or("tee: request src pad failed")?;
+            let tee_pad = src_tee
+                .request_pad_simple("src_%u")
+                .ok_or("tee: request src pad failed")?;
             tee_pad
                 .link(&queue.static_pad("sink").ok_or("send queue: no sink pad")?)
                 .map_err(|e| format!("link tee to send queue: {e}"))?;
@@ -933,7 +1077,16 @@ fn ensure_send_branch(active: &mut ActivePipeline, ch_id: &str, aux_id: &str) ->
         }
     };
     let mixer_pad = mixer_pad_slot.take().expect("gesetzt im Erfolgsfall");
-    branch.sends.insert(aux_id.to_string(), SendBranch { tee: src_tee, queue, adapt, tee_pad, mixer_pad });
+    branch.sends.insert(
+        aux_id.to_string(),
+        SendBranch {
+            tee: src_tee,
+            queue,
+            adapt,
+            tee_pad,
+            mixer_pad,
+        },
+    );
     Ok(())
 }
 
@@ -979,7 +1132,10 @@ fn stage_swap(
     flow_id: &str,
     done: Sender<Result<(), String>>,
 ) -> Result<StagedSwap, String> {
-    let branch = active.channels.get(id).ok_or_else(|| format!("channel {id} not found"))?;
+    let branch = active
+        .channels
+        .get(id)
+        .ok_or_else(|| format!("channel {id} not found"))?;
     let Some(old_channels) = branch._external_input.as_ref().map(|i| i.channels) else {
         return Err("channel input is not hot-swappable (internal test tone)".to_string());
     };
@@ -994,7 +1150,10 @@ fn stage_swap(
     };
     if input.channels != old_channels {
         cleanup(&input);
-        return Err(format!("channel count differs ({old_channels} -> {})", input.channels));
+        return Err(format!(
+            "channel count differs ({old_channels} -> {})",
+            input.channels
+        ));
     }
     let hold = gst::ElementFactory::make("fakesink")
         .property("sync", false)
@@ -1011,7 +1170,9 @@ fn stage_swap(
         return Err(format!("link new input to hold sink (swap {id}): {e}"));
     }
     // Senke zuerst, Quelle zuletzt (s. Kommentar in `add_channel_branch`).
-    let order: Vec<&gst::Element> = std::iter::once(&hold).chain(input.elements.iter().rev()).collect();
+    let order: Vec<&gst::Element> = std::iter::once(&hold)
+        .chain(input.elements.iter().rev())
+        .collect();
     for el in order {
         if let Err(e) = el.sync_state_with_parent() {
             let _ = hold.set_state(gst::State::Null);
@@ -1020,12 +1181,21 @@ fn stage_swap(
             return Err(format!("sync_state_with_parent (swap {id}): {e}"));
         }
     }
-    Ok(StagedSwap { id: id.to_string(), input, hold, since: std::time::Instant::now(), done })
+    Ok(StagedSwap {
+        id: id.to_string(),
+        input,
+        hold,
+        since: std::time::Instant::now(),
+        done,
+    })
 }
 
 /// Phase 2: beide Pads kurz sperren, Quelle umhängen, alte Eingangselemente entfernen. Der Rest des Kanals
 /// (Verarbeitung, Fader, PFL, Sends, Pegel) bleibt unberührt.
-fn finish_swap(active: &mut ActivePipeline, staged: StagedSwap) -> Result<(), (String, StagedSwap)> {
+fn finish_swap(
+    active: &mut ActivePipeline,
+    staged: StagedSwap,
+) -> Result<(), (String, StagedSwap)> {
     match relink_input(active, &staged) {
         Ok(()) => {
             // Der neue Eingang gehört jetzt dem Kanalzweig (hält seinen Lese-Thread am Leben).
@@ -1044,9 +1214,19 @@ const XFADE_STEPS: u32 = 20;
 
 fn relink_input(active: &mut ActivePipeline, staged: &StagedSwap) -> Result<(), String> {
     let id = staged.id.as_str();
-    let branch = active.channels.get_mut(id).ok_or_else(|| format!("channel {id} vanished"))?;
-    let new_src = staged.input.tail.static_pad("src").ok_or("new tail: no src pad")?;
-    let hold_sink = staged.hold.static_pad("sink").ok_or("hold sink: no sink pad")?;
+    let branch = active
+        .channels
+        .get_mut(id)
+        .ok_or_else(|| format!("channel {id} vanished"))?;
+    let new_src = staged
+        .input
+        .tail
+        .static_pad("src")
+        .ok_or("new tail: no src pad")?;
+    let hold_sink = staged
+        .hold
+        .static_pad("sink")
+        .ok_or("hold sink: no sink pad")?;
 
     // Überblend-Mischer VOR dem Sperren anlegen und hochfahren: der Zustandswechsel darf den Strom nicht aufhalten.
     let mut prepared_xf: Option<gst::Element> = None;
@@ -1058,8 +1238,13 @@ fn relink_input(active: &mut ActivePipeline, staged: &StagedSwap) -> Result<(), 
             .map_err(|e| format!("audiomixer (xf, {id}): {e}"))?;
         // Ohne `first` beginnt die Ausgabe bei Zeit 0 und füllt bis zur aktuellen Laufzeit mit Stille.
         mixer.set_property_from_str("start-time-selection", "first");
-        active.pipeline.add(&mixer).map_err(|e| format!("add xf mixer: {e}"))?;
-        mixer.sync_state_with_parent().map_err(|e| format!("sync xf mixer: {e}"))?;
+        active
+            .pipeline
+            .add(&mixer)
+            .map_err(|e| format!("add xf mixer: {e}"))?;
+        mixer
+            .sync_state_with_parent()
+            .map_err(|e| format!("sync xf mixer: {e}"))?;
         prepared_xf = Some(mixer);
     }
 
@@ -1107,26 +1292,51 @@ fn relink_input(active: &mut ActivePipeline, staged: &StagedSwap) -> Result<(), 
 
     // Crossfade-Mischer am Kanaleingang bereitstellen (erster Wechsel) bzw. weiterverwenden.
     let linked = (|| -> Result<(gst::Pad, gst::Pad), String> {
-        new_src.unlink(&hold_sink).map_err(|e| format!("unlink hold sink: {e}"))?;
+        new_src
+            .unlink(&hold_sink)
+            .map_err(|e| format!("unlink hold sink: {e}"))?;
         if let Some(xf) = branch.xf.as_ref() {
-            let new_pad = xf.mixer.request_pad_simple("sink_%u").ok_or("xf: request sink pad failed")?;
+            let new_pad = xf
+                .mixer
+                .request_pad_simple("sink_%u")
+                .ok_or("xf: request sink pad failed")?;
             new_pad.set_property("volume", 0.0f64);
-            new_src.link(&new_pad).map_err(|e| format!("link new input to xf: {e:?}"))?;
+            new_src
+                .link(&new_pad)
+                .map_err(|e| format!("link new input to xf: {e:?}"))?;
             return Ok((xf.cur_pad.clone(), new_pad));
         }
-        let old_src = branch.tail.static_pad("src").ok_or("old tail: no src pad")?;
+        let old_src = branch
+            .tail
+            .static_pad("src")
+            .ok_or("old tail: no src pad")?;
         let convert_sink = old_src.peer().ok_or("old tail is not linked")?;
         let mixer = prepared_xf.take().ok_or("xf mixer not prepared")?;
         let mixer_src = mixer.static_pad("src").ok_or("xf: no src pad")?;
-        let old_pad = mixer.request_pad_simple("sink_%u").ok_or("xf: request sink pad failed")?;
+        let old_pad = mixer
+            .request_pad_simple("sink_%u")
+            .ok_or("xf: request sink pad failed")?;
         old_pad.set_property("volume", 1.0f64);
-        let new_pad = mixer.request_pad_simple("sink_%u").ok_or("xf: request sink pad failed")?;
+        let new_pad = mixer
+            .request_pad_simple("sink_%u")
+            .ok_or("xf: request sink pad failed")?;
         new_pad.set_property("volume", 0.0f64);
-        old_src.unlink(&convert_sink).map_err(|e| format!("unlink old input: {e}"))?;
+        old_src
+            .unlink(&convert_sink)
+            .map_err(|e| format!("unlink old input: {e}"))?;
         let relink = (|| -> Result<(), String> {
-            mixer_src.link(&convert_sink).map(|_| ()).map_err(|e| format!("link xf to channel: {e:?}"))?;
-            old_src.link(&old_pad).map(|_| ()).map_err(|e| format!("link old input to xf: {e:?}"))?;
-            new_src.link(&new_pad).map(|_| ()).map_err(|e| format!("link new input to xf: {e:?}"))
+            mixer_src
+                .link(&convert_sink)
+                .map(|_| ())
+                .map_err(|e| format!("link xf to channel: {e:?}"))?;
+            old_src
+                .link(&old_pad)
+                .map(|_| ())
+                .map_err(|e| format!("link old input to xf: {e:?}"))?;
+            new_src
+                .link(&new_pad)
+                .map(|_| ())
+                .map_err(|e| format!("link new input to xf: {e:?}"))
         })();
         if let Err(e) = relink {
             // Rückweg: alter Zustand (alte Quelle direkt an den Kanal).
@@ -1138,7 +1348,10 @@ fn relink_input(active: &mut ActivePipeline, staged: &StagedSwap) -> Result<(), 
             return Err(e);
         }
         branch.elements.push(mixer.clone());
-        branch.xf = Some(InputXfade { mixer, cur_pad: old_pad.clone() });
+        branch.xf = Some(InputXfade {
+            mixer,
+            cur_pad: old_pad.clone(),
+        });
         Ok((old_pad, new_pad))
     })();
     let (old_pad, new_pad) = match linked {
@@ -1312,16 +1525,28 @@ fn build_aux(
         .and_then(|()| pipeline.add(&silence_src))
         .and_then(|()| pipeline.add(&silence))
         .map_err(|e| format!("add aux elements ({slot_id}): {e}"))?;
-    gst::Element::link_many([&silence_src, &silence]).map_err(|e| format!("link aux silence caps ({slot_id}): {e}"))?;
-    gst::Element::link_many([&mixer, &master, &level]).map_err(|e| format!("link aux ({slot_id}): {e}"))?;
-    let silence_pad = mixer.request_pad_simple("sink_%u").ok_or("aux mixer: request silence pad failed")?;
+    gst::Element::link_many([&silence_src, &silence])
+        .map_err(|e| format!("link aux silence caps ({slot_id}): {e}"))?;
+    gst::Element::link_many([&mixer, &master, &level])
+        .map_err(|e| format!("link aux ({slot_id}): {e}"))?;
+    let silence_pad = mixer
+        .request_pad_simple("sink_%u")
+        .ok_or("aux mixer: request silence pad failed")?;
     silence
         .static_pad("src")
         .ok_or("aux silence: no src pad")?
         .link(&silence_pad)
         .map_err(|e| format!("link aux silence ({slot_id}): {e}"))?;
-    let output = MxlAudioOutput::new(&pipeline, &level, context.clone(), flow_id, label, SAMPLE_RATE, channels)
-        .map_err(|e| format!("MxlAudioOutput (aux {slot_id}): {e}"))?;
+    let output = MxlAudioOutput::new(
+        &pipeline,
+        &level,
+        context.clone(),
+        flow_id,
+        label,
+        SAMPLE_RATE,
+        channels,
+    )
+    .map_err(|e| format!("MxlAudioOutput (aux {slot_id}): {e}"))?;
     // Ventil bleibt beim Bau OFFEN (Live-Befund 2026-10-01): der Aufrufer
     // (`SetAuxActive`) stellt es unmittelbar danach ohnehin ein. Ein hier
     // geschlossenes Ventil ließ die Stille-Quelle zufällig mit "not-linked"
@@ -1336,16 +1561,33 @@ fn build_aux(
     // Pipeline mit (jeder zweite bis dritte Neustart mit Aux).
     for el in pipeline.iterate_elements().into_iter().flatten() {
         if el.current_state() == gst::State::Null && el != silence_src && el != silence {
-            el.sync_state_with_parent().map_err(|e| format!("sync aux element: {e}"))?;
+            el.sync_state_with_parent()
+                .map_err(|e| format!("sync aux element: {e}"))?;
         }
     }
-    silence.sync_state_with_parent().map_err(|e| format!("sync aux silence caps ({slot_id}): {e}"))?;
-    silence_src.sync_state_with_parent().map_err(|e| format!("sync aux silence ({slot_id}): {e}"))?;
-    active.aux.insert(slot_id.to_string(), AuxRt { channels, mixer, master, output });
+    silence
+        .sync_state_with_parent()
+        .map_err(|e| format!("sync aux silence caps ({slot_id}): {e}"))?;
+    silence_src
+        .sync_state_with_parent()
+        .map_err(|e| format!("sync aux silence ({slot_id}): {e}"))?;
+    active.aux.insert(
+        slot_id.to_string(),
+        AuxRt {
+            channels,
+            mixer,
+            master,
+            output,
+        },
+    );
     Ok(())
 }
 
-fn build(context: &Arc<MxlContext>, config: &Config, shared: &SharedMap) -> Result<ActivePipeline, String> {
+fn build(
+    context: &Arc<MxlContext>,
+    config: &Config,
+    shared: &SharedMap,
+) -> Result<ActivePipeline, String> {
     let pipeline = gst::Pipeline::new();
 
     let mixer = gst::ElementFactory::make("audiomixer")
@@ -1389,7 +1631,9 @@ fn build(context: &Arc<MxlContext>, config: &Config, shared: &SharedMap) -> Resu
                     stage.set(*shared.params.lock().expect("lock poisoned"));
                     *seen = v;
                 }
-                with_f32_samples(buffer.make_mut(), scratch, |samples| stage.process(samples, &shared.gr_db));
+                with_f32_samples(buffer.make_mut(), scratch, |samples| {
+                    stage.process(samples, &shared.gr_db)
+                });
             }
             gst::PadProbeReturn::Ok
         });
@@ -1424,8 +1668,11 @@ fn build(context: &Arc<MxlContext>, config: &Config, shared: &SharedMap) -> Resu
         .add(&main_silence)
         .and_then(|()| pipeline.add(&main_silence_caps))
         .map_err(|e| format!("add main silence: {e}"))?;
-    gst::Element::link_many([&main_silence, &main_silence_caps]).map_err(|e| format!("link main silence caps: {e}"))?;
-    let main_silence_pad = mixer.request_pad_simple("sink_%u").ok_or("mixer: request silence pad failed")?;
+    gst::Element::link_many([&main_silence, &main_silence_caps])
+        .map_err(|e| format!("link main silence caps: {e}"))?;
+    let main_silence_pad = mixer
+        .request_pad_simple("sink_%u")
+        .ok_or("mixer: request silence pad failed")?;
     main_silence_caps
         .static_pad("src")
         .ok_or("main silence: no src pad")?
@@ -1597,8 +1844,13 @@ pub fn run(
     loop {
         if last_dsp_report.elapsed() >= Duration::from_millis(100) {
             last_dsp_report = std::time::Instant::now();
-            let snapshot: Vec<(String, Arc<dsp::ChannelShared>)> =
-                active.shared.lock().expect("lock poisoned").iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let snapshot: Vec<(String, Arc<dsp::ChannelShared>)> = active
+                .shared
+                .lock()
+                .expect("lock poisoned")
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
             for (id, sh) in &snapshot {
                 let m = &sh.meters;
                 let _ = tx.send(Event::Dsp {
@@ -1636,7 +1888,10 @@ pub fn run(
         // dafür zu brauchen.
         let mut i = 0;
         while i < staged_swaps.len() {
-            let flowed = staged_swaps[i].input.flowed_handle().load(Ordering::Relaxed);
+            let flowed = staged_swaps[i]
+                .input
+                .flowed_handle()
+                .load(Ordering::Relaxed);
             let gone = !active.channels.contains_key(&staged_swaps[i].id);
             if !(flowed || gone || staged_swaps[i].since.elapsed() >= SWAP_FLOW_TIMEOUT) {
                 i += 1;
@@ -1644,10 +1899,14 @@ pub fn run(
             }
             let staged = staged_swaps.remove(i);
             if gone {
-                let _ = staged.done.send(Err("channel removed during swap".to_string()));
+                let _ = staged
+                    .done
+                    .send(Err("channel removed during swap".to_string()));
                 discard_staged(&active, staged);
             } else if !flowed {
-                let _ = staged.done.send(Err("new source does not deliver audio".to_string()));
+                let _ = staged
+                    .done
+                    .send(Err("new source does not deliver audio".to_string()));
                 discard_staged(&active, staged);
             } else {
                 let done = staged.done.clone();
@@ -1663,12 +1922,14 @@ pub fn run(
             }
         }
         match commands_rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(Command::SwapInput { id, flow_id, done }) => match stage_swap(&active, &context, &id, &flow_id, done.clone()) {
-                Ok(staged) => staged_swaps.push(staged),
-                Err(e) => {
-                    let _ = done.send(Err(e));
+            Ok(Command::SwapInput { id, flow_id, done }) => {
+                match stage_swap(&active, &context, &id, &flow_id, done.clone()) {
+                    Ok(staged) => staged_swaps.push(staged),
+                    Err(e) => {
+                        let _ = done.send(Err(e));
+                    }
                 }
-            },
+            }
             Ok(Command::AddChannel { id, source }) => {
                 match add_channel_branch(&mut active, &context, &id, &source) {
                     Ok(()) => {
@@ -1711,11 +1972,18 @@ pub fn run(
             Ok(Command::SetGain { id, db }) => {
                 shared_for(&active, &id).fader_db.set(db as f32);
             }
-            Ok(Command::SetAfv { id, open, frames, at_tai_ns }) => {
+            Ok(Command::SetAfv {
+                id,
+                open,
+                frames,
+                at_tai_ns,
+            }) => {
                 shared_for(&active, &id).set_afv_at(open, frames, at_tai_ns);
             }
             Ok(Command::SetMute { id, muted }) => {
-                shared_for(&active, &id).muted.store(muted, Ordering::Relaxed);
+                shared_for(&active, &id)
+                    .muted
+                    .store(muted, Ordering::Relaxed);
             }
             Ok(Command::SetProc { id, params }) => {
                 shared_for(&active, &id).set_params(params);
@@ -1724,11 +1992,20 @@ pub fn run(
                 *active.master_params.params.lock().expect("lock poisoned") = params;
                 active.master_params.version.fetch_add(1, Ordering::Release);
             }
-            Ok(Command::SetAuxActive { aux, active: on, channels }) => {
+            Ok(Command::SetAuxActive {
+                aux,
+                active: on,
+                channels,
+            }) => {
                 if on
                     && !active.aux.contains_key(&aux)
-                    && let Some((_, flow_id, label)) = config.aux_slots.iter().find(|(id, _, _)| *id == aux).cloned()
-                    && let Err(e) = build_aux(&mut active, &context, &aux, &flow_id, &label, channels)
+                    && let Some((_, flow_id, label)) = config
+                        .aux_slots
+                        .iter()
+                        .find(|(id, _, _)| *id == aux)
+                        .cloned()
+                    && let Err(e) =
+                        build_aux(&mut active, &context, &aux, &flow_id, &label, channels)
                 {
                     let _ = tx.send(Event::Error(format!("aux {aux} build failed: {e}")));
                 }
@@ -1742,14 +2019,22 @@ pub fn run(
                     rt.master.set_property("mute", muted);
                 }
             }
-            Ok(Command::SetSend { channel, aux, enabled, level_db, post }) => {
+            Ok(Command::SetSend {
+                channel,
+                aux,
+                enabled,
+                level_db,
+                post,
+            }) => {
                 let sh = shared_for(&active, &channel);
                 let send = sh.send(&aux);
                 send.level_db.set(level_db as f32);
                 send.post.store(post, Ordering::Relaxed);
                 send.enabled.store(enabled, Ordering::Relaxed);
                 if enabled && let Err(e) = ensure_send_branch(&mut active, &channel, &aux) {
-                    let _ = tx.send(Event::Error(format!("setSend({channel}->{aux}) failed: {e}")));
+                    let _ = tx.send(Event::Error(format!(
+                        "setSend({channel}->{aux}) failed: {e}"
+                    )));
                 }
             }
             Ok(Command::SetSendPan { channel, aux, pan }) => {
@@ -1757,7 +2042,9 @@ pub fn run(
             }
             Ok(Command::SetPfl { id, enabled }) => {
                 let changed = if let Some(branch) = active.channels.get_mut(&id) {
-                    branch.pfl_gain.set_property("volume", if enabled { 1.0f64 } else { 0.0f64 });
+                    branch
+                        .pfl_gain
+                        .set_property("volume", if enabled { 1.0f64 } else { 0.0f64 });
                     branch.pfl_enabled = enabled;
                     true
                 } else {
@@ -1787,10 +2074,19 @@ pub fn run(
         // abholen (K4-Teil-1) — `pop_filtered` statt `timed_pop_filtered`,
         // damit dieser Schritt den nächsten Kommando-Wartezyklus nicht
         // zusätzlich verzögert.
-        while let Some(msg) = bus.pop_filtered(&[gst::MessageType::Element, gst::MessageType::Error]) {
+        while let Some(msg) =
+            bus.pop_filtered(&[gst::MessageType::Element, gst::MessageType::Error])
+        {
             if let gst::MessageView::Error(err) = msg.view() {
-                let src = msg.src().map(|o| o.path_string().to_string()).unwrap_or_default();
-                let _ = tx.send(Event::Error(format!("GStreamer {src}: {} ({:?})", err.error(), err.debug())));
+                let src = msg
+                    .src()
+                    .map(|o| o.path_string().to_string())
+                    .unwrap_or_default();
+                let _ = tx.send(Event::Error(format!(
+                    "GStreamer {src}: {} ({:?})",
+                    err.error(),
+                    err.debug()
+                )));
                 continue;
             }
             let gst::MessageView::Element(el) = msg.view() else {
@@ -1814,7 +2110,11 @@ pub fn run(
                     None => continue,
                 }
             };
-            let _ = tx.send(Event::Level { channel_id, rms, peak });
+            let _ = tx.send(Event::Level {
+                channel_id,
+                rms,
+                peak,
+            });
         }
     }
 
