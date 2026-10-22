@@ -55,8 +55,11 @@ function clamp(value: number, min: number, max: number): number {
 
 // --- Node-/Port-Layout ---
 
-export const NODE_WIDTH = 160;
-export const HEADER_HEIGHT = 24;
+// Nutzerfund 2026-10-22: Titel waren im Kopf immer abgeschnitten — Kacheln breiter, Kopf zweizeilig (wrapTitle).
+export const NODE_WIDTH = 200;
+export const HEADER_HEIGHT = 36;
+/** Schriftbreite der Kachel-Titel (12 px) für das Zeichenbudget je Zeile. */
+export const TITLE_CHAR_WIDTH = 6.3;
 export const PORT_SPACING = 20;
 export const MIN_BODY_HEIGHT = 40;
 // Größe der Kachel-Inline-Vorschau (16:9, s. flow-canvas.ts
@@ -241,4 +244,42 @@ export function arrangeByFlow(nodes: ArrangeNode[], edges: ArrangeEdge[]): Recor
     x += widestInColumn + ARRANGE_COLUMN_GAP;
   }
   return positions;
+}
+
+
+/**
+ * Bricht einen Kachel-Titel auf höchstens `maxLines` Zeilen mit je höchstens `perLine` Zeichen um (an Leerzeichen; zu lange
+ * Wörter hart). Passt es nicht, wird die letzte Zeile mit „…“ gekürzt — dabei bleibt eine angehängte Instanz-ID „(1a2b3c4d)“
+ * erhalten, weil sie bei mehreren Instanzen desselben Typs das unterscheidende Merkmal ist.
+ */
+export function wrapTitle(label: string, perLine: number, maxLines = 2): { lines: string[]; truncated: boolean } {
+  const per = Math.max(4, Math.floor(perLine));
+  if (label.length <= per) return { lines: [label], truncated: false };
+  const words = label.split(" ").flatMap((w) => {
+    const parts: string[] = [];
+    for (let i = 0; i < w.length; i += per) parts.push(w.slice(i, i + per));
+    return parts.length ? parts : [""];
+  });
+  const lines: string[] = [];
+  let cur = "";
+  for (const w of words) {
+    const next = cur === "" ? w : `${cur} ${w}`;
+    if (next.length <= per) cur = next;
+    else {
+      lines.push(cur);
+      cur = w;
+    }
+  }
+  lines.push(cur);
+  if (lines.length <= maxLines) return { lines, truncated: false };
+  const keep = lines.slice(0, maxLines - 1);
+  const rest = lines.slice(maxLines - 1).join(" ");
+  const idMatch = rest.match(/^(.*) (\([0-9a-fA-F]{4,}\))$/);
+  let last: string;
+  if (idMatch && per - 1 - idMatch[2].length >= 3) {
+    last = `${idMatch[1].slice(0, per - 1 - idMatch[2].length)}…${idMatch[2]}`;
+  } else {
+    last = rest.length <= per ? rest : `${rest.slice(0, per - 1)}…`;
+  }
+  return { lines: [...keep, last], truncated: true };
 }

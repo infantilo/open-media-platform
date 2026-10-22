@@ -18,6 +18,8 @@ import {
   IDENTITY_VIEWPORT,
   MIN_BODY_HEIGHT,
   NODE_WIDTH,
+  TITLE_CHAR_WIDTH,
+  wrapTitle,
   nodeHeight,
   PREVIEW_HEIGHT,
   PREVIEW_RESERVED,
@@ -2821,18 +2823,8 @@ export class FlowCanvas extends HTMLElement {
       g.appendChild(header);
 
       const fullLabel = `▣ ${wf.name}`;
-      const title = document.createElementNS(SVG_NS, "text");
-      title.setAttribute("x", "8");
-      title.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
-      title.setAttribute("fill", "#f0f0f0");
-      title.setAttribute("font-size", "12");
+      const title = this.#createTitle(fullLabel, (NODE_WIDTH - 16) / TITLE_CHAR_WIDTH);
       title.setAttribute("pointer-events", "none");
-      title.textContent = truncateTileTitle(fullLabel, 20);
-      if (fullLabel.length > 20) {
-        const tooltip = document.createElementNS(SVG_NS, "title");
-        tooltip.textContent = fullLabel;
-        title.appendChild(tooltip);
-      }
       g.appendChild(title);
 
       const subtitle = document.createElementNS(SVG_NS, "text");
@@ -3780,18 +3772,9 @@ export class FlowCanvas extends HTMLElement {
     const hasTagButton = !isGroup && tile.inputs.length + tile.outputs.length > 0;
     // Host-Umzug per Knopf statt Kontextmenü (nur eigenständige Instanz-Kacheln in der Host-Ansicht).
     const hasMigrateButton = !isGroup && !!tile.instanceId && this.#hostViewEnabled && this.#scope === null;
-    const titleMaxChars = (hasStopButton ? 17 : 20) - (hasTagButton ? 3 : 0) - (hasMigrateButton ? 3 : 0);
-    const title = document.createElementNS(SVG_NS, "text");
-    title.setAttribute("x", "8");
-    title.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
-    title.setAttribute("fill", "#f0f0f0");
-    title.setAttribute("font-size", "12");
-    title.textContent = truncateTileTitle(fullLabel, titleMaxChars);
-    if (fullLabel.length > titleMaxChars) {
-      const titleTooltip = document.createElementNS(SVG_NS, "title");
-      titleTooltip.textContent = fullLabel;
-      title.appendChild(titleTooltip);
-    }
+    // Zeichenbudget je Zeile: Kachelbreite minus Ränder minus die Knöpfe rechts (je ≈ 18 px).
+    const buttonsWidth = (hasStopButton ? 18 : 0) + (hasTagButton ? 18 : 0) + (hasMigrateButton ? 18 : 0);
+    const title = this.#createTitle(fullLabel, (NODE_WIDTH - 16 - buttonsWidth) / TITLE_CHAR_WIDTH);
     g.appendChild(title);
 
     if (hasMigrateButton) {
@@ -3929,6 +3912,33 @@ export class FlowCanvas extends HTMLElement {
   // Platz (PREVIEW_HEIGHT, geometry.ts) — das Bild bleibt dadurch
   // innerhalb des Kachel-Rahmens (Nutzerfund 2026-07-12: überragte vorher
   // sichtbar den Rahmen).
+  /** Titel im Kachel-Kopf: eine Zeile mittig, sonst bis zu zwei Zeilen; bei Kürzung steht der volle Titel im Tooltip. */
+  #createTitle(fullLabel: string, perLine: number): SVGTextElement {
+    const { lines, truncated } = wrapTitle(fullLabel, perLine, 2);
+    const title = document.createElementNS(SVG_NS, "text");
+    title.setAttribute("fill", "#f0f0f0");
+    title.setAttribute("font-size", "12");
+    if (lines.length === 1) {
+      title.setAttribute("x", "8");
+      title.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
+      title.textContent = lines[0];
+    } else {
+      lines.forEach((line, i) => {
+        const span = document.createElementNS(SVG_NS, "tspan");
+        span.setAttribute("x", "8");
+        span.setAttribute("y", String(i === 0 ? 15 : 29));
+        span.textContent = line;
+        title.appendChild(span);
+      });
+    }
+    if (truncated) {
+      const tip = document.createElementNS(SVG_NS, "title");
+      tip.textContent = fullLabel;
+      title.appendChild(tip);
+    }
+    return title;
+  }
+
   #renderPreviewThumbnail(nodeId: string): SVGForeignObjectElement | null {
     this.#maybeFetchPreviewUrl(nodeId);
     if (!this.#hasPreviewById.get(nodeId)) return null;

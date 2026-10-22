@@ -3,6 +3,8 @@ import {
   arrangeByFlow,
   defaultPosition,
   findFreePosition,
+  HEADER_HEIGHT,
+  NODE_WIDTH,
   IDENTITY_VIEWPORT,
   MAX_SCALE,
   MIN_SCALE,
@@ -10,6 +12,7 @@ import {
   portPosition,
   screenToWorld,
   worldToScreen,
+  wrapTitle,
   zoomAt,
 } from "./geometry.ts";
 
@@ -58,9 +61,9 @@ Deno.test("zoomAt clamps to MIN_SCALE/MAX_SCALE", () => {
 });
 
 Deno.test("nodeHeight grows with the larger port count", () => {
-  assertEquals(nodeHeight(0, 0), 24 + 40);
-  assertEquals(nodeHeight(1, 1), 24 + 40);
-  assertEquals(nodeHeight(5, 1), 24 + 5 * 20);
+  assertEquals(nodeHeight(0, 0), HEADER_HEIGHT + 40);
+  assertEquals(nodeHeight(1, 1), HEADER_HEIGHT + 40);
+  assertEquals(nodeHeight(5, 1), HEADER_HEIGHT + 5 * 20);
 });
 
 Deno.test("portPosition places inputs on the left, outputs on the right", () => {
@@ -69,7 +72,7 @@ Deno.test("portPosition places inputs on the left, outputs on the right", () => 
   const output = portPosition(100, 200, h, 0, 1, "output");
 
   assertEquals(input.x, 100);
-  assertEquals(output.x, 100 + 160);
+  assertEquals(output.x, 100 + NODE_WIDTH);
   assertEquals(input.y, output.y);
 });
 
@@ -180,4 +183,21 @@ Deno.test("arrangeByFlow places disconnected nodes in the source column", () => 
   const edges = [{ from: "src", to: "sink" }];
   const positions = arrangeByFlow(nodes, edges);
   assertEquals(positions.lonely.x, positions.src.x);
+});
+
+Deno.test("wrapTitle: kurz bleibt einzeilig, lang bricht an Leerzeichen um", () => {
+  assertEquals(wrapTitle("Bildmischer", 28), { lines: ["Bildmischer"], truncated: false });
+  assertEquals(wrapTitle("Video Mixer M/E Hauptstudio Regie A", 20), { lines: ["Video Mixer M/E", "Hauptstudio Regie A"], truncated: false });
+});
+
+Deno.test("wrapTitle: zu langes Wort wird hart geteilt, nichts geht verloren solange es in zwei Zeilen passt", () => {
+  assertEquals(wrapTitle("Donaudampfschifffahrt", 12), { lines: ["Donaudampfsc", "hifffahrt"], truncated: false });
+});
+
+Deno.test("wrapTitle: Überlauf kürzt die zweite Zeile, die Instanz-ID bleibt erhalten", () => {
+  const r = wrapTitle("Audiomischer Hauptstudio Regie Nordflügel (1a2b3c4d)", 20);
+  assertEquals(r.truncated, true);
+  assertEquals(r.lines.length, 2);
+  assertEquals(r.lines[1].endsWith("(1a2b3c4d)"), true);
+  assertEquals(r.lines.every((l) => l.length <= 20), true);
 });
