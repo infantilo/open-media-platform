@@ -34,8 +34,8 @@ class IntercomTile extends HTMLElement {
 
   async #load() {
     try {
-      const r = await apiFetch("/api/v1/intercom/panels");
-      if (!r.ok) throw new Error(String(r.status));
+      const r = await apiFetch("/api/v1/ext/intercom/panels");
+      if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? String(r.status));
       const body = (await r.json()) as { panels: PanelEntry[]; error?: string };
       this.#panels = body.panels ?? [];
       this.#error = body.error ?? "";

@@ -11,5 +11,7 @@ gstreamer-sdp = "0.25"
 gstreamer-webrtc = { version = "0.25", features = ["v1_22"] }
 omp-mediaio = { version = "0.1.0", path = "../omp-mediaio", features = ["mxl"] }
 omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
+getrandom = "0.4.3"
+serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "sync", "time"] }

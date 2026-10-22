@@ -2,27 +2,31 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
+	"os"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/cluster"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	audiorulesmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/audiorules"
 	cloudmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/cloud"
+	extsvcmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/extsvc"
 	ingestmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/ingest"
-	intercommod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/intercom"
 	playoutmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/playout"
 	reviewmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/review"
 )
 
 // registerModules meldet die Module des Orchestrators an (UMSETZUNG.md Kapitel 36). Cloud (36.6), Audio-Ausgabe (36.7),
-// Playout (36.8), Eingang/Review (Kapitel 43) und Intercom (Kapitel 47) sind Module.
-func registerModules(reg *module.Registry, playoutSvc *playoutmod.Services, reviewMod *reviewmod.Module, ingestMod *ingestmod.Module, intercomMod *intercommod.Module) {
-	for _, m := range []module.Module{cloudmod.New(), playoutmod.New(playoutSvc), audiorulesmod.New(), reviewMod, ingestMod, intercomMod} {
+// Playout (36.8), Eingang/Review (Kapitel 43) sind Module; `extsvc` ist das Dienst-Gateway (Kapitel 48), über das Fachdienste in eigenen
+// Nodes (z. B. Intercom) Rechte, Oberfläche, Metriken und Audit in die Plattform einbringen.
+func registerModules(reg *module.Registry, playoutSvc *playoutmod.Services, reviewMod *reviewmod.Module, ingestMod *ingestmod.Module, extsvcMod *extsvcmod.Module) {
+	for _, m := range []module.Module{cloudmod.New(), playoutmod.New(playoutSvc), audiorulesmod.New(), reviewMod, ingestMod, extsvcMod} {
 		if err := reg.Register(m); err != nil {
 			slog.Error("module registration failed", "module", m.Name(), "error", err)
 		}
@@ -107,4 +111,38 @@ func (a moduleAccess) Identity(r *http.Request) module.Identity {
 
 func (a moduleAccess) Can(r *http.Request, feature string) bool {
 	return a.Identity(r).Has(feature)
+}
+
+// serviceSecrets gibt das Dienst-Token nur für Nodes heraus, die der Launcher selbst gestartet hat (ein fremder Node in der
+// NMOS-Registry bekommt es nie).
+type serviceSecrets struct {
+	l     *launcher.Launcher
+	token string
+}
+
+func (s serviceSecrets) Secret(instanceID string) string {
+	if instanceID == "" || s.token == "" {
+		return ""
+	}
+	if _, ok := s.l.Get(instanceID); ok {
+		return s.token
+	}
+	return ""
+}
+
+// loadServiceToken liest `OMP_SERVICE_TOKEN` oder, ohne die Variable, die Datei `OMP_SERVICE_TOKEN_FILE` (Standard
+// `../data/service-token`, wird beim ersten Start angelegt).
+func loadServiceToken() (string, error) {
+	if t := os.Getenv("OMP_SERVICE_TOKEN"); t != "" {
+		return t, nil
+	}
+	path := os.Getenv("OMP_SERVICE_TOKEN_FILE")
+	if path == "" {
+		path = "../data/service-token"
+	}
+	b, err := auth.LoadOrCreateSecret(path)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }

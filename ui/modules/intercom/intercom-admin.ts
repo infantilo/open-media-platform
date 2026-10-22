@@ -89,8 +89,8 @@ class IntercomAdmin extends HTMLElement {
 
   async #load() {
     try {
-      const [cfg, guests, dir] = await Promise.all([apiFetch("/api/v1/intercom/config"), apiFetch("/api/v1/intercom/guests"), directory()]);
-      if (!cfg.ok) throw new Error(String(cfg.status));
+      const [cfg, guests, dir] = await Promise.all([apiFetch("/api/v1/ext/intercom/config"), apiFetch("/api/v1/ext/intercom/guests"), directory()]);
+      if (!cfg.ok) throw new Error(((await cfg.json().catch(() => ({}))) as { error?: string }).error ?? String(cfg.status));
       this.#saved = (await cfg.json()) as Config;
       this.#draft = clone(this.#saved);
       this.#guests = guests.ok ? ((await guests.json()) as Guest[]) : [];
@@ -104,7 +104,7 @@ class IntercomAdmin extends HTMLElement {
 
   async #poll() {
     try {
-      const r = await apiFetch("/api/v1/intercom/status");
+      const r = await apiFetch("/api/v1/ext/intercom/status");
       if (!r.ok) throw new Error(String(r.status));
       this.#status = (await r.json()) as Status;
       this.#statusError = "";
@@ -126,7 +126,7 @@ class IntercomAdmin extends HTMLElement {
       this.#render();
       return;
     }
-    const res = await apiFetch("/api/v1/intercom/config", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(cleanConfig(this.#draft)) });
+    const res = await apiFetch("/api/v1/ext/intercom/config", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(cleanConfig(this.#draft)) });
     const body = (await res.json().catch(() => ({}))) as Config & { error?: string; problems?: string[] };
     if (!res.ok) {
       this.#error = tt("icom.saveFailed", { p0: body.problems?.join("; ") ?? body.error ?? String(res.status) });
@@ -343,7 +343,7 @@ class IntercomAdmin extends HTMLElement {
       }
       who.append(btn(tt("icom.party.rotate"), async () => {
         if (!(await confirmDialog(tt("icom.party.rotateConfirm", { p0: p.name })))) return;
-        const r = await apiFetch(`/api/v1/intercom/parties/${p.id}/rotate-token`, { method: "POST" });
+        const r = await apiFetch(`/api/v1/ext/intercom/parties/${p.id}/rotate-token`, { method: "POST" });
         showToast(r.ok ? tt("icom.party.rotated") : tt("icom.saveFailed", { p0: r.status }));
       }));
       card.append(who);
@@ -478,7 +478,7 @@ class IntercomAdmin extends HTMLElement {
           showToast(tt("icom.guest.copyFailed", { p0: g.url ?? "" }));
         }
       }), btn(tt("icom.guest.delete"), async () => {
-        await apiFetch(`/api/v1/intercom/guests/${g.id}`, { method: "DELETE" });
+        await apiFetch(`/api/v1/ext/intercom/guests/${g.id}`, { method: "DELETE" });
         await this.#load();
       }));
       box.append(row);
@@ -500,7 +500,7 @@ class IntercomAdmin extends HTMLElement {
         showToast(tt("icom.guest.pickChannel"));
         return;
       }
-      const res = await apiFetch("/api/v1/intercom/guests", {
+      const res = await apiFetch("/api/v1/ext/intercom/guests", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ name: this.#guestName, ttl_minutes: this.#guestTtl, routes: guestRoutes(this.#guestSel, this.#guestTalk) }),

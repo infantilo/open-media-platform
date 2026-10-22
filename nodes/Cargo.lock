@@ -1462,12 +1462,14 @@ dependencies = [
 name = "omp-intercom"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.4.3",
  "gstreamer",
  "gstreamer-app",
  "gstreamer-sdp",
  "gstreamer-webrtc",
  "omp-mediaio",
  "omp-node-sdk",
+ "serde",
  "serde_json",
  "tokio",
 ]

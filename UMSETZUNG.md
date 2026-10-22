@@ -5540,7 +5540,7 @@ Entscheidungen des Nutzers: Standards der „Offenen Entscheidungen“ gelten (k
 **Offen / nicht geprüft:** Orchestrator mit dem neuen Modul **live** (Neustart nötig; nur Go-Tests, Mock-Test der Oberfläche und Node-E2E liefen); Echtgeräte (Handy-Browser, Firefox/Safari, Kopfhörer-Latenz, WLAN-Jitter); HTTPS-Zertifikatsbestätigung im Alltag; Stream Deck am Gerät; Gast-Zugang von außen (Portweiterleitung).
 
 
-## Kapitel 48: Intercom-Server als eigener Dienst statt Orchestrator-Modul (Nutzerauftrag 2026-10-22, **nur geplant**)
+## Kapitel 48: Intercom-Server als eigener Dienst statt Orchestrator-Modul (Nutzerauftrag 2026-10-22, **umgesetzt 2026-10-22, lokal, nicht committed/gepusht — Orchestrator-Neustart nötig**)
 
 **Anlass:** „Der Intercom-Server ist jetzt Teil des Orchestrators — damit werden wir monolithisch.“ Entscheidungen des Nutzers (2026-10-22): der Dienst wandert **in den vorhandenen Node `omp-intercom`** (kein dritter Prozess), die Konfiguration liegt **als Datei beim Dienst** (nicht mehr im Einstellungsspeicher des Orchestrators).
 
@@ -5566,3 +5566,20 @@ Entscheidungen des Nutzers: Standards der „Offenen Entscheidungen“ gelten (k
 | 48.5 Oberfläche + Aufräumen | Einrichtungs-Ansicht und Kachel aus dem Node-Bundle (`/api/v1/ext/intercom`), Stream-Deck-Adapter/`omp-intercom-panel` auf neue Pfade, `internal/modules/intercom` und `ui/modules/intercom` löschen, Handbuch/ARCHITECTURE §28 fortschreiben | CDP-Klicktest (Einrichtung, Gast-Link, Panel öffnen), E2E `tools/intercom-e2e` |
 
 **Risiken / offene Punkte:** (1) **Datei beim Dienst** heißt: die Konfiguration liegt auf dem Host des Nodes; bei Umzug (Wartung Kap. 41, Cluster-Platzierung) muss die Datei mitwandern — Vorschlag: Sicherungskopie in die Orchestrator-Datensicherung aufnehmen oder Datenverzeichnis fest je Standort. (2) Orchestrator-Neustart nötig (Gateway, Routen). (3) Solange kein Intercom-Node läuft, ist die Einrichtung nicht erreichbar (heute: Konfiguration immer bearbeitbar) — die Oberfläche muss das verständlich melden. (4) Mehrere Intercom-Nodes (ein Node je Standort ist entschieden): das Gateway braucht eine eindeutige Wahl (Standort/Label).
+
+### Umsetzungsstand 2026-10-22
+
+| Schritt | Stand |
+|---|---|
+| 48.1 Konfigurationskern im Node | **erledigt** (`nodes/omp-intercom/src/admin.rs`): Modell, Prüfung (alle Probleme auf einmal), Token (`getrandom`), Gäste, Layout-Auflösung, `parties_for`, Node-Dokument, RFC 3339 ohne Zusatz-Abhängigkeit, Datei atomar; 14 Tests (portiert statt gemeinsamer Fixtures — das Go-Modul entfällt). **Fund:** das alte `Redacted()` ließ `templates` weg (die Oberfläche hätte Vorlagen beim Speichern verloren) — im Port enthalten. |
+| 48.2 Dienst-Routen im Node | **erledigt** (`service.rs`, `main.rs`): `GET /service.json` (Manifest), `/service/{config,guests,parties/{id}/rotate-token,panels,status,metrics}`, intern `import`/`backup`; Token-Pflicht, Identität aus Headern, Audit-Antwort-Header, Panel-Link mit https-Info des SDK, Hintergrund-Aufräumen abgelaufener Gäste (10 s) statt Push. **SDK:** `ParamStore::extra_route_ext` (Header rein/raus, Standard ruft `extra_route`), `https_info()`. |
+| 48.3 Dienst-Gateway | **erledigt** (`orchestrator/internal/modules/extsvc`, 15 Tests + `httpapi/ext_gateway_test.go`): Manifest-Entdeckung (Node ohne Dienst nur einmal befragt), `/api/v1/ext/<dienst>/…`, Rechte je Route, Identität, Audit, Rechte/Tabs/Kacheln/Metriken, gespeichertes Manifest, Sicherungskopie in die Datenbank, Wiederherstellung bei leerem Dienst, einmaliger Import der Altkonfiguration (`intercom.config`, Token bleiben). Routentabelle: 8 Intercom-Routen weg, 5 Gateway-Routen neu (Golden neu erzeugt). |
+| 48.4 Daten | **erledigt**: Import- und Sicherungs-Pfad (s. o.), Marker `extsvc.imported.<name>`; Altdaten bleiben liegen (Rückfall auf die alte Version möglich). |
+| 48.5 Oberfläche/Aufräumen | **erledigt**: `internal/modules/intercom` gelöscht, UI-Pfade auf `/api/v1/ext/intercom/…`, Fehlermeldung des Dienstes („läuft nicht“) statt Statuszahl, Handbuch/ARCHITECTURE §28.5/`docs/MODULE-SCHREIBEN.md` §7. |
+
+**Abweichungen vom Plan:** (1) Das **Dienst-Geheimnis ist ein eigenes, persistentes Token** des Orchestrators (`OMP_SERVICE_TOKEN` oder `data/service-token`), **nicht** das `LaunchSecret` der Instanz — jenes überlebt keinen Orchestrator-Neustart, wiederangebundene Nodes wären danach unerreichbar. Das Token geht nur an vom Launcher gestartete Nodes (Umgebung) und wird nur an diese geschickt; Host-Agent-Hosts: dasselbe Token in der Umgebung des Agents setzen. (2) **Sicherungskopie in der Datenbank** statt „Datei mitwandern lassen“: schließt die Lücke, dass die Konfiguration sonst aus der Datensicherung gefallen wäre, und löst den Umzug des Nodes auf einen anderen Host. (3) Das UI-Bundle bleibt in `ui/modules/intercom` (Shell-Build, i18n, Tests) und ruft nur die neuen Pfade.
+
+**Rollout:** Orchestrator **neu starten** (Gateway, Dienst-Token); **danach** den Intercom-Node einmal neu starten (er bekommt das Token mit der Umgebung; bis dahin sind seine Dienst-Routen gesperrt). Das Gateway übernimmt die bisherige Konfiguration beim ersten Abgleich (≤ 15 s) selbständig. Funktionsrechte `intercom.use`/`intercom.admin` bleiben gültig. Bis zum Neustart des Orchestrators arbeitet der laufende alte Orchestrator weiter mit dem neuen Node (`PUT /config` ohne Token bleibt erlaubt, solange der Node kein Dienst-Token kennt).
+
+**Nicht live geprüft:** der Orchestrator mit dem Gateway gegen den echten Stack (Neustart ausstehend, nur Go-Tests und Node-Tests mit curl); Host-Agent-Hosts (Token in der Agent-Umgebung); Browser-Klicktest der Einrichtung über den neuen Pfad (nur Mock-Test `tools/intercom-e2e/admin-ui.mjs` mit angepasstem Pfad).
+

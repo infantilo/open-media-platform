@@ -49,7 +49,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/materialize"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	ingestmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/ingest"
-	intercommod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/intercom"
+	extsvcmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/extsvc"
 	playoutmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/playout"
 	reviewmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/review"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
@@ -334,8 +334,8 @@ func main() {
 	playoutSvc := &playoutmod.Services{}
 	reviewMod := reviewmod.New(nil)                  // der Asset-Store folgt weiter unten (assetStore), vor dem Mounten der Routen
 	ingestMod := ingestmod.New(ingestmod.Services{}) // Kern-Dienste folgen weiter unten (vor dem Mounten der Routen)
-	intercomMod := intercommod.New(intercommod.Services{}) // Registry und Launcher folgen weiter unten
-	registerModules(modules, playoutSvc, reviewMod, ingestMod, intercomMod)
+	extsvcMod := extsvcmod.New(extsvcmod.Services{}) // Registry, Launcher und Node-Client folgen weiter unten
+	registerModules(modules, playoutSvc, reviewMod, ingestMod, extsvcMod)
 	if err := modules.Migrate(ctx, database); err != nil {
 		slog.Error("module migration failed (affected modules are not mounted)", "error", err)
 	}
@@ -556,6 +556,13 @@ func main() {
 	// um sich ein Service-Token zu holen und den generischen Proxy
 	// statt eines direkten Node-zu-Node-Zugriffs anzusprechen.
 	launcherSvc.SetOrchestratorURL(cfg.OrchestratorURL)
+	// Kapitel 48: Dienst-Token für das Dienst-Gateway (bleibt über Neustarts gleich, damit weiterlaufende Nodes gültig bleiben).
+	serviceToken, err := loadServiceToken()
+	if err != nil {
+		slog.Error("service token unavailable", "error", err)
+		os.Exit(1)
+	}
+	launcherSvc.SetServiceToken(serviceToken)
 	// Nach Neustart/Reboot die zuvor laufenden Instanzen wieder starten (lokale hier, Instanzen auf
 	// Host-Agents vom Cluster-Leader, s. unten).
 	launcherSvc.RestoreLocal()
@@ -882,7 +889,7 @@ func main() {
 	reviewMod.Assets = assetStore
 	ingestFFmpeg, _ := exec.LookPath("ffmpeg")
 	ingestMod.S = ingestmod.Services{Assets: assetStore, Launcher: launcherSvc, Nodes: store, Graph: graphSvc, FFmpeg: ingestFFmpeg}
-	intercomMod.S = intercommod.Services{Nodes: store, Instances: launcherSvc}
+	extsvcMod.S = extsvcmod.Services{Nodes: store, Secrets: serviceSecrets{l: launcherSvc, token: serviceToken}, HTTP: &http.Client{Transport: nodeTransport, Timeout: 10 * time.Second}}
 	processStore := process.NewStore(database)
 	// EventPublisher = nc direkt (erfüllt process.EventPublisher: Publish
 	// (subject string, payload []byte) error) — "workflow -> event"

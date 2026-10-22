@@ -2,15 +2,19 @@
 //!
 //! Browser-Panels verbinden sich per WebRTC (`POST /offer?token=…`, Opus + Datenkanal `ctl`); der
 //! Node mischt alle 20 ms mit dem Mix-Kern ([`mix`]) und schickt jedem Teilnehmer sein Mix-minus.
-//! Konfiguration (Teilnehmer, Kanäle, Rechte) kommt per `PUT /config` (Orchestrator-Modul `intercom`)
-//! oder aus `OMP_INTERCOM_CONFIG` (Datei) beim Start.
+//! Konfiguration (Teilnehmer, Kanäle, Rechte, Gäste) hält der Node selbst ([`admin`], Datei `OMP_INTERCOM_DATA`) und
+//! bietet sie als Dienst an ([`service`]: Manifest `GET /service.json`, Routen unter `/service/…`, erreichbar nur über das
+//! Dienst-Gateway des Orchestrators mit dem Dienst-Geheimnis). `PUT /config` (rohes Node-Dokument) bleibt für Entwicklung
+//! und Tests, ebenso `OMP_INTERCOM_CONFIG`.
 
+mod admin;
 mod encpool;
 mod hub;
 mod ice;
 mod mix;
 mod mxl_io;
 mod peer;
+mod service;
 mod tally;
 mod uibundle;
 
@@ -22,7 +26,7 @@ use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
     Descriptor, InvokeError, MediaReadySource, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType, RawResponse,
-    ReceiverSpec, SenderSpec, SetError,
+    ReceiverSpec, RouteRequest, SenderSpec, SetError,
 };
 use serde_json::{Value, json};
 
@@ -44,6 +48,10 @@ struct Store {
     hub: Arc<hub::Hub>,
     latency_ms: u32,
     config_file: Option<String>,
+    /// Konfiguration des Dienstes (Datei); Sperrreihenfolge: erst `admin`, dann `hub.core`.
+    admin: Mutex<admin::Admin>,
+    /// Dienst-Geheimnis (`OMP_SERVICE_TOKEN`, vom Orchestrator gesetzt); ohne bleiben die Dienst-Routen gesperrt.
+    service_token: Option<String>,
     // Serialisiert gleichzeitige Angebote desselben Teilnehmers.
     offer_lock: Mutex<()>,
     /// IS-05-Steuerung der Programm-Eingänge (leer ohne MXL).
@@ -127,6 +135,159 @@ impl Store {
                 json_resp(200, json!({"ok": true}))
             }
             Err(e) => text(400, e),
+        }
+    }
+
+    /// Wendet die Konfiguration des Dienstes auf den Hub an.
+    fn apply_admin(&self, adm: &admin::Admin) -> Result<(), String> {
+        let doc = adm.cfg.node_config(admin::now_secs());
+        self.hub.core.lock().expect("lock poisoned").apply_config(&doc)
+    }
+
+    fn admin_err(e: admin::AdminError) -> RawResponse {
+        match e {
+            admin::AdminError::Invalid(p) => json_resp(400, json!({"error": p.join("; "), "problems": p})),
+            admin::AdminError::NotFound => json_resp(404, json!({"error": "nicht gefunden"})),
+            admin::AdminError::Internal(m) => {
+                eprintln!("omp-intercom: interner Fehler: {m}");
+                json_resp(500, json!({"error": "interner Fehler"}))
+            }
+        }
+    }
+
+    fn guest_out(req: &RouteRequest, g: &admin::Guest) -> Value {
+        let url = service::panel_url(
+            req.header(service::H_NODE_BASE).unwrap_or(""),
+            req.header(service::H_REQUEST_HOST).unwrap_or(""),
+            &g.token,
+            &omp_node_sdk::https_info(),
+        );
+        json!({"id": g.id, "name": g.name, "expires": admin::format_rfc3339(g.expires), "url": url, "routes": g.routes})
+    }
+
+    /// Eine Dienst-Anfrage (Pfad ohne `/service`): Geheimnis prüfen, Aktion ausführen, Audit-Hinweis als Header zurückgeben.
+    fn service_call(&self, req: &RouteRequest, path: &str) -> (RawResponse, Vec<(String, String)>) {
+        let reply = |r: RawResponse| (r, Vec::new());
+        let Some(expected) = &self.service_token else { return reply(text(403, "Dienst-Routen sind ohne Dienst-Geheimnis gesperrt")) };
+        if !service::secrets_equal(req.header(service::H_TOKEN).unwrap_or(""), expected) {
+            return reply(text(401, "Dienst-Geheimnis fehlt oder ist falsch"));
+        }
+        let Some(op) = service::route(req.method, path) else { return reply(text(404, "not found")) };
+        let who = service::Identity::from_headers(|n| req.header(n).map(String::from));
+        let actor = if who.user.is_empty() { "local".to_string() } else { who.user.clone() };
+        let audit = |n: admin::AuditNote| {
+            let v = json!({"object": n.id, "action": n.action, "details": n.details}).to_string();
+            vec![(service::H_AUDIT.to_string(), service::query_escape(&v))]
+        };
+        let body_json = || serde_json::from_slice::<Value>(req.body).map_err(|_| json_resp(400, json!({"error": "ungültiges JSON"})));
+        match op {
+            service::Op::GetConfig => reply(json_resp(200, serde_json::to_value(self.admin.lock().expect("lock poisoned").cfg.redacted()).unwrap_or(Value::Null))),
+            service::Op::PutConfig => {
+                let cfg = match body_json().and_then(|v| serde_json::from_value::<admin::Config>(v).map_err(|e| json_resp(400, json!({"error": format!("ungültige Konfiguration: {e}")})))) {
+                    Ok(c) => c,
+                    Err(r) => return reply(r),
+                };
+                let mut adm = self.admin.lock().expect("lock poisoned");
+                match adm.update(&actor, cfg) {
+                    Ok(note) => match self.apply_admin(&adm) {
+                        Ok(()) => (json_resp(200, serde_json::to_value(adm.cfg.redacted()).unwrap_or(Value::Null)), audit(note)),
+                        Err(e) => reply(json_resp(500, json!({"error": format!("Konfiguration gespeichert, aber nicht angewendet: {e}")}))),
+                    },
+                    Err(e) => reply(Self::admin_err(e)),
+                }
+            }
+            service::Op::Import => {
+                let cfg = match body_json().and_then(|v| serde_json::from_value::<admin::Config>(v).map_err(|e| json_resp(400, json!({"error": format!("ungültige Konfiguration: {e}")})))) {
+                    Ok(c) => c,
+                    Err(r) => return reply(r),
+                };
+                let mut adm = self.admin.lock().expect("lock poisoned");
+                match adm.import(cfg) {
+                    Ok(note) => match self.apply_admin(&adm) {
+                        Ok(()) => (json_resp(200, json!({"ok": true})), audit(note)),
+                        Err(e) => reply(json_resp(500, json!({"error": e}))),
+                    },
+                    Err(e) => reply(Self::admin_err(e)),
+                }
+            }
+            service::Op::Backup => reply(json_resp(200, serde_json::to_value(&self.admin.lock().expect("lock poisoned").cfg).unwrap_or(Value::Null))),
+            service::Op::Rotate(id) => {
+                let mut adm = self.admin.lock().expect("lock poisoned");
+                match adm.rotate_token(id) {
+                    Ok(note) => match self.apply_admin(&adm) {
+                        Ok(()) => (json_resp(200, json!({"ok": true})), audit(note)),
+                        Err(e) => reply(json_resp(500, json!({"error": e}))),
+                    },
+                    Err(e) => reply(Self::admin_err(e)),
+                }
+            }
+            service::Op::ListGuests => {
+                let adm = self.admin.lock().expect("lock poisoned");
+                let out: Vec<Value> = adm.cfg.active_guests(admin::now_secs()).into_iter().map(|g| Self::guest_out(req, g)).collect();
+                reply(json_resp(200, Value::Array(out)))
+            }
+            service::Op::CreateGuest => {
+                let v = match body_json() {
+                    Ok(v) => v,
+                    Err(r) => return reply(r),
+                };
+                let routes: Vec<admin::Route> = match v.get("routes").cloned().map(serde_json::from_value) {
+                    Some(Ok(r)) => r,
+                    Some(Err(_)) => return reply(json_resp(400, json!({"error": "ungültige Zuordnungen"}))),
+                    None => Vec::new(),
+                };
+                let name = v.get("name").and_then(Value::as_str).unwrap_or("");
+                let ttl = v.get("ttl_minutes").and_then(Value::as_i64).unwrap_or(0);
+                let mut adm = self.admin.lock().expect("lock poisoned");
+                match adm.create_guest(&actor, name, routes, ttl, admin::now_secs()) {
+                    Ok((g, note)) => match self.apply_admin(&adm) {
+                        Ok(()) => (json_resp(201, Self::guest_out(req, &g)), audit(note)),
+                        Err(e) => reply(json_resp(500, json!({"error": e}))),
+                    },
+                    Err(e) => reply(Self::admin_err(e)),
+                }
+            }
+            service::Op::DeleteGuest(id) => {
+                let mut adm = self.admin.lock().expect("lock poisoned");
+                match adm.delete_guest(id) {
+                    Ok(note) => match self.apply_admin(&adm) {
+                        Ok(()) => (json_resp(200, json!({"ok": true})), audit(note)),
+                        Err(e) => reply(json_resp(500, json!({"error": e}))),
+                    },
+                    Err(e) => reply(Self::admin_err(e)),
+                }
+            }
+            service::Op::Panels => {
+                let adm = self.admin.lock().expect("lock poisoned");
+                let parties = if who.can(service::FEAT_ADMIN) && who.is_bootstrap() {
+                    adm.cfg.panel_parties() // Bootstrap-Modus: keine Personen, daher alle zeigen
+                } else {
+                    adm.cfg.parties_for(&who.user, &who.groups)
+                };
+                let https = omp_node_sdk::https_info();
+                let panels: Vec<Value> = parties
+                    .iter()
+                    .map(|p| {
+                        let url = service::panel_url(req.header(service::H_NODE_BASE).unwrap_or(""), req.header(service::H_REQUEST_HOST).unwrap_or(""), &p.token, &https);
+                        json!({"party_id": p.id, "name": p.name, "kind": if p.kind.is_empty() { "human" } else { p.kind.as_str() }, "url": url})
+                    })
+                    .collect();
+                reply(json_resp(200, json!({"panels": panels})))
+            }
+            service::Op::Status => reply(json_resp(200, self.status_json())),
+            service::Op::Metrics => {
+                let core = self.hub.core.lock().expect("lock poisoned");
+                let online = core.sessions.values().filter(|s| s.connected()).count();
+                let under: i64 = core.sessions.values().map(|s| s.underruns.load(Ordering::Relaxed) as i64).sum();
+                let t = service::metrics_text(
+                    online,
+                    core.parties.len(),
+                    under,
+                    self.hub.stats.late_ticks.load(Ordering::Relaxed) as u64,
+                    self.hub.stats.max_tick_us.load(Ordering::Relaxed) as u64,
+                );
+                reply(RawResponse { status: 200, content_type: "text/plain; version=0.0.4", body: t.into_bytes() })
+            }
         }
     }
 
@@ -263,6 +424,26 @@ impl ParamStore for Store {
         }
     }
 
+    fn extra_route_ext(&self, req: &RouteRequest<'_>) -> Option<(RawResponse, Vec<(String, String)>)> {
+        let bare = req.path.split('?').next().unwrap_or(req.path);
+        if req.method == "GET" && bare == "/service.json" {
+            let importable = self.admin.lock().expect("lock poisoned").is_empty();
+            return Some((json_resp(200, service::manifest(importable)), Vec::new()));
+        }
+        if let Some(rest) = bare.strip_prefix("/service/") {
+            return Some(self.service_call(req, rest));
+        }
+        // Rohes Node-Dokument (Entwicklung/Tests): mit Dienst-Geheimnis nur für den Orchestrator.
+        if req.method == "PUT" && bare == "/config" {
+            if let Some(expected) = &self.service_token {
+                if !service::secrets_equal(req.header(service::H_TOKEN).unwrap_or(""), expected) {
+                    return Some((text(401, "Dienst-Geheimnis fehlt oder ist falsch"), Vec::new()));
+                }
+            }
+        }
+        self.extra_route(req.method, req.path, req.body).map(|r| (r, Vec::new()))
+    }
+
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
         let bare = path.split('?').next().unwrap_or(path);
         match (method, bare) {
@@ -305,6 +486,21 @@ impl ParamStore for Store {
     }
 }
 
+/// Abgelaufene Gäste alle 10 s entfernen und die Änderung dem Hub mitteilen (vorher machte das der Abgleich des Orchestrators).
+fn spawn_housekeeping(store: Arc<Store>, _hub: Arc<hub::Hub>) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            let mut adm = store.admin.lock().expect("lock poisoned");
+            if adm.prune_guests(admin::now_secs()) {
+                if let Err(e) = store.apply_admin(&adm) {
+                    eprintln!("omp-intercom: abgelaufene Gäste nicht entfernt: {e}");
+                }
+            }
+        }
+    });
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     gstreamer::init()?;
@@ -326,6 +522,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
             None => eprintln!("omp-intercom: keine gespeicherte Konfiguration in {path} (Start leer)"),
         }
+    }
+    // Konfiguration des Dienstes: Datei beim Dienst. Eine unlesbare Datei beendet den Start (nie still durch eine leere ersetzen).
+    let data_path = env_or("OMP_INTERCOM_DATA", "data/omp-intercom.json");
+    let admin = admin::Admin::open(Some(std::path::PathBuf::from(&data_path)))?;
+    if !admin.is_empty() {
+        let doc = admin.cfg.node_config(admin::now_secs());
+        if let Err(e) = hub.core.lock().expect("lock poisoned").apply_config(&doc) {
+            eprintln!("omp-intercom: gespeicherte Konfiguration {data_path} lässt sich nicht anwenden: {e}");
+        }
+    }
+    let service_token = std::env::var("OMP_SERVICE_TOKEN").ok().filter(|v| !v.is_empty());
+    if service_token.is_none() {
+        eprintln!("omp-intercom: kein Dienst-Geheimnis (OMP_SERVICE_TOKEN) — Einrichtung über den Orchestrator nicht möglich");
     }
     hub.spawn_clock();
     let ticks = hub.stats.ticks.clone();
@@ -386,7 +595,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let alert_hub = hub.clone();
     let tally_nats = nats_url.clone();
     let tally_registry = registry_url.clone();
-    let store: Arc<dyn ParamStore> = Arc::new(Store { hub, latency_ms, config_file, offer_lock: Mutex::new(()), inputs });
+    let store_hub = hub.clone();
+    let store = Arc::new(Store { hub, latency_ms, config_file, admin: Mutex::new(admin), service_token, offer_lock: Mutex::new(()), inputs });
+    spawn_housekeeping(store.clone(), store_hub);
+    let store: Arc<dyn ParamStore> = store;
     let handle = omp_node_sdk::start(
         NodeConfig {
             label,

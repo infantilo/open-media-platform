@@ -19,12 +19,12 @@ const srv = http.createServer((req, res) => {
     const u = req.url;
     if (u === '/') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(page); }
     if (u === '/bundle.js') { res.writeHead(200, { 'content-type': 'text/javascript' }); return res.end(bundle); }
-    if (u === '/api/v1/intercom/config' && req.method === 'GET') return json(res, 200, cfg);
-    if (u === '/api/v1/intercom/config' && req.method === 'PUT') { const c = JSON.parse(body); puts.push(c); cfg = c; return json(res, 200, c); }
-    if (u === '/api/v1/intercom/guests' && req.method === 'GET') return json(res, 200, guests);
-    if (u === '/api/v1/intercom/guests' && req.method === 'POST') { const g = JSON.parse(body); const o = { id: 100000 + guests.length, name: g.name, expires: new Date(Date.now() + g.ttl_minutes * 60000).toISOString(), url: 'https://x:9445/panel?token=abc', routes: g.routes }; guests.push(o); return json(res, 201, o); }
-    if (u === '/api/v1/intercom/status') return json(res, 200, { parties: cfg.parties.map(p => ({ id: p.id, online: p.id === 1, speaking: false })), late_ticks: 0, max_tick_us: 1500 });
-    if (u === '/api/v1/intercom/panels') return json(res, 200, { panels: [{ party_id: 1, name: 'Regie 1', kind: 'human', url: 'about:blank#p1' }, { party_id: 2, name: 'Kamera 1', kind: 'human', url: 'about:blank#p2' }] });
+    if (u === '/api/v1/ext/intercom/config' && req.method === 'GET') return json(res, 200, cfg);
+    if (u === '/api/v1/ext/intercom/config' && req.method === 'PUT') { const c = JSON.parse(body); puts.push(c); cfg = c; return json(res, 200, c); }
+    if (u === '/api/v1/ext/intercom/guests' && req.method === 'GET') return json(res, 200, guests);
+    if (u === '/api/v1/ext/intercom/guests' && req.method === 'POST') { const g = JSON.parse(body); const o = { id: 100000 + guests.length, name: g.name, expires: new Date(Date.now() + g.ttl_minutes * 60000).toISOString(), url: 'https://x:9445/panel?token=abc', routes: g.routes }; guests.push(o); return json(res, 201, o); }
+    if (u === '/api/v1/ext/intercom/status') return json(res, 200, { parties: cfg.parties.map(p => ({ id: p.id, online: p.id === 1, speaking: false })), late_ticks: 0, max_tick_us: 1500 });
+    if (u === '/api/v1/ext/intercom/panels') return json(res, 200, { panels: [{ party_id: 1, name: 'Regie 1', kind: 'human', url: 'about:blank#p1' }, { party_id: 2, name: 'Kamera 1', kind: 'human', url: 'about:blank#p2' }] });
     json(res, 404, { error: 'nf' });
   });
 }).listen(0);

@@ -329,7 +329,24 @@ func catalogKey(nodeType, version string) string {
 // Einträge bleiben eine reguläre, per Code-Review versionierte Datei,
 // nur importierte Fremd-Einträge bekommen die neue, andere
 // Vertrauensstufe.
+// ServiceTokenEnv: Umgebungsvariable, mit der ein gestarteter Node das Dienst-Token des Orchestrators erhält (Kapitel 48).
+const ServiceTokenEnv = "OMP_SERVICE_TOKEN"
+
+// SetServiceToken setzt das Dienst-Token, das jede vom Launcher gestartete Instanz (lokal, Podman, Host-Agent) bekommt.
+// Mit ihm weist sich das Dienst-Gateway gegenüber Nodes aus, die einen Dienst anbieten. Leer = keins. Auf Hosts mit
+// Host-Agent gilt die Allowlist des Agents: dort muss dasselbe Token in der Umgebung des Agents stehen (er vererbt sie an
+// seine Nodes), es wird nicht über das Netz mitgeschickt.
+func (l *Launcher) SetServiceToken(token string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.serviceToken = token
+}
+
 type Launcher struct {
+	// serviceToken s. SetServiceToken (nur unter mu schreiben; Lesen im Startpfad ohne Sperre ist unkritisch, weil es
+	// einmal beim Start des Orchestrators gesetzt wird, bevor Instanzen gestartet werden).
+	serviceToken string
+
 	binaryResolver BinaryResolver
 	binaryLookup   BinaryLookup
 	// Kapitel 29: einstellbare Node-Optionen (Schema je Typ + gespeicherte Werte).
@@ -1079,10 +1096,13 @@ func hashOptions(a, b map[string]string) string {
 // deren Instanz-Werte statt der eigenen gelten (Neustart per Stop + Start mit neuer ID).
 func (l *Launcher) withOptions(nodeType, instanceID, valuesFrom string, extraEnv map[string]string) map[string]string {
 	typeVals, instVals := l.optionLayers(nodeType, instanceID, valuesFrom)
-	if len(typeVals) == 0 && len(instVals) == 0 {
+	if len(typeVals) == 0 && len(instVals) == 0 && l.serviceToken == "" {
 		return extraEnv
 	}
-	out := make(map[string]string, len(typeVals)+len(extraEnv)+len(instVals))
+	out := make(map[string]string, len(typeVals)+len(extraEnv)+len(instVals)+1)
+	if l.serviceToken != "" {
+		out[ServiceTokenEnv] = l.serviceToken // nur im Start-Umfeld, nie in Instance.ExtraEnv (das bleibt unverändert)
+	}
 	for k, v := range typeVals {
 		out[k] = v
 	}

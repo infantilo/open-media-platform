@@ -29,7 +29,7 @@ class OmpIntercomPanel extends HTMLElement {
 
   async _load() {
     try {
-      const r = await fetch("/api/v1/intercom/panels");
+      const r = await fetch("/api/v1/ext/intercom/panels");
       if (!r.ok) throw new Error(String(r.status));
       this._panels = (await r.json()).panels || [];
     } catch (e) {

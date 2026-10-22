@@ -32,4 +32,9 @@ pub use liveness::LivenessMonitor;
 pub use node::{MediaReadySource, NodeConfig, NodeHandle, ReceiverSpec, SenderSpec, run, start};
 pub use peer::{PeerClient, resolve_owning_node_href};
 pub use plugins::{PluginInfo, PluginRegistry};
-pub use server::{InvokeError, ParamStore, RawResponse, SetError};
+pub use server::{InvokeError, ParamStore, RawResponse, RouteRequest, SetError};
+
+/// Inhalt von `GET /https-info` (`{"enabled":bool,"port":N,"url":…}`) für Nodes, die ihre HTTPS-Adresse selbst brauchen.
+pub fn https_info() -> serde_json::Value {
+    https::info_json()
+}

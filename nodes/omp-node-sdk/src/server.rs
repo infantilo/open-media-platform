@@ -51,6 +51,22 @@ pub struct RawResponse {
     pub body: Vec<u8>,
 }
 
+/// Eine Anfrage an `ParamStore::extra_route_ext`.
+pub struct RouteRequest<'a> {
+    pub method: &'a str,
+    /// Pfad samt Query.
+    pub path: &'a str,
+    /// Anfrage-Header (Name klein geschrieben, Wert unverändert).
+    pub headers: &'a [(String, String)],
+    pub body: &'a [u8],
+}
+
+impl RouteRequest<'_> {
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+    }
+}
+
 /// Verbindet einen Node mit dem generischen Descriptor-Proxy des
 /// Orchestrators (A8): jeder Node-Autor implementiert nur diesen Trait,
 /// keine eigene HTTP-Logik nötig.
@@ -72,6 +88,13 @@ pub trait ParamStore: Send + Sync + 'static {
     /// Zusatzrouten, bestehende Nodes brauchen keine Änderung.
     fn extra_route(&self, _method: &str, _path: &str, _body: &[u8]) -> Option<RawResponse> {
         None
+    }
+
+    /// Wie [`ParamStore::extra_route`], aber mit den Anfrage-Headern und mit zusätzlichen Antwort-Headern — für Nodes, die
+    /// einen Dienst anbieten (Kapitel 48: Identität und Dienst-Geheimnis kommen als Header, der Audit-Hinweis geht als
+    /// Antwort-Header zurück). Default: ruft `extra_route` und fügt keine Header hinzu. Header-Namen sind klein geschrieben.
+    fn extra_route_ext(&self, req: &RouteRequest<'_>) -> Option<(RawResponse, Vec<(String, String)>)> {
+        self.extra_route(req.method, req.path, req.body).map(|r| (r, Vec::new()))
     }
 
     /// CORS-Preflight (`OPTIONS`) für eine `extra_route`-Zusatzroute —
@@ -164,13 +187,20 @@ fn handle(mut request: Request, store: &Arc<dyn ParamStore>) {
     // `RawResponse`-Literale verteilt, s. `uibundle.rs`-Module) —
     // dieselbe "eine Middleware statt viele Handler" Begründung wie bei
     // Go.
-    let response = route(&method, &url, &body, store).with_header(
+    let headers: Vec<(String, String)> =
+        request.headers().iter().map(|h| (h.field.as_str().as_str().to_ascii_lowercase(), h.value.as_str().to_string())).collect();
+    let response = route_with_headers(&method, &url, &headers, &body, store).with_header(
         Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).expect("static header"),
     );
     let _ = request.respond(response);
 }
 
+#[cfg(test)]
 fn route(method: &Method, url: &str, body: &[u8], store: &Arc<dyn ParamStore>) -> ResponseBox {
+    route_with_headers(method, url, &[], body, store)
+}
+
+fn route_with_headers(method: &Method, url: &str, headers: &[(String, String)], body: &[u8], store: &Arc<dyn ParamStore>) -> ResponseBox {
     if *method == Method::Get && url == "/https-info" {
         return json_response(200, &crate::https::info_json());
     }
@@ -292,14 +322,16 @@ fn route(method: &Method, url: &str, body: &[u8], store: &Arc<dyn ParamStore>) -
             .boxed();
     }
 
-    if let Some(extra) = store.extra_route(method.as_str(), url, body) {
-        return Response::from_data(extra.body)
-            .with_status_code(extra.status)
-            .with_header(
-                Header::from_bytes(&b"Content-Type"[..], extra.content_type.as_bytes())
-                    .expect("valid content-type header value"),
-            )
-            .boxed();
+    if let Some((extra, more)) = store.extra_route_ext(&RouteRequest { method: method.as_str(), path: url, headers, body }) {
+        let mut resp = Response::from_data(extra.body).with_status_code(extra.status).with_header(
+            Header::from_bytes(&b"Content-Type"[..], extra.content_type.as_bytes()).expect("valid content-type header value"),
+        );
+        for (k, v) in more {
+            if let Ok(h) = Header::from_bytes(k.as_bytes(), v.as_bytes()) {
+                resp = resp.with_header(h);
+            }
+        }
+        return resp.boxed();
     }
 
     error_response(404, "not found")

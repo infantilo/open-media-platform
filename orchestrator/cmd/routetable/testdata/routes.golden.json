@@ -641,6 +641,36 @@
     "domain": "core"
   },
   {
+    "method": "DELETE",
+    "path": "/api/v1/ext/{svc}/{rest...}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/ext/{svc}/{rest...}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/ext/{svc}/{rest...}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/ext/{svc}/{rest...}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/ext/{svc}/{rest...}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
     "method": "GET",
     "path": "/api/v1/features",
     "auth": "auth",
@@ -928,54 +958,6 @@
     "method": "POST",
     "path": "/api/v1/instances/{id}/service-token",
     "auth": "custom:handleIssueServiceToken",
-    "domain": "core"
-  },
-  {
-    "method": "GET",
-    "path": "/api/v1/intercom/config",
-    "auth": "feature:intercom.admin",
-    "domain": "core"
-  },
-  {
-    "method": "PUT",
-    "path": "/api/v1/intercom/config",
-    "auth": "feature:intercom.admin",
-    "domain": "core"
-  },
-  {
-    "method": "GET",
-    "path": "/api/v1/intercom/guests",
-    "auth": "feature:intercom.admin",
-    "domain": "core"
-  },
-  {
-    "method": "POST",
-    "path": "/api/v1/intercom/guests",
-    "auth": "feature:intercom.admin",
-    "domain": "core"
-  },
-  {
-    "method": "DELETE",
-    "path": "/api/v1/intercom/guests/{id}",
-    "auth": "feature:intercom.admin",
-    "domain": "core"
-  },
-  {
-    "method": "GET",
-    "path": "/api/v1/intercom/panels",
-    "auth": "feature:intercom.use|intercom.admin",
-    "domain": "core"
-  },
-  {
-    "method": "POST",
-    "path": "/api/v1/intercom/parties/{id}/rotate-token",
-    "auth": "feature:intercom.admin",
-    "domain": "core"
-  },
-  {
-    "method": "GET",
-    "path": "/api/v1/intercom/status",
-    "auth": "feature:intercom.use|intercom.admin",
     "domain": "core"
   },
   {

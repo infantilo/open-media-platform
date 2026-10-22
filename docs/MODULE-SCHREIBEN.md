@@ -83,3 +83,27 @@ Außerdem prüfen: `go list -deps ./internal/httpapi | grep modules` darf nichts
 
 Module laufen im selben Prozess und derselben Datenbank wie der Orchestrator; es gibt kein Laden zur Laufzeit (Go kann das nicht
 brauchbar). Eigenständige Dienste hinter `/api/v1/ext/<name>` (Stufe 2) sind bewusst **nicht** gebaut — Kriterien in `ARCHITECTURE.md` §28.2.
+
+## 7. Dienst statt Modul (Kapitel 48)
+
+Ein Modul läuft im Orchestrator-Prozess. Soll eine Fachfunktion **nicht** dort laufen (eigener Release, eigene Abhängigkeiten,
+Absturz-Isolation), ist sie ein **Dienst in einem Node**; das Modul `extsvc` ist das generische Gateway davor. Beispiel:
+`nodes/omp-intercom` (`src/service.rs`, `src/admin.rs`).
+
+1. **Manifest:** `GET /service.json` am Node (ohne Anmeldung): `name`, `base` (Pfadpräfix, z. B. `/service`), `features`
+   (IDs müssen mit `<name>.` beginnen), `routes` (`method`, `path` mit `{platzhalter}`, `features` — eines genügt; ohne Recht
+   ist die Route ungültig), optional `ui` (Admin-Tabs, wie `UITab`), `tiles`, `metrics`, `import`, `backup`. Ein ungültiges
+   Manifest wird abgelehnt.
+2. **Aufruf:** Browser → `/api/v1/ext/<name>/<pfad>` → Gateway prüft Anmeldung und Funktionsrecht → Node `<base><pfad>` mit den
+   Headern `X-OMP-Service-Token`, `X-OMP-User`, `X-OMP-Groups`, `X-OMP-Features` (die Rechte der Person aus den Rechten des
+   Dienstes), `X-OMP-Request-Host`, `X-OMP-Node-Base`. **Der Node vertraut ihnen nur bei richtigem Token** (`OMP_SERVICE_TOKEN`,
+   vom Launcher gesetzt) und gibt sonst 401/403.
+3. **Audit:** Antwort-Header `X-OMP-Audit` = URL-kodiertes JSON `{"object","action","details"}`; das Gateway schreibt den Eintrag
+   mit dem Nutzernamen (nur bei Erfolg).
+4. **Daten:** der Dienst hält seine Daten selbst (Datei). Mit `backup` holt das Gateway regelmäßig eine Kopie in die Datenbank
+   (Datensicherung des Orchestrators); meldet der Dienst `import.importable` (leer), spielt es die Kopie per `import.path` ein,
+   sonst einmalig die Altdaten unter `import.settings_key`.
+5. **Oberfläche:** das Bundle bleibt in `ui/modules/<name>` (gebaut nach `ui/dist/modules`) und ruft `/api/v1/ext/<name>/…`.
+6. **Grenzen:** je Dienstname wird der erste laufende Node (nach ID) benutzt; ohne laufenden Node antwortet das Gateway 503, Rechte,
+   Tabs und Kacheln bleiben aber bekannt. Weiterleitung nur mit Körpern bis 1 MB, ohne Streaming.
+
