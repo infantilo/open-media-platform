@@ -2731,10 +2731,12 @@ fn schedule_audio_follow(store: &AutomationStore, state: &AutomationState, stand
         Channel::B => state.player_b_node_id.clone(),
     };
     let client = store.proxy_client(audio);
+    // `giver` = der Bildmischer, den die Automation bedient: der Tonmischer kann so nach „Folgt Bildmischer“ filtern.
+    let giver = state.mixer_node_id.clone().unwrap_or_default();
     if let Some(live) = live_node_id.filter(|n| n != standby_node_id) {
-        let _ = client.invoke("setVideoContext", serde_json::json!({"source": live, "active": false, "takeAt": take_at}));
+        let _ = client.invoke("setVideoContext", serde_json::json!({"source": live, "active": false, "takeAt": take_at, "giver": giver}));
     }
-    if let Err(e) = client.invoke("setVideoContext", serde_json::json!({"source": standby_node_id, "active": true, "takeAt": take_at})) {
+    if let Err(e) = client.invoke("setVideoContext", serde_json::json!({"source": standby_node_id, "active": true, "takeAt": take_at, "giver": giver})) {
         eprintln!("omp-playout-automation: takeAt-Audio fehlgeschlagen: {e}");
     }
 }

@@ -1980,6 +1980,12 @@ impl AudioMixerStore {
                 let active = args.get("active").and_then(Value::as_bool).ok_or(InvokeError::Unknown)?;
                 // Optional `takeAt` (TAI ns): gemeinsamer Schaltzeitpunkt mit dem Bildmischer (Kap. 31.4).
                 let at = args.get("takeAt").and_then(Value::as_u64).unwrap_or(0);
+                // Optional `giver` (Node-ID des auslösenden Bildmischers): gilt der Geber-Filter („Ton folgt Bild“), wird ein
+                // Aufruf eines nicht gewählten Gebers wie dessen Tally ignoriert. Ohne `giver` (Bediener/Probe) nie gefiltert.
+                let giver = args.get("giver").and_then(Value::as_str).unwrap_or("");
+                if !self.tally_filter.lock().expect("lock poisoned").permits(source, giver) {
+                    return Ok(());
+                }
                 self.on_video_tally(source, active);
                 self.afv_follow_at(source, active, at);
                 Ok(())
@@ -3307,6 +3313,11 @@ impl TallyFilter {
         if list.is_empty() || list.iter().any(|g| g == "*") { None } else { Some(list) }
     }
 
+    /// Darf `giver` die Quelle `source` schalten? Ohne Geber-Angabe (Probe/Bediener) immer.
+    fn permits(&self, source: &str, giver: &str) -> bool {
+        giver.is_empty() || self.allowed(source).is_none_or(|l| l.iter().any(|g| g == giver))
+    }
+
     fn to_json(&self) -> Value {
         serde_json::json!({"global": self.global, "bySource": self.by_source})
     }
@@ -3698,6 +3709,18 @@ async fn discovery_loop(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tally_filter_permits_giver() {
+        let mut f = super::TallyFilter::default();
+        assert!(f.permits("cam1", "mixerX"), "leer = alle");
+        f.global = vec!["mixerA".into()];
+        assert!(f.permits("cam1", "mixerA"));
+        assert!(!f.permits("cam1", "mixerB"));
+        assert!(f.permits("cam1", ""), "ohne Geber nie gefiltert");
+        f.by_source.insert("cam1".into(), vec!["*".into()]);
+        assert!(f.permits("cam1", "mixerB"));
+    }
+
     #[test]
     fn tally_filter_global_override_and_json() {
         let mut f = super::TallyFilter::default();
