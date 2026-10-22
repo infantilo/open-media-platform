@@ -425,9 +425,11 @@ class MixerApp {
     }
     this.limGr = h("div", { class: "hint", text: "GR 0.0 dB" });
     pop.append(this.limGr);
-    this.limBtn.classList.add("limit");
-    const limDetails = h("details", { class: "limit" }, h("summary", { class: "tb", text: T("x.limiter"), title: T("am5.b23960") }), pop);
-    const master = h("div", { class: "master" }, h("span", { class: "lbl", text: T("am5.f03bde") }), this.masterMeter.root, limDetails, this.limBtn);
+    pop.prepend(this.limBtn);
+    // Ein Knopf: die Kopfzeile zeigt den Zustand (Farbe = an), Ein/Aus und Einstellungen liegen im Popover.
+    this.limSummary = h("summary", { class: "tb", "aria-pressed": "false", text: T("x.limiter"), title: T("am5.b23960") });
+    const limDetails = h("details", { class: "limit" }, this.limSummary, pop);
+    const master = h("div", { class: "master" }, h("span", { class: "lbl", text: T("am5.f03bde") }), this.masterMeter.root, limDetails);
     this.toolbar = h("header", { class: "toolbar" },
       h("div", { class: "tgrp presetbtns", role: "group", "aria-label": T("am5.a91603") }, h("span", { class: "lbl", text: T("am5.42d57d") }), ...presetBtns),
       this.presetSel,
@@ -919,6 +921,7 @@ class MixerApp {
   updateMasterUi() {
     const l = this.state.masterLimiter;
     this.limBtn.setAttribute("aria-pressed", String(!!l.enabled));
+    this.limSummary.setAttribute("aria-pressed", String(!!l.enabled));
     for (const [key, s] of this.limSliders) s.setValue(l[key]);
   }
 
