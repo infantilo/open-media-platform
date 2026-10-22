@@ -1329,7 +1329,8 @@ und nennt die Dauer:
 Die Konsole des Audiomischers zeigt Kanäle als **Kanalzüge** (Name, Pegel,
 ON AIR / MUTED / OFF AIR, Mute, Solo, Select, Status-Badges) und die Details
 des gewählten Kanals im **Center Control** (Tabs IN, EQ, COMP, GATE, DELAY,
-PAN, AUX, AUTOMIX, DUCK, AUTOMATION, SZENEN).
+PAN, AUX, AUTOMIX, DUCK, AUTOMATION). Alles, was nicht an einen Kanal gebunden ist, liegt
+global im Dialog **⚙ Szenen & Automation** der Kopfleiste.
 
 - **Ansicht** (Auto, Desktop, Compact, Dicht, Grid, Touch), **Operate** (Übersicht,
   Fader ausgeblendet) und **Mix** (Fader + Center Control), **Fader** ein/aus,
@@ -1371,8 +1372,10 @@ PAN, AUX, AUTOMIX, DUCK, AUTOMATION, SZENEN).
 - **AUX**: Aux- und N-1-Busse (max. 10) anlegen; N-1 enthält alle Kanäle außer
   dem ausgeschlossenen — dessen Signal ist technisch nicht enthalten. Sends
   Pre- oder Post-Fader.
-- **SZENEN**: Mix speichern/aktivieren (ohne Aussetzer); Zuordnung
-  „Videoquelle → Audio-Szene“ und Presets des ganzen Mixers.
+- **⚙ Szenen & Automation** (Kopfleiste, unabhängig vom gewählten Kanal): Reiter **Szenen**
+  (speichern, abrufen, umbenennen ✎, aktualisieren, löschen, Auslöser „Videoquelle → Szene“, Presets des
+  ganzen Mixers), **Ducking** (alle Regeln), **Video → Audio** (freie Zuordnungen) und **Ton folgt Bild**.
+  Im Center Control bleibt bei DUCK nur der Kanalbezug (duckbar, Live-Wert, „als Auslöser“).
 - **Bereiche der Konsole (Kap. 32)**: Die Oberfläche ist in zwei klar getrennte Bereiche gegliedert —
   **EINGÄNGE** (Kanäle, bei Bedarf je Mischgruppe oder „Nach Quelle“ gruppiert; Knöpfe „Nach Quelle“,
   „Ausgabegruppen“, „+ Kanal“ in der Kopfzeile des Bereichs) und darunter **AUSGÄNGE** mit einem
@@ -1688,9 +1691,9 @@ startet **leer und frei konfigurierbar** (z. B. nur Stereo, ohne Playout-Automat
 **Ausgabegruppen** in der Kopfleiste legst du bei Bedarf **je Ausgabegruppe einen Kanal** an (Erwartung
 `role.<Gruppe>`); bestehende Kanäle bleiben unberührt. Es wird nichts automatisch angelegt.
 
-**Szenen und Automatik (Tonmischer):** Mix einstellen → in der Kopfleiste **● Szene speichern** → im Reiter
-**SZENEN** pro Szene im Feld **automatisch bei** eine Videoquelle wählen: Sobald diese im Programm ist, wird die
-Szene aktiv (**— nur manuell —** schaltet das ab). Freie Mehrfach-Zuordnungen stehen unter „Erweitert“.
+**Szenen und Automatik (Tonmischer):** Mix einstellen → in der Kopfleiste **● Szene speichern** → im Dialog
+**⚙ Szenen & Automation** pro Szene im Feld **automatisch bei** eine Videoquelle wählen: Sobald diese im Programm ist, wird die
+Szene aktiv (**— nur manuell —** schaltet das ab). Freie Mehrfach-Zuordnungen stehen im Reiter „Video → Audio“.
 
 **Hinweise**
 

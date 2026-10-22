@@ -63,7 +63,6 @@ class CenterControl {
       ["auto", "AUTOMIX", () => this.tabAuto()],
       ["duck", "DUCK", () => this.tabDuck()],
       ["media", "AUTOMATION", () => this.tabMedia()],
-      ["scenes", "SZENEN", () => this.tabScenes()],
     ];
     this.tabBtns = new Map();
     for (const [id, label] of this.tabs) {

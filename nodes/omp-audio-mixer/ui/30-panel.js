@@ -247,6 +247,7 @@ button{cursor:pointer}
 .ppuck{position:absolute;width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;background:var(--c-air);border:2px solid #fff;box-shadow:0 0 8px #0008;pointer-events:none}
 .panbox{flex:1 1 100%}
 .pctl{display:flex;flex-direction:column;gap:8px;min-width:220px;flex:1 1 220px}.tog.mini{padding:0 6px;min-height:20px}
+.gtabs{margin:10px 0 4px}
 .afvcards{display:grid;gap:10px;margin-top:10px}
 .afvcard{border:1px solid var(--c-border);border-radius:8px;padding:10px}
 .afvhead{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
@@ -349,7 +350,7 @@ class MixerApp {
     this.build();
     this.center = new CenterControl(this);
     this.centerHost.append(this.center.root);
-    this.center.tabId = this.ui.centerTab || "in";
+    this.center.tabId = this.center.tabs.some((t) => t[0] === this.ui.centerTab) ? this.ui.centerTab : "in";
     this.center.mount();
     this.applyUiToToolbar();
     this.layoutNow();
@@ -405,7 +406,8 @@ class MixerApp {
     this.meterSel.addEventListener("change", () => { this.ui.meterSize = this.meterSel.value; this.saveUi(); this.applyLayoutVars(); });
     this.sceneBar = h("div", { class: "scenebar", role: "group", "aria-label": T("am5.3cbb2d") });
     this.addBtn = h("button", { class: "tb", type: "button", text: T("x.addCh"), onclick: () => this.cmd("addChannel", { label: "" }).then(() => this.poll()) });
-    this.sceneSaveBtn = h("button", { class: "tb", type: "button", text: T("x.saveScene"), title: T("am5.b82be3"), onclick: () => { const n = window.prompt(T("am5.b07796"), ""); if (n && n.trim()) this.cmd("captureScene", { label: n.trim(), includeProcessing: false }).then(() => { this.announce(T("am5.d718c3", { p0: n.trim() })); this.poll(); }); } });
+    this.sceneSaveBtn = h("button", { class: "tb", type: "button", text: T("x.saveScene"), title: T("am5.b82be3"), onclick: async () => { const n = await this.prompt(T("am5.b07796")); if (n && n.trim()) this.cmd("captureScene", { label: n.trim(), includeProcessing: false }).then(() => { this.announce(T("am5.d718c3", { p0: n.trim() })); this.poll(); }); } });
+    this.globalBtn = h("button", { class: "tb", type: "button", text: tf("x.gBtn"), title: tf("x.gBtnTip"), onclick: () => this.openGlobal() });
     this.srcBtn = h("button", { class: "tb", type: "button", "aria-pressed": "false", text: T("am5.a7c93e"), title: T("am5.62a232"), onclick: () => { this.ui.bySource = !this.ui.bySource; this.srcBtn.setAttribute("aria-pressed", String(this.ui.bySource)); this.saveUi(); this.lastSig = ""; this.renderChannels(); } });
     this.outBtn = h("button", { class: "tb", type: "button", text: T("am5.31561f"), title: T("am5.8f4bcb"), onclick: () => this.openOutputs() });
     this.followBtn = h("button", { class: "tb", type: "button", text: tf("x.afvBtn"), title: tf("x.afvBtnTip"), onclick: () => this.openFollow() });
@@ -432,8 +434,10 @@ class MixerApp {
       h("div", { class: "tgrp", role: "group", "aria-label": T("am5.db77ef") }, ...this.modeBtns),
       h("div", { class: "tgrp opt" }, this.faderBtn, this.colSel, this.meterSel),
       this.sceneBar,
+      this.sceneSaveBtn,
+      this.globalBtn,
       h("span", { class: "spacer" }),
-      master, this.sceneSaveBtn);
+      master);
     this.channelsEl = h("section", { class: "channels", "aria-label": T("am5.45cef4") });
     // Optisch getrennte Bereiche (Kap. 32.4): EINGÄNGE (Kanäle, ggf. je Mischgruppe/Quelle) und AUSGÄNGE
     // (Programm, Gruppen-Busse, Aux/N-1 mit eigenen Pegelanzeigen und Fadern).
@@ -592,6 +596,7 @@ class MixerApp {
     this.renderOutputs();
     if (this.outputs && this.outputs.isOpen) this.outputs.render();
     if (this.follow && this.follow.isOpen) this.follow.render();
+    if (this.global && this.global.isOpen) this.global.refresh();
     this.updateMasterUi();
     this.center.refresh();
     this.layoutNow();
@@ -693,6 +698,21 @@ class MixerApp {
   openFollow() {
     this.follow = this.follow || new FollowDialog(this);
     this.follow.open();
+  }
+  openGlobal(tab) {
+    this.global = this.global || new GlobalDialog(this);
+    this.global.open(tab);
+  }
+  prompt(message, value = "") {
+    return new Promise((resolve) => {
+      const done = (v) => { m.remove(); resolve(v); };
+      const inp = h("input", { class: "text-input", type: "text", value, maxlength: "40", "aria-label": message });
+      inp.addEventListener("keydown", (e) => { if (e.key === "Enter") done(inp.value); if (e.key === "Escape") done(null); });
+      const m = h("div", { class: "modal", role: "dialog", "aria-modal": "true", "aria-label": message },
+        h("div", { class: "box" }, h("p", { text: message }), inp, h("div", { class: "acts" }, h("button", { class: "tog", type: "button", text: T("am5.4b9727"), onclick: () => done(null) }), h("button", { class: "tog", type: "button", text: "OK", onclick: () => done(inp.value) }))));
+      this.shadow.append(m);
+      inp.focus();
+    });
   }
   openOutputs() {
     this.outputs = this.outputs || new OutputsDialog(this);

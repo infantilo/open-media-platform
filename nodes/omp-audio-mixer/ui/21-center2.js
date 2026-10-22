@@ -239,7 +239,7 @@ Object.assign(CenterControl.prototype, {
   },
 
   // ───── Ducking ─────
-  tabDuck() {
+  tabDuck(global = false) {
     const app = this.app;
     const root = h("div", { class: "ctab" });
     const top = this.grid();
@@ -311,7 +311,12 @@ Object.assign(CenterControl.prototype, {
       if (r) await app.cmd(`duck.${r.id}.set`, { keys: ch.id, enabled: false });
       app.poll();
     } });
-    root.append(this.section(T("am3.394e54"), top, liveOut), this.section(T("am3.f18d46"), host, h("div", { class: "rows" }, h("div", { class: "row" }, add, asKey))), h("p", { class: "hint", text: T("am3.55d8be") }));
+    if (global) {
+      root.append(this.section(T("am3.f18d46"), host, h("div", { class: "rows" }, h("div", { class: "row" }, add))), h("p", { class: "hint", text: T("am3.55d8be") }));
+    } else {
+      const all = h("button", { class: "tog", type: "button", text: tf("x.gAllDuck"), onclick: () => app.openGlobal("duck") });
+      root.append(this.section(T("am3.394e54"), top, liveOut, h("div", { class: "rows" }, h("div", { class: "row" }, asKey, all))), h("p", { class: "hint", text: tf("x.gDuckHint") }));
+    }
     return root;
   },
 
@@ -375,13 +380,14 @@ Object.assign(CenterControl.prototype, {
   },
 
   // ───── Szenen / Kontext / Presets ─────
-  tabScenes() {
+  tabScenes(part = "scenes") {
     const app = this.app;
     const root = h("div", { class: "ctab" });
     const host = h("div", { class: "rows" });
     const scenes = new KeyedList(host, (s) => {
       const go = h("button", { class: "tog scene-go", type: "button", text: s.label, onclick: () => app.cmd("activateScene", { sceneId: s.id }).then(() => { app.announce(T("am3.ef315d", { p0: s.label })); app.poll(); }) });
       const upd = h("button", { class: "tog", type: "button", text: T("am3.bf3cfc"), title: T("am3.90f65b"), onclick: async () => { if (await app.confirm(T("am3.90ba68", { p0: s.label }))) app.cmd(`scene.${s.id}.update`, { includeProcessing: false }).then(() => app.poll()); } });
+      const ren = h("button", { class: "tog", type: "button", text: "✎", title: tf("x.gRename"), "aria-label": tf("x.gRename"), onclick: async () => { const n = await app.prompt(tf("x.gRename"), s.label); if (n && n.trim()) app.cmd(`scene.${s.id}.setLabel`, { label: n.trim() }).then(() => app.poll()); } });
       const del = h("button", { class: "tog danger", type: "button", text: T("am3.1010b0"), onclick: async () => { if (await app.confirm(T("am3.abafcf", { p0: s.label }))) app.cmd("removeScene", { sceneId: s.id }).then(() => app.poll()); } });
       // Auslöser direkt an der Szene: „Wenn Videoquelle X im Programm → diese Szene“ (genau eine einfache Regel je Szene).
       const trig = h("select", { class: "sel-input", "aria-label": T("am3.78156f"), title: T("am3.f4bddb") });
@@ -395,7 +401,7 @@ Object.assign(CenterControl.prototype, {
       });
       let k0 = "";
       return {
-        root: h("div", { class: "row" }, go, h("span", { class: "arrow", text: T("am3.99159d") }), trig, upd, del),
+        root: h("div", { class: "row" }, go, h("span", { class: "arrow", text: T("am3.99159d") }), trig, ren, upd, del),
         update: (x) => {
           go.textContent = x.label; go.setAttribute("aria-pressed", String(app.state.audioContext.activeScene === x.id));
           const r = ruleOf();
@@ -450,11 +456,14 @@ Object.assign(CenterControl.prototype, {
     const pn = h("input", { class: "text-input", type: "text", placeholder: T("am3.37180d"), "aria-label": T("am3.588e3b"), maxlength: "40" });
     const savePreset = h("button", { class: "tog", type: "button", text: T("am3.e8c7ee"), onclick: async () => { if (!pn.value.trim()) return; await fetch("/api/v1/snapshots", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label: pn.value.trim(), nodeIds: [app.nodeId] }) }); pn.value = ""; this.loadPresets(presetHost); } });
     this.bind(() => this.loadPresets(presetHost));
-    root.append(
-      this.section(T("am3.f9c3d5"), host, h("div", { class: "rows" }, h("div", { class: "row" }, nm, h("label", { class: "chk" }, withProc, T("am3.808419")), cap)), hint),
-      this.advanced(T("am3.abb4a9"), ctxHost, h("div", { class: "rows" }, h("div", { class: "row" }, addCtx)), ctxInfo, ctxHint),
-      this.section(T("am3.edc059"), presetHost, h("div", { class: "rows" }, h("div", { class: "row" }, pn, savePreset))),
-    );
+    if (part === "context") {
+      root.append(this.section(T("am3.abb4a9"), ctxHost, h("div", { class: "rows" }, h("div", { class: "row" }, addCtx)), ctxInfo, ctxHint));
+    } else {
+      root.append(
+        this.section(T("am3.f9c3d5"), host, h("div", { class: "rows" }, h("div", { class: "row" }, nm, h("label", { class: "chk" }, withProc, T("am3.808419")), cap)), hint),
+        this.section(T("am3.edc059"), presetHost, h("div", { class: "rows" }, h("div", { class: "row" }, pn, savePreset))),
+      );
+    }
     return root;
   },
   async loadPresets(host) {
