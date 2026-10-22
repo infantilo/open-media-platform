@@ -509,7 +509,7 @@ async function start() {
     $('retourConnRow').hidden = !hasRetour;
     $('camLabel').hidden = !hasRetour; // nur bei zwei Kacheln braucht es Beschriftung, sonst eindeutig
     if (hasIntercom) {
-      const ic = icUrl + (icUrl.includes('?') ? '&' : '?') + 'embed=1';
+      const ic = icUrl + (icUrl.includes('?') ? '&' : '?') + 'embed=1&lang=' + LANG;
       $('icFrame').src = ic;
       $('icOpen').href = icUrl;
       $('icBox').hidden = false;

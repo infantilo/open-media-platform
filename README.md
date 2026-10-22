@@ -188,7 +188,7 @@ counters, next to what the writer actually declares about the flow._
 <tr>
 <td width="33%"><img src="docs/screenshots/intercom-zuteilung.png" width="260"><br><sub>Intercom setup, assignment tab: who may talk (mic) and listen (headphones) in which channel — one table, one click per cell</sub></td>
 <td width="33%"><img src="docs/screenshots/intercom-teilnehmer.png" width="260"><br><sub>Intercom setup, parties tab: list on the left, access, special rights and assigned channels on the right; panel layout folded away under "advanced"</sub></td>
-<td width="33%"></td>
+<td width="33%"><img src="docs/screenshots/handy-kamera-intercom.png" width="260"><br><sub>Phone camera page with the intercom panel embedded below the picture — the page fits the screen, no scrolling</sub></td>
 </tr>
 </table>
 

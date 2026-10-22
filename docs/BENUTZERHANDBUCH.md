@@ -1471,7 +1471,9 @@ des Monitor-Nodes.
   wieder „Verbindung trennen“). Ist der Einladungslink mit einer Sprechstelle
   gepaart (Intercom, Abschnitt 10c-5), steht unter dem Bild das kompakte
   Intercom-Panel; die Seite passt dann genau in den Bildschirm, das Bild wird
-  entsprechend kleiner, und die Seite scrollt nicht. Die optionale **Latenzmessung**
+  entsprechend kleiner, und die Seite scrollt nicht.
+
+  ![Handy-Kamera-Seite im Hochformat: Kamerabild oben, darunter das Intercom-Panel mit Kanälen](screenshots/handy-kamera-intercom.png) Die optionale **Latenzmessung**
   blendet einen Zeitstempel-Streifen ins Bild ein.
 - **Monitor-Seite (Retourbild einzeln):** Ein Tipp auf das Videobild schaltet
   **Vollbild** um — nur das Video, randlos, ohne Overlays, Badge oder Texte
