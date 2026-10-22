@@ -96,6 +96,14 @@
                    letter-spacing:.06em; text-transform:uppercase; color:#cfe9ff; margin-bottom:6px; }
   #icBox a { font-size:12px; font-weight:400; text-transform:none; letter-spacing:0; color:#19d3f3; }
   #icFrame { width:100%; height:240px; border:0; border-radius:8px; background:#080c16; }
+  /* Mit Intercom passt die Seite genau in den Bildschirm (kein senkrechtes Scrollen): Bild schrumpft, Panel füllt den Rest. */
+  body.has-ic { height:100vh; height:100dvh; min-height:0; overflow:hidden; }
+  body.has-ic #live { min-height:0; overflow-y:auto; }
+  body.has-ic #tiles.single { max-height:38dvh; }
+  body.has-ic #live .row { margin-top:8px; }
+  body.has-ic #icBox { flex:1; min-height:0; margin:8px 0 0; display:flex; flex-direction:column; }
+  body.has-ic #icBox[hidden] { display:none; }
+  body.has-ic #icFrame { flex:1; min-height:0; height:auto; }
 
   /* Tally: roter Vollbild-Rahmen + "ON AIR", solange ein Auslöser (Mischer/Switcher) diese Kamera sendet. */
   #tallyFrame { position:fixed; inset:0; z-index:50; pointer-events:none; display:none; border:10px solid var(--onair);
@@ -505,6 +513,7 @@ async function start() {
       $('icFrame').src = ic;
       $('icOpen').href = icUrl;
       $('icBox').hidden = false;
+      document.body.classList.add('has-ic');
     }
     setLayout('split');
     $('latRow').hidden = !measure;
@@ -660,7 +669,7 @@ async function stop(quiet) {
   if (pc) { pc.close(); pc = null; }
   if (retourPc) { retourPc.close(); retourPc = null; }
   $('retourVideo').srcObject = null;
-  $('icFrame').src = 'about:blank'; $('icBox').hidden = true;
+  $('icFrame').src = 'about:blank'; $('icBox').hidden = true; document.body.classList.remove('has-ic');
   for (const s of [camStream, sendStream]) s && s.getTracks().forEach((t) => t.stop());
   camStream = sendStream = null;
   try { await wakeLock?.release(); } catch (_) {}
