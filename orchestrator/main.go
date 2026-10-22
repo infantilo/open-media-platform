@@ -557,7 +557,7 @@ func main() {
 	// statt eines direkten Node-zu-Node-Zugriffs anzusprechen.
 	launcherSvc.SetOrchestratorURL(cfg.OrchestratorURL)
 	// Kapitel 48: Dienst-Token für das Dienst-Gateway (bleibt über Neustarts gleich, damit weiterlaufende Nodes gültig bleiben).
-	serviceToken, err := loadServiceToken()
+	serviceToken, err := loadServiceToken(filepath.Dir(cfg.JWTSecretFile))
 	if err != nil {
 		slog.Error("service token unavailable", "error", err)
 		os.Exit(1)

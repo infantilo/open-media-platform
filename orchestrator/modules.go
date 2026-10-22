@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
@@ -130,15 +131,15 @@ func (s serviceSecrets) Secret(instanceID string) string {
 	return ""
 }
 
-// loadServiceToken liest `OMP_SERVICE_TOKEN` oder, ohne die Variable, die Datei `OMP_SERVICE_TOKEN_FILE` (Standard
-// `../data/service-token`, wird beim ersten Start angelegt).
-func loadServiceToken() (string, error) {
+// loadServiceToken liest `OMP_SERVICE_TOKEN` oder, ohne die Variable, die Datei `OMP_SERVICE_TOKEN_FILE` (Standard: neben dem JWT-Geheimnis, wird beim
+// ersten Start angelegt).
+func loadServiceToken(defaultDir string) (string, error) {
 	if t := os.Getenv("OMP_SERVICE_TOKEN"); t != "" {
 		return t, nil
 	}
 	path := os.Getenv("OMP_SERVICE_TOKEN_FILE")
 	if path == "" {
-		path = "../data/service-token"
+		path = filepath.Join(defaultDir, "service-token")
 	}
 	b, err := auth.LoadOrCreateSecret(path)
 	if err != nil {
