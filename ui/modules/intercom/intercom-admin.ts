@@ -51,6 +51,16 @@ function btn(text: string, onClick: () => void, title = ""): HTMLButtonElement {
   return b;
 }
 
+type Tab = "assign" | "parties" | "channels" | "layouts" | "guests";
+const TABS: Tab[] = ["assign", "parties", "channels", "layouts", "guests"];
+function loadTab(): Tab {
+  try {
+    const v = localStorage.getItem("omp-intercom-admin-tab") as Tab | null;
+    if (v && TABS.includes(v)) return v;
+  } catch { /* Speicher gesperrt: Standardreiter */ }
+  return "assign";
+}
+
 interface Status {
   parties: { id: number; online: boolean; speaking: boolean }[];
   late_ticks: number;
@@ -71,6 +81,8 @@ class IntercomAdmin extends HTMLElement {
   #guestTtl = 120;
   #timer = 0;
   #loaded = false;
+  #tab: Tab = loadTab();
+  #selParty = 0;
 
   connectedCallback() {
     this.style.cssText = "display:block;";
@@ -144,7 +156,8 @@ class IntercomAdmin extends HTMLElement {
     this.replaceChildren();
     if (this.#error) this.append(el("div", "color:var(--omp-error);margin-bottom:10px;", this.#error));
 
-    const bar = el("div", "display:flex;gap:8px;align-items:center;margin-bottom:12px;");
+    const bar = el("div", "display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap;");
+    bar.dataset.role = "bar";
     const dirty = this.#dirty();
     const save = btn(tt("icom.save"), () => void this.#save());
     save.disabled = !dirty;
@@ -156,27 +169,108 @@ class IntercomAdmin extends HTMLElement {
     discard.disabled = !dirty;
     bar.append(save, discard);
     if (dirty) bar.append(el("span", "color:var(--omp-warning,#b58900);font-size:12px;", tt("icom.dirty")));
+    const st = el("span", `margin-left:auto;font-size:12px;${DIM}`);
+    st.dataset.role = "status";
+    bar.append(st);
     this.append(bar);
 
-    const st = el("div", BOX);
-    st.dataset.role = "status";
-    st.append(el("h3", H, tt("icom.status")), el("div", "", ""));
-    this.append(st);
+    const tabs = el("div", "display:flex;gap:2px;border-bottom:1px solid var(--omp-border);margin-bottom:14px;flex-wrap:wrap;");
+    tabs.dataset.role = "tabs";
+    for (const k of TABS) {
+      const on = k === this.#tab;
+      const b = el("button", `padding:7px 16px;border:0;border-bottom:2px solid ${on ? "var(--omp-accent-cyan,#19d3f3)" : "transparent"};border-radius:0;background:none;font-weight:${on ? 700 : 400};${on ? "" : DIM}cursor:pointer;`, tt(`icom.tab.${k}` as never));
+      b.dataset.tab = k;
+      b.addEventListener("click", () => this.#goto(k));
+      tabs.append(b);
+    }
+    this.append(tabs);
 
-    this.append(this.#channelsBox(), this.#partiesBox(), this.#templatesBox(), this.#guestsBox());
+    if (this.#tab === "assign") this.append(this.#assignTab());
+    else if (this.#tab === "parties") this.append(this.#partiesBox());
+    else if (this.#tab === "channels") this.append(this.#channelsBox());
+    else if (this.#tab === "layouts") this.append(this.#templatesBox());
+    else this.append(this.#guestsBox());
     this.#renderStatus();
   }
 
+  #goto(k: Tab, party?: number) {
+    this.#tab = k;
+    if (party !== undefined) this.#selParty = party;
+    try {
+      localStorage.setItem("omp-intercom-admin-tab", k);
+    } catch { /* ohne Speicher: nur für diese Sitzung */ }
+    this.#render();
+  }
+
+  /** Gesamttabelle Teilnehmer × Kanäle: je Zelle Sprechen (Mikrofon) und Hören (Kopfhörer) per Klick. */
+  #assignTab(): HTMLElement {
+    const box = el("div", BOX);
+    box.dataset.role = "assign";
+    box.append(el("div", DIM + "font-size:12px;margin-bottom:10px;", tt("icom.assign.hint")));
+    const { channels, parties } = this.#draft;
+    if (!channels.length || !parties.length) {
+      const empty = el("div", "padding:10px 0;");
+      empty.append(el("div", DIM + "margin-bottom:8px;", tt("icom.assign.needBoth")));
+      const row = el("div", "display:flex;gap:8px;");
+      if (!channels.length) row.append(btn(tt("icom.assign.toChannels"), () => this.#goto("channels")));
+      if (!parties.length) row.append(btn(tt("icom.assign.toParties"), () => this.#goto("parties")));
+      empty.append(row);
+      box.append(empty);
+      return box;
+    }
+    const wrap = el("div", "overflow-x:auto;");
+    const grid = el("div", `display:grid;grid-template-columns:minmax(150px,max-content) repeat(${channels.length},minmax(84px,1fr));gap:4px;align-items:center;`);
+    grid.append(el("span"));
+    for (const c of channels) {
+      const h = el("span", `font-size:12px;font-weight:600;text-align:center;padding:4px 6px;border-radius:4px;border-bottom:3px solid ${c.color || "#4c8dff"};`, c.name || `#${c.id}`);
+      grid.append(h);
+    }
+    const toggle = (p: Party, ch: number, f: "talk" | "listen"): HTMLElement => {
+      const b = el("button", "padding:3px 8px;min-width:34px;");
+      const paint = () => {
+        const on = !!getRoute(p, ch)?.[f];
+        b.textContent = f === "talk" ? "🎤" : "🎧";
+        b.style.opacity = on ? "1" : "0.28";
+        b.style.background = on ? "color-mix(in srgb,var(--omp-accent-cyan,#19d3f3) 28%,transparent)" : "";
+        b.setAttribute("aria-pressed", String(on));
+      };
+      b.title = tt(f === "talk" ? "icom.talk" : "icom.listen");
+      b.addEventListener("click", () => {
+        setRoute(p, ch, f, !getRoute(p, ch)?.[f]);
+        paint();
+        this.#touch();
+      });
+      paint();
+      return b;
+    };
+    for (const p of parties) {
+      const name = el("button", "text-align:left;border:0;background:none;padding:4px 2px;cursor:pointer;display:flex;gap:8px;align-items:center;");
+      const dot = el("span", "width:9px;height:9px;border-radius:50%;background:var(--omp-border);flex:none;");
+      dot.dataset.partyDot = String(p.id);
+      name.append(dot, el("span", "", p.name || `#${p.id}`));
+      name.title = tt("icom.assign.openParty");
+      name.addEventListener("click", () => this.#goto("parties", p.id));
+      grid.append(name);
+      for (const c of channels) {
+        const cell = el("span", "display:flex;gap:4px;justify-content:center;");
+        cell.append(toggle(p, c.id, "talk"), toggle(p, c.id, "listen"));
+        grid.append(cell);
+      }
+    }
+    wrap.append(grid);
+    box.append(wrap);
+    return box;
+  }
+
   #renderStatus() {
-    const box = this.querySelector<HTMLElement>("[data-role=status]");
-    if (!box) return;
-    const line = box.lastElementChild as HTMLElement;
+    const line = this.querySelector<HTMLElement>("[data-role=status]");
+    if (!line) return;
     if (!this.#status) {
       line.textContent = this.#statusError || "…";
-      line.style.cssText = "color:var(--omp-error);";
+      line.style.color = "var(--omp-error)";
     } else {
       const online = this.#status.parties.filter((p) => p.online).length;
-      line.style.cssText = "";
+      line.style.color = "";
       line.textContent = tt("icom.statusLine", { p0: online, p1: this.#status.parties.length, p2: this.#status.late_ticks, p3: (this.#status.max_tick_us / 1000).toFixed(1) });
     }
     for (const d of this.querySelectorAll<HTMLElement>("[data-party-dot]")) {
@@ -242,7 +336,7 @@ class IntercomAdmin extends HTMLElement {
 
   /** Nur die Speichern-/Verwerfen-Knöpfe nachziehen, ohne die Felder neu zu bauen (Fokus bleibt). */
   #touch() {
-    const [save, discard] = this.querySelectorAll<HTMLButtonElement>(":scope > div:first-child > button");
+    const [save, discard] = this.querySelectorAll<HTMLButtonElement>("[data-role=bar] > button");
     const d = this.#dirty();
     if (save) save.disabled = !d;
     if (discard) discard.disabled = !d;
@@ -251,18 +345,40 @@ class IntercomAdmin extends HTMLElement {
   #partiesBox(): HTMLElement {
     const box = el("div", BOX);
     box.dataset.role = "parties";
-    box.append(el("h3", H, tt("icom.parties")), el("div", DIM + "font-size:12px;margin-bottom:8px;", tt("icom.partiesHint")));
-    if (this.#draft.parties.length === 0) box.append(el("div", DIM + "padding:6px 0;", tt("icom.noParties")));
-    for (const p of this.#draft.parties) box.append(this.#partyCard(p));
-    box.append(btn(tt("icom.party.add"), () => {
-      addParty(this.#draft, "");
+    box.append(el("div", DIM + "font-size:12px;margin-bottom:10px;", tt("icom.partiesHint")));
+    const parties = this.#draft.parties;
+    if (!parties.some((p) => p.id === this.#selParty)) this.#selParty = parties[0]?.id ?? 0;
+    const cols = el("div", "display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;");
+    const list = el("div", "display:flex;flex-direction:column;gap:2px;min-width:200px;flex:0 0 220px;");
+    for (const p of parties) {
+      const on = p.id === this.#selParty;
+      const row = el("button", `display:flex;gap:8px;align-items:center;text-align:left;padding:7px 10px;border-radius:6px;border:1px solid ${on ? "var(--omp-accent-cyan,#19d3f3)" : "transparent"};background:${on ? "color-mix(in srgb,var(--omp-accent-cyan,#19d3f3) 14%,transparent)" : "none"};cursor:pointer;`);
+      const dot = el("span", "width:9px;height:9px;border-radius:50%;background:var(--omp-border);flex:none;");
+      dot.dataset.partyDot = String(p.id);
+      row.append(dot, el("span", "flex:1;", p.name || `#${p.id}`), el("span", "font-size:11px;" + DIM, tt(`icom.party.kind.${p.kind ?? "human"}` as never)));
+      row.dataset.pick = String(p.id);
+      row.addEventListener("click", () => {
+        this.#selParty = p.id;
+        this.#render();
+      });
+      list.append(row);
+    }
+    list.append(btn(tt("icom.party.add"), () => {
+      this.#selParty = addParty(this.#draft, "").id;
       this.#render();
     }));
+    cols.append(list);
+    const sel = parties.find((p) => p.id === this.#selParty);
+    const detail = el("div", "flex:1 1 380px;min-width:300px;");
+    if (sel) detail.append(this.#partyCard(sel));
+    else detail.append(el("div", DIM + "padding:6px 0;", tt("icom.noParties")));
+    cols.append(detail);
+    box.append(cols);
     return box;
   }
 
   #partyCard(p: Party): HTMLElement {
-    const card = el("div", "border:1px solid var(--omp-border);border-radius:6px;padding:10px;margin-bottom:10px;");
+    const card = el("div", "border:1px solid var(--omp-border);border-radius:8px;padding:12px 14px;");
     card.dataset.party = String(p.id);
     const head = el("div", "display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;");
     const dot = el("span", "width:10px;height:10px;border-radius:50%;background:var(--omp-border);align-self:center;");
@@ -294,7 +410,7 @@ class IntercomAdmin extends HTMLElement {
       this.#render();
     }, tt("icom.party.remove")));
     card.append(head);
-
+    const sec = (key: string): HTMLElement => el("div", "font-size:11px;letter-spacing:.06em;text-transform:uppercase;margin:14px 0 4px;" + DIM, tt(key as never));
     const human = (p.kind ?? "human") === "human" || p.kind === "seat";
     if (p.kind === "program" || p.kind === "port") {
       const slot = (label: string, value: number | undefined, set: (n: number) => void): HTMLElement => {
@@ -315,13 +431,8 @@ class IntercomAdmin extends HTMLElement {
         slot(tt("icom.party.mxlOut"), p.mxl_out, (n) => (p.mxl_out = n)),
         el("span", DIM + "font-size:12px;", tt("icom.party.mxlHint")),
       );
-      card.append(ports);
+      card.append(sec("icom.party.section.link"), ports);
     }
-    const flags = el("div", "display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;");
-    flags.append(check(tt("icom.party.force"), !!p.force, (v) => { p.force = v; this.#touch(); }), check(tt("icom.party.onairLock"), !!p.onair_lock, (v) => { p.onair_lock = v; this.#touch(); }));
-    if (human) flags.append(check(tt("icom.party.open"), !!p.open, (v) => { p.open = v; this.#touch(); }));
-    card.append(flags);
-
     if (human) {
       const who = el("div", "display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;align-items:flex-end;");
       who.append(field(tt("icom.party.users"), textInput((p.users ?? []).join(", "), (v) => { p.users = splitList(v); this.#touch(); }, "260px")));
@@ -346,31 +457,28 @@ class IntercomAdmin extends HTMLElement {
         const r = await apiFetch(`/api/v1/ext/intercom/parties/${p.id}/rotate-token`, { method: "POST" });
         showToast(r.ok ? tt("icom.party.rotated") : tt("icom.saveFailed", { p0: r.status }));
       }));
-      card.append(who);
+      card.append(sec("icom.party.section.access"), who);
     }
 
-    if (human) card.append(this.#layoutSection(p));
+    const flags = el("div", "display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;");
+    flags.append(check(tt("icom.party.force"), !!p.force, (v) => { p.force = v; this.#touch(); }), check(tt("icom.party.onairLock"), !!p.onair_lock, (v) => { p.onair_lock = v; this.#touch(); }));
+    if (human) flags.append(check(tt("icom.party.open"), !!p.open, (v) => { p.open = v; this.#touch(); }));
+    card.append(sec("icom.party.section.rights"), flags);
 
-    const m = el("div", "margin-top:10px;");
-    m.append(el("div", "font-size:11px;letter-spacing:.05em;text-transform:uppercase;" + DIM, tt("icom.matrix")));
-    const grid = el("div", "display:grid;grid-template-columns:minmax(120px,1fr) auto auto;gap:4px 16px;align-items:center;margin-top:4px;max-width:420px;");
-    grid.append(el("span"), el("span", "font-size:11px;" + DIM, tt("icom.talk")), el("span", "font-size:11px;" + DIM, tt("icom.listen")));
-    for (const c of this.#draft.channels) {
-      const r = getRoute(p, c.id);
-      grid.append(el("span", "", c.name || `#${c.id}`));
-      for (const f of ["talk", "listen"] as const) {
-        const cb = el("input");
-        cb.type = "checkbox";
-        cb.checked = !!r?.[f];
-        cb.addEventListener("change", () => {
-          setRoute(p, c.id, f, cb.checked);
-          this.#touch();
-        });
-        grid.append(cb);
-      }
+    const routes = this.#draft.channels.filter((c) => getRoute(p, c.id)?.talk || getRoute(p, c.id)?.listen);
+    const sum = el("div", "display:flex;gap:8px;align-items:center;flex-wrap:wrap;");
+    sum.dataset.role = "summary";
+    sum.append(el("span", routes.length ? "" : DIM, routes.length
+      ? tt("icom.party.summary", { p0: routes.map((c) => `${c.name || `#${c.id}`} ${getRoute(p, c.id)?.talk ? "🎤" : ""}${getRoute(p, c.id)?.listen ? "🎧" : ""}`).join(" · ") })
+      : tt("icom.party.summaryNone")), btn(tt("icom.party.toAssign"), () => this.#goto("assign")));
+    card.append(sec("icom.matrix"), sum);
+
+    if (human) {
+      const det = el("details", "margin-top:14px;");
+      det.open = p.layout !== undefined || p.template !== undefined;
+      det.append(el("summary", "cursor:pointer;" + DIM, tt("icom.layout.advanced")), this.#layoutSection(p));
+      card.append(det);
     }
-    m.append(grid);
-    card.append(m);
     return card;
   }
 

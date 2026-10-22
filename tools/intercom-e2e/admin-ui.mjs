@@ -38,20 +38,25 @@ const ev = s => tab.evaluate(s);
 await ev(`document.getElementById('root').append(document.createElement('omp-intercom-admin'))`);
 await sleep(500);
 const click = async (text, nth = 0) => ev(`(()=>{const b=[...document.querySelectorAll('omp-intercom-admin button')].filter(x=>x.textContent.trim()==${JSON.stringify(text)})[${nth}];if(!b)return false;b.click();return true})()`);
+const goTab = async (k) => { await ev(`document.querySelector('omp-intercom-admin [data-tab=${k}]').click()`); await sleep(150); };
+const pick = async (id) => { await goTab('parties'); await ev(`document.querySelector('omp-intercom-admin [data-pick="${id}"]').click()`); await sleep(150); };
 const setInput = async (sel, v, nth = 0) => ev(`(()=>{const i=document.querySelectorAll(${JSON.stringify('omp-intercom-admin ' + sel)})[${nth}];i.value=${JSON.stringify(v)};i.dispatchEvent(new Event('input',{bubbles:true}));return true})()`);
 
 check(await ev(`document.querySelector('omp-intercom-admin [data-role=status]').textContent.includes('Teilnehmern online')`) || true, 'Status-Box vorhanden');
+await goTab('channels');
 check(await click('+ Kanal'), 'Kanal hinzufügen');
 await setInput('[data-channel] input[type=text], [data-channel] input:not([type])', 'Regie');
 await click('+ Kanal');
 await setInput('[data-channel] input:not([type=color])', 'Technik', 1);
+await goTab('parties');
 check(await click('+ Teilnehmer'), 'Teilnehmer hinzufügen');
 await setInput('[data-party] input:not([type])', 'Regie 1');
-const saveDisabledBefore = await ev(`document.querySelector('omp-intercom-admin > div > button').disabled`);
+const saveDisabledBefore = await ev(`document.querySelector('omp-intercom-admin [data-role=bar] > button').disabled`);
 check(saveDisabledBefore === false, 'Speichern wird durch Änderungen aktiv');
-await ev(`(()=>{const cbs=document.querySelectorAll('omp-intercom-admin [data-party] input[type=checkbox]');return cbs.length})()`).then(n => check(n >= 7, `Matrix + Schalter vorhanden (${n} Kontrollkästchen)`));
-// Matrix: erste Zeile Sprechen+Hören, zweite nur Hören. Die letzten 4 Kästchen sind die Matrix.
-await ev(`(()=>{const cbs=[...document.querySelectorAll('omp-intercom-admin [data-party] input[type=checkbox]')].slice(-4);[cbs[0],cbs[1],cbs[3]].forEach(c=>{c.checked=true;c.dispatchEvent(new Event('change',{bubbles:true}))})})()`);
+await goTab('assign');
+await ev(`document.querySelectorAll('omp-intercom-admin [data-role=assign] button[aria-pressed]').length`).then(n => check(n === 4, `Zuteilungstabelle: 2 Kanäle × (Sprechen, Hören) = 4 Schalter (${n})`));
+// Zuteilung: Regie Sprechen+Hören, Technik nur Hören.
+await ev(`(()=>{const bs=[...document.querySelectorAll('omp-intercom-admin [data-role=assign] button[aria-pressed]')];[bs[0],bs[1],bs[3]].forEach(b=>b.click())})()`);
 check(await click('Speichern'), 'Speichern angeklickt');
 await sleep(500);
 check(puts.length === 1, 'genau ein PUT');
@@ -60,11 +65,13 @@ check(sent.channels.map(c => c.name).join() === 'Regie,Technik', 'Kanäle gesend
 check(sent.parties[0]?.routes.length === 2 && sent.parties[0].routes[0].talk && sent.parties[0].routes[1].listen && !sent.parties[0].routes[1].talk, 'Matrix gesendet: ' + JSON.stringify(sent.parties[0]?.routes));
 check(!('guests' in sent), 'Gäste werden nicht mitgeschickt');
 check((await ev('window.toasts?.length')) >= 1, 'Meldung „Gespeichert“');
-check(await ev(`document.querySelector('omp-intercom-admin > div > button').disabled`) === true, 'Speichern wieder inaktiv');
+check(await ev(`document.querySelector('omp-intercom-admin [data-role=bar] > button').disabled`) === true, 'Speichern wieder inaktiv');
 // ---- Panel-Layout (eigenes Layout, Vorlage, zweiter Teilnehmer) ----
 const selectByText = async (scope, value, nth = 0) => ev(`(()=>{const s=document.querySelectorAll(${JSON.stringify('omp-intercom-admin ' + scope + ' select')});const sel=[...s].filter(x=>[...x.options].some(o=>o.value==${JSON.stringify(value)}))[${nth}];if(!sel)return false;sel.value=${JSON.stringify(value)};sel.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
+await goTab('parties');
 check(await click('+ Teilnehmer'), 'zweiten Teilnehmer anlegen');
 await setInput('[data-party="2"] input:not([type])', 'Kamera 1');
+await goTab('layouts');
 check(await click('+ Vorlage'), 'Vorlage anlegen');
 await setInput('[data-template] input:not([type])', 'Kamera-Vorlage');
 // Taste „Stumm“ in der Vorlage: Art wählen und „+ Taste“
@@ -73,9 +80,11 @@ await sleep(200);
 check(await ev(`document.querySelectorAll('omp-intercom-admin [data-template] [data-key]').length`) === 1, 'Vorlage hat eine Taste');
 check(await ev(`document.querySelector('omp-intercom-admin [data-template] [data-role=preview]').textContent.includes('Mikrofon stumm')`), 'Vorschau zeigt die Taste');
 // Teilnehmer 2 nutzt die Vorlage
+await pick(2);
 check(await selectByText('[data-party="2"] [data-role=layout]', 'template'), 'Teilnehmer 2: Modus Vorlage');
 await sleep(200);
 // Teilnehmer 1: eigenes Layout aus Zuteilung
+await pick(1);
 check(await selectByText('[data-party="1"] [data-role=layout]', 'own'), 'Teilnehmer 1: Modus eigenes Layout');
 await sleep(200);
 const n0 = await ev(`document.querySelectorAll('omp-intercom-admin [data-party="1"] [data-key]').length`);
@@ -109,17 +118,22 @@ check(!p1.template, 'Teilnehmer 1 nutzt kein Template');
 check(p2.template === sent2.templates?.[0]?.id && !p2.layout, 'Teilnehmer 2 verweist auf die Vorlage');
 check(sent2.templates?.[0]?.name === 'Kamera-Vorlage' && sent2.templates[0].layout.pages[0].keys[0].type === 'mute', 'Vorlage gesendet');
 // Kanal löschen räumt Tasten auf
+await goTab('channels');
 await ev(`document.querySelectorAll('omp-intercom-admin [data-channel]')[0].querySelector('button:last-of-type').click()`);
 await sleep(300);
-check(await ev(`document.querySelectorAll('omp-intercom-admin [data-party="1"] [data-page="0"] [data-key]').length`) < n0, 'Kanal löschen entfernt seine Tasten aus dem Layout');
+await goTab('parties'); await pick(1);
+check(await ev(`document.querySelectorAll('omp-intercom-admin [data-party="1"] [data-page="0"] [data-key]').length`) < n0, 'Kanal löschen entfernt seine Tasten (Teilnehmeransicht)');
 await click('Verwerfen');
 // Vorlage löschen setzt Teilnehmer 2 zurück
+await goTab('layouts');
 await ev(`[...document.querySelectorAll('omp-intercom-admin [data-template] > div:first-child button')].find(b=>b.textContent==='✕').click()`);
 await sleep(300);
 check(await ev(`document.querySelectorAll('omp-intercom-admin [data-template]').length`) === 0, 'Vorlage gelöscht');
+await pick(2);
 check(await ev(`document.querySelector('omp-intercom-admin [data-party="2"] [data-role=layout] select').value`) === 'default', 'Teilnehmer 2 fällt auf Standard zurück');
 await click('Verwerfen');
 // Gast
+await goTab('guests');
 await ev(`(()=>{const cb=[...document.querySelectorAll('omp-intercom-admin [data-role=guests] input[type=checkbox]')][0];cb.checked=true;cb.dispatchEvent(new Event('change',{bubbles:true}))})()`);
 await setInput('[data-role=guests] input:not([type])', 'Interview-Gast');
 check(await click('Gast-Link erzeugen'), 'Gast erzeugen');
@@ -127,6 +141,7 @@ await sleep(600);
 check(guests.length === 1 && guests[0].routes[0].ch === 1, 'Gast angelegt mit Kanal 1');
 check(await ev(`!!document.querySelector('omp-intercom-admin [data-guest]')`), 'Gast erscheint in der Liste');
 // Verwerfen
+await goTab('channels');
 await click('+ Kanal');
 check(await ev(`document.querySelectorAll('omp-intercom-admin [data-channel]').length`) === 3, 'dritter Kanal im Entwurf');
 await click('Verwerfen');
