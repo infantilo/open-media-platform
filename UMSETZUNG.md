@@ -5538,3 +5538,31 @@ Entscheidungen des Nutzers: Standards der „Offenen Entscheidungen“ gelten (k
 **Fallen dieser Umsetzung** (zusätzlich zu decisions.md): `pkill -f omp-intercom` beendet die eigene Shell (`pkill -x`); die Routentabelle (`cmd/routetable`) verlangt Rechte als Zeichenketten-Literale in `module.Feature("…")`; `catalog.json` nie komplett neu schreiben (Formatierung), nur Eintrag anhängen; ein geschlossener Browser-Tab beendet den WebRTC-Datenkanal nicht zuverlässig → Herzschlag nötig.
 
 **Offen / nicht geprüft:** Orchestrator mit dem neuen Modul **live** (Neustart nötig; nur Go-Tests, Mock-Test der Oberfläche und Node-E2E liefen); Echtgeräte (Handy-Browser, Firefox/Safari, Kopfhörer-Latenz, WLAN-Jitter); HTTPS-Zertifikatsbestätigung im Alltag; Stream Deck am Gerät; Gast-Zugang von außen (Portweiterleitung).
+
+
+## Kapitel 48: Intercom-Server als eigener Dienst statt Orchestrator-Modul (Nutzerauftrag 2026-10-22, **nur geplant**)
+
+**Anlass:** „Der Intercom-Server ist jetzt Teil des Orchestrators — damit werden wir monolithisch.“ Entscheidungen des Nutzers (2026-10-22): der Dienst wandert **in den vorhandenen Node `omp-intercom`** (kein dritter Prozess), die Konfiguration liegt **als Datei beim Dienst** (nicht mehr im Einstellungsspeicher des Orchestrators).
+
+**Bestandsaufnahme:** Die Echtzeit (Mischen, WebRTC, Opus) läuft schon im eigenen Prozess. Im Orchestrator liegt `internal/modules/intercom` (≈ 1650 Zeilen Go, davon 490 Tests): Konfigurations-Dokument `intercom.config` samt Prüfung (alle Probleme auf einmal), Token und Gäste mit Ablauf, regelmäßiges Weitergeben an den Node (`Push`, alle 10 s, nur Leader), Panel-Link (HTTP/HTTPS, localhost-Sonderfall), Status, Metriken `omp_intercom_*`, Funktionsrechte `intercom.use`/`intercom.admin`, Admin-Tab und Konsolen-Kachel (`ui/modules/intercom`), acht Routen (`/api/v1/intercom/*`).
+
+**Kernfund:** Der generische Node-Proxy (`/api/v1/nodes/{id}/…`) reicht **keine Identität** durch und kennt **keine Funktionsrechte**; Funktionsrechte, Admin-Tabs, Kacheln, Metriken und Audit kennt der Kern nur über Module. Ohne einen kleinen, **generischen** Baustein im Orchestrator ließe sich der Server nicht herauslösen, ohne das Rechtemodell aufzugeben oder die Admin-Endpunkte des Nodes unauthentifiziert zu lassen. Dieser Baustein ist die „Stufe 2“ aus ARCHITECTURE §28.2, bewusst schmal und ohne Kenntnis von Intercom.
+
+### Zielbild
+
+- **Node `omp-intercom`** hält die Konfiguration (JSON-Datei, atomar geschrieben), prüft sie, vergibt Token, verwaltet Gäste, wendet sie **direkt im Hub** an (kein `Push`, kein 10-s-Abgleich mehr), liefert Panel-Link, Status und Metriken und bringt seine Einrichtungs-Oberfläche selbst mit (`ui/bundle.js`).
+- **Dienst-Gateway im Orchestrator (generisch):** ein Node meldet ein **Dienst-Manifest** (`GET /service.json`: Name, Funktionsrechte, Routen mit nötigem Recht, UI-Tabs/Kacheln, Metrikpfad). Der Orchestrator stellt `/api/v1/ext/<name>/…` bereit, prüft das Recht der Route, hängt **Identität** (`X-OMP-User`, `X-OMP-Groups`, `X-OMP-Admin`) an und schreibt für verändernde Aufrufe einen Audit-Eintrag. Funktionsrechte, Tabs, Kacheln und Metriken des Dienstes erscheinen wie die eines Moduls.
+- **Vertrauen:** Der Node nimmt Identität und Admin-Routen nur mit einem gemeinsamen Geheimnis an (`OMP_SERVICE_TOKEN`, vom Launcher beim Start gesetzt, bei mTLS zusätzlich Client-Zertifikat). Ohne Geheimnis: nur Panel-Endpunkte (`/offer`, `/panel`) wie heute.
+- Funktionsrechts-IDs bleiben `intercom.use` / `intercom.admin`, damit vorhandene Vergaben gültig bleiben.
+
+### Schritte (je ≈ 1 Sitzung)
+
+| Schritt | Inhalt | Verifikation |
+|---|---|---|
+| 48.1 Konfigurationskern im Node | Rust-Port von `config.go` (Modell, Prüfung, Token, Gäste, Layout-Auflösung, `PartiesFor`, Node-Dokument) in `nodes/omp-intercom/src/admin.rs`; Dateispeicher; Anwenden direkt am Hub | Dieselben Testfälle wie `intercom_test.go` als gemeinsame JSON-Fixtures (`testdata/`), Go und Rust müssen gleich urteilen |
+| 48.2 Admin-Routen im Node | `/admin/config`, `/admin/guests`, `/admin/parties/{id}/rotate-token`, `/admin/panels`, `/admin/status`; Geheimnis + Identitäts-Header; Audit-Antwortkopf | Rust-Tests; ohne Geheimnis 401 |
+| 48.3 Dienst-Gateway (Orchestrator) | Manifest-Entdeckung, `/api/v1/ext/<name>/…`, Rechteprüfung, Identität, Audit, Aufnahme in Feature-Katalog, UI-Manifest, Metriken; Routentabelle/Golden | `go test`, Rechte-Matrix, Golden bewusst neu |
+| 48.4 Umzug der Daten | Einmaliger Import von `intercom.config` in die Datei des Nodes (Token bleiben, Links gültig); danach Modul entfernen | Import-Test mit echter Konfiguration; vorher Sicherung |
+| 48.5 Oberfläche + Aufräumen | Einrichtungs-Ansicht und Kachel aus dem Node-Bundle (`/api/v1/ext/intercom`), Stream-Deck-Adapter/`omp-intercom-panel` auf neue Pfade, `internal/modules/intercom` und `ui/modules/intercom` löschen, Handbuch/ARCHITECTURE §28 fortschreiben | CDP-Klicktest (Einrichtung, Gast-Link, Panel öffnen), E2E `tools/intercom-e2e` |
+
+**Risiken / offene Punkte:** (1) **Datei beim Dienst** heißt: die Konfiguration liegt auf dem Host des Nodes; bei Umzug (Wartung Kap. 41, Cluster-Platzierung) muss die Datei mitwandern — Vorschlag: Sicherungskopie in die Orchestrator-Datensicherung aufnehmen oder Datenverzeichnis fest je Standort. (2) Orchestrator-Neustart nötig (Gateway, Routen). (3) Solange kein Intercom-Node läuft, ist die Einrichtung nicht erreichbar (heute: Konfiguration immer bearbeitbar) — die Oberfläche muss das verständlich melden. (4) Mehrere Intercom-Nodes (ein Node je Standort ist entschieden): das Gateway braucht eine eindeutige Wahl (Standort/Label).
