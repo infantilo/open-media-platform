@@ -267,7 +267,7 @@ const T = (() => {
 // Statische Texte der Seite (Markup) per exaktem Textvergleich übersetzen.
 (() => {
   if (LANG !== "en") return;
-  const MAP = {"Auflösung": "Resolution", "Bereit": "Ready", "Bildrate": "Frame rate", "Kamera": "Camera", "Latenz Glas→Decoder:": "Latency glass→decoder:", "Latenz messen (Zeitstempel im Bild)": "Measure latency (timestamp in picture)", "Retourbild": "Return feed", "In neuem Tab öffnen": "Open in new tab", "Standards. Technologie. Freiheit.": "Standards. Technology. Freedom.", "Status": "Status", "Ton senden": "Send audio", "Verbinden": "Connect", "Verbindung Kamera:": "Connection camera:", "Verbindung Retourbild:": "Connection return feed:", "Verbindung trennen": "Disconnect", "· Zuspielung": "· Contribution", "(Ø · max": "(avg · max", "ms)": "ms)"};
+  const MAP = {"Auflösung": "Resolution", "Bereit": "Ready", "Bildrate": "Frame rate", "Kamera": "Camera", "Latenz Glas→Decoder:": "Latency glass→decoder:", "Latenz messen (Zeitstempel im Bild)": "Measure latency (timestamp in picture)", "Retourbild": "Return feed", "In neuem Tab öffnen": "Open in new tab", "Standards. Technologie. Freiheit.": "Standards. Technology. Freedom.", "Status": "Status", "Ton senden": "Send audio", "Verbinden": "Connect", "Verbindung Kamera:": "Connection camera:", "Verbindung Retourbild:": "Connection return feed:", "Verbindung trennen": "Disconnect", "Verbindung wiederherstellen": "Reconnect", "· Zuspielung": "· Contribution", "(Ø · max": "(avg · max", "ms)": "ms)"};
   document.documentElement.lang = "en";
   document.title = "OMP Camera";
   const walk = (n) => {
@@ -550,17 +550,17 @@ async function connect(stream) {
     $('conn').textContent = pc.connectionState;
     setBadges();
     const state = thisPc.connectionState;
+    if (pc === thisPc && state === 'connected') setConnLost(false);
     if (state === 'connected' && disconnectGraceTimer) {
       clearTimeout(disconnectGraceTimer);
       disconnectGraceTimer = null;
     } else if (state === 'failed' || state === 'closed') {
       if (disconnectGraceTimer) { clearTimeout(disconnectGraceTimer); disconnectGraceTimer = null; }
       if (pc === thisPc) stop(false);
-    } else if (state === 'disconnected' && !disconnectGraceTimer) {
-      disconnectGraceTimer = setTimeout(() => {
-        disconnectGraceTimer = null;
-        if (pc === thisPc && thisPc.connectionState !== 'connected') stop(false);
-      }, 4000);
+    } else if (state === 'disconnected') {
+      // Kein sofortiger Abbruch (WLAN-Hänger heilt oft selbst), aber der Knopf bietet sofort das Neuverbinden an;
+      // bleibt es dabei, meldet die ICE-Sitzung `failed` und der Reset oben greift.
+      if (pc === thisPc) setConnLost(true);
     }
   };
   await pc.setLocalDescription(await pc.createOffer());
@@ -660,7 +660,17 @@ function stopTally() {
   setTally(false);
 }
 
+// Bei abgerissener Verbindung wird aus „Verbindung trennen“ ein „Verbindung wiederherstellen“ (neu verbinden).
+let connLost = false;
+function setConnLost(lost) {
+  connLost = lost;
+  $('stop').textContent = lost ? (LANG === 'en' ? 'Reconnect' : 'Verbindung wiederherstellen')
+                               : (LANG === 'en' ? 'Disconnect' : 'Verbindung trennen');
+  $('stop').classList.toggle('stop', !lost);
+  $('stop').classList.toggle('primary', lost);
+}
 async function stop(quiet) {
+  setConnLost(false);
   stopTally();
   drawing = false;
   clearInterval(pollTimer);
@@ -683,7 +693,11 @@ async function stop(quiet) {
 }
 
 $('start').onclick = start;
-$('stop').onclick = () => stop(false);
+$('stop').onclick = async () => {
+  if (!connLost) return stop(false);
+  await stop(true);
+  start();
+};
 $('toggleStatus').onclick = () => $('statusPanel').classList.toggle('open');
 $('tiles').querySelector('[data-role="cam"]').addEventListener('click', () => onTileTap('cam'));
 $('retourTile').addEventListener('click', () => onTileTap('retour'));
