@@ -185,6 +185,11 @@ counters, next to what the writer actually declares about the flow._
 <td width="33%"><img src="docs/screenshots/file-eingangskontrolle-liste.png" width="260"><br><sub>File intake control: work list of incoming files with state, QC result, assignee/due date and duration</sub></td>
 <td width="33%"><img src="docs/screenshots/file-eingangskontrolle-qc.png" width="260"><br><sub>File intake control, QC report: one failure, two warnings, 17 passed — filterable by category, result and severity, exportable as JSON/CSV</sub></td>
 </tr>
+<tr>
+<td width="33%"><img src="docs/screenshots/intercom-zuteilung.png" width="260"><br><sub>Intercom setup, assignment tab: who may talk (mic) and listen (headphones) in which channel — one table, one click per cell</sub></td>
+<td width="33%"><img src="docs/screenshots/intercom-teilnehmer.png" width="260"><br><sub>Intercom setup, parties tab: list on the left, access, special rights and assigned channels on the right; panel layout folded away under "advanced"</sub></td>
+<td width="33%"></td>
+</tr>
 </table>
 
 Full walkthroughs and context for every screen above are in

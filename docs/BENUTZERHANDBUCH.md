@@ -1465,7 +1465,13 @@ des Monitor-Nodes.
   muss nach geänderten Gateway-Werten neu geladen werden.
 - Nach dem Verbinden: Kamerabild (und ggf. Retourbild; Antippen vergrößert),
   Anzeige „Live“, **Verbindung trennen** und ein aufklappbares **Status**-Feld
-  mit Verbindungszustand und Latenz. Die optionale **Latenzmessung**
+  mit Verbindungszustand und Latenz. Reißt die Verbindung ab, wechselt der
+  Knopf sofort auf **Verbindung wiederherstellen** (ein Tipp verbindet mit
+  denselben Einstellungen neu; heilt ein kurzer WLAN-Hänger von selbst, steht
+  wieder „Verbindung trennen“). Ist der Einladungslink mit einer Sprechstelle
+  gepaart (Intercom, Abschnitt 10c-5), steht unter dem Bild das kompakte
+  Intercom-Panel; die Seite passt dann genau in den Bildschirm, das Bild wird
+  entsprechend kleiner, und die Seite scrollt nicht. Die optionale **Latenzmessung**
   blendet einen Zeitstempel-Streifen ins Bild ein.
 - **Monitor-Seite (Retourbild einzeln):** Ein Tipp auf das Videobild schaltet
   **Vollbild** um — nur das Video, randlos, ohne Overlays, Badge oder Texte
@@ -1599,7 +1605,13 @@ Das Intercom verbindet Menschen untereinander: **Kanäle** sind gemeinsame Sprec
 
 1. Dienst **Intercom** über den Katalog starten (Reiter Instanzen). Er ist ein eigener Dienst: er speichert Kanäle, Teilnehmer und Gäste selbst (Datei `data/omp-intercom.json`, Pfad per `OMP_INTERCOM_DATA` änderbar) und läuft unabhängig vom Orchestrator weiter; eine Sicherungskopie liegt in der Datenbank des Orchestrators (Datensicherung) und wird automatisch zurückgespielt, falls der Dienst einmal leer startet. Ohne laufenden Dienst ist die Einrichtung nicht erreichbar (Meldung in der Oberfläche). Er braucht keine weitere Einstellung; für das Mikrofon im Browser läuft er mit HTTPS (selbst signiertes Zertifikat, einmal bestätigen). Öffnen Sie die Oberfläche über `localhost` auf demselben Rechner, nutzt das Panel einfaches HTTP – `localhost` gilt für das Mikrofon als sicher, die Zertifikats-Rückfrage entfällt.
 2. **Kanäle** anlegen. Ein Kanal der Art **IFB** führt Programmton, der um einen einstellbaren Wert gedämpft wird, sobald jemand hineinspricht.
-3. **Teilnehmer** anlegen: eine **Person** (öffnet ihr Panel mit dem eigenen Konto), ein **Rollenplatz** (z. B. „Kamera 2“, an dem sich jeder mit dem Recht „Intercom nutzen“ anmelden darf), eine **Programmquelle** oder eine **Anbindung** (Hardware/MXL, s. u.). Je Teilnehmer in der Matrix festlegen, in welchen Kanälen er **sprechen** und **hören** darf. Unter **Panel-Layout** wählen Sie **Standard**, eine **Vorlage** (ein Layout, das mehrere Teilnehmer teilen, z. B. „Kamera“; unter **Layout-Vorlagen** anlegen) oder ein **eigenes Layout** (Seiten und Tasten anordnen, Vorschau darüber; **Aus Zuteilung neu erzeugen** liefert einen Startpunkt). **Priorität** (0–9): Spricht jemand mit höherer Priorität, werden niedrigere im selben Kanal um 12 dB gedämpft. **Darf andere stumm schalten und Alle-Ruf auslösen** gehört nur an Regieplätze. **Mikrofon gesperrt, solange On Air** schaltet Studiolautsprecher und ähnliche Plätze während der Sendung stumm.
+3. Die Einrichtung hat fünf Reiter. Am besten in dieser Reihenfolge: erst **Kanäle**, dann **Teilnehmer**, dann **Zuteilung**; **Panel-Vorlagen** und **Gäste** bei Bedarf. Oben stehen immer **Speichern**, **Verwerfen** und der Betriebsstatus (wie viele Teilnehmer online sind).
+   - **Teilnehmer:** links die Liste (grüner Punkt = online, Punkt mit Ring = spricht gerade), rechts die Einstellungen des gewählten Teilnehmers. Art: eine **Person** (öffnet ihr Panel mit dem eigenen Konto), ein **Rollenplatz** (z. B. „Kamera 2“, an dem sich jeder mit dem Recht „Intercom nutzen“ anmelden darf), eine **Programmquelle** oder eine **Anbindung** (Hardware/MXL, s. u.). Unter **Wer sitzt hier? (Zugang)** stehen Benutzernamen und Gruppen sowie **Neuer Zugangslink**; unter **Besonderheiten** **Priorität** (0–9: Spricht jemand mit höherer Priorität, werden niedrigere im selben Kanal um 12 dB gedämpft), **Darf andere stumm schalten und Alle-Ruf auslösen** (nur Regieplätze) und **Mikrofon gesperrt, solange On Air** (Studiolautsprecher und ähnliche Plätze). Das **Panel-Layout** ist unter „erweitert“ eingeklappt: **Standard**, eine **Vorlage** (ein Layout, das mehrere Teilnehmer teilen, z. B. „Kamera“; unter **Panel-Vorlagen** anlegen) oder ein **eigenes Layout** (Seiten und Tasten anordnen, Vorschau darüber; **Aus Zuteilung neu erzeugen** liefert einen Startpunkt).
+   - **Zuteilung:** eine Tabelle Teilnehmer × Kanäle. Je Zelle schaltet ein Klick **Sprechen** (🎤) oder **Hören** (🎧) um; ein Klick auf einen Namen öffnet dessen Einstellungen. So sieht man auf einen Blick, wer wo zu hören ist.
+
+   ![Intercom-Einrichtung, Reiter Zuteilung: Teilnehmer × Kanäle mit Sprechen und Hören](screenshots/intercom-zuteilung.png)
+
+   ![Intercom-Einrichtung, Reiter Teilnehmer: Liste links, Zugang, Besonderheiten und zugeteilte Kanäle rechts](screenshots/intercom-teilnehmer.png)
 4. **Speichern** – erst damit gilt die Änderung (**Verwerfen** stellt den gespeicherten Stand her). Mit dem Recht „Intercom nutzen“ (Administration → Rechte) öffnet jede Person ihr Panel über die Kachel **Intercom** der Operator-Konsole.
 
 **Das Panel:**
