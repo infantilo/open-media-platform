@@ -428,7 +428,10 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   and manual override; aux/N-1 buses with pre/post sends; scenes with
   video→audio context; declarative media-player automation; derived On-Air
   state; touch-capable responsive console (full/compact/dense/grid/touch);
-  master limiter, solo/PFL, audio-follow-video (see docs/AUDIOMIXER-PLAN.md)
+  master limiter, solo/PFL, audio-follow-video with a choice of which video
+  mixers/tally givers it follows (global, overridable per video source);
+  global “Scenes & automation” dialog for everything not tied to a channel
+  (see docs/AUDIOMIXER-PLAN.md)
 - **omp-mxf-player** — MXF file player with program-group audio shuffle
   and MXF MCA label reading (SMPTE ST 377-4/-41; labels drive the audio rules)
   (cued playback, plus live-MXL-source and real-file playlist items)

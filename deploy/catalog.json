@@ -181,8 +181,8 @@
     "runner": "process",
     "command": ["../nodes/target/release/omp-audio-mixer"],
     "env": {},
-    "description": "Digitales Audiomischpult mit dynamischer Kanalanzahl, Gain/EQ pro Kanal, automatischem Audio-Follow-Video (sample-genau, mit AFV-Anzeige und gemeinsamem Schaltzeitpunkt takeAt; Ausgänge per Dialog anlegen, Mehrfach-Routing-Matrix, Surround-Panner mit Joystick für 5.1/7.1) sowie Aux-, N-1- und frei konfigurierbaren Gruppen-Bussen (Mono bis 7.1, je Bus eigener MXL-Sender mit Gruppen-Tag).",
-    "i18n": { "en": {"description": "Digital audio console with dynamic channel count, gain/EQ per channel, automatic audio-follow-video (sample-accurate, with AFV display and shared switch time takeAt; create outputs via dialog, multi-routing matrix, surround panner with joystick for 5.1/7.1) as well as aux, N-1 and freely configurable group buses (mono to 7.1, each bus with its own MXL sender with group tag).", "expectedResources": "low to moderate, grows with the channel count"} },
+    "description": "Digitales Audiomischpult mit dynamischer Kanalanzahl, Gain/EQ pro Kanal, automatischem Audio-Follow-Video (sample-genau, mit AFV-Anzeige, Auswahl der Bildmischer und gemeinsamem Schaltzeitpunkt takeAt; Ausgänge per Dialog anlegen, Mehrfach-Routing-Matrix, Surround-Panner mit Joystick für 5.1/7.1) sowie Aux-, N-1- und frei konfigurierbaren Gruppen-Bussen (Mono bis 7.1, je Bus eigener MXL-Sender mit Gruppen-Tag).",
+    "i18n": { "en": {"description": "Digital audio console with dynamic channel count, gain/EQ per channel, automatic audio-follow-video (sample-accurate, with AFV display, choice of video mixers and shared switch time takeAt; create outputs via dialog, multi-routing matrix, surround panner with joystick for 5.1/7.1) as well as aux, N-1 and freely configurable group buses (mono to 7.1, each bus with its own MXL sender with group tag).", "expectedResources": "low to moderate, grows with the channel count"} },
     "expectedResources": "gering bis moderat, wächst mit Kanalzahl",
     "latency": { "audio": { "minLatencyFrames": 0, "maxLatencyFrames": 480 } }
   },
