@@ -13,10 +13,12 @@
 //!   unabhängige Video-/Audio-Receiver (Details `pipeline.rs`-Moduldoku).
 //!
 //! Mehrfach instanziierbar (`OMP_LABEL`/`OMP_PORT`), je eine Instanz pro
-//! physischem DeckLink-Gerät (`OMP_DECKLINK_DEVICE_NUMBER`) und Richtung
-//! — dieselbe Karte kann NICHT gleichzeitig von einer Ingest- und einer
-//! Output-Instanz belegt werden (Blackmagic-Treiber-Grenze, kein
-//! OMP-Check dafür in dieser Runde, s. `docs/decisions.md`).
+//! Gerät (`OMP_DECKLINK_DEVICE_NUMBER` oder stabiler `OMP_DECKLINK_
+//! PERSISTENT_ID`) und Richtung. **Duplex-Karten** (DeckLink IP, SDI mit
+//! `*-full`-Profil, `OMP_DECKLINK_PROFILE`) erfassen und geben gleichzeitig
+//! aus: eine Ingest- und eine Output-Instanz DERSELBEN Karte sind dort
+//! ausdrücklich vorgesehen. Nur Half-Duplex-Profile erlauben je Teilgerät
+//! eine Richtung (Blackmagic-Treiber-Grenze, kein OMP-Check dafür).
 
 mod pipeline;
 
@@ -489,6 +491,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let nats_url = env_or("OMP_NATS_URL", "nats://localhost:4222");
     let domain = env_or("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl");
     let device_number: i32 = env_or("OMP_DECKLINK_DEVICE_NUMBER", "0").parse()?;
+    // Duplex-Karten (DeckLink IP, SDI-Profile `*-full`) erfassen und geben gleichzeitig aus: je Richtung eine Instanz,
+    // beide mit derselben Karte. `PERSISTENT_ID` (hat Vorrang vor der Gerätenummer) hält die Zuordnung bei mehreren
+    // Karten stabil; `PROFILE` wählt bei Mehr-Profil-Karten das Duplex-Profil (leer/`default` = unverändert).
+    let persistent_id: Option<i64> = match env_or("OMP_DECKLINK_PERSISTENT_ID", "").trim() {
+        "" => None,
+        v => Some(v.parse()?),
+    };
+    let profile = env_or("OMP_DECKLINK_PROFILE", "default");
+    pipeline::set_device_select(pipeline::DeviceSelect {
+        persistent_id,
+        profile: if profile.trim().is_empty() { "default".to_string() } else { profile.trim().to_string() },
+    })?;
     let mode = env_or("OMP_DECKLINK_MODE", "1080p25");
     let audio_channels: u32 = env_or("OMP_DECKLINK_AUDIO_CHANNELS", "2").parse()?;
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();

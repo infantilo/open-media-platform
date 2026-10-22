@@ -53,6 +53,42 @@ use tokio::sync::oneshot;
 
 pub const SAMPLE_RATE: u32 = 48000;
 
+/// Profile der DeckLink-Karte (GStreamer-Enum `GstDecklinkProfileId`, `gst-inspect-1.0 decklinkvideosrc`).
+/// `default` ändert nichts. Eine Duplex-Karte (SDI-Profile `*-full`, DeckLink IP) erfasst und gibt gleichzeitig aus.
+pub const SUPPORTED_PROFILES: &[&str] =
+    &["default", "one-sub-device-full", "one-sub-device-half", "two-sub-devices-full", "two-sub-devices-half", "four-sub-devices-half"];
+
+/// Geräteauswahl dieses Prozesses (je Instanz genau ein Gerät): `persistent-id` hat Vorrang vor der Gerätenummer und
+/// bleibt bei mehreren Karten/Neustarts stabil; `profile` wird nur gesetzt, wenn es nicht `default` ist.
+#[derive(Clone, Debug)]
+pub struct DeviceSelect {
+    pub persistent_id: Option<i64>,
+    pub profile: String,
+}
+
+static DEVICE_SELECT: std::sync::OnceLock<DeviceSelect> = std::sync::OnceLock::new();
+
+/// Einmal beim Start aus der Umgebung; prüft `profile` gegen [`SUPPORTED_PROFILES`] (ein ungültiger Enum-Nick würde
+/// `set_property_from_str` zum Absturz bringen).
+pub fn set_device_select(sel: DeviceSelect) -> Result<(), String> {
+    if !SUPPORTED_PROFILES.contains(&sel.profile.as_str()) {
+        return Err(format!("OMP_DECKLINK_PROFILE={:?} nicht unterstützt (unterstützt: {SUPPORTED_PROFILES:?})", sel.profile));
+    }
+    let _ = DEVICE_SELECT.set(sel);
+    Ok(())
+}
+
+/// Setzt `persistent-id`/`profile` auf ein DeckLink-Element (Video/Audio, Quelle/Senke) — alle vier teilen die Properties.
+fn select_device(element: &gst::Element) {
+    let Some(sel) = DEVICE_SELECT.get() else { return };
+    if let Some(id) = sel.persistent_id {
+        element.set_property("persistent-id", id);
+    }
+    if sel.profile != "default" {
+        element.set_property_from_str("profile", &sel.profile);
+    }
+}
+
 /// `channels`-große Diagonalmatrix — s. `omp-aes67-gateway::pipeline`-
 /// Pendant (`UMSETZUNG.md` D17/D18) für die ausführliche Begründung;
 /// hier bewusst dupliziert statt geteilt (eigenständiges Crate, gleiche
@@ -184,6 +220,7 @@ impl Pipeline {
             .property("device-number", config.device_number)
             .build()
             .map_err(|e| PipelineError(format!("decklinkvideosrc: {e}")))?;
+        select_device(&decklinkvideosrc);
         decklinkvideosrc.set_property_from_str("mode", &config.mode);
 
         let video_queue = gst::ElementFactory::make("queue")
@@ -222,6 +259,7 @@ impl Pipeline {
             .property("device-number", config.device_number)
             .build()
             .map_err(|e| PipelineError(format!("decklinkaudiosrc: {e}")))?;
+        select_device(&decklinkaudiosrc);
         decklinkaudiosrc.set_property_from_str("channels", &config.audio_channels.to_string());
 
         let audioconvert = gst::ElementFactory::make("audioconvert")
@@ -524,6 +562,7 @@ fn build_output(
         .property("sync", true)
         .build()
         .map_err(|e| format!("decklinkvideosink: {e}"))?;
+    select_device(&decklinkvideosink);
     decklinkvideosink.set_property_from_str("mode", mode);
 
     pipeline
@@ -576,6 +615,7 @@ fn build_output(
                 .property("sync", true)
                 .build()
                 .map_err(|e| format!("decklinkaudiosink: {e}"))?;
+            select_device(&decklinkaudiosink);
 
             // AMWA IS-08 (`UMSETZUNG.md` D18) — zwischen MXL-Eingang und
             // SDI-Ausgang eingefügt, damit ein Reconnect (diese Pipeline

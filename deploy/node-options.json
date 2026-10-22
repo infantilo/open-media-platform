@@ -110,11 +110,37 @@
       "max": 31
     },
     {
+      "key": "OMP_DECKLINK_PERSISTENT_ID",
+      "i18n": { "en": {"label": "Persistent ID", "description": "Stable card ID (takes precedence over the device number). Keeps the assignment with several cards; leave empty to use the device number."} },
+      "label": "Persistente ID",
+      "type": "string",
+      "description": "Stabile Karten-ID (hat Vorrang vor der Gerätenummer). Hält die Zuordnung bei mehreren Karten; leer = Gerätenummer.",
+      "default": "",
+      "group": "Hardware"
+    },
+    {
+      "key": "OMP_DECKLINK_PROFILE",
+      "i18n": { "en": {"label": "Card profile", "description": "Duplex/sub-device layout of multi-profile SDI cards. Full duplex captures and plays at the same time. DeckLink IP cards are full duplex already: leave on default."} },
+      "label": "Karten-Profil",
+      "type": "enum",
+      "description": "Duplex-/Teilgeräte-Aufteilung von Mehr-Profil-SDI-Karten. Full-Duplex erfasst und gibt gleichzeitig aus. DeckLink-IP-Karten sind schon Full-Duplex: auf Standard lassen.",
+      "default": "default",
+      "group": "Hardware",
+      "choices": [
+        { "value": "default" },
+        { "value": "one-sub-device-full" },
+        { "value": "one-sub-device-half" },
+        { "value": "two-sub-devices-full" },
+        { "value": "two-sub-devices-half" },
+        { "value": "four-sub-devices-half" }
+      ]
+    },
+    {
       "key": "OMP_DECKLINK_DIRECTION",
-      "i18n": { "en": {"label": "Direction", "description": "Input (SDI→MXL) or output (MXL→SDI)."} },
+      "i18n": { "en": {"label": "Direction", "description": "Input (card→MXL) or output (MXL→card). A duplex card (DeckLink IP) needs one instance per direction."} },
       "label": "Richtung",
       "type": "enum",
-      "description": "Eingang (SDI→MXL) oder Ausgang (MXL→SDI).",
+      "description": "Eingang (Karte→MXL) oder Ausgang (MXL→Karte). Eine Duplex-Karte (DeckLink IP) braucht je Richtung eine Instanz.",
       "default": "ingest",
       "group": "Hardware",
       "choices": [
