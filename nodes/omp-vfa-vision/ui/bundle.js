@@ -9,11 +9,11 @@ class OmpVfaVisionPanel extends HTMLElement {
       ? { hint: "Die Kameras gibt „Video folgt Audio“ vor. Hier siehst du, was erkannt wird.", none: "Noch keine Kamera gemeldet. „Video folgt Audio“ starten und Kameras anlegen.", noimg: "kein Bild", faces: "Gesichter", size: "Größe", ok: "erkennt" }
       : { hint: "Cameras are provided by “Video follows audio”. This shows what is detected.", none: "No camera reported yet. Start “Video follows audio” and add cameras.", noimg: "no picture", faces: "faces", size: "size", ok: "detecting" };
     root.innerHTML = `<style>
-      :host{display:block;font:14px/1.4 system-ui,sans-serif;color:var(--fg,#e8eaed);padding:12px;--line:#3a414c;--ok:#3fb950;--bad:#e5484d}
-      .hint{color:#9aa3ad;margin:0 0 10px}.cam{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:8px 0}
-      .head{display:flex;gap:8px;align-items:center}.dot{width:10px;height:10px;border-radius:50%;background:var(--bad)}.dot.ok{background:var(--ok)}
-      .frame{position:relative;width:100%;max-width:320px;aspect-ratio:16/9;background:#0006;border:1px solid var(--line);margin-top:6px;border-radius:4px}
-      .f{position:absolute;border:2px solid #ffd33d;border-radius:3px;box-sizing:border-box}.err{color:var(--bad);font-size:12px}
+      :host{display:block;font:13px/1.35 var(--omp-font,system-ui,sans-serif);color:var(--omp-text,#eaf0fa);padding:10px;background:var(--omp-bg,#080c16);--line:var(--omp-border,#223049);--ok:var(--omp-preset,#43a047);--bad:var(--omp-onair,#e53935)}
+      .hint{color:var(--omp-text-dim,#93a1ba);margin:0 0 8px}.cam{border:1px solid var(--line);border-radius:8px;background:var(--omp-surface,#0f1522);padding:8px 10px;margin:6px 0}
+      .head{display:flex;gap:8px;align-items:center}.dot{width:8px;height:8px;border-radius:50%;background:var(--bad)}.dot.ok{background:var(--ok);box-shadow:0 0 6px 1px #43a04799}
+      .frame{position:relative;width:100%;max-width:320px;aspect-ratio:16/9;background:#000;border:1px solid var(--line);margin-top:6px;border-radius:4px}
+      .f{position:absolute;border:2px solid var(--omp-accent-cyan,#19d3f3);border-radius:3px;box-sizing:border-box}.err{color:#ef5350;font-size:12px}
     </style><p class="hint">${this.t.hint}</p><div id="c"></div>`;
     this.box = root.getElementById("c");
     this.tick();

@@ -85,6 +85,9 @@ export const en: Record<keyof typeof de, string> = {
 
   "admin.title": "Administration",
   "admin.group.platform": "Platform",
+  "admin.cluster.access": "Access & rights",
+  "admin.cluster.operations": "Operations",
+  "admin.cluster.maintenance": "Maintenance",
   "admin.tab.users": "Users",
   "admin.tab.organizations": "Organizations",
   "admin.tab.groups": "Groups",

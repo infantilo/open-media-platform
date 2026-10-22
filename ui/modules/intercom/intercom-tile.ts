@@ -77,7 +77,7 @@ class IntercomTile extends HTMLElement {
     open.rel = "noopener";
     bar.append(open, el("span", "font-size:11px;color:var(--omp-text-dim);", tt("icom.tile.certHint")));
     this.append(bar);
-    const frame = el("iframe", "width:100%;max-width:720px;height:calc(100vh - 220px);min-height:520px;border:1px solid var(--omp-border);border-radius:8px;background:var(--omp-surface);");
+    const frame = el("iframe", "width:100%;max-width:980px;height:calc(100vh - 200px);min-height:420px;border:1px solid var(--omp-border);border-radius:8px;background:var(--omp-bg);");
     frame.setAttribute("allow", "microphone; autoplay");
     frame.src = p.url;
     frame.title = p.name;

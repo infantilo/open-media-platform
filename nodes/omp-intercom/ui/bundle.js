@@ -106,7 +106,7 @@ class OmpIntercomPanel extends HTMLElement {
     f.src = p.url;
     f.title = p.name;
     f.setAttribute("allow", "microphone; autoplay");
-    f.style.cssText = "width:100%;max-width:720px;height:calc(100% - 40px);min-height:480px;border:1px solid #444;border-radius:8px;";
+    f.style.cssText = "width:100%;max-width:980px;height:calc(100% - 40px);min-height:420px;border:1px solid var(--omp-border,#223049);border-radius:8px;background:var(--omp-bg,#080c16);";
     this.append(bar, f);
     this._status();
   }

@@ -84,6 +84,9 @@ export const de = {
 
   "admin.title": "Administration",
   "admin.group.platform": "Plattform",
+  "admin.cluster.access": "Zugang & Rechte",
+  "admin.cluster.operations": "Betrieb",
+  "admin.cluster.maintenance": "Wartung",
   "admin.tab.users": "Nutzer",
   "admin.tab.organizations": "Organisationen",
   "admin.tab.groups": "Gruppen",

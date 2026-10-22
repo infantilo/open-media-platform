@@ -246,27 +246,29 @@ interface UpdateOverview {
 type AdminTabId = string;
 // Gruppiert (Nutzerhinweis 2026-10-07): "Playout" und "Audio-Ausgabe" gehören
 // zur Playout-Automation (Kapitel 27), nicht zur allgemeinen Plattform-Verwaltung.
-const ADMIN_SUB_TAB_GROUPS: { id: string; labelKey: I18nKey; tabs: { id: AdminTabId; labelKey: I18nKey }[] }[] = [
+const ADMIN_SUB_TAB_GROUPS: { id: string; labelKey: I18nKey; tabs: { id: AdminTabId; labelKey: I18nKey; clusterKey?: I18nKey }[] }[] = [
   {
     id: "platform",
     labelKey: "admin.group.platform",
     tabs: [
-      { id: "users", labelKey: "admin.tab.users" },
-      { id: "organizations", labelKey: "admin.tab.organizations" },
-      { id: "groups", labelKey: "admin.tab.groups" },
-      { id: "bindings", labelKey: "admin.tab.bindings" },
-      { id: "catalog", labelKey: "admin.tab.catalog" },
-      { id: "nodeversions", labelKey: "admin.tab.nodeversions" },
-      { id: "storage", labelKey: "admin.tab.storage" },
-      { id: "audit", labelKey: "admin.tab.audit" },
-      { id: "diagnose", labelKey: "admin.tab.diagnose" },
-      { id: "backup", labelKey: "admin.tab.backup" },
-      { id: "update", labelKey: "admin.tab.update" },
-      { id: "settings", labelKey: "admin.tab.settings" },
-      { id: "cluster", labelKey: "admin.tab.cluster" },
+      { id: "users", labelKey: "admin.tab.users", clusterKey: "admin.cluster.access" },
+      { id: "organizations", labelKey: "admin.tab.organizations", clusterKey: "admin.cluster.access" },
+      { id: "groups", labelKey: "admin.tab.groups", clusterKey: "admin.cluster.access" },
+      { id: "bindings", labelKey: "admin.tab.bindings", clusterKey: "admin.cluster.access" },
+      { id: "catalog", labelKey: "admin.tab.catalog", clusterKey: "admin.cluster.operations" },
+      { id: "nodeversions", labelKey: "admin.tab.nodeversions", clusterKey: "admin.cluster.operations" },
+      { id: "cluster", labelKey: "admin.tab.cluster", clusterKey: "admin.cluster.operations" },
+      { id: "storage", labelKey: "admin.tab.storage", clusterKey: "admin.cluster.operations" },
+      { id: "audit", labelKey: "admin.tab.audit", clusterKey: "admin.cluster.maintenance" },
+      { id: "diagnose", labelKey: "admin.tab.diagnose", clusterKey: "admin.cluster.maintenance" },
+      { id: "backup", labelKey: "admin.tab.backup", clusterKey: "admin.cluster.maintenance" },
+      { id: "update", labelKey: "admin.tab.update", clusterKey: "admin.cluster.maintenance" },
+      { id: "settings", labelKey: "admin.tab.settings", clusterKey: "admin.cluster.maintenance" },
     ],
   },
 ];
+// Reihenfolge der ersten Ebene; weitere Modul-Gruppen folgen danach.
+const ADMIN_GROUP_ORDER = ["platform", "playout", "production"];
 const SUB_TAB_BUTTON_BASE =
   "border:1px solid transparent;border-radius:var(--omp-radius);" +
   "padding:6px 12px;font-size:var(--omp-font-size-sm);font-family:var(--omp-font);cursor:pointer;";
@@ -2323,15 +2325,19 @@ class AdminView extends HTMLElement {
     return box;
   }
 
+  // Zwei Ebenen: oben die Bereiche (Plattform, Playout, Produktion, …), darunter deren Punkte, bei der Plattform nach
+  // Themen getrennt. Ein Klick auf einen Bereich öffnet dessen zuletzt benutzten Punkt.
+  #lastTabOfGroup = new Map<string, AdminTabId>();
+
   #renderTabBar(): HTMLElement {
-    const bar = document.createElement("div");
-    bar.setAttribute("data-role", "admin-sub-tabs");
-    bar.style.cssText = "display:flex;flex-wrap:wrap;gap:var(--omp-space-2) var(--omp-space-4);margin-bottom:var(--omp-space-3);";
-    // Kern-Gruppen plus Modul-Untertabs: gleiche Gruppen-ID → angehängt, neue Gruppe → eigene Box mit der Beschriftung des Moduls.
-    const groups: { id: string; label: string; tabs: { id: AdminTabId; label: string }[] }[] = ADMIN_SUB_TAB_GROUPS.map((g) => ({
+    const wrap = document.createElement("div");
+    wrap.setAttribute("data-role", "admin-sub-tabs");
+    wrap.style.cssText = "margin-bottom:var(--omp-space-3);";
+    // Kern-Gruppen plus Modul-Untertabs: gleiche Gruppen-ID → angehängt, neue Gruppe → eigener Bereich mit der Beschriftung des Moduls.
+    const groups: { id: string; label: string; tabs: { id: AdminTabId; label: string; cluster?: string }[] }[] = ADMIN_SUB_TAB_GROUPS.map((g) => ({
       id: g.id,
       label: t(g.labelKey),
-      tabs: g.tabs.map((x) => ({ id: x.id, label: t(x.labelKey) })),
+      tabs: g.tabs.map((x) => ({ id: x.id, label: t(x.labelKey), cluster: x.clusterKey ? t(x.clusterKey) : undefined })),
     }));
     for (const mg of this.#moduleGroups) {
       const existing = groups.find((g) => g.id === mg.id);
@@ -2339,16 +2345,58 @@ class AdminView extends HTMLElement {
       if (existing) existing.tabs.push(...tabs);
       else groups.push({ id: mg.id, label: mg.label, tabs });
     }
+    const rank = (id: string) => {
+      const i = ADMIN_GROUP_ORDER.indexOf(id);
+      return i < 0 ? ADMIN_GROUP_ORDER.length : i;
+    };
+    groups.sort((a, b) => rank(a.id) - rank(b.id));
+    const active = groups.find((g) => g.tabs.some((x) => x.id === this.#activeAdminTab)) ?? groups[0];
+    if (active) this.#lastTabOfGroup.set(active.id, this.#activeAdminTab);
+
+    const top = document.createElement("div");
+    top.setAttribute("data-role", "admin-groups");
+    top.style.cssText = "display:flex;flex-wrap:wrap;gap:var(--omp-space-2);border-bottom:1px solid var(--omp-border);margin-bottom:var(--omp-space-3);";
     for (const group of groups) {
-      const box = document.createElement("div");
-      box.setAttribute("data-group", group.id);
-      box.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:var(--omp-space-2);";
-      const label = document.createElement("span");
-      label.textContent = group.label;
-      label.style.cssText =
-        "font-size:var(--omp-font-size-xs);text-transform:uppercase;letter-spacing:0.05em;color:var(--omp-text-dim);";
-      box.appendChild(label);
-      for (const tab of group.tabs) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = group.label;
+      btn.setAttribute("data-group", group.id);
+      const isActive = group === active;
+      btn.style.cssText =
+        "border:1px solid transparent;border-bottom:2px solid " + (isActive ? "var(--omp-accent-cyan)" : "transparent") + ";" +
+        "background:transparent;padding:8px 16px;margin-bottom:-1px;cursor:pointer;font-family:var(--omp-font);" +
+        "font-size:var(--omp-font-size-md);font-weight:600;text-transform:uppercase;letter-spacing:0.06em;" +
+        "color:" + (isActive ? "var(--omp-text)" : "var(--omp-text-dim)") + ";";
+      btn.addEventListener("click", () => {
+        if (isActive) return;
+        const last = this.#lastTabOfGroup.get(group.id);
+        this.#activeAdminTab = last && group.tabs.some((x) => x.id === last) ? last : group.tabs[0].id;
+        this.#render();
+      });
+      top.appendChild(btn);
+    }
+    wrap.appendChild(top);
+
+    if (active) {
+      const sub = document.createElement("div");
+      sub.setAttribute("data-role", "admin-group-tabs");
+      sub.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:var(--omp-space-2) var(--omp-space-4);";
+      let cluster: HTMLElement | null = null;
+      let lastCluster: string | undefined = "\u0000";
+      for (const tab of active.tabs) {
+        if (!cluster || tab.cluster !== lastCluster) {
+          lastCluster = tab.cluster;
+          cluster = document.createElement("div");
+          cluster.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:var(--omp-space-1);";
+          if (tab.cluster) {
+            const label = document.createElement("span");
+            label.textContent = tab.cluster;
+            label.style.cssText =
+              "font-size:var(--omp-font-size-xs);text-transform:uppercase;letter-spacing:0.05em;color:var(--omp-text-dim);margin-right:var(--omp-space-1);";
+            cluster.appendChild(label);
+          }
+          sub.appendChild(cluster);
+        }
         const btn = document.createElement("button");
         btn.type = "button";
         btn.textContent = tab.label;
@@ -2363,11 +2411,11 @@ class AdminView extends HTMLElement {
           this.#activeAdminTab = tab.id;
           this.#render();
         });
-        box.appendChild(btn);
+        cluster.appendChild(btn);
       }
-      bar.appendChild(box);
+      wrap.appendChild(sub);
     }
-    return bar;
+    return wrap;
   }
 
   #renderUsersSection(): HTMLElement {

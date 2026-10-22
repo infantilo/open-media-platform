@@ -3,67 +3,73 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<meta name="theme-color" content="#14171c">
+<meta name="theme-color" content="#080c16">
 <title>Intercom</title>
 <style>
-:root{--bg:#f4f5f7;--panel:#fff;--ink:#16191d;--mute:#6a7380;--line:#d9dde3;--accent:#1f6feb;--talk:#d1242f;--ok:#1a7f37;--warn:#bf8700;--key:#e9ecf0}
-@media (prefers-color-scheme:dark){:root{--bg:#14171c;--panel:#1d2128;--ink:#e8ebef;--mute:#8d97a5;--line:#2c323b;--accent:#4c8dff;--talk:#ff4d57;--ok:#3fb950;--warn:#d4a72c;--key:#272d36}}
+:root{--bg:#080c16;--panel:#0f1522;--raised:#172033;--ink:#eaf0fa;--mute:#93a1ba;--line:#223049;--accent:#19d3f3;--talk:#e53935;--ok:#43a047;--warn:#fb8c00;
+--hi:#565d66;--m-light:#3d434b;--m-mid:#2b2f34;--m-dark:#1a1c1f;--glow:0 0 8px 1px rgba(229,57,53,.65);--font:system-ui,-apple-system,"Segoe UI",sans-serif}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 [hidden]{display:none!important}
-html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.35 system-ui,sans-serif;touch-action:manipulation}
-body{padding:env(safe-area-inset-top) 16px env(safe-area-inset-bottom);max-width:720px;margin:0 auto}
-header{display:flex;align-items:center;gap:12px;padding:12px 0;position:sticky;top:0;background:var(--bg);z-index:3}
-header h1{font-size:18px;margin:0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dot{width:10px;height:10px;border-radius:50%;background:var(--mute);flex:none}
-.dot.on{background:var(--ok)}.dot.bad{background:var(--talk)}.dot.speak{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 35%,transparent)}
-button{font:inherit;color:inherit;border:1px solid var(--line);background:var(--key);border-radius:10px;padding:10px 14px;min-height:44px;cursor:pointer;user-select:none;-webkit-user-select:none;touch-action:none}
-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-button.toggle[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff}
-#mute[aria-pressed=true]{background:var(--talk);border-color:var(--talk);color:#fff}
-.meter{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-bottom:8px}
-.meter i{display:block;height:100%;width:0;background:var(--ok);transition:width .08s}
-#banner{display:none;margin:0 0 12px;padding:10px 12px;border-radius:10px;background:var(--warn);color:#000}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.3 var(--font);touch-action:manipulation}
+body{padding:env(safe-area-inset-top) 10px env(safe-area-inset-bottom);max-width:980px;margin:0 auto}
+header{display:flex;align-items:center;gap:8px;padding:8px 0;position:sticky;top:0;background:var(--bg);z-index:3}
+header h1{font-size:14px;margin:0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--mute);flex:none}
+.dot.on{background:var(--ok)}.dot.bad{background:var(--talk)}.dot.speak{background:var(--ok);box-shadow:0 0 0 3px rgba(67,160,71,.35)}
+button{font:inherit;color:inherit;border:0;background:none;padding:0;cursor:pointer;user-select:none;-webkit-user-select:none;touch-action:none}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+button:disabled{opacity:.4;cursor:default}
+.key,.hb,.mini{border:1px solid #000;border-top-color:var(--hi);background:linear-gradient(180deg,var(--m-light),var(--m-mid) 55%,var(--m-dark));box-shadow:0 2px 0 #000,0 3px 4px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.12);transition:transform .04s,box-shadow .04s,background .08s}
+.key:active:not(:disabled),.hb:active:not(:disabled),.mini:active:not(:disabled),.key[aria-pressed=true],.hb[aria-pressed=true],.mini[aria-pressed=true]{transform:translateY(2px);box-shadow:0 0 0 #000,inset 0 2px 5px rgba(0,0,0,.6)}
+.key{position:relative;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;gap:1px;width:100%;min-height:52px;padding:6px 8px 6px 13px;border-radius:7px;text-align:left;font-weight:600;font-size:14px;line-height:1.15}
+.key::before{content:'';position:absolute;left:5px;top:7px;bottom:7px;width:3px;border-radius:2px;background:var(--cc,var(--line))}
+.key .nm{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.key .wh{font-size:11px;font-weight:500;color:var(--mute);min-height:13px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.key .wh b{color:#6bdc72}
+.key.simple{flex-direction:row;align-items:center;gap:8px;min-height:52px}
+.key.simple span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.key[aria-pressed=true]{background:linear-gradient(180deg,#a82622,#e53935 60%,#a42521);color:#fff;box-shadow:var(--glow),inset 0 2px 4px rgba(0,0,0,.35)}
+.key[aria-pressed=true] .wh{color:#ffd9d7}
+.hb{border-radius:6px;padding:0 10px;height:28px;font-size:12px;font-weight:600}
+.hb[aria-pressed=true]{background:linear-gradient(180deg,#a82622,#e53935 60%,#a42521);color:#fff;box-shadow:var(--glow),inset 0 2px 4px rgba(0,0,0,.35)}
+#dnd[aria-pressed=true]{background:linear-gradient(180deg,#b86300,#fb8c00 60%,#b86300);box-shadow:0 0 8px 1px rgba(251,140,0,.6),inset 0 2px 4px rgba(0,0,0,.35)}
+.mini{width:26px;height:24px;border-radius:5px;font-size:11px;font-weight:700;color:var(--mute)}
+.mini.listen[aria-pressed=true]{background:linear-gradient(180deg,#2f7d32,#43a047 60%,#2f7d32);color:#fff;box-shadow:0 0 6px 1px rgba(67,160,71,.55),inset 0 2px 4px rgba(0,0,0,.35)}
+.mini.solo[aria-pressed=true]{background:linear-gradient(180deg,#b86300,#fb8c00 60%,#b86300);color:#fff;box-shadow:0 0 6px 1px rgba(251,140,0,.55),inset 0 2px 4px rgba(0,0,0,.35)}
+.meter{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin:0 0 8px}
+.meter i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),#a45cff);transition:width .08s}
+#banner{display:none;margin:0 0 8px;padding:6px 10px;border-radius:6px;background:var(--warn);color:#000;font-weight:600}
 #banner.show{display:block}
-#start{display:flex;flex-direction:column;gap:12px;align-items:flex-start;padding:24px 0}
-#start button{background:var(--accent);color:#fff;border-color:var(--accent);padding:14px 22px;font-size:18px;touch-action:manipulation}
-#err{color:var(--talk)}
-.chan{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:12px;border-left:6px solid var(--cc,var(--accent))}
-.chan.ring{animation:ring .5s 6}
-@keyframes ring{50%{background:color-mix(in srgb,var(--warn) 40%,var(--panel))}}
-.chan .top{display:flex;align-items:center;gap:10px}
-.chan .name{font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
-.chan .who{color:var(--mute);font-size:14px;min-height:20px;margin:6px 0 8px}
-.chan .who b{color:var(--ok)}
-.talk{width:100%;min-height:64px;font-size:18px;font-weight:600}
-.talk[aria-pressed=true]{background:var(--talk);border-color:var(--talk);color:#fff}
-.talk[disabled]{opacity:.45}
-.row{display:flex;gap:10px;align-items:center;margin-top:10px}
-.row label{font-size:13px;color:var(--mute);width:56px;flex:none}
-input[type=range]{flex:1;min-width:0;height:32px}
-nav#pages{display:flex;gap:8px;margin:0 0 12px;overflow-x:auto}
-nav#pages button{flex:none}
-nav#pages button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff}
-.keygrid{align-items:start;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-bottom:12px}
-.ckey{display:flex;flex-direction:column;gap:4px;border-left:6px solid var(--cc,var(--accent));border-radius:10px;background:var(--panel);padding:6px}
-.ckey .talk{min-height:72px;font-size:16px}
-.ckey .sub{font-size:12px;color:var(--mute);min-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ckey .sub b{color:var(--ok)}
-.ckey .mini{min-height:32px;padding:4px 8px;font-size:12px}
-.stripcol{margin-bottom:0}
-h2{font-size:14px;color:var(--mute);margin:18px 0 8px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
-.people{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
-.person{display:flex;align-items:center;gap:8px;text-align:left;width:100%}
-.person[aria-pressed=true]{background:var(--talk);border-color:var(--talk);color:#fff}
-.person[disabled]{opacity:.45}
-.hint{color:var(--mute);font-size:13px;margin:16px 0}
+#start{display:flex;flex-direction:column;gap:10px;align-items:flex-start;padding:20px 0;color:var(--mute)}
+#start button{background:linear-gradient(90deg,var(--accent),#a45cff);color:#06101a;border-radius:7px;padding:10px 20px;font-size:15px;font-weight:700;touch-action:manipulation}
+#err{color:#ef5350}
+nav#pages{display:flex;gap:6px;margin:0 0 8px;overflow-x:auto}
+nav#pages button{flex:none;padding:0 12px}
+nav#pages button[aria-pressed=true]{transform:none}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px 8px;align-items:start}
+.unit{display:flex;flex-direction:column;gap:5px;padding:5px;border-radius:9px;background:var(--panel);border:1px solid var(--line)}
+.unit[data-speaking=true]{border-color:#43a047;box-shadow:0 0 0 1px rgba(67,160,71,.4)}
+.unit.ring{animation:ring .5s 6}
+@keyframes ring{50%{background:rgba(251,140,0,.35)}}
+.ctl{display:flex;align-items:center;gap:4px}
+.ctl .sp{flex:1}
+.knob{display:flex;flex-direction:column;align-items:center;width:34px;cursor:ns-resize;touch-action:none;user-select:none;-webkit-user-select:none}
+.knob svg{width:30px;height:30px;display:block}
+.knob .trk{fill:none;stroke:var(--line);stroke-width:3;stroke-linecap:round}
+.knob .val{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round}
+.knob .body{fill:url(#kg);stroke:#000;stroke-width:1}
+.knob .ptr{stroke:#fff;stroke-width:2;stroke-linecap:round}
+.knob span{font-size:9px;line-height:1;color:var(--mute);margin-top:1px;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}
+.knob.drag span{color:var(--accent)}
+.hint{color:var(--mute);font-size:11px;margin:12px 0}
 </style>
 </head>
 <body>
 <header>
   <span class="dot" id="conn" title=""></span>
   <h1 id="me">Intercom</h1>
-  <button id="dnd" class="toggle" aria-pressed="false" hidden></button>
-  <button id="mute" class="toggle" aria-pressed="false" hidden></button>
+  <button id="dnd" class="hb" aria-pressed="false" hidden></button>
+  <button id="mute" class="hb" aria-pressed="false" hidden></button>
 </header>
 <div id="banner" role="status"></div>
 <div id="start">
@@ -152,7 +158,7 @@ h2{font-size:14px;color:var(--mute);margin:18px 0 8px;font-weight:600;text-trans
     if (m.t === 'state') { state = m; render(); }
     else if (m.t === 'busy') { banner(m.name + ' ' + T.busy); setTimeout(() => banner(''), 3000); }
     else if (m.t === 'ring') { beep(); if (navigator.vibrate) navigator.vibrate([200, 100, 200]); lastRing = m; banner(T.ring + ' ' + m.name); setTimeout(() => banner(''), 4000);
-      document.querySelectorAll('.chan.call').forEach(e => { e.classList.remove('ring'); void e.offsetWidth; e.classList.add('ring'); }); }
+      document.querySelectorAll('.unit.call').forEach(e => { e.classList.remove('ring'); void e.offsetWidth; e.classList.add('ring'); }); }
   }
 
   const nameOf = id => (state.parties.find(p => p.id === id) || {}).name || '?';
@@ -204,53 +210,68 @@ h2{font-size:14px;color:var(--mute);margin:18px 0 8px;font-weight:600;text-trans
   const pageChannels = () => [...callChannels(), ...currentKeys().filter(k => k.type === 'channel' && chanById(k.ch)).map(k => chanById(k.ch))];
 
   let sig = '', cells = [];
-  function makeStrip(c) {
-    const rootEl = document.createElement('div'); rootEl.className = 'chan' + (c.kind === 'call' ? ' call' : '');
-    rootEl.innerHTML = '<div class="top"><span class="name"></span><button class="toggle listen"></button><button class="toggle solo"></button></div><div class="who"></div>' +
-      '<button class="talk"></button><div class="row lvl"><label></label><input type="range" min="0" max="150" step="1"></div><div class="row pan"><label></label><input type="range" min="-100" max="100" step="5"></div>';
-    const e = { name: rootEl.querySelector('.name'), listen: rootEl.querySelector('.listen'), solo: rootEl.querySelector('.solo'), who: rootEl.querySelector('.who'),
-      talk: rootEl.querySelector('.talk'), lvl: rootEl.querySelector('.lvl input'), pan: rootEl.querySelector('.pan input') };
-    rootEl.querySelector('.lvl label').textContent = T.level; rootEl.querySelector('.pan label').textContent = T.pan;
-    e.listen.textContent = T.listen; e.solo.textContent = T.solo;
+  const hintFor = id => { const i = pageChannels().findIndex(c => c.id === id); return i >= 0 && i < 9 ? ' [' + (i + 1) + ']' : ''; };
+
+  // Drehregler: senkrecht ziehen, Mausrad, Doppelklick = Grundstellung. `center` = Anzeige-Bogen ab Mitte (Lage).
+  const KNOB_DEFS = '<svg width="0" height="0" style="position:absolute"><defs><radialGradient id="kg" cx="40%" cy="30%" r="80%"><stop offset="0" stop-color="#565d66"/><stop offset="1" stop-color="#1a1c1f"/></radialGradient></defs></svg>';
+  document.body.insertAdjacentHTML('afterbegin', KNOB_DEFS);
+  const pt = (a, r) => (16 + r * Math.sin(a * Math.PI / 180)).toFixed(2) + ' ' + (16 - r * Math.cos(a * Math.PI / 180)).toFixed(2);
+  const arc = (a0, a1) => a1 - a0 < 0.5 ? '' : 'M' + pt(a0, 13) + ' A13 13 0 ' + (a1 - a0 > 180 ? 1 : 0) + ' 1 ' + pt(a1, 13);
+  function makeKnob(label, min, max, def, center, fmt, onInput) {
+    const el = document.createElement('div'); el.className = 'knob'; el.title = label;
+    el.innerHTML = '<svg viewBox="0 0 32 32"><path class="trk" d="' + arc(-135, 135) + '"/><path class="val"/><circle class="body" cx="16" cy="16" r="9"/><line class="ptr" x1="16" y1="16" x2="16" y2="9"/></svg><span></span>';
+    const val = el.querySelector('.val'), ptr = el.querySelector('.ptr'), cap = el.querySelector('span');
+    let v = def, dragging = false;
+    const ang = x => -135 + (x - min) / (max - min) * 270;
+    const paint = () => {
+      const a = ang(v); ptr.setAttribute('transform', 'rotate(' + a + ' 16 16)');
+      const a0 = center ? ang(def) : -135; val.setAttribute('d', arc(Math.min(a0, a), Math.max(a0, a)));
+      cap.textContent = dragging ? fmt(v) : label;
+    };
+    const set = x => { x = Math.max(min, Math.min(max, Math.round(x))); if (x !== v) { v = x; paint(); onInput(v); } };
+    let y0 = 0, v0 = 0;
+    el.addEventListener('pointerdown', ev => { ev.preventDefault(); el.setPointerCapture(ev.pointerId); dragging = true; y0 = ev.clientY; v0 = v; el.classList.add('drag'); paint(); });
+    el.addEventListener('pointermove', ev => { if (dragging) set(v0 + (y0 - ev.clientY) * (max - min) / 140); });
+    const end = () => { dragging = false; el.classList.remove('drag'); paint(); };
+    el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
+    el.addEventListener('dblclick', () => set(def));
+    el.addEventListener('wheel', ev => { ev.preventDefault(); set(v + (ev.deltaY < 0 ? 1 : -1) * (max - min) / 40); }, { passive: false });
+    paint();
+    return { el, get dragging() { return dragging; }, put(x) { if (!dragging && x !== v) { v = x; paint(); } } };
+  }
+  const fmtLevel = v => v <= 0 ? '−∞ dB' : (20 * Math.log10(v / 100)).toFixed(0) + ' dB';
+  const fmtPan = v => v === 0 ? 'C' : (v < 0 ? 'L ' : 'R ') + Math.abs(v);
+
+  // Eine Taste mit dem Namen des Sprechziels; darunter Hören/Solo und die Regler für Pegel und Lage.
+  function makeChannel(c, knobs) {
+    const rootEl = document.createElement('div'); rootEl.className = 'unit' + (c.kind === 'call' ? ' call' : '');
+    rootEl.innerHTML = '<button class="key talk"><span class="nm"></span><span class="wh"></span></button><div class="ctl"><button class="mini listen"></button>' + (knobs ? '<button class="mini solo"></button><span class="sp"></span>' : '') + '</div>';
+    const e = { name: rootEl.querySelector('.nm'), who: rootEl.querySelector('.wh'), talk: rootEl.querySelector('.talk'), listen: rootEl.querySelector('.listen'), solo: rootEl.querySelector('.solo'), ctl: rootEl.querySelector('.ctl') };
+    e.listen.textContent = T.listen.charAt(0).toUpperCase(); e.listen.title = T.listen;
+    let lvl = null, pan = null;
+    if (knobs) {
+      e.solo.textContent = T.solo.charAt(0).toUpperCase(); e.solo.title = T.solo;
+      e.solo.onclick = () => send({ t: 'solo', ch: c.id, on: !chanById(c.id).solo });
+      lvl = makeKnob(T.level, 0, 150, 100, false, fmtLevel, v => send({ t: 'level', ch: c.id, v: v / 100 }));
+      pan = makeKnob(T.pan, -100, 100, 0, true, fmtPan, v => send({ t: 'pan', ch: c.id, v: v / 100 }));
+      e.ctl.append(lvl.el, pan.el);
+    }
     e.listen.onclick = () => send({ t: 'listen', ch: c.id, on: !chanById(c.id).listen_on });
-    e.solo.onclick = () => send({ t: 'solo', ch: c.id, on: !chanById(c.id).solo });
-    e.lvl.oninput = () => send({ t: 'level', ch: c.id, v: e.lvl.value / 100 });
-    e.pan.oninput = () => send({ t: 'pan', ch: c.id, v: e.pan.value / 100 });
     talkButton(c.id, e.talk);
     return { el: rootEl, update(label) {
       const me = state.me, cc = chanById(c.id); if (!cc) return;
       rootEl.style.setProperty('--cc', cc.color || 'var(--accent)');
       e.name.textContent = (label || cc.name) + hintFor(cc.id);
-      e.listen.setAttribute('aria-pressed', String(cc.listen_on)); e.listen.hidden = !cc.listen;
-      e.solo.setAttribute('aria-pressed', String(cc.solo)); e.solo.hidden = !cc.listen;
+      e.listen.setAttribute('aria-pressed', String(cc.listen_on)); e.ctl.hidden = !cc.listen;
       const sp = cc.speakers.filter(id => id !== me.id).map(nameOf);
+      rootEl.dataset.speaking = String(sp.length > 0);
       e.who.innerHTML = sp.length ? '<b>' + sp.map(esc).join(', ') + '</b> ' + T.speaking : '&nbsp;';
-      e.talk.textContent = cc.talk_allowed ? T.talk + (cc.talk ? ' …' : '') : '—';
       e.talk.title = T.hold; e.talk.disabled = !cc.talk_allowed || me.forced; e.talk.setAttribute('aria-pressed', String(cc.talk));
-      if (document.activeElement !== e.lvl) e.lvl.value = Math.round(cc.level * 100);
-      if (document.activeElement !== e.pan) e.pan.value = Math.round(cc.pan * 100);
-      rootEl.querySelector('.lvl').hidden = !cc.listen; rootEl.querySelector('.pan').hidden = !cc.listen;
-    } };
-  }
-  const hintFor = id => { const i = pageChannels().findIndex(c => c.id === id); return i >= 0 && i < 9 ? ' [' + (i + 1) + ']' : ''; };
-  function makeChannelKey(c) {
-    const el = document.createElement('div'); el.className = 'ckey';
-    el.innerHTML = '<button class="talk"></button><div class="sub"></div><button class="toggle mini"></button>';
-    const talk = el.querySelector('.talk'), sub = el.querySelector('.sub'), listen = el.querySelector('.mini');
-    listen.textContent = T.listen; listen.onclick = () => send({ t: 'listen', ch: c.id, on: !chanById(c.id).listen_on });
-    talkButton(c.id, talk);
-    return { el, update(label) {
-      const me = state.me, cc = chanById(c.id); if (!cc) return;
-      el.style.setProperty('--cc', cc.color || 'var(--accent)');
-      talk.textContent = (label || cc.name) + hintFor(cc.id) + (cc.talk ? ' …' : '');
-      talk.disabled = !cc.talk_allowed || me.forced; talk.setAttribute('aria-pressed', String(cc.talk)); talk.title = T.hold;
-      const sp = cc.speakers.filter(id => id !== me.id).map(nameOf);
-      sub.innerHTML = sp.length ? '<b>' + sp.map(esc).join(', ') + '</b>' : '&nbsp;';
-      listen.hidden = !cc.listen; listen.setAttribute('aria-pressed', String(cc.listen_on));
+      if (knobs) { e.solo.setAttribute('aria-pressed', String(cc.solo)); lvl.put(Math.round(cc.level * 100)); pan.put(Math.round(cc.pan * 100)); }
     } };
   }
   function makeSimple(onUpdate, wire) {
-    const b = document.createElement('button'); b.className = 'person'; b.innerHTML = '<span class="dot"></span><span></span>';
+    const b = document.createElement('button'); b.className = 'key simple'; b.innerHTML = '<span class="dot"></span><span></span>';
     wire(b);
     return { el: b, update(label) { onUpdate(b, b.lastChild, b.firstChild, label); } };
   }
@@ -259,7 +280,7 @@ h2{font-size:14px;color:var(--mute);margin:18px 0 8px;font-weight:600;text-trans
     switch (k.type) {
       case 'channel': {
         const c = chanById(k.ch); if (!c) return null;
-        return { cell: k.style === 'key' ? makeChannelKey(c) : makeStrip(c), strip: k.style !== 'key', label: k.label };
+        return { cell: makeChannel(c, k.style !== 'key'), label: k.label };
       }
       case 'call': {
         if (!state.parties.some(p => p.id === k.party)) return null;
@@ -293,17 +314,14 @@ h2{font-size:14px;color:var(--mute);margin:18px 0 8px;font-weight:600;text-trans
     const root = $('chans'); root.replaceChildren(); cells = []; latched.clear();
     const lay = layoutOf();
     const nav = $('pages'); nav.replaceChildren(); nav.hidden = lay.pages.length < 2;
-    lay.pages.forEach((pg, i) => { const b = document.createElement('button'); b.textContent = pg.name || String(i + 1); b.setAttribute('aria-pressed', String(i === pageIdx));
+    lay.pages.forEach((pg, i) => { const b = document.createElement('button'); b.className = 'hb'; b.textContent = pg.name || String(i + 1); b.setAttribute('aria-pressed', String(i === pageIdx));
       b.onclick = () => { pageIdx = i; sessionStorage.setItem('ic-page', String(i)); sig = ''; render(); }; nav.append(b); });
-    // Eingehende Rufe ganz oben
-    const calls = document.createElement('div'); root.append(calls);
-    for (const c of callChannels()) { const m = makeStrip(c); calls.append(m.el); cells.push({ cell: m, label: '' }); }
-    let grid = null, col = null;
+    // Eingehende Rufe ganz oben, danach die Tasten der Seite — alles in einem Raster.
+    const grid = document.createElement('div'); grid.className = 'grid'; root.append(grid);
+    for (const c of callChannels()) { const m = makeChannel(c, true); grid.append(m.el); cells.push({ cell: m, label: '' }); }
     for (const k of currentKeys()) {
       const m = makeCell(k); if (!m) continue;
-      if (m.strip) { grid = null; if (!col) { col = document.createElement('div'); col.className = 'stripcol'; root.append(col); } col.append(m.cell.el); }
-      else { col = null; if (!grid) { grid = document.createElement('div'); grid.className = 'keygrid'; root.append(grid); } grid.append(m.cell.el); }
-      cells.push(m);
+      grid.append(m.cell.el); cells.push(m);
     }
   }
 
