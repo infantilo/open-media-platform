@@ -16,7 +16,7 @@ Auf dem Zielrechner sind **kein Go, Rust, Deno, Compiler und kein Git** nötig.
 | Teil | Inhalt |
 |---|---|
 | `omp/` | Repository-Stand (inkl. Handbücher) + **fertige Binaries**: Orchestrator, Supervisor, Host-Agent und alle Nodes aus `deploy/catalog.json` (Debug-Symbole entfernt), UI-Bundle, libmxl + MXL-Werkzeuge |
-| `images.tar` | Container-Images: NATS, NMOS-Registry, etcd, Patroni/Postgres (Pflicht); Caddy, step-ca, MinIO (optional/Funktionen wie HTTPS, mTLS, Storage) |
+| `images.tar` | Container-Images: NATS, NMOS-Registry, etcd, Patroni/Postgres (Pflicht); Caddy, step-ca, SeaweedFS-S3 (optional/Funktionen wie HTTPS, mTLS, Storage) |
 | `debs/` | Systempakete (nur **apt**-Systeme): Podman, GStreamer-Laufzeit samt Plugins, ffmpeg, make, curl … **mit allen Abhängigkeiten** (kein `-dev`, keine Compiler) |
 | `plugins/` | GStreamer-Plugin `avvideofilter` (Blend-Bildratenwandlung, optional — `docs/INSTALLATION.md` §9) |
 | `SHA256SUMS`, `MANIFEST.json` | Prüfsummen aller Dateien; Distribution, Release, Architektur, glibc des Build-Rechners |

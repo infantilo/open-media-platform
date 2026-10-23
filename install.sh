@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
-# OpenMediaPlatform — Ein-Befehl-Installation (Debian/Ubuntu, Fedora, Arch, openSUSE).
+# OpenMediaPlatform — one-command installation (Debian/Ubuntu, Fedora, Arch, openSUSE).
 #
-#   ./install.sh               Grundsystem: Orchestrator, GUI, NATS, Registry, Postgres
-#   ./install.sh --media       zusätzlich Medien-Nodes (Rust, GStreamer, MXL) — für echtes Video/Audio
-#   ./install.sh --media --start   danach gleich starten
-#   ./install.sh --dry-run     nur anzeigen, was getan würde
-#   ./install.sh --yes         keine Rückfragen
-#   ./install.sh --media --avvideofilter-archive DATEI   Plugin für Blend-Bildratenwandlung aus Datei (ohne Internet)
-#   ./install.sh --media --no-avvideofilter              Plugin nicht installieren (Nodes nutzen videorate)
-#   ./install.sh --systemd     OMP beim Boot automatisch starten (systemd-Dienst "omp", Hauptrechner)
-#   ./install.sh --streamdeck-udev   udev-Regel für das Stream Deck (WebHID im Browser) installieren — gehört auf den
-#                              Bedienplatz-Rechner, an dem das Gerät steckt (docs/BENUTZERHANDBUCH.md §10g)
+#   ./install.sh               base system: orchestrator, GUI, NATS, registry, Postgres
+#   ./install.sh --media       additionally media nodes (Rust, GStreamer, MXL) — for real video/audio
+#   ./install.sh --media --start   start right afterwards
+#   ./install.sh --dry-run     only show what would be done
+#   ./install.sh --yes         no confirmation prompts
+#   ./install.sh --media --avvideofilter-archive DATEI   plugin for blend frame-rate conversion from a file (no internet)
+#   ./install.sh --media --no-avvideofilter              do not install the plugin (nodes use videorate)
+#   ./install.sh --systemd     start OMP automatically at boot (systemd service "omp", main machine)
+#   ./install.sh --streamdeck-udev   install the udev rule for the Stream Deck (WebHID in the browser) — belongs on the
+#                              operator workstation the device is plugged into (docs/BENUTZERHANDBUCH.md §10g)
 #   ./install.sh --host-agent-service --orchestrator <IP> [--label NAME] [--token TOKEN]
-#                              diesen Rechner als zusätzlichen Host anbinden (Dienst "omp-host-agent")
+#                              connect this machine as an additional host (service "omp-host-agent")
 #
-# Was das Skript tut (und nur das):
-#   1. Systempakete per Paketmanager installieren (braucht sudo; fragt vorher)
-#   2. Go, Deno (und mit --media: Rust) installieren, falls fehlend/zu alt — nach $HOME, ohne sudo
-#   3. mit --media: MXL-Bibliothek bauen (deploy/dev/install-mxl.sh) und Medien-Nodes bauen (make nodes);
-#      dazu optional das GStreamer-Plugin avvideofilter (angepinnt, SHA256-geprüft; --no-avvideofilter lässt es weg)
-#   4. make preflight laufen lassen
-# Es öffnet KEINE Firewall-Ports und ändert keine Systemkonfiguration außer den Paketen.
-# Mehrfach aufrufbar: Vorhandenes wird übersprungen.
+# What the script does (and only that):
+#   1. install system packages via the package manager (needs sudo; asks first)
+#   2. install Go, Deno (and with --media: Rust) if missing/too old — into $HOME, without sudo
+#   3. with --media: build the MXL library (deploy/dev/install-mxl.sh) and the media nodes (make nodes);
+#      plus, optionally, the GStreamer plugin avvideofilter (pinned, SHA256-verified; --no-avvideofilter skips it)
+#   4. run make preflight
+# It opens NO firewall ports and changes no system configuration besides the packages.
+# Can be run repeatedly: anything already present is skipped.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,7 +42,7 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY=1 ;;
     --yes|-y) YES=1 ;;
     -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) echo "Unbekannte Option: $a (siehe --help)" >&2; exit 2 ;;
+    *) echo "Unknown option: $a (see --help)" >&2; exit 2 ;;
   esac
 done
 
@@ -50,15 +50,15 @@ say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 run()  { if [ "$DRY" = 1 ]; then echo "    [dry-run] $*"; else eval "$*"; fi; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
-[ "$(uname -s)" = "Linux" ] || { echo "Nur Linux wird unterstützt." >&2; exit 1; }
-[ "$(id -u)" != "0" ] || { echo "Bitte NICHT als root ausführen (Podman läuft rootless, Build als normaler Nutzer). sudo wird bei Bedarf selbst benutzt." >&2; exit 1; }
+[ "$(uname -s)" = "Linux" ] || { echo "Only Linux is supported." >&2; exit 1; }
+[ "$(id -u)" != "0" ] || { echo "Please do NOT run as root (Podman runs rootless, build as a normal user). sudo is used by the script itself when needed." >&2; exit 1; }
 
-# ---- Paketmanager ----------------------------------------------------------
+# ---- Package manager ----------------------------------------------------------
 if   have apt-get; then PM=apt
 elif have dnf;     then PM=dnf
 elif have pacman;  then PM=pacman
 elif have zypper;  then PM=zypper
-else echo "Kein unterstützter Paketmanager (apt/dnf/pacman/zypper). Siehe docs/INSTALLATION.md, Abschnitt „Manuell“." >&2; exit 1; fi
+else echo "No supported package manager (apt/dnf/pacman/zypper). See docs/INSTALLATION.md, section \"Manual\"." >&2; exit 1; fi
 
 BASE_PKGS_apt="podman make curl openssl git ca-certificates zip unzip tar iproute2 uidmap slirp4netns"
 BASE_PKGS_dnf="podman make curl openssl git ca-certificates zip unzip tar iproute shadow-utils"
@@ -73,24 +73,24 @@ MEDIA_PKGS_zypper="gcc gcc-c++ pkg-config cmake ninja bison flex clang libclang-
 pkgs_var="BASE_PKGS_$PM"; PKGS="${!pkgs_var}"
 if [ "$MEDIA" = 1 ]; then m="MEDIA_PKGS_$PM"; PKGS="$PKGS ${!m}"; fi
 
-# ---- Vorab-Prüfung: Plattenplatz und RAM --------------------------------------------
+# ---- Pre-check: disk space and RAM --------------------------------------------
 free_gb=$(( $(df -Pk "$ROOT_DIR" | awk 'NR==2 {print $4}') / 1024 / 1024 ))
 mem_gb=$(( $(awk '/^MemTotal:/ {print $2}' /proc/meminfo) / 1024 / 1024 ))
 NEED_GB=5; [ "$MEDIA" = 1 ] && NEED_GB=25
 if [ "$free_gb" -lt "$NEED_GB" ]; then
-  echo "Warnung: nur ${free_gb} GB frei in $ROOT_DIR — empfohlen sind mindestens ${NEED_GB} GB." >&2
-  [ "$YES" = 1 ] || { read -r -p "Trotzdem fortfahren? [j/N] " a; case "${a:-N}" in j|J) ;; *) exit 1 ;; esac; }
+  echo "Warning: only ${free_gb} GB free in $ROOT_DIR — at least ${NEED_GB} GB recommended." >&2
+  [ "$YES" = 1 ] || { read -r -p "Continue anyway? [y/N] " a; case "${a:-N}" in y|Y) ;; *) exit 1 ;; esac; }
 fi
 if [ "$MEDIA" = 1 ] && [ "$mem_gb" -lt 6 ]; then
-  echo "Warnung: nur ${mem_gb} GB RAM — der Rust-/MXL-Build kann bei weniger als ~8 GB scheitern (ggf. Swap anlegen)." >&2
-  [ "$YES" = 1 ] || { read -r -p "Trotzdem fortfahren? [j/N] " a; case "${a:-N}" in j|J) ;; *) exit 1 ;; esac; }
+  echo "Warning: only ${mem_gb} GB RAM — the Rust/MXL build can fail with less than ~8 GB (create swap if needed)." >&2
+  [ "$YES" = 1 ] || { read -r -p "Continue anyway? [y/N] " a; case "${a:-N}" in y|Y) ;; *) exit 1 ;; esac; }
 fi
 
-say "1/4 Systempakete ($PM)"
+say "1/4 System packages ($PM)"
 echo "    $PKGS"
 if [ "$YES" != 1 ] && [ "$DRY" != 1 ]; then
-  read -r -p "    Diese Pakete jetzt mit sudo installieren? [J/n] " ans
-  case "${ans:-J}" in n|N) echo "Abgebrochen."; exit 1 ;; esac
+  read -r -p "    Install these packages now with sudo? [Y/n] " ans
+  case "${ans:-Y}" in n|N) echo "Aborted."; exit 1 ;; esac
 fi
 case "$PM" in
   apt)    run "sudo apt-get update -y && sudo apt-get install -y $PKGS" ;;
@@ -99,14 +99,14 @@ case "$PM" in
   zypper) run "sudo zypper --non-interactive install $PKGS" ;;
 esac
 
-hash -r   # frisch installierte Programme (git, zip, ...) sofort finden
+hash -r   # find freshly installed programs (git, zip, ...) immediately
 for t in git zip unzip tar curl; do
-  [ "$DRY" = 1 ] || have "$t" || { echo "Fehler: '$t' fehlt nach der Paketinstallation — Paketinstallation oben prüfen." >&2; exit 1; }
+  [ "$DRY" = 1 ] || have "$t" || { echo "Error: '$t' is missing after the package installation — check the package installation output above." >&2; exit 1; }
 done
 
-# rootless Podman braucht subuid/subgid
+# rootless Podman needs subuid/subgid
 if ! grep -q "^$(id -un):" /etc/subuid 2>/dev/null; then
-  say "subuid/subgid für $(id -un) anlegen (rootless Podman)"
+  say "Creating subuid/subgid for $(id -un) (rootless Podman)"
   run "sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $(id -un) && podman system migrate"
 fi
 
@@ -117,63 +117,63 @@ vge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]; }
 export PATH="/usr/local/go/bin:$HOME/.deno/bin:$HOME/.cargo/bin:$PATH"
 go_have=""; have go && go_have="$(go env GOVERSION | sed 's/^go//')"
 if [ -z "$go_have" ] || ! vge "$go_have" "$GO_NEED"; then
-  arch="$(uname -m)"; case "$arch" in x86_64) goarch=amd64 ;; aarch64) goarch=arm64 ;; *) echo "Architektur $arch: Go bitte manuell installieren." >&2; exit 1 ;; esac
-  echo "    Go $GO_NEED nach /usr/local/go (sudo)"
+  arch="$(uname -m)"; case "$arch" in x86_64) goarch=amd64 ;; aarch64) goarch=arm64 ;; *) echo "Architecture $arch: please install Go manually." >&2; exit 1 ;; esac
+  echo "    Installing Go $GO_NEED to /usr/local/go (sudo)"
   run "curl -fsSL https://go.dev/dl/go${GO_NEED}.linux-${goarch}.tar.gz -o /tmp/omp-go.tgz && sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf /tmp/omp-go.tgz && rm -f /tmp/omp-go.tgz"
-else echo "    Go $go_have vorhanden"; fi
-if ! have deno; then run "curl -fsSL https://deno.land/install.sh | sh -s -- -y"; else echo "    Deno vorhanden"; fi
+else echo "    Go $go_have present"; fi
+if ! have deno; then run "curl -fsSL https://deno.land/install.sh | sh -s -- -y"; else echo "    Deno present"; fi
 if [ "$MEDIA" = 1 ] && ! have cargo; then run "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"; fi
 
-# PATH dauerhaft machen (nur wenn noch nicht vorhanden)
+# Make PATH permanent (only if not already present)
 PROFILE_LINE='export PATH="/usr/local/go/bin:$HOME/.deno/bin:$HOME/.cargo/bin:$PATH"'
 if ! grep -qsF "$PROFILE_LINE" "$HOME/.bashrc"; then
-  echo "    PATH-Eintrag in ~/.bashrc ergänzen"
+  echo "    Adding PATH entry to ~/.bashrc"
   run "printf '\n# OpenMediaPlatform\n%s\n' '$PROFILE_LINE' >> \"$HOME/.bashrc\""
 fi
 
-# ---- Medien-Nodes -----------------------------------------------------------------
+# ---- Media nodes -----------------------------------------------------------------
 if [ "$MEDIA" = 1 ]; then
-  say "3/4 MXL-Bibliothek und Medien-Nodes bauen (dauert, je nach Rechner 20–60 Minuten)"
+  say "3/4 Building MXL library and media nodes (takes 20–60 minutes depending on the machine)"
   if [ "$(uname -m)" = "x86_64" ] && ! grep -m1 '^flags' /proc/cpuinfo | grep -qw avx2; then
-    echo "    Hinweis: CPU ohne AVX2 (z. B. generisches QEMU-CPU-Modell) — libmxl wird automatisch für eine ältere"
-    echo "    Ziel-Architektur gebaut (sonst 'Illegal instruction' in jedem MXL-Node). Besser: VM-CPU-Typ 'host' wählen."
+    echo "    Note: CPU without AVX2 (e.g. generic QEMU CPU model) — libmxl is automatically built for an older"
+    echo "    target architecture (otherwise 'Illegal instruction' in every MXL node). Better: choose VM CPU type 'host'."
   fi
   run "\"$ROOT_DIR/deploy/dev/install-mxl.sh\""
   run "make -C \"$ROOT_DIR\" nodes"
-  # Optional: Plugin für die Bildratenwandlung "blend" (Fehlschlag ist nicht kritisch, Nodes nutzen dann videorate).
+  # Optional: plugin for "blend" frame-rate conversion (failure is not critical, nodes then use videorate).
   if [ "$AVF" = 1 ]; then
-    say "3b/4 Plugin avvideofilter (Bildratenwandlung blend, optional)"
+    say "3b/4 Plugin avvideofilter (blend frame-rate conversion, optional)"
     run "\"$ROOT_DIR/deploy/dev/install-avvideofilter.sh\"${AVF_ARCHIVE:+ --archive \"$AVF_ARCHIVE\"} || true"
   fi
 else
-  say "3/4 Medien-Nodes übersprungen (nachholen: ./install.sh --media)"
+  say "3/4 Media nodes skipped (add later: ./install.sh --media)"
 fi
 
-# ---- Host-Agent (für entfernte Hosts im Cluster) ---------------------------------
-# bin/omp-host-agent wird vom Host-Assistenten der UI gebraucht (Skript startet
-# ./bin/omp-host-agent). go build muss IM Verzeichnis host-agent/ laufen.
-say "Host-Agent bauen (bin/omp-host-agent)"
+# ---- Host agent (for remote hosts in the cluster) ---------------------------------
+# bin/omp-host-agent is needed by the UI's host wizard (the script starts
+# ./bin/omp-host-agent). go build must run INSIDE the host-agent/ directory.
+say "Building the host agent (bin/omp-host-agent)"
 run "mkdir -p \"$ROOT_DIR/bin\" && (cd \"$ROOT_DIR/host-agent\" && go build -o ../bin/omp-host-agent .)"
 
-# ---- systemd-Dienste (optional) ------------------------------------------------------
-unit_install() { # Vorlage, Zielname
+# ---- systemd services (optional) ------------------------------------------------------
+unit_install() { # template, target name
   run "sed -e 's#@USER@#$(id -un)#g' -e 's#@ROOT@#$ROOT_DIR#g' -e 's#@UID@#$(id -u)#g' -e 's#@HOME@#$HOME#g' \"$ROOT_DIR/deploy/systemd/$1\" | sudo tee /etc/systemd/system/$2 >/dev/null"
 }
 if [ "$SYSTEMD" = 1 ]; then
-  say "systemd-Dienst: OMP beim Boot starten"
-  have systemctl || { echo "systemd nicht gefunden." >&2; exit 1; }
+  say "systemd service: start OMP at boot"
+  have systemctl || { echo "systemd not found." >&2; exit 1; }
   unit_install omp.service omp.service
-  # rootless Podman (NATS/Registry/Postgres) braucht ein Benutzer-Runtime-Verzeichnis ohne aktive Anmeldung
+  # rootless Podman (NATS/registry/Postgres) needs a user runtime directory without an active login
   run "sudo loginctl enable-linger $(id -un)"
   run "sudo systemctl daemon-reload && sudo systemctl enable omp"
-  echo "    Start jetzt: sudo systemctl start omp   (Log: journalctl -u omp, .run/orchestrator.log)"
-  echo "    Hinweis: Der Dienst baut nichts neu (OMP_SKIP_BUILD=1). Nach Codeänderungen einmal 'make start' bzw. bauen."
+  echo "    Start now: sudo systemctl start omp   (log: journalctl -u omp, .run/orchestrator.log)"
+  echo "    Note: the service does not rebuild anything (OMP_SKIP_BUILD=1). After code changes run 'make start' once or rebuild."
 fi
 if [ "$AGENT_SVC" = 1 ]; then
-  say "systemd-Dienst: Host-Agent (zusätzlicher Host)"
-  [ -n "$ORCH_IP" ] || { echo "--host-agent-service braucht --orchestrator <IP des Hauptrechners>" >&2; exit 2; }
+  say "systemd service: host agent (additional host)"
+  [ -n "$ORCH_IP" ] || { echo "--host-agent-service needs --orchestrator <IP of the main machine>" >&2; exit 2; }
   [ -n "$AGENT_LABEL" ] || AGENT_LABEL="$(hostname -s)"
-  [ -x "$ROOT_DIR/bin/omp-host-agent" ] || [ "$DRY" = 1 ] || { echo "bin/omp-host-agent fehlt (wird oben gebaut, falls go vorhanden)." >&2; exit 1; }
+  [ -x "$ROOT_DIR/bin/omp-host-agent" ] || [ "$DRY" = 1 ] || { echo "bin/omp-host-agent is missing (built above if go is available)." >&2; exit 1; }
   envfile="OMP_HOST_AGENT_LABEL=$AGENT_LABEL
 OMP_ORCHESTRATOR_URL=http://$ORCH_IP:8000
 OMP_REGISTRY_URL=http://$ORCH_IP:8010
@@ -183,31 +183,31 @@ OMP_HOST_AGENT_BOOTSTRAP_TOKEN=$AGENT_TOKEN"
   run "printf '%s\\n' \"$envfile\" | sudo tee /etc/omp-host-agent.env >/dev/null && sudo chmod 600 /etc/omp-host-agent.env"
   unit_install omp-host-agent.service omp-host-agent.service
   run "sudo systemctl daemon-reload && sudo systemctl enable --now omp-host-agent"
-  echo "    Erststart: einmalig ein Bootstrap-Token (UI → Hosts → Host hinzufügen) mit --token übergeben."
-  echo "    Medien-Nodes auf diesem Host: vorher ./install.sh --media. Log: journalctl -u omp-host-agent"
+  echo "    First start: pass a one-time bootstrap token (UI → Hosts → Add host) with --token."
+  echo "    Media nodes on this host: run ./install.sh --media first. Log: journalctl -u omp-host-agent"
 fi
 
 if [ "$STREAMDECK" = 1 ]; then
-  say "Stream Deck: udev-Regel"
+  say "Stream Deck: udev rule"
   run "\"$ROOT_DIR/deploy/dev/streamdeck-udev.sh\""
 fi
 
-# ---- Prüfung ------------------------------------------------------------------------
-say "4/4 Prüfung (make preflight)"
+# ---- Verification ------------------------------------------------------------------------
+say "4/4 Verification (make preflight)"
 run "make -C \"$ROOT_DIR\" preflight || true"
 
 if [ "$START" = 1 ]; then
-  say "Starten (make start)"
+  say "Starting (make start)"
   run "make -C \"$ROOT_DIR\" start"
-  echo; echo "Fertig: http://localhost:8000"
+  echo; echo "Done: http://localhost:8000"
 else
   cat <<EOF
 
-Installation abgeschlossen. Nächste Schritte:
-  source ~/.bashrc          # (oder neues Terminal) damit go/deno/cargo im PATH sind
+Installation complete. Next steps:
+  source ~/.bashrc          # (or open a new terminal) so go/deno/cargo are on the PATH
   cd $ROOT_DIR && make start
-  Browser: http://localhost:8000   (erster Start: Container-Images laden, einige Minuten)
-Weiteren Rechner als Host anbinden: UI → Hosts → „Host hinzufügen“ (Skript auf dem Zielrechner im
-Repo-Verzeichnis ausführen; dort vorher ./install.sh --media). Ports/Firewall: docs/INSTALLATION.md
+  Browser: http://localhost:8000   (first start: pulls container images, takes a few minutes)
+To connect another machine as a host: UI → Hosts → "Add host" (run the script on the target machine in
+the repo directory; run ./install.sh --media there first). Ports/firewall: docs/INSTALLATION.md
 EOF
 fi

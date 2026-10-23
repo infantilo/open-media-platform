@@ -51,7 +51,7 @@ func testStore(t *testing.T) *Store {
 		t.Fatalf("NewStore() error = %v", err)
 	}
 	if err := s.TestConnection(context.Background(), validInput()); err != nil {
-		t.Skipf("dev-MinIO nicht erreichbar (make minio-up?), skip: %v", err)
+		t.Skipf("dev S3 (SeaweedFS) nicht erreichbar (make s3-up?), skip: %v", err)
 	}
 	return s
 }

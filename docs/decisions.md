@@ -30623,3 +30623,29 @@ Bundle); Caddyfile mit `caddy validate` geprüft.
 
 **Go-Tests mit NATS:** `internal/outbox` und `internal/process` laufen gegen den
 auf 2.15.1 aktualisierten Cluster grün.
+
+## 2026-10-23 — S3-Entwicklungsbackend: SeaweedFS statt MinIO; Installer/Preflight englisch
+
+**Anlass:** MinIO verteilt keine Community-Images mehr (quay.io und Docker Hub
+liefern `unauthorized`/nichts, siehe Eintrag oben) — `make minio-up` hätte auf
+einem frischen Rechner nicht mehr funktioniert.
+
+**Entscheidung:** `make s3-up` / `s3-down` starten SeaweedFS
+(`docker.io/chrislusf/seaweedfs:4.48`, Apache-2.0) mit S3-Gateway auf Port 9000,
+Zugangsdaten aus `deploy/s3/seaweedfs-s3.json` (identisch zu den bisherigen
+`OMP_MINIO_*`-Defaults, also keine Konfigurationsänderung). `minio-up`/`minio-down`
+bleiben als Alias. Der Orchestrator nutzt nur die generische S3-API
+(`minio-go` als Client-Bibliothek bleibt), Provider-Name `minio` in
+`storage_backends` bleibt unverändert (Datenbank-Kompatibilität). Container:
+`--userns=keep-id`, damit `.run/s3-data` dem Host-Nutzer gehört (ohne das
+gehören die Dateien einer Sub-UID und lassen sich nicht löschen).
+
+**Getestet:** `internal/objectstore`-Tests (Bucket anlegen, Presigned-PUT/GET-
+Roundtrip, Löschen) grün gegen SeaweedFS; falsche Zugangsdaten werden abgelehnt;
+Objekte überleben einen Container-Neustart. Die Storage-Backend-Tests brauchen
+eine Datenbank und liefen nicht. Nicht geprüft: Mehr-Teile-Uploads großer
+Dateien, Browser-Upload über die UI.
+
+**Installer/Preflight:** `deploy/dev/preflight.sh`, `preflight_test.sh`,
+`install.sh` und `deploy/offline/install-offline.sh` sind vollständig englisch
+(Ausgaben und Kommentare); Rückfragen heißen jetzt `[y/N]`/`[Y/n]`.

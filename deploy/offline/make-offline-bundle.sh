@@ -72,7 +72,7 @@ IMAGES_LIST=(
   "localhost/omp-patroni:latest|1"
   "docker.io/library/caddy:2.11.7|0"
   "docker.io/smallstep/step-ca:0.30.2|0"
-  "quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e|0"
+  "docker.io/chrislusf/seaweedfs:4.48|0"
 )
 [ "$PC_IMAGE" = 1 ] && IMAGES_LIST+=("localhost/omp-pipeline-controller:latest|0")
 

@@ -28,5 +28,5 @@ Vendored under `third_party/` at build time by `deploy/dev/install-mxl.sh` (neve
 
 ## Container images, system packages
 
-NATS, NMOS registry, etcd, PostgreSQL/Patroni, Caddy, step-ca, MinIO, GStreamer, FFmpeg, Podman and the other system
+NATS, NMOS registry, etcd, PostgreSQL/Patroni, Caddy, step-ca, SeaweedFS (S3), GStreamer, FFmpeg, Podman and the other system
 packages are pulled from their upstream sources (or shipped unmodified in the offline package) under their own licenses.

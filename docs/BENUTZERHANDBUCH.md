@@ -803,7 +803,7 @@ Versionen und technischen Dateien (Representations):
 (`filesystem`/`s3`/`http`, frei wählbar) plus „Pfad/URI" registrieren
 nur einen **Verweis** darauf, wo die Datei bereits liegt (reine
 Katalog-/Such-Metadaten, es werden keine Bytes bewegt). Ein echter
-Browser-Datei-Upload über die konfigurierten S3/MinIO-Speicher-Backends
+Browser-Datei-Upload über die konfigurierten S3-Speicher-Backends (Entwicklung: `make s3-up`, SeaweedFS)
 (Administration → Storage) ist backend-seitig vorbereitet, aber noch
 nicht an dieses Formular angebunden.
 

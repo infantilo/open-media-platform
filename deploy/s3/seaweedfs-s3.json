@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "omp-dev",
+      "credentials": [{ "accessKey": "omp-minio-dev", "secretKey": "omp-minio-dev-pass" }],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    }
+  ]
+}

@@ -13,7 +13,7 @@ import (
 
 // testClient liefert einen echten Client gegen die durch
 // OMP_MINIO_ENDPOINT (+ optional OMP_MINIO_ACCESS_KEY/_SECRET_KEY/
-// _BUCKET/_USE_SSL) konfigurierte MinIO-Instanz (`make minio-up`,
+// _BUCKET/_USE_SSL) konfigurierte MinIO-Instanz (`make s3-up`,
 // Kapitel 21 B5) — kein Mock: Presigned URLs sind gerade der Teil, den
 // eine echte S3-kompatible Signatur-Implementierung ausmacht, ein Mock
 // hätte genau diesen Teil ungetestet gelassen. t.Skip, wenn die
@@ -23,7 +23,7 @@ func testClient(t *testing.T) *Client {
 	t.Helper()
 	endpoint := os.Getenv("OMP_MINIO_ENDPOINT")
 	if endpoint == "" {
-		t.Skip("OMP_MINIO_ENDPOINT nicht gesetzt — objectstore-Test übersprungen (make minio-up, dann OMP_MINIO_ENDPOINT=127.0.0.1:9000 setzen)")
+		t.Skip("OMP_MINIO_ENDPOINT nicht gesetzt — objectstore-Test übersprungen (make s3-up, dann OMP_MINIO_ENDPOINT=127.0.0.1:9000 setzen)")
 	}
 	useSSL, _ := strconv.ParseBool(os.Getenv("OMP_MINIO_USE_SSL"))
 	accessKey := os.Getenv("OMP_MINIO_ACCESS_KEY")

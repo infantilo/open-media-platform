@@ -231,7 +231,7 @@ type Config struct {
 
 	// MinIO/S3-Objektspeicher (Kapitel 21 B5, Nachtrag 280) — additiv
 	// wie MTLSEnabled: leeres MinioEndpoint heißt "Feature deaktiviert",
-	// kein impliziter Zwang, `make minio-up` zu betreiben, um den Rest
+	// kein impliziter Zwang, `make s3-up` zu betreiben, um den Rest
 	// von OMP zu nutzen (s. internal/objectstore-Paketdoku).
 	MinioEndpoint  string
 	MinioAccessKey string
@@ -344,7 +344,7 @@ func Load() Config {
 		ClusterDataDir:  getEnv("OMP_RAFT_DATA_DIR", "../data/raft/"+clusterNodeID),
 		ClusterPeers:    getEnv("OMP_CLUSTER_PEERS", ""),
 		ClusterJoin:     clusterJoin,
-		// Defaults passen zu `make minio-up` (s. Makefile) — ein Dev-
+		// Defaults passen zu `make s3-up` (s. Makefile) — ein Dev-
 		// Setup, das MinIO per Makefile startet, braucht dafür keine
 		// zusätzliche OMP_MINIO_*-Konfiguration.
 		MinioEndpoint:    getEnv("OMP_MINIO_ENDPOINT", ""),

@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# Preflight-Prüfung für die Erstinstallation und jeden Start: prüft, ob der
-# Rechner alles hat, was OpenMediaPlatform braucht — BEVOR `make start`
-# nach zwei Minuten mit einer kryptischen Fehlermeldung abbricht. Jede
-# Meldung nennt die Ursache und, wo möglich, den Befehl zur Behebung für
-# die erkannte Distribution.
+# Preflight check for the first installation and every start: verifies that
+# the machine has everything OpenMediaPlatform needs — BEFORE `make start`
+# aborts after two minutes with a cryptic error message. Every message
+# names the cause and, where possible, the command to fix it for the
+# detected distribution.
 #
-#   ./deploy/dev/preflight.sh                 alles prüfen (Standard)
-#   ./deploy/dev/preflight.sh --for=start     nur, was `make start` braucht
-#   ./deploy/dev/preflight.sh --for=nodes     zusätzlich Medien-Nodes (Rust/GStreamer/MXL)
-#   ./deploy/dev/preflight.sh --quiet         nur Warnungen und Fehler ausgeben
-#   ./deploy/dev/preflight.sh --strict        Warnungen wie Fehler behandeln
-#   ./deploy/dev/preflight.sh --json          maschinenlesbar (eine Zeile je Prüfung)
+#   ./deploy/dev/preflight.sh                 check everything (default)
+#   ./deploy/dev/preflight.sh --for=start     only what `make start` needs
+#   ./deploy/dev/preflight.sh --for=nodes     additionally media nodes (Rust/GStreamer/MXL)
+#   ./deploy/dev/preflight.sh --quiet         print warnings and errors only
+#   ./deploy/dev/preflight.sh --strict        treat warnings as errors
+#   ./deploy/dev/preflight.sh --json          machine-readable (one line per check)
 #
-# Exit-Code 0 = kein Fehler (Warnungen möglich), 1 = mindestens ein Fehler.
-# `make preflight` ruft dies auf; `make start` ruft `--for=start --quiet`
-# automatisch auf (überspringbar mit OMP_SKIP_PREFLIGHT=1).
+# Exit code 0 = no error (warnings possible), 1 = at least one error.
+# `make preflight` calls this; `make start` calls `--for=start --quiet`
+# automatically (skippable with OMP_SKIP_PREFLIGHT=1).
 #
-# Reine Bash + Standardwerkzeuge (kein sudo, ändert nichts am System).
+# Plain Bash + standard tools (no sudo, changes nothing on the system).
 set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -31,13 +31,13 @@ for arg in "$@"; do
     --quiet) QUIET=1 ;;
     --strict) STRICT=1 ;;
     --json) JSON=1 ;;
-    -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) echo "Unbekannte Option: $arg (siehe --help)" >&2; exit 2 ;;
+    -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "Unknown option: $arg (see --help)" >&2; exit 2 ;;
   esac
 done
-case "$SCOPE" in all|start|nodes) ;; *) echo "--for= erwartet all|start|nodes" >&2; exit 2 ;; esac
+case "$SCOPE" in all|start|nodes) ;; *) echo "--for= expects all|start|nodes" >&2; exit 2 ;; esac
 
-# ---- Ausgabe ---------------------------------------------------------------
+# ---- Output ----------------------------------------------------------------
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "$JSON" = "0" ]; then
   C_OK=$'\033[32m'; C_WARN=$'\033[33m'; C_ERR=$'\033[31m'; C_DIM=$'\033[2m'; C_B=$'\033[1m'; C_OFF=$'\033[0m'
 else
@@ -72,7 +72,7 @@ warn() { emit warn "$@"; }
 err()  { emit err "$@"; }
 section() { [ "$JSON" = "1" ] && return; [ "$QUIET" = "1" ] && return; printf '\n%s%s%s\n' "$C_B" "$1" "$C_OFF"; }
 
-# ---- Distribution / Paketmanager erkennen ---------------------------------------
+# ---- Detect distribution / package manager ---------------------------------------
 PM=""
 if command -v apt-get >/dev/null 2>&1; then PM="apt"
 elif command -v dnf >/dev/null 2>&1; then PM="dnf"
@@ -80,7 +80,7 @@ elif command -v pacman >/dev/null 2>&1; then PM="pacman"
 elif command -v zypper >/dev/null 2>&1; then PM="zypper"
 fi
 
-# install_hint <werkzeug>: Befehl zum Nachinstallieren (Paketname je Distribution).
+# install_hint <tool>: command to install it (package name per distribution).
 install_hint() {
   local tool="$1" pkg=""
   case "$PM:$tool" in
@@ -106,26 +106,26 @@ install_hint() {
   esac
 }
 
-# version_ge <ist> <soll>: ist >= soll (numerisch je Punkt-Segment)
+# version_ge <have> <want>: have >= want (numeric per dot segment)
 version_ge() {
   local a="$1" b="$2"
   [ "$(printf '%s\n%s\n' "$b" "$a" | sort -V | head -n1)" = "$b" ]
 }
 
-need_tool() { # tool, warum, [level=err]
+need_tool() { # tool, why, [level=err]
   local tool="$1" why="$2" level="${3:-err}"
   if command -v "$tool" >/dev/null 2>&1; then
     return 0
   fi
   local fix; fix="$(install_hint "$tool")"
-  "$level" "$tool nicht gefunden" "$why" "$fix"
+  "$level" "$tool not found" "$why" "$fix"
   return 1
 }
 
-# Grundwerkzeuge, ohne die dieses Skript selbst nicht funktioniert.
+# Basic tools this script itself cannot work without.
 for t in awk sed grep sort df uname tr head; do
   if ! command -v "$t" >/dev/null 2>&1; then
-    echo "Grundwerkzeug '$t' fehlt — dieses System ist für OpenMediaPlatform nicht geeignet oder ein minimaler Container ohne coreutils." >&2
+    echo "Basic tool '$t' is missing — this system is not suitable for OpenMediaPlatform, or it is a minimal container without coreutils." >&2
     exit 1
   fi
 done
@@ -134,36 +134,36 @@ done
 section "System"
 
 case "$(uname -s)" in
-  Linux) ok "Betriebssystem" "Linux ($(uname -m))" ;;
-  *) err "Betriebssystem" "nur Linux wird unterstützt (gefunden: $(uname -s))" "Auf einem Linux-Rechner oder in einer Linux-VM installieren" ;;
+  Linux) ok "Operating system" "Linux ($(uname -m))" ;;
+  *) err "Operating system" "only Linux is supported (found: $(uname -s))" "Install on a Linux machine or in a Linux VM" ;;
 esac
 case "$(uname -m)" in
   x86_64|aarch64) ;;
-  *) warn "Architektur" "$(uname -m) ist ungetestet (getestet: x86_64)" ;;
+  *) warn "Architecture" "$(uname -m) is untested (tested: x86_64)" ;;
 esac
 
-# Arbeitsspeicher
+# Memory
 if [ -r /proc/meminfo ]; then
   mem_kb="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
   mem_gb="$(awk -v k="$mem_kb" 'BEGIN {printf "%.1f", k/1024/1024}')"
   if [ "$mem_kb" -lt 1500000 ]; then
-    err "Arbeitsspeicher" "${mem_gb} GB — mindestens 1,5 GB nötig (Postgres-Cluster, NATS, Orchestrator laufen als Container/Prozesse)" "Mehr RAM bereitstellen (bei einer VM: Speicher erhöhen)"
+    err "Memory" "${mem_gb} GB — at least 1.5 GB required (Postgres cluster, NATS and orchestrator run as containers/processes)" "Provide more RAM (for a VM: increase memory)"
   elif [ "$mem_kb" -lt 7500000 ]; then
-    [ "$SCOPE" != "start" ] && warn "Arbeitsspeicher" "${mem_gb} GB — knapp: für den Grundbetrieb reicht es, für Medien-Nodes (Mischer, Multiviewer) sind 8 GB und mehr empfehlenswert"
+    [ "$SCOPE" != "start" ] && warn "Memory" "${mem_gb} GB — tight: enough for basic operation, but 8 GB or more is recommended for media nodes (mixers, multiviewer)"
   else
-    ok "Arbeitsspeicher" "${mem_gb} GB"
+    ok "Memory" "${mem_gb} GB"
   fi
 fi
 
-# CPU-Kerne
+# CPU cores
 cores="$(nproc 2>/dev/null || echo 1)"
 if [ "$cores" -lt 2 ]; then
-  warn "CPU-Kerne" "$cores — Medien-Nodes brauchen mehrere Kerne" "Mindestens 4 Kerne empfohlen"
+  warn "CPU cores" "$cores — media nodes need several cores" "At least 4 cores recommended"
 else
-  ok "CPU-Kerne" "$cores"
+  ok "CPU cores" "$cores"
 fi
 
-# Plattenplatz im Projektverzeichnis
+# Disk space in the project directory
 free_kb="$(df -Pk "$ROOT_DIR" 2>/dev/null | awk 'NR==2 {print $4}')"
 if [ -n "${free_kb:-}" ]; then
   free_gb="$(awk -v k="$free_kb" 'BEGIN {printf "%.1f", k/1024/1024}')"
@@ -177,75 +177,75 @@ if [ -n "${free_kb:-}" ]; then
 fi
 
 # =============================================================================
-section "Werkzeuge (für make start)"
+section "Tools (for make start)"
 
-need_tool bash "Skripte"
-need_tool make "Einstiegspunkt aller Befehle (make start …)" && ok "make" "$(make --version 2>/dev/null | head -n1)"
-need_tool curl "Health-Checks beim Start" && ok "curl"
-need_tool openssl "erzeugt beim ersten Start den Schlüssel für Storage-Backends" && ok "openssl"
-need_tool git "Versionsstempel/Updates" warn && ok "git"
+need_tool bash "scripts"
+need_tool make "entry point of all commands (make start …)" && ok "make" "$(make --version 2>/dev/null | head -n1)"
+need_tool curl "health checks at startup" && ok "curl"
+need_tool openssl "generates the key for the storage backends on first start" && ok "openssl"
+need_tool git "version stamps/updates" warn && ok "git"
 
-# Offline-Paket: fertig gebaute Binaries, Go/Deno/Rust werden nicht gebraucht (deploy/offline/install-offline.sh)
+# Offline package: prebuilt binaries, Go/Deno/Rust are not needed (deploy/offline/install-offline.sh)
 PREBUILT=0; [ -f "$ROOT_DIR/.offline-install" ] && PREBUILT=1
 
 # Go
 if [ "$PREBUILT" = 1 ] && ! command -v go >/dev/null 2>&1; then
-  ok "Go" "nicht nötig (Offline-Paket mit fertigen Binaries)"
+  ok "Go" "not needed (offline package with prebuilt binaries)"
 elif command -v go >/dev/null 2>&1; then
-  # im Orchestrator-Verzeichnis fragen: dort greift go.mod/GOTOOLCHAIN (bereits geladene Toolchain zählt)
+  # Ask inside the orchestrator directory: go.mod/GOTOOLCHAIN apply there (an already downloaded toolchain counts)
   go_have="$(cd "$ROOT_DIR/orchestrator" 2>/dev/null && go env GOVERSION 2>/dev/null | sed 's/^go//')"
   go_need="$(awk '/^go [0-9]/ {print $2; exit}' "$ROOT_DIR/orchestrator/go.mod" 2>/dev/null)"
   if [ -n "$go_have" ] && [ -n "$go_need" ] && ! version_ge "$go_have" "$go_need"; then
     if [ "${GOTOOLCHAIN:-auto}" = "local" ]; then
-      err "Go" "Version $go_have — the project needs $go_need" "Install Go $go_need or newer: https://go.dev/dl/"
+      err "Go" "version $go_have — the project needs $go_need" "Install Go $go_need or newer: https://go.dev/dl/"
     else
-      warn "Go" "Version $go_have — the project needs $go_need; Go downloads the matching toolchain itself on the first build (internet access required)" "Alternatively install Go $go_need: https://go.dev/dl/"
+      warn "Go" "version $go_have — the project needs $go_need; Go downloads the matching toolchain itself on the first build (internet access required)" "Alternatively install Go $go_need: https://go.dev/dl/"
     fi
   else
     ok "Go" "$go_have"
   fi
 else
-  err "Go nicht gefunden" "baut den Orchestrator" "Go installieren: https://go.dev/dl/ (aktuelle Version)"
+  err "Go not found" "builds the orchestrator" "Install Go: https://go.dev/dl/ (current version)"
 fi
 
 # Deno
 if [ "$PREBUILT" = 1 ] && ! command -v deno >/dev/null 2>&1; then
-  ok "Deno" "nicht nötig (Offline-Paket mit fertigen Binaries)"
+  ok "Deno" "not needed (offline package with prebuilt binaries)"
 elif command -v deno >/dev/null 2>&1; then
   ok "Deno" "$(deno --version 2>/dev/null | head -n1 | awk '{print $2}')"
 else
-  err "Deno nicht gefunden" "baut das UI-Bundle (kein Node/npm nötig)" "Deno installieren: curl -fsSL https://deno.land/install.sh | sh"
+  err "Deno not found" "builds the UI bundle (no Node/npm needed)" "Install Deno: curl -fsSL https://deno.land/install.sh | sh"
 fi
 
 # =============================================================================
-section "Container (Podman)"
+section "Containers (Podman)"
 
-if need_tool podman "startet NATS, NMOS-Registry, etcd und Postgres"; then
+if need_tool podman "starts NATS, NMOS registry, etcd and Postgres"; then
   pv="$(podman --version 2>/dev/null | awk '{print $3}')"
   if podman info >/dev/null 2>&1; then
-    ok "Podman" "$pv, funktionsfähig"
+    ok "Podman" "$pv, working"
   else
-    err "Podman meldet einen Fehler" "'podman info' schlägt fehl" "Ausgabe prüfen: podman info   (rootless: /etc/subuid und /etc/subgid, 'podman system migrate')"
+    err "Podman reports an error" "'podman info' fails" "Check the output: podman info   (rootless: /etc/subuid and /etc/subgid, 'podman system migrate')"
   fi
-  # rootless: subuid/subgid vorhanden?
+  # rootless: subuid/subgid present?
   if [ "$(id -u)" != "0" ]; then
     user="$(id -un)"
     if ! grep -q "^${user}:" /etc/subuid 2>/dev/null || ! grep -q "^${user}:" /etc/subgid 2>/dev/null; then
-      warn "subuid/subgid für $user fehlen" "rootless Podman braucht sie für Container-Benutzer" "sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $user && podman system migrate"
+      warn "subuid/subgid missing for $user" "rootless Podman needs them for container users" "sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $user && podman system migrate"
     fi
   fi
 
-  # Benötigte Images aus dem Makefile ableiten (eine Quelle der Wahrheit)
+  # Derive the required images from the Makefile (single source of truth)
   missing_images=()
   for img in $(grep -ho '\(docker\.io\|quay\.io\)/[a-zA-Z0-9_./-]*:[a-zA-Z0-9._-]*' "$ROOT_DIR/Makefile" | sort -u | grep -E 'nats|nmos-cpp|etcd'); do
     if podman image exists "$img" 2>/dev/null; then
-      ok "Image $img" "vorhanden"
+      ok "Image $img" "present"
     else
       missing_images+=("$img")
     fi
   done
   if [ "${#missing_images[@]}" -gt 0 ]; then
-    # Erreichbarkeit der Registries prüfen (nur relevant, wenn etwas geladen werden muss)
+    # Check registry reachability (only relevant if something has to be pulled)
     reach=1
     for host in registry-1.docker.io quay.io; do
       if ! curl -fsS -m 6 -o /dev/null "https://$host/v2/" 2>/dev/null && ! curl -sS -m 6 -o /dev/null -w '%{http_code}' "https://$host/v2/" 2>/dev/null | grep -q '^\(200\|401\)$'; then
@@ -253,25 +253,25 @@ if need_tool podman "startet NATS, NMOS-Registry, etcd und Postgres"; then
       fi
     done
     if [ "$reach" = "1" ]; then
-      warn "${#missing_images[@]} Container-Image(s) fehlen" "werden beim ersten 'make start' automatisch geladen (${missing_images[*]}) — das dauert einige Minuten" ""
+      warn "${#missing_images[@]} container image(s) missing" "will be pulled automatically on the first 'make start' (${missing_images[*]}) — this takes a few minutes" ""
     else
-      err "${#missing_images[@]} Container-Image(s) fehlen und die Registry ist nicht erreichbar" "${missing_images[*]}" "Internetzugang/Proxy prüfen ODER die Images auf einem anderen Rechner laden und importieren (podman save / podman load)"
+      err "${#missing_images[@]} container image(s) missing and the registry is not reachable" "${missing_images[*]}" "Check internet access/proxy OR pull the images on another machine and import them (podman save / podman load)"
     fi
   fi
   if ! podman image exists localhost/omp-patroni:latest 2>/dev/null; then
-    warn "Postgres-Image (omp-patroni) noch nicht gebaut" "wird beim ersten 'make start' aus deploy/patroni gebaut (mehrere Minuten, braucht Internetzugang)" ""
+    warn "Postgres image (omp-patroni) not built yet" "will be built from deploy/patroni on the first 'make start' (several minutes, needs internet access)" ""
   fi
 fi
 
 # =============================================================================
 section "Ports"
 
-# Erwartete Belegung durch OMP selbst erkennen: laufen die OMP-Container/der
-# Orchestrator bereits, ist die Belegung gewollt und kein Fehler.
+# Detect the expected occupation by OMP itself: if the OMP containers/the
+# orchestrator are already running, the occupation is intended and not an error.
 omp_running=0
 if command -v podman >/dev/null 2>&1; then
-  # Mehrere Versuche: ein einzelnes `podman ps` liefert direkt nach `make stop` gelegentlich kurz nichts
-  # (Podman-Sperre/Neustart des Events-Loggers) — dann wären alle eigenen Infrastruktur-Ports fälschlich „belegt“.
+  # Several attempts: a single `podman ps` occasionally returns nothing right after `make stop`
+  # (Podman lock/restart of the events logger) — all own infrastructure ports would then wrongly count as "in use".
   for _ in 1 2 3; do
     if podman ps --format '{{.Names}}' 2>/dev/null | grep -q '^omp-'; then omp_running=1; break; fi
     sleep 1
@@ -289,148 +289,148 @@ if command -v ss >/dev/null 2>&1; then
     owner="$(ss -Hltnp "sport = :$port" 2>/dev/null | head -n1)"
     [ -z "$owner" ] && continue
     proc="$(printf '%s' "$owner" | grep -o 'users:(("[^"]*"' | head -n1 | sed 's/users:(("//; s/"$//')"
-    # Belegung durch OMP selbst ist gewollt: laufender Orchestrator/Supervisor
-    # bzw. OMP-Container (Prozessname aus der Allowlist oder nicht ermittelbar).
+    # Occupation by OMP itself is intended: running orchestrator/supervisor
+    # or OMP containers (process name from the allowlist or not determinable).
     case "$port:$name" in
       8000:Orchestrator|8091:Supervisor) [ "$orch_running" = "1" ] && continue ;;
     esac
-    # Der Supervisor überlebt `make stop` absichtlich (start-supervisor.sh ist idempotent).
+    # The supervisor intentionally survives `make stop` (start-supervisor.sh is idempotent).
     [ "$port" = "8091" ] && [ "${proc:-}" = "omp-supervisor" ] && continue
     if [ "$omp_running" = "1" ]; then
       case "${proc:-}" in
         ""|nats-server|etcd|postgres|patroni|conmon|rootlessport|slirp4netns|pasta|omp-*|nmos-cpp-*) continue ;;
       esac
     fi
-    err "Port $port ($name) ist belegt" "${proc:+von \"$proc\"}" "Belegenden Prozess beenden: ss -ltnp | grep :$port   (ein früherer, nicht sauber beendeter Lauf? 'make stop' bzw. kill <PID>)"
+    err "Port $port ($name) is in use" "${proc:+by \"$proc\"}" "Stop the occupying process: ss -ltnp | grep :$port   (an earlier run that did not shut down cleanly? 'make stop' or kill <PID>)"
     conflicts=$((conflicts+1))
   done
   if [ "$conflicts" = "0" ]; then
-    if [ "$orch_running" = "1" ]; then ok "Benötigte Ports" "frei bzw. von OpenMediaPlatform selbst belegt (Orchestrator läuft bereits)"; else ok "Benötigte Ports frei"; fi
+    if [ "$orch_running" = "1" ]; then ok "Required ports" "free or occupied by OpenMediaPlatform itself (orchestrator already running)"; else ok "Required ports free"; fi
   fi
 else
-  warn "'ss' nicht gefunden" "Port-Prüfung übersprungen" "$(install_hint ss)"
+  warn "'ss' not found" "port check skipped" "$(install_hint ss)"
 fi
 
-# Podman 5 (pasta): veröffentlichte Ports antworten auf 127.0.0.1, setzen aber
-# Verbindungen über ::1 ("localhost" löst oft zuerst dorthin auf) zurück —
-# dann sieht der Orchestrator die NMOS-Registry nicht und kein Node startet.
-# Nur prüfbar, wenn die Registry bereits läuft.
+# Podman 5 (pasta): published ports answer on 127.0.0.1 but reset
+# connections via ::1 ("localhost" often resolves there first) —
+# the orchestrator then does not see the NMOS registry and no node starts.
+# Only checkable if the registry is already running.
 if command -v curl >/dev/null 2>&1 && curl -s -m 3 -o /dev/null "http://127.0.0.1:8010/x-nmos/query/v1.3/" 2>/dev/null; then
   if curl -s -m 3 -o /dev/null "http://[::1]:8010/x-nmos/query/v1.3/" 2>/dev/null; then
-    ok "Registry über IPv6 (::1)" "erreichbar"
+    ok "Registry via IPv6 (::1)" "reachable"
   elif getent ahosts localhost 2>/dev/null | awk 'NR==1 {exit !($1=="::1")}'; then
-    warn "Registry über ::1 nicht erreichbar" "IPv4 geht, 'localhost' löst aber zuerst auf ::1 auf (Podman/pasta) — Dienste mit localhost-URL sehen die Registry nicht" "OMP_REGISTRY_URL=http://127.0.0.1:8010 setzen (OMP-Standard) und keine localhost-URLs für Registry/Container-Ports verwenden"
+    warn "Registry not reachable via ::1" "IPv4 works, but 'localhost' resolves to ::1 first (Podman/pasta) — services with a localhost URL do not see the registry" "Set OMP_REGISTRY_URL=http://127.0.0.1:8010 (OMP default) and do not use localhost URLs for registry/container ports"
   else
-    ok "Registry über IPv4" "erreichbar (::1 unbenutzt)"
+    ok "Registry via IPv4" "reachable (::1 unused)"
   fi
 fi
 
 # =============================================================================
-section "Konfiguration"
+section "Configuration"
 
 if [ -w "$ROOT_DIR" ]; then
   mkdir -p "$ROOT_DIR/.run" "$ROOT_DIR/bin" 2>/dev/null
   if [ -w "$ROOT_DIR/.run" ] && [ -w "$ROOT_DIR/bin" ]; then
-    ok "Schreibrechte" ".run/ und bin/ beschreibbar"
+    ok "Write permissions" ".run/ and bin/ are writable"
   else
-    err "Keine Schreibrechte in .run/ oder bin/" "" "Besitzer prüfen: ls -ld $ROOT_DIR/.run $ROOT_DIR/bin"
+    err "No write permissions in .run/ or bin/" "" "Check ownership: ls -ld $ROOT_DIR/.run $ROOT_DIR/bin"
   fi
 else
-  err "Projektverzeichnis nicht beschreibbar" "$ROOT_DIR" "Berechtigungen prüfen (nicht als anderer Nutzer/aus einem schreibgeschützten Mount starten)"
+  err "Project directory not writable" "$ROOT_DIR" "Check permissions (do not run as another user/from a read-only mount)"
 fi
 
 if [ -f "$ROOT_DIR/deploy/dev/storage-secret.env" ]; then
-  ok "Storage-Schlüssel" "vorhanden (deploy/dev/storage-secret.env)"
+  ok "Storage key" "present (deploy/dev/storage-secret.env)"
 else
-  ok "Storage-Schlüssel" "wird beim ersten Start automatisch erzeugt"
+  ok "Storage key" "will be generated automatically on first start"
 fi
 
 if [ -s "$ROOT_DIR/.run/update-trusted.pub" ]; then
-  ok "System-Update" "Signaturschlüssel hinterlegt"
+  ok "System update" "signing key in place"
 else
-  [ "$SCOPE" = "all" ] && warn "System-Update: kein Signaturschlüssel" ".run/update-trusted.pub fehlt — hochgeladene Update-Pakete werden abgelehnt" "Nur nötig, wenn du Updates per Browser einspielen willst: make update-keygen (siehe docs/HANDBUCH.md §5b)"
+  [ "$SCOPE" = "all" ] && warn "System update: no signing key" ".run/update-trusted.pub is missing — uploaded update packages will be rejected" "Only needed if you want to apply updates via the browser: make update-keygen (see docs/HANDBUCH.md §5b)"
 fi
 
 # =============================================================================
 if [ "$SCOPE" != "start" ]; then
-section "Medien-Nodes (Rust, GStreamer, MXL) — optional, nur für Video/Audio"
+section "Media nodes (Rust, GStreamer, MXL) — optional, only for video/audio"
 
 if command -v cargo >/dev/null 2>&1 && command -v rustc >/dev/null 2>&1; then
   rv="$(rustc --version | awk '{print $2}')"
-  if version_ge "$rv" "1.85.0"; then ok "Rust" "$rv"; else err "Rust zu alt" "$rv — Edition 2024 braucht mindestens 1.85" "rustup update stable"; fi
+  if version_ge "$rv" "1.85.0"; then ok "Rust" "$rv"; else err "Rust too old" "$rv — edition 2024 needs at least 1.85" "rustup update stable"; fi
 elif [ "$PREBUILT" = 1 ]; then
-  ok "Rust" "nicht nötig (Offline-Paket mit fertigen Binaries)"
+  ok "Rust" "not needed (offline package with prebuilt binaries)"
 else
-  warn "Rust/Cargo nicht gefunden" "baut die Medien-Nodes (make nodes)" "Rust installieren: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+  warn "Rust/Cargo not found" "builds the media nodes (make nodes)" "Install Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
 fi
 
 if [ "$PREBUILT" = 1 ]; then
-  ok "GStreamer-Entwicklungsbibliotheken" "nicht nötig (Offline-Paket mit fertigen Binaries)"
+  ok "GStreamer development libraries" "not needed (offline package with prebuilt binaries)"
 elif command -v pkg-config >/dev/null 2>&1; then
   missing_pc=()
   for m in gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-pbutils-1.0 gstreamer-net-1.0; do
     pkg-config --exists "$m" 2>/dev/null || missing_pc+=("$m")
   done
   if [ "${#missing_pc[@]}" -eq 0 ]; then
-    ok "GStreamer-Entwicklungsbibliotheken" "$(pkg-config --modversion gstreamer-1.0)"
+    ok "GStreamer development libraries" "$(pkg-config --modversion gstreamer-1.0)"
   else
-    warn "GStreamer-Entwicklungsbibliotheken fehlen" "${missing_pc[*]} — 'make nodes' kann die Medien-Nodes nicht bauen" "$(install_hint gst)"
+    warn "GStreamer development libraries missing" "${missing_pc[*]} — 'make nodes' cannot build the media nodes" "$(install_hint gst)"
   fi
 else
-  need_tool pkg-config "findet die GStreamer-Bibliotheken beim Bauen der Nodes" warn
+  need_tool pkg-config "finds the GStreamer libraries when building the nodes" warn
 fi
 
 if command -v gst-inspect-1.0 >/dev/null 2>&1; then
-  # Kernelemente: fehlt eines, funktionieren die Basis-Nodes nicht.
+  # Core elements: if one is missing, the basic nodes do not work.
   core="capsfilter queue videoconvert videoscale videorate tee appsink appsrc audioconvert audioresample audiomixer audiomixmatrix input-selector interleave compositor textoverlay jpegenc mxfdemux decodebin deinterlace volume level valve filesrc videotestsrc audiotestsrc"
   miss_core=()
   for e in $core; do gst-inspect-1.0 --exists "$e" 2>/dev/null || miss_core+=("$e"); done
   if [ "${#miss_core[@]}" -eq 0 ]; then
-    ok "GStreamer-Kernelemente" "alle vorhanden"
+    ok "GStreamer core elements" "all present"
   else
-    err "GStreamer-Elemente fehlen" "${miss_core[*]}" "$(install_hint gst)"
+    err "GStreamer elements missing" "${miss_core[*]}" "$(install_hint gst)"
   fi
-  # Optionale Elemente: je Funktion einzeln melden.
-  opt_check() { # element, funktion
-    gst-inspect-1.0 --exists "$1" 2>/dev/null || warn "GStreamer-Element $1 fehlt" "$2" "$(install_hint gst)"
+  # Optional elements: report per feature.
+  opt_check() { # element, feature
+    gst-inspect-1.0 --exists "$1" 2>/dev/null || warn "GStreamer element $1 missing" "$2" "$(install_hint gst)"
   }
-  opt_check webrtcbin "WebRTC-Gateway/-Monitor"
-  opt_check x264enc "H.264-Encoding (WebRTC, Recorder)"
-  opt_check srtsrc "SRT-Gateway"
-  opt_check rtpvrawpay "ST-2110-Gateway"
+  opt_check webrtcbin "WebRTC gateway/monitor"
+  opt_check x264enc "H.264 encoding (WebRTC, recorder)"
+  opt_check srtsrc "SRT gateway"
+  opt_check rtpvrawpay "ST 2110 gateway"
   opt_check matroskamux "Recorder (Matroska)"
-  # Plugin für die Bildratenwandlung "blend" (Fremdplugin, nicht im Paketmanager): ohne es laufen alle Nodes mit videorate.
-  # --atleast-version nötig: ohne vergleicht gst-inspect gegen die GStreamer-Version (0.1.x < 1.x → "fehlt")
+  # Plugin for "blend" frame-rate conversion (third-party plugin, not in the package manager): without it all nodes use videorate.
+  # --atleast-version is required: without it gst-inspect compares against the GStreamer version (0.1.x < 1.x → "missing")
   if gst-inspect-1.0 --exists --atleast-version=0.0.1 avvideofilter 2>/dev/null; then
-    ok "GStreamer-Plugin avvideofilter" "Bildratenwandlung blend verfügbar"
+    ok "GStreamer plugin avvideofilter" "blend frame-rate conversion available"
   else
-    warn "GStreamer-Plugin avvideofilter fehlt" "optional — nur für OMP_FRAMERATE_CONVERSION=blend (Scaler); ohne läuft videorate" "./deploy/dev/install-avvideofilter.sh   (offline: --archive DATEI, docs/INSTALLATION.md §9)"
+    warn "GStreamer plugin avvideofilter missing" "optional — only for OMP_FRAMERATE_CONVERSION=blend (scaler); without it videorate is used" "./deploy/dev/install-avvideofilter.sh   (offline: --archive FILE, docs/INSTALLATION.md §9)"
   fi
 else
-  warn "gst-inspect-1.0 nicht gefunden" "GStreamer-Laufzeit fehlt oder ist nicht installiert" "$(install_hint gst)"
+  warn "gst-inspect-1.0 not found" "GStreamer runtime is missing or not installed" "$(install_hint gst)"
 fi
 
 # MXL
 mxl_lib="$(ls "$ROOT_DIR"/third_party/mxl/build/*/lib/libmxl.so 2>/dev/null | head -n1)"
 if [ -n "$mxl_lib" ]; then
-  ok "MXL-Bibliothek" "gebaut ($(basename "$(dirname "$(dirname "$mxl_lib")")"))"
+  ok "MXL library" "built ($(basename "$(dirname "$(dirname "$mxl_lib")")"))"
 else
-  warn "MXL-Bibliothek nicht gebaut" "ohne sie starten die Medien-Nodes nicht (libmxl.so fehlt)" "./deploy/dev/install-mxl.sh   (braucht cmake, ninja, clang, vcpkg — siehe Kopfkommentar; dauert länger)"
+  warn "MXL library not built" "the media nodes do not start without it (libmxl.so missing)" "./deploy/dev/install-mxl.sh   (needs cmake, ninja, clang, vcpkg — see header comment; takes a while)"
 fi
 if [ -d /dev/shm ] && [ -w /dev/shm ]; then
   shm_kb="$(df -Pk /dev/shm | awk 'NR==2 {print $2}')"
   if [ "${shm_kb:-0}" -lt 1000000 ]; then
-    warn "/dev/shm ist klein" "$((shm_kb/1024)) MB — MXL-Flows liegen dort im Arbeitsspeicher" "Größe erhöhen: sudo mount -o remount,size=2G /dev/shm"
+    warn "/dev/shm is small" "$((shm_kb/1024)) MB — MXL flows live there in memory" "Increase the size: sudo mount -o remount,size=2G /dev/shm"
   else
-    ok "/dev/shm" "$((shm_kb/1024/1024)) GB, beschreibbar"
+    ok "/dev/shm" "$((shm_kb/1024/1024)) GB, writable"
   fi
 else
-  err "/dev/shm nicht beschreibbar" "MXL legt dort seine Medienpuffer ab" "Prüfen: ls -ld /dev/shm  (in Containern: --shm-size setzen)"
+  err "/dev/shm not writable" "MXL stores its media buffers there" "Check: ls -ld /dev/shm  (in containers: set --shm-size)"
 fi
 
 command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1 \
-  && ok "ffmpeg/ffprobe" "vorhanden (Prozess-Assistent)" \
-  || warn "ffmpeg/ffprobe nicht gefunden" "nur für den ffmpeg-Assistenten im Prozess-Editor" "$(install_hint ffmpeg)"
+  && ok "ffmpeg/ffprobe" "present (process wizard)" \
+  || warn "ffmpeg/ffprobe not found" "only for the ffmpeg wizard in the process editor" "$(install_hint ffmpeg)"
 fi
 
 # =============================================================================
@@ -439,7 +439,7 @@ if [ "$JSON" = "1" ]; then
 else
   [ "$QUIET" = "1" ] && [ "$N_ERR" -eq 0 ] || printf '\n'
   if [ "$QUIET" = "1" ] && [ "$N_ERR" -eq 0 ]; then
-    :  # Kurzform (aus make start): Warnungen stehen schon oben, kein Abschlusssatz
+    :  # short form (from make start): warnings are already printed above, no closing sentence
   elif [ "$N_ERR" -gt 0 ]; then
     printf '%s%s error(s), %s warning(s) — please fix the marked items (→ lines), then run again: make preflight%s\n' "$C_ERR" "$N_ERR" "$N_WARN" "$C_OFF"
   elif [ "$N_WARN" -gt 0 ]; then

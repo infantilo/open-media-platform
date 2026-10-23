@@ -389,7 +389,7 @@ as `derived_from`/`version_of`) gives the process engine something
 real to operate on. Storage is provider-agnostic by design and backed
 by a real implementation, not just a placeholder: representations get
 presigned upload/download URLs against an actual S3-compatible store
-(MinIO), so media bytes move directly between client and object store,
+(S3: SeaweedFS in development), so media bytes move directly between client and object store,
 never proxied through the orchestrator. A process execution can link
 to the specific asset version it produced or consumed (a generic,
 process/asset-agnostic link record, not a special case in either
@@ -717,7 +717,7 @@ MXL in both directions.
 21 (definitions/versions/crash-recoverable executions, the full
 BPMN-style step vocabulary, reliable domain-event triggers, a visual
 step-graph editor, the asset/content domain model with collections,
-typed relationships, and real S3/MinIO-backed storage) and Kapitel 22/
+typed relationships, and real S3-backed storage) and Kapitel 22/
 23 (the guided ffmpeg assistant described above, generalized into a
 graphical audio matrix, timed overlays, lossless-capable concatenation,
 generic multi-track output mapping, and a fully searchable/validated

@@ -342,7 +342,7 @@ status:
 	done
 	@podman container exists omp-step-ca && echo "step-ca: läuft" || echo "step-ca: gestoppt (optional, siehe 'make mtls-up')"
 	@podman container exists omp-caddy && echo "Caddy-Reverse-Proxy: läuft, https://localhost:8443" || echo "Caddy-Reverse-Proxy: gestoppt (optional, siehe 'make proxy-up')"
-	@podman container exists omp-minio && echo "MinIO: läuft, http://localhost:9000 (Konsole :9001)" || echo "MinIO: gestoppt (optional, siehe 'make minio-up')"
+	@podman container exists omp-s3 && echo "S3 (SeaweedFS): running, http://localhost:9000" || echo "S3 (SeaweedFS): stopped (optional, see 'make s3-up')"
 	@if [ -f .run/supervisor.pid ] && kill -0 "$$(cat .run/supervisor.pid)" 2>/dev/null; then \
 		echo "Supervisor (Backup/Restore): läuft (PID $$(cat .run/supervisor.pid))"; \
 	else \
@@ -523,35 +523,34 @@ proxy-down:
 	-podman stop omp-caddy
 	-podman rm omp-caddy
 
-# MinIO (S3-kompatible Storage-Abstraktion, Kapitel 21 B5 — Nutzer-
-# entscheidung 2026-09-23, UMSETZUNG.md 21.5: echte MinIO/S3-Anbindung
-# statt der schlankeren Referenz-Abstraktion). Eigenes Opt-in-Target
-# wie mtls-up/proxy-up, NICHT Teil von `up`: nicht jede Sitzung braucht
-# Storage-Uploads, kein unnötiger Container standardmäßig. Standard-
-# MinIO-Ports 9000 (S3-API)/9001 (Web-Konsole) — beide frei, kein
-# Konflikt mit dem restigen Dev-Stack geprüft. `.run/minio-data`
-# persistiert Objekte über Neustarts hinweg (gleiches Muster wie
-# `.run/caddy`/`.run/step-ca`). `quay.io/minio/minio`, NICHT
-# `docker.io/minio/minio` — live gefunden: Letzteres verlangt inzwischen
-# eine Docker-Hub-Anmeldung ("denied: requested access... unauthorized"),
-# `quay.io` ist MinIOs eigener, frei erreichbarer Distributionsweg.
-minio-up:
-	@mkdir -p .run/minio-data
-	@if podman container exists omp-minio; then \
-		podman start omp-minio; \
+# S3-Objektspeicher für Storage-Uploads (Kapitel 21 B5): SeaweedFS (Apache-2.0)
+# mit S3-Gateway, ersetzt MinIO — MinIO verteilt keine Community-Images mehr
+# (docs/decisions.md, 2026-10-23). Der Orchestrator spricht nur die generische
+# S3-API (Bucket anlegen, Presigned PUT/GET, Löschen); die Zugangsdaten stehen
+# in deploy/s3/seaweedfs-s3.json und passen zu den OMP_MINIO_*-Defaults
+# (Endpoint 127.0.0.1:9000). Opt-in wie mtls-up/proxy-up, NICHT Teil von `up`.
+# `.run/s3-data` persistiert Objekte über Neustarts. Port 9000 = S3-API.
+s3-up:
+	@mkdir -p .run/s3-data
+	@if podman container exists omp-s3; then \
+		podman start omp-s3; \
 	else \
-		podman run -d --name omp-minio --restart=always --network=host \
-			-e MINIO_ROOT_USER=omp-minio-dev \
-			-e MINIO_ROOT_PASSWORD=omp-minio-dev-pass \
-			-v $(CURDIR)/.run/minio-data:/data:Z \
-			quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e server /data --address :9000 --console-address :9001; \
+		podman run -d --name omp-s3 --restart=always --network=host --userns=keep-id \
+			-v $(CURDIR)/.run/s3-data:/data:Z \
+			-v $(CURDIR)/deploy/s3/seaweedfs-s3.json:/etc/seaweedfs/s3.json:ro,Z \
+			docker.io/chrislusf/seaweedfs:4.48 server -dir=/data -ip=127.0.0.1 \
+			-master.volumeSizeLimitMB=256 -s3 -s3.port=9000 -s3.config=/etc/seaweedfs/s3.json; \
 	fi
-	@echo "MinIO bereit: S3-API http://127.0.0.1:9000, Konsole http://127.0.0.1:9001"
-	@echo "Dev-Zugangsdaten (NUR Dev, s. docs/HANDBUCH.md): omp-minio-dev / omp-minio-dev-pass"
+	@echo "S3 ready: API http://127.0.0.1:9000 (SeaweedFS)"
+	@echo "Dev credentials (DEV ONLY): omp-minio-dev / omp-minio-dev-pass"
 
-minio-down:
-	-podman stop omp-minio
-	-podman rm omp-minio
+s3-down:
+	-podman stop omp-s3
+	-podman rm omp-s3
+
+# Alte Namen (bis MinIO ersetzt wurde) bleiben als Alias erhalten.
+minio-up: s3-up
+minio-down: s3-down
 
 # S8 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — startet den Stack
 # (falls nicht bereits gestartet) + 2 Test-Nodes, sammelt /metrics alle

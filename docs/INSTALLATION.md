@@ -190,7 +190,7 @@ im Netz.
 | Meldung / Symptom | Ursache und Abhilfe |
 |---|---|
 | `make start` bricht mit Preflight-Fehler ab | Die Meldung nennt den Befehl zur Behebung; Details mit `make preflight`. |
-| „Port … ist belegt" | Ein früherer Lauf oder anderes Programm: `ss -ltnp \| grep :<port>`; eigener Altlauf: `make stop`. |
+| „Port … is in use" (Preflight-Meldungen sind englisch) | Ein früherer Lauf oder anderes Programm: `ss -ltnp \| grep :<port>`; eigener Altlauf: `make stop`. |
 | Podman: „cannot find UID/GID" / rootless-Fehler | `sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER && podman system migrate` |
 | Images lassen sich nicht laden | Internet/Proxy prüfen, oder auf anderem Rechner `podman save` / hier `podman load`. |
 | Nodes starten nicht: `libmxl.so … cannot open shared object file` | MXL fehlt: `./install.sh --media` (oder `deploy/dev/install-mxl.sh`). |
