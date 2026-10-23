@@ -30598,3 +30598,28 @@ Neuanlegen (nach `make down`) wie bisher ohne Volume an.
 
 **Offen:** etcd bleibt auf v3.5.17 (Patroni-Cluster, eigene Entscheidung);
 Caddy ist weiter `latest`.
+
+## 2026-10-23 — etcd v3.5.17 → v3.5.35, Caddy 2.11.7 gepinnt
+
+**etcd:** Patch-Update innerhalb von 3.5 (kein Minor-Sprung: 3.5 → 3.6 ist nur
+von einem aktuellen 3.5.x-Patch aus unterstützt, 3.6 → 3.7 wieder stufenweise;
+bewusst nicht gemacht, weil der Patroni-Cluster daran hängt). Live als Rolling-
+Update mit Gesundheitsprüfung (alle drei `/health` + Patroni-Leader `running`)
+nach jedem Knoten. `Makefile`, Quadlet, Offline-Bundle angepasst.
+
+**Lehre:** Das Datenverzeichnis eines *laufenden* etcd-Containers per
+`podman cp` zu kopieren und ins neue Container zu mounten ist **nicht sicher** —
+`etcd-1` ging in eine Crash-Schleife (`tocommit(…) is out of range [lastIndex(…)]`,
+WAL hinter dem bereits bestätigten Stand). (Bei NATS ging derselbe Weg gut,
+weil dort die Raft-Identität nur über den Store läuft und er verifiziert wurde.)
+Sicherer Weg für etcd: `etcdctl member remove <id>` → `member add` → Container
+mit **leerem** Datenverzeichnis und `--initial-cluster-state existing` starten;
+der Knoten holt den Stand vom Leader. So wurden alle drei Knoten getauscht;
+Quorum blieb durchgehend (2 von 3), Patroni blieb Leader/2 Replikate.
+Daten liegen jetzt unter `.run/etcd-roll/nN` (Volume, nur für diese Container).
+
+**Caddy:** `caddy:latest` → `2.11.7` (Makefile, `phone-https.sh`, Offline-
+Bundle); Caddyfile mit `caddy validate` geprüft.
+
+**Go-Tests mit NATS:** `internal/outbox` und `internal/process` laufen gegen den
+auf 2.15.1 aktualisierten Cluster grün.

@@ -231,7 +231,7 @@ postgres-up:
 			podman start omp-etcd-$$n; \
 		else \
 			podman run -d --name omp-etcd-$$n --restart=always --network=host \
-				quay.io/coreos/etcd:v3.5.17 etcd \
+				quay.io/coreos/etcd:v3.5.35 etcd \
 				--name etcd-$$n --data-dir /etcd-data \
 				--initial-advertise-peer-urls http://127.0.0.1:$$PEER --listen-peer-urls http://127.0.0.1:$$PEER \
 				--listen-client-urls http://127.0.0.1:$$CLI --advertise-client-urls http://127.0.0.1:$$CLI \
@@ -514,7 +514,7 @@ proxy-up:
 			-v $(CURDIR)/deploy/dev/Caddyfile:/etc/caddy/Caddyfile:ro,Z \
 			-v $(CURDIR)/deploy/dev/webrtc-static:/srv/webrtc-static:ro,Z \
 			-v $(CURDIR)/.run/caddy:/data \
-			docker.io/library/caddy:latest; \
+			docker.io/library/caddy:2.11.7; \
 	fi
 	@echo "Reverse-Proxy bereit: https://localhost:8443 (selbstsigniertes Caddy-Zertifikat, s. docs/HANDBUCH.md)"
 	@echo "Handy Kamera+Monitor kombiniert (omp-webrtc-gateway, Nachtrag 246): https://$${OMP_PUBLIC_HOST:-localhost}:9441"

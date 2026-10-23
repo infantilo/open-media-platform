@@ -68,9 +68,9 @@ RUNTIME_PKGS_apt="podman uidmap slirp4netns make curl openssl ca-certificates ta
 IMAGES_LIST=(
   "docker.io/library/nats:2.15.1|1"
   "docker.io/rhastie/nmos-cpp:master-b6c8367|1"
-  "quay.io/coreos/etcd:v3.5.17|1"
+  "quay.io/coreos/etcd:v3.5.35|1"
   "localhost/omp-patroni:latest|1"
-  "docker.io/library/caddy:latest|0"
+  "docker.io/library/caddy:2.11.7|0"
   "docker.io/smallstep/step-ca:0.30.2|0"
   "quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e|0"
 )
