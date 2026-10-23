@@ -115,8 +115,14 @@ say "2/4 Go, Deno$([ "$MEDIA" = 1 ] && echo ", Rust")"
 GO_NEED="$(awk '/^go [0-9]/ {print $2; exit}' "$ROOT_DIR/orchestrator/go.mod")"
 vge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]; }
 export PATH="/usr/local/go/bin:$HOME/.deno/bin:$HOME/.cargo/bin:$PATH"
-go_have=""; have go && go_have="$(go env GOVERSION | sed 's/^go//')"
-if [ -z "$go_have" ] || ! vge "$go_have" "$GO_NEED"; then
+# Ask inside orchestrator/: go.mod/GOTOOLCHAIN apply there, so an already downloaded toolchain counts.
+go_have=""; have go && go_have="$(cd "$ROOT_DIR/orchestrator" && go env GOVERSION | sed 's/^go//')"
+go_sys=""; have go && go_sys="$(go env GOVERSION | sed 's/^go//')"
+if [ -n "$go_have" ] && ! vge "$go_have" "$GO_NEED" && vge "$go_sys" "1.21" && [ "${GOTOOLCHAIN:-auto}" != "local" ]; then
+  # Go >= 1.21 fetches the toolchain required by go.mod itself on the first build (internet access needed) —
+  # no need to replace the system Go.
+  echo "    Go $go_have present; the matching toolchain $GO_NEED is downloaded automatically on the first build"
+elif [ -z "$go_have" ] || ! vge "$go_have" "$GO_NEED"; then
   arch="$(uname -m)"; case "$arch" in x86_64) goarch=amd64 ;; aarch64) goarch=arm64 ;; *) echo "Architecture $arch: please install Go manually." >&2; exit 1 ;; esac
   echo "    Installing Go $GO_NEED to /usr/local/go (sudo)"
   run "curl -fsSL https://go.dev/dl/go${GO_NEED}.linux-${goarch}.tar.gz -o /tmp/omp-go.tgz && sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf /tmp/omp-go.tgz && rm -f /tmp/omp-go.tgz"
