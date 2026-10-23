@@ -29,6 +29,8 @@ import (
 	"time"
 
 	"github.com/infantilo/openmediaplatform/host-agent/internal/catalog"
+	"github.com/infantilo/openmediaplatform/host-agent/internal/jobs"
+	"github.com/infantilo/openmediaplatform/jobwire"
 	"github.com/infantilo/openmediaplatform/nodeoptions"
 )
 
@@ -132,11 +134,17 @@ type Request struct {
 	// ein ungültiger Wert eines deklarierten Schlüssels lässt den Start scheitern.
 	Options map[string]string `json:"options,omitempty"`
 	// Path/Kind: Action "check-path" — Pfadprüfung auf diesem Host (Antwort: Detail = JSON).
-	Path          string `json:"path,omitempty"`
-	Kind          string `json:"kind,omitempty"`
-	UpdatePath    string `json:"updatePath,omitempty"`
-	UpdateVersion string `json:"updateVersion,omitempty"`
-	UpdateSHA256  string `json:"updateSha256,omitempty"`
+	Path string `json:"path,omitempty"`
+	Kind string `json:"kind,omitempty"`
+	// Jobs (Aktionen exec, exec-cancel, exec-list, exec-pause, exec-resume, exec-nice; docs/ENTWURF-FFMPEG-HOSTWAHL.md).
+	JobID         string   `json:"jobId,omitempty"`
+	Tool          string   `json:"tool,omitempty"`
+	Args          []string `json:"args,omitempty"`
+	TimeoutS      int      `json:"timeoutS,omitempty"`
+	Nice          int      `json:"nice,omitempty"`
+	UpdatePath    string   `json:"updatePath,omitempty"`
+	UpdateVersion string   `json:"updateVersion,omitempty"`
+	UpdateSHA256  string   `json:"updateSha256,omitempty"`
 }
 
 // Response ist die Antwort auf Request.
@@ -183,6 +191,8 @@ type Executor struct {
 	upd             *UpdateConfig
 	// nodeOptions: agent-lokales Optionsschema je Node-Typ (Kapitel 29), nil = keine Optionen.
 	nodeOptions map[string][]nodeoptions.Option
+
+	jobs *jobs.Runner
 
 	mu        sync.Mutex
 	instances map[string]*runningInstance
@@ -295,6 +305,8 @@ func (e *Executor) Handle(req Request) Response {
 		}
 		data, _ := json.Marshal(nodeoptions.CheckPath(req.Path, req.Kind))
 		return Response{OK: true, Detail: string(data)}
+	case jobwire.ActionExec, jobwire.ActionCancel, jobwire.ActionList, jobwire.ActionPause, jobwire.ActionResume, jobwire.ActionNice:
+		return e.handleJob(req)
 	default:
 		return Response{OK: false, Error: fmt.Sprintf("unknown action %q", req.Action)}
 	}

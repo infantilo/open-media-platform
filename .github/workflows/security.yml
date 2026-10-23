@@ -25,7 +25,7 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           rc=0
-          for m in orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check tools/update-bundle host-agent supervisor update nodeoptions; do
+          for m in orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check tools/update-bundle host-agent supervisor update nodeoptions jobwire; do
             echo "== $m"
             (cd "$m" && govulncheck ./...) || rc=1
           done

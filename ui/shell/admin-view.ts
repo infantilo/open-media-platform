@@ -2341,9 +2341,15 @@ class AdminView extends HTMLElement {
     }));
     for (const mg of this.#moduleGroups) {
       const existing = groups.find((g) => g.id === mg.id);
-      const tabs = mg.tabs.map((x) => ({ id: x.id, label: x.label }));
-      if (existing) existing.tabs.push(...tabs);
-      else groups.push({ id: mg.id, label: mg.label, tabs });
+      const tabs = mg.tabs.map((x) => ({ id: x.id, label: x.label, cluster: x.cluster ? t(`admin.cluster.${x.cluster}` as I18nKey) : undefined }));
+      if (existing) {
+        // Tab mit Untergruppe: hinter den letzten Tab dieser Untergruppe setzen, sonst ans Ende
+        for (const tb of tabs) {
+          const last = tb.cluster ? existing.tabs.map((e) => e.cluster).lastIndexOf(tb.cluster) : -1;
+          if (last >= 0) existing.tabs.splice(last + 1, 0, tb);
+          else existing.tabs.push(tb);
+        }
+      } else groups.push({ id: mg.id, label: mg.label, tabs });
     }
     const rank = (id: string) => {
       const i = ADMIN_GROUP_ORDER.indexOf(id);
@@ -2380,22 +2386,31 @@ class AdminView extends HTMLElement {
     if (active) {
       const sub = document.createElement("div");
       sub.setAttribute("data-role", "admin-group-tabs");
-      sub.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:var(--omp-space-2) var(--omp-space-4);";
+      sub.style.cssText = "display:flex;flex-wrap:wrap;align-items:stretch;gap:var(--omp-space-2) var(--omp-space-3);";
       let cluster: HTMLElement | null = null;
       let lastCluster: string | undefined = "\u0000";
       for (const tab of active.tabs) {
         if (!cluster || tab.cluster !== lastCluster) {
           lastCluster = tab.cluster;
-          cluster = document.createElement("div");
-          cluster.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:var(--omp-space-1);";
+          // Untergruppe als umrahmter Block mit Überschrift: sichtbar etwas anderes als die Tab-Knöpfe darin.
+          const block = document.createElement("div");
+          block.setAttribute("data-role", "admin-cluster");
           if (tab.cluster) {
-            const label = document.createElement("span");
+            block.style.cssText =
+              "display:flex;flex-direction:column;gap:var(--omp-space-1);padding:6px 10px 8px;" +
+              "border:1px solid var(--omp-border);border-left:3px solid var(--omp-accent-cyan);border-radius:var(--omp-radius);";
+            const label = document.createElement("div");
+            label.setAttribute("data-role", "admin-cluster-label");
             label.textContent = tab.cluster;
             label.style.cssText =
-              "font-size:var(--omp-font-size-xs);text-transform:uppercase;letter-spacing:0.05em;color:var(--omp-text-dim);margin-right:var(--omp-space-1);";
-            cluster.appendChild(label);
+              "font-size:var(--omp-font-size-xs);font-weight:700;text-transform:uppercase;letter-spacing:0.08em;" +
+              "color:var(--omp-text-dim);cursor:default;user-select:none;";
+            block.appendChild(label);
           }
-          sub.appendChild(cluster);
+          cluster = document.createElement("div");
+          cluster.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:var(--omp-space-1);";
+          block.appendChild(cluster);
+          sub.appendChild(block);
         }
         const btn = document.createElement("button");
         btn.type = "button";

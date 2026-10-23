@@ -19,6 +19,7 @@ import (
 	cloudmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/cloud"
 	extsvcmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/extsvc"
 	ingestmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/ingest"
+	jobsmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/jobs"
 	playoutmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/playout"
 	reviewmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/review"
 )
@@ -26,8 +27,8 @@ import (
 // registerModules meldet die Module des Orchestrators an (UMSETZUNG.md Kapitel 36). Cloud (36.6), Audio-Ausgabe (36.7),
 // Playout (36.8), Eingang/Review (Kapitel 43) sind Module; `extsvc` ist das Dienst-Gateway (Kapitel 48), über das Fachdienste in eigenen
 // Nodes (z. B. Intercom) Rechte, Oberfläche, Metriken und Audit in die Plattform einbringen.
-func registerModules(reg *module.Registry, playoutSvc *playoutmod.Services, reviewMod *reviewmod.Module, ingestMod *ingestmod.Module, extsvcMod *extsvcmod.Module) {
-	for _, m := range []module.Module{cloudmod.New(), playoutmod.New(playoutSvc), audiorulesmod.New(), reviewMod, ingestMod, extsvcMod} {
+func registerModules(reg *module.Registry, playoutSvc *playoutmod.Services, reviewMod *reviewmod.Module, ingestMod *ingestmod.Module, extsvcMod *extsvcmod.Module, jobsMod *jobsmod.Module) {
+	for _, m := range []module.Module{cloudmod.New(), playoutmod.New(playoutSvc), audiorulesmod.New(), reviewMod, ingestMod, extsvcMod, jobsMod} {
 		if err := reg.Register(m); err != nil {
 			slog.Error("module registration failed", "module", m.Name(), "error", err)
 		}

@@ -974,6 +974,66 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/jobs",
+    "auth": "feature:jobs.view|jobs.run|jobs.configure",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/jobs",
+    "auth": "feature:jobs.run|jobs.configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/jobs/calibration",
+    "auth": "feature:jobs.view|jobs.run|jobs.configure",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/jobs/calibration/apply",
+    "auth": "feature:jobs.configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/jobs/config",
+    "auth": "feature:jobs.view|jobs.run|jobs.configure",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/jobs/config",
+    "auth": "feature:jobs.configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/jobs/hosts",
+    "auth": "feature:jobs.view|jobs.run|jobs.configure",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/jobs/preview",
+    "auth": "feature:jobs.view|jobs.run|jobs.configure",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/jobs/{id}",
+    "auth": "feature:jobs.run|jobs.configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/jobs/{id}",
+    "auth": "feature:jobs.view|jobs.run|jobs.configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/layouts/{name}",
     "auth": "auth",
     "domain": "core"

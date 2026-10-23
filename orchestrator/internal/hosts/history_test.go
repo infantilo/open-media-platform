@@ -132,7 +132,10 @@ func TestHistoryWindowClampsToSupportedRange(t *testing.T) {
 	if win, ok := h.Window("host-1", 0); !ok || win.Resolution != "raw" {
 		t.Errorf("Window(0) = %+v, ok=%v, want clamped to >=1m raw window", win, ok)
 	}
-	if win, ok := h.Window("host-1", 999*time.Hour); !ok || win.Resolution != "aggregate" {
-		t.Errorf("Window(999h) = %+v, ok=%v, want clamped to <=24h aggregate window", win, ok)
+	if win, ok := h.Window("host-1", 999*time.Hour); !ok || win.Resolution != "hourly" {
+		t.Errorf("Window(999h) = %+v, ok=%v, want clamped to the 30-day hourly window (Kapitel 54)", win, ok)
+	}
+	if win, ok := h.Window("host-1", 24*time.Hour); !ok || win.Resolution != "aggregate" {
+		t.Errorf("Window(24h) = %+v, ok=%v, want aggregate", win, ok)
 	}
 }

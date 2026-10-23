@@ -104,7 +104,7 @@ func (t *Tools) RunQC(ctx context.Context, file string, prof QCProfile, progress
 
 	// ---- 1. Probe ----
 	progress("probe", 2)
-	stdout, code, err := t.R.Run(ctx, t.FFprobe, []string{"-v", "error", "-count_packets", "-show_format", "-show_streams", "-show_error", "-of", "json", file}, nil)
+	stdout, code, err := t.Exec().Run(ctx, t.FFprobe, []string{"-v", "error", "-count_packets", "-show_format", "-show_streams", "-show_error", "-of", "json", file}, nil)
 	if err != nil {
 		return nil, qcExec("probe", err)
 	}
@@ -235,7 +235,7 @@ func (t *Tools) RunQC(ctx context.Context, file string, prof QCProfile, progress
 	// ---- 2. Integrität (Decode) ----
 	progress("integrity", 10)
 	var decodeLines []string
-	_, icode, err := t.R.Run(ctx, t.FFmpeg, []string{"-nostdin", "-v", "error", "-i", file, "-map", "0:v?", "-map", "0:a?", "-f", "null", "-"}, func(l string) {
+	_, icode, err := t.Exec().Run(ctx, t.FFmpeg, []string{"-nostdin", "-v", "error", "-i", file, "-map", "0:v?", "-map", "0:a?", "-f", "null", "-"}, func(l string) {
 		if len(decodeLines) < 200 {
 			decodeLines = append(decodeLines, l)
 		}
@@ -527,7 +527,7 @@ func (q *qcCtx) videoPass(ctx context.Context, file string, video map[string]any
 	}
 	ip := &IntervalParser{}
 	var lines []string
-	_, code, err := q.t.R.Run(ctx, q.t.FFmpeg, []string{"-nostdin", "-v", "info", "-i", file, "-map", "0:v:0", "-vf", strings.Join(filters, ","), "-an", "-f", "null", "-"}, func(l string) {
+	_, code, err := q.t.Exec().Run(ctx, q.t.FFmpeg, []string{"-nostdin", "-v", "info", "-i", file, "-map", "0:v:0", "-vf", strings.Join(filters, ","), "-an", "-f", "null", "-"}, func(l string) {
 		ip.Line(l)
 		if strings.Contains(l, "idet") {
 			lines = append(lines, l)
@@ -650,7 +650,7 @@ func (q *qcCtx) audioPass(ctx context.Context, file string, i int, a map[string]
 	}
 	ip := &IntervalParser{}
 	tail := newTail(700)
-	_, code, err := q.t.R.Run(ctx, q.t.FFmpeg, []string{"-nostdin", "-v", "info", "-i", file, "-map", fmt.Sprintf("0:a:%d", i), "-af", strings.Join(filters, ","), "-vn", "-f", "null", "-"}, func(l string) {
+	_, code, err := q.t.Exec().Run(ctx, q.t.FFmpeg, []string{"-nostdin", "-v", "info", "-i", file, "-map", fmt.Sprintf("0:a:%d", i), "-af", strings.Join(filters, ","), "-vn", "-f", "null", "-"}, func(l string) {
 		ip.Line(l)
 		tail.add(l)
 	})
@@ -825,7 +825,7 @@ func (t *Tools) ProbeTimeline(ctx context.Context, file string) (*Timeline, map[
 	if err := t.Discover(ctx); err != nil {
 		return nil, nil, err
 	}
-	stdout, code, err := t.R.Run(ctx, t.FFprobe, []string{"-v", "error", "-count_packets", "-select_streams", "v:0", "-show_format", "-show_streams", "-of", "json", file}, nil)
+	stdout, code, err := t.Exec().Run(ctx, t.FFprobe, []string{"-v", "error", "-count_packets", "-select_streams", "v:0", "-show_format", "-show_streams", "-of", "json", file}, nil)
 	if err != nil {
 		return nil, nil, qcExec("probe", err)
 	}

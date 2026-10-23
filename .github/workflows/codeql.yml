@@ -38,7 +38,7 @@ jobs:
       - name: Go-Module bauen
         if: matrix.language == 'go'
         run: |
-          for m in orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check tools/update-bundle host-agent supervisor update nodeoptions; do
+          for m in orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check tools/update-bundle host-agent supervisor update nodeoptions jobwire; do
             (cd "$m" && go build ./...)
           done
 

@@ -7,6 +7,8 @@ export interface ModuleUITab {
   label: Record<string, string>;
   /** Beschriftung der Admin-Gruppe (nur bei Placement "admin:<gruppe>"). */
   group?: Record<string, string>;
+  /** Untergruppe in der Admin-Gruppe „platform“: access | operations | maintenance. */
+  cluster?: string;
   element: string;
   bundle: string;
 }
@@ -107,6 +109,7 @@ export interface AdminModuleTab {
   label: string;
   element: string;
   bundle: string;
+  cluster?: string;
 }
 
 export interface AdminModuleGroup {
@@ -133,7 +136,7 @@ export function adminGroups(modules: ModuleInfo[], lang: string): AdminModuleGro
         groups.set(gid, g);
       }
       if (u.group && g.label === gid) g.label = pickLabel(u.group, lang, gid);
-      g.tabs.push({ id: `mod:${m.name}:${u.id}`, module: m.name, label: pickLabel(u.label, lang, u.id), element: u.element, bundle: u.bundle });
+      g.tabs.push({ id: `mod:${m.name}:${u.id}`, module: m.name, label: pickLabel(u.label, lang, u.id), element: u.element, bundle: u.bundle, cluster: u.cluster });
     }
   }
   return [...groups.values()];

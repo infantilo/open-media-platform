@@ -29,6 +29,7 @@ type Sample struct {
 	Timestamp  time.Time `json:"timestamp"`
 	CPUPercent float64   `json:"cpuPercent"`
 	MemPercent float64   `json:"memPercent"`
+	Extra
 }
 
 // Aggregate fasst alle Samples innerhalb eines abgeschlossenen
@@ -42,6 +43,7 @@ type Aggregate struct {
 	MemAvg      float64   `json:"memAvg"`
 	MemMax      float64   `json:"memMax"`
 	SampleCount int       `json:"sampleCount"`
+	ExtraMax
 }
 
 // Summary ist die Min/Ø/Max-Zusammenfassung über das gesamte
@@ -65,6 +67,7 @@ type HistoryWindow struct {
 	Resolution string      `json:"resolution"`
 	Samples    []Sample    `json:"samples,omitempty"`
 	Aggregates []Aggregate `json:"aggregates,omitempty"`
+	Hours      []HourRow   `json:"hours,omitempty"`
 	Summary    Summary     `json:"summary"`
 }
 
@@ -75,6 +78,9 @@ type hostHistory struct {
 	// Nicht abgeschlossener aktueller 1-Minuten-Eimer.
 	bucketStart   time.Time
 	bucketSamples []Sample
+
+	hours []HourRow
+	acc   hourAcc
 }
 
 // History hält pro Host einen Ringpuffer aus Roh-Samples plus einen
@@ -83,6 +89,8 @@ type hostHistory struct {
 type History struct {
 	mu     sync.Mutex
 	byHost map[string]*hostHistory
+	// OnHour wird mit jeder abgeschlossenen Stunde aufgerufen (Persistenz, s. trend.go); nil = nur im Speicher.
+	OnHour func(hostID string, row HourRow)
 }
 
 // NewHistory erstellt eine leere Historie.
@@ -99,7 +107,7 @@ func (h *History) Record(hostID string, m Metrics) {
 	if m.MemTotalBytes > 0 {
 		memPercent = float64(m.MemUsedBytes) / float64(m.MemTotalBytes) * 100
 	}
-	sample := Sample{Timestamp: m.ReceivedAt, CPUPercent: m.CPUPercent, MemPercent: memPercent}
+	sample := Sample{Timestamp: m.ReceivedAt, CPUPercent: m.CPUPercent, MemPercent: memPercent, Extra: extraOf(m)}
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -128,6 +136,15 @@ func (h *History) Record(hostID string, m Metrics) {
 		hh.bucketSamples = nil
 	}
 	hh.bucketSamples = append(hh.bucketSamples, sample)
+	if row, done := hh.acc.add(sample); done && row.Samples > 0 {
+		hh.hours = append(hh.hours, row)
+		if len(hh.hours) > hourCapacity {
+			hh.hours = hh.hours[len(hh.hours)-hourCapacity:]
+		}
+		if h.OnHour != nil {
+			go h.OnHour(hostID, row)
+		}
+	}
 }
 
 func aggregateFrom(bucketStart time.Time, samples []Sample) Aggregate {
@@ -157,6 +174,9 @@ func aggregateFrom(bucketStart time.Time, samples []Sample) Aggregate {
 	agg.SampleCount = len(samples)
 	agg.CPUAvg = cpuSum / float64(len(samples))
 	agg.MemAvg = memSum / float64(len(samples))
+	for _, sm := range samples {
+		agg.ExtraMax = agg.ExtraMax.maxWith(sm.Extra)
+	}
 	return agg
 }
 
@@ -170,8 +190,8 @@ func (h *History) Window(hostID string, window time.Duration) (HistoryWindow, bo
 	if window < time.Minute {
 		window = time.Minute
 	}
-	if window > aggregateWindow {
-		window = aggregateWindow
+	if window > hourWindow {
+		window = hourWindow
 	}
 
 	h.mu.Lock()
@@ -196,6 +216,16 @@ func (h *History) Window(hostID string, window time.Duration) (HistoryWindow, bo
 			Samples:    samples,
 			Summary:    summarizeSamples(samples),
 		}, true
+	}
+
+	if window > aggregateWindow {
+		var hours []HourRow
+		for _, hr := range hh.hours {
+			if !hr.Hour.Before(cutoff) {
+				hours = append(hours, hr)
+			}
+		}
+		return HistoryWindow{Resolution: "hourly", Hours: hours, Summary: summarizeHours(hours)}, true
 	}
 
 	var aggregates []Aggregate

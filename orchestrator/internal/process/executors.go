@@ -688,7 +688,24 @@ type scriptConfig struct {
 	Command        string   `json:"command"`
 	Args           []string `json:"args,omitempty"`
 	TimeoutSeconds int      `json:"timeoutSeconds,omitempty"`
+	// Target: Ziel für ffmpeg/ffprobe, wenn ein JobRunner verdrahtet ist ("" = Standard der Konfiguration; auto | local |
+	// host:<id> | pool:<name>, docs/ENTWURF-FFMPEG-HOSTWAHL.md).
+	Target string `json:"target,omitempty"`
 }
+
+// JobRunner führt ffmpeg/ffprobe auf einem gewählten Host aus (internal/jobrun.Dispatcher). Ein Exit-Code ≠ 0 ist ein
+// Ergebnis (exit), err ≠ nil ein Ausführungsfehler.
+type JobRunner interface {
+	RunTool(ctx context.Context, caller, tool string, args []string, target string, timeout time.Duration) (stdout []byte, tail []string, exit int, host string, err error)
+}
+
+// ScriptOption ändert das Verhalten von NewScriptExecutor.
+type ScriptOption func(*scriptOpts)
+
+type scriptOpts struct{ jobs JobRunner }
+
+// WithJobRunner leitet ffmpeg-/ffprobe-Schritte über den Job-Dispatcher (Host-Auswahl, Lastverteilung, Sendeschutz).
+func WithJobRunner(j JobRunner) ScriptOption { return func(o *scriptOpts) { o.jobs = j } }
 
 // scriptOutput ist der Output eines Script-Schritts.
 type scriptOutput struct {
@@ -719,7 +736,11 @@ const maxScriptOutputBytes = 1 << 20 // 1 MiB je Strom — ein Steuerungs-Output
 // akzeptieren — main.go entscheidet bewusst, was erlaubt ist, per
 // exec.LookPath ermittelt statt geraten (z. B. {"ffprobe": "/usr/bin/
 // ffprobe", "ffmpeg": "/usr/bin/ffmpeg"}, falls auf dem Host installiert).
-func NewScriptExecutor(allowedCommands map[string]string, eval *Evaluator) StepExecutor {
+func NewScriptExecutor(allowedCommands map[string]string, eval *Evaluator, opts ...ScriptOption) StepExecutor {
+	var so scriptOpts
+	for _, o := range opts {
+		o(&so)
+	}
 	return StepExecutorFunc(func(ctx context.Context, ec ExecutionCtx, step Step) (json.RawMessage, error) {
 		var cfg scriptConfig
 		if err := json.Unmarshal(step.Config, &cfg); err != nil || cfg.Command == "" {
@@ -746,6 +767,24 @@ func NewScriptExecutor(allowedCommands map[string]string, eval *Evaluator) StepE
 		}
 		runCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
+
+		if so.jobs != nil && (cfg.Command == "ffmpeg" || cfg.Command == "ffprobe") {
+			stdout, tail, exit, host, jerr := so.jobs.RunTool(runCtx, "script", cfg.Command, args, cfg.Target, timeout)
+			if jerr != nil {
+				return nil, fmt.Errorf("process: step %q: command %q could not run: %w", step.ID, cfg.Command, jerr)
+			}
+			out := scriptOutput{ExitCode: exit, Stdout: truncate(string(stdout), maxScriptOutputBytes), Stderr: strings.Join(tail, "\n")}
+			_ = host
+			out.JSON = parseStdoutJSON(out.Stdout)
+			raw, marshalErr := json.Marshal(out)
+			if marshalErr != nil {
+				return nil, fmt.Errorf("process: step %q: marshal script output: %w", step.ID, marshalErr)
+			}
+			if exit != 0 {
+				return nil, fmt.Errorf("process: step %q: command %q failed: exit status %d (stderr: %s)", step.ID, cfg.Command, exit, truncate(out.Stderr, 500))
+			}
+			return raw, nil
+		}
 
 		cmd := exec.CommandContext(runCtx, binary, args...)
 		var stdout, stderr bytes.Buffer

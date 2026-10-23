@@ -104,6 +104,10 @@ type Tools struct {
 	FFmpeg  string
 	FFprobe string
 	R       Runner
+	// QCJobs/ProxyJobs: optional — Jobs über den Job-Dispatcher (Host-Auswahl, Lastverteilung, Sendeschutz,
+	// docs/ENTWURF-FFMPEG-HOSTWAHL.md). nil: lokal über R. Die Selbstauskunft (-version, -filters) bleibt immer lokal (R).
+	QCJobs    Runner
+	ProxyJobs Runner
 
 	once     sync.Once
 	versions map[string]string
@@ -120,6 +124,22 @@ func NewTools(ffmpegPath, ffprobePath string) *Tools {
 		ffprobePath, _ = exec.LookPath("ffprobe")
 	}
 	return &Tools{FFmpeg: ffmpegPath, FFprobe: ffprobePath, R: newOSRunner()}
+}
+
+// Exec: Ausführung der QC-Läufe (Klasse batch).
+func (t *Tools) Exec() Runner {
+	if t.QCJobs != nil {
+		return t.QCJobs
+	}
+	return t.R
+}
+
+// ExecProxy: Ausführung für Proxy/Einzelbild (Klasse interactive).
+func (t *Tools) ExecProxy() Runner {
+	if t.ProxyJobs != nil {
+		return t.ProxyJobs
+	}
+	return t.R
 }
 
 // ExecError: die Analyse konnte nicht (vollständig) ausgeführt werden.

@@ -3,6 +3,7 @@ package commands
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -258,4 +259,21 @@ func processAlive(pid int) bool {
 		return false
 	}
 	return process.Signal(syscall.Signal(0)) == nil
+}
+
+// Vertragstest, Gegenstück in orchestrator/internal/jobrun/contract_test.go (gleiche Zeichenkette).
+func TestVertragJobRequest(t *testing.T) {
+	const wire = `{"action":"exec","jobId":"j1-1","tool":"ffmpeg","args":["-i","/a"],"timeoutS":60,"nice":10}`
+	req, err := DecodeRequest([]byte(wire))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Action != "exec" || req.JobID != "j1-1" || req.Tool != "ffmpeg" || len(req.Args) != 2 || req.TimeoutS != 60 || req.Nice != 10 {
+		t.Fatalf("%+v", req)
+	}
+	// Ohne tools.json lehnt der Agent jede Job-Aktion ab
+	e := NewExecutor(nil, "", "", "", "h", nil)
+	if r := e.Handle(req); r.OK || !strings.Contains(r.Error, "tools.json") {
+		t.Fatalf("%+v", r)
+	}
 }

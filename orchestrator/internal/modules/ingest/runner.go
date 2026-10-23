@@ -524,19 +524,38 @@ func (s *Service) process(ctx context.Context, j Job) {
 		return
 	}
 	out := strings.TrimSuffix(j.FilePath, filepath.Ext(j.FilePath)) + ".conv" + p.Convert.Ext
-	if s.FFmpeg == "" {
+	if s.FFmpeg == "" && s.Jobs == nil {
 		s.publishAsset(ctx, j)
 		s.failWith(ctx, j, "processing", "ffmpeg nicht verfügbar — Rohaufnahme bleibt erhalten", "")
 		return
 	}
-	args := append([]string{"-nostdin", "-v", "error", "-y", "-i", j.FilePath}, p.Convert.Args...)
-	args = append(args, out+".part"+p.Convert.Ext)
 	cctx, cancel := context.WithTimeout(ctx, 6*time.Hour)
 	defer cancel()
-	if b, err := exec.CommandContext(cctx, s.FFmpeg, args...).CombinedOutput(); err != nil {
+	var runErr error
+	var msg string
+	if s.Jobs != nil {
+		// über den Dispatcher: absolute Pfade (der Host sieht nicht unser Arbeitsverzeichnis), Host-Auswahl und Sendeschutz inklusive
+		inAbs, _ := filepath.Abs(j.FilePath)
+		partAbs, _ := filepath.Abs(out + ".part" + p.Convert.Ext)
+		args := append([]string{"-nostdin", "-v", "error", "-y", "-i", inAbs}, p.Convert.Args...)
+		args = append(args, partAbs)
+		var lines []string
+		_, code, err := s.Jobs.Run(cctx, "ffmpeg", args, func(l string) { lines = append(lines, l) })
+		if err != nil {
+			runErr, msg = err, err.Error()
+		} else if code != 0 {
+			runErr, msg = fmt.Errorf("exit status %d", code), strings.Join(lines, "\n")
+		}
+	} else {
+		args := append([]string{"-nostdin", "-v", "error", "-y", "-i", j.FilePath}, p.Convert.Args...)
+		args = append(args, out+".part"+p.Convert.Ext)
+		b, err := exec.CommandContext(cctx, s.FFmpeg, args...).CombinedOutput()
+		runErr, msg = err, string(b)
+	}
+	if runErr != nil {
 		_ = os.Remove(out + ".part" + p.Convert.Ext)
 		s.publishAsset(ctx, j) // Rohaufnahme nicht verlieren
-		s.failWith(ctx, j, "processing", "Konvertierung fehlgeschlagen (Rohaufnahme erhalten): "+strings.TrimSpace(string(b)), "")
+		s.failWith(ctx, j, "processing", "Konvertierung fehlgeschlagen (Rohaufnahme erhalten): "+strings.TrimSpace(msg), "")
 		return
 	}
 	if err := os.Rename(out+".part"+p.Convert.Ext, out); err != nil {

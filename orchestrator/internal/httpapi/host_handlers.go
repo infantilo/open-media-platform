@@ -2,10 +2,10 @@ package httpapi
 
 import (
 	"bytes"
-	"io"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -54,7 +54,7 @@ type IOPortInventoryStore interface {
 // handleListAuditLog).
 const (
 	defaultHistoryWindow = time.Hour
-	maxHistoryWindow     = 24 * time.Hour
+	maxHistoryWindow     = 30 * 24 * time.Hour
 )
 
 // bootstrapTokenTTL ist die Gültigkeitsdauer eines ausgestellten

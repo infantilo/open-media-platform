@@ -27,6 +27,8 @@ type Module struct {
 	Assets  *asset.Store // optional: derselbe Store wie im Kern (mit Outbox)
 	DataDir string       // Proxies; leer = $OMP_REVIEW_DIR oder data/review
 	Tools   *Tools       // optional (Tests)
+	// QCRunner/ProxyRunner: optional — QC- bzw. Proxy-Läufe über den Job-Dispatcher (Host-Auswahl, Sendeschutz).
+	QCRunner, ProxyRunner Runner
 
 	mu  sync.Mutex
 	svc *Service
@@ -89,6 +91,12 @@ func (m *Module) service(d module.Deps) *Service {
 	tools := m.Tools
 	if tools == nil {
 		tools = NewTools(os.Getenv("OMP_FFMPEG"), os.Getenv("OMP_FFPROBE"))
+	}
+	if m.QCRunner != nil && tools.QCJobs == nil {
+		tools.QCJobs = m.QCRunner
+	}
+	if m.ProxyRunner != nil && tools.ProxyJobs == nil {
+		tools.ProxyJobs = m.ProxyRunner
 	}
 	m.cfg.get = func() ([]byte, error) {
 		if d.Settings == nil {

@@ -41,6 +41,9 @@ export interface PlacementAdvice {
   suggestedHostId?: string;
   suggestedHostLabel?: string;
   detectedAt: string;
+  /** Vorwarnung aus dem Trend (Kapitel 54): noch unter der Schwelle, läuft aber darauf zu. */
+  predicted?: boolean;
+  minutesToLimit?: number;
 }
 
 export interface Workflow {
@@ -144,11 +147,13 @@ export function buildAlarms(
     const netPart = a.netPercent !== undefined ? tt("y.netPart", { p0: a.netPercent.toFixed(0) }) : "";
     alarms.push({
       key: `placement:${a.hostId}`,
-      fingerprint: `${a.reason}|${[...a.instanceIds].sort().join(",")}`,
+      fingerprint: `${a.predicted ? "predicted|" : ""}${a.reason}|${[...a.instanceIds].sort().join(",")}`,
       severity: "warning",
       source: t("alarms.c2ca16"),
       title: a.hostLabel,
-      detail: t("alarms.fee224", { p0: reasonLabel(a.reason), p1: a.cpuPercent.toFixed(0), p2: a.memPercent.toFixed(0), p3: netPart, p4: a.instanceIds.length, p5: target }),
+      detail: a.predicted
+        ? t("alarms.predicted", { p0: reasonLabel(a.reason), p1: a.minutesToLimit ?? 0, p2: a.cpuPercent.toFixed(0), p3: a.memPercent.toFixed(0), p4: a.instanceIds.length, p5: target })
+        : t("alarms.fee224", { p0: reasonLabel(a.reason), p1: a.cpuPercent.toFixed(0), p2: a.memPercent.toFixed(0), p3: netPart, p4: a.instanceIds.length, p5: target }),
     });
   }
 

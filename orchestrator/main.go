@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -41,6 +42,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/httpapi"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/ioports"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/jobrun"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/locations"
@@ -48,8 +50,9 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/maintenance"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/materialize"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
-	ingestmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/ingest"
 	extsvcmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/extsvc"
+	ingestmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/ingest"
+	jobsmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/jobs"
 	playoutmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/playout"
 	reviewmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/review"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
@@ -335,7 +338,8 @@ func main() {
 	reviewMod := reviewmod.New(nil)                  // der Asset-Store folgt weiter unten (assetStore), vor dem Mounten der Routen
 	ingestMod := ingestmod.New(ingestmod.Services{}) // Kern-Dienste folgen weiter unten (vor dem Mounten der Routen)
 	extsvcMod := extsvcmod.New(extsvcmod.Services{}) // Registry, Launcher und Node-Client folgen weiter unten
-	registerModules(modules, playoutSvc, reviewMod, ingestMod, extsvcMod)
+	jobsMod := jobsmod.New()                         // ffmpeg-Jobs: Host-Auswahl, Lastverteilung, Sendeschutz (Kapitel 52)
+	registerModules(modules, playoutSvc, reviewMod, ingestMod, extsvcMod, jobsMod)
 	if err := modules.Migrate(ctx, database); err != nil {
 		slog.Error("module migration failed (affected modules are not mounted)", "error", err)
 	}
@@ -735,6 +739,25 @@ func main() {
 	// Host-Momentwerte zu projizieren, statt nur mit ihnen allein zu
 	// rechnen.
 	profileStore := profiles.NewStore(database)
+	jobsMod.History, jobsMod.Profiles = hostHistory, profileStore
+	// Trend-Daten (Kapitel 54): Stundenwerte der Host-Telemetrie in Postgres (30 Tage) — überleben Neustarts, Grundlage der
+	// Auto-Kalibrierung der Live-Reserve und der 7-/30-Tage-Ansicht.
+	hourStore := hosts.NewHourStore(database)
+	if rows, herr := hourStore.Load(ctx, time.Now().Add(-30*24*time.Hour)); herr != nil {
+		slog.Warn("trend: Stundenwerte nicht lesbar", "error", herr)
+	} else {
+		for id, r := range rows {
+			hostHistory.Seed(id, r)
+		}
+	}
+	hostHistory.OnHour = func(id string, row hosts.HourRow) {
+		if serr := hourStore.Save(id, row); serr != nil {
+			slog.Warn("trend: Stundenwert nicht gespeichert", "host", id, "error", serr)
+		}
+	}
+	// Der Orchestrator-Rechner selbst ist kein Host-Agent und sendet keine Telemetrie über NATS: hier alle 5 s ins Verlaufsmodell
+	// eintragen (Host-ID "local"), samt Live-Anteil der lokal gestarteten Instanzen.
+	go recordLocalHost(ctx, launcherSvc, hostHistory)
 	profileCollector := profiles.NewCollector(launcherSvc, hostMetricsTracker, profileStore)
 	go profileCollector.Run(ctx)
 
@@ -755,6 +778,16 @@ func main() {
 		HealthyGpuPercent: cfg.PlacementHealthyGpuThreshold,
 	}
 	placementEngine := placement.NewEngine(hostStore, hostMetricsTracker, launcherSvc, hub, placementThresholds, profileStore)
+	// Trend-Vorwarnung (Kapitel 54): OMP_PLACEMENT_PREDICT = off | warn (Standard: Alarm + Vorschlag) | act (auch automatische
+	// Eskalation der Rolle, bevor die Schwelle erreicht ist); OMP_PLACEMENT_PREDICT_HORIZON_MIN = Vorlauf in Minuten (Standard 60).
+	prediction := placement.DefaultPrediction
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("OMP_PLACEMENT_PREDICT"))); v == "off" || v == "warn" || v == "act" {
+		prediction.Mode = v
+	}
+	if v, perr := strconv.Atoi(os.Getenv("OMP_PLACEMENT_PREDICT_HORIZON_MIN")); perr == nil && v >= 5 && v <= 480 {
+		prediction.Horizon = time.Duration(v) * time.Minute
+	}
+	placementEngine.SetPrediction(hostHistory, prediction)
 	// D12 Teil 3: nur die aktuelle Leader-Instanz wertet aus/löst
 	// Migrations-Empfehlungen aus (s. runWhileLeader-Doku) — ohne dieses
 	// Gating würde jede Cluster-Instanz unabhängig denselben Alarm
@@ -888,7 +921,31 @@ func main() {
 	assetStore := asset.NewStore(database, asset.WithOutbox(outboxStore))
 	reviewMod.Assets = assetStore
 	ingestFFmpeg, _ := exec.LookPath("ffmpeg")
-	ingestMod.S = ingestmod.Services{Assets: assetStore, Launcher: launcherSvc, Nodes: store, Graph: graphSvc, FFmpeg: ingestFFmpeg}
+	// ffmpeg-Jobs (Kapitel 52): Dispatcher verdrahten — Weg zu den Host-Agents, Pfadprüfung auf Hosts, gebuchte Live-Zeit
+	// der Aufnahmen; QC, Proxy, Ingest-Nachbearbeitung und Script-Schritte laufen darüber.
+	jobDisp := jobsMod.Dispatcher()
+	if nc != nil {
+		jobDisp.Bus = jobrun.NATSBus{Conn: nc}
+	}
+	jobDisp.CheckPath = func(hostID, path, kind string) (bool, string) {
+		info, perr := launcherSvc.CheckPathOnHost(hostID, path, kind)
+		switch {
+		case perr != nil:
+			return false, perr.Error()
+		case !info.Exists:
+			return false, "nicht vorhanden: " + path
+		case kind == "dir" && !info.IsDir:
+			return false, path + " ist kein Verzeichnis"
+		case kind != "dir" && !info.Readable:
+			return false, path + " nicht lesbar"
+		}
+		return true, ""
+	}
+	jobDisp.Busy = jobsmod.BusyFromBookings(ingestMod.BusyOn)
+	reviewMod.QCRunner = &jobrun.Runner{D: jobDisp, Caller: "qc", Class: jobrun.ClassBatch}
+	reviewMod.ProxyRunner = &jobrun.Runner{D: jobDisp, Caller: "proxy", Class: jobrun.ClassInteractive}
+	ingestMod.S = ingestmod.Services{Assets: assetStore, Launcher: launcherSvc, Nodes: store, Graph: graphSvc, FFmpeg: ingestFFmpeg,
+		Jobs: &jobrun.Runner{D: jobDisp, Caller: "convert", Class: jobrun.ClassScheduled}}
 	extsvcMod.S = extsvcmod.Services{Nodes: store, Secrets: serviceSecrets{l: launcherSvc, token: serviceToken}, HTTP: &http.Client{Transport: nodeTransport, Timeout: 10 * time.Second}}
 	processStore := process.NewStore(database)
 	// EventPublisher = nc direkt (erfüllt process.EventPublisher: Publish
@@ -934,7 +991,7 @@ func main() {
 	// ffmpegtools.Store bleibt dann nutzbar, meldet aber Available()==false.
 	ffmpegToolsStore := ffmpegtools.NewStore(scriptAllowList["ffmpeg"])
 	if scriptEval, err := process.NewEvaluator(); err == nil {
-		processEngine.Register(process.StepTypeScript, process.NewScriptExecutor(scriptAllowList, scriptEval))
+		processEngine.Register(process.StepTypeScript, process.NewScriptExecutor(scriptAllowList, scriptEval, process.WithJobRunner(jobDisp)))
 	} else {
 		slog.Error("process: script executor: evaluator init failed, Script-Schritte bleiben unregistriert", "error", err)
 	}

@@ -35,6 +35,8 @@ import {
   zoomAt,
 } from "./geometry.ts";
 import { portsCompatible } from "./compatibility.ts";
+import { searchNodes } from "./node-search-logic.ts";
+import { showToast } from "../kit/omp-toast.ts";
 import {
   addMember,
   breadcrumbPath,
@@ -2869,7 +2871,20 @@ export class FlowCanvas extends HTMLElement {
     return tiles;
   }
 
+  // Die Kopfleiste wird bei jedem Neuzeichnen (Poll, SSE) neu aufgebaut. Das Suchfeld darin darf dabei weder den Fokus noch die
+  // offene Trefferliste verlieren: Fokus und Cursor werden nach dem Aufbau wiederhergestellt.
   #renderBreadcrumb() {
+    const input = this.#nodeSearchEl?.querySelector("input") ?? null;
+    const hadFocus = !!input && document.activeElement === input;
+    const sel: [number | null, number | null] = input ? [input.selectionStart, input.selectionEnd] : [null, null];
+    this.#renderBreadcrumbInner();
+    if (hadFocus && input && input.isConnected) {
+      input.focus({ preventScroll: true });
+      if (sel[0] !== null && sel[1] !== null) input.setSelectionRange(sel[0], sel[1]);
+    }
+  }
+
+  #renderBreadcrumbInner() {
     this.#breadcrumbBar.replaceChildren();
 
     // Bug 2: eigener Breadcrumb statt Gruppen-Pfad — der bearbeitete
@@ -2957,9 +2972,10 @@ export class FlowCanvas extends HTMLElement {
     // Immer `auto`, unabhängig vom Scope — schiebt den Button (und die
     // beiden folgenden, nur innerhalb einer Gruppe sichtbaren Knöpfe)
     // zuverlässig an den rechten Rand, außerhalb der Palette-Spalte.
+    this.#breadcrumbBar.appendChild(this.#buildNodeSearch());
     const fitBtn = document.createElement("button");
     fitBtn.textContent = tt("flow.05b4ea");
-    fitBtn.style.cssText = "margin-left:auto;font-size:var(--omp-font-size-xs);";
+    fitBtn.style.cssText = "font-size:var(--omp-font-size-xs);";
     fitBtn.addEventListener("click", () => this.#fitAllToViewport());
     this.#breadcrumbBar.appendChild(fitBtn);
 
@@ -3170,6 +3186,135 @@ export class FlowCanvas extends HTMLElement {
       this.#enterScope(scopeGroupId);
     });
     return link;
+  }
+
+  // Node-Suche in der Kopfleiste: Treffer aus allen Gruppen; Auswahl wechselt in die Gruppe des Nodes,
+  // markiert ihn und zentriert die Ansicht darauf. Das Element bleibt über Neuzeichnen erhalten (Fokus/Text).
+  #nodeSearchEl?: HTMLElement;
+  #nodeSearchQuery = "";
+
+  #buildNodeSearch(): HTMLElement {
+    if (this.#nodeSearchEl) {
+      const old = this.#nodeSearchEl.querySelector("input");
+      if (old && old.value !== this.#nodeSearchQuery) old.value = this.#nodeSearchQuery;
+      return this.#nodeSearchEl;
+    }
+    const wrap = document.createElement("span");
+    wrap.setAttribute("data-role", "node-search");
+    wrap.style.cssText = "position:relative;margin-left:auto;display:inline-block;";
+    const input = document.createElement("input");
+    input.type = "search";
+    input.className = "omp-search-input";
+    input.setAttribute("data-role", "node-search-input");
+    input.placeholder = tt("flow.nodeSearch.placeholder");
+    input.title = tt("flow.nodeSearch.title");
+    input.setAttribute("aria-label", tt("flow.nodeSearch.title"));
+    input.style.cssText = "width:200px;font-size:var(--omp-font-size-xs);box-sizing:border-box;";
+    const list = document.createElement("div");
+    list.setAttribute("data-role", "node-search-results");
+    list.className = "omp-popover";
+    list.style.cssText = "position:absolute;right:0;top:100%;min-width:260px;max-height:320px;overflow-y:auto;display:none;z-index:40;padding:4px 0;";
+    let active = -1;
+    let hits: ReturnType<typeof searchNodes> = [];
+    const close = () => {
+      list.style.display = "none";
+      active = -1;
+    };
+    const paint = () => {
+      list.replaceChildren();
+      if (this.#nodeSearchQuery.trim() === "") return close();
+      if (hits.length === 0) {
+        const none = document.createElement("div");
+        none.textContent = tt("flow.nodeSearch.none");
+        none.style.cssText = "padding:6px 12px;color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);";
+        list.appendChild(none);
+      }
+      hits.forEach((h, i) => {
+        const row = document.createElement("div");
+        row.setAttribute("data-node-id", h.id);
+        row.style.cssText = "padding:5px 12px;cursor:pointer;font-size:var(--omp-font-size-xs);" + (i === active ? "background:var(--omp-surface-raised);" : "");
+        const name = document.createElement("div");
+        name.textContent = h.label;
+        row.appendChild(name);
+        if (h.groupPath) {
+          const sub = document.createElement("div");
+          sub.textContent = h.groupPath;
+          sub.style.cssText = "color:var(--omp-text-dim);font-size:10px;";
+          row.appendChild(sub);
+        }
+        row.addEventListener("pointerdown", (ev) => {
+          ev.preventDefault(); // Fokus im Eingabefeld behalten, bis die Auswahl ausgeführt ist
+          pick(i);
+        });
+        list.appendChild(row);
+      });
+      list.style.display = "block";
+    };
+    const pick = (i: number) => {
+      const h = hits[i];
+      if (!h) return;
+      close();
+      this.#revealNode(h.id, h.groupId);
+    };
+    input.addEventListener("input", () => {
+      this.#nodeSearchQuery = input.value;
+      hits = searchNodes(this.#graph.nodes, this.#groupTree, input.value);
+      active = hits.length > 0 ? 0 : -1;
+      paint();
+    });
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+        if (hits.length === 0) return;
+        ev.preventDefault();
+        active = (active + (ev.key === "ArrowDown" ? 1 : -1) + hits.length) % hits.length;
+        paint();
+      } else if (ev.key === "Enter") {
+        ev.preventDefault();
+        pick(Math.max(active, 0));
+      } else if (ev.key === "Escape") {
+        input.value = "";
+        this.#nodeSearchQuery = "";
+        hits = [];
+        close();
+      }
+    });
+    // Verzögert und nur, wenn der Fokus wirklich woanders ist: beim Umhängen der Kopfleiste (Neuzeichnen) kommt der Fokus sofort zurück.
+    input.addEventListener("blur", () => setTimeout(() => { if (document.activeElement !== input) close(); }, 150));
+    input.addEventListener("focus", () => {
+      if (input.value.trim() !== "") {
+        hits = searchNodes(this.#graph.nodes, this.#groupTree, input.value);
+        paint();
+      }
+    });
+    wrap.append(input, list);
+    this.#nodeSearchEl = wrap;
+    return wrap;
+  }
+
+  // Zeigt einen Node: in seine Gruppe wechseln, auswählen, Ansicht darauf zentrieren (Zoom bleibt).
+  #revealNode(nodeId: string, groupId: string | null) {
+    if (this.#workflowEditId) this.#exitWorkflowEditScope();
+    if (this.#scope !== groupId) this.#enterScope(groupId);
+    else this.#assignMissingPositions();
+    const pos = this.#positions[nodeId];
+    const visible = this.#buildTilesAtScope().some((t) => t.id === nodeId);
+    if (!pos || !visible) {
+      const label = this.#graph.nodes.find((n) => n.id === nodeId)?.label ?? nodeId;
+      showToast(tt("flow.nodeSearch.hidden", { p0: label }));
+      return;
+    }
+    const rect = this.#svg.getBoundingClientRect();
+    const height = this.#tileHeightById.get(nodeId) ?? nodeHeight(0, 0);
+    const scale = this.#viewport.scale;
+    this.#selectedIds = new Set([nodeId]);
+    this.#selectedEdgeId = null;
+    this.#viewport = {
+      scale,
+      x: rect.width / 2 - (pos.x + NODE_WIDTH / 2) * scale,
+      y: rect.height / 2 - (pos.y + height / 2) * scale,
+    };
+    this.#render();
+    this.#saveLayout();
   }
 
   #enterScope(groupId: string | null) {

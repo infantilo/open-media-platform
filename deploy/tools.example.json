@@ -1,0 +1,10 @@
+{
+  "tools": {
+    "ffmpeg":  { "path": "/usr/bin/ffmpeg",  "maxJobs": 2, "nice": 10, "threads": 0 },
+    "ffprobe": { "path": "/usr/bin/ffprobe", "maxJobs": 4 }
+  },
+  "jobRoots": ["/srv/media"],
+  "allowNet": false,
+  "maxJobs": 2,
+  "cpuQuota": "200%"
+}

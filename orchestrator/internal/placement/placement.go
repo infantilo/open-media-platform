@@ -173,7 +173,11 @@ type Advice struct {
 	// GpuPercent ist nil, wenn dieser Host keinen GPU-Index für die
 	// Telemetrie konfiguriert hat (s. gpuUtilizationPercent) — kein
 	// stiller 0-Wert, exakt wie NetPercent oben.
-	GpuPercent         *float64  `json:"gpuPercent,omitempty"`
+	GpuPercent *float64 `json:"gpuPercent,omitempty"`
+	// Predicted: Vorwarnung aus dem Trend — der Host liegt noch unter der Schwelle, läuft aber voraussichtlich in MinutesToLimit
+	// Minuten darüber (Kapitel 54). Die Werte CPUPercent/MemPercent sind die aktuellen Messwerte.
+	Predicted          bool      `json:"predicted,omitempty"`
+	MinutesToLimit     int       `json:"minutesToLimit,omitempty"`
 	InstanceIDs        []string  `json:"instanceIds"`
 	SuggestedHostID    string    `json:"suggestedHostId,omitempty"`
 	SuggestedHostLabel string    `json:"suggestedHostLabel,omitempty"`
@@ -216,8 +220,10 @@ type Engine struct {
 	profiles   ProfileReader
 	adviceObs  AdviceObserver
 
-	mu     sync.RWMutex
-	advice map[string]Advice // hostID -> aktueller Alarm
+	mu      sync.RWMutex
+	advice  map[string]Advice // hostID -> aktueller Alarm
+	trends  TrendSource
+	predict Prediction
 	// draining: Hosts, die geleert werden (Cloud-Abbau, ARCHITECTURE.md §27.5) — bekommen keine neue Last.
 	draining map[string]bool
 	// maintenance: Hosts im Wartungsmodus (internal/maintenance) — wie draining gesperrt, aber unabhängig vom Cloud-Abbau.
@@ -257,6 +263,51 @@ func (e *Engine) SetMaintenance(hostID string, on bool) {
 	} else {
 		delete(e.maintenance, hostID)
 	}
+}
+
+// TrendSource liefert die Tendenz von CPU und Speicher eines Hosts (hosts.History.Trend).
+type TrendSource interface {
+	Trend(hostID string, window time.Duration) (cpu, mem hosts.Trend, ok bool)
+}
+
+// Prediction steuert die Trend-Vorwarnung (Kapitel 54). Mode: "off" | "warn" (Standard: Alarm und Vorschlag, aber keine
+// automatische Migration) | "act" (wie ein echter Alarm: die Eskalation der Rolle — advisory oder Auto-Bestätigungsfenster — greift
+// schon vor dem Überschreiten).
+type Prediction struct {
+	Mode string
+	// Horizon: so weit im Voraus wird gewarnt.
+	Horizon time.Duration
+	// Window: Betrachtungsfenster der Geraden (mindestens 20 min Daten nötig).
+	Window time.Duration
+	// MinSlopePerHour: kleinere Steigungen (Prozentpunkte je Stunde) gelten als „flach“.
+	MinSlopePerHour float64
+	// MinLevel: erst ab diesem Anteil der Schwelle (0–1) wird gewarnt.
+	MinLevel float64
+	// MinR2: Mindestgüte der Geraden, sonst gilt der Verlauf als Rauschen.
+	MinR2 float64
+}
+
+// DefaultPrediction: 60 min Vorlauf, 45 min Fenster, ≥ 4 Punkte/h, ab 60 % der Schwelle, R² ≥ 0,5; nur warnen.
+var DefaultPrediction = Prediction{Mode: "warn", Horizon: 60 * time.Minute, Window: 45 * time.Minute, MinSlopePerHour: 4, MinLevel: 0.6, MinR2: 0.5}
+
+// SetPrediction verdrahtet die Trend-Vorwarnung (vor dem ersten Run()-Tick, wie SetAdviceObserver).
+func (e *Engine) SetPrediction(src TrendSource, p Prediction) {
+	e.trends, e.predict = src, p
+}
+
+// predictMinutes: in wie vielen Minuten erreicht der Trend die Grenze? ok=false: keine belastbare Vorhersage.
+func predictMinutes(t hosts.Trend, limit float64, p Prediction) (int, bool) {
+	if t.SpanMin < 20 || t.R2 < p.MinR2 || t.SlopePerHour < p.MinSlopePerHour || t.Fitted >= limit || t.Fitted < p.MinLevel*limit {
+		return 0, false
+	}
+	min := (limit - t.Fitted) / t.SlopePerHour * 60
+	if min > p.Horizon.Minutes() {
+		return 0, false
+	}
+	if min < 1 {
+		min = 1
+	}
+	return int(min + 0.5), true
 }
 
 // SetAdviceObserver verdrahtet den Eskalations-Beobachter nach dem
@@ -812,6 +863,47 @@ func (e *Engine) evaluateOnce() {
 		next[s.host.ID] = advice
 	}
 
+	// Trend-Vorwarnung: Hosts mit Instanzen, die noch unter der Schwelle liegen, aber darauf zulaufen
+	if e.trends != nil && e.predict.Mode != "off" && e.predict.Mode != "" {
+		for _, s := range withMetrics {
+			if _, over := next[s.host.ID]; over {
+				continue
+			}
+			instanceIDs := instancesByHost[s.host.ID]
+			if len(instanceIDs) == 0 {
+				continue
+			}
+			ct, mt, ok := e.trends.Trend(s.host.ID, e.predict.Window)
+			if !ok {
+				continue
+			}
+			var parts []string
+			minutes := 0
+			if m, ok := predictMinutes(ct, e.thresholds.CPUPercent, e.predict); ok {
+				parts, minutes = append(parts, "cpu"), m
+			}
+			if m, ok := predictMinutes(mt, e.thresholds.MemPercent, e.predict); ok {
+				parts = append(parts, "mem")
+				if minutes == 0 || m < minutes {
+					minutes = m
+				}
+			}
+			if len(parts) == 0 {
+				continue
+			}
+			detectedAt := time.Now()
+			if old, ok := prev[s.host.ID]; ok && old.Predicted {
+				detectedAt = old.DetectedAt
+			}
+			adv := Advice{HostID: s.host.ID, HostLabel: s.host.Label, Reason: strings.Join(parts, "+"), CPUPercent: s.m.CPUPercent, MemPercent: s.memPercent,
+				NetPercent: s.netPercent, GpuPercent: s.gpuPercent, InstanceIDs: instanceIDs, DetectedAt: detectedAt, Predicted: true, MinutesToLimit: minutes}
+			if target, ok := e.healthiestAlternative(withMetrics, s.host.ID); ok {
+				adv.SuggestedHostID, adv.SuggestedHostLabel = target.host.ID, target.host.Label
+			}
+			next[s.host.ID] = adv
+		}
+	}
+
 	e.mu.Lock()
 	e.advice = next
 	e.mu.Unlock()
@@ -874,7 +966,8 @@ func (e *Engine) publishChanges(prev, next map[string]Advice) {
 			continue
 		}
 		e.broadcastAdvice(a)
-		if e.adviceObs != nil {
+		// Eine Vorwarnung löst die Eskalation (Migration) nur im Modus "act" aus; sonst bleibt sie Alarm + Vorschlag.
+		if e.adviceObs != nil && (!a.Predicted || e.predict.Mode == "act") {
 			e.adviceObs.OnAdviceRaised(a)
 		}
 	}

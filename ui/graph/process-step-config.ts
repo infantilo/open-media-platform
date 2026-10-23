@@ -2306,6 +2306,24 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
   const timeout = durationInput(typeof cfg.timeoutSeconds === "number" ? cfg.timeoutSeconds : undefined);
   const more = h("details", "margin-top:12px;border-top:1px solid var(--omp-border);padding-top:8px;");
   more.append(h("summary", "cursor:pointer;font-weight:600;", tt("psc.sec.more")), field(tt("psc.31b5c0"), timeout.el, tt("psc.733355")));
+  // Ausführungsort (Kapitel 52): leer = Standard der Job-Einstellungen; auto | local | host:<id> | pool:<name>. Nur für ffmpeg/ffprobe.
+  const targetInput = document.createElement("input");
+  targetInput.type = "text";
+  targetInput.setAttribute("data-role", "script-target");
+  targetInput.setAttribute("list", "omp-script-targets");
+  targetInput.placeholder = tt("psc.target.placeholder");
+  targetInput.value = typeof cfg.target === "string" ? cfg.target : "";
+  targetInput.style.cssText = "width:100%;box-sizing:border-box;";
+  const targetList = document.createElement("datalist");
+  targetList.id = "omp-script-targets";
+  for (const v of ["auto", "local"]) targetList.append(new Option(v, v));
+  void apiFetch("/api/v1/jobs/hosts").then(async (r) => {
+    if (!r.ok) return;
+    const j = (await r.json()) as { hosts?: { ID: string; Label?: string; Local?: boolean }[]; pools?: string[] };
+    for (const hst of j.hosts ?? []) if (!hst.Local) targetList.append(new Option(`host:${hst.ID}`, `host:${hst.ID}`));
+    for (const p of j.pools ?? []) targetList.append(new Option(`pool:${p}`, `pool:${p}`));
+  }).catch(() => {});
+  more.append(field(tt("psc.target.label"), targetInput, tt("psc.target.help")), targetList);
   el.append(switchBar, wizardWrap, advancedWrap, more);
 
   return {
@@ -2318,6 +2336,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
         const out = { ...cfg, command: cmd.value };
         setOrDelete(out, "args", argInputs.map((i) => i.value).filter((v) => v !== ""));
         setOrDelete(out, "timeoutSeconds", t);
+        setOrDelete(out, "target", targetInput.value.trim());
         return { ok: true, config: out };
       }
       if (!activeForm) return { ok: false, error: tt("psc.05b4e5") };
@@ -2325,6 +2344,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
       if (!r.ok) return { ok: false, error: r.error };
       const out = { ...cfg, command: r.command, args: r.args };
       setOrDelete(out, "timeoutSeconds", t);
+      setOrDelete(out, "target", targetInput.value.trim());
       return { ok: true, config: out };
     },
   };

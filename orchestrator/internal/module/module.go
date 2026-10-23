@@ -58,6 +58,9 @@ type UITab struct {
 	Label map[string]string `json:"label"`
 	// Group: Beschriftung der Admin-Gruppe (nur bei Placement "admin:<gruppe>"); Module derselben Gruppe dürfen sie wiederholen.
 	Group map[string]string `json:"group,omitempty"`
+	// Cluster: Untergruppe innerhalb der Admin-Gruppe "platform": "access" (Zugang & Rechte), "operations" (Betrieb) oder
+	// "maintenance" (Wartung); leer = eigener Block.
+	Cluster string `json:"cluster,omitempty"`
 	// Element: Name des Custom Elements, das das Bundle registriert. Bundle: URL des ESM-Bundles.
 	Element string `json:"element"`
 	Bundle  string `json:"bundle"`

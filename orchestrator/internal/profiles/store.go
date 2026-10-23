@@ -69,3 +69,29 @@ func (s *Store) Get(ctx context.Context, nodeType, hostID string) (Snapshot, boo
 	snap.GPUMemMax = uint64(gpuMemMax)
 	return snap, true, nil
 }
+
+// List liefert alle Profile eines Hosts ("" = Orchestrator-Host; GlobalHostID = Typ-Fallback), absteigend nach CPU-P95.
+func (s *Store) List(ctx context.Context, hostID string) ([]Snapshot, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT node_type, host_id, cpu_min, cpu_avg, cpu_max, cpu_p95, rss_min, rss_avg, rss_max, sample_count, updated_at,
+			gpu_avg, gpu_max, gpu_p95, gpu_samples, gpu_mem_max, gpu_mem_samples
+		FROM node_type_profiles WHERE host_id = $1 ORDER BY cpu_p95 DESC`, hostID)
+	if err != nil {
+		return nil, fmt.Errorf("profiles: list: %w", err)
+	}
+	defer rows.Close()
+	var out []Snapshot
+	for rows.Next() {
+		var snap Snapshot
+		var rssMin, rssAvg, rssMax, gpuMemMax int64
+		if err := rows.Scan(&snap.NodeType, &snap.HostID, &snap.CPUMin, &snap.CPUAvg, &snap.CPUMax, &snap.CPUP95,
+			&rssMin, &rssAvg, &rssMax, &snap.SampleCount, &snap.UpdatedAt,
+			&snap.GPUAvg, &snap.GPUMax, &snap.GPUP95, &snap.GPUSamples, &gpuMemMax, &snap.GPUMemSamples); err != nil {
+			return nil, fmt.Errorf("profiles: list: %w", err)
+		}
+		snap.RSSMin, snap.RSSAvg, snap.RSSMax = uint64(rssMin), uint64(rssAvg), uint64(rssMax)
+		snap.GPUMemMax = uint64(gpuMemMax)
+		out = append(out, snap)
+	}
+	return out, rows.Err()
+}

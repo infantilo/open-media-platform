@@ -58,3 +58,13 @@ Deno.test("Instanz-Absturz: neuer Crash (restartCount) ändert den Fingerprint",
   assertEquals(mk(1).key, "instance:i1:crashed");
   assertEquals(mk(1).fingerprint === mk(2).fingerprint, false);
 });
+
+Deno.test("Trend-Vorwarnung wird als eigener Alarm mit Restzeit gebaut", () => {
+  const adv = { hostId: "h1", hostLabel: "Host A", reason: "cpu", cpuPercent: 72, memPercent: 30, instanceIds: ["i1"], suggestedHostId: "h2", suggestedHostLabel: "Host B", detectedAt: "2026-10-23T12:00:00Z", predicted: true, minutesToLimit: 25 };
+  const a = buildAlarms([], [adv], [])[0];
+  assertEquals(a.severity, "warning");
+  assertEquals(a.detail.includes("25"), true);
+  assertEquals(a.fingerprint.startsWith("predicted|"), true);
+  const real = buildAlarms([], [{ ...adv, predicted: false }], [])[0];
+  assertEquals(real.fingerprint.startsWith("predicted|"), false);
+});

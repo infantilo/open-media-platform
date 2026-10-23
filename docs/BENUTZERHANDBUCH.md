@@ -75,6 +75,10 @@ In diesem Beispiel sind auf der Arbeitsfläche sichtbar:
 - **omp-registry** — der Orchestrator selbst als NMOS-Node (Registry-
   Housekeeping, keine Medienfunktion).
 
+### 2.0 Einen bestimmten Node suchen
+
+In der Leiste oben im Flow Editor steht rechts das Feld **„Node suchen…“**. Sie tippen einen Teil des Namens (oder der ID); mehrere Wörter müssen alle passen, Groß-/Kleinschreibung ist egal. Die Trefferliste zeigt zu jedem Node, in welcher Gruppe er liegt. Mit **Pfeiltasten + Enter** oder per Klick springt der Editor in die passende Gruppe, wählt den Node aus und zentriert die Ansicht darauf. **Esc** leert die Suche. Gehört ein Node zu einem laufenden Workflow und ist auf der Hauptebene zu einer Kachel zusammengefasst, meldet ein Hinweis, dass er in dieser Ansicht ausgeblendet ist. (Das Suchfeld links in der Palette durchsucht dagegen die *Katalogeinträge*, die Sie neu starten können.)
+
 ### 2.1 Eine Instanz starten
 
 Im Node-Katalog links auf einen „+ <Node-Typ>"-Knopf klicken (z. B.
@@ -924,7 +928,10 @@ erstellt/restauriert Datenbank-Sicherungen, spielt **System-Updates** ein
 und verwaltet den Orchestrator-Cluster selbst. Die Bereiche liegen als
 eigene Unter-Reiter nebeneinander (Nutzer, Organisationen, Gruppen,
 Rollenbindungen, Node-Katalog, Storage, Audit-Log, Diagnose,
-Backup/Restore, System-Update, Cluster) statt untereinander (der
+Backup/Restore, System-Update, Cluster, ffmpeg-Jobs) statt untereinander.
+Innerhalb von **Plattform** sind die Unter-Reiter in **umrahmten Gruppen mit
+Überschrift** zusammengefasst („Zugang & Rechte“, „Betrieb“, „Wartung“); die
+Überschrift ist kein Knopf, die Reiter darin sind es. (Der
 Screenshot unten zeigt noch den älteren Stand, die ersten vier Abschnitte
 untereinander):
 
@@ -1243,6 +1250,32 @@ passend für einen reinen Live-Schaltplatz ohne Bandmaterial; ist eine
 zugewiesen, erscheint zusätzlich deren Playlist-Oberfläche als eigene
 Kachel.
 
+
+### 8.2 ffmpeg-Jobs auf einem Host erlauben (`tools.json`)
+
+Ein Host führt ffmpeg-/ffprobe-Jobs der Plattform nur aus, wenn **sein Betreiber es am Host erlaubt** — der Orchestrator kann das nicht von außen einschalten. Dazu legt man neben dem Katalog des Host-Agents (`catalog.json`) eine Datei `tools.json` an (Vorlage: `deploy/tools.example.json`; anderer Ort über `OMP_HOST_AGENT_TOOLS`):
+
+| Feld | Bedeutung |
+|---|---|
+| `tools` | erlaubte Programme (`ffmpeg`, `ffprobe`) mit absolutem `path`, optional `maxJobs`, `nice` (Standard 10), `threads` |
+| `jobRoots` | Verzeichnisse, in denen Ein- und Ausgaben liegen dürfen. Pfade außerhalb (auch über Symlinks) werden abgelehnt |
+| `allowNet` | `true` erlaubt Netz-Ein-/Ausgänge (RTMP, SRT, HTTP …). Standard aus: nur Dateien |
+| `maxJobs` | gleichzeitige Jobs auf diesem Host insgesamt (Standard 2) |
+| `cpuQuota` | optional, z. B. `"200%"`: Jobs laufen in einem systemd-Scope mit dieser CPU-Grenze (wenn `systemd-run` vorhanden ist) |
+
+Nach dem Neustart des Host-Agents meldet er Version, Encoder und Hardware-Beschleuniger seines ffmpeg an den Orchestrator. Jobs laufen immer mit niedriger CPU- und Platten-Priorität (`nice`, `ionice`) und werden bei Speichermangel zuerst beendet. **Medien müssen auf dem Host sichtbar sein:** entweder unter demselben Pfad (gemeinsamer Speicher) oder über die *Pfadzuordnung* in den Job-Einstellungen (Abschnitt 10h).
+
+### 8.3 Topologie und Verlauf (grafische Ansicht der Hosts)
+
+Im Reiter **Hosts** zeigt oberhalb der Tabelle ein Diagramm die **Topologie**: jeder Host ist ein Kasten mit Statuspunkt (grün online, gelb Wartung, rot offline), Auslastungsbalken (CPU, RAM, GPU, Netz — nur gemessene Größen), der Zahl laufender ffmpeg-Jobs und seinen Nodes. Der senkrechte Strich im CPU-Balken ist die **Live-Reserve-Grenze**: darüber starten keine Jobs mehr. Pfeile zeigen die **Verbindungen zwischen Hosts** (Zahl = Anzahl der Verbindungen, Dicke wächst mit ihr, gegenläufige Verbindungen laufen getrennt); Verbindungen innerhalb eines Hosts stehen als Zahl im Kasten. Nodes ohne Instanz (z. B. eine Handy-Kamera, die sich selbst anmeldet) liegen im Kasten „Ohne Instanz (extern)“. Ein Klick auf einen Kasten wählt ihn für das Verlaufsdiagramm darunter.
+
+Das **Verlaufsdiagramm** zeigt für den gewählten Host **CPU, RAM, den CPU-Anteil der Live-Nodes (ohne ffmpeg-Jobs), GPU und Netz** über 1 h, 6 h, 24 h, 7 Tage oder 30 Tage (Linie = Mittelwert, Band = bis zur Spitze, Mausover zeigt die Werte). Bei CPU ist die Job-Grenze eingezeichnet. Die Rohwerte der letzten Stunde und die Minutenwerte der letzten 24 Stunden liegen im Speicher des Orchestrators; **Stundenwerte werden 30 Tage lang in der Datenbank gehalten** und überstehen Neustarts. Größen, die ein Host nicht misst (GPU ohne `OMP_HOST_AGENT_GPU_INDEX`, Netz ohne bekannte Link-Geschwindigkeit), erscheinen als „nicht gemessen“, nicht als flache Linie. Für langfristige Auswertung außerhalb der Plattform steht weiterhin `/metrics` (Prometheus) bereit.
+
+### 8.4 Vorwarnung aus dem Trend (rechtzeitig umziehen)
+
+Bisher warnt die Plattform erst, wenn ein Host die Schwelle **schon überschritten** hat (CPU 85 %, RAM 90 %, …). Zusätzlich beobachtet sie jetzt die **Tendenz**: Aus den Messwerten der letzten 45 Minuten legt sie eine Gerade durch CPU und RAM jedes Hosts mit laufenden Instanzen. Steigt die Last deutlich (mindestens 4 Prozentpunkte je Stunde), liegt sie schon bei mindestens 60 % der Schwelle, ist der Verlauf belastbar (kein Rauschen, mindestens 20 Minuten Daten) und trifft die Gerade die Schwelle voraussichtlich innerhalb der nächsten **60 Minuten**, entsteht eine **Vorwarnung**: im Reiter *Alarme* und als orangefarbener Block im Reiter *Hosts* mit der geschätzten Restzeit („erreicht voraussichtlich in ca. 25 min die Grenze“) und dem Vorschlag, wohin die Instanzen ziehen könnten. Ein echter Alarm ersetzt die Vorwarnung, sobald die Schwelle erreicht ist.
+
+Ob die Plattform auf eine Vorwarnung auch **handelt**, steuert `OMP_PLACEMENT_PREDICT`: `off` (keine Vorwarnung), `warn` (**Standard**: nur Alarm und Vorschlag — niemand zieht ungefragt eine Live-Instanz um) oder `act` (die Vorwarnung wird wie ein echter Alarm behandelt, also greift die eingestellte Eskalation der Rolle — nur melden oder Umzug mit Bestätigungsfenster — schon *vor* dem Überschreiten). `OMP_PLACEMENT_PREDICT_HORIZON_MIN` stellt den Vorlauf ein (5–480 Minuten, Standard 60). Auto-Umzüge bleiben dadurch eine bewusste Entscheidung; der Orchestrator-Rechner selbst ist ausgenommen (er hat kein Ziel, auf das er ausweichen könnte).
 
 ### 8.x Host entfernen und Wartungsmodus
 
@@ -1895,6 +1928,26 @@ Starttaste, Zahlen mit Bereich werden am „+“ / „+ XL“ zu Dials. Eigene N
 **Grenzen:** ein Gerät je Browser-Sitzung; Neo, Mini und Ur-Modell sind nicht eingebaut. Pegelanzeigen gibt es nicht auf den Tasten. Das Gerät
 wird nur im geöffneten Browser-Tab bedient (kein Hintergrunddienst). **Noch nicht am echten Gerät geprüft** (nur Simulator und echter Stack): Drehung
 der Bilder beim „+“ und „+ XL“, USB-Dauer, Wiederverbinden, Dial-Drehsinn — Prüfliste am Ende von `UMSETZUNG.md`.
+
+## 10h. ffmpeg-Jobs: wo sie laufen und wie die Sendung geschützt wird
+
+Alle ffmpeg-/ffprobe-Läufe der Plattform — der Workflow-Schritt **Script**, die **File-QC**, **Review-Proxys** und Einzelbilder, die **Nachbearbeitung der Aufnahmen** — laufen als *Jobs*. Unter **Administration → Plattform → ffmpeg-Jobs** sehen Sie Hosts, Jobs und Einstellungen. (Für die Ansicht genügt das Recht „Jobs ansehen“, zum Ändern „Job-Verteilung einstellen“, zum Abbrechen „Jobs starten und abbrechen“.)
+
+**Wo ein Job läuft (Ziel).** Jeder Job hat ein Ziel: `local` (der Orchestrator-Rechner), `auto` (automatisch nach Last auf dem besten geeigneten Host), `host:<id>` (ein bestimmter Host) oder `pool:<name>` (der beste Host einer benannten Gruppe, z. B. alle Hosts mit Grafikkarte). Welches Ziel gilt, wird in dieser Reihenfolge bestimmt: das Ziel am Job (beim Script-Schritt im Dialog unter „Weitere Einstellungen → Ausführungsort“) → das Standardziel des Aufrufers (QC, Proxy, Nachbearbeitung, Script) → das **Standardziel** des Systems. Ausgeliefert ist `local`: nach einem Update läuft alles wie bisher, bis Sie umstellen.
+
+**Automatische Zuweisung.** Bei `auto` (und `pool:`) prüft die Plattform zuerst, welche Hosts überhaupt geeignet sind: online, nicht in Wartung, Jobs erlaubt, Programm und benötigter Encoder vorhanden, die Dateien sichtbar, noch ein freier Job-Platz, und die **Live-Reserve** bleibt frei. Unter den geeigneten gewinnt der mit der niedrigsten Bewertung aus CPU-Last, GPU-Last (nur wenn der Job die GPU nutzt, z. B. `h264_nvenc`; fehlt die Messung, gilt der Wert als „unbekannt“, nicht als „leer“), Anzahl laufender Jobs, Live-Nodes auf dem Host, Datennähe und Netzlast. Gleich schlechte Hosts bekommen abwechselnd Jobs; zugewiesene, aber noch nicht gestartete Jobs zählen schon mit. Ist gerade kein Host frei, **wartet** der Job in der Warteschlange (wichtigste Klasse zuerst) und zeigt den Grund; wartet er länger als eingestellt, gibt es eine Warnung im Protokoll. Klicken Sie auf einen Job und dann auf **„Warum dort?“**: Sie sehen alle Kandidaten mit Bewertung bzw. Ablehnungsgrund. Unter **Testjob** können Sie ein Ziel ausprobieren (`ffmpeg -version`), ohne Medien anzufassen.
+
+**Sendeschutz (hat Vorrang vor allem anderen).**
+- **Live-Reserve:** Je Host bleibt ein Anteil für die Sendung frei (Standard CPU 30 %, Speicher 25 %, GPU 30 %, Netz 25 %). Jobs starten nur unterhalb der Restkapazität; Batch-Arbeit (QC, Script) erst unter 80 % davon, damit immer Luft bleibt.
+- **Gebuchte Aufnahmen:** Ein Job startet nicht auf einem Host, wenn dort in seiner geschätzten Laufzeit (Standard: nächste 30 min) eine Aufnahme gebucht ist.
+- **Wächter:** Alle paar Sekunden prüft die Plattform die Auslastung. Nähert sich ein Host der Grenze, werden Jobs **gedrosselt**; ist sie erreicht, werden Batch-Jobs **pausiert** (danach automatisch fortgesetzt); wird sie deutlich überschritten, oder meldet ein Live-Node Aussetzer, werden Jobs **abgebrochen und neu eingeplant** — zuerst die zuletzt gestartete Batch-Arbeit. Interaktive Jobs (Review-Proxy, auf den jemand wartet) werden wegen reiner Last nie abgebrochen. Jobs mit Live-Quelle werden nicht pausiert (die Quelle läuft weiter), nur gedrosselt. Jeder Eingriff steht im Job-Verlauf und im Metrikzähler `omp_job_protect_total`.
+- **Hosts markieren:** Je Host lässt sich einstellen, ob er überhaupt Jobs bekommt, ob nur Batch (`nur Batch`: dedizierter Rechenhost, Live-Last zählt nicht gegen ihn) oder kein Batch, und zu welchen Pools er gehört. Mit „Hosts mit Live-Nodes: nur interaktive Jobs zulassen“ sperren Sie Hosts mit laufenden Live-Nodes ganz für Batch.
+
+**Live-Reserve automatisch kalibrieren.** Die feste Reserve (Standard 30/25/30/25 %) ist nur ein Startwert. Die Plattform misst je Host, was die **Live-Nodes** tatsächlich brauchen — CPU-Kerne, Arbeitsspeicher und GPU der gestarteten Instanzen, **ohne** die Last der ffmpeg-Jobs selbst (sonst schaukelte sich die Reserve an den Jobs hoch). Die Messwerte stehen in Stundenwerten 30 Tage in der Datenbank, die Kalibrierung betrachtet standardmäßig 7 Tage. Daraus entsteht je Host ein Vorschlag: **Bedarf = das Größere aus dem 95-%-Wert und 75 % der Spitze, plus Sicherheitsabstand** (Standard 10 Punkte), begrenzt auf 10–60 %. Die Karte **„Live-Reserve und Kalibrierung“** zeigt je Host jetzt / typisch (P95) / Spitze, den Vorschlag und die tatsächlich geltende Reserve samt Herkunft; ein Klick auf die Zeile zeigt die **typische Last je Node-Typ auf diesem Host** (CPU Ø/P95/max, RAM), damit man abschätzen kann, was ein weiterer Node braucht. Zwei Betriebsarten in den Einstellungen: **manuell** (Standard) zeigt nur Vorschläge — „Vorschlag übernehmen“ macht ihn zur festen Vorgabe des Hosts, „Vorgabe entfernen“ nimmt sie zurück; **automatisch** verwendet den Vorschlag selbst: Steigt der Bedarf, steigt die Reserve sofort, sinkt er, geht sie höchstens um 1 Punkt je 5 Minuten zurück. Reihenfolge der Quellen: feste Vorgabe des Hosts → automatischer Wert (erst nach mindestens 2 h Messdauer) → Wert aus den Einstellungen. Netz wird nicht kalibriert (die Karte trägt auch den Verkehr der Jobs).
+
+**Wenn ein Host ausfällt**, läuft der Job auf einem anderen Host neu (bis zur eingestellten Zahl von Versuchen); Ausgabedateien entstehen als `<name>.part.<ext>` und werden erst nach Erfolg umbenannt, eine halbe Datei bleibt nie liegen. Ein Programmfehler (Exit-Code ≠ 0) ist ein Ergebnis und wird nicht wiederholt; ein Zeitlimit ebenfalls nicht. Wird der Orchestrator neu gestartet, gelten laufende Jobs als unterbrochen (Verlauf bleibt sichtbar); die Aufrufer wiederholen über ihre eigene Logik.
+
+**Medien auf anderen Hosts (Pfadzuordnung).** Ein Job auf einem anderen Host braucht Zugriff auf dieselben Dateien: gemeinsamer Speicher (NFS/SMB/Isilon …), der dort eingehängt ist. Tragen Sie unter *Pfadzuordnung* ein, wie der Pfad am Orchestrator (z. B. `/data/media`) auf dem Host heißt (z. B. `/mnt/media`). Fehlt der Zugriff, ist der Host für diesen Job „nicht geeignet“ (steht unter „Warum dort?“). Dateien werden nicht kopiert.
 
 ## 11. Weiterführende Dokumente
 

@@ -37,6 +37,7 @@ type Service struct {
 	Log     *slog.Logger
 	Now     func() time.Time
 	FFmpeg  string // für die Nachbearbeitung
+	Jobs    ToolRunner
 	// ChannelCount: Audio-Kanäle einer Quelle, wenn gerade bekannt (Kanalplan früh gegen die Wirklichkeit prüfen); darf nil sein.
 	ChannelCount func(Source) (int, bool)
 
@@ -537,4 +538,9 @@ func fileSize(p string) int64 {
 		return -1
 	}
 	return st.Size()
+}
+
+// ToolRunner führt ffmpeg über den Job-Dispatcher aus (Form wie jobrun.Runner.Run).
+type ToolRunner interface {
+	Run(ctx context.Context, name string, args []string, onStderr func(line string)) (stdout []byte, exitCode int, err error)
 }

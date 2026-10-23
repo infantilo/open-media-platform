@@ -123,7 +123,7 @@ func (s *Service) buildProxy(ctx context.Context, p Proxy) error {
 	// Streams der Quelle: Halbbild-Reihenfolge und Anzahl Tonspuren
 	var video map[string]any
 	nAudio := 0
-	if out, code, e := s.Tools.R.Run(ctx, s.Tools.FFprobe, []string{"-v", "error", "-show_streams", "-of", "json", src}, nil); e == nil && code == 0 {
+	if out, code, e := s.Tools.ExecProxy().Run(ctx, s.Tools.FFprobe, []string{"-v", "error", "-show_streams", "-of", "json", src}, nil); e == nil && code == 0 {
 		var pr struct {
 			Streams []map[string]any `json:"streams"`
 		}
@@ -181,7 +181,7 @@ func (s *Service) buildProxy(ctx context.Context, p Proxy) error {
 	}
 	args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-crf", strconv.Itoa(cfg.ProxyCRF), "-g", "1", "-bf", "0", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", tmp)
 	var errLines []string
-	_, code, err := s.Tools.R.Run(ctx, s.Tools.FFmpeg, args, func(l string) {
+	_, code, err := s.Tools.ExecProxy().Run(ctx, s.Tools.FFmpeg, args, func(l string) {
 		if len(errLines) < 10 {
 			errLines = append(errLines, l)
 		}
@@ -213,7 +213,7 @@ func (s *Service) buildProxy(ctx context.Context, p Proxy) error {
 }
 
 func probeProxy(ctx context.Context, t *Tools, file string) (frames int64, rate Rate, w, h int, start float64, err error) {
-	out, code, e := t.R.Run(ctx, t.FFprobe, []string{"-v", "error", "-count_packets", "-select_streams", "v:0", "-show_streams", "-of", "json", file}, nil)
+	out, code, e := t.ExecProxy().Run(ctx, t.FFprobe, []string{"-v", "error", "-count_packets", "-select_streams", "v:0", "-show_streams", "-of", "json", file}, nil)
 	if e != nil || code != 0 {
 		return 0, Rate{}, 0, 0, 0, fmt.Errorf("Proxy nicht lesbar")
 	}
@@ -279,7 +279,7 @@ func (s *Service) Frame(ctx context.Context, assetID string, n int64) ([]byte, e
 	}
 	var buf bytes.Buffer
 	_ = buf
-	out, code, err := s.Tools.R.Run(ctx, s.Tools.FFmpeg, []string{"-nostdin", "-v", "error", "-ss", strconv.FormatFloat(ts, 'f', 6, 64), "-i", file, "-frames:v", "1", "-f", "image2pipe", "-c:v", "mjpeg", "-q:v", "3", "-"}, nil)
+	out, code, err := s.Tools.ExecProxy().Run(ctx, s.Tools.FFmpeg, []string{"-nostdin", "-v", "error", "-ss", strconv.FormatFloat(ts, 'f', 6, 64), "-i", file, "-frames:v", "1", "-f", "image2pipe", "-c:v", "mjpeg", "-q:v", "3", "-"}, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -19,6 +19,11 @@ import { whoami } from "./auth.ts";
 import { openHostWizard } from "./host-wizard.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 import { showToast } from "../kit/omp-toast.ts";
+import "./host-topology.ts"; // registriert <omp-host-topology> (Seiteneffekt-Import: ein reiner Typ-Import würde wegoptimiert)
+import "./host-trends.ts";
+import type { HostTopology } from "./host-topology.ts";
+import type { HostTrends } from "./host-trends.ts";
+import type { TopoHostIn } from "./host-topology-logic.ts";
 
 // netMetrics fehlt (statt eines Nullwert-Objekts), wenn der Host-Agent
 // kein Interface für die Bandbreiten-Telemetrie konfiguriert hat
@@ -115,6 +120,8 @@ interface PlacementAdvice {
   suggestedHostId?: string;
   suggestedHostLabel?: string;
   detectedAt: string;
+  predicted?: boolean;
+  minutesToLimit?: number;
 }
 
 // D6 Teil 4 (ARCHITECTURE.md §6.1 Erweiterung 2026-07-13 Punkt 2) —
@@ -246,6 +253,11 @@ class HostsView extends HTMLElement {
   // rendert mit den zuletzt geholten Daten neu statt jede Sekunde die
   // API abzufragen.
   #countdownHandle: number | undefined;
+  // Kapitel 54: Topologie und Verlauf sind eigene, dauerhafte Elemente (der Poll zeichnet diese Ansicht komplett neu, sie dürfen
+  // dabei weder Auswahl noch Zeitfenster verlieren).
+  #topo = document.createElement("omp-host-topology") as HostTopology;
+  #trends = document.createElement("omp-host-trends") as HostTrends;
+  #topoKey = "";
   #lastHosts: HostEntry[] = [];
   #lastAdvice: PlacementAdvice[] = [];
   #lastHistory: Map<string, HistoryWindow> = new Map();
@@ -259,6 +271,7 @@ class HostsView extends HTMLElement {
   #isAdmin = false;
 
   connectedCallback() {
+    this.#topo.onSelect = (id) => this.#trends.select(id);
     this.style.cssText =
       "display:block;background:var(--omp-surface);font-family:var(--omp-font);" +
       "font-size:var(--omp-font-size-sm);color:var(--omp-text);padding:var(--omp-space-3);" +
@@ -433,9 +446,42 @@ class HostsView extends HTMLElement {
       const pending = pendingRes.ok ? ((await pendingRes.json()) as PendingMigration[]) : [];
       const history = await this.#fetchHistory(hosts);
       this.#render(hosts, advice, history, pending);
+      await this.#feedGraphics(hosts);
     } catch {
       // Orchestrator kurzzeitig nicht erreichbar — nächster Poll holt es auf.
     }
+  }
+
+  // Hostliste für Topologie und Verlauf; Job-Daten (Plätze, Live-Reserve) kommen best effort aus dem Job-Modul.
+  async #feedGraphics(hosts: HostEntry[]) {
+    let jobHosts: { ID: string; Running: number; Reserved: number; MaxJobs: number; CPUCores?: number; Reserve?: { cpu: number } }[] = [];
+    try {
+      const r = await apiFetch("/api/v1/jobs/hosts");
+      if (r.ok) jobHosts = ((await r.json()) as { hosts?: typeof jobHosts }).hosts ?? [];
+    } catch { /* Job-Modul nicht verfügbar oder keine Berechtigung */ }
+    const jh = new Map(jobHosts.map((j) => [j.ID, j]));
+    const topo: TopoHostIn[] = hosts.map((h) => {
+      const m = h.metrics;
+      const j = jh.get(h.id === "" ? "local" : h.id);
+      const link = m?.net?.linkMbps;
+      return {
+        id: h.id,
+        label: h.label || h.hostname || h.id,
+        online: h.id === "" ? true : isHostOnline(m),
+        maintenance: !!h.maintenance,
+        cpu: m?.cpuPercent,
+        mem: m && m.memTotalBytes > 0 ? (m.memUsedBytes / m.memTotalBytes) * 100 : undefined,
+        gpu: m?.gpu?.utilizationPercent,
+        net: m?.net && link ? ((m.net.rxBytesPerSec + m.net.txBytesPerSec) * 8) / 1e6 / link * 100 : undefined,
+        jobs: j ? j.Running + j.Reserved : undefined,
+        liveReserveCpu: j?.Reserve?.cpu,
+      };
+    });
+    const key = JSON.stringify(topo.map((x) => [x.id, x.label, x.online, x.maintenance, Math.round(x.cpu ?? -1), Math.round(x.mem ?? -1), Math.round(x.gpu ?? -1), Math.round(x.net ?? -1), x.jobs, x.liveReserveCpu]));
+    if (key === this.#topoKey) return;
+    this.#topoKey = key;
+    this.#topo.hosts = topo;
+    this.#trends.hosts = topo.map((x) => ({ id: x.id === "" ? "local" : x.id, label: x.label, reserveCpu: x.liveReserveCpu, cores: jh.get(x.id === "" ? "local" : x.id)?.CPUCores }));
   }
 
   #startCountdown() {
@@ -592,6 +638,11 @@ class HostsView extends HTMLElement {
           : `<span style="color:var(--omp-cue);">${t("hosts.c77b3a")}</span>`;
         const netPart = a.netPercent !== undefined ? tt("y.netPart", { p0: a.netPercent.toFixed(0) }) : "";
         const gpuPart = a.gpuPercent !== undefined ? ` / GPU ${a.gpuPercent.toFixed(0)}%` : "";
+        if (a.predicted) {
+          return `<div style="padding:var(--omp-space-2);margin-bottom:var(--omp-space-1);background:rgba(255,183,77,0.15);border:1px solid var(--omp-cue);border-radius:var(--omp-radius);">
+          <strong>${t("hosts.predictedBadge")}</strong> ${escapeHtml(t("hosts.predicted", { p0: `${a.hostLabel} (${reasonLabel(a.reason)})`, p1: a.minutesToLimit ?? 0, p2: a.cpuPercent.toFixed(0), p3: a.memPercent.toFixed(0), p4: a.instanceIds.length, p5: a.suggestedHostId ? (a.suggestedHostLabel ?? a.suggestedHostId) : "–" }))}
+        </div>`;
+        }
         return `<div style="padding:var(--omp-space-2);margin-bottom:var(--omp-space-1);background:rgba(239,83,80,0.15);border:1px solid var(--omp-error);border-radius:var(--omp-radius);">
           <strong>${escapeHtml(a.hostLabel)}</strong> ${t("hosts.857412", { p0: reasonLabel(a.reason), p1: a.cpuPercent.toFixed(0), p2: a.memPercent.toFixed(0), p3: netPart, p4: gpuPart, p5: a.instanceIds.length, p6: target })}
         </div>`;
@@ -625,6 +676,9 @@ class HostsView extends HTMLElement {
       </div>
       ${adviceBanner}
       ${pendingBanner}
+      <div data-slot="topo" style="margin-bottom:var(--omp-space-4);">
+        <div class="omp-h1" style="margin-bottom:var(--omp-space-2);">${t("topo.title")}</div>
+      </div>
       ${
         hosts.length === 0
           ? `<div class="omp-empty">${t("hosts.75d9aa")}</div>`
@@ -645,7 +699,12 @@ class HostsView extends HTMLElement {
               <tbody>${rows}</tbody>
             </table>`
       }
+      <div data-slot="trend" style="margin-top:var(--omp-space-4);">
+        <div class="omp-h1" style="margin-bottom:var(--omp-space-2);">${t("trend.title")}</div>
+      </div>
     `;
+    this.querySelector('[data-slot="topo"]')?.append(this.#topo);
+    this.querySelector('[data-slot="trend"]')?.append(this.#trends);
   }
 }
 

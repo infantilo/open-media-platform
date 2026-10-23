@@ -85,3 +85,19 @@ func TestStoreGetUnknownReturnsNotOk(t *testing.T) {
 		t.Errorf("Get() ok = true for a never-written profile, want false")
 	}
 }
+
+func TestStoreListSortiertNachCPUP95(t *testing.T) {
+	database := testDB(t)
+	store := NewStore(database)
+	ctx := context.Background()
+	for _, s := range []Snapshot{{NodeType: "a", HostID: "h-list", CPUP95: 10}, {NodeType: "b", HostID: "h-list", CPUP95: 50}, {NodeType: "c", HostID: "anderer", CPUP95: 99}} {
+		s.UpdatedAt = time.Now()
+		if err := store.Upsert(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.List(ctx, "h-list")
+	if err != nil || len(got) != 2 || got[0].NodeType != "b" || got[1].NodeType != "a" {
+		t.Fatalf("%v %+v", err, got)
+	}
+}

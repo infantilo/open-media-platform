@@ -57,3 +57,8 @@ Deno.test("workTiles: nur gemountete Module, nur Kacheln mit passendem Recht, Sp
   assertEquals(workTiles(mods, "en", () => true).map((x) => [x.id, x.label]), [["ingest:recordings", "Recordings"], ["review:intake", "File Eingangskontrolle"]]);
   assertEquals(workTiles(mods, "de", () => false), []);
 });
+
+Deno.test("adminGroups: Untergruppe (cluster) wird durchgereicht", () => {
+  const g = adminGroups([{ name: "jobs", state: "mounted", ui: [{ id: "jobs", placement: "admin:platform", label: { de: "Jobs" }, cluster: "operations", element: "x-y", bundle: "/b.js" }] }] as never, "de");
+  assertEquals(g[0].tabs[0].cluster, "operations");
+});

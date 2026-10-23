@@ -29,6 +29,8 @@ type Services struct {
 	Graph    Connector
 	Runtime  Runtime // optional: ersetzt LauncherRuntime (Tests)
 	FFmpeg   string
+	// Jobs: optional — Nachbearbeitung über den Job-Dispatcher (Host-Auswahl, Sendeschutz); nil = lokal.
+	Jobs ToolRunner
 }
 
 type Module struct {
@@ -98,7 +100,7 @@ func (m *Module) service(d module.Deps) *Service {
 	if rt == nil {
 		rt = unavailableRuntime{}
 	}
-	s := &Service{St: NewStore(d.DB), Cfg: m.cfg.Get, Runtime: rt, Assets: m.S.Assets, Audit: d.Audit, FFmpeg: m.S.FFmpeg}
+	s := &Service{St: NewStore(d.DB), Cfg: m.cfg.Get, Runtime: rt, Assets: m.S.Assets, Audit: d.Audit, FFmpeg: m.S.FFmpeg, Jobs: m.S.Jobs}
 	s.Hosts = func(ctx context.Context) []HostInfo { return hostInfos(ctx, d, s.Cfg().MediaDir) }
 	s.ChannelCount = m.channelCount
 	m.svc = s
@@ -296,4 +298,25 @@ func (m *Module) channelCount(src Source) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// BusyOn meldet, ob auf dem Host zwischen from und to eine Aufnahme gebucht ist oder läuft (Sendeschutz der ffmpeg-Jobs,
+// docs/ENTWURF-FFMPEG-HOSTWAHL.md §3.6). Vor der ersten Nutzung des Moduls (Dienst noch nicht gebaut): keine Buchungen bekannt.
+func (m *Module) BusyOn(hostID string, from, to time.Time) (bool, string) {
+	m.mu.Lock()
+	svc := m.svc
+	m.mu.Unlock()
+	if svc == nil {
+		return false, ""
+	}
+	booked, err := svc.St.Booked(context.Background(), from)
+	if err != nil {
+		return false, ""
+	}
+	for _, b := range booked {
+		if b.Host == hostID && b.End.After(from) && b.Start.Before(to) {
+			return true, fmt.Sprintf("Aufnahme %s–%s", b.Start.Local().Format("15:04"), b.End.Local().Format("15:04"))
+		}
+	}
+	return false, ""
 }

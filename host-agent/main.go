@@ -45,6 +45,7 @@ import (
 
 	"github.com/infantilo/openmediaplatform/host-agent/internal/catalog"
 	"github.com/infantilo/openmediaplatform/host-agent/internal/commands"
+	"github.com/infantilo/openmediaplatform/host-agent/internal/jobs"
 	"github.com/infantilo/openmediaplatform/host-agent/internal/state"
 	"github.com/infantilo/openmediaplatform/host-agent/internal/telemetry"
 	"github.com/infantilo/openmediaplatform/nodeoptions"
@@ -292,6 +293,22 @@ func main() {
 			Dir:           envOr("OMP_UPDATE_DIR", filepath.Join(filepath.Dir(statePath), "updates")),
 		})
 	}
+	// Job-Ausführung (ffmpeg/ffprobe im Auftrag des Orchestrators, docs/ENTWURF-FFMPEG-HOSTWAHL.md): nur mit tools.json
+	// neben dem Katalog — der Host entscheidet, was und wo ausgeführt werden darf.
+	toolsPath := envOr("OMP_HOST_AGENT_TOOLS", filepath.Join(filepath.Dir(catalogPath), "tools.json"))
+	if catalogPath != "" {
+		if jc, err := jobs.LoadFile(toolsPath); err == nil {
+			jr := jobs.NewRunner(jc, st.HostID, envOr("OMP_HOST_AGENT_JOBS_DIR", filepath.Join(filepath.Dir(statePath), "jobs")), nc)
+			if n := jr.CleanupStale(); n > 0 {
+				slog.Warn("orphaned job processes from a previous agent run were terminated", "count", n)
+			}
+			executor.SetJobs(jr)
+			go jr.Probe()
+			slog.Info("job execution enabled", "path", toolsPath, "tools", len(jc.Tools), "roots", jc.JobRoots)
+		} else if !os.IsNotExist(err) {
+			slog.Error("tools.json invalid — job execution disabled on this host", "path", toolsPath, "error", err)
+		}
+	}
 	cmdSubject := fmt.Sprintf("omp.host.%s.cmd", st.HostID)
 	cmdSub, err := nc.Subscribe(cmdSubject, func(msg *nats.Msg) {
 		req, err := commands.DecodeRequest(msg.Data)
@@ -360,6 +377,7 @@ func main() {
 		case <-ticker.C:
 		case sig := <-sigCh:
 			slog.Info("shutdown requested, sending goodbye", "signal", sig.String())
+			executor.ShutdownJobs()
 			if payload, err := json.Marshal(telemetry.Sample{Goodbye: true}); err == nil {
 				if err := nc.Publish(subject, payload); err != nil {
 					slog.Warn("goodbye publish failed", "error", err)
@@ -427,6 +445,7 @@ func main() {
 			sample.Instances = append(sample.Instances, is)
 		}
 		procSampler.Prune(keepPIDs)
+		sample.Jobs = executor.JobsInfo()
 
 		payload, err := json.Marshal(sample)
 		if err != nil {

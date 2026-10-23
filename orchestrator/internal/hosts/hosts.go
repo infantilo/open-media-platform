@@ -18,6 +18,8 @@ package hosts
 
 import (
 	"time"
+
+	"github.com/infantilo/openmediaplatform/jobwire"
 )
 
 // Host ist ein erfolgreich registrierter omp-host-agent.
@@ -57,12 +59,21 @@ type Metrics struct {
 	// `nvidia-smi` dort nichts liefern konnte — Spiegelbild von
 	// host-agent/internal/telemetry.GpuSample.
 	Gpu *GpuMetrics `json:"gpu,omitempty"`
+	// Jobs: Fähigkeiten/Auslastung der Job-Ausführung (ffmpeg-Jobs, docs/ENTWURF-FFMPEG-HOSTWAHL.md); nil = auf dem
+	// Host nicht freigegeben (keine tools.json).
+	Jobs *JobsMetrics `json:"jobs,omitempty"`
 	// Goodbye: der Host-Agent hat sich per SIGTERM/SIGINT absichtlich
 	// abgemeldet (Spiegelbild von host-agent/internal/telemetry.Sample.
 	// Goodbye). Ein danach ausbleibender Telemetrie-Strom ist kein Alarm;
 	// ein Ausbleiben OHNE dieses Flag ist ein kritischer Alarm.
 	Goodbye bool `json:"goodbye,omitempty"`
 }
+
+// JobsMetrics ist die Fähigkeitsmeldung der Job-Ausführung (gemeinsames Wire-Format, jobwire).
+type JobsMetrics = jobwire.Info
+
+// JobToolInfo: Version und Fähigkeiten eines freigegebenen Programms.
+type JobToolInfo = jobwire.ToolInfo
 
 // GpuMetrics ist die zuletzt gemessene Auslastungs-/Speicher-
 // Momentaufnahme der per Host-Agent konfigurierten GPU.
