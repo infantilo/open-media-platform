@@ -271,6 +271,9 @@ func (s *Service) lookupEdge(receiverID string) (Edge, bool) {
 	return e, ok
 }
 
+// Edges liefert eine sortierte Kopie der aktuellen Kanten (für Prüfungen außerhalb des Pakets, z. B. Migration).
+func (s *Service) Edges() []Edge { return s.snapshotEdges() }
+
 // snapshotEdges liefert eine sortierte Kopie des aktuellen Edge-Caches —
 // sortiert nach ID, damit GET /api/v1/graph eine stabile Reihenfolge
 // liefert (weniger UI-Re-Render-Churn) statt Map-Iterationsreihenfolge.

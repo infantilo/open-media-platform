@@ -26,7 +26,7 @@ func rising(fitted, slope float64) hosts.Trend {
 
 func TestPredictMinutes(t *testing.T) {
 	p := DefaultPrediction
-	if m, ok := predictMinutes(rising(70, 30), 85, p); !ok || m != 30 { // 15 Punkte bei 30/h = 30 min
+	if m, ok := predictMinutes(rising(70, 30), 85, p, false); !ok || m != 30 { // 15 Punkte bei 30/h = 30 min
 		t.Fatalf("%d %v", m, ok)
 	}
 	for name, tr := range map[string]hosts.Trend{
@@ -38,7 +38,7 @@ func TestPredictMinutes(t *testing.T) {
 		"zu kurz":      {Fitted: 70, SlopePerHour: 30, R2: 0.9, SpanMin: 10},
 		"fallend":      rising(70, -10),
 	} {
-		if _, ok := predictMinutes(tr, 85, p); ok {
+		if _, ok := predictMinutes(tr, 85, p, false); ok {
 			t.Errorf("%s darf keine Vorwarnung auslösen", name)
 		}
 	}
@@ -91,5 +91,19 @@ func TestVorwarnungAusUndEchterAlarmHatVorrang(t *testing.T) {
 	e.evaluateOnce()
 	if got := e.List(); len(got) != 1 || got[0].Predicted {
 		t.Fatalf("ein echter Alarm ersetzt die Vorwarnung: %+v", got)
+	}
+}
+
+func TestHystereseHaeltVorwarnungAnDerKante(t *testing.T) {
+	p := DefaultPrediction
+	edge := hosts.Trend{Fitted: 60, SlopePerHour: 62, R2: 0.46, SpanMin: 22} // knapp unter R² 0,5
+	if _, ok := predictMinutes(edge, 85, p, false); ok {
+		t.Fatal("neu: R² 0,46 reicht nicht")
+	}
+	if _, ok := predictMinutes(edge, 85, p, true); !ok {
+		t.Fatal("bestehende Vorwarnung bleibt bei R² 0,46")
+	}
+	if _, ok := predictMinutes(hosts.Trend{Fitted: 60, SlopePerHour: 62, R2: 0.2, SpanMin: 22}, 85, p, true); ok {
+		t.Fatal("deutlich schlechtere Güte beendet sie")
 	}
 }

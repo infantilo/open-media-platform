@@ -2663,7 +2663,16 @@ export class FlowCanvas extends HTMLElement {
     return tiles;
   }
 
+  // Während des Ziehens einer neuen Verbindung darf nichts neu gezeichnet werden: periodische Aktualisierungen (Host-Telemetrie alle
+  // 5 s je Host, Graph-/Workflow-Events) würden Anschlüsse, Hervorhebung und Gummiband mitten im Ziehen verwerfen. Das Neuzeichnen wird
+  // nachgeholt, sobald die Maustaste losgelassen ist.
+  #renderDeferred = false;
+
   #render() {
+    if (this.#drag?.kind === "connect") {
+      this.#renderDeferred = true;
+      return;
+    }
     this.#viewportGroup.replaceChildren();
     this.#applyViewportTransform();
     this.#renderBreadcrumb();
@@ -4563,6 +4572,10 @@ export class FlowCanvas extends HTMLElement {
       this.#saveLayout();
     }
     this.#drag = null;
+    if (this.#renderDeferred) {
+      this.#renderDeferred = false;
+      this.#render();
+    }
   }
 
   // Nutzerfund 2026-08-14 ("Bug 1"): Kacheln durften beim Ziehen in der

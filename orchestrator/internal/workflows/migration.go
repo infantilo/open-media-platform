@@ -30,6 +30,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"log/slog"
 	"sort"
 	"sync"
@@ -441,6 +443,25 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 		return
 	}
 	oldNodeID := wf.Runtime[role].NodeID
+
+	// MXL ist host-lokal: hängt der Node über MXL an Nodes auf einem anderen Host als dem Ziel, bliebe deren Bild nach dem Umzug stehen
+	// (und eine nicht in der Workflow-Definition stehende Verbindung wird auch nicht neu aufgebaut). Vor jedem Seiteneffekt prüfen.
+	if el, ok := s.graph.(interface{ Edges() []graph.Edge }); ok && s.nodes != nil {
+		if ll, ok := s.launcher.(interface{ List() []launcher.Instance }); ok {
+			instHost := map[string]string{}
+			for _, in := range ll.List() {
+				instHost[in.ID] = in.HostID
+			}
+			if peer, bad := mxlPeerConflict(s.nodes.List(), el.Edges(), instHost, oldNodeID, targetHostID); bad {
+				slog.Warn("workflows: executeMigration: not migrable, MXL peer on another host", "workflow", workflowID, "role", role, "peer", peer, "targetHost", targetHostID)
+				s.publishMigrationEvent(migrationEvent{
+					WorkflowID: workflowID, Role: role, FromInstanceID: oldInstanceID, TargetHostID: targetHostID,
+					Reason: "not-migrable-mxl-peer", Status: "failed", At: time.Now(),
+				})
+				return
+			}
+		}
+	}
 
 	// D13 (ARCHITECTURE.md §6.1 Erweiterung 2026-07-10 Punkt 3, wörtlich:
 	// "gibt es keinen Ersatz-Host mit Karte, ist der ehrliche Befund

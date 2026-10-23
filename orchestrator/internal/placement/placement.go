@@ -296,12 +296,19 @@ func (e *Engine) SetPrediction(src TrendSource, p Prediction) {
 }
 
 // predictMinutes: in wie vielen Minuten erreicht der Trend die Grenze? ok=false: keine belastbare Vorhersage.
-func predictMinutes(t hosts.Trend, limit float64, p Prediction) (int, bool) {
-	if t.SpanMin < 20 || t.R2 < p.MinR2 || t.SlopePerHour < p.MinSlopePerHour || t.Fitted >= limit || t.Fitted < p.MinLevel*limit {
+//
+// Hysterese: Besteht die Vorwarnung schon (held), gelten großzügigere Grenzen (Güte, Steigung, Pegel × 0,7–0,9, Vorlauf × 1,3) —
+// sonst flackert eine Vorwarnung an der Kante, und ein daran hängendes Bestätigungsfenster würde ständig abgebrochen.
+func predictMinutes(t hosts.Trend, limit float64, p Prediction, held bool) (int, bool) {
+	minR2, minSlope, minLevel, horizon := p.MinR2, p.MinSlopePerHour, p.MinLevel, p.Horizon.Minutes()
+	if held {
+		minR2, minSlope, minLevel, horizon = minR2*0.7, minSlope*0.7, minLevel*0.9, horizon*1.3
+	}
+	if t.SpanMin < 20 || t.R2 < minR2 || t.SlopePerHour < minSlope || t.Fitted >= limit || t.Fitted < minLevel*limit {
 		return 0, false
 	}
 	min := (limit - t.Fitted) / t.SlopePerHour * 60
-	if min > p.Horizon.Minutes() {
+	if min > horizon {
 		return 0, false
 	}
 	if min < 1 {
@@ -879,10 +886,11 @@ func (e *Engine) evaluateOnce() {
 			}
 			var parts []string
 			minutes := 0
-			if m, ok := predictMinutes(ct, e.thresholds.CPUPercent, e.predict); ok {
+			held := prev[s.host.ID].Predicted
+			if m, ok := predictMinutes(ct, e.thresholds.CPUPercent, e.predict, held); ok {
 				parts, minutes = append(parts, "cpu"), m
 			}
-			if m, ok := predictMinutes(mt, e.thresholds.MemPercent, e.predict); ok {
+			if m, ok := predictMinutes(mt, e.thresholds.MemPercent, e.predict, held); ok {
 				parts = append(parts, "mem")
 				if minutes == 0 || m < minutes {
 					minutes = m
