@@ -3,7 +3,7 @@ Description=OpenMediaPlatform Event-Bus (NATS, Cluster-Knoten)
 After=network-online.target
 
 [Container]
-Image=docker.io/library/nats:latest
+Image=docker.io/library/nats:2.15.1
 ContainerName=omp-nats
 # NATS-Clustering (ARCHITECTURE.md §19.3 Punkt 7, UMSETZUNG.md D14):
 # dieses Quadlet ist EIN Knoten eines Drei-Knoten-Clusters — auf

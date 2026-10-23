@@ -165,7 +165,7 @@ up:
 		podman start omp-nats-1; \
 	else \
 		podman run -d --name omp-nats-1 --restart=always --network=host \
-			docker.io/library/nats:latest -js --server_name omp-nats-1 -p 4222 -m 8222 \
+			docker.io/library/nats:2.15.1 -js --server_name omp-nats-1 -p 4222 -m 8222 \
 			--cluster_name OMP --cluster nats://127.0.0.1:6222 \
 			--routes nats://127.0.0.1:6223,nats://127.0.0.1:6224; \
 	fi
@@ -173,7 +173,7 @@ up:
 		podman start omp-nats-2; \
 	else \
 		podman run -d --name omp-nats-2 --restart=always --network=host \
-			docker.io/library/nats:latest -js --server_name omp-nats-2 -p 4223 -m 8223 \
+			docker.io/library/nats:2.15.1 -js --server_name omp-nats-2 -p 4223 -m 8223 \
 			--cluster_name OMP --cluster nats://127.0.0.1:6223 \
 			--routes nats://127.0.0.1:6222,nats://127.0.0.1:6224; \
 	fi
@@ -181,7 +181,7 @@ up:
 		podman start omp-nats-3; \
 	else \
 		podman run -d --name omp-nats-3 --restart=always --network=host \
-			docker.io/library/nats:latest -js --server_name omp-nats-3 -p 4224 -m 8224 \
+			docker.io/library/nats:2.15.1 -js --server_name omp-nats-3 -p 4224 -m 8224 \
 			--cluster_name OMP --cluster nats://127.0.0.1:6224 \
 			--routes nats://127.0.0.1:6222,nats://127.0.0.1:6223; \
 	fi
@@ -192,7 +192,7 @@ up:
 			-p 8010:8010 -p 8011:8011 \
 			-v $(CURDIR)/deploy/nmos/registry.json:/home/registry.json:ro,Z \
 			-e RUN_NODE=FALSE \
-			docker.io/rhastie/nmos-cpp:latest; \
+			docker.io/rhastie/nmos-cpp:master-b6c8367; \
 	fi
 	@$(MAKE) postgres-up
 
@@ -389,7 +389,7 @@ mtls-up:
 			-e DOCKER_STEPCA_INIT_DNS_NAMES="localhost,127.0.0.1" \
 			-e DOCKER_STEPCA_INIT_PROVISIONER_NAME="omp-dev" \
 			-e DOCKER_STEPCA_INIT_PASSWORD_FILE=/home/step/password.txt \
-			docker.io/smallstep/step-ca:latest; \
+			docker.io/smallstep/step-ca:0.30.2; \
 	fi
 	@echo "Warte auf step-ca-Initialisierung..."
 	@for i in $$(seq 1 20); do \
@@ -435,7 +435,7 @@ nmos-registry-tls-up:
 		-v $(CURDIR)/deploy/nmos/registry-tls.json:/home/registry.json:ro,Z \
 		-v $(CURDIR)/.run/mtls:/home/certs:ro,Z \
 		-e RUN_NODE=FALSE \
-		docker.io/rhastie/nmos-cpp:latest
+		docker.io/rhastie/nmos-cpp:master-b6c8367
 	@echo "NMOS-Registry jetzt per BCP-003-01-TLS erreichbar: https://localhost:8010 (Root-CA: .run/mtls/root_ca.crt)"
 
 # Zurück zur Klartext-Registry (registry.json) — gleicher Container-Name,
@@ -467,19 +467,19 @@ nats-tls-up:
 	-podman rm omp-nats-1 omp-nats-2 omp-nats-3
 	podman run -d --name omp-nats-1 --restart=always --network=host \
 		-v $(CURDIR)/.run/mtls:/certs:ro,Z \
-		docker.io/library/nats:latest -js --server_name omp-nats-1 -p 4222 -m 8222 \
+		docker.io/library/nats:2.15.1 -js --server_name omp-nats-1 -p 4222 -m 8222 \
 		--cluster_name OMP --cluster nats://127.0.0.1:6222 \
 		--routes nats://127.0.0.1:6223,nats://127.0.0.1:6224 \
 		--tls --tlscert=/certs/nats-server.crt --tlskey=/certs/nats-server.key --tlscacert=/certs/root_ca.crt --tlsverify
 	podman run -d --name omp-nats-2 --restart=always --network=host \
 		-v $(CURDIR)/.run/mtls:/certs:ro,Z \
-		docker.io/library/nats:latest -js --server_name omp-nats-2 -p 4223 -m 8223 \
+		docker.io/library/nats:2.15.1 -js --server_name omp-nats-2 -p 4223 -m 8223 \
 		--cluster_name OMP --cluster nats://127.0.0.1:6223 \
 		--routes nats://127.0.0.1:6222,nats://127.0.0.1:6224 \
 		--tls --tlscert=/certs/nats-server.crt --tlskey=/certs/nats-server.key --tlscacert=/certs/root_ca.crt --tlsverify
 	podman run -d --name omp-nats-3 --restart=always --network=host \
 		-v $(CURDIR)/.run/mtls:/certs:ro,Z \
-		docker.io/library/nats:latest -js --server_name omp-nats-3 -p 4224 -m 8224 \
+		docker.io/library/nats:2.15.1 -js --server_name omp-nats-3 -p 4224 -m 8224 \
 		--cluster_name OMP --cluster nats://127.0.0.1:6224 \
 		--routes nats://127.0.0.1:6222,nats://127.0.0.1:6223 \
 		--tls --tlscert=/certs/nats-server.crt --tlskey=/certs/nats-server.key --tlscacert=/certs/root_ca.crt --tlsverify
@@ -544,7 +544,7 @@ minio-up:
 			-e MINIO_ROOT_USER=omp-minio-dev \
 			-e MINIO_ROOT_PASSWORD=omp-minio-dev-pass \
 			-v $(CURDIR)/.run/minio-data:/data:Z \
-			quay.io/minio/minio:latest server /data --address :9000 --console-address :9001; \
+			quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e server /data --address :9000 --console-address :9001; \
 	fi
 	@echo "MinIO bereit: S3-API http://127.0.0.1:9000, Konsole http://127.0.0.1:9001"
 	@echo "Dev-Zugangsdaten (NUR Dev, s. docs/HANDBUCH.md): omp-minio-dev / omp-minio-dev-pass"

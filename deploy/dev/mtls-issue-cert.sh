@@ -64,7 +64,7 @@ podman run --rm --network host --userns=keep-id \
   -v "$CERT_DIR":/cert-out \
   -v "$KEY_DIR":/key-out \
   --entrypoint step \
-  docker.io/smallstep/step-ca:latest \
+  docker.io/smallstep/step-ca:0.30.2 \
   ca certificate "$LABEL" "/cert-out/$(basename "$CERT_OUT")" "/key-out/$(basename "$KEY_OUT")" \
     --ca-url https://localhost:9000 \
     --root /home/step/certs/root_ca.crt \

@@ -3,7 +3,7 @@ Description=OpenMediaPlatform interne CA für mTLS Orchestrator<->Nodes (UMSETZU
 After=network-online.target
 
 [Container]
-Image=docker.io/smallstep/step-ca:latest
+Image=docker.io/smallstep/step-ca:0.30.2
 ContainerName=omp-step-ca
 # DOCKER_STEPCA_INIT_PASSWORD_FILE zeigt in Produktion auf ein echtes
 # Secret (z. B. Podman-Secret/Vault), nicht auf die im Dev-Fallback per

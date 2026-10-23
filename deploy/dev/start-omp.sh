@@ -27,7 +27,7 @@ mkdir -p "$RUN_DIR" "$ROOT_DIR/bin"
 if [ "${OMP_SKIP_PREFLIGHT:-}" != "1" ] && [ "${OMP_SKIP_BUILD:-}" != "1" ]; then
   if ! "$ROOT_DIR/deploy/dev/preflight.sh" --for=start --quiet; then
     echo "" >&2
-    echo "Start abgebrochen. Beheben und erneut 'make start' — oder mit OMP_SKIP_PREFLIGHT=1 make start die Prüfung überspringen." >&2
+    echo "Start aborted. Fix the issues above and run 'make start' again — or skip the check with OMP_SKIP_PREFLIGHT=1 make start." >&2
     exit 1
   fi
 fi

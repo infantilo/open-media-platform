@@ -30539,3 +30539,62 @@ fast alles in den `appsrc`-Sendethreads (Opus-Kodierung + SRTP je Hörer). Opus 
 **Latenz:** Eingangspuffer kommt paarweise (2 × 20 ms) — Chromium sendet unter Last gebündelt; der Rest-Puffer wird per Minimum-Fenster (0,5 s) gekürzt. Die Messwerte schwanken zwischen Läufen stark (16–140 ms Node-Anteil),
 weil Chromium und Node auf demselben unter Last stehenden Rechner laufen. **Belastbar nur auf echter Hardware messen** (Handy + Kopfhörer, getrennter Server).
 **Nicht gemacht (bewusst):** Mono-Kodierung für mittige Hörer (Sprung zwischen Mono/Stereo mitten im Strom), Aufzeichnung, SIP, Trunk.
+
+## 2026-10-23 — NMOS-Registry-Image auf festes Tag gepinnt (`master-b6c8367`)
+
+**Anlass:** `rhastie/nmos-cpp:latest` wurde von Podman nur einmal geladen; das
+lokale Image stammte vom 2023-03-08 (`master-0fb6b51`), `latest` upstream seit
+2026-10-13 neu (`master-b6c8367`, nmos-cpp-Basis aktuell). Frische Rechner
+(CI, Offline-Bundle, Proxmox) bekamen dadurch eine andere Version als der
+Entwicklungsrechner.
+
+**Entscheidung:** festes Tag `docker.io/rhastie/nmos-cpp:master-b6c8367` in
+`Makefile` (up + TLS-Variante), `deploy/quadlets/omp-nmos-registry.container`
+(ohne `AutoUpdate`), `deploy/offline/make-offline-bundle.sh`,
+`.github/workflows/ci.yml`. Update künftig bewusst: Tag anheben, Quarantäne-
+Test (zweiter Container auf 18010/18011) wiederholen, dann überall ersetzen.
+
+**Quarantäne-Test (bestanden, gleiches Verhalten wie das alte Image):**
+`registry.json` wird übernommen; Query/Registration v1.0–v1.3; Node, Device,
+Sender, Receiver, Source und Video-Flow mit `tags: {}` (+ `media_type`,
+`components`) → 201; Heartbeat 200; Ablauf nach 60 s ohne Heartbeat;
+Query-Subscription + Websocket-Handshake 101. `ws_href` nennt wie vorher den
+Container-Port 8011. Nicht gesondert getestet: BCP-003-01-TLS-Pfad.
+
+## 2026-10-23 — Weitere Images gepinnt: NATS 2.15.1, step-ca 0.30.2, MinIO per Digest
+
+**Entscheidung:** `nats:latest` → `docker.io/library/nats:2.15.1` (war lokal
+v2.14.3), `smallstep/step-ca:latest` → `:0.30.2` (identisch mit dem bisher
+lokalen Image, upstream aktuell), MinIO → `quay.io/minio/minio@sha256:14cea493…`
+(RELEASE.2025-09-07T16-13-09Z). Geändert in `Makefile` (up, nats-tls-up,
+mtls-up, minio-up), den Quadlets, `deploy/dev/mtls-issue-cert.sh` und
+`deploy/offline/make-offline-bundle.sh`.
+
+**MinIO-Sonderfall:** Auf `quay.io/minio/minio` lässt sich weder ein Versions-Tag
+noch `:latest` noch das Digest mehr ziehen (`unauthorized`), auf Docker Hub
+gibt es keine Tags — MinIO verteilt keine Community-Images mehr. Es bleibt nur
+die lokale Kopie (Digest-Pin, läuft nur auf Rechnern, die das Image schon
+haben; das Offline-Bundle nimmt es mit, wenn es lokal vorhanden ist). Auf einem
+frischen Rechner scheitert `make minio-up`. MinIO ist optional (S3-Backend);
+Alternative bei Bedarf: anderes S3-kompatibles Backend oder selbst gebautes Image.
+
+**Tests vor dem Umschalten (alle bestanden):**
+- NMOS-Registry mit BCP-003-01-TLS (`registry-tls.json`, Zertifikate frisch von
+  step-ca 0.30.2): https mit Root-CA 200, mit Client-Zertifikat 200, Klartext
+  und https ohne CA abgelehnt, Registrierung über TLS 201. Der Log-Eintrag
+  „OCSP error … missing OCSP URIs“ tritt mit dem alten Image identisch auf
+  (kein Regress, step-ca-Zertifikate enthalten keine OCSP-URI).
+- NATS 2.15.1 als 3-Knoten-JetStream-Cluster (Quarantäne-Ports): Stream R3 +
+  KV R3, Leader-Knoten gestoppt → Publish/Get funktionieren weiter, Knoten tritt
+  wieder bei und synchronisiert sich.
+
+**Live-Umstellung NATS:** Rolling, ein Knoten nach dem anderen. Die
+`omp-nats-*`-Container hatten kein Volume (Store im Container); vor dem Tausch
+wurde `/tmp/nats` je Knoten nach `.run/nats-roll/nN` kopiert und ins neue
+Container gemountet, damit Raft-Identität und Streams (`OMP_EVENTS`,
+`OMP_LOGS`, R3) erhalten blieben. Orchestrator hat sich selbst wiederverbunden.
+Diese Container haben dadurch jetzt ein Volume; `make up` legt sie bei einem
+Neuanlegen (nach `make down`) wie bisher ohne Volume an.
+
+**Offen:** etcd bleibt auf v3.5.17 (Patroni-Cluster, eigene Entscheidung);
+Caddy ist weiter `latest`.

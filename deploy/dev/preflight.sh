@@ -168,11 +168,11 @@ free_kb="$(df -Pk "$ROOT_DIR" 2>/dev/null | awk 'NR==2 {print $4}')"
 if [ -n "${free_kb:-}" ]; then
   free_gb="$(awk -v k="$free_kb" 'BEGIN {printf "%.1f", k/1024/1024}')"
   if [ "$free_kb" -lt 3145728 ]; then
-    err "Plattenplatz" "${free_gb} GB frei in $ROOT_DIR — Container-Images, Build-Artefakte und Datenbank brauchen mindestens 10 GB" "Platz schaffen (z. B. 'podman system prune' entfernt ungenutzte Images)"
+    err "Disk space" "${free_gb} GB free in $ROOT_DIR — container images, build artifacts and database need at least 10 GB" "Free up space: 'make clean-cache' (cargo incremental caches + untagged images); biggest consumer is usually nodes/target ('cargo clean --manifest-path nodes/Cargo.toml' or 'rm -rf nodes/target/debug'); 'podman system prune' removes unused images"
   elif [ "$free_kb" -lt 10485760 ]; then
-    warn "Plattenplatz" "${free_gb} GB frei — knapp (Rust-Build der Nodes allein braucht mehrere GB)" "Empfohlen: mindestens 10 GB frei"
+    warn "Disk space" "${free_gb} GB free — tight (the Rust build of the nodes alone needs several GB)" "Recommended: at least 10 GB free"
   else
-    ok "Plattenplatz" "${free_gb} GB frei"
+    ok "Disk space" "${free_gb} GB free"
   fi
 fi
 
@@ -192,13 +192,14 @@ PREBUILT=0; [ -f "$ROOT_DIR/.offline-install" ] && PREBUILT=1
 if [ "$PREBUILT" = 1 ] && ! command -v go >/dev/null 2>&1; then
   ok "Go" "nicht nötig (Offline-Paket mit fertigen Binaries)"
 elif command -v go >/dev/null 2>&1; then
-  go_have="$(go env GOVERSION 2>/dev/null | sed 's/^go//')"
+  # im Orchestrator-Verzeichnis fragen: dort greift go.mod/GOTOOLCHAIN (bereits geladene Toolchain zählt)
+  go_have="$(cd "$ROOT_DIR/orchestrator" 2>/dev/null && go env GOVERSION 2>/dev/null | sed 's/^go//')"
   go_need="$(awk '/^go [0-9]/ {print $2; exit}' "$ROOT_DIR/orchestrator/go.mod" 2>/dev/null)"
   if [ -n "$go_have" ] && [ -n "$go_need" ] && ! version_ge "$go_have" "$go_need"; then
     if [ "${GOTOOLCHAIN:-auto}" = "local" ]; then
-      err "Go" "Version $go_have — das Projekt braucht $go_need" "Go $go_need oder neuer installieren: https://go.dev/dl/"
+      err "Go" "Version $go_have — the project needs $go_need" "Install Go $go_need or newer: https://go.dev/dl/"
     else
-      warn "Go" "Version $go_have — das Projekt braucht $go_need; Go lädt die passende Toolchain beim ersten Build selbst nach (Internetzugang nötig)" "Alternativ Go $go_need installieren: https://go.dev/dl/"
+      warn "Go" "Version $go_have — the project needs $go_need; Go downloads the matching toolchain itself on the first build (internet access required)" "Alternatively install Go $go_need: https://go.dev/dl/"
     fi
   else
     ok "Go" "$go_have"
@@ -440,11 +441,11 @@ else
   if [ "$QUIET" = "1" ] && [ "$N_ERR" -eq 0 ]; then
     :  # Kurzform (aus make start): Warnungen stehen schon oben, kein Abschlusssatz
   elif [ "$N_ERR" -gt 0 ]; then
-    printf '%s%s Fehler, %s Warnung(en) — bitte die markierten Punkte beheben (→ Zeilen), dann erneut: make preflight%s\n' "$C_ERR" "$N_ERR" "$N_WARN" "$C_OFF"
+    printf '%s%s error(s), %s warning(s) — please fix the marked items (→ lines), then run again: make preflight%s\n' "$C_ERR" "$N_ERR" "$N_WARN" "$C_OFF"
   elif [ "$N_WARN" -gt 0 ]; then
-    printf '%sBereit, mit %s Hinweis(en).%s Start: make start\n' "$C_WARN" "$N_WARN" "$C_OFF"
+    printf '%sReady, with %s warning(s).%s Start: make start\n' "$C_WARN" "$N_WARN" "$C_OFF"
   else
-    printf '%sAlles bereit.%s Start: make start\n' "$C_OK" "$C_OFF"
+    printf '%sAll good.%s Start: make start\n' "$C_OK" "$C_OFF"
   fi
 fi
 
