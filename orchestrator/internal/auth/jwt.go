@@ -67,7 +67,12 @@ type claims struct {
 	// entspricht genau dem Default-Epoch nie widerrufener Nutzer, kein
 	// Sonderfall nötig.
 	Epoch int64 `json:"epoch"`
+	// Kind: "svc" für Service-Tokens einer Node-Instanz, leer für Nutzer-Tokens (Audit 2026-10-23 H3: das Fehlen
+	// einer users-Zeile war das einzige Merkmal eines Service-Tokens — das Token eines gelöschten Nutzers galt weiter).
+	Kind string `json:"kind,omitempty"`
 }
+
+const kindService = "svc"
 
 const jwtHeader = `{"alg":"HS256","typ":"JWT"}`
 
@@ -113,12 +118,15 @@ func (s *Signer) issue(p Principal, now time.Time) (string, time.Time, error) {
 // Subject=instanceID angelegte Bindung (workflows.Service.runStart)
 // greift damit ohne Sonderfall in der Prüfung selbst.
 func (s *Signer) issueService(instanceID string, now time.Time) (string, time.Time, error) {
-	return s.issueWithTTL(Principal{UserID: instanceID, Username: instanceID}, now, ServiceTokenTTL)
+	return s.issueWithTTL(Principal{UserID: instanceID, Username: instanceID, Service: true}, now, ServiceTokenTTL)
 }
 
 func (s *Signer) issueWithTTL(p Principal, now time.Time, ttl time.Duration) (string, time.Time, error) {
 	exp := now.Add(ttl)
 	c := claims{Subject: p.UserID, Username: p.Username, IssuedAt: now.Unix(), ExpireAt: exp.Unix(), Epoch: p.Epoch}
+	if p.Service {
+		c.Kind = kindService
+	}
 	payload, err := json.Marshal(c)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("auth: marshal claims: %w", err)
@@ -157,5 +165,8 @@ func (s *Signer) verify(token string, now time.Time) (Principal, error) {
 	if now.Unix() > c.ExpireAt {
 		return Principal{}, ErrTokenExpired
 	}
-	return Principal{UserID: c.Subject, Username: c.Username, Epoch: c.Epoch}, nil
+	// Übergang: Service-Tokens vor Einführung von Kind trugen Subject == Username (= Instanz-ID); Nutzer-Tokens nie.
+	// Sie laufen nach ServiceTokenTTL aus, danach genügt Kind.
+	service := c.Kind == kindService || (c.Kind == "" && c.Subject == c.Username)
+	return Principal{UserID: c.Subject, Username: c.Username, Epoch: c.Epoch, Service: service}, nil
 }

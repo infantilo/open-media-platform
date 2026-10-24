@@ -157,3 +157,92 @@ func TestSignerVerifyRoundTripsEpoch(t *testing.T) {
 		t.Errorf("Epoch = %d, want 3", got.Epoch)
 	}
 }
+
+// Audit 2026-10-23 H3: das Token eines gelöschten Nutzers galt weiter, weil „keine users-Zeile“ als Service-Token zählte.
+func TestServiceAuthenticateRejectsTokenOfDeletedUser(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	username := "test-svc-deleted-" + mustNewID(t)
+	t.Cleanup(func() { _ = svc.DeleteUser(ctx, username) })
+
+	if _, err := svc.CreateUser(ctx, username, "supersecret1", ""); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := svc.Login(ctx, username, "supersecret1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Authenticate(ctx, token); err != nil {
+		t.Fatalf("vor dem Löschen: %v", err)
+	}
+	if err := svc.DeleteUser(ctx, username); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Authenticate(ctx, token); err == nil {
+		t.Fatal("Token eines gelöschten Nutzers muss sofort ungültig sein")
+	}
+}
+
+// Gleicher Name, neues Konto: das alte Token darf nicht auf das neue Konto durchschlagen.
+func TestServiceAuthenticateRejectsTokenOfRecreatedUser(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	username := "test-svc-recreated-" + mustNewID(t)
+	t.Cleanup(func() { _ = svc.DeleteUser(ctx, username) })
+
+	if _, err := svc.CreateUser(ctx, username, "supersecret1", ""); err != nil {
+		t.Fatal(err)
+	}
+	old, _, err := svc.Login(ctx, username, "supersecret1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeleteUser(ctx, username); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateUser(ctx, username, "supersecret1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Authenticate(ctx, old); err == nil {
+		t.Fatal("Token des früheren Kontos gleichen Namens muss ungültig sein")
+	}
+	fresh, _, err := svc.Login(ctx, username, "supersecret1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Authenticate(ctx, fresh); err != nil {
+		t.Fatalf("neues Token muss gelten: %v", err)
+	}
+}
+
+func TestServiceTokenKindAndLegacyTransition(t *testing.T) {
+	signer := NewSigner([]byte("k"))
+	now := time.Now()
+	tok, _, _ := signer.issueService("inst-1", now)
+	if p, err := signer.verify(tok, now); err != nil || !p.Service {
+		t.Fatalf("Service-Token: %+v %v", p, err)
+	}
+	ut, _, _ := signer.issue(Principal{UserID: "uuid-1", Username: "alice"}, now)
+	if p, err := signer.verify(ut, now); err != nil || p.Service {
+		t.Fatalf("Nutzer-Token darf kein Service sein: %+v %v", p, err)
+	}
+	// Alt-Service-Token ohne Kind (Subject == Username) gilt übergangsweise weiter
+	legacy, _, _ := signer.issueWithTTL(Principal{UserID: "inst-2", Username: "inst-2"}, now, time.Hour)
+	if p, err := signer.verify(legacy, now); err != nil || !p.Service {
+		t.Fatalf("Übergang: %+v %v", p, err)
+	}
+}
+
+func TestServiceTokenWithUserAccountNameIsRejected(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	username := "test-svc-spoof-" + mustNewID(t)
+	t.Cleanup(func() { _ = svc.DeleteUser(ctx, username) })
+	if _, err := svc.CreateUser(ctx, username, "supersecret1", ""); err != nil {
+		t.Fatal(err)
+	}
+	tok, _, _ := svc.IssueServiceToken(username)
+	if _, err := svc.Authenticate(ctx, tok); err == nil {
+		t.Fatal("ein Service-Token auf den Namen eines Nutzerkontos darf nicht gelten")
+	}
+}

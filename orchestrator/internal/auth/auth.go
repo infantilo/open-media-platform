@@ -56,4 +56,6 @@ type Principal struct {
 	Username string
 	Epoch    int64
 	OrgID    string
+	// Service: Token einer Node-Instanz (IssueServiceToken), kein Nutzerkonto — es gibt dazu keine users-Zeile.
+	Service bool
 }

@@ -582,6 +582,26 @@ func gpuPercentOrZero(p *float64) float64 {
 	return *p
 }
 
+// lessLoaded: c ist weniger belastet als best (CPU, dann RAM, Netz, GPU; Telemetrie-Hosts vor telemetrielosen).
+func lessLoaded(c, best hostScore) bool {
+	if !c.hasMetrics {
+		return false
+	}
+	if !best.hasMetrics {
+		return true
+	}
+	if c.cpuPercent != best.cpuPercent {
+		return c.cpuPercent < best.cpuPercent
+	}
+	if c.memPercent != best.memPercent {
+		return c.memPercent < best.memPercent
+	}
+	if n, b := netPercentOrZero(c.netPercent), netPercentOrZero(best.netPercent); n != b {
+		return n < b
+	}
+	return gpuPercentOrZero(c.gpuPercent) < gpuPercentOrZero(best.gpuPercent)
+}
+
 func containsString(list []string, s string) bool {
 	for _, v := range list {
 		if v == s {
@@ -689,13 +709,7 @@ func (e *Engine) SelectHost(req PlacementRequest, occ Occupancy) PlacementResult
 		}
 		best := pool[0]
 		for _, c := range pool[1:] {
-			if c.score.hasMetrics && (!best.score.hasMetrics || c.score.cpuPercent < best.score.cpuPercent ||
-				(c.score.cpuPercent == best.score.cpuPercent && c.score.memPercent < best.score.memPercent) ||
-				(c.score.cpuPercent == best.score.cpuPercent && c.score.memPercent == best.score.memPercent &&
-					netPercentOrZero(c.score.netPercent) < netPercentOrZero(best.score.netPercent)) ||
-				(c.score.cpuPercent == best.score.cpuPercent && c.score.memPercent == best.score.memPercent &&
-					netPercentOrZero(c.score.netPercent) == netPercentOrZero(best.score.netPercent) &&
-					gpuPercentOrZero(c.score.gpuPercent) < gpuPercentOrZero(best.score.gpuPercent))) {
+			if lessLoaded(c.score, best.score) {
 				best = c
 			}
 		}

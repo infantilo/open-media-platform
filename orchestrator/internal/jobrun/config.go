@@ -52,6 +52,9 @@ type HostOpts struct {
 	Nice      int      `json:"nice,omitempty"`
 	// Reserve überschreibt die Live-Reserve für diesen Host (nil = System-Reserve bzw. Auto-Kalibrierung).
 	Reserve *Reserve `json:"reserve,omitempty"`
+	// Roots (nur lokal): erlaubte Wurzelverzeichnisse für absolute Pfade in den Argumenten. Leer = keine Einschränkung
+	// außer dem Verbot von „..“-Segmenten und Nullzeichen. Auf Agent-Hosts gilt `jobRoots` der tools.json.
+	Roots []string `json:"roots,omitempty"`
 }
 
 func (o HostOpts) enabled() bool { return o.Enabled == nil || *o.Enabled }

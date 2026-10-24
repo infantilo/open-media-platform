@@ -18,10 +18,63 @@ func TestRequireAuthBypassesWhenNoUsersExist(t *testing.T) {
 	g := &authGate{auth: fakeAuthSvc{userCount: 0}, authz: fakeAuthzSvc{}, audit: &fakeAuditSvc{}, nodes: fakeNodeLister{}}
 
 	rec := httptest.NewRecorder()
-	g.requireAuth(okHandler)(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
+	g.requireAuth(okHandler)(rec, localReq(http.MethodGet, "/x"))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (bootstrap bypass)", rec.Code)
+	}
+}
+
+func localReq(method, path string) *http.Request {
+	r := httptest.NewRequest(method, path, nil)
+	r.RemoteAddr = "127.0.0.1:50000"
+	return r
+}
+
+// Audit 2026-10-23 H2: im Bootstrap-Modus (kein Nutzer) war die API für jeden im Netz offen.
+func TestBootstrapBypassOnlyForLocalRequests(t *testing.T) {
+	mk := func(open bool, token string) *authGate {
+		return &authGate{auth: fakeAuthSvc{userCount: 0}, authz: fakeAuthzSvc{}, audit: &fakeAuditSvc{}, nodes: fakeNodeLister{}, bootstrapOpen: open, bootstrapToken: token}
+	}
+	do := func(g *authGate, r *http.Request) int {
+		rec := httptest.NewRecorder()
+		g.requireAuth(okHandler)(rec, r)
+		return rec.Code
+	}
+	remote := httptest.NewRequest(http.MethodGet, "/x", nil) // 192.0.2.1
+	if c := do(mk(false, ""), remote); c != http.StatusUnauthorized {
+		t.Errorf("entfernt ohne Freigabe: %d, want 401", c)
+	}
+	if c := do(mk(false, ""), localReq(http.MethodGet, "/x")); c != http.StatusOK {
+		t.Errorf("Loopback: %d, want 200", c)
+	}
+	v6 := localReq(http.MethodGet, "/x")
+	v6.RemoteAddr = "[::1]:50000"
+	if c := do(mk(false, ""), v6); c != http.StatusOK {
+		t.Errorf("Loopback IPv6: %d, want 200", c)
+	}
+	for _, h := range []string{"X-Forwarded-For", "X-Real-Ip", "Forwarded", "X-Forwarded-Host"} {
+		r := localReq(http.MethodGet, "/x") // Reverse-Proxy auf demselben Rechner
+		r.Header.Set(h, "203.0.113.9")
+		if c := do(mk(false, ""), r); c != http.StatusUnauthorized {
+			t.Errorf("über Proxy (%s): %d, want 401", h, c)
+		}
+	}
+	if c := do(mk(true, ""), remote); c != http.StatusOK {
+		t.Errorf("OMP_BOOTSTRAP_OPEN: %d, want 200", c)
+	}
+	withTok := httptest.NewRequest(http.MethodGet, "/x", nil)
+	withTok.Header.Set("X-Bootstrap-Token", "geheim")
+	if c := do(mk(false, "geheim"), withTok); c != http.StatusOK {
+		t.Errorf("richtiges Bootstrap-Token: %d, want 200", c)
+	}
+	withTok.Header.Set("X-Bootstrap-Token", "falsch")
+	if c := do(mk(false, "geheim"), withTok); c != http.StatusUnauthorized {
+		t.Errorf("falsches Token: %d, want 401", c)
+	}
+	noTok := httptest.NewRequest(http.MethodGet, "/x", nil)
+	if c := do(mk(false, ""), noTok); c != http.StatusUnauthorized {
+		t.Errorf("leeres Token darf nie passen: %d", c)
 	}
 }
 

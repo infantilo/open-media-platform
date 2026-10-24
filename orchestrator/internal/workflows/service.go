@@ -254,6 +254,9 @@ type IOPortClaimer interface {
 // Service verwaltet Workflow-Definitionen und führt Bundle-Start/-Stop
 // aus (ARCHITECTURE.md §6.2, UMSETZUNG.md D7 Teil 1/Teil 2).
 type Service struct {
+	// groupMoves: Instanzen, die gerade gemeinsam (als MXL-Verbund) auf einen Zielhost umziehen (netplace.go).
+	groupMoves sync.Map // instanceID -> Zielhost
+
 	// Erweiterungspunkte (extension.go, Kapitel 36.5)
 	extMu        sync.RWMutex
 	envHooks     []RoleEnvHook
@@ -877,6 +880,15 @@ func (s *Service) runStart(wf Workflow, ioAssignments map[string]ioPortAssignmen
 	// gegenseitig ausweichen, nicht nur bereits laufenden Workflows.
 	occ := s.buildOccupancy(time.Now())
 
+	fixedHosts := map[string]string{}
+	for name, a := range ioAssignments {
+		fixedHosts[name] = a.HostID
+	}
+	var placer *startPlacer
+	if s.resources != nil {
+		placer = s.newStartPlacer(wf.Definition, fixedHosts, occ)
+	}
+
 	pending := map[string]string{} // roleName -> instanceID, noch nicht in der Registry gesehen
 	for _, role := range wf.Definition.Roles {
 		resolvedHostID := role.HostID
@@ -888,13 +900,11 @@ func (s *Service) runStart(wf Workflow, ioAssignments map[string]ioPortAssignmen
 			// hier bewusst kein Mitspracherecht, s. runStart-Doku.
 			resolvedHostID = assignment.HostID
 			claimedPortID = assignment.PortID
-		} else if s.resources != nil {
-			result := s.resources.SelectHost(placement.PlacementRequest{
-				NodeType:        role.NodeType,
-				PreferredHostID: role.HostID,
-				AffinityGroup:   role.AffinityGroup,
-				RedundancyGroup: role.RedundancyGroup,
-			}, occ)
+			if placer != nil {
+				placer.record(role.Name, resolvedHostID)
+			}
+		} else if placer != nil {
+			result := placer.place(role, occ)
 			resolvedHostID = result.HostID
 			placementReason = result.Reason
 		}
@@ -938,6 +948,11 @@ func (s *Service) runStart(wf Workflow, ioAssignments map[string]ioPortAssignmen
 		}
 		wf.Runtime[role.Name] = RoleRuntime{InstanceID: inst.ID, HostID: resolvedHostID}
 		pending[role.Name] = inst.ID
+		for _, l := range splitMXLLinks(roleLinks(wf.Definition, s.catalogEntries()), hostsOfRuntime(wf)) {
+			if l.A == role.Name || l.B == role.Name {
+				slog.Warn("workflows: MXL-Verbindung über zwei Hosts geplant", "workflow", wf.ID, "from", l.A, "to", l.B)
+			}
+		}
 		if placementReason != "" && resolvedHostID != role.HostID {
 			slog.Info("workflows: role placed on a different host than preferred",
 				"workflow", wf.ID, "role", role.Name, "preferredHostId", role.HostID,
@@ -1410,13 +1425,22 @@ func (s *Service) runRestartRole(wf Workflow, roleName string) {
 	resolvedHostID := role.HostID
 	if s.resources != nil {
 		occ := s.buildOccupancy(time.Now())
+		preferred := role.HostID
+		// MXL ist host-lokal: eine neu gestartete Rolle bleibt bei ihren laufenden MXL-Gegenstellen (Kapitel 56).
+		peer, hasPeer := peerHost(wf, roleLinks(wf.Definition, s.catalogEntries()), roleName)
+		if hasPeer {
+			preferred = peer
+		}
 		result := s.resources.SelectHost(placement.PlacementRequest{
 			NodeType:        role.NodeType,
-			PreferredHostID: role.HostID,
+			PreferredHostID: preferred,
 			AffinityGroup:   role.AffinityGroup,
 			RedundancyGroup: role.RedundancyGroup,
 		}, occ)
 		resolvedHostID = result.HostID
+		if hasPeer && resolvedHostID != peer {
+			slog.Warn("workflows: RestartRole: MXL-Gegenstelle liegt auf einem anderen Host als der neue Platz", "workflow", wf.ID, "role", roleName, "peerHost", peer, "newHost", resolvedHostID)
+		}
 	}
 
 	// oldRuntime wurde oben bereits gestoppt (s. Aufruf von

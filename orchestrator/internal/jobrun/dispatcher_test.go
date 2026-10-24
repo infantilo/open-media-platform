@@ -546,3 +546,49 @@ func TestAgentLehntGrundsaetzlichAb(t *testing.T) {
 		t.Fatalf("%+v", j)
 	}
 }
+
+// Audit 2026-10-23 B3: lokal gab es keine Argumentprüfung.
+func TestLokaleArgumentePruefung(t *testing.T) {
+	root := t.TempDir()
+	for _, c := range []struct {
+		name  string
+		args  []string
+		roots []string
+		bad   bool
+	}{
+		{"Elternpfad", []string{"-i", "../../etc/passwd", "o.mp4"}, nil, true},
+		{"eingebettet", []string{"-vf", "movie=../x.mp4"}, nil, true},
+		{"Nullzeichen", []string{"a\x00b"}, nil, true},
+		{"ohne Wurzeln alles absolute erlaubt", []string{"-i", "/etc/hostname", "/tmp/o.mp4"}, nil, false},
+		{"Wurzel: innen", []string{"-i", filepath.Join(root, "a.mxf"), filepath.Join(root, "neu", "o.mp4")}, []string{root}, false},
+		{"Wurzel: außen", []string{"-i", "/etc/passwd"}, []string{root}, true},
+		{"Wurzel: Filter außen", []string{"-vf", "movie=/etc/passwd[x]"}, []string{root}, true},
+		{"Wurzel: file:-URL außen", []string{"-i", "file:///etc/passwd"}, []string{root}, true},
+		{"Wurzel: Optionen und Ausdrücke bleiben", []string{"-vf", "scale=1280:720", "-c:v", "libx264"}, []string{root}, false},
+	} {
+		err := validateLocal(c.args, c.roots)
+		var rej *rejectedError
+		if c.bad && !errors.As(err, &rej) {
+			t.Errorf("%s: Ablehnung erwartet, bekam %v", c.name, err)
+		}
+		if !c.bad && err != nil {
+			t.Errorf("%s: erlaubt erwartet, bekam %v", c.name, err)
+		}
+	}
+}
+
+func TestLokalAbgelehnterJobScheitertSofortOhneWiederholung(t *testing.T) {
+	hosts := &fakeHosts{hs: []HostState{localHost(5)}}
+	cfg := DefaultConfig()
+	cfg.MaxAttempts = 3
+	d := New(testConfig(&cfg), hosts)
+	d.LocalTool = script(t, `echo sollte-nie-laufen`)
+	startLoop(t, d)
+	res := d.Run(context.Background(), Spec{Tool: "ffmpeg", Args: []string{"-i", "../../etc/passwd", "o.mp4"}})
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "..") {
+		t.Fatalf("%+v", res)
+	}
+	if j := d.List(StateFailed); len(j) != 1 || j[0].Attempt != 1 {
+		t.Fatalf("keine Wiederholung erwartet: %+v", j)
+	}
+}

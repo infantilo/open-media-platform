@@ -451,6 +451,10 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 			instHost := map[string]string{}
 			for _, in := range ll.List() {
 				instHost[in.ID] = in.HostID
+				// Zieht der ganze Verbund auf denselben Zielhost, zählt die noch nicht umgezogene Gegenstelle schon dort.
+				if t, ok := s.groupMoves.Load(in.ID); ok {
+					instHost[in.ID] = t.(string)
+				}
 			}
 			if peer, bad := mxlPeerConflict(s.nodes.List(), el.Edges(), instHost, oldNodeID, targetHostID); bad {
 				slog.Warn("workflows: executeMigration: not migrable, MXL peer on another host", "workflow", workflowID, "role", role, "peer", peer, "targetHost", targetHostID)

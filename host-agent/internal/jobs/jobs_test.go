@@ -255,3 +255,32 @@ func TestCleanupStaleBeendetVerwaisteProzesse(t *testing.T) {
 		t.Fatal("eigener Prozess lebt natürlich")
 	}
 }
+
+// Audit 2026-10-23 B3: relative Pfade mit „..“ wurden nicht geprüft (nur absolute) und verließen das Arbeitsverzeichnis.
+func TestValidateLehntRelativeElternPfadeAb(t *testing.T) {
+	r, _, root := newRunner(t, map[string]ToolConfig{"ffmpeg": {Path: "/usr/bin/ffmpeg"}}, false)
+	out := filepath.Join(root, "o.mp4")
+	for _, bad := range [][]string{
+		{"-i", "../../../../etc/passwd", out},
+		{"-i", filepath.Join(root, "a.mxf"), "../../../../home/x/.ssh/authorized_keys"},
+		{"-vf", "movie=../../secret.mp4[x]", "-i", filepath.Join(root, "a"), out},
+		{"-vf", "subtitles='../x.srt'", "-i", filepath.Join(root, "a"), out},
+		{"-i", "a/../../b", out},
+		{"-i", `..\..\b`, out},
+	} {
+		_, err := r.Validate("ffmpeg", bad)
+		var rej *RejectError
+		if err == nil || !errors.As(err, &rej) {
+			t.Errorf("als dauerhafte Ablehnung erwartet: %v → %v", bad, err)
+		}
+	}
+	// Harmloses bleibt erlaubt: relative Datei im Arbeitsverzeichnis, Punkte in Namen, Ausdrücke
+	for _, good := range [][]string{
+		{"-i", filepath.Join(root, "a..b.mxf"), "teil.part1.mp4"},
+		{"-vf", "scale=1280:720,select='between(n,1,5)'", "-i", filepath.Join(root, "a"), out},
+	} {
+		if _, err := r.Validate("ffmpeg", good); err != nil {
+			t.Errorf("erlaubt erwartet: %v → %v", good, err)
+		}
+	}
+}

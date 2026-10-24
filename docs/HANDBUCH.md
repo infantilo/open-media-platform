@@ -472,6 +472,14 @@ Rollback-Kopien und Verlauf, Standard `.updates/`),
 `OMP_UPDATE_ALLOW_UNSIGNED`, `OMP_SKIP_BUILD` (überspringt in
 `start-omp.sh`/`start-supervisor.sh`/`start-hosts.sh` den Quellcode-Build).
 
+**Erst-Administrator (Bootstrap-Modus).** Solange kein Nutzer existiert, ist
+die API offen, damit sich der erste Administrator anlegen lässt — aber nur
+für Anfragen vom Rechner selbst (Loopback, ohne Proxy-Kopfzeilen). Von einem
+anderen Rechner aus: `OMP_BOOTSTRAP_OPEN=1` setzen (nur für die Erstanlage,
+danach entfernen) oder `OMP_BOOTSTRAP_TOKEN=<geheim>` setzen und den Aufruf
+mit Kopfzeile `X-Bootstrap-Token: <geheim>` senden. Hinter einem Reverse-Proxy
+auf demselben Rechner zählt die Anfrage als entfernt.
+
 **Entwicklungsbetrieb.** Ein späteres `make start` baut wieder aus dem
 Quellcode (Version „dev") und überschreibt damit einen eingespielten
 Stand. Der Update-Weg ist für Installationen mit fertigen Binaries

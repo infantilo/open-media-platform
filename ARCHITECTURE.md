@@ -4615,3 +4615,25 @@ bildgenau gleich; die Leitspur (erste verbundene) bestimmt die Ausrichtung des T
 Komprimierter Pfad (AU-Ring, Schnitt an IDR/IRAP, Parameter-Sätze) und Testbild als Haltebild sind nicht umgesetzt; Katalog-Latenz statisch für
 25 Bilder/s; Ton-Kanalzahl/Abtastrate fest je Workflow; Bildformat im Ring ist v210 (≈ 5,5 MB je 1080-Bild).
 
+
+## 31. Netzwerkarme Platzierung: Verbünde statt Einzelrollen (Plan 2026-10-25, UMSETZUNG.md Kapitel 56)
+
+**Ziel:** Beim Start und beim Rehosting (Ausfall, Wartung, Vorwarnung) so platzieren, dass möglichst wenig Medienverkehr über das Netzwerk (ST 2110/RDMA/SRT) laufen muss. **Kein LLM**: ein deterministischer Scorer/Solver; lernende Teile höchstens als gemessene Last-Profile (`profiles`, Kalibrierung aus Kap. 54), die es schon gibt.
+
+### 31.1 Ausgangslage (aus dem Code)
+- MXL ist host-lokal (Shared Memory). Zwei über MXL verbundene Nodes **müssen** auf demselben Host liegen, außer ein Gateway-Node (Katalog-Feld `network`) übernimmt den Netzwerkweg. `executeMigration` lehnt Umzüge mit MXL-Gegenstelle auf anderem Host bereits ab (`mxlPeerConflict`).
+- `placement.SelectHost` wählt **je Rolle einzeln**: Präferenz → Affinitäts-Tag → geringste Last. Die Zusammengehörigkeit steckt nur im handgesetzten `AffinityGroup`-Tag; ad hoc im Flow Editor gezogene Verbindungen kennt die Platzierung nicht.
+- Evakuierung/Failover zieht Rolle für Rolle um; ein Verbund kann dabei auseinandergerissen werden.
+
+### 31.2 Entwurf
+1. **Verbund** = Zusammenhangskomponente des Signalgraphen über **MXL-Kanten** (aus Workflow-Definition und aus dem Live-Graphen). Ein Verbund wird als Einheit platziert und umgezogen. Netzwerk-Kanten (Gateways) trennen Verbünde.
+2. **Kostenfunktion** je Kandidat-Zuordnung Verbund → Host: harte Filter wie bisher (online, Wartung, Fähigkeit, Live-Reserve, Redundanz) + Zielfunktion
+   `Kosten = w_net · Σ (Bandbreite der Kanten über Host-Grenzen) + w_last · Überlast-Strafe + w_move · Umzugsaufwand`.
+   Bandbreite je Kante aus dem vorhandenen `computeRoleNetwork`/Profil (Mbit/s), unbekannt ⇒ konservative Schätzung nach Format.
+3. **Solver:** zunächst gierig (Verbünde absteigend nach Größe/Bandbreite, bester Host nach Kosten); Verbünde sind klein, ein exakter Löser ist nicht nötig. Reproduzierbar (Gleichstand nach Host-ID), mit Begründung je Entscheidung („Warum dort?“ wie bei ffmpeg-Jobs).
+4. **Passt ein Verbund auf keinen Host** (Reserve): minimalen Schnitt suchen, d. h. die Kante mit der kleinsten Bandbreite über einen Gateway-Weg führen; ohne Gateway ⇒ nicht platzierbar, Operator-Hinweis statt stiller Trennung (MXL bricht sonst).
+5. **Rehosting:** Ausfall/Wartung/Vorwarnung lösen eine Neuberechnung **des betroffenen Verbunds** aus, nicht einzelner Rollen. Ausführung weiter über Make-before-break (Kap. 41); Sendewege nie automatisch (Stufe „Vorschlag mit Bestätigung“ bleibt Standard, `auto-confirm-window` wie bisher).
+6. **Anzeige:** Hosts-Reiter zeigt „Netzlast durch Verbünde“ und Vorschläge „Verbund X auf Host B ⇒ −N Mbit/s Querverkehr“.
+
+### 31.3 Nicht-Ziele / Grenzen
+Kein LLM; keine automatische Verlagerung von Sendewegen; kein Ersatz für Gateways. Transport (ST 2110/SRT zwischen Hosts) ist in der Entwicklungsumgebung nicht verfügbar — der Netzanteil der Kostenfunktion ist dort nur per Test belegbar.

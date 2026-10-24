@@ -1097,7 +1097,8 @@ func main() {
 		"ui_dir", cfg.UIDir,
 	)
 
-	srv := &http.Server{Addr: cfg.Listen, Handler: handler}
+	srv := &http.Server{Addr: cfg.Listen, Handler: httpapi.LimitRequests(handler)}
+	httpapi.ConfigureServer(srv)
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- srv.ListenAndServe()

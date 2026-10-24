@@ -1263,7 +1263,9 @@ Ein Host führt ffmpeg-/ffprobe-Jobs der Plattform nur aus, wenn **sein Betreibe
 | `maxJobs` | gleichzeitige Jobs auf diesem Host insgesamt (Standard 2) |
 | `cpuQuota` | optional, z. B. `"200%"`: Jobs laufen in einem systemd-Scope mit dieser CPU-Grenze (wenn `systemd-run` vorhanden ist) |
 
-Nach dem Neustart des Host-Agents meldet er Version, Encoder und Hardware-Beschleuniger seines ffmpeg an den Orchestrator. Jobs laufen immer mit niedriger CPU- und Platten-Priorität (`nice`, `ionice`) und werden bei Speichermangel zuerst beendet. **Medien müssen auf dem Host sichtbar sein:** entweder unter demselben Pfad (gemeinsamer Speicher) oder über die *Pfadzuordnung* in den Job-Einstellungen (Abschnitt 10h).
+Nach dem Neustart des Host-Agents meldet er Version, Encoder und Hardware-Beschleuniger seines ffmpeg an den Orchestrator. Jobs laufen immer mit niedriger CPU- und Platten-Priorität (`nice`, `ionice`) und werden bei Speichermangel zuerst beendet. **Pfadprüfung:** Argumente mit `..` werden immer abgelehnt (auch lokal). Lokal lassen sich absolute Pfade zusätzlich mit `local.roots` in den Job-Einstellungen auf Wurzelverzeichnisse beschränken (leer = keine Einschränkung). **Medien müssen auf dem Host sichtbar sein:** entweder unter demselben Pfad (gemeinsamer Speicher) oder über die *Pfadzuordnung* in den Job-Einstellungen (Abschnitt 10h).
+
+**Platzierung von Verbünden.** Rollen eines Workflows, die über MXL verbunden sind (MXL ist host-lokal), werden gemeinsam auf **einem** Host gestartet; die Start-Vorschau zeigt den gewählten Host je Rolle. Verbindungen über Netzwerk-Gateways binden nicht, bevorzugen aber den Host der Gegenstelle. Beim Evakuieren eines Hosts (Wartungsmodus) zieht der ganze Verbund zusammen um; passt er auf keinen anderen Host, bleibt er stehen und der Grund steht in der Liste. Eine Warnung in der Vorschau erscheint, wenn eine MXL-Verbindung über zwei Hosts liefe (z. B. weil beide Rollen auf verschiedene Hosts festgelegt sind).
 
 ### 8.3 Topologie und Verlauf (grafische Ansicht der Hosts)
 

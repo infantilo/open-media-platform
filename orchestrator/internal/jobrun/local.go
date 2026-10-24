@@ -7,17 +7,58 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/infantilo/openmediaplatform/jobwire"
 )
 
 var errTimeout = errors.New("Zeitlimit überschritten")
 
 const maxStdout = 32 << 20
 
+// validateLocal prüft die Argumente eines lokalen Jobs: keine Nullzeichen, keine „..“-Pfadsegmente, und — wenn
+// `local.roots` gesetzt ist — absolute Pfade (auch in Filter-Argumenten, file:-URLs) nur unter den Wurzeln.
+// Verstöße sind grundsätzlich (kein Wiederholen), wie die Ablehnung durch einen Host-Agent.
+func validateLocal(args []string, roots []string) error {
+	for i, a := range args {
+		if strings.ContainsRune(a, 0) {
+			return &rejectedError{msg: fmt.Sprintf("Argument %d enthält ein Nullzeichen", i)}
+		}
+		if jobwire.HasParentSegment(a) {
+			return &rejectedError{msg: fmt.Sprintf("Argument %d enthält ein Pfadsegment „..“ (%q)", i, a)}
+		}
+		if len(roots) == 0 {
+			continue
+		}
+		var paths []string
+		switch {
+		case filepath.IsAbs(a):
+			paths = append(paths, a)
+		case strings.HasPrefix(a, "file:"):
+			if p := strings.TrimPrefix(strings.TrimPrefix(a, "file:"), "//"); filepath.IsAbs(p) {
+				paths = append(paths, p)
+			}
+		case !strings.HasPrefix(a, "-"):
+			paths = append(paths, jobwire.EmbeddedAbsPaths(a)...)
+		}
+		for _, p := range paths {
+			if !jobwire.UnderRoots(p, roots) {
+				return &rejectedError{msg: fmt.Sprintf("Pfad %q liegt außerhalb der erlaubten Wurzeln (local.roots)", p)}
+			}
+		}
+	}
+	return nil
+}
+
 // startLocal startet den Job als Prozess des Orchestrators (nice/ionice, eigene Prozessgruppe für Pause/Abbruch).
 func (d *Dispatcher) startLocal(e *entry, gen int, args []string, parts [][2]string, cfg Config) error {
+	if err := validateLocal(args, cfg.Local.Roots); err != nil {
+		return err
+	}
 	bin := ""
 	if d.LocalTool != nil {
 		bin = d.LocalTool(e.spec.Tool)

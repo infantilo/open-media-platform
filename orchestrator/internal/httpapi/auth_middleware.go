@@ -3,9 +3,11 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -105,6 +107,33 @@ type authGate struct {
 	nodes     NodeLister
 	workflows WorkflowRoleFinder // Kapitel 12 Teil 4 — darf nil sein (Tests)
 	layouts   LayoutStore        // Panel-Freigaben (xy-panel-grants) — darf nil sein (Tests)
+	// Bootstrap-Modus (noch kein Nutzer): s. bootstrapAllowed.
+	bootstrapOpen  bool
+	bootstrapToken string
+}
+
+// bootstrapAllowed: darf diese Anfrage im Bootstrap-Modus (noch kein Nutzer angelegt) ohne Anmeldung arbeiten?
+// Audit 2026-10-23 H2: vorher war dann die ganze API für jeden im Netz offen. Jetzt nur lokal (Loopback und keine
+// Proxy-Kopfzeilen — ein Reverse-Proxy auf demselben Rechner würde sonst jede Anfrage lokal aussehen lassen),
+// mit OMP_BOOTSTRAP_OPEN=1 oder mit passender Kopfzeile X-Bootstrap-Token (OMP_BOOTSTRAP_TOKEN).
+func (g *authGate) bootstrapAllowed(r *http.Request) bool {
+	if g.bootstrapOpen {
+		return true
+	}
+	if g.bootstrapToken != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Bootstrap-Token")), []byte(g.bootstrapToken)) == 1 {
+		return true
+	}
+	for _, h := range []string{"X-Forwarded-For", "X-Real-Ip", "Forwarded", "X-Forwarded-Host"} {
+		if r.Header.Get(h) != "" {
+			return false
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // panelGrantsLayout ist der Layout-Name, unter dem die Panel-Freigaben liegen:
@@ -201,6 +230,9 @@ func (g *authGate) authenticate(r *http.Request) (p auth.Principal, bypass bool,
 		return auth.Principal{}, false, false
 	}
 	if count == 0 {
+		if !g.bootstrapAllowed(r) {
+			return auth.Principal{}, false, false
+		}
 		return auth.Principal{}, true, true
 	}
 	token, present := bearerToken(r)

@@ -141,6 +141,10 @@ func (r *Runner) Validate(tool string, args []string) ([]string, error) {
 		if strings.ContainsRune(a, 0) {
 			return nil, reject("Argument %d enthält ein Nullzeichen", i)
 		}
+		// Relative Pfade mit „..“ verließen das Arbeitsverzeichnis des Jobs und damit die erlaubten Wurzeln.
+		if jobwire.HasParentSegment(a) {
+			return nil, reject("Argument %d enthält ein Pfadsegment „..“ (%q)", i, a)
+		}
 		if filepath.IsAbs(a) {
 			if !r.underRoot(a) {
 				return nil, reject("Pfad %q liegt außerhalb der erlaubten Wurzeln", a)
@@ -166,7 +170,7 @@ func (r *Runner) Validate(tool string, args []string) ([]string, error) {
 			continue
 		}
 		// Filter-Argumente können Dateien nennen (movie=, subtitles=, …): absolute Pfade darin prüfen.
-		for _, p := range embeddedAbsPaths(a) {
+		for _, p := range jobwire.EmbeddedAbsPaths(a) {
 			if !r.underRoot(p) {
 				return nil, reject("Pfad %q (in %q) liegt außerhalb der erlaubten Wurzeln", p, a)
 			}
@@ -201,45 +205,8 @@ func (r *Runner) Validate(tool string, args []string) ([]string, error) {
 	return out, nil
 }
 
-var embeddedPathRe = regexp.MustCompile(`(?:^|[=:,;'"\s\[])(/[^\s,;:'"\]]+)`)
-
-func embeddedAbsPaths(a string) []string {
-	var out []string
-	for _, m := range embeddedPathRe.FindAllStringSubmatch(a, -1) {
-		out = append(out, m[1])
-	}
-	return out
-}
-
 // underRoot: Pfad liegt (nach Auflösen von Symlinks des vorhandenen Anteils) unter einer erlaubten Wurzel.
-func (r *Runner) underRoot(p string) bool {
-	p = filepath.Clean(p)
-	rp := resolveExisting(p)
-	for _, root := range r.cfg.JobRoots {
-		rr := resolveExisting(root)
-		if rp == rr || strings.HasPrefix(rp, rr+string(filepath.Separator)) {
-			return true
-		}
-	}
-	return false
-}
-
-// resolveExisting löst Symlinks des längsten vorhandenen Präfixes auf (Ausgabedateien existieren noch nicht).
-func resolveExisting(p string) string {
-	rest := ""
-	cur := p
-	for {
-		if real, err := filepath.EvalSymlinks(cur); err == nil {
-			return filepath.Join(real, rest)
-		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			return p
-		}
-		rest = filepath.Join(filepath.Base(cur), rest)
-		cur = parent
-	}
-}
+func (r *Runner) underRoot(p string) bool { return jobwire.UnderRoots(p, r.cfg.JobRoots) }
 
 func (r *Runner) subject(jobID string) string { return jobwire.EventSubject(r.hostID, jobID) }
 

@@ -59,6 +59,10 @@ func (s *Service) planFor(wf Workflow) StartPlan {
 	occ := s.buildOccupancy(time.Now())
 	est, _ := s.resources.(hostEstimator)
 
+	var placer *startPlacer
+	if !plan.Running && s.resources != nil {
+		placer = s.newStartPlacer(wf.Definition, nil, occ)
+	}
 	extraByHost := map[string]profiles.Snapshot{}
 	order := []string{}
 	unknownProfile := map[string]bool{}
@@ -71,10 +75,8 @@ func (s *Service) planFor(wf Workflow) StartPlan {
 				hostID = rt.HostID
 				rp.Reason = "läuft"
 			}
-		case s.resources != nil:
-			res := s.resources.SelectHost(placement.PlacementRequest{
-				NodeType: role.NodeType, PreferredHostID: role.HostID, AffinityGroup: role.AffinityGroup, RedundancyGroup: role.RedundancyGroup,
-			}, occ)
+		case placer != nil:
+			res := placer.place(role, occ)
 			hostID, rp.Reason = res.HostID, res.Reason
 			if role.AffinityGroup != "" {
 				occ.AffinityGroupHosts[role.AffinityGroup] = append(occ.AffinityGroupHosts[role.AffinityGroup], hostID)
@@ -124,6 +126,15 @@ func (s *Service) planFor(wf Workflow) StartPlan {
 		}
 		if !plan.Running && len(h.Over) > 0 {
 			plan.Warnings = append(plan.Warnings, fmt.Sprintf("Host „%s“: Engpass beim Start — %s", h.Label, joinStrings(h.Over)))
+		}
+	}
+	if !plan.Running {
+		hostOf := map[string]string{}
+		for _, r := range plan.Roles {
+			hostOf[r.Role] = r.PlannedHostID
+		}
+		for _, l := range splitMXLLinks(roleLinks(wf.Definition, s.catalogEntries()), hostOf) {
+			plan.Warnings = append(plan.Warnings, fmt.Sprintf("Verbindung „%s“ → „%s“ läuft über MXL, die Rollen liegen aber auf verschiedenen Hosts — sie funktioniert so nicht", l.A, l.B))
 		}
 	}
 	if msg := missingAnchorWarning(wf.Definition, s.catalogEntries()); msg != "" {

@@ -208,6 +208,11 @@ type Config struct {
 	NodeVersionsDir     string
 	UpdatePubKeyFile    string
 	UpdateAllowUnsigned bool
+	// BootstrapOpen / BootstrapToken (Audit 2026-10-23 H2): solange kein Nutzer existiert, ist die API offen
+	// (Erstanlage des Administrators). Das gilt nur für lokale Anfragen (Loopback ohne Proxy-Kopfzeilen), für
+	// entfernte nur mit BootstrapOpen (OMP_BOOTSTRAP_OPEN=1) oder Kopfzeile X-Bootstrap-Token = BootstrapToken.
+	BootstrapOpen  bool
+	BootstrapToken string
 	// ClusterNodeID/ClusterRaftAddr/ClusterDataDir/ClusterPeers steuern
 	// die Raft-Konsens-Schicht zwischen Orchestrator-Instanzen
 	// (ARCHITECTURE.md §19.3, UMSETZUNG.md D12) — läuft immer (kein
@@ -329,6 +334,11 @@ func Load() Config {
 		UpdateDir:        getEnv("OMP_UPDATE_DIR", "../.updates"),
 		NodeVersionsDir:  getEnv("OMP_NODE_VERSIONS_DIR", "../.node-versions"),
 		UpdatePubKeyFile: getEnv("OMP_UPDATE_PUBKEY_FILE", "../.run/update-trusted.pub"),
+		BootstrapOpen: func() bool {
+			v, _ := strconv.ParseBool(getEnv("OMP_BOOTSTRAP_OPEN", "false"))
+			return v
+		}(),
+		BootstrapToken: getEnv("OMP_BOOTSTRAP_TOKEN", ""),
 		UpdateAllowUnsigned: func() bool {
 			v, _ := strconv.ParseBool(getEnv("OMP_UPDATE_ALLOW_UNSIGNED", "false"))
 			return v

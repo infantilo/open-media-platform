@@ -199,7 +199,16 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Principal, er
 	if err != nil {
 		return Principal{}, err
 	}
-	if ok && p.Epoch != u.SessionsEpoch {
+	if !ok && !p.Service {
+		// Nutzer-Token ohne Nutzerkonto: das Konto wurde gelöscht (Audit 2026-10-23 H3).
+		return Principal{}, ErrTokenRevoked
+	}
+	if ok && p.Service {
+		// Ein Service-Token trägt die Instanz-ID als Namen; gehört der Name einem Nutzerkonto, ist es keines.
+		return Principal{}, ErrTokenInvalid
+	}
+	if ok && (p.Epoch != u.SessionsEpoch || p.UserID != u.ID) {
+		// Epoche abweichend (Sitzungen widerrufen) oder gleicher Name, anderes Konto (gelöscht und neu angelegt).
 		return Principal{}, ErrTokenRevoked
 	}
 	if ok {

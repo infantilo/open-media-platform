@@ -60,6 +60,12 @@ func (s *Service) EvacuateHost(ctx context.Context, hostID string, onStep func(m
 		return
 	}
 
+	groupCache := map[string]placement.GroupResult{}
+	defer func() {
+		for _, it := range roles {
+			s.groupMoves.Delete(it.InstanceID)
+		}
+	}()
 	for _, it := range roles {
 		if ctx.Err() != nil {
 			return
@@ -79,13 +85,12 @@ func (s *Service) EvacuateHost(ctx context.Context, hostID string, onStep func(m
 			fail(it, maintenance.ReasonHostBound)
 			continue
 		}
-		res := s.resources.SelectHost(placement.PlacementRequest{
-			NodeType: roleDef.NodeType, AffinityGroup: roleDef.AffinityGroup, RedundancyGroup: roleDef.RedundancyGroup,
-		}, s.buildOccupancy(time.Now()))
-		if res.HostID == hostID {
-			fail(it, "kein Zielhost verfügbar")
+		targetHost, why := s.evacuationTarget(wf, it, roles, hostID, groupCache)
+		if why != "" {
+			fail(it, why)
 			continue
 		}
+		res := placement.PlacementResult{HostID: targetHost}
 		if !s.claimMigrationAttempt(it.InstanceID) {
 			fail(it, "Migration läuft bereits")
 			continue
@@ -99,4 +104,72 @@ func (s *Service) EvacuateHost(ctx context.Context, hostID string, onStep func(m
 			fail(it, "Umzug fehlgeschlagen (alte Instanz läuft unverändert weiter)")
 		}
 	}
+}
+
+// evacuationTarget wählt den Zielhost für eine zu räumende Rolle. Hängt sie über MXL an weiteren Rollen desselben Workflows
+// auf dem zu räumenden Host, zieht der ganze Verbund auf einen gemeinsamen Zielhost (netzwerkarm, ARCHITECTURE.md §31);
+// passt er auf keinen, wird er nicht auseinandergerissen. Zweiter Rückgabewert: Grund, falls es keinen Zielhost gibt.
+func (s *Service) evacuationTarget(wf Workflow, it maintenance.Item, onHost []maintenance.Item, hostID string, cache map[string]placement.GroupResult) (string, string) {
+	names := make([]string, len(wf.Definition.Roles))
+	byName := map[string]Role{}
+	for i, r := range wf.Definition.Roles {
+		names[i] = r.Name
+		byName[r.Name] = r
+	}
+	var comp []string
+	for _, c := range placement.Components(names, roleLinks(wf.Definition, s.catalogEntries())) {
+		for _, n := range c {
+			if n == it.Role {
+				comp = c
+			}
+		}
+	}
+	var members []placement.GroupMember
+	onThisHost := map[string]maintenance.Item{}
+	for _, o := range onHost {
+		if o.WorkflowID == wf.ID {
+			onThisHost[o.Role] = o
+		}
+	}
+	for _, n := range comp {
+		if _, ok := onThisHost[n]; !ok {
+			continue
+		}
+		r := byName[n]
+		members = append(members, placement.GroupMember{Name: n, Req: placement.PlacementRequest{
+			NodeType: r.NodeType, AffinityGroup: r.AffinityGroup, RedundancyGroup: r.RedundancyGroup,
+		}})
+	}
+	if len(members) < 2 {
+		res := s.resources.SelectHost(placement.PlacementRequest{
+			NodeType: byName[it.Role].NodeType, AffinityGroup: byName[it.Role].AffinityGroup, RedundancyGroup: byName[it.Role].RedundancyGroup,
+		}, s.buildOccupancy(time.Now()))
+		if res.HostID == hostID {
+			return "", "kein Zielhost verfügbar"
+		}
+		return res.HostID, ""
+	}
+	gs, ok := s.resources.(groupSelector)
+	if !ok {
+		return "", "kein Placement für Verbünde verfügbar"
+	}
+	key := wf.ID + "|" + comp[0]
+	res, cached := cache[key]
+	if !cached {
+		res = gs.SelectHostGroup(members, s.buildOccupancy(time.Now()))
+		cache[key] = res
+		if !res.Split {
+			for _, m := range members {
+				s.groupMoves.Store(onThisHost[m.Name].InstanceID, res.Hosts[m.Name])
+			}
+		}
+	}
+	target := res.Hosts[it.Role]
+	if res.Split {
+		return "", "Verbund passt auf keinen einzelnen Host (MXL-Verbindungen blieben getrennt)"
+	}
+	if target == hostID {
+		return "", "kein Zielhost verfügbar"
+	}
+	return target, ""
 }
