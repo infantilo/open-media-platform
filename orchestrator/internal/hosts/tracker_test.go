@@ -50,3 +50,30 @@ func TestTrackerKeepsGoodbyeFlag(t *testing.T) {
 		t.Fatal("Goodbye must clear once the host reports again")
 	}
 }
+
+func TestClockMetricsProblem(t *testing.T) {
+	cases := map[string]*ClockMetrics{
+		"":             {Synced: true, TAIOffsetS: 37},
+		"tai":          {Synced: true, TAIOffsetS: 0},
+		"unsynced":     {Synced: false, TAIOffsetS: 37},
+		"unsynced+tai": {Synced: false, TAIOffsetS: 0},
+	}
+	for want, c := range cases {
+		if got := c.Problem(); got != want {
+			t.Errorf("%+v: %q, want %q", c, got, want)
+		}
+	}
+	var none *ClockMetrics
+	if none.Problem() != "" {
+		t.Error("ältere Agents ohne Uhrdaten: kein Befund")
+	}
+}
+
+func TestTrackerKeepsClockFromTelemetry(t *testing.T) {
+	tr := NewTracker()
+	tr.Touch("h1", []byte(`{"cpuPercent":1,"clock":{"synced":false,"maxErrorUs":505,"estErrorUs":0,"taiOffsetS":0}}`))
+	m, ok := tr.Get("h1")
+	if !ok || m.Clock == nil || m.Clock.Synced || m.Clock.Problem() != "unsynced+tai" {
+		t.Fatalf("%+v %v", m, ok)
+	}
+}

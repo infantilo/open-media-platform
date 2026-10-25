@@ -2,7 +2,9 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -275,5 +277,49 @@ func TestLoadOrCreateSharedSecretSeedsFromFileAndIsSharedAcrossInstances(t *test
 	tok, _, _ := NewSigner(a).issue(Principal{UserID: "u", Username: "u"}, time.Now())
 	if _, err := NewSigner(b).verify(tok, time.Now()); err != nil {
 		t.Fatalf("Token instanzübergreifend: %v", err)
+	}
+}
+
+// Audit 2026-10-23 M4: Passwortrichtlinie.
+func TestValidatePassword(t *testing.T) {
+	bad := map[string][2]string{
+		"zu kurz":        {"alice", "kurz1234"},
+		"ein Zeichen":    {"alice", "aaaaaaaaaaaa"},
+		"Nutzername":     {"alice", "xxAliceyy1234"},
+		"häufig":         {"alice", "Password123"},
+		"zu lang (bcr.)": {"alice", strings.Repeat("ab", 40)},
+		"leer":           {"alice", ""},
+	}
+	for name, c := range bad {
+		if err := ValidatePassword(c[0], c[1]); !errors.Is(err, ErrWeakPassword) {
+			t.Errorf("%s: %q muss abgelehnt werden, bekam %v", name, c[1], err)
+		}
+	}
+	for _, ok := range []string{"supersecret1", "adminpass123", "korrekt pferd batterie", "ÄÖÜäöü12345"} {
+		if err := ValidatePassword("alice", ok); err != nil {
+			t.Errorf("%q muss erlaubt sein: %v", ok, err)
+		}
+	}
+	if err := ValidatePassword("al", "alxxxxxxxxxxx"); err != nil {
+		t.Errorf("sehr kurze Nutzernamen zählen nicht als Bestandteil: %v", err)
+	}
+}
+
+func TestServiceRefusesWeakPasswordsOnCreateAndReset(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	username := "test-svc-weak-" + mustNewID(t)
+	t.Cleanup(func() { _ = svc.DeleteUser(ctx, username) })
+	if _, err := svc.CreateUser(ctx, username, "short", ""); !errors.Is(err, ErrWeakPassword) {
+		t.Fatalf("CreateUser schwach: %v", err)
+	}
+	if _, err := svc.CreateUser(ctx, username, "supersecret1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SetPassword(ctx, username, "abc"); !errors.Is(err, ErrWeakPassword) {
+		t.Fatalf("SetPassword schwach: %v", err)
+	}
+	if _, _, err := svc.Login(ctx, username, "supersecret1"); err != nil {
+		t.Fatalf("das alte Passwort gilt weiter: %v", err)
 	}
 }

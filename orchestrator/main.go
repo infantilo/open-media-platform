@@ -639,6 +639,9 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	if v, err := strconv.Atoi(os.Getenv("OMP_AUTH_MIN_PASSWORD")); err == nil && v >= 8 {
+		auth.MinPasswordLength = v
+	}
 	authSvc := auth.NewService(auth.NewStore(database), jwtSecret)
 	authzStore := authz.NewStore(database)
 	// Kapitel 21 B14 (Nachtrag 283) — s. internal/organizations-Paketdoku.
@@ -1061,6 +1064,15 @@ func main() {
 	}
 
 	backupSvc := backup.NewService(backup.ParsePatroniNodes(cfg.PatroniNodes), cfg.BackupDir, cfg.BackupKeep)
+	if cfg.BackupIntervalHours > 0 {
+		go runWhileLeader(ctx, clusterNode, func(ctx context.Context) {
+			backup.RunSchedule(ctx, time.Duration(cfg.BackupIntervalHours)*time.Hour, 10*time.Minute, time.Hour, backupSvc.Newest,
+				func(ctx context.Context) (string, error) {
+					r, err := backupSvc.Create(ctx)
+					return r.Name, err
+				})
+		})
+	}
 	supervisorClient := supervisorclient.New(cfg.SupervisorURL)
 	updateDist := &updates.Distributor{
 		Downloads: updates.NewDownloads(),

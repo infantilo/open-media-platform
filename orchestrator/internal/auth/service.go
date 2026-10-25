@@ -104,6 +104,9 @@ const DefaultOrgID = "default"
 // CreateUser hasht password und legt den Nutzer an. orgID leer =
 // Default-Organisation (s. DefaultOrgID, Kapitel 21 B14).
 func (s *Service) CreateUser(ctx context.Context, username, password, orgID string) (User, error) {
+	if err := ValidatePassword(username, password); err != nil {
+		return User{}, err
+	}
 	hash, err := HashPassword(password)
 	if err != nil {
 		return User{}, err
@@ -138,6 +141,9 @@ func (s *Service) DeleteUser(ctx context.Context, username string) error {
 // bestehen (der Nutzer ist trotzdem nicht schlechter dran als vorher),
 // wird aber an den Aufrufer durchgereicht, damit er sichtbar bleibt.
 func (s *Service) SetPassword(ctx context.Context, username, password string) error {
+	if err := ValidatePassword(username, password); err != nil {
+		return err
+	}
 	hash, err := HashPassword(password)
 	if err != nil {
 		return err

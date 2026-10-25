@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -517,5 +518,21 @@ func TestClientIPUsesProxyHeaderOnlyBehindLocalProxy(t *testing.T) {
 	r.RemoteAddr = "203.0.113.9:5000"
 	if ip := clientIP(r); ip != "203.0.113.9" {
 		t.Errorf("direkte Verbindung: Header wird ignoriert: %q", ip)
+	}
+}
+
+func TestWeakPasswordIsBadRequestOnCreateAndReset(t *testing.T) {
+	weak := fmt.Errorf("%w: at least 10 characters required", auth.ErrWeakPassword)
+	rec := httptest.NewRecorder()
+	handleCreateUser(fakeAuthSvc{userCount: 1, createErr: weak}, fakeAuthzSvc{})(rec, httptest.NewRequest(http.MethodPost, "/api/v1/auth/users", strings.NewReader(`{"username":"bob","password":"kurz"}`)))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "at least 10") {
+		t.Fatalf("create: %d %q", rec.Code, rec.Body.String())
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("PUT /api/v1/auth/users/{name}/password", handleResetPassword(fakeAuthSvc{setPasswordErr: weak}))
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/auth/users/bob/password", strings.NewReader(`{"password":"kurz"}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("reset: %d %q", rec.Code, rec.Body.String())
 	}
 }

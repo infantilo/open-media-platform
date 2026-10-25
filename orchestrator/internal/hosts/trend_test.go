@@ -22,8 +22,10 @@ func TestStundenwerteUndLiveBedarf(t *testing.T) {
 	n := 0
 	for ts := start; ts.Before(time.Now()); ts = ts.Add(5 * time.Second) {
 		live := 100.0 // 1 Kern
-		if n%360 == 0 {
-			live = 400 // seltene Spitze: 4 Kerne
+		// seltene Spitze: 4 Kerne — nur in den abgeschlossenen Stunden, sonst hängt das Ergebnis von der Minute der laufenden
+		// Stunde ab (deren Minutenmaxima zählen einzeln, bei wenigen Minuten wöge eine Spitze über 5 %)
+		if n%360 == 0 && ts.Before(time.Now().Add(-90*time.Minute)) {
+			live = 400
 		}
 		h.Record("h1", metricAt(ts, live))
 		n++
@@ -68,6 +70,9 @@ func TestPercentile(t *testing.T) {
 
 func TestStundenwerteInPostgres(t *testing.T) {
 	database := dbtest.Open(t)
+	// die Testdatenbank bleibt zwischen Läufen bestehen: Reste früherer Läufe (andere Stunden) würden mitgezählt
+	_, _ = database.Exec(`DELETE FROM host_metrics_hourly WHERE host_id = 'h-trend'`)
+	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM host_metrics_hourly WHERE host_id = 'h-trend'`) })
 	s := NewHourStore(database)
 	h0 := time.Now().Add(-5 * time.Hour).Truncate(time.Hour)
 	for i := 0; i < 3; i++ {

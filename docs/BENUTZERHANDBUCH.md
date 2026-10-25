@@ -27,7 +27,8 @@ das Dev-Passwort — nicht für den Produktivbetrieb geeignet).
 Nach erfolgreicher Anmeldung bleibt die Sitzung angemeldet (Token im
 Browser gespeichert), bis auf „Abmelden" geklickt wird oder das Token
 abläuft. Wird der Nutzer gelöscht oder sein Passwort geändert, endet die
-Sitzung sofort.
+Sitzung sofort. Neue Passwörter brauchen mindestens 10 Zeichen und dürfen den
+Nutzernamen nicht enthalten.
 
 **Zu viele Fehlversuche:** Nach 5 falschen Anmeldungen mit demselben Namen von
 derselben Adresse aus (und bei sehr vielen Fehlversuchen einer Adresse) kommt
@@ -1257,6 +1258,8 @@ zugewiesen, erscheint zusätzlich deren Playlist-Oberfläche als eigene
 Kachel.
 
 
+**Uhr-Hinweis.** Zeigt die Hosts-Tabelle neben dem Status ein **⏱ Uhr**, ist die Systemuhr dieses Hosts nicht synchronisiert und/oder sein TAI-Versatz nicht gesetzt — MXL-Zeitstempel und Schaltzeitpunkte (Playout-Automation) weichen dann von anderen Hosts ab. Der Tooltip nennt die Ursache; Abhilfe steht im Handbuch (Abschnitt 8, Troubleshooting).
+
 **Sicherer Kommandokanal.** Der Orchestrator signiert jedes Kommando an einen Host (Start, Stopp, Update, ffmpeg-Auftrag); der Host führt nur Kommandos mit gültiger Signatur aus. Den Schlüssel bekommt der Host bei der Registrierung, ältere Hosts erhalten ihn automatisch, sobald sie online sind. Für den Betrieb heißt das: nichts einrichten — und nach einem neu aufgesetzten Orchestrator-Datenbestand notfalls `cmdKey` in der `state.json` des Hosts entfernen und den Agent neu starten (Handbuch, Abschnitt 8 „Befehle an einen Host scheitern“). Ein Administrator kann den Schlüssel eines Hosts wechseln (`POST /api/v1/admin/hosts/<id>/rotate-key`).
 
 ### 8.2 ffmpeg-Jobs auf einem Host erlauben (`tools.json`)
@@ -1471,7 +1474,7 @@ global im Dialog **⚙ Szenen & Automation** der Kopfleiste.
   Bild schaltet auf genau dem Frame, Ton am Sample; der Kanal-Player gibt das vorgeladene Datei-Item
   (`load` mit `hold`) so frei, dass erstes Bild und erster Ton exakt dort anliegen. `somMs`/`eomMs`
   im `load` begrenzen die Wiedergabe auf Start-/Endmarke. Einstellungen der Automation:
-  `OMP_PLAYOUT_TAKE_LEAD_MS` (Vorlauf, Standard 300, 0 = aus; unter 250 ms kommt das erste Bild einer frisch gestarteten Quelle zu spät), `OMP_PLAYOUT_FRAMERATE` (Standard 25).
+  `OMP_PLAYOUT_TAKE_LEAD_MS` (Vorlauf, Standard 300, 0 = aus; unter 250 ms kommt das erste Bild einer frisch gestarteten Quelle zu spät), `OMP_PLAYOUT_FRAMERATE` (Bildrate des Schaltrasters als `30000/1001`, `29.97`, `59.94` oder ganze Rate; Standard: Format des Workflows, sonst 25 — bei NTSC-Raten bildgenau).
 
 ## 10b. Handy-Kamera (WebRTC-Gateway)
 

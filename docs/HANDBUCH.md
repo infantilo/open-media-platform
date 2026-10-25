@@ -188,6 +188,12 @@ löschen, Audit-Log einsehen. Der letzte verbleibende Admin kann sich
 dort nicht selbst löschen oder entrechten (Selbstschutz gegen
 versehentliches Aussperren).
 
+**Passwörter.** Neue und zurückgesetzte Passwörter brauchen mindestens 10 Zeichen
+(`OMP_AUTH_MIN_PASSWORD`, nicht unter 8), höchstens 72 Byte, dürfen nicht nur aus
+einem Zeichen bestehen, den Nutzernamen enthalten oder zu den häufigsten
+Passwörtern gehören; die Meldung nennt den Grund. Bestehende Passwörter bleiben
+gültig (auch das Dev-Passwort oben — für den Produktivbetrieb ändern).
+
 **Login-Sperre.** Fehlversuche werden dreifach gezählt: je **Name und
 Adresse** (5 in 15 Minuten, dann 15 Minuten gesperrt), je **Adresse** (30,
 gegen das Durchprobieren vieler Namen) und je **Name über alle Adressen**
@@ -368,6 +374,12 @@ make backup
 # oder direkt:
 ./deploy/dev/backup-omp.sh
 ```
+**Geplante Sicherung.** Der Orchestrator (als Raft-Leader) legt selbst alle 24
+Stunden eine Sicherung an, wenn die neueste älter ist (`OMP_BACKUP_INTERVAL_HOURS`,
+`0` schaltet es ab; ein Fehlschlag steht laut im Log und wird nach einer Stunde
+wiederholt). Nicht enthalten sind Schlüsselmaterial (Update-Schlüssel, mTLS-CA)
+und ein Fremdziel — beides separat sichern.
+
 Schreibt `.backups/omp-<UTC-Zeitstempel>.sql.gz` (`pg_dump --clean
 --if-exists` über `podman exec`, kein lokal installiertes
 `postgresql-client`-Paket nötig). Behält automatisch die letzten 14
@@ -621,6 +633,13 @@ Podman, Images, Ports und Rechte und nennt den Befehl zur Behebung.
 Abschnitt 3 oben (Standardnutzer `admin`/`adminpass123`, bzw.
 Passwort-Reset-Verfahren, falls dieser Nutzer inzwischen geändert oder
 gelöscht wurde).
+
+**Hosts-Tabelle zeigt „⏱ Uhr“** — die Systemuhr des Hosts ist nicht synchronisiert
+(NTP/PTP) und/oder der TAI-Versatz ist nicht gesetzt (`CLOCK_TAI` entspricht dann UTC,
+derzeit 37 s daneben). MXL-Zeitstempel und Schaltzeitpunkte (`takeAt`) stimmen dann
+nicht mit anderen Hosts überein. Abhilfe: chrony mit `leapsectz right/UTC` (setzt den
+TAI-Versatz) bzw. `ptp4l`/`phc2sys`; prüfen mit `timedatectl` und `chronyc tracking`.
+Der Hinweis erscheint nur bei Host-Agents, die die Uhr melden.
 
 **Befehle an einen Host scheitern mit „unauthorized: …“** — der Host-Agent
 prüft die Signatur der Kommandos (Abschnitt 5b). „command is not signed“:

@@ -62,6 +62,9 @@ type Metrics struct {
 	// Jobs: Fähigkeiten/Auslastung der Job-Ausführung (ffmpeg-Jobs, docs/ENTWURF-FFMPEG-HOSTWAHL.md); nil = auf dem
 	// Host nicht freigegeben (keine tools.json).
 	Jobs *JobsMetrics `json:"jobs,omitempty"`
+	// Clock: Zustand der Systemuhr des Hosts (Spiegelbild von host-agent/internal/telemetry.ClockSample, Audit 2026-10-23 M1);
+	// nil bei einem älteren Host-Agent.
+	Clock *ClockMetrics `json:"clock,omitempty"`
 	// Goodbye: der Host-Agent hat sich per SIGTERM/SIGINT absichtlich
 	// abgemeldet (Spiegelbild von host-agent/internal/telemetry.Sample.
 	// Goodbye). Ein danach ausbleibender Telemetrie-Strom ist kein Alarm;
@@ -116,4 +119,27 @@ type InstanceMetrics struct {
 	GpuMemBytes *uint64 `json:"gpuMemBytes,omitempty"`
 	// Outdated: Binary seit dem Prozessstart ersetzt (System-Update).
 	Outdated bool `json:"outdated,omitempty"`
+}
+
+// ClockMetrics: Synchronisation und TAI-Versatz der Systemuhr eines Hosts.
+type ClockMetrics struct {
+	Synced     bool  `json:"synced"`
+	MaxErrorUs int64 `json:"maxErrorUs"`
+	EstErrorUs int64 `json:"estErrorUs"`
+	TAIOffsetS int   `json:"taiOffsetS"`
+}
+
+// Problem beschreibt, was an der Uhr nicht stimmt ("" = in Ordnung): MXL und Schaltzeitpunkte rechnen in TAI.
+func (c *ClockMetrics) Problem() string {
+	switch {
+	case c == nil:
+		return ""
+	case !c.Synced && c.TAIOffsetS == 0:
+		return "unsynced+tai"
+	case !c.Synced:
+		return "unsynced"
+	case c.TAIOffsetS == 0:
+		return "tai"
+	}
+	return ""
 }

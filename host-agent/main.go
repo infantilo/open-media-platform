@@ -459,6 +459,9 @@ func main() {
 		}
 		procSampler.Prune(keepPIDs)
 		sample.Jobs = executor.JobsInfo()
+		if c, ok := telemetry.TakeClock(); ok {
+			sample.Clock = &c
+		}
 
 		payload, err := json.Marshal(sample)
 		if err != nil {

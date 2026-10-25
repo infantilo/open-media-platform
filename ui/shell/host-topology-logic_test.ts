@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { buildTopology, kindOf, layoutBoxes, levelOf, linkPath, routeLink, strokeFor, type GraphEdgeIn, type GraphNodeIn } from "./host-topology-logic.ts";
+import { buildTopology, kindOf, layoutBoxes, clockProblem, levelOf, linkPath, routeLink, strokeFor, type GraphEdgeIn, type GraphNodeIn } from "./host-topology-logic.ts";
 
 const node = (id: string, instanceId: string | undefined, outs: string[] = [], ins: string[] = []): GraphNodeIn => ({
   id, label: id, instanceId, inputs: ins.map((i) => ({ id: i })), outputs: outs.map((o) => ({ id: o, format: "urn:x-nmos:format:video" })),
@@ -94,4 +94,12 @@ Deno.test("Verbindungen im 2×2-Raster: Diagonale frei, Zeile mit Hindernis wird
 Deno.test("Ohne Hindernis bleibt es bei der geraden Linie (wie linkPath)", () => {
   const a = { id: "a", x: 0, y: 0, w: 200, h: 100 }, b = { id: "b", x: 400, y: 0, w: 200, h: 100 };
   assertEquals(routeLink(a, b, [a, b]).d, linkPath(a, b).d);
+});
+
+Deno.test("Uhrbefund: synchron + TAI gesetzt ist in Ordnung, sonst die passende Meldung; unbekannt = kein Befund", () => {
+  assertEquals(clockProblem(undefined), "");
+  assertEquals(clockProblem({ synced: true, maxErrorUs: 5, estErrorUs: 1, taiOffsetS: 37 }), "");
+  assertEquals(clockProblem({ synced: true, maxErrorUs: 5, estErrorUs: 1, taiOffsetS: 0 }), "tai");
+  assertEquals(clockProblem({ synced: false, maxErrorUs: 5, estErrorUs: 1, taiOffsetS: 37 }), "unsynced");
+  assertEquals(clockProblem({ synced: false, maxErrorUs: 505, estErrorUs: 0, taiOffsetS: 0 }), "unsynced+tai");
 });

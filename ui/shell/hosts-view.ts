@@ -23,7 +23,7 @@ import "./host-topology.ts"; // registriert <omp-host-topology> (Seiteneffekt-Im
 import "./host-trends.ts";
 import type { HostTopology } from "./host-topology.ts";
 import type { HostTrends } from "./host-trends.ts";
-import type { TopoHostIn } from "./host-topology-logic.ts";
+import { clockProblem, type ClockIn, type TopoHostIn } from "./host-topology-logic.ts";
 
 // netMetrics fehlt (statt eines Nullwert-Objekts), wenn der Host-Agent
 // kein Interface für die Bandbreiten-Telemetrie konfiguriert hat
@@ -56,6 +56,7 @@ interface HostMetrics {
   receivedAt: string;
   net?: NetMetrics;
   gpu?: GpuMetrics;
+  clock?: ClockIn;
 }
 
 interface HostEntry {
@@ -568,6 +569,10 @@ class HostsView extends HTMLElement {
           : m
             ? t("hosts.eda8d2", { p0: new Date(m.receivedAt).toLocaleTimeString() })
             : t("hosts.61ea4b");
+        const clockIssue = online ? clockProblem(m?.clock) : "";
+        const clockBadge = clockIssue
+          ? ` <span title="${escapeHtml(tLoose("hosts.clock." + clockIssue, { err: m?.clock?.maxErrorUs ?? 0 }))}" style="color:#d9a21b;cursor:help;white-space:nowrap;">⏱ ${escapeHtml(t("hosts.clock.badge"))}</span>`
+          : "";
         const status = `<span title="${escapeHtml(statusTitle)}" style="display:inline-flex;align-items:center;gap:5px;white-space:nowrap;color:${
           online ? "inherit" : "#e05252"
         };">
@@ -608,7 +613,7 @@ class HostsView extends HTMLElement {
           : "";
         const rowTint = online ? "" : "background:rgba(224,82,82,0.08);";
         return `<tr style="${rowTint}">
-          <td style="padding:2px 8px;">${status}${maintBadge}</td>
+          <td style="padding:2px 8px;">${status}${maintBadge}${clockBadge}</td>
           <td style="padding:2px 8px;">${escapeHtml(h.label)}</td>
           <td style="padding:2px 8px;color:var(--omp-text-dim);">${escapeHtml(h.hostname)}</td>
           <td style="padding:2px 8px;">${cpu}</td>

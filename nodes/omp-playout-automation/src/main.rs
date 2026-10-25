@@ -2637,18 +2637,66 @@ fn take_at_enabled() -> bool {
     take_lead_ms() > 0.0 && tai_now_ns() != 0
 }
 
-/// Bildrate des Schaltrasters (`OMP_PLAYOUT_FRAMERATE`, Standard 25 wie die Mischer/Player).
-fn take_framerate() -> f64 {
-    std::env::var("OMP_PLAYOUT_FRAMERATE").ok().and_then(|v| v.parse::<f64>().ok()).filter(|r| *r >= 1.0).unwrap_or(25.0)
+/// Bildrate des Schaltrasters als Bruch (Audit 2026-10-23 M2: vorher f64 — bei 29,97/59,94 nicht bildgenau, die Bildgrenzen
+/// des MXL-Rasters liegen bei `Index·Nenner/Zähler`, nicht bei einem gerundeten Vielfachen von 1e9/29,97).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FrameRate {
+    num: u64,
+    den: u64,
 }
 
-/// Rundet `tai_ns` auf die nächste Bildgrenze des MXL-Rasters (Index = ⌊t·Rate⌋) auf und addiert
-/// 0,5 ms Sicherheitsabstand: der Schreiber rechnet Zeit → Index mit µs-Rauschen, genau auf der
-/// Grenze würde das erste Bild sporadisch einen Index später landen (Messung Kap. 31.5).
-fn snap_to_frame(tai_ns: u64, fps: f64) -> u64 {
-    let frame_ns = 1e9 / fps;
-    let idx = (tai_ns as f64 / frame_ns).ceil();
-    (idx * frame_ns) as u64 + 500_000
+/// Liest `OMP_PLAYOUT_FRAMERATE` (sonst `OMP_FRAMERATE_NUM/DEN` des Workflows): "30000/1001", "29.97" oder "25". Dezimalwerte nahe einer NTSC-Rate (23,976 / 29,97 / 47,95 /
+/// 59,94 / 119,88) werden auf deren exakten Bruch /1001 gelegt; sonst die nächste ganze Rate. Standard 25.
+fn take_framerate() -> FrameRate {
+    if let Ok(explicit) = std::env::var("OMP_PLAYOUT_FRAMERATE") {
+        return parse_framerate(Some(&explicit));
+    }
+    // ohne eigene Vorgabe das Format des Workflows (vom Orchestrator gesetzt, workflows/formats.go formatExtraEnv)
+    match (std::env::var("OMP_FRAMERATE_NUM"), std::env::var("OMP_FRAMERATE_DEN")) {
+        (Ok(n), Ok(d)) => parse_framerate(Some(&format!("{n}/{d}"))),
+        _ => parse_framerate(None),
+    }
+}
+
+fn parse_framerate(raw: Option<&str>) -> FrameRate {
+    const DEFAULT: FrameRate = FrameRate { num: 25, den: 1 };
+    let Some(raw) = raw.map(str::trim).filter(|r| !r.is_empty()) else { return DEFAULT };
+    if let Some((n, d)) = raw.split_once('/') {
+        return match (n.trim().parse::<u64>(), d.trim().parse::<u64>()) {
+            (Ok(n), Ok(d)) if n >= 1 && d >= 1 && n / d >= 1 => FrameRate { num: n, den: d },
+            _ => DEFAULT,
+        };
+    }
+    let Ok(v) = raw.parse::<f64>() else { return DEFAULT };
+    if !(v >= 1.0) || !v.is_finite() {
+        return DEFAULT;
+    }
+    for ntsc in [24_000u64, 30_000, 48_000, 60_000, 120_000] {
+        let exact = ntsc as f64 / 1001.0;
+        if (v - exact).abs() < 0.02 {
+            return FrameRate { num: ntsc, den: 1001 };
+        }
+    }
+    FrameRate { num: v.round() as u64, den: 1 }
+}
+
+/// Bildindex des MXL-Rasters zur TAI-Zeit (⌊t·Zähler/(Nenner·1e9)⌋), exakt in ganzzahliger Rechnung.
+fn frame_index(tai_ns: u64, r: FrameRate) -> u64 {
+    (tai_ns as u128 * r.num as u128 / (r.den as u128 * 1_000_000_000)) as u64
+}
+
+/// Früheste ns, die zum Bildindex gehört (⌈idx·Nenner·1e9/Zähler⌉).
+fn frame_start_ns(idx: u64, r: FrameRate) -> u64 {
+    let num = idx as u128 * r.den as u128 * 1_000_000_000;
+    num.div_ceil(r.num as u128) as u64
+}
+
+/// Rundet `tai_ns` auf die nächste Bildgrenze des MXL-Rasters auf und addiert 0,5 ms Sicherheitsabstand: der Schreiber rechnet
+/// Zeit → Index mit µs-Rauschen, genau auf der Grenze würde das erste Bild sporadisch einen Index später landen (Messung Kap. 31.5).
+fn snap_to_frame(tai_ns: u64, r: FrameRate) -> u64 {
+    let idx = frame_index(tai_ns, r);
+    let idx = if frame_start_ns(idx, r) >= tai_ns { idx } else { idx + 1 };
+    frame_start_ns(idx, r) + 500_000
 }
 
 /// Schaltzeitpunkt für diesen Take: mit Vorgabe (`take_at_hint_ns`, nur Auto-Advance bei aktiver
@@ -2666,10 +2714,9 @@ fn take_at_for(store: &AutomationStore, state: &AutomationState) -> u64 {
     };
     store.last_take_at_ns.store(t.saturating_sub(500_000), std::sync::atomic::Ordering::SeqCst);
     if state.ad.active() {
-        let frame_ns = 1e9 / take_framerate();
         eprintln!(
             "omp-playout-automation: Schaltzeitpunkt takeAt={t} ns (Bild {}), {}",
-            (t as f64 / frame_ns).floor() as u64,
+            frame_index(t, take_framerate()),
             if state.take_at_hint_ns.is_some_and(|h| t >= h && t < h + 41_000_000) { "am nominalen Ende des Vorgängers" } else { "jetzt + Vorlauf" }
         );
     }
@@ -2709,15 +2756,52 @@ fn tai_now_ns() -> u64 {
 
 #[cfg(test)]
 mod take_at_tests {
-    use super::snap_to_frame;
+    use super::{frame_index, frame_start_ns, parse_framerate, snap_to_frame, FrameRate};
+
+    const R25: FrameRate = FrameRate { num: 25, den: 1 };
+    const R2997: FrameRate = FrameRate { num: 30_000, den: 1001 };
+    const R5994: FrameRate = FrameRate { num: 60_000, den: 1001 };
 
     #[test]
     fn snaps_up_to_next_frame_boundary_plus_margin() {
-        let t = snap_to_frame(1_000_000_010, 25.0);
+        let t = snap_to_frame(1_000_000_010, R25);
         assert_eq!(t % 40_000_000, 500_000);
         assert!(t >= 1_000_000_010 && t < 1_000_000_010 + 40_000_000 + 500_000);
         // schon auf der Grenze: bleibt dort (plus Abstand)
-        assert_eq!(snap_to_frame(1_040_000_000, 25.0), 1_040_500_000);
+        assert_eq!(snap_to_frame(1_040_000_000, R25), 1_040_500_000);
+    }
+
+    // Audit 2026-10-23 M2: bei 29,97 und 59,94 liegt die Bildgrenze nicht auf einem gerundeten Vielfachen von 1e9/fps.
+    #[test]
+    fn ntsc_rates_snap_exactly_to_the_mxl_raster() {
+        for r in [R2997, R5994] {
+            for t0 in [1_700_000_000_123_456_789u64, 1_700_000_000_999_999_999, 1_699_999_999_000_000_001] {
+                let t = snap_to_frame(t0, r);
+                let idx = frame_index(t, r);
+                // der Schaltzeitpunkt liegt 0,5 ms hinter dem Anfang genau EINES Bildes …
+                assert_eq!(frame_index(t - 500_000, r), idx, "{r:?} {t0}");
+                assert!(t - frame_start_ns(idx, r) <= 500_001, "{r:?} {t0}");
+                // … und dieses Bild ist das erste nicht vor t0
+                assert!(frame_start_ns(idx, r) >= t0 && frame_start_ns(idx - 1, r) < t0, "{r:?} {t0}");
+            }
+        }
+        // der Index zählt gleichmäßig: 30000 Bilder in genau 1001 s
+        assert_eq!(frame_index(1_001_000_000_000, R2997), 30_000);
+    }
+
+    #[test]
+    fn framerate_parsing() {
+        assert_eq!(parse_framerate(None), R25);
+        assert_eq!(parse_framerate(Some("")), R25);
+        assert_eq!(parse_framerate(Some("50")), FrameRate { num: 50, den: 1 });
+        assert_eq!(parse_framerate(Some("29.97")), R2997);
+        assert_eq!(parse_framerate(Some("59.94")), R5994);
+        assert_eq!(parse_framerate(Some("23.976")), FrameRate { num: 24_000, den: 1001 });
+        assert_eq!(parse_framerate(Some("30000/1001")), R2997);
+        assert_eq!(parse_framerate(Some("30")), FrameRate { num: 30, den: 1 });
+        assert_eq!(parse_framerate(Some("0/0")), R25);
+        assert_eq!(parse_framerate(Some("nonsense")), R25);
+        assert_eq!(parse_framerate(Some("0.5")), R25);
     }
 }
 

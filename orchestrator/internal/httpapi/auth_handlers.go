@@ -205,6 +205,10 @@ func handleCreateUser(authSvc AuthService, bindings AuthzChecker) http.HandlerFu
 				http.Error(w, "username already exists", http.StatusConflict)
 				return
 			}
+			if errors.Is(err, auth.ErrWeakPassword) {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -353,6 +357,10 @@ func handleResetPassword(authSvc AuthService) http.HandlerFunc {
 			return
 		}
 		if err := authSvc.SetPassword(r.Context(), r.PathValue("name"), req.Password); err != nil {
+			if errors.Is(err, auth.ErrWeakPassword) {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 			if errors.Is(err, auth.ErrUserNotFound) {
 				http.Error(w, "user not found", http.StatusNotFound)
 				return

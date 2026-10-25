@@ -192,6 +192,8 @@ type Config struct {
 	// `postgres-up`-Target (REST-Ports 8008/8018/8028).
 	PatroniNodes string
 	BackupKeep   int
+	// BackupIntervalHours: geplante Sicherungen (Audit M8); 0 = aus. Standard 24.
+	BackupIntervalHours int
 	// SupervisorURL zeigt auf den eigenständigen Backup/Restore-
 	// Supervisor-Prozess (supervisor/main.go, Nutzerwunsch 2026-08-13) —
 	// lauscht nur auf 127.0.0.1, s. dessen Kopfkommentar zur
@@ -332,11 +334,12 @@ func Load() Config {
 		// Default spiegelt backup-omp.shs BACKUP_KEEP=14 (bewusst hier
 		// dupliziert statt importiert, gleiches Muster wie die
 		// Placement-/Audit-Defaults oben).
-		BackupKeep:       getEnvInt("OMP_BACKUP_KEEP", 14),
-		SupervisorURL:    getEnv("OMP_SUPERVISOR_URL", "http://127.0.0.1:8091"),
-		UpdateDir:        getEnv("OMP_UPDATE_DIR", "../.updates"),
-		NodeVersionsDir:  getEnv("OMP_NODE_VERSIONS_DIR", "../.node-versions"),
-		UpdatePubKeyFile: getEnv("OMP_UPDATE_PUBKEY_FILE", "../.run/update-trusted.pub"),
+		BackupKeep:          getEnvInt("OMP_BACKUP_KEEP", 14),
+		BackupIntervalHours: getEnvInt("OMP_BACKUP_INTERVAL_HOURS", 24),
+		SupervisorURL:       getEnv("OMP_SUPERVISOR_URL", "http://127.0.0.1:8091"),
+		UpdateDir:           getEnv("OMP_UPDATE_DIR", "../.updates"),
+		NodeVersionsDir:     getEnv("OMP_NODE_VERSIONS_DIR", "../.node-versions"),
+		UpdatePubKeyFile:    getEnv("OMP_UPDATE_PUBKEY_FILE", "../.run/update-trusted.pub"),
 		BootstrapOpen: func() bool {
 			v, _ := strconv.ParseBool(getEnv("OMP_BOOTSTRAP_OPEN", "false"))
 			return v

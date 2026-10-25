@@ -258,3 +258,14 @@ export function routeLink(a: BoxPos, b: BoxPos, boxes: BoxPos[], bend = 0, lane 
   const lp = labelPoint(best);
   return { d: roundedPath(best), lx: lp.x, ly: lp.y, routed: true };
 }
+
+export interface ClockIn { synced: boolean; maxErrorUs: number; estErrorUs: number; taiOffsetS: number }
+
+/** Befund zur Systemuhr eines Hosts ("" = in Ordnung oder unbekannt). MXL und Schaltzeitpunkte rechnen in TAI. */
+export function clockProblem(c: ClockIn | undefined): "" | "unsynced" | "tai" | "unsynced+tai" {
+  if (!c) return "";
+  if (!c.synced && c.taiOffsetS === 0) return "unsynced+tai";
+  if (!c.synced) return "unsynced";
+  if (c.taiOffsetS === 0) return "tai";
+  return "";
+}

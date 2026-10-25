@@ -46,6 +46,8 @@ type Sample struct {
 	Gpu *GpuSample `json:"gpu,omitempty"`
 	// Jobs: Fähigkeiten und Auslastung der Job-Ausführung (tools.json); nil = auf diesem Host nicht freigegeben.
 	Jobs *jobs.Info `json:"jobs,omitempty"`
+	// Clock: Zustand der Systemuhr (Synchronisation, TAI-Versatz); nil, wenn der Kernel ihn nicht liefert.
+	Clock *ClockSample `json:"clock,omitempty"`
 	// Goodbye markiert die letzte Nachricht eines Host-Agents, der per
 	// SIGTERM/SIGINT ABSICHTLICH beendet wird (Nutzerauftrag 2026-09-21:
 	// ein Host, der ohne manuelles Beenden offline geht, ist ein
