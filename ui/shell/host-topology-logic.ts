@@ -138,3 +138,123 @@ export function levelOf(value: number | undefined, limit = 100): "none" | "ok" |
   const r = value / limit;
   return r >= 1 ? "full" : r >= 0.85 ? "warn" : "ok";
 }
+
+// --- Verbindungen um Kästen herumführen ---------------------------------------------------------------------------------
+
+type Pt = { x: number; y: number };
+
+/** Schneidet die achsenparallele oder schräge Strecke p→q das Rechteck r (Innenraum)? */
+function segmentHitsRect(p: Pt, q: Pt, r: { x: number; y: number; w: number; h: number }): boolean {
+  // Liang–Barsky
+  let t0 = 0;
+  let t1 = 1;
+  const dx = q.x - p.x;
+  const dy = q.y - p.y;
+  const clip = (pp: number, qq: number): boolean => {
+    if (pp === 0) return qq >= 0;
+    const t = qq / pp;
+    if (pp < 0) {
+      if (t > t1) return false;
+      if (t > t0) t0 = t;
+    } else {
+      if (t < t0) return false;
+      if (t < t1) t1 = t;
+    }
+    return true;
+  };
+  return clip(-dx, p.x - r.x) && clip(dx, r.x + r.w - p.x) && clip(-dy, p.y - r.y) && clip(dy, r.y + r.h - p.y) && t1 - t0 > 1e-9;
+}
+
+const grow = (b: BoxPos, m: number) => ({ x: b.x - m, y: b.y - m, w: b.w + 2 * m, h: b.h + 2 * m });
+
+function polylineClear(pts: Pt[], others: BoxPos[], margin: number): boolean {
+  for (let i = 0; i + 1 < pts.length; i++) {
+    for (const o of others) if (segmentHitsRect(pts[i], pts[i + 1], grow(o, margin))) return false;
+  }
+  return true;
+}
+
+const pathLength = (pts: Pt[]) => pts.reduce((s, p, i) => (i === 0 ? 0 : s + Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y)), 0);
+
+/** Polylinie mit abgerundeten Ecken. */
+function roundedPath(pts: Pt[], radius = 12): string {
+  let d = `M${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const p = pts[i - 1], c = pts[i], n = pts[i + 1];
+    const l1 = Math.hypot(c.x - p.x, c.y - p.y), l2 = Math.hypot(n.x - c.x, n.y - c.y);
+    const r = Math.min(radius, l1 / 2, l2 / 2);
+    const a = { x: c.x + ((p.x - c.x) / l1) * r, y: c.y + ((p.y - c.y) / l1) * r };
+    const b = { x: c.x + ((n.x - c.x) / l2) * r, y: c.y + ((n.y - c.y) / l2) * r };
+    d += ` L${a.x.toFixed(1)},${a.y.toFixed(1)} Q${c.x.toFixed(1)},${c.y.toFixed(1)} ${b.x.toFixed(1)},${b.y.toFixed(1)}`;
+  }
+  const last = pts[pts.length - 1];
+  return `${d} L${last.x.toFixed(1)},${last.y.toFixed(1)}`;
+}
+
+/** Mitte der längsten Teilstrecke (dort sitzt die Beschriftung). */
+function labelPoint(pts: Pt[]): Pt {
+  let best = 0;
+  let at: Pt = pts[0];
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const l = Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+    if (l > best) {
+      best = l;
+      at = { x: (pts[i].x + pts[i + 1].x) / 2, y: (pts[i].y + pts[i + 1].y) / 2 };
+    }
+  }
+  return at;
+}
+
+/**
+ * Weg einer Verbindung zwischen zwei Kästen. Liegt die gerade Linie frei, bleibt sie (wie `linkPath`); sonst läuft sie
+ * rechtwinklig mit runden Ecken durch die Gassen zwischen den Kästen bzw. um das Raster herum. `lane` versetzt parallele
+ * Verbindungen, `bend` wirkt nur auf die gerade Linie (Gegenrichtung).
+ */
+export function routeLink(a: BoxPos, b: BoxPos, boxes: BoxPos[], bend = 0, lane = 0, gutter = 30): { d: string; lx: number; ly: number; routed: boolean } {
+  const others = boxes.filter((x) => x.id !== a.id && x.id !== b.id);
+  const straight = linkPath(a, b, bend);
+  const acx = a.x + a.w / 2, acy = a.y + a.h / 2, bcx = b.x + b.w / 2, bcy = b.y + b.h / 2;
+  const sp = [{ x: acx, y: acy }, { x: bcx, y: bcy }];
+  if (polylineClear(sp, others, 6)) return { ...straight, routed: false };
+
+  const off = lane * 8;
+  const all = boxes;
+  const minX = Math.min(...all.map((x) => x.x)), maxX = Math.max(...all.map((x) => x.x + x.w));
+  const minY = Math.min(...all.map((x) => x.y)), maxY = Math.max(...all.map((x) => x.y + x.h));
+  const ys = [...new Set(all.flatMap((x) => [x.y, x.y + x.h]))].sort((p, q) => p - q);
+  const xs = [...new Set(all.flatMap((x) => [x.x, x.x + x.w]))].sort((p, q) => p - q);
+  const chY = [minY - gutter / 2], chX = [minX - gutter / 2];
+  for (let i = 1; i + 1 < ys.length; i += 2) chY.push((ys[i] + ys[i + 1]) / 2);
+  for (let i = 1; i + 1 < xs.length; i += 2) chX.push((xs[i] + xs[i + 1]) / 2);
+  chY.push(maxY + gutter / 2);
+  chX.push(maxX + gutter / 2);
+
+  const cands: Pt[][] = [];
+  for (const y0 of chY) {
+    const y = y0 + off;
+    if ((y > a.y && y < a.y + a.h) || (y > b.y && y < b.y + b.h)) continue;
+    const ax = acx + off, bx = bcx + off;
+    cands.push([{ x: ax, y: y < acy ? a.y : a.y + a.h }, { x: ax, y }, { x: bx, y }, { x: bx, y: y < bcy ? b.y : b.y + b.h }]);
+  }
+  for (const x0 of chX) {
+    const x = x0 + off;
+    if ((x > a.x && x < a.x + a.w) || (x > b.x && x < b.x + b.w)) continue;
+    const ay = acy + off, by = bcy + off;
+    cands.push([{ x: x < acx ? a.x : a.x + a.w, y: ay }, { x, y: ay }, { x, y: by }, { x: x < bcx ? b.x : b.x + b.w, y: by }]);
+  }
+  let best: Pt[] | undefined;
+  let bestLen = Infinity;
+  for (const c of cands) {
+    if (!polylineClear(c, others, 4)) continue;
+    // der Weg darf auch die eigenen Kästen nur an den Enden berühren
+    if (!polylineClear(c.slice(1, -1).length ? [c[1], c[2]] : c, [a, b], 0)) continue;
+    const len = pathLength(c);
+    if (len < bestLen) {
+      best = c;
+      bestLen = len;
+    }
+  }
+  if (!best) return { ...straight, routed: false };
+  const lp = labelPoint(best);
+  return { d: roundedPath(best), lx: lp.x, ly: lp.y, routed: true };
+}

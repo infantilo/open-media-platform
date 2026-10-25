@@ -14,16 +14,17 @@ type groupResources struct {
 	planResources
 	target string
 	split  bool
+	over   bool
 	calls  int
 }
 
-func (g *groupResources) SelectHostGroup(ms []placement.GroupMember, _ placement.Occupancy) placement.GroupResult {
+func (g *groupResources) SelectHostGroup(ms []placement.GroupMember, _ []placement.Link, _ placement.Occupancy) placement.GroupResult {
 	g.calls++
-	r := placement.GroupResult{Hosts: map[string]string{}, Reason: "Verbund", Split: g.split}
+	r := placement.GroupResult{Hosts: map[string]string{}, Reason: "Verbund", Split: g.split, Overloaded: g.over}
 	target := g.target
 	for _, m := range ms {
-		if m.Fixed != "" {
-			target = m.Fixed // wie die Engine: ein fester Host zieht den Verbund
+		if m.Fixed != "" && !g.split {
+			target = m.Fixed // wie die Engine: ein fester Host zieht den Verbund, wenn er ihn trägt
 			break
 		}
 	}
@@ -137,6 +138,7 @@ func TestEvacuationTargetMovesConnectedRolesToOneHost(t *testing.T) {
 	res := &groupResources{planResources: planResources{hostFor: map[string]string{"t": "solo-host"}}, target: "hostB"}
 	svc := NewService(nil, nil, nil, nil, nil, nil, res, nil)
 	wf, items := evacWorkflow()
+	wf.Runtime = map[string]RoleRuntime{"src": {InstanceID: "i-src", HostID: "hostA"}, "mix": {InstanceID: "i-mix", HostID: "hostA"}, "solo": {InstanceID: "i-solo", HostID: "hostA"}, "away": {InstanceID: "i-away", HostID: "hostZ"}}
 	cache := map[string]placement.GroupResult{}
 
 	for _, role := range []string{"src", "mix"} {
@@ -145,20 +147,21 @@ func TestEvacuationTargetMovesConnectedRolesToOneHost(t *testing.T) {
 			it = items[1]
 		}
 		h, why := svc.evacuationTarget(wf, it, items, "hostA", cache)
-		if why != "" || h != "hostB" {
+		if why != "" || h != "hostZ" { // das schon auf hostZ laufende Mitglied „away“ zieht den Verbund dorthin
 			t.Fatalf("%s: %q %q", role, h, why)
 		}
 	}
 	if res.calls != 1 {
 		t.Errorf("Verbund einmal berechnet: %d", res.calls)
 	}
-	for _, id := range []string{"i-src", "i-mix"} {
-		if v, ok := svc.groupMoves.Load(id); !ok || v.(string) != "hostB" {
-			t.Errorf("groupMoves[%s] = %v %v", id, v, ok)
+	peers := svc.groupPeerInstances(wf)
+	for _, id := range []string{"i-src", "i-mix", "i-away"} { // away liegt woanders und gehört zum Verbund (src–mix–away)
+		if !peers[id] {
+			t.Errorf("%s gehört zum geplanten Umzug: %v", id, peers)
 		}
 	}
-	if _, ok := svc.groupMoves.Load("i-solo"); ok {
-		t.Error("Einzelrolle ist kein Gruppenumzug")
+	if peers["i-solo"] {
+		t.Error("Einzelrolle ist kein Verbund-Umzug")
 	}
 	// Einzelrolle: normale Wahl; gleicher Host wie Quelle ⇒ kein Ziel
 	if h, why := svc.evacuationTarget(wf, items[2], items, "hostA", cache); h != "solo-host" || why != "" {
@@ -169,35 +172,54 @@ func TestEvacuationTargetMovesConnectedRolesToOneHost(t *testing.T) {
 	}
 }
 
-func TestEvacuationTargetRefusesToSplitGroup(t *testing.T) {
+// Aufteilung ist erlaubt (möglichst wenig Querverbindungen entscheidet die Platzierung): jede Rolle bekommt ihr eigenes Ziel.
+func TestEvacuationTargetFollowsSplitPlan(t *testing.T) {
 	res := &groupResources{planResources: planResources{}, target: "hostB", split: true}
 	svc := NewService(nil, nil, nil, nil, nil, nil, res, nil)
 	wf, items := evacWorkflow()
-	h, why := svc.evacuationTarget(wf, items[0], items, "hostA", map[string]placement.GroupResult{})
-	if h != "" || why == "" {
-		t.Fatalf("Verbund darf nicht zerrissen werden: %q %q", h, why)
+	wf.Runtime = map[string]RoleRuntime{"src": {InstanceID: "i-src", HostID: "hostA"}, "mix": {InstanceID: "i-mix", HostID: "hostA"}, "away": {InstanceID: "i-away", HostID: "hostZ"}}
+	cache := map[string]placement.GroupResult{}
+	h0, why0 := svc.evacuationTarget(wf, items[0], items, "hostA", cache)
+	h1, why1 := svc.evacuationTarget(wf, items[1], items, "hostA", cache)
+	if why0 != "" || why1 != "" || h0 == "" || h1 == "" || h0 == h1 {
+		t.Fatalf("Aufteilung erwartet: %q/%q %q/%q", h0, why0, h1, why1)
 	}
-	if _, ok := svc.groupMoves.Load("i-src"); ok {
-		t.Error("bei Aufteilung keine Gruppenumzug-Marke")
+	if !svc.groupPeerInstances(wf)["i-mix"] {
+		t.Error("beide gehören zum geplanten Umzug")
 	}
 }
 
-func TestPlanStartWarnsAboutMXLLinkAcrossHosts(t *testing.T) {
-	res := &groupResources{planResources: planResources{hostFor: map[string]string{}, cpu: map[string]float64{}, limit: 85, base: map[string]float64{}}, target: "hostB", split: true}
+func TestEvacuationTargetRefusesOverloadedHostForGroup(t *testing.T) {
+	res := &groupResources{planResources: planResources{}, target: "hostB", over: true}
 	svc := NewService(nil, nil, nil, nil, nil, nil, res, nil)
-	def := Definition{
-		Roles:       []Role{{Name: "a", NodeType: "t", HostID: "h1"}, {Name: "b", NodeType: "t", HostID: "h2"}},
-		Connections: []Connection{{FromRole: "a", ToRole: "b"}},
+	wf, items := evacWorkflow()
+	wf.Runtime = map[string]RoleRuntime{"src": {InstanceID: "i-src", HostID: "hostA"}, "mix": {InstanceID: "i-mix", HostID: "hostA"}}
+	h, why := svc.evacuationTarget(wf, items[0], items, "hostA", map[string]placement.GroupResult{})
+	if h != "" || !containsSub(why, "Reserve") {
+		t.Fatalf("%q %q", h, why)
 	}
-	// Verbund passt auf keinen Host (split): die Vorschau warnt
-	plan := svc.planFor(Workflow{ID: "w", Definition: def, Status: StatusStopped})
-	found := false
-	for _, w := range plan.Warnings {
-		if containsSub(w, "MXL") && containsSub(w, "verschiedenen Hosts") {
-			found = true
-		}
+	if len(svc.groupPeerInstances(wf)) != 0 {
+		t.Error("keine Umzugs-Marke bei Überlast")
 	}
-	if !found {
-		t.Fatalf("Warnung fehlt (Rollen: %+v, Warnungen: %v)", plan.Roles, plan.Warnings)
+}
+
+func TestGroupMigrationTargetStaysOrMovesWholePlan(t *testing.T) {
+	res := &groupResources{planResources: planResources{cpu: map[string]float64{"t": 10}}, target: "hostB"}
+	svc := NewService(nil, nil, nil, nil, nil, nil, res, nil)
+	wf, _ := evacWorkflow()
+	wf.ID = "w"
+	wf.Runtime = map[string]RoleRuntime{"src": {InstanceID: "i-src", HostID: "hostA"}, "mix": {InstanceID: "i-mix", HostID: "hostA"}, "solo": {InstanceID: "i-solo", HostID: "hostA"}}
+	if h, ok := svc.groupMigrationTarget(wf, "src", "hostA"); !ok || h != "hostB" {
+		t.Fatalf("Verbund zieht um: %q %v", h, ok)
+	}
+	if !svc.groupPeerInstances(wf)["i-mix"] {
+		t.Error("Mitglieder sind markiert")
+	}
+	if _, ok := svc.groupMigrationTarget(wf, "solo", "hostA"); ok {
+		t.Error("Einzelrolle: keine Verbund-Logik")
+	}
+	res.over = true
+	if h, ok := svc.groupMigrationTarget(wf, "src", "hostA"); !ok || h != "hostA" {
+		t.Fatalf("Überlast: Verbund bleibt: %q %v", h, ok)
 	}
 }

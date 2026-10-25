@@ -228,6 +228,39 @@ type Engine struct {
 	draining map[string]bool
 	// maintenance: Hosts im Wartungsmodus (internal/maintenance) — wie draining gesperrt, aber unabhängig vom Cloud-Abbau.
 	maintenance map[string]bool
+	// cores: Kernzahl je Host aus den Fähigkeiten (kurz gepuffert, scoreHost läuft in der Suche sehr oft).
+	cores   map[string]int
+	coresAt time.Time
+}
+
+const coresTTL = 30 * time.Second
+
+// coresOf liefert die Kernzahl des Hosts (0 = unbekannt). Verbrauchsprofile sind Prozent EINES Kerns, die Telemetrie
+// des Hosts Prozent der ganzen Maschine — Profile müssen vor dem Addieren durch die Kernzahl geteilt werden
+// (wie EstimateHost es tut).
+func (e *Engine) coresOf(hostID string) int {
+	e.mu.RLock()
+	if e.cores != nil && time.Since(e.coresAt) < coresTTL {
+		n := e.cores[hostID]
+		e.mu.RUnlock()
+		return n
+	}
+	e.mu.RUnlock()
+	fresh := map[string]int{}
+	if hs, err := e.hostLister.ListHosts(); err == nil {
+		for _, h := range hs {
+			var caps struct {
+				NumCPU int `json:"numCPU"`
+			}
+			if json.Unmarshal(h.Capabilities, &caps) == nil {
+				fresh[h.ID] = caps.NumCPU
+			}
+		}
+	}
+	e.mu.Lock()
+	e.cores, e.coresAt = fresh, time.Now()
+	e.mu.Unlock()
+	return fresh[hostID]
 }
 
 // SetDraining sperrt bzw. entsperrt einen Host für neue Platzierungen. Laufende Instanzen bleiben unberührt.
@@ -474,6 +507,12 @@ func (e *Engine) hostOnline(hostID string) bool {
 // bereits vorher über hostOnline() aus, bevor es hier überhaupt
 // ankommt (s. dortige Doku).
 func (e *Engine) scoreHost(hostID, nodeType string, extraLoad profiles.Snapshot) hostScore {
+	return e.scoreHostCredit(hostID, nodeType, extraLoad, profiles.Snapshot{})
+}
+
+// scoreHostCredit wie scoreHost, rechnet aber credit von der gemessenen Last ab — die Last von Instanzen, die gerade
+// umgeplant werden und deren Beitrag schon in der Host-Messung steckt (sonst zählte ein Verbleib doppelt).
+func (e *Engine) scoreHostCredit(hostID, nodeType string, extraLoad, credit profiles.Snapshot) hostScore {
 	m, hasMetrics := e.metrics.Get(hostID)
 	if !hasMetrics {
 		return hostScore{ok: true}
@@ -482,16 +521,30 @@ func (e *Engine) scoreHost(hostID, nodeType string, extraLoad profiles.Snapshot)
 	if m.MemTotalBytes > 0 {
 		memPercent = float64(m.MemUsedBytes) / float64(m.MemTotalBytes) * 100
 	}
+	perCore := 1.0
+	if n := e.coresOf(hostID); n > 0 {
+		perCore = 1 / float64(n)
+	}
 	cpuPercent := m.CPUPercent
+	cpuPercent -= credit.CPUAvg * perCore
+	if cpuPercent < 0 {
+		cpuPercent = 0
+	}
+	if m.MemTotalBytes > 0 {
+		memPercent -= float64(credit.RSSAvg) / float64(m.MemTotalBytes) * 100
+		if memPercent < 0 {
+			memPercent = 0
+		}
+	}
 
 	if snap, ok := e.lookupProfile(nodeType, hostID); ok {
-		cpuPercent += snap.CPUAvg
+		cpuPercent += snap.CPUAvg * perCore
 		if m.MemTotalBytes > 0 {
 			memPercent += float64(snap.RSSAvg) / float64(m.MemTotalBytes) * 100
 		}
 	}
 	if extraLoad.CPUAvg > 0 || extraLoad.RSSAvg > 0 {
-		cpuPercent += extraLoad.CPUAvg
+		cpuPercent += extraLoad.CPUAvg * perCore
 		if m.MemTotalBytes > 0 {
 			memPercent += float64(extraLoad.RSSAvg) / float64(m.MemTotalBytes) * 100
 		}
@@ -551,6 +604,9 @@ type Occupancy struct {
 	AffinityGroupHosts   map[string][]string
 	RedundancyGroupHosts map[string][]string
 	ExtraLoad            map[string]profiles.Snapshot
+	// Credit: je Host die Last von Instanzen, die gerade neu platziert werden und schon in der Messung des Hosts stecken
+	// (SelectHostGroup beim Umzug; leer beim Start).
+	Credit map[string]profiles.Snapshot
 }
 
 // PlacementResult ist das Ergebnis von SelectHost. HostID="" bedeutet

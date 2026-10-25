@@ -134,7 +134,7 @@ func (s *Service) planFor(wf Workflow) StartPlan {
 			hostOf[r.Role] = r.PlannedHostID
 		}
 		for _, l := range splitMXLLinks(roleLinks(wf.Definition, s.catalogEntries()), hostOf) {
-			plan.Warnings = append(plan.Warnings, fmt.Sprintf("Verbindung „%s“ → „%s“ läuft über MXL, die Rollen liegen aber auf verschiedenen Hosts — sie funktioniert so nicht", l.A, l.B))
+			plan.Warnings = append(plan.Warnings, fmt.Sprintf("Verbindung „%s“ → „%s“ überquert eine Host-Grenze — direktes MXL gilt nur auf einem Host; dafür ein Fabrics/RDMA-Gateway-Paar (Initiator/Target) in den Workflow einsetzen", l.A, l.B))
 		}
 	}
 	if msg := missingAnchorWarning(wf.Definition, s.catalogEntries()); msg != "" {

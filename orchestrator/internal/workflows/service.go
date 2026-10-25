@@ -255,7 +255,7 @@ type IOPortClaimer interface {
 // aus (ARCHITECTURE.md §6.2, UMSETZUNG.md D7 Teil 1/Teil 2).
 type Service struct {
 	// groupMoves: Instanzen, die gerade gemeinsam (als MXL-Verbund) auf einen Zielhost umziehen (netplace.go).
-	groupMoves sync.Map // instanceID -> Zielhost
+	groupMoves sync.Map // "<Workflow>|<Rolle>" -> groupMove (Teil eines geplanten Verbund-Umzugs)
 
 	// Erweiterungspunkte (extension.go, Kapitel 36.5)
 	extMu        sync.RWMutex

@@ -8,6 +8,7 @@ package placement
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -19,6 +20,15 @@ import (
 type Link struct {
 	A, B  string
 	Bound bool
+	// Weight: Gewicht der Verbindung beim Aufteilen (z. B. Bandbreite); 0 = 1.
+	Weight float64
+}
+
+func (l Link) weight() float64 {
+	if l.Weight <= 0 {
+		return 1
+	}
+	return l.Weight
 }
 
 // Components liefert die Verbünde: Zusammenhangskomponenten der Rollen über Bound-Links.
@@ -83,18 +93,63 @@ type GroupMember struct {
 	Fixed string
 }
 
-// GroupResult: gewählter Host je Rolle. Split=true: der Verbund passt auf keinen einzelnen Host
-// (oder hat zwei feste Hosts) — MXL-Verbindungen zwischen den Hosts funktionieren dann nicht.
+// GroupResult: gewählter Host je Rolle.
+//   - Split: der Verbund läuft auf mehr als einem Host (nur wenn kein einzelner Host ihn unter den Schwellen trägt
+//     oder feste Hosts ihn trennen). Cut/CutWeight: die dabei über Host-Grenzen laufenden Verbindungen — sie brauchen einen
+//     Netzwerkweg (MXL ist host-lokal).
+//   - Overloaded: auch aufgeteilt passt der Verbund nirgends unter die Schwellen; er läuft ungeteilt auf dem am wenigsten
+//     belasteten Host.
 type GroupResult struct {
-	Hosts  map[string]string
-	Reason string
-	Split  bool
+	Hosts      map[string]string
+	Reason     string
+	Split      bool
+	Overloaded bool
+	Cut        []Link
+	CutWeight  float64
 }
 
-// SelectHostGroup wählt einen gemeinsamen Host für alle Mitglieder: Kandidat ist, wer online ist, nicht gesperrt
-// und die Summe aller Mitglieder (Profil + Zusatzlast) unter den Schwellen trägt. Danach Redundanz (mit Rückfall),
-// Vorliebe eines Mitglieds, Affinität, geringste Last (wie SelectHost). Passt kein Host: Aufteilung mit Hinweis.
-func (e *Engine) SelectHostGroup(members []GroupMember, occ Occupancy) GroupResult {
+// searchBudget begrenzt die Suche (Knoten der Tiefensuche); Verbünde sind klein, die Grenze ist nur ein Schutz.
+const searchBudget = 400000
+
+type groupCost struct {
+	redundancy int     // Mitglieder auf Hosts, die ihre Redundanz-Gruppe schon trägt
+	cut        float64 // Gewicht der über Host-Grenzen laufenden Verbindungen
+	hosts      int     // belegte Hosts
+	mismatch   int     // Mitglieder mit Wunschhost auf einem anderen Host
+	noAffinity int     // Mitglieder mit Affinitäts-Gruppe, deren Gruppe nicht auf ihrem Host liegt
+	worst      hostScore
+	hasWorst   bool
+}
+
+// better: a ist besser als b (lexikografisch: Redundanz, Schnitt, Hostzahl, Wunsch, Affinität, geringste Last).
+func (a groupCost) better(b groupCost) bool {
+	if a.redundancy != b.redundancy {
+		return a.redundancy < b.redundancy
+	}
+	if math.Abs(a.cut-b.cut) > 1e-9 {
+		return a.cut < b.cut
+	}
+	if a.hosts != b.hosts {
+		return a.hosts < b.hosts
+	}
+	if a.mismatch != b.mismatch {
+		return a.mismatch < b.mismatch
+	}
+	if a.noAffinity != b.noAffinity {
+		return a.noAffinity < b.noAffinity
+	}
+	if a.hasWorst && b.hasWorst {
+		return lessLoaded(a.worst, b.worst)
+	}
+	return false
+}
+
+// SelectHostGroup platziert einen Verbund. Reihenfolge der Ziele: (1) alles auf einem Host unter den Schwellen,
+// (2) sonst die Aufteilung mit dem geringsten Gewicht der über Hosts laufenden Verbindungen, bei der jeder Host unter
+// den Schwellen bleibt, (3) sonst ungeteilt auf dem am wenigsten belasteten Host (Overloaded). Innerhalb der Stufe
+// zählen Redundanz, weniger Hosts, Wunschhost, Affinität und geringste Last; Gleichstand entscheidet die Hostreihenfolge,
+// das Ergebnis ist deterministisch. links: Verbindungen zwischen den Mitgliedern (nur Bound zählt für den Schnitt).
+func (e *Engine) SelectHostGroup(members []GroupMember, links []Link, occ Occupancy) GroupResult {
 	res := GroupResult{Hosts: map[string]string{}}
 	if len(members) == 0 {
 		return res
@@ -110,33 +165,6 @@ func (e *Engine) SelectHostGroup(members []GroupMember, occ Occupancy) GroupResu
 		return res
 	}
 
-	// Feste Hosts: der erste gilt für den ganzen Verbund; weitere, andere sind eine Aufteilung.
-	fixedHost, hasFixed := "", false
-	for _, m := range members {
-		if m.Fixed == "" {
-			continue
-		}
-		if !hasFixed {
-			fixedHost, hasFixed = m.Fixed, true
-		} else if m.Fixed != fixedHost {
-			res.Split = true
-		}
-	}
-	if hasFixed {
-		for _, m := range members {
-			if m.Fixed != "" {
-				res.Hosts[m.Name] = m.Fixed
-			} else {
-				res.Hosts[m.Name] = fixedHost
-			}
-		}
-		res.Reason = fmt.Sprintf("Verbund an festen Host gebunden (%s)", memberNames(members))
-		if res.Split {
-			res.Reason = fmt.Sprintf("Verbund hat verschiedene feste Hosts (%s) — MXL-Verbindungen zwischen ihnen funktionieren nicht", memberNames(members))
-		}
-		return res
-	}
-
 	allHosts, err := e.hostLister.ListHosts()
 	if err != nil {
 		for _, m := range members {
@@ -145,138 +173,262 @@ func (e *Engine) SelectHostGroup(members []GroupMember, occ Occupancy) GroupResu
 		res.Reason = "Host-Liste nicht verfügbar, lokal gestartet"
 		return res
 	}
-
-	type cand struct {
-		hostID     string
-		score      hostScore
-		affinity   bool
-		redundancy bool
-	}
-	var cands []cand
+	var hostIDs []string
 	for _, h := range allHosts {
-		if !e.hostOnline(h.ID) || e.IsDraining(h.ID) {
-			continue
+		if e.hostOnline(h.ID) && !e.IsDraining(h.ID) {
+			hostIDs = append(hostIDs, h.ID)
 		}
-		extra := occ.ExtraLoad[h.ID]
-		ok := true
-		var last hostScore
+	}
+	// feste Hosts zählen immer mit (ohne Kapazitätsprüfung der Zusage, aber mit ihrer Last)
+	for _, m := range members {
+		if m.Fixed != "" && !containsString(hostIDs, m.Fixed) {
+			hostIDs = append(hostIDs, m.Fixed)
+		}
+	}
+	if len(hostIDs) == 0 {
 		for _, m := range members {
-			s := e.scoreHost(h.ID, m.Req.NodeType, extra)
-			if !s.ok {
-				ok = false
-				break
-			}
-			last = s
-			if p, has := e.lookupProfile(m.Req.NodeType, h.ID); has {
-				extra = addLoad(extra, p)
-			}
+			res.Hosts[m.Name] = ""
 		}
-		if !ok {
-			continue
-		}
-		c := cand{hostID: h.ID, score: last}
-		for _, m := range members {
-			if g := m.Req.AffinityGroup; g != "" && containsString(occ.AffinityGroupHosts[g], h.ID) {
-				c.affinity = true
-			}
-			if g := m.Req.RedundancyGroup; g != "" && containsString(occ.RedundancyGroupHosts[g], h.ID) {
-				c.redundancy = true
-			}
-		}
-		cands = append(cands, c)
+		res.Reason = fmt.Sprintf("Verbund (%s): kein Remote-Host verfügbar, lokal gestartet", memberNames(members))
+		return res
 	}
 
-	if len(cands) > 0 {
-		pool := make([]cand, 0, len(cands))
-		for _, c := range cands {
-			if !c.redundancy {
-				pool = append(pool, c)
+	idx := map[string]int{}
+	for i, m := range members {
+		idx[m.Name] = i
+	}
+	type edge struct {
+		a, b int
+		w    float64
+		l    Link
+	}
+	var edges []edge
+	adj := make([][]int, len(members))
+	for _, l := range links {
+		a, okA := idx[l.A]
+		b, okB := idx[l.B]
+		if !l.Bound || !okA || !okB || a == b {
+			continue
+		}
+		edges = append(edges, edge{a, b, l.weight(), l})
+		adj[a] = append(adj[a], b)
+		adj[b] = append(adj[b], a)
+	}
+	// Reihenfolge: zusammenhängend (Breitensuche ab dem ersten Mitglied), damit der Schnitt früh bekannt ist und beschneidet
+	order := make([]int, 0, len(members))
+	seen := make([]bool, len(members))
+	for start := range members {
+		if seen[start] {
+			continue
+		}
+		seen[start] = true
+		queue := []int{start}
+		for len(queue) > 0 {
+			c := queue[0]
+			queue = queue[1:]
+			order = append(order, c)
+			for _, n := range adj[c] {
+				if !seen[n] {
+					seen[n] = true
+					queue = append(queue, n)
+				}
+			}
+		}
+	}
+
+	nH := len(hostIDs)
+	assign := make([]int, len(members))
+	for i := range assign {
+		assign[i] = -1
+	}
+	extra := make([]profilesSnapshot, nH)
+	for h, id := range hostIDs {
+		extra[h] = occ.ExtraLoad[id]
+	}
+	last := make([]hostScore, nH)
+	count := make([]int, nH)
+	var best []int
+	var bestCost groupCost
+	nodes := 0
+
+	redViol := func(m GroupMember, hostID string) bool {
+		g := m.Req.RedundancyGroup
+		return g != "" && containsString(occ.RedundancyGroupHosts[g], hostID)
+	}
+	affMiss := func(m GroupMember, hostID string) bool {
+		g := m.Req.AffinityGroup
+		return g != "" && !containsString(occ.AffinityGroupHosts[g], hostID)
+	}
+	costOf := func() groupCost {
+		var c groupCost
+		for i, m := range members {
+			hid := hostIDs[assign[i]]
+			if redViol(m, hid) {
+				c.redundancy++
+			}
+			if m.Req.PreferredHostID != "" && m.Req.PreferredHostID != hid {
+				c.mismatch++
+			}
+			if affMiss(m, hid) {
+				c.noAffinity++
+			}
+		}
+		for _, ed := range edges {
+			if assign[ed.a] != assign[ed.b] {
+				c.cut += ed.w
+			}
+		}
+		for h := range hostIDs {
+			if count[h] == 0 {
+				continue
+			}
+			c.hosts++
+			if !c.hasWorst || lessLoaded(c.worst, last[h]) {
+				c.worst, c.hasWorst = last[h], true
+			}
+		}
+		return c
+	}
+	cutSoFar := func(upto int) float64 {
+		var c float64
+		for _, ed := range edges {
+			if assign[ed.a] >= 0 && assign[ed.b] >= 0 && assign[ed.a] != assign[ed.b] {
+				c += ed.w
+			}
+		}
+		return c
+	}
+	var dfs func(pos int)
+	dfs = func(pos int) {
+		if nodes > searchBudget {
+			return
+		}
+		nodes++
+		if best != nil && cutSoFar(pos) > bestCost.cut+1e-9 {
+			return
+		}
+		if pos == len(order) {
+			c := costOf()
+			if best == nil || c.better(bestCost) {
+				best = append([]int(nil), assign...)
+				bestCost = c
+			}
+			return
+		}
+		mi := order[pos]
+		m := members[mi]
+		for h := range hostIDs {
+			if m.Fixed != "" && hostIDs[h] != m.Fixed {
+				continue
+			}
+			sc := e.scoreHostCredit(hostIDs[h], m.Req.NodeType, extra[h], occ.Credit[hostIDs[h]])
+			if !sc.ok && m.Fixed == "" {
+				continue
+			}
+			prevExtra, prevLast := extra[h], last[h]
+			if p, has := e.lookupProfile(m.Req.NodeType, hostIDs[h]); has {
+				extra[h] = addLoad(extra[h], p)
+			}
+			last[h] = sc
+			count[h]++
+			assign[mi] = h
+			dfs(pos + 1)
+			assign[mi] = -1
+			count[h]--
+			extra[h], last[h] = prevExtra, prevLast
+		}
+	}
+	dfs(0)
+
+	if best == nil {
+		return e.groupOverloaded(members, hostIDs, occ, res)
+	}
+	used := map[string]bool{}
+	for i, m := range members {
+		res.Hosts[m.Name] = hostIDs[best[i]]
+		used[hostIDs[best[i]]] = true
+	}
+	res.Split = len(used) > 1
+	res.CutWeight = bestCost.cut
+	for _, ed := range edges {
+		if best[ed.a] != best[ed.b] {
+			res.Cut = append(res.Cut, ed.l)
+		}
+	}
+	if !res.Split {
+		why := "geringste Last"
+		for _, m := range members {
+			if m.Req.PreferredHostID != "" && m.Req.PreferredHostID == res.Hosts[m.Name] {
+				why = "bevorzugter Host trägt den ganzen Verbund"
+				break
 			}
 		}
 		suffix := ""
-		if len(pool) == 0 {
-			pool = cands
+		if bestCost.redundancy > 0 {
 			suffix = " (Redundanz-Konflikt in Kauf genommen)"
-		}
-		chosen := -1
-		why := "geringste Last"
-		for _, m := range members {
-			if m.Req.PreferredHostID == "" {
-				continue
-			}
-			for i, c := range pool {
-				if c.hostID == m.Req.PreferredHostID {
-					chosen, why = i, "bevorzugter Host trägt den ganzen Verbund"
-					break
-				}
-			}
-			if chosen >= 0 {
-				break
-			}
-		}
-		if chosen < 0 {
-			var aff []int
-			for i, c := range pool {
-				if c.affinity {
-					aff = append(aff, i)
-				}
-			}
-			scan := make([]int, 0, len(pool))
-			if len(aff) > 0 {
-				scan, why = aff, "Affinitäts-Gruppe bereits auf diesem Host"
-			} else {
-				for i := range pool {
-					scan = append(scan, i)
-				}
-			}
-			chosen = scan[0]
-			for _, i := range scan[1:] {
-				if lessLoaded(pool[i].score, pool[chosen].score) {
-					chosen = i
-				}
-			}
-		}
-		for _, m := range members {
-			res.Hosts[m.Name] = pool[chosen].hostID
 		}
 		res.Reason = fmt.Sprintf("Verbund (%s) gemeinsam auf einem Host: %s%s", memberNames(members), why, suffix)
 		return res
 	}
-
-	// Kein einzelner Host trägt den Verbund: nacheinander platzieren, dabei am zuerst gewählten Host festhalten, wenn er noch passt.
-	extra := map[string]profilesSnapshot{}
-	anchor := ""
-	distinct := map[string]bool{}
-	for _, m := range members {
-		o := occ
-		o.ExtraLoad = map[string]profilesSnapshot{}
-		for k, v := range occ.ExtraLoad {
-			o.ExtraLoad[k] = v
-		}
-		for k, v := range extra {
-			o.ExtraLoad[k] = addLoad(o.ExtraLoad[k], v)
-		}
-		req := m.Req
-		if req.PreferredHostID == "" {
-			req.PreferredHostID = anchor
-		}
-		r := e.SelectHost(req, o)
-		res.Hosts[m.Name] = r.HostID
-		distinct[r.HostID] = true
-		if anchor == "" {
-			anchor = r.HostID
-		}
-		if p, has := e.lookupProfile(m.Req.NodeType, r.HostID); has {
-			extra[r.HostID] = addLoad(extra[r.HostID], p)
-		}
-	}
-	if len(distinct) > 1 {
-		res.Split = true
-		res.Reason = fmt.Sprintf("Verbund (%s) passt auf keinen einzelnen Host und wurde aufgeteilt — MXL-Verbindungen zwischen den Hosts funktionieren nicht", memberNames(members))
-	} else {
-		res.Reason = fmt.Sprintf("Verbund (%s) auf einem Host (Rückfall)", memberNames(members))
-	}
+	res.Reason = fmt.Sprintf("Verbund (%s) passt auf keinen einzelnen Host unter den Schwellen und wurde auf %d Hosts aufgeteilt, mit möglichst wenig Verbindungen über Host-Grenzen (%d: %s)",
+		memberNames(members), len(used), len(res.Cut), cutNames(res.Cut))
 	return res
+}
+
+// groupOverloaded: auch aufgeteilt passt der Verbund nirgends — ungeteilt auf den am wenigsten belasteten Host (Wunschhost zuerst).
+func (e *Engine) groupOverloaded(members []GroupMember, hostIDs []string, occ Occupancy, res GroupResult) GroupResult {
+	type cand struct {
+		id    string
+		score hostScore
+	}
+	var cands []cand
+	for _, id := range hostIDs {
+		extra := occ.ExtraLoad[id]
+		var last hostScore
+		for _, m := range members {
+			last = e.scoreHostCredit(id, m.Req.NodeType, extra, occ.Credit[id])
+			if p, has := e.lookupProfile(m.Req.NodeType, id); has {
+				extra = addLoad(extra, p)
+			}
+		}
+		cands = append(cands, cand{id, last})
+	}
+	chosen := 0
+	pref := ""
+	for _, m := range members {
+		if m.Req.PreferredHostID != "" && containsString(hostIDs, m.Req.PreferredHostID) {
+			pref = m.Req.PreferredHostID
+			break
+		}
+	}
+	if pref != "" {
+		for i, c := range cands {
+			if c.id == pref {
+				chosen = i
+			}
+		}
+	} else {
+		for i := 1; i < len(cands); i++ {
+			if lessLoaded(cands[i].score, cands[chosen].score) {
+				chosen = i
+			}
+		}
+	}
+	for _, m := range members {
+		res.Hosts[m.Name] = cands[chosen].id
+	}
+	res.Overloaded = true
+	res.Reason = fmt.Sprintf("Verbund (%s) gemeinsam auf einem Host: kein Host trägt ihn unter den Schwellen, auch aufgeteilt nicht — Überlast in Kauf genommen", memberNames(members))
+	return res
+}
+
+func cutNames(ls []Link) string {
+	out := make([]string, len(ls))
+	for i, l := range ls {
+		out[i] = l.A + "→" + l.B
+	}
+	sort.Strings(out)
+	return strings.Join(out, ", ")
 }
 
 type profilesSnapshot = profiles.Snapshot

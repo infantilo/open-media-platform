@@ -269,6 +269,15 @@ func (s *Service) considerMigration(instanceID, sourceHostID, targetHostID, targ
 		s.releaseMigrationClaim(instanceID)
 		return
 	}
+	if target, ok := s.groupMigrationTarget(wf, role, sourceHostID); ok {
+		if target == sourceHostID { // der beste Platz für den Verbund bleibt der aktuelle: kein Umzug
+			s.releaseMigrationClaim(instanceID)
+			return
+		}
+		if target != targetHostID {
+			targetHostID, targetHostLabel = target, target
+		}
+	}
 	switch r.PlacementEscalation() {
 	case EscalationAuto:
 		s.executeMigration(wf.ID, role, instanceID, targetHostID, "overload")
@@ -451,12 +460,10 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 			instHost := map[string]string{}
 			for _, in := range ll.List() {
 				instHost[in.ID] = in.HostID
-				// Zieht der ganze Verbund auf denselben Zielhost, zählt die noch nicht umgezogene Gegenstelle schon dort.
-				if t, ok := s.groupMoves.Load(in.ID); ok {
-					instHost[in.ID] = t.(string)
-				}
 			}
-			if peer, bad := mxlPeerConflict(s.nodes.List(), el.Edges(), instHost, oldNodeID, targetHostID); bad {
+			// Gegenstellen, die zum selben geplanten Verbund-Umzug gehören, sind kein Konflikt (netplace.go, groupMoves).
+			ignore := s.groupPeerInstances(wf)
+			if peer, bad := mxlPeerConflict(s.nodes.List(), el.Edges(), instHost, ignore, oldNodeID, targetHostID); bad {
 				slog.Warn("workflows: executeMigration: not migrable, MXL peer on another host", "workflow", workflowID, "role", role, "peer", peer, "targetHost", targetHostID)
 				s.publishMigrationEvent(migrationEvent{
 					WorkflowID: workflowID, Role: role, FromInstanceID: oldInstanceID, TargetHostID: targetHostID,

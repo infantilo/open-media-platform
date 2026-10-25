@@ -11,7 +11,7 @@ import (
 // Zielhost. MXL ist host-lokal (geteilter Speicher): zöge die Rolle um, bliebe die Gegenstelle ohne Signal stehen (Bild friert ein),
 // und die Verbindung wird auch nicht neu aufgebaut, wenn sie nicht Teil der Workflow-Definition ist. Liefert die Beschriftung der
 // ersten betroffenen Gegenstelle. instHost bildet Instanz-ID → Host-ID ("" = Orchestrator-Host) ab.
-func mxlPeerConflict(nodes []registry.NodeView, edges []graph.Edge, instHost map[string]string, oldNodeID, targetHost string) (string, bool) {
+func mxlPeerConflict(nodes []registry.NodeView, edges []graph.Edge, instHost map[string]string, ignorePeers map[string]bool, oldNodeID, targetHost string) (string, bool) {
 	type portInfo struct {
 		node      *registry.NodeView
 		transport string
@@ -46,6 +46,9 @@ func mxlPeerConflict(nodes []registry.NodeView, edges []graph.Edge, instHost map
 			peer = from.node
 		default:
 			continue
+		}
+		if peer.InstanceID != "" && ignorePeers[peer.InstanceID] {
+			continue // Teil desselben geplanten Verbund-Umzugs: die Aufteilung ist gewollt (Gateway-Paar)
 		}
 		if h := hostOf(peer); h != "?" && h != targetHost {
 			return peer.Label, true

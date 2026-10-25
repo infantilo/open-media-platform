@@ -3,7 +3,7 @@
 // Hosts-Reiter übergebene Hostliste.
 import { apiFetch } from "./connection.ts";
 import { t } from "./i18n.ts";
-import { buildTopology, layoutBoxes, levelOf, linkPath, strokeFor, type GraphEdgeIn, type GraphNodeIn, type InstanceIn, type TopoBox, type TopoHostIn } from "./host-topology-logic.ts";
+import { buildTopology, layoutBoxes, levelOf, routeLink, strokeFor, type GraphEdgeIn, type GraphNodeIn, type InstanceIn, type TopoBox, type TopoHostIn } from "./host-topology-logic.ts";
 
 const NS = "http://www.w3.org/2000/svg";
 const POLL_MS = 10000;
@@ -84,7 +84,8 @@ export class HostTopology extends HTMLElement {
     }
     const avail = Math.max(320, this.clientWidth || 900);
     const lay = layoutBoxes(topo.boxes.map((b) => b.id), avail - 24);
-    const pad = 12;
+    // Rand für Verbindungen, die außen um das Raster laufen
+    const pad = 40;
     const root = svg("svg", { width: lay.width + 2 * pad, height: lay.height + 2 * pad, viewBox: `${-pad} ${-pad} ${lay.width + 2 * pad} ${lay.height + 2 * pad}`, role: "img", "aria-label": t("topo.title") });
     root.style.cssText = "display:block;max-width:100%;font-family:var(--omp-font);font-size:11px;";
     const defs = svg("defs");
@@ -95,11 +96,16 @@ export class HostTopology extends HTMLElement {
 
     // Verbindungen zuerst (unter den Kästen)
     const hasReverse = (a: string, b: string) => topo.links.some((l) => l.from === b && l.to === a);
+    const allBoxes = [...lay.pos.values()];
+    const lanes = new Map<string, number>(); // je Gasse versetzt, damit parallele Verbindungen nicht übereinanderliegen
     for (const l of topo.links) {
       const a = lay.pos.get(l.from);
       const b = lay.pos.get(l.to);
       if (!a || !b) continue;
-      const p = linkPath(a, b, hasReverse(l.from, l.to) ? 22 : 0);
+      const key = [l.from, l.to].sort().join("|");
+      const lane = lanes.get(key) ?? 0;
+      lanes.set(key, lane + 1);
+      const p = routeLink(a, b, allBoxes, hasReverse(l.from, l.to) ? 22 : 0, hasReverse(l.from, l.to) ? (l.from < l.to ? 0 : 1) : lane);
       const g = svg("g");
       const title = svg("title", {}, t("topo.linkTitle", { p0: this.#label(topo.boxes, l.from), p1: this.#label(topo.boxes, l.to), p2: l.count, p3: l.kinds.join(", ") || "–" }));
       g.append(title, svg("path", { d: p.d, fill: "none", stroke: "var(--omp-text-dim)", "stroke-width": strokeFor(l.count), "stroke-opacity": 0.75, "marker-end": "url(#omp-topo-arrow)" }));

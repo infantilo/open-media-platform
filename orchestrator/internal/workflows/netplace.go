@@ -4,15 +4,19 @@
 package workflows
 
 import (
+	"strings"
+	"time"
+
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/profiles"
 )
 
 var _ groupSelector = (*placement.Engine)(nil)
 
 // groupSelector ist die optionale Verbund-Platzierung der Engine (Test-Doubles ohne sie fallen auf Einzelplatzierung zurück).
 type groupSelector interface {
-	SelectHostGroup(members []placement.GroupMember, occ placement.Occupancy) placement.GroupResult
+	SelectHostGroup(members []placement.GroupMember, links []placement.Link, occ placement.Occupancy) placement.GroupResult
 }
 
 // roleLinks leitet aus den Verbindungen der Definition die Platzierungs-Links ab: Verbindungen über Gateway-Typen
@@ -84,7 +88,7 @@ func (s *Service) newStartPlacer(def Definition, fixed map[string]string, occ pl
 			}
 			members = append(members, m)
 		}
-		res := gs.SelectHostGroup(members, occ)
+		res := gs.SelectHostGroup(members, p.links, occ)
 		for _, n := range comp {
 			p.group[n] = placement.PlacementResult{HostID: res.Hosts[n], Reason: res.Reason}
 			p.placed[n] = res.Hosts[n]
@@ -153,7 +157,8 @@ func peerHost(wf Workflow, links []placement.Link, role string) (string, bool) {
 	return host, found
 }
 
-// splitMXLLinks liefert die MXL-Verbindungen, deren Enden auf verschiedenen Hosts geplant sind (funktionieren nicht).
+// splitMXLLinks liefert die direkten MXL-Verbindungen, deren Enden auf verschiedenen Hosts geplant sind. MXL ist
+// host-lokal; über eine Host-Grenze läuft es nur mit einem Fabrics/RDMA-Gateway-Paar (omp-fabrics-gateway-initiator/-target).
 func splitMXLLinks(links []placement.Link, hostOf map[string]string) []placement.Link {
 	var out []placement.Link
 	for _, l := range links {
@@ -172,4 +177,112 @@ func hostsOfRuntime(wf Workflow) map[string]string {
 		m[n] = rt.HostID
 	}
 	return m
+}
+
+// groupMove: eine Rolle gehört zu einem geplanten Verbund-Umzug (Wartung, Überlast) und zieht auf target. Verbindungen
+// zwischen solchen Rollen dürfen Host-Grenzen überqueren (gewollte Aufteilung, mxlPeerConflict ignoriert sie).
+type groupMove struct {
+	target string
+	until  time.Time
+}
+
+func groupMoveKey(workflowID, role string) string { return workflowID + "|" + role }
+
+// markGroupMove merkt die geplante Verteilung eines Verbunds für ttl.
+func (s *Service) markGroupMove(workflowID string, hosts map[string]string, ttl time.Duration) {
+	until := time.Now().Add(ttl)
+	for role, host := range hosts {
+		s.groupMoves.Store(groupMoveKey(workflowID, role), groupMove{target: host, until: until})
+	}
+}
+
+func (s *Service) clearGroupMove(workflowID string, roles []string) {
+	for _, r := range roles {
+		s.groupMoves.Delete(groupMoveKey(workflowID, r))
+	}
+}
+
+// groupPeerInstances: aktuelle Instanz-IDs der Rollen von wf, die gerade zu einem geplanten Verbund-Umzug gehören.
+func (s *Service) groupPeerInstances(wf Workflow) map[string]bool {
+	out := map[string]bool{}
+	now := time.Now()
+	prefix := wf.ID + "|"
+	s.groupMoves.Range(func(k, v any) bool {
+		key := k.(string)
+		if !strings.HasPrefix(key, prefix) {
+			return true
+		}
+		if now.After(v.(groupMove).until) {
+			s.groupMoves.Delete(key)
+			return true
+		}
+		if rt, ok := wf.Runtime[strings.TrimPrefix(key, prefix)]; ok && rt.InstanceID != "" {
+			out[rt.InstanceID] = true
+		}
+		return true
+	})
+	return out
+}
+
+// groupMigrationTarget: Zielhost einer überlastungsbedingt umzuziehenden Rolle, die über MXL mit weiteren Rollen
+// verbunden ist. Der ganze Verbund wird neu bewertet (SelectHostGroup; die Last der betroffenen Mitglieder auf dem
+// Quellhost wird gutgeschrieben, damit ein Verbleib nicht doppelt zählt; Mitglieder auf anderen Hosts bleiben fest).
+// Ergebnis ist der geplante Host der Rolle — der Quellhost, wenn der Verbund dort am besten bleibt oder nirgends
+// unter die Schwellen passt (kein Umzug in die Überlast). ok=false: kein Verbund, es gilt die Wahl der Platzierung.
+func (s *Service) groupMigrationTarget(wf Workflow, role, sourceHostID string) (string, bool) {
+	gs, ok := s.resources.(groupSelector)
+	if !ok || s.resources == nil {
+		return "", false
+	}
+	links := roleLinks(wf.Definition, s.catalogEntries())
+	names := make([]string, len(wf.Definition.Roles))
+	byName := map[string]Role{}
+	for i, r := range wf.Definition.Roles {
+		names[i] = r.Name
+		byName[r.Name] = r
+	}
+	var comp []string
+	for _, c := range placement.Components(names, links) {
+		for _, n := range c {
+			if n == role {
+				comp = c
+			}
+		}
+	}
+	if len(comp) < 2 {
+		return "", false
+	}
+	occ := s.buildOccupancy(time.Now())
+	occ.Credit = map[string]profiles.Snapshot{}
+	var members []placement.GroupMember
+	for _, n := range comp {
+		rt, running := wf.Runtime[n]
+		if !running || rt.InstanceID == "" {
+			continue
+		}
+		r := byName[n]
+		m := placement.GroupMember{Name: n, Req: placement.PlacementRequest{
+			NodeType: r.NodeType, PreferredHostID: rt.HostID, AffinityGroup: r.AffinityGroup, RedundancyGroup: r.RedundancyGroup,
+		}}
+		if rt.HostID != sourceHostID || (s.launcher != nil && s.roleHostBound(r)) {
+			m.Fixed = rt.HostID
+		}
+		if rt.HostID == sourceHostID {
+			c := occ.Credit[sourceHostID]
+			p := s.resources.ProjectedLoad(r.NodeType, sourceHostID)
+			c.CPUAvg += p.CPUAvg
+			c.RSSAvg += p.RSSAvg
+			occ.Credit[sourceHostID] = c
+		}
+		members = append(members, m)
+	}
+	if len(members) < 2 {
+		return "", false
+	}
+	res := gs.SelectHostGroup(members, links, occ)
+	if res.Overloaded {
+		return sourceHostID, true
+	}
+	s.markGroupMove(wf.ID, res.Hosts, 15*time.Minute)
+	return res.Hosts[role], true
 }

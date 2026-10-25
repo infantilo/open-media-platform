@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { buildTopology, kindOf, layoutBoxes, levelOf, linkPath, strokeFor, type GraphEdgeIn, type GraphNodeIn } from "./host-topology-logic.ts";
+import { buildTopology, kindOf, layoutBoxes, levelOf, linkPath, routeLink, strokeFor, type GraphEdgeIn, type GraphNodeIn } from "./host-topology-logic.ts";
 
 const node = (id: string, instanceId: string | undefined, outs: string[] = [], ins: string[] = []): GraphNodeIn => ({
   id, label: id, instanceId, inputs: ins.map((i) => ({ id: i })), outputs: outs.map((o) => ({ id: o, format: "urn:x-nmos:format:video" })),
@@ -60,4 +60,38 @@ Deno.test("Hilfen", () => {
   assertEquals(kindOf("urn:x-nmos:format:audio"), "audio");
   assertEquals([strokeFor(1), strokeFor(100)], [2.4, 8]);
   assertEquals([levelOf(undefined), levelOf(50), levelOf(90), levelOf(100)], ["none", "ok", "warn", "full"]);
+});
+
+Deno.test("Verbindung zwischen Kästen mit einem Kasten dazwischen läuft außen herum", () => {
+  const l = layoutBoxes(["o", "a", "b"], 1100); // eine Reihe: Orchestrator – Regie A – Regie B
+  const boxes = [...l.pos.values()];
+  const o = l.pos.get("o")!, a = l.pos.get("a")!, b = l.pos.get("b")!;
+  // Nachbarn: gerade Linie
+  assertEquals(routeLink(o, a, boxes).routed, false);
+  // Orchestrator → Regie B geht an Regie A vorbei (oberhalb oder unterhalb der Reihe)
+  const r = routeLink(o, b, boxes);
+  assertEquals(r.routed, true);
+  const ys = [...r.d.matchAll(/[ML]-?[\d.]+,(-?[\d.]+)/g)].map((m) => Number(m[1]));
+  assertEquals(ys.some((y) => y < 0 || y > a.h), true);
+  // Keine Teilstrecke geht durch Regie A: alle Punkte mit x innerhalb von A liegen außerhalb von A's Höhe
+  const pts = [...r.d.matchAll(/[ML]\s*(-?[\d.]+),(-?[\d.]+)/g)].map((m) => ({ x: Number(m[1]), y: Number(m[2]) }));
+  for (const p of pts) if (p.x > a.x && p.x < a.x + a.w) assertEquals(p.y <= a.y || p.y >= a.y + a.h, true);
+  // Label sitzt außerhalb von Regie A
+  assertEquals(r.lx > a.x && r.lx < a.x + a.w ? r.ly < a.y || r.ly > a.y + a.h : true, true);
+});
+
+Deno.test("Verbindungen im 2×2-Raster: Diagonale frei, Zeile mit Hindernis wird umgangen, Spuren versetzt", () => {
+  const l = layoutBoxes(["a", "b", "c", "d", "e", "f"], 800); // 2 Spalten × 3 Zeilen
+  const boxes = [...l.pos.values()];
+  const g = (id: string) => l.pos.get(id)!;
+  // a (0,0) → e (0,2): Spalte 0, c steht dazwischen
+  const r = routeLink(g("a"), g("e"), boxes);
+  assertEquals(r.routed, true);
+  const r2 = routeLink(g("a"), g("e"), boxes, 0, 1);
+  assertEquals(r.d !== r2.d, true);
+});
+
+Deno.test("Ohne Hindernis bleibt es bei der geraden Linie (wie linkPath)", () => {
+  const a = { id: "a", x: 0, y: 0, w: 200, h: 100 }, b = { id: "b", x: 400, y: 0, w: 200, h: 100 };
+  assertEquals(routeLink(a, b, [a, b]).d, linkPath(a, b).d);
 });
