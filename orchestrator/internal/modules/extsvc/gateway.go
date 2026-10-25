@@ -66,7 +66,9 @@ type live struct {
 
 // Module ist das Gateway.
 type Module struct {
-	S Services
+	// bg: der Abgleich, den Mount im Hintergrund anstößt (Tests warten darauf, bevor sie die Dienste umstellen)
+	bg sync.WaitGroup
+	S  Services
 
 	mu       sync.Mutex
 	d        module.Deps
@@ -117,7 +119,11 @@ func (m *Module) Mount(r module.Routes, d module.Deps) error {
 	r.Handle("PUT /api/v1/ext/{svc}/{rest...}", module.Authenticated(), m.serve)
 	r.Handle("PATCH /api/v1/ext/{svc}/{rest...}", module.Authenticated(), m.serve)
 	r.Handle("DELETE /api/v1/ext/{svc}/{rest...}", module.Authenticated(), m.serve)
-	go m.refresh(context.Background())
+	m.bg.Add(1)
+	go func() {
+		defer m.bg.Done()
+		m.refresh(context.Background())
+	}()
 	return nil
 }
 

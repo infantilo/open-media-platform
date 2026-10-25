@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -98,7 +99,7 @@ type rig struct {
 	audit    *fakeAudit
 	gotReq   chan *http.Request
 	imported chan string
-	otherHit *int
+	otherHit *atomic.Int32 // vom Test-HTTP-Server gezählt, vom Test gelesen
 }
 
 func newRig(t *testing.T, acc fakeAccess, importable bool) *rig {
@@ -139,9 +140,9 @@ func newRig(t *testing.T, acc fakeAccess, importable bool) *rig {
 	})
 	r.node = httptest.NewServer(mux)
 	t.Cleanup(r.node.Close)
-	hits := 0
-	r.otherHit = &hits
-	r.other = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { hits++; http.NotFound(w, nil) }))
+	hits := &atomic.Int32{}
+	r.otherHit = hits
+	r.other = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { hits.Add(1); http.NotFound(w, nil) }))
 	t.Cleanup(r.other.Close)
 	nodes := fakeNodes{
 		{ID: "n1", Online: true, APIBaseURL: r.other.URL, InstanceID: "i1"},
@@ -152,10 +153,10 @@ func newRig(t *testing.T, acc fakeAccess, importable bool) *rig {
 	if err := r.mod.Mount(muxRoutes{mux2}, module.Deps{Settings: r.settings, Audit: r.audit, Access: acc}); err != nil {
 		t.Fatal(err)
 	}
+	r.mod.bg.Wait() // den Hintergrund-Abgleich von Mount abwarten, sonst überspringt der folgende refresh (loading) und liest/schreibt nebenläufig
 	r.mod.refresh(context.Background())
 	gw := httptest.NewServer(withUser(mux2, acc.user))
 	t.Cleanup(gw.Close)
-	r.node.Config.Handler = mux
 	t.Setenv("GW", gw.URL)
 	return r
 }
@@ -281,11 +282,11 @@ func TestGatewayRightsAndUnknownRoutes(t *testing.T) {
 
 func TestNodeWithoutServiceIsAskedOnce(t *testing.T) {
 	r := newRig(t, fakeAccess{}, false)
-	first := *r.otherHit
+	first := r.otherHit.Load()
 	r.mod.refresh(context.Background())
 	r.mod.refresh(context.Background())
-	if *r.otherHit != first || first != 1 {
-		t.Errorf("Node ohne Dienst: %d Anfragen insgesamt, erwartet genau 1", *r.otherHit)
+	if r.otherHit.Load() != first || first != 1 {
+		t.Errorf("Node ohne Dienst: %d Anfragen insgesamt, erwartet genau 1", r.otherHit.Load())
 	}
 }
 

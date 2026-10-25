@@ -65,7 +65,7 @@ var crosspointByNodeType = map[string]crosspointMethod{
 // var statt const: Tests überschreiben diese Werte, um nicht 20s auf
 // einen absichtlich nie erscheinenden Test-Node warten zu müssen
 // (gleiches Muster wie launcher.stopGracePeriod).
-var registrationTimeout = 20 * time.Second
+var registrationTimeout = newDurVar(20 * time.Second)
 
 // registryPollNowTimeout begrenzt einen einzelnen `RegistryPoller.
 // PollNow()`-Aufruf (`runStop`, s. dort) — bewusst eine eigene Konstante
@@ -84,7 +84,7 @@ var registryPollNowTimeout = 2 * time.Second
 // zusätzlich `waitForCrosspointInput` (ein echter, aber rein lokaler
 // Node-eigener HTTP-Poll) — bei 20s `registrationTimeout` macht das aus
 // ~66 Anfragen ~200, für einen einzelnen Workflow-Start unbedenklich.
-var registrationPollInterval = 100 * time.Millisecond
+var registrationPollInterval = newDurVar(100 * time.Millisecond)
 
 var (
 	// ErrValidation wird bei einer ungültigen Workflow-Definition
@@ -855,7 +855,7 @@ func ioAssignmentRoles(assignments map[string]ioPortAssignment) []string {
 // zurücklassen.
 func (s *Service) runStart(wf Workflow, ioAssignments map[string]ioPortAssignment) {
 	s.markSavedRolesUnrestored(wf.ID)
-	ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout.Load())
 	defer cancel()
 
 	// Kapitel 15 (docs/END-GOAL-FEATURES.md §15.3c): Workflow-Settings
@@ -1063,7 +1063,7 @@ func (s *Service) runStart(wf Workflow, ioAssignments map[string]ioPortAssignmen
 // (300ms) nach dem `node.added`-Event derselben Instanz, statt erst nach
 // der gesamten restlichen Rollen-Registrierung.
 func (s *Service) awaitRegistration(ctx context.Context, wf Workflow, pending map[string]string) error {
-	ticker := time.NewTicker(registrationPollInterval)
+	ticker := time.NewTicker(registrationPollInterval.Load())
 	defer ticker.Stop()
 
 	for {
@@ -1104,7 +1104,7 @@ func (s *Service) awaitRegistration(ctx context.Context, wf Workflow, pending ma
 // neuen Node-ID anmeldet. excludeNodeID darf leer sein (Rolle hatte
 // noch keine aufgelöste Node-ID) — dann zählt jede Registrierung.
 func (s *Service) awaitFreshRegistration(ctx context.Context, instanceID, excludeNodeID string) (registry.NodeView, error) {
-	ticker := time.NewTicker(registrationPollInterval)
+	ticker := time.NewTicker(registrationPollInterval.Load())
 	defer ticker.Stop()
 
 	for {
@@ -1188,7 +1188,7 @@ func (s *Service) rewireAfterRestart(instanceID string) {
 	// Verbindung auf den (kurz danach verschwindenden) toten Sender der
 	// alten Registrierung stehen, statt auf den neuen umzuschwenken.
 	previousNodeID := wf.Runtime[role].NodeID
-	ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout.Load())
 	node, err := s.awaitFreshRegistration(ctx, instanceID, previousNodeID)
 	cancel()
 	if err != nil {
@@ -1244,7 +1244,7 @@ func (s *Service) rewireAfterRestart(instanceID string) {
 			slog.Warn("workflows: rewireAfterRestart: receiver role not ready", "workflow", wf.ID, "connection", conn)
 			continue
 		}
-		connectCtx, connectCancel := context.WithTimeout(context.Background(), registrationTimeout)
+		connectCtx, connectCancel := context.WithTimeout(context.Background(), registrationTimeout.Load())
 		err := s.applyConnection(connectCtx, conn, fromNode, toNode, roleNodeType(wf, conn.ToRole))
 		connectCancel()
 		if err != nil {
@@ -1471,7 +1471,7 @@ func (s *Service) runRestartRole(wf Workflow, roleName string) {
 	}
 	s.publish(wf)
 
-	ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout.Load())
 	defer cancel()
 	if err := s.awaitRegistration(ctx, wf, map[string]string{roleName: inst.ID}); err != nil {
 		slog.Warn("workflows: RestartRole: registration timed out", "workflow", wf.ID, "role", roleName, "error", err)
@@ -1504,7 +1504,7 @@ func (s *Service) runRestartRole(wf Workflow, roleName string) {
 			slog.Warn("workflows: RestartRole: receiver role not ready", "workflow", wf.ID, "connection", conn)
 			continue
 		}
-		connectCtx, connectCancel := context.WithTimeout(context.Background(), registrationTimeout)
+		connectCtx, connectCancel := context.WithTimeout(context.Background(), registrationTimeout.Load())
 		err := s.applyConnection(connectCtx, conn, fromNode, toNode, roleNodeType(wf, conn.ToRole))
 		connectCancel()
 		if err != nil {
@@ -1536,7 +1536,7 @@ func roleByName(wf Workflow, roleName string) (Role, bool) {
 // Aufrufer übergebenen ctx (in runStart/rewireAfterRestart bereits mit
 // registrationTimeout budgetiert).
 func (s *Service) waitForCrosspointInput(ctx context.Context, baseURL, param, senderID string) error {
-	ticker := time.NewTicker(registrationPollInterval)
+	ticker := time.NewTicker(registrationPollInterval.Load())
 	defer ticker.Stop()
 
 	for {

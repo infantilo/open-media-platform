@@ -251,7 +251,7 @@ func (s *Service) promoteStandby(wf Workflow, primaryRole, standbyRole, trigger 
 			slog.Warn("workflows: promoteStandby: receiver role not ready", "workflow", wf.ID, "connection", conn)
 			continue
 		}
-		connectCtx, connectCancel := context.WithTimeout(context.Background(), registrationTimeout)
+		connectCtx, connectCancel := context.WithTimeout(context.Background(), registrationTimeout.Load())
 		err := s.applyConnection(connectCtx, conn, fromNode, toNode, roleNodeType(wf, conn.ToRole))
 		connectCancel()
 		if err != nil {

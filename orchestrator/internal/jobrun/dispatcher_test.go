@@ -397,7 +397,7 @@ func TestSendeschutzBrichtAbUndPlantNeu(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Protect.IntervalS = 1
 	d := New(testConfig(&cfg), hosts)
-	d.LocalTool = script(t, `sleep 1; echo ok`)
+	d.LocalTool = script(t, `sleep 3; echo ok`) // länger als ein Wächter-Takt (IntervalS=1), sonst endet der Job unter Last vor dem Eingriff
 	var degraded bool
 	var dm sync.Mutex
 	d.Degraded = func(string) bool { dm.Lock(); defer dm.Unlock(); return degraded }

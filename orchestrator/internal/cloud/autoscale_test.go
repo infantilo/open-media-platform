@@ -255,6 +255,13 @@ func TestPolicyValidate(t *testing.T) {
 
 func TestSQLPoliciesAndHostsRoundTrip(t *testing.T) {
 	db := dbtest.Open(t)
+	// die Testdatenbank bleibt zwischen Läufen bestehen: Reste des vorigen Laufs würden den Standardwert verdecken
+	clean := func() {
+		_, _ = db.Exec(`DELETE FROM cloud_policies WHERE pool = 'burst'`)
+		_, _ = db.Exec(`DELETE FROM cloud_hosts WHERE id = 'h1'`)
+	}
+	clean()
+	t.Cleanup(clean)
 	ps := NewSQLPolicies(db)
 	if p, err := ps.Get("burst"); err != nil || p.Mode != ModeOff {
 		t.Fatalf("default must be off: %+v %v", p, err)

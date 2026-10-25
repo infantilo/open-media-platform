@@ -228,6 +228,8 @@ func handleStartNodeRollout(m *RolloutManager, svc LauncherService, wf WorkflowS
 		}
 		plan.Running, plan.StartedAt = true, time.Now()
 		cp := plan
+		// eigene Elemente für den laufenden Stand: run() schreibt hierin, während die Antwort unten `plan` serialisiert
+		cp.Items = append([]rolloutItem(nil), plan.Items...)
 		m.last = &cp
 		m.mu.Unlock()
 		actor := actorFromRequest(r)

@@ -152,7 +152,7 @@ check:
 # CI (.github/workflows/ci.yml) startet seit 2026-10-25 einen Postgres-Dienst
 # und setzt die Variable für diesen Schritt, die DB-Tests laufen dort also real.
 check-ci:
-	$(foreach m,$(GO_MODULES),cd $(m) && go vet ./... && go test ./... && cd $(CURDIR) &&) true
+	$(foreach m,$(GO_MODULES),cd $(m) && go vet ./... && go test -race ./... && cd $(CURDIR) &&) true
 	deno check ui/**/*.ts
 	deno test ui/
 

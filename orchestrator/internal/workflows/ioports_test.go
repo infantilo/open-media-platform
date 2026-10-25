@@ -124,9 +124,9 @@ func (f *fakeIOPortClaimer) claimCount() int {
 }
 
 func TestStartClaimsIOPortForRequiredRole(t *testing.T) {
-	original := registrationTimeout
-	registrationTimeout = 2 * time.Second
-	defer func() { registrationTimeout = original }()
+	original := registrationTimeout.Load()
+	registrationTimeout.Store(2 * time.Second)
+	defer func() { registrationTimeout.Store(original) }()
 
 	nodes := &fakeNodeLister{}
 	l := &fakeLauncher{}
@@ -251,9 +251,9 @@ func TestStartRollsBackPartialClaimsWhenALaterRoleCannotBeSatisfied(t *testing.T
 }
 
 func TestStopReleasesIOPortClaim(t *testing.T) {
-	original := registrationTimeout
-	registrationTimeout = 2 * time.Second
-	defer func() { registrationTimeout = original }()
+	original := registrationTimeout.Load()
+	registrationTimeout.Store(2 * time.Second)
+	defer func() { registrationTimeout.Store(original) }()
 
 	nodes := &fakeNodeLister{}
 	l := &fakeLauncher{}
@@ -298,10 +298,10 @@ func TestStopReleasesIOPortClaim(t *testing.T) {
 // 2026-07-10 Punkt 3).
 func setupIOPortMigrationWorkflow(t *testing.T, ioPorts *fakeIOPortClaimer) (svc *Service, nodes *fakeNodeLister, l *fakeLauncher, wfID, oldInstance string) {
 	t.Helper()
-	original, originalPoll := registrationTimeout, registrationPollInterval
-	registrationTimeout = 2 * time.Second
-	registrationPollInterval = 10 * time.Millisecond
-	t.Cleanup(func() { registrationTimeout, registrationPollInterval = original, originalPoll })
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(2 * time.Second)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	t.Cleanup(func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) })
 
 	nodes = &fakeNodeLister{}
 	l = &fakeLauncher{}

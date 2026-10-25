@@ -45,10 +45,10 @@ func (f *fakeHostMetrics) Get(hostID string) (hosts.Metrics, bool) {
 // active/standby.
 func setupRedundantWorkflow(t *testing.T) (svc *Service, nodes *fakeNodeLister, g *fakeGraph, l *fakeLauncher, wf Workflow, activeInstance, standbyInstance string) {
 	t.Helper()
-	original, originalPoll := registrationTimeout, registrationPollInterval
-	registrationTimeout = 2 * time.Second
-	registrationPollInterval = 10 * time.Millisecond
-	t.Cleanup(func() { registrationTimeout, registrationPollInterval = original, originalPoll })
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(2 * time.Second)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	t.Cleanup(func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) })
 
 	nodes = &fakeNodeLister{}
 	g = &fakeGraph{}
@@ -190,13 +190,13 @@ func TestInstanceGaveUpPromotesStandby(t *testing.T) {
 	}
 
 	var sawFailoverEvent bool
-	for _, typ := range events.types {
+	for _, typ := range events.snapshot() {
 		if typ == "workflow.failover" {
 			sawFailoverEvent = true
 		}
 	}
 	if !sawFailoverEvent {
-		t.Errorf("events = %v, want a workflow.failover event", events.types)
+		t.Errorf("events = %v, want a workflow.failover event", events.snapshot())
 	}
 }
 

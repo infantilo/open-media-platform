@@ -24,9 +24,39 @@ import (
 // fakeEventPublisher ist ein Test-Double für EventPublisher, das nur die
 // Typen der empfangenen Events sammelt (gleiches Muster wie
 // graph_test.go/audit_test.go).
-type fakeEventPublisher struct{ types []string }
+type fakeEventPublisher struct {
+	mu    sync.Mutex
+	types []string
+}
 
-func (f *fakeEventPublisher) Broadcast(e sse.Event) { f.types = append(f.types, e.Type) }
+func (f *fakeEventPublisher) Broadcast(e sse.Event) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.types = append(f.types, e.Type)
+}
+
+// snapshot liefert eine Kopie der bisher empfangenen Ereignistypen (Tests lesen, während Hintergrund-Goroutinen senden).
+func (f *fakeEventPublisher) snapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.types...)
+}
+
+// cloneWorkflow kopiert Runtime und die Slices der Definition: der echte Store (Postgres) liefert bei jedem Get einen frischen
+// Stand, die Fake-Map gab dagegen dieselbe Runtime-Map an Test und Hintergrund-Goroutinen heraus (Data Race unter -race).
+func cloneWorkflow(wf Workflow) Workflow {
+	if wf.Runtime != nil {
+		rt := make(map[string]RoleRuntime, len(wf.Runtime))
+		for k, v := range wf.Runtime {
+			rt[k] = v
+		}
+		wf.Runtime = rt
+	}
+	wf.Definition.Roles = append([]Role(nil), wf.Definition.Roles...)
+	wf.Definition.Connections = append([]Connection(nil), wf.Definition.Connections...)
+	wf.Definition.Schedules = append([]Schedule(nil), wf.Definition.Schedules...)
+	return wf
+}
 
 type fakeStore struct {
 	mu         sync.Mutex
@@ -39,7 +69,7 @@ func newFakeStore() *fakeStore { return &fakeStore{wfs: map[string]Workflow{}} }
 func (f *fakeStore) Put(wf Workflow) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.wfs[wf.ID] = wf
+	f.wfs[wf.ID] = cloneWorkflow(wf)
 	return nil
 }
 
@@ -50,7 +80,7 @@ func (f *fakeStore) Get(id string) (Workflow, error) {
 	if !ok {
 		return Workflow{}, ErrNotFound
 	}
-	return wf, nil
+	return cloneWorkflow(wf), nil
 }
 
 func (f *fakeStore) List() ([]Workflow, error) {
@@ -58,7 +88,7 @@ func (f *fakeStore) List() ([]Workflow, error) {
 	defer f.mu.Unlock()
 	out := make([]Workflow, 0, len(f.wfs))
 	for _, wf := range f.wfs {
-		out = append(out, wf)
+		out = append(out, cloneWorkflow(wf))
 	}
 	return out, nil
 }
@@ -92,7 +122,7 @@ func (f *fakeStore) UpdateRuntime(wf Workflow) error {
 	if existing, ok := f.wfs[wf.ID]; ok {
 		wf.Definition.Schedules = existing.Definition.Schedules
 	}
-	f.wfs[wf.ID] = wf
+	f.wfs[wf.ID] = cloneWorkflow(wf)
 	return nil
 }
 
@@ -519,8 +549,8 @@ func TestCreatePublishesWorkflowUpdated(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	if len(pub.types) != 1 || pub.types[0] != "workflow.updated" {
-		t.Errorf("published events = %v, want [workflow.updated]", pub.types)
+	if len(pub.snapshot()) != 1 || pub.snapshot()[0] != "workflow.updated" {
+		t.Errorf("published events = %v, want [workflow.updated]", pub.snapshot())
 	}
 }
 
@@ -536,16 +566,16 @@ func TestDeletePublishesWorkflowUpdated(t *testing.T) {
 		t.Fatalf("Delete() error = %v", err)
 	}
 
-	if len(pub.types) != 1 || pub.types[0] != "workflow.updated" {
-		t.Errorf("published events = %v, want [workflow.updated]", pub.types)
+	if len(pub.snapshot()) != 1 || pub.snapshot()[0] != "workflow.updated" {
+		t.Errorf("published events = %v, want [workflow.updated]", pub.snapshot())
 	}
 }
 
 func TestStartProvisionsRolesAndConnectsOnRegistration(t *testing.T) {
-	original, originalPoll := registrationTimeout, registrationPollInterval
-	registrationTimeout = 2 * time.Second
-	registrationPollInterval = 10 * time.Millisecond
-	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(2 * time.Second)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	defer func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) }()
 
 	nodes := &fakeNodeLister{}
 	g := &fakeGraph{}
@@ -607,10 +637,10 @@ func TestStartProvisionsRolesAndConnectsOnRegistration(t *testing.T) {
 // eine Workflow-gescopte VerbOperate-Bindung auf ihre eigene
 // Instanz-ID — eine reine Medien-Rolle (omp-source) dagegen nicht.
 func TestStartProvisionsServiceBindingForControlPlaneRole(t *testing.T) {
-	original, originalPoll := registrationTimeout, registrationPollInterval
-	registrationTimeout = 2 * time.Second
-	registrationPollInterval = 10 * time.Millisecond
-	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(2 * time.Second)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	defer func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) }()
 
 	nodes := &fakeNodeLister{}
 	g := &fakeGraph{}
@@ -658,10 +688,10 @@ func TestStartProvisionsServiceBindingForControlPlaneRole(t *testing.T) {
 // unbenannte Sender (Video, Audio) in dieser Reihenfolge — ohne
 // FromSender-Label würde immer der erste (Video) gewählt.
 func TestStartResolvesConnectionByLabel(t *testing.T) {
-	original, originalPoll := registrationTimeout, registrationPollInterval
-	registrationTimeout = 2 * time.Second
-	registrationPollInterval = 10 * time.Millisecond
-	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(2 * time.Second)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	defer func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) }()
 
 	nodes := &fakeNodeLister{}
 	g := &fakeGraph{}
@@ -716,10 +746,10 @@ func TestStartResolvesConnectionByLabel(t *testing.T) {
 // (omp-video-mixer-me), wird über einen Methodenaufruf statt IS-05
 // Connect verkabelt — kein graph.Connect-Aufruf.
 func TestStartResolvesCrosspointConnectionViaMethodInvoke(t *testing.T) {
-	original, originalPoll := registrationTimeout, registrationPollInterval
-	registrationTimeout = 2 * time.Second
-	registrationPollInterval = 10 * time.Millisecond
-	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(2 * time.Second)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	defer func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) }()
 
 	nodes := &fakeNodeLister{}
 	g := &fakeGraph{}
@@ -798,10 +828,10 @@ func TestStartFailsWhenCrosspointInputNeverAppears(t *testing.T) {
 	// Node-Registrierung (muss zuerst erfolgreich durchlaufen, sonst
 	// testet dieser Fall nur den bereits anderswo abgedeckten
 	// Registrierungs-Timeout) als auch den anschließenden Crosspoint-Wait.
-	original, originalPoll := registrationTimeout, registrationPollInterval
-	registrationTimeout = 300 * time.Millisecond
-	registrationPollInterval = 10 * time.Millisecond
-	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(300 * time.Millisecond)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	defer func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) }()
 
 	nodes := &fakeNodeLister{}
 	g := &fakeGraph{}
@@ -857,10 +887,10 @@ func TestStartFailsWhenCrosspointInputNeverAppears(t *testing.T) {
 // Crosspoint-Methode (z. B. omp-multiviewer) darf nicht still
 // übersprungen werden.
 func TestStartFailsWhenTargetHasNoReceiverAndNoCrosspointMapping(t *testing.T) {
-	original, originalPoll := registrationTimeout, registrationPollInterval
-	registrationTimeout = 2 * time.Second
-	registrationPollInterval = 10 * time.Millisecond
-	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(2 * time.Second)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	defer func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) }()
 
 	nodes := &fakeNodeLister{}
 	g := &fakeGraph{}
@@ -934,10 +964,10 @@ func TestCreateRejectsMultipleConnectionsToSameCrosspointTarget(t *testing.T) {
 // jedem Rollen-Start. Ein Workflow OHNE Settings darf dagegen kein
 // extraEnv erzeugen (leer = Node behält ihren eigenen Default).
 func TestStartPassesResolutionSettingsAsExtraEnv(t *testing.T) {
-	original, originalPoll := registrationTimeout, registrationPollInterval
-	registrationTimeout = 200 * time.Millisecond
-	registrationPollInterval = 10 * time.Millisecond
-	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(200 * time.Millisecond)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	defer func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) }()
 
 	nodes := &fakeNodeLister{}
 	g := &fakeGraph{}
@@ -1024,10 +1054,10 @@ func TestCreateRejectsUnknownFormat(t *testing.T) {
 // runStart-Doku), und eine dritte Rolle ohne Format bleibt unverändert
 // (Node-eigener Default, kein OMP_WIDTH gesetzt).
 func TestStartAppliesPerRoleFormatIndependently(t *testing.T) {
-	original, originalPoll := registrationTimeout, registrationPollInterval
-	registrationTimeout = 200 * time.Millisecond
-	registrationPollInterval = 10 * time.Millisecond
-	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(200 * time.Millisecond)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	defer func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) }()
 
 	nodes := &fakeNodeLister{}
 	g := &fakeGraph{}
@@ -1079,10 +1109,10 @@ func TestStartAppliesPerRoleFormatIndependently(t *testing.T) {
 // NMOS-Node-Identität), muss der Workflow die betroffene Connection neu
 // auflösen, ohne dass der Nutzer den Workflow manuell neu startet.
 func TestInstanceRestartedRewiresAffectedRole(t *testing.T) {
-	original, originalPoll := registrationTimeout, registrationPollInterval
-	registrationTimeout = 2 * time.Second
-	registrationPollInterval = 10 * time.Millisecond
-	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(2 * time.Second)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	defer func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) }()
 
 	nodes := &fakeNodeLister{}
 	g := &fakeGraph{}
@@ -1192,10 +1222,10 @@ func TestInstanceRestartedIgnoresInstanceOutsideAnyWorkflow(t *testing.T) {
 // gestoppt, neue mit den passenden OMP_WIDTH/HEIGHT/FRAMERATE-Envs
 // gestartet, betroffene Connections werden neu angewendet.
 func TestRestartRoleAppliesNewFormatAndReconnects(t *testing.T) {
-	original, originalPoll := registrationTimeout, registrationPollInterval
-	registrationTimeout = 2 * time.Second
-	registrationPollInterval = 10 * time.Millisecond
-	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(2 * time.Second)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	defer func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) }()
 
 	nodes := &fakeNodeLister{}
 	g := &fakeGraph{}
@@ -1314,10 +1344,10 @@ func TestRestartRoleAppliesNewFormatAndReconnects(t *testing.T) {
 // internen /state-Zustand (z. B. omp-multiviewer-customs Pip-Layout),
 // obwohl Connections danach korrekt neu angewendet wurden.
 func TestRestartRoleCapturesAndRestoresNodeState(t *testing.T) {
-	original, originalPoll := registrationTimeout, registrationPollInterval
-	registrationTimeout = 2 * time.Second
-	registrationPollInterval = 10 * time.Millisecond
-	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(2 * time.Second)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	defer func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) }()
 
 	var mu sync.Mutex
 	var postedBodies []string
@@ -1468,10 +1498,10 @@ func TestRestartRoleRequiresStartedWorkflow(t *testing.T) {
 // Sektion) und die generische Format-Sektion im Property-Panel
 // (flow-canvas.ts) sind unabhängige Buttons/Requests.
 func TestRestartRoleMixerLevelsIndependentOfFormat(t *testing.T) {
-	original, originalPoll := registrationTimeout, registrationPollInterval
-	registrationTimeout = 2 * time.Second
-	registrationPollInterval = 10 * time.Millisecond
-	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(2 * time.Second)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	defer func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) }()
 
 	nodes := &fakeNodeLister{}
 	g := &fakeGraph{}
@@ -1569,10 +1599,10 @@ func TestRestartRoleMixerLevelsIndependentOfFormat(t *testing.T) {
 }
 
 func TestStartFailsWhenRegistrationTimesOut(t *testing.T) {
-	original, originalPoll := registrationTimeout, registrationPollInterval
-	registrationTimeout = 100 * time.Millisecond
-	registrationPollInterval = 10 * time.Millisecond
-	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(100 * time.Millisecond)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	defer func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) }()
 
 	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
 	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil, "")
@@ -1897,10 +1927,10 @@ func TestPauseRequiresConfirmationWhenConfirmStopSet(t *testing.T) {
 }
 
 func TestStartResumesFromPaused(t *testing.T) {
-	original, originalPoll := registrationTimeout, registrationPollInterval
-	registrationTimeout = 2 * time.Second
-	registrationPollInterval = 10 * time.Millisecond
-	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(2 * time.Second)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	defer func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) }()
 
 	store := newFakeStore()
 	nodes := &fakeNodeLister{}

@@ -152,10 +152,10 @@ func TestStartAcceptsWorkflowCompensableViaDelay(t *testing.T) {
 	// weiterlaufende Goroutine nur kurz am Leben (fakeNodeLister
 	// registriert nie etwas, runStart scheitert also ohnehin später
 	// asynchron mit einem Registrierungs-Timeout).
-	original, originalPoll := registrationTimeout, registrationPollInterval
-	registrationTimeout = 200 * time.Millisecond
-	registrationPollInterval = 10 * time.Millisecond
-	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(200 * time.Millisecond)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	defer func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) }()
 
 	l := &fakeLauncher{catalog: delayCatalog()}
 	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, l)

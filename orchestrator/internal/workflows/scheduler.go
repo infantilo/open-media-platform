@@ -131,7 +131,7 @@ func (s *Scheduler) tickWorkflow(wf Workflow, now time.Time) {
 }
 
 func (s *Scheduler) fire(workflowID, workflowName string, action ScheduleAction) {
-	ctx, cancel := context.WithTimeout(WithTrigger(context.Background(), RunSourceSchedule), registrationTimeout)
+	ctx, cancel := context.WithTimeout(WithTrigger(context.Background(), RunSourceSchedule), registrationTimeout.Load())
 	defer cancel()
 
 	var err error

@@ -2,6 +2,7 @@ package maintenance
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -16,22 +17,32 @@ type fakeGate struct{ on map[string]bool }
 func (g *fakeGate) SetMaintenance(id string, on bool) { g.on[id] = on }
 
 type fakeEvac struct {
+	mu      sync.Mutex // EvacuateHost läuft in einer Goroutine des Managers, RolesOn liest aus dem Test
 	roles   []Item
 	release chan struct{}
 	fail    bool
 }
 
 func (f *fakeEvac) EvacuateHost(ctx context.Context, id string, onStep func(Step)) {
-	onStep(Step{Total: len(f.roles)})
+	f.mu.Lock()
+	roles := f.roles
+	f.mu.Unlock()
+	onStep(Step{Total: len(roles)})
 	<-f.release
 	if f.fail {
-		onStep(Step{Total: len(f.roles), Failed: f.roles})
+		onStep(Step{Total: len(roles), Failed: roles})
 		return
 	}
+	f.mu.Lock()
 	f.roles = nil
+	f.mu.Unlock()
 	onStep(Step{Total: 1, Moved: 1})
 }
-func (f *fakeEvac) RolesOn(string) []Item { return f.roles }
+func (f *fakeEvac) RolesOn(string) []Item {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.roles
+}
 
 type fakeInsts struct{ items []Item }
 

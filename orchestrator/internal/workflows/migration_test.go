@@ -18,10 +18,10 @@ import (
 // die Eskalationsstufen-Verzweigung selbst zu prüfen.
 func setupMigrationWorkflow(t *testing.T, escalation string, windowSeconds int) (svc *Service, nodes *fakeNodeLister, g *fakeGraph, l *fakeLauncher, wfID, activeInstance string) {
 	t.Helper()
-	original, originalPoll := registrationTimeout, registrationPollInterval
-	registrationTimeout = 2 * time.Second
-	registrationPollInterval = 10 * time.Millisecond
-	t.Cleanup(func() { registrationTimeout, registrationPollInterval = original, originalPoll })
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(2 * time.Second)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	t.Cleanup(func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) })
 
 	nodes = &fakeNodeLister{}
 	g = &fakeGraph{}

@@ -5793,3 +5793,13 @@ Reihenfolge laut `AUDIT_2026_10_23.md`. Jeder Punkt vorher gegen den Code bestä
 - **Nicht geprüft:** ein echter Lauf der CI mit den neuen Referenzen; `make up` auf einer frischen Maschine (Pull per Digest); der Offline-Bundle-Bau (nur Syntax und `--dry-run`).
 - **Grenze:** `amwa/nmos-testing:latest` bleibt ein bewegtes Tag mit eingefrorenem Digest — ein neuer Stand der Suite kommt erst mit `update-image-pins.sh`.
 
+## Kapitel 61: `-race` sauber und in der CI (Nutzerauftrag 2026-10-25, **umgesetzt, lokal geprüft, nicht committed**)
+
+`go test -race ./...` läuft jetzt in allen Go-Modulen ohne Data Race (Orchestrator mit Postgres-DSN, 5 Wiederholungen der Problempakete); `make check-ci` ruft es mit `-race` auf. Ursachen und Behebung:
+- **`workflows`:** `registrationTimeout`/`registrationPollInterval` waren Package-Variablen, die Tests umsetzten und zurücksetzten, während Hintergrund-Goroutinen (`runStart`, `executeMigration` …) sie lasen → `durVar` (atomar, `timing.go`), Tests rufen `Load()/Store()`. Der Fake-Store gab dieselbe `Runtime`-Map an Test und Goroutinen heraus (der echte Store liefert bei jedem `Get` einen frischen Stand) → `cloneWorkflow`; `fakeEventPublisher` bekam eine Sperre.
+- **`httpapi` — echter Fehler:** `startRollout` teilte das `Items`-Slice zwischen dem laufenden Rollout-Stand (`m.last`, von `run()` beschrieben) und der Antwort (`plan`, serialisiert) → eigene Kopie. Konnte im Betrieb eine halb beschriebene Antwort liefern.
+- **`maintenance`:** Test-Fake `fakeEvac` ohne Sperre.
+- **`modules/extsvc`:** `hits++` im Test-HTTP-Server gegen Lesen im Test (jetzt atomar); `Config.Handler` wurde nach dem Start des Test-Servers gesetzt; der von `Mount` angestoßene Hintergrund-Abgleich lief gegen die Test-Umstellung und machte `refresh` in `newRig` zum No-op (`loading`) — Flake „unbekannter Dienst“ → `Module.bg` (WaitGroup), die Tests warten darauf.
+- **Test-Isolation:** `cloud` (persistente Test-DB behielt Policy/Host des vorigen Laufs), `jobrun` (`TestSendeschutz…`: Job `sleep 1` endete unter Last vor dem Wächter-Takt von 1 s → `sleep 3`).
+- **Nicht in der CI geprüft:** der Lauf mit `-race` auf dem GitHub-Runner (Laufzeit etwa doppelt, cgo vorhanden); die übrigen Module sind klein.
+

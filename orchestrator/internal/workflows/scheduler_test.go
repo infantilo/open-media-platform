@@ -278,10 +278,10 @@ func TestSchedulerDoesNotFireIfPersistFails(t *testing.T) {
 // direkt nach fire() gesetzt hat, wieder verwerfen — der nächste Tick
 // würde dann ein zweites Mal feuern.
 func TestSchedulerLastFiredAtSurvivesConcurrentRunStart(t *testing.T) {
-	original, originalPoll := registrationTimeout, registrationPollInterval
-	registrationTimeout = 2 * time.Second
-	registrationPollInterval = 10 * time.Millisecond
-	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(2 * time.Second)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	defer func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) }()
 
 	store := newFakeStore()
 	nodes := &fakeNodeLister{}

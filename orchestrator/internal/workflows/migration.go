@@ -604,7 +604,7 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 	}
 
 	// Schritt 2: auf ihre Registrierung warten.
-	ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout.Load())
 	node, err := s.awaitFreshRegistration(ctx, newInst.ID, oldNodeID)
 	cancel()
 	if err != nil {
@@ -684,7 +684,7 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 			slog.Warn("workflows: executeMigration: receiver role not ready", "workflow", wf.ID, "connection", conn)
 			continue
 		}
-		connectCtx, connectCancel := context.WithTimeout(context.Background(), registrationTimeout)
+		connectCtx, connectCancel := context.WithTimeout(context.Background(), registrationTimeout.Load())
 		err := s.applyConnection(connectCtx, conn, fromNode, toNode, roleNodeType(wf, conn.ToRole))
 		connectCancel()
 		if err != nil {
