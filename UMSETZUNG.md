@@ -5784,3 +5784,12 @@ Reihenfolge laut `AUDIT_2026_10_23.md`. Jeder Punkt vorher gegen den Code bestä
 **Offen bleibt (M8):** Schlüsselmaterial (`update`-Schlüssel, mTLS-CA, Secrets) ist nicht Teil der Sicherung; Sicherung liegt auf derselben Maschine (`.backups/`), nicht auf einem Fremdziel; nur Postgres.
 **Offen aus dem Audit:** B1, B4, B5, H1-Rest, H4–H7, H9, M5–M7, M11, M12, Rust-CI.
 
+## Kapitel 60: Audit 2026-10-23 — Lieferkette (Image-Digests, Actions per SHA) (Nutzerauftrag 2026-10-25, **umgesetzt, lokal geprüft, nicht committed**)
+
+- **Image-Digests:** alle Container-Images stehen als `repo:tag@sha256:…` in **einer** Datei, `deploy/images.env` (gültig als sh und make). Makefile (`$(call img,$(NATS_IMAGE))` …), `phone-https.sh`, `mtls-issue-cert.sh`, `preflight.sh` und `make-offline-bundle.sh` lesen sie dort; Quadlets, `ci.yml` und das Patroni-`Dockerfile` (`FROM postgres:16-alpine@…`) tragen die Digests als Text und werden von `deploy/dev/update-image-pins.sh` mitgepflegt. `./deploy/dev/update-image-pins.sh [--check]` / `make image-pins-check` löst die Tags in der Registry neu auf (`resolve-image-digest.sh`, über die Registry-HTTP-API, 3 Versuche — Docker Hub liefert gelegentlich ein kurzes 401). Die Digests stimmten für alle lokal gezogenen Images mit denen der Registry überein; **`postgres:16-alpine` hatte sich seit dem letzten lokalen Pull bewegt** (CI und Dockerfile zogen bisher jeweils das aktuelle). `podman run name:tag@digest` findet lokal vorhandene Images ohne neuen Pull (geprüft mit nats).
+- **Offline-Installationen:** `podman load` erhält den Digest nicht — `install-offline.sh` legt `.run/images-unpinned` an, danach gilt (Makefile, Skripte, Preflight) nur das Tag; `make-offline-bundle.sh` zieht den Digest-Bezug und speichert unter dem Tag-Namen.
+- **`AutoUpdate=registry`** aus den Quadlets entfernt (widerspricht dem Pinning; Patroni ist ein lokal gebautes Image).
+- **Actions per SHA:** alle `uses:` in `ci.yml`, `security.yml`, `codeql.yml` sind auf den Commit gepinnt (Kommentar mit der Version: checkout/setup-go/upload-artifact `v7`, codeql-action `v4`, setup-deno `v2.0.5` — `v2` ist dort ein Branch); Dependabot (`github-actions`) hebt SHA und Kommentar gemeinsam an.
+- **Nicht geprüft:** ein echter Lauf der CI mit den neuen Referenzen; `make up` auf einer frischen Maschine (Pull per Digest); der Offline-Bundle-Bau (nur Syntax und `--dry-run`).
+- **Grenze:** `amwa/nmos-testing:latest` bleibt ein bewegtes Tag mit eingefrorenem Digest — ein neuer Stand der Suite kommt erst mit `update-image-pins.sh`.
+

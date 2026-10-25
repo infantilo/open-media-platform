@@ -3,7 +3,7 @@ Description=OpenMediaPlatform interne CA für mTLS Orchestrator<->Nodes (UMSETZU
 After=network-online.target
 
 [Container]
-Image=docker.io/smallstep/step-ca:0.30.2
+Image=docker.io/smallstep/step-ca:0.30.2@sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e52cf4182bc8270
 ContainerName=omp-step-ca
 # DOCKER_STEPCA_INIT_PASSWORD_FILE zeigt in Produktion auf ein echtes
 # Secret (z. B. Podman-Secret/Vault), nicht auf die im Dev-Fallback per
@@ -14,7 +14,7 @@ Environment=DOCKER_STEPCA_INIT_PROVISIONER_NAME=omp
 Environment=DOCKER_STEPCA_INIT_PASSWORD_FILE=/home/step/password.txt
 Volume=omp-step-ca-data:/home/step
 PublishPort=9000:9000
-AutoUpdate=registry
+# AutoUpdate bewusst aus: Image ist auf einen Digest gepinnt (deploy/images.env, Audit 2026-10-23); Updates über update-image-pins.sh
 
 [Service]
 Restart=always

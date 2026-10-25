@@ -65,14 +65,17 @@ RUNTIME_PKGS_apt="podman uidmap slirp4netns make curl openssl ca-certificates ta
  gstreamer1.0-libav gstreamer1.0-nice ffmpeg gstreamer1.0-wpe libwpebackend-fdo-1.0-1"
 
 # Container-Images (wie Makefile 'up'): Name -> Pflicht? (1 = für den Betrieb nötig)
+# Die Referenzen (mit Digest) kommen aus deploy/images.env; unten wird der Digest-Bezug gezogen und unter dem Tag-Namen gespeichert.
+# shellcheck disable=SC1091
+. "$ROOT_DIR/deploy/images.env"
 IMAGES_LIST=(
-  "docker.io/library/nats:2.15.1|1"
-  "docker.io/rhastie/nmos-cpp:master-b6c8367|1"
-  "quay.io/coreos/etcd:v3.5.35|1"
+  "$NATS_IMAGE|1"
+  "$NMOS_REGISTRY_IMAGE|1"
+  "$ETCD_IMAGE|1"
   "localhost/omp-patroni:latest|1"
-  "docker.io/library/caddy:2.11.7|0"
-  "docker.io/smallstep/step-ca:0.30.2|0"
-  "docker.io/chrislusf/seaweedfs:4.48|0"
+  "$CADDY_IMAGE|0"
+  "$STEP_CA_IMAGE|0"
+  "$SEAWEEDFS_IMAGE|0"
 )
 [ "$PC_IMAGE" = 1 ] && IMAGES_LIST+=("localhost/omp-pipeline-controller:latest|0")
 
@@ -141,7 +144,14 @@ if [ "$IMAGES" = 1 ]; then
   have podman || die "podman fehlt (oder --no-images)"
   imgs=()
   for e in "${IMAGES_LIST[@]}"; do
-    img="${e%|*}"; need="${e#*|}"
+    pinned="${e%|*}"; need="${e#*|}"
+    img="${pinned%%@*}"                    # gespeichert und geladen wird unter dem Tag-Namen (der Digest bleibt beim Laden nicht erhalten)
+    if ! podman image exists "$pinned"; then
+      case "$pinned" in
+        *@sha256:*) podman pull "$pinned" || { [ "$need" = 1 ] && die "Pflicht-Image $pinned nicht ladbar" || { echo "    $pinned nicht ladbar — übersprungen" >&2; continue; }; } ;;
+      esac
+    fi
+    case "$pinned" in *@sha256:*) podman tag "$pinned" "$img" ;; esac
     if ! podman image exists "$img"; then
       case "$img" in
         localhost/omp-patroni:latest) podman build -t "$img" -f "$ROOT_DIR/deploy/patroni/Dockerfile" "$ROOT_DIR/deploy/patroni" ;;

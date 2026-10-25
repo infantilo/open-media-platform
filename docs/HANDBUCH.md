@@ -512,6 +512,13 @@ Rollback-Kopien und Verlauf, Standard `.updates/`),
 
 **Signierte Host-Kommandos.** Der Orchestrator signiert jedes Kommando an einen Host-Agent (HMAC, Schlüssel je Host). Neue Hosts bekommen den Schlüssel bei der Registrierung, ältere erhalten ihn automatisch, sobald sie online sind; danach lehnt der Agent unsignierte, abgelaufene oder wiederholte Kommandos ab. `OMP_HOST_AGENT_REQUIRE_KEY=1` am Agent verweigert Kommandos schon vor der Schlüsselübergabe. Hat ein Agent einen falschen Schlüssel (Kommandos scheitern mit „unauthorized“), `cmdKey` aus seiner `state.json` entfernen und den Agent neu starten. Den Schlüssel eines Hosts wechseln: `POST /api/v1/admin/hosts/<id>/rotate-key` (Host muss online sein). Das Token-Secret für Anmeldungen liegt in der Datenbank (`app_secrets`) und wird beim ersten Start aus `OMP_AUTH_JWT_SECRET_FILE` übernommen — alle Orchestrator-Instanzen eines Clusters nutzen dasselbe. `OMP_METRICS_TOKEN` schützt `/metrics` mit einem Bearer-Token.
 
+**Container-Images und ihre Digests.** Alle Images stehen mit Tag **und** Digest in `deploy/images.env`
+(`repo:tag@sha256:…`) — ein bewegtes Tag kann so nicht still ein anderes Image liefern. Auffrischen:
+`./deploy/dev/update-image-pins.sh` (löst die Tags neu auf und trägt die Digests in `images.env`, Quadlets,
+CI und das Patroni-Dockerfile ein), nur prüfen: `make image-pins-check`. Eine neue Version: zuerst das Tag in
+`images.env` ändern, dann das Skript ausführen. Bei **Offline-Installationen** (Images per `podman load`)
+legt der Installer `.run/images-unpinned` an; dann gilt nur das Tag.
+
 **Erst-Administrator (Bootstrap-Modus).** Solange kein Nutzer existiert, ist
 die API offen, damit sich der erste Administrator anlegen lässt — aber nur
 für Anfragen vom Rechner selbst (Loopback, ohne Proxy-Kopfzeilen). Von einem

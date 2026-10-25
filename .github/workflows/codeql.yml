@@ -18,9 +18,9 @@ jobs:
       matrix:
         language: [go, javascript-typescript, actions]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         if: matrix.language == 'go'
         with:
           go-version: "1.26"
@@ -29,7 +29,7 @@ jobs:
       # Rust ist bewusst nicht dabei: der Workspace haengt an
       # third_party/mxl (lokal gebaut, auf dem Runner nicht vorhanden,
       # siehe ci.yml). Rust-Abhaengigkeiten deckt security.yml (cargo audit) ab.
-      - uses: github/codeql-action/init@v4
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.language == 'go' && 'manual' || 'none' }}
@@ -42,6 +42,6 @@ jobs:
             (cd "$m" && go build ./...)
           done
 
-      - uses: github/codeql-action/analyze@v4
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
         with:
           category: /language:${{ matrix.language }}

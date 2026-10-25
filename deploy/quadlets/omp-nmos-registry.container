@@ -3,13 +3,13 @@ Description=OpenMediaPlatform NMOS Registry (nmos-cpp, IS-04/05)
 After=network-online.target
 
 [Container]
-Image=docker.io/rhastie/nmos-cpp:master-b6c8367
+Image=docker.io/rhastie/nmos-cpp:master-b6c8367@sha256:68e61e17dffab70303cfc10fcf4f5f8f219ae84eb189961e120e86a126959413
 ContainerName=omp-nmos-registry
 Environment=RUN_NODE=FALSE
 Volume=%h/OpenMediaPlatform/deploy/nmos/registry.json:/home/registry.json:ro,Z
 PublishPort=8010:8010
 PublishPort=8011:8011
-# AutoUpdate bewusst aus: Image ist auf ein festes Tag gepinnt (docs/decisions.md, 2026-10-23)
+# AutoUpdate bewusst aus: Image ist auf Tag + Digest gepinnt (deploy/images.env, docs/decisions.md 2026-10-23)
 
 [Service]
 Restart=always

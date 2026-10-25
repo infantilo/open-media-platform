@@ -150,6 +150,8 @@ else echo "    [dry-run] mxl.env"; fi
 say "6/7 Container images"
 if [ "$IMAGES" = 1 ] && [ -f "$BUNDLE/images.tar" ]; then
   run "podman load -i \"$BUNDLE/images.tar\""
+  # podman load erhält den Digest nicht: Makefile/Skripte nutzen dann nur das Tag (deploy/images.env)
+  run "mkdir -p \"$TARGET/.run\" && touch \"$TARGET/.run/images-unpinned\""
 else
   echo "    skipped$([ -f "$BUNDLE/images.tar" ] || echo ' (package contains no images — provide them beforehand: podman load -i …)')"
 fi

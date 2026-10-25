@@ -3,7 +3,7 @@ Description=OpenMediaPlatform Event-Bus (NATS, Cluster-Knoten)
 After=network-online.target
 
 [Container]
-Image=docker.io/library/nats:2.15.1
+Image=docker.io/library/nats:2.15.1@sha256:023a08c46caa5aff878fb86841187bebfdad9a6e3c552ba5c1a1e18938bbf88a
 ContainerName=omp-nats
 # NATS-Clustering (ARCHITECTURE.md §19.3 Punkt 7, UMSETZUNG.md D14):
 # dieses Quadlet ist EIN Knoten eines Drei-Knoten-Clusters — auf
@@ -19,7 +19,7 @@ Exec=-js -m 8222 --cluster_name OMP --cluster nats://0.0.0.0:6222 --routes nats:
 PublishPort=4222:4222
 PublishPort=6222:6222
 PublishPort=8222:8222
-AutoUpdate=registry
+# AutoUpdate bewusst aus: Image ist auf einen Digest gepinnt (deploy/images.env, Audit 2026-10-23); Updates über update-image-pins.sh
 
 [Service]
 Restart=always

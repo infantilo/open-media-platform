@@ -17,6 +17,8 @@
 # diese Ports müssen im LAN/NAT erreichbar sein. Firewall: TCP <Port+1000> freigeben.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck disable=SC1091
+. "$ROOT/deploy/dev/image-ref.sh"
 cmd="${1:-list}"; port="${2:-}"
 ip_default="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -1)"
 ip="${3:-${OMP_PUBLIC_HOST:-$ip_default}}"
@@ -30,7 +32,7 @@ case "$cmd" in
     podman rm -f "$(name "$port")" >/dev/null 2>&1 || true
     podman run -d --name "$(name "$port")" --restart=always --network=host \
       -v "$ROOT/.run/caddy-phone:/data" \
-      docker.io/library/caddy:2.11.7 \
+      "$(image_ref CADDY_IMAGE)" \
       caddy reverse-proxy --disable-redirects --from "https://$ip:$https" --to "127.0.0.1:$port" >/dev/null
     echo "Handy-Basis-URL: https://$ip:$https   (Node-Port $port, TCP $https freigeben)"
     ;;

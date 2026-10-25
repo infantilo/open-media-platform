@@ -46,6 +46,8 @@ for san in "$@"; do
 done
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck disable=SC1091
+. "$ROOT_DIR/deploy/dev/image-ref.sh"
 STEP_CA_HOME="$ROOT_DIR/.run/step-ca"
 ROOT_CA="$STEP_CA_HOME/certs/root_ca.crt"
 
@@ -64,7 +66,7 @@ podman run --rm --network host --userns=keep-id \
   -v "$CERT_DIR":/cert-out \
   -v "$KEY_DIR":/key-out \
   --entrypoint step \
-  docker.io/smallstep/step-ca:0.30.2 \
+  "$(image_ref STEP_CA_IMAGE)" \
   ca certificate "$LABEL" "/cert-out/$(basename "$CERT_OUT")" "/key-out/$(basename "$KEY_OUT")" \
     --ca-url https://localhost:9000 \
     --root /home/step/certs/root_ca.crt \

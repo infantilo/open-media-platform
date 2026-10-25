@@ -7,7 +7,7 @@
 # search` geprüft, 2026-08-18), deshalb `pip install` on top von exakt der
 # Basis, die bisher schon lief (`postgres:16-alpine`) — keine neue,
 # unbekannte Postgres-Distribution, nur Patroni selbst kommt hinzu.
-FROM docker.io/library/postgres:16-alpine
+FROM docker.io/library/postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36
 
 # py3-psycopg2 aus dem Alpine-Repo (vorkompiliert, kein C-Build nötig);
 # patroni[etcd3] per pip, da Alpine kein eigenes Paket hat.

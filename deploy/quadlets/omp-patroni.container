@@ -41,7 +41,7 @@ Environment=PATRONI_REPLICATION_PASSWORD=changeme-see-secrets-management
 Volume=omp-patroni-data:/home/postgres/pgdata
 PublishPort=5432:5432
 PublishPort=8008:8008
-AutoUpdate=registry
+# AutoUpdate bewusst aus: lokal gebautes Image (localhost/), nicht aus einer Registry
 
 [Service]
 Restart=always

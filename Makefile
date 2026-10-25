@@ -1,4 +1,19 @@
-.PHONY: streamdeck-udev preflight doctor update-keygen update-bundle build test check check-ci up down ci ui nodes contract start hosts stop status mtls-up mtls-down mtls-issue-certs nmos-registry-tls-up nmos-registry-tls-down nats-tls-up nats-tls-down backup restore proxy-up proxy-down soak clean-cache
+.PHONY: image-pins-check streamdeck-udev preflight doctor update-keygen update-bundle build test check check-ci up down ci ui nodes contract start hosts stop status mtls-up mtls-down mtls-issue-certs nmos-registry-tls-up nmos-registry-tls-down nats-tls-up nats-tls-down backup restore proxy-up proxy-down soak clean-cache
+
+# Container-Images mit Digest (Audit 2026-10-23): eine Quelle für Makefile und Skripte, s. deploy/images.env.
+include deploy/images.env
+# Offline-Installationen laden die Images per `podman load`, dabei bleibt der Digest nicht erhalten — dort gilt nur das Tag.
+ifneq ($(wildcard .run/images-unpinned),)
+img = $(firstword $(subst @, ,$(1)))
+else
+img = $(1)
+endif
+
+.DEFAULT_GOAL := build
+
+# Prüft, ob die Digests in deploy/images.env (und Quadlets/CI/Dockerfile) noch zu den Tags passen; Aktualisieren: ./deploy/dev/update-image-pins.sh
+image-pins-check:
+	./deploy/dev/update-image-pins.sh --check
 
 GO_MODULES := orchestrator nodes/mock nodes/omp-vfa nodes/omp-vfa-vision tools/contract-check tools/nmos-conformance-check tools/update-bundle host-agent supervisor update nodeoptions jobwire
 
@@ -166,7 +181,7 @@ up:
 		podman start omp-nats-1; \
 	else \
 		podman run -d --name omp-nats-1 --restart=always --network=host \
-			docker.io/library/nats:2.15.1 -js --server_name omp-nats-1 -p 4222 -m 8222 \
+			$(call img,$(NATS_IMAGE)) -js --server_name omp-nats-1 -p 4222 -m 8222 \
 			--cluster_name OMP --cluster nats://127.0.0.1:6222 \
 			--routes nats://127.0.0.1:6223,nats://127.0.0.1:6224; \
 	fi
@@ -174,7 +189,7 @@ up:
 		podman start omp-nats-2; \
 	else \
 		podman run -d --name omp-nats-2 --restart=always --network=host \
-			docker.io/library/nats:2.15.1 -js --server_name omp-nats-2 -p 4223 -m 8223 \
+			$(call img,$(NATS_IMAGE)) -js --server_name omp-nats-2 -p 4223 -m 8223 \
 			--cluster_name OMP --cluster nats://127.0.0.1:6223 \
 			--routes nats://127.0.0.1:6222,nats://127.0.0.1:6224; \
 	fi
@@ -182,7 +197,7 @@ up:
 		podman start omp-nats-3; \
 	else \
 		podman run -d --name omp-nats-3 --restart=always --network=host \
-			docker.io/library/nats:2.15.1 -js --server_name omp-nats-3 -p 4224 -m 8224 \
+			$(call img,$(NATS_IMAGE)) -js --server_name omp-nats-3 -p 4224 -m 8224 \
 			--cluster_name OMP --cluster nats://127.0.0.1:6224 \
 			--routes nats://127.0.0.1:6222,nats://127.0.0.1:6223; \
 	fi
@@ -193,7 +208,7 @@ up:
 			-p 8010:8010 -p 8011:8011 \
 			-v $(CURDIR)/deploy/nmos/registry.json:/home/registry.json:ro,Z \
 			-e RUN_NODE=FALSE \
-			docker.io/rhastie/nmos-cpp:master-b6c8367; \
+			$(call img,$(NMOS_REGISTRY_IMAGE)); \
 	fi
 	@$(MAKE) postgres-up
 
@@ -232,7 +247,7 @@ postgres-up:
 			podman start omp-etcd-$$n; \
 		else \
 			podman run -d --name omp-etcd-$$n --restart=always --network=host \
-				quay.io/coreos/etcd:v3.5.35 etcd \
+				$(call img,$(ETCD_IMAGE)) etcd \
 				--name etcd-$$n --data-dir /etcd-data \
 				--initial-advertise-peer-urls http://127.0.0.1:$$PEER --listen-peer-urls http://127.0.0.1:$$PEER \
 				--listen-client-urls http://127.0.0.1:$$CLI --advertise-client-urls http://127.0.0.1:$$CLI \
@@ -390,7 +405,7 @@ mtls-up:
 			-e DOCKER_STEPCA_INIT_DNS_NAMES="localhost,127.0.0.1" \
 			-e DOCKER_STEPCA_INIT_PROVISIONER_NAME="omp-dev" \
 			-e DOCKER_STEPCA_INIT_PASSWORD_FILE=/home/step/password.txt \
-			docker.io/smallstep/step-ca:0.30.2; \
+			$(call img,$(STEP_CA_IMAGE)); \
 	fi
 	@echo "Warte auf step-ca-Initialisierung..."
 	@for i in $$(seq 1 20); do \
@@ -436,7 +451,7 @@ nmos-registry-tls-up:
 		-v $(CURDIR)/deploy/nmos/registry-tls.json:/home/registry.json:ro,Z \
 		-v $(CURDIR)/.run/mtls:/home/certs:ro,Z \
 		-e RUN_NODE=FALSE \
-		docker.io/rhastie/nmos-cpp:master-b6c8367
+		$(call img,$(NMOS_REGISTRY_IMAGE))
 	@echo "NMOS-Registry jetzt per BCP-003-01-TLS erreichbar: https://localhost:8010 (Root-CA: .run/mtls/root_ca.crt)"
 
 # Zurück zur Klartext-Registry (registry.json) — gleicher Container-Name,
@@ -468,19 +483,19 @@ nats-tls-up:
 	-podman rm omp-nats-1 omp-nats-2 omp-nats-3
 	podman run -d --name omp-nats-1 --restart=always --network=host \
 		-v $(CURDIR)/.run/mtls:/certs:ro,Z \
-		docker.io/library/nats:2.15.1 -js --server_name omp-nats-1 -p 4222 -m 8222 \
+		$(call img,$(NATS_IMAGE)) -js --server_name omp-nats-1 -p 4222 -m 8222 \
 		--cluster_name OMP --cluster nats://127.0.0.1:6222 \
 		--routes nats://127.0.0.1:6223,nats://127.0.0.1:6224 \
 		--tls --tlscert=/certs/nats-server.crt --tlskey=/certs/nats-server.key --tlscacert=/certs/root_ca.crt --tlsverify
 	podman run -d --name omp-nats-2 --restart=always --network=host \
 		-v $(CURDIR)/.run/mtls:/certs:ro,Z \
-		docker.io/library/nats:2.15.1 -js --server_name omp-nats-2 -p 4223 -m 8223 \
+		$(call img,$(NATS_IMAGE)) -js --server_name omp-nats-2 -p 4223 -m 8223 \
 		--cluster_name OMP --cluster nats://127.0.0.1:6223 \
 		--routes nats://127.0.0.1:6222,nats://127.0.0.1:6224 \
 		--tls --tlscert=/certs/nats-server.crt --tlskey=/certs/nats-server.key --tlscacert=/certs/root_ca.crt --tlsverify
 	podman run -d --name omp-nats-3 --restart=always --network=host \
 		-v $(CURDIR)/.run/mtls:/certs:ro,Z \
-		docker.io/library/nats:2.15.1 -js --server_name omp-nats-3 -p 4224 -m 8224 \
+		$(call img,$(NATS_IMAGE)) -js --server_name omp-nats-3 -p 4224 -m 8224 \
 		--cluster_name OMP --cluster nats://127.0.0.1:6224 \
 		--routes nats://127.0.0.1:6222,nats://127.0.0.1:6223 \
 		--tls --tlscert=/certs/nats-server.crt --tlskey=/certs/nats-server.key --tlscacert=/certs/root_ca.crt --tlsverify
@@ -515,7 +530,7 @@ proxy-up:
 			-v $(CURDIR)/deploy/dev/Caddyfile:/etc/caddy/Caddyfile:ro,Z \
 			-v $(CURDIR)/deploy/dev/webrtc-static:/srv/webrtc-static:ro,Z \
 			-v $(CURDIR)/.run/caddy:/data \
-			docker.io/library/caddy:2.11.7; \
+			$(call img,$(CADDY_IMAGE)); \
 	fi
 	@echo "Reverse-Proxy bereit: https://localhost:8443 (selbstsigniertes Caddy-Zertifikat, s. docs/HANDBUCH.md)"
 	@echo "Handy Kamera+Monitor kombiniert (omp-webrtc-gateway, Nachtrag 246): https://$${OMP_PUBLIC_HOST:-localhost}:9441"
@@ -539,7 +554,7 @@ s3-up:
 		podman run -d --name omp-s3 --restart=always --network=host --userns=keep-id \
 			-v $(CURDIR)/.run/s3-data:/data:Z \
 			-v $(CURDIR)/deploy/s3/seaweedfs-s3.json:/etc/seaweedfs/s3.json:ro,Z \
-			docker.io/chrislusf/seaweedfs:4.48 server -dir=/data -ip=127.0.0.1 \
+			$(call img,$(SEAWEEDFS_IMAGE)) server -dir=/data -ip=127.0.0.1 \
 			-master.volumeSizeLimitMB=256 -s3 -s3.port=9000 -s3.config=/etc/seaweedfs/s3.json; \
 	fi
 	@echo "S3 ready: API http://127.0.0.1:9000 (SeaweedFS)"

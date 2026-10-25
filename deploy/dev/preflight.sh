@@ -237,7 +237,9 @@ if need_tool podman "starts NATS, NMOS registry, etcd and Postgres"; then
 
   # Derive the required images from the Makefile (single source of truth)
   missing_images=()
-  for img in $(grep -ho '\(docker\.io\|quay\.io\)/[a-zA-Z0-9_./-]*:[a-zA-Z0-9._-]*' "$ROOT_DIR/Makefile" | sort -u | grep -E 'nats|nmos-cpp|etcd'); do
+  # Quelle ist deploy/images.env (mit Digest; bei Offline-Installationen nur das Tag)
+  for img in $(sed -n 's/^\(NATS\|NMOS_REGISTRY\|ETCD\)_IMAGE=//p' "$ROOT_DIR/deploy/images.env" | while read -r ref; do
+      if [ -e "$ROOT_DIR/.run/images-unpinned" ]; then echo "${ref%%@*}"; else echo "$ref"; fi; done); do
     if podman image exists "$img" 2>/dev/null; then
       ok "Image $img" "present"
     else
