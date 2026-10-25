@@ -374,7 +374,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Bewusst unauthentifiziert wie /healthz (Prometheus-Scraper senden
 	// üblicherweise keinen Bearer-Token; Netzwerk-Isolation ist hier die
 	// erwartete Absicherung, nicht Anwendungs-Auth) — s. metrics.go.
-	mux.HandleFunc("GET /metrics", handleMetrics(nodes, events, launcherSvc, reqCounters, moduleMetrics(options.modules)))
+	mux.HandleFunc("GET /metrics", requireMetricsToken(cfg.MetricsToken, handleMetrics(nodes, events, launcherSvc, reqCounters, moduleMetrics(options.modules))))
 
 	// Nachtrag 243: geteilter Quittier-/Maskierstand der Alarme. Lesen für
 	// jeden authentifizierten Nutzer, Ändern braucht "operate" (globaler
@@ -386,7 +386,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 		mux.HandleFunc("DELETE /api/v1/alarms/acks", g.requireVerbGlobal(authz.VerbOperate, handleDeleteAlarmAck(options.alarmAcks, events)))
 	}
 
-	mux.HandleFunc("POST /api/v1/auth/login", handleLogin(authSvc, auditLogger, loginLockout))
+	mux.HandleFunc("POST /api/v1/auth/login", handleLogin(authSvc, auditLogger, loginLockout, loginLimits{ip: auth.NewLoginLockoutN(30), name: auth.NewLoginLockoutN(50)}))
 	mux.HandleFunc("GET /api/v1/auth/whoami", handleWhoami(authSvc, authzStore))
 	mux.HandleFunc("POST /api/v1/auth/users", g.requireVerbGlobal(authz.VerbAdmin, handleCreateUser(authSvc, authzStore)))
 	mux.HandleFunc("GET /api/v1/auth/users", g.requireVerbGlobal(authz.VerbAdmin, handleListUsers(authSvc, authzStore, options.groups)))
@@ -553,6 +553,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// /register bewusst außerhalb von authGate — s. handleRegisterHost.
 	mux.HandleFunc("POST /api/v1/admin/hosts/bootstrap-tokens", g.requireVerbGlobal(authz.VerbAdmin, handleCreateBootstrapToken(hostRegistry)))
 	mux.HandleFunc("DELETE /api/v1/admin/hosts/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteHost(hostRegistry, hostMetrics, events)))
+	mux.HandleFunc("POST /api/v1/admin/hosts/{id}/rotate-key", g.requireVerbGlobal(authz.VerbAdmin, handleRotateHostKey(options.hostKeyRotator, options.domainAudit)))
 	mux.HandleFunc("POST /api/v1/admin/hosts/{id}/maintenance", g.requireVerbGlobal(authz.VerbAdmin, handleSetMaintenance(hostRegistry, options.maintenance, true)))
 	mux.HandleFunc("DELETE /api/v1/admin/hosts/{id}/maintenance", g.requireVerbGlobal(authz.VerbAdmin, handleSetMaintenance(hostRegistry, options.maintenance, false)))
 	mux.HandleFunc("POST /api/v1/hosts/register", handleRegisterHost(hostRegistry, ioPortStore, events))

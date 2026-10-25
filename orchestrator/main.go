@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -37,6 +38,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/groups"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/health"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/hostcmd"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/hosts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/housekeeping"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/httpapi"
@@ -87,7 +89,13 @@ const healthStaleAfter = 10 * time.Second
 // Abhängigkeit (s. dortiger Paketkommentar, UMSETZUNG.md D6 Teil 2).
 type natsRequester struct{ nc *nats.Conn }
 
+// hostSigner signiert Kommandos an Host-Agents (Audit 2026-10-23 B2); gesetzt, sobald die Datenbank bereit ist.
+var hostSigner atomic.Pointer[hostcmd.Signer]
+
 func (r natsRequester) RequestBytes(subject string, data []byte, timeout time.Duration) ([]byte, error) {
+	if sg := hostSigner.Load(); sg != nil {
+		return sg.Request(subject, data, timeout)
+	}
 	msg, err := r.nc.Request(subject, data, timeout)
 	if err != nil {
 		return nil, err
@@ -625,7 +633,7 @@ func main() {
 	// auto-generierten).
 	jwtSecret := []byte(cfg.JWTSecret)
 	if cfg.JWTSecret == "" {
-		jwtSecret, err = auth.LoadOrCreateSecret(cfg.JWTSecretFile)
+		jwtSecret, err = auth.LoadOrCreateSharedSecret(database, cfg.JWTSecretFile)
 		if err != nil {
 			slog.Error("jwt secret setup failed", "error", err)
 			os.Exit(1)
@@ -720,6 +728,31 @@ func main() {
 
 	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).
 	hostStore := hosts.NewStore(database)
+	if nc != nil {
+		sg := &hostcmd.Signer{Conn: nc, Keys: hostStore}
+		hostSigner.Store(sg)
+		// Hosts aus der Zeit vor der Signatur bekommen ihren Schlüssel, sobald sie online sind (nicht erst beim ersten Kommando).
+		safego.Go("hostcmd.provision", func() {
+			tick := time.NewTicker(20 * time.Second)
+			defer tick.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-tick.C:
+					hs, err := hostStore.ListHosts()
+					if err != nil {
+						continue
+					}
+					for _, h := range hs {
+						if m, ok := hostMetricsTracker.Get(h.ID); ok && time.Since(m.ReceivedAt) < 15*time.Second {
+							sg.EnsureProvisioned(h.ID, 3*time.Second)
+						}
+					}
+				}
+			}
+		})
+	}
 
 	// I/O-Karten als erstklassige Host-Ressource (ARCHITECTURE.md §6.1
 	// Erweiterung 2026-07-10, UMSETZUNG.md D13) — Postgres-Atomarität
@@ -925,7 +958,7 @@ func main() {
 	// der Aufnahmen; QC, Proxy, Ingest-Nachbearbeitung und Script-Schritte laufen darüber.
 	jobDisp := jobsMod.Dispatcher()
 	if nc != nil {
-		jobDisp.Bus = jobrun.NATSBus{Conn: nc}
+		jobDisp.Bus = jobrun.NATSBus{Conn: nc, Signer: hostSigner.Load()}
 	}
 	jobDisp.CheckPath = func(hostID, path, kind string) (bool, string) {
 		info, perr := launcherSvc.CheckPathOnHost(hostID, path, kind)
@@ -1086,7 +1119,13 @@ func main() {
 	}
 	moduleDeps := module.Deps{Hooks: module.NewHooks(), DB: database, Audit: domainAuditStore, Settings: moduleSettings{nodeSettingsStore}, Access: moduleAccess{authzStore}, Actor: httpapi.ActorFromRequest,
 		Hosts: hostStore, HostMetrics: hostMetricsTracker, Instances: moduleInstances{launcherSvc}, Placement: placementEngine}
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithModules(modules, moduleDeps))
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithHostKeyRotation(func(id string) error {
+		sg := hostSigner.Load()
+		if sg == nil {
+			return errors.New("no command channel")
+		}
+		return sg.Rotate(id, 5*time.Second)
+	}), httpapi.WithModules(modules, moduleDeps))
 
 	startModules(ctx, modules, moduleDeps, clusterNode)
 

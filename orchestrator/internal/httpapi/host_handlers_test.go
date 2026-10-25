@@ -17,14 +17,20 @@ import (
 // fakeEventPublisher ist ein Test-Double für EventSubscriber, das nur
 // die Typen der über Broadcast verteilten Events sammelt (Subscribe wird
 // von handleRegisterHost nicht genutzt, bleibt ein No-Op).
-type fakeEventPublisher struct{ types []string }
+type fakeEventPublisher struct {
+	types []string
+	data  [][]byte
+}
 
 func (f *fakeEventPublisher) Subscribe() (<-chan sse.Event, func()) {
 	return make(chan sse.Event), func() {}
 }
-func (f *fakeEventPublisher) Broadcast(e sse.Event) { f.types = append(f.types, e.Type) }
-func (f *fakeEventPublisher) ClientCount() int      { return 0 }
-func (f *fakeEventPublisher) TotalDrops() uint64    { return 0 }
+func (f *fakeEventPublisher) Broadcast(e sse.Event) {
+	f.types = append(f.types, e.Type)
+	f.data = append(f.data, []byte(e.Data))
+}
+func (f *fakeEventPublisher) ClientCount() int   { return 0 }
+func (f *fakeEventPublisher) TotalDrops() uint64 { return 0 }
 
 func TestHandleCreateBootstrapToken(t *testing.T) {
 	expires := time.Now().Add(time.Hour)
@@ -251,5 +257,29 @@ func TestBlockMaintenanceHost(t *testing.T) {
 	}
 	if called != 2 {
 		t.Errorf("next called %d times, want 2", called)
+	}
+}
+
+type keyIssuingRegistry struct {
+	fakeHostRegistry
+	key string
+}
+
+func (k keyIssuingRegistry) IssueCommandKey(string) (string, error) { return k.key, nil }
+
+func TestHandleRegisterHostDeliversCommandKeyOnlyInResponse(t *testing.T) {
+	registry := keyIssuingRegistry{fakeHostRegistry{createdHost: hosts.Host{ID: "host-1", Label: "Test Host"}}, "geheimer-kommandoschluessel-0123456789"}
+	pub := &fakeEventPublisher{}
+	h := handleRegisterHost(registry, nil, pub)
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest(http.MethodPost, "/api/v1/hosts/register", strings.NewReader(`{"token":"valid","label":"T","hostname":"t.local"}`)))
+	var resp registerHostResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.CommandKey != registry.key {
+		t.Fatalf("Antwort: %s %v", rec.Body.String(), err)
+	}
+	for _, d := range pub.data {
+		if strings.Contains(string(d), registry.key) {
+			t.Fatal("der Schlüssel darf nie in einem SSE-Ereignis stehen")
+		}
 	}
 }

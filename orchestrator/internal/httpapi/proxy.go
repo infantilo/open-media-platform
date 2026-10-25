@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
@@ -174,6 +175,12 @@ func handleNodeStreamProxy(nodes NodeLister, client *http.Client) http.HandlerFu
 			return
 		}
 
+		// Audit 2026-10-23 H1 (SSRF): die URL kommt vom Node. Ein kompromittierter oder fehlerhafter Node durfte den
+		// Orchestrator so beliebige interne Adressen abrufen lassen. Erlaubt ist nur ein Stream auf dem Host des Nodes selbst.
+		if !streamURLAllowed(node.APIBaseURL, parsed.Value) {
+			http.Error(w, "stream url not on the node's own host", http.StatusBadGateway)
+			return
+		}
 		streamReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, parsed.Value, nil)
 		if err != nil {
 			http.Error(w, "failed to build stream request", http.StatusInternalServerError)
@@ -222,4 +229,26 @@ func handleNodeStreamProxy(nodes NodeLister, client *http.Client) http.HandlerFu
 			}
 		}
 	}
+}
+
+// streamURLAllowed: nur http(s) und derselbe Host wie der API-Endpunkt des Nodes (Port frei: Vorschau-Streams laufen auf eigenen
+// Ports). Loopback-Schreibweisen (localhost, 127.0.0.1, ::1, 0.0.0.0) gelten als derselbe Host; Zugangsdaten in der URL nie.
+func streamURLAllowed(apiBase, streamRaw string) bool {
+	api, err := url.Parse(apiBase)
+	if err != nil || api.Hostname() == "" {
+		return false
+	}
+	su, err := url.Parse(streamRaw)
+	if err != nil || (su.Scheme != "http" && su.Scheme != "https") || su.User != nil || su.Hostname() == "" {
+		return false
+	}
+	canon := func(h string) string {
+		h = strings.ToLower(h)
+		switch h {
+		case "localhost", "127.0.0.1", "::1", "0.0.0.0", "::":
+			return "loopback"
+		}
+		return h
+	}
+	return canon(api.Hostname()) == canon(su.Hostname())
 }

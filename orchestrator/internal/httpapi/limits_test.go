@@ -93,3 +93,26 @@ func TestServerHeaderTimeoutAndKeepAliveAfterJSON(t *testing.T) {
 		}
 	}
 }
+
+func TestRequireMetricsToken(t *testing.T) {
+	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }
+	do := func(h http.HandlerFunc, auth string) int {
+		r := httptest.NewRequest("GET", "/metrics", nil)
+		if auth != "" {
+			r.Header.Set("Authorization", auth)
+		}
+		rec := httptest.NewRecorder()
+		h(rec, r)
+		return rec.Code
+	}
+	if do(requireMetricsToken("", ok), "") != 200 {
+		t.Error("ohne Token offen (bisheriges Verhalten)")
+	}
+	g := requireMetricsToken("s3cret", ok)
+	if do(g, "") != 401 || do(g, "Bearer falsch") != 401 || do(g, "s3cret") != 401 {
+		t.Error("ohne/mit falschem Token abgewiesen")
+	}
+	if do(g, "Bearer s3cret") != 200 {
+		t.Error("richtiges Token")
+	}
+}

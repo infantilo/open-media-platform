@@ -1844,3 +1844,50 @@ func TestConsoleKioskRouteFallsBackToIndexHTML(t *testing.T) {
 		t.Fatalf("body does not contain <html>: %q", rec.Body.String())
 	}
 }
+
+// Audit 2026-10-23 H1: die vom Node gelieferte Stream-URL darf nicht auf fremde Hosts zeigen (SSRF).
+func TestStreamURLAllowed(t *testing.T) {
+	ok := [][2]string{
+		{"http://127.0.0.1:8123", "http://127.0.0.1:9000/preview"},
+		{"http://127.0.0.1:8123", "http://localhost:9000/preview"},
+		{"http://10.0.0.5:8123", "http://10.0.0.5:9001/levels"},
+		{"http://Node-A:8123", "https://node-a:9001/x"},
+	}
+	bad := [][2]string{
+		{"http://127.0.0.1:8123", "http://169.254.169.254/latest/meta-data"},
+		{"http://10.0.0.5:8123", "http://10.0.0.6:9001/x"},
+		{"http://10.0.0.5:8123", "file:///etc/passwd"},
+		{"http://10.0.0.5:8123", "http://user:pw@10.0.0.5:9001/x"},
+		{"http://10.0.0.5:8123", "http://10.0.0.5.evil.example:9001/x"},
+		{"http://10.0.0.5:8123", "//10.0.0.6/x"},
+		{"http://10.0.0.5:8123", ""},
+		{"", "http://10.0.0.5:9001/x"},
+	}
+	for _, c := range ok {
+		if !streamURLAllowed(c[0], c[1]) {
+			t.Errorf("erlaubt erwartet: %v", c)
+		}
+	}
+	for _, c := range bad {
+		if streamURLAllowed(c[0], c[1]) {
+			t.Errorf("abgelehnt erwartet: %v", c)
+		}
+	}
+}
+
+func TestHandleNodeStreamProxyRefusesForeignHost(t *testing.T) {
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"value":"http://169.254.169.254/latest/meta-data"}`)
+	}))
+	defer nodeServer.Close()
+	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
+	h := handleNodeStreamProxy(lister, nil)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/nodes/{id}/stream/{name}", h)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/stream/previewUrl", nil))
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "own host") {
+		t.Fatalf("status %d body %q", rec.Code, rec.Body.String())
+	}
+}

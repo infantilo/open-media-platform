@@ -4,12 +4,21 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/hostcmd"
 )
 
 // NATSBus legt eine NATS-Verbindung hinter [Bus].
-type NATSBus struct{ Conn *nats.Conn }
+type NATSBus struct {
+	Conn *nats.Conn
+	// Signer signiert Kommandos an Host-Agents (nil = unsigniert).
+	Signer *hostcmd.Signer
+}
 
 func (b NATSBus) Request(subject string, data []byte, timeout time.Duration) ([]byte, error) {
+	if b.Signer != nil {
+		return b.Signer.Request(subject, data, timeout)
+	}
 	msg, err := b.Conn.Request(subject, data, timeout)
 	if err != nil {
 		return nil, err

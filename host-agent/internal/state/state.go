@@ -16,6 +16,9 @@ import (
 type State struct {
 	HostID string `json:"hostId"`
 	Label  string `json:"label"`
+	// CmdKey: Schlüssel, mit dem der Orchestrator seine Kommandos signiert (jobwire/cmdauth.go). Leer = noch nicht
+	// provisioniert (Host aus der Zeit vor der Signatur): Kommandos gelten dann unsigniert, bis der Orchestrator ihn liefert.
+	CmdKey string `json:"cmdKey,omitempty"`
 }
 
 // Load liest den Zustand aus path (ok=false, wenn die Datei fehlt — noch
@@ -35,9 +38,8 @@ func Load(path string) (State, bool, error) {
 	return s, true, nil
 }
 
-// Save schreibt s nach path (0600 — enthält keine Geheimnisse, aber
-// gleiche restriktive Berechtigung wie auth.LoadOrCreateSecret im
-// Orchestrator, konsistente Konvention für lokale State-Dateien).
+// Save schreibt s nach path (0600 — enthält den Kommandoschlüssel; gleiche
+// restriktive Berechtigung wie auth.LoadOrCreateSecret im Orchestrator).
 func Save(path string, s State) error {
 	data, err := json.Marshal(s)
 	if err != nil {

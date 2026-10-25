@@ -112,3 +112,72 @@ func mustNewID(t *testing.T) string {
 	}
 	return id
 }
+
+func TestCommandKeyStableUntilProvisioned(t *testing.T) {
+	database := testDB(t)
+	s := NewStore(database)
+	label := "test-cmdkey-" + mustNewID(t)
+	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM hosts WHERE label LIKE $1`, label+"%") })
+	h, err := s.CreateHost(label, "key.local", []byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	k1, prov, err := s.CommandKey(h.ID)
+	if err != nil || prov || len(k1) < 32 {
+		t.Fatalf("neu: %q %v %v", k1, prov, err)
+	}
+	k2, _, _ := s.CommandKey(h.ID)
+	if k1 != k2 {
+		t.Fatal("Schlüssel bleibt stabil")
+	}
+	if err := s.MarkProvisioned(h.ID); err != nil {
+		t.Fatal(err)
+	}
+	if k3, prov, _ := s.CommandKey(h.ID); k3 != k1 || !prov {
+		t.Fatalf("bereitgestellt: %q %v", k3, prov)
+	}
+	h2, _ := s.CreateHost(label+"-2", "key2.local", []byte(`{}`))
+	issued, err := s.IssueCommandKey(h2.ID)
+	if err != nil || issued == k1 {
+		t.Fatalf("Registrierung: %q %v", issued, err)
+	}
+	if _, prov, _ := s.CommandKey(h2.ID); !prov {
+		t.Fatal("bei Registrierung ausgeliefert = bereitgestellt")
+	}
+}
+
+func TestNextKeyPromoteReplacesKey(t *testing.T) {
+	database := testDB(t)
+	s := NewStore(database)
+	label := "test-nextkey-" + mustNewID(t)
+	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM hosts WHERE label = $1`, label) })
+	h, err := s.CreateHost(label, "k.local", []byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, _ := s.IssueCommandKey(h.ID)
+	if n, _ := s.NextKey(h.ID); n != "" {
+		t.Fatalf("anfangs kein Folgeschlüssel: %q", n)
+	}
+	if err := s.PromoteNextKey(h.ID); err != nil {
+		t.Fatal(err)
+	}
+	if k, _, _ := s.CommandKey(h.ID); k != old {
+		t.Fatal("ohne Folgeschlüssel ändert Promote nichts")
+	}
+	if err := s.SetNextKey(h.ID, "folgeschluessel-folgeschluessel-1234"); err != nil {
+		t.Fatal(err)
+	}
+	if k, _, _ := s.CommandKey(h.ID); k != old {
+		t.Fatal("bis zur Bestätigung gilt der alte")
+	}
+	if err := s.PromoteNextKey(h.ID); err != nil {
+		t.Fatal(err)
+	}
+	if k, _, _ := s.CommandKey(h.ID); k != "folgeschluessel-folgeschluessel-1234" {
+		t.Fatalf("neuer Schlüssel: %q", k)
+	}
+	if n, _ := s.NextKey(h.ID); n != "" {
+		t.Fatal("Folgeschlüssel verbraucht")
+	}
+}

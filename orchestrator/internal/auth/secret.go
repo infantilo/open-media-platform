@@ -2,6 +2,7 @@ package auth
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -44,4 +45,41 @@ func LoadOrCreateSecret(path string) ([]byte, error) {
 		return nil, fmt.Errorf("auth: write secret file: %w", err)
 	}
 	return secret, nil
+}
+
+// LoadOrCreateSharedSecret liefert das Token-Secret aus der Datenbank, damit alle Orchestrator-Instanzen eines Clusters
+// dasselbe benutzen (Audit 2026-10-23 H10). Gibt es dort noch keines, wird das der lokalen Datei übernommen (bestehende
+// Tokens bleiben gültig) bzw. neu erzeugt und eingetragen; gleichzeitige Starter einigen sich über ON CONFLICT auf einen Wert.
+func LoadOrCreateSharedSecret(db *sql.DB, filePath string) ([]byte, error) {
+	const name = "auth_jwt_secret"
+	read := func() ([]byte, bool, error) {
+		var v string
+		err := db.QueryRow(`SELECT value FROM app_secrets WHERE name = $1`, name).Scan(&v)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, false, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		b, err := hex.DecodeString(v)
+		if err != nil || len(b) < 16 {
+			return nil, false, fmt.Errorf("auth: app_secrets.%s is not a valid hex secret", name)
+		}
+		return b, true, nil
+	}
+	if b, ok, err := read(); err != nil || ok {
+		return b, err
+	}
+	seed, err := LoadOrCreateSecret(filePath)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := db.Exec(`INSERT INTO app_secrets (name, value) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING`, name, hex.EncodeToString(seed)); err != nil {
+		return nil, fmt.Errorf("auth: store shared secret: %w", err)
+	}
+	b, ok, err := read()
+	if err != nil || !ok {
+		return nil, fmt.Errorf("auth: shared secret missing after insert: %v", err)
+	}
+	return b, nil
 }

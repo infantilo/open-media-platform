@@ -136,6 +136,8 @@ type registerHostRequest struct {
 type registerHostResponse struct {
 	HostID string `json:"hostId"`
 	Label  string `json:"label"`
+	// CommandKey: Schlüssel für signierte Kommandos, nur in der Antwort an den Host-Agent (nie im SSE-Ereignis).
+	CommandKey string `json:"commandKey,omitempty"`
 }
 
 // handleRegisterHost ist POST /api/v1/hosts/register — bewusst
@@ -184,6 +186,18 @@ func handleRegisterHost(registry HostRegistry, ioPortStore IOPortInventoryStore,
 				slog.Warn("hosts: set io port inventory failed", "host_id", h.ID, "error", err)
 			}
 		}
+		// Audit 2026-10-23 B2: Schlüssel für signierte Kommandos mit der Registrierung ausliefern.
+		var cmdKey string
+		if iss, ok := registry.(interface {
+			IssueCommandKey(hostID string) (string, error)
+		}); ok {
+			k, err := iss.IssueCommandKey(h.ID)
+			if err != nil {
+				http.Error(w, "command key: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			cmdKey = k
+		}
 		if events != nil {
 			// Reiner Trigger (gleiches Muster wie audit.Store.Log):
 			// hosts-view.ts lädt bei Empfang einmal GET /api/v1/hosts neu.
@@ -192,7 +206,7 @@ func handleRegisterHost(registry HostRegistry, ioPortStore IOPortInventoryStore,
 				events.Broadcast(sse.Event{Type: "host.registered", Data: data})
 			}
 		}
-		writeJSON(w, http.StatusCreated, registerHostResponse{HostID: h.ID, Label: h.Label})
+		writeJSON(w, http.StatusCreated, registerHostResponse{HostID: h.ID, Label: h.Label, CommandKey: cmdKey})
 	}
 }
 
@@ -427,5 +441,27 @@ func handleLocalHost(catalog CatalogReader) http.HandlerFunc {
 			}
 		}
 		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+// WithHostKeyRotation aktiviert POST /api/v1/admin/hosts/{id}/rotate-key (Schlüsselwechsel für signierte Host-Kommandos).
+func WithHostKeyRotation(rotate func(hostID string) error) HandlerOption {
+	return func(o *handlerOptions) { o.hostKeyRotator = rotate }
+}
+
+// handleRotateHostKey: POST /api/v1/admin/hosts/{id}/rotate-key — der Agent muss online sein und seinen Schlüssel schon haben.
+func handleRotateHostKey(rotate func(hostID string) error, domainAudit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if rotate == nil {
+			http.Error(w, "key rotation not configured", http.StatusNotImplemented)
+			return
+		}
+		id := r.PathValue("id")
+		if err := rotate(id); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "host", id, "command_key_rotated", nil)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	}
 }

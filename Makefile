@@ -132,9 +132,10 @@ check:
 # aktiv ist). Rust/MXL-Code bleibt wie bisher Pflicht zur echten
 # lokalen Live-Verifikation vor jedem Commit (`make check`, s. Historie
 # in docs/decisions.md) — nur nicht Teil des automatisierten
-# GitHub-Actions-Gates. OMP_POSTGRES_URL wird hier NICHT gesetzt — ein
-# GitHub-Actions-Runner hat ohnehin keine Postgres unter dieser DSN
-# laufen, die DB-Tests überspringen sich dort wie schon zuvor.
+# GitHub-Actions-Gates. OMP_POSTGRES_URL wird hier NICHT gesetzt: ohne die
+# Variable überspringen sich die DB-Tests (lokal ein `go test` ohne DSN). Die
+# CI (.github/workflows/ci.yml) startet seit 2026-10-25 einen Postgres-Dienst
+# und setzt die Variable für diesen Schritt, die DB-Tests laufen dort also real.
 check-ci:
 	$(foreach m,$(GO_MODULES),cd $(m) && go vet ./... && go test ./... && cd $(CURDIR) &&) true
 	deno check ui/**/*.ts

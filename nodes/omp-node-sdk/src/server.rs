@@ -9,6 +9,8 @@
 //! Middleware-Stack, Tokio-Runtime-Kopplung nur für diesen Teil) wäre
 //! Overhead ohne Gegenwert (Minimal-Dependency-Regel, `docs/decisions.md`).
 
+use std::io::Read;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -165,9 +167,30 @@ pub fn spawn_tls(
     Ok((port, std::thread::spawn(move || accept_loop(server, store))))
 }
 
+/// Größte angenommene Anfrage (Audit 2026-10-23 H8): vorher las der Server jeden Body unbegrenzt in den Speicher.
+const MAX_BODY_BYTES: usize = 64 << 20;
+
+/// Höchstzahl gleichzeitig bearbeiteter Anfragen (Audit 2026-10-23 H8): vorher bediente EIN Thread alle nacheinander — ein
+/// langsamer oder hängender Client blockierte den ganzen Node-Server. Darüber hinaus: 503 statt unbegrenzt viele Threads.
+const MAX_IN_FLIGHT: usize = 64;
+
+static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+
 fn accept_loop(server: Server, store: Arc<dyn ParamStore>) {
     for request in server.incoming_requests() {
-        handle(request, &store);
+        if IN_FLIGHT.fetch_add(1, Ordering::SeqCst) >= MAX_IN_FLIGHT {
+            IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+            let _ = request.respond(Response::from_string("too many concurrent requests").with_status_code(503));
+            continue;
+        }
+        let store = Arc::clone(&store);
+        let spawned = std::thread::Builder::new().name("omp-http-req".into()).spawn(move || {
+            handle(request, &store);
+            IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+        });
+        if spawned.is_err() {
+            IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -175,8 +198,16 @@ fn handle(mut request: Request, store: &Arc<dyn ParamStore>) {
     let method = request.method().clone();
     let url = request.url().to_string();
 
+    if request.body_length().is_some_and(|n| n > MAX_BODY_BYTES) {
+        let _ = request.respond(Response::from_string("request body too large").with_status_code(413));
+        return;
+    }
     let mut body = Vec::new();
-    let _ = request.as_reader().read_to_end(&mut body);
+    let _ = std::io::Read::take(request.as_reader(), MAX_BODY_BYTES as u64 + 1).read_to_end(&mut body);
+    if body.len() > MAX_BODY_BYTES {
+        let _ = request.respond(Response::from_string("request body too large").with_status_code(413));
+        return;
+    }
 
     // Nachtrag 197: `Access-Control-Allow-Origin` fehlte für JEDE
     // Antwort dieses Servers komplett — genau der Bug, den der
@@ -495,5 +526,43 @@ mod tests {
             &store,
         ));
         assert_eq!(status, 400);
+    }
+
+    fn http_get(port: u16) -> String {
+        use std::io::{Read, Write};
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        c.write_all(b"GET /descriptor.json HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").unwrap();
+        let mut out = String::new();
+        let _ = c.read_to_string(&mut out);
+        out
+    }
+
+    // Audit 2026-10-23 H8: ein Client, der seinen Body nie fertig sendet, darf andere Anfragen nicht blockieren.
+    #[test]
+    fn slow_client_does_not_block_other_requests() {
+        use std::io::Write;
+        let (port, _h) = spawn("127.0.0.1:0", Arc::new(FakeStore { registry: None })).unwrap();
+        let mut slow = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        slow.write_all(b"POST /params/x HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\npartial").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let started = std::time::Instant::now();
+        let reply = http_get(port);
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(3), "wurde vom langsamen Client aufgehalten");
+        drop(slow);
+    }
+
+    #[test]
+    fn oversized_body_is_rejected_with_413() {
+        use std::io::{Read, Write};
+        let (port, _h) = spawn("127.0.0.1:0", Arc::new(FakeStore { registry: None })).unwrap();
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        let declared = MAX_BODY_BYTES + 1;
+        c.write_all(format!("POST /methods/x HTTP/1.1\r\nHost: x\r\nContent-Length: {declared}\r\nConnection: close\r\n\r\n").as_bytes()).unwrap();
+        let mut out = String::new();
+        let _ = c.read_to_string(&mut out);
+        assert!(out.starts_with("HTTP/1.1 413"), "{out}");
     }
 }

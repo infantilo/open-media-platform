@@ -11,6 +11,22 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # Audit 2026-10-23: ohne Datenbank übersprangen sich die DB-Tests (u. a. Anmeldung/Token, Hosts, Workflows) still. dbtest legt je
+    # Testpaket eine eigene Datenbank an, die Dienst-Datenbank selbst bleibt unberührt.
+    services:
+      postgres:
+        image: docker.io/library/postgres:16-alpine
+        env:
+          POSTGRES_USER: omp
+          POSTGRES_PASSWORD: omp
+          POSTGRES_DB: omp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U omp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v7
 
@@ -33,6 +49,8 @@ jobs:
       # lokalen Live-Verifikation vor jedem Commit (`make check`, s.
       # Historie in docs/decisions.md) statt Teil dieses Gates.
       - name: make check-ci
+        env:
+          OMP_POSTGRES_URL: postgres://omp:omp@localhost:5432/omp?sslmode=disable
         run: make check-ci
 
   # Schritt D2 (UMSETZUNG.md): AMWA NMOS Testing Tool gegen unsere

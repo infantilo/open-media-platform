@@ -133,6 +133,8 @@ type Request struct {
 	// Dateisystem). Unbekannte Schlüssel werden ignoriert und gemeldet (Response.Detail),
 	// ein ungültiger Wert eines deklarierten Schlüssels lässt den Start scheitern.
 	Options map[string]string `json:"options,omitempty"`
+	// CommandKey: Action "provision-key" (jobwire.ActionProvisionKey) — der Schlüssel für signierte Kommandos.
+	CommandKey string `json:"commandKey,omitempty"`
 	// Path/Kind: Action "check-path" — Pfadprüfung auf diesem Host (Antwort: Detail = JSON).
 	Path string `json:"path,omitempty"`
 	Kind string `json:"kind,omitempty"`

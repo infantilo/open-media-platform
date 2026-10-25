@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"strings"
 	"time"
@@ -37,4 +38,20 @@ func LimitRequests(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// requireMetricsToken schützt /metrics mit einem Bearer-Token, wenn eines konfiguriert ist (OMP_METRICS_TOKEN).
+func requireMetricsToken(token string, next http.HandlerFunc) http.HandlerFunc {
+	if token == "" {
+		return next
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		got, hasBearer := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !hasBearer || got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="metrics"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
 }

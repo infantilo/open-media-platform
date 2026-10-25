@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 )
@@ -244,5 +245,35 @@ func TestServiceTokenWithUserAccountNameIsRejected(t *testing.T) {
 	tok, _, _ := svc.IssueServiceToken(username)
 	if _, err := svc.Authenticate(ctx, tok); err == nil {
 		t.Fatal("ein Service-Token auf den Namen eines Nutzerkontos darf nicht gelten")
+	}
+}
+
+// Audit 2026-10-23 H10: alle Orchestrator-Instanzen eines Clusters müssen dasselbe Token-Secret benutzen.
+func TestLoadOrCreateSharedSecretSeedsFromFileAndIsSharedAcrossInstances(t *testing.T) {
+	database := testDB(t)
+	_, _ = database.Exec(`DELETE FROM app_secrets WHERE name = 'auth_jwt_secret'`)
+	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM app_secrets WHERE name = 'auth_jwt_secret'`) })
+	dir := t.TempDir()
+	fileA := dir + "/a-secret"
+	fileB := dir + "/b-secret" // ein zweiter Orchestrator mit eigener, anderer Datei
+	fromFile, err := LoadOrCreateSecret(fileA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := LoadOrCreateSharedSecret(database, fileA)
+	if err != nil || string(a) != string(fromFile) {
+		t.Fatalf("erste Instanz übernimmt ihre Datei (bestehende Tokens bleiben gültig): %v", err)
+	}
+	b, err := LoadOrCreateSharedSecret(database, fileB)
+	if err != nil || string(b) != string(a) {
+		t.Fatalf("zweite Instanz bekommt dasselbe Secret aus der Datenbank: %v", err)
+	}
+	if _, err := os.Stat(fileB); err == nil {
+		t.Error("die zweite Instanz braucht ihre Datei nicht anzulegen")
+	}
+	// ein von der ersten Instanz ausgestelltes Token gilt bei der zweiten
+	tok, _, _ := NewSigner(a).issue(Principal{UserID: "u", Username: "u"}, time.Now())
+	if _, err := NewSigner(b).verify(tok, time.Now()); err != nil {
+		t.Fatalf("Token instanzübergreifend: %v", err)
 	}
 }

@@ -48,6 +48,7 @@ import (
 	"github.com/infantilo/openmediaplatform/host-agent/internal/jobs"
 	"github.com/infantilo/openmediaplatform/host-agent/internal/state"
 	"github.com/infantilo/openmediaplatform/host-agent/internal/telemetry"
+	"github.com/infantilo/openmediaplatform/jobwire"
 	"github.com/infantilo/openmediaplatform/nodeoptions"
 )
 
@@ -235,12 +236,12 @@ func main() {
 			slog.Error("not registered yet and OMP_HOST_AGENT_BOOTSTRAP_TOKEN is unset — obtain a token via POST /api/v1/admin/hosts/bootstrap-tokens")
 			os.Exit(1)
 		}
-		hostID, err := register(orchestratorURL, token, label, hostname, ioPorts)
+		hostID, cmdKey, err := register(orchestratorURL, token, label, hostname, ioPorts)
 		if err != nil {
 			slog.Error("registration failed", "error", err)
 			os.Exit(1)
 		}
-		st = state.State{HostID: hostID, Label: label}
+		st = state.State{HostID: hostID, Label: label, CmdKey: cmdKey}
 		if err := state.Save(statePath, st); err != nil {
 			slog.Error("state save failed", "path", statePath, "error", err)
 			os.Exit(1)
@@ -310,10 +311,22 @@ func main() {
 		}
 	}
 	cmdSubject := fmt.Sprintf("omp.host.%s.cmd", st.HostID)
+	requireKey, _ := strconv.ParseBool(envOr("OMP_HOST_AGENT_REQUIRE_KEY", "false"))
+	gate := &commands.Gate{RequireKey: requireKey, Verifier: jobwire.NewVerifier(st.CmdKey), Persist: func(key string) error {
+		st.CmdKey = key
+		return state.Save(statePath, st)
+	}}
+	if st.CmdKey == "" {
+		slog.Warn("no command key yet — commands are accepted unsigned until the orchestrator provisions one")
+	}
 	cmdSub, err := nc.Subscribe(cmdSubject, func(msg *nats.Msg) {
 		req, err := commands.DecodeRequest(msg.Data)
 		if err != nil {
 			_ = msg.Respond(commands.EncodeResponse(commands.Response{OK: false, Error: "invalid request: " + err.Error()}))
+			return
+		}
+		if resp, stop := gate.Admit(msg.Subject, msg.Data, func(k string) string { return msg.Header.Get(k) }, req); stop {
+			_ = msg.Respond(commands.EncodeResponse(resp))
 			return
 		}
 		slog.Info("command received", "action", req.Action, "type", req.Type, "instance_id", req.InstanceID)
@@ -475,6 +488,8 @@ type registerRequest struct {
 
 type registerResponse struct {
 	HostID string `json:"hostId"`
+	// CommandKey: Schlüssel für signierte Kommandos (leer bei einem Orchestrator aus der Zeit vor der Signatur).
+	CommandKey string `json:"commandKey,omitempty"`
 }
 
 // loadIOPorts liest das I/O-Karten-Inventar dieses Hosts aus einer
@@ -506,36 +521,36 @@ func loadIOPorts(path string) ([]ioPort, error) {
 
 // register meldet den Host einmalig beim Orchestrator an (§18.3 Punkt
 // 3) — capabilities ist bewusst minimal (OS/Arch/CPU-Zahl).
-func register(orchestratorURL, token, label, hostname string, ioPorts []ioPort) (string, error) {
+func register(orchestratorURL, token, label, hostname string, ioPorts []ioPort) (hostID, cmdKey string, err error) {
 	capabilities, err := json.Marshal(map[string]any{
 		"os":     runtime.GOOS,
 		"arch":   runtime.GOARCH,
 		"numCPU": runtime.NumCPU(),
 	})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	body, err := json.Marshal(registerRequest{Token: token, Label: label, Hostname: hostname, Capabilities: capabilities, IOPorts: ioPorts})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	resp, err := http.Post(orchestratorURL+"/api/v1/hosts/register", "application/json", bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("register: request failed: %w", err)
+		return "", "", fmt.Errorf("register: request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("register: orchestrator returned %s", resp.Status)
+		return "", "", fmt.Errorf("register: orchestrator returned %s", resp.Status)
 	}
 	var parsed registerResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return "", fmt.Errorf("register: decode response: %w", err)
+		return "", "", fmt.Errorf("register: decode response: %w", err)
 	}
 	if parsed.HostID == "" {
-		return "", fmt.Errorf("register: orchestrator did not return a hostId")
+		return "", "", fmt.Errorf("register: orchestrator did not return a hostId")
 	}
-	return parsed.HostID, nil
+	return parsed.HostID, parsed.CommandKey, nil
 }

@@ -42,6 +42,7 @@ type handlerOptions struct {
 	nodeValues      NodeOptionValues
 	locations       LocationStore
 	maintenance     MaintenanceService
+	hostKeyRotator  func(hostID string) error
 	modules         *module.Registry
 	moduleHooks     *module.Hooks
 	moduleDeps      module.Deps

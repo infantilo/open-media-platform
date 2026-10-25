@@ -472,6 +472,8 @@ Rollback-Kopien und Verlauf, Standard `.updates/`),
 `OMP_UPDATE_ALLOW_UNSIGNED`, `OMP_SKIP_BUILD` (überspringt in
 `start-omp.sh`/`start-supervisor.sh`/`start-hosts.sh` den Quellcode-Build).
 
+**Signierte Host-Kommandos.** Der Orchestrator signiert jedes Kommando an einen Host-Agent (HMAC, Schlüssel je Host). Neue Hosts bekommen den Schlüssel bei der Registrierung, ältere erhalten ihn automatisch, sobald sie online sind; danach lehnt der Agent unsignierte, abgelaufene oder wiederholte Kommandos ab. `OMP_HOST_AGENT_REQUIRE_KEY=1` am Agent verweigert Kommandos schon vor der Schlüsselübergabe. Hat ein Agent einen falschen Schlüssel (Kommandos scheitern mit „unauthorized“), `cmdKey` aus seiner `state.json` entfernen und den Agent neu starten. Den Schlüssel eines Hosts wechseln: `POST /api/v1/admin/hosts/<id>/rotate-key` (Host muss online sein). Das Token-Secret für Anmeldungen liegt in der Datenbank (`app_secrets`) und wird beim ersten Start aus `OMP_AUTH_JWT_SECRET_FILE` übernommen — alle Orchestrator-Instanzen eines Clusters nutzen dasselbe. `OMP_METRICS_TOKEN` schützt `/metrics` mit einem Bearer-Token.
+
 **Erst-Administrator (Bootstrap-Modus).** Solange kein Nutzer existiert, ist
 die API offen, damit sich der erste Administrator anlegen lässt — aber nur
 für Anfragen vom Rechner selbst (Loopback, ohne Proxy-Kopfzeilen). Von einem

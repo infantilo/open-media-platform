@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -54,15 +55,45 @@ type loginResponse struct {
 // (Erfolg/Fehlschlag/Sperre) mit dem versuchten Nutzernamen — auch bei
 // einem nicht existierenden Nutzernamen, s. LoginLockout-Doku, sonst
 // wäre "wird nicht geloggt" selbst wieder ein Enumerations-Orakel.
-func handleLogin(authSvc AuthService, audit AuditLogger, lockout LoginRateLimiter) http.HandlerFunc {
+// loginLimits sind die drei Sperren des Logins (Audit 2026-10-23 M3): vorher zählte nur der Nutzername — wer ihn kannte, sperrte
+// den echten Nutzer von überall aus aus. Jetzt sperrt (1) Name + Adresse (5 Fehlversuche, trifft den Angreifer, nicht den
+// Nutzer an seiner Adresse), (2) die Adresse allein (viele Namen durchprobieren) und (3) der Name über alle Adressen mit
+// hoher Schwelle (verteiltes Durchprobieren). `lockout` ist (1); ip und name dürfen nil sein (Tests).
+type loginLimits struct{ ip, name LoginRateLimiter }
+
+// clientIP: Adresse des Aufrufers; hinter einem Reverse-Proxy auf demselben Rechner zählt der letzte X-Forwarded-For-Eintrag
+// (vom Proxy angehängt), sonst die Verbindungsadresse.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			if last := strings.TrimSpace(parts[len(parts)-1]); net.ParseIP(last) != nil {
+				return last
+			}
+		}
+	}
+	return host
+}
+
+func handleLogin(authSvc AuthService, audit AuditLogger, lockout LoginRateLimiter, extra ...loginLimits) http.HandlerFunc {
+	var lim loginLimits
+	if len(extra) > 0 {
+		lim = extra[0]
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req loginRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
+		ip := clientIP(r)
+		nameIP := req.Username + "|" + ip
 
-		if lockout.Locked(req.Username) {
+		if lockout.Locked(nameIP) || (lim.ip != nil && lim.ip.Locked(ip)) || (lim.name != nil && lim.name.Locked(req.Username)) {
 			audit.Log(req.Username, r.Method, r.URL.Path, "", http.StatusTooManyRequests)
 			http.Error(w, "too many failed login attempts, try again later", http.StatusTooManyRequests)
 			return
@@ -70,12 +101,21 @@ func handleLogin(authSvc AuthService, audit AuditLogger, lockout LoginRateLimite
 
 		token, exp, err := authSvc.Login(r.Context(), req.Username, req.Password)
 		if err != nil {
-			lockout.RecordFailure(req.Username)
+			lockout.RecordFailure(nameIP)
+			if lim.ip != nil {
+				lim.ip.RecordFailure(ip)
+			}
+			if lim.name != nil {
+				lim.name.RecordFailure(req.Username)
+			}
 			audit.Log(req.Username, r.Method, r.URL.Path, "", http.StatusUnauthorized)
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
 		}
-		lockout.RecordSuccess(req.Username)
+		lockout.RecordSuccess(nameIP)
+		if lim.name != nil {
+			lim.name.RecordSuccess(req.Username)
+		}
 		audit.Log(req.Username, r.Method, r.URL.Path, "", http.StatusOK)
 		writeJSON(w, http.StatusOK, loginResponse{Token: token, ExpiresAt: exp, Username: req.Username})
 	}

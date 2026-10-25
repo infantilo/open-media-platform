@@ -78,6 +78,12 @@
     "domain": "core"
   },
   {
+    "method": "POST",
+    "path": "/api/v1/admin/hosts/{id}/rotate-key",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
     "method": "GET",
     "path": "/api/v1/admin/node-versions",
     "auth": "verb:Admin",
@@ -2013,7 +2019,7 @@
   {
     "method": "GET",
     "path": "/metrics",
-    "auth": "custom:handleMetrics",
+    "auth": "custom:requireMetricsToken",
     "domain": "core"
   }
 ]

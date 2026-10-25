@@ -51,7 +51,7 @@ func TestHandleLoginSucceedsRecordsSuccessAndAudits200(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	if lockout.recordedSuccess != "alice" {
+	if lockout.recordedSuccess != "alice|192.0.2.1" {
 		t.Errorf("RecordSuccess called with %q, want alice", lockout.recordedSuccess)
 	}
 	if len(audit.logged) != 1 || audit.logged[0].Status != http.StatusOK || audit.logged[0].Username != "alice" {
@@ -71,7 +71,7 @@ func TestHandleLoginFailureRecordsFailureAndAudits401(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rec.Code)
 	}
-	if lockout.recordedFailure != "alice" {
+	if lockout.recordedFailure != "alice|192.0.2.1" {
 		t.Errorf("RecordFailure called with %q, want alice", lockout.recordedFailure)
 	}
 	if len(audit.logged) != 1 || audit.logged[0].Status != http.StatusUnauthorized {
@@ -462,5 +462,60 @@ func TestHandleListAuditLogIgnoresNegativeBeforeAndLimit(t *testing.T) {
 
 	if reader.lastBefore != 0 || reader.lastLimit != defaultAuditLogLimit {
 		t.Errorf("List() called with before=%d limit=%d, want defaults before=0 limit=%d", reader.lastBefore, reader.lastLimit, defaultAuditLogLimit)
+	}
+}
+
+// Audit 2026-10-23 M3: Ein Fremder, der den Namen kennt, darf den echten Nutzer nicht von dessen Adresse aus sperren.
+func TestLoginLockoutDoesNotLockOutUserFromOtherAddress(t *testing.T) {
+	authSvc := fakeAuthSvc{loginErr: auth.ErrInvalidCredentials}
+	audit := &fakeAuditSvc{}
+	limits := loginLimits{ip: auth.NewLoginLockoutN(30), name: auth.NewLoginLockoutN(50)}
+	lock := auth.NewLoginLockout()
+	attempt := func(addr, user string, svc fakeAuthSvc) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"`+user+`","password":"x"}`))
+		req.RemoteAddr = addr + ":4000"
+		rec := httptest.NewRecorder()
+		handleLogin(svc, audit, lock, limits)(rec, req)
+		return rec.Code
+	}
+	for i := 0; i < 6; i++ {
+		attempt("203.0.113.9", "alice", authSvc) // Angreifer
+	}
+	if c := attempt("203.0.113.9", "alice", authSvc); c != http.StatusTooManyRequests {
+		t.Fatalf("Angreifer-Adresse ist für alice gesperrt, bekam %d", c)
+	}
+	ok := fakeAuthSvc{loginToken: "tok", loginExpires: time.Unix(100, 0)}
+	if c := attempt("198.51.100.4", "alice", ok); c != http.StatusOK {
+		t.Fatalf("alice von ihrer eigenen Adresse darf sich anmelden, bekam %d", c)
+	}
+}
+
+func TestLoginLockoutPerAddressAcrossNames(t *testing.T) {
+	authSvc := fakeAuthSvc{loginErr: auth.ErrInvalidCredentials}
+	limits := loginLimits{ip: auth.NewLoginLockoutN(30), name: auth.NewLoginLockoutN(50)}
+	lock := auth.NewLoginLockout()
+	last := 0
+	for i := 0; i < 32; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"user`+strings.Repeat("x", i)+`","password":"x"}`))
+		req.RemoteAddr = "203.0.113.9:1"
+		rec := httptest.NewRecorder()
+		handleLogin(authSvc, &fakeAuditSvc{}, lock, limits)(rec, req)
+		last = rec.Code
+	}
+	if last != http.StatusTooManyRequests {
+		t.Fatalf("viele Namen von einer Adresse müssen gesperrt werden, letzter Status %d", last)
+	}
+}
+
+func TestClientIPUsesProxyHeaderOnlyBehindLocalProxy(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "127.0.0.1:5000"
+	r.Header.Set("X-Forwarded-For", "evil, 198.51.100.7")
+	if ip := clientIP(r); ip != "198.51.100.7" {
+		t.Errorf("letzter Eintrag vom lokalen Proxy: %q", ip)
+	}
+	r.RemoteAddr = "203.0.113.9:5000"
+	if ip := clientIP(r); ip != "203.0.113.9" {
+		t.Errorf("direkte Verbindung: Header wird ignoriert: %q", ip)
 	}
 }

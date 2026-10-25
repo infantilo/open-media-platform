@@ -32,6 +32,7 @@ const (
 // einem neuen Orakel ("dieser Nutzername kann gar nicht gesperrt
 // werden → existiert nicht").
 type LoginLockout struct {
+	max      int
 	mu       sync.Mutex
 	attempts map[string]*lockoutState
 	// now ist austauschbar (Standard time.Now), damit Tests 15-Minuten-
@@ -48,9 +49,15 @@ type lockoutState struct {
 }
 
 // NewLoginLockout erstellt einen leeren, prozesslokalen Lockout-Zustand.
-func NewLoginLockout() *LoginLockout {
-	return &LoginLockout{attempts: make(map[string]*lockoutState), now: time.Now}
+func NewLoginLockout() *LoginLockout { return NewLoginLockoutN(maxLoginFailures) }
+
+// NewLoginLockoutN wie NewLoginLockout mit eigener Schwelle (z. B. höher für „pro Adresse“ oder „pro Name über alle Adressen“).
+func NewLoginLockoutN(max int) *LoginLockout {
+	return &LoginLockout{max: max, attempts: make(map[string]*lockoutState), now: time.Now}
 }
+
+// maxTracked begrenzt den Speicher: Ein Angreifer mit beliebigen Namen soll die Tabelle nicht unbegrenzt füllen können.
+const maxTracked = 20000
 
 // Locked meldet, ob username aktuell gesperrt ist.
 func (l *LoginLockout) Locked(username string) bool {
@@ -75,11 +82,21 @@ func (l *LoginLockout) RecordFailure(username string) {
 	now := l.now()
 	s, ok := l.attempts[username]
 	if !ok || now.Sub(s.windowStart) > loginFailureWindow {
+		if len(l.attempts) >= maxTracked {
+			for k, v := range l.attempts {
+				if now.After(v.lockedUntil) && now.Sub(v.windowStart) > loginFailureWindow {
+					delete(l.attempts, k)
+				}
+			}
+			if len(l.attempts) >= maxTracked { // nur noch aktive Sperren/Fenster: nichts Neues aufnehmen
+				return
+			}
+		}
 		s = &lockoutState{windowStart: now}
 		l.attempts[username] = s
 	}
 	s.failures++
-	if s.failures >= maxLoginFailures {
+	if s.failures >= l.max {
 		s.lockedUntil = now.Add(loginLockoutDuration)
 	}
 }

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -83,5 +84,26 @@ func TestLoginLockoutIsPerUsername(t *testing.T) {
 	}
 	if l.Locked("bob") {
 		t.Fatalf("locking alice must not lock bob")
+	}
+}
+
+func TestLoginLockoutCustomThresholdAndBoundedMemory(t *testing.T) {
+	l := NewLoginLockoutN(30)
+	for i := 0; i < 29; i++ {
+		l.RecordFailure("ip")
+	}
+	if l.Locked("ip") {
+		t.Fatal("erst bei der Schwelle")
+	}
+	l.RecordFailure("ip")
+	if !l.Locked("ip") {
+		t.Fatal("bei 30 gesperrt")
+	}
+	b := NewLoginLockout()
+	for i := 0; i < maxTracked+500; i++ {
+		b.RecordFailure(fmt.Sprintf("n%d", i))
+	}
+	if len(b.attempts) > maxTracked {
+		t.Fatalf("Tabelle begrenzt: %d", len(b.attempts))
 	}
 }

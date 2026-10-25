@@ -213,6 +213,9 @@ type Config struct {
 	// entfernte nur mit BootstrapOpen (OMP_BOOTSTRAP_OPEN=1) oder Kopfzeile X-Bootstrap-Token = BootstrapToken.
 	BootstrapOpen  bool
 	BootstrapToken string
+	// MetricsToken (Audit 2026-10-23, niedrig): gesetzt = /metrics verlangt „Authorization: Bearer <Token>“ (Prometheus
+	// `authorization: credentials`). Leer = offen wie bisher (Netzwerk-Isolation).
+	MetricsToken string
 	// ClusterNodeID/ClusterRaftAddr/ClusterDataDir/ClusterPeers steuern
 	// die Raft-Konsens-Schicht zwischen Orchestrator-Instanzen
 	// (ARCHITECTURE.md §19.3, UMSETZUNG.md D12) — läuft immer (kein
@@ -339,6 +342,7 @@ func Load() Config {
 			return v
 		}(),
 		BootstrapToken: getEnv("OMP_BOOTSTRAP_TOKEN", ""),
+		MetricsToken:   getEnv("OMP_METRICS_TOKEN", ""),
 		UpdateAllowUnsigned: func() bool {
 			v, _ := strconv.ParseBool(getEnv("OMP_UPDATE_ALLOW_UNSIGNED", "false"))
 			return v
