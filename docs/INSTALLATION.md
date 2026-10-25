@@ -179,7 +179,8 @@ im Netz.
 - `--systemd` legt den Dienst `omp` an (Vorlage `deploy/systemd/omp.service`, Platzhalter werden ersetzt) und
   aktiviert `loginctl enable-linger` für rootless Podman. Beim Kaltstart ist Postgres anfangs noch nicht bereit;
   der Dienst wiederholt den Start selbst. Er baut nichts neu — nach Codeänderungen einmal `make start`.
-- Der Host-Agent braucht beim **ersten** Start ein Bootstrap-Token (UI → Hosts → Host hinzufügen), danach nicht mehr.
+- Der Host-Agent braucht beim **ersten** Start ein Bootstrap-Token (UI → Hosts → Host hinzufügen), danach nicht mehr. Mit der Registrierung erhält er einen eigenen Schlüssel für signierte Kommandos (`state.json`, nicht löschen — sonst Host neu registrieren oder `cmdKey` entfernen, siehe Handbuch Abschnitt 8).
+- **Erst-Administrator von einem anderen Rechner:** Solange kein Nutzer existiert, ist die API nur für den Rechner selbst offen. Von außen entweder per SSH-Tunnel auf `localhost:8000` arbeiten oder vorübergehend `OMP_BOOTSTRAP_OPEN=1` (bzw. `OMP_BOOTSTRAP_TOKEN` + Kopfzeile `X-Bootstrap-Token`) setzen.
   Auf dem Host vorher `./install.sh --media`, sonst gibt es keine Medien-Nodes.
 - Instanzen (Source, Viewer …), die vor einem Neustart liefen, werden nach dem Start automatisch wiederhergestellt.
 - Zweiter Orchestrator (Raft-Cluster, 2 Knoten = kein Quorum bei Ausfall!): Vorlagen `deploy/systemd/omp-orchestrator-peer.service`

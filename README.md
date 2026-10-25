@@ -591,10 +591,29 @@ node has to satisfy.
   configurable per workflow role between purely advisory, a
   confirmation window with automatic execution on expiry, or immediate
   automatic execution) plus a manual guided move in the flow editor for
-  standalone nodes and workflow roles (see above).
+  standalone nodes and workflow roles (see above). Placement is
+  **network-aware**: roles joined by direct MXL connections form a
+  group that is started, evacuated and moved together on one host;
+  only if no host can carry the group under the load thresholds is it
+  split — along the cut with the fewest connections crossing hosts
+  (the traffic that would have to run over RDMA/fabrics gateways) — and
+  never moved onto an overloaded host. No machine learning involved:
+  the search is exact and deterministic, and every decision comes with
+  a plain-language reason.
 - Login-based user/role accounts (local, no external directory server
   required) gate who can wire the graph, launch instances, or
   administer hosts; every write access is captured in an audit log.
+  Login attempts are rate-limited per name+address, per address and
+  per name; tokens die with their account; the token secret lives in
+  the database so every orchestrator of a cluster accepts the same
+  sessions; on a fresh install the open bootstrap mode only answers
+  the machine itself unless explicitly opened.
+- Commands to host agents are **signed** (HMAC per host, replay- and
+  age-checked): an agent with a key refuses unsigned, forged or
+  replayed start/stop/update/job commands; keys are delivered at
+  registration (or automatically to older agents) and can be rotated
+  with one API call. ffmpeg job arguments are checked against `..`
+  traversal and allowed roots on hosts and locally.
   Multi-organization access scoping sits on top: each user belongs to
   one organization, and workflows/process definitions/assets/
   collections carry an owner organization — a user only sees and can
@@ -654,8 +673,18 @@ Being upfront about the current edges, not just the highlights:
   flow's own ID as the group name, so their video and audio never share
   a group. Inside OMP, the X/Y panel's "all ports" button routes a whole
   node's video and audio together (by shared tags, otherwise 1:1).
-- **No independent security audit.** Auth, mTLS, and audit logging
-  exist and are exercised by the test suite. Automated scanning runs on
+- **No independent security audit.** Auth, mTLS, signed host commands
+  and audit logging exist and are exercised by the test suite. An
+  *internal* review on 2026-10-23 (`AUDIT_2026_10_23.md`) found the
+  platform to be a good proof of concept on an isolated lab network,
+  **not production-ready**; several of its findings are fixed (path
+  traversal in ffmpeg jobs, tokens of deleted users, open bootstrap
+  mode, HTTP limits, host-command signing, login lockout, SSRF in the
+  stream proxy), and the file lists what is still open — notably the
+  node HTTP APIs have no authentication yet, the development NATS is
+  unauthenticated and unencrypted unless TLS is switched on, and the
+  production profile (three failure domains, quorum witness) is not
+  built. Automated scanning runs on
   GitHub (CodeQL for Go and TypeScript, `govulncheck`, `cargo audit`,
   Dependabot; Secret Scanning with push protection is a repository
   setting), but there has been no external penetration test or formal
@@ -700,7 +729,10 @@ automatic host zones once more than one host is registered (live CPU/
 RAM per zone, cross-host MXL connections flagged automatically), a
 guided move for standalone node tiles between hosts, a scheduler for
 time-driven workflow start/stop, a placement engine (overload alarm +
-target-host suggestion, configurable advisory/confirm/automatic), a GUI
+target-host suggestion, configurable advisory/confirm/automatic) that
+places and evacuates MXL-connected roles as one group and, when it must
+split one, cuts it where the fewest connections cross hosts, a host
+topology graph that routes links around intermediate hosts, a GUI
 import path for third-party Podman-container microservices.
 
 **Standards conformance** — see the table near the top of this file

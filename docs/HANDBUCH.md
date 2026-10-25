@@ -165,8 +165,10 @@ den CA-Container wieder (separat von `make down`).
 
 Solange kein Nutzer angelegt ist, läuft die GUI **ohne** Anmeldung
 (Auth ist deaktiviert, solange `UserCount()==0`,
-`ARCHITECTURE.md` §12) — praktisch relevant ist das nur auf einer
-komplett frischen Datenbank; auf dieser Dev-Maschine existiert bereits
+`ARCHITECTURE.md` §12) — **aber nur für Anfragen vom Rechner selbst**; von
+einem anderen Rechner aus braucht die Erstanlage `OMP_BOOTSTRAP_OPEN=1`
+oder `OMP_BOOTSTRAP_TOKEN` (Abschnitt 5b, „Erst-Administrator“). Praktisch
+relevant ist das nur auf einer komplett frischen Datenbank; auf dieser Dev-Maschine existiert bereits
 ein Nutzer (s. u.). Auf einer **Neuinstallation** existiert dagegen noch keiner: sofort in Administration einen Admin anlegen.
 
 **Aktueller Dev-Standardnutzer** (Bootstrap-Admin mit Wildcard-
@@ -185,6 +187,20 @@ zurücksetzen, Rollenbindungen (Nutzer × Node × Recht — `view` <
 löschen, Audit-Log einsehen. Der letzte verbleibende Admin kann sich
 dort nicht selbst löschen oder entrechten (Selbstschutz gegen
 versehentliches Aussperren).
+
+**Login-Sperre.** Fehlversuche werden dreifach gezählt: je **Name und
+Adresse** (5 in 15 Minuten, dann 15 Minuten gesperrt), je **Adresse** (30,
+gegen das Durchprobieren vieler Namen) und je **Name über alle Adressen**
+(50, gegen verteiltes Durchprobieren). Wer einen Nutzernamen kennt, kann den
+echten Nutzer an dessen eigener Adresse also nicht aussperren. Hinter einem
+Reverse-Proxy auf demselben Rechner zählt als Adresse der letzte
+`X-Forwarded-For`-Eintrag. Die Zähler liegen im Speicher (ein Neustart setzt
+sie zurück). Meldet die Anmeldung „too many failed login attempts“, 15
+Minuten warten oder von einer anderen Adresse anmelden.
+
+**Tokens.** Löscht man einen Nutzer, wird sein Anmelde-Token sofort
+ungültig (auch wenn später ein Nutzer gleichen Namens angelegt wird);
+„Abmelden überall“ und Passwortwechsel widerrufen ebenfalls alle Tokens.
 
 ### 3.1 Rechte-Modell: vier Begriffe, vier verschiedene Fragen
 
@@ -227,9 +243,13 @@ podman exec -it omp-postgres psql -U omp -d omp \
 
 **JWT-Secret in Produktions-Deployments (S4, docs/REVIEW-2026-07-17-
 SKALIERUNG-24-7.md):** ohne gesetztes `OMP_AUTH_JWT_SECRET`
-generiert/persistiert der Orchestrator beim ersten Start selbst ein
-Secret unter `OMP_AUTH_JWT_SECRET_FILE` (Default
-`../data/auth-jwt-secret`, s. `internal/auth.LoadOrCreateSecret`) — für
+generiert der Orchestrator beim ersten Start selbst ein Secret
+(Datei `OMP_AUTH_JWT_SECRET_FILE`, Default `../data/auth-jwt-secret`) und legt es
+**in der Datenbank** ab (Tabelle `app_secrets`,
+`internal/auth.LoadOrCreateSharedSecret`): Ein bestehendes Datei-Secret wird
+dabei übernommen (bestehende Anmeldungen bleiben gültig), und **alle
+Orchestrator-Instanzen eines Clusters benutzen dasselbe Secret** — ein Token
+gilt also auch nach einem Leader-Wechsel. Für
 den lokalen Dev-Betrieb bequem (kein manueller Schritt nötig), für ein
 echtes Deployment aber **zwingend** `OMP_AUTH_JWT_SECRET_FILE` auf
 einen dauerhaften, gesicherten Pfad setzen (oder gleich
@@ -267,6 +287,12 @@ Token, liefert ein fertiges Provisionierungs-Skript (Shell-Einzeiler
 bzw. EC2-User-Data, je nach gewählter Zielumgebung) und erkennt die
 Anmeldung des neuen `omp-host-agent` live. Details mit Screenshot:
 [`docs/BENUTZERHANDBUCH.md`](BENUTZERHANDBUCH.md) §8.1.
+
+**Sicherer Kommandokanal.** Bei der Registrierung bekommt der Host einen
+eigenen Schlüssel (in seiner `state.json`, Rechte 0600); alle Kommandos des
+Orchestrators an diesen Host sind damit signiert (Abschnitt 5b). Eine
+**Erstinstallation braucht dafür nichts zu tun**; der Wizard-Ablauf bleibt
+gleich.
 
 Kein vorgefertigtes Installations-Artefakt für `omp-host-agent`
 existiert bisher (kein curl-Installer) — das erzeugte Skript geht davon
@@ -550,10 +576,11 @@ ob/wie er `X-Forwarded-*`-Header setzt.
 (Goroutinen, Heap, GC), Registry (Nodes online/gesamt, Poll-Dauer),
 SSE (Clients, verlorene Events), Launcher (Instanzen, automatische
 Neustarts) und HTTP-Requests nach Status-Klasse. Handgeschrieben, kein
-`prometheus/client_golang` (Minimal-Dependency-Regel) — unauthentifiziert
-wie `/healthz` (ein echter Scraper trägt üblicherweise kein
-Bearer-Token; Netzwerk-Isolation ist hier die erwartete Absicherung,
-nicht Anwendungs-Auth).
+`prometheus/client_golang` (Minimal-Dependency-Regel) — standardmäßig
+unauthentifiziert wie `/healthz` (Netzwerk-Isolation ist hier die erwartete
+Absicherung). Mit `OMP_METRICS_TOKEN=<geheim>` verlangt `/metrics` dagegen
+`Authorization: Bearer <geheim>` (in Prometheus: `authorization:
+credentials: <geheim>`).
 
 ```sh
 curl http://localhost:8000/metrics
@@ -594,6 +621,22 @@ Podman, Images, Ports und Rechte und nennt den Befehl zur Behebung.
 Abschnitt 3 oben (Standardnutzer `admin`/`adminpass123`, bzw.
 Passwort-Reset-Verfahren, falls dieser Nutzer inzwischen geändert oder
 gelöscht wurde).
+
+**Befehle an einen Host scheitern mit „unauthorized: …“** — der Host-Agent
+prüft die Signatur der Kommandos (Abschnitt 5b). „command is not signed“:
+das Kommando stammt nicht vom Orchestrator (oder der Orchestrator hat für
+diesen Host noch keinen Schlüssel geliefert — er tut das automatisch, sobald
+der Host online ist, spätestens nach etwa 20 Sekunden). „signature invalid“:
+Orchestrator und Agent haben verschiedene Schlüssel (z. B. weil die
+Datenbank neu aufgesetzt wurde). Abhilfe: im Agent `cmdKey` aus seiner
+`state.json` entfernen, den Agent neu starten — der Orchestrator liefert
+den Schlüssel neu. Planmäßig wechseln: `POST
+/api/v1/admin/hosts/<id>/rotate-key`.
+
+**Erstanlage des Administrators von einem anderen Rechner scheitert (401)** —
+auf einer frischen Installation ist die API nur lokal offen. Entweder per
+`localhost`/SSH-Tunnel arbeiten oder `OMP_BOOTSTRAP_OPEN=1` setzen (nach der
+Erstanlage wieder entfernen), siehe Abschnitt 5b.
 
 **„Auf Port 8000 antwortet bereits ein Prozess, der nicht über
 start-omp.sh/PID-Datei bekannt ist"** — ein verwaister Prozess (z. B. aus

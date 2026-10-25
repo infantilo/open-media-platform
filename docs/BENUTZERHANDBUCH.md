@@ -26,7 +26,13 @@ das Dev-Passwort — nicht für den Produktivbetrieb geeignet).
 
 Nach erfolgreicher Anmeldung bleibt die Sitzung angemeldet (Token im
 Browser gespeichert), bis auf „Abmelden" geklickt wird oder das Token
-abläuft.
+abläuft. Wird der Nutzer gelöscht oder sein Passwort geändert, endet die
+Sitzung sofort.
+
+**Zu viele Fehlversuche:** Nach 5 falschen Anmeldungen mit demselben Namen von
+derselben Adresse aus (und bei sehr vielen Fehlversuchen einer Adresse) kommt
+„too many failed login attempts“; nach etwa 15 Minuten geht es wieder. Von
+einer anderen Adresse aus ist der Nutzer dadurch nicht gesperrt.
 
 ### 1.1 Sprache (Deutsch/English)
 
@@ -1251,6 +1257,8 @@ zugewiesen, erscheint zusätzlich deren Playlist-Oberfläche als eigene
 Kachel.
 
 
+**Sicherer Kommandokanal.** Der Orchestrator signiert jedes Kommando an einen Host (Start, Stopp, Update, ffmpeg-Auftrag); der Host führt nur Kommandos mit gültiger Signatur aus. Den Schlüssel bekommt der Host bei der Registrierung, ältere Hosts erhalten ihn automatisch, sobald sie online sind. Für den Betrieb heißt das: nichts einrichten — und nach einem neu aufgesetzten Orchestrator-Datenbestand notfalls `cmdKey` in der `state.json` des Hosts entfernen und den Agent neu starten (Handbuch, Abschnitt 8 „Befehle an einen Host scheitern“). Ein Administrator kann den Schlüssel eines Hosts wechseln (`POST /api/v1/admin/hosts/<id>/rotate-key`).
+
 ### 8.2 ffmpeg-Jobs auf einem Host erlauben (`tools.json`)
 
 Ein Host führt ffmpeg-/ffprobe-Jobs der Plattform nur aus, wenn **sein Betreiber es am Host erlaubt** — der Orchestrator kann das nicht von außen einschalten. Dazu legt man neben dem Katalog des Host-Agents (`catalog.json`) eine Datei `tools.json` an (Vorlage: `deploy/tools.example.json`; anderer Ort über `OMP_HOST_AGENT_TOOLS`):
@@ -1269,7 +1277,7 @@ Nach dem Neustart des Host-Agents meldet er Version, Encoder und Hardware-Beschl
 
 ### 8.3 Topologie und Verlauf (grafische Ansicht der Hosts)
 
-Im Reiter **Hosts** zeigt oberhalb der Tabelle ein Diagramm die **Topologie**: jeder Host ist ein Kasten mit Statuspunkt (grün online, gelb Wartung, rot offline), Auslastungsbalken (CPU, RAM, GPU, Netz — nur gemessene Größen), der Zahl laufender ffmpeg-Jobs und seinen Nodes. Der senkrechte Strich im CPU-Balken ist die **Live-Reserve-Grenze**: darüber starten keine Jobs mehr. Pfeile zeigen die **Verbindungen zwischen Hosts** (Zahl = Anzahl der Verbindungen, Dicke wächst mit ihr, gegenläufige Verbindungen laufen getrennt); Verbindungen innerhalb eines Hosts stehen als Zahl im Kasten. Nodes ohne Instanz (z. B. eine Handy-Kamera, die sich selbst anmeldet) liegen im Kasten „Ohne Instanz (extern)“. Ein Klick auf einen Kasten wählt ihn für das Verlaufsdiagramm darunter.
+Im Reiter **Hosts** zeigt oberhalb der Tabelle ein Diagramm die **Topologie**: jeder Host ist ein Kasten mit Statuspunkt (grün online, gelb Wartung, rot offline), Auslastungsbalken (CPU, RAM, GPU, Netz — nur gemessene Größen), der Zahl laufender ffmpeg-Jobs und seinen Nodes. Der senkrechte Strich im CPU-Balken ist die **Live-Reserve-Grenze**: darüber starten keine Jobs mehr. Pfeile zeigen die **Verbindungen zwischen Hosts** (Zahl = Anzahl der Verbindungen, Dicke wächst mit ihr, gegenläufige Verbindungen laufen getrennt). Liegt ein anderer Kasten zwischen zwei Hosts, läuft die Linie **um ihn herum** (rechtwinklig durch die Gassen oder außen um das Raster) statt durch ihn hindurch; Verbindungen innerhalb eines Hosts stehen als Zahl im Kasten. Nodes ohne Instanz (z. B. eine Handy-Kamera, die sich selbst anmeldet) liegen im Kasten „Ohne Instanz (extern)“. Ein Klick auf einen Kasten wählt ihn für das Verlaufsdiagramm darunter.
 
 Das **Verlaufsdiagramm** zeigt für den gewählten Host **CPU, RAM, den CPU-Anteil der Live-Nodes (ohne ffmpeg-Jobs), GPU und Netz** über 1 h, 6 h, 24 h, 7 Tage oder 30 Tage (Linie = Mittelwert, Band = bis zur Spitze, Mausover zeigt die Werte). Bei CPU ist die Job-Grenze eingezeichnet. Die Rohwerte der letzten Stunde und die Minutenwerte der letzten 24 Stunden liegen im Speicher des Orchestrators; **Stundenwerte werden 30 Tage lang in der Datenbank gehalten** und überstehen Neustarts. Größen, die ein Host nicht misst (GPU ohne `OMP_HOST_AGENT_GPU_INDEX`, Netz ohne bekannte Link-Geschwindigkeit), erscheinen als „nicht gemessen“, nicht als flache Linie. Für langfristige Auswertung außerhalb der Plattform steht weiterhin `/metrics` (Prometheus) bereit.
 
@@ -1948,6 +1956,8 @@ Alle ffmpeg-/ffprobe-Läufe der Plattform — der Workflow-Schritt **Script**, d
 **Live-Reserve automatisch kalibrieren.** Die feste Reserve (Standard 30/25/30/25 %) ist nur ein Startwert. Die Plattform misst je Host, was die **Live-Nodes** tatsächlich brauchen — CPU-Kerne, Arbeitsspeicher und GPU der gestarteten Instanzen, **ohne** die Last der ffmpeg-Jobs selbst (sonst schaukelte sich die Reserve an den Jobs hoch). Die Messwerte stehen in Stundenwerten 30 Tage in der Datenbank, die Kalibrierung betrachtet standardmäßig 7 Tage. Daraus entsteht je Host ein Vorschlag: **Bedarf = das Größere aus dem 95-%-Wert und 75 % der Spitze, plus Sicherheitsabstand** (Standard 10 Punkte), begrenzt auf 10–60 %. Die Karte **„Live-Reserve und Kalibrierung“** zeigt je Host jetzt / typisch (P95) / Spitze, den Vorschlag und die tatsächlich geltende Reserve samt Herkunft; ein Klick auf die Zeile zeigt die **typische Last je Node-Typ auf diesem Host** (CPU Ø/P95/max, RAM), damit man abschätzen kann, was ein weiterer Node braucht. Zwei Betriebsarten in den Einstellungen: **manuell** (Standard) zeigt nur Vorschläge — „Vorschlag übernehmen“ macht ihn zur festen Vorgabe des Hosts, „Vorgabe entfernen“ nimmt sie zurück; **automatisch** verwendet den Vorschlag selbst: Steigt der Bedarf, steigt die Reserve sofort, sinkt er, geht sie höchstens um 1 Punkt je 5 Minuten zurück. Reihenfolge der Quellen: feste Vorgabe des Hosts → automatischer Wert (erst nach mindestens 2 h Messdauer) → Wert aus den Einstellungen. Netz wird nicht kalibriert (die Karte trägt auch den Verkehr der Jobs).
 
 **Wenn ein Host ausfällt**, läuft der Job auf einem anderen Host neu (bis zur eingestellten Zahl von Versuchen); Ausgabedateien entstehen als `<name>.part.<ext>` und werden erst nach Erfolg umbenannt, eine halbe Datei bleibt nie liegen. Ein Programmfehler (Exit-Code ≠ 0) ist ein Ergebnis und wird nicht wiederholt; ein Zeitlimit ebenfalls nicht. Wird der Orchestrator neu gestartet, gelten laufende Jobs als unterbrochen (Verlauf bleibt sichtbar); die Aufrufer wiederholen über ihre eigene Logik.
+
+**Pfadprüfung.** Argumente mit `..` (auch eingebettet, z. B. `movie=../x.mp4`) und Nullzeichen werden immer abgelehnt — auf Hosts und lokal; ein abgelehnter Auftrag scheitert sofort ohne Wiederholung. Auf einem Host begrenzt `jobRoots` der `tools.json` die absoluten Pfade; für Aufträge **am Orchestrator-Rechner selbst** lässt sich dasselbe mit `local.roots` in den Job-Einstellungen (`ffmpeg.config`) einschalten (leer = keine Einschränkung außer dem `..`-Verbot).
 
 **Medien auf anderen Hosts (Pfadzuordnung).** Ein Job auf einem anderen Host braucht Zugriff auf dieselben Dateien: gemeinsamer Speicher (NFS/SMB/Isilon …), der dort eingehängt ist. Tragen Sie unter *Pfadzuordnung* ein, wie der Pfad am Orchestrator (z. B. `/data/media`) auf dem Host heißt (z. B. `/mnt/media`). Fehlt der Zugriff, ist der Host für diesen Job „nicht geeignet“ (steht unter „Warum dort?“). Dateien werden nicht kopiert.
 
