@@ -531,6 +531,40 @@ liefert gültiges JSON, und ein Import über die GUI (Administration-Tab,
 durch.
 ```
 
+### Fertige Skill-Datei für KI-Werkzeuge
+
+Der Arbeitsablauf dieses Abschnitts liegt als wiederverwendbare Skill-Datei
+im Repo: [`skills/omp-node-builder/SKILL.md`](../skills/omp-node-builder/SKILL.md)
+(mit `references/node-contract.md` und `references/diagnostics.md`). Sie
+folgt dem SKILL.md-Format (Frontmatter `name`/`description`, Ordnername =
+Name) und lässt sich in Claude Code (`.claude/skills/`) oder auf einem
+Skill-Marktplatz wie agensi.io verwenden. Der Ablauf für die KI: Spezifikation
+lesen → Auftrag mit den sieben Punkten oben klären → Referenz-Node nachbauen →
+Diagnosefähigkeit einbauen → mit `make contract NODE_URL=…` abnehmen.
+
+### Diagnosefähigkeit für Node-Autoren (Kapitel 72)
+
+Damit Support und Laien einem Node ansehen können, warum er nichts liefert,
+soll jeder Medien-Node (die KI bitte ausdrücklich darum bitten):
+
+- **Ehrliches `media_ready`:** `MediaReadySource::Probe` (messbar),
+  `Unknown` oder `NotApplicable` — nie pauschal „bereit“.
+- **Bildrate melden:** `handle.register_rate_kpi("video_fps", zähler)` mit einem
+  monotonen `Arc<AtomicU64>`; erscheint im Health-Tab und im Trendverlauf.
+- **Pipeline-Schnappschuss:** `omp_node_sdk::diag::register("main",
+  Arc::new(move || omp_mediaio::diag::snapshot(&pipeline)))` (Feature `mxl`
+  in `omp-mediaio`), abrufbar unter `GET /diag/pipelines`.
+- **Fehlercodes:** Pipeline-Fehler mit `omp_node_sdk::errcode::tag(&msg)` im
+  `Event::Error`-Zweig kennzeichnen; die Codes und ihre Lösungen stehen in
+  `docs/FEHLERCODES.md`.
+- **BCP-008-Monitore** (`omp_node_sdk::bcp008`) für Link-/Sync-/Standardzustand.
+- **Prüfen:** am Node-Kachel die Diagnose (🩺) öffnen; der Node-Zustand muss
+  dort ohne Rätselraten lesbar sein.
+
+Beispiel-Zusatz für den Prompt: „Baue die Diagnosefähigkeit nach
+`skills/omp-node-builder/references/diagnostics.md` ein und zeige mir in der
+Node-Diagnose, dass Bildrate und Pipeline-Zustand erscheinen.“
+
 **Wichtig, unabhängig vom Weg:** der Contract-Check (`make contract`
 bzw. der automatische Admission-Check beim GUI-Import) ist die
 tatsächliche Abnahme, nicht die Selbsteinschätzung der KI — beide
