@@ -554,8 +554,9 @@ soll jeder Medien-Node (die KI bitte ausdrücklich darum bitten):
 - **Pipeline-Schnappschuss:** `omp_node_sdk::diag::register("main",
   Arc::new(move || omp_mediaio::diag::snapshot(&pipeline)))` (Feature `mxl`
   in `omp-mediaio`), abrufbar unter `GET /diag/pipelines`.
-- **Fehlercodes:** Pipeline-Fehler mit `omp_node_sdk::errcode::tag(&msg)` im
-  `Event::Error`-Zweig kennzeichnen; die Codes und ihre Lösungen stehen in
+- **Fehlercodes:** Pipeline-Fehler mit `omp_node_sdk::errcode::tag(&msg)`
+  kennzeichnen, dort wo der Node Pipeline-Fehler meldet (Beispiel:
+  `nodes/omp-source/src/pipeline.rs`); die Codes und ihre Lösungen stehen in
   `docs/FEHLERCODES.md`.
 - **BCP-008-Monitore** (`omp_node_sdk::bcp008`) für Link-/Sync-/Standardzustand.
 - **Prüfen:** am Node-Kachel die Diagnose (🩺) öffnen; der Node-Zustand muss
