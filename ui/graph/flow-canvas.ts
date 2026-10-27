@@ -68,6 +68,8 @@ import { coreIO, xyPanelAdapter } from "../shell/streamdeck/adapters/xy-panel.ts
 import { STANDARD_FORMATS, uniqueRoleName } from "./roles.ts";
 import { isAnchorRole, renameRole } from "./role-designer-logic.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
+import { openStartDialog } from "./start-dialog.ts";
+import type { StartBody } from "./start-dialog-logic.ts";
 import { openPortTagEditor } from "./port-tag-editor.ts";
 import {
   bcp008ParamNames,
@@ -5733,113 +5735,38 @@ export class FlowCanvas extends HTMLElement {
       card.className = "omp-card-compact";
       card.style.cssText = "margin-bottom:var(--omp-space-2);";
 
+      // Nutzerwunsch 2026-10-27: der Katalogname war zugleich der Start-Knopf — unübersichtlich. Jetzt steht der Name als Titel der Karte, daneben ein
+      // eigener Knopf; Name, Zielhost, I/O-Port und die Einstellungen des Node-Typs stellt der Startdialog (ui/graph/start-dialog.ts) vor dem Start ein.
+      const runningCount = instances.filter((i) => i.type === entry.type && (i.version || "") === (entry.version || "")).length;
       const row = document.createElement("div");
-      row.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;";
-
+      row.style.cssText = "display:flex;align-items:center;gap:8px;";
+      const titleEl = document.createElement("div");
+      titleEl.style.cssText = "flex:1;min-width:0;font-weight:600;overflow-wrap:anywhere;";
+      titleEl.textContent = entry.label;
+      if (entry.version) {
+        const v = document.createElement("span");
+        v.textContent = ` (${entry.version})`;
+        v.style.cssText = "font-weight:400;color:var(--omp-text-dim);";
+        titleEl.appendChild(v);
+      }
+      titleEl.title = [entry.label, entry.description, entry.expectedResources].filter((p): p is string => !!p).join(" — ");
+      row.appendChild(titleEl);
+      if (runningCount > 0) {
+        const badge = document.createElement("span");
+        badge.textContent = tt("flow.sd.running", { p0: runningCount });
+        badge.style.cssText = "font-size:var(--omp-font-size-xs);color:var(--omp-preset);white-space:nowrap;";
+        row.appendChild(badge);
+      }
       const btn = document.createElement("button");
-      // version (§17 Teil 5): mehrere importierte Versionen desselben
-      // Typs erscheinen als getrennte Katalog-Einträge/Karten — ohne
-      // die Version im Label wären zwei Karten mit identischem
-      // "+ Label" ununterscheidbar.
-      btn.textContent = entry.version ? `+ ${entry.label} (${entry.version})` : `+ ${entry.label}`;
-      // Beschreibung/Ressourcen-Schätzung stehen sichtbar als
-      // Untertitel (s. u.), zusätzlich hier im Tooltip für den
-      // schnellen Hover-Fall.
-      const tooltipParts = [`${entry.label} starten`, entry.description, entry.expectedResources]
-        .filter((p): p is string => !!p);
-      btn.title = tooltipParts.join(" — ");
-      btn.style.cssText = "flex:1;text-align:left;justify-content:flex-start;";
-
-      // Host-Auswahl nur anzeigen, wenn es überhaupt entfernte Hosts
-      // gibt — im (heute üblichen) Fall ohne Host-Agents bleibt die
-      // Palette optisch unverändert gegenüber vor D6 Teil 2.
-      let hostSelect: HTMLSelectElement | null = null;
-      if (hosts.length > 0) {
-        hostSelect = document.createElement("select");
-        hostSelect.title = tt("flow.ada9a7");
-        hostSelect.style.cssText = "font-size:var(--omp-font-size-xs);max-width:90px;padding:2px 4px;";
-        const localOpt = document.createElement("option");
-        localOpt.value = "";
-        localOpt.textContent = "(lokal)";
-        hostSelect.appendChild(localOpt);
-        for (const host of hosts) {
-          const opt = document.createElement("option");
-          opt.value = host.id;
-          // Nutzerauftrag 2026-09-21: der Host-Status muss auch hier
-          // direkt sichtbar sein, nicht erst nach einem Umweg über die
-          // Host-Ansicht des Flow-Editors — Text-Präfix statt reiner
-          // Punktfarbe, weil <option>-Styling browserabhängig ist und
-          // beim geschlossenen <select> ohnehin nicht mitgerendert wird.
-          const online = isHostOnline(host.metrics);
-          opt.textContent = online ? `● ${host.label}` : tt("flow.390d13", { p0: host.label });
-          opt.style.color = online ? "" : "#e05252";
-          opt.title = online
-            ? tt("flow.514366")
-            : host.metrics
-              ? tt("flow.eda8d2", { p0: new Date(host.metrics.receivedAt).toLocaleTimeString() })
-              : tt("flow.61ea4b");
-          hostSelect.appendChild(opt);
-        }
-        // Status auch am GESCHLOSSENEN Dropdown erkennbar machen (der
-        // Options-Präfix oben ist nur beim Aufklappen sichtbar) — greift
-        // sowohl initial (Default bleibt "(lokal)", also nie offline) als
-        // auch nach jeder manuellen Auswahl.
-        const applyHostSelectStyle = () => {
-          const selected = hosts.find((h) => h.id === hostSelect!.value);
-          const offline = !!selected && !isHostOnline(selected.metrics);
-          hostSelect!.style.color = offline ? "#e05252" : "";
-          hostSelect!.style.borderColor = offline ? "#c0392b" : "";
-        };
-        hostSelect.addEventListener("change", applyHostSelectStyle);
-        applyHostSelectStyle();
-        row.appendChild(hostSelect);
-      }
-
-      // I/O-Port-Richtung (Nutzerfund 2026-08-20, "deklink node crasht
-      // immer noch beim start"): ein direkter Katalog-Start OHNE
-      // requiredIoPort läuft immer mit dem eingebauten device-number=0/
-      // ingest-Default des Nodes — auf jedem Host ohne echte Karte an
-      // genau diesem Index derselbe Crash-Loop wie zuvor am Workflow-
-      // Pfad (dort bereits über role-designer.ts behoben). Nur für
-      // omp-decklink gezeigt (bislang einziges I/O-Karten-nodeType, s.
-      // role-designer.ts DraftRole.requiredIoPort-Doku) — cardType bleibt
-      // fix "decklink", nur die Richtung ist wählbar.
-      let ioPortSelect: HTMLSelectElement | null = null;
-      if (entry.type === "omp-decklink") {
-        ioPortSelect = document.createElement("select");
-        ioPortSelect.title =
-          tt("flow.3a4eae");
-        ioPortSelect.style.cssText = "font-size:var(--omp-font-size-xs);max-width:110px;padding:2px 4px;";
-        const ioPortOptions: Array<[string, string]> = [
-          ["in", "I/O-Port: Eingang"],
-          ["out", "I/O-Port: Ausgang"],
-        ];
-        for (const [value, label] of ioPortOptions) {
-          const opt = document.createElement("option");
-          opt.value = value;
-          opt.textContent = label;
-          ioPortSelect.appendChild(opt);
-        }
-        row.appendChild(ioPortSelect);
-      }
-
-      // Bug 2: im Bearbeiten-Modus eines GESTOPPTEN/PAUSIERTEN Workflows
-      // fügt der Katalog-Button eine Rolle zur Definition hinzu statt
-      // eine Instanz zu starten — der Host-Selector greift hier nicht
-      // (Rollen bekommen ihren Host erst beim nächsten Workflow-Start
-      // über den Launcher, s. orchestrator/internal/workflows/
-      // service.go runStart). Bei einem LAUFENDEN Workflow (s.
-      // #renderRunningWorkflowScope) ist es dagegen ein ganz normaler
-      // Instanz-Start — #startInstance() selbst erkennt den offenen
-      // Live-Scope und ordnet die neue Instanz dort zu.
-      // Optionaler Anzeigename (Nutzerwunsch 2026-10-09) — wird als label an POST /instances gereicht.
-      const nameInput = document.createElement("input");
-      nameInput.type = "text";
-      nameInput.placeholder = tt("flow.nameOptional");
-      nameInput.title = tt("flow.nameOptionalTitle");
-      nameInput.style.cssText = "font-size:var(--omp-font-size-xs);width:110px;padding:2px 4px;";
-      row.appendChild(nameInput);
-
+      btn.setAttribute("data-role", "catalog-start");
+      const addsRole = (() => {
+        if (!this.#workflowEditId) return false;
+        const wf = this.#workflows.find((w) => w.id === this.#workflowEditId);
+        return !!wf && this.#isIdleWorkflow(wf);
+      })();
+      btn.textContent = addsRole ? tt("flow.sd.addRoleBtn") : tt("flow.sd.startBtn");
+      btn.title = `${entry.label} ${addsRole ? tt("flow.sd.addRoleBtn") : tt("flow.sd.startBtn")}`;
+      btn.style.cssText = "flex:none;white-space:nowrap;";
       btn.addEventListener("click", () => {
         if (this.#workflowEditId) {
           const wf = this.#workflows.find((w) => w.id === this.#workflowEditId);
@@ -5848,14 +5775,21 @@ export class FlowCanvas extends HTMLElement {
             return;
           }
         }
-        const requiredIoPort = ioPortSelect ? { cardType: "decklink", direction: ioPortSelect.value } : undefined;
-        // Sicherheitsabfrage (Nutzerwunsch 2026-10-09): versehentlicher
-        // Klick auf den Katalog-Button startete sofort einen Prozess.
-        void (async () => {
-          if (!(await confirmDialog(tt("flow.confirmStartNode", { p0: entry.type }), { confirmLabel: tt("flow.confirmStartLabel") }))) return;
-          await this.#startInstance(entry.type, entry.version, hostSelect?.value || undefined, requiredIoPort, nameInput.value.trim() || undefined);
-          nameInput.value = "";
-        })();
+        void openStartDialog({
+          entry,
+          ioPort: entry.type === "omp-decklink",
+          hosts: hosts.map((h) => {
+            const online = isHostOnline(h.metrics);
+            return {
+              id: h.id,
+              label: h.label,
+              online,
+              title: online ? tt("flow.514366") : h.metrics ? tt("flow.eda8d2", { p0: new Date(h.metrics.receivedAt).toLocaleTimeString() }) : tt("flow.61ea4b"),
+            };
+          }),
+          fillProfile: (target, hostId) => void this.#applyProfileTag(target as HTMLDivElement, entry.type, hostId),
+          submit: (body) => this.#startInstance(body),
+        });
       });
       row.appendChild(btn);
       card.appendChild(row);
@@ -5894,10 +5828,7 @@ export class FlowCanvas extends HTMLElement {
       profileTag.setAttribute("data-role", "profile-tag");
       profileTag.style.cssText = "margin:var(--omp-space-1) 0;font-size:var(--omp-font-size-xs);line-height:1.3;";
       card.appendChild(profileTag);
-      void this.#applyProfileTag(profileTag, entry.type, hostSelect?.value || "");
-      hostSelect?.addEventListener("change", () => {
-        void this.#applyProfileTag(profileTag, entry.type, hostSelect.value || "");
-      });
+      void this.#applyProfileTag(profileTag, entry.type, "");
 
       // §17 Teil 5: nach (Type, Version) filtern, nicht nur Type —
       // sonst würde jede laufende Instanz eines Typs unter JEDER
@@ -6030,23 +5961,18 @@ export class FlowCanvas extends HTMLElement {
     return row;
   }
 
-  async #startInstance(type: string, version?: string, hostId?: string, requiredIoPort?: { cardType: string; direction: string }, label?: string) {
+  /** Startet eine Instanz aus dem Startdialog. Liefert eine Fehlermeldung (Dialog bleibt offen) oder null bei Erfolg. */
+  async #startInstance(startBody: StartBody): Promise<string | null> {
+    const type = startBody.type;
     try {
       const res = await apiFetch("/api/v1/instances", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type,
-          ...(version ? { version } : {}),
-          ...(hostId ? { hostId } : {}),
-          ...(requiredIoPort ? { requiredIoPort } : {}),
-          ...(label ? { label } : {}),
-        }),
+        body: JSON.stringify(startBody),
       });
       if (!res.ok) {
         const text = await res.text();
-        this.#showToast(tt("flow.f6d6b4", { p0: text || res.status }));
-        return;
+        return tt("flow.f6d6b4", { p0: text.trim() || res.status });
       }
       // Kein #fetchAndRender() nötig: die Instanz registriert sich
       // selbst bei der NMOS-Registry, was ein "node.added"-SSE-Event
@@ -6084,8 +6010,9 @@ export class FlowCanvas extends HTMLElement {
       }
       this.#showToast(tt("flow.f0052e", { p0: type }));
       await this.#renderPalette();
+      return null;
     } catch (err) {
-      this.#showToast(tt("flow.f6d6b4", { p0: err }));
+      return tt("flow.f6d6b4", { p0: err });
     }
   }
 

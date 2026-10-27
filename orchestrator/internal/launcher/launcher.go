@@ -973,6 +973,59 @@ func (l *Launcher) StartLabeled(nodeType, version, hostID, customLabel string, e
 	return l.startLocal(nodeType, version, customLabel, extraEnv, "", "")
 }
 
+// ErrInvalidStartOption: eine Option des Startdialogs ist unbekannt oder ungültig (nichts wurde gestartet).
+var ErrInvalidStartOption = errors.New("launcher: ungültige Start-Option")
+
+// StartWithOptions wie StartLabeled, mit Instanz-Optionswerten (Startdialog des Flow-Editors): sie werden gegen das Schema des Node-Typs geprüft und
+// als Instanz-Werte gespeichert, BEVOR der Prozess startet — er liest sie also schon beim ersten Start. Schlägt der Start fehl, werden sie wieder entfernt.
+// Ein unbekannter Schlüssel oder ein ungültiger Wert verhindert den Start (Fehler, nichts gestartet).
+func (l *Launcher) StartWithOptions(nodeType, version, hostID, customLabel string, extraEnv, options map[string]string) (Instance, error) {
+	if len(options) == 0 {
+		return l.StartLabeled(nodeType, version, hostID, customLabel, extraEnv)
+	}
+	l.mu.Lock()
+	schema, store := l.optionSchema[nodeType], l.optionStore
+	l.mu.Unlock()
+	if store == nil || len(schema) == 0 {
+		return Instance{}, fmt.Errorf("%w: %s hat keine einstellbaren Optionen", ErrInvalidStartOption, nodeType)
+	}
+	clean := map[string]string{}
+	for k, v := range options {
+		opt, ok := nodeoptions.Find(schema, k)
+		if !ok {
+			return Instance{}, fmt.Errorf("%w: unbekannte Option %q für %s", ErrInvalidStartOption, k, nodeType)
+		}
+		// Pfade werden nur lokal auf dem Orchestrator geprüft; auf einem Remote-Host gelten sie dort (der Host-Agent prüft sie gegen sein Dateisystem).
+		val, _, err := nodeoptions.ValidateWith(opt, v, hostID == "")
+		if err != nil {
+			return Instance{}, fmt.Errorf("%w: %q: %v", ErrInvalidStartOption, k, err)
+		}
+		if val != "" {
+			clean[k] = val
+		}
+	}
+	var storedID string
+	pre := func(id string) {
+		storedID = id
+		for k, v := range clean {
+			if err := store.Set(nodeoptions.ScopeInstance, id, k, v, "start-dialog"); err != nil {
+				slog.Warn("launcher: Startoption nicht gespeichert", "instance", id, "option", k, "error", err)
+			}
+		}
+	}
+	var inst Instance
+	var err error
+	if hostID != "" {
+		inst, err = l.startRemotePre(nodeType, hostID, customLabel, extraEnv, "", pre)
+	} else {
+		inst, err = l.startLocalPre(nodeType, version, customLabel, extraEnv, "", "", pre)
+	}
+	if err != nil && storedID != "" {
+		_ = store.DeleteInstance(storedID)
+	}
+	return inst, err
+}
+
 // startLocal — unverändertes Verhalten aus C8 (OMP_INSTANCE_ID/
 // OMP_LABEL/OMP_PORT=0 sowie die Registry-/NATS-URLs des Orchestrators
 // als Subprozess-Umgebung, Ergebnis persistiert) plus optionales
@@ -980,6 +1033,11 @@ func (l *Launcher) StartLabeled(nodeType, version, hostID, customLabel string, e
 // mehreren importierten Versionen desselben Typs — leer heißt "die
 // einzige/statische Version", s. resolveCatalogEntry.
 func (l *Launcher) startLocal(nodeType, version, customLabel string, extraEnv map[string]string, optionsFrom, pin string) (Instance, error) {
+	return l.startLocalPre(nodeType, version, customLabel, extraEnv, optionsFrom, pin, nil)
+}
+
+// startLocalPre wie startLocal; pre(id) läuft, sobald die Instanz-ID feststeht und bevor der Prozess seine Optionen liest (Startdialog: Instanz-Werte).
+func (l *Launcher) startLocalPre(nodeType, version, customLabel string, extraEnv map[string]string, optionsFrom, pin string, pre func(id string)) (Instance, error) {
 	entry, err := l.resolveCatalogEntry(nodeType, version)
 	if err != nil {
 		return Instance{}, err
@@ -988,6 +1046,9 @@ func (l *Launcher) startLocal(nodeType, version, customLabel string, extraEnv ma
 	id, err := newInstanceID()
 	if err != nil {
 		return Instance{}, fmt.Errorf("launcher: generate instance id: %w", err)
+	}
+	if pre != nil {
+		pre(id)
 	}
 	label := customLabel
 	if label == "" {
@@ -1626,6 +1687,10 @@ func (l *Launcher) recordRestartLocked(id string) (shouldRestart bool, totalRest
 // (S3) wird mitgeschickt — der Host-Agent prüft es gegen seine eigene
 // Allowlist, s. `Start`-Doku.
 func (l *Launcher) startRemote(nodeType, hostID, customLabel string, extraEnv map[string]string, optionsFrom string) (Instance, error) {
+	return l.startRemotePre(nodeType, hostID, customLabel, extraEnv, optionsFrom, nil)
+}
+
+func (l *Launcher) startRemotePre(nodeType, hostID, customLabel string, extraEnv map[string]string, optionsFrom string, pre func(id string)) (Instance, error) {
 	if l.nc == nil {
 		return Instance{}, ErrRemoteUnavailable
 	}
@@ -1633,6 +1698,9 @@ func (l *Launcher) startRemote(nodeType, hostID, customLabel string, extraEnv ma
 	id, err := newInstanceID()
 	if err != nil {
 		return Instance{}, fmt.Errorf("launcher: generate instance id: %w", err)
+	}
+	if pre != nil {
+		pre(id)
 	}
 	label := customLabel
 	if label == "" {

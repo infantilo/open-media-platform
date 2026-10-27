@@ -88,13 +88,14 @@ In der Leiste oben im Flow Editor steht rechts das Feld **„Node suchen…“**
 
 ### 2.1 Eine Instanz starten
 
-Im Node-Katalog links auf einen „+ <Node-Typ>"-Knopf klicken (z. B.
-„+ Source"). Die Instanz erscheint nach kurzer Zeit als neue Kachel auf
-der Arbeitsfläche und gleichzeitig im Katalogeintrag mit CPU-/RAM-Werten
-und einem „Stop"-Knopf. Neben dem Knopf steht ein Feld **„Name (optional)"**:
-Wer dort einen Namen einträgt, bekommt die Instanz unter diesem Namen
-(statt „Typ (Kurz-ID)") — er erscheint auch als Quellen-/Senken-Name in
-Kreuzschienen und Mischer-Auswahllisten. Die Instanz-ID bleibt davon unberührt.
+Im Node-Katalog links steht jeder Node-Typ als Karte mit **Namen, Beschreibung und einem „Starten …"-Knopf**. Der Knopf öffnet den **Startdialog**:
+
+- **Name (optional):** Wer einen Namen einträgt, bekommt die Instanz unter diesem Namen (statt „Typ (Kurz-ID)") — er erscheint auch als Quellen-/Senken-Name in Kreuzschienen und Mischer-Auswahllisten. Die Instanz-ID bleibt davon unberührt.
+- **Zielhost** (nur, wenn es Host-Agents gibt), mit Online-Anzeige und der Profil-Ampel (typischer CPU-/RAM-Bedarf, freie Kapazität des gewählten Hosts).
+- **I/O-Port** (nur DeckLink): Eingang oder Ausgang.
+- **Einstellungen:** alle einstellbaren Optionen des Node-Typs (dieselben wie unter Administration → Einstellungen), nach Gruppen geordnet. Nur ausfüllen, was für **diese Instanz** abweichen soll; ein leeres Feld übernimmt den Wert des Node-Typs bzw. den Standard (steht im Feld). Ungültige Werte meldet der Dialog sofort und bleibt offen.
+
+„Starten" startet die Instanz mit genau diesen Werten schon beim ersten Start (sie stehen danach als Instanz-Werte unter Administration → Einstellungen). Escape oder „Abbrechen" verwirft den Dialog. Die Instanz erscheint nach kurzer Zeit als neue Kachel auf der Arbeitsfläche und im Katalogeintrag mit CPU-/RAM-Werten und einem „Stop"-Knopf. Im Bearbeiten-Modus eines gestoppten Workflows heißt der Knopf stattdessen **„Als Rolle hinzufügen"** und fügt die Rolle ohne Dialog hinzu.
 
 ### 2.2 Verbinden (Routing)
 
@@ -300,7 +301,7 @@ wirklich Bild/Ton fließt, prüfen die Health- und Scope-Ansichten.
 
 ## 4. Workflows
 
-> **Sicherheitsabfrage:** Manuelles Starten, Stoppen und Löschen eines Workflows sowie das manuelle Starten eines neuen Nodes aus dem Katalog fragen vor der Ausführung nach („Wirklich …?“). Erst „Starten“/„Stoppen“/„Löschen“ löst die Aktion aus; „Abbrechen“ oder Escape verwirft sie.
+> **Sicherheitsabfrage:** Manuelles Starten, Stoppen und Löschen eines Workflows sowie das manuelle Starten eines neuen Nodes aus dem Katalog (Startdialog) fragen vor der Ausführung nach („Wirklich …?“ bzw. der Dialog). Erst „Starten“/„Stoppen“/„Löschen“ löst die Aktion aus; „Abbrechen“ oder Escape verwirft sie.
 
 Der Reiter **Workflows** verwaltet benannte, wiederverwendbare
 Kombinationen aus Node-Typen und Verbindungen — praktisch ein
@@ -333,7 +334,7 @@ Rolle im Workflow-Formular ist zugleich das Label, unter dem diese
 Quelle später überall erscheint, wo sie auswählbar ist — z. B. in den
 Kreuzschienen-Dropdowns von Bild-/Audiomischer. Eine Rolle „Kamera 1"
 zeigt sich dort als „Kamera 1", nicht als kryptische Instanz-ID. Direkt
-über den „+"-Knopf im Node-Katalog (Abschnitt 2.1) gestartete Instanzen
+über den Startdialog im Node-Katalog (Abschnitt 2.1) gestartete Instanzen
 ohne Workflow-Zugehörigkeit bekommen dagegen weiterhin nur das
 generische „`<Typ>` (`<Kurz-ID>`)"-Label — ein eigenes Namensfeld dafür
 gibt es in der Oberfläche noch nicht.

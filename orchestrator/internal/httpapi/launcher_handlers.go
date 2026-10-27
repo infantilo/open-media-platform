@@ -230,6 +230,8 @@ func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStor
 			HostID         string                       `json:"hostId"`
 			Label          string                       `json:"label"`
 			RequiredIOPort *workflows.IOPortRequirement `json:"requiredIoPort,omitempty"`
+			// Options: Instanz-Optionswerte aus dem Startdialog (Schlüssel wie im Optionsschema des Node-Typs).
+			Options map[string]string `json:"options,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
@@ -287,7 +289,20 @@ func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStor
 			extraEnv = workflows.IoPortExtraEnv(body.RequiredIOPort, claimedPortID)
 		}
 
-		inst, err := svc.StartLabeled(body.Type, body.Version, hostID, body.Label, extraEnv)
+		var inst launcher.Instance
+		var err error
+		if len(body.Options) > 0 {
+			ws, ok := svc.(interface {
+				StartWithOptions(nodeType, version, hostID, customLabel string, extraEnv, options map[string]string) (launcher.Instance, error)
+			})
+			if !ok {
+				http.Error(w, "start options not supported", http.StatusNotImplemented)
+				return
+			}
+			inst, err = ws.StartWithOptions(body.Type, body.Version, hostID, body.Label, extraEnv, body.Options)
+		} else {
+			inst, err = svc.StartLabeled(body.Type, body.Version, hostID, body.Label, extraEnv)
+		}
 		if err != nil {
 			if claimRole != "" {
 				if relErr := ioPortStore.ReleasePort(claimedHostID, claimedPortID); relErr != nil {
@@ -436,7 +451,7 @@ func writeLauncherError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, launcher.ErrUnknownType), errors.Is(err, launcher.ErrUnknownInstance):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, launcher.ErrUnsupportedRunner):
+	case errors.Is(err, launcher.ErrUnsupportedRunner), errors.Is(err, launcher.ErrInvalidStartOption):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, launcher.ErrRemoteUnavailable):
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)

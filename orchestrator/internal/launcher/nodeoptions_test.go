@@ -1,8 +1,12 @@
 package launcher
 
 import (
+	"errors"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/dbtest"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeoptions"
@@ -90,5 +94,48 @@ func TestWithOptionsInjectsNodeAPIToken(t *testing.T) {
 	}
 	if got := l.withOptions("x", "i", "", nil); got["OMP_NODE_API_TOKEN"] != "tok" {
 		t.Fatalf("nil extraEnv: %v", got)
+	}
+}
+
+// Startdialog des Flow-Editors: Instanz-Optionen werden vor dem Start gespeichert, der Prozess liest sie schon beim ersten Start.
+func TestStartWithOptionsAppliesInstanceValuesAtFirstStart(t *testing.T) {
+	disableAutoRestart(t)
+	envFile := t.TempDir() + "/env.txt"
+	catalog := []CatalogEntry{{Type: "envdump", Label: "EnvDump", Runner: "process", Command: []string{"/bin/sh", "-c", "env > " + envFile}}}
+	l := newWithStore(catalog, "http://registry:8010", "nats://nats:4222", newFakeInstanceStore(), nil, nil, nil)
+	store := nodeoptions.NewStore(dbtest.Open(t))
+	l.SetNodeOptions(map[string][]nodeoptions.Option{"envdump": {
+		{Key: "OMP_TEST_NAME", Label: "Name", Type: nodeoptions.TypeString},
+		{Key: "OMP_TEST_COUNT", Label: "Zahl", Type: nodeoptions.TypeInt},
+	}}, store)
+
+	if _, err := l.StartWithOptions("envdump", "", "", "", nil, map[string]string{"OMP_NOPE": "x"}); !errors.Is(err, ErrInvalidStartOption) {
+		t.Fatalf("unbekannte Option: %v", err)
+	}
+	if _, err := l.StartWithOptions("envdump", "", "", "", nil, map[string]string{"OMP_TEST_COUNT": "viele"}); !errors.Is(err, ErrInvalidStartOption) {
+		t.Fatalf("ungültiger Wert: %v", err)
+	}
+	if len(l.List()) != 0 {
+		t.Fatal("bei ungültiger Option darf nichts gestartet werden")
+	}
+
+	inst, err := l.StartWithOptions("envdump", "", "", "", nil, map[string]string{"OMP_TEST_NAME": "Regie", "OMP_TEST_COUNT": "7"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var data []byte
+	for i := 0; i < 100; i++ {
+		data, _ = os.ReadFile(envFile)
+		if len(data) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(string(data), "OMP_TEST_NAME=Regie") || !strings.Contains(string(data), "OMP_TEST_COUNT=7") {
+		t.Fatalf("Optionen im Prozess-Umfeld fehlen:\n%s", data)
+	}
+	vals, _ := store.Values(nodeoptions.ScopeInstance, inst.ID)
+	if vals["OMP_TEST_NAME"] != "Regie" || vals["OMP_TEST_COUNT"] != "7" {
+		t.Fatalf("Instanz-Werte: %v", vals)
 	}
 }
