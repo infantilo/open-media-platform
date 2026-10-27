@@ -526,7 +526,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         async move {
             while let Some(event) = video_rx.recv().await {
                 match event {
-                    video_pipeline::Event::Error(message) => eprintln!("omp-scope: video pipeline error: {message}"),
+                    video_pipeline::Event::Error(message) => eprintln!("omp-scope: video pipeline error: {}", omp_node_sdk::errcode::tag(&message)),
                     video_pipeline::Event::MeasuredFps(fps) => *video_measured_fps.lock().expect("lock poisoned") = fps,
                     fmt @ video_pipeline::Event::SourceFormat { .. } => {
                         *video_format.lock().expect("lock poisoned") = Some(fmt);

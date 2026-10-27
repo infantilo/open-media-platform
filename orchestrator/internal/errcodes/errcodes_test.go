@@ -3,6 +3,7 @@ package errcodes
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -111,5 +112,55 @@ func TestCatalogFixtureForUIIsUpToDate(t *testing.T) {
 	}
 	if string(got) != CatalogJSON() {
 		t.Fatal("ui/shell/testdata/errorcodes.json ist veraltet: cd orchestrator && go run ./cmd/errcodedoc -json > ../ui/shell/testdata/errorcodes.json")
+	}
+}
+
+func TestKeywordsAgreeWithPatterns(t *testing.T) {
+	for _, e := range All() {
+		for _, k := range e.Keywords {
+			if k != strings.ToLower(k) {
+				t.Errorf("%s: Schlüsselwort %q nicht klein geschrieben", e.Code, k)
+			}
+			got, ok := Classify(k)
+			if !ok || got.Code != e.Code {
+				t.Errorf("%s: Schlüsselwort %q führt zu %v (%s) — Muster und Schlüsselwort widersprechen sich", e.Code, k, ok, got.Code)
+			}
+		}
+	}
+}
+
+func TestRustTableIsUpToDate(t *testing.T) {
+	got, err := os.ReadFile("../../../nodes/omp-node-sdk/src/errcodes_table.rs")
+	if err != nil {
+		t.Fatalf("errcodes_table.rs fehlt: %v (cd orchestrator && go run ./cmd/errcodedoc -rust > ../nodes/omp-node-sdk/src/errcodes_table.rs)", err)
+	}
+	if string(got) != RustTable() {
+		t.Fatal("nodes/omp-node-sdk/src/errcodes_table.rs ist veraltet: cd orchestrator && go run ./cmd/errcodedoc -rust > ../nodes/omp-node-sdk/src/errcodes_table.rs")
+	}
+}
+
+// Jeder Code, der in Rust oder Go als Text steht („[OMP-nnnn]“), muss im Katalog existieren — ein Tippfehler bliebe sonst unbemerkt.
+func TestCodesUsedInSourcesExist(t *testing.T) {
+	re := regexp.MustCompile(`OMP-\d{4}`)
+	root := "../../.."
+	for _, dir := range []string{"nodes", "orchestrator/internal", "host-agent", "jobwire"} {
+		_ = filepath.WalkDir(filepath.Join(root, dir), func(p string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if d.IsDir() && (d.Name() == "target" || d.Name() == "errcodes" || d.Name() == "node_modules") {
+				return filepath.SkipDir
+			}
+			if d.IsDir() || !(strings.HasSuffix(p, ".rs") || strings.HasSuffix(p, ".go")) || strings.HasSuffix(p, "_test.go") || strings.HasSuffix(p, "errcodes_table.rs") {
+				return nil
+			}
+			b, _ := os.ReadFile(p)
+			for _, code := range re.FindAllString(string(b), -1) {
+				if _, ok := Lookup(code); !ok {
+					t.Errorf("%s: Code %s steht nicht im Katalog", p, code)
+				}
+			}
+			return nil
+		})
 	}
 }

@@ -360,6 +360,8 @@ async fn run_event_loop(
         while let Some(event) = events_rx.recv().await {
             match event {
                 relay::Event::Error(message) => {
+                    // Fehlercode [OMP-nnnn] voranstellen, wenn die Meldung einem Katalogeintrag entspricht (Kap. 72.8)
+                    let message = omp_node_sdk::errcode::tag(&message);
                     eprintln!("omp-fabrics-gateway: {message}");
                     handle.publish_alert(message).await;
                 }

@@ -10,7 +10,12 @@ import (
 
 func main() {
 	asJSON := flag.Bool("json", false, "Katalog als JSON (Prüfstand der Oberfläche) statt Markdown")
+	asRust := flag.Bool("rust", false, "Schlüsselwort-Tabelle für omp-node-sdk (Rust) statt Markdown")
 	flag.Parse()
+	if *asRust {
+		fmt.Print(errcodes.RustTable())
+		return
+	}
 	if *asJSON {
 		fmt.Print(errcodes.CatalogJSON())
 		return

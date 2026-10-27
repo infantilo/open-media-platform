@@ -488,7 +488,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pipeline_handle = match ready_rx.await {
         Ok(Ok(handle)) => handle,
         Ok(Err(e)) => {
-            eprintln!("omp-ograf: pipeline build failed: {e}");
+            eprintln!("omp-ograf: pipeline build failed: {}", omp_node_sdk::errcode::tag(&e.to_string()));
             return Err(e.into());
         }
         Err(_) => {
@@ -606,6 +606,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         while let Some(event) = rx.recv().await {
             match event {
                 pipeline::Event::Error(message) => {
+                    // Fehlercode [OMP-nnnn] voranstellen, wenn die Meldung einem Katalogeintrag entspricht (Kap. 72.8)
+                    let message = omp_node_sdk::errcode::tag(&message);
                     eprintln!("omp-ograf: pipeline error: {message}");
                     handle.publish_alert(message).await;
                 }

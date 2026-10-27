@@ -1606,6 +1606,8 @@ async fn handle_events(
                 }
             }
             pipeline::Event::Error(message) => {
+                // Fehlercode [OMP-nnnn] voranstellen, wenn die Meldung einem Katalogeintrag entspricht (Kap. 72.8)
+                let message = omp_node_sdk::errcode::tag(&message);
                 eprintln!("omp-video-mixer-me: pipeline error: {message}");
                 handle.publish_alert(message).await;
             }

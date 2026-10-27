@@ -447,7 +447,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let pipeline_handle = match ready_rx.await {
                 Ok(Ok(handle)) => handle,
                 Ok(Err(e)) => {
-                    eprintln!("omp-aes67-gateway: sink pipeline build failed: {e}");
+                    eprintln!("omp-aes67-gateway: sink pipeline build failed: {}", omp_node_sdk::errcode::tag(&e.to_string()));
                     return Err(e.into());
                 }
                 Err(_) => {
@@ -581,7 +581,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let pipeline_handle = match ready_rx.await {
                 Ok(Ok(handle)) => handle,
                 Ok(Err(e)) => {
-                    eprintln!("omp-aes67-gateway: source pipeline build failed: {e}");
+                    eprintln!("omp-aes67-gateway: source pipeline build failed: {}", omp_node_sdk::errcode::tag(&e.to_string()));
                     return Err(e.into());
                 }
                 Err(_) => {
@@ -804,6 +804,8 @@ async fn run_event_loop(
         while let Some(event) = events_rx.recv().await {
             match event {
                 pipeline::Event::Error(message) => {
+                    // Fehlercode [OMP-nnnn] voranstellen, wenn die Meldung einem Katalogeintrag entspricht (Kap. 72.8)
+                    let message = omp_node_sdk::errcode::tag(&message);
                     eprintln!("omp-aes67-gateway: pipeline error: {message}");
                     // Sofortige Verschlechterung, solange verbunden (s.
                     // `spawn_sink_monitor_tick`-Doku) — für Sink immer

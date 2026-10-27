@@ -327,7 +327,7 @@
    "Reihenfolge beim Start: erst die Quellen, dann Mischer und Viewer.",
    "Der Leser versucht es selbst erneut; hilft das nicht, den Leser neu starten."
   ],
-  "match": "flow_def\\.json|mxl[^\\n]*(not found|enoent|no such flow)|flow [^\\n]*(does not exist|not found)",
+  "match": "flow_def\\.json|no such flow|mxl[^\\n]*(not found|enoent)|flow [^\\n]*(does not exist|not found)",
   "doc": "FEHLERCODES.md#omp-3001"
  },
  {
@@ -365,7 +365,7 @@
    "Administration → Support: Ist /dev/shm voll (OMP-3002)?",
    "Verwaiste Flows entfernen und den Node neu starten."
   ],
-  "match": "\\[writer\\] (open_grain|commit)[^\\n]*failed",
+  "match": "\\[writer\\] (open_grain|commit)",
   "doc": "FEHLERCODES.md#omp-3010"
  },
  {
@@ -404,7 +404,7 @@
    "Ein anderes Programm (oder eine zweite Instanz) belegt das Gerät: beenden.",
    "Unter Hosts zeigt das Inventar die erkannten I/O-Ports."
   ],
-  "match": "no such device|cannot open (video|audio)|device (is )?busy|decklink[^\\n]*(not found|no device)|v4l2",
+  "match": "no such device|cannot open (video|audio)|device (is )?busy|decklink[^\\n]*(not found|no device)|v4l2|karte/treiber prüfen",
   "doc": "FEHLERCODES.md#omp-3005"
  },
  {

@@ -1089,7 +1089,9 @@ untereinander):
   (`api/errorcodes.json`). Nummernkreise: 1xxx Plattform und Rechner, 2xxx
   Nodes und Instanzen, 3xxx Medien und Pipeline, 4xxx Verbindungen, 5xxx
   Hosts, 6xxx Zugriff, 7xxx Update. Meldungen werden am Wortlaut erkannt;
-  trägt eine Meldung selbst einen Code (`[OMP-3001] …`), gilt dieser.
+  trägt eine Meldung selbst einen Code (`[OMP-3001] …`), gilt dieser —
+  die Nodes setzen ihn bei Pipeline-Fehlern (fehlendes GStreamer-Plugin,
+  Format nicht aushandelbar, Gerät nicht verfügbar …) selbst davor.
   Fehlerantworten der API tragen den Code im Header `X-Omp-Error-Code`,
   Fehlermeldungen (Toasts) hängen ihn als „(OMP-nnnn)“ an.
 

@@ -434,6 +434,8 @@ async fn run_camera(common: Common) -> Result<(), Box<dyn std::error::Error + Se
         while let Some(event) = rx.recv().await {
             match event {
                 pipeline::Event::Error(message) => {
+                    // Fehlercode [OMP-nnnn] voranstellen, wenn die Meldung einem Katalogeintrag entspricht (Kap. 72.8)
+                    let message = omp_node_sdk::errcode::tag(&message);
                     eprintln!("omp-webrtc-gateway: pipeline error: {message}");
                     handle.publish_alert(message).await;
                 }
@@ -921,6 +923,8 @@ async fn run_monitor(common: Common) -> Result<(), Box<dyn std::error::Error + S
         while let Some(event) = rx.recv().await {
             match event {
                 pipeline::Event::Error(message) => {
+                    // Fehlercode [OMP-nnnn] voranstellen, wenn die Meldung einem Katalogeintrag entspricht (Kap. 72.8)
+                    let message = omp_node_sdk::errcode::tag(&message);
                     eprintln!("omp-webrtc-gateway: pipeline error: {message}");
                     handle.publish_alert(message).await;
                 }

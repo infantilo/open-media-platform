@@ -69,3 +69,28 @@ func CatalogJSON() string {
 	b, _ := json.MarshalIndent(out, "", " ")
 	return string(b) + "\n"
 }
+
+// RustTable erzeugt nodes/omp-node-sdk/src/errcodes_table.rs: Code → Schlüsselwörter, in der Reihenfolge des Katalogs. Die Nodes
+// ordnen ihre Meldungen damit zu (omp_node_sdk::errcode::tag), ohne eigene Regel-Kopie und ohne Regex-Bibliothek.
+func RustTable() string {
+	var b strings.Builder
+	b.WriteString("// GENERIERT aus orchestrator/internal/errcodes/catalog.go — nicht von Hand ändern:\n")
+	b.WriteString("//   cd orchestrator && go run ./cmd/errcodedoc -rust > ../nodes/omp-node-sdk/src/errcodes_table.rs\n")
+	b.WriteString("// Reihenfolge = Reihenfolge der Zuordnung; Schlüsselwörter sind klein geschrieben (Teilstring-Suche).\n\n")
+	b.WriteString("pub(crate) const TABLE: &[(&str, &[&str])] = &[\n")
+	for _, e := range catalog {
+		if len(e.Keywords) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "    (%q, &[", e.Code)
+		for i, k := range e.Keywords {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			fmt.Fprintf(&b, "%q", k)
+		}
+		b.WriteString("]),\n")
+	}
+	b.WriteString("];\n")
+	return b.String()
+}

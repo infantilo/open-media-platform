@@ -30,6 +30,9 @@ type Steps struct{ DE, EN []string }
 type Entry struct {
 	Code     string
 	Severity string
+	// Keywords: einfache Teilstrings (klein geschrieben) für Rust: die Nodes ordnen ihre Meldungen damit ohne Regex-Bibliothek zu.
+	// Jedes Schlüsselwort muss für sich allein zum selben Code führen wie das Muster (Test), die Tabelle für Rust wird daraus erzeugt.
+	Keywords []string
 	Match    string // Muster (ohne Schalter); leer = nur über den Code selbst oder die Befund-ID erreichbar
 	Title    Text
 	Cause    Text

@@ -5576,7 +5576,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let alerts = async {
         while let Some(event) = events_rx.recv().await {
             match event {
-                Event::Error(message) => handle.publish_alert(message).await,
+                Event::Error(message) => handle.publish_alert(omp_node_sdk::errcode::tag(&message)).await,
             }
         }
     };

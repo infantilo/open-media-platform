@@ -310,6 +310,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         while let Some(event) = events_rx.recv().await {
             match event {
                 pipeline::Event::Error(message) => {
+                    // Fehlercode [OMP-nnnn] voranstellen, wenn die Meldung einem Katalogeintrag entspricht (Kap. 72.8)
+                    let message = omp_node_sdk::errcode::tag(&message);
                     eprintln!("omp-srt-gateway: pipeline error: {message}");
                     // Ein Bus-Fehler betrifft hier typischerweise die
                     // GANZE Pipeline (GStreamer-Fehler sind meist

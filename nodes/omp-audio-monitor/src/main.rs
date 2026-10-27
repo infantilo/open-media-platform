@@ -391,6 +391,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         while let Some(event) = rx.recv().await {
             match event {
                 pipeline::Event::Error(message) => {
+                    // Fehlercode [OMP-nnnn] voranstellen, wenn die Meldung einem Katalogeintrag entspricht (Kap. 72.8)
+                    let message = omp_node_sdk::errcode::tag(&message);
                     eprintln!("omp-audio-monitor: pipeline error: {message}");
                     handle.publish_alert(message).await;
                 }

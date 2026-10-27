@@ -13,6 +13,8 @@ pub mod buildinfo;
 pub mod channelmapping;
 pub mod connection;
 pub mod descriptor;
+pub mod errcode;
+mod errcodes_table;
 pub mod diag;
 pub mod health;
 pub mod idgen;

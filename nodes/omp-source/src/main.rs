@@ -248,7 +248,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pipeline_handle = match ready_rx.await {
         Ok(Ok(handle)) => handle,
         Ok(Err(e)) => {
-            eprintln!("omp-source: pipeline build failed: {e}");
+            eprintln!("omp-source: pipeline build failed: {}", omp_node_sdk::errcode::tag(&e.to_string()));
             return Err(e.into());
         }
         Err(_) => {
@@ -360,6 +360,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     eprintln!("omp-source: measured video fps ~= {measured:.1}");
                 }
                 pipeline::Event::Error(message) => {
+                    // Fehlercode [OMP-nnnn] voranstellen, wenn die Meldung einem Katalogeintrag entspricht (Kap. 72.8)
+                    let message = omp_node_sdk::errcode::tag(&message);
                     eprintln!("omp-source: pipeline error: {message}");
                     handle.publish_alert(message).await;
                 }

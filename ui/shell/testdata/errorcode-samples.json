@@ -199,6 +199,10 @@
   {
    "message": "unknown node",
    "code": "OMP-2001"
+  },
+  {
+   "message": "set state playing (device-number=0 nicht erreichbar? Karte/Treiber prüfen): Element failed to change its state",
+   "code": "OMP-3005"
   }
  ],
  "harmless": [

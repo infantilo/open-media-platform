@@ -213,7 +213,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let rtp_output: Option<Arc<RtpVideoOutput>> = match ready_rx.await {
         Ok(Ok(output)) => Some(output),
         Ok(Err(e)) => {
-            eprintln!("playout: pipeline build failed, sender connection unavailable: {e}");
+            eprintln!("playout: pipeline build failed, sender connection unavailable: {}", omp_node_sdk::errcode::tag(&e.to_string()));
             None
         }
         Err(_) => {
@@ -283,6 +283,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     eprintln!("playout: measured video fps ~= {measured:.1}");
                 }
                 pipeline::Event::Error(message) => {
+                    // Fehlercode [OMP-nnnn] voranstellen, wenn die Meldung einem Katalogeintrag entspricht (Kap. 72.8)
+                    let message = omp_node_sdk::errcode::tag(&message);
                     eprintln!("playout: pipeline error: {message}");
                     handle.publish_alert(message).await;
                 }
