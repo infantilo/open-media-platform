@@ -5,6 +5,7 @@ import { t } from "./i18n.ts";
 import { apiFetch } from "./connection.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 import { freezeNow } from "./freeze.ts";
+import { coverageKey, findFinding, sparkline, type TrendFinding, type TrendReport } from "./trends-logic.ts";
 import { codeBadge, type ErrorCode, helpDetails, loadErrorCodes, lookup } from "./errorcodes.ts";
 import {
   ACCESS_DURATIONS,
@@ -47,6 +48,8 @@ export class SupportPanel {
   #busy = false;
   #grants = el("div");
   #freezes = el("div");
+  #trends: TrendReport | null = null;
+  #trendInfo = el("div", CARD);
   #newLink = el("div");
   #codes: ErrorCode[] = [];
   #last: SelftestReport | null = null;
@@ -65,7 +68,7 @@ export class SupportPanel {
     again.addEventListener("click", () => void this.refresh());
     head.append(this.#lamp, text, again);
 
-    this.el.append(title, hint, head, this.#list, this.#bundleCard(), this.#freezeCard(), this.#accessCard());
+    this.el.append(title, hint, head, this.#list, this.#trendInfo, this.#bundleCard(), this.#freezeCard(), this.#accessCard());
     void this.#loadGrants();
     void this.#loadFreezes();
     void loadErrorCodes().then((c) => {
@@ -94,6 +97,13 @@ export class SupportPanel {
       const res = await apiFetch("/api/v1/admin/selftest");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const report = (await res.json()) as SelftestReport;
+      // Trends für die Mini-Diagramme an den Trend-Befunden (fehlt der Endpunkt oder die Auswertung, bleibt es ohne Diagramm)
+      try {
+        const tr = await apiFetch("/api/v1/admin/trends");
+        this.#trends = tr.ok ? ((await tr.json()) as TrendReport) : null;
+      } catch {
+        this.#trends = null;
+      }
       if (seq === this.#seq) this.#render(report);
     } catch (e) {
       if (seq !== this.#seq) return;
@@ -124,9 +134,12 @@ export class SupportPanel {
         fix.append(lead, document.createTextNode(c.fix));
         card.append(fix);
       }
+      const finding = findFinding(this.#trends, c.id);
+      if (finding) card.append(this.#chart(finding));
       if (code) card.append(helpDetails(code));
       this.#list.append(card);
     }
+    this.#renderTrendInfo();
     if (fine.length > 0) {
       const d = el("details", CARD);
       d.append(el("summary", "cursor:pointer;", t("sup.fine", { n: fine.length })));
@@ -351,5 +364,47 @@ export class SupportPanel {
       row.append(del);
       this.#freezes.append(row);
     }
+  }
+
+  // ---- Baseline und Trends (Kap. 72.11) ---------------------------------------------------------------------------------
+
+  /** Mini-Diagramm einer Auffälligkeit: der Verlauf als Linie, gestrichelt das Übliche bzw. der Anfangswert, der letzte Wert als Punkt. */
+  #chart(f: TrendFinding): HTMLElement {
+    const box = el("div", "margin-top:8px;");
+    const W = 360, H = 56;
+    const sp = sparkline(f.points, f.baseline, W, H);
+    if (!sp) return box;
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("width", String(W));
+    svg.setAttribute("height", String(H));
+    svg.setAttribute("role", "img");
+    svg.setAttribute("data-testid", "trend-chart");
+    svg.style.cssText = "display:block;max-width:100%;background:rgba(255,255,255,.03);border-radius:4px;";
+    if (sp.baselineY !== null) {
+      const base = document.createElementNS(ns, "line");
+      for (const [k, v] of Object.entries({ x1: "3", x2: String(W - 3), y1: String(sp.baselineY), y2: String(sp.baselineY), stroke: "#9aa0a6", "stroke-dasharray": "4 3", "stroke-width": "1" })) base.setAttribute(k, v);
+      svg.append(base);
+    }
+    const line = document.createElementNS(ns, "path");
+    for (const [k, v] of Object.entries({ d: sp.line, fill: "none", stroke: "#e0a020", "stroke-width": "2" })) line.setAttribute(k, v);
+    const dot = document.createElementNS(ns, "circle");
+    for (const [k, v] of Object.entries({ cx: String(sp.lastX), cy: String(sp.lastY), r: "3.5", fill: "#e05252" })) dot.setAttribute(k, v);
+    svg.append(line, dot);
+    box.append(svg, el("div", DIM + "margin-top:2px;", t(f.kind === "drift" ? "tr.chart.drift" : "tr.chart.deviation")));
+    return box;
+  }
+
+  #renderTrendInfo() {
+    const card = this.#trendInfo;
+    card.replaceChildren(el("div", "font-weight:600;", t("tr.title")));
+    const r = this.#trends;
+    const state = coverageKey(r);
+    const days = r ? (r.coverageHours / 24).toFixed(1) : "0";
+    let text: string;
+    if (state === "none") text = t("tr.none");
+    else if (state === "building") text = t("tr.building", { days, n: r!.seriesChecked });
+    else text = t("tr.ready", { days, n: r!.seriesChecked }) + (r!.findings.length === 0 ? " " + t("tr.clean") : "");
+    card.append(el("div", DIM + "margin-top:4px;", text));
   }
 }

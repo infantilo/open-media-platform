@@ -22,6 +22,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/support"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/trends"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/version"
 )
 
@@ -121,7 +122,7 @@ func loopbackJSON(ctx context.Context, h http.Handler, src *http.Request, path s
 }
 
 // collectSelftestInputs misst den lokalen Rechner und liest die Betriebsdaten.
-func collectSelftestInputs(ctx context.Context, h http.Handler, src *http.Request, raftDir string, lang string, clusterSvc ClusterService, sc *sysCache, fresh bool) (support.Inputs, map[string]hostSys) {
+func collectSelftestInputs(ctx context.Context, h http.Handler, src *http.Request, raftDir string, lang string, clusterSvc ClusterService, sc *sysCache, fresh bool, ta ...*trends.Analyzer) (support.Inputs, map[string]hostSys) {
 	targets := []support.DiskTarget{{Path: "/", Label: map[bool]string{true: "system", false: "System"}[lang == "en"]}}
 	if raftDir != "" {
 		if _, err := os.Stat(raftDir); err == nil {
@@ -208,6 +209,9 @@ func collectSelftestInputs(ctx context.Context, h http.Handler, src *http.Reques
 			in.Findings = append(in.Findings, support.Finding{ID: f.ID, Severity: f.Severity, Message: f.Message, Hint: f.Hint})
 		}
 	}
+	if len(ta) > 0 {
+		in.Trends = trendInputs(ta[0])
+	}
 	return in, sysByHost
 }
 
@@ -236,12 +240,12 @@ func clockProblemText(code, lang string) string {
 }
 
 // handleSelftest liefert GET /api/v1/admin/selftest.
-func handleSelftest(h http.Handler, raftDir string, clusterSvc ClusterService, sc *sysCache) http.HandlerFunc {
+func handleSelftest(h http.Handler, raftDir string, clusterSvc ClusterService, sc *sysCache, ta ...*trends.Analyzer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()
 		lang := requestLang(r)
-		in, _ := collectSelftestInputs(ctx, h, r, raftDir, lang, clusterSvc, sc, false)
+		in, _ := collectSelftestInputs(ctx, h, r, raftDir, lang, clusterSvc, sc, false, ta...)
 		writeJSON(w, http.StatusOK, support.Evaluate(in, lang, time.Now()))
 	}
 }
@@ -271,7 +275,7 @@ Bitte die ganze ZIP-Datei an den Support senden. / Please send the whole ZIP fil
 `
 
 // handleSupportBundle liefert GET /api/v1/admin/support-bundle?minutes=N als ZIP.
-func handleSupportBundle(h http.Handler, raftDir string, clusterSvc ClusterService, sc *sysCache) http.HandlerFunc {
+func handleSupportBundle(h http.Handler, raftDir string, clusterSvc ClusterService, sc *sysCache, ta ...*trends.Analyzer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		minutes := 120
 		if v, err := strconv.Atoi(r.URL.Query().Get("minutes")); err == nil && v > 0 {
@@ -289,7 +293,7 @@ func handleSupportBundle(h http.Handler, raftDir string, clusterSvc ClusterServi
 
 		// Selbsttest in Deutsch und Englisch ist unnötig — in der Sprache der Anfrage.
 		lang := requestLang(r)
-		in, sysByHost := collectSelftestInputs(ctx, h, r, raftDir, lang, clusterSvc, sc, true)
+		in, sysByHost := collectSelftestInputs(ctx, h, r, raftDir, lang, clusterSvc, sc, true, ta...)
 		rep := support.Evaluate(in, lang, now)
 		if b, err := json.MarshalIndent(rep, "", "  "); err == nil {
 			add("selftest.json", b)
@@ -298,6 +302,7 @@ func handleSupportBundle(h http.Handler, raftDir string, clusterSvc ClusterServi
 		for _, s := range []struct{ file, path string }{
 			{"api/version.json", "/api/v1/version"},
 			{"api/errorcodes.json", "/api/v1/errorcodes"},
+			{"api/trends.json", "/api/v1/admin/trends"},
 			{"api/info.json", "/api/v1/info"},
 			{"api/nodes.json", "/api/v1/nodes"},
 			{"api/instances.json", "/api/v1/instances"},

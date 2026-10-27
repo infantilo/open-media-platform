@@ -7,6 +7,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profile"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/timeline"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/trends"
 	"log/slog"
 	"net/http"
 	"time"
@@ -53,6 +54,7 @@ type handlerOptions struct {
 	supportAccess   SupportAccessStore
 	freezer         *freeze.Freezer
 	freezeStore     *freeze.Store
+	trends          *trends.Analyzer
 	uiIsolation     *UIIsolation
 	profileName     string
 	profileFindings []profile.Finding

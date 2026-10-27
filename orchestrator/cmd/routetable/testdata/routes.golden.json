@@ -238,6 +238,13 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/admin/trends",
+    "auth": "verb:Admin",
+    "when": "options.trends != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/admin/updates",
     "auth": "verb:Admin",
     "domain": "core"

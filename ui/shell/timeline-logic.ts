@@ -2,6 +2,8 @@
 // auf der Zeitachse verdichten und den Zustand zu einem Zeitpunkt aus den aufgezeichneten Wechseln nachspielen.
 import { describe as describeAudit, type Resolvers } from "./audit-logic.ts";
 import { CATEGORIES } from "./audit-logic.ts";
+import { formatMetric } from "./trends-logic.ts";
+import { t as translate } from "./i18n.ts";
 
 export type TLSeverity = "info" | "warn" | "error";
 export type TLSource = "event" | "audit" | "domain" | "log";
@@ -82,7 +84,7 @@ export function describeItem(i: TLItem, r: Resolvers, tr: (key: string) => strin
   const label = str(d.label) || (i.subject ? r.instance(i.subject) ?? r.node(i.subject) ?? short(i.subject) : "?");
   const icons: Record<string, string> = {
     "instance.crashed": "✖", "instance.restarted": "↻", "node.notready": "✖", "node.ready": "✔", "host.silent": "✖", "host.resumed": "✔",
-    "host.clock.lost": "⏱", "host.clock.ok": "⏱", "workflow.failover": "⇄", marker: "⚑", "orchestrator.started": "⏻", freeze: "❄",
+    "host.clock.lost": "⏱", "host.clock.ok": "⏱", "workflow.failover": "⇄", marker: "⚑", "orchestrator.started": "⏻", freeze: "❄", trend: "📈",
   };
   const icon = icons[i.kind] ?? "•";
   switch (i.kind) {
@@ -110,6 +112,14 @@ export function describeItem(i: TLItem, r: Resolvers, tr: (key: string) => strin
       return { icon: "🔗", key: `tl.k.${i.kind}`, params: { id: short(str(d.id)) } };
     case "marker":
       return { icon, key: str(d.note) ? "tl.k.marker.note" : "tl.k.marker", params: { actor: i.actor ?? "", note: str(d.note) } };
+    case "trend": {
+      const unit = str(d.unit) || undefined;
+      return {
+        icon,
+        key: `tl.k.trend.${str(d.kind) === "drift" ? "drift" : "deviation"}`,
+        params: { label: str(d.label) || str(i.subject), metric: translate(`tr.m.${str(d.metric)}` as never), value: formatMetric(Number(d.value) || 0, unit), baseline: formatMetric(Number(d.baseline) || 0, unit) },
+      };
+    }
     case "freeze":
       return d.trigger === "auto"
         ? { icon, key: "tl.k.freeze.auto", params: { reason: str(d.reason) } }

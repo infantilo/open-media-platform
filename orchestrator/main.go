@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/infantilo/openmediaplatform/jobwire"
 	"github.com/infantilo/openmediaplatform/jobwire/clocksync"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/alertsink"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/kpi"
@@ -83,8 +84,10 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/storagebackends"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/supervisorclient"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/support"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/supportaccess"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/timeline"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/trends"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/updates"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/version"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
@@ -1264,6 +1267,50 @@ func main() {
 		}
 		return ""
 	}
+	// Baseline und Trends (Kap. 72.11): Stundenverlauf von Instanzen und Orchestrator (trend_hourly), Hosts aus host_metrics_hourly;
+	// die Auswertung erkennt Abweichungen vom Üblichen und stetiges Wachstum.
+	trendCol := trends.NewCollector(database)
+	go trendCol.RunFlush(ctx, func(err error) { slog.Warn("trend flush failed", "error", err) })
+	machineMem := func() float64 {
+		if b, err := os.ReadFile("/proc/meminfo"); err == nil {
+			total, _ := jobwire.ParseMeminfo(string(b))
+			return float64(total)
+		}
+		return 0
+	}
+	trendAnalyzer := trends.NewAnalyzer(trendCol, trends.Sources{
+		Hosts: func() []trends.HostHours {
+			list, err := hostStore.ListHosts()
+			if err != nil {
+				return nil
+			}
+			var out []trends.HostHours
+			for _, h := range list {
+				w, ok := hostHistory.Window(h.ID, 30*24*time.Hour)
+				if !ok || len(w.Hours) == 0 {
+					continue
+				}
+				hh := trends.HostHours{ID: h.ID, Label: h.Label}
+				for _, r := range w.Hours {
+					hh.CPU = append(hh.CPU, trends.Point{T: r.Hour, Avg: r.CPUAvg, Max: r.CPUMax})
+					hh.Mem = append(hh.Mem, trends.Point{T: r.Hour, Avg: r.MemAvg, Max: r.MemMax})
+					hh.Net = append(hh.Net, trends.Point{T: r.Hour, Avg: r.NetMax, Max: r.NetMax})
+				}
+				out = append(out, hh)
+			}
+			return out
+		},
+		Limit: func(subject, metric string) float64 {
+			switch metric {
+			case "host.mem":
+				return 100
+			case "proc.rss", "orch.heap":
+				return machineMem()
+			}
+			return 0
+		},
+	})
+	go trendAnalyzer.Run(ctx, func(err error) { slog.Warn("trend analysis failed", "error", err) })
 	// Einfrieren (Kap. 72.10): Quellen für die Momentaufnahme; die Automatik friert bei Absturz, Medien weg, Host verstummt und Failover ein
 	// (abschaltbar mit OMP_AUTO_FREEZE=0).
 	freezeStore := freeze.NewStore(database)
@@ -1353,6 +1400,7 @@ func main() {
 	}, freezeStore)
 	freezer.AutoEnabled = os.Getenv("OMP_AUTO_FREEZE") != "0"
 	// Prozesswerte (CPU, Speicher je Instanz) alle 5 s in den Flugschreiber.
+	ticks := 0
 	go func() {
 		tick := time.NewTicker(blackbox.Interval)
 		defer tick.Stop()
@@ -1361,8 +1409,43 @@ func main() {
 			case <-ctx.Done():
 				return
 			case now := <-tick.C:
+				ticks++
 				for _, in := range httpapi.InstancesWithMetrics(launcherSvc, hostMetricsTracker) {
 					flightBox.RecordProc(in.ID, in.Label, in.CPUPercent, in.RSSBytes, now)
+					// Stundenverlauf für Baseline und Trends: nach Typ und Name, damit er einen Neustart der Instanz überlebt.
+					subject := "instance:" + in.Type + ":" + in.Label
+					if in.CPUPercent != nil {
+						trendCol.Observe(subject, in.Label, "proc.cpu", *in.CPUPercent, now)
+					}
+					if in.RSSBytes != nil {
+						trendCol.Observe(subject, in.Label, "proc.rss", float64(*in.RSSBytes), now)
+					}
+					// Offene Dateien und Threads nur für Prozesse auf diesem Rechner, einmal pro Minute (Lecks zeigen sich über Stunden).
+					if ticks%12 == 0 && in.HostID == "" && in.PID > 0 && !in.Crashed {
+						if p, err := support.ReadProcess(in.PID); err == nil {
+							trendCol.Observe(subject, in.Label, "proc.fds", float64(p.OpenFDs), now)
+							trendCol.Observe(subject, in.Label, "proc.threads", float64(p.Threads), now)
+						}
+					}
+				}
+			}
+		}
+	}()
+	// Der Orchestrator selbst: Speicher, Goroutinen, offene Dateien alle 30 s (ein Leck im Orchestrator zeigt sich genauso).
+	go func() {
+		tick := time.NewTicker(30 * time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-tick.C:
+				var ms runtime.MemStats
+				runtime.ReadMemStats(&ms)
+				trendCol.Observe("orchestrator", "Orchestrator", "orch.heap", float64(ms.HeapAlloc), now)
+				trendCol.Observe("orchestrator", "Orchestrator", "orch.goroutines", float64(runtime.NumGoroutine()), now)
+				if p, err := support.ReadProcess(os.Getpid()); err == nil {
+					trendCol.Observe("orchestrator", "Orchestrator", "orch.fds", float64(p.OpenFDs), now)
 				}
 			}
 		}
@@ -1376,6 +1459,11 @@ func main() {
 		label, _ := e.Data["label"].(string)
 		freezer.Observe(e.Kind, label)
 	}
+	trendAnalyzer.OnNew = func(f trends.Finding) {
+		timelineSink(timeline.Event{At: time.Now(), Kind: "trend", Severity: timeline.SevWarn, Subject: f.Subject,
+			Data: map[string]any{"label": f.Label, "metric": f.Metric, "kind": f.Kind, "unit": f.Unit, "value": f.Value, "baseline": f.Baseline,
+				"hours": f.Hours, "hoursToLimit": f.HoursToLimit}})
+	}
 	freezer.OnFrozen = func(m freeze.Meta) {
 		timelineSink(timeline.Event{At: m.CreatedAt, Kind: "freeze", Severity: timeline.SevInfo, Subject: m.ID, Actor: m.CreatedBy,
 			Data: map[string]any{"trigger": m.Trigger, "reason": m.Reason, "note": m.Note, "minutes": m.WindowMinutes}})
@@ -1384,7 +1472,7 @@ func main() {
 	timelineSink(timeline.Event{At: time.Now(), Kind: "orchestrator.started", Severity: timeline.SevInfo, Subject: cfg.ClusterNodeID, Data: map[string]any{"version": version.Version}})
 	go timelineRec.Run(ctx, hub, timelineSink)
 	go timelineStore.RunRetention(ctx, cfg.AuditRetentionDays)
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithMediaKPI(kpiTracker), httpapi.WithHostSysinfo(launcherSvc.SysinfoOnHost), httpapi.WithTimeline(timelineSrc), httpapi.WithFreeze(freezer, freezeStore), httpapi.WithSupportAccess(supportaccess.NewStore(database)), httpapi.OptionalUIIsolation(uiIso), httpapi.WithHostKeyRotation(func(id string) error {
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithMediaKPI(kpiTracker), httpapi.WithHostSysinfo(launcherSvc.SysinfoOnHost), httpapi.WithTimeline(timelineSrc), httpapi.WithFreeze(freezer, freezeStore), httpapi.WithTrends(trendAnalyzer), httpapi.WithSupportAccess(supportaccess.NewStore(database)), httpapi.OptionalUIIsolation(uiIso), httpapi.WithHostKeyRotation(func(id string) error {
 		sg := hostSigner.Load()
 		if sg == nil {
 			return errors.New("no command channel")

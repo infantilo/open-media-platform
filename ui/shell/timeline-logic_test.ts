@@ -98,3 +98,11 @@ Deno.test("describeItem: Einfrieren von Hand und automatisch", () => {
   const auto = describeItem(ev("freeze", 0, { data: { trigger: "auto", reason: "instance.crashed: Kamera 2", minutes: 10 } }), res, tr, au);
   assertEquals([auto.key, auto.params?.reason], ["tl.k.freeze.auto", "instance.crashed: Kamera 2"]);
 });
+
+Deno.test("describeItem: Trend-Ereignisse", () => {
+  const drift = describeItem(ev("trend", 0, { severity: "warn", subject: "instance:omp-source:Kamera", data: { label: "Kamera", metric: "proc.rss", kind: "drift", unit: "B", value: 700 * (1 << 20), baseline: 400 * (1 << 20) } }), res, tr, au);
+  assertEquals([drift.key, drift.params?.value, drift.params?.label], ["tl.k.trend.drift", "700 MiB", "Kamera"]);
+  const dev = describeItem(ev("trend", 0, { severity: "warn", data: { label: "Regie", metric: "host.cpu", kind: "deviation", unit: "%", value: 85, baseline: 30 } }), res, tr, au);
+  assertEquals([dev.key, dev.params?.value, dev.params?.baseline], ["tl.k.trend.deviation", "85 %", "30 %"]);
+  assertEquals(categoryOf(ev("trend", 0, { severity: "warn" })), "ops");
+});

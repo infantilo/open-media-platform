@@ -212,6 +212,7 @@ everything needed without a remote session.
 </tr>
 <tr>
 <td width="50%"><img src="docs/screenshots/diagnose-fehlercodes.png" width="420"><br><sub><b>Error codes:</b> every known error has a stable code (<code>OMP-nnnn</code>) with cause and numbered solution steps — in the Diagnose tab, support tab, node diagnosis and start dialog; API errors carry it in an <code>X-Omp-Error-Code</code> header. The full list is in <a href="docs/FEHLERCODES.md"><code>docs/FEHLERCODES.md</code></a>.</sub></td>
+<td width="50%"><img src="docs/screenshots/trends.png" width="420"><br><sub><b>Baseline and trends:</b> "this is not normal for this system". The system compares each host and long-running process with its own usual behaviour at the same time of day (weekday/weekend aware) and watches memory, open files and threads for steady growth — a leak — with a projection of when the limit would be reached. Findings carry a small chart and show up in the self-test and the timeline.</sub></td>
 <td width="50%"><img src="docs/screenshots/einfrieren.png" width="420"><br><sub><b>Freeze the last minutes ("flight recorder"):</b> the <b>❄ Freeze</b> button in the top bar — and automatically on a crash, lost media, a silent host or a failover — saves the last 10 minutes as a package: timeline, messages, per-node figures every 5 s (frame rate, media ready), CPU/memory per process and each node's pipeline state. Kept for 30 days; the support access can download them.</sub></td>
 </tr>
 </table>
@@ -613,6 +614,8 @@ node has to satisfy.
   read-only support access** (link with expiry, revocable at any time,
   every attempt to write refused and audited), "why does nothing
   arrive here?" for every target with the root cause named, and a
+  **baseline and trend detection** (deviation from the usual for this
+  time of day; steady growth = leak, with a projection), a
   **flight recorder** (a ring buffer of the last 15 minutes of per-node
   figures and per-process CPU/memory; the ❄ button or an automatic trigger
   freezes it, together with timeline, messages and pipeline state, into a

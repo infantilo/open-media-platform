@@ -114,6 +114,15 @@ type Inputs struct {
 	Findings     []Finding
 	// Profile: Name des Betriebsprofils; im Profil „dev“ färben Produktionsbefunde die Ampel nicht rot.
 	Profile string
+	// Trends: Auffälligkeiten aus Baseline und Trend-Erkennung (internal/trends).
+	Trends []TrendFinding
+}
+
+// TrendFinding ist eine Auffälligkeit der Trend-Erkennung (Abweichung vom Üblichen oder stetiges Wachstum).
+type TrendFinding struct {
+	Subject, Label, Metric, Kind, Unit string
+	Value, Baseline, SlopePerHour      float64
+	Hours, HoursToLimit                float64
 }
 
 // tr wählt den Text der Sprache ("en" oder sonst Deutsch).
@@ -364,6 +373,11 @@ func Evaluate(in Inputs, lang string, now time.Time) Report {
 	}
 	if len(crashed) == 0 && len(loops) == 0 && len(in.Instances) > 0 {
 		add(Check{ID: "instances", Group: grp, Level: LevelOK, Title: t.s("Instanzen", "Instances"), Detail: t.s(fmt.Sprintf("%d laufen stabil", len(in.Instances)), fmt.Sprintf("%d running stably", len(in.Instances)))})
+	}
+
+	// ---- Trends ---------------------------------------------------------------------------------------------------
+	for _, f := range in.Trends {
+		cs = append(cs, trendCheck(t, f))
 	}
 
 	// ---- Betriebsprofil --------------------------------------------------

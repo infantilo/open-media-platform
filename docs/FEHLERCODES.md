@@ -104,6 +104,30 @@ Meldungen lassen sich auch selbst mit einem Code versehen: eine Meldung mit `[OM
 1. Die Meldung nennt die Einstellung — Wert und Format prüfen (Administration → Einstellungen oder die Umgebung des Dienstes).
 2. Den Dienst danach neu starten.
 
+### OMP-1013
+
+**Wert ungewöhnlich hoch für diese Tageszeit** — Hinweis
+
+**Ursache:** Der Wert liegt deutlich über dem, was zur selben Tageszeit an den Tagen davor üblich war. Das System ist nicht ausgefallen, verhält sich aber anders als sonst.
+
+**Was tun?**
+
+1. Prüfen, ob sich etwas geändert hat: neue Instanzen, ein Workflow, ein Update (Administration → Zeitleiste zeigt, was zu dieser Zeit geschah).
+2. Die Diagnose (🩺) der Instanzen auf diesem Host zeigt, welche Last verursacht.
+3. Ist die Last gewollt (z. B. neue Produktion), ist nichts zu tun — die Baseline passt sich nach einigen Tagen an.
+
+### OMP-1014
+
+**Verbrauch wächst stetig (mögliches Leck)** — Hinweis
+
+**Ursache:** Speicher, offene Dateien oder Threads steigen seit Stunden gleichmäßig an, ohne wieder zu fallen. So sieht ein Leck aus: früher oder später ist die Grenze erreicht und der Prozess stürzt ab.
+
+**Was tun?**
+
+1. Den betroffenen Prozess zu einem ruhigen Zeitpunkt neu starten (nicht während einer Sendung) — das setzt den Verbrauch zurück.
+2. Wächst er danach wieder: Administration → Support → Support-Paket erstellen und senden, damit der Fehler gefunden werden kann.
+3. Die Hochrechnung im Befund zeigt, wie viel Zeit bleibt.
+
 ### OMP-1010
 
 **Arbeitsspeicher knapp** — Hinweis

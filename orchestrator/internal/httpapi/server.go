@@ -380,6 +380,10 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 		mux.HandleFunc("GET /api/v1/freezes/{id}/download", g.requireVerbGlobal(authz.VerbAdmin, handleDownloadFreeze(options.freezeStore)))
 		mux.HandleFunc("DELETE /api/v1/freezes/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteFreeze(options.freezeStore)))
 	}
+	// Baseline und Trends (Kap. 72.11).
+	if options.trends != nil {
+		mux.HandleFunc("GET /api/v1/admin/trends", g.requireVerbGlobal(authz.VerbAdmin, handleTrends(options.trends)))
+	}
 	// Befristeter Support-Zugang (Kap. 72.9).
 	if options.supportAccess != nil {
 		supportLockout := auth.NewLoginLockout()
@@ -597,8 +601,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/nodes/{id}/diag/pipelines", g.requireVerbOnNode(authz.VerbView, handleNodeProxy(nodes, nodeClient, "/diag/pipelines", nodeLogs)))
 	hostSysCache := newSysCache(options.hostSysinfo, 20*time.Second)
 	// Selbsttest und Support-Paket (Kap. 72): sammeln über den eigenen Router mit den Rechten der aufrufenden Person.
-	mux.HandleFunc("GET /api/v1/admin/selftest", g.requireVerbGlobal(authz.VerbAdmin, handleSelftest(mux, cfg.ClusterDataDir, clusterSvc, hostSysCache)))
-	mux.HandleFunc("GET /api/v1/admin/support-bundle", g.requireVerbGlobal(authz.VerbAdmin, handleSupportBundle(mux, cfg.ClusterDataDir, clusterSvc, hostSysCache)))
+	mux.HandleFunc("GET /api/v1/admin/selftest", g.requireVerbGlobal(authz.VerbAdmin, handleSelftest(mux, cfg.ClusterDataDir, clusterSvc, hostSysCache, options.trends)))
+	mux.HandleFunc("GET /api/v1/admin/support-bundle", g.requireVerbGlobal(authz.VerbAdmin, handleSupportBundle(mux, cfg.ClusterDataDir, clusterSvc, hostSysCache, options.trends)))
 	// Orchestrator-Cluster (ARCHITECTURE.md §19.3, UMSETZUNG.md D12 Teil 1).
 	mux.HandleFunc("GET /api/v1/cluster/status", g.requireAuth(handleClusterStatus(clusterSvc)))
 	// D12 Teil 2: Laufzeit-Mitgliedschaft — Admin-Verb wie andere

@@ -80,7 +80,7 @@ func TestClassifyTagWinsOverPattern(t *testing.T) {
 func TestForCheckPointsToExistingCodes(t *testing.T) {
 	for _, id := range []string{"database", "cluster", "disk:/", "memory", "fds", "load", "shm", "host:h1", "host:h1:disk:/", "host:h1:memory", "host:h1:shm",
 		"nodes", "online", "registry", "instances-crashed", "crashed", "instances-restarts", "restarts", "instances-outdated", "outdated", "media", "fps", "cpu",
-		"threads", "pipeline-queues:main", "pipeline-elements:main", "pipeline:main"} {
+		"threads", "trend:host:h1:host.cpu:deviation", "trend:instance:x:y:proc.rss:drift", "pipeline-queues:main", "pipeline-elements:main", "pipeline:main"} {
 		code := ForCheck(id)
 		if code == "" {
 			t.Errorf("%s: kein Code", id)

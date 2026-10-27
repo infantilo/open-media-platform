@@ -316,3 +316,36 @@ func TestHostChecksGetSpecificCodes(t *testing.T) {
 		t.Fatalf("%v", codes)
 	}
 }
+
+func TestEvaluateTrendFindings(t *testing.T) {
+	in := Inputs{Trends: []TrendFinding{
+		{Subject: "instance:omp-source:Kamera", Label: "Kamera", Metric: "proc.rss", Kind: "drift", Unit: "B", Value: 700 << 20, Baseline: 400 << 20, SlopePerHour: 25 << 20, Hours: 12, HoursToLimit: 40},
+		{Subject: "host:h1", Label: "Regie-Host-A", Metric: "host.cpu", Kind: "deviation", Unit: "%", Value: 85, Baseline: 30},
+	}}
+	r := Evaluate(in, "", now)
+	if r.Level != LevelWarn || r.Warnings != 2 {
+		t.Fatalf("%+v", r)
+	}
+	var drift, dev *Check
+	for i := range r.Checks {
+		switch r.Checks[i].Code {
+		case "OMP-1014":
+			drift = &r.Checks[i]
+		case "OMP-1013":
+			dev = &r.Checks[i]
+		}
+	}
+	if drift == nil || dev == nil {
+		t.Fatalf("Codes fehlen: %+v", r.Checks)
+	}
+	if drift.Group != "Trends" || !strings.Contains(drift.Title, "Kamera: Speicher wächst stetig") || !strings.Contains(drift.Detail, "seit 12 Stunden") || !strings.Contains(drift.Detail, "25 MiB/h") || !strings.Contains(drift.Detail, "40 Stunden") {
+		t.Errorf("Drift: %+v", drift)
+	}
+	if !strings.Contains(dev.Title, "Regie-Host-A: Prozessorlast ungewöhnlich hoch") || !strings.Contains(dev.Detail, "jetzt 85 %") || !strings.Contains(dev.Detail, "üblich sind 30 %") || dev.Fix == "" {
+		t.Errorf("Abweichung: %+v", dev)
+	}
+	en := Evaluate(in, "en", now)
+	if !strings.Contains(en.Checks[0].Title+en.Checks[1].Title, "keeps growing") {
+		t.Errorf("englisch: %+v", en.Checks)
+	}
+}

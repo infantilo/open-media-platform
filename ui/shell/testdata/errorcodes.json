@@ -104,6 +104,30 @@
   "doc": "FEHLERCODES.md#omp-1008"
  },
  {
+  "code": "OMP-1013",
+  "severity": "warn",
+  "title": "Wert ungewöhnlich hoch für diese Tageszeit",
+  "cause": "Der Wert liegt deutlich über dem, was zur selben Tageszeit an den Tagen davor üblich war. Das System ist nicht ausgefallen, verhält sich aber anders als sonst.",
+  "steps": [
+   "Prüfen, ob sich etwas geändert hat: neue Instanzen, ein Workflow, ein Update (Administration → Zeitleiste zeigt, was zu dieser Zeit geschah).",
+   "Die Diagnose (🩺) der Instanzen auf diesem Host zeigt, welche Last verursacht.",
+   "Ist die Last gewollt (z. B. neue Produktion), ist nichts zu tun — die Baseline passt sich nach einigen Tagen an."
+  ],
+  "doc": "FEHLERCODES.md#omp-1013"
+ },
+ {
+  "code": "OMP-1014",
+  "severity": "warn",
+  "title": "Verbrauch wächst stetig (mögliches Leck)",
+  "cause": "Speicher, offene Dateien oder Threads steigen seit Stunden gleichmäßig an, ohne wieder zu fallen. So sieht ein Leck aus: früher oder später ist die Grenze erreicht und der Prozess stürzt ab.",
+  "steps": [
+   "Den betroffenen Prozess zu einem ruhigen Zeitpunkt neu starten (nicht während einer Sendung) — das setzt den Verbrauch zurück.",
+   "Wächst er danach wieder: Administration → Support → Support-Paket erstellen und senden, damit der Fehler gefunden werden kann.",
+   "Die Hochrechnung im Befund zeigt, wie viel Zeit bleibt."
+  ],
+  "doc": "FEHLERCODES.md#omp-1014"
+ },
+ {
   "code": "OMP-1010",
   "severity": "warn",
   "title": "Arbeitsspeicher knapp",

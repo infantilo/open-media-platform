@@ -1054,6 +1054,31 @@ untereinander):
 
   ![Was der Support sieht: gelber Streifen „nur lesen“, die Zeitleiste ohne Bedienelemente mit Schreibwirkung](screenshots/support-zugang-lesesicht.png)
 
+- **Baseline und Trends** — „Das ist nicht normal für dieses System.“ Das
+  System lernt, was bei Ihnen üblich ist, und meldet Abweichungen, bevor
+  daraus ein Ausfall wird. Zwei Dinge werden geprüft: **(1) Abweichung vom
+  Üblichen** — Prozessor-, Speicher- und Netzlast der Hosts und die
+  Prozessorlast langlaufender Prozesse werden mit dem verglichen, was zur
+  **selben Tageszeit** an den Tagen davor üblich war (Werktage und
+  Wochenende getrennt); liegen die letzten beiden Stunden deutlich darüber,
+  steht im Support-Tab ein Befund „… ungewöhnlich hoch — jetzt 92 %, zu
+  dieser Tageszeit üblich sind 20 %“ (OMP-1013). Das braucht mindestens
+  **3 Tage Verlauf**; bis dahin sagt der Hinweis „Baseline und Trends“, wie
+  weit der Aufbau ist. **(2) Stetiges Wachstum** — Speicher, offene Dateien
+  und Threads von Instanzen und des Orchestrators selbst: steigt ein Wert
+  seit Stunden gleichmäßig an, ohne zu fallen, ist das ein Leck (OMP-1014).
+  Der Befund nennt den Anstieg je Stunde und **rechnet hoch, wann die Grenze
+  erreicht wäre**; das genügt schon nach 8 Stunden. Jeder Befund hat ein
+  kleines Diagramm (der Verlauf, gestrichelt das Übliche bzw. der
+  Anfangswert) und erscheint in der Zeitleiste (📈, einmal je Auffälligkeit,
+  nach 6 Stunden erneut). Stundenwerte werden 35 Tage aufbewahrt und
+  überstehen einen Neustart; Instanzen werden nach Typ und Name geführt,
+  damit der Verlauf einen Neustart der Instanz überlebt. Die Erkennung
+  nimmt bewusst nur auffällig hohe Werte und stetigen Anstieg ernst —
+  einzelne Spitzen und kleine Änderungen lösen nichts aus.
+
+  ![Trend-Befunde: Prozessorlast ungewöhnlich hoch für diese Tageszeit und Speicher wächst stetig, jeweils mit Verlauf und Lösungsschritten](screenshots/trends.png)
+
 - **Letzte Minuten einfrieren (❄)** — der „Flugschreiber“. Das System hält
   die letzten 15 Minuten der **Kennzahlen je Node** (Medien bereit, Bildrate)
   und der **Prozesswerte** (CPU, Speicher je Instanz) alle ca. 5 Sekunden im

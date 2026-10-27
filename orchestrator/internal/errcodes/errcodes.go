@@ -107,6 +107,10 @@ func Classify(msg string) (Entry, bool) {
 // ForCheck liefert den Code eines Befunds des Selbsttests oder der Node-Diagnose (Befund-ID → Code).
 func ForCheck(id string) string {
 	switch {
+	case strings.HasPrefix(id, "trend:") && strings.HasSuffix(id, ":deviation"):
+		return "OMP-1013"
+	case strings.HasPrefix(id, "trend:") && strings.HasSuffix(id, ":drift"):
+		return "OMP-1014"
 	case id == "database":
 		return "OMP-1001"
 	case id == "cluster":
