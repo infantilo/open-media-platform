@@ -145,23 +145,47 @@ func (s *Service) MigrateInstance(ctx context.Context, oldInstanceID, targetHost
 
 func (s *Service) migrate(inst launcher.Instance, targetHostID string, edges []edgeRef, carry carried) {
 	oldInstanceID, nodeType := inst.ID, inst.Type
+	oldPin := inst.NodeVersion
+	if oldPin == "" {
+		oldPin = launcher.PinInstalled
+	}
 	if err := s.launcher.Stop(oldInstanceID); err != nil {
 		slog.Warn("instancemigrate: stop old instance failed", "instance", oldInstanceID, "error", err)
 		return
 	}
 
-	// Version, Label, ExtraEnv und Instanz-Optionen der alten Instanz übernehmen.
-	newInst, err := s.launcher.StartPinned(nodeType, inst.Version, targetHostID, inst.Label, inst.ExtraEnv, oldInstanceID, "")
-	if err != nil {
-		slog.Warn("instancemigrate: start on target host failed", "type", nodeType, "targetHost", targetHostID, "error", err)
-		return
+	// start startet auf host mit Version, Label, ExtraEnv und Instanz-Optionen der alten Instanz und wartet auf die Registrierung.
+	// Scheitert sie, wird die halbe Instanz wieder gestoppt (Audit 2026-10-23 H5).
+	start := func(host, pin string) (launcher.Instance, registry.NodeView, error) {
+		n, err := s.launcher.StartPinned(nodeType, inst.Version, host, inst.Label, inst.ExtraEnv, oldInstanceID, pin)
+		if err != nil {
+			return n, registry.NodeView{}, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout)
+		defer cancel()
+		node, err := s.awaitRegistration(ctx, n.ID)
+		if err != nil {
+			_ = s.launcher.Stop(n.ID)
+			return n, registry.NodeView{}, err
+		}
+		return n, node, nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout)
-	newNode, err := s.awaitRegistration(ctx, newInst.ID)
-	cancel()
+	newInst, newNode, err := start(targetHostID, "")
 	if err != nil {
-		slog.Warn("instancemigrate: new instance failed to register", "instance", newInst.ID, "error", err)
+		// Audit H5: die alte Instanz ist schon gestoppt — ohne Rücksprung wäre sie jetzt weg. Zurück auf den bisherigen Host, bisheriger Stand.
+		slog.Warn("instancemigrate: Start auf dem Zielhost gescheitert — Rücksprung auf den bisherigen Host", "type", nodeType, "targetHost", targetHostID, "from", inst.HostID, "error", err)
+		rb, rbNode, rbErr := start(inst.HostID, oldPin)
+		if rbErr != nil {
+			slog.Error("instancemigrate: Rücksprung gescheitert — Instanz ist nicht mehr gestartet", "instance", oldInstanceID, "type", nodeType, "error", rbErr)
+			return
+		}
+		rbNode = s.restoreOwnState(carry, rbNode)
+		rbNode = s.awaitEdgePorts(rbNode, edges)
+		s.reconnect(context.Background(), rbNode, edges)
+		s.moveOptions(oldInstanceID, rb.ID)
+		s.restoreCarried(carry, rbNode)
+		slog.Warn("instancemigrate: Instanz läuft wieder auf dem bisherigen Host", "oldInstance", oldInstanceID, "newInstance", rb.ID, "host", inst.HostID)
 		return
 	}
 

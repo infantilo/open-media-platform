@@ -319,6 +319,19 @@ func main() {
 		st.CmdKey = key
 		return state.Save(statePath, st)
 	}}
+	if reset, _ := strconv.ParseBool(envOr("OMP_HOST_AGENT_RESET_TERM", "false")); reset && st.MaxTerm != 0 {
+		// Notausgang: wurde der Raft-Speicher des Orchestrators neu angelegt, beginnen die Amtszeiten wieder bei 1 und der Agent würde jedes
+		// Kommando als „früherer Leader“ abweisen. Einmal mit dieser Variable starten, dann wieder ohne.
+		slog.Warn("leader term reset on request", "was", st.MaxTerm)
+		st.MaxTerm = 0
+		_ = state.Save(statePath, st)
+	}
+	gate.Verifier.SetTerm(st.MaxTerm, func(term uint64) {
+		st.MaxTerm = term
+		if err := state.Save(statePath, st); err != nil {
+			slog.Warn("could not persist the leader term", "error", err)
+		}
+	})
 	if st.CmdKey == "" {
 		slog.Warn("no command key yet — commands are accepted unsigned until the orchestrator provisions one")
 	}

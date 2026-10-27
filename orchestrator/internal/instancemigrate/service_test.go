@@ -39,7 +39,9 @@ type fakeLauncher struct {
 	stopped  []string
 	startErr error
 	// failPin: StartPinned mit diesem Pin schlägt fehl ("" = die neue/produktive Version).
-	failPin   *string
+	failPin *string
+	// failHost: StartPinned auf diesem Host schlägt fehl.
+	failHost  string
 	pinsUsed  []string
 	onStarted func(launcher.Instance) // simuliert die Node-Registrierung der gestarteten Instanz
 }
@@ -76,7 +78,7 @@ func (f *fakeLauncher) StartLabeled(nodeType, version, hostID, customLabel strin
 func (f *fakeLauncher) StartPinned(nodeType, version, hostID, customLabel string, extraEnv map[string]string, optionsFrom, pin string) (launcher.Instance, error) {
 	f.mu.Lock()
 	f.pinsUsed = append(f.pinsUsed, pin)
-	fail := f.failPin != nil && *f.failPin == pin
+	fail := (f.failPin != nil && *f.failPin == pin) || (f.failHost != "" && f.failHost == hostID)
 	f.mu.Unlock()
 	if fail {
 		return launcher.Instance{}, errors.New("start fehlgeschlagen (Test)")
@@ -320,5 +322,50 @@ func TestRestartInPlaceUnknownInstance(t *testing.T) {
 	svc, _, _, _, _ := restartSetup(t)
 	if _, err := svc.RestartInPlace(context.Background(), "nix"); !errors.Is(err, ErrUnknownInstance) {
 		t.Fatal(err)
+	}
+}
+
+// Audit H5: scheitert der Start auf dem Zielhost, springt die Instanz auf den bisherigen Host zurück und wird neu verkabelt.
+func TestMigrateInstanceRollsBackWhenTargetStartFails(t *testing.T) {
+	original := registrationPollInterval
+	registrationPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { registrationPollInterval = original })
+
+	nodes := &fakeNodes{}
+	l := newFakeLauncher()
+	l.failHost = "host-b"
+	g := &fakeGraph{}
+	svc := NewService(nodes, l, g)
+	// Der Rücksprung-Start registriert sich wie ein echter Node.
+	l.onStarted = func(inst launcher.Instance) {
+		nodes.add(registry.NodeView{ID: "node-" + inst.ID, InstanceID: inst.ID, Senders: []registry.SenderView{{ID: "send-" + inst.ID}}, Receivers: []registry.ReceiverView{{ID: "recv-" + inst.ID}}})
+	}
+
+	l.seed(launcher.Instance{ID: "old-1", Type: "omp-scaler", Label: "Scaler", HostID: "host-a"})
+	nodes.add(registry.NodeView{ID: "node-old", InstanceID: "old-1", Senders: []registry.SenderView{{ID: "send-old"}}, Receivers: []registry.ReceiverView{{ID: "recv-old"}}})
+	g.g = graph.Graph{Edges: []graph.Edge{{FromSender: "send-old", ToReceiver: "recv-external"}, {FromSender: "send-external", ToReceiver: "recv-old"}}}
+
+	if err := svc.MigrateInstance(context.Background(), "old-1", "host-b"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		return len(g.calls) == 2
+	})
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var back *launcher.Instance
+	for _, inst := range l.byID {
+		inst := inst
+		if inst.Type == "omp-scaler" {
+			back = &inst
+		}
+	}
+	if back == nil || back.HostID != "host-a" {
+		t.Fatalf("Instanz muss wieder auf host-a laufen: %+v", l.byID)
+	}
+	if len(l.stopped) != 1 || l.stopped[0] != "old-1" {
+		t.Fatalf("nur die alte Instanz wurde gestoppt: %v", l.stopped)
 	}
 }

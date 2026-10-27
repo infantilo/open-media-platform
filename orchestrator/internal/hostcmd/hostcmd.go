@@ -33,6 +33,8 @@ type Conn interface {
 type Signer struct {
 	Conn Conn
 	Keys KeyStore
+	// Term liefert die Raft-Amtszeit dieses Orchestrators (Fencing, Audit H4/M10); nil oder 0 = ohne Amtszeit (Einzelbetrieb ohne Cluster).
+	Term func() uint64
 
 	mu       sync.Mutex
 	lastTry  map[string]time.Time // Provisionierungsversuche je Host (Alt-Agents nicht bei jedem Kommando erneut behelligen)
@@ -66,20 +68,21 @@ func (s *Signer) Request(subject string, data []byte, timeout time.Duration) ([]
 	if !provisioned {
 		s.provision(hostID, subject, key, timeout)
 	}
-	ts, nonce, sig, err := jobwire.Sign(key, subject, data, time.Now())
+	term := s.term()
+	ts, nonce, sig, err := jobwire.SignTerm(key, subject, data, time.Now(), term)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := s.send(subject, data, signedHeader(ts, nonce, sig), timeout)
+	raw, err := s.send(subject, data, signedHeader(ts, nonce, sig, term), timeout)
 	if err != nil {
 		return nil, err
 	}
 	// Brach eine Rotation nach der Übernahme durch den Agent ab, kennt er nur den Folgeschlüssel: einmal damit versuchen.
 	if bytesContain(raw, "command signature invalid") {
 		if next, nerr := s.Keys.NextKey(hostID); nerr == nil && next != "" {
-			ts, nonce, sig, err := jobwire.Sign(next, subject, data, time.Now())
+			ts, nonce, sig, err := jobwire.SignTerm(next, subject, data, time.Now(), term)
 			if err == nil {
-				if raw2, err2 := s.send(subject, data, signedHeader(ts, nonce, sig), timeout); err2 == nil && !bytesContain(raw2, "unauthorized") {
+				if raw2, err2 := s.send(subject, data, signedHeader(ts, nonce, sig, term), timeout); err2 == nil && !bytesContain(raw2, "unauthorized") {
 					if perr := s.Keys.PromoteNextKey(hostID); perr != nil {
 						slog.Warn("hostcmd: promote next key failed", "host", hostID, "error", perr)
 					}
@@ -91,8 +94,18 @@ func (s *Signer) Request(subject string, data []byte, timeout time.Duration) ([]
 	return raw, nil
 }
 
-func signedHeader(ts, nonce, sig string) nats.Header {
+func (s *Signer) term() uint64 {
+	if s.Term == nil {
+		return 0
+	}
+	return s.Term()
+}
+
+func signedHeader(ts, nonce, sig string, term uint64) nats.Header {
 	h := nats.Header{}
+	if t := jobwire.FormatTerm(term); t != "" {
+		h.Set(jobwire.HeaderTerm, t)
+	}
 	h.Set(jobwire.HeaderTs, ts)
 	h.Set(jobwire.HeaderNonce, nonce)
 	h.Set(jobwire.HeaderSig, sig)

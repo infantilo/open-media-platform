@@ -371,6 +371,13 @@ func (n *Node) Shutdown(ctx context.Context) error {
 // Grundlage des ab D12 Teil 3 eingeführten Aktiv/Passiv-Gatings
 // (ARCHITECTURE.md §19.3 Punkt 6): nur der Leader treibt die
 // cluster-weiten Hintergrund-Loops.
+// Term liefert die aktuelle Raft-Amtszeit dieses Knotens — das Fencing-Token für Kommandos an Host-Agents (Audit H4/M10): ein früherer Leader
+// hat eine kleinere Amtszeit als der aktuelle und wird vom Agent abgewiesen. 0, wenn nicht lesbar.
+func (n *Node) Term() uint64 {
+	term, _ := strconv.ParseUint(n.raft.Stats()["term"], 10, 64)
+	return term
+}
+
 func (n *Node) IsLeader() bool {
 	return n.raft.State() == raft.Leader
 }

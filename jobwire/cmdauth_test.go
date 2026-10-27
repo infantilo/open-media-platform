@@ -93,3 +93,70 @@ func TestNonceCacheForgetsOldEntries(t *testing.T) {
 		t.Fatalf("alte Einmalwerte werden verworfen: %d", len(v.seen))
 	}
 }
+
+func hdrTerm(ts, nonce, sig, term string) func(string) string {
+	base := hdr(ts, nonce, sig)
+	return func(k string) string {
+		if k == HeaderTerm {
+			return term
+		}
+		return base(k)
+	}
+}
+
+// Fencing (Audit H4/M10): ein früherer Leader (kleinere Amtszeit) wird abgewiesen, die Amtszeit ist signiert und wird gespeichert.
+func TestFencingRejectsSupersededLeader(t *testing.T) {
+	key, _ := NewKey()
+	v := NewVerifier(key)
+	var saved []uint64
+	v.SetTerm(0, func(n uint64) { saved = append(saved, n) })
+	pl := []byte(`{"action":"stop","instanceId":"i1"}`)
+	send := func(term uint64) error {
+		ts, n, sig, _ := SignTerm(key, "omp.host.h1.cmd", pl, time.Now(), term)
+		return v.Verify("omp.host.h1.cmd", pl, hdrTerm(ts, n, sig, FormatTerm(term)))
+	}
+	if err := send(5); err != nil {
+		t.Fatal(err)
+	}
+	if err := send(7); err != nil {
+		t.Fatal(err)
+	}
+	if err := send(5); err != ErrStaleTerm {
+		t.Fatalf("alter Leader muss scheitern: %v", err)
+	}
+	if err := send(7); err != nil {
+		t.Fatalf("gleiche Amtszeit bleibt erlaubt: %v", err)
+	}
+	if v.MaxTerm() != 7 || len(saved) != 2 || saved[1] != 7 {
+		t.Fatalf("max=%d gespeichert=%v", v.MaxTerm(), saved)
+	}
+	// Ohne Amtszeit nach Fencing: abgewiesen (sonst durch Weglassen zu umgehen).
+	ts, n, sig, _ := Sign(key, "omp.host.h1.cmd", pl, time.Now())
+	if err := v.Verify("omp.host.h1.cmd", pl, hdr(ts, n, sig)); err != ErrNoTerm {
+		t.Fatalf("ohne Amtszeit: %v", err)
+	}
+}
+
+func TestFencingTermIsCoveredBySignature(t *testing.T) {
+	key, _ := NewKey()
+	v := NewVerifier(key)
+	pl := []byte(`{"action":"stop"}`)
+	ts, n, sig, _ := SignTerm(key, "omp.host.h1.cmd", pl, time.Now(), 3)
+	// Angreifer hebt die Amtszeit im Header an, um den Agent für den echten Leader zu sperren.
+	if err := v.Verify("omp.host.h1.cmd", pl, hdrTerm(ts, n, sig, "999")); err != ErrBadSig {
+		t.Fatalf("manipulierte Amtszeit: %v", err)
+	}
+	if v.MaxTerm() != 0 {
+		t.Fatal("Amtszeit darf nicht übernommen werden")
+	}
+}
+
+func TestWithoutTermsBehavesAsBefore(t *testing.T) {
+	key, _ := NewKey()
+	v := NewVerifier(key)
+	pl := []byte(`x`)
+	ts, n, sig, _ := Sign(key, "omp.host.h1.cmd", pl, time.Now())
+	if err := v.Verify("omp.host.h1.cmd", pl, hdr(ts, n, sig)); err != nil {
+		t.Fatal(err)
+	}
+}

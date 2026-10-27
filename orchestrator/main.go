@@ -748,7 +748,7 @@ func main() {
 	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).
 	hostStore := hosts.NewStore(database)
 	if nc != nil {
-		sg := &hostcmd.Signer{Conn: nc, Keys: hostStore}
+		sg := &hostcmd.Signer{Conn: nc, Keys: hostStore, Term: clusterNode.Term}
 		hostSigner.Store(sg)
 		// Hosts aus der Zeit vor der Signatur bekommen ihren Schlüssel, sobald sie online sind (nicht erst beim ersten Kommando).
 		safego.Go("hostcmd.provision", func() {

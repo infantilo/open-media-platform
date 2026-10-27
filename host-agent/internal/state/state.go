@@ -19,6 +19,8 @@ type State struct {
 	// CmdKey: Schlüssel, mit dem der Orchestrator seine Kommandos signiert (jobwire/cmdauth.go). Leer = noch nicht
 	// provisioniert (Host aus der Zeit vor der Signatur): Kommandos gelten dann unsigniert, bis der Orchestrator ihn liefert.
 	CmdKey string `json:"cmdKey,omitempty"`
+	// MaxTerm: höchste Raft-Amtszeit, die ein Kommando des Orchestrators getragen hat (Fencing, Audit H4/M10); Kommandos kleinerer Amtszeit werden abgewiesen.
+	MaxTerm uint64 `json:"maxTerm,omitempty"`
 }
 
 // Load liest den Zustand aus path (ok=false, wenn die Datei fehlt — noch
