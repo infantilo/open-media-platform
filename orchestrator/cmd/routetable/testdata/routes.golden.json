@@ -120,6 +120,12 @@
     "domain": "core"
   },
   {
+    "method": "GET",
+    "path": "/api/v1/admin/profile",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
     "method": "POST",
     "path": "/api/v1/admin/restore",
     "auth": "verb:Admin",
