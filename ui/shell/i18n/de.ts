@@ -320,6 +320,7 @@ export const de = {
   "health.kpi.avail": "Verfügbarkeit",
   "health.kpi.outages": "Ausfälle",
   "health.kpi.longest": "Längster Ausfall",
+  "health.kpi.rates": "Raten (aktuell, Ø, min)",
   "health.kpi.observed": "Beobachtet",
   "health.1b62eb": "Health — AMWA BCP-008",
   "health.41ecdf": "{p0} Node(s) mit BCP-008-Support · aktualisiert alle {p1}s",

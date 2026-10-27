@@ -97,6 +97,8 @@ struct Pipeline {
     pipeline: gst::Pipeline,
     videotestsrc: gst::Element,
     video_buffers: Arc<AtomicU64>,
+    /// Monoton steigende Bildzahl (nie zurückgesetzt) — Grundlage der Kennzahl `video_fps` im Health-Ereignis (Audit M7).
+    video_total: Arc<AtomicU64>,
     /// Sticky-Flag, einmalig gesetzt beim ersten beobachteten Video-Buffer
     /// — anders als `video_buffers` (bei jedem `take_video_fps()`-Aufruf
     /// zurückgesetzt) bleibt dies wahr, sobald die Pipeline nachweislich
@@ -297,6 +299,8 @@ impl Pipeline {
 
         let video_buffers = Arc::new(AtomicU64::new(0));
         let video_flowed = Arc::new(AtomicBool::new(false));
+        let video_total = Arc::new(AtomicU64::new(0));
+        let total = video_total.clone();
         let counter = video_buffers.clone();
         let flowed = video_flowed.clone();
         let video_sink_pad = videosink
@@ -304,6 +308,7 @@ impl Pipeline {
             .expect("fakesink has a sink pad");
         video_sink_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
             counter.fetch_add(1, Ordering::Relaxed);
+            total.fetch_add(1, Ordering::Relaxed);
             flowed.store(true, Ordering::Relaxed);
             gst::PadProbeReturn::Ok
         });
@@ -337,6 +342,7 @@ impl Pipeline {
             pipeline,
             videotestsrc,
             video_buffers,
+            video_total,
             video_flowed,
             _mxl_output: mxl_output,
             _mxl_audio_output: mxl_audio_output,
@@ -376,9 +382,15 @@ impl Pipeline {
 pub struct PipelineHandle {
     videotestsrc: gst::Element,
     video_flowed: Arc<AtomicBool>,
+    video_total: Arc<AtomicU64>,
 }
 
 impl PipelineHandle {
+    /// Zähler der erzeugten Bilder (monoton) für `register_rate_kpi`.
+    pub fn video_counter(&self) -> Arc<AtomicU64> {
+        self.video_total.clone()
+    }
+
     pub fn set_pattern(&self, pattern: &str) {
         self.videotestsrc.set_property_from_str("pattern", pattern);
     }
@@ -410,6 +422,7 @@ pub fn run(
     let _ = ready.send(Ok(PipelineHandle {
         videotestsrc: pipeline.videotestsrc.clone(),
         video_flowed: pipeline.video_flowed.clone(),
+        video_total: pipeline.video_total.clone(),
     }));
 
     loop {

@@ -32,7 +32,26 @@ type Outage struct {
 	Ongoing bool      `json:"ongoing,omitempty"`
 }
 
+// rateBucket: Minutenwerte einer Raten-Kennzahl (Summe/Anzahl für das Mittel, Minimum).
+type rateBucket struct {
+	sum, min float64
+	count    int
+}
+
+type rateSeries struct {
+	last    float64
+	buckets map[int64]*rateBucket
+}
+
+// Rate ist die Auswertung einer Raten-Kennzahl (z. B. video_fps) über das Fenster.
+type Rate struct {
+	Last float64 `json:"last"`
+	Avg  float64 `json:"avg"`
+	Min  float64 `json:"min"`
+}
+
 type node struct {
+	rates     map[string]*rateSeries
 	label     string
 	lastAt    time.Time
 	known     bool
@@ -52,7 +71,7 @@ type Tracker struct {
 func NewTracker() *Tracker { return &Tracker{nodes: map[string]*node{}, now: time.Now} }
 
 // Observe verbucht ein Health-Ereignis. ready=nil (Node meldet kein media_ready) wird ignoriert.
-func (t *Tracker) Observe(id, label string, ready *bool, at time.Time) {
+func (t *Tracker) Observe(id, label string, ready *bool, kpis map[string]float64, at time.Time) {
 	if ready == nil {
 		return
 	}
@@ -65,6 +84,28 @@ func (t *Tracker) Observe(id, label string, ready *bool, at time.Time) {
 	}
 	if label != "" {
 		n.label = label
+	}
+	for name, v := range kpis {
+		if n.rates == nil {
+			n.rates = map[string]*rateSeries{}
+		}
+		rs := n.rates[name]
+		if rs == nil {
+			rs = &rateSeries{buckets: map[int64]*rateBucket{}}
+			n.rates[name] = rs
+		}
+		rs.last = v
+		m := at.Unix() / 60
+		b := rs.buckets[m]
+		if b == nil {
+			b = &rateBucket{min: v}
+			rs.buckets[m] = b
+		}
+		b.sum += v
+		b.count++
+		if v < b.min {
+			b.min = v
+		}
 	}
 	if n.known {
 		if gap := at.Sub(n.lastAt); gap > 0 && gap <= MaxGap {
@@ -119,6 +160,13 @@ func (t *Tracker) prune(n *node, now time.Time) {
 			delete(n.buckets, m)
 		}
 	}
+	for _, rs := range n.rates {
+		for m := range rs.buckets {
+			if m < cut {
+				delete(rs.buckets, m)
+			}
+		}
+	}
 }
 
 // NodeKPI ist die Kennzahl eines Nodes über ein Zeitfenster.
@@ -131,6 +179,8 @@ type NodeKPI struct {
 	Outages         int      `json:"outages"`
 	LongestOutageS  float64  `json:"longestOutageSeconds"`
 	LastOutage      *Outage  `json:"lastOutage,omitempty"`
+	// Rates: Raten-Kennzahlen des Nodes (z. B. video_fps) über das Fenster.
+	Rates map[string]Rate `json:"rates,omitempty"`
 }
 
 // Snapshot liefert die Kennzahlen aller Nodes für die letzten `window` (höchstens Retention), schlechteste Verfügbarkeit zuerst.
@@ -156,6 +206,27 @@ func (t *Tracker) Snapshot(window time.Duration) []NodeKPI {
 		if ready+notReady > 0 {
 			a := ready / (ready + notReady)
 			k.Availability = &a
+		}
+		for name, rs := range n.rates {
+			var sum, min float64
+			count := 0
+			first := true
+			for m, b := range rs.buckets {
+				if m < cutMinute {
+					continue
+				}
+				sum += b.sum
+				count += b.count
+				if first || b.min < min {
+					min, first = b.min, false
+				}
+			}
+			if count > 0 {
+				if k.Rates == nil {
+					k.Rates = map[string]Rate{}
+				}
+				k.Rates[name] = Rate{Last: rs.last, Avg: sum / float64(count), Min: min}
+			}
 		}
 		for i := range n.outages {
 			o := n.outages[i]
@@ -198,17 +269,18 @@ func (t *Tracker) Forget(id string) {
 }
 
 // FromEvent wertet ein SSE-Ereignis aus; ok=false, wenn es kein Health-Ereignis mit media_ready ist.
-func FromEvent(ev sse.Event) (id, label string, ready *bool, ok bool) {
+func FromEvent(ev sse.Event) (id, label string, ready *bool, kpis map[string]float64, ok bool) {
 	const prefix = "omp.health."
 	if !strings.HasPrefix(ev.Type, prefix) {
-		return "", "", nil, false
+		return "", "", nil, nil, false
 	}
 	var p struct {
-		Label      string `json:"label"`
-		MediaReady *bool  `json:"media_ready"`
+		Label      string             `json:"label"`
+		MediaReady *bool              `json:"media_ready"`
+		KPIs       map[string]float64 `json:"kpis"`
 	}
 	if json.Unmarshal(ev.Data, &p) != nil || p.MediaReady == nil {
-		return "", "", nil, false
+		return "", "", nil, nil, false
 	}
-	return strings.TrimPrefix(ev.Type, prefix), p.Label, p.MediaReady, true
+	return strings.TrimPrefix(ev.Type, prefix), p.Label, p.MediaReady, p.KPIs, true
 }

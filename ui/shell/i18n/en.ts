@@ -321,6 +321,7 @@ export const en: Record<keyof typeof de, string> = {
   "health.kpi.avail": "Availability",
   "health.kpi.outages": "Outages",
   "health.kpi.longest": "Longest outage",
+  "health.kpi.rates": "Rates (current, avg, min)",
   "health.kpi.observed": "Observed",
   "health.1b62eb": "Health — AMWA BCP-008",
   "health.41ecdf": "{p0} node(s) with BCP-008 support · refreshed every {p1}s",

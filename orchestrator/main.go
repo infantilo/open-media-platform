@@ -320,8 +320,8 @@ func main() {
 		ch, cancel := hub.Subscribe()
 		defer cancel()
 		for ev := range ch {
-			if id, label, ready, ok := kpi.FromEvent(ev); ok {
-				kpiTracker.Observe(id, label, ready, time.Now())
+			if id, label, ready, kpis, ok := kpi.FromEvent(ev); ok {
+				kpiTracker.Observe(id, label, ready, kpis, time.Now())
 			}
 		}
 	}()

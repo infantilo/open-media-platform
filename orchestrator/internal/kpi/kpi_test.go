@@ -12,7 +12,7 @@ func b(v bool) *bool { return &v }
 func feed(t *Tracker, id string, start time.Time, seconds int, ready bool) time.Time {
 	at := start
 	for i := 0; i < seconds; i += 5 { // alle 5 s ein Ereignis wie ein echter Node
-		t.Observe(id, "PGM", b(ready), at)
+		t.Observe(id, "PGM", b(ready), nil, at)
 		at = at.Add(5 * time.Second)
 	}
 	return at
@@ -22,10 +22,10 @@ func TestAvailabilityAndOutages(t *testing.T) {
 	tr := NewTracker()
 	t0 := time.Unix(1_800_000_000, 0)
 	tr.now = func() time.Time { return t0.Add(120 * time.Second) }
-	at := feed(tr, "n1", t0, 60, true)   // 60 s bereit
-	at = feed(tr, "n1", at, 20, false)   // 20 s Ausfall
-	at = feed(tr, "n1", at, 40, true)    // wieder 40 s bereit
-	tr.Observe("n1", "PGM", b(true), at) // letztes Ereignis schließt das Intervall
+	at := feed(tr, "n1", t0, 60, true)        // 60 s bereit
+	at = feed(tr, "n1", at, 20, false)        // 20 s Ausfall
+	at = feed(tr, "n1", at, 40, true)         // wieder 40 s bereit
+	tr.Observe("n1", "PGM", b(true), nil, at) // letztes Ereignis schließt das Intervall
 
 	k := tr.Snapshot(time.Hour)[0]
 	if k.Availability == nil || *k.Availability < 0.80 || *k.Availability > 0.86 {
@@ -42,11 +42,11 @@ func TestAvailabilityAndOutages(t *testing.T) {
 func TestOngoingOutageAndGapsAreNotObserved(t *testing.T) {
 	tr := NewTracker()
 	t0 := time.Unix(1_800_000_000, 0)
-	tr.Observe("n1", "A", b(true), t0)
-	tr.Observe("n1", "A", b(true), t0.Add(5*time.Second))
+	tr.Observe("n1", "A", b(true), nil, t0)
+	tr.Observe("n1", "A", b(true), nil, t0.Add(5*time.Second))
 	// 10 Minuten Schweigen: nicht beobachtet, nicht als Ausfall gezählt.
-	tr.Observe("n1", "A", b(true), t0.Add(10*time.Minute))
-	tr.Observe("n1", "A", b(false), t0.Add(10*time.Minute+5*time.Second))
+	tr.Observe("n1", "A", b(true), nil, t0.Add(10*time.Minute))
+	tr.Observe("n1", "A", b(false), nil, t0.Add(10*time.Minute+5*time.Second))
 	tr.now = func() time.Time { return t0.Add(10*time.Minute + 65*time.Second) }
 	k := tr.Snapshot(time.Hour)[0]
 	if k.ObservedSeconds > 15 {
@@ -60,14 +60,14 @@ func TestOngoingOutageAndGapsAreNotObserved(t *testing.T) {
 func TestNeverReadyIsNoOutageAndNoDataHasNilAvailability(t *testing.T) {
 	tr := NewTracker()
 	t0 := time.Unix(1_800_000_000, 0)
-	tr.Observe("n1", "A", b(false), t0)
-	tr.Observe("n1", "A", b(false), t0.Add(5*time.Second))
+	tr.Observe("n1", "A", b(false), nil, t0)
+	tr.Observe("n1", "A", b(false), nil, t0.Add(5*time.Second))
 	tr.now = func() time.Time { return t0.Add(10 * time.Second) }
 	k := tr.Snapshot(time.Hour)[0]
 	if k.Outages != 0 {
 		t.Fatal("Start ohne je bereit zu sein ist kein Ausfall")
 	}
-	tr.Observe("n2", "B", nil, t0) // ohne media_ready ignoriert
+	tr.Observe("n2", "B", nil, nil, t0) // ohne media_ready ignoriert
 	if len(tr.Snapshot(time.Hour)) != 1 {
 		t.Fatal("Node ohne media_ready nicht aufnehmen")
 	}
@@ -97,14 +97,39 @@ func TestWindowAndSorting(t *testing.T) {
 }
 
 func TestFromEvent(t *testing.T) {
-	id, label, r, ok := FromEvent(sse.Event{Type: "omp.health.n7", Data: []byte(`{"label":"X","media_ready":true}`)})
+	id, label, r, _, ok := FromEvent(sse.Event{Type: "omp.health.n7", Data: []byte(`{"label":"X","media_ready":true}`)})
 	if !ok || id != "n7" || label != "X" || r == nil || !*r {
 		t.Fatal("health")
 	}
-	if _, _, _, ok := FromEvent(sse.Event{Type: "omp.health.n7", Data: []byte(`{"label":"X"}`)}); ok {
+	if _, _, _, _, ok := FromEvent(sse.Event{Type: "omp.health.n7", Data: []byte(`{"label":"X"}`)}); ok {
 		t.Fatal("ohne media_ready")
 	}
-	if _, _, _, ok := FromEvent(sse.Event{Type: "omp.alert.n7", Data: []byte(`{}`)}); ok {
+	if _, _, _, _, ok := FromEvent(sse.Event{Type: "omp.alert.n7", Data: []byte(`{}`)}); ok {
 		t.Fatal("kein Health")
+	}
+}
+
+func TestRatesAverageAndMinOverWindow(t *testing.T) {
+	tr := NewTracker()
+	t0 := time.Unix(1_800_000_000, 0)
+	for i, v := range []float64{25, 25, 24, 10, 25, 25} {
+		tr.Observe("n1", "A", b(true), map[string]float64{"video_fps": v}, t0.Add(time.Duration(i*5)*time.Second))
+	}
+	tr.now = func() time.Time { return t0.Add(40 * time.Second) }
+	k := tr.Snapshot(time.Hour)[0]
+	r, ok := k.Rates["video_fps"]
+	if !ok || r.Last != 25 || r.Min != 10 || r.Avg < 20.5 || r.Avg > 22.5 {
+		t.Fatalf("%+v", k.Rates)
+	}
+	tr.now = func() time.Time { return t0.Add(3 * time.Hour) }
+	if len(tr.Snapshot(time.Hour)[0].Rates) != 0 {
+		t.Fatal("außerhalb des Fensters keine Rate")
+	}
+}
+
+func TestFromEventCarriesKPIs(t *testing.T) {
+	_, _, _, k, ok := FromEvent(sse.Event{Type: "omp.health.n1", Data: []byte(`{"label":"S","media_ready":true,"kpis":{"video_fps":24.9}}`)})
+	if !ok || k["video_fps"] != 24.9 {
+		t.Fatalf("%v %v", k, ok)
 	}
 }

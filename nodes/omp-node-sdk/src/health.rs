@@ -28,6 +28,9 @@ pub struct Status {
     /// registriert" (`status`) — tatsächlich Medien produziert/konsumiert.
     /// Ausgewertet von [`crate::node::MediaReadySource`].
     pub media_ready: bool,
+    /// Raten-Kennzahlen (z. B. `video_fps`), s. [`crate::kpi`]; leer = nicht gesendet.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub kpis: std::collections::BTreeMap<String, f64>,
 }
 
 /// Auf `omp.alert.<node_id>` veröffentlichter Payload — ein Node meldet

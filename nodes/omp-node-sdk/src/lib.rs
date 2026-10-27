@@ -16,6 +16,7 @@ pub mod descriptor;
 pub mod health;
 pub mod idgen;
 pub mod is04;
+pub mod kpi;
 pub mod liveness;
 pub mod node;
 pub mod nodeauth;

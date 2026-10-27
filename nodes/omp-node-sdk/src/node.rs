@@ -243,6 +243,7 @@ pub struct NodeHandle {
     label: String,
     shared_receivers: Arc<std::sync::Mutex<RegisteredReceivers>>,
     liveness: Arc<crate::liveness::LivenessMonitor>,
+    kpis: Arc<crate::kpi::RateKpis>,
 }
 
 impl NodeHandle {
@@ -268,6 +269,16 @@ impl NodeHandle {
     /// immer fälschlich als hängend).
     pub fn unregister_worker(&self, name: &str) {
         self.liveness.unregister(name);
+    }
+
+    /// Meldet eine Rate als Kennzahl (Audit M7, [`crate::kpi`]): `counter` zählt Ereignisse (z. B. erzeugte Bilder) und muss nur monoton steigen; der
+    /// Health-Takt veröffentlicht daraus `kpis[name]` = Ereignisse je Sekunde, der Orchestrator zeigt Mittel/Minimum im Health-Tab.
+    pub fn register_rate_kpi(&self, name: impl Into<String>, counter: Arc<std::sync::atomic::AtomicU64>) {
+        self.kpis.register(name, counter);
+    }
+
+    pub fn unregister_rate_kpi(&self, name: &str) {
+        self.kpis.unregister(name);
     }
 
     /// Veröffentlicht einen Alarm auf `omp.alert.<node_id>` (z. B. bei
@@ -774,6 +785,7 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
     }));
 
     let liveness = Arc::new(crate::liveness::LivenessMonitor::new());
+    let kpis = Arc::new(crate::kpi::RateKpis::new());
 
     let handle = NodeHandle {
         node_id: node_id.clone(),
@@ -783,6 +795,7 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         label: config.label.clone(),
         shared_receivers: shared_receivers.clone(),
         liveness: liveness.clone(),
+        kpis: kpis.clone(),
     };
 
     // Bugfix 2026-07-26 (Geister-Kacheln im Flow-Editor nach Stop/
@@ -850,6 +863,7 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         config.label,
         config.media_ready,
         liveness,
+        kpis,
     ));
 
     Ok(handle)
@@ -897,6 +911,7 @@ async fn heartbeat_loop(
     mut label: String,
     media_ready: MediaReadySource,
     liveness: Arc<crate::liveness::LivenessMonitor>,
+    kpis: Arc<crate::kpi::RateKpis>,
 ) {
     let mut interval = tokio::time::interval(HEARTBEAT_INTERVAL);
     loop {
@@ -992,6 +1007,7 @@ async fn heartbeat_loop(
                 senders: all_senders.len(),
                 receivers: receivers_snapshot.len(),
                 media_ready: media_ready.is_ready(),
+                kpis: kpis.sample(std::time::Instant::now()),
             };
             if let Err(e) = publisher.publish(&status).await {
                 eprintln!("omp-node-sdk: health publish failed: {e}");

@@ -113,6 +113,7 @@ interface KpiRow {
   observedSeconds: number;
   outages: number;
   longestOutageSeconds: number;
+  rates?: Record<string, { last: number; avg: number; min: number }>;
 }
 
 class HealthView extends HTMLElement {
@@ -327,7 +328,8 @@ class HealthView extends HTMLElement {
           <td style="padding:3px 10px;text-align:right;font-weight:600;color:${color};">${pct}</td>
           <td style="padding:3px 10px;text-align:right;">${k.outages}</td>
           <td style="padding:3px 10px;text-align:right;">${k.outages ? fmt(k.longestOutageSeconds) : "–"}</td>
-          <td style="padding:3px 10px;text-align:right;color:var(--omp-text-dim);">${fmt(k.observedSeconds)}</td></tr>`;
+          <td style="padding:3px 10px;text-align:right;color:var(--omp-text-dim);">${fmt(k.observedSeconds)}</td>
+          <td style="padding:3px 10px;">${Object.entries(k.rates ?? {}).map(([n, r]) => `${escapeHtml(n)} ${r.last.toFixed(1)} <span style="color:var(--omp-text-dim);">(Ø ${r.avg.toFixed(1)}, min ${r.min.toFixed(1)})</span>`).join("<br>")}</td></tr>`;
       })
       .join("");
     return `<div style="margin-top:var(--omp-space-4);">
@@ -335,7 +337,7 @@ class HealthView extends HTMLElement {
       <div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin:2px 0 6px;">${t("health.kpi.hint")}</div>
       <table style="border-collapse:collapse;"><thead><tr style="color:var(--omp-text-dim);text-align:left;">
         <th style="padding:3px 10px;">${t("health.kpi.node")}</th><th style="padding:3px 10px;"></th><th style="padding:3px 10px;text-align:right;">${t("health.kpi.avail")}</th>
-        <th style="padding:3px 10px;text-align:right;">${t("health.kpi.outages")}</th><th style="padding:3px 10px;text-align:right;">${t("health.kpi.longest")}</th><th style="padding:3px 10px;text-align:right;">${t("health.kpi.observed")}</th>
+        <th style="padding:3px 10px;text-align:right;">${t("health.kpi.outages")}</th><th style="padding:3px 10px;text-align:right;">${t("health.kpi.longest")}</th><th style="padding:3px 10px;text-align:right;">${t("health.kpi.observed")}</th><th style="padding:3px 10px;">${t("health.kpi.rates")}</th>
       </tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 

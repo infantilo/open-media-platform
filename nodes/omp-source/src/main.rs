@@ -258,6 +258,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let media_ready_pipeline = pipeline_handle.clone();
+    let video_counter = pipeline_handle.video_counter();
 
     let store: Arc<dyn ParamStore> = Arc::new(SourceStore {
         fps: fps.clone(),
@@ -348,6 +349,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // vorankam.
     handle.register_worker("pipeline", pipeline_heartbeat);
     handle.register_worker("preview-accept", preview_heartbeat);
+    // Audit M7: Bildrate als Kennzahl im Health-Ereignis (Orchestrator: Health-Tab, Mittel/Minimum).
+    handle.register_rate_kpi("video_fps", video_counter);
 
     let events = async {
         while let Some(event) = rx.recv().await {
