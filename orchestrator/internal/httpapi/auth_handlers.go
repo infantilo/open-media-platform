@@ -117,6 +117,7 @@ func handleLogin(authSvc AuthService, audit AuditLogger, lockout LoginRateLimite
 			lim.name.RecordSuccess(req.Username)
 		}
 		audit.Log(req.Username, r.Method, r.URL.Path, "", http.StatusOK)
+		setSessionCookie(w, r, token)
 		writeJSON(w, http.StatusOK, loginResponse{Token: token, ExpiresAt: exp, Username: req.Username})
 	}
 }
@@ -624,5 +625,33 @@ func handleListAuditLog(reader AuditReader) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, entries)
+	}
+}
+
+// handleSession ist POST /api/v1/auth/session: tauscht ein gültiges Bearer-Token gegen das Sitzungs-Cookie (Umstellung einer bestehenden Anmeldung aus
+// localStorage, Audit H1). Nur mit Authorization-Header — ein Cookie allein erzeugt kein neues Cookie.
+func handleSession(authSvc AuthService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		h := r.Header.Get("Authorization")
+		if !strings.HasPrefix(h, "Bearer ") {
+			http.Error(w, "bearer token required", http.StatusUnauthorized)
+			return
+		}
+		token := strings.TrimPrefix(h, "Bearer ")
+		if _, err := authSvc.Authenticate(r.Context(), token); err != nil {
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+		setSessionCookie(w, r, token)
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handleLogout ist POST /api/v1/auth/logout: löscht das Sitzungs-Cookie (das Token selbst bleibt bis zum Ablauf gültig — es gibt keinen Widerruf einzelner Tokens;
+// der Sitzungszähler des Nutzers macht alle ungültig).
+func handleLogout() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		clearSessionCookie(w, r)
+		w.WriteHeader(http.StatusNoContent)
 	}
 }

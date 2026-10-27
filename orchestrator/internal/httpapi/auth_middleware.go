@@ -216,6 +216,10 @@ func bearerToken(r *http.Request) (string, bool) {
 			return t, true
 		}
 	}
+	// Sitzungs-Cookie (H1) — nur, wenn die Anfrage zulässig aus der eigenen Seite kommt (CSRF-Schutz, s. cookieRequestAllowed).
+	if c, err := r.Cookie(sessionCookieName); err == nil && c.Value != "" && cookieRequestAllowed(r) {
+		return c.Value, true
+	}
 	return "", false
 }
 

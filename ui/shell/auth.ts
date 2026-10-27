@@ -12,38 +12,58 @@ import { buildLangSelect, getLang, t } from "./i18n.ts";
 // der alle bestehenden Aufrufer ohne Änderung mit dem Authorization-
 // Header versorgt — ausdrücklich dokumentiert, damit es nicht wie ein
 // Versehen aussieht.
+// Audit 2026-10-23 H1: die Sitzung trägt ein HttpOnly-Cookie (`omp_session`, vom Orchestrator beim Anmelden gesetzt) — das Token liegt nicht mehr in
+// localStorage und ist für Skripte (auch die der Node-Oberflächen im selben Ursprung) unsichtbar. Das Cookie geht bei jeder Anfrage an denselben Ursprung
+// automatisch mit, auch bei `<img>`, `EventSource` und `import()`; die `?access_token=`-Umwege entfallen damit.
 const TOKEN_KEY = "omp-auth-token";
 
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
-}
+// Altbestand: eine vor der Umstellung gespeicherte Anmeldung wird einmalig gegen das Cookie getauscht und dann aus localStorage gelöscht.
+let legacyToken: string | null = null;
+try {
+  legacyToken = localStorage.getItem(TOKEN_KEY);
+} catch { /* Speicher gesperrt: es gibt nichts umzustellen */ }
 
-export function setToken(token: string) {
-  localStorage.setItem(TOKEN_KEY, token);
+/** Nur für Altbestand und Skripte, die ein Token als Query anhängen würden: nach der Umstellung immer `null` (das Cookie genügt). */
+export function getToken(): string | null {
+  return legacyToken;
 }
 
 export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY);
+  legacyToken = null;
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+  } catch { /* egal */ }
 }
 
 function shouldAttachToken(url: string): boolean {
   return url.startsWith("/api/v1/");
 }
 
+const originalFetch = window.fetch.bind(window);
+
 (function installFetchAuth() {
-  const originalFetch = window.fetch.bind(window);
   window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.pathname : "";
-    const token = getToken();
     if (shouldAttachToken(url)) {
       const headers = new Headers(init?.headers);
-      if (token) headers.set("Authorization", `Bearer ${token}`);
+      // Bis zur Umstellung des Altbestands (unten) noch per Header; danach trägt das Cookie die Anmeldung.
+      if (legacyToken && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${legacyToken}`);
       // Sprache für serverseitig lokalisierte Texte (Katalog, Node-Optionen).
       headers.set("Accept-Language", getLang());
       init = { ...init, headers };
     }
     return originalFetch(input, init);
   };
+})();
+
+/** Wird beim Laden einmal ausgeführt; wer die Anmeldung braucht, wartet darauf (`sessionReady`). */
+export const sessionReady: Promise<void> = (async () => {
+  if (!legacyToken) return;
+  try {
+    const res = await originalFetch("/api/v1/auth/session", { method: "POST", headers: { Authorization: `Bearer ${legacyToken}` } });
+    if (res.ok) clearToken(); // Cookie ist gesetzt
+    else if (res.status === 401) clearToken(); // abgelaufen: ohnehin ungültig
+  } catch { /* Orchestrator kurz weg: beim nächsten Laden erneut */ }
 })();
 
 export interface WhoamiResponse {
@@ -71,12 +91,14 @@ export async function login(username: string, password: string): Promise<void> {
     body: JSON.stringify({ username, password }),
   });
   if (!res.ok) throw new Error("invalid credentials");
-  const body = (await res.json()) as { token: string };
-  setToken(body.token);
+  // Der Orchestrator hat das Sitzungs-Cookie gesetzt; das Token in der Antwort ist für API-Clients gedacht und wird hier nicht aufbewahrt.
 }
 
-export function logout() {
+export async function logout() {
   clearToken();
+  try {
+    await fetch("/api/v1/auth/logout", { method: "POST" });
+  } catch { /* egal */ }
   location.reload();
 }
 

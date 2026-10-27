@@ -387,6 +387,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	}
 
 	mux.HandleFunc("POST /api/v1/auth/login", handleLogin(authSvc, auditLogger, loginLockout, loginLimits{ip: auth.NewLoginLockoutN(30), name: auth.NewLoginLockoutN(50)}))
+	mux.HandleFunc("POST /api/v1/auth/session", handleSession(authSvc))
+	mux.HandleFunc("POST /api/v1/auth/logout", handleLogout())
 	mux.HandleFunc("GET /api/v1/auth/whoami", handleWhoami(authSvc, authzStore))
 	mux.HandleFunc("POST /api/v1/auth/users", g.requireVerbGlobal(authz.VerbAdmin, handleCreateUser(authSvc, authzStore)))
 	mux.HandleFunc("GET /api/v1/auth/users", g.requireVerbGlobal(authz.VerbAdmin, handleListUsers(authSvc, authzStore, options.groups)))
@@ -799,7 +801,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 		options.modules.Mount(moduleRoutes{mux: mux, g: g}, options.moduleDeps)
 	}
 
-	mux.Handle("/", spaFallback(cfg.UIDir, revalidateStatic(http.FileServer(http.Dir(cfg.UIDir)))))
+	mux.Handle("/", withShellSecurityHeaders(spaFallback(cfg.UIDir, revalidateStatic(http.FileServer(http.Dir(cfg.UIDir))))))
 	return countRequests(reqCounters, noStoreForAPI(localizeEnglish(mux)))
 }
 

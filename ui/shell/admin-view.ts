@@ -30,7 +30,7 @@ import { getLang } from "./i18n.ts";
 import "./locations-view.ts";
 import { fetchBuildInfo, formatFirmwareLong } from "./version.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
-import { getToken, login } from "./auth.ts";
+import { login, whoami } from "./auth.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 import { showToast } from "../kit/omp-toast.ts";
 
@@ -1024,7 +1024,7 @@ class AdminView extends HTMLElement {
     // neu laden — sonst bliebe die aktuelle Sitzung ohne Token stecken,
     // während UserCount ab jetzt eine echte Anmeldung verlangt, und jeder
     // weitere Admin-Aufruf in diesem Tab würde ins Leere laufen (401).
-    if (!getToken()) {
+    if (!(await whoami()).authenticated) {
       try {
         await login(username, password);
         location.reload();
