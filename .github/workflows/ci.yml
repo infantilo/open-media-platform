@@ -55,10 +55,9 @@ jobs:
 
   # Audit 2026-10-23 "Rust (~97k Zeilen, 746 Tests) in keiner CI": der Rust-Workspace braucht MXL (third_party/mxl, gitignored) — hier wird
   # der feste Tag samt unseren Patches geholt (wie deploy/dev/install-mxl.sh), die C-Bibliothek selbst aber nicht gebaut
-  # (Feature mxl-not-built). Zunächst nicht blockierend (continue-on-error), bis der Lauf auf dem Runner nachweislich stabil ist.
+  # (Feature mxl-not-built). Erster grüner Lauf auf dem Runner: 2026-10-27 (f8ebc68).
   rust:
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

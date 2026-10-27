@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/infantilo/openmediaplatform/jobwire/clocksync"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/alertsink"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profile"
 	"log/slog"
 	"net"
@@ -941,6 +942,26 @@ func main() {
 	// oben) bzw. aus dem von Natur aus single-owner lokalen
 	// os/exec-Supervise-Pfad.
 	go runWhileLeader(ctx, clusterNode, workflowSvc.RunFailoverWatcher)
+	// Audit 2026-10-23 M7: externes Alarming. Nur der Leader sendet (sonst käme jeder Alarm einmal je Orchestrator); ohne OMP_ALERT_WEBHOOK_URL passiert nichts.
+	if sink := alertsink.New(os.Getenv("OMP_ALERT_WEBHOOK_URL"), os.Getenv("OMP_ALERT_WEBHOOK_TOKEN")); sink != nil {
+		slog.Info("externes Alarming aktiv (Webhook)")
+		go sink.Run(ctx)
+		go runWhileLeader(ctx, clusterNode, func(ctx context.Context) { alertsink.NodeAlerts(ctx, hub, sink) })
+		go runWhileLeader(ctx, clusterNode, func(ctx context.Context) {
+			alertsink.WatchHosts(ctx, 5*time.Second, func() map[string]alertsink.HostState {
+				out := map[string]alertsink.HostState{}
+				all, err := hostStore.ListHosts()
+				if err != nil {
+					return out
+				}
+				for _, h := range all {
+					m, ok := hostMetricsTracker.Get(h.ID)
+					out[h.ID] = alertsink.HostState{Name: h.Label, Online: ok && !m.Goodbye && time.Since(m.ReceivedAt) < 15*time.Second}
+				}
+				return out
+			}, sink)
+		})
+	}
 	// Periodische Sicherung des Bedienzustands laufender Workflows
 	// (OMP_ROLE_STATE_BACKUP_INTERVAL, Default 60s, "0" = aus).
 	go runWhileLeader(ctx, clusterNode, workflowSvc.RunRoleStateBackup)

@@ -5854,7 +5854,7 @@ Die Zuteilung (Teilnehmer × Kanäle) war eine einzige Tabelle mit zwei Knöpfen
   - **Notausgang:** wird der Raft-Speicher des Orchestrators neu angelegt (`data/raft` gelöscht), beginnen die Amtszeiten wieder bei 1 und die Agents würden alles abweisen — einmal den Agent mit `OMP_HOST_AGENT_RESET_TERM=1` starten.
   - **Live:** Orchestrator + simulierter Host-Agent: ein Remote-Start lief durch, der Agent speicherte `maxTerm` (Amtszeit 245 im Dev-Stack); ein direkt per NATS gesendetes, korrekt signiertes Kommando mit Amtszeit 1 → „command from a superseded leader (term too old)“, eines ohne Amtszeit → „command without leader term…“.
   - **Grenze:** das Fencing wirkt auf Host-Kommandos (Start/Stop/Jobs), nicht auf NATS-Ereignisse oder Datenbankschreibzugriffe eines abgelösten Leaders; ein echter Split-Brain-Test mit zwei Orchestratoren und gekappter Verbindung fehlt (Dev-Stack: ein Orchestrator).
-- **Rust-CI:** der erste Lauf kompilierte und lief durch bis auf drei Tests (`audiomixmatrix` fehlt → `gstreamer1.0-plugins-bad` installiert; die echte Fabrics-Übertragung braucht libfabric → übersprungen). Job bleibt `continue-on-error`, bis ein Lauf grün ist.
+- **Rust-CI:** der erste Lauf kompilierte und lief durch bis auf drei Tests (`audiomixmatrix` fehlt → `gstreamer1.0-plugins-bad` installiert; die echte Fabrics-Übertragung braucht libfabric → übersprungen). **Zweiter Lauf (f8ebc68): Job `rust` grün auf dem Runner** — `continue-on-error` entfernt, der Job blockiert jetzt.
 
 **Offen aus dem Audit:** B4, B5 (nur mit mehreren Hosts), H1-Rest, H6, M5–M7, M12.
 
@@ -5868,3 +5868,13 @@ Der Produktions-Deployment war der Dev-Stack (Datenbank mit Dev-Passwort, NATS o
 - **Grenze (B4/B5 bleiben als Aufgabe der Installation):** die Prüfung **findet** das Problem, sie behebt es nicht — Patroni-Knoten auf getrennten Rechnern mit Volumes und eigenen Passwörtern, ein dritter Raft-Knoten (Zeuge) auf einem eigenen Rechner und die drei Fehlerdomänen lassen sich nicht aus dem Code erzwingen; dafür stand kein Mehr-Rechner-Aufbau mehr zur Verfügung (.60/.61 entfallen). Das Zeugen-Verfahren selbst (leichter Raft-Knoten ohne Medienlast) ist nicht gebaut.
 
 **Offen aus dem Audit:** B4/B5 (Infrastruktur, s. o.), H1-Rest (Registry offen, Node-JS im Orchestrator-Ursprung), H6, M5–M7, M12.
+
+## Kapitel 67: Audit 2026-10-23 — M7 externes Alarming (Nutzerauftrag 2026-10-27, **umgesetzt, live geprüft**)
+
+Wer nicht auf die Oberfläche schaut, erfuhr von einem ausgefallenen Host oder einer gerissenen Pipeline nichts. `internal/alertsink` leitet Alarme an einen **Webhook** weiter: `OMP_ALERT_WEBHOOK_URL`, optional `OMP_ALERT_WEBHOOK_TOKEN` (als `Authorization: Bearer`). Jeder Alarm geht als JSON hinaus (`kind`, `subject`, `name`, `message`, `time`) mit einem Kurztext `text`, damit Slack-/Teams-/Mattermost-kompatible Eingänge ihn unmittelbar anzeigen.
+- **Quellen:** Node-Alarme (`omp.alert.<id>`, z. B. gerissene Pipeline) und Host online/offline (Telemetrie älter als 15 s; der Ausgangszustand beim Start löst keinen Alarm aus).
+- **Verhalten:** nur der **Leader** sendet (sonst käme jeder Alarm einmal je Orchestrator); gleiche Meldungen werden eine Minute lang zusammengefasst; ein nicht erreichbares Ziel bremst nichts (eigene Warteschlange mit 256 Plätzen, 3 Wiederholungen nach 2/10/30 s, danach Warnung im Log); ohne URL passiert nichts.
+- **Live:** lokaler Webhook-Empfänger; ein per NATS gesendeter Node-Alarm kam mit Bearer-Token an; Host-Agents starten/stoppen → `host-online`/`host-offline` für beide.
+- **Nicht gebaut (M7 Rest):** Medien-KPIs als Zeitreihen (Bildfehler, Pegel, Verzögerung je Sendeweg) und Alarmregeln auf Schwellwerten; weitere Quellen (Failover, Sendeschutz, Backup-Fehler) wären eine kleine Ergänzung an `Sink.Send`.
+
+**Offen aus dem Audit:** B4/B5-Infrastruktur, H1-Rest, H6, M5, M6, M7-Rest, M12.
