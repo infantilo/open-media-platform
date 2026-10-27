@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/infantilo/openmediaplatform/jobwire/clocksync"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/alertsink"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/kpi"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profile"
 	"log/slog"
 	"net"
@@ -313,6 +314,17 @@ func main() {
 	defer stop()
 
 	hub := sse.NewHub()
+	// Audit M7: Medien-Kennzahlen (Verfügbarkeit, Ausfälle) aus den Health-Ereignissen der Nodes.
+	kpiTracker := kpi.NewTracker()
+	go func() {
+		ch, cancel := hub.Subscribe()
+		defer cancel()
+		for ev := range ch {
+			if id, label, ready, ok := kpi.FromEvent(ev); ok {
+				kpiTracker.Observe(id, label, ready, time.Now())
+			}
+		}
+	}()
 	healthTracker := health.NewTracker()
 	hostMetricsTracker := hosts.NewTracker()
 	hostHistory := hosts.NewHistory()
@@ -1214,7 +1226,7 @@ func main() {
 	}
 	moduleDeps := module.Deps{Hooks: module.NewHooks(), DB: database, Audit: domainAuditStore, Settings: moduleSettings{nodeSettingsStore}, Access: moduleAccess{authzStore}, Actor: httpapi.ActorFromRequest,
 		Hosts: hostStore, HostMetrics: hostMetricsTracker, Instances: moduleInstances{launcherSvc}, Placement: placementEngine}
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithHostKeyRotation(func(id string) error {
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithMediaKPI(kpiTracker), httpapi.WithHostKeyRotation(func(id string) error {
 		sg := hostSigner.Load()
 		if sg == nil {
 			return errors.New("no command channel")

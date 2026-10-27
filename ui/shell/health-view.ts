@@ -105,6 +105,16 @@ const OVERALL_BUCKETS: Array<{ key: string; label: string; match: (s: string) =>
   { key: "inactive", label: t("health.3cab03"), match: (s) => s === "Inactive" },
 ];
 
+interface KpiRow {
+  nodeId: string;
+  label: string;
+  currentlyReady: boolean;
+  availability: number | null;
+  observedSeconds: number;
+  outages: number;
+  longestOutageSeconds: number;
+}
+
 class HealthView extends HTMLElement {
   #valuesPollHandle: number | undefined;
   #structurePollHandle: number | undefined;
@@ -129,6 +139,8 @@ class HealthView extends HTMLElement {
       STRUCTURE_POLL_FALLBACK_INTERVAL_MS,
     );
     this.#valuesPollHandle = window.setInterval(() => this.#pollValues(), VALUES_POLL_INTERVAL_MS);
+    void this.#loadKpi();
+    this.#kpiHandle = window.setInterval(() => void this.#loadKpi(), 15000);
     connectionMonitor.addEventListener("sse-message", this.#onSseMessage);
   }
 
@@ -136,6 +148,7 @@ class HealthView extends HTMLElement {
     this.#destroyed = true;
     if (this.#structurePollHandle !== undefined) window.clearInterval(this.#structurePollHandle);
     if (this.#valuesPollHandle !== undefined) window.clearInterval(this.#valuesPollHandle);
+    if (this.#kpiHandle !== undefined) window.clearInterval(this.#kpiHandle);
     connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
   }
 
@@ -286,7 +299,49 @@ class HealthView extends HTMLElement {
     }
   }
 
+  // Medien-Kennzahlen je Node (Audit M7): Verfügbarkeit und Ausfälle der letzten 24 h aus den Health-Ereignissen (GET /api/v1/kpi/media).
+  #kpi: KpiRow[] = [];
+  #kpiHandle: number | undefined;
+  #lastNodes: NodeHealth[] = [];
+  #lastPhase: "loading" | "empty" | "ready" = "loading";
+
+  async #loadKpi() {
+    try {
+      const res = await apiFetch("/api/v1/kpi/media?window=24h");
+      if (!res.ok) return;
+      this.#kpi = ((await res.json()) as { nodes?: KpiRow[] }).nodes ?? [];
+      if (!this.#destroyed) this.#render(this.#lastNodes, this.#lastPhase);
+    } catch { /* nächster Takt */ }
+  }
+
+  #renderKpi(): string {
+    if (this.#kpi.length === 0) return "";
+    const fmt = (s: number) => (s < 90 ? `${Math.round(s)} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`);
+    const rows = this.#kpi
+      .map((k) => {
+        const pct = k.availability === null ? "–" : `${(k.availability * 100).toFixed(k.availability >= 0.9995 ? 0 : 2)} %`;
+        const color = k.availability === null ? "var(--omp-text-dim)" : k.availability >= 0.999 ? "var(--omp-ok,#2da44e)" : k.availability >= 0.99 ? "var(--omp-warn,#d9a21b)" : "var(--omp-error)";
+        return `<tr>
+          <td style="padding:3px 10px;">${escapeHtml(k.label || k.nodeId)}</td>
+          <td style="padding:3px 10px;color:${k.currentlyReady ? "var(--omp-ok,#2da44e)" : "var(--omp-error)"};">${k.currentlyReady ? "●" : "○"}</td>
+          <td style="padding:3px 10px;text-align:right;font-weight:600;color:${color};">${pct}</td>
+          <td style="padding:3px 10px;text-align:right;">${k.outages}</td>
+          <td style="padding:3px 10px;text-align:right;">${k.outages ? fmt(k.longestOutageSeconds) : "–"}</td>
+          <td style="padding:3px 10px;text-align:right;color:var(--omp-text-dim);">${fmt(k.observedSeconds)}</td></tr>`;
+      })
+      .join("");
+    return `<div style="margin-top:var(--omp-space-4);">
+      <div class="omp-h1" style="font-size:var(--omp-font-size-md);">${t("health.kpi.title")}</div>
+      <div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin:2px 0 6px;">${t("health.kpi.hint")}</div>
+      <table style="border-collapse:collapse;"><thead><tr style="color:var(--omp-text-dim);text-align:left;">
+        <th style="padding:3px 10px;">${t("health.kpi.node")}</th><th style="padding:3px 10px;"></th><th style="padding:3px 10px;text-align:right;">${t("health.kpi.avail")}</th>
+        <th style="padding:3px 10px;text-align:right;">${t("health.kpi.outages")}</th><th style="padding:3px 10px;text-align:right;">${t("health.kpi.longest")}</th><th style="padding:3px 10px;text-align:right;">${t("health.kpi.observed")}</th>
+      </tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+
   #render(nodes: NodeHealth[], phase: "loading" | "empty" | "ready") {
+    this.#lastNodes = nodes;
+    this.#lastPhase = phase;
     const counts = new Map(OVERALL_BUCKETS.map((b) => [b.key, 0]));
     for (const n of nodes) {
       for (const b of OVERALL_BUCKETS) {
@@ -322,7 +377,7 @@ class HealthView extends HTMLElement {
       this.innerHTML =
         header +
         `<div class="omp-empty">${t("health.efc263")} ` +
-        `${t("health.45e570")}</div>`;
+        `${t("health.45e570")}</div>` + this.#renderKpi();
       return;
     }
 
@@ -336,7 +391,7 @@ class HealthView extends HTMLElement {
 
     const cards = sorted.map((n) => this.#renderCard(n)).join("");
 
-    this.innerHTML = header + `<div class="omp-card-grid">${cards}</div>`;
+    this.innerHTML = header + `<div class="omp-card-grid">${cards}</div>` + this.#renderKpi();
 
     for (const n of nodes) {
       const btn = this.querySelector<HTMLButtonElement>(`[data-reset-node="${cssEscape(n.nodeId)}"]`);

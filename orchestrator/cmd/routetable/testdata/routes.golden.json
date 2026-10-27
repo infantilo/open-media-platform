@@ -1070,6 +1070,13 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/kpi/media",
+    "auth": "auth",
+    "when": "options.mediaKPI != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/layouts/{name}",
     "auth": "auth",
     "domain": "core"

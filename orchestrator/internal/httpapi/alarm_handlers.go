@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/kpi"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profile"
 	"log/slog"
@@ -44,6 +45,7 @@ type handlerOptions struct {
 	locations       LocationStore
 	maintenance     MaintenanceService
 	hostKeyRotator  func(hostID string) error
+	mediaKPI        MediaKPIReader
 	profileName     string
 	profileFindings []profile.Finding
 	modules         *module.Registry
@@ -52,6 +54,31 @@ type handlerOptions struct {
 	systemSettings  SystemSettingsStore
 	startupSkipped  []string
 	workflowRuns    WorkflowRunReader
+}
+
+// MediaKPIReader liefert Medien-Kennzahlen je Node (implementiert von *kpi.Tracker, Audit M7).
+type MediaKPIReader interface {
+	Snapshot(window time.Duration) []kpi.NodeKPI
+}
+
+// WithMediaKPI aktiviert GET /api/v1/kpi/media.
+func WithMediaKPI(r MediaKPIReader) HandlerOption { return func(o *handlerOptions) { o.mediaKPI = r } }
+
+func handleMediaKPI(r MediaKPIReader) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		window := 24 * time.Hour
+		switch req.URL.Query().Get("window") {
+		case "1h":
+			window = time.Hour
+		case "6h":
+			window = 6 * time.Hour
+		}
+		out := r.Snapshot(window)
+		if out == nil {
+			out = []kpi.NodeKPI{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"windowSeconds": int(window.Seconds()), "nodes": out})
+	}
 }
 
 // WithWorkflowRuns aktiviert GET /api/v1/workflows/runs (Lauf-Historie für
