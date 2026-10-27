@@ -58,10 +58,23 @@ const shellCSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsaf
 	"connect-src 'self'; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 
 // withShellSecurityHeaders setzt CSP und Begleitkopfzeilen auf die ausgelieferte Shell (nicht auf die API: Antworten von Nodes können eigene Seiten tragen).
-func withShellSecurityHeaders(next http.Handler) http.Handler {
+func withShellSecurityHeaders(uiPort string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy", shellCSP)
+		csp := shellCSP
+		if uiPort != "" {
+			// Isolierte Node-Oberflächen (internal/uiorigin) dürfen als iframe auf dem zweiten Ursprung eingebettet werden — nur dort.
+			if strings.HasPrefix(uiPort, "origin:") {
+				csp += "; frame-src 'self' " + strings.TrimPrefix(uiPort, "origin:")
+			} else {
+				host := r.Host
+				if u, err := url.Parse("//" + r.Host); err == nil {
+					host = u.Hostname()
+				}
+				csp += "; frame-src 'self' http://" + host + ":" + uiPort + " https://" + host + ":" + uiPort
+			}
+		}
+		h.Set("Content-Security-Policy", csp)
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)

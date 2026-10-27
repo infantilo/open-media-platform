@@ -116,7 +116,7 @@ func TestLoginSetsHardenedCookieAndSessionExchange(t *testing.T) {
 
 func TestShellSecurityHeaders(t *testing.T) {
 	rec := httptest.NewRecorder()
-	withShellSecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	withShellSecurityHeaders("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	csp := rec.Header().Get("Content-Security-Policy")
 	for _, want := range []string{"default-src 'self'", "connect-src 'self'", "object-src 'none'", "frame-ancestors 'none'", "script-src 'self'"} {
 		if !strings.Contains(csp, want) {
@@ -128,5 +128,19 @@ func TestShellSecurityHeaders(t *testing.T) {
 	}
 	if rec.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Error("nosniff")
+	}
+}
+
+func TestShellCSPAllowsFramesOnlyFromTheUIOrigin(t *testing.T) {
+	rec := httptest.NewRecorder()
+	withShellSecurityHeaders("8001", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://studio.lan:8000/", nil))
+	csp := rec.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "frame-src 'self' http://studio.lan:8001 https://studio.lan:8001") || strings.Contains(csp, "frame-src *") {
+		t.Fatal(csp)
+	}
+	rec = httptest.NewRecorder()
+	withShellSecurityHeaders("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if strings.Contains(rec.Header().Get("Content-Security-Policy"), "frame-src") {
+		t.Fatal("ohne Isolation kein frame-src (default-src 'self' gilt)")
 	}
 }

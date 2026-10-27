@@ -8,6 +8,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/alertsink"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/kpi"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profile"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/uiorigin"
 	"log/slog"
 	"net"
 	"net/http"
@@ -1226,7 +1227,18 @@ func main() {
 	}
 	moduleDeps := module.Deps{Hooks: module.NewHooks(), DB: database, Audit: domainAuditStore, Settings: moduleSettings{nodeSettingsStore}, Access: moduleAccess{authzStore}, Actor: httpapi.ActorFromRequest,
 		Hosts: hostStore, HostMetrics: hostMetricsTracker, Instances: moduleInstances{launcherSvc}, Placement: placementEngine}
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithMediaKPI(kpiTracker), httpapi.WithHostKeyRotation(func(id string) error {
+	// Audit H1: zweiter Ursprung für Node-Oberflächen (nur mit OMP_UI_ORIGIN_LISTEN).
+	var uiIso *httpapi.UIIsolation
+	uiMgr := uiorigin.NewManager()
+	if cfg.UIOriginListen != "" {
+		_, port, perr := net.SplitHostPort(cfg.UIOriginListen)
+		if perr != nil || port == "" {
+			slog.Error("OMP_UI_ORIGIN_LISTEN ungültig (erwartet host:port oder :port)", "value", cfg.UIOriginListen)
+			os.Exit(1)
+		}
+		uiIso = &httpapi.UIIsolation{Manager: uiMgr, Port: port, URLBase: cfg.UIOriginURL, Types: cfg.UIIsolationTypes}
+	}
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithMediaKPI(kpiTracker), httpapi.OptionalUIIsolation(uiIso), httpapi.WithHostKeyRotation(func(id string) error {
 		sg := hostSigner.Load()
 		if sg == nil {
 			return errors.New("no command channel")
@@ -1243,6 +1255,19 @@ func main() {
 		"ui_dir", cfg.UIDir,
 	)
 
+	if uiIso != nil {
+		tokens, _ := os.ReadFile(filepath.Join(cfg.UIDir, "design-tokens.css"))
+		uiSrv := &http.Server{Addr: cfg.UIOriginListen, Handler: httpapi.LimitRequests(uiMgr.Handler(uiorigin.Config{
+			Main: handler, ExtraPaths: cfg.UIIsolationExtra, HostJS: []byte(uiorigin.HostJS), DesignTokens: tokens,
+		}))}
+		httpapi.ConfigureServer(uiSrv)
+		go func() {
+			if err := uiSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				slog.Error("zweiter Ursprung für Node-Oberflächen gestoppt", "error", err)
+			}
+		}()
+		slog.Info("Node-Oberflächen isoliert (zweiter Ursprung)", "listen", cfg.UIOriginListen, "types", cfg.UIIsolationTypes, "extraPaths", cfg.UIIsolationExtra)
+	}
 	srv := &http.Server{Addr: cfg.Listen, Handler: httpapi.LimitRequests(handler)}
 	httpapi.ConfigureServer(srv)
 	serveErr := make(chan error, 1)

@@ -46,6 +46,7 @@ type handlerOptions struct {
 	maintenance     MaintenanceService
 	hostKeyRotator  func(hostID string) error
 	mediaKPI        MediaKPIReader
+	uiIsolation     *UIIsolation
 	profileName     string
 	profileFindings []profile.Finding
 	modules         *module.Registry

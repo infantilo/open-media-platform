@@ -72,7 +72,73 @@ export async function mountUIBundle(container: HTMLElement, apiBase: string): Pr
 
 // Wie mountUIBundle, liefert aber das Custom Element (Kap. 40.4: der
 // Stream-Deck-Broker liest daran die optionale `streamDeck`-Eigenschaft).
+// Audit 2026-10-23 H1: ist der zweite Ursprung für Node-Oberflächen aktiv (OMP_UI_ORIGIN_LISTEN) und der Node-Typ dafür freigegeben, läuft die Oberfläche in einem iframe auf diesem
+// Ursprung (internal/uiorigin): sie sieht weder Shell noch Token und erreicht nur ihren eigenen Node. Sonst unverändert wie bisher in der Shell.
+let isolationEnabled: Promise<boolean> | undefined;
+function isolationAvailable(): Promise<boolean> {
+  isolationEnabled ??= fetch("/api/v1/ui-origin").then((r) => r.ok).catch(() => false);
+  return isolationEnabled;
+}
+
+async function mountIsolated(container: HTMLElement, apiBase: string): Promise<HTMLElement | null> {
+  if (!(await isolationAvailable())) return null;
+  let url = "";
+  try {
+    const res = await fetch(`${apiBase}/ui-grant`, { method: "POST" });
+    if (!res.ok) return null;
+    const g = (await res.json()) as { isolated?: boolean; url?: string };
+    if (!g.isolated || !g.url) return null;
+    url = g.url;
+  } catch {
+    return null;
+  }
+  const frame = document.createElement("iframe");
+  frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-popups allow-modals");
+  frame.setAttribute("data-role", "isolated-node-ui");
+  frame.setAttribute("referrerpolicy", "no-referrer");
+  frame.style.cssText = "display:block;width:100%;height:320px;border:0;background:transparent;";
+  frame.src = url;
+  container.replaceChildren(frame);
+  return new Promise<HTMLElement | null>((resolve) => {
+    let settled = false;
+    const onMessage = (ev: MessageEvent) => {
+      if (!frame.isConnected) {
+        removeEventListener("message", onMessage);
+        return;
+      }
+      if (ev.source !== frame.contentWindow) return;
+      const m = ev.data as { omp?: string; type?: string; height?: number };
+      if (m?.omp !== "ui") return;
+      if (m.type === "size" && typeof m.height === "number") {
+        frame.style.height = `${Math.max(120, Math.min(m.height, 20000))}px`;
+      } else if (m.type === "ready" && !settled) {
+        settled = true;
+        resolve(frame);
+      } else if (m.type === "error" && !settled) {
+        settled = true;
+        removeEventListener("message", onMessage);
+        frame.remove();
+        resolve(null); // zurück auf den klassischen Weg
+      }
+    };
+    addEventListener("message", onMessage);
+    setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        removeEventListener("message", onMessage);
+        frame.remove();
+        resolve(null);
+      }
+    }, 15000);
+  });
+}
+
 export async function mountUIBundleEl(container: HTMLElement, apiBase: string): Promise<HTMLElement | null> {
+  const isolated = await mountIsolated(container, apiBase);
+  if (isolated) {
+    watchAvailability(container, isolated, apiBase);
+    return isolated;
+  }
   try {
     const res = await fetch(`${apiBase}/ui/manifest.json`);
     if (!res.ok) return null;

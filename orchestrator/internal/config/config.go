@@ -195,7 +195,12 @@ type Config struct {
 	PatroniNodes string
 	BackupKeep   int
 	// Audit M8: Schlüsselbündel (verschlüsselt) neben jeder Sicherung und Kopie auf ein Fremdziel.
-	BackupKeyFiles   []string
+	BackupKeyFiles []string
+	// Audit H1: zweiter Ursprung für Node-Oberflächen (internal/uiorigin). UIOriginListen leer = aus (Oberflächen laufen wie bisher in der Shell).
+	UIOriginListen   string
+	UIOriginURL      string
+	UIIsolationTypes []string
+	UIIsolationExtra []string
 	BackupPassphrase string
 	BackupCopyDir    string
 	// BackupIntervalHours: geplante Sicherungen (Audit M8); 0 = aus. Standard 24.
@@ -343,6 +348,10 @@ func Load() Config {
 		BackupKeep:          getEnvInt("OMP_BACKUP_KEEP", 14),
 		BackupIntervalHours: getEnvInt("OMP_BACKUP_INTERVAL_HOURS", 24),
 		BackupKeyFiles:      backupKeyFiles(),
+		UIOriginListen:      getEnv("OMP_UI_ORIGIN_LISTEN", ""),
+		UIOriginURL:         getEnv("OMP_UI_ORIGIN_URL", ""),
+		UIIsolationTypes:    splitList(getEnv("OMP_UI_ISOLATION_TYPES", "omp-scope")),
+		UIIsolationExtra:    splitList(getEnv("OMP_UI_ISOLATION_EXTRA_PATHS", "/api/v1/events")),
 		BackupPassphrase:    backupPassphrase(),
 		BackupCopyDir:       getEnv("OMP_BACKUP_COPY_DIR", ""),
 		SupervisorURL:       getEnv("OMP_SUPERVISOR_URL", "http://127.0.0.1:8091"),
@@ -447,4 +456,14 @@ func backupPassphrase() string {
 		}
 	}
 	return ""
+}
+
+func splitList(v string) []string {
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

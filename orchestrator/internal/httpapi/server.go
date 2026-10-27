@@ -9,6 +9,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -555,6 +556,10 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// /register bewusst außerhalb von authGate — s. handleRegisterHost.
 	mux.HandleFunc("POST /api/v1/admin/hosts/bootstrap-tokens", g.requireVerbGlobal(authz.VerbAdmin, handleCreateBootstrapToken(hostRegistry)))
 	mux.HandleFunc("DELETE /api/v1/admin/hosts/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteHost(hostRegistry, hostMetrics, events)))
+	if options.uiIsolation != nil {
+		mux.HandleFunc("POST /api/v1/nodes/{id}/ui-grant", g.requireAuth(handleUIGrant(options.uiIsolation, nodes, launcherSvc)))
+		mux.HandleFunc("GET /api/v1/ui-origin", g.requireAuth(handleUIOriginInfo(options.uiIsolation)))
+	}
 	if options.mediaKPI != nil {
 		mux.HandleFunc("GET /api/v1/kpi/media", g.requireAuth(handleMediaKPI(options.mediaKPI)))
 	}
@@ -806,7 +811,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 		options.modules.Mount(moduleRoutes{mux: mux, g: g}, options.moduleDeps)
 	}
 
-	mux.Handle("/", withShellSecurityHeaders(spaFallback(cfg.UIDir, revalidateStatic(http.FileServer(http.Dir(cfg.UIDir))))))
+	mux.Handle("/", withShellSecurityHeaders(uiFramePort(&options), spaFallback(cfg.UIDir, revalidateStatic(http.FileServer(http.Dir(cfg.UIDir))))))
 	return countRequests(reqCounters, noStoreForAPI(localizeEnglish(mux)))
 }
 
@@ -928,4 +933,17 @@ func moduleMetrics(reg *module.Registry) func(io.Writer) {
 		return nil
 	}
 	return reg.Metrics
+}
+
+// uiFramePort: Port des zweiten Ursprungs für die CSP der Shell (frame-src); leer, wenn die Isolation aus ist.
+func uiFramePort(o *handlerOptions) string {
+	if o.uiIsolation == nil {
+		return ""
+	}
+	if o.uiIsolation.URLBase != "" {
+		if u, err := url.Parse(o.uiIsolation.URLBase); err == nil {
+			return "origin:" + u.Scheme + "://" + u.Host
+		}
+	}
+	return o.uiIsolation.Port
 }

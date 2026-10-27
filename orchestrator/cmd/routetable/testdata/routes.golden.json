@@ -1256,6 +1256,13 @@
     "domain": "core"
   },
   {
+    "method": "POST",
+    "path": "/api/v1/nodes/{id}/ui-grant",
+    "auth": "auth",
+    "when": "options.uiIsolation != nil",
+    "domain": "core"
+  },
+  {
     "method": "GET",
     "path": "/api/v1/nodes/{id}/ui/bundle.js",
     "auth": "auth",
@@ -1955,6 +1962,13 @@
     "method": "GET",
     "path": "/api/v1/tools/ffmpeg/{kind}/{name}",
     "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/ui-origin",
+    "auth": "auth",
+    "when": "options.uiIsolation != nil",
     "domain": "core"
   },
   {
