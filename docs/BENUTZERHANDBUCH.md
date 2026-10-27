@@ -1028,6 +1028,26 @@ untereinander):
   einsammeln ließen, stehen in der `manifest.json` im Paket. Beide
   Funktionen verlangen das Admin-Recht (`GET /api/v1/admin/selftest`,
   `GET /api/v1/admin/support-bundle?minutes=N`).
+- **Zeitleiste** — „Was hat sich um 14:02 geändert?“ auf einer einzigen
+  Achse. Oben ein Balkenbild des gewählten Zeitraums (letzte Stunde bis 7
+  Tage): rot = Störung, gelb = Hinweis, blau = Information. **In die Balken
+  klicken oder den Regler ziehen** (oder eine Zeile anklicken) wählt einen
+  Zeitpunkt; darunter steht dann **„Zustand um …“** — was zu diesem
+  Zeitpunkt gestört war (z. B. „Host Regie-A meldet sich nicht mehr, seit
+  14:02“) — und **„Das hat sich in den 5 Minuten davor geändert“**. Die Liste
+  darunter zeigt chronologisch: *Störungen* (Absturz, Medien weg, Host
+  verstummt, Ausfallumschaltung), *Marker*, *Änderungen* (Bedienungen aus
+  dem Audit-Log, Workflow gestartet/gestoppt, Verbindungen, Hosts),
+  *Betrieb* (automatische Neustarts, Uhr, Orchestrator gestartet) und
+  optional *Fehler-Logs* und die *Bedienung* mit Reglern und Schnitten
+  (standardmäßig aus, sie wären tausende Zeilen). Aufgezeichnet wird ab dem
+  Start dieser Version (14 Tage, wie das Audit-Log); der Zustand vor dem
+  letzten Neustart des Orchestrators ist nicht bekannt.
+  **Marker „Problem jetzt“:** der Knopf **⚑ Marker** in der oberen Leiste
+  (auf jedem Tab) setzt mit einem Klick, ohne Tippen, einen Marker auf die
+  Zeitleiste — der Support findet später genau diese Minute. Ein Doppelklick
+  zählt einmal. Lesen der Zeitleiste verlangt das Admin-Recht, der Marker
+  das Bedienrecht (`GET /api/v1/timeline`, `POST /api/v1/timeline/marker`).
 - **Backup/Restore** — „Backup jetzt erstellen“ erstellt sofort einen
   Download; Restore verlangt, den gewählten Dateinamen exakt
   einzutippen (Bestätigung), ersetzt danach den kompletten

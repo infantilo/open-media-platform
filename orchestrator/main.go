@@ -79,7 +79,9 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/storagebackends"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/supervisorclient"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/timeline"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/updates"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/version"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
 )
 
@@ -414,6 +416,10 @@ func main() {
 		logPublisher = &logbus.Publisher{}
 	}
 	logStore := logbus.NewStore(database, hub)
+	// Ereignis-Zeitleiste (Kap. 72.6): zeichnet Betriebsereignisse aus dem Hub auf; Bedienungen, Domänen-Audit und Fehler-Logs
+	// kommen beim Lesen aus ihren Tabellen dazu.
+	timelineStore := timeline.NewStore(database)
+
 	go logStore.RunRetention(ctx, cfg.LogRetentionHours)
 
 	// Kapitel 21 Phase 5 Teil 1 (A8/B9): JetStream-Stream für die
@@ -1238,7 +1244,29 @@ func main() {
 		}
 		uiIso = &httpapi.UIIsolation{Manager: uiMgr, Port: port, URLBase: cfg.UIOriginURL, Types: cfg.UIIsolationTypes}
 	}
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithMediaKPI(kpiTracker), httpapi.WithHostSysinfo(launcherSvc.SysinfoOnHost), httpapi.OptionalUIIsolation(uiIso), httpapi.WithHostKeyRotation(func(id string) error {
+	// Zeitleiste (Kap. 72.6): Quellen zusammenführen, Hub aufzeichnen, Start und alte Zeilen aufräumen.
+	timelineSrc := timeline.Sources{Store: timelineStore, Audit: auditStore, Domain: domainAuditStore, Logs: logStore}
+	timelineRec := timeline.NewRecorder()
+	timelineRec.HostLabel = func(id string) string {
+		list, _ := hostStore.ListHosts()
+		for _, h := range list {
+			if h.ID == id {
+				return h.Label
+			}
+		}
+		return ""
+	}
+	timelineSink := func(e timeline.Event) {
+		if err := timelineStore.Insert(e); err != nil {
+			slog.Warn("timeline insert failed", "kind", e.Kind, "error", err)
+			return
+		}
+		hub.Broadcast(sse.Event{Type: "timeline.appended", Data: json.RawMessage("null")})
+	}
+	timelineSink(timeline.Event{At: time.Now(), Kind: "orchestrator.started", Severity: timeline.SevInfo, Subject: cfg.ClusterNodeID, Data: map[string]any{"version": version.Version}})
+	go timelineRec.Run(ctx, hub, timelineSink)
+	go timelineStore.RunRetention(ctx, cfg.AuditRetentionDays)
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithMediaKPI(kpiTracker), httpapi.WithHostSysinfo(launcherSvc.SysinfoOnHost), httpapi.WithTimeline(timelineSrc), httpapi.OptionalUIIsolation(uiIso), httpapi.WithHostKeyRotation(func(id string) error {
 		sg := hostSigner.Load()
 		if sg == nil {
 			return errors.New("no command channel")

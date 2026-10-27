@@ -1930,6 +1930,20 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/timeline",
+    "auth": "verb:Admin",
+    "when": "options.timeline != nil",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/timeline/marker",
+    "auth": "verb:Operate",
+    "when": "options.timeline != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/tools/ffmpeg/capabilities",
     "auth": "auth",
     "domain": "core"

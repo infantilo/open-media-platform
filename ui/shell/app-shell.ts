@@ -23,6 +23,7 @@ import "./scheduler-view.ts";
 import "./admin-view.ts";
 import { apiFetch, type ConnectionChangeDetail, type ConnectionState, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
+import { showToast } from "../kit/omp-toast.ts";
 import { getLang, type I18nKey, t, t as tt } from "./i18n.ts";
 import { ensureBundle, getModules } from "./modules-registry.ts";
 import { insertIndex, mainTabs } from "./modules-logic.ts";
@@ -333,7 +334,25 @@ class AppShell extends HTMLElement {
         "background:var(--omp-surface-raised);color:var(--omp-text);cursor:pointer;font-size:var(--omp-font-size-xs);",
     );
     deck.button.setAttribute("data-role", "deck-toggle");
-    right.appendChild(deck.button);
+    // Marker „Problem jetzt“ (Kap. 72.6): ein Klick setzt einen Marker auf die Zeitleiste, ohne Tippen — der Support findet später
+    // genau diese Minute.
+    const mark = document.createElement("button");
+    mark.setAttribute("data-role", "timeline-marker");
+    mark.textContent = t("tl.mark");
+    mark.title = t("tl.mark.title");
+    mark.style.cssText =
+      "white-space:nowrap;padding:2px 8px;border:1px solid var(--omp-border);border-radius:var(--omp-radius);" +
+      "background:var(--omp-surface-raised);color:var(--omp-text);cursor:pointer;font-size:var(--omp-font-size-xs);";
+    mark.addEventListener("click", async () => {
+      try {
+        const res = await apiFetch("/api/v1/timeline/marker", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast(t("tl.marked", { time: new Date().toLocaleTimeString() }), { variant: "info" });
+      } catch (e) {
+        showToast(t("tl.markFailed", { error: String((e as Error).message ?? e) }), { variant: "error" });
+      }
+    });
+    right.append(mark, deck.button);
 
     bar.append(left, right);
 

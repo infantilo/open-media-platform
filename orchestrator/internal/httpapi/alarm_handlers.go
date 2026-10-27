@@ -5,6 +5,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/kpi"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profile"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/timeline"
 	"log/slog"
 	"net/http"
 	"time"
@@ -47,6 +48,7 @@ type handlerOptions struct {
 	hostKeyRotator  func(hostID string) error
 	mediaKPI        MediaKPIReader
 	hostSysinfo     HostSysinfoFunc
+	timeline        *timeline.Sources
 	uiIsolation     *UIIsolation
 	profileName     string
 	profileFindings []profile.Finding

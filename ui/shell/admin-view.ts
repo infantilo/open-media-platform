@@ -25,6 +25,7 @@ import type { FeatureDef, FeatureGrant } from "./feature-grants-logic.ts";
 import { AuditPanel } from "./audit-panel.ts";
 import { DiagnosePanel } from "./diagnose-panel.ts";
 import { SupportPanel } from "./support-panel.ts";
+import { TimelinePanel } from "./timeline-panel.ts";
 import { ensureBundle, getModules } from "./modules-registry.ts";
 import { adminGroups, type AdminModuleGroup } from "./modules-logic.ts";
 import { getLang } from "./i18n.ts";
@@ -267,6 +268,7 @@ const ADMIN_SUB_TAB_GROUPS: { id: string; labelKey: I18nKey; tabs: { id: AdminTa
       { id: "audit", labelKey: "admin.tab.audit", clusterKey: "admin.cluster.maintenance" },
       { id: "diagnose", labelKey: "admin.tab.diagnose", clusterKey: "admin.cluster.maintenance" },
       { id: "support", labelKey: "admin.tab.support", clusterKey: "admin.cluster.maintenance" },
+      { id: "timeline", labelKey: "admin.tab.timeline", clusterKey: "admin.cluster.maintenance" },
       { id: "backup", labelKey: "admin.tab.backup", clusterKey: "admin.cluster.maintenance" },
       { id: "update", labelKey: "admin.tab.update", clusterKey: "admin.cluster.maintenance" },
       { id: "settings", labelKey: "admin.tab.settings", clusterKey: "admin.cluster.maintenance" },
@@ -331,6 +333,7 @@ class AdminView extends HTMLElement {
   // fehlgeschlagener IS-05-Connect trägt seine trace_id im Response-Header.
   #diagnosePanel = new DiagnosePanel();
   #supportPanel = new SupportPanel();
+  #timelinePanel = new TimelinePanel();
   #logPollHandle: number | undefined;
   #nodes: NodeEntry[] = [];
   #workflows: WorkflowSummary[] = [];
@@ -2271,6 +2274,11 @@ class AdminView extends HTMLElement {
       case "diagnose":
         this.#diagnosePanel.setContext({ nodes: this.#nodes });
         this.appendChild(this.#diagnosePanel.el);
+        break;
+      case "timeline":
+        this.#timelinePanel.setContext({ nodes: this.#nodes, workflows: this.#workflows, processes: this.#processes, groups: this.#groups });
+        this.appendChild(this.#timelinePanel.el);
+        this.#timelinePanel.start();
         break;
       case "support":
         this.appendChild(this.#supportPanel.el);

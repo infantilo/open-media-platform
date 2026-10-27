@@ -570,6 +570,10 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/hosts/register", handleRegisterHost(hostRegistry, ioPortStore, events))
 	mux.HandleFunc("GET /api/v1/hosts", g.requireAuth(handleListHosts(hostRegistry, hostMetrics, ioPortStore, options.maintenance)))
 	mux.HandleFunc("GET /api/v1/hosts/local", g.requireAuth(handleLocalHost(launcherSvc)))
+	if options.timeline != nil {
+		mux.HandleFunc("GET /api/v1/timeline", g.requireVerbGlobal(authz.VerbAdmin, handleTimeline(options.timeline)))
+		mux.HandleFunc("POST /api/v1/timeline/marker", g.requireVerbGlobal(authz.VerbOperate, handlePostTimelineMarker(options.timeline, events)))
+	}
 	hostSysCache := newSysCache(options.hostSysinfo, 20*time.Second)
 	// Selbsttest und Support-Paket (Kap. 72): sammeln über den eigenen Router mit den Rechten der aufrufenden Person.
 	mux.HandleFunc("GET /api/v1/admin/selftest", g.requireVerbGlobal(authz.VerbAdmin, handleSelftest(mux, cfg.ClusterDataDir, clusterSvc, hostSysCache)))
