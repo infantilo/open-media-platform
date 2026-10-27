@@ -344,7 +344,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	for _, opt := range opts {
 		opt(&options)
 	}
-	g := &authGate{auth: authSvc, authz: authzStore, audit: auditLogger, nodes: nodes, workflows: workflowSvc, layouts: layoutStore, bootstrapOpen: cfg.BootstrapOpen, bootstrapToken: cfg.BootstrapToken}
+	g := &authGate{auth: authSvc, authz: authzStore, audit: auditLogger, nodes: nodes, workflows: workflowSvc, layouts: layoutStore, bootstrapOpen: cfg.BootstrapOpen, bootstrapToken: cfg.BootstrapToken, support: supportVerifier(options.supportAccess)}
 
 	// Kapitel 13 Teil 3 (docs/END-GOAL-FEATURES.md §13.4) — braucht
 	// keinen eigenen NewHandler-Parameter: nodes/launcherSvc/graphSvc
@@ -372,6 +372,14 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// prüft damit nach einem Update, ob der neue Stand läuft).
 	mux.HandleFunc("GET /api/v1/version", handleVersion)
 	// Fehlercode-Katalog (Kap. 72.8): Code, Titel, Ursache, Lösungsschritte, Erkennungsmuster.
+	// Befristeter Support-Zugang (Kap. 72.9).
+	if options.supportAccess != nil {
+		supportLockout := auth.NewLoginLockout()
+		mux.HandleFunc("POST /api/v1/auth/support-login", handleSupportLogin(options.supportAccess, options.domainAudit, supportLockout))
+		mux.HandleFunc("GET /api/v1/admin/support-access", g.requireVerbGlobal(authz.VerbAdmin, handleListSupportAccess(options.supportAccess)))
+		mux.HandleFunc("POST /api/v1/admin/support-access", g.requireVerbGlobal(authz.VerbAdmin, handleCreateSupportAccess(options.supportAccess, options.domainAudit)))
+		mux.HandleFunc("DELETE /api/v1/admin/support-access/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleRevokeSupportAccess(options.supportAccess, options.domainAudit)))
+	}
 	mux.HandleFunc("GET /api/v1/errorcodes", g.requireAuth(handleErrorCodes))
 	mux.HandleFunc("GET /api/v1/info", handleInfo)
 	// Bewusst unauthentifiziert wie /healthz (Prometheus-Scraper senden
@@ -392,7 +400,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/auth/login", handleLogin(authSvc, auditLogger, loginLockout, loginLimits{ip: auth.NewLoginLockoutN(30), name: auth.NewLoginLockoutN(50)}))
 	mux.HandleFunc("POST /api/v1/auth/session", handleSession(authSvc))
 	mux.HandleFunc("POST /api/v1/auth/logout", handleLogout())
-	mux.HandleFunc("GET /api/v1/auth/whoami", handleWhoami(authSvc, authzStore))
+	mux.HandleFunc("GET /api/v1/auth/whoami", handleWhoami(authSvc, authzStore, supportVerifier(options.supportAccess)))
 	mux.HandleFunc("POST /api/v1/auth/users", g.requireVerbGlobal(authz.VerbAdmin, handleCreateUser(authSvc, authzStore)))
 	mux.HandleFunc("GET /api/v1/auth/users", g.requireVerbGlobal(authz.VerbAdmin, handleListUsers(authSvc, authzStore, options.groups)))
 	mux.HandleFunc("DELETE /api/v1/auth/users/{name}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteUser(authSvc, authzStore, options.groups)))
@@ -825,7 +833,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	}
 
 	mux.Handle("/", withShellSecurityHeaders(uiFramePort(&options), spaFallback(cfg.UIDir, revalidateStatic(http.FileServer(http.Dir(cfg.UIDir))))))
-	return countRequests(reqCounters, noStoreForAPI(localizeEnglish(errorCodeHeader(mux))))
+	return countRequests(reqCounters, noStoreForAPI(localizeEnglish(errorCodeHeader(supportReadOnly(g, mux)))))
 }
 
 // spaFallback liefert für die Kiosk-Routen /console/... (ARCHITECTURE.md
@@ -959,4 +967,12 @@ func uiFramePort(o *handlerOptions) string {
 		}
 	}
 	return o.uiIsolation.Port
+}
+
+// supportVerifier macht aus einem nil-Speicher ein nil-Interface (sonst wäre der Wert „nicht nil“ und der Gate fragte einen leeren Speicher).
+func supportVerifier(s SupportAccessStore) SupportVerifier {
+	if s == nil {
+		return nil
+	}
+	return s
 }

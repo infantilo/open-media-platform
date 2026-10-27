@@ -230,6 +230,11 @@ var catalog = []Entry{
 		Cause: Text{"Dein Konto darf diese Aktion nicht ausführen.", "Your account may not perform this action."},
 		Fix:   Steps{[]string{"Einen Administrator um das Recht bitten (Administration → Rechte)."}, []string{"Ask an administrator for the right (Administration → Permissions)."}}},
 
+	{Code: "OMP-6003", Severity: SevWarn, Match: `support access is read-only|support access (expired|revoked)|invalid support access`,
+		Title: Text{"Support-Zugang: nur lesen oder nicht mehr gültig", "Support access: read-only or no longer valid"},
+		Cause: Text{"Ein Support-Zugang darf nur ansehen, nicht ändern — oder er ist abgelaufen, widerrufen oder falsch.", "A support access may only look, not change — or it has expired, been revoked or is wrong."},
+		Fix:   Steps{[]string{"Soll etwas geändert werden, muss das ein Administrator mit eigenem Konto tun.", "Ist der Zugang abgelaufen oder widerrufen: Administration → Support → neuen Support-Zugang erzeugen und den Link erneut senden."}, []string{"If something has to be changed, an administrator must do it with their own account.", "If the access expired or was revoked: Administration → Support → create a new support access and send the link again."}}},
+
 	// ---- 7xxx Update ------------------------------------------------------------------------------------------------
 
 	{Code: "OMP-7001", Severity: SevError, Match: `signature[^\n]*(invalid|mismatch|verif)|update[^\n]*(rejected|verification)|prüfsumme stimmt nicht|paket zu groß`,

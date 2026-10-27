@@ -49,6 +49,7 @@ type handlerOptions struct {
 	mediaKPI        MediaKPIReader
 	hostSysinfo     HostSysinfoFunc
 	timeline        *timeline.Sources
+	supportAccess   SupportAccessStore
 	uiIsolation     *UIIsolation
 	profileName     string
 	profileFindings []profile.Finding

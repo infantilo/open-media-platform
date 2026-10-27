@@ -602,6 +602,18 @@
   "doc": "FEHLERCODES.md#omp-6002"
  },
  {
+  "code": "OMP-6003",
+  "severity": "warn",
+  "title": "Support-Zugang: nur lesen oder nicht mehr gültig",
+  "cause": "Ein Support-Zugang darf nur ansehen, nicht ändern — oder er ist abgelaufen, widerrufen oder falsch.",
+  "steps": [
+   "Soll etwas geändert werden, muss das ein Administrator mit eigenem Konto tun.",
+   "Ist der Zugang abgelaufen oder widerrufen: Administration → Support → neuen Support-Zugang erzeugen und den Link erneut senden."
+  ],
+  "match": "support access is read-only|support access (expired|revoked)|invalid support access",
+  "doc": "FEHLERCODES.md#omp-6003"
+ },
+ {
   "code": "OMP-7001",
   "severity": "error",
   "title": "Update-Paket abgelehnt",

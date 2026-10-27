@@ -46,3 +46,27 @@ export function bundleFileName(disposition: string | null, now: Date): string {
 export function levelColor(l: SupportLevel): string {
   return l === "err" ? "var(--omp-error)" : l === "warn" ? "#e0a020" : "var(--omp-ok, #3fb950)";
 }
+
+export interface SupportGrant {
+  id: string;
+  createdBy: string;
+  note?: string;
+  createdAt: string;
+  expiresAt: string;
+  status: "active" | "expired" | "revoked";
+  useCount: number;
+  lastUsedAt?: string;
+}
+
+export const ACCESS_DURATIONS = [60, 240, 1440, 4320] as const;
+
+/** Der Link, den der Support öffnet; das Token steht hinter „#“ und geht so nie an einen Server oder in ein Zugriffsprotokoll. */
+export function accessLink(origin: string, token: string): string {
+  return `${origin}/#support=${encodeURIComponent(token)}`;
+}
+
+/** Aktive zuerst (die nächste Ablaufzeit oben), dann abgelaufene und widerrufene, neueste zuerst. */
+export function sortGrants(list: SupportGrant[]): SupportGrant[] {
+  const rank = (g: SupportGrant) => (g.status === "active" ? 0 : 1);
+  return [...list].sort((a, b) => rank(a) - rank(b) || (rank(a) === 0 ? Date.parse(a.expiresAt) - Date.parse(b.expiresAt) : Date.parse(b.createdAt) - Date.parse(a.createdAt)));
+}

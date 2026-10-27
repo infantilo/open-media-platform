@@ -211,6 +211,27 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/admin/support-access",
+    "auth": "verb:Admin",
+    "when": "options.supportAccess != nil",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/support-access",
+    "auth": "verb:Admin",
+    "when": "options.supportAccess != nil",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/support-access/{id}",
+    "auth": "verb:Admin",
+    "when": "options.supportAccess != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/admin/support-bundle",
     "auth": "verb:Admin",
     "domain": "core"
@@ -438,6 +459,13 @@
     "method": "POST",
     "path": "/api/v1/auth/session",
     "auth": "custom:handleSession",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/support-login",
+    "auth": "custom:handleSupportLogin",
+    "when": "options.supportAccess != nil",
     "domain": "core"
   },
   {

@@ -76,6 +76,10 @@ export interface WhoamiResponse {
   isAdmin?: boolean;
   // true bei global `configure` (Engineering) — Stream-Deck-Anbindung des Flow-Editors.
   canConfigure?: boolean;
+  // Befristeter Support-Zugang (Kap. 72.9): nur lesend, gültig bis supportExpiresAt.
+  support?: boolean;
+  supportExpiresAt?: string;
+  supportNote?: string;
 }
 
 export async function whoami(): Promise<WhoamiResponse> {
@@ -92,6 +96,25 @@ export async function login(username: string, password: string): Promise<void> {
   });
   if (!res.ok) throw new Error("invalid credentials");
   // Der Orchestrator hat das Sitzungs-Cookie gesetzt; das Token in der Antwort ist für API-Clients gedacht und wird hier nicht aufbewahrt.
+}
+
+/**
+ * Löst einen Support-Link (#support=<Token> in der Adresse) ein: meldet mit dem Zugang an und entfernt das Token aus der Adresszeile.
+ * Gibt null zurück, wenn kein Link da war oder die Anmeldung gelang, sonst die Fehlermeldung des Servers.
+ */
+export async function redeemSupportLink(): Promise<string | null> {
+  const m = /^#support=(.+)$/.exec(location.hash);
+  if (!m) return null;
+  const token = decodeURIComponent(m[1]);
+  // Das Token verschwindet sofort aus Adresszeile und Verlauf, egal wie die Anmeldung ausgeht.
+  history.replaceState(null, "", location.pathname + location.search);
+  try {
+    const res = await fetch("/api/v1/auth/support-login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) });
+    if (res.ok) return null;
+    return (await res.text()).trim() || `HTTP ${res.status}`;
+  } catch (e) {
+    return String((e as Error).message ?? e);
+  }
 }
 
 export async function logout() {

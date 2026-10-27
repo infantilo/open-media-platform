@@ -3,13 +3,18 @@
 //   • Paket      — eine ZIP-Datei mit dem Zustand des Systems (ohne Medien, Passwörter und Tokens) für den Support
 import { t } from "./i18n.ts";
 import { apiFetch } from "./connection.ts";
+import { confirmDialog } from "../kit/omp-confirm.ts";
 import { codeBadge, type ErrorCode, helpDetails, loadErrorCodes, lookup } from "./errorcodes.ts";
 import {
+  ACCESS_DURATIONS,
+  accessLink,
   BUNDLE_WINDOWS,
   bundleFileName,
   bundleUrl,
   levelColor,
   type SelftestReport,
+  type SupportGrant,
+  sortGrants,
   splitChecks,
 } from "./support-logic.ts";
 
@@ -36,6 +41,8 @@ export class SupportPanel {
   #timer: number | undefined;
   #seq = 0;
   #busy = false;
+  #grants = el("div");
+  #newLink = el("div");
   #codes: ErrorCode[] = [];
   #last: SelftestReport | null = null;
 
@@ -53,7 +60,8 @@ export class SupportPanel {
     again.addEventListener("click", () => void this.refresh());
     head.append(this.#lamp, text, again);
 
-    this.el.append(title, hint, head, this.#list, this.#bundleCard());
+    this.el.append(title, hint, head, this.#list, this.#bundleCard(), this.#accessCard());
+    void this.#loadGrants();
     void loadErrorCodes().then((c) => {
       this.#codes = c;
       if (this.#last) this.#render(this.#last);
@@ -169,5 +177,109 @@ export class SupportPanel {
     row.append(el("label", DIM, t("sup.bundle.window")), sel, btn);
     card.append(row, this.#bundleState);
     return card;
+  }
+
+  // ---- Befristeter Support-Zugang (Kap. 72.9) -------------------------------------------------------------------------
+
+  #accessCard(): HTMLElement {
+    const card = el("div", CARD);
+    card.append(el("div", "font-weight:600;", t("sup.access.title")), el("div", DIM + "margin:4px 0 8px;", t("sup.access.text")));
+    const row = el("div", "display:flex;gap:8px;align-items:center;flex-wrap:wrap;");
+    const dur = el("select");
+    for (const m of ACCESS_DURATIONS) {
+      const o = el("option", "", t(`sup.access.d.${m}` as never));
+      o.value = String(m);
+      o.selected = m === 240;
+      dur.append(o);
+    }
+    const note = el("input", "min-width:220px;");
+    note.type = "text";
+    note.maxLength = 200;
+    note.placeholder = t("sup.access.note");
+    const btn = el("button", "", t("sup.access.create"));
+    btn.className = "omp-btn omp-btn-primary";
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try {
+        const res = await apiFetch("/api/v1/admin/support-access", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ minutes: Number(dur.value), note: note.value }),
+        });
+        if (!res.ok) throw new Error((await res.text()).trim() || `HTTP ${res.status}`);
+        const made = (await res.json()) as { token: string; expiresAt: string };
+        this.#showNewLink(accessLink(location.origin, made.token), made.expiresAt);
+        note.value = "";
+        void this.#loadGrants();
+      } catch (e) {
+        this.#newLink.replaceChildren(el("div", "color:var(--omp-error);margin-top:8px;", t("sup.access.failed", { error: String((e as Error).message ?? e) })));
+      } finally {
+        btn.disabled = false;
+      }
+    });
+    row.append(el("label", DIM, t("sup.access.duration")), dur, note, btn);
+    card.append(row, this.#newLink, el("div", "font-weight:600;margin-top:12px;", t("sup.access.list")), this.#grants);
+    return card;
+  }
+
+  // Der Link steht nur hier und nur jetzt: das Token wird nirgends gespeichert.
+  #showNewLink(link: string, expiresAt: string) {
+    const box = el("div", "margin-top:10px;padding:10px;border:1px solid var(--omp-accent,#19d3f3);border-radius:8px;");
+    box.setAttribute("data-role", "support-access-link");
+    box.append(el("div", "font-weight:600;", t("sup.access.created")));
+    const input = el("input", "width:100%;box-sizing:border-box;margin:6px 0;font-family:monospace;");
+    input.type = "text";
+    input.readOnly = true;
+    input.value = link;
+    input.addEventListener("focus", () => input.select());
+    const copy = el("button", "", t("sup.access.copy"));
+    copy.className = "omp-btn";
+    copy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(link);
+      } catch {
+        input.select();
+        document.execCommand("copy");
+      }
+      copy.textContent = t("sup.access.copied");
+    });
+    box.append(input, copy, el("span", DIM + "margin-left:10px;", t("sup.access.expires", { time: new Date(expiresAt).toLocaleString() })));
+    this.#newLink.replaceChildren(box);
+  }
+
+  async #loadGrants() {
+    try {
+      const res = await apiFetch("/api/v1/admin/support-access");
+      if (!res.ok) return;
+      this.#renderGrants(sortGrants((await res.json()) as SupportGrant[]));
+    } catch { /* Anzeige bleibt leer */ }
+  }
+
+  #renderGrants(list: SupportGrant[]) {
+    this.#grants.replaceChildren();
+    if (list.length === 0) {
+      this.#grants.append(el("div", DIM, t("sup.access.none")));
+      return;
+    }
+    for (const g of list) {
+      const row = el("div", "display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;padding:4px 0;border-top:1px solid var(--omp-border);");
+      row.setAttribute("data-testid", "support-grant");
+      const color = g.status === "active" ? "var(--omp-ok,#3fb950)" : "var(--omp-text-dim)";
+      row.append(el("span", `font-weight:600;color:${color};min-width:80px;`, t(`sup.access.status.${g.status}` as never)));
+      row.append(el("span", "", t("sup.access.expires", { time: new Date(g.expiresAt).toLocaleString() })));
+      row.append(el("span", DIM, t("sup.access.by", { user: g.createdBy }) + (g.note ? ` — ${g.note}` : "")));
+      row.append(el("span", DIM, g.useCount > 0 ? t("sup.access.used", { n: g.useCount, time: g.lastUsedAt ? new Date(g.lastUsedAt).toLocaleString() : "?" }) : t("sup.access.unused")));
+      if (g.status === "active") {
+        const revoke = el("button", "margin-left:auto;", t("sup.access.revoke"));
+        revoke.className = "omp-btn";
+        revoke.addEventListener("click", async () => {
+          if (!(await confirmDialog(t("sup.access.revokeConfirm"), { confirmLabel: t("sup.access.revokeLabel") }))) return;
+          await apiFetch(`/api/v1/admin/support-access/${encodeURIComponent(g.id)}`, { method: "DELETE" });
+          void this.#loadGrants();
+        });
+        row.append(revoke);
+      }
+      this.#grants.append(row);
+    }
   }
 }

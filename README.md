@@ -207,6 +207,10 @@ everything needed without a remote session.
 <td width="50%"><img src="docs/screenshots/zeitleiste.png" width="420"><br><sub><b>Timeline:</b> faults, restarts, operations, changes and markers on one axis. Click a point in time to see what was wrong then and what changed in the five minutes before. The <b>⚑ Marker</b> button in the top bar flags "problem now" with one click.</sub></td>
 </tr>
 <tr>
+<td width="50%"><img src="docs/screenshots/support-zugang.png" width="420"><br><sub><b>Time-limited support access:</b> an admin creates a link (1 hour to 3 days, with a note) and sends it to the support engineer — read-only, no account, no password handed out. The token is shown once and stored only as a hash; the list shows every access, how often it was used, and a <b>Revoke</b> button that takes effect immediately.</sub></td>
+<td width="50%"><img src="docs/screenshots/support-zugang-lesesicht.png" width="420"><br><sub><b>What the support engineer sees:</b> the normal web UI with a yellow "read-only, valid until …" strip. Diagnosis, timeline, node diagnosis and the support package are open; users, permissions, settings and backups are not, and any attempt to write is refused and audited.</sub></td>
+</tr>
+<tr>
 <td width="50%"><img src="docs/screenshots/diagnose-fehlercodes.png" width="420"><br><sub><b>Error codes:</b> every known error has a stable code (<code>OMP-nnnn</code>) with cause and numbered solution steps — in the Diagnose tab, support tab, node diagnosis and start dialog; API errors carry it in an <code>X-Omp-Error-Code</code> header. The full list is in <a href="docs/FEHLERCODES.md"><code>docs/FEHLERCODES.md</code></a>.</sub></td>
 <td width="50%"></td>
 </tr>
@@ -605,7 +609,9 @@ node has to satisfy.
   before packing), a **timeline** that merges faults, restarts, audit
   entries and operator markers and can replay "what was wrong at 14:02",
   a **per-node diagnosis** including the node's GStreamer pipeline
-  (read-only snapshot, no probes in the data path), "why does nothing
+  (read-only snapshot, no probes in the data path), a **time-limited,
+  read-only support access** (link with expiry, revocable at any time,
+  every attempt to write refused and audited), "why does nothing
   arrive here?" for every target with the root cause named, and a
   catalog of **error codes** with cause and solution steps
   (`docs/FEHLERCODES.md`, generated from the catalog).

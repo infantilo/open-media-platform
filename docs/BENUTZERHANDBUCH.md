@@ -1032,6 +1032,28 @@ untereinander):
   `GET /api/v1/admin/support-bundle?minutes=N`).
 
   ![Support: Ampel mit Befunden, Fehlercode und „Was tun?“, darunter das Support-Paket](screenshots/support-ampel.png)
+- **Support-Zugang (befristet, nur lesen)** — wenn der Support selbst ins
+  System sehen soll, ohne dass Sie ein Konto anlegen oder ein Passwort
+  weitergeben: im Support-Tab unter **„Support-Zugang für externe Hilfe“**
+  Gültigkeit (1 Stunde bis 3 Tage) und eine Notiz (z. B. Ticket-Nummer)
+  wählen und **„Support-Zugang erzeugen“**. Der **Link** erscheint **nur
+  jetzt** — das Token wird nirgends gespeichert, nur sein Fingerabdruck —
+  und geht per Mail oder Chat an den Support. Wer ihn öffnet, ist ohne
+  Anmeldung als „support:…“ eingeloggt und sieht oben einen gelben Streifen
+  („Support-Zugang — nur lesen, gültig bis …“). Er sieht Diagnose, Support,
+  Zeitleiste, Instanzen, Hosts, Graph, Workflows und kann das Support-Paket
+  herunterladen — er **kann nichts ändern**, und er sieht keine Nutzer,
+  Rechte, Einstellungen, Sicherungen und keine Audit-Daten; jeder Versuch
+  zu schreiben wird mit OMP-6003 abgewiesen und im Audit-Log vermerkt. Die
+  Liste darunter zeigt alle Zugänge (aktiv, abgelaufen, widerrufen), wie
+  oft und wann zuletzt sich jemand angemeldet hat, und **„Widerrufen“**
+  beendet einen Zugang **sofort**. Erzeugen, Anmeldung und Widerruf stehen
+  im Domänen-Audit, höchstens 10 Zugänge sind gleichzeitig aktiv.
+
+  ![Support-Zugang erzeugen: Link mit Ablaufzeit, darunter die bisherigen Zugänge](screenshots/support-zugang.png)
+
+  ![Was der Support sieht: gelber Streifen „nur lesen“, die Zeitleiste ohne Bedienelemente mit Schreibwirkung](screenshots/support-zugang-lesesicht.png)
+
 - **Zeitleiste** — „Was hat sich um 14:02 geändert?“ auf einer einzigen
   Achse. Oben ein Balkenbild des gewählten Zeitraums (letzte Stunde bis 7
   Tage): rot = Störung, gelb = Hinweis, blau = Information. **In die Balken

@@ -565,6 +565,17 @@ Meldungen lassen sich auch selbst mit einem Code versehen: eine Meldung mit `[OM
 
 1. Einen Administrator um das Recht bitten (Administration → Rechte).
 
+### OMP-6003
+
+**Support-Zugang: nur lesen oder nicht mehr gültig** — Hinweis
+
+**Ursache:** Ein Support-Zugang darf nur ansehen, nicht ändern — oder er ist abgelaufen, widerrufen oder falsch.
+
+**Was tun?**
+
+1. Soll etwas geändert werden, muss das ein Administrator mit eigenem Konto tun.
+2. Ist der Zugang abgelaufen oder widerrufen: Administration → Support → neuen Support-Zugang erzeugen und den Link erneut senden.
+
 ## 7xxx — Update
 
 ### OMP-7002

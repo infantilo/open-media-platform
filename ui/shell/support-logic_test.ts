@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { bundleFileName, bundleUrl, type SelftestReport, splitChecks } from "./support-logic.ts";
+import { accessLink, bundleFileName, bundleUrl, type SelftestReport, type SupportGrant, sortGrants, splitChecks } from "./support-logic.ts";
 
 Deno.test("splitChecks: Fehler vor Hinweisen, in Ordnung getrennt", () => {
   const r: SelftestReport = {
@@ -25,4 +25,20 @@ Deno.test("bundleFileName: Header oder Ersatzname", () => {
   assertEquals(bundleFileName('attachment; filename="omp-support-regie-20261027-120000.zip"', new Date()), "omp-support-regie-20261027-120000.zip");
   assertEquals(bundleFileName(null, new Date(2026, 9, 27, 8, 5)), "omp-support-20261027-0805.zip");
   assertEquals(bundleFileName('attachment; filename="../../x.sh"', new Date(2026, 9, 27, 8, 5)), "omp-support-20261027-0805.zip");
+});
+
+Deno.test("accessLink: Token hinter dem # und kodiert", () => {
+  assertEquals(accessLink("http://x:8000", "ompsup_abc.d-e_f"), "http://x:8000/#support=ompsup_abc.d-e_f");
+  assertEquals(accessLink("http://x", "a b/c"), "http://x/#support=a%20b%2Fc");
+});
+
+Deno.test("sortGrants: aktive zuerst nach Ablauf, dann die übrigen neueste zuerst", () => {
+  const g = (id: string, status: SupportGrant["status"], createdAt: string, expiresAt: string): SupportGrant => ({ id, createdBy: "a", createdAt, expiresAt, status, useCount: 0 });
+  const out = sortGrants([
+    g("alt", "expired", "2026-10-01T10:00:00Z", "2026-10-01T11:00:00Z"),
+    g("spaet", "active", "2026-10-27T10:00:00Z", "2026-10-27T20:00:00Z"),
+    g("neu-widerrufen", "revoked", "2026-10-26T10:00:00Z", "2026-10-26T20:00:00Z"),
+    g("bald", "active", "2026-10-27T11:00:00Z", "2026-10-27T12:00:00Z"),
+  ]);
+  assertEquals(out.map((x) => x.id), ["bald", "spaet", "neu-widerrufen", "alt"]);
 });

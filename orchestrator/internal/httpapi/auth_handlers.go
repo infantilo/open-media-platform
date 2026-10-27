@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/supportaccess"
 	"log/slog"
 	"net"
 	"net/http"
@@ -132,7 +133,7 @@ func handleLogin(authSvc AuthService, audit AuditLogger, lockout LoginRateLimite
 // Fall (count==0) bewusst true, sonst könnte niemand je den allerersten
 // Nutzer über die UI anlegen (derselbe Bypass-Gedanke wie in
 // handleCreateUser/authGate.authenticate).
-func handleWhoami(authSvc AuthService, authzStore AuthzChecker) http.HandlerFunc {
+func handleWhoami(authSvc AuthService, authzStore AuthzChecker, support ...SupportVerifier) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		count, err := authSvc.UserCount(r.Context())
 		if err != nil {
@@ -146,6 +147,21 @@ func handleWhoami(authSvc AuthService, authzStore AuthzChecker) http.HandlerFunc
 		token, present := bearerToken(r)
 		if !present {
 			writeJSON(w, http.StatusOK, map[string]any{"authRequired": true, "authenticated": false, "isAdmin": false})
+			return
+		}
+		if strings.HasPrefix(token, supportaccess.TokenPrefix) {
+			var g supportaccess.Grant
+			err := errors.New("support access not enabled")
+			if len(support) > 0 && support[0] != nil {
+				g, err = support[0].Verify(r.Context(), token)
+			}
+			if err != nil {
+				writeJSON(w, http.StatusOK, map[string]any{"authRequired": true, "authenticated": false, "isAdmin": false})
+				return
+			}
+			// Der Support sieht die Administration (Diagnose, Support, Zeitleiste), darf dort aber nur lesen.
+			writeJSON(w, http.StatusOK, map[string]any{"authRequired": true, "authenticated": true, "username": "support:" + g.ID, "isAdmin": true, "canConfigure": false,
+				"support": true, "supportExpiresAt": g.ExpiresAt, "supportNote": g.Note})
 			return
 		}
 		p, err := authSvc.Authenticate(r.Context(), token)

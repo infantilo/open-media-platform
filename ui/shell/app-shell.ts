@@ -195,9 +195,31 @@ class AppShell extends HTMLElement {
   // sobald whoami() zurück ist — #buildSkeleton() läuft synchron, damit
   // die restliche Bar sofort nutzbar ist (gleicher Grund wie
   // workflows-view.ts' sofortiges #render() vor dem ersten Poll).
+  // Support-Zugang (Kap. 72.9): ein Streifen zeigt, dass nur gelesen wird und bis wann der Zugang gilt; Bedienelemente mit Schreibwirkung
+  // (Marker) verschwinden.
+  #showSupportBanner(expiresAt?: string, note?: string) {
+    if (this.querySelector('[data-role="support-banner"]')) return;
+    const bar = document.createElement("div");
+    bar.setAttribute("data-role", "support-banner");
+    bar.style.cssText =
+      "flex:0 0 auto;padding:6px 16px;background:#3b3a1f;color:#f3e9a8;font-size:var(--omp-font-size-sm);font-family:var(--omp-font);text-align:center;border-bottom:1px solid var(--omp-border);";
+    const until = expiresAt ? new Date(expiresAt) : undefined;
+    const render = () => {
+      const left = until ? Math.max(0, Math.round((until.getTime() - Date.now()) / 60000)) : 0;
+      bar.textContent = t("sup.access.banner", { until: until ? until.toLocaleString() : "?", min: left }) + (note ? ` — ${note}` : "");
+    };
+    render();
+    window.setInterval(render, 30_000);
+    this.#contentEl.before(bar);
+    const marker = this.querySelector<HTMLElement>('[data-role="timeline-marker"]');
+    if (marker) marker.style.display = "none";
+  }
+
   async #loadAdminTab() {
     try {
-      const { isAdmin } = await whoami();
+      const me = await whoami();
+      if (me.support) this.#showSupportBanner(me.supportExpiresAt, me.supportNote);
+      const { isAdmin } = me;
       if (!isAdmin || this.#tabs.some((t) => t.id === "admin")) return;
       this.#tabs.push(ADMIN_TAB);
       const btn = this.#buildTabButton(ADMIN_TAB);

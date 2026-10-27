@@ -29,7 +29,7 @@ import "./console-board.ts";
 // Test-/Simulator-Seite Stream Deck (Kap. 40.2); Seiteneffekt-Import wie oben.
 import "./streamdeck/sim.ts";
 import type { ConsoleBoard } from "./console-board.ts";
-import { whoami, showLoginOverlay, buildUserWidget } from "./auth.ts";
+import { whoami, showLoginOverlay, buildUserWidget, redeemSupportLink } from "./auth.ts";
 import { attachTaskBadge, loadWorkTiles, renderTileView } from "./operator-home.ts";
 import type { OperatorHome } from "./operator-home.ts";
 import type { WorkTile } from "./modules-logic.ts";
@@ -423,6 +423,17 @@ function renderWorkflowPicker(root: HTMLElement, consoles: ConsoleEntry[], workf
   root.replaceChildren(container);
 }
 
+// Einlösen eines Support-Links fehlgeschlagen (abgelaufen, widerrufen, falsch): kurze Meldung über der Anmeldung.
+function alert_support_error(root: HTMLElement, message: string) {
+  const note = document.createElement("div");
+  note.setAttribute("data-role", "support-link-error");
+  note.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:5000;padding:10px 16px;background:#7a2a2a;color:#fff;font:14px system-ui,sans-serif;text-align:center;";
+  note.textContent = `${t("sup.access.linkFailed")}: ${message}`;
+  document.body.append(note);
+  setTimeout(() => note.remove(), 12000);
+  void root;
+}
+
 async function boot() {
   const root = document.getElementById("shell-root");
   if (!root) return;
@@ -436,6 +447,9 @@ async function boot() {
     return;
   }
 
+  // Support-Link (#support=…): vor der Anmeldeprüfung einlösen, damit der Zugang gleich gilt.
+  const supportError = await redeemSupportLink();
+  if (supportError) alert_support_error(root, supportError);
   const { authRequired, authenticated, username } = await whoami();
   if (!authRequired || authenticated) installToastCodes();
 

@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/supportaccess"
 	"io"
 	"net"
 	"net/http"
@@ -110,6 +111,8 @@ type authGate struct {
 	// Bootstrap-Modus (noch kein Nutzer): s. bootstrapAllowed.
 	bootstrapOpen  bool
 	bootstrapToken string
+	// support prüft Support-Zugänge (nur lesend, befristet); nil = ohne Support-Zugang.
+	support SupportVerifier
 }
 
 // bootstrapAllowed: darf diese Anfrage im Bootstrap-Modus (noch kein Nutzer angelegt) ohne Anmeldung arbeiten?
@@ -243,6 +246,18 @@ func (g *authGate) authenticate(r *http.Request) (p auth.Principal, bypass bool,
 	if !present {
 		return auth.Principal{}, false, false
 	}
+	// Support-Zugang (Kap. 72.9): eigenes Token-Schema; die Einschränkung auf lesende, freigegebene Pfade erzwingt supportReadOnly.
+	if strings.HasPrefix(token, supportaccess.TokenPrefix) {
+		if g.support == nil {
+			return auth.Principal{}, false, false
+		}
+		grant, err := g.support.Verify(r.Context(), token)
+		if err != nil {
+			return auth.Principal{}, false, false
+		}
+		g.support.Touch(r.Context(), grant.ID)
+		return auth.Principal{UserID: "support:" + grant.ID, Username: "support:" + grant.ID, Support: true}, false, true
+	}
 	p, err = g.auth.Authenticate(r.Context(), token)
 	if err != nil {
 		return auth.Principal{}, false, false
@@ -288,6 +303,10 @@ func (g *authGate) requireVerbOnNode(minVerb authz.Verb, next http.HandlerFunc) 
 		p, bypass, ok := g.authenticate(r)
 		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if p.Support {
+			next(w, r.WithContext(contextWithPrincipal(r.Context(), p)))
 			return
 		}
 
@@ -341,6 +360,10 @@ func (g *authGate) requireVerbOnReceiver(minVerb authz.Verb, next http.HandlerFu
 		p, bypass, ok := g.authenticate(r)
 		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if p.Support {
+			next(w, r.WithContext(contextWithPrincipal(r.Context(), p)))
 			return
 		}
 		auditNode := ""
@@ -434,6 +457,10 @@ func (g *authGate) requireVerbGlobal(minVerb authz.Verb, next http.HandlerFunc) 
 		p, bypass, ok := g.authenticate(r)
 		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if p.Support {
+			next(w, r.WithContext(contextWithPrincipal(r.Context(), p)))
 			return
 		}
 

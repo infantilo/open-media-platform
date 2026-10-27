@@ -58,4 +58,6 @@ type Principal struct {
 	OrgID    string
 	// Service: Token einer Node-Instanz (IssueServiceToken), kein Nutzerkonto — es gibt dazu keine users-Zeile.
 	Service bool
+	// Support: befristeter, nur lesender Support-Zugang (internal/supportaccess); Username "support:<id>", kein Nutzerkonto.
+	Support bool
 }
