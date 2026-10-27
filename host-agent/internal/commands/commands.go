@@ -16,6 +16,7 @@
 package commands
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -309,6 +310,16 @@ func (e *Executor) Handle(req Request) Response {
 			return Response{OK: false, Error: "path required"}
 		}
 		data, _ := json.Marshal(nodeoptions.CheckPath(req.Path, req.Kind))
+		return Response{OK: true, Detail: string(data)}
+	case jobwire.ActionSysinfo:
+		// Nur Lesen: Platten, Speicher, Last, Prozesse, Kernel-Meldungen dieses Rechners (Support, Kap. 72).
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		targets := []jobwire.DiskTarget{{Path: "/", Label: "System"}}
+		if wd, err := os.Getwd(); err == nil {
+			targets = append(targets, jobwire.DiskTarget{Path: wd, Label: "Agent"})
+		}
+		data, _ := json.Marshal(jobwire.CollectSysinfo(ctx, targets))
 		return Response{OK: true, Detail: string(data)}
 	case jobwire.ActionExec, jobwire.ActionCancel, jobwire.ActionList, jobwire.ActionPause, jobwire.ActionResume, jobwire.ActionNice:
 		return e.handleJob(req)

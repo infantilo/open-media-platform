@@ -150,6 +150,12 @@
     "domain": "core"
   },
   {
+    "method": "GET",
+    "path": "/api/v1/admin/selftest",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
     "method": "POST",
     "path": "/api/v1/admin/settings/check-path",
     "auth": "verb:Admin",
@@ -200,6 +206,12 @@
   {
     "method": "PUT",
     "path": "/api/v1/admin/storage-locations/{id}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/support-bundle",
     "auth": "verb:Admin",
     "domain": "core"
   },

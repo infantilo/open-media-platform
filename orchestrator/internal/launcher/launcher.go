@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/infantilo/openmediaplatform/jobwire"
 	"io"
 	"log/slog"
 	"os"
@@ -1318,6 +1319,26 @@ func (l *Launcher) CheckPathOnHost(hostID, path, kind string) (nodeoptions.PathI
 		return nodeoptions.PathInfo{}, fmt.Errorf("host %s: unlesbare Antwort: %w", hostID, err)
 	}
 	return info, nil
+}
+
+// SysinfoOnHost holt den Rechnerzustand eines Remote-Hosts (Host-Agent, Aktion sysinfo; Support, Kap. 72). Ein älterer
+// Agent kennt die Aktion nicht und antwortet mit einem Fehler.
+func (l *Launcher) SysinfoOnHost(hostID string) (jobwire.Sysinfo, error) {
+	if l.nc == nil {
+		return jobwire.Sysinfo{}, ErrRemoteUnavailable
+	}
+	resp, err := l.sendCommand(hostID, remoteCommand{Action: jobwire.ActionSysinfo})
+	if err != nil {
+		return jobwire.Sysinfo{}, err
+	}
+	if !resp.OK {
+		return jobwire.Sysinfo{}, fmt.Errorf("host %s: %s", hostID, resp.Error)
+	}
+	var s jobwire.Sysinfo
+	if err := json.Unmarshal([]byte(resp.Detail), &s); err != nil {
+		return jobwire.Sysinfo{}, fmt.Errorf("host %s: unlesbare Antwort: %w", hostID, err)
+	}
+	return s, nil
 }
 
 // OptionsChanged meldet, ob sich die Optionswerte einer laufenden Instanz seit ihrem

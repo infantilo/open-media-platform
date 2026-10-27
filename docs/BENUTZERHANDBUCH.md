@@ -253,6 +253,19 @@ Der Tab **Signalweg** beantwortet die Frage „Läuft Quelle X wirklich bei
 Ziel Y an – und wo bricht es?". Er zeigt den **Ist-Zustand** (die aktuell
 aktiven Verbindungen), ändert aber nichts.
 
+**„Warum kommt hier nichts an?“ — Alle Ziele auf einen Blick:** über den
+Suchfeldern steht für **jedes Ziel** (Viewer, Recorder, Gateway … — jede Node
+mit Eingängen und ohne Ausgang) eine Karte mit Ampelrand: grün = in Ordnung,
+gelb = Hinweis, rot = Fehler, grau = es ist keine Quelle angeschlossen. Bei
+einem Problem steht dort die **erste Fehlerstelle stromaufwärts** — die
+Ursache, alles dahinter ist Folge — und darunter **„Was tun?“** in einem
+Satz. „Kette zeigen“ öffnet die Einzelansicht dieses Ziels. Geprüft wird
+nicht nur die Verbindung, sondern auch der Laufzeitzustand: Node offline oder
+abgestürzt, Node läuft aber **liefert kein Bild oder keinen Ton**, **Bildrate
+eingebrochen** oder **keine Bilder mehr** (Raten-Kennzahlen, soweit der Node
+sie meldet), **mehrfach automatisch neu gestartet**, der **Host antwortet nicht**,
+ist stark ausgelastet oder hat eine **nicht synchrone Uhr**.
+
 1. **Quelle** wählen (ein Ausgang einer Node) und/oder **Ziel** wählen (eine
    Node „jeder Eingang" oder ein bestimmter Eingang). Die drei Felder
    sind **Suchfelder**: Klick öffnet die ganze Liste, Tippen filtert (alle
@@ -997,6 +1010,24 @@ untereinander):
   als Chips zum Entfernen unter der Leiste. Aus dem Flow Editor führt ein
   fehlgeschlagener Verbindungsversuch direkt auf die Schritte seines
   Vorgangs.
+- **Support** — „Ist mein System gesund?“ als Ampel und das
+  Support-Paket. Oben steht der Gesamtstatus in einem Satz (grün, gelb,
+  rot) und aktualisiert sich alle 30 Sekunden. Darunter stehen nur die
+  Punkte, die Aufmerksamkeit brauchen, jeweils mit Befund und einem
+  Absatz **„Was tun?“**; alles, was in Ordnung ist, ist eingeklappt.
+  Geprüft werden Speicherplatz, Arbeitsspeicher, `/dev/shm` (der Platz,
+  über den die Nodes Videobilder austauschen), offene Dateien, Last,
+  Datenbank, Cluster-Mehrheit, jeder Host (meldet er sich, CPU/RAM, Uhr),
+  nicht erreichbare Nodes, abgestürzte oder dauernd neu startende
+  Instanzen und die Befunde des Betriebsprofils. „Support-Paket
+  erstellen“ lädt eine ZIP-Datei mit Zustand, Fehlermeldungen des
+  gewählten Zeitraums (30 Minuten, 2 oder 24 Stunden) und Systemdaten
+  herunter, die unverändert an den Support geht. Sie enthält keine
+  Medien, keine Passwörter, Tokens oder Schlüssel (Werte werden durch
+  `[entfernt]` ersetzt) und kein Audit-Log. Teile, die sich nicht
+  einsammeln ließen, stehen in der `manifest.json` im Paket. Beide
+  Funktionen verlangen das Admin-Recht (`GET /api/v1/admin/selftest`,
+  `GET /api/v1/admin/support-bundle?minutes=N`).
 - **Backup/Restore** — „Backup jetzt erstellen“ erstellt sofort einen
   Download; Restore verlangt, den gewählten Dateinamen exakt
   einzutippen (Bestätigung), ersetzt danach den kompletten

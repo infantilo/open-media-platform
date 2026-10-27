@@ -11,6 +11,7 @@ import {
   diagnosePath,
   findPaths,
   firstError,
+  hasError,
   formatName,
   type GraphData,
   formatMbps,
@@ -26,6 +27,8 @@ import {
   senderOptions,
   targetOptions,
   transportName,
+  targetOverview,
+  type TargetStatus,
   withImplicitFeeds,
 } from "./signal-path-logic.ts";
 
@@ -34,6 +37,21 @@ interface InstanceInfo {
   type?: string;
   hostId?: string;
   crashed?: boolean;
+  restartCount?: number;
+}
+
+interface HostInfo {
+  id: string;
+  label: string;
+  metrics?: { cpuPercent: number; memUsedBytes: number; memTotalBytes: number; receivedAt: string; goodbye?: boolean; clock?: { synced: boolean; taiOffsetS: number } };
+}
+
+interface KpiNode {
+  nodeId: string;
+  currentlyReady: boolean;
+  observedSeconds: number;
+  availability?: number | null;
+  rates?: Record<string, { last: number; avg: number; min: number }>;
 }
 
 interface NetInfo {
@@ -61,6 +79,8 @@ class SignalPathView extends HTMLElement {
   #graph: GraphData = { nodes: [], edges: [] };
   #instances = new Map<string, InstanceInfo>();
   #hostLabels = new Map<string, string>();
+  #hostInfo = new Map<string, HostInfo>();
+  #kpi = new Map<string, KpiNode>();
   #net: NetInfo | null = null;
   #problems = new Map<string, ProblemList>();
   #noMonitorTypes = new Map<string, number>(); // Typ → Zeitpunkt der letzten Fehlanzeige
@@ -89,12 +109,14 @@ class SignalPathView extends HTMLElement {
           </span>
         </label>`).join("")}
       </div>
+      <div id="overview" style="margin-bottom:var(--omp-space-4);"></div>
       <div id="result"></div>`;
     this.addEventListener("input", this.#onInput);
     this.addEventListener("focusin", this.#onFocusIn);
     this.addEventListener("focusout", this.#onFocusOut);
     this.addEventListener("keydown", this.#onKey);
     this.addEventListener("mousedown", this.#onMouseDown);
+    this.addEventListener("click", this.#onClick);
     this.#poll();
     this.#pollHandle = window.setInterval(() => this.#poll(), POLL_INTERVAL_MS);
     connectionMonitor.addEventListener("sse-message", this.#onSseMessage);
@@ -106,6 +128,7 @@ class SignalPathView extends HTMLElement {
     this.removeEventListener("focusout", this.#onFocusOut);
     this.removeEventListener("keydown", this.#onKey);
     this.removeEventListener("mousedown", this.#onMouseDown);
+    this.removeEventListener("click", this.#onClick);
     if (this.#pollHandle !== undefined) window.clearInterval(this.#pollHandle);
     connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
   }
@@ -225,6 +248,18 @@ class SignalPathView extends HTMLElement {
     }
   };
 
+  // „Kette zeigen“ in der Zielübersicht: Ziel setzen, Quelle leeren.
+  #onClick = (ev: MouseEvent) => {
+    const btn = (ev.target as HTMLElement).closest<HTMLElement>("[data-show-target]");
+    if (!btn) return;
+    this.#set("from", "");
+    this.#syncInput("from");
+    this.#set("to", `node:${btn.dataset.showTarget}`);
+    this.#syncInput("to");
+    this.#renderResult();
+    this.querySelector("#result")?.scrollIntoView({ block: "nearest" });
+  };
+
   #onSseMessage = (ev: Event) => {
     try {
       const parsed = JSON.parse((ev as CustomEvent<string>).detail) as { type: string };
@@ -236,11 +271,12 @@ class SignalPathView extends HTMLElement {
 
   async #poll() {
     try {
-      const [g, inst, hosts, net] = await Promise.all([
+      const [g, inst, hosts, net, kpi] = await Promise.all([
         apiFetch("/api/v1/graph"),
         apiFetch("/api/v1/instances"),
         apiFetch("/api/v1/hosts"),
         apiFetch("/api/v1/graph/network"),
+        apiFetch("/api/v1/kpi/media?window=1h"),
       ]);
       this.#net = net.ok ? ((await net.json()) as NetInfo) : null;
       if (!g.ok) return;
@@ -249,9 +285,13 @@ class SignalPathView extends HTMLElement {
       const [feeds, problems] = await Promise.all([this.#implicitFeeds(graph), this.#runtimeProblems(graph)]);
       this.#problems = problems;
       this.#graph = withImplicitFeeds(graph, feeds);
-      this.#hostLabels = new Map(((hosts.ok ? await hosts.json() : []) as { id: string; label: string }[]).map((h) => [h.id, h.label]));
+      const hostList = (hosts.ok ? await hosts.json() : []) as HostInfo[];
+      this.#hostLabels = new Map(hostList.map((h) => [h.id, h.label]));
+      this.#hostInfo = new Map(hostList.map((h) => [h.id, h]));
+      this.#kpi = new Map((((kpi.ok ? (await kpi.json()).nodes : []) ?? []) as KpiNode[]).map((k) => [k.nodeId, k]));
       this.#loaded = true;
       this.#renderForm();
+      this.#renderOverview();
       this.#renderResult();
     } catch {
       // Orchestrator kurzzeitig nicht erreichbar — nächster Poll holt es auf.
@@ -353,7 +393,22 @@ class SignalPathView extends HTMLElement {
       hostKey: inst.hostId ?? "",
       hostLabel: inst.hostId ? this.#hostLabels.get(inst.hostId) || inst.hostId : t("sp.hostLocal"),
       crashed: inst.crashed,
+      restarts: inst.restartCount,
     };
+    const k = this.#kpi.get(nodeId);
+    if (k) {
+      if (k.observedSeconds >= 10) ctx.ready = k.currentlyReady;
+      ctx.everReady = (k.availability ?? 0) > 0;
+      ctx.rates = k.rates;
+    }
+    const host = inst.hostId ? this.#hostInfo.get(inst.hostId)?.metrics : undefined;
+    if (host && !host.goodbye) {
+      const age = Date.now() - new Date(host.receivedAt).getTime();
+      const memPct = host.memTotalBytes ? (host.memUsedBytes / host.memTotalBytes) * 100 : 0;
+      if (age > 30_000) ctx.hostState = "silent";
+      else if (host.cpuPercent > 90 || memPct > 92) ctx.hostState = "overloaded";
+      ctx.hostClockBad = host.clock ? !host.clock.synced : false;
+    }
     const ni = this.#net?.instances[inst.id];
     if (ni) {
       ctx.netRxMbps = ni.netRxMbps;
@@ -364,6 +419,26 @@ class SignalPathView extends HTMLElement {
     }
     return ctx;
   };
+
+  // Alle Ziele auf einen Blick: Ampel, Ursache und „Was tun?“ je Ziel; „Kette zeigen“ öffnet die Einzelansicht.
+  #renderOverview() {
+    const out = this.querySelector<HTMLElement>("#overview");
+    if (!out) return;
+    const rows: TargetStatus[] = targetOverview(this.#graph, this.#ctx);
+    const color = { error: COLOR.error, warn: COLOR.warn, ok: COLOR.ok, none: "var(--omp-text-dim)" };
+    const body = rows.length === 0
+      ? `<div class="omp-empty">${t("sp.overview.empty")}</div>`
+      : rows.map((r) => `<div data-testid="sp-target" style="display:flex;gap:10px;align-items:flex-start;border:1px solid var(--omp-border);border-left:4px solid ${color[r.level]};border-radius:var(--omp-radius);background:var(--omp-surface-raised);padding:var(--omp-space-2);margin-bottom:var(--omp-space-1);">
+          <div style="flex:1;min-width:0;">
+            <div style="font-weight:600;">${esc(r.node.label)}</div>
+            <div style="color:${color[r.level]};">${esc(r.text)}</div>
+            ${r.fix ? `<div style="font-size:var(--omp-font-size-xs);">${esc(t("sp.verdict.fix", { fix: r.fix }))}</div>` : ""}
+          </div>
+          ${r.chains > 0 ? `<button data-show-target="${esc(r.node.id)}">${t("sp.overview.show")}</button>` : ""}
+        </div>`).join("");
+    out.innerHTML = `<div class="omp-h2" style="font-weight:600;margin-bottom:2px;">${t("sp.overview.title")}</div>
+      <div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:var(--omp-space-2);">${t("sp.overview.hint")}</div>${body}`;
+  }
 
   #renderResult() {
     const out = this.querySelector<HTMLElement>("#result")!;
@@ -393,7 +468,7 @@ class SignalPathView extends HTMLElement {
 
   #renderPath(path: Hop[], index: number, total: number): string {
     const issues = diagnosePath(path, this.#ctx, loopFeeder(this.#graph, path));
-    const err = firstError(issues);
+    const err = hasError(issues) ? firstError(issues) : null;
     const nodes = [path[0].fromNode, ...path.map((h) => h.toNode)];
     const at = (pos: number): Issue[] => issues.filter((i) => i.position === pos);
     const border = (pos: number) => (at(pos).some((i) => i.severity === "error") ? COLOR.error : at(pos).length ? COLOR.warn : "var(--omp-border)");
@@ -424,7 +499,7 @@ class SignalPathView extends HTMLElement {
     });
 
     const verdict = err
-      ? `<span style="color:${COLOR.error};">${esc(t("sp.verdict.error", { text: err.text }))}</span>`
+      ? `<span style="color:${COLOR.error};">${esc(t("sp.verdict.error", { text: err.text }))}</span>${err.fix ? `<div style="font-size:var(--omp-font-size-xs);margin-top:2px;">${esc(t("sp.verdict.fix", { fix: err.fix }))}</div>` : ""}`
       : issues.length
       ? `<span style="color:${COLOR.warn};">${t("sp.verdict.warn")}</span>`
       : `<span style="color:${COLOR.ok};">${t("sp.verdict.ok")}</span>`;

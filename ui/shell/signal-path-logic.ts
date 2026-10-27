@@ -250,6 +250,10 @@ export interface Issue {
   /** Position in der Kette: Node k = 2k, Link k (Hop k) = 2k+1. */
   position: number;
   text: string;
+  /** „Was tun?“ in Klartext; leer, wenn es keinen allgemeinen Rat gibt. */
+  fix?: string;
+  /** Folge statt Ursache: Meldung eines Nodes über seinen Eingang (BCP-008, z. B. „kein Video-Buffer“). Die Ursache liegt stromaufwärts. */
+  symptom?: boolean;
 }
 
 /** Zusatzwissen je Node (aus GET /api/v1/instances + /hosts), alles optional. */
@@ -263,6 +267,15 @@ export interface NodeContext {
   netRxMbps?: number;
   netTxMbps?: number;
   netEstimated?: boolean;
+  /** Laufzeitbefunde (Kap. 72): liefert die Node gerade Medien, wie oft ist sie neu gestartet, wie steht ihr Host da. */
+  ready?: boolean;
+  /** Der Node war im beobachteten Zeitraum schon einmal bereit (Verfügbarkeit > 0). Ohne das ist „nicht bereit“ nur ein Hinweis:
+   *  manche Node-Typen melden nie „bereit“ (keine Bereitschaftsprobe), andere sind noch beim Anlaufen. */
+  everReady?: boolean;
+  rates?: Record<string, { last: number; avg: number; min: number }>;
+  restarts?: number;
+  hostState?: "ok" | "silent" | "overloaded";
+  hostClockBad?: boolean;
   /** Netzkarte des Hosts, auf dem die Node läuft. */
   hostNet?: { measured: boolean; linkMbps?: number; percent?: number; thresholdPercent: number };
 }
@@ -309,15 +322,116 @@ export function transportName(t: string | undefined): string {
   return last === "mxl" ? "MXL" : last.toUpperCase();
 }
 
+/** Laufzeitbefunde einer Node (Kap. 72): „läuft, liefert aber nichts“ ist die häufigste Ursache für „kein Bild“. */
+export function runtimeIssues(n: GraphNode, c: NodeContext, position: number): Issue[] {
+  const out: Issue[] = [];
+  if (n.health === "ok" && !c.crashed && c.ready === false) {
+    if (c.everReady) {
+      out.push({ severity: "error", position, text: t("sp.issue.notReady", { node: n.label }), fix: t("sp.fix.notReady") });
+    } else {
+      out.push({ severity: "warn", position, text: t("sp.issue.neverReady", { node: n.label }), fix: t("sp.fix.neverReady") });
+    }
+  }
+  const fps = c.rates?.video_fps;
+  if (fps && n.health === "ok" && c.ready !== false) {
+    if (fps.last < 1 && fps.avg >= 5) {
+      out.push({ severity: "error", position, text: t("sp.issue.noFrames", { node: n.label }), fix: t("sp.fix.noFrames") });
+    } else if (fps.avg >= 5 && fps.last < fps.avg * 0.8) {
+      out.push({
+        severity: "warn",
+        position,
+        text: t("sp.issue.fpsDrop", { node: n.label, last: fps.last.toFixed(1), avg: fps.avg.toFixed(1) }),
+        fix: t("sp.fix.fpsDrop"),
+      });
+    }
+  }
+  if ((c.restarts ?? 0) >= 3) {
+    out.push({ severity: "warn", position, text: t("sp.issue.restarts", { node: n.label, n: c.restarts ?? 0 }), fix: t("sp.fix.restarts") });
+  }
+  return out;
+}
+
+/**
+ * Host-Befunde (antwortet nicht, überlastet, Uhr) betreffen alle Nodes eines Hosts gleichzeitig: einmal je Host und Kette,
+ * an der am weitesten stromaufwärts liegenden Node des Hosts, mit den betroffenen Nodes im Text.
+ */
+export function hostIssues(nodes: GraphNode[], ctx: (nodeId: string) => NodeContext): Issue[] {
+  const out: Issue[] = [];
+  const done = new Set<string>();
+  nodes.forEach((n, k) => {
+    const c = ctx(n.id);
+    if (c.hostKey === undefined || c.hostKey === "" || done.has(c.hostKey)) return;
+    done.add(c.hostKey);
+    const same = nodes.filter((m) => ctx(m.id).hostKey === c.hostKey);
+    const list = same.map((m) => m.label).join(", ");
+    const host = c.hostLabel ?? "Host";
+    const state = same.map((m) => ctx(m.id).hostState).find((x) => x && x !== "ok");
+    if (state === "silent") {
+      out.push({ severity: "error", position: 2 * k, text: t("sp.issue.hostSilent", { host, nodes: list }), fix: t("sp.fix.hostSilent") });
+    } else if (state === "overloaded") {
+      out.push({ severity: "warn", position: 2 * k, text: t("sp.issue.hostOverloaded", { host, nodes: list }), fix: t("sp.fix.hostOverloaded") });
+    }
+    if (same.some((m) => ctx(m.id).hostClockBad)) {
+      out.push({ severity: "warn", position: 2 * k, text: t("sp.issue.hostClock", { host, nodes: list }), fix: t("sp.fix.hostClock") });
+    }
+  });
+  return out;
+}
+
+export type TargetLevel = "ok" | "warn" | "error" | "none";
+
+export interface TargetStatus {
+  node: GraphNode;
+  level: TargetLevel;
+  /** Eine Zeile: Ursache oder „in Ordnung“. */
+  text: string;
+  fix?: string;
+  chains: number;
+}
+
+/** Ziele = Nodes mit Eingängen und ohne Ausgänge (Viewer, Recorder, Gateways, …). */
+export function targetNodes(g: GraphData): GraphNode[] {
+  return g.nodes.filter((n) => n.inputs.length > 0 && n.outputs.length === 0);
+}
+
+/**
+ * „Warum kommt hier nichts an?“ für alle Ziele auf einmal: je Ziel alle ankommenden Ketten prüfen und die am weitesten
+ * stromaufwärts liegende Fehlerstelle nennen (die Ursache; alles dahinter ist Folge).
+ */
+export function targetOverview(g: GraphData, ctx: (nodeId: string) => NodeContext): TargetStatus[] {
+  const rank: Record<TargetLevel, number> = { error: 0, none: 1, warn: 2, ok: 3 };
+  const out = targetNodes(g).map((node): TargetStatus => {
+    const res = findPaths(g, { toNodeId: node.id });
+    if (res.paths.length === 0) return { node, level: "none", text: t("sp.overview.none"), chains: 0 };
+    // Je Kette die Ursache; über alle Ketten gewinnt eine gestörte Kette, dann die weiter stromaufwärts liegende Ursache.
+    let best: { issue: Issue; broken: boolean } | null = null;
+    for (const p of res.paths) {
+      const issues = diagnosePath(p, ctx, loopFeeder(g, p));
+      const broken = hasError(issues);
+      const issue = broken ? firstError(issues) : issues.find((i) => i.severity === "warn") ?? null;
+      if (!issue) continue;
+      if (!best || (broken && !best.broken) || (broken === best.broken && issue.position < best.issue.position)) best = { issue, broken };
+    }
+    if (!best) return { node, level: "ok", text: t("sp.overview.ok"), chains: res.paths.length };
+    return { node, level: best.broken ? "error" : "warn", text: best.issue.text, fix: best.issue.fix, chains: res.paths.length };
+  });
+  return out.sort((a, b) => rank[a.level] - rank[b.level] || a.node.label.localeCompare(b.node.label));
+}
+
 /** Prüft die Kette von vorn nach hinten; Ergebnis ist nach Position sortiert. */
 export function diagnosePath(path: Hop[], ctx: (nodeId: string) => NodeContext, loopFrom?: GraphNode | null): Issue[] {
   const issues: Issue[] = [];
   const nodes = path.length ? [path[0].fromNode, ...path.map((h) => h.toNode)] : [];
-  if (loopFrom) issues.push({ severity: "error", position: 0, text: t("sp.issue.loop", { node: nodes[0].label, from: loopFrom.label }) });
+  if (loopFrom) {
+    issues.push({ severity: "error", position: 0, text: t("sp.issue.loop", { node: nodes[0].label, from: loopFrom.label }), fix: t("sp.fix.loop") });
+  }
+  issues.push(...hostIssues(nodes, ctx));
   nodes.forEach((n, k) => {
-    if (n.health !== "ok") issues.push({ severity: "error", position: 2 * k, text: t("sp.issue.offline", { node: n.label }) });
-    if (ctx(n.id).crashed) issues.push({ severity: "error", position: 2 * k, text: t("sp.issue.crashed", { node: n.label }) });
-    for (const p of ctx(n.id).problems ?? []) issues.push({ severity: p.severity, position: 2 * k, text: p.text });
+    const c = ctx(n.id);
+    if (n.health !== "ok") issues.push({ severity: "error", position: 2 * k, text: t("sp.issue.offline", { node: n.label }), fix: t("sp.fix.offline") });
+    if (c.crashed) issues.push({ severity: "error", position: 2 * k, text: t("sp.issue.crashed", { node: n.label }), fix: t("sp.fix.crashed") });
+    for (const p of c.problems ?? []) issues.push({ severity: p.severity, position: 2 * k, text: p.text, symptom: true });
+    issues.push(...runtimeIssues(n, c, 2 * k));
   });
   nodes.forEach((n, k) => {
     const c = ctx(n.id);
@@ -355,6 +469,7 @@ export function diagnosePath(path: Hop[], ctx: (nodeId: string) => NodeContext, 
         severity: "error",
         position: pos,
         text: t("sp.issue.formatMismatch", { from: formatName(h.sender.format), to: formatName(h.receiver.format) }),
+        fix: t("sp.fix.formatMismatch"),
       });
     }
     if (h.sender.transport && h.receiver.transport && h.sender.transport !== h.receiver.transport) {
@@ -371,15 +486,29 @@ export function diagnosePath(path: Hop[], ctx: (nodeId: string) => NodeContext, 
         severity: "error",
         position: pos,
         text: t("sp.issue.mxlAcrossHosts"),
+        fix: t("sp.fix.mxlAcrossHosts"),
       });
     }
   });
   return issues.sort((x, y) => x.position - y.position || (x.severity === "error" ? -1 : 1));
 }
 
-/** Erste Fehlerstelle (Warnungen zählen nicht), sonst null. */
+/** Hat die Kette einen Fehler (auch einen, der nur ein Symptom ist)? */
+export function hasError(issues: Issue[]): boolean {
+  return issues.some((i) => i.severity === "error");
+}
+
+/**
+ * Ursache der gestörten Kette, sonst null (kein Fehler). Eigene Fehler stromaufwärts zuerst; steht nur ein Symptom
+ * (Meldung eines Nodes über seinen Eingang) als Fehler da, ist die Ursache der am weitesten stromaufwärts liegende
+ * Befund vor ihm — auch ein Hinweis, z. B. „hat noch nichts geliefert“. Sonst das Symptom selbst.
+ */
 export function firstError(issues: Issue[]): Issue | null {
-  return issues.find((i) => i.severity === "error") ?? null;
+  const real = issues.find((i) => i.severity === "error" && !i.symptom);
+  if (real) return real;
+  const symptom = issues.find((i) => i.severity === "error");
+  if (!symptom) return null;
+  return issues.find((i) => !i.symptom && i.position < symptom.position) ?? symptom;
 }
 
 /** Auswahlliste für die Quelle: alle Sender-Ports mit Node-Label. */

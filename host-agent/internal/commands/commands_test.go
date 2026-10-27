@@ -2,6 +2,8 @@ package commands
 
 import (
 	"encoding/json"
+
+	"github.com/infantilo/openmediaplatform/jobwire"
 	"os"
 	"strings"
 	"sync"
@@ -275,5 +277,17 @@ func TestVertragJobRequest(t *testing.T) {
 	e := NewExecutor(nil, "", "", "", "h", nil)
 	if r := e.Handle(req); r.OK || !strings.Contains(r.Error, "tools.json") {
 		t.Fatalf("%+v", r)
+	}
+}
+
+func TestHandleSysinfo(t *testing.T) {
+	e := NewExecutor(nil, "", "", "", "h", nil)
+	resp := e.Handle(Request{Action: jobwire.ActionSysinfo})
+	if !resp.OK {
+		t.Fatal(resp.Error)
+	}
+	var s jobwire.Sysinfo
+	if err := json.Unmarshal([]byte(resp.Detail), &s); err != nil || s.MemTotal == 0 || len(s.Disks) == 0 || s.Files["os-release.txt"] == "" {
+		t.Fatalf("%v %+v", err, s)
 	}
 }

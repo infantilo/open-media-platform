@@ -146,3 +146,86 @@ Deno.test("Schleife zweier Switcher wird als Fehler am Kettenanfang gemeldet", (
   assertEquals(firstError(issues)?.position, 0);
   assertEquals(loopFeeder(withImplicitFeeds(gg, new Map([["b", "src.o"]])), findPaths(withImplicitFeeds(gg, new Map([["b", "src.o"]])), { toNodeId: "v" }).paths[0]), null);
 });
+
+import { diagnosePath as diag, hostIssues, runtimeIssues, targetNodes, targetOverview, type NodeContext } from "./signal-path-logic.ts";
+
+const noCtx = (_: string): NodeContext => ({});
+
+Deno.test("targetNodes: nur Nodes mit Eingängen und ohne Ausgänge", () => {
+  assertEquals(targetNodes(g).map((n) => n.id), ["out"]);
+});
+
+Deno.test("runtimeIssues: läuft aber liefert nichts, Bildrate, Neustarts, Host", () => {
+  const n = node("m", [], [["m.s", V]]);
+  const ids = (c: NodeContext) => runtimeIssues(n, c, 0).map((i) => `${i.severity}:${i.fix ? "fix" : "nofix"}`);
+  assertEquals(ids({ ready: false, everReady: true }), ["error:fix"]);
+  // Nie bereit gewesen (Typ ohne Bereitschaftsprobe oder noch beim Anlaufen): nur Hinweis, kein Fehler
+  assertEquals(ids({ ready: false }), ["warn:fix"]);
+  assertEquals(ids({ rates: { video_fps: { last: 0, avg: 25, min: 0 } } }), ["error:fix"]);
+  assertEquals(ids({ rates: { video_fps: { last: 18, avg: 25, min: 17 } } }), ["warn:fix"]);
+  assertEquals(ids({ rates: { video_fps: { last: 24, avg: 25, min: 23 } } }), []);
+  assertEquals(ids({ restarts: 3 }), ["warn:fix"]);
+  // Host-Befunde gehören nicht mehr zu einzelnen Nodes (hostIssues), runtimeIssues kennt sie nicht
+  assertEquals(ids({ hostState: "silent" }), []);
+  // Offline-Node: kein zusätzlicher „liefert nichts“-Befund (die Offline-Meldung genügt)
+  assertEquals(runtimeIssues(node("o", [], [["o.s", V]], "offline"), { ready: false }, 0), []);
+});
+
+Deno.test("targetOverview: Ursache stromaufwärts, Fehler vor In-Ordnung, nichts angeschlossen", () => {
+  const ok = targetOverview(g, noCtx);
+  assertEquals(ok.map((x) => [x.node.id, x.level]), [["out", "ok"]]);
+
+  // Quelle liefert nichts: Fehlerstelle ist die Quelle (am weitesten stromaufwärts), nicht der Mischer dahinter
+  const bad = targetOverview(g, (id) => (id === "src" ? { ready: false, everReady: true } : id === "mix" ? { restarts: 5 } : {}));
+  assertEquals(bad[0].level, "error");
+  assertEquals(bad[0].text.includes("SRC"), true);
+  assertEquals(typeof bad[0].fix, "string");
+
+  const lonely: GraphData = { nodes: [node("v", [["v.r", V]], [])], edges: [] };
+  assertEquals(targetOverview(lonely, noCtx)[0].level, "none");
+
+  const mixed: GraphData = { nodes: [node("a", [["a.r", V]], []), node("src", [], [["s", V]]), node("b", [["b.r", V]], [])], edges: [edge("s", "b.r")] };
+  assertEquals(targetOverview(mixed, (id) => (id === "src" ? { ready: false, everReady: true } : {})).map((x) => `${x.node.id}:${x.level}`), ["b:error", "a:none"]);
+});
+
+Deno.test("hostIssues: ein Befund je Host und Kette, an der Node am weitesten stromaufwärts, mit den betroffenen Nodes", () => {
+  const a = node("a", [], [["a.s", V]]);
+  const b = node("b", [["b.r", V]], [["b.s", V]]);
+  const c = node("c", [["c.r", V]], []);
+  const ctx = (id: string): NodeContext =>
+    id === "a" || id === "b"
+      ? { hostKey: "h1", hostLabel: "Host1", hostState: "silent", hostClockBad: true }
+      : id === "c"
+      ? { hostKey: "h2", hostLabel: "Host2", hostState: "overloaded" }
+      : {};
+  const out = hostIssues([a, b, c], ctx);
+  assertEquals(out.map((i) => `${i.position}:${i.severity}`), ["0:error", "0:warn", "4:warn"]);
+  assertEquals(out[0].text.includes("A, B"), true);
+  assertEquals(out[2].text.includes("Host2"), true);
+  // lokaler Host ("") und unbekannter Host: kein Befund
+  assertEquals(hostIssues([a], () => ({ hostKey: "", hostState: "silent" })), []);
+  assertEquals(hostIssues([a], () => ({})), []);
+});
+
+Deno.test("Ursache: Meldung des Ziels (Symptom) tritt hinter einen Befund stromaufwärts zurück", () => {
+  const gg: GraphData = {
+    nodes: [node("src", [], [["s", V]]), node("v", [["v.r", V]], [])],
+    edges: [edge("s", "v.r")],
+  };
+  const ctx = (id: string): NodeContext =>
+    id === "src" ? { ready: false } : id === "v" ? { problems: [{ severity: "error", text: "kein Video-Buffer" }] } : {};
+  const path = findPaths(gg, { toNodeId: "v" }).paths[0];
+  const issues = diag(path, ctx, null);
+  // Kette ist gestört (Symptom = Fehler), die Ursache ist der Hinweis an der Quelle
+  assertEquals(issues.some((i) => i.severity === "error"), true);
+  assertEquals(firstError(issues)?.text.includes("SRC"), true);
+  const row = targetOverview(gg, ctx)[0];
+  assertEquals([row.level, row.text.includes("SRC"), typeof row.fix], ["error", true, "string"]);
+
+  // Ohne Befund stromaufwärts bleibt das Symptom selbst die erste Fehlerstelle
+  assertEquals(firstError(diag(path, (id) => (id === "v" ? ctx("v") : {}), null))?.text, "kein Video-Buffer");
+
+  // Ein echter Fehler stromaufwärts schlägt alles
+  const real = diag(path, (id) => (id === "src" ? { crashed: true } : ctx(id)), null);
+  assertEquals(firstError(real)?.symptom, undefined);
+});

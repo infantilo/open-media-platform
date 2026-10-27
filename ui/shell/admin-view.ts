@@ -24,6 +24,7 @@ import { PermissionsEditor } from "./permissions-editor.ts";
 import type { FeatureDef, FeatureGrant } from "./feature-grants-logic.ts";
 import { AuditPanel } from "./audit-panel.ts";
 import { DiagnosePanel } from "./diagnose-panel.ts";
+import { SupportPanel } from "./support-panel.ts";
 import { ensureBundle, getModules } from "./modules-registry.ts";
 import { adminGroups, type AdminModuleGroup } from "./modules-logic.ts";
 import { getLang } from "./i18n.ts";
@@ -265,6 +266,7 @@ const ADMIN_SUB_TAB_GROUPS: { id: string; labelKey: I18nKey; tabs: { id: AdminTa
       { id: "storage", labelKey: "admin.tab.storage", clusterKey: "admin.cluster.operations" },
       { id: "audit", labelKey: "admin.tab.audit", clusterKey: "admin.cluster.maintenance" },
       { id: "diagnose", labelKey: "admin.tab.diagnose", clusterKey: "admin.cluster.maintenance" },
+      { id: "support", labelKey: "admin.tab.support", clusterKey: "admin.cluster.maintenance" },
       { id: "backup", labelKey: "admin.tab.backup", clusterKey: "admin.cluster.maintenance" },
       { id: "update", labelKey: "admin.tab.update", clusterKey: "admin.cluster.maintenance" },
       { id: "settings", labelKey: "admin.tab.settings", clusterKey: "admin.cluster.maintenance" },
@@ -328,6 +330,7 @@ class AdminView extends HTMLElement {
   // "omp-view-trace"-Event aus dem Flow Editor aufgerufen — ein
   // fehlgeschlagener IS-05-Connect trägt seine trace_id im Response-Header.
   #diagnosePanel = new DiagnosePanel();
+  #supportPanel = new SupportPanel();
   #logPollHandle: number | undefined;
   #nodes: NodeEntry[] = [];
   #workflows: WorkflowSummary[] = [];
@@ -2268,6 +2271,10 @@ class AdminView extends HTMLElement {
       case "diagnose":
         this.#diagnosePanel.setContext({ nodes: this.#nodes });
         this.appendChild(this.#diagnosePanel.el);
+        break;
+      case "support":
+        this.appendChild(this.#supportPanel.el);
+        this.#supportPanel.start();
         break;
       case "backup":
         this.appendChild(this.#renderBackupSection());
