@@ -496,6 +496,12 @@ impl ParamStore for Store {
         }
     }
 
+    /// Die Panel-Seite und ihre Signalisierung rufen Browser direkt am Node auf; Schutz ist das Teilnehmer-Token (Audit 2026-10-23 B1).
+    fn public_route(&self, method: &str, path: &str) -> bool {
+        let bare = path.split('?').next().unwrap_or(path);
+        matches!((method, bare), ("GET", "/panel" | "/") | ("POST" | "DELETE", "/offer"))
+    }
+
     fn extra_options(&self, path: &str) -> Option<Vec<&'static str>> {
         match path.split('?').next().unwrap_or(path) {
             "/offer" => Some(vec!["POST", "DELETE"]),

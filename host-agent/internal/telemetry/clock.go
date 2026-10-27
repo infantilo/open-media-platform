@@ -1,6 +1,10 @@
 package telemetry
 
-import "syscall"
+import (
+	"syscall"
+
+	"github.com/infantilo/openmediaplatform/jobwire/clocksync"
+)
 
 // ClockSample ist der Zustand der Systemuhr (Audit 2026-10-23 M1: Zeitbasis wurde nicht geprüft). MXL und die Schaltzeitpunkte
 // (takeAt) rechnen in TAI; ohne gesetzten TAI-Versatz fällt CLOCK_TAI mit der UTC-Uhr zusammen (derzeit 37 s daneben), und ohne
@@ -13,6 +17,9 @@ type ClockSample struct {
 	EstErrorUs int64 `json:"estErrorUs"`
 	// TAIOffsetS: Versatz TAI − UTC in Sekunden; 0 = nicht gesetzt (CLOCK_TAI ist dann falsch).
 	TAIOffsetS int `json:"taiOffsetS"`
+	// Fix: was der Agent selbst an der Uhr getan hat oder warum nicht (jobwire/clocksync.Fix): "tai-set", "stepped", "slewed",
+	// "no-permission", "no-server", "off" oder leer.
+	Fix string `json:"fix,omitempty"`
 }
 
 const (
@@ -27,7 +34,9 @@ func TakeClock() (ClockSample, bool) {
 	if err != nil {
 		return ClockSample{}, false
 	}
-	return clockFrom(state, int(tx.Status), int64(tx.Maxerror), int64(tx.Esterror), int(tx.Tai)), true
+	c := clockFrom(state, int(tx.Status), int64(tx.Maxerror), int64(tx.Esterror), int(tx.Tai))
+	c.Fix = clocksync.Fix()
+	return c, true
 }
 
 func clockFrom(state, status int, maxErr, estErr int64, tai int) ClockSample {

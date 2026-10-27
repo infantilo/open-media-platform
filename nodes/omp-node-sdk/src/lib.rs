@@ -18,6 +18,7 @@ pub mod idgen;
 pub mod is04;
 pub mod liveness;
 pub mod node;
+pub mod nodeauth;
 pub mod peer;
 pub mod plugins;
 pub mod server;

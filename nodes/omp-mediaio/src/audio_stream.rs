@@ -87,6 +87,10 @@ pub fn spawn(addr: &str, broadcaster: Arc<Broadcaster>, heartbeat: Arc<AtomicU64
             heartbeat.fetch_add(1, Ordering::Relaxed);
             match server.recv_timeout(Duration::from_secs(1)) {
                 Ok(Some(request)) => {
+                    if !crate::streamauth::allowed(&request) {
+                        crate::streamauth::deny(request);
+                        continue;
+                    }
                     if request.url() != "/audio-stream" {
                         let _ = request.respond(Response::from_string("not found").with_status_code(404));
                         continue;

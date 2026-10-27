@@ -44,6 +44,13 @@ pub fn spawn(addr: &str, pc_base: String, heartbeat: Arc<AtomicU64>) -> std::io:
             heartbeat.fetch_add(1, Ordering::Relaxed);
             match server.recv_timeout(Duration::from_secs(1)) {
                 Ok(Some(request)) => {
+                    // Audit 2026-10-23 B1: Node-API-Token, s. omp_node_sdk::nodeauth.
+                    let headers: Vec<(String, String)> =
+                        request.headers().iter().map(|h| (h.field.as_str().as_str().to_ascii_lowercase(), h.value.as_str().to_string())).collect();
+                    if !omp_node_sdk::nodeauth::authorized(omp_node_sdk::nodeauth::token(), &headers) {
+                        let _ = request.respond(tiny_http::Response::from_string("node api token required").with_status_code(401));
+                        continue;
+                    }
                     let pc_base = pc_base.clone();
                     std::thread::spawn(move || serve_client(request, &pc_base));
                 }

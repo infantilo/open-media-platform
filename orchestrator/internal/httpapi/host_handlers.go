@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/infantilo/openmediaplatform/jobwire/clocksync"
 	"io"
 	"log/slog"
 	"net/http"
@@ -436,6 +437,9 @@ func handleLocalHost(catalog CatalogReader) http.HandlerFunc {
 				}
 				if n := lh.Net; n != nil {
 					m.Net = &hosts.NetMetrics{Iface: n.Iface, RxBytesPerSec: n.RxBytesPerSec, TxBytesPerSec: n.TxBytesPerSec, LinkMbps: n.LinkMbps}
+				}
+				if c, ok := clocksync.Read(); ok {
+					m.Clock = &hosts.ClockMetrics{Synced: c.Synced, MaxErrorUs: c.MaxErrorUs, EstErrorUs: c.EstErrorUs, TAIOffsetS: c.TAIOffsetS, Fix: clocksync.Fix()}
 				}
 				resp.Metrics = &m
 			}

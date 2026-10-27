@@ -17,6 +17,9 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+# Uhr (Audit M1): Host-Agent/Orchestrator setzen TAI-Versatz und stellen die Uhr selbst, wenn kein Zeitdienst (chrony) läuft. Das braucht CAP_SYS_TIME.
+# Bevorzugt nur für die Programmdatei: sudo setcap cap_sys_time+ep @ROOT@/bin/omp-host-agent  (nach jedem Neubau wiederholen). AmbientCapabilities=CAP_SYS_TIME
+# würde auch an alle Nodes vererbt. Abschalten: OMP_CLOCK_DISCIPLINE=off; Server: OMP_CLOCK_NTP_SERVERS (Standard pool.ntp.org).
 User=@USER@
 WorkingDirectory=@ROOT@
 EnvironmentFile=/etc/omp-host-agent.env

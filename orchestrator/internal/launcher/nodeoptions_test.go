@@ -75,3 +75,20 @@ func TestWithOptionsWithoutSchemaIsTransparent(t *testing.T) {
 		t.Fatalf("%v", got)
 	}
 }
+
+// Audit 2026-10-23 B1: jeder gestartete Node bekommt das Node-API-Token, ohne dass es in Instance.ExtraEnv landet.
+func TestWithOptionsInjectsNodeAPIToken(t *testing.T) {
+	l := &Launcher{}
+	l.SetNodeAPIToken("tok")
+	in := map[string]string{"A": "b"}
+	got := l.withOptions("x", "i", "", in)
+	if got["OMP_NODE_API_TOKEN"] != "tok" || got["A"] != "b" {
+		t.Fatalf("%v", got)
+	}
+	if _, leaked := in["OMP_NODE_API_TOKEN"]; leaked {
+		t.Fatal("token must not be written into the caller's map")
+	}
+	if got := l.withOptions("x", "i", "", nil); got["OMP_NODE_API_TOKEN"] != "tok" {
+		t.Fatalf("nil extraEnv: %v", got)
+	}
+}

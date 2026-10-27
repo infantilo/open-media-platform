@@ -61,7 +61,7 @@ func main() {
 		os.Exit(1)
 	}
 	port = ln.Addr().(*net.TCPAddr).Port
-	srv := &http.Server{Handler: cors(mux)}
+	srv := &http.Server{Handler: cors(requireNodeToken(mux))}
 	go func() {
 		if err := srv.Serve(ln); err != http.ErrServerClosed {
 			slog.Error("http", "error", err)

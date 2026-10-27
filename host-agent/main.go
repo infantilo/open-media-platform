@@ -28,6 +28,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"github.com/infantilo/openmediaplatform/jobwire/clocksync"
 	"log/slog"
 	"net"
 	"net/http"
@@ -163,6 +164,8 @@ func loadNatsTLSConfig() (*tls.Config, error) {
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	// Audit 2026-10-23 M1: TAI-Versatz setzen und die Uhr stellen, wenn kein Zeitdienst es tut (braucht CAP_SYS_TIME, sonst nur Meldung).
+	go clocksync.Run(context.Background(), clocksync.ConfigFromEnv())
 
 	orchestratorURL := envOr("OMP_ORCHESTRATOR_URL", "http://localhost:8000")
 	registryURL := envOr("OMP_REGISTRY_URL", "http://127.0.0.1:8010")

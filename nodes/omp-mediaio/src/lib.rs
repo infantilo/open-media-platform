@@ -25,6 +25,8 @@ pub mod framerate;
 #[cfg(feature = "mxl")]
 pub mod mxl;
 pub mod timebase;
+#[cfg(any(feature = "preview", feature = "audio-stream", feature = "pcm-stream", feature = "levels"))]
+pub mod streamauth;
 
 #[cfg(feature = "fabrics")]
 pub mod fabrics;

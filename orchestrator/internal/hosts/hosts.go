@@ -127,6 +127,8 @@ type ClockMetrics struct {
 	MaxErrorUs int64 `json:"maxErrorUs"`
 	EstErrorUs int64 `json:"estErrorUs"`
 	TAIOffsetS int   `json:"taiOffsetS"`
+	// Fix: was der Host selbst an der Uhr getan hat oder warum nicht ("tai-set", "stepped", "slewed", "no-permission", "no-server", "off").
+	Fix string `json:"fix,omitempty"`
 }
 
 // Problem beschreibt, was an der Uhr nicht stimmt ("" = in Ordnung): MXL und Schaltzeitpunkte rechnen in TAI.

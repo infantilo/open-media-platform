@@ -571,7 +571,7 @@ class HostsView extends HTMLElement {
             : t("hosts.61ea4b");
         const clockIssue = online ? clockProblem(m?.clock) : "";
         const clockBadge = clockIssue
-          ? ` <span title="${escapeHtml(tLoose("hosts.clock." + clockIssue, { err: m?.clock?.maxErrorUs ?? 0 }))}" style="color:#d9a21b;cursor:help;white-space:nowrap;">⏱ ${escapeHtml(t("hosts.clock.badge"))}</span>`
+          ? ` <span title="${escapeHtml(tLoose("hosts.clock." + clockIssue, { err: m?.clock?.maxErrorUs ?? 0 }) + (m?.clock?.fix === "no-permission" || m?.clock?.fix === "no-server" ? " " + tLoose("hosts.clock.fix." + m.clock.fix, {}) : ""))}" style="color:#d9a21b;cursor:help;white-space:nowrap;">⏱ ${escapeHtml(t("hosts.clock.badge"))}</span>`
           : "";
         const status = `<span title="${escapeHtml(statusTitle)}" style="display:inline-flex;align-items:center;gap:5px;white-space:nowrap;color:${
           online ? "inherit" : "#e05252"

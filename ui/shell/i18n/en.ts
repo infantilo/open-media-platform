@@ -962,6 +962,8 @@ export const en: Record<keyof typeof de, string> = {
   "hosts.clock.unsynced": "This host's system clock is not synchronised (NTP/PTP): time error up to {err} µs, switch times and MXL timestamps differ from other hosts.",
   "hosts.clock.tai": "The system clock's TAI offset is not set (CLOCK_TAI equals UTC, currently 37 s off): MXL timestamps and switch times do not match other hosts. Set it with chrony (`leapsectz`/`tai`) or ptp4l.",
   "hosts.clock.unsynced+tai": "The system clock is neither synchronised (NTP/PTP) nor has its TAI offset set: MXL timestamps and switch times differ from other hosts.",
+  "hosts.clock.fix.no-permission": "The machine tried to set its own clock but is not allowed to (CAP_SYS_TIME missing): run as root, set AmbientCapabilities=CAP_SYS_TIME in the systemd unit, or install chrony.",
+  "hosts.clock.fix.no-server": "The machine tried to set its own clock but no NTP server answered (check OMP_CLOCK_NTP_SERVERS).",
   "topo.none": "No hosts or nodes yet.",
   "topo.local": "Orchestrator host",
   "topo.extern": "No instance (external)",

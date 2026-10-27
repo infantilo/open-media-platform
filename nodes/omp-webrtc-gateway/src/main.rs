@@ -257,6 +257,13 @@ impl ParamStore for CameraStore {
         }
     }
 
+    /// Browser und Handys rufen diese Seiten und Endpunkte direkt am Node auf; sie sind durch das Einladungs-Token geschützt (invite.rs),
+    /// nicht durch das Node-API-Token (Audit 2026-10-23 B1).
+    fn public_route(&self, method: &str, path: &str) -> bool {
+        let bare = path.split('?').next().unwrap_or(path);
+        matches!((method, bare), ("GET", "/" | "/camera.html" | "/whip-test.html" | "/clock") | (_, "/whip" | "/tally"))
+    }
+
     fn extra_options(&self, path: &str) -> Option<Vec<&'static str>> {
         // CORS-Preflight spiegelt die echte Ziel-URL inkl. Query-String
         // (der Browser hängt `?token=…` an dieselbe Anfrage) — hier
@@ -778,6 +785,12 @@ impl ParamStore for MonitorStore {
             .or_else(|| self.video_connection.handle(method, path, body))
             .or_else(|| self.audio_connection.handle(method, path, body))
             .map(to_raw)
+    }
+
+    /// Zuschauerseite und /whep: Einladungs-Token statt Node-API-Token (s. CameraStore::public_route).
+    fn public_route(&self, method: &str, path: &str) -> bool {
+        let bare = path.split('?').next().unwrap_or(path);
+        matches!((method, bare), ("GET", "/" | "/monitor.html" | "/clock") | (_, "/whep"))
     }
 
     fn extra_options(&self, path: &str) -> Option<Vec<&'static str>> {

@@ -167,7 +167,7 @@ func main() {
 	if *uiBundle {
 		mux.Handle("/ui/", uibundle.Handler())
 	}
-	handler := withCORS(mux)
+	handler := withCORS(requireNodeToken(mux))
 
 	go func() {
 		addr := fmt.Sprintf(":%d", *port)

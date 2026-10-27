@@ -259,7 +259,7 @@ export function routeLink(a: BoxPos, b: BoxPos, boxes: BoxPos[], bend = 0, lane 
   return { d: roundedPath(best), lx: lp.x, ly: lp.y, routed: true };
 }
 
-export interface ClockIn { synced: boolean; maxErrorUs: number; estErrorUs: number; taiOffsetS: number }
+export interface ClockIn { synced: boolean; maxErrorUs: number; estErrorUs: number; taiOffsetS: number; fix?: string }
 
 /** Befund zur Systemuhr eines Hosts ("" = in Ordnung oder unbekannt). MXL und Schaltzeitpunkte rechnen in TAI. */
 export function clockProblem(c: ClockIn | undefined): "" | "unsynced" | "tai" | "unsynced+tai" {

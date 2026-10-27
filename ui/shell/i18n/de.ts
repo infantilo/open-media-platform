@@ -961,6 +961,8 @@ export const de = {
   "hosts.clock.unsynced": "Die Systemuhr dieses Hosts ist nicht synchronisiert (NTP/PTP): Zeitfehler bis {err} µs, Schaltzeitpunkte und MXL-Zeitstempel weichen von anderen Hosts ab.",
   "hosts.clock.tai": "Der TAI-Versatz der Systemuhr ist nicht gesetzt (CLOCK_TAI = UTC, derzeit 37 s daneben): MXL-Zeitstempel und Schaltzeitpunkte stimmen nicht mit anderen Hosts überein. Mit chrony (`leapsectz`/`tai`) oder ptp4l setzen.",
   "hosts.clock.unsynced+tai": "Die Systemuhr ist weder synchronisiert (NTP/PTP) noch ist der TAI-Versatz gesetzt: MXL-Zeitstempel und Schaltzeitpunkte weichen von anderen Hosts ab.",
+  "hosts.clock.fix.no-permission": "Der Rechner hat versucht, die Uhr selbst zu stellen, darf es aber nicht (CAP_SYS_TIME fehlt): als root starten, AmbientCapabilities=CAP_SYS_TIME im systemd-Dienst setzen oder chrony installieren.",
+  "hosts.clock.fix.no-server": "Der Rechner hat versucht, die Uhr selbst zu stellen, aber kein NTP-Server antwortete (OMP_CLOCK_NTP_SERVERS prüfen).",
   "topo.none": "Noch keine Hosts oder Nodes.",
   "topo.local": "Orchestrator-Host",
   "topo.extern": "Ohne Instanz (extern)",

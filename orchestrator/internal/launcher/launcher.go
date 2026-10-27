@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/gpu"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeauth"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeoptions"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/safego"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
@@ -342,10 +343,20 @@ func (l *Launcher) SetServiceToken(token string) {
 	l.serviceToken = token
 }
 
+// SetNodeAPIToken setzt das Node-API-Token (Audit 2026-10-23 B1, internal/nodeauth): jede vom Launcher gestartete Instanz bekommt es als
+// OMP_NODE_API_TOKEN und verlangt es dann in jeder Anfrage an ihre HTTP-API. Auf Hosts mit Host-Agent geht es im signierten Startkommando mit.
+func (l *Launcher) SetNodeAPIToken(token string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.nodeAPIToken = token
+}
+
 type Launcher struct {
 	// serviceToken s. SetServiceToken (nur unter mu schreiben; Lesen im Startpfad ohne Sperre ist unkritisch, weil es
 	// einmal beim Start des Orchestrators gesetzt wird, bevor Instanzen gestartet werden).
 	serviceToken string
+	// nodeAPIToken s. SetNodeAPIToken (gleiche Sperr-Regel wie serviceToken).
+	nodeAPIToken string
 
 	binaryResolver BinaryResolver
 	binaryLookup   BinaryLookup
@@ -1096,12 +1107,15 @@ func hashOptions(a, b map[string]string) string {
 // deren Instanz-Werte statt der eigenen gelten (Neustart per Stop + Start mit neuer ID).
 func (l *Launcher) withOptions(nodeType, instanceID, valuesFrom string, extraEnv map[string]string) map[string]string {
 	typeVals, instVals := l.optionLayers(nodeType, instanceID, valuesFrom)
-	if len(typeVals) == 0 && len(instVals) == 0 && l.serviceToken == "" {
+	if len(typeVals) == 0 && len(instVals) == 0 && l.serviceToken == "" && l.nodeAPIToken == "" {
 		return extraEnv
 	}
-	out := make(map[string]string, len(typeVals)+len(extraEnv)+len(instVals)+1)
+	out := make(map[string]string, len(typeVals)+len(extraEnv)+len(instVals)+2)
 	if l.serviceToken != "" {
 		out[ServiceTokenEnv] = l.serviceToken // nur im Start-Umfeld, nie in Instance.ExtraEnv (das bleibt unverändert)
+	}
+	if l.nodeAPIToken != "" {
+		out[nodeauth.Env] = l.nodeAPIToken // ebenso nur im Start-Umfeld
 	}
 	for k, v := range typeVals {
 		out[k] = v
@@ -1643,6 +1657,7 @@ func (l *Launcher) startRemote(nodeType, hostID, customLabel string, extraEnv ma
 		ExtraEnv:     extraEnv,
 		Options:      l.remoteOptions(nodeType, id, optionsFrom, extraEnv),
 		LaunchSecret: launchSecret,
+		NodeAPIToken: l.nodeAPIToken,
 	})
 	if err != nil {
 		return Instance{}, fmt.Errorf("launcher: remote start on host %s: %w", hostID, err)
@@ -1680,6 +1695,8 @@ type remoteCommand struct {
 	// dieses Feld (dieselbe bewusste Wire-Format-Duplikation wie der
 	// Rest von remoteCommand).
 	LaunchSecret string `json:"launchSecret,omitempty"`
+	// NodeAPIToken: s. Launcher.SetNodeAPIToken; der Host-Agent setzt es als OMP_NODE_API_TOKEN (Audit B1).
+	NodeAPIToken string `json:"nodeApiToken,omitempty"`
 	// Options (Kapitel 29): Node-Optionen; der Host-Agent prüft sie gegen sein EIGENES Schema.
 	Options map[string]string `json:"options,omitempty"`
 	// Path/Kind: Action "check-path".
@@ -1809,6 +1826,7 @@ func (l *Launcher) HandleRemoteExit(hostID string, payload []byte) {
 		// wie beim lokalen Restart-Pfad, s. execEntry-Aufrufstelle
 		// oben im Datei/"LaunchSecret aus dem getrackten Zustand"-Doku).
 		LaunchSecret: current.LaunchSecret,
+		NodeAPIToken: l.nodeAPIToken,
 	})
 	if err != nil || !resp.OK {
 		errMsg := resp.Error
@@ -2288,7 +2306,7 @@ func (l *Launcher) restoreRemoteOne(inst Instance) {
 		resp, err := l.sendCommand(inst.HostID, remoteCommand{
 			Action: "start", Type: inst.Type, InstanceID: inst.ID, Label: inst.Label,
 			ExtraEnv: inst.ExtraEnv, Options: l.remoteOptions(inst.Type, inst.ID, "", inst.ExtraEnv),
-			LaunchSecret: secret,
+			LaunchSecret: secret, NodeAPIToken: l.nodeAPIToken,
 		})
 		if err == nil && resp.OK {
 			inst.PID = resp.PID

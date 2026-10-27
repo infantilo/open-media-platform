@@ -60,7 +60,7 @@ impl PeerClient {
     /// erwartet.
     pub fn invoke(&self, name: &str) -> Result<(), RemoteError> {
         let url = format!("{}/methods/{}", self.base_url, name);
-        match ureq::post(&url).send_json(serde_json::json!({})) {
+        match crate::nodeauth::with_token(ureq::post(&url)).send_json(serde_json::json!({})) {
             Ok(_) => Ok(()),
             Err(ureq::Error::StatusCode(code)) => Err(RemoteError::Status(code)),
             Err(e) => Err(RemoteError::Request(e.to_string())),
@@ -76,7 +76,7 @@ impl PeerClient {
     /// `server::route`s `{"value": ...}`-Hülle.
     pub fn get_param(&self, name: &str) -> Result<serde_json::Value, RemoteError> {
         let url = format!("{}/params/{}", self.base_url, name);
-        let mut response = match ureq::get(&url).call() {
+        let mut response = match crate::nodeauth::with_token(ureq::get(&url)).call() {
             Ok(r) => r,
             Err(ureq::Error::StatusCode(code)) => return Err(RemoteError::Status(code)),
             Err(e) => return Err(RemoteError::Request(e.to_string())),

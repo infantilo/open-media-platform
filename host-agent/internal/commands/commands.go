@@ -123,6 +123,9 @@ type Request struct {
 	// Einträge, die kein Service-Token brauchen (fast alle) — harmlos,
 	// kein Node liest eine ungenutzte Env-Variable.
 	LaunchSecret string `json:"launchSecret,omitempty"`
+	// NodeAPIToken (Audit 2026-10-23 B1): Node-API-Token der Plattform; der gestartete Node bekommt es als OMP_NODE_API_TOKEN und verlangt es dann
+	// in jeder Anfrage an seine HTTP-API. Es kommt nur in signierten Startkommandos (s. cmdauth) und nicht über ExtraEnv.
+	NodeAPIToken string `json:"nodeApiToken,omitempty"`
 	// System-Update (Action "update", s. update.go): Pfad (relativ zum
 	// eigenen Orchestrator, inkl. Einmal-Token), erwartete Version und
 	// SHA-256 des Pakets.
@@ -358,6 +361,9 @@ func (e *Executor) start(req Request) Response {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	ensureMxlDomain()
 	cmd.Env = buildEnv(entry.Env, extra, req.InstanceID, req.Label, e.registryURL, e.natsURL, e.orchestratorURL, req.LaunchSecret)
+	if req.NodeAPIToken != "" {
+		cmd.Env = append(cmd.Env, "OMP_NODE_API_TOKEN="+req.NodeAPIToken)
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = io.MultiWriter(os.Stderr, stderrTail)
 

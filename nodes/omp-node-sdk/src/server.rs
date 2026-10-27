@@ -99,6 +99,13 @@ pub trait ParamStore: Send + Sync + 'static {
         self.extra_route(req.method, req.path, req.body).map(|r| (r, Vec::new()))
     }
 
+    /// Erklärt eine Route für öffentlich, also ohne Node-API-Token erreichbar (`crate::nodeauth`). Nur für Routen, die der Node selbst
+    /// mit einer eigenen Berechtigung schützt, weil Browser oder Handys sie direkt aufrufen (Einladungs-Token der WebRTC-Seiten).
+    /// `path` trägt einen Query-String mit. Default: keine.
+    fn public_route(&self, _method: &str, _path: &str) -> bool {
+        false
+    }
+
     /// CORS-Preflight (`OPTIONS`) für eine `extra_route`-Zusatzroute —
     /// getrennt von `RawResponse` statt eines neuen Felds darauf
     /// (Nachtrag 197): `RawResponse` wird an ~50 Stellen (v. a.
@@ -232,6 +239,10 @@ fn route(method: &Method, url: &str, body: &[u8], store: &Arc<dyn ParamStore>) -
 }
 
 fn route_with_headers(method: &Method, url: &str, headers: &[(String, String)], body: &[u8], store: &Arc<dyn ParamStore>) -> ResponseBox {
+    // Audit 2026-10-23 B1: mit gesetztem OMP_NODE_API_TOKEN nur Anfragen mit dem Token (s. crate::nodeauth).
+    if let Some(denied) = gate(crate::nodeauth::token(), method, url, headers, store) {
+        return denied;
+    }
     if *method == Method::Get && url == "/https-info" {
         return json_response(200, &crate::https::info_json());
     }
@@ -368,6 +379,14 @@ fn route_with_headers(method: &Method, url: &str, headers: &[(String, String)], 
     error_response(404, "not found")
 }
 
+/// `Some(401)`, wenn `want` ein Token verlangt und die Anfrage weder es trägt noch offen ist.
+fn gate(want: Option<&str>, method: &Method, url: &str, headers: &[(String, String)], store: &Arc<dyn ParamStore>) -> Option<ResponseBox> {
+    if crate::nodeauth::authorized(want, headers) || crate::nodeauth::always_open(method.as_str(), url) || store.public_route(method.as_str(), url) {
+        return None;
+    }
+    Some(error_response(401, "node api token required"))
+}
+
 fn json_response(status: u16, body: &impl Serialize) -> ResponseBox {
     let data = serde_json::to_vec(body).unwrap_or_default();
     Response::from_data(data)
@@ -451,6 +470,31 @@ mod tests {
         Arc::new(FakeStore {
             registry: Some(registry),
         })
+    }
+
+    fn tok(v: &str) -> Vec<(String, String)> {
+        vec![(crate::nodeauth::HEADER.to_string(), v.to_string())]
+    }
+
+    #[test]
+    fn gate_blocks_without_token_and_passes_with_it() {
+        let store = store_without_plugins();
+        let denied = |m: Method, url: &str, h: &[(String, String)]| gate(Some("secret"), &m, url, h, &store).map(|r| r.status_code().0);
+        assert_eq!(denied(Method::Patch, "/params/x", &[]), Some(401));
+        assert_eq!(denied(Method::Post, "/methods/x", &tok("wrong")), Some(401));
+        assert_eq!(denied(Method::Get, "/descriptor.json", &[]), Some(401));
+        assert_eq!(denied(Method::Post, "/label", &[]), Some(401));
+        assert_eq!(denied(Method::Post, "/methods/x", &tok("secret")), None);
+        assert_eq!(denied(Method::Options, "/params/x", &[]), None);
+        assert_eq!(denied(Method::Get, "/https-info", &[]), None);
+        assert_eq!(denied(Method::Get, "/x-nmos/node/v1.3/self", &[]), None);
+        assert_eq!(denied(Method::Patch, "/x-nmos/connection/v1.1/single/receivers/r/staged", &[]), Some(401));
+    }
+
+    #[test]
+    fn gate_is_off_without_a_configured_token() {
+        let store = store_without_plugins();
+        assert!(gate(None, &Method::Patch, "/params/x", &[], &store).is_none());
     }
 
     #[test]

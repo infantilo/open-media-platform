@@ -86,7 +86,7 @@ func serveNode(ctx context.Context, natsURL string) {
 		os.Exit(1)
 	}
 	port = ln.Addr().(*net.TCPAddr).Port
-	srv := &http.Server{Handler: mux}
+	srv := &http.Server{Handler: requireNodeToken(mux)}
 	go func() {
 		if err := srv.Serve(ln); err != http.ErrServerClosed {
 			slog.Error("http", "error", err)

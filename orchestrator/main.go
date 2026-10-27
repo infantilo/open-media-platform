@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/infantilo/openmediaplatform/jobwire/clocksync"
 	"log/slog"
 	"net"
 	"net/http"
@@ -58,6 +59,7 @@ import (
 	playoutmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/playout"
 	reviewmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/review"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeauth"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeoptions"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeversions"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/organizations"
@@ -279,7 +281,10 @@ func subscribeWhileLeader(ctx context.Context, clusterNode *cluster.Node, nc *na
 }
 
 func main() {
+	http.DefaultTransport = nodeauth.Wrap(http.DefaultTransport)
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	// Audit 2026-10-23 M1: auch der Orchestrator-Rechner stellt seinen TAI-Versatz und seine Uhr, wenn kein Zeitdienst es tut.
+	go clocksync.Run(context.Background(), clocksync.ConfigFromEnv())
 
 	cfg := config.Load()
 
@@ -448,7 +453,7 @@ func main() {
 		MaxIdleConnsPerHost: 32,
 		IdleConnTimeout:     90 * time.Second,
 	}
-	nodeHTTPClient := &http.Client{Transport: nodeTransport}
+	nodeHTTPClient := &http.Client{Transport: nodeauth.Wrap(nodeTransport)}
 	if nodeTLSConfig != nil {
 		slog.Info("mtls enabled for orchestrator-to-node requests")
 	}
@@ -575,6 +580,24 @@ func main() {
 		os.Exit(1)
 	}
 	launcherSvc.SetServiceToken(serviceToken)
+	// Audit 2026-10-23 B1: Node-API-Token (s. internal/nodeauth). Aus dem gemeinsamen JWT-Geheimnis abgeleitet, damit alle Orchestrator-
+	// Instanzen des Clusters dasselbe Token kennen; OMP_NODE_API_TOKEN überschreibt (z. B. um es mit extern gestarteten Nodes zu teilen).
+	// Muss vor RestoreLocal stehen: die dort gestarteten Nodes bekommen es in ihre Umgebung.
+	jwtSecret := []byte(cfg.JWTSecret)
+	if cfg.JWTSecret == "" {
+		jwtSecret, err = auth.LoadOrCreateSharedSecret(database, cfg.JWTSecretFile)
+		if err != nil {
+			slog.Error("jwt secret setup failed", "error", err)
+			os.Exit(1)
+		}
+	}
+	nodeAPIToken := os.Getenv(nodeauth.Env)
+	if nodeAPIToken == "" {
+		nodeAPIToken = nodeauth.Derive(jwtSecret)
+	}
+	launcherSvc.SetNodeAPIToken(nodeAPIToken)
+	nodeauth.SetToken(nodeAPIToken)
+	nodeauth.SetExtraHosts(strings.Split(os.Getenv("OMP_NODE_API_TOKEN_HOSTS"), ","))
 	// Nach Neustart/Reboot die zuvor laufenden Instanzen wieder starten (lokale hier, Instanzen auf
 	// Host-Agents vom Cluster-Leader, s. unten).
 	launcherSvc.RestoreLocal()
@@ -631,14 +654,6 @@ func main() {
 	// die authz-Tabelle; JWTSecret hat Vorrang vor JWTSecretFile (echte
 	// Deployments speisen ein eigenes Secret ein statt eines
 	// auto-generierten).
-	jwtSecret := []byte(cfg.JWTSecret)
-	if cfg.JWTSecret == "" {
-		jwtSecret, err = auth.LoadOrCreateSharedSecret(database, cfg.JWTSecretFile)
-		if err != nil {
-			slog.Error("jwt secret setup failed", "error", err)
-			os.Exit(1)
-		}
-	}
 	if v, err := strconv.Atoi(os.Getenv("OMP_AUTH_MIN_PASSWORD")); err == nil && v >= 8 {
 		auth.MinPasswordLength = v
 	}
@@ -982,7 +997,7 @@ func main() {
 	reviewMod.ProxyRunner = &jobrun.Runner{D: jobDisp, Caller: "proxy", Class: jobrun.ClassInteractive}
 	ingestMod.S = ingestmod.Services{Assets: assetStore, Launcher: launcherSvc, Nodes: store, Graph: graphSvc, FFmpeg: ingestFFmpeg,
 		Jobs: &jobrun.Runner{D: jobDisp, Caller: "convert", Class: jobrun.ClassScheduled}}
-	extsvcMod.S = extsvcmod.Services{Nodes: store, Secrets: serviceSecrets{l: launcherSvc, token: serviceToken}, HTTP: &http.Client{Transport: nodeTransport, Timeout: 10 * time.Second}}
+	extsvcMod.S = extsvcmod.Services{Nodes: store, Secrets: serviceSecrets{l: launcherSvc, token: serviceToken}, HTTP: &http.Client{Transport: nodeauth.Wrap(nodeTransport), Timeout: 10 * time.Second}}
 	processStore := process.NewStore(database)
 	// EventPublisher = nc direkt (erfüllt process.EventPublisher: Publish
 	// (subject string, payload []byte) error) — "workflow -> event"
