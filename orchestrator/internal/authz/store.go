@@ -9,12 +9,13 @@ import (
 // Store persistiert Rollenbindungen in Postgres (role_bindings-Tabelle,
 // db/migrations/0002_auth.sql).
 type Store struct {
-	db *sql.DB
+	db    *sql.DB
+	cache *decisionCache
 }
 
 // NewStore erstellt einen Store gegen die gegebene DB-Verbindung.
 func NewStore(db *sql.DB) *Store {
-	return &Store{db: db}
+	return &Store{db: db, cache: newDecisionCache()}
 }
 
 // Load liefert alle Rollenbindungen — genutzt von internal/consoles, das
@@ -59,6 +60,7 @@ func (s *Store) CreateGroupBinding(groupID, workflowID, nodeID string, verb Verb
 }
 
 func (s *Store) create(subjectType, subject, workflowID, nodeID string, verb Verb) (Binding, error) {
+	defer s.cache.clear() // H7: Entzug wirkt sofort, s. cache.go
 	id, err := newID()
 	if err != nil {
 		return Binding{}, err
@@ -76,6 +78,7 @@ func (s *Store) create(subjectType, subject, workflowID, nodeID string, verb Ver
 // existiert (idempotent, gleiches Verhalten wie launcher.Stop bei
 // unbekannter Instanz-ID).
 func (s *Store) Delete(id string) error {
+	defer s.cache.clear() // H7: Entzug wirkt sofort, s. cache.go
 	_, err := s.db.Exec(`DELETE FROM role_bindings WHERE id = $1`, id)
 	return err
 }
@@ -111,6 +114,7 @@ func (s *Store) LoadByWorkflow(workflowID string) ([]Binding, error) {
 // wird. Kein Fehler, wenn keine Bindungen existieren (idempotent, s.
 // Delete oben).
 func (s *Store) DeleteByWorkflow(workflowID string) error {
+	defer s.cache.clear() // H7: Entzug wirkt sofort, s. cache.go
 	_, err := s.db.Exec(`DELETE FROM role_bindings WHERE workflow_id = $1`, workflowID)
 	return err
 }
@@ -129,6 +133,7 @@ func (s *Store) DeleteByWorkflow(workflowID string) error {
 // Instanz-ID, s. Binding-Doku), hier grenzen workflowID+nodeID+verb den
 // Treffer auf exakt das Muster ein, das Create() für diesen Zweck anlegt.
 func (s *Store) DeleteInstanceBinding(instanceID, workflowID string) error {
+	defer s.cache.clear() // H7: Entzug wirkt sofort, s. cache.go
 	_, err := s.db.Exec(
 		`DELETE FROM role_bindings WHERE subject = $1 AND subject_type = 'user' AND workflow_id = $2 AND node_id = $3 AND verb = $4`,
 		instanceID, workflowID, AnyNode, VerbOperate)
@@ -147,6 +152,7 @@ func (s *Store) DeleteInstanceBinding(instanceID, workflowID string) error {
 // mitgelöscht werden. Kein Fehler, wenn keine Bindungen existieren
 // (idempotent, s. Delete oben).
 func (s *Store) DeleteBySubject(username string) error {
+	defer s.cache.clear() // H7: Entzug wirkt sofort, s. cache.go
 	_, err := s.db.Exec(`DELETE FROM role_bindings WHERE subject = $1 AND subject_type = 'user'`, username)
 	return err
 }
@@ -163,6 +169,18 @@ func (s *Store) DeleteBySubject(username string) error {
 // CheckWorkflow, damit ein zufällig gleichlautender Rollenname nie mit
 // einer Instanz-/Node-ID kollidiert.
 func (s *Store) Check(subject, nodeID string, minVerb Verb) (bool, error) {
+	key := decisionKey{kind: 'g', subject: subject, id: nodeID, verb: minVerb}
+	if allowed, ok := s.cache.get(key); ok {
+		return allowed, nil
+	}
+	allowed, err := s.check(subject, nodeID, minVerb)
+	if err == nil {
+		s.cache.put(key, allowed)
+	}
+	return allowed, err
+}
+
+func (s *Store) check(subject, nodeID string, minVerb Verb) (bool, error) {
 	rows, err := s.db.Query(
 		`SELECT verb FROM role_bindings
 		 WHERE workflow_id = '' AND (node_id = $2 OR node_id = $3)
@@ -193,6 +211,18 @@ func (s *Store) Check(subject, nodeID string, minVerb Verb) (bool, error) {
 // vs. Workflow/Rolle) haben unterschiedliche Identitäts-Räume für
 // "nodeID" (Instanz-ID vs. Rollenname) und dürfen sich nie kreuzen.
 func (s *Store) CheckWorkflow(subject, workflowID, role string, minVerb Verb) (bool, error) {
+	key := decisionKey{kind: 'w', subject: subject, workflow: workflowID, id: role, verb: minVerb}
+	if allowed, ok := s.cache.get(key); ok {
+		return allowed, nil
+	}
+	allowed, err := s.checkWorkflow(subject, workflowID, role, minVerb)
+	if err == nil {
+		s.cache.put(key, allowed)
+	}
+	return allowed, err
+}
+
+func (s *Store) checkWorkflow(subject, workflowID, role string, minVerb Verb) (bool, error) {
 	rows, err := s.db.Query(
 		`SELECT verb FROM role_bindings
 		 WHERE workflow_id = $2 AND (node_id = $3 OR node_id = $4)

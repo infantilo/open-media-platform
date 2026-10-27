@@ -666,6 +666,7 @@ func main() {
 	// Var-Gate wie bei den Storage-Backends, da Gruppen kein Secret
 	// verschlüsseln und keine externe Infrastruktur brauchen).
 	groupStore := groups.NewStore(database)
+	groupStore.OnChange = authzStore.Invalidate // Audit H7: Mitgliedschaftsänderung verwirft den Rechte-Cache sofort
 	auditStore := audit.NewStore(database, hub)
 	// S5 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): Startup- + täglicher
 	// Retention-Lauf, löscht Audit-Zeilen älter als cfg.AuditRetentionDays.
@@ -1078,7 +1079,11 @@ func main() {
 		})
 	}
 
-	backupSvc := backup.NewService(backup.ParsePatroniNodes(cfg.PatroniNodes), cfg.BackupDir, cfg.BackupKeep)
+	backupSvc := backup.NewService(backup.ParsePatroniNodes(cfg.PatroniNodes), cfg.BackupDir, cfg.BackupKeep).WithExtras(cfg.BackupKeyFiles, cfg.BackupPassphrase, cfg.BackupCopyDir)
+	backupSvc.Warn = func(msg string, err error) { slog.Warn(msg, "error", err) }
+	if cfg.BackupPassphrase == "" {
+		slog.Info("backup: ohne OMP_BACKUP_PASSPHRASE kein Schlüsselbündel (Update-Schlüssel, mTLS-CA, Dateigeheimnisse sind nicht gesichert)")
+	}
 	if cfg.BackupIntervalHours > 0 {
 		go runWhileLeader(ctx, clusterNode, func(ctx context.Context) {
 			backup.RunSchedule(ctx, time.Duration(cfg.BackupIntervalHours)*time.Hour, 10*time.Minute, time.Hour, backupSvc.Newest,

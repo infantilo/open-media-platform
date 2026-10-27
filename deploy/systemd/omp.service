@@ -21,6 +21,15 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 User=@USER@
+# Härtung/Limits (Audit M11) — nur, was den Medienbetrieb und rootless Podman nicht berührt. Bewusst NICHT gesetzt: ProtectSystem/ProtectHome/PrivateTmp
+# (Nodes schreiben unter @ROOT@ und /dev/shm/omp-mxl), ProtectControlGroups/RestrictSUIDSGID (rootless Podman), NoNewPrivileges (setcap für CAP_SYS_TIME).
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+TasksMax=infinity
 WorkingDirectory=@ROOT@
 Environment=XDG_RUNTIME_DIR=/run/user/@UID@
 Environment=PATH=/usr/local/go/bin:@HOME@/.deno/bin:@HOME@/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

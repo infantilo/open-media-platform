@@ -53,6 +53,45 @@ jobs:
           OMP_POSTGRES_URL: postgres://omp:omp@localhost:5432/omp?sslmode=disable
         run: make check-ci
 
+  # Audit 2026-10-23 "Rust (~97k Zeilen, 746 Tests) in keiner CI": der Rust-Workspace braucht MXL (third_party/mxl, gitignored) — hier wird
+  # der feste Tag samt unseren Patches geholt (wie deploy/dev/install-mxl.sh), die C-Bibliothek selbst aber nicht gebaut
+  # (Feature mxl-not-built). Zunächst nicht blockierend (continue-on-error), bis der Lauf auf dem Runner nachweislich stabil ist.
+  rust:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Systempakete (GStreamer, Bindgen, OpenSSL)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake pkg-config libclang-dev libssl-dev libglib2.0-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            libopus-dev libasound2-dev
+
+      - name: MXL holen (fester Tag + OMP-Patches)
+        run: |
+          MXL_VERSION="$(sed -n 's/^MXL_VERSION="\(.*\)"/\1/p' deploy/dev/install-mxl.sh | head -1)"
+          git clone --depth 1 --branch "$MXL_VERSION" https://github.com/dmf-mxl/mxl third_party/mxl
+          for p in deploy/dev/mxl-patches/*.diff; do git -C third_party/mxl apply "$PWD/$p"; done
+
+      - name: Rust-Toolchain
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            nodes/target
+          key: rust-${{ runner.os }}-${{ hashFiles('nodes/Cargo.lock') }}
+          restore-keys: rust-${{ runner.os }}-
+
+      - name: cargo test (Workspace)
+        working-directory: nodes
+        # Der Debug-Zeittest des Intercom-Mixers hängt von der Rechnerlast ab und gehört in ein Release-Profil.
+        run: cargo test --workspace --no-fail-fast -- --skip hundred_parties_twenty_channels
+
   # Schritt D2 (UMSETZUNG.md): AMWA NMOS Testing Tool gegen unsere
   # nmos-cpp-Registry (IS-04-02, Registration+Query API). NICHT gegen
   # eigene Nodes für IS-04-01 — verifiziert am echten Tool-Lauf

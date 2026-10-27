@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/dbtest"
 	"testing"
+	"time"
 )
 
 func testDB(t *testing.T) *sql.DB {
@@ -405,5 +406,79 @@ func TestFeatureGrantsUserGroupAndConfigure(t *testing.T) {
 	}
 	if err := store.DeleteFeatureGrant(g1.ID); err != ErrFeatureNotFound {
 		t.Fatalf("zweiter Widerruf: %v", err)
+	}
+}
+
+// Audit H7: gemerkte Entscheidungen verfallen nach der TTL, und jede lokale Änderung verwirft sie sofort (Entzug nie verzögert).
+func TestDecisionCacheTTLAndInvalidate(t *testing.T) {
+	now := time.Unix(1000, 0)
+	c := newDecisionCache()
+	c.ttl = 2 * time.Second
+	c.now = func() time.Time { return now }
+	k := decisionKey{kind: 'g', subject: "anna", id: "n1", verb: VerbOperate}
+	if _, ok := c.get(k); ok {
+		t.Fatal("leer")
+	}
+	c.put(k, true)
+	if a, ok := c.get(k); !ok || !a {
+		t.Fatal("Treffer erwartet")
+	}
+	now = now.Add(2 * time.Second)
+	if _, ok := c.get(k); ok {
+		t.Fatal("nach der TTL verfallen")
+	}
+	c.put(k, true)
+	c.clear()
+	if _, ok := c.get(k); ok {
+		t.Fatal("nach clear weg")
+	}
+	c.ttl = 0
+	c.put(k, true)
+	if _, ok := c.get(k); ok {
+		t.Fatal("TTL 0 = aus")
+	}
+}
+
+// Audit H7 mit echter Datenbank: Entzug über den Store wirkt sofort (kein Warten auf die TTL), Fremdänderung direkt in der Tabelle erst nach Ablauf.
+func TestCheckCacheRevocationIsImmediate(t *testing.T) {
+	database := testDB(t)
+	store := NewStore(database)
+	store.cache.ttl = time.Hour // nur Invalidierung darf den Entzug sichtbar machen
+	subject := "test-h7-" + mustNewID(t)
+	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM role_bindings WHERE subject = $1`, subject) })
+
+	b, err := store.Create(subject, "", "inst-h7", VerbOperate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := store.Check(subject, "inst-h7", VerbOperate); !ok {
+		t.Fatal("Zugriff erwartet")
+	}
+	if ok, _ := store.Check(subject, "inst-h7", VerbOperate); !ok {
+		t.Fatal("zweiter Aufruf (aus dem Cache) erwartet Zugriff")
+	}
+	if err := store.Delete(b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := store.Check(subject, "inst-h7", VerbOperate); ok {
+		t.Fatal("Entzug muss sofort wirken")
+	}
+	// Neue Bindung wird ebenfalls sofort sichtbar (nicht erst nach TTL).
+	if _, err := store.Create(subject, "", "inst-h7", VerbOperate); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := store.Check(subject, "inst-h7", VerbOperate); !ok {
+		t.Fatal("neue Bindung muss sofort wirken")
+	}
+	// Änderung an der Tabelle ohne Store (anderer Orchestrator): erst nach TTL sichtbar.
+	if _, err := database.Exec(`DELETE FROM role_bindings WHERE subject = $1`, subject); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := store.Check(subject, "inst-h7", VerbOperate); !ok {
+		t.Fatal("Fremdänderung bleibt bis zum Ablauf der TTL gemerkt")
+	}
+	store.cache.ttl = 0
+	if ok, _ := store.Check(subject, "inst-h7", VerbOperate); ok {
+		t.Fatal("ohne Cache sofort sichtbar")
 	}
 }

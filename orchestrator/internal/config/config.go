@@ -3,7 +3,9 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // defaultNatsURL zeigt auf den per `make up` gestarteten Drei-Knoten-
@@ -192,6 +194,10 @@ type Config struct {
 	// `postgres-up`-Target (REST-Ports 8008/8018/8028).
 	PatroniNodes string
 	BackupKeep   int
+	// Audit M8: Schlüsselbündel (verschlüsselt) neben jeder Sicherung und Kopie auf ein Fremdziel.
+	BackupKeyFiles   []string
+	BackupPassphrase string
+	BackupCopyDir    string
 	// BackupIntervalHours: geplante Sicherungen (Audit M8); 0 = aus. Standard 24.
 	BackupIntervalHours int
 	// SupervisorURL zeigt auf den eigenständigen Backup/Restore-
@@ -336,6 +342,9 @@ func Load() Config {
 		// Placement-/Audit-Defaults oben).
 		BackupKeep:          getEnvInt("OMP_BACKUP_KEEP", 14),
 		BackupIntervalHours: getEnvInt("OMP_BACKUP_INTERVAL_HOURS", 24),
+		BackupKeyFiles:      backupKeyFiles(),
+		BackupPassphrase:    backupPassphrase(),
+		BackupCopyDir:       getEnv("OMP_BACKUP_COPY_DIR", ""),
 		SupervisorURL:       getEnv("OMP_SUPERVISOR_URL", "http://127.0.0.1:8091"),
 		UpdateDir:           getEnv("OMP_UPDATE_DIR", "../.updates"),
 		NodeVersionsDir:     getEnv("OMP_NODE_VERSIONS_DIR", "../.node-versions"),
@@ -402,4 +411,40 @@ func getEnvInt(key string, fallback int) int {
 		return fallback
 	}
 	return i
+}
+
+// backupKeyFiles: Dateien/Verzeichnisse für das Schlüsselbündel der Sicherung (OMP_BACKUP_KEY_FILES, Komma-Liste). Standard: Update-Schlüssel,
+// Dateigeheimnisse neben dem JWT-Geheimnis, mTLS-CA und step-ca unter .run. Fehlendes wird übersprungen.
+func backupKeyFiles() []string {
+	if v, ok := os.LookupEnv("OMP_BACKUP_KEY_FILES"); ok {
+		var out []string
+		for _, p := range strings.Split(v, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	home, _ := os.UserHomeDir()
+	jwt := getEnv("OMP_AUTH_JWT_SECRET_FILE", "../data/auth-jwt-secret")
+	pub := getEnv("OMP_UPDATE_PUBKEY_FILE", "../.run/update-trusted.pub")
+	runDir := filepath.Dir(pub) // dasselbe .run wie der Update-Schlüssel, damit der Pfad zur tatsächlichen Konfiguration passt
+	out := []string{jwt, filepath.Join(filepath.Dir(jwt), "service-token"), pub, filepath.Join(runDir, "mtls"), filepath.Join(runDir, "step-ca")}
+	if home != "" {
+		out = append(out, filepath.Join(home, ".omp-update"))
+	}
+	return out
+}
+
+// backupPassphrase: OMP_BACKUP_PASSPHRASE oder der Inhalt der Datei OMP_BACKUP_PASSPHRASE_FILE; leer = kein Schlüsselbündel.
+func backupPassphrase() string {
+	if v := os.Getenv("OMP_BACKUP_PASSPHRASE"); v != "" {
+		return v
+	}
+	if f := os.Getenv("OMP_BACKUP_PASSPHRASE_FILE"); f != "" {
+		if b, err := os.ReadFile(f); err == nil {
+			return strings.TrimSpace(string(b))
+		}
+	}
+	return ""
 }

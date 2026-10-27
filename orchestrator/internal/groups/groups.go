@@ -42,6 +42,14 @@ type Group struct {
 
 type Store struct {
 	db *sql.DB
+	// OnChange wird nach jeder Änderung aufgerufen, die Rechte berührt (Mitglieder, Gruppe löschen) — der authz-Entscheidungs-Cache (Audit H7) hängt daran.
+	OnChange func()
+}
+
+func (s *Store) changed() {
+	if s.OnChange != nil {
+		s.OnChange()
+	}
 }
 
 func NewStore(db *sql.DB) *Store {
@@ -152,6 +160,7 @@ func (s *Store) CountBindings(id string) (int, error) {
 // Kontrolle ohne Umweg über zwei Tabs" ausdrücklich erwünscht, statt
 // wie bei Dateien einen harten Stopp zu erzwingen).
 func (s *Store) Delete(id string, cascadeBindings bool) error {
+	defer s.changed()
 	if cascadeBindings {
 		if _, err := s.db.Exec(`DELETE FROM role_bindings WHERE subject_type = 'group' AND subject = $1`, id); err != nil {
 			return err
@@ -195,6 +204,7 @@ func (s *Store) ListMembers(groupID string) ([]string, error) {
 // Fremdschlüssel auf users(username) lehnt einen erfundenen
 // Nutzernamen ab (s. Migrations-Doku).
 func (s *Store) AddMember(groupID, username string) error {
+	defer s.changed()
 	_, err := s.db.Exec(`
 		INSERT INTO group_members (group_id, username) VALUES ($1, $2)
 		ON CONFLICT (group_id, username) DO NOTHING
@@ -204,6 +214,7 @@ func (s *Store) AddMember(groupID, username string) error {
 
 // RemoveMember entfernt einen Nutzer — idempotent.
 func (s *Store) RemoveMember(groupID, username string) error {
+	defer s.changed()
 	_, err := s.db.Exec(`DELETE FROM group_members WHERE group_id = $1 AND username = $2`, groupID, username)
 	return err
 }

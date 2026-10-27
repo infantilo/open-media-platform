@@ -624,6 +624,8 @@ impl NodeHandle {
 /// ist die einzige Node-spezifische Eingabe. Gibt sofort nach erfolgreicher
 /// Erstregistrierung zurück.
 pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<NodeHandle, BoxError> {
+    // Audit 2026-10-23 H9: Panics in Hintergrund-Threads dürfen keinen Zombie-Node hinterlassen, s. panicguard.
+    crate::panicguard::install();
     // Bug 2026-08-10: "beim Stoppen/Neustarten eines Workflows verlieren
     // viele Nodes ihre UID" — bislang würfelte jeder Prozessstart
     // node_id/device_id komplett neu, auch wenn derselbe Launcher dieselbe

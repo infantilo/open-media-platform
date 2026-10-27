@@ -183,6 +183,15 @@ const MAX_IN_FLIGHT: usize = 64;
 
 static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
+/// Gibt beim Verlassen des Anfrage-Threads (auch beim Panic) den Platz in `IN_FLIGHT` frei.
+struct InFlightGuard;
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 fn accept_loop(server: Server, store: Arc<dyn ParamStore>) {
     for request in server.incoming_requests() {
         if IN_FLIGHT.fetch_add(1, Ordering::SeqCst) >= MAX_IN_FLIGHT {
@@ -192,8 +201,9 @@ fn accept_loop(server: Server, store: Arc<dyn ParamStore>) {
         }
         let store = Arc::clone(&store);
         let spawned = std::thread::Builder::new().name("omp-http-req".into()).spawn(move || {
+            // Der Zähler muss auch bei einem Panic im Handler sinken (Audit H9): sonst blockierte der Node nach 64 Panics alle Anfragen mit 503.
+            let _slot = InFlightGuard;
             handle(request, &store);
-            IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
         });
         if spawned.is_err() {
             IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
@@ -489,6 +499,19 @@ mod tests {
         assert_eq!(denied(Method::Get, "/https-info", &[]), None);
         assert_eq!(denied(Method::Get, "/x-nmos/node/v1.3/self", &[]), None);
         assert_eq!(denied(Method::Patch, "/x-nmos/connection/v1.1/single/receivers/r/staged", &[]), Some(401));
+    }
+
+    #[test]
+    fn in_flight_slot_is_released_even_when_the_handler_panics() {
+        let before = IN_FLIGHT.load(Ordering::SeqCst);
+        IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+        let r = std::thread::spawn(|| {
+            let _slot = InFlightGuard;
+            panic!("Handler abgestürzt");
+        })
+        .join();
+        assert!(r.is_err());
+        assert_eq!(IN_FLIGHT.load(Ordering::SeqCst), before);
     }
 
     #[test]

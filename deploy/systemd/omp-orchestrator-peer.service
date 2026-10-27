@@ -13,6 +13,15 @@ Wants=network-online.target
 
 [Service]
 User=adunkl
+# Härtung/Limits (Audit M11) — nur, was den Medienbetrieb und rootless Podman nicht berührt. Bewusst NICHT gesetzt: ProtectSystem/ProtectHome/PrivateTmp
+# (Nodes schreiben unter @ROOT@ und /dev/shm/omp-mxl), ProtectControlGroups/RestrictSUIDSGID (rootless Podman), NoNewPrivileges (setcap für CAP_SYS_TIME).
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+TasksMax=infinity
 WorkingDirectory=/home/adunkl/open-media-platform
 Environment=OMP_NODE_ID=node2
 Environment=OMP_RAFT_LISTEN=192.168.0.61:8300

@@ -19,6 +19,7 @@ pub mod is04;
 pub mod liveness;
 pub mod node;
 pub mod nodeauth;
+pub mod panicguard;
 pub mod peer;
 pub mod plugins;
 pub mod server;

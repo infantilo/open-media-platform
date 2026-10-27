@@ -21,6 +21,15 @@ Wants=network-online.target
 # Bevorzugt nur für die Programmdatei: sudo setcap cap_sys_time+ep @ROOT@/bin/omp-host-agent  (nach jedem Neubau wiederholen). AmbientCapabilities=CAP_SYS_TIME
 # würde auch an alle Nodes vererbt. Abschalten: OMP_CLOCK_DISCIPLINE=off; Server: OMP_CLOCK_NTP_SERVERS (Standard pool.ntp.org).
 User=@USER@
+# Härtung/Limits (Audit M11) — nur, was den Medienbetrieb und rootless Podman nicht berührt. Bewusst NICHT gesetzt: ProtectSystem/ProtectHome/PrivateTmp
+# (Nodes schreiben unter @ROOT@ und /dev/shm/omp-mxl), ProtectControlGroups/RestrictSUIDSGID (rootless Podman), NoNewPrivileges (setcap für CAP_SYS_TIME).
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+TasksMax=infinity
 WorkingDirectory=@ROOT@
 EnvironmentFile=/etc/omp-host-agent.env
 ExecStart=/bin/bash -c '[ -f deploy/dev/mxl.env ] && . deploy/dev/mxl.env; exec ./bin/omp-host-agent'

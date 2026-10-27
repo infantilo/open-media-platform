@@ -119,6 +119,26 @@ type Service struct {
 	nodes []PatroniNode
 	dir   string
 	keep  int
+
+	// Audit M8: verschlüsseltes Schlüsselbündel neben jeder Sicherung (keyFiles + passphrase) und eine Kopie beider auf ein Fremdziel (copyDir,
+	// z. B. ein eingehängtes Netzlaufwerk). Alles optional.
+	keyFiles   []string
+	passphrase string
+	copyDir    string
+	// Warn meldet Fehler der Zusatzschritte (Bündel, Kopie); die Sicherung selbst gilt dann trotzdem als erstellt.
+	Warn func(msg string, err error)
+}
+
+// WithExtras schaltet Schlüsselbündel und Fremdziel zu (leer = aus).
+func (s *Service) WithExtras(keyFiles []string, passphrase, copyDir string) *Service {
+	s.keyFiles, s.passphrase, s.copyDir = keyFiles, passphrase, copyDir
+	return s
+}
+
+func (s *Service) warn(msg string, err error) {
+	if s.Warn != nil {
+		s.Warn(msg, err)
+	}
 }
 
 // NewService — dir muss existieren oder anlegbar sein (Create legt es
@@ -175,6 +195,8 @@ func (s *Service) Create(ctx context.Context) (Result, error) {
 		return Result{}, fmt.Errorf("backup umbenennen: %w", err)
 	}
 
+	s.extras(name, finalPath)
+
 	if err := s.rotate(); err != nil {
 		// Ein Rotationsfehler darf das gerade erfolgreich erstellte
 		// Backup nicht als Fehlschlag melden — nur loggen würde hier
@@ -187,6 +209,45 @@ func (s *Service) Create(ctx context.Context) (Result, error) {
 	}
 
 	return Result{Name: name, Path: finalPath}, nil
+}
+
+// extras: Schlüsselbündel erstellen und Sicherung samt Bündel aufs Fremdziel kopieren. Fehler hier sind Warnungen — die Datenbanksicherung existiert bereits.
+func (s *Service) extras(name, dumpPath string) {
+	haveKeys := false
+	if s.passphrase != "" && len(s.keyFiles) > 0 {
+		bundle, n, err := BundleKeys(s.keyFiles, s.passphrase)
+		switch {
+		case err != nil:
+			s.warn("backup: Schlüsselbündel fehlgeschlagen", err)
+		case n > 0:
+			if err := os.WriteFile(filepath.Join(s.dir, keysName(name)), bundle, 0o600); err != nil {
+				s.warn("backup: Schlüsselbündel schreiben fehlgeschlagen", err)
+			} else {
+				haveKeys = true
+			}
+		}
+	}
+	if s.copyDir == "" {
+		return
+	}
+	if err := copyAtomic(dumpPath, s.copyDir, name); err != nil {
+		s.warn("backup: Kopie aufs Fremdziel fehlgeschlagen", err)
+		return
+	}
+	if haveKeys {
+		if err := copyAtomic(filepath.Join(s.dir, keysName(name)), s.copyDir, keysName(name)); err != nil {
+			s.warn("backup: Schlüsselbündel aufs Fremdziel fehlgeschlagen", err)
+		}
+	}
+	s.rotateDir(s.copyDir)
+}
+
+// rotateDir: im Fremdziel dieselbe Aufbewahrung wie lokal (Sicherungen und ihre Bündel).
+func (s *Service) rotateDir(dir string) {
+	sub := &Service{dir: dir, keep: s.keep}
+	if err := sub.rotate(); err != nil {
+		s.warn("backup: Aufbewahrung im Fremdziel fehlgeschlagen", err)
+	}
 }
 
 // Import speichert eine vom Browser hochgeladene Sicherung (Nutzerfund
@@ -293,6 +354,7 @@ func (s *Service) rotate() error {
 		if err := os.Remove(filepath.Join(s.dir, old)); err != nil {
 			return err
 		}
+		_ = os.Remove(filepath.Join(s.dir, keysName(old))) // das Bündel gehört zur Sicherung
 	}
 	return nil
 }
