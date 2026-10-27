@@ -772,6 +772,34 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/freezes",
+    "auth": "verb:Admin",
+    "when": "options.freezer != nil \u0026\u0026 options.freezeStore != nil",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/freezes",
+    "auth": "verb:Operate",
+    "when": "options.freezer != nil \u0026\u0026 options.freezeStore != nil",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/freezes/{id}",
+    "auth": "verb:Admin",
+    "when": "options.freezer != nil \u0026\u0026 options.freezeStore != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/freezes/{id}/download",
+    "auth": "verb:Admin",
+    "when": "options.freezer != nil \u0026\u0026 options.freezeStore != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/graph",
     "auth": "auth",
     "domain": "core"

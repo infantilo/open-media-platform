@@ -9,6 +9,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/kpi"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profile"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/uiorigin"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -33,6 +35,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/backup"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/blackbox"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/cluster"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/consoles"
@@ -40,6 +43,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/domainaudit"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/eventbus"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/ffmpegtools"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/freeze"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/groups"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/health"
@@ -320,12 +324,15 @@ func main() {
 	hub := sse.NewHub()
 	// Audit M7: Medien-Kennzahlen (Verfügbarkeit, Ausfälle) aus den Health-Ereignissen der Nodes.
 	kpiTracker := kpi.NewTracker()
+	// Flugschreiber (Kap. 72.10): die letzten 15 Minuten der Node-Kennzahlen und Prozesswerte in 5-s-Auflösung, Grundlage von „Einfrieren“.
+	flightBox := blackbox.New()
 	go func() {
 		ch, cancel := hub.Subscribe()
 		defer cancel()
 		for ev := range ch {
 			if id, label, ready, kpis, ok := kpi.FromEvent(ev); ok {
 				kpiTracker.Observe(id, label, ready, kpis, time.Now())
+				flightBox.Record(id, label, ready, kpis, time.Now())
 			}
 		}
 	}()
@@ -1257,17 +1264,127 @@ func main() {
 		}
 		return ""
 	}
+	// Einfrieren (Kap. 72.10): Quellen für die Momentaufnahme; die Automatik friert bei Absturz, Medien weg, Host verstummt und Failover ein
+	// (abschaltbar mit OMP_AUTO_FREEZE=0).
+	freezeStore := freeze.NewStore(database)
+	freezer := freeze.New(freeze.Deps{
+		Box:      flightBox,
+		Timeline: func(since, until time.Time) (any, error) { return timelineSrc.Query(since, until, 2000, true) },
+		Logs: func(since, until time.Time) (any, error) {
+			return logStore.Query(logbus.Filter{Since: since, Until: until, Limit: 2000})
+		},
+		Nodes:     func() (any, error) { return store.List(), nil },
+		Instances: func() (any, error) { return httpapi.InstancesWithMetrics(launcherSvc, hostMetricsTracker), nil },
+		Graph:     func(ctx context.Context) (any, error) { return graphSvc.Graph(ctx), nil },
+		Hosts: func() (any, error) {
+			list, err := hostStore.ListHosts()
+			if err != nil {
+				return nil, err
+			}
+			out := make([]map[string]any, 0, len(list))
+			for _, h := range list {
+				row := map[string]any{"id": h.ID, "label": h.Label, "hostname": h.Hostname}
+				if m, ok := hostMetricsTracker.Get(h.ID); ok {
+					row["metrics"] = m
+				}
+				out = append(out, row)
+			}
+			return out, nil
+		},
+		HostSeries: func(window time.Duration) (any, error) {
+			list, err := hostStore.ListHosts()
+			if err != nil {
+				return nil, err
+			}
+			out := map[string]any{}
+			for _, h := range list {
+				if w, ok := hostHistory.Window(h.ID, window); ok {
+					out[h.Label+" ("+h.ID[:min(8, len(h.ID))]+")"] = w
+				}
+			}
+			return out, nil
+		},
+		Pipelines: func(ctx context.Context, scope []string, max int) (map[string][]byte, error) {
+			want := map[string]bool{}
+			for _, id := range scope {
+				want[id] = true
+			}
+			// Parallel und mit kurzem Zeitlimit: ein hängender Node darf die Momentaufnahme nicht um Sekunden verzögern.
+			var picked []registry.NodeView
+			for _, n := range store.List() {
+				if len(picked) >= max {
+					break
+				}
+				if n.Online && n.APIBaseURL != "" && (len(want) == 0 || want[n.ID]) {
+					picked = append(picked, n)
+				}
+			}
+			out := map[string][]byte{}
+			var mu sync.Mutex
+			var wg sync.WaitGroup
+			for _, n := range picked {
+				wg.Add(1)
+				go func(n registry.NodeView) {
+					defer wg.Done()
+					pctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+					defer cancel()
+					req, err := http.NewRequestWithContext(pctx, http.MethodGet, n.APIBaseURL+"/diag/pipelines", nil)
+					if err != nil {
+						return
+					}
+					resp, err := nodeHTTPClient.Do(req)
+					if err != nil {
+						return
+					}
+					defer resp.Body.Close()
+					if resp.StatusCode != http.StatusOK {
+						return
+					}
+					if body, rerr := io.ReadAll(io.LimitReader(resp.Body, 1<<20)); rerr == nil {
+						mu.Lock()
+						out[freezeFileName(n.Label, n.ID)] = body
+						mu.Unlock()
+					}
+				}(n)
+			}
+			wg.Wait()
+			return out, nil
+		},
+	}, freezeStore)
+	freezer.AutoEnabled = os.Getenv("OMP_AUTO_FREEZE") != "0"
+	// Prozesswerte (CPU, Speicher je Instanz) alle 5 s in den Flugschreiber.
+	go func() {
+		tick := time.NewTicker(blackbox.Interval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-tick.C:
+				for _, in := range httpapi.InstancesWithMetrics(launcherSvc, hostMetricsTracker) {
+					flightBox.RecordProc(in.ID, in.Label, in.CPUPercent, in.RSSBytes, now)
+				}
+			}
+		}
+	}()
 	timelineSink := func(e timeline.Event) {
 		if err := timelineStore.Insert(e); err != nil {
 			slog.Warn("timeline insert failed", "kind", e.Kind, "error", err)
 			return
 		}
 		hub.Broadcast(sse.Event{Type: "timeline.appended", Data: json.RawMessage("null")})
+		label, _ := e.Data["label"].(string)
+		freezer.Observe(e.Kind, label)
+	}
+	freezer.OnFrozen = func(m freeze.Meta) {
+		timelineSink(timeline.Event{At: m.CreatedAt, Kind: "freeze", Severity: timeline.SevInfo, Subject: m.ID, Actor: m.CreatedBy,
+			Data: map[string]any{"trigger": m.Trigger, "reason": m.Reason, "note": m.Note, "minutes": m.WindowMinutes}})
+		hub.Broadcast(sse.Event{Type: "freeze.created", Data: json.RawMessage("null")})
 	}
 	timelineSink(timeline.Event{At: time.Now(), Kind: "orchestrator.started", Severity: timeline.SevInfo, Subject: cfg.ClusterNodeID, Data: map[string]any{"version": version.Version}})
 	go timelineRec.Run(ctx, hub, timelineSink)
 	go timelineStore.RunRetention(ctx, cfg.AuditRetentionDays)
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithMediaKPI(kpiTracker), httpapi.WithHostSysinfo(launcherSvc.SysinfoOnHost), httpapi.WithTimeline(timelineSrc), httpapi.WithSupportAccess(supportaccess.NewStore(database)), httpapi.OptionalUIIsolation(uiIso), httpapi.WithHostKeyRotation(func(id string) error {
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithMediaKPI(kpiTracker), httpapi.WithHostSysinfo(launcherSvc.SysinfoOnHost), httpapi.WithTimeline(timelineSrc), httpapi.WithFreeze(freezer, freezeStore), httpapi.WithSupportAccess(supportaccess.NewStore(database)), httpapi.OptionalUIIsolation(uiIso), httpapi.WithHostKeyRotation(func(id string) error {
 		sg := hostSigner.Load()
 		if sg == nil {
 			return errors.New("no command channel")
@@ -1355,4 +1472,20 @@ func getEnvIntMain(name string, def int) int {
 		return v
 	}
 	return def
+}
+
+// freezeFileName: Dateiname einer Pipeline-Momentaufnahme („Kamera-1-1a2b3c4d.json“).
+func freezeFileName(label, id string) string {
+	var b strings.Builder
+	for _, r := range label {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+			b.WriteRune(r)
+		} else if r == ' ' {
+			b.WriteRune('-')
+		}
+	}
+	if b.Len() == 0 {
+		b.WriteString("node")
+	}
+	return b.String() + "-" + id[:min(8, len(id))] + ".json"
 }

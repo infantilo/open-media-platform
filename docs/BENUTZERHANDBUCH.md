@@ -1054,6 +1054,30 @@ untereinander):
 
   ![Was der Support sieht: gelber Streifen „nur lesen“, die Zeitleiste ohne Bedienelemente mit Schreibwirkung](screenshots/support-zugang-lesesicht.png)
 
+- **Letzte Minuten einfrieren (❄)** — der „Flugschreiber“. Das System hält
+  die letzten 15 Minuten der **Kennzahlen je Node** (Medien bereit, Bildrate)
+  und der **Prozesswerte** (CPU, Speicher je Instanz) alle ca. 5 Sekunden im
+  Arbeitsspeicher. Der Knopf **❄ Einfrieren** in der oberen Leiste (oder im
+  Fenster der Node-Diagnose nur für diesen Node, im Support-Tab mit
+  Notiz) sichert die letzten 10 Minuten als **Paket**: Zeitleiste und
+  Meldungen des Fensters, die Messreihen, CPU/RAM je Host, den Zustand von
+  Nodes, Instanzen, Hosts und Graph und den **Pipeline-Zustand** der
+  Nodes. Das Paket bleibt **30 Tage** erhalten (höchstens 30, davon 10
+  automatische) — lange nachdem Puffer und Log-Aufbewahrung die Daten
+  überschrieben haben. Es wird auch **automatisch** angelegt, wenn etwas
+  ausfällt: ein Prozess stürzt ab und startet neu oder gibt auf, Medien
+  fallen weg, ein Host verstummt, eine Ausfallumschaltung läuft (höchstens
+  alle 5 Minuten, 10 Sekunden nach der Störung, damit der Auslöser selbst
+  mit drin ist; abschaltbar mit `OMP_AUTO_FREEZE=0`). Jede Momentaufnahme
+  steht in der Zeitleiste (❄). Im Support-Tab unter „Eingefrorene
+  Momentaufnahmen“ lassen sich die Pakete **herunterladen** und löschen;
+  ein Support-Zugang darf sie laden. Wie das Support-Paket enthält es
+  keine Medien, Passwörter, Tokens oder Schlüssel. Grenze: der Flugschreiber
+  liegt im Arbeitsspeicher — nach einem Neustart des Orchestrators beginnt er
+  neu.
+
+  ![Eingefrorene Momentaufnahmen im Support-Tab: von Hand mit Notiz und automatisch nach einem Absturz, jeweils mit Download](screenshots/einfrieren.png)
+
 - **Zeitleiste** — „Was hat sich um 14:02 geändert?“ auf einer einzigen
   Achse. Oben ein Balkenbild des gewählten Zeitraums (letzte Stunde bis 7
   Tage): rot = Störung, gelb = Hinweis, blau = Information. **In die Balken

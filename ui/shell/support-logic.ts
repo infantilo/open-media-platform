@@ -70,3 +70,24 @@ export function sortGrants(list: SupportGrant[]): SupportGrant[] {
   const rank = (g: SupportGrant) => (g.status === "active" ? 0 : 1);
   return [...list].sort((a, b) => rank(a) - rank(b) || (rank(a) === 0 ? Date.parse(a.expiresAt) - Date.parse(b.expiresAt) : Date.parse(b.createdAt) - Date.parse(a.createdAt)));
 }
+
+export interface FreezeMeta {
+  id: string;
+  createdAt: string;
+  createdBy?: string;
+  trigger: "manual" | "auto";
+  reason?: string;
+  note?: string;
+  windowMinutes: number;
+  scope?: string[];
+  sizeBytes: number;
+}
+
+export function formatSize(bytes: number): string {
+  if (bytes >= 1 << 20) return `${(bytes / (1 << 20)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+export function freezeUrl(id: string): string {
+  return `/api/v1/freezes/${encodeURIComponent(id)}/download`;
+}

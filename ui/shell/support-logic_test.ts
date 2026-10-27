@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { accessLink, bundleFileName, bundleUrl, type SelftestReport, type SupportGrant, sortGrants, splitChecks } from "./support-logic.ts";
+import { accessLink, bundleFileName, formatSize, freezeUrl, bundleUrl, type SelftestReport, type SupportGrant, sortGrants, splitChecks } from "./support-logic.ts";
 
 Deno.test("splitChecks: Fehler vor Hinweisen, in Ordnung getrennt", () => {
   const r: SelftestReport = {
@@ -41,4 +41,12 @@ Deno.test("sortGrants: aktive zuerst nach Ablauf, dann die übrigen neueste zuer
     g("bald", "active", "2026-10-27T11:00:00Z", "2026-10-27T12:00:00Z"),
   ]);
   assertEquals(out.map((x) => x.id), ["bald", "spaet", "neu-widerrufen", "alt"]);
+});
+
+Deno.test("formatSize und freezeUrl", () => {
+  assertEquals(formatSize(100), "1 KB");
+  assertEquals(formatSize(2048), "2 KB");
+  assertEquals(formatSize(3 * (1 << 20)), "3.0 MB");
+  assertEquals(freezeUrl("ab12"), "/api/v1/freezes/ab12/download");
+  assertEquals(freezeUrl("a/b"), "/api/v1/freezes/a%2Fb/download");
 });

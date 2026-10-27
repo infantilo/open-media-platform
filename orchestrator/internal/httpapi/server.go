@@ -372,6 +372,14 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// prüft damit nach einem Update, ob der neue Stand läuft).
 	mux.HandleFunc("GET /api/v1/version", handleVersion)
 	// Fehlercode-Katalog (Kap. 72.8): Code, Titel, Ursache, Lösungsschritte, Erkennungsmuster.
+	// Momentaufnahmen „letzte Minuten einfrieren“ (Kap. 72.10): anlegen darf, wer bedient; ansehen, laden und löschen nur ein Administrator
+	// (der Inhalt zeigt Meldungen und Zustand des ganzen Systems; ein Support-Zugang darf lesen und laden).
+	if options.freezer != nil && options.freezeStore != nil {
+		mux.HandleFunc("POST /api/v1/freezes", g.requireVerbGlobal(authz.VerbOperate, handleCreateFreeze(options.freezer)))
+		mux.HandleFunc("GET /api/v1/freezes", g.requireVerbGlobal(authz.VerbAdmin, handleListFreezes(options.freezeStore)))
+		mux.HandleFunc("GET /api/v1/freezes/{id}/download", g.requireVerbGlobal(authz.VerbAdmin, handleDownloadFreeze(options.freezeStore)))
+		mux.HandleFunc("DELETE /api/v1/freezes/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteFreeze(options.freezeStore)))
+	}
 	// Befristeter Support-Zugang (Kap. 72.9).
 	if options.supportAccess != nil {
 		supportLockout := auth.NewLoginLockout()

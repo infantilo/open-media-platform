@@ -171,6 +171,14 @@ func handleListInstances(svc LauncherService, hostMetrics HostMetricsReader) htt
 	}
 }
 
+// InstancesWithMetrics liefert die Instanzen samt CPU/RAM (lokal vom Launcher, entfernt aus der Host-Telemetrie) — für Flugschreiber und
+// Momentaufnahmen außerhalb dieses Pakets.
+func InstancesWithMetrics(svc LauncherService, hostMetrics HostMetricsReader) []launcher.Instance {
+	list := instancesWithOutdated(svc)
+	mergeInstanceMetrics(list, hostMetrics)
+	return list
+}
+
 // handlePostInstance liefert POST /api/v1/instances: {"type":
 // "<catalogType>"} startet eine neue Instanz lokal; ein zusätzliches
 // {"hostId": "<hostId>"} (ARCHITECTURE.md §18.5, UMSETZUNG.md D6 Teil

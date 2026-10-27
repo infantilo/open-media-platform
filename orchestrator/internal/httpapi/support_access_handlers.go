@@ -45,7 +45,7 @@ var (
 		"/api/v1/logs": true, "/api/v1/logs/summary": true, "/api/v1/timeline": true, "/api/v1/admin/selftest": true, "/api/v1/admin/support-bundle": true,
 		"/api/v1/admin/profile": true, "/api/v1/workflows": true, "/api/v1/workflows/runs": true, "/api/v1/alarms/acks": true,
 		"/api/v1/placement/advice": true, "/api/v1/scheduler/resources": true, "/api/v1/events": true, "/api/v1/catalog": true,
-		"/api/v1/auth/whoami": true,
+		"/api/v1/auth/whoami": true, "/api/v1/freezes": true,
 	}
 	supportNodeSuffixes = []string{"/diagnosis", "/diag/pipelines"}
 )
@@ -59,6 +59,9 @@ func supportMayRead(method, path string) bool {
 		return true
 	}
 	if strings.HasPrefix(path, "/api/v1/hosts/") && strings.HasSuffix(path, "/metrics/history") {
+		return true
+	}
+	if freezeDownloadPath(path) {
 		return true
 	}
 	if rest, ok := strings.CutPrefix(path, "/api/v1/nodes/"); ok {
@@ -122,7 +125,7 @@ func supportReadOnly(g *authGate, next http.Handler) http.Handler {
 			return
 		}
 		// Das Herunterladen des Support-Pakets ist ein Datenabfluss: immer vermerken.
-		if r.URL.Path == "/api/v1/admin/support-bundle" {
+		if r.URL.Path == "/api/v1/admin/support-bundle" || freezeDownloadPath(r.URL.Path) {
 			g.audit.Log(name, r.Method, r.URL.Path, "", http.StatusOK)
 		}
 		next.ServeHTTP(w, r)

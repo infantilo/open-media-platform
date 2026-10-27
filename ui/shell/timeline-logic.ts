@@ -82,7 +82,7 @@ export function describeItem(i: TLItem, r: Resolvers, tr: (key: string) => strin
   const label = str(d.label) || (i.subject ? r.instance(i.subject) ?? r.node(i.subject) ?? short(i.subject) : "?");
   const icons: Record<string, string> = {
     "instance.crashed": "✖", "instance.restarted": "↻", "node.notready": "✖", "node.ready": "✔", "host.silent": "✖", "host.resumed": "✔",
-    "host.clock.lost": "⏱", "host.clock.ok": "⏱", "workflow.failover": "⇄", marker: "⚑", "orchestrator.started": "⏻",
+    "host.clock.lost": "⏱", "host.clock.ok": "⏱", "workflow.failover": "⇄", marker: "⚑", "orchestrator.started": "⏻", freeze: "❄",
   };
   const icon = icons[i.kind] ?? "•";
   switch (i.kind) {
@@ -110,6 +110,10 @@ export function describeItem(i: TLItem, r: Resolvers, tr: (key: string) => strin
       return { icon: "🔗", key: `tl.k.${i.kind}`, params: { id: short(str(d.id)) } };
     case "marker":
       return { icon, key: str(d.note) ? "tl.k.marker.note" : "tl.k.marker", params: { actor: i.actor ?? "", note: str(d.note) } };
+    case "freeze":
+      return d.trigger === "auto"
+        ? { icon, key: "tl.k.freeze.auto", params: { reason: str(d.reason) } }
+        : { icon, key: str(d.note) ? "tl.k.freeze.note" : "tl.k.freeze", params: { actor: i.actor ?? "", minutes: str(d.minutes), note: str(d.note) } };
     case "orchestrator.started":
       return { icon, key: "tl.k.orchestrator.started", params: { version: str(d.version) } };
   }

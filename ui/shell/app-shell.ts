@@ -24,6 +24,7 @@ import "./admin-view.ts";
 import { apiFetch, type ConnectionChangeDetail, type ConnectionState, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
 import { showToast } from "../kit/omp-toast.ts";
+import { freezeNow } from "./freeze.ts";
 import { getLang, type I18nKey, t, t as tt } from "./i18n.ts";
 import { ensureBundle, getModules } from "./modules-registry.ts";
 import { insertIndex, mainTabs } from "./modules-logic.ts";
@@ -211,8 +212,10 @@ class AppShell extends HTMLElement {
     render();
     window.setInterval(render, 30_000);
     this.#contentEl.before(bar);
-    const marker = this.querySelector<HTMLElement>('[data-role="timeline-marker"]');
-    if (marker) marker.style.display = "none";
+    for (const role of ["timeline-marker", "freeze-button"]) {
+      const el = this.querySelector<HTMLElement>(`[data-role="${role}"]`);
+      if (el) el.style.display = "none";
+    }
   }
 
   async #loadAdminTab() {
@@ -374,7 +377,20 @@ class AppShell extends HTMLElement {
         showToast(t("tl.markFailed", { error: String((e as Error).message ?? e) }), { variant: "error" });
       }
     });
-    right.append(mark, deck.button);
+    // Einfrieren (Kap. 72.10): die letzten Minuten als Paket sichern, bevor Ringpuffer und Aufbewahrung sie überschreiben.
+    const freezeBtn = document.createElement("button");
+    freezeBtn.setAttribute("data-role", "freeze-button");
+    freezeBtn.textContent = t("fr.button");
+    freezeBtn.title = t("fr.button.title");
+    freezeBtn.style.cssText = mark.style.cssText;
+    freezeBtn.addEventListener("click", async () => {
+      freezeBtn.disabled = true;
+      freezeBtn.textContent = "❄ …";
+      await freezeNow(10);
+      freezeBtn.textContent = t("fr.button");
+      window.setTimeout(() => (freezeBtn.disabled = false), 3000);
+    });
+    right.append(mark, freezeBtn, deck.button);
 
     bar.append(left, right);
 

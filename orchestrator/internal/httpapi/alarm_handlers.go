@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/freeze"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/kpi"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profile"
@@ -50,6 +51,8 @@ type handlerOptions struct {
 	hostSysinfo     HostSysinfoFunc
 	timeline        *timeline.Sources
 	supportAccess   SupportAccessStore
+	freezer         *freeze.Freezer
+	freezeStore     *freeze.Store
 	uiIsolation     *UIIsolation
 	profileName     string
 	profileFindings []profile.Finding

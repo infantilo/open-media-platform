@@ -1,6 +1,7 @@
 // Node-Diagnose an der Kachel (UMSETZUNG.md Kap. 72.7): „Was ist mit diesem Node los?“ in einem Fenster — Ampel mit „Was tun?“,
 // Prozess und Medien, die Pipeline als Bild (wo stockt der Fluss?), Ereignisse und Meldungen dieses einen Nodes.
 import { apiFetch } from "../shell/connection.ts";
+import { freezeNow } from "../shell/freeze.ts";
 import { codeBadge, type ErrorCode, helpDetails, loadErrorCodes, lookup } from "../shell/errorcodes.ts";
 import { t } from "../shell/i18n.ts";
 import { describeItem, type TLItem } from "../shell/timeline-logic.ts";
@@ -127,7 +128,15 @@ export function openNodeDiagnosis(nodeId: string, label: string): void {
   again.className = "omp-btn";
   const close = el("button", "", t("nd.close"));
   close.className = "omp-btn";
-  head.append(lamp, titles, again, close);
+  const freezeBtn = el("button", "", t("fr.node"));
+  freezeBtn.className = "omp-btn";
+  freezeBtn.title = t("fr.node.title");
+  freezeBtn.addEventListener("click", async () => {
+    freezeBtn.disabled = true;
+    await freezeNow(10, "", [nodeId]);
+    window.setTimeout(() => (freezeBtn.disabled = false), 3000);
+  });
+  head.append(lamp, titles, freezeBtn, again, close);
   const body = el("div", "padding:8px 16px 16px;overflow:auto;");
   dlg.append(head, body);
   root.append(backdrop, dlg);

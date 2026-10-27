@@ -90,3 +90,11 @@ Deno.test("timelineUrl", () => {
   assertEquals(u.includes("operate=1"), true);
   assertEquals(timelineUrl(T0, T0 + 1000, false).includes("operate"), false);
 });
+
+Deno.test("describeItem: Einfrieren von Hand und automatisch", () => {
+  const manual = describeItem(ev("freeze", 0, { actor: "anna", data: { trigger: "manual", minutes: 10, note: "" } }), res, tr, au);
+  assertEquals([manual.key, manual.params?.minutes, manual.icon], ["tl.k.freeze", "10", "❄"]);
+  assertEquals(describeItem(ev("freeze", 0, { actor: "anna", data: { trigger: "manual", minutes: 5, note: "Bild weg" } }), res, tr, au).key, "tl.k.freeze.note");
+  const auto = describeItem(ev("freeze", 0, { data: { trigger: "auto", reason: "instance.crashed: Kamera 2", minutes: 10 } }), res, tr, au);
+  assertEquals([auto.key, auto.params?.reason], ["tl.k.freeze.auto", "instance.crashed: Kamera 2"]);
+});

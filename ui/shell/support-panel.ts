@@ -4,9 +4,13 @@
 import { t } from "./i18n.ts";
 import { apiFetch } from "./connection.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
+import { freezeNow } from "./freeze.ts";
 import { codeBadge, type ErrorCode, helpDetails, loadErrorCodes, lookup } from "./errorcodes.ts";
 import {
   ACCESS_DURATIONS,
+  type FreezeMeta,
+  formatSize,
+  freezeUrl,
   accessLink,
   BUNDLE_WINDOWS,
   bundleFileName,
@@ -42,6 +46,7 @@ export class SupportPanel {
   #seq = 0;
   #busy = false;
   #grants = el("div");
+  #freezes = el("div");
   #newLink = el("div");
   #codes: ErrorCode[] = [];
   #last: SelftestReport | null = null;
@@ -60,8 +65,9 @@ export class SupportPanel {
     again.addEventListener("click", () => void this.refresh());
     head.append(this.#lamp, text, again);
 
-    this.el.append(title, hint, head, this.#list, this.#bundleCard(), this.#accessCard());
+    this.el.append(title, hint, head, this.#list, this.#bundleCard(), this.#freezeCard(), this.#accessCard());
     void this.#loadGrants();
+    void this.#loadFreezes();
     void loadErrorCodes().then((c) => {
       this.#codes = c;
       if (this.#last) this.#render(this.#last);
@@ -280,6 +286,70 @@ export class SupportPanel {
         row.append(revoke);
       }
       this.#grants.append(row);
+    }
+  }
+
+  // ---- Eingefrorene Momentaufnahmen (Kap. 72.10) -----------------------------------------------------------------------
+
+  #freezeCard(): HTMLElement {
+    const card = el("div", CARD);
+    card.append(el("div", "font-weight:600;", t("fr.card.title")), el("div", DIM + "margin:4px 0 8px;", t("fr.card.text")));
+    const row = el("div", "display:flex;gap:8px;align-items:center;flex-wrap:wrap;");
+    const note = el("input", "min-width:220px;");
+    note.type = "text";
+    note.maxLength = 200;
+    note.placeholder = t("fr.note");
+    const btn = el("button", "", t("fr.now"));
+    btn.className = "omp-btn omp-btn-primary";
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      if (await freezeNow(10, note.value)) note.value = "";
+      btn.disabled = false;
+      void this.#loadFreezes();
+    });
+    row.append(note, btn);
+    card.append(row, this.#freezes);
+    return card;
+  }
+
+  async #loadFreezes() {
+    try {
+      const res = await apiFetch("/api/v1/freezes");
+      if (!res.ok) return;
+      this.#renderFreezes((await res.json()) as FreezeMeta[]);
+    } catch { /* Anzeige bleibt leer */ }
+  }
+
+  #renderFreezes(list: FreezeMeta[]) {
+    this.#freezes.replaceChildren();
+    this.#freezes.style.cssText = "margin-top:10px;";
+    if (list.length === 0) {
+      this.#freezes.append(el("div", DIM, t("fr.none")));
+      return;
+    }
+    for (const m of list) {
+      const row = el("div", "display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;padding:4px 0;border-top:1px solid var(--omp-border);");
+      row.setAttribute("data-testid", "freeze-row");
+      row.append(el("span", "min-width:150px;", new Date(m.createdAt).toLocaleString()));
+      row.append(el("span", `font-weight:600;color:${m.trigger === "auto" ? "#e0a020" : "var(--omp-text)"};min-width:86px;`, t(`fr.trigger.${m.trigger}` as never)));
+      const what = [m.trigger === "auto" ? m.reason : m.createdBy, m.note].filter(Boolean).join(" — ");
+      row.append(el("span", "flex:1;" + DIM, `${t("fr.window", { min: m.windowMinutes })}${what ? " · " + what : ""} · ${formatSize(m.sizeBytes)}`));
+      const dl = el("a", "", t("fr.download"));
+      dl.className = "omp-btn";
+      // Ein Link mit Knopf-Aussehen: ohne eigene Farben wäre er dunkelblau auf dunklem Grund.
+      dl.style.cssText = "text-decoration:none;color:var(--omp-text);padding:4px 10px;border:1px solid var(--omp-border);border-radius:var(--omp-radius);background:var(--omp-surface-raised);cursor:pointer;";
+      dl.href = freezeUrl(m.id);
+      dl.setAttribute("download", "");
+      row.append(dl);
+      const del = el("button", "", t("fr.delete"));
+      del.className = "omp-btn";
+      del.addEventListener("click", async () => {
+        if (!(await confirmDialog(t("fr.deleteConfirm"), { confirmLabel: t("fr.deleteLabel") }))) return;
+        await apiFetch(`/api/v1/freezes/${encodeURIComponent(m.id)}`, { method: "DELETE" });
+        void this.#loadFreezes();
+      });
+      row.append(del);
+      this.#freezes.append(row);
     }
   }
 }
