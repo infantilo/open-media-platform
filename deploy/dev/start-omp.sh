@@ -139,6 +139,15 @@ else
   ( cd "$ROOT_DIR/orchestrator" && go build -o "$BIN" . )
 fi
 
+# Uhr (Audit M1): Orchestrator und Host-Agent stellen TAI-Versatz und Zeit selbst, wenn kein Zeitdienst läuft — das braucht CAP_SYS_TIME auf der
+# Programmdatei (nur dort, nicht an Nodes vererbt). Nach jedem Neubau verloren, daher hier. Ohne sudo ohne Passwort bleibt es bei der Meldung im Log.
+SETCAP="$(command -v setcap || ls /usr/sbin/setcap /sbin/setcap 2>/dev/null | head -1)"
+if [ -n "$SETCAP" ] && [ "${OMP_CLOCK_DISCIPLINE:-auto}" != "off" ]; then
+  for b in "$BIN" "$ROOT_DIR/bin/omp-host-agent"; do
+    [ -f "$b" ] && sudo -n "$SETCAP" cap_sys_time+ep "$b" 2>/dev/null && echo "==> CAP_SYS_TIME für $(basename "$b")"
+  done
+fi
+
 echo "==> Orchestrator starten"
 # Absolute Pfade statt cd+relativer Defaults (orchestrator/internal/config/
 # config.go: OMP_UI_DIR=../ui etc. sind relativ zum cwd gedacht) — so kann
