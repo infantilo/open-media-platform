@@ -16,8 +16,8 @@ Wants=network-online.target
 
 [Service]
 # Uhr (Audit M1): Host-Agent/Orchestrator setzen TAI-Versatz und stellen die Uhr selbst, wenn kein Zeitdienst (chrony) läuft. Das braucht CAP_SYS_TIME.
-# Bevorzugt nur für die Programmdatei: sudo setcap cap_sys_time+ep @ROOT@/bin/omp-orchestrator  (nach jedem Neubau wiederholen). AmbientCapabilities=CAP_SYS_TIME
-# würde auch an alle Nodes vererbt. Abschalten: OMP_CLOCK_DISCIPLINE=off; Server: OMP_CLOCK_NTP_SERVERS (Standard pool.ntp.org).
+# NICHT per setcap auf die Programmdatei: das schaltet den sicheren Ausführungsmodus ein, LD_LIBRARY_PATH geht verloren und alle gestarteten Nodes finden libmxl.so nicht mehr.
+# Empfohlen: chrony/systemd-timesyncd. Sonst AmbientCapabilities=CAP_SYS_TIME (wird an alle Nodes vererbt). Abschalten: OMP_CLOCK_DISCIPLINE=off; Server: OMP_CLOCK_NTP_SERVERS (Standard pool.ntp.org).
 Type=oneshot
 RemainAfterExit=yes
 User=@USER@
