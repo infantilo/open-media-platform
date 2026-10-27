@@ -5857,3 +5857,14 @@ Die Zuteilung (Teilnehmer × Kanäle) war eine einzige Tabelle mit zwei Knöpfen
 - **Rust-CI:** der erste Lauf kompilierte und lief durch bis auf drei Tests (`audiomixmatrix` fehlt → `gstreamer1.0-plugins-bad` installiert; die echte Fabrics-Übertragung braucht libfabric → übersprungen). Job bleibt `continue-on-error`, bis ein Lauf grün ist.
 
 **Offen aus dem Audit:** B4, B5 (nur mit mehreren Hosts), H1-Rest, H6, M5–M7, M12.
+
+## Kapitel 66: Audit 2026-10-23 — B4/B5 Produktionsprofil (Nutzerauftrag 2026-10-27, **umgesetzt, geprüft; die Infrastruktur dahinter bleibt Aufgabe der Installation**)
+
+Der Produktions-Deployment war der Dev-Stack (Datenbank mit Dev-Passwort, NATS ohne TLS und Anmeldung, Zwei-Knoten-Raft, Infrastruktur auf einem Rechner) und niemand merkte es. `internal/profile` prüft die Konfiguration beim Start:
+- **Entwicklungsprofil (Standard):** ein Warn-Eintrag im Log mit der Zahl der Befunde, Details unter `GET /api/v1/admin/profile` (Administrator).
+- **`OMP_PROFILE=production`:** der Orchestrator **startet nicht**, solange ein kritischer Befund offen ist; bewusst Akzeptiertes steht in `OMP_PROFILE_ACCEPT` (Komma-Liste der Befund-IDs).
+- **Kritisch:** `postgres-default-credentials` (Passwort leer, gleich Benutzername, `omp`, `postgres`, `password`), `nats-plain` (NATS ohne TLS), `jwt-secret-weak` (< 32 Zeichen aus der Umgebung), `bootstrap-open`, `update-unsigned`, `cluster-quorum` (genau zwei Raft-Knoten: bei Ausfall eines Knotens kein Quorum). **Warnungen:** `cluster-single`, `node-mtls-off`, `registry-plain`, `metrics-open`, `backup-no-keys`, `backup-same-machine`.
+- **Geprüft:** Unit-Tests (gehärtete Konfiguration ohne Befund, Dev-Stack mit Befunden, Passwortregeln, Clustergröße, Durchsetzung/Akzeptanz); echter Start mit `OMP_PROFILE=production` gegen die Dev-Konfiguration wird mit der Befundliste verweigert; Dev-Start läuft.
+- **Grenze (B4/B5 bleiben als Aufgabe der Installation):** die Prüfung **findet** das Problem, sie behebt es nicht — Patroni-Knoten auf getrennten Rechnern mit Volumes und eigenen Passwörtern, ein dritter Raft-Knoten (Zeuge) auf einem eigenen Rechner und die drei Fehlerdomänen lassen sich nicht aus dem Code erzwingen; dafür stand kein Mehr-Rechner-Aufbau mehr zur Verfügung (.60/.61 entfallen). Das Zeugen-Verfahren selbst (leichter Raft-Knoten ohne Medienlast) ist nicht gebaut.
+
+**Offen aus dem Audit:** B4/B5 (Infrastruktur, s. o.), H1-Rest (Registry offen, Node-JS im Orchestrator-Ursprung), H6, M5–M7, M12.

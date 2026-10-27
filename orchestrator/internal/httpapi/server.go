@@ -553,6 +553,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// /register bewusst außerhalb von authGate — s. handleRegisterHost.
 	mux.HandleFunc("POST /api/v1/admin/hosts/bootstrap-tokens", g.requireVerbGlobal(authz.VerbAdmin, handleCreateBootstrapToken(hostRegistry)))
 	mux.HandleFunc("DELETE /api/v1/admin/hosts/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteHost(hostRegistry, hostMetrics, events)))
+	mux.HandleFunc("GET /api/v1/admin/profile", g.requireVerbGlobal(authz.VerbAdmin, handleProfile(options.profileName, options.profileFindings)))
 	mux.HandleFunc("POST /api/v1/admin/hosts/{id}/rotate-key", g.requireVerbGlobal(authz.VerbAdmin, handleRotateHostKey(options.hostKeyRotator, options.domainAudit)))
 	mux.HandleFunc("POST /api/v1/admin/hosts/{id}/maintenance", g.requireVerbGlobal(authz.VerbAdmin, handleSetMaintenance(hostRegistry, options.maintenance, true)))
 	mux.HandleFunc("DELETE /api/v1/admin/hosts/{id}/maintenance", g.requireVerbGlobal(authz.VerbAdmin, handleSetMaintenance(hostRegistry, options.maintenance, false)))

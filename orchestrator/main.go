@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/infantilo/openmediaplatform/jobwire/clocksync"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/profile"
 	"log/slog"
 	"net"
 	"net/http"
@@ -287,6 +288,25 @@ func main() {
 	go clocksync.Run(context.Background(), clocksync.ConfigFromEnv())
 
 	cfg := config.Load()
+
+	// Audit 2026-10-23 B4/B5: Produktionsprofil. OMP_PROFILE=production verweigert den Start bei offenen kritischen Befunden
+	// (bewusst Akzeptiertes in OMP_PROFILE_ACCEPT); sonst werden sie nur gemeldet und unter GET /api/v1/admin/profile angeboten.
+	profileFindings := profile.Evaluate(profile.Inputs{
+		PostgresURL: cfg.PostgresURL, NatsURL: cfg.NatsURL, NatsTLS: cfg.NatsTLSEnabled, RegistryTLS: cfg.RegistryTLSEnabled, NodeMTLS: cfg.MTLSEnabled,
+		JWTSecret: cfg.JWTSecret, BootstrapOpen: cfg.BootstrapOpen, UpdateAllowUnsigned: cfg.UpdateAllowUnsigned, BackupPassphrase: cfg.BackupPassphrase,
+		BackupCopyDir: cfg.BackupCopyDir, MetricsToken: cfg.MetricsToken, ClusterPeers: cfg.ClusterPeers,
+	})
+	profileName := os.Getenv("OMP_PROFILE")
+	if profileName == "" {
+		profileName = "dev"
+	}
+	if err := profile.Enforce(profileName, profileFindings, profile.Accepted(os.Getenv("OMP_PROFILE_ACCEPT"))); err != nil {
+		slog.Error("orchestrator start refused", "error", err)
+		os.Exit(1)
+	}
+	if n := len(profileFindings); n > 0 {
+		slog.Warn("Konfiguration entspricht nicht dem Produktionsprofil", "profile", profileName, "findings", n, "details", "GET /api/v1/admin/profile", "enforce", "OMP_PROFILE=production")
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -1151,7 +1171,7 @@ func main() {
 	}
 	moduleDeps := module.Deps{Hooks: module.NewHooks(), DB: database, Audit: domainAuditStore, Settings: moduleSettings{nodeSettingsStore}, Access: moduleAccess{authzStore}, Actor: httpapi.ActorFromRequest,
 		Hosts: hostStore, HostMetrics: hostMetricsTracker, Instances: moduleInstances{launcherSvc}, Placement: placementEngine}
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithHostKeyRotation(func(id string) error {
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithHostKeyRotation(func(id string) error {
 		sg := hostSigner.Load()
 		if sg == nil {
 			return errors.New("no command channel")

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/profile"
 	"log/slog"
 	"net/http"
 	"time"
@@ -43,6 +44,8 @@ type handlerOptions struct {
 	locations       LocationStore
 	maintenance     MaintenanceService
 	hostKeyRotator  func(hostID string) error
+	profileName     string
+	profileFindings []profile.Finding
 	modules         *module.Registry
 	moduleHooks     *module.Hooks
 	moduleDeps      module.Deps

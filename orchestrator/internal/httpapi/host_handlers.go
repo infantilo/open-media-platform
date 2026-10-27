@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/infantilo/openmediaplatform/jobwire/clocksync"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/profile"
 	"io"
 	"log/slog"
 	"net/http"
@@ -445,6 +446,20 @@ func handleLocalHost(catalog CatalogReader) http.HandlerFunc {
 			}
 		}
 		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+// WithProfile stellt GET /api/v1/admin/profile bereit: Profilname und Befunde der Konfigurationsprüfung (internal/profile).
+func WithProfile(name string, findings []profile.Finding) HandlerOption {
+	return func(o *handlerOptions) { o.profileName, o.profileFindings = name, findings }
+}
+
+func handleProfile(name string, findings []profile.Finding) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if findings == nil {
+			findings = []profile.Finding{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"profile": name, "findings": findings})
 	}
 }
 
