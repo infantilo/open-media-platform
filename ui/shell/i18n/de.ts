@@ -1015,6 +1015,8 @@ export const de = {
   "flow.sd.emptyIs": "leer = {p0}",
   "flow.sd.emptyDefault": "leer = Standard des Nodes",
   "flow.sd.resolution": "Auflösung",
+  "flow.sd.resolutionHint": "Bildgröße in Pixeln. „Eigene Werte“ für andere Maße; Standard = Format des Workflows bzw. des Nodes.",
+  "flow.sd.rateHint": "Bilder pro Sekunde (29,97 und 59,94 sind 30000/1001 bzw. 60000/1001). „Eigene Werte“ für Zähler/Nenner.",
   "flow.sd.rate": "Bildrate",
   "flow.sd.presetDefault": "Standard (Format des Workflows bzw. des Nodes)",
   "flow.sd.presetCustom": "Eigene Werte …",

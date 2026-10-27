@@ -1016,6 +1016,8 @@ export const en: Record<keyof typeof de, string> = {
   "flow.sd.emptyIs": "empty = {p0}",
   "flow.sd.emptyDefault": "empty = node default",
   "flow.sd.resolution": "Resolution",
+  "flow.sd.resolutionHint": "Picture size in pixels. \"Custom values\" for other sizes; default = workflow or node format.",
+  "flow.sd.rateHint": "Frames per second (29.97 and 59.94 are 30000/1001 and 60000/1001). \"Custom values\" for numerator/denominator.",
   "flow.sd.rate": "Frame rate",
   "flow.sd.presetDefault": "Default (workflow or node format)",
   "flow.sd.presetCustom": "Custom values …",

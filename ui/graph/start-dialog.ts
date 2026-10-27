@@ -181,7 +181,7 @@ export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
           own.style.display = sel.value === "custom" ? "flex" : "none";
         };
         sel.addEventListener("change", apply);
-        const row = labelled(pair.kind === "resolution" ? t("flow.sd.resolution") : t("flow.sd.rate"), sel, d1.description ?? "");
+        const row = labelled(pair.kind === "resolution" ? t("flow.sd.resolution") : t("flow.sd.rate"), sel, pair.kind === "resolution" ? t("flow.sd.resolutionHint") : t("flow.sd.rateHint"));
         row.dataset.optionKey = pair.first;
         row.append(own);
         return row;
