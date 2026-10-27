@@ -212,6 +212,11 @@ fn build(
 ) -> Result<ActivePipeline, String> {
     let preview_fps = preview_fps_live.load(Ordering::Relaxed);
     let pipeline = gst::Pipeline::new();
+    // Zustand dieser Pipeline für die Node-Diagnose (GET /diag/pipelines, Kap. 72.7)
+    {
+        let diag_pipeline = pipeline.clone();
+        omp_node_sdk::diag::register("main", std::sync::Arc::new(move || omp_mediaio::diag::snapshot(&diag_pipeline)));
+    }
 
     let input = MxlVideoInput::new(&pipeline, context.clone(), flow_id)?;
     // "media-ready" (ARCHITECTURE.md §5 Punkt 6): Probe hinter dem

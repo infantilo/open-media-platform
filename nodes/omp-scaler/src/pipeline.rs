@@ -123,6 +123,11 @@ fn build(
     output_delay: Arc<AtomicU64>,
 ) -> Result<ActivePipeline, String> {
     let pipeline = gst::Pipeline::new();
+    // Zustand dieser Pipeline für die Node-Diagnose (GET /diag/pipelines, Kap. 72.7)
+    {
+        let diag_pipeline = pipeline.clone();
+        omp_node_sdk::diag::register("main", std::sync::Arc::new(move || omp_mediaio::diag::snapshot(&diag_pipeline)));
+    }
 
     let input = MxlVideoInput::new(&pipeline, context.clone(), source_flow_id)?;
 

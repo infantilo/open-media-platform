@@ -82,6 +82,11 @@ fn build(
     flowed: Arc<AtomicBool>,
 ) -> Result<ActivePipeline, String> {
     let pipeline = gst::Pipeline::new();
+    // Zustand dieser Pipeline für die Node-Diagnose (GET /diag/pipelines, Kap. 72.7)
+    {
+        let diag_pipeline = pipeline.clone();
+        omp_node_sdk::diag::register("main", std::sync::Arc::new(move || omp_mediaio::diag::snapshot(&diag_pipeline)));
+    }
 
     let input = MxlAudioInput::new(&pipeline, context.clone(), flow_id)?;
 

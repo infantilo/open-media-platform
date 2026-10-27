@@ -1155,6 +1155,18 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/nodes/{id}/diag/pipelines",
+    "auth": "node-verb:View",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/nodes/{id}/diagnosis",
+    "auth": "node-verb:View",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/nodes/{id}/https-info",
     "auth": "auth",
     "domain": "core"

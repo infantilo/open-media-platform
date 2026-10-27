@@ -574,6 +574,9 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 		mux.HandleFunc("GET /api/v1/timeline", g.requireVerbGlobal(authz.VerbAdmin, handleTimeline(options.timeline)))
 		mux.HandleFunc("POST /api/v1/timeline/marker", g.requireVerbGlobal(authz.VerbOperate, handlePostTimelineMarker(options.timeline, events)))
 	}
+	// Node-Diagnose (Kap. 72.7): alles zu einem Node an einem Ort; die Pipeline-Anfrage geht an den Node selbst.
+	mux.HandleFunc("GET /api/v1/nodes/{id}/diagnosis", g.requireVerbOnNode(authz.VerbView, handleNodeDiagnosis(mux, options.timeline)))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/diag/pipelines", g.requireVerbOnNode(authz.VerbView, handleNodeProxy(nodes, nodeClient, "/diag/pipelines", nodeLogs)))
 	hostSysCache := newSysCache(options.hostSysinfo, 20*time.Second)
 	// Selbsttest und Support-Paket (Kap. 72): sammeln über den eigenen Router mit den Rechten der aufrufenden Person.
 	mux.HandleFunc("GET /api/v1/admin/selftest", g.requireVerbGlobal(authz.VerbAdmin, handleSelftest(mux, cfg.ClusterDataDir, clusterSvc, hostSysCache)))

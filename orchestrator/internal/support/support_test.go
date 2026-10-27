@@ -3,6 +3,7 @@ package support
 import (
 	"archive/zip"
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -155,5 +156,111 @@ func TestEvaluateHostMachineChecks(t *testing.T) {
 	}
 	if m := find(r, "host:h1:memory"); m == nil || m.Level != LevelOK {
 		t.Fatalf("Speicher des Hosts: %+v", m)
+	}
+}
+
+func nodeLevels(cs []Check) map[string]Level {
+	m := map[string]Level{}
+	for _, c := range cs {
+		m[c.ID] = c.Level
+	}
+	return m
+}
+
+func TestEvaluateNodeHealthyAndBroken(t *testing.T) {
+	cpu := 30.0
+	ok := EvaluateNode(NodeFacts{Label: "Quelle", Known: true, Online: true,
+		Instance:  &InstanceFacts{CPUPercent: &cpu},
+		Process:   &ProcessFacts{Threads: 20, OpenFDs: 40, FDLimit: 1024, RSSBytes: 100 << 20, HostMemory: 8 << 30},
+		Media:     &MediaFacts{Ready: true, EverReady: true, ObservedSecs: 100, VideoFPS: &Rate{Last: 25, Avg: 25}},
+		Pipelines: []PipelineFacts{{Name: "main", State: "Playing", Elements: []ElementFacts{{Name: "q", Factory: "queue", State: "Playing", Level: &QueueLevel{Buffers: 1, MaxBuffers: 200}}}}},
+	}, "")
+	for _, c := range ok {
+		if c.Level != LevelOK {
+			t.Errorf("gesund, aber %+v", c)
+		}
+	}
+
+	hot := 99.0
+	bad := EvaluateNode(NodeFacts{Label: "Mixer", Known: true, Online: true,
+		Instance: &InstanceFacts{Crashed: true, CrashMessage: "signal: killed", RestartCount: 6, Outdated: true, CPUPercent: &hot},
+		Process:  &ProcessFacts{Threads: 900, OpenFDs: 1000, FDLimit: 1024, RSSBytes: 5 << 30, HostMemory: 8 << 30},
+		Media:    &MediaFacts{Ready: false, EverReady: true, ObservedSecs: 100},
+		Pipelines: []PipelineFacts{{Name: "main", State: "Playing", Elements: []ElementFacts{
+			{Name: "enc", State: "Paused"}, {Name: "q", Factory: "queue", State: "Playing", Level: &QueueLevel{Buffers: 200, MaxBuffers: 200}}}}},
+		RecentErrors: 4,
+	}, "")
+	lv := nodeLevels(bad)
+	for _, id := range []string{"crashed", "fds", "media", "pipeline-elements:main", "pipeline-queues:main", "cpu", "memory", "threads", "outdated", "errors"} {
+		if _, ok := lv[id]; !ok {
+			t.Errorf("Befund %s fehlt: %v", id, lv)
+		}
+	}
+	if lv["crashed"] != LevelErr || lv["fds"] != LevelErr || lv["media"] != LevelErr || lv["pipeline-queues:main"] != LevelWarn {
+		t.Errorf("Stufen: %v", lv)
+	}
+	for _, c := range bad {
+		if c.Level != LevelOK && c.Fix == "" && c.ID != "errors" {
+			t.Errorf("Befund ohne „Was tun?“: %+v", c)
+		}
+	}
+	// Fehler stehen vor Hinweisen vor „in Ordnung“
+	last := 0
+	for _, c := range bad {
+		if rank(c.Level) < last {
+			t.Fatalf("nicht sortiert: %v", bad)
+		}
+		last = rank(c.Level)
+	}
+}
+
+func TestEvaluateNodeOfflineNeverReadyAndPipelineState(t *testing.T) {
+	off := nodeLevels(EvaluateNode(NodeFacts{Label: "X", Known: true, Online: false}, ""))
+	if off["online"] != LevelErr {
+		t.Fatalf("%v", off)
+	}
+	unknown := nodeLevels(EvaluateNode(NodeFacts{Label: "X"}, "en"))
+	if unknown["registry"] != LevelErr {
+		t.Fatalf("%v", unknown)
+	}
+	// nie bereit gewesen: nur Hinweis (manche Typen melden keine Bereitschaft)
+	nr := nodeLevels(EvaluateNode(NodeFacts{Label: "X", Known: true, Online: true, Media: &MediaFacts{Ready: false, ObservedSecs: 60}}, ""))
+	if nr["media"] != LevelWarn {
+		t.Fatalf("%v", nr)
+	}
+	// zu kurz beobachtet: noch kein Befund gegen den Node
+	young := nodeLevels(EvaluateNode(NodeFacts{Label: "X", Known: true, Online: true, Media: &MediaFacts{Ready: false, ObservedSecs: 3}}, ""))
+	if young["media"] != LevelOK {
+		t.Fatalf("%v", young)
+	}
+	pl := nodeLevels(EvaluateNode(NodeFacts{Label: "X", Known: true, Online: true, Pipelines: []PipelineFacts{{Name: "main", State: "Paused"}}}, ""))
+	if pl["pipeline:main"] != LevelWarn {
+		t.Fatalf("%v", pl)
+	}
+	// Bildrate: Einbruch und Stillstand
+	fps := func(last, avg float64) Level {
+		return nodeLevels(EvaluateNode(NodeFacts{Label: "X", Known: true, Online: true, Media: &MediaFacts{Ready: true, EverReady: true, ObservedSecs: 100, VideoFPS: &Rate{Last: last, Avg: avg}}}, ""))["fps"]
+	}
+	if fps(25, 25) != LevelOK || fps(18, 25) != LevelWarn || fps(0, 25) != LevelErr {
+		t.Errorf("fps: %v %v %v", fps(25, 25), fps(18, 25), fps(0, 25))
+	}
+}
+
+func TestReadProcessOwn(t *testing.T) {
+	p, err := ReadProcess(os.Getpid())
+	if err != nil || p.Threads < 1 || p.OpenFDs < 3 || p.RSSBytes == 0 || p.HostMemory == 0 {
+		t.Fatalf("%+v %v", p, err)
+	}
+	if _, err := ReadProcess(1 << 30); err == nil {
+		t.Fatal("unbekannter Prozess muss einen Fehler liefern")
+	}
+}
+
+func TestSummary(t *testing.T) {
+	if l, s := Summary(nil, ""); l != LevelOK || s != "Alles in Ordnung" {
+		t.Fatal(l, s)
+	}
+	if l, _ := Summary([]Check{{Level: LevelWarn}, {Level: LevelErr}}, "en"); l != LevelErr {
+		t.Fatal(l)
 	}
 }

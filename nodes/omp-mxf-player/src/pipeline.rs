@@ -1223,6 +1223,11 @@ fn apply_active(active: &ActivePipeline, slot: Slot) {
 
 fn build(context: &Arc<MxlContext>, config: &Config, _event_tx: UnboundedSender<Event>) -> Result<ActivePipeline, String> {
     let pipeline = gst::Pipeline::new();
+    // Zustand dieser Pipeline für die Node-Diagnose (GET /diag/pipelines, Kap. 72.7)
+    {
+        let diag_pipeline = pipeline.clone();
+        omp_node_sdk::diag::register("main", std::sync::Arc::new(move || omp_mediaio::diag::snapshot(&diag_pipeline)));
+    }
 
     // `sync-streams: true` (Default, hier explizit — Root-Cause-Fix
     // 2026-09-03, s. docs/decisions.md): mit `false` (Zustand seit dem

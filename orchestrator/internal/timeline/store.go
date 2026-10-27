@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log/slog"
+	"strconv"
 	"time"
 )
 
@@ -79,6 +80,40 @@ type Row struct {
 func (s *Store) Query(since, until time.Time, limit int) ([]Row, error) {
 	rows, err := s.db.Query(`SELECT id, occurred_at, kind, severity, subject, actor, data FROM timeline_events
 		WHERE occurred_at >= $1 AND occurred_at < $2 ORDER BY occurred_at DESC, id DESC LIMIT $3`, since.UTC(), until.UTC(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var r Row
+		var data []byte
+		if err := rows.Scan(&r.ID, &r.At, &r.Kind, &r.Severity, &r.Subject, &r.Actor, &data); err != nil {
+			return nil, err
+		}
+		r.Data = data
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// QuerySubjects liefert die neuesten Zeilen im Fenster zu bestimmten Gegenständen (Instanz-/Node-/Host-IDs), neueste zuerst.
+func (s *Store) QuerySubjects(since, until time.Time, subjects []string, limit int) ([]Row, error) {
+	if len(subjects) == 0 {
+		return nil, nil
+	}
+	q := `SELECT id, occurred_at, kind, severity, subject, actor, data FROM timeline_events WHERE occurred_at >= $1 AND occurred_at < $2 AND subject IN (`
+	args := []any{since.UTC(), until.UTC()}
+	for i, sub := range subjects {
+		if i > 0 {
+			q += ","
+		}
+		args = append(args, sub)
+		q += "$" + strconv.Itoa(len(args))
+	}
+	args = append(args, limit)
+	q += `) ORDER BY occurred_at DESC, id DESC LIMIT $` + strconv.Itoa(len(args))
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}

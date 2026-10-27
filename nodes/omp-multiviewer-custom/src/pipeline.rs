@@ -424,6 +424,11 @@ fn build_tile(
 
 fn build(config: &Config, context: &Arc<MxlContext>, broadcaster: &Arc<Broadcaster>, layout: &Layout) -> Result<ActivePipeline, String> {
     let pipeline = gst::Pipeline::new();
+    // Zustand dieser Pipeline für die Node-Diagnose (GET /diag/pipelines, Kap. 72.7)
+    {
+        let diag_pipeline = pipeline.clone();
+        omp_node_sdk::diag::register("main", std::sync::Arc::new(move || omp_mediaio::diag::snapshot(&diag_pipeline)));
+    }
 
     let comp = gst::ElementFactory::make("compositor")
         .name("grid")

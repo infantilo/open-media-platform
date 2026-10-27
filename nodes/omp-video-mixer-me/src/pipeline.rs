@@ -2003,6 +2003,11 @@ fn build(
 ) -> Result<(ActivePipeline, Vec<String>), String> {
     let level_count = config.flow_ids.len();
     let pipeline = gst::Pipeline::new();
+    // Zustand dieser Pipeline für die Node-Diagnose (GET /diag/pipelines, Kap. 72.7)
+    {
+        let diag_pipeline = pipeline.clone();
+        omp_node_sdk::diag::register("main", std::sync::Arc::new(move || omp_mediaio::diag::snapshot(&diag_pipeline)));
+    }
 
     // ── Ein (isel, isel_bg)-Paar je Ebene, VOR den Eingängen gebaut —
     //    `build_one_input` unten braucht sie alle gleichzeitig, um jeden

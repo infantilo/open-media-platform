@@ -1048,6 +1048,28 @@ untereinander):
   Zeitleiste — der Support findet später genau diese Minute. Ein Doppelklick
   zählt einmal. Lesen der Zeitleiste verlangt das Admin-Recht, der Marker
   das Bedienrecht (`GET /api/v1/timeline`, `POST /api/v1/timeline/marker`).
+- **Diagnose an der Kachel (🩺)** — „Was ist mit diesem Node los?“ Der
+  Knopf **🩺** im Kopf jeder Node-Kachel im Flow Editor (oder ein
+  **Rechtsklick** auf die Kachel) öffnet ein Fenster nur für diesen einen
+  Node: oben die **Ampel** mit einem Satz, darunter die **Befunde** mit
+  **„Was tun?“** (Node meldet sich nicht, Prozess abgestürzt, automatisch
+  neu gestartet, läuft mit alter Version, liefert kein Bild/keine Bilder
+  mehr, Bildrate eingebrochen, Prozessor voll ausgelastet, viel Speicher,
+  fast alle erlaubten Dateien offen, Fehlermeldungen der letzten 15
+  Minuten). Dann **Prozess und Medien** (Neustarts, Prozessor, Speicher,
+  Threads, offene Dateien, Bild und Ton, Bilder pro Sekunde) und die
+  **Pipeline als Bild**: von der Quelle (links) zum Ausgang (rechts) jeder
+  Baustein mit Zustand; **rot umrandet** = Baustein im falschen Zustand,
+  **gelb** = Puffer voll (der Baustein dahinter nimmt zu langsam ab), ein
+  Balken zeigt den Füllstand; ein Zeiger auf eine Verbindung zeigt das
+  ausgehandelte Format. Zum Schluss die **Ereignisse** (Abstürze,
+  Neustarts, Bedienungen an diesem Node, 24 Stunden) und die **Meldungen**
+  (Fehler und Warnungen). Das Fenster aktualisiert sich alle 8 Sekunden;
+  Scrollstand und aufgeklappte Bereiche bleiben dabei erhalten. Die
+  Pipeline melden die Nodes mit GStreamer-Pipeline (Quelle, Switcher,
+  Viewer, Mischer, Player, Audio-Monitor, Multiviewer, Recorder, Scaler);
+  andere Typen zeigen dort eine Erklärung statt eines Bildes. Das Fenster
+  verlangt das Recht, den Node zu sehen (`GET /api/v1/nodes/{id}/diagnosis`).
 - **Backup/Restore** — „Backup jetzt erstellen“ erstellt sofort einen
   Download; Restore verlangt, den gewählten Dateinamen exakt
   einzutippen (Bestätigung), ersetzt danach den kompletten

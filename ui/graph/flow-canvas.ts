@@ -70,6 +70,7 @@ import { isAnchorRole, renameRole } from "./role-designer-logic.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 import { openStartDialog } from "./start-dialog.ts";
 import type { StartBody } from "./start-dialog-logic.ts";
+import { openNodeDiagnosis } from "./node-diagnose-dialog.ts";
 import { openPortTagEditor } from "./port-tag-editor.ts";
 import {
   bcp008ParamNames,
@@ -3934,7 +3935,9 @@ export class FlowCanvas extends HTMLElement {
     // Host-Umzug per Knopf statt Kontextmenü (nur eigenständige Instanz-Kacheln in der Host-Ansicht).
     const hasMigrateButton = !isGroup && !!tile.instanceId && this.#hostViewEnabled && this.#scope === null;
     // Zeichenbudget je Zeile: Kachelbreite minus Ränder minus die Knöpfe rechts (je ≈ 18 px).
-    const buttonsWidth = (hasStopButton ? 18 : 0) + (hasTagButton ? 18 : 0) + (hasMigrateButton ? 18 : 0);
+    // Diagnose (🩺, Kap. 72.7): an jeder Node-Kachel, nicht an Gruppen.
+    const hasDiagButton = !isGroup;
+    const buttonsWidth = (hasStopButton ? 18 : 0) + (hasTagButton ? 18 : 0) + (hasMigrateButton ? 18 : 0) + (hasDiagButton ? 18 : 0);
     const title = this.#createTitle(fullLabel, (NODE_WIDTH - 16 - buttonsWidth) / TITLE_CHAR_WIDTH);
     g.appendChild(title);
 
@@ -3982,6 +3985,32 @@ export class FlowCanvas extends HTMLElement {
         void openPortTagEditor({ x: ev.clientX, y: ev.clientY }, targets, (m) => this.#showToast(m));
       });
       g.appendChild(tagBtn);
+    }
+
+    // Diagnose (🩺): was ist mit diesem Node los — Befunde mit „Was tun?“, Pipeline, Ereignisse, Meldungen. Rechtsklick auf die Kachel öffnet sie ebenfalls.
+    if (hasDiagButton) {
+      const diagBtn = document.createElementNS(SVG_NS, "text");
+      diagBtn.setAttribute("x", String(NODE_WIDTH - (hasStopButton ? 26 : 8) - (hasMigrateButton ? 18 : 0) - (hasTagButton ? 18 : 0)));
+      diagBtn.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
+      diagBtn.setAttribute("text-anchor", "end");
+      diagBtn.setAttribute("font-size", "12");
+      diagBtn.style.cursor = "pointer";
+      diagBtn.setAttribute("data-role", "node-diagnosis");
+      diagBtn.textContent = "🩺";
+      const diagTitle = document.createElementNS(SVG_NS, "title");
+      diagTitle.textContent = tt("nd.button");
+      diagBtn.appendChild(diagTitle);
+      diagBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+      diagBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        openNodeDiagnosis(tile.id, tile.label);
+      });
+      g.appendChild(diagBtn);
+      g.addEventListener("contextmenu", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        openNodeDiagnosis(tile.id, tile.label);
+      });
     }
 
     // Stop-Control (UMSETZUNG.md C8): nur an Kacheln, deren Node einen

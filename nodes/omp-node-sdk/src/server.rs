@@ -253,6 +253,10 @@ fn route_with_headers(method: &Method, url: &str, headers: &[(String, String)], 
     if let Some(denied) = gate(crate::nodeauth::token(), method, url, headers, store) {
         return denied;
     }
+    // Zustand der angemeldeten Medien-Pipelines (Support, Kap. 72.7); hinter derselben Zugangsprüfung wie alles andere.
+    if *method == Method::Get && url == "/diag/pipelines" {
+        return json_response(200, &crate::diag::snapshot());
+    }
     if *method == Method::Get && url == "/https-info" {
         return json_response(200, &crate::https::info_json());
     }

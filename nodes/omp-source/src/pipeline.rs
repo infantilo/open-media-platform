@@ -123,6 +123,16 @@ impl Pipeline {
 
         let pipeline = gst::Pipeline::new();
 
+        // Zustand dieser Pipeline für die Node-Diagnose (GET /diag/pipelines, Kap. 72.7)
+
+        {
+
+            let diag_pipeline = pipeline.clone();
+
+            omp_node_sdk::diag::register("main", std::sync::Arc::new(move || omp_mediaio::diag::snapshot(&diag_pipeline)));
+
+        }
+
         let videotestsrc = gst::ElementFactory::make("videotestsrc")
             .name("videotestsrc")
             .property("is-live", true)

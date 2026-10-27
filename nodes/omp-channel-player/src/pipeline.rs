@@ -746,6 +746,11 @@ fn query_duration_ms(el: &gst::Element) -> Option<i64> {
 fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::sync::mpsc::Sender<LoopEvent>, plan_slot: Arc<Mutex<Option<AudioPlan>>>) -> Result<ActivePipeline, String> {
     let context = Arc::new(MxlContext::new_synced(&config.domain)?);
     let pipeline = gst::Pipeline::new();
+    // Zustand dieser Pipeline für die Node-Diagnose (GET /diag/pipelines, Kap. 72.7)
+    {
+        let diag_pipeline = pipeline.clone();
+        omp_node_sdk::diag::register("main", std::sync::Arc::new(move || omp_mediaio::diag::snapshot(&diag_pipeline)));
+    }
 
     *plan_slot.lock().expect("lock poisoned") = None;
     let dist = Arc::new(Distributor::build(&pipeline, config.audio.clone(), plan_slot)?);
