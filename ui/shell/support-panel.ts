@@ -3,6 +3,7 @@
 //   • Paket      — eine ZIP-Datei mit dem Zustand des Systems (ohne Medien, Passwörter und Tokens) für den Support
 import { t } from "./i18n.ts";
 import { apiFetch } from "./connection.ts";
+import { codeBadge, type ErrorCode, helpDetails, loadErrorCodes, lookup } from "./errorcodes.ts";
 import {
   BUNDLE_WINDOWS,
   bundleFileName,
@@ -35,6 +36,8 @@ export class SupportPanel {
   #timer: number | undefined;
   #seq = 0;
   #busy = false;
+  #codes: ErrorCode[] = [];
+  #last: SelftestReport | null = null;
 
   constructor() {
     this.el = el("div", "margin-bottom:var(--omp-space-4);max-width:900px;");
@@ -51,6 +54,10 @@ export class SupportPanel {
     head.append(this.#lamp, text, again);
 
     this.el.append(title, hint, head, this.#list, this.#bundleCard());
+    void loadErrorCodes().then((c) => {
+      this.#codes = c;
+      if (this.#last) this.#render(this.#last);
+    });
   }
 
   // Beim Anzeigen des Tabs aufrufen: lädt sofort und danach alle 30 s, bis das Panel nicht mehr im Dokument hängt.
@@ -83,6 +90,7 @@ export class SupportPanel {
   }
 
   #render(r: SelftestReport) {
+    this.#last = r;
     this.#lamp.style.background = levelColor(r.level);
     this.#summary.textContent = r.summary;
     this.#stamp.textContent = t("sup.checkedAt", { time: new Date(r.generatedAt).toLocaleTimeString() });
@@ -90,7 +98,11 @@ export class SupportPanel {
     this.#list.replaceChildren();
     for (const c of problems) {
       const card = el("div", CARD + `border-left:4px solid ${levelColor(c.level)};`);
-      card.append(el("div", "font-weight:600;", c.title));
+      const code = lookup(this.#codes, c.code);
+      const titleRow = el("div", "display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;");
+      if (code) titleRow.append(codeBadge(code));
+      titleRow.append(el("span", "font-weight:600;", c.title));
+      card.append(titleRow);
       if (c.detail) card.append(el("div", DIM + "margin-top:2px;", c.detail));
       if (c.fix) {
         const fix = el("div", "margin-top:6px;font-size:var(--omp-font-size-sm);");
@@ -98,6 +110,7 @@ export class SupportPanel {
         fix.append(lead, document.createTextNode(c.fix));
         card.append(fix);
       }
+      if (code) card.append(helpDetails(code));
       this.#list.append(card);
     }
     if (fine.length > 0) {

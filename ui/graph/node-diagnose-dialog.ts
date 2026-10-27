@@ -1,6 +1,7 @@
 // Node-Diagnose an der Kachel (UMSETZUNG.md Kap. 72.7): „Was ist mit diesem Node los?“ in einem Fenster — Ampel mit „Was tun?“,
 // Prozess und Medien, die Pipeline als Bild (wo stockt der Fluss?), Ereignisse und Meldungen dieses einen Nodes.
 import { apiFetch } from "../shell/connection.ts";
+import { codeBadge, type ErrorCode, helpDetails, loadErrorCodes, lookup } from "../shell/errorcodes.ts";
 import { t } from "../shell/i18n.ts";
 import { describeItem, type TLItem } from "../shell/timeline-logic.ts";
 import { boxLevel, formatBytes, layoutPipeline, type NdCheck, type NdLevel, type NdPipeline, splitFindings } from "./node-diagnose-logic.ts";
@@ -135,6 +136,12 @@ export function openNodeDiagnosis(nodeId: string, label: string): void {
   let timer: number | undefined;
   let seq = 0;
   let lastKey = "";
+  let codes: ErrorCode[] = [];
+  let lastDiagnosis: Diagnosis | null = null;
+  void loadErrorCodes().then((c) => {
+    codes = c;
+    if (lastDiagnosis && root.isConnected) render(lastDiagnosis);
+  });
   const shut = () => {
     window.clearInterval(timer);
     document.removeEventListener("keydown", onKey);
@@ -148,6 +155,7 @@ export function openNodeDiagnosis(nodeId: string, label: string): void {
   close.addEventListener("click", shut);
 
   const render = (d: Diagnosis) => {
+    lastDiagnosis = d;
     lamp.style.background = COLOR[d.level];
     summary.textContent = d.summary;
     title.textContent = t("nd.title", { node: d.node.label || label });
@@ -173,13 +181,18 @@ export function openNodeDiagnosis(nodeId: string, label: string): void {
     if (problems.length === 0) f.body.append(el("div", DIM, t("nd.findings.none")));
     for (const c of problems) {
       const card = el("div", `border:1px solid var(--omp-border,#3a3f45);border-left:4px solid ${COLOR[c.level]};border-radius:6px;padding:8px 10px;margin-bottom:6px;background:var(--omp-surface-raised,#2f3339);`);
-      card.append(el("div", "font-weight:600;", c.title));
+      const code = lookup(codes, c.code);
+      const titleRow = el("div", "display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;");
+      if (code) titleRow.append(codeBadge(code));
+      titleRow.append(el("span", "font-weight:600;", c.title));
+      card.append(titleRow);
       if (c.detail) card.append(el("div", DIM + "margin-top:2px;word-break:break-word;", c.detail));
       if (c.fix) {
         const fix = el("div", "margin-top:5px;");
         fix.append(el("strong", "", t("nd.whatToDo") + " "), document.createTextNode(c.fix));
         card.append(fix);
       }
+      if (code) card.append(helpDetails(code));
       f.body.append(card);
     }
     if (fine.length > 0) {

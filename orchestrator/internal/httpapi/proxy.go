@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/errcodes"
 	"io"
 	"net/http"
 	"net/url"
@@ -84,7 +85,7 @@ func handleNodeProxy(nodes NodeLister, client *http.Client, pathTemplate string,
 			if logs != nil {
 				logs.Publish(ctx, logbus.Entry{
 					Level:   "error",
-					Message: fmt.Sprintf("node proxy call failed (%s %s): %v", r.Method, path, err),
+					Message: errcodes.Tag("OMP-2001", fmt.Sprintf("node proxy call failed (%s %s): %v", r.Method, path, err)),
 					NodeID:  node.ID,
 					Source:  "orchestrator",
 				})

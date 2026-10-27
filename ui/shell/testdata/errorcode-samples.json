@@ -1,0 +1,209 @@
+{
+ "samples": [
+  {
+   "message": "node proxy call failed (GET /params/previewUrl): Get \"http://127.0.0.1:46187/params/previewUrl\": dial tcp 127.0.0.1:46187: connect: connection refused",
+   "code": "OMP-2001"
+  },
+  {
+   "message": "node proxy call failed (GET /params/keyer.enabled): Get \"http://127.0.0.1:40453/params/keyer.enabled\": net/http: timeout awaiting response headers",
+   "code": "OMP-2001"
+  },
+  {
+   "message": "is05 PatchSenderStaged failed (node may not implement a sender-side connection API): is05: unexpected status 404 from PATCH http://127.0.0.1",
+   "code": "OMP-4001"
+  },
+  {
+   "message": "is05: unexpected status 500 from PATCH http://x/receivers/1/staged",
+   "code": "OMP-4002"
+  },
+  {
+   "message": "launcher: start omp-pipeline-controller: podman run localhost/omp-pipeline-controller:latest: exit status 125: Trying to pull localhost/x",
+   "code": "OMP-2002"
+  },
+  {
+   "message": "signal: killed: omp-node-sdk: node registered (crash loop detected: 5 restarts in 1m0s — auto-restart stopped)",
+   "code": "OMP-2004"
+  },
+  {
+   "message": "fork/exec /home/x/nodes/target/release/omp-source: no such file or directory",
+   "code": "OMP-2003"
+  },
+  {
+   "message": "registration timed out",
+   "code": "OMP-2005"
+  },
+  {
+   "message": "failed to restore role state",
+   "code": "OMP-2007"
+  },
+  {
+   "message": "Wert größer als das Maximum 8192",
+   "code": "OMP-2008"
+  },
+  {
+   "message": "db: ping: failed to connect to user=omp database=omp: server error",
+   "code": "OMP-1001"
+  },
+  {
+   "message": "nats: no servers available for connection",
+   "code": "OMP-1002"
+  },
+  {
+   "message": "write /var/lib/x: no space left on device",
+   "code": "OMP-1005"
+  },
+  {
+   "message": "open /etc/x: permission denied",
+   "code": "OMP-1006"
+  },
+  {
+   "message": "listen tcp :8000: bind: address already in use",
+   "code": "OMP-1007"
+  },
+  {
+   "message": "too many open files",
+   "code": "OMP-1011"
+  },
+  {
+   "message": "open flow_def.json: ENOENT",
+   "code": "OMP-3001"
+  },
+  {
+   "message": "could not write /dev/shm/omp-mxl/x",
+   "code": "OMP-3002"
+  },
+  {
+   "message": "streaming stopped, reason not-negotiated (-4)",
+   "code": "OMP-3003"
+  },
+  {
+   "message": "Internal data stream error.",
+   "code": "OMP-3004"
+  },
+  {
+   "message": "kein Video-Buffer von der verbundenen Quelle seit dem letzten Tick",
+   "code": "OMP-3006"
+  },
+  {
+   "message": "MXL ist host-lokal, Quelle und Ziel liegen auf verschiedenen Hosts",
+   "code": "OMP-4003"
+  },
+  {
+   "message": "unauthorized: bad signature",
+   "code": "OMP-5003"
+  },
+  {
+   "message": "unknown action \"sysinfo\"",
+   "code": "OMP-5004"
+  },
+  {
+   "message": "Host Test-Host-C: offline — no telemetry received since orchestrator start",
+   "code": "OMP-5001"
+  },
+  {
+   "message": "HTTP 403",
+   "code": "OMP-6002"
+  },
+  {
+   "message": "Error: initializing source docker://localhost/omp-pipeline-controller:latest: pinging container registry localhost: Get \"https://localhost/v2/\": dial tcp [::1]:443: connect: connection refused",
+   "code": "OMP-2002"
+  },
+  {
+   "message": "failed to poll registry http://localhost:8010: connection refused",
+   "code": "OMP-1003"
+  },
+  {
+   "message": "pg_dump im Container omp-postgres fehlgeschlagen: exit status 1",
+   "code": "OMP-7002"
+  },
+  {
+   "message": "podman wait abc123: exit status 125",
+   "code": "OMP-2012"
+  },
+  {
+   "message": "instancemigrate: Start auf dem Zielhost gescheitert — Rücksprung auf den bisherigen Host",
+   "code": "OMP-2013"
+  },
+  {
+   "message": "neue Version fehlgeschlagen, auf bisherigen Stand zurückgerollt: boom",
+   "code": "OMP-2013"
+  },
+  {
+   "message": "videotestsrc: Failed to find element factory with name 'x264enc' for creating element",
+   "code": "OMP-3009"
+  },
+  {
+   "message": "[writer] open_grain 42 failed: no space",
+   "code": "OMP-3010"
+  },
+  {
+   "message": "workflows: MXL-Verbindung über zwei Hosts geplant",
+   "code": "OMP-4003"
+  },
+  {
+   "message": "workflows: executeMigration: not migrable, MXL peer on another host",
+   "code": "OMP-4003"
+  },
+  {
+   "message": "timed out waiting for registration of instance abc",
+   "code": "OMP-2005"
+  },
+  {
+   "message": "timed out waiting for sender 1234 to appear in http://x/params/y",
+   "code": "OMP-2005"
+  },
+  {
+   "message": "host-agent: realtime-Priorität nicht möglich (Rechte/LimitRTPRIO/chrt fehlt) — ohne",
+   "code": "OMP-5006"
+  },
+  {
+   "message": "host-agent: nice nicht erlaubt (LimitNICE) — ohne",
+   "code": "OMP-5006"
+  },
+  {
+   "message": "tools.json: keine Programme freigegeben",
+   "code": "OMP-5007"
+  },
+  {
+   "message": "Job-Grenze dieses Hosts erreicht (4)",
+   "code": "OMP-5005"
+  },
+  {
+   "message": "hostcmd: command key unavailable: db down",
+   "code": "OMP-5003"
+  },
+  {
+   "message": "kein Kommandokanal zu den Host-Agents (NATS)",
+   "code": "OMP-1002"
+  },
+  {
+   "message": "Prüfsumme stimmt nicht (erwartet abc, erhalten def)",
+   "code": "OMP-7001"
+  },
+  {
+   "message": "OMP_STORAGE_SECRET_KEY must decode to exactly 32 bytes (base64-encoded AES-256 key)",
+   "code": "OMP-1008"
+  },
+  {
+   "message": "omp-channel-player: image pad-added link failed: not-linked",
+   "code": "OMP-3003"
+  },
+  {
+   "message": "launcher: remote start on host cc63 failed: unsupported runner \"podman\"",
+   "code": "OMP-2014"
+  },
+  {
+   "message": "catalog: entry omp-x (runner podman) has no image",
+   "code": "OMP-2014"
+  },
+  {
+   "message": "unknown node",
+   "code": "OMP-2001"
+  }
+ ],
+ "harmless": [
+  "instance started",
+  "omp-source: measured video fps ~= 25.0",
+  "node registered: abc"
+ ]
+}

@@ -264,3 +264,55 @@ func TestSummary(t *testing.T) {
 		t.Fatal(l)
 	}
 }
+
+func TestChecksCarryErrorCodes(t *testing.T) {
+	in := Inputs{
+		Local:     Local{Disks: []Disk{{Path: "/", Label: "System", FreeBytes: 1 << 30, TotalBytes: 100 << 30}}, DatabaseError: "refused"},
+		Hosts:     []Host{{ID: "h1", Label: "A", TelemetryAge: 2 * time.Minute}},
+		Instances: []Instance{{Label: "Q", Crashed: true}},
+	}
+	codes := map[string]string{}
+	for _, c := range Evaluate(in, "", now).Checks {
+		codes[c.ID] = c.Code
+	}
+	for id, want := range map[string]string{"disk:/": "OMP-1005", "database": "OMP-1001", "host:h1": "OMP-5001", "instances-crashed": "OMP-2004"} {
+		if codes[id] != want {
+			t.Errorf("%s: Code %q, erwartet %q", id, codes[id], want)
+		}
+	}
+	// „in Ordnung“ trägt keinen Code
+	for _, c := range Evaluate(Inputs{Local: Local{DatabaseError: ""}}, "", now).Checks {
+		if c.Level == LevelOK && c.Code != "" {
+			t.Errorf("%s: OK mit Code %s", c.ID, c.Code)
+		}
+	}
+	// Absturzmeldung mit genauerem Code: fehlendes Image statt allgemeinem Absturz
+	cs := EvaluateNode(NodeFacts{Label: "X", Known: true, Online: true,
+		Instance: &InstanceFacts{Crashed: true, CrashMessage: "podman run localhost/x: exit status 125: Trying to pull"}}, "")
+	for _, c := range cs {
+		if c.ID == "crashed" && c.Code != "OMP-2002" {
+			t.Errorf("Absturz mit Image-Meldung: %s", c.Code)
+		}
+	}
+	cs = EvaluateNode(NodeFacts{Label: "X", Known: true, Online: true, Instance: &InstanceFacts{Crashed: true, CrashMessage: "signal: killed"}}, "")
+	for _, c := range cs {
+		if c.ID == "crashed" && c.Code != "OMP-2004" {
+			t.Errorf("Absturz allgemein: %s", c.Code)
+		}
+	}
+}
+
+func TestHostChecksGetSpecificCodes(t *testing.T) {
+	in := Inputs{Hosts: []Host{
+		{ID: "silent", Label: "A", TelemetryAge: 2 * time.Minute},
+		{ID: "clock", Label: "B", TelemetryAge: time.Second, ClockProblem: "unsynced"},
+		{ID: "busy", Label: "C", TelemetryAge: time.Second, CPUPercent: 95},
+	}}
+	codes := map[string]string{}
+	for _, c := range Evaluate(in, "", now).Checks {
+		codes[c.ID] = c.Code
+	}
+	if codes["host:silent"] != "OMP-5001" || codes["host:clock"] != "OMP-5002" || codes["host:busy"] != "OMP-1012" {
+		t.Fatalf("%v", codes)
+	}
+}

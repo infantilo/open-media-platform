@@ -7,10 +7,10 @@
 // die Meldungsliste; Filter-Chips zeigen, was gerade eingegrenzt ist.
 import { t } from "./i18n.ts";
 import { apiFetch } from "./connection.ts";
+import { classify, codeBadge, type ErrorCode, helpBlock, loadErrorCodes, lookup } from "./errorcodes.ts";
 import {
   buildLogQuery,
   type DiagRange,
-  explain,
   LEVELS,
   type LevelId,
   type LogGroup,
@@ -52,6 +52,7 @@ export class DiagnosePanel {
   #traceId = "";
   #msgKey = "";
   #msgKeyTitle = "";
+  #codes: ErrorCode[] = [];
   #groups: LogGroup[] = [];
   #rows: LogRow[] = [];
   #hasMore = false;
@@ -77,6 +78,10 @@ export class DiagnosePanel {
     this.el.append(head, hint, this.#controls, this.#body, this.#footer);
     this.#buildControls();
     this.#render();
+    void loadErrorCodes().then((c) => {
+      this.#codes = c;
+      this.#render();
+    });
   }
 
   setContext(c: DiagnoseContext) {
@@ -305,26 +310,29 @@ export class DiagnosePanel {
     return e;
   }
 
-  #groupTitle(g: LogGroup): { title: string; hint?: string } {
-    const x = explain(g.example);
-    if (!x) return { title: g.example.length > 140 ? g.example.slice(0, 140) + "…" : g.example };
-    return {
-      title: t(`dg.x.${x.id}.title` as never, { p0: x.param ?? "" }),
-      hint: tryT(`dg.x.${x.id}.hint`),
-    };
+  /** Fehlercode zu einer Meldung: der vom Server ergänzte, sonst per Muster aus dem Katalog. */
+  #codeOf(message: string, code?: string): ErrorCode | undefined {
+    return lookup(this.#codes, code) ?? classify(this.#codes, message);
+  }
+
+  #groupTitle(g: LogGroup): { title: string; code?: ErrorCode } {
+    const c = this.#codeOf(g.example, g.code);
+    if (!c) return { title: g.example.length > 140 ? g.example.slice(0, 140) + "…" : g.example };
+    return { title: c.title, code: c };
   }
 
   #renderGroups(): HTMLElement {
     if (this.#groups.length === 0) return this.#empty();
     const wrap = el("div", "display:flex;flex-direction:column;gap:8px;");
     for (const g of this.#groups) {
-      const { title, hint } = this.#groupTitle(g);
+      const { title, code } = this.#groupTitle(g);
       const card = el("div", `border:1px solid var(--omp-border);border-left:4px solid ${LEVEL_COLOR[g.level] ?? "var(--omp-border)"};border-radius:var(--omp-radius);padding:8px 12px;`);
       const top = el("div", "display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;");
+      if (code) top.appendChild(codeBadge(code));
       top.appendChild(el("span", "font-weight:600;", title));
       top.appendChild(el("span", "font-size:11px;color:var(--omp-text-dim);", `${g.count}× · ${t("dg.last", { p0: this.#ago(g.last) })}`));
       card.appendChild(top);
-      if (hint) card.appendChild(el("div", "margin-top:4px;font-size:var(--omp-font-size-xs);", hint));
+      if (code) card.appendChild(helpBlock(code));
       if (g.nodeIds.length > 0) {
         const nodes = el("div", "margin-top:4px;font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);");
         const known = g.nodeIds.filter((id) => this.#ctx.nodes.some((x) => x.id === id || x.instanceId === id));
@@ -361,8 +369,11 @@ export class DiagnosePanel {
       row.appendChild(el("span", "color:var(--omp-text-dim);font-variant-numeric:tabular-nums;white-space:nowrap;", new Date(e.occurredAt).toLocaleString()));
       row.appendChild(el("span", `color:${LEVEL_COLOR[e.level] ?? "var(--omp-text)"};font-size:11px;text-transform:uppercase;min-width:52px;`, tryT(`dg.lv.${e.level}`) ?? e.level));
       const mid = el("div", "flex:1;min-width:0;");
-      const x = explain(e.message);
-      mid.appendChild(el("div", "word-break:break-word;", x ? t(`dg.x.${x.id}.title` as never, { p0: x.param ?? "" }) : e.message));
+      const x = this.#codeOf(e.message, e.code);
+      const line = el("div", "word-break:break-word;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;");
+      if (x) line.appendChild(codeBadge(x));
+      line.appendChild(el("span", "", x ? x.title : e.message));
+      mid.appendChild(line);
       if (e.nodeId) mid.appendChild(el("div", "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);", this.#nodeName(e.nodeId)));
       row.appendChild(mid);
       wrap.appendChild(row);
@@ -374,8 +385,7 @@ export class DiagnosePanel {
       if (this.#open.has(k)) {
         const det = el("div", "padding:4px 10px 10px 40px;font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);display:flex;flex-direction:column;gap:4px;");
         if (x) det.appendChild(el("div", "color:var(--omp-text);", e.message));
-        const hint = x ? tryT(`dg.x.${x.id}.hint`) : undefined;
-        if (hint) det.appendChild(el("div", "color:var(--omp-text);", hint));
+        if (x) det.appendChild(helpBlock(x));
         det.appendChild(el("div", "", `${t("dg.source")}: ${e.source}${e.hostId ? ` · ${t("dg.host")}: ${e.hostId}` : ""}`));
         const btns = el("div", "display:flex;gap:8px;");
         if (e.traceId) {

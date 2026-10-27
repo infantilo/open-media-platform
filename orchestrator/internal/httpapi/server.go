@@ -371,6 +371,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Versionsstempel — unauthentifiziert wie /healthz (der Supervisor
 	// prüft damit nach einem Update, ob der neue Stand läuft).
 	mux.HandleFunc("GET /api/v1/version", handleVersion)
+	// Fehlercode-Katalog (Kap. 72.8): Code, Titel, Ursache, Lösungsschritte, Erkennungsmuster.
+	mux.HandleFunc("GET /api/v1/errorcodes", g.requireAuth(handleErrorCodes))
 	mux.HandleFunc("GET /api/v1/info", handleInfo)
 	// Bewusst unauthentifiziert wie /healthz (Prometheus-Scraper senden
 	// üblicherweise keinen Bearer-Token; Netzwerk-Isolation ist hier die
@@ -823,7 +825,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	}
 
 	mux.Handle("/", withShellSecurityHeaders(uiFramePort(&options), spaFallback(cfg.UIDir, revalidateStatic(http.FileServer(http.Dir(cfg.UIDir))))))
-	return countRequests(reqCounters, noStoreForAPI(localizeEnglish(mux)))
+	return countRequests(reqCounters, noStoreForAPI(localizeEnglish(errorCodeHeader(mux))))
 }
 
 // spaFallback liefert für die Kiosk-Routen /console/... (ARCHITECTURE.md

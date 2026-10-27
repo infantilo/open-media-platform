@@ -297,6 +297,7 @@ func handleSupportBundle(h http.Handler, raftDir string, clusterSvc ClusterServi
 
 		for _, s := range []struct{ file, path string }{
 			{"api/version.json", "/api/v1/version"},
+			{"api/errorcodes.json", "/api/v1/errorcodes"},
 			{"api/info.json", "/api/v1/info"},
 			{"api/nodes.json", "/api/v1/nodes"},
 			{"api/instances.json", "/api/v1/instances"},

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/errcodes"
 	"log/slog"
 	"sort"
 	"sync"
@@ -363,7 +364,7 @@ func (s *Service) Connect(ctx context.Context, fromSender, toReceiver string) er
 			slog.Warn("is05 PatchSenderStaged failed (node may not implement a sender-side connection API)",
 				"sender", fromSender, "error", err)
 			s.publishLog(ctx, "warn",
-				fmt.Sprintf("is05 PatchSenderStaged failed (node may not implement a sender-side connection API): %v", err),
+				errcodes.Tag("OMP-4001", fmt.Sprintf("is05 PatchSenderStaged failed (node may not implement a sender-side connection API): %v", err)),
 				senderNode.ID)
 		}
 	}
@@ -405,7 +406,7 @@ func (s *Service) Disconnect(ctx context.Context, receiverID string) error {
 				slog.Warn("is05 PatchSenderStaged failed on disconnect (node may not implement a sender-side connection API)",
 					"sender", previousSenderID, "error", err)
 				s.publishLog(ctx, "warn",
-					fmt.Sprintf("is05 PatchSenderStaged failed on disconnect (node may not implement a sender-side connection API): %v", err),
+					errcodes.Tag("OMP-4001", fmt.Sprintf("is05 PatchSenderStaged failed on disconnect (node may not implement a sender-side connection API): %v", err)),
 					senderNode.ID)
 			}
 		}

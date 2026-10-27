@@ -266,6 +266,8 @@ eingebrochen** oder **keine Bilder mehr** (Raten-Kennzahlen, soweit der Node
 sie meldet), **mehrfach automatisch neu gestartet**, der **Host antwortet nicht**,
 ist stark ausgelastet oder hat eine **nicht synchrone Uhr**.
 
+![Signalweg: alle Ziele auf einen Blick — Monitor Schnitt rot mit der Ursache „Kamera 2 ist abgestürzt“ und „Was tun?“, Monitor Regie in Ordnung](screenshots/signalweg-diagnose.png)
+
 1. **Quelle** wählen (ein Ausgang einer Node) und/oder **Ziel** wählen (eine
    Node „jeder Eingang" oder ein bestimmter Eingang). Die drei Felder
    sind **Suchfelder**: Klick öffnet die ganze Liste, Tippen filtert (alle
@@ -1028,6 +1030,8 @@ untereinander):
   einsammeln ließen, stehen in der `manifest.json` im Paket. Beide
   Funktionen verlangen das Admin-Recht (`GET /api/v1/admin/selftest`,
   `GET /api/v1/admin/support-bundle?minutes=N`).
+
+  ![Support: Ampel mit Befunden, Fehlercode und „Was tun?“, darunter das Support-Paket](screenshots/support-ampel.png)
 - **Zeitleiste** — „Was hat sich um 14:02 geändert?“ auf einer einzigen
   Achse. Oben ein Balkenbild des gewählten Zeitraums (letzte Stunde bis 7
   Tage): rot = Störung, gelb = Hinweis, blau = Information. **In die Balken
@@ -1048,6 +1052,8 @@ untereinander):
   Zeitleiste — der Support findet später genau diese Minute. Ein Doppelklick
   zählt einmal. Lesen der Zeitleiste verlangt das Admin-Recht, der Marker
   das Bedienrecht (`GET /api/v1/timeline`, `POST /api/v1/timeline/marker`).
+
+  ![Zeitleiste: Balkenbild, „Zustand um …“ mit gestörter Kamera und die Änderungen der 5 Minuten davor](screenshots/zeitleiste.png)
 - **Diagnose an der Kachel (🩺)** — „Was ist mit diesem Node los?“ Der
   Knopf **🩺** im Kopf jeder Node-Kachel im Flow Editor (oder ein
   **Rechtsklick** auf die Kachel) öffnet ein Fenster nur für diesen einen
@@ -1070,6 +1076,24 @@ untereinander):
   Viewer, Mischer, Player, Audio-Monitor, Multiviewer, Recorder, Scaler);
   andere Typen zeigen dort eine Erklärung statt eines Bildes. Das Fenster
   verlangt das Recht, den Node zu sehen (`GET /api/v1/nodes/{id}/diagnosis`).
+
+  ![Diagnose an der Kachel: Befunde, Prozess und Medien und die Pipeline als Bild](screenshots/node-diagnose.png)
+- **Fehlercodes (OMP-nnnn)** — jeder bekannte Fehler hat einen stabilen
+  Code mit **Ursache** und nummerierten **Lösungsschritten**. Die
+  Oberfläche zeigt ihn dort, wo Fehler auftauchen: im Diagnose-Tab (je
+  Problemgruppe und Meldung), im Support-Tab und in der Node-Diagnose 🩺
+  (Plakette am Befund, aufklappbar „Ursache und Lösungsschritte“) und im
+  Startdialog, wenn ein Start scheitert (z. B. **OMP-2002**, Container-Image
+  fehlt). Die vollständige Liste steht in `docs/FEHLERCODES.md` (aus dem
+  Katalog erzeugt, mit Anker je Code), dieselbe Liste liegt im Support-Paket
+  (`api/errorcodes.json`). Nummernkreise: 1xxx Plattform und Rechner, 2xxx
+  Nodes und Instanzen, 3xxx Medien und Pipeline, 4xxx Verbindungen, 5xxx
+  Hosts, 6xxx Zugriff, 7xxx Update. Meldungen werden am Wortlaut erkannt;
+  trägt eine Meldung selbst einen Code (`[OMP-3001] …`), gilt dieser.
+  Fehlerantworten der API tragen den Code im Header `X-Omp-Error-Code`,
+  Fehlermeldungen (Toasts) hängen ihn als „(OMP-nnnn)“ an.
+
+  ![Diagnose-Tab: Problemgruppen mit Fehlercode, Ursache und nummerierten Lösungsschritten](screenshots/diagnose-fehlercodes.png)
 - **Backup/Restore** — „Backup jetzt erstellen“ erstellt sofort einen
   Download; Restore verlangt, den gewählten Dateinamen exakt
   einzutippen (Bestätigung), ersetzt danach den kompletten

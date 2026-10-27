@@ -8,6 +8,8 @@ export interface SelftestCheck {
   title: string;
   detail?: string;
   fix?: string;
+  /** Fehlercode (OMP-nnnn) aus dem Katalog. */
+  code?: string;
 }
 
 export interface SelftestReport {

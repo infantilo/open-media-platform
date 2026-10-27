@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"fmt"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/errcodes"
 	"net"
 	"net/url"
 	"os"
@@ -160,7 +161,7 @@ func runPodmanEntry(entry CatalogEntry, id, label, launchSecret string, extraEnv
 
 	out, err := exec.Command("podman", args...).Output()
 	if err != nil {
-		return "", 0, fmt.Errorf("podman run %s: %w", entry.Image, describeExitError(err))
+		return "", 0, fmt.Errorf("%s podman run %s: %w", errcodes.Prefix("OMP-2002"), entry.Image, describeExitError(err))
 	}
 	return strings.TrimSpace(string(out)), port, nil
 }

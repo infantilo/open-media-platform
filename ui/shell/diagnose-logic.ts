@@ -10,6 +10,8 @@ export interface LogRow {
   nodeId?: string;
   hostId?: string;
   source: string;
+  /** Fehlercode (OMP-nnnn), vom Server ergänzt. */
+  code?: string;
 }
 
 export interface LogGroup {
@@ -20,36 +22,13 @@ export interface LogGroup {
   last: string;
   example: string;
   nodeIds: string[];
+  /** Fehlercode (OMP-nnnn), vom Server ergänzt. */
+  code?: string;
 }
 
 export type LevelId = "error" | "warn" | "info";
 export const LEVELS: LevelId[] = ["error", "warn", "info"];
 export type DiagRange = "1h" | "24h" | "7d" | "all";
-
-// Bekannte Meldungen: Muster → verständliche Überschrift und Hinweis
-// (i18n-Schlüssel "dg.x.<id>.title" / ".hint"). Ohne Treffer zeigt die UI
-// die Meldung selbst im Wortlaut.
-const KNOWN: { id: string; re: RegExp; param?: number }[] = [
-  { id: "is05sender", re: /is05 PatchSenderStaged failed/ },
-  { id: "proxyParam", re: /node proxy call failed \(GET \/params\/([\w.]+)\)/, param: 1 },
-  { id: "proxyManifest", re: /node proxy call failed \(GET \/ui\/manifest/ },
-  { id: "proxyOther", re: /node proxy call failed \((\w+) ([^)]*)\)/, param: 2 },
-  { id: "restoreState", re: /failed to restore role state|giving up restoring role state|role state restore retry failed/ },
-  { id: "registration", re: /registration timed out|failed to register/ },
-];
-
-export interface Explained {
-  id: string;
-  param?: string;
-}
-
-export function explain(message: string): Explained | undefined {
-  for (const k of KNOWN) {
-    const m = k.re.exec(message);
-    if (m) return { id: k.id, param: k.param ? m[k.param] : undefined };
-  }
-  return undefined;
-}
 
 // Relative Zeit als [i18n-Schlüssel, Zahl].
 export function relativeTime(iso: string, now = Date.now()): [string, number] {

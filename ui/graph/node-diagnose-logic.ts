@@ -10,6 +10,7 @@ export interface NdCheck {
   title: string;
   detail?: string;
   fix?: string;
+  code?: string;
 }
 
 export interface NdPad {

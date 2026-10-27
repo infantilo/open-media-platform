@@ -3,6 +3,7 @@
 // bleibt bei einem Fehler offen, mit der Meldung des Orchestrators, damit nichts neu eingegeben werden muss.
 
 import { apiFetch } from "../shell/connection.ts";
+import { classify, type ErrorCode, helpBlock, loadErrorCodes } from "../shell/errorcodes.ts";
 import { t } from "../shell/i18n.ts";
 import { groupOptions, hintFor, inputKind, type OptionDef } from "../shell/settings-logic.ts";
 import { buildStartBody, emptyMeaning, findPairs, type OptionPair, presetFor, RATES, RESOLUTIONS, type StartBody, type StartForm, valuesForPreset } from "./start-dialog-logic.ts";
@@ -229,6 +230,10 @@ export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
 
     const error = el("div", "padding:0 16px;color:var(--omp-error,#e55);white-space:pre-wrap;");
     error.setAttribute("role", "alert");
+    // Fehlercode zur Meldung (Ursache und Lösungsschritte), sobald der Katalog da ist.
+    const errorHelp = el("div", "padding:0 16px 6px;");
+    let codes: ErrorCode[] = [];
+    void loadErrorCodes().then((c) => (codes = c));
     const actions = el("div", "display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--omp-border,#3a3f45);");
     const btnCss = "cursor:pointer;font:inherit;padding:6px 14px;border-radius:var(--omp-radius,6px);border:1px solid var(--omp-border,#3a3f45);background:var(--omp-surface-raised,#2f3339);color:inherit;";
     const cancel = el("button", btnCss, t("kit.cancel"));
@@ -236,7 +241,7 @@ export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
     const ok = el("button", btnCss + "background:var(--omp-info,#4285f4);border-color:var(--omp-info,#4285f4);color:#fff;", t("flow.confirmStartLabel"));
     ok.type = "button";
     actions.append(cancel, ok);
-    dlg.append(head, body, error, actions);
+    dlg.append(head, body, error, errorHelp, actions);
     root.append(backdrop, dlg);
 
     let busy = false;
@@ -250,11 +255,15 @@ export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
       busy = true;
       ok.disabled = true;
       error.textContent = "";
+      errorHelp.replaceChildren();
       const msg = await opts.submit(buildStartBody(opts.entry.type, opts.entry.version, form));
       busy = false;
       ok.disabled = false;
-      if (msg) error.textContent = msg;
-      else close(true);
+      if (msg) {
+        error.textContent = msg;
+        const code = classify(codes, msg);
+        if (code) errorHelp.append(el("div", `font-weight:600;color:var(--omp-text,#e8eaed);`, `${code.code} — ${code.title}`), helpBlock(code));
+      } else close(true);
     };
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key === "Escape") {

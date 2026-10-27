@@ -135,6 +135,8 @@ type Group struct {
 	Last    time.Time `json:"last"`
 	Example string    `json:"example"` // jüngste Meldung im Wortlaut
 	NodeIDs []string  `json:"nodeIds"` // betroffene Nodes (höchstens 20)
+	// Code: Fehlercode der Gruppe (OMP-nnnn), wird beim Lesen ergänzt.
+	Code string `json:"code,omitempty"`
 }
 
 // Summary liefert gleichartige Meldungen gruppiert, zuletzt aufgetretene zuerst.

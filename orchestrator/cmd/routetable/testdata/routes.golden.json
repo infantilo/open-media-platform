@@ -684,6 +684,12 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/errorcodes",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/events",
     "auth": "auth",
     "domain": "core"

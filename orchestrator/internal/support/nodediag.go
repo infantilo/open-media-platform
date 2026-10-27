@@ -1,6 +1,10 @@
 package support
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/errcodes"
+)
 
 // Node-Diagnose (UMSETZUNG.md Kap. 72.7): die Fakten eines einzelnen Nodes in Befunde mit „Was tun?“ übersetzen. Wie Evaluate
 // eine reine Funktion auf Messwerten.
@@ -158,6 +162,19 @@ func EvaluateNode(f NodeFacts, lang string) []Check {
 	if f.RecentErrors > 0 {
 		add("errors", LevelWarn, t.s(fmt.Sprintf("%d Fehlermeldung(en) in den letzten 15 Minuten", f.RecentErrors), fmt.Sprintf("%d error message(s) in the last 15 minutes", f.RecentErrors)), "",
 			t.s("Die Meldungen stehen weiter unten und in Administration → Diagnose.", "The messages are listed below and under Administration → Diagnose."))
+	}
+	for i := range cs {
+		if cs[i].Level == LevelOK {
+			continue
+		}
+		// Eine Absturzmeldung kann einen genaueren Code tragen (Image fehlt, Programmdatei fehlt, Speicher voll …).
+		if cs[i].ID == "crashed" {
+			if e, ok := errcodes.Classify(cs[i].Detail); ok {
+				cs[i].Code = e.Code
+				continue
+			}
+		}
+		cs[i].Code = errcodes.ForCheck(cs[i].ID)
 	}
 	sortChecks(cs)
 	return cs

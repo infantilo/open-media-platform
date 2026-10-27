@@ -19,6 +19,7 @@
 // entfernen (per Browser-Test gefunden: `view.setEntries is not a
 // function`, weil das Custom Element nie registriert wurde).
 import { t } from "./i18n.ts";
+import { installToastCodes } from "./errorcodes.ts";
 import "./upcoming.ts";
 import "./console-view.ts";
 import type { ConsoleView, ConsoleEntry } from "./console-view.ts";
@@ -436,9 +437,11 @@ async function boot() {
   }
 
   const { authRequired, authenticated, username } = await whoami();
+  if (!authRequired || authenticated) installToastCodes();
 
   if (authRequired && !authenticated) {
     showLoginOverlay(root, () => {
+      installToastCodes();
       renderShell(root, null).then(({ homeHref, workstation, tiles }) => {
         // Nutzername erst nach dem Login bekannt — ein zweiter,
         // günstiger whoami()-Aufruf statt den Login-Response-Body

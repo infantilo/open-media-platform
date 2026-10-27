@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/errcodes"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
 )
 
@@ -67,6 +68,11 @@ func handleLogSummary(reader LogReader) http.HandlerFunc {
 			http.Error(w, "failed to summarize logs", http.StatusInternalServerError)
 			return
 		}
+		for i := range groups {
+			if e, ok := errcodes.Classify(groups[i].Example); ok {
+				groups[i].Code = e.Code
+			}
+		}
 		writeJSON(w, http.StatusOK, groups)
 	}
 }
@@ -103,6 +109,11 @@ func handleListLogs(reader LogReader) http.HandlerFunc {
 		if err != nil {
 			http.Error(w, "failed to query logs", http.StatusInternalServerError)
 			return
+		}
+		for i := range entries {
+			if e, ok := errcodes.Classify(entries[i].Message); ok {
+				entries[i].Code = e.Code
+			}
 		}
 		writeJSON(w, http.StatusOK, entries)
 	}

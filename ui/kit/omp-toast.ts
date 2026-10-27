@@ -71,10 +71,18 @@ export interface ShowToastOptions {
   durationMs?: number;
 }
 
+let enhancer: ((message: string) => string | undefined) | undefined;
+
+/** Die Shell hängt hier die Fehlercode-Zuordnung ein: Fehler-Toasts bekommen „(OMP-nnnn)“ angehängt (UMSETZUNG.md Kap. 72.8). */
+export function setToastEnhancer(fn: ((message: string) => string | undefined) | undefined): void {
+  enhancer = fn;
+}
+
 export function showToast(message: string, opts: ShowToastOptions = {}): void {
   const toast = document.createElement("omp-toast");
   toast.setAttribute("data-role", "toast");
-  toast.textContent = message;
+  const code = (opts.variant ?? "error") === "error" ? enhancer?.(message) : undefined;
+  toast.textContent = code && !message.includes(code) ? `${message} (${code})` : message;
   if (opts.variant) toast.setAttribute("variant", opts.variant);
   (opts.host ?? document.body).appendChild(toast);
   setTimeout(() => toast.remove(), opts.durationMs ?? DEFAULT_DURATION_MS);

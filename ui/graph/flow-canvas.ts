@@ -3070,11 +3070,14 @@ export class FlowCanvas extends HTMLElement {
             : this.#zoneContentBottom(z.id, tiles);
           maxY = Math.max(maxY, b);
         }
+        // Die Breadcrumb-Leiste (mit „Alle einpassen“) liegt deckend über dem oberen Rand der Zeichenfläche: der Inhalt beginnt
+        // darunter, sonst verschwinden die Host-Rahmen oben aus dem Bild.
         const pad = 24;
-        const scale = Math.min(1, (rect.width - 2 * pad) / (maxX - minX), (rect.height - 2 * pad) / maxY);
+        const top = this.#fitInsetTop() + pad;
+        const scale = Math.min(1, (rect.width - 2 * pad) / (maxX - minX), (rect.height - top - pad) / maxY);
         this.#viewport = {
           x: rect.width / 2 - ((minX + maxX) / 2) * scale,
-          y: pad,
+          y: top,
           scale,
         };
         this.#applyViewportTransform();
@@ -3535,12 +3538,21 @@ export class FlowCanvas extends HTMLElement {
     const minY = Math.min(...points.map((p) => p.y));
     const maxY = Math.max(...points.map((p) => p.y)) + MIN_BODY_HEIGHT + HEADER_HEIGHT;
     const rect = this.#svg.getBoundingClientRect();
+    // Mitte des sichtbaren Bereichs unterhalb der Breadcrumb-Leiste, nicht der ganzen Zeichenfläche.
+    const top = this.#fitInsetTop();
 
     return {
       x: rect.width / 2 - (minX + maxX) / 2,
-      y: rect.height / 2 - (minY + maxY) / 2,
+      y: top + (rect.height - top) / 2 - (minY + maxY) / 2,
       scale: 1,
     };
+  }
+
+  // Höhe des Streifens am oberen Rand der Zeichenfläche, den die Breadcrumb-Leiste verdeckt (0 ohne Leiste/Messung).
+  #fitInsetTop(): number {
+    const bar = this.#breadcrumbBar.getBoundingClientRect();
+    const svg = this.#svg.getBoundingClientRect();
+    return Math.max(0, Math.round(bar.bottom - svg.top));
   }
 
   // Untere Kante der Zonen-Box (Kapitel 13 Teil 4-Doku bei
@@ -6001,7 +6013,9 @@ export class FlowCanvas extends HTMLElement {
       });
       if (!res.ok) {
         const text = await res.text();
-        return tt("flow.f6d6b4", { p0: text.trim() || res.status });
+        // Fehlercode des Servers (X-Omp-Error-Code) voranstellen: der Startdialog zeigt dazu Ursache und Schritte.
+        const code = res.headers.get("X-Omp-Error-Code");
+        return tt("flow.f6d6b4", { p0: (code ? `[${code}] ` : "") + (text.trim() || res.status) });
       }
       // Kein #fetchAndRender() nötig: die Instanz registriert sich
       // selbst bei der NMOS-Registry, was ein "node.added"-SSE-Event

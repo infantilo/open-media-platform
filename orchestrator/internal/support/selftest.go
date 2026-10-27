@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/errcodes"
 )
 
 // Level ist die Ampelstufe eines Befunds.
@@ -28,6 +30,8 @@ type Check struct {
 	Title  string `json:"title"`
 	Detail string `json:"detail,omitempty"`
 	Fix    string `json:"fix,omitempty"`
+	// Code: Fehlercode (OMP-nnnn, internal/errcodes), leer ohne Eintrag im Katalog.
+	Code string `json:"code,omitempty"`
 }
 
 // Report ist das Ergebnis eines Selbsttests.
@@ -297,12 +301,15 @@ func Evaluate(in Inputs, lang string, now time.Time) Report {
 		case h.ClockProblem != "":
 			c.Level = LevelErr
 			c.Detail += " — " + t.s("Uhr: ", "clock: ") + h.ClockProblem
+			c.Code = "OMP-5002"
 			c.Fix = t.s("Eine falsche Uhr stört Videoübergabe und Schaltzeitpunkte. Zeitsynchronisation (chrony/PTP) auf diesem Host prüfen.", "A wrong clock disturbs video exchange and switch times. Check time synchronisation (chrony/PTP) on this host.")
 		case h.CPUPercent > 90 || memPct > 92:
 			c.Level = LevelErr
+			c.Code = "OMP-1012"
 			c.Fix = t.s("Der Host ist am Limit. Instanzen auf andere Hosts verschieben.", "The host is at its limit. Move instances to other hosts.")
 		case h.CPUPercent > 80 || memPct > 85:
 			c.Level = LevelWarn
+			c.Code = "OMP-1012"
 			c.Fix = t.s("Hohe Auslastung. Vor weiteren Instanzen einen anderen Host wählen.", "High load. Pick another host before adding instances.")
 		}
 		add(c)
@@ -387,6 +394,11 @@ func Evaluate(in Inputs, lang string, now time.Time) Report {
 		rep.Summary = t.s(fmt.Sprintf("Läuft, aber %d Hinweis(e) beachten", rep.Warnings), fmt.Sprintf("Running, but %d notice(s) to look at", rep.Warnings))
 	default:
 		rep.Summary = t.s("Alles in Ordnung", "Everything is fine")
+	}
+	for i := range rep.Checks {
+		if rep.Checks[i].Level != LevelOK && rep.Checks[i].Code == "" {
+			rep.Checks[i].Code = errcodes.ForCheck(rep.Checks[i].ID)
+		}
 	}
 	// Schlimmstes zuerst, sonst Reihenfolge der Prüfung.
 	sort.SliceStable(rep.Checks, func(i, j int) bool { return rank(rep.Checks[i].Level) < rank(rep.Checks[j].Level) })

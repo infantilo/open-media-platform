@@ -57,6 +57,8 @@ type Entry struct {
 	// Node-ID (bei einer künftigen node-seitigen Anbindung, s.
 	// ARCHITECTURE.md §25 "bewusst nicht Teil dieser Runde").
 	Source string `json:"source"`
+	// Code: Fehlercode der Meldung (OMP-nnnn, internal/errcodes) — wird beim Lesen ergänzt, nicht gespeichert.
+	Code string `json:"code,omitempty"`
 }
 
 // Publisher veröffentlicht Log-Zeilen auf den JetStream-Stream.

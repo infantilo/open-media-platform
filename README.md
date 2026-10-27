@@ -192,6 +192,26 @@ counters, next to what the writer actually declares about the flow._
 </tr>
 </table>
 
+### Support and diagnostics
+
+Built so that a non-specialist can tell what is wrong and an expert gets
+everything needed without a remote session.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/support-ampel.png" width="420"><br><sub><b>Support tab:</b> one traffic light for the whole system. Only what needs attention is listed, each with a plain-language finding, an error code and a "what to do" step — disks, memory, <code>/dev/shm</code>, database, cluster majority, every host (including its clock) and every instance. One button creates the support package.</sub></td>
+<td width="50%"><img src="docs/screenshots/node-diagnose.png" width="420"><br><sub><b>Node diagnosis</b> (🩺 on every tile, or right-click): findings with next steps, process and media state, and the node's <b>GStreamer pipeline as a picture</b> — element states, negotiated formats, buffer fill levels — to see where the flow stalls.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/signalweg-diagnose.png" width="420"><br><sub><b>"Why does nothing arrive here?"</b> Every target (viewer, recorder, gateway …) at a glance. The chain is checked backwards and the first fault <i>upstream</i> is named — here the crashed camera, not the monitor behind it.</sub></td>
+<td width="50%"><img src="docs/screenshots/zeitleiste.png" width="420"><br><sub><b>Timeline:</b> faults, restarts, operations, changes and markers on one axis. Click a point in time to see what was wrong then and what changed in the five minutes before. The <b>⚑ Marker</b> button in the top bar flags "problem now" with one click.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/diagnose-fehlercodes.png" width="420"><br><sub><b>Error codes:</b> every known error has a stable code (<code>OMP-nnnn</code>) with cause and numbered solution steps — in the Diagnose tab, support tab, node diagnosis and start dialog; API errors carry it in an <code>X-Omp-Error-Code</code> header. The full list is in <a href="docs/FEHLERCODES.md"><code>docs/FEHLERCODES.md</code></a>.</sub></td>
+<td width="50%"></td>
+</tr>
+</table>
+
 Full walkthroughs and context for every screen above are in
 [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
 
@@ -577,6 +597,18 @@ node has to satisfy.
   jump straight to its trace, and — on that same click — briefly
   highlights every graph tile touched by that trace, so an operator
   sees the blast radius of a failure, not just an error string.
+- Support and diagnosis for non-specialists (Administration → Support,
+  Timeline, node diagnosis, signal-path overview): a self-test traffic
+  light across the orchestrator machine and every host, a one-click
+  **support package** (ZIP with state, messages and system data of the
+  orchestrator and each host; passwords, tokens and keys are redacted
+  before packing), a **timeline** that merges faults, restarts, audit
+  entries and operator markers and can replay "what was wrong at 14:02",
+  a **per-node diagnosis** including the node's GStreamer pipeline
+  (read-only snapshot, no probes in the data path), "why does nothing
+  arrive here?" for every target with the root cause named, and a
+  catalog of **error codes** with cause and solution steps
+  (`docs/FEHLERCODES.md`, generated from the catalog).
 - Automatic process restart with a crash-loop brake; a metrics
   endpoint; an operations view with running instances (CPU/RAM per
   process), host resource history, and collected alarms.

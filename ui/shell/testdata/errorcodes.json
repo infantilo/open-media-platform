@@ -1,0 +1,616 @@
+[
+ {
+  "code": "OMP-1001",
+  "severity": "error",
+  "title": "Datenbank nicht erreichbar",
+  "cause": "Der Orchestrator erreicht die PostgreSQL-Datenbank nicht. Ohne sie gehen Anmeldung, Workflows, Protokolle und Zeitleiste nicht.",
+  "steps": [
+   "Prüfen, ob PostgreSQL (bzw. Patroni) läuft: „make status“ oder der Dienst des Datenbank-Containers.",
+   "Adresse und Passwort in OMP_POSTGRES_URL prüfen.",
+   "Bei einem Patroni-Verbund: nur der Primary nimmt Schreibzugriffe an — „patronictl list“ zeigt ihn.",
+   "Danach den Orchestrator neu starten."
+  ],
+  "match": "db: ping|failed to connect to .?user=|\\bpq: |\\bpgx\\b|sql: database is closed|postgres[^\\n]*(refused|unreachable|timeout)",
+  "doc": "FEHLERCODES.md#omp-1001"
+ },
+ {
+  "code": "OMP-1002",
+  "severity": "error",
+  "title": "Nachrichtenbus (NATS) nicht erreichbar",
+  "cause": "Der Orchestrator oder ein Node erreicht NATS nicht. Telemetrie, Host-Kommandos und Ereignisse bleiben aus.",
+  "steps": [
+   "Prüfen, ob die NATS-Container laufen (Port 4222).",
+   "OMP_NATS_URL (und bei TLS die Zertifikate) prüfen.",
+   "Der Orchestrator verbindet sich selbst wieder, sobald NATS erreichbar ist; Nodes ggf. neu starten."
+  ],
+  "match": "nats: no servers|nats disconnected|nats[^\\n]*(connection refused|timeout)|no responders available|kein kommandokanal zu den host-agents",
+  "doc": "FEHLERCODES.md#omp-1002"
+ },
+ {
+  "code": "OMP-1003",
+  "severity": "error",
+  "title": "NMOS-Registry nicht erreichbar",
+  "cause": "Die Registry, bei der sich alle Nodes anmelden, antwortet nicht. Neue Nodes erscheinen nicht, der Graph bleibt leer oder veraltet.",
+  "steps": [
+   "Prüfen, ob der Registry-Container läuft (Port 8010/8011).",
+   "OMP_REGISTRY_URL prüfen.",
+   "Nodes melden sich nach dem Neustart der Registry selbst wieder an (bis zu einer Minute)."
+  ],
+  "match": "failed to poll registry|nmos[ -]registry[^\\n]*(down|unreachable|refused|no such host)|registry (is )?unreachable",
+  "doc": "FEHLERCODES.md#omp-1003"
+ },
+ {
+  "code": "OMP-1004",
+  "severity": "error",
+  "title": "Cluster ohne Mehrheit",
+  "cause": "Zu wenige Orchestratoren sind erreichbar, um einen Leader zu wählen. Automatik, Failover und Zeitplan stehen.",
+  "steps": [
+   "Den Partner-Orchestrator wieder starten oder erreichbar machen.",
+   "Läuft dauerhaft nur einer: Administration → Cluster → Notausgang (nur wenn der Partner wirklich aus ist).",
+   "Auf Dauer einen Raft-Zeugen als dritte Stimme betreiben."
+  ],
+  "match": "no leader|quorum|not the leader|leadership lost",
+  "doc": "FEHLERCODES.md#omp-1004"
+ },
+ {
+  "code": "OMP-1005",
+  "severity": "error",
+  "title": "Speicherplatz voll",
+  "cause": "Auf dem Rechner ist kein Platz mehr. Aufnahmen, Datenbank und Protokolle können nicht mehr schreiben.",
+  "steps": [
+   "Administration → Support zeigt, welche Platte voll ist.",
+   "Alte Aufnahmen, Sicherungen und Update-Pakete löschen.",
+   "Dauerhaft: Platte vergrößern oder Aufbewahrungsfristen verkürzen (Administration → Einstellungen)."
+  ],
+  "match": "no space left on device|disk quota exceeded",
+  "doc": "FEHLERCODES.md#omp-1005"
+ },
+ {
+  "code": "OMP-1006",
+  "severity": "error",
+  "title": "Zugriff vom Betriebssystem verweigert",
+  "cause": "Der Prozess darf eine Datei, ein Verzeichnis oder eine Funktion nicht benutzen.",
+  "steps": [
+   "Im Log steht der Pfad: Besitzer und Rechte prüfen (ls -l).",
+   "Der Dienst läuft unter einem eigenen Benutzer — diesem das Verzeichnis zugänglich machen.",
+   "Für Uhr stellen und Echtzeit sind besondere Rechte nötig; sie fehlen in Containern (siehe OMP-5002)."
+  ],
+  "match": "permission denied|operation not permitted",
+  "doc": "FEHLERCODES.md#omp-1006"
+ },
+ {
+  "code": "OMP-1007",
+  "severity": "error",
+  "title": "Port schon belegt",
+  "cause": "Ein anderer Prozess benutzt die Adresse, die dieser Dienst öffnen will — oft eine Altinstanz, die nicht beendet wurde.",
+  "steps": [
+   "Mit „ss -ltnp“ nachsehen, wer den Port hält.",
+   "Die Altinstanz beenden (unter Instanzen oder per Prozess).",
+   "Dann den Dienst neu starten."
+  ],
+  "match": "address already in use|bind: [^\\n]*in use",
+  "doc": "FEHLERCODES.md#omp-1007"
+ },
+ {
+  "code": "OMP-1008",
+  "severity": "error",
+  "title": "Einstellung fehlt oder ist ungültig",
+  "cause": "Eine Umgebungsvariable (OMP_…) oder ein Wert in der Konfiguration hat ein falsches Format oder fehlt. Der Dienst startet deshalb nicht oder ohne diese Funktion.",
+  "steps": [
+   "Die Meldung nennt die Einstellung — Wert und Format prüfen (Administration → Einstellungen oder die Umgebung des Dienstes).",
+   "Den Dienst danach neu starten."
+  ],
+  "match": "must decode to exactly|OMP_[A-Z_]+ [^\\n]*(must|muss|ungültig|invalid|required)|ungültige konfiguration|invalid configuration",
+  "doc": "FEHLERCODES.md#omp-1008"
+ },
+ {
+  "code": "OMP-1010",
+  "severity": "warn",
+  "title": "Arbeitsspeicher knapp",
+  "cause": "Der Rechner hat fast keinen freien Arbeitsspeicher mehr; das System beendet Prozesse.",
+  "steps": [
+   "Nicht benötigte Instanzen stoppen.",
+   "Instanzen auf andere Hosts verteilen (Scheduler → Platzierung).",
+   "Wächst der Verbrauch dauernd, ist es ein Speicherleck: Node neu starten und das Support-Paket senden."
+  ],
+  "match": "out of memory|cannot allocate memory|\\boom\\b|oom-kill",
+  "doc": "FEHLERCODES.md#omp-1010"
+ },
+ {
+  "code": "OMP-1011",
+  "severity": "warn",
+  "title": "Zu viele offene Dateien",
+  "cause": "Der Prozess hat die erlaubte Zahl offener Dateien und Verbindungen fast oder ganz erreicht. Meist ein Leck.",
+  "steps": [
+   "Den Node neu starten.",
+   "Das Limit (LimitNOFILE) des Dienstes erhöhen.",
+   "Steigt die Zahl wieder, das Support-Paket senden."
+  ],
+  "match": "too many open files",
+  "doc": "FEHLERCODES.md#omp-1011"
+ },
+ {
+  "code": "OMP-1012",
+  "severity": "warn",
+  "title": "Prozessor überlastet",
+  "cause": "Der Rechner oder ein einzelner Prozess ist voll ausgelastet; Bild und Ton können aussetzen.",
+  "steps": [
+   "Auflösung oder Bildrate senken.",
+   "Instanzen auf andere Hosts verteilen.",
+   "Rechenintensive Aufgaben (ffmpeg-Jobs) nicht während der Sendung starten."
+  ],
+  "doc": "FEHLERCODES.md#omp-1012"
+ },
+ {
+  "code": "OMP-2012",
+  "severity": "error",
+  "title": "Container-Laufzeit meldet einen Fehler",
+  "cause": "Podman konnte einen Container nicht beobachten oder beenden. Der Node läuft möglicherweise weiter oder ist halb beendet.",
+  "steps": [
+   "Mit „podman ps -a“ nachsehen, ob der Container noch läuft.",
+   "Einen hängenden Container mit „podman rm -f \u003cName\u003e“ entfernen.",
+   "Dann die Instanz neu starten."
+  ],
+  "match": "podman (wait|stop|rm|kill|ps|inspect)\\b",
+  "doc": "FEHLERCODES.md#omp-2012"
+ },
+ {
+  "code": "OMP-2013",
+  "severity": "error",
+  "title": "Umzug oder Neustart gescheitert",
+  "cause": "Beim Umzug auf einen anderen Host oder beim Neustart mit neuer Version ist etwas schiefgegangen. Das System ist, wenn möglich, auf den bisherigen Stand zurückgegangen.",
+  "steps": [
+   "Unter Instanzen prüfen, ob die Instanz läuft — meist läuft sie auf dem bisherigen Host weiter.",
+   "Steht „Rücksprung gescheitert“ in der Meldung: Instanz von Hand neu starten.",
+   "Zielhost prüfen (online, Platz, Programm vorhanden) und den Umzug wiederholen."
+  ],
+  "match": "rücksprung|rollback|neue version (startet nicht|fehlgeschlagen)|start auf dem zielhost gescheitert",
+  "doc": "FEHLERCODES.md#omp-2013"
+ },
+ {
+  "code": "OMP-7002",
+  "severity": "error",
+  "title": "Datensicherung oder Wiederherstellung fehlgeschlagen",
+  "cause": "Die Sicherung der Datenbank konnte nicht erstellt oder eingespielt werden. Bestehende Daten wurden nicht verändert.",
+  "steps": [
+   "Ist die Datenbank erreichbar (OMP-1001) und Platz frei (OMP-1005)?",
+   "Die Meldung im Diagnose-Tab ansehen; „pg_dump“ muss im Datenbank-Container vorhanden sein.",
+   "Sicherung erneut starten."
+  ],
+  "match": "pg_dump|backup[^\\n]*(failed|fehlgeschlagen)|sicherung[^\\n]*fehlgeschlagen|restore[^\\n]*(failed|fehlgeschlagen)",
+  "doc": "FEHLERCODES.md#omp-7002"
+ },
+ {
+  "code": "OMP-2002",
+  "severity": "error",
+  "title": "Container-Image nicht vorhanden",
+  "cause": "Der Node läuft als Container, sein Image gibt es auf diesem Rechner nicht und kann auch nicht geladen werden.",
+  "steps": [
+   "Das Image bauen oder laden (Name steht in der Meldung), z. B. „podman build“.",
+   "Katalogeintrag prüfen: stimmt der Image-Name?",
+   "Ist der Node nicht nötig, einen anderen Typ verwenden."
+  ],
+  "match": "podman run|trying to pull|initializing source docker|pinging container registry|image not known",
+  "doc": "FEHLERCODES.md#omp-2002"
+ },
+ {
+  "code": "OMP-2003",
+  "severity": "error",
+  "title": "Programmdatei des Nodes fehlt",
+  "cause": "Die Datei, die den Node starten soll, gibt es nicht oder ist nicht ausführbar.",
+  "steps": [
+   "Die Nodes bauen: „cargo build --release“ im Ordner nodes/ (bzw. „make nodes“).",
+   "Pfad des Katalogeintrags und Ausführungsrecht prüfen.",
+   "Bei Remote-Hosts: Die Datei muss auf diesem Host liegen."
+  ],
+  "match": "executable file not found|fork/exec [^\\n]*: no such file|exec: [^\\n]*: no such file",
+  "doc": "FEHLERCODES.md#omp-2003"
+ },
+ {
+  "code": "OMP-2004",
+  "severity": "error",
+  "title": "Prozess abgestürzt",
+  "cause": "Der Node-Prozess hat sich unerwartet beendet. Der Orchestrator startet ihn automatisch neu, gibt aber nach mehreren Abstürzen in kurzer Zeit auf.",
+  "steps": [
+   "Unter Instanzen steht die letzte Fehlermeldung des Prozesses.",
+   "Instanz neu starten.",
+   "Stürzt sie wieder ab: Administration → Support → Support-Paket erstellen und senden.",
+   "Die Diagnose (🩺 an der Kachel) zeigt den Zustand der Pipeline."
+  ],
+  "match": "signal: (killed|segmentation|aborted|terminated)|crash loop detected|exit status [1-9]|panicked at|\\bpanic:",
+  "doc": "FEHLERCODES.md#omp-2004"
+ },
+ {
+  "code": "OMP-2005",
+  "severity": "error",
+  "title": "Node hat sich nicht rechtzeitig angemeldet",
+  "cause": "Der Prozess läuft, meldete sich aber nicht bei der Registry (Rechner ausgelastet, Registry nicht erreichbar oder Fehler beim Start).",
+  "steps": [
+   "Auslastung des Hosts prüfen (Administration → Support).",
+   "Erreichbarkeit der Registry prüfen (OMP-1003).",
+   "Log der Instanz ansehen (Diagnose), dann neu starten."
+  ],
+  "match": "registration timed out|failed to register|timed out waiting for (fresh )?registration|timed out waiting for sender",
+  "doc": "FEHLERCODES.md#omp-2005"
+ },
+ {
+  "code": "OMP-2007",
+  "severity": "warn",
+  "title": "Gespeicherter Zustand einer Rolle nicht wiederhergestellt",
+  "cause": "Nach einem Neustart konnte der gespeicherte Bedienzustand (z. B. Quellenwahl) nicht zurückgespielt werden.",
+  "steps": [
+   "Nichts tun: der Zustand bleibt erhalten und wird automatisch erneut versucht.",
+   "Erst nach mehreren Fehlversuchen wird er freigegeben — dann die Quellen von Hand neu wählen."
+  ],
+  "match": "failed to restore role state|giving up restoring role state|role state restore retry failed",
+  "doc": "FEHLERCODES.md#omp-2007"
+ },
+ {
+  "code": "OMP-2008",
+  "severity": "error",
+  "title": "Ungültige Einstellung",
+  "cause": "Ein Wert im Startdialog oder in den Einstellungen liegt außerhalb des erlaubten Bereichs. Es wurde nichts gestartet.",
+  "steps": [
+   "Den genannten Wert korrigieren (Bereich steht in der Meldung).",
+   "Leeres Feld = Standardwert des Node-Typs."
+  ],
+  "match": "größer als das Maximum|kleiner als das Minimum|ungültiger wert|invalid option|unknown option|exceeds the maximum",
+  "doc": "FEHLERCODES.md#omp-2008"
+ },
+ {
+  "code": "OMP-2009",
+  "severity": "warn",
+  "title": "Instanz startet wiederholt neu",
+  "cause": "Der Prozess endet immer wieder von selbst und wird automatisch neu gestartet. Das ist instabil.",
+  "steps": [
+   "Ursache unter Administration → Diagnose suchen (Meldungen dieses Nodes).",
+   "Die Diagnose an der Kachel (🩺) zeigt Pipeline und Meldungen.",
+   "Support-Paket erstellen und senden."
+  ],
+  "doc": "FEHLERCODES.md#omp-2009"
+ },
+ {
+  "code": "OMP-2010",
+  "severity": "warn",
+  "title": "Läuft mit alter Version",
+  "cause": "Das Programm wurde seit dem Start durch ein Update ersetzt; die Instanz läuft noch mit dem alten Stand.",
+  "steps": [
+   "Neu starten, wenn es der Betrieb erlaubt — nicht während einer Sendung."
+  ],
+  "doc": "FEHLERCODES.md#omp-2010"
+ },
+ {
+  "code": "OMP-2011",
+  "severity": "error",
+  "title": "Host nicht verfügbar",
+  "cause": "Der gewählte Host ist offline, im Wartungsmodus oder dem Orchestrator unbekannt.",
+  "steps": [
+   "Unter Hosts prüfen, ob der Host online ist (OMP-5001).",
+   "Wartungsmodus beenden oder einen anderen Host wählen."
+  ],
+  "match": "host [^\\n]*(is offline|in maintenance|not found)|wartungsmodus|unknown host",
+  "doc": "FEHLERCODES.md#omp-2011"
+ },
+ {
+  "code": "OMP-2014",
+  "severity": "error",
+  "title": "Host kann diesen Node-Typ nicht ausführen",
+  "cause": "Der Host-Agent kennt den Node-Typ nicht oder kann seine Ausführungsart (z. B. Container mit Podman) nicht bedienen.",
+  "steps": [
+   "Einen anderen Host wählen (Startdialog → Host) oder den Node lokal starten.",
+   "Katalog des Host-Agents (catalog.json) prüfen: Eintrag und Programm müssen auf diesem Host vorhanden sein.",
+   "Container-Nodes brauchen einen Host-Agent mit Podman-Unterstützung (neuere Version)."
+  ],
+  "match": "unsupported runner|catalog: entry [^\\n]*(has no|runner)|no catalog entry|unknown node type",
+  "doc": "FEHLERCODES.md#omp-2014"
+ },
+ {
+  "code": "OMP-2001",
+  "severity": "error",
+  "title": "Node nicht erreichbar",
+  "cause": "Der Orchestrator erreicht den Node nicht (beendet, gerade gestartet, umgezogen oder überlastet). Nach Stop, Start oder Umzug ist das kurz normal.",
+  "steps": [
+   "Unter Instanzen prüfen, ob der Prozess läuft; sonst neu starten.",
+   "Bleibt es bestehen: Auslastung des Hosts prüfen und die Diagnose (🩺) öffnen.",
+   "Bei einem Node auf einem Remote-Host auch dessen Host-Agent prüfen (OMP-5001)."
+  ],
+  "match": "node proxy call failed|unknown node\\b|connect: connection refused|timeout awaiting response headers|dial tcp [^\\n]*i/o timeout|connection reset by peer",
+  "doc": "FEHLERCODES.md#omp-2001"
+ },
+ {
+  "code": "OMP-3001",
+  "severity": "error",
+  "title": "Medien-Flow nicht vorhanden",
+  "cause": "Ein Node will einen Flow lesen, den die Quelle (noch) nicht schreibt. Meist wurde der Leser vor der Quelle gestartet oder die Quelle ist ausgefallen.",
+  "steps": [
+   "Die Quelle prüfen: läuft sie und liefert sie Bild (🩺 an ihrer Kachel)?",
+   "Reihenfolge beim Start: erst die Quellen, dann Mischer und Viewer.",
+   "Der Leser versucht es selbst erneut; hilft das nicht, den Leser neu starten."
+  ],
+  "match": "flow_def\\.json|mxl[^\\n]*(not found|enoent|no such flow)|flow [^\\n]*(does not exist|not found)",
+  "doc": "FEHLERCODES.md#omp-3001"
+ },
+ {
+  "code": "OMP-3002",
+  "severity": "warn",
+  "title": "Austauschspeicher /dev/shm voll oder nicht beschreibbar",
+  "cause": "Über /dev/shm tauschen die Nodes Videobilder aus. Ist er voll, bleibt das Bild stehen.",
+  "steps": [
+   "Verwaiste Flows unter /dev/shm/omp-mxl entfernen (vorher die Nodes stoppen).",
+   "/dev/shm vergrößern (Mount-Option size=).",
+   "Danach die Nodes neu starten."
+  ],
+  "match": "/dev/shm",
+  "doc": "FEHLERCODES.md#omp-3002"
+ },
+ {
+  "code": "OMP-3009",
+  "severity": "error",
+  "title": "GStreamer-Baustein oder Plugin fehlt",
+  "cause": "Die Pipeline braucht einen Baustein, den GStreamer auf diesem Rechner nicht kennt — ein Plugin-Paket ist nicht installiert.",
+  "steps": [
+   "Der Name des Bausteins steht in der Meldung („x264enc“, „videoconvert“ …).",
+   "Mit „gst-inspect-1.0 \u003cName\u003e“ prüfen und das passende Paket nachinstallieren (z. B. gstreamer1.0-plugins-ugly für x264).",
+   "Danach den Node neu starten."
+  ],
+  "match": "failed to find element factory|no such element|missing (element|plugin)|could not create element|no element \"",
+  "doc": "FEHLERCODES.md#omp-3009"
+ },
+ {
+  "code": "OMP-3010",
+  "severity": "error",
+  "title": "Schreiben in den Medien-Austausch fehlgeschlagen",
+  "cause": "Der Node kann ein Bild nicht in den Austauschspeicher (MXL) schreiben — meist ist /dev/shm voll oder der Flow wurde von außen entfernt.",
+  "steps": [
+   "Administration → Support: Ist /dev/shm voll (OMP-3002)?",
+   "Verwaiste Flows entfernen und den Node neu starten."
+  ],
+  "match": "\\[writer\\] (open_grain|commit)[^\\n]*failed",
+  "doc": "FEHLERCODES.md#omp-3010"
+ },
+ {
+  "code": "OMP-3003",
+  "severity": "error",
+  "title": "Bildformat nicht aushandelbar",
+  "cause": "Zwei Bausteine einigen sich nicht auf ein gemeinsames Format (Auflösung, Bildrate, Pixelformat).",
+  "steps": [
+   "Auflösung und Bildrate von Quelle und Ziel vergleichen und angleichen.",
+   "Einen Scaler dazwischenschalten.",
+   "Meldung und Format im Support-Paket senden, wenn beide gleich eingestellt sind."
+  ],
+  "match": "not-negotiated|not negotiated|could not link|link failed|caps [^\\n]*(mismatch|incompatible)",
+  "doc": "FEHLERCODES.md#omp-3003"
+ },
+ {
+  "code": "OMP-3004",
+  "severity": "error",
+  "title": "Fehler in der Medien-Pipeline",
+  "cause": "Ein Baustein der Pipeline meldet einen Fehler im Datenstrom; die Verarbeitung steht oder ist gestört.",
+  "steps": [
+   "Die Diagnose (🩺 an der Kachel) zeigt, welcher Baustein in welchem Zustand ist.",
+   "Den Node neu starten.",
+   "Kommt es wieder: Support-Paket erstellen und senden."
+  ],
+  "match": "internal data stream error|streaming stopped, reason|gstreamer[^\\n]*error|pipeline error",
+  "doc": "FEHLERCODES.md#omp-3004"
+ },
+ {
+  "code": "OMP-3005",
+  "severity": "error",
+  "title": "Eingabegerät nicht verfügbar",
+  "cause": "Die Karte oder Kamera fehlt, ist von einem anderen Programm belegt oder der Treiber ist nicht geladen.",
+  "steps": [
+   "Gerät und Kabel prüfen; Treiber geladen?",
+   "Ein anderes Programm (oder eine zweite Instanz) belegt das Gerät: beenden.",
+   "Unter Hosts zeigt das Inventar die erkannten I/O-Ports."
+  ],
+  "match": "no such device|cannot open (video|audio)|device (is )?busy|decklink[^\\n]*(not found|no device)|v4l2",
+  "doc": "FEHLERCODES.md#omp-3005"
+ },
+ {
+  "code": "OMP-3006",
+  "severity": "error",
+  "title": "Kein Bild oder Ton von der Quelle",
+  "cause": "Der Node läuft, bekommt von der verbundenen Quelle aber keine Daten — oder liefert selbst keine.",
+  "steps": [
+   "Die Quelle davor prüfen (🩺 an ihrer Kachel): läuft sie, liefert sie Bild?",
+   "Die Verbindung im Flow Editor prüfen.",
+   "Hilft das nicht, den Node neu starten."
+  ],
+  "match": "kein video-buffer|kein audio-buffer|no video buffer|no audio buffer",
+  "doc": "FEHLERCODES.md#omp-3006"
+ },
+ {
+  "code": "OMP-3007",
+  "severity": "warn",
+  "title": "Bildrate eingebrochen",
+  "cause": "Der Node liefert deutlich weniger Bilder pro Sekunde als sonst — meist Überlastung.",
+  "steps": [
+   "Last des Hosts prüfen (Administration → Support).",
+   "Instanzen auf andere Hosts verteilen.",
+   "Auflösung oder Bildrate senken."
+  ],
+  "doc": "FEHLERCODES.md#omp-3007"
+ },
+ {
+  "code": "OMP-3008",
+  "severity": "warn",
+  "title": "Puffer in der Pipeline voll",
+  "cause": "Ein Puffer ist an seiner Grenze: der Baustein dahinter nimmt Daten zu langsam ab.",
+  "steps": [
+   "Last des Hosts prüfen.",
+   "Prüfen, ob der Ausgang hängt (z. B. Ziel erreichbar, Platte beschreibbar).",
+   "Den Node neu starten."
+  ],
+  "doc": "FEHLERCODES.md#omp-3008"
+ },
+ {
+  "code": "OMP-4001",
+  "severity": "warn",
+  "title": "Verbindung: Sender-Seite nicht ansprechbar (404)",
+  "cause": "Der Node bietet keine Sender-seitige Verbindungs-Schnittstelle an. Bei reinen Sendern ist das normal.",
+  "steps": [
+   "Meist harmlos: die Verbindung wird über die Empfängerseite hergestellt.",
+   "Nur wenn die Verbindung wirklich fehlt: Empfänger im Flow Editor neu verbinden."
+  ],
+  "match": "is05 patchsenderstaged failed",
+  "doc": "FEHLERCODES.md#omp-4001"
+ },
+ {
+  "code": "OMP-4002",
+  "severity": "error",
+  "title": "Verbindung konnte nicht hergestellt werden",
+  "cause": "Der Empfänger hat die Verbindungsanfrage (NMOS IS-05) abgelehnt oder war nicht erreichbar.",
+  "steps": [
+   "Prüfen, ob Sender und Empfänger online sind (🩺 an beiden Kacheln).",
+   "Formate müssen passen (Video mit Video, Ton mit Ton).",
+   "Erneut verbinden; steht der Fehler wieder da, im Diagnose-Tab die Spur (Trace) des Vorgangs öffnen."
+  ],
+  "match": "is05: unexpected status|patchstaged failed|is05 [^\\n]*failed",
+  "doc": "FEHLERCODES.md#omp-4002"
+ },
+ {
+  "code": "OMP-4003",
+  "severity": "error",
+  "title": "MXL verbindet keine verschiedenen Hosts",
+  "cause": "MXL tauscht Bilder nur innerhalb eines Rechners aus; Quelle und Ziel liegen auf verschiedenen Hosts.",
+  "steps": [
+   "Quelle und Ziel auf denselben Host legen, oder",
+   "ein Gateway (ST 2110, SRT, Fabrics) dazwischenschalten."
+  ],
+  "match": "mxl ist host-lokal|mxl is host-local|mxl-gegenstelle liegt auf einem anderen host|mxl-verbindung über zwei hosts|mxl peer on another host",
+  "doc": "FEHLERCODES.md#omp-4003"
+ },
+ {
+  "code": "OMP-4004",
+  "severity": "error",
+  "title": "Formate passen nicht zusammen",
+  "cause": "Sender und Empfänger tragen verschiedene Medienarten (z. B. Video auf einen Audio-Eingang).",
+  "steps": [
+   "Eine Verbindung zwischen passenden Anschlüssen herstellen: Video mit Video, Ton mit Ton."
+  ],
+  "match": "formate passen nicht|formats? (do not|don't) match",
+  "doc": "FEHLERCODES.md#omp-4004"
+ },
+ {
+  "code": "OMP-5003",
+  "severity": "error",
+  "title": "Host-Kommando abgelehnt",
+  "cause": "Der Host-Agent hat ein Kommando des Orchestrators nicht angenommen: Signatur, Zeit oder Amtszeit stimmen nicht.",
+  "steps": [
+   "Uhren von Orchestrator und Host vergleichen (die Zeit darf nur wenige Sekunden abweichen).",
+   "Nach einem Schlüsselwechsel: Administration → Hosts → Schlüssel des Hosts erneuern.",
+   "Den Host-Agent neu starten."
+  ],
+  "match": "unauthorized: [^\\n]*(signature|timestamp|nonce|term|key)|command rejected|stale term|command key unavailable|no command key",
+  "doc": "FEHLERCODES.md#omp-5003"
+ },
+ {
+  "code": "OMP-5004",
+  "severity": "warn",
+  "title": "Host-Agent zu alt für diese Funktion",
+  "cause": "Der Host-Agent kennt das Kommando noch nicht (älterer Stand als der Orchestrator).",
+  "steps": [
+   "Host-Agent auf den Stand des Orchestrators bringen (System-Update oder neu bauen und starten)."
+  ],
+  "match": "unknown action",
+  "doc": "FEHLERCODES.md#omp-5004"
+ },
+ {
+  "code": "OMP-5005",
+  "severity": "warn",
+  "title": "Host-Grenze für Jobs erreicht",
+  "cause": "Auf dem Host laufen schon so viele ffmpeg-Jobs, wie er laut Einstellung gleichzeitig ausführen darf.",
+  "steps": [
+   "Warten, bis ein Job fertig ist, oder einen anderen Host wählen.",
+   "Die Grenze in der tools.json des Hosts anheben, wenn der Rechner es verträgt."
+  ],
+  "match": "job-grenze|grenze für [^\\n]*erreicht|job limit",
+  "doc": "FEHLERCODES.md#omp-5005"
+ },
+ {
+  "code": "OMP-5006",
+  "severity": "warn",
+  "title": "Echtzeit-Priorität auf dem Host nicht erlaubt",
+  "cause": "Der Host-Agent darf Prozessen keine Echtzeit-Priorität oder feste Prozessorkerne geben (fehlende Rechte). Der Node läuft trotzdem, aber ohne diesen Schutz vor Aussetzern.",
+  "steps": [
+   "Dem Dienst die Rechte geben: LimitRTPRIO/LimitNICE in der systemd-Unit des Host-Agents, Programme chrt und taskset installiert.",
+   "In Containern (z. B. LXD) sind diese Rechte meist nicht vergeben — dann ist der Hinweis erwartet.",
+   "Den Host-Agent neu starten."
+  ],
+  "match": "nice nicht erlaubt|realtime-priorität nicht möglich|limitrtprio|limitnice|taskset nicht verfügbar",
+  "doc": "FEHLERCODES.md#omp-5006"
+ },
+ {
+  "code": "OMP-5007",
+  "severity": "error",
+  "title": "tools.json des Host-Agents ungültig",
+  "cause": "Die Datei, die festlegt, welche Programme (ffmpeg …) der Host ausführen darf, ist fehlerhaft oder leer. Ohne sie nimmt der Host keine Jobs an.",
+  "steps": [
+   "Die Meldung nennt die Stelle: Pfade müssen absolut sein, mindestens ein Programm muss freigegeben sein.",
+   "Datei korrigieren und den Host-Agent neu starten."
+  ],
+  "match": "tools\\.json",
+  "doc": "FEHLERCODES.md#omp-5007"
+ },
+ {
+  "code": "OMP-5001",
+  "severity": "error",
+  "title": "Host meldet sich nicht",
+  "cause": "Vom Host-Agent kommt keine Telemetrie mehr: Rechner aus, Netzwerk getrennt oder Dienst beendet. Instanzen dort sind vermutlich nicht erreichbar.",
+  "steps": [
+   "Rechner und Netzwerkverbindung prüfen.",
+   "Den Dienst „omp-host-agent“ auf dem Host prüfen und starten.",
+   "Ein dauerhaft stillgelegter Host: unter Hosts entfernen."
+  ],
+  "match": "no telemetry received|host [^\\n]*offline",
+  "doc": "FEHLERCODES.md#omp-5001"
+ },
+ {
+  "code": "OMP-5002",
+  "severity": "warn",
+  "title": "Uhr nicht synchron",
+  "cause": "Die Systemuhr des Rechners ist nicht mit einer Zeitquelle abgeglichen oder kennt den TAI-Versatz nicht. Das stört Videoübergabe und Schaltzeitpunkte.",
+  "steps": [
+   "Zeitsynchronisation einrichten (chrony oder PTP).",
+   "In Containern (z. B. LXD) darf die Uhr nicht gestellt werden — dort Zeitquelle auf dem Gastgeber einrichten.",
+   "Danach prüft Administration → Support die Uhr erneut."
+  ],
+  "match": "clock[^\\n]*not synchroni[sz]ed|unsynced|uhr[^\\n]*nicht synchron|no tai offset",
+  "doc": "FEHLERCODES.md#omp-5002"
+ },
+ {
+  "code": "OMP-6001",
+  "severity": "warn",
+  "title": "Nicht angemeldet oder Sitzung abgelaufen",
+  "cause": "Die Anmeldung gilt nicht mehr (abgelaufen, abgemeldet oder ein Administrator hat Sitzungen beendet).",
+  "steps": [
+   "Neu anmelden."
+  ],
+  "match": "http 401|session expired|token expired|invalid token|\\bunauthorized\\b",
+  "doc": "FEHLERCODES.md#omp-6001"
+ },
+ {
+  "code": "OMP-6002",
+  "severity": "warn",
+  "title": "Keine Berechtigung",
+  "cause": "Dein Konto darf diese Aktion nicht ausführen.",
+  "steps": [
+   "Einen Administrator um das Recht bitten (Administration → Rechte)."
+  ],
+  "match": "http 403|\\bforbidden\\b",
+  "doc": "FEHLERCODES.md#omp-6002"
+ },
+ {
+  "code": "OMP-7001",
+  "severity": "error",
+  "title": "Update-Paket abgelehnt",
+  "cause": "Die Signatur des Pakets stimmt nicht oder das Paket ist beschädigt. Es wurde nichts verändert.",
+  "steps": [
+   "Das Paket erneut von der Originalquelle laden.",
+   "Prüfen, ob der richtige Schlüssel hinterlegt ist (OMP_UPDATE_PUBKEY_FILE)."
+  ],
+  "match": "signature[^\\n]*(invalid|mismatch|verif)|update[^\\n]*(rejected|verification)|prüfsumme stimmt nicht|paket zu groß",
+  "doc": "FEHLERCODES.md#omp-7001"
+ }
+]

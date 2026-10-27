@@ -1,11 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { buildLogQuery, explain, relativeTime } from "./diagnose-logic.ts";
-
-Deno.test("explain: bekannte Meldungen mit Parameter", () => {
-  assertEquals(explain('node proxy call failed (GET /params/previewUrl): Get "http://x"'), { id: "proxyParam", param: "previewUrl" });
-  assertEquals(explain("is05 PatchSenderStaged failed (node may not implement…): 404")?.id, "is05sender");
-  assertEquals(explain("etwas ganz anderes"), undefined);
-});
+import { buildLogQuery, relativeTime } from "./diagnose-logic.ts";
 
 Deno.test("relativeTime", () => {
   const now = Date.parse("2026-10-16T12:00:00Z");
