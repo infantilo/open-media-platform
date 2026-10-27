@@ -36,6 +36,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -189,6 +190,8 @@ type Config struct {
 	// BootstrapCluster-Doku). Wirkungslos, wenn bereits ein Log
 	// existiert (dann läuft ohnehin kein Bootstrap, s. New-Doku).
 	SkipBootstrap bool
+	// Witness macht diese Instanz zum Raft-Zeugen (witness.go): sie stimmt ab, gibt eine zufällig gewonnene Führung aber sofort ab.
+	Witness bool
 }
 
 // Node kapselt eine laufende Raft-Instanz samt ihrer Speicher-/
@@ -202,6 +205,8 @@ type Node struct {
 	notifyCh  chan bool
 	stopCh    chan struct{}
 	stopOnce  sync.Once
+
+	started time.Time // für NoLeaderFor (witness.go)
 }
 
 // New startet eine Raft-Instanz für cfg. Eine frische Instanz (kein
@@ -263,7 +268,7 @@ func New(cfg Config) (*Node, error) {
 	// — WARN reicht für den Produktionsbetrieb (Leader-Wechsel/Fehler
 	// bleiben sichtbar), passt zum Rest des Projekts (strukturierte,
 	// knappe slog-Logs statt Debug-Rauschen).
-	raftCfg.LogLevel = "WARN"
+	raftCfg.LogLevel = raftLogLevel
 	// notifyCh treibt watchLeadership (Selbst-Ankündigung der eigenen
 	// HTTP-Adresse bei jedem Führungswechsel, s. Paketkommentar) —
 	// gepuffert mit 1, weil raft.Config.NotifyCh-Doku ausdrücklich vor
@@ -271,6 +276,20 @@ func New(cfg Config) (*Node, error) {
 	// channel").
 	notifyCh := make(chan bool, 1)
 	raftCfg.NotifyCh = notifyCh
+
+	if cfg.Witness {
+		applyWitnessTimeouts(raftCfg)
+	}
+
+	// Notausgang (witness.go): eine Marke aus dem Datenverzeichnis baut die Konfiguration auf diesen Knoten allein um — vor dem Start der Raft-Instanz.
+	if m, ok, err := consumeRecoverMarker(cfg.DataDir, cfg.NodeID); err != nil {
+		return nil, fmt.Errorf("cluster: recover marker: %w", err)
+	} else if ok && hasState {
+		if err := recoverSolo(cfg, raftCfg, fsm, logStore, logStore, snapshotStore, transport); err != nil {
+			return nil, fmt.Errorf("cluster: emergency solo recovery: %w", err)
+		}
+		slog.Warn("cluster: Notausgang ausgeführt — dieser Knoten läuft jetzt als Einzelknoten", "requestedBy", m.By, "at", m.At)
+	}
 
 	r, err := raft.NewRaft(raftCfg, fsm, logStore, logStore, snapshotStore, transport)
 	if err != nil {
@@ -311,6 +330,7 @@ func New(cfg Config) (*Node, error) {
 		config:    cfg,
 		notifyCh:  notifyCh,
 		stopCh:    make(chan struct{}),
+		started:   time.Now(),
 	}
 	go node.watchLeadership()
 	return node, nil
@@ -332,6 +352,10 @@ func (n *Node) watchLeadership() {
 		case isLeader, ok := <-n.notifyCh:
 			if !ok {
 				return
+			}
+			if isLeader && n.config.Witness {
+				go n.relinquish() // ein Zeuge führt nie (witness.go)
+				continue
 			}
 			if isLeader && n.config.HTTPAddr != "" {
 				_ = n.SetPeerHTTPAddr(n.config.NodeID, n.config.HTTPAddr)
@@ -532,6 +556,12 @@ type Status struct {
 	FSMVersion     uint64            `json:"fsmVersion"`
 	Peers          []Peer            `json:"peers"`
 	PeerHTTPAddrs  map[string]string `json:"peerHttpAddrs,omitempty"`
+	// Witness: diese Instanz ist ein Raft-Zeuge (stimmt nur ab).
+	Witness bool `json:"witness,omitempty"`
+	// NoLeaderSeconds: seit wann kein Leader bekannt ist (0 = bekannt); QuorumLost: Mehrheit weg (witness.go); SoloPending: Notausgang vorgemerkt.
+	NoLeaderSeconds int  `json:"noLeaderSeconds"`
+	QuorumLost      bool `json:"quorumLost"`
+	SoloPending     bool `json:"soloPending,omitempty"`
 }
 
 // Status liest den aktuellen Raft-Zustand dieser Instanz — reine
@@ -562,19 +592,23 @@ func (n *Node) Status() Status {
 	leaderHTTPAddr, _ := n.LeaderHTTPAddr()
 
 	return Status{
-		NodeID:         n.config.NodeID,
-		RaftAddr:       n.config.RaftAddr,
-		HTTPAddr:       n.config.HTTPAddr,
-		State:          n.raft.State().String(),
-		IsLeader:       n.raft.State() == raft.Leader,
-		LeaderID:       string(leaderID),
-		LeaderRaftAddr: string(leaderAddr),
-		LeaderHTTPAddr: leaderHTTPAddr,
-		Term:           term,
-		AppliedIndex:   n.raft.AppliedIndex(),
-		LastIndex:      n.raft.LastIndex(),
-		FSMVersion:     n.fsm.Version(),
-		Peers:          peers,
-		PeerHTTPAddrs:  n.fsm.PeerHTTPAddrs(),
+		NodeID:          n.config.NodeID,
+		RaftAddr:        n.config.RaftAddr,
+		HTTPAddr:        n.config.HTTPAddr,
+		State:           n.raft.State().String(),
+		IsLeader:        n.raft.State() == raft.Leader,
+		LeaderID:        string(leaderID),
+		LeaderRaftAddr:  string(leaderAddr),
+		LeaderHTTPAddr:  leaderHTTPAddr,
+		Term:            term,
+		AppliedIndex:    n.raft.AppliedIndex(),
+		LastIndex:       n.raft.LastIndex(),
+		FSMVersion:      n.fsm.Version(),
+		Peers:           peers,
+		PeerHTTPAddrs:   n.fsm.PeerHTTPAddrs(),
+		Witness:         n.config.Witness,
+		NoLeaderSeconds: int(n.NoLeaderFor().Seconds()),
+		QuorumLost:      n.QuorumLost(),
+		SoloPending:     n.SoloPending(),
 	}
 }

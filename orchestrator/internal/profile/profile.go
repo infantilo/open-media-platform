@@ -98,7 +98,7 @@ func Evaluate(in Inputs) []Finding {
 	case n < 2:
 		add("cluster-single", Warning, "Nur ein Orchestrator: Failover und Scheduler stehen bei dessen Ausfall.", "Mindestens drei Raft-Knoten auf getrennten Rechnern (Zeuge zählt mit) betreiben.")
 	case n == 2:
-		add("cluster-quorum", Critical, "Zwei Raft-Knoten haben bei Ausfall eines Knotens kein Quorum (Failover und Scheduler stehen).", "Einen dritten Knoten (kann ein leichter Zeuge ohne Medienlast sein) auf einem eigenen Rechner ergänzen.")
+		add("cluster-quorum", Critical, "Zwei Raft-Knoten haben bei Ausfall eines Knotens kein Quorum (Failover und Scheduler stehen).", "Einen dritten Knoten auf einem eigenen Rechner ergänzen: den Raft-Zeugen (cmd/witness, deploy/systemd/omp-raft-witness.service). Notfalls: Notausgang unter Administration → Cluster.")
 	}
 	if !in.NodeMTLS {
 		add("node-mtls-off", Warning, "Orchestrator↔Node ohne gegenseitiges TLS (das Node-API-Token geht im Klartext).", "OMP_MTLS_ENABLED=1 mit Zertifikaten (make mtls-issue-certs).")

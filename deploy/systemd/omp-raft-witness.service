@@ -1,0 +1,31 @@
+# Raft-Zeuge (Audit B5): leichter dritter Raft-Knoten für Installationen mit zwei Orchestratoren. Auf einen EIGENEN Rechner (nicht auf einen der beiden Orchestrator-Rechner).
+# Installation: Binary aus `go build -o bin/omp-witness ./orchestrator/cmd/witness`; Umgebung in /etc/omp-raft-witness.env (Beispiel unten). Danach auf einem Orchestrator
+# unter Administration → Cluster „Weiteren Orchestrator hinzufügen“ (Node-ID und Raft-Adresse des Zeugen) oder POST /api/v1/cluster/join.
+#
+#   OMP_NODE_ID=witness-1
+#   OMP_RAFT_LISTEN=<von den Orchestratoren erreichbare IP>:8300
+#   OMP_RAFT_DATA_DIR=/var/lib/omp-witness/raft
+#   OMP_CLUSTER_JOIN=true
+#   OMP_WITNESS_LISTEN=127.0.0.1:8002        # GET /healthz
+#   (optional) OMP_MTLS_ENABLED=true  OMP_MTLS_CERT_FILE=… OMP_MTLS_KEY_FILE=… OMP_MTLS_CA_FILE=…
+[Unit]
+Description=OpenMediaPlatform Raft-Zeuge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=@USER@
+WorkingDirectory=@ROOT@
+EnvironmentFile=/etc/omp-raft-witness.env
+ExecStart=@ROOT@/bin/omp-witness
+Restart=always
+RestartSec=5
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+LockPersonality=yes
+NoNewPrivileges=yes
+ProtectSystem=full
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

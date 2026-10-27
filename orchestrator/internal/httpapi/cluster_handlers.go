@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"syscall"
+	"time"
 
 	"github.com/hashicorp/raft"
 
@@ -138,4 +141,64 @@ func clusterErrorStatus(err error) int {
 		return http.StatusConflict
 	}
 	return http.StatusInternalServerError
+}
+
+// soloService: Notausgang für einen Zwei-Knoten-Cluster ohne Mehrheit (cluster/witness.go). Optional, damit Test-Doubles von ClusterService unverändert bleiben.
+type soloService interface {
+	RequestSolo(by string) error
+	CancelSolo() error
+}
+
+// handleClusterEmergencySolo ist POST /api/v1/cluster/emergency-solo (Administrator): der verbliebene Orchestrator wird beim nächsten Start als Einzelknoten
+// weiterbetrieben. Nur ohne bekannten Leader (409 sonst) und nur mit {"confirmPartnerDown": true} — läuft der Partner doch noch, entsteht Split-Brain.
+// "restart": true beendet diesen Orchestrator nach der Antwort (SIGTERM); ein Dienstmanager (systemd) startet ihn neu, sonst von Hand starten.
+func handleClusterEmergencySolo(clusterSvc ClusterService, domainAudit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		svc, ok := clusterSvc.(soloService)
+		if !ok {
+			http.Error(w, "emergency exit not supported", http.StatusNotImplemented)
+			return
+		}
+		var body struct {
+			ConfirmPartnerDown bool `json:"confirmPartnerDown"`
+			Restart            bool `json:"restart"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || !body.ConfirmPartnerDown {
+			http.Error(w, `confirmation required: {"confirmPartnerDown": true} — only if the other orchestrator is really down (otherwise two leaders will run side by side)`, http.StatusBadRequest)
+			return
+		}
+		if err := svc.RequestSolo(actorFromRequest(r)); err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, cluster.ErrNotQuorumLost) || errors.Is(err, cluster.ErrNoOtherMembers) {
+				status = http.StatusConflict
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "cluster", "self", "emergency_solo_requested", map[string]any{"restart": body.Restart})
+		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "restartRequired": true, "restarting": body.Restart})
+		if body.Restart {
+			go func() {
+				time.Sleep(500 * time.Millisecond)
+				_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+			}()
+		}
+	}
+}
+
+// handleClusterCancelSolo ist DELETE /api/v1/cluster/emergency-solo: nimmt die Vormerkung zurück (z. B. weil der Partner doch wieder da ist), solange noch nicht neu gestartet wurde.
+func handleClusterCancelSolo(clusterSvc ClusterService, domainAudit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		svc, ok := clusterSvc.(soloService)
+		if !ok {
+			http.Error(w, "emergency exit not supported", http.StatusNotImplemented)
+			return
+		}
+		if err := svc.CancelSolo(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "cluster", "self", "emergency_solo_cancelled", nil)
+		w.WriteHeader(http.StatusNoContent)
+	}
 }

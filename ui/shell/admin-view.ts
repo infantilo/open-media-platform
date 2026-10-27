@@ -146,6 +146,10 @@ interface ClusterStatus {
   appliedIndex: number;
   lastIndex: number;
   peers: ClusterPeer[];
+  witness?: boolean;
+  noLeaderSeconds?: number;
+  quorumLost?: boolean;
+  soloPending?: boolean;
 }
 
 // CatalogEntry — Wire-Format identisch zu orchestrator/internal/
@@ -3772,6 +3776,60 @@ class AdminView extends HTMLElement {
     return wrap;
   }
 
+  #clusterFact(k: string, v: string): HTMLElement {
+    const box = document.createElement("div");
+    const kEl = document.createElement("div");
+    kEl.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);";
+    kEl.textContent = k;
+    const vEl = document.createElement("div");
+    vEl.style.cssText = "font-weight:600;";
+    vEl.textContent = v;
+    box.append(kEl, vEl);
+    return box;
+  }
+
+  // B5 (Audit 2026-10-23): bei zwei Orchestratoren ohne Zeugen steht der Cluster, sobald ein Knoten ausfällt. Hinweis mit dem Notausgang (verbliebenen Knoten
+  // als Einzelknoten weiterbetreiben) — bewusst hinter einer ausdrücklichen Bestätigung, weil bei noch laufendem Partner zwei Leader entstünden.
+  #renderClusterQuorumWarning(c: ClusterStatus): HTMLElement | null {
+    if (!c.quorumLost && !c.soloPending) return null;
+    const box = document.createElement("div");
+    box.setAttribute("data-role", "cluster-quorum");
+    box.style.cssText =
+      "margin-bottom:var(--omp-space-3);padding:var(--omp-space-3);border:1px solid var(--omp-error);border-radius:var(--omp-radius);background:rgba(239,83,80,0.1);";
+    const head = document.createElement("div");
+    head.style.cssText = "font-weight:700;margin-bottom:var(--omp-space-1);";
+    head.textContent = c.soloPending ? tt("adm.cl.pendingTitle") : tt("adm.cl.lostTitle");
+    const text = document.createElement("div");
+    text.style.cssText = "margin-bottom:var(--omp-space-2);white-space:pre-wrap;";
+    text.textContent = c.soloPending ? tt("adm.cl.pendingText") : tt("adm.cl.lostText", { p0: c.noLeaderSeconds ?? 0 });
+    box.append(head, text);
+    const btn = document.createElement("button");
+    btn.style.cssText = "cursor:pointer;";
+    if (c.soloPending) {
+      btn.textContent = tt("adm.cl.cancel");
+      btn.addEventListener("click", async () => {
+        const res = await apiFetch("/api/v1/cluster/emergency-solo", { method: "DELETE" });
+        if (!res.ok) this.#error = tt("adm.64bd21", { p0: await res.text() });
+        await this.#loadClusterStatus();
+      });
+    } else {
+      btn.className = "omp-btn-danger";
+      btn.textContent = tt("adm.cl.solo");
+      btn.addEventListener("click", async () => {
+        if (!(await confirmDialog(tt("adm.cl.soloConfirm"), { confirmLabel: tt("adm.cl.soloConfirmBtn") }))) return;
+        const res = await apiFetch("/api/v1/cluster/emergency-solo", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ confirmPartnerDown: true, restart: false }),
+        });
+        this.#error = res.ok ? "" : tt("adm.64bd21", { p0: (await res.text()).trim() });
+        await this.#loadClusterStatus();
+      });
+    }
+    box.appendChild(btn);
+    return box;
+  }
+
   #renderClusterSection(): HTMLElement {
     const section = document.createElement("div");
 
@@ -3830,6 +3888,9 @@ class AdminView extends HTMLElement {
       statusCard.appendChild(box);
     }
     section.appendChild(statusCard);
+    if (c.witness) statusCard.append(this.#clusterFact(tt("adm.cl.role"), tt("adm.cl.witness")));
+    const warn = this.#renderClusterQuorumWarning(c);
+    if (warn) section.appendChild(warn);
 
     if (this.#showClusterJoinForm) {
       section.appendChild(this.#renderClusterJoinForm());

@@ -567,6 +567,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// D12 Teil 2: Laufzeit-Mitgliedschaft — Admin-Verb wie andere
 	// sicherheitsrelevante Aktionen (Host-Bootstrap-Tokens, Katalog-Import).
 	mux.HandleFunc("POST /api/v1/cluster/join", g.requireVerbGlobal(authz.VerbAdmin, handleClusterJoin(clusterSvc)))
+	mux.HandleFunc("POST /api/v1/cluster/emergency-solo", g.requireVerbGlobal(authz.VerbAdmin, handleClusterEmergencySolo(clusterSvc, options.domainAudit)))
+	mux.HandleFunc("DELETE /api/v1/cluster/emergency-solo", g.requireVerbGlobal(authz.VerbAdmin, handleClusterCancelSolo(clusterSvc, options.domainAudit)))
 	mux.HandleFunc("DELETE /api/v1/cluster/members/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleClusterLeave(clusterSvc)))
 	mux.HandleFunc("GET /api/v1/hosts/{id}/metrics/history", g.requireAuth(handleHostMetricsHistory(hostHistory)))
 

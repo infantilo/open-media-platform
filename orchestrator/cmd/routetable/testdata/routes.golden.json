@@ -580,6 +580,18 @@
     "domain": "cloud"
   },
   {
+    "method": "DELETE",
+    "path": "/api/v1/cluster/emergency-solo",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/cluster/emergency-solo",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
     "method": "POST",
     "path": "/api/v1/cluster/join",
     "auth": "verb:Admin",
