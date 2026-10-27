@@ -5,7 +5,7 @@
 import { apiFetch } from "../shell/connection.ts";
 import { t } from "../shell/i18n.ts";
 import { groupOptions, hintFor, inputKind, type OptionDef } from "../shell/settings-logic.ts";
-import { buildStartBody, emptyMeaning, type StartBody, type StartForm } from "./start-dialog-logic.ts";
+import { buildStartBody, emptyMeaning, findPairs, type OptionPair, presetFor, RATES, RESOLUTIONS, type StartBody, type StartForm, valuesForPreset } from "./start-dialog-logic.ts";
 
 export interface StartDialogEntry {
   type: string;
@@ -135,9 +135,66 @@ export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
       box.open = true;
       box.append(el("summary", "cursor:pointer;font-weight:600;margin-bottom:6px;", t("flow.sd.settings", { p0: defs.length })));
       box.append(el("div", "margin-bottom:8px;" + DIM, t("flow.sd.settingsHint")));
+      // Auflösung und Bildrate als Auswahl: Breite/Höhe bzw. Zähler/Nenner stehen sonst als vier Zahlenfelder nebeneinander (Nutzerfund 2026-10-27).
+      const pairs = findPairs(defs.map((d) => d.key));
+      const pairOfFirst = new Map(pairs.map((p) => [p.first, p]));
+      const pairSecond = new Set(pairs.map((p) => p.second));
+      const defByKey = new Map(defs.map((d) => [d.key, d]));
+      const pairRow = (pair: OptionPair): HTMLElement => {
+        const d1 = defByKey.get(pair.first)!, d2 = defByKey.get(pair.second)!;
+        const sel = el("select", INPUT);
+        const std = el("option", "", t("flow.sd.presetDefault"));
+        std.value = "";
+        sel.append(std);
+        (pair.kind === "resolution" ? RESOLUTIONS : RATES).forEach((r, i) => {
+          const o = el("option", "", pair.kind === "resolution" ? r.label : t("flow.sd.fps", { p0: r.label }));
+          o.value = String(i);
+          sel.append(o);
+        });
+        const custom = el("option", "", t("flow.sd.presetCustom"));
+        custom.value = "custom";
+        sel.append(custom);
+        const mk = (label: string, def: OptionDef): HTMLElement => {
+          const i = el("input", INPUT);
+          i.type = "number";
+          if (def.min !== undefined) i.min = String(def.min);
+          if (def.max !== undefined) i.max = String(def.max);
+          i.addEventListener("input", () => {
+            form.options[def.key] = i.value;
+            sel.value = presetFor(pair.kind, form.options[pair.first] ?? "", form.options[pair.second] ?? "");
+          });
+          return labelled(label, i);
+        };
+        const l1 = pair.kind === "resolution" ? t("flow.sd.width") : t("flow.sd.rateNum");
+        const l2 = pair.kind === "resolution" ? t("flow.sd.height") : t("flow.sd.rateDen");
+        const f1 = mk(l1, d1), f2 = mk(l2, d2);
+        const own = el("div", "display:none;gap:10px;");
+        own.append(f1, f2);
+        const apply = () => {
+          const v = valuesForPreset(pair.kind, sel.value);
+          if (v) {
+            form.options[pair.first] = v[0];
+            form.options[pair.second] = v[1];
+            (f1.querySelector("input") as HTMLInputElement).value = v[0];
+            (f2.querySelector("input") as HTMLInputElement).value = v[1];
+          }
+          own.style.display = sel.value === "custom" ? "flex" : "none";
+        };
+        sel.addEventListener("change", apply);
+        const row = labelled(pair.kind === "resolution" ? t("flow.sd.resolution") : t("flow.sd.rate"), sel, d1.description ?? "");
+        row.dataset.optionKey = pair.first;
+        row.append(own);
+        return row;
+      };
       for (const [group, list] of groupOptions(defs)) {
         box.append(el("div", "margin:8px 0 4px;font-weight:600;" + DIM, group));
         for (const o of list) {
+          if (pairSecond.has(o.key)) continue;
+          const pair = pairOfFirst.get(o.key);
+          if (pair) {
+            box.append(pairRow(pair));
+            continue;
+          }
           let control: HTMLInputElement | HTMLSelectElement;
           const meaning = emptyMeaning(o);
           if (inputKind(o) === "select") {
