@@ -947,6 +947,28 @@ func main() {
 		slog.Info("externes Alarming aktiv (Webhook)")
 		go sink.Run(ctx)
 		go runWhileLeader(ctx, clusterNode, func(ctx context.Context) { alertsink.NodeAlerts(ctx, hub, sink) })
+		go runWhileLeader(ctx, clusterNode, func(ctx context.Context) { (&alertsink.HealthWatch{Sink: sink}).Run(ctx, hub) })
+		go runWhileLeader(ctx, clusterNode, func(ctx context.Context) {
+			alertsink.WatchLoad(ctx, 5*time.Second, time.Duration(getEnvIntMain("OMP_ALERT_LOAD_SECONDS", 120))*time.Second, float64(getEnvIntMain("OMP_ALERT_CPU_PERCENT", 95)), float64(getEnvIntMain("OMP_ALERT_MEM_PERCENT", 95)), func() map[string]alertsink.Load {
+				out := map[string]alertsink.Load{}
+				all, err := hostStore.ListHosts()
+				if err != nil {
+					return out
+				}
+				for _, h := range all {
+					m, ok := hostMetricsTracker.Get(h.ID)
+					if !ok || m.Goodbye || time.Since(m.ReceivedAt) >= 15*time.Second {
+						continue
+					}
+					mem := 0.0
+					if m.MemTotalBytes > 0 {
+						mem = float64(m.MemUsedBytes) / float64(m.MemTotalBytes) * 100
+					}
+					out[h.ID] = alertsink.Load{Name: h.Label, CPUPercent: m.CPUPercent, MemPercent: mem}
+				}
+				return out
+			}, sink)
+		})
 		go runWhileLeader(ctx, clusterNode, func(ctx context.Context) {
 			alertsink.WatchHosts(ctx, 5*time.Second, func() map[string]alertsink.HostState {
 				out := map[string]alertsink.HostState{}
@@ -1258,4 +1280,12 @@ func (m maintenanceInstances) ListOnHost(hostID string) []maintenance.Item {
 		}
 	}
 	return out
+}
+
+// getEnvIntMain liest eine ganze Zahl aus der Umgebung (Standard bei fehlender/ungültiger Angabe).
+func getEnvIntMain(name string, def int) int {
+	if v, err := strconv.Atoi(os.Getenv(name)); err == nil && v > 0 {
+		return v
+	}
+	return def
 }
