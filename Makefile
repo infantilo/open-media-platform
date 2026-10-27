@@ -29,6 +29,8 @@ build: ui
 ui:
 	mkdir -p ui/dist/modules
 	deno bundle ui/shell/shell.ts -o ui/dist/shell.js
+	# Kit-Elemente (omp-confirm/-prompt/-toast) für isolierte Node-Oberflächen auf dem zweiten Ursprung (internal/uiorigin)
+	deno bundle ui/shell/node-ui-kit.ts -o ui/dist/node-ui-kit.js
 	# Modul-Oberflächen (Kapitel 36.3): je ui/modules/<name>/index.ts ein eigenständiges Bundle ui/dist/modules/<name>.js
 	for f in ui/modules/*/index.ts; do n=$$(basename $$(dirname $$f)); deno bundle $$f -o ui/dist/modules/$$n.js || exit 1; done
 	# Intercom (Kapitel 49): Einrichtung/Kachel und Panel-Element liefert der Intercom-Node selbst aus (Dienst-Oberfläche) —

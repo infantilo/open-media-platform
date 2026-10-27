@@ -11,6 +11,7 @@ const post = (m) => parent.postMessage(Object.assign({ omp: "ui", node }, m), "*
     if (!res.ok) throw new Error("manifest " + res.status);
     const manifest = await res.json();
     if (!manifest.tag) throw new Error("kein Element im Manifest");
+    try { await import("/kit.js"); } catch (e) { /* ohne Kit-Elemente lehnen Bundles Bestätigungen ab */ }
     await import(base + "/ui/bundle.js");
     const el = document.createElement(manifest.tag);
     el.setAttribute("node-id", node);

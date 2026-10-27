@@ -29,11 +29,13 @@ var nodeIDRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 
 type grant struct {
 	nodeID, token string
+	rules         []Rule
 	exp           time.Time
 }
 
 type session struct {
 	nodeID, token string
+	rules         []Rule
 	exp           time.Time
 }
 
@@ -56,7 +58,7 @@ func randomID() string {
 }
 
 // NewGrant legt ein Einmal-Grant für (Node, Token des Nutzers) an.
-func (m *Manager) NewGrant(nodeID, userToken string) (string, bool) {
+func (m *Manager) NewGrant(nodeID, userToken string, rules []Rule) (string, bool) {
 	if !nodeIDRe.MatchString(nodeID) || userToken == "" {
 		return "", false
 	}
@@ -64,7 +66,7 @@ func (m *Manager) NewGrant(nodeID, userToken string) (string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.gc()
-	m.grants[id] = grant{nodeID: nodeID, token: userToken, exp: m.now().Add(grantTTL)}
+	m.grants[id] = grant{nodeID: nodeID, token: userToken, rules: rules, exp: m.now().Add(grantTTL)}
 	return id, true
 }
 
@@ -78,18 +80,23 @@ func (m *Manager) redeem(id, nodeID string) (sid string, ok bool) {
 		return "", false
 	}
 	sid = randomID()
-	m.sessions[sid] = session{nodeID: g.nodeID, token: g.token, exp: m.now().Add(sessionTTL)}
+	m.sessions[sid] = session{nodeID: g.nodeID, token: g.token, rules: g.rules, exp: m.now().Add(sessionTTL)}
 	return sid, true
 }
 
 func (m *Manager) lookup(sid, nodeID string) (token string, ok bool) {
+	t, _, ok := m.lookupRules(sid, nodeID)
+	return t, ok
+}
+
+func (m *Manager) lookupRules(sid, nodeID string) (token string, rules []Rule, ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s, found := m.sessions[sid]
 	if !found || s.nodeID != nodeID || !m.now().Before(s.exp) {
-		return "", false
+		return "", nil, false
 	}
-	return s.token, true
+	return s.token, s.rules, true
 }
 
 func (m *Manager) gc() {
@@ -114,6 +121,8 @@ type Config struct {
 	ExtraPaths []string
 	// HostPage/HostJS/DesignTokens: statische Inhalte der Bundle-Hülle.
 	HostJS, DesignTokens []byte
+	// KitJS: Kit-Elemente (omp-confirm/-prompt/-toast) für die Hülle, s. ui/shell/node-ui-kit.ts; leer = nicht ausgeliefert.
+	KitJS []byte
 }
 
 const hostPage = `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/design-tokens.css"><style>html,body{margin:0;background:transparent;color:var(--omp-text,#e8eaed);font-family:var(--omp-font,system-ui,sans-serif)}</style><script type="module" src="/ui-host.js"></script></head><body><div id="mount"></div></body></html>`
@@ -177,6 +186,15 @@ func (m *Manager) Handler(cfg Config) http.Handler {
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		_, _ = w.Write(cfg.HostJS)
 	})
+	mux.HandleFunc("GET /kit.js", func(w http.ResponseWriter, r *http.Request) {
+		headers(w, r)
+		if len(cfg.KitJS) == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = w.Write(cfg.KitJS)
+	})
 	mux.HandleFunc("GET /design-tokens.css", func(w http.ResponseWriter, r *http.Request) {
 		headers(w, r)
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
@@ -235,29 +253,30 @@ func (m *Manager) proxy(cfg Config, w http.ResponseWriter, r *http.Request) {
 		}
 		token = t
 	} else {
-		allowed := false
-		if r.Method == http.MethodGet {
-			for _, p := range cfg.ExtraPaths {
-				if r.URL.Path == p || strings.HasPrefix(r.URL.Path, strings.TrimSuffix(p, "/")+"/") {
-					allowed = true
+		// Pfade außerhalb des eigenen Nodes: nur, was die Regeln des Node-Typs (Sitzung) oder die gemeinsamen GET-Pfade erlauben.
+		for _, c := range r.Cookies() {
+			if !strings.HasPrefix(c.Name, cookiePref) {
+				continue
+			}
+			t, rules, ok := m.lookupRules(c.Value, strings.TrimPrefix(c.Name, cookiePref))
+			if !ok {
+				continue
+			}
+			common := false
+			if r.Method == http.MethodGet {
+				for _, p := range cfg.ExtraPaths {
+					if r.URL.Path == p || strings.HasPrefix(r.URL.Path, strings.TrimSuffix(p, "/")+"/") {
+						common = true
+					}
 				}
 			}
-		}
-		if !allowed {
-			http.Error(w, "path not available to node interfaces", http.StatusForbidden)
-			return
-		}
-		// Gemeinsame Pfade (z. B. Ereignisstrom): irgendeine gültige Sitzung genügt.
-		for _, c := range r.Cookies() {
-			if strings.HasPrefix(c.Name, cookiePref) {
-				if t, ok := m.lookup(c.Value, strings.TrimPrefix(c.Name, cookiePref)); ok {
-					token = t
-					break
-				}
+			if common || anyRule(rules, r.Method, r.URL.Path) {
+				token = t
+				break
 			}
 		}
 		if token == "" {
-			http.Error(w, "no session", http.StatusForbidden)
+			http.Error(w, "path not available to node interfaces", http.StatusForbidden)
 			return
 		}
 	}

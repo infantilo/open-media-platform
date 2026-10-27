@@ -63,7 +63,7 @@ func call(h http.Handler, method, path string, c *http.Cookie, hdr map[string]st
 
 func TestGrantIsSingleUseAndBoundToNode(t *testing.T) {
 	m, h, _ := rig(t)
-	g, ok := m.NewGrant("n1", "jwt")
+	g, ok := m.NewGrant("n1", "jwt", nil)
 	if !ok {
 		t.Fatal("grant")
 	}
@@ -73,16 +73,16 @@ func TestGrantIsSingleUseAndBoundToNode(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("zweites Einlösen: %d", rec.Code)
 	}
-	g2, _ := m.NewGrant("n1", "jwt")
+	g2, _ := m.NewGrant("n1", "jwt", nil)
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/enter/n2?g="+g2, nil))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("Grant für anderen Node: %d", rec.Code)
 	}
-	if _, ok := m.NewGrant("../x", "jwt"); ok {
+	if _, ok := m.NewGrant("../x", "jwt", nil); ok {
 		t.Fatal("ungültige Node-ID")
 	}
-	if _, ok := m.NewGrant("n1", ""); ok {
+	if _, ok := m.NewGrant("n1", "", nil); ok {
 		t.Fatal("ohne Token")
 	}
 }
@@ -91,7 +91,7 @@ func TestGrantExpires(t *testing.T) {
 	m, h, _ := rig(t)
 	now := time.Unix(1000, 0)
 	m.now = func() time.Time { return now }
-	g, _ := m.NewGrant("n1", "jwt")
+	g, _ := m.NewGrant("n1", "jwt", nil)
 	now = now.Add(grantTTL + time.Second)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/enter/n1?g="+g, nil))
@@ -102,7 +102,7 @@ func TestGrantExpires(t *testing.T) {
 
 func TestProxyScopesToOwnNodeAndInjectsTokenServerSide(t *testing.T) {
 	m, h, s := rig(t)
-	g, _ := m.NewGrant("n1", "the-user-jwt")
+	g, _ := m.NewGrant("n1", "the-user-jwt", nil)
 	c := enter(t, h, "n1", g)
 	if code := call(h, "GET", "/api/v1/nodes/n1/params/x", c, map[string]string{"Cookie": "stolen"}); code != 200 || s.auth != "Bearer the-user-jwt" {
 		t.Fatalf("eigener Node: %d auth=%q", code, s.auth)
@@ -134,7 +134,7 @@ func TestProxyScopesToOwnNodeAndInjectsTokenServerSide(t *testing.T) {
 
 func TestExtraPathsAreGetOnlyAndNeedASession(t *testing.T) {
 	m, h, _ := rig(t)
-	g, _ := m.NewGrant("n1", "jwt")
+	g, _ := m.NewGrant("n1", "jwt", nil)
 	c := enter(t, h, "n1", g)
 	if code := call(h, "GET", "/api/v1/events", c, nil); code != 200 {
 		t.Fatalf("Ereignisstrom: %d", code)
@@ -149,7 +149,7 @@ func TestExtraPathsAreGetOnlyAndNeedASession(t *testing.T) {
 
 func TestUnsafeRequestsMustComeFromOwnOrigin(t *testing.T) {
 	m, h, _ := rig(t)
-	g, _ := m.NewGrant("n1", "jwt")
+	g, _ := m.NewGrant("n1", "jwt", nil)
 	c := enter(t, h, "n1", g)
 	if code := call(h, "POST", "/api/v1/nodes/n1/methods/x", c, map[string]string{"Origin": "http://evil.example"}); code != http.StatusForbidden {
 		t.Fatalf("fremder Origin: %d", code)
@@ -167,7 +167,7 @@ func TestHostPageNeedsSessionAndFramesOnlyFromSameHost(t *testing.T) {
 	if code := call(h, "GET", "/ui/n1", nil, nil); code != http.StatusForbidden {
 		t.Fatalf("ohne Sitzung: %d", code)
 	}
-	g, _ := m.NewGrant("n1", "jwt")
+	g, _ := m.NewGrant("n1", "jwt", nil)
 	c := enter(t, h, "n1", g)
 	r := httptest.NewRequest("GET", "http://ui.example:8001/ui/n1", nil)
 	r.AddCookie(c)
@@ -176,5 +176,56 @@ func TestHostPageNeedsSessionAndFramesOnlyFromSameHost(t *testing.T) {
 	csp := rec.Header().Get("Content-Security-Policy")
 	if rec.Code != 200 || !strings.Contains(csp, "frame-ancestors http://ui.example:* https://ui.example:*") || !strings.Contains(csp, "connect-src 'self'") {
 		t.Fatalf("%d %s", rec.Code, csp)
+	}
+}
+
+func TestRulesAllowOnlyDeclaredCallsOutsideTheOwnNode(t *testing.T) {
+	m, h, s := rig(t)
+	g, _ := m.NewGrant("n1", "jwt", []Rule{{"GET", "/api/v1/graph"}, {"POST", "/api/v1/snapshots/*/apply"}, {"*", "/api/v1/ext/**"}})
+	c := enter(t, h, "n1", g)
+	for _, ok := range []struct{ method, path string }{{"GET", "/api/v1/graph"}, {"POST", "/api/v1/snapshots/abc/apply"}, {"DELETE", "/api/v1/ext/intercom/guests/3"}, {"GET", "/api/v1/ext"}} {
+		if ok.path == "/api/v1/ext" {
+			continue // "/api/v1/ext/**" deckt nur Unterpfade
+		}
+		if code := call(h, ok.method, ok.path, c, nil); code != 200 {
+			t.Errorf("%s %s: %d, want 200", ok.method, ok.path, code)
+		}
+	}
+	before := s.n
+	for _, bad := range []struct{ method, path string }{
+		{"POST", "/api/v1/graph"}, {"GET", "/api/v1/workflows"}, {"POST", "/api/v1/snapshots/abc/delete"}, {"POST", "/api/v1/snapshots/apply"},
+		{"GET", "/api/v1/extra"}, {"GET", "/api/v1/instances"}, {"POST", "/api/v1/admin/backup"},
+	} {
+		if code := call(h, bad.method, bad.path, c, nil); code != http.StatusForbidden {
+			t.Errorf("%s %s: %d, want 403", bad.method, bad.path, code)
+		}
+	}
+	if s.n != before {
+		t.Fatal("abgewiesene Aufrufe dürfen den Orchestrator nicht erreichen")
+	}
+}
+
+func TestRuleMatching(t *testing.T) {
+	r := Rule{"POST", "/api/v1/workflows/*/roles/*/restart"}
+	if !r.match("POST", "/api/v1/workflows/w1/roles/Kamera%201/restart") || r.match("GET", "/api/v1/workflows/w1/roles/x/restart") || r.match("POST", "/api/v1/workflows/w1/roles/restart") || r.match("POST", "/api/v1/workflows/w1/roles/x/restart/more") {
+		t.Fatal("Muster")
+	}
+	if !(Rule{"*", "/a/**"}).match("PATCH", "/a/b/c") || (Rule{"*", "/a/**"}).match("GET", "/b/c") {
+		t.Fatal("** und Methode *")
+	}
+}
+
+func TestKitServedWhenConfigured(t *testing.T) {
+	m := NewManager()
+	h := m.Handler(Config{Main: http.NotFoundHandler(), KitJS: []byte("//kit")})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/kit.js", nil))
+	if rec.Code != 200 || rec.Body.String() != "//kit" {
+		t.Fatalf("%d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	m.Handler(Config{Main: http.NotFoundHandler()}).ServeHTTP(rec, httptest.NewRequest("GET", "/kit.js", nil))
+	if rec.Code != 404 {
+		t.Fatalf("ohne Kit: %d", rec.Code)
 	}
 }

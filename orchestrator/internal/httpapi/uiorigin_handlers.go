@@ -91,7 +91,7 @@ func handleUIGrant(u *UIIsolation, nodes NodeLister, launcherSvc LauncherService
 			writeJSON(w, http.StatusOK, map[string]any{"isolated": false})
 			return
 		}
-		grant, ok := u.Manager.NewGrant(id, token)
+		grant, ok := u.Manager.NewGrant(id, token, uiorigin.DefaultRules[nodeType])
 		if !ok {
 			http.Error(w, "cannot grant", http.StatusBadRequest)
 			return

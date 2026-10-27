@@ -110,7 +110,10 @@ async function mountIsolated(container: HTMLElement, apiBase: string): Promise<H
       const m = ev.data as { omp?: string; type?: string; height?: number };
       if (m?.omp !== "ui") return;
       if (m.type === "size" && typeof m.height === "number") {
-        frame.style.height = `${Math.max(120, Math.min(m.height, 20000))}px`;
+        // Höchstens so hoch wie das Fenster: der iframe scrollt dann selbst, und Dialoge (omp-confirm …) erscheinen mittig im sichtbaren Teil
+        // statt irgendwo in einem mehrere tausend Pixel hohen Rahmen außerhalb des Bildschirms.
+        const cap = Math.max(300, innerHeight - 140);
+        frame.style.height = `${Math.max(120, Math.min(m.height, cap))}px`;
       } else if (m.type === "ready" && !settled) {
         settled = true;
         resolve(frame);

@@ -1257,8 +1257,9 @@ func main() {
 
 	if uiIso != nil {
 		tokens, _ := os.ReadFile(filepath.Join(cfg.UIDir, "design-tokens.css"))
+		kit, _ := os.ReadFile(filepath.Join(cfg.UIDir, "dist", "node-ui-kit.js"))
 		uiSrv := &http.Server{Addr: cfg.UIOriginListen, Handler: httpapi.LimitRequests(uiMgr.Handler(uiorigin.Config{
-			Main: handler, ExtraPaths: cfg.UIIsolationExtra, HostJS: []byte(uiorigin.HostJS), DesignTokens: tokens,
+			Main: handler, ExtraPaths: cfg.UIIsolationExtra, HostJS: []byte(uiorigin.HostJS), DesignTokens: tokens, KitJS: kit,
 		}))}
 		httpapi.ConfigureServer(uiSrv)
 		go func() {
