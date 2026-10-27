@@ -20,6 +20,50 @@ var messages = {
     "icom.tab.channels": "Kan\xE4le",
     "icom.tab.layouts": "Panel-Vorlagen",
     "icom.tab.guests": "G\xE4ste",
+    "icom.m.party": "Teilnehmer",
+    "icom.m.filterParty": "Teilnehmer suchen",
+    "icom.m.filterPartyPh": "Name enth\xE4lt \u2026",
+    "icom.m.filterChannel": "Kan\xE4le suchen",
+    "icom.m.filterChannelPh": "Kanalname \u2026",
+    "icom.m.allKinds": "Alle Arten",
+    "icom.m.assigned": "Zuordnung",
+    "icom.m.assignedAll": "Alle",
+    "icom.m.assignedYes": "Mit Zuordnung",
+    "icom.m.assignedNo": "Ohne Zuordnung",
+    "icom.m.resetFilter": "Filter zur\xFCcksetzen",
+    "icom.m.info": "{p0} von {p1} Teilnehmern \xB7 {p2} von {p3} Kan\xE4len sichtbar \xB7 {p4} Teilnehmer ohne jede Zuordnung",
+    "icom.m.listCount": "{p0} von {p1}",
+    "icom.m.selectAll": "Alle gefilterten Teilnehmer ausw\xE4hlen",
+    "icom.m.selected": "{p0} ausgew\xE4hlt",
+    "icom.m.rowTalk": "Diesen Teilnehmer in allen sichtbaren Kan\xE4len sprechen lassen",
+    "icom.m.rowListen": "Diesen Teilnehmer in allen sichtbaren Kan\xE4len h\xF6ren lassen",
+    "icom.m.rowClear": "Alle sichtbaren Zuordnungen dieses Teilnehmers entfernen",
+    "icom.m.colTalk": "Alle {p0} gefilterten Teilnehmer in diesem Kanal sprechen lassen",
+    "icom.m.colListen": "Alle {p0} gefilterten Teilnehmer in diesem Kanal h\xF6ren lassen",
+    "icom.m.colClear": "Diesen Kanal bei allen {p0} gefilterten Teilnehmern entfernen",
+    "icom.m.bulkConfirm": "{p0} Teilnehmer \xE4ndern?",
+    "icom.m.changed": "{p0} Zuordnungen ge\xE4ndert.",
+    "icom.m.copyFrom": "Zuordnung \xFCbernehmen von \u2026",
+    "icom.m.copyFromHint": "Ersetzt die Zuordnungen der ausgew\xE4hlten Teilnehmer durch die des links gew\xE4hlten.",
+    "icom.m.copyConfirm": "Die Zuordnungen von {p0} Teilnehmern durch die von \u201E{p1}\u201C ersetzen?",
+    "icom.m.selTalkOn": "Auswahl: im Kanal sprechen lassen",
+    "icom.m.selTalkOff": "Auswahl: Sprechen im Kanal entfernen",
+    "icom.m.selListenOn": "Auswahl: im Kanal h\xF6ren lassen",
+    "icom.m.selListenOff": "Auswahl: H\xF6ren im Kanal entfernen",
+    "icom.m.delete": "Auswahl l\xF6schen",
+    "icom.m.deleteConfirm": "{p0} Teilnehmer l\xF6schen?",
+    "icom.m.clearSel": "Auswahl aufheben",
+    "icom.m.duplicate": "Duplizieren",
+    "icom.m.duplicateHint": "Neuer Teilnehmer mit denselben Zuordnungen und Rechten (ohne Nutzer)",
+    "icom.m.bulkAdd": "Mehrere anlegen \u2026",
+    "icom.m.bulkPrefix": "Name",
+    "icom.m.bulkPrefixPh": "z. B. Kamera \u2192 Kamera 1, Kamera 2 \u2026",
+    "icom.m.bulkCount": "Anzahl",
+    "icom.m.bulkLike": "Zuordnung wie",
+    "icom.m.bulkLikeNone": "(keine)",
+    "icom.m.bulkCreate": "Anlegen",
+    "icom.m.bulkNeedPrefix": "Ein Name f\xFCr die Nummerierung fehlt.",
+    "icom.m.bulkCreated": "{p0} Teilnehmer angelegt.",
     "icom.assign.hint": "Wer darf in welchem Kanal sprechen (\u{1F3A4}) und mith\xF6ren (\u{1F3A7})? Ein Klick schaltet um. Ein Name f\xFChrt zu den Einstellungen des Teilnehmers. \xC4nderungen gelten nach \u201ESpeichern\u201C.",
     "icom.assign.needBoth": "Zum Zuteilen braucht es mindestens einen Kanal und einen Teilnehmer.",
     "icom.assign.toChannels": "Kan\xE4le anlegen",
@@ -144,6 +188,50 @@ var messages = {
     "icom.tab.channels": "Channels",
     "icom.tab.layouts": "Panel templates",
     "icom.tab.guests": "Guests",
+    "icom.m.party": "Party",
+    "icom.m.filterParty": "Find parties",
+    "icom.m.filterPartyPh": "Name contains \u2026",
+    "icom.m.filterChannel": "Find channels",
+    "icom.m.filterChannelPh": "Channel name \u2026",
+    "icom.m.allKinds": "All kinds",
+    "icom.m.assigned": "Assignment",
+    "icom.m.assignedAll": "All",
+    "icom.m.assignedYes": "With assignment",
+    "icom.m.assignedNo": "Without assignment",
+    "icom.m.resetFilter": "Reset filters",
+    "icom.m.info": "{p0} of {p1} parties \xB7 {p2} of {p3} channels shown \xB7 {p4} parties without any assignment",
+    "icom.m.listCount": "{p0} of {p1}",
+    "icom.m.selectAll": "Select all filtered parties",
+    "icom.m.selected": "{p0} selected",
+    "icom.m.rowTalk": "Let this party talk in all visible channels",
+    "icom.m.rowListen": "Let this party listen in all visible channels",
+    "icom.m.rowClear": "Remove all visible assignments of this party",
+    "icom.m.colTalk": "Let all {p0} filtered parties talk in this channel",
+    "icom.m.colListen": "Let all {p0} filtered parties listen in this channel",
+    "icom.m.colClear": "Remove this channel from all {p0} filtered parties",
+    "icom.m.bulkConfirm": "Change {p0} parties?",
+    "icom.m.changed": "{p0} assignments changed.",
+    "icom.m.copyFrom": "Copy assignment from \u2026",
+    "icom.m.copyFromHint": "Replaces the assignments of the selected parties with those of the party chosen on the left.",
+    "icom.m.copyConfirm": 'Replace the assignments of {p0} parties with those of "{p1}"?',
+    "icom.m.selTalkOn": "Selection: let talk in the channel",
+    "icom.m.selTalkOff": "Selection: remove talking in the channel",
+    "icom.m.selListenOn": "Selection: let listen in the channel",
+    "icom.m.selListenOff": "Selection: remove listening in the channel",
+    "icom.m.delete": "Delete selection",
+    "icom.m.deleteConfirm": "Delete {p0} parties?",
+    "icom.m.clearSel": "Clear selection",
+    "icom.m.duplicate": "Duplicate",
+    "icom.m.duplicateHint": "New party with the same assignments and rights (without users)",
+    "icom.m.bulkAdd": "Create several \u2026",
+    "icom.m.bulkPrefix": "Name",
+    "icom.m.bulkPrefixPh": "e.g. Camera \u2192 Camera 1, Camera 2 \u2026",
+    "icom.m.bulkCount": "Count",
+    "icom.m.bulkLike": "Assign like",
+    "icom.m.bulkLikeNone": "(none)",
+    "icom.m.bulkCreate": "Create",
+    "icom.m.bulkNeedPrefix": "A name for the numbering is missing.",
+    "icom.m.bulkCreated": "{p0} parties created.",
     "icom.assign.hint": `Who may talk (\u{1F3A4}) and listen (\u{1F3A7}) in which channel? Click to toggle. A name opens that party's settings. Changes apply after "Save".`,
     "icom.assign.needBoth": "Assigning needs at least one channel and one party.",
     "icom.assign.toChannels": "Create channels",
@@ -720,7 +808,127 @@ function keyRow(layout, pi, ki, k, cfg, changed, rebuild) {
   return row;
 }
 
-// ui/modules/intercom/intercom-admin.ts
+// ui/modules/intercom/intercom-scale.ts
+function filterParties(parties, f) {
+  const q = f.text.trim().toLowerCase();
+  return parties.filter((p) => {
+    if (q && !(p.name || `#${p.id}`).toLowerCase().includes(q)) return false;
+    if (f.kind !== "all" && (p.kind ?? "human") !== f.kind) return false;
+    if (f.assigned !== void 0 && p.routes.some((r) => r.talk || r.listen) !== f.assigned) return false;
+    return true;
+  });
+}
+function filterChannels(channels, text) {
+  const q = text.trim().toLowerCase();
+  return q ? channels.filter((c) => (c.name || `#${c.id}`).toLowerCase().includes(q)) : channels;
+}
+function visibleWindow(scrollTop, viewHeight, rowHeight, total, buffer = 4) {
+  if (total <= 0 || rowHeight <= 0) return {
+    start: 0,
+    end: 0
+  };
+  const first = Math.floor(Math.max(0, scrollTop) / rowHeight);
+  const count = Math.ceil(Math.max(0, viewHeight) / rowHeight);
+  return {
+    start: Math.max(0, first - buffer),
+    end: Math.min(total, first + count + buffer)
+  };
+}
+function setForParties(parties, ch, field2, on) {
+  let n = 0;
+  for (const p of parties) {
+    if (!!getRoute(p, ch)?.[field2] === on) continue;
+    setRoute(p, ch, field2, on);
+    n++;
+  }
+  return n;
+}
+function setAllChannels(p, channels, field2, on) {
+  for (const ch of channels) if (!!getRoute(p, ch)?.[field2] !== on) setRoute(p, ch, field2, on);
+}
+function copyRoutes(src, targets) {
+  let n = 0;
+  for (const t2 of targets) {
+    if (t2.id === src.id) continue;
+    t2.routes = src.routes.filter((r) => r.talk || r.listen).map((r) => ({
+      ...r
+    }));
+    n++;
+  }
+  return n;
+}
+function nextNumber(cfg, prefix) {
+  const lower = new Set(cfg.parties.map((p) => p.name.trim().toLowerCase()));
+  let n = 1;
+  while (lower.has(`${prefix} ${n}`.trim().toLowerCase())) n++;
+  return n;
+}
+var MAX_BULK_ADD = 500;
+function addParties(cfg, prefix, count, kind, like) {
+  const n = Math.max(0, Math.min(MAX_BULK_ADD, Math.floor(count)));
+  const pre = prefix.trim();
+  const out = [];
+  let num = nextNumber(cfg, pre);
+  for (let i = 0; i < n; i++, num++) {
+    while (cfg.parties.some((p2) => p2.name.trim().toLowerCase() === `${pre} ${num}`.trim().toLowerCase())) num++;
+    const p = addParty(cfg, `${pre} ${num}`.trim());
+    p.kind = kind;
+    if (like) p.routes = like.routes.filter((r) => r.talk || r.listen).map((r) => ({
+      ...r
+    }));
+    out.push(p);
+  }
+  return out;
+}
+function duplicateParty(cfg, id) {
+  const src = cfg.parties.find((p2) => p2.id === id);
+  if (!src) return null;
+  const base = src.name.trim().replace(/\s+\d+$/, "");
+  const [p] = addParties(cfg, base, 1, src.kind ?? "human", src);
+  if (!p) return null;
+  for (const k of [
+    "priority",
+    "force",
+    "onair_lock",
+    "open",
+    "template",
+    "mxl_in",
+    "mxl_out"
+  ]) {
+    if (src[k] !== void 0) p[k] = src[k];
+  }
+  if (src.layout) p.layout = JSON.parse(JSON.stringify(src.layout));
+  return p;
+}
+function removeParties(cfg, ids) {
+  const before = cfg.parties.length;
+  cfg.parties = cfg.parties.filter((p) => !ids.has(p.id));
+  pruneLayouts(cfg);
+  return before - cfg.parties.length;
+}
+function matrixStats(cfg) {
+  let routes = 0;
+  let unassigned = 0;
+  for (const p of cfg.parties) {
+    const n = p.routes.filter((r) => r.talk || r.listen).length;
+    routes += n;
+    if (n === 0) unassigned++;
+  }
+  return {
+    parties: cfg.parties.length,
+    channels: cfg.channels.length,
+    unassigned,
+    routes
+  };
+}
+
+// ui/modules/intercom/intercom-matrix.ts
+var ROW_H = 34;
+var COL_W = 96;
+var NAME_W = 210;
+var TOOLS_W = 92;
+var CHECK_W = 32;
+var CONFIRM_ABOVE = 20;
 function el2(tag, css = "", text = "") {
   const e = document.createElement(tag);
   if (css) e.style.cssText = css;
@@ -728,31 +936,454 @@ function el2(tag, css = "", text = "") {
   return e;
 }
 var DIM2 = "color:var(--omp-text-dim);";
+function newMatrixState() {
+  return {
+    text: "",
+    kind: "all",
+    assigned: "all",
+    channelText: "",
+    selected: /* @__PURE__ */ new Set(),
+    scrollTop: 0,
+    scrollLeft: 0
+  };
+}
+function matrixView(host2) {
+  const st = host2.state;
+  const root = el2("div");
+  root.dataset.role = "matrix";
+  let parties = [];
+  let channels = [];
+  const colTemplate = () => `${CHECK_W}px ${NAME_W}px ${TOOLS_W}px repeat(${channels.length},${COL_W}px)`;
+  const totalWidth = () => CHECK_W + NAME_W + TOOLS_W + channels.length * COL_W;
+  const toolbar = el2("div", "display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px;");
+  const bulk = el2("div", "display:none;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;padding:6px 8px;border:1px solid var(--omp-accent-cyan,#19d3f3);border-radius:6px;");
+  bulk.dataset.role = "bulk";
+  const info = el2("div", `font-size:12px;margin-bottom:6px;${DIM2}`);
+  info.dataset.role = "matrix-info";
+  const scroller = el2("div", "background:var(--omp-surface,#111);overflow:auto;max-height:min(68vh,720px);border:1px solid var(--omp-border);border-radius:6px;position:relative;");
+  scroller.dataset.role = "matrix-scroll";
+  const sizer = el2("div", "position:relative;");
+  const headRow = el2("div", "position:sticky;top:0;z-index:4;background:var(--omp-surface,#111);border-bottom:1px solid var(--omp-border);display:grid;align-items:stretch;");
+  const body = el2("div", "position:relative;");
+  sizer.append(headRow, body);
+  scroller.append(sizer);
+  const input = (value, placeholder, width, on) => {
+    const i = el2("input", `padding:3px 6px;width:${width};`);
+    i.value = value;
+    i.placeholder = placeholder;
+    i.addEventListener("input", () => on(i.value));
+    return i;
+  };
+  const labelled = (label, c) => {
+    const w = el2("label", "display:flex;flex-direction:column;gap:2px;");
+    w.append(el2("span", "font-size:10px;letter-spacing:.06em;text-transform:uppercase;" + DIM2, label), c);
+    return w;
+  };
+  const select = (opts, value, on) => {
+    const s = el2("select", "padding:3px 6px;");
+    for (const [v, text] of opts) {
+      const o = el2("option", "", text);
+      o.value = v;
+      s.append(o);
+    }
+    s.value = value;
+    s.addEventListener("change", () => on(s.value));
+    return s;
+  };
+  const btn2 = (text, on, title = "") => {
+    const b = el2("button", "padding:3px 10px;", text);
+    if (title) b.title = title;
+    b.addEventListener("click", on);
+    return b;
+  };
+  function recompute() {
+    const d = host2.draft();
+    parties = filterParties(d.parties, {
+      text: st.text,
+      kind: st.kind,
+      assigned: st.assigned === "all" ? void 0 : st.assigned === "yes"
+    });
+    channels = filterChannels(d.channels, st.channelText);
+  }
+  function paintCell(b, p, ch, f) {
+    const on = !!getRoute(p, ch)?.[f];
+    b.style.opacity = on ? "1" : "0.25";
+    b.style.background = on ? "color-mix(in srgb,var(--omp-accent-cyan,#19d3f3) 28%,transparent)" : "";
+    b.setAttribute("aria-pressed", String(on));
+  }
+  function rowEl(p, index) {
+    const row = el2("div", `position:absolute;left:0;top:${index * ROW_H}px;height:${ROW_H}px;width:${totalWidth()}px;display:grid;grid-template-columns:${colTemplate()};align-items:center;border-bottom:1px solid color-mix(in srgb,var(--omp-border) 50%,transparent);`);
+    row.dataset.row = String(p.id);
+    const sticky = "position:sticky;left:0;z-index:2;background:var(--omp-surface,#111);height:100%;display:flex;align-items:center;";
+    const check2 = el2("span", sticky + "justify-content:center;");
+    const cb = el2("input");
+    cb.type = "checkbox";
+    cb.checked = st.selected.has(p.id);
+    cb.dataset.act = "select";
+    cb.setAttribute("aria-label", p.name || `#${p.id}`);
+    check2.append(cb);
+    const name = el2("span", `position:sticky;left:${CHECK_W}px;z-index:2;background:var(--omp-surface,#111);height:100%;display:flex;align-items:center;gap:6px;overflow:hidden;`);
+    const dot = el2("span", "width:9px;height:9px;border-radius:50%;background:var(--omp-border);flex:none;");
+    dot.dataset.partyDot = String(p.id);
+    const nb = el2("button", "border:0;background:none;padding:0;cursor:pointer;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", p.name || `#${p.id}`);
+    nb.dataset.act = "open";
+    nb.title = t("icom.assign.openParty");
+    name.append(dot, nb);
+    const tools = el2("span", `position:sticky;left:${CHECK_W + NAME_W}px;z-index:2;background:var(--omp-surface,#111);height:100%;display:flex;align-items:center;gap:2px;border-right:1px solid var(--omp-border);`);
+    for (const [act, text, title] of [
+      [
+        "row-talk",
+        "\u{1F3A4}+",
+        "icom.m.rowTalk"
+      ],
+      [
+        "row-listen",
+        "\u{1F3A7}+",
+        "icom.m.rowListen"
+      ],
+      [
+        "row-clear",
+        "\u2205",
+        "icom.m.rowClear"
+      ]
+    ]) {
+      const b = el2("button", "padding:0 4px;font-size:11px;", text);
+      b.dataset.act = act;
+      b.title = t(title);
+      tools.append(b);
+    }
+    row.append(check2, name, tools);
+    for (const c of channels) {
+      const cell = el2("span", "display:flex;gap:3px;justify-content:center;");
+      for (const f of [
+        "talk",
+        "listen"
+      ]) {
+        const b = el2("button", "padding:2px 6px;min-width:34px;", f === "talk" ? "\u{1F3A4}" : "\u{1F3A7}");
+        b.dataset.act = "cell";
+        b.dataset.ch = String(c.id);
+        b.dataset.f = f;
+        b.title = `${p.name || `#${p.id}`} \xB7 ${c.name || `#${c.id}`} \xB7 ${t(f === "talk" ? "icom.talk" : "icom.listen")}`;
+        paintCell(b, p, c.id, f);
+        cell.append(b);
+      }
+      row.append(cell);
+    }
+    return row;
+  }
+  function renderHead() {
+    headRow.style.gridTemplateColumns = colTemplate();
+    headRow.style.width = `${totalWidth()}px`;
+    headRow.replaceChildren();
+    const all = el2("span", "position:sticky;left:0;z-index:5;background:var(--omp-surface,#111);display:flex;align-items:center;justify-content:center;");
+    const cb = el2("input");
+    cb.type = "checkbox";
+    cb.title = t("icom.m.selectAll");
+    cb.dataset.act = "select-all";
+    cb.checked = parties.length > 0 && parties.every((p) => st.selected.has(p.id));
+    all.append(cb);
+    const nameH = el2("span", `position:sticky;left:${CHECK_W}px;z-index:5;background:var(--omp-surface,#111);padding:6px;font-size:11px;${DIM2}`, t("icom.m.party"));
+    const toolsH = el2("span", `position:sticky;left:${CHECK_W + NAME_W}px;z-index:5;background:var(--omp-surface,#111);border-right:1px solid var(--omp-border);`);
+    headRow.append(all, nameH, toolsH);
+    for (const c of channels) {
+      const h = el2("span", `display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 2px;border-bottom:3px solid ${c.color || "#4c8dff"};min-width:0;`);
+      h.append(el2("span", "font-size:12px;font-weight:600;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", c.name || `#${c.id}`));
+      const tools = el2("span", "display:flex;gap:2px;");
+      for (const [act, text, title] of [
+        [
+          "col-talk",
+          "\u{1F3A4}+",
+          "icom.m.colTalk"
+        ],
+        [
+          "col-listen",
+          "\u{1F3A7}+",
+          "icom.m.colListen"
+        ],
+        [
+          "col-clear",
+          "\u2205",
+          "icom.m.colClear"
+        ]
+      ]) {
+        const b = el2("button", "padding:0 4px;font-size:11px;", text);
+        b.dataset.act = act;
+        b.dataset.ch = String(c.id);
+        b.title = t(title, {
+          p0: parties.length
+        });
+        tools.append(b);
+      }
+      h.append(tools);
+      headRow.append(h);
+    }
+  }
+  function renderRows() {
+    st.scrollTop = scroller.scrollTop;
+    st.scrollLeft = scroller.scrollLeft;
+    body.style.height = `${parties.length * ROW_H}px`;
+    body.style.width = `${totalWidth()}px`;
+    const headH = headRow.offsetHeight || 50;
+    const w = visibleWindow(Math.max(0, scroller.scrollTop), scroller.clientHeight || 600, ROW_H, parties.length, 6);
+    void headH;
+    const frag = document.createDocumentFragment();
+    for (let i = w.start; i < w.end; i++) frag.append(rowEl(parties[i], i));
+    body.replaceChildren(frag);
+    host2.paintDots();
+  }
+  function renderInfo() {
+    const s = matrixStats(host2.draft());
+    info.textContent = t("icom.m.info", {
+      p0: parties.length,
+      p1: s.parties,
+      p2: channels.length,
+      p3: s.channels,
+      p4: s.unassigned
+    });
+  }
+  function renderBulk() {
+    const n = st.selected.size;
+    bulk.style.display = n ? "flex" : "none";
+    bulk.replaceChildren();
+    if (!n) return;
+    const d = host2.draft();
+    bulk.append(el2("strong", "", t("icom.m.selected", {
+      p0: n
+    })));
+    const sel = () => d.parties.filter((p) => st.selected.has(p.id));
+    const src = el2("select", "padding:3px 6px;max-width:200px;");
+    for (const p of d.parties) {
+      const o = el2("option", "", p.name || `#${p.id}`);
+      o.value = String(p.id);
+      src.append(o);
+    }
+    bulk.append(src, btn2(t("icom.m.copyFrom"), async () => {
+      const from = d.parties.find((p) => p.id === Number(src.value));
+      const targets = sel().filter((p) => p.id !== from?.id);
+      if (!from || !targets.length) return;
+      if (!await confirmDialog(t("icom.m.copyConfirm", {
+        p0: targets.length,
+        p1: from.name || `#${from.id}`
+      }))) return;
+      copyRoutes(from, targets);
+      host2.changed();
+      refresh(false);
+    }, t("icom.m.copyFromHint")));
+    const chSel = el2("select", "padding:3px 6px;max-width:160px;");
+    for (const c of d.channels) {
+      const o = el2("option", "", c.name || `#${c.id}`);
+      o.value = String(c.id);
+      chSel.append(o);
+    }
+    const apply = (f, on) => async () => {
+      const ch = Number(chSel.value);
+      if (!ch) return;
+      const targets = sel();
+      if (targets.length > CONFIRM_ABOVE && !await confirmDialog(t("icom.m.bulkConfirm", {
+        p0: targets.length
+      }))) return;
+      setForParties(targets, ch, f, on);
+      host2.changed();
+      refresh(false);
+    };
+    bulk.append(chSel, btn2("\u{1F3A4}+", apply("talk", true), t("icom.m.selTalkOn")), btn2("\u{1F3A4}\u2212", apply("talk", false), t("icom.m.selTalkOff")), btn2("\u{1F3A7}+", apply("listen", true), t("icom.m.selListenOn")), btn2("\u{1F3A7}\u2212", apply("listen", false), t("icom.m.selListenOff")));
+    bulk.append(btn2(t("icom.m.delete"), async () => {
+      const ids = new Set(st.selected);
+      if (!await confirmDialog(t("icom.m.deleteConfirm", {
+        p0: ids.size
+      }))) return;
+      removeParties(d, ids);
+      st.selected.clear();
+      host2.changed();
+      host2.rebuild();
+    }), btn2(t("icom.m.clearSel"), () => {
+      st.selected.clear();
+      refresh(false);
+    }));
+  }
+  function refresh(full) {
+    if (full) {
+      recompute();
+      renderHead();
+    }
+    renderRows();
+    renderInfo();
+    renderBulk();
+  }
+  async function confirmMany(n) {
+    return n <= CONFIRM_ABOVE || await confirmDialog(t("icom.m.bulkConfirm", {
+      p0: n
+    }));
+  }
+  scroller.addEventListener("scroll", () => {
+    if (scroller.scrollTop !== st.scrollTop) requestAnimationFrame(renderRows);
+    st.scrollTop = scroller.scrollTop;
+    st.scrollLeft = scroller.scrollLeft;
+  });
+  sizer.addEventListener("click", (ev) => {
+    const t2 = ev.target.closest("[data-act]");
+    if (!t2) return;
+    const d = host2.draft();
+    const rowId = Number(t2.closest("[data-row]")?.dataset.row);
+    const p = d.parties.find((x) => x.id === rowId);
+    const ch = Number(t2.dataset.ch);
+    switch (t2.dataset.act) {
+      case "cell": {
+        if (!p) return;
+        const f = t2.dataset.f;
+        setRoute(p, ch, f, !getRoute(p, ch)?.[f]);
+        paintCell(t2, p, ch, f);
+        host2.changed();
+        renderInfo();
+        break;
+      }
+      case "open":
+        if (p) host2.openParty(p.id);
+        break;
+      case "select": {
+        if (!p) return;
+        if (t2.checked) st.selected.add(p.id);
+        else st.selected.delete(p.id);
+        renderBulk();
+        renderHead();
+        break;
+      }
+      case "select-all": {
+        if (t2.checked) for (const x of parties) st.selected.add(x.id);
+        else for (const x of parties) st.selected.delete(x.id);
+        refresh(true);
+        break;
+      }
+      case "row-talk":
+      case "row-listen":
+      case "row-clear": {
+        if (!p) return;
+        const ids = channels.map((c) => c.id);
+        if (t2.dataset.act === "row-clear") {
+          setAllChannels(p, ids, "talk", false);
+          setAllChannels(p, ids, "listen", false);
+        } else setAllChannels(p, ids, t2.dataset.act === "row-talk" ? "talk" : "listen", true);
+        host2.changed();
+        refresh(false);
+        break;
+      }
+      case "col-talk":
+      case "col-listen":
+      case "col-clear": {
+        const on = t2.dataset.act !== "col-clear";
+        void (async () => {
+          if (!await confirmMany(parties.length)) return;
+          let n = 0;
+          if (!on) {
+            n += setForParties(parties, ch, "talk", false) + setForParties(parties, ch, "listen", false);
+          } else n += setForParties(parties, ch, t2.dataset.act === "col-talk" ? "talk" : "listen", true);
+          if (n) host2.changed();
+          showToast(t("icom.m.changed", {
+            p0: n
+          }));
+          refresh(false);
+        })();
+        break;
+      }
+    }
+  });
+  const reflow = () => {
+    scroller.scrollTop = 0;
+    refresh(true);
+  };
+  toolbar.append(labelled(t("icom.m.filterParty"), input(st.text, t("icom.m.filterPartyPh"), "200px", (v) => {
+    st.text = v;
+    reflow();
+  })), labelled(t("icom.party.kind"), select([
+    [
+      "all",
+      t("icom.m.allKinds")
+    ],
+    ...[
+      "human",
+      "seat",
+      "program",
+      "port"
+    ].map((k) => [
+      k,
+      t(`icom.party.kind.${k}`)
+    ])
+  ], st.kind, (v) => {
+    st.kind = v;
+    reflow();
+  })), labelled(t("icom.m.assigned"), select([
+    [
+      "all",
+      t("icom.m.assignedAll")
+    ],
+    [
+      "yes",
+      t("icom.m.assignedYes")
+    ],
+    [
+      "no",
+      t("icom.m.assignedNo")
+    ]
+  ], st.assigned, (v) => {
+    st.assigned = v;
+    reflow();
+  })), labelled(t("icom.m.filterChannel"), input(st.channelText, t("icom.m.filterChannelPh"), "160px", (v) => {
+    st.channelText = v;
+    refresh(true);
+  })));
+  const reset = btn2(t("icom.m.resetFilter"), () => {
+    st.text = "";
+    st.kind = "all";
+    st.assigned = "all";
+    st.channelText = "";
+    host2.rebuild();
+  });
+  toolbar.append(reset);
+  root.append(toolbar, bulk, info, scroller);
+  recompute();
+  renderHead();
+  queueMicrotask(() => {
+    scroller.scrollTop = st.scrollTop;
+    scroller.scrollLeft = st.scrollLeft;
+    refresh(false);
+  });
+  refresh(false);
+  return root;
+}
+
+// ui/modules/intercom/intercom-admin.ts
+function el3(tag, css = "", text = "") {
+  const e = document.createElement(tag);
+  if (css) e.style.cssText = css;
+  if (text) e.textContent = text;
+  return e;
+}
+var DIM3 = "color:var(--omp-text-dim);";
 var BOX = "border:1px solid var(--omp-border);border-radius:8px;padding:12px 14px;margin-bottom:16px;";
 var H = "font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--omp-text-dim);margin:0 0 8px;";
 function field(label, input, width = "") {
-  const w = el2("label", `display:flex;flex-direction:column;gap:2px;${width ? `width:${width};` : ""}`);
-  w.append(el2("span", "font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--omp-text-dim);", label), input);
+  const w = el3("label", `display:flex;flex-direction:column;gap:2px;${width ? `width:${width};` : ""}`);
+  w.append(el3("span", "font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--omp-text-dim);", label), input);
   return w;
 }
 function textInput(value, onInput, width = "", placeholder = "") {
-  const i = el2("input", `padding:3px 6px;${width ? `width:${width};` : ""}`);
+  const i = el3("input", `padding:3px 6px;${width ? `width:${width};` : ""}`);
   i.value = value;
   if (placeholder) i.placeholder = placeholder;
   i.addEventListener("input", () => onInput(i.value));
   return i;
 }
 function check(label, on, onChange) {
-  const l = el2("label", "display:flex;gap:6px;align-items:center;font-size:13px;");
-  const c = el2("input");
+  const l = el3("label", "display:flex;gap:6px;align-items:center;font-size:13px;");
+  const c = el3("input");
   c.type = "checkbox";
   c.checked = on;
   c.addEventListener("change", () => onChange(c.checked));
-  l.append(c, el2("span", "", label));
+  l.append(c, el3("span", "", label));
   return l;
 }
 function btn(text, onClick, title = "") {
-  const b = el2("button", "padding:3px 10px;", text);
+  const b = el3("button", "padding:3px 10px;", text);
   if (title) b.title = title;
   b.addEventListener("click", onClick);
   return b;
@@ -794,6 +1425,14 @@ var IntercomAdmin = class extends HTMLElement {
   #loaded = false;
   #tab = loadTab();
   #selParty = 0;
+  #matrix = newMatrixState();
+  // Teilnehmerliste: Filter und Sammelanlage
+  #pText = "";
+  #pKind = "all";
+  #bulkPrefix = "";
+  #bulkCount = 10;
+  #bulkKind = "human";
+  #bulkLike = 0;
   connectedCallback() {
     this.style.cssText = "display:block;";
     if (!this.#loaded) {
@@ -874,8 +1513,8 @@ var IntercomAdmin = class extends HTMLElement {
   }
   #render() {
     this.replaceChildren();
-    if (this.#error) this.append(el2("div", "color:var(--omp-error);margin-bottom:10px;", this.#error));
-    const bar = el2("div", "display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap;");
+    if (this.#error) this.append(el3("div", "color:var(--omp-error);margin-bottom:10px;", this.#error));
+    const bar = el3("div", "display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap;");
     bar.dataset.role = "bar";
     const dirty = this.#dirty();
     const save = btn(t("icom.save"), () => void this.#save());
@@ -887,16 +1526,16 @@ var IntercomAdmin = class extends HTMLElement {
     });
     discard.disabled = !dirty;
     bar.append(save, discard);
-    if (dirty) bar.append(el2("span", "color:var(--omp-warning,#b58900);font-size:12px;", t("icom.dirty")));
-    const st = el2("span", `margin-left:auto;font-size:12px;${DIM2}`);
+    if (dirty) bar.append(el3("span", "color:var(--omp-warning,#b58900);font-size:12px;", t("icom.dirty")));
+    const st = el3("span", `margin-left:auto;font-size:12px;${DIM3}`);
     st.dataset.role = "status";
     bar.append(st);
     this.append(bar);
-    const tabs = el2("div", "display:flex;gap:2px;border-bottom:1px solid var(--omp-border);margin-bottom:14px;flex-wrap:wrap;");
+    const tabs = el3("div", "display:flex;gap:2px;border-bottom:1px solid var(--omp-border);margin-bottom:14px;flex-wrap:wrap;");
     tabs.dataset.role = "tabs";
     for (const k of TABS) {
       const on = k === this.#tab;
-      const b = el2("button", `padding:7px 16px;border:0;border-bottom:2px solid ${on ? "var(--omp-accent-cyan,#19d3f3)" : "transparent"};border-radius:0;background:none;font-weight:${on ? 700 : 400};${on ? "" : DIM2}cursor:pointer;`, t(`icom.tab.${k}`));
+      const b = el3("button", `padding:7px 16px;border:0;border-bottom:2px solid ${on ? "var(--omp-accent-cyan,#19d3f3)" : "transparent"};border-radius:0;background:none;font-weight:${on ? 700 : 400};${on ? "" : DIM3}cursor:pointer;`, t(`icom.tab.${k}`));
       b.dataset.tab = k;
       b.addEventListener("click", () => this.#goto(k));
       tabs.append(b);
@@ -920,61 +1559,28 @@ var IntercomAdmin = class extends HTMLElement {
   }
   /** Gesamttabelle Teilnehmer × Kanäle: je Zelle Sprechen (Mikrofon) und Hören (Kopfhörer) per Klick. */
   #assignTab() {
-    const box = el2("div", BOX);
+    const box = el3("div", BOX);
     box.dataset.role = "assign";
-    box.append(el2("div", DIM2 + "font-size:12px;margin-bottom:10px;", t("icom.assign.hint")));
+    box.append(el3("div", DIM3 + "font-size:12px;margin-bottom:10px;", t("icom.assign.hint")));
     const { channels, parties } = this.#draft;
     if (!channels.length || !parties.length) {
-      const empty = el2("div", "padding:10px 0;");
-      empty.append(el2("div", DIM2 + "margin-bottom:8px;", t("icom.assign.needBoth")));
-      const row = el2("div", "display:flex;gap:8px;");
+      const empty = el3("div", "padding:10px 0;");
+      empty.append(el3("div", DIM3 + "margin-bottom:8px;", t("icom.assign.needBoth")));
+      const row = el3("div", "display:flex;gap:8px;");
       if (!channels.length) row.append(btn(t("icom.assign.toChannels"), () => this.#goto("channels")));
       if (!parties.length) row.append(btn(t("icom.assign.toParties"), () => this.#goto("parties")));
       empty.append(row);
       box.append(empty);
       return box;
     }
-    const wrap = el2("div", "overflow-x:auto;");
-    const grid = el2("div", `display:grid;grid-template-columns:minmax(150px,max-content) repeat(${channels.length},minmax(84px,1fr));gap:4px;align-items:center;`);
-    grid.append(el2("span"));
-    for (const c of channels) {
-      const h = el2("span", `font-size:12px;font-weight:600;text-align:center;padding:4px 6px;border-radius:4px;border-bottom:3px solid ${c.color || "#4c8dff"};`, c.name || `#${c.id}`);
-      grid.append(h);
-    }
-    const toggle = (p, ch, f) => {
-      const b = el2("button", "padding:3px 8px;min-width:34px;");
-      const paint = () => {
-        const on = !!getRoute(p, ch)?.[f];
-        b.textContent = f === "talk" ? "\u{1F3A4}" : "\u{1F3A7}";
-        b.style.opacity = on ? "1" : "0.28";
-        b.style.background = on ? "color-mix(in srgb,var(--omp-accent-cyan,#19d3f3) 28%,transparent)" : "";
-        b.setAttribute("aria-pressed", String(on));
-      };
-      b.title = t(f === "talk" ? "icom.talk" : "icom.listen");
-      b.addEventListener("click", () => {
-        setRoute(p, ch, f, !getRoute(p, ch)?.[f]);
-        paint();
-        this.#touch();
-      });
-      paint();
-      return b;
-    };
-    for (const p of parties) {
-      const name = el2("button", "text-align:left;border:0;background:none;padding:4px 2px;cursor:pointer;display:flex;gap:8px;align-items:center;");
-      const dot = el2("span", "width:9px;height:9px;border-radius:50%;background:var(--omp-border);flex:none;");
-      dot.dataset.partyDot = String(p.id);
-      name.append(dot, el2("span", "", p.name || `#${p.id}`));
-      name.title = t("icom.assign.openParty");
-      name.addEventListener("click", () => this.#goto("parties", p.id));
-      grid.append(name);
-      for (const c of channels) {
-        const cell = el2("span", "display:flex;gap:4px;justify-content:center;");
-        cell.append(toggle(p, c.id, "talk"), toggle(p, c.id, "listen"));
-        grid.append(cell);
-      }
-    }
-    wrap.append(grid);
-    box.append(wrap);
+    box.append(matrixView({
+      draft: () => this.#draft,
+      state: this.#matrix,
+      changed: () => this.#touch(),
+      rebuild: () => this.#render(),
+      openParty: (id) => this.#goto("parties", id),
+      paintDots: () => this.#paintDots()
+    }));
     return box;
   }
   #renderStatus() {
@@ -993,33 +1599,40 @@ var IntercomAdmin = class extends HTMLElement {
         p3: (this.#status.max_tick_us / 1e3).toFixed(1)
       });
     }
+    this.#paintDots();
+  }
+  #paintDots() {
+    const byId = new Map((this.#status?.parties ?? []).map((x) => [
+      x.id,
+      x
+    ]));
     for (const d of this.querySelectorAll("[data-party-dot]")) {
-      const p = this.#status?.parties.find((x) => x.id === Number(d.dataset.partyDot));
+      const p = byId.get(Number(d.dataset.partyDot));
       d.style.background = p?.speaking ? "var(--omp-ok,#2da44e)" : p?.online ? "var(--omp-ok,#2da44e)" : "var(--omp-border)";
       d.style.boxShadow = p?.speaking ? "0 0 0 3px color-mix(in srgb,var(--omp-ok,#2da44e) 35%,transparent)" : "none";
     }
   }
   #channelsBox() {
-    const box = el2("div", BOX);
+    const box = el3("div", BOX);
     box.dataset.role = "channels";
-    box.append(el2("h3", H, t("icom.channels")), el2("div", DIM2 + "font-size:12px;margin-bottom:8px;", t("icom.channelsHint")));
-    if (this.#draft.channels.length === 0) box.append(el2("div", DIM2 + "padding:6px 0;", t("icom.noChannels")));
+    box.append(el3("h3", H, t("icom.channels")), el3("div", DIM3 + "font-size:12px;margin-bottom:8px;", t("icom.channelsHint")));
+    if (this.#draft.channels.length === 0) box.append(el3("div", DIM3 + "padding:6px 0;", t("icom.noChannels")));
     for (const c of this.#draft.channels) {
-      const row = el2("div", "display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px;");
+      const row = el3("div", "display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px;");
       row.dataset.channel = String(c.id);
-      const color = el2("input", "width:44px;height:28px;padding:0;");
+      const color = el3("input", "width:44px;height:28px;padding:0;");
       color.type = "color";
       color.value = c.color || "#4c8dff";
       color.addEventListener("input", () => {
         c.color = color.value;
         this.#touch();
       });
-      const kind = el2("select", "padding:3px 6px;");
+      const kind = el3("select", "padding:3px 6px;");
       for (const k of [
         "party",
         "ifb"
       ]) {
-        const o = el2("option", "", t(`icom.channel.kind.${k}`));
+        const o = el3("option", "", t(`icom.channel.kind.${k}`));
         o.value = k;
         kind.append(o);
       }
@@ -1034,7 +1647,7 @@ var IntercomAdmin = class extends HTMLElement {
         this.#touch();
       }, "180px")), field(t("icom.channel.color"), color), field(t("icom.channel.kind"), kind));
       if (c.kind === "ifb") {
-        const duck = el2("input", "padding:3px 6px;width:70px;");
+        const duck = el3("input", "padding:3px 6px;width:70px;");
         duck.type = "number";
         duck.min = "0";
         duck.max = "60";
@@ -1068,53 +1681,153 @@ var IntercomAdmin = class extends HTMLElement {
     if (discard) discard.disabled = !d;
   }
   #partiesBox() {
-    const box = el2("div", BOX);
+    const box = el3("div", BOX);
     box.dataset.role = "parties";
-    box.append(el2("div", DIM2 + "font-size:12px;margin-bottom:10px;", t("icom.partiesHint")));
+    box.append(el3("div", DIM3 + "font-size:12px;margin-bottom:10px;", t("icom.partiesHint")));
     const parties = this.#draft.parties;
     if (!parties.some((p) => p.id === this.#selParty)) this.#selParty = parties[0]?.id ?? 0;
-    const cols = el2("div", "display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;");
-    const list = el2("div", "display:flex;flex-direction:column;gap:2px;min-width:200px;flex:0 0 220px;");
-    for (const p of parties) {
-      const on = p.id === this.#selParty;
-      const row = el2("button", `display:flex;gap:8px;align-items:center;text-align:left;padding:7px 10px;border-radius:6px;border:1px solid ${on ? "var(--omp-accent-cyan,#19d3f3)" : "transparent"};background:${on ? "color-mix(in srgb,var(--omp-accent-cyan,#19d3f3) 14%,transparent)" : "none"};cursor:pointer;`);
-      const dot = el2("span", "width:9px;height:9px;border-radius:50%;background:var(--omp-border);flex:none;");
-      dot.dataset.partyDot = String(p.id);
-      row.append(dot, el2("span", "flex:1;", p.name || `#${p.id}`), el2("span", "font-size:11px;" + DIM2, t(`icom.party.kind.${p.kind ?? "human"}`)));
-      row.dataset.pick = String(p.id);
-      row.addEventListener("click", () => {
-        this.#selParty = p.id;
-        this.#render();
-      });
-      list.append(row);
+    const bar = el3("div", "display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px;");
+    const q = textInput(this.#pText, (v) => {
+      this.#pText = v;
+      fillList();
+    }, "200px", t("icom.m.filterPartyPh"));
+    const kindFilter = el3("select", "padding:3px 6px;");
+    for (const [v, text] of [
+      [
+        "all",
+        t("icom.m.allKinds")
+      ],
+      ...[
+        "human",
+        "seat",
+        "program",
+        "port"
+      ].map((k) => [
+        k,
+        t(`icom.party.kind.${k}`)
+      ])
+    ]) {
+      const o = el3("option", "", text);
+      o.value = v;
+      kindFilter.append(o);
     }
-    list.append(btn(t("icom.party.add"), () => {
+    kindFilter.value = this.#pKind;
+    kindFilter.addEventListener("change", () => {
+      this.#pKind = kindFilter.value;
+      fillList();
+    });
+    const count = el3("span", "font-size:12px;" + DIM3);
+    bar.append(field(t("icom.m.filterParty"), q), field(t("icom.party.kind"), kindFilter), count);
+    box.append(bar);
+    const cols = el3("div", "display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;");
+    const left = el3("div", "display:flex;flex-direction:column;gap:6px;min-width:220px;flex:0 0 260px;");
+    const list = el3("div", "display:flex;flex-direction:column;gap:2px;max-height:min(60vh,640px);overflow:auto;");
+    list.dataset.role = "party-list";
+    const fillList = () => {
+      const shown = filterParties(parties, {
+        text: this.#pText,
+        kind: this.#pKind
+      });
+      count.textContent = t("icom.m.listCount", {
+        p0: shown.length,
+        p1: parties.length
+      });
+      list.replaceChildren();
+      for (const p of shown) {
+        const on = p.id === this.#selParty;
+        const row = el3("button", `display:flex;gap:8px;align-items:center;text-align:left;padding:5px 10px;border-radius:6px;border:1px solid ${on ? "var(--omp-accent-cyan,#19d3f3)" : "transparent"};background:${on ? "color-mix(in srgb,var(--omp-accent-cyan,#19d3f3) 14%,transparent)" : "none"};cursor:pointer;flex:none;`);
+        const dot = el3("span", "width:9px;height:9px;border-radius:50%;background:var(--omp-border);flex:none;");
+        dot.dataset.partyDot = String(p.id);
+        row.append(dot, el3("span", "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", p.name || `#${p.id}`), el3("span", "font-size:11px;" + DIM3, t(`icom.party.kind.${p.kind ?? "human"}`)));
+        row.dataset.pick = String(p.id);
+        row.addEventListener("click", () => {
+          this.#selParty = p.id;
+          this.#render();
+        });
+        list.append(row);
+      }
+      this.#paintDots();
+    };
+    fillList();
+    left.append(list);
+    left.append(btn(t("icom.party.add"), () => {
       this.#selParty = addParty(this.#draft, "").id;
+      this.#pText = "";
       this.#render();
     }));
-    cols.append(list);
-    const sel = parties.find((p) => p.id === this.#selParty);
-    const detail = el2("div", "flex:1 1 380px;min-width:300px;");
-    if (sel) detail.append(this.#partyCard(sel));
-    else detail.append(el2("div", DIM2 + "padding:6px 0;", t("icom.noParties")));
-    cols.append(detail);
-    box.append(cols);
-    return box;
-  }
-  #partyCard(p) {
-    const card = el2("div", "border:1px solid var(--omp-border);border-radius:8px;padding:12px 14px;");
-    card.dataset.party = String(p.id);
-    const head = el2("div", "display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;");
-    const dot = el2("span", "width:10px;height:10px;border-radius:50%;background:var(--omp-border);align-self:center;");
-    dot.dataset.partyDot = String(p.id);
-    const kind = el2("select", "padding:3px 6px;");
+    const det = el3("details", "margin-top:6px;");
+    det.append(el3("summary", "cursor:pointer;" + DIM3, t("icom.m.bulkAdd")));
+    const form = el3("div", "display:flex;flex-direction:column;gap:6px;margin-top:6px;");
+    const cnt = el3("input", "padding:3px 6px;width:80px;");
+    cnt.type = "number";
+    cnt.min = "1";
+    cnt.max = String(MAX_BULK_ADD);
+    cnt.value = String(this.#bulkCount);
+    cnt.addEventListener("input", () => this.#bulkCount = Number(cnt.value));
+    const kindSel = el3("select", "padding:3px 6px;");
     for (const k of [
       "human",
       "seat",
       "program",
       "port"
     ]) {
-      const o = el2("option", "", t(`icom.party.kind.${k}`));
+      const o = el3("option", "", t(`icom.party.kind.${k}`));
+      o.value = k;
+      kindSel.append(o);
+    }
+    kindSel.value = this.#bulkKind;
+    kindSel.addEventListener("change", () => this.#bulkKind = kindSel.value);
+    const like = el3("select", "padding:3px 6px;max-width:200px;");
+    const none = el3("option", "", t("icom.m.bulkLikeNone"));
+    none.value = "0";
+    like.append(none);
+    for (const p of parties) {
+      const o = el3("option", "", p.name || `#${p.id}`);
+      o.value = String(p.id);
+      like.append(o);
+    }
+    like.value = String(this.#bulkLike);
+    like.addEventListener("change", () => this.#bulkLike = Number(like.value));
+    form.append(field(t("icom.m.bulkPrefix"), textInput(this.#bulkPrefix, (v) => this.#bulkPrefix = v, "180px", t("icom.m.bulkPrefixPh"))), el3("div", "display:flex;gap:8px;"), field(t("icom.m.bulkLike"), like));
+    form.children[1].append(field(t("icom.m.bulkCount"), cnt), field(t("icom.party.kind"), kindSel));
+    form.append(btn(t("icom.m.bulkCreate"), () => {
+      if (!this.#bulkPrefix.trim()) {
+        showToast(t("icom.m.bulkNeedPrefix"));
+        return;
+      }
+      const made = addParties(this.#draft, this.#bulkPrefix, this.#bulkCount, this.#bulkKind, parties.find((p) => p.id === this.#bulkLike));
+      if (made.length) this.#selParty = made[0].id;
+      this.#pText = "";
+      showToast(t("icom.m.bulkCreated", {
+        p0: made.length
+      }));
+      this.#render();
+    }));
+    det.append(form);
+    left.append(det);
+    cols.append(left);
+    const sel = parties.find((p) => p.id === this.#selParty);
+    const detail = el3("div", "flex:1 1 380px;min-width:300px;");
+    if (sel) detail.append(this.#partyCard(sel));
+    else detail.append(el3("div", DIM3 + "padding:6px 0;", t("icom.noParties")));
+    cols.append(detail);
+    box.append(cols);
+    return box;
+  }
+  #partyCard(p) {
+    const card = el3("div", "border:1px solid var(--omp-border);border-radius:8px;padding:12px 14px;");
+    card.dataset.party = String(p.id);
+    const head = el3("div", "display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;");
+    const dot = el3("span", "width:10px;height:10px;border-radius:50%;background:var(--omp-border);align-self:center;");
+    dot.dataset.partyDot = String(p.id);
+    const kind = el3("select", "padding:3px 6px;");
+    for (const k of [
+      "human",
+      "seat",
+      "program",
+      "port"
+    ]) {
+      const o = el3("option", "", t(`icom.party.kind.${k}`));
       o.value = k;
       kind.append(o);
     }
@@ -1123,7 +1836,7 @@ var IntercomAdmin = class extends HTMLElement {
       p.kind = kind.value;
       this.#render();
     });
-    const prio = el2("input", "padding:3px 6px;width:60px;");
+    const prio = el3("input", "padding:3px 6px;width:60px;");
     prio.type = "number";
     prio.min = "0";
     prio.max = "9";
@@ -1136,7 +1849,11 @@ var IntercomAdmin = class extends HTMLElement {
       p.name = v;
       this.#touch();
     }, "180px")), field(t("icom.party.kind"), kind), field(t("icom.party.priority"), prio));
-    head.append(btn("\u2715", async () => {
+    head.append(btn(t("icom.m.duplicate"), () => {
+      const d = duplicateParty(this.#draft, p.id);
+      if (d) this.#selParty = d.id;
+      this.#render();
+    }, t("icom.m.duplicateHint")), btn("\u2715", async () => {
       if (!await confirmDialog(t("icom.party.removeConfirm", {
         p0: p.name || `#${p.id}`
       }))) return;
@@ -1144,11 +1861,11 @@ var IntercomAdmin = class extends HTMLElement {
       this.#render();
     }, t("icom.party.remove")));
     card.append(head);
-    const sec = (key) => el2("div", "font-size:11px;letter-spacing:.06em;text-transform:uppercase;margin:14px 0 4px;" + DIM2, t(key));
+    const sec = (key) => el3("div", "font-size:11px;letter-spacing:.06em;text-transform:uppercase;margin:14px 0 4px;" + DIM3, t(key));
     const human = (p.kind ?? "human") === "human" || p.kind === "seat";
     if (p.kind === "program" || p.kind === "port") {
       const slot = (label, value, set) => {
-        const i = el2("input", "padding:3px 6px;width:70px;");
+        const i = el3("input", "padding:3px 6px;width:70px;");
         i.type = "number";
         i.min = "0";
         i.max = "16";
@@ -1159,22 +1876,22 @@ var IntercomAdmin = class extends HTMLElement {
         });
         return field(label, i);
       };
-      const ports = el2("div", "display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;align-items:flex-end;");
-      ports.append(slot(t("icom.party.mxlIn"), p.mxl_in, (n) => p.mxl_in = n), slot(t("icom.party.mxlOut"), p.mxl_out, (n) => p.mxl_out = n), el2("span", DIM2 + "font-size:12px;", t("icom.party.mxlHint")));
+      const ports = el3("div", "display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;align-items:flex-end;");
+      ports.append(slot(t("icom.party.mxlIn"), p.mxl_in, (n) => p.mxl_in = n), slot(t("icom.party.mxlOut"), p.mxl_out, (n) => p.mxl_out = n), el3("span", DIM3 + "font-size:12px;", t("icom.party.mxlHint")));
       card.append(sec("icom.party.section.link"), ports);
     }
     if (human) {
-      const who = el2("div", "display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;align-items:flex-end;");
+      const who = el3("div", "display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;align-items:flex-end;");
       who.append(field(t("icom.party.users"), textInput((p.users ?? []).join(", "), (v) => {
         p.users = splitList(v);
         this.#touch();
       }, "260px")));
       if (this.#groups.length) {
-        const g = el2("select", "padding:3px 6px;min-width:160px;");
+        const g = el3("select", "padding:3px 6px;min-width:160px;");
         g.multiple = true;
         g.size = Math.min(4, this.#groups.length);
         for (const x of this.#groups) {
-          const o = el2("option", "", x.name);
+          const o = el3("option", "", x.name);
           o.value = x.id;
           o.selected = (p.groups ?? []).includes(x.id);
           g.append(o);
@@ -1200,7 +1917,7 @@ var IntercomAdmin = class extends HTMLElement {
       }));
       card.append(sec("icom.party.section.access"), who);
     }
-    const flags = el2("div", "display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;");
+    const flags = el3("div", "display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;");
     flags.append(check(t("icom.party.force"), !!p.force, (v) => {
       p.force = v;
       this.#touch();
@@ -1214,33 +1931,33 @@ var IntercomAdmin = class extends HTMLElement {
     }));
     card.append(sec("icom.party.section.rights"), flags);
     const routes = this.#draft.channels.filter((c) => getRoute(p, c.id)?.talk || getRoute(p, c.id)?.listen);
-    const sum = el2("div", "display:flex;gap:8px;align-items:center;flex-wrap:wrap;");
+    const sum = el3("div", "display:flex;gap:8px;align-items:center;flex-wrap:wrap;");
     sum.dataset.role = "summary";
-    sum.append(el2("span", routes.length ? "" : DIM2, routes.length ? t("icom.party.summary", {
+    sum.append(el3("span", routes.length ? "" : DIM3, routes.length ? t("icom.party.summary", {
       p0: routes.map((c) => `${c.name || `#${c.id}`} ${getRoute(p, c.id)?.talk ? "\u{1F3A4}" : ""}${getRoute(p, c.id)?.listen ? "\u{1F3A7}" : ""}`).join(" \xB7 ")
     }) : t("icom.party.summaryNone")), btn(t("icom.party.toAssign"), () => this.#goto("assign")));
     card.append(sec("icom.matrix"), sum);
     if (human) {
-      const det = el2("details", "margin-top:14px;");
+      const det = el3("details", "margin-top:14px;");
       det.open = p.layout !== void 0 || p.template !== void 0;
-      det.append(el2("summary", "cursor:pointer;" + DIM2, t("icom.layout.advanced")), this.#layoutSection(p));
+      det.append(el3("summary", "cursor:pointer;" + DIM3, t("icom.layout.advanced")), this.#layoutSection(p));
       card.append(det);
     }
     return card;
   }
   #layoutSection(p) {
-    const box = el2("div", "margin-top:10px;");
+    const box = el3("div", "margin-top:10px;");
     box.dataset.role = "layout";
-    box.append(el2("div", "font-size:11px;letter-spacing:.05em;text-transform:uppercase;" + DIM2, t("icom.layout")), el2("div", "font-size:12px;" + DIM2, t("icom.layout.hint")));
-    const row = el2("div", "display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px;");
+    box.append(el3("div", "font-size:11px;letter-spacing:.05em;text-transform:uppercase;" + DIM3, t("icom.layout")), el3("div", "font-size:12px;" + DIM3, t("icom.layout.hint")));
+    const row = el3("div", "display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px;");
     const mode = layoutMode(p);
-    const sel = el2("select", "padding:3px 6px;");
+    const sel = el3("select", "padding:3px 6px;");
     for (const m of [
       "default",
       "template",
       "own"
     ]) {
-      const o = el2("option", "", t(`icom.layout.mode.${m}`));
+      const o = el3("option", "", t(`icom.layout.mode.${m}`));
       o.value = m;
       if (m === "template" && !(this.#draft.templates ?? []).length) {
         o.disabled = true;
@@ -1265,9 +1982,9 @@ var IntercomAdmin = class extends HTMLElement {
     });
     row.append(sel);
     if (mode === "template") {
-      const ts = el2("select", "padding:3px 6px;");
+      const ts = el3("select", "padding:3px 6px;");
       for (const t2 of this.#draft.templates ?? []) {
-        const o = el2("option", "", t2.name || `#${t2.id}`);
+        const o = el3("option", "", t2.name || `#${t2.id}`);
         o.value = String(t2.id);
         ts.append(o);
       }
@@ -1292,21 +2009,21 @@ var IntercomAdmin = class extends HTMLElement {
     return box;
   }
   #templatesBox() {
-    const box = el2("div", BOX);
+    const box = el3("div", BOX);
     box.dataset.role = "templates";
-    box.append(el2("h3", H, t("icom.templates")), el2("div", DIM2 + "font-size:12px;margin-bottom:8px;", t("icom.templatesHint")));
+    box.append(el3("h3", H, t("icom.templates")), el3("div", DIM3 + "font-size:12px;margin-bottom:8px;", t("icom.templatesHint")));
     const list = this.#draft.templates ?? [];
-    if (list.length === 0) box.append(el2("div", DIM2 + "padding:6px 0;", t("icom.noTemplates")));
+    if (list.length === 0) box.append(el3("div", DIM3 + "padding:6px 0;", t("icom.noTemplates")));
     for (const t2 of list) {
-      const card = el2("div", "border:1px solid var(--omp-border);border-radius:6px;padding:10px;margin-bottom:10px;");
+      const card = el3("div", "border:1px solid var(--omp-border);border-radius:6px;padding:10px;margin-bottom:10px;");
       card.dataset.template = String(t2.id);
-      const head = el2("div", "display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;");
+      const head = el3("div", "display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;");
       const users = this.#draft.parties.filter((p) => p.template === t2.id && !p.layout).map((p) => p.name || `#${p.id}`);
       head.append(field(t("icom.template.name"), textInput(t2.name, (v) => {
         t2.name = v;
         this.#touch();
       }, "200px")));
-      if (users.length) head.append(el2("span", DIM2 + "font-size:12px;", t("icom.template.usedBy", {
+      if (users.length) head.append(el3("span", DIM3 + "font-size:12px;", t("icom.template.usedBy", {
         p0: users.join(", ")
       })));
       head.append(btn("\u2715", async () => {
@@ -1326,18 +2043,18 @@ var IntercomAdmin = class extends HTMLElement {
     return box;
   }
   #guestsBox() {
-    const box = el2("div", BOX);
+    const box = el3("div", BOX);
     box.dataset.role = "guests";
-    box.append(el2("h3", H, t("icom.guests")), el2("div", DIM2 + "font-size:12px;margin-bottom:8px;", t("icom.guestsHint")));
-    if (this.#guests.length === 0) box.append(el2("div", DIM2 + "padding:6px 0;", t("icom.guest.none")));
+    box.append(el3("h3", H, t("icom.guests")), el3("div", DIM3 + "font-size:12px;margin-bottom:8px;", t("icom.guestsHint")));
+    if (this.#guests.length === 0) box.append(el3("div", DIM3 + "padding:6px 0;", t("icom.guest.none")));
     const fmt = new Intl.DateTimeFormat(dateLocale(), {
       dateStyle: "short",
       timeStyle: "short"
     });
     for (const g of this.#guests) {
-      const row = el2("div", "display:flex;gap:10px;align-items:center;margin-bottom:6px;flex-wrap:wrap;");
+      const row = el3("div", "display:flex;gap:10px;align-items:center;margin-bottom:6px;flex-wrap:wrap;");
       row.dataset.guest = String(g.id);
-      row.append(el2("strong", "", g.name), el2("span", DIM2 + "font-size:12px;", t("icom.guest.until", {
+      row.append(el3("strong", "", g.name), el3("span", DIM3 + "font-size:12px;", t("icom.guest.until", {
         p0: fmt.format(new Date(g.expires))
       })));
       row.append(btn(t("icom.guest.copy"), async () => {
@@ -1357,14 +2074,14 @@ var IntercomAdmin = class extends HTMLElement {
       }));
       box.append(row);
     }
-    const form = el2("div", "display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:10px;border-top:1px solid var(--omp-border);padding-top:10px;");
-    const ttl = el2("input", "padding:3px 6px;width:90px;");
+    const form = el3("div", "display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:10px;border-top:1px solid var(--omp-border);padding-top:10px;");
+    const ttl = el3("input", "padding:3px 6px;width:90px;");
     ttl.type = "number";
     ttl.min = "1";
     ttl.value = String(this.#guestTtl);
     ttl.addEventListener("input", () => this.#guestTtl = Number(ttl.value));
     form.append(field(t("icom.guest.name"), textInput(this.#guestName, (v) => this.#guestName = v, "180px")), field(t("icom.guest.ttl"), ttl));
-    const chans = el2("div", "display:flex;gap:12px;flex-wrap:wrap;align-self:center;");
+    const chans = el3("div", "display:flex;gap:12px;flex-wrap:wrap;align-self:center;");
     for (const c of this.#saved.channels) {
       chans.append(check(c.name, this.#guestSel.has(c.id), (v) => v ? this.#guestSel.add(c.id) : this.#guestSel.delete(c.id)));
     }
@@ -1402,7 +2119,7 @@ var IntercomAdmin = class extends HTMLElement {
 if (!customElements.get("omp-intercom-admin")) customElements.define("omp-intercom-admin", IntercomAdmin);
 
 // ui/modules/intercom/intercom-tile.ts
-function el3(tag, css = "", text = "") {
+function el4(tag, css = "", text = "") {
   const e = document.createElement(tag);
   if (css) e.style.cssText = css;
   if (text) e.textContent = text;
@@ -1437,18 +2154,18 @@ var IntercomTile = class extends HTMLElement {
   }
   #render() {
     this.replaceChildren();
-    if (this.#error) this.append(el3("div", "color:var(--omp-error);margin-bottom:8px;", this.#error));
+    if (this.#error) this.append(el4("div", "color:var(--omp-error);margin-bottom:8px;", this.#error));
     if (!this.#loaded || this.#panels.length === 0 && !this.#error) {
-      if (this.#loaded) this.append(el3("div", "color:var(--omp-text-dim);padding:12px 0;", t("icom.tile.none")));
+      if (this.#loaded) this.append(el4("div", "color:var(--omp-text-dim);padding:12px 0;", t("icom.tile.none")));
       return;
     }
     if (this.#panels.length === 0) return;
     const p = this.#panels[Math.min(this.#current, this.#panels.length - 1)];
-    const bar = el3("div", "display:flex;gap:12px;align-items:center;margin-bottom:8px;flex-wrap:wrap;");
+    const bar = el4("div", "display:flex;gap:12px;align-items:center;margin-bottom:8px;flex-wrap:wrap;");
     if (this.#panels.length > 1) {
-      const sel = el3("select", "padding:3px 6px;");
+      const sel = el4("select", "padding:3px 6px;");
       this.#panels.forEach((x, i) => {
-        const o = el3("option", "", x.name);
+        const o = el4("option", "", x.name);
         o.value = String(i);
         sel.append(o);
       });
@@ -1457,17 +2174,17 @@ var IntercomTile = class extends HTMLElement {
         this.#current = Number(sel.value);
         this.#render();
       });
-      bar.append(el3("span", "font-size:12px;color:var(--omp-text-dim);", t("icom.tile.pick")), sel);
+      bar.append(el4("span", "font-size:12px;color:var(--omp-text-dim);", t("icom.tile.pick")), sel);
     } else {
-      bar.append(el3("strong", "", p.name));
+      bar.append(el4("strong", "", p.name));
     }
-    const open = el3("a", "font-size:12px;", t("icom.tile.newTab"));
+    const open = el4("a", "font-size:12px;", t("icom.tile.newTab"));
     open.href = p.url;
     open.target = "_blank";
     open.rel = "noopener";
-    bar.append(open, el3("span", "font-size:11px;color:var(--omp-text-dim);", t("icom.tile.certHint")));
+    bar.append(open, el4("span", "font-size:11px;color:var(--omp-text-dim);", t("icom.tile.certHint")));
     this.append(bar);
-    const frame = el3("iframe", "width:100%;max-width:980px;height:calc(100vh - 200px);min-height:420px;border:1px solid var(--omp-border);border-radius:8px;background:var(--omp-bg);");
+    const frame = el4("iframe", "width:100%;max-width:980px;height:calc(100vh - 200px);min-height:420px;border:1px solid var(--omp-border);border-radius:8px;background:var(--omp-bg);");
     frame.setAttribute("allow", "microphone; autoplay");
     frame.src = p.url;
     frame.title = p.name;

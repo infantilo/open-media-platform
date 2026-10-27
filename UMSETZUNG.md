@@ -5822,3 +5822,15 @@ Reihenfolge laut `AUDIT_2026_10_23.md`. Jeder Punkt vorher gegen den Code bestä
 - **Achtung:** der Standardserver `pool.ntp.org` ist ein Zugriff nach außen; in abgeschotteten Sendenetzen `OMP_CLOCK_NTP_SERVERS` auf den eigenen Zeitserver setzen oder leer lassen.
 
 **Offen aus dem Audit:** B4, B5, H1-Rest, H4–H7, H9, M5–M7, M11, M12, Rust-CI.
+
+## Kapitel 63: Intercom-Oberfläche für hundert und mehr Sprechstellen (Nutzerauftrag 2026-10-27, **umgesetzt, im Browser geprüft**)
+
+Die Zuteilung (Teilnehmer × Kanäle) war eine einzige Tabelle mit zwei Knöpfen je Zelle und je Zelle eigenen Handlern — ab einigen Dutzend Teilnehmern unbrauchbar, die Teilnehmerliste ohne Suche, das Panel in der Standardansicht eine Wand aus Rufen-Tasten.
+- **Matrix (`ui/modules/intercom/intercom-matrix.ts`):** zeichnet nur die sichtbaren Zeilen (feste Zeilenhöhe, `visibleWindow`), feststehende Kopfzeile und linke Spalten, **ein** Klick-Handler (Delegation) statt Tausender. Filter: Name, Art, mit/ohne Zuordnung, Kanalname. Sammelaktionen: je Kanalspalte „alle gefilterten sprechen/hören/entfernen“, je Zeile „alle sichtbaren Kanäle“, Auswahl per Kästchen (alle gefilterten auf einmal) mit **Zuordnung übernehmen von …**, Kanal für die Auswahl ein/aus, **Auswahl löschen**. Sammeländerungen über 20 fragen nach. Filter, Auswahl und Scrollstand bleiben beim Reiterwechsel erhalten.
+- **Teilnehmer-Reiter:** Suche und Artfilter, scrollende Liste, **Mehrere anlegen …** („Kamera 1 … Kamera 40“, ab der ersten freien Nummer, optional mit den Zuordnungen eines Musters, höchstens 500 je Zug), **Duplizieren**.
+- **Logik** (`intercom-scale.ts`, 9 Tests): Filter, Fenster, Sammelaktionen, Kopieren, Sammelanlage mit eindeutigen Namen, Mehrfach-Löschen räumt Panel-Tasten auf.
+- **Panel:** ohne eigenes Layout und mit mehr als 24 anderen Sprechstellen erscheint ein Suchfeld über den Rufen-Tasten (Standardansicht filtert nach Namen).
+- **Server:** Test, dass 500 Sprechstellen × 60 Kanäle mit je 30 Zuordnungen gültig sind und unter 2 s geprüft werden (Prüfung ist linear; gemessen 0,17 s im Debug-Profil).
+- **Im Browser geprüft (Headless-Chromium, echter Intercom-Node, 300 Sprechstellen × 40 Kanäle):** Erstaufbau 0,7 s, ~3000 DOM-Knoten statt 24 000 (21 Zeilen), Scrollen bis ans Ende (Zeilen 281–300), Filter, Zellklick, Spaltenaktion, Auswahl aller, Teilnehmerliste mit 300 Einträgen.
+- **Nicht geprüft:** echte Panels mit 100+ gleichzeitig verbundenen Teilnehmern (Last des Mix-Kerns, Status-Nachricht an jedes Panel enthält alle Sprechstellen); Layout-Editor und Gäste-Reiter sind unverändert (Auswahllisten mit allen Sprechstellen).
+- **Hinweis:** beim Test habe ich die Intercom-Konfiguration überschrieben und danach auf leer gesetzt (`data/omp-intercom.json`, auch die Datenbanksicherung); falls dort vorher eine echte Einrichtung stand, aus der Sicherung (`.backups/`) holen.

@@ -726,6 +726,22 @@ mod tests {
         assert_eq!(format_rfc3339(951_782_400), "2000-02-29T00:00:00Z");
     }
 
+    /// Große Einrichtung (Kapitel 63): 500 Sprechstellen × 60 Kanäle mit je 30 Zuordnungen müssen gültig sein und schnell geprüft werden.
+    #[test]
+    fn validate_handles_hundreds_of_parties() {
+        let channels: Vec<_> = (1..=60).map(|i| json!({"id": i, "name": format!("Kanal {i}")})).collect();
+        let parties: Vec<_> = (1..=500)
+            .map(|i| {
+                let routes: Vec<_> = (0..30).map(|k| json!({"ch": (i + k) % 60 + 1, "talk": k % 2 == 0, "listen": true})).collect();
+                json!({"id": i, "name": format!("Station {i}"), "kind": "seat", "routes": routes})
+            })
+            .collect();
+        let c: Config = serde_json::from_value(json!({"channels": channels, "parties": parties})).unwrap();
+        let t = std::time::Instant::now();
+        assert!(c.validate().is_ok());
+        assert!(t.elapsed() < std::time::Duration::from_secs(2), "Prüfung dauerte {:?}", t.elapsed());
+    }
+
     #[test]
     fn validate_accepts_sample_and_collects_all_problems() {
         assert!(sample().validate().is_ok());

@@ -3,6 +3,8 @@
 
 import { apiFetch, confirmDialog, dateLocale, directory, showToast, t as tt } from "../host.ts";
 import { layoutEditor } from "./intercom-layout-editor.ts";
+import { matrixView, type MatrixState, newMatrixState } from "./intercom-matrix.ts";
+import { addParties, duplicateParty, filterParties, MAX_BULK_ADD } from "./intercom-scale.ts";
 import {
   addTemplate, layoutFromAssignment, layoutMode, removeTemplate,
   addChannel, addParty, cleanConfig, clone, type Config, type Guest, getRoute, guestRoutes, localProblems, type Party, type PartyKind, removeChannel,
@@ -83,6 +85,14 @@ class IntercomAdmin extends HTMLElement {
   #loaded = false;
   #tab: Tab = loadTab();
   #selParty = 0;
+  #matrix: MatrixState = newMatrixState();
+  // Teilnehmerliste: Filter und Sammelanlage
+  #pText = "";
+  #pKind: PartyKind | "all" = "all";
+  #bulkPrefix = "";
+  #bulkCount = 10;
+  #bulkKind: PartyKind = "human";
+  #bulkLike = 0;
 
   connectedCallback() {
     this.style.cssText = "display:block;";
@@ -218,47 +228,14 @@ class IntercomAdmin extends HTMLElement {
       box.append(empty);
       return box;
     }
-    const wrap = el("div", "overflow-x:auto;");
-    const grid = el("div", `display:grid;grid-template-columns:minmax(150px,max-content) repeat(${channels.length},minmax(84px,1fr));gap:4px;align-items:center;`);
-    grid.append(el("span"));
-    for (const c of channels) {
-      const h = el("span", `font-size:12px;font-weight:600;text-align:center;padding:4px 6px;border-radius:4px;border-bottom:3px solid ${c.color || "#4c8dff"};`, c.name || `#${c.id}`);
-      grid.append(h);
-    }
-    const toggle = (p: Party, ch: number, f: "talk" | "listen"): HTMLElement => {
-      const b = el("button", "padding:3px 8px;min-width:34px;");
-      const paint = () => {
-        const on = !!getRoute(p, ch)?.[f];
-        b.textContent = f === "talk" ? "🎤" : "🎧";
-        b.style.opacity = on ? "1" : "0.28";
-        b.style.background = on ? "color-mix(in srgb,var(--omp-accent-cyan,#19d3f3) 28%,transparent)" : "";
-        b.setAttribute("aria-pressed", String(on));
-      };
-      b.title = tt(f === "talk" ? "icom.talk" : "icom.listen");
-      b.addEventListener("click", () => {
-        setRoute(p, ch, f, !getRoute(p, ch)?.[f]);
-        paint();
-        this.#touch();
-      });
-      paint();
-      return b;
-    };
-    for (const p of parties) {
-      const name = el("button", "text-align:left;border:0;background:none;padding:4px 2px;cursor:pointer;display:flex;gap:8px;align-items:center;");
-      const dot = el("span", "width:9px;height:9px;border-radius:50%;background:var(--omp-border);flex:none;");
-      dot.dataset.partyDot = String(p.id);
-      name.append(dot, el("span", "", p.name || `#${p.id}`));
-      name.title = tt("icom.assign.openParty");
-      name.addEventListener("click", () => this.#goto("parties", p.id));
-      grid.append(name);
-      for (const c of channels) {
-        const cell = el("span", "display:flex;gap:4px;justify-content:center;");
-        cell.append(toggle(p, c.id, "talk"), toggle(p, c.id, "listen"));
-        grid.append(cell);
-      }
-    }
-    wrap.append(grid);
-    box.append(wrap);
+    box.append(matrixView({
+      draft: () => this.#draft,
+      state: this.#matrix,
+      changed: () => this.#touch(),
+      rebuild: () => this.#render(),
+      openParty: (id) => this.#goto("parties", id),
+      paintDots: () => this.#paintDots(),
+    }));
     return box;
   }
 
@@ -273,8 +250,13 @@ class IntercomAdmin extends HTMLElement {
       line.style.color = "";
       line.textContent = tt("icom.statusLine", { p0: online, p1: this.#status.parties.length, p2: this.#status.late_ticks, p3: (this.#status.max_tick_us / 1000).toFixed(1) });
     }
+    this.#paintDots();
+  }
+
+  #paintDots() {
+    const byId = new Map((this.#status?.parties ?? []).map((x) => [x.id, x]));
     for (const d of this.querySelectorAll<HTMLElement>("[data-party-dot]")) {
-      const p = this.#status?.parties.find((x) => x.id === Number(d.dataset.partyDot));
+      const p = byId.get(Number(d.dataset.partyDot));
       d.style.background = p?.speaking ? "var(--omp-ok,#2da44e)" : p?.online ? "var(--omp-ok,#2da44e)" : "var(--omp-border)";
       d.style.boxShadow = p?.speaking ? "0 0 0 3px color-mix(in srgb,var(--omp-ok,#2da44e) 35%,transparent)" : "none";
     }
@@ -348,26 +330,101 @@ class IntercomAdmin extends HTMLElement {
     box.append(el("div", DIM + "font-size:12px;margin-bottom:10px;", tt("icom.partiesHint")));
     const parties = this.#draft.parties;
     if (!parties.some((p) => p.id === this.#selParty)) this.#selParty = parties[0]?.id ?? 0;
-    const cols = el("div", "display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;");
-    const list = el("div", "display:flex;flex-direction:column;gap:2px;min-width:200px;flex:0 0 220px;");
-    for (const p of parties) {
-      const on = p.id === this.#selParty;
-      const row = el("button", `display:flex;gap:8px;align-items:center;text-align:left;padding:7px 10px;border-radius:6px;border:1px solid ${on ? "var(--omp-accent-cyan,#19d3f3)" : "transparent"};background:${on ? "color-mix(in srgb,var(--omp-accent-cyan,#19d3f3) 14%,transparent)" : "none"};cursor:pointer;`);
-      const dot = el("span", "width:9px;height:9px;border-radius:50%;background:var(--omp-border);flex:none;");
-      dot.dataset.partyDot = String(p.id);
-      row.append(dot, el("span", "flex:1;", p.name || `#${p.id}`), el("span", "font-size:11px;" + DIM, tt(`icom.party.kind.${p.kind ?? "human"}` as never)));
-      row.dataset.pick = String(p.id);
-      row.addEventListener("click", () => {
-        this.#selParty = p.id;
-        this.#render();
-      });
-      list.append(row);
+
+    // Suche und Filter: mit hundert und mehr Teilnehmern findet man sonst nichts mehr.
+    const bar = el("div", "display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px;");
+    const q = textInput(this.#pText, (v) => { this.#pText = v; fillList(); }, "200px", tt("icom.m.filterPartyPh"));
+    const kindFilter = el("select", "padding:3px 6px;");
+    for (const [v, text] of [["all", tt("icom.m.allKinds")], ...(["human", "seat", "program", "port"] as const).map((k) => [k, tt(`icom.party.kind.${k}` as never)] as [string, string])]) {
+      const o = el("option", "", text);
+      o.value = v;
+      kindFilter.append(o);
     }
-    list.append(btn(tt("icom.party.add"), () => {
+    kindFilter.value = this.#pKind;
+    kindFilter.addEventListener("change", () => { this.#pKind = kindFilter.value as PartyKind | "all"; fillList(); });
+    const count = el("span", "font-size:12px;" + DIM);
+    bar.append(field(tt("icom.m.filterParty"), q), field(tt("icom.party.kind"), kindFilter), count);
+    box.append(bar);
+
+    const cols = el("div", "display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;");
+    const left = el("div", "display:flex;flex-direction:column;gap:6px;min-width:220px;flex:0 0 260px;");
+    const list = el("div", "display:flex;flex-direction:column;gap:2px;max-height:min(60vh,640px);overflow:auto;");
+    list.dataset.role = "party-list";
+    const fillList = () => {
+      const shown = filterParties(parties, { text: this.#pText, kind: this.#pKind });
+      count.textContent = tt("icom.m.listCount", { p0: shown.length, p1: parties.length });
+      list.replaceChildren();
+      for (const p of shown) {
+        const on = p.id === this.#selParty;
+        const row = el("button", `display:flex;gap:8px;align-items:center;text-align:left;padding:5px 10px;border-radius:6px;border:1px solid ${on ? "var(--omp-accent-cyan,#19d3f3)" : "transparent"};background:${on ? "color-mix(in srgb,var(--omp-accent-cyan,#19d3f3) 14%,transparent)" : "none"};cursor:pointer;flex:none;`);
+        const dot = el("span", "width:9px;height:9px;border-radius:50%;background:var(--omp-border);flex:none;");
+        dot.dataset.partyDot = String(p.id);
+        row.append(dot, el("span", "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", p.name || `#${p.id}`), el("span", "font-size:11px;" + DIM, tt(`icom.party.kind.${p.kind ?? "human"}` as never)));
+        row.dataset.pick = String(p.id);
+        row.addEventListener("click", () => {
+          this.#selParty = p.id;
+          this.#render();
+        });
+        list.append(row);
+      }
+      this.#paintDots();
+    };
+    fillList();
+    left.append(list);
+    left.append(btn(tt("icom.party.add"), () => {
       this.#selParty = addParty(this.#draft, "").id;
+      this.#pText = "";
       this.#render();
     }));
-    cols.append(list);
+
+    // Sammelanlage: „Kamera 1 … Kamera 40“ in einem Zug, optional mit den Zuordnungen eines Musters.
+    const det = el("details", "margin-top:6px;");
+    det.append(el("summary", "cursor:pointer;" + DIM, tt("icom.m.bulkAdd")));
+    const form = el("div", "display:flex;flex-direction:column;gap:6px;margin-top:6px;");
+    const cnt = el("input", "padding:3px 6px;width:80px;");
+    cnt.type = "number";
+    cnt.min = "1";
+    cnt.max = String(MAX_BULK_ADD);
+    cnt.value = String(this.#bulkCount);
+    cnt.addEventListener("input", () => (this.#bulkCount = Number(cnt.value)));
+    const kindSel = el("select", "padding:3px 6px;");
+    for (const k of ["human", "seat", "program", "port"] as PartyKind[]) {
+      const o = el("option", "", tt(`icom.party.kind.${k}` as never));
+      o.value = k;
+      kindSel.append(o);
+    }
+    kindSel.value = this.#bulkKind;
+    kindSel.addEventListener("change", () => (this.#bulkKind = kindSel.value as PartyKind));
+    const like = el("select", "padding:3px 6px;max-width:200px;");
+    const none = el("option", "", tt("icom.m.bulkLikeNone"));
+    none.value = "0";
+    like.append(none);
+    for (const p of parties) {
+      const o = el("option", "", p.name || `#${p.id}`);
+      o.value = String(p.id);
+      like.append(o);
+    }
+    like.value = String(this.#bulkLike);
+    like.addEventListener("change", () => (this.#bulkLike = Number(like.value)));
+    form.append(
+      field(tt("icom.m.bulkPrefix"), textInput(this.#bulkPrefix, (v) => (this.#bulkPrefix = v), "180px", tt("icom.m.bulkPrefixPh"))),
+      el("div", "display:flex;gap:8px;"), field(tt("icom.m.bulkLike"), like),
+    );
+    (form.children[1] as HTMLElement).append(field(tt("icom.m.bulkCount"), cnt), field(tt("icom.party.kind"), kindSel));
+    form.append(btn(tt("icom.m.bulkCreate"), () => {
+      if (!this.#bulkPrefix.trim()) {
+        showToast(tt("icom.m.bulkNeedPrefix"));
+        return;
+      }
+      const made = addParties(this.#draft, this.#bulkPrefix, this.#bulkCount, this.#bulkKind, parties.find((p) => p.id === this.#bulkLike));
+      if (made.length) this.#selParty = made[0].id;
+      this.#pText = "";
+      showToast(tt("icom.m.bulkCreated", { p0: made.length }));
+      this.#render();
+    }));
+    det.append(form);
+    left.append(det);
+    cols.append(left);
     const sel = parties.find((p) => p.id === this.#selParty);
     const detail = el("div", "flex:1 1 380px;min-width:300px;");
     if (sel) detail.append(this.#partyCard(sel));
@@ -404,7 +461,11 @@ class IntercomAdmin extends HTMLElement {
       this.#touch();
     });
     head.append(dot, field(tt("icom.party.name"), textInput(p.name, (v) => { p.name = v; this.#touch(); }, "180px")), field(tt("icom.party.kind"), kind), field(tt("icom.party.priority"), prio));
-    head.append(btn("✕", async () => {
+    head.append(btn(tt("icom.m.duplicate"), () => {
+      const d = duplicateParty(this.#draft, p.id);
+      if (d) this.#selParty = d.id;
+      this.#render();
+    }, tt("icom.m.duplicateHint")), btn("✕", async () => {
       if (!(await confirmDialog(tt("icom.party.removeConfirm", { p0: p.name || `#${p.id}` })))) return;
       removeParty(this.#draft, p.id);
       this.#render();
