@@ -56,7 +56,7 @@ func (s *Store) ReleaseStatus(ctx context.Context, assetID string) (ReleaseInfo,
 // ReleaseStatusByFile liefert die Auskunft zur zuletzt geänderten Eingangs-Datei mit diesem Dateinamen
 // (für Playlist-Items ohne Asset-Bezug, z. B. aus importierten Fremdlisten).
 func (s *Store) ReleaseStatusByFile(ctx context.Context, fileName string) (ReleaseInfo, error) {
-	it, err := scanItem(s.db.QueryRowContext(ctx, `SELECT `+itemCols+itemFrom+` WHERE i.file_name=$1 ORDER BY i.updated_at DESC LIMIT 1`, fileName))
+	it, err := scanItem(s.db.QueryRowContext(ctx, `SELECT `+itemCols+itemFrom+` WHERE i.file_name=$1 ORDER BY i.created_at DESC, i.asset_id DESC LIMIT 1`, fileName))
 	if errors.Is(err, sql.ErrNoRows) {
 		return ReleaseInfo{Reason: "nicht im Eingang registriert"}, nil
 	}

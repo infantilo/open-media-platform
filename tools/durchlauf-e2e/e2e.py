@@ -201,7 +201,9 @@ def run(wf, ch):
     except RuntimeError as e:
         print("  ", e)
     cur = next(i for i in param(nid, "items") if i["id"] == it["id"])
-    check("Freigabe verlangt und gesperrt (Datei nicht im Eingang)", cur["release"].get("blocked"), str(cur.get("release")))
+    # Die Datei fehlt noch: das Event ist ohnehin nicht abspielbar. Gibt es von einem früheren Lauf schon einen freigegebenen
+    # Eingangs-Eintrag gleichen Namens, ist die Freigabe offen — gesperrt wird erst durch die neu importierte, noch ungeprüfte Datei.
+    check("Event ist noch nicht sendbar (Datei fehlt)", cur.get("available") is False or bool(cur["release"].get("blocked")), str(cur.get("release")))
     err = None
     try:
         method(nid, "cue", {"itemId": it["id"]})
@@ -224,6 +226,9 @@ def run(wf, ch):
     ri = item()
     print("  QC:", ri["qcStatus"], "Zustand:", ri["state"])
     check("QC lief automatisch", ri["qcStatus"] in ("pass", "warning", "fail"))
+    wait_for(lambda: (next(i for i in param(nid, "items") if i["id"] == it["id"]).get("release") or {}).get("released") is False, 30, "Sperre durch die neue, ungeprüfte Datei", 2)
+    cur = next(i for i in param(nid, "items") if i["id"] == it["id"])
+    check("Neue Datei ist bis zur Freigabe gesperrt", bool(cur["release"].get("blocked")) and ri["state"] != "approved", str(cur.get("release")))
 
     print("== 3. Manuelle Kontrolle: Segment abstecken, einreichen, freigeben")
     ri = un(call("POST", f"/api/v1/review/items/{aid}/claim", {}))

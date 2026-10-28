@@ -713,9 +713,58 @@ fn video_caps(width: u32, height: u32) -> gst::Caps {
         .build()
 }
 
+/// Pixelformat der Programm-/Preset-/PIP-Ebenen und des Compositor-Ausgangs: **AYUV** (YUV 4:4:4 mit Alpha) statt RGBA.
+/// Die Quellen kommen als YUV (v210 → Y42B), der Ausgang geht wieder nach YUV (Y42B → v210): in AYUV entfallen die beiden
+/// Farbmatrix-Umrechnungen (gemessen mit `gst-launch`, 720p, 400 Bilder: Eingang Y42B→AYUV 1,1 s statt →RGBA 2,0 s;
+/// Ausgang AYUV→Y42B 0,8 s statt 2,05 s), und der Compositor blendet AYUV nativ. Der Keyer bleibt RGBA (Fill+Key); seine
+/// Ebene wandelt der Compositor selbst, nur wenn sie sichtbar ist. Mit GPU-Konvertierung bleibt es bei RGBA.
+fn program_format(hwaccel: omp_mediaio::hwaccel::HwAccel) -> &'static str {
+    // Diagnose-Schalter für Messvergleiche (nicht dokumentiert, kein Betriebsparameter): OMP_ME_PROGRAM_FORMAT=RGBA|BGRx|AYUV.
+    match std::env::var("OMP_ME_PROGRAM_FORMAT").as_deref() {
+        Ok("RGBA") => return "RGBA",
+        Ok("BGRx") => return "BGRx",
+        Ok("AYUV") => return "AYUV",
+        _ => {}
+    }
+    if hwaccel.video_convert_scale_available() {
+        "RGBA"
+    } else {
+        "AYUV"
+    }
+}
+
+/// Wandelt ein Einzelbild (Rohdaten in `format`, Mischer-Auflösung) über eine kurze Wegwerf-Pipeline nach RGBA. Nur für
+/// den seltenen Freeze-Abgriff; die Farbmatrix bestimmt GStreamer (`videoconvert`), nicht handgeschriebener Code.
+fn convert_frame_to_rgba(data: &[u8], format: &str, width: u32, height: u32) -> Result<Vec<u8>, String> {
+    let src_caps = pixel_caps(format, width, height);
+    let appsrc = gstreamer_app::AppSrc::builder().caps(&src_caps).format(gst::Format::Time).build();
+    let conv = gst::ElementFactory::make("videoconvert").build().map_err(|e| format!("videoconvert (Freeze): {e}"))?;
+    let sink = gstreamer_app::AppSink::builder().caps(&pixel_caps("RGBA", width, height)).max_buffers(1).build();
+    let pipeline = gst::Pipeline::new();
+    let src_el: gst::Element = appsrc.clone().upcast();
+    let sink_el: gst::Element = sink.clone().upcast();
+    pipeline.add_many([&src_el, &conv, &sink_el]).map_err(|e| format!("Freeze-Pipeline: {e}"))?;
+    gst::Element::link_many([&src_el, &conv, &sink_el]).map_err(|e| format!("Freeze-Pipeline verlinken: {e}"))?;
+    pipeline.set_state(gst::State::Playing).map_err(|e| format!("Freeze-Pipeline starten: {e}"))?;
+    let result = (|| {
+        appsrc.push_buffer(gst::Buffer::from_slice(data.to_vec())).map_err(|e| format!("Freeze-Bild einspeisen: {e}"))?;
+        let _ = appsrc.end_of_stream();
+        let sample = sink.try_pull_sample(gst::ClockTime::from_seconds(3)).ok_or("Freeze-Umwandlung ohne Ergebnis")?;
+        let buf = sample.buffer().ok_or("Freeze-Bild ohne Puffer")?;
+        let map = buf.map_readable().map_err(|e| format!("Freeze-Puffer nicht lesbar: {e}"))?;
+        Ok::<Vec<u8>, String>(map.as_slice().to_vec())
+    })();
+    let _ = pipeline.set_state(gst::State::Null);
+    result
+}
+
 fn rgba_caps(width: u32, height: u32) -> gst::Caps {
+    pixel_caps("RGBA", width, height)
+}
+
+fn pixel_caps(format: &str, width: u32, height: u32) -> gst::Caps {
     gst::Caps::builder("video/x-raw")
-        .field("format", "RGBA")
+        .field("format", format)
         .field("width", width as i32)
         .field("height", height as i32)
         .field(
@@ -849,9 +898,10 @@ fn build_normalized_branch(
     height: u32,
     native: Option<(u32, u32)>,
     hwaccel: omp_mediaio::hwaccel::HwAccel,
+    format: &str,
 ) -> Result<(gst::Element, Vec<gst::Element>), String> {
     if let (Some((sw, sh)), false) = (native, hwaccel.video_convert_scale_available()) {
-        return build_normalized_branch_sw(pipeline, tail, name_suffix, sw, sh, width, height);
+        return build_normalized_branch_sw(pipeline, tail, name_suffix, sw, sh, width, height, format);
     }
     // `queue` zwischen `tail` und der Konvertierungskette: ohne ein
     // pufferndes Element hier beantwortet keins der nachgelagerten
@@ -885,7 +935,7 @@ fn build_normalized_branch(
     // sonst unverändert `videoconvert ! videoscale`. OHNE Framerate in
     // diesen Ziel-Caps — die übernimmt weiterhin ausschließlich das
     // nachfolgende `videorate` (kein GPU-Äquivalent dafür im Einsatz).
-    let format_size_caps = gst::Caps::builder("video/x-raw").field("format", "RGBA").field("width", width as i32).field("height", height as i32).build();
+    let format_size_caps = gst::Caps::builder("video/x-raw").field("format", format).field("width", width as i32).field("height", height as i32).build();
     let (convert_scale_tail, mut elements) =
         omp_mediaio::hwaccel::build_convert_scale(pipeline, &queue, name_suffix, &format_size_caps, hwaccel)?;
 
@@ -893,7 +943,7 @@ fn build_normalized_branch(
         .build()
         .map_err(|e| format!("videorate ({name_suffix}): {e}"))?;
     let caps = gst::ElementFactory::make("capsfilter")
-        .property("caps", rgba_caps(width, height))
+        .property("caps", pixel_caps(format, width, height))
         .build()
         .map_err(|e| format!("capsfilter ({name_suffix}): {e}"))?;
     pipeline
@@ -976,6 +1026,7 @@ fn build_normalized_branch_sw(
     sh: u32,
     width: u32,
     height: u32,
+    format: &str,
 ) -> Result<(gst::Element, Vec<gst::Element>), String> {
     let make = |factory: &str, what: &str| -> Result<gst::Element, String> {
         gst::ElementFactory::make(factory).build().map_err(|e| format!("{factory} ({what}, {name_suffix}): {e}"))
@@ -1013,7 +1064,7 @@ fn build_normalized_branch_sw(
         }
         SwScalePlan::ConvertThenScale => {
             chain.push(make("videoconvert", "Y42B->RGBA")?);
-            chain.push(capsf(raw_caps(Some("RGBA"), sw, sh), "RGBA native")?);
+            chain.push(capsf(raw_caps(Some(format), sw, sh), "native target format")?);
             chain.push(scaler("RGBA up")?);
         }
         SwScalePlan::ScaleThenConvert => {
@@ -1029,7 +1080,7 @@ fn build_normalized_branch_sw(
     let rate = make("videorate", "rate")?;
     rate.set_property("max-duplication-time", 200_000_000u64);
     chain.push(rate);
-    let out_caps = capsf(rgba_caps(width, height), "RGBA target")?;
+    let out_caps = capsf(pixel_caps(format, width, height), "target format")?;
     chain.push(out_caps.clone());
 
     let refs: Vec<&gst::Element> = chain.iter().collect();
@@ -1082,6 +1133,7 @@ fn build_synthetic_branch(
     name_suffix: &str,
     width: u32,
     height: u32,
+    format: &str,
 ) -> Result<(gst::Element, Vec<gst::Element>), String> {
     let queue = gst::ElementFactory::make("queue")
         .property_from_str("leaky", "downstream")
@@ -1091,7 +1143,7 @@ fn build_synthetic_branch(
         .build()
         .map_err(|e| format!("queue ({name_suffix}): {e}"))?;
     let caps = gst::ElementFactory::make("capsfilter")
-        .property("caps", rgba_caps(width, height))
+        .property("caps", pixel_caps(format, width, height))
         .build()
         .map_err(|e| format!("capsfilter ({name_suffix}): {e}"))?;
 
@@ -1263,6 +1315,7 @@ fn build_source_branch(
         height,
         Some((mxl_input.width, mxl_input.height)),
         hwaccel,
+        program_format(hwaccel),
     ) {
         Ok(r) => r,
         Err(e) => {
@@ -1393,6 +1446,7 @@ fn build_still_branch(
     width: u32,
     height: u32,
     activate_now: bool,
+    format: &str,
 ) -> Result<SourceBranch, String> {
     if still.width != width || still.height != height || still.rgba.len() != (width * height * 4) as usize {
         return Err(format!("Freeze hat {}x{}, der Mischer {}x{}", still.width, still.height, width, height));
@@ -1409,17 +1463,37 @@ fn build_still_branch(
         .build()
         .map_err(|e| format!("tee ({name_suffix}): {e}"))?;
     let src_el: gst::Element = appsrc.clone().upcast();
-    pipeline.add(&src_el).map_err(|e| format!("add freeze appsrc ({name_suffix}): {e}"))?;
+    // Programmformat ≠ RGBA: das Standbild (RGBA-Bytes) wird vor dem tee einmal in das Programmformat gewandelt, damit alle
+    // Eingänge eines Selektors identische Caps haben (kein Caps-Wechsel beim Umschalten).
+    let mut chain: Vec<gst::Element> = vec![src_el.clone()];
+    if format != "RGBA" {
+        let conv = gst::ElementFactory::make("videoconvert").build().map_err(|e| format!("videoconvert ({name_suffix}): {e}"))?;
+        let caps = gst::ElementFactory::make("capsfilter")
+            .property("caps", pixel_caps(format, width, height))
+            .build()
+            .map_err(|e| format!("capsfilter ({name_suffix}): {e}"))?;
+        chain.push(conv);
+        chain.push(caps);
+    }
+    let chain_refs: Vec<&gst::Element> = chain.iter().collect();
+    pipeline.add_many(chain_refs.iter().copied()).map_err(|e| format!("add freeze elements ({name_suffix}): {e}"))?;
     if let Err(e) = pipeline.add(&tee) {
-        remove_elements(pipeline, &[src_el]);
+        remove_elements(pipeline, &chain);
         return Err(format!("add tee ({name_suffix}): {e}"));
     }
-    let linked = gst::Element::link(&src_el, &tee)
-        .map_err(|e| format!("link freeze appsrc->tee ({name_suffix}): {e}"))
+    let mut to_link: Vec<&gst::Element> = chain.iter().collect();
+    to_link.push(&tee);
+    let linked = gst::Element::link_many(to_link.iter().copied())
+        .map_err(|e| format!("link freeze chain->tee ({name_suffix}): {e}"))
         .and_then(|()| tee.sync_state_with_parent().map_err(|e| format!("sync tee ({name_suffix}): {e}")))
-        .and_then(|()| src_el.sync_state_with_parent().map_err(|e| format!("sync freeze appsrc ({name_suffix}): {e}")));
+        .and_then(|()| {
+            chain
+                .iter()
+                .try_for_each(|el| el.sync_state_with_parent().map(|_| ()).map_err(|e| format!("sync freeze element ({name_suffix}): {e}")))
+        });
     if let Err(e) = linked {
-        remove_elements(pipeline, &[src_el, tee]);
+        remove_elements(pipeline, &chain);
+        remove_elements(pipeline, &[tee]);
         return Err(e);
     }
     let gate = Arc::new(AtomicBool::new(true));
@@ -1433,7 +1507,7 @@ fn build_still_branch(
     if activate_now {
         feeder.start();
     }
-    Ok(SourceBranch { mxl_input: None, feeder: Some(feeder), gate, chain_elements: vec![src_el], tee, taps: Vec::new() })
+    Ok(SourceBranch { mxl_input: None, feeder: Some(feeder), gate, chain_elements: chain, tee, taps: Vec::new() })
 }
 
 /// Baut den Elemente-Satz eines `SourceBranch`s vollständig ab (Gegenstück
@@ -1551,7 +1625,7 @@ fn build_one_input(
 ) -> Result<(Vec<gst::Pad>, Vec<gst::Pad>, Vec<gst::Pad>, SourceBranch), String> {
     let mut branch = if let Some(id) = input.flow_id.strip_prefix(FREEZE_PREFIX) {
         let still = stills.lock().expect("lock poisoned").get(id).cloned().ok_or_else(|| format!("Freeze {id} nicht im Speicher"))?;
-        build_still_branch(pipeline, &still, &format!("input-{pad_index}"), width, height, activate_now)?
+        build_still_branch(pipeline, &still, &format!("input-{pad_index}"), width, height, activate_now, program_format(hwaccel))?
     } else {
         build_source_branch(
             pipeline,
@@ -1770,15 +1844,20 @@ fn capture_still(lvl: &LevelPipeline, width: u32, height: u32) -> Result<Still, 
     let st = caps.structure(0).ok_or("Caps ohne Struktur")?;
     let fmt = st.get::<&str>("format").unwrap_or("?");
     let (w, h) = (st.get::<i32>("width").unwrap_or(0) as u32, st.get::<i32>("height").unwrap_or(0) as u32);
-    if fmt != "RGBA" || w != width || h != height {
-        return Err(format!("Ausgangsbild ist {fmt} {w}x{h}, erwartet RGBA {width}x{height}"));
+    if !matches!(fmt, "RGBA" | "AYUV") || w != width || h != height {
+        return Err(format!("Ausgangsbild ist {fmt} {w}x{h}, erwartet RGBA oder AYUV {width}x{height}"));
     }
     let buffer = sample.buffer().ok_or("Bild ohne Puffer")?;
     let map = buffer.map_readable().map_err(|e| format!("Puffer nicht lesbar: {e}"))?;
     if map.len() != (width * height * 4) as usize {
         return Err(format!("Ausgangsbild hat {} Bytes, erwartet {}", map.len(), width * height * 4));
     }
-    Ok(Still { width, height, rgba: map.as_slice().to_vec() })
+    // Standbilder werden als RGBA geführt: das Programmformat (AYUV) einmalig über GStreamer zurückwandeln.
+    let rgba = if fmt == "AYUV" { convert_frame_to_rgba(map.as_slice(), fmt, width, height)? } else { map.as_slice().to_vec() };
+    if rgba.len() != (width * height * 4) as usize {
+        return Err(format!("Freeze-Bild hat {} Bytes, erwartet {}", rgba.len(), width * height * 4));
+    }
+    Ok(Still { width, height, rgba })
 }
 
 /// Aufgelöste PIP-Quelle einer Ebene: "pst:N" (1-basierte Ebene N) folgt dem Preset-Bus dieser Ebene,
@@ -2075,6 +2154,7 @@ fn build(
             &format!("black-fg-l{level_idx}"),
             config.width,
             config.height,
+            program_format(config.hwaccel),
         )?;
         let (black_caps_bg, _) = build_synthetic_branch(
             &pipeline,
@@ -2082,6 +2162,7 @@ fn build(
             &format!("black-bg-l{level_idx}"),
             config.width,
             config.height,
+            program_format(config.hwaccel),
         )?;
         let (black_caps_pip, _) = build_synthetic_branch(
             &pipeline,
@@ -2089,6 +2170,7 @@ fn build(
             &format!("black-pip-l{level_idx}"),
             config.width,
             config.height,
+            program_format(config.hwaccel),
         )?;
         black_tees.push(black_tee);
 
@@ -2227,7 +2309,7 @@ fn build(
         let (keyer_caps, keyer_keyfill) = match keyer_source_input {
             Some(kf) => {
                 let (tail, fill_input, key_input) = build_keyfill_tail(&pipeline, context, kf)?;
-                let (caps, _) = build_normalized_branch(&pipeline, &tail, &format!("keyer-l{level_idx}"), config.width, config.height, None, config.hwaccel)?;
+                let (caps, _) = build_normalized_branch(&pipeline, &tail, &format!("keyer-l{level_idx}"), config.width, config.height, None, config.hwaccel, "RGBA")?;
                 (caps, Some((fill_input, key_input)))
             }
             None => {
@@ -2251,6 +2333,7 @@ fn build(
                     &format!("keyer-l{level_idx}"),
                     (config.width / 8).max(2),
                     (config.height / 8).max(2),
+                    "RGBA",
                 )?;
                 (caps, None)
             }
@@ -2298,8 +2381,12 @@ fn build(
             .link(&comp_pip_pad)
             .map_err(|e| format!("link pip to comp.sink_3 (level {level_idx}): {e}"))?;
 
+        // Ausgangsformat des Compositors FEST auf das Programmformat (BGRx): sonst wählt er wegen der RGBA-Keyer-Ebene RGBA und
+        // wandelt jede Programm-/Preset-Ebene jedes Bild um (gemessen: Compositor-Thread 24 % → 45 %).
+        let mut comp_out = video_caps(config.width, config.height);
+        comp_out.make_mut().set("format", program_format(config.hwaccel));
         let comp_out_caps = gst::ElementFactory::make("capsfilter")
-            .property("caps", video_caps(config.width, config.height))
+            .property("caps", comp_out)
             .build()
             .map_err(|e| format!("capsfilter (comp out, level {level_idx}): {e}"))?;
         pipeline
@@ -3701,7 +3788,7 @@ mod letterbox_tests {
         let sink = gst::ElementFactory::make("appsink").property("sync", false).property("max-buffers", 1u32).property("drop", true).build().unwrap();
         pipeline.add_many([&src, &caps, &sink]).unwrap();
         src.link(&caps).unwrap();
-        let (tail, _els) = build_normalized_branch_sw(&pipeline, &caps, "t", sw, sh, w, h).expect("branch");
+        let (tail, _els) = build_normalized_branch_sw(&pipeline, &caps, "t", sw, sh, w, h, "RGBA").expect("branch");
         tail.link(&sink).unwrap();
         pipeline.set_state(gst::State::Playing).unwrap();
         let app: gst_app::AppSink = sink.dynamic_cast().unwrap();
@@ -3809,5 +3896,37 @@ mod pip_loop_tests {
         let preset = vec![Some("pgm1".to_string()), None];
         let pip = vec![None, Some("pst:1".to_string())];
         assert!(feeds_level("pgm2", 0, &cfg, &inputs, &program, &preset, &pip, &mut HashSet::new()));
+    }
+}
+
+#[cfg(test)]
+mod program_format_tests {
+    use super::*;
+
+    #[test]
+    fn freeze_abgriff_wandelt_ayuv_korrekt_nach_rgba() {
+        gst::init().expect("gst init");
+        let (w, h) = (16u32, 8u32);
+        // AYUV-Byte-Reihenfolge je Pixel: A, Y, U, V. Weiß (Y=235) und Schwarz (Y=16) im Videobereich, volles Alpha.
+        let px = |y: u8| [255u8, y, 128, 128];
+        let mut data = Vec::new();
+        for row in 0..h {
+            for _ in 0..w {
+                data.extend_from_slice(&px(if row < h / 2 { 235 } else { 16 }));
+            }
+        }
+        let rgba = convert_frame_to_rgba(&data, "AYUV", w, h).expect("Umwandlung");
+        assert_eq!(rgba.len(), (w * h * 4) as usize);
+        let top = &rgba[0..4];
+        let bottom = &rgba[(w * (h - 1) * 4) as usize..(w * (h - 1) * 4 + 4) as usize];
+        assert!(top[0] >= 250 && top[1] >= 250 && top[2] >= 250 && top[3] == 255, "oben weiß: {top:?}");
+        assert!(bottom[0] <= 5 && bottom[1] <= 5 && bottom[2] <= 5 && bottom[3] == 255, "unten schwarz: {bottom:?}");
+    }
+
+    #[test]
+    fn programmformat_ohne_gpu_ist_ayuv_und_keyer_bleibt_rgba() {
+        // `HwAccel` ohne nutzbare GPU-Konvertierung (Standard in Tests) → AYUV; die RGBA-Caps des Keyers bleiben unberührt.
+        assert_eq!(rgba_caps(64, 36).structure(0).unwrap().get::<&str>("format").unwrap(), "RGBA");
+        assert_eq!(pixel_caps("AYUV", 64, 36).structure(0).unwrap().get::<&str>("format").unwrap(), "AYUV");
     }
 }
