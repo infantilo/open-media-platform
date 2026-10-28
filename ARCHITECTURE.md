@@ -3692,7 +3692,7 @@ abgelehnt.
 **Vorbild:** PIPELINE CONTROLLER `plugins/*.js` + `plugins.json`
 (dynamisches Laden, `enabled`-Flag, pro-Plugin-Config). **Entschieden:**
 nur der generische Host jetzt, keines der fünf PC-Plugins
-(`file-transfer-manager`, `broadcast-controller`, `marina-sync`,
+(`file-transfer-manager`, `broadcast-controller`, `extern-sync`,
 `scte35`, `snmp-monitor`) — die sind eigenständige spätere
 Katalog-Einträge (`category: control` oder passend, §13.5), keine
 Voraussetzung für Playlist/Timeline/Library/Cart-Assets.

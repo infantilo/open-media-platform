@@ -1,4 +1,4 @@
-//! Adapter `mpl3`: XML-Sendeliste mit Wurzel `marinaPlaylist` (Version 3.x). Aufbau und Zeitmodell siehe
+//! Adapter `mpl3`: XML-Sendeliste (Wurzelelement endet auf `Playlist`, Kind `eventList`, Version 3.x). Aufbau und Zeitmodell siehe
 //! `docs/ENTWURF-FREMDPLAYLIST-UND-DURCHLAUF.md` §1. Zeitstempel `YYYY-MM-DDThh:mm:ss:ff` sind Hausuhr (UTC),
 //! das letzte Feld sind Frames. Nur lesend; der Laufzeitzustand des Fremdsystems wird nicht übernommen.
 
@@ -10,7 +10,20 @@ use super::{EndMode, Fps, ForeignEvent, ForeignFormat, ForeignList, Kind, ParseC
 
 pub struct Mpl3;
 
-const ROOT: &str = "marinaPlaylist";
+/// Das Wurzelelement erkennt der Adapter an der Endung `Playlist` (und an `eventList` beim Parsen), nicht an einem festen Namen.
+fn root_name(bytes: &[u8]) -> Option<String> {
+    let head = String::from_utf8_lossy(&bytes[..bytes.len().min(2048)]).to_string();
+    let mut rest = head.as_str();
+    while let Some(i) = rest.find('<') {
+        rest = &rest[i + 1..];
+        if rest.starts_with(['?', '!']) {
+            continue;
+        }
+        let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-').collect();
+        return name.ends_with("Playlist").then_some(name);
+    }
+    None
+}
 
 impl ForeignFormat for Mpl3 {
     fn id(&self) -> &'static str {
@@ -22,18 +35,18 @@ impl ForeignFormat for Mpl3 {
     }
 
     fn sniff(&self, head: &[u8]) -> bool {
-        let h = String::from_utf8_lossy(&head[..head.len().min(512)]);
-        h.contains(&format!("<{ROOT}"))
+        root_name(head).is_some()
     }
 
     fn is_complete(&self, bytes: &[u8]) -> bool {
+        let Some(root) = root_name(bytes) else { return false };
         // Schnelle Vorprüfung (Ende der Datei), erst dann der teure Volltest.
         let tail = &bytes[bytes.len().saturating_sub(64)..];
-        if !String::from_utf8_lossy(tail).trim_end().ends_with(&format!("</{ROOT}>")) {
+        if !String::from_utf8_lossy(tail).trim_end().ends_with(&format!("</{root}>")) {
             return false;
         }
         match std::str::from_utf8(bytes).ok().and_then(|s| Document::parse(s).ok()) {
-            Some(d) => d.root_element().has_tag_name(ROOT),
+            Some(d) => d.root_element().tag_name().name() == root,
             None => false,
         }
     }
@@ -42,8 +55,8 @@ impl ForeignFormat for Mpl3 {
         let text = std::str::from_utf8(bytes).map_err(|e| format!("kein UTF-8: {e}"))?;
         let doc = Document::parse(text).map_err(|e| format!("XML fehlerhaft: {e}"))?;
         let root = doc.root_element();
-        if !root.has_tag_name(ROOT) {
-            return Err(format!("Wurzel ist <{}>, erwartet <{ROOT}>", root.tag_name().name()));
+        if !root.tag_name().name().ends_with("Playlist") || child(root, "eventList").is_none() {
+            return Err(format!("Wurzel <{}> ist keine Sendeliste (Endung Playlist und <eventList> erwartet)", root.tag_name().name()));
         }
         let mut p = Parser { fps: ctx.fps, warnings: Vec::new() };
         let props = child(root, "properties");
@@ -371,7 +384,8 @@ mod tests {
     #[test]
     fn falsche_wurzel_ist_fehler() {
         assert!(Mpl3.parse(b"<a/>", &ParseCtx::default()).is_err());
-        assert!(Mpl3.parse(b"<marinaPlaylist>", &ParseCtx::default()).is_err());
+        assert!(Mpl3.parse(b"<exchangePlaylist/>", &ParseCtx::default()).is_err(), "ohne eventList keine Sendeliste");
+        assert!(Mpl3.parse(b"<exchangePlaylist>", &ParseCtx::default()).is_err());
     }
 
     /// Echtdateien (nicht im Repo): `OMP_TEST_MPL=/pfad/a.mpl:/pfad/b.mpl cargo test -- --ignored`.

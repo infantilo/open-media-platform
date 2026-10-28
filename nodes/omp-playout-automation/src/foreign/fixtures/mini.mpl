@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<marinaPlaylist version="3.1">
+<exchangePlaylist version="3.1">
     <properties>
         <channel name="TxX-A" timeOffset="Local" timeOffsetValue="01:00:00:00" txTime="2026-10-28T08:31:03:14"/>
         <status activeRegionSize="50" eventCount="5" focusIndex="1" listState="Primary Prepared|Primary Running|Primary OnAir"/>
@@ -63,4 +63,4 @@
         </event>
         <event type="PlaylistEnd" enabled="true" uid="7"><state state="Initialised"/><properties><schedule startType="Sequential"/></properties></event>
     </eventList>
-</marinaPlaylist>
+</exchangePlaylist>

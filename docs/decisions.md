@@ -11960,7 +11960,7 @@ bestätigt):**
 2. **Plugin-Host:** nur der generische Lade-/Enable-Disable-/Config-
    Mechanismus jetzt (wie PCs `plugins.json`-Muster), die 5 konkreten
    PC-Plugins (`file-transfer-manager`, `broadcast-controller`,
-   `marina-sync`, `scte35`, `snmp-monitor`) bewusst NICHT jetzt —
+   `extern-sync`, `scte35`, `snmp-monitor`) bewusst NICHT jetzt —
    kommen einzeln bei Bedarf später.
 3. **Assets:** beide PC-Konzepte gewünscht — Media-Library
    (ffprobe-Katalog + Segmente, PCs `library.json`) UND Cart-/

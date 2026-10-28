@@ -4542,8 +4542,8 @@ Hello-Handshake mit `groups`, Reconnect 5 s, kein Multi-Hop),
 `VoiceoverEngine.js`, `GrafixEngine.js`, `MxlSource.js`,
 `PluginHost.js`/`PluginWorker.js` (Isolation per Worker), Plugins
 `file-transfer-manager`, `scte35`, `subtitle-fab`, `broadcast-controller`,
-`snmp-monitor`, `marina-sync`; As-Run als Tagesdatei
-(`asrun/AsRun_YYYYMMDD.txt`), `MarinaParser.js` (externer Playlist-Import).
+`snmp-monitor`, externer Listen-Sync; As-Run als Tagesdatei
+(`asrun/AsRun_YYYYMMDD.txt`), ein Parser für externen Playlist-Import.
 Die Spec verweist auf GitHub; die lokale Kopie wurde stattdessen gelesen
 (Stand kann vom GitHub-Repo abweichen).
 
@@ -4565,7 +4565,7 @@ Die Spec verweist auf GitHub; die lokale Kopie wurde stattdessen gelesen
 | Plugin-System | OMP Process/Node-Mechanismen; Plugin-Hooks nur wo nötig | offen (Spec §133: nichts automatisch als Plugin) |
 | As-Run (Tagesdatei) | persistenter As-Run-Store + NATS-Event | offen |
 | Supervisor / Multi-Channel | OMP-Orchestrator/Launcher/Placement | offen (E2) |
-| MarinaParser (externer Import) | nicht in der Spec | außerhalb Umfang, nicht übernehmen |
+| Parser für externen Import | nicht in der Spec | außerhalb Umfang, nicht übernehmen |
 | `omp-pipeline-controller` (OMP-Adapter-Sidecar) | bleibt unverändert | nicht anfassen |
 
 ### 27.4 Offene Entscheidungen (§0 Punkt 8 — Nutzer entscheidet vor dem jeweiligen Phasenstart)
@@ -6087,7 +6087,7 @@ Ausgangslage: der Diagnose-Tab erklärt Meldungen, aber ein Supporter braucht de
 
 ## Kapitel 74: Fremdplaylist-Import, Havarie-Mitlauf, Freigabe-Durchlauf, intuitivere Playout-UI (Nutzerauftrag 2026-10-28, **nur Entwurf, noch kein Code**)
 
-Entwurf, Befund der zwei echten Beispieldateien (`marinaPlaylist` 3.1, 1057/1470 Events, verschachtelte Child Events), Abbildungstabelle, Mitlauf per Watchfolder auf die Autorejoin-Dateien (entschieden; SOAP-API nicht im kritischen Pfad), offene Entscheidungen (Mitlauf-Verhalten, Freigabe-Flag, Vergleichskriterien) und Schritte 74.1–74.7: **`docs/ENTWURF-FREMDPLAYLIST-UND-DURCHLAUF.md`**. Fremdformat bleibt Adapter, nicht internes Format; keine Herstellernamen im Produkt. Neue Dependency (XML-Parser) vor 74.1 nach §0 Punkt 5 zu begründen. Empfohlene Reihenfolge: 74.1 → 74.3 → 74.4 → 74.5, dann 74.2/74.6/74.7.
+Entwurf, Befund der zwei echten Beispieldateien (XML-Sendeliste 3.1, 1057/1470 Events, verschachtelte Child Events), Abbildungstabelle, Mitlauf per Watchfolder auf die Autorejoin-Dateien (entschieden; SOAP-API nicht im kritischen Pfad), offene Entscheidungen (Mitlauf-Verhalten, Freigabe-Flag, Vergleichskriterien) und Schritte 74.1–74.7: **`docs/ENTWURF-FREMDPLAYLIST-UND-DURCHLAUF.md`**. Fremdformat bleibt Adapter, nicht internes Format; keine Herstellernamen im Produkt. Neue Dependency (XML-Parser) vor 74.1 nach §0 Punkt 5 zu begründen. Empfohlene Reihenfolge: 74.1 → 74.3 → 74.4 → 74.5, dann 74.2/74.6/74.7.
 
 - **74.1 erledigt (2026-10-28, lokal):** `nodes/omp-playout-automation/src/foreign/` — Schnittstelle `ForeignFormat` + neutrales, serialisierbares Zwischenmodell (`mod.rs`), Adapter `mpl3` (`mpl3.rs`, Dependency `roxmltree` begründet in `Cargo.toml`). Zeiten UTC-Hausuhr, Frames exakt (25 fps Standard, Bruch-Bildraten gerundet). Vollständigkeitsprüfung für den Watchfolder. 8 Tests + `echtdateien` (ignoriert, `OMP_TEST_MPL=a:b`): beide Echtlisten parsen (1057/1470 Events, 376/483 Hauptliste, 0,4–0,5 s Debug), Datei-Events ohne Medienkennung werden als Warnung gemeldet. Noch nicht angebunden (kein Plugin-Eintrag, keine Items).
 - **74.2a/74.2b/74.6 (Backend, UI) erledigt (2026-10-28, lokal):** `foreign/map.rs` (Zwischenmodell → `append`/`updateItem`-Argumente, Bericht angenähert/verworfen, Konfig `mediaTemplate/liveMap/childMap/skipDone/requireRelease`), `foreign/sync.rs` (Watchfolder: neueste VOLLSTÄNDIGE Datei, Einschwingzeit, bekannte Fehldateien nicht erneut lesen, Abgleich per reconcileKey, Position Zustand/Uhr, Alter), `foreign/runtime.rs` (Plugin `foreign-mpl3` im SDK-Plugin-Host, Standard aus; Thread; Parameter `foreignStatus`; Methoden `foreign.import` preview|append|replace, `foreign.takeover`, `foreign.rescan`). Panel-Abschnitt „Fremdliste / Mitlauf“ mit Einrichtung, Alarm VERALTET, Import-Dialog mit Vorschau, „Havarie ziehen“. Node-Tests 196 grün; Panel im Headless-Chromium gegen gestubbte API geprüft.

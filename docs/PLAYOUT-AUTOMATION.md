@@ -321,7 +321,7 @@ Channel-Snapshot (überlebt Neustarts). Grenze: `channelStop` kommt nur bei geor
 | Plugin-System | SDK-Plugin-Host + Plugin `event-hooks` (HTTP-Ereignis-Hooks, §12a); Aktionen = Child-Typen; nichts automatisch als Plugin |
 | As-Run (Tagesdatei) | persistenter As-Run-Store (§11) |
 | Supervisor / Multi-Channel | OMP-Orchestrator/Launcher/Placement; Channel = eine Instanz |
-| MarinaParser (externer Import) | nicht übernommen (außerhalb Umfang) |
+| Parser für externen Import | nicht übernommen (außerhalb Umfang) |
 | Subtitle-Engine | Untertitel-Engine im Grafik-Node (SRT/VTT) + Child `SUBTITLE` (P9.4) |
 
 Der OMP-Adapter-Sidecar `omp-pipeline-controller` bleibt unverändert.

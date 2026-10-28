@@ -1067,7 +1067,7 @@ Trigger mit delay/duration relativ zu Clip-Start **oder** -Ende,
 interrupt/break/live), **Counter-Strip** (alle zeitkritischen Events der
 Stunde), Event-Editor (SOM/EOM-Modi manuell/vollständig/Segment,
 Klassifikation, Start-Typ, Transition, Children —
-`ui.html:993–1171`), As-Run-Log (täglich, `asrun/`), Marina-Sync,
+`ui.html:993–1171`), As-Run-Log (täglich, `asrun/`), externer Listen-Sync,
 ChannelBus-Cross-Channel-Trigger, Voiceover-Engine, Record-Engine,
 SCTE-35, Plugin-System.
 
@@ -1147,7 +1147,7 @@ brechen. Übersetzung:
 | Asset-/Break-Panel mit Auto-Return | **hier**, größtenteils bereits da (C18 Cart-System) — Auto-Return-Restdauer-Rechnung fehlt noch |
 | Counter-Strip, Event-Editor, Rundown-UI | **hier**, UI-Bundle — Rundown-Tabelle/Mode/ON-AIR-Badge/Cart-Leiste schon vorhanden, Rest offen |
 | As-Run-Log | **hier** publizieren (NATS `omp.asrun.<id>`), Persistenz im Orchestrator/Postgres (kleiner additiver Endpunkt) |
-| Voiceover/Record/SCTE-35/Marina/ChannelBus/Plugins | **nicht hier** — je eigener Node/Trigger-Child-Typ, ausdrücklich späterer, separater Scope (Community-/P4-Linie) |
+| Voiceover/Record/SCTE-35/externer Sync/ChannelBus/Plugins | **nicht hier** — je eigener Node/Trigger-Child-Typ, ausdrücklich späterer, separater Scope (Community-/P4-Linie) |
 | **Manual Start** (Nutzerauftrag 2026-09-07, kein PC-Vorbild, s. 6.2b) | **hier** — dritter `startType`-Wert, Event bleibt `pending` bis explizitem Operator-TAKE, nimmt weder an Sequenz-Vorrücken noch an Fixzeit-Timern teil |
 | **Medien-/Live-Verfügbarkeit** (Nutzerauftrag 2026-09-07, PC-Vorbild s. 6.2b) | **hier** (Rundown-Badge + Fallback-Verhalten) + **K2**/`omp-media-library` (liefert die eigentliche Existenz-/Health-Prüfung, bereits vorhanden — ffprobe-Validierung, `omp-media-library/src/main.rs:138,193,302`) |
 | **Channel-Branding pro Output** (Nutzerauftrag 2026-09-07, kein echtes PC-Vorbild, s. 6.2b) | **nicht hier** — gehört an den jeweiligen Ausgang (Mixer-DSK-Layer, K3, oder ein permanenter `omp-ograf`-Slot pro Output), nicht an die Playlist; Automation liefert höchstens Trigger-Hooks (z. B. "Event X blendet Bauchbinde Y ein"), der persistente Teil ist strukturell Output-/Workflow-Konfiguration, kein Playlist-Item |

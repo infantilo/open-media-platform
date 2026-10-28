@@ -9,7 +9,7 @@ Leitplanken: Das Fremdformat ist **kein** internes Format, nur Ein-/Ausgang (Ada
 steht kein Herstellername (Projektregel); Bezeichnung: „Fremdplaylist“, Format-Kennung `mpl3`.
 Echte Sendelisten liegen nur außerhalb des Repos; Test-Fixtures werden anonymisiert/verkleinert erzeugt.
 
-## 1. Befund aus den zwei Beispieldateien (Format `marinaPlaylist version="3.1"`)
+## 1. Befund aus den zwei Beispieldateien (Format XML-Sendeliste, Wurzel endet auf `Playlist`, Version 3.1)
 
 Beide Dateien (≈3,8 und 5,2 MB, 1057 bzw. 1470 Events) haben denselben Aufbau; eine ist ein Sicherungsstand
 der laufenden Liste, die andere eine Kanal-Verwaltungsliste — **gleiches Schema**, ein Parser genügt.
@@ -43,7 +43,7 @@ Beobachtungen an den Beispieldateien, auf die der Watcher aufbaut:
 - Dateiname `Autosaved_<Kennung>_<hh-mm-ss-ff>_<dd-mm-yyyy>.mpl`; der Zeitstempel im Namen entspricht (auf wenige Frames)
   `properties/timecode/@houseTime` → Alter einer Datei ohne Parsen erkennbar. Die Kennung (5000/5002) trennt Kanäle.
 - Dateien sind groß (4–5 MB, > 1000 Events) und werden vom Fremdsystem geschrieben → Watcher muss **unvollständige
-  Dateien erkennen** (Größe stabil, Abschluss-Tag `</marinaPlaylist>` vorhanden, wohlgeformtes XML), sonst Datei verwerfen und die
+  Dateien erkennen** (Größe stabil, Abschluss-Tag das schließende Wurzelelement vorhanden, wohlgeformtes XML), sonst Datei verwerfen und die
   vorherige gültige behalten. Nie eine halbe Datei laden.
 - Die Position „was ist jetzt on air“ steckt in der Datei selbst (`state/@state=Running`, `status/@focusIndex`,
   `listState`) plus `houseTime`; zwischen zwei Dateien wird nach Uhrzeit fortgeschrieben.
