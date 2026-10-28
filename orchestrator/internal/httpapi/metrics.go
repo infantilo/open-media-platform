@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 // requestCounters zählt HTTP-Requests nach Status-Klasse, geteilt
@@ -96,6 +97,39 @@ func writeMetric(b *strings.Builder, name, help, typ string, value float64, labe
 		fmt.Fprintf(b, "%s %s\n", name, formatValue(value))
 	} else {
 		fmt.Fprintf(b, "%s{%s} %s\n", name, labels, formatValue(value))
+	}
+}
+
+// hostSensorMetrics schreibt Temperatur und Leistung je Host (nur gemessene Werte, nie 0 für „nicht gemessen“).
+func hostSensorMetrics(reg HostRegistry, mr HostMetricsReader) func(io.Writer) {
+	if reg == nil || mr == nil {
+		return nil
+	}
+	return func(w io.Writer) {
+		list, err := reg.ListHosts()
+		if err != nil {
+			return
+		}
+		var temp, power strings.Builder
+		for _, h := range list {
+			m, ok := mr.Get(h.ID)
+			if !ok || m.Goodbye || m.Sensors == nil || time.Since(m.ReceivedAt) >= 30*time.Second {
+				continue
+			}
+			lbl := fmt.Sprintf("host=%q", h.Label)
+			if m.Sensors.TempC != nil {
+				fmt.Fprintf(&temp, "omp_host_temperature_celsius{%s} %s\n", lbl, formatValue(*m.Sensors.TempC))
+			}
+			if m.Sensors.PowerW != nil {
+				fmt.Fprintf(&power, "omp_host_power_watts{%s,source=%q} %s\n", lbl, m.Sensors.PowerSource, formatValue(*m.Sensors.PowerW))
+			}
+		}
+		if temp.Len() > 0 {
+			fmt.Fprintf(w, "# HELP omp_host_temperature_celsius CPU/platform temperature of the host (only hosts that report a sensor).\n# TYPE omp_host_temperature_celsius gauge\n%s", temp.String())
+		}
+		if power.Len() > 0 {
+			fmt.Fprintf(w, "# HELP omp_host_power_watts Power draw of the host (RAPL = CPU package, battery = whole device).\n# TYPE omp_host_power_watts gauge\n%s", power.String())
+		}
 	}
 }
 

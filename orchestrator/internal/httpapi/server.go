@@ -398,7 +398,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Bewusst unauthentifiziert wie /healthz (Prometheus-Scraper senden
 	// üblicherweise keinen Bearer-Token; Netzwerk-Isolation ist hier die
 	// erwartete Absicherung, nicht Anwendungs-Auth) — s. metrics.go.
-	mux.HandleFunc("GET /metrics", requireMetricsToken(cfg.MetricsToken, handleMetrics(nodes, events, launcherSvc, reqCounters, moduleMetrics(options.modules))))
+	mux.HandleFunc("GET /metrics", requireMetricsToken(cfg.MetricsToken, handleMetrics(nodes, events, launcherSvc, reqCounters, combineMetrics(moduleMetrics(options.modules), hostSensorMetrics(hostRegistry, hostMetrics)))))
 
 	// Nachtrag 243: geteilter Quittier-/Maskierstand der Alarme. Lesen für
 	// jeden authentifizierten Nutzer, Ändern braucht "operate" (globaler
@@ -963,6 +963,17 @@ func controlPlaneCheck(svc any) func(string) bool {
 }
 
 // moduleMetrics liefert die Metrikzeilen der gemounteten Module (nil ohne Registry).
+// combineMetrics hängt mehrere Zusatz-Schreiber hintereinander (nil-Einträge werden übersprungen).
+func combineMetrics(fns ...func(io.Writer)) func(io.Writer) {
+	return func(w io.Writer) {
+		for _, f := range fns {
+			if f != nil {
+				f(w)
+			}
+		}
+	}
+}
+
 func moduleMetrics(reg *module.Registry) func(io.Writer) {
 	if reg == nil {
 		return nil

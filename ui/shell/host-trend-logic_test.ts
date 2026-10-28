@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { chartPaths, hasData, nearest, series, yMax } from "./host-trend-logic.ts";
+import { chartPaths, hasData, nearest, series, unitOf, yMax } from "./host-trend-logic.ts";
 
 const T = (m: number) => new Date(Date.UTC(2026, 9, 23, 12, m)).toISOString();
 
@@ -29,4 +29,26 @@ Deno.test("Pfade: Linie bei Mittel, Band bis Spitze, Nächster Punkt", () => {
   assertEquals(c.band.startsWith("M0.0,0.0 L200.0,50.0"), true);
   assertEquals(nearest(pts, 190, 200)!.t, 100);
   assertEquals(chartPaths([], 1, 1, 1).line, "");
+});
+
+Deno.test("Temperatur und Leistung: eigene Reihen, nicht gemessen = 0, Achse in °C/W", () => {
+  const raw = {
+    resolution: "raw" as const,
+    samples: [
+      { timestamp: "2026-10-28T10:00:00Z", cpuPercent: 10, memPercent: 20, tempC: 61.5, powerW: 18 },
+      { timestamp: "2026-10-28T10:00:05Z", cpuPercent: 12, memPercent: 20, tempC: 66, powerW: 22 },
+      { timestamp: "2026-10-28T10:00:10Z", cpuPercent: 12, memPercent: 20 },
+    ],
+  };
+  assertEquals(series(raw, "temp").map((p) => p.avg), [61.5, 66, 0]);
+  assertEquals(series(raw, "power").map((p) => p.avg), [18, 22, 0]);
+  const hours = { resolution: "hourly" as const, hours: [{ hour: "2026-10-28T10:00:00Z", cpuAvg: 1, cpuMax: 2, memAvg: 1, memMax: 2, tempMax: 74, powerMax: 31 }] };
+  assertEquals(series(hours, "temp")[0].max, 74);
+  assertEquals(series(hours, "power")[0].max, 31);
+  assertEquals(unitOf("temp", false), " °C");
+  assertEquals(unitOf("power", true), " W");
+  assertEquals(unitOf("live", false), "");
+  assertEquals(unitOf("live", true), " %");
+  assertEquals(yMax(series(raw, "temp"), false, true), 70);
+  assertEquals(hasData(series({ resolution: "raw" as const, samples: [raw.samples[2]] }, "temp")), false);
 });

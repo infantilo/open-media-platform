@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/hosts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 )
@@ -173,4 +174,37 @@ func TestCountRequestsDoesNotBreakFlushing(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+}
+
+type sensorHosts struct{ list []hosts.Host }
+
+func (s sensorHosts) CreateBootstrapToken(string, time.Duration) (string, time.Time, error) {
+	return "", time.Time{}, nil
+}
+func (s sensorHosts) ConsumeBootstrapToken(string) error                    { return nil }
+func (s sensorHosts) CreateHost(string, string, []byte) (hosts.Host, error) { return hosts.Host{}, nil }
+func (s sensorHosts) ListHosts() ([]hosts.Host, error)                      { return s.list, nil }
+func (s sensorHosts) DeleteHost(string) error                               { return nil }
+
+type sensorMetrics map[string]hosts.Metrics
+
+func (s sensorMetrics) Get(id string) (hosts.Metrics, bool) { m, ok := s[id]; return m, ok }
+
+func TestHostSensorMetricsOnlyMeasuredFreshHosts(t *testing.T) {
+	temp, power := 71.5, 23.0
+	reg := sensorHosts{list: []hosts.Host{{ID: "a", Label: "Heiß"}, {ID: "b", Label: "OhneSensor"}, {ID: "c", Label: "Alt"}}}
+	mr := sensorMetrics{
+		"a": {ReceivedAt: time.Now(), Sensors: &hosts.SensorMetrics{TempC: &temp, PowerW: &power, PowerSource: "rapl"}},
+		"b": {ReceivedAt: time.Now()},
+		"c": {ReceivedAt: time.Now().Add(-5 * time.Minute), Sensors: &hosts.SensorMetrics{TempC: &temp}},
+	}
+	var b strings.Builder
+	hostSensorMetrics(reg, mr)(&b)
+	out := b.String()
+	if !strings.Contains(out, `omp_host_temperature_celsius{host="Heiß"} 71.5`) || !strings.Contains(out, `omp_host_power_watts{host="Heiß",source="rapl"} 23`) {
+		t.Fatalf("Messwerte fehlen:\n%s", out)
+	}
+	if strings.Contains(out, "OhneSensor") || strings.Contains(out, "Alt") {
+		t.Fatalf("Hosts ohne Sensor oder mit veralteter Telemetrie dürfen nicht erscheinen:\n%s", out)
+	}
 }

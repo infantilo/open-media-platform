@@ -2,7 +2,7 @@
 // Linie = Mittelwert, Band = bis zur Spitze; bei CPU die Grenze, ab der Jobs nicht mehr starten (Live-Reserve).
 import { apiFetch } from "./connection.ts";
 import { t } from "./i18n.ts";
-import { chartPaths, hasData, METRICS, nearest, series, WINDOWS, yMax, type HistoryWindowIn, type Metric } from "./host-trend-logic.ts";
+import { chartPaths, hasData, METRICS, nearest, series, unitOf, WINDOWS, yMax, type HistoryWindowIn, type Metric } from "./host-trend-logic.ts";
 
 const NS = "http://www.w3.org/2000/svg";
 const W = 760;
@@ -104,6 +104,8 @@ export class HostTrends extends HTMLElement {
     if (!this.#chart) return;
     const host = this.#hosts.find((h) => h.id === this.#host);
     const percent = this.#metric !== "live" || !!host?.cores;
+    const absolute = this.#metric === "temp" || this.#metric === "power";
+    const unit = unitOf(this.#metric, !!host?.cores);
     const pts = series(this.#data, this.#metric, host?.cores);
     if (pts.length < 2 || !hasData(pts)) {
       const d = document.createElement("div");
@@ -112,14 +114,14 @@ export class HostTrends extends HTMLElement {
       this.#chart.replaceChildren(d);
       return;
     }
-    const ymax = yMax(pts, percent);
+    const ymax = yMax(pts, percent && !absolute, absolute);
     const c = chartPaths(pts, W, H, ymax);
     const root = s("svg", { viewBox: `-38 -8 ${W + 50} ${H + 34}`, width: "100%", role: "img", "aria-label": t(`trend.metric.${this.#metric}`) });
     root.style.cssText = "display:block;max-width:900px;font-family:var(--omp-font);font-size:10px;";
     for (const f of [0, 0.5, 1]) {
       const y = H - f * H;
       root.append(s("line", { x1: 0, x2: W, y1: y, y2: y, stroke: "var(--omp-border)", "stroke-dasharray": f === 0 ? "" : "3 3" }));
-      root.append(s("text", { x: -6, y: y + 3, "text-anchor": "end", fill: "var(--omp-text-dim)" }, `${(ymax * f).toFixed(ymax <= 1 ? 1 : 0)}${percent ? " %" : ""}`));
+      root.append(s("text", { x: -6, y: y + 3, "text-anchor": "end", fill: "var(--omp-text-dim)" }, `${(ymax * f).toFixed(ymax <= 1 ? 1 : 0)}${unit}`));
     }
     root.append(s("path", { d: c.band, fill: "var(--omp-accent-cyan)", opacity: 0.22 }));
     root.append(s("path", { d: c.line, fill: "none", stroke: "var(--omp-accent-cyan)", "stroke-width": 1.6 }));
@@ -150,7 +152,7 @@ export class HostTrends extends HTMLElement {
       dot.setAttribute("cy", String(py));
       label.setAttribute("x", String(Math.min(W - 150, px + 8)));
       label.setAttribute("y", String(Math.max(12, py - 8)));
-      label.textContent = `${fmt(p.t)} · Ø ${p.avg.toFixed(1)} · ${t("trend.peak")} ${p.max.toFixed(1)}${percent ? " %" : ""}`;
+      label.textContent = `${fmt(p.t)} · Ø ${p.avg.toFixed(1)} · ${t("trend.peak")} ${p.max.toFixed(1)}${unit}`;
       tip.setAttribute("visibility", "visible");
     });
     overlay.addEventListener("mouseleave", () => tip.setAttribute("visibility", "hidden"));

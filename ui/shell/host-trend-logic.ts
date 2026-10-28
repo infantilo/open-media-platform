@@ -1,12 +1,20 @@
 // Verlaufsdiagramme der Hosts (Kapitel 54): Reihen aus GET /api/v1/hosts/{id}/metrics/history für CPU, RAM, Live-Anteil, GPU, Netz.
-export type Metric = "cpu" | "mem" | "live" | "gpu" | "net";
-export const METRICS: Metric[] = ["cpu", "mem", "live", "gpu", "net"];
+export type Metric = "cpu" | "mem" | "live" | "gpu" | "net" | "temp" | "power";
+export const METRICS: Metric[] = ["cpu", "mem", "live", "gpu", "net", "temp", "power"];
+
+/** Einheit der Achse: Prozent, °C, Watt oder (Live-CPU ohne bekannte Kernzahl) Kerne. */
+export function unitOf(metric: Metric, hasCores: boolean): string {
+  if (metric === "temp") return " °C";
+  if (metric === "power") return " W";
+  if (metric === "live" && !hasCores) return "";
+  return " %";
+}
 
 export interface Point { t: number; avg: number; max: number }
 
-interface RawSample { timestamp: string; cpuPercent: number; memPercent: number; liveCpuCores?: number; liveMemPercent?: number; gpuPercent?: number; netPercent?: number }
-interface Aggr { bucketStart: string; cpuAvg: number; cpuMax: number; memAvg: number; memMax: number; liveCpuCoresMax?: number; liveMemMax?: number; gpuMax?: number; netMax?: number }
-interface Hour { hour: string; cpuAvg: number; cpuMax: number; memAvg: number; memMax: number; liveCpuCoresAvg?: number; liveCpuCoresMax?: number; liveMemMax?: number; gpuMax?: number; netMax?: number }
+interface RawSample { timestamp: string; cpuPercent: number; memPercent: number; liveCpuCores?: number; liveMemPercent?: number; gpuPercent?: number; netPercent?: number; tempC?: number; powerW?: number }
+interface Aggr { bucketStart: string; cpuAvg: number; cpuMax: number; memAvg: number; memMax: number; liveCpuCoresMax?: number; liveMemMax?: number; gpuMax?: number; netMax?: number; tempMax?: number; powerMax?: number }
+interface Hour { hour: string; cpuAvg: number; cpuMax: number; memAvg: number; memMax: number; liveCpuCoresAvg?: number; liveCpuCoresMax?: number; liveMemMax?: number; gpuMax?: number; netMax?: number; tempMax?: number; powerMax?: number }
 export interface HistoryWindowIn { resolution: "raw" | "aggregate" | "hourly"; samples?: RawSample[]; aggregates?: Aggr[]; hours?: Hour[] }
 
 export const WINDOWS: { id: string; query: string; ms: number }[] = [
@@ -24,17 +32,17 @@ export function series(win: HistoryWindowIn | null | undefined, metric: Metric, 
   const out: Point[] = [];
   if (win.resolution === "raw") {
     for (const s of win.samples ?? []) {
-      const v = metric === "cpu" ? s.cpuPercent : metric === "mem" ? s.memPercent : metric === "live" ? live(s.liveCpuCores) : metric === "gpu" ? s.gpuPercent ?? 0 : s.netPercent ?? 0;
+      const v = metric === "cpu" ? s.cpuPercent : metric === "mem" ? s.memPercent : metric === "live" ? live(s.liveCpuCores) : metric === "gpu" ? s.gpuPercent ?? 0 : metric === "temp" ? s.tempC ?? 0 : metric === "power" ? s.powerW ?? 0 : s.netPercent ?? 0;
       out.push({ t: Date.parse(s.timestamp), avg: v, max: v });
     }
   } else if (win.resolution === "aggregate") {
     for (const a of win.aggregates ?? []) {
-      const [avg, max] = metric === "cpu" ? [a.cpuAvg, a.cpuMax] : metric === "mem" ? [a.memAvg, a.memMax] : metric === "live" ? [live(a.liveCpuCoresMax), live(a.liveCpuCoresMax)] : metric === "gpu" ? [a.gpuMax ?? 0, a.gpuMax ?? 0] : [a.netMax ?? 0, a.netMax ?? 0];
+      const [avg, max] = metric === "cpu" ? [a.cpuAvg, a.cpuMax] : metric === "mem" ? [a.memAvg, a.memMax] : metric === "live" ? [live(a.liveCpuCoresMax), live(a.liveCpuCoresMax)] : metric === "gpu" ? [a.gpuMax ?? 0, a.gpuMax ?? 0] : metric === "temp" ? [a.tempMax ?? 0, a.tempMax ?? 0] : metric === "power" ? [a.powerMax ?? 0, a.powerMax ?? 0] : [a.netMax ?? 0, a.netMax ?? 0];
       out.push({ t: Date.parse(a.bucketStart), avg, max });
     }
   } else {
     for (const h of win.hours ?? []) {
-      const [avg, max] = metric === "cpu" ? [h.cpuAvg, h.cpuMax] : metric === "mem" ? [h.memAvg, h.memMax] : metric === "live" ? [live(h.liveCpuCoresAvg), live(h.liveCpuCoresMax)] : metric === "gpu" ? [h.gpuMax ?? 0, h.gpuMax ?? 0] : [h.netMax ?? 0, h.netMax ?? 0];
+      const [avg, max] = metric === "cpu" ? [h.cpuAvg, h.cpuMax] : metric === "mem" ? [h.memAvg, h.memMax] : metric === "live" ? [live(h.liveCpuCoresAvg), live(h.liveCpuCoresMax)] : metric === "gpu" ? [h.gpuMax ?? 0, h.gpuMax ?? 0] : metric === "temp" ? [h.tempMax ?? 0, h.tempMax ?? 0] : metric === "power" ? [h.powerMax ?? 0, h.powerMax ?? 0] : [h.netMax ?? 0, h.netMax ?? 0];
       out.push({ t: Date.parse(h.hour), avg, max });
     }
   }
@@ -45,8 +53,10 @@ export function series(win: HistoryWindowIn | null | undefined, metric: Metric, 
 export const hasData = (pts: Point[]): boolean => pts.some((p) => p.max > 0);
 
 /** Obergrenze der Y-Achse: auf 10/25/50/100 aufgerundet, höchstens 100 bei Prozenten. */
-export function yMax(pts: Point[], percent: boolean): number {
+export function yMax(pts: Point[], percent: boolean, absolute = false): number {
   const m = Math.max(0, ...pts.map((p) => p.max));
+  // Absolutwerte (°C, W): auf eine runde Zehnerstelle aufrunden, nicht auf 10/25/50/100 Prozent.
+  if (absolute) return Math.max(10, Math.ceil(m / 10) * 10);
   if (!percent) return m <= 1 ? 1 : Math.ceil(m);
   for (const c of [10, 25, 50, 100]) if (m <= c) return c;
   return 100;

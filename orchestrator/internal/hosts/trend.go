@@ -29,6 +29,9 @@ type Extra struct {
 	GPUPercent float64 `json:"gpuPercent,omitempty"`
 	// NetPercent: Auslastung der Netzwerkkarte in % der Linkgeschwindigkeit (0, wenn nicht bekannt).
 	NetPercent float64 `json:"netPercent,omitempty"`
+	// TempC: CPU-/Plattformtemperatur in °C (0 = nicht gemessen), PowerW: Leistungsaufnahme in Watt (0 = nicht gemessen).
+	TempC  float64 `json:"tempC,omitempty"`
+	PowerW float64 `json:"powerW,omitempty"`
 	// Instances: Anzahl gemeldeter Instanzen.
 	Instances int `json:"instances,omitempty"`
 }
@@ -40,6 +43,8 @@ type ExtraMax struct {
 	LiveGPUMax      float64 `json:"liveGpuMax,omitempty"`
 	GPUMax          float64 `json:"gpuMax,omitempty"`
 	NetMax          float64 `json:"netMax,omitempty"`
+	TempMax         float64 `json:"tempMax,omitempty"`
+	PowerMax        float64 `json:"powerMax,omitempty"`
 }
 
 func (e ExtraMax) maxWith(x Extra) ExtraMax {
@@ -48,6 +53,8 @@ func (e ExtraMax) maxWith(x Extra) ExtraMax {
 	e.LiveGPUMax = math.Max(e.LiveGPUMax, x.LiveGPUPercent)
 	e.GPUMax = math.Max(e.GPUMax, x.GPUPercent)
 	e.NetMax = math.Max(e.NetMax, x.NetPercent)
+	e.TempMax = math.Max(e.TempMax, x.TempC)
+	e.PowerMax = math.Max(e.PowerMax, x.PowerW)
 	return e
 }
 
@@ -57,6 +64,8 @@ func (e ExtraMax) merge(o ExtraMax) ExtraMax {
 	e.LiveGPUMax = math.Max(e.LiveGPUMax, o.LiveGPUMax)
 	e.GPUMax = math.Max(e.GPUMax, o.GPUMax)
 	e.NetMax = math.Max(e.NetMax, o.NetMax)
+	e.TempMax = math.Max(e.TempMax, o.TempMax)
+	e.PowerMax = math.Max(e.PowerMax, o.PowerMax)
 	return e
 }
 
@@ -82,6 +91,14 @@ func extraOf(m Metrics) Extra {
 			n = 1
 		}
 		x.LiveGPUPercent = gpu / float64(n)
+	}
+	if m.Sensors != nil {
+		if m.Sensors.TempC != nil {
+			x.TempC = *m.Sensors.TempC
+		}
+		if m.Sensors.PowerW != nil {
+			x.PowerW = *m.Sensors.PowerW
+		}
 	}
 	if m.Net != nil && m.Net.LinkMbps > 0 {
 		x.NetPercent = (m.Net.RxBytesPerSec + m.Net.TxBytesPerSec) * 8 / 1e6 / m.Net.LinkMbps * 100
@@ -285,12 +302,12 @@ func NewHourStore(db *sql.DB) *HourStore { return &HourStore{db: db} }
 
 func (s *HourStore) Save(hostID string, r HourRow) error {
 	_, err := s.db.Exec(`INSERT INTO host_metrics_hourly (host_id, hour, cpu_avg, cpu_max, mem_avg, mem_max, samples, live_cpu_p95, live_cpu_avg,
-			live_cpu_max, live_mem_max, live_gpu_max, gpu_max, net_max)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+			live_cpu_max, live_mem_max, live_gpu_max, gpu_max, net_max, temp_max, power_max)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		ON CONFLICT (host_id, hour) DO UPDATE SET cpu_avg=$3, cpu_max=$4, mem_avg=$5, mem_max=$6, samples=$7, live_cpu_p95=$8, live_cpu_avg=$9,
-			live_cpu_max=$10, live_mem_max=$11, live_gpu_max=$12, gpu_max=$13, net_max=$14`,
+			live_cpu_max=$10, live_mem_max=$11, live_gpu_max=$12, gpu_max=$13, net_max=$14, temp_max=$15, power_max=$16`,
 		hostID, r.Hour, r.CPUAvg, r.CPUMax, r.MemAvg, r.MemMax, r.Samples, r.LiveCPUCoresP95, r.LiveCPUCoresAvg,
-		r.LiveCPUCoresMax, r.LiveMemMax, r.LiveGPUMax, r.GPUMax, r.NetMax)
+		r.LiveCPUCoresMax, r.LiveMemMax, r.LiveGPUMax, r.GPUMax, r.NetMax, r.TempMax, r.PowerMax)
 	if err != nil {
 		return err
 	}
@@ -301,7 +318,7 @@ func (s *HourStore) Save(hostID string, r HourRow) error {
 // Load liefert die gespeicherten Stundenwerte je Host seit `since`.
 func (s *HourStore) Load(ctx context.Context, since time.Time) (map[string][]HourRow, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT host_id, hour, cpu_avg, cpu_max, mem_avg, mem_max, samples, live_cpu_p95, live_cpu_avg,
-		live_cpu_max, live_mem_max, live_gpu_max, gpu_max, net_max FROM host_metrics_hourly WHERE hour >= $1 ORDER BY hour`, since)
+		live_cpu_max, live_mem_max, live_gpu_max, gpu_max, net_max, temp_max, power_max FROM host_metrics_hourly WHERE hour >= $1 ORDER BY hour`, since)
 	if err != nil {
 		return nil, err
 	}
@@ -311,7 +328,7 @@ func (s *HourStore) Load(ctx context.Context, since time.Time) (map[string][]Hou
 		var id string
 		var r HourRow
 		if err := rows.Scan(&id, &r.Hour, &r.CPUAvg, &r.CPUMax, &r.MemAvg, &r.MemMax, &r.Samples, &r.LiveCPUCoresP95, &r.LiveCPUCoresAvg,
-			&r.LiveCPUCoresMax, &r.LiveMemMax, &r.LiveGPUMax, &r.GPUMax, &r.NetMax); err != nil {
+			&r.LiveCPUCoresMax, &r.LiveMemMax, &r.LiveGPUMax, &r.GPUMax, &r.NetMax, &r.TempMax, &r.PowerMax); err != nil {
 			return nil, err
 		}
 		out[id] = append(out[id], r)

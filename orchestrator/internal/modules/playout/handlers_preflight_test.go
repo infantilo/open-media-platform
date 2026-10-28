@@ -157,7 +157,7 @@ func TestPreflightReportsReleaseStatusFromTheIntake(t *testing.T) {
 	if len(out.Items) != 5 || out.Items[3].Release == nil || !out.Items[3].Release.Released || out.Items[4].Release == nil || out.Items[4].Release.Released {
 		t.Fatalf("Auskunft per Dateiname: %+v", out.Items)
 	}
-	if  out.Items[0].Release == nil || !out.Items[0].Release.Released || out.Items[0].Release.Reason != "QC grün" {
+	if out.Items[0].Release == nil || !out.Items[0].Release.Released || out.Items[0].Release.Reason != "QC grün" {
 		t.Fatalf("a: %+v", out.Items)
 	}
 	if out.Items[1].Release == nil || out.Items[1].Release.Released {

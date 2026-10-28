@@ -94,3 +94,21 @@ func TestStundenwerteInPostgres(t *testing.T) {
 		t.Fatalf("%+v %v", d, ok)
 	}
 }
+
+func TestExtraCarriesTemperatureAndPowerOnlyWhenMeasured(t *testing.T) {
+	temp, power := 71.5, 23.0
+	x := extraOf(Metrics{Sensors: &SensorMetrics{TempC: &temp, PowerW: &power}})
+	if x.TempC != 71.5 || x.PowerW != 23 {
+		t.Fatalf("%+v", x)
+	}
+	if y := extraOf(Metrics{}); y.TempC != 0 || y.PowerW != 0 {
+		t.Fatalf("ohne Sensor 0 = nicht gemessen: %+v", y)
+	}
+	m := ExtraMax{}.maxWith(x).maxWith(Extra{TempC: 60, PowerW: 30})
+	if m.TempMax != 71.5 || m.PowerMax != 30 {
+		t.Fatalf("Maxima: %+v", m)
+	}
+	if mm := m.merge(ExtraMax{TempMax: 80}); mm.TempMax != 80 || mm.PowerMax != 30 {
+		t.Fatalf("merge: %+v", mm)
+	}
+}
