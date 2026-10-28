@@ -1822,6 +1822,7 @@ export const en: Record<keyof typeof de, string> = {
   "set2.9ad047": "effective: {p0} ({p1})",
   "set2.ae997f": "saved: {p0} — only applies after an orchestrator restart",
   "ver.a4394c": "development build",
+  "ver.afterRelease": "development build after {p0}, +{p1}",
   "ver.f7c666": "Firmware {p0}{p1}",
   "aml.ec4721": "Mono (1)",
   "aml.5d9b47": "Mono",

@@ -15,12 +15,18 @@ var Commit = ""
 // BuiltAt ist der Bauzeitpunkt, RFC 3339 (optional).
 var BuiltAt = ""
 
+// Release nennt das Release, auf dem dieser Stand aufbaut, aus `git describe`: "v0.7.0" (genau auf dem Tag) oder "v0.7.0+31"
+// (31 Änderungen danach). Anders als Version bleibt es bei Entwicklungs-Builds gefüllt (Version = "dev" hat für das
+// System-Update eine eigene Bedeutung und wird nicht verändert).
+var Release = ""
+
 // Info fasst den Stempel für die HTTP-API zusammen.
 type Info struct {
 	Version string `json:"version"`
 	Commit  string `json:"commit,omitempty"`
 	BuiltAt string `json:"builtAt,omitempty"`
+	Release string `json:"release,omitempty"`
 }
 
 // Current liefert den Stempel dieses Prozesses.
-func Current() Info { return Info{Version: Version, Commit: Commit, BuiltAt: BuiltAt} }
+func Current() Info { return Info{Version: Version, Commit: Commit, BuiltAt: BuiltAt, Release: Release} }

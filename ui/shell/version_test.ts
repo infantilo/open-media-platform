@@ -9,6 +9,11 @@ Deno.test("formatFirmware: ohne Stempel = Entwicklungsstand", () => {
   assertEquals(formatFirmware({ version: "dev" }), "Firmware Entwicklungsstand");
 });
 
+Deno.test("formatFirmware: Entwicklungsstand zeigt das Release, auf dem er aufbaut", () => {
+  assertEquals(formatFirmware({ version: "dev", release: "v0.7.0+31", commit: "cd97830aa" }), "Firmware Entwicklungsstand nach v0.7.0, +31 (cd97830)");
+  assertEquals(formatFirmware({ version: "dev", release: "v0.7.0" }), "Firmware v0.7.0");
+});
+
 Deno.test("formatFirmware: fehlende Daten ergeben leeren Text statt 'undefined'", () => {
   assertEquals(formatFirmware(null), "");
   assertEquals(formatFirmware(undefined), "");

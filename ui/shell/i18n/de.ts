@@ -1821,6 +1821,7 @@ export const de = {
   "set2.9ad047": "wirksam: {p0} ({p1})",
   "set2.ae997f": "gespeichert: {p0} — gilt erst nach Neustart des Orchestrators",
   "ver.a4394c": "Entwicklungsstand",
+  "ver.afterRelease": "Entwicklungsstand nach {p0}, +{p1}",
   "ver.f7c666": "Firmware {p0}{p1}",
   "aml.ec4721": "Mono (1)",
   "aml.5d9b47": "Mono",

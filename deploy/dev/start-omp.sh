@@ -136,7 +136,10 @@ else
   make -C "$ROOT_DIR" ui
 
   echo "==> Orchestrator-Binary bauen"
-  ( cd "$ROOT_DIR/orchestrator" && go build -o "$BIN" . )
+  # Entwicklungs-Build: Version bleibt "dev" (System-Update), aber Release/Commit/Bauzeit werden für die Anzeige eingetragen.
+  REL="$(git -C "$ROOT_DIR" describe --tags --long 2>/dev/null | sed -E 's/-0-g[0-9a-f]+$//; s/-([0-9]+)-g[0-9a-f]+$/+\1/' || true)"
+  VP=github.com/infantilo/openmediaplatform/orchestrator/internal/version
+  ( cd "$ROOT_DIR/orchestrator" && go build -ldflags "-X $VP.Release=$REL -X $VP.Commit=$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || true) -X $VP.BuiltAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o "$BIN" . )
 fi
 
 echo "==> Orchestrator starten"
