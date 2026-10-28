@@ -2988,6 +2988,10 @@ pub fn run(
     };
     let mut program: Vec<Option<String>> = vec![None; level_count];
     let mut preset: Vec<Option<String>> = vec![None; level_count];
+    // Gewünschtes Programm einer Ebene, dessen Eingang beim Schalten noch fehlte (Kaltstart: der Kanal-Player legt seinen Fluss
+    // erst beim ersten `load` an, der Mischer holt den Eingang erst im Wiederholungstakt nach). Ohne diese Vormerkung blieb das
+    // Programm danach dauerhaft Schwarz, obwohl der Eingang kurz darauf lesbar war.
+    let mut pending_program: Vec<Option<String>> = vec![None; level_count];
     // Missing-Input-Retry (s. Doku oben bei `OLD_WRITER_DRAIN`/Nachtrag
     // Bug 2): Eingänge, die beim letzten Build keinen Pad bekamen — kein
     // festes Budget mehr, es wird auf JEDEM Leerlauf-Tick erneut versucht,
@@ -3367,6 +3371,10 @@ pub fn run(
                     let previous = prog.clone();
                     let swap_prev = previous.clone();
                     let applied = switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, pre);
+                    pending_program[level] = match (&applied, pre) {
+                        (None, Some(id)) if missing_inputs.contains(id) => Some(id.clone()),
+                        _ => None,
+                    };
                     p.comp_fg_pad.set_property("alpha", 1.0f64);
                     p.comp_bg_pad.set_property("alpha", 0.0f64);
                     // Ein zuvor geparkter manueller Slide/Push hinterlässt sonst Versatz.
@@ -3410,6 +3418,10 @@ pub fn run(
                 ) {
                     let previous = prog.clone();
                     let applied = switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, &sender_id);
+                    pending_program[level] = match (&applied, &sender_id) {
+                        (None, Some(id)) if missing_inputs.contains(id) => Some(id.clone()),
+                        _ => None,
+                    };
                     p.comp_fg_pad.set_property("alpha", 1.0f64);
                     p.comp_bg_pad.set_property("alpha", 0.0f64);
                     // Ein zuvor geparkter manueller Slide/Push hinterlässt sonst Versatz.
@@ -3720,6 +3732,26 @@ pub fn run(
                                     "input {} ({}) wieder verfügbar (Flow jetzt lesbar)",
                                     input.sender_id, input.label
                                 )));
+                                // Wurde dieser Eingang schon als Programm geschaltet, als er noch fehlte: jetzt nachholen.
+                                for level in 0..pending_program.len() {
+                                    if pending_program[level].as_deref() != Some(id.as_str()) {
+                                        continue;
+                                    }
+                                    pending_program[level] = None;
+                                    let sel = Some(id.clone());
+                                    if let (Some(lp), Some(prog), Some(fading_l)) =
+                                        (p.levels.get_mut(level), program.get_mut(level), fading.get(level))
+                                    {
+                                        let previous = prog.clone();
+                                        let applied = switch_isel(&lp.isel, &lp.source_pads_fg, &lp.black_pad_fg, &sel);
+                                        lp.comp_fg_pad.set_property("alpha", 1.0f64);
+                                        lp.comp_bg_pad.set_property("alpha", 0.0f64);
+                                        switch_isel(&lp.isel_bg, &lp.source_pads_bg, &lp.black_pad_bg, &sel);
+                                        *prog = applied;
+                                        fading_l.store(false, Ordering::Release);
+                                        let _ = tx.send(Event::ProgramChanged { level, previous, current: prog.clone() });
+                                    }
+                                }
                             }
                             Err(_) => still_missing.push(id),
                         }

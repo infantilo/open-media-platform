@@ -26,6 +26,8 @@ type CompareOptions struct {
 	SampleStartSec float64 `json:"sampleStartSec,omitempty"`
 	// SkipQuality: Bildqualität nicht messen.
 	SkipQuality bool `json:"skipQuality,omitempty"`
+	// AutoOffset: den Vorlauf der Aufnahme aus den Bildern bestimmen (überschreibt OffsetSec, wenn eindeutig).
+	AutoOffset bool `json:"autoOffset,omitempty"`
 }
 
 func (o CompareOptions) withDefaults() CompareOptions {
@@ -66,6 +68,9 @@ type CompareReport struct {
 	Recorded MediaFacts     `json:"recorded"`
 	Checks   []CompareCheck `json:"checks"`
 	SSIM     *float64       `json:"ssim,omitempty"`
+	// OffsetSec: verwendeter Vorlauf der Aufnahme; OffsetAuto: aus den Bildern bestimmt (sonst vorgegeben).
+	OffsetSec  float64 `json:"offsetSec"`
+	OffsetAuto bool    `json:"offsetAuto,omitempty"`
 }
 
 // ParseFacts liest `ffprobe -show_format -show_streams -of json`.
@@ -218,8 +223,8 @@ func (t *Tools) MeasureSSIM(ctx context.Context, orig, rec string, opt CompareOp
 	opt = opt.withDefaults()
 	norm := "scale=320:180:flags=bilinear,setsar=1,fps=25,format=yuv420p"
 	args := []string{"-hide_banner", "-nostats", "-threads", "1",
-		"-ss", fmt.Sprintf("%.3f", opt.SampleStartSec), "-t", fmt.Sprintf("%.3f", opt.SampleSec), "-i", orig,
-		"-ss", fmt.Sprintf("%.3f", opt.SampleStartSec+opt.OffsetSec), "-t", fmt.Sprintf("%.3f", opt.SampleSec), "-i", rec,
+		"-ss", fmt.Sprintf("%.3f", opt.SampleStartSec+math.Max(0, -opt.OffsetSec)), "-t", fmt.Sprintf("%.3f", opt.SampleSec), "-i", orig,
+		"-ss", fmt.Sprintf("%.3f", opt.SampleStartSec+math.Max(0, opt.OffsetSec)), "-t", fmt.Sprintf("%.3f", opt.SampleSec), "-i", rec,
 		"-filter_threads", "1", "-lavfi", "[0:v]" + norm + "[a];[1:v]" + norm + "[b];[a][b]ssim", "-an", "-f", "null", "-"}
 	var all strings.Builder
 	_, code, err := t.Exec().Run(ctx, t.FFmpeg, args, func(l string) { all.WriteString(l + "\n") })
@@ -247,7 +252,24 @@ func (t *Tools) Compare(ctx context.Context, orig, rec string, opt CompareOption
 	if err != nil {
 		return CompareReport{}, fmt.Errorf("Aufnahme: %w", err)
 	}
-	rep := CompareReport{Original: of, Recorded: rf, Checks: CompareFacts(of, rf, opt)}
+	var autoNote *CompareCheck
+	offsetAuto := false
+	if opt.AutoOffset && of.VideoCodec != "" && rf.VideoCodec != "" {
+		off, ok, err := t.EstimateOffset(ctx, orig, rec, 5)
+		switch {
+		case err != nil:
+			autoNote = &CompareCheck{ID: "offset", Label: "Vorlauf", Status: "warn", Message: "automatische Bestimmung nicht möglich: " + err.Error()}
+		case !ok:
+			autoNote = &CompareCheck{ID: "offset", Label: "Vorlauf", Status: "warn", Message: fmt.Sprintf("nicht eindeutig bestimmbar (z. B. fast einfarbiges Bild) — es gilt %.2f s", opt.OffsetSec)}
+		default:
+			opt.OffsetSec, offsetAuto = off, true
+			autoNote = &CompareCheck{ID: "offset", Label: "Vorlauf", Status: "pass", Message: offsetText(off)}
+		}
+	}
+	rep := CompareReport{Original: of, Recorded: rf, Checks: CompareFacts(of, rf, opt), OffsetSec: opt.OffsetSec, OffsetAuto: offsetAuto}
+	if autoNote != nil {
+		rep.Checks = append(rep.Checks, *autoNote)
+	}
 	q := CompareCheck{ID: "quality", Label: "Bildqualität (SSIM)"}
 	switch {
 	case opt.SkipQuality:
@@ -280,4 +302,135 @@ func (t *Tools) Compare(ctx context.Context, orig, rec string, opt CompareOption
 		}
 	}
 	return rep, nil
+}
+
+// ---- Automatischer Vorlauf (Kapitel 74.5) ---------------------------------------------------------------------------
+
+const (
+	offW, offH = 64, 36 // Graustufen-Bilder in Miniatur: reicht, um Bildfolgen zu verorten, und kostet fast nichts
+	offFPS     = 25
+)
+
+// lumaFrames liest bis zu `seconds` Sekunden als Folge von Graubildern (offW×offH, 25 Bilder/s).
+func (t *Tools) lumaFrames(ctx context.Context, file string, seconds float64) ([][]byte, error) {
+	out, code, err := t.Exec().Run(ctx, t.FFmpeg, []string{"-hide_banner", "-loglevel", "error", "-threads", "1", "-t", fmt.Sprintf("%.2f", seconds), "-i", file,
+		"-an", "-vf", fmt.Sprintf("fps=%d,scale=%d:%d:flags=bilinear,format=gray", offFPS, offW, offH), "-f", "rawvideo", "-"}, nil)
+	if err != nil {
+		return nil, err
+	}
+	if code != 0 {
+		return nil, fmt.Errorf("ffmpeg konnte %q nicht in Miniaturbilder wandeln (Exit %d)", file, code)
+	}
+	n := len(out) / (offW * offH)
+	frames := make([][]byte, n)
+	for i := range frames {
+		frames[i] = out[i*offW*offH : (i+1)*offW*offH]
+	}
+	return frames, nil
+}
+
+// BestLag sucht den Bildversatz d (in Bildern, −maxLag…+maxLag), bei dem rec[i+d] dem Original orig[i] am ähnlichsten ist
+// (kleinster mittlerer absoluter Unterschied). ok=false, wenn das Ergebnis nicht eindeutig ist (z. B. fast einfarbiges Bild)
+// oder zu wenig Überlappung besteht. d > 0: die Aufnahme beginnt d Bilder VOR dem Original.
+func BestLag(orig, rec [][]byte, maxLag int) (lag int, score float64, ok bool) {
+	if len(orig) < 10 || len(rec) < 10 {
+		return 0, 0, false
+	}
+	type res struct {
+		lag int
+		mad float64
+	}
+	var all []res
+	for d := -maxLag; d <= maxLag; d++ {
+		var sum float64
+		var cnt int
+		for i := 0; i < len(orig) && i < 150; i++ {
+			j := i + d
+			if j < 0 || j >= len(rec) {
+				continue
+			}
+			a, b := orig[i], rec[j]
+			var s int
+			for k := range a {
+				diff := int(a[k]) - int(b[k])
+				if diff < 0 {
+					diff = -diff
+				}
+				s += diff
+			}
+			sum += float64(s) / float64(len(a))
+			cnt++
+		}
+		if cnt < 10 { // zu wenig Überlappung für eine Aussage
+			continue
+		}
+		all = append(all, res{d, sum / float64(cnt)})
+	}
+	if len(all) < 3 {
+		return 0, 0, false
+	}
+	best := all[0]
+	var total float64
+	for _, r := range all {
+		total += r.mad
+		if r.mad < best.mad {
+			best = r
+		}
+	}
+	mean := total / float64(len(all))
+	// Eindeutig, wenn der beste Wert deutlich unter dem Durchschnitt aller Versätze liegt (bei einfarbigem Bild sind alle gleich).
+	if mean < 2 || best.mad > mean*0.6 {
+		return best.lag, best.mad, false
+	}
+	return best.lag, best.mad, true
+}
+
+// motionFrames: Unterschiede aufeinanderfolgender Bilder. Statische Anteile (Farbbalken, Logos) fallen heraus, übrig bleibt, was sich
+// bewegt — damit ist die Zuordnung auch bei überwiegend ruhigem Bild scharf, und Kodierungsunterschiede im Ruhebild stören nicht.
+func motionFrames(frames [][]byte) [][]byte {
+	if len(frames) < 2 {
+		return nil
+	}
+	out := make([][]byte, len(frames)-1)
+	for i := 1; i < len(frames); i++ {
+		d := make([]byte, len(frames[i]))
+		for k := range d {
+			v := int(frames[i][k]) - int(frames[i-1][k])
+			if v < 0 {
+				v = -v
+			}
+			d[k] = byte(v)
+		}
+		out[i-1] = d
+	}
+	return out
+}
+
+// EstimateOffset bestimmt den Vorlauf der Aufnahme (Sekunden, positiv = Aufnahme beginnt früher als das Original).
+func (t *Tools) EstimateOffset(ctx context.Context, orig, rec string, maxSec float64) (float64, bool, error) {
+	if maxSec <= 0 {
+		maxSec = 5
+	}
+	o, err := t.lumaFrames(ctx, orig, 20)
+	if err != nil {
+		return 0, false, err
+	}
+	r, err := t.lumaFrames(ctx, rec, 20+maxSec*2)
+	if err != nil {
+		return 0, false, err
+	}
+	// Erst über die Bewegung, bei zu wenig Bewegung (Standbild) über die Bilder selbst.
+	if lag, _, ok := BestLag(motionFrames(o), motionFrames(r), int(maxSec*offFPS)); ok {
+		return float64(lag) / offFPS, true, nil
+	}
+	lag, _, ok := BestLag(o, r, int(maxSec*offFPS))
+	return float64(lag) / offFPS, ok, nil
+}
+
+// offsetText beschreibt den Vorlauf in Worten (negativ: die Aufnahme beginnt erst NACH dem Original).
+func offsetText(off float64) string {
+	if off < 0 {
+		return fmt.Sprintf("aus den Bildern bestimmt: Aufnahme beginnt %.2f s nach dem Original (Anfang fehlt)", -off)
+	}
+	return fmt.Sprintf("aus den Bildern bestimmt: Aufnahme beginnt %.2f s vor dem Original", off)
 }

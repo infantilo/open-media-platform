@@ -797,6 +797,90 @@ const TABLE: Record<string, [string, string]> = {
     "Review & Conform",
     "Review & conform"
   ],
+  "rv.tab.compare": [
+    "Aufnahme-Vergleich",
+    "Recording comparison"
+  ],
+  "rv.cmp.hint": [
+    "Vergleicht die Aufnahme eines Events (zweiter Eintrag im Eingang) mit diesem Original: Dauer, Bildrate, Auflösung, Codec, Ton und Bildqualität (SSIM auf einer Stichprobe).",
+    "Compares the recording of an event (second intake entry) with this original: duration, frame rate, resolution, codec, audio and picture quality (SSIM on a sample)."
+  ],
+  "rv.cmp.choose": [
+    "— Aufnahme wählen —",
+    "— choose recording —"
+  ],
+  "rv.cmp.recorded": [
+    "Aufnahme",
+    "Recording"
+  ],
+  "rv.cmp.offset": [
+    "Vorlauf der Aufnahme (s)",
+    "Recording lead-in (s)"
+  ],
+  "rv.cmp.offsetHint": [
+    "Beginn des Originals innerhalb der Aufnahme",
+    "where the original starts inside the recording"
+  ],
+  "rv.cmp.tol": [
+    "Dauer-Toleranz (ms)",
+    "Duration tolerance (ms)"
+  ],
+  "rv.cmp.tolHint": [
+    "leer = ein Bild",
+    "empty = one frame"
+  ],
+  "rv.cmp.ssim": [
+    "Mindest-SSIM",
+    "Minimum SSIM"
+  ],
+  "rv.cmp.sample": [
+    "Stichprobe (s)",
+    "Sample (s)"
+  ],
+  "rv.cmp.skip": [
+    "Bildqualität nicht messen",
+    "Skip picture quality"
+  ],
+  "rv.cmp.run": [
+    "Vergleichen",
+    "Compare"
+  ],
+  "rv.cmp.running": [
+    "Vergleich läuft …",
+    "Comparing …"
+  ],
+  "rv.cmp.needRecorded": [
+    "Bitte zuerst die Aufnahme wählen.",
+    "Please choose the recording first."
+  ],
+  "rv.cmp.overall.pass": [
+    "✓ Aufnahme entspricht dem Original",
+    "✓ Recording matches the original"
+  ],
+  "rv.cmp.overall.warning": [
+    "⚠ Aufnahme weicht in Hinweisen ab",
+    "⚠ Recording differs in notes"
+  ],
+  "rv.cmp.overall.fail": [
+    "✗ Aufnahme weicht vom Original ab",
+    "✗ Recording differs from the original"
+  ],
+  "rv.cmp.auto": [
+    "Vorlauf automatisch bestimmen",
+    "Detect lead-in automatically"
+  ],
+  "rv.cmp.autoHint": [
+    "aus den Bildern; bei nicht eindeutigem Bild gilt der Wert unten",
+    "from the pictures; if ambiguous the value below applies"
+  ],
+  "rv.cmp.usedAuto": [
+    "Verwendeter Vorlauf: {p0} s (aus den Bildern bestimmt)",
+    "Lead-in used: {p0} s (detected from the pictures)"
+  ],
+  "rv.cmp.usedManual": [
+    "Verwendeter Vorlauf: {p0} s (vorgegeben)",
+    "Lead-in used: {p0} s (given)"
+  ],
   "rv.tab.history": [
     "Verlauf",
     "History"

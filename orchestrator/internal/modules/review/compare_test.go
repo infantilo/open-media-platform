@@ -110,3 +110,104 @@ func TestCompareEchteDateien(t *testing.T) {
 		t.Fatal("fehlende Datei ist ein Fehler")
 	}
 }
+
+func TestBestLagFindetVersatzUndMeldetUneindeutiges(t *testing.T) {
+	mk := func(seed int) []byte {
+		b := make([]byte, offW*offH)
+		for i := range b {
+			b[i] = byte((i*seed + seed*seed) % 251)
+		}
+		return b
+	}
+	// 60 verschiedene Bilder; die Aufnahme beginnt 7 Bilder vorher (davor andere Bilder).
+	orig := make([][]byte, 60)
+	for i := range orig {
+		orig[i] = mk(i + 3)
+	}
+	rec := make([][]byte, 0, 80)
+	for i := 0; i < 7; i++ {
+		rec = append(rec, mk(200+i))
+	}
+	rec = append(rec, orig...)
+	lag, _, ok := BestLag(orig, rec, 25)
+	if !ok || lag != 7 {
+		t.Fatalf("Versatz 7 erwartet: lag=%d ok=%v", lag, ok)
+	}
+	// Ohne Vorlauf: 0.
+	if lag, _, ok := BestLag(orig, orig, 25); !ok || lag != 0 {
+		t.Fatalf("gleich lang: lag=%d ok=%v", lag, ok)
+	}
+	// Einfarbiges Bild: nicht eindeutig.
+	flat := make([][]byte, 60)
+	for i := range flat {
+		flat[i] = make([]byte, offW*offH)
+	}
+	if _, _, ok := BestLag(flat, flat, 25); ok {
+		t.Fatal("einfarbig darf nicht als eindeutig gelten")
+	}
+	if _, _, ok := BestLag(orig[:5], rec, 25); ok {
+		t.Fatal("zu kurz")
+	}
+}
+
+func TestEstimateOffsetEchteDateien(t *testing.T) {
+	ff, e1 := exec.LookPath("ffmpeg")
+	_, e2 := exec.LookPath("ffprobe")
+	if e1 != nil || e2 != nil {
+		t.Skip("ffmpeg/ffprobe nicht vorhanden")
+	}
+	dir := t.TempDir()
+	run := func(args ...string) {
+		if out, err := exec.Command("nice", append([]string{"-n", "10", ff, "-hide_banner", "-loglevel", "error", "-threads", "1"}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("ffmpeg: %v %s", err, out)
+		}
+	}
+	orig := filepath.Join(dir, "o.mp4")
+	rec := filepath.Join(dir, "r.mp4")
+	run("-f", "lavfi", "-i", "testsrc2=size=160x90:rate=25:duration=6", "-c:v", "mpeg4", "-q:v", "3", orig)
+	run("-i", orig, "-vf", "tpad=start_duration=1.2:color=black", "-c:v", "mpeg4", "-q:v", "3", rec) // Aufnahme beginnt 1,2 s früher
+	tools := NewTools("", "")
+	off, ok, err := tools.EstimateOffset(context.Background(), orig, rec, 4)
+	if err != nil || !ok || off < 1.12 || off > 1.28 {
+		t.Fatalf("Vorlauf ≈ 1,2 s erwartet: %.3f ok=%v err=%v", off, ok, err)
+	}
+	rep, err := tools.Compare(context.Background(), orig, rec, CompareOptions{AutoOffset: true, SampleSec: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.OffsetAuto || rep.OffsetSec < 1.12 || rep.SSIM == nil || *rep.SSIM < 0.9 {
+		t.Fatalf("mit automatischem Vorlauf muss die Aufnahme bestehen: %+v", rep)
+	}
+}
+
+func TestBewegungsvergleichFindetVersatzBeiRuhigemBild(t *testing.T) {
+	// Fast statisches Bild (gleiche Balken in allen Bildern) mit einem kleinen wandernden Block: roh nicht eindeutig, über die Bewegung schon.
+	mk := func(pos int) []byte {
+		b := make([]byte, offW*offH)
+		for i := range b {
+			b[i] = byte(40 + (i%offW)*3) // statische Balken
+		}
+		for y := 0; y < 4; y++ {
+			for x := 0; x < 4; x++ {
+				b[(10+y)*offW+(pos%(offW-4))+x] = 250
+			}
+		}
+		return b
+	}
+	orig := make([][]byte, 60)
+	for i := range orig {
+		orig[i] = mk(i * 3)
+	}
+	rec := [][]byte{}
+	for i := 0; i < 9; i++ {
+		rec = append(rec, mk(500+i*7)) // Vorlauf: andere Bewegung
+	}
+	rec = append(rec, orig...)
+	if _, _, ok := BestLag(orig, rec, 25); ok {
+		t.Log("(roh war hier zufällig schon eindeutig — kein Fehler)")
+	}
+	lag, _, ok := BestLag(motionFrames(orig), motionFrames(rec), 25)
+	if !ok || lag != 9 {
+		t.Fatalf("Versatz 9 über die Bewegung erwartet: lag=%d ok=%v", lag, ok)
+	}
+}

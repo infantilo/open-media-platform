@@ -300,7 +300,8 @@ def run(wf, ch):
         os.replace(rp, os.path.join(media, "durchlauf_record.mxf"))  # ins Importverzeichnis des Eingangs
         imp2 = call("POST", "/api/v1/review/import", {"path": "durchlauf_record.mxf", "title": "Durchlauf Aufnahme"})
         aid2 = (imp2.get("item") or imp2).get("assetId") or imp2.get("assetId")
-        rep = call("POST", f"/api/v1/review/items/{aid}/compare", {"recordedAssetId": aid2, "options": {"durationTolMs": 1500, "ssimMin": 0.9, "offsetSec": 0.5}})
+        rep = call("POST", f"/api/v1/review/items/{aid}/compare", {"recordedAssetId": aid2, "options": {"durationTolMs": 1500, "ssimMin": 0.9, "autoOffset": True, "sampleSec": 3}})
+        print(f"  Vorlauf: {rep.get('offsetSec', 0):.2f} s ({'aus den Bildern bestimmt' if rep.get('offsetAuto') else 'vorgegeben'})")
         for c in rep["checks"]:
             print(f"  {c['status']:7} {c['label']}: {c.get('original','')} ↔ {c.get('recorded','')}  {c['message']}")
         check("Vergleich erstellt", rep["overall"] in ("pass", "warning", "fail"), rep["overall"])
