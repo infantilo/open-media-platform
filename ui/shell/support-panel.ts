@@ -71,13 +71,73 @@ export class SupportPanel {
     again.addEventListener("click", () => void this.refresh());
     head.append(this.#lamp, text, again);
 
-    this.el.append(title, hint, head, this.#list, this.#trendInfo, this.#bundleCard(), this.#freezeCard(), this.#analysisCard(), this.#accessCard());
+    const pages: { id: string; label: string; nodes: HTMLElement[] }[] = [
+      { id: "check", label: t("sup.tab.check"), nodes: [head, this.#list] },
+      { id: "baseline", label: t("sup.tab.baseline"), nodes: [this.#trendInfo] },
+      { id: "bundle", label: t("sup.tab.bundle"), nodes: [this.#bundleCard()] },
+      { id: "freeze", label: t("sup.tab.freeze"), nodes: [this.#freezeCard()] },
+      { id: "analysis", label: t("sup.tab.analysis"), nodes: [this.#analysisCard()] },
+      { id: "access", label: t("sup.tab.access"), nodes: [this.#accessCard()] },
+    ];
+    this.el.append(title, hint, this.#subTabs(pages));
     void this.#loadGrants();
     void this.#loadFreezes();
     void loadErrorCodes().then((c) => {
       this.#codes = c;
       if (this.#last) this.#render(this.#last);
     });
+  }
+
+  // Untertabs: je Seite ein Container, nur der aktive ist sichtbar; die Wahl bleibt über das Neuladen erhalten.
+  #subTabs(pages: { id: string; label: string; nodes: HTMLElement[] }[]): HTMLElement {
+    const KEY = "omp.support.tab";
+    let stored: string | null = null;
+    try {
+      stored = localStorage.getItem(KEY);
+    } catch {
+      /* ohne Speicher: erster Tab */
+    }
+    let active = pages.some((p) => p.id === stored) ? (stored as string) : pages[0].id;
+    const wrap = el("div");
+    const bar = el("div", "display:flex;flex-wrap:wrap;gap:var(--omp-space-1);margin-bottom:12px;border-bottom:1px solid var(--omp-border);");
+    bar.setAttribute("data-role", "support-sub-tabs");
+    const bodies = new Map<string, HTMLElement>();
+    const buttons = new Map<string, HTMLButtonElement>();
+    const apply = () => {
+      for (const p of pages) {
+        const on = p.id === active;
+        bodies.get(p.id)!.style.display = on ? "" : "none";
+        const b = buttons.get(p.id)!;
+        b.style.cssText =
+          "background:none;border:none;cursor:pointer;padding:6px 12px;font:inherit;color:var(--omp-text);" +
+          (on ? "border-bottom:2px solid var(--omp-accent-cyan);font-weight:600;" : "border-bottom:2px solid transparent;opacity:0.75;");
+        b.setAttribute("aria-selected", String(on));
+      }
+    };
+    for (const p of pages) {
+      const b = el("button", "", p.label);
+      b.type = "button";
+      b.setAttribute("role", "tab");
+      b.setAttribute("data-tab-id", p.id);
+      b.addEventListener("click", () => {
+        active = p.id;
+        try {
+          localStorage.setItem(KEY, p.id);
+        } catch {
+          /* egal */
+        }
+        apply();
+      });
+      buttons.set(p.id, b);
+      bar.append(b);
+      const body = el("div");
+      body.setAttribute("data-role", `support-page-${p.id}`);
+      body.append(...p.nodes);
+      bodies.set(p.id, body);
+    }
+    wrap.append(bar, ...bodies.values());
+    apply();
+    return wrap;
   }
 
   // Beim Anzeigen des Tabs aufrufen: lädt sofort und danach alle 30 s, bis das Panel nicht mehr im Dokument hängt.
