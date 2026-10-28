@@ -979,7 +979,7 @@ func main() {
 		go runWhileLeader(ctx, clusterNode, func(ctx context.Context) { alertsink.NodeAlerts(ctx, hub, sink) })
 		go runWhileLeader(ctx, clusterNode, func(ctx context.Context) { (&alertsink.HealthWatch{Sink: sink}).Run(ctx, hub) })
 		go runWhileLeader(ctx, clusterNode, func(ctx context.Context) {
-			alertsink.WatchLoad(ctx, 5*time.Second, time.Duration(getEnvIntMain("OMP_ALERT_LOAD_SECONDS", 120))*time.Second, float64(getEnvIntMain("OMP_ALERT_CPU_PERCENT", 95)), float64(getEnvIntMain("OMP_ALERT_MEM_PERCENT", 95)), func() map[string]alertsink.Load {
+			alertsink.WatchLoad(ctx, 5*time.Second, time.Duration(getEnvIntMain("OMP_ALERT_LOAD_SECONDS", 120))*time.Second, float64(getEnvIntMain("OMP_ALERT_CPU_PERCENT", 95)), float64(getEnvIntMain("OMP_ALERT_MEM_PERCENT", 95)), float64(getEnvIntMain("OMP_ALERT_TEMP_C", 85)), func() map[string]alertsink.Load {
 				out := map[string]alertsink.Load{}
 				all, err := hostStore.ListHosts()
 				if err != nil {
@@ -994,7 +994,11 @@ func main() {
 					if m.MemTotalBytes > 0 {
 						mem = float64(m.MemUsedBytes) / float64(m.MemTotalBytes) * 100
 					}
-					out[h.ID] = alertsink.Load{Name: h.Label, CPUPercent: m.CPUPercent, MemPercent: mem}
+					load := alertsink.Load{Name: h.Label, CPUPercent: m.CPUPercent, MemPercent: mem}
+					if m.Sensors != nil && m.Sensors.TempC != nil {
+						load.TempC = *m.Sensors.TempC
+					}
+					out[h.ID] = load
 				}
 				return out
 			}, sink)

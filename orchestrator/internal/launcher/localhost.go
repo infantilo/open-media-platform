@@ -23,6 +23,8 @@ type LocalHostSample struct {
 	CPUPercent float64
 	MemPercent float64
 	Net        *LocalNetSample
+	// Sensors: Temperatur/Leistung des Orchestrator-Hosts; nil = nicht verfügbar.
+	Sensors *SensorSample
 }
 
 type LocalNetSample struct {
@@ -33,6 +35,7 @@ type LocalNetSample struct {
 }
 
 type localHostState struct {
+	sensors  *SensorReader
 	hasPrev  bool
 	at       time.Time
 	cpuTotal uint64
@@ -171,6 +174,10 @@ func readNetLinkMbps(iface string) float64 {
 func (s *localHostState) sample(netSpec string) *LocalHostSample {
 	now := time.Now()
 	out := &LocalHostSample{}
+	if s.sensors == nil {
+		s.sensors = NewSensorReader("")
+	}
+	out.Sensors = s.sensors.Read()
 	if m, ok := readMemPercent(); ok {
 		out.MemPercent = m
 	}

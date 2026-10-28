@@ -478,6 +478,7 @@ func main() {
 		if c, ok := telemetry.TakeClock(); ok {
 			sample.Clock = &c
 		}
+		sample.Sensors = telemetry.TakeSensors()
 
 		payload, err := json.Marshal(sample)
 		if err != nil {

@@ -23,6 +23,12 @@ import (
 	"github.com/infantilo/openmediaplatform/host-agent/internal/jobs"
 )
 
+// sensorReader hält den Zustand für die Leistungsberechnung zwischen zwei Messungen.
+var sensorReader = NewSensorReader("")
+
+// TakeSensors liefert Temperatur/Leistung des Hosts (nil = nicht verfügbar).
+func TakeSensors() *SensorSample { return sensorReader.Read() }
+
 // Sample ist eine Momentaufnahme der Host-Auslastung.
 type Sample struct {
 	CPUPercent    float64 `json:"cpuPercent"`
@@ -48,6 +54,8 @@ type Sample struct {
 	Jobs *jobs.Info `json:"jobs,omitempty"`
 	// Clock: Zustand der Systemuhr (Synchronisation, TAI-Versatz); nil, wenn der Kernel ihn nicht liefert.
 	Clock *ClockSample `json:"clock,omitempty"`
+	// Sensors: Temperatur und Leistungsaufnahme (sensors.go); nil = der Host liefert beides nicht.
+	Sensors *SensorSample `json:"sensors,omitempty"`
 	// Goodbye markiert die letzte Nachricht eines Host-Agents, der per
 	// SIGTERM/SIGINT ABSICHTLICH beendet wird (Nutzerauftrag 2026-09-21:
 	// ein Host, der ohne manuelles Beenden offline geht, ist ein

@@ -135,3 +135,17 @@ func toCatalogRealtime(r *catalog.Realtime) *CatalogRealtime {
 	}
 	return &CatalogRealtime{Cpus: r.Cpus, Policy: r.Policy, Priority: r.Priority, Nice: r.Nice}
 }
+
+// withCPUAffinity: Option OMP_CPU_AFFINITY überlagert die Kernbindung des Katalogs (Gegenstück im Orchestrator).
+func withCPUAffinity(rt *CatalogRealtime, env map[string]string) *CatalogRealtime {
+	v := strings.TrimSpace(env["OMP_CPU_AFFINITY"])
+	if v == "" {
+		return rt
+	}
+	out := CatalogRealtime{}
+	if rt != nil {
+		out = *rt
+	}
+	out.Cpus = v
+	return &out
+}

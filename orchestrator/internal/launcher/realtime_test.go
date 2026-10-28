@@ -65,3 +65,20 @@ func TestExecEntryRealtimeApplied(t *testing.T) {
 		t.Fatalf("nice=%s, erwartet %d", f[16], pn+5)
 	}
 }
+
+func TestWithCPUAffinityOverlaysCatalogAndIsOffByDefault(t *testing.T) {
+	if got := withCPUAffinity(nil, nil); got != nil {
+		t.Fatalf("ohne Option und ohne Katalogwert keine Bindung: %+v", got)
+	}
+	cat := &CatalogRealtime{Cpus: "0-1", Policy: "fifo", Priority: 10}
+	if got := withCPUAffinity(cat, map[string]string{"OMP_CPU_AFFINITY": "  "}); got != cat {
+		t.Fatal("leere Option lässt den Katalogwert unberührt")
+	}
+	got := withCPUAffinity(cat, map[string]string{"OMP_CPU_AFFINITY": " 2-3 "})
+	if got == cat || got.Cpus != "2-3" || got.Policy != "fifo" || got.Priority != 10 || cat.Cpus != "0-1" {
+		t.Fatalf("Option überlagert nur die CPU-Liste, Katalog bleibt unverändert: %+v / %+v", got, cat)
+	}
+	if got := withCPUAffinity(nil, map[string]string{"OMP_CPU_AFFINITY": "0"}); got == nil || got.Cpus != "0" {
+		t.Fatalf("Option allein genügt: %+v", got)
+	}
+}

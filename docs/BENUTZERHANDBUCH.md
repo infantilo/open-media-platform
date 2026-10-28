@@ -953,6 +953,13 @@ Diese Funktionen gehören zum Node **Playout-Automation** (Panel-Abschnitt **Fre
 
 **Aufnahme gegen Original vergleichen.** Im Eingang vergleicht `POST /api/v1/review/items/{id}/compare` (`recordedAssetId`, optional `options`) die Aufnahme eines Events mit dem Original: Dauer (±1 Bild, Aufnahme-Vorlauf `offsetSec` wird abgezogen), Bildrate (exakt), Auflösung/Codec (Hinweis), Audio und Bildqualität (SSIM ≥ 0,98 auf einer 10-s-Stichprobe, kleine Auflösung, ein Faden).
 
+
+## 5f. Kernbindung, Temperatur und Leistungsaufnahme
+
+**Kernbindung (CPU-Pinning).** Jede Instanz hat die Option **CPU-Kerne (Bindung)** (Gruppe *Leistung*, `OMP_CPU_AFFINITY`; je Instanz oder je Typ setzbar). Leer = keine Bindung (Standard). Eintrag als Liste, z. B. `2-3` oder `0,2,4`: der Node läuft dann nur auf diesen Kernen (`taskset`, auch auf entfernten Hosts über den Host-Agent). Sinnvoll nur auf Produktions-Hosts, um zeitkritische Nodes (Ausgang, Playout, Geräte-Gateways) vor Batch-Arbeit wie QC oder Transcodes zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder auf dem Host nicht vorhandene Kerne werden mit einer Warnung im Log ignoriert, der Node startet dann ungebunden. Die Option überlagert eine im Katalog festgelegte Bindung (`realtime.cpus`).
+
+**Temperatur und Leistung.** Im Reiter *Hosts* zeigt die Spalte **Temp. / Leistung** die CPU-/Plattformtemperatur (gelb ab 75 °C, rot ab 85 °C; der Tooltip listet alle Sensoren) und die Leistungsaufnahme: das CPU-Paket aus dem RAPL-Energiezähler oder — bei Geräten mit Akku — die Gesamtleistung. **Ohne Sensor steht „–“, nie 0**: virtuelle Maschinen und Container liefern oft keine Werte, RAPL ist auf neueren Kerneln nur mit Rechten lesbar. Der externe Alarm meldet einen Host, dessen Temperatur länger als `OMP_ALERT_LOAD_SECONDS` über `OMP_ALERT_TEMP_C` liegt (Standard 85 °C, 0 = aus), und die Erholung. Die Werte stammen aus `/sys` (hwmon, thermal, powercap, power_supply) und kosten nur wenige kleine Dateilesungen je Messung.
+
 ## 6. Alarme
 
 Der Reiter **Alarme** sammelt an einer Stelle, was operative

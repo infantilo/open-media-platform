@@ -129,10 +129,12 @@ type Load struct {
 	Name       string
 	CPUPercent float64
 	MemPercent float64
+	// TempC: CPU-/Plattformtemperatur; 0 = nicht gemessen (wird nie geprüft).
+	TempC float64
 }
 
 // WatchLoad meldet, wenn ein Host länger als `sustain` über cpuMax/memMax (Prozent) liegt, und wenn er sich wieder erholt. snapshot liefert nur Hosts, die online sind.
-func WatchLoad(ctx context.Context, every, sustain time.Duration, cpuMax, memMax float64, snapshot func() map[string]Load, s *Sink) {
+func WatchLoad(ctx context.Context, every, sustain time.Duration, cpuMax, memMax, tempMax float64, snapshot func() map[string]Load, s *Sink) {
 	if s == nil {
 		return
 	}
@@ -140,7 +142,7 @@ func WatchLoad(ctx context.Context, every, sustain time.Duration, cpuMax, memMax
 		since   time.Time
 		alerted bool
 	}
-	cpu, mem := map[string]*st{}, map[string]*st{}
+	cpu, mem, temp := map[string]*st{}, map[string]*st{}, map[string]*st{}
 	check := func(m map[string]*st, id, name, what string, over bool, val, limit float64, now time.Time) {
 		e := m[id]
 		if e == nil {
@@ -169,11 +171,15 @@ func WatchLoad(ctx context.Context, every, sustain time.Duration, cpuMax, memMax
 		for id, l := range cur {
 			check(cpu, id, l.Name, "CPU", l.CPUPercent > cpuMax, l.CPUPercent, cpuMax, now)
 			check(mem, id, l.Name, "Speicher", l.MemPercent > memMax, l.MemPercent, memMax, now)
+			if tempMax > 0 && l.TempC > 0 {
+				check(temp, id, l.Name, "Temperatur", l.TempC > tempMax, l.TempC, tempMax, now)
+			}
 		}
 		for id := range cpu {
 			if _, ok := cur[id]; !ok {
 				delete(cpu, id)
 				delete(mem, id)
+				delete(temp, id)
 			}
 		}
 		select {

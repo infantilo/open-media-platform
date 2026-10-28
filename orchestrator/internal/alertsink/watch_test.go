@@ -110,7 +110,7 @@ func TestLoadSustained(t *testing.T) {
 	cur := map[string]Load{"h": {Name: "A", CPUPercent: 99, MemPercent: 10}}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go WatchLoad(ctx, 10*time.Millisecond, 400*time.Millisecond, 95, 95, func() map[string]Load { return map[string]Load{"h": cur["h"]} }, s)
+	go WatchLoad(ctx, 10*time.Millisecond, 400*time.Millisecond, 95, 95, 0, func() map[string]Load { return map[string]Load{"h": cur["h"]} }, s)
 	time.Sleep(100 * time.Millisecond)
 	if len(s.queue) != 0 {
 		t.Fatal("zu kurz für Alarm")
@@ -122,5 +122,24 @@ func TestLoadSustained(t *testing.T) {
 	got := drain(s)
 	if len(got) != 1 || got[0].Kind != "load-high" || got[0].Subject != "h/CPU" {
 		t.Fatalf("%+v", got)
+	}
+}
+
+func TestLoadTemperatureAlertsOnlyWhenMeasured(t *testing.T) {
+	s := New("http://x.invalid", "")
+	s.Debounce = 0
+	// h1 heiß, h2 ohne Sensor (TempC 0 = nicht gemessen → nie ein Alarm).
+	cur := map[string]Load{"h1": {Name: "Heiß", TempC: 91}, "h2": {Name: "Ohne Sensor"}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go WatchLoad(ctx, 10*time.Millisecond, 100*time.Millisecond, 95, 95, 85, func() map[string]Load { return cur }, s)
+	deadline := time.Now().Add(3 * time.Second)
+	for len(s.queue) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(150 * time.Millisecond)
+	got := drain(s)
+	if len(got) != 1 || got[0].Kind != "load-high" || got[0].Subject != "h1/Temperatur" {
+		t.Fatalf("nur der heiße Host mit Sensor alarmiert: %+v", got)
 	}
 }

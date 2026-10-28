@@ -1438,7 +1438,7 @@ func (l *Launcher) startPodmanLocal(nodeType string, entry CatalogEntry, id, lab
 // gegebenen (bei einem Neustart: wiederverwendeten) Instanz-ID/-Label —
 // gemeinsamer Kern von startLocal und supervise's Neustart-Zweig.
 func (l *Launcher) execEntry(entry CatalogEntry, id, label, launchSecret string, extraEnv map[string]string) (*exec.Cmd, *tailBuffer, error) {
-	argv := wrapRealtime(entry.Type, entry.Realtime, entry.Command)
+	argv := wrapRealtime(entry.Type, withCPUAffinity(entry.Realtime, extraEnv), entry.Command)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = buildEnv(entry.Env, extraEnv, id, label, launchSecret, l.registryURL, l.orchestratorURL, l.natsURL)
 	// Node-Ausgaben (Pipeline-Fehler etc.) an den Orchestrator-Log

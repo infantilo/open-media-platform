@@ -49,6 +49,22 @@ interface GpuMetrics {
   memTotalBytes: number;
 }
 
+/** Temperatur (rot ab 85 °C, gelb ab 75 °C) und Leistungsaufnahme; ohne Sensor „–“ (nicht gemessen, nie 0). */
+export function formatSensors(s: HostMetrics["sensors"]): string {
+  if (!s || (s.tempC === undefined && s.powerW === undefined)) return `<span style="color:var(--omp-text-dim);" title="${escapeHtml(t("hosts.sensorsNone"))}">–</span>`;
+  const parts: string[] = [];
+  if (s.tempC !== undefined) {
+    const color = s.tempC >= 85 ? "var(--omp-error)" : s.tempC >= 75 ? "var(--omp-cue, #e0a030)" : "inherit";
+    const tip = (s.temps ?? []).map((x) => `${x.name}${x.label ? ` ${x.label}` : ""}: ${x.celsius.toFixed(1)} °C`).join("\n");
+    parts.push(`<span style="color:${color};font-weight:${s.tempC >= 85 ? 600 : 400};" title="${escapeHtml(tip)}">${s.tempC.toFixed(0)} °C</span>`);
+  }
+  if (s.powerW !== undefined) {
+    const what = s.powerSource === "rapl" ? t("hosts.powerRapl") : t("hosts.powerBattery");
+    parts.push(`<span title="${escapeHtml(what)}">${s.powerW.toFixed(0)} W</span>`);
+  }
+  return parts.join(" · ");
+}
+
 interface HostMetrics {
   cpuPercent: number;
   memUsedBytes: number;
@@ -57,6 +73,7 @@ interface HostMetrics {
   net?: NetMetrics;
   gpu?: GpuMetrics;
   clock?: ClockIn;
+  sensors?: { tempC?: number; temps?: { name: string; label?: string; celsius: number }[]; powerW?: number; powerSource?: string };
 }
 
 interface HostEntry {
@@ -551,6 +568,7 @@ class HostsView extends HTMLElement {
         const mem = m ? `${formatBytes(m.memUsedBytes)} / ${formatBytes(m.memTotalBytes)}` : "–";
         const net = m?.net ? formatNetRate(m.net) : "–";
         const gpu = m?.gpu ? formatGpuUsage(m.gpu) : "–";
+        const sensors = formatSensors(m?.sensors);
         const seen = m ? new Date(m.receivedAt).toLocaleTimeString() : "nie";
         const win = history.get(h.id);
         const cpuValues = win?.samples?.map((s) => s.cpuPercent) ?? [];
@@ -620,6 +638,7 @@ class HostsView extends HTMLElement {
           <td style="padding:2px 8px;">${mem}</td>
           <td style="padding:2px 8px;white-space:nowrap;">${net}</td>
           <td style="padding:2px 8px;white-space:nowrap;">${gpu}</td>
+          <td style="padding:2px 8px;white-space:nowrap;">${sensors}</td>
           <td style="padding:2px 8px;">${spark}</td>
           <td style="padding:2px 8px;white-space:nowrap;">${minAvgMax}</td>
           <td style="padding:2px 8px;color:var(--omp-text-dim);">${seen}</td>
@@ -696,6 +715,7 @@ class HostsView extends HTMLElement {
                 <th style="padding:2px 8px;">${t("hosts.e53619")}</th>
                 <th style="padding:2px 8px;">${t("hosts.72ce72")}</th>
                 <th style="padding:2px 8px;">${t("hosts.52f9ec")}</th>
+                <th style="padding:2px 8px;" title="${escapeHtml(t("hosts.sensorsTitle"))}">${t("hosts.sensors")}</th>
                 <th style="padding:2px 8px;">${t("hosts.25850a")}</th>
                 <th style="padding:2px 8px;">${t("hosts.be62a5")}</th>
                 <th style="padding:2px 8px;">${t("hosts.4d62c2")}</th>

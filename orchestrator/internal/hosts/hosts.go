@@ -59,6 +59,8 @@ type Metrics struct {
 	// `nvidia-smi` dort nichts liefern konnte — Spiegelbild von
 	// host-agent/internal/telemetry.GpuSample.
 	Gpu *GpuMetrics `json:"gpu,omitempty"`
+	// Sensors: Temperatur/Leistung; nil = nicht gemessen (VM, kein Sensor, keine Rechte).
+	Sensors *SensorMetrics `json:"sensors,omitempty"`
 	// Jobs: Fähigkeiten/Auslastung der Job-Ausführung (ffmpeg-Jobs, docs/ENTWURF-FFMPEG-HOSTWAHL.md); nil = auf dem
 	// Host nicht freigegeben (keine tools.json).
 	Jobs *JobsMetrics `json:"jobs,omitempty"`
@@ -80,6 +82,20 @@ type JobToolInfo = jobwire.ToolInfo
 
 // GpuMetrics ist die zuletzt gemessene Auslastungs-/Speicher-
 // Momentaufnahme der per Host-Agent konfigurierten GPU.
+// SensorMetrics: Temperatur und Leistungsaufnahme des Hosts (Spiegelbild von host-agent/internal/telemetry.SensorSample).
+type SensorMetrics struct {
+	TempC       *float64     `json:"tempC,omitempty"`
+	Temps       []SensorTemp `json:"temps,omitempty"`
+	PowerW      *float64     `json:"powerW,omitempty"`
+	PowerSource string       `json:"powerSource,omitempty"`
+}
+
+type SensorTemp struct {
+	Name    string  `json:"name"`
+	Label   string  `json:"label,omitempty"`
+	Celsius float64 `json:"celsius"`
+}
+
 type GpuMetrics struct {
 	Index int `json:"index"` // -1 = alle GPUs des Hosts (Pool)
 	// Count: Anzahl der gemessenen GPUs (Pool; 0 bei älteren Host-Agents,

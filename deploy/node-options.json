@@ -95,6 +95,15 @@
       "description": "TCP-Port des Vorschau-/Level-Servers. 0 = automatisch ein freier Port (empfohlen, mehrere Instanzen pro Host).",
       "default": "0",
       "group": "Netzwerk (Ports)"
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-decklink": [
@@ -202,6 +211,15 @@
           "label": "16"
         }
       ]
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-2110-gateway-ingest": [
@@ -327,6 +345,15 @@
       "group": "Zeit",
       "min": 0,
       "max": 127
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-2110-gateway-output": [
@@ -441,6 +468,15 @@
       "type": "string",
       "description": "1 = jede auf dieses Gateway aufgeschaltete Quelle gilt als auf Sendung: ihr Node bekommt Tally (rote Kachel, roter Rahmen an Handy-Kameras), solange sie verbunden ist.",
       "group": "Tally"
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-srt-gateway-uplink": [
@@ -468,6 +504,15 @@
       "type": "port",
       "default": "6000",
       "group": "2110"
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-srt-gateway-downlink": [
@@ -495,6 +540,15 @@
       "type": "port",
       "default": "6000",
       "group": "2110"
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-fabrics-gateway-target": [
@@ -577,6 +631,15 @@
       "group": "Format",
       "min": 1,
       "max": 100000
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-fabrics-gateway-initiator": [
@@ -667,6 +730,15 @@
       "type": "url",
       "description": "Adresse des Fabrics-Targets (Schema://Host:Port).",
       "group": "Netzwerk"
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-aes67-gateway-sink": [
@@ -736,6 +808,15 @@
       "group": "Netzwerk",
       "min": 1,
       "max": 3600
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-aes67-gateway-source": [
@@ -814,6 +895,15 @@
       "group": "Netzwerk",
       "min": 1,
       "max": 600
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-webrtc-gateway-camera": [
@@ -903,6 +993,15 @@
       "type": "string",
       "description": "Nodes, deren Tally den On-Air-Rahmen auf der Handy-Seite einschaltet: Node-Namen oder -IDs, kommagetrennt (z. B. ein Bildmischer und ein Switcher). Leer = jeder Node, der Tally für diese Kamera meldet.",
       "group": "Tally"
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-webrtc-gateway-monitor": [
@@ -984,6 +1083,15 @@
       "type": "host",
       "description": "Adresse, die Browsern als Kandidat gemeldet wird (hinter NAT).",
       "group": "Netzwerk"
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-switcher": [
@@ -1006,6 +1114,15 @@
       "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
       "min": 16,
       "max": 8192
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-viewer": [
@@ -1034,6 +1151,15 @@
       "type": "string",
       "description": "GStreamer-Element für die Anzeige (z. B. autovideosink). Leer = Standard.",
       "group": "Signal"
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-scope": [
@@ -1054,6 +1180,15 @@
       "description": "TCP-Port des Vorschau-/Level-Servers. 0 = automatisch ein freier Port (empfohlen, mehrere Instanzen pro Host).",
       "default": "0",
       "group": "Netzwerk (Ports)"
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-video-mixer-me": [
@@ -1087,6 +1222,15 @@
       "group": "Funktion",
       "min": 1,
       "max": 8
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-audio-mixer": [
@@ -1109,6 +1253,15 @@
       "description": "TCP-Port des Vorschau-/Level-Servers. 0 = automatisch ein freier Port (empfohlen, mehrere Instanzen pro Host).",
       "default": "0",
       "group": "Netzwerk (Ports)"
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-audio-monitor": [
@@ -1120,6 +1273,15 @@
       "description": "TCP-Port des Vorschau-/Level-Servers. 0 = automatisch ein freier Port (empfohlen, mehrere Instanzen pro Host).",
       "default": "0",
       "group": "Netzwerk (Ports)"
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-mxf-player": [
@@ -1152,6 +1314,15 @@
       "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
       "min": 16,
       "max": 8192
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-mxf-player-direct": [
@@ -1201,6 +1372,15 @@
       "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
       "min": 16,
       "max": 8192
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-channel-player": [
@@ -1233,6 +1413,15 @@
       "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
       "min": 16,
       "max": 8192
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-multiviewer": [
@@ -1244,6 +1433,15 @@
       "description": "TCP-Port des Vorschau-/Level-Servers. 0 = automatisch ein freier Port (empfohlen, mehrere Instanzen pro Host).",
       "default": "0",
       "group": "Netzwerk (Ports)"
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-multiviewer-custom": [
@@ -1255,6 +1453,15 @@
       "description": "TCP-Port des Vorschau-/Level-Servers. 0 = automatisch ein freier Port (empfohlen, mehrere Instanzen pro Host).",
       "default": "0",
       "group": "Netzwerk (Ports)"
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-playout-automation": [
@@ -1360,6 +1567,15 @@
       "group": "Werbeblöcke",
       "min": 1000,
       "max": 60000
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-ograf": [
@@ -1389,6 +1605,15 @@
           "value": "1"
         }
       ]
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-media-library": [
@@ -1401,6 +1626,15 @@
       "default": "data/media",
       "group": "Medien und Dateien",
       "pathKind": "dir"
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-recorder": [
@@ -1423,6 +1657,15 @@
       "default": "",
       "group": "Medien und Dateien",
       "pathKind": "dir"
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-scaler": [
@@ -1482,6 +1725,15 @@
           "value": "blend"
         }
       ]
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-playout-buffer": [
@@ -1496,7 +1748,8 @@
     {"key": "OMP_BUFFER_MAX_MIB", "i18n": {"en": {"label": "Memory limit (MiB)", "description": "Hard upper bound for the picture ring (protects against oversized depths). When reached, the oldest pictures are dropped.", "group": "Buffer"}}, "label": "Speichergrenze (MiB)", "type": "int", "description": "Harte Obergrenze für den Bildring (Schutz vor zu großen Tiefen). Beim Erreichen fallen die ältesten Bilder weg.", "default": "1024", "group": "Puffer", "min": 64, "max": 16384},
     {"key": "OMP_AUDIO_CHANNELS", "i18n": {"en": {"label": "Audio channels", "description": "Channel count of the output audio flow.", "group": "Audio"}}, "label": "Audio-Kanäle", "type": "int", "description": "Kanalzahl des Ausgangs-Audioflusses.", "default": "2", "group": "Audio", "min": 1, "max": 64},
     {"key": "OMP_VIDEO_TRACKS", "i18n": {"en": {"label": "Picture tracks", "description": "Number of parallel picture tracks (each with its own receiver, sender and ring, kept frame-aligned). Changeable at runtime in the panel.", "group": "Tracks"}}, "label": "Bildspuren", "type": "int", "description": "Anzahl paralleler Bildspuren (je eigener Empfänger, Sender und Ring, untereinander bildgenau gleich getaktet). Zur Laufzeit im Panel änderbar.", "default": "1", "group": "Spuren", "min": 1, "max": 8},
-    {"key": "OMP_AUDIO_TRACKS", "i18n": {"en": {"label": "Sound tracks", "description": "Number of parallel sound tracks (each with its own receiver and sender). Changeable at runtime in the panel.", "group": "Tracks"}}, "label": "Tonspuren", "type": "int", "description": "Anzahl paralleler Tonspuren (je eigener Empfänger und Sender). Zur Laufzeit im Panel änderbar.", "default": "1", "group": "Spuren", "min": 1, "max": 16}
+    {"key": "OMP_AUDIO_TRACKS", "i18n": {"en": {"label": "Sound tracks", "description": "Number of parallel sound tracks (each with its own receiver and sender). Changeable at runtime in the panel.", "group": "Tracks"}}, "label": "Tonspuren", "type": "int", "description": "Anzahl paralleler Tonspuren (je eigener Empfänger und Sender). Zur Laufzeit im Panel änderbar.", "default": "1", "group": "Spuren", "min": 1, "max": 16},
+    {"key": "OMP_CPU_AFFINITY", "i18n": {"en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"}}, "label": "CPU-Kerne (Bindung)", "type": "string", "placeholder": "z. B. 2-3", "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.", "group": "Leistung"}
   ],
   "omp-scte35": [
     {
@@ -1637,6 +1890,15 @@
       "group": "ANC",
       "min": 1,
       "max": 10
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ],
   "omp-intercom": [
@@ -1704,6 +1966,15 @@
       "default": "40",
       "min": 0,
       "max": 200
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
     }
   ]
 }

@@ -28,6 +28,7 @@ func recordLocalHost(ctx context.Context, l *launcher.Launcher, h *hosts.History
 		}
 		total := memTotalBytes()
 		m := hosts.Metrics{CPUPercent: lh.CPUPercent, MemTotalBytes: total, MemUsedBytes: uint64(lh.MemPercent / 100 * float64(total)), ReceivedAt: time.Now()}
+		m.Sensors = sensorMetricsOf(lh.Sensors)
 		for _, in := range l.List() {
 			if in.HostID != "" || in.CPUPercent == nil {
 				continue
@@ -63,4 +64,16 @@ func memTotalBytes() uint64 {
 		}
 	}
 	return 0
+}
+
+// sensorMetricsOf übersetzt die lokale Sensor-Momentaufnahme in das Host-Wire-Format.
+func sensorMetricsOf(s *launcher.SensorSample) *hosts.SensorMetrics {
+	if s == nil {
+		return nil
+	}
+	out := &hosts.SensorMetrics{TempC: s.TempC, PowerW: s.PowerW, PowerSource: s.PowerSource}
+	for _, t := range s.Temps {
+		out.Temps = append(out.Temps, hosts.SensorTemp{Name: t.Name, Label: t.Label, Celsius: t.Celsius})
+	}
+	return out
 }

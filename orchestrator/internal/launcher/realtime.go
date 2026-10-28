@@ -127,3 +127,19 @@ func wrapRealtime(typ string, rt *CatalogRealtime, argv []string) []string {
 	}
 	return append(prefix, argv...)
 }
+
+// withCPUAffinity überlagert die Kernbindung des Katalogs mit der Instanz-/Typ-Option OMP_CPU_AFFINITY (CPU-Liste im
+// taskset-Format, z. B. „2-3“). Leer/fehlt = Katalogwert bzw. keine Bindung (Standard aus). Ungültige oder nicht vorhandene
+// CPUs werden von wrapRealtime mit Warnung ignoriert — der Node startet dann ungebunden.
+func withCPUAffinity(rt *CatalogRealtime, env map[string]string) *CatalogRealtime {
+	v := strings.TrimSpace(env["OMP_CPU_AFFINITY"])
+	if v == "" {
+		return rt
+	}
+	out := CatalogRealtime{}
+	if rt != nil {
+		out = *rt
+	}
+	out.Cpus = v
+	return &out
+}
