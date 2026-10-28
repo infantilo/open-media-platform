@@ -379,6 +379,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 		mux.HandleFunc("GET /api/v1/freezes", g.requireVerbGlobal(authz.VerbAdmin, handleListFreezes(options.freezeStore)))
 		mux.HandleFunc("GET /api/v1/freezes/{id}/download", g.requireVerbGlobal(authz.VerbAdmin, handleDownloadFreeze(options.freezeStore)))
 		mux.HandleFunc("DELETE /api/v1/freezes/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteFreeze(options.freezeStore)))
+		mux.HandleFunc("GET /api/v1/freezes/{id}/analysis", g.requireVerbGlobal(authz.VerbAdmin, handleAnalyzeFreeze(options.freezeStore)))
 	}
 	// Baseline und Trends (Kap. 72.11).
 	if options.trends != nil {
@@ -602,6 +603,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	hostSysCache := newSysCache(options.hostSysinfo, 20*time.Second)
 	// Selbsttest und Support-Paket (Kap. 72): sammeln über den eigenen Router mit den Rechten der aufrufenden Person.
 	mux.HandleFunc("GET /api/v1/admin/selftest", g.requireVerbGlobal(authz.VerbAdmin, handleSelftest(mux, cfg.ClusterDataDir, clusterSvc, hostSysCache, options.trends)))
+	mux.HandleFunc("POST /api/v1/admin/support/analyze", g.requireVerbGlobal(authz.VerbAdmin, handleAnalyzeUpload()))
 	mux.HandleFunc("GET /api/v1/admin/support-bundle", g.requireVerbGlobal(authz.VerbAdmin, handleSupportBundle(mux, cfg.ClusterDataDir, clusterSvc, hostSysCache, options.trends)))
 	// Orchestrator-Cluster (ARCHITECTURE.md §19.3, UMSETZUNG.md D12 Teil 1).
 	mux.HandleFunc("GET /api/v1/cluster/status", g.requireAuth(handleClusterStatus(clusterSvc)))

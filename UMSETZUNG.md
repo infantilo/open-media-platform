@@ -6074,3 +6074,12 @@ Ausgangslage: der Diagnose-Tab erklärt Meldungen, aber ein Supporter braucht de
 - **Grenzen:** die Erkennung gilt nur für Hosts, Instanzen und den Orchestrator — **keine Latenz** (die Nodes melden keine Verzögerungszeit; sobald ein Node sie als Rate meldet, braucht es nur einen Eintrag in `Specs`); Tageszeit-Vergleich in UTC-Stunden mit Werktag/Wochenende, **Feiertage und Urlaubszeiten kennt er nicht** (die Baseline passt sich nach einigen Tagen an); die Stundenwerte der Instanzen leben bis zum Flush (alle 5 Minuten) im Arbeitsspeicher; nur *hohe* Abweichungen werden gemeldet (zu niedrige Last oder Bildrate nicht); Remote-Instanzen liefern nur CPU und RSS (keine Dateien/Threads); Hosts brauchen Stundenwerte der Host-Telemetrie (Migration 0043).
 
 **Nachtrag Kap. 72 (2026-10-27):** Punkt 10 „Absturzberichte“ (Panic/Core/Backtrace automatisch sammeln und im Diagnose-Tab zeigen) bewusst vertagt. Neu: `skills/omp-node-builder/SKILL.md` (SKILL.md-Format, mit `references/`) und im `docs/NODE-TUTORIAL.md` die Abschnitte „Fertige Skill-Datei für KI-Werkzeuge“ und „Diagnosefähigkeit für Node-Autoren (Kapitel 72)“.
+
+## Kapitel 73: Auswertung von Support-Paket und Momentaufnahme (Nutzerauftrag 2026-10-28, **umgesetzt, live und im Browser geprüft**)
+
+- `orchestrator/internal/support/analyze`: ZIP → Bericht (Befunde, Ausfälle aus `ready`-Lücken, Zeitleiste, Messreihen mit Flags
+  `high`/`growing`/`dropped`, gruppierte Logs); `Markdown()` als Textbericht.
+- API: `POST /api/v1/admin/support/analyze` (ZIP-Body, `?format=md`, `?lang=en`), `GET /api/v1/freezes/{id}/analysis`; Routen-Golden neu erzeugt.
+- UI: Karte „Paket auswerten“ im Support-Tab (`ui/shell/analysis-view.ts`), „Auswerten“ je Momentaufnahme, „Bericht für KI kopieren“.
+- KI: `docs/PAKET-AUSWERTUNG-KI.md` (Anleitung + Reihenfolge der Rohdateien).
+- Offen: Handbuch-Eintrag; echte Störungsdaten (Ausfälle, wachsender Speicher) nur per Test, nicht mit realem Vorfall geprüft.

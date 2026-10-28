@@ -237,6 +237,12 @@
     "domain": "core"
   },
   {
+    "method": "POST",
+    "path": "/api/v1/admin/support/analyze",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
     "method": "GET",
     "path": "/api/v1/admin/trends",
     "auth": "verb:Admin",
@@ -794,6 +800,13 @@
   {
     "method": "DELETE",
     "path": "/api/v1/freezes/{id}",
+    "auth": "verb:Admin",
+    "when": "options.freezer != nil \u0026\u0026 options.freezeStore != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/freezes/{id}/analysis",
     "auth": "verb:Admin",
     "when": "options.freezer != nil \u0026\u0026 options.freezeStore != nil",
     "domain": "core"

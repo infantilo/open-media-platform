@@ -5,6 +5,9 @@ import { t } from "./i18n.ts";
 import { apiFetch } from "./connection.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 import { freezeNow } from "./freeze.ts";
+import { type AnReport, renderAnalysis } from "./analysis-view.ts";
+import { getLang } from "./i18n.ts";
+import { showToast } from "../kit/omp-toast.ts";
 import { coverageKey, findFinding, sparkline, type TrendFinding, type TrendReport } from "./trends-logic.ts";
 import { codeBadge, type ErrorCode, helpDetails, loadErrorCodes, lookup } from "./errorcodes.ts";
 import {
@@ -68,7 +71,7 @@ export class SupportPanel {
     again.addEventListener("click", () => void this.refresh());
     head.append(this.#lamp, text, again);
 
-    this.el.append(title, hint, head, this.#list, this.#trendInfo, this.#bundleCard(), this.#freezeCard(), this.#accessCard());
+    this.el.append(title, hint, head, this.#list, this.#trendInfo, this.#bundleCard(), this.#freezeCard(), this.#analysisCard(), this.#accessCard());
     void this.#loadGrants();
     void this.#loadFreezes();
     void loadErrorCodes().then((c) => {
@@ -325,6 +328,49 @@ export class SupportPanel {
     return card;
   }
 
+  // ---- Auswertung (Kap. 73) -----------------------------------------------------------------------------------------------
+
+  #analysisOut = el("div");
+
+  async #analyse(path: string, init?: RequestInit) {
+    const lang = getLang();
+    this.#analysisOut.replaceChildren(el("div", DIM, "…"));
+    try {
+      const res = await apiFetch(`${path}${path.includes("?") ? "&" : "?"}lang=${lang}`, init);
+      if (!res.ok) throw new Error((await res.text()).trim() || `HTTP ${res.status}`);
+      const rep = (await res.json()) as AnReport;
+      const bar = el("div", "display:flex;gap:8px;margin-top:8px;");
+      const copy = el("button", "", t("an.copy"));
+      copy.className = "omp-btn";
+      copy.addEventListener("click", async () => {
+        const md = await apiFetch(`${path}${path.includes("?") ? "&" : "?"}lang=${lang}&format=md`, init);
+        if (md.ok) {
+          await navigator.clipboard.writeText(await md.text());
+          showToast(t("an.copied"), { variant: "info" });
+        }
+      });
+      bar.append(copy);
+      this.#analysisOut.replaceChildren(bar, renderAnalysis(rep));
+    } catch (e) {
+      this.#analysisOut.replaceChildren(el("div", "color:#e5534b;", t("an.failed", { error: String((e as Error).message ?? e) })));
+    }
+  }
+
+  #analysisCard(): HTMLElement {
+    const card = el("div", CARD);
+    card.append(el("div", "font-weight:600;", t("an.title")), el("div", DIM + "margin:4px 0 8px;", t("an.text")));
+    const input = el("input");
+    input.type = "file";
+    input.accept = ".zip,application/zip";
+    input.setAttribute("data-testid", "analysis-file");
+    input.addEventListener("change", () => {
+      const f = input.files?.[0];
+      if (f) void this.#analyse("/api/v1/admin/support/analyze", { method: "POST", body: f });
+    });
+    card.append(input, this.#analysisOut);
+    return card;
+  }
+
   async #loadFreezes() {
     try {
       const res = await apiFetch("/api/v1/freezes");
@@ -354,6 +400,10 @@ export class SupportPanel {
       dl.href = freezeUrl(m.id);
       dl.setAttribute("download", "");
       row.append(dl);
+      const an = el("button", "", t("an.run"));
+      an.className = "omp-btn";
+      an.addEventListener("click", () => void this.#analyse(`/api/v1/freezes/${encodeURIComponent(m.id)}/analysis`));
+      row.append(an);
       const del = el("button", "", t("fr.delete"));
       del.className = "omp-btn";
       del.addEventListener("click", async () => {
