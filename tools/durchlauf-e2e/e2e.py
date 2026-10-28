@@ -264,6 +264,22 @@ def run(wf, ch):
             rec = n
     if rec:
         check("Recorder online", True, rec["label"])
+        # Direkt nach dem Workflow-Start ist der Recorder noch nicht an den Mischer angebunden
+        # ("keine Quelle verbunden"): ein Take in dieser Zeit ergibt keine bzw. eine schwarze Aufnahme.
+        # Bereitschaft per Probe-Aufnahme abwarten (UMSETZUNG.md Kap. 74, Kaltstart-Befund).
+        def recorder_ready():
+            try:
+                method(rec["id"], "record.start", {"fileName": "durchlauf_probe.mxf", "overwrite": True})
+            except RuntimeError:
+                return False
+            method(rec["id"], "record.stop", {})
+            return True
+        wait_for(recorder_ready, 60, "Recorder mit Quelle verbunden", 2)
+        time.sleep(8)  # Anbindung und Zustandswiederherstellung des Mischers abklingen lassen
+        try:
+            os.remove(os.path.join(os.path.dirname(os.path.normpath(media)), "durchlauf_probe.mxf"))
+        except OSError:
+            pass
         rec_name = "durchlauf_record.mxf"
         rp = os.path.join(os.path.dirname(os.path.normpath(media)), rec_name)  # der Recorder schreibt nach data/
         for q in (rp, os.path.join(media, rec_name)):
