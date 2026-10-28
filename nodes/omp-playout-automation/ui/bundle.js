@@ -51,6 +51,44 @@ const T = (() => {
       "sec.playlist": "Playlist",
       "sec.carts": "Assets / Carts",
       "sec.trigger": "Channel-Trigger",
+      "sec.foreign": "Fremdliste / Mitlauf",
+      "fo.import": "Liste importieren …",
+      "fo.rescan": "Jetzt prüfen",
+      "fo.takeover": "Havarie ziehen …",
+      "fo.takeoverAsk": "Die Schattenliste ab dem Event nach „{title}“ in die Playlist übernehmen? Die aktuelle Playlist wird ersetzt.",
+      "fo.takeoverGo": "Übernehmen",
+      "fo.off": "Mitlauf ist aus. Ordner und Kanalkennung eintragen und aktivieren:",
+      "fo.dir": "Ordner (Watchfolder)",
+      "fo.key": "Kanalkennung (z. B. 5000)",
+      "fo.enable": "Speichern & aktivieren",
+      "fo.disable": "Ausschalten",
+      "fo.waiting": "Wartet auf eine vollständige Datei in {dir}",
+      "fo.file": "Datei",
+      "fo.age": "Alter",
+      "fo.stale": "⚠ VERALTET — Fremdsystem liefert keine neuen Listen",
+      "fo.fresh": "aktuell",
+      "fo.onair": "Läuft laut Liste",
+      "fo.events": "Events",
+      "fo.changes": "Letzte Änderung",
+      "fo.rejected": "Übersprungen",
+      "fo.approx": "Angenähert",
+      "fo.dropped": "Nicht übernommen",
+      "fo.none": "keines",
+      "fo.pick": "Sendeliste wählen (.mpl)",
+      "fo.preview": "Vorschau des Imports",
+      "fo.items": "{n} Sendeevents",
+      "fo.skippedDone": "{n} bereits gelaufen (ausgelassen)",
+      "fo.append": "Anhängen",
+      "fo.replace": "Playlist ersetzen",
+      "fo.cancel": "Abbrechen",
+      "fo.done": "{n} Events übernommen",
+      "fo.errors": "{n} Fehler: {first}",
+      "tgt.release": "Sendefreigabe verlangen (QC grün oder manuell freigegeben)",
+      "ed.release": "Sendefreigabe",
+      "ed.releaseDefault": "wie Channel",
+      "ed.releaseYes": "verlangt",
+      "ed.releaseNo": "nicht verlangt",
+      "av.releaseTip": "Freigabe verlangt — {state}",
       "tgt.a": "Kanal A",
       "tgt.b": "Kanal B",
       "tgt.mixer": "Mixer",
@@ -340,6 +378,44 @@ const T = (() => {
       "sec.playlist": "Playlist",
       "sec.carts": "Assets / carts",
       "sec.trigger": "Channel trigger",
+      "sec.foreign": "Foreign list / follow",
+      "fo.import": "Import list …",
+      "fo.rescan": "Check now",
+      "fo.takeover": "Take over …",
+      "fo.takeoverAsk": "Copy the shadow list from the event after “{title}” into the playlist? The current playlist is replaced.",
+      "fo.takeoverGo": "Take over",
+      "fo.off": "Follow mode is off. Enter folder and channel key and enable:",
+      "fo.dir": "Folder (watch folder)",
+      "fo.key": "Channel key (e.g. 5000)",
+      "fo.enable": "Save & enable",
+      "fo.disable": "Disable",
+      "fo.waiting": "Waiting for a complete file in {dir}",
+      "fo.file": "File",
+      "fo.age": "Age",
+      "fo.stale": "⚠ STALE — the other system delivers no new lists",
+      "fo.fresh": "current",
+      "fo.onair": "On air per list",
+      "fo.events": "Events",
+      "fo.changes": "Last change",
+      "fo.rejected": "Skipped",
+      "fo.approx": "Approximated",
+      "fo.dropped": "Not imported",
+      "fo.none": "none",
+      "fo.pick": "Choose playlist (.mpl)",
+      "fo.preview": "Import preview",
+      "fo.items": "{n} playout events",
+      "fo.skippedDone": "{n} already played (left out)",
+      "fo.append": "Append",
+      "fo.replace": "Replace playlist",
+      "fo.cancel": "Cancel",
+      "fo.done": "{n} events imported",
+      "fo.errors": "{n} errors: {first}",
+      "tgt.release": "Require release (QC green or released manually)",
+      "ed.release": "Release for air",
+      "ed.releaseDefault": "as channel",
+      "ed.releaseYes": "required",
+      "ed.releaseNo": "not required",
+      "av.releaseTip": "Release required — {state}",
       "tgt.a": "Channel A",
       "tgt.b": "Channel B",
       "tgt.mixer": "Mixer",
@@ -983,7 +1059,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         h("label", {}, T("tgt.a"), selA), h("label", {}, T("tgt.b"), selB), h("label", {}, T("tgt.mixer"), selMix),
         h("label", {}, T("tgt.gfx"), selGfx), h("label", {}, T("tgt.audio"), selAud),
         h("label", {}, T("tgt.preflight"), h("input", { type: "number", min: "0", id: "preflightWin", onchange: (e) => setParam("preflightWindowMin", Number(e.target.value) || 0) })),
-        h("label", {}, T("tgt.filler"), h("input", { type: "text", id: "defaultFiller", onchange: (e) => setParam("defaultFiller", e.target.value.trim()) }))));
+        h("label", {}, T("tgt.filler"), h("input", { type: "text", id: "defaultFiller", onchange: (e) => setParam("defaultFiller", e.target.value.trim()) })),
+        h("label", { style: "flex-direction:row;align-items:center;gap:6px;grid-column:1/-1" }, h("input", { type: "checkbox", id: "requireRelease", onchange: (e) => setParam("requireRelease", e.target.checked) }), T("tgt.release"))));
     const fillTargets = (sel, labels, cur) => {
       const all = cur && !labels.includes(cur) ? [cur, ...labels] : labels;
       const key = JSON.stringify(all);
@@ -1168,7 +1245,92 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       h("summary", {}, T("sec.trigger")),
       h("div", { class: "body" }, h("div", { class: "ctrl" }, trEvent, trKind, trTarget, trItem, trAt, trLate, trSend), trLog));
 
-    shadow.append(h("style", {}, STYLE), head, nextFixEl, planWarnEl, banner, controlSec, playlistSec, cartsSec, triggerSec, adSec, targetsSec);
+    // ---- Fremdliste / Mitlauf (Kapitel 74) --------------------------------
+    const pluginCall = async (pluginId, patch) => {
+      const list = await fetch(`/api/v1/nodes/${nodeId}/plugins`).then((r) => (r.ok ? r.json() : []));
+      const cur = (Array.isArray(list) ? list : list.plugins || []).find((p) => p.id === pluginId);
+      const body = { ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}), config: { ...(cur?.config || {}), ...(patch.config || {}) } };
+      return fetch(`/api/v1/nodes/${nodeId}/plugins/${pluginId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    };
+    const fmtAge = (ms) => (ms === null || ms === undefined ? "?" : ms < 90000 ? `${Math.round(ms / 1000)} s` : ms < 5400000 ? `${Math.round(ms / 60000)} min` : `${(ms / 3600000).toFixed(1)} h`);
+    const groupList = (title, g) => h("div", { class: "hint" }, `${title}: ${g?.count ? g.count : T("fo.none")}`,
+      ...(g?.groups || []).slice(0, 6).map((x) => h("div", { style: "margin-left:10px" }, `${x.count}× ${x.reason}`)));
+    const foBody = h("div", { class: "body" });
+    const foreignSec = h("details", { class: "sec" }, h("summary", {}, T("sec.foreign")), foBody);
+    let foKey = "";
+    function renderForeign(st) {
+      if (!st || !Array.isArray(st.adapters)) return;
+      const key = JSON.stringify(st);
+      if (key === foKey || foBody.contains(shadow.activeElement)) return;
+      foKey = key;
+      const kids = [];
+      for (const a of st.adapters) {
+        const row = h("div", { style: "border-bottom:1px solid var(--bd);padding:6px 0" });
+        row.append(h("div", { style: "font-weight:600" }, a.label, " ", h("span", { class: "chip" }, a.enabled ? "an" : "aus")));
+        if (!a.enabled) {
+          const dir = h("input", { type: "text", placeholder: T("fo.dir"), value: a.watchDir || "", style: "flex:1;min-width:200px" });
+          const ck = h("input", { type: "text", placeholder: T("fo.key"), value: a.channelKey || "", style: "width:150px" });
+          row.append(h("div", { class: "hint" }, T("fo.off")), h("div", { class: "ctrl" }, dir, ck, h("button", {
+            onclick: async () => { await pluginCall(a.pluginId, { enabled: true, config: { watchDir: dir.value.trim(), channelKey: ck.value.trim() } }); foKey = ""; poll(); },
+          }, T("fo.enable"))));
+        } else if (!a.file) {
+          row.append(h("div", { class: "hint" }, a.error || T("fo.waiting", { dir: a.watchDir || "?" })));
+          for (const r of a.rejected || []) row.append(h("div", { class: "hint", style: "margin-left:10px" }, `${T("fo.rejected")}: ${r}`));
+        } else {
+          row.append(
+            h("div", { class: "hint" }, `${T("fo.file")}: ${a.file} · ${a.channel || ""} · ${T("fo.age")} ${fmtAge(a.ageMs)} · `,
+              h("b", { style: a.stale ? "color:#f66" : "color:#7c7" }, a.stale ? T("fo.stale") : T("fo.fresh"))),
+            h("div", { class: "hint" }, `${T("fo.onair")}: ${a.onAir ? a.onAir.title : "?"} · ${T("fo.events")}: ${a.events} · ${T("fo.changes")}: +${a.diff.added} −${a.diff.removed} ~${a.diff.changed}`),
+            ...(a.error ? [h("div", { class: "hint", style: "color:#f66" }, a.error)] : []),
+            ...(a.rejected || []).map((r) => h("div", { class: "hint", style: "margin-left:10px" }, `${T("fo.rejected")}: ${r}`)),
+            groupList(T("fo.approx"), a.report?.approximated), groupList(T("fo.dropped"), a.report?.dropped));
+        }
+        if (a.enabled) {
+          row.append(h("div", { class: "ctrl", style: "margin-top:6px" },
+            h("button", { onclick: () => act("foreign.rescan", {}) }, T("fo.rescan")),
+            a.file ? h("button", { class: "danger", onclick: async () => {
+              if (!(await confirmDialog(T("fo.takeoverAsk", { title: a.onAir ? a.onAir.title : "?" }), T("fo.takeoverGo")))) return;
+              const err = await tryCall("foreign.takeover", { adapter: a.id });
+              showBanner(err || T("fo.done", { n: "✓" }), !err);
+              poll();
+            } }, T("fo.takeover")) : null,
+            h("button", { onclick: async () => { await pluginCall(a.pluginId, { enabled: false }); foKey = ""; poll(); } }, T("fo.disable"))));
+        }
+        kids.push(row);
+      }
+      const pick = h("input", { type: "file", accept: ".mpl,.xml,text/xml", style: "display:none", onchange: async (e) => {
+        const f = e.target.files[0];
+        e.target.value = "";
+        if (f) openImport(await f.text());
+      } });
+      kids.push(h("div", { class: "ctrl", style: "margin-top:6px" }, pick, h("button", { onclick: () => pick.click() }, T("fo.import"))));
+      foBody.replaceChildren(...kids);
+    }
+    async function openImport(text) {
+      const err = await tryCall("foreign.import", { text, mode: "preview" });
+      if (err) { showBanner(err); return; }
+      const rep = (await getParam("foreignStatus"))?.import || {};
+      const close = () => ov.remove();
+      const run = async (mode) => {
+        const e2 = await tryCall("foreign.import", { text, mode });
+        close();
+        const r2 = (await getParam("foreignStatus"))?.import || {};
+        showBanner(e2 || (r2.errors?.length ? T("fo.errors", { n: r2.errors.length, first: r2.errors[0] }) : T("fo.done", { n: r2.applied ?? 0 })), !e2 && !r2.errors?.length);
+        poll();
+      };
+      const ov = h("div", { class: "overlay" }, h("div", { class: "modal", style: "width:min(620px,96vw)" },
+        h("header", {}, T("fo.preview"), h("span", {}, `${rep.channel || ""} · ${rep.format || ""}`)),
+        h("div", { class: "content", style: "min-height:120px" },
+          h("div", {}, T("fo.items", { n: rep.items ?? 0 }), " · ", T("fo.skippedDone", { n: rep.skippedDone ?? 0 })),
+          groupList(T("fo.approx"), rep.approximated), groupList(T("fo.dropped"), rep.dropped),
+          ...(rep.warnings || []).slice(0, 5).map((w) => h("div", { class: "hint" }, w))),
+        h("footer", {}, h("button", { onclick: close }, T("fo.cancel")),
+          h("button", { onclick: () => run("append") }, T("fo.append")),
+          h("button", { class: "danger", onclick: () => run("replace") }, T("fo.replace")))));
+      shadow.append(ov);
+    }
+
+    shadow.append(h("style", {}, STYLE), head, nextFixEl, planWarnEl, banner, controlSec, playlistSec, cartsSec, foreignSec, triggerSec, adSec, targetsSec);
     plMain.style.setProperty("--cols", "");
     applyCols();
     // Spalten-Template an die Zeilen weitergeben
@@ -1390,6 +1552,11 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           avBad = it.readiness === "NOT_READY" && st !== "TRANSFERRING";
           avTip = T("assetTip", { id: it.asset.assetId, ready: it.readiness || "UNKNOWN", st: st ? ` (${st}${pct})` : "", detail: it.readinessDetail ? `\n${it.readinessDetail}` : "", onMissing: it.onMissing || "HOLD" });
         }
+        if (it.releaseRequired && it.release) {
+          const blocked = it.release.blocked;
+          if (blocked) { avText = "🔒"; avBad = true; avTip = T("av.releaseTip", { state: blocked }); }
+          else avTip += `\n${T("av.releaseTip", { state: it.release.reason || "✓" })}`;
+        }
         r.av.textContent = avText;
         r.av.className = `av${avBad ? " bad" : ""}`;
         r.av.title = avTip;
@@ -1571,6 +1738,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         pattern: item?.pattern || "smpte", file: item?.file || "", senderId: item?.senderId || "",
         tags: item?.sourceSelector ? (item.sourceSelector.required || []).join(", ") : "", pref: item?.sourceSelector ? (item.sourceSelector.preferred || []).join(", ") : "",
         jumpTarget: item?.jumpTarget || "", assetId: item?.asset?.assetId || "", onMissing: item?.onMissing || "HOLD", fallbackFile: item?.fallbackFile || "",
+        requireRelease: item?.requireRelease === true ? "true" : item?.requireRelease === false ? "false" : "",
         durationMs: item ? item.durationMs : 5000,
         startType: item?.startType || "sequence",
         startLocal: item?.startAt ? new Date(item.startAt).toLocaleString("sv-SE") : item?.fixtimeHms || "",
@@ -1596,6 +1764,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           case "file": case "image": {
             const files = d.file && !mediaLibrary.includes(d.file) ? [d.file, ...mediaLibrary] : mediaLibrary;
             f.append(...field(T("ed.file"), bindSelect(d, "file", [["", T("ed.chooseFile")], ...files.map((x) => [x, x])])));
+            if (d.kind === "file") f.append(...field(T("ed.release"), bindSelect(d, "requireRelease", [["", T("ed.releaseDefault")], ["true", T("ed.releaseYes")], ["false", T("ed.releaseNo")]])));
             break;
           }
           case "live": {
@@ -1848,6 +2017,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           if (d.audioCap) intent.capability = d.audioCap; else delete intent.capability;
           p.audio = intent;
         }
+        if (d.kind === "file" && d.requireRelease !== (item?.requireRelease === true ? "true" : item?.requireRelease === false ? "false" : "")) {
+          p.requireRelease = d.requireRelease === "" ? null : d.requireRelease === "true";
+        }
         if (d.kind === "asset") { p.onMissing = d.onMissing; p.fallbackFile = d.onMissing === "FALLBACK" ? d.fallbackFile.trim() : ""; }
         return p;
       };
@@ -2026,7 +2198,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (dragging) return;
       const names = ["items", "currentItemId", "cuedItemId", "mode", "connected", "playheadPositionMs", "currentDurationMs", "assets", "activeCartId",
         "availableNodes", "targetPlayerALabel", "targetPlayerBLabel", "targetMixerLabel", "targetGraphicsLabel", "targetAudioMixerLabel", "liveChannel", "mediaLibrary", "audioPlans", "audioGroups", "audioMappings",
-        "availableSources", "channelName", "persistence", "schedule", "childEvents", "triggerLog", "channelId", "preflightWindowMin", "defaultFiller", "adBreakEnabled", "adBreakTarget", "adBreakPreRollMs", "adBlocks"];
+        "availableSources", "channelName", "persistence", "schedule", "childEvents", "triggerLog", "channelId", "preflightWindowMin", "defaultFiller", "requireRelease", "foreignStatus", "adBreakEnabled", "adBreakTarget", "adBreakPreRollMs", "adBlocks"];
       const v = Object.fromEntries(await Promise.all(names.map(async (n) => [n, await getParam(n)])));
       if (dragging) return;
       items = v.items || [];
@@ -2116,6 +2288,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (ap && shadow.activeElement !== ap && v.adBreakPreRollMs !== undefined) ap.value = v.adBreakPreRollMs;
       const pw = shadow.getElementById("preflightWin");
       if (pw && shadow.activeElement !== pw && v.preflightWindowMin !== undefined) pw.value = v.preflightWindowMin;
+      const rr = shadow.getElementById("requireRelease");
+      if (rr && shadow.activeElement !== rr && v.requireRelease !== undefined) rr.checked = !!v.requireRelease;
+      renderForeign(v.foreignStatus);
       const df = shadow.getElementById("defaultFiller");
       if (df && shadow.activeElement !== df && v.defaultFiller !== undefined) df.value = v.defaultFiller;
 
