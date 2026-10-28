@@ -760,6 +760,8 @@ struct AutomationState {
     require_release_default: bool,
     /// Kapitel 74.3: zuletzt erfragte Freigabe je Item (Release-Schleife).
     release: HashMap<String, readiness::ReleaseView>,
+    /// Cue hält den Standby-Player am Preroll an (spart die Dekodierung bis zum Take, der ohnehin neu lädt). Standard an.
+    cue_hold: bool,
     /// Kapitel 6 Teil 5 (`graphics_loop`-Doku): Ziel-`omp-ograf` für
     /// Grafik-Kind-Ereignisse — dasselbe dynamische Label-Muster wie
     /// `target_player_label`/`target_mixer_label`, aber bewusst
@@ -848,6 +850,7 @@ impl AutomationState {
             default_filler: String::new(),
             require_release_default: std::env::var("OMP_REQUIRE_RELEASE").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
             release: HashMap::new(),
+            cue_hold: !std::env::var("OMP_PLAYOUT_CUE_HOLD").is_ok_and(|v| v == "0" || v.eq_ignore_ascii_case("false")),
             target_graphics_label: graphics_label,
             target_audio_mixer_label: String::new(),
             audio_mixer_node_id: None,
@@ -1865,7 +1868,9 @@ impl AutomationStore {
         let (standby_node_id, standby_label) = standby_target(&state)?;
         // Kapitel 27 / P8: auch das Cue folgt der Ausfallrichtlinie (Vorschau des Ersatzes bzw. „gehalten“).
         let meta = if matches!(meta.media, ItemMedia::File { .. }) { apply_media_policy(self, &state, &standby_label, &meta, false)? } else { meta };
-        load_onto_channel(self, &standby_node_id, &meta, false)?;
+        // Mit Haltepunkt: der Standby-Player baut bis zum Preroll auf und wartet (kein Dauer-Dekodieren bis zum Take).
+        let hold = state.cue_hold && take_at_enabled() && matches!(meta.media, ItemMedia::File { .. } | ItemMedia::TestPattern { .. } | ItemMedia::Image { .. });
+        load_onto_channel(self, &standby_node_id, &meta, hold)?;
 
         state.playlist.cue(index).map_err(|e| e.to_string())?;
         Ok(())
@@ -3659,6 +3664,7 @@ impl ParamStore for AutomationStore {
             },
             ParamSpec { name: "defaultFiller".to_string(), kind: ParamType::String, unit: None, range: None, readonly: false },
             ParamSpec { name: "requireRelease".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: false },
+            ParamSpec { name: "cueHold".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: false },
             // Kapitel 27 / P7: Protokoll der letzten Channel-Trigger (JSON-Array, neueste zuerst).
             ParamSpec { name: "triggerLog".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             // Kapitel 27 / P1b: Anbindung an die Domäne `playout` (s.
@@ -4147,6 +4153,7 @@ impl ParamStore for AutomationStore {
             "preflightWindowMin" => Some(serde_json::json!(state.preflight_window_min)),
             "defaultFiller" => Some(serde_json::json!(state.default_filler)),
             "requireRelease" => Some(serde_json::json!(state.require_release_default)),
+            "cueHold" => Some(serde_json::json!(state.cue_hold)),
             "triggerLog" => Some(Value::Array(self.trigger_log.lock().expect("lock poisoned").iter().cloned().collect())),
             "schedule" => Some(schedule_json(&state, chrono::Utc::now().timestamp_millis())),
             "childEvents" => Some(child_events_json(&state)),
@@ -4270,6 +4277,10 @@ impl ParamStore for AutomationStore {
             }
             "defaultFiller" => {
                 state.default_filler = value.as_str().unwrap_or_default().trim().to_string();
+                Ok(())
+            }
+            "cueHold" => {
+                state.cue_hold = value.as_bool().ok_or(SetError::Unknown)?;
                 Ok(())
             }
             "requireRelease" => {

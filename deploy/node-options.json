@@ -1505,6 +1505,7 @@
       "description": "Zusätzlich zu stderr alle strukturierten Log-Zeilen (channelId, eventId, childEventId, sourceId, correlationId, triggerId) in diese Datei anhängen — durchsuchbar mit grep/jq. Leer = aus.",
       "group": "Betrieb"
     },
+    {"key": "OMP_PLAYOUT_CUE_HOLD", "i18n": {"en": {"label": "Hold cued event at preroll", "description": "A cued event is prepared on the standby player and paused at the first frame (saves decoding until the take). 0 = old behaviour: the standby player plays on while waiting. Default on (changeable at runtime in the panel).", "group": "Operation"}}, "label": "Gecuetes Event am Preroll anhalten", "type": "enum", "description": "Ein gecuetes Event wird am Standby-Player vorbereitet und am ersten Bild angehalten (spart die Dekodierung bis zum Take). 0 = altes Verhalten: der Standby-Player läuft während des Wartens weiter. Standard an (zur Laufzeit im Panel änderbar).", "group": "Betrieb", "default": "1", "choices": [{"value": "0"}, {"value": "1"}]},
     {
       "key": "OMP_REQUIRE_RELEASE",
       "i18n": { "en": {"label": "Require release before air", "description": "Standard for the channel: a file event only goes to air when intake QC is green or the file was released manually (per event overridable). Otherwise the event's failure policy applies. Default off.", "group": "Operation"} },
