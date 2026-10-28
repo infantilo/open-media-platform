@@ -943,6 +943,12 @@ Diese Funktionen gehören zum Node **Playout-Automation** (Panel-Abschnitt **Fre
 
 **Sendefreigabe.** *Sendefreigabe verlangen* (Ziele; Node-Option `OMP_REQUIRE_RELEASE`) bzw. je Event *Sendefreigabe* (Event-Editor, Datei): Das Event geht nur auf Sendung, wenn die Datei im Eingang (5c) **QC grün** hat **oder manuell freigegeben** wurde; eine Ablehnung im Eingang gilt immer. Gesperrte Events zeigen 🔒 mit Begründung, werden nicht gecued/getaket, und es greift die Ausfallrichtlinie des Events (halten, überspringen, Ersatzdatei …). Ist der Eingang nicht erreichbar, gilt die Datei als **nicht freigegeben**. Eine Datei, die noch nicht angekommen ist, bleibt als nicht verfügbar markiert, bis sie im Medienverzeichnis liegt.
 
+**Mitlauf (Havarie).** Der Mitlauf ist vorbereitet, aber vertagt: er wird erst eingesetzt, wenn das POC dafür groß genug ist (Plugin standardmäßig aus).
+
+**Secondary Record und Überschreibschutz.** `record.start` des Recorders hat das Argument `overwrite` (Standard **aus**): Liegt die Medien-ID schon als Clip vor (im Aufnahmeverzeichnis oder im Verzeichnis der Option *Clip-Verzeichnis*), wird die Aufnahme abgelehnt. Mit `overwrite=true` wird bewusst überschrieben.
+
+**Durchlauf-Test.** `python3 tools/durchlauf-e2e/e2e.py` legt dauerhaft den Workflow „Durchlauf Playout“, den Channel „Durchlauf“ und den Prozess „Durchlauf Eingang“ an (nichts wird aufgeräumt, zum Weitertesten im Reiter *Workflows* starten) und fährt den ganzen Weg von der neuen Datei bis zum Vergleich.
+
 **Aufnahme gegen Original vergleichen.** Im Eingang vergleicht `POST /api/v1/review/items/{id}/compare` (`recordedAssetId`, optional `options`) die Aufnahme eines Events mit dem Original: Dauer (±1 Bild, Aufnahme-Vorlauf `offsetSec` wird abgezogen), Bildrate (exakt), Auflösung/Codec (Hinweis), Audio und Bildqualität (SSIM ≥ 0,98 auf einer 10-s-Stichprobe, kleine Auflösung, ein Faden).
 
 ## 6. Alarme

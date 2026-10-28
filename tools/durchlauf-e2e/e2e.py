@@ -15,12 +15,18 @@ ap.add_argument("--base", default="http://localhost:8000")
 ap.add_argument("--user", default="admin")
 ap.add_argument("--password", default="adminpass123")
 ap.add_argument("--phase", default="all", choices=["setup", "run", "all"])
+ap.add_argument("--keep-running", action="store_true", help="Workflow nach dem Lauf weiterlaufen lassen (Standard: stoppen, spart CPU; Definition bleibt)")
 ap.add_argument("--media", default="data/media", help="Medienverzeichnis (= Importverzeichnis des Eingangs)")
 args = ap.parse_args()
 BASE = args.base.rstrip("/")
 TOKEN, FAILS = "", []
 WF_NAME, CH_NAME, PROC_NAME = "Durchlauf Playout", "Durchlauf", "Durchlauf Eingang"
 NEW_FILE = "durchlauf_neu.mxf"
+# Der Recorder hat zwei Eingänge: ohne Angabe würde jede Verbindung den ersten nehmen (dann fehlt das Bild).
+CONNECTIONS = [
+    {"fromRole": "Bildmischer", "fromSender": "PGM", "toRole": "Recorder", "toReceiver": "Video"},
+    {"fromRole": "Tonmischer", "fromSender": "Tonmischer Sender 1", "toRole": "Recorder", "toReceiver": "Audio"},
+]
 
 
 def call(method, path, body=None):
@@ -114,7 +120,7 @@ def setup():
                       {"name": "Bildmischer", "nodeType": "omp-video-mixer-me"}, {"name": "Tonmischer", "nodeType": "omp-audio-mixer"},
                       {"name": "Recorder", "nodeType": "omp-recorder"},
                       {"name": "Playout-Automation", "nodeType": "omp-playout-automation"}],
-            "connections": [{"fromRole": "Bildmischer", "toRole": "Recorder"}, {"fromRole": "Tonmischer", "toRole": "Recorder"}],
+            "connections": CONNECTIONS,
             "settings": {"programFormat": "720p25"}}})
         print("  Workflow angelegt:", wf["id"])
     else:
@@ -128,6 +134,14 @@ def setup():
             d["connections"].append({"fromRole": "Tonmischer", "toRole": "Recorder"})
             wf = call("PUT", f"/api/v1/workflows/{wf['id']}", {"name": wf["name"], "definition": d})
             print("  Workflow um Tonmischer ergänzt")
+        if wf["definition"].get("connections") != CONNECTIONS:  # Verbindungen mit ausdrücklichen Ein-/Ausgängen nachziehen
+            if wf.get("status") not in ("stopped", None):
+                call("POST", f"/api/v1/workflows/{wf['id']}/stop")
+                time.sleep(6)
+            d = wf["definition"]
+            d["connections"] = CONNECTIONS
+            wf = call("PUT", f"/api/v1/workflows/{wf['id']}", {"name": wf["name"], "definition": d})
+            print("  Workflow-Verbindungen aktualisiert (Video→Video, Ton→Audio)")
         print("  Workflow vorhanden:", wf["id"])
     chs = call("GET", "/api/v1/playout/channels")
     ch = next((c for c in chs if c["name"] == CH_NAME), None)
@@ -268,6 +282,16 @@ def run(wf, ch):
         rp = os.path.join(os.path.dirname(os.path.normpath(media)), "durchlauf_record.mxf")
         wait_for(lambda: os.path.exists(rp) and os.path.getsize(rp) > 0, 30, "Aufnahmedatei", 2)
         time.sleep(3)  # Recorder hat gestoppt und fertig geschrieben
+        # Überschreibschutz (Standard aus): liegt die Medien-ID schon als Clip vor, lehnt der Recorder ab.
+        refused = None
+        try:
+            method(rec["id"], "record.start", {"fileName": "durchlauf_record.mxf"})
+            method(rec["id"], "record.stop", {})
+        except RuntimeError as e:
+            refused = str(e)
+        check("Secondary Record überschreibt vorhandenen Clip nicht (overwrite aus)", refused is not None and "bereits als Clip" in refused, refused or "angenommen")
+        size_before = os.path.getsize(rp)
+        check("vorhandene Aufnahme unverändert", size_before > 0)
         os.replace(rp, os.path.join(media, "durchlauf_record.mxf"))  # ins Importverzeichnis des Eingangs
         imp2 = call("POST", "/api/v1/review/import", {"path": "durchlauf_record.mxf", "title": "Durchlauf Aufnahme"})
         aid2 = (imp2.get("item") or imp2).get("assetId") or imp2.get("assetId")
@@ -275,6 +299,9 @@ def run(wf, ch):
         for c in rep["checks"]:
             print(f"  {c['status']:7} {c['label']}: {c.get('original','')} ↔ {c.get('recorded','')}  {c['message']}")
         check("Vergleich erstellt", rep["overall"] in ("pass", "warning", "fail"), rep["overall"])
+    if not args.keep_running:
+        call("POST", f"/api/v1/workflows/{wf['id']}/stop")
+        print("  Workflow gestoppt (Definition, Channel und Prozess bleiben; zum Weitertesten im Reiter Workflows starten)")
     print("\nErgebnis:", "ALLES BESTANDEN" if not FAILS else f"{len(FAILS)} Prüfung(en) fehlgeschlagen: {FAILS}")
     return not FAILS
 
