@@ -278,6 +278,10 @@ const T = (() => {
       "ed.chooseTemplate": "— Vorlage wählen —",
       "ed.tplFields": "Felder der Vorlage „{name}“ ({n}); * = Pflichtfeld",
       "ed.noTemplates": "Keine Vorlagen vom Ziel-Grafikknoten gelesen (Ziel „Grafik“ prüfen) — ID von Hand eintragen.",
+      "kv.text": "Text", "kv.number": "Zahl", "kv.bool": "Ja/Nein", "kv.list": "Liste", "kv.object": "Gruppe",
+      "kv.type": "Typ", "kv.remove": "Entfernen", "kv.addItem": "＋ Eintrag", "kv.addField": "＋ Feld", "kv.name": "Name", "kv.field": "Feld",
+      "kv.suggest": "Vorschläge:", "ed.dataFields": "Daten", "ed.paramFields": "Parameter", "ed.bodyFields": "Inhalt (Felder)",
+      "ed.methodHint": "Methoden und Argumente stammen vom Ziel-Node; freie Eingabe bleibt möglich.",
       "ed.dataJson": "Daten (JSON)",
       "ed.targetNode": "Ziel-Node",
       "ed.nodeLabelPh": "Node-Label",
@@ -610,6 +614,10 @@ const T = (() => {
       "ed.chooseTemplate": "— choose template —",
       "ed.tplFields": "Fields of template \"{name}\" ({n}); * = required",
       "ed.noTemplates": "No templates read from the target graphics node (check the \"Graphics\" target) — enter the ID by hand.",
+      "kv.text": "Text", "kv.number": "Number", "kv.bool": "Yes/No", "kv.list": "List", "kv.object": "Group",
+      "kv.type": "Type", "kv.remove": "Remove", "kv.addItem": "＋ Item", "kv.addField": "＋ Field", "kv.name": "Name", "kv.field": "Field",
+      "kv.suggest": "Suggestions:", "ed.dataFields": "Data", "ed.paramFields": "Parameters", "ed.bodyFields": "Content (fields)",
+      "ed.methodHint": "Methods and arguments come from the target node; free input stays possible.",
       "ed.dataJson": "Data (JSON)",
       "ed.targetNode": "Target node",
       "ed.nodeLabelPh": "Node label",
@@ -744,6 +752,112 @@ function formatLocalStart(iso, now = new Date()) {
   return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}. ${hms}`;
 }
 
+
+// ---------------------------------------------------------------------------
+// Strukturierte Werte-Editoren (statt JSON-Text): Felder mit Name/Typ/Wert, Listen, verschachtelte Objekte.
+// Sie schreiben direkt in das übergebene Objekt/Array und kennen JSON nur als Datenformat, nie als Eingabe.
+// ---------------------------------------------------------------------------
+const KV_KINDS = ["text", "number", "bool", "list", "object"];
+function kvKindOf(v) {
+  if (Array.isArray(v)) return "list";
+  if (v !== null && typeof v === "object") return "object";
+  if (typeof v === "number") return "number";
+  if (typeof v === "boolean") return "bool";
+  return "text";
+}
+function kvDefault(kind) {
+  return kind === "number" ? 0 : kind === "bool" ? false : kind === "list" ? [] : kind === "object" ? {} : "";
+}
+/** Wert beim Typwechsel sinnvoll mitnehmen (z. B. Text "12" → Zahl 12), sonst Standardwert. */
+function kvConvert(v, kind) {
+  if (kind === "number") { const n = Number(v); return v !== "" && v !== null && v !== undefined && Number.isFinite(n) ? n : 0; }
+  if (kind === "bool") return v === true || v === "true";
+  if (kind === "text") return v === null || v === undefined || typeof v === "object" ? "" : String(v);
+  return kvDefault(kind);
+}
+function kvKindLabel(kind) { return T(`kv.${kind}`); }
+
+/** Editor für EINEN Wert `holder[key]` passend zu seinem Typ; `onChange` meldet jede Änderung. */
+function kvValueEditor(holder, key, onChange, opts = {}) {
+  const kind = opts.kind || kvKindOf(holder[key]);
+  const changed = () => { if (onChange) onChange(); };
+  if (kind === "number") {
+    return h("input", { type: "number", step: "any", value: holder[key] ?? 0, oninput: (e) => { if (e.target.value !== "") { holder[key] = Number(e.target.value); changed(); } } });
+  }
+  if (kind === "bool") {
+    const c = h("input", { type: "checkbox", onchange: (e) => { holder[key] = e.target.checked; changed(); } });
+    c.checked = !!holder[key];
+    return c;
+  }
+  if (kind === "list") {
+    if (!Array.isArray(holder[key])) holder[key] = [];
+    return kvListEditor(holder[key], changed, opts);
+  }
+  if (kind === "object") {
+    if (holder[key] === null || typeof holder[key] !== "object" || Array.isArray(holder[key])) holder[key] = {};
+    return kvObjectEditor(holder[key], changed, opts);
+  }
+  return h("input", { type: "text", value: holder[key] ?? "", oninput: (e) => { holder[key] = e.target.value; changed(); } });
+}
+
+/** Liste: eine Zeile je Eintrag (mit Typwahl) und „＋ Eintrag“. */
+function kvListEditor(arr, onChange, opts = {}) {
+  const box = h("div", { class: "kv-list" });
+  const draw = () => {
+    box.replaceChildren();
+    arr.forEach((_, i) => {
+      const row = h("div", { class: "kv-row" });
+      const kindSel = h("select", { title: T("kv.type"), onchange: (e) => { arr[i] = kvConvert(arr[i], e.target.value); if (onChange) onChange(); draw(); } },
+        ...KV_KINDS.map((k) => h("option", { value: k, ...(k === kvKindOf(arr[i]) ? { selected: "" } : {}) }, kvKindLabel(k))));
+      row.append(kindSel, h("div", { class: "kv-val" }, kvValueEditor(arr, i, onChange, opts)),
+        h("button", { type: "button", class: "kv-x", title: T("kv.remove"), onclick: () => { arr.splice(i, 1); if (onChange) onChange(); draw(); } }, "✕"));
+      box.append(row);
+    });
+    box.append(h("button", { type: "button", class: "kv-add", onclick: () => { arr.push(opts.itemKind ? kvDefault(opts.itemKind) : ""); if (onChange) onChange(); draw(); } }, T("kv.addItem")));
+  };
+  draw();
+  return box;
+}
+
+/** Objekt: eine Zeile je Feld (Name, Typ, Wert, ✕) und „＋ Feld“; `opts.suggest` = [{name, kind}] als Vorschläge zum Anklicken. */
+function kvObjectEditor(obj, onChange, opts = {}) {
+  const box = h("div", { class: "kv-obj" });
+  const draw = () => {
+    box.replaceChildren();
+    const sug = (opts.suggest || []).filter((x) => !(x.name in obj));
+    if (sug.length) {
+      box.append(h("div", { class: "kv-sug" }, h("span", { class: "hint" }, T("kv.suggest")),
+        ...sug.map((x) => h("button", { type: "button", class: "kv-chip", title: kvKindLabel(x.kind || "text"), onclick: () => { obj[x.name] = kvDefault(x.kind || "text"); if (onChange) onChange(); draw(); } }, `＋ ${x.name}`))));
+    }
+    for (const name of Object.keys(obj)) {
+      const row = h("div", { class: "kv-row" });
+      const nameIn = h("input", { type: "text", class: "kv-name", placeholder: T("kv.name"), value: name, onchange: (e) => {
+        const nn = e.target.value.trim();
+        if (!nn || nn === name || nn in obj) { e.target.value = name; return; }
+        const next = {};
+        for (const k of Object.keys(obj)) next[k === name ? nn : k] = obj[k];
+        for (const k of Object.keys(obj)) delete obj[k];
+        Object.assign(obj, next);
+        if (onChange) onChange();
+        draw();
+      } });
+      const kindSel = h("select", { title: T("kv.type"), onchange: (e) => { obj[name] = kvConvert(obj[name], e.target.value); if (onChange) onChange(); draw(); } },
+        ...KV_KINDS.map((k) => h("option", { value: k, ...(k === kvKindOf(obj[name]) ? { selected: "" } : {}) }, kvKindLabel(k))));
+      row.append(nameIn, kindSel, h("div", { class: "kv-val" }, kvValueEditor(obj, name, onChange, opts)),
+        h("button", { type: "button", class: "kv-x", title: T("kv.remove"), onclick: () => { delete obj[name]; if (onChange) onChange(); draw(); } }, "✕"));
+      box.append(row);
+    }
+    box.append(h("button", { type: "button", class: "kv-add", onclick: () => {
+      let n = 1;
+      while (`${T("kv.field")}${n}` in obj) n++;
+      obj[`${T("kv.field")}${n}`] = "";
+      if (onChange) onChange();
+      draw();
+    } }, T("kv.addField")));
+  };
+  draw();
+  return box;
+}
 
 // ---------------------------------------------------------------------------
 // Kleine DOM-Helfer
@@ -932,6 +1046,15 @@ const STYLE = `
   .form .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   .form input[type=text], .form input[type=number], .form select, .form textarea { width: 100%; }
   .form textarea { min-height: 54px; font-family: monospace; }
+  .kv-obj, .kv-list { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+  .kv-row { display: grid; grid-template-columns: minmax(70px, 1fr) 84px minmax(90px, 2fr) 24px; gap: 4px; align-items: start; }
+  .kv-list > .kv-row { grid-template-columns: 84px minmax(90px, 1fr) 24px; }
+  .kv-row .kv-val { min-width: 0; padding-left: 0; }
+  .kv-row .kv-val .kv-obj, .kv-row .kv-val .kv-list { border-left: 2px solid var(--bd); padding-left: 6px; }
+  .kv-x, .kv-add, .kv-chip { cursor: pointer; background: var(--bg3, transparent); border: 1px solid var(--bd); border-radius: 3px; }
+  .kv-add { align-self: flex-start; color: var(--acc); padding: 2px 8px; }
+  .kv-chip { padding: 1px 6px; font-size: 11px; margin: 0 3px 3px 0; }
+  .kv-sug { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
   .hint { color: var(--mut); font-size: 11px; grid-column: 1 / -1; }
   .kid-edit { display: grid; grid-template-columns: 210px 1fr; gap: 12px; }
   .kid-list { border: 1px solid var(--bd); border-radius: 4px; max-height: 340px; overflow: auto; }
@@ -1922,56 +2045,115 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         return box;
       };
 
-      // Editor zur Vorlage: ein Feld je Eintrag in schema.properties, schreibt direkt in k.data.
+      // Editor zur Vorlage: ein Feld je Eintrag in schema.properties, schreibt direkt in k.data. Listen und verschachtelte
+      // Objekte werden rekursiv nach dem Schema aufgebaut (ohne Schema: allgemeine Feld-/Listen-Editoren) — nie als JSON-Text.
+      const schemaDefault = (p) => {
+        if (!p) return "";
+        if (p.default !== undefined) return JSON.parse(JSON.stringify(p.default));
+        if (p.type === "object") {
+          const o = {};
+          for (const [n, q] of Object.entries(p.properties || {})) if (q && q.default !== undefined) o[n] = schemaDefault(q);
+          return o;
+        }
+        return p.type === "array" ? [] : p.type === "boolean" ? false : p.type === "integer" || p.type === "number" ? 0 : "";
+      };
+      const schemaControl = (p, holder, n, onChange) => {
+        p = p || {};
+        const changed = () => { if (onChange) onChange(); };
+        let ctl;
+        if (Array.isArray(p.enum)) {
+          ctl = bindSelect(holder, n, p.enum.map((e) => [String(e), String(e)]));
+          ctl.addEventListener("change", () => { holder[n] = p.type === "integer" || p.type === "number" ? Number(ctl.value) : ctl.value; changed(); });
+        } else if (p.type === "boolean") {
+          ctl = h("input", { type: "checkbox", onchange: (e) => { holder[n] = e.target.checked; changed(); } });
+          ctl.checked = !!holder[n];
+        } else if (p.type === "integer" || p.type === "number") {
+          ctl = h("input", { type: "number", step: p.type === "integer" ? "1" : "any", oninput: (e) => { if (e.target.value !== "") { holder[n] = Number(e.target.value); changed(); } } });
+          if (p.minimum !== undefined) ctl.min = p.minimum;
+          if (p.maximum !== undefined) ctl.max = p.maximum;
+          ctl.value = holder[n] ?? "";
+        } else if (p.type === "object") {
+          if (!holder[n] || typeof holder[n] !== "object" || Array.isArray(holder[n])) holder[n] = {};
+          ctl = p.properties ? schemaObject(p, holder[n], changed) : kvObjectEditor(holder[n], changed);
+        } else if (p.type === "array") {
+          if (!Array.isArray(holder[n])) holder[n] = [];
+          ctl = schemaList(p.items || {}, holder[n], changed);
+        } else {
+          const isColor = /color/i.test(p.gddType || "") && /^#[0-9a-fA-F]{6}$/.test(String(holder[n] ?? ""));
+          ctl = h("input", { type: isColor ? "color" : "text", oninput: (e) => { holder[n] = e.target.value; changed(); } });
+          if (p.maxLength) ctl.maxLength = p.maxLength;
+          ctl.value = holder[n] ?? "";
+        }
+        if (p.description) ctl.title = p.description;
+        return ctl;
+      };
+      const schemaObject = (p, obj, onChange) => {
+        const req = new Set(p.required || []);
+        const box = h("div", { class: "kv-obj" });
+        for (const [n, q] of Object.entries(p.properties || {})) {
+          if (obj[n] === undefined && q && q.default !== undefined) obj[n] = schemaDefault(q);
+          box.append(h("div", { class: "kv-sub" }, h("label", { class: "hint" }, (q && q.title || n) + (req.has(n) ? " *" : "")), schemaControl(q, obj, n, onChange)));
+        }
+        return box;
+      };
+      const schemaList = (itemSchema, arr, onChange) => {
+        const box = h("div", { class: "kv-list" });
+        const draw = () => {
+          box.replaceChildren();
+          arr.forEach((_, i) => {
+            box.append(h("div", { class: "kv-row", style: "grid-template-columns:minmax(90px,1fr) 24px" }, h("div", { class: "kv-val" }, schemaControl(itemSchema, arr, i, onChange)),
+              h("button", { type: "button", class: "kv-x", title: T("kv.remove"), onclick: () => { arr.splice(i, 1); if (onChange) onChange(); draw(); } }, "✕")));
+          });
+          box.append(h("button", { type: "button", class: "kv-add", onclick: () => { arr.push(schemaDefault(itemSchema)); if (onChange) onChange(); draw(); } }, T("kv.addItem")));
+        };
+        draw();
+        return box;
+      };
       const templateForm = (k, tpl, ctx) => {
         const props = tpl.schema.properties;
         const req = new Set(tpl.schema.required || []);
         if (!k.data || typeof k.data !== "object" || Array.isArray(k.data)) k.data = {};
-        for (const [n, p] of Object.entries(props)) if (k.data[n] === undefined && p && p.default !== undefined) k.data[n] = p.default;
+        for (const [n, p] of Object.entries(props)) if (k.data[n] === undefined && p && p.default !== undefined) k.data[n] = schemaDefault(p);
         const box = h("div", { class: "form tpl-form" });
         box.append(h("div", { class: "hint", text: T("ed.tplFields", { name: tpl.label || tpl.id, n: Object.keys(props).length }) }));
-        const set = (n, v) => { k.data[n] = v; };
         for (const [n, p] of Object.entries(props)) {
-          const label = (p.title || n) + (req.has(n) ? " *" : "");
-          const tip = p.description || "";
-          let ctl;
-          if (Array.isArray(p.enum)) {
-            ctl = bindSelect(k.data, n, p.enum.map((e) => [String(e), String(e)]));
-            ctl.addEventListener("change", () => { set(n, p.type === "integer" || p.type === "number" ? Number(ctl.value) : ctl.value); });
-          } else if (p.type === "boolean") {
-            ctl = h("input", { type: "checkbox", onchange: (e) => set(n, e.target.checked) });
-            ctl.checked = !!k.data[n];
-          } else if (p.type === "integer" || p.type === "number") {
-            ctl = h("input", { type: "number", step: p.type === "integer" ? "1" : "any", oninput: (e) => { if (e.target.value !== "") set(n, Number(e.target.value)); } });
-            if (p.minimum !== undefined) ctl.min = p.minimum;
-            if (p.maximum !== undefined) ctl.max = p.maximum;
-            ctl.value = k.data[n] ?? "";
-          } else if (p.type === "array" || p.type === "object") {
-            ctl = h("textarea", { oninput: (e) => { try { set(n, JSON.parse(e.target.value)); e.target.style.outline = ""; } catch { e.target.style.outline = "1px solid #e55"; } } });
-            ctl.value = JSON.stringify(k.data[n] ?? (p.type === "array" ? [] : {}));
-          } else {
-            const isColor = /color/i.test(p.gddType || "") && /^#[0-9a-fA-F]{6}$/.test(String(k.data[n] ?? ""));
-            ctl = h("input", { type: isColor ? "color" : "text", oninput: (e) => set(n, e.target.value) });
-            if (p.maxLength) ctl.maxLength = p.maxLength;
-            ctl.value = k.data[n] ?? "";
-          }
-          if (tip) ctl.title = tip;
-          box.append(...field(label, ctl));
+          box.append(...field((p.title || n) + (req.has(n) ? " *" : ""), schemaControl(p, k.data, n)));
         }
         return box;
       };
 
+      // Beschreibung (Methoden mit Argumenten) des Ziel-Nodes, einmal je Label geladen; bis dahin ohne Vorschläge.
+      const descCache = {};
+      let nodeIndex = null;
+      const loadDescriptor = (label, ctx) => {
+        if (label in descCache) return descCache[label];
+        descCache[label] = null;
+        (async () => {
+          try {
+            if (!nodeIndex) nodeIndex = await fetch("/api/v1/nodes").then((r) => (r.ok ? r.json() : []));
+            const n = nodeIndex.find((x) => x.label === label);
+            if (!n) return;
+            const r = await fetch(`/api/v1/nodes/${n.id}/descriptor`);
+            if (r.ok) { descCache[label] = await r.json(); if (ctx && ctx.redraw) ctx.redraw(); }
+          } catch { /* ohne Vorschläge weiter */ }
+        })();
+        return null;
+      };
       const kidForm = (k, ctx) => {
         const f = h("div", { class: "form" });
         const rt = item && childRuntime.find((x) => x.itemId === item.id && x.id === k.id);
         if (rt) f.append(h("div", { class: "hint" }, T("ed.runtime", { state: rt.state, error: rt.error ? ` — ${rt.error}` : "", attempt: rt.attempt > 1 ? T("ed.attempt", { n: rt.attempt }) : "" })));
         f.append(...field(T("ed.type"), bindSelect(k, "type", CHILD_TYPES, ctx.redraw)));
         const t = k.type;
-        // Parameter/Daten als JSON-Text, beim Speichern geparst
-        const jsonField = (label, key, ph) => {
-          const ta = h("textarea", { placeholder: ph || "{}", oninput: (e) => { k[`_${key}Text`] = e.target.value; } });
-          ta.value = k[`_${key}Text`] ?? (k[key] && Object.keys(k[key]).length ? JSON.stringify(k[key]) : "");
-          return field(label, ta);
+        // Daten/Parameter als strukturierte Felder (Name, Typ, Wert) direkt im Child; `suggest` = Argumente der gewählten Methode.
+        const objField = (label, key, suggest) => {
+          if (!k[key] || typeof k[key] !== "object" || Array.isArray(k[key])) k[key] = {};
+          return field(label, kvObjectEditor(k[key], null, { suggest }));
+        };
+        const methodArgs = (label, m) => {
+          const d = label && descCache[label];
+          const spec = d && (d.methods || []).find((x) => x.name === m);
+          return spec ? (spec.args || []).map((a) => ({ name: a.name, kind: a.type === "number" ? "number" : a.type === "boolean" ? "bool" : "text" })) : [];
         };
         if (["GRAPHIC", "LOGO", "CHANNEL_BRANDING"].includes(t)) {
           if (gfxTemplates.length) {
@@ -1990,17 +2172,29 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           const tpl = gfxTemplates.find((x) => x.id === k.templateId);
           const props = tpl && tpl.schema && tpl.schema.properties;
           if (props && Object.keys(props).length) f.append(templateForm(k, tpl, ctx));
-          else f.append(...jsonField(T("ed.dataJson"), "data", '{"name":"…"}'));
+          else f.append(...objField(T("ed.dataFields"), "data"));
         } else if (["NODE_COMMAND", "TRIGGER", "AUDIO", "VOICEOVER"].includes(t)) {
           const lbl = bindText(k, "target", { list: "pa-nodes", placeholder: T("ed.nodeLabelPh") });
+          lbl.addEventListener("change", () => ctx.redraw()); // Beschreibung des neuen Ziels laden → Methoden/Argumente vorschlagen
           f.append(...field(T("ed.targetNode"), lbl, h("datalist", { id: "pa-nodes" }, ...availableNodes.map((n) => h("option", { value: n })))));
-          f.append(...field(T("ed.method"), bindText(k, "method")));
-          f.append(...jsonField(T("ed.paramsJson"), "params"));
-          f.append(...field(T("ed.stopMethod"), bindText(k, "stopMethod", { placeholder: T("ed.stopMethodPh") })));
-          f.append(...jsonField(T("ed.stopParams"), "stopParams"));
+          const d = k.target ? loadDescriptor(k.target, ctx) : null;
+          const names = d ? (d.methods || []).map((m) => m.name) : [];
+          const methodIn = bindText(k, "method", { list: "pa-methods" });
+          methodIn.addEventListener("change", () => ctx.redraw());
+          f.append(...field(T("ed.method"), methodIn, h("datalist", { id: "pa-methods" }, ...names.map((n) => h("option", { value: n })))));
+          if (names.length) f.append(h("div", { class: "hint" }, T("ed.methodHint")));
+          // Native Voiceover-Absicht (ohne Methode): bekannte Felder zum Anklicken
+          const voSuggest = t === "VOICEOVER" && !k.method
+            ? [{ name: "channel", kind: "text" }, { name: "gainDb", kind: "number" }, { name: "fadeInMs", kind: "number" }, { name: "fadeOutMs", kind: "number" }, { name: "priority", kind: "number" }, { name: "duck", kind: "object" }]
+            : methodArgs(k.target, k.method);
+          f.append(...objField(T("ed.paramFields"), "params", voSuggest));
+          const stopIn = bindText(k, "stopMethod", { list: "pa-methods", placeholder: T("ed.stopMethodPh") });
+          stopIn.addEventListener("change", () => ctx.redraw());
+          f.append(...field(T("ed.stopMethod"), stopIn));
+          if (k.stopMethod) f.append(...objField(T("ed.stopParams"), "stopParams", methodArgs(k.target, k.stopMethod)));
         } else if (t === "WEBHOOK") {
           f.append(...field("URL", bindText(k, "url", { placeholder: "https://…" })));
-          f.append(...jsonField(T("ed.bodyJson"), "params"));
+          f.append(...objField(T("ed.bodyFields"), "params"));
         } else if (t === "CHANNEL_TRIGGER") {
           const p = (k.params = k.params && typeof k.params === "object" ? k.params : {});
           p.target = p.target || {};
@@ -2041,14 +2235,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const cleanKid = (k) => {
         const o = { ...k };
         for (const key of ["data", "params", "stopParams"]) {
-          const txt = o[`_${key}Text`];
-          if (txt !== undefined) {
-            if (txt.trim() === "") delete o[key];
-            else {
-              try { o[key] = JSON.parse(txt); } catch { throw new Error(T("ed.badJson", { id: o.id, key })); }
-            }
-          }
           delete o[`_${key}Text`];
+          if (o[key] && typeof o[key] === "object" && !Array.isArray(o[key]) && Object.keys(o[key]).length === 0) delete o[key];
         }
         if (o._atLocal !== undefined) {
           const iso = parseStartInput(o._atLocal);

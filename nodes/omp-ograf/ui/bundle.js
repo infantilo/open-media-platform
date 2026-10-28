@@ -18,7 +18,9 @@ const T = (() => {
         "ogr.25b279": "Klick: im Editor öffnen (Live-Update)",
         "ogr.398d8a": "Schritt ",
         "ogr.419ff4": "Diese Grafik ausblenden",
-        "ogr.e8bc14": "keine Templates gefunden"
+        "ogr.e8bc14": "keine Templates gefunden",
+        "kv.text": "Text", "kv.number": "Zahl", "kv.bool": "Ja/Nein", "kv.list": "Liste", "kv.object": "Gruppe",
+        "kv.remove": "Entfernen", "kv.addItem": "＋ Eintrag", "kv.addField": "＋ Feld", "kv.name": "Name"
     },
     en: {
         "x.onair": "● On air",
@@ -36,7 +38,9 @@ const T = (() => {
         "ogr.25b279": "Click: open in the editor (live update)",
         "ogr.398d8a": "Step ",
         "ogr.419ff4": "Hide this graphic",
-        "ogr.e8bc14": "no templates found"
+        "ogr.e8bc14": "no templates found",
+        "kv.text": "Text", "kv.number": "Number", "kv.bool": "Yes/No", "kv.list": "List", "kv.object": "Group",
+        "kv.remove": "Remove", "kv.addItem": "＋ Item", "kv.addField": "＋ Field", "kv.name": "Name"
     },
   };
   const lang = document.documentElement.lang === "en" ? "en" : "de";
@@ -236,6 +240,116 @@ class OmpOgrafPanel extends HTMLElement {
 
     const selectedTemplate = () => templates.find((t) => t.id === select.value) || null;
 
+    // Strukturierter Editor für Listen/Objekte (statt JSON-Text): folgt dem Schema (properties/items), ohne Schema allgemeine
+    // Felder (Name, Typ, Wert). `get()` liefert den Wert, `set(v)` füllt den Editor — die Werte leben in den Feldern selbst.
+    const KINDS = ["text", "number", "bool", "list", "object"];
+    const kindOf = (v) => (Array.isArray(v) ? "list" : v !== null && typeof v === "object" ? "object" : typeof v === "number" ? "number" : typeof v === "boolean" ? "bool" : "text");
+    const smallBtn = (label, title, onclick) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = label; b.title = title || ""; b.addEventListener("click", onclick);
+      b.style.cssText = "cursor:pointer;font-size:11px;padding:1px 6px;border-radius:3px;border:1px solid var(--omp-border,#2e3338);background:var(--omp-bg-2,#1c1f22);color:var(--omp-text,#e8eaed);";
+      return b;
+    };
+    function makeEditor(schema, initial) {
+      const sc = schema || {};
+      const wrap = document.createElement("div");
+      wrap.style.cssText = "display:flex;flex-direction:column;gap:3px;flex:1;min-width:0;";
+      const type = sc.type || (sc.properties ? "object" : sc.items ? "array" : null);
+      if (Array.isArray(sc.enum) && sc.enum.length) {
+        const sel = document.createElement("select");
+        sc.enum.forEach((v, i) => { const o = document.createElement("option"); o.value = v; o.textContent = (sc.enumNames && sc.enumNames[i]) || v; sel.appendChild(o); });
+        sel.value = initial ?? sc.default ?? sc.enum[0];
+        wrap.appendChild(sel);
+        return { el: wrap, get: () => (type === "integer" || type === "number" ? Number(sel.value) : sel.value), set: (v) => { sel.value = v ?? sc.enum[0]; } };
+      }
+      if (type === "boolean") {
+        const c = document.createElement("input"); c.type = "checkbox"; c.checked = !!(initial ?? sc.default);
+        wrap.appendChild(c);
+        return { el: wrap, get: () => c.checked, set: (v) => { c.checked = !!v; } };
+      }
+      if (type === "integer" || type === "number") {
+        const n = document.createElement("input"); n.type = "number"; n.step = type === "integer" ? "1" : "any";
+        if (typeof sc.minimum === "number") n.min = String(sc.minimum);
+        if (typeof sc.maximum === "number") n.max = String(sc.maximum);
+        n.value = initial ?? sc.default ?? "";
+        wrap.appendChild(n);
+        return { el: wrap, get: () => (n.value === "" ? 0 : Number(n.value)), set: (v) => { n.value = v ?? ""; } };
+      }
+      if (type === "string") {
+        const t = document.createElement("input"); t.type = "text"; t.value = initial ?? sc.default ?? "";
+        wrap.appendChild(t);
+        return { el: wrap, get: () => t.value, set: (v) => { t.value = v ?? ""; } };
+      }
+      if (type === "array") {
+        const rows = [];
+        const list = document.createElement("div"); list.style.cssText = "display:flex;flex-direction:column;gap:3px;";
+        const addRow = (v) => {
+          const row = document.createElement("div"); row.style.cssText = "display:flex;gap:4px;align-items:flex-start;";
+          const ed = makeEditor(sc.items || null, v);
+          const rec = { row, ed };
+          row.appendChild(ed.el);
+          row.appendChild(smallBtn("✕", T("kv.remove"), () => { rows.splice(rows.indexOf(rec), 1); row.remove(); }));
+          rows.push(rec); list.appendChild(row);
+        };
+        const set = (arr) => { rows.length = 0; list.innerHTML = ""; (Array.isArray(arr) ? arr : []).forEach(addRow); };
+        wrap.append(list, smallBtn(T("kv.addItem"), "", () => addRow(undefined)));
+        set(initial ?? sc.default ?? []);
+        return { el: wrap, get: () => rows.map((r) => r.ed.get()), set };
+      }
+      if (type === "object" && sc.properties) {
+        const parts = [];
+        const box = document.createElement("div"); box.style.cssText = "display:flex;flex-direction:column;gap:3px;border-left:2px solid var(--omp-border,#2e3338);padding-left:6px;";
+        for (const [k, p] of Object.entries(sc.properties)) {
+          const row = document.createElement("div"); row.style.cssText = "display:flex;gap:6px;align-items:flex-start;";
+          const lab = document.createElement("span"); lab.className = "field-label"; lab.textContent = (p && p.title) || k; lab.title = (p && p.description) || k;
+          const ed = makeEditor(p, initial && initial[k]);
+          row.append(lab, ed.el); box.appendChild(row); parts.push([k, ed]);
+        }
+        wrap.appendChild(box);
+        return { el: wrap, get: () => Object.fromEntries(parts.map(([k, ed]) => [k, ed.get()])), set: (v) => parts.forEach(([k, ed]) => ed.set(v ? v[k] : undefined)) };
+      }
+      // Ohne Schema (frei): Felder bzw. Einträge mit Typwahl
+      return makeFreeEditor(type === "array" ? "list" : "object", initial);
+    }
+    function makeFreeValue(kind, v) {
+      if (kind === "number") { const n = document.createElement("input"); n.type = "number"; n.step = "any"; n.value = v ?? 0; return { el: n, get: () => Number(n.value || 0), set: (x) => { n.value = x ?? 0; } }; }
+      if (kind === "bool") { const c = document.createElement("input"); c.type = "checkbox"; c.checked = !!v; return { el: c, get: () => c.checked, set: (x) => { c.checked = !!x; } }; }
+      if (kind === "list" || kind === "object") return makeFreeEditor(kind, v);
+      const t = document.createElement("input"); t.type = "text"; t.value = v ?? ""; return { el: t, get: () => t.value, set: (x) => { t.value = x ?? ""; } };
+    }
+    function makeFreeEditor(kind, initial) {
+      const wrap = document.createElement("div");
+      wrap.style.cssText = "display:flex;flex-direction:column;gap:3px;flex:1;min-width:0;border-left:2px solid var(--omp-border,#2e3338);padding-left:6px;";
+      const rows = [];
+      const list = document.createElement("div"); list.style.cssText = "display:flex;flex-direction:column;gap:3px;";
+      const addRow = (name, v) => {
+        const row = document.createElement("div"); row.style.cssText = "display:flex;gap:4px;align-items:flex-start;";
+        let nameIn = null;
+        if (kind === "object") { nameIn = document.createElement("input"); nameIn.type = "text"; nameIn.placeholder = T("kv.name"); nameIn.value = name; nameIn.style.cssText = "width:30%;"; row.appendChild(nameIn); }
+        const sel = document.createElement("select");
+        KINDS.forEach((k) => { const o = document.createElement("option"); o.value = k; o.textContent = T(`kv.${k}`); sel.appendChild(o); });
+        sel.value = kindOf(v);
+        const rec = { row, nameIn, sel, val: makeFreeValue(sel.value, v) };
+        const slot = document.createElement("div"); slot.style.cssText = "flex:1;min-width:0;display:flex;"; slot.appendChild(rec.val.el);
+        sel.addEventListener("change", () => { rec.val = makeFreeValue(sel.value, undefined); slot.replaceChildren(rec.val.el); });
+        row.append(sel, slot, smallBtn("✕", T("kv.remove"), () => { rows.splice(rows.indexOf(rec), 1); row.remove(); }));
+        rows.push(rec); list.appendChild(row);
+      };
+      const set = (v) => {
+        rows.length = 0; list.innerHTML = "";
+        if (kind === "object") Object.entries(v && typeof v === "object" && !Array.isArray(v) ? v : {}).forEach(([k, x]) => addRow(k, x));
+        else (Array.isArray(v) ? v : []).forEach((x) => addRow("", x));
+      };
+      wrap.append(list, smallBtn(kind === "object" ? T("kv.addField") : T("kv.addItem"), "", () => addRow(kind === "object" ? `${T("kv.name")}${rows.length + 1}` : "", "")));
+      set(initial);
+      const get = () => {
+        if (kind === "object") return Object.fromEntries(rows.filter((r) => r.nameIn.value.trim()).map((r) => [r.nameIn.value.trim(), r.val.get()]));
+        return rows.map((r) => r.val.get());
+      };
+      return { el: wrap, get, set };
+    }
+
+
     function buildFieldRow(key, prop) {
       const row = document.createElement("div");
       row.className = "field-row";
@@ -275,9 +389,10 @@ class OmpOgrafPanel extends HTMLElement {
         if (typeof prop.maximum === "number") input.max = String(prop.maximum);
         input.value = prop.default ?? "";
       } else if (prop.type === "array" || prop.type === "object") {
-        input = document.createElement("textarea");
-        input.rows = 3;
-        input.value = JSON.stringify(prop.default ?? (prop.type === "array" ? [] : {}), null, 2);
+        const ed = makeEditor(prop, prop.default);
+        row.appendChild(ed.el);
+        activeFieldEls.set(key, { el: ed.el, type: prop.type, gddType, editor: ed });
+        return row;
       } else {
         input = document.createElement("input");
         input.type = "text";
@@ -300,17 +415,12 @@ class OmpOgrafPanel extends HTMLElement {
 
     function readFieldData() {
       const data = {};
-      for (const [key, { el, type }] of activeFieldEls) {
-        if (type === "boolean") data[key] = el.checked;
+      for (const [key, { el, type, editor }] of activeFieldEls) {
+        if (editor) data[key] = editor.get();
+        else if (type === "boolean") data[key] = el.checked;
         else if (type === "integer" || type === "number") {
           const n = Number(el.value);
           data[key] = Number.isNaN(n) ? el.value : n;
-        } else if (type === "array" || type === "object") {
-          try {
-            data[key] = JSON.parse(el.value);
-          } catch {
-            data[key] = el.value;
-          }
         } else data[key] = el.value;
       }
       return data;
@@ -318,11 +428,11 @@ class OmpOgrafPanel extends HTMLElement {
 
     // Feldwerte aus gespeicherten Ebenen-Daten setzen (Editor öffnen).
     function applyFieldData(data) {
-      for (const [key, { el, type }] of activeFieldEls) {
+      for (const [key, { el, type, editor }] of activeFieldEls) {
         if (!data || !(key in data)) continue;
         const v = data[key];
-        if (type === "boolean") el.checked = !!v;
-        else if (type === "array" || type === "object") el.value = JSON.stringify(v, null, 2);
+        if (editor) editor.set(v);
+        else if (type === "boolean") el.checked = !!v;
         else el.value = v ?? "";
       }
     }
