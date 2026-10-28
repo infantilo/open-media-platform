@@ -51,6 +51,10 @@ const T = (() => {
       "sec.playlist": "Playlist",
       "sec.carts": "Assets / Carts",
       "sec.trigger": "Channel-Trigger",
+      "tab.live": "Sendung",
+      "tab.carts": "Carts",
+      "tab.auto": "Trigger & Werbung",
+      "tab.config": "Konfiguration",
       "sec.foreign": "Fremdliste / Mitlauf",
       "fo.import": "Liste importieren …",
       "fo.rescan": "Jetzt prüfen",
@@ -379,6 +383,10 @@ const T = (() => {
       "sec.playlist": "Playlist",
       "sec.carts": "Assets / carts",
       "sec.trigger": "Channel trigger",
+      "tab.live": "On air",
+      "tab.carts": "Carts",
+      "tab.auto": "Triggers & ads",
+      "tab.config": "Configuration",
       "sec.foreign": "Foreign list / follow",
       "fo.import": "Import list …",
       "fo.rescan": "Check now",
@@ -828,6 +836,10 @@ const STYLE = `
   .banner.show { display: block; }
   .banner.note { background: #1f4d7a; }
   /* Abschnitte */
+  .ptabs { display: flex; gap: 2px; border-bottom: 1px solid var(--bd); margin: 6px 0 8px; }
+  .ptab { background: transparent; border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; padding: 6px 16px; font-weight: 600; color: var(--mut); cursor: pointer; }
+  .ptab:hover { color: var(--fg, inherit); }
+  .ptab.act { background: var(--bg2); border-color: var(--bd); color: var(--fg, inherit); box-shadow: 0 2px 0 var(--acc) inset; }
   details.sec { border: 1px solid var(--bd); border-radius: 6px; margin-bottom: 8px; background: var(--bg2); }
   details.sec > summary { cursor: pointer; padding: 6px 10px; font-weight: 600; list-style: none; display: flex; gap: 8px; align-items: center; user-select: none; }
   details.sec > summary::before { content: "▸"; color: var(--mut); }
@@ -1355,7 +1367,28 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       shadow.append(ov);
     }
 
-    shadow.append(h("style", {}, STYLE), head, nextFixEl, planWarnEl, banner, controlSec, playlistSec, cartsSec, foreignSec, triggerSec, adSec, targetsSec);
+    // ---- Reiter: Sendung (Steuerung + Playlist) steht vorne, Einrichtung getrennt --------------------------
+    const TABS = [
+      ["live", T("tab.live"), [controlSec, playlistSec]],
+      ["carts", T("tab.carts"), [cartsSec]],
+      ["auto", T("tab.auto"), [triggerSec, adSec]],
+      ["config", T("tab.config"), [targetsSec, foreignSec]],
+    ];
+    for (const [, , secs] of TABS) for (const sec of secs) sec.open = true;
+    let activeTab = "live";
+    try { activeTab = localStorage.getItem("omp-pa-tab") || "live"; } catch { /* ohne Speicher: Standard */ }
+    if (!TABS.some(([k]) => k === activeTab)) activeTab = "live";
+    const panes = TABS.map(([k, , secs]) => h("div", { class: "tabpane", "data-tab": k }, ...secs));
+    const tabBar = h("div", { class: "ptabs", role: "tablist" }, ...TABS.map(([k, label]) =>
+      h("button", { class: "ptab", role: "tab", "data-tab": k, onclick: () => showTab(k) }, label)));
+    const showTab = (k) => {
+      activeTab = k;
+      try { localStorage.setItem("omp-pa-tab", k); } catch { /* ignorieren */ }
+      tabBar.querySelectorAll(".ptab").forEach((b) => { const on = b.dataset.tab === k; b.classList.toggle("act", on); b.setAttribute("aria-selected", String(on)); });
+      panes.forEach((p) => { p.style.display = p.dataset.tab === k ? "" : "none"; });
+    };
+    shadow.append(h("style", {}, STYLE), head, nextFixEl, planWarnEl, banner, tabBar, ...panes);
+    showTab(activeTab);
     plMain.style.setProperty("--cols", "");
     applyCols();
     // Spalten-Template an die Zeilen weitergeben

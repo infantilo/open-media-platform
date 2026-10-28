@@ -935,6 +935,8 @@ Der Tab **Stream Ingest** plant Aufnahmen von Live-Quellen (MXL-Sender): einmali
 
 ## 5e. Fremdplaylist, Mitlauf (Havarie) und Sendefreigabe
 
+**Aufbau des Panels.** Die Playout-Automation hat Reiter: **Sendung** (Steuerung und Playlist — das Wichtigste, öffnet immer zuerst), **Carts**, **Trigger & Werbung** und **Konfiguration** (Ziele, Preflight-Vorlauf, Standard-Filler, Sendefreigabe, Fremdliste). Der zuletzt gewählte Reiter wird im Browser gemerkt.
+
 Diese Funktionen gehören zum Node **Playout-Automation** (Panel-Abschnitt **Fremdliste / Mitlauf**, Einstellung **Sendefreigabe** unter *Ziele*).
 
 **Fremdlisten importieren.** *Liste importieren …* öffnet eine Sendeliste eines anderen Automationssystems (Adapter `mpl3`, XML-Sendeliste). Vor dem Übernehmen zeigt eine **Vorschau**, wie viele Sendeevents entstehen, wie viele schon gelaufen sind (werden ausgelassen), was nur *angenähert* (z. B. Überblendung „Fade Cut“ wird zu „Mix“) und was *nicht übernommen* wird (z. B. Logo-/Grafik-Kinder ohne Zuordnung). Dann: **Anhängen** oder **Playlist ersetzen**. Zuordnungen stehen in der Plugin-Konfiguration `foreign-mpl3` (`mediaTemplate`, `liveMap`, `childMap`, `skipDone`, `requireRelease`). Die Liste wird nur gelesen — das Fremdformat ist kein internes Format.
