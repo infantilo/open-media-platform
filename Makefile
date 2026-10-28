@@ -216,6 +216,8 @@ up:
 
 # Postgres-HA (ARCHITECTURE.md §19.3, UMSETZUNG.md D15) — ersetzt den
 # bisherigen Einzelknoten-omp-postgres-Container: etcd-Dreiknoten-Cluster
+# (Zeitwerte für eine VM mit langsamen Platten-Syncs: Heartbeat 500 ms / Wahl-Timeout 5 s statt 100 ms / 1 s — sonst meldet der Leader
+# „Heartbeat zu spät, Platte zu langsam“ und es kommt zu unnötigen Wahlen; Daten liegen in benannten Volumes, nicht in der Container-Schicht)
 # (Patronis DCS/Failover-Koordinator, gleiche Rolle wie Raft bei D12, aber
 # ein eigenständiges, für genau diesen Zweck gebautes Tool statt
 # Marke-Eigenbau) + Patroni-verwaltetes Postgres (1 Primary + 2 Replikate,
@@ -249,8 +251,10 @@ postgres-up:
 			podman start omp-etcd-$$n; \
 		else \
 			podman run -d --name omp-etcd-$$n --restart=always --network=host \
+				-v omp-etcd-$$n-data:/etcd-data \
 				$(call img,$(ETCD_IMAGE)) etcd \
 				--name etcd-$$n --data-dir /etcd-data \
+				--heartbeat-interval=500 --election-timeout=5000 \
 				--initial-advertise-peer-urls http://127.0.0.1:$$PEER --listen-peer-urls http://127.0.0.1:$$PEER \
 				--listen-client-urls http://127.0.0.1:$$CLI --advertise-client-urls http://127.0.0.1:$$CLI \
 				--initial-cluster-token omp-etcd-cluster \

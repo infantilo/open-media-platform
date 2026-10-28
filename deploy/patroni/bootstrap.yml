@@ -11,9 +11,12 @@
 # für den verschachtelten initdb/pg_hba/users-Teil.
 bootstrap:
   dcs:
-    ttl: 30
+    # Entwicklungs-VM mit langsamen Platten-Syncs: etcd antwortet gelegentlich erst nach Sekunden. ttl/retry_timeout sind großzügig,
+    # damit eine kurze etcd-Verzögerung nicht zum Verlust der Leader-Sperre und zur Neu-Beförderung führt (Bedingung:
+    # loop_wait + 2 * retry_timeout <= ttl). Ein echter Leader-Ausfall wird dadurch erst nach bis zu 60 s erkannt.
+    ttl: 60
     loop_wait: 10
-    retry_timeout: 10
+    retry_timeout: 20
     maximum_lag_on_failover: 1048576
     postgresql:
       use_pg_rewind: true
