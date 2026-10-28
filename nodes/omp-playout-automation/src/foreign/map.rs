@@ -63,6 +63,11 @@ pub struct PlanItem {
     pub patch: Map<String, Value>,
     /// Medienkennung des Fremdsystems (für Abgleich/Freigabe).
     pub media_name: Option<String>,
+    pub title: String,
+    pub is_live: bool,
+    /// Geplante Zeiten aus der Fremdliste (UTC ms).
+    pub start_ms: Option<i64>,
+    pub end_ms: Option<i64>,
 }
 
 #[derive(Debug, Default)]
@@ -159,7 +164,7 @@ pub fn plan(list: &ForeignList, cfg: &MapConfig) -> Plan {
         }
         match (e.start_mode, e.start_ms) {
             (StartMode::Fixed, Some(ms)) => {
-                append.insert("startType".into(), json!("fixtime"));
+                patch.insert("startType".into(), json!("fixtime"));
                 patch.insert("startAt".into(), json!(format_start_at(ms)));
             }
             (StartMode::Fixed, None) => out.approximated.push(format!("{} „{label}“: Fixzeit ohne Zeitpunkt, als Folgestart gelesen", e.uid)),
@@ -222,7 +227,17 @@ pub fn plan(list: &ForeignList, cfg: &MapConfig) -> Plan {
                 out.approximated.push(format!("{} „{label}“: {f} „{v}“ nicht abgebildet", e.uid));
             }
         }
-        out.items.push(PlanItem { uid: e.uid.clone(), reconcile_key: e.reconcile_key.clone(), append, patch, media_name: e.media_name.clone() });
+        out.items.push(PlanItem {
+            uid: e.uid.clone(),
+            reconcile_key: e.reconcile_key.clone(),
+            append,
+            patch,
+            media_name: e.media_name.clone(),
+            title: label.clone(),
+            is_live: e.kind == Kind::Live,
+            start_ms: e.start_ms,
+            end_ms: e.end_ms,
+        });
     }
     out
 }
@@ -252,7 +267,7 @@ mod tests {
         assert_eq!(p.dropped.len(), 2);
         let l = &p.items[1];
         assert_eq!(l.append["eventType"], "LIVE");
-        assert_eq!(l.append["startType"], "fixtime");
+        assert_eq!(l.patch["startType"], "fixtime");
         assert!(l.patch["startAt"].as_str().unwrap().ends_with('Z'));
         assert!(p.approximated.iter().any(|a| a.contains("RP21") && a.contains("liveMap")));
         // Der Kommentar vor dem Blockende hängt an keinem Folge-Event → bleibt für das nächste (hier keines).

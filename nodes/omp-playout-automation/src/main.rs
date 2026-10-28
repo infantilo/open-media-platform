@@ -3578,6 +3578,8 @@ impl ParamStore for AutomationStore {
             },
             // Kapitel 27 / P9.3: Zustand der Ereignis-Hooks (JSON).
             ParamSpec { name: "hookStatus".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            // Kapitel 74: Fremdplaylist-Mitlauf (Schattenliste, Alter, Bericht, letzter Import).
+            ParamSpec { name: "foreignStatus".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             ParamSpec {
                 name: "targetGraphicsLabel".to_string(),
                 kind: ParamType::String,
@@ -3789,6 +3791,23 @@ impl ParamStore for AutomationStore {
                     MethodArg { name: "patchJson".to_string(), kind: ParamType::String },
                 ],
             },
+            // Kapitel 74: Fremdplaylist importieren (preview|append|replace), Schattenliste übernehmen, sofort prüfen.
+            MethodSpec {
+                name: "foreign.import".to_string(),
+                args: vec![
+                    MethodArg { name: "text".to_string(), kind: ParamType::String },
+                    MethodArg { name: "format".to_string(), kind: ParamType::String },
+                    MethodArg { name: "mode".to_string(), kind: ParamType::String },
+                ],
+            },
+            MethodSpec {
+                name: "foreign.takeover".to_string(),
+                args: vec![
+                    MethodArg { name: "adapter".to_string(), kind: ParamType::String },
+                    MethodArg { name: "includeCurrent".to_string(), kind: ParamType::Boolean },
+                ],
+            },
+            MethodSpec { name: "foreign.rescan".to_string(), args: vec![] },
             // Kapitel 27 / P8: Event mit Asset-Referenz (Datei wird am Ziel-Player aufgelöst) und
             // nachträgliche Änderung von Asset/Ausfallrichtlinie/Ersatzdatei.
             MethodSpec {
@@ -3996,6 +4015,7 @@ impl ParamStore for AutomationStore {
             "channelName" => Some(serde_json::json!(self.persistence.channel_name())),
             "persistence" => Some(serde_json::json!(self.persistence.status())),
             "hookStatus" => Some(hooks::status_json(&self.plugins)),
+            "foreignStatus" => Some(foreign::runtime::status_json(&self.plugins)),
             // Kapitel 6 Teil 7: welcher Kanal gerade live ist — reine
             // Anzeige fürs UI (z. B. um die aktive Kanal-Kachel optisch
             // hervorzuheben), keine Bedienmöglichkeit über diesen Node
@@ -4192,6 +4212,12 @@ impl ParamStore for AutomationStore {
                 let to = args.get("toIndex").and_then(Value::as_f64).filter(|n| *n >= 0.0).ok_or("toIndex fehlt".to_string())? as usize;
                 self.do_move_item(item_id, to)
             })(),
+            "foreign.import" => foreign::runtime::import(self, args),
+            "foreign.takeover" => foreign::runtime::takeover(self, args),
+            "foreign.rescan" => {
+                foreign::runtime::rescan(self);
+                Ok(())
+            }
             "updateItem" => (|| {
                 let item_id = args.get("itemId").and_then(Value::as_str).ok_or("itemId fehlt".to_string())?;
                 let patch: Value = serde_json::from_str(args.get("patchJson").and_then(Value::as_str).unwrap_or("{}"))
@@ -5515,6 +5541,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let p = Arc::new(omp_node_sdk::PluginRegistry::new());
             p.register(hooks::PLUGIN_ID, "Ereignis-Hooks (HTTP)", serde_json::json!({"hooks": []}));
             hooks::start(p.clone());
+            foreign::runtime::register(&p);
+            foreign::runtime::start(p.clone());
             p
         },
         persistence: persist::Persistence::new(
