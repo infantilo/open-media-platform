@@ -951,10 +951,12 @@ Diese Funktionen gehören zum Node **Playout-Automation** (Panel-Abschnitt **Fre
 
 **Durchlauf-Test.** `python3 tools/durchlauf-e2e/e2e.py` legt dauerhaft den Workflow „Durchlauf Playout“, den Channel „Durchlauf“ und den Prozess „Durchlauf Eingang“ an (nichts wird aufgeräumt, zum Weitertesten im Reiter *Workflows* starten) und fährt den ganzen Weg von der neuen Datei bis zum Vergleich.
 
-**Aufnahme gegen Original vergleichen.** Im Eingang vergleicht `POST /api/v1/review/items/{id}/compare` (`recordedAssetId`, optional `options`) die Aufnahme eines Events mit dem Original: Dauer (±1 Bild, Aufnahme-Vorlauf `offsetSec` wird abgezogen), Bildrate (exakt), Auflösung/Codec (Hinweis), Audio und Bildqualität (SSIM ≥ 0,98 auf einer 10-s-Stichprobe, kleine Auflösung, ein Faden).
+**Aufnahme gegen Original vergleichen.** Im Eingang gibt es im Detail den Reiter **Aufnahme-Vergleich**: Aufnahme wählen (zweiter Eintrag im Eingang), dann *Vergleichen*. Geprüft werden Dauer (±1 Bild, einstellbar), Bildrate (exakt), Auflösung/Codec (Hinweis), Ton und Bildqualität (SSIM ≥ 0,98 auf einer 10-s-Stichprobe, einstellbar). Der **Vorlauf der Aufnahme** wird standardmäßig aus den Bildern bestimmt (die Aufnahme beginnt meist etwas vor oder nach dem Event); ist das Bild dafür zu ruhig, gilt der eingetragene Wert. Dieselbe Funktion gibt es als `POST /api/v1/review/items/{id}/compare`.
 
 
 ## 5f. Kernbindung, Temperatur und Leistungsaufnahme
+
+**Grafik- und Child-Editoren ohne JSON.** Im Event-Editor der Playout-Automation (Reiter *Child Events*) und im Panel des Grafik-Nodes (ograf) gibt es keine JSON-Textfelder mehr: Grafikvorlagen zeigen ihre Felder samt Listen und Gruppen als Formular, Vorlagen ohne Schema und Webhooks nutzen freie Felder (Name, Typ Text/Zahl/Ja-Nein/Liste/Gruppe, Wert), und bei Node-Befehlen schlägt der Editor Methoden und Argumente des Ziel-Nodes vor.
 
 **Kernbindung (CPU-Pinning).** Jede Instanz hat die Option **CPU-Kerne (Bindung)** (Gruppe *Leistung*, `OMP_CPU_AFFINITY`; je Instanz oder je Typ setzbar). Leer = keine Bindung (Standard). Eintrag als Liste, z. B. `2-3` oder `0,2,4`: der Node läuft dann nur auf diesen Kernen (`taskset`, auch auf entfernten Hosts über den Host-Agent). Sinnvoll nur auf Produktions-Hosts, um zeitkritische Nodes (Ausgang, Playout, Geräte-Gateways) vor Batch-Arbeit wie QC oder Transcodes zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder auf dem Host nicht vorhandene Kerne werden mit einer Warnung im Log ignoriert, der Node startet dann ungebunden. Die Option überlagert eine im Katalog festgelegte Bindung (`realtime.cpus`).
 
