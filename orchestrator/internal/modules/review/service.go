@@ -204,7 +204,11 @@ func (s *Service) ImportFile(ctx context.Context, rel, title, actor string) (Ite
 	if cfg.ImportDir == "" {
 		return Item{}, fmt.Errorf("%w: Import ist nicht eingerichtet (review.config importDir)", ErrValidation)
 	}
-	root, err := filepath.EvalSymlinks(cfg.ImportDir)
+	abs, err := filepath.Abs(cfg.ImportDir) // relative Einstellung (z. B. data/media): Pfade der Quelle müssen für QC/Proxy absolut sein
+	if err != nil {
+		return Item{}, fmt.Errorf("%w: Importverzeichnis nicht lesbar: %v", ErrValidation, err)
+	}
+	root, err := filepath.EvalSymlinks(abs)
 	if err != nil {
 		return Item{}, fmt.Errorf("%w: Importverzeichnis nicht lesbar: %v", ErrValidation, err)
 	}

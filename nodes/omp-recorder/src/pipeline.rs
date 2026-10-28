@@ -282,6 +282,14 @@ fn safe_target_path(media_dir: &str, file_name: &str) -> Result<PathBuf, String>
     Ok(path)
 }
 
+/// Liegt die Medien-ID (Dateiname) in einem der Verzeichnisse schon als Datei vor? (Kein Überschreiben ohne Absicht.)
+pub fn existing_clip(dirs: &[&str], file_name: &str) -> Option<PathBuf> {
+    dirs.iter()
+        .filter(|d| !d.trim().is_empty())
+        .filter_map(|d| safe_target_path(d, file_name).ok())
+        .find(|p| p.is_file())
+}
+
 fn build(
     context: &Arc<MxlContext>,
     video_flow_id: Option<&str>,
@@ -692,6 +700,19 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::safe_target_path;
+
+    #[test]
+    fn existing_clip_wird_erkannt_und_leere_verzeichnisse_ignoriert() {
+        let d = std::env::temp_dir().join(format!("omp-rec-clip-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("a.mxf"), b"x").unwrap();
+        let ds = d.to_string_lossy().to_string();
+        assert!(super::existing_clip(&[ds.as_str()], "a.mxf").is_some());
+        assert!(super::existing_clip(&["", ds.as_str()], "a.mxf").is_some());
+        assert!(super::existing_clip(&[ds.as_str()], "b.mxf").is_none());
+        assert!(super::existing_clip(&[ds.as_str()], "../a.mxf").is_none(), "Pfadangaben werden nie aufgelöst");
+        std::fs::remove_dir_all(d).unwrap();
+    }
 
     #[test]
     fn plain_name_gets_media_dir_prefix_and_mkv_extension() {

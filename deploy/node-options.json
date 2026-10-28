@@ -1413,6 +1413,16 @@
       "default": "data/media",
       "group": "Medien und Dateien",
       "pathKind": "dir"
+    },
+    {
+      "key": "OMP_RECORDER_CLIP_DIR",
+      "i18n": { "en": {"label": "Clip directory (overwrite check)", "description": "Directory of the players' clip library. If the media ID already exists there (or in the recording directory), record.start refuses unless overwrite=true. Empty = check only the recording directory.", "group": "Media and files"} },
+      "label": "Clip-Verzeichnis (Überschreibschutz)",
+      "type": "path",
+      "description": "Verzeichnis der Clip-Bibliothek der Player. Liegt die Medien-ID dort (oder im Aufnahmeverzeichnis) schon vor, lehnt record.start ab, außer overwrite=true. Leer = nur das Aufnahmeverzeichnis prüfen.",
+      "default": "",
+      "group": "Medien und Dateien",
+      "pathKind": "dir"
     }
   ],
   "omp-scaler": [

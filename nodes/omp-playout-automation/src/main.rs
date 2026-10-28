@@ -1864,7 +1864,7 @@ impl AutomationStore {
             .ok_or("Item-Metadaten fehlen (Rundown-Eintrag inkonsistent)".to_string())?;
         let (standby_node_id, standby_label) = standby_target(&state)?;
         // Kapitel 27 / P8: auch das Cue folgt der Ausfallrichtlinie (Vorschau des Ersatzes bzw. „gehalten“).
-        let meta = if meta.media_ref.asset.is_some() { apply_media_policy(self, &state, &standby_label, &meta, false)? } else { meta };
+        let meta = if matches!(meta.media, ItemMedia::File { .. }) { apply_media_policy(self, &state, &standby_label, &meta, false)? } else { meta };
         load_onto_channel(self, &standby_node_id, &meta, false)?;
 
         state.playlist.cue(index).map_err(|e| e.to_string())?;
@@ -2660,7 +2660,7 @@ fn take_on_targets(
 ) -> Result<Channel, String> {
     // Kapitel 27 / P8: Medium nicht bereit → Ausfallrichtlinie (Ersatz oder „gehalten“) VOR allem anderen.
     let policy_meta;
-    let meta = if meta.media_ref.asset.is_some() {
+    let meta = if matches!(meta.media, ItemMedia::File { .. }) {
         let (_, label) = standby_target(state)?;
         policy_meta = apply_media_policy(store, state, &label, meta, true)?;
         &policy_meta

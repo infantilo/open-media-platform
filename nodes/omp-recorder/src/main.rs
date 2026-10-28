@@ -65,6 +65,10 @@ impl ReceiverControl for RecorderReceiverControl {
 
 struct RecorderStore {
     pipeline: pipeline::PipelineHandle,
+    /// Zielverzeichnis der Aufnahmen und optional das Clip-Verzeichnis der Player (`OMP_RECORDER_CLIP_DIR`):
+    /// existiert die Medien-ID dort schon, braucht `record.start` das Flag `overwrite`.
+    media_dir: String,
+    clip_dir: String,
     video_connection: Arc<ReceiverConnection<RecorderReceiverControl>>,
     /// Audio-Receiver in Eingangsreihenfolge (Kapitel 45): 0 = Hauptquelle, weitere für zusätzliche Quellen.
     audio_connections: Vec<Arc<ReceiverConnection<RecorderReceiverControl>>>,
@@ -138,10 +142,11 @@ impl ParamStore for RecorderStore {
         let mut methods = vec![
             MethodSpec {
                 name: "record.start".to_string(),
-                args: vec![MethodArg {
-                    name: "fileName".to_string(),
-                    kind: ParamType::String,
-                }],
+                args: vec![
+                    MethodArg { name: "fileName".to_string(), kind: ParamType::String },
+                    // Standard aus: liegt die Medien-ID schon als Clip vor, wird nicht überschrieben.
+                    MethodArg { name: "overwrite".to_string(), kind: ParamType::Boolean },
+                ],
             },
             MethodSpec {
                 name: "record.stop".to_string(),
@@ -198,6 +203,16 @@ impl ParamStore for RecorderStore {
                     .get("fileName")
                     .and_then(Value::as_str)
                     .ok_or(InvokeError::Unknown)?;
+                let overwrite = match args.get("overwrite") {
+                    Some(Value::Bool(b)) => *b,
+                    Some(Value::String(t)) => matches!(t.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "ja"),
+                    _ => false,
+                };
+                if !overwrite && let Some(found) = pipeline::existing_clip(&[self.media_dir.as_str(), self.clip_dir.as_str()], file_name) {
+                    let msg = format!("Die Medien-ID „{file_name}“ liegt bereits als Clip vor ({}) — mit overwrite=true überschreiben", found.display());
+                    eprintln!("omp-recorder: record.start abgelehnt: {msg}");
+                    return Err(InvokeError::Message(msg));
+                }
                 match self.pipeline.start_recording(file_name.to_string(), Some(self.mca_plan.lock().expect("lock poisoned").clone()), Some(self.audio_plan.lock().expect("lock poisoned").clone())) {
                     Ok(()) => {
                         self.monitor.activate();
@@ -300,6 +315,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let shutdown = Arc::new(AtomicBool::new(false));
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
 
+    let clip_dir = env_or("OMP_RECORDER_CLIP_DIR", "");
+    let store_media_dir = media_dir.clone();
     let pipeline_config = pipeline::Config { domain, media_dir, audio_inputs };
     let pipeline_shutdown = shutdown.clone();
     let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
@@ -347,6 +364,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     monitor.deactivate();
     let store: Arc<dyn ParamStore> = Arc::new(RecorderStore {
         pipeline: pipeline_handle,
+        media_dir: store_media_dir,
+        clip_dir,
         video_connection,
         audio_connections,
         monitor: monitor.clone(),

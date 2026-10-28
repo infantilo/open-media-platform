@@ -124,6 +124,7 @@ const T = (() => {
       "col.child": "Child",
       "col.ready": "Bereitschaft",
       "col.title": "Titel",
+      "col.resize": "Spaltenbreite ziehen (Doppelklick: Standard)",
       "col.dur": "Dauer",
       "col.time": "Zeit",
       "col.rem": "Rest",
@@ -257,7 +258,7 @@ const T = (() => {
       "ed.audioMappingHint": "Welche Quellspuren in welche Ausgabegruppe gehen. Fehlt eine Spur, greifen die Ersatzregeln (Upmix, Downmix …). Ohne Wahl: MXF = Vorlage „Stereo“, sonst der Programmton der Quelle.",
       "ed.resolvedPlan": "Aufgelöster Plan",
       "ed.planLater": "Der aufgelöste Plan erscheint, sobald das Event gecued oder auf Sendung ist.",
-      "ed.audioAfterCreate": "Die Audio-Wahl ist nach dem Anlegen verfügbar (sie hängt von den Capabilities der aufgelösten Live-Quelle ab).",
+      "ed.audioAfterCreate": "Die Audio-Wahl hängt von der aufgelösten Live-Quelle ab: nach „Anlegen“ öffnet sich der Editor direkt auf dieser Seite.",
       "ed.audioLiveOnly": "Nur Live-Events mit bekannter Quelle bieten eine Audio-Wahl.",
       "ed.channelsN": "{n} Kanäle",
       "ed.audioFrom": "Audio von {source}",
@@ -451,6 +452,7 @@ const T = (() => {
       "col.child": "Child",
       "col.ready": "Readiness",
       "col.title": "Title",
+      "col.resize": "Drag to resize (double-click: default)",
       "col.dur": "Duration",
       "col.time": "Time",
       "col.rem": "Remaining",
@@ -584,7 +586,7 @@ const T = (() => {
       "ed.audioMappingHint": "Which source tracks go to which output group. If a track is missing, the fallback rules apply (upmix, downmix …). Without a choice: MXF = “Stereo” template, otherwise the programme sound of the source.",
       "ed.resolvedPlan": "Resolved plan",
       "ed.planLater": "The resolved plan appears as soon as the event is cued or on air.",
-      "ed.audioAfterCreate": "The audio choice is available after creating the event (it depends on the capabilities of the resolved live source).",
+      "ed.audioAfterCreate": "The audio choice depends on the resolved live source: after “Create” the editor reopens directly on this page.",
       "ed.audioLiveOnly": "Only live events with a known source offer an audio choice.",
       "ed.channelsN": "{n} channels",
       "ed.audioFrom": "Audio from {source}",
@@ -847,6 +849,8 @@ const STYLE = `
   .cols-pop { position: absolute; right: 0; top: 30px; z-index: 5; background: var(--bg3); border: 1px solid var(--bd); border-radius: 6px; padding: 8px; display: none; flex-direction: column; gap: 4px; }
   .cols-pop.show { display: flex; }
   .cols-pop label { display: flex; gap: 6px; align-items: center; }
+  .rz { position: absolute; right: -3px; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 2; }
+  .rz:hover { background: var(--acc); opacity: .5; }
   .pl-cols { grid-template-columns: 16px 26px 22px minmax(0,1fr) 54px 108px 84px 40px 92px; }
   .hide-dur .c-dur, .hide-time .c-time, .hide-rem .c-rem { display: none; }
   .pl-main { min-width: 0; overflow-x: auto; }
@@ -1171,7 +1175,11 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       return gap > 0 ? { text: fmtGap(gap), tip: T("gapTip", { s: (gap / 1000).toFixed(1) }) } : { text: fmtGap(gap), cls: "gap-neg", tip: T("overlapTip", { s: (-gap / 1000).toFixed(1) }) };
     };
     const hdr = h("div", { class: "pl-hdr pl-cols" },
-      ...[["", ""], ["#", ""], ["", ""], [T("col.title"), ""], [T("col.dur"), "c-dur"], [T("col.time"), "c-time"], [T("col.rem"), "c-rem"]].map(([t, c]) => h("span", { class: c }, t)),
+      ...[["", ""], ["#", ""], ["", ""], [T("col.title"), ""], [T("col.dur"), "c-dur"], [T("col.time"), "c-time"], [T("col.rem"), "c-rem"]].map(([t, c]) => {
+        const span = h("span", { class: c, style: c ? "position:relative" : "" }, t);
+        if (c) span.append(resizeHandle(c.slice(2)));
+        return span;
+      }),
       ...EXTRA_COLS.map((c) => h("span", { class: `c-${c.k}` }, c.t)),
       h("span", {}, ""), h("span", {}, ""));
     const searchInput = h("input", { type: "search", placeholder: T("search"), oninput: () => { search = searchInput.value.trim().toLowerCase(); renderList(); } });
@@ -1181,13 +1189,30 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       ...EXTRA_COLS.map((c) =>
         h("label", {}, h("input", { type: "checkbox", checked: !!prefs[`show-${c.k}`], onchange: (e) => { prefs[`show-${c.k}`] = e.target.checked; savePrefs(); applyCols(); renderList(); } }), c.t)));
     const colsBtn = h("button", { title: T("columns"), onclick: () => colsPop.classList.toggle("show") }, "⚙");
+    // Spaltenbreite per Maus ziehen (je Browser gemerkt); Doppelklick auf den Griff = Standardbreite.
+    const COL_DEFAULT = { dur: 54, time: 108, rem: 84 };
+    function resizeHandle(k) {
+      const g = h("span", { class: "rz", title: T("col.resize") });
+      g.addEventListener("dblclick", (e) => { e.stopPropagation(); delete prefs[`w-${k}`]; savePrefs(); applyCols(); });
+      g.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const x0 = e.clientX, w0 = prefs[`w-${k}`] || COL_DEFAULT[k];
+        g.setPointerCapture(e.pointerId);
+        const move = (ev) => { prefs[`w-${k}`] = Math.max(36, Math.min(320, Math.round(w0 + ev.clientX - x0))); applyCols(); };
+        const up = () => { g.removeEventListener("pointermove", move); g.removeEventListener("pointerup", up); savePrefs(); };
+        g.addEventListener("pointermove", move);
+        g.addEventListener("pointerup", up);
+      });
+      return g;
+    }
     const applyCols = () => {
       for (const k of ["dur", "time", "rem"]) plMain.classList.toggle(`hide-${k}`, !!prefs[`hide-${k}`]);
       for (const c of EXTRA_COLS) plMain.classList.toggle(`hide-${c.k}`, !prefs[`show-${c.k}`]);
       const parts = ["16px", "26px", "22px", "minmax(150px,1.4fr)"];
-      if (!prefs["hide-dur"]) parts.push("54px");
-      if (!prefs["hide-time"]) parts.push("108px");
-      if (!prefs["hide-rem"]) parts.push("84px");
+      if (!prefs["hide-dur"]) parts.push(`${prefs["w-dur"] || COL_DEFAULT.dur}px`);
+      if (!prefs["hide-time"]) parts.push(`${prefs["w-time"] || COL_DEFAULT.time}px`);
+      if (!prefs["hide-rem"]) parts.push(`${prefs["w-rem"] || COL_DEFAULT.rem}px`);
       for (const c of EXTRA_COLS) if (prefs[`show-${c.k}`]) parts.push(c.w);
       parts.push("40px", "92px");
       plMain.style.setProperty("--cols", parts.join(" "));
@@ -2076,6 +2101,13 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
             if (!created || list.length <= before) return null;
             delete patch.audio;
             const err2 = await tryCall("updateItem", { itemId: created.id, patchJson: JSON.stringify(patch) });
+            if (!err2 && ["live", "liveselect"].includes(d.kind)) {
+              // Die Audio-Wahl hängt von der aufgelösten Quelle ab: Editor direkt auf der Audio-Seite des neuen Events wieder öffnen.
+              setTimeout(async () => {
+                const fresh = ((await getParam("items")) || []).find((x) => x.id === created.id);
+                if (fresh) openEditor(fresh, "audio");
+              }, 500);
+            }
             return err2 ? T("ed.createdNoProps", { err: err2 }) : null;
           }
           if (!onAir) {
