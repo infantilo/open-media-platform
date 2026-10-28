@@ -11,6 +11,7 @@
 
 #![allow(dead_code)] // wird schrittweise angebunden (74.1 Adapter, 74.2+ Kern)
 
+pub mod map;
 pub mod mpl3;
 
 use std::collections::BTreeMap;
