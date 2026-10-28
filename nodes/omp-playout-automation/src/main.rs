@@ -60,6 +60,7 @@
 mod asrun;
 mod adbreak;
 mod children;
+mod foreign;
 mod hooks;
 mod persist;
 mod playlist;

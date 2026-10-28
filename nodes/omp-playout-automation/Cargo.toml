@@ -31,3 +31,6 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "sync", "time"] }
 ureq = { version = "3.3.0", features = ["json"] }
+# Kapitel 74: Fremdplaylist-Adapter lesen mehrere MB große, verschachtelte XML-Sendelisten; ein Handparser wäre bei
+# Entitäten/CDATA/Kodierung fehleranfällig. roxmltree: reine Rust-Bibliothek, keine Unsafe-/Build-Abhängigkeit, MIT/Apache-2.0.
+roxmltree = "0.20"
