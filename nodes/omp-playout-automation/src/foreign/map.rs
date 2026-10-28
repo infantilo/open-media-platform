@@ -181,6 +181,9 @@ pub fn plan(list: &ForeignList, cfg: &MapConfig) -> Plan {
                 out.approximated.push(format!("{} „{label}“: Übergang „{t}“ als Mix", e.uid));
             }
         }
+        if cfg.require_release {
+            patch.insert("requireRelease".into(), json!(true));
+        }
         let mut notes = std::mem::take(&mut pending_notes);
         if let Some(b) = &pending_block {
             notes.insert(0, format!("Block: {b}"));
@@ -289,6 +292,14 @@ mod tests {
         assert_eq!(kids[0]["delayMs"], 0);
         assert_eq!(kids[1]["data"]["Titel"], "Ein Titel");
         assert!(p.dropped.is_empty());
+    }
+
+    #[test]
+    fn freigabe_flag_wird_gesetzt() {
+        let p = plan(&list(), &MapConfig::from_json(&json!({"requireRelease": true})));
+        assert!(p.items.iter().all(|i| i.patch["requireRelease"] == true));
+        let p = plan(&list(), &MapConfig::default());
+        assert!(p.items.iter().all(|i| !i.patch.contains_key("requireRelease")));
     }
 
     #[test]

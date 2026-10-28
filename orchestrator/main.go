@@ -1238,6 +1238,7 @@ func main() {
 	*playoutSvc = playoutmod.Services{
 		Authz: authzStore, Roles: workflowSvc, Preflight: preflightSvc, Launcher: launcherSvc, NodeValues: nodeOptionStore,
 		Nodes: store, RetentionDays: cfg.AuditRetentionDays,
+		Release: reviewmod.NewStore(database),
 	}
 	if nc != nil {
 		playoutSvc.Publisher = nc

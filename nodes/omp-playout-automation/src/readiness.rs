@@ -113,6 +113,36 @@ pub struct MediaRef {
     /// Players (MXF: `stereo`, sonst Programmton der Quelle). Wird beim Laden an den Player gereicht.
     #[serde(rename = "audioMapping", default, skip_serializing_if = "String::is_empty")]
     pub audio_mapping: String,
+    /// Kapitel 74.3: Sendefreigabe verlangen (QC grün oder manuell freigegeben). `None` = Standard des Channels.
+    #[serde(rename = "requireRelease", default, skip_serializing_if = "Option::is_none")]
+    pub require_release: Option<bool>,
+}
+
+/// Auskunft des Eingangs zur Freigabe einer Datei (Kapitel 74.3).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReleaseView {
+    pub released: bool,
+    pub reason: String,
+    pub checked_ms: i64,
+}
+
+/// Gilt für dieses Event eine Freigabepflicht? Event-Angabe vor Channel-Standard.
+pub fn release_required(item: Option<bool>, channel_default: bool) -> bool {
+    item.unwrap_or(channel_default)
+}
+
+/// `None` = darf gesendet werden; `Some(Grund)` = gesperrt. Ohne Auskunft (Eingang nicht erreichbar, noch nicht
+/// geprüft) ist das Event bei verlangter Freigabe gesperrt — im Zweifel nicht senden; die Ausfallrichtlinie
+/// des Events entscheidet, was stattdessen läuft.
+pub fn release_block(required: bool, view: Option<&ReleaseView>) -> Option<String> {
+    if !required {
+        return None;
+    }
+    match view {
+        Some(v) if v.released => None,
+        Some(v) => Some(format!("nicht freigegeben: {}", v.reason)),
+        None => Some("Freigabe nicht prüfbar (Eingang nicht erreichbar oder noch nicht geprüft)".to_string()),
+    }
 }
 
 /// Erlaubte Werte der Klassifikation (leer = keine).
@@ -241,5 +271,30 @@ mod tests {
         assert_eq!(plan_materialization(air - 15_000, air, 20_000, 10_000, 15 * MIN), Plan::StartLate { short_by_ms: 15_000 });
         // Sendezeit schon vorbei: sofort, Fehlbetrag = Dauer + Abstand + Verspätung.
         assert!(matches!(plan_materialization(air + 5_000, air, 20_000, 10_000, 15 * MIN), Plan::StartLate { .. }));
+    }
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::*;
+
+    #[test]
+    fn freigabe_logik() {
+        assert!(release_required(Some(true), false) && !release_required(Some(false), true));
+        assert!(release_required(None, true) && !release_required(None, false));
+        let ok = ReleaseView { released: true, reason: "QC grün".into(), checked_ms: 1 };
+        let no = ReleaseView { released: false, reason: "QC rot und nicht freigegeben".into(), checked_ms: 1 };
+        assert_eq!(release_block(false, Some(&no)), None);
+        assert_eq!(release_block(true, Some(&ok)), None);
+        assert!(release_block(true, Some(&no)).unwrap().contains("QC rot"));
+        assert!(release_block(true, None).unwrap().contains("nicht prüfbar"));
+    }
+
+    #[test]
+    fn flag_im_json_nur_wenn_gesetzt() {
+        let m = MediaRef::default();
+        assert!(!serde_json::to_string(&m).unwrap().contains("requireRelease"));
+        let m: MediaRef = serde_json::from_str(r#"{"requireRelease":true}"#).unwrap();
+        assert_eq!(m.require_release, Some(true));
     }
 }

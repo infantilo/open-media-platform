@@ -1,6 +1,7 @@
 package playout
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/materialize"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/modules/review"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeoptions"
 )
 
@@ -22,6 +24,12 @@ type PreflightService interface {
 	Start(spec materialize.Spec, by string) (executionID string, err error)
 }
 
+// ReleaseChecker beantwortet, ob der Eingang (Kap. 43) ein Asset für die Sendung freigegeben hat (Kap. 74.3).
+type ReleaseChecker interface {
+	ReleaseStatus(ctx context.Context, assetID string) (review.ReleaseInfo, error)
+	ReleaseStatusByFile(ctx context.Context, fileName string) (review.ReleaseInfo, error)
+}
+
 type preflightTarget struct {
 	// NodeLabel: Label der Player-Instanz; daraus ergeben sich Host und wirksames Medienverzeichnis.
 	NodeLabel string `json:"nodeLabel,omitempty"`
@@ -32,6 +40,8 @@ type preflightTarget struct {
 type preflightItem struct {
 	Key string `json:"key"`
 	materialize.Ref
+	// ReleaseFile: nur Freigabe-Auskunft zu diesem Dateinamen (Item ohne Asset-Bezug); die Verfügbarkeit wird dann nicht geprüft.
+	ReleaseFile string `json:"releaseFile,omitempty"`
 }
 
 // hostFileChecker adaptiert LauncherService.CheckPathOnHost auf materialize.HostPaths.
@@ -94,7 +104,7 @@ func resolvePreflightTarget(t preflightTarget, svc LauncherService, values NodeO
 
 // handlePlayoutPreflight: POST /api/v1/playout/channels/{id}/preflight
 // {"target":{"nodeLabel":"…"},"items":[{"key":"…","assetId":"…"}]} → Verfügbarkeit je Eintrag.
-func handlePlayoutPreflight(p PreflightService, svc PlayoutService, az verbChecker, roles InstanceRoleResolver, launcher LauncherService, values NodeOptionValues) http.HandlerFunc {
+func handlePlayoutPreflight(p PreflightService, rel ReleaseChecker, svc PlayoutService, az verbChecker, roles InstanceRoleResolver, launcher LauncherService, values NodeOptionValues) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := channelAccess(svc, az, roles, w, r); !ok {
 			return
@@ -115,10 +125,32 @@ func handlePlayoutPreflight(p PreflightService, svc PlayoutService, az verbCheck
 		type entry struct {
 			Key string `json:"key"`
 			materialize.Result
+			// Release: Freigabe-Auskunft des Eingangs (nur bei Asset-Referenz und verfügbarem Eingang).
+			Release *review.ReleaseInfo `json:"release,omitempty"`
 		}
 		out := make([]entry, 0, len(body.Items))
 		for _, it := range body.Items {
-			out = append(out, entry{Key: it.Key, Result: p.Check(it.Ref, target, hostFileChecker{launcher})})
+			e := entry{Key: it.Key}
+			fileOnly := it.AssetID == "" && it.RepresentationID == "" && it.ReleaseFile != ""
+			if !fileOnly {
+				e.Result = p.Check(it.Ref, target, hostFileChecker{launcher})
+			}
+			if rel != nil {
+				var info review.ReleaseInfo
+				var err error
+				switch {
+				case it.AssetID != "":
+					info, err = rel.ReleaseStatus(r.Context(), it.AssetID)
+				case it.ReleaseFile != "":
+					info, err = rel.ReleaseStatusByFile(r.Context(), it.ReleaseFile)
+				default:
+					err = errors.New("kein Bezug")
+				}
+				if err == nil {
+					e.Release = &info
+				}
+			}
+			out = append(out, e)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"target": target, "items": out})
 	}

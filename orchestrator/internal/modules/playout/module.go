@@ -33,6 +33,8 @@ type Services struct {
 	Nodes NodeLister
 	// Publisher zustellt Trigger per NATS; nil = Trigger werden nur gespeichert.
 	Publisher channeltrigger.Publisher
+	// Release: Freigabe-Auskunft des Eingangs für den Preflight (Kap. 74.3); nil = keine Auskunft.
+	Release ReleaseChecker
 	// RetentionDays: Aufbewahrung des As-Run-Protokolls.
 	RetentionDays int
 }
@@ -87,7 +89,7 @@ func (m *Module) Mount(r module.Routes, d module.Deps) error {
 	r.Handle("PUT /api/v1/playout/channels/{id}/state", module.Authenticated(), handlePutPlayoutState(svc, az, roles))
 	r.Handle("POST /api/v1/playout/channels/{id}/executions", module.Authenticated(), handleRecordPlayoutExecution(svc, az, roles))
 	if m.svc.Preflight != nil {
-		r.Handle("POST /api/v1/playout/channels/{id}/preflight", module.Authenticated(), handlePlayoutPreflight(m.svc.Preflight, svc, az, roles, m.svc.Launcher, m.svc.NodeValues))
+		r.Handle("POST /api/v1/playout/channels/{id}/preflight", module.Authenticated(), handlePlayoutPreflight(m.svc.Preflight, m.svc.Release, svc, az, roles, m.svc.Launcher, m.svc.NodeValues))
 		r.Handle("POST /api/v1/playout/channels/{id}/materialize", module.Authenticated(), handlePlayoutMaterialize(m.svc.Preflight, svc, az, roles, m.svc.Launcher, m.svc.NodeValues, audit))
 	}
 	r.Handle("POST /api/v1/playout/channels/{id}/as-run", module.Authenticated(), handlePostAsRun(m.asrun, svc, az, roles))

@@ -1299,6 +1299,16 @@
       "group": "Betrieb"
     },
     {
+      "key": "OMP_REQUIRE_RELEASE",
+      "i18n": { "en": {"label": "Require release before air", "description": "Standard for the channel: a file event only goes to air when intake QC is green or the file was released manually (per event overridable). Otherwise the event's failure policy applies. Default off.", "group": "Operation"} },
+      "label": "Sendefreigabe verlangen",
+      "type": "enum",
+      "default": "0",
+      "choices": [{ "value": "0" }, { "value": "1" }],
+      "description": "Standard des Channels: ein Datei-Event geht nur auf Sendung, wenn die QC im Eingang grün ist oder die Datei manuell freigegeben wurde (je Event überschreibbar). Sonst greift die Ausfallrichtlinie des Events. Standard aus.",
+      "group": "Betrieb"
+    },
+    {
       "key": "OMP_PLAYOUT_ADBREAK",
       "i18n": {
         "en": {

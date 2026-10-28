@@ -1,6 +1,7 @@
 package playout
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/materialize"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/modules/review"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/playout"
 )
 
@@ -40,7 +42,7 @@ func preflightFixture() (*fakePlayout, optLauncher, *memValues) {
 func TestPreflightResolvesTheTargetMediaDirFromInstanceThenTypeThenDefault(t *testing.T) {
 	svc, l, vals := preflightFixture()
 	fp := &fakePreflight{result: materialize.Result{State: materialize.StateRemoteOnly, Materializable: true}}
-	h := handlePlayoutPreflight(fp, svc, fakeVerbs{}, nil, l, vals)
+	h := handlePlayoutPreflight(fp, nil, svc, fakeVerbs{}, nil, l, vals)
 	call := func() map[string]any {
 		w := httptest.NewRecorder()
 		h(w, playoutReq("POST", "/x", `{"target":{"nodeLabel":"Player A"},"items":[{"key":"i1","assetId":"a1"}]}`, "inst-1"))
@@ -117,5 +119,51 @@ func TestMaterializeStartsOnlyWhenNeededAndPossible(t *testing.T) {
 	fp.result = materialize.Result{State: materialize.StateRemoteOnly, Materializable: false, Detail: "Remote"}
 	if w := post(); w.Code != http.StatusConflict || len(fp.started) != 1 {
 		t.Fatalf("nicht materialisierbar: %d", w.Code)
+	}
+}
+
+type fakeRelease struct{ info review.ReleaseInfo }
+
+func (f fakeRelease) ReleaseStatus(_ context.Context, id string) (review.ReleaseInfo, error) {
+	if id == "unbekannt" {
+		return review.ReleaseInfo{Reason: "nicht im Eingang registriert"}, nil
+	}
+	return f.info, nil
+}
+
+func (f fakeRelease) ReleaseStatusByFile(_ context.Context, name string) (review.ReleaseInfo, error) {
+	return review.ReleaseInfo{Known: true, Released: name == "frei.mxf", Reason: "per Datei"}, nil
+}
+
+func TestPreflightReportsReleaseStatusFromTheIntake(t *testing.T) {
+	svc, l, vals := preflightFixture()
+	fp := &fakePreflight{result: materialize.Result{State: materialize.StateReady}}
+	h := handlePlayoutPreflight(fp, fakeRelease{review.ReleaseInfo{Known: true, Released: true, QC: "pass", Reason: "QC grün"}}, svc, fakeVerbs{}, nil, l, vals)
+	w := httptest.NewRecorder()
+	h(w, playoutReq("POST", "/x", `{"target":{"nodeLabel":"Player A"},"items":[{"key":"a","assetId":"a1"},{"key":"b","assetId":"unbekannt"},{"key":"c","representationId":"r1"},{"key":"d","releaseFile":"frei.mxf"},{"key":"e","releaseFile":"gesperrt.mxf"}]}`, "inst-1"))
+	if w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	var out struct {
+		Items []struct {
+			Key     string `json:"key"`
+			Release *struct {
+				Released bool   `json:"released"`
+				Reason   string `json:"reason"`
+			} `json:"release"`
+		} `json:"items"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &out)
+	if len(out.Items) != 5 || out.Items[3].Release == nil || !out.Items[3].Release.Released || out.Items[4].Release == nil || out.Items[4].Release.Released {
+		t.Fatalf("Auskunft per Dateiname: %+v", out.Items)
+	}
+	if  out.Items[0].Release == nil || !out.Items[0].Release.Released || out.Items[0].Release.Reason != "QC grün" {
+		t.Fatalf("a: %+v", out.Items)
+	}
+	if out.Items[1].Release == nil || out.Items[1].Release.Released {
+		t.Fatalf("unbekanntes Asset ist nie freigegeben: %+v", out.Items[1])
+	}
+	if out.Items[2].Release != nil {
+		t.Fatalf("ohne assetId keine Auskunft: %+v", out.Items[2])
 	}
 }

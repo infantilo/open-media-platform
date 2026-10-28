@@ -756,6 +756,10 @@ struct AutomationState {
     preflight_window_min: u32,
     /// Standard-Filler des Channels (Dateiname im Medienverzeichnis), Richtlinie DEFAULT_FILLER.
     default_filler: String,
+    /// Kapitel 74.3: Channel-Standard „Sendefreigabe verlangen“ (Event-Angabe `requireRelease` hat Vorrang).
+    require_release_default: bool,
+    /// Kapitel 74.3: zuletzt erfragte Freigabe je Item (Release-Schleife).
+    release: HashMap<String, readiness::ReleaseView>,
     /// Kapitel 6 Teil 5 (`graphics_loop`-Doku): Ziel-`omp-ograf` für
     /// Grafik-Kind-Ereignisse — dasselbe dynamische Label-Muster wie
     /// `target_player_label`/`target_mixer_label`, aber bewusst
@@ -842,6 +846,8 @@ impl AutomationState {
             readiness: HashMap::new(),
             preflight_window_min: 15,
             default_filler: String::new(),
+            require_release_default: std::env::var("OMP_REQUIRE_RELEASE").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
+            release: HashMap::new(),
             target_graphics_label: graphics_label,
             target_audio_mixer_label: String::new(),
             audio_mixer_node_id: None,
@@ -2252,6 +2258,14 @@ struct ItemPatch {
     on_missing: Option<String>,
     #[serde(rename = "fallbackFile")]
     fallback_file: Option<String>,
+    /// Kapitel 74.3: `true`/`false` setzt, `null` löscht (= Channel-Standard).
+    #[serde(rename = "requireRelease", default, deserialize_with = "double_option")]
+    require_release: Option<Option<bool>>,
+}
+
+/// Unterscheidet „Feld fehlt“ (`None`) von „Feld ist null“ (`Some(None)`).
+fn double_option<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<bool>>, D::Error> {
+    serde::Deserialize::deserialize(d).map(Some)
 }
 
 
@@ -2333,6 +2347,10 @@ fn apply_item_patch(
     }
     if let Some(f) = p.fallback_file {
         meta.media_ref.fallback_file = Some(f).filter(|f| !f.trim().is_empty());
+    }
+    if let Some(r) = p.require_release {
+        meta.media_ref.require_release = r;
+        state.release.remove(item_id);
     }
     state.fixtime_resolved.remove(item_id);
     state.readiness.remove(item_id);
@@ -2435,29 +2453,134 @@ fn resolve_asset_file(store: &AutomationStore, target_label: &str, asset: &readi
     Ok(name.to_string())
 }
 
+/// Kapitel 74.3: fragt die Sendefreigabe zu Dateien ab (Asset-Bezug oder Dateiname). Antwort je Eintrag wie `preflight`
+/// mit `release` {known, released, reason, …}. Blockierend.
+fn release_request(store: &AutomationStore, channel_id: &str, target_label: &str, items: &[(String, Option<readiness::AssetRef>, String)]) -> Result<Vec<Value>, String> {
+    if channel_id.is_empty() {
+        return Err("Channel unbekannt (Persistenz noch nicht verbunden)".to_string());
+    }
+    let body = serde_json::json!({
+        "target": {"nodeLabel": target_label},
+        "items": items.iter().map(|(k, a, f)| match a {
+            Some(a) if !a.asset_id.is_empty() => serde_json::json!({"key": k, "assetId": a.asset_id, "versionId": a.version_id, "representationType": a.representation_type}),
+            _ => serde_json::json!({"key": k, "releaseFile": f}),
+        }).collect::<Vec<_>>(),
+    });
+    let resp = remote::post_json(&store.orchestrator_url, &store.auth, &format!("/api/v1/playout/channels/{channel_id}/preflight"), &body)?;
+    Ok(resp.get("items").and_then(Value::as_array).cloned().unwrap_or_default())
+}
+
+fn release_view_of(entry: &Value, now_ms: i64) -> Option<readiness::ReleaseView> {
+    let r = entry.get("release")?;
+    Some(readiness::ReleaseView {
+        released: r.get("released").and_then(Value::as_bool).unwrap_or(false),
+        reason: r.get("reason").and_then(Value::as_str).unwrap_or("").to_string(),
+        checked_ms: now_ms,
+    })
+}
+
+/// Freigabe eines Items jetzt erfragen; `None` = keine Auskunft (Fehler wird gemeldet).
+fn fetch_release(store: &AutomationStore, channel: &str, target_label: &str, meta: &ItemMeta) -> Option<readiness::ReleaseView> {
+    let ItemMedia::File { path } = &meta.media else { return None };
+    match release_request(store, channel, target_label, &[("take".to_string(), meta.media_ref.asset.clone(), path.clone())]) {
+        Ok(v) => v.first().and_then(|e| release_view_of(e, chrono::Utc::now().timestamp_millis())),
+        Err(e) => {
+            report_throttled(store, format!("Freigabe für „{}\u{201c} nicht erfragbar: {e}", meta.label));
+            None
+        }
+    }
+}
+
+/// Datei-Items vorne in der Liste, für die eine Freigabe verlangt wird (Release-Schleife).
+fn upcoming_release_items(state: &AutomationState) -> Vec<(String, Option<readiness::AssetRef>, String)> {
+    let from = state.playlist.current_index().unwrap_or(0);
+    state
+        .playlist
+        .items()
+        .iter()
+        .skip(from)
+        .take(SCHEDULE_MAX_ENTRIES)
+        .filter_map(|id| {
+            let m = state.metadata.get(id)?;
+            let ItemMedia::File { path } = &m.media else { return None };
+            readiness::release_required(m.media_ref.require_release, state.require_release_default).then(|| (id.clone(), m.media_ref.asset.clone(), path.clone()))
+        })
+        .collect()
+}
+
+/// Kapitel 74.3: fragt alle 5 s die Freigabe der anstehenden Datei-Events beim Eingang ab (asynchron zum Takt).
+async fn release_loop(store: Arc<AutomationStore>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(5));
+    loop {
+        interval.tick().await;
+        let (items, label, channel) = {
+            let state = store.state.lock().expect("lock poisoned");
+            (upcoming_release_items(&state), state.target_player_a_label.clone(), store.persistence.channel_id())
+        };
+        if items.is_empty() || label.is_empty() || channel.is_empty() {
+            store.state.lock().expect("lock poisoned").release.clear();
+            continue;
+        }
+        let s2 = store.clone();
+        let items2 = items.clone();
+        let res = tokio::task::spawn_blocking(move || release_request(&s2, &channel, &label, &items2)).await;
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let mut state = store.state.lock().expect("lock poisoned");
+        match res {
+            Ok(Ok(entries)) => {
+                let mut fresh = HashMap::new();
+                for e in &entries {
+                    if let (Some(k), Some(v)) = (e.get("key").and_then(Value::as_str), release_view_of(e, now_ms)) {
+                        fresh.insert(k.to_string(), v);
+                    }
+                }
+                state.release = fresh;
+            }
+            Ok(Err(e)) => {
+                state.release.clear(); // ohne Auskunft gilt „nicht prüfbar“ = gesperrt
+                drop(state);
+                report_throttled(&store, format!("Freigabe-Abfrage fehlgeschlagen: {e}"));
+            }
+            Err(_) => {}
+        }
+    }
+}
+
 /// Spec §73: Ist das Asset-Medium des Items zur Sendezeit nicht bereit, entscheidet die Ausfallrichtlinie.
 /// Wird vor dem Laden aufgerufen (Take). Liefert das tatsächlich zu sendende Item (ggf. ersetzt) oder den
 /// Fehler „Event gehalten“. Ist der Preflight selbst nicht erreichbar, wird NICHT ersetzt (ungeprüft laden —
 /// der Player meldet fehlende Dateien selbst), aber gemeldet.
 fn apply_media_policy(store: &AutomationStore, state: &AutomationState, target_label: &str, meta: &ItemMeta, at_take: bool) -> Result<ItemMeta, String> {
-    let Some(asset) = meta.media_ref.asset.clone() else { return Ok(meta.clone()) };
     if !matches!(meta.media, ItemMedia::File { .. }) {
         return Ok(meta.clone());
     }
     let channel = store.persistence.channel_id();
-    let check = preflight_request(store, &channel, target_label, &[("take".to_string(), asset)]);
-    let entry = match check {
-        Ok(v) => v.into_iter().next().unwrap_or(Value::Null),
-        Err(e) => {
-            report_throttled(store, format!("Preflight für „{}\u{201c} nicht möglich ({e}) — Medium wird ungeprüft geladen", meta.label));
-            return Ok(meta.clone());
+    // Kapitel 74.3: Sendefreigabe des Eingangs (QC grün oder manuell freigegeben) — greift vor der Verfügbarkeit.
+    let required = readiness::release_required(meta.media_ref.require_release, state.require_release_default);
+    let release_why = if required {
+        readiness::release_block(true, fetch_release(store, &channel, target_label, meta).as_ref())
+    } else {
+        None
+    };
+    let why = match release_why {
+        Some(w) => w,
+        None => {
+            let Some(asset) = meta.media_ref.asset.clone() else { return Ok(meta.clone()) };
+            let check = preflight_request(store, &channel, target_label, &[("take".to_string(), asset)]);
+            let entry = match check {
+                Ok(v) => v.into_iter().next().unwrap_or(Value::Null),
+                Err(e) => {
+                    report_throttled(store, format!("Preflight für „{}\u{201c} nicht möglich ({e}) — Medium wird ungeprüft geladen", meta.label));
+                    return Ok(meta.clone());
+                }
+            };
+            let st = entry.get("state").and_then(Value::as_str).unwrap_or("");
+            if st == "READY" {
+                return Ok(meta.clone());
+            }
+            format!("{st}{}", entry.get("detail").and_then(Value::as_str).filter(|d| !d.is_empty()).map(|d| format!(": {d}")).unwrap_or_default())
         }
     };
-    let st = entry.get("state").and_then(Value::as_str).unwrap_or("");
-    if st == "READY" {
-        return Ok(meta.clone());
-    }
-    let why = format!("{st}{}", entry.get("detail").and_then(Value::as_str).filter(|d| !d.is_empty()).map(|d| format!(": {d}")).unwrap_or_default());
     let outcome = readiness::apply_policy(
         meta.media_ref.on_missing,
         meta.media_ref.fallback_file.as_deref(),
@@ -3535,6 +3658,7 @@ impl ParamStore for AutomationStore {
                 readonly: false,
             },
             ParamSpec { name: "defaultFiller".to_string(), kind: ParamType::String, unit: None, range: None, readonly: false },
+            ParamSpec { name: "requireRelease".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: false },
             // Kapitel 27 / P7: Protokoll der letzten Channel-Trigger (JSON-Array, neueste zuerst).
             ParamSpec { name: "triggerLog".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             // Kapitel 27 / P1b: Anbindung an die Domäne `playout` (s.
@@ -3985,6 +4109,20 @@ impl ParamStore for AutomationStore {
                         } else if m.media_ref.asset.is_some() {
                             v["readiness"] = serde_json::json!(readiness::Readiness::Unknown);
                         }
+                        // Kapitel 74.3: Freigabe-Anzeige; bei verlangter, aber fehlender Freigabe ist das Event nicht bereit.
+                        if matches!(m.media, ItemMedia::File { .. }) {
+                            let required = readiness::release_required(m.media_ref.require_release, state.require_release_default);
+                            v["releaseRequired"] = serde_json::json!(required);
+                            if required {
+                                let view = state.release.get(id);
+                                let block = readiness::release_block(true, view);
+                                v["release"] = serde_json::json!({"released": view.map(|x| x.released), "reason": view.map(|x| x.reason.clone()), "checkedMs": view.map(|x| x.checked_ms), "blocked": block});
+                                if block.is_some() {
+                                    v["readiness"] = serde_json::json!(readiness::Readiness::NotReady);
+                                    v["readinessDetail"] = serde_json::json!(block);
+                                }
+                            }
+                        }
                         v
                     }))
                     .collect::<Vec<_>>()
@@ -4008,6 +4146,7 @@ impl ParamStore for AutomationStore {
             "adBlocks" => Some(ad_blocks_json(&state)),
             "preflightWindowMin" => Some(serde_json::json!(state.preflight_window_min)),
             "defaultFiller" => Some(serde_json::json!(state.default_filler)),
+            "requireRelease" => Some(serde_json::json!(state.require_release_default)),
             "triggerLog" => Some(Value::Array(self.trigger_log.lock().expect("lock poisoned").iter().cloned().collect())),
             "schedule" => Some(schedule_json(&state, chrono::Utc::now().timestamp_millis())),
             "childEvents" => Some(child_events_json(&state)),
@@ -4131,6 +4270,11 @@ impl ParamStore for AutomationStore {
             }
             "defaultFiller" => {
                 state.default_filler = value.as_str().unwrap_or_default().trim().to_string();
+                Ok(())
+            }
+            "requireRelease" => {
+                state.require_release_default = value.as_bool().ok_or(SetError::Unknown)?;
+                state.release.clear();
                 Ok(())
             }
             "targetAudioMixerLabel" => {
@@ -5591,6 +5735,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tokio::spawn(persist::asrun_loop(store.clone()));
     // Kapitel 27 / P8: Medien-Preflight (Verfügbarkeit, rechtzeitige Bereitstellung, Bereitschaft je Event).
     tokio::spawn(preflight_loop(store.clone()));
+    tokio::spawn(release_loop(store.clone()));
     // Kapitel 27 / P7: Channel-Trigger empfangen.
     tokio::spawn(trigger_loop(store.clone(), nats_url_for_triggers));
 
@@ -6500,6 +6645,21 @@ mod patch_tests {
         let c = ChildEvent::graphic("t1", children::TimingMode::RelativeToStart, 1000, 0);
         apply_item_patch(&mut st, "a", None, None, None, None, None, ItemPatch { children: Some(vec![c]), ..Default::default() }).unwrap();
         assert_eq!(st.metadata["a"].children.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod release_patch_tests {
+    use super::*;
+
+    #[test]
+    fn require_release_patch_unterscheidet_fehlt_null_und_wert() {
+        let p: ItemPatch = serde_json::from_str("{}").unwrap();
+        assert_eq!(p.require_release, None);
+        let p: ItemPatch = serde_json::from_str(r#"{"requireRelease":null}"#).unwrap();
+        assert_eq!(p.require_release, Some(None));
+        let p: ItemPatch = serde_json::from_str(r#"{"requireRelease":true}"#).unwrap();
+        assert_eq!(p.require_release, Some(Some(true)));
     }
 }
 
