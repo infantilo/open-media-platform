@@ -6083,3 +6083,8 @@ Ausgangslage: der Diagnose-Tab erklärt Meldungen, aber ein Supporter braucht de
 - UI: Karte „Paket auswerten“ im Support-Tab (`ui/shell/analysis-view.ts`), „Auswerten“ je Momentaufnahme, „Bericht für KI kopieren“.
 - KI: `docs/PAKET-AUSWERTUNG-KI.md` (Anleitung + Reihenfolge der Rohdateien).
 - Handbuch (BENUTZERHANDBUCH, Support-Tab) ergänzt; Kurven, Ausfälle, wachsender Speicher, hohe Last mit synthetischem Paket im Browser geprüft (echter Vorfall steht aus).
+
+
+## Kapitel 74: Fremdplaylist-Import, Havarie-Mitlauf, Freigabe-Durchlauf, intuitivere Playout-UI (Nutzerauftrag 2026-10-28, **nur Entwurf, noch kein Code**)
+
+Entwurf, Befund der zwei echten Beispieldateien (`marinaPlaylist` 3.1, 1057/1470 Events, verschachtelte Child Events), WSDL-Auswertung, Abbildungstabelle, offene Entscheidungen (Mitlauf-Quelle/-Verhalten, Freigabe-Flag, Vergleichskriterien) und Schritte 74.1–74.7: **`docs/ENTWURF-FREMDPLAYLIST-UND-DURCHLAUF.md`**. Fremdformat bleibt Adapter, nicht internes Format; keine Herstellernamen im Produkt. Neue Dependency (XML-Parser) vor 74.1 nach §0 Punkt 5 zu begründen. Empfohlene Reihenfolge: 74.1 → 74.3 → 74.4 → 74.5, dann 74.2/74.6/74.7.
