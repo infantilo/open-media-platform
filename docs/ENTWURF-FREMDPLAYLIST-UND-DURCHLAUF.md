@@ -70,16 +70,35 @@ Beobachtungen an den Beispieldateien, auf die der Watcher aufbaut:
 Wichtig: Der Import erzeugt immer einen **Importbericht** (übernommen / angenähert / verworfen, mit Grund), damit nichts
 stillschweigend verschwindet.
 
-## 4. Offene Entscheidungen für den Nutzer
+## 4. Entscheidungen (Nutzer 2026-10-28)
 
-1. **Mitlauf-Quelle:** ENTSCHIEDEN — Watchfolder auf die Autorejoin-Dateien (§2); keine SOAP-Abhängigkeit.
-2. **Mitlauf-Verhalten:** Schattenbetrieb = Automator rechnet die Fremdliste live mit (Position per Uhrzeit/`houseTime`, ohne die
-   Player anzufassen), Übernahme per Knopf ab dem laufenden Event („Havarie ziehen“). Bestätigen?
-3. **Freigabe-Flag:** Standard AUS (alte Listen verhalten sich unverändert); pro Event oder pro Channel einschaltbar:
-   „nur senden, wenn QC grün **oder** manuell freigegeben“. Bei Verstoß greift die vorhandene Ausfallrichtlinie (HOLD/SKIP/FALLBACK …).
-4. **Vergleich Original ↔ Secondary Record:** Welche Kriterien zählen als „bestanden“ (Dauer ± Frames, Framerate gleich,
-   Auflösung/Codec egal?, Qualität = SSIM/PSNR-Schwelle oder QC-Befunde gleich)? Vorschlag: Dauer ±1 Frame, Framerate exakt,
-   SSIM ≥ 0,98 auf Stichprobe, QC-Bericht der Aufnahme ohne neue Fehler.
+1. **Mitlauf-Quelle:** Watchfolder auf die Autorejoin-Dateien (§2); keine SOAP-Abhängigkeit.
+2. **Mitlauf-Verhalten:** Die Schattenliste zieht sich **automatisch synchron** mit jeder neuen gültigen Fremddatei (Diff, §2). Die Player
+   werden im Schattenbetrieb nicht angefasst; die Übernahme („Havarie ziehen“) ist eine bewusste Bedienung ab dem laufenden Event.
+3. **Freigabe-Flag:** ja. Standard AUS (Altlisten unverändert), je Channel und je Event einschaltbar: Sendung nur bei „QC grün **oder**
+   manuell freigegeben“; bei Verstoß greift die vorhandene Ausfallrichtlinie (HOLD/SKIP/FALLBACK/…).
+4. **Vergleichskriterien Original ↔ Secondary Record:** Dauer ±1 Frame, Framerate exakt gleich, SSIM ≥ 0,98 auf Stichprobe, keine neuen QC-Fehler.
+5. **Architektur:** Fremdformate sind **Adapter-Plugins im `omp-playout-automation`-Node**, damit andere Sender andere Automationssysteme
+   anbinden können (siehe §6). Keine Herstellernamen im Produkt.
+
+## 6. Plugin-Architektur für Fremdformate
+
+Trennung in zwei Schichten, damit ein neuer Adapter nur das Format kennen muss:
+
+- **Adapter** (`trait ForeignFormat`, ein Modul je Format, Registrierung im Node beim Start): `id()` (z. B. `mpl3`), `label()`,
+  `sniff(bytes) -> bool` (erkennt das Format am Inhalt), `parse(bytes, &ParseCtx) -> Result<ForeignList, ParseError>`,
+  `is_complete(bytes) -> bool` (für den Watcher: Datei fertig geschrieben?). Ergebnis ist ein **neutrales Zwischenmodell**
+  `ForeignList { channel, list_state, house_time, events: Vec<ForeignEvent>, report }` mit `ForeignEvent { uid, reconcile_key, kind
+  (Clip|Live|Image|Hold|Marker|Comment), title, media_name, source_logical, fallback_logical, start (Fixed|Sequential|ParentStart),
+  duration/end, som, transition, state, children, meta, warnings }`. Zeiten sind exakte Frames + Framerate (kein Gleitkomma).
+- **Kern (formatunabhängig):** Zwischenmodell → OMP-Items (Abbildungstabelle §3), Watchfolder-Watcher (§2), Diff/Sync, Schattenliste,
+  Übernahme, Importbericht, Alarm bei veraltetem Eingang, Freigabe-Flag. Dieser Teil wird einmal gebaut.
+- **Als Plugin sichtbar:** Jeder Adapter ist im vorhandenen SDK-Plugin-Host (`PluginRegistry`) eingetragen (`foreign-<id>`, Standard AUS).
+  Konfiguration (JSON): `watchDir`, `filePattern`, `channelKey` (z. B. Kennung 5000), `maxAgeSec` (120), `autoSync` (an), `mode` (`shadow`|`off`).
+  Aktivieren/Konfigurieren läuft über die bestehenden Routen `/api/v1/nodes/<id>/plugins/<pluginId>`.
+- **Grenze (ehrlich):** „Plugin“ heißt hier fest einkompiliertes, einzeln schaltbares Modul, nicht zur Laufzeit nachladbare Bibliothek
+  (Rust, kein stabiles ABI). Ein neuer Adapter ist eine Datei + eine Registrierungszeile; ein späteres Nachladen (WASM/Prozess über
+  Standard-Ein-/Ausgabe) bleibt möglich, weil die Schnittstelle bytes → neutrales JSON ist. Das Zwischenmodell ist serialisierbar angelegt.
 
 ## 5. Schritte (je eine Sitzung, §0 Punkt 2)
 
