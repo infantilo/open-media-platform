@@ -334,6 +334,8 @@ const T = (() => {
       "cart.new": "Neuer Cart",
       "cart.manageTitle": "Assets / Carts verwalten",
       "fixCountdown": "⏰ {hms} „{label}“ in {t}",
+      "cntLive": "Nächstes Live-Event", "cntFix": "Nächstes Fix-Event", "cntMiss": "Nächstes Event ohne Quelle", "cntShow": "Zähler anzeigen:",
+      "cntIn": "{label} in {t}",
       "planWarn.one": "⚠ 1 Plan-Warnung (Überlappung, Lücke oder unbestimmter Start — Details am ⚠ in der Zeitspalte)",
       "planWarn.many": "⚠ {n} Plan-Warnungen (Überlappung, Lücke oder unbestimmter Start — Details am ⚠ in der Zeitspalte)",
       "noTriggerYet": "Noch keine Trigger."
@@ -670,6 +672,8 @@ const T = (() => {
       "cart.new": "New cart",
       "cart.manageTitle": "Manage assets / carts",
       "fixCountdown": "⏰ {hms} “{label}” in {t}",
+      "cntLive": "Next live event", "cntFix": "Next fixed event", "cntMiss": "Next event without source", "cntShow": "Show counters:",
+      "cntIn": "{label} in {t}",
       "planWarn.one": "⚠ 1 plan warning (overlap, gap or undetermined start — details at the ⚠ in the time column)",
       "planWarn.many": "⚠ {n} plan warnings (overlap, gap or undetermined start — details at the ⚠ in the time column)",
       "noTriggerYet": "No triggers yet."
@@ -1150,7 +1154,16 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     const modeChip = h("span", { class: "chip" });
     const connectedChip = h("span", { class: "chip" }, T("notConnected"));
     const persistChip = h("span", { class: "chip" }, T("channelLabel", { name: "…" }));
-    const nextFixEl = h("div", { class: "info", style: "display:none" });
+    // Zähler bis zum nächsten Live-/Fix-/Quelle-fehlt-Event; jeder einzeln abschaltbar (nur in diesem Browser gemerkt).
+    const CNT_KINDS = ["live", "fix", "miss"];
+    const cntOn = (() => { try { return { live: true, fix: true, miss: true, ...JSON.parse(localStorage.getItem("omp-pa-counters") || "{}") }; } catch { return { live: true, fix: true, miss: true }; } })();
+    const cntEls = Object.fromEntries(CNT_KINDS.map((k) => [k, h("span", { class: "chip blue", style: "display:none" })]));
+    const nextFixEl = h("div", { class: "info", style: "display:flex;gap:8px;flex-wrap:wrap;align-items:center" },
+      ...CNT_KINDS.map((k) => cntEls[k]),
+      h("span", { style: "margin-left:auto;opacity:.7;font-size:11px" }, T("cntShow")),
+      ...CNT_KINDS.map((k) => h("label", { style: "font-size:11px;opacity:.85" },
+        h("input", { type: "checkbox", checked: cntOn[k], onchange: (e) => { cntOn[k] = e.target.checked; try { localStorage.setItem("omp-pa-counters", JSON.stringify(cntOn)); } catch { /* ignorieren */ } } }),
+        ` ${T("cnt" + k[0].toUpperCase() + k.slice(1))}`)));
     const planWarnEl = h("div", { class: "info warn", style: "display:none" });
     const head = h("div", { class: "head" }, clockEl, modeChip, connectedChip, persistChip);
 
@@ -2484,7 +2497,11 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         }));
       }
 
-      // Countdown zum nächsten Fixzeit-Event
+      // Zähler: nächstes Fix-Event (Uhrzeit), nächstes Live-Event und nächstes Event ohne Quelle (Playlist-Abstand ab Sendeposition)
+      const fmtRemain = (sec) => {
+        const hh = Math.floor(sec / 3600), mm = Math.floor((sec % 3600) / 60), ss = sec % 60;
+        return `${hh > 0 ? `${hh}:${String(mm).padStart(2, "0")}` : mm}:${String(ss).padStart(2, "0")}`;
+      };
       const nowMs = Date.now();
       const d0 = new Date();
       const nowSecs = d0.getHours() * 3600 + d0.getMinutes() * 60 + d0.getSeconds();
@@ -2493,16 +2510,30 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         const [hh, mm, ss] = it.fixtimeHms.split(":").map(Number);
         return { label: it.label, hms: it.fixtimeHms, remain: hh * 3600 + mm * 60 + ss - nowSecs };
       }).filter((f) => Number.isFinite(f.remain) && f.remain >= 0).sort((a, b) => a.remain - b.remain);
-      if (upcoming.length) {
-        const n = upcoming[0];
-        const hh = Math.floor(n.remain / 3600), mm = Math.floor((n.remain % 3600) / 60), ss = n.remain % 60;
-        nextFixEl.textContent = T("fixCountdown", { hms: n.hms, label: n.label, t: `${hh > 0 ? `${hh}:${String(mm).padStart(2, "0")}` : mm}:${String(ss).padStart(2, "0")}` });
-        nextFixEl.style.display = "";
-      } else nextFixEl.style.display = "none";
+      const show = (k, text) => {
+        cntEls[k].textContent = text || "";
+        cntEls[k].style.display = cntOn[k] && text ? "" : "none";
+      };
+      show("fix", upcoming.length ? T("fixCountdown", { hms: upcoming[0].hms, label: upcoming[0].label, t: fmtRemain(upcoming[0].remain) }) : "");
 
       // Plan + Zeitfenster
       const timeline = items.length ? await fetch(`/api/v1/nodes/${nodeId}/timeline/window?fromIndex=0&count=${items.length}`).then((r) => (r.ok ? r.json() : [])).catch(() => []) : [];
       timeByIndex = new Map(timeline.map((e) => [e.index, e]));
+      // Playlist-Abstand: Beginn des Ziel-Events minus aktuelle Sendeposition (nur bei laufendem Event bekannt)
+      const curIdx = items.findIndex((i) => i.id === currentItemId);
+      const tl = timeByIndex;
+      const remainTo = (pred) => {
+        if (curIdx < 0 || !tl.get(curIdx)) return "";
+        for (let i = curIdx + 1; i < items.length; i++) {
+          if (!pred(items[i]) || !tl.get(i)) continue;
+          const ms = tl.get(i).startMs - (tl.get(curIdx).startMs + playheadMs);
+          return ms >= 0 ? T("cntIn", { label: `${items[i].label}`, t: fmtRemain(Math.floor(ms / 1000)) }) : "";
+        }
+        return "";
+      };
+      show("live", remainTo((it) => !!it.senderId) && `● ${remainTo((it) => !!it.senderId)}`);
+      show("miss", remainTo((it) => !(it.available ?? true)) && `⚠ ${remainTo((it) => !(it.available ?? true))}`);
+
       planById = new Map(((v.schedule && v.schedule.entries) || []).map((e) => [e.id, e]));
       const nw = [...planById.values()].filter((e) => e.warnings && e.warnings.length).length;
       planWarnEl.textContent = nw === 1 ? T("planWarn.one") : T("planWarn.many", { n: nw });
