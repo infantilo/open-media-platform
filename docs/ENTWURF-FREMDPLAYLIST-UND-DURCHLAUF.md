@@ -33,14 +33,24 @@ der laufenden Liste, die andere eine Kanal-Verwaltungsliste — **gleiches Schem
 Ohne `quick-xml`/`roxmltree` im Workspace: für den Parser ist eine XML-Dependency nötig (§0 Punkt 5 — Begründung:
 Dateien mit mehreren MB, verschachtelt, Entitäten; Handparser wäre fehleranfällig). Vorschlag `roxmltree` (reine Rust-Lib, keine Unsafe-/Build-Abhängigkeit).
 
-## 2. Die mitgelieferte Schnittstelle (API.zip, SOAP/WSDL)
+## 2. Mitlauf-Quelle: Watchfolder (Entscheidung Nutzer 2026-10-28)
 
-- **Klassische API:** `getListEventChanges`, `getContiguousListEvents`, `getListEvent`, `getJob`, `heartbeat`, `getMediaMetadata`,
-  `insertUpdateJob` …; **Notification-API:** `OnListChanged`, `OnJobStateChanged` (das Fremdsystem ruft UNS an).
-- **API 2.0:** `appendPlaylist`, `replacePlaylist*`, `getPlaylistBlocks` (Gegenrichtung: Liste ins Fremdsystem schreiben).
-- Für den Havarie-Mitlauf ist die **Notification-/Abfrage-Seite** wichtig: sie liefert „was ist jetzt on air, was kommt“, ohne Dateien
-  abzufischen. Das ist robuster als Dateipolling, setzt aber SOAP-Server/-Client voraus (WSDL → handgeschriebene
-  Minimal-Umsetzung statt Generator) und einen Nutzerentscheid (§4 Frage 2).
+Die SOAP-Schnittstelle (API.zip) ist nach Aussage des Nutzers nicht 100 % zuverlässig; der heutige Havarie-Betrieb läuft
+über die **Autorejoin-Dateien in einem Watchfolder**. OMP übernimmt genau dieses Verfahren — die API wird nicht in den
+kritischen Pfad gelegt (höchstens später als Zusatzsignal; WSDL liegt außerhalb des Repos).
+
+Beobachtungen an den Beispieldateien, auf die der Watcher aufbaut:
+- Dateiname `Autosaved_<Kennung>_<hh-mm-ss-ff>_<dd-mm-yyyy>.mpl`; der Zeitstempel im Namen entspricht (auf wenige Frames)
+  `properties/timecode/@houseTime` → Alter einer Datei ohne Parsen erkennbar. Die Kennung (5000/5002) trennt Kanäle.
+- Dateien sind groß (4–5 MB, > 1000 Events) und werden vom Fremdsystem geschrieben → Watcher muss **unvollständige
+  Dateien erkennen** (Größe stabil, Abschluss-Tag `</marinaPlaylist>` vorhanden, wohlgeformtes XML), sonst Datei verwerfen und die
+  vorherige gültige behalten. Nie eine halbe Datei laden.
+- Die Position „was ist jetzt on air“ steckt in der Datei selbst (`state/@state=Running`, `status/@focusIndex`,
+  `listState`) plus `houseTime`; zwischen zwei Dateien wird nach Uhrzeit fortgeschrieben.
+- Hängt der Eingang (neueste gültige Datei älter als Schwelle, Standard 120 s), meldet OMP das als Alarm — das ist der
+  typische Havarie-Auslöser und muss sichtbar sein, bevor jemand übernimmt.
+- Neue Datei = Abgleich (Diff) gegen die bisherige Mitlauf-Liste per `reconcileKey`/`uid`, nicht Komplettaustausch, damit
+  Vorbereitungen (Preflight, QC-Status) erhalten bleiben.
 
 ## 3. Abbildung Fremdevent → OMP-Item (Import, nur lesend)
 
@@ -62,8 +72,7 @@ stillschweigend verschwindet.
 
 ## 4. Offene Entscheidungen für den Nutzer
 
-1. **Mitlauf-Quelle:** (a) Datei-Polling der Autosave-/Sicherungsdatei (einfach, minutenverzögert), (b) die Notification-API
-   (SOAP, nahezu in Echtzeit), (c) beides. Empfehlung: erst (a) zum Beweis des Modells, dann (b).
+1. **Mitlauf-Quelle:** ENTSCHIEDEN — Watchfolder auf die Autorejoin-Dateien (§2); keine SOAP-Abhängigkeit.
 2. **Mitlauf-Verhalten:** Schattenbetrieb = Automator rechnet die Fremdliste live mit (Position per Uhrzeit/`houseTime`, ohne die
    Player anzufassen), Übernahme per Knopf ab dem laufenden Event („Havarie ziehen“). Bestätigen?
 3. **Freigabe-Flag:** Standard AUS (alte Listen verhalten sich unverändert); pro Event oder pro Channel einschaltbar:
@@ -81,7 +90,7 @@ stillschweigend verschwindet.
 | 74.3 | Freigabe-Flag + Verknüpfung Eingang (Kap. 43) → Asset/Item: `MISSING` → Datei kommt an → QC → grün/Freigabe → READY | Unit + Live: Item wartet, wird nach Freigabe gesendet |
 | 74.4 | Voll-Durchlauf-Test: Workflow erkennt Datei, Auto-QC, Review mit Segmenten, Playlist-Sendung, Secondary Record (Kap. 42) | E2E-Skript `tools/playout-e2e/` |
 | 74.5 | Vergleichsbericht Original ↔ Aufnahme (ffprobe + Qualitätsmaß), im Eingang sichtbar | Test mit absichtlich verschlechterter Aufnahme schlägt an |
-| 74.6 | Havarie-Mitlauf (Schattenmodus + Übernahme), Quelle nach Entscheid §4.1 | Lauf gegen die Echtdatei als Wiedergabe der Zeit |
+| 74.6 | Havarie-Mitlauf: Watchfolder-Watcher (§2: Vollständigkeitsprüfung, Diff, Alter-Alarm), Schattenmodus + Übernahme | Lauf mit Echtdateien in zeitlicher Folge (Kopien nacheinander in einen Testordner, auch eine abgeschnittene Datei) |
 | 74.7 | UI-Pass „intuitiver“ (Child-Editor statt JSON, Audio-Wahl beim Anlegen, Zeitzone, Spaltenbreiten) — Stolpersteine vom Nutzer | Browser-Klicktest |
 
 Reihenfolge-Empfehlung: 74.1 → 74.3 → 74.4 → 74.5 (der gewünschte Voll-Durchlauf zuerst, braucht keine Fremdformate),
