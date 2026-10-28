@@ -2695,10 +2695,20 @@ fn take_on_targets(
     load_onto_channel(store, &standby_node_id, meta, held)?;
 
     let mixer = store.proxy_client(mixer_node_id.to_string());
-    let sender_id = resolve_mixer_sender_id(&mixer, &standby_label).ok_or_else(|| {
+    // Kaltstart: der Kanal-Player legt seinen Videofluss erst beim ersten `load` an (eben geschehen), der Mischer entdeckt ihn erst
+    // im nächsten Suchtakt. Statt sofort abzubrechen, kurz (höchstens 3 s) auf den Eingang warten.
+    let mut sender = resolve_mixer_sender_id(&mixer, &standby_label);
+    for _ in 0..12 {
+        if sender.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+        sender = resolve_mixer_sender_id(&mixer, &standby_label);
+    }
+    let sender_id = sender.ok_or_else(|| {
         format!(
             "Standby-Kanal-Video-Sender am Mixer nicht gefunden (Label-Präfix \"{standby_label} Sender\" \
-             nicht unter crosspoint.inputs — Mixer-Discovery evtl. noch nicht durchgelaufen)"
+             nicht unter crosspoint.inputs, auch nach 3 s Warten — Mixer-Discovery noch nicht durchgelaufen?)"
         )
     })?;
     mixer
