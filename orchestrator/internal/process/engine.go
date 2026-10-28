@@ -383,6 +383,17 @@ func (e *Engine) run(ctx context.Context, executionID string) {
 			}()
 		}
 		wg.Wait()
+		// Wartet ein Schritt auf etwas Externes (Human-Task, Kind-Execution, Warteschritt), nicht in einer engen Schleife
+		// die Datenbank abfragen: erst nach pollInterval erneut prüfen. Ohne diese Pause belegte jede wartende
+		// Execution dauerhaft CPU im Orchestrator und Postgres (Befund 2026-10-28 per CPU-Profil).
+		if after, err := e.store.ListStepExecutions(exec.ID); err == nil {
+			for _, se := range after {
+				if se.Status == StatusWaiting {
+					e.sleep(ctx, e.pollInterval)
+					break
+				}
+			}
+		}
 	}
 }
 

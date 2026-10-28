@@ -1487,6 +1487,7 @@ func main() {
 
 	startModules(ctx, modules, moduleDeps, clusterNode)
 
+	startPprof()
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,
 		"registry_url", cfg.RegistryURL,

@@ -959,3 +959,25 @@ func TestEngineNotificationAndExecutionCompletedEventsPublish(t *testing.T) {
 	awaitPublished(t, publisher, "omp.asset.created", time.Second)
 	awaitPublished(t, publisher, "omp.process."+exec.ID+".completed", time.Second)
 }
+
+// Eine auf Externes wartende Execution darf die Datenbank nicht im Dauertakt abfragen (CPU-Profil 2026-10-28: jede wartende
+// Execution belegte dauerhaft CPU). Mit pollInterval 150 ms sind in 900 ms höchstens rund 7 Läufe möglich; ohne die Pause waren
+// es ~35 (begrenzt nur durch die Datenbank-Roundtrips).
+func TestEngineWaitingStepIsPolledAtIntervalNotInATightLoop(t *testing.T) {
+	engine, store := testEngine(t, WithPollInterval(150*time.Millisecond))
+	var calls atomic.Int64
+	engine.Register(StepTypeWait, StepExecutorFunc(func(ctx context.Context, ec ExecutionCtx, step Step) (json.RawMessage, error) {
+		calls.Add(1)
+		return nil, ErrStepWaiting
+	}))
+	pd, v := publishedVersion(t, store, Definition{StartStepID: "w", Steps: []Step{{ID: "w", Type: StepTypeWait}}})
+	if _, err := engine.Start(CreateExecutionParams{ProcessDefinitionID: pd.ID, ProcessVersionID: v.ID}); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	time.Sleep(900 * time.Millisecond)
+	n := calls.Load()
+	t.Logf("Prüfungen des wartenden Schritts in 900 ms: %d", n)
+	if n < 2 || n > 12 {
+		t.Fatalf("wartender Schritt wurde %d-mal geprüft; erwartet ein Takt von ~150 ms (2–12), nicht ein Dauertakt", n)
+	}
+}
