@@ -7,8 +7,8 @@ require (
 	github.com/hashicorp/raft v1.8.0
 	github.com/hashicorp/raft-boltdb/v2 v2.4.2
 	github.com/jackc/pgx/v5 v5.11.0
-	github.com/minio/minio-go/v7 v7.3.0
-	github.com/nats-io/nats.go v1.54.0
+	github.com/minio/minio-go/v7 v7.4.1
+	github.com/nats-io/nats.go v1.55.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	golang.org/x/crypto v0.58.0
 )
@@ -46,8 +46,8 @@ require (
 )
 
 require (
-	github.com/infantilo/openmediaplatform/nodeoptions v0.0.0
 	github.com/infantilo/openmediaplatform/jobwire v0.0.0
+	github.com/infantilo/openmediaplatform/nodeoptions v0.0.0
 	github.com/infantilo/openmediaplatform/tools/contract-check v0.0.0-00010101000000-000000000000
 	github.com/infantilo/openmediaplatform/update v0.0.0
 	github.com/klauspost/compress v1.20.0 // indirect
@@ -59,6 +59,7 @@ require (
 replace github.com/infantilo/openmediaplatform/tools/contract-check => ../tools/contract-check
 
 replace github.com/infantilo/openmediaplatform/nodeoptions => ../nodeoptions
+
 replace github.com/infantilo/openmediaplatform/jobwire => ../jobwire
 
 replace github.com/infantilo/openmediaplatform/update => ../update
