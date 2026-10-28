@@ -932,6 +932,19 @@ Der Tab **Stream Ingest** plant Aufnahmen von Live-Quellen (MXL-Sender): einmali
 - **Einstellungen** (Administratoren): Formular mit fünf Abschnitten — *Allgemein* (Vorwärmzeit, Ziel der Startabweichung, Planungshorizont, Zielordner), *Standard-Richtlinien* (Verhalten bei fehlender Quelle, Versuche, Pausen), *Zulassungsregeln* (Quellenlimit, Reserve je Ressource ab Priorität, Verdrängungsvorschlag), *Grenzen je Rechner* (Standard und Abweichungen je Rechner, Warnschwelle, Funktionen) und *Aufnahmeprofile* (Dateiformat per Auswahl, erwarteter Bedarf je Ressource — leer = gemessen/Standard —, optionale Konvertierung mit ffmpeg-Argumenten). Eingaben werden vor dem Speichern geprüft; der Server prüft zusätzlich.
   Messwerte aus abgeschlossenen Aufnahmen ersetzen Standardwerte automatisch („gemessen“ vor „konfiguriert“ vor „Standard“).
 
+
+## 5e. Fremdplaylist, Mitlauf (Havarie) und Sendefreigabe
+
+Diese Funktionen gehören zum Node **Playout-Automation** (Panel-Abschnitt **Fremdliste / Mitlauf**, Einstellung **Sendefreigabe** unter *Ziele*).
+
+**Fremdlisten importieren.** *Liste importieren …* öffnet eine Sendeliste eines anderen Automationssystems (Adapter `mpl3`, XML-Sendeliste). Vor dem Übernehmen zeigt eine **Vorschau**, wie viele Sendeevents entstehen, wie viele schon gelaufen sind (werden ausgelassen), was nur *angenähert* (z. B. Überblendung „Fade Cut“ wird zu „Mix“) und was *nicht übernommen* wird (z. B. Logo-/Grafik-Kinder ohne Zuordnung). Dann: **Anhängen** oder **Playlist ersetzen**. Zuordnungen stehen in der Plugin-Konfiguration `foreign-mpl3` (`mediaTemplate`, `liveMap`, `childMap`, `skipDone`, `requireRelease`). Die Liste wird nur gelesen — das Fremdformat ist kein internes Format.
+
+**Mitlauf als Havarie-Playout.** Im Abschnitt *Fremdliste / Mitlauf* Ordner (Watchfolder mit den automatisch gesicherten Listen) und Kanalkennung (z. B. `5000`) eintragen und **Speichern & aktivieren**. OMP liest die jeweils **neueste vollständige** Datei (halb geschriebene werden nie geladen), gleicht sie mit dem letzten Stand ab (neu/entfallen/geändert) und zeigt, welches Event laut Liste läuft. Die Player werden dabei **nicht angefasst**. Kommt länger als `maxAgeSec` (Standard 120 s) keine neue gültige Datei, erscheint **⚠ VERALTET** — das Fremdsystem liefert nicht mehr. **Havarie ziehen …** ersetzt die Playlist durch die Schattenliste ab dem Event nach dem laufenden; das erste Event bekommt seine geplante Fixzeit. Das laufende Event selbst wird nicht mitgenommen (kein Einsprung mitten in eine Datei).
+
+**Sendefreigabe.** *Sendefreigabe verlangen* (Ziele; Node-Option `OMP_REQUIRE_RELEASE`) bzw. je Event *Sendefreigabe* (Event-Editor, Datei): Das Event geht nur auf Sendung, wenn die Datei im Eingang (5c) **QC grün** hat **oder manuell freigegeben** wurde; eine Ablehnung im Eingang gilt immer. Gesperrte Events zeigen 🔒 mit Begründung, werden nicht gecued/getaket, und es greift die Ausfallrichtlinie des Events (halten, überspringen, Ersatzdatei …). Ist der Eingang nicht erreichbar, gilt die Datei als **nicht freigegeben**. Eine Datei, die noch nicht angekommen ist, bleibt als nicht verfügbar markiert, bis sie im Medienverzeichnis liegt.
+
+**Aufnahme gegen Original vergleichen.** Im Eingang vergleicht `POST /api/v1/review/items/{id}/compare` (`recordedAssetId`, optional `options`) die Aufnahme eines Events mit dem Original: Dauer (±1 Bild, Aufnahme-Vorlauf `offsetSec` wird abgezogen), Bildrate (exakt), Auflösung/Codec (Hinweis), Audio und Bildqualität (SSIM ≥ 0,98 auf einer 10-s-Stichprobe, kleine Auflösung, ein Faden).
+
 ## 6. Alarme
 
 Der Reiter **Alarme** sammelt an einer Stelle, was operative
