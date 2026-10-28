@@ -37,6 +37,8 @@ interface LauncherInstance {
   crashMessage?: string;
   restartCount?: number;
   cpuPercent?: number;
+  /** Derselbe Verbrauch in Prozent ALLER Kerne des Hosts (vergleichbar mit der Host-Auslastung); nur lokale Instanzen. */
+  hostCpuPercent?: number;
   rssBytes?: number;
   // version (§17 Teil 5, docs/END-GOAL-FEATURES.md §17.4 Teil 5) — leer
   // für statische/unversionierte Typen.
@@ -54,9 +56,13 @@ const POLL_INTERVAL_MS = 5000;
 
 const REFRESH_EVENT_TYPES = new Set(["instance.crashed", "instance.restarted", "lost-events"]);
 
-function formatCpu(cpuPercent: number | undefined): string {
+function formatCpu(cpuPercent: number | undefined, hostCpuPercent?: number): string {
   if (cpuPercent === undefined) return `<span style="color:var(--omp-text-dim);">–</span>`;
-  return `${cpuPercent.toFixed(0)}%`;
+  // Hauptwert: Anteil an der Gesamtleistung des Hosts (summiert sich zur Host-Auslastung); in Klammern „Prozent eines Kerns“.
+  if (hostCpuPercent !== undefined) {
+    return `${hostCpuPercent.toFixed(1)}%<span style="color:var(--omp-text-dim);font-size:11px;" title="${t("inst.cpu.coreTitle")}"> (${cpuPercent.toFixed(0)}% ${t("inst.cpu.core")})</span>`;
+  }
+  return `<span title="${t("inst.cpu.coreTitle")}">${cpuPercent.toFixed(0)}% ${t("inst.cpu.core")}</span>`;
 }
 
 function formatRss(rssBytes: number | undefined): string {
@@ -299,7 +305,7 @@ class InstancesView extends HTMLElement {
               ? `<select data-edit><option value="">${t("inst.localHost")}</option>${hosts.map((h) => `<option value="${escapeAttr(h.id)}"${h.id === inst.hostId ? " selected" : ""}>${escapeHtml(h.label || h.id)}</option>`).join("")}</select><div style="margin-top:2px;"><button data-action="save-migrate" data-id="${escapeAttr(inst.id)}">${t("inst.migrate").replace(" …", "")}</button> <button data-action="cancel" data-id="${escapeAttr(inst.id)}">${t("inst.cancel")}</button></div>`
               : escapeHtml(hostLabel)
           }</td>
-          <td style="padding:2px 8px;">${formatCpu(inst.cpuPercent)}</td>
+          <td style="padding:2px 8px;">${formatCpu(inst.cpuPercent, inst.hostCpuPercent)}</td>
           <td style="padding:2px 8px;">${formatRss(inst.rssBytes)}</td>
           <td style="padding:2px 8px;color:var(--omp-text-dim);">${inst.pid}</td>
           <td style="padding:2px 8px;">${restarts}</td>

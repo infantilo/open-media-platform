@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -199,7 +200,11 @@ type Instance struct {
 	// jeder Store.Put()-Aufruf (Neustart, Stop) eine flüchtige
 	// Telemetrie-Momentaufnahme in Postgres einfrieren.
 	CPUPercent *float64 `json:"cpuPercent,omitempty"`
-	RSSBytes   *uint64  `json:"rssBytes,omitempty"`
+	// HostCPUPercent: derselbe Verbrauch bezogen auf ALLE Kerne des Hosts (0–100 %), damit die Summe der Instanzen mit der
+	// Host-Auslastung vergleichbar ist. CPUPercent bleibt „Prozent eines Kerns“ (kann über 100 liegen; der Scheduler rechnet damit).
+	// Nur für lokale Instanzen gesetzt.
+	HostCPUPercent *float64 `json:"hostCpuPercent,omitempty"`
+	RSSBytes       *uint64  `json:"rssBytes,omitempty"`
 	// GPUPercent: Auslastung der konfigurierten GPU durch diese Instanz
 	// (Prozent einer GPU), vom Host-Agent gemeldet und wie CPUPercent erst
 	// beim Lesen gemischt. nil = nicht gemessen (nur entfernte Hosts mit
@@ -748,6 +753,10 @@ func (l *Launcher) List() []Instance {
 		if rs, ok := l.resourceSamples[inst.ID]; ok {
 			cpu, rss := rs.cpuPercent, rs.rssBytes
 			inst.CPUPercent = &cpu
+			if inst.HostID == "" && runtime.NumCPU() > 0 {
+				hp := cpu / float64(runtime.NumCPU())
+				inst.HostCPUPercent = &hp
+			}
 			inst.RSSBytes = &rss
 			inst.GPUPercent, inst.GPUMemBytes = rs.gpuPercent, rs.gpuMem
 		}

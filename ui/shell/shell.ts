@@ -232,12 +232,29 @@ async function renderShell(root: HTMLElement, username: string | null): Promise<
   let homeHref: string | undefined;
   // Kapitel 44: Arbeitsplatz-Kacheln (Aufnahmen, Eingang/QC …) für Personen ohne Engineering-Zugang, die dafür
   // Funktionsrechte haben. Engineering-Nutzer haben dieselben Ansichten als Tabs in der App-Leiste.
-  const tiles: WorkTile[] = hasEngineeringAccess ? [] : await loadWorkTiles().catch(() => []);
+  // Ein vorübergehend fehlgeschlagenes Laden der Kacheln darf NIE still zum Flow-Editor führen (Nutzerfund 2026-10-28:
+  // Klick auf eine Aufgabe landete im Editor): erst mehrfach versuchen, dann Fehlerseite mit „Erneut versuchen“.
+  let tiles: WorkTile[] = [];
+  let tilesFailed = false;
+  if (!hasEngineeringAccess) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        tiles = await loadWorkTiles();
+        tilesFailed = false;
+        break;
+      } catch {
+        tilesFailed = true;
+        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+      }
+    }
+  }
   const workstation = tiles.length > 0;
   const tileId = new URLSearchParams(location.search).get("tile");
   const activeTile = tileId ? tiles.find((x) => x.id === tileId) : undefined;
 
-  if (kioskMatch) {
+  if (tilesFailed && !kioskMatch && !workflowMatch) {
+    renderTilesUnavailable(root);
+  } else if (kioskMatch) {
     const [, , nodeRoleId] = kioskMatch;
     const selectEntries = (cs: ConsoleEntry[]) => cs.filter((c) => c.nodeRoleId === nodeRoleId);
     const view = document.createElement("omp-console-view") as ConsoleView;
@@ -339,6 +356,22 @@ async function renderShell(root: HTMLElement, username: string | null): Promise<
 // die Workflow-Auswahl aktualisiert sich nicht selbst, falls währenddessen
 // ein weiterer Workflow startet; ein manueller Neu-laden-Knopf reicht,
 // symmetrisch zum Nachbar-Screen statt eines Alleingangs nur hier).
+function renderTilesUnavailable(root: HTMLElement) {
+  const container = document.createElement("div");
+  container.style.cssText =
+    "display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;" +
+    "background:#181818;color:#eee;font-family:sans-serif;gap:16px;box-sizing:border-box;padding:24px;text-align:center;";
+  const msg = document.createElement("p");
+  msg.textContent = t("op.tiles.unavailable");
+  msg.dataset.role = "tiles-unavailable";
+  const retry = document.createElement("a");
+  retry.href = location.href;
+  retry.textContent = t("op.tiles.retry");
+  retry.style.cssText = "color:#eee;border:1px solid #666;border-radius:4px;padding:4px 14px;text-decoration:none;";
+  container.append(msg, retry);
+  root.replaceChildren(container);
+}
+
 function renderNoActiveConsole(root: HTMLElement) {
   const container = document.createElement("div");
   container.style.cssText =
