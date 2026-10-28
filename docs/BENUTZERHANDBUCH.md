@@ -1103,6 +1103,18 @@ untereinander):
 
   ![Eingefrorene Momentaufnahmen im Support-Tab: von Hand mit Notiz und automatisch nach einem Absturz, jeweils mit Download](screenshots/einfrieren.png)
 
+- **Paket auswerten** — Support-Paket oder Momentaufnahme (ZIP) lassen sich im
+  Support-Tab direkt lesen: unter „Paket auswerten“ die ZIP wählen, oder bei
+  einer gespeicherten Momentaufnahme **„Analyse“** drücken. Oben steht ein
+  Satz („2 Fehler und 3 Warnungen gefunden“), darunter die **Befunde** mit
+  „Nächster Schritt“, die **Ausfälle** (Zeiträume ohne bereite Medien), die
+  **Zeitleiste**, **auffällige Messreihen** als Kurven (Host dauerhaft über
+  90 %, Speicher wächst, Kennzahl auf 0 gefallen) und gleichartige
+  Meldungen gruppiert mit Anzahl. **„Bericht für KI kopieren“** legt dieselbe
+  Auswertung als Text in die Zwischenablage — in ein Gespräch mit einer KI
+  einfügen; die Anleitung dafür steht in `docs/PAKET-AUSWERTUNG-KI.md`.
+  Die Datei wird nur ausgewertet, nicht gespeichert.
+
 - **Zeitleiste** — „Was hat sich um 14:02 geändert?“ auf einer einzigen
   Achse. Oben ein Balkenbild des gewählten Zeitraums (letzte Stunde bis 7
   Tage): rot = Störung, gelb = Hinweis, blau = Information. **In die Balken

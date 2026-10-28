@@ -6082,4 +6082,4 @@ Ausgangslage: der Diagnose-Tab erklärt Meldungen, aber ein Supporter braucht de
 - API: `POST /api/v1/admin/support/analyze` (ZIP-Body, `?format=md`, `?lang=en`), `GET /api/v1/freezes/{id}/analysis`; Routen-Golden neu erzeugt.
 - UI: Karte „Paket auswerten“ im Support-Tab (`ui/shell/analysis-view.ts`), „Auswerten“ je Momentaufnahme, „Bericht für KI kopieren“.
 - KI: `docs/PAKET-AUSWERTUNG-KI.md` (Anleitung + Reihenfolge der Rohdateien).
-- Offen: Handbuch-Eintrag; echte Störungsdaten (Ausfälle, wachsender Speicher) nur per Test, nicht mit realem Vorfall geprüft.
+- Handbuch (BENUTZERHANDBUCH, Support-Tab) ergänzt; Kurven, Ausfälle, wachsender Speicher, hohe Last mit synthetischem Paket im Browser geprüft (echter Vorfall steht aus).
