@@ -255,6 +255,29 @@ func (s *Service) sourcePath(it Item) (string, error) {
 	return LocalPath(rep)
 }
 
+// Compare vergleicht die Quelle eines Eingangs-Eintrags (Original) mit der eines zweiten Eintrags (Aufnahme), Kapitel 74.5.
+func (s *Service) Compare(ctx context.Context, assetID, recordedAssetID, actor string, opt CompareOptions) (CompareReport, error) {
+	if s.Tools == nil {
+		return CompareReport{}, errors.New("keine Medienwerkzeuge konfiguriert")
+	}
+	paths := make([]string, 2)
+	for i, id := range []string{assetID, recordedAssetID} {
+		it, err := s.St.GetItem(ctx, id)
+		if err != nil {
+			return CompareReport{}, fmt.Errorf("Eintrag %s: %w", id, err)
+		}
+		if paths[i], err = s.sourcePath(it); err != nil {
+			return CompareReport{}, fmt.Errorf("Eintrag %s: %w", id, err)
+		}
+	}
+	rep, err := s.Tools.Compare(ctx, paths[0], paths[1], opt)
+	if err != nil {
+		return rep, err
+	}
+	s.audit(actor, assetID, "compare", map[string]any{"recorded": recordedAssetID, "overall": rep.Overall})
+	return rep, nil
+}
+
 // ---- QC ----------------------------------------------------------------------------------------------------------
 
 // RequestQC plant eine (Wiederholungs-)Analyse. force=false: ein aktiver Auftrag wird weitergenutzt.

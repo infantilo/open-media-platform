@@ -125,6 +125,7 @@ func (m *Module) Mount(r module.Routes, d module.Deps) error {
 	r.Handle("POST /api/v1/review/items/{id}/assign", module.Feature("review.assign"), a.assign())
 	r.Handle("POST /api/v1/review/items/{id}/reassign", module.Feature("review.assign"), a.reassign())
 	r.Handle("POST /api/v1/review/items/{id}/qc", module.Feature("review.qc.run"), a.requestQC())
+	r.Handle("POST /api/v1/review/items/{id}/compare", module.Feature("review.work"), a.compare())
 	r.Handle("GET /api/v1/review/items/{id}/qc/reports", module.Authenticated(), a.listReports())
 	r.Handle("GET /api/v1/review/items/{id}/qc/jobs", module.Authenticated(), a.listJobs())
 	r.Handle("GET /api/v1/review/qc/reports/{rid}", module.Authenticated(), a.getReport())

@@ -1777,6 +1777,12 @@
     "domain": "core"
   },
   {
+    "method": "POST",
+    "path": "/api/v1/review/items/{id}/compare",
+    "auth": "feature:review.work",
+    "domain": "core"
+  },
+  {
     "method": "GET",
     "path": "/api/v1/review/items/{id}/conform",
     "auth": "auth",

@@ -263,6 +263,29 @@ func (a *api) requestQC() http.HandlerFunc {
 	}
 }
 
+// compare: POST /api/v1/review/items/{id}/compare {"recordedAssetId":"…","options":{…}} — Original gegen Aufnahme (Kap. 74.5).
+func (a *api) compare() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var b struct {
+			RecordedAssetID string         `json:"recordedAssetId"`
+			Options         CompareOptions `json:"options"`
+		}
+		if !readBody(w, r, &b) {
+			return
+		}
+		if b.RecordedAssetID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "recordedAssetId fehlt"})
+			return
+		}
+		rep, err := a.svc.Compare(r.Context(), r.PathValue("id"), b.RecordedAssetID, actorOf(r), b.Options)
+		if err != nil {
+			a.writeErr(w, err, nil)
+			return
+		}
+		writeJSON(w, http.StatusOK, rep)
+	}
+}
+
 func (a *api) listReports() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		reps, err := a.svc.St.ListReports(r.Context(), r.PathValue("id"))
