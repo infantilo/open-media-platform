@@ -716,14 +716,18 @@ fn video_caps(width: u32, height: u32) -> gst::Caps {
 /// Pixelformat der Programm-/Preset-/PIP-Ebenen und des Compositor-Ausgangs: **AYUV** (YUV 4:4:4 mit Alpha) statt RGBA.
 /// Die Quellen kommen als YUV (v210 → Y42B), der Ausgang geht wieder nach YUV (Y42B → v210): in AYUV entfallen die beiden
 /// Farbmatrix-Umrechnungen (gemessen mit `gst-launch`, 720p, 400 Bilder: Eingang Y42B→AYUV 1,1 s statt →RGBA 2,0 s;
-/// Ausgang AYUV→Y42B 0,8 s statt 2,05 s), und der Compositor blendet AYUV nativ. Der Keyer bleibt RGBA (Fill+Key); seine
-/// Ebene wandelt der Compositor selbst, nur wenn sie sichtbar ist. Mit GPU-Konvertierung bleibt es bei RGBA.
+/// Ausgang AYUV→Y42B 0,8 s statt 2,05 s). **Im Sendebetrieb gemessen (A/B, Player A spielt 720p):** Mischer RGBA 99/104/84 %
+/// → AYUV 73/74/78 % eines Kerns. Verworfen: BGRx (Keyer-Ebene mit Alpha lässt sich bei Ausgang ohne Alpha nicht verlinken;
+/// im Leerlauf täuschend gut, weil dort die Ausgangsumwandlung stillliegt) und Y444 ohne Alpha (im Mikrotest schneller, live
+/// 87–94 % statt 73–78 %). Der Keyer bleibt RGBA (Fill+Key); den wandelt der Compositor nur, wenn er sichtbar ist. Mit
+/// GPU-Konvertierung bleibt es bei RGBA.
 fn program_format(hwaccel: omp_mediaio::hwaccel::HwAccel) -> &'static str {
-    // Diagnose-Schalter für Messvergleiche (nicht dokumentiert, kein Betriebsparameter): OMP_ME_PROGRAM_FORMAT=RGBA|BGRx|AYUV.
+    // Diagnose-Schalter für Messvergleiche (nicht dokumentiert, kein Betriebsparameter): OMP_ME_PROGRAM_FORMAT=RGBA|BGRx|AYUV|Y444.
     match std::env::var("OMP_ME_PROGRAM_FORMAT").as_deref() {
         Ok("RGBA") => return "RGBA",
         Ok("BGRx") => return "BGRx",
         Ok("AYUV") => return "AYUV",
+        Ok("Y444") => return "Y444",
         _ => {}
     }
     if hwaccel.video_convert_scale_available() {
@@ -731,6 +735,27 @@ fn program_format(hwaccel: omp_mediaio::hwaccel::HwAccel) -> &'static str {
     } else {
         "AYUV"
     }
+}
+
+/// Ausgangsformat des Compositors: **muss einen Alpha-Kanal haben** (AYUV), sonst lässt sich die RGBA-Keyer-Ebene nicht
+/// verlinken (Alpha-Pads brauchen einen Alpha-Ausgang). Mit GPU-Konvertierung RGBA.
+fn output_format(hwaccel: omp_mediaio::hwaccel::HwAccel) -> &'static str {
+    if hwaccel.video_convert_scale_available() || program_format(hwaccel) == "RGBA" {
+        "RGBA"
+    } else {
+        "AYUV"
+    }
+}
+
+/// Programmebene des Compositors: bei voller Deckkraft kopieren (`operator=source`), sobald ein Übergang die Deckkraft
+/// senkt, wieder normal überblenden (`over`). Läuft als Reaktion auf jede Änderung von `alpha` (unabhängig davon, an welcher
+/// Stelle des Codes sie gesetzt wird); ändert nur Pad-Eigenschaften, nie Caps.
+fn attach_fg_operator(pad: &gst::Object) {
+    pad.set_property_from_str("operator", "source");
+    pad.connect_notify(Some("alpha"), |pad, _| {
+        let alpha: f64 = pad.property("alpha");
+        pad.set_property_from_str("operator", if alpha >= 1.0 { "source" } else { "over" });
+    });
 }
 
 /// Wandelt ein Einzelbild (Rohdaten in `format`, Mischer-Auflösung) über eine kurze Wegwerf-Pipeline nach RGBA. Nur für
@@ -2265,6 +2290,12 @@ fn build(
             .ok_or_else(|| format!("comp: request sink_0 (fg) failed (level {level_idx})"))?;
         comp_fg_pad.set_property("zorder", 2u32);
         comp_fg_pad.set_property("alpha", 1.0f64);
+        // Deckende Programmebene (alpha 1) wird KOPIERT statt pro Pixel geblendet (`operator=source`, gemessen schneller);
+        // sobald ein Übergang alpha < 1 setzt, schaltet der Handler auf `over` zurück. Wirkt nur auf Pad-Eigenschaften zur
+        // Laufzeit, keine Caps-Änderung. Diagnose: OMP_ME_FG_OPERATOR=over schaltet es ab.
+        if std::env::var("OMP_ME_FG_OPERATOR").as_deref() != Ok("over") {
+            attach_fg_operator(comp_fg_pad.upcast_ref());
+        }
         comp_fg_pad.set_property("xpos", 0i32);
         comp_fg_pad.set_property("ypos", 0i32);
         comp_fg_pad.set_property("width", config.width as i32);
@@ -2381,10 +2412,10 @@ fn build(
             .link(&comp_pip_pad)
             .map_err(|e| format!("link pip to comp.sink_3 (level {level_idx}): {e}"))?;
 
-        // Ausgangsformat des Compositors FEST auf das Programmformat (BGRx): sonst wählt er wegen der RGBA-Keyer-Ebene RGBA und
-        // wandelt jede Programm-/Preset-Ebene jedes Bild um (gemessen: Compositor-Thread 24 % → 45 %).
+        // Ausgangsformat des Compositors FEST (AYUV, mit Alpha): sonst wählt er wegen der RGBA-Keyer-Ebene RGBA und wandelt
+        // jede Programm-/Preset-Ebene in jedem Bild um.
         let mut comp_out = video_caps(config.width, config.height);
-        comp_out.make_mut().set("format", program_format(config.hwaccel));
+        comp_out.make_mut().set("format", output_format(config.hwaccel));
         let comp_out_caps = gst::ElementFactory::make("capsfilter")
             .property("caps", comp_out)
             .build()
@@ -3925,8 +3956,36 @@ mod program_format_tests {
 
     #[test]
     fn programmformat_ohne_gpu_ist_ayuv_und_keyer_bleibt_rgba() {
+        gst::init().expect("gst init");
         // `HwAccel` ohne nutzbare GPU-Konvertierung (Standard in Tests) → AYUV; die RGBA-Caps des Keyers bleiben unberührt.
         assert_eq!(rgba_caps(64, 36).structure(0).unwrap().get::<&str>("format").unwrap(), "RGBA");
         assert_eq!(pixel_caps("AYUV", 64, 36).structure(0).unwrap().get::<&str>("format").unwrap(), "AYUV");
+    }
+}
+
+#[cfg(test)]
+mod fg_operator_tests {
+    use super::*;
+
+    fn operator_nick(pad: &gst::Pad) -> String {
+        let v = pad.property_value("operator");
+        let (_, e) = gst::glib::EnumValue::from_value(&v).expect("enum");
+        e.nick().to_string()
+    }
+
+    #[test]
+    fn programmebene_kopiert_bei_voller_deckkraft_und_blendet_beim_uebergang() {
+        gst::init().expect("gst init");
+        let comp = gst::ElementFactory::make("compositor").build().expect("compositor");
+        let pad = comp.request_pad_simple("sink_0").expect("pad");
+        pad.set_property("alpha", 1.0f64);
+        attach_fg_operator(pad.upcast_ref());
+        assert_eq!(operator_nick(&pad), "source");
+        pad.set_property("alpha", 0.6f64);
+        assert_eq!(operator_nick(&pad), "over", "Überblendung braucht normales Blenden");
+        pad.set_property("alpha", 0.0f64);
+        assert_eq!(operator_nick(&pad), "over");
+        pad.set_property("alpha", 1.0f64);
+        assert_eq!(operator_nick(&pad), "source", "wieder deckend → kopieren");
     }
 }
