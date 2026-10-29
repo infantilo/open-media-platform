@@ -102,10 +102,17 @@ const FIXTIME_PRECUE_SECS: i64 = 5;
 /// gefeuertes Fixtime-Event als verpasst (`Skipped` + Alarm) statt
 /// verspätet doch noch zu feuern.
 const FIXTIME_GRACE_SECS: i64 = 30;
-const FIXTIME_TICK: Duration = Duration::from_secs(1);
-/// Kapitel 6 Teil 5 — feiner als `FIXTIME_TICK`, gröber als
-/// `ADVANCE_TICK` (Begründung bei `graphics_loop`).
-const GRAPHICS_TICK: Duration = Duration::from_millis(250);
+/// Feuer-Genauigkeit: die Entscheidung fällt auf die volle Sekunde, der Tick bestimmt die Verspätung
+/// (bei 1 s bis zu 1 s zu spät, gemessen 2026-10-29: +1,07 s).
+const FIXTIME_TICK: Duration = Duration::from_millis(100);
+/// So früh vor der Sollzeit wird der Take ausgelöst; der Schnitt selbst liegt per `takeAt` exakt auf der
+/// Bildgrenze der Sollzeit (Vorlauf deckt Fernaufrufe und `take_lead_ms` ab).
+const FIXTIME_FIRE_LEAD_MS: i64 = 500;
+/// Kapitel 6 Teil 5 — Takt des `child_loop`. Kurz (20 ms), damit Kind-Events höchstens einen Takt nach ihrer Sollzeit
+/// ausgelöst werden; Grafik-Kinder gehen mit Vorlauf (`CHILD_LOOKAHEAD`) und exakter Sollzeit hinaus (bildgenau).
+const GRAPHICS_TICK: Duration = Duration::from_millis(20);
+/// So früh vor der Sollzeit wird ein Grafik-Befehl samt `atUtcMs` an den Grafik-Node geschickt.
+const CHILD_LOOKAHEAD: Duration = Duration::from_millis(300);
 /// Deutlich unter `auth.ServiceTokenTTL` (24h, Orchestrator) — ein
 /// Refresh auf halber Laufzeit lässt reichlich Spielraum, falls der
 /// Orchestrator beim ersten Versuch kurz nicht erreichbar ist (nächster
@@ -329,7 +336,8 @@ fn asrun_source(state: &AutomationState, m: &ItemMeta) -> String {
 /// Das On-Air-Primary hat gewechselt (`schedule_children`-Aufrufer): As-Run nachführen.
 /// `item_id` ist eine Playlist-Item-ID (Start), „stop“ (Schwarzbild) oder eine Cart-ID (Unterbrechung).
 fn asrun_primary_changed(state: &mut AutomationState, item_id: &str) {
-    let now_ms = chrono::Utc::now().timestamp_millis();
+    // Mit `takeAt` ist der Schnitt die Bildgrenze, nicht der Moment dieses Aufrufs.
+    let now_ms = if state.cut_tai_ns != 0 { state.cut_utc_ms } else { chrono::Utc::now().timestamp_millis() };
     let Some(meta) = state.metadata.get(item_id).cloned() else {
         if item_id == "stop" {
             state.asrun.end(now_ms, "STOPPED", "Operator-Stopp (Schwarzbild)");
@@ -1101,6 +1109,19 @@ impl AutomationStore {
         // Kapitel 37: der echte Schnitt liegt `takeAt` (Bildgrenze) — daran hängen Dauer und Marker.
         state.cut_tai_ns = self.last_take_at_ns.swap(0, std::sync::atomic::Ordering::SeqCst);
         state.cut_utc_ms = tai_ns_to_utc_ms(state.cut_tai_ns).unwrap_or(state.onair_utc_ms);
+        // On-Air-Beginn ist der Schnitt, nicht der Rückkehrzeitpunkt des take-Aufrufs: Kind-Events, Playhead und
+        // As-Run beziehen sich auf die Bildgrenze (Vorlauf `take_lead_ms` liegt dazwischen).
+        let mut onair_since = onair_since;
+        if state.cut_tai_ns != 0 {
+            let shift = Duration::from_millis(state.cut_utc_ms.abs_diff(state.onair_utc_ms));
+            if state.cut_utc_ms >= state.onair_utc_ms {
+                onair_since += shift;
+            } else if let Some(t) = onair_since.checked_sub(shift) {
+                onair_since = t;
+            }
+            state.onair_utc_ms = state.cut_utc_ms;
+            state.onair_since = Some(onair_since);
+        }
         asrun_primary_changed(state, item_id);
         for notice in plan_children(state, item_id, onair_since, None) {
             self.report(notice);
@@ -1279,7 +1300,7 @@ impl AutomationStore {
     /// `fixtime_loop`), hier trotzdem als zweite Sicherung (kein
     /// Zeitfenster zwischen Prüfung und Aufruf, in dem ein Cart
     /// unbemerkt scharf werden könnte).
-    fn do_fire_fixtime(&self, item_id: &str) -> Result<(), String> {
+    fn do_fire_fixtime(&self, item_id: &str, target_utc_ms: Option<i64>) -> Result<(), String> {
         let mut state = self.state.lock().expect("lock poisoned");
         if state.active_cart.is_some() {
             return Err("Cart aktiv".to_string());
@@ -1311,7 +1332,11 @@ impl AutomationStore {
             .ok_or("Ziel-Mixer nicht aufgelöst (targetMixerLabel unbekannt/noch nicht gestartet)")?;
         let (transition, rate_frames) = item_transition(&state, item_id);
 
-        let new_channel = take_on_targets(self, &state, &mixer_node_id, &meta, transition, rate_frames)?;
+        // Bildgenauer Start: der Schnitt soll auf der Bildgrenze der Sollzeit liegen, nicht „jetzt + Vorlauf“.
+        state.take_at_hint_ns = target_utc_ms.and_then(utc_ms_to_tai_ns);
+        let taken = take_on_targets(self, &state, &mixer_node_id, &meta, transition, rate_frames);
+        state.take_at_hint_ns = None;
+        let new_channel = taken?;
         state.live_channel = new_channel;
 
         state.playlist.cue(index).map_err(|e| e.to_string())?;
@@ -2862,6 +2887,30 @@ fn take_at_for(store: &AutomationStore, state: &AutomationState) -> u64 {
     t
 }
 
+/// UTC-ms als TAI-Zeitpunkt (ns); `None`, wenn keine TAI-Uhr verfügbar ist oder der Zeitpunkt in der Vergangenheit liegt.
+fn utc_ms_to_tai_ns(utc_ms: i64) -> Option<u64> {
+    let now_tai = tai_now_ns();
+    if now_tai == 0 {
+        return None;
+    }
+    // Nanosekunden-genau (ms-Rundung kann den Zeitpunkt knapp hinter die Bildgrenze schieben = ein Bild zu spät);
+    // 1 ms Toleranz nach vorn, damit `snap_to_frame` auf der Bildgrenze der Sollzeit landet.
+    let utc_now_ns = chrono::Utc::now().timestamp_nanos_opt()?;
+    let delta_ns = utc_ms * 1_000_000 - utc_now_ns - 1_000_000;
+    u64::try_from(now_tai as i64 + delta_ns).ok()
+}
+
+/// Sollzeit eines Fixtime-Items in UTC-ms: absoluter Zeitpunkt, sonst die lokale Uhrzeit „HH:MM:SS“ von heute.
+fn fixtime_target_utc_ms(meta: &ItemMeta) -> Option<i64> {
+    if let Some(ms) = meta.start_at_utc_ms {
+        return Some(ms);
+    }
+    let secs = parse_hms_to_secs(meta.fixtime_hms.as_deref()?)?;
+    let day = chrono::Local::now().date_naive();
+    let naive = day.and_hms_opt((secs / 3600) as u32, (secs % 3600 / 60) as u32, (secs % 60) as u32)?;
+    naive.and_local_timezone(chrono::Local).single().map(|t| t.timestamp_millis())
+}
+
 /// TAI-Zeitpunkt (ns) als UTC-ms; `None` bei 0.
 fn tai_ns_to_utc_ms(tai_ns: u64) -> Option<i64> {
     let now_tai = tai_now_ns();
@@ -3461,17 +3510,25 @@ fn execute_child(
     graphics_node_id: Option<String>,
     use_fallback: bool,
     stop: bool,
+    at_utc_ms: Option<i64>,
 ) -> Result<(), String> {
     let obj = |v: &Value| if v.is_null() { serde_json::json!({}) } else { v.clone() };
     if child.kind.is_graphics() {
         let node_id = graphics_node_id.ok_or("kein Ziel-omp-ograf aufgelöst (targetGraphicsLabel)")?;
         let graphics = store.proxy_client(node_id);
+        // Mit `atUtcMs` führt der Grafik-Node den Befehl auf die Millisekunde genau zur Sollzeit aus.
+        let timed = |mut args: Value| {
+            if let Some(ms) = at_utc_ms {
+                args["atUtcMs"] = serde_json::json!(ms);
+            }
+            args
+        };
         return if stop {
-            graphics.invoke("hide", serde_json::json!({})).map_err(|e| e.to_string())
+            graphics.invoke("hide", timed(serde_json::json!({}))).map_err(|e| e.to_string())
         } else {
             ensure_mixer_keyer(store);
             graphics
-                .invoke("show", serde_json::json!({"templateId": child.template_id, "data": child.data}))
+                .invoke("show", timed(serde_json::json!({"templateId": child.template_id, "data": child.data})))
                 .map_err(|e| e.to_string())
         };
     }
@@ -5237,13 +5294,12 @@ async fn fixtime_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender
     let mut interval = tokio::time::interval(FIXTIME_TICK);
     loop {
         interval.tick().await;
-        let now_secs = seconds_since_midnight_local();
-        let now_utc_secs = chrono::Utc::now().timestamp();
+        let now_ms = chrono::Utc::now().timestamp_millis();
 
         // Entscheidungs-Schnappschuss bei kurz gehaltenem Lock — keine
         // Fernaufrufe/`spawn_blocking`s, während die Sperre hält (gleiches
         // Prinzip wie `auto_advance_loop` oben).
-        let (precue_ids, fire_ids, skip_infos): (Vec<String>, Vec<String>, Vec<(String, String)>) = {
+        let (precue_ids, fire_ids, skip_infos): (Vec<String>, Vec<(String, Option<i64>)>, Vec<(String, String)>) = {
             let state = store.state.lock().expect("lock poisoned");
             let live_ids: std::collections::HashSet<&String> = state.playlist.items().iter().collect();
             let mut precue = Vec::new();
@@ -5253,20 +5309,15 @@ async fn fixtime_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender
                 if meta.start_type != StartType::Fixtime || !live_ids.contains(id) {
                     continue;
                 }
-                // P2a: absolute UTC-Zeit (Datum, DST-sicher) hat Vorrang;
-                // sonst der dateilose HH:MM:SS-Altbestand gegen die lokale Uhr.
-                let (now_cmp, target_secs) = if let Some(ms) = meta.start_at_utc_ms {
-                    (now_utc_secs, ms.div_euclid(1000))
-                } else if let Some(t) = meta.fixtime_hms.as_deref().and_then(parse_hms_to_secs) {
-                    (now_secs, t)
-                } else {
-                    continue;
-                };
+                // Sollzeit auf die Millisekunde (P2a: absolute UTC-Zeit hat Vorrang, sonst HH:MM:SS von heute);
+                // der Take wird FIXTIME_FIRE_LEAD_MS davor ausgelöst, der Schnitt liegt per takeAt auf der Sollzeit.
+                let Some(target_ms) = fixtime_target_utc_ms(meta) else { continue };
                 let already = state.fixtime_resolved.get(id).copied();
-                match fixtime_action(now_cmp, target_secs, already) {
+                let shifted = (now_ms + FIXTIME_FIRE_LEAD_MS - target_ms).div_euclid(1000);
+                match fixtime_action(shifted, 0, already) {
                     FixtimeAction::None => {}
                     FixtimeAction::PreCue => precue.push(id.clone()),
-                    FixtimeAction::Fire => fire.push(id.clone()),
+                    FixtimeAction::Fire => fire.push((id.clone(), Some(target_ms))),
                     FixtimeAction::Skip => skip.push((id.clone(), meta.label.clone())),
                 }
             }
@@ -5290,7 +5341,7 @@ async fn fixtime_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender
             }
         }
 
-        for id in fire_ids {
+        for (id, target_ms) in fire_ids {
             // Kein Feuern, solange ein Cart aktiv ist — innerhalb des
             // Gnadenfensters beim nächsten Tick einfach erneut versuchen,
             // statt den Interrupt-Kanal zu erzwingen (§6.4: Fixtime ist
@@ -5332,7 +5383,7 @@ async fn fixtime_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender
             }
             let store2 = store.clone();
             let id2 = id.clone();
-            let result = tokio::task::spawn_blocking(move || store2.do_fire_fixtime(&id2)).await;
+            let result = tokio::task::spawn_blocking(move || store2.do_fire_fixtime(&id2, target_ms)).await;
             match result {
                 Ok(Ok(())) => {
                     store.state.lock().expect("lock poisoned").fixtime_resolved.insert(id, FixtimeResolution::Fired);
@@ -5381,8 +5432,10 @@ async fn child_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender<E
         let due: Vec<(ScheduledChild, ChildEvent, Option<String>, i64)> = {
             let mut state = store.state.lock().expect("lock poisoned");
             let mut due_events = Vec::new();
+            let rt_graphics: Vec<(String, String)> = state.child_runtime.iter().filter(|r| r.child.kind.is_graphics()).map(|r| (r.item_id.clone(), r.child.id.clone())).collect();
             state.child_schedule.retain(|ev| {
-                if ev.fire_at <= now {
+                let ahead = if rt_graphics.iter().any(|(i, c)| *i == ev.item_id && *c == ev.child_id) { CHILD_LOOKAHEAD } else { Duration::ZERO };
+                if ev.fire_at <= now + ahead {
                     due_events.push(ev.clone());
                     false
                 } else {
@@ -5414,6 +5467,11 @@ async fn child_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender<E
         }
 
         for (ev, child, graphics_node, occurrence_secs) in due {
+            // Sollzeit des Befehls als UTC-ms; nur für Grafik-Kinder mit Vorlauf (Grafik-Node wartet bis dahin).
+            let at_utc_ms = child.kind.is_graphics().then(|| {
+                let ahead_ms = ev.fire_at.saturating_duration_since(Instant::now()).as_millis() as i64;
+                chrono::Utc::now().timestamp_millis() + ahead_ms
+            });
             match ev.action.clone() {
                 ChildAction::Start { attempt, use_fallback } => {
                     // Exactly-once über Neustarts: VOR dem ersten Versuch ins
@@ -5439,7 +5497,7 @@ async fn child_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender<E
                     }
                     let store2 = store.clone();
                     let child2 = child.clone();
-                    let result = tokio::task::spawn_blocking(move || execute_child(&store2, &child2, graphics_node, use_fallback, false))
+                    let result = tokio::task::spawn_blocking(move || execute_child(&store2, &child2, graphics_node, use_fallback, false, at_utc_ms))
                         .await
                         .unwrap_or_else(|e| Err(format!("Task abgestürzt: {e}")));
                     match result {
@@ -5498,7 +5556,7 @@ async fn child_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender<E
                 ChildAction::Stop => {
                     let store2 = store.clone();
                     let child2 = child.clone();
-                    let result = tokio::task::spawn_blocking(move || execute_child(&store2, &child2, graphics_node, false, true))
+                    let result = tokio::task::spawn_blocking(move || execute_child(&store2, &child2, graphics_node, false, true, at_utc_ms))
                         .await
                         .unwrap_or_else(|e| Err(format!("Task abgestürzt: {e}")));
                     match result {
@@ -5548,7 +5606,15 @@ fn set_child_state(store: &AutomationStore, ev: &ScheduledChild, to: ChildState,
         }
     }
     if let Some((child_id, label, status, reason)) = note {
-        state.asrun.child(chrono::Utc::now().timestamp_millis(), &ev.item_id, &child_id, &label, status, &reason);
+        // Ereigniszeit = Sollzeit des Befehls (bei Grafik mit Vorlauf liegt sie nach dem Aufruf), außer bei Fehlern.
+        let now_utc = chrono::Utc::now().timestamp_millis();
+        let at_ms = if status == "FAILED" || status == "CANCELLED" {
+            now_utc
+        } else {
+            let delta = if ev.fire_at >= Instant::now() { ev.fire_at.duration_since(Instant::now()).as_millis() as i64 } else { -(Instant::now().duration_since(ev.fire_at).as_millis() as i64) };
+            now_utc + delta
+        };
+        state.asrun.child(at_ms, &ev.item_id, &child_id, &label, status, &reason);
     }
 }
 

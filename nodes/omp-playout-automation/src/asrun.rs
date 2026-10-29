@@ -156,6 +156,9 @@ pub struct AsRunTracker {
     pub cause: &'static str,
     /// Letzte Warnung je (Art, Event) — wiederholte Warnungen derselben Ursache werden gedrosselt.
     last_warn: HashMap<(String, String), i64>,
+    /// Lauf-Schlüssel, unter dem ein Child Event gestartet wurde: sein Ende gehört in dieselbe Zeile, auch wenn
+    /// inzwischen das nächste Primary läuft (Ende fällt mit dem Primary-Wechsel zusammen).
+    child_runs: HashMap<(String, String), String>,
 }
 
 impl AsRunTracker {
@@ -230,7 +233,15 @@ impl AsRunTracker {
 
     /// Zustandswechsel eines Child Events (nur Fired/Completed/Failed/Cancelled sind Protokollwürdig).
     pub fn child(&mut self, now_ms: i64, event_id: &str, child_id: &str, label: &str, status: &str, reason: &str) {
-        let run_key = self.open.as_ref().map(|o| o.rec.key.clone()).unwrap_or_else(|| format!("p:0:{event_id}"));
+        let started = matches!(status, "FIRED" | "ACTIVE");
+        let slot = (event_id.to_string(), child_id.to_string());
+        let current = self.open.as_ref().map(|o| o.rec.key.clone()).unwrap_or_else(|| format!("p:0:{event_id}"));
+        let run_key = if started {
+            self.child_runs.insert(slot, current.clone());
+            current
+        } else {
+            self.child_runs.remove(&slot).unwrap_or(current)
+        };
         let mut rec = AsRunRecord::blank(format!("c:{run_key}:{child_id}"), "child", now_ms);
         rec.event_id = event_id.to_string();
         rec.child_id = child_id.to_string();
@@ -373,6 +384,21 @@ mod tests {
         assert_eq!(recs[1].correlation_id, key);
         assert_eq!(recs[2].status, "FAILED");
         assert_eq!(recs[2].key, recs[1].key, "gleiche Zeile wird überschrieben");
+    }
+
+    #[test]
+    fn child_end_after_primary_switch_stays_on_its_start_row() {
+        let mut t = AsRunTracker::default();
+        t.start(0, info("a", None, None));
+        let key_a = t.open_key().unwrap().to_string();
+        t.child(5, "a", "c1", "Logo", "ACTIVE", "");
+        t.end(20, "COMPLETED", "");
+        t.start(20, info("b", None, None));
+        t.child(20, "a", "c1", "Logo", "COMPLETED", "");
+        let recs = t.drain(10);
+        let ends: Vec<_> = recs.iter().filter(|r| r.kind == "child" && r.status == "COMPLETED").collect();
+        assert_eq!(ends.len(), 1);
+        assert_eq!(ends[0].key, format!("c:{key_a}:c1"), "Ende landet in der Zeile des startenden Primary");
     }
 
     #[test]

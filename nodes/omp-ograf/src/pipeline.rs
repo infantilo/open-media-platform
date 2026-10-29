@@ -90,6 +90,23 @@ pub enum Command {
     Hide {
         layer_id: Option<String>,
     },
+    /// Befehl erst zum angegebenen Zeitpunkt (UTC, ms) ausführen — bildgenaue Ein-/Ausblendung: der Automator
+    /// schickt den Befehl mit Vorlauf, die Pipeline wartet auf die Millisekunde (`OMP_OGRAF_RENDER_LATENCY_MS`
+    /// zieht die Render-Latenz der Seite bis zum ersten sichtbaren Bild ab).
+    At {
+        at_utc_ms: i64,
+        inner: Box<Command>,
+    },
+}
+
+/// Wartet bis `at_utc_ms` (abzüglich Render-Latenz); längstens 5 s, damit ein falscher Zeitstempel die Pipeline nie blockiert.
+fn wait_until_utc_ms(at_utc_ms: i64) {
+    let latency: i64 = std::env::var("OMP_OGRAF_RENDER_LATENCY_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64);
+    let wait = at_utc_ms - latency - now_ms;
+    if wait > 0 {
+        std::thread::sleep(Duration::from_millis(wait.min(5000) as u64));
+    }
 }
 
 pub enum Event {
@@ -896,6 +913,13 @@ pub fn run(
         }
 
         if let Some(command) = pending.take() {
+            let command = match command {
+                Command::At { at_utc_ms, inner } => {
+                    wait_until_utc_ms(at_utc_ms);
+                    *inner
+                }
+                other => other,
+            };
             if pipeline.page_ready.load(Ordering::Relaxed) {
                 match &command {
                     Command::Show { layer_id, template_id, dir, main, data } => {
@@ -965,6 +989,8 @@ pub fn run(
                             }
                         }
                     }
+                    // Oben bereits ausgepackt (`wait_until_utc_ms`); verschachteltes At gibt es nicht.
+                    Command::At { .. } => {}
                 }
             } else {
                 pending = Some(command);

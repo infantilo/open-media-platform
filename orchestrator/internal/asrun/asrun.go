@@ -144,8 +144,10 @@ INSERT INTO playout_asrun (channel_id, rec_key, kind, recorded_at, event_id, chi
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 ON CONFLICT (channel_id, rec_key) DO UPDATE SET
     recorded_at = EXCLUDED.recorded_at, label = EXCLUDED.label, asset = EXCLUDED.asset, source = EXCLUDED.source,
-    planned_start = EXCLUDED.planned_start, actual_start = EXCLUDED.actual_start,
-    planned_duration_ms = EXCLUDED.planned_duration_ms, actual_end = EXCLUDED.actual_end,
+    planned_start = COALESCE(EXCLUDED.planned_start, playout_asrun.planned_start),
+    actual_start = COALESCE(EXCLUDED.actual_start, playout_asrun.actual_start),
+    planned_duration_ms = COALESCE(EXCLUDED.planned_duration_ms, playout_asrun.planned_duration_ms),
+    actual_end = COALESCE(EXCLUDED.actual_end, playout_asrun.actual_end),
     status = EXCLUDED.status, reason = EXCLUDED.reason, mode = EXCLUDED.mode, operator = EXCLUDED.operator,
     action = EXCLUDED.action, correlation_id = EXCLUDED.correlation_id, detail = EXCLUDED.detail`,
 			channelID, r.Key, r.Kind, at.UTC(), r.EventID, r.ChildID, r.Label, r.Asset, r.Source,

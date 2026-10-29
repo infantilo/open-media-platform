@@ -62,6 +62,14 @@ impl OgrafStore {
         })
     }
 
+    /// Optionales `atUtcMs`: Befehl zeitgenau (Millisekunde) statt sofort ausführen.
+    fn timed(args: &serde_json::Map<String, Value>, cmd: pipeline::Command) -> pipeline::Command {
+        match args.get("atUtcMs").and_then(Value::as_i64) {
+            Some(at_utc_ms) => pipeline::Command::At { at_utc_ms, inner: Box::new(cmd) },
+            None => cmd,
+        }
+    }
+
     fn subtitle_invoke(&self, method: &str, args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
         let msg = |e: String| InvokeError::Message(e);
         match method {
@@ -307,13 +315,13 @@ impl ParamStore for OgrafStore {
                     .lock()
                     .expect("lock poisoned")
                     .show(&layer_id, info, data.clone());
-                self.pipeline.send(pipeline::Command::Show {
+                self.pipeline.send(Self::timed(args, pipeline::Command::Show {
                     layer_id,
                     template_id: template_id.to_string(),
                     dir,
                     main,
                     data,
-                });
+                }));
                 Ok(())
             }
             "update" => {
@@ -358,7 +366,7 @@ impl ParamStore for OgrafStore {
                 // Eine unbekannte/bereits ausgeblendete Ebene ist kein Fehler
                 // (idempotent), schickt aber auch nichts an die Pipeline.
                 if id.is_none() || !removed.is_empty() {
-                    self.pipeline.send(pipeline::Command::Hide { layer_id: id.map(str::to_string) });
+                    self.pipeline.send(Self::timed(args, pipeline::Command::Hide { layer_id: id.map(str::to_string) }));
                 }
                 Ok(())
             }
