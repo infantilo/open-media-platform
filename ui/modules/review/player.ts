@@ -11,6 +11,7 @@
 //    wird bei Rückstand durch Überspringen von Bildern gehalten (nicht jedes Bild wird angezeigt).
 //  - Der Proxy ist NICHT die Originaldatei: die Oberfläche kennzeichnet das dauerhaft.
 import { t as tt } from "../host.ts";
+import { type AudioSource, ReviewAudio } from "./audio.ts";
 import { clampFrame, type Finding, keyAction, nextBoundary, type Segment, shuttleFrame, shuttleStep, SHUTTLE_SPEEDS } from "./review-logic.ts";
 import { frameForPts, frameForTime, frameForTimecode, timecodeOf, timeForFrame, type Timeline } from "./timecode.ts";
 
@@ -33,6 +34,8 @@ export interface PlayerOptions {
   onFrame?: (frame: number) => void;
   onMarks?: (m: { in: number | null; out: number | null }) => void;
   onAddSegment?: (inF: number, outF: number) => void;
+  /** Ton-Proxy: Spuranzahl und Blockquelle; ohne Angabe bleibt der Player stumm. */
+  audio?: AudioSource;
 }
 
 type ViewEl = HTMLVideoElement & { requestVideoFrameCallback?: (cb: (now: number, md: { mediaTime: number }) => void) => number };
@@ -63,6 +66,9 @@ export class ReviewPlayer {
   #shuttle: HTMLInputElement;
   #destroyed = false;
   #vfcActive = false;
+  #audio: ReviewAudio | null = null;
+  #audioBtns: Array<{ on: HTMLButtonElement; solo: HTMLButtonElement }> = [];
+  #lastSync = 0;
 
   constructor(o: PlayerOptions) {
     this.#o = o;
@@ -161,7 +167,12 @@ export class ReviewPlayer {
       btn("＋ " + tt("rv.player.addsegment"), tt("rv.player.addsegment.hint"), () => this.addSegmentFromMarks()),
       btn("▶ " + tt("rv.player.previewrange"), tt("rv.player.previewrange.hint"), () => this.previewMarks()),
     );
-    this.el.append(stage, this.#bar, row, jog, marks);
+    const audioRow = this.#buildAudioRow(o.audio);
+    this.el.append(stage, this.#bar, row, jog, ...(audioRow ? [audioRow] : []), marks);
+    // Browser geben Ton erst nach einer Benutzeraktion frei
+    const unlock = () => this.#audio?.unlock();
+    this.el.addEventListener("pointerdown", unlock, true);
+    this.el.addEventListener("keydown", unlock, true);
 
     this.#attachBar();
     this.el.addEventListener("keydown", (e) => this.#onKey(e));
@@ -213,7 +224,7 @@ export class ReviewPlayer {
     this.#stopReverse();
     this.#rangeEnd = null;
     const f = clampFrame(frame, this.#tl);
-    this.#setCur(f, true);
+    this.#setCur(f, true, true);
   }
 
   step(n: number): void {
@@ -240,11 +251,14 @@ export class ReviewPlayer {
     this.video.playbackRate = Math.max(0.0625, Math.min(16, speed));
     this.video.muted = speed !== 1;
     void this.video.play().catch(() => this.#showMsg(tt("rv.player.error")));
+    this.#audio?.unlock();
+    this.#audio?.start(timeForFrame(this.#cur, this.#tl.rate), speed);
     this.#render();
   }
 
   pause(): void {
     this.#stopReverse();
+    this.#audio?.stop();
     this.#rangeEnd = null;
     if (!this.video.paused) this.video.pause();
     this.#speed = 0;
@@ -278,6 +292,7 @@ export class ReviewPlayer {
       this.#speed = speed;
       this.#cue = this.#cur;
       this.#startReverse();
+      this.#audio?.start(timeForFrame(this.#cur, this.#tl.rate), speed);
     }
     this.#syncShuttle();
     this.#render();
@@ -342,16 +357,19 @@ export class ReviewPlayer {
     this.video.pause();
     this.video.removeAttribute("src");
     this.video.load();
+    this.#audio?.destroy();
   }
 
   // ---- intern -----------------------------------------------------------------------------------------------------
 
-  #setCur(f: number, seekVideo: boolean): void {
+  /** `scrub`: Benutzernavigation — dabei kurz den Ton dieses Bildes hören (Jog, Einzelbild, Zeitleiste). */
+  #setCur(f: number, seekVideo: boolean, scrub = false): void {
     this.#cur = f;
     if (seekVideo) {
       const t = timeForFrame(f, this.#tl.rate);
       if (Math.abs(this.video.currentTime - t) > 1e-6) this.video.currentTime = t;
     }
+    if (scrub && this.#audio && this.#speed === 0) this.#audio.grain((f * this.#tl.rate.den) / this.#tl.rate.num);
     this.#o.onFrame?.(f);
     this.#render();
   }
@@ -367,6 +385,10 @@ export class ReviewPlayer {
         if (!this.video.paused || this.#speed !== 0) {
           this.#cur = f;
           this.#o.onFrame?.(f);
+          if (this.#audio?.running && !this.video.paused && performance.now() - this.#lastSync > 500) {
+            this.#lastSync = performance.now();
+            this.#audio.resync(md.mediaTime);
+          }
           if (this.#rangeEnd !== null && f >= this.#rangeEnd) {
             const last = this.#rangeEnd - 1;
             this.pause();
@@ -478,6 +500,15 @@ export class ReviewPlayer {
   #onKey(e: KeyboardEvent): void {
     const tag = (e.target as HTMLElement).tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    if (this.#audio && /^[1-9]$/.test(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      const i = Number(e.key) - 1;
+      if (i < this.#audio.tracks) {
+        e.preventDefault();
+        this.#audio.setTrack(i, e.shiftKey ? { solo: !this.#audio.state[i].solo } : { on: !this.#audio.state[i].on });
+        this.#renderAudioRow();
+      }
+      return;
+    }
     const a = keyAction(e, this.#tl.rate.num / this.#tl.rate.den);
     if (!a) return;
     e.preventDefault();
@@ -533,6 +564,64 @@ export class ReviewPlayer {
   #marksChanged(): void {
     this.#o.onMarks?.({ in: this.#markIn, out: this.#markOut });
     this.#render();
+  }
+
+  /** Zeile „Ton“: je Spur ein Schalter (hören) und S (solo), dazu Lautstärke. Ziffern 1–9 schalten Spuren, Umschalt+Ziffer Solo. */
+  #buildAudioRow(src?: AudioSource): HTMLElement | null {
+    if (!src || src.tracks < 1) return null;
+    this.#audio = new ReviewAudio(src);
+    const row = el("div", "display:flex;flex-wrap:wrap;gap:4px;align-items:center;");
+    row.dataset.role = "audio-tracks";
+    row.append(el("span", "font-size:11px;color:var(--omp-text-dim);margin-right:4px;", tt("rv.audio")));
+    for (let i = 0; i < src.tracks; i++) {
+      const on = el("button", "padding:2px 8px;min-width:32px;", `A${i + 1}`);
+      on.type = "button";
+      on.dataset.track = String(i);
+      on.title = tt("rv.audio.track.hint", { p0: i + 1 });
+      on.addEventListener("click", () => {
+        this.#audio!.setTrack(i, { on: !this.#audio!.state[i].on });
+        this.#renderAudioRow();
+        this.el.focus();
+      });
+      const solo = el("button", "padding:2px 5px;font-size:10px;", "S");
+      solo.type = "button";
+      solo.title = tt("rv.audio.solo.hint", { p0: i + 1 });
+      solo.addEventListener("click", () => {
+        this.#audio!.setTrack(i, { solo: !this.#audio!.state[i].solo });
+        this.#renderAudioRow();
+        this.el.focus();
+      });
+      this.#audioBtns.push({ on, solo });
+      row.append(on, solo, el("span", "width:4px;"));
+    }
+    const vol = el("input", "width:90px;margin-left:8px;") as HTMLInputElement;
+    vol.type = "range";
+    vol.min = "0";
+    vol.max = "1.5";
+    vol.step = "0.05";
+    vol.value = "1";
+    vol.title = tt("rv.audio.volume");
+    vol.addEventListener("input", () => this.#audio!.setVolume(Number(vol.value)));
+    row.append(vol, el("span", "font-size:11px;color:var(--omp-text-dim);margin-left:8px;", tt("rv.audio.hint")));
+    this.#renderAudioRow();
+    return row;
+  }
+
+  #renderAudioRow(): void {
+    const a = this.#audio;
+    if (!a) return;
+    const anySolo = a.state.some((t) => t.solo);
+    this.#audioBtns.forEach((b, i) => {
+      const st = a.state[i];
+      const heard = anySolo ? st.solo : st.on;
+      b.on.style.background = heard ? "var(--omp-accent, #2f8cff)" : "";
+      b.on.style.color = heard ? "#fff" : "";
+      b.on.style.opacity = st.on || st.solo ? "1" : ".6";
+      b.on.setAttribute("aria-pressed", String(st.on));
+      b.solo.style.background = st.solo ? "#fb8c00" : "";
+      b.solo.style.color = st.solo ? "#000" : "";
+      b.solo.setAttribute("aria-pressed", String(st.solo));
+    });
   }
 
   #syncShuttle(): void {

@@ -24,13 +24,13 @@ import (
 
 // ProxyProfile benennt Auflösung/Qualität; Teil des Schlüssels (asset, source_rev, profile).
 func (c Config) ProxyProfile() string {
-	return fmt.Sprintf("h264-i-%dp-crf%d-v1", c.ProxyHeight, c.ProxyCRF)
+	return fmt.Sprintf("h264-i-%dp-crf%d-v2", c.ProxyHeight, c.ProxyCRF)
 }
 
 func (s *Store) getProxy(ctx context.Context, assetID, sourceRev, profile string) (*Proxy, error) {
 	var p Proxy
-	err := s.db.QueryRowContext(ctx, `SELECT id, asset_id, source_rev, profile, state, path, frames, rate_num, rate_den, width, height, verified, error, created_at FROM review_proxies WHERE asset_id=$1 AND source_rev=$2 AND profile=$3`,
-		assetID, sourceRev, profile).Scan(&p.ID, &p.AssetID, &p.SourceRev, &p.Profile, &p.State, &p.Path, &p.Frames, &p.Rate.Num, &p.Rate.Den, &p.Width, &p.Height, &p.Verified, &p.Error, &p.CreatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT id, asset_id, source_rev, profile, state, path, audio_tracks, audio_path, frames, rate_num, rate_den, width, height, verified, error, created_at FROM review_proxies WHERE asset_id=$1 AND source_rev=$2 AND profile=$3`,
+		assetID, sourceRev, profile).Scan(&p.ID, &p.AssetID, &p.SourceRev, &p.Profile, &p.State, &p.Path, &p.AudioTracks, &p.AudioPath, &p.Frames, &p.Rate.Num, &p.Rate.Den, &p.Width, &p.Height, &p.Verified, &p.Error, &p.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -164,22 +164,22 @@ func (s *Service) buildProxy(ctx context.Context, p Proxy) error {
 	}
 	vf = append(vf, fmt.Sprintf("scale=-2:%d", cfg.ProxyHeight), fmt.Sprintf("fps=%d/%d", rate.Num, rate.Den), "format=yuv420p")
 	graph := "[0:v:0]" + strings.Join(vf, ",") + "[v]"
-	args := []string{"-nostdin", "-v", "error", "-y", "-i", src}
+	args := []string{"-nostdin", "-v", "error", "-y", "-i", src, "-filter_complex", graph, "-map", "[v]", "-an",
+		"-c:v", "libx264", "-preset", "veryfast", "-crf", strconv.Itoa(cfg.ProxyCRF), "-g", "1", "-bf", "0", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", tmp}
+	// Zweite Ausgabe: Ton-Proxy mit einem Stereo-Stream je Quell-Tonspur, auf die Länge des Bildes aufgefüllt/gekürzt (Bild n ⇔
+	// Ton ab n/Rate). Der Browser mischt/wählt die Spuren selbst (Spurwahl, Scrub-Ton bei Jog/Shuttle).
+	audioFinal := filepath.Join(dir, p.ID+".audio.mp4")
+	audioTmp := filepath.Join(dir, p.ID+".audio.part.mp4")
+	defer os.Remove(audioTmp)
 	if nAudio > 0 {
-		var ins strings.Builder
+		dur := float64(it.Timeline.DurationFrames) * float64(rate.Den) / float64(rate.Num)
+		args = append(args, "-vn")
 		for i := 0; i < nAudio; i++ {
-			fmt.Fprintf(&ins, "[0:a:%d]", i)
+			args = append(args, "-map", fmt.Sprintf("0:a:%d", i))
 		}
-		mix := "aformat=sample_rates=48000:channel_layouts=stereo"
-		if nAudio > 1 {
-			mix = fmt.Sprintf("amix=inputs=%d:normalize=0:duration=longest,%s,alimiter=limit=0.95", nAudio, mix)
-		}
-		graph += ";" + ins.String() + mix + "[a]"
-		args = append(args, "-filter_complex", graph, "-map", "[v]", "-map", "[a]", "-c:a", "aac", "-b:a", "128k")
-	} else {
-		args = append(args, "-filter_complex", graph, "-map", "[v]", "-an")
+		args = append(args, "-af", "aresample=async=1:first_pts=0,apad", "-t", strconv.FormatFloat(dur, 'f', 6, 64),
+			"-c:a", "aac", "-b:a", "96k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", "-f", "mp4", audioTmp)
 	}
-	args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-crf", strconv.Itoa(cfg.ProxyCRF), "-g", "1", "-bf", "0", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", tmp)
 	var errLines []string
 	_, code, err := s.Tools.ExecProxy().Run(ctx, s.Tools.FFmpeg, args, func(l string) {
 		if len(errLines) < 10 {
@@ -203,8 +203,15 @@ func (s *Service) buildProxy(ctx context.Context, p Proxy) error {
 	if err := os.Rename(tmp, final); err != nil {
 		return err
 	}
-	_, err = s.St.db.ExecContext(ctx, `UPDATE review_proxies SET state='ready', path=$2, frames=$3, rate_num=$4, rate_den=$5, width=$6, height=$7, verified=true, error='' WHERE id=$1`,
-		p.ID, final, frames, prate.Num, prate.Den, w, h)
+	audioPath := ""
+	if nAudio > 0 {
+		if err := os.Rename(audioTmp, audioFinal); err != nil {
+			return err
+		}
+		audioPath = audioFinal
+	}
+	_, err = s.St.db.ExecContext(ctx, `UPDATE review_proxies SET state='ready', path=$2, frames=$3, rate_num=$4, rate_den=$5, width=$6, height=$7, verified=true, error='', audio_tracks=$8, audio_path=$9 WHERE id=$1`,
+		p.ID, final, frames, prate.Num, prate.Den, w, h, nAudio, audioPath)
 	if err == nil {
 		s.audit("system", p.AssetID, "proxy_ready", map[string]any{"frames": frames})
 		s.pruneProxies(ctx, p.AssetID, p.ID)
@@ -234,15 +241,19 @@ func probeProxy(ctx context.Context, t *Tools, file string) (frames int64, rate 
 
 // pruneProxies löscht Proxy-Dateien/-Zeilen früherer Quellversionen (nur der jüngste bleibt).
 func (s *Service) pruneProxies(ctx context.Context, assetID, keepID string) {
-	rows, err := s.St.db.QueryContext(ctx, `DELETE FROM review_proxies WHERE asset_id=$1 AND id<>$2 AND state IN ('ready','failed') RETURNING path`, assetID, keepID)
+	rows, err := s.St.db.QueryContext(ctx, `DELETE FROM review_proxies WHERE asset_id=$1 AND id<>$2 AND state IN ('ready','failed') RETURNING path, audio_path`, assetID, keepID)
 	if err != nil {
 		return
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var p string
-		if rows.Scan(&p) == nil && p != "" {
-			_ = os.Remove(p)
+		var p, ap string
+		if rows.Scan(&p, &ap) == nil {
+			for _, f := range []string{p, ap} {
+				if f != "" {
+					_ = os.Remove(f)
+				}
+			}
 		}
 	}
 }

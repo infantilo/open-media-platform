@@ -122,6 +122,9 @@ CREATE TABLE IF NOT EXISTS review_proxies (
     UNIQUE (asset_id, source_rev, profile)
 );
 
+ALTER TABLE review_proxies ADD COLUMN IF NOT EXISTS audio_tracks INT NOT NULL DEFAULT 0;
+ALTER TABLE review_proxies ADD COLUMN IF NOT EXISTS audio_path TEXT NOT NULL DEFAULT '';
+
 CREATE TABLE IF NOT EXISTS conform_revisions (
     id             TEXT PRIMARY KEY,
     asset_id       TEXT NOT NULL,

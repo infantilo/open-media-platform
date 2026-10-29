@@ -44,6 +44,7 @@ interface Proxy {
   width?: number;
   height?: number;
   frames: number;
+  audioTracks: number;
 }
 
 interface ConformDto {
@@ -560,6 +561,13 @@ export class ReviewDetail {
           timeline: tl,
           src: mediaUrl(`/${it.assetId}/proxy`) + (mediaUrl("/x").includes("?") ? "&" : "?") + `v=${p.id}`,
           proxyLabel: `${p.width}×${p.height} H.264`,
+          audio: p.audioTracks > 0
+            ? {
+              tracks: p.audioTracks,
+              durationSec: (tl.durationFrames * tl.rate.den) / tl.rate.num,
+              urlFor: (track, block) => mediaUrl(`/${it.assetId}/audio/${track}/${block}.wav`) + (mediaUrl("/x").includes("?") ? "&" : "?") + `v=${p.id}`,
+            }
+            : undefined,
           getSegments: () => this.#draft.segments,
           findings: () => this.#d?.qcReport ? this.#findings : [],
           onAddSegment: (a, b) => {

@@ -554,6 +554,33 @@ func (a *api) serveProxy() http.HandlerFunc {
 	}
 }
 
+func (a *api) serveAudioBlock() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		track, e1 := strconv.Atoi(r.PathValue("track"))
+		block, e2 := strconv.Atoi(strings.TrimSuffix(r.PathValue("block"), ".wav"))
+		if e1 != nil || e2 != nil {
+			http.Error(w, "ungültige Spur/Block", http.StatusBadRequest)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		wav, err := a.svc.AudioBlock(ctx, r.PathValue("id"), track, block)
+		if err != nil {
+			code := http.StatusInternalServerError
+			if errors.Is(err, ErrNotFound) {
+				code = http.StatusNotFound
+			} else if errors.Is(err, ErrValidation) {
+				code = http.StatusBadRequest
+			}
+			http.Error(w, "Ton nicht verfügbar", code)
+			return
+		}
+		w.Header().Set("Content-Type", "audio/wav")
+		w.Header().Set("Cache-Control", "private, max-age=3600")
+		_, _ = w.Write(wav)
+	}
+}
+
 func (a *api) serveFrame() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		n, err := strconv.ParseInt(strings.TrimSuffix(r.PathValue("n"), ".jpg"), 10, 64)

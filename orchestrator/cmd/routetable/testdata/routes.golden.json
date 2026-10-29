@@ -1892,6 +1892,12 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/review/media/{id}/audio/{track}/{block}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/review/media/{id}/frame/{n}",
     "auth": "auth",
     "domain": "core"

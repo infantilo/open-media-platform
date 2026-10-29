@@ -965,6 +965,26 @@ const TABLE: Record<string, [string, string]> = {
     "Jog: Ziehen = Einzelbilder (ca. 7 px je Bild). Mausrad über dem Bild: ±1 Bild (Umschalt ±10).",
     "Jog: drag for single frames (about 7 px per frame). Mouse wheel over the picture: ±1 frame (Shift ±10)."
   ],
+  "rv.audio": [
+    "Ton",
+    "Audio"
+  ],
+  "rv.audio.track.hint": [
+    "Tonspur {p0} hören/stumm (Taste {p0})",
+    "Listen to / mute audio track {p0} (key {p0})"
+  ],
+  "rv.audio.solo.hint": [
+    "Tonspur {p0} solo (Umschalt+{p0})",
+    "Solo audio track {p0} (Shift+{p0})"
+  ],
+  "rv.audio.volume": [
+    "Lautstärke",
+    "Volume"
+  ],
+  "rv.audio.hint": [
+    "Ton folgt Jog, Einzelbild und Shuttle (−4× … +4×); bei höherem Tempo stumm.",
+    "Audio follows jog, single frame and shuttle (−4× … +4×); muted at higher speeds."
+  ],
   "rv.player.shuttle": [
     "Shuttle",
     "Shuttle"

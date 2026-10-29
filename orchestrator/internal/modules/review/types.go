@@ -211,6 +211,9 @@ type Proxy struct {
 	Profile   string    `json:"profile"`
 	State     string    `json:"state"` // queued|running|ready|failed
 	Path      string    `json:"-"`
+	// Ton-Proxy: eine Datei mit je einem Stereo-Stream je Quell-Tonspur (Browser holt blockweise, s. audio.go).
+	AudioTracks int    `json:"audioTracks"`
+	AudioPath   string `json:"-"`
 	Frames    int64     `json:"frames"`
 	Rate      Rate      `json:"rate"`
 	Verified  bool      `json:"verified"`

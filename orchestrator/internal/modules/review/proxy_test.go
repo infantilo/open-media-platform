@@ -209,3 +209,92 @@ func TestReferenceProfile1080i8Tracks(t *testing.T) {
 		t.Fatalf("proxy audio = %q, want one stereo AAC stream", b)
 	}
 }
+
+// toneStepFixture: 1 s Stille, danach 1-kHz-Ton (Stereo, links lauter) — der Toneinsatz bei genau 1,000 s prüft die Zeitabbildung
+// des Ton-Proxys und der Block-Auslieferung.
+func toneStepFixture(t *testing.T, dir string, frames int) string {
+	t.Helper()
+	out := filepath.Join(dir, "tone.mxf")
+	secs := float64(frames) / 25
+	args := []string{"-v", "error", "-y",
+		"-f", "lavfi", "-i", fmt.Sprintf("color=c=black:s=640x360:r=25:d=%g,format=yuv422p", secs),
+		"-f", "lavfi", "-i", fmt.Sprintf("aevalsrc='if(gte(t,1),0.5*sin(2*PI*1000*t),0)|if(gte(t,1),0.25*sin(2*PI*1000*t),0)':s=48000:d=%g", secs),
+		"-f", "lavfi", "-i", fmt.Sprintf("sine=frequency=300:sample_rate=48000:d=%g", secs),
+		"-map", "0:v", "-map", "1:a", "-map", "2:a", "-t", fmt.Sprintf("%g", secs), "-c:v", "mpeg2video", "-pix_fmt", "yuv422p", "-b:v", "30M", "-g", "12", "-bf", "0",
+		"-c:a", "pcm_s24le", "-timecode", "01:00:00:00", "-f", "mxf", out}
+	if b, err := exec.Command("ffmpeg", args...).CombinedOutput(); err != nil {
+		t.Fatalf("tone fixture: %v\n%s", err, b)
+	}
+	return out
+}
+
+func TestAudioProxyTracksAndBlocksAreTimeAccurate(t *testing.T) {
+	needFFmpeg(t)
+	e := newEnv(t, func(c *Config) { c.QCProfiles["broadcast-default"] = noLoudness(c.QCProfiles["broadcast-default"]) })
+	ctx := context.Background()
+	src := toneStepFixture(t, e.dir, 300) // 12 s → zwei Blöcke je Spur
+	e.file = filepath.Base(src)
+	it := e.importReady(t)
+	if _, err := e.svc.RequestProxy(ctx, it.AssetID, false); err != nil {
+		t.Fatal(err)
+	}
+	if ran, err := e.svc.RunNextProxy(ctx); !ran || err != nil {
+		t.Fatalf("proxy run: %v %v", ran, err)
+	}
+	_, p, err := e.svc.ProxyFile(ctx, it.AssetID)
+	if err != nil || p.AudioTracks != 2 {
+		t.Fatalf("proxy: %v %+v", err, p)
+	}
+	samples := func(wav []byte) (l, r []int16) {
+		if string(wav[:4]) != "RIFF" || string(wav[8:12]) != "WAVE" {
+			t.Fatalf("kein WAV")
+		}
+		pcm := wav[44:]
+		for i := 0; i+3 < len(pcm); i += 4 {
+			l = append(l, int16(uint16(pcm[i])|uint16(pcm[i+1])<<8))
+			r = append(r, int16(uint16(pcm[i+2])|uint16(pcm[i+3])<<8))
+		}
+		return
+	}
+	// Spur 0, Block 0: 10 s, Stille bis 1,000 s (±1 Bild), dann Ton; links ≈ doppelt so laut wie rechts
+	wav, err := e.svc.AudioBlock(ctx, it.AssetID, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, r := samples(wav)
+	if len(l) != 10*48000 {
+		t.Fatalf("Block 0 hat %d Samples, erwartet %d", len(l), 10*48000)
+	}
+	first := -1
+	for i, v := range l {
+		if v > 3000 || v < -3000 {
+			first = i
+			break
+		}
+	}
+	if d := first - 48000; d < -1920 || d > 1920 {
+		t.Errorf("Toneinsatz bei Sample %d, erwartet 48000 ± 1920 (1 Bild)", first)
+	}
+	var sl, sr float64
+	for i := 96000; i < 120000; i++ {
+		sl += float64(l[i]) * float64(l[i])
+		sr += float64(r[i]) * float64(r[i])
+	}
+	if ratio := sl / sr; ratio < 2.5 || ratio > 6 { // Leistung ≈ 4:1
+		t.Errorf("Pegelverhältnis L/R (Leistung) = %.2f, erwartet ≈ 4", ratio)
+	}
+	// Letzter Block ist kürzer (12 s − 10 s), danach nichts mehr
+	wav, err = e.svc.AudioBlock(ctx, it.AssetID, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l, _ = samples(wav); len(l) != 2*48000 {
+		t.Errorf("Block 1 hat %d Samples, erwartet %d", len(l), 2*48000)
+	}
+	if _, err := e.svc.AudioBlock(ctx, it.AssetID, 0, 2); err == nil {
+		t.Error("Block hinter dem Ende muss abgelehnt werden")
+	}
+	if _, err := e.svc.AudioBlock(ctx, it.AssetID, 2, 0); err == nil {
+		t.Error("unbekannte Spur muss abgelehnt werden")
+	}
+}
