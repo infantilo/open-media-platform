@@ -744,6 +744,9 @@ struct AutomationState {
     /// Cart-Anzahl ist die O(n)-Suche unproblematisch, gleiche Abwägung
     /// wie beim Rest dieses Nodes).
     carts: Vec<(String, ItemMeta)>,
+    /// Block-Folge je Cart: danach automatisch ablaufende weitere Carts (Reihenfolge); ein Cart mit Folge ist ein „Block“ aus
+    /// mehreren Events, jedes mit eigenen Children.
+    cart_follow: HashMap<String, Vec<String>>,
     next_cart_seq: u64,
     active_cart: Option<ActiveCart>,
     /// C20 (`ARCHITECTURE.md` §24.5, `timeline.rs`): gefensterter,
@@ -849,6 +852,7 @@ impl AutomationState {
             audio_mappings: Value::Array(vec![]),
             last_live_item_id: None,
             carts: Vec::new(),
+            cart_follow: HashMap::new(),
             next_cart_seq: 0,
             active_cart: None,
             timeline: TimelineCache::new(),
@@ -949,6 +953,8 @@ struct ActiveCart {
     /// `last_live_item_id`-Doku) — der Return startet die Item-Laufzeit
     /// dann bewusst frisch, statt eine Pseudo-Restdauer zu erfinden.
     elapsed_before_interrupt_ms: u128,
+    /// Noch ausstehende Folge-Carts des Blocks (der Reihe nach).
+    follow: std::collections::VecDeque<String>,
 }
 
 enum Event {
@@ -1759,7 +1765,7 @@ impl AutomationStore {
     /// Property-Editor: ändert beliebige Eigenschaften EINES Events in einem Schritt (alles-oder-nichts —
     /// zuerst vollständig geprüft, dann angewendet). Das laufende Event darf nicht umgebaut werden
     /// (Medium/Dauer), Children/Audio/Titel/Start/Transition schon.
-    fn do_update_item(&self, item_id: &str, patch: &Value) -> Result<(), String> {
+    fn prepare_patch(&self, patch: &Value) -> Result<PreparedPatch, String> {
         let mut p: ItemPatch = serde_json::from_value(patch.clone()).map_err(|e| format!("Eigenschaften ungültig: {e}"))?;
 
         // 1) Vorab prüfen/auflösen (ohne den State-Lock zu halten: Asset-Auflösung ist ein HTTP-Aufruf).
@@ -1836,36 +1842,81 @@ impl AutomationStore {
             }
         }
 
+        Ok(PreparedPatch { p, new_media, start_type, start_at_ms, on_missing, audio })
+    }
+
+    fn do_update_item(&self, item_id: &str, patch: &Value) -> Result<(), String> {
+        let PreparedPatch { p, new_media, start_type, start_at_ms, on_missing, audio } = self.prepare_patch(patch)?;
         apply_item_patch(&mut self.state.lock().expect("lock poisoned"), item_id, new_media, start_type, start_at_ms, on_missing, audio, p)
     }
 
-    /// Ändert ein bestehendes Cart (Panel „Assets verwalten“).
+    /// Ändert ein bestehendes Cart (Panel „Assets verwalten“): dieselben Eigenschaften wie beim Event-Editor (Quelle, Dauer,
+    /// Children, Audio, Titel, Symbol, Farbe) und die Block-Folge (`follow`: IDs weiterer Carts).
     fn do_cart_update(&self, asset_id: &str, patch: &Value) -> Result<(), String> {
+        let PreparedPatch { p, new_media, on_missing, audio, .. } = self.prepare_patch(patch)?;
+        if matches!(new_media, Some((ItemMedia::Hold | ItemMedia::Jump { .. }, _))) {
+            return Err("Hold und Jump gibt es für Carts nicht".to_string());
+        }
+        if p.label.as_deref().is_some_and(|l| l.trim().is_empty()) {
+            return Err("label darf nicht leer sein".to_string());
+        }
+        let follow: Option<Vec<String>> = patch.get("follow").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect());
         let mut state = self.state.lock().expect("lock poisoned");
-        let (_, meta) = state.carts.iter_mut().find(|(id, _)| id == asset_id).ok_or("unbekannte Cart-ID".to_string())?;
-        let text = |k: &str| patch.get(k).and_then(Value::as_str);
-        if let Some(l) = text("label") {
-            if l.trim().is_empty() {
-                return Err("label darf nicht leer sein".to_string());
+        if let Some(list) = &follow {
+            for id in list {
+                if id == asset_id {
+                    return Err("Ein Cart kann nicht sich selbst folgen".to_string());
+                }
+                if !state.carts.iter().any(|(c, _)| c == id) {
+                    return Err(format!("Folge-Cart „{id}\u{201c} gibt es nicht"));
+                }
             }
+        }
+        let (_, meta) = state.carts.iter_mut().find(|(id, _)| id == asset_id).ok_or("unbekannte Cart-ID".to_string())?;
+        if let Some(l) = p.label {
             meta.label = l.trim().to_string();
         }
+        for (field, val) in [(&mut meta.media_ref.note, p.note), (&mut meta.media_ref.icon, p.icon), (&mut meta.media_ref.color, p.color), (&mut meta.media_ref.audio_mapping, p.audio_mapping)] {
+            if let Some(v) = val {
+                *field = v;
+            }
+        }
+        if let Some((media, asset)) = new_media {
+            meta.media = media;
+            meta.media_ref.asset = asset;
+        }
+        // älteres Panel: Muster/Ton direkt am Testmuster
+        let text = |k: &str| patch.get(k).and_then(Value::as_str);
         if let ItemMedia::TestPattern { pattern, tone_frequency } = &mut meta.media {
-            if let Some(p) = text("pattern").filter(|p| !p.is_empty()) {
-                *pattern = p.to_string();
+            if let Some(pt) = text("pattern").filter(|x| !x.is_empty()) {
+                *pattern = pt.to_string();
             }
             if let Some(t) = patch.get("toneFrequency").and_then(Value::as_f64) {
                 *tone_frequency = t.max(0.0);
             }
         }
-        if let Some(d) = patch.get("durationMs").and_then(Value::as_f64) {
-            meta.duration_ms = d.max(0.0) as u64;
+        // 0 ist hier gültig: kein automatischer Return (`ActiveCart::duration_ms`)
+        if let Some(d) = p.duration_ms {
+            meta.duration_ms = d;
         }
-        if let Some(i) = text("icon") {
-            meta.media_ref.icon = i.to_string();
+        if let Some(c) = p.children {
+            meta.children = c;
         }
-        if let Some(c) = text("color") {
-            meta.media_ref.color = c.to_string();
+        if let Some(a) = audio {
+            meta.audio = a;
+        }
+        if let Some(m) = on_missing {
+            meta.media_ref.on_missing = m;
+        }
+        if let Some(f) = p.fallback_file {
+            meta.media_ref.fallback_file = Some(f).filter(|f| !f.trim().is_empty());
+        }
+        if let Some(list) = follow {
+            if list.is_empty() {
+                state.cart_follow.remove(asset_id);
+            } else {
+                state.cart_follow.insert(asset_id.to_string(), list);
+            }
         }
         Ok(())
     }
@@ -2032,7 +2083,7 @@ impl AutomationStore {
     /// als eigenen späteren Schritt) — `ItemMeta::media` ist trotzdem
     /// bereits der geteilte Typ, damit `do_cart_fire` unverändert bleibt,
     /// sobald das nachgeholt wird.
-    fn do_cart_define(&self, label: String, pattern: String, tone_frequency: f64, duration_ms: u64) -> Result<(), String> {
+    fn do_cart_define(&self, label: String, media: ItemMedia, duration_ms: u64) -> Result<(), String> {
         let mut state = self.state.lock().expect("lock poisoned");
         state.next_cart_seq += 1;
         let id = format!("cart{}", state.next_cart_seq);
@@ -2040,7 +2091,7 @@ impl AutomationStore {
             id,
             ItemMeta {
                 label,
-                media: ItemMedia::TestPattern { pattern, tone_frequency },
+                media,
                 duration_ms,
                 // Carts laufen nie durch `Playlist::advance()` (eigener
                 // `state.carts`-Vec, nur per explizitem `cart.fire`
@@ -2070,6 +2121,11 @@ impl AutomationStore {
         if state.carts.len() == before {
             return Err("unbekannte Cart-Asset-ID".to_string());
         }
+        state.cart_follow.remove(asset_id);
+        for list in state.cart_follow.values_mut() {
+            list.retain(|id| id != asset_id);
+        }
+        state.cart_follow.retain(|_, l| !l.is_empty());
         Ok(())
     }
 
@@ -2118,13 +2174,39 @@ impl AutomationStore {
         // Hauptkanal-Items.
         self.schedule_children(&mut state, asset_id, Instant::now());
 
+        let follow: std::collections::VecDeque<String> = expand_cart_follow(&state, asset_id).into();
         state.active_cart = Some(ActiveCart {
             asset_id: asset_id.to_string(),
             fired_at: Instant::now(),
             duration_ms: meta.duration_ms,
             interrupted_item_id,
             elapsed_before_interrupt_ms,
+            follow,
         });
+        Ok(())
+    }
+
+    /// Nächster Schritt eines Cart-Blocks: nimmt das nächste Folge-Cart auf Sendung (harter Cut, wie beim Fire) und plant
+    /// dessen Children. Ohne weiteren Schritt: Return.
+    fn do_cart_next(&self) -> Result<(), String> {
+        let mut state = self.state.lock().expect("lock poisoned");
+        let Some(next_id) = state.active_cart.as_mut().and_then(|a| a.follow.pop_front()) else {
+            drop(state);
+            return self.do_cart_return();
+        };
+        let Some(meta) = state.carts.iter().find(|(id, _)| *id == next_id).map(|(_, m)| m.clone()) else {
+            drop(state);
+            return self.do_cart_next(); // Folge-Cart inzwischen gelöscht: überspringen
+        };
+        let mixer_node_id = state.mixer_node_id.clone().ok_or("Ziel-Mixer nicht aufgelöst (Cart-Block)")?;
+        let new_channel = take_on_targets(self, &state, &mixer_node_id, &meta, Transition::Cut, None)?;
+        state.live_channel = new_channel;
+        self.schedule_children(&mut state, &next_id, Instant::now());
+        if let Some(a) = state.active_cart.as_mut() {
+            a.asset_id = next_id;
+            a.fired_at = Instant::now();
+            a.duration_ms = meta.duration_ms;
+        }
         Ok(())
     }
 
@@ -2194,6 +2276,25 @@ impl AutomationStore {
     }
 }
 
+/// Alle Folge-Carts eines Cart-Blocks in Ablaufreihenfolge (verschachtelte Folgen aufgelöst; jedes Cart höchstens einmal,
+/// damit eine Schleife nicht endlos läuft).
+fn expand_cart_follow(state: &AutomationState, start: &str) -> Vec<String> {
+    fn walk(state: &AutomationState, id: &str, seen: &mut Vec<String>, out: &mut Vec<String>) {
+        for next in state.cart_follow.get(id).into_iter().flatten() {
+            if seen.contains(next) {
+                continue;
+            }
+            seen.push(next.clone());
+            out.push(next.clone());
+            walk(state, next, seen, out);
+        }
+    }
+    let mut seen = vec![start.to_string()];
+    let mut out = Vec::new();
+    walk(state, start, &mut seen, &mut out);
+    out
+}
+
 /// Baut die `load()`-Argumente aus einem `ItemMeta` — exakt das
 /// Feld-Set, das `omp-channel-player::invoke("load")` erwartet (label/
 /// pattern/file/senderId/toneFrequency/durationMs). Geteilt zwischen
@@ -2260,6 +2361,16 @@ struct MediaPatch {
     #[serde(default)]
     asset: Option<readiness::AssetRef>,
 }
+/// Vorab geprüfter Änderungssatz (Event-Editor und Cart-Editor teilen die Prüfung).
+struct PreparedPatch {
+    p: ItemPatch,
+    new_media: Option<(ItemMedia, Option<readiness::AssetRef>)>,
+    start_type: Option<StartType>,
+    start_at_ms: Option<Option<i64>>,
+    on_missing: Option<readiness::MissingPolicy>,
+    audio: Option<Option<omp_resolver::audio::AudioIntent>>,
+}
+
 #[derive(serde::Deserialize, Default)]
 struct ItemPatch {
     label: Option<String>,
@@ -3145,11 +3256,13 @@ fn plan_children(
     saved: Option<&HashMap<String, ChildState>>,
 ) -> Vec<String> {
     let mut notices = Vec::new();
-    if !state.metadata.contains_key(item_id) {
+    // Carts tragen ihre Children selbst (kein Eintrag in `metadata`)
+    let cart_meta = state.carts.iter().find(|(id, _)| id == item_id).map(|(_, m)| m.clone());
+    if !state.metadata.contains_key(item_id) && cart_meta.is_none() {
         return notices;
     }
-    let auto = ad_break_children(state, item_id);
-    let Some(meta) = state.metadata.get(item_id) else { return notices };
+    let auto = if cart_meta.is_some() { Vec::new() } else { ad_break_children(state, item_id) };
+    let Some(meta) = state.metadata.get(item_id).or(cart_meta.as_ref()) else { return notices };
     if meta.children.is_empty() && auto.is_empty() {
         return notices;
     }
@@ -3549,6 +3662,10 @@ fn execute_child(
         return if stop {
             client.invoke("subtitle.stop", serde_json::json!({})).map_err(|e| e.to_string())
         } else {
+            // Wie bei Grafik-Kindern: Fill der Grafik in den Keyer des Mischers legen, sonst bleibt der Untertitel außerhalb von PGM.
+            if child.target.trim().is_empty() {
+                ensure_mixer_keyer(store);
+            }
             let mut args = serde_json::json!({"track": child.params["track"]});
             if let Some(o) = child.params.get("offsetMs") {
                 args["offsetMs"] = o.clone();
@@ -4127,6 +4244,10 @@ impl ParamStore for AutomationStore {
             MethodSpec {
                 name: "cart.define".to_string(),
                 args: vec![
+                    MethodArg { name: "file".to_string(), kind: ParamType::String },
+                    MethodArg { name: "senderId".to_string(), kind: ParamType::String },
+                    MethodArg { name: "eventType".to_string(), kind: ParamType::String },
+                    MethodArg { name: "sourceSelectorJson".to_string(), kind: ParamType::String },
                     MethodArg {
                         name: "label".to_string(),
                         kind: ParamType::String,
@@ -4286,7 +4407,13 @@ impl ParamStore for AutomationStore {
                 state
                     .carts
                     .iter()
-                    .map(|(id, m)| item_meta_to_json(id, m))
+                    .map(|(id, m)| {
+                        let mut v = item_meta_to_json(id, m);
+                        if let Some(f) = state.cart_follow.get(id) {
+                            v["follow"] = serde_json::json!(f);
+                        }
+                        v
+                    })
                     .collect::<Vec<_>>()
             )),
             "activeCartId" => Some(serde_json::json!(
@@ -4585,32 +4712,31 @@ impl ParamStore for AutomationStore {
             "nextLive" => self.do_next_live(),
             "stop" => self.do_stop(),
             // C18 (ARCHITECTURE.md §24.3).
-            "cart.define" => {
-                let label = args
-                    .get("label")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or("Cart")
-                    .to_string();
-                let pattern = args
-                    .get("pattern")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or(DEFAULT_PATTERN)
-                    .to_string();
-                let tone_frequency = args.get("toneFrequency").and_then(Value::as_f64).unwrap_or(0.0);
-                // Anders als beim Haupt-`append`: 0 ist hier ein gültiger,
-                // bewusster Wert ("kein automatischer Return", s.
-                // `ActiveCart::duration_ms`-Doku) statt auf
-                // DEFAULT_DURATION_MS zu fallen.
-                let duration_ms = args
-                    .get("durationMs")
-                    .and_then(Value::as_f64)
-                    .filter(|d| *d >= 0.0)
-                    .map(|d| d as u64)
-                    .unwrap_or(0);
-                self.do_cart_define(label, pattern, tone_frequency, duration_ms)
-            }
+            "cart.define" => (|| {
+                let label = args.get("label").and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or("Cart").to_string();
+                let text = |k: &str| args.get(k).and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(str::to_string);
+                let selector: Option<omp_resolver::Selector> = text("sourceSelectorJson")
+                    .map(|j| serde_json::from_str(&j))
+                    .transpose()
+                    .map_err(|e| format!("sourceSelectorJson ungültig: {e}"))?;
+                let event_type = text("eventType");
+                if matches!(event_type.as_deref().map(str::to_ascii_lowercase).as_deref(), Some("hold" | "jump")) {
+                    return Err("Hold und Jump gibt es für Carts nicht".to_string());
+                }
+                let media = item_media_from_args(
+                    text("pattern").as_deref(),
+                    text("file").as_deref(),
+                    text("senderId").as_deref(),
+                    args.get("toneFrequency").and_then(Value::as_f64),
+                    event_type.as_deref(),
+                    None,
+                    selector.as_ref(),
+                );
+                // Anders als beim Haupt-`append`: 0 ist hier ein gültiger, bewusster Wert ("kein automatischer Return", s.
+                // `ActiveCart::duration_ms`-Doku) statt auf DEFAULT_DURATION_MS zu fallen.
+                let duration_ms = args.get("durationMs").and_then(Value::as_f64).filter(|d| *d >= 0.0).map(|d| d as u64).unwrap_or(0);
+                self.do_cart_define(label, media, duration_ms)
+            })(),
             "cart.remove" => match args.get("assetId").and_then(Value::as_str) {
                 Some(id) => self.do_cart_remove(id),
                 None => Err("assetId fehlt".to_string()),
@@ -4894,6 +5020,7 @@ async fn token_refresh_loop(
 enum AdvanceAction {
     None,
     CartReturn,
+    CartNext,
     PlaylistAdvance,
 }
 
@@ -4914,7 +5041,7 @@ async fn auto_advance_loop(
             let state = store.state.lock().expect("lock poisoned");
             if let Some(active) = &state.active_cart {
                 if active.duration_ms > 0 && active.fired_at.elapsed().as_millis() as u64 >= active.duration_ms {
-                    AdvanceAction::CartReturn
+                    if active.follow.is_empty() { AdvanceAction::CartReturn } else { AdvanceAction::CartNext }
                 } else {
                     AdvanceAction::None
                 }
@@ -4963,6 +5090,10 @@ async fn auto_advance_loop(
             AdvanceAction::CartReturn => {
                 let store2 = store.clone();
                 ("Cart-Return", tokio::task::spawn_blocking(move || store2.do_cart_return()).await)
+            }
+            AdvanceAction::CartNext => {
+                let store2 = store.clone();
+                ("Cart-Block", tokio::task::spawn_blocking(move || store2.do_cart_next()).await)
             }
             AdvanceAction::PlaylistAdvance => {
                 let store2 = store.clone();
@@ -6926,5 +7057,20 @@ mod adbreak_plan_tests {
         plan_children(&mut s, "show", Instant::now(), Some(&saved));
         assert_eq!(s.child_runtime[0].state, ChildState::Completed);
         assert!(s.child_schedule.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod cart_block_tests {
+    use super::*;
+
+    #[test]
+    fn follow_is_flattened_in_order_and_cycles_stop() {
+        let mut st = AutomationState::new(String::new(), String::new(), String::new(), String::new());
+        st.cart_follow.insert("a".into(), vec!["b".into(), "c".into()]);
+        st.cart_follow.insert("b".into(), vec!["d".into()]);
+        st.cart_follow.insert("d".into(), vec!["a".into()]); // Schleife zurück zum Start
+        assert_eq!(expand_cart_follow(&st, "a"), vec!["b", "d", "c"]);
+        assert!(expand_cart_follow(&st, "x").is_empty());
     }
 }

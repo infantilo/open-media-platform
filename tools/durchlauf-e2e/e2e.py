@@ -151,6 +151,25 @@ def setup():
     return wf, ch
 
 
+def wire_audio():
+    """Der Tonmischer hat nach dem Start keine Kanäle — ohne sie ist die Sendung (und damit die Aufnahme) stumm. Je Player ein
+    Kanal, Quelle = der Audio-Ausgang des Players (idempotent: vorhandene Kanäle bleiben)."""
+    mixer = next((n for n in call("GET", "/api/v1/nodes") if n.get("online") and n["label"] == "Tonmischer"), None)
+    if not mixer:
+        return
+    have = {c.get("label"): c for c in param(mixer["id"], "channels")}
+    audio = {x["label"]: x["senderId"] for x in call("GET", "/api/v1/sources?mediaType=audio")}
+    for i, name in enumerate(["Player A", "Player B"], start=1):
+        if name not in have:
+            method(mixer["id"], "addChannel", {"label": name})
+    have = {c.get("label"): c for c in param(mixer["id"], "channels")}
+    for name in ["Player A", "Player B"]:
+        sender = audio.get(f"{name} Audio")
+        if sender and name in have:
+            method(mixer["id"], f"channel.{have[name]['id']}.setSource", {"senderId": sender})
+    print("  Tonmischer: Kanäle für Player A/B verbunden")
+
+
 def run(wf, ch):
     print("== Workflow starten")
     w = next(x for x in wf_list() if x["id"] == wf["id"])
@@ -173,6 +192,7 @@ def run(wf, ch):
                 pass
     auto = wait_for(find_auto, 120, "Automation-Node des Channels online", 3)
     nid = auto["id"]
+    wire_audio()
     print("  Automation:", auto["label"])
     # Ziele und Freigabe
     time.sleep(5)

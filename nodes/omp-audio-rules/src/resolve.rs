@@ -44,6 +44,10 @@ fn try_spec(group: &TargetGroup, spec: &SourceSpec, tracks: &[SourceTrack], ncol
     let mut selected: Vec<Option<usize>> = Vec::new();
     match (&spec.tracks, &spec.select) {
         (Some(list), None) => {
+            // Mono-Quelle auf dem Standard-Stereopaar (Spuren 1+2): Dual-Mono statt stiller Gruppe. Nur für genau dieses
+            // Paar — fehlende Spuren anderer Gruppen (AD, Originalton …) dürfen nicht mit dem Programmton gefüllt werden.
+            let mono_source = tracks.len() == 1 && tracks[0].n == 1 && tracks[0].channel_names().len() == 1;
+            let list: &[u32] = if mono_source && list.as_slice() == [1, 2] { &[1, 1] } else { list.as_slice() };
             for &n in list {
                 if n == 0 {
                     selected.push(None);
@@ -495,6 +499,16 @@ mod tests {
         assert!(errs.iter().any(|e| e.contains("unbekannte Zielgruppe 'nope'")), "{errs:?}");
         assert!(errs.iter().any(|e| e.contains("bit-exakt")), "{errs:?}");
         assert!(errs.iter().any(|e| e.contains("Tag-Ausdruck")), "{errs:?}");
+    }
+
+    #[test]
+    fn mono_source_on_the_stereo_pair_becomes_dual_mono() {
+        let plan = resolve(&default_profile(), &mono_tracks(1), default_mappings().iter().find(|m| m.id == "stereo"), &RuleSet::default());
+        let pt = plan.groups.iter().find(|g| g.group == "pt").unwrap();
+        assert!(!pt.silent, "{:?}", pt.warnings);
+        assert_eq!(pt.matrix, vec![vec![1.0], vec![1.0]]);
+        // andere Gruppen bleiben still: kein Programmton in AD/Originalton
+        assert!(plan.groups.iter().filter(|g| g.group != "pt").all(|g| g.silent));
     }
 
     #[test]

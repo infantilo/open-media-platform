@@ -49,6 +49,8 @@ struct Settings {
     enabled: bool,
     live_display: bool,
     graphics_label: String,
+    /// Bildmischer, dessen Keyer die Untertitel-Grafik bekommt (leer = Keyer nicht anfassen).
+    mixer_label: String,
     track_name: String,
 }
 
@@ -175,6 +177,41 @@ fn worker(shared: Arc<Shared>, rx: Receiver<segment::Segment>, display: std::syn
     }
 }
 
+/// Legt den Fill des Grafik-Nodes in den Keyer des Mischers und schaltet ihn ein (wie die Playout-Automation bei Grafik-Kindern).
+/// Leeres `mixer_label` = nichts tun.
+fn ensure_keyer(registry: &RegistryClient, mixer_label: &str, graphics_label: &str) -> Result<(), String> {
+    if mixer_label.is_empty() {
+        return Ok(());
+    }
+    let node = registry
+        .list_nodes()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|n| n.label == mixer_label)
+        .ok_or_else(|| format!("Mischer „{mixer_label}“ nicht gefunden"))?;
+    let mixer = PeerClient::new(node.href);
+    let inputs = mixer.get_param("keyer.inputs").map_err(|e| e.to_string())?;
+    let fill = inputs
+        .as_array()
+        .and_then(|list| {
+            list.iter().find_map(|e| {
+                let label = e.get("label")?.as_str()?;
+                if !label.starts_with(graphics_label) || label.contains("Lowres") {
+                    return None;
+                }
+                e.get("senderId")?.as_str().map(str::to_string)
+            })
+        })
+        .ok_or_else(|| format!("Fill von „{graphics_label}“ nicht unter keyer.inputs gefunden"))?;
+    if mixer.get_param("keyer.source").ok().and_then(|v| v.as_str().map(str::to_string)).as_deref() != Some(fill.as_str()) {
+        mixer.invoke_with("keyer.setSource", json!({"senderId": fill})).map_err(|e| e.to_string())?;
+    }
+    if mixer.get_param("keyer.enabled").ok().and_then(|v| v.as_bool()) != Some(true) {
+        mixer.invoke_with("keyer.setEnabled", json!({"enabled": true})).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Anzeige: Einheiten nacheinander in die Untertitelebene des Grafik-Nodes, danach leeren.
 fn display_loop(shared: Arc<Shared>, registry: RegistryClient, rx: Receiver<Vec<Cue>>, shutdown: Arc<AtomicBool>) {
     let mut queue: VecDeque<Cue> = VecDeque::new();
@@ -198,7 +235,15 @@ fn display_loop(shared: Arc<Shared>, registry: RegistryClient, rx: Receiver<Vec<
         let result = if *layer_ready {
             p.invoke_with("update", json!({"layerId": SUBTITLE_LAYER, "data": {"text": text}}))
         } else {
-            p.invoke_with("show", json!({"templateId": "subtitle", "layerId": SUBTITLE_LAYER, "data": {"text": text}})).inspect(|()| *layer_ready = true)
+            let r = p.invoke_with("show", json!({"templateId": "subtitle", "layerId": SUBTITLE_LAYER, "data": {"text": text}})).inspect(|()| *layer_ready = true);
+            if r.is_ok() {
+                let mixer = shared.settings.lock().expect("lock poisoned").mixer_label.clone();
+                if let Err(e) = ensure_keyer(&registry, &mixer, &label) {
+                    shared.errors_total.fetch_add(1, Ordering::Relaxed);
+                    shared.set_status(format!("error: Keyer: {e}"));
+                }
+            }
+            r
         };
         if let Err(e) = result {
             *layer_ready = false;
@@ -320,6 +365,7 @@ impl omp_node_sdk::ParamStore for AsrStore {
                 spec("language", ParamType::String, false),
                 spec("liveDisplay", ParamType::Boolean, false),
                 spec("targetGraphicsLabel", ParamType::String, false),
+                spec("targetMixerLabel", ParamType::String, false),
                 spec("trackName", ParamType::String, false),
                 spec("trackActive", ParamType::Boolean, true),
             ],
@@ -367,6 +413,7 @@ impl omp_node_sdk::ParamStore for AsrStore {
             "language" => Some(json!(settings.language)),
             "liveDisplay" => Some(json!(settings.live_display)),
             "targetGraphicsLabel" => Some(json!(settings.graphics_label)),
+            "targetMixerLabel" => Some(json!(settings.mixer_label)),
             "trackName" => Some(json!(settings.track_name)),
             "trackActive" => Some(json!(s.track.lock().expect("lock poisoned").is_some())),
             _ => None,
@@ -386,6 +433,7 @@ impl omp_node_sdk::ParamStore for AsrStore {
                 s.language = l;
             }
             "targetGraphicsLabel" => s.graphics_label = value.as_str().ok_or(SetError::Unknown)?.trim().to_string(),
+            "targetMixerLabel" => s.mixer_label = value.as_str().ok_or(SetError::Unknown)?.trim().to_string(),
             "trackName" => s.track_name = value.as_str().ok_or(SetError::Unknown)?.trim().to_string(),
             "status" | "connectedFlowId" | "connectedLabel" | "availableSources" | "availableNodes" | "engine" | "engineStatus" | "lastText" | "cues"
             | "stats" | "trackActive" => return Err(SetError::ReadOnly),
@@ -499,6 +547,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             enabled: env_or("OMP_ASR_ENABLED", "1") != "0",
             live_display: env_or("OMP_ASR_LIVE_DISPLAY", "1") != "0",
             graphics_label: env_or("OMP_ASR_GRAPHICS_LABEL", ""),
+            mixer_label: env_or("OMP_ASR_MIXER_LABEL", ""),
             track_name: String::new(),
         }),
         status: Mutex::new("idle".to_string()),

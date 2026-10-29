@@ -4,7 +4,7 @@ const T = (() => {
     de: {
       "asr.source": "— Audioquelle wählen —", "asr.status": "Status", "asr.engine": "Erkennung", "asr.enabled": "Untertitelung aktiv",
       "asr.language": "Sprache", "asr.auto": "automatisch erkennen", "asr.live": "Live in Grafik-Node anzeigen", "asr.target": "Grafik-Node",
-      "asr.noTarget": "— keiner —", "asr.track": "Spur mitschreiben (SRT)", "asr.trackName": "Spurname", "asr.trackStart": "● Spur starten",
+      "asr.noTarget": "— keiner —", "asr.mixer": "Bildmischer (Keyer)", "asr.track": "Spur mitschreiben (SRT)", "asr.trackName": "Spurname", "asr.trackStart": "● Spur starten",
       "asr.trackStop": "■ Spur beenden", "asr.trackOn": "Spur läuft: {name}", "asr.last": "Zuletzt erkannt", "asr.none": "noch nichts erkannt",
       "asr.stats": "Segmente {segments} · verworfen {dropped} · Fehler {errors} · letzte Erkennung {lastLatencyMs} ms", "asr.clear": "Liste leeren",
       "asr.idle": "wartet auf Audioquelle", "asr.listening": "hört zu", "asr.transcribing": "erkennt …", "asr.engineOk": "bereit",
@@ -13,7 +13,7 @@ const T = (() => {
     en: {
       "asr.source": "— choose audio source —", "asr.status": "Status", "asr.engine": "Recognition", "asr.enabled": "Subtitling active",
       "asr.language": "Language", "asr.auto": "detect automatically", "asr.live": "Show live in graphics node", "asr.target": "Graphics node",
-      "asr.noTarget": "— none —", "asr.track": "Write track (SRT)", "asr.trackName": "Track name", "asr.trackStart": "● Start track",
+      "asr.noTarget": "— none —", "asr.mixer": "Video mixer (keyer)", "asr.track": "Write track (SRT)", "asr.trackName": "Track name", "asr.trackStart": "● Start track",
       "asr.trackStop": "■ Stop track", "asr.trackOn": "Track running: {name}", "asr.last": "Last recognised", "asr.none": "nothing recognised yet",
       "asr.stats": "Segments {segments} · dropped {dropped} · errors {errors} · last recognition {lastLatencyMs} ms", "asr.clear": "Clear list",
       "asr.idle": "waiting for audio source", "asr.listening": "listening", "asr.transcribing": "recognising …", "asr.engineOk": "ready",
@@ -66,6 +66,7 @@ class OmpSubtitleAsrPanel extends HTMLElement {
     for (const [v, name] of LANGS) lang.append(el("option", { value: v }, name ?? T("asr.auto")));
     const live = el("input", { type: "checkbox" });
     const target = el("select");
+    const mixer = el("select");
     const trackName = el("input", { type: "text", placeholder: "sendung-2026-10-29" });
     const trackBtn = el("button", {}, T("asr.trackStart"));
     const trackInfo = el("span", { className: "chip" });
@@ -81,6 +82,7 @@ class OmpSubtitleAsrPanel extends HTMLElement {
       el("div", { className: "row" }, el("label", {}, T("asr.language")), lang),
       el("div", { className: "row" }, el("label", {}, T("asr.live")), live),
       el("div", { className: "row" }, el("label", {}, T("asr.target")), target),
+      el("div", { className: "row" }, el("label", {}, T("asr.mixer")), mixer),
       el("div", { className: "row" }, el("label", {}, T("asr.track")), trackName, trackBtn, trackInfo),
       el("div", { className: "row" }, el("label", {}, T("asr.last"))), last, cues, stats,
       el("div", { className: "row" }, clearBtn), el("p", {}, T("asr.hint")),
@@ -97,6 +99,7 @@ class OmpSubtitleAsrPanel extends HTMLElement {
     lang.addEventListener("change", () => setParam("language", lang.value));
     live.addEventListener("change", () => setParam("liveDisplay", live.checked));
     target.addEventListener("change", () => setParam("targetGraphicsLabel", target.value));
+    mixer.addEventListener("change", () => setParam("targetMixerLabel", mixer.value));
     select.addEventListener("change", () => call("selectSource", { senderId: select.value }));
     clearBtn.addEventListener("click", () => call("clear"));
     let trackActive = false;
@@ -109,8 +112,8 @@ class OmpSubtitleAsrPanel extends HTMLElement {
     let catalogKey = "";
     let catalogAt = 0;
     const refresh = async () => {
-      const [status, engineStatus, st, en, lg, ld, tg, tn, ta, lt, cl, sources, nodes, connected] = await Promise.all(
-        ["status", "engineStatus", "stats", "enabled", "language", "liveDisplay", "targetGraphicsLabel", "trackName", "trackActive", "lastText", "cues", "availableSources", "availableNodes", "connectedFlowId"].map(getParam));
+      const [status, engineStatus, st, en, lg, ld, tg, tn, ta, lt, cl, sources, nodes, connected, tm] = await Promise.all(
+        ["status", "engineStatus", "stats", "enabled", "language", "liveDisplay", "targetGraphicsLabel", "trackName", "trackActive", "lastText", "cues", "availableSources", "availableNodes", "connectedFlowId", "targetMixerLabel"].map(getParam));
       const sKey = String(status || "idle");
       const base = sKey.split(":")[0];
       statusChip.textContent = sKey.startsWith("error") ? sKey : T("asr." + base);
@@ -125,7 +128,11 @@ class OmpSubtitleAsrPanel extends HTMLElement {
       if (target.options.length !== want.length || [...target.options].some((o, i) => o.value !== want[i])) {
         target.replaceChildren(el("option", { value: "" }, T("asr.noTarget")), ...nodeList.map((l) => el("option", { value: l }, l)));
       }
+      if (mixer.options.length !== want.length || [...mixer.options].some((o, i) => o.value !== want[i])) {
+        mixer.replaceChildren(el("option", { value: "" }, T("asr.noTarget")), ...nodeList.map((l) => el("option", { value: l }, l)));
+      }
       if (shadow.activeElement !== target) target.value = tg || "";
+      if (shadow.activeElement !== mixer) mixer.value = tm || "";
       trackActive = !!ta;
       trackBtn.textContent = trackActive ? T("asr.trackStop") : T("asr.trackStart");
       trackInfo.textContent = trackActive ? T("asr.trackOn", { name: tn }) : "";

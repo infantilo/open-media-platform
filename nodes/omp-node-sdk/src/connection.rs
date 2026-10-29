@@ -626,11 +626,31 @@ pub struct ReceiverConnection<C> {
     transport_urn: &'static str,
 }
 
+/// Aktivzustand aller `ReceiverConnection`s dieses Prozesses (Receiver-ID → hat Quelle und ist eingeschaltet).
+static RECEIVER_ACTIVE: std::sync::Mutex<Vec<(String, bool)>> = std::sync::Mutex::new(Vec::new());
+
+fn note_receiver_active(id: &str, active: bool) {
+    let mut v = RECEIVER_ACTIVE.lock().expect("lock poisoned");
+    match v.iter_mut().find(|(i, _)| i == id) {
+        Some(e) => e.1 = active,
+        None => v.push((id.to_string(), active)),
+    }
+}
+
+/// Ob dieser Prozess IS-05-Receiver führt und keiner davon eine Quelle hat. Ein reiner Empfänger (z. B. Viewer, Monitor,
+/// Recorder) ohne Verbindung hat nichts zu liefern — „Bereitschaft“ ist dann kein Fehlzustand (`node::heartbeat_loop`).
+pub fn receivers_all_idle() -> bool {
+    let v = RECEIVER_ACTIVE.lock().expect("lock poisoned");
+    !v.is_empty() && v.iter().all(|(_, active)| !active)
+}
+
 impl<C: ReceiverControl> ReceiverConnection<C> {
     pub fn new(receiver_id: impl Into<String>, control: C) -> Self {
         let transport_urn = TRANSPORT_MXL;
+        let receiver_id = receiver_id.into();
+        note_receiver_active(&receiver_id, false);
         ReceiverConnection {
-            receiver_id: receiver_id.into(),
+            receiver_id,
             control,
             state: Mutex::new(ReceiverResource {
                 sender_id: None,
@@ -753,6 +773,7 @@ impl<C: ReceiverControl> ReceiverConnection<C> {
             );
         }
 
+        note_receiver_active(&self.receiver_id, state.sender_id.is_some() && state.master_enable);
         self.control.apply(&state);
         (
             200,

@@ -51,6 +51,9 @@ pub struct SnapItem {
 pub struct SnapCart {
     pub id: String,
     pub meta: ItemMeta,
+    /// Folge-Carts (Cart-Block), leer = einzelnes Cart.
+    #[serde(default)]
+    pub follow: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -164,7 +167,7 @@ pub fn build_snapshot(state: &AutomationState, since_cache: &mut SinceCache, now
         },
         last_live_item_id: state.last_live_item_id.clone(),
         onair_since_utc_ms,
-        carts: state.carts.iter().map(|(id, m)| SnapCart { id: id.clone(), meta: m.clone() }).collect(),
+        carts: state.carts.iter().map(|(id, m)| SnapCart { id: id.clone(), meta: m.clone(), follow: state.cart_follow.get(id).cloned().unwrap_or_default() }).collect(),
         active_cart_id: state.active_cart.as_ref().map(|a| a.asset_id.clone()),
         fixtime_resolved: state
             .fixtime_resolved
@@ -220,6 +223,7 @@ pub fn apply_snapshot(state: &mut AutomationState, snap: Snapshot, now_utc_ms: i
     state.next_item_seq = state.next_item_seq.max(snap.next_item_seq);
     state.next_cart_seq = state.next_cart_seq.max(snap.next_cart_seq);
     state.live_channel = if snap.live_channel == "b" { Channel::B } else { Channel::A };
+    state.cart_follow = snap.carts.iter().filter(|c| !c.follow.is_empty()).map(|c| (c.id.clone(), c.follow.clone())).collect();
     state.carts = snap.carts.into_iter().map(|c| (c.id, c.meta)).collect();
     state.fixtime_resolved = snap
         .fixtime_resolved
@@ -842,6 +846,19 @@ mod tests {
     }
 
     #[test]
+    fn cart_block_follow_survives_snapshot_and_restore() {
+        let mut s = state_with_three_items();
+        s.carts.push(("cart1".to_string(), meta("slate", 5000)));
+        s.carts.push(("cart2".to_string(), meta("notice", 3000)));
+        s.cart_follow.insert("cart1".to_string(), vec!["cart2".to_string()]);
+        let mut cache = None;
+        let snap = build_snapshot(&s, &mut cache, 0);
+        let (r, _) = restore_into_fresh(snap, 0);
+        assert_eq!(r.cart_follow.get("cart1"), Some(&vec!["cart2".to_string()]));
+        assert!(r.cart_follow.get("cart2").is_none());
+    }
+
+    #[test]
     fn restore_reports_active_cart_and_drops_it() {
         let mut s = state_with_three_items();
         s.carts.push(("cart1".to_string(), meta("slate", 5000)));
@@ -851,6 +868,7 @@ mod tests {
             duration_ms: 5000,
             interrupted_item_id: None,
             elapsed_before_interrupt_ms: 0,
+            follow: Default::default(),
         });
         let mut cache = None;
         let snap = build_snapshot(&s, &mut cache, 0);

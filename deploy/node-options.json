@@ -1370,6 +1370,14 @@
           "group": "Spracherkennung"
       },
       {
+          "key": "OMP_ASR_MIXER_LABEL",
+          "i18n": {"en": {"label": "Video mixer (keyer)", "description": "Label of the video mixer whose keyer receives the subtitle graphic (fill of the graphics node). Empty = do not touch the keyer.", "group": "Speech recognition"}},
+          "label": "Bildmischer (Keyer)",
+          "type": "string",
+          "description": "Bezeichnung des Bildmischers, dessen Keyer die Untertitel-Grafik (Fill des Grafik-Nodes) bekommt. Leer = Keyer nicht anfassen.",
+          "group": "Spracherkennung"
+      },
+      {
           "key": "OMP_SUBTITLE_DIR",
           "i18n": {
               "en": {

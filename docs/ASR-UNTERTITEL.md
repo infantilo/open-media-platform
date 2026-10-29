@@ -36,7 +36,23 @@ Richtwerte: `base` ≈ 140 MB, schnell, für Tests; `small` ≈ 470 MB, brauchba
 
 ## Bedienung
 
-Kachel **Auto-Untertitel**: Audioquelle wählen, Sprache, optional Grafik-Node für die Live-Anzeige (im Mischer muss der Grafik-Node als Keyer anliegen), optional Spur mitschreiben. Parameter: `status`, `engineStatus`, `lastText`, `cues`, `stats` (Segmente, verworfen, Fehler, letzte Erkennung ms, Samples, Spitzenpegel); Methoden `selectSource`, `track.start`, `track.stop`, `clear`.
+Kachel **Auto-Untertitel**: Audioquelle wählen, Sprache, optional Grafik-Node und Bildmischer für die Live-Anzeige (der Node schaltet den Keyer selbst), optional Spur mitschreiben. Parameter: `status`, `engineStatus`, `lastText`, `cues`, `stats` (Segmente, verworfen, Fehler, letzte Erkennung ms, Samples, Spitzenpegel); Methoden `selectSource`, `track.start`, `track.stop`, `clear`.
+
+## Wo sieht man die Untertitel, wie kommen sie an die Gateways
+
+Die Live-Untertitel sind eine **Grafik** (OGraf-Ebene `subtitle`), keine Datenspur. Sie wandern deshalb wie jede Grafik durch den Signalweg:
+
+```
+Auto-Untertitel ─▶ Grafik-Node (Ebene „subtitle“, Fill+Key) ─▶ Keyer des Bildmischers ─▶ PGM ─┬▶ Viewer / Multiviewer (sehen)
+                                                                                                ├▶ SRT-Gateway (Uplink)
+                                                                                                ├▶ ST-2110-Gateway (Ausgang) / SDI-Ausgabe (DeckLink)
+                                                                                                └▶ WebRTC-Gateway (Handy/Browser)
+```
+
+* **Ansehen:** im Viewer oder Multiviewer das **PGM des Bildmischers** zeigen — dort ist der Untertitel eingebrannt, sobald der Keyer aktiv ist. Den Grafik-Node allein (Fill/Key) kann man ebenfalls im Viewer ansehen. In der Kachel des Auto-Untertitel-Nodes stehen außerdem der zuletzt erkannte Text und die Liste der Einheiten.
+* **Keyer:** Der Node legt den Fill des Grafik-Nodes selbst in den Keyer des Mischers und schaltet ihn ein, wenn im Panel (oder per `OMP_ASR_MIXER_LABEL`) der **Bildmischer** gewählt ist. Datei-Untertitel (Kind-Event `SUBTITLE` der Playout-Automation) tun das jetzt ebenfalls, wie die Grafik-Kinder.
+* **Übergabe an Gateways:** Alles, was am PGM hängt, trägt den eingebrannten Untertitel — SRT-Gateway (Uplink), ST-2110-Gateway, DeckLink/SDI, WebRTC. Dafür ist nichts weiter einzustellen. Soll ein Ausgang **ohne** Untertitel laufen, den Gateway nicht an PGM, sondern an einen Mischer-Ausgang ohne Keyer hängen (Clean Feed).
+* **Nicht möglich:** Untertitel als eigene Datenspur (CEA-608/708, Teletext/DVB-Subtitles, TTML/IMSC, ST-2110-40-ANC). Dafür bräuchte es einen Inserter im Gateway; das gibt es bisher nicht (der ANC-Aufbau in `omp-scte35` trägt nur SCTE-104). Die SRT-Spur ist die Vorstufe dafür: aus ihr lassen sich solche Formate später ableiten.
 
 ## Grenzen
 

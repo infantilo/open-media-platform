@@ -333,6 +333,13 @@ const T = (() => {
       "cart.none": "Noch keine Carts (Blackclip, Standby, …).",
       "cart.new": "Neuer Cart",
       "cart.manageTitle": "Assets / Carts verwalten",
+      "cart.edit": "Cart bearbeiten: {label}", "cart.newTitle": "Neuer Cart", "cart.newBtn": "＋ Neuer Cart", "cart.create2": "Cart anlegen",
+      "cart.durationHint": "0 = kein automatisches Ende (RETURN beendet den Cart).",
+      "cart.tab.block": "Block ({n})", "cart.blockHint": "Ein Block spielt nach diesem Cart automatisch weitere Carts der Reihe nach, jedes mit seinen eigenen Children. Jeder Schritt braucht eine Dauer, sonst bleibt der Block dort stehen, bis RETURN gedrückt wird.",
+      "cart.blockEmpty": "Kein Folge-Cart — dieses Cart läuft allein.", "cart.blockAdd": "— Cart hinzufügen —", "cart.blockNoDur": "⚠ „{label}“ hat keine Dauer: der Block bleibt dort stehen.",
+      "cart.blockUp": "nach oben", "cart.blockDown": "nach unten", "cart.blockRemove": "entfernen", "cart.src": "Quelle", "cart.children": "{n} Children", "cart.blockN": "Block mit {n} weiteren",
+      "cart.noSource": "Quelle fehlt", "cart.pickIcon": "Symbol wählen …", "cart.manager.edit": "Bearbeiten",
+      "ic.title": "Symbol wählen", "ic.none": "Kein Symbol", "ic.custom": "Eigenes Zeichen", "ic.use": "Übernehmen", "ic.playback": "Wiedergabe", "ic.onair": "Sendung", "ic.audio": "Ton", "ic.notice": "Hinweis", "ic.misc": "Sonstiges",
       "fixCountdown": "⏰ {hms} „{label}“ in {t}",
       "cntLive": "Nächstes Live-Event", "cntFix": "Nächstes Fix-Event", "cntMiss": "Nächstes Event ohne Quelle", "cntShow": "Zähler anzeigen:",
       "cntIn": "{label} in {t}",
@@ -671,6 +678,13 @@ const T = (() => {
       "cart.none": "No carts yet (black clip, standby, …).",
       "cart.new": "New cart",
       "cart.manageTitle": "Manage assets / carts",
+      "cart.edit": "Edit cart: {label}", "cart.newTitle": "New cart", "cart.newBtn": "＋ New cart", "cart.create2": "Create cart",
+      "cart.durationHint": "0 = no automatic end (RETURN ends the cart).",
+      "cart.tab.block": "Block ({n})", "cart.blockHint": "A block plays further carts one after another after this cart, each with its own children. Every step needs a duration, otherwise the block stops there until RETURN is pressed.",
+      "cart.blockEmpty": "No follow-up cart — this cart runs alone.", "cart.blockAdd": "— add cart —", "cart.blockNoDur": "⚠ “{label}” has no duration: the block stops there.",
+      "cart.blockUp": "up", "cart.blockDown": "down", "cart.blockRemove": "remove", "cart.src": "Source", "cart.children": "{n} children", "cart.blockN": "block with {n} more",
+      "cart.noSource": "source missing", "cart.pickIcon": "Choose symbol …", "cart.manager.edit": "Edit",
+      "ic.title": "Choose symbol", "ic.none": "No symbol", "ic.custom": "Custom character", "ic.use": "Apply", "ic.playback": "Playback", "ic.onair": "On air", "ic.audio": "Audio", "ic.notice": "Notice", "ic.misc": "Other",
       "fixCountdown": "⏰ {hms} “{label}” in {t}",
       "cntLive": "Next live event", "cntFix": "Next fixed event", "cntMiss": "Next event without source", "cntShow": "Show counters:",
       "cntIn": "{label} in {t}",
@@ -1048,6 +1062,7 @@ const STYLE = `
   .form { display: grid; grid-template-columns: 130px 1fr; gap: 7px 10px; align-items: center; }
   .form > label { color: var(--mut); }
   .form .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .crow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .form input[type=text], .form input[type=number], .form select, .form textarea { width: 100%; }
   .form textarea { min-height: 54px; font-family: monospace; }
   .kv-obj, .kv-list { display: flex; flex-direction: column; gap: 4px; width: 100%; }
@@ -1922,9 +1937,40 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       } catch { /* Auswahl bleibt leer, Texteingabe geht weiter */ }
     };
 
+    // ---- Symbol-Auswahl --------------------------------------------------
+    const ICON_SETS = () => [
+      [T("ic.playback"), ["▶", "⏸", "⏹", "⏭", "⏺", "🔁", "⏩", "⏪"]],
+      [T("ic.onair"), ["📺", "🎬", "🎥", "📡", "🔴", "⚫", "⬛", "⚪", "🟢", "🟡"]],
+      [T("ic.audio"), ["🎵", "🎶", "🔊", "🔇", "🎤", "📢", "🔔", "🎧"]],
+      [T("ic.notice"), ["⚠", "❗", "⏱", "⏰", "⌛", "☕", "🌙", "🚧", "🛑"]],
+      [T("ic.misc"), ["★", "♥", "✓", "✕", "🏁", "🎯", "📰", "⚽", "🎭", "🎁", "🏆", "💬"]],
+    ];
+    function openIconPicker(current, onPick) {
+      let m = null;
+      const pick = (ic) => { onPick(ic); if (m) m.close(); };
+      const custom = h("input", { type: "text", maxlength: "4", style: "width:70px", placeholder: T("ic.custom"), value: current && !ICON_SETS().some(([, l]) => l.includes(current)) ? current : "" });
+      m = openModal({
+        title: T("ic.title"),
+        render: () => h("div", {},
+          ...ICON_SETS().map(([title, list]) => h("div", { style: "margin-bottom:8px" },
+            h("div", { style: "color:var(--mut);font-size:11px;margin-bottom:3px" }, title),
+            h("div", { style: "display:flex;flex-wrap:wrap;gap:4px" }, ...list.map((ic) => h("button", { style: `font-size:20px;width:42px;height:38px;${ic === current ? "outline:2px solid var(--acc)" : ""}`, onclick: () => pick(ic) }, ic))))),
+          h("div", { class: "crow" }, custom, h("button", { onclick: () => { if (custom.value.trim()) pick(custom.value.trim()); } }, T("ic.use")),
+            h("button", { onclick: () => pick("") }, T("ic.none")))),
+      });
+    }
+    // Symbolfeld mit Auswahlknopf: Textfeld (freies Zeichen) + Dialog
+    const iconField = (obj, key) => {
+      const inp = bindText(obj, key, { placeholder: T("ed.emoji"), style: "width:80px" });
+      const btn = h("button", { title: T("cart.pickIcon"), onclick: () => openIconPicker(obj[key], (ic) => { obj[key] = ic; inp.value = ic; btn.textContent = ic || "☺"; }) }, obj[key] || "☺");
+      inp.addEventListener("input", () => { btn.textContent = obj[key] || "☺"; });
+      return [inp, btn];
+    };
+
     // ---- Event-Editor ----------------------------------------------------
     const newKid = (n) => ({ id: `c${n}`, type: "GRAPHIC", timing: "RELATIVE_TO_START", delayMs: 0, durationMs: 0, templateId: "", failurePolicy: "WARN" });
-    function openEditor(item, startTab, startKid) {
+    function openEditor(item, startTab, startKid, opts = {}) {
+      const cart = !!opts.cart;
       const isNew = !item;
       const onAir = !!item && item.id === currentItemId;
       const d = {
@@ -1933,7 +1979,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         tags: item?.sourceSelector ? (item.sourceSelector.required || []).join(", ") : "", pref: item?.sourceSelector ? (item.sourceSelector.preferred || []).join(", ") : "",
         jumpTarget: item?.jumpTarget || "", assetId: item?.asset?.assetId || "", onMissing: item?.onMissing || "HOLD", fallbackFile: item?.fallbackFile || "",
         requireRelease: item?.requireRelease === true ? "true" : item?.requireRelease === false ? "false" : "",
-        durationMs: item ? item.durationMs : 5000,
+        durationMs: item ? item.durationMs : cart ? 0 : 5000,
         startType: item?.startType || "sequence",
         startLocal: item?.startAt ? new Date(item.startAt).toLocaleString("sv-SE") : item?.fixtimeHms || "",
         transition: item?.transition || "cut", rateFrames: item?.transitionRateFrames ?? "",
@@ -1945,12 +1991,14 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const kids = JSON.parse(JSON.stringify(item?.children || []));
       let kidIdx = Math.min(startKid ?? 0, kids.length - 1);
 
-      const durationEditable = () => ["pattern", "image", "live", "liveselect"].includes(d.kind);
+      const durationEditable = () => (cart ? true : ["pattern", "image", "live", "liveselect"].includes(d.kind));
+      const block = [...(item?.follow || [])];
+      const kindOptions = cart ? MEDIA_KINDS.filter(([k]) => ["pattern", "file", "image", "live", "liveselect"].includes(k)) : MEDIA_KINDS;
 
       const renderContent = (ctx) => {
         const f = h("div", { class: "form" });
         f.append(...field(T("ed.title"), bindText(d, "label", { placeholder: T("ed.title") })));
-        f.append(...field(T("ed.type"), bindSelect(d, "kind", MEDIA_KINDS, ctx.redraw)));
+        f.append(...field(T("ed.type"), bindSelect(d, "kind", kindOptions, ctx.redraw)));
         if (onAir) f.querySelectorAll("select").forEach((s) => { s.disabled = true; });
         const dis = onAir ? { disabled: "" } : {};
         switch (d.kind) {
@@ -1997,11 +2045,12 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         }
         if (durationEditable()) f.append(...field(T("ed.durationMs"), bindTc(d, "durationMs", dis)));
         else if (d.kind === "file" || d.kind === "asset") f.append(h("div", { class: "hint" }, T("ed.durationHint")));
+        if (cart) f.append(h("div", { class: "hint" }, T("cart.durationHint")));
         if (onAir) f.append(h("div", { class: "hint" }, T("ed.onAirHint")));
         f.append(...field(T("ed.note"), bindText(d, "note", { placeholder: T("ed.notePh") })));
-        f.append(...field(T("ed.adClass"), bindSelect(d, "adClass", [["", T("ed.adNone")], ["commercial", T("ed.adCommercial")], ["promo", T("ed.adPromo")], ["block_start", T("ed.adStart")], ["block_end", T("ed.adEnd")]])));
+        if (!cart) f.append(...field(T("ed.adClass"), bindSelect(d, "adClass", [["", T("ed.adNone")], ["commercial", T("ed.adCommercial")], ["promo", T("ed.adPromo")], ["block_start", T("ed.adStart")], ["block_end", T("ed.adEnd")]])));
         const color = h("input", { type: "color", value: d.color || "#4a90d9", oninput: (e) => { d.color = e.target.value; } });
-        f.append(...field(T("ed.iconColor"), bindText(d, "icon", { placeholder: T("ed.emoji"), style: "width:80px" }), color,
+        f.append(...field(T("ed.iconColor"), ...iconField(d, "icon"), color,
           h("button", { onclick: () => { d.color = ""; color.value = "#4a90d9"; } }, T("ed.clearColor"))));
         return f;
       };
@@ -2028,7 +2077,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         if (d.kind !== "hold" && d.kind !== "jump") {
           f.append(...field(T("ed.audioMapping"), bindSelect(d, "audioMapping", [["", T("ed.audioStd")], ...audioMappings.map((m) => [m.id, m.label || m.id])])));
           f.append(h("div", { class: "hint" }, T("ed.audioMappingHint")));
-          const plan = item ? planOf(item) : null;
+          const plan = item && !cart ? planOf(item) : null;
           if (plan) {
             const t = h("div", { class: "hint" });
             planRows(plan).forEach((r) => t.append(h("div", { style: r.failed ? "color:var(--err,#ff6b6b)" : r.rule ? "color:var(--warn)" : r.silent ? "color:var(--mut)" : "" }, `${r.label}: ${r.text}`)));
@@ -2045,6 +2094,26 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         f.append(...field(T("ed.audioFrom", { source: a.source }), bindSelect(d, "audioCap", [["", T("ed.audioAuto")], ...(a.capabilities || []).map((c) => [c.id, `${c.id} (${layoutName(c.layout)})${c.isDefault ? T("ed.default") : ""}`])])));
         const res = a.resolution || {};
         f.append(h("div", { class: "hint" }, T("ed.currentChoice", { chosen: res.chosen || "—", via: res.via || "none" }), ...(res.warnings || []).map((w) => h("div", { style: "color:var(--warn)" }, `⚠ ${w}`))));
+        return f;
+      };
+
+      const renderBlock = (ctx) => {
+        const f = h("div", {});
+        f.append(h("div", { class: "hint" }, T("cart.blockHint")));
+        const nameOf = (id) => (assets.find((a) => a.id === id) || {}).label || id;
+        if (!block.length) f.append(h("div", { class: "empty" }, T("cart.blockEmpty")));
+        block.forEach((id, i) => f.append(h("div", { class: "crow", style: "margin-bottom:4px" },
+          h("span", { style: "min-width:24px" }, `${i + 1}.`), h("span", { style: "flex:1;min-width:160px" }, nameOf(id)),
+          h("button", { title: T("cart.blockUp"), disabled: i === 0 ? "" : null, onclick: () => { [block[i - 1], block[i]] = [block[i], block[i - 1]]; ctx.redraw(); } }, "↑"),
+          h("button", { title: T("cart.blockDown"), disabled: i === block.length - 1 ? "" : null, onclick: () => { [block[i + 1], block[i]] = [block[i], block[i + 1]]; ctx.redraw(); } }, "↓"),
+          h("button", { class: "danger", title: T("cart.blockRemove"), onclick: () => { block.splice(i, 1); ctx.redraw(); } }, "✕"))));
+        const others = assets.filter((a) => a.id !== item?.id && !block.includes(a.id));
+        const add = h("select", { onchange: (e) => { if (e.target.value) { block.push(e.target.value); ctx.redraw(); } } },
+          h("option", { value: "" }, T("cart.blockAdd")), ...others.map((a) => h("option", { value: a.id }, a.label)));
+        f.append(h("div", { class: "crow", style: "margin-top:8px" }, add));
+        const steps = [d.durationMs, ...block.map((id) => (assets.find((a) => a.id === id) || {}).durationMs || 0)];
+        const names = [d.label || (item?.label ?? ""), ...block.map(nameOf)];
+        steps.forEach((dur, i) => { if (i < steps.length - 1 && !dur) f.append(h("div", { class: "hint", style: "color:var(--warn)" }, T("cart.blockNoDur", { label: names[i] }))); });
         return f;
       };
 
@@ -2271,6 +2340,10 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         if (d.transition && d.transition !== "cut" && String(d.rateFrames).trim() !== "") p.transitionRateFrames = Number(d.rateFrames);
         p.children = kids.map(cleanKid);
         p.audioMapping = d.audioMapping || "";
+        if (cart) {
+          delete p.startType; delete p.startAt; delete p.transition; delete p.adClass; delete p.transitionRateFrames;
+          p.follow = block;
+        }
         if (item?.audio && d.audioCap !== (item.audio.intent?.capability || "")) {
           const intent = { ...(item.audio.intent || {}) };
           if (d.audioCap) intent.capability = d.audioCap; else delete intent.capability;
@@ -2294,17 +2367,17 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         }
       };
       const appendNew = async () => {
-        const body = { label: d.label.trim() || "Event" };
-        let method = "append";
+        const body = { label: d.label.trim() || (cart ? "Cart" : "Event") };
+        let method = cart ? "cart.define" : "append";
         switch (d.kind) {
-          case "pattern": body.pattern = d.pattern; body.toneFrequency = 0; body.durationMs = d.durationMs || 5000; break;
-          case "file": if (!d.file) return T("ed.pickFile"); body.file = d.file; break;
-          case "image": if (!d.file) return T("ed.pickImage"); body.file = d.file; body.eventType = "image"; body.durationMs = d.durationMs || 5000; break;
-          case "live": if (!d.senderId) return T("ed.pickLive"); body.senderId = d.senderId; body.durationMs = d.durationMs || 5000; break;
+          case "pattern": body.pattern = d.pattern; body.toneFrequency = 0; body.durationMs = cart ? d.durationMs : d.durationMs || 5000; break;
+          case "file": if (!d.file) return T("ed.pickFile"); body.file = d.file; if (cart) body.durationMs = d.durationMs; break;
+          case "image": if (!d.file) return T("ed.pickImage"); body.file = d.file; body.eventType = "image"; body.durationMs = cart ? d.durationMs : d.durationMs || 5000; break;
+          case "live": if (!d.senderId) return T("ed.pickLive"); body.senderId = d.senderId; body.durationMs = cart ? d.durationMs : d.durationMs || 5000; break;
           case "liveselect":
             if (splitTags(d.tags).length === 0) return T("ed.needTag");
             body.sourceSelectorJson = JSON.stringify({ required: splitTags(d.tags), preferred: splitTags(d.pref) });
-            body.durationMs = d.durationMs || 5000;
+            body.durationMs = cart ? d.durationMs : d.durationMs || 5000;
             break;
           case "hold": body.eventType = "hold"; break;
           case "jump": if (!d.jumpTarget) return T("ed.pickJump"); body.eventType = "jump"; body.jumpTarget = d.jumpTarget; break;
@@ -2319,13 +2392,36 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       };
 
       openModal({
-        title: isNew ? T("ed.new") : T("ed.edit", { label: item.label }),
-        tabs: [["content", T("ed.tab.content")], ["timing", T("ed.tab.timing")], ["audio", T("ed.tab.audio")], ["kids", T("ed.tab.kids", { n: kids.length })]],
-        saveLabel: isNew ? T("ed.create") : T("save"),
-        render: (tab, ctx) => (tab === "content" ? renderContent(ctx) : tab === "timing" ? renderTiming() : tab === "audio" ? renderAudio() : renderKids(ctx)),
+        title: cart ? (isNew ? T("cart.newTitle") : T("cart.edit", { label: item.label })) : isNew ? T("ed.new") : T("ed.edit", { label: item.label }),
+        tabs: cart
+          ? [["content", T("ed.tab.content")], ["audio", T("ed.tab.audio")], ["kids", T("ed.tab.kids", { n: kids.length })], ["block", T("cart.tab.block", { n: block.length })]]
+          : [["content", T("ed.tab.content")], ["timing", T("ed.tab.timing")], ["audio", T("ed.tab.audio")], ["kids", T("ed.tab.kids", { n: kids.length })]],
+        saveLabel: isNew ? (cart ? T("cart.create2") : T("ed.create")) : T("save"),
+        onClose: opts.onDone,
+        render: (tab, ctx) => (tab === "content" ? renderContent(ctx) : tab === "timing" ? renderTiming() : tab === "audio" ? renderAudio() : tab === "block" ? renderBlock(ctx) : renderKids(ctx)),
         onSave: async () => {
           let patch;
           try { patch = buildPatch(); } catch (e) { return e.message; }
+          if (cart) {
+            if (isNew) {
+              const err = await appendNew();
+              if (err) return err;
+              assets = (await getParam("assets")) || [];
+              const created = assets[assets.length - 1];
+              if (!created) return null;
+              delete patch.audio;
+              const err2 = await tryCall("cart.update", { assetId: created.id, patchJson: JSON.stringify(patch) });
+              assets = (await getParam("assets")) || assets;
+              renderCarts();
+              return err2 ? T("ed.createdNoProps", { err: err2 }) : null;
+            }
+            if (mediaSig(d) !== origSig) patch.media = mediaPatch();
+            if (d.durationMs !== origDur) patch.durationMs = d.durationMs;
+            const err = await tryCall("cart.update", { assetId: item.id, patchJson: JSON.stringify(patch) });
+            assets = (await getParam("assets")) || assets;
+            renderCarts();
+            return err;
+          }
           if (isNew) {
             const before = items.length;
             const err = await appendNew();
@@ -2406,54 +2502,45 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         b.children[1].textContent = a.label;
         b.style.background = a.color || "";
         b.style.color = a.color ? "#fff" : "";
-        b.title = `${a.pattern || ""}${a.durationMs > 0 ? ` · ${a.durationMs} ms` : T("cart.manual")}`;
+        b.title = cartSummary(a);
         b.disabled = active;
         b.classList.toggle("firing", a.id === activeCartId);
       });
     };
 
+    const cartSource = (a) => {
+      const kind = mediaKindOf(a);
+      const kindName = (MEDIA_KINDS.find(([k]) => k === kind) || [kind, kind])[1];
+      const detail = kind === "file" || kind === "image" ? baseName(a.file)
+        : kind === "live" ? ((availableSources.find((x) => x.senderId === a.senderId) || {}).label || a.senderId || "")
+        : kind === "liveselect" ? (a.sourceSelector?.required || []).join(", ")
+        : a.pattern || "";
+      return detail ? `${kindName}: ${detail}` : kindName;
+    };
+    const cartSummary = (a) => [
+      cartSource(a),
+      a.durationMs > 0 ? `${a.durationMs} ms` : T("cart.manual").replace(/^ · /, ""),
+      (a.children || []).length ? T("cart.children", { n: a.children.length }) : "",
+      (a.follow || []).length ? T("cart.blockN", { n: a.follow.length }) : "",
+    ].filter(Boolean).join(" · ");
+
     function openCartManager() {
-      const rows = () => assets.map((a) => ({ id: a.id, label: a.label, pattern: a.pattern || "smpte", durationMs: a.durationMs || 0, icon: a.icon || "", color: a.color || "" }));
-      let list = rows();
-      let fresh = { label: "", pattern: "smpte", durationMs: 0, icon: "", color: "" };
       const box = h("div", {});
-      const patch = (r) => JSON.stringify({ label: r.label, pattern: r.pattern, durationMs: r.durationMs, icon: r.icon, color: r.color });
       const draw = () => {
-        const mk = (r, isNew) => {
-          const color = h("input", { type: "color", value: r.color || "#4a90d9", oninput: (e) => { r.color = e.target.value; } });
-          const row = h("div", { class: "row", style: "margin-bottom:6px" },
-            bindText(r, "icon", { placeholder: T("cart.iconPh"), style: "width:54px" }), color,
-            bindText(r, "label", { placeholder: T("cart.titlePh"), style: "width:150px" }),
-            bindSelect(r, "pattern", PATTERNS.map((p) => [p, p])),
-            bindNum(r, "durationMs", { style: "width:90px", title: T("cart.msTitle") }),
-            isNew
-              ? h("button", { class: "primary", onclick: async () => {
-                  const err = await tryCall("cart.define", { label: r.label || "Cart", pattern: r.pattern, toneFrequency: 0, durationMs: r.durationMs });
-                  if (err) return showBanner(err);
-                  const a = (await getParam("assets")) || [];
-                  const last = a[a.length - 1];
-                  if (last && (r.icon || r.color)) await tryCall("cart.update", { assetId: last.id, patchJson: patch(r) });
-                  assets = (await getParam("assets")) || [];
-                  list = rows(); fresh = { label: "", pattern: "smpte", durationMs: 0, icon: "", color: "" }; draw(); renderCarts();
-                } }, T("cart.create"))
-              : [h("button", { onclick: async () => {
-                  const err = await tryCall("cart.update", { assetId: r.id, patchJson: patch(r) });
-                  showBanner(err || T("cart.saved", { label: r.label }), !err);
-                  assets = (await getParam("assets")) || assets; renderCarts();
-                } }, T("save")),
-                h("button", { class: "danger", onclick: async () => {
-                  if (!(await confirmDialog(T("cart.confirmRemove", { label: r.label }), T("remove")))) return;
-                  const err = await tryCall("cart.remove", { assetId: r.id });
-                  if (err) return showBanner(err);
-                  assets = (await getParam("assets")) || []; list = rows(); draw(); renderCarts();
-                } }, "✕")]);
-          return row;
-        };
-        box.replaceChildren(
-          ...(list.length ? list.map((r) => mk(r, false)) : [h("div", { class: "empty" }, T("cart.none"))]),
-          h("div", { style: "border-top:1px solid var(--bd);margin:8px 0;padding-top:8px;color:var(--mut)" }, T("cart.new")),
-          mk(fresh, true));
+        const rows = assets.map((a) => h("div", { class: "crow", style: "margin-bottom:6px" },
+          h("span", { class: "cart-btn", style: `width:46px;height:34px;background:${a.color || ""};color:${a.color ? "#fff" : ""}` }, h("span", { class: "ci" }, a.icon || "▶")),
+          h("div", { style: "flex:1;min-width:0" }, h("div", { style: "font-weight:600" }, a.label), h("div", { class: "hint", style: "margin:0" }, cartSummary(a))),
+          h("button", { onclick: () => openEditor(a, "content", 0, { cart: true, onDone: refresh }) }, T("cart.manager.edit")),
+          h("button", { class: "danger", onclick: async () => {
+            if (!(await confirmDialog(T("cart.confirmRemove", { label: a.label }), T("remove")))) return;
+            const err = await tryCall("cart.remove", { assetId: a.id });
+            if (err) return showBanner(err);
+            await refresh();
+          } }, "✕")));
+        box.replaceChildren(...(rows.length ? rows : [h("div", { class: "empty" }, T("cart.none"))]),
+          h("div", { style: "border-top:1px solid var(--bd);margin:8px 0;padding-top:8px" }, h("button", { class: "primary", onclick: () => openEditor(null, "content", 0, { cart: true, onDone: refresh }) }, T("cart.newBtn"))));
       };
+      const refresh = async () => { assets = (await getParam("assets")) || assets; draw(); renderCarts(); };
       draw();
       openModal({ title: T("cart.manageTitle"), render: () => box });
     }

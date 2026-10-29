@@ -1006,7 +1006,8 @@ async fn heartbeat_loop(
                 status: if workers_alive { "ok" } else { "degraded" }.to_string(),
                 senders: all_senders.len(),
                 receivers: receivers_snapshot.len(),
-                media_ready: media_ready.is_ready(),
+                // Reiner Empfänger ohne aktive Verbindung: nichts zu liefern, also bereit (kein Fehlalarm im Signalweg).
+                media_ready: media_ready.is_ready() || (all_senders.is_empty() && crate::connection::receivers_all_idle()),
                 kpis: kpis.sample(std::time::Instant::now()),
             };
             if let Err(e) = publisher.publish(&status).await {
