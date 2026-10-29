@@ -962,6 +962,18 @@ Der Node **Auto-Untertitel** erkennt gesprochene Sprache aus einem Audiostream u
 
 Der Viewer zeigt die Untertitel auch, wenn sein Untertitel-Eingang am CEA-608-Ausgang hängt (er liest Text und CEA-608). Ist ein Untertitel-Eingang vorhanden, steht sein Zustand (Wiedergabe/Bereit/Aus) in der Diagnose des Nodes.
 
+## 5g-2. Gebärdensprach-Avatar
+
+Der Node **Gebärdensprach-Avatar** setzt Untertitel in Deutsche Gebärdensprache (DGS) um und liefert einen animierten Avatar als Fill+Key-Ausgang für das Bild-in-Bild im Bildmischer. Er rechnet selbst (Software, keine Grafikkarte) und nur, solange jemand das Bild liest.
+
+**Verdrahten:** den Untertitel-Ausgang von *Auto-Untertitel* (Text-Strom oder CEA-608) auf den Eingang „Untertitel“ des Avatars legen; Fill und Key wie bei einer Grafik an den Mischer (PIP-Ebene oder DSK). **Größe und Lage auf dem Sendebild** stellst du im Mischer ein (PIP-Box oder PIP-Preset). Die **Bildgröße des Avatars** selbst (klein 360×405, mittel 480×540, groß 600×675) und die **Hintergrundkarte** (besser lesbar im kleinen Bild) sind Optionen der Instanz.
+
+**Was er tut:** Der Text wird in Sätze zerlegt, Wörter werden auf Gebärden abgebildet (Füllwörter entfallen, Zeitangaben stehen vorn, das Verb hinten, die Verneinung dahinter mit Kopfschütteln, das Fragewort am Ende mit Frage-Kopfhaltung). **Unbekannte Wörter** werden buchstabiert (Fingeralphabet), Zahlen als Zahlgebärde. Ist ein Satz **überwiegend unbekannt**, wird er nicht geraten, sondern als **Text im Bild** gezeigt. Läuft der Avatar dem Untertitel hinterher, gebärdet er schneller; bei großem Rückstand werden ältere Sätze verworfen (Zähler „verworfen“ im Zustand).
+
+**Freigabe:** Gebärden kommen aus dem **Lexikon** (`data/sign/lexicon.json`, Beispiel `deploy/sign/lexicon.example.json`). Nur Einträge mit `"verified": true` — von Gebärdenden am Kontaktbogen geprüft — kommen auf Sendung; alles andere behandelt der Node wie unbekannt. Prüfen: `omp-sign-avatar --lexicon-check data/sign/lexicon.json --sheet bogen.png` meldet Fehler mit Pfad ins Lexikon und erzeugt ein Bild mit allen Gebärden Schlüssel für Schlüssel. Die Regeln (Füllwörter, Zeit-, Verneinungs-, Fragewörter, Rückfall-Schwelle) liegen als Datei (`OMP_SIGN_RULES`, Vorlage `deploy/sign/rules.example.json`); die eingebauten Standardregeln sind ein **Entwurf**, den Fachleute prüfen müssen. **Das Fingeralphabet ist eine Näherung** und gehört vor produktivem Einsatz von Gebärdenden geprüft.
+
+**Im Panel:** `auto` (Untertitel automatisch gebärden), `speed`, Zustand (Warteschlange, Verzug, verworfen, gebärdet, als Text, letzte Glossen, Anteil unbekannt), Lexikon-Stand. Methoden: `translate` (Text wie einen Untertitel behandeln — zum Ausprobieren der Regeln), `speak` (nur buchstabieren), `stop`.
+
 ## 5f. Kernbindung, Temperatur und Leistungsaufnahme
 
 **Grafik- und Child-Editoren ohne JSON.** Im Event-Editor der Playout-Automation (Reiter *Child Events*) und im Panel des Grafik-Nodes (ograf) gibt es keine JSON-Textfelder mehr: Grafikvorlagen zeigen ihre Felder samt Listen und Gruppen als Formular, Vorlagen ohne Schema und Webhooks nutzen freie Felder (Name, Typ Text/Zahl/Ja-Nein/Liste/Gruppe, Wert), und bei Node-Befehlen schlägt der Editor Methoden und Argumente des Ziel-Nodes vor.

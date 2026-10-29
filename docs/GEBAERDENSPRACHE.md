@@ -120,6 +120,20 @@ Fremdabhängigkeiten (nur GStreamer/MXL im Ausgaberahmen, wie die übrigen Nodes
 - Prüfwerkzeuge: `omp-sign-avatar --dump x.png --letter K` (Einzelbild), `--bench`, ignorierter Test `flow_probe` (liest den
   Key-Flow eines laufenden Nodes und schreibt ihn als PNG).
 
+## 7b. Phase 2 — Stand (2026-10-29)
+
+Entscheidung des Nutzers: gleich auf **Produktivqualität** hin bauen (kein Wegwerf-Demonstrator). Umgesetzt ist alles, was **ohne Aufnahmen** möglich ist:
+
+- **Untertitel-Eingang:** Empfänger „Untertitel“ (`video/smpte291`, Text-Strom oder CEA-608) über denselben `SubtitleInput` wie Viewer/Multiviewer.
+- **Lexikon als Daten** (`lexicon.rs`): JSON, Gebärde = Folge von Schlüsselhaltungen (Arme, Handform aus dem Fingeralphabet oder frei, Kopf); strenge Prüfung mit Fehlerpfad; `verified`-Pflicht (nicht freigegebene Einträge gelten als unbekannt). Prüfwerkzeug mit Kontaktbogen für Fachleute.
+- **Regeln als Datei** (`rules.rs`): Sätze, Füllwörter, Zeit vorn, Verb hinten, Verneinung, Fragewort, Zahlen, Rückfallschwelle; getestet.
+- **Engine** (`engine.rs`): Warteschlange, Verzugsmessung, Aufholen (schneller ab ¼/½ des Höchstverzugs), Verwerfen alter Sätze, Kopfschütteln (Verneinung) und Frage-Kopfhaltung, Text-Rückfall im Bild.
+- **Panel-Zustand:** Warteschlange, Verzug, verworfen, gebärdet, als Text, letzte Glossen, Anteil unbekannt.
+- **Produktiv-Rahmen:** Katalogeintrag, Instanz-Optionen (Größe klein/mittel/groß, Hintergrundkarte, Überabtastung, Lexikon, Regeln, Höchstverzug), Handbuch. Die Größe auf dem Sendebild stellt der Mischer (PIP-Box/-Preset) — der Avatar muss dafür nichts können.
+
+**Noch nicht möglich, bewusst nicht vorgetäuscht:** ein **freigegebenes Lexikon** (braucht Aufnahmen/Mitarbeit von Gebärdenden — mit dem mitgelieferten Beispiel läuft alles über Buchstabieren/Text), **geprüfte Regeln** und ein **geprüftes Fingeralphabet**. Nicht manuelle Marker außer Kopf (Brauen/Mund) und weiches Skinning folgen mit den echten Daten (Phase 3).
+Test am echten Ausgang: Satz mit Beispiel-Lexikon gebärdet (`translate`), überwiegend unbekannter Satz erscheint als Text im Fill-Flow (geprüft am MXL-Ausgang).
+
 ## 8. Weitere Phasen (Entwurf)
 
 - **Phase 2:** Untertitel-Eingang, Satzbildung, Glossen-Regeln (s. 3) mit Fachleuten, kleines Lexikon (≈100 Gebärden) aus Aufnahmen.

@@ -47,6 +47,14 @@ impl Raster {
         }
     }
 
+    /// Achsparalleles Rechteck in Bildpunkten (nicht Samples) mit Tiefe `z`, flache Farbe.
+    pub fn rect(&mut self, x: i32, y: i32, w: i32, h: i32, z: f32, rgb: u32) {
+        let ss = self.ss as f32;
+        let (x0, y0, x1, y1) = (x as f32 * ss, y as f32 * ss, (x + w) as f32 * ss, (y + h) as f32 * ss);
+        self.triangle([[x0, y0, z], [x1, y0, z], [x1, y1, z]], rgb);
+        self.triangle([[x0, y0, z], [x1, y1, z], [x0, y1, z]], rgb);
+    }
+
     /// Ein Dreieck in Samplekoordinaten zeichnen (Vorder- und Rückseite).
     pub fn triangle(&mut self, v: [[f32; 3]; 3], rgb: u32) {
         let (x0, y0, x1, y1, x2, y2) = (v[0][0], v[0][1], v[1][0], v[1][1], v[2][0], v[2][1]);
@@ -214,6 +222,17 @@ mod tests {
         r.clear();
         let (_, key) = render(&r);
         assert!(key.iter().all(|&k| k == 0));
+    }
+
+    #[test]
+    fn rect_fills_exactly_its_pixels() {
+        let mut r = Raster::new(8, 8, 2);
+        r.rect(2, 1, 3, 4, 0.0, 0xFFFFFF);
+        let (_, key) = render(&r);
+        let covered: Vec<usize> = key.iter().enumerate().filter(|(_, k)| **k == 255).map(|(i, _)| i).collect();
+        assert_eq!(covered.len(), 12);
+        assert!(key.iter().all(|&k| k == 0 || k == 255), "Rand eines pixelgenauen Rechtecks darf nicht halb deckend sein");
+        assert_eq!(covered[0], 8 + 2);
     }
 
     #[test]

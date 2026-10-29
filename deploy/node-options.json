@@ -2198,5 +2198,150 @@
       "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
       "group": "Leistung"
     }
+  ],
+  "omp-sign-avatar": [
+    {
+      "key": "OMP_SIGN_SIZE",
+      "i18n": {
+        "en": {
+          "label": "Picture size",
+          "description": "Size of the avatar picture (aspect 8:9). Small 360×405 needs the least computing power and suffices for a picture-in-picture; the size on air is set in the video mixer (PIP box/preset), independently.",
+          "group": "Picture"
+        }
+      },
+      "label": "Bildgröße",
+      "type": "enum",
+      "description": "Größe des Avatar-Bildes (Seitenverhältnis 8:9). Klein 360×405 braucht am wenigsten Rechenleistung und reicht für ein Bild-in-Bild; die Größe auf dem Sendebild stellt man im Bildmischer ein (PIP-Box/Preset), unabhängig davon.",
+      "default": "small",
+      "group": "Bild",
+      "choices": [
+        {
+          "value": "small"
+        },
+        {
+          "value": "medium"
+        },
+        {
+          "value": "large"
+        }
+      ]
+    },
+    {
+      "key": "OMP_SIGN_PANEL",
+      "i18n": {
+        "en": {
+          "label": "Background card",
+          "description": "1: the avatar stands on a full-frame dark card (more legible in a small picture-in-picture). 0: cut out (fill+key), the mixer places it over the programme picture.",
+          "group": "Picture"
+        }
+      },
+      "label": "Hintergrundkarte",
+      "type": "enum",
+      "description": "1: der Avatar steht auf einer vollflächigen dunklen Karte (besser lesbar im kleinen Bild-in-Bild). 0: freigestellt (Fill+Key), der Mischer legt ihn über das Programmbild.",
+      "default": "0",
+      "group": "Bild",
+      "choices": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "1"
+        }
+      ]
+    },
+    {
+      "key": "OMP_SIGN_SS",
+      "i18n": {
+        "en": {
+          "label": "Anti-aliasing (supersampling)",
+          "description": "Samples per pixel and axis: 2 = smooth edges (default), 1 saves about half the computing time, jagged edges.",
+          "group": "Performance"
+        }
+      },
+      "label": "Kantenglättung (Überabtastung)",
+      "type": "enum",
+      "description": "Samples je Pixel und Achse: 2 = glatte Kanten (Standard), 1 = spart rund die Hälfte der Rechenzeit, Kanten treppig.",
+      "default": "2",
+      "group": "Leistung",
+      "choices": [
+        {
+          "value": "1"
+        },
+        {
+          "value": "2"
+        },
+        {
+          "value": "3"
+        }
+      ]
+    },
+    {
+      "key": "OMP_SIGN_LEXICON",
+      "i18n": {
+        "en": {
+          "label": "Lexicon (signs)",
+          "description": "JSON file with the signs. Only entries marked \"verified\" (checked by signers) go on air; a faulty file prevents the start.",
+          "group": "Translation"
+        }
+      },
+      "label": "Lexikon (Gebärden)",
+      "type": "path",
+      "description": "JSON-Datei mit den Gebärden. Nur als „verified“ gekennzeichnete Einträge (von Gebärdenden geprüft) kommen auf Sendung; fehlerhafte Dateien verhindern den Start.",
+      "default": "data/sign/lexicon.json",
+      "group": "Übersetzung"
+    },
+    {
+      "key": "OMP_SIGN_RULES",
+      "i18n": {
+        "en": {
+          "label": "Rules file (sentence preparation)",
+          "description": "JSON file with the rules (filler words, time words, negation, question words, fallback threshold). Empty = built-in default rules (draft, to be reviewed by experts).",
+          "group": "Translation"
+        }
+      },
+      "label": "Regeldatei (Satzaufbereitung)",
+      "type": "path",
+      "description": "JSON-Datei mit den Regeln (Füllwörter, Zeitwörter, Verneinung, Fragewörter, Rückfall-Schwelle). Leer = eingebaute Standardregeln (Entwurf, von Fachleuten zu prüfen).",
+      "default": "",
+      "group": "Übersetzung"
+    },
+    {
+      "key": "OMP_SIGN_MAX_DELAY_S",
+      "i18n": {
+        "en": {
+          "label": "Maximum delay (s)",
+          "description": "If a sentence waits longer than half of this, signing speeds up; if the backlog is larger, older sentences are dropped and only the latest is signed (the node counts the losses).",
+          "group": "Translation"
+        }
+      },
+      "label": "Höchstverzug (s)",
+      "type": "string",
+      "description": "Wartet ein Satz länger als die Hälfte davon, wird schneller gebärdet; ist der Rückstand größer, werden ältere Sätze verworfen und nur der jüngste gebärdet (die Verluste zählt der Node).",
+      "default": "8",
+      "group": "Übersetzung"
+    },
+    {
+      "key": "OMP_SIGN_ALLOW_UNVERIFIED",
+      "i18n": {
+        "en": {
+          "label": "Allow unverified signs",
+          "description": "FOR TESTS ONLY. 0 (default): unreleased lexicon entries count as unknown (spelling/text). 1: they are signed — never on air.",
+          "group": "Translation"
+        }
+      },
+      "label": "Ungeprüfte Gebärden zulassen",
+      "type": "enum",
+      "description": "NUR FÜR TESTS. 0 (Standard): nicht freigegebene Lexikon-Einträge gelten als unbekannt (buchstabieren/Text). 1: sie werden gebärdet — nie auf Sendung.",
+      "default": "0",
+      "group": "Übersetzung",
+      "choices": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "1"
+        }
+      ]
+    }
   ]
 }

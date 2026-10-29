@@ -68,33 +68,43 @@ fn shape(c: char) -> Option<Shape> {
 }
 
 /// Grundstellung zum Buchstabieren: Unterarm hoch, Handfläche zum Betrachter, andere Hand ruht.
-fn signing_base() -> ArmPose {
+pub fn signing_base() -> ArmPose {
     ArmPose { shoulder: [-1.2, 0.0, -0.3], elbow: -1.75, twist: std::f32::consts::PI, wrist: [0.0; 3], ..ArmPose::REST }
 }
 
-/// Haltung für ein Zeichen; `None` für unbekannte Zeichen (Leerzeichen, Satzzeichen).
-pub fn pose_for(c: char) -> Option<Pose> {
-    let c = match c {
+/// Normiert Umlaute/ß auf den Grundbuchstaben (Phase 1: Näherung).
+fn base_letter(c: char) -> char {
+    match c {
         'ä' | 'Ä' => 'A',
         'ö' | 'Ö' => 'O',
         'ü' | 'Ü' => 'U',
         'ß' => 'S',
         o => o,
-    };
-    let sh = shape(c)?;
-    let mut dom = signing_base();
-    dom.curl = sh.curl;
-    dom.thumb_abd = sh.thumb_abd;
-    dom.spread = sh.spread;
-    for i in 0..3 {
-        dom.wrist[i] += sh.wrist[i];
     }
-    Some(Pose { dom, ..Pose::REST })
 }
 
-/// Ruhehaltung, aus der und in die überblendet wird.
-pub fn rest() -> Pose {
-    Pose::REST
+/// Setzt nur die Handform (Finger, Daumen, Spreizen, Handgelenk-Zusatz) eines Zeichens auf einen Arm; die Armstellung bleibt.
+/// Rückgabe `false` für unbekannte Zeichen.
+pub fn apply_hand(arm: &mut ArmPose, c: char) -> bool {
+    let Some(sh) = shape(base_letter(c)) else { return false };
+    arm.curl = sh.curl;
+    arm.thumb_abd = sh.thumb_abd;
+    arm.spread = sh.spread;
+    for i in 0..3 {
+        arm.wrist[i] += sh.wrist[i];
+    }
+    true
+}
+
+/// Haltung für ein Zeichen; `None` für unbekannte Zeichen (Leerzeichen, Satzzeichen).
+pub fn pose_for(c: char) -> Option<Pose> {
+    let mut dom = signing_base();
+    apply_hand(&mut dom, c).then_some(Pose { dom, ..Pose::REST })
+}
+
+/// Grundstellung zum Gebärden vor dem Gesicht (Unterarm hoch, Handfläche zum Betrachter) — Ausgangspunkt für Lexikon-Einträge.
+pub fn signing_pose() -> Pose {
+    Pose { dom: signing_base(), ..Pose::REST }
 }
 
 #[cfg(test)]

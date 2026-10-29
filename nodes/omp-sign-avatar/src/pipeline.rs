@@ -12,7 +12,7 @@ use gstreamer_app as gst_app;
 use omp_mediaio::Output;
 use omp_mediaio::mxl::{MxlContext, MxlVideoOutput};
 
-use crate::player::Timeline;
+use crate::engine::Engine;
 use crate::{Renderer, FPS};
 
 pub struct Config {
@@ -23,19 +23,18 @@ pub struct Config {
     pub width: u32,
     pub height: u32,
     pub ss: usize,
+    /// Vollflächiger Kartenhintergrund statt freigestelltem Avatar.
+    pub panel: bool,
 }
 
-/// Was gerade gebärdet wird; von der Node-API gesetzt, vom Render-Thread gelesen.
-#[derive(Default)]
-pub struct Playback {
-    pub timeline: Option<Timeline>,
-    pub started: Option<Instant>,
-    pub text: String,
-    pub looping: bool,
-}
-
+/// Gemeinsamer Zustand zwischen Node-API und Render-Thread.
 pub struct Shared {
-    pub playback: Mutex<Playback>,
+    pub engine: Mutex<Engine>,
+    /// Untertitel-Eingang (MXL-Daten-Flow, per IS-05 verbunden); leer = nichts zu zeigen.
+    pub subtitle: Arc<omp_mediaio::mxl::SubtitleInput>,
+    /// Untertitel automatisch in Gebärden umsetzen (sonst nur Testbetrieb per `speak`).
+    pub auto: AtomicBool,
+    pub last_subtitle: Mutex<String>,
     /// Mittlere Renderzeit je neu gezeichnetem Bild in Mikrosekunden (gleitend), für die Anzeige.
     pub render_us: AtomicU64,
     pub frames_out: AtomicU64,
@@ -71,7 +70,7 @@ pub struct Running {
 }
 
 impl Running {
-    pub fn start(config: &Config) -> Result<Running, String> {
+    pub fn start(config: &Config, engine: Engine, subtitle: Arc<omp_mediaio::mxl::SubtitleInput>) -> Result<Running, String> {
         if config.width % 4 != 0 {
             return Err(format!("Breite {} nicht durch 4 teilbar (GRAY8-Key)", config.width));
         }
@@ -108,17 +107,20 @@ impl Running {
         res.map_err(|e| format!("Pipeline erreicht PLAYING nicht: {e:?}"))?;
 
         let shared = Arc::new(Shared {
-            playback: Mutex::new(Playback::default()),
+            engine: Mutex::new(engine),
+            subtitle,
+            auto: AtomicBool::new(true),
+            last_subtitle: Mutex::new(String::new()),
             render_us: AtomicU64::new(0),
             frames_out: AtomicU64::new(0),
             running: AtomicBool::new(true),
             heartbeat: Arc::new(AtomicU64::new(0)),
         });
         let sh = shared.clone();
-        let (w, h, ss) = (config.width as usize, config.height as usize, config.ss);
+        let (w, h, ss, panel) = (config.width as usize, config.height as usize, config.ss, config.panel);
         let thread = std::thread::Builder::new()
             .name("omp-sign-avatar-render".into())
-            .spawn(move || render_loop(sh, fill_src, key_src, parked, w, h, ss))
+            .spawn(move || render_loop(sh, fill_src, key_src, parked, w, h, ss, panel))
             .map_err(|e| format!("Render-Thread: {e}"))?;
         Ok(Running { pipeline, shared, thread: Some(thread), _fill: fill, _key: key })
     }
@@ -146,8 +148,10 @@ fn render_loop(
     w: usize,
     h: usize,
     ss: usize,
+    panel: bool,
 ) {
     let mut renderer = Renderer::new(w, h, ss);
+    renderer.panel = panel;
     // Dauerhafte Puffer (Rasterizer schreibt nur geänderte Zeilen, s. Raster::resolve)
     let (mut bgra, mut key) = (vec![0u8; w * h * 4], vec![0u8; w * h]);
     let mut last: Option<(gst::Buffer, gst::Buffer)> = None;
@@ -162,27 +166,18 @@ fn render_loop(
             std::thread::sleep(deadline - now);
         }
         let is_parked = parked.0.load(Ordering::Relaxed) && parked.1.load(Ordering::Relaxed);
+        let now_ms = t0.elapsed().as_secs_f64() * 1000.0;
         let pose = {
-            let mut pb = shared.playback.lock().expect("lock poisoned");
-            let (t_ms, finished) = match (&pb.timeline, pb.started) {
-                (Some(tl), Some(st)) => {
-                    let t = st.elapsed().as_secs_f32() * 1000.0;
-                    (t, tl.is_finished(t))
+            // Untertitel-Eingang: neuer, nichtleerer Text → Warteschlange (gleicher Text nur einmal)
+            if shared.auto.load(Ordering::Relaxed) {
+                let text = shared.subtitle.text();
+                let mut last = shared.last_subtitle.lock().expect("lock poisoned");
+                if !text.is_empty() && *last != text {
+                    shared.engine.lock().expect("lock poisoned").submit(&text, now_ms);
                 }
-                _ => (0.0, false),
-            };
-            if finished {
-                if pb.looping {
-                    pb.started = Some(Instant::now());
-                } else {
-                    pb.timeline = None;
-                    pb.started = None;
-                }
+                *last = text;
             }
-            match &pb.timeline {
-                Some(tl) => tl.pose_at(t_ms),
-                None => crate::avatar::Pose::REST,
-            }
+            shared.engine.lock().expect("lock poisoned").tick(now_ms)
         };
         let pts = gst::ClockTime::from_nseconds(frame.as_nanos() as u64 * n);
         // Geparkt: nichts neu zeichnen (die Puffer des letzten Bildes laufen weiter, damit ein neuer Leser anlaufen kann).
@@ -190,7 +185,7 @@ fn render_loop(
             false
         } else {
             let t = Instant::now();
-            let changed = renderer.render(&pose, &mut bgra, &mut key);
+            let changed = renderer.render(&pose.pose, pose.overlay.as_deref(), &mut bgra, &mut key);
             if changed {
                 let us = t.elapsed().as_micros() as u64;
                 let old = shared.render_us.load(Ordering::Relaxed);

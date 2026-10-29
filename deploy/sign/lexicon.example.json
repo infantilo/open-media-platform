@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "_hinweis": "BEISPIELEINTRÄGE zum Format — NICHT von Gebärdenden erstellt oder geprüft, deshalb verified=false: der Node behandelt sie wie unbekannte Wörter (buchstabieren/Text). Ein Eintrag darf erst auf verified=true, wenn Gebärdende ihn am Kontaktbogen (omp-sign-avatar --lexicon-check data/sign/lexicon.json --sheet bogen.png) freigegeben haben.",
+  "signs": [
+    {
+      "gloss": "HALLO",
+      "pos": "other",
+      "verified": false,
+      "keys": [
+        { "ms": 0,   "pose": { "dom": { "hand": "B", "shoulder": [-1.0, 0.0, -0.1], "elbow": -1.9 } } },
+        { "ms": 350, "pose": { "dom": { "hand": "B", "shoulder": [-1.0, 0.0, -0.1], "elbow": -1.9, "wrist": [0.0, 0.0, 0.5] } } },
+        { "ms": 700, "pose": { "dom": { "hand": "B", "shoulder": [-1.0, 0.0, -0.1], "elbow": -1.9, "wrist": [0.0, 0.0, 0.0] } } }
+      ]
+    },
+    {
+      "gloss": "HEUTE",
+      "pos": "time",
+      "verified": false,
+      "keys": [
+        { "ms": 0,   "pose": { "base": "sign", "dom": { "hand": "5", "shoulder": [-0.8, 0.0, -0.3], "elbow": -1.2 }, "off": { "hand": "5", "shoulder": [-0.8, 0.0, 0.3], "elbow": -1.2, "twist": 3.14 } } },
+        { "ms": 400, "pose": { "base": "sign", "dom": { "hand": "5", "shoulder": [-0.9, 0.0, -0.3], "elbow": -1.1 }, "off": { "hand": "5", "shoulder": [-0.9, 0.0, 0.3], "elbow": -1.1, "twist": 3.14 } } }
+      ]
+    }
+  ],
+  "lemmas": { "hallo": "HALLO", "heute": "HEUTE" }
+}

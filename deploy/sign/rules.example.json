@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "drop": ["der","die","das","den","dem","des","ein","eine","einen","einem","einer","eines","ist","sind","war","waren","wird","werden","wurde","wurden","hat","haben","hatte","hatten","wurde","sein","zu","von","im","am","um","und","dass","auch","sehr","noch","schon"],
+  "timeWords": ["heute","gestern","morgen","jetzt","gleich","später","früher","bald","montag","dienstag","mittwoch","donnerstag","freitag","samstag","sonntag","abend","nachmittag","vormittag","nacht"],
+  "negations": ["nicht","kein","keine","keinen","keinem","nie","niemals","nichts"],
+  "questionWords": ["wer","was","wo","wann","wie","warum","wieso","weshalb","welche","welcher","welches","wohin","woher"],
+  "maxUnknownRatio": 0.5,
+  "spellUnknown": true
+}

@@ -494,6 +494,12 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   (video+audio in one step, by tags or 1:1), 60-second undo; usable
   on a phone
 - **omp-ograf** — EBU OGraf graphics overlay node (Fill+Key)
+- **omp-sign-avatar** — sign language avatar (DGS): a software-rasterised
+  avatar (no browser, no GPU) delivered as Fill+Key MXL for the mixer
+  picture-in-picture. Takes the subtitle stream (text or CEA-608), prepares
+  sentences by an editable rules file, signs from a lexicon that signers
+  release, fingerspells unknown words and shows mostly-unknown sentences as
+  text; unreleased signs never go on air
 - **omp-subtitle-asr** — automatic subtitles: recognises speech from an
   audio stream locally (no cloud) and produces a live subtitle layer in the
   graphics node, a running SRT track with the real speaking times, and two

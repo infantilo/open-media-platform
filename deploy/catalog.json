@@ -327,6 +327,16 @@
     "expectedResources": "sehr gering (nur Steuerebene)"
   },
   {
+    "type": "omp-sign-avatar",
+    "label": "Gebärdensprach-Avatar",
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-sign-avatar"],
+    "env": {},
+    "description": "Gebärdensprach-Avatar (DGS): setzt Untertitel regelbasiert in Gebärden um und liefert einen animierten Avatar als Fill+Key-MXL-Ausgang für das Bild-in-Bild im Bildmischer. Eingang „Untertitel“ (Text-Strom oder CEA-608, z. B. von Auto-Untertitel); Sätze werden nach Regeldatei aufbereitet (Zeit nach vorn, Verb nach hinten, Verneinung, Frage), Gebärden kommen aus einem Lexikon, das Gebärdende prüfen und freigeben. Unbekannte Wörter werden buchstabiert (Fingeralphabet), Sätze, die überwiegend unbekannt sind, erscheinen als Text im Bild; nicht freigegebene Gebärden laufen nie auf Sendung. Reiner Software-Rasterizer (kein Browser, keine GPU), rechnet nur, solange jemand das Bild liest. Die Größe auf dem Sendebild stellt man im Mischer ein.",
+    "i18n": { "en": {"label": "Sign language avatar", "description": "Sign language avatar (DGS): converts subtitles into signs by rules and delivers an animated avatar as a fill+key MXL output for the picture-in-picture of the video mixer. Input \"Subtitle\" (text stream or CEA-608, e.g. from auto subtitles); sentences are prepared by a rules file (time first, verb last, negation, question), signs come from a lexicon that signers review and release. Unknown words are fingerspelled, sentences that are mostly unknown appear as text in the picture; unreleased signs never go on air. Pure software rasteriser (no browser, no GPU), computes only while someone reads the picture. The size on air is set in the mixer.", "expectedResources": "low (about 5 to 10 % of one core at 360×405 while read)"} },
+    "expectedResources": "gering (etwa 5 bis 10 % eines Kerns bei 360×405, solange gelesen wird)"
+  },
+  {
     "type": "omp-device-hub",
     "hostBound": true,
     "label": "Geräte-Hub",
