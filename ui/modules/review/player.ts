@@ -11,7 +11,8 @@
 //    wird bei Rückstand durch Überspringen von Bildern gehalten (nicht jedes Bild wird angezeigt).
 //  - Der Proxy ist NICHT die Originaldatei: die Oberfläche kennzeichnet das dauerhaft.
 import { t as tt } from "../host.ts";
-import { type AudioSource, ReviewAudio } from "./audio.ts";
+import { type AudioSource, audibleTracks, ReviewAudio } from "./audio.ts";
+import { Waveform } from "./waveform.ts";
 import { clampFrame, type Finding, keyAction, nextBoundary, type Segment, shuttleFrame, shuttleStep, SHUTTLE_SPEEDS } from "./review-logic.ts";
 import { frameForPts, frameForTime, frameForTimecode, timecodeOf, timeForFrame, type Timeline } from "./timecode.ts";
 
@@ -67,6 +68,7 @@ export class ReviewPlayer {
   #destroyed = false;
   #vfcActive = false;
   #audio: ReviewAudio | null = null;
+  #wave: Waveform | null = null;
   #audioBtns: Array<{ on: HTMLButtonElement; solo: HTMLButtonElement }> = [];
   #lastSync = 0;
 
@@ -95,6 +97,11 @@ export class ReviewPlayer {
     // Zeitleiste
     this.#bar = el("div", "position:relative;height:38px;background:var(--omp-surface-raised);border:1px solid var(--omp-border);border-radius:4px;cursor:ew-resize;touch-action:none;user-select:none;");
     this.#playhead = el("div", "position:absolute;top:0;bottom:0;width:2px;background:#fff;pointer-events:none;");
+    if (o.audio?.peaksUrl) {
+      this.#wave = new Waveform(o.audio.tracks, o.audio.peaksUrl);
+      this.#bar.append(this.#wave.canvas);
+      void this.#wave.load();
+    }
     this.#bar.append(this.#playhead);
 
     // Transport
@@ -358,6 +365,7 @@ export class ReviewPlayer {
     this.video.removeAttribute("src");
     this.video.load();
     this.#audio?.destroy();
+    this.#wave?.destroy();
   }
 
   // ---- intern -----------------------------------------------------------------------------------------------------
@@ -610,6 +618,7 @@ export class ReviewPlayer {
   #renderAudioRow(): void {
     const a = this.#audio;
     if (!a) return;
+    this.#wave?.setAudible(audibleTracks(a.state));
     const anySolo = a.state.some((t) => t.solo);
     this.#audioBtns.forEach((b, i) => {
       const st = a.state[i];
@@ -654,7 +663,7 @@ export class ReviewPlayer {
     const pct = (f: number) => `${(f / tl.durationFrames) * 100}%`;
     this.#playhead.style.left = `calc(${pct(this.#cur)} - 1px)`;
     // alles außer Spielkopf neu aufbauen
-    [...this.#bar.children].forEach((c) => c !== this.#playhead && c.remove());
+    [...this.#bar.children].forEach((c) => c !== this.#playhead && c !== this.#wave?.canvas && c.remove());
     this.#o.getSegments().forEach((s, i) => {
       const d = el("div", `position:absolute;top:18px;height:14px;left:${pct(s.in)};width:${Math.max(0.3, ((s.out - s.in) / tl.durationFrames) * 100)}%;background:${SEG_COLORS[i % SEG_COLORS.length]};opacity:.75;border-radius:2px;pointer-events:none;`);
       d.title = `${s.label || tt("rv.seg.n", { p0: i + 1 })}: ${timecodeOf(tl, s.in)} – ${timecodeOf(tl, s.out)}`;

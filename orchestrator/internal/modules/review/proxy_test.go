@@ -304,3 +304,54 @@ func TestAudioProxyTracksAndBlocksAreTimeAccurate(t *testing.T) {
 		t.Error("unbekannte Spur muss abgelehnt werden")
 	}
 }
+
+func TestPeaksShowSilenceThenToneAtTheRightFrame(t *testing.T) {
+	needFFmpeg(t)
+	e := newEnv(t, func(c *Config) { c.QCProfiles["broadcast-default"] = noLoudness(c.QCProfiles["broadcast-default"]) })
+	ctx := context.Background()
+	src := toneStepFixture(t, e.dir, 100) // 4 s, Ton ab 1,000 s = Bild 25
+	e.file = filepath.Base(src)
+	it := e.importReady(t)
+	if _, err := e.svc.RequestProxy(ctx, it.AssetID, false); err != nil {
+		t.Fatal(err)
+	}
+	if ran, err := e.svc.RunNextProxy(ctx); !ran || err != nil {
+		t.Fatalf("proxy run: %v %v", ran, err)
+	}
+	pk, err := e.svc.Peaks(ctx, it.AssetID, 0)
+	if err != nil || len(pk) != 100 {
+		t.Fatalf("peaks: %v len=%d", err, len(pk))
+	}
+	first := -1
+	for i, v := range pk {
+		if v > 100 {
+			first = i
+			break
+		}
+	}
+	if first < 24 || first > 26 {
+		t.Errorf("Toneinsatz bei Bild %d, erwartet 25 (±1)", first)
+	}
+	// Mono-Mischung aus L 0,5 und R 0,25 = 0,375 FS (−8,5 dB): (−8,5+60)/60·255 ≈ 219
+	if v := pk[60]; v < 212 || v > 226 {
+		t.Errorf("Pegel Bild 60 = %d, erwartet ≈ 219", v)
+	}
+	if again, _ := e.svc.Peaks(ctx, it.AssetID, 0); string(again) != string(pk) {
+		t.Error("zweiter Abruf (Zwischenspeicher) muss gleich sein")
+	}
+	if _, err := e.svc.Peaks(ctx, it.AssetID, 5); err == nil {
+		t.Error("unbekannte Spur muss abgelehnt werden")
+	}
+}
+
+func TestPeaksFromPCMScaleAndAlignment(t *testing.T) {
+	// 2 Bilder à 8000/25 = 320 Samples; Bild 0 still, Bild 1 volle Aussteuerung
+	pcm := make([]byte, 640*2)
+	for i := 320; i < 640; i++ {
+		pcm[2*i], pcm[2*i+1] = 0xFF, 0x7F // 32767
+	}
+	got := PeaksFromPCM(pcm, 8000, 3, 25, 1) // Bild 2 liegt hinter den Daten → Stille
+	if got[0] != 0 || got[1] != 255 || got[2] != 0 {
+		t.Errorf("peaks = %v", got)
+	}
+}

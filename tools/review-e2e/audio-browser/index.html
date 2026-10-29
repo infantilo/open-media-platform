@@ -1,0 +1,17 @@
+<!doctype html><meta charset=utf-8><body>
+<script type="module">
+import { ReviewAudio } from "./audio.bundle.js";
+// Analysator vor den Ausgang: misst, was die Engine wirklich abspielt
+const Base = globalThis.AudioContext;
+class Tap extends Base {
+  constructor(o) { super(o); this._an = this.createAnalyser(); this._an.fftSize = 2048; this._an.connect(super.destination); window.__an = this._an; }
+  get destination() { return this._an; }
+}
+globalThis.AudioContext = Tap;
+const urls = [];
+const a = new ReviewAudio({ tracks: 2, durationSec: 12, urlFor: (t, b) => { urls.push(`${t}/${b}`); return `a/${t}/${b}.wav`; } });
+window.a = a; window.urls = urls;
+window.rms = () => { const d = new Float32Array(2048); window.__an.getFloatTimeDomainData(d); let s = 0; for (const v of d) s += v * v; return Math.sqrt(s / d.length); };
+window.maxRms = async (ms) => { let m = 0; const t0 = performance.now(); while (performance.now() - t0 < ms) { m = Math.max(m, window.rms()); await new Promise(r => setTimeout(r, 10)); } return m; };
+window.ready = true;
+</script>

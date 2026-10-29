@@ -1904,6 +1904,12 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/review/media/{id}/peaks/{track}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/review/media/{id}/proxy",
     "auth": "auth",
     "domain": "core"

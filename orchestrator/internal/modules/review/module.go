@@ -145,6 +145,7 @@ func (m *Module) Mount(r module.Routes, d module.Deps) error {
 	r.Handle("GET /api/v1/review/items/{id}/timecode", module.Authenticated(), a.timecode())
 	r.Handle("GET /api/v1/review/media/{id}/proxy", module.Authenticated(), a.serveProxy())
 	r.Handle("GET /api/v1/review/media/{id}/audio/{track}/{block}", module.Authenticated(), a.serveAudioBlock())
+	r.Handle("GET /api/v1/review/media/{id}/peaks/{track}", module.Authenticated(), a.servePeaks())
 	r.Handle("GET /api/v1/review/media/{id}/frame/{n}", module.Authenticated(), a.serveFrame())
 	r.Handle("GET /api/v1/review/import/files", module.Feature("review.import"), a.importList())
 	r.Handle("POST /api/v1/review/import", module.Feature("review.import"), a.importFile())

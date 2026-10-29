@@ -62,6 +62,8 @@ export interface AudioSource {
   tracks: number;
   durationSec: number;
   urlFor: (track: number, block: number) => string;
+  /** Wellenform (Spitzenwerte je Bild und Spur); ohne Angabe keine Wellenform. */
+  peaksUrl?: (track: number) => string;
 }
 
 export class ReviewAudio {
@@ -79,6 +81,7 @@ export class ReviewAudio {
   #grain: { gain: GainNode; src: AudioBufferSourceNode[] } | null = null;
   #grainSeq = 0;
   #volume = 1;
+  #lastT = 0;
 
   constructor(src: AudioSource) {
     this.#src = src;
@@ -124,6 +127,7 @@ export class ReviewAudio {
   setTrack(i: number, patch: Partial<TrackState>): void {
     Object.assign(this.state[i], patch);
     this.#applyGains();
+    this.prefetch(this.#lastT); // neu hörbare Spur: Blöcke an der aktuellen Stelle schon holen, damit der nächste Schritt nicht wartet
   }
 
   #applyGains(): void {
@@ -200,6 +204,7 @@ export class ReviewAudio {
 
   /** Spielt ab Medienzeit t ein kurzes Stück (Scrub). Neue Stücke lösen das vorige mit kurzer Blende ab. */
   grain(t: number, dur = GRAIN_SEC): void {
+    this.#lastT = t;
     if (!this.ready || this.#run) return;
     const ctx = this.#ctx!;
     const seq = ++this.#grainSeq;
@@ -258,6 +263,7 @@ export class ReviewAudio {
 
   /** Wiedergabe ab Medienzeit t mit Rate r (negativ = rückwärts). */
   start(t: number, rate: number): void {
+    this.#lastT = t;
     this.stop();
     if (!this.ready || !rateAudible(rate)) return;
     const ctx = this.#ctx!;

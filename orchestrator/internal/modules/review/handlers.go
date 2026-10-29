@@ -581,6 +581,32 @@ func (a *api) serveAudioBlock() http.HandlerFunc {
 	}
 }
 
+func (a *api) servePeaks() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		track, err := strconv.Atoi(r.PathValue("track"))
+		if err != nil {
+			http.Error(w, "ungültige Spur", http.StatusBadRequest)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+		defer cancel()
+		b, err := a.svc.Peaks(ctx, r.PathValue("id"), track)
+		if err != nil {
+			code := http.StatusInternalServerError
+			if errors.Is(err, ErrNotFound) {
+				code = http.StatusNotFound
+			} else if errors.Is(err, ErrValidation) {
+				code = http.StatusBadRequest
+			}
+			http.Error(w, "Wellenform nicht verfügbar", code)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Cache-Control", "private, max-age=3600")
+		_, _ = w.Write(b)
+	}
+}
+
 func (a *api) serveFrame() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		n, err := strconv.ParseInt(strings.TrimSuffix(r.PathValue("n"), ".jpg"), 10, 64)

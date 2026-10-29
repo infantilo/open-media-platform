@@ -565,6 +565,7 @@ export class ReviewDetail {
             ? {
               tracks: p.audioTracks,
               durationSec: (tl.durationFrames * tl.rate.den) / tl.rate.num,
+              peaksUrl: (track) => mediaUrl(`/${it.assetId}/peaks/${track}`) + (mediaUrl("/x").includes("?") ? "&" : "?") + `v=${p.id}`,
               urlFor: (track, block) => mediaUrl(`/${it.assetId}/audio/${track}/${block}.wav`) + (mediaUrl("/x").includes("?") ? "&" : "?") + `v=${p.id}`,
             }
             : undefined,

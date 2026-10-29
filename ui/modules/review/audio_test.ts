@@ -151,3 +151,17 @@ Deno.test("Spur stumm/Solo: nur hörbare Spuren werden geholt und eingeplant", a
   assertEquals(m.started.length, 1);
   a.destroy();
 });
+
+import { reduceColumns } from "./waveform.ts";
+
+Deno.test("Wellenform: Spalten nehmen das Maximum ihrer Bilder, nur hörbare Spuren zählen, Stille bleibt 0", () => {
+  const a = new Uint8Array(100);
+  const b = new Uint8Array(100);
+  a.fill(200, 50); // Spur A: Ton ab Bild 50
+  b[10] = 255; // Spur B: ein Knall bei Bild 10
+  const both = reduceColumns([a, b], [true, true], 10);
+  assertEquals([both[0], both[1], both[4], both[5]], [0, 255, 0, 200]); // Spalte = 10 Bilder
+  assertEquals(Array.from(reduceColumns([a, b], [true, false], 10)).slice(0, 2), [0, 0]);
+  assertEquals(reduceColumns([null, null], [true, true], 5).every((v) => v === 0), true);
+  assertEquals(reduceColumns([a], [true], 200).length, 200); // mehr Spalten als Bilder: jede Spalte mindestens ein Bild
+});
