@@ -1264,6 +1264,158 @@
       "group": "Leistung"
     }
   ],
+  "omp-subtitle-asr": [
+      {
+          "key": "OMP_ASR_ENGINE",
+          "i18n": {
+              "en": {
+                  "label": "Engine",
+                  "description": "whisper = local whisper.cpp server; mock = stand-in without a model (tests/demos only).",
+                  "group": "Speech recognition"
+              }
+          },
+          "label": "Engine",
+          "type": "string",
+          "description": "whisper = lokaler whisper.cpp-Server; mock = Ersatz ohne Modell (nur Tests/Vorführung).",
+          "default": "whisper",
+          "group": "Spracherkennung"
+      },
+      {
+          "key": "OMP_ASR_URL",
+          "i18n": {
+              "en": {
+                  "label": "Engine URL",
+                  "description": "Address of the whisper server.",
+                  "group": "Speech recognition"
+              }
+          },
+          "label": "Engine-URL",
+          "type": "string",
+          "description": "Adresse des whisper-Servers.",
+          "default": "http://127.0.0.1:8178",
+          "group": "Spracherkennung"
+      },
+      {
+          "key": "OMP_ASR_BIN",
+          "i18n": {
+              "en": {
+                  "label": "Engine program (autostart)",
+                  "description": "Path to whisper-server. If set (together with the model) the node starts the engine itself when none answers at the URL.",
+                  "group": "Speech recognition"
+              }
+          },
+          "label": "Engine-Programm (Autostart)",
+          "type": "path",
+          "description": "Pfad zu whisper-server. Gesetzt (zusammen mit dem Modell) startet der Node die Engine selbst, falls unter der URL keine antwortet.",
+          "group": "Spracherkennung",
+          "pathKind": "file"
+      },
+      {
+          "key": "OMP_ASR_MODEL",
+          "i18n": {
+              "en": {
+                  "label": "Model file",
+                  "description": "Path to the ggml model file (e.g. ggml-small.bin). Larger = more accurate but slower; \"base\" is enough for tests, \"small\" for broadcast use.",
+                  "group": "Speech recognition"
+              }
+          },
+          "label": "Modelldatei",
+          "type": "path",
+          "description": "Pfad zur ggml-Modelldatei (z. B. ggml-small.bin). Größer = genauer, aber langsamer; „base“ reicht für Tests, „small“ für Sendebetrieb.",
+          "group": "Spracherkennung",
+          "pathKind": "file"
+      },
+      {
+          "key": "OMP_ASR_THREADS",
+          "i18n": {
+              "en": {
+                  "label": "Engine threads",
+                  "description": "CPU threads of the engine. Recognition must be faster than real time or segments are dropped.",
+                  "group": "Speech recognition"
+              }
+          },
+          "label": "Engine-Threads",
+          "type": "string",
+          "description": "Rechenkerne der Engine. Die Erkennung muss schneller als Echtzeit sein, sonst werden Segmente verworfen.",
+          "default": "4",
+          "group": "Spracherkennung"
+      },
+      {
+          "key": "OMP_ASR_LANGUAGE",
+          "i18n": {
+              "en": {
+                  "label": "Language",
+                  "description": "ISO language code (de, en, fr …) or auto. Switchable in the panel.",
+                  "group": "Speech recognition"
+              }
+          },
+          "label": "Sprache",
+          "type": "string",
+          "description": "ISO-Code der Sprache (de, en, fr …) oder auto. Im Panel umschaltbar.",
+          "default": "de",
+          "group": "Spracherkennung"
+      },
+      {
+          "key": "OMP_ASR_GRAPHICS_LABEL",
+          "i18n": {
+              "en": {
+                  "label": "Graphics node (live display)",
+                  "description": "Label of the graphics node whose subtitle layer shows the text live. Empty = no live display. Switchable in the panel.",
+                  "group": "Speech recognition"
+              }
+          },
+          "label": "Grafik-Node (Live-Anzeige)",
+          "type": "string",
+          "description": "Bezeichnung des Grafik-Nodes, in dessen Untertitel-Ebene der Text live erscheint. Leer = keine Live-Anzeige. Im Panel umschaltbar.",
+          "group": "Spracherkennung"
+      },
+      {
+          "key": "OMP_SUBTITLE_DIR",
+          "i18n": {
+              "en": {
+                  "label": "Track directory",
+                  "description": "Directory the SRT tracks are written to (same as for the graphics node).",
+                  "group": "Media and files"
+              }
+          },
+          "label": "Spur-Verzeichnis",
+          "type": "path",
+          "description": "Verzeichnis, in das die SRT-Spuren geschrieben werden (dasselbe wie beim Grafik-Node).",
+          "default": "data/subtitles",
+          "group": "Medien und Dateien",
+          "pathKind": "dir"
+      },
+      {
+          "key": "OMP_ASR_END_SILENCE_MS",
+          "i18n": {
+              "en": {
+                  "label": "Pause for end of segment (ms)",
+                  "description": "Silence of this length closes a segment. Shorter = faster but smaller subtitles.",
+                  "group": "Speech recognition"
+              }
+          },
+          "label": "Pause für Satzende (ms)",
+          "type": "string",
+          "description": "So lange Stille schließt einen Abschnitt ab. Kürzer = schnellere, aber kleinere Untertitel.",
+          "default": "600",
+          "group": "Spracherkennung"
+      },
+      {
+          "key": "OMP_ASR_MAX_SEGMENT_MS",
+          "i18n": {
+              "en": {
+                  "label": "Longest segment (ms)",
+                  "description": "Longer speech is split here.",
+                  "group": "Speech recognition"
+              }
+          },
+          "label": "Längster Abschnitt (ms)",
+          "type": "string",
+          "description": "Längere Redeflüsse werden hier hart geteilt.",
+          "default": "8000",
+          "group": "Spracherkennung"
+      }
+  ],
   "omp-audio-monitor": [
     {
       "key": "OMP_AUDIO_MONITOR_STREAM_PORT",

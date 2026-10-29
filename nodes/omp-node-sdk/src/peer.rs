@@ -67,6 +67,16 @@ impl PeerClient {
         }
     }
 
+    /// Methodenaufruf mit Argumenten (flaches JSON-Objekt wie bei `omp_node_sdk::server::route`).
+    pub fn invoke_with(&self, name: &str, args: serde_json::Value) -> Result<(), RemoteError> {
+        let url = format!("{}/methods/{}", self.base_url, name);
+        match crate::nodeauth::with_token(ureq::post(&url)).send_json(args) {
+            Ok(_) => Ok(()),
+            Err(ureq::Error::StatusCode(code)) => Err(RemoteError::Status(code)),
+            Err(e) => Err(RemoteError::Request(e.to_string())),
+        }
+    }
+
     /// Liest einen einzelnen Parameterwert (`GET /params/<name>`,
     /// zweiter Konsument nach `invoke` — Kapitel 16 Teil 2,
     /// `omp-fabrics-gateway`: die Initiator-Rolle muss den per HTTP

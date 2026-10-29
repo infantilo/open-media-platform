@@ -402,12 +402,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 r
             },
             instance_id,
-            // "media-ready" (ARCHITECTURE.md §5 Punkt 6): true, sobald
-            // seit dem letzten `record.start` mindestens ein Buffer den
-            // Muxer erreicht hat (s. `pipeline.rs`) — false im Leerlauf,
-            // kein Fehlzustand (dieser Node hat keine eigenen Sender).
+            // "media-ready" (ARCHITECTURE.md §5 Punkt 6): während einer Aufnahme true, sobald seit dem
+            // letzten `record.start` mindestens ein Buffer den Muxer erreicht hat (s. `pipeline.rs`).
+            // Im Leerlauf ist der Recorder als Senke ohne Ausgänge bereit — nichts zu liefern ist kein
+            // Fehlzustand (der Signalweg zeigte sonst nach der ersten Aufnahme „liefert kein Bild und
+            // keinen Ton mehr“).
             media_ready: omp_node_sdk::MediaReadySource::Probe(Arc::new(move || {
-                media_ready_pipeline.media_ready()
+                media_ready_pipeline.status() != pipeline::RecordStatus::Recording || media_ready_pipeline.media_ready()
             })),
         },
         store,

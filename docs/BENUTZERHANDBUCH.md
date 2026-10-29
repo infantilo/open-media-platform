@@ -954,6 +954,10 @@ Diese Funktionen gehören zum Node **Playout-Automation** (Panel-Abschnitt **Fre
 **Aufnahme gegen Original vergleichen.** Im Eingang gibt es im Detail den Reiter **Aufnahme-Vergleich**: Aufnahme wählen (zweiter Eintrag im Eingang), dann *Vergleichen*. Geprüft werden Dauer (±1 Bild, einstellbar), Bildrate (exakt), Auflösung/Codec (Hinweis), Ton und Bildqualität (SSIM ≥ 0,98 auf einer 10-s-Stichprobe, einstellbar). Der **Vorlauf der Aufnahme** wird standardmäßig aus den Bildern bestimmt (die Aufnahme beginnt meist etwas vor oder nach dem Event); ist das Bild dafür zu ruhig, gilt der eingetragene Wert. Dieselbe Funktion gibt es als `POST /api/v1/review/items/{id}/compare`.
 
 
+## 5g. Automatische Untertitel
+
+Der Node **Auto-Untertitel** erkennt gesprochene Sprache aus einem Audiostream und erzeugt daraus Untertitel: live in der Untertitel-Ebene eines Grafik-Nodes und als fortlaufende SRT-Spur. Quelle, Sprache, Grafik-Node und Spurname stellst du in der Kachel ein; „Spur starten“ beginnt eine neue Datei in `data/subtitles`. Der Text erscheint mit einigen Sekunden Verzug nach dem Sprechen, die Spur enthält die echten Sprechzeiten. Die Erkennung läuft lokal (whisper.cpp) und braucht mehrere Rechenkerne. Einrichtung, Grenzen und Zeitverhalten: `docs/ASR-UNTERTITEL.md`.
+
 ## 5f. Kernbindung, Temperatur und Leistungsaufnahme
 
 **Grafik- und Child-Editoren ohne JSON.** Im Event-Editor der Playout-Automation (Reiter *Child Events*) und im Panel des Grafik-Nodes (ograf) gibt es keine JSON-Textfelder mehr: Grafikvorlagen zeigen ihre Felder samt Listen und Gruppen als Formular, Vorlagen ohne Schema und Webhooks nutzen freie Felder (Name, Typ Text/Zahl/Ja-Nein/Liste/Gruppe, Wert), und bei Node-Befehlen schlägt der Editor Methoden und Argumente des Ziel-Nodes vor.

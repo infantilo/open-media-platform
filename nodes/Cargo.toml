@@ -36,6 +36,7 @@ members = [
     "omp-mxf-mca",
     "omp-device-hub",
     "omp-intercom",
+    "omp-subtitle-asr",
 ]
 
 # Eigener Rust-Code mit Pixel-Schleifen (v210-Packen/Alpha-Key-Extraktion in
