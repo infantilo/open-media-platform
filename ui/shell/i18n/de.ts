@@ -2482,6 +2482,7 @@ export const de = {
   "nd.f.fps": "Bilder pro Sekunde",
   "nd.pipeline": "Pipeline",
   "nd.pipeline.hint": "Von der Quelle (links) zum Ausgang (rechts). Rot umrandet: Baustein im falschen Zustand. Gelb: Puffer voll — der Baustein dahinter nimmt zu langsam ab. Ein Balken zeigt den Füllstand.",
+  "flow.workflowBand": "Workflows",
   "flow.alarm.crashed": "Abgestürzt",
   "flow.alarm.restarts": "Wurde {n}× neu gestartet",
   "flow.alarm.offline": "Nicht erreichbar",

@@ -2483,6 +2483,7 @@ export const en: Record<keyof typeof de, string> = {
   "nd.f.fps": "Frames per second",
   "nd.pipeline": "Pipeline",
   "nd.pipeline.hint": "From the source (left) to the output (right). Red outline: element in the wrong state. Yellow: buffer full — the element after it takes data too slowly. A bar shows the fill level.",
+  "flow.workflowBand": "Workflows",
   "flow.alarm.crashed": "Crashed",
   "flow.alarm.restarts": "Restarted {n}×",
   "flow.alarm.offline": "Not reachable",

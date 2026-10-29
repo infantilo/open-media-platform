@@ -102,6 +102,14 @@ const HOST_ZONE_HEADER_HEIGHT = 46;
 function ghostBlockHeight(entries: number): number {
   return 36 + entries * 14;
 }
+// Eigener Unterbereich „Workflows“ je Host-Zone (Nutzerwunsch 2026-10-29): Workflow-Kacheln (gestartet oder nicht) stehen fest
+// untereinander unter dem Zonenkopf (und dem „Geplant“-Block), Node-Kacheln beginnen darunter und können sie nie überlappen.
+const WORKFLOW_BAND_CAPTION = 20;
+const WORKFLOW_BAND_ROW_GAP = 10;
+const WORKFLOW_BAND_PAD = 10;
+function workflowBandHeight(count: number): number {
+  return count > 0 ? WORKFLOW_BAND_CAPTION + count * (MIN_BODY_HEIGHT + HEADER_HEIGHT + WORKFLOW_BAND_ROW_GAP) + WORKFLOW_BAND_PAD : 0;
+}
 const HOST_ZONE_TILE_GAP = 24;
 const HOST_ZONE_MARGIN = 24;
 // Ein Host gilt als "online", wenn seine letzte Telemetrie nicht älter
@@ -1531,8 +1539,17 @@ export class FlowCanvas extends HTMLElement {
   // "Geplant"-Einträge einer Host-Zone: nicht gestartete Workflows, die sich über mehrere Zonen verteilen.
   #zoneTopInset(zoneId: string): number {
     if (this.#collapsedZoneIds.has(zoneId)) return 0;
+    return this.#ghostBlockInset(zoneId) + workflowBandHeight(this.#workflowsForZone(zoneId).length);
+  }
+  #ghostBlockInset(zoneId: string): number {
     const n = this.#ghostsForZone(zoneId).length;
     return n > 0 ? ghostBlockHeight(n) : 0;
+  }
+  // Workflows einer Zone in fester, stabiler Reihenfolge (Name, dann ID) — Reihenfolge des Unterbereichs.
+  #workflowsForZone(zoneId: string): WorkflowSummary[] {
+    return this.#workflowsInScope()
+      .filter((wf) => this.#zoneIdForWorkflow(wf) === zoneId)
+      .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   }
   #ghostsForZone(zoneId: string): GhostEntry[] {
     return ghostEntriesForZone(zoneId, this.#workflowsInScope().map((wf) => this.#planInput(wf)));
@@ -1716,7 +1733,15 @@ export class FlowCanvas extends HTMLElement {
         reserved.some((r) => candidateY < r.y + r.height + GAP && candidateY + height + GAP > r.y);
 
       const finalPos = new Map<string, Point>();
+      // Workflow-Kacheln haben ihren festen Platz im Unterbereich „Workflows“ (ohne gemerkte Position): Geplant-Block, dann
+      // Überschrift, dann eine Kachel je Zeile. Die Node-Kacheln beginnen darunter (Reservierung über `ghostInset`).
+      const bandTop = HOST_ZONE_HEADER_HEIGHT + this.#ghostBlockInset(zone.id) + WORKFLOW_BAND_CAPTION;
+      const bandX = x + Math.max(WORKFLOW_BAND_PAD, Math.floor((laneWidth - NODE_WIDTH) / 2));
+      this.#workflowsForZone(zone.id).forEach((wf, i) => {
+        finalPos.set(workflowTileId(wf.id), { x: bandX, y: bandTop + i * (workflowHeight + WORKFLOW_BAND_ROW_GAP) });
+      });
       const rememberedCandidates = zoneEntries
+        .filter((entry) => workflowIdFromTileId(entry.id) === null)
         .map((entry) => ({ entry, remembered: this.#hostViewPositions[entry.id] }))
         .filter(({ remembered }) => !!remembered && remembered.x >= x - 1 && remembered.x < x + laneWidth)
         // Kacheln nicht gestarteter Workflows zuerst: sie bleiben, wo sie sind (Übersicht); wächst oder erscheint eine Node-Kachel
@@ -3795,6 +3820,28 @@ export class FlowCanvas extends HTMLElement {
         });
       }
 
+      const bandCount = collapsed ? 0 : this.#workflowsForZone(zone.id).length;
+      if (bandCount > 0) {
+        const bandY = HOST_ZONE_HEADER_HEIGHT + this.#ghostBlockInset(zone.id);
+        const bandFrame = document.createElementNS(SVG_NS, "rect");
+        bandFrame.setAttribute("x", "8");
+        bandFrame.setAttribute("y", String(bandY));
+        bandFrame.setAttribute("width", String(laneWidth - 16));
+        bandFrame.setAttribute("height", String(workflowBandHeight(bandCount) - 4));
+        bandFrame.setAttribute("rx", "4");
+        bandFrame.setAttribute("fill", "#262b33");
+        bandFrame.setAttribute("stroke", "#4a5568");
+        bandFrame.setAttribute("data-role", "workflow-band");
+        g.appendChild(bandFrame);
+        const bandCap = document.createElementNS(SVG_NS, "text");
+        bandCap.setAttribute("x", "16");
+        bandCap.setAttribute("y", String(bandY + 14));
+        bandCap.setAttribute("fill", "#9aa0a6");
+        bandCap.setAttribute("font-size", "10");
+        bandCap.textContent = tt("flow.workflowBand");
+        g.appendChild(bandCap);
+      }
+
       if (collapsed) {
         const countText = document.createElementNS(SVG_NS, "text");
         countText.setAttribute("x", String(labelX));
@@ -4697,6 +4744,8 @@ export class FlowCanvas extends HTMLElement {
   // wächst nach unten weiterhin frei mit (#zoneContentBottom, von
   // #buildHostZoneLayer gelesen), wie sie es schon vor Bug 1 tat.
   #clampToOwnZone(tileId: string, pos: Point): Point {
+    // Workflow-Kacheln sitzen fest im Unterbereich „Workflows“ ihrer Zone.
+    if (workflowIdFromTileId(tileId) !== null && this.#positions[tileId]) return this.#positions[tileId];
     const rootTiles = this.#rootZoneTiles();
     const zoneId = this.#zoneIdForTileId(tileId);
     const range = this.#zoneXRange(rootTiles, zoneId);
