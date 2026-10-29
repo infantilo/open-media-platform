@@ -142,8 +142,8 @@ Deno.test("Spur stumm/Solo: nur hörbare Spuren werden geholt und eingeplant", a
   const m = mockAudio();
   const a = new ReviewAudio({ tracks: 3, durationSec: 60, urlFor: (t, b) => `/a/${t}/${b}` });
   a.unlock();
+  a.setTrack(2, { solo: true }); // zuerst Solo: Zwischenzustände holen sonst schon Blöcke der noch hörbaren Spuren
   a.setTrack(0, { on: false });
-  a.setTrack(2, { solo: true });
   a.grain(2);
   await new Promise((r) => setTimeout(r, 30));
   assertEquals(m.fetched.filter((u) => u.startsWith("/a/2/")).length > 0, true);
