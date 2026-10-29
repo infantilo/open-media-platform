@@ -203,10 +203,16 @@ func TestReferenceProfile1080i8Tracks(t *testing.T) {
 	if err != nil || p.Frames != 50 || p.Height != 540 || p.Width != 960 {
 		t.Fatalf("proxy: %v %+v", err, p)
 	}
-	// Proxy hat Ton (Stereo-Mischung der 8 Spuren)
-	b, _ := exec.Command("ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=channels,codec_name", "-of", "csv=p=0", path).Output()
-	if !strings.Contains(string(b), "aac,2") {
-		t.Fatalf("proxy audio = %q, want one stereo AAC stream", b)
+	// Ton-Proxy: je Quell-Tonspur ein Stereo-AAC-Stream (Spurwahl im Browser); das Video-Proxy selbst ist stumm
+	if p.AudioTracks != 8 || p.AudioPath == "" {
+		t.Fatalf("audio proxy: tracks=%d path=%q, want 8 tracks", p.AudioTracks, p.AudioPath)
+	}
+	b, _ := exec.Command("ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=channels,codec_name", "-of", "csv=p=0", p.AudioPath).Output()
+	if got := strings.Count(string(b), "aac,2"); got != 8 {
+		t.Fatalf("audio proxy streams = %q, want 8 stereo AAC streams", b)
+	}
+	if v, _ := exec.Command("ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_name", "-of", "csv=p=0", path).Output(); strings.TrimSpace(string(v)) != "" {
+		t.Fatalf("video proxy must carry no audio, got %q", v)
 	}
 }
 

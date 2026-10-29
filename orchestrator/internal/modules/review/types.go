@@ -205,20 +205,20 @@ type HistoryEntry struct {
 
 // Proxy ist ein Review-Proxy der Quelldatei (eigene Datei, Beziehung über asset_id + source_rev).
 type Proxy struct {
-	ID        string    `json:"id"`
-	AssetID   string    `json:"assetId"`
-	SourceRev string    `json:"sourceRev"`
-	Profile   string    `json:"profile"`
-	State     string    `json:"state"` // queued|running|ready|failed
-	Path      string    `json:"-"`
+	ID        string `json:"id"`
+	AssetID   string `json:"assetId"`
+	SourceRev string `json:"sourceRev"`
+	Profile   string `json:"profile"`
+	State     string `json:"state"` // queued|running|ready|failed
+	Path      string `json:"-"`
 	// Ton-Proxy: eine Datei mit je einem Stereo-Stream je Quell-Tonspur (Browser holt blockweise, s. audio.go).
-	AudioTracks int    `json:"audioTracks"`
-	AudioPath   string `json:"-"`
-	Frames    int64     `json:"frames"`
-	Rate      Rate      `json:"rate"`
-	Verified  bool      `json:"verified"`
-	Error     string    `json:"error,omitempty"`
-	Width     int       `json:"width,omitempty"`
-	Height    int       `json:"height,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
+	AudioTracks int       `json:"audioTracks"`
+	AudioPath   string    `json:"-"`
+	Frames      int64     `json:"frames"`
+	Rate        Rate      `json:"rate"`
+	Verified    bool      `json:"verified"`
+	Error       string    `json:"error,omitempty"`
+	Width       int       `json:"width,omitempty"`
+	Height      int       `json:"height,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
 }

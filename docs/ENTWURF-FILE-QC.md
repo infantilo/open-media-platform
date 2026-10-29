@@ -180,3 +180,14 @@ Das Skript liegt nicht im Repo (Einmalmessung); Reproduktion: Burn-in-Fixture wi
 5. Feldgenaue Wiedergabe, Proxy mit Original-A/V-Versatz, Tonspurauswahl im Player, weitere Browser messen.
 6. Echtzeit-Aktualisierung per SSE statt 5-s-Abfrage; Editor für QC-Profile statt JSON.
 7. QC-Lauf über mehrere Hosts verteilen (heute: Orchestrator-Host).
+
+
+## Ton im Review-Player (2026-10-29)
+
+Der Browser-Player braucht den Ton mit Spurwahl und mit Ton beim Jog/Shuttle, damit Ein- und Ausstiege von Ton gefunden werden können.
+
+- **Ton-Proxy** (`proxy.go`, Profil `…-v2`): neben dem stummen Video-Proxy entsteht eine zweite Datei mit **einem Stereo-AAC-Stream je Quell-Tonspur** (höchstens `proxyMaxAudioTracks`), auf die Bildlänge aufgefüllt (`apad`, `-t`) und bei 0 beginnend — Ton ab Sekunde *s* gehört zu Bild *s·Rate*. Ältere Proxys (`v1`) gelten als nicht vorhanden und werden beim Öffnen neu erzeugt.
+- **Blockauslieferung** (`audio.go`): `GET /api/v1/review/media/{id}/audio/{track}/{block}.wav` liefert 10 Sekunden als 16-Bit-WAV (48 kHz, Stereo, exakter Kopf). Test `TestAudioProxyTracksAndBlocksAreTimeAccurate` prüft Toneinsatz (±1 Bild), Stereo-Pegel, Randblock und Fehlerfälle.
+- **Browser** (`ui/modules/review/audio.ts`): Web Audio, Video bleibt stumm. Spurwahl `A1…An` (Taste 1–9, Umschalt = Solo), Lautstärke. **Wiedergabe** vorwärts/rückwärts bei −4× … +4× (Tonhöhe folgt dem Tempo, darüber stumm); **Einzelbild/Jog/Zeitleiste**: je Bildschritt ein kurzes Stück (90 ms ab Bildbeginn) mit kurzer Blende. Die Tonuhr wird alle 0,5 s mit dem Video abgeglichen (> 60 ms Abweichung → neu ansetzen). Rückwärts über umgekehrte Pufferkopien.
+- **Prüfung:** Planung gegen Mock-AudioContext (`audio_test.ts`: lückenlose Stücke über Blockgrenzen, Rückwärts-Offsets, Scrub-Stück, Spurwahl/Solo). **Nicht** im echten Browser gehört/geprüft — das steht aus (Neustart des Orchestrators, UI-Bundle bauen).
+- **Grenzen:** erster Ton nach dem Springen erscheint, sobald der Block geladen ist (ca. 50–150 ms, danach aus dem Zwischenspeicher); ein ursprünglicher Versatz zwischen Bild und Ton der Quelle wird nicht abgebildet (wie bisher).
