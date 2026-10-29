@@ -89,7 +89,7 @@ impl Engine for WhisperHttp {
             .post(&format!("{}/inference", self.base_url.trim_end_matches('/')))
             .header("Content-Type", &format!("multipart/form-data; boundary={boundary}"))
             .send(&body[..])
-            .map_err(|e| format!("Engine nicht erreichbar: {e}"))?;
+            .map_err(|e| format!("Engine nicht erreichbar ({}): {e} — Engine starten oder in den Instanz-Optionen OMP_ASR_BIN und OMP_ASR_MODEL setzen (docs/ASR-UNTERTITEL.md)", self.base_url))?;
         let status = resp.status().as_u16();
         let text = resp.body_mut().read_to_string().map_err(|e| e.to_string())?;
         if status != 200 {
@@ -104,7 +104,7 @@ impl Engine for WhisperHttp {
 
     fn check(&self) -> Result<(), String> {
         // whisper-server liefert auf GET / eine Seite; jede HTTP-Antwort heißt „läuft“.
-        self.agent(3).get(&self.base_url).call().map(|_| ()).map_err(|e| format!("Engine nicht erreichbar: {e}"))
+        self.agent(3).get(&self.base_url).call().map(|_| ()).map_err(|e| format!("Engine nicht erreichbar ({}): {e} — OMP_ASR_BIN und OMP_ASR_MODEL setzen oder Engine starten", self.base_url))
     }
 }
 
