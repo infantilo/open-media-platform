@@ -3508,7 +3508,26 @@ fn execute_child(
         let node_id = remote::resolve_node_id_by_label(&store.registry, label)
             .ok_or_else(|| format!("Ziel-Node „{label}\u{201c} nicht gefunden"))?;
         let params = if stop { obj(&child.stop_params) } else { obj(&child.params) };
-        return store.proxy_client(node_id).invoke(method, params).map_err(|e| e.to_string());
+        let client = store.proxy_client(node_id);
+        // Kaltstart: der Recorder ist nach dem Workflow-Start einige Sekunden noch nicht an den Mischer
+        // angebunden („keine Quelle verbunden“). Beim Start kurz wiederholen statt eine leere Aufnahme zu riskieren.
+        let attempts = if stop { 1 } else { 8 };
+        let mut last = String::new();
+        for attempt in 0..attempts {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+            }
+            match client.invoke(method, params.clone()) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    last = e.to_string();
+                    if !last.contains("keine Quelle verbunden") {
+                        break;
+                    }
+                }
+            }
+        }
+        return Err(last);
     }
     if child.kind == ChildType::ChannelTrigger {
         if stop {

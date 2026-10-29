@@ -47,6 +47,8 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 pub enum RemoteError {
     Request(String),
     Status(u16),
+    /// Statuscode plus der vom Ziel-Node gelieferte Fehlertext (z. B. „keine Quelle verbunden“).
+    Rejected(u16, String),
     UnexpectedBody,
 }
 
@@ -55,6 +57,7 @@ impl fmt::Display for RemoteError {
         match self {
             RemoteError::Request(e) => write!(f, "remote: {e}"),
             RemoteError::Status(code) => write!(f, "remote: unexpected status {code}"),
+            RemoteError::Rejected(code, detail) => write!(f, "{detail} (HTTP {code})"),
             RemoteError::UnexpectedBody => write!(f, "remote: unexpected response body"),
         }
     }
@@ -205,12 +208,24 @@ impl ProxyClient {
         match ureq::post(&url)
             .config()
             .timeout_global(Some(CALL_TIMEOUT))
+            .http_status_as_error(false)
             .build()
             .header("Authorization", &auth_header)
             .send_json(args)
         {
-            Ok(_) => Ok(()),
-            Err(ureq::Error::StatusCode(code)) => Err(RemoteError::Status(code)),
+            Ok(mut resp) => {
+                let status = resp.status().as_u16();
+                if (200..300).contains(&status) {
+                    return Ok(());
+                }
+                let text = resp.body_mut().read_to_string().unwrap_or_default();
+                let detail = text.trim();
+                if detail.is_empty() {
+                    Err(RemoteError::Status(status))
+                } else {
+                    Err(RemoteError::Rejected(status, detail.chars().take(300).collect()))
+                }
+            }
             Err(e) => Err(RemoteError::Request(e.to_string())),
         }
     }
