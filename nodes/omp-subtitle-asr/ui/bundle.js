@@ -7,7 +7,7 @@ const T = (() => {
       "asr.noTarget": "— keiner —", "asr.mixer": "Bildmischer (Keyer)", "asr.track": "Spur mitschreiben (SRT)", "asr.trackName": "Spurname", "asr.trackStart": "● Spur starten",
       "asr.trackStop": "■ Spur beenden", "asr.trackOn": "Spur läuft: {name}", "asr.last": "Zuletzt erkannt", "asr.none": "noch nichts erkannt",
       "asr.stats": "Segmente {segments} · verworfen {dropped} · Fehler {errors} · letzte Erkennung {lastLatencyMs} ms", "asr.clear": "Liste leeren",
-      "asr.idle": "wartet auf Audioquelle", "asr.credit": "Spracherkennung: whisper.cpp und Whisper-Modelle (MIT-Lizenz). Lizenztexte liegen im Paket.", "asr.model": "Modell", "asr.starting": "Engine lädt …", "asr.modelHint": "Größere Modelle erkennen genauer, brauchen aber mehr Rechenzeit; nach dem Wechsel lädt die Engine einige Sekunden.", "asr.noModel": "Engine läuft nicht im Node", "asr.listening": "hört zu", "asr.transcribing": "erkennt …", "asr.engineOk": "bereit",
+      "asr.idle": "wartet auf Audioquelle", "asr.powered": "Powered by Whisper", "asr.credit": "Spracherkennung: whisper.cpp und Whisper-Modelle (MIT-Lizenz). Lizenztexte liegen im Paket.", "asr.model": "Modell", "asr.starting": "Engine lädt …", "asr.modelHint": "Größere Modelle erkennen genauer, brauchen aber mehr Rechenzeit; nach dem Wechsel lädt die Engine einige Sekunden.", "asr.noModel": "Engine läuft nicht im Node", "asr.listening": "hört zu", "asr.transcribing": "erkennt …", "asr.engineOk": "bereit",
       "asr.hint": "Der Text erscheint mit einigen Sekunden Verzug (nach dem Sprechen); die Spur trägt die echten Sprechzeiten.",
     },
     en: {
@@ -16,7 +16,7 @@ const T = (() => {
       "asr.noTarget": "— none —", "asr.mixer": "Video mixer (keyer)", "asr.track": "Write track (SRT)", "asr.trackName": "Track name", "asr.trackStart": "● Start track",
       "asr.trackStop": "■ Stop track", "asr.trackOn": "Track running: {name}", "asr.last": "Last recognised", "asr.none": "nothing recognised yet",
       "asr.stats": "Segments {segments} · dropped {dropped} · errors {errors} · last recognition {lastLatencyMs} ms", "asr.clear": "Clear list",
-      "asr.idle": "waiting for audio source", "asr.credit": "Speech recognition: whisper.cpp and Whisper models (MIT licence). Licence texts are included in the package.", "asr.model": "Model", "asr.starting": "Engine loading …", "asr.modelHint": "Larger models recognise more accurately but need more processing time; after a change the engine loads for a few seconds.", "asr.noModel": "Engine does not run inside the node", "asr.listening": "listening", "asr.transcribing": "recognising …", "asr.engineOk": "ready",
+      "asr.idle": "waiting for audio source", "asr.powered": "Powered by Whisper", "asr.credit": "Speech recognition: whisper.cpp and Whisper models (MIT licence). Licence texts are included in the package.", "asr.model": "Model", "asr.starting": "Engine loading …", "asr.modelHint": "Larger models recognise more accurately but need more processing time; after a change the engine loads for a few seconds.", "asr.noModel": "Engine does not run inside the node", "asr.listening": "listening", "asr.transcribing": "recognising …", "asr.engineOk": "ready",
       "asr.hint": "Text appears a few seconds after speech; the track carries the real speaking times.",
     },
   };
@@ -78,6 +78,7 @@ class OmpSubtitleAsrPanel extends HTMLElement {
 
     shadow.append(
       style, select,
+      el("div", { className: "row" }, el("span", { className: "chip", style: "font-weight:600" }, T("asr.powered"))),
       el("div", { className: "row" }, el("label", {}, T("asr.status")), statusChip, el("label", { style: "min-width:0" }, T("asr.engine")), engineChip),
       el("div", { className: "row" }, el("label", {}, T("asr.model")), model),
       el("div", { className: "row" }, el("label", {}, T("asr.enabled")), enabled),
