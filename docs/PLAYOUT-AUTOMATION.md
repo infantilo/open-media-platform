@@ -325,3 +325,8 @@ Channel-Snapshot (überlebt Neustarts). Grenze: `channelStop` kommt nur bei geor
 | Subtitle-Engine | Untertitel-Engine im Grafik-Node (SRT/VTT) + Child `SUBTITLE` (P9.4) |
 
 Der OMP-Adapter-Sidecar `omp-pipeline-controller` bleibt unverändert.
+
+
+## Bildgenaue Grafik-Einblendung (Messung)
+
+Grafik-Kinder gehen mit 300 ms Vorlauf und `atUtcMs` an den Grafik-Node, der den Befehl zur Sollzeit abzüglich `OMP_OGRAF_RENDER_LATENCY_MS` (Standard 110 ms) ausführt. Gemessen am Fill-Flow (`tools/ograf-frame-e2e/probe.py`): sichtbares Bild bei −20…+31 ms um die Sollzeit (Bildlänge 40 ms bei 25 fps). Die Latenz hängt von Rechner, Auflösung und Vorlage ab — nachmessen und die Option anpassen. Der erste Aufruf einer Vorlage nach dem Start ist langsamer (Vorlage wird geladen).

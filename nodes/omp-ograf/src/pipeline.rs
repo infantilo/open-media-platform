@@ -101,7 +101,9 @@ pub enum Command {
 
 /// Wartet bis `at_utc_ms` (abzüglich Render-Latenz); längstens 5 s, damit ein falscher Zeitstempel die Pipeline nie blockiert.
 fn wait_until_utc_ms(at_utc_ms: i64) {
-    let latency: i64 = std::env::var("OMP_OGRAF_RENDER_LATENCY_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    // Standard 110 ms: gemessen 2026-10-29 (Dev-Rechner, 720p/25, Vorlage „subtitle“): das erste sichtbare Bild folgt dem Befehl ca. 118 ms
+    // später; mit diesem Abzug lag es bei −20…+31 ms um die Sollzeit (`tools/ograf-frame-e2e`). Je Rechner nachmessen.
+    let latency: i64 = std::env::var("OMP_OGRAF_RENDER_LATENCY_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(110);
     let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64);
     let wait = at_utc_ms - latency - now_ms;
     if wait > 0 {

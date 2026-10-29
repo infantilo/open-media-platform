@@ -8,6 +8,8 @@
 //! Mixer-DSK-Anschluss (Empfängerseite) ist K5-Teil-2.
 
 mod layers;
+#[cfg(test)]
+mod frame_probe;
 mod pipeline;
 mod subtitles;
 mod templates;

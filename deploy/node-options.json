@@ -1759,6 +1759,15 @@
   ],
   "omp-ograf": [
     {
+      "key": "OMP_OGRAF_RENDER_LATENCY_MS",
+      "i18n": { "en": {"label": "Render latency (ms)", "description": "Time from a timed show/hide command to the first visible frame. The node executes timed commands this much earlier so the graphic appears on the target frame. Default 110, measured on a dev machine; re-measure per machine with tools/ograf-frame-e2e.", "group": "Timing"} },
+      "label": "Render-Latenz (ms)",
+      "type": "string",
+      "description": "Zeit vom zeitgenauen show/hide-Befehl bis zum ersten sichtbaren Bild. Der Node führt zeitgenaue Befehle um diesen Betrag früher aus, damit die Grafik auf dem Soll-Bild erscheint. Standard 110, gemessen auf einem Entwicklungsrechner; je Rechner mit tools/ograf-frame-e2e nachmessen.",
+      "default": "110",
+      "group": "Zeitverhalten"
+    },
+    {
       "key": "OMP_OGRAF_TEMPLATES",
       "i18n": { "en": {"label": "Template directory", "description": "Directory with the OGraf graphics templates.", "group": "Media and files"} },
       "label": "Vorlagenverzeichnis",

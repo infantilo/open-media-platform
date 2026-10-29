@@ -3880,6 +3880,12 @@ fn grain_rate_of(def: &str) -> (i64, i64) {
 
 impl MxlDataInput {
     pub fn new(context: Arc<MxlContext>, flow_id: &str, on_grain: impl Fn(&[u8]) + Send + 'static) -> Result<Self, String> {
+        Self::new_indexed(context, flow_id, move |_, payload| on_grain(payload))
+    }
+
+    /// Wie [`Self::new`], der Rückruf bekommt zusätzlich den Grain-Index (→ `MxlContext::index_to_ns` mit der Rate des Flows).
+    /// Taugt für jeden Grain-Flow, auch Video (Frame-Messungen).
+    pub fn new_indexed(context: Arc<MxlContext>, flow_id: &str, on_grain: impl Fn(u64, &[u8]) + Send + 'static) -> Result<Self, String> {
         let def = context.flow_def(flow_id)?;
         let (num, den) = grain_rate_of(&def);
         let rate = mxl_sys::Rational { numerator: num, denominator: den };
@@ -3914,7 +3920,7 @@ impl MxlDataInput {
                         }
                         // Teil-Grains überspringen wir bewusst nicht aus: ein Daten-Grain hat eine Slice.
                         if grain.payload.len() >= crate::anc::HEADER_LEN {
-                            on_grain(grain.payload);
+                            on_grain(index, grain.payload);
                             flowed_t.store(true, Ordering::Relaxed);
                         }
                         index += 1;
