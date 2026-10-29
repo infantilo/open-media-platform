@@ -23,6 +23,15 @@ pub struct Config {
     pub model: String,
     /// Datei, in der die im Panel gewählte Modellwahl bleibt (leer = nicht merken).
     pub state_file: Option<PathBuf>,
+    /// Audio-Kontext der Engine (`-ac`, Einheit 20 ms; 0 = volles 30-s-Fenster). Whisper rechnet sonst immer 30 s, auch für einen 5-s-Abschnitt;
+    /// ein auf die längsten Abschnitte zugeschnittenes Fenster spart bei `small` gemessen über die Hälfte der Rechenzeit.
+    pub audio_ctx: u32,
+}
+
+/// Audio-Kontext für Abschnitte bis `max_segment_ms` (plus Vor-/Nachlauf), auf 64 gerundet, mindestens 256, höchstens 1500 (= 30 s).
+pub fn audio_ctx_for(max_segment_ms: u32) -> u32 {
+    let frames = (max_segment_ms + 2_000) / 20;
+    (frames.div_ceil(64) * 64).clamp(256, 1500)
 }
 
 struct State {
@@ -131,7 +140,11 @@ impl EngineManager {
             _ => lib_dir.display().to_string(),
         };
         let mut cmd = Command::new(&bin);
-        cmd.args(["-m", &path.to_string_lossy(), "--host", "127.0.0.1", "--port", &self.port.to_string(), "-t", &self.cfg.threads.to_string()])
+        cmd.args(["-m", &path.to_string_lossy(), "--host", "127.0.0.1", "--port", &self.port.to_string(), "-t", &self.cfg.threads.to_string()]);
+        if self.cfg.audio_ctx > 0 && self.cfg.audio_ctx < 1500 {
+            cmd.args(["-ac", &self.cfg.audio_ctx.to_string()]);
+        }
+        cmd
             .env("LD_LIBRARY_PATH", ld)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -209,5 +222,25 @@ impl Engine for EngineManager {
         }
         // `starting:` kennzeichnet „lädt noch“ (kein Fehler): das Modell braucht einige Sekunden
         self.http().check().map_err(|_| format!("starting: Engine lädt Modell {} …", self.current_model()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn audio_context_fits_the_longest_segment_with_margin() {
+        assert_eq!(audio_ctx_for(8_000), 512); // 10 s → 500 Rahmen → 512
+        assert_eq!(audio_ctx_for(3_000), 256); // Untergrenze
+        assert_eq!(audio_ctx_for(40_000), 1500); // Obergrenze = volles Fenster
+    }
+
+    #[test]
+    fn model_names_come_from_the_file_names() {
+        assert_eq!(model_name(Path::new("x/ggml-small.bin")), Some("small".into()));
+        assert_eq!(model_name(Path::new("x/ggml-large-v3.bin")), Some("large-v3".into()));
+        assert_eq!(model_name(Path::new("x/other.bin")), None);
+        assert!(preference("small") < preference("base") && preference("base") < preference("large-v3"));
     }
 }

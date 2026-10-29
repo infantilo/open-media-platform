@@ -559,6 +559,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 bin: std::env::var("OMP_ASR_BIN").ok().filter(|v| !v.trim().is_empty()).map(Into::into),
                 threads: env_or("OMP_ASR_THREADS", "4").parse().unwrap_or(4),
                 model: env_or("OMP_ASR_MODEL", ""),
+                // Standard: Fenster passend zum längsten Abschnitt; OMP_ASR_AUDIO_CTX=0 = volles 30-s-Fenster (genauer, langsamer)
+                audio_ctx: env_or("OMP_ASR_AUDIO_CTX", "").parse().unwrap_or_else(|_| manager::audio_ctx_for(env_or("OMP_ASR_MAX_SEGMENT_MS", "8000").parse().unwrap_or(8000))),
             };
             match manager::EngineManager::start(cfg) {
                 Ok(m) => {

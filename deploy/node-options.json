@@ -1266,6 +1266,14 @@
   ],
   "omp-subtitle-asr": [
       {
+          "key": "OMP_ASR_AUDIO_CTX",
+          "i18n": {"en": {"label": "Audio context (engine window)", "description": "Window of the engine in units of 20 ms (512 = 10 s). Empty = automatic, fitted to the longest segment. 0 = full 30 s window (slightly more accurate, much slower). Measured: model small 11 s → 3 s per 8 s segment.", "group": "Speech recognition"}},
+          "label": "Audio-Kontext (Engine-Fenster)",
+          "type": "string",
+          "description": "Fenster der Engine in Einheiten zu 20 ms (512 = 10 s). Leer = automatisch passend zum längsten Abschnitt. 0 = volles 30-s-Fenster (etwas genauer, deutlich langsamer). Gemessen: Modell small 11 s → 3 s je 8-s-Abschnitt.",
+          "group": "Spracherkennung"
+      },
+      {
           "key": "OMP_ASR_FPS",
           "i18n": {
               "en": {
