@@ -16,7 +16,7 @@
 //! kein Rückkanal von der Seite in die Pipeline nötig für Teil 1.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -42,26 +42,10 @@ pub const HEIGHT: u32 = 720;
 pub const FRAMERATE_NUMERATOR: u32 = 25;
 pub const FRAMERATE_DENOMINATOR: u32 = 1;
 
-/// Kapitel 15 Teil 4 (docs/END-GOAL-FEATURES.md §15.4, Nutzerentscheidung
-/// 2026-07-20): nur **Fill** bekommt einen Lowres-Begleiter, **Key**
-/// bewusst nicht — Multiviewer/Vorschau zeigen immer nur ein fertiges
-/// Bild, nie eine Echtzeit-Komposition; eine Key-Ebene allein (reines
-/// Alpha-Matte) ist als Vorschau-Kachel nicht aussagekräftig, und kein
-/// Node compositiert Fill+Key heute tatsächlich in Auflösungs-
-/// sensitiver Weise (der Mixer-Keyer ist weiterhin eine synthetische
-/// DSK-Farbfläche, kein echter Fill+Key-Verbraucher). Gleiche
-/// Auflösung/Technik wie `omp-source`/`omp-player`: fester
-/// `MxlVideoOutput::set_active(bool)`-Schalter, kein dynamisches
-/// Pad-Relinking nötig (der `tee`-Zweig existiert immer, nur das
-/// tatsächliche Schreiben von Grains ist referenzgezählt gated).
-pub const LOWRES_WIDTH: u32 = 320;
-pub const LOWRES_HEIGHT: u32 = 180;
-
 pub struct Config {
     pub domain: String,
     pub fill_flow_id: String,
     pub key_flow_id: String,
-    pub lowres_flow_id: String,
     pub label: String,
     pub harness_url: String,
     pub width: u32,
@@ -448,9 +432,6 @@ struct Pipeline {
     key_blank: Arc<BlankProbe>,
     _mxl_fill: MxlVideoOutput,
     _mxl_key: MxlVideoOutput,
-    lowres_output: Arc<MxlVideoOutput>,
-    lowres_valve: gst::Element,
-    lowres_active_count: Arc<AtomicUsize>,
 }
 
 impl Pipeline {
@@ -509,38 +490,6 @@ impl Pipeline {
         gst::Element::link_many([&tee, &fill_queue, &fill_convert_head])
             .map_err(|e| PipelineError(format!("link fill branch: {e}")))?;
 
-        // Kapitel 15 Teil 4: vierter `tee`-Zweig für die Fill-Lowres-
-        // Vorschau (nur Fill, s. `LOWRES_WIDTH`-Doku) — `MxlVideoOutput::
-        // new` unten baut selbst videoconvert/videoscale/videorate/
-        // capsfilter auf `LOWRES_WIDTH`×`LOWRES_HEIGHT` ein, hier reicht
-        // ein reiner `queue`-Tap (identisch zu omp-source/omp-player).
-        let lowres_queue = gst::ElementFactory::make("queue")
-            .build()
-            .map_err(|e| PipelineError(format!("queue (lowres): {e}")))?;
-        // Ventil AM KOPF des Zweigs (zu, solange niemand die Vorschau
-        // aktiviert): der MxlVideoOutput schaltet sonst erst am ENDE seiner
-        // Kette ab, die volle 720p-Wandlung lief trotzdem. Danach zuerst
-        // auf Vorschaugröße skalieren, dann wandeln (statt 720p→v210→klein).
-        let lowres_valve = gst::ElementFactory::make("valve")
-            .property("drop", true)
-            .build()
-            .map_err(|e| PipelineError(format!("valve (lowres): {e}")))?;
-        let lowres_scale = gst::ElementFactory::make("videoscale")
-            .build()
-            .map_err(|e| PipelineError(format!("videoscale (lowres): {e}")))?;
-        let lowres_caps = gst::ElementFactory::make("capsfilter")
-            .property("caps", bgra_caps(LOWRES_WIDTH, LOWRES_HEIGHT))
-            .build()
-            .map_err(|e| PipelineError(format!("capsfilter (lowres): {e}")))?;
-        pipeline
-            .add(&lowres_queue)
-            .and_then(|()| pipeline.add(&lowres_valve))
-            .and_then(|()| pipeline.add(&lowres_scale))
-            .and_then(|()| pipeline.add(&lowres_caps))
-            .map_err(|e| PipelineError(format!("add lowres elements: {e}")))?;
-        gst::Element::link_many([&tee, &lowres_queue, &lowres_valve, &lowres_scale, &lowres_caps])
-            .map_err(|e| PipelineError(format!("link lowres branch: {e}")))?;
-
         let mxl_context = Arc::new(
             MxlContext::new(&config.domain)
                 .map_err(|e| PipelineError(format!("MxlContext::new: {e}")))?,
@@ -561,26 +510,6 @@ impl Pipeline {
         )
         .map_err(PipelineError)?;
         mxl_fill.set_active(true);
-
-        // Kapitel 15 Teil 4: der Lowres-Sender wird bewusst NICHT
-        // `set_active(true)` — bleibt zu, bis `PipelineHandle::
-        // activate_lowres_preview()` (referenzgezählt) ihn öffnet, exakt
-        // dasselbe Muster wie `omp-source`/`omp-player`.
-        let lowres_output = Arc::new(
-            MxlVideoOutput::new(
-                &pipeline,
-                &lowres_caps,
-                mxl_context.clone(),
-                &config.lowres_flow_id,
-                &format!("{} Fill Lowres", config.label),
-                LOWRES_WIDTH,
-                LOWRES_HEIGHT,
-                FRAMERATE_NUMERATOR,
-                FRAMERATE_DENOMINATOR,
-                Arc::new(AtomicU64::new(0)),
-            )
-            .map_err(PipelineError)?,
-        );
 
         let key_bridge_running = Arc::new(AtomicBool::new(true));
         let key_bridge_heartbeat = Arc::new(AtomicU64::new(0));
@@ -675,9 +604,6 @@ impl Pipeline {
             key_blank,
             _mxl_fill: mxl_fill,
             _mxl_key: mxl_key,
-            lowres_output,
-            lowres_valve,
-            lowres_active_count: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -701,9 +627,6 @@ impl Pipeline {
 pub struct PipelineHandle {
     commands: std::sync::mpsc::Sender<Command>,
     page_ready: Arc<AtomicBool>,
-    lowres_output: Arc<MxlVideoOutput>,
-    lowres_valve: gst::Element,
-    lowres_active_count: Arc<AtomicUsize>,
     key_bridge_heartbeat: Arc<AtomicU64>,
     main_loop_heartbeat: Arc<AtomicU64>,
 }
@@ -729,38 +652,10 @@ impl PipelineHandle {
         self.main_loop_heartbeat.clone()
     }
 
-    /// Aktiviert die Fill-Lowres-Vorschau referenzgezählt (Kapitel 15
-    /// Teil 4) — identisches Muster zu `omp-source`/`omp-player`: erst
-    /// der Übergang 0→1 schreibt tatsächlich Grains, jeder weitere
-    /// Aufruf erhöht nur den Zähler.
-    pub fn activate_lowres_preview(&self) {
-        if self.lowres_active_count.fetch_add(1, Ordering::SeqCst) == 0 {
-            self.lowres_valve.set_property("drop", false);
-            self.lowres_output.set_active(true);
-        }
-    }
-
-    /// Gibt eine Aktivierung wieder frei; schaltet erst ab, wenn der
-    /// Zähler auf 0 zurückfällt. Sättigt bei 0 (kein Unterlauf durch
-    /// einen unbalancierten zusätzlichen Aufruf).
-    pub fn release_lowres_preview(&self) {
-        let prev = self
-            .lowres_active_count
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |c| Some(c.saturating_sub(1)))
-            .unwrap_or(0);
-        if prev == 1 {
-            self.lowres_output.set_active(false);
-            self.lowres_valve.set_property("drop", true);
-        }
-    }
-
-    pub fn lowres_preview_active(&self) -> bool {
-        self.lowres_active_count.load(Ordering::SeqCst) > 0
-    }
 }
 
 /// Nutzerauftrag "ograf burns cpu": `wpesrc`+`tee`+alle drei Branches
-/// (Fill/Key/Lowres) rendern/verteilen bislang UNBEDINGT mit voller
+/// (Fill/Key) rendern/verteilen bislang UNBEDINGT mit voller
 /// Auflösung bei 25fps weiter, auch wenn nichts sichtbar ist (`show`/
 /// `hide` schalten bisher nur CSS auf der Seite um, s. Moduldoku)
 /// — live gemessen: dominiert von GStreamers eigenen `tee`/`queue`-
@@ -870,9 +765,6 @@ pub fn run(
     let _ = ready.send(Ok(PipelineHandle {
         commands: commands_tx,
         page_ready: pipeline.page_ready.clone(),
-        lowres_output: pipeline.lowres_output.clone(),
-        lowres_valve: pipeline.lowres_valve.clone(),
-        lowres_active_count: pipeline.lowres_active_count.clone(),
         key_bridge_heartbeat: pipeline.key_bridge_heartbeat.clone(),
         main_loop_heartbeat,
     }));

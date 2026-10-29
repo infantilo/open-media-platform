@@ -4035,11 +4035,12 @@ impl SubtitleInput {
     }
 
     /// Zustand für die Node-Diagnose (`omp_node_sdk::diag`, gleiche Form wie `diag::snapshot`): ein Glied „Untertitel-Eingang“, das
-    /// Playing zeigt, wenn Grains des verbundenen Flows ankommen, und Null, solange nichts verbunden ist.
+    /// Playing zeigt, wenn Grains des verbundenen Flows ankommen; solange nichts verbunden ist, bleibt der Zustand leer
+    /// (ein unbenutzter optionaler Eingang ist kein Fehler und löst keinen Diagnose-Hinweis aus).
     pub fn diag_snapshot(&self) -> serde_json::Value {
         let flow = self.connected_flow_id();
         let (state, text) = if flow.is_empty() {
-            ("Null", String::new())
+            ("", String::new())
         } else if self.flowed() {
             ("Playing", self.text())
         } else {
