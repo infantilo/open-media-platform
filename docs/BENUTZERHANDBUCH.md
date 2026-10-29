@@ -976,7 +976,7 @@ Der Viewer zeigt die Untertitel auch, wenn sein Untertitel-Eingang am CEA-608-Au
 
 **Alarm-Symbol im Flow-Editor.** Auf der Kachel einer Instanz erscheint ein ⚠, wenn sie abgestürzt ist, schon neu gestartet wurde oder offline ist; ein Klick öffnet die Diagnose.
 
-**Nodes als Container-Pakete.** Auto-Untertitel, Grafik (OGraf) und Intercom lassen sich als Container-Image mit allem Zubehör paketieren (`deploy/container/build.sh <Typ>`, Import `import.sh`, Entfernen `uninstall.sh`). Das Entfernen löscht Image und – bei der letzten Version – das Datenvolumen des Nodes. Der Intercom-Container nutzt das Host-Netz, damit WebRTC erreichbar bleibt. Die Standard-Installation startet Grafik und Intercom weiterhin als normale Programme.
+**Nodes als Container-Pakete.** Auto-Untertitel, Grafik (OGraf) und Intercom lassen sich als Container-Image mit allem Zubehör paketieren (`deploy/container/build.sh <Typ>`, Import `import.sh`, Entfernen `uninstall.sh`). Das Entfernen löscht Image und – bei der letzten Version – das Datenvolumen des Nodes. Der Intercom-Container nutzt das Host-Netz, damit WebRTC erreichbar bleibt. Die Standard-Installation startet Grafik und Intercom weiterhin als normale Programme. Die Container-Pakete stehen daneben im Katalog als „OGraf Grafik (Container)“ und „Intercom (Container)“ (Typen `omp-ograf-pkg`, `omp-intercom-pkg`; Import mit `OMP_IMPORT_TYPE=omp-ograf-pkg sh deploy/container/import.sh omp-ograf`, Entfernen mit `uninstall.sh omp-ograf-pkg`).
 
 ## 6. Alarme
 
