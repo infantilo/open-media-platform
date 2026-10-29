@@ -22,11 +22,27 @@ MXL-Audio ─ Pipeline (mono, 16 kHz) ─ Segmentierer (Sprechpausen) ─ Engine
 
 Erkennung läuft **nach** dem Sprechen: Verzug = Rest des Abschnitts + Rechenzeit (gemessen mit Modell `base`, 3 Threads: ≈ 0,4 × Echtzeit, also ~3 s für 8 s Audio). Live erscheint der Text deshalb mit einigen Sekunden Verzug; die SRT-Spur trägt dagegen die tatsächlichen Sprechzeiten. Für Sendebetrieb mit festen Sprechzeiten die Spur aufnehmen und danach als Datei-Untertitel abspielen.
 
-## Engine (gehört zum Node)
+## Paket: Node, Engine und Modelle als ein Container-Image
+
+Der Auto-Untertitel-Node ist ein **in sich geschlossenes, importierbares Paket**: ein Podman-Image mit dem Node, der Spracherkennungs-Engine (whisper.cpp) und den Modellen (`small`, `base`). Wer das Image bekommt, braucht sonst nichts — keine Installation von Engine oder Modellen auf dem Host. Es läuft wie jeder Container-Node des Systems (MXL-Verzeichnis eingehängt, Registry über `host.containers.internal`).
+
+```
+sh deploy/subtitle-asr/build.sh      # Image bauen (Node + Engine + Modelle aus data/asr-engine), Größe ca. 0,7 GB
+sh deploy/subtitle-asr/import.sh     # als Node-Typ „Auto-Untertitel“ importieren (Admin; mit Aufnahmeprüfung)
+sh deploy/subtitle-asr/uninstall.sh  # vollständig entfernen
+```
+
+Weitergeben: `podman save -o omp-subtitle-asr.tar localhost/omp-subtitle-asr:<Version>` und beim Empfänger `podman load -i …`, danach `import.sh` (oder `POST /api/v1/catalog` mit `deploy/subtitle-asr/catalog-entry.json`, Feld `image` anpassen).
+
+**Deinstallieren** heißt: laufende Instanzen dieser Version beenden, Katalogeintrag entfernen (`DELETE /api/v1/catalog/omp-subtitle-asr?version=…`) **und das Image löschen**. Letzteres macht der Orchestrator beim Entfernen selbst (`podman rmi`, außer ein anderer Eintrag nutzt dasselbe Image); `uninstall.sh` fasst die drei Schritte zusammen. Es bleibt nichts zurück: Die Engine und die Modelle liegen nur im Image, die SRT-Spuren im (flüchtigen) Container. Wer die Spuren behalten will, lädt sie vorher über das Panel/`data/subtitles` des Containers herunter.
+
+**Container und andere Nodes:** Aufrufe an andere Nodes (Grafik-Node, Bildmischer) laufen aus dem Container über den Host-Alias (`OMP_LOOPBACK_ALIAS`, gesetzt vom Launcher), weil `127.0.0.1` im Container der Container selbst ist.
+
+## Engine im Node (auch ohne Container)
 
 Die Spracherkennungs-Engine (whisper.cpp-Server) läuft **im Node**: Beim Start des Nodes startet sie mit, auf einem eigenen freien lokalen Port (mehrere Untertitel-Nodes stören sich nicht), wird überwacht (stürzt sie ab, startet sie neu) und endet mit dem Node — auch bei hartem Abbruch. Wird ein Untertitel-Node durch einen anderen ersetzt, ist damit auch seine Engine ersetzt.
 
-**Einrichten (einmal je Rechner):** `sh tools/asr-engine/install.sh [Modell …]` legt Programm und Modelle unter `data/asr-engine/` ab (`bin/whisper-server`, `models/ggml-<Name>.bin`; Standard-Modell `small`, weitere z. B. `base`, `medium`). Vorhandene whisper.cpp-Übersetzung mit `WHISPER_SRC=<Pfad>` wiederverwenden, sonst wird geklont und gebaut (cmake, g++ nötig). Ordner abweichend: Option `OMP_ASR_HOME`. Ist nichts eingerichtet, meldet der Node den Befehl dazu.
+**Nur für den Betrieb ohne Container (Entwicklung):** `sh tools/asr-engine/install.sh [Modell …]` legt Programm und Modelle unter `data/asr-engine/` ab (`bin/whisper-server`, `models/ggml-<Name>.bin`; Standard-Modell `small`, weitere z. B. `base`, `medium`). Vorhandene whisper.cpp-Übersetzung mit `WHISPER_SRC=<Pfad>` wiederverwenden, sonst wird geklont und gebaut (cmake, g++ nötig). Ordner abweichend: Option `OMP_ASR_HOME`. Ist nichts eingerichtet, meldet der Node den Befehl dazu.
 
 **Modell wechseln:** im Panel unter „Modell“ (Methode `engine.setModel`). Die Engine lädt das neue Modell einige Sekunden (Status „Engine lädt …“, laufende Abschnitte in der Zeit entfallen); die Wahl bleibt gemerkt. Größere Modelle erkennen genauer, brauchen aber mehr Rechenzeit — die Erkennung muss schneller als Echtzeit laufen, sonst werden Abschnitte verworfen (`stats.dropped`). **Geschwindigkeit (gemessen auf einem mit Medien-Nodes ausgelasteten 8-Kern-Rechner, Last 11–14):** Whisper rechnet standardmäßig immer ein festes 30-s-Fenster, auch für einen 4-s-Abschnitt — der Encoder braucht bei `small` dann ca. 10 s, unabhängig von der Abschnittslänge, und mehr Threads helfen nicht (6–8 Threads waren bei dieser Last sogar viel langsamer). Der Node startet die Engine deshalb mit einem **zum längsten Abschnitt passenden Audio-Kontext** (`-ac`, bei 8 s Abschnitten 512 = 10-s-Fenster; Option `OMP_ASR_AUDIO_CTX`, `0` = volles Fenster). Ergebnis je 8-s-Abschnitt: `small` 11 s → **2,4–3,5 s**, `base` 3,6 s → 0,8 s, bei identischem Text im Test (englischer Satz). Kürzere Abschnitte allein bringen dagegen nichts. Abschnitte, die länger als das Fenster sind, würden abgeschnitten: `OMP_ASR_MAX_SEGMENT_MS` und Kontext bleiben deshalb gekoppelt (automatisch). Die Genauigkeit mit kleinem Fenster ist nur an einem Satz geprüft — bei Qualitätsproblemen `OMP_ASR_AUDIO_CTX=0` testen.
 

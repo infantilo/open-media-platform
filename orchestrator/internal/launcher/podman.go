@@ -118,6 +118,8 @@ func runPodmanEntry(entry CatalogEntry, id, label, launchSecret string, extraEnv
 	merged["OMP_LABEL"] = label
 	merged["OMP_HOST"] = "127.0.0.1"
 	merged["OMP_PORT"] = strconv.Itoa(port)
+	// Aufrufe an andere Nodes (deren Hrefs zeigen auf 127.0.0.1 des Hosts) gehen aus dem Container über diesen Alias (SDK: peer::rewrite_loopback)
+	merged["OMP_LOOPBACK_ALIAS"] = containerNetworkGateway
 	merged["OMP_REGISTRY_URL"] = rewriteForContainer(registryURL)
 	merged["OMP_NATS_URL"] = rewriteForContainer(natsURL)
 	// OMP_ORCHESTRATOR_URL/OMP_LAUNCH_SECRET (ARCHITECTURE.md §24.1,
@@ -222,4 +224,19 @@ func describeExitError(err error) error {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(exitErr.Stderr)))
 	}
 	return err
+}
+
+// removeContainerImage löscht ein Container-Image vom Host (`podman rmi`, ohne -f: ein noch genutztes Image bleibt). Variable, damit
+// Tests ohne Podman auskommen.
+var removeContainerImage = func(image string) error {
+	out, err := exec.Command("podman", "rmi", image).CombinedOutput()
+	if err != nil {
+		text := strings.TrimSpace(string(out))
+		// schon weg ist kein Fehler
+		if strings.Contains(text, "image not known") || strings.Contains(text, "no such image") {
+			return nil
+		}
+		return fmt.Errorf("podman rmi %s: %w (%s)", image, err, text)
+	}
+	return nil
 }

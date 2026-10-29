@@ -670,9 +670,36 @@ func (l *Launcher) RemoveCatalogEntry(nodeType, version string) error {
 	}
 
 	l.mu.Lock()
+	removed := l.importedCatalog[catalogKey(nodeType, version)]
 	delete(l.importedCatalog, catalogKey(nodeType, version))
+	stillUsed := l.imageUsedLocked(removed.Image)
 	l.mu.Unlock()
+
+	// Deinstallation heißt: auch das Image (mit Engine, Modellen …) verschwindet vom Host — es sei denn, ein anderer Eintrag nutzt es noch.
+	if removed.Image != "" && !stillUsed {
+		if err := removeContainerImage(removed.Image); err != nil {
+			return fmt.Errorf("launcher: catalog entry %q removed, but its image could not be deleted: %w", nodeType, err)
+		}
+	}
 	return nil
+}
+
+// imageUsedLocked: nutzt ein statischer oder importierter Katalog-Eintrag dieses Image? Aufrufer hält l.mu.
+func (l *Launcher) imageUsedLocked(image string) bool {
+	if image == "" {
+		return false
+	}
+	for _, e := range l.staticCatalog {
+		if e.Image == image {
+			return true
+		}
+	}
+	for _, e := range l.importedCatalog {
+		if e.Image == image {
+			return true
+		}
+	}
+	return false
 }
 
 func findStatic(entries []CatalogEntry, nodeType string) (CatalogEntry, bool) {

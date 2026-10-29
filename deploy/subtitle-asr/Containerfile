@@ -1,0 +1,28 @@
+# Auto-Untertitel (omp-subtitle-asr) als vollständiges, importierbares Microservice-Image: Node, Spracherkennungs-Engine
+# (whisper.cpp) und Modelle sind dabei. Build-Kontext stellt build.sh zusammen (node/, mxl/, engine/).
+# Gleiche Debian-Bookworm-glibc wie der Host-Build des Nodes (kein eigener Rust-Build-Stage nötig).
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      libgstreamer1.0-0 gstreamer1.0-plugins-base \
+      libunwind8 libdw1 libgomp1 libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node, MXL-Laufzeit (libmxl wird per dlopen geladen), Engine + Modelle
+COPY node/omp-subtitle-asr /opt/omp/omp-subtitle-asr
+COPY mxl/ /opt/mxl/lib/
+COPY engine/ /opt/asr-engine/
+RUN mkdir -p /data/subtitles && chmod -R a+rX /opt
+
+ENV OMP_ASR_HOME=/opt/asr-engine \
+    OMP_SUBTITLE_DIR=/data/subtitles \
+    LD_LIBRARY_PATH=/opt/mxl/lib
+WORKDIR /data
+
+ARG VERSION=dev
+LABEL org.opencontainers.image.title="omp-subtitle-asr" org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.description="OpenMediaPlatform Auto-Untertitel: Node + whisper.cpp-Engine + Modelle"
+
+ENTRYPOINT ["/opt/omp/omp-subtitle-asr"]

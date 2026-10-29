@@ -390,6 +390,7 @@ func TestImportCatalogEntryRealAdmissionCheck(t *testing.T) {
 	const image = "localhost/omp-mock-test:latest"
 	requireImage(t, image)
 
+	stubImageRemoval(t) // das Test-Image soll das Entfernen des Eintrags überleben
 	l := newWithStore(nil, "http://localhost:8010", "nats://localhost:4222", newFakeInstanceStore(), nil, nil, testCatalogStore(t))
 	entry := CatalogEntry{
 		Type:   "imported-mock",
@@ -1454,5 +1455,53 @@ func TestRestoreLocalRestartsDeadInstanceUnderSameID(t *testing.T) {
 	}
 	if _, ok := store.data["other-1"]; !ok {
 		t.Errorf("foreign-origin row must stay in the store")
+	}
+}
+
+// stubImageRemoval ersetzt `podman rmi` durch eine Aufzeichnung und liefert die Liste der gelöschten Images.
+func stubImageRemoval(t *testing.T) *[]string {
+	t.Helper()
+	var removed []string
+	orig := removeContainerImage
+	removeContainerImage = func(image string) error {
+		removed = append(removed, image)
+		return nil
+	}
+	t.Cleanup(func() { removeContainerImage = orig })
+	return &removed
+}
+
+// Deinstallation: Das Image eines importierten Nodes verschwindet mit dem Katalogeintrag — außer ein anderer Eintrag nutzt es noch.
+func TestRemoveCatalogEntryDeletesItsImageUnlessAnotherEntryUsesIt(t *testing.T) {
+	removed := stubImageRemoval(t)
+	l := newWithStore(nil, "http://localhost:8010", "nats://localhost:4222", newFakeInstanceStore(), nil, nil, testCatalogStore(t))
+	add := func(typ, version, image string) {
+		e := CatalogEntry{Type: typ, Version: version, Runner: runnerPodman, Image: image}
+		if err := l.catalog.Put(e); err != nil {
+			t.Fatal(err)
+		}
+		l.importedCatalog[catalogKey(typ, version)] = e
+	}
+	add("pkg", "1", "localhost/pkg:1")
+	add("pkg", "2", "localhost/pkg:shared")
+	add("other", "", "localhost/pkg:shared")
+
+	if err := l.RemoveCatalogEntry("pkg", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(*removed) != 1 || (*removed)[0] != "localhost/pkg:1" {
+		t.Fatalf("gelöschte Images = %v, want [localhost/pkg:1]", *removed)
+	}
+	if err := l.RemoveCatalogEntry("pkg", "2"); err != nil {
+		t.Fatal(err)
+	}
+	if len(*removed) != 1 {
+		t.Fatalf("geteiltes Image wurde gelöscht: %v", *removed)
+	}
+	if err := l.RemoveCatalogEntry("other", ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(*removed) != 2 || (*removed)[1] != "localhost/pkg:shared" {
+		t.Fatalf("gelöschte Images = %v, want das geteilte Image nach dem letzten Eintrag", *removed)
 	}
 }

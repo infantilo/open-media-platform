@@ -47,7 +47,7 @@ pub struct PeerClient {
 
 impl PeerClient {
     pub fn new(href: impl Into<String>) -> Self {
-        let mut base_url = href.into();
+        let mut base_url = rewrite_loopback(&href.into(), std::env::var("OMP_LOOPBACK_ALIAS").ok().as_deref());
         while base_url.ends_with('/') {
             base_url.pop();
         }
@@ -101,6 +101,21 @@ impl PeerClient {
     }
 }
 
+/// Läuft der Node in einem Container, ist `127.0.0.1` dort der Container selbst: Die Hrefs anderer Nodes (so in der Registry
+/// eingetragen, vom Host aus gesehen) werden dann auf den vom Launcher gesetzten Host-Alias (`OMP_LOOPBACK_ALIAS`, z. B.
+/// `host.containers.internal`) umgeschrieben. Ohne Alias (Prozess-Node) bleibt alles unverändert.
+pub fn rewrite_loopback(url: &str, alias: Option<&str>) -> String {
+    let Some(alias) = alias.filter(|a| !a.is_empty()) else { return url.to_string() };
+    for host in ["127.0.0.1", "localhost"] {
+        if let Some(rest) = url.strip_prefix("http://").and_then(|r| r.strip_prefix(host)) {
+            if rest.is_empty() || rest.starts_with(':') || rest.starts_with('/') {
+                return format!("http://{alias}{rest}");
+            }
+        }
+    }
+    url.to_string()
+}
+
 /// Löst den `href` des Node auf, der den gegebenen Sender besitzt
 /// (Sender → Device → Node, Kapitel 15 Teil 3) — `None` bei jedem
 /// Fehlschlag auf dem Weg (Sender/Device/Node inzwischen verschwunden,
@@ -112,4 +127,20 @@ pub fn resolve_owning_node_href(registry: &RegistryClient, sender_id: &str) -> O
     let device = registry.get_device(&sender.device_id).ok()?;
     let node = registry.get_node(&device.node_id).ok()?;
     Some(node.href)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rewrite_loopback;
+
+    #[test]
+    fn loopback_hosts_are_rewritten_only_with_an_alias() {
+        let a = Some("host.containers.internal");
+        assert_eq!(rewrite_loopback("http://127.0.0.1:9398/", a), "http://host.containers.internal:9398/");
+        assert_eq!(rewrite_loopback("http://localhost:80", a), "http://host.containers.internal:80");
+        assert_eq!(rewrite_loopback("http://10.0.0.5:9398/", a), "http://10.0.0.5:9398/");
+        assert_eq!(rewrite_loopback("http://127.0.0.10:1/", a), "http://127.0.0.10:1/", "kein Präfix-Treffer");
+        assert_eq!(rewrite_loopback("http://127.0.0.1:9398/", None), "http://127.0.0.1:9398/");
+        assert_eq!(rewrite_loopback("http://127.0.0.1:9398/", Some("")), "http://127.0.0.1:9398/");
+    }
 }

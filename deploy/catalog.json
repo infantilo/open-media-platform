@@ -400,23 +400,5 @@
       }
     },
     "expectedResources": "gering (wenige Prozent eines Kerns bei dutzenden Teilnehmern)"
-  },
-  {
-    "type": "omp-subtitle-asr",
-    "label": "Auto-Untertitel",
-    "runner": "process",
-    "command": [
-      "../nodes/target/release/omp-subtitle-asr"
-    ],
-    "env": {},
-    "description": "Automatische Untertitelung (Spracherkennung): liest einen MXL-Audiostream, erkennt die Sprache abschnittsweise mit einer lokalen Engine (whisper.cpp-Server) und liefert den Text live in die Untertitel-Ebene eines Grafik-Nodes (Vorlage „subtitle“) als fortlaufende SRT-Spur in data/subtitles zur Nachbearbeitung und Wiederholung sowie über zwei verdrahtbare MXL-Daten-Ausgänge: Untertitel-Text (für den Aux-Eingang „Untertitel“ von Viewer und Multiviewer) und CEA-608 im CDP (ANC-Datenspur für Gateways). Sprache einstellbar oder automatisch; der Text erscheint mit einigen Sekunden Verzug nach dem Sprechen, die Spur trägt die echten Sprechzeiten. Die Engine läuft getrennt (Einrichtung: docs/ASR-UNTERTITEL.md) — der Node startet sie auf Wunsch selbst.",
-    "i18n": {
-      "en": {
-        "label": "Auto subtitles",
-        "description": "Automatic subtitling (speech recognition): reads an MXL audio stream, recognises speech in segments with a local engine (whisper.cpp server) and delivers the text live into the subtitle layer of a graphics node (template \"subtitle\") as a running SRT track in data/subtitles for post-production and replay, and through two wireable MXL data outputs: subtitle text (for the aux input \"Subtitle\" of the viewer and multiviewer) and CEA-608 in a CDP (ANC data track for gateways). Language selectable or automatic; text appears a few seconds after speech, the track carries the real speaking times. The engine runs separately (setup: docs/ASR-UNTERTITEL.md) — the node can start it itself on request.",
-        "expectedResources": "moderate to high on the engine side (model-dependent, several cores), low in the node itself"
-      }
-    },
-    "expectedResources": "mittel bis hoch bei der Engine (modellabhängig, mehrere Kerne), gering im Node selbst"
   }
 ]
