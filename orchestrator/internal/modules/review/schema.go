@@ -7,8 +7,15 @@ func (*Module) Migrations() []module.Migration {
 	return []module.Migration{
 		{Version: 1, Name: "review-qc-conform", SQL: schemaV1},
 		{Version: 2, Name: "review-assignment", SQL: schemaV2},
+		{Version: 3, Name: "review-audio-proxy", SQL: schemaV3},
 	}
 }
+
+// schemaV3: Ton-Proxy (je Quell-Tonspur ein Stereo-Stream in einer eigenen Datei, Kapitel 43 Ton im Review-Player).
+const schemaV3 = `
+ALTER TABLE review_proxies ADD COLUMN IF NOT EXISTS audio_tracks INT NOT NULL DEFAULT 0;
+ALTER TABLE review_proxies ADD COLUMN IF NOT EXISTS audio_path TEXT NOT NULL DEFAULT '';
+`
 
 // schemaV2 (Kapitel 44): Zuweisung einer Prüfaufgabe an eine Person oder Gruppe, mit Frist. Unabhängig vom Bearbeiter (`assignee`):
 // der ist, wer die Datei gerade übernommen hat; die Zuweisung sagt, wer sie bearbeiten soll.
@@ -121,9 +128,6 @@ CREATE TABLE IF NOT EXISTS review_proxies (
     heartbeat_at TIMESTAMPTZ,
     UNIQUE (asset_id, source_rev, profile)
 );
-
-ALTER TABLE review_proxies ADD COLUMN IF NOT EXISTS audio_tracks INT NOT NULL DEFAULT 0;
-ALTER TABLE review_proxies ADD COLUMN IF NOT EXISTS audio_path TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS conform_revisions (
     id             TEXT PRIMARY KEY,
