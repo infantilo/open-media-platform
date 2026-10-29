@@ -111,6 +111,21 @@ impl Engine for WhisperHttp {
     }
 }
 
+/// Platzhalter, wenn die Engine nicht eingerichtet ist: meldet überall den Grund (z. B. den Installationsbefehl).
+pub struct Unavailable(pub String);
+
+impl Engine for Unavailable {
+    fn name(&self) -> String {
+        "nicht eingerichtet".to_string()
+    }
+    fn transcribe(&self, _pcm: &[i16], _language: &str) -> Result<String, String> {
+        Err(self.0.clone())
+    }
+    fn check(&self) -> Result<(), String> {
+        Err(self.0.clone())
+    }
+}
+
 /// Ersatz-Engine ohne Modell: liefert je Segment einen festen Text mit Länge — für Tests und Vorführungen.
 pub struct Mock;
 

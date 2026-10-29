@@ -12,6 +12,7 @@
 
 mod caption;
 mod engine;
+mod manager;
 mod outputs;
 mod output;
 mod pipeline;
@@ -174,6 +175,11 @@ fn worker(shared: Arc<Shared>, rx: Receiver<segment::Segment>, display: std::syn
                 if shared.settings.lock().expect("lock poisoned").live_display {
                     let _ = display.send(text);
                 }
+            }
+            // Engine lädt noch (Start oder Modellwechsel): kein Fehler, dieser Abschnitt entfällt
+            Err(e) if e.starts_with("starting:") => {
+                shared.set_status(e);
+                continue;
             }
             Err(e) => {
                 shared.errors_total.fetch_add(1, Ordering::Relaxed);
@@ -338,6 +344,8 @@ struct AsrStore {
     registry: RegistryClient,
     own_receiver_id: String,
     own_label: String,
+    /// Engine im Node (None bei externer Engine oder Ersatz-Engine): Modellwahl nur hier.
+    manager: Option<Arc<manager::EngineManager>>,
 }
 
 fn spec(name: &str, kind: ParamType, readonly: bool) -> ParamSpec {
@@ -356,6 +364,9 @@ impl omp_node_sdk::ParamStore for AsrStore {
                 spec("availableNodes", ParamType::String, true),
                 spec("engine", ParamType::String, true),
                 spec("engineStatus", ParamType::String, true),
+                // Modellwahl der im Node laufenden Engine: `models` = vorhandene, `model` = aktuelle (wechseln: Methode `engine.setModel`)
+                spec("models", ParamType::String, true),
+                spec("model", ParamType::String, true),
                 spec("lastText", ParamType::String, true),
                 spec("cues", ParamType::String, true),
                 spec("stats", ParamType::String, true),
@@ -372,6 +383,7 @@ impl omp_node_sdk::ParamStore for AsrStore {
                 MethodSpec { name: "track.start".to_string(), args: vec![MethodArg { name: "name".to_string(), kind: ParamType::String }] },
                 MethodSpec { name: "track.stop".to_string(), args: vec![] },
                 MethodSpec { name: "clear".to_string(), args: vec![] },
+                MethodSpec { name: "engine.setModel".to_string(), args: vec![MethodArg { name: "name".to_string(), kind: ParamType::String }] },
             ],
         }
     }
@@ -393,6 +405,8 @@ impl omp_node_sdk::ParamStore for AsrStore {
                     .unwrap_or_default()
             )),
             "engine" => Some(json!(s.engine.name())),
+            "models" => Some(json!(self.manager.as_ref().map(|m| m.models()).unwrap_or_default())),
+            "model" => Some(json!(self.manager.as_ref().map(|m| m.current_model()).unwrap_or_default())),
             "engineStatus" => Some(json!(match s.engine.check() {
                 Ok(()) => "ok".to_string(),
                 Err(e) => e,
@@ -433,7 +447,7 @@ impl omp_node_sdk::ParamStore for AsrStore {
             "targetGraphicsLabel" => s.graphics_label = value.as_str().ok_or(SetError::Unknown)?.trim().to_string(),
             "targetMixerLabel" => s.mixer_label = value.as_str().ok_or(SetError::Unknown)?.trim().to_string(),
             "trackName" => s.track_name = value.as_str().ok_or(SetError::Unknown)?.trim().to_string(),
-            "status" | "connectedFlowId" | "connectedLabel" | "availableSources" | "availableNodes" | "engine" | "engineStatus" | "lastText" | "cues"
+            "status" | "connectedFlowId" | "connectedLabel" | "availableSources" | "availableNodes" | "engine" | "engineStatus" | "models" | "model" | "lastText" | "cues"
             | "stats" | "trackActive" => return Err(SetError::ReadOnly),
             _ => return Err(SetError::Unknown),
         }
@@ -459,6 +473,13 @@ impl omp_node_sdk::ParamStore for AsrStore {
             "track.stop" => {
                 self.shared.stop_track();
                 Ok(())
+            }
+            "engine.setModel" => {
+                let name = args.get("name").and_then(Value::as_str).unwrap_or("");
+                match &self.manager {
+                    Some(m) => m.set_model(name).map_err(InvokeError::Message),
+                    None => Err(InvokeError::Message("Die Engine läuft nicht im Node (externe Engine oder Ersatz-Engine) — Modell dort wechseln".to_string())),
+                }
             }
             "clear" => {
                 self.shared.cues.lock().expect("lock poisoned").clear();
@@ -513,24 +534,6 @@ fn env_or(key: &str, fallback: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| fallback.to_string())
 }
 
-/// Startet bei Bedarf einen lokalen `whisper-server` (`OMP_ASR_BIN` + `OMP_ASR_MODEL`), wenn unter der URL keiner antwortet.
-fn maybe_spawn_engine(engine: &engine::WhisperHttp, url: &str) -> Option<std::process::Child> {
-    if engine.check().is_ok() {
-        return None;
-    }
-    let bin = std::env::var("OMP_ASR_BIN").ok()?;
-    let model = std::env::var("OMP_ASR_MODEL").ok()?;
-    let port = url.rsplit(':').next().and_then(|p| p.trim_end_matches('/').parse::<u16>().ok()).unwrap_or(8178);
-    let threads = env_or("OMP_ASR_THREADS", "4");
-    eprintln!("omp-subtitle-asr: starte Engine {bin} (Modell {model}, Port {port}, {threads} Threads)");
-    std::process::Command::new(bin)
-        .args(["-m", &model, "--host", "127.0.0.1", "--port", &port.to_string(), "-t", &threads])
-        .stdin(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| eprintln!("omp-subtitle-asr: Engine-Start fehlgeschlagen: {e}"))
-        .ok()
-}
-
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let label = env_or("OMP_LABEL", "Auto-Untertitel");
@@ -541,13 +544,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let domain = env_or("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl");
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
 
-    let asr_url = env_or("OMP_ASR_URL", "http://127.0.0.1:8178");
-    let (engine, mut engine_child): (Arc<dyn Engine>, Option<std::process::Child>) = match env_or("OMP_ASR_ENGINE", "whisper").as_str() {
-        "mock" => (Arc::new(engine::Mock), None),
+    // Engine: standardmäßig im Node (Programm und Modelle unter OMP_ASR_HOME, startet und endet mit dem Node); mit OMP_ASR_URL
+    // eine bereits laufende externe Engine; OMP_ASR_ENGINE=mock ersetzt die Erkennung für Tests.
+    let mut manager: Option<Arc<manager::EngineManager>> = None;
+    let engine: Arc<dyn Engine> = match (env_or("OMP_ASR_ENGINE", "whisper").as_str(), env_or("OMP_ASR_URL", "")) {
+        ("mock", _) => Arc::new(engine::Mock),
+        (_, url) if !url.trim().is_empty() => Arc::new(engine::WhisperHttp { base_url: url.trim().to_string() }),
         _ => {
-            let w = engine::WhisperHttp { base_url: asr_url.clone() };
-            let child = maybe_spawn_engine(&w, &asr_url);
-            (Arc::new(w), child)
+            let home = std::path::PathBuf::from(env_or("OMP_ASR_HOME", "data/asr-engine"));
+            let safe: String = label.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
+            let cfg = manager::Config {
+                state_file: Some(home.join(format!("selected-model-{safe}"))),
+                home,
+                bin: std::env::var("OMP_ASR_BIN").ok().filter(|v| !v.trim().is_empty()).map(Into::into),
+                threads: env_or("OMP_ASR_THREADS", "4").parse().unwrap_or(4),
+                model: env_or("OMP_ASR_MODEL", ""),
+            };
+            match manager::EngineManager::start(cfg) {
+                Ok(m) => {
+                    manager = Some(m.clone());
+                    m
+                }
+                Err(e) => {
+                    eprintln!("omp-subtitle-asr: {e}");
+                    Arc::new(engine::Unavailable(e))
+                }
+            }
         }
     };
 
@@ -726,6 +748,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         registry: RegistryClient::new(registry_url.clone()),
         own_receiver_id: receiver_id.clone(),
         own_label: label.clone(),
+        manager: manager.clone(),
     });
 
     let handle = omp_node_sdk::start(
@@ -780,9 +803,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for t in output_threads {
         let _ = t.join();
     }
-    if let Some(child) = engine_child.as_mut() {
-        let _ = child.kill();
-        let _ = child.wait();
+    if let Some(m) = &manager {
+        m.shutdown();
     }
     Ok(())
 }

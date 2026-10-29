@@ -1267,7 +1267,13 @@
   "omp-subtitle-asr": [
       {
           "key": "OMP_ASR_FPS",
-          "i18n": {"en": {"label": "Frame rate of the data outputs", "description": "Rate of the MXL data flows (text stream and CEA-608), e.g. 25/1 or 30000/1001. Should match the programme frame rate (CEA-608 supports 24, 25, 29.97, 30, 50, 59.94 and 60).", "group": "Speech recognition"}},
+          "i18n": {
+              "en": {
+                  "label": "Frame rate of the data outputs",
+                  "description": "Rate of the MXL data flows (text stream and CEA-608), e.g. 25/1 or 30000/1001. Should match the programme frame rate (CEA-608 supports 24, 25, 29.97, 30, 50, 59.94 and 60).",
+                  "group": "Speech recognition"
+              }
+          },
           "label": "Bildrate der Daten-Ausgänge",
           "type": "string",
           "description": "Takt der MXL-Daten-Flows (Text-Strom und CEA-608), z. B. 25/1 oder 30000/1001. Soll zur Bildrate der Sendung passen (CEA-608 kennt 24, 25, 29,97, 30, 50, 59,94 und 60).",
@@ -1290,32 +1296,47 @@
           "group": "Spracherkennung"
       },
       {
-          "key": "OMP_ASR_URL",
+          "key": "OMP_ASR_HOME",
           "i18n": {
               "en": {
-                  "label": "Engine URL",
-                  "description": "Address of the whisper server.",
+                  "label": "Engine folder",
+                  "description": "Folder with the speech engine (bin/whisper-server) and the models (models/ggml-<name>.bin). Set up with tools/asr-engine/install.sh.",
                   "group": "Speech recognition"
               }
           },
-          "label": "Engine-URL",
+          "label": "Engine-Ordner",
+          "type": "path",
+          "description": "Ordner mit der Spracherkennungs-Engine (bin/whisper-server) und den Modellen (models/ggml-<Name>.bin). Eingerichtet mit tools/asr-engine/install.sh.",
+          "default": "data/asr-engine",
+          "group": "Spracherkennung",
+          "pathKind": "dir"
+      },
+      {
+          "key": "OMP_ASR_URL",
+          "i18n": {
+              "en": {
+                  "label": "External engine (URL)",
+                  "description": "Empty (default) = the engine runs inside the node and starts/ends with it. Only set it to use an already running external whisper engine (e.g. http://127.0.0.1:8178); the model choice in the panel is then unavailable.",
+                  "group": "Speech recognition"
+              }
+          },
+          "label": "Externe Engine (URL)",
           "type": "string",
-          "description": "Adresse des whisper-Servers.",
-          "default": "http://127.0.0.1:8178",
+          "description": "Leer (Standard) = die Engine läuft im Node und startet/endet mit ihm. Nur setzen, um eine bereits laufende externe whisper-Engine zu nutzen (z. B. http://127.0.0.1:8178); dann entfällt die Modellwahl im Panel.",
           "group": "Spracherkennung"
       },
       {
           "key": "OMP_ASR_BIN",
           "i18n": {
               "en": {
-                  "label": "Engine program (autostart)",
-                  "description": "Path to whisper-server. If set (together with the model) the node starts the engine itself when none answers at the URL.",
+                  "label": "Engine program (override)",
+                  "description": "Normally empty: the node uses <engine folder>/bin/whisper-server. Only set it if the program is elsewhere.",
                   "group": "Speech recognition"
               }
           },
-          "label": "Engine-Programm (Autostart)",
+          "label": "Engine-Programm (abweichend)",
           "type": "path",
-          "description": "Pfad zu whisper-server. Gesetzt (zusammen mit dem Modell) startet der Node die Engine selbst, falls unter der URL keine antwortet.",
+          "description": "Normalerweise leer: der Node nimmt <Engine-Ordner>/bin/whisper-server. Nur setzen, wenn das Programm woanders liegt.",
           "group": "Spracherkennung",
           "pathKind": "file"
       },
@@ -1323,16 +1344,15 @@
           "key": "OMP_ASR_MODEL",
           "i18n": {
               "en": {
-                  "label": "Model file",
-                  "description": "Path to the ggml model file (e.g. ggml-small.bin). Larger = more accurate but slower; \"base\" is enough for tests, \"small\" for broadcast use.",
+                  "label": "Model (start value)",
+                  "description": "Name (small, base, …) or file path of the model at start. Empty = the remembered or best available one (small). Switchable in the panel at any time; the choice is remembered.",
                   "group": "Speech recognition"
               }
           },
-          "label": "Modelldatei",
-          "type": "path",
-          "description": "Pfad zur ggml-Modelldatei (z. B. ggml-small.bin). Größer = genauer, aber langsamer; „base“ reicht für Tests, „small“ für Sendebetrieb.",
-          "group": "Spracherkennung",
-          "pathKind": "file"
+          "label": "Modell (Startwert)",
+          "type": "string",
+          "description": "Name (small, base, …) oder Dateipfad des Modells beim Start. Leer = das gemerkte bzw. beste vorhandene (small). Im Panel jederzeit wechselbar; die Wahl bleibt gemerkt.",
+          "group": "Spracherkennung"
       },
       {
           "key": "OMP_ASR_THREADS",
@@ -1380,7 +1400,13 @@
       },
       {
           "key": "OMP_ASR_MIXER_LABEL",
-          "i18n": {"en": {"label": "Video mixer (keyer)", "description": "Label of the video mixer whose keyer receives the subtitle graphic (fill of the graphics node). Empty = do not touch the keyer.", "group": "Speech recognition"}},
+          "i18n": {
+              "en": {
+                  "label": "Video mixer (keyer)",
+                  "description": "Label of the video mixer whose keyer receives the subtitle graphic (fill of the graphics node). Empty = do not touch the keyer.",
+                  "group": "Speech recognition"
+              }
+          },
           "label": "Bildmischer (Keyer)",
           "type": "string",
           "description": "Bezeichnung des Bildmischers, dessen Keyer die Untertitel-Grafik (Fill des Grafik-Nodes) bekommt. Leer = Keyer nicht anfassen.",

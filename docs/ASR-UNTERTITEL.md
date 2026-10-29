@@ -22,17 +22,17 @@ MXL-Audio ─ Pipeline (mono, 16 kHz) ─ Segmentierer (Sprechpausen) ─ Engine
 
 Erkennung läuft **nach** dem Sprechen: Verzug = Rest des Abschnitts + Rechenzeit (gemessen mit Modell `base`, 3 Threads: ≈ 0,4 × Echtzeit, also ~3 s für 8 s Audio). Live erscheint der Text deshalb mit einigen Sekunden Verzug; die SRT-Spur trägt dagegen die tatsächlichen Sprechzeiten. Für Sendebetrieb mit festen Sprechzeiten die Spur aufnehmen und danach als Datei-Untertitel abspielen.
 
-## Engine einrichten (whisper.cpp)
+## Engine (gehört zum Node)
 
-```
-git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git
-cd whisper.cpp && cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j4
-sh models/download-ggml-model.sh small        # oder base (Test), medium (genauer, langsamer)
-```
+Die Spracherkennungs-Engine (whisper.cpp-Server) läuft **im Node**: Beim Start des Nodes startet sie mit, auf einem eigenen freien lokalen Port (mehrere Untertitel-Nodes stören sich nicht), wird überwacht (stürzt sie ab, startet sie neu) und endet mit dem Node — auch bei hartem Abbruch. Wird ein Untertitel-Node durch einen anderen ersetzt, ist damit auch seine Engine ersetzt.
 
-Im Node (Instanz-Einstellungen): `OMP_ASR_BIN` = `…/build/bin/whisper-server`, `OMP_ASR_MODEL` = `…/models/ggml-small.bin`. Der Node startet die Engine dann selbst, wenn unter `OMP_ASR_URL` (Standard `http://127.0.0.1:8178`) keine antwortet, und beendet sie mit sich. Die Bibliotheken liegen neben dem Programm (`build/bin`): ist `LD_LIBRARY_PATH` nicht gesetzt, den Pfad dorthin aufnehmen. Alternativ läuft der Server als eigener Dienst; dann nur `OMP_ASR_URL` setzen.
+**Einrichten (einmal je Rechner):** `sh tools/asr-engine/install.sh [Modell …]` legt Programm und Modelle unter `data/asr-engine/` ab (`bin/whisper-server`, `models/ggml-<Name>.bin`; Standard-Modell `small`, weitere z. B. `base`, `medium`). Vorhandene whisper.cpp-Übersetzung mit `WHISPER_SRC=<Pfad>` wiederverwenden, sonst wird geklont und gebaut (cmake, g++ nötig). Ordner abweichend: Option `OMP_ASR_HOME`. Ist nichts eingerichtet, meldet der Node den Befehl dazu.
 
-Richtwerte: `base` ≈ 140 MB, schnell, für Tests; `small` ≈ 470 MB, brauchbare Genauigkeit für Deutsch; größere Modelle brauchen deutlich mehr Rechenzeit — die Erkennung muss schneller als Echtzeit bleiben. Ohne GPU belastet die Engine mehrere Kerne (`OMP_ASR_THREADS`, `OMP_CPU_AFFINITY` zum Abgrenzen vom Sendepfad).
+**Modell wechseln:** im Panel unter „Modell“ (Methode `engine.setModel`). Die Engine lädt das neue Modell einige Sekunden (Status „Engine lädt …“, laufende Abschnitte in der Zeit entfallen); die Wahl bleibt gemerkt. Größere Modelle erkennen genauer, brauchen aber mehr Rechenzeit — die Erkennung muss schneller als Echtzeit laufen, sonst werden Abschnitte verworfen (`stats.dropped`). Mit `small` und 4 Threads brauchte ein 8-s-Abschnitt auf einem ausgelasteten Entwicklungsrechner bis ~9 s; dort ist `base` die sichere Wahl, auf einem freien Rechner (oder mit mehr Threads, `OMP_ASR_THREADS`) `small`.
+
+**Externe Engine (Ausnahme):** mit `OMP_ASR_URL` nutzt der Node eine bereits laufende Engine, dann ohne Modellwahl im Panel. `OMP_ASR_ENGINE=mock` ersetzt die Erkennung für Tests.
+
+Ohne GPU belastet die Engine mehrere Kerne (`OMP_ASR_THREADS`, `OMP_CPU_AFFINITY` zum Abgrenzen vom Sendepfad).
 
 ## Bedienung
 

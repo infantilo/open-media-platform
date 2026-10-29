@@ -7,7 +7,7 @@ const T = (() => {
       "asr.noTarget": "— keiner —", "asr.mixer": "Bildmischer (Keyer)", "asr.track": "Spur mitschreiben (SRT)", "asr.trackName": "Spurname", "asr.trackStart": "● Spur starten",
       "asr.trackStop": "■ Spur beenden", "asr.trackOn": "Spur läuft: {name}", "asr.last": "Zuletzt erkannt", "asr.none": "noch nichts erkannt",
       "asr.stats": "Segmente {segments} · verworfen {dropped} · Fehler {errors} · letzte Erkennung {lastLatencyMs} ms", "asr.clear": "Liste leeren",
-      "asr.idle": "wartet auf Audioquelle", "asr.listening": "hört zu", "asr.transcribing": "erkennt …", "asr.engineOk": "bereit",
+      "asr.idle": "wartet auf Audioquelle", "asr.model": "Modell", "asr.starting": "Engine lädt …", "asr.modelHint": "Größere Modelle erkennen genauer, brauchen aber mehr Rechenzeit; nach dem Wechsel lädt die Engine einige Sekunden.", "asr.noModel": "Engine läuft nicht im Node", "asr.listening": "hört zu", "asr.transcribing": "erkennt …", "asr.engineOk": "bereit",
       "asr.hint": "Der Text erscheint mit einigen Sekunden Verzug (nach dem Sprechen); die Spur trägt die echten Sprechzeiten.",
     },
     en: {
@@ -16,7 +16,7 @@ const T = (() => {
       "asr.noTarget": "— none —", "asr.mixer": "Video mixer (keyer)", "asr.track": "Write track (SRT)", "asr.trackName": "Track name", "asr.trackStart": "● Start track",
       "asr.trackStop": "■ Stop track", "asr.trackOn": "Track running: {name}", "asr.last": "Last recognised", "asr.none": "nothing recognised yet",
       "asr.stats": "Segments {segments} · dropped {dropped} · errors {errors} · last recognition {lastLatencyMs} ms", "asr.clear": "Clear list",
-      "asr.idle": "waiting for audio source", "asr.listening": "listening", "asr.transcribing": "recognising …", "asr.engineOk": "ready",
+      "asr.idle": "waiting for audio source", "asr.model": "Model", "asr.starting": "Engine loading …", "asr.modelHint": "Larger models recognise more accurately but need more processing time; after a change the engine loads for a few seconds.", "asr.noModel": "Engine does not run inside the node", "asr.listening": "listening", "asr.transcribing": "recognising …", "asr.engineOk": "ready",
       "asr.hint": "Text appears a few seconds after speech; the track carries the real speaking times.",
     },
   };
@@ -62,6 +62,7 @@ class OmpSubtitleAsrPanel extends HTMLElement {
     const statusChip = el("span", { className: "chip" });
     const engineChip = el("span", { className: "chip" });
     const enabled = el("input", { type: "checkbox" });
+    const model = el("select", { title: T("asr.modelHint") });
     const lang = el("select");
     for (const [v, name] of LANGS) lang.append(el("option", { value: v }, name ?? T("asr.auto")));
     const live = el("input", { type: "checkbox" });
@@ -78,6 +79,7 @@ class OmpSubtitleAsrPanel extends HTMLElement {
     shadow.append(
       style, select,
       el("div", { className: "row" }, el("label", {}, T("asr.status")), statusChip, el("label", { style: "min-width:0" }, T("asr.engine")), engineChip),
+      el("div", { className: "row" }, el("label", {}, T("asr.model")), model),
       el("div", { className: "row" }, el("label", {}, T("asr.enabled")), enabled),
       el("div", { className: "row" }, el("label", {}, T("asr.language")), lang),
       el("div", { className: "row" }, el("label", {}, T("asr.live")), live),
@@ -97,6 +99,7 @@ class OmpSubtitleAsrPanel extends HTMLElement {
 
     enabled.addEventListener("change", () => setParam("enabled", enabled.checked));
     lang.addEventListener("change", () => setParam("language", lang.value));
+    model.addEventListener("change", async () => { await call("engine.setModel", { name: model.value }); refresh(); });
     live.addEventListener("change", () => setParam("liveDisplay", live.checked));
     target.addEventListener("change", () => setParam("targetGraphicsLabel", target.value));
     mixer.addEventListener("change", () => setParam("targetMixerLabel", mixer.value));
@@ -112,14 +115,23 @@ class OmpSubtitleAsrPanel extends HTMLElement {
     let catalogKey = "";
     let catalogAt = 0;
     const refresh = async () => {
-      const [status, engineStatus, st, en, lg, ld, tg, tn, ta, lt, cl, sources, nodes, connected, tm] = await Promise.all(
-        ["status", "engineStatus", "stats", "enabled", "language", "liveDisplay", "targetGraphicsLabel", "trackName", "trackActive", "lastText", "cues", "availableSources", "availableNodes", "connectedFlowId", "targetMixerLabel"].map(getParam));
+      const [status, engineStatus, st, en, lg, ld, tg, tn, ta, lt, cl, sources, nodes, connected, tm, models, curModel] = await Promise.all(
+        ["status", "engineStatus", "stats", "enabled", "language", "liveDisplay", "targetGraphicsLabel", "trackName", "trackActive", "lastText", "cues", "availableSources", "availableNodes", "connectedFlowId", "targetMixerLabel", "models", "model"].map(getParam));
       const sKey = String(status || "idle");
       const base = sKey.split(":")[0];
       statusChip.textContent = sKey.startsWith("error") ? sKey : T("asr." + base);
       statusChip.className = "chip " + (sKey.startsWith("error") ? "err" : base === "transcribing" ? "busy" : base === "listening" ? "ok" : "");
-      engineChip.textContent = engineStatus === "ok" ? T("asr.engineOk") : String(engineStatus ?? "");
-      engineChip.className = "chip " + (engineStatus === "ok" ? "ok" : "err");
+      const loading = String(engineStatus ?? "").startsWith("starting:");
+      engineChip.textContent = engineStatus === "ok" ? T("asr.engineOk") : loading ? T("asr.starting") : String(engineStatus ?? "");
+      engineChip.className = "chip " + (engineStatus === "ok" ? "ok" : loading ? "busy" : "err");
+      const modelList = Array.isArray(models) ? models : [];
+      model.disabled = !modelList.length;
+      if (shadow.activeElement !== model) {
+        if (model.options.length !== modelList.length || [...model.options].some((o, i) => o.value !== modelList[i])) {
+          model.replaceChildren(...(modelList.length ? modelList.map((m) => el("option", { value: m }, m)) : [el("option", { value: "" }, T("asr.noModel"))]));
+        }
+        model.value = curModel || "";
+      }
       if (document.activeElement !== enabled) enabled.checked = !!en;
       if (shadow.activeElement !== lang) lang.value = lg || "de";
       live.checked = !!ld;
