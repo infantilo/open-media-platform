@@ -56,7 +56,14 @@ class OmpViewerPanel extends HTMLElement {
     const style = document.createElement("style");
     style.textContent = `
       :host { display: block; font-family: sans-serif; color: #eee; }
-      .preview-wrap { position: relative; }
+      .preview-wrap { position: relative; container-type: inline-size; }
+      /* Untertitel (Aux-Eingang): HTML-Overlay, nicht ins Bild gerendert */
+      .sub {
+        position: absolute; left: 4%; right: 4%; bottom: 14%; text-align: center; color: #fff;
+        font-size: 4.4cqw; line-height: 1.25; font-weight: 600; white-space: pre-line; pointer-events: none;
+        text-shadow: 0 0 3px #000, 0 0 3px #000, 1px 1px 2px #000;
+      }
+      .sub:empty { display: none; }
       .umd {
         position: absolute; left: 0; right: 0; bottom: 0; text-align: center;
         background: rgba(0,0,0,.6); color: #fff; font-size: 12px; padding: 2px 4px;
@@ -135,7 +142,15 @@ class OmpViewerPanel extends HTMLElement {
     wrap.className = "preview-wrap";
     const umd = document.createElement("div");
     umd.className = "umd";
-    wrap.append(img, umd);
+    const sub = document.createElement("div");
+    sub.className = "sub";
+    wrap.append(img, sub, umd);
+    const refreshSubtitle = async () => {
+      const t = await getParam("subtitle");
+      sub.textContent = t || "";
+    };
+    refreshSubtitle();
+    this._subInterval = setInterval(refreshSubtitle, 250);
     const refreshLabel = async () => {
       const l = await getParam("connectedLabel");
       umd.textContent = l || "";
@@ -315,6 +330,7 @@ class OmpViewerPanel extends HTMLElement {
     clearInterval(this._inputsInterval);
     clearInterval(this._previewInterval);
     clearInterval(this._labelInterval);
+    clearInterval(this._subInterval);
     if (this._levelsSource) this._levelsSource.close();
   }
 }

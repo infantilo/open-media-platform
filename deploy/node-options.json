@@ -1266,6 +1266,15 @@
   ],
   "omp-subtitle-asr": [
       {
+          "key": "OMP_ASR_FPS",
+          "i18n": {"en": {"label": "Frame rate of the data outputs", "description": "Rate of the MXL data flows (text stream and CEA-608), e.g. 25/1 or 30000/1001. Should match the programme frame rate (CEA-608 supports 24, 25, 29.97, 30, 50, 59.94 and 60).", "group": "Speech recognition"}},
+          "label": "Bildrate der Daten-Ausgänge",
+          "type": "string",
+          "description": "Takt der MXL-Daten-Flows (Text-Strom und CEA-608), z. B. 25/1 oder 30000/1001. Soll zur Bildrate der Sendung passen (CEA-608 kennt 24, 25, 29,97, 30, 50, 59,94 und 60).",
+          "default": "25/1",
+          "group": "Spracherkennung"
+      },
+      {
           "key": "OMP_ASR_ENGINE",
           "i18n": {
               "en": {
@@ -1605,6 +1614,15 @@
     }
   ],
   "omp-multiviewer-custom": [
+      {
+          "key": "OMP_MULTIVIEWER_SUBTITLE_BURN",
+          "i18n": {"en": {"label": "Burn subtitles into the PGM picture", "description": "1 = the subtitle (aux input “Subtitle”) is rendered into the PGM output; 0 = only as an overlay in the preview (default, saves processing). Switchable in the panel at any time.", "group": "Subtitles"}},
+          "label": "Untertitel ins PGM-Bild einbrennen",
+          "type": "string",
+          "description": "1 = der Untertitel (Aux-Eingang „Untertitel“) wird in den PGM-Ausgang gerendert; 0 = nur als Overlay in der Vorschau (Standard, spart Rechenzeit). Im Panel jederzeit umschaltbar.",
+          "default": "0",
+          "group": "Untertitel"
+      },
     {
       "key": "OMP_MULTIVIEWER_CUSTOM_PREVIEW_PORT",
       "i18n": { "en": {"label": "Preview port", "description": "TCP port of the preview/level server. 0 = automatically a free port (recommended, several instances per host).", "group": "Network (ports)"} },

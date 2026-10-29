@@ -450,6 +450,9 @@ fn build_receiver(
         if let Some(first) = media_types.first() {
             if first.starts_with("audio/") {
                 receiver.format = is04::FORMAT_AUDIO.to_string();
+            } else if first == "video/smpte291" {
+                // Ancillary-Daten (ST 291) tragen den Registry-Typ „data“, auch wenn der Medientyp mit „video/“ beginnt.
+                receiver.format = is04::FORMAT_DATA.to_string();
             } else if first.starts_with("video/") {
                 receiver.format = is04::FORMAT_VIDEO.to_string();
             }

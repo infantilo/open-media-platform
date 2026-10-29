@@ -40,7 +40,23 @@ Kachel **Auto-Untertitel**: Audioquelle wählen, Sprache, optional Grafik-Node u
 
 ## Wo sieht man die Untertitel, wie kommen sie an die Gateways
 
-Die Live-Untertitel sind eine **Grafik** (OGraf-Ebene `subtitle`), keine Datenspur. Sie wandern deshalb wie jede Grafik durch den Signalweg:
+Der Node hat drei Ausgänge:
+
+| Ausgang | Was | Wofür |
+|---|---|---|
+| **Untertitel-Text** (MXL-Datenflow) | je Bild der aktuell anzuzeigende Text in einem privaten ANC-Paket (DID 0x5E/SDID 0x01) | Aux-Eingang „Untertitel“ von Viewer und Multiviewer (HTML-Overlay) |
+| **CEA-608 (ANC)** (MXL-Datenflow) | CEA-608-Pop-on (CC1) im Caption Distribution Packet (DID 0x61/SDID 0x01), ein CDP je Bild | Datenspur für Gateways, die ANC einbetten können (SDI, ST 2110-40) |
+| **Live-Grafik** (Aufruf an den Grafik-Node) | Text in die OGraf-Ebene `subtitle` | eingebrannt über den Keyer des Mischers in PGM |
+
+Beide Datenflows sind normale NMOS-Sender (Format `data`) und im Flow-Editor verdrahtbar. Die Bildrate stellt `OMP_ASR_FPS` ein (Standard 25/1; CEA-608 kennt 24, 25, 29,97, 30, 50, 59,94, 60). **CEA-608 hat 32 Zeichen je Zeile, höchstens 2 Zeilen**; Umlaute und ß gehen über die erweiterten Zeichen, übrige Akzente werden ohne Akzent gesendet. Gemessen: ca. 25 CDPs je Sekunde, gültige Prüfsumme, lückenlose Zählung.
+
+### Viewer und Multiviewer: Aux-Eingang „Untertitel“
+
+* **Viewer** und **Multiviewer** (automatisch und frei) haben einen zusätzlichen Eingang „… Untertitel“ (Format `data`). Den Text-Strom des Untertitel-Nodes dort verdrahten: der Text erscheint als **HTML-Overlay** über der Vorschau (Panel des Viewers, Kacheln im Flow-Editor, Operator-Konsole) — er wird nicht ins Bild gerendert und kostet keine Rechenzeit im Node.
+* **Einbrennen (nur frei konfigurierbarer Multiviewer, optional):** Der Multiviewer hat einen echten PGM-Ausgang. Mit `burnSubtitle` (Panel-Schalter „Untertitel ins PGM-Bild einbrennen“, Umgebung `OMP_MULTIVIEWER_SUBTITLE_BURN`) rendert er den Text zusätzlich in diesen Ausgang. **Standard aus**: dann läuft kein Text-Element mit, und die Browser-Vorschau bleibt in jedem Fall sauber (dort gilt das HTML-Overlay). Beim Umschalten baut sich die Pipeline kurz neu auf. Der einfache Multiviewer hat nur die Browser-Vorschau, also nur das Overlay.
+* Der CEA-608-Strom ist für Gateways gedacht; Viewer und Multiviewer lesen nur den Text-Strom.
+
+Die Live-Grafik ist eine **Grafik** (OGraf-Ebene `subtitle`) und wandert wie jede Grafik durch den Signalweg:
 
 ```
 Auto-Untertitel ─▶ Grafik-Node (Ebene „subtitle“, Fill+Key) ─▶ Keyer des Bildmischers ─▶ PGM ─┬▶ Viewer / Multiviewer (sehen)
@@ -52,7 +68,7 @@ Auto-Untertitel ─▶ Grafik-Node (Ebene „subtitle“, Fill+Key) ─▶ Keyer
 * **Ansehen:** im Viewer oder Multiviewer das **PGM des Bildmischers** zeigen — dort ist der Untertitel eingebrannt, sobald der Keyer aktiv ist. Den Grafik-Node allein (Fill/Key) kann man ebenfalls im Viewer ansehen. In der Kachel des Auto-Untertitel-Nodes stehen außerdem der zuletzt erkannte Text und die Liste der Einheiten.
 * **Keyer:** Der Node legt den Fill des Grafik-Nodes selbst in den Keyer des Mischers und schaltet ihn ein, wenn im Panel (oder per `OMP_ASR_MIXER_LABEL`) der **Bildmischer** gewählt ist. Datei-Untertitel (Kind-Event `SUBTITLE` der Playout-Automation) tun das jetzt ebenfalls, wie die Grafik-Kinder.
 * **Übergabe an Gateways:** Alles, was am PGM hängt, trägt den eingebrannten Untertitel — SRT-Gateway (Uplink), ST-2110-Gateway, DeckLink/SDI, WebRTC. Dafür ist nichts weiter einzustellen. Soll ein Ausgang **ohne** Untertitel laufen, den Gateway nicht an PGM, sondern an einen Mischer-Ausgang ohne Keyer hängen (Clean Feed).
-* **Nicht möglich:** Untertitel als eigene Datenspur (CEA-608/708, Teletext/DVB-Subtitles, TTML/IMSC, ST-2110-40-ANC). Dafür bräuchte es einen Inserter im Gateway; das gibt es bisher nicht (der ANC-Aufbau in `omp-scte35` trägt nur SCTE-104). Die SRT-Spur ist die Vorstufe dafür: aus ihr lassen sich solche Formate später ableiten.
+* **Datenspur (CEA-608):** Der Node liefert sie als ANC-Datenflow. Die Gateways (ST 2110, DeckLink/SDI) **betten ANC aber noch nicht ein** — das ist der nächste Schritt (ein Daten-Eingang im Gateway). Nicht vorhanden sind außerdem CEA-708-Dienste, Teletext/DVB-Subtitles und TTML/IMSC.
 
 ## Grenzen
 

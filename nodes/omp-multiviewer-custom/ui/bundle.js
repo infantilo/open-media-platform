@@ -4,6 +4,8 @@ const T = (() => {
   const D = {
     de: {
         "x.choose": "— auswählen —",
+        "mvc.burn": "Untertitel ins PGM-Bild einbrennen",
+        "mvc.burnHint": "Aus (Standard): der Untertitel erscheint nur als Overlay in der Vorschau und spart Rechenzeit. An: er wird zusätzlich in den echten PGM-Ausgang gerendert (Aux-Eingang „Untertitel“ muss verbunden sein).",
         "mvc.26bc42": "Leinwand\n            ",
         "mvc.f30ff5": "+ PIP",
         "mvc.3ee601": "Beim Ziehen der Größenänderungs-Ecke bleibt das aktuelle Breite/Höhe-Verhältnis der Kachel erhalten, statt frei verzerrbar zu sein.",
@@ -57,6 +59,8 @@ const T = (() => {
         "mvc.46f51f": "Höhe"
     },
     en: {
+        "mvc.burn": "Burn subtitles into the PGM picture",
+        "mvc.burnHint": "Off (default): the subtitle only appears as an overlay in the preview and saves processing. On: it is additionally rendered into the real PGM output (the aux input “Subtitle” must be connected).",
         "x.choose": "— choose —",
         "mvc.26bc42": "Canvas\n            ",
         "mvc.f30ff5": "+ PIP",
@@ -186,6 +190,9 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
           <label class="keep-ratio-label" title="${T("mvc.3ee601")}">
             <input type="checkbox" class="keep-ratio" checked> ${T("mvc.2fe42e")}
           </label>
+          <label class="burn-label" title="${T("mvc.burnHint")}">
+            <input type="checkbox" class="burn"> ${T("mvc.burn")}
+          </label>
           <span class="spacer"></span>
           <span class="status"></span>
           <button class="reload">${T("mvc.6e5595")}</button>
@@ -220,6 +227,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
       canvasH: shadow.querySelector(".canvas-h"),
       addPip: shadow.querySelector(".add-pip"),
       keepRatio: shadow.querySelector(".keep-ratio"),
+      burn: shadow.querySelector(".burn"),
       reload: shadow.querySelector(".reload"),
       save: shadow.querySelector(".save"),
       status: shadow.querySelector(".status"),
@@ -257,6 +265,11 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
     // für JEDEN Resize-Drag, solange aktiviert. Bewusst NICHT Teil von
     // `this._layout` — reine Editor-Sitzungseinstellung, kein
     // Node-Zustand, der mitgespeichert werden müsste.
+    // Untertitel einbrennen (Aux-Eingang „Untertitel“): sofort wirksam, kein Speichern nötig
+    fetch(`/api/v1/nodes/${this._nodeId}/params/burnSubtitle`).then((r) => (r.ok ? r.json() : null)).then((b) => { if (b) this._el.burn.checked = !!b.value; }).catch(() => {});
+    this._el.burn.addEventListener("change", () => {
+      fetch(`/api/v1/nodes/${this._nodeId}/params/burnSubtitle`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ value: this._el.burn.checked }) }).catch(() => {});
+    });
     this._keepAspectRatio = true; // Standard AN (Nutzerauftrag 2026-10-09); Checkbox ist `checked` vorbelegt
     this._el.keepRatio.addEventListener("change", () => {
       this._keepAspectRatio = this._el.keepRatio.checked;

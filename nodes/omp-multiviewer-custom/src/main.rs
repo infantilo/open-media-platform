@@ -29,11 +29,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use omp_node_sdk::connection::{ReceiverConnection, ReceiverControl, ReceiverResource};
 use omp_node_sdk::health;
 use omp_node_sdk::is04::{self, RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
-    Descriptor, InvokeError, NodeConfig, ParamSpec, ParamStore, ParamType, RawResponse, SenderSpec, SetError,
+    Descriptor, InvokeError, NodeConfig, ParamSpec, ParamStore, ParamType, RawResponse, ReceiverSpec, SenderSpec, SetError,
 };
 use pipeline::{DEFAULT_CANVAS_HEIGHT, DEFAULT_CANVAS_WIDTH, MIN_PIP_SIZE, PipelineHandle, ResolvedPip};
 use serde::{Deserialize, Serialize};
@@ -251,6 +252,33 @@ async fn resolve_node_id(registry_url: &str, device_id: &str, cache: &Arc<Mutex<
     }
 }
 
+/// IS-05-Steuerung des Aux-Eingangs „Untertitel“ (Daten-Flow, `video/smpte291`): der Text erscheint im Panel als HTML-Overlay
+/// über der Vorschau und — nur auf Wunsch (`burnSubtitle`) — eingebrannt im PGM-Ausgang.
+struct SubtitleControl {
+    registry: RegistryClient,
+    context: Arc<omp_mediaio::mxl::MxlContext>,
+    input: Arc<omp_mediaio::mxl::SubtitleInput>,
+}
+
+impl ReceiverControl for SubtitleControl {
+    fn apply(&self, resource: &ReceiverResource) {
+        match (&resource.sender_id, resource.master_enable) {
+            (Some(sender_id), true) => match self.registry.get_sender(sender_id) {
+                Ok(sender) => match sender.flow_id {
+                    Some(flow_id) => {
+                        if let Err(e) = self.input.connect(self.context.clone(), &flow_id) {
+                            eprintln!("omp-multiviewer-custom: Untertitel-Eingang {flow_id}: {e}");
+                        }
+                    }
+                    None => eprintln!("omp-multiviewer-custom: sender {sender_id} has no flow_id"),
+                },
+                Err(e) => eprintln!("omp-multiviewer-custom: resolve sender {sender_id} failed: {e}"),
+            },
+            _ => self.input.disconnect(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------
 // ParamStore
 // ---------------------------------------------------------------------
@@ -268,6 +296,10 @@ struct MultiviewerCustomStore {
     // Benannte, gespeicherte Layouts (s. `NamedLayout`-Doku) — getrennt
     // vom aktuell AKTIVEN `layout` oben.
     saved_layouts: Arc<Mutex<Vec<NamedLayout>>>,
+    subtitle: Arc<omp_mediaio::mxl::SubtitleInput>,
+    subtitle_connection: Arc<ReceiverConnection<SubtitleControl>>,
+    /// Untertitel ins PGM-Bild einbrennen (Standard aus, spart Ressourcen).
+    burn: Arc<AtomicBool>,
 }
 
 impl MultiviewerCustomStore {
@@ -347,6 +379,11 @@ impl ParamStore for MultiviewerCustomStore {
                 // Ausgang verbinden würde), die eigentliche NMOS-
                 // Registrierung läuft unabhängig über NodeConfig.senders.
                 ParamSpec { name: "pgmFlowId".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+                // Aux-Eingang „Untertitel“: aktueller Text (leer = nichts) als HTML-Overlay im Panel; `burnSubtitle` brennt ihn
+                // zusätzlich ins PGM-Bild (Standard aus — spart die Textdarstellung, solange niemand sie braucht).
+                ParamSpec { name: "subtitle".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+                ParamSpec { name: "subtitleFlowId".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+                ParamSpec { name: "burnSubtitle".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: false },
             ],
             methods: vec![],
         }
@@ -362,11 +399,21 @@ impl ParamStore for MultiviewerCustomStore {
             }
             "previewUrl" => Some(serde_json::json!(self.preview_url)),
             "pgmFlowId" => Some(serde_json::json!(self.pgm_flow_id)),
+            "subtitle" => Some(serde_json::json!(self.subtitle.text())),
+            "subtitleFlowId" => Some(serde_json::json!(self.subtitle.connected_flow_id())),
+            "burnSubtitle" => Some(serde_json::json!(self.burn.load(Ordering::Relaxed))),
             _ => None,
         }
     }
 
-    fn set(&self, _name: &str, _value: Value) -> Result<(), SetError> {
+    fn set(&self, name: &str, value: Value) -> Result<(), SetError> {
+        if name == "burnSubtitle" {
+            let on = value.as_bool().ok_or(SetError::Unknown)?;
+            if self.burn.swap(on, Ordering::Relaxed) != on {
+                self.pipeline.set_burn(on);
+            }
+            return Ok(());
+        }
         Err(SetError::ReadOnly)
     }
 
@@ -376,6 +423,9 @@ impl ParamStore for MultiviewerCustomStore {
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
         let path = path.split('?').next().unwrap_or(path);
+        if let Some((status, content_type, body)) = self.subtitle_connection.handle(method, path, body) {
+            return Some(RawResponse { status, content_type, body });
+        }
         // Wire-Format `{"state": ...}` auf BEIDEN Seiten — kein
         // Freiraum hier: `orchestrator/internal/snapshots/nodeclient.go`
         // (Backup/Restore, GetState/ApplyState) parst/baut exakt dieses
@@ -538,13 +588,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // gesamte Prozesslaufzeit, gleiche Konvention wie omp-decklinks
     // flow_id.
     let pgm_flow_id = omp_node_sdk::idgen::new_v4();
+    let subtitle_context = Arc::new(omp_mediaio::mxl::MxlContext::new(&domain)?);
+    let subtitle = Arc::new(omp_mediaio::mxl::SubtitleInput::new());
+    let burn = Arc::new(AtomicBool::new(env_or("OMP_MULTIVIEWER_SUBTITLE_BURN", "0") == "1"));
     let pipeline_config = pipeline::Config { domain, pgm_flow_id: pgm_flow_id.clone(), label: label.clone() };
+    let (subtitle_for_pipeline, initial_burn) = (subtitle.clone(), burn.load(Ordering::Relaxed));
     let pipeline_shutdown = shutdown.clone();
     let broadcaster_for_pipeline = broadcaster.clone();
     let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
     let pipeline_heartbeat_thread = pipeline_heartbeat.clone();
     let pipeline_thread = std::thread::spawn(move || {
-        pipeline::run(pipeline_config, broadcaster_for_pipeline, tx, pipeline_shutdown, ready_tx, pipeline_heartbeat_thread)
+        pipeline::run(pipeline_config, broadcaster_for_pipeline, tx, pipeline_shutdown, ready_tx, pipeline_heartbeat_thread, subtitle_for_pipeline, initial_burn)
     });
 
     let pipeline_handle = match ready_rx.await {
@@ -563,6 +617,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let sources = Arc::new(Mutex::new(Vec::<SourceInfo>::new()));
     let media_ready_pipeline = pipeline_handle.clone();
 
+    let subtitle_receiver_id = omp_node_sdk::idgen::new_v4();
+    let subtitle_connection = Arc::new(ReceiverConnection::new(
+        subtitle_receiver_id.clone(),
+        SubtitleControl { registry: RegistryClient::new(registry_url.clone()), context: subtitle_context, input: subtitle.clone() },
+    ));
+    let subtitle_label = format!("{label} Untertitel");
     let store: Arc<dyn ParamStore> = Arc::new(MultiviewerCustomStore {
         layout: layout.clone(),
         sources: sources.clone(),
@@ -570,6 +630,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         preview_url,
         pgm_flow_id: pgm_flow_id.clone(),
         saved_layouts: Arc::new(Mutex::new(Vec::new())),
+        subtitle,
+        subtitle_connection,
+        burn,
     });
 
     let handle = omp_node_sdk::start(
@@ -591,7 +654,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 tags: HashMap::new(),
                 ..Default::default()
             }],
-            receivers: vec![],
+            receivers: vec![ReceiverSpec {
+                id: Some(subtitle_receiver_id),
+                transport: Some(TRANSPORT_MXL.to_string()),
+                media_types: Some(vec!["video/smpte291".to_string()]),
+                label: Some(subtitle_label),
+                ..Default::default()
+            }],
             instance_id,
             media_ready: omp_node_sdk::MediaReadySource::Probe(Arc::new(move || media_ready_pipeline.media_ready())),
         },

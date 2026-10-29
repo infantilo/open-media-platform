@@ -16,6 +16,7 @@
 //! jeweiligen Implementierung (`docs/decisions.md`, 2026-07-09: MXL hat
 //! keine "Zieladresse" im RTP-Sinn, nur eine feste Flow-ID+Domain).
 
+pub mod anc;
 pub mod au_ring;
 pub mod rtp;
 pub mod st2110;

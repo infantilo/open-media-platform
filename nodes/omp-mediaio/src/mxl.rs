@@ -3856,3 +3856,163 @@ impl MxlDataOutput {
         access.commit(total).map_err(|e| format!("commit {index}: {e}"))
     }
 }
+
+// ---------------------------------------------------------------------------
+// Daten-/Ancillary-Eingang (Untertitel-Aux-Eingang von Viewer und Multiviewer)
+// ---------------------------------------------------------------------------
+
+/// Leser für einen MXL-Daten-Flow (`video/smpte291`): ein eigener Thread liest Grain für Grain (nicht blockierend,
+/// 5-ms-Backoff wie `read_loop`, s. dort zum Futex-Livelock) und reicht jede Nutzlast an `on_grain`. Öffnet den
+/// Leser neu, wenn der Schreiber seinen Flow neu anlegt (`FLOW_INVALID`) oder lange nichts ankam.
+pub struct MxlDataInput {
+    running: Arc<AtomicBool>,
+    flowed: Arc<AtomicBool>,
+    heartbeat: Arc<AtomicU64>,
+}
+
+fn grain_rate_of(def: &str) -> (i64, i64) {
+    serde_json::from_str::<serde_json::Value>(def)
+        .ok()
+        .and_then(|v| Some((v.get("grain_rate")?.get("numerator")?.as_i64()?, v.get("grain_rate")?.get("denominator").and_then(|d| d.as_i64()).unwrap_or(1))))
+        .filter(|(n, d)| *n > 0 && *d > 0)
+        .unwrap_or((25, 1))
+}
+
+impl MxlDataInput {
+    pub fn new(context: Arc<MxlContext>, flow_id: &str, on_grain: impl Fn(&[u8]) + Send + 'static) -> Result<Self, String> {
+        let def = context.flow_def(flow_id)?;
+        let (num, den) = grain_rate_of(&def);
+        let rate = mxl_sys::Rational { numerator: num, denominator: den };
+        let open = {
+            let context = context.clone();
+            let flow_id = flow_id.to_string();
+            move || context.instance.create_flow_reader(&flow_id).and_then(|r| r.to_grain_reader()).map_err(|e| format!("create_flow_reader({flow_id}): {e}"))
+        };
+        let reader = open()?;
+        let running = Arc::new(AtomicBool::new(true));
+        let flowed = Arc::new(AtomicBool::new(false));
+        let heartbeat = Arc::new(AtomicU64::new(0));
+        let (running_t, flowed_t, heartbeat_t) = (running.clone(), flowed.clone(), heartbeat.clone());
+        thread::spawn(move || {
+            let mut reader = Some(reader);
+            let mut index = context.instance.get_current_index(&rate);
+            let mut last_ok = std::time::Instant::now();
+            while running_t.load(Ordering::Relaxed) {
+                heartbeat_t.fetch_add(1, Ordering::Relaxed);
+                let result = if last_ok.elapsed() > STALE_READER_AFTER {
+                    last_ok = std::time::Instant::now();
+                    Err(mxl::Error::Unknown(mxl_sys::MXL_ERR_FLOW_INVALID))
+                } else {
+                    reader.as_ref().expect("Leser vorhanden").get_grain_non_blocking(index)
+                };
+                match result {
+                    Ok(grain) => {
+                        last_ok = std::time::Instant::now();
+                        if grain.index != index {
+                            index = if grain.index < index { index + 1 } else { context.instance.get_current_index(&rate) };
+                            continue;
+                        }
+                        // Teil-Grains überspringen wir bewusst nicht aus: ein Daten-Grain hat eine Slice.
+                        if grain.payload.len() >= crate::anc::HEADER_LEN {
+                            on_grain(grain.payload);
+                            flowed_t.store(true, Ordering::Relaxed);
+                        }
+                        index += 1;
+                    }
+                    Err(mxl::Error::OutOfRangeTooEarly) => thread::sleep(Duration::from_millis(5)),
+                    Err(mxl::Error::OutOfRangeTooLate) => {
+                        index = context.instance.get_current_index(&rate);
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => {
+                        // Flow ungültig (Schreiber hat ihn neu angelegt) oder lange nichts gelesen: Leser neu öffnen.
+                        drop(reader.take());
+                        loop {
+                            if !running_t.load(Ordering::Relaxed) {
+                                return;
+                            }
+                            match open() {
+                                Ok(r) => {
+                                    reader = Some(r);
+                                    index = context.instance.get_current_index(&rate);
+                                    break;
+                                }
+                                Err(_) => thread::sleep(Duration::from_millis(200)),
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        Ok(MxlDataInput { running, flowed, heartbeat })
+    }
+
+    pub fn flowed_handle(&self) -> Arc<AtomicBool> {
+        self.flowed.clone()
+    }
+
+    pub fn heartbeat_handle(&self) -> Arc<AtomicU64> {
+        self.heartbeat.clone()
+    }
+
+    pub fn stop(&self) {
+        self.running.store(false, Ordering::Relaxed);
+    }
+}
+
+impl Drop for MxlDataInput {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Relaxed);
+    }
+}
+
+/// Aux-Eingang „Untertitel“ für Empfänger-Nodes (Viewer, Multiviewer): hält den aktuell anzuzeigenden Text des verbundenen
+/// Text-Stroms (`anc::text_packet`). Ein Grain ohne Text-Paket löscht ihn. Verbinden/Trennen ist billig (nur ein Lese-Thread).
+#[derive(Default)]
+pub struct SubtitleInput {
+    state: Arc<Mutex<(u16, String)>>,
+    input: Mutex<Option<MxlDataInput>>,
+    flow_id: Mutex<String>,
+}
+
+impl SubtitleInput {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Verbindet mit dem Daten-Flow `flow_id` (ersetzt eine bestehende Verbindung).
+    pub fn connect(&self, context: Arc<MxlContext>, flow_id: &str) -> Result<(), String> {
+        self.disconnect();
+        let state = self.state.clone();
+        let input = MxlDataInput::new(context, flow_id, move |grain| {
+            let mut s = state.lock().expect("lock poisoned");
+            match crate::anc::parse_text_grain(grain) {
+                Some((seq, text)) => *s = (seq, text),
+                None => s.1.clear(),
+            }
+        })?;
+        *self.input.lock().expect("lock poisoned") = Some(input);
+        *self.flow_id.lock().expect("lock poisoned") = flow_id.to_string();
+        Ok(())
+    }
+
+    pub fn disconnect(&self) {
+        *self.input.lock().expect("lock poisoned") = None;
+        self.flow_id.lock().expect("lock poisoned").clear();
+        self.state.lock().expect("lock poisoned").1.clear();
+    }
+
+    /// Aktueller Text (leer = nichts anzeigen).
+    pub fn text(&self) -> String {
+        self.state.lock().expect("lock poisoned").1.clone()
+    }
+
+    pub fn connected_flow_id(&self) -> String {
+        self.flow_id.lock().expect("lock poisoned").clone()
+    }
+
+    /// Hat der verbundene Flow Grains geliefert?
+    pub fn flowed(&self) -> bool {
+        self.input.lock().expect("lock poisoned").as_ref().is_some_and(|i| i.flowed_handle().load(Ordering::Relaxed))
+    }
+}

@@ -91,6 +91,33 @@ impl ReceiverControl for AudioInputControl {
     }
 }
 
+/// IS-05-Steuerung des Aux-Eingangs „Untertitel“ (Daten-Flow, `video/smpte291`): verbindet den Text-Strom eines Untertitel-Nodes;
+/// der Text erscheint im Browser als HTML-Overlay über der Vorschau (nicht ins Bild gerendert).
+struct SubtitleControl {
+    registry: RegistryClient,
+    context: Arc<MxlContext>,
+    input: Arc<omp_mediaio::mxl::SubtitleInput>,
+}
+
+impl ReceiverControl for SubtitleControl {
+    fn apply(&self, resource: &ReceiverResource) {
+        match (&resource.sender_id, resource.master_enable) {
+            (Some(sender_id), true) => match self.registry.get_sender(sender_id) {
+                Ok(sender) => match sender.flow_id {
+                    Some(flow_id) => {
+                        if let Err(e) = self.input.connect(self.context.clone(), &flow_id) {
+                            eprintln!("omp-viewer: Untertitel-Eingang {flow_id}: {e}");
+                        }
+                    }
+                    None => eprintln!("omp-viewer: sender {sender_id} has no flow_id"),
+                },
+                Err(e) => eprintln!("omp-viewer: resolve sender {sender_id} failed: {e}"),
+            },
+            _ => self.input.disconnect(),
+        }
+    }
+}
+
 struct AudioInputEntry {
     label: String,
     connection: Arc<ReceiverConnection<AudioInputControl>>,
@@ -121,6 +148,8 @@ struct ViewerStore {
     connection: Arc<ReceiverConnection<ViewerControl>>,
     levels_url: String,
     audio_inputs: Arc<Mutex<HashMap<String, AudioInputEntry>>>,
+    subtitle: Arc<omp_mediaio::mxl::SubtitleInput>,
+    subtitle_connection: Arc<ReceiverConnection<SubtitleControl>>,
     commands: tokio::sync::mpsc::UnboundedSender<ViewerCommand>,
     // Nutzerauftrag 2026-09-03 ("die fps ... einstellbar in der UI"):
     // eigener geklonter Griff (nicht der in `ViewerControl` hinter
@@ -210,6 +239,21 @@ impl ParamStore for ViewerStore {
                     range: None,
                     readonly: true,
                 },
+                // Aux-Eingang „Untertitel“: aktueller Text des verbundenen Text-Stroms (leer = nichts), als HTML-Overlay im Panel
+                ParamSpec {
+                    name: "subtitle".to_string(),
+                    kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
+                ParamSpec {
+                    name: "subtitleFlowId".to_string(),
+                    kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
             ];
         parameters.extend(self.monitor.param_specs("monitor"));
         let mut methods = vec![
@@ -235,6 +279,8 @@ impl ParamStore for ViewerStore {
                 *self.connected_label.lock().expect("lock poisoned")
             )),
             "previewUrl" => Some(serde_json::json!(self.preview_url)),
+            "subtitle" => Some(serde_json::json!(self.subtitle.text())),
+            "subtitleFlowId" => Some(serde_json::json!(self.subtitle.connected_flow_id())),
             "previewFps" => Some(serde_json::json!(self.pipeline.preview_fps())),
             "levelsUrl" => Some(serde_json::json!(self.levels_url)),
             "handoverPending" => Some(serde_json::json!(self.pipeline.handover_pending())),
@@ -331,6 +377,9 @@ impl ParamStore for ViewerStore {
                 let _ = self.commands.send(ViewerCommand::AddAudioInput { label: Some(label).filter(|l| !l.is_empty()) });
             }
             return Some(RawResponse { status: 200, content_type: "application/json", body: br#"{"ok":true}"#.to_vec() });
+        }
+        if let Some((status, content_type, body)) = self.subtitle_connection.handle(method, path, body) {
+            return Some(RawResponse { status, content_type, body });
         }
         if let Some((status, content_type, body)) = self.connection.handle(method, path, body) {
             return Some(RawResponse {
@@ -505,6 +554,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pipeline_shutdown = shutdown.clone();
     let broadcaster_for_pipeline = broadcaster.clone();
     let context_for_pipeline = mxl_context.clone();
+    let context_for_subtitle = mxl_context.clone();
     let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
     let pipeline_heartbeat_thread = pipeline_heartbeat.clone();
     let pipeline_thread = std::thread::spawn(move || {
@@ -552,6 +602,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         },
     ));
 
+    let subtitle = Arc::new(omp_mediaio::mxl::SubtitleInput::new());
+    let subtitle_receiver_id = omp_node_sdk::idgen::new_v4();
+    let subtitle_connection = Arc::new(ReceiverConnection::new(
+        subtitle_receiver_id.clone(),
+        SubtitleControl { registry: RegistryClient::new(registry_url.clone()), context: context_for_subtitle, input: subtitle.clone() },
+    ));
     let audio_inputs: Arc<Mutex<HashMap<String, AudioInputEntry>>> = Arc::new(Mutex::new(HashMap::new()));
     let (commands_tx, commands_rx) = tokio::sync::mpsc::unbounded_channel::<ViewerCommand>();
 
@@ -562,11 +618,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         connection,
         levels_url,
         audio_inputs: audio_inputs.clone(),
+        subtitle,
+        subtitle_connection,
         commands: commands_tx,
         pipeline: store_pipeline,
         monitor: monitor.clone(),
     });
 
+    let subtitle_label = format!("{label} Untertitel");
     let handle = omp_node_sdk::start(
         NodeConfig {
             label,
@@ -575,12 +634,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             registry_url: registry_url.clone(),
             nats_url,
             senders: vec![],
-            receivers: vec![ReceiverSpec {
-                id: Some(receiver_id),
-                transport: Some(TRANSPORT_MXL.to_string()),
-                media_types: Some(vec!["video/v210".to_string()]),
-                ..Default::default()
-            }],
+            receivers: vec![
+                ReceiverSpec {
+                    id: Some(receiver_id),
+                    transport: Some(TRANSPORT_MXL.to_string()),
+                    media_types: Some(vec!["video/v210".to_string()]),
+                    ..Default::default()
+                },
+                ReceiverSpec {
+                    id: Some(subtitle_receiver_id),
+                    transport: Some(TRANSPORT_MXL.to_string()),
+                    media_types: Some(vec!["video/smpte291".to_string()]),
+                    label: Some(subtitle_label),
+                    ..Default::default()
+                },
+            ],
             instance_id,
             // "media-ready" über PipelineHandle::media_ready()
             // (ARCHITECTURE.md §5 Punkt 6, UMSETZUNG.md D5-prep-2) — false vor

@@ -22,9 +22,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use omp_mediaio::preview;
+use omp_node_sdk::connection::{ReceiverConnection, ReceiverControl, ReceiverResource};
 use omp_node_sdk::is04::{self, RegistryClient, Sender, TRANSPORT_MXL};
 use omp_node_sdk::{
-    Descriptor, InvokeError, NodeConfig, ParamSpec, ParamStore, ParamType, PeerClient, SetError,
+    Descriptor, InvokeError, NodeConfig, ParamSpec, ParamStore, ParamType, PeerClient, RawResponse, ReceiverSpec, SetError,
     resolve_owning_node_href,
 };
 use pipeline::DiscoveredInput;
@@ -38,9 +39,38 @@ use serde_json::Value;
 /// Sender).
 const GROUPHINT_TAG: &str = "urn:x-nmos:tag:grouphint/v1.0";
 
+/// IS-05-Steuerung des Aux-Eingangs „Untertitel“ (Daten-Flow): der Text erscheint in der Vorschau der Shell als HTML-Overlay.
+/// (Dieser Multiviewer hat nur die Browser-Vorschau, keinen PGM-Ausgang — Einbrennen gibt es hier nicht.)
+struct SubtitleControl {
+    registry: RegistryClient,
+    context: Arc<omp_mediaio::mxl::MxlContext>,
+    input: Arc<omp_mediaio::mxl::SubtitleInput>,
+}
+
+impl ReceiverControl for SubtitleControl {
+    fn apply(&self, resource: &ReceiverResource) {
+        match (&resource.sender_id, resource.master_enable) {
+            (Some(sender_id), true) => match self.registry.get_sender(sender_id) {
+                Ok(sender) => match sender.flow_id {
+                    Some(flow_id) => {
+                        if let Err(e) = self.input.connect(self.context.clone(), &flow_id) {
+                            eprintln!("omp-multiviewer: Untertitel-Eingang {flow_id}: {e}");
+                        }
+                    }
+                    None => eprintln!("omp-multiviewer: sender {sender_id} has no flow_id"),
+                },
+                Err(e) => eprintln!("omp-multiviewer: resolve sender {sender_id} failed: {e}"),
+            },
+            _ => self.input.disconnect(),
+        }
+    }
+}
+
 struct MultiviewerStore {
     inputs: Arc<Mutex<Vec<DiscoveredInput>>>,
     preview_url: String,
+    subtitle: Arc<omp_mediaio::mxl::SubtitleInput>,
+    subtitle_connection: Arc<ReceiverConnection<SubtitleControl>>,
 }
 
 impl ParamStore for MultiviewerStore {
@@ -69,6 +99,8 @@ impl ParamStore for MultiviewerStore {
                     range: None,
                     readonly: true,
                 },
+                // Aux-Eingang „Untertitel“: aktueller Text (leer = nichts), als HTML-Overlay in der Vorschau
+                ParamSpec { name: "subtitle".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             ],
             methods: vec![],
         }
@@ -86,6 +118,7 @@ impl ParamStore for MultiviewerStore {
                 ))
             }
             "previewUrl" => Some(serde_json::json!(self.preview_url)),
+            "subtitle" => Some(serde_json::json!(self.subtitle.text())),
             _ => None,
         }
     }
@@ -100,6 +133,10 @@ impl ParamStore for MultiviewerStore {
         _args: &serde_json::Map<String, Value>,
     ) -> Result<(), InvokeError> {
         Err(InvokeError::Unknown)
+    }
+
+    fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        self.subtitle_connection.handle(method, path, body).map(|(status, content_type, body)| RawResponse { status, content_type, body })
     }
 }
 
@@ -134,6 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let shutdown = Arc::new(AtomicBool::new(false));
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
 
+    let subtitle_context = Arc::new(omp_mediaio::mxl::MxlContext::new(&domain)?);
     let pipeline_config = pipeline::Config { domain };
     let pipeline_shutdown = shutdown.clone();
     let broadcaster_for_pipeline = broadcaster.clone();
@@ -165,9 +203,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let inputs = Arc::new(Mutex::new(Vec::<DiscoveredInput>::new()));
     let media_ready_pipeline = pipeline_handle.clone();
 
+    let subtitle = Arc::new(omp_mediaio::mxl::SubtitleInput::new());
+    let subtitle_receiver_id = omp_node_sdk::idgen::new_v4();
+    let subtitle_connection = Arc::new(ReceiverConnection::new(
+        subtitle_receiver_id.clone(),
+        SubtitleControl { registry: RegistryClient::new(registry_url.clone()), context: subtitle_context, input: subtitle.clone() },
+    ));
+    let subtitle_label = format!("{label} Untertitel");
     let store: Arc<dyn ParamStore> = Arc::new(MultiviewerStore {
         inputs: inputs.clone(),
         preview_url,
+        subtitle,
+        subtitle_connection,
     });
 
     let handle = omp_node_sdk::start(
@@ -178,7 +225,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             registry_url: registry_url.clone(),
             nats_url,
             senders: vec![],
-            receivers: vec![],
+            receivers: vec![ReceiverSpec {
+                id: Some(subtitle_receiver_id),
+                transport: Some(TRANSPORT_MXL.to_string()),
+                media_types: Some(vec!["video/smpte291".to_string()]),
+                label: Some(subtitle_label),
+                ..Default::default()
+            }],
             instance_id,
             // "media-ready" über PipelineHandle::media_ready()
             // (ARCHITECTURE.md §5 Punkt 6, UMSETZUNG.md D5-prep-2).

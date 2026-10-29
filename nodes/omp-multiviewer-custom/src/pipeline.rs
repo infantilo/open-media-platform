@@ -137,6 +137,8 @@ pub enum Event {
 }
 
 enum Command {
+    /// Untertitel ins PGM-Bild einbrennen an/aus (Neuaufbau der Pipeline, damit bei „aus“ nichts mitläuft).
+    SetBurn(bool),
     SetLayout { canvas_width: u32, canvas_height: u32, pips: Vec<ResolvedPip> },
 }
 
@@ -153,6 +155,11 @@ pub struct PipelineHandle {
 }
 
 impl PipelineHandle {
+    /// Schaltet das Einbrennen des Untertitels in den PGM-Ausgang (nicht in die Browser-Vorschau).
+    pub fn set_burn(&self, on: bool) {
+        let _ = self.commands.send(Command::SetBurn(on));
+    }
+
     pub fn set_layout(&self, canvas_width: u32, canvas_height: u32, pips: Vec<ResolvedPip>) {
         let _ = self.commands.send(Command::SetLayout { canvas_width, canvas_height, pips });
     }
@@ -189,6 +196,38 @@ struct ActivePipeline {
     // ActivePipeline läuft (kein weiterer Zugriff nötig, „_"-Präfix wie
     // bei `_inputs`).
     _pgm_output: MxlVideoOutput,
+    /// Nachführung des eingebrannten Untertitels (nur wenn eingeschaltet).
+    _burn: Option<BurnPoller>,
+}
+
+/// Hält `text` eines `textoverlay` auf dem aktuellen Untertitel (10 Hz, nur bei Änderung) — reiner Property-Set, kein Neuaufbau.
+struct BurnPoller {
+    stop: Arc<AtomicBool>,
+}
+
+impl BurnPoller {
+    fn spawn(input: Arc<omp_mediaio::mxl::SubtitleInput>, overlay: gst::Element) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_t = stop.clone();
+        std::thread::spawn(move || {
+            let mut last = String::new();
+            while !stop_t.load(Ordering::Relaxed) {
+                let t = input.text();
+                if t != last {
+                    overlay.set_property("text", t.as_str());
+                    last = t;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        BurnPoller { stop }
+    }
+}
+
+impl Drop for BurnPoller {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
 }
 
 impl Drop for ActivePipeline {
@@ -422,7 +461,7 @@ fn build_tile(
     Ok((mxl_input, flowed_handle))
 }
 
-fn build(config: &Config, context: &Arc<MxlContext>, broadcaster: &Arc<Broadcaster>, layout: &Layout) -> Result<ActivePipeline, String> {
+fn build(config: &Config, context: &Arc<MxlContext>, broadcaster: &Arc<Broadcaster>, layout: &Layout, burn: Option<&Arc<omp_mediaio::mxl::SubtitleInput>>) -> Result<ActivePipeline, String> {
     let pipeline = gst::Pipeline::new();
     // Zustand dieser Pipeline für die Node-Diagnose (GET /diag/pipelines, Kap. 72.7)
     {
@@ -537,9 +576,29 @@ fn build(config: &Config, context: &Arc<MxlContext>, broadcaster: &Arc<Broadcast
     let pgm_queue = gst::ElementFactory::make("queue").build().map_err(|e| format!("queue (pgm branch): {e}"))?;
     pipeline.add(&pgm_queue).map_err(|e| format!("add pgm branch queue: {e}"))?;
     tee.link(&pgm_queue).map_err(|e| format!("link tee to pgm branch queue: {e}"))?;
+    // Optional: Untertitel ins PGM-Bild brennen (kostet CPU, deshalb nur auf Wunsch). Die Browser-Vorschau bleibt sauber, dort
+    // liegt der Untertitel als HTML-Overlay.
+    let mut pgm_upstream = pgm_queue.clone();
+    let mut burn_poller = None;
+    if let Some(input) = burn {
+        let overlay = gst::ElementFactory::make("textoverlay")
+            .property("text", "")
+            .property("font-desc", format!("Sans Bold {}", (layout.canvas_height / 40).max(9)).as_str())
+            .property("shaded-background", true)
+            .property("ypad", (layout.canvas_height / 14) as i32)
+            .build()
+            .map_err(|e| format!("textoverlay (subtitle burn): {e}"))?;
+        overlay.set_property_from_str("valignment", "bottom");
+        overlay.set_property_from_str("halignment", "center");
+        overlay.set_property_from_str("line-alignment", "center");
+        pipeline.add(&overlay).map_err(|e| format!("add subtitle overlay: {e}"))?;
+        pgm_queue.link(&overlay).map_err(|e| format!("link pgm queue to subtitle overlay: {e}"))?;
+        burn_poller = Some(BurnPoller::spawn(input.clone(), overlay.clone()));
+        pgm_upstream = overlay;
+    }
     let pgm_output = MxlVideoOutput::new(
         &pipeline,
-        &pgm_queue,
+        &pgm_upstream,
         context.clone(),
         &config.pgm_flow_id,
         &config.label,
@@ -562,7 +621,7 @@ fn build(config: &Config, context: &Arc<MxlContext>, broadcaster: &Arc<Broadcast
         .set_state(gst::State::Playing)
         .map_err(|e| format!("set state playing: {e}"))?;
 
-    Ok(ActivePipeline { pipeline, _inputs: mxl_inputs, flowed, tally_borders, _pgm_output: pgm_output })
+    Ok(ActivePipeline { pipeline, _inputs: mxl_inputs, flowed, tally_borders, _pgm_output: pgm_output, _burn: burn_poller })
 }
 
 /// Läuft auf einem eigenen Thread (analog `omp-multiviewer::pipeline::run`):
@@ -576,6 +635,8 @@ pub fn run(
     shutdown: Arc<AtomicBool>,
     ready: oneshot::Sender<Result<PipelineHandle, String>>,
     heartbeat: Arc<AtomicU64>,
+    subtitle: Arc<omp_mediaio::mxl::SubtitleInput>,
+    initial_burn: bool,
 ) {
     if let Err(e) = gst::init() {
         let msg = format!("gst init failed: {e}");
@@ -597,7 +658,8 @@ pub fn run(
     let tally_borders_slot: Arc<Mutex<HashMap<String, gst::Element>>> = Arc::new(Mutex::new(HashMap::new()));
 
     let mut current_layout = Layout { canvas_width: DEFAULT_CANVAS_WIDTH, canvas_height: DEFAULT_CANVAS_HEIGHT, pips: Vec::new() };
-    let mut active = match build(&config, &context, &broadcaster, &current_layout) {
+    let mut burn = initial_burn;
+    let mut active = match build(&config, &context, &broadcaster, &current_layout, burn.then_some(&subtitle)) {
         Ok(p) => {
             *flowed_slot.lock().expect("lock poisoned") = p.flowed.clone();
             *tally_borders_slot.lock().expect("lock poisoned") = p.tally_borders.clone();
@@ -625,12 +687,28 @@ pub fn run(
             break;
         }
         match commands_rx.recv_timeout(Duration::from_millis(500)) {
+            Ok(Command::SetBurn(on)) => {
+                if on != burn {
+                    burn = on;
+                    active = None;
+                    match build(&config, &context, &broadcaster, &current_layout, burn.then_some(&subtitle)) {
+                        Ok(p) => {
+                            *flowed_slot.lock().expect("lock poisoned") = p.flowed.clone();
+                            *tally_borders_slot.lock().expect("lock poisoned") = p.tally_borders.clone();
+                            active = Some(p);
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Event::Error(format!("rebuild (Untertitel einbrennen {on}) failed: {e}")));
+                        }
+                    }
+                }
+            }
             Ok(Command::SetLayout { canvas_width, canvas_height, pips }) => {
                 let new_layout = Layout { canvas_width, canvas_height, pips };
                 if new_layout != current_layout {
                     current_layout = new_layout;
                     active = None; // Reader-Threads/State-Null vor dem Neuaufbau stoppen.
-                    match build(&config, &context, &broadcaster, &current_layout) {
+                    match build(&config, &context, &broadcaster, &current_layout, burn.then_some(&subtitle)) {
                         Ok(p) => {
                             *flowed_slot.lock().expect("lock poisoned") = p.flowed.clone();
                             *tally_borders_slot.lock().expect("lock poisoned") = p.tally_borders.clone();
@@ -661,7 +739,7 @@ pub fn run(
             // erneut versuchen, solange keine aktive Pipeline steht.
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if active.is_none()
-                    && let Ok(p) = build(&config, &context, &broadcaster, &current_layout)
+                    && let Ok(p) = build(&config, &context, &broadcaster, &current_layout, burn.then_some(&subtitle))
                 {
                     *flowed_slot.lock().expect("lock poisoned") = p.flowed.clone();
                     *tally_borders_slot.lock().expect("lock poisoned") = p.tally_borders.clone();

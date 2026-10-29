@@ -42,7 +42,12 @@ pub fn reading_ms(text: &str) -> i64 {
 
 /// Zerlegt erkannten Text in Anzeigeeinheiten ab `start_ms`; jede Einheit läuft nach Lesedauer, die nächste schließt nahtlos an.
 pub fn cues_for(text: &str, start_ms: i64) -> Vec<Cue> {
-    let lines = wrap(text, MAX_LINE);
+    cues_for_width(text, start_ms, MAX_LINE)
+}
+
+/// Wie [`cues_for`] mit eigener Zeilenbreite (CEA-608: 32 Zeichen).
+pub fn cues_for_width(text: &str, start_ms: i64, width: usize) -> Vec<Cue> {
+    let lines = wrap(text, width);
     let mut cues = Vec::new();
     let mut t = start_ms;
     for group in lines.chunks(MAX_LINES) {

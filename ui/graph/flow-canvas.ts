@@ -617,8 +617,10 @@ export class FlowCanvas extends HTMLElement {
   // (Nutzerfund 2026-08-24, s. `#renderPreviewThumbnail`-Doku dort).
   #previewElementsById: Map<
     string,
-    { fo: SVGForeignObjectElement; img: HTMLImageElement; notConnected: HTMLDivElement }
+    { fo: SVGForeignObjectElement; img: HTMLImageElement; notConnected: HTMLDivElement; subtitle: HTMLDivElement }
   > = new Map();
+  // Untertitel-Overlay (Aux-Eingang „Untertitel“ von Viewer/Multiviewer): false = Node hat keinen `subtitle`-Parameter.
+  #subtitleSupportedById: Map<string, boolean> = new Map();
 
   #svg!: SVGSVGElement;
   #viewportGroup!: SVGGElement;
@@ -4217,9 +4219,17 @@ export class FlowCanvas extends HTMLElement {
       notConnected.style.display = "flex";
     });
 
+    // Untertitel als HTML-Overlay über der Vorschau (nicht ins Bild gerendert).
+    const subtitle = document.createElement("div");
+    subtitle.style.cssText =
+      `position:absolute;left:4%;right:4%;bottom:12%;text-align:center;color:#fff;font-weight:600;` +
+      `font-size:${Math.max(8, Math.round(PREVIEW_WIDTH / 22))}px;line-height:1.2;white-space:pre-line;pointer-events:none;` +
+      `text-shadow:0 0 2px #000,0 0 2px #000,1px 1px 1px #000;`;
+
     fo.appendChild(img);
     fo.appendChild(notConnected);
-    this.#previewElementsById.set(nodeId, { fo, img, notConnected });
+    fo.appendChild(subtitle);
+    this.#previewElementsById.set(nodeId, { fo, img, notConnected, subtitle });
     return fo;
   }
 
@@ -4240,6 +4250,7 @@ export class FlowCanvas extends HTMLElement {
       clearInterval(timer);
       this.#previewPollTimerById.delete(nodeId);
       this.#previewElementsById.delete(nodeId);
+      this.#subtitleSupportedById.delete(nodeId);
       this.#hasPreviewById.delete(nodeId);
     }
   }
@@ -4269,6 +4280,23 @@ export class FlowCanvas extends HTMLElement {
         if (!img.complete) return;
         img.src = url;
       });
+      // Untertitel-Text nachführen (nur Nodes mit `subtitle`-Parameter)
+      if (this.#subtitleSupportedById.get(nodeId) !== false) {
+        apiFetch(`/api/v1/nodes/${nodeId}/params/subtitle`)
+          .then((res) => {
+            if (!res.ok) {
+              this.#subtitleSupportedById.set(nodeId, false);
+              return null;
+            }
+            this.#subtitleSupportedById.set(nodeId, true);
+            return res.json();
+          })
+          .then((body) => {
+            const el = this.#previewElementsById.get(nodeId)?.subtitle;
+            if (el && body) el.textContent = typeof body.value === "string" ? body.value : "";
+          })
+          .catch(() => {});
+      }
     }, PREVIEW_POLL_INTERVAL_MS);
     this.#previewPollTimerById.set(nodeId, timer);
   }

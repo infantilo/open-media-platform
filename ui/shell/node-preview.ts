@@ -104,8 +104,35 @@ export function mountNodePreview(apiBase: string): MountedPreview {
     notConnected.style.display = "flex";
   });
 
-  wrapper.append(img, notConnected);
+  // Untertitel (Aux-Eingang „Untertitel“ von Viewer/Multiviewer): HTML-Overlay über der Vorschau, nicht ins Bild gerendert.
+  // Nodes ohne `subtitle`-Parameter beantworten die Anfrage mit einem Fehler — dann wird nicht weiter gefragt.
+  wrapper.style.containerType = "inline-size";
+  const subtitle = document.createElement("div");
+  subtitle.style.cssText =
+    "position:absolute;left:4%;right:4%;bottom:12%;text-align:center;color:#fff;font-weight:600;" +
+    "font-size:4.4cqw;line-height:1.25;white-space:pre-line;pointer-events:none;" +
+    "text-shadow:0 0 3px #000,0 0 3px #000,1px 1px 2px #000;";
+  let subtitleSupported = true;
+  const refreshSubtitle = async (): Promise<void> => {
+    if (!subtitleSupported) return;
+    try {
+      const res = await apiFetch(`${apiBase}/params/subtitle`);
+      if (!res.ok) {
+        subtitleSupported = false;
+        subtitle.textContent = "";
+        return;
+      }
+      const body = await res.json();
+      subtitle.textContent = typeof body?.value === "string" ? body.value : "";
+    } catch {
+      /* nächster Tick */
+    }
+  };
+
+  wrapper.append(img, notConnected, subtitle);
   img.src = previewSnapshotUrl(apiBase);
+  void refreshSubtitle();
+  const subtitleTimer = setInterval(() => void refreshSubtitle(), 300);
 
   const timer = setInterval(() => {
     // Nur neu anfragen, wenn der vorherige Request fertig ist — sonst
@@ -120,6 +147,7 @@ export function mountNodePreview(apiBase: string): MountedPreview {
     element: wrapper,
     dispose() {
       clearInterval(timer);
+      clearInterval(subtitleTimer);
     },
   };
 }

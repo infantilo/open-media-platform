@@ -10,9 +10,12 @@
 //! Zeitverhalten: die Erkennung läuft nach dem Sprechen (Segmentende + Rechenzeit), live erscheint der Text daher mit einigen
 //! Sekunden Verzug; die SRT-Spur trägt dagegen die tatsächlichen Sprechzeiten.
 
+mod caption;
 mod engine;
+mod outputs;
 mod output;
 mod pipeline;
+mod playout;
 mod segment;
 mod uibundle;
 
@@ -27,8 +30,9 @@ use omp_node_sdk::connection::{
     ReceiverConnection, ReceiverControl, ReceiverResource, bulk_cors_methods, bulk_discovery, bulk_patch, list_ids, root_discovery,
 };
 use omp_node_sdk::is04::{self, RegistryClient, TRANSPORT_MXL};
+use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
-    Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamType, PeerClient, RawResponse, ReceiverSpec, SetError,
+    Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamType, PeerClient, RawResponse, ReceiverSpec, SenderSpec, SetError,
 };
 use serde_json::{Value, json};
 
@@ -125,7 +129,7 @@ impl Shared {
 }
 
 /// Erkennung: ein Segment nach dem anderen, Ergebnis an Anzeige und Spur.
-fn worker(shared: Arc<Shared>, rx: Receiver<segment::Segment>, display: std::sync::mpsc::Sender<Vec<Cue>>, shutdown: Arc<AtomicBool>) {
+fn worker(shared: Arc<Shared>, rx: Receiver<segment::Segment>, display: std::sync::mpsc::Sender<String>, flows: Vec<std::sync::mpsc::Sender<String>>, shutdown: Arc<AtomicBool>) {
     while !shutdown.load(Ordering::Relaxed) {
         let seg = match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(s) => s,
@@ -148,7 +152,11 @@ fn worker(shared: Arc<Shared>, rx: Receiver<segment::Segment>, display: std::syn
             Ok(text) if text.is_empty() => {}
             Ok(text) => {
                 let cues = output::cues_for(&text, seg.start_ms);
-                *shared.last_text.lock().expect("lock poisoned") = text;
+                *shared.last_text.lock().expect("lock poisoned") = text.clone();
+                // Die MXL-Ausgänge (Text-Strom, CEA-608) laufen unabhängig von der Live-Grafik.
+                for f in &flows {
+                    let _ = f.send(text.clone());
+                }
                 {
                     let mut list = shared.cues.lock().expect("lock poisoned");
                     for c in &cues {
@@ -164,7 +172,7 @@ fn worker(shared: Arc<Shared>, rx: Receiver<segment::Segment>, display: std::syn
                     continue;
                 }
                 if shared.settings.lock().expect("lock poisoned").live_display {
-                    let _ = display.send(cues);
+                    let _ = display.send(text);
                 }
             }
             Err(e) => {
@@ -213,9 +221,8 @@ fn ensure_keyer(registry: &RegistryClient, mixer_label: &str, graphics_label: &s
 }
 
 /// Anzeige: Einheiten nacheinander in die Untertitelebene des Grafik-Nodes, danach leeren.
-fn display_loop(shared: Arc<Shared>, registry: RegistryClient, rx: Receiver<Vec<Cue>>, shutdown: Arc<AtomicBool>) {
-    let mut queue: VecDeque<Cue> = VecDeque::new();
-    let mut shown_until: Option<Instant> = None;
+fn display_loop(shared: Arc<Shared>, registry: RegistryClient, rx: Receiver<String>, shutdown: Arc<AtomicBool>) {
+    let mut playout = playout::Playout::default();
     let mut peer: Option<(String, PeerClient)> = None;
     let mut layer_ready = false;
     let send = |peer: &mut Option<(String, PeerClient)>, layer_ready: &mut bool, text: &str| {
@@ -253,31 +260,22 @@ fn display_loop(shared: Arc<Shared>, registry: RegistryClient, rx: Receiver<Vec<
         }
     };
     while !shutdown.load(Ordering::Relaxed) {
-        let wait = shown_until.map_or(Duration::from_millis(300), |t| t.saturating_duration_since(Instant::now()).max(Duration::from_millis(10)));
+        let wait = playout.next_due_ms().map_or(Duration::from_millis(300), |t| Duration::from_millis((t - now_ms()).clamp(10, 300) as u64));
         match rx.recv_timeout(wait) {
-            Ok(cues) => queue.extend(cues),
+            Ok(text) => playout.push(output::cues_for(&text, now_ms())),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
         loop {
             match rx.try_recv() {
-                Ok(cues) => queue.extend(cues),
+                Ok(text) => playout.push(output::cues_for(&text, now_ms())),
                 Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
             }
         }
-        if shown_until.is_some_and(|t| Instant::now() < t) {
-            continue;
-        }
-        if let Some(cue) = queue.pop_front() {
-            // Staut sich Text auf (Engine lag zurück), kürzer zeigen, um aufzuholen.
-            let mut dur = (cue.end_ms - cue.start_ms).max(1_200);
-            if queue.len() >= 2 {
-                dur = 1_200;
-            }
-            send(&mut peer, &mut layer_ready, &cue.text);
-            shown_until = Some(Instant::now() + Duration::from_millis(dur as u64));
-        } else if shown_until.take().is_some() {
-            send(&mut peer, &mut layer_ready, "");
+        match playout.tick(now_ms()) {
+            Some(Some(text)) => send(&mut peer, &mut layer_ready, &text),
+            Some(None) => send(&mut peer, &mut layer_ready, ""),
+            None => {}
         }
     }
 }
@@ -499,6 +497,18 @@ impl omp_node_sdk::ParamStore for AsrStore {
     }
 }
 
+/// Stabile Flow-ID je Instanz und Zweck (gleiche ID nach Neustart, damit Verbindungen halten).
+fn stable_flow_id(seed: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let h = |salt: u8| {
+        let mut s = std::collections::hash_map::DefaultHasher::new();
+        (salt, seed).hash(&mut s);
+        s.finish()
+    };
+    let (a, b) = (h(1), h(2));
+    format!("{:08x}-{:04x}-4{:03x}-a{:03x}-{:012x}", (a >> 32) as u32, (a >> 16) as u16, a as u16 & 0xFFF, (b >> 52) as u16 & 0xFFF, b & 0xFFFF_FFFF_FFFF)
+}
+
 fn env_or(key: &str, fallback: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| fallback.to_string())
 }
@@ -566,12 +576,72 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     });
     let shutdown = Arc::new(AtomicBool::new(false));
 
-    // Erkennung und Anzeige auf eigenen Threads
+    // Erkennung, Live-Grafik und MXL-Ausgänge auf eigenen Threads
     let (seg_tx, seg_rx): (SyncSender<segment::Segment>, Receiver<segment::Segment>) = std::sync::mpsc::sync_channel(BACKLOG);
-    let (display_tx, display_rx) = std::sync::mpsc::channel::<Vec<Cue>>();
+    let (display_tx, display_rx) = std::sync::mpsc::channel::<String>();
+
+    // MXL-Daten-Ausgänge: Text-Strom (privat) und CEA-608 im CDP, ein Grain je Bild (OMP_ASR_FPS, Standard 25/1)
+    let rate = {
+        let v = env_or("OMP_ASR_FPS", "25/1");
+        let (n, d) = v.split_once('/').unwrap_or((v.as_str(), "1"));
+        match (n.trim().parse::<u32>(), d.trim().parse::<u32>()) {
+            (Ok(n), Ok(d)) if n > 0 && d > 0 => (n, d),
+            _ => (25, 1),
+        }
+    };
+    let mut senders: Vec<SenderSpec> = vec![];
+    let mut flow_txs: Vec<std::sync::mpsc::Sender<String>> = vec![];
+    let mut output_threads: Vec<std::thread::JoinHandle<()>> = vec![];
+    let out_frames = Arc::new(AtomicU64::new(0));
+    let mut out_heartbeats: Vec<(String, Arc<AtomicU64>)> = vec![];
+    match omp_mediaio::mxl::MxlContext::new(&domain).map(Arc::new) {
+        Ok(ctx) => {
+            let seed = format!("{label}:{}", env_or("OMP_INSTANCE_ID", ""));
+            let text_id = stable_flow_id(&format!("{seed}:text"));
+            let cea_id = stable_flow_id(&format!("{seed}:cea608"));
+            match omp_mediaio::mxl::MxlDataOutput::new(ctx.clone(), &text_id, &format!("{label} Text"), &label, rate.0, rate.1) {
+                Ok(out) => {
+                    let (tx, rx) = std::sync::mpsc::channel::<String>();
+                    let hb = Arc::new(AtomicU64::new(0));
+                    out_heartbeats.push(("text-out".to_string(), hb.clone()));
+                    output_threads.push(outputs::spawn_text(out, rx, shutdown.clone(), hb, out_frames.clone()));
+                    flow_txs.push(tx);
+                    senders.push(SenderSpec {
+                        transport: Some(TRANSPORT_MXL.to_string()),
+                        flow: Some(FlowSpec::Data { id: Some(text_id), grain_rate_numerator: rate.0, grain_rate_denominator: rate.1, did_sdid: vec![(omp_mediaio::anc::DID_OMP_TEXT, omp_mediaio::anc::SDID_OMP_TEXT)] }),
+                        label: Some(format!("{label} Untertitel-Text")),
+                        ..Default::default()
+                    });
+                }
+                Err(e) => eprintln!("omp-subtitle-asr: Text-Ausgang aus — {e}"),
+            }
+            match omp_mediaio::mxl::MxlDataOutput::new(ctx.clone(), &cea_id, &format!("{label} CEA-608"), &label, rate.0, rate.1) {
+                Ok(out) => {
+                    let (tx, rx) = std::sync::mpsc::channel::<String>();
+                    let hb = Arc::new(AtomicU64::new(0));
+                    match outputs::spawn_cea(out, rate, rx, shutdown.clone(), hb.clone(), out_frames.clone()) {
+                        Ok(t) => {
+                            out_heartbeats.push(("cea-out".to_string(), hb));
+                            output_threads.push(t);
+                            flow_txs.push(tx);
+                            senders.push(SenderSpec {
+                                transport: Some(TRANSPORT_MXL.to_string()),
+                                flow: Some(FlowSpec::Data { id: Some(cea_id), grain_rate_numerator: rate.0, grain_rate_denominator: rate.1, did_sdid: vec![(caption::DID_CDP, caption::SDID_CDP)] }),
+                                label: Some(format!("{label} CEA-608 (ANC)")),
+                                ..Default::default()
+                            });
+                        }
+                        Err(e) => eprintln!("omp-subtitle-asr: CEA-608-Ausgang aus — {e}"),
+                    }
+                }
+                Err(e) => eprintln!("omp-subtitle-asr: CEA-608-Ausgang aus — {e}"),
+            }
+        }
+        Err(e) => eprintln!("omp-subtitle-asr: keine MXL-Ausgänge — {e}"),
+    }
     let worker_thread = {
         let (s, sd) = (shared.clone(), shutdown.clone());
-        std::thread::spawn(move || worker(s, seg_rx, display_tx, sd))
+        std::thread::spawn(move || worker(s, seg_rx, display_tx, flow_txs, sd))
     };
     let display_thread = {
         let (s, sd, reg) = (shared.clone(), shutdown.clone(), RegistryClient::new(registry_url.clone()));
@@ -665,7 +735,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             port,
             registry_url,
             nats_url,
-            senders: vec![],
+            senders,
             receivers: vec![ReceiverSpec {
                 id: Some(receiver_id),
                 transport: Some(TRANSPORT_MXL.to_string()),
@@ -683,6 +753,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     )
     .await?;
     handle.register_worker("pipeline", pipeline_heartbeat);
+    for (name, hb) in out_heartbeats {
+        handle.register_worker(&name, hb);
+    }
 
     let events = async {
         while let Some(event) = rx.recv().await {
@@ -704,6 +777,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _ = pipeline_thread.join();
     let _ = worker_thread.join();
     let _ = display_thread.join();
+    for t in output_threads {
+        let _ = t.join();
+    }
     if let Some(child) = engine_child.as_mut() {
         let _ = child.kill();
         let _ = child.wait();
