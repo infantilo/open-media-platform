@@ -2288,7 +2288,8 @@
       "type": "path",
       "description": "JSON-Datei mit den Gebärden. Nur als „verified“ gekennzeichnete Einträge (von Gebärdenden geprüft) kommen auf Sendung; fehlerhafte Dateien verhindern den Start.",
       "default": "data/sign/lexicon.json",
-      "group": "Übersetzung"
+      "group": "Übersetzung",
+      "pathKind": "file"
     },
     {
       "key": "OMP_SIGN_RULES",
@@ -2303,7 +2304,8 @@
       "type": "path",
       "description": "JSON-Datei mit den Regeln (Füllwörter, Zeitwörter, Verneinung, Fragewörter, Rückfall-Schwelle). Leer = eingebaute Standardregeln (Entwurf, von Fachleuten zu prüfen).",
       "default": "",
-      "group": "Übersetzung"
+      "group": "Übersetzung",
+      "pathKind": "file"
     },
     {
       "key": "OMP_SIGN_MAX_DELAY_S",
