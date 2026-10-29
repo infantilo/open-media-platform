@@ -264,6 +264,9 @@ def run(wf, ch):
             rec = n
     if rec:
         check("Recorder online", True, rec["label"])
+        # Das Original ist mono, der Mischer sendet Stereo: Kanalplan der Aufnahme (Kap. 45) nimmt nur Kanal 1,
+        # damit Original und Aufnahme dieselbe Kanalzahl haben (sonst „Kanalzahl weicht ab“ im Vergleich).
+        setparam(rec["id"], "record.audioPlan", json.dumps({"channels": [{"input": 0, "channel": 0}]}))
         # Direkt nach dem Workflow-Start ist der Recorder noch nicht an den Mischer angebunden
         # ("keine Quelle verbunden"): ein Take in dieser Zeit ergibt keine bzw. eine schwarze Aufnahme.
         # Bereitschaft per Probe-Aufnahme abwarten (UMSETZUNG.md Kap. 74, Kaltstart-Befund).
