@@ -350,7 +350,7 @@ func Load() Config {
 		BackupKeyFiles:      backupKeyFiles(),
 		UIOriginListen:      getEnv("OMP_UI_ORIGIN_LISTEN", ""),
 		UIOriginURL:         getEnv("OMP_UI_ORIGIN_URL", ""),
-		UIIsolationTypes:    splitList(getEnv("OMP_UI_ISOLATION_TYPES", "omp-scope,omp-viewer,omp-audio-monitor,omp-recorder,omp-playout-buffer,omp-media-library,omp-device-hub,omp-ograf,omp-vfa-vision,omp-vfa,omp-mxf-player,omp-mxf-player-direct,omp-switcher,omp-video-mixer-me,omp-audio-mixer,omp-playout-automation,omp-multiviewer-custom,omp-webrtc-gateway-camera,omp-webrtc-gateway-monitor")),
+		UIIsolationTypes:    splitList(getEnv("OMP_UI_ISOLATION_TYPES", "omp-scope,omp-viewer,omp-audio-monitor,omp-subtitle-asr,omp-recorder,omp-playout-buffer,omp-media-library,omp-device-hub,omp-ograf,omp-vfa-vision,omp-vfa,omp-mxf-player,omp-mxf-player-direct,omp-switcher,omp-video-mixer-me,omp-audio-mixer,omp-playout-automation,omp-multiviewer-custom,omp-webrtc-gateway-camera,omp-webrtc-gateway-monitor")),
 		UIIsolationExtra:    splitList(getEnv("OMP_UI_ISOLATION_EXTRA_PATHS", "/api/v1/events")),
 		BackupPassphrase:    backupPassphrase(),
 		BackupCopyDir:       getEnv("OMP_BACKUP_COPY_DIR", ""),

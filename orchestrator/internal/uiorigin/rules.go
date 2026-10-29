@@ -46,6 +46,7 @@ var DefaultRules = map[string][]Rule{
 	},
 	"omp-audio-mixer":            {{"GET", "/api/v1/audio-rules"}, {"GET", "/api/v1/nodes"}},
 	"omp-audio-monitor":          sourceSelectorRules,
+	"omp-subtitle-asr":           sourceSelectorRules,
 	"omp-multiviewer-custom":     sourceSelectorRules,
 	"omp-playout-automation":     {{"GET", "/api/v1/nodes"}, {"GET", "/api/v1/sources"}},
 	"omp-vfa":                    {{"GET", "/api/v1/nodes"}},
