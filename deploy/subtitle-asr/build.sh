@@ -16,6 +16,9 @@ CTX="deploy/subtitle-asr/ctx"; rm -rf "$CTX"; mkdir -p "$CTX/node" "$CTX/mxl" "$
 cp "$NODE" "$CTX/node/"
 cp -a "$MXL"/libmxl.so* "$CTX/mxl/"
 cp -a "$ENGINE/bin" "$ENGINE/models" "$CTX/engine/"
+cp -a deploy/subtitle-asr/licenses "$CTX/licenses"
+cp LICENSE "$CTX/licenses/OpenMediaPlatform-Apache-2.0" 2>/dev/null || true
+cp THIRD-PARTY-NOTICES.md "$CTX/licenses/" 2>/dev/null || true
 rm -f "$CTX"/engine/bin/libparakeet* "$CTX"/engine/bin/*.part 2>/dev/null || true
 podman build -f deploy/subtitle-asr/Containerfile --build-arg VERSION="$VERSION" \
   -t "localhost/omp-subtitle-asr:$VERSION" "$CTX"

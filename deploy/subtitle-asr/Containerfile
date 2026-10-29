@@ -14,6 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY node/omp-subtitle-asr /opt/omp/omp-subtitle-asr
 COPY mxl/ /opt/mxl/lib/
 COPY engine/ /opt/asr-engine/
+# Lizenztexte der enthaltenen Fremdkomponenten (MIT verlangt, dass sie die Kopien begleiten)
+COPY licenses/ /usr/share/licenses/omp-subtitle-asr/
 RUN mkdir -p /data/subtitles && chmod -R a+rX /opt
 
 ENV OMP_ASR_HOME=/opt/asr-engine \

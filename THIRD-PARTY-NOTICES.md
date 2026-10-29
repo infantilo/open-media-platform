@@ -26,6 +26,16 @@ of this repository's source**; they are fetched at install/build time or loaded 
 Vendored under `third_party/` at build time by `deploy/dev/install-mxl.sh` (never committed); upstream licenses apply
 (see the respective source trees).
 
+## Speech recognition in `omp-subtitle-asr` (whisper.cpp and Whisper models)
+
+| | |
+|---|---|
+| Engine | **whisper.cpp** / ggml — <https://github.com/ggml-org/whisper.cpp>, Copyright (c) 2023-2026 The ggml authors, MIT License |
+| Models | **Whisper** model weights (`ggml-small.bin`, `ggml-base.bin`, converted for whisper.cpp) — <https://github.com/openai/whisper>, Copyright (c) 2022 OpenAI, released under the MIT License (code and model weights) |
+| How it is used | The engine runs as a separate process (`whisper-server`) inside the node and is reached over local HTTP; it is not linked into OMP. Engine binary, libraries and models are fetched at build time by `tools/asr-engine/install.sh` (never committed) and shipped inside the node's container image |
+| Obligation | MIT requires the copyright and permission notice to accompany copies: the image carries both license texts under `/usr/share/licenses/omp-subtitle-asr/` (source: `deploy/subtitle-asr/licenses/`) |
+| Note | "Whisper" and "OpenAI" are names of the model's authors; OMP uses no logo and implies no endorsement |
+
 ## Container images, system packages
 
 NATS, NMOS registry, etcd, PostgreSQL/Patroni, Caddy, step-ca, SeaweedFS (S3), GStreamer, FFmpeg, Podman and the other system
