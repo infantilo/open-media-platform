@@ -38,8 +38,11 @@ pub fn wav_bytes(pcm: &[i16]) -> Vec<u8> {
 pub fn clean_text(raw: &str) -> String {
     let mut out = String::new();
     let mut depth = 0i32;
+    let mut starred = false; // „* Musik *“: Whisper kennzeichnet Geräusche mit Sternchen
     for c in raw.chars() {
         match c {
+            '*' => starred = !starred,
+            _ if starred => {}
             '[' | '(' => depth += 1,
             ']' | ')' => depth = (depth - 1).max(0),
             '♪' | '♫' => {}
@@ -142,6 +145,8 @@ mod tests {
         assert_eq!(clean_text("(Musik) Guten  Abend ♪"), "Guten Abend");
         assert_eq!(clean_text("..."), "");
         assert_eq!(clean_text("Das ist [unverständlich] gut."), "Das ist gut.");
+        assert_eq!(clean_text(" * Musik * "), "");
+        assert_eq!(clean_text("Hallo *Applaus* Welt"), "Hallo Welt");
     }
 
     #[test]
