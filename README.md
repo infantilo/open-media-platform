@@ -494,6 +494,13 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   (video+audio in one step, by tags or 1:1), 60-second undo; usable
   on a phone
 - **omp-ograf** — EBU OGraf graphics overlay node (Fill+Key)
+- **omp-subtitle-asr** — automatic subtitles: recognises speech from an
+  audio stream locally (no cloud) and produces a live subtitle layer in the
+  graphics node, a running SRT track with the real speaking times, and two
+  MXL data outputs (subtitle text and CEA-608). Viewer and multiviewers take
+  the subtitles as an extra input (overlay, optionally burnt into the
+  multiviewer output). Ships as a complete container package (node, engine,
+  models) with one-step import and uninstall
 - **omp-media-library** — file catalog with technical metadata
   (ffprobe) and mark-in/out segments
 - **omp-recorder** — records an MXL source (video/audio) to a Matroska
@@ -589,6 +596,12 @@ not a wide-open remote-exec channel). Third-party microservices can
 also be imported as Podman containers straight from the GUI, subject
 to an admission check against the same node contract every built-in
 node has to satisfy.
+Nodes can be packaged as self-contained container images
+(`deploy/container/build.sh <type>`, import and uninstall scripts;
+host networking and a named data volume are supported; removing the last
+version also removes the image and the volume). Packages exist for
+automatic subtitles, OGraf and the intercom. Instances running in
+containers report their CPU and RAM like native ones.
 
 **Reliability & operations**
 
