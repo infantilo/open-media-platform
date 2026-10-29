@@ -1505,3 +1505,55 @@ func TestRemoveCatalogEntryDeletesItsImageUnlessAnotherEntryUsesIt(t *testing.T)
 		t.Fatalf("gelöschte Images = %v, want das geteilte Image nach dem letzten Eintrag", *removed)
 	}
 }
+
+// Das Datenvolumen eines Typs verschwindet erst mit dessen letzter importierter Version.
+func TestRemoveCatalogEntryDeletesDataVolumeWithLastVersion(t *testing.T) {
+	stubImageRemoval(t)
+	var vols []string
+	orig := removeDataVolume
+	removeDataVolume = func(nodeType string) error { vols = append(vols, nodeType); return nil }
+	t.Cleanup(func() { removeDataVolume = orig })
+	l := newWithStore(nil, "http://localhost:8010", "nats://localhost:4222", newFakeInstanceStore(), nil, nil, testCatalogStore(t))
+	for _, v := range []string{"1", "2"} {
+		e := CatalogEntry{Type: "svc", Version: v, Runner: runnerPodman, Image: "localhost/svc:" + v, DataDir: "/data"}
+		if err := l.catalog.Put(e); err != nil {
+			t.Fatal(err)
+		}
+		l.importedCatalog[catalogKey("svc", v)] = e
+	}
+	if err := l.RemoveCatalogEntry("svc", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(vols) != 0 {
+		t.Fatalf("Volume zu früh gelöscht: %v", vols)
+	}
+	if err := l.RemoveCatalogEntry("svc", "2"); err != nil {
+		t.Fatal(err)
+	}
+	if len(vols) != 1 || vols[0] != "svc" {
+		t.Fatalf("gelöschte Volumes = %v, want [svc]", vols)
+	}
+}
+
+// Container-Messung: CPU-Zeit und Speicher kommen aus der cgroup des Containers.
+func TestContainerUsageReadsCgroup(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/cpu.stat", []byte("usage_usec 2500000\nuser_usec 2000000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/memory.current", []byte("123456789\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ticks, rss, err := containerUsage(dir)
+	if err != nil || ticks != 250 || rss != 123456789 {
+		t.Fatalf("ticks=%d rss=%d err=%v, want 250 / 123456789 / nil", ticks, rss, err)
+	}
+}
+
+// Ohne eigene cgroup zählt der Prozessbaum: der eigene Prozess liefert CPU-Zeit und Speicher.
+func TestProcessTreeUsageIncludesOwnProcess(t *testing.T) {
+	_, rss, err := processTreeUsage(os.Getpid())
+	if err != nil || rss == 0 {
+		t.Fatalf("rss=%d err=%v, want >0 / nil", rss, err)
+	}
+}

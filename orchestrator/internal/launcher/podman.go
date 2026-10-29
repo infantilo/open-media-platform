@@ -119,14 +119,19 @@ func runPodmanEntry(entry CatalogEntry, id, label, launchSecret string, extraEnv
 	merged["OMP_HOST"] = "127.0.0.1"
 	merged["OMP_PORT"] = strconv.Itoa(port)
 	// Aufrufe an andere Nodes (deren Hrefs zeigen auf 127.0.0.1 des Hosts) gehen aus dem Container über diesen Alias (SDK: peer::rewrite_loopback)
-	merged["OMP_LOOPBACK_ALIAS"] = containerNetworkGateway
-	merged["OMP_REGISTRY_URL"] = rewriteForContainer(registryURL)
-	merged["OMP_NATS_URL"] = rewriteForContainer(natsURL)
+	rewrite := rewriteForContainer
+	if entry.HostNetwork {
+		rewrite = func(u string) string { return u } // Netz des Hosts: Adressen gelten unverändert
+	} else {
+		merged["OMP_LOOPBACK_ALIAS"] = containerNetworkGateway
+	}
+	merged["OMP_REGISTRY_URL"] = rewrite(registryURL)
+	merged["OMP_NATS_URL"] = rewrite(natsURL)
 	// OMP_ORCHESTRATOR_URL/OMP_LAUNCH_SECRET (ARCHITECTURE.md §24.1,
 	// UMSETZUNG.md C16) — gleiches Rewrite wie Registry/NATS, der
 	// Container erreicht den Orchestrator sonst nicht unter dessen
 	// eigener Localhost-Adresse.
-	merged["OMP_ORCHESTRATOR_URL"] = rewriteForContainer(orchestratorURL)
+	merged["OMP_ORCHESTRATOR_URL"] = rewrite(orchestratorURL)
 	if launchSecret != "" {
 		merged["OMP_LAUNCH_SECRET"] = launchSecret
 	}
@@ -137,9 +142,16 @@ func runPodmanEntry(entry CatalogEntry, id, label, launchSecret string, extraEnv
 	args := []string{
 		"run", "-d", "--rm",
 		"--name", "omp-" + id,
-		"-p", fmt.Sprintf("%d:%d", port, port),
 	}
-	if entry.ExtraPort {
+	if entry.HostNetwork {
+		args = append(args, "--network=host")
+	} else {
+		args = append(args, "-p", fmt.Sprintf("%d:%d", port, port))
+	}
+	if entry.DataDir != "" {
+		args = append(args, "-v", dataVolumeName(entry.Type)+":"+entry.DataDir)
+	}
+	if entry.ExtraPort && !entry.HostNetwork {
 		args = append(args, "-p", fmt.Sprintf("%d:%d", extraPort, extraPort))
 	}
 	// MxlAccess: expliziter Opt-in am Katalog-Eintrag (s. catalog.go-Doku)
@@ -237,6 +249,22 @@ var removeContainerImage = func(image string) error {
 			return nil
 		}
 		return fmt.Errorf("podman rmi %s: %w (%s)", image, err, text)
+	}
+	return nil
+}
+
+// dataVolumeName: Name des dauerhaften Datenvolumens eines Node-Typs (CatalogEntry.DataDir).
+func dataVolumeName(nodeType string) string { return "omp-data-" + nodeType }
+
+// removeDataVolume löscht das Datenvolumen eines Node-Typs (`podman volume rm`); fehlt es, ist das kein Fehler. Variable für Tests.
+var removeDataVolume = func(nodeType string) error {
+	out, err := exec.Command("podman", "volume", "rm", dataVolumeName(nodeType)).CombinedOutput()
+	if err != nil {
+		text := strings.TrimSpace(string(out))
+		if strings.Contains(text, "no such volume") || strings.Contains(text, "no volume with name") {
+			return nil
+		}
+		return fmt.Errorf("podman volume rm %s: %w (%s)", dataVolumeName(nodeType), err, text)
 	}
 	return nil
 }

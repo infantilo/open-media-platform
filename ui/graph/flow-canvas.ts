@@ -1719,7 +1719,9 @@ export class FlowCanvas extends HTMLElement {
       const rememberedCandidates = zoneEntries
         .map((entry) => ({ entry, remembered: this.#hostViewPositions[entry.id] }))
         .filter(({ remembered }) => !!remembered && remembered.x >= x - 1 && remembered.x < x + laneWidth)
-        .sort((a, b) => a.remembered!.y - b.remembered!.y || a.entry.id.localeCompare(b.entry.id));
+        // Kacheln nicht gestarteter Workflows zuerst: sie bleiben, wo sie sind (Übersicht); wächst oder erscheint eine Node-Kachel
+        // darüber, weicht diese aus, nicht die Workflow-Kachel (sonst rutschen sie bei jedem Start weiter nach unten).
+        .sort((a, b) => Number(workflowIdFromTileId(b.entry.id) !== null) - Number(workflowIdFromTileId(a.entry.id) !== null) || a.remembered!.y - b.remembered!.y || a.entry.id.localeCompare(b.entry.id));
       for (const { entry, remembered } of rememberedCandidates) {
         if (overlapsReserved(remembered!.y, entry.height)) continue;
         finalPos.set(entry.id, remembered!);
@@ -3951,7 +3953,9 @@ export class FlowCanvas extends HTMLElement {
     // Zeichenbudget je Zeile: Kachelbreite minus Ränder minus die Knöpfe rechts (je ≈ 18 px).
     // Diagnose (🩺, Kap. 72.7): an jeder Node-Kachel, nicht an Gruppen.
     const hasDiagButton = !isGroup;
-    const buttonsWidth = (hasStopButton ? 18 : 0) + (hasTagButton ? 18 : 0) + (hasMigrateButton ? 18 : 0) + (hasDiagButton ? 18 : 0);
+    // Alarm-Symbol: abgestürzt, wiederholt neu gestartet oder nicht mehr erreichbar.
+    const alarmText = isGroup ? "" : this.#alarmTextForTile(tile);
+    const buttonsWidth = (hasStopButton ? 18 : 0) + (hasTagButton ? 18 : 0) + (hasMigrateButton ? 18 : 0) + (hasDiagButton ? 18 : 0) + (alarmText ? 18 : 0);
     const title = this.#createTitle(fullLabel, (NODE_WIDTH - 16 - buttonsWidth) / TITLE_CHAR_WIDTH);
     g.appendChild(title);
 
@@ -4020,6 +4024,26 @@ export class FlowCanvas extends HTMLElement {
         openNodeDiagnosis(tile.id, tile.label);
       });
       g.appendChild(diagBtn);
+      if (alarmText) {
+        const alarm = document.createElementNS(SVG_NS, "text");
+        alarm.setAttribute("x", String(NODE_WIDTH - (hasStopButton ? 26 : 8) - (hasMigrateButton ? 18 : 0) - (hasTagButton ? 18 : 0) - 18));
+        alarm.setAttribute("y", String(HEADER_HEIGHT / 2 + 5));
+        alarm.setAttribute("text-anchor", "end");
+        alarm.setAttribute("font-size", "14");
+        alarm.setAttribute("fill", "#ff5252");
+        alarm.style.cursor = "pointer";
+        alarm.setAttribute("data-role", "node-alarm");
+        alarm.textContent = "⚠";
+        const alarmTitle = document.createElementNS(SVG_NS, "title");
+        alarmTitle.textContent = alarmText;
+        alarm.appendChild(alarmTitle);
+        alarm.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+        alarm.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          openNodeDiagnosis(tile.id, tile.label);
+        });
+        g.appendChild(alarm);
+      }
       g.addEventListener("contextmenu", (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
@@ -5965,6 +5989,15 @@ export class FlowCanvas extends HTMLElement {
   // (also nie eine Kachel im Graph) bekommen, verschwand also bis hierhin
   // komplett spurlos. Bleibt sichtbar (rot markiert, mit Fehlertext), bis
   // sie per "Entfernen" weggeklickt oder neu gestartet wird.
+  // Text für das Alarm-Symbol einer Kachel (leer = kein Alarm).
+  #alarmTextForTile(tile: TileSpec): string {
+    const inst = tile.instanceId ? this.#paletteInstances.find((i) => i.id === tile.instanceId) : undefined;
+    if (inst?.crashed) return inst.crashMessage ? `${tt("flow.alarm.crashed")}: ${inst.crashMessage}` : tt("flow.alarm.crashed");
+    if (inst?.restartCount) return tt("flow.alarm.restarts", { n: inst.restartCount });
+    if (tile.health === "offline") return tt("flow.alarm.offline");
+    return "";
+  }
+
   #renderInstanceRow(inst: LauncherInstance, hosts: HostEntry[] = []): HTMLDivElement {
     const row = document.createElement("div");
     row.setAttribute("data-role", "instance-row");

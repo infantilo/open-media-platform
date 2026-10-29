@@ -323,4 +323,20 @@ mod tests {
         let d = decode(&pop_on_pairs(&["Cafï 日本 * _".to_string()]));
         assert_eq!(d[0].1.trim(), "Cafi ?? - -");
     }
+
+    #[test]
+    fn media_io_reader_decodes_what_the_encoder_sends() {
+        let mut enc = CaptionEncoder::new(25, 1).unwrap();
+        enc.show("Guten Abend, schöne Grüße");
+        let mut dec = omp_mediaio::cea608::Cea608Decoder::new();
+        for _ in 0..60 {
+            dec.feed_cdp(&enc.next_cdp());
+        }
+        assert_eq!(dec.text(), "Guten Abend, schöne Grüße");
+        enc.clear();
+        for _ in 0..10 {
+            dec.feed_cdp(&enc.next_cdp());
+        }
+        assert_eq!(dec.text(), "");
+    }
 }

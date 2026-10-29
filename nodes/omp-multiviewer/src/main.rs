@@ -204,6 +204,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let media_ready_pipeline = pipeline_handle.clone();
 
     let subtitle = Arc::new(omp_mediaio::mxl::SubtitleInput::new());
+    {
+        let diag_subtitle = subtitle.clone();
+        omp_node_sdk::diag::register("subtitle", Arc::new(move || diag_subtitle.diag_snapshot()));
+    }
     let subtitle_receiver_id = omp_node_sdk::idgen::new_v4();
     let subtitle_connection = Arc::new(ReceiverConnection::new(
         subtitle_receiver_id.clone(),

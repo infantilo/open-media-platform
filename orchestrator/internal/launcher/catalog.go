@@ -134,6 +134,13 @@ type CatalogEntry struct {
 	// nur für Katalog-Einträge, die es explizit setzen (admin-only Import,
 	// s. httpapi ImportCatalogEntry).
 	MxlAccess bool `json:"mxlAccess,omitempty"`
+	// HostNetwork (nur runner:"podman") startet den Container im Netz des Hosts (`--network=host`) statt im Bridge-Netz — für Nodes,
+	// die viele oder wechselnde UDP-Ports brauchen (WebRTC-Medienpfad der Intercom-Sprechstellen). Dann entfallen Port-Veröffentlichung
+	// und Adress-Umschreibung. Vertrauens-Erweiterung wie MxlAccess: nur auf ausdrücklichen Eintrag (admin-only Import).
+	HostNetwork bool `json:"hostNetwork,omitempty"`
+	// DataDir (nur runner:"podman") ist ein Pfad im Container, der auf ein benanntes Volume `omp-data-<Typ>` zeigt: Einstellungen des
+	// Nodes überleben Neustarts. Das Volume verschwindet, wenn die letzte Version des Typs aus dem Katalog entfernt wird.
+	DataDir string `json:"dataDir,omitempty"`
 	// ExtraPort (nur runner:"podman") veröffentlicht einen ZWEITEN,
 	// vorab vom Launcher gewählten Port (`podman run -p`, s. podman.go)
 	// und teilt ihn dem Container als OMP_EXTRA_PORT mit — für Nodes, die

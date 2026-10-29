@@ -1,0 +1,19 @@
+# Intercom (omp-intercom) als importierbares Microservice-Image: Node, WebRTC-Medienpfad (GStreamer webrtcbin, Opus) und MXL-Laufzeit.
+# Gleiche Debian-Bookworm-glibc wie der Host-Build. Läuft im Netz des Hosts (Katalog: hostNetwork), weil die Sprechstellen
+# den Medienpfad per UDP direkt zum Node aufbauen.
+FROM debian:bookworm-slim
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates openssl libunwind8 libdw1 \
+      libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-nice \
+    && rm -rf /var/lib/apt/lists/*
+COPY node/omp-intercom /opt/omp/omp-intercom
+COPY mxl/ /opt/mxl/lib/
+COPY licenses/ /usr/share/licenses/omp-intercom/
+RUN mkdir -p /data && chmod -R a+rX /opt
+ENV OMP_INTERCOM_DATA=/data/omp-intercom.json OMP_HTTPS_CERT_DIR=/data/https LD_LIBRARY_PATH=/opt/mxl/lib
+WORKDIR /data
+ARG VERSION=dev
+LABEL org.opencontainers.image.title="omp-intercom" org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.description="OpenMediaPlatform Intercom: Node + WebRTC-Medienpfad"
+ENTRYPOINT ["/opt/omp/omp-intercom"]

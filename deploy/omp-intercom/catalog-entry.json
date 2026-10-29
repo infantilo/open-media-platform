@@ -1,0 +1,21 @@
+{
+  "type": "omp-intercom",
+  "label": "Intercom",
+  "runner": "podman",
+  "env": {
+    "OMP_HTTPS": "1",
+    "OMP_HTTPS_PORT": "9445"
+  },
+  "description": "Sprechverbindungen zwischen Regie, Technik, Kameras, Studio und Gästen: Partyline-Kanäle, Direkt-, Gruppen- und Alle-Ruf, IFB (Programmton mit Unterbrechung), Stummschaltung (auch erzwungen) und Mikrofonsperre bei On Air. Bedient wird im Browser (auch am Handy): jede Person öffnet ihre Sprechstelle über die Kachel „Intercom“ der Operator-Konsole, Gäste per Link. Kanäle, Teilnehmer und Rechte werden unter Administration → Produktion → Intercom eingerichtet; der Node selbst braucht keine Einstellung. Mischt alle 20 ms mit Mix-minus (niemand hört sich selbst). Für das Mikrofon im Browser läuft der Node mit HTTPS (selbst signiertes Zertifikat, einmal bestätigen). Der Node läuft samt WebRTC-Medienpfad im Container (im Netz des Hosts); Kanäle, Teilnehmer und Rechte liegen in einem eigenen Datenvolumen und überleben Neustarts; beim Entfernen des Node-Typs verschwindet alles mit.",
+  "i18n": {
+    "en": {
+      "label": "Intercom",
+      "description": "Voice communication between control room, engineering, cameras, studio and guests: party-line channels, direct, group and all calls, IFB (programme audio with interrupt), muting (also forced) and microphone lock while on air. Operated in the browser (also on a phone): everyone opens their own station through the \"Intercom\" tile of the operator console, guests via a link. Channels, parties and rights are set up under Administration → Production → Intercom; the node itself needs no settings. Mixes every 20 ms with mix-minus (nobody hears themselves). For the browser microphone the node runs with HTTPS (self-signed certificate, confirm once). The node runs with its WebRTC media path inside a container (in the host network); channels, parties and rights live in their own data volume and survive restarts; removing the node type removes everything.",
+      "expectedResources": "low (a few percent of one core for dozens of participants)"
+    }
+  },
+  "expectedResources": "gering (wenige Prozent eines Kerns bei dutzenden Teilnehmern)",
+  "hostNetwork": true,
+  "mxlAccess": true,
+  "dataDir": "/data"
+}

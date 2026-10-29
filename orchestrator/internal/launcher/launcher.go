@@ -402,8 +402,9 @@ type Launcher struct {
 	// supervise()). resourceSamples ist bewusst getrennt von l.instances
 	// gehalten (s. Instance.CPUPercent-Doku) — List() mischt erst beim
 	// Lesen.
-	procState       map[string]procCPUState
-	resourceSamples map[string]instanceResourceSample
+	procState        map[string]procCPUState
+	containerCgroups map[string]containerCgroup
+	resourceSamples  map[string]instanceResourceSample
 	// gpuProbe misst die GPU des lokalen Hosts (Default gpu.Probe, in
 	// Tests ersetzbar); localGPU ist der zuletzt gemessene Host-Pool.
 	gpuProbe func(context.Context) gpu.Result
@@ -484,19 +485,20 @@ func New(catalog []CatalogEntry, registryURL, natsURL string, store *Store, even
 
 func newWithStore(staticCatalog []CatalogEntry, registryURL, natsURL string, store instanceStore, events EventPublisher, nc NATSRequester, catalog catalogStore) *Launcher {
 	l := &Launcher{
-		staticCatalog:   staticCatalog,
-		registryURL:     registryURL,
-		natsURL:         natsURL,
-		store:           store,
-		catalog:         catalog,
-		events:          events,
-		nc:              nc,
-		instances:       map[string]Instance{},
-		importedCatalog: map[string]CatalogEntry{},
-		restarts:        map[string]*restartState{},
-		procState:       map[string]procCPUState{},
-		resourceSamples: map[string]instanceResourceSample{},
-		gpuProbe:        gpu.Probe,
+		staticCatalog:    staticCatalog,
+		registryURL:      registryURL,
+		natsURL:          natsURL,
+		store:            store,
+		catalog:          catalog,
+		events:           events,
+		nc:               nc,
+		instances:        map[string]Instance{},
+		importedCatalog:  map[string]CatalogEntry{},
+		restarts:         map[string]*restartState{},
+		procState:        map[string]procCPUState{},
+		containerCgroups: map[string]containerCgroup{},
+		resourceSamples:  map[string]instanceResourceSample{},
+		gpuProbe:         gpu.Probe,
 	}
 	l.loadState()
 	l.loadImportedCatalog()
@@ -673,12 +675,24 @@ func (l *Launcher) RemoveCatalogEntry(nodeType, version string) error {
 	removed := l.importedCatalog[catalogKey(nodeType, version)]
 	delete(l.importedCatalog, catalogKey(nodeType, version))
 	stillUsed := l.imageUsedLocked(removed.Image)
+	typeStillImported := false
+	for _, e := range l.importedCatalog {
+		if e.Type == nodeType {
+			typeStillImported = true
+		}
+	}
 	l.mu.Unlock()
 
 	// Deinstallation heißt: auch das Image (mit Engine, Modellen …) verschwindet vom Host — es sei denn, ein anderer Eintrag nutzt es noch.
 	if removed.Image != "" && !stillUsed {
 		if err := removeContainerImage(removed.Image); err != nil {
 			return fmt.Errorf("launcher: catalog entry %q removed, but its image could not be deleted: %w", nodeType, err)
+		}
+	}
+	// letzte Version des Typs weg: auch dessen dauerhafte Daten
+	if removed.DataDir != "" && !typeStillImported {
+		if err := removeDataVolume(nodeType); err != nil {
+			return fmt.Errorf("launcher: catalog entry %q removed, but its data volume could not be deleted: %w", nodeType, err)
 		}
 	}
 	return nil
@@ -928,13 +942,37 @@ func (l *Launcher) sampleLocalResources() {
 		}
 		active[id] = true
 
-		ticks, err := processTimes(inst.PID)
-		if err != nil {
-			continue
-		}
-		rss, err := processRSSBytes(inst.PID)
-		if err != nil {
-			continue
+		var (
+			ticks, rss uint64
+			err        error
+			gpuPID     = inst.PID
+		)
+		if inst.ContainerID != "" {
+			// Container: Messung über dessen cgroup (alle Prozesse im Container); Pfad einmal ermitteln und merken
+			cg, ok := l.containerCgroups[id]
+			if !ok || cg.dir == "" {
+				if cg, err = containerCgroupLookup(inst.ContainerID); err != nil {
+					continue
+				}
+				l.containerCgroups[id] = cg
+			}
+			gpuPID = cg.pid
+			if cg.dir != "" {
+				ticks, rss, err = containerUsage(cg.dir)
+			} else {
+				ticks, rss, err = processTreeUsage(cg.pid)
+			}
+			if err != nil {
+				delete(l.containerCgroups, id) // Container neu gestartet o. ä.: beim nächsten Mal neu suchen
+				continue
+			}
+		} else {
+			if ticks, err = processTimes(inst.PID); err != nil {
+				continue
+			}
+			if rss, err = processRSSBytes(inst.PID); err != nil {
+				continue
+			}
 		}
 		now := time.Now()
 		prev, hadPrev := l.procState[id]
@@ -949,7 +987,7 @@ func (l *Launcher) sampleLocalResources() {
 		cpuPercent := (float64(ticks-prev.ticks) / clockTicksPerSecond / elapsed) * 100
 		rs := instanceResourceSample{cpuPercent: cpuPercent, rssBytes: rss}
 		if gres.Host != nil && gres.Procs != nil {
-			g := gpu.ForTree(gres.Procs, gres.Parents, inst.PID)
+			g := gpu.ForTree(gres.Procs, gres.Parents, gpuPID)
 			rs.gpuPercent = &g.SM
 			if g.HasFB {
 				rs.gpuMem = &g.FB
@@ -964,6 +1002,7 @@ func (l *Launcher) sampleLocalResources() {
 	// hinweg.
 	for id := range l.procState {
 		if !active[id] {
+			delete(l.containerCgroups, id)
 			delete(l.procState, id)
 			delete(l.resourceSamples, id)
 		}

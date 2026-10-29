@@ -17,6 +17,7 @@
 //! keine "Zieladresse" im RTP-Sinn, nur eine feste Flow-ID+Domain).
 
 pub mod anc;
+pub mod cea608;
 pub mod au_ring;
 pub mod rtp;
 pub mod st2110;

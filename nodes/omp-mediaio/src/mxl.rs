@@ -3990,11 +3990,23 @@ impl SubtitleInput {
     pub fn connect(&self, context: Arc<MxlContext>, flow_id: &str) -> Result<(), String> {
         self.disconnect();
         let state = self.state.clone();
+        // Hängt der Eingang am CEA-608-Strom (CDP) statt am Text-Strom, wird der Untertitel daraus gelesen.
+        let cea = Mutex::new(crate::cea608::Cea608Decoder::new());
         let input = MxlDataInput::new(context, flow_id, move |grain| {
             let mut s = state.lock().expect("lock poisoned");
-            match crate::anc::parse_text_grain(grain) {
-                Some((seq, text)) => *s = (seq, text),
-                None => s.1.clear(),
+            if let Some((seq, text)) = crate::anc::parse_text_grain(grain) {
+                *s = (seq, text);
+                return;
+            }
+            let cdps: Vec<_> = crate::anc::parse_mxl_grain(grain).unwrap_or_default().into_iter().filter(|p| p.did == 0x61 && p.sdid == 0x01).collect();
+            if cdps.is_empty() {
+                s.1.clear();
+            } else {
+                let mut cea = cea.lock().expect("lock poisoned");
+                for p in &cdps {
+                    cea.feed_cdp(&p.udw);
+                }
+                s.1 = cea.text();
             }
         })?;
         *self.input.lock().expect("lock poisoned") = Some(input);
@@ -4020,5 +4032,30 @@ impl SubtitleInput {
     /// Hat der verbundene Flow Grains geliefert?
     pub fn flowed(&self) -> bool {
         self.input.lock().expect("lock poisoned").as_ref().is_some_and(|i| i.flowed_handle().load(Ordering::Relaxed))
+    }
+
+    /// Zustand für die Node-Diagnose (`omp_node_sdk::diag`, gleiche Form wie `diag::snapshot`): ein Glied „Untertitel-Eingang“, das
+    /// Playing zeigt, wenn Grains des verbundenen Flows ankommen, und Null, solange nichts verbunden ist.
+    pub fn diag_snapshot(&self) -> serde_json::Value {
+        let flow = self.connected_flow_id();
+        let (state, text) = if flow.is_empty() {
+            ("Null", String::new())
+        } else if self.flowed() {
+            ("Playing", self.text())
+        } else {
+            ("Ready", String::new())
+        };
+        serde_json::json!({
+            "state": state,
+            "clock": false,
+            "elements": [{
+                "name": "Untertitel-Eingang",
+                "factory": if flow.is_empty() { "kein Flow".to_string() } else { format!("mxl-data {}", &flow[..flow.len().min(8)]) },
+                "state": state,
+                "parent": null,
+                "pads": [],
+                "text": text,
+            }],
+        })
     }
 }

@@ -590,6 +590,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pgm_flow_id = omp_node_sdk::idgen::new_v4();
     let subtitle_context = Arc::new(omp_mediaio::mxl::MxlContext::new(&domain)?);
     let subtitle = Arc::new(omp_mediaio::mxl::SubtitleInput::new());
+    {
+        let diag_subtitle = subtitle.clone();
+        omp_node_sdk::diag::register("subtitle", Arc::new(move || diag_subtitle.diag_snapshot()));
+    }
     let burn = Arc::new(AtomicBool::new(env_or("OMP_MULTIVIEWER_SUBTITLE_BURN", "0") == "1"));
     let pipeline_config = pipeline::Config { domain, pgm_flow_id: pgm_flow_id.clone(), label: label.clone() };
     let (subtitle_for_pipeline, initial_burn) = (subtitle.clone(), burn.load(Ordering::Relaxed));

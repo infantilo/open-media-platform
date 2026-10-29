@@ -1,0 +1,22 @@
+# OGraf-Grafik (omp-ograf) als importierbares Microservice-Image: Node, Web-Renderer (GStreamer wpesrc / WPE-WebKit) und MXL-Laufzeit.
+# Vorlagen: was beim Bauen in `templates/` liegt (prepare.sh kopiert OMP_OGRAF_TEMPLATES, Standard data/ograf-templates); die eingebaute
+# Untertitel-Vorlage legt der Node selbst an.
+FROM debian:bookworm-slim
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates libunwind8 libdw1 \
+      libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-wpe \
+      libegl1 libgles2 libgl1-mesa-dri fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+COPY node/omp-ograf /opt/omp/omp-ograf
+COPY mxl/ /opt/mxl/lib/
+COPY licenses/ /usr/share/licenses/omp-ograf/
+COPY templates/ /opt/ograf-templates/
+RUN chmod -R a+rwX /opt/ograf-templates && chmod -R a+rX /opt
+ENV OMP_OGRAF_TEMPLATES=/opt/ograf-templates LD_LIBRARY_PATH=/opt/mxl/lib XDG_RUNTIME_DIR=/tmp/xdg
+RUN mkdir -p /tmp/xdg && chmod 700 /tmp/xdg
+WORKDIR /tmp
+ARG VERSION=dev
+LABEL org.opencontainers.image.title="omp-ograf" org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.description="OpenMediaPlatform OGraf-Grafik: Node + Web-Renderer"
+ENTRYPOINT ["/opt/omp/omp-ograf"]

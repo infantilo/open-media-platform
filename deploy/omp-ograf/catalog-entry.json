@@ -1,0 +1,10 @@
+{
+  "type": "omp-ograf",
+  "label": "OGraf Grafik",
+  "runner": "podman",
+  "env": {},
+  "description": "Rendert eine EBU-OGraf-Grafikvorlage (Bauchbinde, Laufband u. a.) als Fill+Key-MXL-Ausgang für den Bildmischer-DSK. Der Web-Renderer und die Grafikvorlagen sind im Paket enthalten und laufen im Node-Container; beim Entfernen des Node-Typs verschwindet alles mit.",
+  "i18n": { "en": {"label": "OGraf Graphics", "description": "Renders an EBU OGraf graphics template (lower third, ticker etc.) as a fill+key MXL output for the video mixer DSK. The web renderer and the graphics templates are part of the package and run inside the node container; removing the node type removes everything.", "expectedResources": "moderate (web rendering per active template); image about 0.6 GB"} },
+  "expectedResources": "moderat (Web-Rendering pro aktivem Template); Image ca. 0,6 GB",
+  "mxlAccess": true
+}
