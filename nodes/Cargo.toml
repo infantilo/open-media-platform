@@ -37,6 +37,7 @@ members = [
     "omp-device-hub",
     "omp-intercom",
     "omp-subtitle-asr",
+    "omp-sign-avatar",
 ]
 
 # Eigener Rust-Code mit Pixel-Schleifen (v210-Packen/Alpha-Key-Extraktion in
@@ -51,4 +52,7 @@ opt-level = 3
 # Audiomischer (Kapitel 26): EQ/Kompressor/Gate/Delay/Pan laufen als Per-Sample-
 # Schleifen im Audio-Thread — unoptimiert (Debug) kostete 64 Kanäle ~680 % CPU.
 [profile.dev.package.omp-audio-mixer]
+opt-level = 3
+# Gebärdensprach-Avatar: Rasterizer-Schleifen (Dreiecke/Auflösen) im Debug-Profil unbrauchbar langsam.
+[profile.dev.package.omp-sign-avatar]
 opt-level = 3

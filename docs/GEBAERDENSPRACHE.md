@@ -90,6 +90,36 @@ Ziel: Machbarkeit von Rendering und Ausgang messen, bevor in Daten und Regeln in
 
 Nicht Teil von Phase 1: Untertitel-Eingang, Glossen-Regeln, Lexikon-Aufnahmen, Mimik-Grammatik, Container-Paket, Handbuch.
 
+## 7a. Phase 1 — Ergebnis (2026-10-29)
+
+Umgesetzt in `nodes/omp-sign-avatar` (Rasterizer, Avatar, Fingeralphabet, Wiedergabe, Fill+Key-Ausgang). Reines Rust ohne
+Fremdabhängigkeiten (nur GStreamer/MXL im Ausgaberahmen, wie die übrigen Nodes); `THIRD-PARTY-NOTICES.md` unverändert.
+
+- **Rasterizer:** Z-Puffer, flache Toon-Schattierung, 2×2-Überabtastung (Alpha = Deckungsgrad), zeilenweise Spannen, nur geänderte
+  Zeilen werden gelöscht/aufgelöst. Skinning ist in Phase 1 **starr** (jedes Teil an einem Knochen, Gelenke überlappen) — weiches
+  Skinning erst, wenn die Lesbarkeit es verlangt.
+- **Modell:** ca. 1300 Dreiecke, selbst erstellt (prozedural im Code), Hände 1,5-fach vergrößert für die Lesbarkeit im kleinen Bild.
+- **Fingeralphabet A–Z, Ziffern 0–9:** Näherung aus Beschreibungen, **nicht von Gebärdenden geprüft** (§6). J/Z nur als Handform mit
+  Handgelenk-Schwung, Ä/Ö/Ü als doppelter Grundbuchstabe, SCH/ß vereinfacht.
+- **Ausgang:** zwei MXL-Flows (Fill BGRA→v210, Key GRAY8→v210), 25 Bilder/s; neu gezeichnet wird nur bei geänderter Haltung und
+  nur, solange ein Leser den Flow liest (`gate_on_consumers`). Parameter `text`, `speed`, `loop`; Methoden `speak`, `stop`;
+  Umgebung `OMP_SIGN_WIDTH/HEIGHT/SS` (Standard 480×540, SS=2).
+- **Messung** (Dev-Rechner, mit anderer Last, nice; ein Kern = 100 %):
+
+| Aufbau | Last |
+|---|---|
+| nur Rendern, 480×540, SS=2, Buchstabieren (Bench `--bench`) | ≈ 6 % (Roh ohne Haltungs-Cache: ≈ 17 %, 7 ms je Bild) |
+| nur Rendern, 360×405, SS=2 | ≈ 3,5 % |
+| ganzer Node, 480×540, SS=2, Leser aktiv, Dauerbewegung | ≈ 31 % (Wandlung nach v210 und MXL-Schreiben für zwei Flows inklusive) |
+| ganzer Node, 360×405, SS=2, Leser aktiv | ≈ 7–11 % |
+
+  Schlechtester Einzelbild-Renderaufwand 12–22 ms (< 40 ms Bildzeit). Das Abbruchkriterium (15 % eines Kerns für das **Rendern**)
+  ist erfüllt; die Gesamtlast des Nodes wird von Wandlung und Ausgang bestimmt, nicht vom Rasterizer. **Empfehlung:** 360×405 als
+  Standard fürs Bild-in-Bild, 480×540 nur wenn nötig.
+- **Offen für den Nutzer:** Sichtprüfung der Lesbarkeit in der Mischer-PiP-Anzeige (Handformen, Größe), Entscheidung zu den Fragen in §9.
+- Prüfwerkzeuge: `omp-sign-avatar --dump x.png --letter K` (Einzelbild), `--bench`, ignorierter Test `flow_probe` (liest den
+  Key-Flow eines laufenden Nodes und schreibt ihn als PNG).
+
 ## 8. Weitere Phasen (Entwurf)
 
 - **Phase 2:** Untertitel-Eingang, Satzbildung, Glossen-Regeln (s. 3) mit Fachleuten, kleines Lexikon (≈100 Gebärden) aus Aufnahmen.

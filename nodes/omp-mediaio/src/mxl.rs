@@ -1332,6 +1332,12 @@ impl MxlVideoOutput {
         Ok(())
     }
 
+    /// `true`, solange `gate_on_consumers` den Ausgang mangels Leser geparkt hat — Quellen, die selbst
+    /// rechnen (z. B. omp-sign-avatar), sparen dann ihr Rendern.
+    pub fn parked_handle(&self) -> Arc<AtomicBool> {
+        self.gate_parked.clone()
+    }
+
     /// Eigenständiger, klonbarer Griff auf das "media-ready"-Flag
     /// (`ARCHITECTURE.md` §5 Punkt 6) — für Aufrufer, deren
     /// `MxlVideoOutput`-Instanz nicht über die gesamte Prozesslaufzeit
