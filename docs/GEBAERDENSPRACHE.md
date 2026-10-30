@@ -160,6 +160,17 @@ Test am echten Ausgang: Satz mit Beispiel-Lexikon gebärdet (`translate`), über
 
 Die Entscheidung zwischen 1 und 2 (und ob ein Authoring-Editor gebaut wird) liegt beim Nutzer.
 
+### Entscheidung 2026-10-30: Demo ohne Lexikon, Datenfrage später klären
+
+Für die **Demo reicht der jetzige Stand** (Rückfall Text bzw. Buchstabieren, kein freigegebenes Lexikon). **Es gibt keine offenen Daten**, die wir im Produkt nutzen dürften; das ist bewusst **offen vermerkt** und muss **vor einem Produktiveinsatz** geklärt werden.
+
+**Wo klären:**
+- **ÖGS:** LedaSila (Universität Klagenfurt, rund 19.000 Videos, davon etwa 7.400 standardisierte ÖGS-Gebärden; Lizenz unklar, „Creative-Commons-Bedingungen“ nur aus Sekundärquelle) und der Österreichische Gehörlosenbund; sign-it.at (keine Lizenzangabe).
+- **DGS:** Rechteinhaber von SignAvatars (Lizenzanfrage laut Projektseite) und des DGS-Korpus (Universität Hamburg).
+- **International:** kein offenes Lexikon gefunden (nur ein Zenodo-Datensatz mit Skelett-Animationen unter CC BY 4.0 laut Sekundärquelle, ungeprüft); Signbank-Daten sind nicht allgemein zugänglich.
+
+**Wie klären:** schriftliche Anfrage an die Rechteinhaber mit den Fragen (1) kommerzielle Nutzung erlaubt?, (2) Ableitung von Bewegungsdaten und Einbau in ein Produkt erlaubt?, (3) Namensnennung/Gebühren?, (4) bei Videos: Rechte der abgebildeten Gebärdenden. Parallel Gebärdende und Gehörlosenverbände als Autoren/Prüfer gewinnen (Voraussetzung für `verified` in jedem Fall). Lizenztexte werden vor Nutzung selbst gelesen, nicht aus Suchergebnissen übernommen. Bis dahin gilt: keine Daten mit Nicht-kommerziell-Lizenz im Produkt.
+
 ## 8. Weitere Phasen (Entwurf)
 
 - **Phase 2:** Untertitel-Eingang, Satzbildung, Glossen-Regeln (s. 3) mit Fachleuten, kleines Lexikon (≈100 Gebärden) aus Aufnahmen.
