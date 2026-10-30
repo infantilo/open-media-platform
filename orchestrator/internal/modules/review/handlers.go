@@ -728,7 +728,7 @@ type subtitleBody struct {
 	Name     string   `json:"name"`
 	Track    int      `json:"track"`
 	Language string   `json:"language"`
-	Speakers int      `json:"speakers"`
+	Speakers *int     `json:"speakers"` // fehlt = 1 (ohne Sprechererkennung, optional)
 	Names    []string `json:"names"`
 	Word     string   `json:"word"`
 	Style    string   `json:"style"`
@@ -751,7 +751,7 @@ func (a *api) startSubtitles() http.HandlerFunc {
 			writeJSON(w, http.StatusForbidden, map[string]any{"error": "Die Datei ist Ihnen nicht zugewiesen (Recht „Alle Dateien sehen“ fehlt)"})
 			return
 		}
-		j, err := a.svc.StartSubtitles(r.Context(), it.AssetID, actorOf(r), b.Name, SubtitleParams{Track: b.Track, Language: b.Language, Speakers: b.Speakers, Names: b.Names, Word: b.Word, Style: b.Style})
+		j, err := a.svc.StartSubtitles(r.Context(), it.AssetID, actorOf(r), b.Name, SubtitleParams{Track: b.Track, Language: b.Language, Speakers: speakersOrOff(b.Speakers), Names: b.Names, Word: b.Word, Style: b.Style})
 		if err != nil {
 			a.writeErr(w, err, nil)
 			return
@@ -820,4 +820,12 @@ func (a *api) downloadSubtitle() http.HandlerFunc {
 		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 		http.ServeFile(w, r, path)
 	}
+}
+
+// speakersOrOff: ohne Angabe keine Sprechererkennung (sie ist optional und rechnet minutenlang).
+func speakersOrOff(n *int) int {
+	if n == nil {
+		return 1
+	}
+	return *n
 }

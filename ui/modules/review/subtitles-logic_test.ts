@@ -1,8 +1,9 @@
 import { assertEquals } from "jsr:@std/assert";
 import { anyActive, clampPct, EMPTY_SUBTITLE_FORM, parseNames, subtitleBody } from "./subtitles-logic.ts";
 
-Deno.test("Untertitel-Formular: Standard = automatische Sprecheranzahl", () => {
-  assertEquals(subtitleBody(EMPTY_SUBTITLE_FORM), { track: 0, speakers: 0, style: "colon" });
+Deno.test("Untertitel-Formular: Standard = ohne Sprechererkennung (optional)", () => {
+  assertEquals(subtitleBody(EMPTY_SUBTITLE_FORM), { track: 0, speakers: 1 });
+  assertEquals(subtitleBody({ ...EMPTY_SUBTITLE_FORM, speakers: "auto" }), { track: 0, speakers: 0, style: "colon" });
 });
 
 Deno.test("Untertitel-Formular: ein Sprecher lässt Namen und Schreibweise weg", () => {

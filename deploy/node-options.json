@@ -2323,7 +2323,7 @@
       "label": "Rückfall bei unbekannten Wörtern",
       "type": "enum",
       "description": "Was mit einem Satz geschieht, der zu viele Wörter ohne freigegebene Gebärde enthält: nur den Text einblenden oder den Satz buchstabieren (Fingeralphabet), der Text bleibt zur Kontrolle sichtbar. Ohne freigegebenes Lexikon ist jeder Satz ein Rückfall.",
-      "default": "text",
+      "default": "spell",
       "group": "Übersetzung",
       "choices": [
         {

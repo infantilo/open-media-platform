@@ -461,7 +461,7 @@ async fn run_node_async(w: usize, h: usize, ss: usize) -> Result<(), Box<dyn std
     let engine = engine::Engine::new(
         Arc::new(lex),
         rules,
-        engine::EngineConfig { allow_unverified, max_delay_ms, fallback_spell: env_or("OMP_SIGN_FALLBACK", "text") == "spell", ..Default::default() },
+        engine::EngineConfig { allow_unverified, max_delay_ms, fallback_spell: env_or("OMP_SIGN_FALLBACK", "spell") == "spell", ..Default::default() },
     );
 
     let subtitle_context = Arc::new(omp_mediaio::mxl::MxlContext::new(&domain)?);

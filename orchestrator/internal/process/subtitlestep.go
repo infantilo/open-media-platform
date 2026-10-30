@@ -21,7 +21,7 @@ type SubtitleStepConfig struct {
 	Track   int
 	// Language: „de“, „en“ … oder „auto“.
 	Language string
-	// Speakers: 1 = ohne Sprechernamen, 0 = Anzahl automatisch, ≥ 2 = feste Anzahl.
+	// Speakers: 1 = ohne Sprechernamen (Standard), 0 = Anzahl automatisch, ≥ 2 = feste Anzahl (Sprechererkennung ist optional).
 	Speakers int
 	Names    []string
 	Word     string
@@ -114,7 +114,7 @@ func NewSubtitleExecutor(svc SubtitleService) StepExecutor {
 		if cfg.Track, err = rawInt(ev, vars, raw.Track, 0); err != nil {
 			return nil, fmt.Errorf("process: step %q: track: %w", step.ID, err)
 		}
-		if cfg.Speakers, err = rawInt(ev, vars, raw.Speakers, 0); err != nil {
+		if cfg.Speakers, err = rawInt(ev, vars, raw.Speakers, 1); err != nil {
 			return nil, fmt.Errorf("process: step %q: speakers: %w", step.ID, err)
 		}
 		// Namen: Liste oder kommagetrennter Text

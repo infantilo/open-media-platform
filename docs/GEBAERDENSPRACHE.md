@@ -138,7 +138,7 @@ Test am echten Ausgang: Satz mit Beispiel-Lexikon gebärdet (`translate`), über
 
 **Befund:** Der ANC-Weg ist in Ordnung. Ein Test über echtes MXL (`outputs.rs`, `subtitle_input_reads_both_outputs_of_the_node`) schickt Text-Strom und CEA-608-Strom des Untertitel-Nodes in den Untertitel-Eingang; beide liefern den Text. Der Avatar „reagiert“ trotzdem nicht, weil das Lexikon leer bzw. nur mit nicht freigegebenen Einträgen gefüllt ist: Jedes Wort ist unbekannt, die Unbekannt-Quote liegt über `maxUnknownRatio` (0,5), der Satz fällt auf den Rückfall — bisher nur Text-Einblendung, keine Handbewegung.
 
-**Rückfall wählbar (Option `OMP_SIGN_FALLBACK`, Parameter `fallback`):** `text` (Standard, wie bisher) oder `spell` — der Satz wird mit dem Fingeralphabet buchstabiert, der Text bleibt zur Kontrolle sichtbar. Das ist die ehrliche Lösung ohne Daten: Der Avatar bewegt sich, ohne dass erfundene Gebärden gezeigt werden. Das Fingeralphabet ist noch nicht von Gebärdenden geprüft (s. 7b); Buchstabieren ganzer Sätze ist langsam und für Gehörlose schwer lesbar, es bleibt eine Notlösung (Namen, einzelne Begriffe).
+**Rückfall wählbar (Option `OMP_SIGN_FALLBACK`, Parameter `fallback`):** `spell` (Standard seit 2026-10-30) oder `text` (nur Text einblenden, ohne Bewegung) — bei `spell` wird der Satz mit dem Fingeralphabet buchstabiert, der Text bleibt zur Kontrolle sichtbar. Das ist die ehrliche Lösung ohne Daten: Der Avatar bewegt sich, ohne dass erfundene Gebärden gezeigt werden. Das Fingeralphabet ist noch nicht von Gebärdenden geprüft (s. 7b); Buchstabieren ganzer Sätze ist langsam und für Gehörlose schwer lesbar, es bleibt eine Notlösung (Namen, einzelne Begriffe).
 
 **Datenquellen, geprüft (Stand 2026-10-30) — keine ist für ein Produkt frei nutzbar:**
 

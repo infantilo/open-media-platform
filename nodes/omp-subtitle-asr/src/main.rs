@@ -565,7 +565,8 @@ impl omp_node_sdk::ParamStore for AsrStore {
                     file: std::path::PathBuf::from(text("file")),
                     track: num("track", 0),
                     language,
-                    speakers: num("speakers", 0),
+                    // Sprechererkennung ist optional und rechnet minutenlang: ohne Angabe 1 = aus
+                    speakers: num("speakers", 1),
                     names: text("names").split(',').map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect(),
                     label_word: text("word"),
                     style,

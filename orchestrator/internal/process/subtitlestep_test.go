@@ -67,7 +67,7 @@ func TestSubtitleStepNamesAsListAndDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := svc.calls[0]
-	if c.AssetID != "A1" || c.Speakers != 0 || c.Track != 0 || len(c.Names) != 2 {
+	if c.AssetID != "A1" || c.Speakers != 1 || c.Track != 0 || len(c.Names) != 2 {
 		t.Fatalf("Standardwerte = %+v", c)
 	}
 }

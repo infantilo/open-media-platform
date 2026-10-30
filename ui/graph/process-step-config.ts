@@ -2551,7 +2551,7 @@ function buildSubtitles(cfg: Record<string, unknown>): FormPart {
   const lang = textInput(String(cfg.language ?? ""), "de", "language");
   const sp = select(
     [{ value: "0", label: tt("psc.sub.sp.auto") }, { value: "1", label: tt("psc.sub.sp.one") }, ...["2", "3", "4", "5", "6"].map((n) => ({ value: n, label: n }))],
-    String(cfg.speakers ?? "0"),
+    String(cfg.speakers ?? "1"),
     "speakers",
   );
   const names = textInput(Array.isArray(cfg.names) ? (cfg.names as string[]).join(", ") : String(cfg.names ?? ""), "Alice, Bob", "names");

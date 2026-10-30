@@ -29,7 +29,7 @@ export interface SubtitleForm {
   style: "colon" | "bracket" | "dash";
 }
 
-export const EMPTY_SUBTITLE_FORM: SubtitleForm = { name: "", track: "0", language: "", speakers: "auto", names: "", style: "colon" };
+export const EMPTY_SUBTITLE_FORM: SubtitleForm = { name: "", track: "0", language: "", speakers: "1", names: "", style: "colon" };
 
 export const SPEAKER_CHOICES = ["auto", "1", "2", "3", "4", "5", "6"];
 
