@@ -212,7 +212,7 @@ func InstancesWithMetrics(svc LauncherService, hostMetrics HostMetricsReader) []
 // Doku) statt eines Workflow-Scopes, den es hier gar nicht gibt — best
 // effort wie beim Workflow-Pfad, ein Fehler hier bricht den Start nicht ab.
 // Nutzerfund 2026-08-20 ("deklink node crasht immer noch beim start"):
-// ein per Node-Katalog/Instanzen-Tab DIREKT gestarteter `omp-decklink`
+// ein per Node-Katalog/Instanzen-Tab DIREKT gestarteter `omp-capture-card-decklink`
 // (kein Workflow-Kontext) durchlief NIE workflows.Service.Start()s
 // claimIOPortsForStart — selbst nach dessen Fix (D13-Portweitergabe,
 // s. workflows/ioports.go) startete diese Instanz weiterhin mit dem

@@ -75,8 +75,8 @@ var allowedExtraEnvKeys = map[string]bool{
 	// lehnte diese Allowlist die Anfrage bislang komplett ab
 	// ("extraEnv key ... not allowed") — live mit einem echten Host-Agent
 	// gefunden, s. docs/decisions.md.
-	"OMP_DECKLINK_DEVICE_NUMBER": true,
-	"OMP_DECKLINK_DIRECTION":     true,
+	"OMP_CARD_DEVICE_NUMBER": true,
+	"OMP_CARD_DIRECTION":     true,
 	// Die Programm-/Rollenformate setzen zusätzlich zur Auflösung die Bildrate (workflows/formats.go
 	// formatExtraEnv): ohne diese beiden Schlüssel lehnte der Agent jeden Remote-Start eines Workflows
 	// mit Format ab ("extraEnv key OMP_FRAMERATE_DEN not allowed"). OMP_ME_LEVELS: Role.MixerLevels.

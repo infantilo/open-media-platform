@@ -20,15 +20,15 @@ type ioPortAssignment struct {
 // Kontext) braucht dieselbe Übersetzung — das war die verbleibende
 // Lücke, nachdem der Workflow-Start-Pfad bereits gefixt war (s.
 // ioPortAssignment-Doku): ein per Node-Katalog/Instanzen-Tab direkt
-// gestarteter `omp-decklink` durchlief NIE `workflows.Service.Start()`,
+// gestarteter `omp-capture-card-decklink` durchlief NIE `workflows.Service.Start()`,
 // bekam also nie einen Port zugewiesen, unabhängig vom Workflow-Fix.
 //
 // Live gefundener Bug (2026-08-20): claimIOPortsForStart/executeMigration
 // claimten bereits korrekt einen freien, zum Host passenden Port — der
 // PortID-Rückgabewert wurde danach aber verworfen, nie an die gestartete
-// Instanz weitergereicht. Jede omp-decklink-Instanz startete deshalb
-// IMMER mit ihrem eingebauten Default (`OMP_DECKLINK_DEVICE_NUMBER=0`,
-// `OMP_DECKLINK_DIRECTION=ingest`, s. nodes/omp-decklink/src/main.rs),
+// Instanz weitergereicht. Jede omp-capture-card-decklink-Instanz startete deshalb
+// IMMER mit ihrem eingebauten Default (`OMP_CARD_DEVICE_NUMBER=0`,
+// `OMP_CARD_DIRECTION=ingest`, s. nodes/omp-capture-card/src/main.rs),
 // unabhängig davon, welcher Port tatsächlich geclaimt wurde — auf einem
 // Host mit mehr als einem Port/einer Karte, oder wo Port 0 keine echte
 // Hardware ist, scheiterte `set_state(Playing)` ("Karte/Treiber
@@ -45,14 +45,14 @@ func IoPortExtraEnv(req *IOPortRequirement, portID string) map[string]string {
 	}
 	switch req.CardType {
 	case "decklink", "aja", "matrox":
-		// AJA/Matrox laufen im selben Node (omp-decklink-Binary, Kap. 76) und lesen dieselben Variablen.
+		// AJA/Matrox laufen im selben Node (omp-capture-card-decklink-Binary, Kap. 76) und lesen dieselben Variablen.
 		direction := "ingest"
 		if req.Direction == "out" {
 			direction = "output"
 		}
 		return map[string]string{
-			"OMP_DECKLINK_DEVICE_NUMBER": portID,
-			"OMP_DECKLINK_DIRECTION":     direction,
+			"OMP_CARD_DEVICE_NUMBER": portID,
+			"OMP_CARD_DIRECTION":     direction,
 		}
 	default:
 		return nil

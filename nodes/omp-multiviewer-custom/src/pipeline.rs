@@ -80,14 +80,14 @@ pub struct Config {
     /// einen output um das signal auch zb auf ein gateway routen zu
     /// können" — zusätzlich zur MJPEG-Vorschau (Browser-Monitoring)
     /// registriert der Node einen zweiten, echten MXL-Video-Sender für
-    /// dieselbe komponierte Leinwand, den z. B. ein `omp-decklink` in
+    /// dieselbe komponierte Leinwand, den z. B. ein `omp-capture-card` in
     /// Ausgabe-Richtung oder `omp-2110-gateway` unverändert abgreifen
     /// kann (physischer Monitor statt Browser-Tab). "Optional" heißt
     /// hier: der Sender existiert immer in der NMOS-Registry (wie jeder
     /// andere Sender-Node), MUSS aber von niemandem verbunden werden —
     /// unbenutzte Sender sind der NMOS-Normalfall, kein Sonderzustand.
     /// Stabile Flow-ID über die gesamte Prozesslaufzeit (von `main.rs`
-    /// einmalig erzeugt, gleiches Muster wie `omp-decklink`s
+    /// einmalig erzeugt, gleiches Muster wie `omp-capture-card`s
     /// `flow_id`) — Breite/Höhe des Flows folgen dagegen bei jedem
     /// strukturellen Rebuild der jeweils AKTUELLEN Leinwandgröße
     /// (`Layout::canvas_width/-height`, per Editor änderbar); ein bereits
@@ -232,7 +232,7 @@ impl Drop for BurnPoller {
 
 impl Drop for ActivePipeline {
     fn drop(&mut self) {
-        // Dieselbe gstreamer-rs-Falle wie omp-decklink/omp-multiviewer —
+        // Dieselbe gstreamer-rs-Falle wie omp-capture-card/omp-multiviewer —
         // Pipeline::Drop räumt NICHT automatisch über NULL ab.
         let _ = self.pipeline.set_state(gst::State::Null);
     }
@@ -606,7 +606,7 @@ fn build(config: &Config, context: &Arc<MxlContext>, broadcaster: &Arc<Broadcast
         layout.canvas_height,
         PGM_FRAMERATE_NUMERATOR as u32,
         PGM_FRAMERATE_DENOMINATOR as u32,
-        // Kein Delay-Bedarf (wie omp-decklink/-source): dieser Node setzt
+        // Kein Delay-Bedarf (wie omp-capture-card/-source): dieser Node setzt
         // selbst den Ursprung, keine MXL-Eingangsseite zum Abgleichen.
         Arc::new(AtomicU64::new(0)),
     )

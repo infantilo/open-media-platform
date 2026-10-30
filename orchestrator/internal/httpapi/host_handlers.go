@@ -36,7 +36,7 @@ type IOPortInventoryStore interface {
 	// start"): handlePostInstance/handleDeleteInstance (launcher_
 	// handlers.go) brauchen denselben Claim-Mechanismus wie
 	// workflows.Service.Start()/Stop() — ein direkt über den Node-
-	// Katalog/die Instanzen-API gestarteter `omp-decklink` (kein
+	// Katalog/die Instanzen-API gestarteter `omp-capture-card-decklink` (kein
 	// Workflow-Kontext) durchlief bisher NIE claimIOPortsForStart, bekam
 	// also nie einen echten Port zugewiesen. `ReleasePort`/
 	// `ReleaseClaimedByInstance` statt `Release(workflowID, role)`: der

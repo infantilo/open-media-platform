@@ -8,7 +8,7 @@ import (
 
 func TestRoleHostBound(t *testing.T) {
 	s := &Service{launcher: &fakeLauncher{catalog: []launcher.CatalogEntry{
-		{Type: "omp-decklink", HostBound: true},
+		{Type: "omp-capture-card-decklink", HostBound: true},
 		{Type: "omp-source"},
 	}}}
 	cases := []struct {
@@ -16,7 +16,7 @@ func TestRoleHostBound(t *testing.T) {
 		role Role
 		want bool
 	}{
-		{"catalog hostBound", Role{NodeType: "omp-decklink"}, true},
+		{"catalog hostBound", Role{NodeType: "omp-capture-card-decklink"}, true},
 		{"plain role", Role{NodeType: "omp-source"}, false},
 		{"escalation pinned", Role{NodeType: "omp-source", Placement: &RolePlacementPolicy{Escalation: EscalationPinned}}, true},
 		{"exclusive io port", Role{NodeType: "omp-source", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}}, true},

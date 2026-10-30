@@ -224,7 +224,7 @@ pub fn root_discovery(method: &str, path: &str) -> Option<(u16, &'static str, Ve
 /// [`root_discovery`], aber braucht die tatsächlichen IDs — deshalb eine
 /// eigene Funktion statt Teil davon, jeder Node reicht seine eigene(n)
 /// ID(s) durch (meist eine, bei Video+Audio-Receiver-Paaren wie
-/// `omp-recorder`/`omp-decklink`/`omp-pipeline-controller` zwei). Ein
+/// `omp-recorder`/`omp-capture-card`/`omp-pipeline-controller` zwei). Ein
 /// leeres `ids` (z. B. `playout` ohne konfigurierten Sender) liefert
 /// korrekt `[]`, nicht 404 — derselbe Node hat den Pfad ja, nur (noch)
 /// keine Ressource darunter.
@@ -1114,7 +1114,7 @@ mod tests {
     /// Nachtrag 192: `single/receivers/`-Listing fehlte für alle
     /// Rust-Nodes komplett — deckt eine ID (die Regel für die meisten
     /// Nodes) und zwei IDs ab (Video+Audio-Receiver-Paare wie
-    /// `omp-recorder`/`omp-decklink`/`omp-pipeline-controller`).
+    /// `omp-recorder`/`omp-capture-card`/`omp-pipeline-controller`).
     #[test]
     fn list_ids_lists_given_ids_per_version() {
         for version in API_VERSIONS {

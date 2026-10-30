@@ -460,7 +460,7 @@ fn env_or(key: &str, fallback: &str) -> String {
 
 /// BCP-008-Tick (`MonitorKind::Receiver`) — 1s-Kadenz, gleiche
 /// Begründung wie bei den Gateway-Nodes. `streamStatus` aus
-/// `media_ready()` (anders als bei `omp-decklink`/`omp-aes67-gateway`
+/// `media_ready()` (anders als bei `omp-capture-card`/`omp-aes67-gateway`
 /// hier tatsächlich ein Dauersignal, kein "einmal wahr, bleibt wahr" —
 /// `connect()`/`disconnect()` setzen das Flag laut `pipeline.rs`-Doku
 /// bei JEDEM Quellwechsel zurück). `connectionStatus` bekommt nur den

@@ -34,7 +34,7 @@ func TestSchedulerResourcesModel(t *testing.T) {
 			{Name: "Mix", NodeType: "omp-video-mixer-me", HostID: "h1"},
 			{Name: "Quelle", NodeType: "omp-source"},
 			{Name: "Unbekannt", NodeType: "omp-neu"},
-			{Name: "Karte", NodeType: "omp-decklink", RequiredIOPort: &workflows.IOPortRequirement{CardType: "decklink", Direction: "in"}},
+			{Name: "Karte", NodeType: "omp-capture-card-decklink", RequiredIOPort: &workflows.IOPortRequirement{CardType: "decklink", Direction: "in"}},
 		}},
 	}}}
 

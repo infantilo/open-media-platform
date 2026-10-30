@@ -258,7 +258,7 @@ Full walkthroughs and context for every screen above are in
 - **AMWA BCP-008-01/02 health monitoring**: real receiver/sender status
   (link, external sync, connection/transmission, stream/essence, plus
   an aggregated overall status) on every node that touches a real
-  network or hardware boundary — `omp-2110-gateway`, `omp-decklink`,
+  network or hardware boundary — `omp-2110-gateway`, `omp-capture-card`,
   `omp-aes67-gateway`, `omp-srt-gateway` — backed by actual signals
   (GStreamer `rtpjitterbuffer` packet-loss counters, PTP lock state,
   DeckLink cable/format lock, real SRT connection statistics), not
@@ -433,7 +433,7 @@ with its own UI and self-described parameters (full list with
 functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
 
 - **omp-source** — test sources (color bars etc. plus test tone)
-- **omp-decklink** — Blackmagic DeckLink SDI/IP capture card bridge,
+- **omp-capture-card** (catalog types `-decklink`, `-aja`, `-matrox`) — SDI/IP capture card bridge for Blackmagic DeckLink,
   directed per instance (ingest: card → MXL; output: MXL → card,
   video-anchored with an independent optional audio leg); SDI and IP
   cards are addressed identically in software — a DeckLink IP card's
@@ -441,8 +441,7 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   Blackmagic's own driver, outside NMOS's reach; also exposes AMWA NMOS
   IS-08 for its embedded SDI audio channels (e.g. remap embedded
   channels 3+4 onto program audio via the standard API)
-- **omp-aja / omp-matrox** — the same card node (`omp-decklink`) with a
-  vendor backend: AJA via its GStreamer plugin, Matrox SDK cards via a
+- **omp-capture-card, vendor backends** — the same node serves AJA and Matrox as well, selected by `OMP_CARD_VENDOR`: AJA via its GStreamer plugin, Matrox SDK cards via a
   customer-built plugin named in `OMP_CARD_ELEMENTS`; video mode, device
   and extra properties are resolved by introspection and a missing
   plugin or unknown property is a clear start error. Not verified on

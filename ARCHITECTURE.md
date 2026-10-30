@@ -1742,7 +1742,7 @@ der sich Community-Beiträge orientieren, nicht die Umsetzung selbst.
 
 **Status (2026-09-13, UMSETZUNG.md D17/D18/D21):** AMWA IS-08 (Audio
 Channel Mapping, s. Standard-Tabelle §2) umgesetzt auf
-`omp-aes67-gateway` (D17), `omp-decklink` (D18, embedded SDI-Audio-
+`omp-aes67-gateway` (D17), `omp-capture-card` (D18, embedded SDI-Audio-
 Kanäle — z. B. "Embedded-Kanal 3+4 auf Programmton" per Standard-API
 statt Hersteller-Software) und `omp-2110-gateway` (D21) — alles
 Gateways/Karten mit reinem Kanal-Durchreich-Pfad, nicht
@@ -3875,7 +3875,7 @@ Ingest wird **nicht** portiert). Live-Quellen kommen ausschließlich
 bisher immer mit "keine testbare Hardware auf der Dev-Maschine"
 begründet (`UMSETZUNG.md` §0 Punkt 7). Nutzer bestätigte echte
 DeckLink-Hardware an anderer Stelle im Setup und wies per direkter
-Anweisung an, die Entscheidung aufzuheben und umzusetzen. `omp-decklink`
+Anweisung an, die Entscheidung aufzuheben und umzusetzen. `omp-capture-card` (damals `omp-decklink`)
 (Teil 1: Ingest, `UMSETZUNG.md` D10) implementiert seither genau den
 hier ausgeschlossenen Pfad — Details/Design/Testbarkeits-Grenzen in
 Kapitel 20. Diese Zeilen bleiben als Entscheidungshistorie stehen

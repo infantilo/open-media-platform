@@ -104,7 +104,7 @@ struct NamedLayout {
 }
 
 /// Validiert ein per `POST /state` eingereichtes Layout — "ehrliche
-/// Ablehnung statt stillem Clamping" (gleiche Linie wie `omp-decklink`s
+/// Ablehnung statt stillem Clamping" (gleiche Linie wie `omp-capture-card`s
 /// `audio_channels`-Validierung): ein zu kleines/negatives Maß wäre sonst
 /// erst als kryptischer GStreamer-Pipeline-Fehler beim nächsten Rebuild
 /// sichtbar, weit weg vom eigentlichen Bedienfehler.
@@ -289,7 +289,7 @@ struct MultiviewerCustomStore {
     pipeline: PipelineHandle,
     preview_url: String,
     // Nur für den readonly "pgmFlowId"-Parameter (Introspektion/Debug,
-    // gleiches Muster wie omp-decklinks "flowId") — die eigentliche
+    // gleiches Muster wie omp-capture-cards "flowId") — die eigentliche
     // Registrierung läuft über NodeConfig.senders, unabhängig von diesem
     // Feld.
     pgm_flow_id: String,
@@ -585,7 +585,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Optionaler PGM-MXL-Ausgang (Nutzerauftrag 2026-08-20, s.
     // pipeline::Config::pgm_flow_id-Doku) — stabile Flow-UUID über die
-    // gesamte Prozesslaufzeit, gleiche Konvention wie omp-decklinks
+    // gesamte Prozesslaufzeit, gleiche Konvention wie omp-capture-cards
     // flow_id.
     let pgm_flow_id = omp_node_sdk::idgen::new_v4();
     let subtitle_context = Arc::new(omp_mediaio::mxl::MxlContext::new(&domain)?);
@@ -932,7 +932,7 @@ mod tests {
     #[test]
     fn urlencoding_decode_does_not_panic_on_malformed_percent_sequence() {
         // Live gefundene Absturzkategorie (dieselbe Session, s.
-        // omp-decklink-Historie): eine Str-Slice-Indexierung nach einem
+        // omp-capture-card-Historie): eine Str-Slice-Indexierung nach einem
         // einzelnen "%" hätte bei mehrbyte-UTF-8-Folgezeichen mit
         // "byte index is not a char boundary" paniken können —
         // `urlencoding_decode` nutzt bewusst `str::from_utf8` (Result)

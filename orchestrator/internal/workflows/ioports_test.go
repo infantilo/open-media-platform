@@ -134,7 +134,7 @@ func TestStartClaimsIOPortForRequiredRole(t *testing.T) {
 	ioPorts := newFakeIOPortClaimer(fakeIOPort{hostID: "host-1", portID: "p1", cardType: "decklink", direction: "in"})
 	svc.SetIOPortClaimer(ioPorts)
 
-	def := Definition{Roles: []Role{{Name: "ingest", NodeType: "omp-decklink", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}}}}
+	def := Definition{Roles: []Role{{Name: "ingest", NodeType: "omp-capture-card-decklink", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}}}}
 	wf, err := svc.Create("wf", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -143,7 +143,7 @@ func TestStartClaimsIOPortForRequiredRole(t *testing.T) {
 	if err := svc.Start(context.Background(), wf.ID); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	awaitAndRegisterFakeNode(t, l, nodes, "omp-decklink", "node-ingest")
+	awaitAndRegisterFakeNode(t, l, nodes, "omp-capture-card-decklink", "node-ingest")
 	started := waitForStatus(t, svc, wf.ID, StatusStarted)
 
 	if started.Runtime["ingest"].HostID != "host-1" {
@@ -157,12 +157,12 @@ func TestStartClaimsIOPortForRequiredRole(t *testing.T) {
 	// wurde bislang nie an die gestartete Instanz weitergereicht — sie
 	// startete immer mit dem eingebauten device-number=0-Default, egal
 	// welcher Port tatsächlich frei/geclaimt war (s. ioPortExtraEnv-Doku).
-	gotEnv := l.lastExtraEnv["omp-decklink"]
-	if gotEnv["OMP_DECKLINK_DEVICE_NUMBER"] != "p1" {
-		t.Errorf("OMP_DECKLINK_DEVICE_NUMBER = %q, want %q (the claimed port)", gotEnv["OMP_DECKLINK_DEVICE_NUMBER"], "p1")
+	gotEnv := l.lastExtraEnv["omp-capture-card-decklink"]
+	if gotEnv["OMP_CARD_DEVICE_NUMBER"] != "p1" {
+		t.Errorf("OMP_CARD_DEVICE_NUMBER = %q, want %q (the claimed port)", gotEnv["OMP_CARD_DEVICE_NUMBER"], "p1")
 	}
-	if gotEnv["OMP_DECKLINK_DIRECTION"] != "ingest" {
-		t.Errorf("OMP_DECKLINK_DIRECTION = %q, want %q", gotEnv["OMP_DECKLINK_DIRECTION"], "ingest")
+	if gotEnv["OMP_CARD_DIRECTION"] != "ingest" {
+		t.Errorf("OMP_CARD_DIRECTION = %q, want %q", gotEnv["OMP_CARD_DIRECTION"], "ingest")
 	}
 }
 
@@ -174,7 +174,7 @@ func TestStartRejectsWhenNoMatchingIOPortAvailable(t *testing.T) {
 	ioPorts := newFakeIOPortClaimer(fakeIOPort{hostID: "host-1", portID: "p1", cardType: "decklink", direction: "out"})
 	svc.SetIOPortClaimer(ioPorts)
 
-	def := Definition{Roles: []Role{{Name: "ingest", NodeType: "omp-decklink", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}}}}
+	def := Definition{Roles: []Role{{Name: "ingest", NodeType: "omp-capture-card-decklink", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}}}}
 	wf, err := svc.Create("wf", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -208,7 +208,7 @@ func TestStartRejectsWhenIOPortRequiredButNoClaimerConfigured(t *testing.T) {
 	// eine deklarierte Hardware-Anforderung darf dadurch nicht
 	// stillschweigend ignoriert werden.
 
-	def := Definition{Roles: []Role{{Name: "ingest", NodeType: "omp-decklink", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}}}}
+	def := Definition{Roles: []Role{{Name: "ingest", NodeType: "omp-capture-card-decklink", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}}}}
 	wf, err := svc.Create("wf", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -231,8 +231,8 @@ func TestStartRollsBackPartialClaimsWhenALaterRoleCannotBeSatisfied(t *testing.T
 	svc.SetIOPortClaimer(ioPorts)
 
 	def := Definition{Roles: []Role{
-		{Name: "ingest-a", NodeType: "omp-decklink", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}},
-		{Name: "ingest-b", NodeType: "omp-decklink", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}},
+		{Name: "ingest-a", NodeType: "omp-capture-card-decklink", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}},
+		{Name: "ingest-b", NodeType: "omp-capture-card-decklink", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}},
 	}}
 	wf, err := svc.Create("wf", def, nil, "")
 	if err != nil {
@@ -261,7 +261,7 @@ func TestStopReleasesIOPortClaim(t *testing.T) {
 	ioPorts := newFakeIOPortClaimer(fakeIOPort{hostID: "host-1", portID: "p1", cardType: "decklink", direction: "in"})
 	svc.SetIOPortClaimer(ioPorts)
 
-	def := Definition{Roles: []Role{{Name: "ingest", NodeType: "omp-decklink", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}}}}
+	def := Definition{Roles: []Role{{Name: "ingest", NodeType: "omp-capture-card-decklink", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}}}}
 	wf, err := svc.Create("wf", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -269,7 +269,7 @@ func TestStopReleasesIOPortClaim(t *testing.T) {
 	if err := svc.Start(context.Background(), wf.ID); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	awaitAndRegisterFakeNode(t, l, nodes, "omp-decklink", "node-ingest")
+	awaitAndRegisterFakeNode(t, l, nodes, "omp-capture-card-decklink", "node-ingest")
 	waitForStatus(t, svc, wf.ID, StatusStarted)
 	if ioPorts.claimCount() != 1 {
 		t.Fatalf("claimCount() after Start() = %d, want 1", ioPorts.claimCount())
@@ -308,7 +308,7 @@ func setupIOPortMigrationWorkflow(t *testing.T, ioPorts *fakeIOPortClaimer) (svc
 	svc = newTestService(newFakeStore(), nodes, &fakeGraph{}, l)
 	svc.SetIOPortClaimer(ioPorts)
 
-	def := Definition{Roles: []Role{{Name: "ingest", NodeType: "omp-decklink", HostID: "host-1", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}}}}
+	def := Definition{Roles: []Role{{Name: "ingest", NodeType: "omp-capture-card-decklink", HostID: "host-1", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}}}}
 	created, err := svc.Create("wf", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -316,10 +316,10 @@ func setupIOPortMigrationWorkflow(t *testing.T, ioPorts *fakeIOPortClaimer) (svc
 	if err := svc.Start(context.Background(), created.ID); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	awaitAndRegisterFakeNode(t, l, nodes, "omp-decklink", "node-ingest")
+	awaitAndRegisterFakeNode(t, l, nodes, "omp-capture-card-decklink", "node-ingest")
 	waitForStatus(t, svc, created.ID, StatusStarted)
 
-	oldInstance = l.instanceIDFor("omp-decklink")
+	oldInstance = l.instanceIDFor("omp-capture-card-decklink")
 	return svc, nodes, l, created.ID, oldInstance
 }
 
@@ -380,7 +380,7 @@ func TestMigrateRoleMovesIOPortClaimOnSuccess(t *testing.T) {
 		defer l.mu.Unlock()
 		return len(l.started) == 2
 	})
-	newInstance := l.instanceIDFor("omp-decklink")
+	newInstance := l.instanceIDFor("omp-capture-card-decklink")
 	if newInstance == oldInstance {
 		t.Fatalf("expected a fresh instance ID for the migrated role")
 	}
@@ -390,10 +390,10 @@ func TestMigrateRoleMovesIOPortClaimOnSuccess(t *testing.T) {
 	// Instanz weitergereicht — sie startete mit dem eingebauten
 	// device-number=0-Default statt "p2".
 	l.mu.Lock()
-	gotEnv := l.lastExtraEnv["omp-decklink"]
+	gotEnv := l.lastExtraEnv["omp-capture-card-decklink"]
 	l.mu.Unlock()
-	if gotEnv["OMP_DECKLINK_DEVICE_NUMBER"] != "p2" {
-		t.Errorf("OMP_DECKLINK_DEVICE_NUMBER = %q, want %q (the newly claimed port on host-2)", gotEnv["OMP_DECKLINK_DEVICE_NUMBER"], "p2")
+	if gotEnv["OMP_CARD_DEVICE_NUMBER"] != "p2" {
+		t.Errorf("OMP_CARD_DEVICE_NUMBER = %q, want %q (the newly claimed port on host-2)", gotEnv["OMP_CARD_DEVICE_NUMBER"], "p2")
 	}
 
 	nodes.add(registry.NodeView{ID: "node-ingest-2", InstanceID: newInstance})

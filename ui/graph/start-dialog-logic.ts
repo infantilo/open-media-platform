@@ -31,7 +31,7 @@ export function filledOptions(options: Record<string, string>): Record<string, s
 }
 
 /** Karten-Node-Typen mit exklusivem I/O-Port und ihr `cardType` im Host-Inventar (Kap. 76). */
-export const IO_CARD_TYPES: Record<string, string> = { "omp-decklink": "decklink", "omp-aja": "aja", "omp-matrox": "matrox" };
+export const IO_CARD_TYPES: Record<string, string> = { "omp-capture-card-decklink": "decklink", "omp-capture-card-aja": "aja", "omp-capture-card-matrox": "matrox" };
 
 /** Anfragekörper für `POST /api/v1/instances` aus Katalogeintrag und Formular. */
 export function buildStartBody(type: string, version: string | undefined, f: StartForm): StartBody {

@@ -173,7 +173,7 @@ func TestStartAllowsAllowlistedExtraEnvKeys(t *testing.T) {
 
 // TestStartAllowsDecklinkIOPortExtraEnvKeys — live gefundener Bug
 // (2026-08-20): workflows.ioPortExtraEnv reicht den per Role.RequiredIOPort
-// geclaimten Port als OMP_DECKLINK_DEVICE_NUMBER/OMP_DECKLINK_DIRECTION
+// geclaimten Port als OMP_CARD_DEVICE_NUMBER/OMP_CARD_DIRECTION
 // weiter, war aber bis hierher nie in der Allowlist — ein Workflow mit
 // requiredIoPort auf einem per Host-Agent verwalteten Remote-Host (der
 // eigentliche Zielfall für physische I/O-Karten) scheiterte deshalb
@@ -188,7 +188,7 @@ func TestStartAllowsDecklinkIOPortExtraEnvKeys(t *testing.T) {
 		Action:     "start",
 		Type:       "sleeper",
 		InstanceID: "test-allow-decklink",
-		ExtraEnv:   map[string]string{"OMP_DECKLINK_DEVICE_NUMBER": "3", "OMP_DECKLINK_DIRECTION": "ingest"},
+		ExtraEnv:   map[string]string{"OMP_CARD_DEVICE_NUMBER": "3", "OMP_CARD_DIRECTION": "ingest"},
 	})
 	if !resp.OK {
 		t.Fatalf("Handle() = %+v, want OK=true for allowlisted decklink extraEnv keys", resp)

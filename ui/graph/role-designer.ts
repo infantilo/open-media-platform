@@ -92,7 +92,7 @@ const MIXER_LEVELS_ROW_HEIGHT = 22;
 // Nutzerauftrag 2026-08-20 (im Anschluss an den DeckLink-Crash-Loop-Fix,
 // s. role-designer-logic.ts DraftRole.requiredIoPort-Doku): sechste Zeile
 // für die Richtung des geclaimten physischen I/O-Ports — gleiches
-// Baumuster wie MIXER_LEVELS_ROW_HEIGHT, nur für nodeType==="omp-decklink"
+// Baumuster wie MIXER_LEVELS_ROW_HEIGHT, nur für nodeType==="omp-capture-card-decklink"
 // sichtbar, jede andere Rolle lässt die Zeile leer/versteckt.
 const IO_PORT_ROW_HEIGHT = 22;
 const TILE_HEIGHT =
@@ -404,7 +404,7 @@ export class RoleDesigner extends HTMLElement {
     const used = new Set(this.#roles.map((r) => r.name));
     const name = uniqueRoleName(nodeType, used);
     // requiredIoPort (s. role-designer-logic.ts DraftRole-Doku): eine
-    // omp-decklink-Rolle ohne geclaimten Port kann mit echter Hardware
+    // omp-capture-card-decklink-Rolle ohne geclaimten Port kann mit echter Hardware
     // ohnehin nie funktionieren (fester device-number=0-Default) — direkt
     // beim Anlegen gesetzt statt einer Rolle, die erst nachträglich per
     // Dropdown "scharf" gemacht werden müsste. Default "in" (Ingest,
@@ -1241,7 +1241,7 @@ export class RoleDesigner extends HTMLElement {
     // Nutzerauftrag 2026-08-20 (im Anschluss an den DeckLink-Crash-Loop-
     // Fix): Richtung des geclaimten physischen I/O-Ports — gleiches
     // Baumuster wie die mixerLevels-Zeile oben, nur für
-    // nodeType==="omp-decklink" sichtbar. cardType bleibt fix "decklink"
+    // nodeType==="omp-capture-card-decklink" sichtbar. cardType bleibt fix "decklink"
     // (bislang einziges I/O-Karten-nodeType, s. DraftRole-Doku) — nur die
     // Richtung ist wählbar.
     const ioPortObject = document.createElementNS(SVG_NS, "foreignObject");

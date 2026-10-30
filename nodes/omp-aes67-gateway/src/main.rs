@@ -716,7 +716,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 /// Doku (identische Begründung/Kadenz, Audio- statt Video-Pendant).
 /// `connectionStatus`s Verschlechterung kommt zusätzlich event-getrieben
 /// aus `run_event_loop`s `Event::Error`-Zweig (kein doppeltes GStreamer-
-/// Bus-Polling nötig, s. `omp-decklink::main::spawn_decklink_monitor_
+/// Bus-Polling nötig, s. `omp-capture-card::main::spawn_decklink_monitor_
 /// tick`-Doku zur selben Überlegung) — der Tick selbst pusht hier nur
 /// den optimistischen Healthy-Wert.
 fn spawn_sink_monitor_tick(monitor: Arc<omp_node_sdk::Monitor>, pipeline: Arc<pipeline::SinkHandle>) {

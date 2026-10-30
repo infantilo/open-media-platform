@@ -1,4 +1,4 @@
-//! GStreamer-Pipeline von `omp-decklink` (Teil 1: Ingest, `UMSETZUNG.md`
+//! GStreamer-Pipeline von `omp-capture-card` (Teil 1: Ingest, `UMSETZUNG.md`
 //! D10): `decklinkvideosrc device-number=<n> mode=<mode>` + `decklink-
 //! audiosrc device-number=<n> channels=<n>` → je ein `MxlVideoOutput`/
 //! `MxlAudioOutput` (`UMSETZUNG.md` C4), analog `omp-source`s Pipeline
@@ -72,7 +72,7 @@ static DEVICE_SELECT: std::sync::OnceLock<DeviceSelect> = std::sync::OnceLock::n
 /// `set_property_from_str` zum Absturz bringen).
 pub fn set_device_select(sel: DeviceSelect) -> Result<(), String> {
     if !SUPPORTED_PROFILES.contains(&sel.profile.as_str()) {
-        return Err(format!("OMP_DECKLINK_PROFILE={:?} nicht unterstützt (unterstützt: {SUPPORTED_PROFILES:?})", sel.profile));
+        return Err(format!("OMP_CARD_PROFILE={:?} nicht unterstützt (unterstützt: {SUPPORTED_PROFILES:?})", sel.profile));
     }
     let _ = DEVICE_SELECT.set(sel);
     Ok(())

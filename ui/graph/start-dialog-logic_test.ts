@@ -6,8 +6,8 @@ const empty = { name: "", hostId: "", ioDirection: "" as const, options: {} };
 Deno.test("Startkörper: nur Gesetztes wird gesendet", () => {
   assertEquals(buildStartBody("omp-source", undefined, empty), { type: "omp-source" });
   assertEquals(
-    buildStartBody("omp-decklink", "1.2", { name: "  Kamera 3 ", hostId: "h1", ioDirection: "in", options: { A: " 5 ", B: "  ", C: "x" } }),
-    { type: "omp-decklink", version: "1.2", hostId: "h1", label: "Kamera 3", requiredIoPort: { cardType: "decklink", direction: "in" }, options: { A: "5", C: "x" } },
+    buildStartBody("omp-capture-card-decklink", "1.2", { name: "  Kamera 3 ", hostId: "h1", ioDirection: "in", options: { A: " 5 ", B: "  ", C: "x" } }),
+    { type: "omp-capture-card-decklink", version: "1.2", hostId: "h1", label: "Kamera 3", requiredIoPort: { cardType: "decklink", direction: "in" }, options: { A: "5", C: "x" } },
   );
 });
 

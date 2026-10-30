@@ -112,7 +112,7 @@ struct IngestStore {
     /// direkt nach dem erfolgreichen Pipeline-Start. Deckt seit D21
     /// BEIDE Essenzen ab (s. `spawn_ingest_monitor_tick`) — ein
     /// eigener zweiter Monitor pro Essenz wäre spec-genauer (BCP-008
-    /// ist pro NMOS-Ressource gedacht), aber `omp-decklink` (D18)
+    /// ist pro NMOS-Ressource gedacht), aber `omp-capture-card` (D18)
     /// etabliert bereits das "ein Monitor pro Richtung"-Muster für
     /// genau diesen Fall, hier bewusst konsistent übernommen.
     monitor: Arc<omp_node_sdk::Monitor>,
@@ -294,7 +294,7 @@ impl ReceiverControl for OutputControl {
 /// Moduldoku zur bewusst getrennten Video-/Audio-Ausgangspipeline).
 /// Rührt `monitor` NICHT an (anders als `OutputControl`) — Video bleibt
 /// wie bisher der alleinige Treiber von `activate()`/`deactivate()`
-/// (identisches Muster zu `omp-decklink::main::OutputControl::is_video`,
+/// (identisches Muster zu `omp-capture-card::main::OutputControl::is_video`,
 /// dort ebenfalls nur die Video-Instanz).
 struct AudioOutputControl {
     registry: RegistryClient,
@@ -702,7 +702,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             } = resolve_audio_ingest_params()?;
             let flow_id = omp_node_sdk::idgen::new_v4();
             let audio_flow_id = omp_node_sdk::idgen::new_v4();
-            // S. `omp-decklink::main`-Pendant-Kommentar (`UMSETZUNG.md`
+            // S. `omp-capture-card::main`-Pendant-Kommentar (`UMSETZUNG.md`
             // D17/D18): `FlowSpec::Audio` UND `ChannelMapping`s
             // `OutputSpec::source_id` brauchen dieselbe, tatsächlich
             // registrierte Source-UUID.
@@ -760,7 +760,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             // AMWA IS-08 (D21) — "2110-audio-in" bündelt die per Netzwerk
             // empfangenen Audiokanäle (kein IS-04-Receiver dafür
             // registriert, reine Netzwerk-Erfassung, `parent` bleibt
-            // null/null — identisches Muster zu `omp-decklink`s "sdi-in"),
+            // null/null — identisches Muster zu `omp-capture-card`s "sdi-in"),
             // "mxl-audio-out" die des ausgehenden MXL-Audio-Senders.
             let channel_mapping = Arc::new(ChannelMapping::new(
                 vec![InputSpec {
@@ -1003,7 +1003,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             // Interoperability - NMOS IS-04.md`-Pflicht), "2110-audio-out"
             // hat KEINE Source (`source_id: None` — reiner Netzwerk-
             // Ausgang, keine NMOS-Ressource, identisches Muster zu
-            // `omp-decklink`s "sdi-out").
+            // `omp-capture-card`s "sdi-out").
             let channel_mapping = Arc::new(ChannelMapping::new(
                 vec![InputSpec {
                     id: "mxl-audio-in".to_string(),
@@ -1120,7 +1120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 ///
 /// **Ehrliche Grenze (kein Raten):** `linkStatus` bleibt hier dauerhaft
 /// `AllUp` — es gibt in dieser Umgebung kein echtes NIC-/PHY-Signal
-/// dafür (anders als z. B. `omp-decklink`s Kabel-Erkennungssignal, s.
+/// dafür (anders als z. B. `omp-capture-card`s Kabel-Erkennungssignal, s.
 /// `docs/decisions.md` BCP-008-Nachtrag: geplanter Folgeschritt). Ein
 /// kompletter Paketausfall zeigt sich stattdessen ehrlich im
 /// `connectionStatus` (`num-lost` bleibt 0, aber `media_ready()` fällt

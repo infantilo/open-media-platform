@@ -186,16 +186,16 @@ func TestReleaseClaimedByInstance(t *testing.T) {
 		t.Fatalf("SetInventory() error = %v", err)
 	}
 
-	if _, _, ok, err := store.Claim("decklink", "in", "", "", "direct:omp-decklink:a", "inst-a"); err != nil || !ok {
+	if _, _, ok, err := store.Claim("decklink", "in", "", "", "direct:omp-capture-card-decklink:a", "inst-a"); err != nil || !ok {
 		t.Fatalf("Claim(a) = ok=%v, err=%v", ok, err)
 	}
-	if _, _, ok, err := store.Claim("decklink", "in", "", "", "direct:omp-decklink:b", "inst-b"); err != nil || !ok {
+	if _, _, ok, err := store.Claim("decklink", "in", "", "", "direct:omp-capture-card-decklink:b", "inst-b"); err != nil || !ok {
 		t.Fatalf("Claim(b) = ok=%v, err=%v", ok, err)
 	}
-	if err := store.UpdateInstanceID("", "direct:omp-decklink:a", "inst-a"); err != nil {
+	if err := store.UpdateInstanceID("", "direct:omp-capture-card-decklink:a", "inst-a"); err != nil {
 		t.Fatalf("UpdateInstanceID(a) error = %v", err)
 	}
-	if err := store.UpdateInstanceID("", "direct:omp-decklink:b", "inst-b"); err != nil {
+	if err := store.UpdateInstanceID("", "direct:omp-capture-card-decklink:b", "inst-b"); err != nil {
 		t.Fatalf("UpdateInstanceID(b) error = %v", err)
 	}
 

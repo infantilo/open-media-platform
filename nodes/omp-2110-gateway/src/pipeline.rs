@@ -26,7 +26,7 @@
 //! Richtung verschieden gewählt:
 //!
 //! - **Ingest:** Video- UND Audio-Zweig teilen sich EIN `gst::Pipeline`-
-//!   Objekt (wie `omp-decklink::pipeline::run_ingest`s Video+Audio-
+//!   Objekt (wie `omp-capture-card::pipeline::run_ingest`s Video+Audio-
 //!   Branches) — beide sind "einmal konfiguriert, dauerhaft aktiv" (kein
 //!   Reconnect-Unterschied zwischen den Essenzen), ein gemeinsamer PTP-
 //!   Clock-Apply auf dieselbe Pipeline ist ohnehin die korrekte Semantik
@@ -34,17 +34,17 @@
 //! - **Output:** Video (bestehend, unverändert) und Audio (neu) bleiben
 //!   ZWEI unabhängige `gst::Pipeline`-Objekte mit eigenem Connect/
 //!   Disconnect-Lebenszyklus (wie `omp-aes67-gateway::pipeline::
-//!   run_source`) — anders als bei `omp-decklink` (eine einzelne SDI-
+//!   run_source`) — anders als bei `omp-capture-card` (eine einzelne SDI-
 //!   Ausgangskarte kann physisch nicht "nur Ton, kein Bild" senden) ist
 //!   ein ST2110-Netzwerkausgang genau das ein reales, unabhängiges
 //!   Deployment-Szenario (z. B. ein reiner Audio-Embedder/-De-Embedder);
-//!   "Video als Anker-Verbindung" (`omp-decklink`s Modell) würde hier
+//!   "Video als Anker-Verbindung" (`omp-capture-card`s Modell) würde hier
 //!   eine Hardware-Beschränkung erfinden, die es nicht gibt.
 //!
 //! IS-08 (`omp_node_sdk::channelmapping`, `UMSETZUNG.md` D17/D18) sitzt
 //! in beiden Fällen als `audiomixmatrix` zwischen dem Audio-Eingang und
 //! dessen MXL-/2110-Ausgang, exakt wie bei `omp-aes67-gateway`/
-//! `omp-decklink` (`main.rs` verdrahtet die Aktivierung).
+//! `omp-capture-card` (`main.rs` verdrahtet die Aktivierung).
 
 use std::collections::BTreeMap;
 use std::sync::mpsc::{Receiver, Sender};
@@ -615,7 +615,7 @@ pub fn run_output(
 // Audio-Output: MXL-Flow → 2110/AES67-Multicast (D21) — bewusst EIGENE,
 // vom Video-Ausgang unabhängige Pipeline/Verbindung, s. Moduldoku oben
 // ("Video als Anker-Verbindung" passt hier nicht, anders als bei
-// `omp-decklink`). Struktur exakt nach dem Vorbild von
+// `omp-capture-card`). Struktur exakt nach dem Vorbild von
 // `omp-aes67-gateway::pipeline::{SourceConfig, SourcePipelineHandle,
 // ActiveSourcePipeline, build_source, run_source}` — bewusst dupliziert
 // statt geteilt (jeder Gateway-Node bleibt ein unabhängiges Binary,

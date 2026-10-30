@@ -1,21 +1,21 @@
-//! omp-decklink: Blackmagic-DeckLink-SDI/IP-Capture-Karte ⇄ MXL
+//! omp-capture-card: Blackmagic-DeckLink-SDI/IP-Capture-Karte ⇄ MXL
 //! (`UMSETZUNG.md` D10). Gerichtet je Instanz
-//! (`OMP_DECKLINK_DIRECTION=ingest|output`, gleiches Muster wie
+//! (`OMP_CARD_DIRECTION=ingest|output`, gleiches Muster wie
 //! `omp-srt-gateway`/`omp-2110-gateway`):
 //!
 //! - **Ingest** (Teil 1, Default): Karte → MXL, reine Live-Quelle wie
 //!   `omp-source` (`nodes/omp-source/src/main.rs`, hier als Vorlage
 //!   übernommen), aber echte Hardware-Erfassung statt `videotestsrc`/
-//!   `audiotestsrc`. Modus/Gerät fix per Env-Var (`OMP_DECKLINK_*`).
+//!   `audiotestsrc`. Modus/Gerät fix per Env-Var (`OMP_CARD_*`).
 //! - **Output** (Teil 2): MXL → Karte, Quellwahl per echtem IS-05-
 //!   Receiver-PATCH (Flow-Editor drag&drop), gleiches Muster wie
 //!   `omp-2110-gateway`s Output-Richtung + `omp-recorder`s zwei
 //!   unabhängige Video-/Audio-Receiver (Details `pipeline.rs`-Moduldoku).
 //!
 //! Mehrfach instanziierbar (`OMP_LABEL`/`OMP_PORT`), je eine Instanz pro
-//! Gerät (`OMP_DECKLINK_DEVICE_NUMBER` oder stabiler `OMP_DECKLINK_
+//! Gerät (`OMP_CARD_DEVICE_NUMBER` oder stabiler `OMP_CARD_
 //! PERSISTENT_ID`) und Richtung. **Duplex-Karten** (DeckLink IP, SDI mit
-//! `*-full`-Profil, `OMP_DECKLINK_PROFILE`) erfassen und geben gleichzeitig
+//! `*-full`-Profil, `OMP_CARD_PROFILE`) erfassen und geben gleichzeitig
 //! aus: eine Ingest- und eine Output-Instanz DERSELBEN Karte sind dort
 //! ausdrücklich vorgesehen. Nur Half-Duplex-Profile erlauben je Teilgerät
 //! eine Richtung (Blackmagic-Treiber-Grenze, kein OMP-Check dafür).
@@ -259,9 +259,9 @@ impl ReceiverControl for OutputControl {
                             self.pipeline.connect_audio(flow_id);
                         }
                     }
-                    None => eprintln!("omp-decklink: sender {sender_id} has no flow_id"),
+                    None => eprintln!("omp-capture-card: sender {sender_id} has no flow_id"),
                 },
-                Err(e) => eprintln!("omp-decklink: resolve sender {sender_id} failed: {e}"),
+                Err(e) => eprintln!("omp-capture-card: resolve sender {sender_id} failed: {e}"),
             },
             _ => {
                 *self.connected_flow_id.lock().expect("lock poisoned") = String::new();
@@ -292,7 +292,7 @@ impl ReceiverControl for AncControl {
             (Some(sender_id), true) => match self.registry.get_sender(sender_id) {
                 Ok(sender) => sender.flow_id,
                 Err(e) => {
-                    eprintln!("omp-decklink: resolve anc sender {sender_id} failed: {e}");
+                    eprintln!("omp-capture-card: resolve anc sender {sender_id} failed: {e}");
                     return;
                 }
             },
@@ -309,7 +309,7 @@ impl ReceiverControl for AncControl {
                     *input = Some(i);
                     *self.connected_flow_id.lock().expect("lock poisoned") = flow_id;
                 }
-                Err(e) => eprintln!("omp-decklink: anc connect {flow_id} failed: {e}"),
+                Err(e) => eprintln!("omp-capture-card: anc connect {flow_id} failed: {e}"),
             }
         }
     }
@@ -542,38 +542,45 @@ fn spawn_output_monitor_tick(monitor: Arc<omp_node_sdk::Monitor>, pipeline: pipe
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let label = env_or("OMP_LABEL", "DeckLink");
+    card::set_backend_from_env()?;
+    let label = env_or(
+        "OMP_LABEL",
+        match card::backend().vendor.as_str() {
+            "aja" => "AJA",
+            "custom" => "Capture card",
+            _ => "DeckLink",
+        },
+    );
     let host = env_or("OMP_HOST", "127.0.0.1");
     let port: u16 = env_or("OMP_PORT", "9330").parse()?;
     let registry_url = env_or("OMP_REGISTRY_URL", "http://127.0.0.1:8010");
     let nats_url = env_or("OMP_NATS_URL", "nats://localhost:4222");
     let domain = env_or("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl");
-    let device_number: i32 = env_or("OMP_DECKLINK_DEVICE_NUMBER", "0").parse()?;
+    let device_number: i32 = env_or("OMP_CARD_DEVICE_NUMBER", "0").parse()?;
     // Duplex-Karten (DeckLink IP, SDI-Profile `*-full`) erfassen und geben gleichzeitig aus: je Richtung eine Instanz,
     // beide mit derselben Karte. `PERSISTENT_ID` (hat Vorrang vor der Gerätenummer) hält die Zuordnung bei mehreren
     // Karten stabil; `PROFILE` wählt bei Mehr-Profil-Karten das Duplex-Profil (leer/`default` = unverändert).
-    let persistent_id: Option<i64> = match env_or("OMP_DECKLINK_PERSISTENT_ID", "").trim() {
+    let persistent_id: Option<i64> = match env_or("OMP_CARD_PERSISTENT_ID", "").trim() {
         "" => None,
         v => Some(v.parse()?),
     };
-    let profile = env_or("OMP_DECKLINK_PROFILE", "default");
-    card::set_backend_from_env()?;
+    let profile = env_or("OMP_CARD_PROFILE", "default");
     pipeline::set_device_select(pipeline::DeviceSelect {
         persistent_id,
         profile: if profile.trim().is_empty() { "default".to_string() } else { profile.trim().to_string() },
     })?;
-    let mode = env_or("OMP_DECKLINK_MODE", "1080p25");
-    let audio_channels: u32 = env_or("OMP_DECKLINK_AUDIO_CHANNELS", "2").parse()?;
+    let mode = env_or("OMP_CARD_MODE", "1080p25");
+    let audio_channels: u32 = env_or("OMP_CARD_AUDIO_CHANNELS", "2").parse()?;
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
 
-    let direction = match env_or("OMP_DECKLINK_DIRECTION", "ingest").as_str() {
+    let direction = match env_or("OMP_CARD_DIRECTION", "ingest").as_str() {
         "output" => Direction::Output,
         _ => Direction::Ingest,
     };
 
     if pipeline::mode_info(&mode).is_none() {
         return Err(format!(
-            "OMP_DECKLINK_MODE={mode:?} nicht unterstützt (unterstützt: {:?})",
+            "OMP_CARD_MODE={mode:?} nicht unterstützt (unterstützt: {:?})",
             pipeline::SUPPORTED_MODES
         )
         .into());
@@ -618,12 +625,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Ok(Ok(handle)) => handle,
                 Ok(Err(e)) => {
                     eprintln!(
-                        "omp-decklink: ingest pipeline build failed (device-number={device_number}, mode={mode}): {e}"
+                        "omp-capture-card: ingest pipeline build failed (device-number={device_number}, mode={mode}): {e}"
                     );
                     return Err(e.into());
                 }
                 Err(_) => {
-                    eprintln!("omp-decklink: ingest pipeline thread ended before reporting readiness");
+                    eprintln!("omp-capture-card: ingest pipeline thread ended before reporting readiness");
                     return Err("ingest pipeline thread ended before reporting readiness".into());
                 }
             };
@@ -733,7 +740,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }))
                 .await
             {
-                eprintln!("omp-decklink: announcing channelmapping control failed: {e}");
+                eprintln!("omp-capture-card: announcing channelmapping control failed: {e}");
             }
 
             handle.register_worker("pipeline", pipeline_heartbeat);
@@ -744,7 +751,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         pipeline::Event::Error(message) => {
                             // Fehlercode [OMP-nnnn] voranstellen, wenn die Meldung einem Katalogeintrag entspricht (Kap. 72.8)
                             let message = omp_node_sdk::errcode::tag(&message);
-                            eprintln!("omp-decklink: pipeline error: {message}");
+                            eprintln!("omp-capture-card: pipeline error: {message}");
                             // Sofortige Verschlechterung (s.
                             // `spawn_decklink_monitor_tick`-Doku) — der
                             // Tick pusht danach weiter optimistisch
@@ -760,7 +767,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         pipeline::Event::SignalChanged(ok) => {
                             signal.store(ok, Ordering::Relaxed);
                             eprintln!(
-                                "omp-decklink: signal [{device_number}]: {}",
+                                "omp-capture-card: signal [{device_number}]: {}",
                                 if ok { "OK" } else { "KEIN SIGNAL" }
                             );
                             if !ok {
@@ -777,10 +784,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {
-                    eprintln!("omp-decklink: shutdown requested");
+                    eprintln!("omp-capture-card: shutdown requested");
                 }
                 _ = events => {
-                    eprintln!("omp-decklink: pipeline thread ended");
+                    eprintln!("omp-capture-card: pipeline thread ended");
                 }
             }
 
@@ -809,11 +816,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let pipeline_handle = match ready_rx.await {
                 Ok(Ok(handle)) => handle,
                 Ok(Err(e)) => {
-                    eprintln!("omp-decklink: output pipeline init failed: {e}");
+                    eprintln!("omp-capture-card: output pipeline init failed: {e}");
                     return Err(e.into());
                 }
                 Err(_) => {
-                    eprintln!("omp-decklink: output pipeline thread ended before reporting readiness");
+                    eprintln!("omp-capture-card: output pipeline thread ended before reporting readiness");
                     return Err("output pipeline thread ended before reporting readiness".into());
                 }
             };
@@ -955,7 +962,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }))
                 .await
             {
-                eprintln!("omp-decklink: announcing channelmapping control failed: {e}");
+                eprintln!("omp-capture-card: announcing channelmapping control failed: {e}");
             }
 
             handle.register_worker("pipeline", pipeline_heartbeat);
@@ -966,7 +973,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         pipeline::Event::Error(message) => {
                             // Fehlercode [OMP-nnnn] voranstellen, wenn die Meldung einem Katalogeintrag entspricht (Kap. 72.8)
                             let message = omp_node_sdk::errcode::tag(&message);
-                            eprintln!("omp-decklink: pipeline error: {message}");
+                            eprintln!("omp-capture-card: pipeline error: {message}");
                             // S. `spawn_decklink_monitor_tick`-Doku —
                             // nur relevant, solange verbunden, sonst hat
                             // `deactivate()` `activity` schon auf
@@ -992,10 +999,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {
-                    eprintln!("omp-decklink: shutdown requested");
+                    eprintln!("omp-capture-card: shutdown requested");
                 }
                 _ = events => {
-                    eprintln!("omp-decklink: pipeline thread ended");
+                    eprintln!("omp-capture-card: pipeline thread ended");
                 }
             }
 

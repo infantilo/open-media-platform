@@ -11,24 +11,24 @@
     "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
   },
   {
-    "type": "omp-decklink",
+    "type": "omp-capture-card-decklink",
     "hostBound": true,
     "label": "DeckLink",
     "runner": "process",
-    "command": ["../nodes/target/release/omp-decklink"],
-    "env": {},
-    "description": "Im Ausgang bettet der Empfänger „ANC / Untertitel“ CEA-708-CDPs (DID 0x61/SDID 0x01) eines MXL-Daten-Flows in die VANC-Zeile ein (nur CDP; ohne Hardware nicht geprüft). Blackmagic-DeckLink-SDI/IP-Karte (Video+Audio) ⇄ MXL, gerichtet je Instanz (UMSETZUNG.md D10: Teil 1 Ingest, Teil 2 Ausgabe). Braucht echte Hardware am jeweiligen Host, per OMP_DECKLINK_DEVICE_NUMBER/OMP_DECKLINK_DIRECTION gewählt — auf einem Host ohne passende Karte startet die Instanz mit klarem Fehler statt still zu laufen. Für Rollen mit requiredIoPort (§6.1 Erweiterung 2026-07-10, D13) setzt der Orchestrator beide Variablen automatisch aus dem geclaimten Port; ohne requiredIoPort bleibt der eingebaute Default (device-number=0, ingest).",
-    "i18n": { "en": {"description": "In output mode the receiver \"ANC / Subtitles\" embeds CEA-708 CDPs (DID 0x61/SDID 0x01) of an MXL data flow into the VANC line (CDP only; not verified without hardware). Blackmagic DeckLink SDI/IP card (video+audio) ⇄ MXL, directional per instance (UMSETZUNG.md D10: part 1 ingest, part 2 output). Needs real hardware on the respective host, chosen via OMP_DECKLINK_DEVICE_NUMBER/OMP_DECKLINK_DIRECTION — on a host without a matching card the instance starts with a clear error instead of running silently. For roles with requiredIoPort (§6.1 extension 2026-07-10, D13) the orchestrator sets both variables automatically from the claimed port; without requiredIoPort the built-in default (device-number=0, ingest) applies.", "expectedResources": "low, constant (hardware capture, no software encoding)"} },
+    "command": ["../nodes/target/release/omp-capture-card"],
+    "env": { "OMP_CARD_VENDOR": "decklink" },
+    "description": "Im Ausgang bettet der Empfänger „ANC / Untertitel“ CEA-708-CDPs (DID 0x61/SDID 0x01) eines MXL-Daten-Flows in die VANC-Zeile ein (nur CDP; ohne Hardware nicht geprüft). Blackmagic-DeckLink-SDI/IP-Karte (Video+Audio) ⇄ MXL, gerichtet je Instanz (UMSETZUNG.md D10: Teil 1 Ingest, Teil 2 Ausgabe). Braucht echte Hardware am jeweiligen Host, per OMP_CARD_DEVICE_NUMBER/OMP_CARD_DIRECTION gewählt — auf einem Host ohne passende Karte startet die Instanz mit klarem Fehler statt still zu laufen. Für Rollen mit requiredIoPort (§6.1 Erweiterung 2026-07-10, D13) setzt der Orchestrator beide Variablen automatisch aus dem geclaimten Port; ohne requiredIoPort bleibt der eingebaute Default (device-number=0, ingest).",
+    "i18n": { "en": {"description": "In output mode the receiver \"ANC / Subtitles\" embeds CEA-708 CDPs (DID 0x61/SDID 0x01) of an MXL data flow into the VANC line (CDP only; not verified without hardware). Blackmagic DeckLink SDI/IP card (video+audio) ⇄ MXL, directional per instance (UMSETZUNG.md D10: part 1 ingest, part 2 output). Needs real hardware on the respective host, chosen via OMP_CARD_DEVICE_NUMBER/OMP_CARD_DIRECTION — on a host without a matching card the instance starts with a clear error instead of running silently. For roles with requiredIoPort (§6.1 extension 2026-07-10, D13) the orchestrator sets both variables automatically from the claimed port; without requiredIoPort the built-in default (device-number=0, ingest) applies.", "expectedResources": "low, constant (hardware capture, no software encoding)"} },
     "expectedResources": "gering, konstant (Hardware-Erfassung, kein Software-Encoding)",
     "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
   },
   {
-    "type": "omp-aja",
+    "type": "omp-capture-card-aja",
     "hostBound": true,
     "label": "AJA",
     "runner": "process",
     "command": [
-      "../nodes/target/release/omp-decklink"
+      "../nodes/target/release/omp-capture-card"
     ],
     "env": {
       "OMP_CARD_VENDOR": "aja"
@@ -49,12 +49,12 @@
     }
   },
   {
-    "type": "omp-matrox",
+    "type": "omp-capture-card-matrox",
     "hostBound": true,
     "label": "Matrox",
     "runner": "process",
     "command": [
-      "../nodes/target/release/omp-decklink"
+      "../nodes/target/release/omp-capture-card"
     ],
     "env": {
       "OMP_CARD_VENDOR": "custom"

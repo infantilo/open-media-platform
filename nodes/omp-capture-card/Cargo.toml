@@ -1,5 +1,5 @@
 [package]
-name = "omp-decklink"
+name = "omp-capture-card"
 version = "0.1.0"
 edition = "2024"
 # Projektlizenz noch nicht entschieden (docs/decisions.md, Schritt C1) —

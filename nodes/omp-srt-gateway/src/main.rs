@@ -111,7 +111,7 @@ impl ParamStore for GatewayStore {
 }
 
 /// BCP-008-Tick — 1s-Kadenz, gleiche Begründung wie bei den anderen drei
-/// Gateway-Nodes (`omp-2110-gateway`/`omp-decklink`/`omp-aes67-gateway`).
+/// Gateway-Nodes (`omp-2110-gateway`/`omp-capture-card`/`omp-aes67-gateway`).
 /// Anders als dort aber EIN Tick pro Prozess, der je nach `direction`
 /// unterschiedliche Signalpaare liest (Uplink/Downlink betreiben
 /// jeweils nur EINEN SRT-Endpunkt, s. `pipeline::ActiveEndpoint`) —
@@ -347,7 +347,7 @@ mod bcp008_tests {
 
     // `GatewayStore` braucht keine echte Pipeline (alle Felder sind
     // einfache Werte) — direkt testbar, gleiches Muster wie
-    // `omp-decklink::bcp008_tests`.
+    // `omp-capture-card::bcp008_tests`.
     fn store(direction: Direction) -> GatewayStore {
         GatewayStore {
             direction,
