@@ -481,7 +481,17 @@ impl ParamStore for OutputStore {
             ))),
             "connectedAncFlowId" => Some(serde_json::json!(*self.connected_anc_flow_id.lock().expect("lock poisoned"))),
             "destinationAncEndpoint" => Some(serde_json::json!(format!("{}:{}", self.destination_anc_host, self.destination_anc_port))),
-            "ancSdp" => Some(serde_json::json!(omp_mediaio::st2110_anc::sdp("OMP ANC", &self.destination_anc_host, self.destination_anc_port, &[(0x61, 0x01)]))),
+            "ancSdp" => {
+                let (origin_ip, mac) = omp_mediaio::st2110_anc::local_route_info(&self.destination_anc_host);
+                let sdp = omp_mediaio::st2110_anc::sdp(
+                    "OMP ANC",
+                    &self.destination_anc_host,
+                    self.destination_anc_port,
+                    &[(0x61, 0x01)],
+                    &omp_mediaio::st2110_anc::SdpOptions { origin_ip, ptp: self.ptp_domain.is_some(), mac },
+                );
+                Some(serde_json::json!(sdp))
+            }
             "ancStats" => Some(serde_json::json!(match &*self.anc_output.lock().expect("lock poisoned") {
                 Some(o) => serde_json::json!({
                     "frames": o.frames.load(std::sync::atomic::Ordering::Relaxed),

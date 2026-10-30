@@ -123,22 +123,78 @@ pub fn rtp_timestamp(tai_ns: u64) -> u32 {
     ((tai_ns as u128 * 90_000 / 1_000_000_000) & 0xFFFF_FFFF) as u32
 }
 
-/// SDP für den ANC-Strom (ST 2110-40). `did_sdid` je Paar wie `0x61,0x01` (CEA-708-CDP). Es fehlt bewusst die Uhr-Angabe
-/// (`ts-refclk`): sie hängt vom Netz ab und ist hier nicht bekannt.
-pub fn sdp(name: &str, dest_host: &str, port: u16, did_sdid: &[(u8, u8)]) -> String {
-    let multicast = dest_host.split('.').next().and_then(|f| f.parse::<u8>().ok()).is_some_and(|f| (224..=239).contains(&f));
+/// TTL der Multicast-Pakete (Socket) und im SDP (`c=`-Zeile) — beides muss übereinstimmen.
+pub const MULTICAST_TTL: u32 = 16;
+
+/// Angaben für das SDP, die vom Netz abhängen.
+#[derive(Default, Clone, Debug)]
+pub struct SdpOptions {
+    /// Absenderadresse (`o=`, `a=source-filter`); `None` = unbekannt.
+    pub origin_ip: Option<String>,
+    /// PTP-Zeitbasis aktiv (`OMP_PTP_DOMAIN`): `a=ts-refclk:ptp=…`. Ohne Domäne: `localmac=` aus `mac`.
+    pub ptp: bool,
+    /// MAC der Sendeschnittstelle für `ts-refclk:localmac=` (Format `aa-bb-cc-dd-ee-ff`).
+    pub mac: Option<String>,
+}
+
+fn is_multicast(host: &str) -> bool {
+    host.split('.').next().and_then(|f| f.parse::<u8>().ok()).is_some_and(|f| (224..=239).contains(&f))
+}
+
+/// SDP für den ANC-Strom (ST 2110-40 / RFC 8331). `did_sdid` je Paar wie `0x61,0x01` (CEA-708-CDP).
+///
+/// Uhr (`a=ts-refclk`): mit `ptp` → `ptp=IEEE1588-2008:traceable` (die Großmeister-ID kennt der Node nicht, die Domäne gehört nicht in
+/// diese Form); ohne PTP → `localmac=<MAC>` falls bekannt, sonst entfällt die Zeile. Bei Multicast mit bekannter Absenderadresse kommt
+/// ein Quellenfilter (`a=source-filter`) dazu.
+pub fn sdp(name: &str, dest_host: &str, port: u16, did_sdid: &[(u8, u8)], opts: &SdpOptions) -> String {
+    let multicast = is_multicast(dest_host);
+    let origin = opts.origin_ip.as_deref().unwrap_or("0.0.0.0");
     let pairs: Vec<String> = did_sdid.iter().map(|(d, s)| format!("DID_SDID={{0x{d:02X},0x{s:02X}}}")).collect();
     let mut s = String::new();
     s.push_str("v=0\r\n");
-    s.push_str("o=- 0 0 IN IP4 0.0.0.0\r\n");
+    s.push_str(&format!("o=- 0 0 IN IP4 {origin}\r\n"));
     s.push_str(&format!("s={name}\r\n"));
     s.push_str("t=0 0\r\n");
     s.push_str(&format!("m=video {port} RTP/AVP {RTP_PT}\r\n"));
-    s.push_str(&format!("c=IN IP4 {}\r\n", if multicast { format!("{dest_host}/32") } else { dest_host.to_string() }));
+    s.push_str(&format!("c=IN IP4 {}\r\n", if multicast { format!("{dest_host}/{MULTICAST_TTL}") } else { dest_host.to_string() }));
+    if multicast && let Some(src) = &opts.origin_ip {
+        s.push_str(&format!("a=source-filter: incl IN IP4 {dest_host} {src}\r\n"));
+    }
     s.push_str(&format!("a=rtpmap:{RTP_PT} smpte291/90000\r\n"));
     s.push_str(&format!("a=fmtp:{RTP_PT} {}\r\n", pairs.join(";")));
+    if opts.ptp {
+        s.push_str("a=ts-refclk:ptp=IEEE1588-2008:traceable\r\n");
+    } else if let Some(mac) = &opts.mac {
+        s.push_str(&format!("a=ts-refclk:localmac={mac}\r\n"));
+    }
     s.push_str("a=mediaclk:direct=0\r\n");
     s
+}
+
+/// Lokale IPv4-Adresse, über die `dest_host` erreicht würde (sendet nichts), und die MAC der zugehörigen Schnittstelle.
+pub fn local_route_info(dest_host: &str) -> (Option<String>, Option<String>) {
+    let probe_target = if is_multicast(dest_host) { "8.8.8.8" } else { dest_host };
+    let ip = std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|s| s.connect((probe_target, 9)).map(|()| s))
+        .and_then(|s| s.local_addr())
+        .ok()
+        .map(|a| a.ip().to_string())
+        .filter(|ip| ip != "0.0.0.0");
+    let mac = ip.as_deref().and_then(mac_of_ip);
+    (ip, mac)
+}
+
+/// MAC der Schnittstelle mit der IPv4-Adresse `ip` (Linux: `/sys/class/net`, Adresse aus `/proc/net/fib_trie` ist aufwendig, daher über
+/// `/proc/net/route`: Schnittstelle der Standardroute, wenn keine bessere Zuordnung möglich ist).
+fn mac_of_ip(_ip: &str) -> Option<String> {
+    let route = std::fs::read_to_string("/proc/net/route").ok()?;
+    let iface = route.lines().skip(1).find_map(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        (f.len() > 2 && f[1] == "00000000").then(|| f[0].to_string())
+    })?;
+    let mac = std::fs::read_to_string(format!("/sys/class/net/{iface}/address")).ok()?;
+    let mac = mac.trim();
+    (mac.len() == 17 && mac != "00:00:00:00:00:00").then(|| mac.replace(':', "-"))
 }
 
 #[cfg(feature = "mxl")]
@@ -164,7 +220,7 @@ impl St2110AncOutput {
     pub fn new(context: Arc<MxlContext>, flow_id: &str, dest_host: &str, dest_port: u16, ssrc: u32) -> Result<Self, String> {
         let (num, den) = grain_rate(&context.flow_def(flow_id)?);
         let socket = UdpSocket::bind("0.0.0.0:0").map_err(|e| format!("UDP-Socket: {e}"))?;
-        let _ = socket.set_multicast_ttl_v4(16);
+        let _ = socket.set_multicast_ttl_v4(MULTICAST_TTL);
         socket.connect((dest_host, dest_port)).map_err(|e| format!("UDP-Ziel {dest_host}:{dest_port}: {e}"))?;
         let packetizer = Mutex::new(Packetizer::new(ssrc));
         let (frames, packets, errors) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
@@ -282,11 +338,36 @@ mod tests {
 
     #[test]
     fn sdp_names_smpte291_and_did_sdid() {
-        let s = sdp("OMP ANC", "239.1.1.3", 6004, &[(0x61, 0x01)]);
+        let o = SdpOptions { origin_ip: Some("10.0.0.5".into()), ptp: false, mac: Some("aa-bb-cc-dd-ee-ff".into()) };
+        let s = sdp("OMP ANC", "239.1.1.3", 6004, &[(0x61, 0x01)], &o);
         assert!(s.contains("m=video 6004 RTP/AVP 100"));
         assert!(s.contains("a=rtpmap:100 smpte291/90000"));
         assert!(s.contains("a=fmtp:100 DID_SDID={0x61,0x01}"));
-        assert!(s.contains("c=IN IP4 239.1.1.3/32"));
+        assert!(s.contains("c=IN IP4 239.1.1.3/16"), "TTL im SDP = TTL am Socket");
+        assert!(s.contains("a=source-filter: incl IN IP4 239.1.1.3 10.0.0.5"));
+        assert!(s.contains("a=ts-refclk:localmac=aa-bb-cc-dd-ee-ff"));
+        assert!(s.contains("o=- 0 0 IN IP4 10.0.0.5"));
+        assert!(s.contains("a=mediaclk:direct=0"));
+    }
+
+    #[test]
+    fn sdp_uses_ptp_clock_when_enabled_and_omits_unknowns() {
+        let s = sdp("x", "239.1.1.3", 6004, &[(0x61, 0x01), (0x41, 0x05)], &SdpOptions { ptp: true, ..Default::default() });
+        assert!(s.contains("a=ts-refclk:ptp=IEEE1588-2008:traceable"));
+        assert!(s.contains("DID_SDID={0x61,0x01};DID_SDID={0x41,0x05}"));
+        assert!(!s.contains("source-filter") && !s.contains("localmac"));
+        let u = sdp("x", "10.1.2.3", 6004, &[(0x61, 0x01)], &SdpOptions::default());
+        assert!(u.contains("c=IN IP4 10.1.2.3\r\n") && !u.contains("ts-refclk"));
+    }
+
+    #[test]
+    fn route_info_is_best_effort_and_never_panics() {
+        let (ip, mac) = local_route_info("239.1.1.3");
+        if let Some(mac) = mac {
+            assert_eq!(mac.len(), 17);
+            assert!(mac.contains('-'));
+        }
+        let _ = ip;
     }
 
     #[cfg(feature = "mxl")]

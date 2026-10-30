@@ -20,6 +20,7 @@
 //! ausdrücklich vorgesehen. Nur Half-Duplex-Profile erlauben je Teilgerät
 //! eine Richtung (Blackmagic-Treiber-Grenze, kein OMP-Check dafür).
 
+mod captions;
 mod pipeline;
 
 use std::collections::{BTreeMap, HashMap};
@@ -274,6 +275,45 @@ impl ReceiverControl for OutputControl {
     }
 }
 
+/// ANC-Eingang des SDI-Ausgangs: ein MXL-Daten-Flow (`video/smpte291`); seine CEA-708-CDPs werden als Untertitel in die
+/// VANC-Zeile eingebettet (`captions.rs`). Nur CDPs — andere ANC-Typen kann `decklinkvideosink` nicht einbetten.
+struct AncControl {
+    registry: RegistryClient,
+    context: Arc<omp_mediaio::mxl::MxlContext>,
+    queue: Arc<captions::CaptionQueue>,
+    connected_flow_id: Arc<Mutex<String>>,
+    input: Mutex<Option<omp_mediaio::mxl::MxlDataInput>>,
+}
+
+impl ReceiverControl for AncControl {
+    fn apply(&self, resource: &ReceiverResource) {
+        let flow_id = match (&resource.sender_id, resource.master_enable) {
+            (Some(sender_id), true) => match self.registry.get_sender(sender_id) {
+                Ok(sender) => sender.flow_id,
+                Err(e) => {
+                    eprintln!("omp-decklink: resolve anc sender {sender_id} failed: {e}");
+                    return;
+                }
+            },
+            _ => None,
+        };
+        let mut input = self.input.lock().expect("lock poisoned");
+        *input = None;
+        self.queue.clear();
+        *self.connected_flow_id.lock().expect("lock poisoned") = String::new();
+        if let Some(flow_id) = flow_id {
+            let queue = self.queue.clone();
+            match omp_mediaio::mxl::MxlDataInput::new(self.context.clone(), &flow_id, move |grain| queue.feed_grain(grain)) {
+                Ok(i) => {
+                    *input = Some(i);
+                    *self.connected_flow_id.lock().expect("lock poisoned") = flow_id;
+                }
+                Err(e) => eprintln!("omp-decklink: anc connect {flow_id} failed: {e}"),
+            }
+        }
+    }
+}
+
 struct OutputStore {
     device_number: i32,
     mode: String,
@@ -282,6 +322,9 @@ struct OutputStore {
     connected_audio_flow_id: Arc<Mutex<String>>,
     video_connection: Arc<ReceiverConnection<OutputControl>>,
     audio_connection: Arc<ReceiverConnection<OutputControl>>,
+    anc_connection: Arc<ReceiverConnection<AncControl>>,
+    connected_anc_flow_id: Arc<Mutex<String>>,
+    captions: Arc<captions::CaptionQueue>,
     /// AMWA BCP-008-02 (NMOS Sender Status Monitoring) — Output sendet
     /// echtes SDI/IP-Signal über die Karte, ist also der "Sender"
     /// dieser Instanz. Aktiv/inaktiv folgt der Video-Receiver-
@@ -339,6 +382,8 @@ impl ParamStore for OutputStore {
                 range: None,
                 readonly: true,
             },
+            ParamSpec { name: "connectedAncFlowId".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec { name: "ancStats".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
         ];
         parameters.extend(self.monitor.param_specs("monitor"));
         Descriptor { latency: None, parameters, methods: self.monitor.method_specs("monitor") }
@@ -347,6 +392,14 @@ impl ParamStore for OutputStore {
     fn get(&self, name: &str) -> Option<Value> {
         match name {
             "direction" => Some(serde_json::json!("output")),
+            "connectedAncFlowId" => Some(serde_json::json!(*self.connected_anc_flow_id.lock().expect("lock poisoned"))),
+            "ancStats" => Some(serde_json::json!(
+                serde_json::json!({
+                    "embedded": self.captions.embedded.load(Ordering::Relaxed),
+                    "dropped": self.captions.dropped.load(Ordering::Relaxed),
+                })
+                .to_string()
+            )),
             "deviceNumber" => Some(serde_json::json!(self.device_number)),
             "mode" => Some(serde_json::json!(self.mode)),
             "audioChannels" => Some(serde_json::json!(self.audio_channels)),
@@ -390,7 +443,7 @@ impl ParamStore for OutputStore {
                     method,
                     path,
                     "receivers",
-                    &[self.video_connection.id(), self.audio_connection.id()],
+                    &[self.video_connection.id(), self.audio_connection.id(), self.anc_connection.id()],
                 )
             })
             .or_else(|| bulk_discovery(method, path))
@@ -400,6 +453,8 @@ impl ParamStore for OutputStore {
                         Some(self.video_connection.patch_staged(params).0)
                     } else if self.audio_connection.id() == id {
                         Some(self.audio_connection.patch_staged(params).0)
+                    } else if self.anc_connection.id() == id {
+                        Some(self.anc_connection.patch_staged(params).0)
                     } else {
                         None
                     }
@@ -408,6 +463,7 @@ impl ParamStore for OutputStore {
             .or_else(|| bulk_patch(method, path, "senders", body, |_, _| None))
             .or_else(|| self.video_connection.handle(method, path, body))
             .or_else(|| self.audio_connection.handle(method, path, body))
+            .or_else(|| self.anc_connection.handle(method, path, body))
             .or_else(|| self.channel_mapping.handle(method, path, body))
             .map(to_raw)
     }
@@ -416,6 +472,7 @@ impl ParamStore for OutputStore {
         self.video_connection
             .cors_methods(path)
             .or_else(|| self.audio_connection.cors_methods(path))
+            .or_else(|| self.anc_connection.cors_methods(path))
             .or_else(|| bulk_cors_methods(path, "senders"))
             .or_else(|| bulk_cors_methods(path, "receivers"))
             .or_else(|| self.channel_mapping.cors_methods(path))
@@ -731,11 +788,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Direction::Output => {
             let control_host = host.clone();
             let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+            let captions = captions::CaptionQueue::new();
+            let anc_context = Arc::new(omp_mediaio::mxl::MxlContext::new(&domain)?);
             let pipeline_config = pipeline::OutputConfig {
                 domain,
                 device_number,
                 mode: mode.clone(),
                 audio_channels,
+                captions: captions.clone(),
             };
             let pipeline_shutdown = shutdown.clone();
             let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
@@ -777,6 +837,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     connected_flow_id: connected_video_flow_id.clone(),
                     is_video: true,
                     monitor: monitor.clone(),
+                },
+            ));
+            let anc_receiver_id = omp_node_sdk::idgen::new_v4();
+            let connected_anc_flow_id = Arc::new(Mutex::new(String::new()));
+            let anc_connection = Arc::new(ReceiverConnection::new(
+                anc_receiver_id.clone(),
+                AncControl {
+                    registry: registry.clone(),
+                    context: anc_context,
+                    queue: captions.clone(),
+                    connected_flow_id: connected_anc_flow_id.clone(),
+                    input: Mutex::new(None),
                 },
             ));
             let audio_connection = Arc::new(ReceiverConnection::new(
@@ -826,6 +898,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 connected_audio_flow_id,
                 video_connection,
                 audio_connection,
+                anc_connection,
+                connected_anc_flow_id,
+                captions,
                 monitor: monitor.clone(),
                 channel_mapping,
             });
@@ -851,6 +926,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             transport: Some(TRANSPORT_MXL.to_string()),
                             media_types: Some(vec!["audio/L24".to_string()]),
                             label: Some("Audio".to_string()),
+                            ..Default::default()
+                        },
+                        ReceiverSpec {
+                            id: Some(anc_receiver_id),
+                            transport: Some(TRANSPORT_MXL.to_string()),
+                            media_types: Some(vec!["video/smpte291".to_string()]),
+                            label: Some("ANC / Untertitel".to_string()),
                             ..Default::default()
                         },
                     ],

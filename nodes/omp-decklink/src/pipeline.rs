@@ -463,6 +463,8 @@ pub struct OutputConfig {
     pub device_number: i32,
     pub mode: String,
     pub audio_channels: u32,
+    /// Untertitel-CDPs aus dem ANC-Eingang (`captions.rs`); jedes Video-Bild nimmt das nächste.
+    pub captions: Arc<crate::captions::CaptionQueue>,
 }
 
 enum Command {
@@ -503,6 +505,7 @@ fn build_output(
     device_number: i32,
     mode: &str,
     audio_channels: u32,
+    captions: &Arc<crate::captions::CaptionQueue>,
     desired_map: &Arc<Mutex<BTreeMap<u32, MapEntry>>>,
     mixmatrix_cell: &Arc<Mutex<Option<gst::Element>>>,
 ) -> Result<ActiveOutputPipeline, String> {
@@ -564,6 +567,11 @@ fn build_output(
         .map_err(|e| format!("decklinkvideosink: {e}"))?;
     select_device(&decklinkvideosink);
     decklinkvideosink.set_property_from_str("mode", mode);
+    // Untertitel (GstVideoCaptionMeta) in die VANC-Zeile einbetten; ohne CDPs im Puffer passiert nichts.
+    decklinkvideosink.set_property("cc-line", crate::captions::DEFAULT_CC_LINE);
+    if let Some(pad) = decklinkvideosink.static_pad("sink") {
+        crate::captions::attach(&pad, captions.clone());
+    }
 
     pipeline
         .add(&videoconvert_in)
@@ -780,6 +788,7 @@ pub fn run_output(
             config.device_number,
             &config.mode,
             config.audio_channels,
+            &config.captions,
             &desired_map,
             &mixmatrix_cell,
         ) {
