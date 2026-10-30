@@ -103,7 +103,7 @@ const T = (() => {
         "scp.anc.none": "kein ANC-Flow verbunden",
         "scp.anc.status": "{p0} Bilder · {p1} Pakete · {p2} Pakete/s",
         "scp.anc.empty": "leere Bilder",
-        "scp.anc.gaps": "Lücken",
+        "scp.anc.gaps": "Lücken", "scp.anc.tc": "Zeitcode", "scp.anc.tcjumps": "Sprünge", "scp.anc.tcinvalid": "ungültig",
         "scp.anc.typ": "Typ",
         "scp.anc.count": "Anzahl",
         "scp.anc.rate": "/s",
@@ -220,7 +220,7 @@ const T = (() => {
         "scp.anc.none": "no ANC flow connected",
         "scp.anc.status": "{p0} frames · {p1} packets · {p2} packets/s",
         "scp.anc.empty": "empty frames",
-        "scp.anc.gaps": "gaps",
+        "scp.anc.gaps": "gaps", "scp.anc.tc": "Timecode", "scp.anc.tcjumps": "jumps", "scp.anc.tcinvalid": "invalid",
         "scp.anc.typ": "Type",
         "scp.anc.count": "Count",
         "scp.anc.rate": "/s",
@@ -626,6 +626,8 @@ class OmpScopePanel extends HTMLElement {
     }
 
     // --- ANC / SCTE ---
+    const ancTc = document.createElement("div");
+    ancTc.style.cssText = "font:600 28px monospace;letter-spacing:1px;margin:4px 0;display:none";
     const ancStatus = document.createElement("div");
     ancStatus.className = "anc-status";
     const ancTable = document.createElement("table");
@@ -706,6 +708,18 @@ class OmpScopePanel extends HTMLElement {
         ancStatus.textContent = T("scp.anc.status", { p0: int(r.frames), p1: int(r.packets), p2: fmt(r.packetsPerSec, 1) }) +
           ` · ${T("scp.anc.empty")} ${int(r.emptyFrames)} · ${T("scp.anc.gaps")} ${int(r.indexGaps)}`;
       }
+      // Zeitcode (ST 12-2): große Anzeige, Sprünge/ungültig in Rot
+      const tc = r.timecode;
+      if (tc && tc.present) {
+        ancTc.style.display = "";
+        ancTc.dataset.role = "anc-timecode";
+        ancTc.replaceChildren(`${T("scp.anc.tc")} ${tc.value}`);
+        if (tc.jumps || tc.invalid) {
+          const w = el("span", "warn", ` ⚠ ${T("scp.anc.tcjumps")} ${int(tc.jumps)} · ${T("scp.anc.tcinvalid")} ${int(tc.invalid)}`);
+          w.style.fontSize = "12px";
+          ancTc.appendChild(w);
+        }
+      } else ancTc.style.display = "none";
       // Typ-Tabelle
       ancTable.replaceChildren();
       const head = el("tr");
@@ -811,7 +825,7 @@ class OmpScopePanel extends HTMLElement {
       audio: [hintAudio, section(T("scp.e71d24")), meterRow, section(T("scp.00f47c")), lufsGrid, r128Wrap],
       timing: [hintTiming, section("A/V-Timing (Lipsync)", T("scp.f488c4")), syncBox, section("MXL-Transport", T("scp.d00749")), transport.table],
       flow: [section("MXL-Flow", T("scp.42889b")), decl.table, section(T("scp.4a876b")), measured.table],
-      anc: [hintAnc, ancStatus, ancTable, ancDetail, section(T("scp.anc.errors")), ancErrors],
+      anc: [hintAnc, ancTc, ancStatus, ancTable, ancDetail, section(T("scp.anc.errors")), ancErrors],
       scte: [hintScte, scteStat, filters, section(T("scp.scte.in")), scteIn, el("div", "anc-status", T("scp.scte.udp")), section(T("scp.anc.scte")), scteLog],
     };
     const tabBar = el("div", "tabs");

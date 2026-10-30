@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -17,6 +18,17 @@ import (
 // regulären Rust-Nodes OMP_MXL_DOMAIN geerbt bekommen — der Orchestrator-
 // Prozess selbst braucht dafür keine eigene buildEnv-Verdrahtung).
 const defaultMxlDomain = "/dev/shm/omp-mxl"
+
+// mediaMountPaths: absolute Pfade aus OMP_MEDIA_MOUNTS (durch `:` getrennt); leere und relative Einträge entfallen.
+func mediaMountPaths() []string {
+	var out []string
+	for _, p := range strings.Split(os.Getenv("OMP_MEDIA_MOUNTS"), ":") {
+		if p = strings.TrimSpace(p); filepath.IsAbs(p) {
+			out = append(out, filepath.Clean(p))
+		}
+	}
+	return out
+}
 
 func mxlDomainPath() string {
 	if d := os.Getenv("OMP_MXL_DOMAIN"); d != "" {
@@ -161,6 +173,11 @@ func runPodmanEntry(entry CatalogEntry, id, label, launchSecret string, extraEnv
 	if entry.MxlAccess {
 		domain := mxlDomainPath()
 		args = append(args, "-v", domain+":"+domain)
+	}
+	if entry.MediaRead {
+		for _, d := range mediaMountPaths() {
+			args = append(args, "-v", d+":"+d+":ro")
+		}
 	}
 	for k, v := range merged {
 		args = append(args, "-e", k+"="+v)

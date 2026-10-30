@@ -2543,6 +2543,52 @@ function buildNotification(cfg: Record<string, unknown>): FormPart {
   };
 }
 
+function buildSubtitles(cfg: Record<string, unknown>): FormPart {
+  const el = h("div", "");
+  const file = textInput(String(cfg.file ?? ""), "/pfad/zur/datei.mxf", "file");
+  const asset = textInput(String(cfg.assetId ?? ""), "", "assetId");
+  const track = textInput(String(cfg.track ?? "0"), "0", "track");
+  const lang = textInput(String(cfg.language ?? ""), "de", "language");
+  const sp = select(
+    [{ value: "0", label: tt("psc.sub.sp.auto") }, { value: "1", label: tt("psc.sub.sp.one") }, ...["2", "3", "4", "5", "6"].map((n) => ({ value: n, label: n }))],
+    String(cfg.speakers ?? "0"),
+    "speakers",
+  );
+  const names = textInput(Array.isArray(cfg.names) ? (cfg.names as string[]).join(", ") : String(cfg.names ?? ""), "Alice, Bob", "names");
+  const style = select(
+    [{ value: "colon", label: "Alice: …" }, { value: "bracket", label: "[Alice] …" }, { value: "dash", label: "- Alice: …" }],
+    String(cfg.style ?? "colon"),
+    "style",
+  );
+  const name = textInput(String(cfg.name ?? ""), "", "name");
+  el.append(
+    field(tt("psc.sub.file"), file, tt("psc.sub.file.help")),
+    field(tt("psc.sub.asset"), asset, tt("psc.sub.asset.help")),
+    field(tt("psc.sub.track"), track),
+    field(tt("psc.sub.lang"), lang, tt("psc.sub.lang.help")),
+    field(tt("psc.sub.speakers"), sp),
+    field(tt("psc.sub.names"), names),
+    field(tt("psc.sub.style"), style),
+    field(tt("psc.sub.name"), name, tt("psc.sub.name.help")),
+  );
+  return {
+    el,
+    read: () => {
+      if (!file.value.trim() && !asset.value.trim()) return { ok: false, error: tt("psc.sub.err") };
+      const out: Record<string, unknown> = { ...cfg };
+      setOrDelete(out, "file", file.value.trim() || undefined);
+      setOrDelete(out, "assetId", asset.value.trim() || undefined);
+      out.track = track.value.trim() || "0";
+      setOrDelete(out, "language", lang.value.trim() || undefined);
+      out.speakers = sp.value;
+      setOrDelete(out, "names", names.value.trim() || undefined);
+      out.style = style.value;
+      setOrDelete(out, "name", name.value.trim() || undefined);
+      return { ok: true, config: out };
+    },
+  };
+}
+
 function buildInfoOnly(text: string, cfg: Record<string, unknown>): FormPart {
   const el = h("div", HELP_CSS + "margin-top:8px;", text);
   return { el, read: () => ({ ok: true, config: Object.keys(cfg).length ? cfg : undefined }) };
@@ -2573,6 +2619,8 @@ function buildForm(step: DraftStep, ctx: StepConfigContext, vars: VariableOption
       return buildSubworkflow(cfg);
     case "notification":
       return buildNotification(cfg);
+    case "subtitles":
+      return buildSubtitles(cfg);
     case "parallel":
       return buildInfoOnly(tt("psc.1a58bf"), cfg);
     case "join":

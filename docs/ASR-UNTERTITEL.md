@@ -86,9 +86,51 @@ Auto-Untertitel ─▶ Grafik-Node (Ebene „subtitle“, Fill+Key) ─▶ Keyer
 * **Übergabe an Gateways:** Alles, was am PGM hängt, trägt den eingebrannten Untertitel — SRT-Gateway (Uplink), ST-2110-Gateway, DeckLink/SDI, WebRTC. Dafür ist nichts weiter einzustellen. Soll ein Ausgang **ohne** Untertitel laufen, den Gateway nicht an PGM, sondern an einen Mischer-Ausgang ohne Keyer hängen (Clean Feed).
 * **Datenspur (CEA-608):** Der Node liefert sie als ANC-Datenflow. Der **ST-2110-Gateway (Ausgang)** sendet sie als **ST 2110-40** (RFC 8331, RTP/UDP) über seinen dritten Empfänger „ANC / Untertitel“ (Ziel `OMP_2110_GATEWAY_ANC_DEST_HOST`/`_PORT`, Standard 239.1.1.3:6004; SDP im Parameter `ancSdp`). **Nur im Rundlauf geprüft** (Paketieren → Lesen; Untertitel-Node → Gateway → UDP auf Loopback: 25 Pakete/s, Zeitstempelschritt 3600, keine Lücke in der Folge, DID/SDID 0x61/0x01) — **nicht mit echten ST-2110-40-Empfängern**; das SDP (`ancSdp`) enthält Absenderadresse, Quellenfilter, `ts-refclk` (PTP: `traceable`, sonst `localmac`) und die TTL; Payload-Type fest 100. **DeckLink/SDI:** der Ausgang hat ebenfalls den Empfänger „ANC / Untertitel“ und bettet die **CEA-708-CDPs** (DID 0x61/SDID 0x01) über `decklinkvideosink` (`cc-line` 9, `GstVideoCaptionMeta`) in die VANC-Zeile ein; Zähler im Parameter `ancStats`. **Andere ANC-Typen (SCTE-104, Zeitcode, private Pakete) kann dieser Weg nicht einbetten** — das bräuchte die ANC-Schnittstelle des DeckLink-SDK. Nicht an echter Hardware geprüft (Metadaten an den Puffern sind per Test belegt). Die Aufnahme von ANC aus SDI (Eingang) ist nicht umgesetzt: das GStreamer-Element dieser Version liefert keine Untertitel-Metadaten. Nicht vorhanden sind außerdem CEA-708-Dienste, Teletext/DVB-Subtitles und TTML/IMSC.
 
+## SRT aus einer Datei erzeugen — mit Sprechererkennung (Kapitel 77)
+
+Neben der Live-Erkennung kann derselbe Node eine **Mediendatei komplett transkribieren** (Methode `file.transcribe`) und eine SRT-Datei schreiben, auf Wunsch mit **Sprechernamen** („Alice: …“). Drei Zugänge:
+
+* **Eingang → Datei → Reiter „Untertitel“:** Tonspur, Sprache, Sprecheranzahl (automatisch / 1 / 2 …), Namen (in der Reihenfolge des ersten Auftretens), Schreibweise (`Alice: …`, `[Alice] …`, `- Alice: …`). Aufträge mit Fortschritt, Abbrechen, Download und Löschen. API: `POST/GET /api/v1/review/items/{id}/subtitles`, `POST …/subtitles/{sid}/cancel`, `DELETE …/subtitles/{sid}`, `GET …/subtitles/{sid}/srt`.
+* **Prozess-Schritt „Untertitel (SRT)“** (`subtitles`): Datei (Pfad) oder Asset-ID, dieselben Optionen; wartet, bis der Auftrag fertig ist. Ausgaben: `srt`, `playoutTrack`, `speakers`, `cues`, `durationS`.
+* Das Ergebnis liegt (a) beim Asset (`<DataDir>/subtitles/<Asset>/<Name>.srt`, als Darstellung „subtitle“ an einer **neuen Asset-Version**, weil veröffentlichte Versionen unveränderlich sind) und (b) als Kopie in `data/subtitles` (`OMP_SUBTITLE_DIR`). Der Name dieser Kopie ist die **Spur** des Kind-Events `SUBTITLE` der Playout-Automation (`params.track`).
+
+**Live pausiert bei SRT-Wiedergabe:** Spielt der Grafik-Node am Ausgang gerade eine Untertitel-Datei (`subtitle.running`), schreibt der Live-Teil des Auto-Untertitel-Nodes nichts mehr in die Ebene und löscht auch nichts; Status „live paused: subtitle file playing“, Parameter `liveSuppressed`. Endet die Datei, läuft die Live-Untertitelung von selbst weiter. Per Unit-Test belegt, **noch nicht im Live-Betrieb mit echtem Playout** geprüft.
+
+### Dedizierter Datei-Node (Aufgabe „file“)
+
+Dateiaufträge rechnen minutenlang auf mehreren Kernen. Damit sie die **Live-Untertitelung nie beeinträchtigen**, trennt die Option **Aufgabe** (`OMP_ASR_ROLE`) die Instanzen:
+
+* `live` (Standard): Live-Untertitel aus einem Audiostream. Nimmt **keine** Dateiaufträge an (`file.transcribe` wird abgelehnt).
+* `file`: dedizierter Datei-Node. Hat keine Live-Quelle, keine MXL-Ausgänge und keinen Live-Betrieb; nimmt `file.transcribe` an. Eingangskontrolle (Reiter „Untertitel“) und Prozess-Schritt „Untertitel (SRT)“ wählen **ausschließlich** Datei-Nodes (mit Sprechererkennung, wenn Namen gewünscht sind). Läuft keiner, meldet die Oberfläche das mit Hinweis auf die Option; ältere Nodes ohne den Parameter `role` zählen als `live`.
+
+Für den Betrieb: eine Instanz „Auto-Untertitel“ mit Aufgabe `file` zusätzlich zur Live-Instanz starten (eigener Prozess bzw. Container, eigene Kerne; `OMP_ASR_THREADS` und `OMP_ASR_DIARIZE_THREADS` begrenzen die Last).
+
+### Sprechererkennung einrichten
+
+`sh tools/asr-engine/install-diarization.sh` lädt **sherpa-onnx** (Apache-2.0) und zwei ONNX-Modelle (Segmentierung: pyannote-segmentation-3-0, MIT; Sprecher-Einbettung: 3D-Speaker CAM++) nach `data/asr-engine/diarization/{bin,lib,models}`. Nichts davon liegt im Repo oder im Image. **Lizenz der Einbettungsmodelle nicht abschließend geprüft** — vor kommerzieller Nutzung klären (s. `THIRD-PARTY-NOTICES.md`). Ohne die Dateien erzeugt der Node SRT ohne Sprecher; die Oberfläche weist darauf hin.
+
+WhisperX wird **nicht** verwendet (es bräuchte Python/PyTorch und das auf Hugging Face gesperrte pyannote-Modell); whisper.cpp + sherpa-onnx leisten dasselbe lokal und ohne Konto.
+
+Umgebung: `OMP_ASR_HOME` (Engine-Verzeichnis), `OMP_FFMPEG`, `OMP_ASR_FILE_MAX_MINUTES` (180), `OMP_ASR_DIARIZE_THRESHOLD` (0,7; kleiner = mehr Sprecher), `OMP_ASR_DIARIZE_THREADS` (2).
+
+### Wiedergabe im Takt des Bildes (Zeitcode, ST 12-2)
+
+Der Kanal-Player gibt die Medienposition seines Clips als **Zeitcode-Strom** aus (Sender „Zeitcode (ANC)“, ATC_LTC nach SMPTE ST 12-2, ein Paket je Bild; 00:00:00:00 = Clipanfang). Verdrahtet man ihn auf den Empfänger **„Zeitcode“ des Grafik-Nodes**, folgt `subtitle.start` diesem Zeitcode statt einer freilaufenden Uhr: die SRT bleibt bei **Halt, Pause und Sprung** (Seek) bildgenau synchron, und bei Ausfall des Zeitcodes bleibt sie stehen, statt ohne Bild weiterzulaufen.
+
+* `subtitle.start` (auch als Kind-Event `SUBTITLE`, `params`): `clock` = `auto` (Standard: Zeitcode, wenn einer anliegt, sonst freilaufend) | `timecode` (Fehler, wenn keiner anliegt) | `free`; `offsetMs` verschiebt die Spur; `fpsNum`/`fpsDen` = Bildrate des Zeitcodes (Standard 25/1). Der Parameter `subtitle` des Grafik-Nodes zeigt `clock` und den anliegenden Zeitcode.
+* SRT-Dateien aus der Datei-Erzeugung sind **medienzeit-bezogen** (0 = Dateianfang) und passen damit zum Zeitcode des Kanal-Players ohne Versatz.
+* Anzeige: Viewer (Overlay oben links, Empfänger „Zeitcode“) und Messgerät (ANC-Reiter: große Zeitcode-Anzeige, Sprungzähler, Gültigkeit). Geprüft: Kodierung gegen die Tabellen der Norm, Live-Lauf Kanal-Player → Messgerät/Viewer/Grafik-Node, SRT im Halt eingefroren (Position 120 ms über 3 s) und nach Freigabe mit dem Zeitcode synchron (erster Untertitel bei 7,5 s).
+* Grenzen: nicht an echter ST-2110-/SDI-Hardware geprüft; die Halbbildmarke bei Raten über 30 Bilder/s wird nicht gesetzt (ST 12-2 §9.3 erlaubt das); der Zeitcode ist die Position in der Datei, nicht der Start-Zeitcode der MXF-Datei; Drop-Frame wird nur gelesen. Der Zeitcode wird aus der Position des Videozweigs abgeleitet — bis zu 2 Bilder Vorlauf gegenüber dem tatsächlich ausgegebenen Bild sind möglich (nicht gemessen).
+
 ## Grenzen
 
-* Nur Text; keine Sprecherkennung, keine Positions-/Farbangaben, keine Einbettung in CEA-608/708 oder Teletext (der Text läuft als Grafik).
+* Der Eingabepfad muss **auf dem Rechner des Nodes lesbar** sein. Im Container-Paket hängt der Launcher die Verzeichnisse aus `OMP_MEDIA_MOUNTS` (Umgebung des Orchestrators, absolute Pfade mit `:` getrennt) schreibgeschützt und mit gleichem Pfad ein (Katalogfeld `mediaRead`); ohne die Variable sieht der Container keine Medien. Das Image enthält ffmpeg und – falls beim Bauen `data/asr-engine/diarization` vorhanden war – die Sprechererkennung.
+* Überlappendes Sprechen erscheint doppelt; kein Wort-genaues Alignment; die Sprecheranzahl bei „automatisch“ hängt von der Schwelle ab (im Test mit zwei Sprechern: 0,7 → 2, 0,5/0,6 → 3, 0,9 → 1).
+* Gemessen: 34 s Zwei-Sprecher-Audio in ca. 20 s (Modell `base`). Geprüft mit dem sherpa-Beispiel (zwei Sprecher, Namen korrekt zugeordnet), **nicht** mit echtem Sendematerial und nicht im Container-Paket.
+
+## Grenzen
+
+* Live: nur Text, keine Sprecherkennung (die gibt es nur bei der Datei-Erzeugung, s. o.); keine Positions-/Farbangaben, keine Einbettung in CEA-608/708 oder Teletext (der Text läuft als Grafik).
 * Mehrkanal-Quellen werden gleichmäßig auf mono gemischt; eine Quelle mit Sprache nur auf einem Kanal verliert dadurch Pegel (die Schwelle folgt dem Grundrauschen).
 * Der Spitzenpegel in `stats.peakDb` zeigt, ob überhaupt Ton ankommt (≈ −90 dB = Stille).
 * Getestet: Segmentierer und Aufbereitung (Unit-Tests), echte Sprache durch Segmentierer + whisper-Server (`cargo test -p omp-subtitle-asr -- --ignored`, Satz korrekt erkannt), MXL-Audiopfad mit Testton, Live-Anzeige in einen echten Grafik-Node und SRT-Datei mit dem Ersatz-Engine. **Nicht** getestet: echte Sprache über einen MXL-Flow im Gesamtsystem, Dauerbetrieb, Sprachen außer Englisch.

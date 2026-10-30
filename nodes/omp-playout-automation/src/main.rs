@@ -3667,8 +3667,12 @@ fn execute_child(
                 ensure_mixer_keyer(store);
             }
             let mut args = serde_json::json!({"track": child.params["track"]});
-            if let Some(o) = child.params.get("offsetMs") {
-                args["offsetMs"] = o.clone();
+            // offsetMs: Spur gegen die Uhr/den Zeitcode verschieben; clock: auto (Standard, folgt dem Zeitcode des Grafik-Nodes,
+            // wenn einer verdrahtet ist) | timecode | free; fpsNum/fpsDen: Bildrate des Zeitcodes (Standard 25/1)
+            for key in ["offsetMs", "clock", "fpsNum", "fpsDen"] {
+                if let Some(v) = child.params.get(key) {
+                    args[key] = v.clone();
+                }
             }
             client.invoke("subtitle.start", args).map_err(|e| e.to_string())
         };

@@ -306,6 +306,151 @@ pub fn parse_text_grain(grain: &[u8]) -> Option<(u16, String)> {
     Some((u16::from_be_bytes([p.udw[1], p.udw[2]]), String::from_utf8_lossy(&p.udw[3..]).into_owned()))
 }
 
+// ---------------------------------------------------------------------------
+// Zeitcode im ANC-Raum (SMPTE ST 12-2, „ATC“): DID 0x60 / SDID 0x60, 16 Nutzdatenwörter
+// ---------------------------------------------------------------------------
+
+/// DID/SDID des Ancillary Time Code (ATC_LTC, ATC_VITC1/2 unterscheidet DBB1).
+pub const DID_ATC: u8 = 0x60;
+pub const SDID_ATC: u8 = 0x60;
+/// Bevorzugte Zeile für ATC_LTC bei HD (ST 12-2 Tabelle 7).
+pub const ATC_LINE: u16 = 10;
+
+/// Ein Zeitcode-Wert (Anzeigeform `HH:MM:SS:FF`, bei Drop-Frame `HH:MM:SS;FF`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timecode {
+    pub hours: u8,
+    pub minutes: u8,
+    pub seconds: u8,
+    pub frames: u8,
+    pub drop_frame: bool,
+    /// Halbbildmarke (bei Raten über 30 Bilder/s: erstes/zweites Bild eines Paares). Wird nur gelesen/geschrieben, nie interpretiert.
+    pub field: bool,
+}
+
+impl Timecode {
+    /// Zeitcode zu einer laufenden Bildnummer (0 = 00:00:00:00). `rate` = Bildrate als Bruch. Bei Raten über 30 Bilder/s zählt
+    /// der Zeitcode Bildpaare (ST 12-2 §9.2); `field` kennzeichnet das zweite Bild des Paares. Drop-Frame nur bei 30000/1001
+    /// und 60000/1001 (Zeitcodebasis 30).
+    pub fn from_frame_number(frame: u64, rate_num: u32, rate_den: u32, drop_frame: bool) -> Timecode {
+        let nominal = (rate_num as f64 / rate_den.max(1) as f64).round().max(1.0) as u64;
+        let (label, field) = if nominal > 30 { (frame / 2, frame % 2 == 1) } else { (frame, false) };
+        let base = if nominal > 30 { nominal / 2 } else { nominal };
+        let mut n = label;
+        let drop = drop_frame && base == 30;
+        if drop {
+            // 2 Bildnummern pro Minute fehlen, außer jede zehnte Minute (17982 Bilder je 10 Minuten)
+            let d = n / 17982;
+            let m = n % 17982;
+            n += 18 * d + if m >= 2 { 2 * ((m - 2) / 1798) } else { 0 };
+        }
+        let frames = (n % base) as u8;
+        let secs = n / base;
+        Timecode { hours: ((secs / 3600) % 24) as u8, minutes: ((secs / 60) % 60) as u8, seconds: (secs % 60) as u8, frames, drop_frame: drop, field }
+    }
+
+    /// Zeitcode zur Tageszeit (`seconds_of_day` + Bruchteil in Nanosekunden) bei gegebener Bildrate.
+    pub fn from_time_of_day(secs: u64, nanos: u32, rate_num: u32, rate_den: u32, drop_frame: bool) -> Timecode {
+        let nominal = (rate_num as f64 / rate_den.max(1) as f64).round().max(1.0) as u64;
+        let frame_in_second = ((nanos as u128 * rate_num as u128) / (1_000_000_000u128 * rate_den.max(1) as u128)) as u64;
+        let base = if nominal > 30 { nominal / 2 } else { nominal };
+        let f = if nominal > 30 { frame_in_second / 2 } else { frame_in_second };
+        let mut tc = Timecode { hours: ((secs / 3600) % 24) as u8, minutes: ((secs / 60) % 60) as u8, seconds: (secs % 60) as u8, frames: f.min(base - 1) as u8, drop_frame: false, field: nominal > 30 && frame_in_second % 2 == 1 };
+        if drop_frame && base == 30 {
+            // Tageszeit-Drop-Frame: in den Minuten (nicht jede zehnte) entfallen die Bilder 0 und 1 der Sekunde 0
+            tc.drop_frame = true;
+            if tc.seconds == 0 && tc.minutes % 10 != 0 && tc.frames < 2 {
+                tc.frames = 2;
+            }
+        }
+        tc
+    }
+
+    /// Anzeige `HH:MM:SS:FF` bzw. `HH:MM:SS;FF` (Drop-Frame).
+    pub fn display(&self) -> String {
+        format!("{:02}:{:02}:{:02}{}{:02}", self.hours, self.minutes, self.seconds, if self.drop_frame { ';' } else { ':' }, self.frames)
+    }
+
+    /// Die 64 Informationsbits des Zeitcodeworts nach ST 12-1 (Binärgruppen = 0). Bit 0 ist das niederwertigste Bit des Wortes.
+    fn word(&self) -> u64 {
+        let mut w: u64 = 0;
+        let mut put = |bit: u32, v: u64| w |= v << bit;
+        put(0, (self.frames % 10) as u64);
+        put(8, (self.frames / 10) as u64 & 3);
+        put(10, self.drop_frame as u64);
+        put(16, (self.seconds % 10) as u64);
+        put(24, (self.seconds / 10) as u64 & 7);
+        put(32, (self.minutes % 10) as u64);
+        put(40, (self.minutes / 10) as u64 & 7);
+        put(48, (self.hours % 10) as u64);
+        put(56, (self.hours / 10) as u64 & 3);
+        // Halbbildmarke: ST 12-1 legt sie je nach Bildrate auf Bit 27 (25/50) oder Bit 43 (30/60) — hier nur bei Bedarf gesetzt
+        w
+    }
+
+    fn from_word(w: u64) -> Timecode {
+        let g = |bit: u32, n: u32| ((w >> bit) & ((1u64 << n) - 1)) as u8;
+        Timecode {
+            frames: g(0, 4) + 10 * g(8, 2),
+            seconds: g(16, 4) + 10 * g(24, 3),
+            minutes: g(32, 4) + 10 * g(40, 3),
+            hours: g(48, 4) + 10 * g(56, 2),
+            drop_frame: g(10, 1) == 1,
+            field: false,
+        }
+    }
+}
+
+/// ATC_LTC-Paket (DBB1 = 0) für einen Zeitcode: Bits b7…b4 der 16 UDW tragen die 64 Zeitcodebits (je 4, b4 = niederwertigstes),
+/// b3 trägt DBB1 (UDW 1–8) und DBB2 (UDW 9–16), b2…b0 sind 0 (ST 12-2 Tabellen 1, 2, 3 und 6). `valid` = false setzt das
+/// Gültigkeitsbit DBB2 b6 („Zeitcode interpoliert/fehlerhaft“).
+pub fn atc_packet(tc: &Timecode, valid: bool) -> AncPacket {
+    let w = tc.word();
+    let dbb1: u8 = 0; // ATC_LTC
+    let dbb2: u8 = if valid { 0 } else { 1 << 6 };
+    let mut udw = Vec::with_capacity(16);
+    for i in 0..16u32 {
+        let nibble = ((w >> (4 * i)) & 0xF) as u8;
+        let dbb = if i < 8 { (dbb1 >> i) & 1 } else { (dbb2 >> (i - 8)) & 1 };
+        udw.push((nibble << 4) | (dbb << 3));
+    }
+    AncPacket { c_not_y: false, line: ATC_LINE, offset: 0, did: DID_ATC, sdid: SDID_ATC, udw }
+}
+
+/// Gelesener ATC-Inhalt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AtcInfo {
+    pub timecode: Timecode,
+    /// DBB1: 0 = ATC_LTC, 1/2 = ATC_VITC1/2, sonstige Werte siehe ST 12-2 Tabelle 2.
+    pub payload_type: u8,
+    /// false = DBB2 b6 gesetzt (Zeitcode interpoliert).
+    pub valid: bool,
+}
+
+/// Liest ein ATC-Paket (DID/SDID 0x60/0x60, 16 Nutzdatenwörter). `None` bei falscher Kennung oder Länge.
+pub fn parse_atc(p: &AncPacket) -> Option<AtcInfo> {
+    if (p.did, p.sdid) != (DID_ATC, SDID_ATC) || p.udw.len() != 16 {
+        return None;
+    }
+    let mut w: u64 = 0;
+    let (mut dbb1, mut dbb2) = (0u8, 0u8);
+    for (i, b) in p.udw.iter().enumerate() {
+        w |= (((*b >> 4) & 0xF) as u64) << (4 * i);
+        let bit = (*b >> 3) & 1;
+        if i < 8 {
+            dbb1 |= bit << i;
+        } else {
+            dbb2 |= bit << (i - 8);
+        }
+    }
+    Some(AtcInfo { timecode: Timecode::from_word(w), payload_type: dbb1, valid: dbb2 & (1 << 6) == 0 })
+}
+
+/// Liest den ersten ATC_LTC-Zeitcode eines Grains (`None`, wenn keiner enthalten ist).
+pub fn parse_atc_grain(grain: &[u8]) -> Option<AtcInfo> {
+    parse_mxl_grain(grain).ok()?.iter().filter_map(parse_atc).find(|a| a.payload_type == 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,5 +527,67 @@ mod tests {
         let mut cut = mxl_grain(&[]).unwrap();
         cut[2] = 3; // behauptet drei Pakete, Length 0
         assert!(parse_mxl_grain_lenient(&cut).error.is_some());
+    }
+
+    #[test]
+    fn atc_layout_follows_st12_2_tables() {
+        // 12:34:56:07 ohne Drop-Frame: Bits laut Tabelle 6
+        let tc = Timecode { hours: 12, minutes: 34, seconds: 56, frames: 7, drop_frame: false, field: false };
+        let p = atc_packet(&tc, true);
+        assert_eq!((p.did, p.sdid, p.udw.len()), (0x60, 0x60, 16));
+        // UDW1 = Bilder-Einer (7) in b7…b4, b3 = DBB1 LSB = 0; UDW3 = Bilder-Zehner 0; UDW5 = Sekunden-Einer 6 …
+        assert_eq!(p.udw[0], 0x70);
+        assert_eq!(p.udw[2], 0x00);
+        assert_eq!(p.udw[4], 0x60);
+        assert_eq!(p.udw[5], 0x00);
+        assert_eq!(p.udw[6], 0x50); // Sekunden-Zehner 5
+        assert_eq!(p.udw[8], 0x40); // Minuten-Einer 4
+        assert_eq!(p.udw[10], 0x30); // Minuten-Zehner 3
+        assert_eq!(p.udw[12], 0x20); // Stunden-Einer 2
+        assert_eq!(p.udw[14], 0x10); // Stunden-Zehner 1
+        assert!(p.udw.iter().all(|b| b & 0x07 == 0), "b2…b0 sind 0");
+        let back = parse_atc(&p).unwrap();
+        assert_eq!(back.timecode, tc);
+        assert!(back.valid);
+        assert_eq!(back.payload_type, 0);
+    }
+
+    #[test]
+    fn atc_drop_frame_flag_and_invalid_bit() {
+        let tc = Timecode { hours: 0, minutes: 1, seconds: 0, frames: 2, drop_frame: true, field: false };
+        let p = atc_packet(&tc, false);
+        assert_eq!(p.udw[2] >> 4, 0x4, "Bit 10 (Drop-Frame) = UDW3 b6");
+        assert_eq!(p.udw[14] & 0x08, 0x08, "DBB2 b6 = UDW15 b3");
+        let b = parse_atc(&p).unwrap();
+        assert!(b.timecode.drop_frame && !b.valid);
+        assert_eq!(b.timecode.display(), "00:01:00;02");
+    }
+
+    #[test]
+    fn atc_survives_the_grain_round_trip() {
+        let tc = Timecode::from_frame_number(25 * 3600 + 13, 25, 1, false);
+        assert_eq!(tc.display(), "01:00:00:13");
+        let g = mxl_grain(&[atc_packet(&tc, true)]).unwrap();
+        assert_eq!(parse_atc_grain(&g).unwrap().timecode, tc);
+        assert!(parse_atc_grain(&mxl_grain(&[]).unwrap()).is_none());
+    }
+
+    #[test]
+    fn frame_numbers_map_to_timecode() {
+        assert_eq!(Timecode::from_frame_number(0, 25, 1, false).display(), "00:00:00:00");
+        assert_eq!(Timecode::from_frame_number(24, 25, 1, false).display(), "00:00:00:24");
+        assert_eq!(Timecode::from_frame_number(25, 25, 1, false).display(), "00:00:01:00");
+        // 29,97 Drop-Frame: Bild 1800 = 00:01:00;02, Bild 17982 = 00:10:00;00
+        assert_eq!(Timecode::from_frame_number(1799, 30000, 1001, true).display(), "00:00:59;29");
+        assert_eq!(Timecode::from_frame_number(1800, 30000, 1001, true).display(), "00:01:00;02");
+        assert_eq!(Timecode::from_frame_number(17982, 30000, 1001, true).display(), "00:10:00;00");
+        assert_eq!(Timecode::from_frame_number(17981, 30000, 1001, true).display(), "00:09:59;29");
+        // 29,97 ohne Drop-Frame läuft linear
+        assert_eq!(Timecode::from_frame_number(1800, 30000, 1001, false).display(), "00:01:00:00");
+        // 50 Bilder/s: ein Zeitcode je Bildpaar, zweites Bild trägt die Halbbildmarke
+        let a = Timecode::from_frame_number(100, 50, 1, false);
+        let b = Timecode::from_frame_number(101, 50, 1, false);
+        assert_eq!((a.display(), a.field), ("00:00:02:00".to_string(), false));
+        assert_eq!((b.display(), b.field), ("00:00:02:00".to_string(), true));
     }
 }

@@ -802,3 +802,11 @@ Deno.test("Befehlsvorschau: ein Paar je Zeile, Werte mit Leerzeichen gequotet", 
   assertEquals(s, "ffmpeg \\\n  -y \\\n  -i '/a b/in.mxf' \\\n  -vf scale=-2:540 \\\n  out.mp4");
   assertEquals(formatCommand("ffprobe", [], () => false), "ffprobe");
 });
+
+Deno.test("Untertitel-Schritt: Pflichtangabe Datei oder Asset, Ausgabefelder", async () => {
+  const { missingConfig, outputFieldsFor } = await import("./process-step-config-logic.ts");
+  assertEquals(missingConfig({ id: "s", type: "subtitles", config: {} }) !== null, true);
+  assertEquals(missingConfig({ id: "s", type: "subtitles", config: { file: "/a.mxf" } }), null);
+  assertEquals(missingConfig({ id: "s", type: "subtitles", config: { assetId: "x" } }), null);
+  assertEquals(outputFieldsFor({ id: "s", type: "subtitles" }).map((f) => f.path), ["srt", "playoutTrack", "speakers", "cues"]);
+});

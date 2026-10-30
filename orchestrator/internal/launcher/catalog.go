@@ -134,6 +134,10 @@ type CatalogEntry struct {
 	// nur für Katalog-Einträge, die es explizit setzen (admin-only Import,
 	// s. httpapi ImportCatalogEntry).
 	MxlAccess bool `json:"mxlAccess,omitempty"`
+	// MediaRead (nur runner:"podman") hängt die Medienverzeichnisse des Betreibers (Umgebung OMP_MEDIA_MOUNTS, absolute Pfade durch `:` getrennt)
+	// schreibgeschützt und mit gleichem Pfad ein — für Nodes, die Dateien lesen müssen, die der Orchestrator ihnen als Pfad nennt (Datei-Untertitel).
+	// Ohne gesetzte Umgebung wird nichts eingehängt. Vertrauens-Erweiterung wie MxlAccess: nur auf ausdrücklichen Eintrag.
+	MediaRead bool `json:"mediaRead,omitempty"`
 	// HostNetwork (nur runner:"podman") startet den Container im Netz des Hosts (`--network=host`) statt im Bridge-Netz — für Nodes,
 	// die viele oder wechselnde UDP-Ports brauchen (WebRTC-Medienpfad der Intercom-Sprechstellen). Dann entfallen Port-Veröffentlichung
 	// und Adress-Umschreibung. Vertrauens-Erweiterung wie MxlAccess: nur auf ausdrücklichen Eintrag (admin-only Import).

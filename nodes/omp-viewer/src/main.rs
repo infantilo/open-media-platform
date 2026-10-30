@@ -118,6 +118,32 @@ impl ReceiverControl for SubtitleControl {
     }
 }
 
+/// IS-05-Steuerung des Aux-Eingangs „Zeitcode“ (Daten-Flow mit ST-12-2-Paketen): der Zeitcode erscheint als HTML-Overlay im Panel.
+struct TimecodeControl {
+    registry: RegistryClient,
+    context: Arc<MxlContext>,
+    input: Arc<omp_mediaio::mxl::TimecodeInput>,
+}
+
+impl ReceiverControl for TimecodeControl {
+    fn apply(&self, resource: &ReceiverResource) {
+        match (&resource.sender_id, resource.master_enable) {
+            (Some(sender_id), true) => match self.registry.get_sender(sender_id) {
+                Ok(sender) => match sender.flow_id {
+                    Some(flow_id) => {
+                        if let Err(e) = self.input.connect(self.context.clone(), &flow_id) {
+                            eprintln!("omp-viewer: Zeitcode-Eingang {flow_id}: {e}");
+                        }
+                    }
+                    None => eprintln!("omp-viewer: sender {sender_id} has no flow_id"),
+                },
+                Err(e) => eprintln!("omp-viewer: resolve sender {sender_id} failed: {e}"),
+            },
+            _ => self.input.disconnect(),
+        }
+    }
+}
+
 struct AudioInputEntry {
     label: String,
     connection: Arc<ReceiverConnection<AudioInputControl>>,
@@ -150,6 +176,8 @@ struct ViewerStore {
     audio_inputs: Arc<Mutex<HashMap<String, AudioInputEntry>>>,
     subtitle: Arc<omp_mediaio::mxl::SubtitleInput>,
     subtitle_connection: Arc<ReceiverConnection<SubtitleControl>>,
+    timecode: Arc<omp_mediaio::mxl::TimecodeInput>,
+    timecode_connection: Arc<ReceiverConnection<TimecodeControl>>,
     commands: tokio::sync::mpsc::UnboundedSender<ViewerCommand>,
     // Nutzerauftrag 2026-09-03 ("die fps ... einstellbar in der UI"):
     // eigener geklonter Griff (nicht der in `ViewerControl` hinter
@@ -247,6 +275,21 @@ impl ParamStore for ViewerStore {
                     range: None,
                     readonly: true,
                 },
+                // Aux-Eingang „Zeitcode“ (ST 12-2): aktueller Zeitcode des verbundenen Daten-Flows (leer = keiner)
+                ParamSpec {
+                    name: "timecode".to_string(),
+                    kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
+                ParamSpec {
+                    name: "timecodeFlowId".to_string(),
+                    kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
                 ParamSpec {
                     name: "subtitleFlowId".to_string(),
                     kind: ParamType::String,
@@ -281,6 +324,8 @@ impl ParamStore for ViewerStore {
             "previewUrl" => Some(serde_json::json!(self.preview_url)),
             "subtitle" => Some(serde_json::json!(self.subtitle.text())),
             "subtitleFlowId" => Some(serde_json::json!(self.subtitle.connected_flow_id())),
+            "timecode" => Some(serde_json::json!(self.timecode.display())),
+            "timecodeFlowId" => Some(serde_json::json!(self.timecode.connected_flow_id())),
             "previewFps" => Some(serde_json::json!(self.pipeline.preview_fps())),
             "levelsUrl" => Some(serde_json::json!(self.levels_url)),
             "handoverPending" => Some(serde_json::json!(self.pipeline.handover_pending())),
@@ -379,6 +424,9 @@ impl ParamStore for ViewerStore {
             return Some(RawResponse { status: 200, content_type: "application/json", body: br#"{"ok":true}"#.to_vec() });
         }
         if let Some((status, content_type, body)) = self.subtitle_connection.handle(method, path, body) {
+            return Some(RawResponse { status, content_type, body });
+        }
+        if let Some((status, content_type, body)) = self.timecode_connection.handle(method, path, body) {
             return Some(RawResponse { status, content_type, body });
         }
         if let Some((status, content_type, body)) = self.connection.handle(method, path, body) {
@@ -555,6 +603,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let broadcaster_for_pipeline = broadcaster.clone();
     let context_for_pipeline = mxl_context.clone();
     let context_for_subtitle = mxl_context.clone();
+    let context_for_timecode = mxl_context.clone();
     let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
     let pipeline_heartbeat_thread = pipeline_heartbeat.clone();
     let pipeline_thread = std::thread::spawn(move || {
@@ -612,6 +661,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         subtitle_receiver_id.clone(),
         SubtitleControl { registry: RegistryClient::new(registry_url.clone()), context: context_for_subtitle, input: subtitle.clone() },
     ));
+    let timecode = Arc::new(omp_mediaio::mxl::TimecodeInput::new());
+    let timecode_receiver_id = omp_node_sdk::idgen::new_v4();
+    let timecode_connection = Arc::new(ReceiverConnection::new(
+        timecode_receiver_id.clone(),
+        TimecodeControl { registry: RegistryClient::new(registry_url.clone()), context: context_for_timecode, input: timecode.clone() },
+    ));
     let audio_inputs: Arc<Mutex<HashMap<String, AudioInputEntry>>> = Arc::new(Mutex::new(HashMap::new()));
     let (commands_tx, commands_rx) = tokio::sync::mpsc::unbounded_channel::<ViewerCommand>();
 
@@ -624,12 +679,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         audio_inputs: audio_inputs.clone(),
         subtitle,
         subtitle_connection,
+        timecode,
+        timecode_connection,
         commands: commands_tx,
         pipeline: store_pipeline,
         monitor: monitor.clone(),
     });
 
     let subtitle_label = format!("{label} Untertitel");
+    let timecode_label = format!("{label} Zeitcode");
     let handle = omp_node_sdk::start(
         NodeConfig {
             label,
@@ -650,6 +708,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     transport: Some(TRANSPORT_MXL.to_string()),
                     media_types: Some(vec!["video/smpte291".to_string()]),
                     label: Some(subtitle_label),
+                    ..Default::default()
+                },
+                ReceiverSpec {
+                    id: Some(timecode_receiver_id),
+                    transport: Some(TRANSPORT_MXL.to_string()),
+                    media_types: Some(vec!["video/smpte291".to_string()]),
+                    label: Some(timecode_label),
                     ..Default::default()
                 },
             ],

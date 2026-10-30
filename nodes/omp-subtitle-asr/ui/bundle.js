@@ -8,6 +8,7 @@ const T = (() => {
       "asr.trackStop": "■ Spur beenden", "asr.trackOn": "Spur läuft: {name}", "asr.last": "Zuletzt erkannt", "asr.none": "noch nichts erkannt",
       "asr.stats": "Segmente {segments} · verworfen {dropped} · Fehler {errors} · letzte Erkennung {lastLatencyMs} ms", "asr.clear": "Liste leeren",
       "asr.idle": "wartet auf Audioquelle", "asr.powered": "Powered by Whisper", "asr.credit": "Spracherkennung: whisper.cpp und Whisper-Modelle (MIT-Lizenz). Lizenztexte liegen im Paket.", "asr.model": "Modell", "asr.starting": "Engine lädt …", "asr.modelHint": "Größere Modelle erkennen genauer, brauchen aber mehr Rechenzeit; nach dem Wechsel lädt die Engine einige Sekunden.", "asr.noModel": "Engine läuft nicht im Node", "asr.listening": "hört zu", "asr.transcribing": "erkennt …", "asr.engineOk": "bereit",
+      "asr.role.file": "Datei-Node (nur SRT aus Dateien, keine Live-Untertitelung)", "asr.role.live": "Live-Node (keine Dateiaufträge)", "asr.paused": "Live pausiert: Untertitel-Datei läuft am Ausgang", "asr.files": "Datei-Aufträge", "asr.nofiles": "keine Aufträge", "asr.nodiar": "Sprechererkennung nicht eingerichtet (install-diarization.sh)", "asr.diar": "Sprechererkennung bereit",
       "asr.hint": "Der Text erscheint mit einigen Sekunden Verzug (nach dem Sprechen); die Spur trägt die echten Sprechzeiten.",
     },
     en: {
@@ -17,6 +18,7 @@ const T = (() => {
       "asr.trackStop": "■ Stop track", "asr.trackOn": "Track running: {name}", "asr.last": "Last recognised", "asr.none": "nothing recognised yet",
       "asr.stats": "Segments {segments} · dropped {dropped} · errors {errors} · last recognition {lastLatencyMs} ms", "asr.clear": "Clear list",
       "asr.idle": "waiting for audio source", "asr.powered": "Powered by Whisper", "asr.credit": "Speech recognition: whisper.cpp and Whisper models (MIT licence). Licence texts are included in the package.", "asr.model": "Model", "asr.starting": "Engine loading …", "asr.modelHint": "Larger models recognise more accurately but need more processing time; after a change the engine loads for a few seconds.", "asr.noModel": "Engine does not run inside the node", "asr.listening": "listening", "asr.transcribing": "recognising …", "asr.engineOk": "ready",
+      "asr.role.file": "File node (SRT from files only, no live subtitling)", "asr.role.live": "Live node (no file jobs)", "asr.paused": "Live paused: subtitle file playing at the output", "asr.files": "File jobs", "asr.nofiles": "no jobs", "asr.nodiar": "Speaker detection not set up (install-diarization.sh)", "asr.diar": "Speaker detection ready",
       "asr.hint": "Text appears a few seconds after speech; the track carries the real speaking times.",
     },
   };
@@ -74,6 +76,10 @@ class OmpSubtitleAsrPanel extends HTMLElement {
     const last = el("div", { className: "last" });
     const cues = el("div", { className: "cues" });
     const stats = el("p");
+    const paused = el("div", { className: "chip busy", style: "display:none;margin:6px 0" }, T("asr.paused"));
+    const diarInfo = el("p");
+    const roleChip = el("span", { className: "chip" });
+    const files = el("div", { className: "cues" });
     const clearBtn = el("button", {}, T("asr.clear"));
 
     shadow.append(
@@ -88,7 +94,7 @@ class OmpSubtitleAsrPanel extends HTMLElement {
       el("div", { className: "row" }, el("label", {}, T("asr.mixer")), mixer),
       el("div", { className: "row" }, el("label", {}, T("asr.track")), trackName, trackBtn, trackInfo),
       el("div", { className: "row" }, el("label", {}, T("asr.last"))), last, cues, stats,
-      el("div", { className: "row" }, clearBtn), el("p", {}, T("asr.hint")), el("p", { style: "font-size:10px;opacity:.7" }, T("asr.credit")),
+      el("div", { className: "row" }, clearBtn), paused, el("div", { className: "row" }, roleChip), el("div", { className: "row" }, el("label", {}, T("asr.files")), diarInfo), files, el("p", {}, T("asr.hint")), el("p", { style: "font-size:10px;opacity:.7" }, T("asr.credit")),
     );
 
     const call = (method, body) => fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
@@ -116,8 +122,8 @@ class OmpSubtitleAsrPanel extends HTMLElement {
     let catalogKey = "";
     let catalogAt = 0;
     const refresh = async () => {
-      const [status, engineStatus, st, en, lg, ld, tg, tn, ta, lt, cl, sources, nodes, connected, tm, models, curModel] = await Promise.all(
-        ["status", "engineStatus", "stats", "enabled", "language", "liveDisplay", "targetGraphicsLabel", "trackName", "trackActive", "lastText", "cues", "availableSources", "availableNodes", "connectedFlowId", "targetMixerLabel", "models", "model"].map(getParam));
+      const [status, engineStatus, st, en, lg, ld, tg, tn, ta, lt, cl, sources, nodes, connected, tm, models, curModel, suppressed, fileJobs, diar, role] = await Promise.all(
+        ["status", "engineStatus", "stats", "enabled", "language", "liveDisplay", "targetGraphicsLabel", "trackName", "trackActive", "lastText", "cues", "availableSources", "availableNodes", "connectedFlowId", "targetMixerLabel", "models", "model", "liveSuppressed", "fileJobs", "diarization", "role"].map(getParam));
       const sKey = String(status || "idle");
       const base = sKey.split(":")[0];
       statusChip.textContent = sKey.startsWith("error") ? sKey : T("asr." + base);
@@ -154,6 +160,12 @@ class OmpSubtitleAsrPanel extends HTMLElement {
       last.textContent = lt || T("asr.none");
       const list = Array.isArray(cl) ? cl : [];
       cues.replaceChildren(...list.slice().reverse().map((c) => { const d = el("div"); d.append(el("b", {}, new Date(c.startMs).toLocaleTimeString()), c.text); return d; }));
+      roleChip.textContent = T(role === "file" ? "asr.role.file" : "asr.role.live");
+      roleChip.className = "chip " + (role === "file" ? "busy" : "ok");
+      paused.style.display = suppressed ? "" : "none";
+      diarInfo.textContent = diar ? T("asr.diar") : T("asr.nodiar");
+      const fj = Array.isArray(fileJobs) ? fileJobs : [];
+      files.replaceChildren(...(fj.length ? fj.slice().reverse().map((j) => { const d = el("div"); d.append(el("b", {}, j.state === "running" ? (j.progress ?? 0) + " %" : j.state), `${j.name || j.file}${j.state === "done" ? " · " + j.cues + " / " + j.speakersFound : ""}${j.message && j.state !== "done" ? " · " + j.message : ""}`); return d; }) : [el("div", {}, T("asr.nofiles"))]));
       stats.textContent = st ? T("asr.stats", st) : "";
       const sourceList = Array.isArray(sources) ? sources : [];
       const key = JSON.stringify(sourceList);

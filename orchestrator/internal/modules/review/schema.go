@@ -9,8 +9,38 @@ func (*Module) Migrations() []module.Migration {
 		{Version: 2, Name: "review-assignment", SQL: schemaV2},
 		{Version: 3, Name: "review-audio-proxy", SQL: schemaV3},
 		{Version: 4, Name: "review-proxy-progress", SQL: schemaV4},
+		{Version: 5, Name: "review-subtitles", SQL: schemaV5},
 	}
 }
+
+// schemaV5: Untertitel (SRT) aus der Datei erzeugen — ein Auftrag je Zeile, Rechenarbeit im Auto-Untertitel-Node (Sprecher- und Spracherkennung).
+const schemaV5 = `
+CREATE TABLE IF NOT EXISTS review_subtitles (
+    id             TEXT PRIMARY KEY,
+    asset_id       TEXT NOT NULL,
+    source_rev     TEXT NOT NULL DEFAULT '',
+    name           TEXT NOT NULL,
+    state          TEXT NOT NULL,
+    progress       INT NOT NULL DEFAULT 0,
+    message        TEXT NOT NULL DEFAULT '',
+    params         JSONB NOT NULL DEFAULT '{}',
+    node_id        TEXT NOT NULL DEFAULT '',
+    node_base      TEXT NOT NULL DEFAULT '',
+    node_label     TEXT NOT NULL DEFAULT '',
+    speakers_found INT NOT NULL DEFAULT 0,
+    cues           INT NOT NULL DEFAULT 0,
+    duration_s     DOUBLE PRECISION NOT NULL DEFAULT 0,
+    path           TEXT NOT NULL DEFAULT '',
+    playout_path   TEXT NOT NULL DEFAULT '',
+    rep_id         TEXT NOT NULL DEFAULT '',
+    created_by     TEXT NOT NULL DEFAULT '',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS review_subtitles_asset_idx ON review_subtitles (asset_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS review_subtitles_state_idx ON review_subtitles (state);
+`
 
 // schemaV4: Fortschritt der Proxy-Erzeugung in Prozent (0–100) für den Fortschrittsbalken der Oberfläche.
 const schemaV4 = `

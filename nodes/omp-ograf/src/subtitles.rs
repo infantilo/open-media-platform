@@ -5,6 +5,8 @@
 //! `subtitle.load/select/start/stop` (Child Event `SUBTITLE`); Cues, Zeitlogik und Darstellung bleiben hier.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -141,21 +143,51 @@ pub fn load_track(dir: &Path, id: &str) -> Result<Track, String> {
     Err(format!("Spur „{id}\u{201c} nicht gefunden in {}", dir.display()))
 }
 
-/// Laufender Abspielzustand (Uhr = `Instant` minus Versatz).
+/// Woher die Position der Wiedergabe kommt.
+pub enum Clock {
+    /// Freilaufende Uhr ab `subtitle.start`.
+    Free(Instant),
+    /// Zeitcode (ST 12-2) des verbundenen Daten-Flows: die Spur läuft mit dem Bild — auch bei Halt, Pause und Sprung (Seek).
+    /// Fällt der Zeitcode aus, bleibt die letzte Position stehen (kein Weiterlaufen ohne Bild).
+    Timecode { input: Arc<omp_mediaio::mxl::TimecodeInput>, rate: (u32, u32), last_ms: AtomicU64 },
+}
+
+/// Laufender Abspielzustand.
 pub struct Playback {
     pub track: Track,
-    started: Instant,
+    clock: Clock,
     offset_ms: u64,
     pub last_text: String,
 }
 
 impl Playback {
     pub fn new(track: Track, offset_ms: u64) -> Playback {
-        Playback { track, started: Instant::now(), offset_ms, last_text: String::new() }
+        Playback { track, clock: Clock::Free(Instant::now()), offset_ms, last_text: String::new() }
+    }
+
+    /// Wiedergabe, die dem Zeitcode folgt. `offset_ms` wird zur Medienzeit addiert (Spur gegen Zeitcode verschieben).
+    pub fn following(track: Track, offset_ms: u64, input: Arc<omp_mediaio::mxl::TimecodeInput>, rate: (u32, u32)) -> Playback {
+        let start = input.media_ms(rate.0, rate.1).unwrap_or(0);
+        Playback { track, clock: Clock::Timecode { input, rate, last_ms: AtomicU64::new(start) }, offset_ms, last_text: String::new() }
+    }
+
+    pub fn clock_name(&self) -> &'static str {
+        match self.clock {
+            Clock::Free(_) => "free",
+            Clock::Timecode { .. } => "timecode",
+        }
     }
 
     pub fn position_ms(&self) -> u64 {
-        self.started.elapsed().as_millis() as u64 + self.offset_ms
+        match &self.clock {
+            Clock::Free(started) => started.elapsed().as_millis() as u64 + self.offset_ms,
+            Clock::Timecode { input, rate, last_ms } => {
+                if let Some(ms) = input.media_ms(rate.0, rate.1) {
+                    last_ms.store(ms, Ordering::Relaxed);
+                }
+                last_ms.load(Ordering::Relaxed) + self.offset_ms
+            }
+        }
     }
 
     /// `Some(neuer Text)`, wenn sich der anzuzeigende Text seit dem letzten Aufruf geändert hat.
@@ -169,6 +201,7 @@ impl Playback {
         }
     }
 
+    /// Ende der Spur erreicht. Bei Zeitcode-Folge nicht allein am Zeitcode festgemacht: steht er (Halt), endet nichts von selbst.
     pub fn finished(&self) -> bool {
         self.position_ms() > self.track.end_ms() + 500
     }
@@ -177,6 +210,7 @@ impl Playback {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use omp_mediaio::anc;
 
     const SRT: &str = "1\n00:00:01,000 --> 00:00:03,000\nErste <i>Zeile</i>\n\n2\n00:00:03,500 --> 00:00:06,250\nZwei\nZeilen\n";
 
@@ -225,6 +259,38 @@ mod tests {
         assert!(!p.finished());
         let late = Playback::new(parse("de", SRT).unwrap(), 10_000);
         assert!(late.finished());
+    }
+
+    fn tc_grain(frame: u64) -> Vec<u8> {
+        use omp_mediaio::anc::{self, Timecode};
+        anc::mxl_grain(&[anc::atc_packet(&Timecode::from_frame_number(frame, 25, 1, false), true)]).unwrap()
+    }
+
+    #[test]
+    fn following_playback_tracks_timecode_through_hold_and_seek() {
+        let input = Arc::new(omp_mediaio::mxl::TimecodeInput::new());
+        input.feed_grain(&tc_grain(0));
+        let mut p = Playback::following(parse("de", SRT).unwrap(), 0, input.clone(), (25, 1));
+        assert_eq!(p.clock_name(), "timecode");
+        assert_eq!(p.changed_text(), None, "bei 0 s kein Cue");
+        input.feed_grain(&tc_grain(25 * 2)); // 2,0 s
+        assert_eq!(p.changed_text().as_deref(), Some("Erste Zeile"));
+        // Halt: der Zeitcode steht — die Spur auch, egal wie viel Uhrzeit vergeht
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        assert_eq!(p.position_ms(), 2000);
+        // Sprung auf 4,0 s (Seek)
+        input.feed_grain(&tc_grain(25 * 4));
+        assert_eq!(p.changed_text().as_deref(), Some("Zwei\nZeilen"));
+        // Zeitcode fällt aus (leere Grains): letzte Position bleibt, kein Weiterlaufen
+        for _ in 0..12 {
+            input.feed_grain(&anc::mxl_grain(&[]).unwrap());
+        }
+        assert_eq!(p.position_ms(), 4000);
+        assert!(!p.finished());
+        // Versatz der Spur gegen den Zeitcode
+        let q = Playback::following(parse("de", SRT).unwrap(), 500, input.clone(), (25, 1));
+        input.feed_grain(&tc_grain(25 * 4));
+        assert_eq!(q.position_ms(), 4500);
     }
 
     #[test]

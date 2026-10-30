@@ -7,9 +7,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
       libgstreamer1.0-0 gstreamer1.0-plugins-base \
-      libunwind8 libdw1 libgomp1 libstdc++6 \
+      libunwind8 libdw1 libgomp1 libstdc++6 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
+# Datei-Untertitel (Kap. 77): ffmpeg holt die Tonspur; Sprechererkennung (sherpa-onnx + Modelle) liegt unter engine/diarization,
+# soweit sie beim Bauen vorhanden war (tools/asr-engine/install-diarization.sh).
 # Node, MXL-Laufzeit (libmxl wird per dlopen geladen), Engine + Modelle
 COPY node/omp-subtitle-asr /opt/omp/omp-subtitle-asr
 COPY mxl/ /opt/mxl/lib/

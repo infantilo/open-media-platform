@@ -1332,6 +1332,19 @@ fn build_source_branch(
             }
         });
     }
+    // Zeitcode: PTS des Eingangsbildes ↔ Ursprungs-Grain der Quelle (für den bildgenauen Zeitcode am Programmausgang, `tc.rs`)
+    if let (Some(bridge), Some(pad)) = (crate::tc::bridge(), mxl_input.tail.static_pad("src")) {
+        let (sender, ctx) = (sender_id.to_string(), context.clone());
+        pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+            if let Some(buf) = info.buffer()
+                && let Some(pts) = buf.pts()
+                && let Some(origin) = omp_mediaio::mxl::buffer_origin_index(&ctx, buf, FRAMERATE_NUMERATOR as i64, FRAMERATE_DENOMINATOR as i64)
+            {
+                bridge.note_input(&sender, pts.nseconds(), origin);
+            }
+            gst::PadProbeReturn::Ok
+        });
+    }
     let (_, elements) = match build_normalized_branch(
         pipeline,
         &mxl_input.tail,
@@ -2454,6 +2467,9 @@ fn build(
             output_delays[level_idx].clone(),
         )
         .map_err(|e| format!("MxlVideoOutput (level {level_idx}): {e}"))?;
+        if let Some(bridge) = crate::tc::bridge() {
+            mxl_output.set_frame_hook(Box::new(move |index, pts| bridge.on_frame(level_idx, index, pts)));
+        }
         mxl_output.set_active(true);
         let flowed = mxl_output.flowed_handle();
 

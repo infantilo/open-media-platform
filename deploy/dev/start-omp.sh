@@ -95,6 +95,10 @@ fi
 # von Hand anlegt.
 mkdir -p "${OMP_MXL_DOMAIN:-/dev/shm/omp-mxl}"
 
+# Medienverzeichnisse, die Container-Nodes mit Katalogfeld mediaRead (z. B. Auto-Untertitel, Datei-SRT) schreibgeschützt und mit
+# gleichem Pfad sehen — sonst meldet der Node „Datei nicht gefunden“. Weitere Pfade mit `:` anhängen.
+export OMP_MEDIA_MOUNTS="${OMP_MEDIA_MOUNTS:-$ROOT_DIR/data/media:$ROOT_DIR/data/review}"
+
 if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
   echo "Orchestrator läuft bereits (PID $(cat "$PID_FILE"))." >&2
   echo "Erst stoppen: make stop" >&2

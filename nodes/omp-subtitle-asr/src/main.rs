@@ -11,7 +11,9 @@
 //! Sekunden Verzug; die SRT-Spur trägt dagegen die tatsächlichen Sprechzeiten.
 
 mod caption;
+mod diarize;
 mod engine;
+mod filejob;
 mod manager;
 mod outputs;
 mod output;
@@ -44,6 +46,13 @@ const SUBTITLE_LAYER: &str = "subtitle";
 const KEEP_CUES: usize = 30;
 /// Wartende Segmente, bevor ältere verworfen werden (Engine langsamer als Echtzeit).
 const BACKLOG: usize = 6;
+
+/// Spielt der Grafik-Node gerade eine Untertiteldatei ab? Sein Parameter `subtitle` meldet `running`. Eine Untertiteldatei hat
+/// Vorrang vor der Live-Erkennung: sonst überschrieben sich beide in derselben Ebene (und ein „Löschen“ der Live-Anzeige
+/// würde den Dateitext ausblenden).
+fn file_subtitle_running(state: &Value) -> bool {
+    state.get("running").and_then(Value::as_bool).unwrap_or(false)
+}
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
@@ -82,6 +91,8 @@ struct Shared {
     samples_total: AtomicU64,
     /// Spitzenpegel der letzten Sekunden in dBFS ×10 (Anzeige „kommt Ton an?“).
     peak_db10: AtomicI64,
+    /// Live-Anzeige ruht, weil der Grafik-Node gerade eine Untertiteldatei (SRT) abspielt (Kind-Event `SUBTITLE` der Playout-Automation).
+    live_suppressed: AtomicBool,
 }
 
 impl Shared {
@@ -245,6 +256,19 @@ fn display_loop(shared: Arc<Shared>, registry: RegistryClient, rx: Receiver<Stri
             shared.set_status(format!("error: Grafik-Node „{label}“ nicht gefunden"));
             return;
         };
+        // Untertiteldatei läuft im Grafik-Node: Live pausiert (kein Schreiben, kein Löschen); danach wieder `show`
+        let file_running = p.get_param("subtitle").map(|v| file_subtitle_running(&v)).unwrap_or(false);
+        let was = shared.live_suppressed.swap(file_running, Ordering::Relaxed);
+        if file_running {
+            *layer_ready = false;
+            if !was {
+                shared.set_status("live paused: subtitle file playing");
+            }
+            return;
+        }
+        if was {
+            shared.set_status("listening");
+        }
         let result = if *layer_ready {
             p.invoke_with("update", json!({"layerId": SUBTITLE_LAYER, "data": {"text": text}}))
         } else {
@@ -336,7 +360,28 @@ impl ReceiverControl for AsrControl {
     }
 }
 
+/// Aufgabe der Instanz. Dateiaufträge (SRT aus Mediendateien, Eingangskontrolle/Prozess) rechnen minutenlang auf allen Kernen und dürfen
+/// die Live-Untertitelung nie stören — deshalb nimmt eine Live-Instanz keine Dateiaufträge an und eine Datei-Instanz keine Live-Quelle.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Role {
+    Live,
+    File,
+}
+
+impl Role {
+    fn parse(s: &str) -> Role {
+        if s.trim().eq_ignore_ascii_case("file") { Role::File } else { Role::Live }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Role::Live => "live",
+            Role::File => "file",
+        }
+    }
+}
+
 struct AsrStore {
+    role: Role,
     shared: Arc<Shared>,
     connected_flow_id: Arc<Mutex<String>>,
     connected_label: Arc<Mutex<String>>,
@@ -346,6 +391,8 @@ struct AsrStore {
     own_label: String,
     /// Engine im Node (None bei externer Engine oder Ersatz-Engine): Modellwahl nur hier.
     manager: Option<Arc<manager::EngineManager>>,
+    /// Untertitel aus Dateien (mit Sprechererkennung), s. `filejob.rs`.
+    files: Arc<filejob::FileJobs>,
 }
 
 fn spec(name: &str, kind: ParamType, readonly: bool) -> ParamSpec {
@@ -357,6 +404,8 @@ impl omp_node_sdk::ParamStore for AsrStore {
         Descriptor {
             latency: None,
             parameters: vec![
+                // "live" (Standard) oder "file": dedizierter Datei-Node (OMP_ASR_ROLE=file)
+                spec("role", ParamType::String, true),
                 spec("status", ParamType::String, true),
                 spec("connectedFlowId", ParamType::String, true),
                 spec("connectedLabel", ParamType::String, true),
@@ -370,6 +419,11 @@ impl omp_node_sdk::ParamStore for AsrStore {
                 spec("lastText", ParamType::String, true),
                 spec("cues", ParamType::String, true),
                 spec("stats", ParamType::String, true),
+                // true, solange die Live-Anzeige ruht, weil der Grafik-Node eine Untertiteldatei abspielt
+                spec("liveSuppressed", ParamType::Boolean, true),
+                // Untertitel aus Dateien: Aufträge (Zustand, Fortschritt, Ergebnisse als `fileJobSrt.<id>`) und ob die Sprechererkennung eingerichtet ist
+                spec("fileJobs", ParamType::String, true),
+                spec("diarization", ParamType::Boolean, true),
                 spec("enabled", ParamType::Boolean, false),
                 spec("language", ParamType::String, false),
                 spec("liveDisplay", ParamType::Boolean, false),
@@ -383,6 +437,15 @@ impl omp_node_sdk::ParamStore for AsrStore {
                 MethodSpec { name: "track.start".to_string(), args: vec![MethodArg { name: "name".to_string(), kind: ParamType::String }] },
                 MethodSpec { name: "track.stop".to_string(), args: vec![] },
                 MethodSpec { name: "clear".to_string(), args: vec![] },
+                MethodSpec {
+                    name: "file.transcribe".to_string(),
+                    args: ["id", "file", "track", "language", "speakers", "names", "word", "style", "name"]
+                        .into_iter()
+                        .map(|n| MethodArg { name: n.to_string(), kind: if matches!(n, "track" | "speakers") { ParamType::Number } else { ParamType::String } })
+                        .collect(),
+                },
+                MethodSpec { name: "file.cancel".to_string(), args: vec![MethodArg { name: "id".to_string(), kind: ParamType::String }] },
+                MethodSpec { name: "file.remove".to_string(), args: vec![MethodArg { name: "id".to_string(), kind: ParamType::String }] },
                 MethodSpec { name: "engine.setModel".to_string(), args: vec![MethodArg { name: "name".to_string(), kind: ParamType::String }] },
             ],
         }
@@ -421,6 +484,11 @@ impl omp_node_sdk::ParamStore for AsrStore {
                 "samples": s.samples_total.load(Ordering::Relaxed),
                 "peakDb": s.peak_db10.load(Ordering::Relaxed) as f64 / 10.0,
             })),
+            "role" => Some(json!(self.role.name())),
+            "liveSuppressed" => Some(json!(s.live_suppressed.load(Ordering::Relaxed))),
+            "fileJobs" => Some(self.files.list_json()),
+            "diarization" => Some(json!(self.files.has_diarizer())),
+            n if n.starts_with("fileJobSrt.") => self.files.srt(&n["fileJobSrt.".len()..]).map(Value::String),
             "enabled" => Some(json!(settings.enabled)),
             "language" => Some(json!(settings.language)),
             "liveDisplay" => Some(json!(settings.live_display)),
@@ -448,13 +516,20 @@ impl omp_node_sdk::ParamStore for AsrStore {
             "targetMixerLabel" => s.mixer_label = value.as_str().ok_or(SetError::Unknown)?.trim().to_string(),
             "trackName" => s.track_name = value.as_str().ok_or(SetError::Unknown)?.trim().to_string(),
             "status" | "connectedFlowId" | "connectedLabel" | "availableSources" | "availableNodes" | "engine" | "engineStatus" | "models" | "model" | "lastText" | "cues"
-            | "stats" | "trackActive" => return Err(SetError::ReadOnly),
+            | "stats" | "trackActive" | "liveSuppressed" | "fileJobs" | "diarization" => return Err(SetError::ReadOnly),
             _ => return Err(SetError::Unknown),
         }
         Ok(())
     }
 
     fn invoke(&self, name: &str, args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
+        let live_only = matches!(name, "selectSource" | "clear" | "track.start" | "track.stop");
+        if live_only && self.role == Role::File {
+            return Err(InvokeError::Message("Dieser Node ist ein dedizierter Datei-Node (OMP_ASR_ROLE=file) und hat keine Live-Untertitelung".to_string()));
+        }
+        if name == "file.transcribe" && self.role == Role::Live {
+            return Err(InvokeError::Message("Dateiaufträge laufen nur auf einem dedizierten Datei-Node (OMP_ASR_ROLE=file), damit die Live-Untertitelung nicht gestört wird".to_string()));
+        }
         match name {
             "selectSource" => {
                 let sender_id = args.get("senderId").and_then(Value::as_str).unwrap_or("");
@@ -480,6 +555,32 @@ impl omp_node_sdk::ParamStore for AsrStore {
                     Some(m) => m.set_model(name).map_err(InvokeError::Message),
                     None => Err(InvokeError::Message("Die Engine läuft nicht im Node (externe Engine oder Ersatz-Engine) — Modell dort wechseln".to_string())),
                 }
+            }
+            "file.transcribe" => {
+                let text = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+                let num = |k: &str, d: usize| args.get(k).and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).map_or(d, |n| n as usize);
+                let style = filejob::LabelStyle::parse(&text("style")).ok_or_else(|| InvokeError::Message("style: colon, bracket oder dash".to_string()))?;
+                let language = if text("language").is_empty() { self.shared.settings.lock().expect("lock poisoned").language.clone() } else { text("language") };
+                let spec = filejob::FileSpec {
+                    file: std::path::PathBuf::from(text("file")),
+                    track: num("track", 0),
+                    language,
+                    speakers: num("speakers", 0),
+                    names: text("names").split(',').map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect(),
+                    label_word: text("word"),
+                    style,
+                    name: text("name"),
+                    id: text("id"),
+                };
+                self.files.submit(spec, &self.shared.engine.name()).map(|_| ()).map_err(InvokeError::Message)
+            }
+            "file.cancel" => {
+                let id = args.get("id").and_then(Value::as_str).unwrap_or("");
+                if self.files.cancel(id) { Ok(()) } else { Err(InvokeError::Message(format!("Auftrag {id} unbekannt"))) }
+            }
+            "file.remove" => {
+                let id = args.get("id").and_then(Value::as_str).unwrap_or("");
+                if self.files.remove(id) { Ok(()) } else { Err(InvokeError::Message(format!("Auftrag {id} unbekannt oder läuft noch (erst abbrechen)"))) }
             }
             "clear" => {
                 self.shared.cues.lock().expect("lock poisoned").clear();
@@ -575,10 +676,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
+    let role = Role::parse(&env_or("OMP_ASR_ROLE", "live"));
     let shared = Arc::new(Shared {
         settings: Mutex::new(Settings {
             language: env_or("OMP_ASR_LANGUAGE", "de"),
-            enabled: env_or("OMP_ASR_ENABLED", "1") != "0",
+            enabled: role == Role::Live && env_or("OMP_ASR_ENABLED", "1") != "0",
             live_display: env_or("OMP_ASR_LIVE_DISPLAY", "1") != "0",
             graphics_label: env_or("OMP_ASR_GRAPHICS_LABEL", ""),
             mixer_label: env_or("OMP_ASR_MIXER_LABEL", ""),
@@ -597,6 +699,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         connected: AtomicBool::new(false),
         samples_total: AtomicU64::new(0),
         peak_db10: AtomicI64::new(-1200),
+        live_suppressed: AtomicBool::new(false),
     });
     let shutdown = Arc::new(AtomicBool::new(false));
 
@@ -618,7 +721,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut output_threads: Vec<std::thread::JoinHandle<()>> = vec![];
     let out_frames = Arc::new(AtomicU64::new(0));
     let mut out_heartbeats: Vec<(String, Arc<AtomicU64>)> = vec![];
-    match omp_mediaio::mxl::MxlContext::new(&domain).map(Arc::new) {
+    // Datei-Node: keine MXL-Daten-Ausgänge (es gibt keine Live-Untertitelung)
+    let mxl_ctx = if role == Role::File { Err("Datei-Node".to_string()) } else { omp_mediaio::mxl::MxlContext::new(&domain).map(Arc::new) };
+    match mxl_ctx {
         Ok(ctx) => {
             let seed = format!("{label}:{}", env_or("OMP_INSTANCE_ID", ""));
             let text_id = stable_flow_id(&format!("{seed}:text"));
@@ -661,7 +766,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Err(e) => eprintln!("omp-subtitle-asr: CEA-608-Ausgang aus — {e}"),
             }
         }
-        Err(e) => eprintln!("omp-subtitle-asr: keine MXL-Ausgänge — {e}"),
+        Err(e) => eprintln!("omp-subtitle-asr: keine MXL-Ausgänge ({}) — {e}", role.name()),
     }
     let worker_thread = {
         let (s, sd) = (shared.clone(), shutdown.clone());
@@ -742,7 +847,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             connected_label: connected_label.clone(),
         },
     ));
+    // Untertitel aus Dateien: Sprechererkennung (falls eingerichtet) und Ton-Extraktion über ffmpeg
+    let diarizer = diarize::Diarizer::discover(&std::path::PathBuf::from(env_or("OMP_ASR_HOME", "data/asr-engine"))).map(Arc::new);
+    match &diarizer {
+        Some(_) => eprintln!("omp-subtitle-asr: Sprechererkennung eingerichtet"),
+        None => eprintln!("omp-subtitle-asr: Sprechererkennung nicht eingerichtet (sh tools/asr-engine/install-diarization.sh) — Datei-Untertitel nur ohne Namen"),
+    }
+    let ffmpeg = env_or("OMP_FFMPEG", "ffmpeg");
+    let max_minutes = env_or("OMP_ASR_FILE_MAX_MINUTES", &filejob::DEFAULT_MAX_MINUTES.to_string()).parse().unwrap_or(filejob::DEFAULT_MAX_MINUTES);
+    let files = filejob::FileJobs::new(
+        shared.engine.clone(),
+        diarizer,
+        Arc::new(move |file, track| filejob::extract_with_ffmpeg(&ffmpeg, file, track, max_minutes)),
+        env_or("OMP_ASR_DIARIZE_THRESHOLD", &diarize::Diarizer::DEFAULT_THRESHOLD.to_string()).parse().unwrap_or(diarize::Diarizer::DEFAULT_THRESHOLD),
+        env_or("OMP_ASR_DIARIZE_THREADS", "2").parse().unwrap_or(2),
+    );
     let store: Arc<dyn omp_node_sdk::ParamStore> = Arc::new(AsrStore {
+        role,
         shared: shared.clone(),
         connected_flow_id,
         connected_label,
@@ -751,6 +872,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         own_receiver_id: receiver_id.clone(),
         own_label: label.clone(),
         manager: manager.clone(),
+        files,
     });
 
     let handle = omp_node_sdk::start(
@@ -809,4 +931,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         m.shutdown();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_subtitle_state_decides_whether_live_pauses() {
+        assert!(file_subtitle_running(&json!({"running": true, "selected": "wetter"})));
+        assert!(!file_subtitle_running(&json!({"running": false, "tracks": []})));
+        assert!(!file_subtitle_running(&Value::Null), "Grafik-Node ohne Auskunft: Live läuft weiter");
+        assert!(!file_subtitle_running(&json!({"running": "ja"})), "kein Wahrheitswert: nicht pausieren");
+    }
 }

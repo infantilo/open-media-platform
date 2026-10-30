@@ -59,6 +59,54 @@ pub fn cues_for_width(text: &str, start_ms: i64, width: usize) -> Vec<Cue> {
     cues
 }
 
+/// Zerlegt Text in Anzeigeeinheiten innerhalb eines gegebenen Zeitfensters (Datei-Untertitel: die Sprechzeit steht fest, anders als bei
+/// Live). Die Dauer verteilt sich nach Zeichenzahl auf die Einheiten (je mindestens 700 ms, das Fenster wächst notfalls darüber hinaus).
+pub fn cues_between(text: &str, start_ms: i64, end_ms: i64) -> Vec<Cue> {
+    let lines = wrap(text, MAX_LINE);
+    let groups: Vec<String> = lines.chunks(MAX_LINES).map(|g| g.join("\n")).collect();
+    if groups.is_empty() {
+        return Vec::new();
+    }
+    const FLOOR_MS: i64 = 700;
+    let total = (end_ms - start_ms).max(FLOOR_MS * groups.len() as i64);
+    let weight: usize = groups.iter().map(|g| g.chars().count().max(1)).sum();
+    let mut out = Vec::with_capacity(groups.len());
+    let mut t = start_ms;
+    let mut left = total;
+    for (i, g) in groups.iter().enumerate() {
+        let remaining = (groups.len() - i - 1) as i64;
+        let share = if remaining == 0 { left } else { ((total as f64 * g.chars().count().max(1) as f64 / weight as f64) as i64).clamp(FLOOR_MS, left - FLOOR_MS * remaining) };
+        out.push(Cue { start_ms: t, end_ms: t + share, text: g.clone() });
+        t += share;
+        left -= share;
+    }
+    out
+}
+
+/// Ordnet Einheiten nach Beginn und beseitigt Überlappungen (z. B. Sprecher, die durcheinander reden): die frühere Einheit wird
+/// gekürzt (nicht unter 500 ms), reicht das nicht, rückt die spätere nach hinten. Danach hat jede Einheit Ende > Beginn.
+pub fn tidy(cues: &mut Vec<Cue>) {
+    cues.sort_by_key(|c| (c.start_ms, c.end_ms));
+    for i in 1..cues.len() {
+        let (head, tail) = cues.split_at_mut(i);
+        let (prev, cur) = (&mut head[i - 1], &mut tail[0]);
+        if cur.start_ms < prev.end_ms {
+            let cut = cur.start_ms.max(prev.start_ms + 500);
+            prev.end_ms = cut;
+            if cur.start_ms < prev.end_ms {
+                let len = cur.end_ms - cur.start_ms;
+                cur.start_ms = prev.end_ms;
+                cur.end_ms = cur.start_ms + len.max(1);
+            }
+        }
+    }
+}
+
+/// Komplette SRT-Datei (Nummerierung ab 1, Zeiten ab Dateibeginn).
+pub fn srt_file(cues: &[Cue]) -> String {
+    cues.iter().enumerate().map(|(i, c)| srt_block(i + 1, c, 0)).collect()
+}
+
 fn stamp(ms: i64) -> String {
     let ms = ms.max(0);
     format!("{:02}:{:02}:{:02},{:03}", ms / 3_600_000, ms / 60_000 % 60, ms / 1000 % 60, ms % 1000)
@@ -96,6 +144,45 @@ mod tests {
     fn short_text_gets_the_minimum_duration() {
         let c = &cues_for("Ja.", 0)[0];
         assert_eq!(c.end_ms - c.start_ms, 1_200);
+    }
+
+    #[test]
+    fn cues_between_fills_the_window_proportionally() {
+        let text = "Wort ".repeat(40);
+        let c = cues_between(text.trim(), 1_000, 11_000);
+        assert!(c.len() >= 2);
+        assert_eq!(c[0].start_ms, 1_000);
+        assert_eq!(c.last().unwrap().end_ms, 11_000, "das Fenster wird genau ausgefüllt");
+        for w in c.windows(2) {
+            assert_eq!(w[0].end_ms, w[1].start_ms);
+        }
+        assert!(c.iter().all(|x| x.end_ms - x.start_ms >= 700));
+        // sehr kurzes Fenster: Mindestdauer je Einheit hat Vorrang
+        let tight = cues_between(text.trim(), 0, 500);
+        assert!(tight.last().unwrap().end_ms >= 700 * tight.len() as i64);
+        assert!(cues_between("   ", 0, 1000).is_empty());
+    }
+
+    #[test]
+    fn tidy_removes_overlaps_and_keeps_order() {
+        let mut v = vec![
+            Cue { start_ms: 3_000, end_ms: 5_000, text: "B".into() },
+            Cue { start_ms: 0, end_ms: 4_000, text: "A".into() },
+            Cue { start_ms: 4_100, end_ms: 4_300, text: "C".into() },
+        ];
+        tidy(&mut v);
+        assert_eq!(v.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(), ["A", "B", "C"]);
+        for w in v.windows(2) {
+            assert!(w[0].end_ms <= w[1].start_ms, "{w:?}");
+            assert!(w[0].end_ms > w[0].start_ms);
+        }
+        assert_eq!(v[0].end_ms, 3_000, "A endet, wo B beginnt");
+    }
+
+    #[test]
+    fn srt_file_numbers_from_one() {
+        let s = srt_file(&[Cue { start_ms: 0, end_ms: 1500, text: "Eins".into() }, Cue { start_ms: 2000, end_ms: 3000, text: "Zwei".into() }]);
+        assert_eq!(s, "1\n00:00:00,000 --> 00:00:01,500\nEins\n\n2\n00:00:02,000 --> 00:00:03,000\nZwei\n\n");
     }
 
     #[test]

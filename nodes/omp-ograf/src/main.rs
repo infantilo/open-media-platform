@@ -20,16 +20,46 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use omp_node_sdk::is04::TRANSPORT_MXL;
+use omp_node_sdk::connection::{ReceiverConnection, ReceiverControl, ReceiverResource};
+use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
     Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType,
-    RawResponse, SenderSpec, SetError,
+    RawResponse, ReceiverSpec, SenderSpec, SetError,
 };
 use serde_json::Value;
 use templates::TemplateInfo;
 
+/// IS-05-Steuerung des Eingangs „Zeitcode“ (Daten-Flow mit ST-12-2-Paketen, z. B. „Zeitcode (ANC)“ eines Kanal-Players): die
+/// Untertitel-Wiedergabe folgt diesem Zeitcode statt einer freilaufenden Uhr.
+struct TimecodeControl {
+    registry: RegistryClient,
+    context: Arc<omp_mediaio::mxl::MxlContext>,
+    input: Arc<omp_mediaio::mxl::TimecodeInput>,
+}
+
+impl ReceiverControl for TimecodeControl {
+    fn apply(&self, resource: &ReceiverResource) {
+        match (&resource.sender_id, resource.master_enable) {
+            (Some(sender_id), true) => match self.registry.get_sender(sender_id) {
+                Ok(sender) => match sender.flow_id {
+                    Some(flow_id) => {
+                        if let Err(e) = self.input.connect(self.context.clone(), &flow_id) {
+                            eprintln!("omp-ograf: Zeitcode-Eingang {flow_id}: {e}");
+                        }
+                    }
+                    None => eprintln!("omp-ograf: sender {sender_id} has no flow_id"),
+                },
+                Err(e) => eprintln!("omp-ograf: resolve sender {sender_id} failed: {e}"),
+            },
+            _ => self.input.disconnect(),
+        }
+    }
+}
+
 struct OgrafStore {
+    timecode: Arc<omp_mediaio::mxl::TimecodeInput>,
+    timecode_connection: Option<Arc<ReceiverConnection<TimecodeControl>>>,
     templates: Vec<TemplateInfo>,
     /// Gleichzeitig sichtbare Grafik-Ebenen (s. layers.rs).
     layers: Mutex<layers::Layers>,
@@ -58,6 +88,8 @@ impl OgrafStore {
             "selected": sel.as_ref().map(|t| t.id.clone()),
             "running": play.is_some(),
             "positionMs": play.as_ref().map(|p| p.position_ms()),
+            "clock": play.as_ref().map(|p| p.clock_name()),
+            "timecode": self.timecode.display(),
             "text": play.as_ref().map(|p| p.last_text.clone()).unwrap_or_default(),
             "tracks": subtitles::list_tracks(&self.subtitle_dir),
         })
@@ -89,7 +121,22 @@ impl OgrafStore {
                 let offset = args.get("offsetMs").and_then(Value::as_u64).unwrap_or(0);
                 // Ebene sichtbar machen (leerer Text), dann läuft der Ticker.
                 self.invoke("show", &Self::subtitle_args(serde_json::json!({"templateId": "subtitle", "layerId": SUBTITLE_LAYER, "data": {"text": ""}}))).map_err(|_| msg("Template „subtitle“ nicht gefunden (data/ograf-templates/subtitle)".to_string()))?;
-                *self.subtitle_play.lock().expect("lock poisoned") = Some(subtitles::Playback::new(track, offset));
+                // Uhr: "timecode" folgt dem verbundenen Zeitcode (Bild-genau, auch bei Halt/Seek), "free" läuft ab jetzt frei,
+                // "auto" (Standard) folgt dem Zeitcode, wenn einer anliegt.
+                let rate = (
+                    args.get("fpsNum").and_then(Value::as_u64).unwrap_or(25) as u32,
+                    args.get("fpsDen").and_then(Value::as_u64).unwrap_or(1) as u32,
+                );
+                let clock = args.get("clock").and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or("auto");
+                let have_tc = self.timecode.media_ms(rate.0, rate.1).is_some();
+                let playback = match clock {
+                    "free" => subtitles::Playback::new(track, offset),
+                    "timecode" if !have_tc => return Err(msg("clock=timecode: kein Zeitcode verbunden oder er liegt nicht an (Eingang „Zeitcode“ des Grafik-Nodes verdrahten)".to_string())),
+                    "timecode" | "auto" if have_tc => subtitles::Playback::following(track, offset, self.timecode.clone(), rate),
+                    "auto" => subtitles::Playback::new(track, offset),
+                    other => return Err(msg(format!("clock „{other}“ unbekannt (auto | timecode | free)"))),
+                };
+                *self.subtitle_play.lock().expect("lock poisoned") = Some(playback);
                 self.spawn_ticker();
                 Ok(())
             }
@@ -170,13 +217,21 @@ impl ParamStore for OgrafStore {
                 },
                 // Kapitel 27 / P9.4: Untertitel-Engine (JSON: selected, running, positionMs, text, tracks).
                 ParamSpec { name: "subtitle".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+                ParamSpec { name: "timecodeFlowId".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             ],
             methods: vec![
                 MethodSpec { name: "subtitle.load".to_string(), args: vec![MethodArg { name: "track".to_string(), kind: ParamType::String }] },
                 MethodSpec { name: "subtitle.select".to_string(), args: vec![MethodArg { name: "track".to_string(), kind: ParamType::String }] },
                 MethodSpec {
                     name: "subtitle.start".to_string(),
-                    args: vec![MethodArg { name: "track".to_string(), kind: ParamType::String }, MethodArg { name: "offsetMs".to_string(), kind: ParamType::Number }],
+                    args: vec![
+                        MethodArg { name: "track".to_string(), kind: ParamType::String },
+                        MethodArg { name: "offsetMs".to_string(), kind: ParamType::Number },
+                        // auto (Standard) | timecode | free — s. Untertitel-Engine
+                        MethodArg { name: "clock".to_string(), kind: ParamType::String },
+                        MethodArg { name: "fpsNum".to_string(), kind: ParamType::Number },
+                        MethodArg { name: "fpsDen".to_string(), kind: ParamType::Number },
+                    ],
                 },
                 MethodSpec { name: "subtitle.stop".to_string(), args: vec![] },
                 MethodSpec {
@@ -233,6 +288,9 @@ impl ParamStore for OgrafStore {
     fn get(&self, name: &str) -> Option<Value> {
         if name == "subtitle" {
             return Some(self.subtitle_state());
+        }
+        if name == "timecodeFlowId" {
+            return Some(serde_json::json!(self.timecode.connected_flow_id()));
         }
         match name {
             "templates" => Some(serde_json::json!(
@@ -341,7 +399,12 @@ impl ParamStore for OgrafStore {
         }
     }
 
-    fn extra_route(&self, method: &str, path: &str, _body: &[u8]) -> Option<RawResponse> {
+    fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        if let Some(conn) = &self.timecode_connection
+            && let Some((status, content_type, body)) = conn.handle(method, path, body)
+        {
+            return Some(RawResponse { status, content_type, body });
+        }
         uibundle::route(method, path).or_else(|| templates::route(&self.templates_root, method, path))
     }
 }
@@ -444,7 +507,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let harness_url = format!("http://127.0.0.1:{harness_port}/ograf-harness.html");
 
     let pipeline_config = pipeline::Config {
-        domain,
+        domain: domain.clone(),
         fill_flow_id: fill_flow_id.clone(),
         key_flow_id: key_flow_id.clone(),
         label: label.clone(),
@@ -475,7 +538,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let key_bridge_heartbeat = pipeline_handle.key_bridge_heartbeat_handle();
     let main_loop_heartbeat = pipeline_handle.main_loop_heartbeat_handle();
 
+    let timecode = Arc::new(omp_mediaio::mxl::TimecodeInput::new());
+    let timecode_receiver_id = omp_node_sdk::idgen::new_v4();
+    let timecode_label = format!("{label} Zeitcode");
+    let timecode_connection = match omp_mediaio::mxl::MxlContext::new(&domain).map(Arc::new) {
+        Ok(ctx) => Some(Arc::new(ReceiverConnection::new(
+            timecode_receiver_id.clone(),
+            TimecodeControl { registry: RegistryClient::new(registry_url.clone()), context: ctx, input: timecode.clone() },
+        ))),
+        Err(e) => {
+            eprintln!("omp-ograf: Zeitcode-Eingang aus — {e}");
+            None
+        }
+    };
+    let timecode_receivers = if timecode_connection.is_some() {
+        vec![ReceiverSpec {
+            id: Some(timecode_receiver_id),
+            transport: Some(TRANSPORT_MXL.to_string()),
+            media_types: Some(vec!["video/smpte291".to_string()]),
+            label: Some(timecode_label),
+            ..Default::default()
+        }]
+    } else {
+        vec![]
+    };
     let concrete = Arc::new(OgrafStore {
+        timecode: timecode.clone(),
+        timecode_connection,
         templates,
         layers: Mutex::new(layers::Layers::default()),
         templates_root,
@@ -541,7 +630,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     ..Default::default()
                 },
             ],
-            receivers: vec![],
+            receivers: timecode_receivers,
             instance_id,
             media_ready: omp_node_sdk::MediaReadySource::Probe(Arc::new(move || {
                 media_ready_pipeline.media_ready()

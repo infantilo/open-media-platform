@@ -2,14 +2,18 @@ package main
 
 import (
 	"context"
+	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/asset"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/cluster"
@@ -22,6 +26,9 @@ import (
 	jobsmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/jobs"
 	playoutmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/playout"
 	reviewmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/review"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/process"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/subtitlegen"
 )
 
 // registerModules meldet die Module des Orchestrators an (UMSETZUNG.md Kapitel 36). Cloud (36.6), Audio-Ausgabe (36.7),
@@ -147,4 +154,150 @@ func loadServiceToken(defaultDir string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// subtitleNodes liefert die erreichbaren Auto-Untertitel-Nodes (Instanzen des Typs omp-subtitle-asr mit Node im Verzeichnis).
+func subtitleNodes(l interface{ List() []launcher.Instance }, nodes interface{ List() []registry.NodeView }) func() []subtitlegen.Target {
+	return func() []subtitlegen.Target {
+		types := map[string]bool{}
+		for _, in := range l.List() {
+			if in.Type == "omp-subtitle-asr" {
+				types[in.ID] = true
+			}
+		}
+		var out []subtitlegen.Target
+		for _, n := range nodes.List() {
+			if n.Online && n.APIBaseURL != "" && types[n.InstanceID] {
+				out = append(out, subtitlegen.Target{NodeID: n.ID, InstanceID: n.InstanceID, Label: n.Label, BaseURL: n.APIBaseURL})
+			}
+		}
+		return out
+	}
+}
+
+// subtitleSteps verbindet den Prozess-Schritt „Untertitel“ mit dem Auto-Untertitel-Node und der Ablage (Asset-Version, Playout-Verzeichnis).
+type subtitleSteps struct {
+	assets  *asset.Store
+	targets func() []subtitlegen.Target
+	client  subtitlegen.Client
+	// assetRoot: Ablage der Dateien (<assetRoot>/<Asset|process>/<Name>.srt); playDir: Verzeichnis, aus dem das Kind-Event SUBTITLE abspielt.
+	assetRoot, playDir string
+}
+
+func newSubtitleSteps(assets *asset.Store, targets func() []subtitlegen.Target) *subtitleSteps {
+	root := os.Getenv("OMP_REVIEW_DIR")
+	if root == "" {
+		root = "data/review"
+	}
+	play := os.Getenv("OMP_SUBTITLE_DIR")
+	if play == "" {
+		play = "data/subtitles"
+	}
+	return &subtitleSteps{assets: assets, targets: targets, assetRoot: filepath.Join(root, "subtitles"), playDir: play}
+}
+
+// stepJobID: stabile Auftrags-ID je Ausführung+Schritt (Neustart der Engine → derselbe Auftrag, kein zweiter).
+func stepJobID(key string) string {
+	sum := sha1.Sum([]byte(key))
+	return "p" + hex.EncodeToString(sum[:])[:30]
+}
+
+// source liefert den Pfad der Mediendatei: die angegebene Datei oder die Quelle des Assets.
+func (s *subtitleSteps) source(cfg process.SubtitleStepConfig) (string, error) {
+	if cfg.File != "" {
+		return cfg.File, nil
+	}
+	a, err := s.assets.GetAsset(cfg.AssetID)
+	if err != nil {
+		return "", fmt.Errorf("Asset %s: %w", cfg.AssetID, err)
+	}
+	reps, err := s.assets.ListRepresentations(a.CurrentVersionID)
+	if err != nil {
+		return "", err
+	}
+	var local []asset.Representation
+	for _, r := range reps {
+		if r.Type == "source" {
+			local = append([]asset.Representation{r}, local...)
+		} else {
+			local = append(local, r)
+		}
+	}
+	for _, r := range local {
+		if r.Type == "subtitle" || r.Type == "proxy" {
+			continue
+		}
+		if p, err := reviewmod.LocalPath(r); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("Asset %s hat keine lokal lesbare Quelldatei", cfg.AssetID)
+}
+
+func (s *subtitleSteps) Step(ctx context.Context, key string, cfg process.SubtitleStepConfig) (process.SubtitleStepResult, bool, error) {
+	id := stepJobID(key)
+	targets := s.targets()
+	// Gibt es den Auftrag schon (Poll oder Neustart), dort weiterfragen.
+	var lastErr error
+	for _, t := range targets {
+		st, err := s.client.Status(ctx, t, id)
+		if errors.Is(err, subtitlegen.ErrJobLost) {
+			continue
+		}
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		switch st.State {
+		case "done":
+			srt, err := s.client.Result(ctx, t, id)
+			if err != nil {
+				return process.SubtitleStepResult{}, false, err
+			}
+			name := subtitlegen.Slug(cfg.Name)
+			if name == "" {
+				name = "untertitel-" + id[:8]
+			}
+			subject := cfg.AssetID
+			if subject == "" {
+				subject = "process"
+			}
+			pl, err := subtitlegen.Place(s.assets, cfg.AssetID, name, srt, filepath.Join(s.assetRoot, subject), s.playDir)
+			if err != nil {
+				return process.SubtitleStepResult{}, false, fmt.Errorf("Ergebnis nicht ablegbar: %w", err)
+			}
+			s.client.Cancel(ctx, t, id, true)
+			return process.SubtitleStepResult{SRT: pl.Path, Name: pl.Name, PlayoutTrack: strings.TrimSuffix(filepath.Base(pl.PlayoutPath), ".srt"), RepresentationID: pl.RepID, Speakers: st.SpeakersFound, Cues: st.Cues, DurationS: st.DurationS, Warning: pl.Warning}, true, nil
+		case "failed", "canceled":
+			msg := st.Message
+			if msg == "" {
+				msg = st.State
+			}
+			return process.SubtitleStepResult{}, false, errors.New(msg)
+		default:
+			return process.SubtitleStepResult{}, false, nil
+		}
+	}
+	if lastErr != nil {
+		return process.SubtitleStepResult{}, false, lastErr
+	}
+	// neu einreichen
+	src, err := s.source(cfg)
+	if err != nil {
+		return process.SubtitleStepResult{}, false, err
+	}
+	t, err := s.client.Pick(ctx, targets, cfg.Speakers)
+	if err != nil {
+		return process.SubtitleStepResult{}, false, err
+	}
+	lang := cfg.Language
+	if lang == "" {
+		lang = "de"
+	}
+	name := subtitlegen.Slug(cfg.Name)
+	if name == "" {
+		name = "untertitel-" + id[:8]
+	}
+	err = s.client.Submit(ctx, t, subtitlegen.Request{ID: id, File: src, Track: cfg.Track, Language: lang, Speakers: cfg.Speakers, Names: cfg.Names, Word: cfg.Word, Style: cfg.Style, Name: name})
+	return process.SubtitleStepResult{}, false, err
 }

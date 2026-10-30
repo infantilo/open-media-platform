@@ -139,10 +139,35 @@ pub fn decode_cdp(cdp: &[u8]) -> Decoded {
     d
 }
 
+/// Zeitcode-Paket (ST 12-2): Zeitcode, Art (LTC/VITC), Gültigkeit.
+fn decode_atc(udw: &[u8]) -> Decoded {
+    let mut d = Decoded { title: "Zeitcode (ATC)".to_string(), ..Default::default() };
+    let p = omp_mediaio::anc::AncPacket { c_not_y: false, line: 0, offset: 0, did: 0x60, sdid: 0x60, udw: udw.to_vec() };
+    match omp_mediaio::anc::parse_atc(&p) {
+        Some(a) => {
+            d.fields.push(("Zeitcode".to_string(), a.timecode.display()));
+            d.fields.push((
+                "Art".to_string(),
+                match a.payload_type {
+                    0 => "ATC_LTC (linear)".to_string(),
+                    1 => "ATC_VITC1".to_string(),
+                    2 => "ATC_VITC2".to_string(),
+                    n => format!("Nutzlasttyp 0x{n:02X}"),
+                },
+            ));
+            d.fields.push(("Drop-Frame".to_string(), if a.timecode.drop_frame { "ja" } else { "nein" }.to_string()));
+            d.fields.push(("Gültig".to_string(), if a.valid { "ja" } else { "nein (interpoliert)" }.to_string()));
+        }
+        None => d.fields.push(("Fehler".to_string(), format!("{} Nutzdatenwörter statt 16", udw.len()))),
+    }
+    d
+}
+
 /// Aus den Nutzdaten eines ANC-Pakets das, was sich für den Typ lesen lässt (sonst nur Rohdaten).
 pub fn decode_packet(did: u8, sdid: u8, udw: &[u8]) -> Decoded {
     match (did, sdid) {
         (0x61, 0x01) => decode_cdp(udw),
+        (0x60, 0x60) => decode_atc(udw),
         (0x41, 0x05) => {
             let mut d = Decoded { title: "AFD und Bar-Daten".to_string(), ..Default::default() };
             if let Some(&b) = udw.first() {
@@ -240,6 +265,22 @@ struct State {
     fps: f64,
     packets_per_s: f64,
     rate_packets: u64,
+    /// Zeitcode (ST 12-2): letzter Wert, Zahl der Sprünge (nicht fortlaufend) und Pakete mit ungültig-Bit.
+    tc_last: Option<omp_mediaio::anc::Timecode>,
+    tc_jumps: u64,
+    tc_invalid: u64,
+}
+
+/// Folgt `b` auf `a` ohne Lücke? Gleicher Wert (Halbbilder bei hohen Raten) und der nächste Bildzähler zählen; ein Übertrag in die
+/// nächste Sekunde/Minute/Stunde wird nicht auf die Bildrate geprüft (die kennt der Datenstrom nicht), nur dass er bei Bild 0 oder 2
+/// (Drop-Frame) beginnt.
+fn tc_follows(a: &omp_mediaio::anc::Timecode, b: &omp_mediaio::anc::Timecode) -> bool {
+    let secs = |t: &omp_mediaio::anc::Timecode| t.hours as u32 * 3600 + t.minutes as u32 * 60 + t.seconds as u32;
+    if secs(a) == secs(b) {
+        return b.frames == a.frames || b.frames == a.frames + 1;
+    }
+    let next = (secs(a) + 1) % 86400 == secs(b);
+    next && (b.frames == 0 || (b.drop_frame && b.frames == 2 && b.seconds == 0))
 }
 
 impl State {
@@ -267,6 +308,9 @@ impl State {
             fps: 0.0,
             packets_per_s: 0.0,
             rate_packets: 0,
+            tc_last: None,
+            tc_jumps: 0,
+            tc_invalid: 0,
         }
     }
 
@@ -390,6 +434,22 @@ impl State {
             if (did, sdid) == (scte::DID_SCTE104, scte::SDID_SCTE104) {
                 self.on_scte104_packet(p);
             }
+            if (did, sdid) == (anc::DID_ATC, anc::SDID_ATC)
+                && let Some(a) = anc::parse_atc(&p.packet)
+                && a.payload_type == 0
+            {
+                if !a.valid {
+                    self.tc_invalid += 1;
+                }
+                if let Some(prev) = &self.tc_last
+                    && !tc_follows(prev, &a.timecode)
+                {
+                    self.tc_jumps += 1;
+                    let msg = format!("Zeitcode springt: {} → {}", prev.display(), a.timecode.display());
+                    self.error(msg);
+                }
+                self.tc_last = Some(a.timecode);
+            }
         }
     }
 
@@ -505,6 +565,12 @@ impl AncAnalyzer {
             "indexGaps": s.index_gaps, "badGrains": s.bad_grains,
             "uptimeS": s.started.elapsed().as_secs(),
             "types": types,
+            "timecode": json!({
+                "present": s.tc_last.is_some(),
+                "value": s.tc_last.as_ref().map(|t| t.display()),
+                "dropFrame": s.tc_last.as_ref().is_some_and(|t| t.drop_frame),
+                "jumps": s.tc_jumps, "invalid": s.tc_invalid,
+            }),
             "scte": {
                 "messages104": s.scte104_messages, "dropped104": s.scte104_dropped, "errors104": s.scte104_errors,
                 "sections35": s.scte35_sections, "errors35": s.scte35_errors,
@@ -533,6 +599,19 @@ pub fn spawn_scte35_udp(addr: &str, analyzer: Arc<AncAnalyzer>, shutdown: Arc<st
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timecode_continuity_rules() {
+        use omp_mediaio::anc::Timecode;
+        let t = |h, m, s, f, d| Timecode { hours: h, minutes: m, seconds: s, frames: f, drop_frame: d, field: false };
+        assert!(tc_follows(&t(0, 0, 0, 5, false), &t(0, 0, 0, 6, false)));
+        assert!(tc_follows(&t(0, 0, 0, 5, false), &t(0, 0, 0, 5, false)), "Halbbild");
+        assert!(tc_follows(&t(0, 0, 0, 24, false), &t(0, 0, 1, 0, false)));
+        assert!(tc_follows(&t(0, 0, 59, 29, true), &t(0, 1, 0, 2, true)), "Drop-Frame überspringt 0 und 1");
+        assert!(tc_follows(&t(23, 59, 59, 24, false), &t(0, 0, 0, 0, false)));
+        assert!(!tc_follows(&t(0, 0, 0, 5, false), &t(0, 0, 0, 9, false)));
+        assert!(!tc_follows(&t(0, 0, 0, 5, false), &t(0, 0, 5, 0, false)));
+    }
     use omp_mediaio::anc::AncPacket;
 
     fn cdp(seq: u16, with_text: bool) -> Vec<u8> {

@@ -1632,6 +1632,126 @@ const TABLE: Record<string, [string, string]> = {
   "rv.import.nofiles": [
     "Im Importverzeichnis liegen keine Mediendateien.",
     "There are no media files in the import directory."
+  ],
+  "rv.tab.subtitles": [
+    "Untertitel",
+    "Subtitles"
+  ],
+  "rv.sub.hint": [
+    "Erzeugt aus dem Ton dieser Datei eine SRT-Untertiteldatei (Auto-Untertitel-Node, optional mit Sprechererkennung). Das Ergebnis hängt als Darstellung am Asset, lässt sich herunterladen und als Kind-Event SUBTITLE in der Playout-Automation abspielen; ein Auto-Untertitel-Node am Ausgang pausiert dann die Live-Untertitelung.",
+    "Creates an SRT subtitle file from this file's audio (auto-subtitle node, optionally with speaker detection). The result is attached to the asset as a representation, can be downloaded and played as a SUBTITLE child event in playout automation; an auto-subtitle node on the output then pauses live captioning."
+  ],
+  "rv.sub.nonode": [
+    "Kein Datei-Node läuft — „Auto-Untertitel“ mit Aufgabe „file“ starten (Option OMP_ASR_ROLE=file). Live-Nodes nehmen keine Dateiaufträge an, damit die Live-Untertitelung nicht gestört wird.",
+    "No file node is running — start “Auto subtitles” with task “file” (option OMP_ASR_ROLE=file). Live nodes take no file jobs so live subtitling is never disturbed."
+  ],
+  "rv.sub.nodiar": [
+    "Die Sprechererkennung ist am Node nicht eingerichtet (tools/asr-engine/install-diarization.sh) — es wird ohne Sprecher erzeugt.",
+    "Speaker detection is not set up on the node (tools/asr-engine/install-diarization.sh) — generating without speakers."
+  ],
+  "rv.sub.dir": [
+    "Ablage für die Playout-Automation: {p0}",
+    "Location for playout automation: {p0}"
+  ],
+  "rv.sub.name": [
+    "Name",
+    "Name"
+  ],
+  "rv.sub.name.hint": [
+    "leer = Dateiname",
+    "empty = file name"
+  ],
+  "rv.sub.track": [
+    "Tonspur",
+    "Audio track"
+  ],
+  "rv.sub.track.hint": [
+    "0 = erste",
+    "0 = first"
+  ],
+  "rv.sub.lang": [
+    "Sprache",
+    "Language"
+  ],
+  "rv.sub.lang.hint": [
+    "Code, leer = automatisch",
+    "code, empty = auto"
+  ],
+  "rv.sub.speakers": [
+    "Sprecher",
+    "Speakers"
+  ],
+  "rv.sub.sp.auto": [
+    "automatisch erkennen",
+    "detect automatically"
+  ],
+  "rv.sub.sp.one": [
+    "1 (ohne Namen)",
+    "1 (no names)"
+  ],
+  "rv.sub.names": [
+    "Namen",
+    "Names"
+  ],
+  "rv.sub.names.hint": [
+    "in Reihenfolge des ersten Auftretens, durch Komma getrennt",
+    "in order of first appearance, comma-separated"
+  ],
+  "rv.sub.style": [
+    "Schreibweise",
+    "Label style"
+  ],
+  "rv.sub.start": [
+    "SRT erzeugen",
+    "Generate SRT"
+  ],
+  "rv.sub.err": [
+    "Untertitel-Auftrag fehlgeschlagen.",
+    "Subtitle job failed."
+  ],
+  "rv.sub.none": [
+    "Noch keine Untertitel für diese Datei.",
+    "No subtitles for this file yet."
+  ],
+  "rv.sub.state.running": [
+    "läuft",
+    "running"
+  ],
+  "rv.sub.state.done": [
+    "fertig",
+    "done"
+  ],
+  "rv.sub.state.failed": [
+    "fehlgeschlagen",
+    "failed"
+  ],
+  "rv.sub.state.canceled": [
+    "abgebrochen",
+    "canceled"
+  ],
+  "rv.sub.result": [
+    "{p0} Untertitel, {p1} Sprecher, {p2} s",
+    "{p0} cues, {p1} speakers, {p2} s"
+  ],
+  "rv.sub.playout": [
+    "Spur für Kind-Event SUBTITLE: {p0}",
+    "Track for SUBTITLE child event: {p0}"
+  ],
+  "rv.sub.cancel": [
+    "Abbrechen",
+    "Cancel"
+  ],
+  "rv.sub.download": [
+    "SRT herunterladen",
+    "Download SRT"
+  ],
+  "rv.sub.delete": [
+    "Löschen",
+    "Delete"
+  ],
+  "rv.sub.delete.q": [
+    "Untertitel „{p0}“ löschen? Die Kopie für die Playout-Automation wird entfernt.",
+    "Delete subtitle “{p0}”? The copy for playout automation is removed."
   ]
 };
 

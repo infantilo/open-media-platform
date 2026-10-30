@@ -17,6 +17,7 @@ import (
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/asset"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/subtitlegen"
 )
 
 // Service enthält die Ablauflogik (Claim, QC, Conform, Freigabe). HTTP-Handler sind dünn darüber.
@@ -24,7 +25,9 @@ type Service struct {
 	St     *Store
 	Assets *asset.Store
 	Tools  *Tools
-	Cfg    func() Config
+	// SubNodes liefert die erreichbaren Auto-Untertitel-Nodes (Untertitel aus Dateien); nil = nicht eingerichtet.
+	SubNodes func() []subtitlegen.Target
+	Cfg      func() Config
 	// DataDir: Ablage der Review-Proxies (<DataDir>/proxies/<asset>/…).
 	DataDir string
 	Audit   module.DomainAudit

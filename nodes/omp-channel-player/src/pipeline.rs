@@ -78,6 +78,9 @@ pub struct Config {
     pub label: String,
     pub width: u32,
     pub height: u32,
+    /// Bildnummer der Medienposition des laufenden Clips (Stream-Zeit × Bildrate, 0 = Clipanfang bei Medienzeit 0), -1 = kein Clip
+    /// mit Medienzeit (Testbild, Live, Standbild). Quelle des Zeitcode-Ausgangs (ST 12-2, `tc.rs`).
+    pub tc_frame: Arc<crate::tc::TcSource>,
 }
 
 /// Woher ein geladenes Item seine Essenz bezieht — deckungsgleich mit
@@ -743,7 +746,37 @@ fn query_duration_ms(el: &gst::Element) -> Option<i64> {
 /// Preroll-Tanz nötig"). `new_paced` (statt `new`) passt sich derselben
 /// Begründung wie bei `omp-mxf-player-direct` an: Datei-Decode-Quellen
 /// produzieren nicht von sich aus in Echtzeit.
+/// Pad-Probe am Ende des Videozweigs: aus Segment und Zeitstempel die Medienposition (Stream-Zeit) jedes Bildes als Bildnummer.
+/// Nach einem Seek (SOM) zeigt sie die echte Position in der Datei; im Halt (Pause) bleibt sie stehen, weil keine Bilder laufen.
+fn attach_timecode_probe(tail: &gst::Element, tc_frame: Arc<crate::tc::TcSource>) {
+    let Some(pad) = tail.static_pad("src") else { return };
+    let segment: Arc<Mutex<Option<gst::FormattedSegment<gst::ClockTime>>>> = Arc::new(Mutex::new(None));
+    pad.add_probe(gst::PadProbeType::BUFFER | gst::PadProbeType::EVENT_DOWNSTREAM, move |_, info| {
+        match &info.data {
+            Some(gst::PadProbeData::Event(ev)) => {
+                if let gst::EventView::Segment(seg) = ev.view()
+                    && let Ok(s) = seg.segment().clone().downcast::<gst::ClockTime>()
+                {
+                    *segment.lock().expect("lock poisoned") = Some(s);
+                }
+            }
+            Some(gst::PadProbeData::Buffer(buf)) => {
+                if let (Some(pts), Some(seg)) = (buf.pts(), segment.lock().expect("lock poisoned").as_ref())
+                    && let Some(st) = seg.to_stream_time(pts)
+                {
+                    let frame = (st.nseconds() as u128 * FRAMERATE_NUMERATOR as u128 + (FRAMERATE_DENOMINATOR as u128 * 500_000_000)) / (FRAMERATE_DENOMINATOR as u128 * 1_000_000_000);
+                    tc_frame.set(frame as i64);
+                    tc_frame.note_pts(pts.nseconds(), frame as i64);
+                }
+            }
+            _ => {}
+        }
+        gst::PadProbeReturn::Ok
+    });
+}
+
 fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::sync::mpsc::Sender<LoopEvent>, plan_slot: Arc<Mutex<Option<AudioPlan>>>) -> Result<ActivePipeline, String> {
+    config.tc_frame.clear();
     let context = Arc::new(MxlContext::new_synced(&config.domain)?);
     let pipeline = gst::Pipeline::new();
     // Zustand dieser Pipeline für die Node-Diagnose (GET /diag/pipelines, Kap. 72.7)
@@ -842,6 +875,11 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
         let _ = pipeline.set_state(gst::State::Null);
         format!("MxlVideoOutput: {e}")
     })?;
+    if matches!(item.source, ItemSource::File { .. }) {
+        attach_timecode_probe(&video_tail, config.tc_frame.clone());
+        let tc = config.tc_frame.clone();
+        mxl_video_output.set_frame_hook(Box::new(move |index, pts| tc.on_frame(index, pts)));
+    }
     mxl_video_output.set_active(true);
     let video_flowed = mxl_video_output.flowed_handle();
 

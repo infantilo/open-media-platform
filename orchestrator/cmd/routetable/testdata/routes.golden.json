@@ -1898,6 +1898,18 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/review/items/{id}/subtitles",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/review/items/{id}/subtitles",
+    "auth": "feature:review.work",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/review/items/{id}/timecode",
     "auth": "auth",
     "domain": "core"
@@ -1978,6 +1990,24 @@
     "method": "POST",
     "path": "/api/v1/review/register",
     "auth": "feature:review.import",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/review/subtitles/{sid}",
+    "auth": "feature:review.work",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/review/subtitles/{sid}/cancel",
+    "auth": "feature:review.work",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/review/subtitles/{sid}/srt",
+    "auth": "auth",
     "domain": "core"
   },
   {

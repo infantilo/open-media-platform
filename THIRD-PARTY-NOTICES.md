@@ -36,6 +36,15 @@ Vendored under `third_party/` at build time by `deploy/dev/install-mxl.sh` (neve
 | Obligation | MIT requires the copyright and permission notice to accompany copies: the image carries both license texts under `/usr/share/licenses/omp-subtitle-asr/` (source: `deploy/subtitle-asr/licenses/`) |
 | Note | "Whisper" and "OpenAI" are names of the model's authors; OMP uses no logo and implies no endorsement |
 
+## Speaker detection for subtitle files (chapter 77, optional, operator-installed)
+
+| | |
+|---|---|
+| Runtime | **sherpa-onnx** — <https://github.com/k2-fsa/sherpa-onnx>, Apache License 2.0; downloaded by `tools/asr-engine/install-diarization.sh` into `data/asr-engine/diarization` (never committed, not part of the container image) |
+| Segmentation model | **pyannote-segmentation-3-0** (ONNX export), MIT License (CNRS), license text verified in the downloaded archive |
+| Embedding model | **3D-Speaker CAM++** (speaker embedding). **License not verified** — the upstream project states that each model has its own license. Check it before commercial use; alternative embedding models can be set in the script |
+| Not used | WhisperX (BSD-2-Clause) and pyannote.audio (MIT) are not used; the pyannote "community-1" pipeline is gated on Hugging Face and cannot be redistributed. Reverb diarization models are non-commercial and are not used |
+
 ## Capture hardware, network cards and their vendor software (chapter 76)
 
 OMP **contains, links and ships none of the software below**. Every item is installed by the operator from the vendor,

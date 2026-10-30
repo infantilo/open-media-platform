@@ -18,6 +18,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/asset"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/subtitlegen"
 )
 
 const settingsKey = "review.config"
@@ -29,6 +30,8 @@ type Module struct {
 	Tools   *Tools       // optional (Tests)
 	// QCRunner/ProxyRunner: optional — QC- bzw. Proxy-Läufe über den Job-Dispatcher (Host-Auswahl, Sendeschutz).
 	QCRunner, ProxyRunner Runner
+	// SubtitleNodes: erreichbare Auto-Untertitel-Nodes für „SRT erzeugen“ (Sprecher- und Spracherkennung); nil = Funktion aus.
+	SubtitleNodes func() []subtitlegen.Target
 
 	mu  sync.Mutex
 	svc *Service
@@ -110,7 +113,7 @@ func (m *Module) service(d module.Deps) *Service {
 		}
 		return b, err
 	}
-	m.svc = &Service{St: NewStore(d.DB), Assets: m.Assets, Tools: tools, Cfg: m.cfg.Get, DataDir: dir, Audit: d.Audit}
+	m.svc = &Service{St: NewStore(d.DB), Assets: m.Assets, Tools: tools, Cfg: m.cfg.Get, DataDir: dir, Audit: d.Audit, SubNodes: m.SubtitleNodes}
 	asset.RegisterPurgeHook("review", m.svc.purgeAssets)
 	return m.svc
 }
@@ -153,6 +156,11 @@ func (m *Module) Mount(r module.Routes, d module.Deps) error {
 	r.Handle("GET /api/v1/review/import/files", module.Feature("review.import"), a.importList())
 	r.Handle("POST /api/v1/review/import", module.Feature("review.import"), a.importFile())
 	r.Handle("POST /api/v1/review/register", module.Feature("review.import"), a.registerAsset())
+	r.Handle("POST /api/v1/review/items/{id}/subtitles", module.Feature("review.work"), a.startSubtitles())
+	r.Handle("GET /api/v1/review/items/{id}/subtitles", module.Authenticated(), a.listSubtitles())
+	r.Handle("POST /api/v1/review/subtitles/{sid}/cancel", module.Feature("review.work"), a.cancelSubtitle())
+	r.Handle("DELETE /api/v1/review/subtitles/{sid}", module.Feature("review.work"), a.deleteSubtitle())
+	r.Handle("GET /api/v1/review/subtitles/{sid}/srt", module.Authenticated(), a.downloadSubtitle())
 	r.Handle("GET /api/v1/review/config", module.Authenticated(), a.getConfig())
 	r.Handle("PUT /api/v1/review/config", module.Verb(authz.VerbAdmin), a.putConfig())
 	r.Handle("GET /api/v1/review/qc-profiles", module.Authenticated(), a.listProfiles())
@@ -187,6 +195,20 @@ func (m *Module) Start(ctx context.Context, d module.Deps) error {
 func (m *Module) run(ctx context.Context, svc *Service) {
 	log := slog.With("module", "review")
 	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { // Untertitel-Aufträge: Fortschritt abholen, Ergebnisse ablegen
+		defer wg.Done()
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		for {
+			svc.PollSubtitles(ctx)
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
 	for i := 0; i < 4; i++ { // bis zu 4 Arbeiter; tatsächlich aktiv: cfg.QCWorkers
 		wg.Add(1)
 		go func(n int) {

@@ -42,6 +42,7 @@ export const STEP_TYPE_INFO: Record<string, StepTypeInfo> = {
   timer: { label: tt("pscl.efb477"), group: "flow", help: tt("pscl.534969") },
   human_task: { label: tt("pscl.4ca08f"), group: "human", help: tt("pscl.774c40") },
   approval: { label: tt("pscl.c947f6"), group: "human", help: tt("pscl.5f3043") },
+  subtitles: { label: tt("pscl.sub.label"), group: "action", help: tt("pscl.sub.help") },
   task: { label: tt("pscl.e4fa94"), group: "action", help: tt("pscl.8faa35") },
   loop: { label: tt("pscl.6c5de6"), group: "flow", help: tt("pscl.2b4ae5") },
   event_trigger: { label: tt("pscl.3727f6"), group: "flow", help: tt("pscl.dcc732") },
@@ -126,6 +127,13 @@ export function outputFieldsFor(step: DraftStep): OutputField[] {
     case "media_function":
     case "subworkflow":
       return [{ path: "", label: tt("pscl.2f0304") }];
+    case "subtitles":
+      return [
+        { path: "srt", label: tt("pscl.sub.o.srt") },
+        { path: "playoutTrack", label: tt("pscl.sub.o.track") },
+        { path: "speakers", label: tt("pscl.sub.o.speakers") },
+        { path: "cues", label: tt("pscl.sub.o.cues") },
+      ];
     default:
       return [];
   }
@@ -1548,6 +1556,8 @@ export function missingConfig(step: DraftStep): string | null {
       return c.instanceId && c.method ? null : tt("pscl.a400c0");
     case "notification":
       return c.subject ? null : tt("pscl.d92700");
+    case "subtitles":
+      return c.file || c.assetId ? null : tt("pscl.sub.missing");
     case "condition":
       return c.expression ? null : tt("pscl.bf4504");
     case "branch":

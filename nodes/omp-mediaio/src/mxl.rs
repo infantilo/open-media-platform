@@ -405,7 +405,11 @@ fn video_caps(
 /// — derselbe Mechanismus wie `MxlAudioOutput`s Freilauf-Bug, nur
 /// milder, weil hier ohnehin jeder Aufruf frisch gegen die Wallclock
 /// rechnet.
+/// Rückruf nach jedem geschriebenen Videobild: (Grain-Index, PTS des Bildes).
+pub type FrameHook = Box<dyn Fn(u64, Option<gst::ClockTime>) + Send>;
+
 pub struct MxlVideoOutput {
+    frame_hook: Arc<Mutex<Option<FrameHook>>>,
     valve: gst::Element,
     /// Gesetzt von [`MxlVideoOutput::gate_on_consumers`], solange geparkt.
     gate_parked: Arc<AtomicBool>,
@@ -846,8 +850,11 @@ impl MxlVideoOutput {
             }
         };
 
+        let frame_hook: Arc<Mutex<Option<FrameHook>>> = Arc::new(Mutex::new(None));
+        let frame_hook_thread = frame_hook.clone();
         thread::spawn(move || {
             write_loop(
+                &frame_hook_thread,
                 &context,
                 grain_writer,
                 &grain_rate,
@@ -860,6 +867,7 @@ impl MxlVideoOutput {
         });
 
         Ok(MxlVideoOutput {
+            frame_hook,
             valve,
             gate_parked: Arc::new(AtomicBool::new(false)),
             running,
@@ -1056,6 +1064,7 @@ fn pts_index(
 
 #[allow(clippy::too_many_arguments)]
 fn write_loop(
+    frame_hook: &Arc<Mutex<Option<FrameHook>>>,
     context: &Arc<MxlContext>,
     grain_writer: mxl::GrainWriter,
     grain_rate: &mxl_sys::Rational,
@@ -1213,7 +1222,12 @@ fn write_loop(
                 payload[..n].copy_from_slice(&map.as_slice()[..n]);
                 let total_slices = access.total_slices();
                 match access.commit(total_slices) {
-                    Ok(()) => flowed.store(true, Ordering::Relaxed),
+                    Ok(()) => {
+                        flowed.store(true, Ordering::Relaxed);
+                        if let Some(hook) = frame_hook.lock().expect("lock poisoned").as_ref() {
+                            hook(this_index, buffer.pts());
+                        }
+                    }
                     Err(e) => eprintln!("omp-mediaio(mxl): commit grain {this_index} failed: {e}"),
                 }
             }
@@ -1245,6 +1259,11 @@ fn origin_index_from_buffer(
         .instance
         .timestamp_to_index(meta.timestamp().nseconds(), rate)
         .ok()
+}
+
+/// Grain-Index, aus dem ein Puffer ursprünglich stammt (Ursprungs-Meta des Eingangs); `None` ohne Meta.
+pub fn buffer_origin_index(context: &Arc<MxlContext>, buffer: &gst::BufferRef, rate_num: i64, rate_den: i64) -> Option<u64> {
+    origin_index_from_buffer(context, buffer, &tai_reference_caps(), &mxl_sys::Rational { numerator: rate_num, denominator: rate_den })
 }
 
 impl Output for MxlVideoOutput {
@@ -1334,6 +1353,11 @@ impl MxlVideoOutput {
 
     /// `true`, solange `gate_on_consumers` den Ausgang mangels Leser geparkt hat — Quellen, die selbst
     /// rechnen (z. B. omp-sign-avatar), sparen dann ihr Rendern.
+    /// Meldet jedes geschriebene Bild (Grain-Index, PTS) — z. B. um einen Zeitcode-Grain auf denselben Index zu schreiben.
+    pub fn set_frame_hook(&self, hook: FrameHook) {
+        *self.frame_hook.lock().expect("lock poisoned") = Some(hook);
+    }
+
     pub fn parked_handle(&self) -> Arc<AtomicBool> {
         self.gate_parked.clone()
     }
@@ -3975,6 +3999,115 @@ impl MxlDataInput {
 impl Drop for MxlDataInput {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
+    }
+}
+
+/// Aux-Eingang „Zeitcode“ für Empfänger-Nodes (Viewer, Multiviewer): hält den zuletzt gelesenen Zeitcode (ST 12-2, ATC_LTC) des
+/// verbundenen Daten-Flows. Ein Grain ohne Zeitcodepaket lässt den Wert stehen und zählt als „kein Zeitcode“, damit die Anzeige
+/// einen ausgefallenen Zeitcode nicht als gültig weiterzeigt (`stale`).
+#[derive(Default)]
+pub struct TimecodeInput {
+    state: Arc<Mutex<TcState>>,
+    input: Mutex<Option<MxlDataInput>>,
+    flow_id: Mutex<String>,
+}
+
+#[derive(Default)]
+struct TcState {
+    last: Option<crate::anc::AtcInfo>,
+    /// Grains in Folge ohne Zeitcodepaket.
+    missing: u32,
+    /// Letzte Grains nach Grain-Index (für die bildgenaue Zuordnung im Mischer), `None` = Grain ohne Zeitcode.
+    history: std::collections::VecDeque<(u64, Option<crate::anc::AtcInfo>)>,
+    manual_index: u64,
+}
+
+impl TimecodeInput {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn connect(&self, context: Arc<MxlContext>, flow_id: &str) -> Result<(), String> {
+        self.disconnect();
+        let state = self.state.clone();
+        let input = MxlDataInput::new_indexed(context, flow_id, move |index, grain| Self::feed_at(&state, Some(index), grain))?;
+        *self.input.lock().expect("lock poisoned") = Some(input);
+        *self.flow_id.lock().expect("lock poisoned") = flow_id.to_string();
+        Ok(())
+    }
+
+    fn feed_at(state: &Mutex<TcState>, index: Option<u64>, grain: &[u8]) {
+        let mut s = state.lock().expect("lock poisoned");
+        let parsed = crate::anc::parse_atc_grain(grain);
+        let index = index.unwrap_or_else(|| {
+            s.manual_index += 1;
+            s.manual_index
+        });
+        s.history.push_back((index, parsed.clone()));
+        while s.history.len() > 64 {
+            s.history.pop_front();
+        }
+        match parsed {
+            Some(a) => {
+                s.last = Some(a);
+                s.missing = 0;
+            }
+            None => s.missing = s.missing.saturating_add(1),
+        }
+    }
+
+    /// Zeitcode des Grains mit genau diesem Index (aus den letzten 64); `None`, wenn nicht (mehr) bekannt oder ohne Zeitcode.
+    pub fn at_index(&self, index: u64) -> Option<crate::anc::AtcInfo> {
+        self.state.lock().expect("lock poisoned").history.iter().rev().find(|(i, _)| *i == index).and_then(|(_, a)| a.clone())
+    }
+
+    /// Einen Grain von Hand einspeisen (Tests, Wiedergabe ohne MXL).
+    pub fn feed_grain(&self, grain: &[u8]) {
+        Self::feed_at(&self.state, None, grain);
+    }
+
+    pub fn disconnect(&self) {
+        *self.input.lock().expect("lock poisoned") = None;
+        self.flow_id.lock().expect("lock poisoned").clear();
+        *self.state.lock().expect("lock poisoned") = TcState::default();
+    }
+
+    /// Anzeige des aktuellen Zeitcodes (`HH:MM:SS:FF`, bei Drop-Frame `;`); leer, wenn keiner anliegt oder er seit mehr als
+    /// 10 Bildern fehlt. Ein als ungültig markierter Zeitcode trägt ein „?“ am Ende.
+    pub fn display(&self) -> String {
+        let s = self.state.lock().expect("lock poisoned");
+        match &s.last {
+            Some(a) if s.missing <= 10 => format!("{}{}", a.timecode.display(), if a.valid { "" } else { " ?" }),
+            _ => String::new(),
+        }
+    }
+
+    /// Medienzeit des aktuellen Zeitcodes in Millisekunden (Stunden:Minuten:Sekunden plus Bild/Bildrate), `None`, wenn keiner anliegt
+    /// oder er fehlt (wie [`Self::display`]). Zeitcode-Basis ist die Bildrate des Flows (`rate_num/rate_den`); Drop-Frame-Zeitcode
+    /// wird als Zählung ohne Auslassung gelesen — die Abweichung (0,1 %) spielt für Untertitel keine Rolle.
+    pub fn media_ms(&self, rate_num: u32, rate_den: u32) -> Option<u64> {
+        let s = self.state.lock().expect("lock poisoned");
+        let a = s.last.as_ref().filter(|_| s.missing <= 10)?;
+        let t = &a.timecode;
+        let secs = t.hours as u64 * 3600 + t.minutes as u64 * 60 + t.seconds as u64;
+        // über 30 Bilder/s zählt der Zeitcode Bildpaare; das Halbbild-Bit trägt die zweite Hälfte
+        let nominal = (rate_num as f64 / rate_den.max(1) as f64).round() as u64;
+        let (frames, per_sec) = if nominal > 30 { (t.frames as u64 * 2 + t.field as u64, nominal) } else { (t.frames as u64, nominal.max(1)) };
+        Some(secs * 1000 + frames * 1000 / per_sec)
+    }
+
+    /// Letzter gelesener Zeitcode samt Gültigkeit; `None`, wenn keiner anliegt oder er seit mehr als 10 Bildern fehlt.
+    pub fn latest(&self) -> Option<crate::anc::AtcInfo> {
+        let s = self.state.lock().expect("lock poisoned");
+        s.last.clone().filter(|_| s.missing <= 10)
+    }
+
+    pub fn connected_flow_id(&self) -> String {
+        self.flow_id.lock().expect("lock poisoned").clone()
+    }
+
+    pub fn flowed(&self) -> bool {
+        self.input.lock().expect("lock poisoned").as_ref().is_some_and(|i| i.flowed_handle().load(Ordering::Relaxed))
     }
 }
 

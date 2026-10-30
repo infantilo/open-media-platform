@@ -28,6 +28,9 @@
 
 mod freeze;
 mod pipeline;
+mod tc;
+#[cfg(test)]
+mod tc_probe;
 mod uibundle;
 
 use std::collections::HashMap;
@@ -1307,6 +1310,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let hwaccel = omp_mediaio::hwaccel::HwAccel::probe();
     let stills: pipeline::StillStore = Arc::new(Mutex::new(HashMap::new()));
 
+    let tc_context = match omp_mediaio::mxl::MxlContext::new(&domain).map(Arc::new) {
+        Ok(c) => Some(c),
+        Err(e) => {
+            eprintln!("omp-video-mixer-me: Zeitcode-Ausgang aus — {e}");
+            None
+        }
+    };
+    let source_timecodes = tc_context.clone().map(|c| Arc::new(tc::SourceTimecodes::new(c)));
+    if let Some(b) = &source_timecodes {
+        tc::install(b.clone());
+    }
     let pipeline_config = pipeline::Config {
         domain,
         flow_ids: flow_ids.clone(),
@@ -1397,7 +1411,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // "<Label> Sender N" verriet an der Kachel nicht, dass dieser Ausgang
     // der Programm-Bus ist. Ein Sender je Ebene (Nutzerwunsch: "jede
     // Mischerebene soll eigenen Output erzeugen").
-    let senders: Vec<SenderSpec> = sender_ids
+    let tc_flow_ids: Vec<String> = (0..level_count).map(|_| omp_node_sdk::idgen::new_v4()).collect();
+    let mut tc_senders: Vec<SenderSpec> = Vec::new();
+    if let (Some(ctx), Some(src)) = (&tc_context, &source_timecodes) {
+        for (level, flow_id) in tc_flow_ids.iter().enumerate() {
+            let name = if level_count <= 1 { "PGM".to_string() } else { format!("PGM {}", level + 1) };
+            match omp_mediaio::mxl::MxlDataOutput::new(ctx.clone(), flow_id, &format!("{label} {name} Zeitcode"), &label, pipeline::FRAMERATE_NUMERATOR, pipeline::FRAMERATE_DENOMINATOR) {
+                Ok(out) => {
+                    // geschrieben wird vom Video-Schreiber-Hook der Ebene (derselbe Grain-Index wie das Bild), s. `tc.rs`
+                    src.add_output(Arc::new(out), program[level].clone());
+                    tc_senders.push(SenderSpec {
+                        transport: Some(TRANSPORT_MXL.to_string()),
+                        flow: Some(FlowSpec::Data {
+                            id: Some(flow_id.clone()),
+                            grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
+                            grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
+                            did_sdid: vec![(omp_mediaio::anc::DID_ATC, omp_mediaio::anc::SDID_ATC)],
+                        }),
+                        label: Some(format!("{name} Zeitcode (ANC)")),
+                        ..Default::default()
+                    });
+                }
+                Err(e) => eprintln!("omp-video-mixer-me: Zeitcode-Ausgang {name} aus — {e}"),
+            }
+        }
+    }
+
+    let mut senders: Vec<SenderSpec> = sender_ids
         .iter()
         .zip(flow_ids.iter())
         .enumerate()
@@ -1415,6 +1455,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             ..Default::default()
         })
         .collect();
+    senders.extend(tc_senders);
 
     let handle = omp_node_sdk::start(
         NodeConfig {
@@ -1454,6 +1495,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         pipeline_handle,
         freezes.clone(),
         keyfill_inputs,
+        source_timecodes,
     );
 
     let events = handle_events(
@@ -1732,7 +1774,7 @@ fn discover(
     // Mastereben-Routing braucht die Sichtbarkeit fremder eigener
     // Ausgänge weiterhin).
     own_sender_ids: &[String],
-) -> Result<(Vec<DiscoveredInput>, Vec<DiscoveredKeyFill>), String> {
+) -> Result<(Vec<DiscoveredInput>, Vec<DiscoveredKeyFill>, HashMap<String, String>), String> {
     let senders = registry.list_senders().map_err(|e| e.to_string())?;
     let exclude_own_from_inputs = own_sender_ids.len() <= 1;
 
@@ -1758,7 +1800,19 @@ fn discover(
             device_id: s.device_id.clone(),
         });
     }
-    Ok((discovered, discover_keyfill(&senders, own_sender_ids)))
+    let timecodes = discover_timecodes(&senders, &discovered);
+    Ok((discovered, discover_keyfill(&senders, own_sender_ids), timecodes))
+}
+
+/// Zeitcode-Sender (Label „… Zeitcode (ANC)“, Daten-Flow) je Quelle: Video-Sender-ID → Flow-ID des Zeitcode-Senders am selben Gerät.
+fn discover_timecodes(senders: &[Sender], inputs: &[DiscoveredInput]) -> HashMap<String, String> {
+    let mut by_device: HashMap<&str, &str> = HashMap::new();
+    for s in senders {
+        if s.transport == TRANSPORT_MXL && s.label.ends_with("Zeitcode (ANC)") && let Some(flow) = &s.flow_id {
+            by_device.insert(s.device_id.as_str(), flow.as_str());
+        }
+    }
+    inputs.iter().filter_map(|i| Some((i.sender_id.clone(), by_device.get(i.device_id.as_str())?.to_string()))).collect()
 }
 
 /// Findet Fill+Key-Senderpaare je NMOS-Device (Keyer-DSK-Kandidaten, s.
@@ -1813,6 +1867,7 @@ async fn discovery_loop(
     pipeline: pipeline::PipelineHandle,
     freezes: Arc<freeze::Freezes>,
     keyfill_inputs: Arc<Mutex<Vec<DiscoveredKeyFill>>>,
+    source_timecodes: Option<Arc<tc::SourceTimecodes>>,
 ) {
     let registry = RegistryClient::new(registry_url);
     let mut interval = tokio::time::interval(Duration::from_secs(2));
@@ -1824,7 +1879,7 @@ async fn discovery_loop(
         let result =
             tokio::task::spawn_blocking(move || discover(&registry_for_poll, &own_sender_ids_for_poll)).await;
 
-        let (discovered, discovered_keyfill) = match result {
+        let (discovered, discovered_keyfill, timecodes) = match result {
             Ok(Ok(discovered)) => discovered,
             Ok(Err(e)) => {
                 eprintln!("omp-video-mixer-me: discovery poll failed: {e}");
@@ -1835,6 +1890,9 @@ async fn discovery_loop(
                 continue;
             }
         };
+        if let Some(t) = &source_timecodes {
+            t.sync(&timecodes);
+        }
         *keyfill_inputs.lock().expect("lock poisoned") = discovered_keyfill.clone();
         pipeline.set_keyfill_inputs(discovered_keyfill);
 

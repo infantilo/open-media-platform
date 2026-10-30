@@ -1353,6 +1353,25 @@
   ],
   "omp-subtitle-asr": [
       {
+          "key": "OMP_ASR_ROLE",
+          "i18n": {
+              "en": {
+                  "label": "Task",
+                  "description": "live = live subtitles from an audio stream (default). file = dedicated node for SRT files from media files (intake control, process step): it takes no live source, and live nodes never get file jobs, so live subtitling is never disturbed.",
+                  "group": "Speech recognition"
+              }
+          },
+          "label": "Aufgabe",
+          "type": "enum",
+          "description": "live = Live-Untertitel aus einem Audiostream (Standard). file = dedizierter Node für SRT aus Mediendateien (Eingangskontrolle, Prozess-Schritt): nimmt keine Live-Quelle an, und Live-Nodes bekommen nie Dateiaufträge — die Live-Untertitelung wird so nie gestört.",
+          "default": "live",
+          "group": "Spracherkennung",
+          "choices": [
+              { "value": "live" },
+              { "value": "file" }
+          ]
+      },
+      {
           "key": "OMP_ASR_AUDIO_CTX",
           "i18n": {"en": {"label": "Audio context (engine window)", "description": "Window of the engine in units of 20 ms (512 = 10 s). Empty = automatic, fitted to the longest segment. 0 = full 30 s window (slightly more accurate, much slower). Measured: model small 11 s → 3 s per 8 s segment.", "group": "Speech recognition"}},
           "label": "Audio-Kontext (Engine-Fenster)",

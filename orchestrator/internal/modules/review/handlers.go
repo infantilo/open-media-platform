@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/subtitlegen"
 )
 
 type api struct {
@@ -718,5 +719,105 @@ func (a *api) putConfig() http.HandlerFunc {
 		a.m.cfg.Invalidate()
 		a.svc.audit(actorOf(r), "", "config_changed", nil)
 		writeJSON(w, 200, c)
+	}
+}
+
+// ---- Untertitel (SRT) aus der Datei erzeugen ----
+
+type subtitleBody struct {
+	Name     string   `json:"name"`
+	Track    int      `json:"track"`
+	Language string   `json:"language"`
+	Speakers int      `json:"speakers"`
+	Names    []string `json:"names"`
+	Word     string   `json:"word"`
+	Style    string   `json:"style"`
+}
+
+// POST /api/v1/review/items/{id}/subtitles: Auftrag anlegen (202).
+func (a *api) startSubtitles() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var b subtitleBody
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&b); err != nil {
+			writeJSON(w, 400, map[string]any{"error": "Körper nicht lesbar"})
+			return
+		}
+		it, err := a.svc.St.GetItem(r.Context(), r.PathValue("id"))
+		if err != nil {
+			a.writeErr(w, err, nil)
+			return
+		}
+		if !a.visible(r, it) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "Die Datei ist Ihnen nicht zugewiesen (Recht „Alle Dateien sehen“ fehlt)"})
+			return
+		}
+		j, err := a.svc.StartSubtitles(r.Context(), it.AssetID, actorOf(r), b.Name, SubtitleParams{Track: b.Track, Language: b.Language, Speakers: b.Speakers, Names: b.Names, Word: b.Word, Style: b.Style})
+		if err != nil {
+			a.writeErr(w, err, nil)
+			return
+		}
+		writeJSON(w, 202, map[string]any{"job": j})
+	}
+}
+
+// GET /api/v1/review/items/{id}/subtitles: Aufträge und ob die Erzeugung möglich ist (Node vorhanden, Sprechererkennung eingerichtet).
+func (a *api) listSubtitles() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		jobs, err := a.svc.St.listSubtitles(r.Context(), r.PathValue("id"))
+		if err != nil {
+			a.writeErr(w, err, nil)
+			return
+		}
+		avail := map[string]any{"node": false, "diarization": false}
+		if a.svc.SubNodes != nil {
+			cl := &subtitlegen.Client{}
+			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+			defer cancel()
+			all := a.svc.SubNodes()
+			nodes := cl.FileNodes(ctx, all)
+			avail["node"] = len(nodes) > 0
+			avail["liveOnly"] = len(all) > 0 && len(nodes) == 0
+			for _, n := range nodes {
+				if cl.HasDiarization(ctx, n) {
+					avail["diarization"] = true
+					break
+				}
+			}
+		}
+		writeJSON(w, 200, map[string]any{"jobs": jobs, "available": avail, "subtitleDir": a.svc.Cfg().SubtitleDir})
+	}
+}
+
+func (a *api) cancelSubtitle() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := a.svc.CancelSubtitle(r.Context(), r.PathValue("sid"), actorOf(r)); err != nil {
+			a.writeErr(w, err, nil)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+	}
+}
+
+func (a *api) deleteSubtitle() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := a.svc.DeleteSubtitle(r.Context(), r.PathValue("sid"), actorOf(r)); err != nil {
+			a.writeErr(w, err, nil)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+	}
+}
+
+// GET /api/v1/review/subtitles/{sid}/srt: Download der SRT-Datei.
+func (a *api) downloadSubtitle() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		path, name, err := a.svc.SubtitleFile(r.Context(), r.PathValue("sid"))
+		if err != nil {
+			a.writeErr(w, err, nil)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-subrip; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+		http.ServeFile(w, r, path)
 	}
 }

@@ -16,6 +16,11 @@ CTX="deploy/subtitle-asr/ctx"; rm -rf "$CTX"; mkdir -p "$CTX/node" "$CTX/mxl" "$
 cp "$NODE" "$CTX/node/"
 cp -a "$MXL"/libmxl.so* "$CTX/mxl/"
 cp -a "$ENGINE/bin" "$ENGINE/models" "$CTX/engine/"
+if [ -x "$ENGINE/diarization/bin/sherpa-onnx-offline-speaker-diarization" ]; then
+  cp -a "$ENGINE/diarization" "$CTX/engine/diarization"; echo "Sprechererkennung wird eingepackt"
+else
+  echo "Hinweis: keine Sprechererkennung in $ENGINE/diarization (sh tools/asr-engine/install-diarization.sh) — Image kann nur SRT ohne Sprecher"
+fi
 cp -a deploy/subtitle-asr/licenses "$CTX/licenses"
 cp LICENSE "$CTX/licenses/OpenMediaPlatform-Apache-2.0" 2>/dev/null || true
 cp THIRD-PARTY-NOTICES.md "$CTX/licenses/" 2>/dev/null || true

@@ -69,6 +69,7 @@ export const STEP_TYPES = [
   "event_trigger",
   "subworkflow",
   "compensation",
+  "subtitles",
 ] as const;
 
 export type StepType = (typeof STEP_TYPES)[number];

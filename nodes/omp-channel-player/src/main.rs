@@ -15,6 +15,7 @@
 mod audio;
 mod discovery;
 mod pipeline;
+mod tc;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -279,13 +280,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
 
+    let tc_frame = Arc::new(tc::TcSource::new());
     let pipeline_config = pipeline::Config {
-        domain,
+        domain: domain.clone(),
         video_flow_id: video_flow_id.clone(),
         audio: audio_ctx.clone(),
         label: label.clone(),
         width,
         height,
+        tc_frame: tc_frame.clone(),
     };
     let pipeline_thread = std::thread::spawn(move || pipeline::run(pipeline_config, tx, ready_tx));
 
@@ -320,6 +323,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             ..Default::default()
         },
     ];
+    // Zeitcode-Ausgang (ST 12-2) der Medienposition: MXL-Daten-Flow, ein Grain je Bild
+    let tc_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let tc_flow_id = omp_node_sdk::idgen::new_v4();
+    match omp_mediaio::mxl::MxlContext::new(&domain).map(Arc::new) {
+        Ok(ctx) => match omp_mediaio::mxl::MxlDataOutput::new(ctx, &tc_flow_id, &format!("{label} Zeitcode"), &label, pipeline::FRAMERATE_NUMERATOR, pipeline::FRAMERATE_DENOMINATOR) {
+            Ok(out) => {
+                let out = Arc::new(out);
+                tc_frame.attach(out.clone());
+                tc::spawn(out, tc_frame.clone(), tc_shutdown.clone());
+                senders.push(SenderSpec {
+                    transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
+                    flow: Some(omp_node_sdk::node::FlowSpec::Data {
+                        id: Some(tc_flow_id),
+                        grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
+                        grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
+                        did_sdid: vec![(omp_mediaio::anc::DID_ATC, omp_mediaio::anc::SDID_ATC)],
+                    }),
+                    label: Some(format!("{label} Zeitcode (ANC)")),
+                    ..Default::default()
+                });
+            }
+            Err(e) => eprintln!("omp-channel-player: Zeitcode-Ausgang aus — {e}"),
+        },
+        Err(e) => eprintln!("omp-channel-player: Zeitcode-Ausgang aus — {e}"),
+    }
+
     // Ein Audio-Sender je Zielgruppe; der erste behält das bisherige Label "<Node> Audio".
     for (i, g) in audio_ctx.groups.iter().enumerate() {
         // Die Quell-Tags des Orchestrators heißen `domain.name` (`role.pt`); die Engine-Tags `role:pt` werden so
@@ -405,6 +434,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
+    tc_shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
     drop(pipeline_thread);
     Ok(())
 }

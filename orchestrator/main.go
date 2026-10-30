@@ -1069,6 +1069,9 @@ func main() {
 	outboxStore := outbox.NewStore(database)
 	assetStore := asset.NewStore(database, asset.WithOutbox(outboxStore))
 	reviewMod.Assets = assetStore
+	// „SRT erzeugen“ (Eingangskontrolle, Prozess-Schritt): die laufenden Auto-Untertitel-Nodes — Instanzen des Typs omp-subtitle-asr,
+	// deren Node im Verzeichnis online ist.
+	reviewMod.SubtitleNodes = subtitleNodes(launcherSvc, store)
 	ingestFFmpeg, _ := exec.LookPath("ffmpeg")
 	// ffmpeg-Jobs (Kapitel 52): Dispatcher verdrahten — Weg zu den Host-Agents, Pfadprüfung auf Hosts, gebuchte Live-Zeit
 	// der Aufnahmen; QC, Proxy, Ingest-Nachbearbeitung und Script-Schritte laufen darüber.
@@ -1114,6 +1117,7 @@ func main() {
 	processEngine.Register(process.StepTypeMaterialize, materialize.Executor{Manager: matManager})
 	preflightSvc := materialize.Preflight{Manager: matManager, Starter: &materialize.Starter{Store: processStore, Engine: processEngine}}
 	processEngine.Register(process.StepTypeServiceCall, process.NewServiceCallExecutor(nodeHTTPClient))
+	processEngine.Register(process.StepTypeSubtitles, process.NewSubtitleExecutor(newSubtitleSteps(assetStore, reviewMod.SubtitleNodes)))
 	processEngine.Register(process.StepTypeMediaFunction, process.NewMediaFunctionExecutor(process.NewRegistryNodeResolver(store), nodeHTTPClient))
 	// Script (Aufgaben-Zusatzwunsch "Datei-Workflows nach Möglichkeit auf
 	// ffmpeg aufbauen"): die Allow-Liste wird per exec.LookPath ERMITTELT,

@@ -33,6 +33,9 @@ type Config struct {
 	MetadataFields []MetaField `json:"metadataFields"`
 	// Medienverzeichnis, aus dem Dateien direkt importiert werden dürfen (leer = Import abgeschaltet).
 	ImportDir string `json:"importDir"`
+	// SubtitleDir: Verzeichnis der Untertiteldateien, aus dem das Kind-Event `SUBTITLE` der Playout-Automation abspielt
+	// (dasselbe wie `OMP_SUBTITLE_DIR` des Grafik-Nodes, Standard data/subtitles). Erzeugte SRT-Dateien werden dorthin kopiert.
+	SubtitleDir string `json:"subtitleDir"`
 }
 
 // MetaField beschreibt ein Feld des redaktionellen Metadatenformulars (Pflichtfelder, erlaubte Werte).
@@ -128,7 +131,7 @@ func DefaultConfig() Config {
 		AllowOverlap: true, AllowGaps: true, MinSegmentFrames: 1,
 		ApprovalMode: "single", AllowSelfApproval: true,
 		DefaultQCProfile: p.ID, QCProfiles: map[string]QCProfile{p.ID: p}, QCWorkers: 1, AutoQC: true,
-		ProxyHeight: 540, ProxyCRF: 23, ProxyMaxAudio: 8, ImportDir: "data/media",
+		ProxyHeight: 540, ProxyCRF: 23, ProxyMaxAudio: 8, ImportDir: "data/media", SubtitleDir: "data/subtitles",
 		MetadataFields: []MetaField{
 			{ID: "title", Label: "Titel", Type: "text", Required: true, Max: 200},
 			{ID: "description", Label: "Beschreibung", Type: "longtext", Max: 4000},
@@ -209,6 +212,9 @@ func (c *Config) Normalize() error {
 	}
 	if c.ProxyMaxAudio < 1 {
 		c.ProxyMaxAudio = d.ProxyMaxAudio
+	}
+	if strings.TrimSpace(c.SubtitleDir) == "" {
+		c.SubtitleDir = d.SubtitleDir
 	}
 	if len(c.MetadataFields) == 0 {
 		c.MetadataFields = d.MetadataFields

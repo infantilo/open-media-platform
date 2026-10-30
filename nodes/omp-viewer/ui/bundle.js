@@ -67,6 +67,10 @@ class OmpViewerPanel extends HTMLElement {
         text-shadow: 0 0 3px #000, 0 0 3px #000, 1px 1px 2px #000;
       }
       .sub:empty { display: none; }
+      .tc {
+        position: absolute; left: 6px; top: 6px; background: rgba(0,0,0,.65); color: #fff; font: 600 13px monospace;
+        padding: 1px 6px; border-radius: 3px; pointer-events: none;
+      }
       .umd {
         position: absolute; left: 0; right: 0; bottom: 0; text-align: center;
         background: rgba(0,0,0,.6); color: #fff; font-size: 12px; padding: 2px 4px;
@@ -147,10 +151,17 @@ class OmpViewerPanel extends HTMLElement {
     umd.className = "umd";
     const sub = document.createElement("div");
     sub.className = "sub";
-    wrap.append(img, sub, umd);
+    const tcBox = document.createElement("div");
+    tcBox.className = "tc";
+    tcBox.dataset.role = "viewer-timecode";
+    tcBox.style.display = "none";
+    wrap.append(img, sub, umd, tcBox);
     const refreshSubtitle = async () => {
       const t = await getParam("subtitle");
       sub.textContent = t || "";
+      const tc = await getParam("timecode");
+      tcBox.textContent = tc || "";
+      tcBox.style.display = tc ? "" : "none";
     };
     refreshSubtitle();
     this._subInterval = setInterval(refreshSubtitle, 250);

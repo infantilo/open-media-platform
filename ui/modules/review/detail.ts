@@ -3,6 +3,7 @@ import { confirmDialog, dateLocale, showToast, t as tt } from "../host.ts";
 import { type Directory, groupName } from "../../kit/features.ts";
 import { call, errText, mediaUrl } from "./api.ts";
 import { ComparePanel } from "./compare-panel.ts";
+import { SubtitlesPanel } from "./subtitles-panel.ts";
 import { ConformPanel, type Draft, type MetaField } from "./conform-panel.ts";
 import { type Job, QcPanel, type Report } from "./qc-panel.ts";
 import { ReviewPlayer } from "./player.ts";
@@ -167,8 +168,9 @@ export class ReviewDetail {
   #cfg: Config;
   #onClose: () => void;
   #d: Detail | null = null;
-  #tab: "qc" | "review" | "compare" | "history" = "qc";
+  #tab: "qc" | "review" | "compare" | "subtitles" | "history" = "qc";
   #compare: ComparePanel | null = null;
+  #subtitles: SubtitlesPanel | null = null;
   #draft: Draft = { usable: null, segments: [], assetMetadata: {} };
   #dirty = false;
   #remoteChanged = false;
@@ -475,7 +477,7 @@ export class ReviewDetail {
     }
     // Tabs
     const tabs = el("div", "display:flex;gap:2px;width:100%;margin-top:6px;");
-    for (const [id, label] of [["qc", tt("rv.tab.qc")], ["review", tt("rv.tab.review")], ["compare", tt("rv.tab.compare")], ["history", tt("rv.tab.history")]] as const) {
+    for (const [id, label] of [["qc", tt("rv.tab.qc")], ["review", tt("rv.tab.review")], ["compare", tt("rv.tab.compare")], ["subtitles", tt("rv.tab.subtitles")], ["history", tt("rv.tab.history")]] as const) {
       const b = el("button", `padding:4px 14px;border-radius:6px 6px 0 0;${this.#tab === id ? "background:var(--omp-surface-raised);font-weight:600;" : ""}`, label);
       b.dataset.tab = id;
       b.addEventListener("click", () => {
@@ -496,6 +498,8 @@ export class ReviewDetail {
     this.#conform = null;
     this.#compare?.destroy();
     this.#compare = null;
+    this.#subtitles?.destroy();
+    this.#subtitles = null;
     clearTimeout(this.#proxyTimer);
     this.#body.replaceChildren();
     if (!this.#d) return;
@@ -507,6 +511,9 @@ export class ReviewDetail {
     } else if (this.#tab === "compare") {
       this.#compare = new ComparePanel(this.#id);
       this.#body.append(this.#compare.el);
+    } else if (this.#tab === "subtitles") {
+      this.#subtitles = new SubtitlesPanel(this.#id);
+      this.#body.append(this.#subtitles.el);
     } else {
       void this.#renderHistory();
     }
