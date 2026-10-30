@@ -57,6 +57,9 @@ class OmpViewerPanel extends HTMLElement {
     style.textContent = `
       :host { display: block; font-family: sans-serif; color: #eee; }
       .preview-wrap { position: relative; container-type: inline-size; }
+      /* Ohne Video (nicht verbunden): schwarze 16:9-Fläche, damit das Untertitel-Overlay trotzdem sichtbar ist
+         (Aux-Eingang „Untertitel“ funktioniert unabhängig vom Videoeingang) */
+      .preview-wrap.novideo { aspect-ratio: 16 / 9; background: #000; border: 1px solid #444; box-sizing: border-box; }
       /* Untertitel (Aux-Eingang): HTML-Overlay, nicht ins Bild gerendert */
       .sub {
         position: absolute; left: 4%; right: 4%; bottom: 14%; text-align: center; color: #fff;
@@ -139,7 +142,7 @@ class OmpViewerPanel extends HTMLElement {
     // Quellenbezeichnung als HTML-Overlay über dem Bild (nicht ins Video
     // gerendert — das kostete CPU je Bild).
     const wrap = document.createElement("div");
-    wrap.className = "preview-wrap";
+    wrap.className = "preview-wrap novideo";
     const umd = document.createElement("div");
     umd.className = "umd";
     const sub = document.createElement("div");
@@ -205,9 +208,11 @@ class OmpViewerPanel extends HTMLElement {
     img.addEventListener("load", () => {
       status.style.display = "none";
       img.style.display = "";
+      wrap.classList.remove("novideo");
     });
     img.addEventListener("error", () => {
       img.style.display = "none";
+      wrap.classList.add("novideo");
       status.textContent = T("notConnected");
       status.style.display = "";
     });
