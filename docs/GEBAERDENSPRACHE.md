@@ -148,7 +148,7 @@ Test am echten Ausgang: Satz mit Beispiel-Lexikon gebärdet (`translate`), über
 | DGS-Korpus (Hamburg) | Videos, Annotationen | CC BY-NC / Forschungslizenz | nein |
 | Dicta-Sign | mehrsprachiges Lexikon | CC BY-NC-ND 4.0 | nein |
 | 3DZSignDB (Algerisch), tschechische Mocap-Korpora | SiGML bzw. Mocap | CC BY-NC | nein, falsche Sprache |
-| Sign-Language-Mocap-Archive (Studio Galt) | Mocap | CC0 | Lizenz ja, aber überwiegend amerikanische Gebärdensprache — für DGS unbrauchbar |
+| Sign-Language-Mocap-Archive (Studio Galt) | Mocap (FBX, Pose-JSON), Ordner „SG ASL Dictionary“ und „SG ASL Fingerspelling“ (geprüft 2026-10-30) | CC0 | Lizenz ja, aber nur amerikanische Gebärdensprache, kein deutsches/österreichisches Alphabet — für DGS/ÖGS unbrauchbar; höchstens Testmaterial für ein Umsetzungswerkzeug |
 | MMS Player | Wiedergabe-Software | GPL-3.0 | nicht einbindbar (Apache-2.0-Projekt) |
 | HamNoSys / SiGML / JASigning | Notation und Player | nicht geprüft | offen |
 

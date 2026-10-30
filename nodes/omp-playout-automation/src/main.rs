@@ -3965,6 +3965,14 @@ impl ParamStore for AutomationStore {
                 range: None,
                 readonly: true,
             },
+            // Zahl der noch ausstehenden Folge-Carts des laufenden Cart-Blocks (0 = letzter Schritt oder kein Block).
+            ParamSpec {
+                name: "activeCartRemaining".to_string(),
+                kind: ParamType::Number,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
             // Nutzerwunsch 2026-07-22: Player-/Mixer-Auswahl "wie beim
             // Video-Mixer DSK" — eine Discovery-Liste statt Freitext, s.
             // `remote::list_node_labels`-Doku.
@@ -4284,6 +4292,12 @@ impl ParamStore for AutomationStore {
                 name: "cart.return".to_string(),
                 args: vec![],
             },
+            // Cart-Block: nächstes Folge-Cart sofort nehmen (nötig bei einem Cart mit Dauer 0 = endlos mitten im Block);
+            // ohne weiteres Folge-Cart wie `cart.return`.
+            MethodSpec {
+                name: "cart.next".to_string(),
+                args: vec![],
+            },
         ];
 
         Descriptor { parameters, methods, latency: None }
@@ -4419,6 +4433,7 @@ impl ParamStore for AutomationStore {
             "activeCartId" => Some(serde_json::json!(
                 state.active_cart.as_ref().map(|a| a.asset_id.clone()).unwrap_or_default()
             )),
+            "activeCartRemaining" => Some(serde_json::json!(state.active_cart.as_ref().map(|a| a.follow.len()).unwrap_or(0))),
             "availableNodes" => Some(serde_json::json!(state.discovered_labels)),
             "mediaLibrary" => Some(serde_json::json!(state.media_library)),
             "availableSources" => Some(serde_json::json!(selectable_live_sources(&state))),
@@ -4746,6 +4761,13 @@ impl ParamStore for AutomationStore {
                 None => Err("assetId fehlt".to_string()),
             },
             "cart.return" => self.do_cart_return(),
+            "cart.next" => {
+                if self.state.lock().expect("lock poisoned").active_cart.is_none() {
+                    Err("kein Cart aktiv".to_string())
+                } else {
+                    self.do_cart_next()
+                }
+            }
             _ => return Err(InvokeError::Unknown),
         };
 

@@ -324,6 +324,7 @@ const T = (() => {
       "pick.add": "Hinzufügen",
       "cart.onAir": "CART ON AIR: {label}",
       "cart.manual": " · manuell (RETURN)",
+      "cart.next": "NÄCHSTES",
       "cart.iconPh": "Icon",
       "cart.titlePh": "Titel",
       "cart.msTitle": "ms, 0 = manuell (RETURN)",
@@ -669,6 +670,7 @@ const T = (() => {
       "pick.add": "Add",
       "cart.onAir": "CART ON AIR: {label}",
       "cart.manual": " · manual (RETURN)",
+      "cart.next": "NEXT",
       "cart.iconPh": "Icon",
       "cart.titlePh": "Title",
       "cart.msTitle": "ms, 0 = manual (RETURN)",
@@ -1106,6 +1108,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     let currentItemId = "";
     let cuedItemId = "";
     let activeCartId = "";
+    let activeCartRemaining = 0;
     let audioMixerLabel = "";
     const selected = new Set();
     let lastClickedId = null;
@@ -1397,7 +1400,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     // ---- Assets / Carts --------------------------------------------------
     const cartBanner = h("div", { class: "cart-banner" });
     const cartBannerLabel = h("span");
-    cartBanner.append(cartBannerLabel, h("button", { onclick: () => act("cart.return", {}) }, "RETURN"));
+    const cartNextBtn = h("button", { onclick: () => act("cart.next", {}) }, T("cart.next"));
+    cartBanner.append(cartBannerLabel, cartNextBtn, h("button", { onclick: () => act("cart.return", {}) }, "RETURN"));
     const cartGrid = h("div", { class: "cart-grid" });
     const cartsSec = h("details", { class: "sec", open: true },
       h("summary", {}, T("sec.carts")),
@@ -2489,6 +2493,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       for (const [id, b] of cartBtns) if (!ids.has(id)) { b.remove(); cartBtns.delete(id); }
       const active = !!activeCartId;
       cartBanner.classList.toggle("show", active);
+      cartNextBtn.style.display = activeCartRemaining > 0 ? "" : "none";
       if (active) cartBannerLabel.textContent = T("cart.onAir", { label: assets.find((a) => a.id === activeCartId)?.label || activeCartId });
       assets.forEach((a) => {
         let b = cartBtns.get(a.id);
@@ -2549,7 +2554,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     const poll = async () => {
       clockEl.textContent = new Date().toLocaleTimeString(LOCALE);
       if (dragging) return;
-      const names = ["items", "currentItemId", "cuedItemId", "mode", "connected", "playheadPositionMs", "currentDurationMs", "assets", "activeCartId",
+      const names = ["items", "currentItemId", "cuedItemId", "mode", "connected", "playheadPositionMs", "currentDurationMs", "assets", "activeCartId", "activeCartRemaining",
         "availableNodes", "targetPlayerALabel", "targetPlayerBLabel", "targetMixerLabel", "targetGraphicsLabel", "targetAudioMixerLabel", "liveChannel", "mediaLibrary", "audioPlans", "audioGroups", "audioMappings",
         "availableSources", "channelName", "persistence", "schedule", "childEvents", "triggerLog", "channelId", "preflightWindowMin", "defaultFiller", "requireRelease", "foreignStatus", "adBreakEnabled", "adBreakTarget", "adBreakPreRollMs", "adBlocks"];
       const v = Object.fromEntries(await Promise.all(names.map(async (n) => [n, await getParam(n)])));
@@ -2570,6 +2575,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       currentItemId = v.currentItemId || "";
       cuedItemId = v.cuedItemId || "";
       activeCartId = v.activeCartId || "";
+      activeCartRemaining = Number(v.activeCartRemaining) || 0;
       durationMs = v.currentDurationMs || 0;
       playheadMs = v.playheadPositionMs || 0;
       for (const id of [...selected]) if (!items.some((i) => i.id === id)) selected.delete(id);
