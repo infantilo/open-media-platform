@@ -454,7 +454,9 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
 - **omp-video-mixer-me** — video mixer (configurable number of M/E
   levels via `OMP_ME_LEVELS`, default 1; each level with its own
   program/preset bus and output, shared source pool; cut, crossfade,
-  picture-in-picture, downstream keyer)
+  picture-in-picture, downstream keyer). Carries a frame-accurate
+  SMPTE ST 12-2 timecode output per level (the timecode of the input on
+  programme, measured at 0 frames offset to the picture)
 - **omp-audio-mixer** — broadcast audio console: per-channel HPF + 4-band
   EQ, compressor (attack/release/knee/GR), gate/expander, delay, pan, phase;
   gain-sharing AutoMix and sidechain ducking (separate engines) with groups
@@ -469,7 +471,9 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   and MXF MCA label reading (SMPTE ST 377-4/-41; labels drive the audio rules)
   (cued playback, plus live-MXL-source and real-file playlist items)
 - **omp-channel-player** — isel-free single-branch player for the
-  playout automation channels (load-only, no playlist/cue-take)
+  playout automation channels (load-only, no playlist/cue-take); outputs
+  the media position of the playing clip as an ST 12-2 timecode data flow
+  bound to the same grain as the picture
 - **omp-playout-automation** — playout automation (playlist-driven,
   Auto/Hold, Next/Next-Live/Stop, cart/interrupt assets; no pipeline of
   its own)
@@ -507,14 +511,15 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   picture-in-picture. Takes the subtitle stream (text or CEA-608), prepares
   sentences by an editable rules file, signs from a lexicon that signers
   release, fingerspells unknown words and shows mostly-unknown sentences as
-  text; unreleased signs never go on air
+  text (or, by default, fingerspells them); unreleased signs never go on air
 - **omp-subtitle-asr** — automatic subtitles: recognises speech from an
   audio stream locally (no cloud) and produces a live subtitle layer in the
   graphics node, a running SRT track with the real speaking times, and two
   MXL data outputs (subtitle text and CEA-608). Viewer and multiviewers take
   the subtitles as an extra input (overlay, optionally burnt into the
   multiviewer output). Ships as a complete container package (node, engine,
-  models) with one-step import and uninstall
+  models) with one-step import and uninstall. File subtitles run on a
+  dedicated file node; speaker detection is optional (off by default)
 - **omp-recorder** — records an MXL source (video/audio) to a Matroska
   file, or to MXF (H.264 + 24-bit PCM) when the name ends in `.mxf`, with
   optional SMPTE ST 377-4/-41 MCA labels (`record.mcaPlan`) and an
