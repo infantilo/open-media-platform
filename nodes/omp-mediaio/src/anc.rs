@@ -186,6 +186,91 @@ pub fn parse_mxl_grain(g: &[u8]) -> Result<Vec<AncPacket>, String> {
 }
 
 
+/// Ein Paket aus [`parse_mxl_grain_lenient`]: der Inhalt plus das Ergebnis der Prüfungen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedAnc {
+    pub packet: AncPacket,
+    /// Datenstrom-Flag S und StreamNum aus dem Kopf (RFC 8331).
+    pub s_flag: bool,
+    pub stream_num: u8,
+    /// Alle 10-Bit-Wörter (DID, SDID, DC, UDW) trugen gültige Parität.
+    pub parity_ok: bool,
+    pub checksum_ok: bool,
+    /// Rohe 10-Bit-Wörter der Nutzdaten (für die Anzeige von Fehlern).
+    pub words: usize,
+}
+
+/// Ergebnis von [`parse_mxl_grain_lenient`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LenientGrain {
+    /// ANC_Count aus dem Kopf.
+    pub declared_count: usize,
+    pub packets: Vec<ParsedAnc>,
+    /// Gesetzt, wenn die Struktur unlesbar ist (zu kurz, Length falsch, Paket abgeschnitten): ab dort sind keine Pakete mehr gelesen.
+    pub error: Option<String>,
+}
+
+/// Wie [`parse_mxl_grain`], bricht aber bei Paritäts-/Prüfsummenfehlern **nicht** ab: das Paket wird mit Markierung geliefert (für
+/// Messgeräte). Nur wenn der Aufbau selbst nicht mehr stimmt, endet das Lesen und `error` sagt warum.
+pub fn parse_mxl_grain_lenient(g: &[u8]) -> LenientGrain {
+    let mut out = LenientGrain::default();
+    if g.len() < HEADER_LEN {
+        out.error = Some("Grain kürzer als der Kopf".to_string());
+        return out;
+    }
+    let length = u16::from_be_bytes([g[0], g[1]]) as usize;
+    out.declared_count = g[2] as usize;
+    if HEADER_LEN + length > g.len() {
+        out.error = Some(format!("Length {length} reicht über den Grain ({}) hinaus", g.len()));
+        return out;
+    }
+    let mut r = BitReader { d: &g[HEADER_LEN..HEADER_LEN + length], pos: 0 };
+    for i in 0..out.declared_count {
+        let start = r.pos;
+        let read = (|| -> Result<ParsedAnc, String> {
+            let c = r.get(1)? == 1;
+            let line = r.get(11)? as u16;
+            let offset = r.get(12)? as u16;
+            let s_flag = r.get(1)? == 1;
+            let stream_num = r.get(7)? as u8;
+            let did_w = r.get(10)? as u16;
+            let sdid_w = r.get(10)? as u16;
+            let dc_w = r.get(10)? as u16;
+            let mut parity_ok = true;
+            let mut byte = |w: u16| {
+                strip_parity(w).unwrap_or_else(|_| {
+                    parity_ok = false;
+                    (w & 0xFF) as u8
+                })
+            };
+            let (did, sdid, dc) = (byte(did_w), byte(sdid_w), byte(dc_w) as usize);
+            let mut words = vec![did_w, sdid_w, dc_w];
+            let mut udw = Vec::with_capacity(dc);
+            for _ in 0..dc {
+                let w = r.get(10)? as u16;
+                words.push(w);
+                udw.push(byte(w));
+            }
+            let cs = r.get(10)? as u16;
+            let used = r.pos - start;
+            r.pos = start + used.div_ceil(32) * 32;
+            Ok(ParsedAnc { packet: AncPacket { c_not_y: c, line, offset, did, sdid, udw }, s_flag, stream_num, parity_ok, checksum_ok: cs == checksum(&words), words: dc })
+        })();
+        match read {
+            Ok(p) => out.packets.push(p),
+            Err(e) => {
+                out.error = Some(format!("Paket {} von {}: {e}", i + 1, out.declared_count));
+                break;
+            }
+        }
+    }
+    if out.error.is_none() && r.pos / 8 != length {
+        out.error = Some(format!("Length {length} passt nicht zu den {} gelesenen Byte", r.pos / 8));
+    }
+    out
+}
+
+
 
 // ---------------------------------------------------------------------------
 // Text-Cue-Paket (privat): Untertitel als verdrahtbarer Strom für Viewer/Multiviewer
@@ -261,5 +346,41 @@ mod tests {
         let long = "ä".repeat(200); // 400 Byte
         let (_, t) = parse_text_grain(&mxl_grain(&[text_packet(&long, 1, 9)]).unwrap()).unwrap();
         assert!(t.len() <= MAX_TEXT_BYTES && t.chars().all(|c| c == 'ä'));
+    }
+
+    #[test]
+    fn lenient_reports_bad_parity_and_checksum_without_aborting() {
+        let a = AncPacket { c_not_y: false, line: 9, offset: 0, did: 0x61, sdid: 0x01, udw: vec![1, 2, 3, 4] };
+        let b = AncPacket { c_not_y: true, line: 12, offset: 5, did: 0x41, sdid: 0x05, udw: vec![0x28] };
+        let mut g = mxl_grain(&[a.clone(), b.clone()]).unwrap();
+        let ok = parse_mxl_grain_lenient(&g);
+        assert!(ok.error.is_none() && ok.packets.len() == 2);
+        assert!(ok.packets.iter().all(|p| p.parity_ok && p.checksum_ok));
+        assert_eq!(ok.packets[1].packet, b);
+        // Prüfsumme des ersten Pakets zerstören: letztes Wort der Daten liegt vor der Füllung — Byte im Rumpf ändern
+        let first_len = rfc8331_packet(&a).unwrap().len();
+        g[HEADER_LEN + first_len - 3] ^= 0x01; // niedrige Bits des Prüfsummenworts (die letzten zwei Byte sind Füllung)
+        let bad = parse_mxl_grain_lenient(&g);
+        assert_eq!(bad.packets.len(), 2, "zweites Paket wird trotzdem gelesen");
+        assert!(!bad.packets[0].checksum_ok && bad.packets[1].checksum_ok);
+        assert!(parse_mxl_grain(&g).is_err(), "der strenge Leser bricht ab");
+    }
+
+    #[test]
+    fn lenient_flags_parity_errors_and_structure_errors() {
+        let a = AncPacket { c_not_y: false, line: 9, offset: 0, did: 0x61, sdid: 0x01, udw: vec![1] };
+        let mut g = mxl_grain(&[a]).unwrap();
+        g[HEADER_LEN + 4] ^= 0xC0; // Paritätsbits der DID-Wörter
+        let r = parse_mxl_grain_lenient(&g);
+        assert!(!r.packets[0].parity_ok);
+        let short = parse_mxl_grain_lenient(&[0, 9]);
+        assert!(short.error.is_some() && short.packets.is_empty());
+        let mut over = mxl_grain(&[]).unwrap();
+        over[0] = 0xFF;
+        over[1] = 0xFF;
+        assert!(parse_mxl_grain_lenient(&over).error.is_some());
+        let mut cut = mxl_grain(&[]).unwrap();
+        cut[2] = 3; // behauptet drei Pakete, Length 0
+        assert!(parse_mxl_grain_lenient(&cut).error.is_some());
     }
 }

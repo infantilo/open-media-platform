@@ -1180,6 +1180,15 @@
   ],
   "omp-scope": [
     {
+      "key": "OMP_SCOPE_SCTE35_UDP",
+      "i18n": { "en": {"label": "SCTE-35 input (UDP)", "description": "Listens on host:port for raw SCTE-35 splice sections (e.g. the UDP output of the SCTE node, OMP_SCTE35_UDP) and decodes them in the ANC/SCTE log. Empty = off.", "group": "ANC / SCTE"} },
+      "label": "SCTE-35-Eingang (UDP)",
+      "type": "string",
+      "description": "Hört auf host:port auf rohe SCTE-35-Abschnitte (z. B. die UDP-Ausgabe des SCTE-Nodes, OMP_SCTE35_UDP) und entschlüsselt sie im ANC-/SCTE-Ablauf. Leer = aus.",
+      "default": "",
+      "group": "ANC / SCTE"
+    },
+    {
       "key": "OMP_SCOPE_PREVIEW_PORT",
       "i18n": { "en": {"label": "Preview port", "description": "TCP port of the preview/level server. 0 = automatically a free port (recommended, several instances per host).", "group": "Network (ports)"} },
       "label": "Vorschau-Port",

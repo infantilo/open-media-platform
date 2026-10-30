@@ -68,7 +68,56 @@ const T = (() => {
         "scp.caca19": "gleiche Quellgruppe",
         "scp.086fb1": "verschiedene Quellgruppen",
         "scp.0a6161": "Die NMOS-Grouphints der beiden Flows nennen verschiedene Gruppen. Bei OMP-eigenen Quellen ist das derzeit immer so: deren MXL-Schreiber verwenden die jeweilige Flow-ID als Gruppennamen, statt Video und Audio einer Quelle derselben Gruppe zuzuordnen.",
-        "scp.08fd3e": "nicht verbunden"
+        "scp.08fd3e": "nicht verbunden",
+        "scp.tab.ov": "Übersicht",
+        "scp.tab.video": "Video",
+        "scp.tab.audio": "Audio",
+        "scp.tab.timing": "Timing",
+        "scp.tab.flow": "Flow",
+        "scp.tab.anc": "ANC",
+        "scp.tab.scte": "SCTE",
+        "scp.ov.sources": "Quellen",
+        "scp.ov.alarms": "Signalüberwachung",
+        "scp.ov.checks": "Prüfungen",
+        "scp.ov.lipsync": "Lipsync",
+        "scp.ov.loud": "Lautheit",
+        "scp.ov.anc": "ANC-Daten",
+        "scp.ov.scte": "SCTE-Marker",
+        "scp.ov.go": "Details",
+        "scp.src.video": "Video",
+        "scp.src.audio": "Audio",
+        "scp.src.anc": "ANC / SCTE",
+        "scp.src.none": "nicht verbunden",
+        "scp.hint.video": "Kein Video verbunden. Im Flow-Editor einen Video-Sender auf den Empfänger „Video“ dieses Messgeräts ziehen.",
+        "scp.hint.audio": "Kein Audio verbunden. Im Flow-Editor einen Audio-Sender auf den Empfänger „Audio“ ziehen.",
+        "scp.hint.anc": "Kein ANC-Flow verbunden. Einen Daten-Sender (Untertitel, SCTE 104) auf den Empfänger „ANC / SCTE“ ziehen.",
+        "scp.hint.timing": "Lipsync braucht Video und Audio. Transportwerte erscheinen, sobald der jeweilige Flow läuft.",
+        "scp.scte.all": "Alle",
+        "scp.scte.in": "SCTE-35-Abschnitt von Hand prüfen",
+        "scp.scte.udp": "Rohe SCTE-35-Abschnitte per UDP: Option „SCTE-35-Eingang (UDP)“ des Messgeräts.",
+        "scp.ok": "in Ordnung",
+        "scp.alarm": "Alarm",
+        "scp.messages": "Nachrichten",
+        "scp.anc.title": "ANC / Daten",
+        "scp.anc.hint": "· jeder Pakettyp, SCTE 104/35",
+        "scp.anc.none": "kein ANC-Flow verbunden",
+        "scp.anc.status": "{p0} Bilder · {p1} Pakete · {p2} Pakete/s",
+        "scp.anc.empty": "leere Bilder",
+        "scp.anc.gaps": "Lücken",
+        "scp.anc.typ": "Typ",
+        "scp.anc.count": "Anzahl",
+        "scp.anc.rate": "/s",
+        "scp.anc.pos": "Zeile/Offset",
+        "scp.anc.err": "Fehler",
+        "scp.anc.errors": "Fehler und Warnungen",
+        "scp.anc.noerr": "keine",
+        "scp.anc.scte": "SCTE-Ablauf",
+        "scp.anc.scteNone": "noch keine SCTE-Nachricht",
+        "scp.anc.scteIn": "SCTE-35-Abschnitt prüfen (Hex oder Base64)",
+        "scp.anc.decode": "Prüfen",
+        "scp.anc.dup": "Duplikat",
+        "scp.anc.bad": "Eingabe ist weder Hex noch Base64",
+        "scp.anc.recent": "Letzte Pakete"
     },
     en: {
       "v:unbekannt": "unknown",
@@ -136,7 +185,56 @@ const T = (() => {
         "scp.caca19": "same source group",
         "scp.086fb1": "different source groups",
         "scp.0a6161": "The NMOS group hints of the two flows name different groups. For OMP's own sources this is currently always the case: their MXL writers use the respective flow ID as group name instead of assigning video and audio of a source to the same group.",
-        "scp.08fd3e": "not connected"
+        "scp.08fd3e": "not connected",
+        "scp.tab.ov": "Overview",
+        "scp.tab.video": "Video",
+        "scp.tab.audio": "Audio",
+        "scp.tab.timing": "Timing",
+        "scp.tab.flow": "Flow",
+        "scp.tab.anc": "ANC",
+        "scp.tab.scte": "SCTE",
+        "scp.ov.sources": "Sources",
+        "scp.ov.alarms": "Signal monitoring",
+        "scp.ov.checks": "Checks",
+        "scp.ov.lipsync": "Lip sync",
+        "scp.ov.loud": "Loudness",
+        "scp.ov.anc": "ANC data",
+        "scp.ov.scte": "SCTE markers",
+        "scp.ov.go": "Details",
+        "scp.src.video": "Video",
+        "scp.src.audio": "Audio",
+        "scp.src.anc": "ANC / SCTE",
+        "scp.src.none": "not connected",
+        "scp.hint.video": "No video connected. In the flow editor, drag a video sender onto this meter's “Video” receiver.",
+        "scp.hint.audio": "No audio connected. In the flow editor, drag an audio sender onto the “Audio” receiver.",
+        "scp.hint.anc": "No ANC flow connected. Drag a data sender (subtitles, SCTE 104) onto the “ANC / SCTE” receiver.",
+        "scp.hint.timing": "Lip sync needs video and audio. Transport values appear as soon as the respective flow runs.",
+        "scp.scte.all": "All",
+        "scp.scte.in": "Check an SCTE-35 section by hand",
+        "scp.scte.udp": "Raw SCTE-35 sections via UDP: meter option “SCTE-35 input (UDP)”.",
+        "scp.ok": "ok",
+        "scp.alarm": "alarm",
+        "scp.messages": "messages",
+        "scp.anc.title": "ANC / data",
+        "scp.anc.hint": "· every packet type, SCTE 104/35",
+        "scp.anc.none": "no ANC flow connected",
+        "scp.anc.status": "{p0} frames · {p1} packets · {p2} packets/s",
+        "scp.anc.empty": "empty frames",
+        "scp.anc.gaps": "gaps",
+        "scp.anc.typ": "Type",
+        "scp.anc.count": "Count",
+        "scp.anc.rate": "/s",
+        "scp.anc.pos": "Line/offset",
+        "scp.anc.err": "Errors",
+        "scp.anc.errors": "Errors and warnings",
+        "scp.anc.noerr": "none",
+        "scp.anc.scte": "SCTE log",
+        "scp.anc.scteNone": "no SCTE message yet",
+        "scp.anc.scteIn": "Check an SCTE-35 section (hex or base64)",
+        "scp.anc.decode": "Check",
+        "scp.anc.dup": "duplicate",
+        "scp.anc.bad": "input is neither hex nor base64",
+        "scp.anc.recent": "Latest packets"
     },
   };
   const lang = document.documentElement.lang === "en" ? "en" : "de";
@@ -239,6 +337,68 @@ class OmpScopePanel extends HTMLElement {
       .chip.alarm { border-color: #6b2c2f; background: #3a1d1f; color: #ff7b72; }
       .chip .title { font-weight: 600; display: block; }
       .chip .detail { font-size: 10px; opacity: .85; font-variant-numeric: tabular-nums; }
+
+      /* ANC / SCTE */
+      .anc-status { font-size: 11px; color: #9aa; margin: 2px 0 6px 0; }
+      table.anc td, table.anc th { white-space: normal; }
+      table.anc tr.sel td { background: #1c2230; }
+      table.anc tr.type { cursor: pointer; }
+      table.anc td.name { text-align: left; color: #ddd; }
+      table.anc .std { color: #777; font-size: 9px; display: block; }
+      table.anc .bad { color: #ff7b72; }
+      .anc-detail, .scte-event { background: #16181d; border: 1px solid #2a2f37; border-radius: 5px; padding: 6px 8px; margin: 4px 0; font-size: 11px; }
+      .anc-detail .t, .scte-event .t { font-weight: 600; color: #cdd; }
+      .anc-detail .kv, .scte-event .kv { display: grid; grid-template-columns: max-content 1fr; gap: 1px 10px; margin: 3px 0 3px 8px; }
+      .anc-detail .kv span:nth-child(odd), .scte-event .kv span:nth-child(odd) { color: #8a9; }
+      .anc-detail .kv span:nth-child(even), .scte-event .kv span:nth-child(even) { word-break: break-word; font-variant-numeric: tabular-nums; }
+      .scte-event .op { margin: 4px 0 2px 10px; padding-left: 8px; border-left: 2px solid #345; }
+      .scte-event .warn, .anc-detail .warn { color: #e3b341; }
+      .scte-event .src { color: #789; font-size: 10px; }
+      .anc-errors { font-size: 11px; color: #e3b341; margin: 2px 0; }
+      .anc-errors span.n { color: #999; }
+      .scte-in { display: flex; gap: 4px; margin-top: 6px; }
+      .scte-in input { flex: 1; min-width: 0; background: #0f1115; color: #eee; border: 1px solid #343941; border-radius: 4px; padding: 3px 6px; font-size: 11px; }
+      .scte-in button { background: #23262c; color: #ddd; border: 1px solid #343941; border-radius: 4px; padding: 3px 10px; font-size: 11px; cursor: pointer; }
+
+      /* Tabs */
+      .tabs {
+        display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid #2a2f37;
+        position: sticky; top: 0; background: #101216; z-index: 2; margin-bottom: 8px;
+      }
+      .tab {
+        padding: 7px 10px; font-size: 12px; cursor: pointer; color: #9aa; background: none; border: none;
+        border-bottom: 2px solid transparent; font-family: inherit;
+      }
+      .tab:hover { color: #dde; }
+      .tab.active { color: #fff; border-bottom-color: #4ec3ff; font-weight: 600; }
+      .tab .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-left: 5px; vertical-align: middle; }
+      .tab .dot.bad { background: #e5534b; }
+      .tab .dot.warn { background: #e3b341; }
+      .tab .dot.ok { background: #3fb950; }
+      .pane[hidden] { display: none; }
+      .hintbox { font-size: 11px; color: #9aa; background: #16181d; border: 1px dashed #343941; border-radius: 5px; padding: 8px 10px; margin: 6px 0; }
+      .srcrow { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border: 1px solid #2a2f37; border-radius: 5px; margin: 3px 0; background: #16181d; font-size: 12px; }
+      .srcrow .led { width: 9px; height: 9px; border-radius: 50%; background: #555; flex: none; }
+      .srcrow.on .led { background: #3fb950; box-shadow: 0 0 5px #3fb95099; }
+      .srcrow .k { color: #9aa; width: 78px; flex: none; }
+      .srcrow .v { color: #ddd; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+      .card { border: 1px solid #343941; background: #23262c; border-radius: 5px; padding: 7px 9px; font-size: 11px; cursor: pointer; }
+      .card .t { color: #9aa; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+      .card .v { font-size: 14px; font-weight: 600; color: #ddd; margin-top: 2px; }
+      .card.ok { border-color: #2c5a38; background: #16301d; }
+      .card.ok .v { color: #4ec36f; }
+      .card.bad { border-color: #6b2c2f; background: #3a1d1f; }
+      .card.bad .v { color: #ff7b72; }
+      .card.warn { border-color: #6b5420; background: #33280f; }
+      .card.warn .v { color: #e3b341; }
+      .filters { display: flex; gap: 4px; margin: 4px 0 6px; }
+      .filters button { background: #23262c; color: #aab; border: 1px solid #343941; border-radius: 12px; padding: 2px 10px; font-size: 11px; cursor: pointer; }
+      .filters button.on { background: #1d3050; color: #fff; border-color: #3b6ea8; }
+      details.scte-event > summary { cursor: pointer; list-style: none; }
+      details.scte-event > summary::-webkit-details-marker { display: none; }
+      details.scte-event > summary .sum { color: #cdd; font-weight: 600; }
+      details.scte-event > summary .brief { color: #9ab; font-size: 10px; display: block; margin-top: 1px; }
     `;
 
     const token = localStorage.getItem("omp-auth-token");
@@ -269,7 +429,8 @@ class OmpScopePanel extends HTMLElement {
     const previewUrl = () => withToken(`/api/v1/nodes/${nodeId}/stream/previewUrl?_=${Date.now()}`);
     img.src = previewUrl();
     this._previewInterval = setInterval(() => {
-      if (!img.complete) return;
+      // Das Messbild wird nur geholt, solange der Tab „Video“ offen ist (spart Last auf Node und Orchestrator).
+      if (!img.complete || this._tab !== "video") return;
       img.src = previewUrl();
     }, 200);
 
@@ -464,26 +625,243 @@ class OmpScopePanel extends HTMLElement {
       measured.row(label, 1);
     }
 
-    shadow.append(
-      style,
-      img,
-      status,
-      section("A/V-Timing (Lipsync)", T("scp.f488c4")),
-      syncBox,
-      section(T("scp.ee42eb")),
-      chips,
-      section(T("scp.e71d24")),
-      meterRow,
-      section(T("scp.00f47c")),
-      lufsGrid,
-      r128Wrap,
-      section("MXL-Transport", T("scp.d00749")),
-      transport.table,
-      section("MXL-Flow", T("scp.42889b")),
-      decl.table,
-      section(T("scp.4a876b")),
-      measured.table,
-    );
+    // --- ANC / SCTE ---
+    const ancStatus = document.createElement("div");
+    ancStatus.className = "anc-status";
+    const ancTable = document.createElement("table");
+    ancTable.className = "anc";
+    const ancDetail = document.createElement("div");
+    const ancErrors = document.createElement("div");
+    ancErrors.className = "anc-errors";
+    const scteLog = document.createElement("div");
+    const scteIn = document.createElement("div");
+    scteIn.className = "scte-in";
+    const scteInput = document.createElement("input");
+    scteInput.placeholder = T("scp.anc.scteIn");
+    const scteBtn = document.createElement("button");
+    scteBtn.textContent = T("scp.anc.decode");
+    scteIn.append(scteInput, scteBtn);
+    scteBtn.addEventListener("click", async () => {
+      const text = scteInput.value.trim();
+      if (!text) return;
+      const res = await fetch(`/api/v1/nodes/${nodeId}/params/scte35Input`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: text }),
+      });
+      if (!res.ok) scteInput.title = T("scp.anc.bad");
+      else scteInput.value = "";
+      refresh();
+    });
+    let ancSelected = null;
+    const el = (tag, cls, text) => {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text !== undefined) e.textContent = text;
+      return e;
+    };
+    const scteStat = el("div", "anc-status");
+    let scteFilter = "all";
+    const filters = el("div", "filters");
+    const filterBtns = {};
+    for (const [k, label] of [["all", T("scp.scte.all")], ["104", "SCTE 104"], ["35", "SCTE 35"]]) {
+      const b = el("button", k === "all" ? "on" : "", label);
+      b.addEventListener("click", () => {
+        scteFilter = k;
+        for (const [kk, bb] of Object.entries(filterBtns)) bb.className = kk === k ? "on" : "";
+        if (lastAnc) renderAnc(lastAnc);
+      });
+      filterBtns[k] = b;
+      filters.appendChild(b);
+    }
+    const collectWarnings = (d) => d.warnings.concat(...d.children.map(collectWarnings));
+    const shortTitle = (d) => d.title.replace("SCTE 104 ", "").replace("SCTE 35 ", "").replace("multiple_operation_message", "multiple operation").replace("splice_info_section", "splice info");
+    const BRIEF_KEYS = ["splice_insert_type", "out_of_network_indicator", "splice_event_id", "segmentation_type_id", "pre_roll_time", "break_duration", "segmentation_duration", "pts_time"];
+    const briefOf = (d) => {
+      const found = {};
+      const walk = (x) => {
+        for (const [k, v] of x.fields) if (BRIEF_KEYS.includes(k) && !(k in found)) found[k] = v;
+        x.children.forEach(walk);
+      };
+      walk(d);
+      return BRIEF_KEYS.filter((k) => k in found).map((k) => `${found[k]}`.replace(/ \(.*$/, (m) => (k === "segmentation_type_id" || k === "splice_insert_type" || k === "out_of_network_indicator" ? m : ""))).join(" · ");
+    };
+    const renderDecoded = (d, container, top) => {
+      const box = el("div", top ? "" : "op");
+      box.appendChild(el("div", "t", d.title));
+      if (d.fields.length) {
+        const kv = el("div", "kv");
+        for (const [k, v] of d.fields) kv.append(el("span", "", k), el("span", "", v));
+        box.appendChild(kv);
+      }
+      for (const w of d.warnings) box.appendChild(el("div", "warn", "⚠ " + w));
+      for (const c of d.children) renderDecoded(c, box, false);
+      container.appendChild(box);
+    };
+    const hex2 = (n) => "0x" + Number(n).toString(16).toUpperCase().padStart(2, "0");
+    const renderAnc = (r) => {
+      if (!r) return;
+      if (!r.connected) ancStatus.textContent = T("scp.anc.none");
+      else {
+        ancStatus.textContent = T("scp.anc.status", { p0: int(r.frames), p1: int(r.packets), p2: fmt(r.packetsPerSec, 1) }) +
+          ` · ${T("scp.anc.empty")} ${int(r.emptyFrames)} · ${T("scp.anc.gaps")} ${int(r.indexGaps)}`;
+      }
+      // Typ-Tabelle
+      ancTable.replaceChildren();
+      const head = el("tr");
+      for (const h of [T("scp.anc.typ"), "DID/SDID", T("scp.anc.count"), T("scp.anc.rate"), T("scp.anc.pos"), "DC", T("scp.anc.err")]) head.appendChild(el("th", "", h));
+      ancTable.appendChild(head);
+      for (const t of r.types) {
+        const tr = el("tr", "type" + (ancSelected === `${t.did}/${t.sdid}` ? " sel" : ""));
+        const name = el("td", "name", t.name);
+        name.appendChild(el("span", "std", t.standard));
+        const errs = t.parityErrors + t.checksumErrors + (t.seqGaps || 0);
+        const e = el("td", errs ? "bad" : "", errs ? `${t.parityErrors}P ${t.checksumErrors}C${t.seqGaps ? " " + t.seqGaps + "S" : ""}` : "0");
+        tr.append(name, el("td", "", `${hex2(t.did)}/${hex2(t.sdid)}`), el("td", "", int(t.count)), el("td", "", t.active ? fmt(t.perSec, 1) : "–"),
+          el("td", "", `${t.line}/${t.offset} ${t.channel[0]}`), el("td", "", t.dcMin === t.dcMax ? `${t.dcMax}` : `${t.dcMin}–${t.dcMax}`), e);
+        tr.addEventListener("click", () => { ancSelected = ancSelected === `${t.did}/${t.sdid}` ? null : `${t.did}/${t.sdid}`; renderAnc(lastAnc); });
+        ancTable.appendChild(tr);
+      }
+      // Detail des gewählten Typs
+      ancDetail.replaceChildren();
+      const sel = r.types.find((t) => `${t.did}/${t.sdid}` === ancSelected);
+      if (sel && sel.decoded) {
+        const box = el("div", "anc-detail");
+        renderDecoded(sel.decoded, box, true);
+        ancDetail.appendChild(box);
+      }
+      // Fehler
+      ancErrors.replaceChildren();
+      if (r.errors.length) for (const e of r.errors) {
+        const line = el("div", "", "⚠ " + e.message + " ");
+        line.appendChild(el("span", "n", `×${e.count}`));
+        ancErrors.appendChild(line);
+      }
+      // SCTE-Ablauf
+      scteLog.replaceChildren();
+      const sc = r.scte;
+      scteStat.textContent = `SCTE 104: ${int(sc.messages104)} · SCTE 35: ${int(sc.sections35)} · ${T("scp.anc.err")}: ${int(sc.errors104 + sc.errors35)}`;
+      const evs = sc.events.filter((ev) => scteFilter === "all" || (scteFilter === "104" ? ev.source.includes("104") : ev.source.includes("35")));
+      if (!evs.length) scteLog.appendChild(el("div", "hintbox", T("scp.anc.scteNone")));
+      evs.forEach((ev, i) => {
+        const box = el("details", "scte-event");
+        if (i < 2) box.open = true;
+        const sum = el("summary");
+        const when = new Date(ev.atMs).toLocaleTimeString(LOCALE) + "." + String(ev.atMs % 1000).padStart(3, "0");
+        sum.appendChild(el("div", "src", `${when} · ${ev.source}${ev.duplicate ? " · " + T("scp.anc.dup") : ""}${ev.line != null ? " · L" + ev.line : ""}`));
+        const warnN = collectWarnings(ev.decoded).length;
+        sum.appendChild(el("span", "sum", (warnN ? "⚠ " : "") + shortTitle(ev.decoded)));
+        const brief = briefOf(ev.decoded);
+        if (brief) sum.appendChild(el("span", "brief", brief));
+        box.appendChild(sum);
+        renderDecoded(ev.decoded, box, true);
+        scteLog.appendChild(box);
+      });
+    };
+    let lastAnc = null;
+
+    // --- Tabs ---------------------------------------------------------------
+    const hintBox = (key) => el("div", "hintbox", T(key));
+    const hintVideo = hintBox("scp.hint.video");
+    const hintAudio = hintBox("scp.hint.audio");
+    const hintAnc = hintBox("scp.hint.anc");
+    const hintScte = hintBox("scp.hint.anc");
+    const hintTiming = hintBox("scp.hint.timing");
+
+    // Übersicht: Quellen, Alarme, Kurzurteile mit Sprung in den passenden Tab
+    const mkSrc = (labelKey) => {
+      const row = el("div", "srcrow");
+      const led = el("span", "led");
+      const k = el("span", "k", T(labelKey));
+      const v = el("span", "v", T("scp.src.none"));
+      row.append(led, k, v);
+      return { row, v };
+    };
+    const srcVideo = mkSrc("scp.src.video");
+    const srcAudio = mkSrc("scp.src.audio");
+    const srcAnc = mkSrc("scp.src.anc");
+    const mkCard = (titleKey, tab) => {
+      const c = el("div", "card idle");
+      const t = el("div", "t", T(titleKey));
+      const v = el("div", "v", "–");
+      c.append(t, v);
+      c.addEventListener("click", () => selectTab(tab));
+      c.title = T("scp.ov.go");
+      return { c, v };
+    };
+    const cardSync = mkCard("scp.ov.lipsync", "timing");
+    const cardLoud = mkCard("scp.ov.loud", "audio");
+    const cardAnc = mkCard("scp.ov.anc", "anc");
+    const cardScte = mkCard("scp.ov.scte", "scte");
+    const cards = el("div", "cards");
+    cards.append(cardSync.c, cardLoud.c, cardAnc.c, cardScte.c);
+
+    const TABS = [
+      ["ov", "scp.tab.ov"],
+      ["video", "scp.tab.video"],
+      ["audio", "scp.tab.audio"],
+      ["timing", "scp.tab.timing"],
+      ["flow", "scp.tab.flow"],
+      ["anc", "scp.tab.anc"],
+      ["scte", "scp.tab.scte"],
+    ];
+    const panes = {
+      ov: [section(T("scp.ov.sources")), srcVideo.row, srcAudio.row, srcAnc.row, section(T("scp.ov.alarms")), chips, section(T("scp.ov.checks")), cards],
+      video: [hintVideo, img, status],
+      audio: [hintAudio, section(T("scp.e71d24")), meterRow, section(T("scp.00f47c")), lufsGrid, r128Wrap],
+      timing: [hintTiming, section("A/V-Timing (Lipsync)", T("scp.f488c4")), syncBox, section("MXL-Transport", T("scp.d00749")), transport.table],
+      flow: [section("MXL-Flow", T("scp.42889b")), decl.table, section(T("scp.4a876b")), measured.table],
+      anc: [hintAnc, ancStatus, ancTable, ancDetail, section(T("scp.anc.errors")), ancErrors],
+      scte: [hintScte, scteStat, filters, section(T("scp.scte.in")), scteIn, el("div", "anc-status", T("scp.scte.udp")), section(T("scp.anc.scte")), scteLog],
+    };
+    const tabBar = el("div", "tabs");
+    const tabBtn = {};
+    const tabDot = {};
+    const paneEl = {};
+    for (const [id, key] of TABS) {
+      const b = el("button", "tab");
+      b.append(document.createTextNode(T(key)));
+      const dot = el("span", "dot");
+      dot.style.display = "none";
+      b.appendChild(dot);
+      b.addEventListener("click", () => selectTab(id));
+      tabBtn[id] = b;
+      tabDot[id] = dot;
+      tabBar.appendChild(b);
+      const pane = el("div", "pane");
+      for (const node of panes[id]) pane.appendChild(node);
+      paneEl[id] = pane;
+    }
+    const selectTab = (id) => {
+      if (!paneEl[id]) id = "ov";
+      this._tab = id;
+      try { localStorage.setItem("omp-scope-tab", id); } catch { /* ohne Speicher: nur nicht merken */ }
+      for (const [k, pane] of Object.entries(paneEl)) {
+        pane.hidden = k !== id;
+        tabBtn[k].classList.toggle("active", k === id);
+      }
+      if (id === "video") img.src = previewUrl();
+    };
+    let stored = "ov";
+    try { stored = localStorage.getItem("omp-scope-tab") || "ov"; } catch { /* egal */ }
+    this._tab = paneEl[stored] ? stored : "ov";
+
+    shadow.append(style, tabBar, ...Object.values(paneEl));
+    selectTab(this._tab);
+
+    // Alarm-Punkt an einem Tab: "bad" rot, "warn" gelb, "ok" grün, leer = nichts
+    const setDot = (id, state) => {
+      tabDot[id].style.display = state ? "" : "none";
+      tabDot[id].className = "dot" + (state ? " " + state : "");
+    };
+    const setCard = (card, text, state) => {
+      card.v.textContent = text;
+      card.c.className = "card " + state;
+    };
+    const setSrc = (src, connected, text) => {
+      src.row.classList.toggle("on", connected);
+      src.v.textContent = connected ? text : T("scp.src.none");
+    };
 
     const setBadge = (el, text, state) => {
       el.textContent = text;
@@ -614,6 +992,50 @@ class OmpScopePanel extends HTMLElement {
       set1(T("scp.6d7bfd"), m.audioSourceLabel || T("scp.08fd3e"));
       set1(T("scp.0ab6cb"), num(m.audioSampleRate) === undefined ? undefined : `${int(m.audioSampleRate)} Hz`);
       set1(T("scp.45cef4"), m.audioChannels ?? undefined);
+
+      // ANC / SCTE
+      if (typeof m.ancReport === "string") {
+        try {
+          lastAnc = JSON.parse(m.ancReport);
+          renderAnc(lastAnc);
+        } catch {
+          /* unvollständige Antwort: beim nächsten Takt wieder */
+        }
+      }
+
+      // Übersicht, Hinweise und Alarm-Punkte
+      const hasV = !!m.videoConnectedFlowId, hasA = !!m.audioConnectedFlowId, hasN = !!m.ancConnectedFlowId;
+      setSrc(srcVideo, hasV, `${m.videoSourceLabel || m.videoConnectedFlowId}${m.videoWidth ? " · " + m.videoWidth + "×" + m.videoHeight : ""}${m.videoFramerate ? " @ " + m.videoFramerate : ""}`);
+      setSrc(srcAudio, hasA, `${m.audioSourceLabel || m.audioConnectedFlowId}${num(m.audioSampleRate) ? " · " + int(m.audioSampleRate) + " Hz" : ""}${m.audioChannels ? " · " + m.audioChannels + " ch" : ""}`);
+      setSrc(srcAnc, hasN, `${(m.ancConnectedFlowId || "").slice(0, 8)}…${lastAnc ? " · " + int(lastAnc.packets) + " pkt" : ""}`);
+      hintVideo.style.display = hasV ? "none" : "";
+      hintAudio.style.display = hasA ? "none" : "";
+      hintAnc.style.display = hasN ? "none" : "";
+      hintScte.style.display = hasN || (lastAnc && lastAnc.scte.sections35 > 0) ? "none" : "";
+      hintTiming.style.display = hasV && hasA ? "none" : "";
+
+      const vBad = m.videoBlackDetected === true || m.videoFreezeDetected === true;
+      const aBad = m.audioSilenceDetected === true;
+      const syncBad = (m.avSyncVerdict || "").startsWith("außerhalb");
+      const r128Bad = !["unbekannt", "R 128 erfüllt"].includes(m.loudnessR128Verdict || "unbekannt");
+      setDot("video", vBad ? "bad" : "");
+      setDot("audio", aBad ? "bad" : r128Bad ? "warn" : "");
+      setDot("timing", syncBad ? "bad" : "");
+      const ancErr = lastAnc ? lastAnc.errors.filter((e) => !e.message.startsWith("SCTE")).reduce((n, e) => n + e.count, 0) + (lastAnc.indexGaps || 0) : 0;
+      setDot("anc", ancErr ? "warn" : "");
+      const scteErr = lastAnc ? lastAnc.scte.errors104 + lastAnc.scte.errors35 : 0;
+      setDot("scte", scteErr ? "warn" : lastAnc && lastAnc.scte.events.length ? "ok" : "");
+      setDot("ov", vBad || aBad || syncBad ? "bad" : "");
+
+      const sv = m.avSyncVerdict || "unbekannt";
+      setCard(cardSync, vt(sv), sv.startsWith("innerhalb") ? "ok" : sv.startsWith("außerhalb") ? "bad" : "idle");
+      const lv = m.loudnessR128Verdict || "unbekannt";
+      setCard(cardLoud, vt(lv), lv === "R 128 erfüllt" ? "ok" : lv === "unbekannt" ? "idle" : "bad");
+      if (lastAnc) {
+        setCard(cardAnc, hasN ? `${lastAnc.types.length} · ${fmt(lastAnc.packetsPerSec, 1)}/s${ancErr ? " ⚠" : ""}` : "–", !hasN ? "idle" : ancErr ? "warn" : "ok");
+        const n = lastAnc.scte.messages104 + lastAnc.scte.sections35;
+        setCard(cardScte, n ? `${int(n)} ${T("scp.messages")}${scteErr ? " ⚠" : ""}` : "–", scteErr ? "warn" : n ? "ok" : "idle");
+      }
     };
     refresh();
     this._metaInterval = setInterval(refresh, 1000);

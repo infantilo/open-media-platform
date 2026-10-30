@@ -160,7 +160,7 @@
     "runner": "process",
     "command": ["../nodes/target/release/omp-scope"],
     "env": {},
-    "description": "Passiver Mess-Tap für Video (Waveform/Vektorskop, Schwarzbild-/Standbild-Erkennung), Audio (Peak/RMS, EBU-R128-Lautheit, True Peak nach BS.1770, Stille-Erkennung) und MXL-Timing (Transportlatenz/Jitter/Kadenz aus den Grain-Ursprungszeitstempeln, A/V-Versatz nach EBU R 37) plus die Flow-Deklaration aus der MXL-Domain — kein Ausgang, reines Analysegerät.",
+    "description": "Passiver Mess-Tap für Video (Waveform/Vektorskop, Schwarzbild-/Standbild-Erkennung), Audio (Peak/RMS, EBU-R128-Lautheit, True Peak nach BS.1770, Stille-Erkennung) und MXL-Timing (Transportlatenz/Jitter/Kadenz aus den Grain-Ursprungszeitstempeln, A/V-Versatz nach EBU R 37) plus die Flow-Deklaration aus der MXL-Domain und ein ANC-/SCTE-Analysator (jeder ANC-Pakettyp, entschlüsselt CEA-708, AFD, SCTE 104 und SCTE 35) — kein Ausgang, reines Analysegerät, bedienbar in Tabs.",
     "i18n": { "en": {"label": "Meter (Scope)", "description": "Passive measurement tap for video (waveform/vectorscope, black/freeze detection), audio (peak/RMS, EBU R128 loudness, true peak per BS.1770, silence detection) and MXL timing (transport latency/jitter/cadence from the grain origin timestamps, A/V offset per EBU R 37) plus the flow declaration from the MXL domain — no output, pure analysis device.", "expectedResources": "low"} },
     "expectedResources": "gering"
   },

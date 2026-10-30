@@ -29,6 +29,7 @@
 //! keine gegatete Integrated-Loudness-Sonderbehandlung über die von
 //! `ebur128` bereits gelieferte hinaus.
 
+mod anc;
 mod audio_pipeline;
 mod flowmeta;
 mod qc;
@@ -108,7 +109,34 @@ impl ReceiverControl for AudioControl {
     }
 }
 
+struct AncControl {
+    registry: RegistryClient,
+    context: Arc<MxlContext>,
+    analyzer: Arc<anc::AncAnalyzer>,
+}
+
+impl ReceiverControl for AncControl {
+    fn apply(&self, resource: &ReceiverResource) {
+        match (&resource.sender_id, resource.master_enable) {
+            (Some(sender_id), true) => match self.registry.get_sender(sender_id) {
+                Ok(sender) => match sender.flow_id {
+                    Some(flow_id) => {
+                        if let Err(e) = self.analyzer.connect(self.context.clone(), &flow_id) {
+                            eprintln!("omp-scope: ANC-Eingang {flow_id}: {e}");
+                        }
+                    }
+                    None => eprintln!("omp-scope: anc sender {sender_id} has no flow_id"),
+                },
+                Err(e) => eprintln!("omp-scope: resolve anc sender {sender_id} failed: {e}"),
+            },
+            _ => self.analyzer.disconnect(),
+        }
+    }
+}
+
 struct ScopeStore {
+    anc_connection: Arc<ReceiverConnection<AncControl>>,
+    anc: Arc<anc::AncAnalyzer>,
     preview_url: String,
     levels_url: String,
     video_connection: Arc<ReceiverConnection<VideoControl>>,
@@ -214,6 +242,15 @@ impl ParamStore for ScopeStore {
             readonly_number("audioFlowChannelCount", None),
             readonly_number("audioFlowBitrateMbps", Some("Mbit/s")),
             readonly_string("audioFlowGroupHint"),
+            // --- ANC / SCTE ---
+            readonly_string("ancConnectedFlowId"),
+            readonly_number("ancFrames", None),
+            readonly_number("ancPackets", None),
+            readonly_number("ancScteMessages", None),
+            readonly_number("ancErrors", None),
+            readonly_string("ancReport"),
+            // Schreibbar: SCTE-35-Abschnitt (Hex oder Base64) zur Einzelprüfung; das Ergebnis steht im ancReport (Ablauf „SCTE-35 (manuell)“)
+            ParamSpec { name: "scte35Input".to_string(), kind: ParamType::String, unit: None, range: None, readonly: false },
             // --- QC-Alarme ---
             readonly_bool("videoBlackDetected"),
             readonly_number("videoBlackSeconds", Some("s")),
@@ -297,6 +334,15 @@ impl ParamStore for ScopeStore {
             "audioFlowBitrateMbps" => Some(opt_f64_json(flowmeta::audio_bitrate_mbps(&self.audio_measurements.flow()))),
             "audioFlowGroupHint" => Some(opt_string_json(self.audio_measurements.flow().grouphint)),
 
+            // --- ANC / SCTE ---
+            "ancConnectedFlowId" => Some(serde_json::json!(self.anc.flow_id())),
+            "ancFrames" => Some(serde_json::json!(self.anc.counters().0)),
+            "ancPackets" => Some(serde_json::json!(self.anc.counters().1)),
+            "ancScteMessages" => Some(serde_json::json!(self.anc.counters().2)),
+            "ancErrors" => Some(serde_json::json!(self.anc.counters().3)),
+            "ancReport" => Some(serde_json::json!(self.anc.snapshot().to_string())),
+            "scte35Input" => Some(serde_json::json!("")),
+
             // --- QC-Alarme ---
             "videoBlackDetected" => Some(serde_json::json!(self.video_measurements.qc().black)),
             "videoBlackSeconds" => Some(opt_f64_json(self.video_measurements.qc().black_seconds)),
@@ -315,8 +361,18 @@ impl ParamStore for ScopeStore {
         }
     }
 
-    fn set(&self, _name: &str, _value: Value) -> Result<(), SetError> {
-        Err(SetError::ReadOnly)
+    fn set(&self, name: &str, value: Value) -> Result<(), SetError> {
+        if name != "scte35Input" {
+            return Err(SetError::ReadOnly);
+        }
+        let text = value.as_str().ok_or(SetError::Unknown)?;
+        match omp_mediaio::scte_decode::parse_section_text(text) {
+            Some(bytes) => {
+                self.anc.add_scte35(&bytes, "SCTE-35 (manuell)");
+                Ok(())
+            }
+            None => Err(SetError::Unknown),
+        }
     }
 
     fn invoke(&self, _name: &str, _args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
@@ -354,6 +410,27 @@ impl ParamStore for ScopeStore {
                 content_type: "application/json",
                 body: serde_json::to_vec(&Value::Object(values)).unwrap_or_else(|_| b"{}".to_vec()),
             });
+        }
+        if method == "GET" && path.split('?').next() == Some("/anc") {
+            return Some(RawResponse {
+                status: 200,
+                content_type: "application/json",
+                body: serde_json::to_vec(&self.anc.snapshot()).unwrap_or_else(|_| b"{}".to_vec()),
+            });
+        }
+        // Einen SCTE-35-Abschnitt von Hand prüfen: Body = Hex (auch mit Leerzeichen/0x) oder Base64.
+        if method == "POST" && path.split('?').next() == Some("/scte35/decode") {
+            let text = String::from_utf8_lossy(body).to_string();
+            return Some(match omp_mediaio::scte_decode::parse_section_text(&text) {
+                Some(bytes) => {
+                    let d = self.anc.add_scte35(&bytes, "SCTE-35 (manuell)");
+                    RawResponse { status: 200, content_type: "application/json", body: serde_json::to_vec(&anc::decoded_to_json(&d)).unwrap_or_default() }
+                }
+                None => RawResponse { status: 400, content_type: "text/plain", body: b"weder Hex noch Base64".to_vec() },
+            });
+        }
+        if let Some((status, content_type, body)) = self.anc_connection.handle(method, path, body) {
+            return Some(RawResponse { status, content_type, body });
         }
         if let Some((status, content_type, body)) = self.video_connection.handle(method, path, body) {
             return Some(RawResponse { status, content_type, body });
@@ -559,6 +636,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             connected_label: video_connected_label.clone(),
         },
     ));
+    let anc_receiver_id = omp_node_sdk::idgen::new_v4();
+    let anc_analyzer = Arc::new(anc::AncAnalyzer::new());
+    let anc_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let anc_udp_thread = match std::env::var("OMP_SCOPE_SCTE35_UDP") {
+        Ok(addr) if !addr.is_empty() => match anc::spawn_scte35_udp(&addr, anc_analyzer.clone(), anc_shutdown.clone()) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                eprintln!("omp-scope: {e}");
+                None
+            }
+        },
+        _ => None,
+    };
+    let anc_connection = Arc::new(ReceiverConnection::new(
+        anc_receiver_id.clone(),
+        AncControl {
+            registry: RegistryClient::new(registry_url.clone()),
+            context: Arc::new(MxlContext::new(&domain)?),
+            analyzer: anc_analyzer.clone(),
+        },
+    ));
     let audio_connection = Arc::new(ReceiverConnection::new(
         audio_receiver_id.clone(),
         AudioControl {
@@ -571,8 +669,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let media_ready_video = video_handle.clone();
     let media_ready_audio = audio_handle.clone();
+    let media_ready_anc = anc_analyzer.clone();
 
     let store: Arc<dyn ParamStore> = Arc::new(ScopeStore {
+        anc_connection,
+        anc: anc_analyzer.clone(),
         preview_url,
         levels_url,
         video_connection,
@@ -609,13 +710,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     media_types: Some(vec!["audio/float32".to_string()]),
                     ..Default::default()
                 },
+                omp_node_sdk::ReceiverSpec {
+                    id: Some(anc_receiver_id),
+                    transport: Some(TRANSPORT_MXL.to_string()),
+                    media_types: Some(vec!["video/smpte291".to_string()]),
+                    label: Some("ANC / SCTE".to_string()),
+                    ..Default::default()
+                },
             ],
             instance_id,
             // "media-ready" (ARCHITECTURE.md §5 Punkt 6): bereits nützlich,
             // sobald MINDESTENS einer der beiden unabhängigen Taps ein
             // echtes Signal liefert — ein Messgerät mit nur Video ODER nur
             // Audio verbunden zeigt trotzdem sinnvolle Messwerte an.
-            media_ready: omp_node_sdk::MediaReadySource::Probe(Arc::new(move || media_ready_video.media_ready() || media_ready_audio.media_ready())),
+            media_ready: omp_node_sdk::MediaReadySource::Probe(Arc::new(move || media_ready_video.media_ready() || media_ready_audio.media_ready() || media_ready_anc.flowed())),
         },
         store,
     )
@@ -634,6 +742,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     eprintln!("omp-scope: shutdown requested");
     video_shutdown.store(true, Ordering::Relaxed);
     audio_shutdown.store(true, Ordering::Relaxed);
+    anc_shutdown.store(true, Ordering::Relaxed);
+    if let Some(t) = anc_udp_thread {
+        let _ = t.join();
+    }
     let _ = video_thread.join();
     let _ = audio_thread.join();
     drop(handle);

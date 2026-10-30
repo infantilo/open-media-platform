@@ -1568,8 +1568,41 @@ Der Node-Typ **Messgerät (Scope)** (`omp-scope`) ist ein passives
 Messgerät: er hängt sich an einen Video- und/oder einen Audio-Flow, ohne
 selbst etwas zu senden. Sie starten ihn wie jeden anderen Node aus dem
 Katalog und ziehen im Flow Editor eine Verbindung von der Quelle auf
-seinen Video- bzw. Audio-Eingang — beide Eingänge sind unabhängig, einer
-allein reicht. Ein Klick auf die Kachel öffnet das Messpanel.
+seinen Video-, Audio- bzw. ANC-/SCTE-Eingang — die drei Eingänge sind
+unabhängig, einer allein reicht. Ein Klick auf die Kachel öffnet das
+Messpanel.
+
+**Aufbau des Panels (Tabs):** *Übersicht* (Quellen mit Status, Alarme für
+Schwarzbild/Standbild/Stille, Kurzurteile zu Lipsync, Lautheit, ANC und SCTE —
+ein Klick auf eine Karte springt in den passenden Tab), *Video* (Waveform und
+Vektorskop), *Audio* (Pegel und EBU-R-128-Lautheit), *Timing* (Lipsync und
+MXL-Transport), *Flow* (Deklaration des Schreibers, gemessene Werte), *ANC*
+(alle Pakettypen) und *SCTE* (Marker). Ein roter oder gelber Punkt am Tab zeigt
+einen Alarm bzw. Fehler, auch wenn ein anderer Tab offen ist. Fehlt eine
+Verbindung, steht im Tab ein Hinweis, was zu verbinden ist. Der zuletzt offene
+Tab wird gemerkt; das Messbild wird nur geholt, solange der Tab *Video* offen ist.
+
+**ANC und SCTE:** Der Eingang „ANC / SCTE“ nimmt einen MXL-Daten-Flow
+(`video/smpte291`), z. B. den Text- oder CEA-608-Ausgang des Auto-Untertitel-
+Nodes oder den SCTE-104-Ausgang des SCTE-Nodes. Der Tab *ANC* listet **jeden**
+Pakettyp (DID/SDID) mit Name und Norm, Anzahl, Rate, Zeile/Offset,
+Nutzdatenlänge sowie Paritäts-, Prüfsummen- und Folgefehlern; ein Klick auf eine
+Zeile zeigt die letzten Nutzdaten, bei bekannten Typen entschlüsselt
+(CEA-708-CDP mit Kopf, Prüfsumme und Untertiteltext, AFD, OMP-Text), bei
+unbekannten als Rohdaten. Fehlerhafte Pakete und Strukturfehler werden gezählt
+und aufgelistet, statt den Rest zu verwerfen. Der Tab *SCTE* zeigt den
+Ablauf: **SCTE 104** aus ANC (über mehrere Pakete zusammengesetzt, Duplikate
+gekennzeichnet, jede Operation entschlüsselt: Splice mit Typ, Event-ID,
+Pre-Roll, Dauer und Auto-Return, Time-Signal, Segmentierungsdescriptor mit UPID
+und Typ) und **SCTE 35** (`splice_info_section` mit CRC-Prüfung, `splice_insert`,
+`time_signal`, Descriptoren). SCTE-35-Abschnitte kommen aus einem UDP-Eingang
+(Option *SCTE-35-Eingang (UDP)*, z. B. die UDP-Ausgabe des SCTE-Nodes) oder
+werden im Tab von Hand als Hex oder Base64 eingegeben. Ältere Einträge sind
+eingeklappt und zeigen eine Kurzzeile; ein Filter trennt SCTE 104 und 35.
+*Grenzen:* Der Decoder ist nur gegen selbst erzeugte Nachrichten geprüft, nicht
+gegen Aufzeichnungen fremder Geräte; Zeitcode-Pakete (ATC) und die Details von
+SCTE-104-Spezialoperationen erscheinen als Rohdaten; verschlüsseltes SCTE 35
+wird erkannt, aber nicht entschlüsselt.
 
 ![Messgerät: Waveform/Vektorskop, A/V-Timing (Lipsync) und die Signalüberwachung](screenshots/scope-messgeraet.png)
 

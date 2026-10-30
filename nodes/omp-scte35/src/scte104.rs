@@ -286,4 +286,45 @@ mod tests {
         let p = crate::splice::parse(&sec).unwrap();
         assert_eq!((p.event_id, p.out_of_network, p.duration_ms), (Some(77), Some(true), Some(30_000)));
     }
+
+    /// Gegenprobe: der allgemeine Messgeräte-Decoder (`omp_mediaio::scte_decode`) liest, was dieser Erzeuger schreibt —
+    /// SCTE 104 und SCTE 35, alle Cue-Arten, ohne Warnung.
+    #[test]
+    fn meter_decoder_reads_everything_the_generator_writes() {
+        use omp_mediaio::scte_decode as dec;
+        let cues = [
+            Cue::Out { event_id: 0x0102_0304, duration_ms: Some(30_000), auto_return: true, lead_ms: 4000 },
+            Cue::In { event_id: 77, lead_ms: 2000 },
+            Cue::Cancel { event_id: 9 },
+            Cue::Signal { event_id: 5, type_id: 0x30, duration_ms: Some(20_000), upid: b"AD-1234".to_vec(), lead_ms: 1000 },
+        ];
+        for cue in cues {
+            let msg = encode_mom(&cue.to_scte104(0).unwrap(), 4).unwrap();
+            let d104 = dec::scte104(&msg);
+            assert!(d104.all_warnings().is_empty(), "{cue:?}: {:?}", d104.all_warnings());
+            assert_eq!(d104.get("message_number"), Some("4"));
+            assert!(!d104.children.is_empty());
+            let sec = cue.to_scte35(0).unwrap();
+            let d35 = dec::scte35(&sec);
+            assert!(d35.all_warnings().is_empty(), "{cue:?}: {:?}", d35.all_warnings());
+            assert_eq!(d35.get("CRC-32"), Some("gültig"));
+        }
+        let out = Cue::Out { event_id: 0x0102_0304, duration_ms: Some(30_000), auto_return: true, lead_ms: 4000 };
+        let d = dec::scte104(&encode_mom(&out.to_scte104(0).unwrap(), 1).unwrap());
+        assert_eq!(d.children[0].get("splice_event_id"), Some("16909060"));
+        assert_eq!(d.children[0].get("break_duration"), Some("30.0 s"));
+        assert_eq!(d.children[0].get("pre_roll_time"), Some("4000 ms"));
+        let s = dec::scte35(&out.to_scte35(0).unwrap());
+        assert_eq!(s.children[0].get("splice_event_id"), Some("16909060"));
+        assert!(s.children[0].get("break_duration").unwrap().contains("30.000 s"));
+        assert_eq!(s.children[0].get("auto_return"), Some("true"));
+        // ANC-Weg: Pakete → Assembler → Decoder
+        let msg = encode_mom(&out.to_scte104(0).unwrap(), 2).unwrap();
+        let mut asm = dec::Scte104Assembler::default();
+        let mut got = None;
+        for p in crate::anc::scte104_packets(&msg, 9, 0, false) {
+            got = asm.feed(&p.udw).unwrap();
+        }
+        assert_eq!(got.unwrap().bytes, msg);
+    }
 }
