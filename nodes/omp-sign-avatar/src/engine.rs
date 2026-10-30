@@ -19,11 +19,14 @@ pub struct EngineConfig {
     pub max_delay_ms: f64,
     /// Mindestdauer der Text-Einblendung (Rückfall); sonst `70 ms` je Zeichen.
     pub min_overlay_ms: f64,
+    /// Rückfall bei zu vielen unbekannten Wörtern: `false` = nur Text einblenden, `true` = den Satz buchstabieren (Fingeralphabet)
+    /// und den Text zur Kontrolle dazu einblenden.
+    pub fallback_spell: bool,
 }
 
 impl Default for EngineConfig {
     fn default() -> Self {
-        EngineConfig { speed: 1.0, allow_unverified: false, max_delay_ms: 8000.0, min_overlay_ms: 2500.0 }
+        EngineConfig { speed: 1.0, allow_unverified: false, max_delay_ms: 8000.0, min_overlay_ms: 2500.0, fallback_spell: false }
     }
 }
 
@@ -83,6 +86,14 @@ impl Engine {
 
     pub fn set_speed(&mut self, speed: f32) {
         self.cfg.speed = speed.clamp(0.25, 4.0);
+    }
+
+    pub fn set_fallback_spell(&mut self, spell: bool) {
+        self.cfg.fallback_spell = spell;
+    }
+
+    pub fn fallback_spell(&self) -> bool {
+        self.cfg.fallback_spell
     }
 
     pub fn stats(&self) -> Stats {
@@ -177,11 +188,16 @@ impl Engine {
         self.stats.last_glosses = q.sentence.glosses.iter().map(gloss_label).collect::<Vec<_>>().join(" ");
         if q.sentence.text_fallback {
             self.stats.fallbacks += 1;
-            let ms = (q.sentence.text.chars().count() as f64 * 70.0).max(self.cfg.min_overlay_ms);
-            let mut tl = Timeline::new(ms as f32);
-            tl.finish(0.0, 0.0);
+            let tl = if self.cfg.fallback_spell {
+                Timeline::spell(&q.sentence.text, speed * 1.25)
+            } else {
+                let ms = (q.sentence.text.chars().count() as f64 * 70.0).max(self.cfg.min_overlay_ms);
+                let mut tl = Timeline::new(ms as f32);
+                tl.finish(0.0, 0.0);
+                tl
+            };
             self.cur = Some(Current { timeline: tl, started_ms: now_ms, overlay: Some(q.sentence.text.clone()) });
-            self.stats.last_glosses = String::from("(Text)");
+            self.stats.last_glosses = String::from(if self.cfg.fallback_spell { "(Buchstabiert)" } else { "(Text)" });
         } else {
             self.stats.signed += 1;
             self.cur = Some(Current { timeline: self.build(&q.sentence, speed), started_ms: now_ms, overlay: None });
@@ -303,5 +319,23 @@ mod tests {
         e.play_now(Timeline::spell("ab", 1.0), 100.0);
         assert!(!e.idle() || e.cur.is_some());
         assert_ne!(e.tick(100.0 + 1000.0).pose, Pose::REST);
+    }
+
+    #[test]
+    fn fallback_spell_fingerspells_unknown_sentences_with_text_shown() {
+        let mut e = Engine::new(Arc::new(Lexicon::default()), Rules::default_rules(), EngineConfig { fallback_spell: true, ..Default::default() });
+        e.submit("Kanzler eröffnet Ausstellung.", 0.0);
+        e.tick(0.0);
+        assert_eq!(e.stats().last_glosses, "(Buchstabiert)");
+        let first = e.tick(100.0);
+        assert_eq!(first.overlay.as_deref(), Some("Kanzler eröffnet Ausstellung."));
+        let mut moved = false;
+        let rest = e.tick(100.0).pose;
+        for t in (200..3000).step_by(40) {
+            if e.tick(t as f64).pose != rest {
+                moved = true;
+            }
+        }
+        assert!(moved, "Hände bewegen sich beim Buchstabieren");
     }
 }

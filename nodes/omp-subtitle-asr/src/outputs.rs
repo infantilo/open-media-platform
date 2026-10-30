@@ -155,3 +155,55 @@ mod live_tests {
         assert!(non_null > 0, "keine Untertitel-Daten im Strom");
     }
 }
+
+#[cfg(test)]
+mod loopback_tests {
+    use super::*;
+    use omp_mediaio::mxl::{MxlContext, SubtitleInput};
+    use std::sync::mpsc::channel;
+    use std::time::{Duration, Instant};
+
+    fn libmxl_available() -> bool {
+        std::env::var("LD_LIBRARY_PATH").unwrap_or_default().contains("mxl")
+    }
+
+    fn wait_for(input: &SubtitleInput, expect: &str) -> bool {
+        let t0 = Instant::now();
+        while t0.elapsed() < Duration::from_secs(8) {
+            if input.text().contains(expect) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        false
+    }
+
+    /// Text-Strom und CEA-608-Strom des Nodes über echtes MXL in den Untertitel-Eingang (wie bei Viewer und Gebärden-Avatar).
+    #[test]
+    fn subtitle_input_reads_both_outputs_of_the_node() {
+        if !libmxl_available() {
+            return;
+        }
+        let domain = std::env::temp_dir().join(format!("omp-mxl-sub-loop-{}", std::process::id()));
+        std::fs::create_dir_all(&domain).unwrap();
+        let ctx = Arc::new(MxlContext::new(&domain.to_string_lossy()).unwrap());
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let rate = (25u32, 1u32);
+        for (cea, id) in [(false, "5a1b0000-0000-4000-8000-000000000001"), (true, "5a1b0000-0000-4000-8000-000000000002")] {
+            let out = MxlDataOutput::new(ctx.clone(), id, "Test", "Test", rate.0, rate.1).unwrap();
+            let (tx, rx) = channel();
+            let (hb, fr) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
+            let h = if cea { spawn_cea(out, rate, rx, shutdown.clone(), hb, fr).unwrap() } else { spawn_text(out, rx, shutdown.clone(), hb, fr) };
+            let input = SubtitleInput::new();
+            input.connect(ctx.clone(), id).unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+            tx.send("Heute regnet es nicht.".to_string()).unwrap();
+            assert!(wait_for(&input, "Heute regnet"), "{}: Untertitel-Eingang liefert den Text nicht (text={:?}, flowed={})", if cea { "CEA-608" } else { "Text-Strom" }, input.text(), input.flowed());
+            shutdown.store(true, Ordering::Relaxed);
+            drop(tx);
+            h.join().unwrap();
+            shutdown.store(false, Ordering::Relaxed);
+        }
+        let _ = std::fs::remove_dir_all(&domain);
+    }
+}

@@ -327,6 +327,7 @@ impl ParamStore for SignStore {
             latency: None,
             parameters: vec![
                 p("auto", ParamType::Boolean, None, false),
+                p("fallback", ParamType::String, None, false),
                 p("speed", ParamType::Number, Some(Range::Number { min: 0.25, max: 4.0 }), false),
                 p("text", ParamType::String, None, false),
                 p("subtitle", ParamType::String, None, true),
@@ -349,6 +350,7 @@ impl ParamStore for SignStore {
             "auto" => Some(Value::from(self.shared.auto.load(Ordering::Relaxed))),
             "text" => Some(Value::from(self.text.lock().expect("lock poisoned").clone())),
             "speed" => Some(Value::from(*self.speed.lock().expect("lock poisoned"))),
+            "fallback" => Some(Value::from(if self.shared.engine.lock().expect("lock poisoned").fallback_spell() { "spell" } else { "text" })),
             "subtitle" => Some(Value::from(self.shared.subtitle.text())),
             "subtitleFlowId" => Some(Value::from(self.shared.subtitle.connected_flow_id())),
             "lexicon" => Some(Value::from(self.lexicon_info.clone())),
@@ -370,6 +372,15 @@ impl ParamStore for SignStore {
         match name {
             "auto" => {
                 self.shared.auto.store(value.as_bool().ok_or(SetError::Unknown)?, Ordering::Relaxed);
+                Ok(())
+            }
+            "fallback" => {
+                let spell = match value.as_str() {
+                    Some("spell") => true,
+                    Some("text") => false,
+                    _ => return Err(SetError::Unknown),
+                };
+                self.shared.engine.lock().expect("lock poisoned").set_fallback_spell(spell);
                 Ok(())
             }
             "text" => {
@@ -450,7 +461,7 @@ async fn run_node_async(w: usize, h: usize, ss: usize) -> Result<(), Box<dyn std
     let engine = engine::Engine::new(
         Arc::new(lex),
         rules,
-        engine::EngineConfig { allow_unverified, max_delay_ms, ..Default::default() },
+        engine::EngineConfig { allow_unverified, max_delay_ms, fallback_spell: env_or("OMP_SIGN_FALLBACK", "text") == "spell", ..Default::default() },
     );
 
     let subtitle_context = Arc::new(omp_mediaio::mxl::MxlContext::new(&domain)?);

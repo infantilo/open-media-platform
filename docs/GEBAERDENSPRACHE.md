@@ -134,6 +134,32 @@ Entscheidung des Nutzers: gleich auf **Produktivqualität** hin bauen (kein Wegw
 **Noch nicht möglich, bewusst nicht vorgetäuscht:** ein **freigegebenes Lexikon** (braucht Aufnahmen/Mitarbeit von Gebärdenden — mit dem mitgelieferten Beispiel läuft alles über Buchstabieren/Text), **geprüfte Regeln** und ein **geprüftes Fingeralphabet**. Nicht manuelle Marker außer Kopf (Brauen/Mund) und weiches Skinning folgen mit den echten Daten (Phase 3).
 Test am echten Ausgang: Satz mit Beispiel-Lexikon gebärdet (`translate`), überwiegend unbekannter Satz erscheint als Text im Fill-Flow (geprüft am MXL-Ausgang).
 
+## 7c. Warum der Avatar nicht gebärdet, und die Datenfrage (2026-10-30)
+
+**Befund:** Der ANC-Weg ist in Ordnung. Ein Test über echtes MXL (`outputs.rs`, `subtitle_input_reads_both_outputs_of_the_node`) schickt Text-Strom und CEA-608-Strom des Untertitel-Nodes in den Untertitel-Eingang; beide liefern den Text. Der Avatar „reagiert“ trotzdem nicht, weil das Lexikon leer bzw. nur mit nicht freigegebenen Einträgen gefüllt ist: Jedes Wort ist unbekannt, die Unbekannt-Quote liegt über `maxUnknownRatio` (0,5), der Satz fällt auf den Rückfall — bisher nur Text-Einblendung, keine Handbewegung.
+
+**Rückfall wählbar (Option `OMP_SIGN_FALLBACK`, Parameter `fallback`):** `text` (Standard, wie bisher) oder `spell` — der Satz wird mit dem Fingeralphabet buchstabiert, der Text bleibt zur Kontrolle sichtbar. Das ist die ehrliche Lösung ohne Daten: Der Avatar bewegt sich, ohne dass erfundene Gebärden gezeigt werden. Das Fingeralphabet ist noch nicht von Gebärdenden geprüft (s. 7b); Buchstabieren ganzer Sätze ist langsam und für Gehörlose schwer lesbar, es bleibt eine Notlösung (Namen, einzelne Begriffe).
+
+**Datenquellen, geprüft (Stand 2026-10-30) — keine ist für ein Produkt frei nutzbar:**
+
+| Quelle | Inhalt | Lizenz | Nutzbar? |
+|---|---|---|---|
+| SignAvatars (ECCV 2024) | 3D-Bewegungsdaten (u. a. DGS) | CC BY-NC-SA, Nutzung nur auf Anfrage für Forschung; Lizenzanfrage an die Autoren | nein (nicht kommerziell); Rückfrage bei den Rechteinhabern möglich |
+| DGS-Korpus (Hamburg) | Videos, Annotationen | CC BY-NC / Forschungslizenz | nein |
+| Dicta-Sign | mehrsprachiges Lexikon | CC BY-NC-ND 4.0 | nein |
+| 3DZSignDB (Algerisch), tschechische Mocap-Korpora | SiGML bzw. Mocap | CC BY-NC | nein, falsche Sprache |
+| Sign-Language-Mocap-Archive (Studio Galt) | Mocap | CC0 | Lizenz ja, aber überwiegend amerikanische Gebärdensprache — für DGS unbrauchbar |
+| MMS Player | Wiedergabe-Software | GPL-3.0 | nicht einbindbar (Apache-2.0-Projekt) |
+| HamNoSys / SiGML / JASigning | Notation und Player | nicht geprüft | offen |
+
+**Konsequenz:** Ein frei lizenziertes DGS-Lexikon mit Bewegungsdaten gibt es nach dieser Recherche nicht. Es bleiben drei Wege, die sich ergänzen:
+
+1. **Lizenz anfragen** bei den Rechteinhabern (SignAvatars-Autoren, DGS-Korpus) für den kommerziellen Einsatz; Daten wären Bewegungsdaten eines fremden Skeletts und müssten auf unser Skelett umgesetzt werden (Retargeting-Werkzeug nötig).
+2. **Eigenes Lexikon mit Gebärdenden** (Aufnahmen oder Authoring am Avatar), Freigabe `verified` durch Gebärdende. Aus Videos lassen sich Handhaltungen offline mit einem Apache-lizenzierten Schätzverfahren gewinnen; der Node selbst bleibt ohne Schätzer.
+3. **Bis dahin:** Rückfall `spell` für Namen/Fachbegriffe plus Text-Einblendung.
+
+Die Entscheidung zwischen 1 und 2 (und ob ein Authoring-Editor gebaut wird) liegt beim Nutzer.
+
 ## 8. Weitere Phasen (Entwurf)
 
 - **Phase 2:** Untertitel-Eingang, Satzbildung, Glossen-Regeln (s. 3) mit Fachleuten, kleines Lexikon (≈100 Gebärden) aus Aufnahmen.

@@ -2227,6 +2227,29 @@
       ]
     },
     {
+      "key": "OMP_SIGN_FALLBACK",
+      "i18n": {
+        "en": {
+          "label": "Fallback for unknown words",
+          "description": "What happens to a sentence that contains too many words without an approved sign: show only the text, or finger-spell the sentence (manual alphabet) with the text shown for control. Without an approved lexicon every sentence is a fallback.",
+          "group": "Translation"
+        }
+      },
+      "label": "Rückfall bei unbekannten Wörtern",
+      "type": "enum",
+      "description": "Was mit einem Satz geschieht, der zu viele Wörter ohne freigegebene Gebärde enthält: nur den Text einblenden oder den Satz buchstabieren (Fingeralphabet), der Text bleibt zur Kontrolle sichtbar. Ohne freigegebenes Lexikon ist jeder Satz ein Rückfall.",
+      "default": "text",
+      "group": "Übersetzung",
+      "choices": [
+        {
+          "value": "text"
+        },
+        {
+          "value": "spell"
+        }
+      ]
+    },
+    {
       "key": "OMP_SIGN_PANEL",
       "i18n": {
         "en": {
