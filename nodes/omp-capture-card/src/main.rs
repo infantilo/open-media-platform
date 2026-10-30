@@ -1,31 +1,25 @@
-//! omp-capture-card: Blackmagic-DeckLink-SDI/IP-Capture-Karte ⇄ MXL
-//! (`UMSETZUNG.md` D10). Gerichtet je Instanz
-//! (`OMP_CARD_DIRECTION=ingest|output`, gleiches Muster wie
-//! `omp-srt-gateway`/`omp-2110-gateway`):
+//! omp-capture-card: SDI/IP-Capture-Karte ⇄ MXL (`UMSETZUNG.md` D10, Kap. 76).
 //!
-//! - **Ingest** (Teil 1, Default): Karte → MXL, reine Live-Quelle wie
-//!   `omp-source` (`nodes/omp-source/src/main.rs`, hier als Vorlage
-//!   übernommen), aber echte Hardware-Erfassung statt `videotestsrc`/
-//!   `audiotestsrc`. Modus/Gerät fix per Env-Var (`OMP_CARD_*`).
-//! - **Output** (Teil 2): MXL → Karte, Quellwahl per echtem IS-05-
-//!   Receiver-PATCH (Flow-Editor drag&drop), gleiches Muster wie
-//!   `omp-2110-gateway`s Output-Richtung + `omp-recorder`s zwei
-//!   unabhängige Video-/Audio-Receiver (Details `pipeline.rs`-Moduldoku).
+//! **Eine Instanz je Karte, alle gewählten Ports** (wie der Geräte-Hub): `OMP_CARD_PORTS="0:in,0:out,1:in"`
+//! erzeugt je Eingang einen Video- und einen Audio-Sender (Karte → MXL) und je Ausgang drei IS-05-Empfänger
+//! (Video, Audio, ANC/Untertitel; MXL → Karte). Duplex-Ports bekommen Eingang UND Ausgang gleichzeitig.
+//! Die Auswahl trifft der Start-Assistent anhand der erkannten, freien Anschlüsse.
 //!
-//! Mehrfach instanziierbar (`OMP_LABEL`/`OMP_PORT`), je eine Instanz pro
-//! Gerät (`OMP_CARD_DEVICE_NUMBER` oder stabiler `OMP_CARD_
-//! PERSISTENT_ID`) und Richtung. **Duplex-Karten** (DeckLink IP, SDI mit
-//! `*-full`-Profil, `OMP_CARD_PROFILE`) erfassen und geben gleichzeitig
-//! aus: eine Ingest- und eine Output-Instanz DERSELBEN Karte sind dort
-//! ausdrücklich vorgesehen. Nur Half-Duplex-Profile erlauben je Teilgerät
-//! eine Richtung (Blackmagic-Treiber-Grenze, kein OMP-Check dafür).
+//! Hersteller (`OMP_CARD_VENDOR=decklink|aja|custom`, s. `card.rs`): dieselbe Pipeline-Logik für Blackmagic
+//! DeckLink, AJA und SDK-Karten mit eigenem GStreamer-Plugin (Matrox). `--list-cards` gibt die erkannten
+//! Anschlüsse als JSON aus (Host-Agent, `detect.rs`).
+//!
+//! Zustand (BCP-008): ein gemeinsamer Monitor je Instanz — mit Eingängen als Empfänger (Link = alle Eingänge
+//! haben Signal), sonst als Sender. Einzelwerte je Port stehen als `in<N>.…`/`out<N>.…`-Parameter.
 
 mod captions;
 mod card;
+mod detect;
 mod pipeline;
+mod ports;
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -43,206 +37,47 @@ use omp_node_sdk::{
     ParamType, Range, RawResponse, ReceiverSpec, SenderSpec, SetError,
 };
 use pipeline::SAMPLE_RATE;
+use ports::{Dir, PortSel};
 use serde_json::Value;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Direction {
-    Ingest,
-    Output,
-}
 
 fn env_or(key: &str, fallback: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| fallback.to_string())
 }
 
-/// AMWA IS-08 (`UMSETZUNG.md` D18) — s. `omp-aes67-gateway::main::
-/// generic_channels`-Doku (bewusst dupliziert, gleiche Begründung).
+/// AMWA IS-08 (`UMSETZUNG.md` D18) — s. `omp-aes67-gateway::main::generic_channels`-Doku.
 fn generic_channels(count: u32) -> Vec<Channel> {
     (1..=count.max(1)).map(|n| Channel { label: format!("Channel {n}") }).collect()
 }
 
-/// S. `omp-aes67-gateway::main::SinkMatrixApply`-Doku.
-struct IngestMatrixApply(pipeline::IngestHandle);
-impl ChannelMapApply for IngestMatrixApply {
-    fn apply(&self, _output_id: &str, map: &BTreeMap<u32, MapEntry>) {
-        self.0.set_channel_map(map);
-    }
+/// IS-08-Ausgänge aller Ports in einer Zuordnung: die Ausgangs-ID (`mxl-audio-out-<N>` bzw. `sdi-out-<N>`)
+/// bestimmt, welche Pipeline die Matrix bekommt.
+struct MatrixApply {
+    ingest: HashMap<String, pipeline::IngestHandle>,
+    output: HashMap<String, pipeline::OutputPipelineHandle>,
 }
-
-/// S. `omp-aes67-gateway::main::SourceMatrixApply`-Doku.
-struct OutputMatrixApply(pipeline::OutputPipelineHandle);
-impl ChannelMapApply for OutputMatrixApply {
-    fn apply(&self, _output_id: &str, map: &BTreeMap<u32, MapEntry>) {
-        self.0.set_channel_map(map.clone());
-    }
-}
-
-// ---------------------------------------------------------------------
-// Ingest (Teil 1)
-// ---------------------------------------------------------------------
-
-/// Generisch über den `ChannelMapApply`-Typ (`UMSETZUNG.md` D18) — nicht
-/// weil es je eine zweite Produktions-Implementierung bräuchte (`main()`
-/// nutzt immer `IngestMatrixApply`), sondern damit der bestehende
-/// `bcp008_tests::store()`-Testaufbau ohne echtes GStreamer/Hardware
-/// auskommt (`IngestHandle`s Felder sind absichtlich `pipeline.rs`-
-/// privat, ein Test-Dummy dafür würde diese Kapselung durchbrechen; ein
-/// `NoopApply`-Test-Double braucht dagegen kein GStreamer).
-struct IngestStore<A: ChannelMapApply> {
-    flow_id: String,
-    audio_flow_id: String,
-    device_number: i32,
-    mode: String,
-    audio_channels: u32,
-    signal: Arc<AtomicBool>,
-    /// AMWA BCP-008-01 (NMOS Receiver Status Monitoring, `docs/
-    /// decisions.md` BCP-008-Nachtrag): Ingest empfängt echtes SDI/IP-
-    /// Signal über die Karte, ist also der "Receiver" dieser Instanz.
-    /// Immer aktiv (keine Enable/Disable-Semantik wie bei Output),
-    /// `monitor.activate()` direkt nach dem Pipeline-Start.
-    monitor: Arc<omp_node_sdk::Monitor>,
-    /// AMWA IS-08 (`UMSETZUNG.md` D18).
-    channel_mapping: Arc<ChannelMapping<A>>,
-}
-
-impl<A: ChannelMapApply> ParamStore for IngestStore<A> {
-    fn descriptor(&self) -> Descriptor {
-        let mut parameters = vec![
-            ParamSpec {
-                name: "direction".to_string(),
-                kind: ParamType::String,
-                unit: None,
-                range: None,
-                readonly: true,
-            },
-            ParamSpec {
-                name: "signal".to_string(),
-                kind: ParamType::Boolean,
-                unit: None,
-                range: None,
-                readonly: true,
-            },
-            ParamSpec {
-                name: "deviceNumber".to_string(),
-                kind: ParamType::Number,
-                unit: None,
-                range: None,
-                readonly: true,
-            },
-            ParamSpec {
-                name: "mode".to_string(),
-                kind: ParamType::Enum,
-                unit: None,
-                range: Some(Range::Enum {
-                    values: pipeline::SUPPORTED_MODES.iter().map(|m| m.to_string()).collect(),
-                }),
-                readonly: true,
-            },
-            ParamSpec {
-                name: "audioChannels".to_string(),
-                kind: ParamType::Number,
-                unit: None,
-                range: None,
-                readonly: true,
-            },
-            ParamSpec {
-                name: "flowId".to_string(),
-                kind: ParamType::String,
-                unit: None,
-                range: None,
-                readonly: true,
-            },
-            ParamSpec {
-                name: "audioFlowId".to_string(),
-                kind: ParamType::String,
-                unit: None,
-                range: None,
-                readonly: true,
-            },
-        ];
-        parameters.extend(self.monitor.param_specs("monitor"));
-        Descriptor {
-            // Eine Hardware-Erfassung setzt selbst den Ursprung, wie
-            // omp-source (dortige Begründung 1:1 übernommen) — keine
-            // zusätzliche Latenz messbar, da es keinen MXL-Eingang gibt.
-            latency: Some(LatencyInfo {
-                video: Some(LatencyRange { min_latency_frames: 0, max_latency_frames: 0 }),
-                audio: None,
-                data: None,
-                supports_delay_compensation: false,
-            }),
-            parameters,
-            methods: self.monitor.method_specs("monitor"),
+impl ChannelMapApply for MatrixApply {
+    fn apply(&self, output_id: &str, map: &BTreeMap<u32, MapEntry>) {
+        if let Some(h) = self.ingest.get(output_id) {
+            h.set_channel_map(map);
+        } else if let Some(h) = self.output.get(output_id) {
+            h.set_channel_map(map.clone());
         }
-    }
-
-    fn get(&self, name: &str) -> Option<Value> {
-        match name {
-            "direction" => Some(serde_json::json!("ingest")),
-            "signal" => Some(serde_json::json!(self.signal.load(Ordering::Relaxed))),
-            "deviceNumber" => Some(serde_json::json!(self.device_number)),
-            "mode" => Some(serde_json::json!(self.mode)),
-            "audioChannels" => Some(serde_json::json!(self.audio_channels)),
-            "flowId" => Some(serde_json::json!(self.flow_id)),
-            "audioFlowId" => Some(serde_json::json!(self.audio_flow_id)),
-            // Keine Paketverlust-Erkennung auf SDI/IP-Hardware-Ebene
-            // verfügbar (anders als `omp-2110-gateway`s `rtpjitter
-            // buffer`) — leere Zählerliste statt erfundener Werte.
-            _ => self.monitor.get("monitor", name, None, Vec::new),
-        }
-    }
-
-    fn set(&self, name: &str, value: Value) -> Result<(), SetError> {
-        match self.monitor.set("monitor", name, &value) {
-            Some(true) => Ok(()),
-            Some(false) => Err(SetError::Unknown),
-            None => Err(SetError::Unknown),
-        }
-    }
-
-    fn invoke(
-        &self,
-        name: &str,
-        _args: &serde_json::Map<String, Value>,
-    ) -> Result<(), InvokeError> {
-        if self.monitor.invoke("monitor", name) {
-            Ok(())
-        } else {
-            Err(InvokeError::Unknown)
-        }
-    }
-
-    fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
-        self.channel_mapping
-            .handle(method, path, body)
-            .map(|(status, content_type, body)| RawResponse { status, content_type, body })
-    }
-
-    fn extra_options(&self, path: &str) -> Option<Vec<&'static str>> {
-        self.channel_mapping.cors_methods(path)
     }
 }
 
 // ---------------------------------------------------------------------
-// Output (Teil 2)
+// Ausgang: IS-05-Empfänger
 // ---------------------------------------------------------------------
 
-/// Gemeinsam für Video- und Audio-Receiver (nur unterschiedlich, welche
-/// `OutputPipelineHandle`-Methode sie beim Verbinden/Trennen rufen) —
-/// löst `sender_id` über die Registry auf eine MXL-`flow_id` auf, genau
-/// wie `omp-2110-gateway::OutputControl`/`omp-recorder::
-/// RecorderReceiverControl`.
+/// Gemeinsam für Video- und Audio-Receiver eines Ausgangs-Ports — löst `sender_id` über die Registry auf eine
+/// MXL-`flow_id` auf (wie `omp-2110-gateway::OutputControl`/`omp-recorder`).
 struct OutputControl {
     registry: RegistryClient,
     pipeline: pipeline::OutputPipelineHandle,
     connected_flow_id: Arc<Mutex<String>>,
     is_video: bool,
-    /// S. `OutputStore::monitor`-Doku. Nur die Video-`OutputControl`
-    /// ruft `activate()`/`deactivate()` — Video ist die Anker-
-    /// Verbindung (Moduldoku oben: ohne sie baut `build_output` gar
-    /// keine Pipeline), Audio kann unabhängig kommen/gehen, ohne den
-    /// Aktivitätszustand des Senders selbst zu ändern.
-    monitor: Arc<omp_node_sdk::Monitor>,
+    /// Video ist die Anker-Verbindung des Ports: `true` bei Connect, `false` bei Disconnect (Aktivitätszähler).
+    on_video: Arc<dyn Fn(bool) + Send + Sync>,
 }
 
 impl ReceiverControl for OutputControl {
@@ -254,7 +89,7 @@ impl ReceiverControl for OutputControl {
                         *self.connected_flow_id.lock().expect("lock poisoned") = flow_id.clone();
                         if self.is_video {
                             self.pipeline.connect_video(flow_id);
-                            self.monitor.activate();
+                            (self.on_video)(true);
                         } else {
                             self.pipeline.connect_audio(flow_id);
                         }
@@ -267,7 +102,7 @@ impl ReceiverControl for OutputControl {
                 *self.connected_flow_id.lock().expect("lock poisoned") = String::new();
                 if self.is_video {
                     self.pipeline.disconnect_video();
-                    self.monitor.deactivate();
+                    (self.on_video)(false);
                 } else {
                     self.pipeline.disconnect_audio();
                 }
@@ -315,233 +150,257 @@ impl ReceiverControl for AncControl {
     }
 }
 
-struct OutputStore {
-    device_number: i32,
-    mode: String,
-    audio_channels: u32,
-    connected_video_flow_id: Arc<Mutex<String>>,
-    connected_audio_flow_id: Arc<Mutex<String>>,
-    video_connection: Arc<ReceiverConnection<OutputControl>>,
-    audio_connection: Arc<ReceiverConnection<OutputControl>>,
-    anc_connection: Arc<ReceiverConnection<AncControl>>,
-    connected_anc_flow_id: Arc<Mutex<String>>,
-    captions: Arc<captions::CaptionQueue>,
-    /// AMWA BCP-008-02 (NMOS Sender Status Monitoring) — Output sendet
-    /// echtes SDI/IP-Signal über die Karte, ist also der "Sender"
-    /// dieser Instanz. Aktiv/inaktiv folgt der Video-Receiver-
-    /// Verbindung (s. `OutputControl::apply`), nicht dem Prozess-
-    /// Lebenszyklus.
-    monitor: Arc<omp_node_sdk::Monitor>,
-    /// AMWA IS-08 (`UMSETZUNG.md` D18).
-    channel_mapping: Arc<ChannelMapping<OutputMatrixApply>>,
+
+// ---------------------------------------------------------------------
+// Laufzeitzustand je Port
+// ---------------------------------------------------------------------
+
+struct InPort {
+    device: i32,
+    flow_id: String,
+    audio_flow_id: String,
+    signal: Arc<AtomicBool>,
+    handle: pipeline::IngestHandle,
 }
 
-impl ParamStore for OutputStore {
+struct OutPort {
+    device: i32,
+    video: Arc<ReceiverConnection<OutputControl>>,
+    audio: Arc<ReceiverConnection<OutputControl>>,
+    anc: Arc<ReceiverConnection<AncControl>>,
+    connected_video: Arc<Mutex<String>>,
+    connected_audio: Arc<Mutex<String>>,
+    connected_anc: Arc<Mutex<String>>,
+    captions: Arc<captions::CaptionQueue>,
+}
+
+/// Teilt `in3.signal` in `("in", 3, "signal")`; `None` bei allem anderen.
+fn split_port_param(name: &str) -> Option<(&str, i32, &str)> {
+    let (head, rest) = name.split_once('.')?;
+    let (kind, num) = if let Some(n) = head.strip_prefix("in") {
+        ("in", n)
+    } else if let Some(n) = head.strip_prefix("out") {
+        ("out", n)
+    } else {
+        return None;
+    };
+    Some((kind, num.parse().ok()?, rest))
+}
+
+fn spec(name: String, kind: ParamType) -> ParamSpec {
+    ParamSpec { name, kind, unit: None, range: None, readonly: true }
+}
+
+struct CardStore<A: ChannelMapApply> {
+    vendor: String,
+    mode: String,
+    audio_channels: u32,
+    ports_text: String,
+    ins: Vec<InPort>,
+    outs: Vec<OutPort>,
+    monitor: Arc<omp_node_sdk::Monitor>,
+    channel_mapping: Arc<ChannelMapping<A>>,
+}
+
+impl<A: ChannelMapApply> ParamStore for CardStore<A> {
     fn descriptor(&self) -> Descriptor {
         let mut parameters = vec![
-            ParamSpec {
-                name: "direction".to_string(),
-                kind: ParamType::String,
-                unit: None,
-                range: None,
-                readonly: true,
-            },
-            ParamSpec {
-                name: "deviceNumber".to_string(),
-                kind: ParamType::Number,
-                unit: None,
-                range: None,
-                readonly: true,
-            },
+            spec("vendor".into(), ParamType::String),
             ParamSpec {
                 name: "mode".to_string(),
                 kind: ParamType::Enum,
                 unit: None,
-                range: Some(Range::Enum {
-                    values: pipeline::SUPPORTED_MODES.iter().map(|m| m.to_string()).collect(),
-                }),
+                range: Some(Range::Enum { values: pipeline::SUPPORTED_MODES.iter().map(|m| m.to_string()).collect() }),
                 readonly: true,
             },
-            ParamSpec {
-                name: "audioChannels".to_string(),
-                kind: ParamType::Number,
-                unit: None,
-                range: None,
-                readonly: true,
-            },
-            ParamSpec {
-                name: "connectedVideoFlowId".to_string(),
-                kind: ParamType::String,
-                unit: None,
-                range: None,
-                readonly: true,
-            },
-            ParamSpec {
-                name: "connectedAudioFlowId".to_string(),
-                kind: ParamType::String,
-                unit: None,
-                range: None,
-                readonly: true,
-            },
-            ParamSpec { name: "connectedAncFlowId".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
-            ParamSpec { name: "ancStats".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            spec("audioChannels".into(), ParamType::Number),
+            spec("ports".into(), ParamType::String),
         ];
+        for p in &self.ins {
+            let d = p.device;
+            parameters.push(spec(format!("in{d}.signal"), ParamType::Boolean));
+            parameters.push(spec(format!("in{d}.flowId"), ParamType::String));
+            parameters.push(spec(format!("in{d}.audioFlowId"), ParamType::String));
+        }
+        for p in &self.outs {
+            let d = p.device;
+            parameters.push(spec(format!("out{d}.connectedVideoFlowId"), ParamType::String));
+            parameters.push(spec(format!("out{d}.connectedAudioFlowId"), ParamType::String));
+            parameters.push(spec(format!("out{d}.connectedAncFlowId"), ParamType::String));
+            parameters.push(spec(format!("out{d}.ancStats"), ParamType::String));
+        }
         parameters.extend(self.monitor.param_specs("monitor"));
-        Descriptor { latency: None, parameters, methods: self.monitor.method_specs("monitor") }
+        Descriptor {
+            // Eine Hardware-Erfassung setzt selbst den Ursprung, wie omp-source.
+            latency: (!self.ins.is_empty()).then(|| LatencyInfo {
+                video: Some(LatencyRange { min_latency_frames: 0, max_latency_frames: 0 }),
+                audio: None,
+                data: None,
+                supports_delay_compensation: false,
+            }),
+            parameters,
+            methods: self.monitor.method_specs("monitor"),
+        }
     }
 
     fn get(&self, name: &str) -> Option<Value> {
         match name {
-            "direction" => Some(serde_json::json!("output")),
-            "connectedAncFlowId" => Some(serde_json::json!(*self.connected_anc_flow_id.lock().expect("lock poisoned"))),
-            "ancStats" => Some(serde_json::json!(
-                serde_json::json!({
-                    "embedded": self.captions.embedded.load(Ordering::Relaxed),
-                    "dropped": self.captions.dropped.load(Ordering::Relaxed),
-                })
-                .to_string()
-            )),
-            "deviceNumber" => Some(serde_json::json!(self.device_number)),
-            "mode" => Some(serde_json::json!(self.mode)),
-            "audioChannels" => Some(serde_json::json!(self.audio_channels)),
-            "connectedVideoFlowId" => Some(serde_json::json!(
-                *self.connected_video_flow_id.lock().expect("lock poisoned")
-            )),
-            "connectedAudioFlowId" => Some(serde_json::json!(
-                *self.connected_audio_flow_id.lock().expect("lock poisoned")
-            )),
-            // Kein Rückkanal von einem echten SDI-/IP-Empfänger — leere
-            // Zählerliste statt erfundener Werte (s. `IngestStore::get`).
-            _ => self.monitor.get("monitor", name, None, Vec::new),
+            "vendor" => return Some(serde_json::json!(self.vendor)),
+            "mode" => return Some(serde_json::json!(self.mode)),
+            "audioChannels" => return Some(serde_json::json!(self.audio_channels)),
+            "ports" => return Some(serde_json::json!(self.ports_text)),
+            _ => {}
         }
+        if let Some((kind, dev, field)) = split_port_param(name) {
+            let s = |m: &Mutex<String>| serde_json::json!(*m.lock().expect("lock poisoned"));
+            return match kind {
+                "in" => {
+                    let p = self.ins.iter().find(|p| p.device == dev)?;
+                    match field {
+                        "signal" => Some(serde_json::json!(p.signal.load(Ordering::Relaxed))),
+                        "flowId" => Some(serde_json::json!(p.flow_id)),
+                        "audioFlowId" => Some(serde_json::json!(p.audio_flow_id)),
+                        _ => None,
+                    }
+                }
+                _ => {
+                    let p = self.outs.iter().find(|p| p.device == dev)?;
+                    match field {
+                        "connectedVideoFlowId" => Some(s(&p.connected_video)),
+                        "connectedAudioFlowId" => Some(s(&p.connected_audio)),
+                        "connectedAncFlowId" => Some(s(&p.connected_anc)),
+                        "ancStats" => Some(serde_json::json!(
+                            serde_json::json!({
+                                "embedded": p.captions.embedded.load(Ordering::Relaxed),
+                                "dropped": p.captions.dropped.load(Ordering::Relaxed),
+                            })
+                            .to_string()
+                        )),
+                        _ => None,
+                    }
+                }
+            };
+        }
+        // Keine Paketverlust-Erkennung auf SDI/IP-Hardware-Ebene — leere Zählerliste statt erfundener Werte.
+        self.monitor.get("monitor", name, None, Vec::new)
     }
 
     fn set(&self, name: &str, value: Value) -> Result<(), SetError> {
         match self.monitor.set("monitor", name, &value) {
             Some(true) => Ok(()),
             Some(false) => Err(SetError::Unknown),
-            None => Err(SetError::ReadOnly),
+            None => Err(SetError::Unknown),
         }
     }
 
-    fn invoke(
-        &self,
-        name: &str,
-        _args: &serde_json::Map<String, Value>,
-    ) -> Result<(), InvokeError> {
-        if self.monitor.invoke("monitor", name) {
-            Ok(())
-        } else {
-            Err(InvokeError::Unknown)
-        }
+    fn invoke(&self, name: &str, _args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
+        if self.monitor.invoke("monitor", name) { Ok(()) } else { Err(InvokeError::Unknown) }
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
         let to_raw = |(status, content_type, body)| RawResponse { status, content_type, body };
-        root_discovery(method, path)
-            .or_else(|| {
-                list_ids(
-                    method,
-                    path,
-                    "receivers",
-                    &[self.video_connection.id(), self.audio_connection.id(), self.anc_connection.id()],
-                )
-            })
-            .or_else(|| bulk_discovery(method, path))
-            .or_else(|| {
-                bulk_patch(method, path, "receivers", body, |id, params| {
-                    if self.video_connection.id() == id {
-                        Some(self.video_connection.patch_staged(params).0)
-                    } else if self.audio_connection.id() == id {
-                        Some(self.audio_connection.patch_staged(params).0)
-                    } else if self.anc_connection.id() == id {
-                        Some(self.anc_connection.patch_staged(params).0)
-                    } else {
+        if !self.outs.is_empty() {
+            let ids: Vec<String> = self
+                .outs
+                .iter()
+                .flat_map(|o| [o.video.id().to_string(), o.audio.id().to_string(), o.anc.id().to_string()])
+                .collect();
+            let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+            let found = root_discovery(method, path)
+                .or_else(|| list_ids(method, path, "receivers", &id_refs))
+                .or_else(|| bulk_discovery(method, path))
+                .or_else(|| {
+                    bulk_patch(method, path, "receivers", body, |id, params| {
+                        for o in &self.outs {
+                            if o.video.id() == id {
+                                return Some(o.video.patch_staged(params).0);
+                            }
+                            if o.audio.id() == id {
+                                return Some(o.audio.patch_staged(params).0);
+                            }
+                            if o.anc.id() == id {
+                                return Some(o.anc.patch_staged(params).0);
+                            }
+                        }
                         None
-                    }
+                    })
                 })
-            })
-            .or_else(|| bulk_patch(method, path, "senders", body, |_, _| None))
-            .or_else(|| self.video_connection.handle(method, path, body))
-            .or_else(|| self.audio_connection.handle(method, path, body))
-            .or_else(|| self.anc_connection.handle(method, path, body))
-            .or_else(|| self.channel_mapping.handle(method, path, body))
-            .map(to_raw)
+                .or_else(|| bulk_patch(method, path, "senders", body, |_, _| None))
+                .or_else(|| {
+                    self.outs.iter().find_map(|o| {
+                        o.video.handle(method, path, body).or_else(|| o.audio.handle(method, path, body)).or_else(|| o.anc.handle(method, path, body))
+                    })
+                });
+            if let Some(r) = found {
+                return Some(to_raw(r));
+            }
+        }
+        self.channel_mapping.handle(method, path, body).map(to_raw)
     }
 
     fn extra_options(&self, path: &str) -> Option<Vec<&'static str>> {
-        self.video_connection
-            .cors_methods(path)
-            .or_else(|| self.audio_connection.cors_methods(path))
-            .or_else(|| self.anc_connection.cors_methods(path))
-            .or_else(|| bulk_cors_methods(path, "senders"))
-            .or_else(|| bulk_cors_methods(path, "receivers"))
+        self.outs
+            .iter()
+            .find_map(|o| o.video.cors_methods(path).or_else(|| o.audio.cors_methods(path)).or_else(|| o.anc.cors_methods(path)))
+            .or_else(|| if self.outs.is_empty() { None } else { bulk_cors_methods(path, "senders").or_else(|| bulk_cors_methods(path, "receivers")) })
             .or_else(|| self.channel_mapping.cors_methods(path))
     }
 }
 
-/// BCP-008-Tick für die Ingest-Richtung (`omp_node_sdk::MonitorKind::
-/// Receiver`) — s. `omp-2110-gateway::main::spawn_ingest_monitor_tick`-
-/// Doku (gleiche Kadenz/Begründung). `link`/`streamStatus` stützen sich
-/// hier auf `signal` (`decklinkvideosrc`s echtes Kabel-/Format-Lock-
-/// Signal, bereits vom Event-Loop aktuell gehalten, s. `Event::
-/// SignalChanged`) — anders als bei `omp-2110-gateway` gibt es hier
-/// tatsächlich ein physisches Link-Signal, kein `AllUp`-Dauerzustand.
-/// `connectionStatus` bekommt hier nur den optimistischen Healthy-Tick;
-/// die Verschlechterung kommt event-getrieben direkt aus dem
-/// `Event::Error`-Zweig der aufrufenden `main()` (kein GStreamer-Bus-
-/// Doppel-Poll nötig). `externalSynchronizationStatus` bleibt dauerhaft
-/// `NotUsed` (kein PTP-/Genlock-Signal in diesem Node verfügbar) — dafür
-/// bewusst kein `observe()`-Aufruf hier, `Monitor::new` startet ihn
-/// bereits neutral.
-fn spawn_decklink_monitor_tick(monitor: Arc<omp_node_sdk::Monitor>, signal: Arc<AtomicBool>) {
+/// BCP-008-Tick (1 s). Mit Eingängen: Link/Stream = alle Eingänge haben Signal. Nur Ausgänge: Inhalt = Bilder
+/// gehen an die Karte (nur solange ein Ausgang verbunden ist — sonst ist der Monitor `Neutral`).
+fn spawn_monitor_tick(
+    monitor: Arc<omp_node_sdk::Monitor>,
+    signals: Vec<(i32, Arc<AtomicBool>)>,
+    outs: Vec<pipeline::OutputPipelineHandle>,
+) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(1));
         loop {
             ticker.tick().await;
             let delay = monitor.status_reporting_delay();
-            let level = if signal.load(Ordering::Relaxed) {
-                omp_node_sdk::HealthLevel::Healthy
-            } else {
-                omp_node_sdk::HealthLevel::Unhealthy
-            };
-            monitor.link.observe(level, delay, Some("kein Eingangssignal (decklinkvideosrc::signal=false)"));
-            monitor.content.observe(level, delay, Some("kein Eingangssignal, kein dekodierbarer Stream"));
-            monitor.activity.observe(omp_node_sdk::HealthLevel::Healthy, delay, None);
+            if !signals.is_empty() {
+                let missing: Vec<String> =
+                    signals.iter().filter(|(_, s)| !s.load(Ordering::Relaxed)).map(|(d, _)| d.to_string()).collect();
+                let level = if missing.is_empty() { omp_node_sdk::HealthLevel::Healthy } else { omp_node_sdk::HealthLevel::Unhealthy };
+                let msg = format!("kein Eingangssignal an Eingang {}", missing.join(", "));
+                monitor.link.observe(level, delay, Some(&msg));
+                monitor.content.observe(level, delay, Some(&msg));
+                monitor.activity.observe(omp_node_sdk::HealthLevel::Healthy, delay, None);
+            } else if monitor.overall() != omp_node_sdk::HealthLevel::Neutral {
+                let level = if outs.iter().all(|o| o.media_ready()) { omp_node_sdk::HealthLevel::Healthy } else { omp_node_sdk::HealthLevel::Unhealthy };
+                monitor.content.observe(level, delay, Some("keine Bilder an die Karte seit dem letzten Tick"));
+                monitor.activity.observe(omp_node_sdk::HealthLevel::Healthy, delay, None);
+            }
         }
     });
 }
 
-/// BCP-008-Tick für die Output-Richtung (`omp_node_sdk::MonitorKind::
-/// Sender`) — s. `spawn_decklink_monitor_tick`-Doku. Kein physisches
-/// Link-Readback auf der Ausgangsseite dieser Karte verfügbar (anders
-/// als `signal` bei Ingest) — `linkStatus` bleibt deshalb dauerhaft auf
-/// seinem `Monitor::new`-Startwert `AllUp` (ehrliche Grenze, s.
-/// `docs/decisions.md` BCP-008-Nachtrag, gleiche Einschränkung wie bei
-/// `omp-2110-gateway`s Output-Richtung). Nur relevant, solange verbunden
-/// (`monitor.overall() == Neutral` prüft das, s. dortige Doku).
-fn spawn_output_monitor_tick(monitor: Arc<omp_node_sdk::Monitor>, pipeline: pipeline::OutputPipelineHandle) {
+enum NodeEvent {
+    Error(String),
+    Signal(i32, bool),
+}
+
+/// Leitet die Ereignisse einer Pipeline (ohne Port-Angabe) mit Portnummer an den gemeinsamen Kanal weiter.
+fn forward(device: i32, all: tokio::sync::mpsc::UnboundedSender<NodeEvent>) -> tokio::sync::mpsc::UnboundedSender<pipeline::Event> {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(Duration::from_secs(1));
-        loop {
-            ticker.tick().await;
-            if monitor.overall() == omp_node_sdk::HealthLevel::Neutral {
-                continue;
-            }
-            let delay = monitor.status_reporting_delay();
-            let level = if pipeline.media_ready() {
-                omp_node_sdk::HealthLevel::Healthy
-            } else {
-                omp_node_sdk::HealthLevel::Unhealthy
-            };
-            monitor.content.observe(level, delay, Some("keine Bilder an die Karte seit dem letzten Tick"));
-            monitor.activity.observe(omp_node_sdk::HealthLevel::Healthy, delay, None);
+        while let Some(e) = rx.recv().await {
+            let _ = all.send(match e {
+                pipeline::Event::Error(m) => NodeEvent::Error(m),
+                pipeline::Event::SignalChanged(ok) => NodeEvent::Signal(device, ok),
+            });
         }
     });
+    tx
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if std::env::args().any(|a| a == "--list-cards") {
+        println!("{}", detect::to_json(&detect::scan()));
+        return Ok(());
+    }
     card::set_backend_from_env()?;
     let label = env_or(
         "OMP_LABEL",
@@ -556,494 +415,363 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let registry_url = env_or("OMP_REGISTRY_URL", "http://127.0.0.1:8010");
     let nats_url = env_or("OMP_NATS_URL", "nats://localhost:4222");
     let domain = env_or("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl");
-    let device_number: i32 = env_or("OMP_CARD_DEVICE_NUMBER", "0").parse()?;
-    // Duplex-Karten (DeckLink IP, SDI-Profile `*-full`) erfassen und geben gleichzeitig aus: je Richtung eine Instanz,
-    // beide mit derselben Karte. `PERSISTENT_ID` (hat Vorrang vor der Gerätenummer) hält die Zuordnung bei mehreren
-    // Karten stabil; `PROFILE` wählt bei Mehr-Profil-Karten das Duplex-Profil (leer/`default` = unverändert).
+    let selected: Vec<PortSel> = ports::parse_ports(&env_or("OMP_CARD_PORTS", ""))?;
+    let ports_text = ports::format_ports(&selected);
+    // Duplex-Karten (DeckLink IP, SDI-Profile `*-full`) erfassen und geben gleichzeitig aus. `PERSISTENT_ID` (hat
+    // Vorrang vor der Gerätenummer) gilt nur, wenn die Instanz genau ein Gerät bedient; `PROFILE` wählt das
+    // Duplex-Profil der Karte (leer/`default` = unverändert).
     let persistent_id: Option<i64> = match env_or("OMP_CARD_PERSISTENT_ID", "").trim() {
         "" => None,
         v => Some(v.parse()?),
     };
+    let devices: std::collections::BTreeSet<i32> = selected.iter().map(|s| s.device).collect();
     let profile = env_or("OMP_CARD_PROFILE", "default");
     pipeline::set_device_select(pipeline::DeviceSelect {
-        persistent_id,
+        persistent_id: if devices.len() == 1 { persistent_id } else { None },
         profile: if profile.trim().is_empty() { "default".to_string() } else { profile.trim().to_string() },
     })?;
     let mode = env_or("OMP_CARD_MODE", "1080p25");
     let audio_channels: u32 = env_or("OMP_CARD_AUDIO_CHANNELS", "2").parse()?;
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
+    let mode_info = pipeline::mode_info(&mode).ok_or_else(|| {
+        format!("OMP_CARD_MODE={mode:?} nicht unterstützt (unterstützt: {:?})", pipeline::SUPPORTED_MODES)
+    })?;
 
-    let direction = match env_or("OMP_CARD_DIRECTION", "ingest").as_str() {
-        "output" => Direction::Output,
-        _ => Direction::Ingest,
+    let (all_tx, mut all_rx) = tokio::sync::mpsc::unbounded_channel::<NodeEvent>();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let control_host = host.clone();
+    let multi = selected.len() > 1;
+    let has_ingest = selected.iter().any(|s| s.dir == Dir::In);
+
+    let monitor = Arc::new(omp_node_sdk::Monitor::new(if has_ingest {
+        omp_node_sdk::MonitorKind::Receiver
+    } else {
+        omp_node_sdk::MonitorKind::Sender
+    }));
+    if has_ingest {
+        monitor.activate();
+    } else {
+        monitor.deactivate();
+    }
+    let connected_outs = Arc::new(AtomicUsize::new(0));
+
+    let registry = RegistryClient::new(registry_url.clone());
+    let mut threads: Vec<std::thread::JoinHandle<()>> = Vec::new();
+    let mut workers: Vec<(String, Arc<AtomicU64>)> = Vec::new();
+    let mut ins: Vec<InPort> = Vec::new();
+    let mut outs: Vec<OutPort> = Vec::new();
+    let mut out_handles: Vec<pipeline::OutputPipelineHandle> = Vec::new();
+    let mut senders: Vec<SenderSpec> = Vec::new();
+    let mut receivers: Vec<ReceiverSpec> = Vec::new();
+    let mut cm_inputs: Vec<InputSpec> = Vec::new();
+    let mut cm_outputs: Vec<OutputSpec> = Vec::new();
+    let mut apply = MatrixApply { ingest: HashMap::new(), output: HashMap::new() };
+    let fail = |threads: Vec<std::thread::JoinHandle<()>>, shutdown: &AtomicBool, msg: String| -> Box<dyn std::error::Error + Send + Sync> {
+        shutdown.store(true, Ordering::Relaxed);
+        for t in threads {
+            let _ = t.join();
+        }
+        msg.into()
     };
 
-    if pipeline::mode_info(&mode).is_none() {
-        return Err(format!(
-            "OMP_CARD_MODE={mode:?} nicht unterstützt (unterstützt: {:?})",
-            pipeline::SUPPORTED_MODES
-        )
-        .into());
-    }
-
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
-    let shutdown = Arc::new(AtomicBool::new(false));
-
-    match direction {
-        Direction::Ingest => {
-            // mode_info() bereits oben geprüft — hier nur noch entpackt.
-            let mode_info = pipeline::mode_info(&mode).expect("mode already validated above");
-
-            // Flow-UUID == MXL-flow-id-Konvention (`UMSETZUNG.md` C4).
-            let flow_id = omp_node_sdk::idgen::new_v4();
-            let audio_flow_id = omp_node_sdk::idgen::new_v4();
-            // S. `omp-aes67-gateway::main`-Pendant-Kommentar (`UMSETZUNG.md`
-            // D17/D18): sowohl `FlowSpec::Audio` als auch `ChannelMapping`s
-            // `OutputSpec::source_id` brauchen dieselbe, tatsächlich
-            // registrierte Source-UUID.
-            let audio_source_id = omp_node_sdk::idgen::new_v4();
-            let control_host = host.clone();
-
-            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-            let pipeline_config = pipeline::IngestConfig {
-                domain,
-                flow_id: flow_id.clone(),
-                audio_flow_id: audio_flow_id.clone(),
-                label: label.clone(),
-                device_number,
-                mode: mode.clone(),
-                audio_channels,
-            };
-            let pipeline_shutdown = shutdown.clone();
-            let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
-            let pipeline_heartbeat_thread = pipeline_heartbeat.clone();
-            let pipeline_thread = std::thread::spawn(move || {
-                pipeline::run_ingest(pipeline_config, tx, pipeline_shutdown, ready_tx, pipeline_heartbeat_thread)
-            });
-
-            let pipeline_handle = match ready_rx.await {
-                Ok(Ok(handle)) => handle,
-                Ok(Err(e)) => {
-                    eprintln!(
-                        "omp-capture-card: ingest pipeline build failed (device-number={device_number}, mode={mode}): {e}"
-                    );
-                    return Err(e.into());
-                }
-                Err(_) => {
-                    eprintln!("omp-capture-card: ingest pipeline thread ended before reporting readiness");
-                    return Err("ingest pipeline thread ended before reporting readiness".into());
-                }
-            };
-
-            let media_ready_pipeline = pipeline_handle.clone();
-            let signal = Arc::new(AtomicBool::new(pipeline_handle.signal()));
-
-            let monitor = Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Receiver));
-            // Ingest ist immer aktiv (keine Enable/Disable-Semantik,
-            // anders als Output) — sofort aktivieren.
-            monitor.activate();
-            spawn_decklink_monitor_tick(monitor.clone(), signal.clone());
-
-            // AMWA IS-08 (`UMSETZUNG.md` D18): "sdi-in" bündelt die
-            // eingebetteten SDI-Audiokanäle (kein IS-04-Receiver dafür
-            // registriert, s. `receivers: vec![]` unten — reine
-            // Hardware-Erfassung, `parent` bleibt null/null), "mxl-
-            // audio-out" die des ausgehenden MXL-Audio-Senders
-            // (`source_id` = die oben vorab generierte Source-UUID).
-            let channel_mapping = Arc::new(ChannelMapping::new(
-                vec![InputSpec {
-                    id: "sdi-in".to_string(),
-                    name: "SDI Embedded Audio".to_string(),
-                    description: "Eingebettete SDI-Audiokanäle der DeckLink-Karte".to_string(),
+    for sel in &selected {
+        let d = sel.device;
+        let port_label = if multi { format!("{label} {d}") } else { label.clone() };
+        let ptx = forward(d, all_tx.clone());
+        let heartbeat = Arc::new(AtomicU64::new(0));
+        match sel.dir {
+            Dir::In => {
+                let flow_id = omp_node_sdk::idgen::new_v4();
+                let audio_flow_id = omp_node_sdk::idgen::new_v4();
+                let audio_source_id = omp_node_sdk::idgen::new_v4();
+                let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+                let cfg = pipeline::IngestConfig {
+                    domain: domain.clone(),
+                    flow_id: flow_id.clone(),
+                    audio_flow_id: audio_flow_id.clone(),
+                    label: port_label.clone(),
+                    device_number: d,
+                    mode: mode.clone(),
+                    audio_channels,
+                };
+                let (sd, hb) = (shutdown.clone(), heartbeat.clone());
+                threads.push(std::thread::spawn(move || pipeline::run_ingest(cfg, ptx, sd, ready_tx, hb)));
+                let handle = match ready_rx.await {
+                    Ok(Ok(h)) => h,
+                    Ok(Err(e)) => {
+                        eprintln!("omp-capture-card: Eingang {d} (mode={mode}): {e}");
+                        return Err(fail(threads, &shutdown, e));
+                    }
+                    Err(_) => return Err(fail(threads, &shutdown, format!("Eingang {d}: Pipeline-Thread vor Bereitschaft beendet"))),
+                };
+                let signal = Arc::new(AtomicBool::new(handle.signal()));
+                let sdi_in = format!("sdi-in-{d}");
+                let mxl_out = format!("mxl-audio-out-{d}");
+                cm_inputs.push(InputSpec {
+                    id: sdi_in.clone(),
+                    name: format!("SDI Embedded Audio {d}"),
+                    description: "Eingebettete SDI-Audiokanäle der Karte".to_string(),
                     channels: generic_channels(audio_channels),
                     parent_id: None,
                     parent_type: None,
                     reordering: true,
                     block_size: 1,
-                }],
-                vec![OutputSpec {
-                    id: "mxl-audio-out".to_string(),
-                    name: "MXL Audio Output".to_string(),
+                });
+                cm_outputs.push(OutputSpec {
+                    id: mxl_out.clone(),
+                    name: format!("MXL Audio Output {d}"),
                     description: "Ausgehender MXL-Audio-Flow".to_string(),
                     channels: generic_channels(audio_channels),
                     source_id: Some(audio_source_id.clone()),
-                    routable_inputs: Some(vec![Some("sdi-in".to_string()), None]),
-                }],
-                IngestMatrixApply(pipeline_handle.clone()),
-            ));
-
-            let store: Arc<dyn ParamStore> = Arc::new(IngestStore {
-                flow_id: flow_id.clone(),
-                audio_flow_id: audio_flow_id.clone(),
-                device_number,
-                mode: mode.clone(),
-                audio_channels,
-                signal: signal.clone(),
-                monitor: monitor.clone(),
-                channel_mapping,
-            });
-
-            let handle = omp_node_sdk::start(
-                NodeConfig {
-                    label,
-                    host,
-                    port,
-                    registry_url,
-                    nats_url,
-                    senders: vec![
-                        SenderSpec {
-                            transport: Some(TRANSPORT_MXL.to_string()),
-                            flow: Some(FlowSpec::Video {
-                                id: Some(flow_id),
-                                frame_width: mode_info.width,
-                                frame_height: mode_info.height,
-                                grain_rate_numerator: mode_info.fps_numerator,
-                                grain_rate_denominator: mode_info.fps_denominator,
-                            }),
-                            tags: HashMap::new(),
-                            ..Default::default()
-                        },
-                        SenderSpec {
-                            transport: Some(TRANSPORT_MXL.to_string()),
-                            flow: Some(FlowSpec::Audio {
-                                id: Some(audio_flow_id),
-                                sample_rate_numerator: SAMPLE_RATE,
-                                channel_count: audio_channels,
-                                media_type: "audio/float32".to_string(),
-                                bit_depth: 32,
-                                source_id: Some(audio_source_id),
-                            }),
-                            ..Default::default()
-                        },
-                    ],
-                    receivers: vec![],
-                    instance_id,
-                    // Wie omp-source: echter Nachweis geflossener
-                    // Video-Buffer, kein hartkodiertes `true`
-                    // (ARCHITECTURE.md §5 Punkt 6).
-                    media_ready: omp_node_sdk::MediaReadySource::Probe(Arc::new(move || {
-                        media_ready_pipeline.media_ready()
-                    })),
-                },
-                store,
-            )
-            .await?;
-
-            // AMWA IS-08 (`UMSETZUNG.md` D18) — kündigt die Channel-
-            // Mapping-API im IS-04-Device an, erst nach `start()` möglich
-            // (`handle.port` steht erst nach dem tatsächlichen Binden
-            // fest, s. `omp-aes67-gateway::main`-Pendant-Kommentar).
-            if let Err(e) = handle
-                .add_device_control(serde_json::json!({
-                    "type": CM_CONTROL_TYPE,
-                    "href": format!("http://{control_host}:{}/x-nmos/channelmapping/v1.0/", handle.port),
-                }))
-                .await
-            {
-                eprintln!("omp-capture-card: announcing channelmapping control failed: {e}");
+                    routable_inputs: Some(vec![Some(sdi_in), None]),
+                });
+                apply.ingest.insert(mxl_out, handle.clone());
+                senders.push(SenderSpec {
+                    transport: Some(TRANSPORT_MXL.to_string()),
+                    flow: Some(FlowSpec::Video {
+                        id: Some(flow_id.clone()),
+                        frame_width: mode_info.width,
+                        frame_height: mode_info.height,
+                        grain_rate_numerator: mode_info.fps_numerator,
+                        grain_rate_denominator: mode_info.fps_denominator,
+                    }),
+                    label: multi.then(|| format!("Eingang {d} – Video")),
+                    tags: HashMap::new(),
+                    ..Default::default()
+                });
+                senders.push(SenderSpec {
+                    transport: Some(TRANSPORT_MXL.to_string()),
+                    flow: Some(FlowSpec::Audio {
+                        id: Some(audio_flow_id.clone()),
+                        sample_rate_numerator: SAMPLE_RATE,
+                        channel_count: audio_channels,
+                        media_type: "audio/float32".to_string(),
+                        bit_depth: 32,
+                        source_id: Some(audio_source_id),
+                    }),
+                    label: multi.then(|| format!("Eingang {d} – Audio")),
+                    ..Default::default()
+                });
+                workers.push((format!("pipeline-in{d}"), heartbeat));
+                ins.push(InPort { device: d, flow_id, audio_flow_id, signal, handle });
             }
-
-            handle.register_worker("pipeline", pipeline_heartbeat);
-
-            let events = async {
-                while let Some(event) = rx.recv().await {
-                    match event {
-                        pipeline::Event::Error(message) => {
-                            // Fehlercode [OMP-nnnn] voranstellen, wenn die Meldung einem Katalogeintrag entspricht (Kap. 72.8)
-                            let message = omp_node_sdk::errcode::tag(&message);
-                            eprintln!("omp-capture-card: pipeline error: {message}");
-                            // Sofortige Verschlechterung (s.
-                            // `spawn_decklink_monitor_tick`-Doku) — der
-                            // Tick pusht danach weiter optimistisch
-                            // Healthy, `DebouncedDomain` entscheidet
-                            // selbst, ob/wann das als Erholung zählt.
-                            monitor.activity.observe(
-                                omp_node_sdk::HealthLevel::Unhealthy,
-                                monitor.status_reporting_delay(),
-                                Some(&message),
-                            );
-                            handle.publish_alert(message).await;
-                        }
-                        pipeline::Event::SignalChanged(ok) => {
-                            signal.store(ok, Ordering::Relaxed);
-                            eprintln!(
-                                "omp-capture-card: signal [{device_number}]: {}",
-                                if ok { "OK" } else { "KEIN SIGNAL" }
-                            );
-                            if !ok {
-                                handle
-                                    .publish_alert(format!(
-                                        "DeckLink device-number={device_number}: kein Eingangssignal"
-                                    ))
-                                    .await;
-                            }
-                        }
+            Dir::Out => {
+                let captions = captions::CaptionQueue::new();
+                let anc_context = Arc::new(omp_mediaio::mxl::MxlContext::new(&domain)?);
+                let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+                let cfg = pipeline::OutputConfig {
+                    domain: domain.clone(),
+                    device_number: d,
+                    mode: mode.clone(),
+                    audio_channels,
+                    captions: captions.clone(),
+                };
+                let (sd, hb) = (shutdown.clone(), heartbeat.clone());
+                threads.push(std::thread::spawn(move || pipeline::run_output(cfg, ptx, sd, ready_tx, hb)));
+                let handle = match ready_rx.await {
+                    Ok(Ok(h)) => h,
+                    Ok(Err(e)) => {
+                        eprintln!("omp-capture-card: Ausgang {d}: {e}");
+                        return Err(fail(threads, &shutdown, e));
                     }
-                }
-            };
-
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    eprintln!("omp-capture-card: shutdown requested");
-                }
-                _ = events => {
-                    eprintln!("omp-capture-card: pipeline thread ended");
-                }
-            }
-
-            shutdown.store(true, Ordering::Relaxed);
-            let _ = pipeline_thread.join();
-        }
-        Direction::Output => {
-            let control_host = host.clone();
-            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-            let captions = captions::CaptionQueue::new();
-            let anc_context = Arc::new(omp_mediaio::mxl::MxlContext::new(&domain)?);
-            let pipeline_config = pipeline::OutputConfig {
-                domain,
-                device_number,
-                mode: mode.clone(),
-                audio_channels,
-                captions: captions.clone(),
-            };
-            let pipeline_shutdown = shutdown.clone();
-            let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
-            let pipeline_heartbeat_thread = pipeline_heartbeat.clone();
-            let pipeline_thread = std::thread::spawn(move || {
-                pipeline::run_output(pipeline_config, tx, pipeline_shutdown, ready_tx, pipeline_heartbeat_thread)
-            });
-
-            let pipeline_handle = match ready_rx.await {
-                Ok(Ok(handle)) => handle,
-                Ok(Err(e)) => {
-                    eprintln!("omp-capture-card: output pipeline init failed: {e}");
-                    return Err(e.into());
-                }
-                Err(_) => {
-                    eprintln!("omp-capture-card: output pipeline thread ended before reporting readiness");
-                    return Err("output pipeline thread ended before reporting readiness".into());
-                }
-            };
-
-            let video_receiver_id = omp_node_sdk::idgen::new_v4();
-            let audio_receiver_id = omp_node_sdk::idgen::new_v4();
-            let registry = RegistryClient::new(registry_url.clone());
-            let connected_video_flow_id = Arc::new(Mutex::new(String::new()));
-            let connected_audio_flow_id = Arc::new(Mutex::new(String::new()));
-
-            let monitor = Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Sender));
-            // Startzustand `Inactive` (noch kein Video-Connect erfolgt)
-            // — `OutputControl::apply` übernimmt `activate()`/
-            // `deactivate()` bei jedem echten Video-Connect/-Disconnect.
-            monitor.deactivate();
-            spawn_output_monitor_tick(monitor.clone(), pipeline_handle.clone());
-
-            let video_connection = Arc::new(ReceiverConnection::new(
-                video_receiver_id.clone(),
-                OutputControl {
-                    registry: registry.clone(),
-                    pipeline: pipeline_handle.clone(),
-                    connected_flow_id: connected_video_flow_id.clone(),
-                    is_video: true,
-                    monitor: monitor.clone(),
-                },
-            ));
-            let anc_receiver_id = omp_node_sdk::idgen::new_v4();
-            let connected_anc_flow_id = Arc::new(Mutex::new(String::new()));
-            let anc_connection = Arc::new(ReceiverConnection::new(
-                anc_receiver_id.clone(),
-                AncControl {
-                    registry: registry.clone(),
-                    context: anc_context,
-                    queue: captions.clone(),
-                    connected_flow_id: connected_anc_flow_id.clone(),
-                    input: Mutex::new(None),
-                },
-            ));
-            let audio_connection = Arc::new(ReceiverConnection::new(
-                audio_receiver_id.clone(),
-                OutputControl {
-                    registry,
-                    pipeline: pipeline_handle.clone(),
-                    connected_flow_id: connected_audio_flow_id.clone(),
-                    is_video: false,
-                    monitor: monitor.clone(),
-                },
-            ));
-
-            // AMWA IS-08 (`UMSETZUNG.md` D18): "mxl-audio-in" hängt am
-            // tatsächlich registrierten IS-04-Audio-Receiver (`parent`,
-            // s. `docs/Interoperability - NMOS IS-04.md`-Pflicht),
-            // "sdi-out" hat KEINE Source (`source_id: None` — die SDI-
-            // Karte ist ein physischer Ausgang, keine NMOS-Ressource).
-            let channel_mapping = Arc::new(ChannelMapping::new(
-                vec![InputSpec {
-                    id: "mxl-audio-in".to_string(),
-                    name: "MXL Audio Input".to_string(),
+                    Err(_) => return Err(fail(threads, &shutdown, format!("Ausgang {d}: Pipeline-Thread vor Bereitschaft beendet"))),
+                };
+                let (video_id, audio_id, anc_id) =
+                    (omp_node_sdk::idgen::new_v4(), omp_node_sdk::idgen::new_v4(), omp_node_sdk::idgen::new_v4());
+                let (connected_video, connected_audio, connected_anc) =
+                    (Arc::new(Mutex::new(String::new())), Arc::new(Mutex::new(String::new())), Arc::new(Mutex::new(String::new())));
+                // Aktivität: mit Eingängen immer aktiv; nur mit Ausgängen aktiv, solange mindestens ein Video verbunden ist.
+                let was = Arc::new(AtomicBool::new(false));
+                let on_video: Arc<dyn Fn(bool) + Send + Sync> = {
+                    let (monitor, connected_outs, was) = (monitor.clone(), connected_outs.clone(), was.clone());
+                    Arc::new(move |on| {
+                        if was.swap(on, Ordering::Relaxed) == on {
+                            return;
+                        }
+                        let n = if on { connected_outs.fetch_add(1, Ordering::Relaxed) + 1 } else { connected_outs.fetch_sub(1, Ordering::Relaxed) - 1 };
+                        if !has_ingest {
+                            if n > 0 { monitor.activate() } else { monitor.deactivate() }
+                        }
+                    })
+                };
+                let video = Arc::new(ReceiverConnection::new(
+                    video_id.clone(),
+                    OutputControl {
+                        registry: registry.clone(),
+                        pipeline: handle.clone(),
+                        connected_flow_id: connected_video.clone(),
+                        is_video: true,
+                        on_video,
+                    },
+                ));
+                let audio = Arc::new(ReceiverConnection::new(
+                    audio_id.clone(),
+                    OutputControl {
+                        registry: registry.clone(),
+                        pipeline: handle.clone(),
+                        connected_flow_id: connected_audio.clone(),
+                        is_video: false,
+                        on_video: Arc::new(|_| {}),
+                    },
+                ));
+                let anc = Arc::new(ReceiverConnection::new(
+                    anc_id.clone(),
+                    AncControl {
+                        registry: registry.clone(),
+                        context: anc_context,
+                        queue: captions.clone(),
+                        connected_flow_id: connected_anc.clone(),
+                        input: Mutex::new(None),
+                    },
+                ));
+                let mxl_in = format!("mxl-audio-in-{d}");
+                let sdi_out = format!("sdi-out-{d}");
+                // IS-08: "mxl-audio-in" hängt am registrierten IS-04-Audio-Receiver (`parent`); "sdi-out" hat keine
+                // Source (die Karte ist ein physischer Ausgang, keine NMOS-Ressource).
+                cm_inputs.push(InputSpec {
+                    id: mxl_in.clone(),
+                    name: format!("MXL Audio Input {d}"),
                     description: "Ausgewählte MXL-Audioquelle".to_string(),
                     channels: generic_channels(audio_channels),
-                    parent_id: Some(audio_receiver_id.clone()),
+                    parent_id: Some(audio_id.clone()),
                     parent_type: Some("receiver"),
                     reordering: true,
                     block_size: 1,
-                }],
-                vec![OutputSpec {
-                    id: "sdi-out".to_string(),
-                    name: "SDI Embedded Audio Output".to_string(),
-                    description: "Eingebettete SDI-Audiokanäle der DeckLink-Karte".to_string(),
+                });
+                cm_outputs.push(OutputSpec {
+                    id: sdi_out.clone(),
+                    name: format!("SDI Embedded Audio Output {d}"),
+                    description: "Eingebettete SDI-Audiokanäle der Karte".to_string(),
                     channels: generic_channels(audio_channels),
                     source_id: None,
-                    routable_inputs: Some(vec![Some("mxl-audio-in".to_string()), None]),
-                }],
-                OutputMatrixApply(pipeline_handle.clone()),
-            ));
-
-            let media_ready_pipeline = pipeline_handle.clone();
-            let store: Arc<dyn ParamStore> = Arc::new(OutputStore {
-                device_number,
-                mode: mode.clone(),
-                audio_channels,
-                connected_video_flow_id,
-                connected_audio_flow_id,
-                video_connection,
-                audio_connection,
-                anc_connection,
-                connected_anc_flow_id,
-                captions,
-                monitor: monitor.clone(),
-                channel_mapping,
-            });
-
-            let handle = omp_node_sdk::start(
-                NodeConfig {
-                    label,
-                    host,
-                    port,
-                    registry_url,
-                    nats_url,
-                    senders: vec![],
-                    receivers: vec![
-                        ReceiverSpec {
-                            id: Some(video_receiver_id),
-                            transport: Some(TRANSPORT_MXL.to_string()),
-                            media_types: Some(vec!["video/v210".to_string()]),
-                            label: Some("Video".to_string()),
-                            ..Default::default()
-                        },
-                        ReceiverSpec {
-                            id: Some(audio_receiver_id),
-                            transport: Some(TRANSPORT_MXL.to_string()),
-                            media_types: Some(vec!["audio/L24".to_string()]),
-                            label: Some("Audio".to_string()),
-                            ..Default::default()
-                        },
-                        ReceiverSpec {
-                            id: Some(anc_receiver_id),
-                            transport: Some(TRANSPORT_MXL.to_string()),
-                            media_types: Some(vec!["video/smpte291".to_string()]),
-                            label: Some("ANC / Untertitel".to_string()),
-                            ..Default::default()
-                        },
-                    ],
-                    instance_id,
-                    media_ready: omp_node_sdk::MediaReadySource::Probe(Arc::new(move || {
-                        media_ready_pipeline.media_ready()
-                    })),
-                },
-                store,
-            )
-            .await?;
-
-            // AMWA IS-08 (`UMSETZUNG.md` D18) — s. Ingest-Zweig-Kommentar.
-            if let Err(e) = handle
-                .add_device_control(serde_json::json!({
-                    "type": CM_CONTROL_TYPE,
-                    "href": format!("http://{control_host}:{}/x-nmos/channelmapping/v1.0/", handle.port),
-                }))
-                .await
-            {
-                eprintln!("omp-capture-card: announcing channelmapping control failed: {e}");
+                    routable_inputs: Some(vec![Some(mxl_in), None]),
+                });
+                apply.output.insert(sdi_out, handle.clone());
+                let rl = |what: &str| if multi { Some(format!("Ausgang {d} – {what}")) } else { Some(what.to_string()) };
+                for (id, mt, what) in [
+                    (video_id, "video/v210", "Video"),
+                    (audio_id, "audio/L24", "Audio"),
+                    (anc_id, "video/smpte291", "ANC / Untertitel"),
+                ] {
+                    receivers.push(ReceiverSpec {
+                        id: Some(id),
+                        transport: Some(TRANSPORT_MXL.to_string()),
+                        media_types: Some(vec![mt.to_string()]),
+                        label: rl(what),
+                        ..Default::default()
+                    });
+                }
+                workers.push((format!("pipeline-out{d}"), heartbeat));
+                out_handles.push(handle);
+                outs.push(OutPort { device: d, video, audio, anc, connected_video, connected_audio, connected_anc, captions });
             }
-
-            handle.register_worker("pipeline", pipeline_heartbeat);
-
-            let events = async {
-                while let Some(event) = rx.recv().await {
-                    match event {
-                        pipeline::Event::Error(message) => {
-                            // Fehlercode [OMP-nnnn] voranstellen, wenn die Meldung einem Katalogeintrag entspricht (Kap. 72.8)
-                            let message = omp_node_sdk::errcode::tag(&message);
-                            eprintln!("omp-capture-card: pipeline error: {message}");
-                            // S. `spawn_decklink_monitor_tick`-Doku —
-                            // nur relevant, solange verbunden, sonst hat
-                            // `deactivate()` `activity` schon auf
-                            // `Inactive` gesetzt und ein `observe()` hier
-                            // würde das unnötig überschreiben.
-                            if monitor.overall() != omp_node_sdk::HealthLevel::Neutral {
-                                monitor.activity.observe(
-                                    omp_node_sdk::HealthLevel::Unhealthy,
-                                    monitor.status_reporting_delay(),
-                                    Some(&message),
-                                );
-                            }
-                            handle.publish_alert(message).await;
-                        }
-                        pipeline::Event::SignalChanged(_) => {
-                            // Nur relevant für Ingest (`signal`-Property
-                            // von `decklinkvideosrc`) — Output nutzt
-                            // diesen Event-Zweig nicht, s. `pipeline.rs`.
-                        }
-                    }
-                }
-            };
-
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    eprintln!("omp-capture-card: shutdown requested");
-                }
-                _ = events => {
-                    eprintln!("omp-capture-card: pipeline thread ended");
-                }
-            }
-
-            shutdown.store(true, Ordering::Relaxed);
-            let _ = pipeline_thread.join();
         }
     }
+    drop(all_tx);
 
+    spawn_monitor_tick(monitor.clone(), ins.iter().map(|p| (p.device, p.signal.clone())).collect(), out_handles.clone());
+
+    let signals: HashMap<i32, Arc<AtomicBool>> = ins.iter().map(|p| (p.device, p.signal.clone())).collect();
+    let ready_handles: Vec<pipeline::IngestHandle> = ins.iter().map(|p| p.handle.clone()).collect();
+    let channel_mapping = Arc::new(ChannelMapping::new(cm_inputs, cm_outputs, apply));
+    let store: Arc<dyn ParamStore> = Arc::new(CardStore {
+        vendor: card::backend().vendor.clone(),
+        mode: mode.clone(),
+        audio_channels,
+        ports_text,
+        ins,
+        outs,
+        monitor: monitor.clone(),
+        channel_mapping,
+    });
+
+    let handle = omp_node_sdk::start(
+        NodeConfig {
+            label,
+            host,
+            port,
+            registry_url,
+            nats_url,
+            senders,
+            receivers,
+            instance_id,
+            // Echter Nachweis geflossener Buffer: jeder Eingang hat ein Bild gesehen; Ausgänge sind im Leerlauf bereit.
+            media_ready: omp_node_sdk::MediaReadySource::Probe(Arc::new(move || {
+                ready_handles.iter().all(|h| h.media_ready()) && out_handles.iter().all(|h| h.media_ready())
+            })),
+        },
+        store,
+    )
+    .await?;
+
+    // AMWA IS-08 (`UMSETZUNG.md` D18) — erst nach `start()` möglich (`handle.port` steht dann fest).
+    if let Err(e) = handle
+        .add_device_control(serde_json::json!({
+            "type": CM_CONTROL_TYPE,
+            "href": format!("http://{control_host}:{}/x-nmos/channelmapping/v1.0/", handle.port),
+        }))
+        .await
+    {
+        eprintln!("omp-capture-card: announcing channelmapping control failed: {e}");
+    }
+    for (name, hb) in workers {
+        handle.register_worker(name, hb);
+    }
+
+    let events = async {
+        while let Some(event) = all_rx.recv().await {
+            match event {
+                NodeEvent::Error(message) => {
+                    // Fehlercode [OMP-nnnn] voranstellen, wenn die Meldung einem Katalogeintrag entspricht (Kap. 72.8)
+                    let message = omp_node_sdk::errcode::tag(&message);
+                    eprintln!("omp-capture-card: pipeline error: {message}");
+                    if monitor.overall() != omp_node_sdk::HealthLevel::Neutral {
+                        monitor.activity.observe(omp_node_sdk::HealthLevel::Unhealthy, monitor.status_reporting_delay(), Some(&message));
+                    }
+                    handle.publish_alert(message).await;
+                }
+                NodeEvent::Signal(device, ok) => {
+                    if let Some(s) = signals.get(&device) {
+                        s.store(ok, Ordering::Relaxed);
+                    }
+                    eprintln!("omp-capture-card: signal [{device}]: {}", if ok { "OK" } else { "KEIN SIGNAL" });
+                    if !ok {
+                        handle.publish_alert(format!("Capture-Karte, Eingang {device}: kein Eingangssignal")).await;
+                    }
+                }
+            }
+        }
+    };
+
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => eprintln!("omp-capture-card: shutdown requested"),
+        _ = events => eprintln!("omp-capture-card: pipeline threads ended"),
+    }
+
+    shutdown.store(true, Ordering::Relaxed);
+    for t in threads {
+        let _ = t.join();
+    }
     Ok(())
 }
 
 #[cfg(test)]
-mod bcp008_tests {
+mod tests {
     use super::*;
 
-    // `IngestStore` braucht keine echte Hardware/Pipeline (alle Felder
-    // sind einfache Werte/Handles) — deshalb hier direkt gegen sie
-    // getestet, ohne ein echtes DeckLink-Gerät zu brauchen (in dieser
-    // Sandbox sowieso nicht vorhanden, s. `docs/decisions.md`
-    // BCP-008-Nachtrag: "ohne Hardware getestet", gleiche Grenze wie
-    // beim ursprünglichen D10-Teil-1/2). `OutputStore` teilt sich
-    // dieselbe `Monitor`-Dispatch-Logik (`monitor.get`/`set`/`invoke`),
-    // ein zweiter Test dafür wäre redundant.
-    //
-    // `IngestStore` ist seit `UMSETZUNG.md` D18 generisch über den
-    // `ChannelMapApply`-Typ (s. dortige Struct-Doku) — genau damit dieser
-    // Test-Aufbau ohne echtes GStreamer auskommt: `NoopApply` ist ein
-    // reines Test-Double, kein `pipeline::IngestHandle` nötig.
     struct NoopApply;
     impl ChannelMapApply for NoopApply {
         fn apply(&self, _output_id: &str, _map: &BTreeMap<u32, MapEntry>) {}
     }
 
-    fn store() -> IngestStore<NoopApply> {
-        IngestStore {
-            flow_id: "flow-1".to_string(),
-            audio_flow_id: "flow-2".to_string(),
-            device_number: 0,
+    fn store() -> CardStore<NoopApply> {
+        CardStore {
+            vendor: "decklink".to_string(),
             mode: "1080p25".to_string(),
             audio_channels: 2,
-            signal: Arc::new(AtomicBool::new(true)),
+            ports_text: "0:in".to_string(),
+            ins: vec![],
+            outs: vec![],
             monitor: Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Receiver)),
             channel_mapping: Arc::new(ChannelMapping::new(vec![], vec![], NoopApply)),
         }
@@ -1053,39 +781,46 @@ mod bcp008_tests {
     fn descriptor_includes_bcp008_monitor_params_and_methods() {
         let d = store().descriptor();
         let names: Vec<&str> = d.parameters.iter().map(|p| p.name.as_str()).collect();
-        assert!(names.contains(&"monitor.overallStatus"));
-        assert!(names.contains(&"monitor.connectionStatus"), "receiver-side wire name expected");
-        assert!(names.contains(&"monitor.streamStatus"));
-        assert!(names.contains(&"monitor.linkStatus"));
-        assert!(names.contains(&"monitor.statusReportingDelay"));
+        for n in ["monitor.overallStatus", "monitor.connectionStatus", "monitor.streamStatus", "monitor.linkStatus", "monitor.statusReportingDelay", "vendor", "ports"] {
+            assert!(names.contains(&n), "{n} fehlt");
+        }
         assert_eq!(d.methods.len(), 1);
         assert_eq!(d.methods[0].name, "monitor.resetCountersAndMessages");
     }
 
     #[test]
-    fn get_dispatches_monitor_params_alongside_own_params() {
+    fn get_dispatches_own_and_monitor_params() {
         let s = store();
-        assert_eq!(s.get("signal"), Some(serde_json::json!(true)));
+        assert_eq!(s.get("vendor"), Some(serde_json::json!("decklink")));
+        assert_eq!(s.get("in0.signal"), None, "Port ohne Eingang");
         s.monitor.activate();
         assert_eq!(s.get("monitor.overallStatus"), Some(serde_json::json!("Healthy")));
         assert_eq!(s.get("monitor.lostPacketCounters"), Some(serde_json::json!([])));
     }
 
     #[test]
-    fn set_writes_through_to_monitor_config() {
+    fn set_and_invoke_reach_the_monitor() {
         let s = store();
         assert!(s.set("monitor.statusReportingDelay", serde_json::json!(5000)).is_ok());
         assert_eq!(s.monitor.status_reporting_delay(), Duration::from_millis(5000));
         assert!(matches!(s.set("monitor.overallStatus", serde_json::json!("Healthy")), Err(SetError::Unknown)));
-    }
-
-    #[test]
-    fn invoke_reset_clears_monitor_counters() {
-        let s = store();
         s.monitor.link.observe(omp_node_sdk::HealthLevel::Unhealthy, Duration::ZERO, Some("no cable"));
-        assert_eq!(s.monitor.link.transition_counter(), 1);
         assert!(s.invoke("monitor.resetCountersAndMessages", &serde_json::Map::new()).is_ok());
         assert_eq!(s.monitor.link.transition_counter(), 0);
         assert!(matches!(s.invoke("unknownMethod", &serde_json::Map::new()), Err(InvokeError::Unknown)));
+    }
+
+    #[test]
+    fn port_params_split() {
+        assert_eq!(split_port_param("in3.signal"), Some(("in", 3, "signal")));
+        assert_eq!(split_port_param("out12.ancStats"), Some(("out", 12, "ancStats")));
+        assert_eq!(split_port_param("monitor.overallStatus"), None);
+        assert_eq!(split_port_param("inx.signal"), None);
+    }
+
+    #[test]
+    fn matrix_apply_routes_by_output_id_without_panicking() {
+        let a = MatrixApply { ingest: HashMap::new(), output: HashMap::new() };
+        a.apply("unbekannt", &BTreeMap::new());
     }
 }

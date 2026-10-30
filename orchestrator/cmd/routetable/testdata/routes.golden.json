@@ -924,6 +924,12 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/hosts/{id}/cards",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/hosts/{id}/metrics/history",
     "auth": "auth",
     "domain": "core"

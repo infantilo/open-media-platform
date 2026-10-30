@@ -69,7 +69,7 @@ import { STANDARD_FORMATS, uniqueRoleName } from "./roles.ts";
 import { isAnchorRole, renameRole } from "./role-designer-logic.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 import { openStartDialog } from "./start-dialog.ts";
-import { IO_CARD_TYPES, type StartBody } from "./start-dialog-logic.ts";
+import type { StartBody } from "./start-dialog-logic.ts";
 import { openNodeDiagnosis } from "./node-diagnose-dialog.ts";
 import { openPortTagEditor } from "./port-tag-editor.ts";
 import {
@@ -5919,7 +5919,7 @@ export class FlowCanvas extends HTMLElement {
         }
         void openStartDialog({
           entry,
-          ioPort: entry.type in IO_CARD_TYPES,
+          captureCard: entry.type === "omp-capture-card",
           hosts: hosts.map((h) => {
             const online = isHostOnline(h.metrics);
             return {

@@ -1396,6 +1396,33 @@ func (l *Launcher) CheckPathOnHost(hostID, path, kind string) (nodeoptions.PathI
 	return info, nil
 }
 
+// CardConnector ist ein von einem Host-Agent erkannter Capture-Karten-Anschluss (Kap. 76).
+type CardConnector struct {
+	Vendor string `json:"vendor"`
+	Device int    `json:"device"`
+	Dir    string `json:"dir"` // "in" | "out"
+	Name   string `json:"name"`
+}
+
+// CardsOnHost fragt den Host-Agent nach den erkannten Capture-Karten-Anschlüssen (Aktion list-cards).
+func (l *Launcher) CardsOnHost(hostID string) ([]CardConnector, error) {
+	if l.nc == nil {
+		return nil, ErrRemoteUnavailable
+	}
+	resp, err := l.sendCommand(hostID, remoteCommand{Action: "list-cards"})
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		return nil, fmt.Errorf("host %s: %s", hostID, resp.Error)
+	}
+	var out []CardConnector
+	if err := json.Unmarshal([]byte(resp.Detail), &out); err != nil {
+		return nil, fmt.Errorf("host %s: unlesbare Antwort: %w", hostID, err)
+	}
+	return out, nil
+}
+
 // SysinfoOnHost holt den Rechnerzustand eines Remote-Hosts (Host-Agent, Aktion sysinfo; Support, Kap. 72). Ein älterer
 // Agent kennt die Aktion nicht und antwortet mit einem Fehler.
 func (l *Launcher) SysinfoOnHost(hostID string) (jobwire.Sysinfo, error) {

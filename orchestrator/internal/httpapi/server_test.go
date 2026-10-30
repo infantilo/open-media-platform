@@ -329,6 +329,24 @@ func (f *fakeIOPortStore) Claim(cardType, direction, preferredHostID, workflowID
 	return "", "", false, nil
 }
 
+func (f *fakeIOPortStore) ClaimPorts(hostID string, portIDs []string, workflowID, role, instanceID string) (bool, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, id := range portIDs {
+		if !f.ports[hostID+"/"+id] {
+			return false, id, nil
+		}
+	}
+	for _, id := range portIDs {
+		key := hostID + "/" + id
+		f.ports[key] = false
+		rec := ioportClaimRecord{"", "", hostID, id, workflowID, role, instanceID}
+		f.claims[key] = rec
+		f.claimed = append(f.claimed, rec)
+	}
+	return true, "", nil
+}
+
 func (f *fakeIOPortStore) UpdateInstanceID(workflowID, role, instanceID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1669,12 +1687,12 @@ func TestHandlePostInstanceUnknownTypeReturns404(t *testing.T) {
 // also nicht aufzeichnen, ohne jeden bestehenden Test-Call-Site
 // anzufassen).
 func TestHandlePostInstanceWithRequiredIOPortClaimsAPort(t *testing.T) {
-	svc := fakeLauncherService{started: launcher.Instance{ID: "inst-decklink-1", Type: "omp-capture-card-decklink"}}
+	svc := fakeLauncherService{started: launcher.Instance{ID: "inst-decklink-1", Type: "omp-capture-card"}}
 	ioPorts := newFakeIOPortStore("host-1/0")
 	h := NewHandler(config.Config{UIDir: t.TempDir(), BootstrapOpen: true}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, ioPorts, nil, nil, nil, nil, nil)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/instances", strings.NewReader(`{"type":"omp-capture-card-decklink","requiredIoPort":{"cardType":"decklink","direction":"in"}}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/instances", strings.NewReader(`{"type":"omp-capture-card","requiredIoPort":{"cardType":"decklink","direction":"in"}}`))
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1696,7 +1714,7 @@ func TestHandlePostInstanceRequiredIOPortRejectsWhenNoStoreConfigured(t *testing
 	h := NewHandler(config.Config{UIDir: t.TempDir(), BootstrapOpen: true}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil, nil, nil, nil, nil, nil)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/instances", strings.NewReader(`{"type":"omp-capture-card-decklink","requiredIoPort":{"cardType":"decklink","direction":"in"}}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/instances", strings.NewReader(`{"type":"omp-capture-card","requiredIoPort":{"cardType":"decklink","direction":"in"}}`))
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -1710,7 +1728,7 @@ func TestHandlePostInstanceRequiredIOPortRejectsWhenNoFreePort(t *testing.T) {
 	h := NewHandler(config.Config{UIDir: t.TempDir(), BootstrapOpen: true}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, ioPorts, nil, nil, nil, nil, nil)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/instances", strings.NewReader(`{"type":"omp-capture-card-decklink","requiredIoPort":{"cardType":"decklink","direction":"in"}}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/instances", strings.NewReader(`{"type":"omp-capture-card","requiredIoPort":{"cardType":"decklink","direction":"in"}}`))
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -1729,7 +1747,7 @@ func TestHandlePostInstanceReleasesClaimWhenStartFails(t *testing.T) {
 	h := NewHandler(config.Config{UIDir: t.TempDir(), BootstrapOpen: true}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, ioPorts, nil, nil, nil, nil, nil)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/instances", strings.NewReader(`{"type":"omp-capture-card-decklink","requiredIoPort":{"cardType":"decklink","direction":"in"}}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/instances", strings.NewReader(`{"type":"omp-capture-card","requiredIoPort":{"cardType":"decklink","direction":"in"}}`))
 	h.ServeHTTP(rec, req)
 
 	if rec.Code == http.StatusOK {
@@ -1889,5 +1907,29 @@ func TestHandleNodeStreamProxyRefusesForeignHost(t *testing.T) {
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/stream/previewUrl", nil))
 	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "own host") {
 		t.Fatalf("status %d body %q", rec.Code, rec.Body.String())
+	}
+}
+
+// Start-Assistent (Kap. 76): ausdrücklich gewählte Ports einer Karte werden zusammen belegt.
+func TestHandlePostInstanceClaimsExplicitCardPorts(t *testing.T) {
+	svc := fakeLauncherService{started: launcher.Instance{ID: "inst-card-1", Type: "omp-capture-card"}}
+	ioPorts := newFakeIOPortStore("host-1/aja-0-in", "host-1/aja-0-out", "host-1/aja-1-in")
+	h := NewHandler(config.Config{UIDir: t.TempDir(), BootstrapOpen: true}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, ioPorts, nil, nil, nil, nil, nil)
+	post := func(body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/instances", strings.NewReader(body)))
+		return rec
+	}
+	body := `{"type":"omp-capture-card","hostId":"host-1","requiredIoPort":{"cardType":"aja","ports":["aja-0-in","aja-0-out"]}}`
+	if rec := post(body); rec.Code != http.StatusOK || ioPorts.claimCount() != 2 {
+		t.Fatalf("status = %d, claims = %d, body = %s", rec.Code, ioPorts.claimCount(), rec.Body.String())
+	}
+	// Dieselben Anschlüsse nochmals: Konflikt, nichts Zusätzliches belegt.
+	if rec := post(body); rec.Code != http.StatusConflict || ioPorts.claimCount() != 2 {
+		t.Fatalf("zweiter Start: status = %d, claims = %d", rec.Code, ioPorts.claimCount())
+	}
+	// Ohne hostId ist die Portwahl nicht eindeutig.
+	if rec := post(`{"type":"omp-capture-card","requiredIoPort":{"cardType":"aja","ports":["aja-1-in"]}}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("ohne hostId: status = %d", rec.Code)
 	}
 }

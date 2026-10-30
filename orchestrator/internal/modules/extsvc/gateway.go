@@ -203,11 +203,11 @@ func (m *Module) fetchManifest(ctx context.Context, n registry.NodeView) (Manife
 }
 
 // refresh liest die Manifeste der laufenden Nodes. Nodes ohne Dienst werden nur einmal befragt.
-func (m *Module) refresh(ctx context.Context) {
+func (m *Module) refresh(ctx context.Context) bool {
 	m.mu.Lock()
 	if m.loading || m.S.Nodes == nil {
 		m.mu.Unlock()
-		return
+		return false
 	}
 	m.loading = true
 	neg := map[string]bool{}
@@ -265,6 +265,7 @@ func (m *Module) refresh(ctx context.Context) {
 			slog.Warn("extsvc: Manifeste nicht gespeichert", "error", err)
 		}
 	}
+	return true
 }
 
 func sameManifest(a, b Manifest) bool {
@@ -651,8 +652,13 @@ func (m *Module) importLegacy(ctx context.Context) {
 	}
 }
 
-// RefreshForTest führt einen Abgleich sofort und synchron aus (für Tests außerhalb des Pakets).
-func (m *Module) RefreshForTest(ctx context.Context) { m.refresh(ctx) }
+// RefreshForTest führt einen Abgleich synchron aus (für Tests außerhalb des Pakets). Läuft gerade der Hintergrundabgleich
+// von Mount(), wartet er darauf und holt den eigenen Lauf nach — sonst käme die Anfrage vor dem Manifest an („unbekannter Dienst“).
+func (m *Module) RefreshForTest(ctx context.Context) {
+	for i := 0; i < 500 && !m.refresh(ctx); i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+}
 
 // ---------- Entdeckung für Clients, Oberfläche des Dienstes ----------
 

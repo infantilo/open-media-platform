@@ -6,6 +6,7 @@ import { apiFetch } from "../shell/connection.ts";
 import { classify, type ErrorCode, helpBlock, loadErrorCodes } from "../shell/errorcodes.ts";
 import { t } from "../shell/i18n.ts";
 import { groupOptions, hintFor, inputKind, type OptionDef } from "../shell/settings-logic.ts";
+import { createCardWizard } from "./capture-card-wizard.ts";
 import { buildStartBody, emptyMeaning, findPairs, type OptionPair, presetFor, RATES, RESOLUTIONS, type StartBody, type StartForm, valuesForPreset } from "./start-dialog-logic.ts";
 
 export interface StartDialogEntry {
@@ -27,8 +28,8 @@ export interface StartDialogHost {
 export interface StartDialogOptions {
   entry: StartDialogEntry;
   hosts: StartDialogHost[];
-  /** Nur DeckLink: Richtung des physischen Ports wählen. */
-  ioPort: boolean;
+  /** Capture-Karte: Anschlüsse der erkannten Karten wählen (Assistent). */
+  captureCard: boolean;
   /** Zusatzzeile unter dem Host (z. B. Profil-Ampel); wird bei jeder Host-Wahl neu befüllt. */
   fillProfile?: (target: HTMLElement, hostId: string) => void;
   /** Führt den Start aus; Rückgabe = Fehlermeldung (Dialog bleibt offen) oder null (Dialog schließt). */
@@ -66,7 +67,12 @@ async function loadOptions(type: string): Promise<OptionDef[]> {
 /** Öffnet den Dialog. Löst mit true auf, wenn gestartet wurde, mit false bei Abbruch. */
 export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
   return new Promise((resolve) => {
-    const form: StartForm = { name: "", hostId: "", ioDirection: opts.ioPort ? "in" : "", options: {} };
+    const form: StartForm = { name: "", hostId: "", ioCardType: "", ioPorts: [], options: {} };
+    const wizard = opts.captureCard ? createCardWizard((card, ports) => {
+      form.ioCardType = card;
+      form.ioPorts = ports;
+      refreshOk();
+    }) : null;
 
     const root = el("div", "position:fixed;inset:0;z-index:3000;display:flex;align-items:center;justify-content:center;font-family:var(--omp-font,system-ui,sans-serif);font-size:var(--omp-font-size-sm,12px);");
     root.setAttribute("data-role", "start-dialog");
@@ -104,6 +110,7 @@ export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
       const profile = el("div", "font-size:11px;margin-top:2px;");
       sel.addEventListener("change", () => {
         form.hostId = sel.value;
+        wizard?.setHost(form.hostId);
         profile.textContent = "";
         opts.fillProfile?.(profile, form.hostId);
       });
@@ -115,16 +122,7 @@ export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
       opts.fillProfile(profile, "");
     }
 
-    if (opts.ioPort) {
-      const sel = el("select", INPUT);
-      for (const [v, key] of [["in", "flow.sd.ioIn"], ["out", "flow.sd.ioOut"]] as const) {
-        const o = el("option", "", t(key));
-        o.value = v;
-        sel.append(o);
-      }
-      sel.addEventListener("change", () => (form.ioDirection = sel.value as "in" | "out"));
-      body.append(labelled(t("flow.sd.io"), sel, t("flow.3a4eae")));
-    }
+    if (wizard) body.append(wizard.element);
 
     // Einstellungen des Node-Typs (Schema aus node-options.json) — werden nachgeladen, der Dialog ist sofort bedienbar.
     const settings = el("div", "margin-top:4px;");
@@ -236,15 +234,20 @@ export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
     void loadErrorCodes().then((c) => (codes = c));
     const actions = el("div", "display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--omp-border,#3a3f45);");
     const btnCss = "cursor:pointer;font:inherit;padding:6px 14px;border-radius:var(--omp-radius,6px);border:1px solid var(--omp-border,#3a3f45);background:var(--omp-surface-raised,#2f3339);color:inherit;";
+    let busy = false;
     const cancel = el("button", btnCss, t("kit.cancel"));
     cancel.type = "button";
     const ok = el("button", btnCss + "background:var(--omp-info,#4285f4);border-color:var(--omp-info,#4285f4);color:#fff;", t("flow.confirmStartLabel"));
     ok.type = "button";
     actions.append(cancel, ok);
+    // Capture-Karte: ohne gewählten Anschluss gibt es nichts zu starten.
+    function refreshOk() {
+      ok.disabled = busy || (opts.captureCard && form.ioPorts.length === 0);
+    }
+    refreshOk();
     dlg.append(head, body, error, errorHelp, actions);
     root.append(backdrop, dlg);
 
-    let busy = false;
     const close = (started: boolean) => {
       document.removeEventListener("keydown", onKey, true);
       root.remove();
@@ -253,12 +256,12 @@ export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
     const start = async () => {
       if (busy) return;
       busy = true;
-      ok.disabled = true;
+      refreshOk();
       error.textContent = "";
       errorHelp.replaceChildren();
       const msg = await opts.submit(buildStartBody(opts.entry.type, opts.entry.version, form));
       busy = false;
-      ok.disabled = false;
+      refreshOk();
       if (msg) {
         error.textContent = msg;
         const code = classify(codes, msg);

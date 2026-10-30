@@ -112,6 +112,15 @@ func TestShippedNodeOptionsAreValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Typen aus Container-Paketen (deploy/<paket>/catalog-entry.json) kommen erst beim Import in den Katalog.
+	pkgs, _ := filepath.Glob("../deploy/*/catalog-entry.json")
+	for _, f := range pkgs {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cat = append(cat, b...)
+	}
 	for typ, opts := range m {
 		if !strings.Contains(string(cat), `"type": "`+typ+`"`) {
 			t.Errorf("Typ %s steht nicht im Katalog", typ)

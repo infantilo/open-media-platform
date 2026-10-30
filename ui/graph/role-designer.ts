@@ -52,7 +52,7 @@ import {
 import { apiFetch } from "../shell/connection.ts";
 import { showToast } from "../kit/omp-toast.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
-import { IO_CARD_TYPES } from "./start-dialog-logic.ts";
+import { CARD_TYPES } from "./capture-card-logic.ts";
 
 export type { DraftConnection, DraftRole };
 
@@ -92,7 +92,7 @@ const MIXER_LEVELS_ROW_HEIGHT = 22;
 // Nutzerauftrag 2026-08-20 (im Anschluss an den DeckLink-Crash-Loop-Fix,
 // s. role-designer-logic.ts DraftRole.requiredIoPort-Doku): sechste Zeile
 // für die Richtung des geclaimten physischen I/O-Ports — gleiches
-// Baumuster wie MIXER_LEVELS_ROW_HEIGHT, nur für nodeType==="omp-capture-card-decklink"
+// Baumuster wie MIXER_LEVELS_ROW_HEIGHT, nur für nodeType==="omp-capture-card"
 // sichtbar, jede andere Rolle lässt die Zeile leer/versteckt.
 const IO_PORT_ROW_HEIGHT = 22;
 const TILE_HEIGHT =
@@ -404,12 +404,12 @@ export class RoleDesigner extends HTMLElement {
     const used = new Set(this.#roles.map((r) => r.name));
     const name = uniqueRoleName(nodeType, used);
     // requiredIoPort (s. role-designer-logic.ts DraftRole-Doku): eine
-    // omp-capture-card-decklink-Rolle ohne geclaimten Port kann mit echter Hardware
-    // ohnehin nie funktionieren (fester device-number=0-Default) — direkt
+    // Capture-Card-Rolle ohne geclaimten Port kann mit echter Hardware
+    // ohnehin nie funktionieren (kein Anschluss gewählt) — direkt
     // beim Anlegen gesetzt statt einer Rolle, die erst nachträglich per
     // Dropdown "scharf" gemacht werden müsste. Default "in" (Ingest,
     // Teil 1) — Nutzer kann unten auf "out" umstellen.
-    const requiredIoPort = nodeType in IO_CARD_TYPES ? { cardType: IO_CARD_TYPES[nodeType], direction: "in" } : undefined;
+    const requiredIoPort = nodeType === "omp-capture-card" ? { cardType: "decklink", direction: "in" } : undefined;
     this.#roles.push({ name, nodeType, hostId: hostId || undefined, requiredIoPort });
     this.#positions[name] = position ?? this.#nextDefaultPosition();
     this.#render();
@@ -1241,7 +1241,7 @@ export class RoleDesigner extends HTMLElement {
     // Nutzerauftrag 2026-08-20 (im Anschluss an den DeckLink-Crash-Loop-
     // Fix): Richtung des geclaimten physischen I/O-Ports — gleiches
     // Baumuster wie die mixerLevels-Zeile oben, nur für
-    // nodeType==="omp-capture-card-decklink" sichtbar. cardType bleibt fix "decklink"
+    // nodeType==="omp-capture-card" sichtbar. cardType und Richtung wählt der Nutzer
     // (bislang einziges I/O-Karten-nodeType, s. DraftRole-Doku) — nur die
     // Richtung ist wählbar.
     const ioPortObject = document.createElementNS(SVG_NS, "foreignObject");
@@ -1256,7 +1256,7 @@ export class RoleDesigner extends HTMLElement {
     ioPortObject.setAttribute("width", String(NODE_WIDTH - 12));
     ioPortObject.setAttribute("height", String(IO_PORT_ROW_HEIGHT));
     ioPortObject.addEventListener("pointerdown", (ev) => ev.stopPropagation());
-    if (role.nodeType in IO_CARD_TYPES) {
+    if (role.nodeType === "omp-capture-card") {
       const ioPortSelect = document.createElement("select");
       ioPortSelect.title =
         t("rd.e7cb49");
@@ -1268,21 +1268,29 @@ export class RoleDesigner extends HTMLElement {
       // aus einer vor diesem Feature gespeicherten Definition) tatsächlich
       // requiredIoPort===undefined haben — #addRole setzt es für NEUE
       // Rollen direkt auf "in", s. dortige Doku.
-      const ioPortOptions: Array<[string, string]> = [
-        ["", t("rd.59d216")],
-        ["in", "I/O-Port: Eingang (SDI-In)"],
-        ["out", "I/O-Port: Ausgang (SDI-Out)"],
-      ];
+      // Eine Rolle belegt einen Anschluss (Hersteller + Richtung) oder beide Richtungen eines Geräts; mehrere Anschlüsse einer Karte
+      // wählt der Start-Assistent im Node-Katalog (eine Instanz, alle Ein-/Ausgänge). "Ein- und Ausgang" belegt
+      // beide Richtungen desselben Geräts (Duplex).
+      const ioPortOptions: Array<[string, string]> = [["", t("rd.59d216")]];
+      for (const card of CARD_TYPES) {
+        ioPortOptions.push(
+          [`${card}:in`, `${card}: ${t("cc.in")}`],
+          [`${card}:out`, `${card}: ${t("cc.out")}`],
+          [`${card}:both`, `${card}: ${t("cc.both")}`],
+        );
+      }
+      const current = role.requiredIoPort ? `${role.requiredIoPort.cardType}:${role.requiredIoPort.direction}` : "";
       for (const [value, label] of ioPortOptions) {
         const opt = document.createElement("option");
         opt.value = value;
         opt.textContent = label;
-        if (value === (role.requiredIoPort?.direction ?? "")) opt.selected = true;
+        if (value === current) opt.selected = true;
         ioPortSelect.appendChild(opt);
       }
       ioPortSelect.addEventListener("change", () => {
         this.#pushUndo();
-        role.requiredIoPort = ioPortSelect.value ? { cardType: IO_CARD_TYPES[role.nodeType] ?? "decklink", direction: ioPortSelect.value } : undefined;
+        const [cardType, direction] = ioPortSelect.value.split(":");
+        role.requiredIoPort = ioPortSelect.value ? { cardType, direction } : undefined;
       });
       ioPortObject.appendChild(ioPortSelect);
     }

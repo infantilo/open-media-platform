@@ -139,7 +139,10 @@ type Role struct {
 // passendem Port, s. Service.claimIOPortsForStart.
 type IOPortRequirement struct {
 	CardType  string `json:"cardType"`
-	Direction string `json:"direction"` // "in" | "out"
+	Direction string `json:"direction"` // "in" | "out" | "both" (Eingang und Ausgang desselben Geräts, Duplex)
+	// Ports: ausdrücklich gewählte Anschlüsse (`<Hersteller>-<N>-in|out`) einer Karten-Instanz (Start-Assistent, Kap. 76).
+	// Gesetzt → Direction wird ignoriert und genau diese Ports werden belegt.
+	Ports []string `json:"ports,omitempty"`
 }
 
 // PlacementEscalation liefert die Eskalationsstufe dieser Rolle,
@@ -176,7 +179,7 @@ const (
 
 // roleHostBound: Rolle darf nicht automatisch umziehen — ausdrücklich gesetzt (Escalation "pinned"),
 // durch einen exklusiven I/O-Port (RequiredIOPort) oder weil der Katalog den Node-Typ als
-// hostgebunden führt (CatalogEntry.HostBound, z. B. omp-capture-card-decklink).
+// hostgebunden führt (CatalogEntry.HostBound, z. B. omp-capture-card).
 func (s *Service) roleHostBound(r Role) bool {
 	if r.PlacementEscalation() == EscalationPinned || r.RequiredIOPort != nil {
 		return true

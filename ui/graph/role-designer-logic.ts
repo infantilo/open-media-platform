@@ -43,14 +43,11 @@ export interface DraftRole {
   // gesamte Laufzeit einen exklusiven physischen I/O-Port braucht (D13,
   // ARCHITECTURE.md §6.1 Erweiterung 2026-07-10). Bislang nur per
   // Roh-JSON/API setzbar, was live gefundene Folgefehler hatte: ohne
-  // requiredIoPort startet jede omp-capture-card-decklink-Instanz mit ihrem
-  // eingebauten Default (device-number=0, ingest, s. nodes/omp-capture-card/
-  // src/main.rs) — auf einem Host ohne Karte an genau diesem Index ein
-  // Crash-Loop statt einer ehrlichen "kein freier Port"-Ablehnung. Nur
-  // für nodeType==="omp-capture-card-decklink" gezeigt/gesetzt (s. role-designer.ts
-  // #renderRoleTile/#addRole) — cardType ist dort fix "decklink", da das
-  // bislang einzige I/O-Karten-nodeType; direction ("in"|"out") steuert
-  // zugleich OMP_CARD_DIRECTION (ioports.go ioPortExtraEnv).
+  // requiredIoPort startet die Instanz ohne Anschluss-Wahl (OMP_CARD_PORTS leer) — der Node bricht dann mit
+  // einer klaren Meldung ab, statt auf einem Host ohne Karte in einen Crash-Loop zu laufen; so kommt eine
+  // ehrliche "kein freier Port"-Ablehnung. Nur für nodeType==="omp-capture-card" gezeigt/gesetzt
+  // (s. role-designer.ts #renderRoleTile/#addRole). cardType ("decklink"|"aja"|"matrox") und direction
+  // ("in"|"out") bestimmen OMP_CARD_VENDOR und OMP_CARD_PORTS (ioports.go CardPortsEnv).
   requiredIoPort?: { cardType: string; direction: string };
 }
 

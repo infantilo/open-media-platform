@@ -75,8 +75,8 @@ var allowedExtraEnvKeys = map[string]bool{
 	// lehnte diese Allowlist die Anfrage bislang komplett ab
 	// ("extraEnv key ... not allowed") — live mit einem echten Host-Agent
 	// gefunden, s. docs/decisions.md.
-	"OMP_CARD_DEVICE_NUMBER": true,
-	"OMP_CARD_DIRECTION":     true,
+	"OMP_CARD_PORTS":  true,
+	"OMP_CARD_VENDOR": true,
 	// Die Programm-/Rollenformate setzen zusätzlich zur Auflösung die Bildrate (workflows/formats.go
 	// formatExtraEnv): ohne diese beiden Schlüssel lehnte der Agent jeden Remote-Start eines Workflows
 	// mit Format ab ("extraEnv key OMP_FRAMERATE_DEN not allowed"). OMP_ME_LEVELS: Role.MixerLevels.
@@ -311,6 +311,23 @@ func (e *Executor) Handle(req Request) Response {
 		}
 		data, _ := json.Marshal(nodeoptions.CheckPath(req.Path, req.Kind))
 		return Response{OK: true, Detail: string(data)}
+	case "list-cards":
+		// Erkannte Anschlüsse der Capture-Karten dieses Hosts (Start-Assistent, Kap. 76): das Karten-Node-Binary
+		// fragt die Herstellerplugins ab (`--list-cards`) und gibt JSON aus.
+		entry, ok := catalog.Find(e.catalog, "omp-capture-card")
+		if !ok || len(entry.Command) == 0 {
+			return Response{OK: true, Detail: "[]"}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, entry.Command[0], append(append([]string{}, entry.Command[1:]...), "--list-cards")...).Output()
+		if err != nil {
+			return Response{OK: false, Error: fmt.Sprintf("Kartenerkennung: %v", err)}
+		}
+		if !json.Valid(out) {
+			return Response{OK: false, Error: "Kartenerkennung: keine gültige JSON-Ausgabe"}
+		}
+		return Response{OK: true, Detail: strings.TrimSpace(string(out))}
 	case jobwire.ActionSysinfo:
 		// Nur Lesen: Platten, Speicher, Last, Prozesse, Kernel-Meldungen dieses Rechners (Support, Kap. 72).
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

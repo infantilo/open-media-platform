@@ -118,6 +118,8 @@ func TestSupportMayRead(t *testing.T) {
 }
 
 func TestSupportReadOnlyMiddlewareBlocksWritesAndAuditsThem(t *testing.T) {
+	// `blockedReads` ist Paketzustand: ohne frische Instanz sieht ein zweiter Durchlauf (-count>1) die Lesezugriffe als „schon gesehen“.
+	blockedReads = &recentSet{window: time.Minute}
 	aud := &fakeAuditSvc{}
 	g := &authGate{auth: fakeAuthSvc{userCount: 1}, authz: fakeAuthzSvc{}, audit: aud, nodes: fakeNodeLister{}, support: newFakeSupport()}
 	reached := 0

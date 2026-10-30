@@ -1,13 +1,13 @@
 import { assertEquals } from "jsr:@std/assert";
 import { buildStartBody, emptyMeaning, filledOptions, needsDialogFields } from "./start-dialog-logic.ts";
 
-const empty = { name: "", hostId: "", ioDirection: "" as const, options: {} };
+const empty = { name: "", hostId: "", ioCardType: "", ioPorts: [], options: {} };
 
 Deno.test("Startkörper: nur Gesetztes wird gesendet", () => {
   assertEquals(buildStartBody("omp-source", undefined, empty), { type: "omp-source" });
   assertEquals(
-    buildStartBody("omp-capture-card-decklink", "1.2", { name: "  Kamera 3 ", hostId: "h1", ioDirection: "in", options: { A: " 5 ", B: "  ", C: "x" } }),
-    { type: "omp-capture-card-decklink", version: "1.2", hostId: "h1", label: "Kamera 3", requiredIoPort: { cardType: "decklink", direction: "in" }, options: { A: "5", C: "x" } },
+    buildStartBody("omp-capture-card", "1.2", { name: "  Kamera 3 ", hostId: "h1", ioCardType: "decklink", ioPorts: ["decklink-0-in", "decklink-0-out"], options: { A: " 5 ", B: "  ", C: "x" } }),
+    { type: "omp-capture-card", version: "1.2", hostId: "h1", label: "Kamera 3", requiredIoPort: { cardType: "decklink", ports: ["decklink-0-in", "decklink-0-out"] }, options: { A: "5", C: "x" } },
   );
 });
 

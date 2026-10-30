@@ -1985,8 +1985,8 @@ func validate(def Definition) error {
 			if r.RequiredIOPort.CardType == "" {
 				return fmt.Errorf("%w: role %q requiredIoPort needs a cardType", ErrValidation, r.Name)
 			}
-			if r.RequiredIOPort.Direction != "in" && r.RequiredIOPort.Direction != "out" {
-				return fmt.Errorf("%w: role %q requiredIoPort.direction must be \"in\" or \"out\", got %q", ErrValidation, r.Name, r.RequiredIOPort.Direction)
+			if r.RequiredIOPort.Direction != "in" && r.RequiredIOPort.Direction != "out" && r.RequiredIOPort.Direction != "both" {
+				return fmt.Errorf("%w: role %q requiredIoPort.direction must be \"in\", \"out\" or \"both\", got %q", ErrValidation, r.Name, r.RequiredIOPort.Direction)
 			}
 		}
 		nodeTypeByRole[r.Name] = r.NodeType

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"errors"
+	"sync/atomic"
 
 	"archive/zip"
 	"bytes"
@@ -150,8 +151,9 @@ func hostSysTestMux(t *testing.T) *http.ServeMux {
 }
 
 func TestSelftestAndBundleIncludeHostSysinfo(t *testing.T) {
-	calls := 0
-	sc := newSysCache(func(id string) (jobwire.Sysinfo, error) { calls++; return fakeSysinfo(id) }, time.Minute)
+	var n atomic.Int32 // fetchAll ruft den Abruf je Host in eigenen Goroutinen auf
+	sc := newSysCache(func(id string) (jobwire.Sysinfo, error) { n.Add(1); return fakeSysinfo(id) }, time.Minute)
+	calls := func() int { return int(n.Load()) }
 	mux := hostSysTestMux(t)
 
 	rec := httptest.NewRecorder()
@@ -169,13 +171,13 @@ func TestSelftestAndBundleIncludeHostSysinfo(t *testing.T) {
 	if disk == nil || disk.Level != support.LevelErr || disk.Group != "Hosts: Regie" {
 		t.Fatalf("Platte des Hosts fehlt oder falsch: %+v", disk)
 	}
-	if calls != 2 {
-		t.Fatalf("calls = %d, erwartet je ein Abruf pro Host", calls)
+	if calls() != 2 {
+		t.Fatalf("calls = %d, erwartet je ein Abruf pro Host", calls())
 	}
 	// Zweiter Selbsttest innerhalb der Gültigkeit: aus dem Zwischenspeicher.
 	handleSelftest(mux, "", nil, sc)(httptest.NewRecorder(), authed("/api/v1/admin/selftest"))
-	if calls != 2 {
-		t.Fatalf("Zwischenspeicher nicht genutzt: calls = %d", calls)
+	if calls() != 2 {
+		t.Fatalf("Zwischenspeicher nicht genutzt: calls = %d", calls())
 	}
 
 	// Das Paket fragt frisch ab, schwärzt den Bericht und nennt den älteren Agent unter failed.

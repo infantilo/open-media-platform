@@ -5,8 +5,9 @@ export interface StartForm {
   name: string;
   /** Zielhost ("" = lokal). */
   hostId: string;
-  /** I/O-Port-Richtung für DeckLink-Nodes ("" = nicht zutreffend). */
-  ioDirection: "" | "in" | "out";
+  /** Capture-Karte: Hersteller der gewählten Anschlüsse (`cardType`) und ihre Port-IDs (leer = nicht zutreffend). */
+  ioCardType: string;
+  ioPorts: string[];
   /** Eingaben je Option (Schlüssel → Text); leere Felder bedeuten „Standard“. */
   options: Record<string, string>;
 }
@@ -16,7 +17,7 @@ export interface StartBody {
   version?: string;
   hostId?: string;
   label?: string;
-  requiredIoPort?: { cardType: string; direction: string };
+  requiredIoPort?: { cardType: string; ports: string[] };
   options?: Record<string, string>;
 }
 
@@ -30,9 +31,6 @@ export function filledOptions(options: Record<string, string>): Record<string, s
   return out;
 }
 
-/** Karten-Node-Typen mit exklusivem I/O-Port und ihr `cardType` im Host-Inventar (Kap. 76). */
-export const IO_CARD_TYPES: Record<string, string> = { "omp-capture-card-decklink": "decklink", "omp-capture-card-aja": "aja", "omp-capture-card-matrox": "matrox" };
-
 /** Anfragekörper für `POST /api/v1/instances` aus Katalogeintrag und Formular. */
 export function buildStartBody(type: string, version: string | undefined, f: StartForm): StartBody {
   const body: StartBody = { type };
@@ -40,7 +38,7 @@ export function buildStartBody(type: string, version: string | undefined, f: Sta
   if (f.hostId) body.hostId = f.hostId;
   const name = f.name.trim();
   if (name) body.label = name;
-  if (f.ioDirection) body.requiredIoPort = { cardType: IO_CARD_TYPES[type] ?? "decklink", direction: f.ioDirection };
+  if (f.ioPorts.length > 0) body.requiredIoPort = { cardType: f.ioCardType, ports: f.ioPorts };
   const opts = filledOptions(f.options);
   if (Object.keys(opts).length > 0) body.options = opts;
   return body;

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
@@ -31,6 +32,7 @@ func (extAccess) Identity(*http.Request) module.Identity {
 // Das Dienst-Gateway hängt wie jedes Modul hinter der Anmeldung des Kerns: ohne gültiges Token nie bis zum Dienst,
 // mit Token kommt der angemeldete Nutzer als Identität an, und das Funktionsrecht der Route entscheidet.
 func TestExtGatewayIsBehindCoreAuthAndPassesTheLoggedInUser(t *testing.T) {
+	var mu sync.Mutex // der Dienst läuft im Server-Goroutine, der Test liest nach der Antwort
 	var seenUser, seenFeatures string
 	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/service.json" {
@@ -41,7 +43,9 @@ func TestExtGatewayIsBehindCoreAuthAndPassesTheLoggedInUser(t *testing.T) {
 			})
 			return
 		}
+		mu.Lock()
 		seenUser, seenFeatures = r.Header.Get(extsvc.HUser), r.Header.Get(extsvc.HFeatures)
+		mu.Unlock()
 		io.WriteString(w, `{"pong":true}`)
 	}))
 	defer node.Close()
@@ -72,6 +76,8 @@ func TestExtGatewayIsBehindCoreAuthAndPassesTheLoggedInUser(t *testing.T) {
 	if rec.Code != http.StatusOK || rec.Body.String() != `{"pong":true}`+"\n" && rec.Body.String() != `{"pong":true}` {
 		t.Fatalf("mit Recht: %d %s", rec.Code, rec.Body.String())
 	}
+	mu.Lock()
+	defer mu.Unlock()
 	if seenUser != "alice" || seenFeatures != "demo.use" {
 		t.Errorf("Identität am Dienst: user=%q features=%q", seenUser, seenFeatures)
 	}

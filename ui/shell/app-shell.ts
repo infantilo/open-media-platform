@@ -25,6 +25,7 @@ import { apiFetch, type ConnectionChangeDetail, type ConnectionState, connection
 import { whoami } from "./auth.ts";
 import { showToast } from "../kit/omp-toast.ts";
 import { freezeNow } from "./freeze.ts";
+import { askNote } from "./note-prompt.ts";
 import { getLang, type I18nKey, t, t as tt } from "./i18n.ts";
 import { ensureBundle, getModules } from "./modules-registry.ts";
 import { insertIndex, mainTabs } from "./modules-logic.ts";
@@ -369,8 +370,10 @@ class AppShell extends HTMLElement {
       "white-space:nowrap;padding:2px 8px;border:1px solid var(--omp-border);border-radius:var(--omp-radius);" +
       "background:var(--omp-surface-raised);color:var(--omp-text);cursor:pointer;font-size:var(--omp-font-size-xs);";
     mark.addEventListener("click", async () => {
+      const note = await askNote("marker");
+      if (note === null) return;
       try {
-        const res = await apiFetch("/api/v1/timeline/marker", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+        const res = await apiFetch("/api/v1/timeline/marker", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note }) });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         showToast(t("tl.marked", { time: new Date().toLocaleTimeString() }), { variant: "info" });
       } catch (e) {
@@ -384,9 +387,11 @@ class AppShell extends HTMLElement {
     freezeBtn.title = t("fr.button.title");
     freezeBtn.style.cssText = mark.style.cssText;
     freezeBtn.addEventListener("click", async () => {
+      const note = await askNote("freeze");
+      if (note === null) return;
       freezeBtn.disabled = true;
       freezeBtn.textContent = "❄ …";
-      await freezeNow(10);
+      await freezeNow(10, note);
       freezeBtn.textContent = t("fr.button");
       window.setTimeout(() => (freezeBtn.disabled = false), 3000);
     });

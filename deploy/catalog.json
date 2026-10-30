@@ -11,58 +11,19 @@
     "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
   },
   {
-    "type": "omp-capture-card-decklink",
+    "type": "omp-capture-card",
     "hostBound": true,
-    "label": "DeckLink",
-    "runner": "process",
-    "command": ["../nodes/target/release/omp-capture-card"],
-    "env": { "OMP_CARD_VENDOR": "decklink" },
-    "description": "Im Ausgang bettet der Empfänger „ANC / Untertitel“ CEA-708-CDPs (DID 0x61/SDID 0x01) eines MXL-Daten-Flows in die VANC-Zeile ein (nur CDP; ohne Hardware nicht geprüft). Blackmagic-DeckLink-SDI/IP-Karte (Video+Audio) ⇄ MXL, gerichtet je Instanz (UMSETZUNG.md D10: Teil 1 Ingest, Teil 2 Ausgabe). Braucht echte Hardware am jeweiligen Host, per OMP_CARD_DEVICE_NUMBER/OMP_CARD_DIRECTION gewählt — auf einem Host ohne passende Karte startet die Instanz mit klarem Fehler statt still zu laufen. Für Rollen mit requiredIoPort (§6.1 Erweiterung 2026-07-10, D13) setzt der Orchestrator beide Variablen automatisch aus dem geclaimten Port; ohne requiredIoPort bleibt der eingebaute Default (device-number=0, ingest).",
-    "i18n": { "en": {"description": "In output mode the receiver \"ANC / Subtitles\" embeds CEA-708 CDPs (DID 0x61/SDID 0x01) of an MXL data flow into the VANC line (CDP only; not verified without hardware). Blackmagic DeckLink SDI/IP card (video+audio) ⇄ MXL, directional per instance (UMSETZUNG.md D10: part 1 ingest, part 2 output). Needs real hardware on the respective host, chosen via OMP_CARD_DEVICE_NUMBER/OMP_CARD_DIRECTION — on a host without a matching card the instance starts with a clear error instead of running silently. For roles with requiredIoPort (§6.1 extension 2026-07-10, D13) the orchestrator sets both variables automatically from the claimed port; without requiredIoPort the built-in default (device-number=0, ingest) applies.", "expectedResources": "low, constant (hardware capture, no software encoding)"} },
-    "expectedResources": "gering, konstant (Hardware-Erfassung, kein Software-Encoding)",
-    "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
-  },
-  {
-    "type": "omp-capture-card-aja",
-    "hostBound": true,
-    "label": "AJA",
+    "label": "Capture Card",
     "runner": "process",
     "command": [
       "../nodes/target/release/omp-capture-card"
     ],
-    "env": {
-      "OMP_CARD_VENDOR": "aja"
-    },
-    "description": "AJA-Karte (NTV2, z. B. KONA) über das AJA-GStreamer-Plugin (ajavideosrc/-sink, ajaaudiosrc/-sink) ⇄ MXL, gerichtet je Instanz; gleicher Node wie DeckLink (Untertitel-Einbettung, IS-05, Kanalzuordnung). Modus wird aus der Enum-Liste des Plugins zugeordnet, Eingang/Kanal per OMP_CARD_PROPS (z. B. input-source=sdi-1,channel=0). KONA IP im reinen ST-2110-Betrieb braucht diesen Node nicht: sie erscheint als NMOS-Gerät im Netz und wird über das ST-2110-Gateway angebunden. Ohne Karte/Plugin startet die Instanz mit klarem Fehler. Nicht an Hardware geprüft.",
+    "env": {},
+    "description": "SDI-/IP-Capture-Karte (Blackmagic DeckLink, AJA, Matrox-SDK-Karten) ⇄ MXL. Eine Instanz je Karte: der Start-Assistent zeigt die erkannten Karten mit ihren Anschlüssen (frei/belegt); für jeden gewählten Anschluss entstehen Eingang (Sender: Video + Audio) und/oder Ausgang (Empfänger: Video, Audio, ANC/Untertitel). Duplex-Anschlüsse liefern beide Richtungen gleichzeitig. Der Ausgang bettet CEA-708-CDPs eines MXL-Daten-Flows in die VANC-Zeile ein (nur CDP). Der Hersteller wird mit der Karte erkannt (DeckLink, AJA); Matrox-SDK-Karten brauchen ein vom Betreiber gebautes GStreamer-Plugin (OMP_CARD_ELEMENTS). Auf einem Host ohne passende Karte startet die Instanz mit klarem Fehler. Nicht an Hardware geprüft.",
     "i18n": {
       "en": {
-        "description": "AJA card (NTV2, e.g. KONA) via the AJA GStreamer plugin (ajavideosrc/-sink, ajaaudiosrc/-sink) ⇄ MXL, directional per instance; same node as DeckLink (caption embedding, IS-05, channel mapping). The mode is matched from the plugin's enum list, input/channel via OMP_CARD_PROPS (e.g. input-source=sdi-1,channel=0). KONA IP in pure ST 2110 operation does not need this node: it appears as an NMOS device on the network and is attached via the ST 2110 gateway. Without card/plugin the instance starts with a clear error. Not verified on hardware.",
-        "expectedResources": "low, constant (hardware capture, no software encoding)"
-      }
-    },
-    "expectedResources": "gering, konstant (Hardware-Erfassung, kein Software-Encoding)",
-    "latency": {
-      "video": {
-        "minLatencyFrames": 0,
-        "maxLatencyFrames": 0
-      }
-    }
-  },
-  {
-    "type": "omp-capture-card-matrox",
-    "hostBound": true,
-    "label": "Matrox",
-    "runner": "process",
-    "command": [
-      "../nodes/target/release/omp-capture-card"
-    ],
-    "env": {
-      "OMP_CARD_VENDOR": "custom"
-    },
-    "description": "Matrox-SDK-Karte (DSX LE5 / xMIO) ⇄ MXL, gerichtet je Instanz. Matrox liefert kein öffentliches GStreamer-Plugin: der Host braucht ein auf dem Matrox-SDK gebautes Plugin, dessen vier Elementnamen in OMP_CARD_ELEMENTS stehen (videosrc,audiosrc,videosink,audiosink). Danach gleicher Node wie DeckLink. Ohne Plugin startet die Instanz mit klarem Fehler. Nicht an Hardware geprüft.",
-    "i18n": {
-      "en": {
-        "description": "Matrox SDK card (DSX LE5 / xMIO) ⇄ MXL, directional per instance. Matrox ships no public GStreamer plugin: the host needs a plugin built on the Matrox SDK, its four element names go into OMP_CARD_ELEMENTS (videosrc,audiosrc,videosink,audiosink). After that it is the same node as DeckLink. Without the plugin the instance starts with a clear error. Not verified on hardware.",
+        "label": "Capture Card",
+        "description": "SDI/IP capture card (Blackmagic DeckLink, AJA, Matrox SDK cards) ⇄ MXL. One instance per card: the start wizard lists the detected cards with their connectors (free/in use); every selected connector yields an input (sender: video + audio) and/or an output (receiver: video, audio, ANC/captions). Duplex connectors provide both directions at the same time. The output embeds CEA-708 CDPs of an MXL data flow into the VANC line (CDP only). The vendor is detected with the card (DeckLink, AJA); Matrox SDK cards need a GStreamer plugin built by the operator (OMP_CARD_ELEMENTS). On a host without a matching card the instance starts with a clear error. Not verified on hardware.",
         "expectedResources": "low, constant (hardware capture, no software encoding)"
       }
     },

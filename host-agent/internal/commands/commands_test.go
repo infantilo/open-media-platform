@@ -173,7 +173,7 @@ func TestStartAllowsAllowlistedExtraEnvKeys(t *testing.T) {
 
 // TestStartAllowsDecklinkIOPortExtraEnvKeys — live gefundener Bug
 // (2026-08-20): workflows.ioPortExtraEnv reicht den per Role.RequiredIOPort
-// geclaimten Port als OMP_CARD_DEVICE_NUMBER/OMP_CARD_DIRECTION
+// geclaimten Port als OMP_CARD_PORTS/OMP_CARD_VENDOR
 // weiter, war aber bis hierher nie in der Allowlist — ein Workflow mit
 // requiredIoPort auf einem per Host-Agent verwalteten Remote-Host (der
 // eigentliche Zielfall für physische I/O-Karten) scheiterte deshalb
@@ -188,7 +188,7 @@ func TestStartAllowsDecklinkIOPortExtraEnvKeys(t *testing.T) {
 		Action:     "start",
 		Type:       "sleeper",
 		InstanceID: "test-allow-decklink",
-		ExtraEnv:   map[string]string{"OMP_CARD_DEVICE_NUMBER": "3", "OMP_CARD_DIRECTION": "ingest"},
+		ExtraEnv:   map[string]string{"OMP_CARD_PORTS": "3:in", "OMP_CARD_VENDOR": "decklink"},
 	})
 	if !resp.OK {
 		t.Fatalf("Handle() = %+v, want OK=true for allowlisted decklink extraEnv keys", resp)
@@ -289,5 +289,24 @@ func TestHandleSysinfo(t *testing.T) {
 	var s jobwire.Sysinfo
 	if err := json.Unmarshal([]byte(resp.Detail), &s); err != nil || s.MemTotal == 0 || len(s.Disks) == 0 || s.Files["os-release.txt"] == "" {
 		t.Fatalf("%v %+v", err, s)
+	}
+}
+
+// Kartenerkennung (Kap. 76): der Agent ruft das Karten-Node-Binary mit --list-cards auf und gibt dessen JSON weiter.
+func TestListCardsRunsNodeBinary(t *testing.T) {
+	e := NewExecutor([]catalog.Entry{{
+		Type: "omp-capture-card", Runner: catalog.RunnerProcess,
+		Command: []string{"sh", "-c", `[ "$1" = "--list-cards" ] && echo '[{"vendor":"aja","device":0,"dir":"in","name":"KONA"}]'`, "x"},
+	}}, "", "", "", "host-1", nil)
+	resp := e.Handle(Request{Action: "list-cards"})
+	if !resp.OK || !strings.Contains(resp.Detail, `"vendor":"aja"`) {
+		t.Fatalf("Handle() = %+v", resp)
+	}
+}
+
+func TestListCardsWithoutCatalogEntryIsEmpty(t *testing.T) {
+	e := NewExecutor(nil, "", "", "", "host-1", nil)
+	if resp := e.Handle(Request{Action: "list-cards"}); !resp.OK || resp.Detail != "[]" {
+		t.Fatalf("Handle() = %+v", resp)
 	}
 }

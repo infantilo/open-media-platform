@@ -186,16 +186,16 @@ func TestReleaseClaimedByInstance(t *testing.T) {
 		t.Fatalf("SetInventory() error = %v", err)
 	}
 
-	if _, _, ok, err := store.Claim("decklink", "in", "", "", "direct:omp-capture-card-decklink:a", "inst-a"); err != nil || !ok {
+	if _, _, ok, err := store.Claim("decklink", "in", "", "", "direct:omp-capture-card:a", "inst-a"); err != nil || !ok {
 		t.Fatalf("Claim(a) = ok=%v, err=%v", ok, err)
 	}
-	if _, _, ok, err := store.Claim("decklink", "in", "", "", "direct:omp-capture-card-decklink:b", "inst-b"); err != nil || !ok {
+	if _, _, ok, err := store.Claim("decklink", "in", "", "", "direct:omp-capture-card:b", "inst-b"); err != nil || !ok {
 		t.Fatalf("Claim(b) = ok=%v, err=%v", ok, err)
 	}
-	if err := store.UpdateInstanceID("", "direct:omp-capture-card-decklink:a", "inst-a"); err != nil {
+	if err := store.UpdateInstanceID("", "direct:omp-capture-card:a", "inst-a"); err != nil {
 		t.Fatalf("UpdateInstanceID(a) error = %v", err)
 	}
-	if err := store.UpdateInstanceID("", "direct:omp-capture-card-decklink:b", "inst-b"); err != nil {
+	if err := store.UpdateInstanceID("", "direct:omp-capture-card:b", "inst-b"); err != nil {
 		t.Fatalf("UpdateInstanceID(b) error = %v", err)
 	}
 
@@ -406,5 +406,89 @@ func TestClaimIsAtomicUnderRealConcurrency(t *testing.T) {
 	}
 	if wins != 1 {
 		t.Fatalf("wins = %d across %d concurrent Claim() attempts on the same single port, want exactly 1", wins, attempts)
+	}
+}
+
+// ClaimPorts belegt mehrere Anschlüsse einer Karte atomar: alles oder nichts.
+func TestClaimPortsAllOrNothing(t *testing.T) {
+	database := dbtest.Open(t)
+	cleanTables(t, database)
+	hostStore := hosts.NewStore(database)
+	store := NewStore(database)
+	hostID := newTestHost(t, hostStore)
+	if err := store.SetInventory(hostID, []Port{
+		{HostID: hostID, PortID: "decklink-0-in", CardType: "decklink", Direction: "in"},
+		{HostID: hostID, PortID: "decklink-0-out", CardType: "decklink", Direction: "out"},
+		{HostID: hostID, PortID: "decklink-1-in", CardType: "decklink", Direction: "in"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ok, conflict, err := store.ClaimPorts(hostID, []string{"decklink-0-in", "decklink-0-out"}, "", "direct:a", "")
+	if err != nil || !ok || conflict != "" {
+		t.Fatalf("erste Belegung: ok=%v conflict=%q err=%v", ok, conflict, err)
+	}
+	// Zweiter Versuch überschneidet sich in 0-out: nichts darf belegt werden, auch 1-in nicht.
+	ok, conflict, err = store.ClaimPorts(hostID, []string{"decklink-1-in", "decklink-0-out"}, "", "direct:b", "")
+	if err != nil || ok || conflict != "decklink-0-out" {
+		t.Fatalf("Überschneidung: ok=%v conflict=%q err=%v", ok, conflict, err)
+	}
+	if ok, _, _ := store.ClaimPorts(hostID, []string{"decklink-9-in"}, "", "direct:c", ""); ok {
+		t.Fatal("unbekannter Port darf nicht belegbar sein")
+	}
+	claims, _ := store.ListClaims()
+	if len(claims) != 2 {
+		t.Fatalf("Belegungen = %+v, want genau 0-in und 0-out", claims)
+	}
+	if err := store.UpdateInstanceID("", "direct:a", "inst-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReleaseClaimedByInstance("inst-a"); err != nil {
+		t.Fatal(err)
+	}
+	if claims, _ = store.ListClaims(); len(claims) != 0 {
+		t.Fatalf("nach Stop müssen beide Ports frei sein: %+v", claims)
+	}
+}
+
+// Direction "both": Eingang und Ausgang desselben Geräts gemeinsam, atomar, mit gemeinsamer Freigabe.
+func TestClaimBothTakesInAndOutOfOneDevice(t *testing.T) {
+	database := dbtest.Open(t)
+	cleanTables(t, database)
+	hostStore := hosts.NewStore(database)
+	store := NewStore(database)
+	hostID := newTestHost(t, hostStore)
+	if err := store.SetInventory(hostID, []Port{
+		{HostID: hostID, PortID: "decklink-0-in", CardType: "decklink", Direction: "in"},
+		{HostID: hostID, PortID: "decklink-0-out", CardType: "decklink", Direction: "out"},
+		{HostID: hostID, PortID: "decklink-1-in", CardType: "decklink", Direction: "in"}, // Gerät 1 hat keinen Ausgang
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Gerät 0 ist teilweise belegt (Ausgang) → "both" findet nichts.
+	if _, _, ok, err := store.Claim("decklink", "out", "", "wf-x", "r-x", ""); err != nil || !ok {
+		t.Fatalf("Vorbelegung: ok=%v err=%v", ok, err)
+	}
+	if _, _, ok, _ := store.Claim("decklink", "both", "", "wf", "r", ""); ok {
+		t.Fatal("both darf kein halb belegtes oder einseitiges Gerät nehmen")
+	}
+	if err := store.Release("wf-x", "r-x"); err != nil {
+		t.Fatal(err)
+	}
+	h, p, ok, err := store.Claim("decklink", "both", "", "wf", "r", "")
+	if err != nil || !ok || h != hostID || p != "decklink-0-in,decklink-0-out" {
+		t.Fatalf("both: host=%q port=%q ok=%v err=%v", h, p, ok, err)
+	}
+	if claims, _ := store.ListClaims(); len(claims) != 2 {
+		t.Fatalf("Belegungen = %+v, want 2", claims)
+	}
+	c, found, err := store.GetClaim("wf", "r")
+	if err != nil || !found || c.PortID != "decklink-0-in,decklink-0-out" {
+		t.Fatalf("GetClaim = %+v found=%v err=%v", c, found, err)
+	}
+	if err := store.ReleasePort(hostID, c.PortID); err != nil {
+		t.Fatal(err)
+	}
+	if claims, _ := store.ListClaims(); len(claims) != 0 {
+		t.Fatalf("nach Freigabe: %+v", claims)
 	}
 }

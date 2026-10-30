@@ -212,7 +212,7 @@ func InstancesWithMetrics(svc LauncherService, hostMetrics HostMetricsReader) []
 // Doku) statt eines Workflow-Scopes, den es hier gar nicht gibt — best
 // effort wie beim Workflow-Pfad, ein Fehler hier bricht den Start nicht ab.
 // Nutzerfund 2026-08-20 ("deklink node crasht immer noch beim start"):
-// ein per Node-Katalog/Instanzen-Tab DIREKT gestarteter `omp-capture-card-decklink`
+// ein per Node-Katalog/Instanzen-Tab DIREKT gestarteter `omp-capture-card`
 // (kein Workflow-Kontext) durchlief NIE workflows.Service.Start()s
 // claimIOPortsForStart — selbst nach dessen Fix (D13-Portweitergabe,
 // s. workflows/ioports.go) startete diese Instanz weiterhin mit dem
@@ -259,8 +259,9 @@ func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStor
 				http.Error(w, "requiredIoPort.cardType must not be empty", http.StatusBadRequest)
 				return
 			}
-			if body.RequiredIOPort.Direction != "in" && body.RequiredIOPort.Direction != "out" {
-				http.Error(w, `requiredIoPort.direction must be "in" or "out"`, http.StatusBadRequest)
+			explicit := len(body.RequiredIOPort.Ports) > 0
+			if !explicit && body.RequiredIOPort.Direction != "in" && body.RequiredIOPort.Direction != "out" && body.RequiredIOPort.Direction != "both" {
+				http.Error(w, `requiredIoPort.direction must be "in", "out" or "both"`, http.StatusBadRequest)
 				return
 			}
 			if ioPortStore == nil {
@@ -280,21 +281,44 @@ func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStor
 			}
 			claimRole = "direct:" + body.Type + ":" + id
 			var ok bool
-			claimedHostID, claimedPortID, ok, err = ioPortStore.Claim(body.RequiredIOPort.CardType, body.RequiredIOPort.Direction, hostID, "", claimRole, "")
-			if err != nil {
-				http.Error(w, "claim io port: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-			if !ok {
-				if hostID != "" {
-					http.Error(w, fmt.Sprintf("needs a free %s/%s port on host %q, none available (no silent fallback to another host)", body.RequiredIOPort.CardType, body.RequiredIOPort.Direction, hostID), http.StatusBadRequest)
-				} else {
-					http.Error(w, fmt.Sprintf("needs a free %s/%s port, none available on any host", body.RequiredIOPort.CardType, body.RequiredIOPort.Direction), http.StatusBadRequest)
+			if explicit {
+				// Start-Assistent (Kap. 76): genau diese Anschlüsse der Karte belegen, alles oder nichts.
+				if hostID == "" {
+					http.Error(w, "requiredIoPort.ports needs hostId", http.StatusBadRequest)
+					return
 				}
-				return
+				env, perr := workflows.CardPortsEnv(body.RequiredIOPort.CardType, body.RequiredIOPort.Ports, "")
+				if perr != nil {
+					http.Error(w, perr.Error(), http.StatusBadRequest)
+					return
+				}
+				okAll, conflict, cerr := ioPortStore.ClaimPorts(hostID, body.RequiredIOPort.Ports, "", claimRole, "")
+				if cerr != nil {
+					http.Error(w, "claim io ports: "+cerr.Error(), http.StatusInternalServerError)
+					return
+				}
+				if !okAll {
+					http.Error(w, fmt.Sprintf("port %q on host %q does not exist or is already in use", conflict, hostID), http.StatusConflict)
+					return
+				}
+				claimedHostID, claimedPortID, extraEnv = hostID, "", env
+			} else {
+				claimedHostID, claimedPortID, ok, err = ioPortStore.Claim(body.RequiredIOPort.CardType, body.RequiredIOPort.Direction, hostID, "", claimRole, "")
+				if err != nil {
+					http.Error(w, "claim io port: "+err.Error(), http.StatusInternalServerError)
+					return
+				}
+				if !ok {
+					if hostID != "" {
+						http.Error(w, fmt.Sprintf("needs a free %s/%s port on host %q, none available (no silent fallback to another host)", body.RequiredIOPort.CardType, body.RequiredIOPort.Direction, hostID), http.StatusBadRequest)
+					} else {
+						http.Error(w, fmt.Sprintf("needs a free %s/%s port, none available on any host", body.RequiredIOPort.CardType, body.RequiredIOPort.Direction), http.StatusBadRequest)
+					}
+					return
+				}
+				hostID = claimedHostID
+				extraEnv = workflows.IoPortExtraEnv(body.RequiredIOPort, claimedPortID)
 			}
-			hostID = claimedHostID
-			extraEnv = workflows.IoPortExtraEnv(body.RequiredIOPort, claimedPortID)
 		}
 
 		var inst launcher.Instance
@@ -313,7 +337,17 @@ func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStor
 		}
 		if err != nil {
 			if claimRole != "" {
-				if relErr := ioPortStore.ReleasePort(claimedHostID, claimedPortID); relErr != nil {
+				var relErr error
+				if claimedPortID == "" {
+					for _, pid := range body.RequiredIOPort.Ports {
+						if e := ioPortStore.ReleasePort(claimedHostID, pid); e != nil {
+							relErr = e
+						}
+					}
+				} else {
+					relErr = ioPortStore.ReleasePort(claimedHostID, claimedPortID)
+				}
+				if relErr != nil {
 					slog.Warn("launcher: rollback: release io port claim after failed start failed", "type", body.Type, "error", relErr)
 				}
 			}

@@ -24,6 +24,8 @@ package ioports
 
 import (
 	"database/sql"
+	"errors"
+	"strings"
 	"time"
 )
 
@@ -170,7 +172,7 @@ func (s *Store) GetClaim(workflowID, role string) (Claim, bool, error) {
 	err := s.db.QueryRow(`
 		SELECT host_id, port_id, workflow_id, role, instance_id, claimed_at FROM io_port_claims
 		WHERE workflow_id = $1 AND role = $2
-		ORDER BY claimed_at LIMIT 1
+		ORDER BY claimed_at, port_id LIMIT 1
 	`, workflowID, role).Scan(&c.HostID, &c.PortID, &c.WorkflowID, &c.Role, &c.InstanceID, &c.ClaimedAt)
 	if err == sql.ErrNoRows {
 		return Claim{}, false, nil
@@ -178,7 +180,25 @@ func (s *Store) GetClaim(workflowID, role string) (Claim, bool, error) {
 	if err != nil {
 		return Claim{}, false, err
 	}
-	return c, true, nil
+	// Eine Rolle mit Direction "both" hält zwei Ports desselben Hosts: alle als "id,id" zurückgeben,
+	// damit ReleasePort/IoPortExtraEnv die ganze Belegung treffen.
+	rows, err := s.db.Query(`SELECT port_id FROM io_port_claims WHERE workflow_id = $1 AND role = $2 AND host_id = $3 ORDER BY claimed_at, port_id`, workflowID, role, c.HostID)
+	if err != nil {
+		return Claim{}, false, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return Claim{}, false, err
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) > 1 {
+		c.PortID = strings.Join(ids, ",")
+	}
+	return c, true, rows.Err()
 }
 
 // ReleasePort gibt einen einzelnen, konkret benannten Port frei — anders
@@ -187,8 +207,13 @@ func (s *Store) GetClaim(workflowID, role string) (Claim, bool, error) {
 // EINER von ggf. zwei gleichzeitig bestehenden Claims desselben
 // (workflowID, role) gemeint ist.
 func (s *Store) ReleasePort(hostID, portID string) error {
-	_, err := s.db.Exec(`DELETE FROM io_port_claims WHERE host_id = $1 AND port_id = $2`, hostID, portID)
-	return err
+	// "id,id" (Direction "both", s. Claim) gibt beide Ports frei.
+	for _, id := range strings.Split(portID, ",") {
+		if _, err := s.db.Exec(`DELETE FROM io_port_claims WHERE host_id = $1 AND port_id = $2`, hostID, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Claim reserviert atomar einen freien Port vom Typ cardType/direction
@@ -207,6 +232,9 @@ func (s *Store) ReleasePort(hostID, portID string) error {
 // bekommen — Postgres serialisiert das selbst, keine Anwendungs-Sperre
 // nötig (s. Paketkommentar).
 func (s *Store) Claim(cardType, direction, preferredHostID, workflowID, role, instanceID string) (hostID, portID string, ok bool, err error) {
+	if direction == "both" {
+		return s.claimBoth(cardType, preferredHostID, workflowID, role, instanceID)
+	}
 	row := s.db.QueryRow(`
 		WITH candidate AS (
 			SELECT p.host_id, p.port_id
@@ -231,6 +259,75 @@ func (s *Store) Claim(cardType, direction, preferredHostID, workflowID, role, in
 		return "", "", false, err
 	}
 	return hostID, portID, true, nil
+}
+
+// ClaimPorts reserviert genau die genannten Ports eines Hosts atomar für (workflowID, role, instanceID) — alles
+// oder nichts (Kap. 76: eine Karten-Instanz belegt mehrere Anschlüsse, z. B. `0-in`, `0-out`, `1-in`). `ok=false` mit
+// `conflict` = erster nicht vorhandener oder bereits belegter Port; es wird nichts belegt.
+func (s *Store) ClaimPorts(hostID string, portIDs []string, workflowID, role, instanceID string) (ok bool, conflict string, err error) {
+	if len(portIDs) == 0 {
+		return false, "", errors.New("ioports: keine Ports angegeben")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, "", err
+	}
+	defer tx.Rollback()
+	for _, id := range portIDs {
+		var exists bool
+		if err := tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM host_io_ports WHERE host_id = $1 AND port_id = $2)`, hostID, id).Scan(&exists); err != nil {
+			return false, "", err
+		}
+		if !exists {
+			return false, id, nil
+		}
+		res, err := tx.Exec(`INSERT INTO io_port_claims (host_id, port_id, workflow_id, role, instance_id) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
+			hostID, id, workflowID, role, instanceID)
+		if err != nil {
+			return false, "", err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return false, id, nil
+		}
+	}
+	return true, "", tx.Commit()
+}
+
+// claimBoth belegt Eingang UND Ausgang desselben Geräts (`<Hersteller>-<N>-in` + `-out`) atomar — für Rollen einer
+// Duplex-Karte (Direction "both"). `portID` ist "inId,outId".
+func (s *Store) claimBoth(cardType, preferredHostID, workflowID, role, instanceID string) (hostID, portID string, ok bool, err error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", "", false, err
+	}
+	defer tx.Rollback()
+	var inID, outID string
+	err = tx.QueryRow(`
+		SELECT i.host_id, i.port_id, o.port_id
+		FROM host_io_ports i
+		JOIN host_io_ports o ON o.host_id = i.host_id AND o.card_type = i.card_type AND o.direction = 'out'
+		 AND o.port_id = regexp_replace(i.port_id, '-in$', '-out')
+		WHERE i.card_type = $1 AND i.direction = 'in' AND ($2 = '' OR i.host_id = $2)
+		  AND NOT EXISTS (SELECT 1 FROM io_port_claims c WHERE c.host_id = i.host_id AND c.port_id IN (i.port_id, o.port_id))
+		ORDER BY i.host_id, i.port_id
+		LIMIT 1
+		FOR UPDATE OF i, o SKIP LOCKED
+	`, cardType, preferredHostID).Scan(&hostID, &inID, &outID)
+	if err == sql.ErrNoRows {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	for _, id := range []string{inID, outID} {
+		if _, err := tx.Exec(`INSERT INTO io_port_claims (host_id, port_id, workflow_id, role, instance_id) VALUES ($1, $2, $3, $4, $5)`, hostID, id, workflowID, role, instanceID); err != nil {
+			return "", "", false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return "", "", false, err
+	}
+	return hostID, inID + "," + outID, true, nil
 }
 
 // UpdateInstanceID trägt die tatsächliche Launcher-Instanz-ID eines

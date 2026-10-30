@@ -451,8 +451,11 @@ export function computeTimeline(
         slot.unknown.push(`${wf.name}/${role.name}`);
       }
       if (role.ioPort) {
-        const k = ioKey(role.ioPort.cardType, role.ioPort.direction);
-        slot.io[k] = (slot.io[k] ?? 0) + 1;
+        // "both" (Duplex-Karte) belegt Eingang und Ausgang desselben Geräts.
+        for (const dir of role.ioPort.direction === "both" ? ["in", "out"] : [role.ioPort.direction]) {
+          const k = ioKey(role.ioPort.cardType, dir);
+          slot.io[k] = (slot.io[k] ?? 0) + 1;
+        }
       }
       const rx = role.netRxMbps ?? 0;
       const tx = role.netTxMbps ?? 0;

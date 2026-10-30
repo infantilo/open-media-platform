@@ -433,23 +433,22 @@ with its own UI and self-described parameters (full list with
 functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
 
 - **omp-source** — test sources (color bars etc. plus test tone)
-- **omp-capture-card** (catalog types `-decklink`, `-aja`, `-matrox`) — SDI/IP capture card bridge for Blackmagic DeckLink,
-  directed per instance (ingest: card → MXL; output: MXL → card,
-  video-anchored with an independent optional audio leg); SDI and IP
-  cards are addressed identically in software — a DeckLink IP card's
-  network-side configuration (multicast/PTP/SDP) lives entirely in
-  Blackmagic's own driver, outside NMOS's reach; also exposes AMWA NMOS
-  IS-08 for its embedded SDI audio channels (e.g. remap embedded
-  channels 3+4 onto program audio via the standard API)
-- **omp-capture-card, vendor backends** — the same node serves AJA and Matrox as well, selected by `OMP_CARD_VENDOR`: AJA via its GStreamer plugin, Matrox SDK cards via a
-  customer-built plugin named in `OMP_CARD_ELEMENTS`; video mode, device
-  and extra properties are resolved by introspection and a missing
-  plugin or unknown property is a clear start error. Not verified on
-  hardware. AJA KONA IP in ST 2110 operation attaches over NMOS and the
-  ST 2110 gateway instead. The device hub additionally recognises
-  Magewell and Elgato capture devices; the host agent reports NVIDIA
-  Mellanox/Intel NICs (PTP clock, RDMA, bypass options) and
-  `OMP_2110_TRANSPORT` prepares Intel MTL for ST 2110 (not wired yet; kernel sockets are used)
+- **omp-capture-card** — SDI/IP capture card bridge for Blackmagic DeckLink,
+  AJA and (via an operator-built GStreamer plugin) Matrox SDK cards; one
+  instance per card. The start wizard lists the detected cards of the
+  chosen host with every input and output as free or in use; each chosen
+  connector becomes an input (video + audio sender) and/or an output
+  (video, audio and ANC/caption receivers, IS-05), duplex connectors
+  provide both at once. The vendor is selected by `OMP_CARD_VENDOR`,
+  ports by `OMP_CARD_PORTS`; video mode, device and extra properties are
+  resolved by introspection and a missing plugin or unknown property is a
+  clear start error. Also exposes AMWA NMOS IS-08 for the embedded SDI
+  audio channels. Not verified on hardware. AJA KONA IP in ST 2110
+  operation attaches over NMOS and the ST 2110 gateway instead. The
+  device hub additionally recognises Magewell and Elgato capture devices;
+  the host agent reports NVIDIA Mellanox/Intel NICs (PTP clock, RDMA,
+  bypass options) and `OMP_2110_TRANSPORT` prepares Intel MTL for ST 2110
+  (not wired yet; kernel sockets are used)
 - **omp-switcher** — simple video switcher between auto-discovered
   sources (no program/preset bus)
 - **omp-video-mixer-me** — video mixer (configurable number of M/E

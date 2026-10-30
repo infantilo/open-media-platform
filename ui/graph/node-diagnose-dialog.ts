@@ -2,6 +2,7 @@
 // Prozess und Medien, die Pipeline als Bild (wo stockt der Fluss?), Ereignisse und Meldungen dieses einen Nodes.
 import { apiFetch } from "../shell/connection.ts";
 import { freezeNow } from "../shell/freeze.ts";
+import { askNote } from "../shell/note-prompt.ts";
 import { codeBadge, type ErrorCode, helpDetails, loadErrorCodes, lookup } from "../shell/errorcodes.ts";
 import { t } from "../shell/i18n.ts";
 import { describeItem, type TLItem } from "../shell/timeline-logic.ts";
@@ -132,8 +133,10 @@ export function openNodeDiagnosis(nodeId: string, label: string): void {
   freezeBtn.className = "omp-btn";
   freezeBtn.title = t("fr.node.title");
   freezeBtn.addEventListener("click", async () => {
+    const note = await askNote("freeze");
+    if (note === null) return;
     freezeBtn.disabled = true;
-    await freezeNow(10, "", [nodeId]);
+    await freezeNow(10, note, [nodeId]);
     window.setTimeout(() => (freezeBtn.disabled = false), 3000);
   });
   head.append(lamp, titles, freezeBtn, again, close);
