@@ -50,3 +50,48 @@ func TestBuildCardsShowsFreeAndUsedPerDirection(t *testing.T) {
 		t.Fatalf("Duo-Ports = %+v: Eingang soll frei, Ausgang belegt sein", duo.Ports)
 	}
 }
+
+func TestAddManualMatroxCard(t *testing.T) {
+	existing := []ioports.Port{
+		{HostID: "h1", PortID: "decklink-0-in", CardType: "decklink", Direction: "in", Label: "Duo 2"},
+		{HostID: "h1", PortID: "matrox-0-in", CardType: "matrox", Direction: "in", Label: "xMIO3"},
+		{HostID: "h1", PortID: "matrox-0-out", CardType: "matrox", Direction: "out", Label: "xMIO3"},
+	}
+	got, err := addManualCard("h1", "matrox", existing, manualCardRequest{Name: " DSX LE5 ", Connectors: []string{"duplex", "in"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, p := range got[len(existing):] {
+		ids = append(ids, p.PortID+"/"+p.Label)
+	}
+	want := []string{"matrox-1-in/DSX LE5", "matrox-1-out/DSX LE5", "matrox-2-in/DSX LE5"}
+	if len(ids) != 3 || ids[0] != want[0] || ids[1] != want[1] || ids[2] != want[2] {
+		t.Fatalf("neue Ports = %v, want %v (Nummern ab der nächsten freien)", ids, want)
+	}
+	for _, bad := range []manualCardRequest{
+		{Name: "", Connectors: []string{"duplex"}},
+		{Name: "x", Connectors: nil},
+		{Name: "x", Connectors: make([]string, 17)},
+		{Name: "x", Connectors: []string{"both"}},
+	} {
+		if _, err := addManualCard("h1", "matrox", existing, bad); err == nil {
+			t.Errorf("%+v: want error", bad)
+		}
+	}
+}
+
+func TestRemoveManualDeviceRefusesWhileInUse(t *testing.T) {
+	ports := []ioports.Port{
+		{HostID: "h1", PortID: "matrox-0-in", CardType: "matrox"}, {HostID: "h1", PortID: "matrox-0-out", CardType: "matrox"},
+		{HostID: "h1", PortID: "matrox-1-in", CardType: "matrox"},
+	}
+	claims := []ioports.Claim{{HostID: "h1", PortID: "matrox-0-out"}}
+	if _, ok := removeManualDevice("matrox", 0, ports, claims, "h1"); ok {
+		t.Fatal("belegtes Gerät darf nicht entfernt werden")
+	}
+	got, ok := removeManualDevice("matrox", 1, ports, claims, "h1")
+	if !ok || len(got) != 2 {
+		t.Fatalf("freies Gerät: ok=%v ports=%v", ok, got)
+	}
+}

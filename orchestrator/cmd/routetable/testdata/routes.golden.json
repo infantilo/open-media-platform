@@ -929,6 +929,18 @@
     "domain": "core"
   },
   {
+    "method": "POST",
+    "path": "/api/v1/hosts/{id}/cards/manual",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/hosts/{id}/cards/manual/{device}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
     "method": "GET",
     "path": "/api/v1/hosts/{id}/metrics/history",
     "auth": "auth",

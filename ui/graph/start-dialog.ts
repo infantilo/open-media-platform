@@ -72,6 +72,9 @@ export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
       form.ioCardType = card;
       form.ioPorts = ports;
       refreshOk();
+    }, (elements) => {
+      form.options.OMP_CARD_ELEMENTS = elements;
+      refreshOk();
     }) : null;
 
     const root = el("div", "position:fixed;inset:0;z-index:3000;display:flex;align-items:center;justify-content:center;font-family:var(--omp-font,system-ui,sans-serif);font-size:var(--omp-font-size-sm,12px);");
@@ -189,6 +192,8 @@ export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
         box.append(el("div", "margin:8px 0 4px;font-weight:600;" + DIM, group));
         for (const o of list) {
           if (pairSecond.has(o.key)) continue;
+          // Hersteller und Elementnamen setzt der Assistent aus der gewählten Karte.
+          if (opts.captureCard && (o.key === "OMP_CARD_VENDOR" || o.key === "OMP_CARD_ELEMENTS")) continue;
           const pair = pairOfFirst.get(o.key);
           if (pair) {
             box.append(pairRow(pair));
@@ -242,7 +247,9 @@ export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
     actions.append(cancel, ok);
     // Capture-Karte: ohne gewählten Anschluss gibt es nichts zu starten.
     function refreshOk() {
-      ok.disabled = busy || (opts.captureCard && form.ioPorts.length === 0);
+      // Matrox-SDK-Karten laufen über ein Plugin des Betreibers: ohne dessen Elementnamen kann die Instanz nicht starten.
+      const needsElements = form.ioCardType === "matrox" && (form.options.OMP_CARD_ELEMENTS ?? "").split(",").filter((x) => x.trim()).length !== 4;
+      ok.disabled = busy || (opts.captureCard && (form.ioPorts.length === 0 || needsElements));
     }
     refreshOk();
     dlg.append(head, body, error, errorHelp, actions);
