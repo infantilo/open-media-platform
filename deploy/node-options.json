@@ -391,6 +391,22 @@
       "group": "Audio"
     },
     {
+      "key": "OMP_2110_GATEWAY_ANC_DEST_HOST",
+      "i18n": { "en": {"label": "ANC (ST 2110-40): destination address"} },
+      "label": "ANC (ST 2110-40): Zieladresse",
+      "type": "host",
+      "default": "239.1.1.3",
+      "group": "ANC"
+    },
+    {
+      "key": "OMP_2110_GATEWAY_ANC_DEST_PORT",
+      "i18n": { "en": {"label": "ANC (ST 2110-40): destination port"} },
+      "label": "ANC (ST 2110-40): Zielport",
+      "type": "port",
+      "default": "6004",
+      "group": "ANC"
+    },
+    {
       "key": "OMP_2110_GATEWAY_WIDTH",
       "i18n": { "en": {"label": "Width"} },
       "label": "Breite",

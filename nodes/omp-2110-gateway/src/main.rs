@@ -325,6 +325,50 @@ impl ReceiverControl for AudioOutputControl {
     }
 }
 
+/// ST 2110-40 (ANC/Untertitel): dritter, unabhängiger Ausgang. Der gewählte MXL-Daten-Flow (`video/smpte291`) wird als RTP
+/// (RFC 8331) an das ANC-Ziel gesendet. Nur im Rundlauf geprüft (`omp_mediaio::st2110_anc`), nicht mit echten Empfängern.
+struct AncOutputControl {
+    registry: RegistryClient,
+    context: Arc<omp_mediaio::mxl::MxlContext>,
+    destination_host: String,
+    destination_port: u16,
+    connected_flow_id: Arc<Mutex<String>>,
+    output: Arc<Mutex<Option<omp_mediaio::st2110_anc::St2110AncOutput>>>,
+}
+
+impl ReceiverControl for AncOutputControl {
+    fn apply(&self, resource: &ReceiverResource) {
+        let flow_id = match (&resource.sender_id, resource.master_enable) {
+            (Some(sender_id), true) => match self.registry.get_sender(sender_id) {
+                Ok(sender) => sender.flow_id,
+                Err(e) => {
+                    eprintln!("omp-2110-gateway: resolve anc sender {sender_id} failed: {e}");
+                    return;
+                }
+            },
+            _ => None,
+        };
+        let mut out = self.output.lock().expect("lock poisoned");
+        *out = None;
+        match flow_id {
+            Some(flow_id) => {
+                let ssrc = flow_id.bytes().fold(0x811C_9DC5u32, |h, b| (h ^ b as u32).wrapping_mul(0x0100_0193));
+                match omp_mediaio::st2110_anc::St2110AncOutput::new(self.context.clone(), &flow_id, &self.destination_host, self.destination_port, ssrc) {
+                    Ok(o) => {
+                        *out = Some(o);
+                        *self.connected_flow_id.lock().expect("lock poisoned") = flow_id;
+                    }
+                    Err(e) => {
+                        eprintln!("omp-2110-gateway: anc connect {flow_id} failed: {e}");
+                        *self.connected_flow_id.lock().expect("lock poisoned") = String::new();
+                    }
+                }
+            }
+            None => *self.connected_flow_id.lock().expect("lock poisoned") = String::new(),
+        }
+    }
+}
+
 struct OutputStore {
     destination_host: String,
     destination_port: u16,
@@ -349,6 +393,12 @@ struct OutputStore {
     audio_pipeline: pipeline::AudioOutputPipelineHandle,
     /// AMWA IS-08 (D21).
     channel_mapping: Arc<ChannelMapping<AudioOutputMatrixApply>>,
+    /// ST 2110-40 (ANC): s. `AncOutputControl`.
+    destination_anc_host: String,
+    destination_anc_port: u16,
+    connected_anc_flow_id: Arc<Mutex<String>>,
+    anc_connection: Arc<ReceiverConnection<AncOutputControl>>,
+    anc_output: Arc<Mutex<Option<omp_mediaio::st2110_anc::St2110AncOutput>>>,
 }
 
 impl ParamStore for OutputStore {
@@ -389,6 +439,10 @@ impl ParamStore for OutputStore {
                 range: None,
                 readonly: true,
             },
+            ParamSpec { name: "connectedAncFlowId".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec { name: "destinationAncEndpoint".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec { name: "ancSdp".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec { name: "ancStats".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             ParamSpec {
                 name: "ptpSynced".to_string(),
                 kind: ParamType::Boolean,
@@ -425,6 +479,18 @@ impl ParamStore for OutputStore {
                 "{}:{}",
                 self.destination_audio_host, self.destination_audio_port
             ))),
+            "connectedAncFlowId" => Some(serde_json::json!(*self.connected_anc_flow_id.lock().expect("lock poisoned"))),
+            "destinationAncEndpoint" => Some(serde_json::json!(format!("{}:{}", self.destination_anc_host, self.destination_anc_port))),
+            "ancSdp" => Some(serde_json::json!(omp_mediaio::st2110_anc::sdp("OMP ANC", &self.destination_anc_host, self.destination_anc_port, &[(0x61, 0x01)]))),
+            "ancStats" => Some(serde_json::json!(match &*self.anc_output.lock().expect("lock poisoned") {
+                Some(o) => serde_json::json!({
+                    "frames": o.frames.load(std::sync::atomic::Ordering::Relaxed),
+                    "packets": o.packets.load(std::sync::atomic::Ordering::Relaxed),
+                    "errors": o.errors.load(std::sync::atomic::Ordering::Relaxed),
+                    "flowing": o.flowed(),
+                }),
+                None => serde_json::json!({}),
+            }.to_string())),
             "ptpSynced" => match self.ptp_domain {
                 Some(_) => Some(serde_json::json!(self.pipeline.ptp_synced().unwrap_or(false))),
                 None => Some(Value::Null),
@@ -462,7 +528,7 @@ impl ParamStore for OutputStore {
         let to_raw = |(status, content_type, body)| omp_node_sdk::RawResponse { status, content_type, body };
         root_discovery(method, path)
             .or_else(|| {
-                list_ids(method, path, "receivers", &[self.connection.id(), self.audio_connection.id()])
+                list_ids(method, path, "receivers", &[self.connection.id(), self.audio_connection.id(), self.anc_connection.id()])
             })
             .or_else(|| bulk_discovery(method, path))
             .or_else(|| {
@@ -471,6 +537,8 @@ impl ParamStore for OutputStore {
                         Some(self.connection.patch_staged(params).0)
                     } else if self.audio_connection.id() == id {
                         Some(self.audio_connection.patch_staged(params).0)
+                    } else if self.anc_connection.id() == id {
+                        Some(self.anc_connection.patch_staged(params).0)
                     } else {
                         None
                     }
@@ -479,6 +547,7 @@ impl ParamStore for OutputStore {
             .or_else(|| bulk_patch(method, path, "senders", body, |_, _| None))
             .or_else(|| self.connection.handle(method, path, body))
             .or_else(|| self.audio_connection.handle(method, path, body))
+            .or_else(|| self.anc_connection.handle(method, path, body))
             .or_else(|| self.channel_mapping.handle(method, path, body))
             .map(to_raw)
     }
@@ -487,6 +556,7 @@ impl ParamStore for OutputStore {
         self.connection
             .cors_methods(path)
             .or_else(|| self.audio_connection.cors_methods(path))
+            .or_else(|| self.anc_connection.cors_methods(path))
             .or_else(|| bulk_cors_methods(path, "senders"))
             .or_else(|| bulk_cors_methods(path, "receivers"))
             .or_else(|| self.channel_mapping.cors_methods(path))
@@ -790,7 +860,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let destination_audio_port: u16 = env_or("OMP_2110_GATEWAY_AUDIO_DEST_PORT", "6002").parse()?;
             let audio_sample_rate: i32 = env_or("OMP_2110_GATEWAY_AUDIO_SAMPLE_RATE", "48000").parse()?;
             let audio_channels: i32 = env_or("OMP_2110_GATEWAY_AUDIO_CHANNELS", "2").parse()?;
+            let destination_anc_host = env_or("OMP_2110_GATEWAY_ANC_DEST_HOST", "239.1.1.3");
+            let destination_anc_port: u16 = env_or("OMP_2110_GATEWAY_ANC_DEST_PORT", "6004").parse()?;
             let control_host = host.clone();
+            let anc_context = Arc::new(omp_mediaio::mxl::MxlContext::new(&domain)?);
 
             let cfg = OutputConfig {
                 domain: domain.clone(),
@@ -891,6 +964,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     tally: tally_giver.clone(),
                 },
             ));
+            let anc_receiver_id = omp_node_sdk::idgen::new_v4();
+            let connected_anc_flow_id = Arc::new(Mutex::new(String::new()));
+            let anc_output = Arc::new(Mutex::new(None));
+            let anc_connection = Arc::new(ReceiverConnection::new(
+                anc_receiver_id.clone(),
+                AncOutputControl {
+                    registry: registry.clone(),
+                    context: anc_context,
+                    destination_host: destination_anc_host.clone(),
+                    destination_port: destination_anc_port,
+                    connected_flow_id: connected_anc_flow_id.clone(),
+                    output: anc_output.clone(),
+                },
+            ));
             let audio_connection = Arc::new(ReceiverConnection::new(
                 audio_receiver_id.clone(),
                 AudioOutputControl {
@@ -943,6 +1030,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 audio_connection,
                 audio_pipeline: audio_pipeline_handle,
                 channel_mapping,
+                destination_anc_host,
+                destination_anc_port,
+                connected_anc_flow_id,
+                anc_connection,
+                anc_output,
             });
 
             let handle = omp_node_sdk::start(
@@ -965,6 +1057,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             transport: Some(TRANSPORT_MXL.to_string()),
                             media_types: Some(vec!["audio/L24".to_string()]),
                             label: Some("Audio".to_string()),
+                            ..Default::default()
+                        },
+                        ReceiverSpec {
+                            id: Some(anc_receiver_id),
+                            transport: Some(TRANSPORT_MXL.to_string()),
+                            media_types: Some(vec!["video/smpte291".to_string()]),
+                            label: Some("ANC / Untertitel".to_string()),
                             ..Default::default()
                         },
                     ],
