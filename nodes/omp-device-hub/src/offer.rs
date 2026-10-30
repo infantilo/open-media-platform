@@ -30,7 +30,14 @@ pub fn choose_format(d: &Device) -> Format {
             let best = d.video_modes.iter().filter(|m| m.width <= 1920 && m.height <= 1080).max_by_key(|m| (m.width, m.height));
             match best {
                 Some(m) => {
-                    let fps = if m.max_fps >= 25.0 { 25 } else { (m.max_fps.floor() as u32).max(1) };
+                    let fps = if d.family == crate::vendor::Family::Capture {
+                        // Capture-Karte/-Stick: Signalrate übernehmen (Kap. 76), nicht auf 25 zwingen.
+                        crate::vendor::capture_fps(m.max_fps)
+                    } else if m.max_fps >= 25.0 {
+                        25
+                    } else {
+                        (m.max_fps.floor() as u32).max(1)
+                    };
                     Format::Video { width: m.width, height: m.height, fps }
                 }
                 None => Format::Video { width: 1280, height: 720, fps: 25 },
@@ -250,6 +257,8 @@ mod tests {
             video_modes: Vec::new(),
             audio_modes: Vec::new(),
             caps_known: true,
+            vendor: String::new(),
+            family: Default::default(),
         }
     }
 
@@ -263,6 +272,14 @@ mod tests {
         assert_eq!(choose_format(&d), Format::Video { width: 640, height: 480, fps: 15 });
         d.video_modes.clear();
         assert_eq!(choose_format(&d), Format::Video { width: 1280, height: 720, fps: 25 });
+    }
+
+    #[test]
+    fn capture_card_keeps_signal_rate() {
+        let mut d = dev(DeviceKind::Video);
+        d.family = crate::vendor::Family::Capture;
+        d.video_modes = vec![VideoMode { format: "YUY2".into(), width: 1920, height: 1080, max_fps: 59.94 }];
+        assert_eq!(choose_format(&d), Format::Video { width: 1920, height: 1080, fps: 60 });
     }
 
     #[test]

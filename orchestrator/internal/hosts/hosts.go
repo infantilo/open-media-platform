@@ -61,6 +61,8 @@ type Metrics struct {
 	Gpu *GpuMetrics `json:"gpu,omitempty"`
 	// Sensors: Temperatur/Leistung; nil = nicht gemessen (VM, kein Sensor, keine Rechte).
 	Sensors *SensorMetrics `json:"sensors,omitempty"`
+	// Nics: physische Netzwerkkarten (Spiegel von host-agent telemetry.NicInfo); leer bei älterem Agent.
+	Nics []NicMetrics `json:"nics,omitempty"`
 	// Jobs: Fähigkeiten/Auslastung der Job-Ausführung (ffmpeg-Jobs, docs/ENTWURF-FFMPEG-HOSTWAHL.md); nil = auf dem
 	// Host nicht freigegeben (keine tools.json).
 	Jobs *JobsMetrics `json:"jobs,omitempty"`

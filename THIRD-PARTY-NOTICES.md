@@ -36,6 +36,30 @@ Vendored under `third_party/` at build time by `deploy/dev/install-mxl.sh` (neve
 | Obligation | MIT requires the copyright and permission notice to accompany copies: the image carries both license texts under `/usr/share/licenses/omp-subtitle-asr/` (source: `deploy/subtitle-asr/licenses/`) |
 | Note | "Whisper" and "OpenAI" are names of the model's authors; OMP uses no logo and implies no endorsement |
 
+## Capture hardware, network cards and their vendor software (chapter 76)
+
+OMP **contains, links and ships none of the software below**. Every item is installed by the operator from the vendor,
+under the operator's own agreement with the vendor, and is only reached at run time through GStreamer plugins that are
+discovered on the host (`gst-inspect`) or through files the operator provides. Without them OMP falls back to its
+standard path or stops the affected instance with a clear message.
+
+| Product | Relationship | Operator's obligation |
+|---|---|---|
+| **Intel Media Transport Library** (`mtl_st20p_tx/rx`) | open-source plugin (BSD-3-Clause upstream), not included | install it yourself; keep upstream's licence notices with any copy you distribute |
+| **AJA** NTV2 / GStreamer `aja` plugin | vendor SDK and plugin, not included | install from the vendor; follow the vendor's licence |
+| **Matrox** SDK | proprietary SDK, not included; OMP has no Matrox code and no Matrox plugin — a plugin built by the operator on the Matrox SDK can be attached via `OMP_CARD_ELEMENTS` | the operator's SDK agreement governs building and using such a plugin |
+| **Magewell** Pro Capture / USB Capture drivers, **Elgato** Cam Link | vendor drivers expose standard V4L2/ALSA; OMP uses only those kernel interfaces | install the vendor driver under its licence |
+| **NVIDIA Mellanox / Intel** network cards | detected from `/sys` (driver name, link, PTP clock); no vendor code | none |
+
+Product and company names (AJA, Elgato, Intel, Magewell, Matrox, Mellanox, NVIDIA, Blackmagic Design,
+DeckLink) are trademarks of their respective owners. They are used only to say which hardware OMP can work with
+(nominative use); OMP is not affiliated with, endorsed by or certified by any of them, and the interoperability
+statements in the documentation are not vendor certifications. Hardware-dependent paths are marked "not verified on
+hardware" until they have been run on the real device.
+
+This file is a technical inventory, not legal advice. Before commercial distribution, have the vendor agreements
+reviewed by counsel.
+
 ## Container images, system packages
 
 NATS, NMOS registry, etcd, PostgreSQL/Patroni, Caddy, step-ca, SeaweedFS (S3), GStreamer, FFmpeg, Podman and the other system

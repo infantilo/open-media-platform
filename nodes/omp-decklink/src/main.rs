@@ -21,6 +21,7 @@
 //! eine Richtung (Blackmagic-Treiber-Grenze, kein OMP-Check dafür).
 
 mod captions;
+mod card;
 mod pipeline;
 
 use std::collections::{BTreeMap, HashMap};
@@ -556,6 +557,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         v => Some(v.parse()?),
     };
     let profile = env_or("OMP_DECKLINK_PROFILE", "default");
+    card::set_backend_from_env()?;
     pipeline::set_device_select(pipeline::DeviceSelect {
         persistent_id,
         profile: if profile.trim().is_empty() { "default".to_string() } else { profile.trim().to_string() },

@@ -23,6 +23,58 @@
     "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
   },
   {
+    "type": "omp-aja",
+    "hostBound": true,
+    "label": "AJA",
+    "runner": "process",
+    "command": [
+      "../nodes/target/release/omp-decklink"
+    ],
+    "env": {
+      "OMP_CARD_VENDOR": "aja"
+    },
+    "description": "AJA-Karte (NTV2, z. B. KONA) über das AJA-GStreamer-Plugin (ajavideosrc/-sink, ajaaudiosrc/-sink) ⇄ MXL, gerichtet je Instanz; gleicher Node wie DeckLink (Untertitel-Einbettung, IS-05, Kanalzuordnung). Modus wird aus der Enum-Liste des Plugins zugeordnet, Eingang/Kanal per OMP_CARD_PROPS (z. B. input-source=sdi-1,channel=0). KONA IP im reinen ST-2110-Betrieb braucht diesen Node nicht: sie erscheint als NMOS-Gerät im Netz und wird über das ST-2110-Gateway angebunden. Ohne Karte/Plugin startet die Instanz mit klarem Fehler. Nicht an Hardware geprüft.",
+    "i18n": {
+      "en": {
+        "description": "AJA card (NTV2, e.g. KONA) via the AJA GStreamer plugin (ajavideosrc/-sink, ajaaudiosrc/-sink) ⇄ MXL, directional per instance; same node as DeckLink (caption embedding, IS-05, channel mapping). The mode is matched from the plugin's enum list, input/channel via OMP_CARD_PROPS (e.g. input-source=sdi-1,channel=0). KONA IP in pure ST 2110 operation does not need this node: it appears as an NMOS device on the network and is attached via the ST 2110 gateway. Without card/plugin the instance starts with a clear error. Not verified on hardware.",
+        "expectedResources": "low, constant (hardware capture, no software encoding)"
+      }
+    },
+    "expectedResources": "gering, konstant (Hardware-Erfassung, kein Software-Encoding)",
+    "latency": {
+      "video": {
+        "minLatencyFrames": 0,
+        "maxLatencyFrames": 0
+      }
+    }
+  },
+  {
+    "type": "omp-matrox",
+    "hostBound": true,
+    "label": "Matrox",
+    "runner": "process",
+    "command": [
+      "../nodes/target/release/omp-decklink"
+    ],
+    "env": {
+      "OMP_CARD_VENDOR": "custom"
+    },
+    "description": "Matrox-SDK-Karte (DSX LE5 / xMIO) ⇄ MXL, gerichtet je Instanz. Matrox liefert kein öffentliches GStreamer-Plugin: der Host braucht ein auf dem Matrox-SDK gebautes Plugin, dessen vier Elementnamen in OMP_CARD_ELEMENTS stehen (videosrc,audiosrc,videosink,audiosink). Danach gleicher Node wie DeckLink. Ohne Plugin startet die Instanz mit klarem Fehler. Nicht an Hardware geprüft.",
+    "i18n": {
+      "en": {
+        "description": "Matrox SDK card (DSX LE5 / xMIO) ⇄ MXL, directional per instance. Matrox ships no public GStreamer plugin: the host needs a plugin built on the Matrox SDK, its four element names go into OMP_CARD_ELEMENTS (videosrc,audiosrc,videosink,audiosink). After that it is the same node as DeckLink. Without the plugin the instance starts with a clear error. Not verified on hardware.",
+        "expectedResources": "low, constant (hardware capture, no software encoding)"
+      }
+    },
+    "expectedResources": "gering, konstant (Hardware-Erfassung, kein Software-Encoding)",
+    "latency": {
+      "video": {
+        "minLatencyFrames": 0,
+        "maxLatencyFrames": 0
+      }
+    }
+  },
+  {
     "type": "omp-2110-gateway-ingest",
     "label": "ST 2110 Gateway (Ingest)",
     "runner": "process",

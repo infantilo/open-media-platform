@@ -44,7 +44,8 @@ func IoPortExtraEnv(req *IOPortRequirement, portID string) map[string]string {
 		return nil
 	}
 	switch req.CardType {
-	case "decklink":
+	case "decklink", "aja", "matrox":
+		// AJA/Matrox laufen im selben Node (omp-decklink-Binary, Kap. 76) und lesen dieselben Variablen.
 		direction := "ingest"
 		if req.Direction == "out" {
 			direction = "output"

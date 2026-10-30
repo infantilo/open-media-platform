@@ -21,6 +21,7 @@ pub mod cea608;
 pub mod au_ring;
 pub mod rtp;
 pub mod st2110;
+pub mod kbypass;
 pub mod st2110_anc;
 pub mod scte_decode;
 pub mod hwaccel;

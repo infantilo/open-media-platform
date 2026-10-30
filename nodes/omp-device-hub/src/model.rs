@@ -71,4 +71,9 @@ pub struct Device {
     pub audio_modes: Vec<AudioMode>,
     /// `true`, wenn die Fähigkeiten von GStreamer bestätigt wurden.
     pub caps_known: bool,
+    /// Erkannter Hersteller (Magewell, Elgato …), leer = unbekannt. Kap. 76.
+    #[serde(default)]
+    pub vendor: String,
+    #[serde(default)]
+    pub family: crate::vendor::Family,
 }

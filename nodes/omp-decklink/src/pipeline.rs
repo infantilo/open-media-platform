@@ -81,10 +81,12 @@ pub fn set_device_select(sel: DeviceSelect) -> Result<(), String> {
 /// Setzt `persistent-id`/`profile` auf ein DeckLink-Element (Video/Audio, Quelle/Senke) — alle vier teilen die Properties.
 fn select_device(element: &gst::Element) {
     let Some(sel) = DEVICE_SELECT.get() else { return };
-    if let Some(id) = sel.persistent_id {
+    if let Some(id) = sel.persistent_id
+        && element.find_property("persistent-id").is_some()
+    {
         element.set_property("persistent-id", id);
     }
-    if sel.profile != "default" {
+    if sel.profile != "default" && element.find_property("profile").is_some() {
         element.set_property_from_str("profile", &sel.profile);
     }
 }
@@ -215,13 +217,11 @@ impl Pipeline {
 
         let pipeline = gst::Pipeline::new();
 
-        let decklinkvideosrc = gst::ElementFactory::make("decklinkvideosrc")
-            .name("decklinkvideosrc")
-            .property("device-number", config.device_number)
-            .build()
-            .map_err(|e| PipelineError(format!("decklinkvideosrc: {e}")))?;
+        let decklinkvideosrc = crate::card::make(crate::card::Role::VideoSrc, config.device_number, Some("decklinkvideosrc"))
+            .map_err(PipelineError)?;
         select_device(&decklinkvideosrc);
-        decklinkvideosrc.set_property_from_str("mode", &config.mode);
+        crate::card::set_mode(&decklinkvideosrc, &config.mode, mode_info.height, mode_info.fps_numerator, mode_info.fps_denominator)
+            .map_err(PipelineError)?;
 
         let video_queue = gst::ElementFactory::make("queue")
             .build()
@@ -255,12 +255,17 @@ impl Pipeline {
         .map_err(PipelineError)?;
         mxl_output.set_active(true);
 
-        let decklinkaudiosrc = gst::ElementFactory::make("decklinkaudiosrc")
-            .property("device-number", config.device_number)
-            .build()
-            .map_err(|e| PipelineError(format!("decklinkaudiosrc: {e}")))?;
+        let decklinkaudiosrc =
+            crate::card::make(crate::card::Role::AudioSrc, config.device_number, None).map_err(PipelineError)?;
         select_device(&decklinkaudiosrc);
-        decklinkaudiosrc.set_property_from_str("channels", &config.audio_channels.to_string());
+        if decklinkaudiosrc.find_property("channels").is_some() {
+            decklinkaudiosrc.set_property_from_str("channels", &config.audio_channels.to_string());
+        }
+        let unused = crate::card::unused_props(&[&decklinkvideosrc, &decklinkaudiosrc]);
+        if !unused.is_empty() {
+            let _ = pipeline.set_state(gst::State::Null);
+            return Err(PipelineError(format!("OMP_CARD_PROPS: unbekannte Eigenschaft(en) {unused:?} an Video-/Audioquelle")));
+        }
 
         let audioconvert = gst::ElementFactory::make("audioconvert")
             .build()
@@ -351,7 +356,7 @@ impl Pipeline {
     /// (kein Change-Event, muss aktiv gepollt werden — PIPELINE
     /// CONTROLLERs `_startLiveSignalPoll`-Kommentar).
     fn signal(&self) -> bool {
-        self.decklinkvideosrc.property::<bool>("signal")
+        crate::card::signal(&self.decklinkvideosrc)
     }
 
     fn shutdown(&self) {
@@ -376,7 +381,7 @@ impl IngestHandle {
     }
 
     pub fn signal(&self) -> bool {
-        self.decklinkvideosrc.property::<bool>("signal")
+        crate::card::signal(&self.decklinkvideosrc)
     }
 
     /// AMWA IS-08 (`UMSETZUNG.md` D18) — s. `omp-aes67-gateway::pipeline::
@@ -555,20 +560,17 @@ fn build_output(
     let videoconvert_out = gst::ElementFactory::make("videoconvert")
         .build()
         .map_err(|e| format!("videoconvert (out): {e}"))?;
-    let decklinkvideosink = gst::ElementFactory::make("decklinkvideosink")
-        .property("device-number", device_number)
-        // sync=true: der DeckLink-Sink ist der alleinige Clock-Provider
-        // dieser eigenständigen Pipeline — GStreamer wählt automatisch
-        // die Karten-Clock, getaktetes Playback statt "so schnell wie
-        // möglich" (identische Begründung wie PIPELINE CONTROLLERs
-        // `_buildDecklinkPipelineStr`-Kommentar).
-        .property("sync", true)
-        .build()
-        .map_err(|e| format!("decklinkvideosink: {e}"))?;
+    let decklinkvideosink = crate::card::make(crate::card::Role::VideoSink, device_number, None)?;
+    // sync=true: der Karten-Sink ist der alleinige Clock-Provider dieser eigenständigen Pipeline —
+    // GStreamer wählt automatisch die Karten-Clock, getaktetes Playback statt "so schnell wie
+    // möglich" (identische Begründung wie PIPELINE CONTROLLERs `_buildDecklinkPipelineStr`-Kommentar).
+    decklinkvideosink.set_property("sync", true);
     select_device(&decklinkvideosink);
-    decklinkvideosink.set_property_from_str("mode", mode);
+    crate::card::set_mode(&decklinkvideosink, mode, mode_info.height, mode_info.fps_numerator, mode_info.fps_denominator)?;
     // Untertitel (GstVideoCaptionMeta) in die VANC-Zeile einbetten; ohne CDPs im Puffer passiert nichts.
-    decklinkvideosink.set_property("cc-line", crate::captions::DEFAULT_CC_LINE);
+    if decklinkvideosink.find_property("cc-line").is_some() {
+        decklinkvideosink.set_property("cc-line", crate::captions::DEFAULT_CC_LINE);
+    }
     if let Some(pad) = decklinkvideosink.static_pad("sink") {
         crate::captions::attach(&pad, captions.clone());
     }
@@ -618,11 +620,8 @@ fn build_output(
                 )
                 .build()
                 .map_err(|e| format!("capsfilter (audio): {e}"))?;
-            let decklinkaudiosink = gst::ElementFactory::make("decklinkaudiosink")
-                .property("device-number", device_number)
-                .property("sync", true)
-                .build()
-                .map_err(|e| format!("decklinkaudiosink: {e}"))?;
+            let decklinkaudiosink = crate::card::make(crate::card::Role::AudioSink, device_number, None)?;
+            decklinkaudiosink.set_property("sync", true);
             select_device(&decklinkaudiosink);
 
             // AMWA IS-08 (`UMSETZUNG.md` D18) — zwischen MXL-Eingang und

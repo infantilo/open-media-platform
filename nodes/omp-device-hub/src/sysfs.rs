@@ -75,6 +75,14 @@ pub fn scan_video(root: &Path) -> Vec<Device> {
                 (t, None, format!("{}-{base}-v{index}", if t == Transport::Pci { "pci" } else { "dev" }))
             }
         };
+        let ven = match (&usb, transport) {
+            (Some(u), _) => crate::vendor::from_usb(&u.vendor_id),
+            (None, Transport::Pci) => {
+                crate::vendor::from_pci(&read(&fs::canonicalize(&link).unwrap_or_default().join("vendor")))
+            }
+            _ => None,
+        }
+        .or_else(|| crate::vendor::from_name(&name));
         out.push(Device {
             id,
             kind: DeviceKind::Video,
@@ -87,6 +95,8 @@ pub fn scan_video(root: &Path) -> Vec<Device> {
             video_modes: Vec::new(),
             audio_modes: Vec::new(),
             caps_known: false,
+            vendor: ven.map(|v| v.name.to_string()).unwrap_or_default(),
+            family: ven.map(|v| v.family).unwrap_or_default(),
         });
     }
     out
@@ -132,6 +142,14 @@ fn scan_cards(root: &Path, dir_kind: Direction) -> Vec<Device> {
             }
         };
         let audio_modes = parse_stream(&read_stream(root, num), header);
+        let ven = match (&usb, transport) {
+            (Some(u), _) => crate::vendor::from_usb(&u.vendor_id),
+            (None, Transport::Pci) => {
+                crate::vendor::from_pci(&read(&fs::canonicalize(&link).unwrap_or_default().join("vendor")))
+            }
+            _ => None,
+        }
+        .or_else(|| crate::vendor::from_name(&name));
         out.push(Device {
             id,
             kind: DeviceKind::Audio,
@@ -144,6 +162,8 @@ fn scan_cards(root: &Path, dir_kind: Direction) -> Vec<Device> {
             video_modes: Vec::new(),
             audio_modes,
             caps_known: false,
+            vendor: ven.map(|v| v.name.to_string()).unwrap_or_default(),
+            family: ven.map(|v| v.family).unwrap_or_default(),
         });
     }
     out
@@ -299,6 +319,27 @@ mod tests {
         assert_eq!(d[0].transport, Transport::Usb);
         assert_eq!(d[0].node, "/dev/video0");
         assert_eq!(d[0].usb.as_ref().unwrap().manufacturer, "Acme");
+    }
+
+    #[test]
+    fn elgato_cam_link_and_magewell_pci_are_recognised() {
+        let t = Tree::new("vendors");
+        t.usb("CL1");
+        t.w("sys/devices/pci0000:00/0000:00:14.0/usb1/1-2/idVendor", "0fd9\n");
+        t.w("sys/class/video4linux/video0/name", "Cam Link 4K: Cam Link 4K\n");
+        t.w("sys/class/video4linux/video0/index", "0");
+        t.link("sys/class/video4linux/video0/device", "../../../devices/pci0000:00/0000:00:14.0/usb1/1-2/1-2:1.0");
+        // Magewell-PCIe-Karte: kein USB-Vorfahr, Hersteller steht in sysfs `vendor`.
+        t.w("sys/devices/pci0000:00/0000:00:1c.0/vendor", "0x1cd7\n");
+        t.w("sys/class/video4linux/video1/name", "Pro Capture HDMI 4K+\n");
+        t.w("sys/class/video4linux/video1/index", "0");
+        t.link("sys/class/video4linux/video1/device", "../../../devices/pci0000:00/0000:00:1c.0");
+        let mut d = scan_video(&t.0);
+        d.sort_by(|a, b| a.node.cmp(&b.node));
+        assert_eq!(d[0].vendor, "Elgato");
+        assert_eq!(d[0].family, crate::vendor::Family::Capture);
+        assert_eq!(d[1].vendor, "Magewell");
+        assert_eq!(d[1].transport, Transport::Pci);
     }
 
     #[test]

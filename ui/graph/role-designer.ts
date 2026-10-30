@@ -52,6 +52,7 @@ import {
 import { apiFetch } from "../shell/connection.ts";
 import { showToast } from "../kit/omp-toast.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
+import { IO_CARD_TYPES } from "./start-dialog-logic.ts";
 
 export type { DraftConnection, DraftRole };
 
@@ -408,7 +409,7 @@ export class RoleDesigner extends HTMLElement {
     // beim Anlegen gesetzt statt einer Rolle, die erst nachträglich per
     // Dropdown "scharf" gemacht werden müsste. Default "in" (Ingest,
     // Teil 1) — Nutzer kann unten auf "out" umstellen.
-    const requiredIoPort = nodeType === "omp-decklink" ? { cardType: "decklink", direction: "in" } : undefined;
+    const requiredIoPort = nodeType in IO_CARD_TYPES ? { cardType: IO_CARD_TYPES[nodeType], direction: "in" } : undefined;
     this.#roles.push({ name, nodeType, hostId: hostId || undefined, requiredIoPort });
     this.#positions[name] = position ?? this.#nextDefaultPosition();
     this.#render();
@@ -1255,7 +1256,7 @@ export class RoleDesigner extends HTMLElement {
     ioPortObject.setAttribute("width", String(NODE_WIDTH - 12));
     ioPortObject.setAttribute("height", String(IO_PORT_ROW_HEIGHT));
     ioPortObject.addEventListener("pointerdown", (ev) => ev.stopPropagation());
-    if (role.nodeType === "omp-decklink") {
+    if (role.nodeType in IO_CARD_TYPES) {
       const ioPortSelect = document.createElement("select");
       ioPortSelect.title =
         t("rd.e7cb49");
@@ -1281,7 +1282,7 @@ export class RoleDesigner extends HTMLElement {
       }
       ioPortSelect.addEventListener("change", () => {
         this.#pushUndo();
-        role.requiredIoPort = ioPortSelect.value ? { cardType: "decklink", direction: ioPortSelect.value } : undefined;
+        role.requiredIoPort = ioPortSelect.value ? { cardType: IO_CARD_TYPES[role.nodeType] ?? "decklink", direction: ioPortSelect.value } : undefined;
       });
       ioPortObject.appendChild(ioPortSelect);
     }

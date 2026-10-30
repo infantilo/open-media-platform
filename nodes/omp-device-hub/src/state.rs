@@ -101,6 +101,8 @@ pub fn view(devices: &[Device], state: &Offered, status: &std::collections::Hash
                     video_modes: Vec::new(),
                     audio_modes: Vec::new(),
                     caps_known: false,
+                    vendor: String::new(),
+                    family: Default::default(),
                 },
                 offered: true,
                 present: false,
@@ -129,6 +131,8 @@ mod tests {
             video_modes: Vec::new(),
             audio_modes: Vec::new(),
             caps_known: true,
+            vendor: String::new(),
+            family: Default::default(),
         }
     }
 

@@ -9,6 +9,7 @@ pub mod model;
 pub mod offer;
 pub mod state;
 pub mod sysfs;
+pub mod vendor;
 
 pub use model::{AudioMode, Device, DeviceKind, Direction, Transport, UsbInfo, VideoMode};
 

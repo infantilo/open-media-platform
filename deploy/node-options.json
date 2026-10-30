@@ -222,6 +222,278 @@
       "group": "Leistung"
     }
   ],
+  "omp-aja": [
+    {
+      "key": "OMP_DECKLINK_DEVICE_NUMBER",
+      "i18n": {
+        "en": {
+          "label": "Device number",
+          "description": "Number of the card on the host (0 = first)."
+        }
+      },
+      "label": "Gerätenummer",
+      "type": "int",
+      "description": "Nummer der Karte auf dem Host (0 = erste).",
+      "default": "0",
+      "group": "Hardware",
+      "min": 0,
+      "max": 31
+    },
+    {
+      "key": "OMP_DECKLINK_DIRECTION",
+      "i18n": {
+        "en": {
+          "label": "Direction",
+          "description": "Input (card→MXL) or output (MXL→card). A duplex card (DeckLink IP) needs one instance per direction."
+        }
+      },
+      "label": "Richtung",
+      "type": "enum",
+      "description": "Eingang (Karte→MXL) oder Ausgang (MXL→Karte). Eine Duplex-Karte (DeckLink IP) braucht je Richtung eine Instanz.",
+      "default": "ingest",
+      "group": "Hardware",
+      "choices": [
+        {
+          "value": "ingest"
+        },
+        {
+          "value": "output"
+        }
+      ]
+    },
+    {
+      "key": "OMP_DECKLINK_MODE",
+      "i18n": {
+        "en": {
+          "label": "Video mode"
+        }
+      },
+      "label": "Videomodus",
+      "type": "enum",
+      "default": "1080p25",
+      "group": "Format",
+      "choices": [
+        {
+          "value": "pal-p"
+        },
+        {
+          "value": "720p50"
+        },
+        {
+          "value": "720p5994"
+        },
+        {
+          "value": "1080p25"
+        },
+        {
+          "value": "1080p2997"
+        },
+        {
+          "value": "1080p50"
+        }
+      ]
+    },
+    {
+      "key": "OMP_DECKLINK_AUDIO_CHANNELS",
+      "i18n": {
+        "en": {
+          "label": "Audio channels",
+          "description": "The DeckLink elements only support these channel counts."
+        }
+      },
+      "label": "Audiokanäle",
+      "type": "enum",
+      "description": "Die DeckLink-Elemente unterstützen nur diese Kanalzahlen.",
+      "default": "2",
+      "group": "Format",
+      "choices": [
+        {
+          "value": "2",
+          "label": "2"
+        },
+        {
+          "value": "8",
+          "label": "8"
+        },
+        {
+          "value": "16",
+          "label": "16"
+        }
+      ]
+    },
+    {
+      "key": "OMP_CARD_PROPS",
+      "i18n": {
+        "en": {
+          "label": "Extra card properties",
+          "description": "Vendor properties as key=value,key=value (e.g. input-source=sdi-1,channel=0). Checked against the plugin; an unknown key or invalid enum value stops the start with a clear error."
+        }
+      },
+      "label": "Zusätzliche Karteneigenschaften",
+      "type": "string",
+      "description": "Herstellereigenschaften als schlüssel=wert,schlüssel=wert (z. B. input-source=sdi-1,channel=0). Wird gegen das Plugin geprüft; ein unbekannter Schlüssel oder ungültiger Enum-Wert beendet den Start mit klarer Fehlermeldung.",
+      "default": "",
+      "group": "Hardware"
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": {
+        "en": {
+          "label": "CPU cores (pinning)",
+          "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.",
+          "group": "Performance"
+        }
+      },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
+    }
+  ],
+  "omp-matrox": [
+    {
+      "key": "OMP_DECKLINK_DEVICE_NUMBER",
+      "i18n": {
+        "en": {
+          "label": "Device number",
+          "description": "Number of the card on the host (0 = first)."
+        }
+      },
+      "label": "Gerätenummer",
+      "type": "int",
+      "description": "Nummer der Karte auf dem Host (0 = erste).",
+      "default": "0",
+      "group": "Hardware",
+      "min": 0,
+      "max": 31
+    },
+    {
+      "key": "OMP_DECKLINK_DIRECTION",
+      "i18n": {
+        "en": {
+          "label": "Direction",
+          "description": "Input (card→MXL) or output (MXL→card). A duplex card (DeckLink IP) needs one instance per direction."
+        }
+      },
+      "label": "Richtung",
+      "type": "enum",
+      "description": "Eingang (Karte→MXL) oder Ausgang (MXL→Karte). Eine Duplex-Karte (DeckLink IP) braucht je Richtung eine Instanz.",
+      "default": "ingest",
+      "group": "Hardware",
+      "choices": [
+        {
+          "value": "ingest"
+        },
+        {
+          "value": "output"
+        }
+      ]
+    },
+    {
+      "key": "OMP_DECKLINK_MODE",
+      "i18n": {
+        "en": {
+          "label": "Video mode"
+        }
+      },
+      "label": "Videomodus",
+      "type": "enum",
+      "default": "1080p25",
+      "group": "Format",
+      "choices": [
+        {
+          "value": "pal-p"
+        },
+        {
+          "value": "720p50"
+        },
+        {
+          "value": "720p5994"
+        },
+        {
+          "value": "1080p25"
+        },
+        {
+          "value": "1080p2997"
+        },
+        {
+          "value": "1080p50"
+        }
+      ]
+    },
+    {
+      "key": "OMP_DECKLINK_AUDIO_CHANNELS",
+      "i18n": {
+        "en": {
+          "label": "Audio channels",
+          "description": "The DeckLink elements only support these channel counts."
+        }
+      },
+      "label": "Audiokanäle",
+      "type": "enum",
+      "description": "Die DeckLink-Elemente unterstützen nur diese Kanalzahlen.",
+      "default": "2",
+      "group": "Format",
+      "choices": [
+        {
+          "value": "2",
+          "label": "2"
+        },
+        {
+          "value": "8",
+          "label": "8"
+        },
+        {
+          "value": "16",
+          "label": "16"
+        }
+      ]
+    },
+    {
+      "key": "OMP_CARD_ELEMENTS",
+      "i18n": {
+        "en": {
+          "label": "GStreamer elements",
+          "description": "Four element names of the vendor plugin: videosrc,audiosrc,videosink,audiosink."
+        }
+      },
+      "label": "GStreamer-Elemente",
+      "type": "string",
+      "description": "Vier Elementnamen des Hersteller-Plugins: videosrc,audiosrc,videosink,audiosink.",
+      "default": "",
+      "group": "Hardware"
+    },
+    {
+      "key": "OMP_CARD_PROPS",
+      "i18n": {
+        "en": {
+          "label": "Extra card properties",
+          "description": "Vendor properties as key=value,key=value (e.g. input-source=sdi-1,channel=0). Checked against the plugin; an unknown key or invalid enum value stops the start with a clear error."
+        }
+      },
+      "label": "Zusätzliche Karteneigenschaften",
+      "type": "string",
+      "description": "Herstellereigenschaften als schlüssel=wert,schlüssel=wert (z. B. input-source=sdi-1,channel=0). Wird gegen das Plugin geprüft; ein unbekannter Schlüssel oder ungültiger Enum-Wert beendet den Start mit klarer Fehlermeldung.",
+      "default": "",
+      "group": "Hardware"
+    },
+    {
+      "key": "OMP_CPU_AFFINITY",
+      "i18n": {
+        "en": {
+          "label": "CPU cores (pinning)",
+          "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.",
+          "group": "Performance"
+        }
+      },
+      "label": "CPU-Kerne (Bindung)",
+      "type": "string",
+      "placeholder": "z. B. 2-3",
+      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
+      "group": "Leistung"
+    }
+  ],
   "omp-2110-gateway-ingest": [
     {
       "key": "OMP_2110_GATEWAY_LISTEN_PORT",

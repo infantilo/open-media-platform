@@ -90,7 +90,7 @@ class OmpDeviceHubPanel extends HTMLElement {
       if (document.activeElement !== r.cb && !r.cb.disabled) r.cb.checked = d.offered;
       const kindKey = d.kind === "audio" && d.direction === "output" ? "audioOut" : d.kind;
       r.kind.textContent = `${T(kindKey)} · ${T(d.transport)}`;
-      r.nameText.textContent = d.name;
+      r.nameText.textContent = d.vendor && !d.name.toLowerCase().includes(d.vendor.toLowerCase()) ? `${d.vendor} ${d.name}` : d.name;
       const k = statusKind(d.status);
       r.badge.className = `badge ${k}`;
       r.badge.textContent = T(k);

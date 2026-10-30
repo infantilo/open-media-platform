@@ -441,6 +441,16 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   Blackmagic's own driver, outside NMOS's reach; also exposes AMWA NMOS
   IS-08 for its embedded SDI audio channels (e.g. remap embedded
   channels 3+4 onto program audio via the standard API)
+- **omp-aja / omp-matrox** — the same card node (`omp-decklink`) with a
+  vendor backend: AJA via its GStreamer plugin, Matrox SDK cards via a
+  customer-built plugin named in `OMP_CARD_ELEMENTS`; video mode, device
+  and extra properties are resolved by introspection and a missing
+  plugin or unknown property is a clear start error. Not verified on
+  hardware. AJA KONA IP in ST 2110 operation attaches over NMOS and the
+  ST 2110 gateway instead. The device hub additionally recognises
+  Magewell and Elgato capture devices; the host agent reports NVIDIA
+  Mellanox/Intel NICs (PTP clock, RDMA, bypass options) and
+  `OMP_2110_TRANSPORT` prepares Intel MTL for ST 2110 (not wired yet; kernel sockets are used)
 - **omp-switcher** — simple video switcher between auto-discovered
   sources (no program/preset bus)
 - **omp-video-mixer-me** — video mixer (configurable number of M/E

@@ -29,6 +29,7 @@ func recordLocalHost(ctx context.Context, l *launcher.Launcher, h *hosts.History
 		total := memTotalBytes()
 		m := hosts.Metrics{CPUPercent: lh.CPUPercent, MemTotalBytes: total, MemUsedBytes: uint64(lh.MemPercent / 100 * float64(total)), ReceivedAt: time.Now()}
 		m.Sensors = sensorMetricsOf(lh.Sensors)
+		m.Nics = hosts.TakeNICs()
 		for _, in := range l.List() {
 			if in.HostID != "" || in.CPUPercent == nil {
 				continue

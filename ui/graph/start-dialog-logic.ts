@@ -30,6 +30,9 @@ export function filledOptions(options: Record<string, string>): Record<string, s
   return out;
 }
 
+/** Karten-Node-Typen mit exklusivem I/O-Port und ihr `cardType` im Host-Inventar (Kap. 76). */
+export const IO_CARD_TYPES: Record<string, string> = { "omp-decklink": "decklink", "omp-aja": "aja", "omp-matrox": "matrox" };
+
 /** Anfragekörper für `POST /api/v1/instances` aus Katalogeintrag und Formular. */
 export function buildStartBody(type: string, version: string | undefined, f: StartForm): StartBody {
   const body: StartBody = { type };
@@ -37,7 +40,7 @@ export function buildStartBody(type: string, version: string | undefined, f: Sta
   if (f.hostId) body.hostId = f.hostId;
   const name = f.name.trim();
   if (name) body.label = name;
-  if (f.ioDirection) body.requiredIoPort = { cardType: "decklink", direction: f.ioDirection };
+  if (f.ioDirection) body.requiredIoPort = { cardType: IO_CARD_TYPES[type] ?? "decklink", direction: f.ioDirection };
   const opts = filledOptions(f.options);
   if (Object.keys(opts).length > 0) body.options = opts;
   return body;

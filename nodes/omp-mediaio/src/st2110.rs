@@ -108,14 +108,7 @@ impl St2110VideoOutput {
             .property("drop", true)
             .build()
             .map_err(|e| format!("valve: {e}"))?;
-        let udpsink = gst::ElementFactory::make("udpsink")
-            .name("st2110_video_sink")
-            .property("host", initial_host)
-            .property("port", initial_port as i32)
-            .property("sync", true)
-            .property("async", false)
-            .build()
-            .map_err(|e| format!("udpsink: {e}"))?;
+        let (udpsink, _) = crate::kbypass::make_sink("st2110_video_sink", initial_host, initial_port)?;
 
         pipeline
             .add(&videoconvert)
@@ -164,8 +157,7 @@ impl St2110VideoOutput {
     }
 
     pub fn set_destination(&self, host: &str, port: u16) {
-        self.udpsink.set_property("host", host);
-        self.udpsink.set_property("port", port as i32);
+        crate::kbypass::set_destination(&self.udpsink, host, port);
         *self.destination.lock().expect("lock poisoned") = (host.to_string(), port);
     }
 
@@ -280,15 +272,7 @@ impl St2110VideoInput {
             .field("payload", 96)
             .build();
 
-        let udpsrc_builder = gst::ElementFactory::make("udpsrc")
-            .name("st2110_video_src")
-            .property("port", listen_port as i32)
-            .property("caps", rtp_caps);
-        let udpsrc_builder = match multicast_group {
-            Some(group) => udpsrc_builder.property("address", group),
-            None => udpsrc_builder,
-        };
-        let udpsrc = udpsrc_builder.build().map_err(|e| format!("udpsrc: {e}"))?;
+        let (udpsrc, _) = crate::kbypass::make_src("st2110_video_src", listen_port, &rtp_caps, multicast_group)?;
         let jitterbuffer = gst::ElementFactory::make("rtpjitterbuffer")
             .build()
             .map_err(|e| format!("rtpjitterbuffer: {e}"))?;
@@ -434,14 +418,7 @@ impl St2110AudioOutput {
             .property("drop", true)
             .build()
             .map_err(|e| format!("valve: {e}"))?;
-        let udpsink = gst::ElementFactory::make("udpsink")
-            .name("st2110_audio_sink")
-            .property("host", initial_host)
-            .property("port", initial_port as i32)
-            .property("sync", true)
-            .property("async", false)
-            .build()
-            .map_err(|e| format!("udpsink: {e}"))?;
+        let (udpsink, _) = crate::kbypass::make_sink("st2110_audio_sink", initial_host, initial_port)?;
 
         pipeline
             .add(&audioconvert)
@@ -477,8 +454,7 @@ impl St2110AudioOutput {
     }
 
     pub fn set_destination(&self, host: &str, port: u16) {
-        self.udpsink.set_property("host", host);
-        self.udpsink.set_property("port", port as i32);
+        crate::kbypass::set_destination(&self.udpsink, host, port);
         *self.destination.lock().expect("lock poisoned") = (host.to_string(), port);
     }
 
@@ -555,15 +531,7 @@ impl St2110AudioInput {
             .field("payload", 96)
             .build();
 
-        let udpsrc_builder = gst::ElementFactory::make("udpsrc")
-            .name("st2110_audio_src")
-            .property("port", listen_port as i32)
-            .property("caps", rtp_caps);
-        let udpsrc_builder = match multicast_group {
-            Some(group) => udpsrc_builder.property("address", group),
-            None => udpsrc_builder,
-        };
-        let udpsrc = udpsrc_builder.build().map_err(|e| format!("udpsrc: {e}"))?;
+        let (udpsrc, _) = crate::kbypass::make_src("st2110_audio_src", listen_port, &rtp_caps, multicast_group)?;
         let jitterbuffer = gst::ElementFactory::make("rtpjitterbuffer")
             .build()
             .map_err(|e| format!("rtpjitterbuffer: {e}"))?;

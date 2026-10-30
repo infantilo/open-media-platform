@@ -56,6 +56,8 @@ type Sample struct {
 	Clock *ClockSample `json:"clock,omitempty"`
 	// Sensors: Temperatur und Leistungsaufnahme (sensors.go); nil = der Host liefert beides nicht.
 	Sensors *SensorSample `json:"sensors,omitempty"`
+	// Nics: physische Netzwerkkarten (nic.go) mit Treiber, Link, PTP-Hardware-Uhr, RDMA, Bypass-Wegen.
+	Nics []NicInfo `json:"nics,omitempty"`
 	// Goodbye markiert die letzte Nachricht eines Host-Agents, der per
 	// SIGTERM/SIGINT ABSICHTLICH beendet wird (Nutzerauftrag 2026-09-21:
 	// ein Host, der ohne manuelles Beenden offline geht, ist ein
