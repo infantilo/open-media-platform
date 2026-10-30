@@ -13,6 +13,7 @@
 import { t as tt } from "../host.ts";
 import { type AudioSource, audibleTracks, ReviewAudio } from "./audio.ts";
 import { Waveform } from "./waveform.ts";
+import * as zm from "./timeline-zoom.ts";
 import { clampFrame, type Finding, keyAction, nextBoundary, type Segment, shuttleFrame, shuttleStep, SHUTTLE_SPEEDS } from "./review-logic.ts";
 import { frameForPts, frameForTime, frameForTimecode, timecodeOf, timeForFrame, type Timeline } from "./timecode.ts";
 
@@ -69,12 +70,17 @@ export class ReviewPlayer {
   #vfcActive = false;
   #audio: ReviewAudio | null = null;
   #wave: Waveform | null = null;
+  #view: zm.View;
+  #zoomOut!: HTMLElement;
+  #overview!: HTMLElement;
+  #overviewWin!: HTMLElement;
   #audioBtns: Array<{ on: HTMLButtonElement; solo: HTMLButtonElement }> = [];
   #lastSync = 0;
 
   constructor(o: PlayerOptions) {
     this.#o = o;
     this.#tl = o.timeline;
+    this.#view = zm.fullView(o.timeline.durationFrames);
     this.el = el("div", "display:flex;flex-direction:column;gap:6px;outline:none;");
     this.el.tabIndex = 0;
     this.el.dataset.role = "review-player";
@@ -175,7 +181,7 @@ export class ReviewPlayer {
       btn("▶ " + tt("rv.player.previewrange"), tt("rv.player.previewrange.hint"), () => this.previewMarks()),
     );
     const audioRow = this.#buildAudioRow(o.audio);
-    this.el.append(stage, this.#bar, row, jog, ...(audioRow ? [audioRow] : []), marks);
+    this.el.append(stage, this.#bar, this.#buildZoomRow(btn), row, jog, ...(audioRow ? [audioRow] : []), marks);
     // Browser geben Ton erst nach einer Benutzeraktion frei
     const unlock = () => this.#audio?.unlock();
     this.el.addEventListener("pointerdown", unlock, true);
@@ -372,7 +378,11 @@ export class ReviewPlayer {
 
   /** `scrub`: Benutzernavigation — dabei kurz den Ton dieses Bildes hören (Jog, Einzelbild, Zeitleiste). */
   #setCur(f: number, seekVideo: boolean, scrub = false): void {
+    // Ausschnitt nur nachführen, wenn sich die Position wirklich ändert — `pause()` setzt dieselbe Position erneut und darf
+    // einen vom Nutzer verschobenen Ausschnitt nicht zurückholen.
+    const moved = f !== this.#cur;
     this.#cur = f;
+    if (moved) this.#ensureVisible();
     if (seekVideo) {
       const t = timeForFrame(f, this.#tl.rate);
       if (Math.abs(this.video.currentTime - t) > 1e-6) this.video.currentTime = t;
@@ -392,6 +402,7 @@ export class ReviewPlayer {
         this.el.dataset.presentedFrame = String(f);
         if (!this.video.paused || this.#speed !== 0) {
           this.#cur = f;
+          this.#ensureVisible();
           this.#o.onFrame?.(f);
           if (this.#audio?.running && !this.video.paused && performance.now() - this.#lastSync > 500) {
             this.#lastSync = performance.now();
@@ -421,6 +432,7 @@ export class ReviewPlayer {
         this.el.dataset.presentedFrame = String(f);
         if (!this.video.paused) {
           this.#cur = f;
+          this.#ensureVisible();
           this.#o.onFrame?.(f);
           if (this.#rangeEnd !== null && f >= this.#rangeEnd) {
             const last = this.#rangeEnd - 1;
@@ -486,7 +498,7 @@ export class ReviewPlayer {
     const at = (e: PointerEvent): number => {
       const r = this.#bar.getBoundingClientRect();
       const x = Math.min(Math.max(0, e.clientX - r.left), r.width);
-      return Math.min(this.#tl.durationFrames - 1, Math.floor((x / r.width) * this.#tl.durationFrames));
+      return zm.fracToFrame(this.#view, x / r.width, this.#tl.durationFrames);
     };
     let dragging = false;
     this.#bar.addEventListener("pointerdown", (e) => {
@@ -503,6 +515,97 @@ export class ReviewPlayer {
     const up = () => (dragging = false);
     this.#bar.addEventListener("pointerup", up);
     this.#bar.addEventListener("pointercancel", up);
+    // Mausrad: zoomen um den Zeiger; Umschalt + Rad (oder seitliches Rad) verschiebt den Ausschnitt
+    this.#bar.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const r = this.#bar.getBoundingClientRect();
+      const frac = r.width > 0 ? Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) : 0.5;
+      if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        const d = (e.shiftKey ? e.deltaY : e.deltaX) || 0;
+        this.#setView(zm.pan(this.#view, this.#tl.durationFrames, (d / 100) * zm.span(this.#view) * 0.2));
+      } else {
+        this.#zoomAt(e.deltaY < 0 ? 1.4 : 1 / 1.4, this.#view.start + frac * zm.span(this.#view));
+      }
+    }, { passive: false });
+  }
+
+  // ---- Zoom der Zeitleiste und der Wellenform ----
+
+  #buildZoomRow(btn: (label: string, title: string, fn: () => void) => HTMLButtonElement): HTMLElement {
+    const row = el("div", "display:flex;flex-wrap:wrap;gap:4px;align-items:center;");
+    row.dataset.role = "zoom-row";
+    this.#overview = el("div", "position:relative;flex:1;min-width:120px;height:10px;border:1px solid var(--omp-border);border-radius:3px;background:var(--omp-surface-raised);cursor:ew-resize;touch-action:none;");
+    this.#overview.dataset.role = "zoom-overview";
+    this.#overview.title = tt("rv.zoom.overview");
+    this.#overviewWin = el("div", "position:absolute;top:0;bottom:0;background:rgba(66,133,244,.55);border-radius:2px;pointer-events:none;");
+    this.#overviewWin.style.left = "0%";
+    this.#overviewWin.style.width = "100%";
+    this.el.dataset.zoomStart = String(this.#view.start);
+    this.el.dataset.zoomEnd = String(this.#view.end);
+    this.#overview.append(this.#overviewWin);
+    let drag = false;
+    const moveTo = (e: PointerEvent) => {
+      const r = this.#overview.getBoundingClientRect();
+      const total = this.#tl.durationFrames;
+      const centre = r.width > 0 ? ((e.clientX - r.left) / r.width) * total : 0;
+      const s = zm.span(this.#view);
+      this.#setView(zm.clampView({ start: centre - s / 2, end: centre + s / 2 }, total));
+    };
+    this.#overview.addEventListener("pointerdown", (e) => {
+      drag = true;
+      this.#overview.setPointerCapture(e.pointerId);
+      moveTo(e);
+    });
+    this.#overview.addEventListener("pointermove", (e) => drag && moveTo(e));
+    this.#overview.addEventListener("pointerup", () => (drag = false));
+    this.#overview.addEventListener("pointercancel", () => (drag = false));
+    this.#zoomOut = el("span", "min-width:52px;font:12px var(--omp-font-mono);color:var(--omp-text-dim);", "1×");
+    this.#zoomOut.dataset.role = "zoom-level";
+    row.append(
+      el("span", "font-size:11px;color:var(--omp-text-dim);", tt("rv.zoom")),
+      btn("−", tt("rv.zoom.out"), () => this.#zoomAt(1 / 1.6, this.#cur)),
+      btn("＋", tt("rv.zoom.in"), () => this.#zoomAt(1.6, this.#cur)),
+      btn("⤢", tt("rv.zoom.fit"), () => this.#setView(zm.fullView(this.#tl.durationFrames))),
+      btn("I–O", tt("rv.zoom.marks"), () => this.zoomToMarks()),
+      this.#zoomOut,
+      this.#overview,
+    );
+    return row;
+  }
+
+  #zoomAt(factor: number, anchor: number): void {
+    this.#setView(zm.zoom(this.#view, this.#tl.durationFrames, factor, anchor));
+  }
+
+  #setView(v: zm.View): void {
+    this.#view = v;
+    const total = this.#tl.durationFrames;
+    this.#wave?.setView(zm.isZoomed(v, total) ? v : null);
+    this.#zoomOut.textContent = `${zm.zoomFactor(v, total)}×`;
+    this.#overviewWin.style.left = `${(v.start / total) * 100}%`;
+    this.#overviewWin.style.width = `${Math.max(1.5, (zm.span(v) / total) * 100)}%`;
+    this.el.dataset.zoomStart = String(v.start);
+    this.el.dataset.zoomEnd = String(v.end);
+    this.#render();
+  }
+
+  /** Ausschnitt auf die Marken I/O (oder, ohne Marken, um den Spielkopf) legen. */
+  zoomToMarks(): void {
+    const total = this.#tl.durationFrames;
+    if (this.#markIn !== null && this.#markOut !== null && this.#markOut > this.#markIn) this.#setView(zm.around(this.#markIn, this.#markOut, total));
+    else this.#setView(zm.around(this.#cur - 50, this.#cur + 50, total));
+  }
+
+  /** Läuft der Spielkopf aus dem Ausschnitt, wird er nachgeführt. */
+  #ensureVisible(): void {
+    const next = zm.follow(this.#view, this.#tl.durationFrames, this.#cur);
+    if (next !== this.#view) {
+      this.#view = next;
+      this.#wave?.setView(next);
+      this.#overviewWin.style.left = `${(next.start / this.#tl.durationFrames) * 100}%`;
+      this.el.dataset.zoomStart = String(next.start);
+      this.el.dataset.zoomEnd = String(next.end);
+    }
   }
 
   #onKey(e: KeyboardEvent): void {
@@ -660,22 +763,31 @@ export class ReviewPlayer {
     const tl = this.#tl;
     this.#renderInfo(this.#cur);
     this.#speedOut.textContent = `${this.#speed}×`;
-    const pct = (f: number) => `${(f / tl.durationFrames) * 100}%`;
+    const v = this.#view;
+    const pct = (f: number) => `${zm.frameToFrac(v, f) * 100}%`;
+    const inView = this.#cur >= v.start && this.#cur < v.end;
+    this.#playhead.style.display = inView ? "" : "none";
     this.#playhead.style.left = `calc(${pct(this.#cur)} - 1px)`;
     // alles außer Spielkopf neu aufbauen
     [...this.#bar.children].forEach((c) => c !== this.#playhead && c !== this.#wave?.canvas && c.remove());
     this.#o.getSegments().forEach((s, i) => {
-      const d = el("div", `position:absolute;top:18px;height:14px;left:${pct(s.in)};width:${Math.max(0.3, ((s.out - s.in) / tl.durationFrames) * 100)}%;background:${SEG_COLORS[i % SEG_COLORS.length]};opacity:.75;border-radius:2px;pointer-events:none;`);
+      const pl = zm.placeRange(v, s.in, s.out);
+      if (!pl) return;
+      const d = el("div", `position:absolute;top:18px;height:14px;left:${pl.left * 100}%;width:${Math.max(0.3, pl.width * 100)}%;background:${SEG_COLORS[i % SEG_COLORS.length]};opacity:.75;border-radius:2px;pointer-events:none;`);
       d.title = `${s.label || tt("rv.seg.n", { p0: i + 1 })}: ${timecodeOf(tl, s.in)} – ${timecodeOf(tl, s.out)}`;
       this.#bar.append(d);
     });
     if (this.#markIn !== null || this.#markOut !== null) {
       const a = this.#markIn ?? 0;
       const b = this.#markOut ?? tl.durationFrames;
-      this.#bar.append(el("div", `position:absolute;top:0;height:16px;left:${pct(a)};width:${Math.max(0.3, ((b - a) / tl.durationFrames) * 100)}%;background:rgba(25,211,243,.35);border-left:${this.#markIn !== null ? 2 : 0}px solid #19d3f3;border-right:${this.#markOut !== null ? 2 : 0}px solid #19d3f3;pointer-events:none;`));
+      const pl = zm.placeRange(v, a, b);
+      if (pl) {
+        this.#bar.append(el("div", `position:absolute;top:0;height:16px;left:${pl.left * 100}%;width:${Math.max(0.3, pl.width * 100)}%;background:rgba(25,211,243,.35);border-left:${this.#markIn !== null && this.#markIn >= v.start ? 2 : 0}px solid #19d3f3;border-right:${this.#markOut !== null && this.#markOut <= v.end ? 2 : 0}px solid #19d3f3;pointer-events:none;`));
+      }
     }
     for (const f of this.#o.findings()) {
       if (f.startFrame === undefined || (f.status !== "fail" && f.status !== "warning")) continue;
+      if (f.startFrame < v.start || f.startFrame >= v.end) continue;
       const m = el("div", `position:absolute;top:0;height:16px;left:${pct(f.startFrame)};width:5px;margin-left:-2px;background:${SEV_COLOR[f.severity] ?? "#ef5350"};cursor:pointer;`);
       m.dataset.findingFrame = String(f.startFrame);
       m.title = f.message;

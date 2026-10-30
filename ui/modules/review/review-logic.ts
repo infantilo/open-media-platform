@@ -328,3 +328,10 @@ export function isoToLocalInput(iso: string | undefined): string {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
+
+/** Zustand der Proxy-Erzeugung für den Fortschrittsbalken: `pct` = null → unbestimmt (wartet noch). */
+export function proxyProgress(p: { state: string; progress?: number } | null): { pct: number | null; waiting: boolean } {
+  if (!p || p.state === "queued") return { pct: null, waiting: true };
+  const n = Number.isFinite(p.progress) ? Math.round(p.progress as number) : 0;
+  return { pct: Math.min(100, Math.max(0, n)), waiting: false };
+}

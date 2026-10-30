@@ -803,7 +803,7 @@ Versionen und technischen Dateien (Representations):
   an, die der Lebenszyklus vom aktuellen Status aus erlaubt (Eingang →
   Registriert → In Verarbeitung → Bereit → In Prüfung → Freigegeben →
   Veröffentlicht → Archiviert, plus Rückwege, „Abgelaufen" und
-  „Gelöscht"). „Gelöscht" ist ein Endzustand und fragt vorher nach.
+  „Gelöscht"). „Gelöscht" ist ein Endzustand und fragt vorher nach. Als gelöscht markierte Assets bleiben zunächst erhalten; der Knopf **„Gelöschte aufräumen (n)"** (nur Administratoren, erscheint, sobald es welche gibt) entfernt sie **endgültig** samt Versionen, Darstellungen, QC-Berichten, Prüfverlauf und Proxys. Die Quelldateien auf der Platte bleiben unberührt; Aufnahme-Aufträge behalten ihren Verlaufseintrag und verlieren nur den Verweis auf das Asset. Das lässt sich nicht rückgängig machen.
 - **Metadaten → „Bearbeiten"** öffnet ein Formular mit Feldname/Wert je
   Kategorie (Beschreibend, Redaktionell, Technisch, Eigene Felder,
   KI-generiert, System). Strukturierte Werte (Zahlen, Listen) erscheinen
@@ -848,11 +848,7 @@ Daraus ergibt sich:
   Node-Prozess ausführt, selbst gemountet sein (NFS/SMB, außerhalb von
   OMPs Verantwortung) — danach ist es für den Node ein ganz normaler
   lokaler Pfad.
-- Der Node-Typ `omp-media-library` scannt ein Verzeichnis
-  (`OMP_MEDIA_DIR`) automatisch, liest technische Metadaten per
-  `ffprobe` aus (Dauer, Codec, Auflösung, Mark-In/Out) und ist der
-  vorgesehene Weg, ein Verzeichnis oder Netzlaufwerk als durchsuchbare
-  Bibliothek einzubinden — unabhängig vom Asset-Katalog oben.
+- Ein Verzeichnis oder Netzlaufwerk als durchsuchbare Bibliothek einbinden: Im Tab **File Eingangskontrolle** importiert „Import“ Dateien aus dem Medienverzeichnis (Einstellung `importDir`) als Assets; dort lesen QC und Review die technischen Metadaten per `ffprobe`. Die Player zeigen ihre eigene Medienliste aus dem Verzeichnis `OMP_MEDIA_DIR`.
 - Bietet eure Isilon (neuere OneFS-Versionen) ein S3-kompatibles
   Protokoll an, lässt sie sich wie MinIO im Administration-Tab unter
   „Storage" als eigenes Backend eintragen — auch das aktuell nur als
@@ -888,6 +884,11 @@ Originaldatei wird dabei nie verändert.
   Einzelbilder) und **Shuttle** (Regler oder J/K/L: −8× … +8×; rückwärts über Einzelbild-Sprünge, nicht jedes Bild wird gezeigt), Timecode-Feld (Taste G),
   I/O setzen In/Out (**Out ist exklusiv**: das aktuelle Bild ist das letzte enthaltene), Alt+I/Alt+O springen hin, `[` `]` springen zu Segmentgrenzen, N legt ein Segment aus
   den Marken an. Befunde der QC erscheinen als rote/orange Marker auf der Zeitleiste.
+  **Zoom der Zeitleiste und der Wellenform:** Unter der Zeitleiste stehen **−**, **＋**, **⤢** (ganze Länge), **I–O** (auf die Marken zoomen, ohne Marken um den Spielkopf) und die
+  Zoomstufe. Mausrad auf der Zeitleiste zoomt um den Zeiger, Umschalt + Mausrad verschiebt; der Übersichtsstreifen daneben zeigt den gezeigten Ausschnitt und lässt sich ziehen.
+  Segmente, Marken und QC-Befunde folgen dem Ausschnitt, ein Klick springt auf das Bild darunter, und in der Wiedergabe wandert der Ausschnitt mit dem Spielkopf mit.
+  Die Wellenform hat einen Spitzenwert je Bild — weiter als auf einzelne Bilder (mindestens 10 Bilder im Ausschnitt) lässt sich also nicht hineinzoomen.
+  **Proxy wird erzeugt:** Solange der Review-Proxy noch entsteht, zeigt ein **Fortschrittsbalken** den Anteil der erzeugten Bilder (zuerst „wartet“, dann Prozent); danach erscheint der Player von selbst.
   Rechts: **Nutzbarer Bereich**, **Segmente** (Name, In, Out exklusiv, Reihenfolge, Beschreibung; „▶“ spielt den Bereich), danach die **Metadaten** (Pflichtfelder mit *;
   Felder und Auswahllisten stellt der Administrator ein). Überlappungen/Lücken meldet die Oberfläche sofort, wenn die Einstellungen sie verbieten.
 - **Speichern/Einreichen:** „Entwurf speichern“ sichert den Stand jederzeit (auch unvollständig). „Einreichen“ prüft vollständig (Pflichtfelder, mindestens ein Segment).
@@ -896,7 +897,8 @@ Originaldatei wird dabei nie verändert.
 - **Änderungen anderer:** Hat jemand anderes zwischenzeitlich gespeichert oder ist die Quelldatei neu, erscheint ein Hinweis: „Aktuellen Stand laden“ oder
   „trotzdem speichern“ (überschreibt ausdrücklich). Ungespeicherte Änderungen werden beim Verlassen nachgefragt.
 - **Verlauf:** Alle Aktionen (wer, was, wann, Zustand von → nach) und die Conform-Revisionen.
-- **Einstellungen** (Administratoren): Formular mit den Abschnitten *Freigabe und Prüfung* (Modus, Selbstfreigabe), *Segmentregeln*, *Qualitätskontrolle* (Standardprofil, parallele Prüfungen, Profile mit Schwellen für Schwarzbild, Standbild, Stille, Lautheit, Übersteuerung, Bild/Ton-Versatz und Erwartungen an die Datei; Profile duplizieren/entfernen), *Prüfkopie*, *Metadatenformular* (Felder anlegen, sortieren, Typ, Pflicht, erlaubte Werte) und *Import*. Eingaben werden vor dem Speichern geprüft; der Server prüft zusätzlich.
+- **QC-Profile** (Administratoren, *Administration → Plattform → QC-Profile*): Liste aller Profile mit Kennung und Version (`broadcast-default@1`), dem Standard-Zeichen und einer Kurzfassung der Erwartungen und der Lautheit. **+ Neues Profil** beginnt mit den Werten des mitgelieferten Rundfunkprofils; **Bearbeiten**, **Kopieren**, **Zum Standard machen** und **Löschen** (das Standardprofil und das letzte Profil bleiben). Der Editor enthält die Schwellen für Schwarzbild, Standbild und Stille, die Lautheit (EBU R128), Übersteuerung, Bild/Ton-Versatz, die Zeitgrenze und die Erwartungen an die Datei (Auflösung, Bildrate, Halbbilder, Codec, Container, Tonspuren, Abtastrate, Bittiefe, Untertitel). Die Kennung eines neuen Profils folgt dem Namen und lässt sich danach nicht mehr ändern, weil sie in jedem Prüfbericht steht. **Ändern sich die Regeln, steigt die Version automatisch** (reine Umbenennung lässt sie stehen), damit jeder Befund einem Regelstand zuordenbar bleibt. Unsinnige Werte (Warnschwelle über der Fehlerschwelle, negative Zeiten, Pegel über 0 dB …) lehnt der Server mit einer Meldung ab. Ein Profil wird je Datei beim Prüfen gewählt; ohne Wahl gilt das Standardprofil.
+- **Einstellungen** (Administratoren): Formular mit den Abschnitten *Freigabe und Prüfung* (Modus, Selbstfreigabe), *Segmentregeln*, *Qualitätskontrolle* (Standardprofil, parallele Prüfungen; die Profile selbst bearbeiten Sie unter *Administration → Plattform → QC-Profile*, s. unten), *Prüfkopie*, *Metadatenformular* (Felder anlegen, sortieren, Typ, Pflicht, erlaubte Werte) und *Import*. Eingaben werden vor dem Speichern geprüft; der Server prüft zusätzlich.
   Das Modul lässt sich mit `OMP_MODULES_DISABLE=review` abschalten; Proxys liegen unter `OMP_REVIEW_DIR` (Standard `data/review`).
 
 ## 5d. Stream Ingest (geplante Live-Aufnahme)

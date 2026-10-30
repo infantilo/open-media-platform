@@ -164,6 +164,7 @@ class AssetView extends HTMLElement {
   #countEl!: HTMLElement;
   #typeSelect!: HTMLSelectElement;
   #statusSelect!: HTMLSelectElement;
+  #purgeBtn!: HTMLButtonElement;
   #filterBarEl!: HTMLElement;
   #assetsModeBtn!: HTMLButtonElement;
   #collectionsModeBtn!: HTMLButtonElement;
@@ -197,6 +198,30 @@ class AssetView extends HTMLElement {
     }
   }
 
+  /** Zeigt „Gelöschte aufräumen (n)“, sobald gelöschte Assets existieren. */
+  #syncPurgeButton() {
+    if (!this.#purgeBtn) return;
+    const n = this.#assets.filter((a) => a.status === "deleted").length;
+    this.#purgeBtn.style.display = n > 0 ? "" : "none";
+    this.#purgeBtn.textContent = tt("asset.purge", { p0: n });
+    this.#purgeBtn.title = tt("asset.purge.title");
+  }
+
+  async #purgeDeleted() {
+    const n = this.#assets.filter((a) => a.status === "deleted").length;
+    if (n === 0) return;
+    if (!(await confirmDialog(tt("asset.purge.confirm", { p0: n }), { confirmLabel: tt("asset.purge.ok") }))) return;
+    const res = await apiFetch("/api/v1/assets/purge-deleted", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    if (res.ok) {
+      const r = (await res.json()) as { purged: number };
+      showToast(tt("asset.purge.done", { p0: r.purged }), { variant: "info" });
+      if (this.#selectedId && this.#assets.some((a) => a.id === this.#selectedId && a.status === "deleted")) this.#selectedId = "";
+    } else {
+      showToast(tt("misc.failedWith", { p0: tt("asset.purge.what"), p1: (await res.text()).trim() || res.status }), { variant: "error" });
+    }
+    await this.#refresh();
+  }
+
   async #refresh() {
     try {
       const res = await apiFetch("/api/v1/assets");
@@ -210,6 +235,7 @@ class AssetView extends HTMLElement {
     } catch {
       // s.o.
     }
+    this.#syncPurgeButton();
     if (this.#selectedId) await this.#loadDetail(this.#selectedId);
     if (this.#selectedCollectionId) await this.#loadCollectionMembers(this.#selectedCollectionId);
     this.#renderList();
@@ -736,6 +762,12 @@ class AssetView extends HTMLElement {
     });
     delLabel.append(delCb, document.createTextNode(tt("asset.7cf160")));
     bar.appendChild(delLabel);
+    // Aufräumen: als gelöscht markierte Assets endgültig entfernen (nur Administratoren, nur wenn welche da sind)
+    this.#purgeBtn = document.createElement("button");
+    this.#purgeBtn.setAttribute("data-role", "asset-purge");
+    this.#purgeBtn.style.cssText = "display:none;cursor:pointer;font-size:var(--omp-font-size-xs);padding:2px 8px;";
+    this.#purgeBtn.addEventListener("click", () => void this.#purgeDeleted());
+    bar.appendChild(this.#purgeBtn);
     return bar;
   }
 

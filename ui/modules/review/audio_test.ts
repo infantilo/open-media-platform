@@ -165,3 +165,15 @@ Deno.test("Wellenform: Spalten nehmen das Maximum ihrer Bilder, nur hörbare Spu
   assertEquals(reduceColumns([null, null], [true, true], 5).every((v) => v === 0), true);
   assertEquals(reduceColumns([a], [true], 200).length, 200); // mehr Spalten als Bilder: jede Spalte mindestens ein Bild
 });
+
+Deno.test("Wellenform: Ausschnitt zeigt nur die gewählten Bilder (Zoom)", () => {
+  const a = new Uint8Array(1000);
+  a[500] = 255; // ein Knall bei Bild 500
+  const full = reduceColumns([a], [true], 10);
+  assertEquals(Array.from(full).filter((v) => v > 0).length, 1); // ganze Länge: eine Spalte à 100 Bilder
+  assertEquals(full[5], 255);
+  const zoomed = reduceColumns([a], [true], 10, 495, 505); // 10 Bilder auf 10 Spalten: Bild 500 = Spalte 5
+  assertEquals(Array.from(zoomed), [0, 0, 0, 0, 0, 255, 0, 0, 0, 0]);
+  assertEquals(reduceColumns([a], [true], 10, 0, 100).every((v) => v === 0), true); // Knall außerhalb
+  assertEquals(reduceColumns([a], [true], 4, 990, 5000).length, 4); // Ende wird beschnitten, kein Fehler
+});

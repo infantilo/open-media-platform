@@ -297,9 +297,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let registry_url = env_or("OMP_REGISTRY_URL", "http://127.0.0.1:8010");
     let nats_url = env_or("OMP_NATS_URL", "nats://localhost:4222");
     let domain = env_or("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl");
-    // Gleiche Variable/gleicher Default wie `omp-media-library`s Scan
-    // (`ARCHITECTURE.md` §24.7): eine Aufnahme landet ohne manuellen
-    // Schritt im nächsten Library-Scan.
+    // Gleiche Variable/gleicher Default wie die Medienverzeichnisse der Player
+    // (`ARCHITECTURE.md` §24.7): eine Aufnahme landet ohne manuellen Schritt
+    // im Verzeichnis, das die Player scannen.
     let media_dir = env_or("OMP_MEDIA_DIR", "/home/infantilo/OpenMediaPlatform/data");
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
 

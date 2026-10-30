@@ -387,6 +387,12 @@
     "domain": "core"
   },
   {
+    "method": "POST",
+    "path": "/api/v1/assets/purge-deleted",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
     "method": "GET",
     "path": "/api/v1/assets/search",
     "auth": "auth",
@@ -1930,6 +1936,30 @@
     "method": "GET",
     "path": "/api/v1/review/media/{id}/proxy",
     "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/review/qc-profiles",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/review/qc-profiles/default",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/review/qc-profiles/{id}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/review/qc-profiles/{id}",
+    "auth": "verb:Admin",
     "domain": "core"
   },
   {

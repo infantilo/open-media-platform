@@ -140,3 +140,14 @@ Deno.test("assignmentLabel zeigt Gruppennamen statt IDs", async () => {
   const { assignmentLabel } = await import("./review-logic.ts");
   assertEquals(assignmentLabel({ assignedGroup: "g1" }, "Gruppe", () => "Nachtschicht"), "Gruppe Nachtschicht");
 });
+
+import { proxyProgress } from "./review-logic.ts";
+
+Deno.test("Proxy-Fortschritt: wartend ist unbestimmt, laufend zeigt Prozent, Werte bleiben in 0–100", () => {
+  assertEquals(proxyProgress(null), { pct: null, waiting: true });
+  assertEquals(proxyProgress({ state: "queued", progress: 0 }), { pct: null, waiting: true });
+  assertEquals(proxyProgress({ state: "running", progress: 42.4 }), { pct: 42, waiting: false });
+  assertEquals(proxyProgress({ state: "running" }), { pct: 0, waiting: false }); // älterer Server ohne Feld
+  assertEquals(proxyProgress({ state: "running", progress: 250 }).pct, 100);
+  assertEquals(proxyProgress({ state: "running", progress: -3 }).pct, 0);
+});

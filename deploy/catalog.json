@@ -280,16 +280,6 @@
     "expectedResources": "moderat (Web-Rendering pro aktivem Template)"
   },
   {
-    "type": "omp-media-library",
-    "label": "Media Library",
-    "runner": "process",
-    "command": ["../nodes/target/release/omp-media-library"],
-    "env": {},
-    "description": "Datei-Katalog mit technischen Metadaten (ffprobe) und Mark-In/Out-Segmenten. Keine eigene Medienpipeline.",
-    "i18n": { "en": {"description": "File catalog with technical metadata (ffprobe) and mark-in/out segments. No media pipeline of its own.", "expectedResources": "very low (no media processing)"} },
-    "expectedResources": "sehr gering (keine Medienverarbeitung)"
-  },
-  {
     "type": "omp-scte35",
     "label": "SCTE-35 Generator",
     "runner": "process",

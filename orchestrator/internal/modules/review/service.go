@@ -992,3 +992,18 @@ func (s *Service) Unarchive(ctx context.Context, assetID, actor string, expected
 func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
 
 func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
+
+// purgeAssets räumt die Daten gelöschter Assets auf (Haken von asset.Store.PurgeDeleted): alle Tabellen des Moduls mit `asset_id`,
+// danach — erst nach dem Commit — die Proxy-Dateien.
+func (s *Service) purgeAssets(tx *sql.Tx, ids []string) (func(), error) {
+	for _, table := range []string{"review_history", "review_skipped", "review_proxies", "conform_revisions", "qc_reports", "qc_jobs", "review_items"} {
+		if _, err := tx.Exec("DELETE FROM "+table+" WHERE asset_id = ANY($1)", ids); err != nil {
+			return nil, fmt.Errorf("%s: %w", table, err)
+		}
+	}
+	return func() {
+		for _, id := range ids {
+			_ = os.RemoveAll(filepath.Join(s.DataDir, "proxies", id))
+		}
+	}, nil
+}

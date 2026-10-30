@@ -247,6 +247,8 @@ type AssetService interface {
 	// asset.Store.SearchAssets-Doku.
 	SearchAssets(query string) ([]asset.Asset, error)
 	UpdateAssetStatus(id string, expectedRowVersion int, newStatus, updatedBy string) (asset.Asset, error)
+	// PurgeDeleted entfernt als gelöscht markierte Assets endgültig (älter als die Frist; 0 = alle).
+	PurgeDeleted(olderThan time.Duration) ([]string, error)
 	UpdateAssetMetadata(id string, expectedRowVersion int, metadata asset.Metadata, updatedBy string) (asset.Asset, error)
 
 	CreateVersion(assetID, parentVersionID, changeReason, createdBy string) (asset.AssetVersion, error)
@@ -733,6 +735,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/assets/search", g.requireAuth(handleSearchAssets(assetSvc)))
 	mux.HandleFunc("POST /api/v1/assets", g.requireVerbGlobal(authz.VerbConfigure, handleCreateAsset(assetSvc, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/assets/{id}", g.requireAuth(handleGetAsset(assetSvc)))
+	mux.HandleFunc("POST /api/v1/assets/purge-deleted", g.requireVerbGlobal(authz.VerbAdmin, handlePurgeDeletedAssets(assetSvc, options.domainAudit)))
 	mux.HandleFunc("POST /api/v1/assets/{id}/status", g.requireVerbGlobal(authz.VerbOperate, handleUpdateAssetStatus(assetSvc, options.domainAudit)))
 	mux.HandleFunc("PUT /api/v1/assets/{id}/metadata", g.requireVerbGlobal(authz.VerbOperate, handleUpdateAssetMetadata(assetSvc)))
 	mux.HandleFunc("GET /api/v1/assets/{id}/versions", g.requireAuth(handleListAssetVersions(assetSvc)))

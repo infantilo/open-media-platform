@@ -33,6 +33,8 @@ type Module struct {
 	mu  sync.Mutex
 	svc *Service
 	cfg cfgHolder
+	// cfgMu serialisiert Lesen-Ändern-Schreiben des Einstellungsdokuments (Profilverwaltung).
+	cfgMu sync.Mutex
 
 	qcRuns, qcFailures, qcExecFailures atomic.Int64
 	qcSecondsMilli                     atomic.Int64
@@ -109,6 +111,7 @@ func (m *Module) service(d module.Deps) *Service {
 		return b, err
 	}
 	m.svc = &Service{St: NewStore(d.DB), Assets: m.Assets, Tools: tools, Cfg: m.cfg.Get, DataDir: dir, Audit: d.Audit}
+	asset.RegisterPurgeHook("review", m.svc.purgeAssets)
 	return m.svc
 }
 
@@ -152,15 +155,24 @@ func (m *Module) Mount(r module.Routes, d module.Deps) error {
 	r.Handle("POST /api/v1/review/register", module.Feature("review.import"), a.registerAsset())
 	r.Handle("GET /api/v1/review/config", module.Authenticated(), a.getConfig())
 	r.Handle("PUT /api/v1/review/config", module.Verb(authz.VerbAdmin), a.putConfig())
+	r.Handle("GET /api/v1/review/qc-profiles", module.Authenticated(), a.listProfiles())
+	r.Handle("PUT /api/v1/review/qc-profiles/{id}", module.Verb(authz.VerbAdmin), a.putProfile())
+	r.Handle("DELETE /api/v1/review/qc-profiles/{id}", module.Verb(authz.VerbAdmin), a.deleteProfile())
+	r.Handle("POST /api/v1/review/qc-profiles/default", module.Verb(authz.VerbAdmin), a.setDefaultProfile())
 	return nil
 }
 
-// UI: Tab „Eingang“ in der Hauptleiste, nach „Assets“.
+// UI: Tab „Eingang“ in der Hauptleiste, nach „Assets“; dazu der Editor der QC-Profile in der Administration (Plattform → Betrieb).
 func (*Module) UI() []module.UITab {
 	return []module.UITab{{
 		ID: "review", Placement: "main", After: "assets",
 		Label:   map[string]string{"de": "File Eingangskontrolle", "en": "File intake control"},
 		Element: "omp-review-view", Bundle: "/dist/modules/review.js",
+	}, {
+		ID: "qc-profiles", Placement: "admin:platform", After: "jobs",
+		Label: map[string]string{"de": "QC-Profile", "en": "QC profiles"},
+		Group: map[string]string{"de": "Plattform", "en": "Platform"}, Cluster: "operations",
+		Element: "omp-qc-profiles-view", Bundle: "/dist/modules/review.js",
 	}}
 }
 

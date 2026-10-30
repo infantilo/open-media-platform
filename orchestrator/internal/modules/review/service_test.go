@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -471,4 +472,57 @@ func TestScanNewRegistersAssetsOnce(t *testing.T) {
 		t.Fatalf("exactly one QC job expected, got %d", len(jobs))
 	}
 	e.drain(t)
+}
+
+// importReady2: zweite, andere Datei (gleicher Inhalt, eigener Name), damit ein zweites Asset entsteht.
+func (e *testEnv) importReady2(t *testing.T) Item {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(e.dir, e.file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.dir, "zweite-datei.mxf"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	it, err := e.svc.ImportFile(context.Background(), "zweite-datei.mxf", "", "importer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.drain(t)
+	got, err := e.svc.St.GetItem(context.Background(), it.AssetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// Aufräumen gelöschter Assets: Der Haken des Moduls entfernt Eingangsdaten (Zeilen und Proxy-Ordner) mit; nicht gelöschte bleiben.
+func TestPurgeDeletedAssetsRemovesReviewDataAndProxyFolder(t *testing.T) {
+	e := newEnv(t, nil)
+	asset.RegisterPurgeHook("review", e.svc.purgeAssets)
+	defer asset.RegisterPurgeHook("review", func(*sql.Tx, []string) (func(), error) { return nil, nil })
+	_, _ = e.svc.Assets.PurgeDeleted(0) // Reste früherer Läufe in der Testdatenbank
+	gone := e.importReady(t)
+	keep := e.importReady2(t)
+	dir := filepath.Join(e.svc.DataDir, "proxies", gone.AssetID)
+	if err := os.MkdirAll(dir, 0o755); err != nil || os.WriteFile(filepath.Join(dir, "x.mp4"), []byte("x"), 0o644) != nil {
+		t.Fatal("Proxy-Ordner anlegen")
+	}
+	a, _ := e.svc.Assets.GetAsset(gone.AssetID)
+	if _, err := e.svc.Assets.UpdateAssetStatus(gone.AssetID, a.RowVersion, asset.StatusDeleted, "t"); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := e.svc.Assets.PurgeDeleted(0)
+	if err != nil || len(ids) != 1 || ids[0] != gone.AssetID {
+		t.Fatalf("PurgeDeleted = %v, %v", ids, err)
+	}
+	if _, err := e.svc.St.GetItem(context.Background(), gone.AssetID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Eingangs-Element des gelöschten Assets existiert noch: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("Proxy-Ordner existiert noch: %v", err)
+	}
+	if _, err := e.svc.St.GetItem(context.Background(), keep.AssetID); err != nil {
+		t.Errorf("anderes Element verschwunden: %v", err)
+	}
 }

@@ -8,8 +8,14 @@ func (*Module) Migrations() []module.Migration {
 		{Version: 1, Name: "review-qc-conform", SQL: schemaV1},
 		{Version: 2, Name: "review-assignment", SQL: schemaV2},
 		{Version: 3, Name: "review-audio-proxy", SQL: schemaV3},
+		{Version: 4, Name: "review-proxy-progress", SQL: schemaV4},
 	}
 }
+
+// schemaV4: Fortschritt der Proxy-Erzeugung in Prozent (0–100) für den Fortschrittsbalken der Oberfläche.
+const schemaV4 = `
+ALTER TABLE review_proxies ADD COLUMN IF NOT EXISTS progress INT NOT NULL DEFAULT 0;
+`
 
 // schemaV3: Ton-Proxy (je Quell-Tonspur ein Stereo-Stream in einer eigenen Datei, Kapitel 43 Ton im Review-Player).
 const schemaV3 = `

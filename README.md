@@ -515,8 +515,6 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   the subtitles as an extra input (overlay, optionally burnt into the
   multiviewer output). Ships as a complete container package (node, engine,
   models) with one-step import and uninstall
-- **omp-media-library** — file catalog with technical metadata
-  (ffprobe) and mark-in/out segments
 - **omp-recorder** — records an MXL source (video/audio) to a Matroska
   file, or to MXF (H.264 + 24-bit PCM) when the name ends in `.mxf`, with
   optional SMPTE ST 377-4/-41 MCA labels (`record.mcaPlan`) and an

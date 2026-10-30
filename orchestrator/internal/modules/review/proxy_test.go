@@ -355,3 +355,31 @@ func TestPeaksFromPCMScaleAndAlignment(t *testing.T) {
 		t.Errorf("peaks = %v", got)
 	}
 }
+
+func TestParseProgress(t *testing.T) {
+	cases := []struct {
+		line string
+		pct  int
+		prog bool
+	}{
+		{"frame=250", 25, true},
+		{"frame=1000", 99, true}, // nie 100 vor der Verifikation
+		{"frame=2000", 99, true}, // mehr Bilder als erwartet
+		{"frame=0", 0, true},
+		{"fps=48.2", -1, true},
+		{"out_time_us=4000000", -1, true},
+		{"progress=continue", -1, true},
+		{"speed=1.3x", -1, true},
+		{"Error while decoding stream #0:0", -1, false}, // echte Fehlermeldungen bleiben Fehlerzeilen
+		{"", -1, false},
+	}
+	for _, c := range cases {
+		pct, prog := parseProgress(c.line, 1000)
+		if pct != c.pct || prog != c.prog {
+			t.Errorf("%q: got (%d,%v), want (%d,%v)", c.line, pct, prog, c.pct, c.prog)
+		}
+	}
+	if pct, prog := parseProgress("frame=5", 0); pct != -1 || !prog {
+		t.Errorf("unbekannte Länge: (%d,%v)", pct, prog)
+	}
+}

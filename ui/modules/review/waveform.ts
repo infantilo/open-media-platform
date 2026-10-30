@@ -2,14 +2,20 @@
 // Server: `GET …/peaks/{track}`). Gezeichnet wird das Maximum der gerade hörbaren Spuren — Ton-Ein- und Ausstiege sind so
 // vor dem Abhören zu sehen (Stille = flache Linie).
 
-/** Spitzenwert je Bildschirmspalte: Maximum über alle Bilder der Spalte und alle hörbaren, geladenen Spuren. */
-export function reduceColumns(peaks: Array<Uint8Array | null>, audible: boolean[], width: number): Uint8Array {
+/**
+ * Spitzenwert je Bildschirmspalte: Maximum über alle Bilder der Spalte und alle hörbaren, geladenen Spuren.
+ * `from`/`to` begrenzen den gezeigten Ausschnitt in Bildern (Zoom); ohne Angabe die ganze Länge.
+ */
+export function reduceColumns(peaks: Array<Uint8Array | null>, audible: boolean[], width: number, from = 0, to?: number): Uint8Array {
   const out = new Uint8Array(Math.max(0, width));
   const frames = peaks.find((p) => p)?.length ?? 0;
   if (!frames || width <= 0) return out;
+  const lo = Math.max(0, Math.min(frames, from));
+  const hi = Math.max(lo + 1, Math.min(frames, to ?? frames));
+  const n = hi - lo;
   for (let c = 0; c < width; c++) {
-    const a = Math.floor((c * frames) / width);
-    const b = Math.max(a + 1, Math.floor(((c + 1) * frames) / width));
+    const a = lo + Math.floor((c * n) / width);
+    const b = Math.max(a + 1, lo + Math.floor(((c + 1) * n) / width));
     let m = 0;
     for (let t = 0; t < peaks.length; t++) {
       const p = peaks[t];
@@ -27,6 +33,8 @@ export class Waveform {
   #audible: boolean[];
   #urlFor: (track: number) => string;
   #ro?: ResizeObserver;
+  #from = 0;
+  #to: number | undefined;
 
   constructor(tracks: number, urlFor: (track: number) => string) {
     this.#peaks = Array.from({ length: tracks }, () => null);
@@ -53,6 +61,13 @@ export class Waveform {
     }
   }
 
+  /** Zeigt nur die Bilder [from, to) (Zoom der Zeitleiste); `null` = die ganze Länge. */
+  setView(view: { start: number; end: number } | null): void {
+    this.#from = view?.start ?? 0;
+    this.#to = view?.end;
+    this.draw();
+  }
+
   setAudible(a: boolean[]): void {
     this.#audible = a;
     this.draw();
@@ -69,7 +84,7 @@ export class Waveform {
     const g = cv.getContext("2d");
     if (!g) return;
     g.clearRect(0, 0, w, h);
-    const cols = reduceColumns(this.#peaks, this.#audible, w);
+    const cols = reduceColumns(this.#peaks, this.#audible, w, this.#from, this.#to);
     g.fillStyle = "rgba(147,161,186,0.55)";
     const mid = h / 2;
     for (let x = 0; x < w; x++) {

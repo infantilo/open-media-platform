@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/asset"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/statemachine"
@@ -692,5 +693,33 @@ func handleDeleteRelationship(svc AssetService, domainAudit DomainAuditLogger) h
 		}
 		logDomainAudit(domainAudit, actorFromRequest(r), "asset_relationship", id, "deleted", nil)
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}
+
+// handlePurgeDeletedAssets liefert POST /api/v1/assets/purge-deleted {"olderThanDays": N} (N optional, 0 = alle): entfernt als
+// gelöscht markierte Assets endgültig samt Versionen, Darstellungen und den Daten der Module (Eingang: Proxys, QC, Verlauf).
+// Nicht rückgängig zu machen — nur Administratoren. Die Quelldateien selbst bleiben unberührt.
+func handlePurgeDeletedAssets(svc AssetService, domainAudit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			OlderThanDays int `json:"olderThanDays"`
+		}
+		if r.ContentLength != 0 {
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&body); err != nil {
+				http.Error(w, "invalid JSON body", http.StatusBadRequest)
+				return
+			}
+		}
+		if body.OlderThanDays < 0 || body.OlderThanDays > 3650 {
+			http.Error(w, "olderThanDays must be between 0 and 3650", http.StatusBadRequest)
+			return
+		}
+		ids, err := svc.PurgeDeleted(time.Duration(body.OlderThanDays) * 24 * time.Hour)
+		if err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "asset", "", "purged", map[string]any{"count": len(ids), "olderThanDays": body.OlderThanDays})
+		writeJSON(w, http.StatusOK, map[string]any{"purged": len(ids), "ids": ids})
 	}
 }

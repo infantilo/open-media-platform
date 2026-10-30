@@ -4,6 +4,7 @@ package ingest
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"log/slog"
@@ -101,6 +102,7 @@ func (m *Module) service(d module.Deps) *Service {
 		rt = unavailableRuntime{}
 	}
 	s := &Service{St: NewStore(d.DB), Cfg: m.cfg.Get, Runtime: rt, Assets: m.S.Assets, Audit: d.Audit, FFmpeg: m.S.FFmpeg, Jobs: m.S.Jobs}
+	asset.RegisterPurgeHook("ingest", purgeAssets)
 	s.Hosts = func(ctx context.Context) []HostInfo { return hostInfos(ctx, d, s.Cfg().MediaDir) }
 	s.ChannelCount = m.channelCount
 	m.svc = s
@@ -319,4 +321,11 @@ func (m *Module) BusyOn(hostID string, from, to time.Time) (bool, string) {
 		}
 	}
 	return false, ""
+}
+
+// purgeAssets (Haken von asset.Store.PurgeDeleted): Aufnahme-Aufträge bleiben als Verlauf erhalten, verlieren aber den Verweis auf das
+// endgültig entfernte Asset — sonst zeigte der Tab „Aufnahmen“ einen Link ins Leere.
+func purgeAssets(tx *sql.Tx, ids []string) (func(), error) {
+	_, err := tx.Exec(`UPDATE ingest_jobs SET asset_id = '' WHERE asset_id = ANY($1)`, ids)
+	return nil, err
 }

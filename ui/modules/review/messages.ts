@@ -125,6 +125,114 @@ const TABLE: Record<string, [string, string]> = {
     "Lücken zwischen Segmenten erlauben",
     "Allow gaps between segments"
   ],
+  "rv.qp.title": [
+    "QC-Profile",
+    "QC profiles"
+  ],
+  "rv.qp.intro": [
+    "Ein QC-Profil legt fest, wie streng die Eingangsprüfung ist: Schwellen für Schwarzbild, Standbild, Stille und Lautheit sowie die Erwartungen an die Datei (Format, Bildrate, Tonspuren …). Das Standardprofil gilt für jede neue Prüfung; für einzelne Dateien lässt sich ein anderes wählen. Ändern sich die Regeln eines Profils, steigt seine Version automatisch — jeder Befund trägt „Profil@Version“ und bleibt so einem Regelstand zuordenbar.",
+    "A QC profile defines how strict the intake check is: thresholds for black, freeze, silence and loudness plus the expectations on the file (format, frame rate, audio tracks …). The default profile applies to every new check; another one can be chosen per file. When a profile's rules change its version rises automatically — every finding carries “profile@version” and stays traceable to a rule set."
+  ],
+  "rv.qp.new": [
+    "Neues Profil",
+    "New profile"
+  ],
+  "rv.qp.new.hint": [
+    "Beginnt mit den Werten des mitgelieferten Rundfunkprofils (broadcast-default)",
+    "Starts with the values of the shipped broadcast profile (broadcast-default)"
+  ],
+  "rv.qp.newname": [
+    "Neues Profil",
+    "New profile"
+  ],
+  "rv.qp.default": [
+    "Standard",
+    "Default"
+  ],
+  "rv.qp.edit": [
+    "Bearbeiten",
+    "Edit"
+  ],
+  "rv.qp.makedefault": [
+    "Zum Standard machen",
+    "Make default"
+  ],
+  "rv.qp.defaultset": [
+    "„{p0}“ ist jetzt das Standardprofil",
+    "“{p0}” is now the default profile"
+  ],
+  "rv.qp.del.default": [
+    "Das Standardprofil lässt sich nicht löschen — zuerst ein anderes zum Standard machen",
+    "The default profile cannot be deleted — make another one the default first"
+  ],
+  "rv.qp.tracks": [
+    "Tonspuren",
+    "audio tracks"
+  ],
+  "rv.qp.captions": [
+    "Untertitel",
+    "captions"
+  ],
+  "rv.qp.noexpect": [
+    "keine Erwartungen an das Format",
+    "no format expectations"
+  ],
+  "rv.qp.loud": [
+    "Lautheit",
+    "Loudness"
+  ],
+  "rv.qp.noloud": [
+    "Lautheit nicht geprüft",
+    "loudness not checked"
+  ],
+  "rv.qp.editor.new": [
+    "Neues QC-Profil",
+    "New QC profile"
+  ],
+  "rv.qp.editor.edit": [
+    "QC-Profil „{p0}“ bearbeiten",
+    "Edit QC profile “{p0}”"
+  ],
+  "rv.qp.id": [
+    "Kennung",
+    "ID"
+  ],
+  "rv.qp.id.new": [
+    "Kleinbuchstaben, Ziffern, Bindestrich; folgt dem Namen, bis Sie sie ändern",
+    "lowercase letters, digits, hyphen; follows the name until you change it"
+  ],
+  "rv.qp.id.fixed": [
+    "lässt sich nicht ändern (steht in bestehenden Prüfberichten)",
+    "cannot be changed (it appears in existing reports)"
+  ],
+  "rv.qp.versionnote": [
+    "Ändern Sie Schwellen oder Erwartungen, erhöht der Server die Version selbst; bei reiner Umbenennung bleibt sie.",
+    "If you change thresholds or expectations the server raises the version itself; a plain rename keeps it."
+  ],
+  "rv.qp.err.name": [
+    "Bitte einen Namen eingeben.",
+    "Please enter a name."
+  ],
+  "rv.qp.err.id": [
+    "Die Kennung darf nur Kleinbuchstaben, Ziffern und Bindestrich enthalten (höchstens 40 Zeichen).",
+    "The ID may only contain lowercase letters, digits and hyphens (at most 40 characters)."
+  ],
+  "rv.qp.err.idtaken": [
+    "Es gibt schon ein Profil mit der Kennung „{p0}“.",
+    "A profile with the ID “{p0}” already exists."
+  ],
+  "rv.qp.created": [
+    "Profil „{p0}“ angelegt",
+    "Profile “{p0}” created"
+  ],
+  "rv.qp.saved": [
+    "Profil „{p0}“ gespeichert (Version {p1})",
+    "Profile “{p0}” saved (version {p1})"
+  ],
+  "rv.cfg.qc.profiles.moved": [
+    "Die QC-Profile selbst (Schwellen, Erwartungen, anlegen, kopieren, löschen) bearbeiten Sie unter Administration → Plattform → QC-Profile.",
+    "The QC profiles themselves (thresholds, expectations, create, copy, delete) are edited under Administration → Platform → QC profiles."
+  ],
   "rv.cfg.qc": [
     "Qualitätskontrolle (QC)",
     "Quality control (QC)"
@@ -901,6 +1009,14 @@ const TABLE: Record<string, [string, string]> = {
     "Review-Proxy wird erzeugt … (die Originaldatei bleibt unverändert)",
     "Review proxy is being created … (the original file stays untouched)"
   ],
+  "rv.proxy.waiting": [
+    "Wartet auf einen freien Platz in der Warteschlange …",
+    "Waiting for a free slot in the queue …"
+  ],
+  "rv.proxy.progress": [
+    "{p0} % erzeugt",
+    "{p0} % created"
+  ],
   "rv.proxy.failed": [
     "Review-Proxy konnte nicht erzeugt werden",
     "Review proxy could not be created"
@@ -1037,9 +1153,33 @@ const TABLE: Record<string, [string, string]> = {
     "Der Proxy konnte nicht abgespielt werden.",
     "The proxy could not be played."
   ],
+  "rv.zoom": [
+    "Zoom",
+    "Zoom"
+  ],
+  "rv.zoom.in": [
+    "Hineinzoomen (um den Spielkopf) — oder Mausrad auf der Zeitleiste",
+    "Zoom in (around the playhead) — or mouse wheel on the timeline"
+  ],
+  "rv.zoom.out": [
+    "Herauszoomen",
+    "Zoom out"
+  ],
+  "rv.zoom.fit": [
+    "Ganze Länge zeigen",
+    "Show the whole length"
+  ],
+  "rv.zoom.marks": [
+    "Auf die Marken I–O zoomen (ohne Marken: um den Spielkopf)",
+    "Zoom to the I–O marks (without marks: around the playhead)"
+  ],
+  "rv.zoom.overview": [
+    "Übersicht: ziehen verschiebt den gezeigten Ausschnitt (Umschalt + Mausrad auf der Zeitleiste verschiebt ebenfalls)",
+    "Overview: drag to move the visible section (Shift + mouse wheel on the timeline also pans)"
+  ],
   "rv.player.keys": [
-    "Tasten: ←/→ ±1 Bild (Umschalt ±10, Strg ±1 s) · Leertaste Wiedergabe · J/K/L Shuttle · I/O Marken (Alt: hinspringen) · [ ] Segmentgrenzen · G Timecode · N Segment",
-    "Keys: ←/→ ±1 frame (Shift ±10, Ctrl ±1 s) · Space play · J/K/L shuttle · I/O marks (Alt: jump) · [ ] segment boundaries · G timecode · N segment"
+    "Tasten: ←/→ ±1 Bild (Umschalt ±10, Strg ±1 s) · Leertaste Wiedergabe · J/K/L Shuttle · I/O Marken (Alt: hinspringen) · [ ] Segmentgrenzen · G Timecode · N Segment · Mausrad auf der Zeitleiste: Zoom (Umschalt: verschieben)",
+    "Keys: ←/→ ±1 frame (Shift ±10, Ctrl ±1 s) · Space play · J/K/L shuttle · I/O marks (Alt: jump) · [ ] segment boundaries · G timecode · N segment · mouse wheel on the timeline: zoom (Shift: pan)"
   ],
   "rv.in.hint": [
     "In (inklusiv): erstes enthaltenes Bild",

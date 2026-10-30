@@ -473,9 +473,9 @@ fn item_media_from_args(
 /// spiegeln den zuletzt bekannten `media_library`/`available_sources`-
 /// Stand des Ziel-Players (`discovery_loop`-Doku, best effort, kein
 /// Extra-Poll nur für diese Prüfung) — bewusst KEIN eigener
-/// Backup-Verzeichnis-Mechanismus wie bei PC (`omp-media-library` ist
-/// ein zentraler, gepflegter Katalog, kein Dateisystem mit
-/// Ausweich-Ordnern, s. §6.4-Doku).
+/// Backup-Verzeichnis-Mechanismus wie bei PC (die Medienliste des Players
+/// ist ein gepflegter Katalog, kein Dateisystem mit Ausweich-Ordnern,
+/// s. §6.4-Doku).
 fn item_is_available(m: &ItemMeta, media_library: &[String], available_sources: &[Value], sources: &[omp_resolver::Source]) -> bool {
     // Kapitel 27 / P8: Items mit Asset-Referenz regelt der Medien-Preflight (Bereitschaft + Ausfallrichtlinie
     // beim Take) — die Datei muss nicht schon im Medienverzeichnis liegen, sie wird bereitgestellt.
@@ -1517,8 +1517,8 @@ impl AutomationStore {
     /// `duration_ms` kommt jetzt vom Operator (`DEFAULT_DURATION_MS`,
     /// falls leer) statt automatisch per `ffprobe` ermittelt zu werden —
     /// vormals probte der Ziel-Player die reale Clip-Länge selbst. Ein
-    /// künftiger Ausbau könnte das über `omp-media-library`s bereits
-    /// ffprobe'ten Dateikatalog nachrüsten (`docs/END-GOAL-FEATURES.md`
+    /// künftiger Ausbau könnte das über einen ffprobe-Dateikatalog (z. B. die Asset-Domäne)
+    /// nachrüsten (`docs/END-GOAL-FEATURES.md`
     /// §6.5 Teil 7 nennt das als "Kandidat"), bewusst nicht Teil dieser
     /// Runde — der Datei-Decode-Pfad selbst probt weiterhin die echte
     /// Länge beim tatsächlichen `load()` auf einen Kanal, nur eben nicht

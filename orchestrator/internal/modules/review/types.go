@@ -210,7 +210,9 @@ type Proxy struct {
 	SourceRev string `json:"sourceRev"`
 	Profile   string `json:"profile"`
 	State     string `json:"state"` // queued|running|ready|failed
-	Path      string `json:"-"`
+	// Progress: Fortschritt der Erzeugung in Prozent (0–100), nur während „running“ aussagekräftig.
+	Progress int    `json:"progress"`
+	Path     string `json:"-"`
 	// Ton-Proxy: eine Datei mit je einem Stereo-Stream je Quell-Tonspur (Browser holt blockweise, s. audio.go).
 	AudioTracks int       `json:"audioTracks"`
 	AudioPath   string    `json:"-"`

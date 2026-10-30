@@ -6,7 +6,7 @@ import { ComparePanel } from "./compare-panel.ts";
 import { ConformPanel, type Draft, type MetaField } from "./conform-panel.ts";
 import { type Job, QcPanel, type Report } from "./qc-panel.ts";
 import { ReviewPlayer } from "./player.ts";
-import { assignmentLabel, EDITABLE_STATES, isOverdue, isoToLocalInput, type Item, localInputToIso, type Policy, qcBadge, type Segment, stateBadge, toServerSegments } from "./review-logic.ts";
+import { assignmentLabel, EDITABLE_STATES, isOverdue, isoToLocalInput, type Item, localInputToIso, type Policy, proxyProgress, qcBadge, type Segment, stateBadge, toServerSegments } from "./review-logic.ts";
 import { timecodeOf } from "./timecode.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, css = "", text = ""): HTMLElementTagNameMap[K] {
@@ -45,6 +45,7 @@ interface Proxy {
   height?: number;
   frames: number;
   audioTracks: number;
+  progress?: number;
 }
 
 interface ConformDto {
@@ -592,15 +593,46 @@ export class ReviewDetail {
         b.append(retry);
         left.append(b);
       } else {
-        left.append(el("div", "border:1px solid var(--omp-border);border-radius:6px;padding:14px;", tt("rv.proxy.building")));
-        if (!p) void call("POST", `/items/${it.assetId}/proxy`, {});
-        this.#proxyTimer = setTimeout(async () => {
-          const r = await call<{ proxy: Proxy | null }>("GET", `/items/${it.assetId}/proxy`);
-          if (this.#d && r.ok) {
-            this.#d.proxy = r.data.proxy;
-            showPlayer();
+        // Fortschrittsbalken der Proxy-Erzeugung: wartet noch (unbestimmt) oder zeigt den Anteil der erzeugten Bilder
+        const box = el("div", "border:1px solid var(--omp-border);border-radius:6px;padding:14px;");
+        box.dataset.role = "proxy-progress";
+        const track = el("div", "height:10px;margin-top:8px;border-radius:5px;background:var(--omp-surface-raised);border:1px solid var(--omp-border);overflow:hidden;position:relative;");
+        const fill = el("div", "height:100%;width:0;background:var(--omp-info,#4285f4);transition:width .4s linear;");
+        track.append(fill);
+        const status = el("div", "margin-top:4px;font-size:11px;color:var(--omp-text-dim);");
+        box.append(el("div", "", tt("rv.proxy.building")), track, status);
+        left.append(box);
+        const paint = (px: Proxy | null) => {
+          const g = proxyProgress(px);
+          track.setAttribute("role", "progressbar");
+          if (g.pct === null) {
+            fill.style.width = "35%";
+            fill.style.opacity = "0.45";
+            status.textContent = tt("rv.proxy.waiting");
+          } else {
+            fill.style.width = `${g.pct}%`;
+            fill.style.opacity = "1";
+            track.setAttribute("aria-valuenow", String(g.pct));
+            status.textContent = tt("rv.proxy.progress", { p0: g.pct });
           }
-        }, 2500) as unknown as number;
+        };
+        paint(p);
+        if (!p) void call("POST", `/items/${it.assetId}/proxy`, {});
+        const poll = async () => {
+          const r = await call<{ proxy: Proxy | null }>("GET", `/items/${it.assetId}/proxy`);
+          if (!this.#d) return;
+          if (r.ok) {
+            this.#d.proxy = r.data.proxy;
+            const px = r.data.proxy;
+            if (px && (px.state === "ready" || px.state === "failed")) {
+              showPlayer();
+              return;
+            }
+            paint(px);
+          }
+          this.#proxyTimer = setTimeout(poll, 1000) as unknown as number;
+        };
+        this.#proxyTimer = setTimeout(poll, 1000) as unknown as number;
       }
     };
     showPlayer();

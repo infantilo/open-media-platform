@@ -170,6 +170,9 @@ func (c *Config) Normalize() error {
 		if p.Version < 1 {
 			p.Version = 1
 		}
+		if strings.TrimSpace(p.Name) == "" {
+			p.Name = p.ID
+		}
 		if p.MaxAudioStreams < 1 {
 			p.MaxAudioStreams = 16
 		}
@@ -180,6 +183,9 @@ func (c *Config) Normalize() error {
 			if _, err := ParseRate(p.Expect.FrameRate); err != nil {
 				return fmt.Errorf("QC-Profil %q: %w", k, err)
 			}
+		}
+		if err := p.Validate(); err != nil {
+			return fmt.Errorf("QC-Profil %q: %w", k, err)
 		}
 		c.QCProfiles[k] = p
 	}

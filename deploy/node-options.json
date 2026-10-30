@@ -1925,27 +1925,6 @@
       "group": "Leistung"
     }
   ],
-  "omp-media-library": [
-    {
-      "key": "OMP_MEDIA_DIR",
-      "i18n": { "en": {"label": "Media directory", "description": "Directory searched for media files. Additionally changeable at runtime in the panel (setMediaDir).", "group": "Media and files"} },
-      "label": "Medienverzeichnis",
-      "type": "path",
-      "description": "Verzeichnis, das nach Mediendateien durchsucht wird. Zur Laufzeit zusätzlich im Panel änderbar (setMediaDir).",
-      "default": "data/media",
-      "group": "Medien und Dateien",
-      "pathKind": "dir"
-    },
-    {
-      "key": "OMP_CPU_AFFINITY",
-      "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
-      "label": "CPU-Kerne (Bindung)",
-      "type": "string",
-      "placeholder": "z. B. 2-3",
-      "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
-      "group": "Leistung"
-    }
-  ],
   "omp-recorder": [
     {
       "key": "OMP_MEDIA_DIR",
