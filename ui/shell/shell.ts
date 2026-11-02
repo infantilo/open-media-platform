@@ -218,6 +218,25 @@ interface ShellContext {
   tiles: WorkTile[];
 }
 
+// Benutzer-Widget unten rechts samt Stream-Deck-Knopf. Gemeinsam für den normalen Start und den Login ohne Reload —
+// sonst fehlte der Knopf nach dem Login (dort wurde das Widget früher ohne ihn gebaut).
+function mountUserWidget(root: HTMLElement, username: string, homeHref: string | undefined, workstation: boolean, tiles: Parameters<typeof attachTaskBadge>[1]) {
+  const widget = buildUserWidget(username, homeHref, workstation);
+  attachTaskBadge(widget, tiles);
+  // Die Engineering-Ansicht (omp-app-shell) hat den Stream-Deck-Knopf in der App-Leiste; reine
+  // Operator-Ansichten haben keine App-Leiste, dort sitzt er im Benutzer-Widget.
+  if (!root.querySelector("omp-app-shell")) {
+    const deck = createDeckToggle(
+      "font-size:var(--omp-font-size-xs);padding:2px var(--omp-space-2);border:1px solid var(--omp-border);" +
+        "border-radius:var(--omp-radius);background:var(--omp-surface-raised);color:var(--omp-text);cursor:pointer;",
+    );
+    deck.button.setAttribute("data-role", "deck-toggle");
+    widget.insertBefore(deck.button, widget.firstChild);
+    document.body.appendChild(deck.panel);
+  }
+  document.body.appendChild(widget);
+}
+
 async function renderShell(root: HTMLElement, username: string | null): Promise<ShellContext> {
   const kioskMatch = KIOSK_ROUTE.exec(location.pathname);
   const workflowMatch = kioskMatch ? null : WORKFLOW_CONSOLE_ROUTE.exec(location.pathname);
@@ -329,22 +348,7 @@ async function renderShell(root: HTMLElement, username: string | null): Promise<
     }
   }
 
-  if (username) {
-    const widget = buildUserWidget(username, homeHref, workstation);
-    attachTaskBadge(widget, tiles);
-    // Die Engineering-Ansicht (omp-app-shell) hat den Stream-Deck-Knopf in der App-Leiste; reine
-    // Operator-Ansichten haben keine App-Leiste, dort sitzt er im Benutzer-Widget.
-    if (!root.querySelector("omp-app-shell")) {
-      const deck = createDeckToggle(
-        "font-size:var(--omp-font-size-xs);padding:2px var(--omp-space-2);border:1px solid var(--omp-border);" +
-          "border-radius:var(--omp-radius);background:var(--omp-surface-raised);color:var(--omp-text);cursor:pointer;",
-      );
-      deck.button.setAttribute("data-role", "deck-toggle");
-      widget.insertBefore(deck.button, widget.firstChild);
-      document.body.appendChild(deck.panel);
-    }
-    document.body.appendChild(widget);
-  }
+  if (username) mountUserWidget(root, username, homeHref, workstation, tiles);
   return { homeHref, workstation, tiles };
 }
 
@@ -494,11 +498,7 @@ async function boot() {
         // günstiger whoami()-Aufruf statt den Login-Response-Body
         // durchzureichen, hält showLoginOverlay von Shell-Kenntnis frei.
         whoami().then(({ username }) => {
-          if (username) {
-            const widget = buildUserWidget(username, homeHref, workstation);
-            attachTaskBadge(widget, tiles);
-            document.body.appendChild(widget);
-          }
+          if (username) mountUserWidget(root, username, homeHref, workstation, tiles);
         });
       });
     });
