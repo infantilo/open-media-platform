@@ -353,16 +353,16 @@ func (s *Service) restoreRoleState(wf Workflow) {
 // Alias im Blob enthalten, z. B. reine DVE-Box-/Enabled-Flags ohne
 // Sender-Bezug) verifiziert nicht extra — ein einzelner POST reicht.
 func (s *Service) restoreOneRoleState(wf Workflow, role string, raw json.RawMessage) error {
-	err := s.restoreOneRoleStateTry(wf, role, raw)
+	err := s.restoreOneRoleStateTry(wf, role, raw, restoreStateRetries)
 	if err == nil {
 		s.clearUnrestored(wf.ID, role)
 	}
 	return err
 }
 
-func (s *Service) restoreOneRoleStateTry(wf Workflow, role string, raw json.RawMessage) error {
+func (s *Service) restoreOneRoleStateTry(wf Workflow, role string, raw json.RawMessage, retries int) error {
 	var lastErr error
-	for attempt := 1; attempt <= restoreStateRetries; attempt++ {
+	for attempt := 1; attempt <= retries; attempt++ {
 		if attempt > 1 {
 			time.Sleep(restoreStateRetryDelay)
 		}

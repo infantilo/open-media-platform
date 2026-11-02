@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -85,6 +86,9 @@ var registryPollNowTimeout = 2 * time.Second
 // Node-eigener HTTP-Poll) — bei 20s `registrationTimeout` macht das aus
 // ~66 Anfragen ~200, für einen einzelnen Workflow-Start unbedenklich.
 var registrationPollInterval = newDurVar(100 * time.Millisecond)
+
+// portWaitTimeout: wie lange applyConnection auf noch nicht registrierte Sender/Receiver wartet (awaitPorts).
+var portWaitTimeout = newDurVar(15 * time.Second)
 
 var (
 	// ErrValidation wird bei einer ungültigen Workflow-Definition
@@ -995,6 +999,7 @@ func (s *Service) runStart(wf Workflow, ioAssignments map[string]ioPortAssignmen
 		return
 	}
 
+	s.restoreDynamicPorts(wf)
 	for _, conn := range wf.Definition.Connections {
 		fromNode, ok := s.nodeForRole(wf, conn.FromRole)
 		if !ok {
@@ -1597,6 +1602,9 @@ const (
 // Behandlung mit fest `formatVideo` (`crosspointByNodeType` enthält
 // heute ausschließlich Video-Crosspoints, s. Map oben).
 func (s *Service) applyConnection(ctx context.Context, conn Connection, fromNode, toNode registry.NodeView, toRoleNodeType string) error {
+	// Ein Node meldet sich zuerst an, seine IS-04-Receiver/-Sender tauchen in der Registry erst nach und nach auf
+	// (besonders bei dynamisch erzeugten Quellen/Zielen): auf die verlangten Ports warten statt sofort zu scheitern.
+	fromNode, toNode = s.awaitPorts(ctx, conn, fromNode, toNode, toRoleNodeType)
 	// Ausgangs-Anker (Kapitel 39.6, z. B. omp-playout-buffer) haben je Medienart einen Receiver: eine
 	// Rollen-Verbindung ohne Port-Angabe verbindet jedes Format, für das der Sender der Quellrolle etwas hat
 	// (Bild UND Ton) — der Rollen-Designer kennt keine Ports und soll den Ton nicht vergessen können.
@@ -1644,6 +1652,81 @@ func (s *Service) applyConnection(ctx context.Context, conn Connection, fromNode
 	}
 
 	return fmt.Errorf("connection %s -> %s: role %s (%s) has neither a receiver nor a known crosspoint method", conn.FromRole, conn.ToRole, conn.ToRole, toRoleNodeType)
+}
+
+// connectionPortsReady: ob die von der Connection verlangten Ports schon in der Registry stehen (Sender der Quelle,
+// Receiver des Ziels; Letzterer entfällt bei Crosspoint-Typen ohne Receiver).
+func connectionPortsReady(conn Connection, from, to registry.NodeView, toRoleNodeType string) bool {
+	if _, ok := findSender(from, conn.FromSender, ""); !ok {
+		return false
+	}
+	if _, crosspoint := crosspointByNodeType[toRoleNodeType]; crosspoint && len(to.Receivers) == 0 {
+		return true
+	}
+	_, ok := findReceiver(to, conn.ToReceiver)
+	return ok
+}
+
+// restoreDynamicPorts legt vor dem Verbinden die dynamisch erzeugten Ports (Viewer-Audiokanäle, Mischer-Kanäle/-Pods) wieder an:
+// Der gespeicherte Rollenzustand erzeugt sie, wird sonst aber erst NACH den Verbindungen eingespielt — eine Kante auf einen
+// solchen Port scheiterte dann mit "has no receiver". Pro Rolle ein einziger Versuch; der volle Restore (mit Wiederholungen)
+// folgt am Ende von runStart und ist idempotent.
+func (s *Service) restoreDynamicPorts(wf Workflow) {
+	saved, err := s.store.GetRoleState(wf.ID)
+	if err != nil || len(saved) == 0 {
+		return
+	}
+	done := map[string]bool{}
+	for _, conn := range wf.Definition.Connections {
+		from, okFrom := s.nodeForRole(wf, conn.FromRole)
+		to, okTo := s.nodeForRole(wf, conn.ToRole)
+		if !okFrom || !okTo || connectionPortsReady(conn, from, to, roleNodeType(wf, conn.ToRole)) {
+			continue
+		}
+		for _, role := range []string{conn.FromRole, conn.ToRole} {
+			raw, has := saved[role]
+			if !has || done[role] {
+				continue
+			}
+			done[role] = true
+			if err := s.restoreOneRoleStateTry(wf, role, raw, 1); err != nil {
+				slog.Debug("workflows: early restore of dynamic ports failed", "workflow", wf.ID, "role", role, "error", err)
+			}
+		}
+	}
+}
+
+// awaitPorts pollt (höchstens portWaitTimeout, oder bis ctx endet) die Registry, bis die von der Connection verlangten Ports
+// existieren: Sender der Quellrolle (Label oder irgendeiner) und Receiver der Zielrolle (Label oder irgendeiner;
+// entfällt bei Crosspoint-Typen). Liefert sonst den zuletzt gesehenen Stand zurück, der Fehler kommt dann aus applyConnection.
+func (s *Service) awaitPorts(ctx context.Context, conn Connection, from, to registry.NodeView, toRoleNodeType string) (registry.NodeView, registry.NodeView) {
+	ready := func(f, t registry.NodeView) bool { return connectionPortsReady(conn, f, t, toRoleNodeType) }
+	if ready(from, to) {
+		return from, to
+	}
+	deadline := time.After(portWaitTimeout.Load())
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return from, to
+		case <-deadline:
+			return from, to
+		case <-ticker.C:
+		}
+		for _, n := range s.nodes.List() {
+			switch n.ID {
+			case from.ID:
+				from = n
+			case to.ID:
+				to = n
+			}
+		}
+		if ready(from, to) {
+			return from, to
+		}
+	}
 }
 
 // isAnchorType: ob der Katalog den Node-Typ als Ausgangs-Anker (`anchor:true`) führt.
@@ -1701,6 +1784,12 @@ func findSender(node registry.NodeView, label, preferFormat string) (registry.Se
 			return sndr, true
 		}
 	}
+	want := portName(label, node.Label)
+	for _, sndr := range node.Senders {
+		if portName(sndr.Label, node.Label) == want {
+			return sndr, true
+		}
+	}
 	return registry.SenderView{}, false
 }
 
@@ -1722,7 +1811,26 @@ func findReceiver(node registry.NodeView, label string) (registry.ReceiverView, 
 			return r, true
 		}
 	}
+	want := portName(label, node.Label)
+	for _, r := range node.Receivers {
+		if portName(r.Label, node.Label) == want {
+			return r, true
+		}
+	}
 	return registry.ReceiverView{}, false
+}
+
+// instanceLabelPrefix: führender Node-Label-Teil mit Instanz-ID, z. B. "Viewer (7a38420d) " in "Viewer (7a38420d) Untertitel".
+var instanceLabelPrefix = regexp.MustCompile(`^.*? \([0-9a-f]{6,}\) `)
+
+// portName liefert den Port-Namen ohne das vorangestellte Node-Label. Port-Labels heißen "<Node-Label> <Port>", und das
+// Node-Label trägt oft die Instanz-ID, die sich bei jedem Start ändert — ein gespeichertes Label einer früheren Instanz
+// ("Viewer (7a38420d) Receiver 1") würde sonst nie mehr passen. Ohne erkennbares Präfix bleibt das Label unverändert.
+func portName(label, nodeLabel string) string {
+	if nodeLabel != "" && strings.HasPrefix(label, nodeLabel+" ") {
+		return strings.TrimPrefix(label, nodeLabel+" ")
+	}
+	return instanceLabelPrefix.ReplaceAllString(label, "")
 }
 
 func labelSuffix(label string) string {

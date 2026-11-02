@@ -631,6 +631,62 @@ func TestStartProvisionsRolesAndConnectsOnRegistration(t *testing.T) {
 	}
 }
 
+// TestStartWaitsForReceiverRegisteredAfterNode: der Node meldet sich vor seinen IS-04-Receivern an (dynamisch erzeugte
+// Ziele); Start() muss auf den Receiver warten statt mit "has no receiver" zu scheitern.
+func TestStartWaitsForReceiverRegisteredAfterNode(t *testing.T) {
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(5 * time.Second)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	defer func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) }()
+
+	nodes := &fakeNodeLister{}
+	g := &fakeGraph{}
+	l := &fakeLauncher{}
+	svc := newTestService(newFakeStore(), nodes, g, l)
+
+	def := Definition{
+		Roles:       []Role{{Name: "src", NodeType: "omp-source"}, {Name: "view", NodeType: "omp-viewer"}},
+		Connections: []Connection{{FromRole: "src", ToRole: "view"}},
+	}
+	wf, err := svc.Create("regie", def, nil, "")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := svc.Start(context.Background(), wf.ID); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		l.mu.Lock()
+		n := len(l.started)
+		l.mu.Unlock()
+		if n == 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	srcInstance, viewInstance := l.instanceIDFor("omp-source"), l.instanceIDFor("omp-viewer")
+	nodes.add(registry.NodeView{ID: "node-src", InstanceID: srcInstance, Senders: []registry.SenderView{{ID: "send-1"}}})
+	nodes.add(registry.NodeView{ID: "node-view", InstanceID: viewInstance})
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		nodes.mu.Lock()
+		defer nodes.mu.Unlock()
+		for i := range nodes.nodes {
+			if nodes.nodes[i].ID == "node-view" {
+				nodes.nodes[i].Receivers = []registry.ReceiverView{{ID: "recv-1"}}
+			}
+		}
+	}()
+
+	waitForStatus(t, svc, wf.ID, StatusStarted)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.calls) != 1 || g.calls[0].toReceiver != "recv-1" {
+		t.Fatalf("connect calls = %+v, want one -> recv-1", g.calls)
+	}
+}
+
 // TestStartProvisionsServiceBindingForControlPlaneRole deckt
 // ARCHITECTURE.md §24.1 / UMSETZUNG.md C16 ab: eine Rolle mit
 // NodeType "omp-playout-automation" bekommt bei Start() automatisch
@@ -890,6 +946,9 @@ func TestStartFailsWhenTargetHasNoReceiverAndNoCrosspointMapping(t *testing.T) {
 	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
 	registrationTimeout.Store(2 * time.Second)
 	registrationPollInterval.Store(10 * time.Millisecond)
+	originalWait := portWaitTimeout.Load()
+	portWaitTimeout.Store(100 * time.Millisecond)
+	defer func() { portWaitTimeout.Store(originalWait) }()
 	defer func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) }()
 
 	nodes := &fakeNodeLister{}
