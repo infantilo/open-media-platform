@@ -728,7 +728,9 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         // `OMP_HTTPS_PORT` = fester TLS-Port (für Portweiterleitung, z. B. Crostini→ChromeOS);
         // ist er belegt (zweite Instanz), fällt der Node auf einen freien Port zurück.
         let fixed_port: u16 = std::env::var("OMP_HTTPS_PORT").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(0);
-        match crate::https::load_or_create_cert(&config.host).and_then(|(c, k)| {
+        let cert_key = crate::https::load_or_create_cert(&config.host);
+        let retry_cert = cert_key.as_ref().ok().cloned();
+        match cert_key.and_then(|(c, k)| {
             if fixed_port != 0 {
                 match server::spawn_tls(&format!("0.0.0.0:{fixed_port}"), actual_port, c.clone(), k.clone()) {
                     Ok(r) => return Ok(r),
@@ -740,6 +742,24 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
             Ok((https_port, _h)) => {
                 crate::https::set_bound(&config.host, https_port);
                 eprintln!("omp-node-sdk: HTTPS auf Port {https_port} (https://{}:{https_port})", config.host);
+                // Make-before-break (Umzug auf einen Host, auf dem die alte Instanz den festen Port noch hält):
+                // den festen Port später übernehmen, sobald er frei wird — Links, QR-Codes und offene Seiten
+                // zeigen auf ihn. Der Ausweich-Port bleibt offen, damit bereits geöffnete Seiten weiterlaufen.
+                if fixed_port != 0 && https_port != fixed_port {
+                    if let Some((c, k)) = retry_cert {
+                        let host = config.host.clone();
+                        let _ = std::thread::Builder::new().name("https-port-reclaim".into()).spawn(move || {
+                            for _ in 0..300 {
+                                std::thread::sleep(std::time::Duration::from_secs(2));
+                                if let Ok((p, _h)) = server::spawn_tls(&format!("0.0.0.0:{fixed_port}"), actual_port, c.clone(), k.clone()) {
+                                    crate::https::set_bound(&host, p);
+                                    eprintln!("omp-node-sdk: HTTPS-Port {p} ist frei geworden und übernommen (https://{host}:{p}); Ausweich-Port {https_port} bleibt offen");
+                                    return; // der Listener läuft in seinem eigenen Thread weiter
+                                }
+                            }
+                        });
+                    }
+                }
             }
             Err(e) => eprintln!("omp-node-sdk: HTTPS nicht verfügbar: {e}"),
         }
