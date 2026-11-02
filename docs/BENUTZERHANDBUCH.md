@@ -2302,3 +2302,14 @@ Alle ffmpeg-/ffprobe-Läufe der Plattform — der Workflow-Schritt **Script**, d
   und Standard-Basis (EBU DMF, MXL, NMOS/ST2110).
 - [`../UMSETZUNG.md`](../UMSETZUNG.md) — Umsetzungsstand, Status-
   Checkliste aller Kapitel.
+
+## HDR, UHD und komprimierte Formate (Kapitel 79)
+
+**Kennzeichnung (HDR).** Jeder Video-Flow trägt `colorspace` und `transfer_characteristic` nach NMOS IS-04 v1.3 (`BT601`, `BT709`, `BT2020`, `BT2100` und `SDR`, `HLG`, `PQ`). Je Node-Prozess legt `OMP_COLORIMETRY` fest, wie seine **ausgehenden** Flows gekennzeichnet werden: `sdr` (Standard, BT709/SDR), `hlg` (BT2100/HLG), `pq` (BT2100/PQ) oder ausdrücklich `<Farbraum>/<Übertragung>`. Das Messgerät zeigt Farbraum und Übertragung des angeschlossenen Flows an, wählt danach die Farbmatrix für den Gamut-Alarm und die Datei-QC meldet die Kennzeichnung einer Datei (`video.colorimetry`; HDR braucht mindestens 10 Bit und BT.2020-Primärfarben; ein QC-Profil kann `expect.transfer` = `sdr`, `hlg`, `pq` oder `any` verlangen).
+
+**Grenze, bitte beachten:** OMP **kennzeichnet** HDR und reicht die Kennzeichnung durch, es **wandelt nicht** zwischen SDR und HDR (kein Tone-Mapping) und mischt nicht farbmetrisch. Ein Mischer, der HDR- und SDR-Quellen zusammenführt, liefert falsche Bilder; beim Verbinden steht dazu eine Warnung im Protokoll des Nodes. Viewer und Vorschau zeigen HDR unverändert (flau). Richtig ist ein Arbeitsablauf, in dem alle Nodes gleich gekennzeichnet sind.
+
+**UHD.** Gemessen mit einem einzelnen Schreiber und einem Leser auf dem Entwicklungsrechner (3840×2160, 25 Bilder/s, 3 s, Testbild): 78 Bilder beim Leser, 104 % eines Kerns, 385 MiB Spitzenspeicher, 21 MiB je v210-Bild (527 MiB/s). Zum Vergleich 1920×1080: 54 % eines Kerns, 102 MiB. Das ist **nur der MXL-Pfad**; Mischer, Scaler, Aufnahme und Vorschau kosten zusätzlich und wurden bei UHD nicht gemessen. Zwischen Hosts braucht ein UHD-Flow rund 4,4 Gbit/s (unkomprimiert).
+
+**SRT mit komprimiertem Video.** Das SRT-Gateway kann Rohvideo oder H.264/HEVC (MPEG-TS über SRT), mit beliebiger Auflösung und Rate; Einstellungen im Handbuch (`docs/HANDBUCH.md`, Eintrag `omp-srt-gateway`).
+
