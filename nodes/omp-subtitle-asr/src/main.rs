@@ -416,7 +416,12 @@ impl omp_node_sdk::ParamStore for AsrStore {
                 // Modellwahl der im Node laufenden Engine: `models` = vorhandene, `model` = aktuelle (wechseln: Methode `engine.setModel`)
                 spec("models", ParamType::String, true),
                 // schreibbar (Workflow-Sicherung): der Workflow merkt sich nur schreibbare Parameter; ohne das fiel das Modell nach Stop/Start auf das erste vorhandene zurück
-                spec("model", ParamType::String, false),
+                // Aufzählung der vorhandenen Modelle (Wertebereich laut Descriptor, damit der Konformitätstest einen gültigen Wert
+                // setzen kann); ohne Engine im Node oder ohne Modell schreibgeschützt
+                match self.manager.as_ref().map(|m| m.models()).filter(|v| !v.is_empty()) {
+                    Some(values) => ParamSpec { name: "model".to_string(), kind: ParamType::Enum, unit: None, range: Some(omp_node_sdk::Range::Enum { values }), readonly: false },
+                    None => spec("model", ParamType::String, true),
+                },
                 spec("lastText", ParamType::String, true),
                 spec("cues", ParamType::String, true),
                 spec("stats", ParamType::String, true),
