@@ -72,11 +72,21 @@ class DeckSession {
     this.#emit();
   }
 
+  /** Broker beenden und Gerät schließen → Gerät zeigt wieder sein Logo (Logout, Seite schließen). */
+  async releaseDevice() {
+    const dev = this.#dev;
+    if (!dev) return;
+    this.setDevice(null);
+    await dev.close();
+  }
+
   #installHotplug() {
     if (this.#hotplug) return;
     const hid = (navigator as unknown as { hid?: EventTarget }).hid;
     if (!hid) return;
     this.#hotplug = true;
+    // Seite wird geschlossen/neu geladen: Logo statt stehengebliebener Tasten.
+    globalThis.addEventListener("pagehide", () => void this.releaseDevice());
     hid.addEventListener("disconnect", () => {
       if (this.#dev) this.setDevice(null);
     });

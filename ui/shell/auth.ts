@@ -118,6 +118,9 @@ export async function redeemSupportLink(): Promise<string | null> {
 }
 
 export async function logout() {
+  try {
+    await (await import("./streamdeck/session.ts")).deckSession.releaseDevice();
+  } catch { /* kein Gerät */ }
   clearToken();
   try {
     await fetch("/api/v1/auth/logout", { method: "POST" });
