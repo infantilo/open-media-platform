@@ -9,16 +9,13 @@
 // gültiges Drag-Ziel; für sie existiert stattdessen
 // workflows.Service.MigrateRole, noch ohne UI-Anschluss).
 //
-// Ablauf: alte Instanz stoppen, eine neue vom selben Node-Typ auf dem
-// Zielhost starten, ihre Registrierung abwarten, dann alle Kanten
-// wiederherstellen, die die alte Instanz betrafen — Zuordnung über
-// Port-ROLLE (Seite + Index in der IS-04-Registrierungsreihenfolge),
-// nicht über die IDs selbst, da Sender-/Receiver-IDs bei jedem Neustart
-// neu vergeben werden. Kein Make-before-break wie beim Workflow-Pfad:
-// eine eigenständige Instanz hat keinen Workflow-Zustand zum
-// Übertragen, ein kurzer Signalausfall während des Umzugs ist hier
-// hinnehmbar (der Nutzer hat den Umzug per Bestätigungsdialog bewusst
-// ausgelöst).
+// Ablauf (seit 2026-11-02 make-before-break, wie beim Workflow-Pfad): eine
+// neue Instanz vom selben Node-Typ auf dem Zielhost starten, ihre
+// Registrierung abwarten, alle Kanten der alten Instanz auf sie umschalten
+// — Zuordnung über Port-ROLLE (Seite + Index in der IS-04-Registrierungs-
+// reihenfolge), nicht über die IDs selbst, da Sender-/Receiver-IDs bei
+// jedem Neustart neu vergeben werden — und ERST DANN die alte stoppen.
+// Scheitert der Start auf dem Zielhost, läuft die alte unverändert weiter.
 package instancemigrate
 
 import (
@@ -143,58 +140,44 @@ func (s *Service) MigrateInstance(ctx context.Context, oldInstanceID, targetHost
 	return nil
 }
 
+// migrate zieht eine eigenständige Instanz make-before-break auf den Zielhost um (Nutzerforderung
+// 2026-11-02): die NEUE Instanz startet und registriert sich, während die alte weiterläuft; der Zustand
+// der alten wird erst dann frisch abgenommen, die Kanten werden auf die neue umgeschaltet, und
+// ERST ZULETZT wird die alte gestoppt. Scheitert der Start oder die Registrierung auf dem Zielhost,
+// bleibt die alte Instanz unberührt (kein Rücksprung nötig, kein Signalausfall).
 func (s *Service) migrate(inst launcher.Instance, targetHostID string, edges []edgeRef, carry carried) {
 	oldInstanceID, nodeType := inst.ID, inst.Type
-	oldPin := inst.NodeVersion
-	if oldPin == "" {
-		oldPin = launcher.PinInstalled
-	}
-	if err := s.launcher.Stop(oldInstanceID); err != nil {
-		slog.Warn("instancemigrate: stop old instance failed", "instance", oldInstanceID, "error", err)
-		return
-	}
 
-	// start startet auf host mit Version, Label, ExtraEnv und Instanz-Optionen der alten Instanz und wartet auf die Registrierung.
-	// Scheitert sie, wird die halbe Instanz wieder gestoppt (Audit 2026-10-23 H5).
-	start := func(host, pin string) (launcher.Instance, registry.NodeView, error) {
-		n, err := s.launcher.StartPinned(nodeType, inst.Version, host, inst.Label, inst.ExtraEnv, oldInstanceID, pin)
-		if err != nil {
-			return n, registry.NodeView{}, err
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout)
-		defer cancel()
-		node, err := s.awaitRegistration(ctx, n.ID)
-		if err != nil {
-			_ = s.launcher.Stop(n.ID)
-			return n, registry.NodeView{}, err
-		}
-		return n, node, nil
-	}
-
-	newInst, newNode, err := start(targetHostID, "")
+	newInst, err := s.launcher.StartPinned(nodeType, inst.Version, targetHostID, inst.Label, inst.ExtraEnv, oldInstanceID, "")
 	if err != nil {
-		// Audit H5: die alte Instanz ist schon gestoppt — ohne Rücksprung wäre sie jetzt weg. Zurück auf den bisherigen Host, bisheriger Stand.
-		slog.Warn("instancemigrate: Start auf dem Zielhost gescheitert — Rücksprung auf den bisherigen Host", "type", nodeType, "targetHost", targetHostID, "from", inst.HostID, "error", err)
-		rb, rbNode, rbErr := start(inst.HostID, oldPin)
-		if rbErr != nil {
-			slog.Error("instancemigrate: Rücksprung gescheitert — Instanz ist nicht mehr gestartet", "instance", oldInstanceID, "type", nodeType, "error", rbErr)
-			return
-		}
-		rbNode = s.restoreOwnState(carry, rbNode)
-		rbNode = s.awaitEdgePorts(rbNode, edges)
-		s.reconnect(context.Background(), rbNode, edges)
-		s.moveOptions(oldInstanceID, rb.ID)
-		s.restoreCarried(carry, rbNode)
-		slog.Warn("instancemigrate: Instanz läuft wieder auf dem bisherigen Host", "oldInstance", oldInstanceID, "newInstance", rb.ID, "host", inst.HostID)
+		slog.Warn("instancemigrate: Start auf dem Zielhost gescheitert — alte Instanz läuft unverändert weiter", "instance", oldInstanceID, "type", nodeType, "targetHost", targetHostID, "error", err)
+		return
+	}
+	regCtx, cancel := context.WithTimeout(context.Background(), registrationTimeout)
+	newNode, err := s.awaitRegistration(regCtx, newInst.ID)
+	cancel()
+	if err != nil {
+		slog.Warn("instancemigrate: neue Instanz registriert sich nicht — alte läuft unverändert weiter", "instance", oldInstanceID, "newInstance", newInst.ID, "error", err)
+		_ = s.launcher.Stop(newInst.ID)
 		return
 	}
 
+	// Zustand der alten Instanz JETZT noch einmal abnehmen: sie lief während des Starts weiter.
+	if oldNode, ok := s.findNodeByInstance(oldInstanceID); ok {
+		carry = s.captureCarried(oldNode)
+	}
 	newNode = s.restoreOwnState(carry, newNode)
 	newNode = s.awaitEdgePorts(newNode, edges)
 	s.reconnect(context.Background(), newNode, edges)
 	s.moveOptions(oldInstanceID, newInst.ID)
 	s.restoreCarried(carry, newNode)
-	slog.Info("instancemigrate: migration completed", "oldInstance", oldInstanceID, "newInstance", newInst.ID, "targetHost", targetHostID)
+
+	// Erst jetzt die alte Instanz beenden (die Kanten laufen bereits über die neue).
+	if err := s.launcher.Stop(oldInstanceID); err != nil {
+		slog.Error("instancemigrate: alte Instanz ließ sich nach dem Umzug nicht stoppen — beide laufen", "instance", oldInstanceID, "newInstance", newInst.ID, "error", err)
+		return
+	}
+	slog.Info("instancemigrate: migration completed (make-before-break)", "oldInstance", oldInstanceID, "newInstance", newInst.ID, "targetHost", targetHostID)
 }
 
 func (s *Service) findNodeByInstance(instanceID string) (registry.NodeView, bool) {

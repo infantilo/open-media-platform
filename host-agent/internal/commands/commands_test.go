@@ -310,3 +310,22 @@ func TestListCardsWithoutCatalogEntryIsEmpty(t *testing.T) {
 		t.Fatalf("Handle() = %+v", resp)
 	}
 }
+
+// TestStartAllowsStateKeyExtraEnv — Regression (Kap. 81, 2026-11-02): der Orchestrator setzt OMP_STATE_KEY bei jedem
+// Start; ohne Eintrag in der Allowlist scheiterte jeder Remote-Start mit "extraEnv key ... not allowed".
+func TestStartAllowsStateKeyExtraEnv(t *testing.T) {
+	e := NewExecutor([]catalog.Entry{
+		{Type: "sleeper", Runner: catalog.RunnerProcess, Command: []string{"sleep", "5"}},
+	}, "", "", "", "host-1", nil)
+
+	resp := e.Handle(Request{
+		Action:     "start",
+		Type:       "sleeper",
+		InstanceID: "test-allow-statekey",
+		ExtraEnv:   map[string]string{"OMP_STATE_KEY": "abc123"},
+	})
+	if !resp.OK {
+		t.Fatalf("Handle() = %+v, want OK=true für OMP_STATE_KEY", resp)
+	}
+	e.Handle(Request{Action: "stop", InstanceID: "test-allow-statekey"})
+}

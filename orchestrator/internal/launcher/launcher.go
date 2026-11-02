@@ -1919,6 +1919,20 @@ func (l *Launcher) sendCommand(hostID string, cmd remoteCommand) (remoteResponse
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return remoteResponse{}, fmt.Errorf("decode response: %w", err)
 	}
+	// Älterer Host-Agent (Versionsunterschied beim Update): kennt OMP_STATE_KEY nicht und lehnt das ganze
+	// Kommando ab. Dann einmal ohne den Schlüssel wiederholen — die Instanz läuft (der Zustand des Nodes ist
+	// dann an die Instanz-ID statt an den Schlüssel gebunden), statt dass jeder Remote-Start scheitert.
+	if !resp.OK && cmd.ExtraEnv[StateKeyEnv] != "" && strings.Contains(resp.Error, `"`+StateKeyEnv+`" not allowed`) {
+		slog.Warn("launcher: Host-Agent kennt OMP_STATE_KEY nicht (veraltet) — Start ohne Zustandsschlüssel", "host", hostID)
+		stripped := make(map[string]string, len(cmd.ExtraEnv))
+		for k, v := range cmd.ExtraEnv {
+			if k != StateKeyEnv {
+				stripped[k] = v
+			}
+		}
+		cmd.ExtraEnv = stripped
+		return l.sendCommand(hostID, cmd)
+	}
 	return resp, nil
 }
 

@@ -65,7 +65,10 @@ var allowedExtraEnvKeys = map[string]bool{
 	"OMP_WIDTH":       true,
 	"OMP_HEIGHT":      true,
 	"OMP_WORKFLOW_ID": true, // 2026-09-30: Workflow-Zugehörigkeit als NMOS-Node-Tag, s. workflows/state.go workflowIDEnvKey
-	"OMP_ROLE_SEED":   true, // Bug 2026-08-10: stabile node_id/device_id über einen Workflow-Neustart hinweg, s. workflows/state.go withRoleSeed
+	// Kap. 81: stabiler Zustandsschlüssel der Instanz (launcher.StateKeyEnv) — der Orchestrator setzt ihn bei JEDEM Start;
+	// ohne diesen Eintrag lehnte der Agent jeden Remote-Start ab. Nur ein Dateiname-Baustein, kein Geheimnis.
+	"OMP_STATE_KEY": true,
+	"OMP_ROLE_SEED": true, // Bug 2026-08-10: stabile node_id/device_id über einen Workflow-Neustart hinweg, s. workflows/state.go withRoleSeed
 	// D13-Fix (2026-08-20): Role.RequiredIOPort (workflows/ioports.go
 	// ioPortExtraEnv) reicht den geclaimten physischen Port an die
 	// Instanz weiter — auf einem lokal (Orchestrator-Prozess selbst)

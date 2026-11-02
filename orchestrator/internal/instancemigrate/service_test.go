@@ -44,6 +44,7 @@ type fakeLauncher struct {
 	failHost  string
 	pinsUsed  []string
 	onStarted func(launcher.Instance) // simuliert die Node-Registrierung der gestarteten Instanz
+	onStop    func(id string)         // wird in Stop aufgerufen (Reihenfolge-Prüfung make-before-break)
 }
 
 func newFakeLauncher() *fakeLauncher {
@@ -95,6 +96,9 @@ func (f *fakeLauncher) Stop(id string) error {
 	defer f.mu.Unlock()
 	delete(f.byID, id)
 	f.stopped = append(f.stopped, id)
+	if f.onStop != nil {
+		f.onStop(id)
+	}
 	return nil
 }
 
@@ -158,15 +162,17 @@ func TestMigrateInstanceHappyPath(t *testing.T) {
 		{FromSender: "send-external", ToReceiver: "recv-old"},
 	}}
 
+	// Make-before-break: zum Zeitpunkt des Stoppens der alten Instanz müssen die Kanten bereits umgeschaltet sein.
+	callsAtStop := -1
+	l.onStop = func(string) {
+		g.mu.Lock()
+		callsAtStop = len(g.calls)
+		g.mu.Unlock()
+	}
+
 	if err := svc.MigrateInstance(context.Background(), "old-1", "host-b"); err != nil {
 		t.Fatalf("MigrateInstance() error = %v", err)
 	}
-
-	waitFor(t, func() bool {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-		return len(l.stopped) == 1 && l.stopped[0] == "old-1"
-	})
 
 	var newID string
 	waitFor(t, func() bool {
@@ -180,6 +186,15 @@ func TestMigrateInstanceHappyPath(t *testing.T) {
 		}
 		return false
 	})
+
+	// Die neue Instanz läuft, die alte darf noch NICHT gestoppt sein.
+	l.mu.Lock()
+	_, oldAlive := l.byID["old-1"]
+	nStopped := len(l.stopped)
+	l.mu.Unlock()
+	if !oldAlive || nStopped != 0 {
+		t.Fatalf("alte Instanz wurde vor dem Umschalten gestoppt (alive=%v, stopped=%d)", oldAlive, nStopped)
+	}
 
 	// Registrierung der neuen Instanz simulieren, sobald der Launcher
 	// sie kennt — genau wie ein echter Node-Prozess, der sich beim
@@ -208,6 +223,19 @@ func TestMigrateInstanceHappyPath(t *testing.T) {
 	}
 	if calls[0] != wantInbound && calls[1] != wantInbound {
 		t.Fatalf("Connect calls = %+v, want one of them = %+v", calls, wantInbound)
+	}
+
+	// Erst nach dem Umschalten wird die alte Instanz gestoppt.
+	waitFor(t, func() bool {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		return len(l.stopped) == 1 && l.stopped[0] == "old-1"
+	})
+	l.mu.Lock()
+	got := callsAtStop
+	l.mu.Unlock()
+	if got != 2 {
+		t.Fatalf("alte Instanz wurde nach %d von 2 Umschaltungen gestoppt — kein make-before-break", got)
 	}
 }
 
@@ -325,8 +353,9 @@ func TestRestartInPlaceUnknownInstance(t *testing.T) {
 	}
 }
 
-// Audit H5: scheitert der Start auf dem Zielhost, springt die Instanz auf den bisherigen Host zurück und wird neu verkabelt.
-func TestMigrateInstanceRollsBackWhenTargetStartFails(t *testing.T) {
+// Make-before-break: scheitert der Start auf dem Zielhost, bleibt die alte Instanz unberührt — sie wird weder
+// gestoppt noch neu gestartet, und es werden keine Kanten angefasst.
+func TestMigrateInstanceKeepsOldRunningWhenTargetStartFails(t *testing.T) {
 	original := registrationPollInterval
 	registrationPollInterval = 10 * time.Millisecond
 	t.Cleanup(func() { registrationPollInterval = original })
@@ -336,10 +365,6 @@ func TestMigrateInstanceRollsBackWhenTargetStartFails(t *testing.T) {
 	l.failHost = "host-b"
 	g := &fakeGraph{}
 	svc := NewService(nodes, l, g)
-	// Der Rücksprung-Start registriert sich wie ein echter Node.
-	l.onStarted = func(inst launcher.Instance) {
-		nodes.add(registry.NodeView{ID: "node-" + inst.ID, InstanceID: inst.ID, Senders: []registry.SenderView{{ID: "send-" + inst.ID}}, Receivers: []registry.ReceiverView{{ID: "recv-" + inst.ID}}})
-	}
 
 	l.seed(launcher.Instance{ID: "old-1", Type: "omp-scaler", Label: "Scaler", HostID: "host-a"})
 	nodes.add(registry.NodeView{ID: "node-old", InstanceID: "old-1", Senders: []registry.SenderView{{ID: "send-old"}}, Receivers: []registry.ReceiverView{{ID: "recv-old"}}})
@@ -349,23 +374,64 @@ func TestMigrateInstanceRollsBackWhenTargetStartFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		g.mu.Lock()
-		defer g.mu.Unlock()
-		return len(g.calls) == 2
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		return len(l.pinsUsed) == 1 // der (fehlgeschlagene) Start auf host-b ist erfolgt
+	})
+	time.Sleep(150 * time.Millisecond) // Zeit für etwaige (unerwünschte) Folgeschritte
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.stopped) != 0 {
+		t.Fatalf("keine Instanz darf gestoppt werden: %v", l.stopped)
+	}
+	if inst, ok := l.byID["old-1"]; !ok || inst.HostID != "host-a" {
+		t.Fatalf("alte Instanz muss unverändert auf host-a laufen: %+v", l.byID)
+	}
+	if len(l.byID) != 1 {
+		t.Fatalf("es darf keine zweite Instanz entstehen: %+v", l.byID)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.calls) != 0 {
+		t.Fatalf("keine Kante darf angefasst werden: %+v", g.calls)
+	}
+}
+
+// Make-before-break: registriert sich die neue Instanz nie, wird sie wieder gestoppt und die alte läuft weiter.
+func TestMigrateInstanceKeepsOldRunningWhenNewNeverRegisters(t *testing.T) {
+	origPoll, origTimeout := registrationPollInterval, registrationTimeout
+	registrationPollInterval, registrationTimeout = 10*time.Millisecond, 150*time.Millisecond
+	t.Cleanup(func() { registrationPollInterval, registrationTimeout = origPoll, origTimeout })
+
+	nodes := &fakeNodes{}
+	l := newFakeLauncher() // onStarted == nil: die neue Instanz meldet sich nie an
+	g := &fakeGraph{}
+	svc := NewService(nodes, l, g)
+
+	l.seed(launcher.Instance{ID: "old-1", Type: "omp-scaler", Label: "Scaler", HostID: "host-a"})
+	nodes.add(registry.NodeView{ID: "node-old", InstanceID: "old-1", Senders: []registry.SenderView{{ID: "send-old"}}})
+	g.g = graph.Graph{Edges: []graph.Edge{{FromSender: "send-old", ToReceiver: "recv-external"}}}
+
+	if err := svc.MigrateInstance(context.Background(), "old-1", "host-b"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		return len(l.stopped) == 1
 	})
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	var back *launcher.Instance
-	for _, inst := range l.byID {
-		inst := inst
-		if inst.Type == "omp-scaler" {
-			back = &inst
-		}
+	if l.stopped[0] == "old-1" {
+		t.Fatalf("die alte Instanz darf nicht gestoppt werden: %v", l.stopped)
 	}
-	if back == nil || back.HostID != "host-a" {
-		t.Fatalf("Instanz muss wieder auf host-a laufen: %+v", l.byID)
+	if _, ok := l.byID["old-1"]; !ok {
+		t.Fatal("alte Instanz fehlt")
 	}
-	if len(l.stopped) != 1 || l.stopped[0] != "old-1" {
-		t.Fatalf("nur die alte Instanz wurde gestoppt: %v", l.stopped)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.calls) != 0 {
+		t.Fatalf("keine Kante darf umgeschaltet werden: %+v", g.calls)
 	}
 }
