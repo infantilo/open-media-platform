@@ -20,5 +20,11 @@ ignore = [
   # herabstufen. rustls 0.20 kennt gar keinen hybriden PQ-Austausch, und
   # tiny_http nutzt es nur als TLS-SERVER — nicht betroffen. Alle uebrigen
   # rustls-Funde sind durch 0.23.46 (async-nats/tokio-rustls) behoben.
+  #
+  # Dependabot-Meldungen zur alten Kopie rustls 0.20.9 (2026-11-02 geprueft und geschlossen):
+  #  - GHSA-h2v8-394m-p7vv (Brotli-Zertifikatskompression): 0.20.9 hat diese Funktion nicht (Quelltext geprueft).
+  #  - GHSA-c8m5-c952-6cm4 (Session-Debug zeigt Geheimnisse): nur bei eigenem ClientSessionStore, den es hier nicht gibt.
+  #  - GHSA-w44r-93j7-qv28 (ServerHello, Client-Seite): gleich RUSTSEC-2026-0349.
+  # Die dauerhafte Loesung bleibt, tiny_http-TLS durch einen eigenen Acceptor mit rustls >= 0.23 zu ersetzen.
   "RUSTSEC-2026-0349",
 ]
