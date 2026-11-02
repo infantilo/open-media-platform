@@ -55,6 +55,8 @@
   #setup .row:first-child { margin-top:0; }
   #setup label { display:flex; flex-direction:column; gap:6px; font-size:11px; font-weight:600;
                  letter-spacing:.12em; text-transform:uppercase; color:var(--dim); flex:1 1 140px; }
+  /* `hidden` allein reicht nicht: `#setup label { display:flex }` ist spezifischer als die Browser-Regel. */
+  #setup [hidden] { display:none !important; }
   #setup label select { text-transform:none; letter-spacing:normal; font-weight:400; font-size:15px; }
   #setup .check { flex-direction:row; align-items:center; gap:10px; color:var(--text); font-size:15px; flex:1 1 100%;
                   text-transform:none; letter-spacing:normal; font-weight:400; }
