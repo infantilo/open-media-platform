@@ -551,6 +551,7 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 		}
 	}
 	roleEnv = s.withRoleHooks(roleEnv, wf.Definition, roleDef)
+	roleEnv = withRoleStateKey(roleEnv, wf.ID, roleDef.Name)
 	// D13-Fix (2026-08-20, s. ioPortExtraEnv-Doku in ioports.go): ohne
 	// dies startet die neue Instanz auf dem Zielhost mit dem eingebauten
 	// device-number-Default statt dem hier gerade neu geclaimten Port —

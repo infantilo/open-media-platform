@@ -13,6 +13,8 @@ import (
 	"os"
 	"reflect"
 	"time"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 )
 
 // Bugfix 2026-07-26 (docs/decisions.md Nachtrag 91 Punkt 4): "beim
@@ -100,6 +102,27 @@ func withRoleSeed(env map[string]string, workflowID, roleName string) map[string
 	sum := sha256.Sum256([]byte(workflowID + "|" + roleName))
 	out[roleSeedEnvKey] = hex.EncodeToString(sum[:])
 	out[workflowIDEnvKey] = workflowID
+	out[launcher.StateKeyEnv] = roleStateKey(workflowID, roleName)
+	return out
+}
+
+// roleStateKey ist der stabile Zustandsschlüssel einer Workflow-Rolle (`OMP_STATE_KEY`): gleich
+// über Workflow-Stop/-Start, Rollen-Neustart und Migration, anders als die Instanz-ID. Nodes legen
+// darunter dauerhaften Zustand ab (z. B. die Einladungen des Handy-Gateways). Nur [0-9a-f], damit
+// er als Dateiname taugt.
+func roleStateKey(workflowID, roleName string) string {
+	sum := sha256.Sum256([]byte("state|" + workflowID + "|" + roleName))
+	return hex.EncodeToString(sum[:16])
+}
+
+// withRoleStateKey setzt nur den Zustandsschlüssel (für die Migration, die bewusst keinen Rollen-
+// Seed vergibt, s. withRoleSeed).
+func withRoleStateKey(env map[string]string, workflowID, roleName string) map[string]string {
+	out := make(map[string]string, len(env)+1)
+	for k, v := range env {
+		out[k] = v
+	}
+	out[launcher.StateKeyEnv] = roleStateKey(workflowID, roleName)
 	return out
 }
 
