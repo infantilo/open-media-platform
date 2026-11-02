@@ -415,7 +415,8 @@ impl omp_node_sdk::ParamStore for AsrStore {
                 spec("engineStatus", ParamType::String, true),
                 // Modellwahl der im Node laufenden Engine: `models` = vorhandene, `model` = aktuelle (wechseln: Methode `engine.setModel`)
                 spec("models", ParamType::String, true),
-                spec("model", ParamType::String, true),
+                // schreibbar (Workflow-Sicherung): der Workflow merkt sich nur schreibbare Parameter; ohne das fiel das Modell nach Stop/Start auf das erste vorhandene zurück
+                spec("model", ParamType::String, false),
                 spec("lastText", ParamType::String, true),
                 spec("cues", ParamType::String, true),
                 spec("stats", ParamType::String, true),
@@ -512,10 +513,15 @@ impl omp_node_sdk::ParamStore for AsrStore {
                 }
                 s.language = l;
             }
+            "model" => {
+                // gleiche Wirkung wie die Methode `engine.setModel` (Engine startet mit dem Modell neu); unbekanntes Modell → abgelehnt
+                let name = value.as_str().ok_or(SetError::Unknown)?;
+                self.manager.as_ref().ok_or(SetError::Unknown)?.set_model(name).map_err(|_| SetError::Unknown)?;
+            }
             "targetGraphicsLabel" => s.graphics_label = value.as_str().ok_or(SetError::Unknown)?.trim().to_string(),
             "targetMixerLabel" => s.mixer_label = value.as_str().ok_or(SetError::Unknown)?.trim().to_string(),
             "trackName" => s.track_name = value.as_str().ok_or(SetError::Unknown)?.trim().to_string(),
-            "status" | "connectedFlowId" | "connectedLabel" | "availableSources" | "availableNodes" | "engine" | "engineStatus" | "models" | "model" | "lastText" | "cues"
+            "status" | "connectedFlowId" | "connectedLabel" | "availableSources" | "availableNodes" | "engine" | "engineStatus" | "models" | "lastText" | "cues"
             | "stats" | "trackActive" | "liveSuppressed" | "fileJobs" | "diarization" => return Err(SetError::ReadOnly),
             _ => return Err(SetError::Unknown),
         }
