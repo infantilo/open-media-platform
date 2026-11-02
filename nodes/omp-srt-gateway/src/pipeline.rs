@@ -31,10 +31,12 @@ use omp_mediaio::MediaFlow;
 use omp_mediaio::Output;
 use omp_mediaio::st2110::{St2110VideoInput, St2110VideoOutput};
 
-pub const WIDTH: i32 = 640;
-pub const HEIGHT: i32 = 480;
-pub const FRAMERATE_NUMERATOR: i32 = 25;
-pub const FRAMERATE_DENOMINATOR: i32 = 1;
+use crate::codec::{self, Codec, EncodeParams, Raster};
+
+/// Vorgaben, wenn nichts konfiguriert ist (bisheriges Verhalten). Jede andere Auflösung und Rate ist per
+/// `OMP_SRT_GATEWAY_WIDTH/HEIGHT/FPS` möglich.
+pub const DEFAULT_WIDTH: i32 = 640;
+pub const DEFAULT_HEIGHT: i32 = 480;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
@@ -56,6 +58,14 @@ pub struct Config {
     pub st2110_host: String,
     pub st2110_port: u16,
     pub srt_uri: String,
+    /// Bildraster des ST-2110-Stroms und des SRT-Videos (beliebig, s. `codec::Raster`).
+    pub raster: Raster,
+    /// `raw` = RTP-Rohvideo über SRT, sonst komprimiert als MPEG-TS über SRT (s. `codec`).
+    pub codec: Codec,
+    /// Zieldatenrate komprimierter Ströme in kbit/s; 0 = automatisch aus dem Raster.
+    pub bitrate_kbps: u32,
+    /// 10 Bit (nur komprimiert: H.264 High 10 / HEVC Main 10).
+    pub ten_bit: bool,
 }
 
 /// Der jeweils eine 2110-Endpunkt, den diese Richtung tatsächlich betreibt
@@ -70,7 +80,7 @@ pub struct Config {
 /// statt erfundener Werte.
 enum ActiveEndpoint {
     Uplink { input: St2110VideoInput, srtsink: gst::Element },
-    Downlink { output: St2110VideoOutput, srtsrc: gst::Element, jitterbuffer: gst::Element },
+    Downlink { output: St2110VideoOutput, srtsrc: gst::Element, jitterbuffer: Option<gst::Element> },
 }
 
 impl ActiveEndpoint {
@@ -150,10 +160,12 @@ impl PipelineHandle {
     pub fn local_jitterbuffer_stats(&self) -> (u64, u64) {
         match &self.endpoint {
             ActiveEndpoint::Uplink { input, .. } => input.jitterbuffer_stats(),
-            ActiveEndpoint::Downlink { jitterbuffer, .. } => {
-                let stats = jitterbuffer.property::<gst::Structure>("stats");
+            ActiveEndpoint::Downlink { jitterbuffer: Some(jb), .. } => {
+                let stats = jb.property::<gst::Structure>("stats");
                 (u64_field(&stats, "num-lost"), u64_field(&stats, "num-late"))
             }
+            // komprimiert (MPEG-TS): kein RTP-Jitterbuffer; Verluste meldet die SRT-Statistik
+            ActiveEndpoint::Downlink { jitterbuffer: None, .. } => (0, 0),
         }
     }
 }
@@ -223,65 +235,68 @@ pub fn build(
 }
 
 fn build_uplink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<(St2110VideoInput, gst::Element), String> {
-    let input = St2110VideoInput::new(
-        pipeline,
-        cfg.st2110_port,
-        WIDTH,
-        HEIGHT,
-        FRAMERATE_NUMERATOR,
-        FRAMERATE_DENOMINATOR,
-        None,
-    )?;
+    let r = cfg.raster;
+    let input = St2110VideoInput::new(pipeline, cfg.st2110_port, r.width, r.height, r.fps_n, r.fps_d, None)?;
 
-    let payloader = gst::ElementFactory::make("rtpvrawpay")
-        .build()
-        .map_err(|e| format!("rtpvrawpay: {e}"))?;
     let srtsink = gst::ElementFactory::make("srtsink")
         .property("uri", &cfg.srt_uri)
         .build()
         .map_err(|e| format!("srtsink: {e}"))?;
+    pipeline.add(&srtsink).map_err(|e| format!("add srtsink: {e}"))?;
 
-    pipeline
-        .add(&payloader)
-        .and_then(|()| pipeline.add(&srtsink))
-        .map_err(|e| format!("add uplink elements: {e}"))?;
-    gst::Element::link_many([&input.tail, &payloader, &srtsink])
-        .map_err(|e| format!("link uplink chain: {e}"))?;
-
+    if cfg.codec == Codec::Raw {
+        let payloader = gst::ElementFactory::make("rtpvrawpay")
+            .build()
+            .map_err(|e| format!("rtpvrawpay: {e}"))?;
+        pipeline.add(&payloader).map_err(|e| format!("add uplink elements: {e}"))?;
+        gst::Element::link_many([&input.tail, &payloader, &srtsink]).map_err(|e| format!("link uplink chain: {e}"))?;
+    } else {
+        let bitrate = if cfg.bitrate_kbps > 0 { cfg.bitrate_kbps } else { r.auto_bitrate_kbps(cfg.codec) };
+        let chain = codec::encode_chain(cfg.codec, EncodeParams { bitrate_kbps: bitrate, ten_bit: cfg.ten_bit, fps: r.fps().round() as i32 })?;
+        pipeline.add_many(chain.iter()).map_err(|e| format!("add encode chain: {e}"))?;
+        let mut all: Vec<&gst::Element> = vec![&input.tail];
+        all.extend(chain.iter());
+        all.push(&srtsink);
+        gst::Element::link_many(all).map_err(|e| format!("link uplink chain: {e}"))?;
+    }
     Ok((input, srtsink))
 }
 
-fn build_downlink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<(St2110VideoOutput, gst::Element, gst::Element), String> {
+fn build_downlink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<(St2110VideoOutput, gst::Element, Option<gst::Element>), String> {
+    let r = cfg.raster;
     let srtsrc = gst::ElementFactory::make("srtsrc")
         .property("uri", &cfg.srt_uri)
         .build()
         .map_err(|e| format!("srtsrc: {e}"))?;
-    let jitterbuffer = gst::ElementFactory::make("rtpjitterbuffer")
-        .build()
-        .map_err(|e| format!("rtpjitterbuffer: {e}"))?;
-    let depayloader = gst::ElementFactory::make("rtpvrawdepay")
-        .build()
-        .map_err(|e| format!("rtpvrawdepay: {e}"))?;
+    pipeline.add(&srtsrc).map_err(|e| format!("add srtsrc: {e}"))?;
 
-    pipeline
-        .add(&srtsrc)
-        .and_then(|()| pipeline.add(&jitterbuffer))
-        .and_then(|()| pipeline.add(&depayloader))
-        .map_err(|e| format!("add downlink elements: {e}"))?;
-    gst::Element::link_many([&srtsrc, &jitterbuffer, &depayloader])
-        .map_err(|e| format!("link downlink chain: {e}"))?;
+    let (upstream, jitterbuffer) = if cfg.codec == Codec::Raw {
+        // RTP-Rohvideo: die Empfangskaps (RFC 4175) müssen zum Sender passen, deshalb aus dem Raster.
+        let rtp_caps = gst::Caps::builder("application/x-rtp")
+            .field("media", "video")
+            .field("clock-rate", 90000i32)
+            .field("encoding-name", "RAW")
+            .field("sampling", "YCbCr-4:2:2")
+            .field("depth", "8")
+            .field("width", r.width.to_string())
+            .field("height", r.height.to_string())
+            .field("colorimetry", "BT709-2")
+            .build();
+        // `srtsrc` hat keine caps-Eigenschaft (liefert „ANY“): die RTP-Kaps setzt ein Filter dahinter.
+        let rtp_filter = gst::ElementFactory::make("capsfilter").property("caps", &rtp_caps).build().map_err(|e| format!("capsfilter(rtp): {e}"))?;
+        pipeline.add(&rtp_filter).map_err(|e| format!("add rtp caps filter: {e}"))?;
+        let jitterbuffer = gst::ElementFactory::make("rtpjitterbuffer").build().map_err(|e| format!("rtpjitterbuffer: {e}"))?;
+        let depayloader = gst::ElementFactory::make("rtpvrawdepay").build().map_err(|e| format!("rtpvrawdepay: {e}"))?;
+        pipeline.add(&jitterbuffer).and_then(|()| pipeline.add(&depayloader)).map_err(|e| format!("add downlink elements: {e}"))?;
+        gst::Element::link_many([&srtsrc, &rtp_filter, &jitterbuffer, &depayloader]).map_err(|e| format!("link downlink chain: {e}"))?;
+        (depayloader, Some(jitterbuffer))
+    } else {
+        let (first, last) = codec::decode_chain(cfg.codec, pipeline)?;
+        gst::Element::link_many([&srtsrc, &first]).map_err(|e| format!("link downlink chain: {e}"))?;
+        (last, None)
+    };
 
-    let output = St2110VideoOutput::new(
-        pipeline,
-        &depayloader,
-        &cfg.st2110_host,
-        cfg.st2110_port,
-        WIDTH,
-        HEIGHT,
-        FRAMERATE_NUMERATOR,
-        FRAMERATE_DENOMINATOR,
-    )?;
+    let output = St2110VideoOutput::new(pipeline, &upstream, &cfg.st2110_host, cfg.st2110_port, r.width, r.height, r.fps_n, r.fps_d)?;
     output.set_active(true);
-
     Ok((output, srtsrc, jitterbuffer))
 }

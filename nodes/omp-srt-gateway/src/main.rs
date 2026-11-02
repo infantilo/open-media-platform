@@ -13,6 +13,7 @@
 //! nötig. Der generische Parameter-Proxy (A8) bleibt trotzdem nutzbar
 //! (readonly Status-Parameter), nur eben ohne Schreibpfad.
 
+mod codec;
 mod pipeline;
 
 use std::sync::Arc;
@@ -28,6 +29,8 @@ struct GatewayStore {
     st2110_host: String,
     st2110_port: u16,
     srt_uri: String,
+    /// Codec, Raster und Bittiefe als Text (nur Anzeige).
+    video: String,
     /// AMWA BCP-008 (`docs/decisions.md` BCP-008-Nachtrag) — **bewusste
     /// Abweichung von den bisherigen vier BCP-008-Nodes:**
     /// `omp-srt-gateway` registriert gar keine NMOS-Sender/Receiver
@@ -69,6 +72,14 @@ impl ParamStore for GatewayStore {
                 range: None,
                 readonly: true,
             },
+            // Codec/Raster des SRT-Videos, z. B. "hevc 3840×2160@50/1 10 Bit" oder "raw 640×480@25/1"
+            ParamSpec {
+                name: "video".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
         ];
         parameters.extend(self.monitor.param_specs("monitor"));
         Descriptor { latency: None, parameters, methods: self.monitor.method_specs("monitor") }
@@ -85,6 +96,7 @@ impl ParamStore for GatewayStore {
                 self.st2110_host, self.st2110_port
             ))),
             "srtUri" => Some(serde_json::json!(self.srt_uri)),
+            "video" => Some(serde_json::json!(self.video)),
             // Kein Rückkanal, der eine echte Zählerliste liefern würde
             // (die SRT-Statistik fließt hier direkt in die Domain-
             // Level, nicht in eine separate Zähler-Liste, s. `main()`s
@@ -249,12 +261,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let st2110_port: u16 = env_or("OMP_SRT_GATEWAY_ST2110_PORT", "6000").parse()?;
     let srt_uri = env_or("OMP_SRT_GATEWAY_SRT_URI", "srt://127.0.0.1:7000");
 
+    // Bildraster: beliebige Auflösung und Rate (gebrochene Raten wie 30000/1001 erlaubt).
+    let (fps_n, fps_d) = codec::parse_rate(&env_or("OMP_SRT_GATEWAY_FPS", "25"))?;
+    let raster = codec::Raster::new(
+        env_or("OMP_SRT_GATEWAY_WIDTH", &pipeline::DEFAULT_WIDTH.to_string()).parse()?,
+        env_or("OMP_SRT_GATEWAY_HEIGHT", &pipeline::DEFAULT_HEIGHT.to_string()).parse()?,
+        fps_n,
+        fps_d,
+    )?;
+    let codec_name = env_or("OMP_SRT_GATEWAY_CODEC", "raw");
+    let video_codec = codec::Codec::parse(&codec_name).ok_or_else(|| format!("OMP_SRT_GATEWAY_CODEC={codec_name}: raw, h264 oder hevc"))?;
+    let bitrate_kbps: u32 = env_or("OMP_SRT_GATEWAY_BITRATE_KBPS", "0").parse()?;
+    let ten_bit = match env_or("OMP_SRT_GATEWAY_BIT_DEPTH", "8").as_str() {
+        "8" => false,
+        "10" if video_codec != codec::Codec::Raw => true,
+        "10" => return Err("OMP_SRT_GATEWAY_BIT_DEPTH=10 gilt nur für h264/hevc (Rohvideo über die 2110-Seite ist 8 Bit)".into()),
+        other => return Err(format!("OMP_SRT_GATEWAY_BIT_DEPTH={other}: 8 oder 10").into()),
+    };
     let cfg = Config {
         direction,
         st2110_host: st2110_host.clone(),
         st2110_port,
         srt_uri: srt_uri.clone(),
+        raster,
+        codec: video_codec,
+        bitrate_kbps,
+        ten_bit,
     };
+    let video_desc = format!("{} {}×{}@{}/{}{}", video_codec.as_str(), raster.width, raster.height, raster.fps_n, raster.fps_d, if ten_bit { " 10 Bit" } else { "" });
 
     let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
     let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
@@ -277,6 +311,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         st2110_host,
         st2110_port,
         srt_uri,
+        video: video_desc,
         monitor: monitor.clone(),
     });
 
@@ -354,6 +389,7 @@ mod bcp008_tests {
             st2110_host: "127.0.0.1".to_string(),
             st2110_port: 6000,
             srt_uri: "srt://127.0.0.1:7000".to_string(),
+            video: "raw 640×480@25/1".to_string(),
             monitor: Arc::new(omp_node_sdk::Monitor::new(match direction {
                 Direction::Uplink => omp_node_sdk::MonitorKind::Sender,
                 Direction::Downlink => omp_node_sdk::MonitorKind::Receiver,
