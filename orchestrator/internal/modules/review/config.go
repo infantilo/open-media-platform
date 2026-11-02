@@ -110,6 +110,7 @@ type QCProfile struct {
 		SampleRate  int      `json:"sampleRate,omitempty"`
 		MinBitDepth int      `json:"minBitDepth,omitempty"`
 		Captions    bool     `json:"captions,omitempty"` // Untertitel-/Datenstrom erwartet
+		Transfer    string   `json:"transfer,omitempty"` // sdr | hlg | pq | any: erwartete Übertragungsfunktion (NMOS IS-04 transfer_characteristic)
 	} `json:"expect"`
 	MaxAudioStreams int `json:"maxAudioStreams"` // Analyse begrenzen
 	TimeoutSec      int `json:"timeoutSec"`

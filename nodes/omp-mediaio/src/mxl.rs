@@ -332,7 +332,9 @@ fn video_flow_def(
         "frame_width": width,
         "frame_height": height,
         "interlace_mode": "progressive",
-        "colorspace": "BT709",
+        // IS-04 v1.3: colorspace + transfer_characteristic (SDR/HLG/PQ), Prozessvorgabe OMP_COLORIMETRY
+        "colorspace": crate::colorimetry::Colorimetry::process_default().colorspace,
+        "transfer_characteristic": crate::colorimetry::Colorimetry::process_default().transfer,
         "components": [
             {"name": "Y", "width": width, "height": height, "bit_depth": 10},
             {"name": "Cb", "width": width / 2, "height": height, "bit_depth": 10},
@@ -1950,6 +1952,8 @@ impl MxlVideoInput {
             .map_err(|e| format!("get_flow_def({flow_id}): {e}"))?;
         let flow_def: serde_json::Value = serde_json::from_str(&flow_def_json)
             .map_err(|e| format!("flow_def JSON parsen: {e}"))?;
+        // HDR-Kennzeichnung (Kapitel 79): abweichende Quelle melden, nicht umrechnen.
+        crate::colorimetry::warn_if_mismatch(flow_id, &crate::colorimetry::Colorimetry::from_fields(flow_def["colorspace"].as_str(), flow_def["transfer_characteristic"].as_str()));
         let width = flow_def["frame_width"]
             .as_u64()
             .ok_or("flow_def: frame_width fehlt")? as u32;

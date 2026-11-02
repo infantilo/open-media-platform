@@ -36,6 +36,11 @@ func (p QCProfile) Validate() error {
 		}
 		return nil
 	}
+	switch strings.ToLower(p.Expect.Transfer) {
+	case "", "any", "sdr", "hlg", "pq":
+	default:
+		return fmt.Errorf("Erwartung Übertragungsfunktion: sdr, hlg, pq oder any")
+	}
 	for _, c := range []error{
 		neg("Schwarz: Mindestdauer", p.Black.MinDurationS), neg("Schwarz: Warnschwelle", p.Black.WarnAboveS), neg("Schwarz: Fehlerschwelle", p.Black.FailAboveS),
 		neg("Schwarz: Anfang ignorieren", p.Black.IgnoreHeadS), neg("Schwarz: Ende ignorieren", p.Black.IgnoreTailS),

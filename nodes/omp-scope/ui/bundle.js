@@ -41,6 +41,7 @@ const T = (() => {
         "scp.30507b": "Bittiefe",
         "scp.45cef4": "Kanäle",
         "scp.e32d85": "Farbraum",
+        "scp.transfer": "Übertragung (SDR/HLG/PQ)",
         "scp.85069b": "Abtastraster",
         "scp.2d0160": "Grain-Größe",
         "scp.ebace4": "Datenrate",
@@ -136,6 +137,7 @@ const T = (() => {
         "scp.003b20": "Black picture",
         "scp.bdaf0f": "Frozen picture",
         "scp.a0a083": "Silence",
+        "scp.transfer": "Transfer (SDR/HLG/PQ)",
         "scp.gamut": "Gamut (R 103)",
         "scp.c0483b": "Peak/RMS",
         "scp.be6369": "Momentary (LUFS)",
@@ -996,6 +998,7 @@ class OmpScopePanel extends HTMLElement {
       set2(T("scp.30507b"), num(m.videoFlowBitDepth) === undefined ? undefined : `${m.videoFlowBitDepth} bit`, undefined);
       set2(T("scp.45cef4"), undefined, m.audioFlowChannelCount ?? undefined);
       set2(T("scp.e32d85"), m.videoFlowColorspace, undefined);
+      set2(T("scp.transfer"), m.videoFlowTransfer, undefined);
       set2(T("scp.85069b"), m.videoFlowInterlaceMode, undefined);
       set2(T("scp.2d0160"), num(m.videoFlowGrainBytes) === undefined ? undefined : `${int(Math.round(m.videoFlowGrainBytes / 1024))} KiB`, undefined);
       set2(T("scp.ebace4"), fmt(m.videoFlowBitrateMbps, 1, "Mbit/s"), fmt(m.audioFlowBitrateMbps, 2, "Mbit/s"));

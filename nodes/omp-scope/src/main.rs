@@ -232,6 +232,8 @@ impl ParamStore for ScopeStore {
             readonly_string("videoFlowMediaType"),
             readonly_string("videoFlowGrainRate"),
             readonly_string("videoFlowColorspace"),
+            // SDR, HLG oder PQ (NMOS IS-04 v1.3); HDR-Flows werden gekennzeichnet, OMP wandelt sie nicht
+            readonly_string("videoFlowTransfer"),
             readonly_string("videoFlowInterlaceMode"),
             readonly_number("videoFlowBitDepth", Some("bit")),
             readonly_number("videoFlowGrainBytes", Some("B")),
@@ -330,6 +332,7 @@ impl ParamStore for ScopeStore {
                 Some(opt_string_json(self.video_measurements.flow().grain_rate.map(|(n, d)| format!("{n}/{d}"))))
             }
             "videoFlowColorspace" => Some(opt_string_json(self.video_measurements.flow().colorspace)),
+            "videoFlowTransfer" => Some(opt_string_json(Some(self.video_measurements.flow().transfer.unwrap_or_else(|| "SDR".to_string())))),
             "videoFlowInterlaceMode" => Some(opt_string_json(self.video_measurements.flow().interlace_mode)),
             "videoFlowBitDepth" => Some(opt_u64_json(self.video_measurements.flow().bit_depth)),
             "videoFlowGrainBytes" => Some(opt_u64_json(self.video_measurements.flow().grain_bytes)),

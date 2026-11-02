@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"math"
+	"os/exec"
 	"testing"
 )
 
@@ -126,5 +127,64 @@ func TestRunQCGamutPassesLegalFileAndCanBeDisabled(t *testing.T) {
 	o, _ = tools.RunQC(context.Background(), file, prof, nil)
 	if len(findings(o, "video.gamut")) != 0 {
 		t.Error("disabled check must not report")
+	}
+}
+
+func TestTransferOf(t *testing.T) {
+	for in, want := range map[string]string{"smpte2084": "PQ", "arib-std-b67": "HLG", "bt709": "SDR", "smpte170m": "SDR"} {
+		if got, known := TransferOf(in); got != want || !known {
+			t.Errorf("TransferOf(%q) = %s,%v want %s,true", in, got, known, want)
+		}
+	}
+	if got, known := TransferOf(""); got != "SDR" || known {
+		t.Errorf("unlabelled: %s,%v", got, known)
+	}
+}
+
+// Echte HDR-Datei (FFV1 10 Bit in Matroska, BT.2020/PQ gekennzeichnet): wird erkannt; Erwartung „sdr“ schlägt fehl,
+// „pq“ besteht; 8-Bit-Datei mit PQ-Kennzeichnung ist unplausibel.
+func TestRunQCDetectsHDRLabelling(t *testing.T) {
+	tools := needFFmpeg(t)
+	mk := func(name, pix string, extra ...string) string {
+		out := t.TempDir() + "/" + name
+		args := []string{"-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25:duration=2,format=" + pix,
+			"-c:v", "ffv1", "-pix_fmt", pix}
+		args = append(args, extra...)
+		args = append(args, "-t", "2", out)
+		if b, err := exec.Command("ffmpeg", args...).CombinedOutput(); err != nil {
+			t.Fatalf("fixture: %v\n%s", err, b)
+		}
+		return out
+	}
+	hdr := mk("pq.mkv", "yuv422p10le", "-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc")
+	run := func(file string, mod func(*QCProfile)) Finding {
+		prof := DefaultQCProfile()
+		prof.Loudness.Enabled = false
+		prof.Gamut.Enabled = false
+		if mod != nil {
+			mod(&prof)
+		}
+		o, err := tools.RunQC(context.Background(), file, prof, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := findings(o, "video.colorimetry")
+		if len(f) != 1 {
+			t.Fatalf("colorimetry findings: %+v", f)
+		}
+		return f[0]
+	}
+	if f := run(hdr, nil); f.Status != CheckPass || f.Measured["transfer"] != "PQ" {
+		t.Errorf("PQ file: %+v", f)
+	}
+	if f := run(hdr, func(p *QCProfile) { p.Expect.Transfer = "sdr" }); f.Status != CheckFail {
+		t.Errorf("expect sdr on PQ file must fail: %+v", f)
+	}
+	if f := run(hdr, func(p *QCProfile) { p.Expect.Transfer = "pq" }); f.Status != CheckPass {
+		t.Errorf("expect pq on PQ file must pass: %+v", f)
+	}
+	bad := mk("pq8.mkv", "yuv422p10le", "-color_trc", "smpte2084")
+	if f := run(bad, nil); f.Status == CheckPass {
+		t.Errorf("PQ without BT.2020 primaries should at least warn: %+v", f)
 	}
 }

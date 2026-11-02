@@ -219,6 +219,7 @@ func (t *Tools) RunQC(ctx context.Context, file string, prof QCProfile, progress
 			Measured: map[string]any{"codec": gs(video, "codec_name"), "profile": gs(video, "profile"), "width": w, "height": h, "frameRate": gs(video, "r_frame_rate"),
 				"fieldOrder": fo, "pixFmt": pix, "bitDepth": depth, "chroma": chromaOf(pix), "colorSpace": gs(video, "color_space"),
 				"colorTransfer": gs(video, "color_transfer"), "colorPrimaries": gs(video, "color_primaries"), "colorRange": gs(video, "color_range")}})
+		q.colorimetry(video, depth)
 		q.deliveryVideo(video, w, h, fo)
 		out.Timeline = tl
 	} else {

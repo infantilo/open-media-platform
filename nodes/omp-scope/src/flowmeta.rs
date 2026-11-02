@@ -28,6 +28,8 @@ pub struct VideoFlowMeta {
     pub height: Option<u64>,
     pub interlace_mode: Option<String>,
     pub colorspace: Option<String>,
+    /// IS-04 v1.3 `transfer_characteristic`: SDR, HLG oder PQ (fehlt bei Flows ohne HDR-Kennzeichnung).
+    pub transfer: Option<String>,
     pub bit_depth: Option<u64>,
     /// NMOS-Grouphint (`urn:x-nmos:tag:grouphint/v1.0`) — die Angabe, über
     /// die MXL/NMOS zusammengehörige Video- und Audioflows derselben
@@ -121,6 +123,7 @@ pub fn parse_video(json: &str) -> VideoFlowMeta {
         height,
         interlace_mode: string_field(&v, "interlace_mode"),
         colorspace: string_field(&v, "colorspace"),
+        transfer: string_field(&v, "transfer_characteristic"),
         bit_depth,
         grouphint: grouphint(&v),
         label: string_field(&v, "label"),
@@ -192,7 +195,7 @@ mod tests {
         "format": "urn:x-nmos:format:video", "parents": [], "media_type": "video/v210",
         "grain_rate": {"numerator": 25, "denominator": 1},
         "frame_width": 640, "frame_height": 480,
-        "interlace_mode": "progressive", "colorspace": "BT709",
+        "interlace_mode": "progressive", "colorspace": "BT2100", "transfer_characteristic": "PQ",
         "components": [
             {"name": "Y", "width": 640, "height": 480, "bit_depth": 10},
             {"name": "Cb", "width": 320, "height": 480, "bit_depth": 10},
@@ -214,7 +217,8 @@ mod tests {
         assert_eq!(m.width, Some(640));
         assert_eq!(m.height, Some(480));
         assert_eq!(m.interlace_mode.as_deref(), Some("progressive"));
-        assert_eq!(m.colorspace.as_deref(), Some("BT709"));
+        assert_eq!(m.colorspace.as_deref(), Some("BT2100"));
+        assert_eq!(m.transfer.as_deref(), Some("PQ"));
         assert_eq!(m.bit_depth, Some(10));
         assert_eq!(m.grouphint.as_deref(), Some("f1:Video"));
         assert_eq!(m.label.as_deref(), Some("Testquelle"));
