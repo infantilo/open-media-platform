@@ -1375,6 +1375,15 @@ impl AutomationStore {
         if state.active_cart.is_some() {
             return Err("Cart aktiv — zuerst cart.return() aufrufen".to_string());
         }
+        // Wartet ein Event gecued auf den Operator (Manual Hold am Ende des Vorgängers / manueller Start), ist DAS das
+        // nächste Event: Next nimmt es, statt ab dem Cue-Zeiger noch einen Schritt weiterzuspringen.
+        if !state.playlist.on_air()
+            && let Some(cued) = state.playlist.current_index().and_then(|i| state.playlist.items().get(i)).cloned()
+            && (state.held_cue.as_deref() == Some(cued.as_str()) || state.metadata.get(&cued).is_some_and(|m| m.start_type == StartType::Manual))
+        {
+            drop(state);
+            return self.do_take();
+        }
         let Some(item_id) = state.playlist.force_advance() else {
             state.onair_since = None;
             return Ok(());
