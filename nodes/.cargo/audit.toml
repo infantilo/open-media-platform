@@ -1,30 +1,7 @@
 # Bewusst akzeptierte Funde (Begruendung je Eintrag). Alles andere muss gruen sein.
 #
-# Diese Funde (plus die zwei Unmaintained-Warnungen) stammen aus tiny_http 0.12.0 mit Feature `ssl-rustls`
-# (omp-node-sdk/src/server.rs `spawn_tls`): tiny_http ist in 0.12.0 die
-# aktuelle Version und haengt fest an rustls 0.20 / ring 0.16 — es gibt keinen
-# Upstream-Fix. Der TLS-Server ist der Parameter-/Health-Endpunkt eines Nodes
-# im Cluster-Netz (mTLS-Umgebung, nicht fuer das offene Internet gedacht).
-# Abhilfe auf Dauer: tiny_http-TLS durch einen eigenen Acceptor mit rustls >=0.23
-# ersetzen (offen, siehe docs/decisions.md 2026-10-14).
+# Zurzeit keine. Die frueheren Ausnahmen (rustls 0.20, ring 0.16) stammten aus tiny_http mit Feature `ssl-rustls`; der
+# optionale HTTPS-Listener nutzt seit Kapitel 80 einen eigenen TLS-Acceptor mit rustls 0.23 (omp-node-sdk/src/tlsproxy.rs),
+# die alten Pakete sind aus dem Lockfile verschwunden.
 [advisories]
-ignore = [
-  # rustls 0.20: complete_io kann bei praeparierter Netz-Eingabe endlos laufen
-  # (DoS eines einzelnen Node-Threads). Echtes, akzeptiertes Restrisiko.
-  "RUSTSEC-2024-0336",
-  # ring 0.16: AES-Funktionen paniken nur bei aktivierten Overflow-Checks —
-  # Release-Builds haben sie aus.
-  "RUSTSEC-2025-0009",
-  # rustls 0.20 (CLIENT-Seite): ein unauthentisiertes ServerHello kann spaetere
-  # Verbindungen auf klassischen Schluesselaustausch statt X25519MLKEM768
-  # herabstufen. rustls 0.20 kennt gar keinen hybriden PQ-Austausch, und
-  # tiny_http nutzt es nur als TLS-SERVER — nicht betroffen. Alle uebrigen
-  # rustls-Funde sind durch 0.23.46 (async-nats/tokio-rustls) behoben.
-  #
-  # Dependabot-Meldungen zur alten Kopie rustls 0.20.9 (2026-11-02 geprueft und geschlossen):
-  #  - GHSA-h2v8-394m-p7vv (Brotli-Zertifikatskompression): 0.20.9 hat diese Funktion nicht (Quelltext geprueft).
-  #  - GHSA-c8m5-c952-6cm4 (Session-Debug zeigt Geheimnisse): nur bei eigenem ClientSessionStore, den es hier nicht gibt.
-  #  - GHSA-w44r-93j7-qv28 (ServerHello, Client-Seite): gleich RUSTSEC-2026-0349.
-  # Die dauerhafte Loesung bleibt, tiny_http-TLS durch einen eigenen Acceptor mit rustls >= 0.23 zu ersetzen.
-  "RUSTSEC-2026-0349",
-]
+ignore = []

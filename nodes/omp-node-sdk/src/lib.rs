@@ -8,6 +8,7 @@
 //! minimale Nutzung.
 
 mod https;
+mod tlsproxy;
 pub mod bcp008;
 pub mod buildinfo;
 pub mod channelmapping;

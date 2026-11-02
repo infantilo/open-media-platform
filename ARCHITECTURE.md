@@ -3057,7 +3057,7 @@ ebenfalls eine eigene Sitzung bekam):
    (Verschlüsselung), kein eingebautes Client-Zertifikat-Verlangen —
    echtes mTLS (der Node verlangt ein gültiges Client-Zertifikat vom
    Aufrufer) bräuchte einen eigenen rustls-Akzeptor statt `tiny_http`s
-   vereinfachtem `SslConfig`. Ob dafür reine Server-TLS-Verschlüsselung
+   vereinfachtem `SslConfig`. **Stand 2026-11-02 (Kapitel 80):** den eigenen Akzeptor gibt es jetzt (`omp-node-sdk/src/tlsproxy.rs`, rustls 0.23 über `tokio-rustls`, Provider `ring`) — für den optionalen `OMP_HTTPS`-Listener; `tiny_http` nutzt kein `ssl-rustls` mehr. Er verlangt (noch) keine Client-Zertifikate; mTLS wäre dort ein kleiner Schritt (`with_client_cert_verifier`). Ob dafür reine Server-TLS-Verschlüsselung
    bereits ausreicht (der generische Proxy-Pfad bleibt ohnehin die
    sanktionierte Zugriffsroute, ein direkter Node-Port-Zugriff ist ein
    Netzsegmentierungs-Thema, nicht primär ein Authentifizierungs-Thema)

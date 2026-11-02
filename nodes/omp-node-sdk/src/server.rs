@@ -161,17 +161,15 @@ pub fn spawn(
     Ok((port, std::thread::spawn(move || accept_loop(server, store))))
 }
 
-/// Wie [`spawn`], aber mit TLS (selbst signiertes Zertifikat, s. `https.rs`) — gleiche Routen/Store.
+/// TLS-Listener (selbst signiertes Zertifikat, s. `https.rs`) vor dem normalen Node-Port `backend_port`: entschlüsselt mit
+/// rustls 0.23 und reicht die Bytes weiter (`tlsproxy.rs`) — gleiche Routen, gleicher Store, ein HTTP-Server je Node.
 pub fn spawn_tls(
     addr: &str,
-    store: Arc<dyn ParamStore>,
+    backend_port: u16,
     certificate: Vec<u8>,
     private_key: Vec<u8>,
 ) -> std::io::Result<(u16, std::thread::JoinHandle<()>)> {
-    let server = Server::https(addr, tiny_http::SslConfig { certificate, private_key })
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
-    let port = server.server_addr().to_ip().map(|a| a.port()).unwrap_or(0);
-    Ok((port, std::thread::spawn(move || accept_loop(server, store))))
+    crate::tlsproxy::spawn(addr, backend_port, &certificate, &private_key)
 }
 
 /// Größte angenommene Anfrage (Audit 2026-10-23 H8): vorher las der Server jeden Body unbegrenzt in den Speicher.

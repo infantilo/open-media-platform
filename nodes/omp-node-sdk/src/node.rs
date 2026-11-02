@@ -730,12 +730,12 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         let fixed_port: u16 = std::env::var("OMP_HTTPS_PORT").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(0);
         match crate::https::load_or_create_cert(&config.host).and_then(|(c, k)| {
             if fixed_port != 0 {
-                match server::spawn_tls(&format!("0.0.0.0:{fixed_port}"), store.clone(), c.clone(), k.clone()) {
+                match server::spawn_tls(&format!("0.0.0.0:{fixed_port}"), actual_port, c.clone(), k.clone()) {
                     Ok(r) => return Ok(r),
                     Err(e) => eprintln!("omp-node-sdk: HTTPS-Port {fixed_port} nicht bindbar ({e}), nehme freien Port"),
                 }
             }
-            server::spawn_tls("0.0.0.0:0", store, c, k).map_err(|e| e.to_string())
+            server::spawn_tls("0.0.0.0:0", actual_port, c, k).map_err(|e| e.to_string())
         }) {
             Ok((https_port, _h)) => {
                 crate::https::set_bound(&config.host, https_port);
