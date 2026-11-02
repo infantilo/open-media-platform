@@ -110,3 +110,20 @@ Deno.test("filterAssets hides deleted by default, but shows them when filtering 
   assertEquals(filterAssets(list, { ...base, status: "deleted" }).map((a) => a.id), ["2"]);
   assertEquals(filterAssets(list, { ...base, type: "video", query: "wet" }).map((a) => a.id), ["3"]);
 });
+
+Deno.test("coerceMetadata: Zahl/Ja-Nein/Mehrfachfeld nach Feldtyp, freie Schlüssel unverändert", async () => {
+  const { coerceMetadata } = await import("./asset-view-logic.ts");
+  const defs = [
+    { id: "1", category: "custom", key: "anzahl", label: "Anzahl", dataType: "integer" },
+    { id: "2", category: "custom", key: "live", label: "Live", dataType: "boolean" },
+    { id: "3", category: "descriptive", key: "subject", label: "Schlagworte", dataType: "text", multiple: true },
+  ] as const;
+  const got = coerceMetadata(
+    { custom: { anzahl: "3", live: "ja", frei: "7", kaputt: "x" }, descriptive: { subject: "Sport" } },
+    [...defs],
+  );
+  assertEquals(got.custom, { anzahl: 3, live: true, frei: "7", kaputt: "x" });
+  assertEquals(got.descriptive, { subject: ["Sport"] });
+  const bad = coerceMetadata({ custom: { anzahl: "abc" } }, [...defs]);
+  assertEquals(bad.custom, { anzahl: "abc" }); // unlesbar bleibt Text; das Backend meldet den Fehler
+});

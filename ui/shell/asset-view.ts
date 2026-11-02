@@ -21,10 +21,12 @@ import {
   type AssetFilter,
   type AssetMetadata,
   type AssetVersion,
+  coerceMetadata,
   filterAssets,
   type LifecycleGraph,
   METADATA_CATEGORIES,
   type MetadataRows,
+  type MetaFieldDef,
   metadataToRows,
   parseOptionalNumber,
   type Representation,
@@ -418,10 +420,207 @@ class AssetView extends HTMLElement {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ expectedRowVersion: asset.rowVersion, metadata }),
     });
-    if (!res.ok) return await this.#reportError(tt("asset.d6ea46"), res);
+    if (!res.ok) {
+      if (res.status === 400) {
+        const problems = await this.#validationProblems(res);
+        if (problems) {
+          showToast(`${tt("asset.d6ea46")}: ${problems}`, { variant: "error" });
+          return false;
+        }
+      }
+      return await this.#reportError(tt("asset.d6ea46"), res);
+    }
     showToast(tt("asset.5156b5"), { variant: "info" });
     await this.#refresh();
     return true;
+  }
+
+  // Antwort 400 der Feld-Registry: {"error", "problems": [...]} — als lesbarer Text, sonst null.
+  async #validationProblems(res: Response): Promise<string | null> {
+    try {
+      const j = (await res.clone().json()) as { problems?: string[] };
+      return j.problems?.length ? j.problems.join("; ") : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async #loadFields(assetType: string): Promise<MetaFieldDef[]> {
+    const res = await apiFetch(`/api/v1/asset-fields?assetType=${encodeURIComponent(assetType)}`);
+    if (!res.ok) return [];
+    return ((await res.json()) as { fields: MetaFieldDef[] }).fields ?? [];
+  }
+
+  // EBUCore (EBU Tech 3293): Export als Datei, Import mit Vorschau.
+  async #exportEBUCore(asset: Asset) {
+    const res = await apiFetch(`/api/v1/assets/${asset.id}/ebucore`);
+    if (!res.ok) {
+      showToast(tt("asset.ebu.exportFailed", { p0: res.status }), { variant: "error" });
+      return;
+    }
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${asset.id}.ebucore.xml`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  #importEBUCore(asset: Asset) {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".xml,application/xml,text/xml";
+    input.addEventListener("change", async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      const body = await file.text();
+      const post = (q: string) =>
+        apiFetch(`/api/v1/assets/${asset.id}/ebucore?${q}`, { method: "POST", headers: { "Content-Type": "application/xml" }, body });
+      const dry = await post("dryRun=1");
+      if (!dry.ok) {
+        const problems = await this.#validationProblems(dry);
+        showToast(tt("asset.ebu.importFailed", { p0: problems ?? (await dry.text()).trim() }), { variant: "error" });
+        return;
+      }
+      const r = (await dry.json()) as { imported: { metadata: AssetMetadata; skipped?: string[] } };
+      const n = Object.values(r.imported.metadata).reduce((sum, blk) => sum + Object.keys(blk ?? {}).length, 0);
+      if (!(await confirmDialog(tt("asset.ebu.importConfirm", { p0: n, p1: file.name }), { confirmLabel: tt("asset.ebu.importOk") }))) return;
+      const res = await post(`expectedRowVersion=${asset.rowVersion}`);
+      if (!res.ok) {
+        await this.#reportError(tt("asset.ebu.importFailed", { p0: "" }), res);
+        return;
+      }
+      showToast(tt("asset.ebu.imported", { p0: n }), { variant: "info" });
+      await this.#refresh();
+    });
+    input.click();
+  }
+
+  // Feldverwaltung (Kapitel 78.1): registrierte und mitgelieferte Felder, neue Felder anlegen, eigene löschen.
+  async #openFieldManager() {
+    const res = await apiFetch("/api/v1/asset-fields");
+    if (!res.ok) {
+      showToast(tt("asset.fields.loadFailed", { p0: res.status }), { variant: "error" });
+      return;
+    }
+    const info = (await res.json()) as { fields: MetaFieldDef[]; categories: string[]; dataTypes: string[]; ebucoreTargets: string[] };
+    this.#openModal(tt("asset.fields.title"), (modal, close) => {
+      const hint = document.createElement("div");
+      hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:var(--omp-space-2);";
+      hint.textContent = tt("asset.fields.hint");
+      modal.appendChild(hint);
+
+      const table = document.createElement("table");
+      table.style.cssText = "border-collapse:collapse;width:100%;";
+      table.setAttribute("data-role", "field-table");
+      const cell = (txt: string, dim = false) => {
+        const td = document.createElement("td");
+        td.style.cssText = `padding:2px 8px 2px 0;vertical-align:top;${dim ? "color:var(--omp-text-dim);" : ""}`;
+        td.textContent = txt;
+        return td;
+      };
+      for (const f of info.fields) {
+        const tr = document.createElement("tr");
+        tr.setAttribute("data-field-id", f.id);
+        const flags = [f.required ? tt("asset.fields.required") : "", f.multiple ? tt("asset.fields.multiple") : "", f.builtin ? tt("asset.fields.builtin") : ""]
+          .filter(Boolean).join(", ");
+        tr.append(
+          cell(`${f.category}.${f.key}`, true),
+          cell(f.label),
+          cell(f.dataType + (f.enumValues?.length ? ` (${f.enumValues.join("/")})` : "")),
+          cell(f.assetType || tt("asset.fields.allTypes"), true),
+          cell(f.ebucoreTarget ? `EBUCore: ${f.ebucoreTarget}` : "", true),
+          cell(flags, true),
+        );
+        const td = document.createElement("td");
+        if (!f.builtin) {
+          const rm = document.createElement("button");
+          rm.textContent = "✕";
+          rm.title = tt("asset.fields.delete");
+          rm.setAttribute("data-role", "field-delete");
+          rm.addEventListener("click", async () => {
+            if (!(await confirmDialog(tt("asset.fields.deleteConfirm", { p0: f.label }), { confirmLabel: tt("asset.fields.delete") }))) return;
+            const r = await apiFetch(`/api/v1/asset-fields/${encodeURIComponent(f.id)}`, { method: "DELETE" });
+            if (!r.ok) {
+              showToast(tt("misc.failedWith", { p0: tt("asset.fields.delete"), p1: (await r.text()).trim() || r.status }), { variant: "error" });
+              return;
+            }
+            close();
+            await this.#openFieldManager();
+          });
+          td.appendChild(rm);
+        }
+        tr.appendChild(td);
+        table.appendChild(tr);
+      }
+      modal.appendChild(table);
+
+      const title = document.createElement("div");
+      title.style.cssText = "font-weight:600;margin-top:var(--omp-space-3);";
+      title.textContent = tt("asset.fields.new");
+      modal.appendChild(title);
+
+      const select = (name: string, values: string[], labels?: Record<string, string>) => {
+        const sel = document.createElement("select");
+        sel.name = name;
+        for (const v of values) {
+          const o = document.createElement("option");
+          o.value = v;
+          o.textContent = labels?.[v] ?? v;
+          sel.appendChild(o);
+        }
+        return sel;
+      };
+      const category = select("category", info.categories.filter((c) => c !== "system"));
+      category.value = "custom";
+      const key = this.#input("key", { placeholder: "kostenstelle" });
+      const label = this.#input("label", { placeholder: tt("asset.fields.labelPh") });
+      const dataType = select("dataType", info.dataTypes);
+      const enumValues = this.#input("enumValues", { placeholder: tt("asset.fields.enumPh") });
+      const assetType = this.#input("assetType", { placeholder: tt("asset.fields.allTypes"), list: "omp-asset-type-suggestions" });
+      ensureDatalist("omp-asset-type-suggestions", ASSET_TYPE_SUGGESTIONS);
+      const target = select("ebucoreTarget", ["", ...info.ebucoreTargets], { "": tt("asset.fields.noTarget") });
+      const required = document.createElement("input");
+      required.type = "checkbox";
+      const multiple = document.createElement("input");
+      multiple.type = "checkbox";
+      modal.append(
+        this.#field(tt("asset.fields.category"), category),
+        this.#field(tt("asset.fields.key"), key, tt("asset.fields.keyHint")),
+        this.#field(tt("asset.fields.label"), label),
+        this.#field(tt("asset.fields.dataType"), dataType),
+        this.#field(tt("asset.fields.enumValues"), enumValues),
+        this.#field(tt("asset.fields.assetType"), assetType),
+        this.#field(tt("asset.fields.ebucore"), target, tt("asset.fields.ebucoreHint")),
+        this.#field(tt("asset.fields.required"), required),
+        this.#field(tt("asset.fields.multiple"), multiple),
+      );
+      this.#actions(modal, close, tt("asset.fields.create"), (btn) => {
+        const def = {
+          category: category.value,
+          key: key.value.trim(),
+          label: label.value.trim(),
+          dataType: dataType.value,
+          assetType: assetType.value.trim(),
+          ebucoreTarget: target.value,
+          required: required.checked,
+          multiple: multiple.checked,
+          enumValues: enumValues.value.split(",").map((x) => x.trim()).filter(Boolean),
+        };
+        void this.#guard(btn, async () => {
+          const r = await apiFetch("/api/v1/asset-fields", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(def) });
+          if (!r.ok) {
+            showToast(tt("misc.failedWith", { p0: tt("asset.fields.create"), p1: (await r.text()).trim() || r.status }), { variant: "error" });
+            return false;
+          }
+          showToast(tt("asset.fields.created", { p0: def.label }), { variant: "info" });
+          setTimeout(() => void this.#openFieldManager(), 0);
+          return true;
+        }, close);
+      });
+    }, "820px");
   }
 
   async #createVersion(assetId: string, parentVersionId: string, changeReason: string): Promise<boolean> {
@@ -1091,8 +1290,24 @@ class AssetView extends HTMLElement {
     const editBtn = document.createElement("button");
     editBtn.textContent = tt("asset.5ad05d");
     editBtn.setAttribute("data-role", "metadata-edit");
-    editBtn.addEventListener("click", () => this.#openMetadataModal(asset));
-    head.appendChild(editBtn);
+    editBtn.addEventListener("click", () => void this.#openMetadataModal(asset));
+    const tools = document.createElement("span");
+    tools.style.cssText = "display:flex;gap:4px;";
+    const mk = (role: string, text: string, title: string, fn: () => void) => {
+      const b = document.createElement("button");
+      b.textContent = text;
+      b.title = title;
+      b.setAttribute("data-role", role);
+      b.addEventListener("click", fn);
+      return b;
+    };
+    tools.append(
+      mk("ebucore-export", tt("asset.ebu.export"), tt("asset.ebu.exportHint"), () => void this.#exportEBUCore(asset)),
+      mk("ebucore-import", tt("asset.ebu.import"), tt("asset.ebu.importHint"), () => this.#importEBUCore(asset)),
+      mk("fields-manage", tt("asset.fields.manage"), tt("asset.fields.hint"), () => void this.#openFieldManager()),
+      editBtn,
+    );
+    head.appendChild(tools);
     card.appendChild(head);
 
     let any = false;
@@ -1579,8 +1794,11 @@ class AssetView extends HTMLElement {
   // Zielgruppe laut Aufgabenstellung auch Nicht-Techniker. Werte, die
   // im Original kein String waren, bleiben als JSON bearbeitbar (s.
   // asset-view-logic.ts MetadataRow.json).
-  #openMetadataModal(asset: Asset) {
+  async #openMetadataModal(asset: Asset) {
     const rows: MetadataRows = metadataToRows(asset.metadata);
+    // Registrierte Felder (Kapitel 78.1): Vorschläge für den Schlüssel und Datentyp-Umwandlung beim Speichern.
+    const defs = await this.#loadFields(asset.type);
+    const defOf = (cat: string, k: string) => defs.find((d) => d.category === cat && d.key === k);
     this.#openModal(tt("asset.b1d04a", { p0: asset.title }), (modal, close) => {
       const body = document.createElement("div");
       modal.appendChild(body);
@@ -1607,7 +1825,14 @@ class AssetView extends HTMLElement {
           k.placeholder = tt("asset.6d686f");
           k.value = row.key;
           k.setAttribute("data-meta-key", cat);
-          k.addEventListener("input", () => (row.key = k.value));
+          k.setAttribute("list", `omp-meta-keys-${cat}`);
+          const reg = defOf(cat, row.key);
+          if (reg) k.title = `${reg.label} (${reg.dataType}${reg.required ? ", " + tt("asset.fields.required") : ""})`;
+          k.addEventListener("input", () => {
+            row.key = k.value;
+            const r = defOf(cat, k.value);
+            k.title = r ? `${r.label} (${r.dataType}${r.required ? ", " + tt("asset.fields.required") : ""})` : "";
+          });
           const v = document.createElement("input");
           v.placeholder = row.json ? tt("asset.48bce5") : tt("asset.5a597b");
           v.value = row.value;
@@ -1629,6 +1854,15 @@ class AssetView extends HTMLElement {
         });
       };
       for (const { key, label } of METADATA_CATEGORIES) {
+        const dl = document.createElement("datalist");
+        dl.id = `omp-meta-keys-${key}`;
+        for (const d of defs.filter((x) => x.category === key)) {
+          const o = document.createElement("option");
+          o.value = d.key;
+          o.label = d.label;
+          dl.appendChild(o);
+        }
+        body.appendChild(dl);
         const sec = document.createElement("div");
         body.appendChild(sec);
         renderCategory(key, label, sec);
@@ -1643,7 +1877,7 @@ class AssetView extends HTMLElement {
         // Mit der zum Öffnen-Zeitpunkt gelesenen rowVersion speichern —
         // hat jemand anderes inzwischen geändert, lehnt das Backend (CAS)
         // mit 409 ab, statt fremde Änderungen still zu überschreiben.
-        void this.#guard(btn, () => this.#saveMetadata(asset, result.metadata), close);
+        void this.#guard(btn, () => this.#saveMetadata(asset, coerceMetadata(result.metadata, defs)), close);
       });
     }, "680px");
   }

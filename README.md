@@ -36,6 +36,9 @@
 | SMPTE ST 377-4 / ST 377-41 (MXF MCA) | Multichannel audio labeling in MXF (channel / soundfield-group / group labels, controlled vocabulary) | Own parser and injector (`omp-mxf-mca`); `omp-mxf-player` reads labels into the audio rules, `omp-recorder` writes them into `.mxf` recordings; round-trip checked against ffmpeg/GStreamer demuxers (no MCA reference file available yet) |
 | EBU R 37 | A/V lip-sync tolerance window | `omp-scope` measures real signals and scores them against it live |
 | EBU R 128 / ITU-R BS.1770 | Loudness & true peak | `omp-scope` computes both and gives a live compliance verdict |
+| EBU R 103 v3.0 | Video signal tolerance (RGB/Y gamut, 1 % area rule, prescribed pre-filter) | `omp-scope` live alarm and a file-QC check; one set of test vectors in Rust and Go; file QC run on real generated files (approximation: measured on a downscaled image) |
+| EBU Tech 3293 v1.10 (EBUCore) | Metadata exchange for assets, including your own dynamic fields | Export validated against the official `ebucore.xsd` 1.10.1; round trip keeps dynamic fields; import preview |
+| EBU R 143 v3.0 | Cybersecurity requirements for media vendors' products | Honest control-by-control assessment in `docs/R143-KONFORMITAET.md` (8 met, 17 partly, 2 open of 28) — an assessment, not a certification |
 
 ![OpenMediaPlatform Hero](./OpenMediaPlatform%20Hero.png)
 
@@ -755,8 +758,8 @@ Being upfront about the current edges, not just the highlights:
   **not production-ready**; several of its findings are fixed (path
   traversal in ffmpeg jobs, tokens of deleted users, open bootstrap
   mode, HTTP limits, host-command signing, login lockout, SSRF in the
-  stream proxy), and the file lists what is still open — notably the
-  node HTTP APIs have no authentication yet, the development NATS is
+  stream proxy, a platform token for the node HTTP APIs), and the file lists what is still open — notably the
+  development NATS is
   unauthenticated and unencrypted unless TLS is switched on, and the
   production profile (three failure domains, quorum witness) is not
   built. Automated scanning runs on

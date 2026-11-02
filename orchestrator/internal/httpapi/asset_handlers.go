@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/asset"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/ebucore"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/statemachine"
 )
 
@@ -190,7 +192,19 @@ func handleUpdateAssetMetadata(svc AssetService) http.HandlerFunc {
 			return
 		}
 		id := r.PathValue("id")
-		if _, ok := assetOrgGuard(w, r, svc, id); !ok {
+		cur, ok := assetOrgGuard(w, r, svc, id)
+		if !ok {
+			return
+		}
+		// Registrierte Felder (Kapitel 78.1) prüfen: Typ, Auswahlliste, Pflicht.
+		// Freie Schlüssel ohne Registrierung bleiben unberührt.
+		fields, err := svc.ListFields(cur.Type)
+		if err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		if problems := asset.ValidateMetadata(fields, body.Metadata); len(problems) > 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "metadata validation failed", "problems": problems})
 			return
 		}
 		updatedBy := ""
@@ -203,6 +217,196 @@ func handleUpdateAssetMetadata(svc AssetService) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, a)
+	}
+}
+
+// ---- EBUCore (Kapitel 78.2, EBU Tech 3293) -------------------------------------------------------
+
+// handleExportAssetEBUCore liefert GET /api/v1/assets/{id}/ebucore als EBUCore-XML
+// (application/xml, ebucore.xsd 1.10.1) inklusive der Representations der aktuellen Version.
+func handleExportAssetEBUCore(svc AssetService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		a, ok := assetOrgGuard(w, r, svc, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		fields, err := svc.ListFields(a.Type)
+		if err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		var reps []asset.Representation
+		if a.CurrentVersionID != "" {
+			if reps, err = svc.ListRepresentations(a.CurrentVersionID); err != nil {
+				writeAssetError(w, err)
+				return
+			}
+		}
+		doc, err := ebucore.Export(a, reps, fields, time.Now())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="`+a.ID+`.ebucore.xml"`)
+		_, _ = w.Write(doc)
+	}
+}
+
+// handleImportAssetEBUCore liefert POST /api/v1/assets/{id}/ebucore?expectedRowVersion=N[&dryRun=1]:
+// Body ist ein EBUCore-XML-Dokument. Die gelesenen Werte werden in die Metadaten gemischt (Importwert
+// gewinnt je Schlüssel, übrige Schlüssel bleiben), gegen die Feld-Registry geprüft und gespeichert.
+// Mit dryRun=1 wird nur gezeigt, was übernommen würde. Titel und Beschreibung des Dokuments werden
+// gemeldet, aber nicht überschrieben (Stammdaten des Assets).
+func handleImportAssetEBUCore(svc AssetService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cur, ok := assetOrgGuard(w, r, svc, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		fields, err := svc.ListFields(cur.Type)
+		if err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		imp, err := ebucore.Import(http.MaxBytesReader(w, r.Body, 4<<20), fields)
+		if err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		merged := mergeMetadata(cur.Metadata, imp.Metadata)
+		if problems := asset.ValidateMetadata(fields, merged); len(problems) > 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "metadata validation failed", "problems": problems, "imported": imp})
+			return
+		}
+		if r.URL.Query().Get("dryRun") != "" {
+			writeJSON(w, http.StatusOK, map[string]any{"dryRun": true, "imported": imp, "result": merged})
+			return
+		}
+		expected := cur.RowVersion
+		if v := r.URL.Query().Get("expectedRowVersion"); v != "" {
+			n, perr := strconv.Atoi(v)
+			if perr != nil {
+				http.Error(w, "invalid expectedRowVersion", http.StatusBadRequest)
+				return
+			}
+			expected = n
+		}
+		updatedBy := ""
+		if p, ok := principalFromContext(r); ok {
+			updatedBy = p.Username
+		}
+		a, err := svc.UpdateAssetMetadata(cur.ID, expected, merged, updatedBy)
+		if err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"imported": imp, "asset": a})
+	}
+}
+
+// mergeMetadata legt Importwerte über vorhandene Metadaten (je Schlüssel überschreibend).
+func mergeMetadata(base, over asset.Metadata) asset.Metadata {
+	m := func(a, b map[string]any) map[string]any {
+		if a == nil && b == nil {
+			return nil
+		}
+		out := map[string]any{}
+		for k, v := range a {
+			out[k] = v
+		}
+		for k, v := range b {
+			out[k] = v
+		}
+		return out
+	}
+	return asset.Metadata{
+		System: m(base.System, over.System), Technical: m(base.Technical, over.Technical),
+		Descriptive: m(base.Descriptive, over.Descriptive), Editorial: m(base.Editorial, over.Editorial),
+		Custom: m(base.Custom, over.Custom), AI: m(base.AI, over.AI),
+	}
+}
+
+// ---- Feld-Registry (Kapitel 78.1) ---------------------------------------------------------------
+
+// handleListAssetFields liefert GET /api/v1/asset-fields?assetType=: Standardfelder plus
+// registrierte Felder, die für den Asset-Typ gelten (ohne Angabe: alle). Zusätzlich die
+// Menge der Kategorien, Datentypen und EBUCore-Ziele, damit die UI sie nicht dupliziert.
+func handleListAssetFields(svc AssetService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		list, err := svc.ListFields(r.URL.Query().Get("assetType"))
+		if err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"fields":         list,
+			"categories":     asset.MetadataCategories,
+			"dataTypes":      []string{asset.FieldText, asset.FieldLongText, asset.FieldInteger, asset.FieldNumber, asset.FieldBoolean, asset.FieldDate, asset.FieldDateTime, asset.FieldEnum, asset.FieldURL},
+			"ebucoreTargets": asset.EBUCoreTargets,
+		})
+	}
+}
+
+func handleCreateAssetField(svc AssetService, domainAudit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var f asset.Field
+		if err := json.NewDecoder(r.Body).Decode(&f); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		by := ""
+		if p, ok := principalFromContext(r); ok {
+			by = p.Username
+		}
+		out, err := svc.CreateField(f, by)
+		if err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		logDomainAudit(domainAudit, by, "asset_field", out.ID, "created", map[string]any{"category": out.Category, "key": out.Key})
+		writeJSON(w, http.StatusCreated, out)
+	}
+}
+
+func handleUpdateAssetField(svc AssetService, domainAudit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var f asset.Field
+		if err := json.NewDecoder(r.Body).Decode(&f); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		out, err := svc.UpdateField(r.PathValue("id"), f)
+		if err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		by := ""
+		if p, ok := principalFromContext(r); ok {
+			by = p.Username
+		}
+		logDomainAudit(domainAudit, by, "asset_field", out.ID, "updated", map[string]any{"category": out.Category, "key": out.Key})
+		writeJSON(w, http.StatusOK, out)
+	}
+}
+
+func handleDeleteAssetField(svc AssetService, domainAudit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if strings.HasPrefix(id, "builtin:") {
+			http.Error(w, "built-in fields cannot be deleted", http.StatusBadRequest)
+			return
+		}
+		if err := svc.DeleteField(id); err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		by := ""
+		if p, ok := principalFromContext(r); ok {
+			by = p.Username
+		}
+		logDomainAudit(domainAudit, by, "asset_field", id, "deleted", nil)
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

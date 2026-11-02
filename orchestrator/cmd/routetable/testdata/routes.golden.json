@@ -308,6 +308,30 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/asset-fields",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/asset-fields",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/asset-fields/{id}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/asset-fields/{id}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/asset-lifecycle",
     "auth": "auth",
     "domain": "core"
@@ -402,6 +426,18 @@
     "method": "GET",
     "path": "/api/v1/assets/{id}",
     "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/assets/{id}/ebucore",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/assets/{id}/ebucore",
+    "auth": "verb:Operate",
     "domain": "core"
   },
   {

@@ -179,7 +179,7 @@ fn copy_plane(frame: &mut gst_video::VideoFrame<gst_video::video_frame::Writable
 /// berechnet daraus das Ausgabebild — `None`, falls Caps/Puffer (noch)
 /// nicht vorliegen (z. B. der allererste Sample vor abgeschlossener
 /// Verhandlung).
-fn render_from_sample(sample: &gst::Sample) -> Option<(scope_image::Image, Vec<u8>)> {
+fn render_from_sample(sample: &gst::Sample) -> Option<(scope_image::Image, Vec<u8>, Vec<u8>, Vec<u8>)> {
     let caps = sample.caps()?;
     let info = gst_video::VideoInfo::from_caps(caps).ok()?;
     let buffer = sample.buffer()?;
@@ -207,7 +207,7 @@ fn render_from_sample(sample: &gst::Sample) -> Option<(scope_image::Image, Vec<u
     // (Schwarz-/Standbild) rechnet auf demselben bereits skalierten
     // Analysebild weiter, statt eine zweite Skalierkette zu betreiben.
     let image = scope_image::render(&y, &u, &v);
-    Some((image, y))
+    Some((image, y, u, v))
 }
 
 fn build(
@@ -384,12 +384,20 @@ fn build(
     let app_src: gst_app::AppSrc = scope_src.dynamic_cast().map_err(|_| "appsrc: cast to AppSrc failed".to_string())?;
     let qc = measurements.qc.clone();
     let qc_context = context.clone();
+    let flow_meta = measurements.flow.clone();
     app_sink.set_callbacks(
         gst_app::AppSinkCallbacks::builder()
             .new_sample(move |sink| {
                 let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
-                if let Some((image, luma)) = render_from_sample(&sample) {
-                    qc.lock().expect("lock poisoned").observe(&luma, qc_context.now_ns());
+                if let Some((image, luma, cb, cr)) = render_from_sample(&sample) {
+                    {
+                        let mut qc = qc.lock().expect("lock poisoned");
+                        let now = qc_context.now_ns();
+                        qc.observe(&luma, now);
+                        // R 103 (Kapitel 78.3): Gamut auf demselben Analysebild.
+                        let matrix = crate::gamut::Matrix::from_flow_colorspace(flow_meta.lock().expect("lock poisoned").colorspace.as_deref());
+                        qc.observe_gamut(&luma, &cb, &cr, WAVEFORM_WIDTH, ANALYSIS_HEIGHT, matrix, now);
+                    }
                     if let Ok(out_buffer) = build_output_buffer(&output_info, &image) {
                         let _ = app_src.push_buffer(out_buffer);
                     }

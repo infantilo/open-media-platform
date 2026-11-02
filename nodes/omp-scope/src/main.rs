@@ -32,6 +32,7 @@
 mod anc;
 mod audio_pipeline;
 mod flowmeta;
+mod gamut;
 mod qc;
 mod scope_image;
 mod timing;
@@ -257,6 +258,12 @@ impl ParamStore for ScopeStore {
             readonly_bool("videoFreezeDetected"),
             readonly_number("videoFreezeSeconds", Some("s")),
             readonly_number("videoMeanLumaPercent", Some("%")),
+            // EBU R 103 v3.0: Gamut-Fehler (R, G, B, Y außerhalb 5…246 bei 8 Bit), Alarm ab 1 % der Fläche
+            readonly_bool("videoGamutAlarm"),
+            readonly_number("videoGamutSeconds", Some("s")),
+            readonly_number("videoGamutAreaPercent", Some("%")),
+            readonly_number("videoGamutHighPercent", Some("%")),
+            readonly_number("videoGamutLowPercent", Some("%")),
             readonly_number("videoFrameDifference", None),
             readonly_bool("audioSilenceDetected"),
             readonly_number("audioSilenceSeconds", Some("s")),
@@ -348,6 +355,11 @@ impl ParamStore for ScopeStore {
             "videoBlackSeconds" => Some(opt_f64_json(self.video_measurements.qc().black_seconds)),
             "videoFreezeDetected" => Some(serde_json::json!(self.video_measurements.qc().freeze)),
             "videoFreezeSeconds" => Some(opt_f64_json(self.video_measurements.qc().freeze_seconds)),
+            "videoGamutAlarm" => Some(serde_json::json!(self.video_measurements.qc().gamut_alarm)),
+            "videoGamutSeconds" => Some(opt_f64_json(self.video_measurements.qc().gamut_seconds)),
+            "videoGamutAreaPercent" => Some(opt_f64_json(self.video_measurements.qc().gamut.map(|g| g.area_percent))),
+            "videoGamutHighPercent" => Some(opt_f64_json(self.video_measurements.qc().gamut.map(|g| g.high_percent))),
+            "videoGamutLowPercent" => Some(opt_f64_json(self.video_measurements.qc().gamut.map(|g| g.low_percent))),
             "videoMeanLumaPercent" => Some(opt_f64_json(self.video_measurements.qc().mean_luma_percent)),
             "videoFrameDifference" => Some(opt_f64_json(self.video_measurements.qc().frame_diff)),
             "audioSilenceDetected" => Some(serde_json::json!(self.audio_measurements.qc().silence)),

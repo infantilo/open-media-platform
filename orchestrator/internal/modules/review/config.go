@@ -70,6 +70,16 @@ type QCProfile struct {
 		WarnAboveS   float64 `json:"warnAboveS"`
 		FailAboveS   float64 `json:"failAboveS"`
 	} `json:"freeze"`
+	// Gamut: EBU R 103 v3.0 (Kapitel 78.4). Fehler = R, G, B oder Y außerhalb 5…246 (8 Bit) auf mehr als
+	// AreaLimitPercent der Bildfläche (Norm: 1 %). Stichprobenweise (SampleFPS), s. gamut.go.
+	Gamut struct {
+		Enabled          bool    `json:"enabled"`
+		SampleFPS        float64 `json:"sampleFps"`
+		AreaLimitPercent float64 `json:"areaLimitPercent"`
+		MinDurationS     float64 `json:"minDurationS"`
+		WarnAboveS       float64 `json:"warnAboveS"`
+		FailAboveS       float64 `json:"failAboveS"`
+	} `json:"gamut"`
 	Silence struct {
 		NoiseDb      float64 `json:"noiseDb"`
 		MinDurationS float64 `json:"minDurationS"`
@@ -114,6 +124,8 @@ func DefaultQCProfile() QCProfile {
 	p.Black.MinDurationS, p.Black.PixTh, p.Black.PicTh = 0.5, 0.10, 0.98
 	p.Black.WarnAboveS, p.Black.FailAboveS, p.Black.IgnoreHeadS, p.Black.IgnoreTailS = 1.0, 10, 0, 0
 	p.Freeze.NoiseDb, p.Freeze.MinDurationS, p.Freeze.WarnAboveS, p.Freeze.FailAboveS = -50, 2, 2, 10 // -60 dB (ffmpeg-Standard) übersieht Standbilder in verlustbehaftet kodiertem Material
+	p.Gamut.Enabled, p.Gamut.SampleFPS, p.Gamut.AreaLimitPercent = true, 2, 1
+	p.Gamut.MinDurationS, p.Gamut.WarnAboveS, p.Gamut.FailAboveS = 1, 1, 10
 	p.Silence.NoiseDb, p.Silence.MinDurationS, p.Silence.WarnAboveS, p.Silence.FailAboveS = -60, 2, 2, 10
 	p.Loudness.Enabled, p.Loudness.TargetLUFS = true, -23
 	p.Loudness.WarnToleranceLU, p.Loudness.FailToleranceLU, p.Loudness.MaxTruePeakDB, p.Loudness.MaxLRA = 1, 3, -1, 0

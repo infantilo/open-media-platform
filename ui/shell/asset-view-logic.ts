@@ -243,3 +243,67 @@ export function filterAssets(assets: Asset[], f: AssetFilter): Asset[] {
       a.type.toLowerCase().includes(q);
   });
 }
+
+// ---- Feld-Registry (Kapitel 78.1) -----------------------------------------------------------------
+
+// GET /api/v1/asset-fields: registrierte und mitgelieferte Metadatenfelder.
+export interface MetaFieldDef {
+  id: string;
+  assetType?: string;
+  category: keyof AssetMetadata;
+  key: string;
+  label: string;
+  description?: string;
+  dataType: "text" | "longtext" | "integer" | "number" | "boolean" | "date" | "datetime" | "enum" | "url";
+  required?: boolean;
+  multiple?: boolean;
+  enumValues?: string[];
+  ebucoreTarget?: string;
+  builtin?: boolean;
+}
+
+function coerceScalar(def: MetaFieldDef, v: unknown): unknown {
+  if (typeof v !== "string") return v;
+  const s = v.trim();
+  switch (def.dataType) {
+    case "integer":
+    case "number": {
+      if (s === "") return v;
+      const n = Number(s);
+      return Number.isFinite(n) ? n : v; // unlesbar: Text lassen, das Backend meldet den Fehler mit Feldnamen
+    }
+    case "boolean":
+      if (/^(true|ja|yes|1)$/i.test(s)) return true;
+      if (/^(false|nein|no|0)$/i.test(s)) return false;
+      return v;
+    default:
+      return v;
+  }
+}
+
+// Wandelt die im Editor als Text getippten Werte registrierter Felder in ihren Datentyp (Zahl, Ja/Nein) und
+// verpackt Mehrfachfelder als Liste. Werte freier Schlüssel bleiben unverändert (Editor-Regel: Text bleibt Text).
+export function coerceMetadata(metadata: AssetMetadata, defs: MetaFieldDef[]): AssetMetadata {
+  const byKey = new Map(defs.map((d) => [`${d.category}.${d.key}`, d]));
+  const out: AssetMetadata = {};
+  for (const { key: cat } of METADATA_CATEGORIES) {
+    const block = metadata[cat];
+    if (!block) continue;
+    const next: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(block)) {
+      const def = byKey.get(`${cat}.${k}`);
+      if (!def) {
+        next[k] = v;
+        continue;
+      }
+      if (def.multiple) {
+        const items = Array.isArray(v) ? v : [v];
+        next[k] = items.map((x) => coerceScalar(def, x));
+      } else {
+        next[k] = coerceScalar(def, v);
+      }
+    }
+    out[cat] = next;
+  }
+  return out;
+}

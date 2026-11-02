@@ -18,6 +18,7 @@ const T = (() => {
         "scp.003b20": "Schwarzbild",
         "scp.bdaf0f": "Standbild",
         "scp.a0a083": "Stille",
+        "scp.gamut": "Gamut (R 103)",
         "scp.c0483b": "Peak/RMS",
         "scp.be6369": "Momentary (LUFS)",
         "scp.1b4389": "Short-term (LUFS)",
@@ -135,6 +136,7 @@ const T = (() => {
         "scp.003b20": "Black picture",
         "scp.bdaf0f": "Frozen picture",
         "scp.a0a083": "Silence",
+        "scp.gamut": "Gamut (R 103)",
         "scp.c0483b": "Peak/RMS",
         "scp.be6369": "Momentary (LUFS)",
         "scp.1b4389": "Short-term (LUFS)",
@@ -528,6 +530,9 @@ class OmpScopePanel extends HTMLElement {
     const blackChip = makeChip(T("scp.003b20"));
     const freezeChip = makeChip(T("scp.bdaf0f"));
     const silenceChip = makeChip(T("scp.a0a083"));
+    // EBU R 103 v3.0: Alarm, wenn R, G, B oder Y auf mehr als 1 % der Bildfläche außerhalb 5…246 (8 Bit) liegen.
+    const gamutChip = makeChip(T("scp.gamut"));
+    gamutChip.chip.title = "EBU R 103 v3.0: R, G, B, Y außerhalb 5…246 (8 Bit) auf mehr als 1 % der Bildfläche";
 
     // --- Audio-Pegel ---
     const meterRow = document.createElement("div");
@@ -936,6 +941,10 @@ class OmpScopePanel extends HTMLElement {
       setChip(blackChip, m.videoBlackDetected === true, m.videoBlackSeconds);
       setChip(freezeChip, m.videoFreezeDetected === true, m.videoFreezeSeconds);
       setChip(silenceChip, m.audioSilenceDetected === true, m.audioSilenceSeconds);
+      setChip(gamutChip, m.videoGamutAlarm === true, m.videoGamutSeconds);
+      if (m.videoGamutAlarm === true && num(m.videoGamutAreaPercent) !== undefined) {
+        gamutChip.detail.textContent += ` · ${fmt(m.videoGamutAreaPercent, 1, "%")} (↑${fmt(m.videoGamutHighPercent, 1, "%")} ↓${fmt(m.videoGamutLowPercent, 1, "%")})`;
+      }
 
       // Lautheit
       momentaryEl.textContent = fmt(m.loudnessMomentaryLufs);
@@ -1028,7 +1037,7 @@ class OmpScopePanel extends HTMLElement {
       hintScte.style.display = hasN || (lastAnc && lastAnc.scte.sections35 > 0) ? "none" : "";
       hintTiming.style.display = hasV && hasA ? "none" : "";
 
-      const vBad = m.videoBlackDetected === true || m.videoFreezeDetected === true;
+      const vBad = m.videoBlackDetected === true || m.videoFreezeDetected === true || m.videoGamutAlarm === true;
       const aBad = m.audioSilenceDetected === true;
       const syncBad = (m.avSyncVerdict || "").startsWith("außerhalb");
       const r128Bad = !["unbekannt", "R 128 erfüllt"].includes(m.loudnessR128Verdict || "unbekannt");

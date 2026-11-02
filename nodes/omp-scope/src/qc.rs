@@ -130,10 +130,17 @@ pub struct VideoQcSnapshot {
     pub black_seconds: Option<f64>,
     pub freeze: bool,
     pub freeze_seconds: Option<f64>,
+    /// EBU R 103 v3.0 (s. `gamut`): letzte Einzelbildmessung und Alarm (> 1 % der Fläche,
+    /// gehalten über `GAMUT_HOLD_NS`).
+    pub gamut: Option<crate::gamut::GamutMeasurement>,
+    pub gamut_alarm: bool,
+    pub gamut_seconds: Option<f64>,
 }
 
 #[derive(Debug)]
 pub struct VideoQc {
+    gamut: Option<crate::gamut::GamutMeasurement>,
+    gamut_cond: Condition,
     previous: Option<Vec<u8>>,
     mean_luma: Option<f64>,
     frame_diff: Option<f64>,
@@ -149,6 +156,8 @@ pub struct VideoQc {
 impl Default for VideoQc {
     fn default() -> Self {
         VideoQc {
+            gamut: None,
+            gamut_cond: Condition::new(crate::gamut::GAMUT_HOLD_NS),
             previous: None,
             mean_luma: None,
             frame_diff: None,
@@ -182,8 +191,17 @@ impl VideoQc {
         }
     }
 
+    /// Gamut-Messung nach EBU R 103 v3.0 (Kapitel 78.3); der Alarm folgt der 1-%-Regel der Norm.
+    pub fn observe_gamut(&mut self, y: &[u8], u: &[u8], v: &[u8], w: usize, h: usize, mx: crate::gamut::Matrix, now_ns: u64) {
+        self.gamut = crate::gamut::measure(y, u, v, w, h, mx);
+        self.gamut_cond.update(self.gamut.is_some_and(|m| m.exceeds_limit()), now_ns);
+    }
+
     pub fn snapshot(&self) -> VideoQcSnapshot {
         VideoQcSnapshot {
+            gamut: self.gamut,
+            gamut_alarm: self.gamut_cond.raised(),
+            gamut_seconds: self.gamut_cond.seconds(),
             mean_luma_percent: self.mean_luma.map(|v| v / 255.0 * 100.0),
             frame_diff: self.frame_diff,
             black: self.black.raised(),
@@ -374,5 +392,22 @@ mod tests {
         // Lautheitsfehler schlägt True-Peak-Fehler: erst pegeln, dann
         // limitieren.
         assert_eq!(r128_verdict(Some(-10.0), Some(0.5)), R128Verdict::LoudnessOff);
+    }
+
+    /// R 103 (Kapitel 78.3): Der Gamut-Alarm folgt der Haltezeit und fällt mit dem Bild wieder ab.
+    #[test]
+    fn gamut_alarm_needs_hold_time_and_clears() {
+        let (w, h) = (64usize, 36usize);
+        let (u, v) = (vec![128u8; w * h / 4], vec![128u8; w * h / 4]);
+        let bad = vec![252u8; w * h];
+        let good = vec![126u8; w * h];
+        let mut qc = VideoQc::default();
+        qc.observe_gamut(&bad, &u, &v, w, h, crate::gamut::Matrix::BT709, 0);
+        assert!(!qc.snapshot().gamut_alarm, "ein einzelnes Bild ist kein Alarm");
+        qc.observe_gamut(&bad, &u, &v, w, h, crate::gamut::Matrix::BT709, crate::gamut::GAMUT_HOLD_NS + 1);
+        let s = qc.snapshot();
+        assert!(s.gamut_alarm && s.gamut.unwrap().area_percent > 99.0);
+        qc.observe_gamut(&good, &u, &v, w, h, crate::gamut::Matrix::BT709, 2 * crate::gamut::GAMUT_HOLD_NS);
+        assert!(!qc.snapshot().gamut_alarm);
     }
 }

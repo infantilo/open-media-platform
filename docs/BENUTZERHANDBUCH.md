@@ -811,6 +811,22 @@ Versionen und technischen Dateien (Representations):
   Liste. Hat jemand anderes das Asset währenddessen geändert, lehnt der
   Server das Speichern ab, das Formular schließt sich mit Hinweis — neu
   öffnen, damit nichts Fremdes überschrieben wird.
+- **Metadatenfelder (Typ, Pflicht, Auswahlliste):** Der Knopf **„Felder…"** öffnet die Feldverwaltung. Dort stehen die
+  mitgelieferten Felder (Alternativtitel, Schlagworte, Sprache, Genre, Urheber, Mitwirkende, Herausgeber, Inhaltsangabe,
+  externe Kennung) und die selbst angelegten. Ein Administrator legt neue Felder ohne Neustart an: Kategorie, Schlüssel,
+  Beschriftung, **Datentyp** (Text, langer Text, Ganzzahl, Zahl, Ja/Nein, Datum, Zeitpunkt, Auswahl, URL), optional
+  Auswahlwerte, **Pflicht**, **Mehrfachwerte**, Geltung für einen Asset-Typ oder alle, und das **EBUCore-Ziel**. Beim
+  Speichern der Metadaten prüft der Server die Werte registrierter Felder (falscher Typ, Wert außerhalb der Auswahlliste,
+  fehlendes Pflichtfeld); die Meldung nennt jedes Feld. Schlüssel ohne Eintrag bleiben als **freie Felder** erlaubt und
+  werden nicht geprüft. Im Bearbeiten-Formular schlägt die Schlüssel-Eingabe die registrierten Felder vor und wandelt
+  Zahlen und Ja/Nein automatisch in den richtigen Typ. Das Löschen eines Felds löscht keine gespeicherten Werte.
+- **Austausch mit anderen Systemen (EBUCore, EBU Tech 3293):** **„EBUCore ↓"** lädt die Metadaten des Assets samt
+  Representations der aktuellen Version als EBUCore-XML (Version 1.10, schemagültig gegen `ebucore.xsd` 1.10.1).
+  **„EBUCore ↑"** liest eine solche Datei ein, zeigt vorher, wie viele Werte übernommen werden, und mischt sie in die
+  Metadaten (gleiche Schlüssel werden überschrieben, Titel und Beschreibung bleiben). Felder mit EBUCore-Ziel landen im
+  passenden Standardelement (z. B. Schlagworte → `subject`); alle übrigen Werte gehen als beschriftete Zusatzfelder
+  (`typeLabel`, Tech 3293 §3.19) mit und kommen beim Wiedereinlesen zurück. API: `GET`/`POST /api/v1/assets/{id}/ebucore`
+  (`?dryRun=1` für die Vorschau). Mehr: `docs/ENTWURF-NORMEN-EBUCORE-R103-R143.md`.
 - **Versionen:** „+ Neue Version" legt einen Entwurf an (optional auf
   Basis einer früheren Version, mit Änderungsgrund). Eine Zeile anklicken
   zeigt deren **Representations** (z. B. Master, Proxy, Thumbnail mit
@@ -897,7 +913,7 @@ Originaldatei wird dabei nie verändert.
 - **Änderungen anderer:** Hat jemand anderes zwischenzeitlich gespeichert oder ist die Quelldatei neu, erscheint ein Hinweis: „Aktuellen Stand laden“ oder
   „trotzdem speichern“ (überschreibt ausdrücklich). Ungespeicherte Änderungen werden beim Verlassen nachgefragt.
 - **Verlauf:** Alle Aktionen (wer, was, wann, Zustand von → nach) und die Conform-Revisionen.
-- **QC-Profile** (Administratoren, *Administration → Plattform → QC-Profile*): Liste aller Profile mit Kennung und Version (`broadcast-default@1`), dem Standard-Zeichen und einer Kurzfassung der Erwartungen und der Lautheit. **+ Neues Profil** beginnt mit den Werten des mitgelieferten Rundfunkprofils; **Bearbeiten**, **Kopieren**, **Zum Standard machen** und **Löschen** (das Standardprofil und das letzte Profil bleiben). Der Editor enthält die Schwellen für Schwarzbild, Standbild und Stille, die Lautheit (EBU R128), Übersteuerung, Bild/Ton-Versatz, die Zeitgrenze und die Erwartungen an die Datei (Auflösung, Bildrate, Halbbilder, Codec, Container, Tonspuren, Abtastrate, Bittiefe, Untertitel). Die Kennung eines neuen Profils folgt dem Namen und lässt sich danach nicht mehr ändern, weil sie in jedem Prüfbericht steht. **Ändern sich die Regeln, steigt die Version automatisch** (reine Umbenennung lässt sie stehen), damit jeder Befund einem Regelstand zuordenbar bleibt. Unsinnige Werte (Warnschwelle über der Fehlerschwelle, negative Zeiten, Pegel über 0 dB …) lehnt der Server mit einer Meldung ab. Ein Profil wird je Datei beim Prüfen gewählt; ohne Wahl gilt das Standardprofil.
+- **QC-Profile** (Administratoren, *Administration → Plattform → QC-Profile*): Liste aller Profile mit Kennung und Version (`broadcast-default@1`), dem Standard-Zeichen und einer Kurzfassung der Erwartungen und der Lautheit. **+ Neues Profil** beginnt mit den Werten des mitgelieferten Rundfunkprofils; **Bearbeiten**, **Kopieren**, **Zum Standard machen** und **Löschen** (das Standardprofil und das letzte Profil bleiben). Der Editor enthält die Schwellen für Schwarzbild, Standbild, Stille und **Gamut (EBU R 103 v3.0)** (Flächengrenze, Stichproben je Sekunde, Mindestdauer, Warn-/Fehlerschwelle; die Prüfung tastet die Datei stichprobenweise ab und meldet zusammenhängende Abschnitte; neue Profile haben sie an, bestehende gespeicherte Profile erst nach dem Aktivieren), die Lautheit (EBU R128), Übersteuerung, Bild/Ton-Versatz, die Zeitgrenze und die Erwartungen an die Datei (Auflösung, Bildrate, Halbbilder, Codec, Container, Tonspuren, Abtastrate, Bittiefe, Untertitel). Die Kennung eines neuen Profils folgt dem Namen und lässt sich danach nicht mehr ändern, weil sie in jedem Prüfbericht steht. **Ändern sich die Regeln, steigt die Version automatisch** (reine Umbenennung lässt sie stehen), damit jeder Befund einem Regelstand zuordenbar bleibt. Unsinnige Werte (Warnschwelle über der Fehlerschwelle, negative Zeiten, Pegel über 0 dB …) lehnt der Server mit einer Meldung ab. Ein Profil wird je Datei beim Prüfen gewählt; ohne Wahl gilt das Standardprofil.
 - **Einstellungen** (Administratoren): Formular mit den Abschnitten *Freigabe und Prüfung* (Modus, Selbstfreigabe), *Segmentregeln*, *Qualitätskontrolle* (Standardprofil, parallele Prüfungen; die Profile selbst bearbeiten Sie unter *Administration → Plattform → QC-Profile*, s. unten), *Prüfkopie*, *Metadatenformular* (Felder anlegen, sortieren, Typ, Pflicht, erlaubte Werte) und *Import*. Eingaben werden vor dem Speichern geprüft; der Server prüft zusätzlich.
   Das Modul lässt sich mit `OMP_MODULES_DISABLE=review` abschalten; Proxys liegen unter `OMP_REVIEW_DIR` (Standard `data/review`).
 
@@ -1638,6 +1654,17 @@ Von oben nach unten:
   schlagen erst an, wenn der Zustand ununterbrochen anhält (1 s bzw.
   2 s); ein einzelnes schwarzes Bild zwischen zwei Schnitten ist kein
   Alarm. Die Kachel zeigt zusätzlich, seit wann der Zustand anliegt.
+- **Gamut (EBU R 103 v3.0)** — meldet, wenn R, G, B oder Y auf mehr als 1 %
+  der Bildfläche außerhalb des bevorzugten Bereichs liegen (8 Bit: 5 bis 246;
+  bei 10 Bit entsprechend 20 bis 984). Gemessen wird nach der Norm mit dem
+  dort vorgeschriebenen Vorfilter; die YCbCr→RGB-Umrechnung richtet sich nach
+  dem Farbraum der Flow-Deklaration (BT.601/709/2020). Der Alarm hält 1 s
+  (OMP-Wert, die Norm nennt keine Dauer). Der Chip zeigt die betroffene Fläche
+  mit Anteil Spitzen (↑) und Tiefen (↓). **Grenzen:** gemessen wird auf dem
+  herunterskalierten Analysebild, der Flächenanteil ist daher eine Näherung;
+  der Scope korrigiert nichts (R 103 rät vom automatischen Begrenzen ab).
+  Messwerte: `videoGamutAlarm`, `videoGamutSeconds`, `videoGamutAreaPercent`,
+  `videoGamutHighPercent`, `videoGamutLowPercent`.
 - **Audio-Pegel und Lautheit** — Peak/RMS sowie EBU R 128
   (Momentary/Short-term/Integrated/Range), True Peak in dBTP nach
   ITU-R BS.1770 und eine Ampel, ob das Programm die R-128-Vorgaben

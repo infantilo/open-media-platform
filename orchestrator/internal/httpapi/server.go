@@ -251,6 +251,12 @@ type AssetService interface {
 	PurgeDeleted(olderThan time.Duration) ([]string, error)
 	UpdateAssetMetadata(id string, expectedRowVersion int, metadata asset.Metadata, updatedBy string) (asset.Asset, error)
 
+	// Feld-Registry der Asset-Metadaten (Kapitel 78.1).
+	ListFields(assetType string) ([]asset.Field, error)
+	CreateField(f asset.Field, createdBy string) (asset.Field, error)
+	UpdateField(id string, f asset.Field) (asset.Field, error)
+	DeleteField(id string) error
+
 	CreateVersion(assetID, parentVersionID, changeReason, createdBy string) (asset.AssetVersion, error)
 	GetVersion(id string) (asset.AssetVersion, error)
 	ListVersions(assetID string) ([]asset.AssetVersion, error)
@@ -727,6 +733,12 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// an existierendem Content, dieselbe Einstufung wie HumanTask-
 	// Zuweisen/Entscheiden, nicht Konfiguration des Systems selbst.
 	mux.HandleFunc("GET /api/v1/asset-lifecycle", g.requireAuth(handleAssetLifecycle()))
+	// Feld-Registry (Kapitel 78.1): lesen darf jeder Angemeldete (die UI braucht sie
+	// zum Rendern), pflegen nur Administratoren.
+	mux.HandleFunc("GET /api/v1/asset-fields", g.requireAuth(handleListAssetFields(assetSvc)))
+	mux.HandleFunc("POST /api/v1/asset-fields", g.requireVerbGlobal(authz.VerbAdmin, handleCreateAssetField(assetSvc, options.domainAudit)))
+	mux.HandleFunc("PUT /api/v1/asset-fields/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleUpdateAssetField(assetSvc, options.domainAudit)))
+	mux.HandleFunc("DELETE /api/v1/asset-fields/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteAssetField(assetSvc, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/assets", g.requireAuth(handleListAssets(assetSvc)))
 	// B11 (Kapitel 21 Teil B, Nachtrag 284) — "search" ist ein Literal-
 	// Segment und gewinnt automatisch gegen das wildcard {id} unten
@@ -738,6 +750,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/assets/purge-deleted", g.requireVerbGlobal(authz.VerbAdmin, handlePurgeDeletedAssets(assetSvc, options.domainAudit)))
 	mux.HandleFunc("POST /api/v1/assets/{id}/status", g.requireVerbGlobal(authz.VerbOperate, handleUpdateAssetStatus(assetSvc, options.domainAudit)))
 	mux.HandleFunc("PUT /api/v1/assets/{id}/metadata", g.requireVerbGlobal(authz.VerbOperate, handleUpdateAssetMetadata(assetSvc)))
+	mux.HandleFunc("GET /api/v1/assets/{id}/ebucore", g.requireAuth(handleExportAssetEBUCore(assetSvc)))
+	mux.HandleFunc("POST /api/v1/assets/{id}/ebucore", g.requireVerbGlobal(authz.VerbOperate, handleImportAssetEBUCore(assetSvc)))
 	mux.HandleFunc("GET /api/v1/assets/{id}/versions", g.requireAuth(handleListAssetVersions(assetSvc)))
 	mux.HandleFunc("POST /api/v1/assets/{id}/versions", g.requireVerbGlobal(authz.VerbConfigure, handleCreateAssetVersion(assetSvc, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/asset-versions/{id}", g.requireAuth(handleGetAssetVersion(assetSvc)))

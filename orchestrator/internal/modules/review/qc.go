@@ -251,6 +251,9 @@ func (t *Tools) RunQC(ctx context.Context, file string, prof QCProfile, progress
 		if err := q.videoPass(ctx, file, video, tl, vStart); err != nil {
 			return nil, err
 		}
+		if err := q.gamutPass(ctx, file, video, tl, vStart); err != nil {
+			return nil, err
+		}
 	}
 	// ---- 4. Audio-Analyse je Spur ----
 	for i, a := range audios {
