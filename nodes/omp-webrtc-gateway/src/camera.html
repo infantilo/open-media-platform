@@ -135,7 +135,8 @@
 <!-- Vor dem Verbinden / nach dem Trennen: nur Konfiguration, kein Videobild sichtbar (Nutzerauftrag 2026-09-24). -->
 <div id="setup">
   <div class="row">
-    <label>Kamera <select id="camera"></select></label>
+    <label id="srcRow" hidden><span id="srcLbl"></span> <select id="source"></select></label>
+    <label id="camRow">Kamera <select id="camera"></select></label>
     <label>Auflösung
       <select id="res">
         <option value="640x360">640×360</option>
@@ -228,7 +229,13 @@ const T = (() => {
         "pcam.30510c": "Retourbild-Track: ",
         "pcam.6cb0ea": "Retourbild (WHEP) verbunden",
         "pcam.379ee8": "Bereit",
-        "pcam.580899": "Hinweis: Kamera-Zugriff braucht HTTPS (oder localhost)."
+        "pcam.580899": "Hinweis: Kamera-Zugriff braucht HTTPS (oder localhost).",
+        "pcam.srcLbl": "Quelle",
+        "pcam.srcCam": "Kamera",
+        "pcam.srcScr": "Bildschirm / Fenster / Tab",
+        "pcam.scrDenied": "Die Bildschirmfreigabe wurde abgebrochen oder nicht erlaubt. Bitte erneut versuchen und im Browser-Dialog eine Quelle wählen.",
+        "pcam.scrEnded": "Die Bildschirmfreigabe wurde beendet.",
+        "pcam.scrTrack": "Bildschirm: "
     },
     en: {
         "pcam.f93fb3": "No access to camera/microphone. Please allow it in the browser settings and try again.",
@@ -255,7 +262,13 @@ const T = (() => {
         "pcam.30510c": "Return-feed track: ",
         "pcam.6cb0ea": "Return feed (WHEP) connected",
         "pcam.379ee8": "Ready",
-        "pcam.580899": "Note: camera access needs HTTPS (or localhost)."
+        "pcam.580899": "Note: camera access needs HTTPS (or localhost).",
+        "pcam.srcLbl": "Source",
+        "pcam.srcCam": "Camera",
+        "pcam.srcScr": "Screen / window / tab",
+        "pcam.scrDenied": "Screen sharing was cancelled or not allowed. Please try again and choose a source in the browser dialog.",
+        "pcam.scrEnded": "Screen sharing ended.",
+        "pcam.scrTrack": "Screen: "
     },
   };
   return (k, p) => {
@@ -320,6 +333,7 @@ const clearConnectError = () => { $('setupError').hidden = true; };
 // `#log` erhalten (s. `showConnectError`), nichts geht verloren.
 function friendlyConnectError(e) {
   const name = e && e.name;
+  if (name === 'ScreenDenied') return e.message;
   if (name === 'NotAllowedError' || name === 'SecurityError') {
     return T("pcam.f93fb3");
   }
@@ -418,7 +432,43 @@ async function listCameras() {
   if (cur) sel.value = cur;
 }
 
+// Quelle „Bildschirm“ (Kap. 81.1): nur wo der Browser `getDisplayMedia` kann
+// (Desktop; Handys meist nicht). Die Quelle bleibt vorerst Auswahl der
+// Sendeseite — der WHIP-Weg dahinter ist derselbe wie bei der Kamera.
+const canScreen = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+const isScreen = () => canScreen && $('source').value === 'screen';
+(function initSource() {
+  if (!canScreen) return;
+  $('srcLbl').textContent = T("pcam.srcLbl");
+  $('source').add(new Option(T("pcam.srcCam"), 'camera'));
+  $('source').add(new Option(T("pcam.srcScr"), 'screen'));
+  $('srcRow').hidden = false;
+  $('source').onchange = () => { $('camRow').hidden = isScreen(); };
+})();
+
+async function openScreen() {
+  const [w, h] = $('res').value.split('x').map(Number);
+  const fps = Number($('fps').value);
+  const video = { width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: fps } };
+  try {
+    camStream = await navigator.mediaDevices.getDisplayMedia({ video, audio: $('audio').checked });
+  } catch (e) {
+    if (e && e.name === 'NotAllowedError') throw Object.assign(new Error(T("pcam.scrDenied")), { name: 'ScreenDenied' });
+    throw e;
+  }
+  $('preview').srcObject = camStream;
+  const t = camStream.getVideoTracks()[0];
+  if (t) {
+    t.contentHint = 'detail'; // Text/Folien: Schärfe vor Bewegung
+    log(T("pcam.scrTrack") + t.label + ' ' + JSON.stringify(t.getSettings()));
+    // Der Bediener beendet die Freigabe über die Leiste des Browsers.
+    t.addEventListener('ended', () => { log(T("pcam.scrEnded")); stop(); });
+  }
+  return { w, h, fps };
+}
+
 async function openCamera() {
+  if (isScreen()) return openScreen();
   const [w, h] = $('res').value.split('x').map(Number);
   const fps = Number($('fps').value);
   const video = { width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: fps } };
