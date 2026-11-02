@@ -142,6 +142,8 @@
         <option value="640x360">640×360</option>
         <option value="1280x720" selected>1280×720</option>
         <option value="1920x1080">1920×1080</option>
+        <option value="2560x1440" data-screen="1" hidden disabled>2560×1440</option>
+        <option value="3840x2160" data-screen="1" hidden disabled>3840×2160</option>
       </select>
     </label>
     <label>Bildrate
@@ -230,6 +232,7 @@ const T = (() => {
         "pcam.6cb0ea": "Retourbild (WHEP) verbunden",
         "pcam.379ee8": "Bereit",
         "pcam.580899": "Hinweis: Kamera-Zugriff braucht HTTPS (oder localhost).",
+        "pcam.resNative": "Original (Bildschirmgröße)",
         "pcam.srcLbl": "Quelle",
         "pcam.srcCam": "Kamera",
         "pcam.srcScr": "Bildschirm / Fenster / Tab",
@@ -263,6 +266,7 @@ const T = (() => {
         "pcam.6cb0ea": "Return feed (WHEP) connected",
         "pcam.379ee8": "Ready",
         "pcam.580899": "Note: camera access needs HTTPS (or localhost).",
+        "pcam.resNative": "Original (screen size)",
         "pcam.srcLbl": "Source",
         "pcam.srcCam": "Camera",
         "pcam.srcScr": "Screen / window / tab",
@@ -443,13 +447,29 @@ const isScreen = () => canScreen && $('source').value === 'screen';
   $('source').add(new Option(T("pcam.srcCam"), 'camera'));
   $('source').add(new Option(T("pcam.srcScr"), 'screen'));
   $('srcRow').hidden = false;
-  $('source').onchange = () => { $('camRow').hidden = isScreen(); };
+  $('source').onchange = () => {
+    const scr = isScreen();
+    $('camRow').hidden = scr;
+    // Bildschirm: Originalgröße (ohne Vorgabe) und größere Raster wählbar,
+    // Standard „Original“ — ein Desktop soll nicht auf 720p gedrückt werden.
+    for (const o of $('res').options) if (o.dataset.screen) { o.hidden = !scr; o.disabled = !scr; }
+    if (scr && !$('res').querySelector('option[value="native"]')) {
+      const o = new Option(T("pcam.resNative"), 'native'); o.dataset.screen = '1';
+      $('res').insertBefore(o, $('res').firstChild);
+    }
+    const nat = $('res').querySelector('option[value="native"]');
+    if (nat) { nat.hidden = !scr; nat.disabled = !scr; }
+    if (scr) $('res').value = 'native';
+    else if ($('res').value === 'native' || $('res').selectedOptions[0]?.disabled) $('res').value = '1280x720';
+  };
 })();
 
 async function openScreen() {
-  const [w, h] = $('res').value.split('x').map(Number);
   const fps = Number($('fps').value);
-  const video = { width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: fps } };
+  const native = $('res').value === 'native';
+  const [w, h] = native ? [0, 0] : $('res').value.split('x').map(Number);
+  // „Original“: keine Größenvorgabe, der Browser liefert die Fenster-/Bildschirmgröße.
+  const video = native ? { frameRate: { ideal: fps } } : { width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: fps } };
   try {
     camStream = await navigator.mediaDevices.getDisplayMedia({ video, audio: $('audio').checked });
   } catch (e) {
@@ -464,7 +484,8 @@ async function openScreen() {
     // Der Bediener beendet die Freigabe über die Leiste des Browsers.
     t.addEventListener('ended', () => { log(T("pcam.scrEnded")); stop(); });
   }
-  return { w, h, fps };
+  const st = t && t.getSettings();
+  return { w: (st && st.width) || w, h: (st && st.height) || h, fps };
 }
 
 async function openCamera() {
@@ -625,8 +646,11 @@ async function connect(stream) {
   if (sender) {
     const p = sender.getParameters();
     if (!p.encodings || !p.encodings.length) p.encodings = [{}];
-    p.encodings[0].maxBitrate = 6_000_000;
-    p.degradationPreference = 'maintain-framerate';
+    // Bildschirm: Schärfe vor Bewegung (Text/Folien) und mehr Bitrate; sonst
+    // skaliert der Browser bei knapper Schätzung auf 360p/540p herunter.
+    const scr = isScreen();
+    p.encodings[0].maxBitrate = scr ? 16_000_000 : 6_000_000;
+    p.degradationPreference = scr ? 'maintain-resolution' : 'maintain-framerate';
     try { await sender.setParameters(p); } catch (_) {}
   }
   log(T("pcam.bcd6a2"));
