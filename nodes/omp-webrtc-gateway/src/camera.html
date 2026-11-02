@@ -235,6 +235,10 @@ const T = (() => {
         "pcam.379ee8": "Bereit",
         "pcam.580899": "Hinweis: Kamera-Zugriff braucht HTTPS (oder localhost).",
         "pcam.resNative": "Original (Bildschirmgröße)",
+        "pcam.reconnecting": "Verbinde neu ({p0}/{p1})",
+        "pcam.reconnected": "Verbindung wiederhergestellt",
+        "pcam.reconnectFailed": "Die Verbindung konnte nach mehreren Versuchen nicht wiederhergestellt werden. Bitte neu verbinden.",
+        "pcam.sourceEnded": "Die Quelle (Kamera/Bildschirm) ist nicht mehr verfügbar. Bitte neu verbinden.",
         "pcam.srcLbl": "Quelle",
         "pcam.srcCam": "Kamera",
         "pcam.srcScr": "Bildschirm / Fenster / Tab",
@@ -269,6 +273,10 @@ const T = (() => {
         "pcam.379ee8": "Ready",
         "pcam.580899": "Note: camera access needs HTTPS (or localhost).",
         "pcam.resNative": "Original (screen size)",
+        "pcam.reconnecting": "Reconnecting ({p0}/{p1})",
+        "pcam.reconnected": "Connection restored",
+        "pcam.reconnectFailed": "The connection could not be restored after several attempts. Please connect again.",
+        "pcam.sourceEnded": "The source (camera/screen) is no longer available. Please connect again.",
         "pcam.srcLbl": "Source",
         "pcam.srcCam": "Camera",
         "pcam.srcScr": "Screen / window / tab",
@@ -620,20 +628,22 @@ async function connect(stream) {
   // berapariert) bekommt erst eine kurze Kulanzfrist, damit ein
   // Netzwerk-Blip nicht sofort die ganze Sitzung killt.
   pc.onconnectionstatechange = () => {
+    if (pc !== thisPc) return; // veraltete Verbindung (wird gerade ersetzt)
     $('conn').textContent = pc.connectionState;
     setBadges();
     const state = thisPc.connectionState;
-    if (pc === thisPc && state === 'connected') setConnLost(false);
-    if (state === 'connected' && disconnectGraceTimer) {
-      clearTimeout(disconnectGraceTimer);
-      disconnectGraceTimer = null;
-    } else if (state === 'failed' || state === 'closed') {
+    if (state === 'connected') {
+      if (!reconnecting) setConnLost(false);
       if (disconnectGraceTimer) { clearTimeout(disconnectGraceTimer); disconnectGraceTimer = null; }
-      if (pc === thisPc) stop(false);
+    } else if (state === 'failed') {
+      if (disconnectGraceTimer) { clearTimeout(disconnectGraceTimer); disconnectGraceTimer = null; }
+      startReconnect(thisPc);
+    } else if (state === 'closed') {
+      if (!reconnecting) stop(false);
     } else if (state === 'disconnected') {
-      // Kein sofortiger Abbruch (WLAN-Hänger heilt oft selbst), aber der Knopf bietet sofort das Neuverbinden an;
-      // bleibt es dabei, meldet die ICE-Sitzung `failed` und der Reset oben greift.
-      if (pc === thisPc) setConnLost(true);
+      // Kurzer WLAN-Hänger heilt oft selbst: erst nach einer Kulanzfrist neu verbinden.
+      setConnLost(true);
+      if (!disconnectGraceTimer) disconnectGraceTimer = setTimeout(() => { disconnectGraceTimer = null; startReconnect(thisPc); }, RECONNECT_GRACE_MS);
     }
   };
   await pc.setLocalDescription(await pc.createOffer());
@@ -691,7 +701,7 @@ async function connectRetour() {
 function setBadges() {
   const camBadge = $('camBadge');
   const camLive = pc && pc.connectionState === 'connected';
-  camBadge.textContent = camLive ? 'LIVE' : (pc ? pc.connectionState : T("pcam.379ee8"));
+  camBadge.textContent = camLive ? 'LIVE' : (reconnecting ? T("pcam.reconnecting", { p0: reconnectAttempt, p1: RECONNECT_DELAYS.length }) : (pc ? pc.connectionState : T("pcam.379ee8")));
   camBadge.className = 'badge' + (camLive ? ' live' : '');
   if (hasRetour) {
     const retourBadge = $('retourBadge');
@@ -745,7 +755,67 @@ function setConnLost(lost) {
   $('stop').classList.toggle('stop', !lost);
   $('stop').classList.toggle('primary', lost);
 }
+// Automatische Wiederverbindung (Nutzerwunsch 2026-11-02): bricht die Verbindung ab (WLAN-Wechsel,
+// Funkloch, Gateway-Neustart), versucht die Seite es mehrmals mit wachsendem Abstand — mit demselben
+// Kamera-/Bildschirm-Stream, ohne neue Freigabe. Erst danach geht es zurück zum Setup.
+const RECONNECT_GRACE_MS = 4000;
+const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 15000, 30000];
+let reconnecting = false, reconnectAttempt = 0, reconnectTimer = null;
+function cancelReconnect() {
+  reconnecting = false; reconnectAttempt = 0;
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+}
+function startReconnect(thisPc) {
+  if (pc !== thisPc || reconnecting || !sendStream) return;
+  reconnecting = true; reconnectAttempt = 0;
+  setConnLost(true);
+  tryReconnect();
+}
+async function tryReconnect() {
+  if (!reconnecting) return;
+  if (reconnectAttempt >= RECONNECT_DELAYS.length) {
+    cancelReconnect();
+    await stop(true);
+    showConnectError(T("pcam.reconnectFailed"), 'reconnect gave up');
+    return;
+  }
+  const n = ++reconnectAttempt;
+  $('camBadge').textContent = T("pcam.reconnecting", { p0: n, p1: RECONNECT_DELAYS.length });
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null;
+    if (!reconnecting) return;
+    if (!sendStream || sendStream.getVideoTracks().some((t) => t.readyState === 'ended')) {
+      cancelReconnect();
+      await stop(true);
+      showConnectError(T("pcam.sourceEnded"), 'source ended');
+      return;
+    }
+    try {
+      const old = pc; pc = null; // veraltete Handler ignorieren sich über `pc !== thisPc`
+      if (old) { try { old.close(); } catch (_) {} }
+      if (retourPc) { try { retourPc.close(); } catch (_) {} retourPc = null; }
+      try { await fetch(whipUrl, { method: 'DELETE' }); } catch (_) {}
+      await connect(sendStream);
+      if (hasRetour) { try { await connectRetour(); } catch (e) { log(T("pcam.831575") + (e.message || e)); } }
+      cancelReconnect();
+      setConnLost(false); setBadges();
+      log(T("pcam.reconnected") + ' (' + n + ')');
+    } catch (e) {
+      log('reconnect ' + n + ': ' + (e.message || e));
+      if (/^WHIP 401:/.test(e.message || '')) { // Einladung widerrufen: weiter versuchen ist sinnlos
+        cancelReconnect();
+        await stop(true);
+        showConnectError(friendlyConnectError(e), e.message);
+        return;
+      }
+      if (pc) { try { pc.close(); } catch (_) {} }
+      tryReconnect();
+    }
+  }, RECONNECT_DELAYS[n - 1]);
+}
+
 async function stop(quiet) {
+  cancelReconnect();
   setConnLost(false);
   stopTally();
   drawing = false;
