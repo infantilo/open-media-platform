@@ -48,6 +48,11 @@ if [ -f "$MXL_ENV_FILE" ]; then
   source "$MXL_ENV_FILE"
 fi
 
+# VA-API-Elemente des GStreamer-va-Plugins werden beim Verdrahten automatisch gewählt; der VA-Treiber der VM
+# (virtio_gpu_drv_video.so) stürzt darin ab (Segfault im Thread videotestsrc0, Player/Mischer sterben). Die Nodes
+# rechnen auf der CPU — deshalb diese Elemente nie automatisch wählen (Rang 0; ausdrücklich angefordert bleiben sie nutzbar).
+export GST_PLUGIN_FEATURE_RANK="${GST_PLUGIN_FEATURE_RANK:+$GST_PLUGIN_FEATURE_RANK,}vapostproc:0,vacompositor:0,vadeinterlace:0"
+
 # OMP_STORAGE_SECRET_KEY (Kapitel 21, Nutzerauftrag 2026-09-24: super-
 # admin-verwaltete Storage-Backends, Nachtrag 286) — verschlüsselt die
 # S3/MinIO-Zugangsdaten der Backends in Postgres, muss deshalb bei
