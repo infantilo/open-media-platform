@@ -1126,6 +1126,7 @@ func (l *Launcher) startLocalPre(nodeType, version, customLabel string, extraEnv
 	if pre != nil {
 		pre(id)
 	}
+	extraEnv = withStateKey(extraEnv, id, optionsFrom)
 	label := customLabel
 	if label == "" {
 		label = fmt.Sprintf("%s (%s)", entry.Label, id[:8])
@@ -1825,6 +1826,7 @@ func (l *Launcher) startRemotePre(nodeType, hostID, customLabel string, extraEnv
 	if pre != nil {
 		pre(id)
 	}
+	extraEnv = withStateKey(extraEnv, id, optionsFrom)
 	label := customLabel
 	if label == "" {
 		label = fmt.Sprintf("%s (%s)", nodeType, id[:8])
@@ -2366,6 +2368,32 @@ func (b *tailBuffer) String() string {
 		lines = append(append([]string{}, lines...), b.partial.String())
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// StateKeyEnv ist der Schlüssel, unter dem ein Node eigenen dauerhaften Zustand (z. B. die
+// Einladungen des Handy-Gateways) ablegt. Anders als die Instanz-ID überlebt er einen manuellen
+// Neustart (Stop + Start mit neuer ID): er steht im gespeicherten ExtraEnv der Instanz, und
+// Neustart und Migration geben dieses ExtraEnv an die neue Instanz weiter.
+const StateKeyEnv = "OMP_STATE_KEY"
+
+// withStateKey liefert extraEnv mit gesetztem [StateKeyEnv]. Ein geerbter Wert bleibt. Fehlt er
+// (Erststart, oder Instanz aus der Zeit vor dem Schlüssel), gilt die ID der Vorgängerinstanz
+// (`optionsFrom`, deren Node den Zustand unter seiner Instanz-ID abgelegt hat), sonst die neue ID.
+// Die übergebene Map wird nicht verändert.
+func withStateKey(extraEnv map[string]string, id, optionsFrom string) map[string]string {
+	if extraEnv[StateKeyEnv] != "" {
+		return extraEnv
+	}
+	key := id
+	if optionsFrom != "" {
+		key = optionsFrom
+	}
+	out := make(map[string]string, len(extraEnv)+1)
+	for k, v := range extraEnv {
+		out[k] = v
+	}
+	out[StateKeyEnv] = key
+	return out
 }
 
 // newInstanceID erzeugt eine zufällige ID (gleiches Muster wie

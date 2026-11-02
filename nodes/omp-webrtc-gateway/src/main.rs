@@ -44,12 +44,21 @@ const MONITOR_PAGE: &str = include_str!("monitor.html");
 
 /// Einladungsablage dieser Instanz (Kap. 81): `OMP_WEBRTC_GATEWAY_STATE_DIR`,
 /// sonst `.run/webrtc-gateway` relativ zum Arbeitsverzeichnis des Nodes (Dev:
-/// Projektwurzel). Eine Datei je Instanz und Richtung, damit mehrere Gateways
-/// sich nicht überschreiben; ohne Instanz-ID `default`.
-fn invite_store(direction: &str) -> invite::InviteStore {
+/// Projektwurzel). Eine Datei je Zustandsschlüssel und Richtung. Der Schlüssel
+/// ist `OMP_STATE_KEY` (setzt der Orchestrator; bleibt bei einem manuellen
+/// Neustart mit neuer Instanz-ID gleich), sonst `OMP_INSTANCE_ID`, sonst
+/// `default`. Räumt beim Start Dateien anderer Instanzen weg, die länger als
+/// 90 Tage unverändert sind (`OMP_WEBRTC_GATEWAY_INVITE_KEEP_DAYS`).
+fn invite_store(direction: &str) -> Arc<invite::InviteStore> {
     let dir = env_or("OMP_WEBRTC_GATEWAY_STATE_DIR", ".run/webrtc-gateway");
-    let id = std::env::var("OMP_INSTANCE_ID").ok().filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).unwrap_or_else(|| "default".into());
-    invite::InviteStore::persistent(std::path::Path::new(&dir).join(format!("invites-{direction}-{id}.json")))
+    let safe = |v: String| Some(v).filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+    let key = std::env::var("OMP_STATE_KEY").ok().and_then(safe)
+        .or_else(|| std::env::var("OMP_INSTANCE_ID").ok().and_then(safe))
+        .unwrap_or_else(|| "default".into());
+    let days: u64 = env_or("OMP_WEBRTC_GATEWAY_INVITE_KEEP_DAYS", "90").parse().unwrap_or(90);
+    let store = Arc::new(invite::InviteStore::persistent(std::path::Path::new(&dir).join(format!("invites-{direction}-{key}.json"))));
+    invite::spawn_housekeeping(store.clone(), Duration::from_secs(days.max(1) * 24 * 3600));
+    store
 }
 
 fn env_or(key: &str, fallback: &str) -> String {
@@ -376,7 +385,7 @@ async fn run_camera(common: Common) -> Result<(), Box<dyn std::error::Error + Se
         flow_id: flow_id.clone(),
         audio_flow_id: audio_flow_id.clone(),
         gateway: gateway.clone(),
-        invites: Arc::new(invite_store("camera")),
+        invites: invite_store("camera"),
         active_token: Mutex::new(None),
         // Remote-Nutzer sollen Auflösung/Bildrate schon passend zum
         // Gateway-Betrieb vorgewählt vorfinden (Nutzerwunsch 2026-10-05).
@@ -892,7 +901,7 @@ async fn run_monitor(common: Common) -> Result<(), Box<dyn std::error::Error + S
         audio_connection,
         connected_video,
         connected_audio,
-        invites: Arc::new(invite_store("monitor")),
+        invites: invite_store("monitor"),
         active_token: Mutex::new(None),
     });
 

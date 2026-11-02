@@ -154,6 +154,55 @@ impl InviteStore {
     }
 }
 
+/// Kehrdienst (Kap. 81): löscht in `dir` Einladungsdateien (`invites-*.json`,
+/// auch liegengebliebene `.json.tmp`) anderer Instanzen, die seit `max_age`
+/// nicht verändert wurden. Die eigene Datei (`keep`) bleibt immer. Gibt die
+/// Zahl der gelöschten Dateien zurück. Laufende Instanzen halten ihre Datei
+/// frisch (s. [`spawn_housekeeping`]), sie werden also nicht erwischt.
+pub fn sweep_stale(dir: &std::path::Path, keep: &std::path::Path, max_age: std::time::Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    let now = SystemTime::now();
+    let mut removed = 0;
+    for e in entries.flatten() {
+        let path = e.path();
+        let name = e.file_name().to_string_lossy().into_owned();
+        let ours = name.starts_with("invites-") && (name.ends_with(".json") || name.ends_with(".json.tmp"));
+        if !ours || path == keep {
+            continue;
+        }
+        let old = e
+            .metadata()
+            .ok()
+            .filter(|m| m.is_file())
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| now.duration_since(t).ok())
+            .is_some_and(|age| age > max_age);
+        if old && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// Räumt beim Start alte Dateien anderer Instanzen weg und schreibt die eigene
+/// Datei danach täglich neu, damit ihr Änderungsdatum frisch bleibt (sonst
+/// würde eine lange laufende, unveränderte Instanz von der Aufräumung einer
+/// anderen erwischt). Nur mit Ablage; sonst ohne Wirkung.
+pub fn spawn_housekeeping(store: std::sync::Arc<InviteStore>, max_age: std::time::Duration) {
+    let Some(file) = store.file.clone() else { return };
+    if let Some(dir) = file.parent() {
+        let n = sweep_stale(dir, &file, max_age);
+        if n > 0 {
+            eprintln!("omp-webrtc-gateway: {n} alte Einladungsdatei(en) in {} aufgeräumt", dir.display());
+        }
+    }
+    let _ = std::thread::Builder::new().name("invite-housekeeping".into()).spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(24 * 3600));
+        let snapshot = store.list();
+        store.save(&snapshot);
+    });
+}
+
 fn parse_invites(v: &Value) -> Vec<Invite> {
     v.get("invites")
         .and_then(Value::as_array)
@@ -528,5 +577,29 @@ mod tests {
         std::fs::write(&file, br#"{"invites":[{"token":"","label":"x"}]}"#).unwrap();
         assert!(InviteStore::persistent(file.clone()).list().is_empty());
         let _ = std::fs::remove_dir_all(file.parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn sweep_removes_only_old_foreign_invite_files() {
+        let dir = std::env::temp_dir().join(format!("omp-invite-sweep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let keep = dir.join("invites-camera-eigene.json");
+        let old = dir.join("invites-camera-alt.json");
+        let old_tmp = dir.join("invites-monitor-alt.json.tmp");
+        let young = dir.join("invites-camera-jung.json");
+        let other = dir.join("etwas-anderes.json");
+        for f in [&keep, &old, &old_tmp, &young, &other] {
+            std::fs::write(f, b"{}").unwrap();
+        }
+        let ancient = SystemTime::now() - std::time::Duration::from_secs(200 * 24 * 3600);
+        for f in [&keep, &old, &old_tmp, &other] {
+            std::fs::File::options().write(true).open(f).unwrap().set_modified(ancient).unwrap();
+        }
+        let n = sweep_stale(&dir, &keep, std::time::Duration::from_secs(90 * 24 * 3600));
+        assert_eq!(n, 2);
+        assert!(keep.exists() && young.exists() && other.exists());
+        assert!(!old.exists() && !old_tmp.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
