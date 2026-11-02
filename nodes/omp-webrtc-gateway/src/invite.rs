@@ -11,7 +11,11 @@
 //! **Neues Modell:** ein In-Memory-Satz aus Einladungs-Tokens (128-Bit-
 //! Zufall über [`omp_node_sdk::idgen::new_v4`], keine Persistenz über
 //! einen Neustart hinaus — ein neu gestarteter Node hat bewusst noch
-//! KEINE gültige Einladung, s. u.). `/whip`/`/whep` (POST **und**
+//! KEINE gültige Einladung, s. u.). **Seit Kap. 81 (Nutzerfund
+//! 2026-11-02, "bei einem Handy-Gateway-Neustart gehen die Einladungslinks
+//! verloren") ist das überholt:** [`InviteStore::persistent`] legt den
+//! Satz in einer Datei (Rechte 0600, atomar geschrieben) ab und lädt ihn
+//! beim Start. Ohne Datei (Tests) bleibt es rein im Speicher. `/whip`/`/whep` (POST **und**
 //! DELETE, s. dortige Doku) verlangen jetzt `?token=<Token>` als
 //! Query-Parameter auf dem Pfad selbst — NICHT als `Authorization`-
 //! Header, weil [`omp_node_sdk::ParamStore::extra_route`] keinen
@@ -26,6 +30,7 @@
 //! alte, offene Verhalten. Die Bedienoberfläche (`uibundle.rs`)
 //! erzeugt neue Einladungen samt fertigem Link + QR-Code.
 
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -46,11 +51,64 @@ pub struct Invite {
 /// Verwaltet den Satz gültiger Einladungs-Tokens dieser Node-Instanz.
 pub struct InviteStore {
     invites: Mutex<Vec<Invite>>,
+    /// Ablage für den Satz; `None` = nur im Speicher.
+    file: Option<PathBuf>,
 }
 
 impl InviteStore {
     pub fn new() -> Self {
-        Self { invites: Mutex::new(Vec::new()) }
+        Self { invites: Mutex::new(Vec::new()), file: None }
+    }
+
+    /// Wie [`Self::new`], aber mit Ablage in `file`: lädt vorhandene
+    /// Einladungen und schreibt jede Änderung zurück. Eine fehlende Datei
+    /// ist ein leerer Satz; eine unlesbare/kaputte Datei wird gemeldet und
+    /// NICHT überschrieben, solange nichts geändert wird (sicher-per-Default
+    /// bleibt: dann gibt es eben keine Einladung).
+    pub fn persistent(file: PathBuf) -> Self {
+        let invites = match std::fs::read(&file) {
+            Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
+                Ok(v) => parse_invites(&v),
+                Err(e) => {
+                    eprintln!("omp-webrtc-gateway: Einladungsdatei {} ist kaputt, ignoriert: {e}", file.display());
+                    Vec::new()
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => {
+                eprintln!("omp-webrtc-gateway: Einladungsdatei {} nicht lesbar: {e}", file.display());
+                Vec::new()
+            }
+        };
+        Self { invites: Mutex::new(invites), file: Some(file) }
+    }
+
+    /// Schreibt den Satz atomar (Nachbardatei + Umbenennen), Rechte 0600,
+    /// weil die Tokens Zugangsdaten sind.
+    fn save(&self, invites: &[Invite]) {
+        let Some(path) = &self.file else { return };
+        let doc = serde_json::json!({
+            "invites": invites.iter().map(|i| serde_json::json!({
+                "token": i.token, "label": i.label, "createdAtMs": i.created_at_ms
+            })).collect::<Vec<_>>()
+        });
+        let result = (|| -> std::io::Result<()> {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            if let Some(dir) = path.parent() {
+                if !dir.as_os_str().is_empty() {
+                    std::fs::create_dir_all(dir)?;
+                }
+            }
+            let tmp = path.with_extension("json.tmp");
+            let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
+            f.write_all(doc.to_string().as_bytes())?;
+            f.sync_all()?;
+            std::fs::rename(&tmp, path)
+        })();
+        if let Err(e) = result {
+            eprintln!("omp-webrtc-gateway: Einladungen nicht gespeichert ({}): {e}", path.display());
+        }
     }
 
     /// Erzeugt eine neue Einladung mit optionalem Label (z. B. "Kamera
@@ -60,7 +118,9 @@ impl InviteStore {
         let token = omp_node_sdk::idgen::new_v4();
         let created_at_ms = now_ms();
         let invite = Invite { token, label, created_at_ms };
-        self.invites.lock().expect("lock poisoned").push(invite.clone());
+        let mut guard = self.invites.lock().expect("lock poisoned");
+        guard.push(invite.clone());
+        self.save(&guard);
         invite
     }
 
@@ -75,7 +135,11 @@ impl InviteStore {
         let mut guard = self.invites.lock().expect("lock poisoned");
         let before = guard.len();
         guard.retain(|i| i.token != token);
-        guard.len() != before
+        let removed = guard.len() != before;
+        if removed {
+            self.save(&guard);
+        }
+        removed
     }
 
     /// Prüft einen von `/whip`/`/whep` mitgegebenen Token — leerer/
@@ -88,6 +152,27 @@ impl InviteStore {
         }
         self.invites.lock().expect("lock poisoned").iter().any(|i| i.token == token)
     }
+}
+
+fn parse_invites(v: &Value) -> Vec<Invite> {
+    v.get("invites")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| {
+                    let token = x.get("token")?.as_str()?.to_string();
+                    if token.is_empty() {
+                        return None;
+                    }
+                    Some(Invite {
+                        token,
+                        label: x.get("label").and_then(Value::as_str).unwrap_or_default().to_string(),
+                        created_at_ms: x.get("createdAtMs").and_then(Value::as_u64).unwrap_or(0),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn now_ms() -> u64 {
@@ -397,5 +482,51 @@ mod tests {
     fn route_unknown_path_returns_none() {
         let store = InviteStore::new();
         assert!(route(&store, "GET", "/something-else", b"", |_, _| {}).is_none());
+    }
+
+    fn temp_file(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("omp-invite-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir.join("sub").join("invites.json")
+    }
+
+    #[test]
+    fn persistent_store_survives_restart_and_revoke() {
+        let file = temp_file("roundtrip");
+        let a = InviteStore::persistent(file.clone());
+        let one = a.create("Kamera 1".into());
+        let two = a.create("Kamera 2".into());
+        drop(a);
+
+        let b = InviteStore::persistent(file.clone());
+        assert!(b.is_valid(&one.token) && b.is_valid(&two.token));
+        let listed = b.list();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].label, "Kamera 1");
+        assert_eq!(listed[0].created_at_ms, one.created_at_ms);
+        assert!(b.revoke(&one.token));
+        drop(b);
+
+        let c = InviteStore::persistent(file.clone());
+        assert!(!c.is_valid(&one.token) && c.is_valid(&two.token));
+
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(file.parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn persistent_store_with_broken_or_missing_file_starts_empty() {
+        let file = temp_file("broken");
+        assert!(InviteStore::persistent(file.clone()).list().is_empty());
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, b"{kaputt").unwrap();
+        let s = InviteStore::persistent(file.clone());
+        assert!(s.list().is_empty());
+        assert!(!s.is_valid(""));
+        // Leere Tokens aus einer Datei werden nie gültig.
+        std::fs::write(&file, br#"{"invites":[{"token":"","label":"x"}]}"#).unwrap();
+        assert!(InviteStore::persistent(file.clone()).list().is_empty());
+        let _ = std::fs::remove_dir_all(file.parent().unwrap().parent().unwrap());
     }
 }

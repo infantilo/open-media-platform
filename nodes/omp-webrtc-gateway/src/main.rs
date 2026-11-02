@@ -42,6 +42,16 @@ use serde_json::Value;
 const CAMERA_PAGE: &str = include_str!("camera.html");
 const MONITOR_PAGE: &str = include_str!("monitor.html");
 
+/// Einladungsablage dieser Instanz (Kap. 81): `OMP_WEBRTC_GATEWAY_STATE_DIR`,
+/// sonst `.run/webrtc-gateway` relativ zum Arbeitsverzeichnis des Nodes (Dev:
+/// Projektwurzel). Eine Datei je Instanz und Richtung, damit mehrere Gateways
+/// sich nicht überschreiben; ohne Instanz-ID `default`.
+fn invite_store(direction: &str) -> invite::InviteStore {
+    let dir = env_or("OMP_WEBRTC_GATEWAY_STATE_DIR", ".run/webrtc-gateway");
+    let id = std::env::var("OMP_INSTANCE_ID").ok().filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).unwrap_or_else(|| "default".into());
+    invite::InviteStore::persistent(std::path::Path::new(&dir).join(format!("invites-{direction}-{id}.json")))
+}
+
 fn env_or(key: &str, fallback: &str) -> String {
     match std::env::var(key) {
         Ok(v) if !v.is_empty() => v,
@@ -366,7 +376,7 @@ async fn run_camera(common: Common) -> Result<(), Box<dyn std::error::Error + Se
         flow_id: flow_id.clone(),
         audio_flow_id: audio_flow_id.clone(),
         gateway: gateway.clone(),
-        invites: Arc::new(invite::InviteStore::new()),
+        invites: Arc::new(invite_store("camera")),
         active_token: Mutex::new(None),
         // Remote-Nutzer sollen Auflösung/Bildrate schon passend zum
         // Gateway-Betrieb vorgewählt vorfinden (Nutzerwunsch 2026-10-05).
@@ -882,7 +892,7 @@ async fn run_monitor(common: Common) -> Result<(), Box<dyn std::error::Error + S
         audio_connection,
         connected_video,
         connected_audio,
-        invites: Arc::new(invite::InviteStore::new()),
+        invites: Arc::new(invite_store("monitor")),
         active_token: Mutex::new(None),
     });
 
