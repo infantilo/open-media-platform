@@ -647,7 +647,7 @@ fn item_meta_to_json(id: &str, m: &ItemMeta) -> Value {
     if let Some(f) = &m.media_ref.fallback_file {
         v["fallbackFile"] = serde_json::json!(f);
     }
-    for (k, val) in [("icon", &m.media_ref.icon), ("color", &m.media_ref.color), ("note", &m.media_ref.note), ("adClass", &m.media_ref.ad_class), ("audioMapping", &m.media_ref.audio_mapping)] {
+    for (k, val) in [("icon", &m.media_ref.icon), ("color", &m.media_ref.color), ("note", &m.media_ref.note), ("adClass", &m.media_ref.ad_class), ("audioMapping", &m.media_ref.audio_mapping), ("endType", &m.media_ref.end_type)] {
         if !val.is_empty() {
             v[k] = serde_json::json!(val);
         }
@@ -723,6 +723,8 @@ struct AutomationState {
     audio_plan_b: Value,
     audio_groups: Value,
     audio_mappings: Value,
+    /// Nach „Manual Hold“/manuellem Start gecuedes Event, das auf den Operator wartet (nur gültig, solange nichts on air ist).
+    held_cue: Option<String>,
     /// Item-ID, die zuletzt tatsächlich per `take_on_targets` remote live
     /// geschaltet wurde (C18-Fund, `ARCHITECTURE.md` §24.3) — bewusst
     /// **nicht** aus `playlist.on_air()` abgeleitet: erreicht `advance()`
@@ -850,6 +852,7 @@ impl AutomationState {
             audio_plan_b: Value::Null,
             audio_groups: Value::Array(vec![]),
             audio_mappings: Value::Array(vec![]),
+            held_cue: None,
             last_live_item_id: None,
             carts: Vec::new(),
             cart_follow: HashMap::new(),
@@ -1216,6 +1219,8 @@ impl AutomationStore {
         // eines Prädikat-Parameters an `advance()` selbst. Im `Hold`-Modus
         // erübrigt sich das: `advance()` rückt dort ohnehin nie automatisch
         // vor, unabhängig vom `startType`.
+        // „Manual Hold“ am Ende des laufenden Events: wie ein manueller Start des Nachfolgers behandeln.
+        let end_hold = state.playlist.current_index().and_then(|i| state.playlist.items().get(i)).and_then(|id| state.metadata.get(id)).is_some_and(|m| m.media_ref.end_type == "manual");
         if state.playlist.mode() != Mode::Hold
             && let Some(next_id) = state.playlist.peek_next().map(str::to_string)
         {
@@ -1234,7 +1239,7 @@ impl AutomationStore {
                 .get(&next_id)
                 .map(|m| fixtime_is_in_future(m, chrono::Utc::now().timestamp(), seconds_since_midnight_local()))
                 .unwrap_or(false);
-            if is_manual || waits_for_clock {
+            if is_manual || waits_for_clock || end_hold {
                 // Cued, aber NICHT auf Sendung genommen — sichtbar als
                 // "als Nächstes fällig, wartet auf TAKE" statt einfach
                 // am Listenende zu verharren. Kein Remote-Aufruf: das
@@ -1244,6 +1249,7 @@ impl AutomationStore {
                     let _ = state.playlist.cue(index);
                 }
                 state.onair_since = None;
+                state.held_cue = Some(next_id);
                 return Ok(());
             }
         }
@@ -1801,6 +1807,11 @@ impl AutomationStore {
             && !readiness::AD_CLASSES.contains(&c)
         {
             return Err(format!("adClass „{c}\u{201c} unbekannt ({})", readiness::AD_CLASSES.join(" | ")));
+        }
+        if let Some(e) = p.end_type.as_deref()
+            && !matches!(e, "" | "sequence" | "manual")
+        {
+            return Err(format!("endType „{e}\u{201c} unbekannt (sequence | manual)"));
         }
         let start_type = match p.start_type.as_deref() {
             None => None,
@@ -2381,6 +2392,9 @@ struct ItemPatch {
     ad_class: Option<String>,
     #[serde(rename = "audioMapping")]
     audio_mapping: Option<String>,
+    /// `""`/`sequence` = weiter nach Plan, `manual` = Manual Hold am Ende.
+    #[serde(rename = "endType")]
+    end_type: Option<String>,
     media: Option<MediaPatch>,
     #[serde(rename = "durationMs")]
     duration_ms: Option<u64>,
@@ -2441,6 +2455,9 @@ fn apply_item_patch(
         if let Some(v) = val {
             *field = v;
         }
+    }
+    if let Some(e) = p.end_type.as_deref() {
+        meta.media_ref.end_type = if e == "manual" { "manual".to_string() } else { String::new() };
     }
     if let Some((media, asset)) = new_media {
         meta.media = media;
@@ -3849,6 +3866,8 @@ impl ParamStore for AutomationStore {
                 readonly: false,
             },
             ParamSpec { name: "audioRouting".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            // Wartet die Sendung auf den Operator (HOLD-Event, Manual Hold am Ende, manueller Start des Nachfolgers)? → Next blinkt.
+            ParamSpec { name: "operatorWait".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             // Kapitel 37: automatische Werbeblock-Kennzeichnung (SCTE-35/-104 über `omp-scte35`).
             ParamSpec { name: "adBreakEnabled".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: false },
             ParamSpec { name: "adBreakTarget".to_string(), kind: ParamType::String, unit: None, range: None, readonly: false },
@@ -4369,6 +4388,7 @@ impl ParamStore for AutomationStore {
             "targetMixerLabel" => Some(serde_json::json!(state.target_mixer_label)),
             "targetGraphicsLabel" => Some(serde_json::json!(state.target_graphics_label)),
             "targetAudioMixerLabel" => Some(serde_json::json!(state.target_audio_mixer_label)),
+            "operatorWait" => Some(operator_wait(&state)),
             "audioRouting" => Some(serde_json::json!(self.audio_status.lock().expect("lock poisoned").clone())),
             "adBreakEnabled" => Some(serde_json::json!(state.ad.enabled)),
             "adBreakTarget" => Some(serde_json::json!(state.ad.target)),
@@ -4858,6 +4878,36 @@ impl AutomationStore {
 
         omp_node_sdk::RawResponse { status: 200, content_type: "application/json", body }
     }
+}
+
+/// Wartet die Sendung auf eine Bedienung? `kind`: `hold` (HOLD-Event läuft), `endHold` (laufendes Event hat „Manual Hold“
+/// am Ende), `manualStart` (Nachfolger startet nur manuell), `cued` (nach Hold/Manual gecued, wartet auf Take/Next).
+/// `remainingMs` = Restlaufzeit des laufenden Events bis zu diesem Punkt (sonst `null`) für den optionalen Zähler.
+fn operator_wait(state: &AutomationState) -> Value {
+    let none = serde_json::json!({"kind": "", "remainingMs": null});
+    if state.active_cart.is_some() {
+        return none;
+    }
+    let meta_at = |id: &str| state.metadata.get(id);
+    let cur = state.playlist.current_index().and_then(|i| state.playlist.items().get(i)).cloned();
+    if !state.playlist.on_air() {
+        let waiting = cur.as_deref().is_some_and(|id| state.held_cue.as_deref() == Some(id) || meta_at(id).is_some_and(|m| m.start_type == StartType::Manual));
+        return if waiting { serde_json::json!({"kind": "cued", "itemId": cur, "remainingMs": null}) } else { none };
+    }
+    let Some(cur_id) = cur else { return none };
+    let Some(m) = meta_at(&cur_id) else { return none };
+    let remaining = (m.duration_ms > 0).then(|| state.onair_since.map(|s| m.duration_ms.saturating_sub(s.elapsed().as_millis() as u64))).flatten();
+    if matches!(m.media, ItemMedia::Hold) {
+        return serde_json::json!({"kind": "hold", "itemId": cur_id, "remainingMs": null});
+    }
+    let next_manual = state.playlist.peek_next().filter(|id| meta_at(id).is_some_and(|n| n.start_type == StartType::Manual));
+    if let Some(n) = next_manual {
+        return serde_json::json!({"kind": "manualStart", "itemId": n, "remainingMs": remaining});
+    }
+    if m.media_ref.end_type == "manual" && state.playlist.peek_next().is_some() {
+        return serde_json::json!({"kind": "endHold", "itemId": cur_id, "remainingMs": remaining});
+    }
+    none
 }
 
 fn current_or_cued_id(state: &AutomationState, want_onair: bool) -> String {
@@ -6831,6 +6881,28 @@ mod patch_tests {
         assert_eq!(Transition::parse("nope"), None);
         assert_eq!(serde_json::to_value(Transition::FadeCut).unwrap(), "fadecut");
         assert_eq!(serde_json::from_value::<Transition>(serde_json::json!("cutfade")).unwrap(), Transition::CutFade);
+    }
+
+    #[test]
+    fn end_type_manual_is_patched_shown_and_signals_operator_wait() {
+        let mut st = state_with(&["a", "b"]);
+        assert_eq!(operator_wait(&st)["kind"], "");
+        apply(&mut st, "a", serde_json::json!({"endType": "manual"})).unwrap();
+        assert_eq!(item_meta_to_json("a", &st.metadata["a"])["endType"], "manual");
+        st.playlist.cue(0).unwrap();
+        st.playlist.take().unwrap();
+        st.onair_since = Some(Instant::now());
+        assert_eq!(operator_wait(&st)["kind"], "endHold");
+        assert!(operator_wait(&st)["remainingMs"].as_u64().is_some());
+        apply(&mut st, "a", serde_json::json!({"endType": "sequence"})).unwrap();
+        assert!(item_meta_to_json("a", &st.metadata["a"]).get("endType").is_none());
+        assert_eq!(operator_wait(&st)["kind"], "");
+        st.metadata.get_mut("b").unwrap().start_type = StartType::Manual;
+        assert_eq!(operator_wait(&st)["kind"], "manualStart");
+        st.metadata.get_mut("a").unwrap().media = ItemMedia::Hold;
+        assert_eq!(operator_wait(&st)["kind"], "hold");
+        let p: ItemPatch = serde_json::from_value(serde_json::json!({"endType": "x"})).unwrap();
+        assert!(p.end_type.is_some());
     }
 
     #[test]

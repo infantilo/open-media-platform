@@ -62,6 +62,11 @@ export class AutoRasterAdapter implements StreamDeckAdapter {
   #last: AutoLayout | null = null;
   #ready = false;
   #ctx: LayoutContext | null = null;
+  /** Node meldet `operatorWait` (Playout-Automation): wartet die Sendung auf den Operator, blinkt die „next“-Taste. */
+  #hasWait = false;
+  #waiting = false;
+  #phase = false;
+  #blink: ReturnType<typeof setInterval> | null = null;
   /** Vom Broker gesetzt: Anzeige neu aufbauen. */
   onChange: () => void = () => {};
   /** Vom Broker gesetzt: Fehlermeldung. */
@@ -76,6 +81,7 @@ export class AutoRasterAdapter implements StreamDeckAdapter {
       const d = await this.io.descriptor();
       this.#items = buildItems(d);
       this.#dials = buildDialItems(d);
+      this.#hasWait = d.parameters.some((p) => p.name === "operatorWait");
       this.#ready = true;
       await this.refresh();
     } catch (e) {
@@ -88,6 +94,12 @@ export class AutoRasterAdapter implements StreamDeckAdapter {
     this.#ctx = ctx;
     if (!this.#ready) return { keys: [[{ label: "…", dim: true }]] };
     this.#last = layoutAuto(this.#items, this.#dials, this.#values, ctx.cols, ctx.rows, ctx.dials, ctx.page);
+    if (this.#waiting) {
+      this.#last.cells.forEach((row, r) => row.forEach((it, c) => {
+        const k = this.#last!.keys[r][c];
+        if (k && it?.kind === "trigger" && it.name === "next") this.#last!.keys[r][c] = { ...k, state: this.#phase ? "cue" : "off", sub: "!" };
+      }));
+    }
     return this.#last;
   }
 
@@ -143,7 +155,35 @@ export class AutoRasterAdapter implements StreamDeckAdapter {
         }
       } catch { /* einzelner Wert nicht lesbar: Taste bleibt gedimmt */ }
     }));
+    if (this.#hasWait) {
+      try {
+        const raw = await this.io.getParam("operatorWait");
+        const w = typeof raw === "string" ? JSON.parse(raw) : raw;
+        this.#setWaiting(!!(w && typeof w === "object" && (w as { kind?: string }).kind));
+      } catch { /* kein Blinken bei unlesbarem Wert */ }
+    }
     if (changed) this.onChange();
+  }
+
+  #setWaiting(on: boolean) {
+    if (on === this.#waiting) return;
+    this.#waiting = on;
+    this.#phase = on;
+    if (on) {
+      this.#blink = globalThis.setInterval(() => {
+        this.#phase = !this.#phase;
+        this.onChange();
+      }, 500);
+    } else if (this.#blink) {
+      clearInterval(this.#blink);
+      this.#blink = null;
+    }
+    this.onChange();
+  }
+
+  dispose(): void {
+    if (this.#blink) clearInterval(this.#blink);
+    this.#blink = null;
   }
 
   get context() {

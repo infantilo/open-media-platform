@@ -250,6 +250,7 @@ const T = (() => {
       "ed.startSeq": "⏭ Sequenz (nach dem Vorgänger)",
       "ed.startManual": "✋ Manuell (Cue + Take)",
       "ed.startFix": "⏰ Fixzeit (feste Uhrzeit)",
+      "ed.end": "Ende", "ed.endSeq": "⏭ Weiter nach Plan", "ed.endHold": "⏸ HOLD (Manual Hold: nach Ablauf anhalten, Operator schaltet mit Next weiter)",
       "ed.ramp": "Rampe",
       "ed.rampPh": "Frames 1–250, leer = Mixer-Rate",
       "ed.transition": "Übergang",
@@ -342,7 +343,7 @@ const T = (() => {
       "cart.noSource": "Quelle fehlt", "cart.pickIcon": "Symbol wählen …", "cart.manager.edit": "Bearbeiten",
       "ic.title": "Symbol wählen", "ic.none": "Kein Symbol", "ic.custom": "Eigenes Zeichen", "ic.use": "Übernehmen", "ic.playback": "Wiedergabe", "ic.onair": "Sendung", "ic.audio": "Ton", "ic.notice": "Hinweis", "ic.misc": "Sonstiges",
       "fixCountdown": "⏰ {hms} „{label}“ in {t}",
-      "cntLive": "Nächstes Live-Event", "cntFix": "Nächstes Fix-Event", "cntMiss": "Nächstes Event ohne Quelle", "cntShow": "Zähler anzeigen:",
+      "cntLive": "Nächstes Live-Event", "cntMan": "Nächstes manuelles Event", "waitHold": "HOLD: wartet auf Next", "waitMan": "{label} startet manuell", "waitEnd": "Manual Hold nach „{label}“", "waitCued": "{label} wartet auf Take/Next", "cntFix": "Nächstes Fix-Event", "cntMiss": "Nächstes Event ohne Quelle", "cntShow": "Zähler anzeigen:",
       "cntIn": "{label} in {t}",
       "planWarn.one": "⚠ 1 Plan-Warnung (Überlappung, Lücke oder unbestimmter Start — Details am ⚠ in der Zeitspalte)",
       "planWarn.many": "⚠ {n} Plan-Warnungen (Überlappung, Lücke oder unbestimmter Start — Details am ⚠ in der Zeitspalte)",
@@ -596,6 +597,7 @@ const T = (() => {
       "ed.startSeq": "⏭ Sequence (after the previous event)",
       "ed.startManual": "✋ Manual (cue + take)",
       "ed.startFix": "⏰ Fixed time (clock time)",
+      "ed.end": "End", "ed.endSeq": "⏭ Continue as planned", "ed.endHold": "⏸ HOLD (manual hold: stop after the event, operator continues with Next)",
       "ed.ramp": "Ramp",
       "ed.rampPh": "Frames 1–250, empty = mixer rate",
       "ed.transition": "Transition",
@@ -688,7 +690,7 @@ const T = (() => {
       "cart.noSource": "source missing", "cart.pickIcon": "Choose symbol …", "cart.manager.edit": "Edit",
       "ic.title": "Choose symbol", "ic.none": "No symbol", "ic.custom": "Custom character", "ic.use": "Apply", "ic.playback": "Playback", "ic.onair": "On air", "ic.audio": "Audio", "ic.notice": "Notice", "ic.misc": "Other",
       "fixCountdown": "⏰ {hms} “{label}” in {t}",
-      "cntLive": "Next live event", "cntFix": "Next fixed event", "cntMiss": "Next event without source", "cntShow": "Show counters:",
+      "cntLive": "Next live event", "cntMan": "Next manual event", "waitHold": "HOLD: waiting for Next", "waitMan": "{label} starts manually", "waitEnd": "Manual hold after “{label}”", "waitCued": "{label} waits for Take/Next", "cntFix": "Next fixed event", "cntMiss": "Next event without source", "cntShow": "Show counters:",
       "cntIn": "{label} in {t}",
       "planWarn.one": "⚠ 1 plan warning (overlap, gap or undetermined start — details at the ⚠ in the time column)",
       "planWarn.many": "⚠ {n} plan warnings (overlap, gap or undetermined start — details at the ⚠ in the time column)",
@@ -1049,6 +1051,8 @@ const STYLE = `
   .cart-btn .ci { font-size: 18px; } .cart-btn .cl { font-size: 11px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cart-btn.firing { outline: 2px solid #ff5050; animation: pulse 1s infinite; }
   @keyframes pulse { 50% { opacity: .6; } }
+  @keyframes nextblink { 50% { background: #c8860a; border-color: #ffcf5a; color: #000; } }
+  button.blink { animation: nextblink 0.9s steps(1, end) infinite; font-weight: bold; }
   .cart-banner { display: none; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-radius: 4px; background: #7a1f1f; margin-bottom: 8px; }
   .cart-banner.show { display: flex; }
   /* Dialoge */
@@ -1173,8 +1177,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     const connectedChip = h("span", { class: "chip" }, T("notConnected"));
     const persistChip = h("span", { class: "chip" }, T("channelLabel", { name: "…" }));
     // Zähler bis zum nächsten Live-/Fix-/Quelle-fehlt-Event; jeder einzeln abschaltbar (nur in diesem Browser gemerkt).
-    const CNT_KINDS = ["live", "fix", "miss"];
-    const cntOn = (() => { try { return { live: true, fix: true, miss: true, ...JSON.parse(localStorage.getItem("omp-pa-counters") || "{}") }; } catch { return { live: true, fix: true, miss: true }; } })();
+    const CNT_KINDS = ["live", "fix", "miss", "man"];
+    const cntOn = (() => { try { return { live: true, fix: true, miss: true, man: true, ...JSON.parse(localStorage.getItem("omp-pa-counters") || "{}") }; } catch { return { live: true, fix: true, miss: true, man: true }; } })();
     const cntEls = Object.fromEntries(CNT_KINDS.map((k) => [k, h("span", { class: "chip blue", style: "display:none" })]));
     const nextFixEl = h("div", { class: "info", style: "display:flex;gap:8px;flex-wrap:wrap;align-items:center" },
       ...CNT_KINDS.map((k) => cntEls[k]),
@@ -1984,7 +1988,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         jumpTarget: item?.jumpTarget || "", assetId: item?.asset?.assetId || "", onMissing: item?.onMissing || "HOLD", fallbackFile: item?.fallbackFile || "",
         requireRelease: item?.requireRelease === true ? "true" : item?.requireRelease === false ? "false" : "",
         durationMs: item ? item.durationMs : cart ? 0 : 5000,
-        startType: item?.startType || "sequence",
+        startType: item?.startType || "sequence", endType: item?.endType || "sequence",
         startLocal: item?.startAt ? new Date(item.startAt).toLocaleString("sv-SE") : item?.fixtimeHms || "",
         transition: item?.transition || "cut", rateFrames: item?.transitionRateFrames ?? "",
         audioCap: item?.audio?.intent?.capability || "",
@@ -2067,6 +2071,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         f.append(...field(T("ed.start"), bindSelect(d, "startType", [["sequence", T("ed.startSeq")], ["manual", T("ed.startManual")], ["fixtime", T("ed.startFix")]], sync)));
         f.append(...startRow);
         sync();
+        if (!cart && d.kind !== "hold" && d.kind !== "jump") f.append(...field(T("ed.end"), bindSelect(d, "endType", [["sequence", T("ed.endSeq")], ["manual", T("ed.endHold")]])));
         const rate = bindText(d, "rateFrames", { placeholder: T("ed.rampPh") });
         const rateRow = field(T("ed.ramp"), rate);
         const syncT = () => { rateRow.forEach((e) => { e.style.display = d.transition && d.transition !== "cut" ? "" : "none"; }); };
@@ -2334,7 +2339,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       };
 
       const buildPatch = () => {
-        const p = { label: d.label.trim(), note: d.note, adClass: d.adClass || "", icon: d.icon.trim(), color: d.color, startType: d.startType, transition: d.transition };
+        const p = { label: d.label.trim(), note: d.note, adClass: d.adClass || "", icon: d.icon.trim(), color: d.color, startType: d.startType, endType: d.endType === "manual" ? "manual" : "", transition: d.transition };
         if (!p.label) throw new Error(T("ed.titleMissing"));
         if (d.startType === "fixtime") {
           const iso = parseStartInput(d.startLocal);
@@ -2345,7 +2350,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         p.children = kids.map(cleanKid);
         p.audioMapping = d.audioMapping || "";
         if (cart) {
-          delete p.startType; delete p.startAt; delete p.transition; delete p.adClass; delete p.transitionRateFrames;
+          delete p.startType; delete p.endType; delete p.startAt; delete p.transition; delete p.adClass; delete p.transitionRateFrames;
           p.follow = block;
         }
         if (item?.audio && d.audioCap !== (item.audio.intent?.capability || "")) {
@@ -2556,7 +2561,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (dragging) return;
       const names = ["items", "currentItemId", "cuedItemId", "mode", "connected", "playheadPositionMs", "currentDurationMs", "assets", "activeCartId", "activeCartRemaining",
         "availableNodes", "targetPlayerALabel", "targetPlayerBLabel", "targetMixerLabel", "targetGraphicsLabel", "targetAudioMixerLabel", "liveChannel", "mediaLibrary", "audioPlans", "audioGroups", "audioMappings",
-        "availableSources", "channelName", "persistence", "schedule", "childEvents", "triggerLog", "channelId", "preflightWindowMin", "defaultFiller", "requireRelease", "foreignStatus", "adBreakEnabled", "adBreakTarget", "adBreakPreRollMs", "adBlocks"];
+        "availableSources", "channelName", "persistence", "schedule", "childEvents", "triggerLog", "channelId", "preflightWindowMin", "defaultFiller", "requireRelease", "foreignStatus", "adBreakEnabled", "adBreakTarget", "adBreakPreRollMs", "adBlocks", "operatorWait"];
       const v = Object.fromEntries(await Promise.all(names.map(async (n) => [n, await getParam(n)])));
       if (dragging) return;
       items = v.items || [];
@@ -2645,6 +2650,15 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       persistChip.className = `chip${/fehlgeschlagen|Konflikt|nicht lesbar|nicht serialisierbar/.test(ptxt) ? " err" : v.channelName ? " blue" : ""}`;
       takeBtn.disabled = !cuedItemId;
       nextBtn.disabled = items.length === 0;
+      const ow = v.operatorWait && v.operatorWait.kind ? v.operatorWait : null;
+      nextBtn.classList.toggle("blink", !!ow);
+      const owItem = ow && items.find((i) => i.id === ow.itemId);
+      const owLabel = owItem ? owItem.label : "";
+      const owText = !ow ? "" : ow.kind === "hold" ? T("waitHold") : ow.kind === "manualStart" ? T("waitMan", { label: owLabel }) : ow.kind === "endHold" ? T("waitEnd", { label: owLabel }) : T("waitCued", { label: owLabel });
+      const owRem = ow && Number.isFinite(ow.remainingMs) ? ` · ${fmtRemain(Math.ceil(ow.remainingMs / 1000))}` : "";
+      nextBtn.title = ow ? `${T("nextTitle")}\n${owText}${owRem}` : T("nextTitle");
+      cntEls.man.textContent = owText ? owText + owRem : "";
+      cntEls.man.style.display = cntOn.man && owText ? "" : "none";
       const refIdx = items.findIndex((i) => i.id === (currentItemId || cuedItemId));
       const hasLive = items.some((i) => i.senderId);
       nextLiveBtn.style.display = hasLive ? "" : "none";

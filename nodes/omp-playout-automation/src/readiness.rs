@@ -116,6 +116,10 @@ pub struct MediaRef {
     /// Kapitel 74.3: Sendefreigabe verlangen (QC grün oder manuell freigegeben). `None` = Standard des Channels.
     #[serde(rename = "requireRelease", default, skip_serializing_if = "Option::is_none")]
     pub require_release: Option<bool>,
+    /// Ende des Events: leer = weiter nach Plan, `manual` = „Manual Hold“ — nach Ablauf der Dauer wird das nächste
+    /// Event nur gecued; der Operator schaltet mit Next/Take weiter (PIPELINE CONTROLLER `endType: manual`).
+    #[serde(rename = "endType", default, skip_serializing_if = "String::is_empty")]
+    pub end_type: String,
 }
 
 /// Auskunft des Eingangs zur Freigabe einer Datei (Kapitel 74.3).

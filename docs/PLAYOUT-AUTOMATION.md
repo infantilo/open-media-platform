@@ -32,6 +32,7 @@ Je Item (Parameter `items`, flaches JSON; Alt-Snapshots laden unverändert):
 | `asset` | Asset-Referenz `{assetId, versionId?, representationType?}` statt Rohdateiname |
 | `durationMs` | Dauer; `0` = endlos (Live/HOLD) |
 | `startType` | `sequence` (folgt dem Vorgänger), `manual` (nur per Operator-Cue+Take), `fixtime` |
+| `endType` | `sequence` (Standard, weiter nach Plan) oder `manual` („Manual Hold“: nach Ablauf wird der Nachfolger nur gecued, der Operator schaltet mit Next/Take weiter). Im Event-Editor unter Zeitverhalten → Ende |
 | `startAt` / `fixtimeHms` | Fixzeit: RFC 3339 mit Offset (→ UTC, DST-sicher, hat Vorrang) bzw. Alt-Form `HH:MM:SS` |
 | `transition`, `transitionRateFrames` | `cut` oder `mix` (Auto-Transition am Mixer) |
 | `onMissing`, `fallbackFile` | Ausfallrichtlinie, s. §9 |
@@ -330,3 +331,7 @@ Der OMP-Adapter-Sidecar `omp-pipeline-controller` bleibt unverändert.
 ## Bildgenaue Grafik-Einblendung (Messung)
 
 Grafik-Kinder gehen mit 300 ms Vorlauf und `atUtcMs` an den Grafik-Node, der den Befehl zur Sollzeit abzüglich `OMP_OGRAF_RENDER_LATENCY_MS` (Standard 110 ms) ausführt. Gemessen am Fill-Flow (`tools/ograf-frame-e2e/probe.py`): sichtbares Bild bei −20…+31 ms um die Sollzeit (Bildlänge 40 ms bei 25 fps). Die Latenz hängt von Rechner, Auflösung und Vorlage ab — nachmessen und die Option anpassen. Der erste Aufruf einer Vorlage nach dem Start ist langsamer (Vorlage wird geladen). Nachmessung 2026-10-30 auf dem Entwicklungsrechner bei laufendem Stack (9 Läufe): 110 ms → Mittel +33 ms (zu spät), 143 ms → Mittel −31 ms (zu früh), Nulldurchgang bei etwa 125 ms; die Streuung von ±50 ms (mehr als ein Bild) bleibt unabhängig vom Wert und stammt vom Renderer unter Last. Der Standard bleibt 110 ms; auf dem Sendehost mit dessen Last nachmessen.
+
+### Hinweis „Operator gefragt“ (Next blinkt)
+
+Der Parameter `operatorWait` (`kind`: `hold` | `endHold` | `manualStart` | `cued`, `remainingMs`) meldet, wenn die Sendung auf eine Bedienung wartet: HOLD-Event läuft, laufendes Event hat Ende `manual`, der Nachfolger startet nur manuell, oder ein dadurch gecuedetes Event wartet auf Take/Next. Die Next-Taste im Panel und am Stream Deck blinkt dann; der optionale Zähler „Nächstes manuelles Event“ (abschaltbar unter „Zähler anzeigen“) zeigt die Restzeit bis dahin.
