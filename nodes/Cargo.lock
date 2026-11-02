@@ -1707,6 +1707,7 @@ name = "omp-srt-gateway"
 version = "0.1.0"
 dependencies = [
  "gstreamer",
+ "gstreamer-app",
  "omp-mediaio",
  "omp-node-sdk",
  "serde_json",

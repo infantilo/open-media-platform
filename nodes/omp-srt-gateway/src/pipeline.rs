@@ -31,6 +31,7 @@ use omp_mediaio::MediaFlow;
 use omp_mediaio::Output;
 use omp_mediaio::st2110::{St2110VideoInput, St2110VideoOutput};
 
+use crate::autobridge::AutoBridge;
 use crate::codec::{self, Codec, EncodeParams, Raster};
 
 /// Vorgaben, wenn nichts konfiguriert ist (bisheriges Verhalten). Jede andere Auflösung und Rate ist per
@@ -66,6 +67,8 @@ pub struct Config {
     pub bitrate_kbps: u32,
     /// 10 Bit (nur komprimiert: H.264 High 10 / HEVC Main 10).
     pub ten_bit: bool,
+    /// Raster automatisch aus dem ankommenden Strom (nur Downlink + komprimiert, `OMP_SRT_GATEWAY_RASTER=auto`).
+    pub auto_raster: bool,
 }
 
 /// Der jeweils eine 2110-Endpunkt, den diese Richtung tatsächlich betreibt
@@ -80,7 +83,22 @@ pub struct Config {
 /// statt erfundener Werte.
 enum ActiveEndpoint {
     Uplink { input: St2110VideoInput, srtsink: gst::Element },
-    Downlink { output: St2110VideoOutput, srtsrc: gst::Element, jitterbuffer: Option<gst::Element> },
+    Downlink { output: DownlinkOutput, srtsrc: gst::Element, jitterbuffer: Option<gst::Element> },
+}
+
+/// Der 2110-Ausgang des Downlinks: fest gebaut oder (Raster automatisch) erst beim ersten Bild.
+enum DownlinkOutput {
+    Fixed(St2110VideoOutput),
+    Auto(Arc<AutoBridge>),
+}
+
+impl DownlinkOutput {
+    fn has_flowed(&self) -> bool {
+        match self {
+            DownlinkOutput::Fixed(o) => o.has_flowed(),
+            DownlinkOutput::Auto(b) => b.has_flowed(),
+        }
+    }
 }
 
 impl ActiveEndpoint {
@@ -108,6 +126,17 @@ fn i32_field(structure: &gst::Structure, name: &str) -> i32 {
 impl PipelineHandle {
     pub fn shutdown(&self) {
         let _ = self.pipeline.set_state(gst::State::Null);
+        if let ActiveEndpoint::Downlink { output: DownlinkOutput::Auto(b), .. } = &self.endpoint {
+            b.shutdown();
+        }
+    }
+
+    /// Bei automatischem Raster: das zuletzt erkannte Raster als Text (z. B. "1920x1080@25/1"), sonst `None`.
+    pub fn detected_raster(&self) -> Option<String> {
+        match &self.endpoint {
+            ActiveEndpoint::Downlink { output: DownlinkOutput::Auto(b), .. } => b.current().map(|(w, h, n, d)| format!("{w}x{h}@{n}/{d}")),
+            _ => None,
+        }
     }
 
     /// "media-ready" (ARCHITECTURE.md §5 Punkt 6): ob der 2110-Endpunkt
@@ -262,7 +291,7 @@ fn build_uplink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<(St2110VideoIn
     Ok((input, srtsink))
 }
 
-fn build_downlink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<(St2110VideoOutput, gst::Element, Option<gst::Element>), String> {
+fn build_downlink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<(DownlinkOutput, gst::Element, Option<gst::Element>), String> {
     let r = cfg.raster;
     let srtsrc = gst::ElementFactory::make("srtsrc")
         .property("uri", &cfg.srt_uri)
@@ -296,7 +325,15 @@ fn build_downlink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<(St2110Video
         (last, None)
     };
 
+    if cfg.auto_raster {
+        if cfg.codec == Codec::Raw {
+            return Err("Automatisches Raster gilt nur für komprimiertes Video (h264/hevc); bei Rohvideo steht das Raster im RTP-Strom nicht fest".to_string());
+        }
+        let bridge = AutoBridge::new(&cfg.st2110_host, cfg.st2110_port, (r.fps_n, r.fps_d));
+        bridge.attach(pipeline, &upstream)?;
+        return Ok((DownlinkOutput::Auto(bridge), srtsrc, jitterbuffer));
+    }
     let output = St2110VideoOutput::new(pipeline, &upstream, &cfg.st2110_host, cfg.st2110_port, r.width, r.height, r.fps_n, r.fps_d)?;
     output.set_active(true);
-    Ok((output, srtsrc, jitterbuffer))
+    Ok((DownlinkOutput::Fixed(output), srtsrc, jitterbuffer))
 }

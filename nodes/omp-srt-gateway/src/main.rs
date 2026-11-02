@@ -13,6 +13,7 @@
 //! nötig. Der generische Parameter-Proxy (A8) bleibt trotzdem nutzbar
 //! (readonly Status-Parameter), nur eben ohne Schreibpfad.
 
+mod autobridge;
 mod codec;
 mod pipeline;
 
@@ -278,6 +279,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "10" => return Err("OMP_SRT_GATEWAY_BIT_DEPTH=10 gilt nur für h264/hevc (Rohvideo über die 2110-Seite ist 8 Bit)".into()),
         other => return Err(format!("OMP_SRT_GATEWAY_BIT_DEPTH={other}: 8 oder 10").into()),
     };
+    // Optional: Raster automatisch aus dem ankommenden Strom (nur Downlink + komprimiert).
+    let auto_raster = matches!(env_or("OMP_SRT_GATEWAY_RASTER", "").to_ascii_lowercase().as_str(), "auto");
+    if auto_raster && (direction != Direction::Downlink || video_codec == codec::Codec::Raw) {
+        return Err("OMP_SRT_GATEWAY_RASTER=auto gilt nur für Downlink mit h264/hevc; beim Uplink und bei Rohvideo muss das Raster angegeben werden (OMP_SRT_GATEWAY_WIDTH/_HEIGHT/_FPS)".into());
+    }
     let cfg = Config {
         direction,
         st2110_host: st2110_host.clone(),
@@ -287,8 +293,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         codec: video_codec,
         bitrate_kbps,
         ten_bit,
+        auto_raster,
     };
-    let video_desc = format!("{} {}×{}@{}/{}{}", video_codec.as_str(), raster.width, raster.height, raster.fps_n, raster.fps_d, if ten_bit { " 10 Bit" } else { "" });
+    let video_desc = if auto_raster {
+        format!("{} Raster automatisch{}", video_codec.as_str(), if ten_bit { " 10 Bit" } else { "" })
+    } else {
+        format!("{} {}×{}@{}/{}{}", video_codec.as_str(), raster.width, raster.height, raster.fps_n, raster.fps_d, if ten_bit { " 10 Bit" } else { "" })
+    };
 
     let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
     let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
