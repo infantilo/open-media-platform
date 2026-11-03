@@ -31,6 +31,8 @@ type Service struct {
 	// DataDir: Ablage der Review-Proxies (<DataDir>/proxies/<asset>/…).
 	DataDir string
 	Audit   module.DomainAudit
+	// Alerter (optional) meldet Eingangs-Ereignisse nach außen (E-Mail-Alarmierung, Kap. 83): kind = qc-failed | qc-error | file-rejected.
+	Alerter func(kind, assetID, title, message string)
 	Log     *slog.Logger
 	Now     func() time.Time
 }
@@ -47,6 +49,20 @@ func (s *Service) log() *slog.Logger {
 		return s.Log
 	}
 	return slog.Default()
+}
+
+// alert meldet ein Eingangs-Ereignis, falls ein Alerter hängt (Titel der Datei wird nachgeschlagen).
+func (s *Service) alert(kind, assetID, message string) {
+	if s.Alerter == nil {
+		return
+	}
+	title := assetID
+	if s.Assets != nil {
+		if a, err := s.Assets.GetAsset(assetID); err == nil && a.Title != "" {
+			title = a.Title
+		}
+	}
+	s.Alerter(kind, assetID, title, message)
 }
 
 func (s *Service) audit(actor, assetID, action string, d map[string]any) {
@@ -418,6 +434,9 @@ func (s *Service) runJob(ctx context.Context, job Job) {
 		log.Warn("QC-Ergebnis nicht am Eintrag vermerkt", "error", err)
 	}
 	s.audit("system", job.AssetID, "qc_done", map[string]any{"overall": out.Overall, "report": rep.ID})
+	if out.Overall == OverallFail && !changed {
+		s.alert("qc-failed", job.AssetID, fmt.Sprintf("QC nicht bestanden: %d Fehler, %d Warnungen (Bericht %s)", out.Counts[CheckFail], out.Counts[CheckWarning], rep.ID))
+	}
 	if changed {
 		_, _, _ = s.RequestQC(ctx, job.AssetID, "system", job.ProfileID, false)
 	}
@@ -436,6 +455,7 @@ func (s *Service) failJob(ctx context.Context, job Job, msg string) {
 	}, "system")
 	s.audit("system", job.AssetID, "qc_execution_failed", map[string]any{"error": msg})
 	s.log().Warn("QC nicht ausführbar", "asset", job.AssetID, "error", msg)
+	s.alert("qc-error", job.AssetID, "QC konnte nicht ausgeführt werden: "+msg)
 }
 
 // ---- Claim / Release ---------------------------------------------------------------------------------------------
@@ -896,6 +916,9 @@ func (s *Service) Decide(ctx context.Context, assetID, actor string, approve boo
 	}, actor)
 	if err == nil && decided != nil {
 		s.audit(actor, assetID, map[bool]string{true: "approved", false: "rejected"}[approve], map[string]any{"note": note})
+		if !approve {
+			s.alert("file-rejected", assetID, fmt.Sprintf("Abgelehnt von %s: %s", actor, note))
+		}
 		if approve {
 			segs, _ := s.St.GetConform(ctx, assetID, decided.Revision)
 			if segs != nil {

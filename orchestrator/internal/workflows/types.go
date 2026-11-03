@@ -15,6 +15,7 @@
 package workflows
 
 import (
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/alertsink"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
@@ -423,6 +424,10 @@ type ExportedWorkflow struct {
 	// Export→Delete→Import auch mit denselben Berechtigungen
 	// wiederherstellen, wenn der Exportierende das ausdrücklich anfordert.
 	Bindings []ExportedBinding `json:"bindings,omitempty"`
+	// AlertRules sind die E-Mail-Alarmregeln, die auf diesen Workflow begrenzt sind (Kap. 83); wie Bindings nur mit
+	// includeBindings=true (enthalten Empfängeradressen, also Nutzerdaten des Systems). Beim Import entstehen sie neu,
+	// begrenzt auf den neuen Workflow.
+	AlertRules []alertsink.Route `json:"alertRules,omitempty"`
 }
 
 // ExportedBinding ist eine Workflow-gescopte Rollenbindung (authz.Binding
@@ -452,4 +457,6 @@ type Workflow struct {
 	// bei Status/UpdatedAt (Migration 0004: Spalten existieren, wo
 	// gefiltert/sortiert wird).
 	OwnerOrgID string `json:"ownerOrgId,omitempty"`
+	// ImportNotes: Hinweise des Imports (z. B. nicht übernommene Alarmregeln); nur in der Antwort, nicht gespeichert.
+	ImportNotes []string `json:"importNotes,omitempty"`
 }

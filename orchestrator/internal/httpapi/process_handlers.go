@@ -183,7 +183,7 @@ func handleUpdateProcessDefinition(svc ProcessStoreService) http.HandlerFunc {
 // handleDeleteProcessDefinition liefert DELETE
 // /api/v1/process-definitions/{id} (204) — 409, solange noch Ausführungen
 // laufen (s. process.Store.DeleteDefinition).
-func handleDeleteProcessDefinition(svc ProcessStoreService, domainAudit DomainAuditLogger) http.HandlerFunc {
+func handleDeleteProcessDefinition(svc ProcessStoreService, domainAudit DomainAuditLogger, onDeleted func(id string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		pd, err := svc.GetDefinition(id)
@@ -198,6 +198,9 @@ func handleDeleteProcessDefinition(svc ProcessStoreService, domainAudit DomainAu
 		if err := svc.DeleteDefinition(id); err != nil {
 			writeProcessError(w, err)
 			return
+		}
+		if onDeleted != nil {
+			onDeleted(id) // Kap. 83: Alarmregeln, die diesen Prozess nennen, aufräumen
 		}
 		logDomainAudit(domainAudit, actorFromRequest(r), "process_definition", id, "deleted", map[string]any{"name": pd.Name})
 		w.WriteHeader(http.StatusNoContent)

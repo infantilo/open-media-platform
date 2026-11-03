@@ -3,6 +3,7 @@
 // Explizites Speichern je Zeile (kein Schreiben bei jedem Tastendruck).
 
 import { t as tr, t as tt } from "./i18n.ts";
+import "./alert-mail-panel.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 import { apiFetch } from "./connection.ts";
 import {
@@ -55,6 +56,7 @@ class SettingsView extends HTMLElement {
   #hostLabels = new Map<string, string>();
 
   #loaded = false;
+  #mailPanel?: HTMLElement; // dieselbe Instanz behalten, damit Eingaben beim Neuzeichnen bleiben
 
   connectedCallback() {
     this.style.cssText = "display:block;";
@@ -166,7 +168,7 @@ class SettingsView extends HTMLElement {
     if (this.#error) this.append(el("div", "color:var(--omp-danger,#d33);margin-bottom:10px;white-space:pre-wrap;", this.#error));
     if (this.#message) this.append(el("div", "color:var(--omp-success,#4a4);margin-bottom:10px;white-space:pre-wrap;", this.#message));
 
-    this.append(this.#renderNodes(), this.#renderSystem());
+    this.append(this.#renderNodes(), this.#renderSystem(), (this.#mailPanel ??= document.createElement("omp-alert-mail-panel")));
     const scroller = this.closest("[style*=overflow]");
     if (scroller) scroller.scrollTop = scroll;
   }

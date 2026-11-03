@@ -32,6 +32,8 @@ type Module struct {
 	QCRunner, ProxyRunner Runner
 	// SubtitleNodes: erreichbare Auto-Untertitel-Nodes für „SRT erzeugen“ (Sprecher- und Spracherkennung); nil = Funktion aus.
 	SubtitleNodes func() []subtitlegen.Target
+	// Alerter: optional — Eingangs-Ereignisse (QC nicht bestanden/nicht ausführbar, Datei abgelehnt) für die E-Mail-Alarmierung.
+	Alerter func(kind, assetID, title, message string)
 
 	mu  sync.Mutex
 	svc *Service
@@ -113,7 +115,7 @@ func (m *Module) service(d module.Deps) *Service {
 		}
 		return b, err
 	}
-	m.svc = &Service{St: NewStore(d.DB), Assets: m.Assets, Tools: tools, Cfg: m.cfg.Get, DataDir: dir, Audit: d.Audit, SubNodes: m.SubtitleNodes}
+	m.svc = &Service{St: NewStore(d.DB), Assets: m.Assets, Tools: tools, Cfg: m.cfg.Get, DataDir: dir, Audit: d.Audit, SubNodes: m.SubtitleNodes, Alerter: m.Alerter}
 	asset.RegisterPurgeHook("review", m.svc.purgeAssets)
 	return m.svc
 }

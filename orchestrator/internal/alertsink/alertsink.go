@@ -22,18 +22,42 @@ import (
 
 // Alert ist ein Alarm.
 type Alert struct {
-	Kind    string    `json:"kind"`    // node-alert | host-offline | host-online
-	Subject string    `json:"subject"` // Node- oder Host-ID
-	Name    string    `json:"name,omitempty"`
-	Message string    `json:"message"`
-	Time    time.Time `json:"time"`
-	Text    string    `json:"text"` // Kurztext für Chat-Webhooks
+	Kind     string `json:"kind"`             // node-alert | host-offline | host-online | …, siehe ListKinds
+	Severity string `json:"severity"`         // critical | warning | info
+	Action   string `json:"action,omitempty"` // nur „user-action“: objektart.aktion
+	Subject  string `json:"subject"`          // Node- oder Host-ID
+	Name     string `json:"name,omitempty"`
+	Message  string `json:"message"`
+	// Workflows, zu denen der Alarm gehört (Node: sein Workflow; Host: alle laufenden Workflows mit einer Rolle dort). Leer = keiner.
+	Workflows []WorkflowRef `json:"workflows,omitempty"`
+	// Processes: der Prozess (Definition), aus dem der Alarm stammt (nur Prozess-Alarme).
+	Processes []ProcessRef `json:"processes,omitempty"`
+	Time      time.Time    `json:"time"`
+	Text      string       `json:"text"` // Kurztext für Chat-Webhooks
+}
+
+// WorkflowRef nennt einen Workflow (ID für Regeln, Name zur Anzeige).
+type WorkflowRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// ProcessRef nennt einen Prozess (Definition).
+type ProcessRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // Sink liefert Alarme an das Webhook-Ziel.
 type Sink struct {
 	URL, Token string
 	Client     *http.Client
+	// Mail: optionaler zweiter Kanal (SMTP); unabhängig vom Webhook, jeder mit eigenen Wiederholungen.
+	Mail *Mailer
+	// Resolve (optional) ordnet einen Alarm Workflows zu; wird beim Senden einmal aufgerufen.
+	Resolve func(Alert) []WorkflowRef
+	// MailProvider (optional) liefert den aktuellen Mailer je Zustellung und ersetzt Mail.
+	MailProvider func() *Mailer
 	// Debounce: gleiche (Art, Gegenstand, Meldung) höchstens einmal in dieser Zeit.
 	Debounce time.Duration
 	// Retry: Wartezeiten zwischen den Versuchen (Länge = Zahl der Wiederholungen).
@@ -54,12 +78,23 @@ func New(url, token string) *Sink {
 		Retry: []time.Duration{2 * time.Second, 10 * time.Second, 30 * time.Second}, queue: make(chan Alert, 256), last: map[string]time.Time{}, now: time.Now}
 }
 
+// NewWithMail wie New, zusätzlich mit E-Mail-Kanal. Liefert immer einen Sink (der Mailkanal kann zur Laufzeit über MailProvider dazukommen).
+func NewWithMail(url, token string, m *Mailer) *Sink {
+	s := New("http://invalid.invalid", token)
+	s.URL = strings.TrimSpace(url)
+	s.Mail = m
+	return s
+}
+
 // Send stellt einen Alarm in die Warteschlange (nie blockierend; bei voller Warteschlange verfällt er mit einer Log-Warnung).
 func (s *Sink) Send(a Alert) {
 	if s == nil {
 		return
 	}
 	a.Time = s.now()
+	if !validSeverity(a.Severity) {
+		a.Severity = DefaultSeverity(a.Kind)
+	}
 	if a.Text == "" {
 		a.Text = fmt.Sprintf("[OpenMediaPlatform] %s %s: %s", a.Kind, firstNonEmpty(a.Name, a.Subject), a.Message)
 	}
@@ -78,6 +113,9 @@ func (s *Sink) Send(a Alert) {
 		}
 	}
 	s.mu.Unlock()
+	if s.Resolve != nil && len(a.Workflows) == 0 {
+		a.Workflows = s.Resolve(a)
+	}
 	select {
 	case s.queue <- a:
 	default:
@@ -110,10 +148,23 @@ func (s *Sink) Run(ctx context.Context) {
 }
 
 func (s *Sink) deliver(ctx context.Context, a Alert) {
-	body, _ := json.Marshal(a)
+	if s.URL != "" && !isOptIn(a.Kind) { // Opt-in-Arten (Benutzeraktionen) gehen nie an den Webhook
+		body, _ := json.Marshal(a)
+		s.try(ctx, a, "Webhook", func() error { return s.post(ctx, body) })
+	}
+	m := s.Mail
+	if s.MailProvider != nil {
+		m = s.MailProvider()
+	}
+	if m != nil {
+		s.try(ctx, a, "E-Mail", func() error { return m.Deliver(ctx, a) })
+	}
+}
+
+func (s *Sink) try(ctx context.Context, a Alert, channel string, f func() error) {
 	var err error
 	for attempt := 0; ; attempt++ {
-		if err = s.post(ctx, body); err == nil {
+		if err = f(); err == nil {
 			return
 		}
 		if attempt >= len(s.Retry) {
@@ -125,7 +176,7 @@ func (s *Sink) deliver(ctx context.Context, a Alert) {
 		case <-time.After(s.Retry[attempt]):
 		}
 	}
-	slog.Warn("alertsink: Alarm nicht zugestellt", "kind", a.Kind, "subject", a.Subject, "error", err)
+	slog.Warn("alertsink: Alarm nicht zugestellt", "kanal", channel, "kind", a.Kind, "subject", a.Subject, "error", err)
 }
 
 func (s *Sink) post(ctx context.Context, body []byte) error {
@@ -179,14 +230,15 @@ func FromEvent(ev sse.Event) (Alert, bool) {
 	}
 	id := strings.TrimPrefix(ev.Type, prefix)
 	var p struct {
-		NodeID  string `json:"node_id"`
-		Message string `json:"message"`
+		NodeID   string `json:"node_id"`
+		Message  string `json:"message"`
+		Severity string `json:"severity"`
 	}
 	_ = json.Unmarshal(ev.Data, &p)
 	if p.Message == "" {
 		p.Message = string(ev.Data)
 	}
-	return Alert{Kind: "node-alert", Subject: id, Message: p.Message}, true
+	return Alert{Kind: "node-alert", Subject: id, Message: p.Message, Severity: p.Severity}, true
 }
 
 // HostState ist der beobachtete Zustand eines Hosts.

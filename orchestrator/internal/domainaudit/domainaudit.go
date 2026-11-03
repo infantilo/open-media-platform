@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
@@ -53,6 +54,16 @@ type EventPublisher interface {
 type Store struct {
 	db     *sql.DB
 	events EventPublisher
+	// observer (optional) sieht jeden erfolgreich geschriebenen Eintrag (E-Mail-Alarmierung bei Benutzeraktionen, Kap. 83).
+	obsMu    sync.RWMutex
+	observer func(Entry)
+}
+
+// SetObserver setzt den Beobachter (nil = keiner). Er läuft synchron im Aufrufer und muss schnell sein.
+func (s *Store) SetObserver(f func(Entry)) {
+	s.obsMu.Lock()
+	s.observer = f
+	s.obsMu.Unlock()
 }
 
 // NewStore erstellt einen Store gegen die gegebene DB-Verbindung.
@@ -80,6 +91,12 @@ func (s *Store) Log(actor, objectType, objectID, action string, details map[stri
 	if err != nil {
 		slog.Warn("domain audit log write failed", "error", err, "actor", actor, "object_type", objectType, "object_id", objectID, "action", action)
 		return
+	}
+	s.obsMu.RLock()
+	obs := s.observer
+	s.obsMu.RUnlock()
+	if obs != nil {
+		obs(Entry{OccurredAt: time.Now(), Actor: actor, ObjectType: objectType, ObjectID: objectID, Action: action, Details: raw})
 	}
 	// Reiner Trigger, keine Nutzdaten — s. internal/audit.Store.Log.
 	if s.events != nil {

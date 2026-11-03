@@ -65,3 +65,9 @@ func decryptSecret(key []byte, ciphertext []byte) (string, error) {
 	}
 	return string(pt), nil
 }
+
+// DecodeMasterKey, EncryptSecret und DecryptSecret machen dasselbe AES-256-GCM-Verfahren
+// für weitere Geheimnisse in der Datenbank nutzbar (z. B. SMTP-Kennwort der E-Mail-Alarmierung).
+func DecodeMasterKey(b64 string) ([]byte, error)             { return decodeMasterKey(b64) }
+func EncryptSecret(key []byte, plain string) ([]byte, error) { return encryptSecret(key, plain) }
+func DecryptSecret(key, ct []byte) (string, error)           { return decryptSecret(key, ct) }

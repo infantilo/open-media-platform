@@ -973,8 +973,50 @@ func main() {
 	// os/exec-Supervise-Pfad.
 	go runWhileLeader(ctx, clusterNode, workflowSvc.RunFailoverWatcher)
 	// Audit 2026-10-23 M7: externes Alarming. Nur der Leader sendet (sonst käme jeder Alarm einmal je Orchestrator); ohne OMP_ALERT_WEBHOOK_URL passiert nichts.
-	if sink := alertsink.New(os.Getenv("OMP_ALERT_WEBHOOK_URL"), os.Getenv("OMP_ALERT_WEBHOOK_TOKEN")); sink != nil {
-		slog.Info("externes Alarming aktiv (Webhook)")
+	alertMailer, mailErr := alertsink.NewMailer(os.Getenv("OMP_ALERT_SMTP_HOST"), os.Getenv("OMP_ALERT_SMTP_PORT"), os.Getenv("OMP_ALERT_SMTP_USER"),
+		os.Getenv("OMP_ALERT_SMTP_PASSWORD"), os.Getenv("OMP_ALERT_SMTP_FROM"), os.Getenv("OMP_ALERT_SMTP_TO"), os.Getenv("OMP_ALERT_SMTP_SECURITY"))
+	if mailErr != nil {
+		slog.Error("E-Mail-Alarmierung deaktiviert: ungültige Konfiguration", "error", mailErr)
+	}
+	var alertSink *alertsink.Sink // auch für Prozess-Alarme (process_alerts.go)
+	// Kap. 83: in der Oberfläche eingestellte E-Mail-Alarmierung (Datenbank) hat Vorrang vor den Umgebungsvariablen.
+	alertMailStore, mserr := alertsink.NewMailStore(database, cfg.StorageSecretKey, alertMailer)
+	if mserr != nil {
+		slog.Error("E-Mail-Alarmierung: Einstellungen in der Oberfläche nicht verfügbar", "error", mserr)
+	}
+	alertSink = alertsink.NewWithMail(os.Getenv("OMP_ALERT_WEBHOOK_URL"), os.Getenv("OMP_ALERT_WEBHOOK_TOKEN"), alertMailer)
+	if sink := alertSink; sink != nil {
+		if alertMailStore != nil {
+			sink.MailProvider = alertMailStore.Current
+		}
+		// Kap. 83: Eingangs-Ereignisse (QC nicht bestanden/nicht ausführbar, Datei abgelehnt).
+		reviewMod.Alerter = func(kind, assetID, title, message string) {
+			sink.Send(alertsink.Alert{Kind: kind, Subject: assetID, Name: title, Message: message})
+		}
+		// Kap. 83: manuelle Benutzeraktionen aus dem Domänen-Audit (Opt-in: nur Regeln, die „Manuelle Benutzeraktion“ nennen).
+		domainAuditStore.SetObserver(userActionAlerter(sink))
+		// Kap. 83: Alarm → Workflow(s) für Regeln je Workflow. Host-Alarme gehören zu allen laufenden Workflows mit einer Rolle auf dem Host.
+		if alertMailStore != nil {
+			workflowSvc.SetAlertRules(alertMailStore) // Kap. 83: Regeln je Workflow beim Löschen aufräumen, beim Export/Import mitnehmen
+		}
+		sink.Resolve = func(a alertsink.Alert) []alertsink.WorkflowRef {
+			var refs []workflows.NameRef
+			switch a.Kind {
+			case "host-offline", "host-online", "load-high", "load-recovered":
+				hostID, _, _ := strings.Cut(a.Subject, "/")
+				refs = workflowSvc.WorkflowsOnHost(hostID)
+			default:
+				if r, ok := workflowSvc.WorkflowOfSubject(a.Subject); ok {
+					refs = []workflows.NameRef{r}
+				}
+			}
+			out := make([]alertsink.WorkflowRef, 0, len(refs))
+			for _, r := range refs {
+				out = append(out, alertsink.WorkflowRef{ID: r.ID, Name: r.Name})
+			}
+			return out
+		}
+		slog.Info("externes Alarming aktiv", "webhook", sink.URL != "", "email_env", sink.Mail != nil)
 		go sink.Run(ctx)
 		go runWhileLeader(ctx, clusterNode, func(ctx context.Context) { alertsink.NodeAlerts(ctx, hub, sink) })
 		go runWhileLeader(ctx, clusterNode, func(ctx context.Context) { (&alertsink.HealthWatch{Sink: sink}).Run(ctx, hub) })
@@ -1104,7 +1146,7 @@ func main() {
 	// (subject string, payload []byte) error) — "workflow -> event"
 	// bleibt bewusst fire-and-forget wie der Rest von internal/eventbus,
 	// s. engine.go-Moduldoku; kein Outbox-Umweg für diese Richtung.
-	processEngine := process.NewEngine(processStore, process.WithEventPublisher(nc))
+	processEngine := process.NewEngine(processStore, process.WithEventPublisher(processAlertPublisher{inner: nc, onFailed: processFailureAlerter(processStore, alertSink)}))
 	// MediaFunction/ServiceCall brauchen keine zusätzliche Sicherheits-
 	// entscheidung (HTTP-Client + registry.Store genügen) — anders als
 	// Script (s. u.), daher immer registriert.
@@ -1503,7 +1545,7 @@ func main() {
 	timelineSink(timeline.Event{At: time.Now(), Kind: "orchestrator.started", Severity: timeline.SevInfo, Subject: cfg.ClusterNodeID, Data: map[string]any{"version": version.Version}})
 	go timelineRec.Run(ctx, hub, timelineSink)
 	go timelineStore.RunRetention(ctx, cfg.AuditRetentionDays)
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithDBHealth(func(ctx context.Context) (housekeeping.Health, error) {
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithAlertMail(alertMailStore), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithDBHealth(func(ctx context.Context) (housekeeping.Health, error) {
 		h, err := housekeeping.CheckHealth(ctx, database)
 		housekeeping.AddVolume(&h, os.Getenv("OMP_DB_VOLUME_PATH"))
 		return h, err

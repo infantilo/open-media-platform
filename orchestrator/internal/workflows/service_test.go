@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/alertsink"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -2362,5 +2363,105 @@ func TestApplyConnectionAnchorConnectsEveryMatchingFormat(t *testing.T) {
 	}
 	if len(g.calls) != 1 {
 		t.Fatalf("plain type: calls = %+v, want exactly one", g.calls)
+	}
+}
+
+// fakeAlertRules ist ein Test-Double für AlertRuleBinder (Kap. 83).
+type fakeAlertRules struct {
+	routes []alertsink.Route
+	noCfg  bool
+}
+
+func (f *fakeAlertRules) WorkflowRules(id string) ([]alertsink.Route, error) {
+	var out []alertsink.Route
+	for _, r := range f.routes {
+		for _, w := range r.Workflows {
+			if w == id {
+				r.Workflows = []string{}
+				out = append(out, r)
+			}
+		}
+	}
+	return out, nil
+}
+func (f *fakeAlertRules) AddWorkflowRules(id string, rules []alertsink.Route) error {
+	if f.noCfg {
+		return alertsink.ErrNoMailConfig
+	}
+	for _, r := range rules {
+		r.Workflows = []string{id}
+		f.routes = append(f.routes, r)
+	}
+	return nil
+}
+func (f *fakeAlertRules) RemoveWorkflow(id string) error {
+	var out []alertsink.Route
+	for _, r := range f.routes {
+		var rest []string
+		for _, w := range r.Workflows {
+			if w != id {
+				rest = append(rest, w)
+			}
+		}
+		if len(r.Workflows) > 0 && len(rest) == 0 {
+			continue
+		}
+		r.Workflows = rest
+		out = append(out, r)
+	}
+	f.routes = out
+	return nil
+}
+
+func TestAlertRulesFollowWorkflowLifecycle(t *testing.T) {
+	ar := &fakeAlertRules{}
+	l := &fakeLauncher{catalog: []launcher.CatalogEntry{{Type: "omp-video-mixer-me"}}}
+	svc := &Service{store: newFakeStore(), nodes: &fakeNodeLister{}, graph: &fakeGraph{}, launcher: l, alertRules: ar}
+	def := Definition{Roles: []Role{{Name: "mixer", NodeType: "omp-video-mixer-me"}}}
+	wf, _ := svc.Create("Regieplatz 1", def, nil, "")
+	other, _ := svc.Create("Regieplatz 2", def, nil, "")
+	ar.routes = []alertsink.Route{
+		{Name: "nur 1", Enabled: true, Workflows: []string{wf.ID}, To: "a@example.org"},
+		{Name: "beide", Enabled: true, Workflows: []string{wf.ID, other.ID}, To: "b@example.org"},
+		{Name: "global", Enabled: true, To: "c@example.org"},
+	}
+
+	// Ohne includeBindings kein Alarm-Export; mit: nur die Regeln dieses Workflows, ohne Workflow-Zuordnung.
+	if e, _ := svc.Export(wf.ID, false); len(e.AlertRules) != 0 {
+		t.Fatalf("Standard-Export darf keine Regeln enthalten: %+v", e.AlertRules)
+	}
+	exported, err := svc.Export(wf.ID, true)
+	if err != nil || len(exported.AlertRules) != 2 || len(exported.AlertRules[0].Workflows) != 0 {
+		t.Fatalf("Export: %+v %v", exported.AlertRules, err)
+	}
+
+	// Löschen räumt auf: „nur 1“ verschwindet (sonst würde sie global), „beide“ behält nur den anderen.
+	if err := svc.Delete(wf.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(ar.routes) != 2 || ar.routes[0].Name != "beide" || len(ar.routes[0].Workflows) != 1 || ar.routes[0].Workflows[0] != other.ID || ar.routes[1].Name != "global" {
+		t.Fatalf("nach Löschen: %+v", ar.routes)
+	}
+
+	// Import stellt sie für den neuen Workflow wieder her.
+	re, err := svc.Import(exported, "")
+	if err != nil || len(re.ImportNotes) != 0 {
+		t.Fatalf("Import: %v %+v", err, re.ImportNotes)
+	}
+	n := 0
+	for _, r := range ar.routes {
+		if len(r.Workflows) == 1 && r.Workflows[0] == re.ID {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("wiederhergestellte Regeln: %d, erwartet 2 (%+v)", n, ar.routes)
+	}
+
+	// Ohne eingerichtete Mail-Konfiguration: Import klappt, Hinweis in der Antwort.
+	ar.noCfg = true
+	re2, err := svc.Import(exported, "")
+	if err != nil || len(re2.ImportNotes) != 1 {
+		t.Fatalf("Import ohne Konfiguration: %v %+v", err, re2.ImportNotes)
 	}
 }

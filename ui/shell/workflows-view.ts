@@ -664,8 +664,9 @@ class WorkflowsView extends HTMLElement {
         showToast(tt("wf.6cdb17", { p0: await res.text() }));
         return;
       }
-      const created = (await res.json()) as Workflow;
+      const created = (await res.json()) as Workflow & { importNotes?: string[] };
       showToast(tt("wf.db21f2", { p0: created.name }));
+      if (created.importNotes?.length) showToast(tt("wf.importNotes", { p0: created.importNotes.join("; ") }));
     } catch (err) {
       showToast(tt("wf.6cdb17", { p0: err }));
       return;

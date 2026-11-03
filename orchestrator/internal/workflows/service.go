@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/alertsink"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -161,6 +162,16 @@ type EventPublisher interface {
 	Broadcast(sse.Event)
 }
 
+// AlertRuleBinder verwaltet die auf einen Workflow begrenzten Alarmregeln (implementiert von *alertsink.MailStore).
+type AlertRuleBinder interface {
+	WorkflowRules(workflowID string) ([]alertsink.Route, error)
+	AddWorkflowRules(workflowID string, rules []alertsink.Route) error
+	RemoveWorkflow(workflowID string) error
+}
+
+// SetAlertRules verdrahtet die Alarmregeln (nil = aus).
+func (s *Service) SetAlertRules(b AlertRuleBinder) { s.alertRules = b }
+
 // AuthzBinder legt Rollenbindungen an (implementiert von *authz.Store,
 // ARCHITECTURE.md §24.1, UMSETZUNG.md C16) — Workflow-Start nutzt dies,
 // um jeder Control-Plane-Instanz (s. RegisterControlPlaneType) automatisch
@@ -289,6 +300,8 @@ type Service struct {
 	httpClient *http.Client
 	// authz (ARCHITECTURE.md §24.1, UMSETZUNG.md C16) — s. AuthzBinder.
 	authz AuthzBinder
+	// alertRules (Kap. 83): E-Mail-Alarmregeln je Workflow — beim Löschen aufräumen, beim Export/Import mitnehmen. nil = aus.
+	alertRules AlertRuleBinder
 	// hostMetrics (K7 Teil 4, failover.go) — s. SetHostMetrics/
 	// HostMetricsReader. Nil = Host-Offline-Failover-Trigger bleibt aus
 	// (kein Crash, nur ein fehlendes Feature ohne Verdrahtung, gleiches
@@ -513,6 +526,12 @@ func (s *Service) Delete(id string) error {
 			slog.Warn("workflows: failed to clean up role bindings after delete", "workflow", id, "error", err)
 		}
 	}
+	// Kap. 83: Alarmregeln, die diesen Workflow nennen, aufräumen (best effort wie die Bindungen).
+	if s.alertRules != nil {
+		if err := s.alertRules.RemoveWorkflow(id); err != nil {
+			slog.Warn("workflows: failed to clean up alert rules after delete", "workflow", id, "error", err)
+		}
+	}
 	// S2: gleicher Grund wie bei Create() — ein extern gelöschter
 	// Workflow soll auch in anderen offenen Tabs sofort verschwinden.
 	// Der Payload trägt den letzten bekannten Stand vor dem Löschen; die
@@ -551,6 +570,13 @@ func (s *Service) Export(id string, includeBindings bool) (ExportedWorkflow, err
 		for _, b := range bindings {
 			exported.Bindings = append(exported.Bindings, ExportedBinding{Subject: b.Subject, Role: b.NodeID, Verb: b.Verb})
 		}
+	}
+	if includeBindings && s.alertRules != nil {
+		rules, err := s.alertRules.WorkflowRules(id)
+		if err != nil {
+			return ExportedWorkflow{}, err
+		}
+		exported.AlertRules = rules
 	}
 	return exported, nil
 }
@@ -596,6 +622,15 @@ func (s *Service) Import(exported ExportedWorkflow, ownerOrgID string) (Workflow
 		}
 	}
 
+	// Kap. 83: mitexportierte Alarmregeln für den neuen Workflow wiederherstellen (best effort, Hinweis in der Antwort).
+	if len(exported.AlertRules) > 0 {
+		if s.alertRules == nil {
+			wf.ImportNotes = append(wf.ImportNotes, "Alarmregeln nicht übernommen: nicht verfügbar")
+		} else if err := s.alertRules.AddWorkflowRules(wf.ID, exported.AlertRules); err != nil {
+			slog.Warn("workflows: failed to restore alert rules on import", "workflow", wf.ID, "error", err)
+			wf.ImportNotes = append(wf.ImportNotes, "Alarmregeln nicht übernommen: "+err.Error())
+		}
+	}
 	return wf, nil
 }
 
@@ -2208,4 +2243,49 @@ func newID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b[:]), nil
+}
+
+// NameRef ist ein Workflow mit Anzeigenamen (Titel, sonst Name).
+type NameRef struct{ ID, Name string }
+
+func wfDisplayName(wf Workflow) string {
+	if wf.Definition.Title != "" {
+		return wf.Definition.Title
+	}
+	return wf.Name
+}
+
+// WorkflowOfSubject ordnet einen Alarm-Gegenstand (Node-ID oder Instanz-ID) dem Workflow zu,
+// dessen Rolle er erfüllt (Alarm-Regeln je Workflow, Kap. 83). ok=false: gehört zu keinem Workflow.
+func (s *Service) WorkflowOfSubject(subject string) (NameRef, bool) {
+	if id, name, _, ok := s.FindRoleForNode(subject); ok {
+		return NameRef{ID: id, Name: name}, true
+	}
+	if id, _, ok := s.FindRoleForInstance(subject); ok {
+		if wf, err := s.store.Get(id); err == nil {
+			return NameRef{ID: id, Name: wfDisplayName(wf)}, true
+		}
+	}
+	return NameRef{}, false
+}
+
+// WorkflowsOnHost listet die laufenden Workflows, die mindestens eine Rolle auf hostID haben.
+func (s *Service) WorkflowsOnHost(hostID string) []NameRef {
+	all, err := s.store.List()
+	if err != nil {
+		return nil
+	}
+	var out []NameRef
+	for _, wf := range all {
+		if wf.Status != StatusStarted {
+			continue
+		}
+		for _, rt := range wf.Runtime {
+			if rt.InstanceID != "" && rt.HostID == hostID {
+				out = append(out, NameRef{ID: wf.ID, Name: wfDisplayName(wf)})
+				break
+			}
+		}
+	}
+	return out
 }

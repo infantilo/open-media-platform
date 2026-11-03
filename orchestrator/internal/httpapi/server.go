@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -573,6 +574,10 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/admin/settings/check-path", g.requireVerbGlobal(authz.VerbAdmin, handleCheckPath(launcherSvc)))
 	mux.HandleFunc("GET /api/v1/admin/settings/system", g.requireVerbGlobal(authz.VerbAdmin, handleListSystemSettings(options.systemSettings, cfg, options.startupSkipped)))
 	mux.HandleFunc("PUT /api/v1/admin/settings/system/{key}", g.requireVerbGlobal(authz.VerbAdmin, handleSetSystemSetting(options.systemSettings, cfg, options.domainAudit)))
+	mux.HandleFunc("GET /api/v1/admin/settings/alert-mail", g.requireVerbGlobal(authz.VerbAdmin, handleGetAlertMail(options.alertMail)))
+	mux.HandleFunc("PUT /api/v1/admin/settings/alert-mail", g.requireVerbGlobal(authz.VerbAdmin, handlePutAlertMail(options.alertMail, options.domainAudit)))
+	mux.HandleFunc("DELETE /api/v1/admin/settings/alert-mail", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteAlertMail(options.alertMail, options.domainAudit)))
+	mux.HandleFunc("POST /api/v1/admin/settings/alert-mail/test", g.requireVerbGlobal(authz.VerbAdmin, handleTestAlertMail(options.alertMail)))
 	mux.HandleFunc("GET /api/v1/admin/storage-locations", g.requireVerbGlobal(authz.VerbAdmin, handleListLocations(options.locations, options.nodeValues, launcherSvc)))
 	mux.HandleFunc("POST /api/v1/admin/storage-locations", g.requireVerbGlobal(authz.VerbAdmin, handleCreateLocation(options.locations, launcherSvc, options.domainAudit)))
 	mux.HandleFunc("PUT /api/v1/admin/storage-locations/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleUpdateLocation(options.locations, options.domainAudit)))
@@ -704,7 +709,13 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/process-definitions", g.requireVerbGlobal(authz.VerbConfigure, handleCreateProcessDefinition(processStore, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/process-definitions/{id}", g.requireAuth(handleGetProcessDefinition(processStore)))
 	mux.HandleFunc("PUT /api/v1/process-definitions/{id}", g.requireVerbOnProcess(authz.VerbConfigure, processDefFromPath, handleUpdateProcessDefinition(processStore)))
-	mux.HandleFunc("DELETE /api/v1/process-definitions/{id}", g.requireVerbOnProcess(authz.VerbConfigure, processDefFromPath, handleDeleteProcessDefinition(processStore, options.domainAudit)))
+	mux.HandleFunc("DELETE /api/v1/process-definitions/{id}", g.requireVerbOnProcess(authz.VerbConfigure, processDefFromPath, handleDeleteProcessDefinition(processStore, options.domainAudit, func(id string) {
+		if options.alertMail != nil {
+			if err := options.alertMail.RemoveProcess(id); err != nil {
+				slog.Warn("alertmail: Regeln nach Prozess-Löschen nicht aufgeräumt", "process", id, "error", err)
+			}
+		}
+	})))
 	mux.HandleFunc("GET /api/v1/process-definitions/{id}/versions", g.requireAuth(handleListProcessVersions(processStore)))
 	mux.HandleFunc("POST /api/v1/process-definitions/{id}/versions", g.requireVerbOnProcess(authz.VerbConfigure, processDefFromPath, handleCreateProcessVersion(processStore)))
 	mux.HandleFunc("GET /api/v1/process-versions/{id}", g.requireAuth(handleGetProcessVersion(processStore)))

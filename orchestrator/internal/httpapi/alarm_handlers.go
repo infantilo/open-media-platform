@@ -63,6 +63,7 @@ type handlerOptions struct {
 	moduleHooks     *module.Hooks
 	moduleDeps      module.Deps
 	systemSettings  SystemSettingsStore
+	alertMail       AlertMailStore
 	startupSkipped  []string
 	workflowRuns    WorkflowRunReader
 }
