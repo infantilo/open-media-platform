@@ -209,6 +209,14 @@ func collectSelftestInputs(ctx context.Context, h http.Handler, src *http.Reques
 			in.Findings = append(in.Findings, support.Finding{ID: f.ID, Severity: f.Severity, Message: f.Message, Hint: f.Hint})
 		}
 	}
+	var dh struct {
+		Findings []struct{ ID, Severity, Message, Hint string } `json:"findings"`
+	}
+	if loopbackJSON(ctx, h, src, "/api/v1/admin/db-health", &dh) {
+		for _, f := range dh.Findings {
+			in.Findings = append(in.Findings, support.Finding{ID: f.ID, Severity: f.Severity, Message: f.Message, Hint: f.Hint})
+		}
+	}
 	if len(ta) > 0 {
 		in.Trends = trendInputs(ta[0])
 	}

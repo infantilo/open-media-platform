@@ -14,6 +14,7 @@ var metricNames = map[string]Text2{
 	"proc.fds":        {"offene Dateien", "open files"},
 	"proc.threads":    {"Threads", "threads"},
 	"orch.heap":       {"Speicher des Orchestrators", "orchestrator memory"},
+	"db.size":         {"Größe der Datenbank", "database size"},
 	"orch.goroutines": {"Goroutinen des Orchestrators", "orchestrator goroutines"},
 	"orch.fds":        {"offene Dateien des Orchestrators", "orchestrator open files"},
 }

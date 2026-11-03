@@ -43,7 +43,7 @@ var (
 		"/api/v1/me/features": true, "/api/v1/me/consoles": true, "/api/v1/nodes": true, "/api/v1/graph": true, "/api/v1/graph/network": true,
 		"/api/v1/instances": true, "/api/v1/hosts": true, "/api/v1/hosts/local": true, "/api/v1/cluster/status": true, "/api/v1/kpi/media": true,
 		"/api/v1/logs": true, "/api/v1/logs/summary": true, "/api/v1/timeline": true, "/api/v1/admin/selftest": true, "/api/v1/admin/support-bundle": true,
-		"/api/v1/admin/profile": true, "/api/v1/workflows": true, "/api/v1/workflows/runs": true, "/api/v1/alarms/acks": true,
+		"/api/v1/admin/profile": true, "/api/v1/admin/db-health": true, "/api/v1/workflows": true, "/api/v1/workflows/runs": true, "/api/v1/alarms/acks": true,
 		"/api/v1/placement/advice": true, "/api/v1/scheduler/resources": true, "/api/v1/events": true, "/api/v1/catalog": true,
 		"/api/v1/auth/whoami": true, "/api/v1/freezes": true, "/api/v1/admin/trends": true,
 	}

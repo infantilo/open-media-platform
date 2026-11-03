@@ -6255,3 +6255,15 @@ Frage war, ob das Handy-Gateway (WebRTC/WHIP, Kamera-Seite im Node) auch Webseit
 - **81.3 Netz und Sicherheit.** Externe Seiten laden nur, wenn der Node sie erreicht; Lösung wäre ein Proxy mit Freigabeliste statt offenem Zugang. Wer Bildschirme einspeisen darf, in die Funktionsrechte (Kap. 44) und den Node-Token (Kap. 62) aufnehmen.
 - **Neue Funktionen** gehören im selben Arbeitsgang ins Handbuch und in die Katalogbeschreibung (§0, Memory-Regel).
 - **Reihenfolge:** 81.1 zuerst (klein, zeigt sofort, ob die Qualität reicht), 81.2 erst danach und nur nach Entscheidung des Nutzers.
+
+## Kapitel 82: Datenbank-Wartung (Nutzerauftrag 2026-11-03, **umgesetzt, Tests gegen Dev-Postgres grün; Orchestrator neu starten, Migration 0053**)
+
+Bestand: Aufbewahrungsfristen für alle wachsenden Tabellen (audit, logs, outbox, Läufe, Trends …, `internal/housekeeping`). Neu:
+
+- **Autovacuum-Feinabstimmung** (Migration `0053`): engere Schwellen (2–5 % statt 20 %) für Logs, Outbox, Audit, Zeitleiste, As-run, Trends, Workflow-Läufe.
+- **Support-Zugänge**: abgelaufene/widerrufene Einträge fallen nach `OMP_HOST_TOKEN_RETENTION_DAYS` (7) weg.
+- **Zustandsprüfung** `housekeeping.CheckHealth`: Datenbankgröße, größte Tabellen, tote Zeilen, Autovacuum an/aus, Verbindungsauslastung. Ausgabe: `GET /api/v1/admin/db-health`, Prometheus `omp_db_size_bytes`, `omp_db_table_bytes{table}`, `omp_db_table_dead_tuples{table}`, `omp_db_connections`.
+- **Selbsttest-Ampel**: Befunde `db.autovacuum_off`, `db.bloat.<tabelle>` (≥30 % Müll bei ≥10 000 toten Zeilen), `db.vacuum_stale.<tabelle>`, `db.connections` (≥80 %) mit nächstem Schritt.
+- Bewusst nicht automatisch gelöscht: Nutzerdaten (Workflows, Snapshots, Assets, Definitionen).
+- **Trend Datenbankgröße** (`db.size`, minütlich beobachtet, Stundenverlauf): meldet stetiges Wachstum (ab 256 MiB im Fenster). Mit `OMP_DB_VOLUME_PATH` (Pfad des Postgres-Datenträgers auf dem Orchestrator-Rechner) kommt die Hochrechnung „voll in N Stunden“ dazu.
+- **Plattenplatz**: mit `OMP_DB_VOLUME_PATH` Befund `db.disk_low` (< 15 % frei Warnung, < 5 % Fehler) und Metrik `omp_db_volume_free_bytes`. Läuft Postgres auf einem anderen Rechner/im Container ohne sichtbaren Pfad, bleibt es aus — dann Plattenplatz dort überwachen.

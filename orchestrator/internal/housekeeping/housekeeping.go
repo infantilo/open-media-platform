@@ -46,7 +46,7 @@ func New(db *sql.DB, cfg Config, acks AlarmAckPurger) *Housekeeper {
 
 // Result: gelöschte Zeilen je Bereich.
 type Result struct {
-	Outbox, HostTokens, ProcessExecutions, AlarmAcks int64
+	Outbox, HostTokens, ProcessExecutions, AlarmAcks, SupportAccess int64
 }
 
 // PurgeOnce führt alle Bereinigungen einmal aus. Ein Fehler in einem Bereich
@@ -82,6 +82,11 @@ func (h *Housekeeper) PurgeOnce() (Result, error) {
 			  AND NOT EXISTS (SELECT 1 FROM process_executions c WHERE c.parent_execution_id = e.id)`, h.cfg.ProcessExecutionDays)
 		note("process executions", err)
 	}
+	// Abgelaufene bzw. widerrufene Support-Zugänge (Token-Hash, keine Nutzdaten).
+	if h.cfg.HostTokenDays > 0 {
+		res.SupportAccess, err = h.exec(`DELETE FROM support_access WHERE COALESCE(revoked_at, expires_at) < now() - ($1 * interval '1 day')`, h.cfg.HostTokenDays)
+		note("support access", err)
+	}
 	if h.acks != nil {
 		res.AlarmAcks, err = h.acks.PurgeStale()
 		note("alarm acks", err)
@@ -114,9 +119,9 @@ func (h *Housekeeper) Run(ctx context.Context) {
 
 func (h *Housekeeper) once() {
 	res, _ := h.PurgeOnce()
-	if res.Outbox+res.HostTokens+res.ProcessExecutions+res.AlarmAcks > 0 {
+	if res.Outbox+res.HostTokens+res.ProcessExecutions+res.AlarmAcks+res.SupportAccess > 0 {
 		slog.Info("housekeeping: purge completed",
 			"outbox", res.Outbox, "host_tokens", res.HostTokens,
-			"process_executions", res.ProcessExecutions, "alarm_acks", res.AlarmAcks)
+			"process_executions", res.ProcessExecutions, "alarm_acks", res.AlarmAcks, "support_access", res.SupportAccess)
 	}
 }

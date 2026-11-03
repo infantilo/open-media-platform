@@ -42,6 +42,7 @@ var Specs = map[string]Spec{
 	"proc.fds":        {Metric: "proc.fds", Drift: true, MinGrowth: 50},
 	"proc.threads":    {Metric: "proc.threads", Drift: true, MinGrowth: 30},
 	"orch.heap":       {Metric: "orch.heap", Unit: "B", Drift: true, MinGrowth: 100 << 20},
+	"db.size":         {Metric: "db.size", Unit: "B", Drift: true, MinGrowth: 256 << 20},
 	"orch.goroutines": {Metric: "orch.goroutines", Drift: true, MinGrowth: 200},
 	"orch.fds":        {Metric: "orch.fds", Drift: true, MinGrowth: 100},
 }

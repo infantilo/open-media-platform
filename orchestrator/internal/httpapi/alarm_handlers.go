@@ -58,6 +58,7 @@ type handlerOptions struct {
 	uiIsolation     *UIIsolation
 	profileName     string
 	profileFindings []profile.Finding
+	dbHealth        DBHealthFunc
 	modules         *module.Registry
 	moduleHooks     *module.Hooks
 	moduleDeps      module.Deps

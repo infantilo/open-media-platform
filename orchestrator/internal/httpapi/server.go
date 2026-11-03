@@ -406,7 +406,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Bewusst unauthentifiziert wie /healthz (Prometheus-Scraper senden
 	// üblicherweise keinen Bearer-Token; Netzwerk-Isolation ist hier die
 	// erwartete Absicherung, nicht Anwendungs-Auth) — s. metrics.go.
-	mux.HandleFunc("GET /metrics", requireMetricsToken(cfg.MetricsToken, handleMetrics(nodes, events, launcherSvc, reqCounters, combineMetrics(moduleMetrics(options.modules), hostSensorMetrics(hostRegistry, hostMetrics)))))
+	mux.HandleFunc("GET /metrics", requireMetricsToken(cfg.MetricsToken, handleMetrics(nodes, events, launcherSvc, reqCounters, combineMetrics(moduleMetrics(options.modules), hostSensorMetrics(hostRegistry, hostMetrics), dbHealthMetrics(options.dbHealth)))))
 
 	// Nachtrag 243: geteilter Quittier-/Maskierstand der Alarme. Lesen für
 	// jeden authentifizierten Nutzer, Ändern braucht "operate" (globaler
@@ -593,6 +593,9 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	}
 	if options.mediaKPI != nil {
 		mux.HandleFunc("GET /api/v1/kpi/media", g.requireAuth(handleMediaKPI(options.mediaKPI)))
+	}
+	if options.dbHealth != nil {
+		mux.HandleFunc("GET /api/v1/admin/db-health", g.requireVerbGlobal(authz.VerbAdmin, handleDBHealth(options.dbHealth)))
 	}
 	mux.HandleFunc("GET /api/v1/admin/profile", g.requireVerbGlobal(authz.VerbAdmin, handleProfile(options.profileName, options.profileFindings)))
 	mux.HandleFunc("POST /api/v1/admin/hosts/{id}/rotate-key", g.requireVerbGlobal(authz.VerbAdmin, handleRotateHostKey(options.hostKeyRotator, options.domainAudit)))

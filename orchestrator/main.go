@@ -1315,10 +1315,32 @@ func main() {
 				return 100
 			case "proc.rss", "orch.heap":
 				return machineMem()
+			case "db.size":
+				// Obergrenze = heutige Größe + freier Platz des Datenträgers (nur wenn OMP_DB_VOLUME_PATH gesetzt ist).
+				if h, err := housekeeping.CheckHealth(context.Background(), database); err == nil {
+					if housekeeping.AddVolume(&h, os.Getenv("OMP_DB_VOLUME_PATH")); h.Volume != nil {
+						return float64(h.DatabaseBytes + h.Volume.FreeBytes)
+					}
+				}
 			}
 			return 0
 		},
 	})
+	// Datenbankgröße stündlich auswertbar machen (Wachstum, „voll in N Tagen“ bei gesetztem OMP_DB_VOLUME_PATH).
+	go func() {
+		tick := time.NewTicker(time.Minute)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-tick.C:
+				if h, err := housekeeping.CheckHealth(ctx, database); err == nil {
+					trendCol.Observe("database", "Datenbank", "db.size", float64(h.DatabaseBytes), now)
+				}
+			}
+		}
+	}()
 	go trendAnalyzer.Run(ctx, func(err error) { slog.Warn("trend analysis failed", "error", err) })
 	// Einfrieren (Kap. 72.10): Quellen für die Momentaufnahme; die Automatik friert bei Absturz, Medien weg, Host verstummt und Failover ein
 	// (abschaltbar mit OMP_AUTO_FREEZE=0).
@@ -1481,7 +1503,11 @@ func main() {
 	timelineSink(timeline.Event{At: time.Now(), Kind: "orchestrator.started", Severity: timeline.SevInfo, Subject: cfg.ClusterNodeID, Data: map[string]any{"version": version.Version}})
 	go timelineRec.Run(ctx, hub, timelineSink)
 	go timelineStore.RunRetention(ctx, cfg.AuditRetentionDays)
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithMediaKPI(kpiTracker), httpapi.WithHostSysinfo(launcherSvc.SysinfoOnHost), httpapi.WithTimeline(timelineSrc), httpapi.WithFreeze(freezer, freezeStore), httpapi.WithTrends(trendAnalyzer), httpapi.WithSupportAccess(supportaccess.NewStore(database)), httpapi.OptionalUIIsolation(uiIso), httpapi.WithHostKeyRotation(func(id string) error {
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithDBHealth(func(ctx context.Context) (housekeeping.Health, error) {
+		h, err := housekeeping.CheckHealth(ctx, database)
+		housekeeping.AddVolume(&h, os.Getenv("OMP_DB_VOLUME_PATH"))
+		return h, err
+	}), httpapi.WithMediaKPI(kpiTracker), httpapi.WithHostSysinfo(launcherSvc.SysinfoOnHost), httpapi.WithTimeline(timelineSrc), httpapi.WithFreeze(freezer, freezeStore), httpapi.WithTrends(trendAnalyzer), httpapi.WithSupportAccess(supportaccess.NewStore(database)), httpapi.OptionalUIIsolation(uiIso), httpapi.WithHostKeyRotation(func(id string) error {
 		sg := hostSigner.Load()
 		if sg == nil {
 			return errors.New("no command channel")
