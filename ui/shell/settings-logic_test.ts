@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { effectiveValue, groupOptions, hintFor, inputKind, isDirty, type OptionDef } from "./settings-logic.ts";
+import { effectiveValue, groupOptions, hintFor, inputKind, isDirty, matchesQuery, type OptionDef, tabForQuery } from "./settings-logic.ts";
 
 const opt = (o: Partial<OptionDef>): OptionDef => ({ key: "OMP_X", label: "X", type: "string", ...o });
 
@@ -28,4 +28,19 @@ Deno.test("inputKind und isDirty", () => {
   assertEquals(inputKind(opt({ type: "path" })), "text");
   assertEquals(isDirty(" 5 ", "5"), false);
   assertEquals(isDirty("6", "5"), true);
+});
+
+Deno.test("matchesQuery: alle Wörter, egal wo und in welcher Schreibweise", () => {
+  assertEquals(matchesQuery("", "x"), true);
+  assertEquals(matchesQuery("audit tage", "Audit-Log", "OMP_AUDIT_RETENTION_DAYS", "Aufbewahrung in Tagen"), true);
+  assertEquals(matchesQuery("AUDIT retention", "Audit-Log", "OMP_AUDIT_RETENTION_DAYS"), true);
+  assertEquals(matchesQuery("audit gpu", "Audit-Log", "OMP_AUDIT_RETENTION_DAYS"), false);
+  assertEquals(matchesQuery("x", undefined), false);
+});
+
+Deno.test("tabForQuery wechselt nur, wenn der aktuelle Reiter leer ausgeht", () => {
+  assertEquals(tabForQuery("nodes", { nodes: 2, system: 5, mail: 0 }), "nodes");
+  assertEquals(tabForQuery("nodes", { nodes: 0, system: 5, mail: 1 }), "system");
+  assertEquals(tabForQuery("system", { nodes: 0, system: 0, mail: 1 }), "mail");
+  assertEquals(tabForQuery("system", { nodes: 0, system: 0, mail: 0 }), "system");
 });

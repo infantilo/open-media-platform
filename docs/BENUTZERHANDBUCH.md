@@ -1031,6 +1031,10 @@ Normalbetrieb bleibt er leer:
 
 ![Alarme (keine aktiven)](screenshots/alarme.png)
 
+### Administration → Einstellungen: Reiter und Suche
+
+Die Einstellungen sind in drei Reiter gegliedert: **Node-Optionen** (je Node-Typ und Instanz), **Betriebswerte** (Aufbewahrung, Backups, Platzierungs-Schwellen des Orchestrators) und **E-Mail-Alarmierung**. Das **Suchfeld** darüber durchsucht alle drei Reiter zugleich — Bezeichnung, Name der Umgebungsvariable, Beschreibung und Gruppe; mehrere Wörter müssen alle vorkommen („audit tage“). Die Reiter zeigen die Trefferzahl; ein Reiter ohne Treffer ist abgeblendet, und die Ansicht springt von allein zum ersten Reiter mit Treffern (bei Node-Optionen zum ersten Node-Typ mit Treffern, die Typ-Auswahl nennt die Zahl je Typ). Leeres Suchfeld zeigt wieder alles. Nicht gespeicherte Eingaben bleiben beim Suchen und Wechseln der Reiter erhalten.
+
 ### Alarme per E-Mail und Webhook
 
 Wer nicht auf die Oberfläche schaut, erfährt von einem ausgefallenen Host oder einer gerissenen Pipeline sonst nichts. Der Orchestrator kann Alarme deshalb nach außen schicken: Node-Alarme, Host online/offline, Medien-Gesundheit (Sendeweg liefert keine Medien mehr) und hohe Last. Gleiche Meldungen werden eine Minute lang zusammengefasst; ein nicht erreichbares Ziel bremst nichts (3 Wiederholungen nach 2/10/30 s, danach Warnung im Log). Gesendet wird nur vom führenden Orchestrator im Cluster.

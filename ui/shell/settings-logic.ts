@@ -74,3 +74,20 @@ export interface SystemItem {
   override?: string;
   pendingRestart: boolean;
 }
+
+/** Suche: alle Wörter der Eingabe müssen (ohne Groß-/Kleinschreibung) in einem der Felder vorkommen; leere Eingabe trifft alles. */
+export function matchesQuery(query: string, ...fields: (string | undefined)[]): boolean {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return true;
+  const hay = fields.filter(Boolean).join("\n").toLowerCase();
+  return words.every((w) => hay.includes(w));
+}
+
+export type SettingsTab = "nodes" | "system" | "mail";
+export const SETTINGS_TABS: SettingsTab[] = ["nodes", "system", "mail"];
+
+/** Erster Reiter mit Treffern; bleibt beim aktuellen, wenn der Treffer hat oder es keine Treffer gibt. */
+export function tabForQuery(current: SettingsTab, counts: Record<SettingsTab, number>): SettingsTab {
+  if (counts[current] > 0) return current;
+  return SETTINGS_TABS.find((t) => counts[t] > 0) ?? current;
+}

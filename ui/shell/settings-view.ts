@@ -7,7 +7,7 @@ import "./alert-mail-panel.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 import { apiFetch } from "./connection.ts";
 import {
-  effectiveValue, groupOptions, hintFor, inputKind, isDirty, type OptionDef, type SystemItem,
+  effectiveValue, groupOptions, hintFor, inputKind, isDirty, matchesQuery, SETTINGS_TABS, type OptionDef, type SettingsTab, type SystemItem, tabForQuery,
 } from "./settings-logic.ts";
 
 interface InstanceRow {
@@ -56,6 +56,9 @@ class SettingsView extends HTMLElement {
   #hostLabels = new Map<string, string>();
 
   #loaded = false;
+  #tab: SettingsTab = "nodes";
+  #query = "";
+  #searchInput?: HTMLInputElement;
   #mailPanel?: HTMLElement; // dieselbe Instanz behalten, damit Eingaben beim Neuzeichnen bleiben
 
   connectedCallback() {
@@ -153,6 +156,8 @@ class SettingsView extends HTMLElement {
 
   #render() {
     const scroll = this.closest("[style*=overflow]")?.scrollTop ?? 0;
+    // Das Suchfeld wird mit neu aufgebaut: Fokus vorher merken (replaceChildren nimmt ihn sonst).
+    const hadFocus = !!this.#searchInput && document.activeElement === this.#searchInput;
     this.replaceChildren();
     const head = el("div", "", tr("sett.27014d"));
     head.className = "omp-h1";
@@ -168,9 +173,85 @@ class SettingsView extends HTMLElement {
     if (this.#error) this.append(el("div", "color:var(--omp-danger,#d33);margin-bottom:10px;white-space:pre-wrap;", this.#error));
     if (this.#message) this.append(el("div", "color:var(--omp-success,#4a4);margin-bottom:10px;white-space:pre-wrap;", this.#message));
 
-    this.append(this.#renderNodes(), this.#renderSystem(), (this.#mailPanel ??= document.createElement("omp-alert-mail-panel")));
+    this.append(this.#renderSearch(), this.#renderTabs());
+    this.append(
+      this.#tab === "nodes" ? this.#renderNodes() : this.#tab === "system" ? this.#renderSystem() : (this.#mailPanel ??= document.createElement("omp-alert-mail-panel")),
+    );
+    if (hadFocus && this.#searchInput) {
+      this.#searchInput.focus();
+      const n = this.#searchInput.value.length;
+      this.#searchInput.setSelectionRange(n, n);
+    }
     const scroller = this.closest("[style*=overflow]");
     if (scroller) scroller.scrollTop = scroll;
+  }
+
+  // ---- Suche und Reiter -------------------------------------------------
+
+  #optionMatches(o: OptionDef): boolean {
+    return matchesQuery(this.#query, o.label, o.key, o.description, o.group, o.default);
+  }
+  #itemMatches(i: SystemItem): boolean {
+    return matchesQuery(this.#query, i.label, i.key, i.description, i.group);
+  }
+  #mailMatches(): boolean {
+    return matchesQuery(this.#query, tr("amail.title"), tr("amail.intro"), "smtp e-mail email mail alarm alert webhook", tr("amail.to"), tr("amail.routes.title"));
+  }
+  #counts(): Record<SettingsTab, number> {
+    let nodes = 0;
+    for (const t of this.#types) nodes += t.options.filter((o) => this.#optionMatches(o)).length;
+    return { nodes, system: (this.#system?.items ?? []).filter((i) => this.#itemMatches(i)).length, mail: this.#mailMatches() ? 1 : 0 };
+  }
+
+  #setQuery(q: string) {
+    this.#query = q;
+    if (q.trim()) {
+      this.#tab = tabForQuery(this.#tab, this.#counts());
+      const cur = this.#types.find((x) => x.type === this.#selectedType);
+      if (cur && !cur.options.some((o) => this.#optionMatches(o))) {
+        const alt = this.#types.find((x) => x.options.some((o) => this.#optionMatches(o)));
+        if (alt) {
+          this.#selectedType = alt.type;
+          this.#selectedInstance = "";
+        }
+      }
+    }
+    this.#render();
+  }
+
+  #renderSearch(): HTMLElement {
+    const wrap = el("div", "display:flex;gap:8px;align-items:center;margin:0 0 10px;max-width:520px;");
+    const inp = (this.#searchInput ??= el("input", "flex:1;padding:5px 8px;"));
+    inp.type = "search";
+    inp.placeholder = tr("setx.search");
+    inp.value = this.#query;
+    inp.oninput = () => this.#setQuery(inp.value);
+    wrap.append(inp);
+    return wrap;
+  }
+
+  #renderTabs(): HTMLElement {
+    const bar = el("div", "display:flex;gap:4px;border-bottom:1px solid rgba(255,255,255,0.12);margin-bottom:14px;");
+    const counts = this.#counts();
+    const searching = this.#query.trim() !== "";
+    for (const id of SETTINGS_TABS) {
+      const b = el("button", "padding:6px 14px;cursor:pointer;background:none;border:none;border-bottom:2px solid transparent;color:var(--omp-text-dim);font:inherit;");
+      b.textContent = tr(`setx.tab.${id}` as "setx.tab.nodes") + (searching ? ` (${counts[id]})` : "");
+      if (this.#tab === id) {
+        b.style.borderBottomColor = "var(--omp-accent,#4a8cff)";
+        b.style.color = "var(--omp-text,inherit)";
+      } else if (searching && counts[id] === 0) b.style.opacity = "0.45";
+      b.addEventListener("click", () => {
+        this.#tab = id;
+        this.#render();
+      });
+      bar.append(b);
+    }
+    return bar;
+  }
+
+  #noHits(): HTMLElement {
+    return el("div", "color:var(--omp-text-dim);margin:8px 0;", tr("setx.noHits", { p0: this.#query }));
   }
 
   #renderNodes(): HTMLElement {
@@ -183,7 +264,8 @@ class SettingsView extends HTMLElement {
     const bar = el("div", "display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;");
     const typeSel = el("select", "padding:3px;");
     for (const t of this.#types) {
-      const o = el("option", "", `${t.label} (${t.type})`);
+      const hits = this.#query.trim() ? ` · ${t.options.filter((x) => this.#optionMatches(x)).length}` : "";
+      const o = el("option", "", `${t.label} (${t.type})${hits}`);
       o.value = t.type;
       o.selected = t.type === this.#selectedType;
       typeSel.append(o);
@@ -223,7 +305,9 @@ class SettingsView extends HTMLElement {
         tr("sett.a3ccd7")));
     }
 
-    for (const [group, opts] of groupOptions(t.options)) {
+    const shown = t.options.filter((o) => this.#optionMatches(o));
+    if (shown.length === 0 && this.#query.trim()) sec.append(this.#noHits());
+    for (const [group, opts] of groupOptions(shown)) {
       const box = el("div", "margin-bottom:14px;");
       box.append(el("div", "font-weight:600;margin-bottom:4px;color:var(--omp-text-dim);", group));
       for (const o of opts) box.append(this.#renderOption(t, o, inst));
@@ -364,7 +448,9 @@ class SettingsView extends HTMLElement {
       sec.append(el("div", "margin-bottom:10px;color:var(--omp-warn,#b8860b);white-space:pre-wrap;",
         tr("sett.17a397", { p0: sys.skipped.join("\n") })));
     }
-    for (const [group, items] of groupOptions(sys.items)) {
+    const shownItems = sys.items.filter((i) => this.#itemMatches(i));
+    if (shownItems.length === 0 && this.#query.trim()) sec.append(this.#noHits());
+    for (const [group, items] of groupOptions(shownItems)) {
       const box = el("div", "margin-bottom:14px;");
       box.append(el("div", "font-weight:600;margin-bottom:4px;color:var(--omp-text-dim);", group));
       for (const it of items) box.append(this.#renderSystemItem(it));
@@ -374,7 +460,7 @@ class SettingsView extends HTMLElement {
     const det = el("details", "margin-top:10px;");
     det.append(el("summary", "cursor:pointer;color:var(--omp-text-dim);", tr("sett.a51de6")));
     const table = el("table", "border-collapse:collapse;margin-top:6px;font-size:12px;");
-    for (const e of sys.startup) {
+    for (const e of sys.startup.filter((x) => matchesQuery(this.#query, x.label, x.key, x.value))) {
       const tr = el("tr");
       tr.append(el("td", "padding:2px 14px 2px 0;", e.label), el("td", "padding:2px 14px 2px 0;font-family:monospace;color:var(--omp-text-dim);", e.key), el("td", "padding:2px 0;", e.value));
       table.append(tr);

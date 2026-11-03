@@ -2849,4 +2849,10 @@ export const de = {
   "amail.route.actions": "Benutzeraktionen",
   "amail.route.actionsHint": "nur für „Manuelle Benutzeraktion“; leer = alle. Beispiele: review.rejected, workflow.*",
   "amail.testAction": "Aktion, z. B. review.rejected",
+  "setx.tab.nodes": "Node-Optionen",
+  "setx.tab.system": "Betriebswerte",
+  "setx.tab.mail": "E-Mail-Alarmierung",
+  "setx.search": "Einstellungen durchsuchen …",
+  "setx.noHits": "Keine Einstellung passt zu „{p0}“ in diesem Reiter.",
+  "setx.clear": "Suche löschen",
 };

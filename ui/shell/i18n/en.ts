@@ -2850,4 +2850,10 @@ export const en: Record<keyof typeof de, string> = {
   "amail.route.actions": "User actions",
   "amail.route.actionsHint": "only for “Manual user action”; empty = all. Examples: review.rejected, workflow.*",
   "amail.testAction": "Action, e.g. review.rejected",
+  "setx.tab.nodes": "Node options",
+  "setx.tab.system": "Operating values",
+  "setx.tab.mail": "E-mail alerting",
+  "setx.search": "Search settings …",
+  "setx.noHits": "No setting matches “{p0}” in this tab.",
+  "setx.clear": "Clear search",
 };
