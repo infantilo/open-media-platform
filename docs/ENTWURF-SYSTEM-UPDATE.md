@@ -260,3 +260,133 @@ Noch nicht enthalten
 - Im Entwicklungsbetrieb überschreibt ein späteres `make start` den
   eingespielten Stand wieder mit einem Quellcode-Build (Version „dev“);
   `start-hosts.sh` verhält sich genauso (außer mit `OMP_SKIP_BUILD=1`).
+
+## 11. Cluster-Rolling-Update (Plan, 2026-11-03, **noch kein Code**)
+
+Ziel: ein Paket im Browser einspielen, alle Orchestrator-Mitglieder des
+Raft-Clusters werden nacheinander aktualisiert, ohne dass die Steuerung
+ausfällt. Dieselbe Mechanik liefert „Cluster rollierend neu starten“ (Paket
+leer, nur Neustart) — das ist der zentrale Neustart.
+
+### 11.1 Ausgangslage (geprüft)
+
+- Jedes Mitglied hat eigenes Dateisystem und eigenen Supervisor
+  (`127.0.0.1:8091`); `apply` wirkt nur lokal (`handleApplyUpdate`).
+- Postgres, NATS und JWT-Geheimnis sind gemeinsam; Raft hält nur
+  Mitgliedschaft/Leader (`cluster.Status`: Peers, `peerHttpAddrs`,
+  `appliedIndex/lastIndex`, `fsmVersion`).
+- Vorbild für die Verteilung: `updates/distribute.go` (Einmal-Token, Download
+  vom eigenen Orchestrator, Prüfung mit dem **eigenen** Vertrauensanker).
+- Fencing-Vorbild: Raft-Amtszeit `Omp-Term` in signierten Host-Kommandos.
+
+### 11.2 Ablauf
+
+1. Vorprüfung (alles muss grün sein, sonst 409 mit Klartext):
+   - mindestens **3 stimmberechtigte Mitglieder** (oder 2 + Zeuge); bei genau
+     2 gibt es beim Neustart eines Mitglieds kein Quorum → blockiert (Befund `cluster-quorum`, siehe 11.9);
+   - alle Mitglieder erreichbar, Follower, `appliedIndex` nahe `lastIndex`;
+   - Paket hat Manifest-Merkmal **`rollingSafe: true`** (siehe 11.4);
+   - kein Restore/Update läuft (gemeinsames Busy-Flag).
+2. Paket an alle Mitglieder verteilen (Einmal-Token, Download vom
+   Koordinator, Prüfung am Mitglied selbst). Erst wenn **alle** das Paket
+   geprüft haben, beginnt der Tausch.
+3. Reihenfolge: Zeuge, dann Follower einzeln, **Leader zuletzt**. Vor dem
+   Leader: `raft.LeadershipTransfer()` auf ein bereits aktualisiertes
+   Mitglied (neue Methode `Node.TransferLeadership`), dann den alten Leader
+   als Follower aktualisieren.
+4. Je Mitglied: lokaler Supervisor führt die bekannten Phasen aus (stopping →
+   swapping → starting → verifying → bei Fehler eigener Rollback). **Tor zum
+   nächsten Mitglied:** `/healthz` ok, Version = Zielversion, Raft-Zustand
+   Follower/Leader, Rückstand `lastIndex − appliedIndex` unter Schwelle,
+   Quorum weiter vorhanden. Erst dann der nächste.
+5. Fehler irgendwo: Rollout **hält an**, übrige Mitglieder bleiben
+   unberührt, UI zeigt „gemischter Stand“ (Mitglied → Version). Das
+   fehlgeschlagene Mitglied hat sich selbst zurückgerollt. Kein automatisches
+   Zurückrollen bereits fertiger Mitglieder; Knopf „Rollout fortsetzen“ /
+   „bereits aktualisierte zurücksetzen“ (Vorgängerpaket liegt im
+   `.updates/rollback`).
+
+### 11.3 Wer steuert? (Kernentscheidung)
+
+Der Koordinator darf nicht „der Prozess sein, mit dem der Browser spricht“ —
+der Leader wird mitten im Rollout neu gestartet. Daher:
+
+- **Rollout-Zustand in Postgres** (Tabelle `cluster_rollouts`: ID, Paket,
+  Zielversion, Schritte je Mitglied mit Zustand/Zeit/Fehler, Gesamtzustand).
+- Der Treiber läuft unter `runWhileLeader` (bestehendes Muster D12). Wechselt
+  der Leader (Transfer oder Absturz), setzt der neue Leader den Rollout aus
+  dem Datenbankzustand fort; Schritte sind idempotent (Zielversion schon da
+  → überspringen).
+- Befehl an ein Mitglied: neue interne Route
+  `POST /api/v1/internal/cluster-update/apply`, Authentisierung per HMAC aus
+  dem gemeinsamen JWT-Geheimnis (Ableitung `omp-cluster-update-v1`, gleiche
+  Technik wie `nodeauth`) **plus** `Omp-Term`-Fencing (ein abgelöster Leader
+  kann keinen Schritt mehr auslösen). Das Mitglied ruft seinen lokalen
+  Supervisor — der Supervisor bleibt loopback-only.
+
+### 11.4 Datenbank-Migrationen (das eigentliche Risiko)
+
+Während des Rollouts laufen alte und neue Version gleichzeitig gegen
+**dieselbe** Datenbank. Daher:
+
+- Manifest-Merkmal `rollingSafe`: Migrationen sind rein additiv
+  (Expand/Contract, §7) und das alte Binary läuft gegen das neue Schema.
+  `tools/update-bundle` setzt es nur auf ausdrückliche Angabe; ohne das
+  Merkmal bietet die UI nur „Alle gleichzeitig mit kurzer Unterbrechung“ an
+  (Mitglieder stoppen, einer migriert, übrige starten).
+- Raft-FSM: neue Befehlsarten, die ein altes Mitglied nicht kennt, brechen
+  die Replikation. Tor: `fsmVersion` der Zielversion darf höchstens +0
+  Befehlsarten abweichen, sonst nicht `rollingSafe`. Prüfung im Test
+  (FSM der alten Version spielt Log der neuen ab).
+- Migrationen laufen beim Start des ersten aktualisierten Mitglieds; die
+  Migrationssperre existiert bereits (prüfen: nicht geraten, vor Schritt 4
+  im Code nachlesen).
+
+### 11.5 Reihenfolge mit Hosts
+
+Wie in §6 vorgesehen: erst Host-Agents (`distribute`, bestehend), dann
+Orchestrator-Cluster. Im Rollout ein Schalter „Hosts zuerst verteilen“
+(Standard an). Laufende Sendungen werden nie neu gestartet.
+
+### 11.6 Oberfläche
+
+Administration → System-Update → Paket: Karte „Cluster-Rollout“ mit Tabelle
+Mitglied | Rolle | Version | Schritt | Zustand, Fortschrittsbalken,
+„Abbrechen/Anhalten“, „Fortsetzen“. Zusätzlich „Cluster rollierend neu
+starten“ (ohne Paket). Bestätigung durch Tippen der Zielversion wie bisher.
+Texte über `t()` (de.ts + en.ts), Dialoge nie per JS-`confirm`.
+
+### 11.7 Tests und Verifikation
+
+- Unit: Zustandsautomat des Treibers mit Fake-Mitgliedern (Erfolg, Fehler im
+  2. Mitglied, Leader-Wechsel mitten im Rollout, Fortsetzen, Quorum-Tor,
+  Vorprüfung 2 Mitglieder).
+- Cluster-Test in-process (`cluster_test.go`, 3 Knoten): `TransferLeadership`.
+- FSM-Kompatibilität alt → neu (11.4).
+- **Live:** 3 Orchestratoren lokal (andere Ports/Datenverzeichnisse, gemeinsame
+  Test-Postgres, Fake-Supervisor-Skripte bzw. echter Supervisor je Instanz),
+  zwei gestempelte Pakete, Rollout alt → neu; währenddessen ein Schleifen-
+  Client auf `/api/v1/cluster/status` gegen alle Mitglieder (nie länger als
+  Wahlzeit ohne Leader). Absichtlich kaputtes Paket → Halt am ersten
+  Mitglied, Rest unberührt. `.60/.61` haben nur 2 Mitglieder: dort nur mit
+  Zeuge oder `force`-Test. Wenig CPU: 3 Orchestratoren, keine Nodes.
+
+### 11.8 Schritte (je Sitzung einer)
+
+| # | Inhalt | Prüfkriterium |
+|---|---|---|
+| 84.1 | `Node.TransferLeadership` + Mitglieds-Zustand (Rolle/Lag/Quorum-Tor) | Cluster-Test 3 Knoten |
+| 84.2 | Manifest `rollingSafe` + `update-bundle` + FSM-Kompatibilitätstest | Bundle-Test, Tests grün |
+| 84.3 | Tabelle `cluster_rollouts` (Migration), Treiber-Zustandsautomat mit Fakes | Unit-Tests inkl. Leader-Wechsel |
+| 84.4 | Interne Mitglieds-Route (HMAC + Term) + Paketverteilung an Mitglieder | Handler-Tests, Fremd-Token 401, alter Term abgewiesen |
+| 84.5 | API + UI-Karte + i18n + Handbuch/HANDBUCH §9 | `deno check`, i18n-Test |
+| 84.6 | Live-Lauf mit 3 lokalen Orchestratoren, Fehlerfall, Browser-Klicktest | siehe 11.7 |
+
+### 11.9 Entscheidungen des Nutzers (2026-11-03)
+
+1. **2 Mitglieder ohne Zeuge: blockieren.** Kein `force`; die Vorprüfung
+   verweist auf Zeuge/dritten Orchestrator.
+2. **Bei Fehler nur anhalten**, kein automatisches Zurückrollen bereits
+   aktualisierter Mitglieder; manuell „Fortsetzen“ (das „bereits
+   aktualisierte zurücksetzen“ aus 11.2 Punkt 5 entfällt).
+3. **Paket ohne `rollingSafe` wird verweigert** (kein „alle gleichzeitig“).
