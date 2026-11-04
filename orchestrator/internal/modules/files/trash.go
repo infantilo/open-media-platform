@@ -14,7 +14,7 @@ import (
 )
 
 func (m *Module) rootDF(root Root) (jobwire.DFResult, error) {
-	raw, err := m.hostOp(root.HostID, jobwire.FileOp{Op: jobwire.FileOpDF, Root: root.Path})
+	raw, err := m.rootOp(root, jobwire.FileOp{Op: jobwire.FileOpDF})
 	if err != nil {
 		return jobwire.DFResult{}, err
 	}
@@ -23,8 +23,8 @@ func (m *Module) rootDF(root Root) (jobwire.DFResult, error) {
 }
 
 func (m *Module) purgeOp(root Root, op jobwire.FileOp) (jobwire.PurgeResult, error) {
-	op.Op, op.Root = jobwire.FileOpPurge, root.Path
-	raw, err := m.hostOp(root.HostID, op)
+	op.Op = jobwire.FileOpPurge
+	raw, err := m.rootOp(root, op)
 	if err != nil {
 		return jobwire.PurgeResult{}, err
 	}
@@ -257,7 +257,7 @@ func (m *Module) proxyMembers(roots []Root, assetID string) []famFile {
 		if r.Role != RoleProxy {
 			continue
 		}
-		raw, err := m.hostOp(r.HostID, jobwire.FileOp{Op: jobwire.FileOpList, Root: r.Path, Rel: "proxies/" + assetID, Limit: 200})
+		raw, err := m.rootOp(r, jobwire.FileOp{Op: jobwire.FileOpList, Rel: "proxies/" + assetID, Limit: 200})
 		if err != nil {
 			continue
 		}
@@ -309,7 +309,7 @@ func (m *Module) ExecDelete(ctx context.Context, req DeleteRequest, actor string
 		for k, i := range idxs {
 			rels[k] = plan.Items[i].Rel
 		}
-		raw, err := m.hostOp(root.HostID, jobwire.FileOp{Op: jobwire.FileOpTrash, Root: root.Path, Rels: rels})
+		raw, err := m.rootOp(root, jobwire.FileOp{Op: jobwire.FileOpTrash, Rels: rels})
 		if err != nil {
 			for _, i := range idxs {
 				plan.Items[i].Status, plan.Items[i].Error = "error", err.Error()

@@ -1,14 +1,11 @@
 // <omp-files-view> — Dateien (Kapitel 86, docs/ENTWURF-DATEIVERWALTUNG.md): Explorer je Ort/Host mit Dateifamilien (Rolle, „Gehört zu“),
 // Dateizustand je Asset („Datei fehlt“), Papierkorb mit Wiederherstellen, Löschen mit Verwendungsprüfung und Einstellungen.
-import { apiFetch, confirmDialog, features, getLang, showToast, t } from "../host.ts";
+import { apiFetch, confirmDialog, features, showToast, t } from "../host.ts";
 import { hasFeature } from "../../kit/features.ts";
+import { btn, type Cfg, CARD, DIM, el, fmtMs, hostLabel, INPUT, jsonOrThrow, openModal, pill, post, roleLabel, type Root, STATE_COLOR, stateLabel, TD, TH } from "./files-ui.ts";
 import { canSubmitDelete, crumbs, deleteMode, fmtBytes, freePercent, joinPath, parentPath, remaining, type Plan } from "./files-logic.ts";
 
-interface Root {
-  id: string; name: string; hostId: string; path: string; role: string; readOnly: boolean;
-  trashDays?: number; emergencyFreeGb?: number; emergencyFreePct?: number; lockBeforeH?: number; lockAfterH?: number;
-  free?: number; total?: number; reachable?: boolean; error?: string; trashItems?: number;
-}
+
 interface AssetRef { id: string; title: string; type: string; status: string; representationType?: string }
 interface Entry {
   name: string; isDir?: boolean; size?: number; mtimeMs?: number; abs?: string; role?: string; assets?: AssetRef[];
@@ -17,55 +14,15 @@ interface Entry {
 interface Reason { kind: string; text: string }
 interface DelItem { rootId: string; rootName: string; rel: string; abs: string; role?: string; derived?: boolean; status: string; error?: string; usage?: { absolute: Reason[]; hard: Reason[]; soft: Reason[] } }
 interface DelPlan extends Plan { items: (DelItem & { rel: string; status: string })[] }
-interface Cfg {
-  trashDays: number; emergencyFreeGb: number; emergencyFreePct: number; graceMinutes: number; lockBeforeH: number; lockAfterH: number;
-  plannedIsHard: boolean; checkEveryMin: number; checkBatch: number; sweepEveryMin: number;
-}
+
 interface RepState { representationId: string; type: string; provider: string; uri: string; state: string; size?: number; detail?: string; checkedAt?: string }
 interface TrashRow { id: string; rel: string; deletedMs: number; size: number; expiresMs: number }
 interface AssetRow { id: string; title: string; type: string; status: string }
 
-const DIM = "color:var(--omp-text-dim);font-size:var(--omp-font-size-sm);";
-const CARD = "background:var(--omp-surface-raised);border:1px solid var(--omp-border);border-radius:var(--omp-radius);padding:12px;margin-bottom:12px;";
-const INPUT = "background:var(--omp-bg);color:var(--omp-text);border:1px solid var(--omp-border);border-radius:var(--omp-radius);padding:4px 6px;font:inherit;";
-const TH = "text-align:left;padding:4px 8px;font-weight:600;border-bottom:1px solid var(--omp-border);white-space:nowrap;";
-const TD = "padding:4px 8px;border-bottom:1px solid var(--omp-border);vertical-align:top;";
-const STATE_COLOR: Record<string, string> = { present: "var(--omp-ok, #3a3)", missing: "var(--omp-danger, #d44)", unreachable: "var(--omp-warn, #db3)", unknown: "var(--omp-text-dim)", unchecked: "var(--omp-text-dim)" };
-const ROLES = ["media", "import", "proxy", "subtitle", "recording", "output", "other"];
 
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, style = "", text = ""): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (style) e.style.cssText = style;
-  if (text) e.textContent = text;
-  return e;
-}
-function btn(label: string, on: () => void, opts: { disabled?: boolean; danger?: boolean; role?: string } = {}): HTMLButtonElement {
-  const b = el("button", "cursor:pointer;" + (opts.danger ? "color:var(--omp-danger,#d44);" : ""), label);
-  b.disabled = !!opts.disabled;
-  if (opts.role) b.setAttribute("data-role", opts.role);
-  b.addEventListener("click", on);
-  return b;
-}
-function pill(text: string, color: string): HTMLElement {
-  return el("span", `display:inline-block;padding:0 6px;border-radius:8px;border:1px solid ${color};color:${color};font-size:var(--omp-font-size-xs);white-space:nowrap;`, text);
-}
-const roleLabel = (r?: string): string => (r ? t(`filesv.role.${r}`) === `filesv.role.${r}` ? r : t(`filesv.role.${r}`) : "");
-const stateLabel = (s?: string): string => (s ? (t(`filesv.state.${s}`) === `filesv.state.${s}` ? s : t(`filesv.state.${s}`)) : "");
-const hostLabel = (h: string): string => (h ? t("filesv.root.host", { p0: h }) : t("filesv.root.host.local"));
-const fmtMs = (ms?: number): string => (ms ? new Date(ms).toLocaleString(getLang() === "de" ? "de-DE" : "en-GB") : "–");
-
-async function jsonOrThrow<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    let msg = `${res.status}`;
-    try { msg = ((await res.json()) as { error?: string }).error ?? msg; } catch { /* kein JSON */ }
-    throw new Error(msg);
-  }
-  return (await res.json()) as T;
-}
-const post = (url: string, body: unknown) => apiFetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 export class FilesView extends HTMLElement {
-  #tab: "places" | "assets" | "trash" | "settings" = "places";
+  #tab: "places" | "assets" | "trash" = "places";
   #roots: Root[] = [];
   #rootId = "";
   #path = "";
@@ -157,8 +114,7 @@ export class FilesView extends HTMLElement {
     if (!this.#can.view) { this.#body.append(el("div", DIM, t("filesv.err.noRight"))); return; }
     const bar = el("div", "display:flex;gap:6px;align-items:center;margin-bottom:12px;flex-wrap:wrap;");
     bar.append(el("h2", "font-size:var(--omp-font-size-lg);margin:0 12px 0 0;", t("filesv.title")));
-    const tabs: ["places" | "assets" | "trash" | "settings", string][] = [["places", "filesv.tab.places"], ["assets", "filesv.tab.assets"], ["trash", "filesv.tab.trash"]];
-    if (this.#can.admin) tabs.push(["settings", "filesv.tab.settings"]);
+    const tabs: ["places" | "assets" | "trash", string][] = [["places", "filesv.tab.places"], ["assets", "filesv.tab.assets"], ["trash", "filesv.tab.trash"]];
     for (const [id, key] of tabs) {
       const b = btn(t(key), () => void this.#goTab(id), { role: `files-tab-${id}` });
       if (this.#tab === id) b.style.cssText += "font-weight:700;border-color:var(--omp-accent-cyan);";
@@ -170,16 +126,14 @@ export class FilesView extends HTMLElement {
       case "places": this.#body.append(this.#viewPlaces()); break;
       case "assets": this.#body.append(this.#viewAssets()); break;
       case "trash": this.#body.append(this.#viewTrash()); break;
-      case "settings": this.#body.append(this.#viewSettings()); break;
     }
   }
 
-  async #goTab(tab: "places" | "assets" | "trash" | "settings") {
+  async #goTab(tab: "places" | "assets" | "trash") {
     this.#tab = tab;
     if (tab === "places") await this.#loadDir();
     if (tab === "assets") await this.#loadAssets();
     if (tab === "trash") await this.#loadTrash();
-    if (tab === "settings") await this.#loadCfg();
     this.#render();
   }
 
@@ -193,7 +147,12 @@ export class FilesView extends HTMLElement {
       const card = el("div", CARD + "cursor:pointer;margin-bottom:8px;padding:8px;" + (r.id === this.#rootId ? "border-color:var(--omp-accent-cyan);" : ""));
       card.setAttribute("data-root-id", r.id);
       card.append(el("div", "font-weight:600;", r.name));
-      card.append(el("div", DIM, `${hostLabel(r.hostId)} · ${roleLabel(r.role)}${r.readOnly ? " · " + t("filesv.root.readOnly") : ""}`));
+      const where = r.shared ? `${t("filesv.root.shared")}${r.mount?.activeHost !== undefined ? " · " + t("filesv.root.activeHost", { p0: hostLabel(r.mount.activeHost) }) : ""}` : hostLabel(r.hostId);
+      card.append(el("div", DIM, `${where} · ${roleLabel(r.role)}${r.readOnly ? " · " + t("filesv.root.readOnly") : ""}`));
+      if (r.mount && r.mount.state !== "ok") {
+        const since = r.mount.since ? new Date(r.mount.since).toLocaleTimeString() : "";
+        card.append(el("div", "color:var(--omp-danger,#d44);font-weight:600;", r.mount.state === "hung" ? t("filesv.root.mount.hung", { p0: since }) : t("filesv.root.mount.unreachable", { p0: since })));
+      }
       card.append(el("div", DIM + "word-break:break-all;", r.path));
       if (r.reachable === false) card.append(el("div", "color:var(--omp-danger,#d44);", t("filesv.root.unreachable", { p0: r.error ?? "" })));
       else {
@@ -303,15 +262,7 @@ export class FilesView extends HTMLElement {
 
   // ---- Löschen ------------------------------------------------------------------------------------------
 
-  #modal(title: string, build: (box: HTMLElement, close: () => void) => void): void {
-    const overlay = el("div", "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000;display:flex;align-items:center;justify-content:center;");
-    const box = el("div", "background:var(--omp-surface-raised);color:var(--omp-text);border:1px solid var(--omp-border);border-radius:var(--omp-radius);padding:16px;width:min(860px,94vw);max-height:88vh;overflow:auto;");
-    box.append(el("h3", "margin:0 0 10px;font-size:var(--omp-font-size-md);", title));
-    const close = () => overlay.remove();
-    build(box, close);
-    overlay.append(box);
-    document.body.append(overlay);
-  }
+  #modal(title: string, build: (box: HTMLElement, close: () => void) => void): void { openModal(title, build); }
 
   async #openDelete(r: Root) {
     const st = { family: false, confirm: false, force: false, reason: "", plan: null as DelPlan | null, error: "" };
@@ -610,107 +561,6 @@ export class FilesView extends HTMLElement {
     return wrap;
   }
 
-  // ---- Einstellungen (files.admin) -----------------------------------------------------------------------
-
-  async #loadCfg() {
-    try { this.#cfg = await jsonOrThrow<Cfg>(await apiFetch("/api/v1/files/config")); await this.#loadRoots(); this.#err = ""; }
-    catch (e) { this.#err = t("filesv.err.load", { p0: (e as Error).message }); }
-  }
-
-  #viewSettings(): HTMLElement {
-    const wrap = el("div");
-    const c = this.#cfg;
-    if (c) {
-      const card = el("div", CARD);
-      card.append(el("h3", "margin:0 0 8px;font-size:var(--omp-font-size-md);", t("filesv.set.config")));
-      const fields: [keyof Cfg, string][] = [["trashDays", "filesv.set.trashDays"], ["emergencyFreeGb", "filesv.set.emerGb"], ["emergencyFreePct", "filesv.set.emerPct"], ["graceMinutes", "filesv.set.grace"],
-        ["lockBeforeH", "filesv.set.lockBefore"], ["lockAfterH", "filesv.set.lockAfter"], ["checkEveryMin", "filesv.set.checkEvery"], ["sweepEveryMin", "filesv.set.sweepEvery"]];
-      const inputs = new Map<keyof Cfg, HTMLInputElement>();
-      const grid = el("div", "display:grid;grid-template-columns:minmax(260px,1fr) 120px;gap:6px 12px;align-items:center;max-width:620px;");
-      for (const [k, key] of fields) {
-        const i = el("input", INPUT) as HTMLInputElement; i.type = "number"; i.min = "0"; i.step = "any"; i.value = String(c[k]);
-        inputs.set(k, i); grid.append(el("label", "", t(key)), i);
-      }
-      const pl = el("input") as HTMLInputElement; pl.type = "checkbox"; pl.checked = c.plannedIsHard;
-      const plWrap = el("label", "display:flex;gap:6px;align-items:center;grid-column:1 / span 2;"); plWrap.append(pl, document.createTextNode(t("filesv.set.planned")));
-      grid.append(plWrap);
-      card.append(grid);
-      card.append(btn(t("filesv.set.save"), async () => {
-        const body: Record<string, unknown> = { plannedIsHard: pl.checked };
-        for (const [k, i] of inputs) body[k] = Number(i.value);
-        const res = await apiFetch("/api/v1/files/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-        if (res.ok) { this.#cfg = (await res.json()) as Cfg; showToast(t("filesv.set.saved")); } else showToast(((await res.json().catch(() => ({}))) as { error?: string }).error ?? String(res.status));
-      }, { role: "files-config-save" }));
-      wrap.append(card);
-    }
-    wrap.append(this.#rootsCard());
-    return wrap;
-  }
-
-  #rootsCard(): HTMLElement {
-    const card = el("div", CARD);
-    card.append(el("h3", "margin:0 0 4px;font-size:var(--omp-font-size-md);", t("filesv.set.roots")), el("div", DIM + "margin-bottom:8px;", t("filesv.set.note")));
-    const num = (v: number | undefined) => (v === undefined ? "" : String(v));
-    const opt = (s: string): number | undefined => (s.trim() === "" ? undefined : Number(s));
-    const table = el("table", "border-collapse:collapse;width:100%;");
-    const h = el("tr");
-    for (const x of ["filesv.set.name", "filesv.set.host", "filesv.set.path", "filesv.set.role", "filesv.set.readOnly", "filesv.set.trashDaysRoot", "filesv.set.lockBeforeRoot", "filesv.set.lockAfterRoot", "filesv.set.emerGbRoot"]) h.append(el("th", TH, t(x)));
-    h.append(el("th", TH));
-    table.append(h);
-    for (const r of this.#roots) {
-      const tr = el("tr");
-      const role = el("select", INPUT) as HTMLSelectElement;
-      for (const v of ROLES) { const o = el("option"); o.value = v; o.textContent = roleLabel(v); role.append(o); }
-      role.value = r.role;
-      const ro = el("input") as HTMLInputElement; ro.type = "checkbox"; ro.checked = r.readOnly;
-      const mk = (v: number | undefined) => { const i = el("input", INPUT + "width:70px;") as HTMLInputElement; i.type = "number"; i.min = "0"; i.step = "any"; i.value = num(v); return i; };
-      const td = mk(r.trashDays), lb = mk(r.lockBeforeH), la = mk(r.lockAfterH), eg = mk(r.emergencyFreeGb);
-      const cell = (n: Node) => { const c = el("td", TD); c.append(n); return c; };
-      const actions = el("td", TD + "white-space:nowrap;");
-      actions.append(btn(t("filesv.set.save"), async () => {
-        const res = await apiFetch(`/api/v1/files/roots/${r.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role: role.value, readOnly: ro.checked, trashDays: opt(td.value), lockBeforeH: opt(lb.value), lockAfterH: opt(la.value), emergencyFreeGb: opt(eg.value) }) });
-        showToast(res.ok ? t("filesv.set.rootSaved") : ((await res.json().catch(() => ({}))) as { error?: string }).error ?? String(res.status));
-        await this.#loadRoots(); this.#render();
-      }), btn(t("filesv.set.remove"), async () => {
-        if (!(await confirmDialog(t("filesv.set.removeConfirm", { p0: r.name })))) return;
-        await apiFetch(`/api/v1/files/roots/${r.id}`, { method: "DELETE" });
-        await this.#loadRoots(); this.#render();
-      }, { danger: true }));
-      tr.append(el("td", TD, r.name), el("td", TD, hostLabel(r.hostId)), el("td", TD + "word-break:break-all;", r.path), cell(role), cell(ro), cell(td), cell(lb), cell(la), cell(eg), actions);
-      table.append(tr);
-    }
-    card.append(table);
-    card.append(btn(t("filesv.set.addRoot"), () => void this.#addRoot(), { role: "files-add-root" }));
-    return card;
-  }
-
-  async #addRoot() {
-    let hosts: { id?: string; ID?: string; label?: string; Label?: string; hostname?: string }[] = [];
-    try { hosts = (await jsonOrThrow<typeof hosts>(await apiFetch("/api/v1/hosts"))) ?? []; } catch { /* nur Texteingabe */ }
-    this.#modal(t("filesv.set.addRoot"), (box, close) => {
-      const mk = (label: string, i: HTMLElement) => { box.append(el("div", "margin-top:8px;", label), i); };
-      const name = el("input", INPUT + "width:100%;box-sizing:border-box;") as HTMLInputElement;
-      const host = el("input", INPUT + "width:100%;box-sizing:border-box;") as HTMLInputElement; host.setAttribute("list", "files-hosts");
-      const dl = el("datalist"); dl.id = "files-hosts";
-      for (const h of hosts) { const o = el("option"); o.value = h.id ?? h.ID ?? ""; o.label = h.label ?? h.Label ?? h.hostname ?? ""; dl.append(o); }
-      const path = el("input", INPUT + "width:100%;box-sizing:border-box;") as HTMLInputElement;
-      const role = el("select", INPUT) as HTMLSelectElement;
-      for (const v of ROLES) { const o = el("option"); o.value = v; o.textContent = roleLabel(v); role.append(o); }
-      const ro = el("input") as HTMLInputElement; ro.type = "checkbox";
-      mk(t("filesv.set.name"), name); mk(t("filesv.set.host"), host); box.append(dl); mk(t("filesv.set.path"), path); mk(t("filesv.set.role"), role);
-      const l = el("label", "display:flex;gap:6px;align-items:center;margin-top:8px;"); l.append(ro, document.createTextNode(t("filesv.set.readOnly"))); box.append(l);
-      const foot = el("div", "display:flex;gap:8px;justify-content:flex-end;margin-top:12px;");
-      foot.append(btn(t("filesv.del.cancel"), close), btn(t("filesv.set.addRoot"), async () => {
-        const res = await post("/api/v1/files/roots", { name: name.value, hostId: host.value.trim(), path: path.value, role: role.value, readOnly: ro.checked });
-        if (!res.ok) { showToast(((await res.json().catch(() => ({}))) as { error?: string }).error ?? String(res.status)); return; }
-        const made = (await res.json().catch(() => ({}))) as { warning?: string };
-        showToast(made.warning ? t("filesv.set.rootWarn", { p0: made.warning }) : t("filesv.set.rootSaved"));
-        close();
-        await this.#loadRoots(); this.#render();
-      }, { role: "files-add-root-run" }));
-      box.append(foot);
-    });
-  }
 }
 
 if (!customElements.get("omp-files-view")) customElements.define("omp-files-view", FilesView);

@@ -47,6 +47,8 @@ type Module struct {
 	cfg   Config
 	cfgAt time.Time
 	cfgOK bool
+
+	mounts *mountTracker
 }
 
 // New legt das Modul an.
@@ -95,7 +97,7 @@ func (m *Module) invalidate() {
 
 // Migrations implementiert module.Migrator.
 func (*Module) Migrations() []module.Migration {
-	return []module.Migration{{Version: 1, Name: "file_roots_representation_health", SQL: schema}}
+	return []module.Migration{{Version: 1, Name: "file_roots_representation_health", SQL: schema}, {Version: 2, Name: "file_roots_shared", SQL: schemaV2}}
 }
 
 func (m *Module) audit(actor, objectType, id, action string, details map[string]any) {
@@ -145,6 +147,7 @@ func (m *Module) loop(ctx context.Context) {
 					slog.Error("files: Hintergrundlauf abgestürzt", "panic", p)
 				}
 			}()
+			m.ProbeRoots(ctx)
 			cfg := m.Config()
 			if err := m.CheckDue(ctx, cfg); err != nil {
 				slog.Warn("files: Dateiprüfung fehlgeschlagen", "error", err)

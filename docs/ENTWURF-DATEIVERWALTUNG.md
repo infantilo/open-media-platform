@@ -145,3 +145,12 @@ Im Assets-Tab: Filter „Dateien“ (4) und Asset-Detail → Representation → 
 - **Nicht umgesetzt:** Prüfung von `http`-Representations (Zustand „nicht prüfbar“), S3-Prüfung (Hook `ObjectHead` vorhanden, nicht an die Storage-Backends angebunden), Verwendungsprüfung gegen ffmpeg-Jobs
   nur über die Ein-/Ausgabepfade der Job-Spezifikation, Playlists außerhalb des Playout-Moduls (z. B. Fremdplaylist-Importe, die nicht im Kanalzustand stehen).
 
+### 9.1 Nachtrag: gemeinsamer Speicher, hängende Mounts, Einstellungen in der Administration (Nutzerwunsch 2026-11-04)
+
+- **Gemeinsamer Speicher** (`file_roots.shared`, `hosts_json`): ein Ort, mehrere bedienende Hosts in Vorzugsreihenfolge; `Module.rootOp` versucht sie der Reihe nach (nur Host-/Mount-Fehler führen zum nächsten Host, ungültige Anfragen nicht)
+  und merkt sich den zuletzt erfolgreichen. Der Ort erscheint einmal im Explorer.
+- **Hängende Mounts** (`jobwire/files_timeout.go`): Frist je Operation (lesend 3,5 s, unter der NATS-Frist von 5 s; ändernd 25 s, NATS 30 s); die Operation läuft in einer Goroutine, bei Fristablauf kommt sofort `ErrMountHung`;
+  die Wurzel gilt als hängend, solange diese Goroutine nicht zurück ist (weitere Operationen werden sofort abgewiesen, höchstens ein hängender Strang je Wurzel; gleichzeitige Operationen innerhalb der Frist sind erlaubt).
+  Gilt im Host-Agent und im Orchestrator. Zustand je Ort (`ok/hung/unreachable`) und Alarme `file-mount-hung`, `file-root-unreachable`, `file-mount-recovered` (zwei Fehlschläge in Folge, Takt-Test alle 30 s).
+- **Einstellungen** wohnen in der Administration (Plattform → Betrieb → Dateien, Element `omp-files-settings`), nicht mehr im Reiter „Dateien“.
+

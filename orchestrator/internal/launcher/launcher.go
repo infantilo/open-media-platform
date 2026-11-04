@@ -1431,12 +1431,16 @@ func (l *Launcher) CheckPathOnHost(hostID, path, kind string) (nodeoptions.PathI
 // sonst über den Host-Agent des Hosts. Das Ergebnis ist das JSON der jeweiligen jobwire-Ergebnisart.
 func (l *Launcher) FileOp(hostID string, op jobwire.FileOp) ([]byte, error) {
 	if hostID == "" {
-		return jobwire.RunFileOp(op)
+		return jobwire.RunFileOpTimeout(op, 0) // mit Frist: ein hängender Mount blockiert den Orchestrator nie
 	}
 	if l.nc == nil {
 		return nil, ErrRemoteUnavailable
 	}
-	resp, err := l.sendCommand(hostID, remoteCommand{Action: jobwire.ActionFiles, FileOp: &op})
+	timeout := remoteCommandTimeout
+	if jobwire.OpTimeout(op.Op) > remoteCommandTimeout { // ändernde Operationen dürfen länger dauern (Papierkorb, Leeren)
+		timeout = jobwire.WriteOpNATSTimeout
+	}
+	resp, err := l.sendCommandT(hostID, remoteCommand{Action: jobwire.ActionFiles, FileOp: &op}, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -1974,12 +1978,16 @@ type remoteResponse struct {
 }
 
 func (l *Launcher) sendCommand(hostID string, cmd remoteCommand) (remoteResponse, error) {
+	return l.sendCommandT(hostID, cmd, remoteCommandTimeout)
+}
+
+func (l *Launcher) sendCommandT(hostID string, cmd remoteCommand, timeout time.Duration) (remoteResponse, error) {
 	payload, err := json.Marshal(cmd)
 	if err != nil {
 		return remoteResponse{}, err
 	}
 	subject := fmt.Sprintf("omp.host.%s.cmd", hostID)
-	data, err := l.nc.RequestBytes(subject, payload, remoteCommandTimeout)
+	data, err := l.nc.RequestBytes(subject, payload, timeout)
 	if err != nil {
 		return remoteResponse{}, err
 	}

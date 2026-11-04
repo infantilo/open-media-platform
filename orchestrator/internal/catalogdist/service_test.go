@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -76,10 +77,24 @@ func (m *memRepo) row(t, v, h string) Row {
 	return Row{}
 }
 
-type tokens struct{ m map[string]string }
+// tokens: Issue wird aus den parallelen Host-Läufen von Reconcile aufgerufen — die Zuordnung braucht eine Sperre (Datenwettlauf in CI mit -race).
+type tokens struct {
+	mu sync.Mutex
+	m  map[string]string
+}
 
-func (t *tokens) Issue(id string) string    { t.m[id] = "tok-" + id; return "tok-" + id }
-func (t *tokens) Check(id, tok string) bool { return t.m[id] == tok && tok != "" }
+func (t *tokens) Issue(id string) string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.m[id] = "tok-" + id
+	return "tok-" + id
+}
+
+func (t *tokens) Check(id, tok string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.m[id] == tok && tok != ""
+}
 
 // fakeHost simuliert Host-Agents.
 type fakeHost struct {
@@ -293,11 +308,11 @@ func TestBundleDownloadGuards(t *testing.T) {
 
 func TestBundleBuiltOncePerVersion(t *testing.T) {
 	s, _, _ := setup(t)
-	saves := 0
-	s.SaveImage = func(_, dst string) error { saves++; return os.WriteFile(dst, []byte("IMAGE"), 0o600) }
+	var saves atomic.Int32
+	s.SaveImage = func(_, dst string) error { saves.Add(1); return os.WriteFile(dst, []byte("IMAGE"), 0o600) }
 	s.Distribute("svc", "1", []string{"h1", "h2"})
 	s.Reconcile(context.Background())
-	if saves != 1 {
-		t.Fatalf("Image wurde %d× gespeichert, erwartet 1", saves)
+	if n := saves.Load(); n != 1 {
+		t.Fatalf("Image wurde %d× gespeichert, erwartet 1", n)
 	}
 }

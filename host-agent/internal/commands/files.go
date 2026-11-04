@@ -26,7 +26,7 @@ func (e *Executor) handleFiles(req Request) Response {
 			return Response{OK: false, Error: "Wurzel nicht freigegeben (OMP_FILE_ROOTS dieses Hosts)"}
 		}
 	}
-	out, err := jobwire.RunFileOp(*req.FileOp)
+	out, err := jobwire.RunFileOpTimeout(*req.FileOp, 0)
 	if err != nil {
 		return Response{OK: false, Error: err.Error()}
 	}

@@ -119,6 +119,9 @@ func init() {
 		{Kind: "file-missing", Severity: SevWarning, Group: "files", Label: "Datei eines Assets fehlt"},
 		{Kind: "file-recovered", Severity: SevInfo, Group: "files", Label: "Fehlende Datei ist wieder da"},
 		{Kind: "file-trash-emergency", Severity: SevWarning, Group: "files", Label: "Speicher knapp (Papierkorb vorzeitig geleert)"},
+		{Kind: "file-mount-hung", Severity: SevCritical, Group: "files", Label: "Mount hängt (Ort antwortet nicht)"},
+		{Kind: "file-root-unreachable", Severity: SevWarning, Group: "files", Label: "Ort nicht erreichbar (Host offline oder Pfad fehlt)"},
+		{Kind: "file-mount-recovered", Severity: SevInfo, Group: "files", Label: "Ort antwortet wieder"},
 		{Kind: "file-force-delete", Severity: SevWarning, Group: "files", Label: "Gesperrte Datei erzwungen gelöscht"},
 		{Kind: "user-action", Severity: SevInfo, Group: "user", Label: "Manuelle Benutzeraktion", OptIn: true},
 	} {

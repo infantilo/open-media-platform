@@ -956,7 +956,7 @@ Der Tab **Stream Ingest** plant Aufnahmen von Live-Quellen (MXL-Sender): einmali
 
 ## 5h. Dateien (Explorer, Papierkorb, „Datei fehlt“)
 
-Der Reiter **Dateien** zeigt die Mediendateien der **Orte** (Medienordner, Proxys, Untertitel, Aufnahmen …) auf dem Orchestrator-Rechner und auf den Hosts und
+Der Reiter **Dateien** (Einstellungen: Administration → Plattform → Betrieb → Dateien) zeigt die Mediendateien der **Orte** (Medienordner, Proxys, Untertitel, Aufnahmen …) auf dem Orchestrator-Rechner und auf den Hosts und
 verwaltet sie: ansehen, einem Asset zuordnen, hochladen, löschen und wiederherstellen. Er braucht die Funktionsrechte *Dateien ansehen* (`files.view`),
 *Dateien löschen und wiederherstellen* (`files.delete`), *Gesperrte Dateien löschen (Erzwingen)* (`files.force`), *Dateien hochladen* (`files.upload`) und
 *Orte und Dateieinstellungen verwalten* (`files.admin`). Hintergrund und Entscheidungen: `docs/ENTWURF-DATEIVERWALTUNG.md`.
@@ -978,10 +978,19 @@ verwaltet sie: ansehen, einem Asset zuordnen, hochladen, löschen und wiederhers
   und Prüfzeit sowie zugehörige Untertitel und Proxys; **„Jetzt prüfen“** prüft sofort. Derselbe Filter steht in der Asset-Liste (Reiter *Assets*, Auswahlfeld „Dateien“, ⚠ an Assets mit fehlender Datei,
   Spalte „Datei“ in der Representation-Tabelle).
 - **Papierkorb:** je Ort die gelöschten Dateien mit Restzeit; **Wiederherstellen** (überschreibt nie eine vorhandene Datei), **Endgültig löschen** und **Papierkorb leeren** (Recht `files.admin`).
-- **Einstellungen** (`files.admin`): Aufbewahrung im Papierkorb (Tage, 0 = sofort endgültig), **Notfallgrenze** (freier Platz in GB oder Prozent), Schutzfrist für frisch Gelöschtes, **Sperrfenster** vor und nach der
-  Sendung, „solange verplant, bleibt gesperrt“ sowie die Prüf- und Pflegeintervalle; je Ort lassen sich Papierkorb-Tage, Sperrfenster und Notfallgrenze überschreiben, dazu Rolle und Schreibschutz.
-  **Ort hinzufügen:** Name, Host (leer = Orchestrator-Rechner), absoluter Pfad, Rolle. Ein Host-Agent kann zusätzlich die Wurzeln, die er bedient, per `OMP_FILE_ROOTS` (Doppelpunkt-getrennt) einschränken;
-  liegt ein Ort außerhalb, meldet der Ort „nicht erreichbar … nicht freigegeben“.
+- **Einstellungen** (`files.admin`) liegen in der **Administration → Plattform → Betrieb → Dateien**: Aufbewahrung im Papierkorb (Tage, 0 = sofort endgültig), **Notfallgrenze** (freier Platz in GB oder Prozent),
+  Schutzfrist für frisch Gelöschtes, **Sperrfenster** vor und nach der Sendung, „solange verplant, bleibt gesperrt“ sowie die Prüf- und Pflegeintervalle; je Ort lassen sich Papierkorb-Tage, Sperrfenster und
+  Notfallgrenze überschreiben, dazu Rolle und Schreibschutz. **Ort hinzufügen:** Name, Host (leer = Orchestrator-Rechner), absoluter Pfad, Rolle. Ein Host-Agent kann die Wurzeln, die er bedient, per
+  `OMP_FILE_ROOTS` (Doppelpunkt-getrennt) einschränken; liegt ein Ort außerhalb, meldet er „nicht erreichbar … nicht freigegeben“.
+- **Gemeinsamer Speicher (z. B. Isilon):** Beim Anlegen „Gemeinsamer Speicher“ ankreuzen und die Hosts wählen, die ihn unter **demselben Pfad** eingehängt haben (der Orchestrator-Rechner zählt als Host). Die
+  Reihenfolge der Häkchen ist die Vorzugsreihenfolge: der erste wird zuerst befragt, fällt er aus oder hängt sein Mount, übernimmt der nächste (der zuletzt erfolgreiche bleibt vorn). Der Ort erscheint **einmal**
+  im Explorer, mit dem gerade bedienenden Host. „Hosts …“ ändert die Liste später. Upload geht nur, wenn der Orchestrator-Rechner einer der Hosts ist.
+
+**Hängende Mounts blockieren nichts:** Jede Dateioperation hat eine Frist (lesend 3,5 s, ändernd 25 s) und läuft in einem eigenen Strang; ein NFS-/SMB-Mount, der nicht antwortet, bringt die Oberfläche, den
+Orchestrator, den Host-Agent und andere Orte nie zum Stehen. Der Ort meldet dann sofort „Mount hängt“ (rote Zeile an der Karte, Marke in der Administration); weitere Operationen darauf werden ohne Wartezeit abgewiesen,
+höchstens ein hängender Strang je Ort bleibt zurück und erledigt sich, sobald der Mount wieder antwortet. Ein Takt-Test (alle 30 s) prüft jeden Ort auch ohne Bedienung. **Zwei Fehlschläge in Folge** lösen den Alarm aus:
+`file-mount-hung` (kritisch: Mount hängt), `file-root-unreachable` (Warnung: Host offline, Pfad fehlt, nicht freigegeben) und bei Erholung `file-mount-recovered`; dazu Audit und Ereignis (`omp.file.mount.hung` …).
+Dateizustände auf einem solchen Ort werden „nicht erreichbar“, nie „fehlt“.
 
 **Dateizustand („Datei fehlt“):** Je Representation merkt sich der Orchestrator, ob die Datei da ist (*vorhanden*, *fehlt*, *nicht erreichbar*, *nicht prüfbar*). Geprüft wird im Hintergrund (Standard alle 6 Stunden, in Stapeln),
 beim Öffnen/„Jetzt prüfen“ sofort und nach Löschen/Wiederherstellen. **„Fehlt“ gilt erst nach der zweiten Prüfung hintereinander** (ein kurz getrennter Netzmount löst keinen Alarm aus); ein nicht erreichbarer Host

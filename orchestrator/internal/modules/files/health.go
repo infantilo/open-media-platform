@@ -43,11 +43,31 @@ func (m *Module) hostOp(hostID string, op jobwire.FileOp) ([]byte, error) {
 }
 
 type cand struct {
-	host, rootPath, rootID, rel string
-	adhoc                       bool
+	root          *Root // nil = Ordner ohne eingerichteten Ort (wird auf dem Orchestrator-Rechner geprüft)
+	rootPath, rel string
+	adhoc         bool
 }
 
-func (c cand) key() string { return c.host + "\x00" + c.rootPath }
+func (c cand) host() string {
+	if c.root != nil {
+		return c.root.HostID
+	}
+	return ""
+}
+
+func (c cand) rootID() string {
+	if c.root != nil {
+		return c.root.ID
+	}
+	return ""
+}
+
+func (c cand) key() string {
+	if c.root != nil {
+		return "r:" + c.root.ID
+	}
+	return "d:" + c.rootPath
+}
 
 type statRes struct {
 	st  jobwire.FileStat
@@ -79,7 +99,8 @@ func (m *Module) ObserveReps(ctx context.Context, roots []Root, reps []repRow) m
 		}
 		var cs []cand
 		for _, mt := range MatchRoots(roots, abs) {
-			cs = append(cs, cand{host: mt.Root.HostID, rootPath: mt.Root.Path, rootID: mt.Root.ID, rel: mt.Rel})
+			root := mt.Root
+			cs = append(cs, cand{root: &root, rootPath: root.Path, rel: mt.Rel})
 		}
 		if len(cs) == 0 {
 			cs = append(cs, cand{rootPath: filepath.Dir(abs), rel: filepath.Base(abs), adhoc: true})
@@ -97,7 +118,14 @@ func (m *Module) ObserveReps(ctx context.Context, roots []Root, reps []repRow) m
 		results[key] = map[string]statRes{}
 		for i := 0; i < len(rels); i += 1000 {
 			end := min(i+1000, len(rels))
-			raw, err := m.hostOp(c.host, jobwire.FileOp{Op: jobwire.FileOpStat, Root: c.rootPath, Rels: rels[i:end]})
+			op := jobwire.FileOp{Op: jobwire.FileOpStat, Root: c.rootPath, Rels: rels[i:end]}
+			var raw []byte
+			var err error
+			if c.root != nil {
+				raw, err = m.rootOp(*c.root, op)
+			} else {
+				raw, err = m.hostOp("", op)
+			}
 			if err != nil {
 				groupErr[key] = err.Error()
 				break
@@ -125,16 +153,16 @@ func (m *Module) ObserveReps(ctx context.Context, roots []Root, reps []repRow) m
 				if c.adhoc && strings.Contains(e, "Wurzel nicht erreichbar") {
 					continue // Ordner fehlt auf dem Orchestrator: Datei fehlt
 				}
-				unreachable = append(unreachable, hostLabel(c.host)+": "+e)
+				unreachable = append(unreachable, c.label()+": "+e)
 				continue
 			}
 			s := results[c.key()][c.rel]
 			switch {
 			case s.st.Exists:
-				obs = observation{State: StatePresent, Size: s.st.Size, MTimeMs: s.st.MTime, HostID: c.host, RootID: c.rootID, Rel: c.rel}
+				obs = observation{State: StatePresent, Size: s.st.Size, MTimeMs: s.st.MTime, HostID: c.host(), RootID: c.rootID(), Rel: c.rel}
 				found = true
 			case s.st.Err != "":
-				unreachable = append(unreachable, hostLabel(c.host)+": "+s.st.Err)
+				unreachable = append(unreachable, c.label()+": "+s.st.Err)
 			}
 			if found {
 				break
@@ -142,18 +170,25 @@ func (m *Module) ObserveReps(ctx context.Context, roots []Root, reps []repRow) m
 		}
 		if !found {
 			c := cs[0]
-			obs.HostID, obs.RootID, obs.Rel = c.host, c.rootID, c.rel
+			obs.HostID, obs.RootID, obs.Rel = c.host(), c.rootID(), c.rel
 			if len(unreachable) > 0 {
 				obs.State, obs.Detail = StateUnreachable, strings.Join(unreachable, "; ")
 			} else if c.adhoc {
 				obs.Detail = "nicht gefunden (kein Speicherort für diesen Pfad angelegt — geprüft auf dem Orchestrator-Rechner)"
 			} else {
-				obs.Detail = "nicht gefunden auf " + hostLabel(c.host)
+				obs.Detail = "nicht gefunden in Ort „" + c.root.Name + "“"
 			}
 		}
 		out[r.RepID] = obs
 	}
 	return out
+}
+
+func (c cand) label() string {
+	if c.root != nil {
+		return "Ort „" + c.root.Name + "“"
+	}
+	return hostLabel("")
 }
 
 func hostLabel(h string) string {

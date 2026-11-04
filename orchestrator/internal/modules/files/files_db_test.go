@@ -207,8 +207,14 @@ func TestUnreachableIsNotMissing(t *testing.T) {
 	if s, _ := e.state(t, r.ID); s != StateUnreachable {
 		t.Fatalf("erwartet unreachable, war %s", s)
 	}
-	if len(e.alertKinds()) != 0 {
-		t.Fatalf("Alarm bei unerreichbarem Host: %v", e.alertKinds())
+	// Kein „Datei fehlt“-Alarm bei unerreichbarem Host; stattdessen meldet der Ort selbst (einmalig, Warnung).
+	for _, k := range e.alertKinds() {
+		if strings.HasPrefix(k, "file-missing") {
+			t.Fatalf("Datei-fehlt-Alarm bei unerreichbarem Host: %v", e.alertKinds())
+		}
+	}
+	if k := e.alertKinds(); len(k) != 1 || k[0] != "file-root-unreachable:warning" {
+		t.Fatalf("Ortsalarm: %v", k)
 	}
 	// Datei ohne Ort in einem Ordner, den es nicht gibt → fehlt (Orchestrator-Rechner).
 	a2, _ := e.assets.CreateAsset("video", "ohne ort", "", "t", "")
@@ -390,5 +396,33 @@ func TestSweepRetention(t *testing.T) {
 	_ = json.Unmarshal(raw, &tl)
 	if len(tl) != 0 {
 		t.Fatalf("Notfall-Leerung: %+v", tl)
+	}
+}
+
+func TestSharedRootRoundTrip(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	if err := SaveRootSettings(ctx, e.m.db(), Root{ID: e.root.ID, Role: RoleMedia, Shared: true, Hosts: []string{"", "hostB", "", "hostC"}}); err != nil {
+		t.Fatal(err)
+	}
+	r, err := GetRoot(ctx, e.m.db(), e.root.ID)
+	if err != nil || !r.Shared || fmt.Sprint(r.Hosts) != "[ hostB hostC]" {
+		t.Fatalf("Rundlauf: %v %+v", err, r)
+	}
+	if err := SaveRootSettings(ctx, e.m.db(), Root{ID: e.root.ID, Role: RoleMedia, Shared: true}); err == nil {
+		t.Fatal("gemeinsamer Speicher ohne Host akzeptiert")
+	}
+	// Ausfall des ersten Hosts: der Orchestrator-Rechner (hier der lokale Fake) bedient weiter, Hosts werden der Reihe nach versucht.
+	if err := SaveRootSettings(ctx, e.m.db(), Root{ID: e.root.ID, Role: RoleMedia, Shared: true, Hosts: []string{"down", ""}}); err != nil {
+		t.Fatal(err)
+	}
+	r, _ = GetRoot(ctx, e.m.db(), e.root.ID)
+	_ = os.WriteFile(filepath.Join(e.dir, "x.txt"), []byte("1"), 0o644)
+	raw, err := e.m.rootOp(r, jobwire.FileOp{Op: jobwire.FileOpStat, Rels: []string{"x.txt"}})
+	if err != nil || !strings.Contains(string(raw), `"exists":true`) {
+		t.Fatalf("Ausweichen: %v %s", err, raw)
+	}
+	if mi := e.m.mountInfo(r.ID); mi.State != MountOK || mi.ActiveHost != "" {
+		t.Fatalf("Zustand: %+v", mi)
 	}
 }

@@ -3,6 +3,7 @@ package files
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -36,15 +37,20 @@ type Root struct {
 	EmergencyFreePct *float64 `json:"emergencyFreePct,omitempty"`
 	LockBeforeH      *float64 `json:"lockBeforeH,omitempty"`
 	LockAfterH       *float64 `json:"lockAfterH,omitempty"`
+	// Shared: gemeinsamer Speicher (z. B. Isilon). Hosts: die Rechner, die ihn bedienen können, in Vorzugsreihenfolge
+	// ("" = Orchestrator-Rechner); HostID ist der erste davon.
+	Shared bool     `json:"shared,omitempty"`
+	Hosts  []string `json:"hosts,omitempty"`
 }
 
-const rootCols = `l.id, l.name, l.host_id, l.path, f.role, f.read_only, f.trash_days, f.emergency_free_gb, f.emergency_free_pct, f.lock_before_h, f.lock_after_h`
+const rootCols = `l.id, l.name, l.host_id, l.path, f.role, f.read_only, f.trash_days, f.emergency_free_gb, f.emergency_free_pct, f.lock_before_h, f.lock_after_h, f.shared, f.hosts_json`
 
 func scanRoot(row interface{ Scan(...any) error }) (Root, error) {
 	var r Root
 	var td sql.NullInt64
 	var gb, pct, lb, la sql.NullFloat64
-	if err := row.Scan(&r.ID, &r.Name, &r.HostID, &r.Path, &r.Role, &r.ReadOnly, &td, &gb, &pct, &lb, &la); err != nil {
+	var hostsJSON string
+	if err := row.Scan(&r.ID, &r.Name, &r.HostID, &r.Path, &r.Role, &r.ReadOnly, &td, &gb, &pct, &lb, &la, &r.Shared, &hostsJSON); err != nil {
 		return Root{}, err
 	}
 	if td.Valid {
@@ -59,6 +65,9 @@ func scanRoot(row interface{ Scan(...any) error }) (Root, error) {
 		return &v
 	}
 	r.EmergencyFreeGB, r.EmergencyFreePct, r.LockBeforeH, r.LockAfterH = f(gb), f(pct), f(lb), f(la)
+	if r.Shared {
+		_ = json.Unmarshal([]byte(hostsJSON), &r.Hosts)
+	}
 	return r, nil
 }
 
@@ -108,11 +117,25 @@ func SaveRootSettings(ctx context.Context, db *sql.DB, r Root) error {
 			return fmt.Errorf("Werte dürfen nicht negativ sein")
 		}
 	}
+	hosts := []string{}
+	if r.Shared {
+		seen := map[string]bool{}
+		for _, h := range r.Hosts {
+			if !seen[h] {
+				seen[h] = true
+				hosts = append(hosts, h)
+			}
+		}
+		if len(hosts) == 0 {
+			return fmt.Errorf("gemeinsamer Speicher braucht mindestens einen Host")
+		}
+	}
+	hj, _ := json.Marshal(hosts)
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO file_roots (location_id, role, read_only, trash_days, emergency_free_gb, emergency_free_pct, lock_before_h, lock_after_h)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-		ON CONFLICT (location_id) DO UPDATE SET role=$2, read_only=$3, trash_days=$4, emergency_free_gb=$5, emergency_free_pct=$6, lock_before_h=$7, lock_after_h=$8`,
-		r.ID, r.Role, r.ReadOnly, r.TrashDays, r.EmergencyFreeGB, r.EmergencyFreePct, r.LockBeforeH, r.LockAfterH)
+		INSERT INTO file_roots (location_id, role, read_only, trash_days, emergency_free_gb, emergency_free_pct, lock_before_h, lock_after_h, shared, hosts_json)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		ON CONFLICT (location_id) DO UPDATE SET role=$2, read_only=$3, trash_days=$4, emergency_free_gb=$5, emergency_free_pct=$6, lock_before_h=$7, lock_after_h=$8, shared=$9, hosts_json=$10`,
+		r.ID, r.Role, r.ReadOnly, r.TrashDays, r.EmergencyFreeGB, r.EmergencyFreePct, r.LockBeforeH, r.LockAfterH, r.Shared, string(hj))
 	return err
 }
 

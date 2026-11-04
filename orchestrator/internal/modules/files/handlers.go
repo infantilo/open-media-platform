@@ -86,6 +86,12 @@ func (*Module) UI() []module.UITab {
 		ID: "files", Placement: "main", After: "assets",
 		Label:   map[string]string{"de": "Dateien", "en": "Files"},
 		Element: "omp-files-view", Bundle: "/dist/modules/files.js",
+	}, {
+		// Einstellungen gehören in die Administration (Nutzerwunsch 2026-11-04).
+		ID: "files-settings", Placement: "admin:platform", After: "jobs",
+		Label: map[string]string{"de": "Dateien", "en": "Files"},
+		Group: map[string]string{"de": "Plattform", "en": "Platform"}, Cluster: "operations",
+		Element: "omp-files-settings", Bundle: "/dist/modules/files.js",
 	}}
 }
 
@@ -121,11 +127,12 @@ func (m *Module) rootByID(ctx context.Context, id string) (Root, error) {
 
 type rootView struct {
 	Root
-	Free       *int64 `json:"free,omitempty"`
-	Total      *int64 `json:"total,omitempty"`
-	Reachable  bool   `json:"reachable"`
-	Error      string `json:"error,omitempty"`
-	TrashItems int    `json:"trashItems"`
+	Free       *int64    `json:"free,omitempty"`
+	Total      *int64    `json:"total,omitempty"`
+	Reachable  bool      `json:"reachable"`
+	Error      string    `json:"error,omitempty"`
+	TrashItems int       `json:"trashItems"`
+	Mount      MountInfo `json:"mount"`
 }
 
 func (m *Module) hRoots(w http.ResponseWriter, r *http.Request) {
@@ -147,7 +154,7 @@ func (m *Module) hRoots(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			out[i].Reachable, out[i].Free, out[i].Total = true, &df.Free, &df.Total
-			if raw, err := m.hostOp(roots[i].HostID, jobwire.FileOp{Op: jobwire.FileOpTrashList, Root: roots[i].Path}); err == nil {
+			if raw, err := m.rootOp(roots[i], jobwire.FileOp{Op: jobwire.FileOpTrashList}); err == nil {
 				var tl []jobwire.TrashEntry
 				if json.Unmarshal(raw, &tl) == nil {
 					out[i].TrashItems = len(tl)
@@ -156,6 +163,9 @@ func (m *Module) hRoots(w http.ResponseWriter, r *http.Request) {
 		}(i)
 	}
 	wg.Wait()
+	for i := range out {
+		out[i].Mount = m.mountInfo(out[i].ID)
+	}
 	writeJSON(w, 200, out)
 }
 
@@ -172,6 +182,9 @@ func (m *Module) hCreateRoot(w http.ResponseWriter, r *http.Request) {
 	}
 	id := b.LocationID
 	if id == "" {
+		if b.Shared && len(b.Hosts) > 0 {
+			b.HostID = b.Hosts[0] // der Ort liegt in der Liste der Speicherorte beim ersten (bevorzugten) Host
+		}
 		l, err := locations.NewStore(m.db()).Create(locations.Input{Name: b.Name, HostID: b.HostID, Path: b.Path, Note: b.Note}, actorOf(r))
 		if err != nil {
 			code := 400
@@ -385,7 +398,7 @@ func (m *Module) hList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, _ := strconv.Atoi(q.Get("limit"))
-	raw, err := m.hostOp(root.HostID, jobwire.FileOp{Op: jobwire.FileOpList, Root: root.Path, Rel: rel, Cursor: q.Get("cursor"), Limit: limit})
+	raw, err := m.rootOp(root, jobwire.FileOp{Op: jobwire.FileOpList, Rel: rel, Cursor: q.Get("cursor"), Limit: limit})
 	if err != nil {
 		writeErr(w, 502, err)
 		return
@@ -420,7 +433,7 @@ func (m *Module) hOrphans(w http.ResponseWriter, r *http.Request) {
 		queue = queue[1:]
 		cursor := ""
 		for {
-			raw, err := m.hostOp(root.HostID, jobwire.FileOp{Op: jobwire.FileOpList, Root: root.Path, Rel: dir, Cursor: cursor, Limit: 500})
+			raw, err := m.rootOp(root, jobwire.FileOp{Op: jobwire.FileOpList, Rel: dir, Cursor: cursor, Limit: 500})
 			if err != nil {
 				break
 			}
@@ -464,7 +477,7 @@ func (m *Module) hTrash(w http.ResponseWriter, r *http.Request) {
 		rootErr(w, err)
 		return
 	}
-	raw, err := m.hostOp(root.HostID, jobwire.FileOp{Op: jobwire.FileOpTrashList, Root: root.Path})
+	raw, err := m.rootOp(root, jobwire.FileOp{Op: jobwire.FileOpTrashList})
 	if err != nil {
 		writeErr(w, 502, err)
 		return
@@ -500,7 +513,7 @@ func (m *Module) hRestore(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, fmt.Errorf("Ort schreibgeschützt oder keine Einträge gewählt"))
 		return
 	}
-	raw, err := m.hostOp(root.HostID, jobwire.FileOp{Op: jobwire.FileOpRestore, Root: root.Path, IDs: b.IDs})
+	raw, err := m.rootOp(root, jobwire.FileOp{Op: jobwire.FileOpRestore, IDs: b.IDs})
 	if err != nil {
 		writeErr(w, 502, err)
 		return
@@ -594,8 +607,8 @@ func (m *Module) hUpload(w http.ResponseWriter, r *http.Request) {
 		rootErr(w, err)
 		return
 	}
-	if root.HostID != "" {
-		writeErr(w, 400, fmt.Errorf("Upload ist nur in Orte des Orchestrator-Rechners möglich (Ort liegt auf Host %s)", root.HostID))
+	if !servedLocally(root) {
+		writeErr(w, 400, fmt.Errorf("Upload ist nur in Orte möglich, die der Orchestrator-Rechner selbst bedient (Ort liegt auf Host %s)", root.HostID))
 		return
 	}
 	if root.ReadOnly {
@@ -777,7 +790,7 @@ func (m *Module) repFor(root Root, rel string, raw []byte) (asset.Representation
 }
 
 func (m *Module) statOne(root Root, rel string) ([]byte, error) {
-	return m.hostOp(root.HostID, jobwire.FileOp{Op: jobwire.FileOpStat, Root: root.Path, Rels: []string{rel}})
+	return m.rootOp(root, jobwire.FileOp{Op: jobwire.FileOpStat, Rels: []string{rel}})
 }
 
 // hCreateAssets legt je Datei ein Asset an (Version, Representation „source“, veröffentlicht, Status „registriert“).
@@ -936,4 +949,17 @@ func firstNonEmpty(v ...string) string {
 		}
 	}
 	return ""
+}
+
+// servedLocally: der Orchestrator-Rechner bedient den Ort selbst (Host leer oder bei gemeinsamem Speicher in der Hostliste).
+func servedLocally(r Root) bool {
+	if r.Shared {
+		for _, h := range r.Hosts {
+			if h == "" {
+				return true
+			}
+		}
+		return false
+	}
+	return r.HostID == ""
 }

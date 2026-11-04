@@ -34,3 +34,9 @@ CREATE TABLE IF NOT EXISTS representation_health (
 CREATE INDEX IF NOT EXISTS representation_health_asset_idx ON representation_health (asset_id);
 CREATE INDEX IF NOT EXISTS representation_health_state_idx ON representation_health (state);
 `
+
+// Version 2: gemeinsamer Speicher (z. B. Isilon): ein Ort, den mehrere Hosts bedienen können (Reihenfolge = Vorzug, Ausweichen bei Ausfall).
+const schemaV2 = `
+ALTER TABLE file_roots ADD COLUMN IF NOT EXISTS shared BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE file_roots ADD COLUMN IF NOT EXISTS hosts_json TEXT NOT NULL DEFAULT '[]';
+`

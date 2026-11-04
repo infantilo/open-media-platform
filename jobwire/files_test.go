@@ -2,8 +2,10 @@ package jobwire
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -142,5 +144,63 @@ func TestPurge(t *testing.T) {
 	}
 	if d := run[DFResult](t, FileOp{Op: FileOpDF, Root: root}); d.Total <= 0 {
 		t.Fatalf("df: %+v", d)
+	}
+}
+
+func TestHungMountDoesNotBlockAndRecovers(t *testing.T) {
+	root := newRoot(t)
+	release := make(chan struct{})
+	orig := runner
+	defer func() { runner = orig }()
+	var calls atomic.Int32
+	runner = func(op FileOp) ([]byte, error) {
+		if calls.Add(1) == 1 {
+			<-release // simuliert hängenden Mount
+		}
+		return orig(op)
+	}
+	t0 := time.Now()
+	_, err := RunFileOpTimeout(FileOp{Op: FileOpStat, Root: root, Rels: []string{"a.mxf"}}, 150*time.Millisecond)
+	if !IsMountHung(err) || time.Since(t0) > time.Second {
+		t.Fatalf("Frist: %v nach %v", err, time.Since(t0))
+	}
+	// Solange die Goroutine hängt: sofortige Abweisung, keine zweite Goroutine.
+	t1 := time.Now()
+	_, err = RunFileOpTimeout(FileOp{Op: FileOpList, Root: root}, time.Second)
+	if !IsMountHung(err) || time.Since(t1) > 100*time.Millisecond || calls.Load() != 1 {
+		t.Fatalf("Schnellabweisung: %v nach %v, calls=%d", err, time.Since(t1), calls.Load())
+	}
+	// Eine andere Wurzel ist nicht betroffen.
+	other := newRoot(t)
+	if _, err := RunFileOpTimeout(FileOp{Op: FileOpDF, Root: other}, time.Second); err != nil {
+		t.Fatalf("andere Wurzel: %v", err)
+	}
+	// Mount antwortet wieder → die Wurzel arbeitet ohne Neustart weiter.
+	close(release)
+	time.Sleep(50 * time.Millisecond)
+	if _, err := RunFileOpTimeout(FileOp{Op: FileOpStat, Root: root, Rels: []string{"a.mxf"}}, time.Second); err != nil {
+		t.Fatalf("nach Erholung: %v", err)
+	}
+	if !IsMountHung(errors.New("host x: " + MountHungText + ": y")) {
+		t.Fatal("Text-Erkennung über NATS")
+	}
+}
+
+func TestConcurrentOpsOnSameRootAreNotHung(t *testing.T) {
+	root := newRoot(t)
+	orig := runner
+	defer func() { runner = orig }()
+	gate := make(chan struct{})
+	runner = func(op FileOp) ([]byte, error) { <-gate; return orig(op) }
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() { _, err := RunFileOpTimeout(FileOp{Op: FileOpDF, Root: root}, 2*time.Second); errs <- err }()
+	}
+	time.Sleep(100 * time.Millisecond) // beide laufen gleichzeitig, keine ist über der Frist
+	close(gate)
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("gleichzeitige Operation abgewiesen: %v", err)
+		}
 	}
 }
