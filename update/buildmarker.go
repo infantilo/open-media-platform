@@ -69,7 +69,9 @@ type Stamp struct {
 	BuiltAt string
 	// Modified: Änderungszeit der Datei (RFC 3339, UTC) — Anhaltspunkt, wenn der Stempel keine Bauzeit trägt (Entwicklungs-Builds).
 	Modified string
-	Error    string
+	// Size: Dateigröße in Byte — gleiche Größe bei gleichem Stempel gilt als gleicher Build.
+	Size  int64
+	Error string
 }
 
 type stampKey struct {
@@ -98,12 +100,13 @@ func StampOf(path string) Stamp {
 	stampMu.Unlock()
 	var v Stamp
 	mod := st.ModTime().UTC().Format("2006-01-02T15:04:05Z")
+	size := st.Size()
 	raw, err := ReadBuildMarker(path)
 	switch {
 	case errors.Is(err, ErrNoBuildMarker):
-		v = Stamp{Error: "kein Build-Stempel", Modified: mod}
+		v = Stamp{Error: "kein Build-Stempel", Modified: mod, Size: size}
 	case err != nil:
-		v = Stamp{Error: err.Error(), Modified: mod}
+		v = Stamp{Error: err.Error(), Modified: mod, Size: size}
 	default:
 		var info struct {
 			Version string `json:"version"`
@@ -111,9 +114,9 @@ func StampOf(path string) Stamp {
 			BuiltAt string `json:"builtAt"`
 		}
 		if json.Unmarshal(raw, &info) != nil {
-			v = Stamp{Error: "Stempel unlesbar", Modified: mod}
+			v = Stamp{Error: "Stempel unlesbar", Modified: mod, Size: size}
 		} else {
-			v = Stamp{Version: info.Version, Commit: info.Commit, BuiltAt: info.BuiltAt, Modified: mod}
+			v = Stamp{Version: info.Version, Commit: info.Commit, BuiltAt: info.BuiltAt, Modified: mod, Size: size}
 		}
 	}
 	stampMu.Lock()

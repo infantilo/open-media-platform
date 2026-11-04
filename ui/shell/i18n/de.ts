@@ -2921,4 +2921,9 @@ export const de = {
   "hostsw.col.built": "Gebaut",
   "hostsw.col.running": "Läuft",
   "hostsw.fileTime": "Änderungszeit der Datei (der Stempel trägt keine Bauzeit)",
+  "hostsw.staleBanner": "{p0} Host(s) mit älterem Stand: {p1}",
+  "hostsw.staleAgent": "Host-Agent älter",
+  "hostsw.staleNodes": "{p0} Node-Typ(en) älter",
+  "hostsw.newerOn": "neuer auf {p0}: {p1}",
+  "hostsw.col.note": "Hinweis",
 };

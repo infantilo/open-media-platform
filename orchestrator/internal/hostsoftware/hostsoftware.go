@@ -21,6 +21,7 @@ type Node struct {
 	Commit   string `json:"commit,omitempty"`
 	BuiltAt  string `json:"builtAt,omitempty"`
 	Modified string `json:"modified,omitempty"`
+	Size     int64  `json:"size,omitempty"`
 	Source   string `json:"source,omitempty"`
 	Error    string `json:"error,omitempty"`
 	Running  int    `json:"running"`

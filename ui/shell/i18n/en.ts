@@ -2922,4 +2922,9 @@ export const en: Record<keyof typeof de, string> = {
   "hostsw.col.built": "Built",
   "hostsw.col.running": "Running",
   "hostsw.fileTime": "File modification time (the stamp carries no build time)",
+  "hostsw.staleBanner": "{p0} host(s) with an older build: {p1}",
+  "hostsw.staleAgent": "host agent older",
+  "hostsw.staleNodes": "{p0} node type(s) older",
+  "hostsw.newerOn": "newer on {p0}: {p1}",
+  "hostsw.col.note": "Note",
 };

@@ -24,6 +24,7 @@ type SoftwareNode struct {
 	BuiltAt string `json:"builtAt,omitempty"`
 	// Modified: Änderungszeit der Binärdatei (Anhaltspunkt bei Entwicklungs-Builds ohne Bauzeit im Stempel).
 	Modified string `json:"modified,omitempty"`
+	Size     int64  `json:"size,omitempty"`
 	// Source: "binary" (Stempel aus der Datei), "image" (Container) oder leer, wenn kein Stempel lesbar war.
 	Source   string `json:"source,omitempty"`
 	Error    string `json:"error,omitempty"`
@@ -61,6 +62,7 @@ func (e *Executor) software() Response {
 			n.Binary = filepath.Base(en.Command[0])
 			v := update.StampOf(en.Command[0])
 			n.Version, n.Commit, n.BuiltAt, n.Modified, n.Error = v.Version, v.Commit, v.BuiltAt, v.Modified, v.Error
+			n.Size = v.Size
 			if v.Error == "" {
 				n.Source = "binary"
 			}

@@ -2,7 +2,7 @@
 // Node-Typen mit Version, Commit und laufenden Instanzen. Eigenes Element, damit es das Neuzeichnen der Host-Tabelle überlebt.
 import { apiFetch } from "./connection.ts";
 import { t } from "./i18n.ts";
-import { buildLabel, deviates, hostSummary, mixedVersions, nodeVersion, shortTime, type SwHost, type SwReport } from "./host-software-logic.ts";
+import { buildLabel, deviates, hostSummary, type HostStale, mixedVersions, nodeVersion, shortTime, staleHosts, type SwHost, type SwReport } from "./host-software-logic.ts";
 
 const REFRESH_MS = 30_000;
 
@@ -12,6 +12,7 @@ export class HostSoftware extends HTMLElement {
   #loading = false;
   #timer: number | undefined;
   #open = new Set<string>();
+  #stale = new Map<string, HostStale>();
 
   connectedCallback() {
     void this.load(false);
@@ -20,6 +21,11 @@ export class HostSoftware extends HTMLElement {
 
   disconnectedCallback() {
     if (this.#timer !== undefined) window.clearInterval(this.#timer);
+  }
+
+  /** Markierung „älterer Stand“ für einen Host (für die Host-Tabelle); leer = aktuell oder unbekannt. */
+  staleFor(hostId: string): HostStale | undefined {
+    return this.#stale.get(hostId);
   }
 
   async load(force: boolean) {
@@ -66,6 +72,15 @@ export class HostSoftware extends HTMLElement {
 
     const rep = this.#report;
     if (rep) {
+      const stale = staleHosts(rep);
+      this.#stale = stale;
+      if (stale.size > 0) {
+        const old = document.createElement("div");
+        old.dataset.role = "hostsw-stale";
+        old.style.cssText = "color:#e0a030;font-weight:600;font-size:var(--omp-font-size-sm);margin-bottom:var(--omp-space-2);";
+        old.textContent = t("hostsw.staleBanner", { p0: stale.size, p1: [...stale.values()].map((x) => x.label).join(", ") });
+        root.appendChild(old);
+      }
       const mixed = mixedVersions(rep.hosts);
       if (mixed.size > 0) {
         const warn = document.createElement("div");
@@ -103,7 +118,20 @@ export class HostSoftware extends HTMLElement {
     agent.textContent = h.agent ? `${h.local ? t("hostsw.orch") : t("hostsw.agent")} ${buildLabel(h.agent)}` : "";
     agent.title = h.agent?.builtAt ? t("hostsw.builtAt", { p0: shortTime(h.agent.builtAt) }) : "";
     sum.append(dot, name, agent);
-    if (!h.local && deviates(h.agent, rep.orchestrator)) {
+    const stale = this.#stale.get(key);
+    if (stale) {
+      det.style.borderColor = "#e0a030";
+      const b = document.createElement("span");
+      b.dataset.role = "stale";
+      b.className = "omp-badge";
+      b.style.cssText = "color:#e0a030;font-weight:600;";
+      const parts: string[] = [];
+      if (stale.agentOlder) parts.push(t("hostsw.staleAgent"));
+      if (stale.nodes.length > 0) parts.push(t("hostsw.staleNodes", { p0: stale.nodes.length }));
+      b.textContent = "⚠ " + parts.join(" · ");
+      b.title = [stale.agentOlder ? t("hostsw.deviatesTitle", { p0: buildLabel(rep.orchestrator) }) : "", ...stale.nodes.map((n) => `${n.type}: ${t("hostsw.newerOn", { p0: n.newerOn, p1: n.newer })}`)].filter(Boolean).join("\n");
+      sum.appendChild(b);
+    } else if (!h.local && deviates(h.agent, rep.orchestrator)) {
       const b = document.createElement("span");
       b.dataset.role = "deviates";
       b.className = "omp-badge";
@@ -131,7 +159,7 @@ export class HostSoftware extends HTMLElement {
       table.style.cssText = "border-collapse:collapse;margin-top:var(--omp-space-2);font-size:var(--omp-font-size-xs);";
       const th = document.createElement("tr");
       th.style.cssText = "color:var(--omp-text-dim);text-align:left;";
-      for (const c of ["hostsw.col.type", "hostsw.col.version", "hostsw.col.commit", "hostsw.col.built", "hostsw.col.running"] as const) {
+      for (const c of ["hostsw.col.type", "hostsw.col.version", "hostsw.col.commit", "hostsw.col.built", "hostsw.col.running", "hostsw.col.note"] as const) {
         const cell = document.createElement("th");
         cell.style.padding = "2px 10px";
         cell.textContent = t(c);
@@ -140,15 +168,23 @@ export class HostSoftware extends HTMLElement {
       table.appendChild(th);
       // laufende Typen zuerst, dann nach Name
       const nodes = [...h.nodes].sort((a, b) => (b.running > 0 ? 1 : 0) - (a.running > 0 ? 1 : 0) || a.type.localeCompare(b.type));
+      const olderMap = new Map((stale?.nodes ?? []).map((o) => [o.type, o]));
       for (const n of nodes) {
         const tr = document.createElement("tr");
         tr.dataset.type = n.type;
+        const older = olderMap.get(n.type);
+        if (older) {
+          tr.dataset.older = "1";
+          tr.style.cssText = "background:rgba(224,160,48,0.12);";
+          tr.title = t("hostsw.newerOn", { p0: older.newerOn, p1: older.newer });
+        }
         const cells = [
           n.type + (n.runner === "podman" ? " 🐳" : ""),
           nodeVersion(n),
           n.commit ?? "",
           shortTime(n.builtAt) || shortTime(n.modified),
           n.running > 0 ? String(n.running) + (n.outdated ? ` (${t("hostsw.outdatedShort", { p0: n.outdated })})` : "") : "",
+          older ? `⚠ ${t("hostsw.newerOn", { p0: older.newerOn, p1: older.newer })}` : "",
         ];
         cells.forEach((text, i) => {
           const td = document.createElement("td");

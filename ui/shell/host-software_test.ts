@@ -34,3 +34,52 @@ Deno.test("nodeVersion und shortTime", () => {
   assertEquals(shortTime("kaputt"), "");
   assertEquals(shortTime(""), "");
 });
+
+import { compareBuilds, compareVersions, staleHosts, type SwReport } from "./host-software-logic.ts";
+
+Deno.test("compareVersions numerisch je Segment", () => {
+  assertEquals(compareVersions("2026.10.0", "2026.11.1"), -1);
+  assertEquals(compareVersions("2026.9.3", "2026.10.0"), -1);
+  assertEquals(compareVersions("1.2", "1.2.0"), 0);
+  assertEquals(compareVersions("2.0-rc1", "1.9"), 1);
+});
+
+Deno.test("compareBuilds: Versionen, Commit, Bauzeit, Größe, Dateizeit", () => {
+  assertEquals(compareBuilds({ version: "1.0" }, { version: "1.1" }), -1);
+  assertEquals(compareBuilds({ version: "dev", commit: "a" }, { version: "dev", commit: "a" }), 0);
+  assertEquals(compareBuilds({ version: "dev", commit: "a", builtAt: "2026-11-01T10:00:00Z" }, { version: "dev", commit: "b", builtAt: "2026-11-02T10:00:00Z" }), -1);
+  assertEquals(compareBuilds({ version: "dev", commit: "a" }, { version: "dev", commit: "b" }), null);
+  // gleicher Dev-Build auf zwei Rechnern, nur Installationszeit verschieden → gleich (gleiche Größe)
+  assertEquals(compareBuilds({ version: "dev", size: 100, modified: "2026-11-01T10:00:00Z" }, { version: "dev", size: 100, modified: "2026-11-03T10:00:00Z" }), 0);
+  assertEquals(compareBuilds({ version: "dev", size: 100, modified: "2026-11-01T10:00:00Z" }, { version: "dev", size: 120, modified: "2026-11-03T10:00:00Z" }), -1);
+  // innerhalb der Toleranz (Build in einem Rutsch) → gleich
+  assertEquals(compareBuilds({ version: "dev", size: 1, modified: "2026-11-01T10:00:00Z" }, { version: "dev", size: 2, modified: "2026-11-01T10:01:00Z" }), 0);
+});
+
+Deno.test("staleHosts markiert älteren Agent und ältere Node-Typen, nie den neuesten", () => {
+  const mk = (label: string, local: boolean, agent: SwReport["orchestrator"], nodes: SwHost["nodes"]): SwHost => ({ hostId: local ? "" : label, label, local, online: true, agent, nodes });
+  const orch = { version: "2026.11.1", commit: "n" };
+  const rep: SwReport = {
+    orchestrator: orch,
+    hosts: [
+      mk("Orch", true, orch, [{ type: "omp-source", runner: "process", version: "2026.11.1", running: 0 }, { type: "pkg", runner: "podman", version: "1", running: 0 }]),
+      mk("A", false, { version: "2026.11.1", commit: "n" }, [{ type: "omp-source", runner: "process", version: "2026.11.1", running: 0 }]),
+      mk("B", false, { version: "2026.10.0", commit: "o" }, [{ type: "omp-source", runner: "process", version: "2026.10.0", running: 1 }, { type: "pkg", runner: "podman", version: "0.9", running: 0 }]),
+    ],
+  };
+  const st = staleHosts(rep);
+  assertEquals([...st.keys()], ["B"]);
+  const b = st.get("B")!;
+  assertEquals(b.agentOlder, true);
+  assertEquals(b.nodes.map((n) => n.type), ["omp-source"]); // Container-Typen werden nicht verglichen
+  assertEquals(b.nodes[0].newerOn, "Orch");
+});
+
+Deno.test("staleHosts: alles gleich → nichts markiert", () => {
+  const n = { type: "x", runner: "process", version: "dev", size: 5, modified: "2026-11-01T10:00:00Z", running: 0 };
+  const rep: SwReport = { orchestrator: { version: "dev", commit: "c" }, hosts: [
+    { hostId: "", label: "O", local: true, online: true, agent: { version: "dev", commit: "c" }, nodes: [n] },
+    { hostId: "a", label: "A", online: true, agent: { version: "dev", commit: "c" }, nodes: [{ ...n, modified: "2026-11-03T10:00:00Z" }] },
+  ] };
+  assertEquals(staleHosts(rep).size, 0);
+});

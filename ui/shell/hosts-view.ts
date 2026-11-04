@@ -277,7 +277,7 @@ class HostsView extends HTMLElement {
   #topo = document.createElement("omp-host-topology") as HostTopology;
   #trends = document.createElement("omp-host-trends") as HostTrends;
   // Kap. 85: Software-Stand je Host; eigenes Element, überlebt das Neuzeichnen per innerHTML.
-  #software = document.createElement("omp-host-software");
+  #software = document.createElement("omp-host-software") as HTMLElement & { staleFor(id: string): { agentOlder: boolean; nodes: { type: string; newerOn: string; newer: string }[] } | undefined };
   #topoKey = "";
   #lastHosts: HostEntry[] = [];
   #lastAdvice: PlacementAdvice[] = [];
@@ -632,9 +632,13 @@ class HostsView extends HTMLElement {
               return `<div title="${escapeHtml(list.join("\n"))}" style="color:${color};font-size:11px;white-space:nowrap;">🛠 ${escapeHtml(text)}</div>${items}`;
             })()
           : "";
+        const stale = h.id ? this.#software.staleFor?.(h.id) : undefined;
+        const staleBadge = stale
+          ? ` <span data-role="stale" title="${escapeHtml([stale.agentOlder ? t("hostsw.staleAgent") : "", ...stale.nodes.map((n) => `${n.type}: ${t("hostsw.newerOn", { p0: n.newerOn, p1: n.newer })}`)].filter(Boolean).join("\n"))}" style="color:#e0a030;cursor:help;white-space:nowrap;font-size:11px;">⚠ ${escapeHtml(stale.agentOlder ? t("hostsw.staleAgent") : t("hostsw.staleNodes", { p0: stale.nodes.length }))}</span>`
+          : "";
         const rowTint = online ? "" : "background:rgba(224,82,82,0.08);";
         return `<tr style="${rowTint}">
-          <td style="padding:2px 8px;">${status}${maintBadge}${clockBadge}</td>
+          <td style="padding:2px 8px;">${status}${maintBadge}${clockBadge}${staleBadge}</td>
           <td style="padding:2px 8px;">${escapeHtml(h.label)}</td>
           <td style="padding:2px 8px;color:var(--omp-text-dim);">${escapeHtml(h.hostname)}</td>
           <td style="padding:2px 8px;">${cpu}</td>

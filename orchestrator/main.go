@@ -1334,6 +1334,7 @@ func main() {
 					n.Binary = filepath.Base(e.Command[0])
 					st := update.StampOf(e.Command[0])
 					n.Version, n.Commit, n.BuiltAt, n.Modified, n.Error = st.Version, st.Commit, st.BuiltAt, st.Modified, st.Error
+					n.Size = st.Size
 					if st.Error == "" {
 						n.Source = "binary"
 					}
