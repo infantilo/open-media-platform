@@ -45,6 +45,7 @@ type handlerOptions struct {
 	clusterRolloutToken string
 	updateBackup        BackupService
 	updateDist          UpdateDistributor
+	catalogDist         CatalogDistributor
 	nodeVersions        NodeVersionStore
 	nodeValues          NodeOptionValues
 	locations           LocationStore

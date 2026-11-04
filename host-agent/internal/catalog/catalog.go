@@ -31,15 +31,11 @@ import (
 	"strings"
 )
 
-// RunnerProcess ist der einzige vom Host-Agent tatsächlich ausführbare
-// Runner (lokaler Subprozess, os/exec, s. commands.go). RunnerPodman
-// ist hier nur zum Laden/Validieren bekannt, nicht zum Ausführen — ein
-// eingehendes Start-Kommando für einen solchen Eintrag schlägt in
-// commands.go bewusst mit "unsupported runner" fehl. Ohne diesen Fall
-// würde Load() an jedem gemeinsam mit dem Orchestrator genutzten
-// deploy/catalog.json scheitern, sobald dort ein
-// `runner:"podman"`-Eintrag (Image statt Command, s.
-// orchestrator/internal/launcher/catalog.go) auftaucht.
+// RunnerProcess ist der Runner für lokale Subprozesse (os/exec, s. commands.go).
+// RunnerPodman (seit Kap. 85) startet einen Container über das gemeinsame Modul
+// podmanrun; Image statt Command (s. orchestrator/internal/launcher/catalog.go).
+// Ein Eintrag mit diesem Runner darf auch in einem gemeinsam mit dem Orchestrator
+// genutzten deploy/catalog.json stehen.
 const (
 	RunnerProcess = "process"
 	RunnerPodman  = "podman"
@@ -53,6 +49,15 @@ type Entry struct {
 	Command []string          `json:"command"`
 	Image   string            `json:"image,omitempty"`
 	Env     map[string]string `json:"env"`
+	// Version/Opt-ins gelten nur für runner:"podman" (Kap. 85): importierte Microservices, die der
+	// Orchestrator als signiertes Bundle verteilt hat. Die Opt-ins sind Vertrauens-Erweiterungen und werden
+	// auf DIESEM Host gegen die lokale Allowlist (internal/microsvc) geprüft, nie blind übernommen.
+	Version     string `json:"version,omitempty"`
+	MxlAccess   bool   `json:"mxlAccess,omitempty"`
+	MediaRead   bool   `json:"mediaRead,omitempty"`
+	HostNetwork bool   `json:"hostNetwork,omitempty"`
+	ExtraPort   bool   `json:"extraPort,omitempty"`
+	DataDir     string `json:"dataDir,omitempty"`
 	// Realtime: CPU-Pinning/Priorität (Handbuch Kap. 10), s. commands/realtime.go.
 	Realtime *Realtime `json:"realtime,omitempty"`
 }

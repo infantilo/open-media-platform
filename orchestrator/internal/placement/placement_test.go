@@ -713,3 +713,34 @@ func TestDrainingHostGetsNoNewPlacement(t *testing.T) {
 		t.Fatalf("after undrain got %q", r.HostID)
 	}
 }
+
+// Kap. 85: ein importierter Container-Typ wird nur auf Hosts platziert, auf denen er installiert ist.
+func TestSelectHostSkipsHostsWithoutImportedMicroservice(t *testing.T) {
+	e := NewEngine(
+		fakeHosts{hosts: []hosts.Host{{ID: "h1"}, {ID: "h2"}}},
+		fakeMetrics{"h1": {}, "h2": {}},
+		fakeInstances{}, &fakeEvents{}, testThresholds(), fakeProfiles{})
+	e.SetTypeAvailability(func(nodeType, hostID string) (bool, bool) {
+		if nodeType == "svc" {
+			return true, hostID == "h2"
+		}
+		return false, false
+	})
+	if r := e.SelectHost(PlacementRequest{NodeType: "svc", PreferredHostID: "h1"}, Occupancy{}); r.HostID != "h2" {
+		t.Fatalf("svc nur auf h2 installiert, bekam %q", r.HostID)
+	}
+	if r := e.SelectHost(PlacementRequest{NodeType: "omp-source", PreferredHostID: "h1"}, Occupancy{}); r.HostID != "h1" {
+		t.Fatalf("anderer Typ ist nicht eingeschränkt, bekam %q", r.HostID)
+	}
+	if reason, ok := e.CheckHost("h1", "svc"); ok || !strings.Contains(reason, "nicht installiert") {
+		t.Fatalf("CheckHost h1: %q %v", reason, ok)
+	}
+	if _, ok := e.CheckHost("h2", "svc"); !ok {
+		t.Fatal("CheckHost h2 muss ok sein")
+	}
+	// kein Host hat ihn → lokal (Anker) statt Fehlstart auf einem Remote-Host
+	e.SetTypeAvailability(func(string, string) (bool, bool) { return true, false })
+	if r := e.SelectHost(PlacementRequest{NodeType: "svc"}, Occupancy{}); r.HostID != "" {
+		t.Fatalf("erwartet lokal, bekam %q", r.HostID)
+	}
+}

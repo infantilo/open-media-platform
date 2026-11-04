@@ -827,6 +827,43 @@ Zwei unabhängige Wege, je nach Auslieferungsform (Details/Codepfade:
   ausschließlich `runner: "podman"` — ein reiner Prozess-Eintrag lässt
   sich darüber nicht anlegen.
 
+**Importierte Container-Microservices auf Hosts verteilen (Kap. 85).**
+Der Import gilt zunächst nur auf dem Orchestrator. Damit der Typ auch auf
+Remote-Hosts läuft, steht auf seiner Katalogkarte (Administration › Node-Katalog)
+der Block **Hosts** mit **„Auf Hosts verteilen …“** (nur mit Versionsangabe beim Import).
+Ablauf: Der Orchestrator baut aus Katalogeintrag und Image ein **signiertes Bundle**
+(Ed25519-Verteilschlüssel des Clusters, liegt in der Datenbank) und schickt jedem
+gewählten Host ein signiertes Kommando mit Einmal-Token. Der Host-Agent lädt das
+Bundle **nur vom eigenen Orchestrator**, prüft Signatur (eigener Vertrauensanker,
+der Verteilschlüssel wird beim ersten Kontakt hinterlegt und danach nicht still
+ersetzt) und die Prüfsumme des Image-Archivs, dann `podman load`, und führt den
+Typ in seinem eigenen Katalog (`<Zustandsverzeichnis>/microservices/`).
+
+- **Der Host entscheidet** über Vertrauens-Erweiterungen des Eintrags. Ohne
+  Konfiguration erlaubt er nur `extraPort` und `dataDir`; `mxlAccess`, `mediaRead`
+  und `hostNetwork` müssen am Host-Agent mit `OMP_MICROSERVICE_ALLOW`
+  (Kommaliste) freigegeben sein. Verlangt ein Eintrag mehr, wird die
+  Installation abgelehnt (Fehlertext im UI), nie stillschweigend abgeschwächt.
+- **Soll-Zustand in Postgres** (Tabelle `catalog_distribution`): ein Abgleich auf dem
+  Leader zieht später hinzugekommene oder wieder erreichbare Hosts nach, wiederholt
+  Fehlschläge mit wachsendem Abstand (bis 10 Minuten; „Erneut versuchen“ sofort) und
+  erkennt Hosts, auf denen der Typ verschwunden ist (alle 2 Minuten Abgleich mit `catalog-list`).
+- **Platzierung:** Ein importierter Typ wird nur auf Hosts angeboten und automatisch
+  platziert, auf denen er „bereit“ ist. Ein direkter Start auf einem anderen Host
+  liefert HTTP 409 mit Klartext statt OMP-2002.
+- **Entfernen** („Entfernen“ am Host oder „Löschen“ im Katalog) räumt Image und –
+  beim letzten Stand des Typs – das Datenvolumen auf den Hosts auf; läuft dort noch
+  eine Instanz, bleibt es bei „fehlgeschlagen“, bis sie gestoppt ist.
+- Konfiguration am Host-Agent: `OMP_MICROSERVICE_DIR` (Standard `microservices/`
+  neben der Zustandsdatei), `OMP_MICROSERVICE_ALLOW`, optional `OMP_MICROSERVICE_PUBKEY`
+  (Verteilschlüssel vorab); am Orchestrator `OMP_CATALOG_BUNDLE_DIR` (Zwischenspeicher
+  der gebauten Bundles, Standard `<OMP_UPDATE_DIR>/catalog-bundles`).
+- **Grenzen:** Das Image muss auf dem Orchestrator vorhanden sein, der die Bundles baut (im
+  Orchestrator-Cluster der Leader). Der Download läuft über die im Host-Agent konfigurierte
+  Orchestrator-Adresse (wie beim System-Update). Rootless Podman auf SELinux-Hosts (Rocky 9) ist noch nicht geprüft.
+- API: `GET /api/v1/catalog/distribution`, `POST|DELETE /api/v1/catalog/{type}/hosts`
+  (admin), `POST …/hosts/retry`, Download `GET /api/v1/host-catalog/{id}?token=…`.
+
 ### 9.6 Instanz-Label vergeben
 
 Ohne eigenes Label heißt jede gestartete Instanz generisch

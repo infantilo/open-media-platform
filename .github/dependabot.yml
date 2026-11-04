@@ -12,6 +12,7 @@ updates:
       - /update
       - /nodeoptions
       - /jobwire
+      - /podmanrun
     schedule:
       interval: weekly
     groups:

@@ -7,6 +7,7 @@ require github.com/nats-io/nats.go v1.54.0
 require (
 	github.com/infantilo/openmediaplatform/nodeoptions v0.0.0
 	github.com/infantilo/openmediaplatform/jobwire v0.0.0
+	github.com/infantilo/openmediaplatform/podmanrun v0.0.0
 	github.com/infantilo/openmediaplatform/update v0.0.0
 	github.com/klauspost/compress v1.20.0 // indirect
 	github.com/nats-io/nkeys v0.4.16 // indirect
@@ -17,5 +18,6 @@ require (
 
 replace github.com/infantilo/openmediaplatform/nodeoptions => ../nodeoptions
 replace github.com/infantilo/openmediaplatform/jobwire => ../jobwire
+replace github.com/infantilo/openmediaplatform/podmanrun => ../podmanrun
 
 replace github.com/infantilo/openmediaplatform/update => ../update

@@ -393,6 +393,8 @@ type Launcher struct {
 	instances       map[string]Instance
 	pendingRestore  []Instance // beim Laden nicht mehr laufende, nicht abgestürzte Instanzen (RestoreLocal/RestoreRemote)
 	importedCatalog map[string]CatalogEntry
+	// remoteTypeCheck (Kap. 85): prüft vor einem Remote-Start, ob der importierte Microservice auf dem Host installiert ist.
+	remoteTypeCheck func(nodeType, version, hostID string) error
 	restarts        map[string]*restartState
 
 	// procState/resourceSamples (Kapitel 14 Teil 2) — Zustand für
@@ -587,6 +589,34 @@ type ErrCatalogVersionAmbiguous struct {
 
 func (e *ErrCatalogVersionAmbiguous) Error() string {
 	return fmt.Sprintf("launcher: catalog type %q has multiple versions (%s), version must be specified", e.Type, strings.Join(e.Versions, ", "))
+}
+
+// ImportedEntry liefert den importierten (nicht statischen) Container-Eintrag für Typ und Version. Ist version leer und
+// der Typ nur einmal importiert, ist es dieser eine Eintrag.
+func (l *Launcher) ImportedEntry(nodeType, version string) (CatalogEntry, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if e, ok := l.importedCatalog[catalogKey(nodeType, version)]; ok && e.Runner == runnerPodman {
+		return e, true
+	}
+	if version != "" {
+		return CatalogEntry{}, false
+	}
+	var found CatalogEntry
+	n := 0
+	for _, e := range l.importedCatalog {
+		if e.Type == nodeType && e.Runner == runnerPodman {
+			found, n = e, n+1
+		}
+	}
+	return found, n == 1
+}
+
+// SetRemoteTypeCheck setzt die Prüfung „Typ auf Host installiert?“ (Kap. 85) für importierte Container-Typen.
+func (l *Launcher) SetRemoteTypeCheck(f func(nodeType, version, hostID string) error) {
+	l.mu.Lock()
+	l.remoteTypeCheck = f
+	l.mu.Unlock()
 }
 
 // ErrCatalogInvalidEntry wird von ImportCatalogEntry geliefert, wenn
@@ -1044,7 +1074,7 @@ func (l *Launcher) Start(nodeType, version, hostID string, extraEnv map[string]s
 // Sender-Label, s. omp-node-sdk::node::start).
 func (l *Launcher) StartLabeled(nodeType, version, hostID, customLabel string, extraEnv map[string]string) (Instance, error) {
 	if hostID != "" {
-		return l.startRemote(nodeType, hostID, customLabel, extraEnv, "")
+		return l.startRemote(nodeType, version, hostID, customLabel, extraEnv, "")
 	}
 	return l.startLocal(nodeType, version, customLabel, extraEnv, "", "")
 }
@@ -1092,7 +1122,7 @@ func (l *Launcher) StartWithOptions(nodeType, version, hostID, customLabel strin
 	var inst Instance
 	var err error
 	if hostID != "" {
-		inst, err = l.startRemotePre(nodeType, hostID, customLabel, extraEnv, "", pre)
+		inst, err = l.startRemotePre(nodeType, version, hostID, customLabel, extraEnv, "", pre)
 	} else {
 		inst, err = l.startLocalPre(nodeType, version, customLabel, extraEnv, "", "", pre)
 	}
@@ -1271,7 +1301,7 @@ func (l *Launcher) withOptions(nodeType, instanceID, valuesFrom string, extraEnv
 // Instanz `optionsFrom` (Neustart mit neuer ID: die Einstellungen sollen von Anfang an gelten).
 func (l *Launcher) StartInheriting(nodeType, version, hostID, customLabel string, extraEnv map[string]string, optionsFrom string) (Instance, error) {
 	if hostID != "" {
-		return l.startRemote(nodeType, hostID, customLabel, extraEnv, optionsFrom)
+		return l.startRemote(nodeType, version, hostID, customLabel, extraEnv, optionsFrom)
 	}
 	return l.startLocal(nodeType, version, customLabel, extraEnv, optionsFrom, "")
 }
@@ -1285,7 +1315,7 @@ const PinInstalled = "@installed"
 // beziehen ihre Binaries über den Host-Agent — dort gilt der Pin nicht.
 func (l *Launcher) StartPinned(nodeType, version, hostID, customLabel string, extraEnv map[string]string, optionsFrom, pin string) (Instance, error) {
 	if hostID != "" {
-		return l.startRemote(nodeType, hostID, customLabel, extraEnv, optionsFrom)
+		return l.startRemote(nodeType, version, hostID, customLabel, extraEnv, optionsFrom)
 	}
 	return l.startLocal(nodeType, version, customLabel, extraEnv, optionsFrom, pin)
 }
@@ -1810,13 +1840,27 @@ func (l *Launcher) recordRestartLocked(id string) (shouldRestart bool, totalRest
 // Zielhost kommt als Fehler in der Kommando-Antwort zurück. extraEnv
 // (S3) wird mitgeschickt — der Host-Agent prüft es gegen seine eigene
 // Allowlist, s. `Start`-Doku.
-func (l *Launcher) startRemote(nodeType, hostID, customLabel string, extraEnv map[string]string, optionsFrom string) (Instance, error) {
-	return l.startRemotePre(nodeType, hostID, customLabel, extraEnv, optionsFrom, nil)
+func (l *Launcher) startRemote(nodeType, version, hostID, customLabel string, extraEnv map[string]string, optionsFrom string) (Instance, error) {
+	return l.startRemotePre(nodeType, version, hostID, customLabel, extraEnv, optionsFrom, nil)
 }
 
-func (l *Launcher) startRemotePre(nodeType, hostID, customLabel string, extraEnv map[string]string, optionsFrom string, pre func(id string)) (Instance, error) {
+func (l *Launcher) startRemotePre(nodeType, version, hostID, customLabel string, extraEnv map[string]string, optionsFrom string, pre func(id string)) (Instance, error) {
 	if l.nc == nil {
 		return Instance{}, ErrRemoteUnavailable
+	}
+	// Kap. 85: ein importierter Container-Microservice läuft nur auf Hosts, auf denen er installiert ist.
+	if _, static := findStatic(l.staticCatalog, nodeType); !static {
+		if entry, ok := l.ImportedEntry(nodeType, version); ok {
+			version = entry.Version
+			l.mu.Lock()
+			check := l.remoteTypeCheck
+			l.mu.Unlock()
+			if check != nil {
+				if err := check(nodeType, entry.Version, hostID); err != nil {
+					return Instance{}, err
+				}
+			}
+		}
 	}
 
 	id, err := newInstanceID()
@@ -1845,6 +1889,7 @@ func (l *Launcher) startRemotePre(nodeType, hostID, customLabel string, extraEnv
 	resp, err := l.sendCommand(hostID, remoteCommand{
 		Action:       "start",
 		Type:         nodeType,
+		Version:      version,
 		InstanceID:   id,
 		Label:        label,
 		ExtraEnv:     extraEnv,
@@ -1859,7 +1904,7 @@ func (l *Launcher) startRemotePre(nodeType, hostID, customLabel string, extraEnv
 		return Instance{}, fmt.Errorf("launcher: remote start on host %s failed: %s", hostID, resp.Error)
 	}
 
-	inst := Instance{OptionsApplied: l.appliedFor(id), ID: id, Type: nodeType, Label: label, PID: resp.PID, HostID: hostID, ExtraEnv: extraEnv, LaunchSecret: launchSecret}
+	inst := Instance{OptionsApplied: l.appliedFor(id), ID: id, Type: nodeType, Version: version, Label: label, PID: resp.PID, HostID: hostID, ExtraEnv: extraEnv, LaunchSecret: launchSecret}
 	l.mu.Lock()
 	l.instances[id] = inst
 	if err := l.persistInstanceLocked(id); err != nil {
@@ -1876,8 +1921,10 @@ func (l *Launcher) startRemotePre(nodeType, hostID, customLabel string, extraEnv
 // eigenständiges Go-Modul (analog nodes/mock), kein gemeinsames
 // drittes Paket für ein derart schmales Format.
 type remoteCommand struct {
-	Action     string            `json:"action"`
-	Type       string            `json:"type,omitempty"`
+	Action string `json:"action"`
+	Type   string `json:"type,omitempty"`
+	// Version: Version eines importierten Microservice (Kap. 85); leer = neueste auf dem Host.
+	Version    string            `json:"version,omitempty"`
 	InstanceID string            `json:"instanceId"`
 	Label      string            `json:"label,omitempty"`
 	ExtraEnv   map[string]string `json:"extraEnv,omitempty"`
@@ -2024,6 +2071,7 @@ func (l *Launcher) HandleRemoteExit(hostID string, payload []byte) {
 	resp, err := l.sendCommand(hostID, remoteCommand{
 		Action:     "start",
 		Type:       current.Type,
+		Version:    current.Version,
 		InstanceID: ev.InstanceID,
 		Label:      current.Label,
 		ExtraEnv:   current.ExtraEnv,
@@ -2537,7 +2585,7 @@ func (l *Launcher) restoreRemoteOne(inst Instance) {
 			return // Stop() während der Wiederholungen
 		}
 		resp, err := l.sendCommand(inst.HostID, remoteCommand{
-			Action: "start", Type: inst.Type, InstanceID: inst.ID, Label: inst.Label,
+			Action: "start", Type: inst.Type, Version: inst.Version, InstanceID: inst.ID, Label: inst.Label,
 			ExtraEnv: inst.ExtraEnv, Options: l.remoteOptions(inst.Type, inst.ID, "", inst.ExtraEnv),
 			LaunchSecret: secret, NodeAPIToken: l.nodeAPIToken,
 		})

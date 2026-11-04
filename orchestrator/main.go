@@ -38,6 +38,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/backup"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/blackbox"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/catalogdist"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/cluster"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/consoles"
@@ -1262,6 +1263,43 @@ func main() {
 			return launcherNATS.RequestBytes(subject, data, timeout)
 		},
 	}
+	// Kap. 85: importierte Container-Microservices auf Hosts verteilen. Soll-Zustand in Postgres, Abgleich nur auf dem Leader.
+	catalogDist := &catalogdist.Service{
+		Repo:   catalogdist.NewStore(database),
+		Tokens: updates.NewDownloads(),
+		Dir:    catalogBundleDir(cfg.UpdateDir),
+		Hosts: func() ([]catalogdist.HostRef, error) {
+			hs, err := updateDist.Hosts()
+			if err != nil {
+				return nil, err
+			}
+			out := make([]catalogdist.HostRef, 0, len(hs))
+			for _, h := range hs {
+				out = append(out, catalogdist.HostRef{ID: h.ID, Label: h.Label})
+			}
+			return out, nil
+		},
+		Online:  updateDist.Online,
+		Request: updateDist.Request,
+		Entry: func(typ, version string) (json.RawMessage, string, string, bool) {
+			if e, ok := launcherSvc.ImportedEntry(typ, version); ok && e.Image != "" && e.Version == version {
+				raw, err := json.Marshal(e)
+				if err != nil {
+					return nil, "", "", false
+				}
+				return raw, e.Image, e.Label, true
+			}
+			return nil, "", "", false
+		},
+	}
+	launcherSvc.SetRemoteTypeCheck(catalogDist.CheckStart)
+	placementEngine.SetTypeAvailability(func(nodeType, hostID string) (bool, bool) {
+		if e, ok := launcherSvc.ImportedEntry(nodeType, ""); ok {
+			return true, catalogDist.InstalledOn(nodeType, e.Version, hostID)
+		}
+		return false, false
+	})
+	go runWhileLeader(ctx, clusterNode, catalogDist.Run)
 	// Kapitel 28: Versionsspeicher für Node-Binaries; produktive Version gilt für
 	// neu gestartete lokale Instanzen. Gestempelte, installierte Binaries werden
 	// im Hintergrund archiviert (Rückkehr nach einem Update).
@@ -1565,7 +1603,7 @@ func main() {
 	timelineSink(timeline.Event{At: time.Now(), Kind: "orchestrator.started", Severity: timeline.SevInfo, Subject: cfg.ClusterNodeID, Data: map[string]any{"version": version.Version}})
 	go timelineRec.Run(ctx, hub, timelineSink)
 	go timelineStore.RunRetention(ctx, cfg.AuditRetentionDays)
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithClusterRollout(clusterRollout, clusterRolloutToken), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithAlertMail(alertMailStore), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithDBHealth(func(ctx context.Context) (housekeeping.Health, error) {
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithCatalogDistributor(catalogDist), httpapi.WithClusterRollout(clusterRollout, clusterRolloutToken), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithAlertMail(alertMailStore), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithDBHealth(func(ctx context.Context) (housekeeping.Health, error) {
 		h, err := housekeeping.CheckHealth(ctx, database)
 		housekeeping.AddVolume(&h, os.Getenv("OMP_DB_VOLUME_PATH"))
 		return h, err
@@ -1653,6 +1691,14 @@ func (m maintenanceInstances) ListOnHost(hostID string) []maintenance.Item {
 }
 
 // getEnvIntMain liest eine ganze Zahl aus der Umgebung (Standard bei fehlender/ungültiger Angabe).
+// catalogBundleDir: Zwischenspeicher der gebauten Microservice-Bundles (Kap. 85).
+func catalogBundleDir(updateDir string) string {
+	if d := os.Getenv("OMP_CATALOG_BUNDLE_DIR"); d != "" {
+		return d
+	}
+	return filepath.Join(updateDir, "catalog-bundles")
+}
+
 func getEnvIntMain(name string, def int) int {
 	if v, err := strconv.Atoi(os.Getenv(name)); err == nil && v > 0 {
 		return v

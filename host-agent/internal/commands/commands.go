@@ -31,8 +31,10 @@ import (
 
 	"github.com/infantilo/openmediaplatform/host-agent/internal/catalog"
 	"github.com/infantilo/openmediaplatform/host-agent/internal/jobs"
+	"github.com/infantilo/openmediaplatform/host-agent/internal/microsvc"
 	"github.com/infantilo/openmediaplatform/jobwire"
 	"github.com/infantilo/openmediaplatform/nodeoptions"
+	"github.com/infantilo/openmediaplatform/podmanrun"
 )
 
 // Publisher ist die von Executor für ExitEvent-Publishing (S3) genutzte
@@ -146,14 +148,21 @@ type Request struct {
 	Path string `json:"path,omitempty"`
 	Kind string `json:"kind,omitempty"`
 	// Jobs (Aktionen exec, exec-cancel, exec-list, exec-pause, exec-resume, exec-nice; docs/ENTWURF-FFMPEG-HOSTWAHL.md).
-	JobID         string   `json:"jobId,omitempty"`
-	Tool          string   `json:"tool,omitempty"`
-	Args          []string `json:"args,omitempty"`
-	TimeoutS      int      `json:"timeoutS,omitempty"`
-	Nice          int      `json:"nice,omitempty"`
-	UpdatePath    string   `json:"updatePath,omitempty"`
-	UpdateVersion string   `json:"updateVersion,omitempty"`
-	UpdateSHA256  string   `json:"updateSha256,omitempty"`
+	JobID    string   `json:"jobId,omitempty"`
+	Tool     string   `json:"tool,omitempty"`
+	Args     []string `json:"args,omitempty"`
+	TimeoutS int      `json:"timeoutS,omitempty"`
+	Nice     int      `json:"nice,omitempty"`
+	// Version: gewünschte Version eines importierten Microservice (Kap. 85); leer = neueste installierte.
+	Version string `json:"version,omitempty"`
+	// Bundle (Aktionen catalog-install/-remove, s. microsvc.go): Download-Pfad, Prüfsumme usw.
+	BundlePath   string `json:"bundlePath,omitempty"`
+	BundleSHA256 string `json:"bundleSha256,omitempty"`
+	// DistKey: öffentlicher Verteilschlüssel (Action catalog-trust).
+	DistKey       string `json:"distKey,omitempty"`
+	UpdatePath    string `json:"updatePath,omitempty"`
+	UpdateVersion string `json:"updateVersion,omitempty"`
+	UpdateSHA256  string `json:"updateSha256,omitempty"`
 }
 
 // Response ist die Antwort auf Request.
@@ -183,9 +192,13 @@ type ExitEvent struct {
 // stderr-Tail-Puffer (für ExitEvent.StderrTail bei einem unerwarteten
 // Ende, gleicher Zweck wie orchestrator/internal/launcher.tailBuffer).
 type runningInstance struct {
-	cmd        *exec.Cmd
+	cmd        *exec.Cmd // nil bei Container-Instanzen (Kap. 85)
 	stderrTail *tailBuffer
 	binPath    string // Katalog-Command[0], für die "veraltet"-Erkennung
+	// containerID ist gesetzt für runner:"podman" (s. podman.go).
+	containerID string
+	nodeType    string
+	version     string
 }
 
 // Executor führt Start-/Stop-Kommandos für die auf diesem Host lokal
@@ -198,6 +211,8 @@ type Executor struct {
 	hostID          string
 	nc              Publisher
 	upd             *UpdateConfig
+	// installed: per Bundle installierte Microservices (Kap. 85), nil = Funktion auf diesem Host aus.
+	installed *microsvc.Store
 	// nodeOptions: agent-lokales Optionsschema je Node-Typ (Kapitel 29), nil = keine Optionen.
 	nodeOptions map[string][]nodeoptions.Option
 
@@ -293,6 +308,10 @@ func (e *Executor) Instances() []InstanceInfo {
 	defer e.mu.Unlock()
 	out := make([]InstanceInfo, 0, len(e.instances))
 	for id, ri := range e.instances {
+		if ri.containerID != "" {
+			out = append(out, InstanceInfo{InstanceID: id, PID: podmanrun.PID(ri.containerID)})
+			continue
+		}
 		pid := ri.cmd.Process.Pid
 		out = append(out, InstanceInfo{InstanceID: id, PID: pid, Outdated: binaryNewerThanProcess(ri.binPath, pid)})
 	}
@@ -308,6 +327,8 @@ func (e *Executor) Handle(req Request) Response {
 		return e.stop(req)
 	case "update":
 		return e.update(req)
+	case "catalog-trust", "catalog-install", "catalog-remove", "catalog-list":
+		return e.handleMicroservice(req)
 	case "check-path":
 		if req.Path == "" {
 			return Response{OK: false, Error: "path required"}
@@ -349,11 +370,11 @@ func (e *Executor) Handle(req Request) Response {
 }
 
 func (e *Executor) start(req Request) Response {
-	entry, ok := catalog.Find(e.catalog, req.Type)
+	entry, ok := e.findEntry(req.Type, req.Version)
 	if !ok {
 		return Response{OK: false, Error: fmt.Sprintf("unknown catalog type %q on this host", req.Type)}
 	}
-	if entry.Runner != catalog.RunnerProcess {
+	if entry.Runner != catalog.RunnerProcess && entry.Runner != catalog.RunnerPodman {
 		return Response{OK: false, Error: fmt.Sprintf("unsupported runner %q", entry.Runner)}
 	}
 	if req.InstanceID == "" {
@@ -363,8 +384,13 @@ func (e *Executor) start(req Request) Response {
 	// persistierten Instanzen wiederherstellt, schickt "start" auch für Instanzen,
 	// die hier noch laufen — nicht doppelt starten, sondern die laufende melden.
 	e.mu.Lock()
-	if ri, running := e.instances[req.InstanceID]; running && ri.cmd.Process != nil {
-		pid := ri.cmd.Process.Pid
+	if ri, running := e.instances[req.InstanceID]; running {
+		pid := 0
+		if ri.containerID != "" {
+			pid = podmanrun.PID(ri.containerID)
+		} else if ri.cmd != nil && ri.cmd.Process != nil {
+			pid = ri.cmd.Process.Pid
+		}
 		e.mu.Unlock()
 		return Response{OK: true, PID: pid}
 	}
@@ -385,6 +411,10 @@ func (e *Executor) start(req Request) Response {
 	}
 	for k, v := range opts {
 		extra[k] = v
+	}
+
+	if entry.Runner == catalog.RunnerPodman {
+		return e.startPodman(req, entry, extra, ignored)
 	}
 
 	stderrTail := newTailBuffer(crashStderrLines)
@@ -474,6 +504,9 @@ func (e *Executor) stop(req Request) Response {
 		// Idempotent wie der Orchestrator-Launcher: eine bereits
 		// beendete/unbekannte Instanz ist kein Fehler.
 		return Response{OK: true}
+	}
+	if running.containerID != "" {
+		return e.stopPodman(req.InstanceID, running)
 	}
 	cmd := running.cmd
 

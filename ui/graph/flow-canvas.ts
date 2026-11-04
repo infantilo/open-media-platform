@@ -5917,10 +5917,27 @@ export class FlowCanvas extends HTMLElement {
             return;
           }
         }
+        void (async () => {
+        // Kap. 85: ein importierter Container-Microservice läuft nur auf Hosts, auf die er verteilt wurde und wo er bereit ist.
+        let allowedHosts: Set<string> | null = null;
+        if (entry.runner === "podman") {
+          try {
+            const res = await apiFetch("/api/v1/catalog/distribution");
+            if (res.ok) {
+              const dist = (await res.json()) as { type: string; version: string; hostId: string; desired: string; state: string }[];
+              const mine = dist.filter((r) => r.type === entry.type && r.version === (entry.version ?? ""));
+              if (mine.length > 0 || entry.version) {
+                allowedHosts = new Set(mine.filter((r) => r.desired === "present" && r.state === "ok").map((r) => r.hostId));
+              }
+            }
+          } catch {
+            // ohne Auskunft bleibt die Auswahl unverändert; der Orchestrator lehnt einen unpassenden Host beim Start ab
+          }
+        }
         void openStartDialog({
           entry,
           captureCard: entry.type === "omp-capture-card",
-          hosts: hosts.map((h) => {
+          hosts: hosts.filter((h) => !allowedHosts || allowedHosts.has(h.id)).map((h) => {
             const online = isHostOnline(h.metrics);
             return {
               id: h.id,
@@ -5932,6 +5949,7 @@ export class FlowCanvas extends HTMLElement {
           fillProfile: (target, hostId) => void this.#applyProfileTag(target as HTMLDivElement, entry.type, hostId),
           submit: (body) => this.#startInstance(body),
         });
+        })();
       });
       row.appendChild(btn);
       card.appendChild(row);

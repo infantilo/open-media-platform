@@ -30,6 +30,7 @@ import { ensureBundle, getModules } from "./modules-registry.ts";
 import { adminGroups, type AdminModuleGroup } from "./modules-logic.ts";
 import { getLang } from "./i18n.ts";
 import "./locations-view.ts";
+import { CatalogHosts } from "./catalog-hosts.ts";
 import { fetchBuildInfo, formatFirmwareLong } from "./version.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { login, whoami } from "./auth.ts";
@@ -412,6 +413,8 @@ class AdminView extends HTMLElement {
   // import/export machen") — reine UI-Anbindung, Backend existiert
   // bereits vollständig inkl. C9-Admission-Check und Versionierung.
   #catalog: CatalogEntry[] = [];
+  // Kap. 85: Verteilung importierter Microservices auf Hosts.
+  #catalogHosts = new CatalogHosts(() => this.#render());
   #showCatalogForm = false;
   // Node-Katalog-Redesign 2026-09-02: rein clientseitiger Freitext-Filter
   // (Katalog ist klein, kein Server-Roundtrip nötig) über Label/Typ/
@@ -534,6 +537,7 @@ class AdminView extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this.#catalogHosts.stop();
     if (this.#auditPollHandle !== undefined) window.clearInterval(this.#auditPollHandle);
     if (this.#logPollHandle !== undefined) window.clearInterval(this.#logPollHandle);
     if (this.#updPollHandle !== null) window.clearInterval(this.#updPollHandle);
@@ -1136,6 +1140,7 @@ class AdminView extends HTMLElement {
     } catch {
       // Orchestrator kurzzeitig nicht erreichbar — nächstes gezieltes Neuladen holt es auf.
     }
+    void this.#catalogHosts.load();
   }
 
   async #loadBackups() {
@@ -3794,6 +3799,7 @@ class AdminView extends HTMLElement {
       delBtn.addEventListener("click", () => this.#removeCatalogEntry(entry));
       actions.appendChild(delBtn);
     }
+    if (isImported) card.appendChild(this.#catalogHosts.render(entry));
     card.appendChild(actions);
 
     return card;

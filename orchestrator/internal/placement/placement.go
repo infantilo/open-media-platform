@@ -220,10 +220,12 @@ type Engine struct {
 	profiles   ProfileReader
 	adviceObs  AdviceObserver
 
-	mu      sync.RWMutex
-	advice  map[string]Advice // hostID -> aktueller Alarm
-	trends  TrendSource
-	predict Prediction
+	mu sync.RWMutex
+	// typeAvail: Kap. 85, s. SetTypeAvailability.
+	typeAvail func(nodeType, hostID string) (restricted, installed bool)
+	advice    map[string]Advice // hostID -> aktueller Alarm
+	trends    TrendSource
+	predict   Prediction
 	// draining: Hosts, die geleert werden (Cloud-Abbau, ARCHITECTURE.md §27.5) — bekommen keine neue Last.
 	draining map[string]bool
 	// maintenance: Hosts im Wartungsmodus (internal/maintenance) — wie draining gesperrt, aber unabhängig vom Cloud-Abbau.
@@ -429,6 +431,9 @@ func (e *Engine) List() []Advice {
 // Bedarf ist kein Blocker, nur eine fehlende Datengrundlage (§14.3d:
 // "nie ein stiller Block").
 func (e *Engine) CheckHost(hostID, nodeType string) (string, bool) {
+	if !e.typeAvailable(hostID, nodeType) {
+		return "Der Microservice ist auf diesem Host nicht installiert (Node-Katalog › Hosts)", false
+	}
 	s := e.scoreHost(hostID, nodeType, profiles.Snapshot{})
 	return s.reason, s.ok
 }
@@ -479,6 +484,26 @@ func gpuUtilizationPercent(m hosts.Metrics) *float64 {
 	}
 	p := m.Gpu.UtilizationPercent
 	return &p
+}
+
+// SetTypeAvailability (Kap. 85) setzt die Prüfung, ob ein importierter Container-Typ auf einem Host installiert ist.
+// f liefert (eingeschränkt, installiert): „eingeschränkt“ ist ein Typ, der nur auf Hosts läuft, auf die er verteilt wurde;
+// alle anderen Typen laufen überall wie bisher.
+func (e *Engine) SetTypeAvailability(f func(nodeType, hostID string) (restricted, installed bool)) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.typeAvail = f
+}
+
+func (e *Engine) typeAvailable(hostID, nodeType string) bool {
+	e.mu.RLock()
+	f := e.typeAvail
+	e.mu.RUnlock()
+	if f == nil || hostID == "" {
+		return true
+	}
+	restricted, installed := f(nodeType, hostID)
+	return !restricted || installed
 }
 
 // hostOnline meldet, ob hostID innerhalb von HostOnlineThreshold
@@ -725,7 +750,7 @@ func (e *Engine) SelectHost(req PlacementRequest, occ Occupancy) PlacementResult
 
 	var candidates []candidate
 	for _, h := range allHosts {
-		if !e.hostOnline(h.ID) || e.IsDraining(h.ID) {
+		if !e.hostOnline(h.ID) || e.IsDraining(h.ID) || !e.typeAvailable(h.ID, req.NodeType) {
 			continue
 		}
 		s := e.scoreHost(h.ID, req.NodeType, occ.ExtraLoad[h.ID])

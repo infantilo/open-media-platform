@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/catalogdist"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -119,11 +120,17 @@ func handlePostCatalogEntry(svc LauncherService) http.HandlerFunc {
 // Parameter (§17 Teil 5: mehrere Versionen desselben Typs) — fehlt er,
 // wird "" angenommen (unverändertes Verhalten für unversionierte
 // Importe aus §17 Teil 4).
-func handleDeleteCatalogEntry(svc LauncherService) http.HandlerFunc {
+func handleDeleteCatalogEntry(svc LauncherService, dist CatalogDistributor) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := svc.RemoveCatalogEntry(r.PathValue("type"), r.URL.Query().Get("version")); err != nil {
 			writeCatalogImportError(w, err)
 			return
+		}
+		// Kap. 85: auch von den Hosts aufräumen, auf die der Typ verteilt wurde (Soll-Zustand „entfernt“).
+		if dist != nil {
+			if err := dist.Withdraw(r.PathValue("type"), r.URL.Query().Get("version"), nil); err != nil {
+				slog.Warn("catalog: Entfernen von den Hosts nicht vorgemerkt", "type", r.PathValue("type"), "error", err)
+			}
 		}
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}
@@ -497,6 +504,8 @@ func writeLauncherError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, launcher.ErrRemoteUnavailable):
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	case errors.Is(err, catalogdist.ErrNotInstalled):
+		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.As(err, &versionErr):
 		// §17 Teil 5: Typ existiert, aber mehrdeutig ohne Version — 409
 		// (wie ErrCatalogTypeExists/ErrCatalogTypeInUse: ein Konflikt mit

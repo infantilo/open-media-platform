@@ -1104,7 +1104,12 @@ untereinander):
   als Referenz exportierbar; „+ Node/Microservice importieren"
   (Abschnitt „Related project"/`HANDBUCH.md`) nimmt zusätzlich
   containerisierte Drittanbieter-Microservices auf, nach demselben
-  Contract-Check wie eingebaute Nodes.
+  Contract-Check wie eingebaute Nodes. Auf der Karte eines importierten Typs
+  verteilt **„Auf Hosts verteilen …“** ihn auf Remote-Hosts (signiertes Bundle, jeder
+  Host prüft und entscheidet über Erweiterungen selbst); der Block **Hosts** zeigt je Host
+  „bereit“, „wird installiert …“, „Host offline – wird nachgezogen“ oder den Fehlertext mit
+  „Erneut versuchen“. Starten lässt sich der Typ nur auf Hosts, auf denen er bereit ist;
+  „Entfernen“ räumt dort auf (HANDBUCH §9.5).
 - **Audit-Log** — zeigt in Klartext, wer wann was geändert hat („anna
   Workflow Studio gestartet“, „admin Recht vergeben“), nach Tagen
   gruppiert. Protokolliert wird jede schreibende Anfrage, auch

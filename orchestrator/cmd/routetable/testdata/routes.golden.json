@@ -633,8 +633,32 @@
     "domain": "core"
   },
   {
+    "method": "GET",
+    "path": "/api/v1/catalog/distribution",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
     "method": "DELETE",
     "path": "/api/v1/catalog/{type}",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/catalog/{type}/hosts",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/catalog/{type}/hosts",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/catalog/{type}/hosts/retry",
     "auth": "verb:Admin",
     "domain": "core"
   },
@@ -993,6 +1017,12 @@
     "path": "/api/v1/groups/{id}/members/{username}",
     "auth": "verb:Admin",
     "when": "options.groups != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/host-catalog/{id}",
+    "auth": "custom:handleHostCatalogDownload",
     "domain": "core"
   },
   {

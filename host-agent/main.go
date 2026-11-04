@@ -47,6 +47,7 @@ import (
 	"github.com/infantilo/openmediaplatform/host-agent/internal/catalog"
 	"github.com/infantilo/openmediaplatform/host-agent/internal/commands"
 	"github.com/infantilo/openmediaplatform/host-agent/internal/jobs"
+	"github.com/infantilo/openmediaplatform/host-agent/internal/microsvc"
 	"github.com/infantilo/openmediaplatform/host-agent/internal/state"
 	"github.com/infantilo/openmediaplatform/host-agent/internal/telemetry"
 	"github.com/infantilo/openmediaplatform/jobwire"
@@ -296,6 +297,21 @@ func main() {
 			SelfPath:      selfPath,
 			Dir:           envOr("OMP_UPDATE_DIR", filepath.Join(filepath.Dir(statePath), "updates")),
 		})
+	}
+	// Importierte Microservices (Kap. 85): Installationen, Vertrauensanker und Allowlist der Vertrauens-Erweiterungen
+	// liegen agent-lokal. OMP_MICROSERVICE_ALLOW: Kommaliste aus mxlAccess,mediaRead,hostNetwork,extraPort,dataDir
+	// (Standard: extraPort,dataDir).
+	if ms, err := microsvc.NewStore(envOr("OMP_MICROSERVICE_DIR", filepath.Join(filepath.Dir(statePath), "microservices")),
+		microsvc.ParseAllow(os.Getenv("OMP_MICROSERVICE_ALLOW"))); err == nil {
+		if f := os.Getenv("OMP_MICROSERVICE_PUBKEY"); f != "" { // optional: Verteilschlüssel vorab per Konfiguration
+			if terr := ms.TrustKey(f); terr != nil {
+				slog.Warn("OMP_MICROSERVICE_PUBKEY not applied", "error", terr)
+			}
+		}
+		executor.SetMicroservices(ms)
+		slog.Info("microservice store ready", "dir", ms.Dir(), "installed", len(ms.List()))
+	} else {
+		slog.Warn("microservice store unavailable — imported microservices disabled on this host", "error", err)
 	}
 	// Job-Ausführung (ffmpeg/ffprobe im Auftrag des Orchestrators, docs/ENTWURF-FFMPEG-HOSTWAHL.md): nur mit tools.json
 	// neben dem Katalog — der Host entscheidet, was und wo ausgeführt werden darf.

@@ -15,7 +15,7 @@ endif
 image-pins-check:
 	./deploy/dev/update-image-pins.sh --check
 
-GO_MODULES := orchestrator nodes/mock nodes/omp-vfa nodes/omp-vfa-vision tools/contract-check tools/nmos-conformance-check tools/update-bundle host-agent supervisor update nodeoptions jobwire
+GO_MODULES := orchestrator nodes/mock nodes/omp-vfa nodes/omp-vfa-vision tools/contract-check tools/nmos-conformance-check tools/update-bundle host-agent supervisor update nodeoptions jobwire podmanrun
 
 build: ui
 	$(foreach m,$(GO_MODULES),cd $(m) && go build ./... && cd $(CURDIR) &&) true
