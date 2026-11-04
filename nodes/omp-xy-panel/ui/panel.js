@@ -27,7 +27,8 @@ const XY_T = (() => {
       composeBundle: "Bouquet zusammenstellen", recordRoutes: "Feste Schaltungen aufzeichnen", kindBundle: "Bündel",
       bundling: "Bouquet: {n} Quelle(n) — Quellen anklicken (Reihenfolge = Kanalreihenfolge, nochmal klicken entfernt)",
       modeOrder: "1:1 (nach Reihenfolge)", modeTags: "per Tag", targetNode: "Ziel-Node", mode: "Zuordnung",
-      pickTarget: "Ziel-Node wählen.", nothingToRoute: "Nichts zu schalten — Zuordnung prüfen.", moveUp: "Nach oben", moveDown: "Nach unten",
+      pickTarget: "Ziel-Node wählen.", nothingToRoute: "Nichts zu schalten — Zuordnung prüfen.", moveUp: "Nach oben",
+      skinNew: "Konsole 2 ▸", skinClassic: "◂ Klassisch", skinTip: "Optik umschalten (nur Darstellung)", moveDown: "Nach unten",
       bundleN: "{n} Quellen", notMatched: "Ohne Partner",
       grant: "Schalten über dieses Panel freigeben", grantHint: "Nutzer/Gruppen mit Bedienrecht (operate) auf diesem Panel dürfen darüber beliebige Ziele schalten.", grantFailed: "Freigabe konnte nicht gespeichert werden: {detail}",
     },
@@ -53,7 +54,8 @@ const XY_T = (() => {
       composeBundle: "Compose bouquet", recordRoutes: "Record fixed routes", kindBundle: "bundle",
       bundling: "Bouquet: {n} source(s) — click sources (order = channel order, click again to remove)",
       modeOrder: "1:1 (by order)", modeTags: "by tag", targetNode: "Destination node", mode: "Mapping",
-      pickTarget: "Choose a destination node.", nothingToRoute: "Nothing to route — check the mapping.", moveUp: "Move up", moveDown: "Move down",
+      pickTarget: "Choose a destination node.", nothingToRoute: "Nothing to route — check the mapping.", moveUp: "Move up",
+      skinNew: "Console 2 ▸", skinClassic: "◂ Classic", skinTip: "Switch look (display only)", moveDown: "Move down",
       bundleN: "{n} sources", notMatched: "No partner",
       grant: "Allow routing via this panel", grantHint: "Users/groups with operate rights on this panel may route any destination through it.", grantFailed: "Could not save the permission: {detail}",
     },
@@ -154,6 +156,40 @@ input[type=search], select { font: inherit; color: inherit; background: var(--om
 }
 `;
 
+
+// Konsole 2: dichte Pult-Optik (wie Audio-/Videomischer). Reine Darstellung; Wahl in localStorage `omp-mixer-skin`
+// (gemeinsam mit den Mischern; Standard "v2" = neue Optik, "classic" = alt).
+const XY_SKIN_KEY = "omp-mixer-skin";
+const XY_C2_CSS = `
+:host([data-skin="c2"]) {
+  --omp-bg: #111; --omp-surface: #1a1a1a; --omp-surface-raised: #262626; --omp-border: #2c2c2c;
+  --omp-text: #d8dde2; --omp-text-dim: #7d848c; --omp-text-disabled: #555;
+  --omp-font: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  --omp-font-size-sm: 11px; --omp-font-size-md: 12px; --omp-radius: 3px;
+  --omp-onair: #ff4040; --omp-preset: #25d366; --omp-cue: #ff9f1c; --omp-info: #1fa4e6;
+  --omp-accent-cyan: #27e0f0; --omp-accent-violet: #b57bff;
+  --omp-glow-onair: 0 0 8px 1px rgba(255, 64, 64, .55);
+  background: #111; padding: 6px; line-height: 1.2; user-select: none;
+}
+:host([data-skin="c2"]) button { background: linear-gradient(#3a3a3a, #262626); border: 1px solid #060606; text-transform: uppercase;
+  letter-spacing: .03em; font-weight: 700; font-size: 10px; box-shadow: 0 1px 0 rgba(255,255,255,.12) inset, 0 1px 2px rgba(0,0,0,.5); }
+:host([data-skin="c2"]) button:hover:not(:disabled) { background: linear-gradient(#444, #2d2d2d); }
+:host([data-skin="c2"]) button.on { background: linear-gradient(#32b6c6, #168593); color: #001a1f; border-color: #46e6f6; }
+:host([data-skin="c2"]) .side { background: #161616; border-color: #060606; border-radius: 2px; padding: 0 5px 5px; }
+:host([data-skin="c2"]) .side h3 { margin: 0 -5px; padding: 5px 8px; font-size: 12px; text-align: center; background: #27c3e0; color: #04131c; text-shadow: 0 1px 0 #fff4; }
+:host([data-skin="c2"]) .cols .side + .side h3 { background: #ff4f9a; }
+:host([data-skin="c2"]) .pt { background: linear-gradient(#303030, #1f1f1f); border: 1px solid #060606; border-left-width: 3px; }
+:host([data-skin="c2"]) .pt.live { background: linear-gradient(#1d5a37, #123a24); }
+:host([data-skin="c2"]) .pt.sel { background: linear-gradient(#5a1f1f, #3a1212); color: #fff; }
+:host([data-skin="c2"]) .folder { background: linear-gradient(#303030, #1f1f1f); text-transform: none; }
+:host([data-skin="c2"]) .bar { background: linear-gradient(#202020, #161616); border-color: #060606; }
+:host([data-skin="c2"]) .bar button.go { background: linear-gradient(#ff5a5a, #c01f1f); color: #fff; border-color: #000; }
+:host([data-skin="c2"]), :host([data-skin="c2"]) * { scrollbar-color: #444 #161616; scrollbar-width: thin; }
+:host([data-skin="c2"]) .dlg { background: #1a1a1a; border-color: #444; }
+:host([data-skin="c2"]) input[type=search], :host([data-skin="c2"]) select { background: #06121c; color: #27e0f0; border-color: #1d3b52; }
+.skin-toggle { margin-left: auto; min-height: 22px !important; padding: 0 9px !important; font-size: 10px !important; }
+`;
+
 function xyEl(tag, attrs, ...kids) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -174,7 +210,11 @@ class OmpXyPanel extends HTMLElement {
     const L = globalThis.OmpXyLogic;
     const t = XY_T;
     const shadow = this.attachShadow({ mode: "open" });
-    shadow.append(xyEl("style", { text: XY_CSS }));
+    shadow.append(xyEl("style", { text: XY_CSS + XY_C2_CSS }));
+    const host = this;
+    const skinNow = () => { try { return new URLSearchParams(location.search).get("skin") === "classic" || localStorage.getItem(XY_SKIN_KEY) === "classic" ? "classic" : "v2"; } catch { return "v2"; } };
+    const applySkin = (skin) => host.setAttribute("data-skin", skin === "v2" ? "c2" : "classic");
+    applySkin(skinNow());
 
     // ---- Zustand ----------------------------------------------------------
     const st = {
@@ -742,7 +782,12 @@ class OmpXyPanel extends HTMLElement {
       }
       const top = xyEl("div", { class: "top" },
         xyEl("div", { class: "grp" }, xyEl("button", { onclick: openBouquetDialog }, "▦ " + t("bouquets")), xyEl("button", { onclick: openTagDialog }, "# " + t("tagRouting"))),
-        ...(grantUi ? [grantUi] : []), auto);
+        ...(grantUi ? [grantUi] : []), auto,
+        xyEl("button", { class: "skin-toggle", type: "button", title: t("skinTip"), onclick: () => {
+          const next = host.getAttribute("data-skin") === "c2" ? "classic" : "v2";
+          try { localStorage.setItem(XY_SKIN_KEY, next); } catch {}
+          applySkin(next); render();
+        } }, host.getAttribute("data-skin") === "c2" ? t("skinClassic") : t("skinNew")));
       const msg = xyEl("div", { id: "msg", class: "msg" + (st.msgErr ? " err" : ""), role: "status", "aria-live": "polite", text: st.msg });
       root.replaceChildren(top, tabs, xyEl("div", { class: "cols" }, renderSide("src"), renderSide("dst")), ...(st.draft ? [renderDraft()] : []), ...(st.bundle ? [renderBundle()] : [renderBar()]), msg);
       if (keepFocus) {
