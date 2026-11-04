@@ -482,7 +482,7 @@ Routen `/api/v1/internal/cluster-update/{info,fetch,apply}` angesteuert
 JWT-Geheimnis; `apply` trägt die Raft-Amtszeit, ein abgelöster Leader wird mit
 409 abgewiesen). Das Mitglied prüft das Paket mit dem **eigenen**
 Vertrauensanker. Der Supervisor kennt dafür `POST /restart` (Neustart ohne
-Paket). API: `GET/POST /api/v1/admin/cluster-rollout`, `…/resume`, `…/cancel`.
+Paket). Follower melden ihre HTTP-Adresse selbst dem Leader (`…/internal/cluster-update/announce`, HMAC); so ist auch ein per `OMP_CLUSTER_PEERS` gegründeter Cluster ohne `Join` ansteuerbar. „Host-Agents zuerst“ (§11.5) ist der Pseudo-Schritt `@hosts` vor allen Mitgliedern. API: `GET/POST /api/v1/admin/cluster-rollout`, `…/resume`, `…/cancel`.
 
 **Ablauf beim Installieren.**
 1. Backup (Pflicht, wenn das Paket Datenbank-Migrationen enthält).

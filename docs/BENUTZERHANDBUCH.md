@@ -1364,7 +1364,7 @@ untereinander):
      an**, die übrigen Mitglieder bleiben unberührt, bereits aktualisierte
      werden nicht automatisch zurückgerollt; nach der Ursachenbehebung
      **„Rollout fortsetzen"** (oder „Rollout abbrechen"). Das fehlgeschlagene
-     Mitglied hat sich selbst zurückgerollt. Der Rollout läuft auch weiter,
+     Mitglied hat sich selbst zurückgerollt. Mit dem Haken **„Host-Agents zuerst verteilen“** (Standard an) wird das Paket vor dem Cluster an alle erreichbaren Host-Agents verteilt (Zeile „Host-Agents“ in der Tabelle); schlägt das bei einem Host fehl, bleibt der Cluster unberührt. Der Rollout läuft auch weiter,
      wenn sich währenddessen der Leader ändert (Zustand liegt in der
      Datenbank). Laufende Sendungen werden nie neu gestartet.
 
