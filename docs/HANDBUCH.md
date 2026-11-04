@@ -862,6 +862,9 @@ Typ in seinem eigenen Katalog (`<Zustandsverzeichnis>/microservices/`).
 - **Grenzen:** Das Image muss auf dem Orchestrator vorhanden sein, der die Bundles baut (im
   Orchestrator-Cluster der Leader). Der Download läuft über die im Host-Agent konfigurierte
   Orchestrator-Adresse (wie beim System-Update). Rootless Podman auf SELinux-Hosts (Rocky 9) ist noch nicht geprüft.
+- Software-Stand je Host: `GET /api/v1/hosts/software[?refresh=1]` (Agent-Aktion `software`; Build-Stempel per
+  `-ldflags` in `deploy/dev/start-hosts.sh` bzw. `make update-bundle`, Node-Stempel aus `OMPBUILD1…` in den Binaries,
+  nie ausgeführt; UI: Hosts-Tab).
 - API: `GET /api/v1/catalog/distribution`, `POST|DELETE /api/v1/catalog/{type}/hosts`
   (admin), `POST …/hosts/retry`, Download `GET /api/v1/host-catalog/{id}?token=…`.
 

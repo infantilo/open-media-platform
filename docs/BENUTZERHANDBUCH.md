@@ -1110,6 +1110,13 @@ untereinander):
   „bereit“, „wird installiert …“, „Host offline – wird nachgezogen“ oder den Fehlertext mit
   „Erneut versuchen“. Starten lässt sich der Typ nur auf Hosts, auf denen er bereit ist;
   „Entfernen“ räumt dort auf (HANDBUCH §9.5).
+- **Hosts › Software-Stand der Hosts** — zeigt je Host (auch den Orchestrator-Rechner), mit
+  welchem Stand er läuft: Build-Stempel des Orchestrators bzw. Host-Agents (Release, Commit, Bauzeit),
+  je Node-Typ Version, Commit, Bauzeit (sonst die Dateizeit, in Grau) und die Zahl laufender Instanzen,
+  davon veraltete. „weicht vom Orchestrator ab“ markiert Agents mit anderem Commit/anderer Version; ein
+  Hinweis über der Liste nennt Node-Typen, die auf verschiedenen Hosts verschieden stehen. Container-Typen
+  tragen 🐳 und zeigen die verteilte Version. Die Angaben werden live bei den Host-Agents abgefragt (alle
+  8 s zwischengespeichert, „Aktualisieren“ erzwingt neu); ein zu alter Agent meldet das ausdrücklich.
 - **Audit-Log** — zeigt in Klartext, wer wann was geändert hat („anna
   Workflow Studio gestartet“, „admin Recht vergeben“), nach Tagen
   gruppiert. Protokolliert wird jede schreibende Anfrage, auch

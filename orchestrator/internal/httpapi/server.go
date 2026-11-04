@@ -625,6 +625,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/hosts/register", handleRegisterHost(hostRegistry, ioPortStore, events))
 	mux.HandleFunc("GET /api/v1/hosts", g.requireAuth(handleListHosts(hostRegistry, hostMetrics, ioPortStore, options.maintenance)))
 	mux.HandleFunc("GET /api/v1/hosts/local", g.requireAuth(handleLocalHost(launcherSvc)))
+	mux.HandleFunc("GET /api/v1/hosts/software", g.requireAuth(handleHostSoftware(options.hostSoftware)))
 	if options.timeline != nil {
 		mux.HandleFunc("GET /api/v1/timeline", g.requireVerbGlobal(authz.VerbAdmin, handleTimeline(options.timeline)))
 		mux.HandleFunc("POST /api/v1/timeline/marker", g.requireVerbGlobal(authz.VerbOperate, handlePostTimelineMarker(options.timeline, events)))

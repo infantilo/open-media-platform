@@ -50,7 +50,10 @@ if [ "${OMP_SKIP_BUILD:-}" = "1" ] && [ -x "$BIN" ]; then
   echo "==> Bauen übersprungen (OMP_SKIP_BUILD=1, fertiges Binary)"
 else
   echo "==> Host-Agent-Binary bauen"
-  ( cd "$ROOT_DIR/host-agent" && go build -o "$BIN" . )
+  # Build-Stempel für die Software-Anzeige (Hosts-Tab): Release/Commit/Bauzeit, Version bleibt "dev" wie beim Orchestrator
+  REL="$(git -C "$ROOT_DIR" describe --tags --long 2>/dev/null | sed -E 's/-0-g[0-9a-f]+$//; s/-([0-9]+)-g[0-9a-f]+$/+\1/' || true)"
+  VP=github.com/infantilo/openmediaplatform/host-agent/internal/version
+  ( cd "$ROOT_DIR/host-agent" && go build -ldflags "-X $VP.Release=$REL -X $VP.Commit=$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || true) -X $VP.BuiltAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o "$BIN" . )
 fi
 
 # id:label je simuliertem Host — bei Bedarf hier erweitern (dritter Host

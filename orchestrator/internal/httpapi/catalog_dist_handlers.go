@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/catalogdist"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/hostsoftware"
 )
 
 // CatalogDistributor ist die vom Handler benötigte Teilmenge von *catalogdist.Service.
@@ -150,5 +151,31 @@ func handleHostCatalogDownload(d CatalogDistributor) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/x-tar")
 		http.ServeFile(w, r, path)
+	}
+}
+
+// HostSoftwareCollector liefert, welcher Host mit welcher Version läuft (implementiert von *hostsoftware.Service).
+type HostSoftwareCollector interface {
+	Collect(force bool) (hostsoftware.Report, error)
+}
+
+// WithHostSoftware aktiviert GET /api/v1/hosts/software.
+func WithHostSoftware(c HostSoftwareCollector) HandlerOption {
+	return func(o *handlerOptions) { o.hostSoftware = c }
+}
+
+// handleHostSoftware: GET /api/v1/hosts/software[?refresh=1] — Build-Stempel von Orchestrator und Host-Agents, Node-Binaries, Microservices.
+func handleHostSoftware(c HostSoftwareCollector) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if c == nil {
+			http.NotFound(w, r)
+			return
+		}
+		rep, err := c.Collect(r.URL.Query().Get("refresh") == "1")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, rep)
 	}
 }

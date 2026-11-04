@@ -1051,6 +1051,12 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/hosts/software",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/hosts/{id}/cards",
     "auth": "auth",
     "domain": "core"

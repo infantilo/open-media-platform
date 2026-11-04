@@ -52,6 +52,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/health"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/hostcmd"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/hosts"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/hostsoftware"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/housekeeping"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/httpapi"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/ioports"
@@ -93,6 +94,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/updates"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/version"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
+	"github.com/infantilo/openmediaplatform/update"
 )
 
 // healthStaleAfter ist der Schwellwert für die NATS-Health-basierte
@@ -1292,6 +1294,55 @@ func main() {
 			return nil, "", "", false
 		},
 	}
+	// Kap. 85: Anzeige „welcher Host läuft mit welcher Version“ (Hosts-Tab).
+	hostSoftwareSvc := &hostsoftware.Service{
+		Hosts: func() ([]hostsoftware.HostRef, error) {
+			hs, err := updateDist.Hosts()
+			out := make([]hostsoftware.HostRef, 0, len(hs))
+			for _, h := range hs {
+				out = append(out, hostsoftware.HostRef{ID: h.ID, Label: h.Label})
+			}
+			return out, err
+		},
+		Online:  updateDist.Online,
+		Request: updateDist.Request,
+		Orchestrator: func() hostsoftware.Build {
+			v := version.Current()
+			return hostsoftware.Build{Version: v.Version, Commit: v.Commit, BuiltAt: v.BuiltAt, Release: v.Release}
+		},
+		Local: func() hostsoftware.Host {
+			v := version.Current()
+			h := hostsoftware.Host{Label: "Orchestrator", Nodes: []hostsoftware.Node{}, Agent: &hostsoftware.Build{Version: v.Version, Commit: v.Commit, BuiltAt: v.BuiltAt, Release: v.Release}}
+			running, outdated := map[string]int{}, map[string]int{}
+			for _, in := range httpapi.InstancesWithMetrics(launcherSvc, hostMetricsTracker) {
+				if in.HostID != "" {
+					continue
+				}
+				running[in.Type]++
+				if in.Outdated {
+					outdated[in.Type]++
+				}
+			}
+			for _, e := range launcherSvc.Catalog() {
+				n := hostsoftware.Node{Type: e.Type, Runner: e.Runner, Running: running[e.Type], Outdated: outdated[e.Type]}
+				if n.Runner == "" {
+					n.Runner = "process"
+				}
+				if e.Runner == "podman" {
+					n.Version, n.Source = e.Version, "image"
+				} else if len(e.Command) > 0 {
+					n.Binary = filepath.Base(e.Command[0])
+					st := update.StampOf(e.Command[0])
+					n.Version, n.Commit, n.BuiltAt, n.Modified, n.Error = st.Version, st.Commit, st.BuiltAt, st.Modified, st.Error
+					if st.Error == "" {
+						n.Source = "binary"
+					}
+				}
+				h.Nodes = append(h.Nodes, n)
+			}
+			return h
+		},
+	}
 	launcherSvc.SetRemoteTypeCheck(catalogDist.CheckStart)
 	placementEngine.SetTypeAvailability(func(nodeType, hostID string) (bool, bool) {
 		if e, ok := launcherSvc.ImportedEntry(nodeType, ""); ok {
@@ -1603,7 +1654,7 @@ func main() {
 	timelineSink(timeline.Event{At: time.Now(), Kind: "orchestrator.started", Severity: timeline.SevInfo, Subject: cfg.ClusterNodeID, Data: map[string]any{"version": version.Version}})
 	go timelineRec.Run(ctx, hub, timelineSink)
 	go timelineStore.RunRetention(ctx, cfg.AuditRetentionDays)
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithCatalogDistributor(catalogDist), httpapi.WithClusterRollout(clusterRollout, clusterRolloutToken), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithAlertMail(alertMailStore), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithDBHealth(func(ctx context.Context) (housekeeping.Health, error) {
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithCatalogDistributor(catalogDist), httpapi.WithHostSoftware(hostSoftwareSvc), httpapi.WithClusterRollout(clusterRollout, clusterRolloutToken), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithAlertMail(alertMailStore), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithDBHealth(func(ctx context.Context) (housekeeping.Health, error) {
 		h, err := housekeeping.CheckHealth(ctx, database)
 		housekeeping.AddVolume(&h, os.Getenv("OMP_DB_VOLUME_PATH"))
 		return h, err

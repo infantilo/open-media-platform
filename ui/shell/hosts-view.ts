@@ -21,6 +21,7 @@ import { confirmDialog } from "../kit/omp-confirm.ts";
 import { showToast } from "../kit/omp-toast.ts";
 import "./host-topology.ts"; // registriert <omp-host-topology> (Seiteneffekt-Import: ein reiner Typ-Import würde wegoptimiert)
 import "./host-trends.ts";
+import "./host-software.ts"; // registriert <omp-host-software> (Seiteneffekt-Import)
 import type { HostTopology } from "./host-topology.ts";
 import type { HostTrends } from "./host-trends.ts";
 import { clockProblem, type ClockIn, type TopoHostIn } from "./host-topology-logic.ts";
@@ -275,6 +276,8 @@ class HostsView extends HTMLElement {
   // dabei weder Auswahl noch Zeitfenster verlieren).
   #topo = document.createElement("omp-host-topology") as HostTopology;
   #trends = document.createElement("omp-host-trends") as HostTrends;
+  // Kap. 85: Software-Stand je Host; eigenes Element, überlebt das Neuzeichnen per innerHTML.
+  #software = document.createElement("omp-host-software");
   #topoKey = "";
   #lastHosts: HostEntry[] = [];
   #lastAdvice: PlacementAdvice[] = [];
@@ -724,11 +727,13 @@ class HostsView extends HTMLElement {
               <tbody>${rows}</tbody>
             </table>`
       }
+      <div data-slot="software" style="margin-top:var(--omp-space-4);"></div>
       <div data-slot="trend" style="margin-top:var(--omp-space-4);">
         <div class="omp-h1" style="margin-bottom:var(--omp-space-2);">${t("trend.title")}</div>
       </div>
     `;
     this.querySelector('[data-slot="topo"]')?.append(this.#topo);
+    this.querySelector('[data-slot="software"]')?.append(this.#software);
     this.querySelector('[data-slot="trend"]')?.append(this.#trends);
   }
 }

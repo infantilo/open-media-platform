@@ -46,6 +46,7 @@ type handlerOptions struct {
 	updateBackup        BackupService
 	updateDist          UpdateDistributor
 	catalogDist         CatalogDistributor
+	hostSoftware        HostSoftwareCollector
 	nodeVersions        NodeVersionStore
 	nodeValues          NodeOptionValues
 	locations           LocationStore

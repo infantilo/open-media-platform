@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/catalogdist"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/hostsoftware"
 )
 
 type fakeDist struct {
@@ -127,5 +128,26 @@ func TestNotInstalledStartIsConflict(t *testing.T) {
 	writeLauncherError(w, fmt.Errorf("start: %w", catalogdist.ErrNotInstalled))
 	if w.Code != http.StatusConflict {
 		t.Fatalf("erwartet 409, bekam %d", w.Code)
+	}
+}
+
+type fakeSW struct{ force bool }
+
+func (f *fakeSW) Collect(force bool) (hostsoftware.Report, error) {
+	f.force = force
+	return hostsoftware.Report{Orchestrator: hostsoftware.Build{Version: "dev"}, Hosts: []hostsoftware.Host{{Label: "A"}}}, nil
+}
+
+func TestHostSoftwareHandler(t *testing.T) {
+	f := &fakeSW{}
+	w := httptest.NewRecorder()
+	handleHostSoftware(f)(w, httptest.NewRequest("GET", "/api/v1/hosts/software?refresh=1", nil))
+	if w.Code != 200 || !f.force || !strings.Contains(w.Body.String(), `"label":"A"`) {
+		t.Fatalf("%d %v %s", w.Code, f.force, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	handleHostSoftware(nil)(w, httptest.NewRequest("GET", "/x", nil))
+	if w.Code != 404 {
+		t.Fatalf("deaktiviert: %d", w.Code)
 	}
 }

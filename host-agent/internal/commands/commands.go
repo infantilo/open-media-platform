@@ -327,6 +327,8 @@ func (e *Executor) Handle(req Request) Response {
 		return e.stop(req)
 	case "update":
 		return e.update(req)
+	case "software":
+		return e.software()
 	case "catalog-trust", "catalog-install", "catalog-remove", "catalog-list":
 		return e.handleMicroservice(req)
 	case "check-path":
@@ -433,7 +435,7 @@ func (e *Executor) start(req Request) Response {
 	}
 
 	e.mu.Lock()
-	e.instances[req.InstanceID] = &runningInstance{cmd: cmd, stderrTail: stderrTail, binPath: entry.Command[0]}
+	e.instances[req.InstanceID] = &runningInstance{cmd: cmd, stderrTail: stderrTail, binPath: entry.Command[0], nodeType: entry.Type, version: entry.Version}
 	e.mu.Unlock()
 
 	pid := cmd.Process.Pid

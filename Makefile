@@ -96,7 +96,7 @@ update-bundle: ui nodes
 	mkdir -p dist/update
 	cd orchestrator && go build -ldflags "-X $(VERSION_PKG).Version=$(UPDATE_VERSION) -X $(VERSION_PKG).Commit=$$(git rev-parse --short HEAD) -X $(VERSION_PKG).BuiltAt=$$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o ../dist/update/omp-orchestrator .
 	cd supervisor && go build -o ../dist/update/omp-supervisor .
-	cd host-agent && go build -o ../dist/update/omp-host-agent .
+	cd host-agent && go build -ldflags "-X github.com/infantilo/openmediaplatform/host-agent/internal/version.Version=$(UPDATE_VERSION) -X github.com/infantilo/openmediaplatform/host-agent/internal/version.Commit=$$(git rev-parse --short HEAD) -X github.com/infantilo/openmediaplatform/host-agent/internal/version.BuiltAt=$$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o ../dist/update/omp-host-agent .
 	cd tools/update-bundle && go run . pack -version "$(UPDATE_VERSION)" -key "$(UPDATE_KEY)" \
 		-commit "$$(git rev-parse --short HEAD)" -out ../../dist/omp-update-$(UPDATE_VERSION).tar.gz \
 		-orchestrator ../../dist/update/omp-orchestrator -supervisor ../../dist/update/omp-supervisor \

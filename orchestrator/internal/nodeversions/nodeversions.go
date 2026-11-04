@@ -15,7 +15,6 @@
 package nodeversions
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -55,56 +54,21 @@ type Info struct {
 	BuiltAt  string `json:"builtAt,omitempty"`
 }
 
-const (
-	markerStart = "OMPBUILD1{"
-	markerEnd   = "}OMPBUILD1END"
-)
-
-// ReadMarker sucht den Build-Stempel in einer Datei (streamend, Chunk-Überlappung).
+// ReadMarker sucht den Build-Stempel in einer Datei (streamend, Chunk-Überlappung). Die Suche selbst liegt seit Kap. 85
+// im Modul update (update.ReadBuildMarker), weil der Host-Agent denselben Stempel liest.
 func ReadMarker(path string) (Info, error) {
-	f, err := os.Open(path)
+	raw, err := update.ReadBuildMarker(path)
 	if err != nil {
+		if errors.Is(err, update.ErrNoBuildMarker) {
+			return Info{}, ErrNoMarker
+		}
 		return Info{}, err
 	}
-	defer f.Close()
-	const chunk = 4 << 20
-	const overlap = 512
-	buf := make([]byte, chunk+overlap)
-	have := 0
-	for {
-		n, rerr := f.Read(buf[have : have+chunk])
-		have += n
-		window := buf[:have]
-		if i := bytes.Index(window, []byte(markerStart)); i >= 0 {
-			rest := window[i+len(markerStart)-1:] // ab "{"
-			if j := bytes.Index(rest, []byte(markerEnd)); j >= 0 {
-				var info Info
-				if err := json.Unmarshal(rest[:j+1], &info); err != nil {
-					return Info{}, fmt.Errorf("nodeversions: Stempel unlesbar: %w", err)
-				}
-				return info, nil
-			}
-			// Marker beginnt, Ende fehlt noch: ab Markeranfang weiterlesen.
-			copy(buf, window[i:])
-			have -= i
-			if rerr != nil {
-				return Info{}, ErrNoMarker
-			}
-			continue
-		}
-		if rerr != nil {
-			if errors.Is(rerr, io.EOF) {
-				return Info{}, ErrNoMarker
-			}
-			return Info{}, rerr
-		}
-		keep := overlap
-		if have < keep {
-			keep = have
-		}
-		copy(buf, window[have-keep:])
-		have = keep
+	var info Info
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return Info{}, fmt.Errorf("nodeversions: Stempel unlesbar: %w", err)
 	}
+	return info, nil
 }
 
 // Version ist eine gespeicherte Binary-Version.
