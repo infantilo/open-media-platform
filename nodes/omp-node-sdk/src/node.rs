@@ -133,6 +133,14 @@ pub enum FlowSpec {
 }
 
 impl FlowSpec {
+    fn kind(&self) -> &'static str {
+        match self {
+            FlowSpec::Video { .. } => "Video",
+            FlowSpec::Audio { .. } => "Audio",
+            FlowSpec::Data { .. } => "Data",
+        }
+    }
+
     fn id(&self) -> &Option<String> {
         match self {
             FlowSpec::Video { id, .. } => id,
@@ -339,6 +347,7 @@ impl NodeHandle {
 fn build_sender_parts(
     id: &str,
     i: usize,
+    kind_ordinal: usize,
     spec: &SenderSpec,
     device_id: &str,
     node_label: &str,
@@ -419,12 +428,7 @@ fn build_sender_parts(
                 // (`high`/`low`/`audio`) bleiben unberührt.
                 if !sender.tags.contains_key(crate::group::GROUPHINT_TAG) {
                     if let Some(group) = crate::group::from_env() {
-                        let kind = match flow_spec {
-                            FlowSpec::Video { .. } => "Video",
-                            FlowSpec::Audio { .. } => "Audio",
-                            FlowSpec::Data { .. } => "Data",
-                        };
-                        let role = crate::group::auto_role(kind, spec.label.as_deref(), i);
+                        let role = crate::group::auto_role(flow_spec.kind(), spec.label.as_deref(), kind_ordinal);
                         sender.tags.insert(crate::group::GROUPHINT_TAG.to_string(), vec![format!("{group}:{role}")]);
                     }
                 }
@@ -487,7 +491,7 @@ impl NodeHandle {
         let (sender, source, flow, device_snapshot) = {
             let mut shared = self.shared_receivers.lock().expect("lock poisoned");
             let index = shared.device.senders.len();
-            let (sender, source, flow) = build_sender_parts(&id, index, &spec, &shared.device.id, &self.label);
+            let (sender, source, flow) = build_sender_parts(&id, index, index, &spec, &shared.device.id, &self.label);
             shared.device.senders.push(id.clone());
             shared.device.version = is04::now_version();
             shared.extra_senders.push(ExtraSender { sender: sender.clone(), source: source.clone(), flow: flow.clone() });
@@ -716,7 +720,9 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         .zip(&config.senders)
         .enumerate()
         .map(|(i, (id, spec))| {
-            let (sender, source, flow) = build_sender_parts(id, i, spec, &device_id, &config.label);
+            // Reihenfolge innerhalb der Art (erstes Video heißt „Video“, nicht „Video #1“).
+            let ordinal = spec.flow.as_ref().map_or(0, |f| config.senders[..i].iter().filter(|s| s.flow.as_ref().is_some_and(|g| g.kind() == f.kind())).count());
+            let (sender, source, flow) = build_sender_parts(id, i, ordinal, spec, &device_id, &config.label);
             sources.extend(source);
             flows.extend(flow);
             sender

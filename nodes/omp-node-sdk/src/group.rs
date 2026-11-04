@@ -33,12 +33,13 @@ pub fn name_or(fallback: &str) -> String {
 }
 
 /// Rolle für einen automatisch getaggten Sender: bereinigtes Sender-Label,
-/// sonst `<Art> #<n>` (Rollen einer Gruppe müssen verschieden sein, deshalb
-/// Position des Senders im Node).
-pub fn auto_role(kind: &str, label: Option<&str>, index: usize) -> String {
+/// sonst die Art (`Video`), ab dem zweiten Sender derselben Art `Video #2`
+/// (Rollen einer Gruppe müssen verschieden sein). `ordinal` zählt von 0.
+pub fn auto_role(kind: &str, label: Option<&str>, ordinal: usize) -> String {
     match label.map(|l| l.replace(':', "-").trim().to_string()).filter(|l| !l.is_empty()) {
         Some(l) => l,
-        None => format!("{kind} #{}", index + 1),
+        None if ordinal == 0 => kind.to_string(),
+        None => format!("{kind} #{}", ordinal + 1),
     }
 }
 
@@ -57,6 +58,7 @@ mod tests {
     #[test]
     fn rolle() {
         assert_eq!(auto_role("Video", Some("PGM"), 0), "PGM");
+        assert_eq!(auto_role("Audio", None, 0), "Audio");
         assert_eq!(auto_role("Audio", None, 1), "Audio #2");
     }
 }
