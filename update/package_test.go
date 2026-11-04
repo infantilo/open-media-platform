@@ -232,3 +232,26 @@ func TestParsePublicKeys(t *testing.T) {
 		t.Errorf("comment only: %v %v", ks, err)
 	}
 }
+
+func TestRollingSafeRoundTripAndDefaultFalse(t *testing.T) {
+	pub, priv := keys(t)
+	pkgPath, files := buildPkg(t, priv)
+	pkg, err := ReadPackage(pkgPath, Options{Trusted: []ed25519.PublicKey{pub}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pkg.Manifest.RollingSafe {
+		t.Fatal("rollingSafe darf ohne ausdrueckliche Angabe nicht gesetzt sein")
+	}
+	out := filepath.Join(t.TempDir(), "rs.tar.gz")
+	if err := Build(out, Manifest{Version: "2026.10.1", Arch: "linux/amd64", RollingSafe: true}, priv, files); err != nil {
+		t.Fatal(err)
+	}
+	pkg, err = ReadPackage(out, Options{Trusted: []ed25519.PublicKey{pub}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pkg.Manifest.RollingSafe {
+		t.Fatal("rollingSafe ging verloren")
+	}
+}

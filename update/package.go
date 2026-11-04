@@ -58,15 +58,19 @@ type Component struct {
 
 // Manifest beschreibt ein Update.
 type Manifest struct {
-	SchemaVersion  int         `json:"schemaVersion"`
-	Version        string      `json:"version"`
-	GitCommit      string      `json:"gitCommit,omitempty"`
-	BuiltAt        string      `json:"builtAt,omitempty"`
-	Arch           string      `json:"arch"`
-	MinFromVersion string      `json:"minFromVersion,omitempty"`
-	Migrations     []string    `json:"migrations,omitempty"`
-	Notes          string      `json:"notes,omitempty"`
-	Components     []Component `json:"components"`
+	SchemaVersion  int      `json:"schemaVersion"`
+	Version        string   `json:"version"`
+	GitCommit      string   `json:"gitCommit,omitempty"`
+	BuiltAt        string   `json:"builtAt,omitempty"`
+	Arch           string   `json:"arch"`
+	MinFromVersion string   `json:"minFromVersion,omitempty"`
+	Migrations     []string `json:"migrations,omitempty"`
+	// RollingSafe: Migrationen rein additiv (Expand/Contract), das alte Binary läuft gegen das neue Schema, und die
+	// Raft-FSM-Befehle bleiben für alte Mitglieder lesbar. Nur dann darf der Cluster-Rollout (Kap. 84) das Paket
+	// nacheinander einspielen. Nur auf ausdrückliche Angabe gesetzt.
+	RollingSafe bool        `json:"rollingSafe,omitempty"`
+	Notes       string      `json:"notes,omitempty"`
+	Components  []Component `json:"components"`
 }
 
 // Package ist ein vollständig geprüftes Paket.

@@ -32,6 +32,12 @@ const (
 	CommandRemovePeerHTTPAddr CommandType = "remove_peer_http_addr"
 )
 
+// KnownCommandTypes listet alle Befehlsarten dieses FSM. Wächter fürs Cluster-Rolling-Update (Kap. 84):
+// jede Ergänzung muss die Liste im Test fsm_compat_test.go bewusst mitändern.
+func KnownCommandTypes() []CommandType {
+	return []CommandType{CommandSetPeerHTTPAddr, CommandRemovePeerHTTPAddr}
+}
+
 // Command ist die über raft.Apply(data, …) verschickte Nutzlast —
 // JSON, damit sie sich verlustfrei im Snapshot spiegeln lässt und beim
 // Debuggen lesbar bleibt (kein Binärformat nötig, die Nutzlast ist

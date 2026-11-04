@@ -5,7 +5,7 @@
 //	    erzeugt <dir>/update-signing.key (GEHEIM, 0600) und update-trusted.pub
 //	update-bundle pack -version V -key <signing.key> -out <paket.tar.gz>
 //	    [-orchestrator F] [-supervisor F] [-host-agent F] [-ui-dir D]
-//	    [-node omp-source=F ...] [-min-from V] [-migrations a.sql,b.sql]
+//	    [-node omp-source=F ...] [-min-from V] [-migrations a.sql,b.sql] [-rolling-safe]
 //	    [-commit C] [-notes T] [-arch linux/amd64] [-unsigned]
 //	update-bundle verify -pub <trusted.pub> <paket.tar.gz>
 package main
@@ -108,6 +108,7 @@ func pack(args []string) error {
 	agent := fset.String("host-agent", "", "Host-Agent-Binary")
 	uiDir := fset.String("ui-dir", "", "UI-Verzeichnis ui/dist (alle Dateien)")
 	minFrom := fset.String("min-from", "", "frühestens installierbar ab Version")
+	rollingSafe := fset.Bool("rolling-safe", false, "Paket ist fuer den Cluster-Rollout geeignet (Migrationen additiv, altes Binary laeuft gegen neues Schema, FSM-Befehle abwaertslesbar)")
 	migrations := fset.String("migrations", "", "Komma-Liste neuer Migrationsdateien")
 	commit := fset.String("commit", "", "Git-Commit")
 	notes := fset.String("notes", "", "Hinweistext")
@@ -194,7 +195,7 @@ func pack(args []string) error {
 	}
 	err := update.Build(*out, update.Manifest{
 		Version: *version, GitCommit: *commit, Arch: *arch, MinFromVersion: *minFrom,
-		Migrations: migs, Notes: *notes,
+		Migrations: migs, RollingSafe: *rollingSafe, Notes: *notes,
 	}, priv, files)
 	if err != nil {
 		return err
@@ -252,7 +253,7 @@ func verify(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("OK  Version %s  signiert=%v (Key %s)  sha256=%s\n", pkg.Manifest.Version, pkg.Signed, pkg.KeyID, pkg.SHA256)
+	fmt.Printf("OK  Version %s  signiert=%v (Key %s)  rollingSafe=%v  sha256=%s\n", pkg.Manifest.Version, pkg.Signed, pkg.KeyID, pkg.Manifest.RollingSafe, pkg.SHA256)
 	for _, c := range pkg.Manifest.Components {
 		fmt.Printf("    %-28s → %s\n", c.ID, c.Target)
 	}
