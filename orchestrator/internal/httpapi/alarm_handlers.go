@@ -29,43 +29,45 @@ type AlarmAckStore interface {
 type HandlerOption func(*handlerOptions)
 
 type handlerOptions struct {
-	alarmAcks       AlarmAckStore
-	scriptCommands  []string
-	domainAudit     DomainAuditLogger
-	domainAuditR    DomainAuditReader
-	assetLinks      AssetLinkService
-	storageBackends StorageBackendService
-	organizations   OrganizationService
-	groups          GroupService
-	sourceTags      SourceTagStore
-	ffmpegTools     FFmpegToolsService
-	updates         UpdateService
-	updateSup       UpdateSupervisor
-	updateBackup    BackupService
-	updateDist      UpdateDistributor
-	nodeVersions    NodeVersionStore
-	nodeValues      NodeOptionValues
-	locations       LocationStore
-	maintenance     MaintenanceService
-	hostKeyRotator  func(hostID string) error
-	mediaKPI        MediaKPIReader
-	hostSysinfo     HostSysinfoFunc
-	timeline        *timeline.Sources
-	supportAccess   SupportAccessStore
-	freezer         *freeze.Freezer
-	freezeStore     *freeze.Store
-	trends          *trends.Analyzer
-	uiIsolation     *UIIsolation
-	profileName     string
-	profileFindings []profile.Finding
-	dbHealth        DBHealthFunc
-	modules         *module.Registry
-	moduleHooks     *module.Hooks
-	moduleDeps      module.Deps
-	systemSettings  SystemSettingsStore
-	alertMail       AlertMailStore
-	startupSkipped  []string
-	workflowRuns    WorkflowRunReader
+	alarmAcks           AlarmAckStore
+	scriptCommands      []string
+	domainAudit         DomainAuditLogger
+	domainAuditR        DomainAuditReader
+	assetLinks          AssetLinkService
+	storageBackends     StorageBackendService
+	organizations       OrganizationService
+	groups              GroupService
+	sourceTags          SourceTagStore
+	ffmpegTools         FFmpegToolsService
+	updates             UpdateService
+	updateSup           UpdateSupervisor
+	clusterRollout      ClusterRolloutDriver
+	clusterRolloutToken string
+	updateBackup        BackupService
+	updateDist          UpdateDistributor
+	nodeVersions        NodeVersionStore
+	nodeValues          NodeOptionValues
+	locations           LocationStore
+	maintenance         MaintenanceService
+	hostKeyRotator      func(hostID string) error
+	mediaKPI            MediaKPIReader
+	hostSysinfo         HostSysinfoFunc
+	timeline            *timeline.Sources
+	supportAccess       SupportAccessStore
+	freezer             *freeze.Freezer
+	freezeStore         *freeze.Store
+	trends              *trends.Analyzer
+	uiIsolation         *UIIsolation
+	profileName         string
+	profileFindings     []profile.Finding
+	dbHealth            DBHealthFunc
+	modules             *module.Registry
+	moduleHooks         *module.Hooks
+	moduleDeps          module.Deps
+	systemSettings      SystemSettingsStore
+	alertMail           AlertMailStore
+	startupSkipped      []string
+	workflowRuns        WorkflowRunReader
 }
 
 // MediaKPIReader liefert Medien-Kennzahlen je Node (implementiert von *kpi.Tracker, Audit M7).

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/clusterupdate"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	"io"
 	"log/slog"
@@ -586,6 +587,14 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/admin/node-versions/{name}/rollout", g.requireVerbGlobal(authz.VerbAdmin, handleStartNodeRollout(rolloutMgr, launcherSvc, workflowSvc, instanceMigrateSvc, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/admin/node-versions/{name}/rollout", g.requireVerbGlobal(authz.VerbAdmin, handleGetNodeRollout(rolloutMgr)))
 	mux.HandleFunc("GET /api/v1/host-updates/{id}", handleHostUpdateDownload(options.updates, options.updateDist))
+	// Cluster-Rolling-Update (Kap. 84): interne Mitglieds-Routen (HMAC) + Admin-API.
+	mux.HandleFunc("GET "+clusterupdate.PathInfo, handleMemberInfo(options.clusterRolloutToken, clusterSvc))
+	mux.HandleFunc("POST "+clusterupdate.PathFetch, handleMemberFetch(options.clusterRolloutToken, options.updates, options.nodeRegistrar()))
+	mux.HandleFunc("POST "+clusterupdate.PathApply, handleMemberApply(options.clusterRolloutToken, options.updates, options.updateSup, options.nodeRegistrar(), launcherSvc, clusterSvc, options.domainAudit))
+	mux.HandleFunc("GET /api/v1/admin/cluster-rollout", g.requireVerbGlobal(authz.VerbAdmin, handleGetClusterRollout(options.clusterRollout)))
+	mux.HandleFunc("POST /api/v1/admin/cluster-rollout", g.requireVerbGlobal(authz.VerbAdmin, handleStartClusterRollout(options.clusterRollout, clusterSvc, options.updates, options.updateBackup, options.domainAudit)))
+	mux.HandleFunc("POST /api/v1/admin/cluster-rollout/resume", g.requireVerbGlobal(authz.VerbAdmin, handleClusterRolloutAction(options.clusterRollout, clusterSvc, "resume", options.domainAudit)))
+	mux.HandleFunc("POST /api/v1/admin/cluster-rollout/cancel", g.requireVerbGlobal(authz.VerbAdmin, handleClusterRolloutAction(options.clusterRollout, clusterSvc, "cancel", options.domainAudit)))
 	mux.HandleFunc("POST /api/v1/admin/updates/{id}/apply", g.requireVerbGlobal(authz.VerbAdmin, handleApplyUpdate(options.updates, options.updateSup, options.updateBackup, options.nodeRegistrar(), launcherSvc, options.domainAudit)))
 
 	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).

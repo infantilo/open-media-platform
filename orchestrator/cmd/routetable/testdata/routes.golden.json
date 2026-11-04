@@ -37,6 +37,37 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/admin/cluster-rollout",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/cluster-rollout",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/cluster-rollout/cancel",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/cluster-rollout/resume",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/db-health",
+    "auth": "verb:Admin",
+    "when": "options.dbHealth != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/admin/feature-grants",
     "auth": "verb:Admin",
     "domain": "core"
@@ -152,6 +183,30 @@
   {
     "method": "GET",
     "path": "/api/v1/admin/selftest",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/settings/alert-mail",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/settings/alert-mail",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/admin/settings/alert-mail",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/settings/alert-mail/test",
     "auth": "verb:Admin",
     "domain": "core"
   },

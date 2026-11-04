@@ -476,3 +476,6 @@ func (d *Driver) verify(ctx context.Context, r *Rollout, st *Step) error {
 		}
 	}
 }
+
+// Latest liefert den zuletzt angelegten Rollout (für die Anzeige).
+func (d *Driver) Latest() (*Rollout, error) { return d.Store.Latest() }

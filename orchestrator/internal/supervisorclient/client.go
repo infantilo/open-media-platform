@@ -107,3 +107,22 @@ func (c *Client) Status(ctx context.Context) (json.RawMessage, error) {
 	}
 	return json.RawMessage(data), nil
 }
+
+// TriggerRestart ruft POST {baseURL}/restart auf: der Supervisor startet den Orchestrator ohne Paket neu
+// (rollierender Cluster-Neustart, Kap. 84).
+func (c *Client) TriggerRestart(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/restart", nil)
+	if err != nil {
+		return fmt.Errorf("request bauen: %w", err)
+	}
+	res, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("supervisor nicht erreichbar: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusAccepted {
+		respBody, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("supervisor antwortete mit %d: %s", res.StatusCode, string(respBody))
+	}
+	return nil
+}
