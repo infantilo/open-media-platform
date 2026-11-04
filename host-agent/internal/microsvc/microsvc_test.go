@@ -90,13 +90,28 @@ func TestForeignSignatureRejected(t *testing.T) {
 	}
 }
 
-func TestAllowlistRejectsInsteadOfWeakening(t *testing.T) {
+func TestDefaultAllowsAllExtensions(t *testing.T) {
 	s, priv, pub := setup(t, "")
+	s.TrustKey(pub)
+	e := map[string]any{"type": "svc", "runner": "podman", "image": "localhost/svc:2", "hostNetwork": true, "mxlAccess": true, "mediaRead": true, "extraPort": true, "dataDir": "/d"}
+	if _, err := s.Install(bundle(t, priv, e, "sha256:abc")); err != nil {
+		t.Fatalf("Standard erlaubt alle Erweiterungen: %v", err)
+	}
+}
+
+func TestAllowlistRejectsInsteadOfWeakening(t *testing.T) {
+	s, priv, pub := setup(t, "extraPort,dataDir")
 	s.TrustKey(pub)
 	e := map[string]any{"type": "svc", "runner": "podman", "image": "localhost/svc:2", "hostNetwork": true, "mxlAccess": true}
 	_, err := s.Install(bundle(t, priv, e, "sha256:abc"))
 	if err == nil || !strings.Contains(err.Error(), "hostNetwork") || !strings.Contains(err.Error(), "mxlAccess") {
 		t.Fatalf("erwartet Ablehnung mit beiden Opt-ins: %v", err)
+	}
+	// "none" erlaubt gar nichts
+	s3, priv3, pub3 := setup(t, "none")
+	s3.TrustKey(pub3)
+	if _, err := s3.Install(bundle(t, priv3, map[string]any{"type": "svc", "runner": "podman", "image": "localhost/svc:2", "extraPort": true}, "sha256:abc")); err == nil {
+		t.Fatal("none muss auch extraPort ablehnen")
 	}
 	s2, priv2, pub2 := setup(t, "hostNetwork, mxlAccess")
 	s2.TrustKey(pub2)

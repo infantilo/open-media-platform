@@ -300,7 +300,7 @@ func main() {
 	}
 	// Importierte Microservices (Kap. 85): Installationen, Vertrauensanker und Allowlist der Vertrauens-Erweiterungen
 	// liegen agent-lokal. OMP_MICROSERVICE_ALLOW: Kommaliste aus mxlAccess,mediaRead,hostNetwork,extraPort,dataDir
-	// (Standard: extraPort,dataDir).
+	// (Standard: alle; "none" = keine).
 	if ms, err := microsvc.NewStore(envOr("OMP_MICROSERVICE_DIR", filepath.Join(filepath.Dir(statePath), "microservices")),
 		microsvc.ParseAllow(os.Getenv("OMP_MICROSERVICE_ALLOW"))); err == nil {
 		if f := os.Getenv("OMP_MICROSERVICE_PUBKEY"); f != "" { // optional: Verteilschlüssel vorab per Konfiguration

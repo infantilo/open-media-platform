@@ -840,10 +840,11 @@ ersetzt) und die Prüfsumme des Image-Archivs, dann `podman load`, und führt de
 Typ in seinem eigenen Katalog (`<Zustandsverzeichnis>/microservices/`).
 
 - **Der Host entscheidet** über Vertrauens-Erweiterungen des Eintrags. Ohne
-  Konfiguration erlaubt er nur `extraPort` und `dataDir`; `mxlAccess`, `mediaRead`
-  und `hostNetwork` müssen am Host-Agent mit `OMP_MICROSERVICE_ALLOW`
-  (Kommaliste) freigegeben sein. Verlangt ein Eintrag mehr, wird die
-  Installation abgelehnt (Fehlertext im UI), nie stillschweigend abgeschwächt.
+  Konfiguration erlaubt er alle (`mxlAccess`, `mediaRead`, `hostNetwork`, `extraPort`,
+  `dataDir`; Nutzerentscheidung 2026-11-04) — der Import bleibt admin-only, das Bundle
+  signiert, der Contract-Check Pflicht. Enger fassen: `OMP_MICROSERVICE_ALLOW` am Host-Agent
+  (Kommaliste, z. B. `extraPort,dataDir`; `none` = keine Erweiterung). Verlangt ein Eintrag
+  mehr als erlaubt, wird die Installation abgelehnt (Fehlertext im UI), nie stillschweigend abgeschwächt.
 - **Soll-Zustand in Postgres** (Tabelle `catalog_distribution`): ein Abgleich auf dem
   Leader zieht später hinzugekommene oder wieder erreichbare Hosts nach, wiederholt
   Fehlschläge mit wachsendem Abstand (bis 10 Minuten; „Erneut versuchen“ sofort) und

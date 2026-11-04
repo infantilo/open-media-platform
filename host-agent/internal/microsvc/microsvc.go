@@ -36,8 +36,10 @@ const (
 	OptDataDir     = "dataDir"
 )
 
-// DefaultAllow: ohne Konfiguration erlaubt ein Host nur die harmlosen Erweiterungen.
-var DefaultAllow = []string{OptExtraPort, OptDataDir}
+// DefaultAllow: ohne Konfiguration erlaubt ein Host alle Erweiterungen (Nutzerentscheidung 2026-11-04). Der Import ist
+// admin-only, das Bundle signiert und der Contract-Check bestanden; wer einen Host enger fassen will, setzt
+// OMP_MICROSERVICE_ALLOW (z. B. "extraPort,dataDir" oder "none" für gar keine Erweiterung).
+var DefaultAllow = []string{OptMxlAccess, OptMediaRead, OptHostNetwork, OptExtraPort, OptDataDir}
 
 // ParseAllow liest eine Kommaliste (OMP_MICROSERVICE_ALLOW); leer = DefaultAllow.
 func ParseAllow(s string) map[string]bool {
@@ -45,6 +47,9 @@ func ParseAllow(s string) map[string]bool {
 	list := DefaultAllow
 	if strings.TrimSpace(s) != "" {
 		list = strings.Split(s, ",")
+	}
+	if strings.EqualFold(strings.TrimSpace(s), "none") {
+		return out
 	}
 	for _, v := range list {
 		if v = strings.TrimSpace(v); v != "" {
