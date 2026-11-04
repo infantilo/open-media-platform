@@ -132,7 +132,10 @@ const T = (() => {
       "applyPreset": "Preset anwenden",
       "promptName": "Name des Presets:",
       "newPresetName": "Neues Preset",
-      "thumbnails": "Vorschaubilder"
+      "thumbnails": "Vorschaubilder",
+      "skinNew": "Konsole 2 ▸",
+      "skinClassic": "◂ Klassisch",
+      "skinTip": "Optik umschalten (nur Darstellung)"
   },
     en: {
       "close": "Close (Esc)",
@@ -221,7 +224,10 @@ const T = (() => {
       "applyPreset": "Apply preset",
       "promptName": "Preset name:",
       "newPresetName": "New preset",
-      "thumbnails": "Thumbnails"
+      "thumbnails": "Thumbnails",
+      "skinNew": "Console 2 ▸",
+      "skinClassic": "◂ Classic",
+      "skinTip": "Switch look (display only)"
   },
   };
   const lang = document.documentElement.lang === "en" ? "en" : "de";
@@ -517,6 +523,54 @@ function openModal(titleText, opts) {
   return { bodyEl, close };
 }
 
+
+// ───── Konsole 2: dichte Pult-Optik (gleicher Stil wie die Audiomischer-Konsole 2) ─────
+// Reine Darstellung: Logik, DOM und Kommandos bleiben unverändert. Umschaltbar (Kopf des Panels),
+// Wahl in localStorage `omp-mixer-skin` (gemeinsam mit dem Audiomischer: Standard "v2" = neue Optik, "classic" = alt).
+const SKIN_KEY = "omp-mixer-skin";
+const SKIN_C2_CSS = `
+  :host([data-skin="c2"]) {
+    --omp-bg: #111; --omp-surface: #1a1a1a; --omp-surface-raised: #222; --omp-border: #2c2c2c;
+    --omp-text: #d8dde2; --omp-text-dim: #7d848c; --omp-text-disabled: #555;
+    --omp-font: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    --omp-font-size-xs: 10px; --omp-font-size-sm: 11px; --omp-radius: 3px;
+    --omp-metal-highlight: #4a4a4a; --omp-metal-light: #383838; --omp-metal-mid: #262626; --omp-metal-dark: #131313;
+    --omp-onair: #ff4040; --omp-preset: #25d366; --omp-cue: #ff9f1c; --omp-info: #27e0f0;
+    --omp-glow-onair: 0 0 8px 1px rgba(255, 64, 64, 0.55); --omp-glow-preset: 0 0 8px 1px rgba(37, 211, 102, 0.5);
+    background: #111; padding: 6px; font-size: 11px; line-height: 1.2; user-select: none;
+  }
+  :host([data-skin="c2"]) omp-button::part(button) { text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px; font-weight: 700; }
+  :host([data-skin="c2"]) omp-button[active]:not([color])::part(button) { color: #001a1f; border-color: #46e6f6; }
+  :host([data-skin="c2"]) omp-button[active][color="preset"]::part(button) { color: #02150a; }
+  :host([data-skin="c2"]) omp-button[active][color="cue"]::part(button) { color: #2a1500; }
+  :host([data-skin="c2"]) .bank-row { background: #161616; border: 1px solid #060606; border-radius: 2px; padding: 5px; }
+  :host([data-skin="c2"]) .bank-row + .bank-row { margin-top: 4px; border-top: 1px solid #060606; }
+  :host([data-skin="c2"]) .bank-gutter { background: #2a2a2a; color: #cfd6dc; border-radius: 2px; width: 16px; }
+  :host([data-skin="c2"]) .bus-label {
+    width: 38px; height: 22px; padding: 0; margin-top: 4px; display: flex; align-items: center; justify-content: center;
+    border-radius: 2px; font-weight: 800; color: #1a0606; background: #ff4040; text-shadow: 0 1px 0 #fff4;
+  }
+  :host([data-skin="c2"]) .bus-row:nth-child(2) .bus-label { background: #25d366; color: #02150a; }
+  :host([data-skin="c2"]) .bus-buttons omp-button { height: 32px; min-width: 64px; }
+  :host([data-skin="c2"]) .bus-thumb { border: 1px solid #000; background: #050505; }
+  :host([data-skin="c2"]) .bus-buttons .group-label, :host([data-skin="c2"]) .tool-label {
+    color: #9aa3ad; letter-spacing: 0.14em; border-left-color: #333; font-weight: 800;
+  }
+  :host([data-skin="c2"]) .toolbar-row { border-top: 1px solid #2c2c2c; margin-top: 2px; }
+  :host([data-skin="c2"]) .tool-group + .tool-group { border-left-color: #2c2c2c; }
+  :host([data-skin="c2"]) .transition { border-left: 1px solid #2c2c2c; background: linear-gradient(#202020, #161616); padding: 6px; border-radius: 2px; }
+  :host([data-skin="c2"]) .transition omp-button.cut::part(button) { background: linear-gradient(#ff5a5a, #c01f1f); border-color: #000; color: #fff; }
+  :host([data-skin="c2"]) .transition omp-button.auto::part(button) { background: linear-gradient(#ffb64d, #d77d00); border-color: #000; color: #241300; }
+  :host([data-skin="c2"]) .pin-chip { background: #202020; border-color: #333; }
+  :host([data-skin="c2"]) .thumbs-toggle { color: #9aa3ad; }
+  .skin-toggle {
+    margin-left: auto; height: 22px; padding: 0 9px; border: 1px solid #3a3a3a; border-radius: 3px; cursor: pointer;
+    background: linear-gradient(#3a3a3a, #262626); color: #d8dde2; font: 700 10px ui-monospace, Menlo, Consolas, monospace;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .skin-toggle:hover { background: linear-gradient(#444, #2d2d2d); }
+  .skin-bar { display: flex; align-items: center; gap: 10px; }
+`;
 class OmpVideoMixerMePanel extends HTMLElement {
   async connectedCallback() {
     const nodeId = this.getAttribute("node-id");
@@ -709,6 +763,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
       .pin-chip omp-button { width: 32px !important; height: 32px !important; font-size: 13px; padding: 0; }
       [disabled] { opacity: 0.4; }
     `;
+    style.textContent += SKIN_C2_CSS;
 
     // Bugfund 2026-09-28 Teil 2 (Nutzermeldung: T("noPicture")-Text ist weg,
     // aber es blitzt weiterhin zyklisch schwarz durch): live per
@@ -2086,9 +2141,28 @@ class OmpVideoMixerMePanel extends HTMLElement {
       this._refresh?.();
     });
 
+    const skinBtn = document.createElement("button");
+    skinBtn.type = "button";
+    skinBtn.className = "skin-toggle";
+    const applySkin = (skin) => {
+      this.setAttribute("data-skin", skin === "v2" ? "c2" : "classic");
+      skinBtn.textContent = skin === "v2" ? T("skinClassic") : T("skinNew");
+      skinBtn.title = T("skinTip");
+    };
+    const currentSkin = () => { try { return localStorage.getItem(SKIN_KEY) === "classic" ? "classic" : "v2"; } catch { return "v2"; } };
+    applySkin(new URLSearchParams(location.search).get("skin") === "classic" ? "classic" : currentSkin());
+    skinBtn.addEventListener("click", () => {
+      const next = this.getAttribute("data-skin") === "c2" ? "classic" : "v2";
+      try { localStorage.setItem(SKIN_KEY, next); } catch {}
+      applySkin(next);
+    });
+    const skinBar = document.createElement("div");
+    skinBar.className = "skin-bar";
+    skinBar.append(thumbsToggle, skinBtn);
+
     const consoleSection = document.createElement("omp-panel-section");
     consoleSection.setAttribute("label", "Video Mixer M/E");
-    consoleSection.append(thumbsToggle, consoleList);
+    consoleSection.append(skinBar, consoleList);
 
     // Ebenen-Restart-Sektion (s. Moduldoku oben zu "Ebenenzahl live
     // ändern") — ermittelt Workflow/Rolle/aktuelles Format über einen

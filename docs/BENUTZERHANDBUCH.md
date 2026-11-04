@@ -1842,6 +1842,13 @@ Pegel oder Routing.
   Control mit den selteneren Einstellungen (Delay, Pan, AutoMix, Ducking,
   Automation, Quelle, Reihenfolge).
 
+Der **Bildmischer** (Video Mixer M/E) hat dieselbe Optik: Knopf **„Konsole 2 ▸“**
+bzw. **„◂ Klassisch“** oben rechts im Panel, dieselbe Browser-Einstellung wie beim
+Audiomischer (`?skin=v2` erzwingt sie). Nur die Darstellung ändert sich (PGM rot, PST
+grün, CUT/AUTO farbig, dunkle Pult-Optik); Bedienung und Kommandos bleiben gleich.
+
+![Bildmischer in der Konsole-2-Optik](screenshots/videomixer-konsole2.png)
+
 - **Ansicht** (Auto, Desktop, Compact, Dicht, Grid, Touch), **Operate** (Übersicht,
   Fader ausgeblendet) und **Mix** (Fader + Center Control), **Fader** ein/aus,
   Spalten, Metergröße. Das sind reine Darstellungs-Einstellungen: sie ändern nie
