@@ -27,6 +27,7 @@ pub mod st2110_anc;
 pub mod scte_decode;
 pub mod hwaccel;
 pub mod framerate;
+pub mod group;
 
 #[cfg(feature = "mxl")]
 pub mod mxl;

@@ -67,7 +67,7 @@ fn video_flow_def(
         "label": label,
         "description": format!("OpenMediaPlatform: {label}"),
         "tags": {
-            "urn:x-nmos:tag:grouphint/v1.0": [format!("{flow_id}:Video")],
+            "urn:x-nmos:tag:grouphint/v1.0": [omp_mediaio::group::tag_value("Video", flow_id)],
         },
         "format": "urn:x-nmos:format:video",
         "parents": [],

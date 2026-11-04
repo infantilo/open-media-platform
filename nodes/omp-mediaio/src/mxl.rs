@@ -315,12 +315,11 @@ fn video_flow_def(
         "description": format!("OpenMediaPlatform: {label}"),
         "tags": {
             // Pflichtfeld, Format "<group-name>:<role-in-group>" (siehe
-            // FlowParser.cpp-Fehlermeldung sowie das mitgelieferte
-            // v210_flow.json-Beispiel) — MXL gruppiert zusammengehörige
-            // Flows (z. B. Video+Audio derselben Quelle) darüber; wir
-            // haben v0 nur Video, daher Flow-ID als eindeutiger
-            // Gruppenname.
-            "urn:x-nmos:tag:grouphint/v1.0": [format!("{flow_id}:Video")],
+            // FlowParser.cpp-Fehlermeldung). Laut mxlCreateFlowWriter-Doku
+            // ist der Gruppenname der Name der Media-Function-Instanz, damit
+            // Video/Audio/ANC desselben Nodes eine Gruppe bilden (`group.rs`);
+            // ohne Instanznamen (Werkzeuge/Tests) die Flow-ID wie bisher.
+            "urn:x-nmos:tag:grouphint/v1.0": [crate::group::tag_value("Video", flow_id)],
         },
         "format": "urn:x-nmos:format:video",
         "parents": [],
@@ -1409,7 +1408,7 @@ fn audio_flow_def(flow_id: &str, label: &str, sample_rate: u32, channel_count: u
         "label": label,
         "description": format!("OpenMediaPlatform: {label}"),
         "tags": {
-            "urn:x-nmos:tag:grouphint/v1.0": [format!("{flow_id}:Audio")],
+            "urn:x-nmos:tag:grouphint/v1.0": [crate::group::tag_value("Audio", flow_id)],
         },
         "format": "urn:x-nmos:format:audio",
         "parents": [],
@@ -3804,7 +3803,7 @@ fn data_flow_def(flow_id: &str, label: &str, group: &str, rate_num: u32, rate_de
         "id": flow_id,
         "label": label,
         "description": format!("OpenMediaPlatform: {label}"),
-        "tags": { "urn:x-nmos:tag:grouphint/v1.0": [format!("{group}:Ancillary Data")] },
+        "tags": { "urn:x-nmos:tag:grouphint/v1.0": [format!("{}:{}", crate::group::name_or(group), crate::group::role_for("Ancillary Data", flow_id))] },
         "format": "urn:x-nmos:format:data",
         "parents": [],
         "media_type": "video/smpte291",

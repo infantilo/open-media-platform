@@ -15,6 +15,7 @@ pub mod channelmapping;
 pub mod connection;
 pub mod descriptor;
 pub mod errcode;
+pub mod group;
 mod errcodes_table;
 pub mod diag;
 pub mod health;

@@ -274,7 +274,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // "<group-name>:<role-in-group>" — laut Spec ein Sender-/Receiver-Tag
     // (nicht Flow/Source). `flow_id` (Highres-Flow-UUID) als Gruppenname:
     // stabil, pro Instanz eindeutig, kein zusätzlicher Bezeichner nötig.
-    let highres_group_name = flow_id.clone();
+    let highres_group_name = omp_node_sdk::group::name_or(&flow_id);
 
     let handle = omp_node_sdk::start(
         NodeConfig {

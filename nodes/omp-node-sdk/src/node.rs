@@ -413,6 +413,21 @@ fn build_sender_parts(
                     }
                 }
                 sender.flow_id = Some(flow_id);
+                // Natural Group (BCP-002-01): jeder Sender mit Flow, der keinen eigenen
+                // Grouphint mitbringt, gehört zur Gruppe seiner Instanz — so erscheinen
+                // Video/Audio/ANC eines Nodes zusammen. Nodes mit eigenen Rollen
+                // (`high`/`low`/`audio`) bleiben unberührt.
+                if !sender.tags.contains_key(crate::group::GROUPHINT_TAG) {
+                    if let Some(group) = crate::group::from_env() {
+                        let kind = match flow_spec {
+                            FlowSpec::Video { .. } => "Video",
+                            FlowSpec::Audio { .. } => "Audio",
+                            FlowSpec::Data { .. } => "Data",
+                        };
+                        let role = crate::group::auto_role(kind, spec.label.as_deref(), i);
+                        sender.tags.insert(crate::group::GROUPHINT_TAG.to_string(), vec![format!("{group}:{role}")]);
+                    }
+                }
             }
     (sender, source_out, flow_out)
 }

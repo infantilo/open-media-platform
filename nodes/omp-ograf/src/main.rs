@@ -591,7 +591,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // "<group>:<role>" — `fill_flow_id` als Gruppenname (stabil, pro
     // Instanz eindeutig). Nur Fill bekommt das Tag, Key bleibt
     // unangetastet .
-    let fill_group_name = fill_flow_id.clone();
+    let fill_group_name = omp_node_sdk::group::name_or(&fill_flow_id);
 
     let handle = omp_node_sdk::start(
         NodeConfig {
