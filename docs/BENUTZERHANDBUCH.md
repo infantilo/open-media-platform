@@ -850,6 +850,9 @@ Browser-Datei-Upload über die konfigurierten S3-Speicher-Backends (Entwicklung:
 (Administration → Storage) ist backend-seitig vorbereitet, aber noch
 nicht an dieses Formular angebunden.
 
+**Ab Kapitel 86 gibt es dafür den Reiter „Dateien“** (§5h): Dateien eines Ortes ansehen, per Klick als Asset anlegen oder einem Asset zuordnen, in den
+Orchestrator-Rechner hochladen und mit Papierkorb löschen; der Asset-Liste fehlt dann nichts mehr — Assets, deren Datei verschwunden ist, lassen sich dort filtern.
+
 Was eine Mediendatei tatsächlich **abspielbar** macht, ist davon
 unabhängig: Playout-Nodes (Kanal-Player, MXF-Player, …) lesen ihre
 Datei direkt vom Dateisystem des Hosts, auf dem ihr Prozess läuft —
@@ -950,6 +953,43 @@ Der Tab **Stream Ingest** plant Aufnahmen von Live-Quellen (MXL-Sender): einmali
 - **Einstellungen** (Administratoren): Formular mit fünf Abschnitten — *Allgemein* (Vorwärmzeit, Ziel der Startabweichung, Planungshorizont, Zielordner), *Standard-Richtlinien* (Verhalten bei fehlender Quelle, Versuche, Pausen), *Zulassungsregeln* (Quellenlimit, Reserve je Ressource ab Priorität, Verdrängungsvorschlag), *Grenzen je Rechner* (Standard und Abweichungen je Rechner, Warnschwelle, Funktionen) und *Aufnahmeprofile* (Dateiformat per Auswahl, erwarteter Bedarf je Ressource — leer = gemessen/Standard —, optionale Konvertierung mit ffmpeg-Argumenten). Eingaben werden vor dem Speichern geprüft; der Server prüft zusätzlich.
   Messwerte aus abgeschlossenen Aufnahmen ersetzen Standardwerte automatisch („gemessen“ vor „konfiguriert“ vor „Standard“).
 
+
+## 5h. Dateien (Explorer, Papierkorb, „Datei fehlt“)
+
+Der Reiter **Dateien** zeigt die Mediendateien der **Orte** (Medienordner, Proxys, Untertitel, Aufnahmen …) auf dem Orchestrator-Rechner und auf den Hosts und
+verwaltet sie: ansehen, einem Asset zuordnen, hochladen, löschen und wiederherstellen. Er braucht die Funktionsrechte *Dateien ansehen* (`files.view`),
+*Dateien löschen und wiederherstellen* (`files.delete`), *Gesperrte Dateien löschen (Erzwingen)* (`files.force`), *Dateien hochladen* (`files.upload`) und
+*Orte und Dateieinstellungen verwalten* (`files.admin`). Hintergrund und Entscheidungen: `docs/ENTWURF-DATEIVERWALTUNG.md`.
+
+- **Nach Ort:** links die Orte (Host, Rolle, freier Platz, Anzahl im Papierkorb), rechts der Ordnerinhalt. Je Datei stehen **Rolle** (Master, Proxy, Untertitel,
+  Aufnahme …), **Gehört zu** (das Asset), der **Dateizustand** und ein Schloss-/Warnsymbol (🔒 gesperrt oder in Verwendung, ⚠ Hinweise). Das Häkchen
+  **„nur verwaiste Dateien“** durchsucht den ganzen Ort (bis 3000 Dateien) nach Dateien, auf die kein Asset, kein Untertitel und keine Aufnahme verweist.
+- **Als Asset anlegen / Zu Asset hinzufügen:** gewählte Dateien werden je ein neues Asset (veröffentlichte Version, Status „Registriert“, erscheint im Eingang) bzw. als
+  Representation an einem Entwurf eines vorhandenen Assets angehängt (erst „Veröffentlichen“ macht die Version gültig). Dateien, die schon zu einem Asset gehören, werden nicht doppelt angelegt.
+- **Hochladen** (`files.upload`): Datei aus dem Browser in den geöffneten Ordner eines Ortes **auf dem Orchestrator-Rechner**; Orte auf Hosts nehmen keinen Upload an.
+- **Löschen:** Die Vorschau zeigt die gewählten Dateien und für jede, warum sie gesperrt ist oder wovor gewarnt wird. **„Zugehörige Dateien mitnehmen“** nimmt die Familie
+  (weitere Representations, Untertitel, Review-Proxys) dazu; der Master wird nie stillschweigend mitgelöscht. Danach liegen die Dateien im **Papierkorb** desselben Ortes
+  (gleiche Platte, kein Kopieren) und lassen sich wiederherstellen.
+  - **Absolut gesperrt** (nicht umgehbar): die Datei läuft gerade auf Sendung, wird aufgenommen, geprüft (QC) oder von einem ffmpeg-Job gelesen/geschrieben, oder der Ort ist schreibgeschützt.
+  - **Gesperrt** (nur mit **Erzwingen**, Recht `files.force`, Begründung mindestens 5 Zeichen, wird protokolliert und löst einen Alarm aus): die Datei liegt im **Sperrfenster** um eine Sendung
+    (Beginn minus „vorher“ bis Ende plus „nachher“) oder ist noch **verplant**.
+  - **Hinweis** (Bestätigung genügt): Teil einer veröffentlichten Version, Asset freigegeben/veröffentlicht oder im Eingang in Bearbeitung.
+- **Nach Asset:** die Assets mit dem Dateizustand und Filter (alle vorhanden, Datei fehlt, teilweise fehlend, nicht erreichbar, nie geprüft, ohne Datei). Ein Klick zeigt je Representation Zustand, Größe
+  und Prüfzeit sowie zugehörige Untertitel und Proxys; **„Jetzt prüfen“** prüft sofort. Derselbe Filter steht in der Asset-Liste (Reiter *Assets*, Auswahlfeld „Dateien“, ⚠ an Assets mit fehlender Datei,
+  Spalte „Datei“ in der Representation-Tabelle).
+- **Papierkorb:** je Ort die gelöschten Dateien mit Restzeit; **Wiederherstellen** (überschreibt nie eine vorhandene Datei), **Endgültig löschen** und **Papierkorb leeren** (Recht `files.admin`).
+- **Einstellungen** (`files.admin`): Aufbewahrung im Papierkorb (Tage, 0 = sofort endgültig), **Notfallgrenze** (freier Platz in GB oder Prozent), Schutzfrist für frisch Gelöschtes, **Sperrfenster** vor und nach der
+  Sendung, „solange verplant, bleibt gesperrt“ sowie die Prüf- und Pflegeintervalle; je Ort lassen sich Papierkorb-Tage, Sperrfenster und Notfallgrenze überschreiben, dazu Rolle und Schreibschutz.
+  **Ort hinzufügen:** Name, Host (leer = Orchestrator-Rechner), absoluter Pfad, Rolle. Ein Host-Agent kann zusätzlich die Wurzeln, die er bedient, per `OMP_FILE_ROOTS` (Doppelpunkt-getrennt) einschränken;
+  liegt ein Ort außerhalb, meldet der Ort „nicht erreichbar … nicht freigegeben“.
+
+**Dateizustand („Datei fehlt“):** Je Representation merkt sich der Orchestrator, ob die Datei da ist (*vorhanden*, *fehlt*, *nicht erreichbar*, *nicht prüfbar*). Geprüft wird im Hintergrund (Standard alle 6 Stunden, in Stapeln),
+beim Öffnen/„Jetzt prüfen“ sofort und nach Löschen/Wiederherstellen. **„Fehlt“ gilt erst nach der zweiten Prüfung hintereinander** (ein kurz getrennter Netzmount löst keinen Alarm aus); ein nicht erreichbarer Host
+ist **nie** „fehlt“. Bei bestätigtem „fehlt“ gehen ein Alarm (Webhook, E-Mail — Art `file-missing`), das Domänen-Audit und ein Ereignis (`omp.files.missing`) hinaus; ist die Datei im Sperrfenster oder verplant, ist der
+Alarm **kritisch**, sonst eine Warnung. Kommt die Datei zurück, meldet `file-recovered` das. Dateien ohne Ort (kein Speicherort für den Pfad angelegt) werden auf dem Orchestrator-Rechner gesucht.
+
+**Speicher knapp:** Unterschreitet der freie Platz eines Ortes die Notfallgrenze, leert die Pflege den Papierkorb **früher** — älteste Einträge zuerst, nur bis die Grenze wieder erreicht ist, nie Frischgelöschtes innerhalb der
+Schutzfrist und nie Dateien außerhalb des Papierkorbs; der Alarm `file-trash-emergency` nennt, was entfernt wurde (oder dass der Papierkorb nichts Löschbares enthält).
 
 ## 5e. Fremdplaylist, Mitlauf (Havarie) und Sendefreigabe
 

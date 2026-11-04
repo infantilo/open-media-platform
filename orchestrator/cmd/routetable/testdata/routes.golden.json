@@ -906,6 +906,120 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/files/asset-states",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/files/assets",
+    "auth": "feature:FeatDelete",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/files/assets/{id}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/files/assets/{id}/attach",
+    "auth": "feature:FeatDelete",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/files/check",
+    "auth": "feature:FeatView",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/files/config",
+    "auth": "feature:FeatView",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/files/config",
+    "auth": "feature:FeatAdmin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/files/delete",
+    "auth": "feature:FeatDelete",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/files/delete/preview",
+    "auth": "feature:FeatDelete",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/files/list",
+    "auth": "feature:FeatView",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/files/orphans",
+    "auth": "feature:FeatView",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/files/roots",
+    "auth": "feature:FeatView",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/files/roots",
+    "auth": "feature:FeatAdmin",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/files/roots/{id}",
+    "auth": "feature:FeatAdmin",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/files/roots/{id}",
+    "auth": "feature:FeatAdmin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/files/trash",
+    "auth": "feature:FeatView",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/files/trash/purge",
+    "auth": "feature:FeatAdmin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/files/trash/restore",
+    "auth": "feature:FeatDelete",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/files/upload",
+    "auth": "feature:FeatUpload",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/freezes",
     "auth": "verb:Admin",
     "when": "options.freezer != nil \u0026\u0026 options.freezeStore != nil",

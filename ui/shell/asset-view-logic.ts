@@ -230,12 +230,28 @@ export interface AssetFilter {
   type: string;
   status: string;
   showDeleted: boolean;
+  /** Dateizustand (Kapitel 86): "" = alle, "problem" = fehlt/teilweise/nicht erreichbar, sonst genau ein Zustand. */
+  fileState?: string;
 }
 
-export function filterAssets(assets: Asset[], f: AssetFilter): Asset[] {
+/** Zustand der Dateien eines Assets (GET /api/v1/files/asset-states). */
+export type FileState = "ok" | "missing" | "partial" | "unreachable" | "unchecked" | "none";
+
+export const FILE_FILTERS = ["problem", "ok", "missing", "partial", "unreachable", "unchecked", "none"] as const;
+
+/** Passt der Dateizustand eines Assets zum Filter? Ohne Angabe zum Asset (Modul aus) zählt es als „nie geprüft“. */
+export function matchesFileState(filter: string | undefined, state: string | undefined): boolean {
+  if (!filter) return true;
+  const s = state ?? "unchecked";
+  if (filter === "problem") return s === "missing" || s === "partial" || s === "unreachable";
+  return s === filter;
+}
+
+export function filterAssets(assets: Asset[], f: AssetFilter, fileStates?: Map<string, string>): Asset[] {
   const q = f.query.trim().toLowerCase();
   return assets.filter((a) => {
     if (f.type && a.type !== f.type) return false;
+    if (!matchesFileState(f.fileState, fileStates?.get(a.id))) return false;
     if (f.status && a.status !== f.status) return false;
     if (!f.status && !f.showDeleted && a.status === "deleted") return false;
     if (!q) return true;

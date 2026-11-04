@@ -22,6 +22,7 @@ import {
   type AssetMetadata,
   type AssetVersion,
   coerceMetadata,
+  FILE_FILTERS,
   filterAssets,
   type LifecycleGraph,
   METADATA_CATEGORIES,
@@ -71,6 +72,24 @@ interface AssetLink {
   role: string;
   createdAt: string;
 }
+
+const FILE_STATE_LABEL: Record<string, () => string> = {
+  present: () => tt("files.state.present"),
+  missing: () => tt("files.state.missing"),
+  unreachable: () => tt("files.state.unreachable"),
+  unknown: () => tt("files.state.unknown"),
+  unchecked: () => tt("files.state.unchecked"),
+};
+
+const FILE_FILTER_LABEL: Record<string, () => string> = {
+  problem: () => tt("files.filter.problem"),
+  ok: () => tt("files.filter.ok"),
+  missing: () => tt("files.filter.missing"),
+  partial: () => tt("files.filter.partial"),
+  unreachable: () => tt("files.filter.unreachable"),
+  unchecked: () => tt("files.filter.unchecked"),
+  none: () => tt("files.filter.none"),
+};
 
 const RELATIONSHIP_TYPE_SUGGESTIONS = ["derived_from", "version_of", "part_of", "references"];
 
@@ -140,7 +159,11 @@ class AssetView extends HTMLElement {
   #reps: Representation[] = [];
   #relationships: AssetRelationship[] = [];
   #versionLinks: AssetLink[] = [];
-  #filter: AssetFilter = { query: "", type: "", status: "", showDeleted: false };
+  #filter: AssetFilter = { query: "", type: "", status: "", showDeleted: false, fileState: "" };
+  // Dateizustand je Asset (Kapitel 86, GET /api/v1/files/asset-states) und je Representation des gewählten Assets.
+  #fileStates = new Map<string, string>();
+  #repHealth = new Map<string, { state: string; detail?: string; checkedAt?: string }>();
+  #fileSelect!: HTMLSelectElement;
   // Volltextsuche (B11, Kapitel 21 Teil B, Nachtrag 284) — null = keine
   // Suche aktiv (Liste zeigt #assets client-gefiltert wie bisher,
   // unverändertes Verhalten). Nicht-null = Ergebnis von GET /api/v1/
@@ -237,6 +260,15 @@ class AssetView extends HTMLElement {
     } catch {
       // s.o.
     }
+    try {
+      const res = await apiFetch("/api/v1/files/asset-states");
+      if (res.ok) {
+        const body = (await res.json()) as { assets?: { assetId: string; state: string }[] };
+        this.#fileStates = new Map((body.assets ?? []).map((s) => [s.assetId, s.state]));
+      }
+    } catch {
+      // Dateien-Modul aus oder nicht erreichbar: der Dateifilter zeigt dann „nie geprüft“.
+    }
     this.#syncPurgeButton();
     if (this.#selectedId) await this.#loadDetail(this.#selectedId);
     if (this.#selectedCollectionId) await this.#loadCollectionMembers(this.#selectedCollectionId);
@@ -282,6 +314,15 @@ class AssetView extends HTMLElement {
       const asset = this.#assets.find((a) => a.id === assetId);
       const newest = [...this.#versions].sort((a, b) => b.versionNumber - a.versionNumber)[0];
       this.#selectedVersionId = asset?.currentVersionId ?? newest?.id ?? null;
+    }
+    try {
+      const res = await apiFetch(`/api/v1/files/assets/${assetId}`);
+      if (res.ok) {
+        const body = (await res.json()) as { representations?: { representationId: string; state: string; detail?: string; checkedAt?: string }[] };
+        this.#repHealth = new Map((body.representations ?? []).map((r) => [r.representationId, { state: r.state, detail: r.detail, checkedAt: r.checkedAt }]));
+      }
+    } catch {
+      // Dateien-Modul aus: keine Zustandsanzeige.
     }
     if (this.#selectedVersionId) {
       try {
@@ -950,6 +991,21 @@ class AssetView extends HTMLElement {
     });
     row.append(this.#typeSelect, this.#statusSelect);
     bar.appendChild(row);
+    // Dateifilter (Kapitel 86): Assets, deren Dateien fehlen, teilweise fehlen oder nicht erreichbar sind.
+    this.#fileSelect = document.createElement("select");
+    this.#fileSelect.setAttribute("data-role", "asset-file-filter");
+    this.#fileSelect.style.cssText = "width:100%;";
+    for (const [value, label] of [["", tt("files.filter.all")], ...FILE_FILTERS.map((f) => [f, FILE_FILTER_LABEL[f]()])]) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = label;
+      this.#fileSelect.appendChild(opt);
+    }
+    this.#fileSelect.addEventListener("change", () => {
+      this.#filter.fileState = this.#fileSelect.value;
+      this.#renderList();
+    });
+    bar.appendChild(this.#fileSelect);
 
     const delLabel = document.createElement("label");
     delLabel.style.cssText = "display:flex;align-items:center;gap:4px;color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);";
@@ -1014,7 +1070,7 @@ class AssetView extends HTMLElement {
     // einmal per Substring anwenden (Ranking-Reihenfolge bliebe erhalten,
     // Typ/Status/showDeleted bleiben als zusätzliche UND-Kriterien aktiv).
     const source = this.#searchResults ?? this.#assets;
-    const visible = filterAssets(source, this.#searchResults ? { ...this.#filter, query: "" } : this.#filter);
+    const visible = filterAssets(source, this.#searchResults ? { ...this.#filter, query: "" } : this.#filter, this.#fileStates);
     this.#countEl.textContent = visible.length === this.#assets.length
       ? tt("asset.81c00b", { p0: this.#assets.length })
       : tt("asset.030c2c", { p0: visible.length, p1: this.#assets.length });
@@ -1043,7 +1099,7 @@ class AssetView extends HTMLElement {
       card.innerHTML = `
         <div style="display:flex;justify-content:space-between;gap:6px;align-items:baseline;">
           <span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(a.title)}</span>
-          ${badge(statusLabel(a.status), STATUS_BADGE[a.status] ?? "")}
+          <span>${this.#fileStates.get(a.id) === "missing" || this.#fileStates.get(a.id) === "partial" ? `<span data-role="asset-file-warn" title="${escapeHtml(tt("files.warn.missing"))}" style="color:var(--omp-danger,#d44);">⚠</span> ` : ""}${badge(statusLabel(a.status), STATUS_BADGE[a.status] ?? "")}</span>
         </div>
         <div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">${escapeHtml(a.type)} · ${fmtTime(a.updatedAt)}</div>
       `;
@@ -1405,6 +1461,20 @@ class AssetView extends HTMLElement {
     return card;
   }
 
+  #repStateHtml(repId: string): string {
+    const h = this.#repHealth.get(repId);
+    if (!h) return "";
+    const known = ["present", "missing", "unreachable", "unknown"].includes(h.state) ? h.state : "unchecked";
+    const cls = known === "present" ? "omp-badge-running" : known === "unchecked" || known === "unknown" ? "omp-badge-cue" : "omp-badge-error";
+    return `<span title="${escapeHtml(h.detail ?? "")}">${badge(FILE_STATE_LABEL[known](), cls)}</span>`;
+  }
+
+  async #checkFiles(assetId: string) {
+    const res = await apiFetch("/api/v1/files/check", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ assetId }) });
+    if (res.ok) showToast(tt("files.checked"));
+    await this.#refresh();
+  }
+
   #renderRepresentations(): HTMLElement {
     const card = document.createElement("div");
     card.className = "omp-card";
@@ -1413,6 +1483,14 @@ class AssetView extends HTMLElement {
     head.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--omp-space-2);";
     head.innerHTML = `<span style="font-weight:600;">${tt("asset.199987", { p0: version ? tt("asset.311f64", { p0: version.versionNumber }) : "", p1: this.#reps.length })}</span>`;
     card.appendChild(head);
+    if (this.#selectedId && this.#repHealth.size > 0) {
+      const chk = document.createElement("button");
+      chk.textContent = tt("files.check");
+      chk.setAttribute("data-role", "rep-check-files");
+      const aid = this.#selectedId;
+      chk.addEventListener("click", () => void this.#checkFiles(aid));
+      head.appendChild(chk);
+    }
 
     if (!version) {
       const empty = document.createElement("div");
@@ -1449,7 +1527,7 @@ class AssetView extends HTMLElement {
     table.style.cssText = "border-collapse:collapse;width:100%;";
     table.innerHTML = `<thead><tr style="color:var(--omp-text-dim);text-align:left;">
       <th style="padding:2px 8px;">${tt("asset.c2ea84")}</th><th style="padding:2px 8px;">${tt("asset.601a93")}</th>
-      <th style="padding:2px 8px;">${tt("asset.5f06f4")}</th><th style="padding:2px 8px;"></th></tr></thead>`;
+      <th style="padding:2px 8px;">${tt("asset.5f06f4")}</th><th style="padding:2px 8px;">${escapeHtml(tt("files.col.state"))}</th><th style="padding:2px 8px;"></th></tr></thead>`;
     const tbody = document.createElement("tbody");
     for (const r of this.#reps) {
       const tr = document.createElement("tr");
@@ -1457,7 +1535,8 @@ class AssetView extends HTMLElement {
       tr.innerHTML = `
         <td style="padding:2px 8px;font-weight:600;">${escapeHtml(r.type)}</td>
         <td style="padding:2px 8px;word-break:break-all;"><span style="color:var(--omp-text-dim);">${escapeHtml(r.storage.provider)}:</span> ${escapeHtml(r.storage.uri)}</td>
-        <td style="padding:2px 8px;">${escapeHtml(representationSummary(r))}${r.checksum ? `<div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);word-break:break-all;">${escapeHtml(r.checksum)}</div>` : ""}</td>`;
+        <td style="padding:2px 8px;">${escapeHtml(representationSummary(r))}${r.checksum ? `<div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);word-break:break-all;">${escapeHtml(r.checksum)}</div>` : ""}</td>
+        <td style="padding:2px 8px;" data-role="rep-file-state">${this.#repStateHtml(r.id)}</td>`;
       const td = document.createElement("td");
       td.style.cssText = "padding:2px 8px;text-align:right;";
       if (editable) {

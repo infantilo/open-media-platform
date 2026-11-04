@@ -127,3 +127,19 @@ Deno.test("coerceMetadata: Zahl/Ja-Nein/Mehrfachfeld nach Feldtyp, freie Schlüs
   const bad = coerceMetadata({ custom: { anzahl: "abc" } }, [...defs]);
   assertEquals(bad.custom, { anzahl: "abc" }); // unlesbar bleibt Text; das Backend meldet den Fehler
 });
+
+import { matchesFileState } from "./asset-view-logic.ts";
+
+Deno.test("matchesFileState: Dateifilter (Kapitel 86)", () => {
+  assertEquals(matchesFileState("", "missing"), true);
+  assertEquals(matchesFileState(undefined, undefined), true);
+  assertEquals(matchesFileState("problem", "missing"), true);
+  assertEquals(matchesFileState("problem", "partial"), true);
+  assertEquals(matchesFileState("problem", "unreachable"), true);
+  assertEquals(matchesFileState("problem", "ok"), false);
+  assertEquals(matchesFileState("ok", "ok"), true);
+  assertEquals(matchesFileState("missing", "partial"), false);
+  // ohne Angabe zum Asset (Modul aus / neu) gilt „nie geprüft“
+  assertEquals(matchesFileState("unchecked", undefined), true);
+  assertEquals(matchesFileState("ok", undefined), false);
+});

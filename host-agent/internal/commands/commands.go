@@ -147,6 +147,8 @@ type Request struct {
 	// Path/Kind: Action "check-path" — Pfadprüfung auf diesem Host (Antwort: Detail = JSON).
 	Path string `json:"path,omitempty"`
 	Kind string `json:"kind,omitempty"`
+	// FileOp: Action "files" (Kap. 86) — Dateiliste/Existenzprüfung/Papierkorb in einer Wurzel dieses Hosts (jobwire.RunFileOp).
+	FileOp *jobwire.FileOp `json:"fileOp,omitempty"`
 	// Jobs (Aktionen exec, exec-cancel, exec-list, exec-pause, exec-resume, exec-nice; docs/ENTWURF-FFMPEG-HOSTWAHL.md).
 	JobID    string   `json:"jobId,omitempty"`
 	Tool     string   `json:"tool,omitempty"`
@@ -337,6 +339,8 @@ func (e *Executor) Handle(req Request) Response {
 		}
 		data, _ := json.Marshal(nodeoptions.CheckPath(req.Path, req.Kind))
 		return Response{OK: true, Detail: string(data)}
+	case jobwire.ActionFiles:
+		return e.handleFiles(req)
 	case "list-cards":
 		// Erkannte Anschlüsse der Capture-Karten dieses Hosts (Start-Assistent, Kap. 76): das Karten-Node-Binary
 		// fragt die Herstellerplugins ab (`--list-cards`) und gibt JSON aus.

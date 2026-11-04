@@ -1427,6 +1427,25 @@ func (l *Launcher) CheckPathOnHost(hostID, path, kind string) (nodeoptions.PathI
 	return info, nil
 }
 
+// FileOp führt eine Dateioperation (Kap. 86) auf einem Host aus: hostID leer = der Orchestrator-Rechner (direkt),
+// sonst über den Host-Agent des Hosts. Das Ergebnis ist das JSON der jeweiligen jobwire-Ergebnisart.
+func (l *Launcher) FileOp(hostID string, op jobwire.FileOp) ([]byte, error) {
+	if hostID == "" {
+		return jobwire.RunFileOp(op)
+	}
+	if l.nc == nil {
+		return nil, ErrRemoteUnavailable
+	}
+	resp, err := l.sendCommand(hostID, remoteCommand{Action: jobwire.ActionFiles, FileOp: &op})
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		return nil, fmt.Errorf("host %s: %s", hostID, resp.Error)
+	}
+	return []byte(resp.Detail), nil
+}
+
 // CardConnector ist ein von einem Host-Agent erkannter Capture-Karten-Anschluss (Kap. 76).
 type CardConnector struct {
 	Vendor string `json:"vendor"`
@@ -1942,6 +1961,8 @@ type remoteCommand struct {
 	// Path/Kind: Action "check-path".
 	Path string `json:"path,omitempty"`
 	Kind string `json:"kind,omitempty"`
+	// FileOp: Action "files" (Kapitel 86).
+	FileOp *jobwire.FileOp `json:"fileOp,omitempty"`
 }
 
 type remoteResponse struct {

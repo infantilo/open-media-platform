@@ -66,6 +66,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/materialize"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	extsvcmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/extsvc"
+	filesmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/files"
 	ingestmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/ingest"
 	jobsmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/jobs"
 	playoutmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/playout"
@@ -403,7 +404,8 @@ func main() {
 	ingestMod := ingestmod.New(ingestmod.Services{}) // Kern-Dienste folgen weiter unten (vor dem Mounten der Routen)
 	extsvcMod := extsvcmod.New(extsvcmod.Services{}) // Registry, Launcher und Node-Client folgen weiter unten
 	jobsMod := jobsmod.New()                         // ffmpeg-Jobs: Host-Auswahl, Lastverteilung, Sendeschutz (Kapitel 52)
-	registerModules(modules, playoutSvc, reviewMod, ingestMod, extsvcMod, jobsMod)
+	filesMod := filesmod.New()                       // Dateien: Explorer, Papierkorb, „Datei fehlt“ (Kapitel 86); Anbindungen folgen unten
+	registerModules(modules, playoutSvc, reviewMod, ingestMod, extsvcMod, jobsMod, filesMod)
 	if err := modules.Migrate(ctx, database); err != nil {
 		slog.Error("module migration failed (affected modules are not mounted)", "error", err)
 	}
@@ -997,6 +999,10 @@ func main() {
 		reviewMod.Alerter = func(kind, assetID, title, message string) {
 			sink.Send(alertsink.Alert{Kind: kind, Subject: assetID, Name: title, Message: message})
 		}
+		// Kap. 86: Dateien (fehlende Datei, Notfall-Leerung, Erzwingen) über alle Alarmwege.
+		filesMod.Alerter = func(kind, severity, subject, name, message string) {
+			sink.Send(alertsink.Alert{Kind: kind, Severity: severity, Subject: subject, Name: name, Message: message})
+		}
 		// Kap. 83: manuelle Benutzeraktionen aus dem Domänen-Audit (Opt-in: nur Regeln, die „Manuelle Benutzeraktion“ nennen).
 		domainAuditStore.SetObserver(userActionAlerter(sink))
 		// Kap. 83: Alarm → Workflow(s) für Regeln je Workflow. Host-Alarme gehören zu allen laufenden Workflows mit einer Rolle auf dem Host.
@@ -1114,6 +1120,16 @@ func main() {
 	// Aufrufer CreateAsset/UpdateAssetStatus/... rief).
 	outboxStore := outbox.NewStore(database)
 	assetStore := asset.NewStore(database, asset.WithOutbox(outboxStore))
+	// Kap. 86: Dateien-Modul — Host-Operationen, Asset-Store, Ereignisse, Standard-Orte (Medien, Proxys, Untertitel).
+	filesMod.Hosts, filesMod.Assets = launcherSvc, assetStore
+	filesMod.Events = func(subject string, payload any) {
+		if raw, err := json.Marshal(payload); err == nil {
+			if _, err := outboxStore.EnqueueDB(subject, raw, ""); err != nil {
+				slog.Warn("files: Ereignis nicht eingereiht", "subject", subject, "error", err)
+			}
+		}
+	}
+	filesMod.DefaultRoots = defaultFileRoots()
 	reviewMod.Assets = assetStore
 	// „SRT erzeugen“ (Eingangskontrolle, Prozess-Schritt): die laufenden Auto-Untertitel-Nodes — Instanzen des Typs omp-subtitle-asr,
 	// deren Node im Verzeichnis online ist.

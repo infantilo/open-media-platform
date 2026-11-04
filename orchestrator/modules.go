@@ -22,6 +22,7 @@ import (
 	audiorulesmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/audiorules"
 	cloudmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/cloud"
 	extsvcmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/extsvc"
+	filesmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/files"
 	ingestmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/ingest"
 	jobsmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/jobs"
 	playoutmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/playout"
@@ -34,8 +35,8 @@ import (
 // registerModules meldet die Module des Orchestrators an (UMSETZUNG.md Kapitel 36). Cloud (36.6), Audio-Ausgabe (36.7),
 // Playout (36.8), Eingang/Review (Kapitel 43) sind Module; `extsvc` ist das Dienst-Gateway (Kapitel 48), über das Fachdienste in eigenen
 // Nodes (z. B. Intercom) Rechte, Oberfläche, Metriken und Audit in die Plattform einbringen.
-func registerModules(reg *module.Registry, playoutSvc *playoutmod.Services, reviewMod *reviewmod.Module, ingestMod *ingestmod.Module, extsvcMod *extsvcmod.Module, jobsMod *jobsmod.Module) {
-	for _, m := range []module.Module{cloudmod.New(), playoutmod.New(playoutSvc), audiorulesmod.New(), reviewMod, ingestMod, extsvcMod, jobsMod} {
+func registerModules(reg *module.Registry, playoutSvc *playoutmod.Services, reviewMod *reviewmod.Module, ingestMod *ingestmod.Module, extsvcMod *extsvcmod.Module, jobsMod *jobsmod.Module, filesMod *filesmod.Module) {
+	for _, m := range []module.Module{cloudmod.New(), playoutmod.New(playoutSvc), audiorulesmod.New(), reviewMod, ingestMod, extsvcMod, jobsMod, filesMod} {
 		if err := reg.Register(m); err != nil {
 			slog.Error("module registration failed", "module", m.Name(), "error", err)
 		}
@@ -300,4 +301,26 @@ func (s *subtitleSteps) Step(ctx context.Context, key string, cfg process.Subtit
 	}
 	err = s.client.Submit(ctx, t, subtitlegen.Request{ID: id, File: src, Track: cfg.Track, Language: lang, Speakers: cfg.Speakers, Names: cfg.Names, Word: cfg.Word, Style: cfg.Style, Name: name})
 	return process.SubtitleStepResult{}, false, err
+}
+
+// defaultFileRoots: Orte auf dem Orchestrator-Rechner, die das Dateien-Modul beim ersten Start anlegt (Kap. 86): Medien,
+// Review-Proxys (schreibgeschützt: neu erzeugbar), Untertitel.
+func defaultFileRoots() []filesmod.DefaultRoot {
+	abs := func(p string) string {
+		if a, err := filepath.Abs(p); err == nil {
+			return a
+		}
+		return p
+	}
+	env := func(k, def string) string {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
+		}
+		return def
+	}
+	return []filesmod.DefaultRoot{
+		{Name: "Medien", Path: abs(env("OMP_MEDIA_DIR", "data/media")), Role: filesmod.RoleMedia},
+		{Name: "Review-Proxys", Path: abs(env("OMP_REVIEW_DIR", "data/review")), Role: filesmod.RoleProxy, ReadOnly: true},
+		{Name: "Untertitel", Path: abs("data/subtitles"), Role: filesmod.RoleSubtitle},
+	}
 }
