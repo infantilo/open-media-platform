@@ -428,7 +428,7 @@ fn build_sender_parts(
                 // (`high`/`low`/`audio`) bleiben unberührt.
                 if !sender.tags.contains_key(crate::group::GROUPHINT_TAG) {
                     if let Some(group) = crate::group::from_env() {
-                        let role = crate::group::auto_role(flow_spec.kind(), spec.label.as_deref(), kind_ordinal);
+                        let role = crate::group::auto_role(flow_spec.kind(), spec.label.as_deref(), kind_ordinal, node_label);
                         sender.tags.insert(crate::group::GROUPHINT_TAG.to_string(), vec![format!("{group}:{role}")]);
                     }
                 }

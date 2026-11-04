@@ -35,7 +35,9 @@ pub fn name_or(fallback: &str) -> String {
 /// Rolle für einen automatisch getaggten Sender: bereinigtes Sender-Label,
 /// sonst die Art (`Video`), ab dem zweiten Sender derselben Art `Video #2`
 /// (Rollen einer Gruppe müssen verschieden sein). `ordinal` zählt von 0.
-pub fn auto_role(kind: &str, label: Option<&str>, ordinal: usize) -> String {
+pub fn auto_role(kind: &str, label: Option<&str>, ordinal: usize, node_label: &str) -> String {
+    // Der Node-Name steckt schon im Gruppennamen — in der Rolle weglassen („Mixer Monitor“ → „Monitor“).
+    let label = label.map(|l| l.strip_prefix(node_label).unwrap_or(l));
     match label.map(|l| l.replace(':', "-").trim().to_string()).filter(|l| !l.is_empty()) {
         Some(l) => l,
         None if ordinal == 0 => kind.to_string(),
@@ -57,8 +59,10 @@ mod tests {
 
     #[test]
     fn rolle() {
-        assert_eq!(auto_role("Video", Some("PGM"), 0), "PGM");
-        assert_eq!(auto_role("Audio", None, 0), "Audio");
-        assert_eq!(auto_role("Audio", None, 1), "Audio #2");
+        assert_eq!(auto_role("Video", Some("PGM"), 0, "X"), "PGM");
+        assert_eq!(auto_role("Audio", Some("Mixer 1 Monitor"), 1, "Mixer 1"), "Monitor");
+        assert_eq!(auto_role("Audio", Some("Mixer 1"), 0, "Mixer 1"), "Audio");
+        assert_eq!(auto_role("Audio", None, 0, "X"), "Audio");
+        assert_eq!(auto_role("Audio", None, 1, "X"), "Audio #2");
     }
 }
