@@ -468,6 +468,22 @@ Mindestversion, Hinweistext) über `UPDATE_BUNDLE_ARGS` bzw. direkt mit
 `cd tools/update-bundle && go run . pack -h`; `go run . verify -pub <Schlüssel> <Paket>`
 prüft ein Paket auf der Kommandozeile.
 
+**Cluster-Rolling-Update (Kap. 84).** `go run . pack … -rolling-safe` setzt im
+Manifest `rollingSafe: true`; nur solche Pakete nimmt der Cluster-Rollout an.
+Das Merkmal ist eine Zusage des Paketbauers: (1) Migrationen rein additiv
+(Expand/Contract), das alte Programm läuft gegen das neue Schema; (2) keine neue
+Raft-FSM-Befehlsart (`cluster.KnownCommandTypes`, der Test `fsm_compat_test.go`
+schlägt bei jeder Ergänzung an und erzwingt die Entscheidung). Ablauf und
+Entscheidungen: `docs/ENTWURF-SYSTEM-UPDATE.md` §11. Technik: Rollout-Zustand in
+Tabelle `cluster_rollouts` (Migration 0056), Treiber `internal/clusterupdate`
+läuft nur auf dem Leader (`runWhileLeader`); Mitglieder werden über interne
+Routen `/api/v1/internal/cluster-update/{info,fetch,apply}` angesteuert
+(Authentisierung: HMAC `omp-cluster-update-v1` aus dem gemeinsamen
+JWT-Geheimnis; `apply` trägt die Raft-Amtszeit, ein abgelöster Leader wird mit
+409 abgewiesen). Das Mitglied prüft das Paket mit dem **eigenen**
+Vertrauensanker. Der Supervisor kennt dafür `POST /restart` (Neustart ohne
+Paket). API: `GET/POST /api/v1/admin/cluster-rollout`, `…/resume`, `…/cancel`.
+
 **Ablauf beim Installieren.**
 1. Backup (Pflicht, wenn das Paket Datenbank-Migrationen enthält).
 2. Alle Dateien werden neben ihrem Ziel bereitgestellt und geprüft —

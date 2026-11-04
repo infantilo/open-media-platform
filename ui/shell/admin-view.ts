@@ -229,6 +229,7 @@ interface UpdatePackage {
     arch: string;
     minFromVersion?: string;
     migrations?: string[];
+    rollingSafe?: boolean;
     notes?: string;
     components: UpdateComponent[];
   };
@@ -236,6 +237,25 @@ interface UpdatePackage {
 interface UpdateHistoryEntry { time: string; from?: string; version: string; ok: boolean; rolledBack?: boolean; error?: string }
 interface UpdateHostResult { hostId: string; label: string; state: string; detail?: string; updated: string }
 interface UpdateDistribution { packageId: string; version: string; running: boolean; hosts: UpdateHostResult[] }
+interface ClusterRolloutStep {
+  nodeId: string;
+  httpAddr: string;
+  state: string;
+  version?: string;
+  detail?: string;
+}
+interface ClusterRollout {
+  id: string;
+  kind: "update" | "restart";
+  packageId?: string;
+  targetVersion?: string;
+  state: "running" | "failed" | "done" | "cancelled";
+  error?: string;
+  steps: ClusterRolloutStep[];
+  created: string;
+  updated: string;
+}
+
 interface UpdateOverview {
   distribution?: UpdateDistribution;
   current: { version: string; commit?: string; builtAt?: string };
@@ -450,6 +470,8 @@ class AdminView extends HTMLElement {
   #updForce = false;
   #updApplying = false;
   #updPollHandle: number | null = null;
+  #clRollout: ClusterRollout | null = null;
+  #clRolloutPoll: number | null = null;
   #restartingOutdated = false;
 
   // Node-Versionen (Kapitel 28): Versionsspeicher je Node-Typ, produktive Version
@@ -501,6 +523,7 @@ class AdminView extends HTMLElement {
     this.#loadCatalog();
     this.#loadBackups();
     this.#loadUpdates();
+    void this.#loadClusterRollout();
     this.#loadNodeVersions();
     this.#loadClusterStatus();
     void this.#loadModuleTabs();
@@ -513,6 +536,7 @@ class AdminView extends HTMLElement {
     if (this.#auditPollHandle !== undefined) window.clearInterval(this.#auditPollHandle);
     if (this.#logPollHandle !== undefined) window.clearInterval(this.#logPollHandle);
     if (this.#updPollHandle !== null) window.clearInterval(this.#updPollHandle);
+    if (this.#clRolloutPoll !== null) window.clearInterval(this.#clRolloutPoll);
     connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
   }
 
@@ -1520,6 +1544,133 @@ class AdminView extends HTMLElement {
     }
   }
 
+  async #loadClusterRollout() {
+    try {
+      const res = await apiFetch("/api/v1/admin/cluster-rollout");
+      if (!res.ok) return;
+      this.#clRollout = ((await res.json()) as { rollout: ClusterRollout | null }).rollout;
+      this.#render();
+      const running = this.#clRollout?.state === "running";
+      if (running && this.#clRolloutPoll === null) {
+        this.#clRolloutPoll = window.setInterval(() => void this.#loadClusterRollout(), 3000);
+      } else if (!running && this.#clRolloutPoll !== null) {
+        window.clearInterval(this.#clRolloutPoll);
+        this.#clRolloutPoll = null;
+      }
+    } catch {
+      // Orchestrator während des Rollouts kurz nicht erreichbar (Leader-Wechsel) — nächster Takt lädt neu.
+    }
+  }
+
+  async #startClusterRollout(body: Record<string, unknown>, confirmText: string, confirmLabel: string) {
+    const ok = await confirmDialog(confirmText, { confirmLabel });
+    if (!ok) return;
+    this.#error = "";
+    const res = await apiFetch("/api/v1/admin/cluster-rollout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 409) {
+      try {
+        const j = (await res.clone().json()) as { findings?: string[] };
+        if (j.findings) {
+          this.#error = tt("clro.precheck", { p0: j.findings.join("; ") });
+          this.#render();
+          return;
+        }
+      } catch {
+        // kein JSON: Klartext unten
+      }
+    }
+    if (!res.ok) {
+      this.#error = tt("clro.startFailed", { p0: (await res.text()).trim() });
+      this.#render();
+      return;
+    }
+    await this.#loadClusterRollout();
+  }
+
+  async #clusterRolloutAction(action: "resume" | "cancel") {
+    const res = await apiFetch(`/api/v1/admin/cluster-rollout/${action}`, { method: "POST" });
+    if (!res.ok) this.#error = tt("clro.startFailed", { p0: (await res.text()).trim() });
+    await this.#loadClusterRollout();
+  }
+
+  #renderClusterRolloutCard(): HTMLElement {
+    const card = document.createElement("div");
+    card.className = "omp-card";
+    card.style.cssText = "margin-top:16px;";
+    const title = document.createElement("div");
+    title.style.cssText = "font-weight:600;margin-bottom:6px;";
+    title.textContent = tt("clro.title");
+    card.appendChild(title);
+    const hint = document.createElement("div");
+    hint.style.cssText = "color:var(--omp-text-dim);margin-bottom:8px;";
+    hint.textContent = tt("clro.hint");
+    card.appendChild(hint);
+
+    const ro = this.#clRollout;
+    const active = ro?.state === "running" || ro?.state === "failed";
+    if (ro) {
+      const head = document.createElement("div");
+      head.style.cssText = "margin-bottom:4px;" + (ro.state === "failed" ? "color:var(--omp-danger, #d33);" : "");
+      head.textContent = tt("clro.status", {
+        p0: ro.kind === "update" ? tt("clro.kindUpdate", { p0: ro.targetVersion ?? "" }) : tt("clro.kindRestart"),
+        p1: tt(`clro.state.${ro.state}` as I18nKey),
+      });
+      card.appendChild(head);
+      const done = ro.steps.filter((x) => x.state === "done").length;
+      const bar = document.createElement("progress");
+      bar.max = Math.max(1, ro.steps.length);
+      bar.value = done;
+      bar.style.cssText = "width:100%;margin-bottom:6px;";
+      card.appendChild(bar);
+      const table = document.createElement("table");
+      table.style.cssText = "border-collapse:collapse;font-size:11px;margin-bottom:6px;";
+      for (const st of ro.steps) {
+        const tr = document.createElement("tr");
+        const cells = [st.nodeId, st.version ?? "", tt(`clro.step.${st.state}` as I18nKey), st.detail ?? ""];
+        for (const c of cells) {
+          const td = document.createElement("td");
+          td.style.cssText = "padding:1px 14px 1px 0;" + (st.state === "failed" ? "color:var(--omp-danger, #d33);" : "");
+          td.textContent = c;
+          tr.appendChild(td);
+        }
+        table.appendChild(tr);
+      }
+      card.appendChild(table);
+      if (ro.error) {
+        const err = document.createElement("div");
+        err.style.cssText = "color:var(--omp-danger, #d33);margin-bottom:6px;white-space:pre-wrap;";
+        err.textContent = ro.error;
+        card.appendChild(err);
+      }
+    }
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;";
+    if (ro?.state === "failed") {
+      const resume = document.createElement("button");
+      resume.textContent = tt("clro.resume");
+      resume.addEventListener("click", () => void this.#clusterRolloutAction("resume"));
+      row.appendChild(resume);
+    }
+    if (active) {
+      const cancel = document.createElement("button");
+      cancel.textContent = tt("clro.cancel");
+      cancel.addEventListener("click", () => void this.#clusterRolloutAction("cancel"));
+      row.appendChild(cancel);
+    }
+    const restart = document.createElement("button");
+    restart.textContent = tt("clro.restart");
+    restart.disabled = active;
+    restart.addEventListener("click", () =>
+      void this.#startClusterRollout({ kind: "restart", confirm: true }, tt("clro.restartConfirm"), tt("clro.restart")));
+    row.appendChild(restart);
+    card.appendChild(row);
+    return card;
+  }
+
   async #uploadUpdate(file: File) {
     this.#updUploading = true;
     this.#error = "";
@@ -1861,6 +2012,28 @@ class AdminView extends HTMLElement {
       }
       detail.appendChild(distRow);
 
+      // Rollierend auf alle Orchestrator-Mitglieder (Kap. 84) — nur für Pakete mit rollingSafe.
+      const roRow = document.createElement("div");
+      roRow.style.cssText = "margin-bottom:10px;";
+      const roBtn = document.createElement("button");
+      roBtn.textContent = tt("clro.startUpdate");
+      roBtn.disabled = !m.rollingSafe || this.#updTyped !== selected.version || this.#clRollout?.state === "running" || this.#clRollout?.state === "failed";
+      roBtn.title = m.rollingSafe ? "" : tt("clro.notSafe");
+      roBtn.addEventListener("click", () =>
+        void this.#startClusterRollout(
+          { kind: "update", packageId: selected.id, version: selected.version, backup: this.#updBackup },
+          tt("clro.updateConfirm", { p0: selected.version }),
+          tt("clro.startUpdate"),
+        ));
+      roRow.appendChild(roBtn);
+      if (!m.rollingSafe) {
+        const note = document.createElement("span");
+        note.style.cssText = "margin-left:8px;color:var(--omp-text-dim);font-size:11px;";
+        note.textContent = tt("clro.notSafe");
+        roRow.appendChild(note);
+      }
+      detail.appendChild(roRow);
+
       const backupLbl = document.createElement("label");
       backupLbl.style.cssText = "display:flex;align-items:center;gap:6px;margin-bottom:6px;";
       const backupCb = document.createElement("input");
@@ -1902,6 +2075,8 @@ class AdminView extends HTMLElement {
       detail.appendChild(row);
       section.appendChild(detail);
     }
+
+    section.appendChild(this.#renderClusterRolloutCard());
 
     // Verlauf
     const histHead = document.createElement("div");

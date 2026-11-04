@@ -1345,6 +1345,29 @@ untereinander):
      Liste (ok / fehlgeschlagen / offline). Ein neues Host-Agent-Programm
      wird erst nach dem Neustart des Agents aktiv.
 
+  7. **Mehrere Orchestratoren (Cluster).** „Jetzt installieren" wirkt nur
+     auf dem Orchestrator, mit dem du verbunden bist. Für einen Cluster gibt
+     es die Karte **„Cluster-Rollout"** im selben Reiter: **„Rollierend auf
+     alle Mitglieder einspielen"** (ausgewähltes Paket, Version eintippen)
+     aktualisiert die Mitglieder nacheinander, **der Leader zuletzt** – er
+     gibt vorher die Führung ab, die Steuerung fällt nicht aus.
+     **„Cluster rollierend neu starten"** startet ebenso alle Mitglieder
+     nacheinander neu (zentraler Neustart, ohne Paket). Voraussetzungen, die
+     vorab geprüft werden: mindestens **3 stimmberechtigte Mitglieder**
+     (zwei reichen nicht – beim Neustart eines Mitglieds gäbe es keine
+     Mehrheit; ggf. dritten Orchestrator oder Zeugen ergänzen), alle
+     Mitglieder erreichbar und aufgeholt, und das Paket muss als
+     **„rollingSafe"** gebaut sein (Datenbank-Änderungen nur additiv, altes
+     Programm läuft gegen das neue Schema). Ein Paket ohne diese
+     Kennzeichnung wird für den Cluster-Rollout verweigert. Die Tabelle zeigt
+     je Mitglied Version und Schritt. **Bei einem Fehler hält der Rollout
+     an**, die übrigen Mitglieder bleiben unberührt, bereits aktualisierte
+     werden nicht automatisch zurückgerollt; nach der Ursachenbehebung
+     **„Rollout fortsetzen"** (oder „Rollout abbrechen"). Das fehlgeschlagene
+     Mitglied hat sich selbst zurückgerollt. Der Rollout läuft auch weiter,
+     wenn sich währenddessen der Leader ändert (Zustand liegt in der
+     Datenbank). Laufende Sendungen werden nie neu gestartet.
+
   Wichtig: Ein Update-Paket ist ausführbarer Code. Deshalb ist der Reiter
   nur für Administratoren, jedes Hochladen/Installieren steht im Audit-Log,
   und ohne hinterlegten Signaturschlüssel wird **jedes** Paket abgelehnt.

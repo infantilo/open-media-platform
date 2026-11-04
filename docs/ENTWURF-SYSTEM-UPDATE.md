@@ -261,7 +261,7 @@ Noch nicht enthalten
   eingespielten Stand wieder mit einem Quellcode-Build (Version „dev“);
   `start-hosts.sh` verhält sich genauso (außer mit `OMP_SKIP_BUILD=1`).
 
-## 11. Cluster-Rolling-Update (Plan, 2026-11-03, **noch kein Code**)
+## 11. Cluster-Rolling-Update (Plan 2026-11-03, umgesetzt 2026-11-04 – Schritte 84.1–84.5; 84.6 siehe UMSETZUNG.md)
 
 Ziel: ein Paket im Browser einspielen, alle Orchestrator-Mitglieder des
 Raft-Clusters werden nacheinander aktualisiert, ohne dass die Steuerung
