@@ -2879,4 +2879,6 @@ export const de = {
   "clro.notSafe": "Paket nicht als „rollingSafe“ gekennzeichnet – für den Cluster-Rollout nicht zugelassen.",
   "clro.precheck": "Vorprüfung nicht bestanden: {p0}",
   "clro.startFailed": "Cluster-Rollout: {p0}",
+  "clro.hostsFirst": "Host-Agents zuerst verteilen",
+  "clro.hosts": "Host-Agents",
 };

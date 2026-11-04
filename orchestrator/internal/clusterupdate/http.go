@@ -21,6 +21,8 @@ const (
 	PathInfo  = "/api/v1/internal/cluster-update/info"
 	PathFetch = "/api/v1/internal/cluster-update/fetch"
 	PathApply = "/api/v1/internal/cluster-update/apply"
+	// PathAnnounce: ein Follower meldet dem Leader seine HTTP-Adresse (Cluster per OMP_CLUSTER_PEERS gegründet, kein Join).
+	PathAnnounce = "/api/v1/internal/cluster-update/announce"
 	// TokenHeader trägt das abgeleitete Token.
 	TokenHeader = "X-OMP-Cluster-Update"
 )
@@ -134,4 +136,15 @@ func (h *HTTPMembers) Fetch(ctx context.Context, httpAddr, packageID string) err
 // Apply implementiert Members.
 func (h *HTTPMembers) Apply(ctx context.Context, httpAddr string, kind Kind, packageID, version string, term uint64) error {
 	return h.do(ctx, http.MethodPost, httpAddr, PathApply, ApplyRequest{Kind: kind, PackageID: packageID, Version: version, Term: term}, nil, 30*time.Second)
+}
+
+// AnnounceRequest: Follower → Leader.
+type AnnounceRequest struct {
+	NodeID   string `json:"nodeId"`
+	HTTPAddr string `json:"httpAddr"`
+}
+
+// Announce meldet die eigene HTTP-Adresse beim Leader.
+func (h *HTTPMembers) Announce(ctx context.Context, leaderHTTPAddr, nodeID, httpAddr string) error {
+	return h.do(ctx, http.MethodPost, leaderHTTPAddr, PathAnnounce, AnnounceRequest{NodeID: nodeID, HTTPAddr: httpAddr}, nil, 5*time.Second)
 }

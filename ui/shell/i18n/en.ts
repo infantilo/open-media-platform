@@ -2880,4 +2880,6 @@ export const en: Record<keyof typeof de, string> = {
   "clro.notSafe": "Package is not marked “rollingSafe” – not allowed for the cluster rollout.",
   "clro.precheck": "Precheck failed: {p0}",
   "clro.startFailed": "Cluster rollout: {p0}",
+  "clro.hostsFirst": "Distribute to host agents first",
+  "clro.hosts": "Host agents",
 };

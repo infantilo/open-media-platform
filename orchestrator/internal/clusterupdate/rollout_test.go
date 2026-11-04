@@ -274,3 +274,57 @@ func TestQuorumGateStopsWhenAnotherMemberIsDown(t *testing.T) {
 		t.Fatal("b angefasst, obwohl c fehlt (Mehrheit waere weg)")
 	}
 }
+
+type fakeHosts struct {
+	err   error
+	calls int
+	log   *[]string
+}
+
+func (h *fakeHosts) Distribute(_ context.Context, pkg string) (string, error) {
+	h.calls++
+	*h.log = append(*h.log, "hosts:"+pkg)
+	return "2 Host(s) aktualisiert, 0 offline", h.err
+}
+
+func TestHostsFirstDistributesBeforeAnyMemberAndHaltsOnHostFailure(t *testing.T) {
+	f := newFakeCluster("a", "b", "c")
+	st := &MemStore{}
+	d := newDriver(f, st)
+	h := &fakeHosts{log: &f.log}
+	d.Hosts = h
+	if _, fi, err := d.Start(context.Background(), StartParams{Kind: KindUpdate, PackageID: "2.0-abc", TargetVersion: "2.0", RollingSafe: true, HostsFirst: true}); err != nil || len(fi) > 0 {
+		t.Fatalf("%v %v", err, fi)
+	}
+	r := runAll(t, d, st)
+	if r.State != StateDone {
+		t.Fatalf("%s %s", r.State, r.Error)
+	}
+	if got := strings.Join(f.log, " "); got != "hosts:2.0-abc apply:b apply:c transfer:a->b apply:a" {
+		t.Fatalf("Reihenfolge %q", got)
+	}
+	if h.calls != 1 {
+		t.Fatalf("Hosts %d mal", h.calls)
+	}
+
+	// Fehlschlag bei den Hosts: kein Mitglied wird angefasst.
+	f = newFakeCluster("a", "b", "c")
+	st = &MemStore{}
+	d = newDriver(f, st)
+	d.Hosts = &fakeHosts{err: errors.New("host1: failed"), log: &f.log}
+	_, _, _ = d.Start(context.Background(), StartParams{Kind: KindUpdate, PackageID: "p", TargetVersion: "2.0", RollingSafe: true, HostsFirst: true})
+	r = runAll(t, d, st)
+	if r.State != StateFailed || !strings.Contains(r.Error, "Host-Agents") {
+		t.Fatalf("%s %q", r.State, r.Error)
+	}
+	for id, m := range f.members {
+		if m.applied != 0 {
+			t.Fatalf("%s angefasst", id)
+		}
+	}
+	// ohne Verteiler: Vorpruefung weist HostsFirst ab
+	d = newDriver(newFakeCluster("a", "b", "c"), &MemStore{})
+	if _, fi, _ := d.Start(context.Background(), StartParams{Kind: KindUpdate, PackageID: "p", TargetVersion: "2.0", RollingSafe: true, HostsFirst: true}); len(fi) != 1 {
+		t.Fatalf("Befunde: %v", fi)
+	}
+}

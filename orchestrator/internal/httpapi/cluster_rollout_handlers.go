@@ -185,6 +185,51 @@ func handleMemberApply(token string, svc UpdateService, sup UpdateSupervisor, nv
 	}
 }
 
+// handleMemberAnnounce: POST …/announce — nur auf dem Leader: trägt die HTTP-Adresse eines Mitglieds ins FSM ein.
+// In einem per OMP_CLUSTER_PEERS gegründeten Cluster kündigt sich sonst nur der Leader selbst an.
+func handleMemberAnnounce(token string, clusterSvc ClusterService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !memberAuth(token, w, r) {
+			return
+		}
+		var req clusterupdate.AnnounceRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil || req.NodeID == "" || req.HTTPAddr == "" {
+			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+		if u, err := url.Parse(req.HTTPAddr); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			http.Error(w, "ungueltige HTTP-Adresse", http.StatusBadRequest)
+			return
+		}
+		if !clusterSvc.IsLeader() {
+			http.Error(w, "nicht Leader", http.StatusConflict)
+			return
+		}
+		member := false
+		for _, p := range clusterSvc.Status().Peers {
+			if p.ID == req.NodeID {
+				member = true
+			}
+		}
+		if !member {
+			http.Error(w, "kein Cluster-Mitglied", http.StatusForbidden)
+			return
+		}
+		setter, ok := clusterSvc.(interface {
+			SetPeerHTTPAddr(nodeID, httpAddr string) error
+		})
+		if !ok {
+			http.Error(w, "nicht unterstuetzt", http.StatusNotImplemented)
+			return
+		}
+		if err := setter.SetPeerHTTPAddr(req.NodeID, req.HTTPAddr); err != nil {
+			http.Error(w, err.Error(), clusterErrorStatus(err))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	}
+}
+
 // ---- Admin-API -----------------------------------------------------------------
 
 func rolloutDisabled(w http.ResponseWriter, d ClusterRolloutDriver) bool {
@@ -222,11 +267,12 @@ func handleStartClusterRollout(d ClusterRolloutDriver, clusterSvc ClusterService
 			return
 		}
 		var body struct {
-			Kind      clusterupdate.Kind `json:"kind"`
-			PackageID string             `json:"packageId"`
-			Version   string             `json:"version"`
-			Confirm   bool               `json:"confirm"`
-			Backup    *bool              `json:"backup"`
+			Kind       clusterupdate.Kind `json:"kind"`
+			PackageID  string             `json:"packageId"`
+			Version    string             `json:"version"`
+			Confirm    bool               `json:"confirm"`
+			Backup     *bool              `json:"backup"`
+			HostsFirst *bool              `json:"hostsFirst"` // Standard: an
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
@@ -262,6 +308,7 @@ func handleStartClusterRollout(d ClusterRolloutDriver, clusterSvc ClusterService
 				return
 			}
 			p.PackageID, p.TargetVersion, p.RollingSafe = e.ID, e.Version, e.Manifest.RollingSafe
+			p.HostsFirst = body.HostsFirst == nil || *body.HostsFirst
 			if (body.Backup == nil || *body.Backup || len(e.Manifest.Migrations) > 0) && p.RollingSafe {
 				if bk == nil {
 					http.Error(w, "Backup-Dienst nicht verfügbar", http.StatusServiceUnavailable)

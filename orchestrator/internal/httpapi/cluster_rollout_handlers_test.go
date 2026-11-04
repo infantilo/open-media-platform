@@ -165,3 +165,35 @@ func coordTrust(t *testing.T, member, coord updateEnv) *updates.Service {
 	t.Helper()
 	return updates.New(filepath.Join(member.dir, "updates"), filepath.Join(coord.dir, "trusted.pub"), false, "", 0)
 }
+
+type announceCluster struct {
+	fakeClusterService
+	set map[string]string
+}
+
+func (a *announceCluster) SetPeerHTTPAddr(id, addr string) error { a.set[id] = addr; return nil }
+
+func TestMemberAnnounceChecksTokenLeaderMembershipAndURL(t *testing.T) {
+	tok := clusterupdate.DeriveToken([]byte("secret"))
+	mk := func(leader bool) *announceCluster {
+		return &announceCluster{fakeClusterService: fakeClusterService{isLeader: leader, status: cluster.Status{Peers: []cluster.Peer{{ID: "n1"}, {ID: "n2"}}}}, set: map[string]string{}}
+	}
+	c := mk(true)
+	h := handleMemberAnnounce(tok, c)
+	if rec := memberCall(h, "", clusterupdate.AnnounceRequest{NodeID: "n2", HTTPAddr: "http://h:1"}); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("ohne Token: %d", rec.Code)
+	}
+	if rec := memberCall(h, tok, clusterupdate.AnnounceRequest{NodeID: "fremd", HTTPAddr: "http://h:1"}); rec.Code != http.StatusForbidden {
+		t.Fatalf("Nicht-Mitglied: %d", rec.Code)
+	}
+	if rec := memberCall(h, tok, clusterupdate.AnnounceRequest{NodeID: "n2", HTTPAddr: "file:///x"}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("URL: %d", rec.Code)
+	}
+	if rec := memberCall(h, tok, clusterupdate.AnnounceRequest{NodeID: "n2", HTTPAddr: "http://h:1"}); rec.Code != http.StatusOK || c.set["n2"] != "http://h:1" {
+		t.Fatalf("ok: %d %v", rec.Code, c.set)
+	}
+	f := mk(false)
+	if rec := memberCall(handleMemberAnnounce(tok, f), tok, clusterupdate.AnnounceRequest{NodeID: "n2", HTTPAddr: "http://h:1"}); rec.Code != http.StatusConflict || len(f.set) != 0 {
+		t.Fatalf("Follower: %d", rec.Code)
+	}
+}

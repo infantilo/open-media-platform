@@ -471,6 +471,7 @@ class AdminView extends HTMLElement {
   #updApplying = false;
   #updPollHandle: number | null = null;
   #clRollout: ClusterRollout | null = null;
+  #clHostsFirst = true;
   #clRolloutPoll: number | null = null;
   #restartingOutdated = false;
 
@@ -1630,7 +1631,7 @@ class AdminView extends HTMLElement {
       table.style.cssText = "border-collapse:collapse;font-size:11px;margin-bottom:6px;";
       for (const st of ro.steps) {
         const tr = document.createElement("tr");
-        const cells = [st.nodeId, st.version ?? "", tt(`clro.step.${st.state}` as I18nKey), st.detail ?? ""];
+        const cells = [st.nodeId === "@hosts" ? tt("clro.hosts") : st.nodeId, st.version ?? "", tt(`clro.step.${st.state}` as I18nKey), st.detail ?? ""];
         for (const c of cells) {
           const td = document.createElement("td");
           td.style.cssText = "padding:1px 14px 1px 0;" + (st.state === "failed" ? "color:var(--omp-danger, #d33);" : "");
@@ -2021,11 +2022,18 @@ class AdminView extends HTMLElement {
       roBtn.title = m.rollingSafe ? "" : tt("clro.notSafe");
       roBtn.addEventListener("click", () =>
         void this.#startClusterRollout(
-          { kind: "update", packageId: selected.id, version: selected.version, backup: this.#updBackup },
+          { kind: "update", packageId: selected.id, version: selected.version, backup: this.#updBackup, hostsFirst: this.#clHostsFirst },
           tt("clro.updateConfirm", { p0: selected.version }),
           tt("clro.startUpdate"),
         ));
-      roRow.appendChild(roBtn);
+      const hfLbl = document.createElement("label");
+      hfLbl.style.cssText = "display:inline-flex;align-items:center;gap:6px;margin-right:10px;";
+      const hfCb = document.createElement("input");
+      hfCb.type = "checkbox";
+      hfCb.checked = this.#clHostsFirst;
+      hfCb.addEventListener("change", () => (this.#clHostsFirst = hfCb.checked));
+      hfLbl.append(hfCb, document.createTextNode(tt("clro.hostsFirst")));
+      roRow.append(hfLbl, roBtn);
       if (!m.rollingSafe) {
         const note = document.createElement("span");
         note.style.cssText = "margin-left:8px;color:var(--omp-text-dim);font-size:11px;";

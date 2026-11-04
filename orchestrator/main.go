@@ -1297,8 +1297,12 @@ func main() {
 			},
 		},
 		Local: clusterNode,
+		Hosts: &clusterupdate.DistributorHosts{Dist: updateDist, Get: updateSvc.Get},
 	}
 	go runWhileLeader(ctx, clusterNode, clusterRollout.Run)
+	// Follower melden ihre HTTP-Adresse dem Leader (Cluster ohne Join gegründet): sonst fehlt sie im FSM und der Rollout
+	// kann dieses Mitglied nicht ansteuern.
+	go announceToLeader(ctx, clusterNode, cfg.OrchestratorURL, clusterRollout.Members.(*clusterupdate.HTTPMembers))
 
 	// Dienste, die das Playout-Modul vom Kern braucht (Mount geschieht erst in NewHandler unten).
 	*playoutSvc = playoutmod.Services{
@@ -1670,4 +1674,33 @@ func freezeFileName(label, id string) string {
 		b.WriteString("node")
 	}
 	return b.String() + "-" + id[:min(8, len(id))] + ".json"
+}
+
+// announceToLeader: solange diese Instanz Follower ist und das FSM ihre eigene HTTP-Adresse nicht (oder anders) kennt,
+// wird sie dem Leader gemeldet.
+func announceToLeader(ctx context.Context, n *cluster.Node, selfURL string, m *clusterupdate.HTTPMembers) {
+	if selfURL == "" || m.Token == "" {
+		return
+	}
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if n.IsLeader() {
+			continue
+		}
+		st := n.Status()
+		if st.LeaderHTTPAddr == "" || st.PeerHTTPAddrs[st.NodeID] == selfURL {
+			continue
+		}
+		actx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		if err := m.Announce(actx, st.LeaderHTTPAddr, st.NodeID, selfURL); err != nil {
+			slog.Debug("cluster: Adress-Meldung an Leader fehlgeschlagen", "error", err)
+		}
+		cancel()
+	}
 }

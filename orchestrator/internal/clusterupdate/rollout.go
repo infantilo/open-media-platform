@@ -41,6 +41,16 @@ const (
 	StepFailed       = "failed"
 )
 
+// HostsStep ist der Pseudo-Schritt „Host-Agents zuerst verteilen“ (§11.5); kein Cluster-Mitglied.
+const HostsStep = "@hosts"
+
+func isMember(s Step) bool { return s.NodeID != HostsStep }
+
+// HostDistributor verteilt das Paket an die Host-Agents und wartet auf das Ergebnis.
+type HostDistributor interface {
+	Distribute(ctx context.Context, packageID string) (detail string, err error)
+}
+
 // Step ist der Stand eines Mitglieds im Rollout.
 type Step struct {
 	NodeID    string    `json:"nodeId"`
@@ -106,6 +116,8 @@ type Driver struct {
 	Store   Store
 	Members Members
 	Local   Local
+	// Hosts: optional; nötig, wenn StartParams.HostsFirst gesetzt ist.
+	Hosts HostDistributor
 	// Hooks, ohne die der Treiber testbar bleibt.
 	MaxLag        uint64
 	VerifyTimeout time.Duration // je Mitglied: Zeit bis Zielversion/Neustart sichtbar
@@ -149,6 +161,7 @@ type StartParams struct {
 	PackageID     string
 	TargetVersion string
 	RollingSafe   bool // Manifest-Merkmal; bei KindUpdate Pflicht
+	HostsFirst    bool // erst Host-Agents (distribute), dann der Orchestrator-Cluster (§11.5)
 	By            string
 }
 
@@ -205,6 +218,12 @@ func (d *Driver) Start(ctx context.Context, p StartParams) (*Rollout, []string, 
 		return nil, findings, nil
 	}
 	sort.SliceStable(steps, func(i, j int) bool { return steps[i].NodeID < steps[j].NodeID })
+	if p.HostsFirst && p.Kind == KindUpdate {
+		if d.Hosts == nil {
+			return nil, []string{"Host-Verteilung nicht verfuegbar"}, nil
+		}
+		steps = append([]Step{{NodeID: HostsStep, State: StepPending}}, steps...)
+	}
 	now := d.now()
 	r := &Rollout{
 		ID: fmt.Sprintf("ro-%d", now.UnixNano()), Kind: p.Kind, PackageID: p.PackageID, TargetVersion: p.TargetVersion,
@@ -292,11 +311,14 @@ func (d *Driver) Step(ctx context.Context) error {
 		return d.save(r)
 	}
 	st := &r.Steps[idx]
+	if !isMember(*st) {
+		return d.runHosts(ctx, r, st)
+	}
 	// Der Leader selbst kommt zuletzt: erst Führung an ein fertiges Mitglied übergeben, der neue Leader macht weiter.
 	if st.NodeID == self.NodeID {
 		target := ""
 		for _, s := range r.Steps {
-			if s.NodeID != self.NodeID && s.State == StepDone {
+			if isMember(s) && s.NodeID != self.NodeID && s.State == StepDone {
 				target = s.NodeID
 				break
 			}
@@ -315,6 +337,11 @@ func (d *Driver) Step(ctx context.Context) error {
 // pickNext wählt das nächste offene Mitglied: laufende Schritte zuerst (Wiederaufnahme nach Leader-Wechsel),
 // dann ausstehende Nicht-Leader, der amtierende Leader zuletzt.
 func (d *Driver) pickNext(r *Rollout, self cluster.Status) int {
+	for i, s := range r.Steps {
+		if !isMember(s) && s.State != StepDone {
+			return i
+		}
+	}
 	for i, s := range r.Steps {
 		if s.State == StepDistributing || s.State == StepApplying || s.State == StepVerifying {
 			return i
@@ -407,7 +434,7 @@ func (d *Driver) othersHealthy(ctx context.Context, r *Rollout, st *Step, self c
 		return fmt.Sprintf("cluster-quorum: ohne %s fehlt die Mehrheit (%d stimmberechtigt)", st.NodeID, voters)
 	}
 	for _, o := range r.Steps {
-		if o.NodeID == st.NodeID || o.NodeID == self.NodeID {
+		if !isMember(o) || o.NodeID == st.NodeID || o.NodeID == self.NodeID {
 			continue
 		}
 		info, err := d.Members.Info(ctx, o.HTTPAddr)
@@ -479,3 +506,19 @@ func (d *Driver) verify(ctx context.Context, r *Rollout, st *Step) error {
 
 // Latest liefert den zuletzt angelegten Rollout (für die Anzeige).
 func (d *Driver) Latest() (*Rollout, error) { return d.Store.Latest() }
+
+// runHosts verteilt das Paket an die Host-Agents. Fehlgeschlagene Hosts halten den Rollout an (der Cluster würde sonst
+// vor den Hosts aktualisiert); offline gemeldete Hosts stehen nur im Detail (sie holen das Paket nicht ab).
+func (d *Driver) runHosts(ctx context.Context, r *Rollout, st *Step) error {
+	if d.Hosts == nil {
+		return d.fail(r, st, "Host-Verteilung nicht verfuegbar")
+	}
+	if err := d.setStep(r, st, StepApplying, ""); err != nil {
+		return err
+	}
+	detail, err := d.Hosts.Distribute(ctx, r.PackageID)
+	if err != nil {
+		return d.fail(r, st, "Host-Agents: "+err.Error())
+	}
+	return d.setStep(r, st, StepDone, detail)
+}

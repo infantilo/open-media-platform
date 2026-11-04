@@ -591,6 +591,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET "+clusterupdate.PathInfo, handleMemberInfo(options.clusterRolloutToken, clusterSvc))
 	mux.HandleFunc("POST "+clusterupdate.PathFetch, handleMemberFetch(options.clusterRolloutToken, options.updates, options.nodeRegistrar()))
 	mux.HandleFunc("POST "+clusterupdate.PathApply, handleMemberApply(options.clusterRolloutToken, options.updates, options.updateSup, options.nodeRegistrar(), launcherSvc, clusterSvc, options.domainAudit))
+	mux.HandleFunc("POST "+clusterupdate.PathAnnounce, handleMemberAnnounce(options.clusterRolloutToken, clusterSvc))
 	mux.HandleFunc("GET /api/v1/admin/cluster-rollout", g.requireVerbGlobal(authz.VerbAdmin, handleGetClusterRollout(options.clusterRollout)))
 	mux.HandleFunc("POST /api/v1/admin/cluster-rollout", g.requireVerbGlobal(authz.VerbAdmin, handleStartClusterRollout(options.clusterRollout, clusterSvc, options.updates, options.updateBackup, options.domainAudit)))
 	mux.HandleFunc("POST /api/v1/admin/cluster-rollout/resume", g.requireVerbGlobal(authz.VerbAdmin, handleClusterRolloutAction(options.clusterRollout, clusterSvc, "resume", options.domainAudit)))
