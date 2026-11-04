@@ -336,7 +336,7 @@ class MixerApp {
   constructor(host, nodeId) {
     this.host = host;
     this.nodeId = nodeId;
-    this.shadow = host.attachShadow({ mode: "open" });
+    this.shadow = host.shadowRoot || host.attachShadow({ mode: "open" });
     this.state = emptyState();
     this.live = new Map();
     this.masterLive = { rms: 0, peak: 0, gr: 0 };
@@ -409,6 +409,7 @@ class MixerApp {
     this.sceneBar = h("div", { class: "scenebar", role: "group", "aria-label": T("am5.3cbb2d") });
     this.addBtn = h("button", { class: "tb", type: "button", text: T("x.addCh"), onclick: () => this.cmd("addChannel", { label: "" }).then(() => this.poll()) });
     this.sceneSaveBtn = h("button", { class: "tb", type: "button", text: T("x.saveScene"), title: T("am5.b82be3"), onclick: async () => { const n = await this.prompt(T("am5.b07796")); if (n && n.trim()) this.cmd("captureScene", { label: n.trim(), includeProcessing: false }).then(() => { this.announce(T("am5.d718c3", { p0: n.trim() })); this.poll(); }); } });
+    this.skinBtn = h("button", { class: "tb", type: "button", text: "Konsole 2 ▸", title: "Neue, dichte Pult-Oberfläche (Vorschau)", onclick: () => swapSkin(this, "v2") });
     this.globalBtn = h("button", { class: "tb", type: "button", text: tf("x.gBtn"), title: tf("x.gBtnTip"), onclick: () => this.openGlobal() });
     this.srcBtn = h("button", { class: "tb", type: "button", "aria-pressed": "false", text: T("am5.a7c93e"), title: T("am5.62a232"), onclick: () => { this.ui.bySource = !this.ui.bySource; this.srcBtn.setAttribute("aria-pressed", String(this.ui.bySource)); this.saveUi(); this.lastSig = ""; this.renderChannels(); } });
     this.outBtn = h("button", { class: "tb", type: "button", text: T("am5.31561f"), title: T("am5.8f4bcb"), onclick: () => this.openOutputs() });
@@ -440,6 +441,7 @@ class MixerApp {
       this.sceneBar,
       this.sceneSaveBtn,
       this.globalBtn,
+      this.skinBtn,
       h("span", { class: "spacer" }),
       master);
     this.channelsEl = h("section", { class: "channels", "aria-label": T("am5.45cef4") });
@@ -972,15 +974,4 @@ class MixerApp {
   }
 }
 
-class OmpAudioMixerPanel extends HTMLElement {
-  connectedCallback() {
-    this.app = new MixerApp(this, this.getAttribute("node-id"));
-  }
-  disconnectedCallback() {
-    this.app?.destroy();
-  }
-}
-
-if (!customElements.get("omp-audio-mixer-panel")) {
-  customElements.define("omp-audio-mixer-panel", OmpAudioMixerPanel);
-}
+// Custom Element + Umschalter klassisch/Konsole 2: siehe 40-console2.js (muss nach MixerApp und ConsoleApp definiert werden).

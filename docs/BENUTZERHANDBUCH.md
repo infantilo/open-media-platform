@@ -1816,6 +1816,32 @@ des gewählten Kanals im **Center Control** (Tabs IN, EQ, COMP, GATE, DELAY,
 PAN, AUX, AUTOMIX, DUCK, AUTOMATION). Alles, was nicht an einen Kanal gebunden ist, liegt
 global im Dialog **⚙ Szenen & Automation** der Kopfleiste.
 
+### Konsole 2 (neue Oberfläche)
+
+Neben der klassischen Ansicht gibt es die dichte **Konsole 2**. Umschalten mit
+**„Konsole 2 ▸“** in der Kopfzeile bzw. **„Klassisch“** zurück (die Wahl merkt sich
+der Browser; `?skin=v2` in der URL erzwingt sie). Das Umschalten ändert nie
+Pegel oder Routing.
+
+![Audiomischer Konsole 2: Detailansicht des gewählten Kanals über den Kanalzügen](screenshots/audiomischer-konsole2.png)
+
+- **Oben** die Details des gewählten Kanals (Namensfahne anklicken oder ◀ ▶):
+  Input (Quelle, Ø, PFL, Trim), Dynamik (GATE/COMP mit Drehreglern und
+  Gain-Reduction-Anzeige), **EQ-Graph** (Punkte ziehen: waagerecht Frequenz,
+  senkrecht Gain, Mausrad = Güte; Hochpass „H“ ebenfalls ziehbar; darunter Felder
+  für F/G/Q) sowie Aux/N-1-Sends (Ein/Aus, Pegel) und Programm-/Gruppen-Routing.
+- **Unten** die Kanalzüge: Pan-Drehregler, MUTE, Gain- und Peak-Anzeige, vertikaler
+  Fader mit Pegelbalken (Doppelklick = 0 dB), Nummer mit On-Air-Punkt, SOLO;
+  rechts Gruppen, Ausgangs-Busse und Master. Drehregler und Zahlenfelder:
+  senkrecht ziehen, Shift = fein, Mausrad, Doppelklick = Standardwert.
+- **Kompakt** blendet die Detailansicht sowie Pan, Peak und Statuszeile aus:
+
+  ![Konsole 2 im Kompaktmodus](screenshots/audiomischer-konsole2-kompakt.png)
+
+- **Mehr…** (oder Doppelklick auf die Namensfahne) öffnet das klassische Center
+  Control mit den selteneren Einstellungen (Delay, Pan, AutoMix, Ducking,
+  Automation, Quelle, Reihenfolge).
+
 - **Ansicht** (Auto, Desktop, Compact, Dicht, Grid, Touch), **Operate** (Übersicht,
   Fader ausgeblendet) und **Mix** (Fader + Center Control), **Fader** ein/aus,
   Spalten, Metergröße. Das sind reine Darstellungs-Einstellungen: sie ändern nie

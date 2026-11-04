@@ -141,6 +141,17 @@ hosts, not a same-host zero-copy MXL flow._
 _An operator's console: every node UI it's entitled to operate, live,
 side by side — no flow editor, no catalog, nothing to misconfigure._
 
+![Audio mixer "Console 2": detail view of the selected channel (input, gate/comp, draggable EQ graph, aux and routing) above a row of channel strips, group/bus strips and the master](docs/screenshots/audiomischer-konsole2.png)
+
+_The audio mixer's dense console surface ("Console 2", switchable from the
+classic view): detail of the selected channel on top — input, gate/compressor
+with gain-reduction meters, an EQ graph with draggable points — and channel
+strips with vertical faders below. Eight test sources shown._
+
+![Audio mixer Console 2 in compact mode: channel strips only](docs/screenshots/audiomischer-konsole2-kompakt.png)
+
+_Compact mode: strips only; the detail view stays one click away ("More…")._
+
 ![The measurement node: waveform/vectorscope, A/V timing against the EBU R 37 window, held signal alarms, EBU R 128 loudness with true peak](docs/screenshots/scope-messgeraet.png)
 
 _The `omp-scope` measurement tap: lip-sync computed from the MXL grain

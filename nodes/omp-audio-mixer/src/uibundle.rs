@@ -27,6 +27,8 @@ const BUNDLE: &str = concat!(
     include_str!("../ui/24-global.js"),
     "\n",
     include_str!("../ui/30-panel.js"),
+    "\n",
+    include_str!("../ui/40-console2.js"),
 );
 
 pub fn route(method: &str, path: &str) -> Option<RawResponse> {
