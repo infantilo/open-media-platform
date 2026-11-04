@@ -102,3 +102,6 @@ func RolloutPrecheck(statuses []Status, maxLag uint64) []string {
 	}
 	return out
 }
+
+// ErrNotLeaderForRollout: ein Rollout darf nur auf dem Leader gestartet werden.
+var ErrNotLeaderForRollout = errors.New("cluster: Rollout nur auf dem Leader startbar")

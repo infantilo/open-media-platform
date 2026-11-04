@@ -588,3 +588,38 @@ func errString(err error) string {
 	}
 	return err.Error()
 }
+
+// handleRestart: POST /restart — startet nur den Orchestrator neu (Stop-, Start-Skript), ohne Paket. Dient dem
+// rollierenden Cluster-Neustart (Kap. 84). Gemeinsames Busy-Flag mit Restore/Update.
+func (s *server) handleRestart(w http.ResponseWriter, r *http.Request) {
+	u := s.upd
+	if !s.status.beginKind("restart", "", "", "stopping") {
+		http.Error(w, "ein Restore oder Update läuft bereits", http.StatusConflict)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "neustart eingeleitet"})
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	go func() {
+		err := u.doRestart()
+		s.status.finish(err)
+		if err != nil {
+			slog.Error("supervisor: restart fehlgeschlagen", "error", err)
+		}
+	}()
+}
+
+func (u *updater) doRestart() error {
+	st := u.srv.status
+	time.Sleep(sleepBeforeStop)
+	if out, err := exec.Command(u.srv.stopScript).CombinedOutput(); err != nil {
+		return fmt.Errorf("stop-omp.sh: %w (%s)", err, tailText(string(out), 6))
+	}
+	st.setPhase("starting")
+	if err := u.startOrchestrator(); err != nil {
+		return err
+	}
+	st.setPhase("verifying")
+	return u.waitHealthy()
+}

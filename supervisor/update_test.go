@@ -286,3 +286,35 @@ func TestResolvePackageOnlyFromUpdateDir(t *testing.T) {
 		t.Error("symlink must be rejected")
 	}
 }
+
+func TestRestartStopsAndStartsWithoutPackageAndIsBusyExclusive(t *testing.T) {
+	h := newHarness(t)
+	rec := httptest.NewRecorder()
+	h.srv.upd = h.upd
+	h.srv.handleRestart(rec, httptest.NewRequest(http.MethodPost, "/restart", nil))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		h.srv.status.mu.Lock()
+		busy := h.srv.status.data.Busy
+		h.srv.status.mu.Unlock()
+		if !busy {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	log := h.read("calls.log")
+	if !strings.Contains(log, "stop") || !strings.Contains(log, "start") {
+		t.Fatalf("scripts: %q", log)
+	}
+	if !h.srv.status.beginKind("update", "x", "1", "staging") {
+		t.Fatal("Busy-Flag nach Neustart nicht freigegeben")
+	}
+	rec = httptest.NewRecorder()
+	h.srv.handleRestart(rec, httptest.NewRequest(http.MethodPost, "/restart", nil))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("waehrend Update: code = %d, want 409", rec.Code)
+	}
+}

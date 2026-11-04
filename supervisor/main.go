@@ -145,6 +145,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /status", s.handleStatus)
 	mux.HandleFunc("POST /restore", s.handleRestore)
 	mux.HandleFunc("POST /update", s.handleUpdate)
+	mux.HandleFunc("POST /restart", s.handleRestart)
 	return mux
 }
 
