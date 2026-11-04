@@ -22,8 +22,8 @@ const getSkin = () => {
   try {
     const q = new URLSearchParams(location.search).get("skin");
     if (q === "v2" || q === "classic") return q;
-    return localStorage.getItem(SKIN_KEY) === "v2" ? "v2" : "classic";
-  } catch { return "classic"; }
+    return localStorage.getItem(SKIN_KEY) === "classic" ? "classic" : "v2";
+  } catch { return "v2"; }
 };
 const setSkin = (s) => { try { localStorage.setItem(SKIN_KEY, s); } catch {} };
 
@@ -34,7 +34,7 @@ const CSS2 = `
 .c2{--bg:#111;--panel:#1a1a1a;--panel2:#202020;--line:#2c2c2c;--line2:#3a3a3a;--txt:#d8dde2;--dim:#7d848c;
   --cyan:#27e0f0;--blue:#1fa4e6;--green:#25d366;--pink:#ff4f9a;--orange:#ff9f1c;--amber:#ffb000;--red:#ff4040;--violet:#b57bff;
   --mono:ui-monospace,"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
-  display:flex;flex-direction:column;background:var(--bg);color:var(--txt);font:11px/1.2 var(--mono);height:max(780px,calc(100vh - 70px));min-height:0;border:1px solid #000;position:relative;user-select:none}
+  display:flex;flex-direction:column;background:var(--bg);color:var(--txt);font:11px/1.2 var(--mono);height:max(600px,calc(100vh - 120px));min-height:0;overflow:hidden;border:1px solid #000;position:relative;user-select:none}
 .c2 :where(button){font:inherit;color:inherit;cursor:pointer}
 .c2 *{box-sizing:border-box}
 .c2 [hidden]{display:none!important}
@@ -175,7 +175,6 @@ const CSS2 = `
 .c2[data-compact="1"] .st[data-kind=bus],.c2[data-compact="1"] .st[data-kind=grp]{flex:0 0 58px}
 .c2[data-compact="1"] .st[data-kind=master]{flex:0 0 70px;min-width:70px}
 .c2[data-compact="1"] .c2-top{min-height:34px}
-.c2[data-compact="1"]{height:max(420px,calc(100vh - 70px))}
 .c2-drawer{position:absolute;top:44px;right:0;bottom:0;width:min(460px,96%);background:var(--panel);border-left:2px solid var(--cyan);z-index:30;overflow:auto;box-shadow:-10px 0 30px #000c}
 .c2-drawer .c2-dh{display:flex;align-items:center;padding:4px 8px;gap:8px;border-bottom:1px solid var(--line)}
 .c2-drawer .c2-dh b{flex:1}
@@ -409,17 +408,21 @@ class ConsoleApp extends MixerApp {
     this.clock.textContent = new Date().toLocaleTimeString(LOCALE, { hour12: false });
     this.refreshDetail();
     this.applyCompact();
+    this.onWinResize = () => this.layoutNow();
+    window.addEventListener("resize", this.onWinResize);
   }
 
   applyCompact() {
     const on = !!this.ui.compact;
     this.root.dataset.compact = on ? "1" : "0";
+    this.layoutNow();
     this.compactBtn.setAttribute("aria-pressed", String(on));
     for (const fn of this.binds) try { fn(); } catch {}
   }
 
   destroy() {
     clearInterval(this.clockTimer);
+    window.removeEventListener("resize", this.onWinResize);
     super.destroy();
   }
 
@@ -706,6 +709,11 @@ class ConsoleApp extends MixerApp {
   layoutNow() {
     this.width = this.host.clientWidth || this.width || 1000;
     this.root.dataset.layout = "c2";
+    // Höhe = verfügbarer Platz unter dem Panel-Anfang (kein senkrechter Scrollbalken der Seite).
+    const top = this.host.getBoundingClientRect().top;
+    const min = this.ui.compact ? 380 : 600;
+    const h = Math.max(min, Math.floor(window.innerHeight - top - 8));
+    if (this.c2h !== h) { this.c2h = h; this.root.style.height = h + "px"; }
   }
   applyLayoutVars() {}
   centerIsOpen() { return !this.drawer.hidden; }
