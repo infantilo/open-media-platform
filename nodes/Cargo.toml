@@ -18,6 +18,7 @@ members = [
     "omp-multiviewer",
     "omp-multiviewer-custom",
     "omp-playout-automation",
+    "omp-playout-core",
     "omp-srt-gateway",
     "omp-ograf",
     "omp-2110-gateway",

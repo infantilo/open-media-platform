@@ -64,13 +64,13 @@ mod foreign;
 mod hooks;
 mod mixersetup;
 mod persist;
-mod playlist;
-mod readiness;
+use omp_playout_core::playlist;
+use omp_playout_core::readiness;
 mod remote;
-mod schedule;
+use omp_playout_core::schedule;
 mod structlog;
-mod timeline;
-mod trigger;
+use omp_playout_core::timeline;
+use omp_playout_core::trigger;
 mod uibundle;
 mod voiceover;
 

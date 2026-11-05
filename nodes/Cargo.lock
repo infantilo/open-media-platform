@@ -1597,6 +1597,7 @@ dependencies = [
  "futures-util",
  "libc",
  "omp-node-sdk",
+ "omp-playout-core",
  "omp-resolver",
  "roxmltree",
  "serde",
@@ -1615,6 +1616,15 @@ dependencies = [
  "omp-node-sdk",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "omp-playout-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
