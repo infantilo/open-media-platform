@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -524,5 +525,45 @@ func TestPurgeDeletedAssetsRemovesReviewDataAndProxyFolder(t *testing.T) {
 	}
 	if _, err := e.svc.St.GetItem(context.Background(), keep.AssetID); err != nil {
 		t.Errorf("anderes Element verschwunden: %v", err)
+	}
+}
+
+// Kapitel 89 / RA2: Nach der Prüfung steht die Lautheit am Asset (`metadata.technical.loudness`) — Grundlage für Wiedergabe-Gain
+// und Planung. Echter Lauf: Tondatei importieren, Profil „Radio Kurzform“, ffmpeg-Messung, Asset aus der Datenbank lesen.
+func TestQCRecordsLoudnessOnAsset(t *testing.T) {
+	e := newEnv(t, func(c *Config) { c.AutoQC = false }) // sonst misst zuerst das Standardprofil
+	ctx := context.Background()
+	wav := makeAudioFile(t, "spot.wav", "sine=f=997:r=48000:d=20,volume='if(gt(t,16.5),1.21,0.304)':eval=frame")
+	data, err := os.ReadFile(wav)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.dir, "spot.wav"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	it, err := e.svc.ImportFile(ctx, "spot.wav", "Spot", "importer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.svc.RequestQC(ctx, it.AssetID, "tester", "radio-short-form", true); err != nil {
+		t.Fatal(err)
+	}
+	e.drain(t)
+	a, err := e.svc.Assets.GetAsset(it.AssetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, ok := a.Metadata.Technical["loudness"].(map[string]any)
+	if !ok {
+		t.Fatalf("Merkmal Lautheit fehlt: %+v", a.Metadata.Technical)
+	}
+	i, _ := l["integratedLufs"].(float64)
+	s, _ := l["maxShortTermLufs"].(float64)
+	if math.Abs(i-(-23.0)) > 0.4 || s <= -18 || l["profile"] != "radio-short-form" || l["reportId"] == nil || l["truePeakDbtp"] == nil {
+		t.Fatalf("Lautheit am Asset: %+v", l)
+	}
+	// bestehende technische Merkmale bleiben erhalten (nur `loudness` kommt dazu)
+	if len(a.Metadata.Technical) < 1 {
+		t.Fatal("technische Merkmale verloren")
 	}
 }

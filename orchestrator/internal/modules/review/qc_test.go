@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -216,4 +217,86 @@ func asExec(err error, target **ExecError) bool {
 		*target = e
 	}
 	return ok
+}
+
+// makeAudioFile erzeugt eine reine Tondatei (WAV, 24 Bit, 48 kHz stereo) aus einem lavfi-Ausdruck.
+func makeAudioFile(t *testing.T, name, expr string) string {
+	t.Helper()
+	out := filepath.Join(t.TempDir(), name)
+	args := []string{"-v", "error", "-y", "-f", "lavfi", "-i", expr + ",pan=stereo|c0=c0|c1=c0", "-c:a", "pcm_s24le", out}
+	if b, err := exec.Command("ffmpeg", args...).CombinedOutput(); err != nil {
+		t.Fatalf("Tondatei: %v\n%s", err, b)
+	}
+	return out
+}
+
+// Kapitel 89 / RA2: Radio-Profile nach EBU R 128 (2023) und R 128 s1 (2020) an echten, kalibrierten Tondateien.
+// 997-Hz-Sinus: Pegel so gewählt, dass ffmpeg ebur128 −23,0 LUFS misst (Kalibrierung im Test selbst geprüft, nicht angenommen).
+func TestRunQCRadioProfiles(t *testing.T) {
+	tools := needFFmpeg(t)
+	_ = tools.Discover(context.Background()) // Filter-Erkennung (RunQC tut das selbst)
+	if !tools.Has("ebur128") {
+		t.Skip("ffmpeg ohne ebur128")
+	}
+	ctx := context.Background()
+	exact := makeAudioFile(t, "exakt.wav", "sine=f=997:r=48000:d=15,volume=-4.95dB")
+	// 16,5 s leise, dann 3,5 s heiß: Integrated ≈ −23 LUFS, aber höchster Short-term-Wert ≈ −16,5 LUFS (Spot mit lauter Schlussphase)
+	hotEnd := makeAudioFile(t, "spot.wav", "sine=f=997:r=48000:d=20,volume='if(gt(t,16.5),1.21,0.304)':eval=frame")
+	loud := makeAudioFile(t, "laut.wav", "sine=f=997:r=48000:d=15,volume=5dB")
+	short := makeAudioFile(t, "kurz.wav", "sine=f=997:r=48000:d=2,volume=-4.95dB")
+
+	run := func(file string, p QCProfile) *QCOutput {
+		o, err := tools.RunQC(ctx, file, p, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return o
+	}
+	status := func(o *QCOutput, id string) string {
+		if f := findings(o, id); len(f) > 0 {
+			return f[0].Status
+		}
+		return "fehlt"
+	}
+	prod, form := RadioProductionProfile(), RadioShortFormProfile()
+
+	o := run(exact, prod)
+	if o.Loudness == nil || math.Abs(o.Loudness.IntegratedLUFS-(-23.0)) > 0.2 {
+		t.Fatalf("Kalibrierung: %+v", o.Loudness)
+	}
+	if o.Loudness.MaxShortTermLUFS == nil || math.Abs(*o.Loudness.MaxShortTermLUFS-(-23.0)) > 0.3 {
+		t.Fatalf("Short-term der Kalibrierdatei: %+v", o.Loudness)
+	}
+	if s := status(o, "audio.loudness"); s != CheckPass {
+		t.Errorf("−23,0 LUFS im Profil Radio Produktion: %s", s)
+	}
+	if s := status(o, "audio.short_term"); s != "fehlt" {
+		t.Errorf("Produktionsprofil prüft keinen Short-term-Wert: %s", s)
+	}
+	if s := status(run(exact, form), "audio.short_term"); s != CheckPass {
+		t.Errorf("−23 LUFS Short-term im Profil Kurzform: %s", s)
+	}
+
+	o = run(hotEnd, prod)
+	if o.Loudness == nil || math.Abs(o.Loudness.IntegratedLUFS-(-23.0)) > 0.3 {
+		t.Fatalf("Spot sollte ≈ −23 LUFS integriert haben: %+v", o.Loudness)
+	}
+	if s := status(o, "audio.loudness"); s != CheckPass && s != CheckFail {
+		t.Errorf("Spot Lautheitsbefund fehlt: %s", s)
+	}
+	if o.Loudness.MaxShortTermLUFS == nil || *o.Loudness.MaxShortTermLUFS <= -18 {
+		t.Fatalf("Spot sollte einen Short-term-Wert über −18 LUFS haben: %+v", o.Loudness)
+	}
+	of := run(hotEnd, form)
+	if s := status(of, "audio.short_term"); s != CheckFail {
+		t.Errorf("Spot mit Short-term über −18 LUFS im Profil Kurzform: %s (%+v)", s, o.Loudness)
+	}
+
+	if s := status(run(loud, prod), "audio.loudness"); s != CheckFail {
+		t.Errorf("zu laute Datei: %s", s)
+	}
+	// unter 3 s gibt es keinen Short-term-Wert
+	if s := status(run(short, form), "audio.short_term"); s != CheckNotEvaluated {
+		t.Errorf("Datei unter 3 s im Profil Kurzform: %s", s)
+	}
 }

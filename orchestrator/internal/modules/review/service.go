@@ -433,6 +433,9 @@ func (s *Service) runJob(ctx context.Context, job Job) {
 	if err != nil {
 		log.Warn("QC-Ergebnis nicht am Eintrag vermerkt", "error", err)
 	}
+	if !changed {
+		s.recordLoudness(job.AssetID, out, prof.ID, rep.ID)
+	}
 	s.audit("system", job.AssetID, "qc_done", map[string]any{"overall": out.Overall, "report": rep.ID})
 	if out.Overall == OverallFail && !changed {
 		s.alert("qc-failed", job.AssetID, fmt.Sprintf("QC nicht bestanden: %d Fehler, %d Warnungen (Bericht %s)", out.Counts[CheckFail], out.Counts[CheckWarning], rep.ID))
@@ -440,6 +443,41 @@ func (s *Service) runJob(ctx context.Context, job Job) {
 	if changed {
 		_, _, _ = s.RequestQC(ctx, job.AssetID, "system", job.ProfileID, false)
 	}
+}
+
+// recordLoudness schreibt die gemessene Lautheit als Asset-Merkmal (`metadata.technical.loudness`, Kapitel 89/RA2): Grundlage der
+// Wiedergabe-Gain-Berechnung im Radio-Abspieler und der Planung. Fehler sind nicht fatal (nur Warnung im Log).
+func (s *Service) recordLoudness(assetID string, out *QCOutput, profileID, reportID string) {
+	if s.Assets == nil || out == nil || out.Loudness == nil {
+		return
+	}
+	value := map[string]any{"integratedLufs": out.Loudness.IntegratedLUFS, "profile": profileID, "reportId": reportID, "measuredAt": time.Now().UTC().Format(time.RFC3339), "method": "ffmpeg ebur128 (ITU-R BS.1770 / EBU R 128)"}
+	if v := out.Loudness.LRA; v != nil {
+		value["lra"] = *v
+	}
+	if v := out.Loudness.TruePeakDBTP; v != nil {
+		value["truePeakDbtp"] = *v
+	}
+	if v := out.Loudness.MaxShortTermLUFS; v != nil {
+		value["maxShortTermLufs"] = *v
+	}
+	for try := 0; try < 3; try++ {
+		a, err := s.Assets.GetAsset(assetID)
+		if err != nil {
+			return
+		}
+		md := a.Metadata
+		next := map[string]any{}
+		for k, v := range md.Technical {
+			next[k] = v
+		}
+		next["loudness"] = value
+		md.Technical = next
+		if _, err = s.Assets.UpdateAssetMetadata(assetID, a.RowVersion, md, "system"); err == nil {
+			return
+		}
+	}
+	slog.Warn("Lautheit nicht am Asset vermerkt", "asset", assetID)
 }
 
 // mergeTimeline: der Start-Timecode/Rate aus der Analyse ersetzt die vorläufige Zeitachse der Registrierung.

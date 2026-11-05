@@ -21,6 +21,17 @@ type QCOutput struct {
 	Tools    map[string]string
 	Profile  QCProfile
 	Counts   map[string]int
+	// Loudness: Lautheitsmesswerte der ersten messbaren Tonspur (Asset-Merkmal „Lautheit“), nil wenn keine Messung gelang.
+	Loudness *LoudnessMeasure
+}
+
+// LoudnessMeasure sind die Messwerte nach EBU R 128 / Tech 3341 einer Tonspur.
+type LoudnessMeasure struct {
+	Stream           int      `json:"stream"`
+	IntegratedLUFS   float64  `json:"integratedLufs"`
+	LRA              *float64 `json:"lra,omitempty"`
+	TruePeakDBTP     *float64 `json:"truePeakDbtp,omitempty"`
+	MaxShortTermLUFS *float64 `json:"maxShortTermLufs,omitempty"`
 }
 
 type qcCtx struct {
@@ -28,6 +39,7 @@ type qcCtx struct {
 	prof     QCProfile
 	at       time.Time
 	findings []Finding
+	loud     *LoudnessMeasure
 }
 
 func (q *qcCtx) add(f Finding) {
@@ -286,6 +298,7 @@ func qcExec(phase string, err error) error {
 func (q *qcCtx) finish(out *QCOutput) *QCOutput {
 	sort.SliceStable(q.findings, func(i, j int) bool { return false })
 	out.Findings = q.findings
+	out.Loudness = q.loud
 	out.Counts = map[string]int{CheckPass: 0, CheckWarning: 0, CheckFail: 0, CheckNotEvaluated: 0, "incomplete": 0}
 	for _, f := range q.findings {
 		out.Counts[f.Status]++
@@ -653,9 +666,11 @@ func (q *qcCtx) audioPass(ctx context.Context, file string, i int, a map[string]
 		return nil
 	}
 	ip := &IntervalParser{}
+	st := &ShortTermTracker{}
 	tail := newTail(700)
 	_, code, err := q.t.Exec().Run(ctx, q.t.FFmpeg, []string{"-nostdin", "-v", "info", "-i", file, "-map", fmt.Sprintf("0:a:%d", i), "-af", strings.Join(filters, ","), "-vn", "-f", "null", "-"}, func(l string) {
 		ip.Line(l)
+		st.Line(l)
 		tail.add(l)
 	})
 	if err != nil {
@@ -711,18 +726,40 @@ func (q *qcCtx) audioPass(ctx context.Context, file string, i int, a map[string]
 		case !ok || math.IsNaN(l.IntegratedLUFS) || math.IsInf(l.IntegratedLUFS, 0) || l.IntegratedLUFS <= -69.9:
 			q.notEvaluated("audio.loudness", CatAudio, fmt.Sprintf("Spur %d: Lautheit nicht messbar (zu kurz oder zu leise)", i+1), false, "ffmpeg")
 		default:
-			diff := l.IntegratedLUFS - p.Loudness.TargetLUFS
-			st, sev := CheckPass, SevInfo
-			switch {
-			case math.Abs(diff) > p.Loudness.FailToleranceLU:
-				st, sev = CheckFail, SevMajor
-			case math.Abs(diff) > p.Loudness.WarnToleranceLU:
-				st, sev = CheckWarning, SevMinor
+			diff := round3(l.IntegratedLUFS - p.Loudness.TargetLUFS) // gerundet: −22,8 − (−23) darf nicht als 0,2000000000000028 über der Toleranz liegen
+			stt, sev := judgeLoudness(diff, p.Loudness.WarnToleranceLU, p.Loudness.FailToleranceLU)
+			if q.loud == nil {
+				m := &LoudnessMeasure{Stream: i, IntegratedLUFS: round3(l.IntegratedLUFS)}
+				if v, ok := optFloat(l.LRA); ok {
+					m.LRA = &v
+				}
+				if v, ok := optFloat(l.TruePeakDBFS); ok {
+					m.TruePeakDBTP = &v
+				}
+				if st.Valid {
+					v := round3(st.Max)
+					m.MaxShortTermLUFS = &v
+				}
+				q.loud = m
 			}
-			q.add(Finding{CheckID: "audio.loudness", Category: CatAudio, Status: st, Severity: sev, Stream: &idx, Tool: "ffmpeg",
+			q.add(Finding{CheckID: "audio.loudness", Category: CatAudio, Status: stt, Severity: sev, Stream: &idx, Tool: "ffmpeg",
 				Message:   fmt.Sprintf("Spur %d: %.1f LUFS (Ziel %.1f, Abweichung %+.1f LU)", i+1, l.IntegratedLUFS, p.Loudness.TargetLUFS, diff),
 				Measured:  map[string]any{"integratedLufs": round3(l.IntegratedLUFS), "lra": jsonFloat(l.LRA), "diffLu": round3(diff)},
 				Threshold: map[string]any{"targetLufs": p.Loudness.TargetLUFS, "warnToleranceLu": p.Loudness.WarnToleranceLU, "failToleranceLu": p.Loudness.FailToleranceLU}})
+			if p.Loudness.CheckShortTerm {
+				switch {
+				case !st.Valid:
+					q.notEvaluated("audio.short_term", CatAudio, fmt.Sprintf("Spur %d: kein Short-term-Wert (Datei kürzer als 3 s)", i+1), false, "ffmpeg")
+				case st.Max > p.Loudness.MaxShortTermLUFS:
+					q.add(Finding{CheckID: "audio.short_term", Category: CatAudio, Status: CheckFail, Severity: SevMajor, Stream: &idx, Tool: "ffmpeg",
+						Message:  fmt.Sprintf("Spur %d: höchste Short-term-Lautheit %.1f LUFS über Grenze %.1f", i+1, st.Max, p.Loudness.MaxShortTermLUFS),
+						Measured: map[string]any{"maxShortTermLufs": round3(st.Max)}, Threshold: map[string]any{"maxShortTermLufs": p.Loudness.MaxShortTermLUFS}})
+				default:
+					q.add(Finding{CheckID: "audio.short_term", Category: CatAudio, Status: CheckPass, Severity: SevInfo, Stream: &idx, Tool: "ffmpeg",
+						Message:  fmt.Sprintf("Spur %d: höchste Short-term-Lautheit %.1f LUFS (Grenze %.1f)", i+1, st.Max, p.Loudness.MaxShortTermLUFS),
+						Measured: map[string]any{"maxShortTermLufs": round3(st.Max)}, Threshold: map[string]any{"maxShortTermLufs": p.Loudness.MaxShortTermLUFS}})
+				}
+			}
 			if p.Loudness.MaxLRA > 0 && !math.IsNaN(l.LRA) && l.LRA > p.Loudness.MaxLRA {
 				q.add(Finding{CheckID: "audio.lra", Category: CatAudio, Status: CheckWarning, Severity: SevMinor, Stream: &idx, Tool: "ffmpeg",
 					Message:  fmt.Sprintf("Spur %d: Lautheitsumfang %.1f LU über %.1f", i+1, l.LRA, p.Loudness.MaxLRA),
@@ -739,6 +776,25 @@ func (q *qcCtx) audioPass(ctx context.Context, file string, i int, a map[string]
 		}
 	}
 	return nil
+}
+
+// judgeLoudness bewertet die Abweichung der Programmlautheit vom Ziel (LU): über der Fehlertoleranz Fehler, über der Warntoleranz Warnung.
+func judgeLoudness(diffLU, warnTol, failTol float64) (string, string) {
+	switch {
+	case math.Abs(diffLU) > failTol:
+		return CheckFail, SevMajor
+	case math.Abs(diffLU) > warnTol:
+		return CheckWarning, SevMinor
+	}
+	return CheckPass, SevInfo
+}
+
+// optFloat: gerundeter Wert, `ok=false` bei NaN/Unendlich.
+func optFloat(f float64) (float64, bool) {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0, false
+	}
+	return round3(f), true
 }
 
 func jsonFloat(f float64) any {

@@ -114,3 +114,78 @@ func TestExecFailureVersusMediaFailure(t *testing.T) {
 		t.Fatalf("timeout must be an ExecError, got %v", err)
 	}
 }
+
+func TestShortTermTracker(t *testing.T) {
+	var s ShortTermTracker
+	// vor Sekunde 3 zählt nicht (Fenster nicht gefüllt), -inf/-120,7 ebenfalls nicht
+	for _, l := range []string{
+		"[Parsed_ebur128_0 @ 0x55f0] t: 0.0999773  TARGET:-23 LUFS    M:-120.7 S:-120.7     I: -70.0 LUFS       LRA:   0.0 LU  FTPK: -18.1 dBFS  TPK: -18.1 dBFS",
+		"[Parsed_ebur128_0 @ 0x55f0] t: 1.5  TARGET:-23 LUFS    M: -10.0 S: -10.0     I: -10.0 LUFS       LRA:   0.0 LU  FTPK: -3.0 dBFS  TPK: -3.0 dBFS",
+		"irgendeine andere Zeile S: -3.0",
+	} {
+		s.Line(l)
+	}
+	if s.Valid {
+		t.Fatalf("vor 3 s darf kein Wert zählen: %+v", s)
+	}
+	for _, l := range []string{
+		"[Parsed_ebur128_0 @ 0x55f0] t: 3.1  TARGET:-23 LUFS    M: -20.5 S: -21.7     I: -22.0 LUFS       LRA:   0.0 LU",
+		"[Parsed_ebur128_0 @ 0x55f0] t: 4.0  TARGET:-23 LUFS    M: -17.0 S: -18.4     I: -21.0 LUFS       LRA:   1.0 LU",
+		"[Parsed_ebur128_0 @ 0x55f0] t: 12.0  TARGET:-23 LUFS    M: -30.0 S: -26.0     I: -23.0 LUFS       LRA:   2.0 LU",
+		"[Parsed_ebur128_0 @ 0x55f0] t: 13.0  TARGET:-23 LUFS    M:-120.7 S:-inf     I: -23.0 LUFS       LRA:   2.0 LU",
+	} {
+		s.Line(l)
+	}
+	if !s.Valid || s.Max != -18.4 {
+		t.Fatalf("Max Short-term: %+v", s)
+	}
+}
+
+func TestJudgeLoudnessToleranceBoundaries(t *testing.T) {
+	// EBU R 128: Programmlautheit −23,0 LUFS, Prüftoleranz ±0,2 LU (Profil „Radio Produktion“: Warn = Fehler = 0,2)
+	p := RadioProductionProfile()
+	cases := []struct {
+		measured float64
+		want     string
+	}{{-23.0, CheckPass}, {-22.8, CheckPass}, {-23.2, CheckPass}, {-22.7, CheckFail}, {-23.3, CheckFail}, {-13.0, CheckFail}}
+	for _, c := range cases {
+		diff := round3(c.measured - p.Loudness.TargetLUFS)
+		got, _ := judgeLoudness(diff, p.Loudness.WarnToleranceLU, p.Loudness.FailToleranceLU)
+		if got != c.want {
+			t.Errorf("%.1f LUFS: %s, erwartet %s (Abweichung %.3f)", c.measured, got, c.want, diff)
+		}
+	}
+	// Standardprofil: ±1 LU Warnung, ±3 LU Fehler bleibt unverändert
+	d := DefaultQCProfile()
+	if got, _ := judgeLoudness(1.5, d.Loudness.WarnToleranceLU, d.Loudness.FailToleranceLU); got != CheckWarning {
+		t.Errorf("Standardprofil 1,5 LU: %s", got)
+	}
+}
+
+func TestRadioProfilesAreBuiltinAndValid(t *testing.T) {
+	for _, p := range builtinRadioProfiles() {
+		if err := p.Validate(); err != nil {
+			t.Errorf("%s: %v", p.ID, err)
+		}
+		if !ValidProfileID(p.ID) {
+			t.Errorf("%s: ungültige Kennung", p.ID)
+		}
+	}
+	prod, short := RadioProductionProfile(), RadioShortFormProfile()
+	if prod.Loudness.CheckShortTerm || !short.Loudness.CheckShortTerm || short.Loudness.MaxShortTermLUFS != -18 {
+		t.Fatalf("Kurzform: Short-term −18 LUFS erwartet: %+v / %+v", prod.Loudness, short.Loudness)
+	}
+	// ein gespeichertes Altprofil ohne Radio-Profile bekommt sie beim Normalisieren dazu
+	c := DefaultConfig()
+	delete(c.QCProfiles, prod.ID)
+	delete(c.QCProfiles, short.ID)
+	if err := c.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.QCProfiles[prod.ID]; !ok {
+		t.Fatal("Radio Produktion fehlt nach normalize")
+	}
+	if _, ok := c.QCProfiles[short.ID]; !ok {
+		t.Fatal("Radio Kurzform fehlt nach normalize")
+	}
+}

@@ -90,6 +90,7 @@ func TestWithProfileRejectsBadIDAndValues(t *testing.T) {
 
 func TestWithoutProfileKeepsDefaultAndLast(t *testing.T) {
 	c := DefaultConfig()
+	base := len(c.QCProfiles) // Standardprofil + mitgelieferte Radio-Profile
 	if _, err := withoutProfile(c, "broadcast-default"); err == nil {
 		t.Fatal("letztes/Standardprofil darf nicht gelöscht werden")
 	}
@@ -98,7 +99,7 @@ func TestWithoutProfileKeepsDefaultAndLast(t *testing.T) {
 		t.Fatalf("Standardprofil: %v", err)
 	}
 	c2, err := withoutProfile(c, "zweit")
-	if err != nil || len(c2.QCProfiles) != 1 || len(c.QCProfiles) != 2 {
+	if err != nil || len(c2.QCProfiles) != base || len(c.QCProfiles) != base+1 {
 		t.Fatalf("löschen: %v %d/%d", err, len(c2.QCProfiles), len(c.QCProfiles))
 	}
 	if _, err := withoutProfile(c, "gibtsnicht"); !errors.Is(err, ErrNotFound) {

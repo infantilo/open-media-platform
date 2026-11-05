@@ -25,6 +25,7 @@ var (
 	reSilStart   = regexp.MustCompile(`silence_start:\s*(-?[0-9.]+)`)
 	reSilEnd     = regexp.MustCompile(`silence_end:\s*(-?[0-9.]+)`)
 	reIdet       = regexp.MustCompile(`Multi frame detection:\s*TFF:\s*(\d+)\s+BFF:\s*(\d+)\s+Progressive:\s*(\d+)\s+Undetermined:\s*(\d+)`)
+	reEbuFrame   = regexp.MustCompile(`\bt:\s*([0-9.]+)\s.*?\bS:\s*(-?[0-9.]+|-?inf)`)
 	reLoudI      = regexp.MustCompile(`^\s*I:\s*(-?[0-9.]+|-?inf)\s+LUFS`)
 	reLoudLRA    = regexp.MustCompile(`^\s*LRA:\s*(-?[0-9.]+|-?inf)\s+LU\b`)
 	reLoudPeak   = regexp.MustCompile(`^\s*Peak:\s*(-?[0-9.]+|-?inf)\s+dBFS`)
@@ -195,4 +196,28 @@ func ParseAstats(lines []string) (AudioStats, bool) {
 		}
 	}
 	return out, ok
+}
+
+// ShortTermTracker liest die laufenden Zeilen des ebur128-Filters (`t: 4.1 … M:-21.0 S:-22.3 I: …`) und hält den größten
+// Short-term-Wert (3-s-Fenster). Werte vor Sekunde 3 gehören zu einem nicht gefüllten Fenster und zählen nicht (EBU Tech 3341:
+// Short-term über 3 s); Dateien unter 3 s liefern deshalb keinen Wert.
+type ShortTermTracker struct {
+	Max   float64
+	Valid bool
+}
+
+// Line wertet eine Ausgabezeile aus; fremde Zeilen werden ignoriert.
+func (s *ShortTermTracker) Line(l string) {
+	m := reEbuFrame.FindStringSubmatch(l)
+	if m == nil {
+		return
+	}
+	t := num(m[1])
+	v := num(m[2])
+	if t < 3.0 || math.IsNaN(v) || math.IsInf(v, 0) || v <= -70 {
+		return
+	}
+	if !s.Valid || v > s.Max {
+		s.Max, s.Valid = v, true
+	}
 }

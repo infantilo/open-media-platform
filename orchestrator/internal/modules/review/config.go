@@ -93,6 +93,9 @@ type QCProfile struct {
 		FailToleranceLU float64 `json:"failToleranceLu"`
 		MaxTruePeakDB   float64 `json:"maxTruePeakDbtp"`
 		MaxLRA          float64 `json:"maxLra"` // 0 = nicht prüfen
+		// Höchster Short-term-Wert (3-s-Fenster, LUFS); nur geprüft, wenn CheckShortTerm (EBU R 128 s1: ≤ −18,0 LUFS für Kurzformate).
+		CheckShortTerm   bool    `json:"checkShortTerm,omitempty"`
+		MaxShortTermLUFS float64 `json:"maxShortTermLufs,omitempty"`
 	} `json:"loudness"`
 	ClipPeakDB float64 `json:"clipPeakDb"` // Sample-Peak ≥ Wert → Clipping-Verdacht
 	Sync       struct {
@@ -136,6 +139,33 @@ func DefaultQCProfile() QCProfile {
 	return p
 }
 
+// RadioProductionProfile: „Radio Produktion“ nach EBU R 128 (2023): Programmlautheit −23,0 LUFS mit der Prüftoleranz ±0,2 LU,
+// True Peak höchstens −1 dBTP bei einer Messtoleranz von 0,3 dB (also Fehler erst über −0,7 dBTP). Kein Bildprüfungen nötig,
+// die Videoprüfungen laufen bei reinen Tondateien ohnehin ins Leere.
+func RadioProductionProfile() QCProfile {
+	p := DefaultQCProfile()
+	p.ID, p.Name = "radio-production", "Radio Produktion (EBU R 128)"
+	p.Loudness.Enabled, p.Loudness.TargetLUFS = true, -23
+	p.Loudness.WarnToleranceLU, p.Loudness.FailToleranceLU, p.Loudness.MaxTruePeakDB, p.Loudness.MaxLRA = 0.2, 0.2, -0.7, 0
+	p.Silence.NoiseDb, p.Silence.MinDurationS, p.Silence.WarnAboveS, p.Silence.FailAboveS = -60, 2, 3, 10
+	return p
+}
+
+// RadioShortFormProfile: „Radio Kurzform“ (Spots, Jingles) nach EBU R 128 s1 (2020): −23,0 LUFS (±0,2 LU), höchster Short-term-Wert
+// −18,0 LUFS, −1 dBTP (Messtoleranz 0,3 dB), keine Grenze für den Lautheitsumfang.
+func RadioShortFormProfile() QCProfile {
+	p := RadioProductionProfile()
+	p.ID, p.Name = "radio-short-form", "Radio Kurzform (EBU R 128 s1)"
+	p.Loudness.CheckShortTerm, p.Loudness.MaxShortTermLUFS = true, -18
+	p.Silence.WarnAboveS, p.Silence.FailAboveS = 1, 3
+	return p
+}
+
+// builtinRadioProfiles sind die mitgelieferten Radio-Profile (werden angelegt, falls sie fehlen).
+func builtinRadioProfiles() []QCProfile {
+	return []QCProfile{RadioProductionProfile(), RadioShortFormProfile()}
+}
+
 // DefaultConfig: Standardwerte.
 func DefaultConfig() Config {
 	p := DefaultQCProfile()
@@ -143,7 +173,7 @@ func DefaultConfig() Config {
 		AllowReviewWhileQCRunning: false, AllowReviewAfterQCExecFail: true,
 		AllowOverlap: true, AllowGaps: true, MinSegmentFrames: 1,
 		ApprovalMode: "single", AllowSelfApproval: true,
-		DefaultQCProfile: p.ID, QCProfiles: map[string]QCProfile{p.ID: p}, QCWorkers: 1, AutoQC: true,
+		DefaultQCProfile: p.ID, QCProfiles: map[string]QCProfile{p.ID: p, RadioProductionProfile().ID: RadioProductionProfile(), RadioShortFormProfile().ID: RadioShortFormProfile()}, QCWorkers: 1, AutoQC: true,
 		ProxyHeight: 540, ProxyCRF: 23, ProxyMaxAudio: 8, ImportDir: "data/media", SubtitleDir: "data/subtitles",
 		MetadataFields: []MetaField{
 			{ID: "title", Label: "Titel", Type: "text", Required: true, Max: 200},
@@ -175,6 +205,11 @@ func (c *Config) Normalize() error {
 	}
 	if len(c.QCProfiles) == 0 {
 		c.QCProfiles = d.QCProfiles
+	}
+	for _, b := range builtinRadioProfiles() {
+		if _, ok := c.QCProfiles[b.ID]; !ok {
+			c.QCProfiles[b.ID] = b
+		}
 	}
 	for k, p := range c.QCProfiles {
 		if p.ID == "" {
