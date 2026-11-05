@@ -3,7 +3,7 @@
 import { renderScene } from "./runtime.js";
 import {
   addElement, alignGroup, ANIM_TYPES, type Align, alignToScene, angleFor, boundsOf, distribute, duplicateMany, elementsInRect, type Guide, HANDLES,
-  type Handle, hitTest, History, KINDS, type Kind, moveElements, newElement, removeElements, reorder, resizeBox, resizeRotated, type Scene,
+  type Handle, hitTest, History, KINDS, type Kind, checkScene, moveElements, newElement, removeElements, reorder, resizeBox, resizeRotated, type Scene,
   type SceneElement, setActions, setStepCount, setTiming, snapBox, timelineEnd, updateElement, EFFECT_TYPES, newAction,
 } from "./scene.ts";
 import { messages } from "./messages.ts";
@@ -21,6 +21,8 @@ export interface CanvasHost {
   images: () => string[];
   assetUrl: (name: string) => string;
   params: () => ParamInfo[];
+  /** Alle Dateinamen des Pakets (für die Prüfung). */
+  files: () => string[];
   /** Schriftdateien des Pakets (Namen). */
   fonts: () => string[];
   /** Vorgabewerte der Parameter für die Anzeige. */
@@ -329,6 +331,30 @@ export class CanvasEditor {
     if (!this.scene.elements.length) box.append(document.createTextNode(tr("canvasEmpty")));
     this.#drawFonts();
     this.#drawActions();
+    this.#drawCheck();
+  }
+  #chkBox?: HTMLDivElement;
+  #drawCheck() {
+    if (!this.#chkBox) {
+      this.#chkBox = document.createElement("div");
+      this.#chkBox.className = "col";
+      (this.#actBox ?? this.#layers).after(this.#chkBox);
+    }
+    const box = this.#chkBox;
+    box.innerHTML = "";
+    const r = checkScene(this.scene, this.#host.files(), this.#host.params().map((p) => p.key));
+    const h = document.createElement("div");
+    h.textContent = `${tr("check")}: ${r.errors.length ? `${r.errors.length} ${tr("errors")}` : tr("checkOk")}${r.warnings.length ? ` · ${r.warnings.length} ${tr("warnings")}` : ""}`;
+    h.style.cssText = `font-size:11px;color:${r.errors.length ? "#ff7b72" : "#3fb950"}`;
+    box.append(h);
+    for (const [list, color] of [[r.errors, "#ff7b72"], [r.warnings, "#e3b341"]] as const) {
+      for (const m of list) {
+        const d = document.createElement("div");
+        d.textContent = `• ${m}`;
+        d.style.cssText = `font-size:11px;color:${color}`;
+        box.append(d);
+      }
+    }
   }
   #actBox?: HTMLDivElement;
   #fontBox?: HTMLDivElement;

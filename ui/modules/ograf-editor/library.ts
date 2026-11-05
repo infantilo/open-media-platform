@@ -68,7 +68,7 @@ function promptDialog(message: string, initial = ""): Promise<string | null> {
 const isBinaryOrSvg = (n: string): boolean => isBinaryName(n) || n.toLowerCase().endsWith(".svg");
 
 const KIND_LABEL: Record<FieldKind, string> = {
-  text: "kText", multiline: "kMulti", number: "kNumber", bool: "kBool", color: "kColor", choice: "kChoice",
+  text: "kText", multiline: "kMulti", number: "kNumber", bool: "kBool", color: "kColor", choice: "kChoice", raw: "kRaw",
 };
 
 const STYLE = `
@@ -530,6 +530,15 @@ class OmpOgrafLibrary extends HTMLElement {
     );
     row(tr("resolution"), res);
     row(tr("frameRate"), this.#input(f.frameRate, "number", (v) => upd({ frameRate: Number(v) || 0 })));
+    const thumb = this.#el("select");
+    for (const n of ["", ...Object.keys(this.#files).filter((n) => /\.(png|jpe?g|webp|gif)$/i.test(n))]) {
+      const o = this.#el("option", "", n || tr("noThumb"));
+      o.value = n;
+      thumb.append(o);
+    }
+    thumb.value = f.thumbnail;
+    thumb.addEventListener("change", () => upd({ thumbnail: thumb.value }));
+    row(tr("thumbnail"), thumb);
     return form;
   }
   #writeFields() {
@@ -544,6 +553,20 @@ class OmpOgrafLibrary extends HTMLElement {
         this.#input(fd.key, "text", (v) => { fd.key = v; this.#writeFields(); }),
         this.#input(fd.title, "text", (v) => { fd.title = v; this.#writeFields(); }),
       );
+      if (fd.kind === "raw") {
+        const note = this.#el("span", "status", tr("rawField"));
+        note.style.gridColumn = "3 / 5";
+        row.append(note);
+        const ctl0 = this.#el("span", "bar");
+        ctl0.append(
+          this.#btn("▲", () => this.#move(i, -1), "", i === 0),
+          this.#btn("▼", () => this.#move(i, 1), "", i === this.#fields.length - 1),
+          this.#btn("✕", () => { this.#fields.splice(i, 1); this.#writeFields(); this.#render(); }),
+        );
+        row.append(this.#el("span"), ctl0);
+        box.append(row);
+        return;
+      }
       const sel = this.#el("select");
       for (const k of kinds) {
         const o = this.#el("option", "", tr(KIND_LABEL[k]));
@@ -624,6 +647,7 @@ class OmpOgrafLibrary extends HTMLElement {
       this.#canvas = new CanvasEditor({
         scene,
         images: () => Object.keys(this.#files).filter(isBinaryOrSvg),
+        files: () => Object.keys(this.#files),
         assetUrl: (n) => this.#assetUrl(n),
         fonts: () => Object.keys(this.#files).filter((n) => /\.(woff2?|ttf)$/i.test(n)),
         params: () => this.#fields.map((f) => ({ key: f.key, kind: f.kind })),

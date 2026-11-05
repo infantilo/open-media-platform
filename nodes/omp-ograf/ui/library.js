@@ -421,7 +421,8 @@ function formFromManifest(m) {
     supportsNonRealTime: m.supportsNonRealTime === true,
     width: ideal(res.width),
     height: ideal(res.height),
-    frameRate: ideal(req.frameRate)
+    frameRate: ideal(req.frameRate),
+    thumbnail: Array.isArray(m.thumbnails) && m.thumbnails[0] && typeof m.thumbnails[0] === "object" ? str(m.thumbnails[0].file) : ""
   };
 }
 function applyForm(prev, f, id) {
@@ -474,6 +475,15 @@ function applyForm(prev, f, id) {
   if (Object.keys(first).length) reqs[0] = first;
   else reqs.shift();
   opt("renderRequirements", reqs, reqs.length === 0);
+  const thumbs = Array.isArray(prev.thumbnails) ? [
+    ...prev.thumbnails
+  ] : [];
+  if (f.thumbnail) thumbs[0] = {
+    ...thumbs[0] ?? {},
+    file: f.thumbnail
+  };
+  else thumbs.shift();
+  opt("thumbnails", thumbs, thumbs.length === 0);
   return m;
 }
 function stringify(m) {
@@ -487,15 +497,20 @@ var FIELD_KINDS = [
   "color",
   "choice"
 ];
+var COLOR_PATTERN = "^#[0-9a-f]{6}$";
 var OWN_PROPS = /* @__PURE__ */ new Set([
   "type",
   "title",
   "default",
   "enum",
-  "gddType",
   "pattern"
 ]);
+var KIND_GDD = /* @__PURE__ */ new Set([
+  "color-rrggbb",
+  "multi-line"
+]);
 function kindOf(p) {
+  if (p.type === "array" || p.type === "object" || p.gddType === "select" || p.gddType === "select-multiple" || p.gddType === "color-rrggbbaa") return "raw";
   if (Array.isArray(p.enum) && p.enum.length) return "choice";
   if (p.type === "boolean") return "bool";
   if (p.type === "number" || p.type === "integer") return "number";
@@ -509,13 +524,17 @@ function fieldsFromSchema(schema) {
   const required = Array.isArray(s.required) ? s.required.filter((x) => typeof x === "string") : [];
   return Object.entries(props).map(([key, p]) => {
     const prop = p && typeof p === "object" ? p : {};
+    const kind = kindOf(prop);
     const extra = {};
-    for (const [k, v] of Object.entries(prop)) if (!OWN_PROPS.has(k)) extra[k] = v;
+    for (const [k, v] of Object.entries(prop)) {
+      if (kind === "raw") extra[k] = v;
+      else if (!OWN_PROPS.has(k) && !(k === "gddType" && KIND_GDD.has(String(v)))) extra[k] = v;
+    }
     return {
       key,
       title: str(prop.title),
-      kind: kindOf(prop),
-      def: prop.default === void 0 ? "" : String(prop.default),
+      kind,
+      def: kind === "raw" || prop.default === void 0 ? "" : String(prop.default),
       choices: Array.isArray(prop.enum) ? prop.enum.map(String) : [],
       required: required.includes(key),
       extra
@@ -528,6 +547,15 @@ function schemaFromFields(fields, prev) {
   } : {};
   const properties = {};
   for (const f of fields) {
+    if (f.kind === "raw") {
+      properties[f.key] = {
+        ...f.extra,
+        ...f.title ? {
+          title: f.title
+        } : {}
+      };
+      continue;
+    }
     const p = {
       ...f.extra
     };
@@ -544,8 +572,8 @@ function schemaFromFields(fields, prev) {
       case "color":
         p.type = "string";
         p.gddType = "color-rrggbb";
-        p.pattern = "^#[0-9a-fA-F]{6}$";
-        if (f.def) p.default = f.def;
+        p.pattern = COLOR_PATTERN;
+        if (f.def) p.default = f.def.toLowerCase();
         break;
       case "choice":
         p.type = "string";
@@ -581,13 +609,14 @@ function validateFields(fields) {
     if (f.kind === "choice" && f.def && !f.choices.includes(f.def)) out.push(`\u201E${f.key}\u201C: Vorgabe nicht in der Auswahl`);
     if (f.kind === "number" && f.def.trim() !== "" && !Number.isFinite(Number(f.def))) out.push(`\u201E${f.key}\u201C: Vorgabe keine Zahl`);
     if (f.kind === "color" && f.def && !/^#[0-9a-fA-F]{6}$/.test(f.def)) out.push(`\u201E${f.key}\u201C: Farbe als #rrggbb`);
+    if (f.kind === "raw") continue;
   }
   return out;
 }
 function defaultsOf(fields) {
   const o = {};
   for (const f of fields) {
-    if (f.def === "") continue;
+    if (f.def === "" || f.kind === "raw") continue;
     o[f.key] = f.kind === "number" ? Number(f.def) : f.kind === "bool" ? f.def === "true" : f.def;
   }
   return o;
@@ -992,6 +1021,38 @@ function setActions(s, actions) {
   return {
     ...s,
     actions
+  };
+}
+function checkScene(s, fileNames, paramKeys) {
+  const errors = [];
+  const warnings = [];
+  const files = new Set(fileNames);
+  const ids = new Set(s.elements.map((e) => e.id));
+  const zones = /* @__PURE__ */ new Map();
+  for (const e of s.elements) {
+    const who = `\u201E${e.name}\u201C`;
+    if (e.kind === "image") {
+      if (!e.file) errors.push(`${who}: kein Bild gew\xE4hlt`);
+      else if (!files.has(e.file)) errors.push(`${who}: Bilddatei \u201E${e.file}\u201C fehlt im Paket`);
+    }
+    if (e.kind === "zone") zones.set(e.zone ?? "", (zones.get(e.zone ?? "") ?? 0) + 1);
+    if (e.kind === "text" && !(e.text ?? "").trim()) warnings.push(`${who}: leerer Text`);
+    if (e.x + e.w <= 0 || e.y + e.h <= 0 || e.x >= s.width || e.y >= s.height) warnings.push(`${who}: liegt ganz au\xDFerhalb der Fl\xE4che`);
+    if (e.opacity === 0) warnings.push(`${who}: Deckkraft 0 \u2014 unsichtbar`);
+    if ((e.from ?? 0) >= (s.stepCount ?? 1)) warnings.push(`${who}: erscheint erst nach dem letzten Schritt`);
+    if (e.to !== void 0 && e.to >= 0 && e.to < (e.from ?? 0)) warnings.push(`${who}: \u201Ebis\u201C liegt vor \u201Evon\u201C (Schritt)`);
+  }
+  for (const [z, n] of zones) if (n > 1) errors.push(`Zone \u201E${z}\u201C kommt ${n}\xD7 vor \u2014 die ID muss eindeutig sein`);
+  for (const f of s.fonts ?? []) if (!files.has(f.file)) errors.push(`Schrift \u201E${f.family}\u201C: Datei \u201E${f.file}\u201C fehlt im Paket`);
+  for (const a of s.actions ?? []) {
+    if (!a.effects.length) warnings.push(`Aktion \u201E${a.name}\u201C hat keine Effekte`);
+    for (const fx of a.effects) if (!ids.has(fx.target)) errors.push(`Aktion \u201E${a.name}\u201C: Ziel \u201E${fx.target}\u201C gibt es nicht mehr`);
+  }
+  const keys = new Set(paramKeys);
+  for (const p of placeholders(s)) if (!keys.has(p)) warnings.push(`Platzhalter {{${p}}} hat noch keinen Parameter (wird beim Speichern erg\xE4nzt)`);
+  return {
+    errors,
+    warnings
   };
 }
 function setStepCount(s, n) {
@@ -1405,14 +1466,14 @@ function newDesignerPackage(id, name, runtime) {
           type: "string",
           title: "Balkenfarbe",
           gddType: "color-rrggbb",
-          pattern: "^#[0-9a-fA-F]{6}$",
+          pattern: COLOR_PATTERN,
           default: "#10151f"
         },
         accentColor: {
           type: "string",
           title: "Akzentfarbe",
           gddType: "color-rrggbb",
-          pattern: "^#[0-9a-fA-F]{6}$",
+          pattern: COLOR_PATTERN,
           default: "#00c8ff"
         }
       }
@@ -1654,6 +1715,12 @@ var messages = {
     fx_flash: "Blinken",
     fx_shake: "Wackeln",
     fx_bounce: "H\xFCpfen",
+    kRaw: "Erweitert",
+    rawField: "Erweiterte Eigenschaft (z. B. Mehrfachauswahl) \u2014 im Quelltext bearbeiten",
+    check: "Pr\xFCfung",
+    checkOk: "in Ordnung",
+    thumbnail: "Vorschaubild",
+    noThumb: "\u2013 keines \u2013",
     generated: "Erzeugt aus der Leinwand \u2014 nicht von Hand bearbeiten."
   },
   en: {
@@ -1806,6 +1873,12 @@ var messages = {
     fx_flash: "Flash",
     fx_shake: "Shake",
     fx_bounce: "Bounce",
+    kRaw: "Advanced",
+    rawField: "Advanced property (e.g. multiple choice) \u2014 edit in the Source tab",
+    check: "Check",
+    checkOk: "all good",
+    thumbnail: "Thumbnail",
+    noThumb: "\u2013 none \u2013",
     generated: "Generated from the canvas \u2014 do not edit by hand."
   }
 };
@@ -2129,6 +2202,39 @@ var CanvasEditor = class {
     if (!this.scene.elements.length) box.append(document.createTextNode(tr("canvasEmpty")));
     this.#drawFonts();
     this.#drawActions();
+    this.#drawCheck();
+  }
+  #chkBox;
+  #drawCheck() {
+    if (!this.#chkBox) {
+      this.#chkBox = document.createElement("div");
+      this.#chkBox.className = "col";
+      (this.#actBox ?? this.#layers).after(this.#chkBox);
+    }
+    const box = this.#chkBox;
+    box.innerHTML = "";
+    const r = checkScene(this.scene, this.#host.files(), this.#host.params().map((p) => p.key));
+    const h = document.createElement("div");
+    h.textContent = `${tr("check")}: ${r.errors.length ? `${r.errors.length} ${tr("errors")}` : tr("checkOk")}${r.warnings.length ? ` \xB7 ${r.warnings.length} ${tr("warnings")}` : ""}`;
+    h.style.cssText = `font-size:11px;color:${r.errors.length ? "#ff7b72" : "#3fb950"}`;
+    box.append(h);
+    for (const [list, color] of [
+      [
+        r.errors,
+        "#ff7b72"
+      ],
+      [
+        r.warnings,
+        "#e3b341"
+      ]
+    ]) {
+      for (const m of list) {
+        const d = document.createElement("div");
+        d.textContent = `\u2022 ${m}`;
+        d.style.cssText = `font-size:11px;color:${color}`;
+        box.append(d);
+      }
+    }
   }
   #actBox;
   #fontBox;
@@ -3230,7 +3336,8 @@ var KIND_LABEL2 = {
   number: "kNumber",
   bool: "kBool",
   color: "kColor",
-  choice: "kChoice"
+  choice: "kChoice",
+  raw: "kRaw"
 };
 var STYLE2 = `
 :host { display: block; font-family: var(--omp-font, system-ui, sans-serif); color: var(--omp-text, #e8eaed); font-size: var(--omp-font-size-sm, 12px); }
@@ -3783,6 +3890,20 @@ var OmpOgrafLibrary = class extends HTMLElement {
     row(tr2("frameRate"), this.#input(f.frameRate, "number", (v) => upd({
       frameRate: Number(v) || 0
     })));
+    const thumb = this.#el("select");
+    for (const n of [
+      "",
+      ...Object.keys(this.#files).filter((n2) => /\.(png|jpe?g|webp|gif)$/i.test(n2))
+    ]) {
+      const o = this.#el("option", "", n || tr2("noThumb"));
+      o.value = n;
+      thumb.append(o);
+    }
+    thumb.value = f.thumbnail;
+    thumb.addEventListener("change", () => upd({
+      thumbnail: thumb.value
+    }));
+    row(tr2("thumbnail"), thumb);
     return form;
   }
   #writeFields() {
@@ -3803,6 +3924,20 @@ var OmpOgrafLibrary = class extends HTMLElement {
         fd.title = v;
         this.#writeFields();
       }));
+      if (fd.kind === "raw") {
+        const note = this.#el("span", "status", tr2("rawField"));
+        note.style.gridColumn = "3 / 5";
+        row.append(note);
+        const ctl0 = this.#el("span", "bar");
+        ctl0.append(this.#btn("\u25B2", () => this.#move(i, -1), "", i === 0), this.#btn("\u25BC", () => this.#move(i, 1), "", i === this.#fields.length - 1), this.#btn("\u2715", () => {
+          this.#fields.splice(i, 1);
+          this.#writeFields();
+          this.#render();
+        }));
+        row.append(this.#el("span"), ctl0);
+        box.append(row);
+        return;
+      }
       const sel = this.#el("select");
       for (const k of kinds) {
         const o = this.#el("option", "", tr2(KIND_LABEL2[k]));
@@ -3919,6 +4054,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
       this.#canvas = new CanvasEditor({
         scene,
         images: () => Object.keys(this.#files).filter(isBinaryOrSvg),
+        files: () => Object.keys(this.#files),
         assetUrl: (n) => this.#assetUrl(n),
         fonts: () => Object.keys(this.#files).filter((n) => /\.(woff2?|ttf)$/i.test(n)),
         params: () => this.#fields.map((f) => ({

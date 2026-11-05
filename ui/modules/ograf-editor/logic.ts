@@ -58,6 +58,8 @@ export interface ManifestForm {
   width: number;
   height: number;
   frameRate: number;
+  /** Vorschaubild (Datei im Paket) oder leer. */
+  thumbnail: string;
 }
 
 const str = (v: unknown): string => typeof v === "string" ? v : "";
@@ -86,6 +88,7 @@ export function formFromManifest(m: Json): ManifestForm {
     width: ideal(res.width),
     height: ideal(res.height),
     frameRate: ideal(req.frameRate),
+    thumbnail: Array.isArray(m.thumbnails) && m.thumbnails[0] && typeof m.thumbnails[0] === "object" ? str((m.thumbnails[0] as Json).file) : "",
   };
 }
 
@@ -117,6 +120,10 @@ export function applyForm(prev: Json, f: ManifestForm, id: string): Json {
   if (Object.keys(first).length) reqs[0] = first;
   else reqs.shift();
   opt("renderRequirements", reqs, reqs.length === 0);
+  const thumbs = Array.isArray(prev.thumbnails) ? [...prev.thumbnails] as Json[] : [];
+  if (f.thumbnail) thumbs[0] = { ...(thumbs[0] ?? {}), file: f.thumbnail };
+  else thumbs.shift();
+  opt("thumbnails", thumbs, thumbs.length === 0);
   return m;
 }
 
@@ -126,8 +133,11 @@ export function stringify(m: Json): string {
 
 // ── Parameter-Schema als Feldliste ────────────────────────────────────────────────────────────────────────
 
-export type FieldKind = "text" | "multiline" | "number" | "bool" | "color" | "choice";
+export type FieldKind = "text" | "multiline" | "number" | "bool" | "color" | "choice" | "raw";
+/** Bearbeitbare Arten (`raw` = Eigenschaft mit Aufbau, den das Formular nicht kennt; bleibt unverändert, Bearbeitung im Quelltext). */
 export const FIELD_KINDS: FieldKind[] = ["text", "multiline", "number", "bool", "color", "choice"];
+/** Farbmuster laut `gdd/gdd-types.json` (Kleinbuchstaben). */
+export const COLOR_PATTERN = "^#[0-9a-f]{6}$";
 
 export interface Field {
   key: string;
@@ -141,9 +151,12 @@ export interface Field {
   extra: Json;
 }
 
-const OWN_PROPS = new Set(["type", "title", "default", "enum", "gddType", "pattern"]);
+const OWN_PROPS = new Set(["type", "title", "default", "enum", "pattern"]);
+/** gddType-Werte, die eine Art des Formulars selbst festlegt (alle anderen bleiben in `extra`). */
+const KIND_GDD = new Set(["color-rrggbb", "multi-line"]);
 
 function kindOf(p: Json): FieldKind {
+  if (p.type === "array" || p.type === "object" || p.gddType === "select" || p.gddType === "select-multiple" || p.gddType === "color-rrggbbaa") return "raw";
   if (Array.isArray(p.enum) && p.enum.length) return "choice";
   if (p.type === "boolean") return "bool";
   if (p.type === "number" || p.type === "integer") return "number";
@@ -158,13 +171,17 @@ export function fieldsFromSchema(schema: unknown): Field[] {
   const required = Array.isArray(s.required) ? s.required.filter((x): x is string => typeof x === "string") : [];
   return Object.entries(props).map(([key, p]) => {
     const prop = (p && typeof p === "object" ? p : {}) as Json;
+    const kind = kindOf(prop);
     const extra: Json = {};
-    for (const [k, v] of Object.entries(prop)) if (!OWN_PROPS.has(k)) extra[k] = v;
+    for (const [k, v] of Object.entries(prop)) {
+      if (kind === "raw") extra[k] = v;
+      else if (!OWN_PROPS.has(k) && !(k === "gddType" && KIND_GDD.has(String(v)))) extra[k] = v;
+    }
     return {
       key,
       title: str(prop.title),
-      kind: kindOf(prop),
-      def: prop.default === undefined ? "" : String(prop.default),
+      kind,
+      def: kind === "raw" || prop.default === undefined ? "" : String(prop.default),
       choices: Array.isArray(prop.enum) ? prop.enum.map(String) : [],
       required: required.includes(key),
       extra,
@@ -177,6 +194,10 @@ export function schemaFromFields(fields: Field[], prev: unknown): Json {
   const base = (prev && typeof prev === "object" && !Array.isArray(prev) ? { ...(prev as Json) } : {}) as Json;
   const properties: Record<string, Json> = {};
   for (const f of fields) {
+    if (f.kind === "raw") {
+      properties[f.key] = { ...f.extra, ...(f.title ? { title: f.title } : {}) };
+      continue;
+    }
     const p: Json = { ...f.extra };
     if (f.title) p.title = f.title;
     switch (f.kind) {
@@ -191,8 +212,8 @@ export function schemaFromFields(fields: Field[], prev: unknown): Json {
       case "color":
         p.type = "string";
         p.gddType = "color-rrggbb";
-        p.pattern = "^#[0-9a-fA-F]{6}$";
-        if (f.def) p.default = f.def;
+        p.pattern = COLOR_PATTERN;
+        if (f.def) p.default = f.def.toLowerCase();
         break;
       case "choice":
         p.type = "string";
@@ -230,6 +251,7 @@ export function validateFields(fields: Field[]): string[] {
     if (f.kind === "choice" && f.def && !f.choices.includes(f.def)) out.push(`„${f.key}“: Vorgabe nicht in der Auswahl`);
     if (f.kind === "number" && f.def.trim() !== "" && !Number.isFinite(Number(f.def))) out.push(`„${f.key}“: Vorgabe keine Zahl`);
     if (f.kind === "color" && f.def && !/^#[0-9a-fA-F]{6}$/.test(f.def)) out.push(`„${f.key}“: Farbe als #rrggbb`);
+    if (f.kind === "raw") continue;
   }
   return out;
 }
@@ -238,7 +260,7 @@ export function validateFields(fields: Field[]): string[] {
 export function defaultsOf(fields: Field[]): Record<string, unknown> {
   const o: Record<string, unknown> = {};
   for (const f of fields) {
-    if (f.def === "") continue;
+    if (f.def === "" || f.kind === "raw") continue;
     o[f.key] = f.kind === "number" ? Number(f.def) : f.kind === "bool" ? f.def === "true" : f.def;
   }
   return o;

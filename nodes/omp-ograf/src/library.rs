@@ -182,6 +182,23 @@ pub fn check(id: &str, files: &Files) -> Report {
             r.errors.push("author.name fehlt".into());
         }
     }
+    if let Some(sc) = obj.get("schema") {
+        check_gdd(sc, "schema", true, &mut r);
+    }
+    for (key, val) in [("renderRequirements", obj.get("renderRequirements")), ("thumbnails", obj.get("thumbnails")), ("actionDurations", obj.get("actionDurations"))] {
+        if let Some(v) = val {
+            check_list_fields(key, v, &mut r);
+        }
+    }
+    if let Some(list) = obj.get("thumbnails").and_then(Value::as_array) {
+        for (i, t) in list.iter().enumerate() {
+            if let Some(f) = t.get("file").and_then(Value::as_str)
+                && !files.contains_key(f)
+            {
+                r.errors.push(format!("thumbnails[{i}]: Datei „{f}“ ist nicht im Paket"));
+            }
+        }
+    }
     if let Some(ca) = obj.get("customActions") {
         match ca.as_array() {
             None => r.errors.push("customActions muss eine Liste sein".into()),
@@ -218,6 +235,126 @@ pub fn check(id: &str, files: &Files) -> Report {
         }
     }
     r
+}
+
+const GDD_TYPES: [&str; 6] = ["boolean", "string", "number", "integer", "array", "object"];
+const GDD_KINDS: [&str; 10] = [
+    "single-line", "multi-line", "file-path", "file-path/image-path", "select", "select-multiple", "color-rrggbb", "color-rrggbbaa", "percentage", "duration-ms",
+];
+
+/// Prüft ein Parameter-Schema nach `gdd/object.json` + `gdd/gdd-types.json` (gelesen 2026-11-05): jede Eigenschaft braucht `type` aus
+/// der Liste; `gddType` nur aus den zehn bekannten Werten und passend zum Grundtyp; Farben mit dem vorgeschriebenen Muster; `select` mit
+/// `enum` und `gddOptions`. Abweichungen sind **Hinweise** (ältere Importe halten sich nicht daran), nur ein kaputter Aufbau ist ein Fehler.
+fn check_gdd(node: &Value, path: &str, top: bool, r: &mut Report) {
+    let Some(o) = node.as_object() else {
+        r.errors.push(format!("{path}: muss ein Objekt sein"));
+        return;
+    };
+    let ty = o.get("type").and_then(Value::as_str);
+    match ty {
+        None => r.warnings.push(format!("{path}: „type“ fehlt (Pflicht im GDD-Schema)")),
+        Some(t) if !GDD_TYPES.contains(&t) => r.warnings.push(format!("{path}: type „{t}“ ist kein GDD-Typ")),
+        _ => {}
+    }
+    if top && ty.is_some_and(|t| t != "object") {
+        r.warnings.push(format!("{path}: das Parameter-Schema sollte type „object“ haben"));
+    }
+    if let Some(h) = o.get("hidden")
+        && !h.is_boolean()
+    {
+        r.warnings.push(format!("{path}: hidden muss ja/nein sein"));
+    }
+    if let Some(n) = o.get("order")
+        && !n.is_number()
+    {
+        r.warnings.push(format!("{path}: order muss eine Zahl sein"));
+    }
+    if let Some(g) = o.get("gddType") {
+        match g.as_str() {
+            Some(k) if GDD_KINDS.contains(&k) => {
+                let want: &[&str] = match k {
+                    "single-line" | "multi-line" | "file-path" | "file-path/image-path" | "color-rrggbb" | "color-rrggbbaa" => &["string"],
+                    "select" => &["string", "number", "integer"],
+                    "select-multiple" => &["array"],
+                    "percentage" => &["number"],
+                    _ => &["integer"], // duration-ms
+                };
+                if let Some(t) = ty
+                    && !want.contains(&t)
+                {
+                    r.warnings.push(format!("{path}: gddType „{k}“ gehört zu type {}", want.join("/")));
+                }
+                let pattern = o.get("pattern").and_then(Value::as_str);
+                if k == "color-rrggbb" && pattern != Some("^#[0-9a-f]{6}$") {
+                    r.warnings.push(format!("{path}: color-rrggbb braucht pattern „^#[0-9a-f]{{6}}$“"));
+                }
+                if k == "color-rrggbbaa" && pattern != Some("^#[0-9a-f]{8}$") {
+                    r.warnings.push(format!("{path}: color-rrggbbaa braucht pattern „^#[0-9a-f]{{8}}$“"));
+                }
+                if k == "select" && (!o.get("enum").is_some_and(Value::is_array) || !o.get("gddOptions").is_some_and(Value::is_object)) {
+                    r.warnings.push(format!("{path}: select braucht enum und gddOptions"));
+                }
+            }
+            Some(k) => r.warnings.push(format!("{path}: gddType „{k}“ ist nicht definiert")),
+            None => r.warnings.push(format!("{path}: gddType muss Text sein")),
+        }
+    }
+    if let Some(e) = o.get("enum")
+        && !e.is_array()
+    {
+        r.errors.push(format!("{path}: enum muss eine Liste sein"));
+    }
+    match o.get("properties") {
+        Some(Value::Object(props)) => {
+            for (k, v) in props {
+                check_gdd(v, &format!("{path}.{k}"), false, r);
+            }
+        }
+        Some(_) => r.errors.push(format!("{path}: properties muss ein Objekt sein")),
+        None => {}
+    }
+    if let Some(items) = o.get("items") {
+        check_gdd(items, &format!("{path}[]"), false, r);
+    }
+}
+
+/// `renderRequirements`, `thumbnails`, `actionDurations`: Listen von Objekten mit den Pflichtfeldern des Schemas.
+fn check_list_fields(key: &str, v: &Value, r: &mut Report) {
+    let Some(list) = v.as_array() else {
+        r.errors.push(format!("{key} muss eine Liste sein"));
+        return;
+    };
+    for (i, item) in list.iter().enumerate() {
+        let Some(o) = item.as_object() else {
+            r.errors.push(format!("{key}[{i}] muss ein Objekt sein"));
+            continue;
+        };
+        let (allowed, required): (&[&str], &[&str]) = match key {
+            "renderRequirements" => (&["resolution", "frameRate", "accessToPublicInternet", "engine"], &[]),
+            "thumbnails" => (&["file", "resolution"], &["file"]),
+            _ => (&["type", "duration"], &["type", "duration"]),
+        };
+        for k in required {
+            if !o.contains_key(*k) {
+                r.errors.push(format!("{key}[{i}]: „{k}“ fehlt"));
+            }
+        }
+        for k in o.keys() {
+            if !allowed.contains(&k.as_str()) && !k.starts_with("v_") {
+                r.errors.push(format!("{key}[{i}]: Feld „{k}“ ist im Schema nicht erlaubt"));
+            }
+        }
+        if key == "actionDurations" {
+            if let Some(t) = o.get("type").and_then(Value::as_str)
+                && !["playAction", "updateAction", "stopAction", "customAction"].contains(&t)
+            {
+                r.errors.push(format!("{key}[{i}]: type „{t}“ unbekannt"));
+            }
+            if o.get("duration").and_then(Value::as_i64).is_none_or(|d| d < -1) {
+                r.errors.push(format!("{key}[{i}]: duration muss eine ganze Zahl ≥ −1 sein"));
+            }
+        }
+    }
 }
 
 fn pkg_dir(root: &Path, id: &str) -> Result<PathBuf, String> {
@@ -447,6 +584,72 @@ mod tests {
         assert!(read(&root, "b").unwrap()["errors"].as_array().unwrap().is_empty());
         assert!(std::fs::read_dir(&root).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with('.')));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn schema_follows_the_gdd_types() {
+        let mut f = skeleton("a", "A");
+        let mut m: Value = serde_json::from_str(&f["a.ograf.json"]).unwrap();
+        m["schema"] = json!({"type": "object", "properties": {
+            "c": {"type": "string", "gddType": "color-rrggbb", "pattern": "^#[0-9a-f]{6}$", "default": "#ffffff"},
+            "d": {"type": "integer", "gddType": "duration-ms"},
+            "s": {"type": "string", "enum": ["a", "b"]},
+            "arr": {"type": "array", "items": {"type": "string"}, "gddType": "select-multiple"},
+        }});
+        f.insert("a.ograf.json".into(), m.to_string());
+        let r = check("a", &f);
+        assert!(r.errors.is_empty() && r.warnings.iter().all(|w| w.contains("select-multiple")), "{r:?}");
+        m["schema"] = json!({"type": "object", "properties": {
+            "c": {"type": "string", "gddType": "color-rrggbb", "pattern": "^#[0-9a-fA-F]{6}$"},
+            "x": {"gddType": "bogus"},
+            "n": {"type": "string", "gddType": "percentage"},
+            "q": {"type": "kaputt"},
+        }});
+        f.insert("a.ograf.json".into(), m.to_string());
+        let w = check("a", &f).warnings.join("|");
+        assert!(w.contains("schema.c") && w.contains("pattern"), "{w}");
+        assert!(w.contains("schema.x: „type“ fehlt") && w.contains("bogus") && w.contains("schema.n: gddType „percentage“") && w.contains("kein GDD-Typ"), "{w}");
+        m["schema"] = json!({"type": "object", "properties": {"p": {"type": "string", "enum": "nope"}}});
+        f.insert("a.ograf.json".into(), m.to_string());
+        assert!(check("a", &f).errors.iter().any(|e| e.contains("enum muss eine Liste")));
+    }
+
+    #[test]
+    fn nested_lists_and_thumbnails_are_checked() {
+        let mut f = skeleton("a", "A");
+        let mut m: Value = serde_json::from_str(&f["a.ograf.json"]).unwrap();
+        m["thumbnails"] = json!([{"file": "t.png"}]);
+        m["actionDurations"] = json!([{"type": "playAction", "duration": 500}]);
+        m["renderRequirements"] = json!([{"resolution": {"width": {"ideal": 1920}}}]);
+        f.insert("a.ograf.json".into(), m.to_string());
+        let e = check("a", &f).errors.join("|");
+        assert!(e.contains("nicht im Paket"), "{e}");
+        f.insert("t.png".into(), "base64:AAAA".into());
+        assert!(check("a", &f).errors.is_empty());
+        m["actionDurations"] = json!([{"type": "x", "duration": -5}, {"type": "stopAction"}]);
+        m["renderRequirements"] = json!([{"bogus": 1}]);
+        f.insert("a.ograf.json".into(), m.to_string());
+        let e = check("a", &f).errors.join("|");
+        assert!(e.contains("unbekannt") && e.contains("duration") && e.contains("bogus"), "{e}");
+    }
+
+    #[test]
+    #[ignore = "liest das echte Vorlagenverzeichnis (data/ograf-templates), nur zur Sichtung"]
+    fn survey_real_templates() {
+        let root = std::path::Path::new("../../data/ograf-templates");
+        let list = list(root);
+        let items = list.as_array().unwrap();
+        let (mut bad, mut warn) = (0, 0);
+        for e in items {
+            if !e["valid"].as_bool().unwrap() {
+                bad += 1;
+                println!("FEHLER {}: {}", e["id"], e["errors"]);
+            }
+            if !e["warnings"].as_array().unwrap().is_empty() {
+                warn += 1;
+            }
+        }
+        println!("{} Pakete, {} mit Fehlern, {} mit Hinweisen", items.len(), bad, warn);
     }
 
     #[test]

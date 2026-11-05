@@ -2,7 +2,7 @@ import { assertEquals, assertNotEquals } from "jsr:@std/assert@1";
 import RUNTIME from "./runtime.js" with { type: "text" };
 import { bindText, effectKeyframes, inStep, keyframesFor } from "./runtime.js";
 import {
-  addElement, alignGroup, alignToScene, angleFor, boundsOf, distribute, duplicateMany, elementsInRect, ensureParams, newAction, resizeRotated, setActions, setStepCount, setTiming, timelineEnd, applyScene, duplicateElement, generateMain, hitTest, History, isDesigner, moveElements, newDesignerPackage,
+  addElement, alignGroup, checkScene, alignToScene, angleFor, boundsOf, distribute, duplicateMany, elementsInRect, ensureParams, newAction, resizeRotated, setActions, setStepCount, setTiming, timelineEnd, applyScene, duplicateElement, generateMain, hitTest, History, isDesigner, moveElements, newDesignerPackage,
   newElement, newScene, parseScene, placeholders, removeElements, reorder, resizeBox, SCENE_FORMAT, snapBox, updateElement, usedAssets, zoneIds,
 } from "./scene.ts";
 import { parseManifest } from "./logic.ts";
@@ -264,4 +264,20 @@ Deno.test("Aktionen: Effekte, Modell, Manifest-customActions", () => {
   ] }))!;
   assertEquals(p.actions!.length, 1);
   assertEquals(p.actions![0].effects.map((f) => f.type), ["shake"]);
+});
+
+Deno.test("checkScene meldet Fehler und Hinweise", () => {
+  let s = newScene();
+  s = addElement(s, { ...newElement("image", s), id: "i1", name: "Logo", file: "" });
+  s = addElement(s, { ...newElement("image", s), id: "i2", name: "Foto", file: "weg.png" });
+  s = addElement(s, { ...newElement("zone", s), id: "z1", zone: "w" });
+  s = addElement(s, { ...newElement("zone", s), id: "z2", zone: "w" });
+  s = addElement(s, { ...newElement("text", s), id: "t1", name: "Leer", text: " ", x: 5000 });
+  s = addElement(s, { ...newElement("text", s), id: "t2", text: "{{neu}}", opacity: 0, from: 3 });
+  s = { ...s, fonts: [{ family: "F", file: "f.ttf" }], actions: [{ id: "a", name: "A", effects: [{ target: "weg", type: "pulse", ms: 100, delay: 0 }] }, { id: "b", name: "B", effects: [] }] };
+  const r = checkScene(s, ["f.ttf"], []);
+  const e = r.errors.join("|"), w = r.warnings.join("|");
+  assertEquals([e.includes("kein Bild"), e.includes("weg.png"), e.includes("Zone „w“"), e.includes("Ziel „weg“"), e.includes("f.ttf")], [true, true, true, true, false]);
+  assertEquals([w.includes("leerer Text"), w.includes("außerhalb"), w.includes("Deckkraft 0"), w.includes("nach dem letzten Schritt"), w.includes("{{neu}}"), w.includes("keine Effekte")], [true, true, true, true, true, true]);
+  assertEquals(checkScene(newScene(), [], []), { errors: [], warnings: [] });
 });

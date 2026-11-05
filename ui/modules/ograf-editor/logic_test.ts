@@ -66,6 +66,7 @@ Deno.test("Schema ↔ Feldliste: Arten, Vorgaben, unbekannte Eigenschaften bleib
   assertEquals(p.n, { type: "number", default: 3, minimum: 0 });
   assertEquals(p.side.enumNames, ["L", "R"]);
   assertEquals(p.c.gddType, "color-rrggbb");
+  assertEquals(p.c.pattern, "^#[0-9a-f]{6}$"); // GDD-Muster (Kleinbuchstaben), auch wenn das Eingangsschema "[0-9a-f]" hatte
   assertEquals(defaultsOf(fields), { name: "Gast", n: 3, on: true, c: "#ff8c00", side: "left" });
 });
 
@@ -109,4 +110,37 @@ Deno.test("renamePackage zieht Manifest, id und main mit um", () => {
   const m = parseManifest(out)!;
   assertEquals([m.id, m.main], ["y", "y.js"]);
   assertEquals(m.designWidth, 1920); // unbekannte Felder bleiben
+});
+
+Deno.test("GDD: Farbwert klein, unbekannte gddType/komplexe Eigenschaften bleiben erhalten", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      c: { type: "string", gddType: "color-rrggbb", pattern: "^#[0-9a-f]{6}$", default: "#FF8C00" },
+      p: { type: "number", gddType: "percentage", default: 50 },
+      d: { type: "integer", gddType: "duration-ms" },
+      f: { type: "string", gddType: "file-path/image-path", gddOptions: { extensions: ["png"] } },
+      m: { type: "array", gddType: "select-multiple", items: { type: "string", enum: ["a"] }, gddOptions: { labels: { a: "A" } } },
+      h: { type: "string", hidden: true, order: 3 },
+    },
+  };
+  const fields = fieldsFromSchema(schema);
+  assertEquals(fields.map((f) => f.kind), ["color", "number", "number", "text", "raw", "text"]);
+  const back = schemaFromFields(fields, schema) as { properties: Record<string, Record<string, unknown>> };
+  assertEquals(back.properties.c.default, "#ff8c00"); // klein geschrieben
+  assertEquals(back.properties.p.gddType, "percentage"); // bleibt
+  assertEquals(back.properties.f.gddOptions, { extensions: ["png"] });
+  assertEquals(back.properties.m, schema.properties.m); // komplex: unverändert
+  assertEquals([back.properties.h.hidden, back.properties.h.order], [true, 3]);
+  assertEquals(defaultsOf(fields), { c: "#FF8C00", p: 50 }); // raw wird nicht zum Vorgabewert
+  assertEquals(validateFields(fields), []);
+});
+
+Deno.test("Formular: Vorschaubild wird gesetzt und entfernt", () => {
+  const f = { ...formFromManifest(MANIFEST), thumbnail: "vorschau.png" };
+  const m = applyForm(MANIFEST, f, "x");
+  assertEquals(m.thumbnails, [{ file: "vorschau.png" }]);
+  assertEquals(formFromManifest(m).thumbnail, "vorschau.png");
+  const m2 = applyForm(m, { ...f, thumbnail: "" }, "x");
+  assertEquals("thumbnails" in m2, false);
 });

@@ -1,7 +1,7 @@
 // Szenenmodell der Designer-Vorlagen (Kapitel 90.5): Elemente auf einer Fläche (Text, Rechteck, Bild, Zone) samt Verschieben,
 // Skalieren, Ausrichten, Reihenfolge, Platzhaltern `{{schluessel}}` und der Erzeugung der Paketdateien. Rein und ohne DOM
 // (Deno-Tests). Gespeichert wird `scene.json` im Paket; die Vorlagen-Datei `<id>.js` ist daraus + `runtime.js` erzeugt.
-import { SCHEMA_URL, stringify } from "./logic.ts";
+import { COLOR_PATTERN, SCHEMA_URL, stringify } from "./logic.ts";
 import type { Field, Files } from "./logic.ts";
 
 export const SCENE_FORMAT = "omp-ograf-scene/1";
@@ -275,6 +275,42 @@ export function setActions(s: Scene, actions: SceneAction[]): Scene {
   return { ...s, actions };
 }
 
+export interface SceneCheck {
+  errors: string[];
+  warnings: string[];
+}
+
+/** Prüft die Szene auf Fehler, die erst im Sendebetrieb auffallen würden (fehlende Dateien, tote Verweise, unsichtbare Elemente). */
+export function checkScene(s: Scene, fileNames: string[], paramKeys: string[]): SceneCheck {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const files = new Set(fileNames);
+  const ids = new Set(s.elements.map((e) => e.id));
+  const zones = new Map<string, number>();
+  for (const e of s.elements) {
+    const who = `„${e.name}“`;
+    if (e.kind === "image") {
+      if (!e.file) errors.push(`${who}: kein Bild gewählt`);
+      else if (!files.has(e.file)) errors.push(`${who}: Bilddatei „${e.file}“ fehlt im Paket`);
+    }
+    if (e.kind === "zone") zones.set(e.zone ?? "", (zones.get(e.zone ?? "") ?? 0) + 1);
+    if (e.kind === "text" && !(e.text ?? "").trim()) warnings.push(`${who}: leerer Text`);
+    if (e.x + e.w <= 0 || e.y + e.h <= 0 || e.x >= s.width || e.y >= s.height) warnings.push(`${who}: liegt ganz außerhalb der Fläche`);
+    if (e.opacity === 0) warnings.push(`${who}: Deckkraft 0 — unsichtbar`);
+    if ((e.from ?? 0) >= (s.stepCount ?? 1)) warnings.push(`${who}: erscheint erst nach dem letzten Schritt`);
+    if (e.to !== undefined && e.to >= 0 && e.to < (e.from ?? 0)) warnings.push(`${who}: „bis“ liegt vor „von“ (Schritt)`);
+  }
+  for (const [z, n] of zones) if (n > 1) errors.push(`Zone „${z}“ kommt ${n}× vor — die ID muss eindeutig sein`);
+  for (const f of s.fonts ?? []) if (!files.has(f.file)) errors.push(`Schrift „${f.family}“: Datei „${f.file}“ fehlt im Paket`);
+  for (const a of s.actions ?? []) {
+    if (!a.effects.length) warnings.push(`Aktion „${a.name}“ hat keine Effekte`);
+    for (const fx of a.effects) if (!ids.has(fx.target)) errors.push(`Aktion „${a.name}“: Ziel „${fx.target}“ gibt es nicht mehr`);
+  }
+  const keys = new Set(paramKeys);
+  for (const p of placeholders(s)) if (!keys.has(p)) warnings.push(`Platzhalter {{${p}}} hat noch keinen Parameter (wird beim Speichern ergänzt)`);
+  return { errors, warnings };
+}
+
 /** Anzahl Schritte setzen und die Schrittbereiche der Elemente einpassen. */
 export function setStepCount(s: Scene, n: number): Scene {
   const count = Math.min(20, Math.max(1, Math.round(n)));
@@ -515,8 +551,8 @@ export function newDesignerPackage(id: string, name: string, runtime: string): F
       properties: {
         name: { type: "string", title: "Name", default: "Max Mustermann" },
         title: { type: "string", title: "Untertitel", default: "Reporter" },
-        barColor: { type: "string", title: "Balkenfarbe", gddType: "color-rrggbb", pattern: "^#[0-9a-fA-F]{6}$", default: "#10151f" },
-        accentColor: { type: "string", title: "Akzentfarbe", gddType: "color-rrggbb", pattern: "^#[0-9a-fA-F]{6}$", default: "#00c8ff" },
+        barColor: { type: "string", title: "Balkenfarbe", gddType: "color-rrggbb", pattern: COLOR_PATTERN, default: "#10151f" },
+        accentColor: { type: "string", title: "Akzentfarbe", gddType: "color-rrggbb", pattern: COLOR_PATTERN, default: "#00c8ff" },
       },
     },
   };
