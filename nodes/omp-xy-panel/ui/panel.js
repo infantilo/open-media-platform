@@ -222,8 +222,9 @@ class OmpXyPanel extends HTMLElement {
       model: L.buildModel({ nodes: [], groupTree: null, workflows: [] }),
       names: new Map(), // nodeId → Anzeigename ohne Instanz-Kurz-ID
       side: {
-        src: { path: [], media: "", query: "" },
-        dst: { path: [], media: "", query: "" },
+        // open: vom Bediener auf-/zugeklappte Nodes (nodeId → bool), überlebt jedes Neuzeichnen; scroll: Listenposition.
+        src: { path: [], media: "", query: "", open: new Map(), scroll: 0 },
+        dst: { path: [], media: "", query: "", open: new Map(), scroll: 0 },
       },
       selSrc: null, selDst: null, selSrcNode: null, selDstNode: null,
       auto: localStorage.getItem("omp-xy-auto") !== "0",
@@ -536,17 +537,22 @@ class OmpXyPanel extends HTMLElement {
         }
         for (const n of l2.nodes) {
           const nsel = (kind === "src" ? st.selSrcNode : st.selDstNode) === n.id;
-          const det = xyEl("details", { class: "node", open: n.points.length <= 8 || s.query.trim() ? true : null },
+          const wasOpen = s.open.get(n.id);
+          const det = xyEl("details", { class: "node", open: (wasOpen !== undefined ? wasOpen : n.points.length <= 8 || s.query.trim() !== "") ? true : null },
             xyEl("summary", {},
               `${st.names.get(n.id) ?? L.stripInstanceId(n.label)} (${n.points.length}) `,
               n.points.length > 1 ? xyEl("button", { class: "nodeall" + (nsel ? " sel" : ""), title: t("nodeAllTip"), "aria-pressed": nsel ? "true" : "false",
                 onclick: (e) => { e.preventDefault(); e.stopPropagation(); pickNode(kind, n.id); } }, "⇉ " + t("nodeAll")) : ""),
             xyEl("div", { class: "points" }, n.points.map((p) => renderPoint(kind, p, routeOfSink, srcMap))));
+          det.addEventListener("toggle", () => s.open.set(n.id, det.open));
           listHost.append(det);
         }
         if (!l2.folders.length && !l2.nodes.length) listHost.append(xyEl("div", { class: "empty", text: t("empty") }));
       };
       renderList();
+      listHost.addEventListener("scroll", () => { s.scroll = listHost.scrollTop; });
+      // scrollTop lässt sich erst setzen, wenn der Knoten im DOM hängt (nach root.replaceChildren in render()).
+      queueMicrotask(() => { listHost.scrollTop = s.scroll; });
       return xyEl("section", { class: "side" + (st.tab === kind ? "" : " hide") }, xyEl("h3", { text: title }), nav, chips, search, listHost);
     }
 
