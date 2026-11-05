@@ -79,7 +79,6 @@ impl ZoneStore {
     }
 
     /// Zonen einer Ebene (Kopie).
-    #[allow(dead_code)] // wird in 90.2 (Kopplung zum Mischer) gebraucht
     pub fn layer(&self, layer: &str) -> Vec<Zone> {
         self.0.lock().expect("lock poisoned").get(layer).cloned().unwrap_or_default()
     }

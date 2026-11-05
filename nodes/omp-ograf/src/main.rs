@@ -8,6 +8,7 @@
 //! Mixer-DSK-Anschluss (Empfängerseite) ist K5-Teil-2.
 
 mod layers;
+mod layout;
 #[cfg(test)]
 mod frame_probe;
 mod pipeline;
@@ -67,6 +68,8 @@ struct OgrafStore {
     templates_root: PathBuf,
     /// Kapitel 90.1: von der Harness-Seite gemessene Layout-Zonen je Ebene.
     zones: zones::ZoneStore,
+    /// Kapitel 90.2: Zone → PIP-Slot eines Bildmischers.
+    layout: layout::Layout,
     pipeline: pipeline::PipelineHandle,
     /// Kapitel 27 / P9.4: Untertitel-Engine (s. `subtitles.rs`).
     subtitle_dir: PathBuf,
@@ -222,6 +225,8 @@ impl ParamStore for OgrafStore {
                 ParamSpec { name: "subtitle".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
                 // Kapitel 90.1: gemessene Layout-Zonen je Ebene (JSON, normiert 0..1): { "<layerId>": [ {id,x,y,w,h,o} ] }.
                 ParamSpec { name: "zones".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+                // Kapitel 90.2: Bindungen Zone → Mischer-PIP (JSON-Array mit enabled/error).
+                ParamSpec { name: "layout".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
                 ParamSpec { name: "timecodeFlowId".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             ],
             methods: vec![
@@ -271,6 +276,25 @@ impl ParamStore for OgrafStore {
                         },
                     ],
                 },
+                // Kapitel 90.2: Zone einer Ebene führt einen PIP-Slot des Mischers (Squeeze-back).
+                MethodSpec {
+                    name: "layout.bind".to_string(),
+                    args: vec![
+                        MethodArg { name: "layerId".to_string(), kind: ParamType::String },
+                        MethodArg { name: "zone".to_string(), kind: ParamType::String },
+                        MethodArg { name: "mixer".to_string(), kind: ParamType::String },
+                        MethodArg { name: "senderId".to_string(), kind: ParamType::String },
+                        MethodArg { name: "slot".to_string(), kind: ParamType::Number },
+                        MethodArg { name: "level".to_string(), kind: ParamType::Number },
+                    ],
+                },
+                MethodSpec {
+                    name: "layout.unbind".to_string(),
+                    args: vec![
+                        MethodArg { name: "layerId".to_string(), kind: ParamType::String },
+                        MethodArg { name: "zone".to_string(), kind: ParamType::String },
+                    ],
+                },
                 MethodSpec {
                     name: "continue".to_string(),
                     args: vec![MethodArg {
@@ -296,6 +320,9 @@ impl ParamStore for OgrafStore {
         }
         if name == "zones" {
             return Some(self.zones.to_json());
+        }
+        if name == "layout" {
+            return Some(self.layout.to_json());
         }
         if name == "timecodeFlowId" {
             return Some(serde_json::json!(self.timecode.connected_flow_id()));
@@ -404,6 +431,24 @@ impl ParamStore for OgrafStore {
                 if id.is_none() || !removed.is_empty() {
                     self.pipeline.send(Self::timed(args, pipeline::Command::Hide { layer_id: id.map(str::to_string) }));
                 }
+                Ok(())
+            }
+            "layout.bind" => {
+                let text = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                let num = |k: &str| args.get(k).and_then(Value::as_f64).filter(|v| v.is_finite() && *v >= 0.0).map_or(0, |v| v as u32);
+                let b = layout::Binding {
+                    layer: text("layerId"),
+                    zone: text("zone"),
+                    mixer: text("mixer"),
+                    level: num("level"),
+                    slot: num("slot"),
+                    sender_id: text("senderId"),
+                };
+                self.layout.bind(b).map_err(|e| InvokeError::Message(e))
+            }
+            "layout.unbind" => {
+                let text = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                self.layout.unbind(&text("layerId"), &text("zone"));
                 Ok(())
             }
             _ if name.starts_with("subtitle.") => self.subtitle_invoke(&name["subtitle.".len()..], args),
@@ -583,6 +628,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         layers: Mutex::new(layers::Layers::default()),
         templates_root,
         zones: zone_store.clone(),
+        layout: layout::Layout::new(RegistryClient::new(registry_url.clone()), zone_store.clone()),
         pipeline: pipeline_handle,
         subtitle_dir: PathBuf::from(env_or("OMP_SUBTITLE_DIR", "data/subtitles")),
         subtitle_track: Mutex::new(None),
