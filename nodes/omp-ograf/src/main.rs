@@ -9,6 +9,7 @@
 
 mod layers;
 mod layout;
+mod library;
 #[cfg(test)]
 mod frame_probe;
 mod pipeline;
@@ -62,7 +63,7 @@ impl ReceiverControl for TimecodeControl {
 struct OgrafStore {
     timecode: Arc<omp_mediaio::mxl::TimecodeInput>,
     timecode_connection: Option<Arc<ReceiverConnection<TimecodeControl>>>,
-    templates: Vec<TemplateInfo>,
+    templates: std::sync::RwLock<Vec<TemplateInfo>>,
     /// Gleichzeitig sichtbare Grafik-Ebenen (s. layers.rs).
     layers: Mutex<layers::Layers>,
     templates_root: PathBuf,
@@ -83,6 +84,49 @@ struct OgrafStore {
 const SUBTITLE_LAYER: &str = "subtitle";
 
 impl OgrafStore {
+    /// Bibliothek ändern und danach die Vorlagenliste neu einlesen (laufende Grafiken bleiben unberührt).
+    fn library_invoke(&self, method: &str, args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
+        let msg = InvokeError::Message;
+        let text = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let id = text("id");
+        match method {
+            "new" => {
+                let name = if text("name").is_empty() { id.clone() } else { text("name") };
+                if !library::valid_id(&id) {
+                    return Err(msg("id: nur Kleinbuchstaben, Ziffern und Bindestrich".into()));
+                }
+                if self.templates_root.join(&id).exists() {
+                    return Err(msg(format!("Paket „{id}“ existiert schon")));
+                }
+                library::save(&self.templates_root, &id, &library::skeleton(&id, &name)).map_err(msg)?;
+            }
+            "save" => {
+                let Some(Value::Object(obj)) = args.get("files") else { return Err(msg("files fehlt".into())) };
+                let mut files = library::Files::new();
+                for (k, v) in obj {
+                    files.insert(k.clone(), v.as_str().ok_or_else(|| msg(format!("Datei „{k}“ ist kein Text")))?.to_string());
+                }
+                library::save(&self.templates_root, &id, &files).map_err(msg)?;
+            }
+            "duplicate" => library::duplicate(&self.templates_root, &id, &text("newId")).map_err(msg)?,
+            "delete" => {
+                let in_use = {
+                    let templates = self.templates.read().expect("lock poisoned");
+                    let ids: Vec<String> = templates.iter().filter(|t| t.dir_name() == id).map(|t| t.id.clone()).collect();
+                    let layers = self.layers.lock().expect("lock poisoned").to_json();
+                    layers.as_array().is_some_and(|ls| ls.iter().any(|l| l["templateId"].as_str().is_some_and(|t| ids.iter().any(|i| i == t))))
+                };
+                if in_use {
+                    return Err(msg("Vorlage ist gerade auf Sendung — erst ausblenden".into()));
+                }
+                library::delete(&self.templates_root, &id).map_err(msg)?;
+            }
+            _ => return Err(InvokeError::Unknown),
+        }
+        *self.templates.write().expect("lock poisoned") = templates::scan_templates(&self.templates_root);
+        Ok(())
+    }
+
     fn subtitle_args(v: Value) -> serde_json::Map<String, Value> {
         v.as_object().cloned().unwrap_or_default()
     }
@@ -227,6 +271,8 @@ impl ParamStore for OgrafStore {
                 ParamSpec { name: "zones".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
                 // Kapitel 90.2: Bindungen Zone → Mischer-PIP (JSON-Array mit enabled/error).
                 ParamSpec { name: "layout".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+                // Kapitel 90.4: Bibliothek der Vorlagen-Pakete (JSON-Array mit valid/errors/warnings/files); `library.<id>` liefert die Dateien.
+                ParamSpec { name: "library".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
                 ParamSpec { name: "timecodeFlowId".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             ],
             methods: vec![
@@ -290,6 +336,30 @@ impl ParamStore for OgrafStore {
                         MethodArg { name: "kind".to_string(), kind: ParamType::String },
                     ],
                 },
+                // Kapitel 90.4: Vorlagen-Bibliothek (Editor)
+                MethodSpec {
+                    name: "library.new".to_string(),
+                    args: vec![
+                        MethodArg { name: "id".to_string(), kind: ParamType::String },
+                        MethodArg { name: "name".to_string(), kind: ParamType::String },
+                    ],
+                },
+                MethodSpec {
+                    name: "library.save".to_string(),
+                    // files = Objekt {Dateiname: Text}
+                    args: vec![
+                        MethodArg { name: "id".to_string(), kind: ParamType::String },
+                        MethodArg { name: "files".to_string(), kind: ParamType::String },
+                    ],
+                },
+                MethodSpec {
+                    name: "library.duplicate".to_string(),
+                    args: vec![
+                        MethodArg { name: "id".to_string(), kind: ParamType::String },
+                        MethodArg { name: "newId".to_string(), kind: ParamType::String },
+                    ],
+                },
+                MethodSpec { name: "library.delete".to_string(), args: vec![MethodArg { name: "id".to_string(), kind: ParamType::String }] },
                 MethodSpec {
                     name: "layout.unbind".to_string(),
                     args: vec![
@@ -326,12 +396,21 @@ impl ParamStore for OgrafStore {
         if name == "layout" {
             return Some(self.layout.to_json());
         }
+        // Kapitel 90.4: Vorlagen-Bibliothek. `library` = Liste aller Pakete (auch fehlerhafter), `library.<id>` = Dateien eines Pakets.
+        if name == "library" {
+            return Some(library::list(&self.templates_root));
+        }
+        if let Some(id) = name.strip_prefix("library.") {
+            return library::read(&self.templates_root, id);
+        }
         if name == "timecodeFlowId" {
             return Some(serde_json::json!(self.timecode.connected_flow_id()));
         }
         match name {
             "templates" => Some(serde_json::json!(
                 self.templates
+                    .read()
+                    .expect("lock poisoned")
                     .iter()
                     .map(TemplateInfo::to_descriptor_json)
                     .collect::<Vec<_>>()
@@ -355,9 +434,10 @@ impl ParamStore for OgrafStore {
                     .get("templateId")
                     .and_then(Value::as_str)
                     .ok_or(InvokeError::Unknown)?;
-                let info = templates::find_by_id(&self.templates, template_id)
+                let templates = self.templates.read().expect("lock poisoned");
+                let info = templates::find_by_id(&templates, template_id)
                     .ok_or(InvokeError::Unknown)?;
-                let (dir, main) = templates::module_url(info);
+                let (dir, main) = templates::module_url(&self.templates_root, info);
                 let mut data = templates::schema_defaults(&info.schema);
                 if let Some(Value::Object(overrides)) = args.get("data") {
                     if let Value::Object(map) = &mut data {
@@ -449,6 +529,7 @@ impl ParamStore for OgrafStore {
                 };
                 self.layout.bind(b).map_err(|e| InvokeError::Message(e))
             }
+            _ if name.starts_with("library.") => self.library_invoke(&name["library.".len()..], args),
             "layout.unbind" => {
                 let text = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").to_string();
                 self.layout.unbind(&text("layerId"), &text("zone"));
@@ -642,7 +723,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let concrete = Arc::new(OgrafStore {
         timecode: timecode.clone(),
         timecode_connection,
-        templates,
+        templates: std::sync::RwLock::new(templates),
         layers: Mutex::new(layers::Layers::default()),
         templates_root,
         zones: zone_store.clone(),

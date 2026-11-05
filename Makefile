@@ -37,6 +37,8 @@ ui:
 	# die gebauten Bundles liegen als eingecheckte Kopien im Node (`include_str!`), damit `cargo build` ohne deno läuft.
 	cp ui/dist/modules/intercom.js nodes/omp-intercom/ui/admin.js
 	deno bundle ui/modules/intercom/panel.ts -o nodes/omp-intercom/ui/bundle.js
+	# OGraf-Editor (Kapitel 90.4): gebaute Kopie im Node (`include_str!`), hängt hinter dem Panel-Bundle.
+	deno bundle ui/modules/ograf-editor/library.ts -o nodes/omp-ograf/ui/library.js
 
 # Baut die per deploy/catalog.json vom Instanz-Launcher startbaren Node-
 # Binaries (UMSETZUNG.md C8) — separates Target von `build`, weil der

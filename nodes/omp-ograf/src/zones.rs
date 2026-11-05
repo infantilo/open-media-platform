@@ -82,6 +82,7 @@ impl ZoneStore {
     }
 
     /// Zonen einer Ebene (Kopie).
+    #[cfg(test)]
     pub fn layer(&self, layer: &str) -> Vec<Zone> {
         self.layer_seen(layer).0
     }

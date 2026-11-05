@@ -47,6 +47,11 @@ impl TemplateInfo {
         }
     }
 
+    /// Verzeichnisname des Pakets (kann von der Manifest-`id` älterer Importe abweichen).
+    pub fn dir_name(&self) -> &str {
+        &self.dir
+    }
+
     pub fn to_descriptor_json(&self) -> Value {
         serde_json::json!({
             "id": self.id,
@@ -73,6 +78,9 @@ pub fn scan_templates(root: &Path) -> Vec<TemplateInfo> {
             continue;
         }
         let dir_name = entry.file_name().to_string_lossy().into_owned();
+        if dir_name.starts_with('.') {
+            continue; // Zwischenverzeichnisse der Bibliothek (library.rs)
+        }
         let Some(manifest_path) = find_manifest(&path) else {
             continue;
         };
@@ -190,6 +198,7 @@ pub fn route(root: &Path, method: &str, path: &str) -> Option<RawResponse> {
         });
     }
     let rel = path.strip_prefix("/ograf-templates/")?;
+    let rel = rel.split('?').next().unwrap_or(rel); // `?v=<Änderungszeit>` (module_url)
     let resolved = resolve_under_root(root, rel)?;
     if !resolved.is_file() {
         return None;
@@ -210,6 +219,13 @@ pub fn find_by_id<'a>(templates: &'a [TemplateInfo], id: &str) -> Option<&'a Tem
     templates.iter().find(|t| t.id == id)
 }
 
-pub fn module_url(info: &TemplateInfo) -> (String, String) {
-    (info.dir.clone(), info.main.clone())
+/// Verzeichnis und Hauptmodul für die Harness-Seite. An den Modulnamen hängt die Änderungszeit der Datei als `?v=…`: ohne sie
+/// lädt die Seite ein bearbeitetes Modul nie neu (ES-Module werden je URL einmal geladen, Kapitel 90.4 Editor).
+pub fn module_url(root: &Path, info: &TemplateInfo) -> (String, String) {
+    let v = std::fs::metadata(root.join(&info.dir).join(&info.main))
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_millis());
+    (info.dir.clone(), format!("{}?v={v}", info.main))
 }

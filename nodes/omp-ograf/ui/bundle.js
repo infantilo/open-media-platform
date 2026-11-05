@@ -19,6 +19,8 @@ const T = (() => {
         "ogr.398d8a": "Schritt ",
         "ogr.419ff4": "Diese Grafik ausblenden",
         "ogr.e8bc14": "keine Templates gefunden",
+        "lib.open": "Vorlagen bearbeiten…",
+        "lib.back": "‹ Zur Sendung",
         "kv.text": "Text", "kv.number": "Zahl", "kv.bool": "Ja/Nein", "kv.list": "Liste", "kv.object": "Gruppe",
         "kv.remove": "Entfernen", "kv.addItem": "＋ Eintrag", "kv.addField": "＋ Feld", "kv.name": "Name"
     },
@@ -39,6 +41,8 @@ const T = (() => {
         "ogr.398d8a": "Step ",
         "ogr.419ff4": "Hide this graphic",
         "ogr.e8bc14": "no templates found",
+        "lib.open": "Edit templates…",
+        "lib.back": "‹ Back to on-air",
         "kv.text": "Text", "kv.number": "Number", "kv.bool": "Yes/No", "kv.list": "List", "kv.object": "Group",
         "kv.remove": "Remove", "kv.addItem": "＋ Item", "kv.addField": "＋ Field", "kv.name": "Name"
     },
@@ -217,7 +221,27 @@ class OmpOgrafPanel extends HTMLElement {
     editSection.setAttribute("label", T("ogr.344a7f"));
     editSection.append(fields);
 
-    shadow.append(style, controlSection, pickSection, editSection);
+    // Kapitel 90.4: Vorlagen-Bibliothek/Editor (eigenes Element `omp-ograf-library`, kommt mit diesem Bundle, s. library.js).
+    const libToggle = document.createElement("button");
+    libToggle.type = "button";
+    libToggle.textContent = T("lib.open");
+    libToggle.style.cssText = "cursor:pointer;font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--omp-border,#3a3f45);background:var(--omp-surface-raised,#2f3339);color:inherit;margin-bottom:6px;";
+    const libHost = document.createElement("div");
+    libHost.style.display = "none";
+    const liveParts = [controlSection, pickSection, editSection];
+    let libOpen = false;
+    libToggle.addEventListener("click", () => {
+      libOpen = !libOpen;
+      libToggle.textContent = libOpen ? T("lib.back") : T("lib.open");
+      libHost.style.display = libOpen ? "" : "none";
+      for (const part of liveParts) part.style.display = libOpen ? "none" : "";
+      if (libOpen && !libHost.firstChild && customElements.get("omp-ograf-library")) {
+        const lib = document.createElement("omp-ograf-library");
+        lib.setAttribute("node-id", nodeId);
+        libHost.append(lib);
+      }
+    });
+    shadow.append(style, libToggle, libHost, controlSection, pickSection, editSection);
 
     const call = (method, body) =>
       fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {

@@ -97,7 +97,9 @@
         if (!layer) {
           const mod = await import(`/ograf-templates/${dir}/${main}`);
           const TemplateClass = mod.default;
-          const tag = "ograf-tpl-" + templateId.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+          // Version (`?v=<Änderungszeit>`) gehört in den Namen: ein bearbeitetes Modul braucht ein neues Custom Element.
+          const ver = (main.split("?v=")[1] || "0").replace(/[^0-9]/g, "");
+          const tag = "ograf-tpl-" + templateId.toLowerCase().replace(/[^a-z0-9-]/g, "-") + "-" + ver;
           if (!customElements.get(tag)) {
             customElements.define(tag, TemplateClass);
           }
