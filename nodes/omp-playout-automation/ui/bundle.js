@@ -343,7 +343,7 @@ const T = (() => {
       "cart.noSource": "Quelle fehlt", "cart.pickIcon": "Symbol wählen …", "cart.manager.edit": "Bearbeiten",
       "ic.title": "Symbol wählen", "ic.none": "Kein Symbol", "ic.custom": "Eigenes Zeichen", "ic.use": "Übernehmen", "ic.playback": "Wiedergabe", "ic.onair": "Sendung", "ic.audio": "Ton", "ic.notice": "Hinweis", "ic.misc": "Sonstiges",
       "fixCountdown": "⏰ {hms} „{label}“ in {t}",
-      "cntLive": "Nächstes Live-Event", "cntMan": "Nächstes manuelles Event", "waitHold": "HOLD: wartet auf Next", "waitMan": "{label} startet manuell", "waitEnd": "Manual Hold nach „{label}“", "waitCued": "{label} wartet auf Take/Next", "cntFix": "Nächstes Fix-Event", "cntMiss": "Nächstes Event ohne Quelle", "cntShow": "Zähler anzeigen:", "tlBtn": "Timeline", "tlTip": "Zeitleiste mit Child Events ein-/ausblenden", "tlNow": "jetzt", "tlEmpty": "Keine Events in der Playlist.", "tlWin": "Fenster",
+      "cntLive": "Nächstes Live-Event", "cntMan": "Nächstes manuelles Event", "waitHold": "HOLD: wartet auf Next", "waitMan": "{label} startet manuell", "waitEnd": "Manual Hold nach „{label}“", "waitCued": "{label} wartet auf Take/Next", "cntFix": "Nächstes Fix-Event", "cntMiss": "Nächstes Event ohne Quelle", "cntShow": "Zähler anzeigen:", "badMiss": "QUELLE FEHLT", "badErr": "FEHLERHAFT", "badKid": "CHILD-FEHLER", "tlBtn": "Timeline", "tlTip": "Zeitleiste mit Child Events ein-/ausblenden", "tlNow": "jetzt", "tlEmpty": "Keine Events in der Playlist.", "tlWin": "Fenster",
       "cntIn": "{label} in {t}",
       "planWarn.one": "⚠ 1 Plan-Warnung (Überlappung, Lücke oder unbestimmter Start — Details am ⚠ in der Zeitspalte)",
       "planWarn.many": "⚠ {n} Plan-Warnungen (Überlappung, Lücke oder unbestimmter Start — Details am ⚠ in der Zeitspalte)",
@@ -690,7 +690,7 @@ const T = (() => {
       "cart.noSource": "source missing", "cart.pickIcon": "Choose symbol …", "cart.manager.edit": "Edit",
       "ic.title": "Choose symbol", "ic.none": "No symbol", "ic.custom": "Custom character", "ic.use": "Apply", "ic.playback": "Playback", "ic.onair": "On air", "ic.audio": "Audio", "ic.notice": "Notice", "ic.misc": "Other",
       "fixCountdown": "⏰ {hms} “{label}” in {t}",
-      "cntLive": "Next live event", "cntMan": "Next manual event", "waitHold": "HOLD: waiting for Next", "waitMan": "{label} starts manually", "waitEnd": "Manual hold after “{label}”", "waitCued": "{label} waits for Take/Next", "cntFix": "Next fixed event", "cntMiss": "Next event without source", "cntShow": "Show counters:", "tlBtn": "Timeline", "tlTip": "Show/hide timeline with child events", "tlNow": "now", "tlEmpty": "No events in the playlist.", "tlWin": "Window",
+      "cntLive": "Next live event", "cntMan": "Next manual event", "waitHold": "HOLD: waiting for Next", "waitMan": "{label} starts manually", "waitEnd": "Manual hold after “{label}”", "waitCued": "{label} waits for Take/Next", "cntFix": "Next fixed event", "cntMiss": "Next event without source", "cntShow": "Show counters:", "badMiss": "SOURCE MISSING", "badErr": "FAULTY", "badKid": "CHILD FAILED", "tlBtn": "Timeline", "tlTip": "Show/hide timeline with child events", "tlNow": "now", "tlEmpty": "No events in the playlist.", "tlWin": "Window",
       "cntIn": "{label} in {t}",
       "planWarn.one": "⚠ 1 plan warning (overlap, gap or undetermined start — details at the ⚠ in the time column)",
       "planWarn.many": "⚠ {n} plan warnings (overlap, gap or undetermined start — details at the ⚠ in the time column)",
@@ -1113,6 +1113,16 @@ const STYLE = `
   .tl-ev span, .tl-kid span { pointer-events: none; }
   .tl-now { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #ff4040; pointer-events: none; box-shadow: 0 0 4px #ff4040; }
   .chip.empty { opacity: .45; }
+  .chip.prob { background: #ff4040; color: #fff; font-weight: 800; letter-spacing: .04em; animation: probblink 1.6s ease-in-out infinite; }
+  .chip.prob.bad { background: #ff9f1c; color: #1a0f00; }
+  @keyframes probblink { 50% { opacity: .55; } }
+  .pl-row.miss:not(.onair) { background: repeating-linear-gradient(135deg, #4a1414 0 8px, #331010 8px 16px); border-left: 5px solid #ff4040; box-shadow: inset 0 0 0 1px #ff404077; }
+  .pl-row.bad:not(.onair) { background: repeating-linear-gradient(135deg, #46300c 0 8px, #33240a 8px 16px); border-left: 5px solid #ff9f1c; box-shadow: inset 0 0 0 1px #ff9f1c77; }
+  .pl-row.miss .title .txt { color: #ff9a9a; font-weight: 700; } .pl-row.bad .title .txt { color: #ffc46b; font-weight: 700; }
+  .tl-ev.miss, .tl-ev.bad { background: repeating-linear-gradient(135deg, #c42b2b 0 6px, #7a1414 6px 12px); color: #fff; box-shadow: 0 0 0 2px #ff4040; z-index: 1; }
+  .tl-ev.bad { background: repeating-linear-gradient(135deg, #d98a14 0 6px, #7a4a08 6px 12px); box-shadow: 0 0 0 2px #ff9f1c; }
+  .tl-kid.Failed { box-shadow: 0 0 0 2px #ff4040; font-weight: 800; }
+  .pl-list { overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
   .cnt-row { position: relative; display: grid; gap: 6px; height: 24px; margin-bottom: 6px; align-items: stretch; }
   .cnt-row .chip { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 20px; padding: 2px 8px; min-width: 0; }
   .cnt-gear { padding: 0; height: 24px; }
@@ -1371,6 +1381,16 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       };
     });
     const itemIndex = (id) => items.findIndex((x) => x.id === id);
+    // Problem-Zustand eines Events: "miss" (Quelle/Datei fehlt), "bad" (nicht bereit, Plan-Warnung, fehlgeschlagenes Child) oder "".
+    const problemOf = (it) => {
+      if (it.eventType === "HOLD" || it.eventType === "JUMP") return null;
+      if (!(it.available ?? true)) return { kind: "miss", text: T("badMiss") };
+      if (it.asset && it.readiness === "NOT_READY") return { kind: "bad", text: T("badErr"), tip: it.readinessDetail || "" };
+      const w = planById.get(it.id)?.warnings;
+      if (w && w.length) return { kind: "bad", text: T("badErr"), tip: w.join("\n") };
+      if (childRuntime.some((c) => c.itemId === it.id && c.state === "Failed")) return { kind: "bad", text: T("badKid"), tip: childRuntime.find((c) => c.itemId === it.id && c.state === "Failed").error || "" };
+      return null;
+    };
     const statusOf = (it, i) => {
       const cur = itemIndex(currentItemId);
       if (it.id === currentItemId) return { text: "ON AIR", cls: "st-onair" };
@@ -1719,7 +1739,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         if (ins < wraps.length) y = wraps[ins].querySelector(".pl-row").getBoundingClientRect().top - lr.top;
         else if (wraps.length) y = wraps[wraps.length - 1].getBoundingClientRect().bottom - lr.top;
         if (!dropLine) { dropLine = h("div", { class: "drop-line" }); listEl.style.position = "relative"; listEl.append(dropLine); }
-        dropLine.style.top = `${y ?? 0}px`;
+        dropLine.style.top = `${(y ?? 0) + listEl.scrollTop}px`;
       };
       const end = (e) => {
         handle.removeEventListener("pointermove", move);
@@ -1804,6 +1824,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         const isCued = it.id === cuedItemId;
         r.row.className = `pl-row pl-cols${isOn ? " onair" : isCued ? " cued" : ""}${selected.has(it.id) ? " sel" : ""}` +
           `${it.startType === "fixtime" ? " fix" : it.startType === "manual" ? " manual" : ""}`;
+        const prob = problemOf(it);
+        if (prob) r.row.classList.add(prob.kind);
         const blk = adBlocks.find((b) => b.ids.includes(it.id));
         if (blk) {
           const pos = blk.ids.indexOf(it.id);
@@ -1866,6 +1888,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         r.delBtn.disabled = isOn;
         // Chips: Start-Typ, Transition, Kinder, Audio
         const chips = [];
+        if (prob) chips.push(h("span", { class: `chip prob ${prob.kind}`, title: prob.tip || prob.text }, `⚠ ${prob.text}`));
         if (it.startType === "fixtime") chips.push(h("span", { class: "chip blue", title: T("fixStart") }, `⏰ ${it.startAt ? formatLocalStart(it.startAt) : it.fixtimeHms || ""}`));
         if (it.startType === "manual") chips.push(h("span", { class: "chip", style: "background:#6b5210", title: T("manualStart") }, "✋"));
         if (it.transition && it.transition !== "cut") chips.push(h("span", { class: "chip", style: "background:#1f5a28", title: T("transitionTitle", { name: TRANSITION_LABEL[it.transition] || it.transition }) }, it.transition === "mix" ? "⇄" : it.transition === "fadecut" ? "◐✂" : "✂◑"));
@@ -1937,9 +1960,10 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       for (const { it, i, e } of ent) {
         const sp = clip(e.startMs, e.durationMs > 0 ? e.endMs : t1);
         if (!sp) continue;
-        const cls = `tl-ev${it.id === currentItemId ? " onair" : it.id === cuedItemId ? " cued" : ""}${it.startType === "fixtime" ? " fix" : ""}${it.senderId ? " live" : ""}${it.eventType === "HOLD" || it.eventType === "JUMP" ? " ctl" : ""}`;
-        lane.append(h("div", { class: cls, style: `left:${pct(sp[0])};width:max(3px,calc(${pct(sp[1])} - ${pct(sp[0])}))`, title: `${it.label} · ${tcFormat(it.durationMs, TC_FPS)}`, onclick: (ev) => select(it.id, ev), ondblclick: () => openEditor(it) },
-          h("span", {}, it.label)));
+        const prob = problemOf(it);
+        const cls = `tl-ev${prob ? ` ${prob.kind}` : ""}${it.id === currentItemId ? " onair" : it.id === cuedItemId ? " cued" : ""}${it.startType === "fixtime" ? " fix" : ""}${it.senderId ? " live" : ""}${it.eventType === "HOLD" || it.eventType === "JUMP" ? " ctl" : ""}`;
+        lane.append(h("div", { class: cls, style: `left:${pct(sp[0])};width:max(3px,calc(${pct(sp[1])} - ${pct(sp[0])}))`, title: `${prob ? `⚠ ${prob.text}${prob.tip ? ` — ${prob.tip}` : ""}\n` : ""}${it.label} · ${tcFormat(it.durationMs, TC_FPS)}`, onclick: (ev) => select(it.id, ev), ondblclick: () => openEditor(it) },
+          h("span", {}, prob ? `⚠ ${it.label}` : it.label)));
         // Child Events: Lanes so vergeben, dass sich überlappende Balken nicht verdecken.
         (it.children || []).forEach((c, ci) => {
           const span = childSpan(c, e.durationMs, Math.max(0, t1 - e.startMs));
@@ -1960,6 +1984,16 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     };
     const fmtRemainTl = (sec) => { const hh = Math.floor(sec / 3600), mm = Math.floor((sec % 3600) / 60), ss = sec % 60; return `${hh > 0 ? `${hh}:${String(mm).padStart(2, "0")}` : mm}:${String(ss).padStart(2, "0")}`; };
 
+    // Playlist-Raster nimmt die verfügbare Resthöhe des Fensters ein (scrollt intern, Kopfzeile bleibt stehen).
+    const fitList = () => {
+      if (activeTab !== "live" || !listEl.isConnected) return;
+      const top = listEl.getBoundingClientRect().top;
+      if (!top) return;
+      const h2 = Math.max(220, Math.floor(window.innerHeight - top - 18));
+      if (listEl.dataset.h !== String(h2)) { listEl.dataset.h = String(h2); listEl.style.height = `${h2}px`; }
+    };
+    window.addEventListener("resize", fitList);
+    this._fit = fitList;
     const timingText = (c) => {
       const t = c.timing || (c.relativeTo === "END" ? "RELATIVE_TO_END" : "RELATIVE_TO_START");
       const d = c.durationMs ? tcFormat(c.durationMs, TC_FPS) : T("untilEnd");
@@ -2831,6 +2865,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
 
       renderList();
       renderTimeline();
+      fitList();
       renderCarts();
     };
 
@@ -2840,6 +2875,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
 
   disconnectedCallback() {
     clearInterval(this._interval);
+    if (this._fit) window.removeEventListener("resize", this._fit);
   }
 }
 
