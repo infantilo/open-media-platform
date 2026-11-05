@@ -315,7 +315,7 @@ const T = (() => {
       "ed.badStart": "Startzeit ungültig (z. B. 14:30:00 oder 2026-10-03 06:00:00)",
       "ed.pickFile": "Datei wählen",
       "ed.pickImage": "Bilddatei wählen",
-      "ed.pickLive": "Live-Quelle wählen", "ed.liveNoSourceHint": "Ohne Quelle wird das Event als „Quelle fehlt“ angelegt (Zähler „Event ohne Quelle“) — die Quelle kann später gewählt werden.",
+      "ed.pickLive": "Live-Quelle wählen", "ed.noMedia": "Keine Dateien verfügbar — die Dateiliste stammt vom Ziel-Player A (Reiter Konfiguration → Ziele prüfen).", "ed.noSources": "Keine Live-Quellen verfügbar — Ziel-Player A im Reiter Konfiguration prüfen.", "ed.noAssets": "Keine Assets gefunden — die ID kann auch von Hand eingegeben werden.", "pick.noHit": "Kein Treffer", "pick.more": "… {n} weitere — Suchbegriff eingrenzen", "ed.liveNoSourceHint": "Ohne Quelle wird das Event als „Quelle fehlt“ angelegt (Zähler „Event ohne Quelle“) — die Quelle kann später gewählt werden.",
       "ed.needTag": "Live nach Tags braucht mindestens einen Pflicht-Tag",
       "ed.pickJump": "Sprungziel wählen",
       "ed.assetMissing": "Asset-ID fehlt",
@@ -662,7 +662,7 @@ const T = (() => {
       "ed.badStart": "Invalid start time (e.g. 14:30:00 or 2026-10-03 06:00:00)",
       "ed.pickFile": "Choose a file",
       "ed.pickImage": "Choose an image file",
-      "ed.pickLive": "Choose a live source", "ed.liveNoSourceHint": "Without a source the event is created as “source missing” (counter “event without source”) — the source can be chosen later.",
+      "ed.pickLive": "Choose a live source", "ed.noMedia": "No files available — the file list comes from target player A (Configuration tab → check targets).", "ed.noSources": "No live sources available — check target player A in the Configuration tab.", "ed.noAssets": "No assets found — you can also type the ID by hand.", "pick.noHit": "No match", "pick.more": "… {n} more — narrow the search", "ed.liveNoSourceHint": "Without a source the event is created as “source missing” (counter “event without source”) — the source can be chosen later.",
       "ed.needTag": "Live by tags needs at least one required tag",
       "ed.pickJump": "Choose a jump target",
       "ed.assetMissing": "Asset ID missing",
@@ -1113,6 +1113,11 @@ const STYLE = `
   .tl-ev span, .tl-kid span { pointer-events: none; }
   .tl-now { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #ff4040; pointer-events: none; box-shadow: 0 0 4px #ff4040; }
   .chip.empty { opacity: .45; }
+  .combo { flex: 1; min-width: 0; width: 100%; }
+  .combo > input { width: 100%; }
+  .combo-list { max-height: 220px; overflow: auto; margin-top: 2px; background: #06121c; border: 1px solid #1d3b52; border-radius: 2px; scrollbar-width: thin; }
+  .combo-list .it { padding: 4px 8px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid #0d2233; }
+  .combo-list .it:hover { background: #0e3340; } .combo-list .it.cur { color: #fff; background: #0e4a63; } .combo-list .it.none { color: var(--mut); font-style: italic; }
   .chip.prob { background: #ff4040; color: #fff; font-weight: 800; letter-spacing: .04em; animation: probblink 1.6s ease-in-out infinite; }
   .chip.prob.bad { background: #ff9f1c; color: #1a0f00; }
   @keyframes probblink { 50% { opacity: .55; } }
@@ -2061,6 +2066,46 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       s.value = obj[key] ?? options[0][0];
       return s;
     };
+    // Auswahlfeld mit Suche: Tippen filtert die Liste (Teiltreffer in Name und Wert), Klick wählt. `free`: freie Eingabe gilt als Wert (z. B. Asset-ID).
+    const combo = (obj, key, getOptions, { placeholder = "", empty = "", free = false, noneLabel = "" } = {}) => {
+      const labelOf = (v) => { const o = getOptions().find(([x]) => x === v); return o ? o[1] : v || ""; };
+      const inp = h("input", { type: "text", placeholder, value: labelOf(obj[key] || ""), autocomplete: "off" });
+      const list = h("div", { class: "combo-list", style: "display:none" });
+      let q = "";
+      const draw = () => {
+        const all = getOptions();
+        const hits = all.filter(([v, t]) => !q || `${t} ${v}`.toLowerCase().includes(q));
+        const rows = [];
+        if (noneLabel && !q) rows.push(h("div", { class: "it none", onmousedown: (e) => { e.preventDefault(); pick(""); } }, noneLabel));
+        for (const [v, t] of hits.slice(0, 300)) rows.push(h("div", { class: `it${v === obj[key] ? " cur" : ""}`, title: v, onmousedown: (e) => { e.preventDefault(); pick(v); } }, t));
+        if (hits.length > 300) rows.push(h("div", { class: "hint", style: "padding:3px 8px" }, T("pick.more", { n: hits.length - 300 })));
+        if (!hits.length) rows.push(h("div", { class: "hint", style: "padding:6px 8px" }, all.length ? T("pick.noHit") : empty || T("pick.none")));
+        list.replaceChildren(...rows);
+      };
+      const open = () => { draw(); list.style.display = ""; };
+      const close = () => { list.style.display = "none"; };
+      const pick = (v) => { obj[key] = v; inp.value = labelOf(v); close(); inp.dispatchEvent(new Event("combo-change")); };
+      inp.addEventListener("focus", () => { q = ""; inp.select(); open(); });
+      inp.addEventListener("input", () => { q = inp.value.toLowerCase(); if (free) obj[key] = inp.value.trim(); open(); });
+      inp.addEventListener("blur", () => { close(); if (!free) inp.value = labelOf(obj[key] || ""); });
+      inp.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); const first = getOptions().find(([v, t]) => !q || `${t} ${v}`.toLowerCase().includes(q)); if (first && !free) pick(first[0]); else close(); }
+        else if (e.key === "Escape") { close(); inp.blur(); }
+      });
+      inp.addEventListener("combo-refresh", () => { if (list.style.display === "") draw(); if (document.activeElement !== inp && shadow.activeElement !== inp) inp.value = labelOf(obj[key] || ""); });
+      return h("div", { class: "combo" }, inp, list);
+    };
+    // Asset-Katalog des Orchestrators (für die Asset-Suche im Editor), kurz zwischengespeichert.
+    let assetCatalog = [], assetCatalogAt = 0;
+    const loadAssetCatalog = async () => {
+      if (Date.now() - assetCatalogAt < 15000) return;
+      assetCatalogAt = Date.now();
+      try {
+        const res = await fetch("/api/v1/assets");
+        if (!res.ok) return;
+        assetCatalog = (await res.json()).map((a) => [a.id, `${a.title || a.id}${a.type ? ` · ${a.type}` : ""} · ${String(a.id).slice(0, 8)}`]).sort((x, y) => x[1].localeCompare(y[1]));
+      } catch { /* Eingabe der ID von Hand bleibt möglich */ }
+    };
     const field = (label, ...ctrl) => [h("label", {}, label), h("div", { class: "row" }, ...ctrl)];
 
     // Live-Event ohne gewählte Quelle: Platzhalter (Selektor „exakte ID leer“ löst nie auf) → zählt als „Event ohne Quelle“, Quelle später im Editor wählbar.
@@ -2182,14 +2227,14 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           case "pattern": f.append(...field(T("ed.pattern"), bindSelect(d, "pattern", PATTERNS.map((p) => [p, p])))); break;
           case "file": case "image": {
             const files = d.file && !mediaLibrary.includes(d.file) ? [d.file, ...mediaLibrary] : mediaLibrary;
-            f.append(...field(T("ed.file"), bindSelect(d, "file", [["", T("ed.chooseFile")], ...files.map((x) => [x, x])])));
+            f.append(...field(T("ed.file"), combo(d, "file", () => files.map((x) => [x, x]), { placeholder: T("ed.chooseFile"), empty: T("ed.noMedia"), noneLabel: T("ed.chooseFile") })));
             if (d.kind === "file") f.append(...field(T("ed.release"), bindSelect(d, "requireRelease", [["", T("ed.releaseDefault")], ["true", T("ed.releaseYes")], ["false", T("ed.releaseNo")]])));
             break;
           }
           case "live": {
             const known = availableSources.map((s) => [s.senderId, s.label]);
             if (d.senderId && !known.some(([id]) => id === d.senderId)) known.unshift([d.senderId, d.senderId]);
-            f.append(...field(T("ed.liveSource"), bindSelect(d, "senderId", [["", T("ed.chooseSource")], ...known])));
+            f.append(...field(T("ed.liveSource"), combo(d, "senderId", () => known, { placeholder: T("ed.chooseSource"), empty: T("ed.noSources"), noneLabel: T("ed.chooseSource") })));
             if (!d.senderId) f.append(h("div", { class: "hint" }, T("ed.liveNoSourceHint")));
             break;
           }
@@ -2215,9 +2260,13 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
             f.append(...field(T("ed.jumpTarget"), bindSelect(d, "jumpTarget", [["", T("ed.chooseEvent")], ...items.filter((x) => x.eventType !== "JUMP" && x.id !== item?.id).map((x) => [x.id, `${items.indexOf(x) + 1}. ${x.label}`])])));
             break;
           case "asset":
-            f.append(...field(T("ed.assetId"), bindText(d, "assetId", { placeholder: T("ed.assetIdPh") })));
+            {
+              const ac = combo(d, "assetId", () => assetCatalog, { placeholder: T("ed.assetIdPh"), empty: T("ed.noAssets"), free: true });
+              f.append(...field(T("ed.assetId"), ac));
+              loadAssetCatalog().then(() => ac.querySelector("input").dispatchEvent(new Event("combo-refresh")));
+            }
             f.append(...field(T("ed.ifMissing"), bindSelect(d, "onMissing", MISSING_POLICIES)));
-            f.append(...field(T("ed.fallbackFile"), bindText(d, "fallbackFile", { placeholder: T("ed.fallbackPh") })));
+            f.append(...field(T("ed.fallbackFile"), combo(d, "fallbackFile", () => mediaLibrary.map((x) => [x, x]), { placeholder: T("ed.fallbackPh"), empty: T("ed.noMedia"), free: true })));
             break;
           default: break;
         }
