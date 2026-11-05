@@ -3,6 +3,7 @@
 //! ein As-Run. Kein Medien-I/O; Fernaufrufe laufen über den Orchestrator-Proxy (wie `omp-playout-automation`).
 
 mod runner;
+mod uibundle;
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,6 +23,32 @@ fn tai_now_ns() -> u64 {
     // SAFETY: gültiger Zeiger auf eine lokale timespec
     unsafe { libc::clock_gettime(libc::CLOCK_TAI, &mut ts) };
     ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
+}
+
+/// Unterschied TAI − Wanduhr in ns (für die Anzeige in Ortszeit und Startzeiten „um 14:00“).
+fn tai_offset_ns() -> i128 {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: gültiger Zeiger auf eine lokale timespec
+    unsafe { libc::clock_gettime(libc::CLOCK_REALTIME, &mut ts) };
+    tai_now_ns() as i128 - (ts.tv_sec as i128 * 1_000_000_000 + ts.tv_nsec as i128)
+}
+
+/// Ansicht für das Bedienfeld: Zustand, Plan je Element (Beginn/Ende in ms ab Logstart), gesendet-Markierung, Startzeit in Wanduhr-ms.
+fn view_json(r: &Run) -> Value {
+    let off = tai_offset_ns();
+    let now_unix_ms = ((tai_now_ns() as i128 - off) / 1_000_000) as i64;
+    let start_unix_ms = if r.start_tai_ns == 0 { 0 } else { ((r.start_tai_ns as i128 - off) / 1_000_000) as i64 };
+    let items: Vec<Value> = r
+        .placed
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let it = r.log.as_ref().and_then(|l| l.items.get(i));
+            json!({"index": i, "id": p.id, "kind": it.map(|x| x.kind), "file": it.map(|x| x.file.clone()), "startMs": p.start_ms, "endMs": p.end_ms, "nextStartMs": p.next_start_ms,
+                   "fadeInMs": p.fade_in_ms, "fadeOutMs": p.fade_out_ms, "stopAtMs": p.stop_at_ms, "sent": r.sent.contains(&i)})
+        })
+        .collect();
+    json!({"state": Store::state_value(r), "startUnixMs": start_unix_ms, "nowUnixMs": now_unix_ms, "items": items})
 }
 
 #[derive(Default)]
@@ -72,11 +99,13 @@ impl ParamStore for Store {
                 ro("sentCount", ParamType::Number),
                 ro("startTaiNs", ParamType::Number),
                 ro("asRun", ParamType::String),
+                ro("view", ParamType::String),
+                ro("log", ParamType::String),
                 ro("lastError", ParamType::String),
             ],
             methods: vec![
                 MethodSpec { name: "load".to_string(), args: vec![MethodArg { name: "log".to_string(), kind: ParamType::String }] },
-                MethodSpec { name: "start".to_string(), args: vec![MethodArg { name: "atTai".to_string(), kind: ParamType::Number }, MethodArg { name: "delayMs".to_string(), kind: ParamType::Number }] },
+                MethodSpec { name: "start".to_string(), args: vec![MethodArg { name: "atTai".to_string(), kind: ParamType::Number }, MethodArg { name: "atUnixMs".to_string(), kind: ParamType::Number }, MethodArg { name: "delayMs".to_string(), kind: ParamType::Number }] },
                 MethodSpec { name: "stop".to_string(), args: vec![MethodArg { name: "fadeMs".to_string(), kind: ParamType::Number }] },
             ],
         }
@@ -93,6 +122,8 @@ impl ParamStore for Store {
             "sentCount" => json!(r.sent.len()),
             "startTaiNs" => json!(r.start_tai_ns),
             "asRun" => json!(serde_json::to_string(&r.as_run).unwrap_or_default()),
+            "view" => json!(view_json(&r).to_string()),
+            "log" => json!(r.log.as_ref().map(|l| serde_json::to_string(l).unwrap_or_default()).unwrap_or_default()),
             "lastError" => json!(r.last_error),
             _ => return None,
         })
@@ -140,7 +171,11 @@ impl ParamStore for Store {
                 if r.start_tai_ns != 0 {
                     return Err(InvokeError::Message("läuft bereits".to_string()));
                 }
-                let at = args.get("atTai").and_then(Value::as_u64).filter(|v| *v > 0);
+                let at = args
+                    .get("atTai")
+                    .and_then(Value::as_u64)
+                    .filter(|v| *v > 0)
+                    .or_else(|| args.get("atUnixMs").and_then(Value::as_u64).filter(|v| *v > 0).map(|ms| (ms as i128 * 1_000_000 + tai_offset_ns()) as u64));
                 let delay = args.get("delayMs").and_then(Value::as_u64).unwrap_or(3000);
                 r.start_tai_ns = at.unwrap_or_else(|| tai_now_ns() + delay * 1_000_000);
                 Ok(())
@@ -161,6 +196,9 @@ impl ParamStore for Store {
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        if let Some(r) = uibundle::route(method, path) {
+            return Some(r);
+        }
         // Sicherung: Log, Startzeit und gesendete Plätze überleben einen Neustart (kein Doppelstart, kein Verlust des Ablaufs)
         let json_ok = |v: Value| RawResponse { status: 200, content_type: "application/json", body: serde_json::to_vec(&v).unwrap_or_default() };
         if method == "GET" && path == "/state" {

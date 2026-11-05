@@ -55,6 +55,7 @@ var DefaultRules = map[string][]Rule{
 		{"GET", "/api/v1/audio-rules/default"}, {"POST", "/api/v1/audio-rules/simulate"},
 	},
 	"omp-vfa":                    {{"GET", "/api/v1/nodes"}},
+	"omp-radio-automation":       {{"GET", "/api/v1/nodes"}},
 	"omp-webrtc-gateway-camera":  webrtcRules,
 	"omp-webrtc-gateway-monitor": webrtcRules,
 }
