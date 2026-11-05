@@ -1623,8 +1623,11 @@ name = "omp-playout-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "omp-node-sdk",
+ "omp-resolver",
  "serde",
  "serde_json",
+ "ureq",
 ]
 
 [[package]]

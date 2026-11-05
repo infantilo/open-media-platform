@@ -9,3 +9,6 @@ description = "Gemeinsamer, reiner Sendekern (Listen, Zeitachse, Fixzeit, Trigge
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
+omp-resolver = { version = "0.1.0", path = "../omp-resolver" }
+ureq = { version = "3.3.0", features = ["json"] }

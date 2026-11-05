@@ -66,7 +66,7 @@ mod mixersetup;
 mod persist;
 use omp_playout_core::playlist;
 use omp_playout_core::readiness;
-mod remote;
+use omp_playout_core::remote;
 use omp_playout_core::schedule;
 mod structlog;
 use omp_playout_core::timeline;

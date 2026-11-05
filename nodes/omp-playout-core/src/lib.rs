@@ -5,3 +5,5 @@ pub mod readiness;
 pub mod schedule;
 pub mod timeline;
 pub mod trigger;
+pub mod segue;
+pub mod remote;
