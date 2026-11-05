@@ -1,7 +1,16 @@
 # Radio auf der OpenMediaPlatform — Lückenanalyse, Zielbild und Phasenplan (Vorschlag)
 
-Stand: 2026-11-05. Auftrag: `docs/RADIO-ANALYSE-PROMPT.md`. **Reiner Vorschlag, kein Code.** Nichts davon ist in
-`UMSETZUNG.md` übernommen. Das geschieht erst, wenn der Nutzer zugestimmt hat (§0 Regel 8: Optionen nennen, Nutzer entscheidet).
+Stand: 2026-11-05. Auftrag: `docs/RADIO-ANALYSE-PROMPT.md`. **Reiner Vorschlag, kein Code.** Der Nutzer hat am 2026-11-05 die
+Grundentscheidungen getroffen (unten); als Kapitel 89 steht der Plan in `UMSETZUNG.md`. Die Phasen RA–RG sind weiter Vorschlag, bis sie je Schritt freigegeben werden.
+
+**Entscheidungen des Nutzers (2026-11-05):**
+1. Radio wird **vorgezogen** (hebt `ARCHITECTURE.md` §7 „nach 2029“ und §20.8 für Radio-Automation auf). **MAM bleibt Zukunft.**
+2. `omp-segue-player` und eigene `omp-radio-automation` auf gemeinsamer Crate `omp-playout-core`: **ja**.
+3. Programmplanung: **zuerst nur Vertrag und Import** eines extern geplanten Ablaufs (RF1); kein eigener Planer/Löser jetzt.
+4. Verbreitung derzeit: **MADI und Streaming**. FM/RDS und DAB+ (Phase RD, Datendienste) sind vorerst nicht gefragt.
+5. Mitschnitt-Recht/Aufbewahrung und Musikmeldung: **später entscheiden**.
+6. SIP-Telefonie und Mandantentrennung: **später entscheiden**.
+Offen bleiben die übrigen Rückfragen in §12 (Verbreitungs-Lautheit, Archiv, KI-Stimmen, Hardware, Reihenfolge).
 
 Grundlage sind die Projektdateien, die ich selbst gelesen habe: `CLAUDE.md`, `ARCHITECTURE.md` (§1–§5, §12–§14, §20.6–§21,
 §24, §28–§31), `UMSETZUNG.md` (§0, Kap. 27 mit §27.1–§27.7, Kap. 39, 42–45, 47–49, 74, 75), `docs/PLAYOUT-AUTOMATION.md`,

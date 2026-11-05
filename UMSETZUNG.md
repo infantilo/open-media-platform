@@ -6418,3 +6418,37 @@ nehmen es automatisch mit. `validate()` prüft: Name nötig und je Seite eindeut
 **88.13 (2026-11-05, Nutzerfund „Startanimation nur für das rechte PIP“):** Messung der Bewegung statt nur des Endzustands: Live-Tests `pip_scene_three_slots_with_2d_entry_animation_all_appear` und `pip_scene_entry_moves_every_slot` (echte Pipeline, 640×480-Quellen an 1280×720-Mischer, Szene „PIP 1“, Bild je Frame ausgewertet). Mit der Reparatur aus 88.10 fahren alle drei Slots (2D und nicht-2D) beim Aktivieren sichtbar ein (Rot x 1242→213, Grün y 21→321, Blau x 763→1062). Gegenprobe an einem **frisch gestarteten Betriebs-Mischer** (Workflow mit 3 Quellen + Mischer, Szene über `pip.applyPreset`/`pip.setEnabled`): Ein- und Ausfahrt laufen für Slot 0 und 1 sauber. Am Mischer von PIP DEMO sprangen die 2D-Slots dagegen ohne Zwischenstellung; dieser Mischer lief aber seit einem Orchestrator-Neustart (14:26) weiter, während der Neustart die drei Quellen neu gestartet hatte. **Nicht geklärt**, ob das die Ursache ist; offen bleibt außerdem, dass ein Mischer nach dem Neustart seiner Quellen (gleiche Sender-IDs) sein Bild nicht zuverlässig wiederbekommt (schwarzes Programm, PIP-Verlauf statt Farbe). Diagnose-Tests `diag_grab_running_pgm`/`diag_watch_running_pgm` (nur lesend, `--ignored`, Umgebungsvariablen `OMP_DIAG_*`) lesen den Programm-Flow eines LAUFENDEN Mischers aus. Beobachtet, nicht untersucht: veraltete PGM-Sender toter Mischer-Prozesse bleiben in der Registry stehen (drei „PGM“ am selben Node); NATS-Outbox meldet wiederholt `publish failed … omp.files.trash-emergency`.
 
 **88.14 (2026-11-05, Nutzerwunsch: PGM-Monitor im Videomixer mit Ausgangsrate):** Der Monitor lieferte 5 Bilder/s (Node: fester 200-ms-Takt, danach Warten auf das JPEG) und holte sie im UI mit 4/s ab (250-ms-Intervall, ein Abruf gleichzeitig). Jetzt: `monitor.rs` fragt alle 10 ms (¼ Bildperiode von `FRAMERATE_NUMERATOR/DENOMINATOR`) nach einem neuen Kompositor-Bild (Kennung = Zeitstempel + Größe), schiebt es ohne zu warten in die Codierkette und veröffentlicht fertige JPEGs nebenläufig; UI (`bundle.js`) tickt alle 40 ms mit höchstens vier gleichzeitigen Abrufen und verwirft überholte Antworten (Sequenznummer). Messung am frisch gestarteten Betriebs-Mischer (Quelle „ball“, Programm): 4,8 → ~23 verschiedene Bilder/s am Node (zwei parallele Clients), im echten Browser (CDP, Panel gemountet) 4 → ~19 Bildwechsel/s; Mischer-CPU +7 % eines Kerns mit Zuschauer, 0 ohne (kein Codieren ohne Abruf, `ACTIVE_WINDOW` 3 s). Rest-Lücke zu 25: Antwortzeit im Browser über den Orchestrator-Proxy (50–110 ms) und überholte Antworten; ein echter Datenstrom (MJPEG/WebSocket) wäre der nächste Schritt, ist aber bewusst nicht gebaut (Einzelbild-Abruf ist Absicht, s. `omp-mediaio/src/preview.rs`). Hinweis: „35 fps“ im Auftrag als Ausgangsrate 25 fps gelesen.
+
+## Kapitel 89: Radio-Betrieb (Nutzerentscheidung 2026-11-05, **nur Plan übernommen, noch kein Code**)
+
+Grundlage: **`docs/RADIO-PLAN.md`** (Lückenanalyse, Zielbild, Phasen RA–RG, gelesene Normen). Entscheidungen des Nutzers:
+
+1. Radio ist **vorgezogen** (hebt `ARCHITECTURE.md` §7 „nach 2029“ und §20.8 für Radio-Automation auf). **MAM bleibt Zukunft.**
+2. `omp-segue-player` + eigene `omp-radio-automation` auf gemeinsamer Crate `omp-playout-core` (ohne Verhaltensänderung aus dem TV-Node gelöst): **ja**.
+3. Programmplanung: **zuerst nur Vertrag und Import** eines extern geplanten Ablaufs (RF1), kein eigener Planer.
+4. Verbreitung derzeit **MADI und Streaming**; FM/RDS/DAB+ (Datendienste in Phase RD) vorerst nicht.
+5. Mitschnitt-Recht/Aufbewahrung, Musikmeldung, SIP-Telefonie, Mandantentrennung: **später entscheiden**.
+
+| Schritt | Inhalt | Status |
+|---|---|---|
+| RA1–RA2 | Kanal-Player ohne Bild, Lautheit als Asset-Merkmal | offen (Einstieg laut Plan: RA1 → RA2 → RB1 → RB2 → RB3) |
+| RB–RG | Sendekern, Studio, Ausspielung, Aufnahme, Planung-Import, Betrieb | offen, je Schritt einzeln freizugeben |
+
+Vor jedem Schritt den Originaltext der zitierten Normen lesen (§0 Regel 10). Veraltet: `docs/PLAYOUT-AUTOMATION.md` §13 nennt den entfernten Sidecar `omp-pipeline-controller`.
+
+## Kapitel 90: OGraf — Layout-Zonen, Rahmen-Transitions (Paternoster), vollwertiger OGraf-Editor (Nutzerwunsch 2026-11-05; **in Arbeit**)
+
+**Befund:** OGraf v1 (`ograf.ebu.io/v1`, Spezifikation selbst gelesen) kennt **keine** Layout-Zonen, kein DVE/Squeeze-back und keine Videoeingänge. Lifecycle-Methoden (`load/dispose/playAction/stopAction/updateAction/customAction`) haben keinen Geometrie-Parameter; `renderRequirements` beschreibt nur Renderer-Anforderungen. Erweiterung nur über `v_`-Felder. Die importierte Vorlage `dve-lower-third` nutzt schon die Konvention `data-dve-zone="box"` (aus dem früheren System, **in OMP bisher nicht ausgewertet**).
+
+**Leitidee:** Grafik bleibt reine Optik (Fill+Key). Der **Bildmischer** besitzt Bewegung und Quellen. Die Vorlage deklariert **Zonen** (DOM-Elemente mit `data-ograf-zone="<id>"`, Altname `data-dve-zone` wird mitgelesen); der Node misst deren Rechteck live in der gerenderten Seite (auch während der Animation) und stellt es als Property bereit. Der Mixer legt Quelle (PGM, PST, andere) in einen PIP-Slot und fährt ihn auf die Zone (Squeeze-back). Paternoster = Rahmen-Vorlage mit zwei Zonen (A/B), der Mixer fährt PGM und PST als zwei Posen aneinander vorbei. Die Vorlage bleibt gültiges OGraf, andere Systeme ignorieren die Zonen.
+
+| Schritt | Inhalt | Status |
+|---|---|---|
+| 90.1 | Zonen-Rückkanal: Harness misst `data-ograf-zone`/`data-dve-zone` je Ebene, meldet per POST an den Node (Loopback), Property `zones` (normiert 0..1) | offen |
+| 90.2 | Layout-Kopplung Node → Mixer: Zone → PIP-Slot-Pose (Quelle PGM/PST/Quellenkennung wählbar), zeitgenau, Rückfahrt bei `hide` | offen |
+| 90.3 | Rahmen-Transition (Paternoster u. a.): zwei Zonen A/B, Mixer fährt zwei Posen, Take am Ende | offen; **Vorprüfung:** kann die Transition-Engine zwei Quellen mit je eigener 2D-Pose fahren? |
+| 90.4 | OGraf-Editor Grundgerüst: Bibliothek (neu/duplizieren/löschen/Import+Export als Paket), Manifest-Formular, Parameter-Schema-Editor | offen |
+| 90.5 | Editor-Leinwand: Ebenen (Text, Form, Bild, Zone), Eigenschaften, Raster/Ausrichten, Rückgängig/Wiederholen | offen |
+| 90.6 | Editor-Animation: Ein-/Ausblenden, Schritte (`stepCount`), Easing, Vorschau über denselben Lifecycle wie im Sendebetrieb | offen |
+| 90.7 | Validierung gegen das OGraf-v1-Schema, Live-Test im Sende-Node, Veröffentlichen in `OMP_OGRAF_TEMPLATES` | offen |
+| 90.8 | Handbuch (BENUTZERHANDBUCH, HANDBUCH §9), Katalogbeschreibung, UI-Texte über `t()` in `de.ts`/`en.ts` | offen |
