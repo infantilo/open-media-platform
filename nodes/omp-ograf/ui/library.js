@@ -1721,6 +1721,20 @@ var messages = {
     checkOk: "in Ordnung",
     thumbnail: "Vorschaubild",
     noThumb: "\u2013 keines \u2013",
+    layoutNone: "Keine Zonen: Die stehende Grafik meldet kein Fenster (Element mit data-ograf-zone).",
+    layoutHidden: "Grafik nicht auf Sendung",
+    layoutHiddenHint: "Zuerst die Grafik einblenden, dann koppeln",
+    layoutOn: "Fenster aktiv",
+    layoutOff: "Fenster aus",
+    layoutUnbind: "L\xF6sen",
+    layoutBind: "Koppeln",
+    kindPip: "Bild im Fenster (PIP)",
+    kindWindow: "Fenster f\xFCr Paternoster",
+    mixer: "Mischer",
+    source: "Quelle",
+    slot: "PIP-Slot",
+    srcPst: "Preset (pst:1)",
+    noMixer: "Kein Videomischer gefunden.",
     generated: "Erzeugt aus der Leinwand \u2014 nicht von Hand bearbeiten."
   },
   en: {
@@ -1879,6 +1893,20 @@ var messages = {
     checkOk: "all good",
     thumbnail: "Thumbnail",
     noThumb: "\u2013 none \u2013",
+    layoutNone: "No zones: the graphic on air reports no window (element with data-ograf-zone).",
+    layoutHidden: "graphic not on air",
+    layoutHiddenHint: "Show the graphic first, then couple",
+    layoutOn: "window active",
+    layoutOff: "window off",
+    layoutUnbind: "Release",
+    layoutBind: "Couple",
+    kindPip: "Picture in window (PIP)",
+    kindWindow: "Window for paternoster",
+    mixer: "Mixer",
+    source: "Source",
+    slot: "PIP slot",
+    srcPst: "Preset (pst:1)",
+    noMixer: "No video mixer found.",
     generated: "Generated from the canvas \u2014 do not edit by hand."
   }
 };
@@ -3107,6 +3135,269 @@ var CanvasEditor = class {
   }
 };
 
+// ui/modules/ograf-editor/layout-panel.ts
+var L2 = (document.documentElement.lang || "de").startsWith("en") ? "en" : "de";
+var tr2 = (k, p) => {
+  let s = messages[L2][k] ?? messages.de[k] ?? k;
+  for (const [a, b] of Object.entries(p ?? {})) s = s.split(`{${a}}`).join(b);
+  return s;
+};
+function auth() {
+  try {
+    const t = localStorage.getItem("omp-auth-token");
+    return t ? {
+      Authorization: `Bearer ${t}`
+    } : {};
+  } catch {
+    return {};
+  }
+}
+async function get(path) {
+  try {
+    const r = await fetch(`/api/v1/${path}`, {
+      headers: auth()
+    });
+    return r.ok ? await r.json() : null;
+  } catch {
+    return null;
+  }
+}
+var STYLE2 = `
+:host { display: block; font-size: 11px; }
+* { box-sizing: border-box; }
+.zone { border: 1px solid var(--omp-border, #2e3338); border-radius: 4px; padding: 6px; margin-bottom: 6px; display: flex; flex-direction: column; gap: 4px; }
+.zone h4 { margin: 0; font-size: 12px; }
+.row { display: grid; grid-template-columns: 80px 1fr; gap: 4px; align-items: center; }
+.row label { color: var(--omp-text-dim, #9aa0a6); }
+select, input { width: 100%; font: inherit; padding: 2px 4px; border-radius: 4px; background: var(--omp-bg-2, #1c1f22); color: var(--omp-text, #e8eaed); border: 1px solid var(--omp-border, #2e3338); }
+button { cursor: pointer; font: inherit; padding: 3px 10px; border-radius: 4px; border: 1px solid var(--omp-border, #3a3f45); background: var(--omp-surface-raised, #2f3339); color: inherit; }
+button.primary { background: var(--omp-info, #4285f4); border-color: var(--omp-info, #4285f4); color: #fff; }
+.ok { color: #3fb950; } .bad { color: #ff7b72; } .dim { color: var(--omp-text-dim, #9aa0a6); }
+`;
+var OmpOgrafLayout = class extends HTMLElement {
+  #nodeId = "";
+  #timer = 0;
+  #mixers = [];
+  #sources = /* @__PURE__ */ new Map();
+  /** Auswahl je Zone, bleibt über das Neuzeichnen erhalten. */
+  #draft = /* @__PURE__ */ new Map();
+  #busy = false;
+  #last = "";
+  connectedCallback() {
+    this.#nodeId = this.getAttribute("node-id") ?? "";
+    this.attachShadow({
+      mode: "open"
+    });
+    void this.#tick();
+    this.#timer = window.setInterval(() => void this.#tick(), 2e3);
+  }
+  disconnectedCallback() {
+    window.clearInterval(this.#timer);
+  }
+  async #call(method, body) {
+    const r = await fetch(`/api/v1/nodes/${this.#nodeId}/methods/${method}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...auth()
+      },
+      body: JSON.stringify(body)
+    });
+    if (r.ok) return null;
+    try {
+      const j = await r.json();
+      return String(j.error ?? j.message ?? r.status);
+    } catch {
+      return String(r.status);
+    }
+  }
+  async #loadMixers() {
+    const inst = await get("instances");
+    const nodes = await get("nodes");
+    if (!nodes) return;
+    const labels = new Map(nodes.map((n) => [
+      n.label,
+      n.id
+    ]));
+    const mixers = (inst ?? []).filter((i) => i.type === "omp-video-mixer-me" && labels.has(i.label)).map((i) => ({
+      nodeId: labels.get(i.label),
+      label: i.label
+    }));
+    this.#mixers = mixers;
+  }
+  async #loadSources(m) {
+    const v = await get(`nodes/${m.nodeId}/params/crosspoint.inputs`);
+    const list = (v?.value ?? []).filter((e) => e.senderId && !/lowres/i.test(e.label)).map((e) => ({
+      senderId: e.senderId,
+      label: e.label
+    }));
+    this.#sources.set(m.label, [
+      {
+        senderId: "pst:1",
+        label: tr2("srcPst")
+      },
+      ...list
+    ]);
+  }
+  async #tick() {
+    if (this.#busy || !this.isConnected) return;
+    this.#busy = true;
+    try {
+      const zones = (await get(`nodes/${this.#nodeId}/params/zones`))?.value ?? {};
+      const bindings = (await get(`nodes/${this.#nodeId}/params/layout`))?.value ?? [];
+      if (!this.#mixers.length) await this.#loadMixers();
+      const sig = JSON.stringify([
+        zones,
+        bindings
+      ]);
+      if (sig === this.#last && this.shadowRoot?.querySelector("select:focus,input:focus")) return;
+      for (const m of this.#mixers) if (!this.#sources.has(m.label)) await this.#loadSources(m);
+      this.#last = sig;
+      this.#render(zones, bindings);
+    } finally {
+      this.#busy = false;
+    }
+  }
+  #el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== void 0) e.textContent = text;
+    return e;
+  }
+  #select(options, value, on) {
+    const s = this.#el("select");
+    for (const [v, l] of options) {
+      const o = this.#el("option", "", l);
+      o.value = v;
+      s.append(o);
+    }
+    s.value = value;
+    s.addEventListener("change", () => on(s.value));
+    return s;
+  }
+  #render(zones, bindings) {
+    const root = this.shadowRoot;
+    if (root.querySelector("select:focus,input:focus")) return;
+    root.innerHTML = "";
+    const style = this.#el("style");
+    style.textContent = STYLE2;
+    root.append(style);
+    const keys = /* @__PURE__ */ new Map();
+    for (const [layer, zs] of Object.entries(zones)) for (const z of zs) keys.set(`${layer}/${z.id}`, {
+      layer,
+      zone: z.id
+    });
+    for (const b of bindings) keys.set(`${b.layerId}/${b.zone}`, {
+      layer: b.layerId,
+      zone: b.zone
+    });
+    if (!keys.size) {
+      root.append(this.#el("div", "dim", tr2("layoutNone")));
+      return;
+    }
+    for (const [key, { layer, zone }] of keys) {
+      const bound = bindings.find((b) => b.layerId === layer && b.zone === zone);
+      const live = (zones[layer] ?? []).some((z) => z.id === zone);
+      const card = this.#el("div", "zone");
+      card.append(this.#el("h4", "", `${layer} \xB7 ${zone}${live ? "" : ` (${tr2("layoutHidden")})`}`));
+      if (bound) {
+        const what = bound.kind === "window" ? tr2("kindWindow") : `${tr2("kindPip")} ${bound.slot + 1}`;
+        card.append(this.#el("div", bound.error ? "bad" : "ok", `${what} \u2192 ${bound.mixer}${bound.kind === "window" ? "" : ` \xB7 ${bound.senderId === "pst:1" ? tr2("srcPst") : (this.#sources.get(bound.mixer) ?? []).find((x) => x.senderId === bound.senderId)?.label ?? bound.senderId.slice(0, 8)}`}${bound.error ? ` \xB7 ${bound.error}` : bound.enabled ? ` \xB7 ${tr2("layoutOn")}` : ` \xB7 ${tr2("layoutOff")}`}${bound.lagMs !== void 0 && !bound.error ? ` \xB7 ${Math.round(bound.lagMs)} ms` : ""}`));
+        const un = this.#el("button", "", tr2("layoutUnbind"));
+        un.addEventListener("click", async () => {
+          await this.#call("layout.unbind", {
+            layerId: layer,
+            zone
+          });
+          this.#last = "";
+          void this.#tick();
+        });
+        card.append(un);
+        root.append(card);
+        continue;
+      }
+      const d = this.#draft.get(key) ?? {
+        kind: "pip",
+        mixer: this.#mixers[0]?.label ?? "",
+        sender: "pst:1",
+        slot: 0,
+        level: 0
+      };
+      this.#draft.set(key, d);
+      const row = (label, el) => {
+        const r = this.#el("div", "row");
+        r.append(this.#el("label", "", label), el);
+        card.append(r);
+      };
+      row(tr2("kind"), this.#select([
+        [
+          "pip",
+          tr2("kindPip")
+        ],
+        [
+          "window",
+          tr2("kindWindow")
+        ]
+      ], d.kind, (v) => {
+        d.kind = v;
+        this.#last = "";
+        this.#render(zones, bindings);
+      }));
+      if (!this.#mixers.length) card.append(this.#el("div", "bad", tr2("noMixer")));
+      row(tr2("mixer"), this.#select(this.#mixers.map((m) => [
+        m.label,
+        m.label
+      ]), d.mixer, (v) => {
+        d.mixer = v;
+        d.sender = "pst:1";
+        this.#render(zones, bindings);
+      }));
+      if (d.kind === "pip") {
+        const src = this.#sources.get(d.mixer) ?? [
+          {
+            senderId: "pst:1",
+            label: tr2("srcPst")
+          }
+        ];
+        row(tr2("source"), this.#select(src.map((s) => [
+          s.senderId,
+          s.label
+        ]), d.sender, (v) => {
+          d.sender = v;
+        }));
+        const slot = this.#el("input");
+        slot.type = "number";
+        slot.min = "1";
+        slot.value = String(d.slot + 1);
+        slot.addEventListener("change", () => {
+          d.slot = Math.max(0, (Number(slot.value) || 1) - 1);
+        });
+        row(tr2("slot"), slot);
+      }
+      const go = this.#el("button", "primary", tr2("layoutBind"));
+      go.disabled = !this.#mixers.length || !live;
+      go.title = live ? "" : tr2("layoutHiddenHint");
+      go.addEventListener("click", async () => {
+        const err = await this.#call("layout.bind", {
+          layerId: layer,
+          zone,
+          mixer: d.mixer,
+          kind: d.kind === "window" ? "window" : "",
+          senderId: d.kind === "window" ? "" : d.sender,
+          slot: d.slot,
+          level: d.level
+        });
+        if (err) card.append(this.#el("div", "bad", err));
+        this.#last = "";
+        void this.#tick();
+      });
+      card.append(go);
+      root.append(card);
+    }
+  }
+};
+if (!customElements.get("omp-ograf-layout")) customElements.define("omp-ograf-layout", OmpOgrafLayout);
+
 // ui/modules/ograf-editor/zip.ts
 var TEXT_EXT = [
   "js",
@@ -3283,9 +3574,9 @@ function bytesToFiles(entries) {
 }
 
 // ui/modules/ograf-editor/library.ts
-var L2 = (document.documentElement.lang || "de").startsWith("en") ? "en" : "de";
-var D = messages[L2];
-var tr2 = (k, p) => {
+var L3 = (document.documentElement.lang || "de").startsWith("en") ? "en" : "de";
+var D = messages[L3];
+var tr3 = (k, p) => {
   let s = D[k] ?? messages.de[k] ?? k;
   for (const [a, b] of Object.entries(p ?? {})) s = s.split(`{${a}}`).join(b);
   return s;
@@ -3339,7 +3630,7 @@ var KIND_LABEL2 = {
   choice: "kChoice",
   raw: "kRaw"
 };
-var STYLE2 = `
+var STYLE3 = `
 :host { display: block; font-family: var(--omp-font, system-ui, sans-serif); color: var(--omp-text, #e8eaed); font-size: var(--omp-font-size-sm, 12px); }
 * { box-sizing: border-box; }
 .wrap { display: grid; grid-template-columns: 220px 1fr; gap: 10px; min-height: 420px; }
@@ -3435,11 +3726,11 @@ var OmpOgrafLibrary = class extends HTMLElement {
       this.#list = await this.#param("library");
     } catch {
       this.#list = [];
-      this.#say(tr2("loadFailed"), true);
+      this.#say(tr3("loadFailed"), true);
     }
   }
   async #open(id) {
-    if (this.#dirty() && !await confirmDialog(tr2("leaveDirty"))) return;
+    if (this.#dirty() && !await confirmDialog(tr3("leaveDirty"))) return;
     try {
       const pkg = await this.#param(`library.${id}`);
       this.#selected = id;
@@ -3457,7 +3748,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
       this.#sourceFile = Object.keys(this.#files).find((n) => !n.endsWith(".ograf.json")) ?? "";
       this.#say("", false);
     } catch {
-      this.#say(tr2("loadFailed"), true);
+      this.#say(tr3("loadFailed"), true);
     }
     this.#render();
   }
@@ -3497,7 +3788,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
   }
   // ── Aktionen ──
   async #newTemplate(designer = false) {
-    const name = await promptDialog(tr2("askName"));
+    const name = await promptDialog(tr3("askName"));
     if (!name?.trim()) return;
     const id = nextFreeId(name, this.#list.map((e) => e.id));
     const err = designer ? await this.#call("library.save", {
@@ -3507,7 +3798,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
       id,
       name: name.trim()
     });
-    if (err) return this.#say(tr2("saveFailed", {
+    if (err) return this.#say(tr3("saveFailed", {
       why: err
     }), true);
     await this.#loadList();
@@ -3516,7 +3807,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
   /** Sendetest: die gespeicherte Vorlage auf dem Grafik-Node einblenden, weiterschalten oder ausblenden. */
   async #test(what) {
     if (!this.#selected) return;
-    if (what === "show" && this.#dirty()) return this.#say(tr2("saveFirst"), true);
+    if (what === "show" && this.#dirty()) return this.#say(tr3("saveFirst"), true);
     const body = {
       layerId: "editor-test"
     };
@@ -3525,33 +3816,33 @@ var OmpOgrafLibrary = class extends HTMLElement {
       body.data = defaultsOf(this.#fields);
     }
     const err = await this.#call(what, body);
-    this.#say(err ? tr2("testFailed", {
+    this.#say(err ? tr3("testFailed", {
       why: err
     }) : "", !!err);
   }
   async #duplicate() {
     if (!this.#selected) return;
-    const name = await promptDialog(tr2("askCopyName"), `${this.#selected}-kopie`);
+    const name = await promptDialog(tr3("askCopyName"), `${this.#selected}-kopie`);
     if (!name?.trim()) return;
     const id = nextFreeId(name, this.#list.map((e) => e.id));
     const err = await this.#call("library.duplicate", {
       id: this.#selected,
       newId: id
     });
-    if (err) return this.#say(tr2("saveFailed", {
+    if (err) return this.#say(tr3("saveFailed", {
       why: err
     }), true);
     await this.#loadList();
     await this.#open(id);
   }
   async #delete() {
-    if (!this.#selected || !await confirmDialog(tr2("askDelete", {
+    if (!this.#selected || !await confirmDialog(tr3("askDelete", {
       id: this.#selected
     }))) return;
     const err = await this.#call("library.delete", {
       id: this.#selected
     });
-    if (err) return this.#say(tr2("saveFailed", {
+    if (err) return this.#say(tr3("saveFailed", {
       why: err
     }), true);
     this.#selected = "";
@@ -3567,7 +3858,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
       id: this.#selected,
       files: this.#files
     });
-    if (err) return this.#say(tr2("saveFailed", {
+    if (err) return this.#say(tr3("saveFailed", {
       why: err
     }), true);
     const id = this.#selected;
@@ -3575,7 +3866,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
     this.#orig = "";
     this.#selected = "";
     await this.#open(id);
-    this.#say(tr2("saved"), false);
+    this.#say(tr3("saved"), false);
   }
   #export() {
     if (!this.#selected) return;
@@ -3592,14 +3883,14 @@ var OmpOgrafLibrary = class extends HTMLElement {
   }
   async #rename() {
     if (!this.#selected) return;
-    if (this.#dirty() && !await confirmDialog(tr2("leaveDirty"))) return;
+    if (this.#dirty() && !await confirmDialog(tr3("leaveDirty"))) return;
     const old = this.#selected;
-    const wanted = await promptDialog(tr2("askRename", {
+    const wanted = await promptDialog(tr3("askRename", {
       id: old
     }), old);
     const id = slugify(wanted ?? "");
     if (!id || id === old) return;
-    if (this.#list.some((e) => e.id === id)) return this.#say(tr2("renameFailed", {
+    if (this.#list.some((e) => e.id === id)) return this.#say(tr3("renameFailed", {
       why: id
     }), true);
     const files = renamePackage(this.#files, old, id);
@@ -3607,13 +3898,13 @@ var OmpOgrafLibrary = class extends HTMLElement {
       id,
       files
     });
-    if (err) return this.#say(tr2("renameFailed", {
+    if (err) return this.#say(tr3("renameFailed", {
       why: err
     }), true);
     err = await this.#call("library.delete", {
       id: old
     });
-    if (err) this.#say(tr2("renameFailed", {
+    if (err) this.#say(tr3("renameFailed", {
       why: err
     }), true);
     this.#orig = "";
@@ -3631,23 +3922,23 @@ var OmpOgrafLibrary = class extends HTMLElement {
         files = bytesToFiles(z.files);
         skipped = z.skipped;
       } catch (e) {
-        return this.#say(tr2("importFailed", {
+        return this.#say(tr3("importFailed", {
           why: e.message
         }), true);
       }
       const m = parseManifest(files);
-      if (!m) return this.#say(tr2("importFailed", {
+      if (!m) return this.#say(tr3("importFailed", {
         why: "Manifest (*.ograf.json) fehlt oder ist kein JSON"
       }), true);
       id = typeof m.id === "string" && slugify(m.id) === m.id ? m.id : slugify(String(m.name ?? file.name.replace(/\.zip$/i, "")));
-      if (!id) return this.#say(tr2("importFailed", {
+      if (!id) return this.#say(tr3("importFailed", {
         why: "id"
       }), true);
       const had = typeof m.id === "string" ? m.id : id;
       if (had !== id || manifestFileName(files) !== `${id}.ograf.json`) files = renamePackage(files, manifestFileName(files).replace(/\.ograf\.json$/, ""), id);
     } else {
       const r = importPackage(await file.text());
-      if ("error" in r) return this.#say(tr2("importFailed", {
+      if ("error" in r) return this.#say(tr3("importFailed", {
         why: r.error
       }), true);
       ({ id, files } = r);
@@ -3655,7 +3946,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
     const taken = this.#list.map((e) => e.id);
     if (taken.includes(id)) {
       const newId = nextFreeId(id, taken);
-      if (!await confirmDialog(tr2("importExists", {
+      if (!await confirmDialog(tr3("importExists", {
         id,
         newId
       }))) return;
@@ -3666,12 +3957,12 @@ var OmpOgrafLibrary = class extends HTMLElement {
       id,
       files
     });
-    if (err) return this.#say(tr2("importFailed", {
+    if (err) return this.#say(tr3("importFailed", {
       why: err
     }), true);
     await this.#loadList();
     await this.#open(id);
-    if (skipped.length) this.#say(tr2("importSkipped", {
+    if (skipped.length) this.#say(tr3("importSkipped", {
       list: skipped.join(", ")
     }), false);
   }
@@ -3697,7 +3988,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
     const root = this.#root;
     root.innerHTML = "";
     const style = this.#el("style");
-    style.textContent = STYLE2;
+    style.textContent = STYLE3;
     const wrap = this.#el("div", "wrap");
     wrap.append(this.#renderSide(), this.#renderMain());
     root.append(style, wrap);
@@ -3705,7 +3996,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
   #renderSide() {
     const side = this.#el("div", "side");
     const bar = this.#el("div", "bar");
-    const imp = this.#el("label", "b", tr2("importBtn"));
+    const imp = this.#el("label", "b", tr3("importBtn"));
     const input = this.#el("input");
     input.type = "file";
     input.accept = ".zip,.json,application/zip,application/json";
@@ -3716,10 +4007,10 @@ var OmpOgrafLibrary = class extends HTMLElement {
       if (f) void this.#import(f);
     });
     imp.append(input);
-    bar.append(this.#btn(tr2("newTpl"), () => void this.#newTemplate(), "primary"), this.#btn(tr2("newDesigner"), () => void this.#newTemplate(true), "primary"), imp);
+    bar.append(this.#btn(tr3("newTpl"), () => void this.#newTemplate(), "primary"), this.#btn(tr3("newDesigner"), () => void this.#newTemplate(true), "primary"), imp);
     const search = this.#el("input");
     search.type = "text";
-    search.placeholder = tr2("search");
+    search.placeholder = tr3("search");
     search.value = this.#filter;
     search.addEventListener("input", () => {
       this.#filter = search.value;
@@ -3732,8 +4023,8 @@ var OmpOgrafLibrary = class extends HTMLElement {
     const list = this.#el("div", "list");
     const q = this.#filter.trim().toLowerCase();
     const shown = this.#list.filter((e) => !q || e.label.toLowerCase().includes(q) || e.id.includes(q));
-    if (!this.#list.length) list.append(this.#el("div", "status", tr2("empty")));
-    else if (!shown.length) list.append(this.#el("div", "status", tr2("noMatch")));
+    if (!this.#list.length) list.append(this.#el("div", "status", tr3("empty")));
+    else if (!shown.length) list.append(this.#el("div", "status", tr3("noMatch")));
     for (const e of shown) {
       const it = this.#el("button", `item${e.id === this.#selected ? " sel" : ""}`);
       it.type = "button";
@@ -3749,41 +4040,41 @@ var OmpOgrafLibrary = class extends HTMLElement {
   #renderMain() {
     const main = this.#el("div", "main");
     if (!this.#selected) {
-      main.append(this.#el("div", "status", tr2("none")), this.#statusEl());
+      main.append(this.#el("div", "status", tr3("none")), this.#statusEl());
       return main;
     }
     const m = parseManifest(this.#files);
     const head = this.#el("div", "head");
     const valid = this.#serverErrors.length === 0;
-    head.append(this.#el("h3", "", String(m?.name ?? this.#selected)), this.#el("span", `pill${valid ? "" : " bad"}`, valid ? tr2("valid") : tr2("invalid")));
-    const dirty = this.#el("span", "dirty", tr2("dirty"));
+    head.append(this.#el("h3", "", String(m?.name ?? this.#selected)), this.#el("span", `pill${valid ? "" : " bad"}`, valid ? tr3("valid") : tr3("invalid")));
+    const dirty = this.#el("span", "dirty", tr3("dirty"));
     dirty.style.display = this.#dirty() ? "" : "none";
     head.append(dirty);
     const spacer = this.#el("span");
     spacer.style.flex = "1";
-    const save = this.#btn(tr2("save"), () => void this.#save(), "primary save", !this.#dirty());
-    head.append(spacer, this.#tip(this.#btn(tr2("testShow"), () => void this.#test("show")), tr2("testHint")), this.#tip(this.#btn(tr2("testNext"), () => void this.#test("continue")), tr2("testNextHint")), this.#tip(this.#btn(tr2("testOff"), () => void this.#test("hide")), tr2("testOffHint")), this.#btn(tr2("duplicate"), () => void this.#duplicate()), this.#btn(tr2("rename"), () => void this.#rename()), this.#btn(tr2("exportBtn"), () => this.#export()), this.#btn(tr2("delete"), () => void this.#delete()), this.#btn(tr2("revert"), () => this.#revert(), "", false), save);
+    const save = this.#btn(tr3("save"), () => void this.#save(), "primary save", !this.#dirty());
+    head.append(spacer, this.#tip(this.#btn(tr3("testShow"), () => void this.#test("show")), tr3("testHint")), this.#tip(this.#btn(tr3("testNext"), () => void this.#test("continue")), tr3("testNextHint")), this.#tip(this.#btn(tr3("testOff"), () => void this.#test("hide")), tr3("testOffHint")), this.#btn(tr3("duplicate"), () => void this.#duplicate()), this.#btn(tr3("rename"), () => void this.#rename()), this.#btn(tr3("exportBtn"), () => this.#export()), this.#btn(tr3("delete"), () => void this.#delete()), this.#btn(tr3("revert"), () => this.#revert(), "", false), save);
     main.append(head);
-    if (this.#serverErrors.length) main.append(this.#list_("err", tr2("errors"), this.#serverErrors));
-    if (this.#serverWarnings.length) main.append(this.#list_("warn", tr2("warnings"), this.#serverWarnings));
+    if (this.#serverErrors.length) main.append(this.#list_("err", tr3("errors"), this.#serverErrors));
+    if (this.#serverWarnings.length) main.append(this.#list_("warn", tr3("warnings"), this.#serverWarnings));
     const tabs = this.#el("div", "tabs");
     const tabList = [
       [
         "general",
-        tr2("tabGeneral")
+        tr3("tabGeneral")
       ],
       [
         "params",
-        tr2("tabParams")
+        tr3("tabParams")
       ],
       [
         "source",
-        tr2("tabSource")
+        tr3("tabSource")
       ]
     ];
     if (isDesigner(this.#files)) tabList.unshift([
       "canvas",
-      tr2("tabCanvas")
+      tr3("tabCanvas")
     ]);
     for (const [id, label] of tabList) {
       const t = this.#el("button", `tab${this.#tab === id ? " on" : ""}`, label);
@@ -3796,7 +4087,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
       tabs.append(t);
     }
     main.append(tabs);
-    if (!m && this.#tab !== "source") main.append(this.#el("div", "status bad", tr2("manifestBroken")));
+    if (!m && this.#tab !== "source") main.append(this.#el("div", "status bad", tr3("manifestBroken")));
     else if (this.#tab === "canvas" && isDesigner(this.#files)) main.append(this.#renderCanvas());
     else if (this.#tab === "general") main.append(this.#renderGeneral(m));
     else if (this.#tab === "params") main.append(this.#renderParams());
@@ -3846,12 +4137,12 @@ var OmpOgrafLibrary = class extends HTMLElement {
       this.#writeManifest((prev) => applyForm(prev, f, this.#selected));
     };
     const row = (label, el) => form.append(this.#el("label", "k", label), el);
-    row(tr2("name"), this.#input(f.name, "text", (v) => upd({
+    row(tr3("name"), this.#input(f.name, "text", (v) => upd({
       name: v
     })));
-    row(tr2("id"), this.#input(this.#selected, "text", () => {
+    row(tr3("id"), this.#input(this.#selected, "text", () => {
     }, true));
-    row(tr2("version"), this.#input(f.version, "text", (v) => upd({
+    row(tr3("version"), this.#input(f.version, "text", (v) => upd({
       version: v
     })));
     const desc = this.#el("textarea");
@@ -3861,23 +4152,23 @@ var OmpOgrafLibrary = class extends HTMLElement {
     desc.addEventListener("input", () => upd({
       description: desc.value
     }));
-    row(tr2("description"), desc);
-    row(tr2("author"), this.#input(f.authorName, "text", (v) => upd({
+    row(tr3("description"), desc);
+    row(tr3("author"), this.#input(f.authorName, "text", (v) => upd({
       authorName: v
     })));
-    row(tr2("authorEmail"), this.#input(f.authorEmail, "text", (v) => upd({
+    row(tr3("authorEmail"), this.#input(f.authorEmail, "text", (v) => upd({
       authorEmail: v
     })));
-    row(tr2("authorUrl"), this.#input(f.authorUrl, "text", (v) => upd({
+    row(tr3("authorUrl"), this.#input(f.authorUrl, "text", (v) => upd({
       authorUrl: v
     })));
-    row(tr2("steps"), this.#input(f.stepCount, "number", (v) => upd({
+    row(tr3("steps"), this.#input(f.stepCount, "number", (v) => upd({
       stepCount: Number(v) || 1
     })));
-    row(tr2("realtime"), this.#check(f.supportsRealTime, (v) => upd({
+    row(tr3("realtime"), this.#check(f.supportsRealTime, (v) => upd({
       supportsRealTime: v
     })));
-    row(tr2("nonRealtime"), this.#check(f.supportsNonRealTime, (v) => upd({
+    row(tr3("nonRealtime"), this.#check(f.supportsNonRealTime, (v) => upd({
       supportsNonRealTime: v
     })));
     const res = this.#el("div", "row2");
@@ -3886,8 +4177,8 @@ var OmpOgrafLibrary = class extends HTMLElement {
     })), this.#input(f.height, "number", (v) => upd({
       height: Number(v) || 0
     })));
-    row(tr2("resolution"), res);
-    row(tr2("frameRate"), this.#input(f.frameRate, "number", (v) => upd({
+    row(tr3("resolution"), res);
+    row(tr3("frameRate"), this.#input(f.frameRate, "number", (v) => upd({
       frameRate: Number(v) || 0
     })));
     const thumb = this.#el("select");
@@ -3895,7 +4186,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
       "",
       ...Object.keys(this.#files).filter((n2) => /\.(png|jpe?g|webp|gif)$/i.test(n2))
     ]) {
-      const o = this.#el("option", "", n || tr2("noThumb"));
+      const o = this.#el("option", "", n || tr3("noThumb"));
       o.value = n;
       thumb.append(o);
     }
@@ -3903,7 +4194,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
     thumb.addEventListener("change", () => upd({
       thumbnail: thumb.value
     }));
-    row(tr2("thumbnail"), thumb);
+    row(tr3("thumbnail"), thumb);
     return form;
   }
   #writeFields() {
@@ -3925,7 +4216,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
         this.#writeFields();
       }));
       if (fd.kind === "raw") {
-        const note = this.#el("span", "status", tr2("rawField"));
+        const note = this.#el("span", "status", tr3("rawField"));
         note.style.gridColumn = "3 / 5";
         row.append(note);
         const ctl0 = this.#el("span", "bar");
@@ -3940,7 +4231,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
       }
       const sel = this.#el("select");
       for (const k of kinds) {
-        const o = this.#el("option", "", tr2(KIND_LABEL2[k]));
+        const o = this.#el("option", "", tr3(KIND_LABEL2[k]));
         o.value = k;
         sel.append(o);
       }
@@ -3955,18 +4246,18 @@ var OmpOgrafLibrary = class extends HTMLElement {
       req.append(this.#check(fd.required, (v) => {
         fd.required = v;
         this.#writeFields();
-      }), document.createTextNode(` ${tr2("required")}`));
+      }), document.createTextNode(` ${tr3("required")}`));
       const ctl = this.#el("span", "bar");
       ctl.append(this.#btn("\u25B2", () => this.#move(i, -1), "", i === 0), this.#btn("\u25BC", () => this.#move(i, 1), "", i === this.#fields.length - 1), this.#btn("\u2715", () => {
         this.#fields.splice(i, 1);
         this.#writeFields();
         this.#render();
       }));
-      ctl.title = `${tr2("up")} / ${tr2("down")} / ${tr2("remove")}`;
+      ctl.title = `${tr3("up")} / ${tr3("down")} / ${tr3("remove")}`;
       row.append(req, ctl);
       if (fd.kind === "choice") {
         const ch = this.#el("div", "ch");
-        ch.append(this.#el("span", "", `${tr2("choices")}: `));
+        ch.append(this.#el("span", "", `${tr3("choices")}: `));
         ch.append(this.#input(fd.choices.join(", "), "text", (v) => {
           fd.choices = v.split(",").map((s) => s.trim()).filter(Boolean);
           this.#writeFields();
@@ -3976,8 +4267,8 @@ var OmpOgrafLibrary = class extends HTMLElement {
       box.append(row);
     });
     const issues = validateFields(this.#fields);
-    if (issues.length) box.append(this.#list_("err", tr2("errors"), issues));
-    box.append(this.#btn(tr2("addField"), () => {
+    if (issues.length) box.append(this.#list_("err", tr3("errors"), issues));
+    box.append(this.#btn(tr3("addField"), () => {
       let n = 1;
       while (this.#fields.some((f) => f.key === `feld${n}`)) n++;
       this.#fields.push({
@@ -4004,11 +4295,11 @@ var OmpOgrafLibrary = class extends HTMLElement {
         ],
         [
           "true",
-          tr2("kBool") + ": \u2713"
+          tr3("kBool") + ": \u2713"
         ],
         [
           "false",
-          tr2("kBool") + ": \u2717"
+          tr3("kBool") + ": \u2717"
         ]
       ]) {
         const o = this.#el("option", "", l);
@@ -4049,7 +4340,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
   }
   #renderCanvas() {
     const scene = parseScene(this.#files["scene.json"] ?? "");
-    if (!scene) return this.#el("div", "status bad", tr2("manifestBroken"));
+    if (!scene) return this.#el("div", "status bad", tr3("manifestBroken"));
     if (!this.#canvas) {
       this.#canvas = new CanvasEditor({
         scene,
@@ -4106,7 +4397,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
       this.#render();
     });
     const isManifest = this.#sourceFile.endsWith(".ograf.json");
-    bar.append(this.#el("span", "", `${tr2("file")}:`), sel, this.#btn(tr2("addFile"), () => void this.#addFile()), this.#btn(tr2("delFile"), () => {
+    bar.append(this.#el("span", "", `${tr3("file")}:`), sel, this.#btn(tr3("addFile"), () => void this.#addFile()), this.#btn(tr3("delFile"), () => {
       const n = this.#sourceFile;
       const { [n]: _gone, ...rest } = this.#files;
       this.#files = rest;
@@ -4114,7 +4405,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
       this.#markDirty();
       this.#render();
     }, "", isManifest));
-    const upload = this.#el("label", "b", tr2("upload"));
+    const upload = this.#el("label", "b", tr3("upload"));
     const up = this.#el("input");
     up.type = "file";
     up.style.display = "none";
@@ -4128,7 +4419,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
     if (isBinaryName(this.#sourceFile)) {
       const content = this.#files[this.#sourceFile] ?? "";
       const info = this.#el("div", "fields");
-      info.append(this.#el("div", "status", tr2("binaryInfo", {
+      info.append(this.#el("div", "status", tr3("binaryInfo", {
         kb: String(Math.round(content.length * 3 / 4 / 1024))
       })));
       const ext = this.#sourceFile.slice(this.#sourceFile.lastIndexOf(".") + 1).toLowerCase();
@@ -4152,7 +4443,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
     ta.value = this.#files[this.#sourceFile] ?? "";
     if (isDesigner(this.#files) && (this.#sourceFile === `${this.#selected}.js` || this.#sourceFile === "scene.json")) {
       ta.readOnly = true;
-      box.append(this.#el("div", "status", tr2("generated")));
+      box.append(this.#el("div", "status", tr3("generated")));
     }
     ta.addEventListener("input", () => {
       this.#files = {
@@ -4187,7 +4478,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
     this.#render();
   }
   async #addFile() {
-    const name = await promptDialog(tr2("askFile"));
+    const name = await promptDialog(tr3("askFile"));
     const n = (name ?? "").trim();
     if (!n || this.#files[n] !== void 0) return;
     this.#files = {

@@ -126,13 +126,14 @@ pub fn plan(b: &Binding, zone: Option<&Zone>, canvas: (u32, u32), st: &mut Appli
     out
 }
 
-#[derive(Default)]
 struct Entry {
     applied: Applied,
     last_error: String,
     /// Nachlauf: Zeit von der Meldung der Seite bis zum fertigen `pip.setPose`-Aufruf (ms), letzter und größter Wert.
     lag_ms: f64,
     lag_max_ms: f64,
+    /// Zeitpunkt der Bindung: der Nachlauf zählt frühestens von hier (die Seite meldet eine ruhende Zone nur einmal).
+    created: Instant,
     /// Von `unbind` markiert: der Slot wird noch ausgeschaltet, dann verschwindet die Bindung.
     unbound: bool,
 }
@@ -146,6 +147,12 @@ struct Shared {
 #[derive(Clone)]
 pub struct Layout {
     shared: Arc<Shared>,
+}
+
+impl Entry {
+    fn new() -> Entry {
+        Entry { applied: Applied::default(), last_error: String::new(), lag_ms: 0.0, lag_max_ms: 0.0, created: Instant::now(), unbound: false }
+    }
 }
 
 impl Layout {
@@ -173,7 +180,7 @@ impl Layout {
         // Eine geänderte Bindung (anderer Mischer/Slot/Quelle) beginnt von vorn.
         let key = b.key();
         if map.get(&key).is_none_or(|(old, e)| *old != b || e.unbound) {
-            map.insert(key, (b, Entry::default()));
+            map.insert(key, (b, Entry::new()));
         }
         self.shared.wake.notify_all();
         Ok(())
@@ -211,7 +218,8 @@ impl Layout {
                 .filter(|(_, e)| !e.unbound)
                 .map(|(b, e)| {
                     let mut v = serde_json::to_value(b).unwrap_or(Value::Null);
-                    v["enabled"] = json!(e.applied.enabled);
+                    // PIP: Slot an; Fenster-Bindung: „aktiv“, solange ein Fenster am Mischer gesetzt ist
+                    v["enabled"] = json!(e.applied.enabled || (b.is_window() && e.applied.pose.is_some()));
                     v["error"] = json!(e.last_error);
                     v["lagMs"] = json!(e.lag_ms);
                     v["lagMaxMs"] = json!(e.lag_max_ms);
@@ -233,7 +241,7 @@ fn worker(weak: std::sync::Weak<Shared>, registry: RegistryClient, zones: ZoneSt
     loop {
         let Some(shared) = weak.upgrade() else { return };
         // Bindungen kopieren, damit der Mutex bei den HTTP-Aufrufen frei bleibt.
-        let work: Vec<(String, Binding, Applied, bool)> = {
+        let work: Vec<(String, Binding, Applied, bool, Instant)> = {
             let mut map = shared.bindings.lock().expect("lock poisoned");
             while map.is_empty() {
                 let (g, _) = shared.wake.wait_timeout(map, Duration::from_secs(5)).expect("lock poisoned");
@@ -242,10 +250,10 @@ fn worker(weak: std::sync::Weak<Shared>, registry: RegistryClient, zones: ZoneSt
                     return; // Layout wurde freigegeben
                 }
             }
-            map.iter().map(|(k, (b, e))| (k.clone(), b.clone(), e.applied.clone(), e.unbound)).collect()
+            map.iter().map(|(k, (b, e))| (k.clone(), b.clone(), e.applied.clone(), e.unbound, e.created)).collect()
         };
-        for (key, b, mut st, unbound) in work {
-            let result = run_one(&mut links, &registry, &zones, &b, &mut st, unbound);
+        for (key, b, mut st, unbound, created) in work {
+            let result = run_one(&mut links, &registry, &zones, &b, &mut st, unbound, created);
             let mut map = shared.bindings.lock().expect("lock poisoned");
             if let Some((cur, e)) = map.get_mut(&key) {
                 if *cur != b {
@@ -280,6 +288,7 @@ fn run_one(
     b: &Binding,
     st: &mut Applied,
     unbound: bool,
+    created: Instant,
 ) -> Result<Option<f64>, String> {
     if !links.contains_key(&b.mixer) {
         let node = registry
@@ -329,7 +338,7 @@ fn run_one(
     }
     *st = next;
     let moved = actions.iter().any(|a| matches!(a, Action::SetPose(_) | Action::SetWindow(Some(_))));
-    Ok(seen.filter(|_| moved).map(|t| Instant::now().duration_since(t).as_secs_f64() * 1000.0))
+    Ok(seen.filter(|_| moved).map(|t| Instant::now().duration_since(t.max(created)).as_secs_f64() * 1000.0))
 }
 
 #[cfg(test)]

@@ -21,6 +21,7 @@ const T = (() => {
         "ogr.e8bc14": "keine Templates gefunden",
         "lib.open": "Vorlagen bearbeiten…",
         "lib.back": "‹ Zur Sendung",
+        "lay.title": "Layout-Kopplung (Bildmischer)",
         "kv.text": "Text", "kv.number": "Zahl", "kv.bool": "Ja/Nein", "kv.list": "Liste", "kv.object": "Gruppe",
         "kv.remove": "Entfernen", "kv.addItem": "＋ Eintrag", "kv.addField": "＋ Feld", "kv.name": "Name"
     },
@@ -43,6 +44,7 @@ const T = (() => {
         "ogr.e8bc14": "no templates found",
         "lib.open": "Edit templates…",
         "lib.back": "‹ Back to on-air",
+        "lay.title": "Layout coupling (video mixer)",
         "kv.text": "Text", "kv.number": "Number", "kv.bool": "Yes/No", "kv.list": "List", "kv.object": "Group",
         "kv.remove": "Remove", "kv.addItem": "＋ Item", "kv.addField": "＋ Field", "kv.name": "Name"
     },
@@ -244,7 +246,16 @@ class OmpOgrafPanel extends HTMLElement {
         libHost.append(lib);
       }
     });
-    shadow.append(style, libToggle, libHost, controlSection, pickSection, editSection);
+    // Layout-Kopplung (Kapitel 90.8): Zonen der stehenden Grafik an den Bildmischer koppeln (Element kommt aus library.js)
+    const layoutSection = document.createElement("omp-panel-section");
+    layoutSection.setAttribute("label", T("lay.title"));
+    if (customElements.get("omp-ograf-layout")) {
+      const lay = document.createElement("omp-ograf-layout");
+      lay.setAttribute("node-id", nodeId);
+      layoutSection.append(lay);
+    } else layoutSection.style.display = "none";
+    liveParts.push(layoutSection);
+    shadow.append(style, libToggle, libHost, controlSection, pickSection, editSection, layoutSection);
 
     const call = (method, body) =>
       fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {

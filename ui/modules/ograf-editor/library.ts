@@ -4,6 +4,7 @@
 // (`GET /api/v1/nodes/{id}/params/library[.<id>]`, `POST …/methods/library.*`).
 import RUNTIME from "./runtime.js" with { type: "text" };
 import { CanvasEditor } from "./canvas.ts";
+import "./layout-panel.ts";
 import { applyScene, ensureParams, isDesigner, newDesignerPackage, parseScene, type Scene } from "./scene.ts";
 import { messages } from "./messages.ts";
 import { bytesToFiles, filesToBytes, isBinaryName, makeZip, readZip } from "./zip.ts";
