@@ -630,7 +630,10 @@ const SKIN_C2_CSS = `
     border-radius: 2px; font-weight: 800; color: #1a0606; background: #ff4040; text-shadow: 0 1px 0 #fff4;
   }
   :host([data-skin="c2"]) .bus-row:nth-child(2) .bus-label { background: #25d366; color: #02150a; }
-  :host([data-skin="c2"]) .bus-buttons omp-button { height: 32px; min-width: 64px; }
+  /* Feste Tastenbreite wie am Pult (vorher nur min-width: lange Quellennamen machten die Tasten sehr breit); der Name
+     bricht auf zwei Zeilen um, der volle Name steht im Tooltip. Karten mit Vorschaubild behalten ihre eigene Breite. */
+  :host([data-skin="c2"]) .bus-buttons omp-button:not(.with-thumb) { height: 32px; width: 72px; min-width: 0; max-width: 72px; }
+  :host([data-skin="c2"]) .bus-buttons omp-button:not(.with-thumb)::part(button) { padding: 0 3px; font-size: 9px; line-height: 1.05; text-align: center; overflow: hidden; word-break: break-word; }
   :host([data-skin="c2"]) .bus-thumb { border: 1px solid #000; background: #050505; }
   :host([data-skin="c2"]) .bus-buttons .group-label, :host([data-skin="c2"]) .tool-label {
     color: #9aa3ad; letter-spacing: 0.14em; border-left-color: #333; font-weight: 800;
