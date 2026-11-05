@@ -376,7 +376,7 @@ die **Eingänge** („Zuspiel“). Diese legst du in der **Schnittstelle** fest:
 2. **Ausgang bzw. Eingang anlegen**, Namen vergeben (je Seite eindeutig),
    optional einen Anzeigenamen.
 3. **Mitglieder zuordnen:** Rolle wählen und den Port der Rolle eintragen
-   (bei laufendem Workflow macht das Feld Vorschläge, leer = automatisch).
+   (bei laufendem Workflow macht das Feld Vorschläge; leer heißt beim Ausgang „alle Sender der Rolle“, beim Eingang der erste Empfänger).
    Mehrere Mitglieder bündeln einen Ausgang, z. B. Bild und Ton als „PGM“.
 
 Bei einem gestoppten Workflow wirkt die Änderung im Entwurf und wird mit

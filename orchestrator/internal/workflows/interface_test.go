@@ -231,3 +231,20 @@ func TestValidateRejectsBadFeed(t *testing.T) {
 		t.Errorf("feed without output: %v", err)
 	}
 }
+
+func TestResolveOutputWithoutPortExpandsToAllSenders(t *testing.T) {
+	node := registry.NodeView{ID: "n", Label: "Src", Online: true, Senders: []registry.SenderView{
+		{ID: "a", Label: "Src Audio", Format: "urn:x-nmos:format:audio"},
+		{ID: "v", Label: "Src Video", Format: formatVideo},
+		{ID: "l", Label: "Src Video Lowres", Format: formatVideo},
+	}}
+	wf := Workflow{ID: "w", Runtime: map[string]RoleRuntime{"src": {NodeID: "n"}}, Definition: Definition{
+		Roles:     []Role{{Name: "src", NodeType: "omp-source"}},
+		Interface: &Interface{Outputs: []InterfacePort{{Name: "OUT", Members: []InterfaceMember{{Role: "src"}}}}},
+	}}
+	got := resolveInterface(wf, func(Workflow, string) (registry.NodeView, bool) { return node, true })
+	m := got.Outputs[0].Members
+	if !got.Outputs[0].Available || len(m) != 2 || m[0].PortID != "a" || m[1].PortID != "v" {
+		t.Fatalf("members = %+v (lowres companion must be left out)", m)
+	}
+}

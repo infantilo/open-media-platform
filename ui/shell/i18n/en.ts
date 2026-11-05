@@ -263,7 +263,7 @@ export const en: Record<keyof typeof de, string> = {
   "wfi.inputsHint": "What this workflow accepts from outside, e.g. feed.",
   "wfi.name": "Name (unique)",
   "wfi.labelPlaceholder": "Display name (optional)",
-  "wfi.portPlaceholder": "Port of the role (empty = automatic)",
+  "wfi.portPlaceholder": "Port of the role (empty: output = all senders, input = first)",
   "wfi.addMember": "+ sender/receiver",
   "wfi.removeMember": "Remove member",
   "wfi.removePort": "Remove",

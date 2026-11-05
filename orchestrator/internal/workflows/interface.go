@@ -171,7 +171,24 @@ func resolveInterface(wf Workflow, nodeForRole func(Workflow, string) (registry.
 				rm := ResolvedMember{Role: m.Role, Port: m.Port}
 				if node, ok := nodeForRole(wf, m.Role); ok && node.Online {
 					rm.NodeID = node.ID
-					if output {
+					if output && m.Port == "" {
+						// Ohne Port-Angabe gehören alle Sender der Rolle zum Ausgang (z. B. Bild + Ton einer Quelle), ohne
+						// die Lowres-Begleiter, die nur der Vorschau dienen.
+						expanded := false
+						for _, snd := range node.Senders {
+							if isLowresCompanion(snd.Label) {
+								continue
+							}
+							expanded = true
+							rp.Members = append(rp.Members, ResolvedMember{
+								Role: m.Role, Port: portName(snd.Label, node.Label), PortID: snd.ID, NodeID: node.ID,
+								Format: snd.Format, Available: true,
+							})
+						}
+						if expanded {
+							continue
+						}
+					} else if output {
 						if snd, ok := findSender(node, m.Port, ""); ok {
 							rm.PortID, rm.Format, rm.Available = snd.ID, snd.Format, true
 						}

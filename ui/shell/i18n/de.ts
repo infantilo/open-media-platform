@@ -262,7 +262,7 @@ export const de = {
   "wfi.inputsHint": "Was dieser Workflow von außen annimmt, z. B. Zuspiel.",
   "wfi.name": "Name (eindeutig)",
   "wfi.labelPlaceholder": "Anzeigename (optional)",
-  "wfi.portPlaceholder": "Port der Rolle (leer = automatisch)",
+  "wfi.portPlaceholder": "Port der Rolle (leer: Ausgang = alle Sender, Eingang = erster)",
   "wfi.addMember": "+ Sender/Empfänger",
   "wfi.removeMember": "Mitglied entfernen",
   "wfi.removePort": "Entfernen",
