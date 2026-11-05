@@ -2027,7 +2027,9 @@ func (s *Service) runStop(wf Workflow, targetStatus string) {
 	var errs []string
 	for role, rt := range wf.Runtime {
 		if rt.InstanceID != "" {
-			if err := s.launcher.Stop(rt.InstanceID); err != nil {
+			// Eine Instanz, die es nicht mehr gibt (z. B. von Hand im laufenden Workflow gestoppt), ist beim Stoppen schon
+			// erledigt — kein Grund, den ganzen Workflow auf „failed“ zu setzen (und damit löschen zu sperren).
+			if err := s.launcher.Stop(rt.InstanceID); err != nil && !errors.Is(err, launcher.ErrUnknownInstance) {
 				errs = append(errs, fmt.Sprintf("role %s: %v", role, err))
 			}
 			// Root-Cause-Fix (Nutzerfund 2026-09-24): die Service-Token-

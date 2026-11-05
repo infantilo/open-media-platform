@@ -1723,6 +1723,34 @@ func TestStopStopsAllRunningRoles(t *testing.T) {
 	}
 }
 
+// Regression (Nutzerfund 2026-11-05): wurde der Node einer Rolle von Hand im laufenden Workflow gestoppt, meldete der Launcher
+// beim Workflow-Stopp "unknown instance" — der ganze Workflow wurde "failed" und ließ sich nicht mehr löschen.
+func TestStopTreatsAlreadyGoneInstanceAsStopped(t *testing.T) {
+	store := newFakeStore()
+	l := &fakeLauncher{stopErrs: map[string]error{"inst-view": launcher.ErrUnknownInstance}}
+	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, l)
+
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{
+		{Name: "src", NodeType: "omp-source"},
+		{Name: "view", NodeType: "omp-viewer"},
+	}}, nil, "")
+	running := wf
+	running.Status = StatusStarted
+	running.Runtime = map[string]RoleRuntime{
+		"src":  {InstanceID: "inst-src", NodeID: "node-src"},
+		"view": {InstanceID: "inst-view", NodeID: "node-view"},
+	}
+	store.Put(running)
+
+	if err := svc.Stop(context.Background(), wf.ID, false); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	stopped := waitForStatus(t, svc, wf.ID, StatusStopped)
+	if stopped.Error != "" {
+		t.Errorf("Error = %q, want empty", stopped.Error)
+	}
+}
+
 func TestStopRequiresRunning(t *testing.T) {
 	store := newFakeStore()
 	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
