@@ -892,6 +892,10 @@ fn keyfill_fill_caps() -> gst::Caps {
 /// S. `keyfill_fill_caps` — `GRAY8` trägt die Key-Ebene (Luma als Alpha-
 /// Maske, s. `omp-ograf::pipeline::spawn_alpha_key_bridge`, das dieselbe
 /// Kodierung umgekehrt erzeugt).
+/// Aufweitung Videobereich → 0…255 für den Key (Herleitung bei `build_keyfill_tail`): 255/219 und der Versatz, der 16 auf 0 legt.
+const KEY_RANGE_CONTRAST: f64 = 1.1644;
+const KEY_RANGE_BRIGHTNESS: f64 = -0.064;
+
 fn keyfill_key_caps() -> gst::Caps {
     gst::Caps::builder("video/x-raw")
         .field("format", "GRAY8")
@@ -941,8 +945,26 @@ fn build_keyfill_tail(
         .property("caps", keyfill_key_caps())
         .build()
         .map_err(|e| format!("capsfilter (keyer-key): {e}"))?;
-    pipeline.add(&key_caps).map_err(|e| format!("add keyer-key caps: {e}"))?;
-    gst::Element::link(&key_input.tail, &key_caps).map_err(|e| format!("link keyer-key caps: {e}"))?;
+    // Bereichsanpassung des Keys: der Key läuft als Luma im Videobereich (16…235) durch MXL (so schreibt ihn
+    // `MxlVideoOutput`: GRAY8 255 → v210 Y=943). `videoconvert` v210 → GRAY8 kopiert die Luma ohne Aufweitung, Alpha
+    // käme als 16…235 von 255 an (deckende Grafik ≈ 92 % statt 100 %, durchsichtige Fläche ≈ 6 % statt 0 %). Darum
+    // über I420 und `videobalance` auf 0…255 aufweiten (gemessen mit gst-launch: 0→0, 10→10, 128→128, 255→255).
+    let key_to_i420 = gst::ElementFactory::make("videoconvert").build().map_err(|e| format!("videoconvert (keyer-key range): {e}"))?;
+    let key_i420_caps = gst::ElementFactory::make("capsfilter")
+        .property("caps", gst::Caps::builder("video/x-raw").field("format", "I420").build())
+        .build()
+        .map_err(|e| format!("capsfilter (keyer-key I420): {e}"))?;
+    let key_range = gst::ElementFactory::make("videobalance")
+        .property("contrast", KEY_RANGE_CONTRAST)
+        .property("brightness", KEY_RANGE_BRIGHTNESS)
+        .build()
+        .map_err(|e| format!("videobalance (keyer-key range): {e}"))?;
+    let key_to_gray = gst::ElementFactory::make("videoconvert").build().map_err(|e| format!("videoconvert (keyer-key gray): {e}"))?;
+    pipeline
+        .add_many([&key_to_i420, &key_i420_caps, &key_range, &key_to_gray, &key_caps])
+        .map_err(|e| format!("add keyer-key range chain: {e}"))?;
+    gst::Element::link_many([&key_input.tail, &key_to_i420, &key_i420_caps, &key_range, &key_to_gray, &key_caps])
+        .map_err(|e| format!("link keyer-key range chain: {e}"))?;
 
     let alphacombine = gst::ElementFactory::make("alphacombine")
         .build()
