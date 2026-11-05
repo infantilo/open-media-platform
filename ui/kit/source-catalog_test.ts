@@ -50,3 +50,15 @@ Deno.test("senders-Liste schränkt ein, behält deren Label; unbekannte Sender b
 Deno.test("fehlende Graph-/Workflow-Daten degradieren ohne Fehler", () => {
   assertEquals(buildCatalog({ graph: null, workflows: null }), { entries: [], currentWorkflowId: null });
 });
+
+Deno.test("buildCatalog: exponierte Workflow-Ausgänge werden an den Sendern markiert (Kap. 88)", () => {
+  const r = buildCatalog({
+    graph: { nodes: [{ id: "n1", label: "Mixer", outputs: [{ id: "s1", label: "PGM", format: "urn:x-nmos:format:video" }, { id: "s2", label: "PGM Audio", format: "urn:x-nmos:format:audio" }, { id: "s3", label: "Aux", format: "urn:x-nmos:format:video" }] }] },
+    workflows: [{ id: "wf", name: "Regie 1", runtime: { mixer: { nodeId: "n1" } } }],
+    interfaces: [{ workflowId: "wf", outputs: [{ name: "PGM", label: "Programm", members: [{ portId: "s1", available: true }, { portId: "s2", available: true }, { portId: "s3", available: false }] }] }],
+  });
+  const byId = new Map(r.entries.map((e) => [e.id, e]));
+  if (byId.get("s1")?.exposedAs?.[0]?.portLabel !== "Programm") throw new Error("s1 nicht markiert");
+  if (!byId.get("s2")?.exposedAs) throw new Error("s2 nicht markiert");
+  if (byId.get("s3")?.exposedAs) throw new Error("s3 nicht verfügbar, darf nicht markiert sein");
+});

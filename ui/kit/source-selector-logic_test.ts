@@ -201,3 +201,20 @@ Deno.test("Instanz-Kurz-ID wird in Knotennamen und Blättern weggelassen", () =>
   const rows = visibleRows(tree, () => true);
   assertEquals(rows.slice(1).map((r) => r.node.label), ["Source", "Source Sender 1"]);
 });
+
+Deno.test("buildSourceTree: Sektion Workflow-Ausgänge bündelt Bild + Ton je Ausgang (Kap. 88)", () => {
+  const x = { workflowId: "wf", workflowName: "Regie 1", portName: "PGM", portLabel: "Programm" };
+  const tree = buildSourceTree([
+    { id: "s2", label: "PGM Audio", mediaType: "audio", workflowId: "wf", workflowName: "Regie 1", nodeId: "n1", nodeName: "Mixer", exposedAs: [x] },
+    { id: "s1", label: "PGM", mediaType: "video", workflowId: "wf", workflowName: "Regie 1", nodeId: "n1", nodeName: "Mixer", exposedAs: [x] },
+    { id: "s3", label: "Aux", mediaType: "video", workflowId: "wf", workflowName: "Regie 1", nodeId: "n1", nodeName: "Mixer" },
+  ]);
+  if (tree[0].id !== "sec:outputs") throw new Error("Ausgänge zuerst: " + tree.map((t) => t.id));
+  const port = (tree[0].children[0] as any).children[0];
+  if (port.label !== "Programm" || port.children.map((c: any) => c.id).join() !== "s1,s2") throw new Error("Bündel falsch");
+  // nur Video akzeptiert → Ton-Mitglied entfällt, Ausgang bleibt
+  const v = buildSourceTree([{ id: "s2", label: "A", mediaType: "audio", exposedAs: [x] }, { id: "s1", label: "V", mediaType: "video", exposedAs: [x] }], { accepts: ["video"] });
+  if ((v[0].children[0] as any).children[0].children.length !== 1) throw new Error("accepts-Filter greift nicht");
+  // ohne exponierte Sender keine Sektion
+  if (buildSourceTree([{ id: "s3", label: "Aux", mediaType: "video" }]).some((s) => s.id === "sec:outputs")) throw new Error("leere Sektion");
+});

@@ -366,6 +366,32 @@ Platzierung laut Plan-Vorschau). Es ist eine Vorschau: dort läuft noch nichts.
 Der Block verschwindet, sobald der Workflow läuft und seine
 echten Kacheln in den Zonen stehen.
 
+### 4.0a Schnittstelle eines Workflows: Ausgänge und Eingänge
+
+Ein Workflow (z. B. ein Regieplatz) hat viele Sender und Empfänger in seinen
+Rollen, der Bediener braucht aber nur wenige: den **Ausgang** („PGM“) und
+die **Eingänge** („Zuspiel“). Diese legst du in der **Schnittstelle** fest:
+
+1. Workflow per Doppelklick öffnen, in der Leiste oben **„Schnittstelle…“**.
+2. **Ausgang bzw. Eingang anlegen**, Namen vergeben (je Seite eindeutig),
+   optional einen Anzeigenamen.
+3. **Mitglieder zuordnen:** Rolle wählen und den Port der Rolle eintragen
+   (bei laufendem Workflow macht das Feld Vorschläge, leer = automatisch).
+   Mehrere Mitglieder bündeln einen Ausgang, z. B. Bild und Ton als „PGM“.
+
+Bei einem gestoppten Workflow wirkt die Änderung im Entwurf und wird mit
+**„Speichern“** übernommen; bei einem laufenden gilt sie sofort (sie ändert
+nur die Zuordnung, nicht die laufenden Prozesse). Es wird nichts
+automatisch exponiert, nur was du hier festlegst. Gespeichert wird der
+Port-Name, nicht die ID — die Zuordnung überlebt jeden Neustart.
+
+Die Workflow-Kachel zeigt die Pads: Eingänge links, Ausgänge rechts (grün
+= Workflow läuft). In jeder **Quellenwahl** steht oben die Sektion
+**„Workflow-Ausgänge“**: je Workflow und Ausgang gebündelt („Regieplatz 1 →
+PGM“ mit Bild und Ton). Die Auswahl filtert wie sonst nach Medienart, ein
+Bildmischer-Eingang zeigt also nur das Bild des Ausgangs. Rechte ändern
+sich nicht: Geschaltet wird am Ziel, die Rechte dort entscheiden.
+
 ### 4.0 Laufenden Workflow ändern und Startzustand speichern
 
 Doppelklick auf einen laufenden Workflow öffnet ihn im Flow Editor. Dort

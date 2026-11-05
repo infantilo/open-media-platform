@@ -68,6 +68,8 @@ import { coreIO, xyPanelAdapter } from "../shell/streamdeck/adapters/xy-panel.ts
 import { STANDARD_FORMATS, uniqueRoleName } from "./roles.ts";
 import { isAnchorRole, renameRole } from "./role-designer-logic.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
+import { openInterfaceDialog } from "./workflow-interface-dialog.ts";
+import { type InterfacePort, type InterfaceSide, portNameOf, renameRoleIn, type WorkflowInterface } from "./workflow-interface-logic.ts";
 import { openStartDialog } from "./start-dialog.ts";
 import type { StartBody } from "./start-dialog-logic.ts";
 import { openNodeDiagnosis } from "./node-diagnose-dialog.ts";
@@ -2404,6 +2406,7 @@ export class FlowCanvas extends HTMLElement {
       ...draft,
       roles: draft.roles.filter((r) => r.name !== roleName),
       connections: draft.connections.filter((c) => c.fromRole !== roleName && c.toRole !== roleName),
+      interface: renameRoleIn(draft.interface as WorkflowInterface | undefined, roleName, null),
     }));
   }
 
@@ -2428,7 +2431,12 @@ export class FlowCanvas extends HTMLElement {
         delete this.#positions[oldId];
       }
     }
-    this.#mutateWorkflowDraft((draft) => ({ ...draft, roles: result.roles, connections: result.connections }));
+    this.#mutateWorkflowDraft((draft) => ({
+      ...draft,
+      roles: result.roles,
+      connections: result.connections,
+      interface: renameRoleIn(draft.interface as WorkflowInterface | undefined, oldName, newName.trim()),
+    }));
   }
 
   #addWorkflowConnection(fromRole: string, toRole: string) {
@@ -2814,6 +2822,89 @@ export class FlowCanvas extends HTMLElement {
     return wf.status === "stopped" || wf.status === "paused";
   }
 
+  // Kap. 88: Pads der Workflow-Schnittstelle am Rand der Workflow-Kachel — Eingänge links, Ausgänge rechts, höchstens zwei
+  // Zeilen je Seite ("+n" für den Rest; die volle Liste steht im Tooltip und im Schnittstellen-Dialog).
+  #appendWorkflowInterfacePads(g: SVGGElement, status: string, ifc: WorkflowInterface) {
+    const MAX_ROWS = 2;
+    const live = status === "started";
+    const draw = (ports: InterfacePort[], side: "input" | "output") => {
+      const x = side === "input" ? 0 : NODE_WIDTH;
+      const shown = ports.length > MAX_ROWS ? MAX_ROWS : ports.length;
+      for (let i = 0; i < shown; i++) {
+        const y = HEADER_HEIGHT + 12 + i * 18;
+        const rest = ports.length - (MAX_ROWS - 1);
+        const more = ports.length > MAX_ROWS && i === MAX_ROWS - 1;
+        const pad = document.createElementNS(SVG_NS, "circle");
+        pad.setAttribute("data-role", `workflow-${side}-pad`);
+        pad.setAttribute("data-pad-name", more ? "" : ports[i].name);
+        pad.setAttribute("cx", String(x));
+        pad.setAttribute("cy", String(y));
+        pad.setAttribute("r", "5");
+        pad.setAttribute("fill", live ? "#4caf50" : "#777");
+        pad.setAttribute("stroke", "#1b1b1b");
+        const tip = document.createElementNS(SVG_NS, "title");
+        tip.textContent = (more ? ports.slice(MAX_ROWS - 1) : [ports[i]]).map((p) => p.label || p.name).join(", ");
+        pad.appendChild(tip);
+        g.appendChild(pad);
+        const text = document.createElementNS(SVG_NS, "text");
+        text.setAttribute("x", String(side === "input" ? 10 : NODE_WIDTH - 10));
+        text.setAttribute("y", String(y + 4));
+        text.setAttribute("text-anchor", side === "input" ? "start" : "end");
+        text.setAttribute("fill", "#d8d8d8");
+        text.setAttribute("font-size", "10");
+        text.setAttribute("pointer-events", "none");
+        text.textContent = more ? `+${rest}` : truncateTileTitle(ports[i].label || ports[i].name, 13);
+        g.appendChild(text);
+      }
+    };
+    draw(ifc.inputs ?? [], "input");
+    draw(ifc.outputs ?? [], "output");
+  }
+
+  // Kap. 88: Schnittstellen-Dialog des gerade bearbeiteten Workflows. Gestoppt/pausiert: ändert nur den Entwurf (Speichern wie
+  // gewohnt). Laufend: sofort per PUT — die Schnittstelle ist reine Zuordnung und ändert die laufenden Prozesse nicht.
+  async #editWorkflowInterface() {
+    const workflowId = this.#workflowEditId;
+    const wf = this.#workflows.find((w) => w.id === workflowId);
+    if (!workflowId || !wf) return;
+    const live = !this.#isIdleWorkflow(wf);
+    const base = live ? wf.definition : this.#workflowEditDraft;
+    if (!base) return;
+    const portsOf = (role: string, side: InterfaceSide): string[] => {
+      const nodeId = wf.runtime?.[role]?.nodeId;
+      const node = this.#graph.nodes.find((n) => n.id === nodeId);
+      if (!node) return [];
+      const ports = side === "outputs" ? node.outputs : node.inputs;
+      return [...new Set(ports.map((p) => portNameOf(p.label, node.label)))];
+    };
+    const result = await openInterfaceDialog({
+      workflowName: wf.name,
+      roles: base.roles.map((r) => r.name),
+      initial: base.interface as WorkflowInterface | undefined,
+      portsOf,
+    });
+    if (result === null) return;
+    if (!live) {
+      this.#mutateWorkflowDraft((draft) => ({ ...draft, interface: result }));
+      return;
+    }
+    try {
+      const res = await apiFetch(`/api/v1/workflows/${encodeURIComponent(workflowId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: wf.name, definition: { ...wf.definition, interface: result } }),
+      });
+      if (!res.ok) {
+        this.#showToast(tt("flow.616d9c", { p0: (await res.text()) || res.status }));
+        return;
+      }
+      this.#showToast(tt("flow.00d76f"));
+      await this.#queueFetchAndRender();
+    } catch (err) {
+      this.#showToast(tt("flow.616d9c", { p0: err }));
+    }
+  }
+
   // Nutzerwunsch (2026-07-26, wörtlich, zweite Präzisierung): "ein
   // Workflow soll im Root (oder Parent) aussehen wie eine Gruppe...
   // aber wenn er läuft, ist er im Floweditor maximiert und sieht nicht
@@ -2893,6 +2984,13 @@ export class FlowCanvas extends HTMLElement {
         subtitleTooltip.textContent = fullSubtitle;
         subtitle.appendChild(subtitleTooltip);
       }
+      const ifc = wf.definition.interface as WorkflowInterface | undefined;
+      const hasPads = (ifc?.outputs?.length ?? 0) + (ifc?.inputs?.length ?? 0) > 0;
+      if (hasPads) {
+        // Kap. 88: mit Schnittstelle zeigt der Körper die Pads (Status steht im Rahmen und Tooltip), sonst den Status.
+        subtitle.textContent = "";
+        this.#appendWorkflowInterfacePads(g, wf.status, ifc!);
+      }
       g.appendChild(subtitle);
 
       // Wie eine echte Gruppen-Kachel: ziehbar (#onTilePointerDown ist ID-
@@ -2968,9 +3066,17 @@ export class FlowCanvas extends HTMLElement {
       // Bearbeiten-Modus ist aus Nutzersicht "auch nur eine Gruppe".
       // #autoArrange() erkennt #workflowEditId selbst und verzweigt in
       // #autoArrangeWorkflowEdit() (live vs. pausiert/Entwurf).
+      const ifcBtn = document.createElement("button");
+      ifcBtn.setAttribute("data-role", "workflow-interface-button");
+      ifcBtn.textContent = tt("wfi.button");
+      ifcBtn.title = tt("wfi.buttonTitle");
+      ifcBtn.style.cssText = "margin-left:auto;font-size:var(--omp-font-size-xs);";
+      ifcBtn.addEventListener("click", () => void this.#editWorkflowInterface());
+      this.#breadcrumbBar.appendChild(ifcBtn);
+
       const arrangeBtn = document.createElement("button");
       arrangeBtn.textContent = tt("flow.de024d");
-      arrangeBtn.style.cssText = "margin-left:auto;font-size:var(--omp-font-size-xs);";
+      arrangeBtn.style.cssText = "font-size:var(--omp-font-size-xs);";
       arrangeBtn.title = tt("flow.486700");
       arrangeBtn.addEventListener("click", () => this.#autoArrange());
       this.#breadcrumbBar.appendChild(arrangeBtn);

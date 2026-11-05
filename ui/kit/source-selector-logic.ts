@@ -32,6 +32,15 @@ export interface SourceEntry {
   /** Roher NMOS-`grouphint`-Tag-Wert ("<gruppe>:<rolle>[:<scope>]"). */
   groupHint?: string;
   access?: SourceAccess;
+  /** Kap. 88: Workflow-Ausgänge, als die dieser Sender exponiert ist (Regieplatz → "PGM"). */
+  exposedAs?: ExposedOutput[];
+}
+
+export interface ExposedOutput {
+  workflowId: string;
+  workflowName: string;
+  portName: string;
+  portLabel: string;
 }
 
 export interface ParsedGroupHint {
@@ -73,7 +82,7 @@ export function applyAccess(
   return out;
 }
 
-export type SectionKind = "current" | "other" | "unassigned";
+export type SectionKind = "outputs" | "current" | "other" | "unassigned";
 
 export type SourceTreeNode = SourceGroupNode | SourceLeafNode;
 
@@ -219,6 +228,49 @@ function nodeGroups(
   return [...nodes, ...loose.map((e) => leaf(e, parseGroupHint(e.groupHint)?.role)).sort(byLabel)];
 }
 
+/**
+ * Kap. 88: Sektion "Workflow-Ausgänge" — nur ausdrücklich exponierte Sender, je Workflow und Ausgang gebündelt
+ * (Bild + Ton unter "PGM"). Der Operator findet "Regieplatz 1 → PGM", ohne die Rollen des Workflows zu kennen.
+ */
+function outputsSection(entries: (SourceEntry & { access: SourceAccess })[]): SourceGroupNode | null {
+  const byWf = new Map<string, { name: string; ports: Map<string, { label: string; members: SourceLeafNode[] }> }>();
+  for (const e of entries) {
+    for (const x of e.exposedAs ?? []) {
+      let wf = byWf.get(x.workflowId);
+      if (!wf) {
+        wf = { name: x.workflowName, ports: new Map() };
+        byWf.set(x.workflowId, wf);
+      }
+      let port = wf.ports.get(x.portName);
+      if (!port) {
+        port = { label: x.portLabel || x.portName, members: [] };
+        wf.ports.set(x.portName, port);
+      }
+      port.members.push(leaf(e));
+    }
+  }
+  if (byWf.size === 0) return null;
+  const wfNodes: SourceGroupNode[] = [];
+  for (const [wfId, wf] of byWf) {
+    const id = `sec:outputs/wf:${wfId}`;
+    const ports: SourceGroupNode[] = [];
+    for (const [name, port] of wf.ports) {
+      ports.push({
+        type: "group",
+        id: `${id}/out:${name}`,
+        label: port.label,
+        level: "natural",
+        children: port.members.sort(mediaOrder),
+        defaultOpen: true,
+      });
+    }
+    ports.sort(byLabel);
+    wfNodes.push({ type: "group", id, label: wf.name || wfId, level: "workflow", children: ports, defaultOpen: true });
+  }
+  wfNodes.sort(byLabel);
+  return { type: "group", id: "sec:outputs", label: t("kit.workflowOutputs"), level: "section", children: wfNodes, defaultOpen: true };
+}
+
 /** Baut den Anzeigebaum: Current workflow → Other workflows → Other / unassigned. */
 export function buildSourceTree(entries: SourceEntry[], opts: BuildOptions = {}, policy?: Parameters<typeof applyAccess>[1]): SourceGroupNode[] {
   const accepts = opts.accepts && opts.accepts.length > 0 ? new Set(opts.accepts) : null;
@@ -243,6 +295,8 @@ export function buildSourceTree(entries: SourceEntry[], opts: BuildOptions = {},
   }
 
   const sections: SourceGroupNode[] = [];
+  const outputs = outputsSection(visible);
+  if (outputs) sections.push(outputs);
   if (current.length > 0) {
     sections.push({
       type: "group",
