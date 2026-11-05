@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
@@ -179,6 +180,9 @@ type roleStateEnvelope struct {
 	// der nie gespeichert wurde, behält das Verhalten "letzter Stand vor
 	// Stop". Update() eines gestoppten Workflows leert alles inkl. Pins.
 	Pinned bool `json:"__pinned,omitempty"`
+	// Unrestored: Merker "gespeicherter Zustand noch nicht im Node
+	// angekommen" — überlebt Orchestrator-Neustarts (s. markUnrestored).
+	Unrestored bool `json:"__unrestored,omitempty"`
 }
 
 // captureOneRoleState ist der pro-Rolle-Kern von captureRoleState,
@@ -220,16 +224,18 @@ func (s *Service) pinRoleState(wf Workflow) {
 func (s *Service) captureRoleStateMode(wf Workflow, role string, senderToAlias map[string]string, mode captureMode) {
 	if mode == capturePin {
 		s.clearUnrestored(wf.ID, role)
-	} else if s.isUnrestored(wf.ID, role) {
-		// Die Rolle läuft, hat ihren gespeicherten Zustand aber noch nicht
-		// (erfolgreich) zurückbekommen: ihr aktueller Stand ist leer/
-		// Standard. Ihn zu speichern würde den guten Zustand überschreiben
-		// (Nutzerfund 2026-10-16: Quellbuttons/Kanäle von Bild- und
-		// Tonmischer weg nach Start/Stop/Umzug).
-		return
-	}
-	if mode == captureAuto {
-		if saved, err := s.store.GetRoleState(wf.ID); err == nil {
+	} else {
+		saved, _ := s.store.GetRoleState(wf.ID)
+		// Die Rolle hat ihren gespeicherten Zustand noch nicht (erfolgreich)
+		// zurückbekommen: ihr aktueller Stand ist leer/Standard. Ihn zu
+		// speichern würde den guten Zustand überschreiben (Nutzerfund
+		// 2026-10-16 und 2026-11-05: Quellen/Mischer verlieren nach Stop/
+		// Start ihre Einstellungen). Der Merker steht auch im gespeicherten
+		// Eintrag und überlebt so einen Orchestrator-Neustart.
+		if s.isUnrestored(wf.ID, role) || hasUnrestoredMarker(saved[role]) {
+			return
+		}
+		if mode == captureAuto {
 			var cur roleStateEnvelope
 			if raw, ok := saved[role]; ok && json.Unmarshal(raw, &cur) == nil && cur.Pinned {
 				return
@@ -357,11 +363,19 @@ func (s *Service) restoreRoleState(wf Workflow) {
 		return
 	}
 
+	// Parallel je Rolle: eine nicht erreichbare Rolle (bis zu 16 s Wiederholung)
+	// darf die Wiederherstellung der übrigen nicht aufhalten.
+	var wg sync.WaitGroup
 	for role, raw := range saved {
-		if err := s.restoreOneRoleState(wf, role, raw); err != nil {
-			slog.Warn("workflows: failed to restore role state", "workflow", wf.ID, "role", role, "error", err)
-		}
+		wg.Add(1)
+		go func(role string, raw json.RawMessage) {
+			defer wg.Done()
+			if err := s.restoreOneRoleState(wf, role, raw); err != nil {
+				slog.Warn("workflows: failed to restore role state", "workflow", wf.ID, "role", role, "error", err)
+			}
+		}(role, raw)
 	}
+	wg.Wait()
 }
 
 // restoreOneRoleState löst Alias→aktuelle-Sender-ID auf, postet und
@@ -376,7 +390,11 @@ func (s *Service) restoreRoleState(wf Workflow) {
 // Alias im Blob enthalten, z. B. reine DVE-Box-/Enabled-Flags ohne
 // Sender-Bezug) verifiziert nicht extra — ein einzelner POST reicht.
 func (s *Service) restoreOneRoleState(wf Workflow, role string, raw json.RawMessage) error {
-	err := s.restoreOneRoleStateTry(wf, role, raw, restoreStateRetries)
+	return s.restoreOneRoleStateN(wf, role, raw, restoreStateRetries)
+}
+
+func (s *Service) restoreOneRoleStateN(wf Workflow, role string, raw json.RawMessage, retries int) error {
+	err := s.restoreOneRoleStateTry(wf, role, raw, retries)
 	if err == nil {
 		s.clearUnrestored(wf.ID, role)
 	}
@@ -384,6 +402,7 @@ func (s *Service) restoreOneRoleState(wf Workflow, role string, raw json.RawMess
 }
 
 func (s *Service) restoreOneRoleStateTry(wf Workflow, role string, raw json.RawMessage, retries int) error {
+	raw = stripUnrestoredMarker(raw)
 	var lastErr error
 	for attempt := 1; attempt <= retries; attempt++ {
 		if attempt > 1 {
@@ -448,7 +467,7 @@ func (s *Service) restoreOneRoleStateTry(wf Workflow, role string, raw json.RawM
 		switch {
 		case err != nil:
 			lastErr = err
-		case stateMatches(after, state):
+		case stateCarriesIDs(after, state, resolvedIDs):
 			return nil
 		default:
 			lastErr = fmt.Errorf("restored state did not stick (registry propagation lag)")
@@ -739,12 +758,38 @@ func unrestoredKey(wfID, role string) string { return wfID + "\x00" + role }
 
 func (s *Service) markUnrestored(wfID string, roles ...string) {
 	s.unrestoredMu.Lock()
-	defer s.unrestoredMu.Unlock()
 	if s.unrestored == nil {
 		s.unrestored = map[string]int{}
 	}
 	for _, r := range roles {
 		s.unrestored[unrestoredKey(wfID, r)] = 0
+	}
+	s.unrestoredMu.Unlock()
+	// Zusätzlich im gespeicherten Eintrag vermerken: ein Orchestrator-Neustart
+	// mitten in der Wiederherstellung ließ den Node sonst leer laufen, und die
+	// nächste Sicherung hielt den leeren Stand für den echten.
+	s.setPersistedMarker(wfID, true, roles...)
+}
+
+func (s *Service) setPersistedMarker(wfID string, on bool, roles ...string) {
+	saved, err := s.store.GetRoleState(wfID)
+	if err != nil {
+		return
+	}
+	for _, r := range roles {
+		raw, ok := saved[r]
+		if !ok || hasUnrestoredMarker(raw) == on {
+			continue
+		}
+		var updated json.RawMessage
+		if on {
+			updated = withUnrestoredMarker(raw)
+		} else {
+			updated = stripUnrestoredMarker(raw)
+		}
+		if err := s.store.SetRoleState(wfID, r, updated); err != nil {
+			slog.Warn("workflows: failed to persist restore marker", "workflow", wfID, "role", r, "error", err)
+		}
 	}
 }
 
@@ -757,10 +802,13 @@ func (s *Service) isUnrestored(wfID, role string) bool {
 
 func (s *Service) clearUnrestored(wfID, role string) {
 	s.unrestoredMu.Lock()
-	defer s.unrestoredMu.Unlock()
 	delete(s.unrestored, unrestoredKey(wfID, role))
+	s.unrestoredMu.Unlock()
+	s.setPersistedMarker(wfID, false, role)
 }
 
+// clearUnrestoredWorkflow verwirft nur die Laufzeit-Merker (Stop/Update). Der
+// gespeicherte Merker bleibt: die Wiederherstellung steht ja weiterhin aus.
 func (s *Service) clearUnrestoredWorkflow(wfID string) {
 	s.unrestoredMu.Lock()
 	defer s.unrestoredMu.Unlock()
@@ -770,6 +818,95 @@ func (s *Service) clearUnrestoredWorkflow(wfID string) {
 			delete(s.unrestored, k)
 		}
 	}
+}
+
+const unrestoredMarkerKey = "__unrestored"
+
+func hasUnrestoredMarker(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil {
+		return false
+	}
+	v, ok := m[unrestoredMarkerKey]
+	return ok && string(v) == "true"
+}
+
+func withUnrestoredMarker(raw json.RawMessage) json.RawMessage {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil {
+		return raw
+	}
+	m[unrestoredMarkerKey] = json.RawMessage("true")
+	out, err := json.Marshal(m)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+func stripUnrestoredMarker(raw json.RawMessage) json.RawMessage {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil {
+		return raw
+	}
+	if _, ok := m[unrestoredMarkerKey]; !ok {
+		return raw
+	}
+	delete(m, unrestoredMarkerKey)
+	out, err := json.Marshal(m)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+// stateCarriesIDs prüft nach dem Wiederherstellen nur die Felder, in denen
+// aufgelöste Sender-/Node-IDs stehen: jedes Blatt von want, das eine dieser IDs
+// ist, muss unter demselben Pfad in after stehen. Ein Vergleich des ganzen
+// Dokuments scheiterte, sobald der Node Felder normalisiert oder ergänzt
+// (Bildmischer: "did not stick" bei jedem Start, Nutzerfund 2026-11-05).
+func stateCarriesIDs(after, want json.RawMessage, ids []string) bool {
+	var a, w interface{}
+	if json.Unmarshal(after, &a) != nil || json.Unmarshal(want, &w) != nil {
+		return false
+	}
+	set := map[string]bool{}
+	for _, id := range ids {
+		set[id] = true
+	}
+	return carriesIDs(a, w, set)
+}
+
+func carriesIDs(a, w interface{}, ids map[string]bool) bool {
+	switch wv := w.(type) {
+	case string:
+		if ids[wv] {
+			as, _ := a.(string)
+			return as == wv
+		}
+	case map[string]interface{}:
+		am, _ := a.(map[string]interface{})
+		for k, v := range wv {
+			if !carriesIDs(am[k], v, ids) {
+				return false
+			}
+		}
+	case []interface{}:
+		aa, _ := a.([]interface{})
+		for i, v := range wv {
+			var av interface{}
+			if i < len(aa) {
+				av = aa[i]
+			}
+			if !carriesIDs(av, v, ids) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // markSavedRolesUnrestored markiert alle Rollen, für die ein gespeicherter
@@ -785,37 +922,49 @@ func (s *Service) markSavedRolesUnrestored(wfID string) {
 }
 
 // retryUnrestored versucht für laufende Rollen mit ausstehender
-// Wiederherstellung einen weiteren Durchlauf; nach maxUnrestoredRetries
-// erfolglosen Runden wird die Markierung verworfen (der Node nimmt den
-// Zustand offenbar nicht an — dann soll der Ist-Stand wieder gesichert werden).
+// Wiederherstellung (Laufzeit-Merker oder gespeicherter Merker, z. B. nach einem
+// Orchestrator-Neustart) einen weiteren Durchlauf. Nach maxUnrestoredRetries
+// erfolglosen Runden wird NICHT aufgegeben: der Merker bleibt, damit der leere
+// Ist-Stand den gespeicherten nie überschreibt (Nutzerfund 2026-11-05); es gibt
+// dann nur noch je Runde einen einzelnen Versuch. Aufgehoben wird er durch eine
+// erfolgreiche Wiederherstellung oder ein ausdrückliches Speichern (Pin).
 func (s *Service) retryUnrestored(wf Workflow) {
 	saved, err := s.store.GetRoleState(wf.ID)
 	if err != nil {
 		return
 	}
 	for role := range wf.Runtime {
-		if !s.isUnrestored(wf.ID, role) {
+		raw, ok := saved[role]
+		if !s.isUnrestored(wf.ID, role) && !hasUnrestoredMarker(raw) {
 			continue
 		}
-		raw, ok := saved[role]
 		if !ok {
 			s.clearUnrestored(wf.ID, role)
 			continue
 		}
-		if err := s.restoreOneRoleState(wf, role, raw); err == nil {
+		s.unrestoredMu.Lock()
+		if s.unrestored == nil {
+			s.unrestored = map[string]int{}
+		}
+		k := unrestoredKey(wf.ID, role)
+		n := s.unrestored[k]
+		s.unrestored[k] = n
+		s.unrestoredMu.Unlock()
+
+		retries := restoreStateRetries
+		if n >= maxUnrestoredRetries {
+			retries = 1
+		}
+		if err := s.restoreOneRoleStateN(wf, role, raw, retries); err == nil {
 			continue
+		} else if n+1 == maxUnrestoredRetries {
+			slog.Warn("workflows: role state could not be restored, keeping saved state untouched until it succeeds or is saved explicitly", "workflow", wf.ID, "role", role, "error", err)
 		} else {
 			slog.Warn("workflows: role state restore retry failed", "workflow", wf.ID, "role", role, "error", err)
 		}
 		s.unrestoredMu.Lock()
-		k := unrestoredKey(wf.ID, role)
-		if n, ok := s.unrestored[k]; ok {
-			if n+1 >= maxUnrestoredRetries {
-				delete(s.unrestored, k)
-				slog.Warn("workflows: giving up restoring role state", "workflow", wf.ID, "role", role)
-			} else {
-				s.unrestored[k] = n + 1
-			}
+		if n+1 <= maxUnrestoredRetries {
+			s.unrestored[k] = n + 1
 		}
 		s.unrestoredMu.Unlock()
 	}
