@@ -2605,13 +2605,20 @@ export class FlowCanvas extends HTMLElement {
     const roleNameByNodeId = new Map<string, string>();
     const roles: { name: string; nodeType: string; hostId?: string }[] = [];
     const missing: string[] = [];
+    const notRunning: string[] = [];
     const usedNames = new Set<string>(existingRoleNameByNodeId.values());
 
     for (const nodeId of memberIds) {
       const node = this.#graph.nodes.find((n) => n.id === nodeId);
-      const inst = node?.instanceId ? instanceById.get(node.instanceId) : undefined;
-      if (!node || !inst) {
-        missing.push(node?.label ?? nodeId);
+      if (!node) {
+        // Der Workflow führt die Rolle noch, ihr Node ist aber nicht (mehr) in der Registry: Prozess beendet, nicht neu
+        // gestartet. Das ist etwas anderes als „nicht über den Katalog gestartet“ — mit Rollenname melden.
+        notRunning.push(existingRoleNameByNodeId.get(nodeId) ?? nodeId);
+        continue;
+      }
+      const inst = node.instanceId ? instanceById.get(node.instanceId) : undefined;
+      if (!inst) {
+        missing.push(node.label);
         continue;
       }
       const roleName = existingRoleNameByNodeId.get(nodeId) ?? uniqueRoleName(inst.type, usedNames);
@@ -2620,6 +2627,10 @@ export class FlowCanvas extends HTMLElement {
       roles.push({ name: roleName, nodeType: inst.type, hostId: inst.hostId });
     }
 
+    if (notRunning.length > 0) {
+      this.#showToast(tt("flow.roleNotRunning", { p0: notRunning.join(", ") }));
+      return;
+    }
     if (missing.length > 0) {
       this.#showToast(
         tt("flow.b2892b", { p0: 

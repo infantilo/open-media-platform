@@ -197,3 +197,66 @@ fn pip_live() {
     }
     let _ = std::fs::remove_dir_all(&domain);
 }
+
+/// Regression (Nutzerfund 2026-11-05): eine Szene mit Einfahrt muss das PIP tatsächlich ins Bild fahren. Vorher kam `Enable`
+/// nach `Animate`, zählte den Animationszähler hoch und brach die Einfahrt ab — das PIP blieb an der Startposition außerhalb
+/// des Bildes. Der Test spielt dieselben Aktionen ab wie `pip.applyPreset` und prüft das gerenderte Bild.
+#[test]
+#[ignore = "braucht libmxl (deploy/dev/mxl.env) und startet eine echte Pipeline"]
+fn pip_scene_with_entry_animation_appears() {
+    use crate::pipstate::{LevelPips, PipEntry, PipPreset};
+    gst::init().unwrap();
+    let domain = format!("/dev/shm/omp-pip-scene-{}", std::process::id());
+    std::fs::create_dir_all(&domain).unwrap();
+    let ctx = Arc::new(MxlContext::new(&domain).expect("MxlContext"));
+    let flow = omp_node_sdk::idgen::new_v4();
+    let (src_pipe, _out) = source(&ctx, 0xFFFF0000, &flow);
+    let out_flow = omp_node_sdk::idgen::new_v4();
+    let config = Config {
+        domain: domain.clone(),
+        flow_ids: vec![out_flow.clone()],
+        label: "pip-scene".into(),
+        width: W,
+        height: H,
+        hwaccel: omp_mediaio::hwaccel::HwAccel::default(),
+        stills: Arc::new(Mutex::new(Default::default())),
+        pip_slots: 2,
+        pip_2d_slots: 0,
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let monitor = Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Receiver));
+    let sd = shutdown.clone();
+    let th = std::thread::spawn(move || pipeline::run(config, tx, sd, ready_tx, Arc::new(AtomicU64::new(0)), monitor));
+    let h = ready_rx.blocking_recv().expect("ready").expect("pipeline");
+    h.set_inputs(vec![DiscoveredInput { sender_id: "s0".into(), label: "s0".into(), flow_id: flow.clone(), device_id: String::new(), format: None }]);
+    std::thread::sleep(Duration::from_secs(4));
+
+    let rect = |x, y, w, hh| PipPose::from_box(&DveBox { x, y, width: w, height: hh });
+    let target = rect(40, 40, 200, 120);
+    let entry = PipEntry {
+        slot: 0,
+        sender_id: Some("s0".into()),
+        pose: target,
+        start: Some(rect(W as i32 + 50, 40, 200, 120)), // vollständig rechts außerhalb des Bildes
+        end: None,
+        in_ms: 400,
+        out_ms: 0,
+        z: None,
+        focus: None,
+    };
+    let mut pips = LevelPips::new(2, 0, W, H);
+    let actions = pips.plan_apply(&PipPreset { id: "t".into(), name: "t".into(), entries: vec![entry] });
+    actions.iter().for_each(|a| a.run(&h, 0));
+    std::thread::sleep(Duration::from_millis(1800));
+    let d = grab(&ctx, &out_flow);
+    println!("Mitte des PIP {:?}", px(&d, 140, 100));
+    assert!(is(px(&d, 140, 100), RED), "das PIP muss nach der Einfahrt an seiner Zielposition stehen");
+
+    shutdown.store(true, Ordering::Relaxed);
+    let _ = th.join();
+    while rx.try_recv().is_ok() {}
+    let _ = src_pipe.set_state(gst::State::Null);
+    let _ = std::fs::remove_dir_all(&domain);
+}

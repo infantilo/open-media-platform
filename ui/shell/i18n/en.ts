@@ -281,6 +281,7 @@ export const en: Record<keyof typeof de, string> = {
   "wfi.feedTip": "Permanent assignment (output → input); click and press Del to disconnect",
   "wfi.disconnected": "Connection removed.",
   "wfi.disconnect": "Disconnect (Del)",
+  "flow.roleNotRunning": "Cannot save to the workflow — the role is not running (its node is not registered): {p0}. Restart the role (or stop and start the workflow) and save again.",
   "kit.workflowOutputs": "Workflow outputs",
   "kit.currentWorkflow": "Current workflow",
   "kit.otherWorkflows": "Other workflows",

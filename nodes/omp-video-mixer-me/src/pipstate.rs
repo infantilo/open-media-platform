@@ -214,8 +214,12 @@ impl LevelPips {
             out.push(Action::Z(e.slot, z));
             match e.start {
                 Some(from) if e.in_ms > 0 => {
-                    out.push(Action::Animate { slot: e.slot, from: Some(from), to: e.pose, ms: e.in_ms, then_disable: false, z_during: None, z_after: None });
+                    // Reihenfolge ist wichtig: `Enable` zählt den Animationszähler des Slots hoch und würde eine bereits
+                    // gestartete Einfahrt sofort abbrechen (das PIP bliebe an der Startposition stehen, außerhalb des
+                    // Bildes). Darum erst Startpose setzen und einschalten, die Einfahrt zuletzt.
+                    out.push(Action::Pose(e.slot, from));
                     out.push(Action::Enable(e.slot, true));
+                    out.push(Action::Animate { slot: e.slot, from: Some(from), to: e.pose, ms: e.in_ms, then_disable: false, z_during: None, z_after: None });
                 }
                 _ => {
                     out.push(Action::Pose(e.slot, e.pose));
@@ -364,7 +368,22 @@ mod tests {
         e.in_ms = 400;
         let acts = l.plan_apply(&PipPreset { id: "a".into(), name: "a".into(), entries: vec![e] });
         assert!(acts.iter().any(|a| matches!(a, Action::Animate { slot: 0, from: Some(_), ms: 400, then_disable: false, .. })));
-        assert!(!acts.iter().any(|a| matches!(a, Action::Pose(..))));
+        // Die Zielpose wird nicht hart gesetzt; nur die Startpose (vor dem Einschalten).
+        assert!(!acts.contains(&Action::Pose(0, pose(0, 0, 100, 100))));
+    }
+
+    #[test]
+    fn apply_with_start_enables_before_the_entry_animation() {
+        // Regression (Nutzerfund 2026-11-05): `Enable` nach `Animate` brach die Einfahrt ab, das PIP erschien nie.
+        let mut l = LevelPips::new(2, 0, 1280, 720);
+        let mut e = entry(0, pose(0, 0, 100, 100));
+        e.start = Some(pose(-100, 0, 100, 100));
+        e.in_ms = 400;
+        let acts = l.plan_apply(&PipPreset { id: "a".into(), name: "a".into(), entries: vec![e] });
+        let enable = acts.iter().position(|a| *a == Action::Enable(0, true)).expect("enable");
+        let animate = acts.iter().position(|a| matches!(a, Action::Animate { slot: 0, .. })).expect("animate");
+        assert!(enable < animate, "Enable muss vor Animate laufen: {acts:?}");
+        assert_eq!(acts.last(), acts.get(animate), "Animate ist die letzte Aktion des Slots");
     }
 
     #[test]
