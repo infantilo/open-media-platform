@@ -30,6 +30,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::adbreak;
 use crate::playlist::Mode;
 use crate::remote::OrchestratorAuth;
 use crate::children::ChildState;
@@ -95,6 +96,22 @@ pub struct Snapshot {
     /// das Ende/die Rücknahme aus; alte Snapshots → leer).
     #[serde(default)]
     pub ad_open: Vec<SnapAdOpen>,
+    /// Einstellungen des Panels (Ziele-Reiter, Werbung, Preflight …); ältere Snapshots → `None` (Vorgaben bleiben).
+    #[serde(default)]
+    pub config: Option<SnapConfig>,
+}
+
+/// Bedienbare Einstellungen, die einen Neustart überleben müssen (nicht nur Playlist und Ziel-Labels).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnapConfig {
+    pub target_audio_mixer_label: String,
+    pub ad_enabled: bool,
+    pub ad_target: String,
+    pub ad_pre_roll_ms: u64,
+    pub preflight_window_min: u32,
+    pub default_filler: String,
+    pub cue_hold: bool,
+    pub require_release_default: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -185,6 +202,16 @@ pub fn build_snapshot(state: &AutomationState, since_cache: &mut SinceCache, now
             .collect(),
         onair_utc_ms: state.onair_utc_ms,
         plugins: crate::hooks::capture(),
+        config: Some(SnapConfig {
+            target_audio_mixer_label: state.target_audio_mixer_label.clone(),
+            ad_enabled: state.ad.enabled,
+            ad_target: state.ad.target.clone(),
+            ad_pre_roll_ms: state.ad.pre_roll_ms,
+            preflight_window_min: state.preflight_window_min,
+            default_filler: state.default_filler.clone(),
+            cue_hold: state.cue_hold,
+            require_release_default: state.require_release_default,
+        }),
         ad_open: {
             let mut v: Vec<SnapAdOpen> = state
                 .ad_open
@@ -242,6 +269,19 @@ pub fn apply_snapshot(state: &mut AutomationState, snap: Snapshot, now_utc_ms: i
         if cur.is_empty() {
             *cur = saved;
         }
+    }
+
+    if let Some(c) = snap.config {
+        if state.target_audio_mixer_label.is_empty() {
+            state.target_audio_mixer_label = c.target_audio_mixer_label;
+        }
+        state.ad.enabled = c.ad_enabled;
+        state.ad.target = c.ad_target;
+        state.ad.pre_roll_ms = c.ad_pre_roll_ms.clamp(adbreak::MIN_PRE_ROLL_MS, 60_000);
+        state.preflight_window_min = c.preflight_window_min.clamp(1, 240);
+        state.default_filler = c.default_filler;
+        state.cue_hold = c.cue_hold;
+        state.require_release_default = c.require_release_default;
     }
 
     state.ad_open = snap
@@ -445,6 +485,10 @@ struct Inner {
     status: String,
     last_error: Option<String>,
     ticks_since_lookup: u32,
+    /// Orchestrator hat bestätigt: kein Channel an diese Instanz gebunden → lokale Sicherung zuständig.
+    no_channel_confirmed: bool,
+    local_loaded: bool,
+    local_last: Option<String>,
 }
 
 pub struct Persistence {
@@ -513,7 +557,12 @@ fn now_utc_ms() -> i64 {
 /// überschreiben).
 fn persist_tick(store: &AutomationStore) {
     let p = &store.persistence;
-    let Some(client) = p.client.clone() else { return };
+    let Some(client) = p.client.clone() else {
+        // Ohne Orchestrator-Anbindung (kein Launch-Secret): nur die lokale Sicherung.
+        p.inner.lock().expect("lock poisoned").no_channel_confirmed = true;
+        local_tick(store);
+        return;
+    };
 
     let (channel, loaded) = {
         let inner = p.inner.lock().expect("lock poisoned");
@@ -540,8 +589,8 @@ fn persist_tick(store: &AutomationStore) {
                 inner.last_error = None;
             }
             Ok(None) => {
-                p.inner.lock().expect("lock poisoned").status =
-                    "kein Channel an diese Instanz gebunden (Persistenz aus)".to_string();
+                p.inner.lock().expect("lock poisoned").no_channel_confirmed = true;
+                local_tick(store);
             }
             Err(e) => {
                 p.inner.lock().expect("lock poisoned").status = format!("Channel-Suche fehlgeschlagen: {e}");
@@ -687,6 +736,103 @@ pub async fn asrun_loop(store: Arc<AutomationStore>) {
     }
 }
 
+// ---- Lokale Sicherung (Instanz ohne Channel) ------------------------------------------------------
+//
+// Eine freistehende Instanz hat keinen Channel; ein manueller Neustart gibt ihr eine neue Instanz-ID
+// (`restartInstance`), der Orchestrator-Zustand wäre also ohnehin nicht mehr zuzuordnen. Deshalb sichert
+// sie denselben Snapshot als Datei unter dem stabilen Zustandsschlüssel `OMP_STATE_KEY` (bleibt beim
+// Neustart gleich, wie beim WebRTC-Gateway) und stellt ihn beim Start wieder her. Ist ein Channel
+// gebunden, ist ausschließlich dieser zuständig.
+
+/// `OMP_PLAYOUT_STATE_DIR`, sonst `.run/playout-automation` relativ zum Arbeitsverzeichnis des Nodes.
+fn local_state_path() -> std::path::PathBuf {
+    let dir = std::env::var("OMP_PLAYOUT_STATE_DIR").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| ".run/playout-automation".to_string());
+    let safe = |v: String| Some(v).filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+    let key = std::env::var("OMP_STATE_KEY").ok().and_then(safe)
+        .or_else(|| std::env::var("OMP_INSTANCE_ID").ok().and_then(safe))
+        .unwrap_or_else(|| "default".to_string());
+    std::path::Path::new(&dir).join(format!("state-{key}.json"))
+}
+
+fn write_atomic(path: &std::path::Path, body: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, body)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
+    std::fs::rename(&tmp, path)
+}
+
+fn local_tick(store: &AutomationStore) {
+    let p = &store.persistence;
+    {
+        let inner = p.inner.lock().expect("lock poisoned");
+        if inner.channel.is_some() || !inner.no_channel_confirmed {
+            return;
+        }
+    }
+    let path = local_state_path();
+    let loaded = p.inner.lock().expect("lock poisoned").local_loaded;
+    if !loaded {
+        let mut status = format!("kein Channel gebunden — lokale Sicherung ({})", path.display());
+        let mut notices = Vec::new();
+        match std::fs::read_to_string(&path) {
+            Ok(text) => match serde_json::from_str::<Snapshot>(&text) {
+                Ok(snap) => {
+                    let mut state = store.state.lock().expect("lock poisoned");
+                    if state.playlist.items().is_empty() && state.metadata.is_empty() {
+                        match apply_snapshot(&mut state, snap, now_utc_ms()) {
+                            Ok(rep) => {
+                                status = format!("lokal wiederhergestellt ({} Events) — {}", rep.restored_items, path.display());
+                                notices.extend(rep.notices);
+                            }
+                            Err(e) => notices.push(format!("Lokale Sicherung nicht angewendet: {e}")),
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Unlesbare Datei NICHT überschreiben: als .bad beiseitelegen.
+                    let _ = std::fs::rename(&path, path.with_extension("json.bad"));
+                    notices.push(format!("Lokale Sicherung nicht lesbar ({e}) — beiseitegelegt als {}", path.with_extension("json.bad").display()));
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                p.inner.lock().expect("lock poisoned").status = format!("lokale Sicherung nicht lesbar: {e}");
+                return; // beim nächsten Tick erneut versuchen, nie auf Verdacht überschreiben
+            }
+        }
+        for n in notices {
+            store.report(n);
+        }
+        let mut inner = p.inner.lock().expect("lock poisoned");
+        inner.local_loaded = true;
+        inner.status = status;
+        return;
+    }
+    let body = {
+        let state = store.state.lock().expect("lock poisoned");
+        let mut inner = p.inner.lock().expect("lock poisoned");
+        match serde_json::to_string(&build_snapshot(&state, &mut inner.since_cache, now_utc_ms())) {
+            Ok(b) => b,
+            Err(_) => return,
+        }
+    };
+    let mut inner = p.inner.lock().expect("lock poisoned");
+    if inner.local_last.as_deref() == Some(body.as_str()) {
+        return;
+    }
+    match write_atomic(&path, &body) {
+        Ok(()) => inner.local_last = Some(body),
+        Err(e) => inner.status = format!("lokale Sicherung nicht schreibbar ({}): {e}", path.display()),
+    }
+}
+
 pub async fn persist_loop(store: Arc<AutomationStore>) {
     let mut interval = tokio::time::interval(PERSIST_TICK);
     loop {
@@ -748,6 +894,32 @@ mod tests {
         assert_eq!(back, snap);
         assert_eq!(back.items.len(), 3);
         assert_eq!(back.live_channel, "b");
+    }
+
+    #[test]
+    fn panel_config_survives_restart_and_old_snapshots_keep_defaults() {
+        let mut s = state_with_three_items();
+        s.preflight_window_min = 42;
+        s.default_filler = "filler.mxf".to_string();
+        s.cue_hold = false;
+        s.require_release_default = true;
+        s.ad.enabled = true;
+        s.ad.target = "SCTE".to_string();
+        s.ad.pre_roll_ms = 7000;
+        s.target_audio_mixer_label = "Tonmischer".to_string();
+        let snap = build_snapshot(&s, &mut None, 1_000_000);
+        let (r, _) = restore_into_fresh(snap.clone(), 1_000_000);
+        assert_eq!(r.preflight_window_min, 42);
+        assert_eq!(r.default_filler, "filler.mxf");
+        assert!(!r.cue_hold && r.require_release_default && r.ad.enabled);
+        assert_eq!((r.ad.target.as_str(), r.ad.pre_roll_ms), ("SCTE", 7000));
+        assert_eq!(r.target_audio_mixer_label, "Tonmischer");
+        // Snapshot aus älterer Fassung (ohne `config`): Vorgaben bleiben.
+        let mut old = snap;
+        old.config = None;
+        let (r2, _) = restore_into_fresh(old, 1_000_000);
+        assert_eq!(r2.preflight_window_min, 15);
+        assert!(!r2.ad.enabled);
     }
 
     #[test]
