@@ -1,0 +1,413 @@
+// Szenenmodell der Designer-Vorlagen (Kapitel 90.5): Elemente auf einer Fläche (Text, Rechteck, Bild, Zone) samt Verschieben,
+// Skalieren, Ausrichten, Reihenfolge, Platzhaltern `{{schluessel}}` und der Erzeugung der Paketdateien. Rein und ohne DOM
+// (Deno-Tests). Gespeichert wird `scene.json` im Paket; die Vorlagen-Datei `<id>.js` ist daraus + `runtime.js` erzeugt.
+import { SCHEMA_URL, stringify } from "./logic.ts";
+import type { Field, Files } from "./logic.ts";
+
+export const SCENE_FORMAT = "omp-ograf-scene/1";
+export type Kind = "rect" | "text" | "image" | "zone";
+export const KINDS: Kind[] = ["text", "rect", "image", "zone"];
+export const ANIM_TYPES = ["none", "fade", "fromLeft", "fromRight", "fromTop", "fromBottom", "scale", "wipe"] as const;
+
+export interface AnimSpec {
+  type: string;
+  ms: number;
+  delay: number;
+  ease: string;
+}
+export interface SceneElement {
+  id: string;
+  kind: Kind;
+  name: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  rotation: number;
+  opacity: number;
+  anim?: { in?: AnimSpec; out?: AnimSpec };
+  // Rechteck
+  fill?: string;
+  radius?: number;
+  stroke?: string;
+  strokeW?: number;
+  // Text
+  text?: string;
+  font?: string;
+  size?: number;
+  weight?: number;
+  color?: string;
+  align?: "left" | "center" | "right";
+  valign?: "top" | "middle" | "bottom";
+  lineHeight?: number;
+  bg?: string;
+  padding?: number;
+  // Bild
+  file?: string;
+  fit?: "contain" | "cover" | "fill";
+  // Zone
+  zone?: string;
+}
+export interface Scene {
+  format: typeof SCENE_FORMAT;
+  width: number;
+  height: number;
+  elements: SceneElement[];
+}
+export interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+const MIN_SIZE = 4;
+const num = (v: unknown, d: number): number => typeof v === "number" && Number.isFinite(v) ? v : d;
+const str = (v: unknown, d = ""): string => typeof v === "string" ? v : d;
+
+export function newScene(width = 1920, height = 1080): Scene {
+  return { format: SCENE_FORMAT, width, height, elements: [] };
+}
+
+function uniqueId(scene: Scene, base: string): string {
+  const ids = new Set(scene.elements.map((e) => e.id));
+  for (let i = 1; i < 10000; i++) if (!ids.has(`${base}${i}`)) return `${base}${i}`;
+  return `${base}${Date.now()}`;
+}
+
+const LABEL: Record<Kind, string> = { text: "Text", rect: "Fläche", image: "Bild", zone: "Zone" };
+
+/** Neues Element mit sinnvollen Vorgaben, mittig auf der Fläche. */
+export function newElement(kind: Kind, scene: Scene): SceneElement {
+  const id = uniqueId(scene, kind === "zone" ? "z" : kind[0]);
+  const same = scene.elements.filter((e) => e.kind === kind).length + 1;
+  const base = { id, kind, name: `${LABEL[kind]} ${same}`, rotation: 0, opacity: 1 };
+  const w = kind === "text" ? 720 : kind === "zone" ? 640 : 480;
+  const h = kind === "text" ? 100 : kind === "zone" ? 360 : 270;
+  const box = { x: Math.round((scene.width - w) / 2), y: Math.round((scene.height - h) / 2), w, h };
+  switch (kind) {
+    case "text":
+      return { ...base, ...box, text: "Text", font: "system-ui, sans-serif", size: 64, weight: 600, color: "#ffffff", align: "left", valign: "middle", lineHeight: 1.2, padding: 0, anim: { in: { type: "fade", ms: 300, delay: 0, ease: "ease-out" }, out: { type: "fade", ms: 300, delay: 0, ease: "ease-in" } } };
+    case "rect":
+      return { ...base, ...box, fill: "#10151f", radius: 0, stroke: "", strokeW: 0, anim: { in: { type: "fade", ms: 300, delay: 0, ease: "ease-out" }, out: { type: "fade", ms: 300, delay: 0, ease: "ease-in" } } };
+    case "image":
+      return { ...base, ...box, file: "", fit: "contain", anim: { in: { type: "fade", ms: 300, delay: 0, ease: "ease-out" }, out: { type: "fade", ms: 300, delay: 0, ease: "ease-in" } } };
+    default:
+      return { ...base, ...box, zone: uniqueZone(scene) };
+  }
+}
+
+function uniqueZone(scene: Scene): string {
+  const used = new Set(scene.elements.filter((e) => e.kind === "zone").map((e) => e.zone));
+  if (!used.has("window")) return "window";
+  for (let i = 2; i < 100; i++) if (!used.has(`window${i}`)) return `window${i}`;
+  return "zone";
+}
+
+// ── Einlesen ──────────────────────────────────────────────────────────────────────────────────────────────
+
+function parseAnim(v: unknown): AnimSpec | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  const type = str(o.type, "none");
+  return { type: (ANIM_TYPES as readonly string[]).includes(type) ? type : "none", ms: Math.max(0, num(o.ms, 400)), delay: Math.max(0, num(o.delay, 0)), ease: str(o.ease, "ease-out") };
+}
+
+/** Liest `scene.json`; unbekannte Arten werden verworfen, Zahlen begrenzt. Fehler: `null`. */
+export function parseScene(text: string): Scene | null {
+  let v: unknown;
+  try {
+    v = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const o = v as Record<string, unknown> | null;
+  if (!o || o.format !== SCENE_FORMAT || !Array.isArray(o.elements)) return null;
+  const scene = newScene(Math.max(16, num(o.width, 1920)), Math.max(16, num(o.height, 1080)));
+  const seen = new Set<string>();
+  for (const raw of o.elements) {
+    const e = raw as Record<string, unknown>;
+    if (!e || typeof e !== "object" || !KINDS.includes(e.kind as Kind)) continue;
+    let id = str(e.id) || "e";
+    while (seen.has(id)) id += "x";
+    seen.add(id);
+    const anim = e.anim && typeof e.anim === "object" ? e.anim as Record<string, unknown> : {};
+    scene.elements.push({
+      ...(e as unknown as SceneElement),
+      id,
+      kind: e.kind as Kind,
+      name: str(e.name, id),
+      x: num(e.x, 0), y: num(e.y, 0), w: Math.max(MIN_SIZE, num(e.w, 100)), h: Math.max(MIN_SIZE, num(e.h, 100)),
+      rotation: num(e.rotation, 0),
+      opacity: Math.min(1, Math.max(0, num(e.opacity, 1))),
+      anim: { in: parseAnim(anim.in), out: parseAnim(anim.out) },
+    });
+  }
+  return scene;
+}
+
+// ── Bearbeiten (unveränderlich: jede Funktion liefert eine neue Szene) ──────────────────────────────────
+
+export const withElements = (s: Scene, elements: SceneElement[]): Scene => ({ ...s, elements });
+
+export function updateElement(s: Scene, id: string, patch: Partial<SceneElement>): Scene {
+  return withElements(s, s.elements.map((e) => e.id === id ? clampElement({ ...e, ...patch }) : e));
+}
+
+function clampElement(e: SceneElement): SceneElement {
+  return { ...e, w: Math.max(MIN_SIZE, e.w), h: Math.max(MIN_SIZE, e.h), opacity: Math.min(1, Math.max(0, e.opacity)) };
+}
+
+export function addElement(s: Scene, e: SceneElement): Scene {
+  return withElements(s, [...s.elements, e]);
+}
+
+export function removeElements(s: Scene, ids: string[]): Scene {
+  return withElements(s, s.elements.filter((e) => !ids.includes(e.id)));
+}
+
+export function duplicateElement(s: Scene, id: string): { scene: Scene; id: string } {
+  const src = s.elements.find((e) => e.id === id);
+  if (!src) return { scene: s, id: "" };
+  const nid = uniqueId(s, src.kind === "zone" ? "z" : src.kind[0]);
+  const copy: SceneElement = { ...structuredClone(src), id: nid, name: `${src.name} (Kopie)`, x: src.x + 40, y: src.y + 40 };
+  if (copy.kind === "zone") copy.zone = uniqueZone(s);
+  const i = s.elements.findIndex((e) => e.id === id);
+  const els = [...s.elements];
+  els.splice(i + 1, 0, copy);
+  return { scene: withElements(s, els), id: nid };
+}
+
+export function moveElements(s: Scene, ids: string[], dx: number, dy: number): Scene {
+  return withElements(s, s.elements.map((e) => ids.includes(e.id) ? { ...e, x: Math.round(e.x + dx), y: Math.round(e.y + dy) } : e));
+}
+
+/** Reihenfolge: das letzte Element liegt oben. */
+export function reorder(s: Scene, id: string, how: "front" | "back" | "up" | "down"): Scene {
+  const i = s.elements.findIndex((e) => e.id === id);
+  if (i < 0) return s;
+  const els = [...s.elements];
+  const [e] = els.splice(i, 1);
+  const j = how === "front" ? els.length : how === "back" ? 0 : how === "up" ? Math.min(els.length, i + 1) : Math.max(0, i - 1);
+  els.splice(j, 0, e);
+  return withElements(s, els);
+}
+
+export type Align = "left" | "hcenter" | "right" | "top" | "vcenter" | "bottom";
+/** Richtet ein Element an der Fläche aus. */
+export function alignToScene(s: Scene, id: string, how: Align): Scene {
+  const e = s.elements.find((x) => x.id === id);
+  if (!e) return s;
+  const p: Partial<SceneElement> = how === "left" ? { x: 0 } : how === "hcenter" ? { x: Math.round((s.width - e.w) / 2) } : how === "right" ? { x: s.width - e.w }
+    : how === "top" ? { y: 0 } : how === "vcenter" ? { y: Math.round((s.height - e.h) / 2) } : { y: s.height - e.h };
+  return updateElement(s, id, p);
+}
+
+// ── Geometrie ───────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Punkt (Szenenkoordinaten) im (ggf. gedrehten) Element? */
+export function hits(e: SceneElement, px: number, py: number): boolean {
+  const cx = e.x + e.w / 2, cy = e.y + e.h / 2;
+  const a = -(e.rotation * Math.PI) / 180;
+  const dx = px - cx, dy = py - cy;
+  const lx = dx * Math.cos(a) - dy * Math.sin(a), ly = dx * Math.sin(a) + dy * Math.cos(a);
+  return Math.abs(lx) <= e.w / 2 && Math.abs(ly) <= e.h / 2;
+}
+
+/** Oberstes Element unter dem Punkt (Zonen zuletzt, weil sie meist große Flächen sind) oder `null`. */
+export function hitTest(s: Scene, px: number, py: number): string | null {
+  for (let i = s.elements.length - 1; i >= 0; i--) if (hits(s.elements[i], px, py)) return s.elements[i].id;
+  return null;
+}
+
+export type Handle = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
+export const HANDLES: Handle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+
+/** Neue Box nach Ziehen eines Griffs um (dx, dy); `keepRatio` hält das Seitenverhältnis (nur Eckgriffe). */
+export function resizeBox(b: Box, handle: Handle, dx: number, dy: number, keepRatio = false): Box {
+  let { x, y, w, h } = b;
+  const ratio = b.w / b.h;
+  if (handle.includes("e")) w = b.w + dx;
+  if (handle.includes("w")) { w = b.w - dx; x = b.x + dx; }
+  if (handle.includes("s")) h = b.h + dy;
+  if (handle.includes("n")) { h = b.h - dy; y = b.y + dy; }
+  if (keepRatio && handle.length === 2) {
+    if (Math.abs(w - b.w) / b.w >= Math.abs(h - b.h) / b.h) h = w / ratio;
+    else w = h * ratio;
+    if (handle.includes("w")) x = b.x + b.w - w;
+    if (handle.includes("n")) y = b.y + b.h - h;
+  }
+  if (w < MIN_SIZE) { if (handle.includes("w")) x -= MIN_SIZE - w; w = MIN_SIZE; }
+  if (h < MIN_SIZE) { if (handle.includes("n")) y -= MIN_SIZE - h; h = MIN_SIZE; }
+  return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+}
+
+export interface Guide {
+  axis: "x" | "y";
+  at: number;
+}
+/** Rastet die Box an Flächenrändern/-mitte und Kanten anderer Elemente ein (je Achse die nächste innerhalb `threshold`). */
+export function snapBox(b: Box, s: Scene, skipIds: string[], threshold: number): { box: Box; guides: Guide[] } {
+  const xs = [0, s.width / 2, s.width];
+  const ys = [0, s.height / 2, s.height];
+  for (const e of s.elements) {
+    if (skipIds.includes(e.id)) continue;
+    xs.push(e.x, e.x + e.w / 2, e.x + e.w);
+    ys.push(e.y, e.y + e.h / 2, e.y + e.h);
+  }
+  const pick = (own: number[], targets: number[]): { d: number; at: number } | null => {
+    let best: { d: number; at: number } | null = null;
+    for (const o of own) for (const t of targets) {
+      const d = t - o;
+      if (Math.abs(d) <= threshold && (!best || Math.abs(d) < Math.abs(best.d))) best = { d, at: t };
+    }
+    return best;
+  };
+  const sx = pick([b.x, b.x + b.w / 2, b.x + b.w], xs);
+  const sy = pick([b.y, b.y + b.h / 2, b.y + b.h], ys);
+  const guides: Guide[] = [];
+  if (sx) guides.push({ axis: "x", at: sx.at });
+  if (sy) guides.push({ axis: "y", at: sy.at });
+  return { box: { ...b, x: Math.round(b.x + (sx?.d ?? 0)), y: Math.round(b.y + (sy?.d ?? 0)) }, guides };
+}
+
+// ── Platzhalter und Paketdateien ───────────────────────────────────────────────────────────────────────────
+
+const PLACEHOLDER = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
+
+/** Alle `{{schluessel}}` der Szene (Text, Farben), in Reihenfolge des ersten Auftretens. */
+export function placeholders(s: Scene): string[] {
+  const out: string[] = [];
+  const add = (v: unknown) => {
+    if (typeof v !== "string") return;
+    for (const m of v.matchAll(PLACEHOLDER)) if (!out.includes(m[1])) out.push(m[1]);
+  };
+  for (const e of s.elements) for (const k of ["text", "fill", "stroke", "color", "bg"] as const) add(e[k]);
+  return out;
+}
+
+/** Zonen-IDs der Szene. */
+export function zoneIds(s: Scene): string[] {
+  return s.elements.filter((e) => e.kind === "zone").map((e) => e.zone ?? "");
+}
+
+/** Dateien, die ein Element braucht (Bilder). */
+export function usedAssets(s: Scene): string[] {
+  return [...new Set(s.elements.filter((e) => e.kind === "image" && e.file).map((e) => e.file!))];
+}
+
+export function isDesigner(files: Files): boolean {
+  return "scene.json" in files;
+}
+
+const HEADER = "// ERZEUGT vom OGraf-Editor (Leinwand) — Änderungen bitte in der Leinwand machen, sie werden beim Speichern überschrieben.\n";
+
+/** Hauptmodul einer Designer-Vorlage: Laufzeit + Szene. */
+export function generateMain(runtime: string, scene: Scene): string {
+  return `${HEADER}${runtime}\nexport default createSceneElement(${JSON.stringify(scene)}, import.meta.url);\n`;
+}
+
+/** Schreibt Szene und erzeugtes Hauptmodul in die Paketdateien (Manifest-`main` zeigt auf `<id>.js`). */
+export function applyScene(files: Files, id: string, scene: Scene, runtime: string): Files {
+  const out: Files = { ...files, "scene.json": JSON.stringify(scene, null, 2) + "\n", [`${id}.js`]: generateMain(runtime, scene) };
+  const mname = Object.keys(out).find((n) => n.endsWith(".ograf.json"));
+  if (mname) {
+    try {
+      const m = JSON.parse(out[mname]);
+      if (m.main !== `${id}.js`) out[mname] = stringify({ ...m, main: `${id}.js` });
+    } catch { /* kaputtes Manifest: der Node meldet es */ }
+  }
+  return out;
+}
+
+/** Startpaket einer Designer-Vorlage: Balken mit zwei Textfeldern (Name, Untertitel) und Farbparameter. */
+export function newDesignerPackage(id: string, name: string, runtime: string): Files {
+  const scene = newScene();
+  const bar = { ...newElement("rect", scene), name: "Balken", x: 120, y: 820, w: 900, h: 150, fill: "{{barColor}}" };
+  scene.elements.push(bar);
+  const accent = { ...newElement("rect", withElements(scene, scene.elements)), name: "Akzent", x: 120, y: 820, w: 12, h: 150, fill: "{{accentColor}}" };
+  accent.id = "r2";
+  scene.elements.push(accent);
+  const t1 = { ...newElement("text", withElements(scene, scene.elements)), name: "Name", id: "t1", x: 160, y: 830, w: 840, h: 80, text: "{{name}}", size: 60, weight: 700 };
+  t1.anim = { in: { type: "fromLeft", ms: 400, delay: 150, ease: "ease-out" }, out: { type: "fade", ms: 250, delay: 0, ease: "ease-in" } };
+  scene.elements.push(t1);
+  const t2 = { ...newElement("text", withElements(scene, scene.elements)), name: "Untertitel", id: "t2", x: 160, y: 905, w: 840, h: 55, text: "{{title}}", size: 38, weight: 400, color: "#c8d0dc" };
+  t2.anim = { in: { type: "fromLeft", ms: 400, delay: 280, ease: "ease-out" }, out: { type: "fade", ms: 250, delay: 0, ease: "ease-in" } };
+  scene.elements.push(t2);
+  const manifest = {
+    $schema: SCHEMA_URL, id, name, version: "1.0.0", main: `${id}.js`, supportsRealTime: true, supportsNonRealTime: false, stepCount: 1,
+    schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", title: "Name", default: "Max Mustermann" },
+        title: { type: "string", title: "Untertitel", default: "Reporter" },
+        barColor: { type: "string", title: "Balkenfarbe", gddType: "color-rrggbb", pattern: "^#[0-9a-fA-F]{6}$", default: "#10151f" },
+        accentColor: { type: "string", title: "Akzentfarbe", gddType: "color-rrggbb", pattern: "^#[0-9a-fA-F]{6}$", default: "#00c8ff" },
+      },
+    },
+  };
+  return applyScene({ [`${id}.ograf.json`]: stringify(manifest) }, id, scene, runtime);
+}
+
+/** Ergänzt für jeden Platzhalter der Szene ein fehlendes Parameterfeld (Farbe, wenn er in einem Farbfeld steht, sonst Text). */
+export function ensureParams(fields: Field[], s: Scene): Field[] {
+  const have = new Set(fields.map((f) => f.key));
+  const colorKeys = new Set<string>();
+  for (const e of s.elements) {
+    for (const k of ["fill", "stroke", "color", "bg"] as const) {
+      const v = e[k];
+      if (typeof v === "string") for (const m of v.matchAll(PLACEHOLDER)) colorKeys.add(m[1]);
+    }
+  }
+  const out = [...fields];
+  for (const k of placeholders(s)) {
+    if (have.has(k)) continue;
+    const isColor = colorKeys.has(k);
+    out.push({ key: k, title: k, kind: isColor ? "color" : "text", def: isColor ? "#ffffff" : "", choices: [], required: false, extra: {} });
+  }
+  return out;
+}
+
+// ── Rückgängig / Wiederholen ────────────────────────────────────────────────────────────────────────────────
+
+/** Einfacher Verlauf; `push` verwirft den Wiederholen-Zweig, `limit` begrenzt den Speicher. */
+export class History<T> {
+  #past: T[] = [];
+  #future: T[] = [];
+  constructor(private current: T, private limit = 100) {}
+  get value(): T {
+    return this.current;
+  }
+  push(next: T): void {
+    this.#past.push(this.current);
+    if (this.#past.length > this.limit) this.#past.shift();
+    this.#future = [];
+    this.current = next;
+  }
+  /** Aktuellen Stand ersetzen, ohne Verlaufseintrag (laufende Zeigergeste). */
+  replaceCurrent(next: T): void {
+    this.current = next;
+  }
+  get canUndo(): boolean {
+    return this.#past.length > 0;
+  }
+  get canRedo(): boolean {
+    return this.#future.length > 0;
+  }
+  undo(): T {
+    const p = this.#past.pop();
+    if (p !== undefined) {
+      this.#future.push(this.current);
+      this.current = p;
+    }
+    return this.current;
+  }
+  redo(): T {
+    const f = this.#future.pop();
+    if (f !== undefined) {
+      this.#past.push(this.current);
+      this.current = f;
+    }
+    return this.current;
+  }
+}

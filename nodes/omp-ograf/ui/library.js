@@ -1,324 +1,189 @@
-// ui/modules/ograf-editor/messages.ts
-var messages = {
-  de: {
-    title: "Vorlagen-Bibliothek",
-    back: "\u2039 Zur Sendung",
-    openLib: "Vorlagen bearbeiten",
-    newTpl: "\uFF0B Neu",
-    duplicate: "Duplizieren",
-    delete: "L\xF6schen",
-    importBtn: "Import\u2026",
-    exportBtn: "Export (ZIP)",
-    search: "Suchen\u2026",
-    rename: "ID \xE4ndern\u2026",
-    askRename: "Neue Kennung (ID) f\xFCr \u201E{id}\u201C",
-    renameFailed: "ID \xE4ndern fehlgeschlagen: {why}",
-    upload: "Hochladen\u2026",
-    binaryInfo: "Bin\xE4rdatei, {kb} KB",
-    importSkipped: "Importiert. Nicht \xFCbernommen: {list}",
-    noMatch: "Keine Treffer.",
-    save: "Speichern",
-    revert: "Verwerfen",
-    dirty: "\u25CF ungespeichert",
-    saved: "Gespeichert.",
-    none: "Keine Vorlage gew\xE4hlt.",
-    empty: "Noch keine Vorlagen.",
-    tabGeneral: "Allgemein",
-    tabParams: "Parameter",
-    tabSource: "Quelltext",
-    askName: "Name der neuen Vorlage",
-    askCopyName: "Name der Kopie",
-    askDelete: "Vorlage \u201E{id}\u201C endg\xFCltig l\xF6schen?",
-    valid: "g\xFCltig",
-    invalid: "fehlerhaft",
-    errors: "Fehler",
-    warnings: "Hinweise",
-    name: "Name",
-    id: "Kennung (ID)",
-    version: "Version",
-    description: "Beschreibung",
-    author: "Autor",
-    authorEmail: "E-Mail",
-    authorUrl: "Web",
-    steps: "Schritte (stepCount, \u22121 = dynamisch)",
-    realtime: "Echtzeit (supportsRealTime)",
-    nonRealtime: "Nicht-Echtzeit (supportsNonRealTime)",
-    resolution: "Renderaufl\xF6sung (0 = keine Angabe)",
-    frameRate: "Bildrate (0 = keine Angabe)",
-    addField: "\uFF0B Parameter",
-    key: "Schl\xFCssel",
-    fieldTitle: "Beschriftung",
-    kind: "Art",
-    def: "Vorgabe",
-    choices: "Auswahl (kommagetrennt)",
-    required: "Pflicht",
-    remove: "Entfernen",
-    up: "Nach oben",
-    down: "Nach unten",
-    kText: "Text",
-    kMulti: "Mehrzeilig",
-    kNumber: "Zahl",
-    kBool: "Ja/Nein",
-    kColor: "Farbe",
-    kChoice: "Auswahl",
-    file: "Datei",
-    addFile: "\uFF0B Datei",
-    delFile: "Datei l\xF6schen",
-    askFile: "Dateiname (z. B. stil.css)",
-    importFailed: "Import fehlgeschlagen: {why}",
-    importExists: "Vorlage \u201E{id}\u201C gibt es schon. Als \u201E{newId}\u201C importieren?",
-    loadFailed: "Laden fehlgeschlagen",
-    saveFailed: "Speichern fehlgeschlagen: {why}",
-    leaveDirty: "Ungespeicherte \xC4nderungen verwerfen?",
-    manifestBroken: "Das Manifest ist kein g\xFCltiges JSON \u2014 bitte im Quelltext reparieren."
-  },
-  en: {
-    title: "Template library",
-    back: "\u2039 Back to on-air",
-    openLib: "Edit templates",
-    newTpl: "\uFF0B New",
-    duplicate: "Duplicate",
-    delete: "Delete",
-    importBtn: "Import\u2026",
-    exportBtn: "Export (ZIP)",
-    search: "Search\u2026",
-    rename: "Change ID\u2026",
-    askRename: "New identifier (ID) for \u201C{id}\u201D",
-    renameFailed: "Changing the ID failed: {why}",
-    upload: "Upload\u2026",
-    binaryInfo: "Binary file, {kb} KB",
-    importSkipped: "Imported. Not taken over: {list}",
-    noMatch: "No matches.",
-    save: "Save",
-    revert: "Discard",
-    dirty: "\u25CF unsaved",
-    saved: "Saved.",
-    none: "No template selected.",
-    empty: "No templates yet.",
-    tabGeneral: "General",
-    tabParams: "Parameters",
-    tabSource: "Source",
-    askName: "Name of the new template",
-    askCopyName: "Name of the copy",
-    askDelete: "Delete template \u201C{id}\u201D permanently?",
-    valid: "valid",
-    invalid: "faulty",
-    errors: "Errors",
-    warnings: "Notes",
-    name: "Name",
-    id: "Identifier (ID)",
-    version: "Version",
-    description: "Description",
-    author: "Author",
-    authorEmail: "E-mail",
-    authorUrl: "Web",
-    steps: "Steps (stepCount, \u22121 = dynamic)",
-    realtime: "Real time (supportsRealTime)",
-    nonRealtime: "Non-real time (supportsNonRealTime)",
-    resolution: "Render resolution (0 = unspecified)",
-    frameRate: "Frame rate (0 = unspecified)",
-    addField: "\uFF0B Parameter",
-    key: "Key",
-    fieldTitle: "Label",
-    kind: "Kind",
-    def: "Default",
-    choices: "Choices (comma-separated)",
-    required: "Required",
-    remove: "Remove",
-    up: "Move up",
-    down: "Move down",
-    kText: "Text",
-    kMulti: "Multi-line",
-    kNumber: "Number",
-    kBool: "Yes/No",
-    kColor: "Colour",
-    kChoice: "Choice",
-    file: "File",
-    addFile: "\uFF0B File",
-    delFile: "Delete file",
-    askFile: "File name (e.g. style.css)",
-    importFailed: "Import failed: {why}",
-    importExists: "Template \u201C{id}\u201D already exists. Import as \u201C{newId}\u201D?",
-    loadFailed: "Loading failed",
-    saveFailed: "Saving failed: {why}",
-    leaveDirty: "Discard unsaved changes?",
-    manifestBroken: "The manifest is not valid JSON \u2014 please repair it in the source tab."
-  }
-};
+// ui/modules/ograf-editor/runtime.js with { type: 'text' }
+var runtime_default = '// Laufzeit der Designer-Vorlagen des OGraf-Editors (Kapitel 90.5). Diese EINE Datei wird\n//  (a) vom Editor f\xFCr die Leinwand-Vorschau benutzt und\n//  (b) als Text in jede mit der Leinwand gebaute Vorlage kopiert (`<id>.js` = diese Datei + `export default createSceneElement(...)`),\n// damit Vorschau und Sendung denselben Code ausf\xFChren. Reines JavaScript ohne Abh\xE4ngigkeiten, ES-Modul.\n// Das Szenenmodell steht in `scene.json` des Pakets (Format `omp-ograf-scene/1`, s. scene.ts).\n\n/** Ersetzt `{{schluessel}}` durch Werte aus `data` (fehlend = leer). */\nexport function bindText(text, data) {\n  return String(text ?? "").replace(/\\{\\{\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*\\}\\}/g, (_, k) => {\n    const v = data ? data[k] : undefined;\n    return v === undefined || v === null ? "" : String(v);\n  });\n}\n\n/** Alle Animationsarten: Anzeigename-Schl\xFCssel \u2192 Start-Keyframes (Zustand \u201Eweg\u201C) und Ziel \u201Eda\u201C. */\nexport const ANIM_TYPES = ["none", "fade", "fromLeft", "fromRight", "fromTop", "fromBottom", "scale", "wipe"];\n\n/** Keyframes f\xFCr Einblenden (`dir` = "in") bzw. Ausblenden ("out", r\xFCckw\xE4rts). `dist` = Weg in Bildpunkten. */\nexport function keyframesFor(type, dir, dist = 80) {\n  const slide = (t) => [{ opacity: 0, transform: t }, { opacity: 1, transform: "none" }];\n  let pair;\n  switch (type) {\n    case "fade": pair = [{ opacity: 0 }, { opacity: 1 }]; break;\n    case "fromLeft": pair = slide(`translateX(${-dist}px)`); break;\n    case "fromRight": pair = slide(`translateX(${dist}px)`); break;\n    case "fromTop": pair = slide(`translateY(${-dist}px)`); break;\n    case "fromBottom": pair = slide(`translateY(${dist}px)`); break;\n    case "scale": pair = slide("scale(0.8)"); break;\n    case "wipe": pair = [{ clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0 0 0)" }]; break;\n    default: return null;\n  }\n  return dir === "in" ? pair : [pair[1], pair[0]];\n}\n\nfunction applyBox(el, e) {\n  const s = el.style;\n  s.position = "absolute";\n  s.left = `${e.x}px`;\n  s.top = `${e.y}px`;\n  s.width = `${e.w}px`;\n  s.height = `${e.h}px`;\n  s.transform = e.rotation ? `rotate(${e.rotation}deg)` : "none";\n  s.boxSizing = "border-box";\n}\n\nfunction paint(inner, e, data) {\n  const s = inner.style;\n  const color = (c) => bindText(c, data);\n  if (e.kind === "rect") {\n    s.background = color(e.fill || "transparent");\n    s.borderRadius = `${e.radius || 0}px`;\n    s.border = e.strokeW ? `${e.strokeW}px solid ${color(e.stroke || "#fff")}` : "none";\n  } else if (e.kind === "text") {\n    inner.textContent = bindText(e.text, data);\n    s.font = `${e.weight || 400} ${e.size || 40}px/${e.lineHeight || 1.2} ${e.font || "system-ui, sans-serif"}`;\n    s.color = color(e.color || "#fff");\n    s.textAlign = e.align || "left";\n    s.whiteSpace = "pre-wrap";\n    s.overflow = "hidden";\n    s.display = "flex";\n    s.alignItems = { top: "flex-start", middle: "center", bottom: "flex-end" }[e.valign || "top"];\n    s.justifyContent = { left: "flex-start", center: "center", right: "flex-end" }[e.align || "left"];\n    s.background = e.bg ? color(e.bg) : "transparent";\n    s.padding = `${e.padding || 0}px`;\n    s.borderRadius = `${e.radius || 0}px`;\n  } else if (e.kind === "image") {\n    s.objectFit = e.fit || "contain";\n    s.borderRadius = `${e.radius || 0}px`;\n  }\n}\n\n/**\n * Baut die Szene in `root` (ShadowRoot oder Element) und liefert den Griff `{play, stop, update, destroy, stage}`.\n * `opts.resolveAsset(datei) \u2192 URL`, `opts.scale() \u2192 Faktor` (Standard: Breite des Fensters / Szenenbreite),\n * `opts.editor = true` zeigt Zonen als gestrichelte Rahmen und spielt keine Animation (alles sichtbar).\n */\nexport function renderScene(root, scene, data, opts = {}) {\n  const stage = document.createElement("div");\n  stage.style.cssText = `position:absolute;left:0;top:0;width:${scene.width}px;height:${scene.height}px;transform-origin:0 0;overflow:hidden`;\n  const scaleOf = opts.scale || (() => (window.innerWidth || scene.width) / scene.width);\n  const fit = () => { stage.style.transform = `scale(${scaleOf()})`; };\n  fit();\n  const onResize = () => fit();\n  window.addEventListener("resize", onResize);\n  const items = [];\n  for (const e of scene.elements || []) {\n    const wrap = document.createElement("div");\n    applyBox(wrap, e);\n    wrap.style.opacity = String(e.opacity ?? 1);\n    wrap.dataset.elementId = e.id;\n    let inner;\n    if (e.kind === "image") {\n      inner = document.createElement("img");\n      inner.alt = "";\n      if (e.file && opts.resolveAsset) inner.src = opts.resolveAsset(e.file);\n    } else {\n      inner = document.createElement("div");\n    }\n    inner.style.cssText += ";width:100%;height:100%;box-sizing:border-box";\n    if (e.kind === "zone") {\n      wrap.setAttribute("data-ograf-zone", e.zone || "zone");\n      if (opts.editor) inner.style.outline = "2px dashed #00c8ff";\n    }\n    paint(inner, e, data);\n    wrap.append(inner);\n    stage.append(wrap);\n    items.push({ e, wrap, inner, anims: [] });\n  }\n  root.append(stage);\n  const clear = (it) => { for (const a of it.anims) a.cancel(); it.anims = []; };\n  const run = (it, dir) => {\n    const spec = it.e.anim && it.e.anim[dir];\n    const kf = spec ? keyframesFor(spec.type, dir) : null;\n    clear(it);\n    if (!kf) { it.inner.style.visibility = dir === "in" ? "visible" : "hidden"; return Promise.resolve(); }\n    it.inner.style.visibility = "visible";\n    const a = it.inner.animate(kf, { duration: spec.ms ?? 400, delay: spec.delay ?? 0, easing: spec.ease || "ease-out", fill: "both" });\n    it.anims.push(a);\n    return a.finished.catch(() => {});\n  };\n  if (!opts.editor) for (const it of items) it.inner.style.visibility = "hidden";\n  return {\n    stage,\n    play: () => Promise.all(items.map((it) => run(it, "in"))),\n    stop: () => Promise.all(items.map((it) => run(it, "out"))),\n    update(next) { for (const it of items) paint(it.inner, it.e, next); },\n    destroy() { window.removeEventListener("resize", onResize); for (const it of items) clear(it); stage.remove(); },\n  };\n}\n\n/** Die Web-Component-Klasse, die OGraf als `default export` erwartet. `base` = `import.meta.url` des Hauptmoduls. */\nexport function createSceneElement(scene, base) {\n  return class SceneGraphic extends HTMLElement {\n    constructor() {\n      super();\n      const sr = this.attachShadow({ mode: "open" });\n      const st = document.createElement("style");\n      st.textContent = ":host{position:fixed;inset:0;display:block;pointer-events:none}";\n      sr.append(st);\n    }\n    async load(p) {\n      this._data = (p && p.data) || {};\n      this._h = renderScene(this.shadowRoot, scene, this._data, { resolveAsset: (f) => new URL(f, base).href });\n      return { statusCode: 200 };\n    }\n    async dispose() { if (this._h) this._h.destroy(); return { statusCode: 200 }; }\n    async playAction() { await this._h.play(); return { statusCode: 200, currentStep: 0 }; }\n    async stopAction() { await this._h.stop(); return { statusCode: 200 }; }\n    async updateAction(p) { this._data = { ...this._data, ...((p && p.data) || {}) }; this._h.update(this._data); return { statusCode: 200 }; }\n    async customAction() { return { statusCode: 200 }; }\n  };\n}\n';
 
-// ui/modules/ograf-editor/zip.ts
-var TEXT_EXT = [
-  "js",
-  "mjs",
-  "json",
-  "css",
-  "svg",
-  "html",
-  "txt"
-];
-var BINARY_EXT = [
-  "png",
-  "jpg",
-  "jpeg",
-  "webp",
-  "gif",
-  "woff",
-  "woff2",
-  "ttf"
-];
-var BINARY_PREFIX = "base64:";
-var MAX_ENTRIES = 200;
-var MAX_UNPACKED = 16 * 1024 * 1024;
-var extOf = (n) => n.includes(".") ? n.slice(n.lastIndexOf(".") + 1).toLowerCase() : "";
-var isBinaryName = (n) => BINARY_EXT.includes(extOf(n));
-var isTextName = (n) => TEXT_EXT.includes(extOf(n));
-var CRC = null;
-function crc32(data) {
-  if (!CRC) {
-    CRC = new Uint32Array(256);
-    for (let n = 0; n < 256; n++) {
-      let c2 = n;
-      for (let k = 0; k < 8; k++) c2 = c2 & 1 ? 3988292384 ^ c2 >>> 1 : c2 >>> 1;
-      CRC[n] = c2 >>> 0;
-    }
-  }
-  let c = 4294967295;
-  for (let i = 0; i < data.length; i++) c = CRC[(c ^ data[i]) & 255] ^ c >>> 8;
-  return (c ^ 4294967295) >>> 0;
-}
-function bytesToBase64(b) {
-  let s = "";
-  for (let i = 0; i < b.length; i += 32768) s += String.fromCharCode(...b.subarray(i, i + 32768));
-  return btoa(s);
-}
-function base64ToBytes(s) {
-  const bin = atob(s);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-function filesToBytes(files) {
-  const out = {};
-  for (const [n, c] of Object.entries(files)) {
-    out[n] = isBinaryName(n) && c.startsWith(BINARY_PREFIX) ? base64ToBytes(c.slice(BINARY_PREFIX.length)) : new TextEncoder().encode(c);
-  }
-  return out;
-}
-function makeZip(entries) {
-  const enc = new TextEncoder();
-  const chunks = [];
-  const central = [];
-  let offset = 0;
-  const u16 = (v) => new Uint8Array([
-    v & 255,
-    v >> 8 & 255
-  ]);
-  const u32 = (v) => new Uint8Array([
-    v & 255,
-    v >> 8 & 255,
-    v >> 16 & 255,
-    v >>> 24 & 255
-  ]);
-  const cat = (...p) => {
-    const o = new Uint8Array(p.reduce((a, b) => a + b.length, 0));
-    let i = 0;
-    for (const x of p) {
-      o.set(x, i);
-      i += x.length;
-    }
-    return o;
-  };
-  const DOS_TIME = 0, DOS_DATE = 1 << 5 | 1 | 2026 - 1980 << 9;
-  for (const [name, data] of Object.entries(entries)) {
-    const nm = enc.encode(name);
-    const crc = crc32(data);
-    const local = cat(u32(67324752), u16(20), u16(2048), u16(0), u16(DOS_TIME), u16(DOS_DATE), u32(crc), u32(data.length), u32(data.length), u16(nm.length), u16(0), nm, data);
-    central.push(cat(u32(33639248), u16(20), u16(20), u16(2048), u16(0), u16(DOS_TIME), u16(DOS_DATE), u32(crc), u32(data.length), u32(data.length), u16(nm.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(offset), nm));
-    chunks.push(local);
-    offset += local.length;
-  }
-  const cdSize = central.reduce((a, b) => a + b.length, 0);
-  const count = Object.keys(entries).length;
-  return cat(...chunks, ...central, u32(101010256), u16(0), u16(0), u16(count), u16(count), u32(cdSize), u32(offset), u16(0));
-}
-async function inflate(raw) {
-  const ds = new DecompressionStream("deflate-raw");
-  const w = ds.writable.getWriter();
-  void w.write(raw).then(() => w.close()).catch(() => {
+// ui/modules/ograf-editor/runtime.js
+function bindText(text, data) {
+  return String(text ?? "").replace(/\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g, (_, k) => {
+    const v = data ? data[k] : void 0;
+    return v === void 0 || v === null ? "" : String(v);
   });
-  const buf = await new Response(ds.readable).arrayBuffer();
-  return new Uint8Array(buf);
 }
-async function readZip(data) {
-  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
-  let eocd = -1;
-  for (let i = data.length - 22; i >= Math.max(0, data.length - 22 - 65535); i--) {
-    if (dv.getUint32(i, true) === 101010256) {
-      eocd = i;
-      break;
+function keyframesFor(type, dir, dist = 80) {
+  const slide = (t) => [
+    {
+      opacity: 0,
+      transform: t
+    },
+    {
+      opacity: 1,
+      transform: "none"
     }
+  ];
+  let pair;
+  switch (type) {
+    case "fade":
+      pair = [
+        {
+          opacity: 0
+        },
+        {
+          opacity: 1
+        }
+      ];
+      break;
+    case "fromLeft":
+      pair = slide(`translateX(${-dist}px)`);
+      break;
+    case "fromRight":
+      pair = slide(`translateX(${dist}px)`);
+      break;
+    case "fromTop":
+      pair = slide(`translateY(${-dist}px)`);
+      break;
+    case "fromBottom":
+      pair = slide(`translateY(${dist}px)`);
+      break;
+    case "scale":
+      pair = slide("scale(0.8)");
+      break;
+    case "wipe":
+      pair = [
+        {
+          clipPath: "inset(0 100% 0 0)"
+        },
+        {
+          clipPath: "inset(0 0 0 0)"
+        }
+      ];
+      break;
+    default:
+      return null;
   }
-  if (eocd < 0) throw new Error("kein ZIP-Archiv");
-  const count = dv.getUint16(eocd + 10, true);
-  let p = dv.getUint32(eocd + 16, true);
-  if (count > MAX_ENTRIES) throw new Error("zu viele Eintr\xE4ge im Archiv");
-  const dec = new TextDecoder();
-  const raw = [];
-  let unpacked = 0;
-  for (let n = 0; n < count; n++) {
-    if (p + 46 > data.length || dv.getUint32(p, true) !== 33639248) throw new Error("Archiv besch\xE4digt");
-    const flags = dv.getUint16(p + 8, true);
-    const method = dv.getUint16(p + 10, true);
-    const crc = dv.getUint32(p + 16, true);
-    const csize = dv.getUint32(p + 20, true);
-    const usize = dv.getUint32(p + 24, true);
-    const nlen = dv.getUint16(p + 28, true), elen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true);
-    const lho = dv.getUint32(p + 42, true);
-    const name = dec.decode(data.subarray(p + 46, p + 46 + nlen));
-    p += 46 + nlen + elen + clen;
-    if (name.endsWith("/")) continue;
-    if (flags & 1) throw new Error("verschl\xFCsseltes Archiv wird nicht unterst\xFCtzt");
-    if (csize === 4294967295 || usize === 4294967295) throw new Error("ZIP64 wird nicht unterst\xFCtzt");
-    unpacked += usize;
-    if (unpacked > MAX_UNPACKED) throw new Error("Archiv entpackt zu gro\xDF");
-    if (lho + 30 > data.length || dv.getUint32(lho, true) !== 67324752) throw new Error("Archiv besch\xE4digt");
-    const start = lho + 30 + dv.getUint16(lho + 26, true) + dv.getUint16(lho + 28, true);
-    const body = data.subarray(start, start + csize);
-    if (body.length !== csize) throw new Error("Archiv besch\xE4digt");
-    let out;
-    if (method === 0) out = body;
-    else if (method === 8) out = await inflate(body);
-    else throw new Error(`Kompressionsmethode ${method} wird nicht unterst\xFCtzt`);
-    if (out.length !== usize || crc32(out) !== crc) throw new Error(`Pr\xFCfsumme von \u201E${name}\u201C stimmt nicht`);
-    raw.push({
-      name,
-      data: out
+  return dir === "in" ? pair : [
+    pair[1],
+    pair[0]
+  ];
+}
+function applyBox(el, e) {
+  const s = el.style;
+  s.position = "absolute";
+  s.left = `${e.x}px`;
+  s.top = `${e.y}px`;
+  s.width = `${e.w}px`;
+  s.height = `${e.h}px`;
+  s.transform = e.rotation ? `rotate(${e.rotation}deg)` : "none";
+  s.boxSizing = "border-box";
+}
+function paint(inner, e, data) {
+  const s = inner.style;
+  const color = (c) => bindText(c, data);
+  if (e.kind === "rect") {
+    s.background = color(e.fill || "transparent");
+    s.borderRadius = `${e.radius || 0}px`;
+    s.border = e.strokeW ? `${e.strokeW}px solid ${color(e.stroke || "#fff")}` : "none";
+  } else if (e.kind === "text") {
+    inner.textContent = bindText(e.text, data);
+    s.font = `${e.weight || 400} ${e.size || 40}px/${e.lineHeight || 1.2} ${e.font || "system-ui, sans-serif"}`;
+    s.color = color(e.color || "#fff");
+    s.textAlign = e.align || "left";
+    s.whiteSpace = "pre-wrap";
+    s.overflow = "hidden";
+    s.display = "flex";
+    s.alignItems = {
+      top: "flex-start",
+      middle: "center",
+      bottom: "flex-end"
+    }[e.valign || "top"];
+    s.justifyContent = {
+      left: "flex-start",
+      center: "center",
+      right: "flex-end"
+    }[e.align || "left"];
+    s.background = e.bg ? color(e.bg) : "transparent";
+    s.padding = `${e.padding || 0}px`;
+    s.borderRadius = `${e.radius || 0}px`;
+  } else if (e.kind === "image") {
+    s.objectFit = e.fit || "contain";
+    s.borderRadius = `${e.radius || 0}px`;
+  }
+}
+function renderScene(root, scene, data, opts = {}) {
+  const stage = document.createElement("div");
+  stage.style.cssText = `position:absolute;left:0;top:0;width:${scene.width}px;height:${scene.height}px;transform-origin:0 0;overflow:hidden`;
+  const scaleOf = opts.scale || (() => (window.innerWidth || scene.width) / scene.width);
+  const fit = () => {
+    stage.style.transform = `scale(${scaleOf()})`;
+  };
+  fit();
+  const onResize = () => fit();
+  window.addEventListener("resize", onResize);
+  const items = [];
+  for (const e of scene.elements || []) {
+    const wrap = document.createElement("div");
+    applyBox(wrap, e);
+    wrap.style.opacity = String(e.opacity ?? 1);
+    wrap.dataset.elementId = e.id;
+    let inner;
+    if (e.kind === "image") {
+      inner = document.createElement("img");
+      inner.alt = "";
+      if (e.file && opts.resolveAsset) inner.src = opts.resolveAsset(e.file);
+    } else {
+      inner = document.createElement("div");
+    }
+    inner.style.cssText += ";width:100%;height:100%;box-sizing:border-box";
+    if (e.kind === "zone") {
+      wrap.setAttribute("data-ograf-zone", e.zone || "zone");
+      if (opts.editor) inner.style.outline = "2px dashed #00c8ff";
+    }
+    paint(inner, e, data);
+    wrap.append(inner);
+    stage.append(wrap);
+    items.push({
+      e,
+      wrap,
+      inner,
+      anims: []
     });
   }
-  const clean = raw.filter((r) => !r.name.startsWith("__MACOSX/"));
-  const tops = new Set(clean.map((r) => r.name.includes("/") ? r.name.split("/")[0] : ""));
-  const strip = tops.size === 1 && !tops.has("") ? `${[
-    ...tops
-  ][0]}/` : "";
-  const files = {};
-  const skipped = [];
-  for (const r of clean) {
-    const name = strip ? r.name.slice(strip.length) : r.name;
-    const ok = name !== "" && !name.includes("/") && !name.startsWith(".") && /^[A-Za-z0-9._-]+$/.test(name) && (isTextName(name) || isBinaryName(name));
-    if (ok) files[name] = r.data;
-    else skipped.push(r.name);
-  }
-  return {
-    files,
-    skipped
+  root.append(stage);
+  const clear = (it) => {
+    for (const a of it.anims) a.cancel();
+    it.anims = [];
   };
-}
-function bytesToFiles(entries) {
-  const out = {};
-  for (const [n, b] of Object.entries(entries)) {
-    out[n] = isBinaryName(n) ? BINARY_PREFIX + bytesToBase64(b) : new TextDecoder().decode(b);
-  }
-  return out;
+  const run = (it, dir) => {
+    const spec = it.e.anim && it.e.anim[dir];
+    const kf = spec ? keyframesFor(spec.type, dir) : null;
+    clear(it);
+    if (!kf) {
+      it.inner.style.visibility = dir === "in" ? "visible" : "hidden";
+      return Promise.resolve();
+    }
+    it.inner.style.visibility = "visible";
+    const a = it.inner.animate(kf, {
+      duration: spec.ms ?? 400,
+      delay: spec.delay ?? 0,
+      easing: spec.ease || "ease-out",
+      fill: "both"
+    });
+    it.anims.push(a);
+    return a.finished.catch(() => {
+    });
+  };
+  if (!opts.editor) for (const it of items) it.inner.style.visibility = "hidden";
+  return {
+    stage,
+    play: () => Promise.all(items.map((it) => run(it, "in"))),
+    stop: () => Promise.all(items.map((it) => run(it, "out"))),
+    update(next) {
+      for (const it of items) paint(it.inner, it.e, next);
+    },
+    destroy() {
+      window.removeEventListener("resize", onResize);
+      for (const it of items) clear(it);
+      stage.remove();
+    }
+  };
 }
 
 // ui/modules/ograf-editor/logic.ts
@@ -541,6 +406,14 @@ function validateFields(fields) {
   }
   return out;
 }
+function defaultsOf(fields) {
+  const o = {};
+  for (const f of fields) {
+    if (f.def === "") continue;
+    o[f.key] = f.kind === "number" ? Number(f.def) : f.kind === "bool" ? f.def === "true" : f.def;
+  }
+  return o;
+}
 function importPackage(text) {
   let v;
   try {
@@ -591,10 +464,1798 @@ function renamePackage(files, from, to) {
   return out;
 }
 
-// ui/modules/ograf-editor/library.ts
+// ui/modules/ograf-editor/scene.ts
+var SCENE_FORMAT = "omp-ograf-scene/1";
+var KINDS = [
+  "text",
+  "rect",
+  "image",
+  "zone"
+];
+var ANIM_TYPES = [
+  "none",
+  "fade",
+  "fromLeft",
+  "fromRight",
+  "fromTop",
+  "fromBottom",
+  "scale",
+  "wipe"
+];
+var MIN_SIZE = 4;
+var num2 = (v, d) => typeof v === "number" && Number.isFinite(v) ? v : d;
+var str2 = (v, d = "") => typeof v === "string" ? v : d;
+function newScene(width = 1920, height = 1080) {
+  return {
+    format: SCENE_FORMAT,
+    width,
+    height,
+    elements: []
+  };
+}
+function uniqueId(scene, base) {
+  const ids = new Set(scene.elements.map((e) => e.id));
+  for (let i = 1; i < 1e4; i++) if (!ids.has(`${base}${i}`)) return `${base}${i}`;
+  return `${base}${Date.now()}`;
+}
+var LABEL = {
+  text: "Text",
+  rect: "Fl\xE4che",
+  image: "Bild",
+  zone: "Zone"
+};
+function newElement(kind, scene) {
+  const id = uniqueId(scene, kind === "zone" ? "z" : kind[0]);
+  const same = scene.elements.filter((e) => e.kind === kind).length + 1;
+  const base = {
+    id,
+    kind,
+    name: `${LABEL[kind]} ${same}`,
+    rotation: 0,
+    opacity: 1
+  };
+  const w = kind === "text" ? 720 : kind === "zone" ? 640 : 480;
+  const h = kind === "text" ? 100 : kind === "zone" ? 360 : 270;
+  const box = {
+    x: Math.round((scene.width - w) / 2),
+    y: Math.round((scene.height - h) / 2),
+    w,
+    h
+  };
+  switch (kind) {
+    case "text":
+      return {
+        ...base,
+        ...box,
+        text: "Text",
+        font: "system-ui, sans-serif",
+        size: 64,
+        weight: 600,
+        color: "#ffffff",
+        align: "left",
+        valign: "middle",
+        lineHeight: 1.2,
+        padding: 0,
+        anim: {
+          in: {
+            type: "fade",
+            ms: 300,
+            delay: 0,
+            ease: "ease-out"
+          },
+          out: {
+            type: "fade",
+            ms: 300,
+            delay: 0,
+            ease: "ease-in"
+          }
+        }
+      };
+    case "rect":
+      return {
+        ...base,
+        ...box,
+        fill: "#10151f",
+        radius: 0,
+        stroke: "",
+        strokeW: 0,
+        anim: {
+          in: {
+            type: "fade",
+            ms: 300,
+            delay: 0,
+            ease: "ease-out"
+          },
+          out: {
+            type: "fade",
+            ms: 300,
+            delay: 0,
+            ease: "ease-in"
+          }
+        }
+      };
+    case "image":
+      return {
+        ...base,
+        ...box,
+        file: "",
+        fit: "contain",
+        anim: {
+          in: {
+            type: "fade",
+            ms: 300,
+            delay: 0,
+            ease: "ease-out"
+          },
+          out: {
+            type: "fade",
+            ms: 300,
+            delay: 0,
+            ease: "ease-in"
+          }
+        }
+      };
+    default:
+      return {
+        ...base,
+        ...box,
+        zone: uniqueZone(scene)
+      };
+  }
+}
+function uniqueZone(scene) {
+  const used = new Set(scene.elements.filter((e) => e.kind === "zone").map((e) => e.zone));
+  if (!used.has("window")) return "window";
+  for (let i = 2; i < 100; i++) if (!used.has(`window${i}`)) return `window${i}`;
+  return "zone";
+}
+function parseAnim(v) {
+  if (!v || typeof v !== "object") return void 0;
+  const o = v;
+  const type = str2(o.type, "none");
+  return {
+    type: ANIM_TYPES.includes(type) ? type : "none",
+    ms: Math.max(0, num2(o.ms, 400)),
+    delay: Math.max(0, num2(o.delay, 0)),
+    ease: str2(o.ease, "ease-out")
+  };
+}
+function parseScene(text) {
+  let v;
+  try {
+    v = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const o = v;
+  if (!o || o.format !== SCENE_FORMAT || !Array.isArray(o.elements)) return null;
+  const scene = newScene(Math.max(16, num2(o.width, 1920)), Math.max(16, num2(o.height, 1080)));
+  const seen = /* @__PURE__ */ new Set();
+  for (const raw of o.elements) {
+    const e = raw;
+    if (!e || typeof e !== "object" || !KINDS.includes(e.kind)) continue;
+    let id = str2(e.id) || "e";
+    while (seen.has(id)) id += "x";
+    seen.add(id);
+    const anim = e.anim && typeof e.anim === "object" ? e.anim : {};
+    scene.elements.push({
+      ...e,
+      id,
+      kind: e.kind,
+      name: str2(e.name, id),
+      x: num2(e.x, 0),
+      y: num2(e.y, 0),
+      w: Math.max(MIN_SIZE, num2(e.w, 100)),
+      h: Math.max(MIN_SIZE, num2(e.h, 100)),
+      rotation: num2(e.rotation, 0),
+      opacity: Math.min(1, Math.max(0, num2(e.opacity, 1))),
+      anim: {
+        in: parseAnim(anim.in),
+        out: parseAnim(anim.out)
+      }
+    });
+  }
+  return scene;
+}
+var withElements = (s, elements) => ({
+  ...s,
+  elements
+});
+function updateElement(s, id, patch) {
+  return withElements(s, s.elements.map((e) => e.id === id ? clampElement({
+    ...e,
+    ...patch
+  }) : e));
+}
+function clampElement(e) {
+  return {
+    ...e,
+    w: Math.max(MIN_SIZE, e.w),
+    h: Math.max(MIN_SIZE, e.h),
+    opacity: Math.min(1, Math.max(0, e.opacity))
+  };
+}
+function addElement(s, e) {
+  return withElements(s, [
+    ...s.elements,
+    e
+  ]);
+}
+function removeElements(s, ids) {
+  return withElements(s, s.elements.filter((e) => !ids.includes(e.id)));
+}
+function duplicateElement(s, id) {
+  const src = s.elements.find((e) => e.id === id);
+  if (!src) return {
+    scene: s,
+    id: ""
+  };
+  const nid = uniqueId(s, src.kind === "zone" ? "z" : src.kind[0]);
+  const copy = {
+    ...structuredClone(src),
+    id: nid,
+    name: `${src.name} (Kopie)`,
+    x: src.x + 40,
+    y: src.y + 40
+  };
+  if (copy.kind === "zone") copy.zone = uniqueZone(s);
+  const i = s.elements.findIndex((e) => e.id === id);
+  const els = [
+    ...s.elements
+  ];
+  els.splice(i + 1, 0, copy);
+  return {
+    scene: withElements(s, els),
+    id: nid
+  };
+}
+function moveElements(s, ids, dx, dy) {
+  return withElements(s, s.elements.map((e) => ids.includes(e.id) ? {
+    ...e,
+    x: Math.round(e.x + dx),
+    y: Math.round(e.y + dy)
+  } : e));
+}
+function reorder(s, id, how) {
+  const i = s.elements.findIndex((e2) => e2.id === id);
+  if (i < 0) return s;
+  const els = [
+    ...s.elements
+  ];
+  const [e] = els.splice(i, 1);
+  const j = how === "front" ? els.length : how === "back" ? 0 : how === "up" ? Math.min(els.length, i + 1) : Math.max(0, i - 1);
+  els.splice(j, 0, e);
+  return withElements(s, els);
+}
+function alignToScene(s, id, how) {
+  const e = s.elements.find((x) => x.id === id);
+  if (!e) return s;
+  const p = how === "left" ? {
+    x: 0
+  } : how === "hcenter" ? {
+    x: Math.round((s.width - e.w) / 2)
+  } : how === "right" ? {
+    x: s.width - e.w
+  } : how === "top" ? {
+    y: 0
+  } : how === "vcenter" ? {
+    y: Math.round((s.height - e.h) / 2)
+  } : {
+    y: s.height - e.h
+  };
+  return updateElement(s, id, p);
+}
+function hits(e, px, py) {
+  const cx = e.x + e.w / 2, cy = e.y + e.h / 2;
+  const a = -(e.rotation * Math.PI) / 180;
+  const dx = px - cx, dy = py - cy;
+  const lx = dx * Math.cos(a) - dy * Math.sin(a), ly = dx * Math.sin(a) + dy * Math.cos(a);
+  return Math.abs(lx) <= e.w / 2 && Math.abs(ly) <= e.h / 2;
+}
+function hitTest(s, px, py) {
+  for (let i = s.elements.length - 1; i >= 0; i--) if (hits(s.elements[i], px, py)) return s.elements[i].id;
+  return null;
+}
+var HANDLES = [
+  "nw",
+  "n",
+  "ne",
+  "e",
+  "se",
+  "s",
+  "sw",
+  "w"
+];
+function resizeBox(b, handle, dx, dy, keepRatio = false) {
+  let { x, y, w, h } = b;
+  const ratio = b.w / b.h;
+  if (handle.includes("e")) w = b.w + dx;
+  if (handle.includes("w")) {
+    w = b.w - dx;
+    x = b.x + dx;
+  }
+  if (handle.includes("s")) h = b.h + dy;
+  if (handle.includes("n")) {
+    h = b.h - dy;
+    y = b.y + dy;
+  }
+  if (keepRatio && handle.length === 2) {
+    if (Math.abs(w - b.w) / b.w >= Math.abs(h - b.h) / b.h) h = w / ratio;
+    else w = h * ratio;
+    if (handle.includes("w")) x = b.x + b.w - w;
+    if (handle.includes("n")) y = b.y + b.h - h;
+  }
+  if (w < MIN_SIZE) {
+    if (handle.includes("w")) x -= MIN_SIZE - w;
+    w = MIN_SIZE;
+  }
+  if (h < MIN_SIZE) {
+    if (handle.includes("n")) y -= MIN_SIZE - h;
+    h = MIN_SIZE;
+  }
+  return {
+    x: Math.round(x),
+    y: Math.round(y),
+    w: Math.round(w),
+    h: Math.round(h)
+  };
+}
+function snapBox(b, s, skipIds, threshold) {
+  const xs = [
+    0,
+    s.width / 2,
+    s.width
+  ];
+  const ys = [
+    0,
+    s.height / 2,
+    s.height
+  ];
+  for (const e of s.elements) {
+    if (skipIds.includes(e.id)) continue;
+    xs.push(e.x, e.x + e.w / 2, e.x + e.w);
+    ys.push(e.y, e.y + e.h / 2, e.y + e.h);
+  }
+  const pick = (own, targets) => {
+    let best = null;
+    for (const o of own) for (const t of targets) {
+      const d = t - o;
+      if (Math.abs(d) <= threshold && (!best || Math.abs(d) < Math.abs(best.d))) best = {
+        d,
+        at: t
+      };
+    }
+    return best;
+  };
+  const sx = pick([
+    b.x,
+    b.x + b.w / 2,
+    b.x + b.w
+  ], xs);
+  const sy = pick([
+    b.y,
+    b.y + b.h / 2,
+    b.y + b.h
+  ], ys);
+  const guides = [];
+  if (sx) guides.push({
+    axis: "x",
+    at: sx.at
+  });
+  if (sy) guides.push({
+    axis: "y",
+    at: sy.at
+  });
+  return {
+    box: {
+      ...b,
+      x: Math.round(b.x + (sx?.d ?? 0)),
+      y: Math.round(b.y + (sy?.d ?? 0))
+    },
+    guides
+  };
+}
+var PLACEHOLDER = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
+function placeholders(s) {
+  const out = [];
+  const add = (v) => {
+    if (typeof v !== "string") return;
+    for (const m of v.matchAll(PLACEHOLDER)) if (!out.includes(m[1])) out.push(m[1]);
+  };
+  for (const e of s.elements) for (const k of [
+    "text",
+    "fill",
+    "stroke",
+    "color",
+    "bg"
+  ]) add(e[k]);
+  return out;
+}
+function isDesigner(files) {
+  return "scene.json" in files;
+}
+var HEADER = "// ERZEUGT vom OGraf-Editor (Leinwand) \u2014 \xC4nderungen bitte in der Leinwand machen, sie werden beim Speichern \xFCberschrieben.\n";
+function generateMain(runtime, scene) {
+  return `${HEADER}${runtime}
+export default createSceneElement(${JSON.stringify(scene)}, import.meta.url);
+`;
+}
+function applyScene(files, id, scene, runtime) {
+  const out = {
+    ...files,
+    "scene.json": JSON.stringify(scene, null, 2) + "\n",
+    [`${id}.js`]: generateMain(runtime, scene)
+  };
+  const mname = Object.keys(out).find((n) => n.endsWith(".ograf.json"));
+  if (mname) {
+    try {
+      const m = JSON.parse(out[mname]);
+      if (m.main !== `${id}.js`) out[mname] = stringify({
+        ...m,
+        main: `${id}.js`
+      });
+    } catch {
+    }
+  }
+  return out;
+}
+function newDesignerPackage(id, name, runtime) {
+  const scene = newScene();
+  const bar = {
+    ...newElement("rect", scene),
+    name: "Balken",
+    x: 120,
+    y: 820,
+    w: 900,
+    h: 150,
+    fill: "{{barColor}}"
+  };
+  scene.elements.push(bar);
+  const accent = {
+    ...newElement("rect", withElements(scene, scene.elements)),
+    name: "Akzent",
+    x: 120,
+    y: 820,
+    w: 12,
+    h: 150,
+    fill: "{{accentColor}}"
+  };
+  accent.id = "r2";
+  scene.elements.push(accent);
+  const t1 = {
+    ...newElement("text", withElements(scene, scene.elements)),
+    name: "Name",
+    id: "t1",
+    x: 160,
+    y: 830,
+    w: 840,
+    h: 80,
+    text: "{{name}}",
+    size: 60,
+    weight: 700
+  };
+  t1.anim = {
+    in: {
+      type: "fromLeft",
+      ms: 400,
+      delay: 150,
+      ease: "ease-out"
+    },
+    out: {
+      type: "fade",
+      ms: 250,
+      delay: 0,
+      ease: "ease-in"
+    }
+  };
+  scene.elements.push(t1);
+  const t2 = {
+    ...newElement("text", withElements(scene, scene.elements)),
+    name: "Untertitel",
+    id: "t2",
+    x: 160,
+    y: 905,
+    w: 840,
+    h: 55,
+    text: "{{title}}",
+    size: 38,
+    weight: 400,
+    color: "#c8d0dc"
+  };
+  t2.anim = {
+    in: {
+      type: "fromLeft",
+      ms: 400,
+      delay: 280,
+      ease: "ease-out"
+    },
+    out: {
+      type: "fade",
+      ms: 250,
+      delay: 0,
+      ease: "ease-in"
+    }
+  };
+  scene.elements.push(t2);
+  const manifest = {
+    $schema: SCHEMA_URL,
+    id,
+    name,
+    version: "1.0.0",
+    main: `${id}.js`,
+    supportsRealTime: true,
+    supportsNonRealTime: false,
+    stepCount: 1,
+    schema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          title: "Name",
+          default: "Max Mustermann"
+        },
+        title: {
+          type: "string",
+          title: "Untertitel",
+          default: "Reporter"
+        },
+        barColor: {
+          type: "string",
+          title: "Balkenfarbe",
+          gddType: "color-rrggbb",
+          pattern: "^#[0-9a-fA-F]{6}$",
+          default: "#10151f"
+        },
+        accentColor: {
+          type: "string",
+          title: "Akzentfarbe",
+          gddType: "color-rrggbb",
+          pattern: "^#[0-9a-fA-F]{6}$",
+          default: "#00c8ff"
+        }
+      }
+    }
+  };
+  return applyScene({
+    [`${id}.ograf.json`]: stringify(manifest)
+  }, id, scene, runtime);
+}
+function ensureParams(fields, s) {
+  const have = new Set(fields.map((f) => f.key));
+  const colorKeys = /* @__PURE__ */ new Set();
+  for (const e of s.elements) {
+    for (const k of [
+      "fill",
+      "stroke",
+      "color",
+      "bg"
+    ]) {
+      const v = e[k];
+      if (typeof v === "string") for (const m of v.matchAll(PLACEHOLDER)) colorKeys.add(m[1]);
+    }
+  }
+  const out = [
+    ...fields
+  ];
+  for (const k of placeholders(s)) {
+    if (have.has(k)) continue;
+    const isColor = colorKeys.has(k);
+    out.push({
+      key: k,
+      title: k,
+      kind: isColor ? "color" : "text",
+      def: isColor ? "#ffffff" : "",
+      choices: [],
+      required: false,
+      extra: {}
+    });
+  }
+  return out;
+}
+var History = class {
+  current;
+  limit;
+  #past;
+  #future;
+  constructor(current, limit = 100) {
+    this.current = current;
+    this.limit = limit;
+    this.#past = [];
+    this.#future = [];
+  }
+  get value() {
+    return this.current;
+  }
+  push(next) {
+    this.#past.push(this.current);
+    if (this.#past.length > this.limit) this.#past.shift();
+    this.#future = [];
+    this.current = next;
+  }
+  /** Aktuellen Stand ersetzen, ohne Verlaufseintrag (laufende Zeigergeste). */
+  replaceCurrent(next) {
+    this.current = next;
+  }
+  get canUndo() {
+    return this.#past.length > 0;
+  }
+  get canRedo() {
+    return this.#future.length > 0;
+  }
+  undo() {
+    const p = this.#past.pop();
+    if (p !== void 0) {
+      this.#future.push(this.current);
+      this.current = p;
+    }
+    return this.current;
+  }
+  redo() {
+    const f = this.#future.pop();
+    if (f !== void 0) {
+      this.#past.push(this.current);
+      this.current = f;
+    }
+    return this.current;
+  }
+};
+
+// ui/modules/ograf-editor/messages.ts
+var messages = {
+  de: {
+    title: "Vorlagen-Bibliothek",
+    back: "\u2039 Zur Sendung",
+    openLib: "Vorlagen bearbeiten",
+    newTpl: "\uFF0B Neu",
+    duplicate: "Duplizieren",
+    delete: "L\xF6schen",
+    importBtn: "Import\u2026",
+    exportBtn: "Export (ZIP)",
+    search: "Suchen\u2026",
+    rename: "ID \xE4ndern\u2026",
+    askRename: "Neue Kennung (ID) f\xFCr \u201E{id}\u201C",
+    renameFailed: "ID \xE4ndern fehlgeschlagen: {why}",
+    upload: "Hochladen\u2026",
+    binaryInfo: "Bin\xE4rdatei, {kb} KB",
+    importSkipped: "Importiert. Nicht \xFCbernommen: {list}",
+    noMatch: "Keine Treffer.",
+    save: "Speichern",
+    revert: "Verwerfen",
+    dirty: "\u25CF ungespeichert",
+    saved: "Gespeichert.",
+    none: "Keine Vorlage gew\xE4hlt.",
+    empty: "Noch keine Vorlagen.",
+    tabGeneral: "Allgemein",
+    tabParams: "Parameter",
+    tabSource: "Quelltext",
+    askName: "Name der neuen Vorlage",
+    askCopyName: "Name der Kopie",
+    askDelete: "Vorlage \u201E{id}\u201C endg\xFCltig l\xF6schen?",
+    valid: "g\xFCltig",
+    invalid: "fehlerhaft",
+    errors: "Fehler",
+    warnings: "Hinweise",
+    name: "Name",
+    id: "Kennung (ID)",
+    version: "Version",
+    description: "Beschreibung",
+    author: "Autor",
+    authorEmail: "E-Mail",
+    authorUrl: "Web",
+    steps: "Schritte (stepCount, \u22121 = dynamisch)",
+    realtime: "Echtzeit (supportsRealTime)",
+    nonRealtime: "Nicht-Echtzeit (supportsNonRealTime)",
+    resolution: "Renderaufl\xF6sung (0 = keine Angabe)",
+    frameRate: "Bildrate (0 = keine Angabe)",
+    addField: "\uFF0B Parameter",
+    key: "Schl\xFCssel",
+    fieldTitle: "Beschriftung",
+    kind: "Art",
+    def: "Vorgabe",
+    choices: "Auswahl (kommagetrennt)",
+    required: "Pflicht",
+    remove: "Entfernen",
+    up: "Nach oben",
+    down: "Nach unten",
+    kText: "Text",
+    kMulti: "Mehrzeilig",
+    kNumber: "Zahl",
+    kBool: "Ja/Nein",
+    kColor: "Farbe",
+    kChoice: "Auswahl",
+    file: "Datei",
+    addFile: "\uFF0B Datei",
+    delFile: "Datei l\xF6schen",
+    askFile: "Dateiname (z. B. stil.css)",
+    importFailed: "Import fehlgeschlagen: {why}",
+    importExists: "Vorlage \u201E{id}\u201C gibt es schon. Als \u201E{newId}\u201C importieren?",
+    loadFailed: "Laden fehlgeschlagen",
+    saveFailed: "Speichern fehlgeschlagen: {why}",
+    leaveDirty: "Ungespeicherte \xC4nderungen verwerfen?",
+    manifestBroken: "Das Manifest ist kein g\xFCltiges JSON \u2014 bitte im Quelltext reparieren.",
+    tabCanvas: "Leinwand",
+    newDesigner: "\uFF0B Designer",
+    kRect: "Fl\xE4che",
+    kImage: "Bild",
+    kZone: "Zone",
+    undo: "R\xFCckg\xE4ngig (Strg+Z)",
+    redo: "Wiederholen (Strg+Y)",
+    previewHint: "Vorschau: Einblenden, kurz halten, Ausblenden",
+    snap: "Einrasten (Alt beim Ziehen = aus)",
+    canvasEmpty: "Noch keine Elemente. Oben eines hinzuf\xFCgen.",
+    noSelection: "Nichts ausgew\xE4hlt. Auf ein Element klicken oder in der Liste w\xE4hlen.",
+    rotation: "Drehung \xB0",
+    opacity: "Deckkraft",
+    align: "Ausrichten",
+    content: "Inhalt",
+    insertParam: "Parameter einf\xFCgen",
+    font: "Schrift",
+    size: "Gr\xF6\xDFe / St\xE4rke",
+    color: "Farbe",
+    hAlign: "Ausrichtung",
+    lineHeight: "Zeilenh\xF6he / Rand",
+    background: "Hintergrund",
+    fill: "F\xFCllung",
+    radius: "Rundung",
+    stroke: "Rahmen",
+    strokeW: "Rahmenst\xE4rke",
+    fit: "Einpassen",
+    noImages: "Keine Bilder im Paket \u2014 im Reiter Quelltext hochladen.",
+    zoneId: "Zonen-ID",
+    zoneHint: "Eine Zone ist ein Fenster: Der Bildmischer legt dort ein Bild ein (Squeeze-back) oder f\xE4hrt den Paternoster.",
+    animIn: "Einblenden",
+    animOut: "Ausblenden",
+    animType: "Art",
+    animMs: "Dauer / Verzug ms",
+    animEase: "Verlauf",
+    anim_none: "keine",
+    anim_fade: "\xDCberblenden",
+    anim_fromLeft: "von links",
+    anim_fromRight: "von rechts",
+    anim_fromTop: "von oben",
+    anim_fromBottom: "von unten",
+    anim_scale: "Zoom",
+    anim_wipe: "Wischen",
+    generated: "Erzeugt aus der Leinwand \u2014 nicht von Hand bearbeiten."
+  },
+  en: {
+    title: "Template library",
+    back: "\u2039 Back to on-air",
+    openLib: "Edit templates",
+    newTpl: "\uFF0B New",
+    duplicate: "Duplicate",
+    delete: "Delete",
+    importBtn: "Import\u2026",
+    exportBtn: "Export (ZIP)",
+    search: "Search\u2026",
+    rename: "Change ID\u2026",
+    askRename: "New identifier (ID) for \u201C{id}\u201D",
+    renameFailed: "Changing the ID failed: {why}",
+    upload: "Upload\u2026",
+    binaryInfo: "Binary file, {kb} KB",
+    importSkipped: "Imported. Not taken over: {list}",
+    noMatch: "No matches.",
+    save: "Save",
+    revert: "Discard",
+    dirty: "\u25CF unsaved",
+    saved: "Saved.",
+    none: "No template selected.",
+    empty: "No templates yet.",
+    tabGeneral: "General",
+    tabParams: "Parameters",
+    tabSource: "Source",
+    askName: "Name of the new template",
+    askCopyName: "Name of the copy",
+    askDelete: "Delete template \u201C{id}\u201D permanently?",
+    valid: "valid",
+    invalid: "faulty",
+    errors: "Errors",
+    warnings: "Notes",
+    name: "Name",
+    id: "Identifier (ID)",
+    version: "Version",
+    description: "Description",
+    author: "Author",
+    authorEmail: "E-mail",
+    authorUrl: "Web",
+    steps: "Steps (stepCount, \u22121 = dynamic)",
+    realtime: "Real time (supportsRealTime)",
+    nonRealtime: "Non-real time (supportsNonRealTime)",
+    resolution: "Render resolution (0 = unspecified)",
+    frameRate: "Frame rate (0 = unspecified)",
+    addField: "\uFF0B Parameter",
+    key: "Key",
+    fieldTitle: "Label",
+    kind: "Kind",
+    def: "Default",
+    choices: "Choices (comma-separated)",
+    required: "Required",
+    remove: "Remove",
+    up: "Move up",
+    down: "Move down",
+    kText: "Text",
+    kMulti: "Multi-line",
+    kNumber: "Number",
+    kBool: "Yes/No",
+    kColor: "Colour",
+    kChoice: "Choice",
+    file: "File",
+    addFile: "\uFF0B File",
+    delFile: "Delete file",
+    askFile: "File name (e.g. style.css)",
+    importFailed: "Import failed: {why}",
+    importExists: "Template \u201C{id}\u201D already exists. Import as \u201C{newId}\u201D?",
+    loadFailed: "Loading failed",
+    saveFailed: "Saving failed: {why}",
+    leaveDirty: "Discard unsaved changes?",
+    manifestBroken: "The manifest is not valid JSON \u2014 please repair it in the source tab.",
+    tabCanvas: "Canvas",
+    newDesigner: "\uFF0B Designer",
+    kRect: "Shape",
+    kImage: "Image",
+    kZone: "Zone",
+    undo: "Undo (Ctrl+Z)",
+    redo: "Redo (Ctrl+Y)",
+    previewHint: "Preview: animate in, hold briefly, animate out",
+    snap: "Snap (Alt while dragging = off)",
+    canvasEmpty: "No elements yet. Add one above.",
+    noSelection: "Nothing selected. Click an element or choose one in the list.",
+    rotation: "Rotation \xB0",
+    opacity: "Opacity",
+    align: "Align",
+    content: "Content",
+    insertParam: "Insert parameter",
+    font: "Font",
+    size: "Size / weight",
+    color: "Colour",
+    hAlign: "Alignment",
+    lineHeight: "Line height / padding",
+    background: "Background",
+    fill: "Fill",
+    radius: "Radius",
+    stroke: "Border",
+    strokeW: "Border width",
+    fit: "Fit",
+    noImages: "No images in the package \u2014 upload them in the Source tab.",
+    zoneId: "Zone ID",
+    zoneHint: "A zone is a window: the video mixer places a picture there (squeeze-back) or runs the paternoster.",
+    animIn: "Animate in",
+    animOut: "Animate out",
+    animType: "Type",
+    animMs: "Duration / delay ms",
+    animEase: "Easing",
+    anim_none: "none",
+    anim_fade: "Fade",
+    anim_fromLeft: "from left",
+    anim_fromRight: "from right",
+    anim_fromTop: "from top",
+    anim_fromBottom: "from bottom",
+    anim_scale: "Zoom",
+    anim_wipe: "Wipe",
+    generated: "Generated from the canvas \u2014 do not edit by hand."
+  }
+};
+
+// ui/modules/ograf-editor/canvas.ts
 var L = (document.documentElement.lang || "de").startsWith("en") ? "en" : "de";
-var D = messages[L];
-var tr = (k, p) => {
+var tr = (k) => messages[L][k] ?? messages.de[k] ?? k;
+var STYLE = `
+:host { display: block; }
+.cv { display: grid; grid-template-columns: 200px minmax(360px, 1fr) 280px; gap: 10px; align-items: start; }
+.col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.tools { display: flex; flex-wrap: wrap; gap: 4px; }
+.vp { position: relative; width: 100%; background: repeating-conic-gradient(#2a2d31 0% 25%, #222529 0% 50%) 0 0 / 24px 24px; border: 1px solid var(--omp-border, #2e3338); overflow: hidden; outline: none; user-select: none; touch-action: none; }
+.ov { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
+.sel { position: absolute; border: 1px solid #00c8ff; box-sizing: border-box; }
+.hd { position: absolute; width: 9px; height: 9px; margin: -5px 0 0 -5px; background: #fff; border: 1px solid #00c8ff; box-sizing: border-box; pointer-events: auto; }
+.guide { position: absolute; background: #ff3b81; }
+.layers { display: flex; flex-direction: column; border: 1px solid var(--omp-border, #2e3338); border-radius: 4px; max-height: 360px; overflow: auto; }
+.ly { display: flex; align-items: center; gap: 4px; padding: 3px 6px; cursor: pointer; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; }
+.ly.on { background: var(--omp-info, #4285f4); color: #fff; }
+.ly .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp { display: grid; grid-template-columns: 90px 1fr; gap: 4px 6px; align-items: center; }
+.pp h4 { grid-column: 1 / -1; margin: 6px 0 0; font-size: 11px; color: var(--omp-text-dim, #9aa0a6); text-transform: uppercase; letter-spacing: .05em; }
+.pp label { color: var(--omp-text-dim, #9aa0a6); }
+.pp .two { display: flex; gap: 4px; }
+button.s { cursor: pointer; font: inherit; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--omp-border, #3a3f45); background: var(--omp-surface-raised, #2f3339); color: inherit; }
+button.s:disabled { opacity: .4; cursor: default; }
+button.s.on { background: var(--omp-info, #4285f4); border-color: var(--omp-info, #4285f4); color: #fff; }
+input, select, textarea { font: inherit; padding: 2px 5px; border-radius: 4px; background: var(--omp-bg-2, #1c1f22); color: var(--omp-text, #e8eaed); border: 1px solid var(--omp-border, #2e3338); min-width: 0; width: 100%; box-sizing: border-box; }
+input[type=color] { padding: 0 2px; height: 22px; width: 40px; flex: none; }
+textarea { min-height: 54px; resize: vertical; }
+`;
+var KIND_LABEL = {
+  text: "kText",
+  rect: "kRect",
+  image: "kImage",
+  zone: "kZone"
+};
+var CanvasEditor = class {
+  el;
+  #root;
+  #host;
+  #hist;
+  #sel = "";
+  #vp;
+  #ov;
+  #side;
+  #layers;
+  #tools;
+  #scale = 1;
+  #handle = null;
+  #guides = [];
+  #drag = null;
+  #preview = false;
+  #ro;
+  #snap = true;
+  constructor(host) {
+    this.#host = host;
+    this.#hist = new History(host.scene);
+    this.el = document.createElement("div");
+    this.#root = this.el.attachShadow({
+      mode: "open"
+    });
+    this.#build();
+    this.#ro = new ResizeObserver(() => this.#fit());
+    this.#ro.observe(this.#vp);
+    queueMicrotask(() => this.#redraw());
+  }
+  get scene() {
+    return this.#hist.value;
+  }
+  destroy() {
+    this.#ro.disconnect();
+    this.#handle?.destroy();
+  }
+  /** Szene von außen ersetzen (z. B. nach Verwerfen). */
+  setScene(s) {
+    this.#hist = new History(s);
+    if (!s.elements.some((e) => e.id === this.#sel)) this.#sel = "";
+    this.#redraw();
+  }
+  // ── Aufbau ──
+  #btn(label, onClick, title = "", cls = "") {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = `s ${cls}`.trim();
+    b.textContent = label;
+    b.title = title;
+    b.addEventListener("click", onClick);
+    return b;
+  }
+  #build() {
+    const style = document.createElement("style");
+    style.textContent = STYLE;
+    const cv = document.createElement("div");
+    cv.className = "cv";
+    const left = document.createElement("div");
+    left.className = "col";
+    this.#tools = document.createElement("div");
+    this.#tools.className = "tools";
+    this.#layers = document.createElement("div");
+    this.#layers.className = "layers";
+    left.append(this.#tools, this.#layers);
+    const mid = document.createElement("div");
+    mid.className = "col";
+    this.#vp = document.createElement("div");
+    this.#vp.className = "vp";
+    this.#vp.tabIndex = 0;
+    this.#ov = document.createElement("div");
+    this.#ov.className = "ov";
+    this.#vp.append(this.#ov);
+    mid.append(this.#vp);
+    this.#side = document.createElement("div");
+    this.#side.className = "col";
+    cv.append(left, mid, this.#side);
+    this.#root.append(style, cv);
+    this.#vp.addEventListener("pointerdown", (e) => this.#down(e));
+    this.#vp.addEventListener("pointermove", (e) => this.#move(e));
+    this.#vp.addEventListener("pointerup", (e) => this.#up(e));
+    this.#vp.addEventListener("pointercancel", (e) => this.#up(e));
+    this.#vp.addEventListener("keydown", (e) => this.#key(e));
+  }
+  // ── Zeichnen ──
+  #fit() {
+    const s = this.scene;
+    const w = this.#vp.clientWidth || 640;
+    this.#scale = w / s.width;
+    this.#vp.style.height = `${Math.round(s.height * this.#scale)}px`;
+    this.#drawOverlay();
+    if (this.#handle) this.#handle.stage.style.transform = `scale(${this.#scale})`;
+  }
+  #redraw() {
+    this.#handle?.destroy();
+    const s = this.scene;
+    this.#scale = (this.#vp.clientWidth || 640) / s.width;
+    this.#vp.style.height = `${Math.round(s.height * this.#scale)}px`;
+    this.#handle = renderScene(this.#vp, s, this.#host.data(), {
+      editor: !this.#preview,
+      scale: () => this.#scale,
+      resolveAsset: (f) => this.#host.assetUrl(f)
+    });
+    this.#vp.insertBefore(this.#handle.stage, this.#ov);
+    this.#drawOverlay();
+    this.#drawTools();
+    this.#drawLayers();
+    this.#drawProps();
+  }
+  #selected() {
+    return this.scene.elements.find((e) => e.id === this.#sel);
+  }
+  #drawOverlay() {
+    this.#ov.innerHTML = "";
+    if (this.#preview) return;
+    const e = this.#selected();
+    const k = this.#scale;
+    if (e) {
+      const sel = document.createElement("div");
+      sel.className = "sel";
+      sel.style.cssText = `left:${e.x * k}px;top:${e.y * k}px;width:${e.w * k}px;height:${e.h * k}px;transform:rotate(${e.rotation}deg)`;
+      if (!e.rotation) {
+        for (const h of HANDLES) {
+          const d = document.createElement("div");
+          d.className = "hd";
+          d.dataset.handle = h;
+          d.style.cursor = `${h}-resize`;
+          d.style.left = h.includes("w") ? "0" : h.includes("e") ? "100%" : "50%";
+          d.style.top = h.includes("n") ? "0" : h.includes("s") ? "100%" : "50%";
+          sel.append(d);
+        }
+      }
+      this.#ov.append(sel);
+    }
+    for (const g of this.#guides) {
+      const d = document.createElement("div");
+      d.className = "guide";
+      d.style.cssText = g.axis === "x" ? `left:${g.at * k}px;top:0;width:1px;height:100%` : `top:${g.at * k}px;left:0;height:1px;width:100%`;
+      this.#ov.append(d);
+    }
+  }
+  #drawTools() {
+    const t = this.#tools;
+    t.innerHTML = "";
+    for (const k of KINDS) t.append(this.#btn(`\uFF0B ${tr(KIND_LABEL[k])}`, () => this.#add(k)));
+    const sel = !!this.#selected();
+    t.append(this.#btn("\u21B6", () => this.#undo(), tr("undo"), ""), this.#btn("\u21B7", () => this.#redo(), tr("redo"), ""), this.#btn("\u29C9", () => this.#dup(), tr("duplicate")), this.#btn("\u2715", () => this.#del(), tr("delete")), this.#btn("\u25B6 / \u25A0", () => this.#togglePreview(), tr("previewHint"), this.#preview ? "on" : ""), this.#btn("\u2317", () => {
+      this.#snap = !this.#snap;
+      this.#drawTools();
+    }, tr("snap"), this.#snap ? "on" : ""));
+    const bs = t.querySelectorAll("button");
+    bs[kindsLen()].disabled = !this.#hist.canUndo;
+    bs[kindsLen() + 1].disabled = !this.#hist.canRedo;
+    bs[kindsLen() + 2].disabled = !sel;
+    bs[kindsLen() + 3].disabled = !sel;
+  }
+  #drawLayers() {
+    const box = this.#layers;
+    box.innerHTML = "";
+    for (const e of [
+      ...this.scene.elements
+    ].reverse()) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = `ly${e.id === this.#sel ? " on" : ""}`;
+      const icon = {
+        text: "T",
+        rect: "\u25AD",
+        image: "\u{1F5BC}",
+        zone: "\u2B1A"
+      }[e.kind];
+      const n = document.createElement("span");
+      n.className = "n";
+      n.textContent = `${icon} ${e.name}`;
+      b.append(n);
+      for (const [l, how, ttl] of [
+        [
+          "\u25B2",
+          "up",
+          tr("up")
+        ],
+        [
+          "\u25BC",
+          "down",
+          tr("down")
+        ]
+      ]) {
+        const m = document.createElement("span");
+        m.textContent = l;
+        m.title = ttl;
+        m.style.padding = "0 3px";
+        m.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          this.#commit(reorder(this.scene, e.id, how));
+        });
+        b.append(m);
+      }
+      b.addEventListener("click", () => {
+        this.#sel = e.id;
+        this.#redraw();
+      });
+      box.append(b);
+    }
+    if (!this.scene.elements.length) box.append(document.createTextNode(tr("canvasEmpty")));
+  }
+  // ── Eigenschaften ──
+  #drawProps() {
+    const side = this.#side;
+    side.innerHTML = "";
+    const e = this.#selected();
+    if (!e) {
+      side.append(document.createTextNode(tr("noSelection")));
+      return;
+    }
+    const pp = document.createElement("div");
+    pp.className = "pp";
+    const head = (t) => {
+      const h = document.createElement("h4");
+      h.textContent = t;
+      pp.append(h);
+    };
+    const row = (label, ...els) => {
+      const l = document.createElement("label");
+      l.textContent = label;
+      const w = document.createElement("div");
+      w.className = els.length > 1 ? "two" : "";
+      w.append(...els);
+      pp.append(l, w);
+    };
+    const patch = (p, live = false) => {
+      if (live) this.#live(updateElement(this.scene, e.id, p));
+      else this.#commit(updateElement(this.scene, e.id, p), false);
+    };
+    const text = (v, on) => {
+      const i = document.createElement("input");
+      i.value = v;
+      i.addEventListener("change", () => on(i.value));
+      return i;
+    };
+    const number = (v, on, step = 1) => {
+      const i = document.createElement("input");
+      i.type = "number";
+      i.step = String(step);
+      i.value = String(Math.round(v * 100) / 100);
+      i.addEventListener("change", () => {
+        const n = Number(i.value);
+        if (Number.isFinite(n)) on(n);
+      });
+      return i;
+    };
+    const select = (v, opts, on) => {
+      const s = document.createElement("select");
+      for (const [val, label] of opts) {
+        const o = document.createElement("option");
+        o.value = val;
+        o.textContent = label;
+        s.append(o);
+      }
+      s.value = v;
+      s.addEventListener("change", () => on(s.value));
+      return s;
+    };
+    const color = (v, on) => {
+      const c = document.createElement("input");
+      c.type = "color";
+      c.value = /^#[0-9a-fA-F]{6}$/.test(v ?? "") ? v : "#000000";
+      c.addEventListener("change", () => on(c.value));
+      const t = text(v ?? "", on);
+      t.placeholder = "#rrggbb / {{farbe}}";
+      return [
+        c,
+        t
+      ];
+    };
+    head(tr(KIND_LABEL[e.kind]));
+    row(tr("name"), text(e.name, (s) => patch({
+      name: s
+    })));
+    row("X / Y", number(e.x, (n) => patch({
+      x: Math.round(n)
+    })), number(e.y, (n) => patch({
+      y: Math.round(n)
+    })));
+    row("B / H", number(e.w, (n) => patch({
+      w: Math.round(n)
+    })), number(e.h, (n) => patch({
+      h: Math.round(n)
+    })));
+    row(tr("rotation"), number(e.rotation, (n) => patch({
+      rotation: n
+    })));
+    row(tr("opacity"), number(e.opacity, (n) => patch({
+      opacity: n
+    }), 0.05));
+    const al = (how, l) => this.#btn(l, () => this.#commit(alignToScene(this.scene, e.id, how)));
+    row(tr("align"), al("left", "\u21E4"), al("hcenter", "\u2194"), al("right", "\u21E5"));
+    row("", al("top", "\u2912"), al("vcenter", "\u2195"), al("bottom", "\u2913"));
+    if (e.kind === "text") {
+      head(tr("kText"));
+      const ta = document.createElement("textarea");
+      ta.value = e.text ?? "";
+      ta.addEventListener("change", () => patch({
+        text: ta.value
+      }));
+      row(tr("content"), ta);
+      const keys = this.#host.params().map((p) => p.key);
+      if (keys.length) {
+        row(tr("insertParam"), select("", [
+          [
+            "",
+            "\u2026"
+          ],
+          ...keys.map((k) => [
+            k,
+            k
+          ])
+        ], (k) => {
+          if (k) patch({
+            text: `${e.text ?? ""}{{${k}}}`
+          });
+        }));
+      }
+      row(tr("font"), select(e.font ?? "", [
+        [
+          "system-ui, sans-serif",
+          "Sans"
+        ],
+        [
+          "Georgia, serif",
+          "Serif"
+        ],
+        [
+          "ui-monospace, monospace",
+          "Mono"
+        ],
+        [
+          "Impact, sans-serif",
+          "Impact"
+        ]
+      ], (s) => patch({
+        font: s
+      })));
+      row(tr("size"), number(e.size ?? 40, (n) => patch({
+        size: n
+      })), number(e.weight ?? 400, (n) => patch({
+        weight: n
+      }), 100));
+      row(tr("color"), ...color(e.color, (s) => patch({
+        color: s
+      })));
+      row(tr("hAlign"), select(e.align ?? "left", [
+        [
+          "left",
+          "\u25C0"
+        ],
+        [
+          "center",
+          "\u25C6"
+        ],
+        [
+          "right",
+          "\u25B6"
+        ]
+      ], (s) => patch({
+        align: s
+      })), select(e.valign ?? "top", [
+        [
+          "top",
+          "\u25B2"
+        ],
+        [
+          "middle",
+          "\u25C6"
+        ],
+        [
+          "bottom",
+          "\u25BC"
+        ]
+      ], (s) => patch({
+        valign: s
+      })));
+      row(tr("lineHeight"), number(e.lineHeight ?? 1.2, (n) => patch({
+        lineHeight: n
+      }), 0.1), number(e.padding ?? 0, (n) => patch({
+        padding: n
+      })));
+      row(tr("background"), ...color(e.bg, (s) => patch({
+        bg: s
+      })));
+    } else if (e.kind === "rect") {
+      head(tr("kRect"));
+      row(tr("fill"), ...color(e.fill, (s) => patch({
+        fill: s
+      })));
+      row(tr("radius"), number(e.radius ?? 0, (n) => patch({
+        radius: n
+      })));
+      row(tr("stroke"), ...color(e.stroke, (s) => patch({
+        stroke: s
+      })));
+      row(tr("strokeW"), number(e.strokeW ?? 0, (n) => patch({
+        strokeW: n
+      })));
+    } else if (e.kind === "image") {
+      head(tr("kImage"));
+      const imgs = this.#host.images();
+      row(tr("file"), select(e.file ?? "", [
+        [
+          "",
+          "\u2013"
+        ],
+        ...imgs.map((f) => [
+          f,
+          f
+        ])
+      ], (s) => patch({
+        file: s
+      })));
+      row(tr("fit"), select(e.fit ?? "contain", [
+        [
+          "contain",
+          "contain"
+        ],
+        [
+          "cover",
+          "cover"
+        ],
+        [
+          "fill",
+          "fill"
+        ]
+      ], (s) => patch({
+        fit: s
+      })));
+      row(tr("radius"), number(e.radius ?? 0, (n) => patch({
+        radius: n
+      })));
+      if (!imgs.length) pp.append(document.createTextNode(tr("noImages")));
+    } else {
+      head(tr("kZone"));
+      row(tr("zoneId"), text(e.zone ?? "", (s) => patch({
+        zone: s.replace(/[^A-Za-z0-9_-]/g, "") || "zone"
+      })));
+      pp.append(document.createTextNode(tr("zoneHint")));
+    }
+    if (e.kind !== "zone") {
+      for (const dir of [
+        "in",
+        "out"
+      ]) {
+        head(dir === "in" ? tr("animIn") : tr("animOut"));
+        const a = e.anim?.[dir] ?? {
+          type: "none",
+          ms: 300,
+          delay: 0,
+          ease: "ease-out"
+        };
+        const set = (p) => patch({
+          anim: {
+            ...e.anim,
+            [dir]: {
+              ...a,
+              ...p
+            }
+          }
+        });
+        row(tr("animType"), select(a.type, ANIM_TYPES.map((t) => [
+          t,
+          tr(`anim_${t}`)
+        ]), (s) => set({
+          type: s
+        })));
+        row(tr("animMs"), number(a.ms, (n) => set({
+          ms: Math.max(0, n)
+        }), 50), number(a.delay, (n) => set({
+          delay: Math.max(0, n)
+        }), 50));
+        row(tr("animEase"), select(a.ease, [
+          [
+            "linear",
+            "linear"
+          ],
+          [
+            "ease-out",
+            "ease-out"
+          ],
+          [
+            "ease-in",
+            "ease-in"
+          ],
+          [
+            "ease-in-out",
+            "ease-in-out"
+          ]
+        ], (s) => set({
+          ease: s
+        })));
+      }
+    }
+    side.append(pp);
+  }
+  // ── Änderungen ──
+  /** Änderung ohne Verlaufseintrag (während des Ziehens). */
+  #live(s) {
+    this.#hist.replaceCurrent(s);
+    this.#host.onChange(s);
+    this.#redrawStage();
+  }
+  #redrawStage() {
+    this.#handle?.destroy();
+    this.#handle = renderScene(this.#vp, this.scene, this.#host.data(), {
+      editor: !this.#preview,
+      scale: () => this.#scale,
+      resolveAsset: (f) => this.#host.assetUrl(f)
+    });
+    this.#vp.insertBefore(this.#handle.stage, this.#ov);
+    this.#drawOverlay();
+  }
+  #commit(s, full = true) {
+    if (s === this.scene) return;
+    this.#hist.push(s);
+    this.#host.onChange(s);
+    if (full) this.#redraw();
+    else this.#redraw();
+  }
+  #add(kind) {
+    const e = newElement(kind, this.scene);
+    this.#sel = e.id;
+    this.#commit(addElement(this.scene, e));
+    this.#vp.focus();
+  }
+  #del() {
+    if (!this.#sel) return;
+    const id = this.#sel;
+    this.#sel = "";
+    this.#commit(removeElements(this.scene, [
+      id
+    ]));
+  }
+  #dup() {
+    if (!this.#sel) return;
+    const r = duplicateElement(this.scene, this.#sel);
+    this.#sel = r.id;
+    this.#commit(r.scene);
+  }
+  #undo() {
+    if (!this.#hist.canUndo) return;
+    this.#hist.undo();
+    this.#host.onChange(this.scene);
+    if (!this.#selected()) this.#sel = "";
+    this.#redraw();
+  }
+  #redo() {
+    if (!this.#hist.canRedo) return;
+    this.#hist.redo();
+    this.#host.onChange(this.scene);
+    this.#redraw();
+  }
+  async #togglePreview() {
+    this.#preview = !this.#preview;
+    this.#redraw();
+    if (this.#preview && this.#handle) {
+      await this.#handle.play();
+      await new Promise((r) => setTimeout(r, 800));
+      if (this.#preview && this.#handle) await this.#handle.stop();
+    }
+  }
+  // ── Zeigereingaben ──
+  #toScene(ev) {
+    const r = this.#vp.getBoundingClientRect();
+    return {
+      x: (ev.clientX - r.left) / this.#scale,
+      y: (ev.clientY - r.top) / this.#scale
+    };
+  }
+  #down(ev) {
+    if (this.#preview || ev.button !== 0) return;
+    this.#vp.focus();
+    const target = ev.target;
+    const h = target.dataset?.handle;
+    const p = this.#toScene(ev);
+    let id = this.#sel;
+    let mode = "move";
+    if (h && this.#selected()) mode = h;
+    else {
+      id = hitTest(this.scene, p.x, p.y) ?? "";
+      this.#sel = id;
+    }
+    if (!id) {
+      this.#redraw();
+      return;
+    }
+    this.#drag = {
+      mode,
+      sx: ev.clientX,
+      sy: ev.clientY,
+      base: this.scene,
+      id,
+      changed: false
+    };
+    try {
+      this.#vp.setPointerCapture(ev.pointerId);
+    } catch {
+    }
+    this.#drawOverlay();
+    this.#drawLayers();
+    this.#drawProps();
+    this.#drawTools();
+  }
+  #move(ev) {
+    const d = this.#drag;
+    if (!d) return;
+    const dx = (ev.clientX - d.sx) / this.#scale;
+    const dy = (ev.clientY - d.sy) / this.#scale;
+    const base = d.base.elements.find((e) => e.id === d.id);
+    if (!base) return;
+    let box = {
+      x: base.x,
+      y: base.y,
+      w: base.w,
+      h: base.h
+    };
+    if (d.mode === "move") box = {
+      ...box,
+      x: base.x + dx,
+      y: base.y + dy
+    };
+    else box = resizeBox(box, d.mode, dx, dy, ev.shiftKey);
+    this.#guides = [];
+    if (this.#snap && !ev.altKey) {
+      const sn = snapBox(box, d.base, [
+        d.id
+      ], 8 / this.#scale);
+      if (d.mode === "move") box = sn.box;
+      this.#guides = sn.guides;
+    }
+    box = {
+      x: Math.round(box.x),
+      y: Math.round(box.y),
+      w: Math.round(box.w),
+      h: Math.round(box.h)
+    };
+    d.changed = d.changed || Math.abs(dx) + Math.abs(dy) > 0.5;
+    this.#hist.replaceCurrent(updateElement(d.base, d.id, box));
+    this.#host.onChange(this.scene);
+    this.#redrawStage();
+  }
+  #up(_ev) {
+    const d = this.#drag;
+    this.#drag = null;
+    this.#guides = [];
+    if (!d) return;
+    if (d.changed) {
+      const final = this.scene;
+      this.#hist.replaceCurrent(d.base);
+      this.#hist.push(final);
+      this.#host.onChange(final);
+    }
+    this.#redraw();
+  }
+  #key(ev) {
+    const mod = ev.ctrlKey || ev.metaKey;
+    if (mod && ev.key.toLowerCase() === "z") {
+      ev.preventDefault();
+      if (ev.shiftKey) this.#redo();
+      else this.#undo();
+    } else if (mod && ev.key.toLowerCase() === "y") {
+      ev.preventDefault();
+      this.#redo();
+    } else if (mod && ev.key.toLowerCase() === "d") {
+      ev.preventDefault();
+      this.#dup();
+    } else if (ev.key === "Delete" || ev.key === "Backspace") {
+      ev.preventDefault();
+      this.#del();
+    } else if (this.#sel && ev.key.startsWith("Arrow")) {
+      ev.preventDefault();
+      const n = ev.shiftKey ? 10 : 1;
+      const [dx, dy] = {
+        ArrowLeft: [
+          -n,
+          0
+        ],
+        ArrowRight: [
+          n,
+          0
+        ],
+        ArrowUp: [
+          0,
+          -n
+        ],
+        ArrowDown: [
+          0,
+          n
+        ]
+      }[ev.key] ?? [
+        0,
+        0
+      ];
+      this.#commit(moveElements(this.scene, [
+        this.#sel
+      ], dx, dy));
+    }
+  }
+};
+var kindsLen = () => KINDS.length;
+
+// ui/modules/ograf-editor/zip.ts
+var TEXT_EXT = [
+  "js",
+  "mjs",
+  "json",
+  "css",
+  "svg",
+  "html",
+  "txt"
+];
+var BINARY_EXT = [
+  "png",
+  "jpg",
+  "jpeg",
+  "webp",
+  "gif",
+  "woff",
+  "woff2",
+  "ttf"
+];
+var BINARY_PREFIX = "base64:";
+var MAX_ENTRIES = 200;
+var MAX_UNPACKED = 16 * 1024 * 1024;
+var extOf = (n) => n.includes(".") ? n.slice(n.lastIndexOf(".") + 1).toLowerCase() : "";
+var isBinaryName = (n) => BINARY_EXT.includes(extOf(n));
+var isTextName = (n) => TEXT_EXT.includes(extOf(n));
+var CRC = null;
+function crc32(data) {
+  if (!CRC) {
+    CRC = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c2 = n;
+      for (let k = 0; k < 8; k++) c2 = c2 & 1 ? 3988292384 ^ c2 >>> 1 : c2 >>> 1;
+      CRC[n] = c2 >>> 0;
+    }
+  }
+  let c = 4294967295;
+  for (let i = 0; i < data.length; i++) c = CRC[(c ^ data[i]) & 255] ^ c >>> 8;
+  return (c ^ 4294967295) >>> 0;
+}
+function bytesToBase64(b) {
+  let s = "";
+  for (let i = 0; i < b.length; i += 32768) s += String.fromCharCode(...b.subarray(i, i + 32768));
+  return btoa(s);
+}
+function base64ToBytes(s) {
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function filesToBytes(files) {
+  const out = {};
+  for (const [n, c] of Object.entries(files)) {
+    out[n] = isBinaryName(n) && c.startsWith(BINARY_PREFIX) ? base64ToBytes(c.slice(BINARY_PREFIX.length)) : new TextEncoder().encode(c);
+  }
+  return out;
+}
+function makeZip(entries) {
+  const enc = new TextEncoder();
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  const u16 = (v) => new Uint8Array([
+    v & 255,
+    v >> 8 & 255
+  ]);
+  const u32 = (v) => new Uint8Array([
+    v & 255,
+    v >> 8 & 255,
+    v >> 16 & 255,
+    v >>> 24 & 255
+  ]);
+  const cat = (...p) => {
+    const o = new Uint8Array(p.reduce((a, b) => a + b.length, 0));
+    let i = 0;
+    for (const x of p) {
+      o.set(x, i);
+      i += x.length;
+    }
+    return o;
+  };
+  const DOS_TIME = 0, DOS_DATE = 1 << 5 | 1 | 2026 - 1980 << 9;
+  for (const [name, data] of Object.entries(entries)) {
+    const nm = enc.encode(name);
+    const crc = crc32(data);
+    const local = cat(u32(67324752), u16(20), u16(2048), u16(0), u16(DOS_TIME), u16(DOS_DATE), u32(crc), u32(data.length), u32(data.length), u16(nm.length), u16(0), nm, data);
+    central.push(cat(u32(33639248), u16(20), u16(20), u16(2048), u16(0), u16(DOS_TIME), u16(DOS_DATE), u32(crc), u32(data.length), u32(data.length), u16(nm.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(offset), nm));
+    chunks.push(local);
+    offset += local.length;
+  }
+  const cdSize = central.reduce((a, b) => a + b.length, 0);
+  const count = Object.keys(entries).length;
+  return cat(...chunks, ...central, u32(101010256), u16(0), u16(0), u16(count), u16(count), u32(cdSize), u32(offset), u16(0));
+}
+async function inflate(raw) {
+  const ds = new DecompressionStream("deflate-raw");
+  const w = ds.writable.getWriter();
+  void w.write(raw).then(() => w.close()).catch(() => {
+  });
+  const buf = await new Response(ds.readable).arrayBuffer();
+  return new Uint8Array(buf);
+}
+async function readZip(data) {
+  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  let eocd = -1;
+  for (let i = data.length - 22; i >= Math.max(0, data.length - 22 - 65535); i--) {
+    if (dv.getUint32(i, true) === 101010256) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) throw new Error("kein ZIP-Archiv");
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  if (count > MAX_ENTRIES) throw new Error("zu viele Eintr\xE4ge im Archiv");
+  const dec = new TextDecoder();
+  const raw = [];
+  let unpacked = 0;
+  for (let n = 0; n < count; n++) {
+    if (p + 46 > data.length || dv.getUint32(p, true) !== 33639248) throw new Error("Archiv besch\xE4digt");
+    const flags = dv.getUint16(p + 8, true);
+    const method = dv.getUint16(p + 10, true);
+    const crc = dv.getUint32(p + 16, true);
+    const csize = dv.getUint32(p + 20, true);
+    const usize = dv.getUint32(p + 24, true);
+    const nlen = dv.getUint16(p + 28, true), elen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true);
+    const lho = dv.getUint32(p + 42, true);
+    const name = dec.decode(data.subarray(p + 46, p + 46 + nlen));
+    p += 46 + nlen + elen + clen;
+    if (name.endsWith("/")) continue;
+    if (flags & 1) throw new Error("verschl\xFCsseltes Archiv wird nicht unterst\xFCtzt");
+    if (csize === 4294967295 || usize === 4294967295) throw new Error("ZIP64 wird nicht unterst\xFCtzt");
+    unpacked += usize;
+    if (unpacked > MAX_UNPACKED) throw new Error("Archiv entpackt zu gro\xDF");
+    if (lho + 30 > data.length || dv.getUint32(lho, true) !== 67324752) throw new Error("Archiv besch\xE4digt");
+    const start = lho + 30 + dv.getUint16(lho + 26, true) + dv.getUint16(lho + 28, true);
+    const body = data.subarray(start, start + csize);
+    if (body.length !== csize) throw new Error("Archiv besch\xE4digt");
+    let out;
+    if (method === 0) out = body;
+    else if (method === 8) out = await inflate(body);
+    else throw new Error(`Kompressionsmethode ${method} wird nicht unterst\xFCtzt`);
+    if (out.length !== usize || crc32(out) !== crc) throw new Error(`Pr\xFCfsumme von \u201E${name}\u201C stimmt nicht`);
+    raw.push({
+      name,
+      data: out
+    });
+  }
+  const clean = raw.filter((r) => !r.name.startsWith("__MACOSX/"));
+  const tops = new Set(clean.map((r) => r.name.includes("/") ? r.name.split("/")[0] : ""));
+  const strip = tops.size === 1 && !tops.has("") ? `${[
+    ...tops
+  ][0]}/` : "";
+  const files = {};
+  const skipped = [];
+  for (const r of clean) {
+    const name = strip ? r.name.slice(strip.length) : r.name;
+    const ok = name !== "" && !name.includes("/") && !name.startsWith(".") && /^[A-Za-z0-9._-]+$/.test(name) && (isTextName(name) || isBinaryName(name));
+    if (ok) files[name] = r.data;
+    else skipped.push(r.name);
+  }
+  return {
+    files,
+    skipped
+  };
+}
+function bytesToFiles(entries) {
+  const out = {};
+  for (const [n, b] of Object.entries(entries)) {
+    out[n] = isBinaryName(n) ? BINARY_PREFIX + bytesToBase64(b) : new TextDecoder().decode(b);
+  }
+  return out;
+}
+
+// ui/modules/ograf-editor/library.ts
+var L2 = (document.documentElement.lang || "de").startsWith("en") ? "en" : "de";
+var D = messages[L2];
+var tr2 = (k, p) => {
   let s = D[k] ?? messages.de[k] ?? k;
   for (const [a, b] of Object.entries(p ?? {})) s = s.split(`{${a}}`).join(b);
   return s;
@@ -638,7 +2299,8 @@ function promptDialog(message, initial = "") {
     document.body.appendChild(el);
   });
 }
-var KIND_LABEL = {
+var isBinaryOrSvg = (n) => isBinaryName(n) || n.toLowerCase().endsWith(".svg");
+var KIND_LABEL2 = {
   text: "kText",
   multiline: "kMulti",
   number: "kNumber",
@@ -646,7 +2308,7 @@ var KIND_LABEL = {
   color: "kColor",
   choice: "kChoice"
 };
-var STYLE = `
+var STYLE2 = `
 :host { display: block; font-family: var(--omp-font, system-ui, sans-serif); color: var(--omp-text, #e8eaed); font-size: var(--omp-font-size-sm, 12px); }
 * { box-sizing: border-box; }
 .wrap { display: grid; grid-template-columns: 220px 1fr; gap: 10px; min-height: 420px; }
@@ -702,6 +2364,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
   #fields = [];
   #sourceFile = "";
   #filter = "";
+  #canvas = null;
   #status = "";
   #statusBad = false;
   connectedCallback() {
@@ -741,11 +2404,11 @@ var OmpOgrafLibrary = class extends HTMLElement {
       this.#list = await this.#param("library");
     } catch {
       this.#list = [];
-      this.#say(tr("loadFailed"), true);
+      this.#say(tr2("loadFailed"), true);
     }
   }
   async #open(id) {
-    if (this.#dirty() && !await confirmDialog(tr("leaveDirty"))) return;
+    if (this.#dirty() && !await confirmDialog(tr2("leaveDirty"))) return;
     try {
       const pkg = await this.#param(`library.${id}`);
       this.#selected = id;
@@ -755,12 +2418,15 @@ var OmpOgrafLibrary = class extends HTMLElement {
       this.#serverErrors = pkg.errors;
       this.#serverWarnings = pkg.warnings;
       this.#origId = id;
+      this.#canvas?.destroy();
+      this.#canvas = null;
+      this.#tab = isDesigner(this.#files) ? "canvas" : this.#tab === "canvas" ? "general" : this.#tab;
       this.#orig = JSON.stringify(this.#files);
       this.#syncFields();
       this.#sourceFile = Object.keys(this.#files).find((n) => !n.endsWith(".ograf.json")) ?? "";
       this.#say("", false);
     } catch {
-      this.#say(tr("loadFailed"), true);
+      this.#say(tr2("loadFailed"), true);
     }
     this.#render();
   }
@@ -799,15 +2465,18 @@ var OmpOgrafLibrary = class extends HTMLElement {
     if (save) save.disabled = !d;
   }
   // ── Aktionen ──
-  async #newTemplate() {
-    const name = await promptDialog(tr("askName"));
+  async #newTemplate(designer = false) {
+    const name = await promptDialog(tr2("askName"));
     if (!name?.trim()) return;
     const id = nextFreeId(name, this.#list.map((e) => e.id));
-    const err = await this.#call("library.new", {
+    const err = designer ? await this.#call("library.save", {
+      id,
+      files: newDesignerPackage(id, name.trim(), runtime_default)
+    }) : await this.#call("library.new", {
       id,
       name: name.trim()
     });
-    if (err) return this.#say(tr("saveFailed", {
+    if (err) return this.#say(tr2("saveFailed", {
       why: err
     }), true);
     await this.#loadList();
@@ -815,27 +2484,27 @@ var OmpOgrafLibrary = class extends HTMLElement {
   }
   async #duplicate() {
     if (!this.#selected) return;
-    const name = await promptDialog(tr("askCopyName"), `${this.#selected}-kopie`);
+    const name = await promptDialog(tr2("askCopyName"), `${this.#selected}-kopie`);
     if (!name?.trim()) return;
     const id = nextFreeId(name, this.#list.map((e) => e.id));
     const err = await this.#call("library.duplicate", {
       id: this.#selected,
       newId: id
     });
-    if (err) return this.#say(tr("saveFailed", {
+    if (err) return this.#say(tr2("saveFailed", {
       why: err
     }), true);
     await this.#loadList();
     await this.#open(id);
   }
   async #delete() {
-    if (!this.#selected || !await confirmDialog(tr("askDelete", {
+    if (!this.#selected || !await confirmDialog(tr2("askDelete", {
       id: this.#selected
     }))) return;
     const err = await this.#call("library.delete", {
       id: this.#selected
     });
-    if (err) return this.#say(tr("saveFailed", {
+    if (err) return this.#say(tr2("saveFailed", {
       why: err
     }), true);
     this.#selected = "";
@@ -851,7 +2520,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
       id: this.#selected,
       files: this.#files
     });
-    if (err) return this.#say(tr("saveFailed", {
+    if (err) return this.#say(tr2("saveFailed", {
       why: err
     }), true);
     const id = this.#selected;
@@ -859,7 +2528,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
     this.#orig = "";
     this.#selected = "";
     await this.#open(id);
-    this.#say(tr("saved"), false);
+    this.#say(tr2("saved"), false);
   }
   #export() {
     if (!this.#selected) return;
@@ -876,14 +2545,14 @@ var OmpOgrafLibrary = class extends HTMLElement {
   }
   async #rename() {
     if (!this.#selected) return;
-    if (this.#dirty() && !await confirmDialog(tr("leaveDirty"))) return;
+    if (this.#dirty() && !await confirmDialog(tr2("leaveDirty"))) return;
     const old = this.#selected;
-    const wanted = await promptDialog(tr("askRename", {
+    const wanted = await promptDialog(tr2("askRename", {
       id: old
     }), old);
     const id = slugify(wanted ?? "");
     if (!id || id === old) return;
-    if (this.#list.some((e) => e.id === id)) return this.#say(tr("renameFailed", {
+    if (this.#list.some((e) => e.id === id)) return this.#say(tr2("renameFailed", {
       why: id
     }), true);
     const files = renamePackage(this.#files, old, id);
@@ -891,13 +2560,13 @@ var OmpOgrafLibrary = class extends HTMLElement {
       id,
       files
     });
-    if (err) return this.#say(tr("renameFailed", {
+    if (err) return this.#say(tr2("renameFailed", {
       why: err
     }), true);
     err = await this.#call("library.delete", {
       id: old
     });
-    if (err) this.#say(tr("renameFailed", {
+    if (err) this.#say(tr2("renameFailed", {
       why: err
     }), true);
     this.#orig = "";
@@ -915,23 +2584,23 @@ var OmpOgrafLibrary = class extends HTMLElement {
         files = bytesToFiles(z.files);
         skipped = z.skipped;
       } catch (e) {
-        return this.#say(tr("importFailed", {
+        return this.#say(tr2("importFailed", {
           why: e.message
         }), true);
       }
       const m = parseManifest(files);
-      if (!m) return this.#say(tr("importFailed", {
+      if (!m) return this.#say(tr2("importFailed", {
         why: "Manifest (*.ograf.json) fehlt oder ist kein JSON"
       }), true);
       id = typeof m.id === "string" && slugify(m.id) === m.id ? m.id : slugify(String(m.name ?? file.name.replace(/\.zip$/i, "")));
-      if (!id) return this.#say(tr("importFailed", {
+      if (!id) return this.#say(tr2("importFailed", {
         why: "id"
       }), true);
       const had = typeof m.id === "string" ? m.id : id;
       if (had !== id || manifestFileName(files) !== `${id}.ograf.json`) files = renamePackage(files, manifestFileName(files).replace(/\.ograf\.json$/, ""), id);
     } else {
       const r = importPackage(await file.text());
-      if ("error" in r) return this.#say(tr("importFailed", {
+      if ("error" in r) return this.#say(tr2("importFailed", {
         why: r.error
       }), true);
       ({ id, files } = r);
@@ -939,7 +2608,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
     const taken = this.#list.map((e) => e.id);
     if (taken.includes(id)) {
       const newId = nextFreeId(id, taken);
-      if (!await confirmDialog(tr("importExists", {
+      if (!await confirmDialog(tr2("importExists", {
         id,
         newId
       }))) return;
@@ -950,12 +2619,12 @@ var OmpOgrafLibrary = class extends HTMLElement {
       id,
       files
     });
-    if (err) return this.#say(tr("importFailed", {
+    if (err) return this.#say(tr2("importFailed", {
       why: err
     }), true);
     await this.#loadList();
     await this.#open(id);
-    if (skipped.length) this.#say(tr("importSkipped", {
+    if (skipped.length) this.#say(tr2("importSkipped", {
       list: skipped.join(", ")
     }), false);
   }
@@ -977,7 +2646,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
     const root = this.#root;
     root.innerHTML = "";
     const style = this.#el("style");
-    style.textContent = STYLE;
+    style.textContent = STYLE2;
     const wrap = this.#el("div", "wrap");
     wrap.append(this.#renderSide(), this.#renderMain());
     root.append(style, wrap);
@@ -985,7 +2654,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
   #renderSide() {
     const side = this.#el("div", "side");
     const bar = this.#el("div", "bar");
-    const imp = this.#el("label", "b", tr("importBtn"));
+    const imp = this.#el("label", "b", tr2("importBtn"));
     const input = this.#el("input");
     input.type = "file";
     input.accept = ".zip,.json,application/zip,application/json";
@@ -996,10 +2665,10 @@ var OmpOgrafLibrary = class extends HTMLElement {
       if (f) void this.#import(f);
     });
     imp.append(input);
-    bar.append(this.#btn(tr("newTpl"), () => void this.#newTemplate(), "primary"), imp);
+    bar.append(this.#btn(tr2("newTpl"), () => void this.#newTemplate(), "primary"), this.#btn(tr2("newDesigner"), () => void this.#newTemplate(true), "primary"), imp);
     const search = this.#el("input");
     search.type = "text";
-    search.placeholder = tr("search");
+    search.placeholder = tr2("search");
     search.value = this.#filter;
     search.addEventListener("input", () => {
       this.#filter = search.value;
@@ -1012,8 +2681,8 @@ var OmpOgrafLibrary = class extends HTMLElement {
     const list = this.#el("div", "list");
     const q = this.#filter.trim().toLowerCase();
     const shown = this.#list.filter((e) => !q || e.label.toLowerCase().includes(q) || e.id.includes(q));
-    if (!this.#list.length) list.append(this.#el("div", "status", tr("empty")));
-    else if (!shown.length) list.append(this.#el("div", "status", tr("noMatch")));
+    if (!this.#list.length) list.append(this.#el("div", "status", tr2("empty")));
+    else if (!shown.length) list.append(this.#el("div", "status", tr2("noMatch")));
     for (const e of shown) {
       const it = this.#el("button", `item${e.id === this.#selected ? " sel" : ""}`);
       it.type = "button";
@@ -1029,38 +2698,43 @@ var OmpOgrafLibrary = class extends HTMLElement {
   #renderMain() {
     const main = this.#el("div", "main");
     if (!this.#selected) {
-      main.append(this.#el("div", "status", tr("none")), this.#statusEl());
+      main.append(this.#el("div", "status", tr2("none")), this.#statusEl());
       return main;
     }
     const m = parseManifest(this.#files);
     const head = this.#el("div", "head");
     const valid = this.#serverErrors.length === 0;
-    head.append(this.#el("h3", "", String(m?.name ?? this.#selected)), this.#el("span", `pill${valid ? "" : " bad"}`, valid ? tr("valid") : tr("invalid")));
-    const dirty = this.#el("span", "dirty", tr("dirty"));
+    head.append(this.#el("h3", "", String(m?.name ?? this.#selected)), this.#el("span", `pill${valid ? "" : " bad"}`, valid ? tr2("valid") : tr2("invalid")));
+    const dirty = this.#el("span", "dirty", tr2("dirty"));
     dirty.style.display = this.#dirty() ? "" : "none";
     head.append(dirty);
     const spacer = this.#el("span");
     spacer.style.flex = "1";
-    const save = this.#btn(tr("save"), () => void this.#save(), "primary save", !this.#dirty());
-    head.append(spacer, this.#btn(tr("duplicate"), () => void this.#duplicate()), this.#btn(tr("rename"), () => void this.#rename()), this.#btn(tr("exportBtn"), () => this.#export()), this.#btn(tr("delete"), () => void this.#delete()), this.#btn(tr("revert"), () => this.#revert(), "", false), save);
+    const save = this.#btn(tr2("save"), () => void this.#save(), "primary save", !this.#dirty());
+    head.append(spacer, this.#btn(tr2("duplicate"), () => void this.#duplicate()), this.#btn(tr2("rename"), () => void this.#rename()), this.#btn(tr2("exportBtn"), () => this.#export()), this.#btn(tr2("delete"), () => void this.#delete()), this.#btn(tr2("revert"), () => this.#revert(), "", false), save);
     main.append(head);
-    if (this.#serverErrors.length) main.append(this.#list_("err", tr("errors"), this.#serverErrors));
-    if (this.#serverWarnings.length) main.append(this.#list_("warn", tr("warnings"), this.#serverWarnings));
+    if (this.#serverErrors.length) main.append(this.#list_("err", tr2("errors"), this.#serverErrors));
+    if (this.#serverWarnings.length) main.append(this.#list_("warn", tr2("warnings"), this.#serverWarnings));
     const tabs = this.#el("div", "tabs");
-    for (const [id, label] of [
+    const tabList = [
       [
         "general",
-        tr("tabGeneral")
+        tr2("tabGeneral")
       ],
       [
         "params",
-        tr("tabParams")
+        tr2("tabParams")
       ],
       [
         "source",
-        tr("tabSource")
+        tr2("tabSource")
       ]
-    ]) {
+    ];
+    if (isDesigner(this.#files)) tabList.unshift([
+      "canvas",
+      tr2("tabCanvas")
+    ]);
+    for (const [id, label] of tabList) {
       const t = this.#el("button", `tab${this.#tab === id ? " on" : ""}`, label);
       t.type = "button";
       t.addEventListener("click", () => {
@@ -1071,7 +2745,8 @@ var OmpOgrafLibrary = class extends HTMLElement {
       tabs.append(t);
     }
     main.append(tabs);
-    if (!m && this.#tab !== "source") main.append(this.#el("div", "status bad", tr("manifestBroken")));
+    if (!m && this.#tab !== "source") main.append(this.#el("div", "status bad", tr2("manifestBroken")));
+    else if (this.#tab === "canvas" && isDesigner(this.#files)) main.append(this.#renderCanvas());
     else if (this.#tab === "general") main.append(this.#renderGeneral(m));
     else if (this.#tab === "params") main.append(this.#renderParams());
     else main.append(this.#renderSource());
@@ -1082,6 +2757,8 @@ var OmpOgrafLibrary = class extends HTMLElement {
     if (!this.#dirty()) return;
     this.#files = JSON.parse(this.#orig);
     this.#syncFields();
+    const sc = this.#files["scene.json"] ? parseScene(this.#files["scene.json"]) : null;
+    if (sc) this.#canvas?.setScene(sc);
     this.#render();
   }
   #statusEl() {
@@ -1118,12 +2795,12 @@ var OmpOgrafLibrary = class extends HTMLElement {
       this.#writeManifest((prev) => applyForm(prev, f, this.#selected));
     };
     const row = (label, el) => form.append(this.#el("label", "k", label), el);
-    row(tr("name"), this.#input(f.name, "text", (v) => upd({
+    row(tr2("name"), this.#input(f.name, "text", (v) => upd({
       name: v
     })));
-    row(tr("id"), this.#input(this.#selected, "text", () => {
+    row(tr2("id"), this.#input(this.#selected, "text", () => {
     }, true));
-    row(tr("version"), this.#input(f.version, "text", (v) => upd({
+    row(tr2("version"), this.#input(f.version, "text", (v) => upd({
       version: v
     })));
     const desc = this.#el("textarea");
@@ -1133,23 +2810,23 @@ var OmpOgrafLibrary = class extends HTMLElement {
     desc.addEventListener("input", () => upd({
       description: desc.value
     }));
-    row(tr("description"), desc);
-    row(tr("author"), this.#input(f.authorName, "text", (v) => upd({
+    row(tr2("description"), desc);
+    row(tr2("author"), this.#input(f.authorName, "text", (v) => upd({
       authorName: v
     })));
-    row(tr("authorEmail"), this.#input(f.authorEmail, "text", (v) => upd({
+    row(tr2("authorEmail"), this.#input(f.authorEmail, "text", (v) => upd({
       authorEmail: v
     })));
-    row(tr("authorUrl"), this.#input(f.authorUrl, "text", (v) => upd({
+    row(tr2("authorUrl"), this.#input(f.authorUrl, "text", (v) => upd({
       authorUrl: v
     })));
-    row(tr("steps"), this.#input(f.stepCount, "number", (v) => upd({
+    row(tr2("steps"), this.#input(f.stepCount, "number", (v) => upd({
       stepCount: Number(v) || 1
     })));
-    row(tr("realtime"), this.#check(f.supportsRealTime, (v) => upd({
+    row(tr2("realtime"), this.#check(f.supportsRealTime, (v) => upd({
       supportsRealTime: v
     })));
-    row(tr("nonRealtime"), this.#check(f.supportsNonRealTime, (v) => upd({
+    row(tr2("nonRealtime"), this.#check(f.supportsNonRealTime, (v) => upd({
       supportsNonRealTime: v
     })));
     const res = this.#el("div", "row2");
@@ -1158,8 +2835,8 @@ var OmpOgrafLibrary = class extends HTMLElement {
     })), this.#input(f.height, "number", (v) => upd({
       height: Number(v) || 0
     })));
-    row(tr("resolution"), res);
-    row(tr("frameRate"), this.#input(f.frameRate, "number", (v) => upd({
+    row(tr2("resolution"), res);
+    row(tr2("frameRate"), this.#input(f.frameRate, "number", (v) => upd({
       frameRate: Number(v) || 0
     })));
     return form;
@@ -1184,7 +2861,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
       }));
       const sel = this.#el("select");
       for (const k of kinds) {
-        const o = this.#el("option", "", tr(KIND_LABEL[k]));
+        const o = this.#el("option", "", tr2(KIND_LABEL2[k]));
         o.value = k;
         sel.append(o);
       }
@@ -1199,18 +2876,18 @@ var OmpOgrafLibrary = class extends HTMLElement {
       req.append(this.#check(fd.required, (v) => {
         fd.required = v;
         this.#writeFields();
-      }), document.createTextNode(` ${tr("required")}`));
+      }), document.createTextNode(` ${tr2("required")}`));
       const ctl = this.#el("span", "bar");
       ctl.append(this.#btn("\u25B2", () => this.#move(i, -1), "", i === 0), this.#btn("\u25BC", () => this.#move(i, 1), "", i === this.#fields.length - 1), this.#btn("\u2715", () => {
         this.#fields.splice(i, 1);
         this.#writeFields();
         this.#render();
       }));
-      ctl.title = `${tr("up")} / ${tr("down")} / ${tr("remove")}`;
+      ctl.title = `${tr2("up")} / ${tr2("down")} / ${tr2("remove")}`;
       row.append(req, ctl);
       if (fd.kind === "choice") {
         const ch = this.#el("div", "ch");
-        ch.append(this.#el("span", "", `${tr("choices")}: `));
+        ch.append(this.#el("span", "", `${tr2("choices")}: `));
         ch.append(this.#input(fd.choices.join(", "), "text", (v) => {
           fd.choices = v.split(",").map((s) => s.trim()).filter(Boolean);
           this.#writeFields();
@@ -1220,8 +2897,8 @@ var OmpOgrafLibrary = class extends HTMLElement {
       box.append(row);
     });
     const issues = validateFields(this.#fields);
-    if (issues.length) box.append(this.#list_("err", tr("errors"), issues));
-    box.append(this.#btn(tr("addField"), () => {
+    if (issues.length) box.append(this.#list_("err", tr2("errors"), issues));
+    box.append(this.#btn(tr2("addField"), () => {
       let n = 1;
       while (this.#fields.some((f) => f.key === `feld${n}`)) n++;
       this.#fields.push({
@@ -1248,11 +2925,11 @@ var OmpOgrafLibrary = class extends HTMLElement {
         ],
         [
           "true",
-          tr("kBool") + ": \u2713"
+          tr2("kBool") + ": \u2713"
         ],
         [
           "false",
-          tr("kBool") + ": \u2717"
+          tr2("kBool") + ": \u2717"
         ]
       ]) {
         const o = this.#el("option", "", l);
@@ -1291,6 +2968,40 @@ var OmpOgrafLibrary = class extends HTMLElement {
     this.#writeFields();
     this.#render();
   }
+  #renderCanvas() {
+    const scene = parseScene(this.#files["scene.json"] ?? "");
+    if (!scene) return this.#el("div", "status bad", tr2("manifestBroken"));
+    if (!this.#canvas) {
+      this.#canvas = new CanvasEditor({
+        scene,
+        images: () => Object.keys(this.#files).filter(isBinaryOrSvg),
+        assetUrl: (n) => this.#assetUrl(n),
+        params: () => this.#fields.map((f) => ({
+          key: f.key,
+          kind: f.kind
+        })),
+        data: () => defaultsOf(this.#fields),
+        onChange: (sc) => this.#onScene(sc)
+      });
+    }
+    return this.#canvas.el;
+  }
+  #assetUrl(name) {
+    const c = this.#files[name] ?? "";
+    const ext = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
+    if (c.startsWith("base64:")) return `data:image/${ext === "jpg" ? "jpeg" : ext};base64,${c.slice(7)}`;
+    if (ext === "svg") return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(c)}`;
+    return "";
+  }
+  /** Szene → Paketdateien (`scene.json`, erzeugtes Hauptmodul) und fehlende Parameter im Manifest-Schema. */
+  #onScene(sc) {
+    this.#files = applyScene(this.#files, this.#selected, sc, runtime_default);
+    const next = ensureParams(this.#fields, sc);
+    if (next.length !== this.#fields.length) {
+      this.#fields = next;
+      this.#writeFields();
+    } else this.#markDirty();
+  }
   #renderSource() {
     const box = this.#el("div", "fields");
     const bar = this.#el("div", "fileBar");
@@ -1307,7 +3018,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
       this.#render();
     });
     const isManifest = this.#sourceFile.endsWith(".ograf.json");
-    bar.append(this.#el("span", "", `${tr("file")}:`), sel, this.#btn(tr("addFile"), () => void this.#addFile()), this.#btn(tr("delFile"), () => {
+    bar.append(this.#el("span", "", `${tr2("file")}:`), sel, this.#btn(tr2("addFile"), () => void this.#addFile()), this.#btn(tr2("delFile"), () => {
       const n = this.#sourceFile;
       const { [n]: _gone, ...rest } = this.#files;
       this.#files = rest;
@@ -1315,7 +3026,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
       this.#markDirty();
       this.#render();
     }, "", isManifest));
-    const upload = this.#el("label", "b", tr("upload"));
+    const upload = this.#el("label", "b", tr2("upload"));
     const up = this.#el("input");
     up.type = "file";
     up.style.display = "none";
@@ -1329,7 +3040,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
     if (isBinaryName(this.#sourceFile)) {
       const content = this.#files[this.#sourceFile] ?? "";
       const info = this.#el("div", "fields");
-      info.append(this.#el("div", "status", tr("binaryInfo", {
+      info.append(this.#el("div", "status", tr2("binaryInfo", {
         kb: String(Math.round(content.length * 3 / 4 / 1024))
       })));
       const ext = this.#sourceFile.slice(this.#sourceFile.lastIndexOf(".") + 1).toLowerCase();
@@ -1351,6 +3062,10 @@ var OmpOgrafLibrary = class extends HTMLElement {
     const ta = this.#el("textarea");
     ta.spellcheck = false;
     ta.value = this.#files[this.#sourceFile] ?? "";
+    if (isDesigner(this.#files) && (this.#sourceFile === `${this.#selected}.js` || this.#sourceFile === "scene.json")) {
+      ta.readOnly = true;
+      box.append(this.#el("div", "status", tr2("generated")));
+    }
     ta.addEventListener("input", () => {
       this.#files = {
         ...this.#files,
@@ -1384,7 +3099,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
     this.#render();
   }
   async #addFile() {
-    const name = await promptDialog(tr("askFile"));
+    const name = await promptDialog(tr2("askFile"));
     const n = (name ?? "").trim();
     if (!n || this.#files[n] !== void 0) return;
     this.#files = {

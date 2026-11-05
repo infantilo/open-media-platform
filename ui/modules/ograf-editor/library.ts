@@ -2,10 +2,13 @@
 // Parameter-Schema und Quelltext. Eigenständiges Bundle (kein Shell-Import, wie die anderen Node-Oberflächen): kommt vom Node
 // `omp-ograf` mit seinem Panel (`/ui/bundle.js`) und spricht dessen Descriptor-API über den Orchestrator an
 // (`GET /api/v1/nodes/{id}/params/library[.<id>]`, `POST …/methods/library.*`).
+import RUNTIME from "./runtime.js" with { type: "text" };
+import { CanvasEditor } from "./canvas.ts";
+import { applyScene, ensureParams, isDesigner, newDesignerPackage, parseScene, type Scene } from "./scene.ts";
 import { messages } from "./messages.ts";
 import { bytesToFiles, filesToBytes, isBinaryName, makeZip, readZip } from "./zip.ts";
 import {
-  applyForm, type Field, FIELD_KINDS, type FieldKind, fieldsFromSchema, type Files, formFromManifest,
+  applyForm, defaultsOf, type Field, FIELD_KINDS, type FieldKind, fieldsFromSchema, type Files, formFromManifest,
   importPackage, manifestFileName, type ManifestForm, nextFreeId, parseManifest, renamePackage, schemaFromFields, slugify,
   stringify, validateFields,
 } from "./logic.ts";
@@ -26,7 +29,7 @@ interface ListEntry {
   warnings: string[];
   files: string[];
 }
-type Tab = "general" | "params" | "source";
+type Tab = "general" | "params" | "source" | "canvas";
 
 function authHeaders(): Record<string, string> {
   let tok: string | null = null;
@@ -61,6 +64,8 @@ function promptDialog(message: string, initial = ""): Promise<string | null> {
     document.body.appendChild(el);
   });
 }
+
+const isBinaryOrSvg = (n: string): boolean => isBinaryName(n) || n.toLowerCase().endsWith(".svg");
 
 const KIND_LABEL: Record<FieldKind, string> = {
   text: "kText", multiline: "kMulti", number: "kNumber", bool: "kBool", color: "kColor", choice: "kChoice",
@@ -123,6 +128,7 @@ class OmpOgrafLibrary extends HTMLElement {
   #fields: Field[] = [];
   #sourceFile = "";
   #filter = "";
+  #canvas: CanvasEditor | null = null;
   #status = "";
   #statusBad = false;
 
@@ -169,6 +175,9 @@ class OmpOgrafLibrary extends HTMLElement {
       this.#serverErrors = pkg.errors;
       this.#serverWarnings = pkg.warnings;
       this.#origId = id;
+      this.#canvas?.destroy();
+      this.#canvas = null;
+      this.#tab = isDesigner(this.#files) ? "canvas" : (this.#tab === "canvas" ? "general" : this.#tab);
       this.#orig = JSON.stringify(this.#files);
       this.#syncFields();
       this.#sourceFile = Object.keys(this.#files).find((n) => !n.endsWith(".ograf.json")) ?? "";
@@ -211,11 +220,13 @@ class OmpOgrafLibrary extends HTMLElement {
   }
 
   // ── Aktionen ──
-  async #newTemplate() {
+  async #newTemplate(designer = false) {
     const name = await promptDialog(tr("askName"));
     if (!name?.trim()) return;
     const id = nextFreeId(name, this.#list.map((e) => e.id));
-    const err = await this.#call("library.new", { id, name: name.trim() });
+    const err = designer
+      ? await this.#call("library.save", { id, files: newDesignerPackage(id, name.trim(), RUNTIME) })
+      : await this.#call("library.new", { id, name: name.trim() });
     if (err) return this.#say(tr("saveFailed", { why: err }), true);
     await this.#loadList();
     await this.#open(id);
@@ -353,7 +364,7 @@ class OmpOgrafLibrary extends HTMLElement {
       if (f) void this.#import(f);
     });
     imp.append(input);
-    bar.append(this.#btn(tr("newTpl"), () => void this.#newTemplate(), "primary"), imp);
+    bar.append(this.#btn(tr("newTpl"), () => void this.#newTemplate(), "primary"), this.#btn(tr("newDesigner"), () => void this.#newTemplate(true), "primary"), imp);
     const search = this.#el("input");
     search.type = "text";
     search.placeholder = tr("search");
@@ -415,7 +426,9 @@ class OmpOgrafLibrary extends HTMLElement {
     if (this.#serverErrors.length) main.append(this.#list_("err", tr("errors"), this.#serverErrors));
     if (this.#serverWarnings.length) main.append(this.#list_("warn", tr("warnings"), this.#serverWarnings));
     const tabs = this.#el("div", "tabs");
-    for (const [id, label] of [["general", tr("tabGeneral")], ["params", tr("tabParams")], ["source", tr("tabSource")]] as [Tab, string][]) {
+    const tabList: [Tab, string][] = [["general", tr("tabGeneral")], ["params", tr("tabParams")], ["source", tr("tabSource")]];
+    if (isDesigner(this.#files)) tabList.unshift(["canvas", tr("tabCanvas")]);
+    for (const [id, label] of tabList) {
       const t = this.#el("button", `tab${this.#tab === id ? " on" : ""}`, label);
       t.type = "button";
       t.addEventListener("click", () => {
@@ -427,6 +440,7 @@ class OmpOgrafLibrary extends HTMLElement {
     }
     main.append(tabs);
     if (!m && this.#tab !== "source") main.append(this.#el("div", "status bad", tr("manifestBroken")));
+    else if (this.#tab === "canvas" && isDesigner(this.#files)) main.append(this.#renderCanvas());
     else if (this.#tab === "general") main.append(this.#renderGeneral(m!));
     else if (this.#tab === "params") main.append(this.#renderParams());
     else main.append(this.#renderSource());
@@ -437,6 +451,8 @@ class OmpOgrafLibrary extends HTMLElement {
     if (!this.#dirty()) return;
     this.#files = JSON.parse(this.#orig);
     this.#syncFields();
+    const sc = this.#files["scene.json"] ? parseScene(this.#files["scene.json"]) : null;
+    if (sc) this.#canvas?.setScene(sc);
     this.#render();
   }
   #statusEl(): HTMLElement {
@@ -582,6 +598,37 @@ class OmpOgrafLibrary extends HTMLElement {
     this.#writeFields();
     this.#render();
   }
+  #renderCanvas(): HTMLElement {
+    const scene = parseScene(this.#files["scene.json"] ?? "");
+    if (!scene) return this.#el("div", "status bad", tr("manifestBroken"));
+    if (!this.#canvas) {
+      this.#canvas = new CanvasEditor({
+        scene,
+        images: () => Object.keys(this.#files).filter(isBinaryOrSvg),
+        assetUrl: (n) => this.#assetUrl(n),
+        params: () => this.#fields.map((f) => ({ key: f.key, kind: f.kind })),
+        data: () => defaultsOf(this.#fields),
+        onChange: (sc) => this.#onScene(sc),
+      });
+    }
+    return this.#canvas.el;
+  }
+  #assetUrl(name: string): string {
+    const c = this.#files[name] ?? "";
+    const ext = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
+    if (c.startsWith("base64:")) return `data:image/${ext === "jpg" ? "jpeg" : ext};base64,${c.slice(7)}`;
+    if (ext === "svg") return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(c)}`;
+    return "";
+  }
+  /** Szene → Paketdateien (`scene.json`, erzeugtes Hauptmodul) und fehlende Parameter im Manifest-Schema. */
+  #onScene(sc: Scene) {
+    this.#files = applyScene(this.#files, this.#selected, sc, RUNTIME);
+    const next = ensureParams(this.#fields, sc);
+    if (next.length !== this.#fields.length) {
+      this.#fields = next;
+      this.#writeFields();
+    } else this.#markDirty();
+  }
   #renderSource(): HTMLElement {
     const box = this.#el("div", "fields");
     const bar = this.#el("div", "fileBar");
@@ -635,6 +682,10 @@ class OmpOgrafLibrary extends HTMLElement {
     const ta = this.#el("textarea");
     ta.spellcheck = false;
     ta.value = this.#files[this.#sourceFile] ?? "";
+    if (isDesigner(this.#files) && (this.#sourceFile === `${this.#selected}.js` || this.#sourceFile === "scene.json")) {
+      ta.readOnly = true;
+      box.append(this.#el("div", "status", tr("generated")));
+    }
     ta.addEventListener("input", () => {
       this.#files = { ...this.#files, [this.#sourceFile]: ta.value };
       this.#markDirty();
