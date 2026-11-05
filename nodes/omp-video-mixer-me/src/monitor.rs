@@ -18,8 +18,11 @@ use crate::pipeline::PipelineHandle;
 const MONITOR_WIDTH: i32 = 640;
 /// So lange nach dem letzten Abruf wird weiter codiert.
 const ACTIVE_WINDOW: Duration = Duration::from_secs(3);
-/// Takt der Erzeugung (≈ 5 Bilder/s genügen zum Zielen und Klicken).
-const TICK: Duration = Duration::from_millis(200);
+/// Wie oft nach einem neuen Bild gesehen wird: ein Viertel der Bildperiode des Mischerausgangs (25 Bilder/s → 10 ms). Gecodet
+/// wird nur, wenn der Kompositor seit dem letzten Mal ein neues Bild geliefert hat (Zeitstempel + Größe als Kennung); so läuft
+/// der Monitor mit der Ausgangsrate, ohne dass Codierzeit und Wartezeit die Periode über 40 ms hinaus dehnen (ein fester
+/// 40-ms-Schlaf nach jedem Bild ergab nur etwa 19 Bilder/s).
+const TICK: Duration = Duration::from_millis(1000 * crate::pipeline::FRAMERATE_DENOMINATOR as u64 / crate::pipeline::FRAMERATE_NUMERATOR as u64 / 4);
 
 struct Encoder {
     pipe: gst::Pipeline,
@@ -44,13 +47,24 @@ impl Encoder {
         Ok(Encoder { pipe, src, sink, caps: caps.clone() })
     }
 
-    fn encode(&self, sample: &gst::Sample) -> Option<Vec<u8>> {
+    /// Schiebt ein Bild in die Codierkette, ohne auf das Ergebnis zu warten (die Kette arbeitet nebenläufig).
+    fn push(&self, sample: &gst::Sample) -> Option<()> {
         let mut buf = sample.buffer()?.copy();
         // Zeitstempel egal (nicht synchronisiert), aber gültig halten
         buf.get_mut()?.set_pts(gst::ClockTime::ZERO);
         self.src.push_buffer(buf).ok()?;
-        let out = self.sink.try_pull_sample(gst::ClockTime::from_mseconds(400))?;
-        Some(out.buffer()?.map_readable().ok()?.as_slice().to_vec())
+        Some(())
+    }
+
+    /// Holt alle bereits fertigen JPEGs ab (nicht blockierend), in Reihenfolge.
+    fn ready(&self) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        while let Some(s) = self.sink.try_pull_sample(gst::ClockTime::ZERO) {
+            if let Some(b) = s.buffer().and_then(|b| b.map_readable().ok().map(|m| m.as_slice().to_vec())) {
+                out.push(b);
+            }
+        }
+        out
     }
 }
 
@@ -73,19 +87,33 @@ pub fn start(handle: PipelineHandle, levels: usize, host: &str, shutdown: Arc<At
             .name(format!("pgm-monitor-{level}"))
             .spawn(move || {
                 let mut enc: Option<Encoder> = None;
+                let mut last_key: Option<(Option<gst::ClockTime>, usize)> = None;
                 while !sd.load(Ordering::Relaxed) {
                     std::thread::sleep(TICK);
                     if !broadcaster.requested_within(ACTIVE_WINDOW) {
                         enc = None; // niemand schaut: Encoder freigeben
+                        last_key = None;
                         continue;
+                    }
+                    // Fertige JPEGs sofort veröffentlichen — auch in Runden ohne neues Bild.
+                    if let Some(e) = enc.as_ref() {
+                        for jpeg in e.ready() {
+                            broadcaster.publish(&jpeg);
+                        }
                     }
                     let Some(sample) = h.last_frame(level) else { continue };
                     let Some(caps) = sample.caps() else { continue };
+                    // Dasselbe Bild nicht noch einmal codieren (Zeitstempel + Größe als Kennung).
+                    let key = sample.buffer().map(|b| (b.pts(), b.size()));
+                    if key.is_some() && key == last_key {
+                        continue;
+                    }
+                    last_key = key;
                     if enc.as_ref().is_none_or(|e| e.caps.as_ref() != caps) {
                         enc = Encoder::new(&caps.to_owned()).map_err(|e| eprintln!("omp-video-mixer-me: PGM-Monitor Ebene {}: {e}", level + 1)).ok();
                     }
-                    if let Some(jpeg) = enc.as_ref().and_then(|e| e.encode(&sample)) {
-                        broadcaster.publish(&jpeg);
+                    if let Some(e) = enc.as_ref() {
+                        let _ = e.push(&sample);
                     }
                 }
             })

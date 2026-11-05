@@ -1705,7 +1705,14 @@ bedienberechtigt:
   **PGM-Monitor und Klick-Fokus:** die Taste „PGM-Monitor" (Gruppe
   „Monitor") blendet ein kleines Programmbild der Ebene ein (Option
   `OMP_ME_PGM_MONITOR=0` schaltet es ab; es wird nur gerechnet, solange jemand
-  zuschaut). Ein **Klick auf ein PIP** im Bild fährt es auf seine
+  zuschaut). Der Monitor läuft mit der **Bildrate des Mischerausgangs**
+  (25 Bilder/s): der Node codiert jedes neue Ausgangsbild genau einmal, das
+  Panel holt es im 40-ms-Takt ab (bis zu vier Abrufe gleichzeitig; überholte
+  Antworten werden verworfen). Gemessen am Wegwerf-Mischer: etwa 23 verschiedene
+  Bilder/s am Node, im Browser rund 19 Bildwechsel/s — begrenzt durch die
+  Antwortzeit des Abrufs über den Orchestrator (vorher 5 bzw. 4 Bilder/s); der
+  Mehraufwand beträgt etwa 7 % eines Prozessorkerns und nur bei geöffnetem
+  Monitor. Ein **Klick auf ein PIP** im Bild fährt es auf seine
   Fokusposition (z. B. fast Vollbild, ganz nach vorn); ein **erneuter Klick**
   fährt es zurück an die Haltposition. Mit der Maus über dem Bild
   hebt sich das PIP unter dem Zeiger gelb hervor (bei mehreren

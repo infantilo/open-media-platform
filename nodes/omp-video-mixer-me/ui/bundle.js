@@ -1387,21 +1387,32 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const withToken = token ? `${base}?access_token=${encodeURIComponent(token)}` : base;
         return `${withToken}${withToken.includes("?") ? "&" : "?"}_=${Date.now()}`;
       };
-      let monBusy = false;
+      const MON_FRAME_MS = 40;
+      // Mehrere Abrufe gleichzeitig: die Antwortzeit im Browser über den Orchestrator (50–110 ms) läge sonst über der Bildperiode von
+      // 40 ms. Antworten, die ein neueres Bild überholt hat, werden verworfen (sonst ruckelt das Bild rückwärts).
+      const MON_MAX_IN_FLIGHT = 4;
+      let monInFlight = 0;
+      let monSeq = 0;
+      let monShown = 0;
       const monTick = async () => {
-        if (monBusy || !monitorOn || !latestPgmPreview) return;
-        monBusy = true;
+        if (monInFlight >= MON_MAX_IN_FLIGHT || !monitorOn || !latestPgmPreview) return;
+        monInFlight++;
+        const seq = ++monSeq;
         try {
           const res = await fetch(monUrl(), { cache: "no-store" });
           if (res.ok) {
-            const url = URL.createObjectURL(await res.blob());
-            const old = monImg.dataset.blobUrl;
-            monImg.src = url;
-            monImg.dataset.blobUrl = url;
-            if (old) URL.revokeObjectURL(old);
+            const blob = await res.blob();
+            if (seq > monShown) {
+              monShown = seq;
+              const url = URL.createObjectURL(blob);
+              const old = monImg.dataset.blobUrl;
+              monImg.src = url;
+              monImg.dataset.blobUrl = url;
+              if (old) URL.revokeObjectURL(old);
+            }
           }
         } catch { /* nächster Takt */ }
-        monBusy = false;
+        monInFlight--;
       };
       const renderMonitor = () => {
         monGroup.style.display = latestPgmPreview ? "" : "none";
@@ -1412,7 +1423,9 @@ class OmpVideoMixerMePanel extends HTMLElement {
           renderMonOverlay();
           if (!this._monTimers) this._monTimers = new Set();
           if (!monImg._timer) {
-            monImg._timer = setInterval(monTick, 250);
+            // Takt = Ausgangsrate des Mischers (25 Bilder/s, `FRAMERATE_NUMERATOR` im Node); `MON_MAX_IN_FLIGHT` begrenzt die gleichzeitigen Abrufe,
+            // so entsteht nie ein Stau.
+            monImg._timer = setInterval(monTick, MON_FRAME_MS);
             this._monTimers.add(monImg._timer);
             monTick();
           }
