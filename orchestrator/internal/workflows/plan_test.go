@@ -104,3 +104,29 @@ func TestMissingAnchorWarning(t *testing.T) {
 		t.Fatalf("Katalog ohne Anker-Typ: keine Warnung, war %q", msg)
 	}
 }
+
+// Radio (Kapitel 89, RA1): ein Workflow aus Ton-Typen (Player → Recorder) braucht keinen Bild-Anker.
+func TestMissingAnchorWarningSkipsAudioWorkflows(t *testing.T) {
+	catalog := []launcher.CatalogEntry{
+		{Type: "omp-playout-buffer", Label: "Playout-Puffer", Anchor: true},
+		{Type: "omp-source", Label: "Source"},
+		{Type: "omp-audio-player", Label: "Audio-Player", MediaKind: "audio"},
+		{Type: "omp-audio-mixer", Label: "Audio Mixer", MediaKind: "audio"},
+		{Type: "omp-recorder", Label: "Recorder", MediaKind: "any"},
+	}
+	role := func(name, typ string) Role { return Role{Name: name, NodeType: typ} }
+	if msg := missingAnchorWarning(Definition{Roles: []Role{role("p", "omp-audio-player"), role("r", "omp-recorder")}}, catalog); msg != "" {
+		t.Fatalf("Player → Recorder: keine Warnung erwartet, war %q", msg)
+	}
+	if msg := missingAnchorWarning(Definition{Roles: []Role{role("p", "omp-audio-player"), role("m", "omp-audio-mixer")}}, catalog); msg != "" {
+		t.Fatalf("Player → Mischer: keine Warnung erwartet, war %q", msg)
+	}
+	// ein Bildtyp dabei: die Warnung bleibt
+	if msg := missingAnchorWarning(Definition{Roles: []Role{role("p", "omp-audio-player"), role("s", "omp-source")}}, catalog); msg == "" {
+		t.Fatal("mit einer Bildrolle muss weiter gewarnt werden")
+	}
+	// nur neutrale Rollen (kein reiner Ton-Typ): kein Ton-Workflow, Warnung bleibt
+	if msg := missingAnchorWarning(Definition{Roles: []Role{role("a", "omp-recorder"), role("b", "omp-recorder")}}, catalog); msg == "" {
+		t.Fatal("zwei Recorder allein sind kein Ton-Workflow")
+	}
+}

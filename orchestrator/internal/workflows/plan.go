@@ -167,6 +167,9 @@ func missingAnchorWarning(def Definition, catalog []launcher.CatalogEntry) strin
 	if len(def.Roles) < 2 {
 		return ""
 	}
+	if isAudioWorkflow(def, catalog) {
+		return ""
+	}
 	anchors := map[string]string{}
 	for _, e := range catalog {
 		if e.Anchor {
@@ -187,6 +190,26 @@ func missingAnchorWarning(def Definition, catalog []launcher.CatalogEntry) strin
 	}
 	sort.Strings(labels)
 	return fmt.Sprintf("Der Workflow hat keinen Ausgangs-Anker (%s) — fällt ein Node davor aus, reißt der Ausgang ab", joinStrings(labels))
+}
+
+// isAudioWorkflow (Kapitel 89, Radio): alle Rollen sind Ton-Typen (`mediaKind` „audio“) oder bild-neutral („any“, z. B. Recorder),
+// und mindestens eine ist ein reiner Ton-Typ. Der Bild-Anker (`omp-playout-buffer`) sichert den Bildausgang — ohne Bild sinnlos.
+func isAudioWorkflow(def Definition, catalog []launcher.CatalogEntry) bool {
+	kind := map[string]string{}
+	for _, e := range catalog {
+		kind[e.Type] = e.MediaKind
+	}
+	audio := false
+	for _, r := range def.Roles {
+		switch kind[r.NodeType] {
+		case "audio":
+			audio = true
+		case "any":
+		default:
+			return false
+		}
+	}
+	return audio
 }
 
 func contains(list []string, s string) bool {

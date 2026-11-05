@@ -69,6 +69,8 @@ struct PlayerStore {
     pipeline: PipelineHandle,
     media_dir: PathBuf,
     registry: RegistryClient,
+    /// Tonbetrieb (Radio): Live-Quellen ohne Bild auflösen
+    audio_only: bool,
     // `discovery::discover` ist blockierend (eigener Registry-Roundtrip)
     // — im periodischen Poll-Loop statt bei jedem `GET availableSources`
     // ausgeführt, gleiches Muster wie `omp-player`.
@@ -182,7 +184,7 @@ impl ParamStore for PlayerStore {
                 // Precedence senderId > file > pattern — deckungsgleich mit
                 // `omp-player::invoke("append")`.
                 if let Some(sender_id) = args.get("senderId").and_then(Value::as_str).filter(|s| !s.is_empty()) {
-                    let (video_flow_id, audio_flow_id) = discovery::resolve(&self.registry, sender_id, true).ok_or(InvokeError::Unknown)?;
+                    let (video_flow_id, audio_flow_id) = discovery::resolve(&self.registry, sender_id, !self.audio_only).ok_or(InvokeError::Unknown)?;
                     self.pipeline.load(pipeline::Item {
                         label,
                         source: pipeline::ItemSource::Live { video_flow_id, audio_flow_id },
@@ -268,6 +270,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let width: u32 = env_or("OMP_WIDTH", "").parse().unwrap_or(pipeline::DEFAULT_WIDTH);
     let height: u32 = env_or("OMP_HEIGHT", "").parse().unwrap_or(pipeline::DEFAULT_HEIGHT);
     let media_dir = PathBuf::from(env_or("OMP_MEDIA_DIR", "data/media"));
+    // Radio (Kapitel 89, RA1): `OMP_AUDIO_ONLY=1` = Tonbetrieb ohne Bild-Sender, ohne Zeitcode-Ausgang
+    let audio_only = matches!(env_or("OMP_AUDIO_ONLY", "").as_str(), "1" | "true");
 
     let video_flow_id = omp_node_sdk::idgen::new_v4();
     let orchestrator_url = env_or("OMP_ORCHESTRATOR_URL", "http://localhost:8000");
@@ -286,6 +290,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         video_flow_id: video_flow_id.clone(),
         audio: audio_ctx.clone(),
         label: label.clone(),
+        audio_only,
         width,
         height,
         tc_frame: tc_frame.clone(),
@@ -304,7 +309,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
-    let mut senders = vec![
+    let mut senders = if audio_only { vec![] } else { vec![
         SenderSpec {
             id: Some(own_video_sender_id.clone()),
             transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
@@ -322,11 +327,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             tags: std::collections::HashMap::from([("urn:x-nmos:tag:grouphint/v1.0".to_string(), vec![format!("{natural_group}:high")])]),
             ..Default::default()
         },
-    ];
+    ] };
     // Zeitcode-Ausgang (ST 12-2) der Medienposition: MXL-Daten-Flow, ein Grain je Bild
     let tc_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let tc_flow_id = omp_node_sdk::idgen::new_v4();
-    match omp_mediaio::mxl::MxlContext::new(&domain).map(Arc::new) {
+    let tc_ctx = if audio_only { Err("Tonbetrieb".to_string()) } else { omp_mediaio::mxl::MxlContext::new(&domain).map(Arc::new).map_err(|e| e.to_string()) };
+    match tc_ctx {
         Ok(ctx) => match omp_mediaio::mxl::MxlDataOutput::new(ctx, &tc_flow_id, &format!("{label} Zeitcode"), &label, pipeline::FRAMERATE_NUMERATOR, pipeline::FRAMERATE_DENOMINATOR) {
             Ok(out) => {
                 let out = Arc::new(out);
@@ -346,6 +352,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
             Err(e) => eprintln!("omp-channel-player: Zeitcode-Ausgang aus — {e}"),
         },
+        Err(_) if audio_only => {}
         Err(e) => eprintln!("omp-channel-player: Zeitcode-Ausgang aus — {e}"),
     }
 
@@ -387,6 +394,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         pipeline: pipeline_handle.clone(),
         media_dir,
         registry: RegistryClient::new(registry_url.clone()),
+        audio_only,
         available_sources: available_sources.clone(),
     });
 
@@ -407,7 +415,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     )
     .await?;
 
-    let discovery = discovery::discovery_loop(registry_url, own_video_sender_id, omp_node_sdk::is04::FORMAT_VIDEO, available_sources);
+    let discovery = discovery::discovery_loop(registry_url, own_video_sender_id, if audio_only { omp_node_sdk::is04::FORMAT_AUDIO } else { omp_node_sdk::is04::FORMAT_VIDEO }, available_sources);
 
     let events = async {
         while let Some(event) = rx.recv().await {

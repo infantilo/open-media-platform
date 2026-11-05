@@ -193,7 +193,7 @@
     "label": "Audio Mixer",
     "runner": "process",
     "command": ["../nodes/target/release/omp-audio-mixer"],
-    "env": {},
+    "mediaKind": "audio", "env": {},
     "description": "Digitales Audiomischpult mit dynamischer Kanalanzahl, Gain/EQ pro Kanal, automatischem Audio-Follow-Video (sample-genau, mit AFV-Anzeige, Auswahl der Bildmischer und gemeinsamem Schaltzeitpunkt takeAt; Ausgänge per Dialog anlegen, Mehrfach-Routing-Matrix, Surround-Panner mit Joystick für 5.1/7.1) sowie Aux-, N-1- und frei konfigurierbaren Gruppen-Bussen (Mono bis 7.1, je Bus eigener MXL-Sender mit Gruppen-Tag). Zwei Oberflächen: klassisch und die dichte „Konsole 2“ (Detailansicht mit ziehbarem EQ-Graph, Dynamik und Routing über vertikalen Fadern, mit Kompaktmodus), umschaltbar in der Kopfzeile.",
     "i18n": { "en": {"description": "Digital audio console with dynamic channel count, gain/EQ per channel, automatic audio-follow-video (sample-accurate, with AFV display, choice of video mixers and shared switch time takeAt; create outputs via dialog, multi-routing matrix, surround panner with joystick for 5.1/7.1) as well as aux, N-1 and freely configurable group buses (mono to 7.1, each bus with its own MXL sender with group tag). Two surfaces: classic and the dense “Console 2” (detail view with a draggable EQ graph, dynamics and routing above vertical faders, with a compact mode), switchable in the header.", "expectedResources": "low to moderate, grows with the channel count"} },
     "expectedResources": "gering bis moderat, wächst mit Kanalzahl",
@@ -204,7 +204,7 @@
     "label": "Audio Monitor",
     "runner": "process",
     "command": ["../nodes/target/release/omp-audio-monitor"],
-    "env": {},
+    "mediaKind": "audio", "env": {},
     "description": "Spielt einen ausgewählten MXL-Audiostream (z. B. einen Audio-Mixer-Pre-Listen-Bus) als Abhörstrom im Browser ab. Kompaktes Bedienpanel in der Konsole-2-Optik (Poti, Pegel, Schnellwahl, Kanalmodus, Kopfhörer-Ausgleich, A/V-Sync).",
     "i18n": { "en": {"description": "Plays a selected MXL audio stream (e.g. an audio mixer pre-listen bus) as a monitoring stream in the browser. Compact control panel in the Console 2 look (knob, meters, quick select, channel mode, headphone compensation, A/V sync).", "expectedResources": "low"} },
     "expectedResources": "gering"
@@ -237,6 +237,17 @@
     "env": {},
     "description": "Kapitel 6 Teil 6: einzweigiger, Isel-freier Player (Datei-Items optional mit hold/playAt für framegenauen Start und somMs/eomMs) ohne Playlist/Cue-Take — load() ersetzt den aktuellen Inhalt (Testbild/Datei inkl. MXF-Audio-Shuffle/Live-Quelle) sofort. Audio: je Zielgruppe des Ausgabeprofils (Orchestrator-Dokument audio-rules) ein eigener Sender, Zuordnung per load(audioMapping), Ersatzregeln bei fehlenden Spuren. Gedacht als EINE von zwei physischen Quellen am Video-Mixer-Crosspoint für echten Crossfade (zweimal im selben Workflow als Player A/Player B).",
     "i18n": { "en": {"label": "Channel Player", "description": "Chapter 6 part 6: single-branch, isel-free player (file items optionally with hold/playAt for frame-accurate start and somMs/eomMs) without playlist/cue-take — load() replaces the current content (test picture/file incl. MXF audio shuffle/live source) immediately. Audio: one sender per target group of the output profile (orchestrator document audio-rules), mapping via load(audioMapping), fallback rules for missing tracks. Intended as ONE of two physical sources at the video mixer crosspoint for a true crossfade (twice in the same workflow as player A/player B).", "expectedResources": "low to moderate (file decoding)"} },
+    "expectedResources": "gering bis moderat (Datei-Decoding)"
+  },
+  {
+    "type": "omp-audio-player",
+    "label": "Audio-Player (Radio)",
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-channel-player"],
+    "env": { "OMP_AUDIO_ONLY": "1" },
+    "mediaKind": "audio",
+    "description": "Spielt eine Audiodatei (WAV, FLAC, MP3, AAC, Ogg …) oder einen Live-Ton als reinen Ton-Sender ohne Bild: ein MXL-Ton-Ausgang je Zielgruppe, kein Bild-Sender, kein Zeitcode-Ausgang; `media_ready` meldet nur den Ton. Grundbaustein für Radio-Workflows (Player → Mischer/Recorder/Verzögerung) — später durch den Segue-Player ergänzt.",
+    "i18n": { "en": {"label": "Audio player (radio)", "description": "Plays an audio file (WAV, FLAC, MP3, AAC, Ogg …) or a live sound as an audio-only sender without picture: one MXL audio output per target group, no picture sender, no timecode output; media-ready reports the sound only. Basic building block for radio workflows (player → mixer/recorder/delay) — to be complemented by the segue player later.", "expectedResources": "low (file decoding)"} },
     "expectedResources": "gering bis moderat (Datei-Decoding)"
   },
   {
@@ -294,7 +305,7 @@
     "label": "Recorder",
     "runner": "process",
     "command": ["../nodes/target/release/omp-recorder"],
-    "env": {},
+    "mediaKind": "any", "env": {},
     "description": "Nimmt eine per Kreuzschiene angeschlossene MXL-Quelle (Video/Audio) als Matroska-Datei auf; Dateiname auf .mxf = MXF (H.264 + PCM 24 Bit) mit optionalen MCA-Labels (Parameter record.mcaPlan). Optionaler Kanalplan (Parameter record.audioPlan, Umgebung OMP_RECORDER_AUDIO_INPUTS = Zahl der Audio-Empfänger „Audio“, „Audio 2“ …): Kanäle mehrerer Quellen in beliebiger Reihenfolge auf die Ausgabekanäle der Datei, mit Gain und Stille. Ausschließlich MXL als Eingang, keine Capture-Karte.",
     "i18n": { "en": {"description": "Records an MXL source (video/audio) connected via the crosspoint as a Matroska file; a .mxf file name gives MXF (H.264 + 24-bit PCM) with optional MCA labels (parameter record.mcaPlan). Optional channel plan (parameter record.audioPlan, environment OMP_RECORDER_AUDIO_INPUTS = number of audio receivers \"Audio\", \"Audio 2\" …): channels of several sources in any order onto the output channels of the file, with gain and silence. MXL is the only input, no capture card.", "expectedResources": "moderate during a recording (encoding), otherwise very low (no source subscribed)"} },
     "expectedResources": "moderat während einer Aufnahme (Encoding), sonst sehr gering (keine Quelle abonniert)"

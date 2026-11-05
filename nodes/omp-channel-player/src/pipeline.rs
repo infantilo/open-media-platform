@@ -76,6 +76,8 @@ pub struct Config {
     /// Dynamische Audio-Zielgruppen (je Gruppe ein MXL-Audio-Flow), s. `audio.rs`.
     pub audio: Arc<AudioCtx>,
     pub label: String,
+    /// Reiner Tonbetrieb (Radio, Kapitel 89/RA1): kein Bild-Sender und kein Bild-Zweig; `media_ready` fragt nur den Ton.
+    pub audio_only: bool,
     pub width: u32,
     pub height: u32,
     /// Bildnummer der Medienposition des laufenden Clips (Stream-Zeit × Bildrate, 0 = Clipanfang bei Medienzeit 0), -1 = kein Clip
@@ -347,7 +349,10 @@ fn build_testpattern_audio(pipeline: &gst::Pipeline, tone_freq: f64, live: bool)
 /// laufende Pipeline einfügen) erforderlich.
 /// Rückgabe: (`uridecodebin`-Element für Positions-/Dauer-Query,
 /// Video-Tail, Audio-Tail).
-fn build_generic_file(pipeline: &gst::Pipeline, uri: &str, width: u32, height: u32) -> Result<(gst::Element, gst::Element, gst::Element), String> {
+fn build_generic_file(pipeline: &gst::Pipeline, uri: &str, width: u32, height: u32, with_video: bool) -> Result<(gst::Element, Option<gst::Element>, gst::Element), String> {
+    if !with_video {
+        return build_generic_audio_file(pipeline, uri).map(|(s, a)| (s, None, a));
+    }
     let vdeint = make_deinterlace()?;
     let vconvert = gst::ElementFactory::make("videoconvert").build().map_err(|e| format!("videoconvert: {e}"))?;
     let vscale = gst::ElementFactory::make("videoscale").build().map_err(|e| format!("videoscale: {e}"))?;
@@ -407,7 +412,31 @@ fn build_generic_file(pipeline: &gst::Pipeline, uri: &str, width: u32, height: u
         }
     });
 
-    Ok((src, vcaps.upcast(), acaps.upcast()))
+    Ok((src, Some(vcaps.upcast()), acaps.upcast()))
+}
+
+/// Tondatei ohne Bildzweig (Radio): `uridecodebin` mit nur dem Audiozweig; vorhandene Bildspuren (z. B. Cover in MP3/MP4)
+/// laufen in eine Senke, damit der Dekoder nicht an einem unverbundenen Ausgang stehen bleibt.
+fn build_generic_audio_file(pipeline: &gst::Pipeline, uri: &str) -> Result<(gst::Element, gst::Element), String> {
+    let aconvert = gst::ElementFactory::make("audioconvert").build().map_err(|e| format!("audioconvert: {e}"))?;
+    let aresample = gst::ElementFactory::make("audioresample").build().map_err(|e| format!("audioresample: {e}"))?;
+    let acaps = gst::ElementFactory::make("capsfilter").property("caps", audio_caps()).build().map_err(|e| format!("capsfilter(audio): {e}"))?;
+    let drain = gst::ElementFactory::make("fakesink").property("sync", false).property("async", false).build().map_err(|e| format!("fakesink: {e}"))?;
+    pipeline.add_many([&aconvert, &aresample, &acaps, &drain]).map_err(|e| format!("add audio file chain: {e}"))?;
+    gst::Element::link_many([&aconvert, &aresample, &acaps]).map_err(|e| format!("link audio file chain: {e}"))?;
+    let src = gst::ElementFactory::make("uridecodebin").property("uri", uri).property("expose-all-streams", false).build().map_err(|e| format!("uridecodebin: {e}"))?;
+    pipeline.add(&src).map_err(|e| format!("add uridecodebin: {e}"))?;
+    let audio_sink = aconvert.static_pad("sink").ok_or("audioconvert: no sink pad")?;
+    let drain_sink = drain.static_pad("sink").ok_or("fakesink: no sink pad")?;
+    src.connect_pad_added(move |_src, new_pad| {
+        let Some(caps) = new_pad.current_caps() else { return };
+        let Some(structure) = caps.structure(0) else { return };
+        let target = if structure.name().starts_with("audio/") { &audio_sink } else if structure.name().starts_with("video/") || structure.name().starts_with("image/") { &drain_sink } else { return };
+        if !target.is_linked() && let Err(e) = new_pad.link(target) {
+            eprintln!("omp-channel-player: uridecodebin pad-added link failed: {e:?}");
+        }
+    });
+    Ok((src, acaps.upcast()))
 }
 
 /// Standbild-Zweig (Kapitel 27 / P2b): `uridecodebin ! videoconvert !
@@ -682,7 +711,7 @@ struct ActivePipeline {
     // MÜSSEN für die Lebensdauer der Pipeline gehalten werden — beide
     // Output-Typen setzen in ihrem `Drop` `running=false`, s.
     // `omp-mxf-player-direct::ActivePipeline`-Doku.
-    _mxl_video_output: MxlVideoOutput,
+    _mxl_video_output: Option<MxlVideoOutput>,
     /// Ein MXL-Audio-Ausgang je Zielgruppe (Profil-Reihenfolge).
     _mxl_audio_outputs: Vec<MxlAudioOutput>,
     // Dito für Live-Empfang (`read_loop`-Thread).
@@ -804,38 +833,43 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
     let (video_tail, audio_tail) = match &item.source {
         ItemSource::TestPattern { pattern, tone_freq } => {
             // Mit `hold` nicht live: Quelle prerollt in PAUSED wie eine Datei und kann auf `playAt` exakt starten.
-            let v = build_testpattern_video(&pipeline, pattern, config.width, config.height, !item.timing.hold)?;
+            let v = if config.audio_only { None } else { Some(build_testpattern_video(&pipeline, pattern, config.width, config.height, !item.timing.hold)?) };
             let a = build_testpattern_audio(&pipeline, *tone_freq, !item.timing.hold)?;
             (v, a)
         }
         ItemSource::File { path } => {
+            if config.audio_only && path.to_ascii_lowercase().ends_with(".mxf") {
+                return Err("MXF-Dateien werden im Tonbetrieb nicht unterstützt (WAV, FLAC, MP3, AAC, Ogg, …)".to_string());
+            }
             if path.to_ascii_lowercase().ends_with(".mxf") {
                 let mapping = requested_mapping.clone().or_else(|| dist.mapping_named(audio::DEFAULT_MXF_MAPPING).cloned());
                 let (demux, v, a) = build_mxf_file(&pipeline, path, config.width, config.height, dist.clone(), mapping)?;
                 mxf_audio = true;
                 query_el = Some(demux);
-                (v, a)
+                (Some(v), a)
             } else {
                 let uri = gst::glib::filename_to_uri(path, None).map_err(|e| format!("filename_to_uri({path}): {e}"))?;
-                let (src, v, a) = build_generic_file(&pipeline, uri.as_str(), config.width, config.height)?;
+                let (src, v, a) = build_generic_file(&pipeline, uri.as_str(), config.width, config.height, !config.audio_only)?;
                 query_el = Some(src);
                 (v, a)
             }
         }
+        ItemSource::Image { .. } if config.audio_only => return Err("Standbilder gibt es im Tonbetrieb nicht".to_string()),
         ItemSource::Image { path } => {
             let uri = gst::glib::filename_to_uri(path, None).map_err(|e| format!("filename_to_uri({path}): {e}"))?;
             let (_src, v) = build_image_file(&pipeline, uri.as_str(), config.width, config.height)?;
             // Standbild ohne Ton: Stille (kein eigener Audio-Strom im Bild).
             let a = build_testpattern_audio(&pipeline, 0.0, !item.timing.hold)?;
-            (v, a)
+            (Some(v), a)
         }
         ItemSource::Live { video_flow_id, audio_flow_id } => {
             let (v, mv) = match video_flow_id {
+                _ if config.audio_only => (None, None),
                 Some(flow_id) => {
                     let (tail, input) = build_live_video(&pipeline, context.clone(), flow_id, config.width, config.height)?;
-                    (tail, Some(input))
+                    (Some(tail), Some(input))
                 }
-                None => (build_testpattern_video(&pipeline, EMPTY_PATTERN, config.width, config.height, true)?, None),
+                None => (Some(build_testpattern_video(&pipeline, EMPTY_PATTERN, config.width, config.height, true)?), None),
             };
             let (a, ma) = match audio_flow_id {
                 Some(flow_id) => {
@@ -859,29 +893,35 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
     }
     audio_tail.link(&dist.input).map_err(|e| format!("link audio to distributor: {e}"))?;
 
-    let mxl_video_output = MxlVideoOutput::new_paced(
-        &pipeline,
-        &video_tail,
-        context.clone(),
-        &config.video_flow_id,
-        &config.label,
-        config.width,
-        config.height,
-        FRAMERATE_NUMERATOR,
-        FRAMERATE_DENOMINATOR,
-        Arc::new(AtomicU64::new(0)),
-    )
-    .map_err(|e| {
-        let _ = pipeline.set_state(gst::State::Null);
-        format!("MxlVideoOutput: {e}")
-    })?;
-    if matches!(item.source, ItemSource::File { .. }) {
-        attach_timecode_probe(&video_tail, config.tc_frame.clone());
-        let tc = config.tc_frame.clone();
-        mxl_video_output.set_frame_hook(Box::new(move |index, pts| tc.on_frame(index, pts)));
-    }
-    mxl_video_output.set_active(true);
-    let video_flowed = mxl_video_output.flowed_handle();
+    let (mxl_video_output, video_flowed) = match video_tail.as_ref() {
+        None => (None, Arc::new(AtomicBool::new(true))), // Tonbetrieb: kein Bild, nichts abzuwarten
+        Some(video_tail) => {
+            let out = MxlVideoOutput::new_paced(
+                &pipeline,
+                video_tail,
+                context.clone(),
+                &config.video_flow_id,
+                &config.label,
+                config.width,
+                config.height,
+                FRAMERATE_NUMERATOR,
+                FRAMERATE_DENOMINATOR,
+                Arc::new(AtomicU64::new(0)),
+            )
+            .map_err(|e| {
+                let _ = pipeline.set_state(gst::State::Null);
+                format!("MxlVideoOutput: {e}")
+            })?;
+            if matches!(item.source, ItemSource::File { .. }) {
+                attach_timecode_probe(video_tail, config.tc_frame.clone());
+                let tc = config.tc_frame.clone();
+                out.set_frame_hook(Box::new(move |index, pts| tc.on_frame(index, pts)));
+            }
+            out.set_active(true);
+            let flowed = out.flowed_handle();
+            (Some(out), flowed)
+        }
+    };
 
     let mut mxl_audio_outputs = Vec::new();
     for (i, (group, tail)) in config.audio.groups.iter().zip(dist.tails()).enumerate() {

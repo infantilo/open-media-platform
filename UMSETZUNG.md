@@ -6431,7 +6431,8 @@ Grundlage: **`docs/RADIO-PLAN.md`** (Lückenanalyse, Zielbild, Phasen RA–RG, g
 
 | Schritt | Inhalt | Status |
 |---|---|---|
-| RA1–RA2 | Kanal-Player ohne Bild, Lautheit als Asset-Merkmal | offen (Einstieg laut Plan: RA1 → RA2 → RB1 → RB2 → RB3) |
+| RA1 | Ton ohne Bild: `omp-channel-player` mit `OMP_AUDIO_ONLY=1` (kein Bild-Sender, kein Bild-Zweig, kein Zeitcode-Ausgang, `media_ready` nur Ton; Dateien ohne Bildspur, Bildspuren in Tondateien werden verworfen; MXF und Standbild im Tonbetrieb abgelehnt, Live-Quellen nur Ton); neuer Katalogtyp **`omp-audio-player`** („Audio-Player (Radio)“, gleiche Binärdatei mit `OMP_AUDIO_ONLY=1`); Katalogfeld **`mediaKind`** (`audio`/`any`/leer) und Regel `isAudioWorkflow`: Ton-Workflows bekommen in der Start-Vorschau **keine** Warnung vor dem fehlenden Bild-Ausgangs-Anker | **erledigt 2026-11-05**: `omp-channel-player` 7 Tests, Go `workflows`/`launcher` grün (+1 Test, 4 Fälle); **live** (Release): Instanz `omp-audio-player` meldet nur Ton-Sender (5 Ton-Gruppen laut TV-Standardprofil, **kein Video, kein Zeitcode**), WAV (48 kHz stereo, 21,3 s) und FLAC (44,1 kHz mono → 11,6 s) laden, MXL-Kopfindex läuft, Health `media_ready: true`; Workflow-Plan „Audio-Player → Recorder“ **ohne Warnung**, „Quelle → Recorder“ **mit** Warnung. **Nicht geprüft:** Aufnahme eines Ton-Flows im Recorder; Standard-Ausgabeprofil ist noch das TV-Profil (5 Gruppen) — ein Radio-Profil (nur Stereo) fehlt (→ RA1b); Orchestrator-Neustart war nötig (Katalog), er beendete dabei einen fremden `omp-ograf` (PID 22141) |
+| RA2 | Lautheit als Asset-Merkmal | offen |
 | RB–RG | Sendekern, Studio, Ausspielung, Aufnahme, Planung-Import, Betrieb | offen, je Schritt einzeln freizugeben |
 
 Vor jedem Schritt den Originaltext der zitierten Normen lesen (§0 Regel 10). Veraltet: `docs/PLAYOUT-AUTOMATION.md` §13 nennt den entfernten Sidecar `omp-pipeline-controller`.

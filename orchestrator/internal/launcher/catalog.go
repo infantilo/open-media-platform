@@ -119,6 +119,10 @@ type CatalogEntry struct {
 	// löschen; fehlt in einem Workflow jede Anker-Rolle, warnt die Start-Vorschau. Optional (Standard
 	// false) — ohne Feld unverändertes Verhalten.
 	Anchor bool `json:"anchor,omitempty"`
+	// MediaKind (Kapitel 89, Radio): "audio" = reiner Ton-Typ (kein Bild), "any" = trägt Bild und Ton gleichermaßen
+	// (Recorder, Gateways), leer = Bildtyp. Ein Workflow, der nur aus "audio"/"any"-Rollen besteht und mindestens eine
+	// "audio"-Rolle hat, ist ein Ton-Workflow: dort entfällt die Warnung vor dem fehlenden Bild-Ausgangs-Anker.
+	MediaKind string `json:"mediaKind,omitempty"`
 	// Network deklariert, dass dieser Node-Typ Datenverkehr über die
 	// Netzwerkkarte des Hosts erzeugt (Gateways; MXL zwischen Nodes auf
 	// einem Host ist Shared Memory und belastet die NIC nicht). Grundlage
