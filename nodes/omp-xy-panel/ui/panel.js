@@ -7,6 +7,7 @@ const XY_T = (() => {
   const D = {
     de: {
       sources: "Quellen", sinks: "Ziele", home: "Home", up: "Eine Ebene hoch",
+      ifcOut: "Ausgang", ifcIn: "Eingang", ifcNotRunning: "Workflow läuft nicht", ifcRouted: "{from} → Workflow-Eingang {to} geschaltet ({n} Mitglieder)",
       unassigned: "Nicht zugewiesen", all: "Alle", video: "Video", audio: "Audio", data: "Daten",
       search: "Suchen (Name, Node, Tag) …", empty: "Nichts auf dieser Ebene.", offline: "offline",
       take: "Take", nodeAll: "Alle Ports", nodeAllTip: "Ganzen Node wählen: Video und Audio gemeinsam schalten (nach Tags, sonst 1:1)", nodeRouted: "{n} Verbindungen geschaltet ({tag} nach Tags, {order} 1:1)", nodeNoPairs: "Keine passenden Ports zwischen {from} und {to}.", disconnect: "Trennen", clear: "Auswahl aufheben", autoTake: "Sofort schalten", nodeModeTags: "Nach Tags, sonst 1:1", nodeModeTagsOnly: "Nur nach Tags", nodeModeOrder: "Nur 1:1 (Reihenfolge)", nodeModeLabel: "Zuordnung der Ports",
@@ -34,6 +35,7 @@ const XY_T = (() => {
     },
     en: {
       sources: "Sources", sinks: "Destinations", home: "Home", up: "Up one level",
+      ifcOut: "Output", ifcIn: "Input", ifcNotRunning: "Workflow is not running", ifcRouted: "{from} → workflow input {to} switched ({n} members)",
       unassigned: "Unassigned", all: "All", video: "Video", audio: "Audio", data: "Data",
       search: "Search (name, node, tag) …", empty: "Nothing at this level.", offline: "offline",
       take: "Take", nodeAll: "All ports", nodeAllTip: "Select the whole node: route video and audio together (by tags, otherwise 1:1)", nodeRouted: "{n} connections routed ({tag} by tags, {order} 1:1)", nodeNoPairs: "No matching ports between {from} and {to}.", disconnect: "Disconnect", clear: "Clear selection", autoTake: "Switch immediately", nodeModeTags: "By tags, otherwise 1:1", nodeModeTagsOnly: "By tags only", nodeModeOrder: "1:1 only (by order)", nodeModeLabel: "Port mapping",
@@ -218,7 +220,7 @@ class OmpXyPanel extends HTMLElement {
 
     // ---- Zustand ----------------------------------------------------------
     const st = {
-      sources: [], sinks: [], edges: [], nodes: [], groupTree: { groups: {} }, workflows: [], bouquets: [],
+      sources: [], sinks: [], ifcSources: [], ifcSinks: [], ifcVirtual: [], edges: [], nodes: [], groupTree: { groups: {} }, workflows: [], bouquets: [],
       model: L.buildModel({ nodes: [], groupTree: null, workflows: [] }),
       names: new Map(), // nodeId → Anzeigename ohne Instanz-Kurz-ID
       side: {
@@ -237,8 +239,12 @@ class OmpXyPanel extends HTMLElement {
     };
     let lastSig = "";
 
-    const bySrc = () => new Map(st.sources.map((p) => [p.id, p]));
-    const byDst = () => new Map(st.sinks.map((p) => [p.id, p]));
+    // Workflow-Schnittstellen (Kap. 88): Kopien der Sender unter virtuellen Ausgangs-Nodes, virtuelle Eingangs-Senken.
+    // Bei gleicher ID gewinnt das Original (steht in der Map zuletzt).
+    const allSources = () => [...st.ifcSources, ...st.sources];
+    const allSinks = () => [...st.ifcSinks, ...st.sinks];
+    const bySrc = () => new Map(allSources().map((p) => [p.id, p]));
+    const byDst = () => new Map(allSinks().map((p) => [p.id, p]));
 
     // ---- API ----------------------------------------------------------------
     const jget = async (url) => {
@@ -268,13 +274,25 @@ class OmpXyPanel extends HTMLElement {
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
     }
     async function connect(from, to) {
+      if (to.ifc) return connectIfc(to, [from.id]);
       const r = await fetch("/api/v1/graph/edges", {
         method: "POST", headers: { "Content-Type": "application/json", ...panelHdr() },
         body: JSON.stringify({ from: from.id, to: to.id }),
       });
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
     }
+    async function connectIfc(to, senderIds) {
+      const r = await fetch(`/api/v1/workflows/${encodeURIComponent(to.ifc.workflowId)}/interface/inputs/${encodeURIComponent(to.ifc.name)}/connect`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...panelHdr() }, body: JSON.stringify({ senderIds }),
+      });
+      if (!r.ok) throw new Error((await r.text()).trim() || (r.status === 409 ? t("ifcNotRunning") : String(r.status)));
+    }
     async function disconnect(to) {
+      if (to.ifc) {
+        const r = await fetch(`/api/v1/workflows/${encodeURIComponent(to.ifc.workflowId)}/interface/inputs/${encodeURIComponent(to.ifc.name)}/disconnect`, { method: "POST", headers: panelHdr() });
+        if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
+        return;
+      }
       const r = await fetch(`/api/v1/graph/edges/${encodeURIComponent(to.id)}`, { method: "DELETE", headers: panelHdr() });
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
     }
@@ -305,24 +323,35 @@ class OmpXyPanel extends HTMLElement {
           ]);
           slow = { layout, workflows, bouquets };
         }
-        const sig = JSON.stringify([graph, sources, sinks, slow]);
+        // Workflow-Schnittstellen: nur für Workflows, die eine definiert haben (jede Antwort enthält die aktuell speisenden Sender).
+        const wfList = (slow ? slow.workflows : st.workflows) || [];
+        const ifcWf = (Array.isArray(wfList) ? wfList : []).filter((w) => {
+          const i = w.definition && w.definition.interface;
+          return i && ((i.outputs || []).length + (i.inputs || []).length > 0);
+        });
+        const resolved = (await Promise.all(ifcWf.map((w) => jgetOpt(`/api/v1/workflows/${encodeURIComponent(w.id)}/interface`)))).filter(Boolean);
+        const sig = JSON.stringify([graph, sources, sinks, slow, resolved]);
         if (sig === lastSig && st.loaded) return;
         lastSig = sig;
         st.nodes = graph.nodes || [];
         st.edges = graph.edges || [];
         st.sources = L.normSources(sources);
         st.sinks = L.normSinks(sinks);
-        st.names = L.nodeNames([...st.sources, ...st.sinks]);
+        const ifcPts = L.interfacePoints(resolved, st.sources, { out: t("ifcOut"), in: t("ifcIn") });
+        st.ifcSources = ifcPts.sources;
+        st.ifcSinks = ifcPts.sinks;
+        st.ifcVirtual = ifcPts.virtual;
+        st.names = L.nodeNames([...allSources(), ...allSinks()]);
         if (slow) {
           st.groupTree = (slow.layout && slow.layout.groups) || { groups: {} };
           st.workflows = Array.isArray(slow.workflows) ? slow.workflows : [];
           st.bouquets = slow.bouquets;
         }
-        st.model = L.buildModel({ nodes: st.nodes, groupTree: st.groupTree, workflows: st.workflows });
+        st.model = L.buildModel({ nodes: st.nodes, groupTree: st.groupTree, workflows: st.workflows, virtual: st.ifcVirtual });
         // Auswahl verwerfen, wenn der Punkt verschwunden ist; Pfade auf gültige Ordner kürzen.
         if (st.selSrc && !bySrc().has(st.selSrc)) st.selSrc = null;
-        if (st.selSrcNode && !st.sources.some((x) => x.nodeId === st.selSrcNode)) st.selSrcNode = null;
-        if (st.selDstNode && !st.sinks.some((x) => x.nodeId === st.selDstNode)) st.selDstNode = null;
+        if (st.selSrcNode && !allSources().some((x) => x.nodeId === st.selSrcNode)) st.selSrcNode = null;
+        if (st.selDstNode && !allSinks().some((x) => x.nodeId === st.selDstNode)) st.selDstNode = null;
         if (st.selDst && !byDst().has(st.selDst)) st.selDst = null;
         for (const s of [st.side.src, st.side.dst]) {
           const ok = s.path.findIndex((f) => !st.model.folders.has(f));
@@ -350,6 +379,8 @@ class OmpXyPanel extends HTMLElement {
     const undoStack = []; // {at, prev:[{to, from|null}]}
     function pushUndo(tos) {
       const rm = L.routeMap(st.edges);
+      tos = tos.filter((to) => !to.ifc); // Workflow-Eingänge sind nicht rückgängig zu machen (keine Kante)
+      if (!tos.length) return;
       undoStack.push({ at: Date.now(), prev: tos.map((to) => ({ to, from: rm.get(to.id) ?? null })) });
       updateUndo();
     }
@@ -414,8 +445,22 @@ class OmpXyPanel extends HTMLElement {
 
     /** Ganzer Node → ganzer Node: Ports gleichen Medientyps nach gemeinsamen Tags, je nach st.nodeMode mit 1:1-Rückfall oder nur 1:1. */
     async function doNodeTake(srcNode, dstNode) {
-      const srcs = st.sources.filter((x) => x.nodeId === srcNode);
-      const dsts = st.sinks.filter((x) => x.nodeId === dstNode);
+      const srcs = allSources().filter((x) => x.nodeId === srcNode);
+      const dsts = allSinks().filter((x) => x.nodeId === dstNode);
+      const ifcSink = dsts.find((d) => d.ifc);
+      if (ifcSink) {
+        // Workflow-Eingang: alle Quellen des Nodes auf einmal, der Orchestrator ordnet sie den Mitgliedern nach Format zu.
+        const ids = srcs.filter((x) => x.online).map((x) => x.id);
+        const from = nodeNameById(srcNode), to = nodeNameById(dstNode);
+        if (!ids.length) { setMsg(t("nodeNoPairs", { from, to }), true); return; }
+        try {
+          await connectIfc(ifcSink, ids);
+          setMsg(t("ifcRouted", { from, to, n: ids.length }));
+        } catch (e) { setMsg(t("failed", { detail: e.message }), true); }
+        st.selDstNode = null;
+        await refresh(false);
+        return;
+      }
       const plan = L.planTagRoutes(srcs, dsts, { fallbackOrder: st.nodeMode === "tags", byTags: st.nodeMode !== "order" });
       const from = nodeNameById(srcNode), to = nodeNameById(dstNode);
       if (!plan.routes.length) { setMsg(t("nodeNoPairs", { from, to }), true); return; }
@@ -426,7 +471,7 @@ class OmpXyPanel extends HTMLElement {
       render();
     }
     function nodeNameById(id) {
-      const p = st.sources.find((x) => x.nodeId === id) || st.sinks.find((x) => x.nodeId === id);
+      const p = allSources().find((x) => x.nodeId === id) || allSinks().find((x) => x.nodeId === id);
       return st.names.get(id) ?? L.stripInstanceId(p ? p.nodeLabel : id);
     }
     function pickNode(kind, id) {
@@ -478,7 +523,7 @@ class OmpXyPanel extends HTMLElement {
       let live = false;
       let subTitle = "";
       if (kind === "dst") {
-        const from = routeOfSink.get(p.id);
+        const from = p.ifc ? (p.feedSenderIds || [])[0] : routeOfSink.get(p.id);
         if (from) {
           const s = srcMap.get(from);
           sub = "◄ " + (s ? pointName(s) : from.slice(0, 8));
@@ -499,7 +544,7 @@ class OmpXyPanel extends HTMLElement {
 
     function renderSide(kind) {
       const s = st.side[kind];
-      const all = kind === "src" ? st.sources : st.sinks;
+      const all = kind === "src" ? allSources() : allSinks();
       const filtered = L.filterPoints(all, { media: s.media, query: "" });
       const lvl = L.levelContents(st.model, s.path, L.groupPointsByNode(filtered)); // Brotkrumen
       const routeOfSink = L.routeMap(st.edges);
@@ -541,7 +586,7 @@ class OmpXyPanel extends HTMLElement {
           const det = xyEl("details", { class: "node", open: (wasOpen !== undefined ? wasOpen : n.points.length <= 8 || s.query.trim() !== "") ? true : null },
             xyEl("summary", {},
               `${st.names.get(n.id) ?? L.stripInstanceId(n.label)} (${n.points.length}) `,
-              n.points.length > 1 ? xyEl("button", { class: "nodeall" + (nsel ? " sel" : ""), title: t("nodeAllTip"), "aria-pressed": nsel ? "true" : "false",
+              (n.points.length > 1 || n.points[0].ifc) ? xyEl("button", { class: "nodeall" + (nsel ? " sel" : ""), title: t("nodeAllTip"), "aria-pressed": nsel ? "true" : "false",
                 onclick: (e) => { e.preventDefault(); e.stopPropagation(); pickNode(kind, n.id); } }, "⇉ " + t("nodeAll")) : ""),
             xyEl("div", { class: "points" }, n.points.map((p) => renderPoint(kind, p, routeOfSink, srcMap))));
           det.addEventListener("toggle", () => s.open.set(n.id, det.open));

@@ -239,3 +239,26 @@ Deno.test("Gleichnamige Nodes: Punktname behält die Kurz-ID, sonst nicht unters
   assertEquals(L.fullName(b, names.get("b")), "Source (0a1b2c3d) Sender 1");
   assertEquals(L.fullName(c, names.get("c")), "Source (99887766) Sender 1");
 });
+
+Deno.test("interfacePoints: Workflow-Ausgänge als virtuelle Nodes, Eingänge als eine Senke, im Workflow-Ordner", () => {
+  const sources = L.normSources([src("s-v", "cam", "Kamera Sender 1", "video"), src("s-a", "cam", "Kamera Sender 2", "audio")]);
+  const resolved = [{
+    workflowId: "w1",
+    outputs: [{ name: "pgm", label: "PGM", available: true, members: [{ role: "a", portId: "s-v" }, { role: "a", portId: "s-a" }, { role: "x", portId: "fehlt" }] }],
+    inputs: [{ name: "ext", label: "Extern", available: true, feedSenderIds: ["s-v"] }],
+  }];
+  const pts = L.interfacePoints(resolved, sources, { out: "Ausgang", in: "Eingang" });
+  assertEquals(pts.sources.map((p: { id: string }) => p.id), ["s-v", "s-a"]);
+  assertEquals(pts.sources[0].nodeId, "ifc-out:w1:pgm");
+  assertEquals(pts.sources[0].nodeLabel, "Ausgang: PGM");
+  assertEquals(pts.sinks.length, 1);
+  assertEquals(pts.sinks[0].ifc, { workflowId: "w1", name: "ext" });
+  assertEquals(pts.sinks[0].mediaType, "");
+  assertEquals(pts.sinks[0].feedSenderIds, ["s-v"]);
+  const model = L.buildModel({ nodes, groupTree, workflows, virtual: pts.virtual });
+  const wf = model.folders.get("wf:w1");
+  assert(wf.nodeIds.includes("ifc-out:w1:pgm"));
+  assert(wf.nodeIds.includes("ifc-in:w1:ext"));
+  // Virtuelle Nodes zählen nicht als "nicht zugewiesen".
+  assert(!model.folders.get("unassigned").nodeIds.some((id: string) => id.startsWith("ifc-")));
+});

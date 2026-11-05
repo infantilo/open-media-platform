@@ -90,9 +90,9 @@
    * Ein Workflow, den eine Gruppe per `workflowId` referenziert, übernimmt deren
    * Untergruppen und Nodes (die Gruppe erscheint dann nicht zusätzlich).
    */
-  function buildModel({ nodes, groupTree, workflows }) {
+  function buildModel({ nodes, groupTree, workflows, virtual }) {
     const groups = (groupTree && groupTree.groups) || {};
-    const known = new Set((nodes || []).map((n) => n.id));
+    const known = new Set([...(nodes || []).map((n) => n.id), ...(virtual || []).map((v) => v.id)]);
     const nodeLabel = new Map((nodes || []).map((n) => [n.id, n.label || n.id]));
     const folders = new Map();
     const rootIds = [];
@@ -106,7 +106,10 @@
 
     for (const wf of workflows || []) {
       const label = (wf.definition && wf.definition.title) || wf.name || wf.id;
-      const wfNodes = Object.values(wf.runtime || {}).map((r) => r && r.nodeId).filter(Boolean);
+      const wfNodes = [
+        ...(virtual || []).filter((v) => v.workflowId === wf.id).map((v) => v.id),
+        ...Object.values(wf.runtime || {}).map((r) => r && r.nodeId).filter(Boolean),
+      ];
       const linked = groupByWf.get(wf.id);
       let nodeIds = wfNodes;
       let folderIds = [];
@@ -141,6 +144,46 @@
     folders.set("unassigned", { id: "unassigned", label: "", kind: "unassigned", folderIds: [], nodeIds: unassignedIds });
     rootIds.push("unassigned");
     return { folders, rootIds, nodeLabel };
+  }
+
+
+  /**
+   * Workflow-Schnittstellen (Kapitel 88) als zusätzliche Punkte. `resolved` = Antworten von
+   * GET /api/v1/workflows/{id}/interface. Jeder Ausgang wird ein virtueller Node (id `ifc-out:<wf>:<name>`) mit
+   * Kopien seiner Sender; jeder Eingang ein virtueller Node mit EINER Senke (id `ifc-in:<wf>:<name>`, `ifc` gesetzt),
+   * die Quellen beliebiger Medienart annimmt (der Orchestrator verteilt sie nach Format auf die Mitglieder).
+   */
+  function interfacePoints(resolved, sources, labels) {
+    const bySender = new Map((sources || []).map((s) => [s.id, s]));
+    const outSources = [];
+    const inSinks = [];
+    const virtual = [];
+    for (const ifc of resolved || []) {
+      if (!ifc || !ifc.workflowId) continue;
+      for (const o of ifc.outputs || []) {
+        const nodeId = `ifc-out:${ifc.workflowId}:${o.name}`;
+        const nodeLabel = `${(labels && labels.out) || "Output"}: ${o.label || o.name}`;
+        let any = false;
+        for (const m of o.members || []) {
+          const orig = bySender.get(m.portId);
+          if (!orig) continue;
+          outSources.push({ ...orig, nodeId, nodeLabel });
+          any = true;
+        }
+        if (any) virtual.push({ id: nodeId, workflowId: ifc.workflowId });
+      }
+      for (const i of ifc.inputs || []) {
+        const nodeId = `ifc-in:${ifc.workflowId}:${i.name}`;
+        const nodeLabel = `${(labels && labels.in) || "Input"}: ${i.label || i.name}`;
+        inSinks.push({
+          kind: "sink", id: nodeId, label: nodeLabel, nodeId, nodeLabel, mediaType: "", tags: [],
+          online: i.available !== false, ifc: { workflowId: ifc.workflowId, name: i.name },
+          feedSenderIds: i.feedSenderIds || [],
+        });
+        virtual.push({ id: nodeId, workflowId: ifc.workflowId });
+      }
+    }
+    return { sources: outSources, sinks: inSinks, virtual };
   }
 
   /** Nodes unterhalb eines Ordners (rekursiv), ohne Doppelte. */
@@ -392,6 +435,7 @@
     groupPointsByNode,
     flattenGroup,
     buildModel,
+    interfacePoints,
     folderNodeIds,
     levelContents,
     folderLabel,
