@@ -98,6 +98,10 @@ const T = (() => {
       "tgt.mixer": "Mixer",
       "tgt.gfx": "Grafik",
       "tgt.audio": "Audio-Mixer",
+      "tgt.mixAuto": "Mischer automatisch einrichten, sobald verbunden",
+      "tgt.mixSetup": "Mischer jetzt einrichten",
+      "tgt.mixSetupTip": "Legt im Audiomischer für jeden Player und jedes Programm des Channels einen Kanal (mit Ton folgt Bild) an und heftet die Player im Bildmischer an",
+      "tgt.mixHint": "Fügt nur hinzu, was fehlt: vorhandene Kanäle und angeheftete Quellen bleiben unverändert, nichts wird gelöscht.",
       "tgt.preflight": "Preflight-Vorlauf (min)",
       "tgt.filler": "Standard-Filler (Datei)",
       "sec.ads": "Werbeblöcke (SCTE)",
@@ -445,6 +449,10 @@ const T = (() => {
       "tgt.mixer": "Mixer",
       "tgt.gfx": "Graphics",
       "tgt.audio": "Audio mixer",
+      "tgt.mixAuto": "Set up mixers automatically once connected",
+      "tgt.mixSetup": "Set up mixers now",
+      "tgt.mixSetupTip": "Creates an audio mixer channel (with audio follows video) for every player and every programme of the channel and pins the players on the video mixer",
+      "tgt.mixHint": "Only adds what is missing: existing channels and pinned sources stay as they are, nothing is deleted.",
       "tgt.preflight": "Preflight lead time (min)",
       "tgt.filler": "Default filler (file)",
       "sec.ads": "Ad breaks (SCTE)",
@@ -1312,7 +1320,11 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         h("label", {}, T("tgt.gfx"), selGfx), h("label", {}, T("tgt.audio"), selAud),
         h("label", {}, T("tgt.preflight"), h("input", { type: "number", min: "0", id: "preflightWin", onchange: (e) => setParam("preflightWindowMin", Number(e.target.value) || 0) })),
         h("label", {}, T("tgt.filler"), h("input", { type: "text", id: "defaultFiller", onchange: (e) => setParam("defaultFiller", e.target.value.trim()) })),
-        h("label", { style: "flex-direction:row;align-items:center;gap:6px;grid-column:1/-1" }, h("input", { type: "checkbox", id: "requireRelease", onchange: (e) => setParam("requireRelease", e.target.checked) }), T("tgt.release"))));
+        h("label", { style: "flex-direction:row;align-items:center;gap:6px;grid-column:1/-1" }, h("input", { type: "checkbox", id: "requireRelease", onchange: (e) => setParam("requireRelease", e.target.checked) }), T("tgt.release")),
+        h("div", { style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap;grid-column:1/-1" },
+          h("label", { style: "flex-direction:row;align-items:center;gap:6px" }, h("input", { type: "checkbox", id: "mixerAutoSetup", onchange: (e) => setParam("mixerAutoSetup", e.target.checked) }), T("tgt.mixAuto")),
+          h("button", { title: T("tgt.mixSetupTip"), onclick: () => act("setupMixers", {}) }, T("tgt.mixSetup"))),
+        h("div", { class: "hint", style: "grid-column:1/-1" }, T("tgt.mixHint"))));
     const fillTargets = (sel, labels, cur) => {
       const all = cur && !labels.includes(cur) ? [cur, ...labels] : labels;
       const key = JSON.stringify(all);
@@ -2900,7 +2912,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (dragging) return;
       const names = ["items", "currentItemId", "cuedItemId", "mode", "connected", "playheadPositionMs", "currentDurationMs", "assets", "activeCartId", "activeCartRemaining",
         "availableNodes", "targetPlayerALabel", "targetPlayerBLabel", "targetMixerLabel", "targetGraphicsLabel", "targetAudioMixerLabel", "liveChannel", "mediaLibrary", "audioPlans", "audioGroups", "audioMappings",
-        "availableSources", "channelName", "instanceId", "persistence", "schedule", "childEvents", "triggerLog", "channelId", "preflightWindowMin", "defaultFiller", "requireRelease", "foreignStatus", "adBreakEnabled", "adBreakTarget", "adBreakPreRollMs", "adBlocks", "operatorWait"];
+        "availableSources", "channelName", "instanceId", "persistence", "schedule", "childEvents", "triggerLog", "channelId", "preflightWindowMin", "defaultFiller", "requireRelease", "mixerAutoSetup", "foreignStatus", "adBreakEnabled", "adBreakTarget", "adBreakPreRollMs", "adBlocks", "operatorWait"];
       const v = Object.fromEntries(await Promise.all(names.map(async (n) => [n, await getParam(n)])));
       if (dragging) return;
       items = v.items || [];
@@ -3027,6 +3039,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (ap && shadow.activeElement !== ap && v.adBreakPreRollMs !== undefined) ap.value = v.adBreakPreRollMs;
       const pw = shadow.getElementById("preflightWin");
       if (pw && shadow.activeElement !== pw && v.preflightWindowMin !== undefined) pw.value = v.preflightWindowMin;
+      const mas = shadow.getElementById("mixerAutoSetup");
+      if (mas && shadow.activeElement !== mas && v.mixerAutoSetup !== undefined) mas.checked = !!v.mixerAutoSetup;
       const rr = shadow.getElementById("requireRelease");
       if (rr && shadow.activeElement !== rr && v.requireRelease !== undefined) rr.checked = !!v.requireRelease;
       renderForeign(v.foreignStatus);

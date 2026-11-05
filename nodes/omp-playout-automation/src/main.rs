@@ -62,6 +62,7 @@ mod adbreak;
 mod children;
 mod foreign;
 mod hooks;
+mod mixersetup;
 mod persist;
 mod playlist;
 mod readiness;
@@ -788,6 +789,10 @@ struct AutomationState {
     /// (`setSourceContext`) gemeldet wird. Leer = kein semantisches Audio-Routing.
     target_audio_mixer_label: String,
     audio_mixer_node_id: Option<String>,
+    /// Audiomischer automatisch aus den Vorgaben des Channels einrichten, sobald er verbunden ist (mixersetup.rs).
+    mixer_auto_setup: bool,
+    /// Schlüssel (Mischer|Player A|Player B|Channel) des zuletzt erfolgreich eingerichteten Zustands.
+    mixer_setup_done: Option<String>,
     graphics_node_id: Option<String>,
     /// Erhöht sich bei JEDER On-Air-Änderung (alle 8 `take_on_targets`-
     /// Aufrufstellen, auch die drei "immer harter Cut"-Ausnahmen) — ein
@@ -869,6 +874,8 @@ impl AutomationState {
             target_graphics_label: graphics_label,
             target_audio_mixer_label: String::new(),
             audio_mixer_node_id: None,
+            mixer_auto_setup: std::env::var("OMP_PLAYOUT_MIXER_AUTO_SETUP").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
+            mixer_setup_done: None,
             graphics_node_id: None,
             child_epoch: 0,
             child_schedule: Vec::new(),
@@ -3898,6 +3905,7 @@ impl ParamStore for AutomationStore {
                 readonly: false,
             },
             ParamSpec { name: "defaultFiller".to_string(), kind: ParamType::String, unit: None, range: None, readonly: false },
+            ParamSpec { name: "mixerAutoSetup".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: false },
             ParamSpec { name: "requireRelease".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: false },
             ParamSpec { name: "cueHold".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: false },
             // Kapitel 27 / P7: Protokoll der letzten Channel-Trigger (JSON-Array, neueste zuerst).
@@ -4287,6 +4295,11 @@ impl ParamStore for AutomationStore {
                 name: "stop".to_string(),
                 args: vec![],
             },
+            // Audiomischer aus den Vorgaben des Channels einrichten (mixersetup.rs).
+            MethodSpec {
+                name: "setupMixers".to_string(),
+                args: vec![],
+            },
             // C18 (ARCHITECTURE.md §24.3).
             MethodSpec {
                 name: "cart.define".to_string(),
@@ -4413,6 +4426,7 @@ impl ParamStore for AutomationStore {
             "adBlocks" => Some(ad_blocks_json(&state)),
             "preflightWindowMin" => Some(serde_json::json!(state.preflight_window_min)),
             "defaultFiller" => Some(serde_json::json!(state.default_filler)),
+            "mixerAutoSetup" => Some(serde_json::json!(state.mixer_auto_setup)),
             "requireRelease" => Some(serde_json::json!(state.require_release_default)),
             "cueHold" => Some(serde_json::json!(state.cue_hold)),
             "triggerLog" => Some(Value::Array(self.trigger_log.lock().expect("lock poisoned").iter().cloned().collect())),
@@ -4553,6 +4567,11 @@ impl ParamStore for AutomationStore {
                 state.cue_hold = value.as_bool().ok_or(SetError::Unknown)?;
                 Ok(())
             }
+            "mixerAutoSetup" => {
+                state.mixer_auto_setup = value.as_bool().ok_or(SetError::Unknown)?;
+                state.mixer_setup_done = None;
+                Ok(())
+            }
             "requireRelease" => {
                 state.require_release_default = value.as_bool().ok_or(SetError::Unknown)?;
                 state.release.clear();
@@ -4561,6 +4580,7 @@ impl ParamStore for AutomationStore {
             "targetAudioMixerLabel" => {
                 state.target_audio_mixer_label = value.as_str().unwrap_or_default().to_string();
                 state.audio_mixer_node_id = None;
+                state.mixer_setup_done = None;
                 Ok(())
             }
             _ => Err(SetError::ReadOnly),
@@ -4768,6 +4788,7 @@ impl ParamStore for AutomationStore {
             "next" => self.do_next(),
             "nextLive" => self.do_next_live(),
             "stop" => self.do_stop(),
+            "setupMixers" => setup_mixers(self).map(|summary| eprintln!("omp-playout-automation: {summary}")),
             // C18 (ARCHITECTURE.md §24.3).
             "cart.define" => (|| {
                 let label = args.get("label").and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or("Cart").to_string();
@@ -4940,6 +4961,132 @@ fn current_or_cued_id(state: &AutomationState, want_onair: bool) -> String {
         .unwrap_or_default()
 }
 
+/// Legt im verbundenen Audiomischer für jeden Player und jedes Programm (Ausgabegruppe) des Channels einen
+/// Kanal an: Quelle = der Gruppen-Sender des Players, „Audio folgt Video“ = dieser Player (hart). Additiv und
+/// wiederholbar, s. `mixersetup`. Liefert eine Zusammenfassung.
+fn setup_mixers(store: &AutomationStore) -> Result<String, String> {
+    let audio = setup_audio_mixer(store);
+    let video = setup_video_mixer(store);
+    match (audio, video) {
+        (Err(a), Err(v)) => Err(format!("Audio: {a}; Video: {v}")),
+        (a, v) => Ok([a.ok(), v.ok()].into_iter().flatten().collect::<Vec<_>>().join("; ")),
+    }
+}
+
+fn setup_audio_mixer(store: &AutomationStore) -> Result<String, String> {
+    let (mixer, a, b, la, lb) = {
+        let s = store.state.lock().expect("lock poisoned");
+        (s.audio_mixer_node_id.clone(), s.player_a_node_id.clone(), s.player_b_node_id.clone(), s.target_player_a_label.clone(), s.target_player_b_label.clone())
+    };
+    let mixer = mixer.ok_or("Audiomischer nicht verbunden (targetAudioMixerLabel)")?;
+    let channel_id = store.persistence.channel_id();
+    let doc = if channel_id.is_empty() {
+        remote::get_json(&store.orchestrator_url, &store.auth, "/api/v1/audio-rules")?
+    } else {
+        remote::get_json(&store.orchestrator_url, &store.auth, &format!("/api/v1/audio-rules/channel/{channel_id}"))
+            .or_else(|_| remote::get_json(&store.orchestrator_url, &store.auth, "/api/v1/audio-rules"))?
+    };
+    let groups = mixersetup::groups_from_doc(&doc);
+    if groups.is_empty() {
+        return Err("das Audio-Ausgabe-Dokument des Channels enthält keine Ausgabegruppen mit Tags".to_string());
+    }
+    let nodes = remote::get_json(&store.orchestrator_url, &store.auth, "/api/v1/nodes")?;
+    let nodes = nodes.as_array().cloned().unwrap_or_default();
+    let player = |label: &str, id: Option<String>| -> Option<mixersetup::Player> {
+        let id = id?;
+        let n = nodes.iter().find(|n| n.get("id").and_then(Value::as_str) == Some(id.as_str()))?;
+        let senders = n
+            .get("senders")?
+            .as_array()?
+            .iter()
+            .filter(|s| s.get("format").and_then(Value::as_str) == Some("urn:x-nmos:format:audio"))
+            .filter_map(|s| {
+                Some(mixersetup::PlayerSender {
+                    id: s.get("id")?.as_str()?.to_string(),
+                    label: s.get("label").and_then(Value::as_str).unwrap_or_default().to_string(),
+                    tags: s.get("discovered_tags").and_then(Value::as_array).map(|t| t.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default(),
+                })
+            })
+            .collect();
+        Some(mixersetup::Player { label: label.to_string(), node_id: id, senders })
+    };
+    let players: Vec<mixersetup::Player> = [player(&la, a), player(&lb, b)].into_iter().flatten().collect();
+    if players.is_empty() {
+        return Err("kein Player verbunden".to_string());
+    }
+    let client = store.proxy_client(mixer);
+    let read_channels = || -> Result<Vec<(String, mixersetup::Existing)>, String> {
+        let v = client.get_param("mixState").map_err(|e| e.to_string())?;
+        let doc: Value = match v {
+            Value::String(s) => serde_json::from_str(&s).map_err(|e| e.to_string())?,
+            other => other,
+        };
+        Ok(doc
+            .get("channels")
+            .and_then(Value::as_array)
+            .map(|cs| {
+                cs.iter()
+                    .filter_map(|c| {
+                        let id = c.get("id")?.as_str()?.to_string();
+                        let label = c.get("label").and_then(Value::as_str).unwrap_or_default().to_string();
+                        let source = c.get("source").and_then(Value::as_str).unwrap_or_default().to_string();
+                        Some((id, mixersetup::Existing { label, source }))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    };
+    let existing: Vec<mixersetup::Existing> = read_channels()?.into_iter().map(|(_, e)| e).collect();
+    let wanted = mixersetup::plan(&groups, &players, &existing);
+    let mut done = 0;
+    for w in &wanted {
+        client.invoke("addChannel", serde_json::json!({"label": w.label})).map_err(|e| e.to_string())?;
+        // Die Kanal-ID vergibt der Mischer; über den (eindeutigen) Namen wiederfinden.
+        let id = read_channels()?.into_iter().find(|(_, e)| e.label == w.label).map(|(id, _)| id).ok_or_else(|| format!("Kanal „{}\u{201c} nach dem Anlegen nicht gefunden", w.label))?;
+        client.invoke(&format!("channel.{id}.setSource"), serde_json::json!({"senderId": w.sender_id})).map_err(|e| e.to_string())?;
+        client.invoke(&format!("channel.{id}.setFollow"), serde_json::json!({"targetNodeId": w.follow_node_id, "mode": "cut"})).map_err(|e| e.to_string())?;
+        done += 1;
+    }
+    Ok(format!("Audiomischer: {done} Kanal/Kanäle angelegt, {} bereits vorhanden", existing.len()))
+}
+
+/// Heftet im verbundenen Bildmischer die Video-Sender beider Player an (Tasten für PGM/PST). Additiv:
+/// schon angeheftete Quellen bleiben, nichts wird entfernt oder umsortiert.
+fn setup_video_mixer(store: &AutomationStore) -> Result<String, String> {
+    let (mixer, a, b) = {
+        let s = store.state.lock().expect("lock poisoned");
+        (s.mixer_node_id.clone(), s.player_a_node_id.clone(), s.player_b_node_id.clone())
+    };
+    let mixer = mixer.ok_or("Bildmischer nicht verbunden (targetMixerLabel)")?;
+    let nodes = remote::get_json(&store.orchestrator_url, &store.auth, "/api/v1/nodes")?;
+    let nodes = nodes.as_array().cloned().unwrap_or_default();
+    let mut senders = Vec::new();
+    for id in [a, b].into_iter().flatten() {
+        let Some(n) = nodes.iter().find(|n| n.get("id").and_then(Value::as_str) == Some(id.as_str())) else { continue };
+        // Das Bild des Players: sein Video-Sender (die Zeitcode-Daten sind ein eigener Datenfluss).
+        if let Some(s) = n.get("senders").and_then(Value::as_array).and_then(|l| l.iter().find(|s| s.get("format").and_then(Value::as_str) == Some("urn:x-nmos:format:video"))) {
+            if let Some(sid) = s.get("id").and_then(Value::as_str) {
+                senders.push(sid.to_string());
+            }
+        }
+    }
+    if senders.is_empty() {
+        return Err("kein Player mit Video-Sender verbunden".to_string());
+    }
+    let client = store.proxy_client(mixer);
+    let v = client.get_param("crosspoint.pinnedSenderIds").map_err(|e| e.to_string())?;
+    let pinned: Vec<String> = match v {
+        Value::String(s) => serde_json::from_str(&s).unwrap_or_default(),
+        Value::Array(a) => a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect(),
+        _ => Vec::new(),
+    };
+    let missing = mixersetup::plan_video(&senders, &pinned);
+    for sid in &missing {
+        client.invoke("crosspoint.pin", serde_json::json!({"senderId": sid})).map_err(|e| e.to_string())?;
+    }
+    Ok(format!("Bildmischer: {} Quelle(n) angeheftet, {} bereits vorhanden", missing.len(), senders.len() - missing.len()))
+}
+
 /// Löst `targetPlayerALabel`/`targetPlayerBLabel`/`targetMixerLabel`
 /// periodisch neu auf (gleiches 2s-Poll-Muster wie `omp-switcher`/
 /// `omp-video-mixer-me`s Sender-Discovery, C7/C10) — macht die Ziel-
@@ -4948,6 +5095,7 @@ fn current_or_cued_id(state: &AutomationState, want_onair: bool) -> String {
 /// Setzen des Labels.
 async fn discovery_loop(store: Arc<AutomationStore>) {
     let mut interval = tokio::time::interval(DISCOVERY_INTERVAL);
+    let mut last_audio_setup: Option<Instant> = None;
     loop {
         interval.tick().await;
         let audio_label = store.state.lock().expect("lock poisoned").target_audio_mixer_label.clone();
@@ -4996,6 +5144,36 @@ async fn discovery_loop(store: Arc<AutomationStore>) {
             state.graphics_node_id = graphics_node_id;
             state.audio_mixer_node_id = audio_mixer_node_id;
             state.discovered_labels = discovered_labels;
+        }
+
+        // Audiomischer automatisch einrichten, sobald Mischer und beide Player verbunden sind
+        // (nur wenn eingeschaltet; additiv, s. mixersetup.rs). Fehlversuche höchstens alle 10 s.
+        {
+            let pending = {
+                let state = store.state.lock().expect("lock poisoned");
+                match (&state.audio_mixer_node_id, &state.player_a_node_id, &state.player_b_node_id) {
+                    (Some(m), Some(a), Some(b)) if state.mixer_auto_setup => {
+                        let key = format!("{m}|{}|{a}|{b}|{}", state.mixer_node_id.clone().unwrap_or_default(), store.persistence.channel_id());
+                        (state.mixer_setup_done.as_deref() != Some(key.as_str())).then_some(key)
+                    }
+                    _ => None,
+                }
+            };
+            if let Some(key) = pending {
+                if last_audio_setup.map_or(true, |t| t.elapsed() >= Duration::from_secs(10)) {
+                    last_audio_setup = Some(Instant::now());
+                    let st = store.clone();
+                    let res = tokio::task::spawn_blocking(move || setup_mixers(&st)).await;
+                    match res {
+                        Ok(Ok(summary)) => {
+                            eprintln!("omp-playout-automation: {summary}");
+                            store.state.lock().expect("lock poisoned").mixer_setup_done = Some(key);
+                        }
+                        Ok(Err(e)) => eprintln!("omp-playout-automation: Audiomischer einrichten: {e}"),
+                        Err(_) => {}
+                    }
+                }
+            }
         }
 
         // Rundown-Echtmedien-Folgeschritt: `mediaLibrary`/`availableSources`

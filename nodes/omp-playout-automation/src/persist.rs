@@ -112,6 +112,8 @@ pub struct SnapConfig {
     pub default_filler: String,
     pub cue_hold: bool,
     pub require_release_default: bool,
+    #[serde(default)]
+    pub mixer_auto_setup: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -211,6 +213,7 @@ pub fn build_snapshot(state: &AutomationState, since_cache: &mut SinceCache, now
             default_filler: state.default_filler.clone(),
             cue_hold: state.cue_hold,
             require_release_default: state.require_release_default,
+            mixer_auto_setup: state.mixer_auto_setup,
         }),
         ad_open: {
             let mut v: Vec<SnapAdOpen> = state
@@ -282,6 +285,7 @@ pub fn apply_snapshot(state: &mut AutomationState, snap: Snapshot, now_utc_ms: i
         state.default_filler = c.default_filler;
         state.cue_hold = c.cue_hold;
         state.require_release_default = c.require_release_default;
+        state.mixer_auto_setup = c.mixer_auto_setup;
     }
 
     state.ad_open = snap

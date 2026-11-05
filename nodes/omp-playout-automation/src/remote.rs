@@ -273,6 +273,25 @@ pub fn fetch_sources(orchestrator_url: &str, auth: &OrchestratorAuth) -> Result<
     }
 }
 
+/// GET gegen die Orchestrator-API mit dem Service-Token; liefert den JSON-Body.
+pub fn get_json(orchestrator_url: &str, auth: &OrchestratorAuth, path: &str) -> Result<Value, String> {
+    let header = auth.header_value().ok_or_else(|| "kein Service-Token verfügbar (Orchestrator noch nicht erreicht?)".to_string())?;
+    let url = format!("{}{}", orchestrator_url.trim_end_matches('/'), path);
+    let mut resp = ureq::get(&url)
+        .config()
+        .timeout_global(Some(CALL_TIMEOUT))
+        .http_status_as_error(false)
+        .build()
+        .header("Authorization", &header)
+        .call()
+        .map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    if (200..300).contains(&status) {
+        return resp.body_mut().read_json::<Value>().map_err(|e| e.to_string());
+    }
+    Err(format!("{path}: HTTP {status}"))
+}
+
 /// POST gegen die Orchestrator-API (nicht den Node-Proxy) mit dem Service-Token (Kapitel 27 / P7:
 /// Trigger senden/quittieren). Liefert den JSON-Body; bei einem Fehlerstatus den Fehlertext des
 /// Servers (z. B. „darf nicht steuern“), damit der Operator ihn sieht.

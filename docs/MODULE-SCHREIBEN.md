@@ -111,7 +111,7 @@ Absturz-Isolation), ist sie ein **Dienst in einem Node**; das Modul `extsvc` ist
 
 Damit ein Dienst **austauschbar** ist, meldet er im Manifest `kind` (Diensttyp, z. B. `intercom`) und je Route eine `role`. Die
 Tabelle der Typen steht in `orchestrator/internal/modules/extsvc/contracts.go`, die Beschreibung in `docs/CONTRACT-<TYP>.md`
-(`CONTRACT-INTERCOM.md`). Das Manifest wird gegen den Vertrag geprüft; Clients suchen über `GET /api/v1/ext` (Typ, Rollen) und
+(`CONTRACT-INTERCOM.md`). Für eigene Bild-/Tonmischer gilt `CONTRACT-MIXER-SETUP.md` (Einrichten aus den Channel-Vorgaben, Zustandssicherung). Das Manifest wird gegen den Vertrag geprüft; Clients suchen über `GET /api/v1/ext` (Typ, Rollen) und
 kennen keinen Produktnamen. Eigene Oberfläche: Bundle-Name ohne `/` = Datei, die der Dienst unter `<base>/ui/<datei>` ausliefert.
 Prüfen: `go run ./cmd/serviceconformance -node … -token …`.
 
