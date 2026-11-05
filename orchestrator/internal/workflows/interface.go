@@ -378,3 +378,57 @@ func isCrosspointRole(wf Workflow, role string) bool {
 	_, ok := crosspointByNodeType[roleNodeType(wf, role)]
 	return ok
 }
+
+// DisconnectInput löst einen Workflow-Eingang (Kapitel 88): die dauerhafte Zuordnung (Feed) wird gelöscht, und die Quellen,
+// die den Eingang zuletzt gespeist haben, werden in Mischern/Umschaltern wieder abgeheftet. Echte IS-05-Verbindungen zu
+// Empfängern trennt der Aufrufer über die Graph-Kanten (DELETE /graph/edges/{id}). Liefert die Zahl abgehefteter Quellen.
+func (s *Service) DisconnectInput(ctx context.Context, id, input string) (int, error) {
+	wf, err := s.Get(id)
+	if err != nil {
+		return 0, err
+	}
+	port := findInterfacePort(wf.Definition.Interface, "inputs", input)
+	if port == nil {
+		return 0, fmt.Errorf("%w: workflow has no input %q", ErrValidation, input)
+	}
+	seen := map[string]bool{}
+	var ids []string
+	addID := func(x string) {
+		if !seen[x] {
+			seen[x] = true
+			ids = append(ids, x)
+		}
+	}
+	for _, x := range s.volatileFeed(id, input) {
+		addID(x)
+	}
+	if port.Feed != nil {
+		for _, snd := range s.feedSenders(*port.Feed) {
+			addID(snd.ID)
+		}
+	}
+	unpinned := 0
+	if wf.Status == StatusStarted {
+		for _, m := range port.Members {
+			node, ok := s.nodeForRole(wf, m.Role)
+			if !ok || len(node.Receivers) > 0 || node.APIBaseURL == "" || !isCrosspointRole(wf, m.Role) {
+				continue
+			}
+			for _, sid := range ids {
+				if err := s.methods.Invoke(ctx, node.APIBaseURL, "crosspoint.unpin", map[string]any{"senderId": sid}); err == nil {
+					unpinned++
+				}
+			}
+		}
+	}
+	s.setVolatileFeed(id, input, nil)
+	if port.Feed != nil {
+		port.Feed = nil
+		wf.UpdatedAt = time.Now()
+		if err := s.store.Put(wf); err != nil {
+			return unpinned, err
+		}
+		s.publish(wf)
+	}
+	return unpinned, nil
+}

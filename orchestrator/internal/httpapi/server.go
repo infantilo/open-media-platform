@@ -164,6 +164,8 @@ type WorkflowService interface {
 	PlanStart(id string) (workflows.StartPlan, error)
 	// ResolveInterface: benannte Ausgänge/Eingänge des Workflows mit aktuellen Sender-/Empfänger-IDs (Kap. 88).
 	ResolveInterface(id string) (workflows.ResolvedInterface, error)
+	// DisconnectInput löst einen Workflow-Eingang (Zuordnung löschen, Quellen abheften).
+	DisconnectInput(ctx context.Context, id, input string) (int, error)
 	// ConnectInput schaltet Quellen auf einen Workflow-Eingang (Kap. 88).
 	ConnectInput(ctx context.Context, id, input string, senderIDs []string, feed *workflows.InterfaceFeed) ([]workflows.ConnectedMember, error)
 	Update(id, name string, def workflows.Definition) (workflows.Workflow, error)
@@ -438,6 +440,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/nodes", g.requireAuth(handleNodes(nodes)))
 	mux.HandleFunc("GET /api/v1/workflows/{id}/interface", g.requireAuth(handleWorkflowInterface(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/interface/inputs/{name}/connect", g.requireVerbGlobal(authz.VerbOperate, handleWorkflowInterfaceConnect(workflowSvc)))
+	mux.HandleFunc("POST /api/v1/workflows/{id}/interface/inputs/{name}/disconnect", g.requireVerbGlobal(authz.VerbOperate, handleWorkflowInterfaceDisconnect(workflowSvc)))
 	mux.HandleFunc("GET /api/v1/workflows/{id}/plan", g.requireAuth(handleWorkflowPlan(workflowSvc)))
 	mux.HandleFunc("GET /api/v1/events", g.requireAuth(handleEvents(events)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/descriptor", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/descriptor.json", nodeLogs)))

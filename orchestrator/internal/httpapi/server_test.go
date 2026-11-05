@@ -597,6 +597,10 @@ func (f fakeWorkflowService) ConnectInput(_ context.Context, _, _ string, _ []st
 	return nil, nil
 }
 
+func (f fakeWorkflowService) DisconnectInput(_ context.Context, _, _ string) (int, error) {
+	return 0, nil
+}
+
 func (f fakeWorkflowService) PlanStart(id string) (workflows.StartPlan, error) {
 	return workflows.StartPlan{WorkflowID: id}, nil
 }

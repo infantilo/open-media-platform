@@ -419,3 +419,20 @@ func handleWorkflowInterfaceConnect(svc WorkflowService) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, map[string]any{"members": res})
 	}
 }
+
+// handleWorkflowInterfaceDisconnect liefert POST /api/v1/workflows/{id}/interface/inputs/{name}/disconnect (Kapitel 88):
+// löscht die dauerhafte Zuordnung des Eingangs und heftet seine Quellen im Mischer/Umschalter ab.
+func handleWorkflowInterfaceDisconnect(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if !workflowOrgGuard(w, r, svc, id) {
+			return
+		}
+		n, err := svc.DisconnectInput(r.Context(), id, r.PathValue("name"))
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"unpinned": n})
+	}
+}

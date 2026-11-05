@@ -405,9 +405,14 @@ blass. Der Tooltip einer Kugel nennt die Medienart und den Port.
 Pads und den echten Ports bzw. anderen Pads: für echte Verbindungen zu
 Mitgliedern, für dauerhafte Zuordnungen (Ausgang → Eingang) und für Quellen,
 die gerade einen Eingang speisen (z. B. im Mischer angeheftet). Die Linien
-liegen über den Kacheln, sind nicht anklickbar, und laufen bei untereinander
-liegenden Kacheln außen herum. Eine Zuordnung löst du im Dialog
-„Schnittstelle…“.
+liegen über den Kacheln und laufen bei untereinander liegenden Kacheln außen
+herum. **Zum Trennen** klickst du die Linie an (sie wird weiß, in der Mitte
+erscheint ein roter ×-Knopf) und drückst **Entf** oder klickst das ×. Bei
+einer echten Verbindung wird die Kante gelöscht; endet sie an einem
+Workflow-Eingang, wird zusätzlich dessen dauerhafte Zuordnung gelöst. Bei
+einer Zuordnung ohne echte Kante (Quelle im Mischer angeheftet) wird die
+Zuordnung gelöscht und die Quelle im Mischer abgeheftet. Die Zuordnung lässt
+sich weiterhin auch im Dialog „Schnittstelle…“ lösen.
 
 **Pads ziehen (Drag & Drop).** Die Pads der Workflow-Kachel sind echte
 Anschlüsse im Flow Editor:

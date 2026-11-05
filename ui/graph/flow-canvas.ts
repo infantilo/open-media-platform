@@ -625,6 +625,8 @@ export class FlowCanvas extends HTMLElement {
   #rubberBand: SVGPathElement | null = null;
   #selectionRect: SVGRectElement | null = null;
   #selectedEdgeId: string | null = null;
+  // Kap. 88: gewählte Verbindungslinie der Workflow-Schnittstelle (key = Linienkennung, edgeId = echte Kante, input = Eingang).
+  #selectedIfcEdge: { key: string; edgeId?: string; input?: { workflowId: string; name: string } } | null = null;
   #portLocation: Map<string, PortLocation> = new Map();
   // Kapitel 13 Teil 2: Transport-URN je Port-ID, unabhängig vom aktuell
   // sichtbaren Scope (anders als #portLocation) — eine Gruppen-Kachel
@@ -744,6 +746,9 @@ export class FlowCanvas extends HTMLElement {
       if (this.#selectedEdgeId) {
         ev.preventDefault();
         this.#deleteSelectedEdge();
+      } else if (this.#selectedIfcEdge) {
+        ev.preventDefault();
+        void this.#disconnectInterfaceEdge();
       }
       return;
     }
@@ -2882,11 +2887,44 @@ export class FlowCanvas extends HTMLElement {
     };
   }
 
+  // Kap. 88: gewählte Schnittstellen-Linie trennen — echte Kante löschen und/oder die Zuordnung des Eingangs lösen
+  // (Orchestrator: Feed löschen, Quellen im Mischer abheften).
+  async #disconnectInterfaceEdge() {
+    const sel = this.#selectedIfcEdge;
+    if (!sel) return;
+    this.#selectedIfcEdge = null;
+    try {
+      if (sel.edgeId) {
+        const res = await apiFetch(`/api/v1/graph/edges/${encodeURIComponent(sel.edgeId)}`, { method: "DELETE" });
+        if (!res.ok) {
+          this.#showToast(tt("flow.e6871e", { p0: (await res.text()).trim() || res.status }), this.#traceToastAction(res));
+          this.#render();
+          return;
+        }
+      }
+      if (sel.input) {
+        const res = await apiFetch(
+          `/api/v1/workflows/${encodeURIComponent(sel.input.workflowId)}/interface/inputs/${encodeURIComponent(sel.input.name)}/disconnect`,
+          { method: "POST" },
+        );
+        if (!res.ok) {
+          this.#showToast(tt("flow.e6871e", { p0: (await res.text()).trim() || res.status }));
+          this.#render();
+          return;
+        }
+      }
+      this.#showToast(tt("wfi.disconnected"));
+      await this.#queueFetchAndRender();
+    } catch (err) {
+      this.#showToast(tt("flow.e6871e", { p0: err }));
+    }
+  }
+
   // Kap. 88: Verbindungslinien der Workflow-Schnittstelle. Es entstehen drei Arten, jeweils nur wenn mindestens ein Ende ein
   // Pad ist (reine Port-zu-Port-Kanten zeichnet #renderEdge): (1) echte Kanten, deren Port ein Mitglied eines Pads ist,
   // (2) dauerhafte Zuordnungen (Ausgang → Eingang), (3) aktuell speisende Sender eines Eingangs (z. B. im Mischer angeheftet).
-  // Die Linien sind gestrichelt und nicht anklickbar; gelöst wird eine Zuordnung im Schnittstellen-Dialog.
-  #renderWorkflowInterfaceEdges(): SVGPathElement[] {
+  // Die Linien sind gestrichelt und wählbar (Klick, dann Entf oder ×-Knopf trennt: echte Kante löschen bzw. Zuordnung lösen).
+  #renderWorkflowInterfaceEdges(): SVGGElement[] {
     if (this.#scope !== null) return [];
     const outPad = new Map<string, { wf: string; name: string }>();
     const inPad = new Map<string, { wf: string; name: string }>();
@@ -2914,8 +2952,19 @@ export class FlowCanvas extends HTMLElement {
     };
 
     const seen = new Set<string>();
-    const lines: SVGPathElement[] = [];
-    const add = (from: { pt: Point; key: string } | null, to: { pt: Point; key: string } | null, active: boolean, title: string) => {
+    const lines: SVGGElement[] = [];
+    type IfcAction = { edgeId?: string; input?: { workflowId: string; name: string } };
+    const inputOf = (key: string): IfcAction["input"] => {
+      const [kind, wf, ...rest] = key.split(":");
+      return kind === "i" ? { workflowId: wf, name: rest.join(":") } : undefined;
+    };
+    const add = (
+      from: { pt: Point; key: string } | null,
+      to: { pt: Point; key: string } | null,
+      active: boolean,
+      title: string,
+      action: IfcAction,
+    ) => {
       if (!from || !to) return;
       const isPad = (k: string) => k.startsWith("o:") || k.startsWith("i:");
       if (!isPad(from.key) && !isPad(to.key)) return; // Port-zu-Port zeichnet #renderEdge
@@ -2927,24 +2976,75 @@ export class FlowCanvas extends HTMLElement {
       const backwards = to.pt.x <= from.pt.x + 20;
       const c1x = backwards ? from.pt.x + 70 : (from.pt.x + to.pt.x) / 2;
       const c2x = backwards ? to.pt.x - 70 : (from.pt.x + to.pt.x) / 2;
+      const d = `M ${from.pt.x} ${from.pt.y} C ${c1x} ${from.pt.y}, ${c2x} ${to.pt.y}, ${to.pt.x} ${to.pt.y}`;
+      const selected = this.#selectedIfcEdge?.key === key;
+      const group = document.createElementNS(SVG_NS, "g");
+      group.setAttribute("data-role", "workflow-interface-edge");
+      group.setAttribute("data-edge-key", key);
       const path = document.createElementNS(SVG_NS, "path");
-      path.setAttribute("d", `M ${from.pt.x} ${from.pt.y} C ${c1x} ${from.pt.y}, ${c2x} ${to.pt.y}, ${to.pt.x} ${to.pt.y}`);
+      path.setAttribute("d", d);
       path.setAttribute("fill", "none");
-      path.setAttribute("stroke", active ? "#e0a030" : "#777");
-      path.setAttribute("stroke-width", "2");
+      path.setAttribute("stroke", selected ? "#ffffff" : active ? "#e0a030" : "#777");
+      path.setAttribute("stroke-width", selected ? "3" : "2");
       path.setAttribute("stroke-dasharray", "6 3");
-      path.setAttribute("data-role", "workflow-interface-edge");
       path.style.pointerEvents = "none";
+      // Unsichtbarer, breiter Treffer-Pfad: die 2-px-Linie wäre kaum zu treffen.
+      const hit = document.createElementNS(SVG_NS, "path");
+      hit.setAttribute("d", d);
+      hit.setAttribute("fill", "none");
+      hit.setAttribute("stroke", "transparent");
+      hit.setAttribute("stroke-width", "14");
+      hit.style.pointerEvents = "stroke";
+      hit.style.cursor = "pointer";
       const tip = document.createElementNS(SVG_NS, "title");
       tip.textContent = title;
-      path.appendChild(tip);
-      lines.push(path);
+      hit.appendChild(tip);
+      hit.addEventListener("pointerdown", (ev) => {
+        ev.stopPropagation();
+        this.#selectedEdgeId = null;
+        this.#selectedIfcEdge = { key, ...action };
+        this.#render();
+      });
+      group.append(path, hit);
+      if (selected) {
+        // ×-Knopf in der Mitte der Linie (Kurvenmitte bei t=0,5), zusätzlich zur Entf-Taste.
+        const mx = (from.pt.x + 3 * c1x + 3 * c2x + to.pt.x) / 8;
+        const my = (from.pt.y + 3 * from.pt.y + 3 * to.pt.y + to.pt.y) / 8;
+        const btn = document.createElementNS(SVG_NS, "g");
+        btn.setAttribute("data-role", "workflow-interface-edge-delete");
+        btn.style.cursor = "pointer";
+        const bg = document.createElementNS(SVG_NS, "circle");
+        bg.setAttribute("cx", String(mx));
+        bg.setAttribute("cy", String(my));
+        bg.setAttribute("r", "9");
+        bg.setAttribute("fill", "#b03030");
+        bg.setAttribute("stroke", "#fff");
+        const x = document.createElementNS(SVG_NS, "text");
+        x.setAttribute("x", String(mx));
+        x.setAttribute("y", String(my + 4));
+        x.setAttribute("text-anchor", "middle");
+        x.setAttribute("fill", "#fff");
+        x.setAttribute("font-size", "13");
+        x.setAttribute("pointer-events", "none");
+        x.textContent = "×";
+        const btnTip = document.createElementNS(SVG_NS, "title");
+        btnTip.textContent = tt("wfi.disconnect");
+        btn.append(bg, x, btnTip);
+        btn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+        btn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          void this.#disconnectInterfaceEdge();
+        });
+        group.appendChild(btn);
+      }
+      lines.push(group);
     };
 
     for (const edge of this.#graph.edges) {
       const from = outPad.has(edge.fromSender) || inPad.has(edge.toReceiver) ? senderPoint(edge.fromSender) : null;
       const to = from ? receiverPoint(edge.toReceiver) : null;
-      add(from, to, edge.state === "active", tt("wfi.edgeTip"));
+      // Eine echte Kante wird gelöscht; endet sie an einem Workflow-Eingang, wird dessen Zuordnung ebenfalls gelöst.
+      add(from, to, edge.state === "active", tt("wfi.edgeTip"), { edgeId: edge.id, input: to ? inputOf(to.key) : undefined });
     }
     for (const wf of this.#workflowsInScope()) {
       const ifc = this.#workflowInterfaces.get(wf.id);
@@ -2955,9 +3055,13 @@ export class FlowCanvas extends HTMLElement {
         })();
         if (input.feed) {
           const pt = this.#padWorld(input.feed.workflowId, "output", input.feed.output);
-          add(pt ? { pt, key: `o:${input.feed.workflowId}:${input.feed.output}` } : null, to, (input.feedSenderIds?.length ?? 0) > 0, tt("wfi.feedTip"));
+          add(pt ? { pt, key: `o:${input.feed.workflowId}:${input.feed.output}` } : null, to, (input.feedSenderIds?.length ?? 0) > 0, tt("wfi.feedTip"), {
+            input: { workflowId: wf.id, name: input.name },
+          });
         }
-        for (const sid of input.feedSenderIds ?? []) add(senderPoint(sid), to, true, tt("wfi.feedTip"));
+        for (const sid of input.feedSenderIds ?? []) {
+          add(senderPoint(sid), to, true, tt("wfi.feedTip"), { input: { workflowId: wf.id, name: input.name } });
+        }
       }
     }
     return lines;
@@ -4788,6 +4892,7 @@ export class FlowCanvas extends HTMLElement {
     path.addEventListener("pointerdown", (ev) => {
       ev.stopPropagation();
       this.#selectedEdgeId = edge.id;
+      this.#selectedIfcEdge = null;
       this.#render();
     });
     return path;
@@ -4940,6 +5045,10 @@ export class FlowCanvas extends HTMLElement {
   #onPointerDown(ev: PointerEvent) {
     if (this.#drag) return;
     this.#selectedEdgeId = null;
+    if (this.#selectedIfcEdge) {
+      this.#selectedIfcEdge = null;
+      this.#render();
+    }
 
     if (ev.shiftKey) {
       this.#svg.setPointerCapture(ev.pointerId);

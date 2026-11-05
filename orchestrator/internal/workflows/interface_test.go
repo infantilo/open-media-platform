@@ -262,3 +262,28 @@ func TestResolveCrosspointInputIsAvailableVideo(t *testing.T) {
 		t.Errorf("crosspoint input = %+v", got.Inputs[0])
 	}
 }
+
+func TestDisconnectInputClearsFeedAndUnpins(t *testing.T) {
+	s, _, m := connectFixture(t)
+	nodes := s.nodes.(*fakeNodeLister)
+	nodes.add(registry.NodeView{ID: "src", Label: "Src", Online: true, Senders: []registry.SenderView{{ID: "feed-video", Label: "PGM", Format: formatVideo}}})
+	_ = s.store.Put(Workflow{ID: "up", Name: "Up", Status: StatusStarted, Runtime: map[string]RoleRuntime{"src": {NodeID: "src"}},
+		Definition: Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}},
+			Interface: &Interface{Outputs: []InterfacePort{{Name: "OUT", Members: []InterfaceMember{{Role: "src", Port: "PGM"}}}}}}})
+	ctx := context.Background()
+	if _, err := s.ConnectInput(ctx, "wf", "FQ1", []string{"feed-video"}, &InterfaceFeed{WorkflowID: "up", Output: "OUT"}); err != nil {
+		t.Fatal(err)
+	}
+	m.calls = nil
+	n, err := s.DisconnectInput(ctx, "wf", "FQ1")
+	if err != nil || n != 1 || len(m.calls) != 1 || m.calls[0].method != "crosspoint.unpin" || m.calls[0].args["senderId"] != "feed-video" {
+		t.Fatalf("n=%d err=%v calls=%+v", n, err, m.calls)
+	}
+	wf, _ := s.store.Get("wf")
+	if wf.Definition.Interface.Inputs[0].Feed != nil || len(s.volatileFeed("wf", "FQ1")) != 0 {
+		t.Error("feed must be cleared")
+	}
+	if _, err := s.DisconnectInput(ctx, "wf", "gibtsnicht"); !errors.Is(err, ErrValidation) {
+		t.Errorf("unknown input: %v", err)
+	}
+}
