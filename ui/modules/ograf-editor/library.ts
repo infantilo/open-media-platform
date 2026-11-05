@@ -606,17 +606,22 @@ class OmpOgrafLibrary extends HTMLElement {
         scene,
         images: () => Object.keys(this.#files).filter(isBinaryOrSvg),
         assetUrl: (n) => this.#assetUrl(n),
+        fonts: () => Object.keys(this.#files).filter((n) => /\.(woff2?|ttf)$/i.test(n)),
         params: () => this.#fields.map((f) => ({ key: f.key, kind: f.kind })),
         data: () => defaultsOf(this.#fields),
         onChange: (sc) => this.#onScene(sc),
       });
     }
+    else queueMicrotask(() => this.#canvas?.refresh());
     return this.#canvas.el;
   }
   #assetUrl(name: string): string {
     const c = this.#files[name] ?? "";
     const ext = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
-    if (c.startsWith("base64:")) return `data:image/${ext === "jpg" ? "jpeg" : ext};base64,${c.slice(7)}`;
+    if (c.startsWith("base64:")) {
+      const mime = ["woff", "woff2", "ttf"].includes(ext) ? `font/${ext}` : `image/${ext === "jpg" ? "jpeg" : ext}`;
+      return `data:${mime};base64,${c.slice(7)}`;
+    }
     if (ext === "svg") return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(c)}`;
     return "";
   }

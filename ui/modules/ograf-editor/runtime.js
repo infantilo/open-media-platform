@@ -32,6 +32,40 @@ export function keyframesFor(type, dir, dist = 80) {
   return dir === "in" ? pair : [pair[1], pair[0]];
 }
 
+/** Schrift verkleinern, bis der Text ins Feld passt (nur bei `e.autofit`, nicht unter `e.minSize`). Braucht ein eingehängtes Element. */
+export function autofit(inner, e) {
+  if (e.kind !== "text" || !e.autofit) return;
+  let size = e.size || 40;
+  const min = e.minSize || 12;
+  const s = inner.style;
+  const keep = s.alignItems;
+  s.alignItems = "flex-start"; // sonst zählt der Überstand nach oben nicht in scrollHeight
+  s.fontSize = `${size}px`;
+  for (let guard = 0; guard < 60 && size > min && (inner.scrollHeight > inner.clientHeight + 1 || inner.scrollWidth > inner.clientWidth + 1); guard++) {
+    size = Math.max(min, size - Math.max(1, Math.round(size * 0.04)));
+    s.fontSize = `${size}px`;
+  }
+  s.alignItems = keep;
+}
+
+const FONTS = new Set();
+/** Schriftdateien der Szene als Schriftfamilien anmelden; Ergebnis: Versprechen, das nach dem Laden aller erfüllt ist. */
+function loadFonts(scene, resolveAsset) {
+  if (typeof FontFace === "undefined" || !document.fonts || !resolveAsset) return Promise.resolve();
+  const jobs = [];
+  for (const f of scene.fonts || []) {
+    const url = resolveAsset(f.file);
+    if (!url) continue;
+    const key = `${f.family}|${url}`;
+    if (FONTS.has(key)) continue;
+    FONTS.add(key);
+    const face = new FontFace(f.family, `url("${url}")`);
+    document.fonts.add(face);
+    jobs.push(face.load().catch(() => {}));
+  }
+  return Promise.all(jobs).then(() => {});
+}
+
 function applyBox(el, e) {
   const s = el.style;
   s.position = "absolute";
@@ -107,6 +141,9 @@ export function renderScene(root, scene, data, opts = {}) {
     items.push({ e, wrap, inner, anims: [] });
   }
   root.append(stage);
+  const fitAll = () => { for (const it of items) autofit(it.inner, it.e); };
+  fitAll();
+  const ready = loadFonts(scene, opts.resolveAsset).then(fitAll);
   const clear = (it) => { for (const a of it.anims) a.cancel(); it.anims = []; };
   const run = (it, dir) => {
     const spec = it.e.anim && it.e.anim[dir];
@@ -121,9 +158,10 @@ export function renderScene(root, scene, data, opts = {}) {
   if (!opts.editor) for (const it of items) it.inner.style.visibility = "hidden";
   return {
     stage,
+    ready,
     play: () => Promise.all(items.map((it) => run(it, "in"))),
     stop: () => Promise.all(items.map((it) => run(it, "out"))),
-    update(next) { for (const it of items) paint(it.inner, it.e, next); },
+    update(next) { for (const it of items) { paint(it.inner, it.e, next); autofit(it.inner, it.e); } },
     destroy() { window.removeEventListener("resize", onResize); for (const it of items) clear(it); stage.remove(); },
   };
 }
@@ -141,6 +179,7 @@ export function createSceneElement(scene, base) {
     async load(p) {
       this._data = (p && p.data) || {};
       this._h = renderScene(this.shadowRoot, scene, this._data, { resolveAsset: (f) => new URL(f, base).href });
+      await this._h.ready;
       return { statusCode: 200 };
     }
     async dispose() { if (this._h) this._h.destroy(); return { statusCode: 200 }; }

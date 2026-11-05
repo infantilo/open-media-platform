@@ -2,7 +2,7 @@ import { assertEquals, assertNotEquals } from "jsr:@std/assert@1";
 import RUNTIME from "./runtime.js" with { type: "text" };
 import { bindText, keyframesFor } from "./runtime.js";
 import {
-  addElement, alignToScene, ensureParams, applyScene, duplicateElement, generateMain, hitTest, History, isDesigner, moveElements, newDesignerPackage,
+  addElement, alignGroup, alignToScene, angleFor, boundsOf, distribute, duplicateMany, elementsInRect, ensureParams, resizeRotated, applyScene, duplicateElement, generateMain, hitTest, History, isDesigner, moveElements, newDesignerPackage,
   newElement, newScene, parseScene, placeholders, removeElements, reorder, resizeBox, SCENE_FORMAT, snapBox, updateElement, usedAssets, zoneIds,
 } from "./scene.ts";
 import { parseManifest } from "./logic.ts";
@@ -159,4 +159,57 @@ Deno.test("History: undo/redo, Wiederholen-Zweig wird verworfen, Grenze", () => 
   let n = 0;
   while (h.canUndo) { h.undo(); n++; }
   assertEquals(n, 3);
+});
+
+Deno.test("resizeRotated: gegenüberliegende Kante bleibt stehen (0°, 90°, 30°)", () => {
+  const b = { x: 100, y: 100, w: 200, h: 100 };
+  assertEquals(resizeRotated(b, 0, "e", 50, 0), { x: 100, y: 100, w: 250, h: 100 });
+  // 90°: Elementsystem ist um 90° gedreht → Zeiger nach unten (dy=+50) vergrößert die Breite („e“)
+  const r = resizeRotated(b, 90, "e", 0, 50);
+  assertEquals(r.w, 250);
+  // linke Kante im Elementsystem = obere Kante im Bild (bei 90°): ihre Weltposition bleibt
+  const worldLeft = (box: { x: number; y: number; w: number; h: number }, a: number) => {
+    const cx = box.x + box.w / 2, cy = box.y + box.h / 2, rad = (a * Math.PI) / 180;
+    return [cx - (box.w / 2) * Math.cos(rad), cy - (box.w / 2) * Math.sin(rad)];
+  };
+  const [bx, by] = worldLeft(b, 90), [rx, ry] = worldLeft(r, 90);
+  assertEquals([Math.round(rx), Math.round(ry)], [Math.round(bx), Math.round(by)]);
+  const r30 = resizeRotated(b, 30, "w", -20, 0);
+  const [b30x, b30y] = [b.x + b.w / 2 + (b.w / 2) * Math.cos(Math.PI / 6), b.y + b.h / 2 + (b.w / 2) * Math.sin(Math.PI / 6)]; // rechte Kante (bleibt)
+  const [r30x, r30y] = [r30.x + r30.w / 2 + (r30.w / 2) * Math.cos(Math.PI / 6), r30.y + r30.h / 2 + (r30.w / 2) * Math.sin(Math.PI / 6)];
+  assertEquals([Math.abs(r30x - b30x) < 1.5, Math.abs(r30y - b30y) < 1.5], [true, true]);
+});
+
+Deno.test("angleFor: 0° oben, rechts 90°, Einrasten", () => {
+  const b = { x: 0, y: 0, w: 100, h: 100 };
+  assertEquals(angleFor(b, 50, -100), 0);
+  assertEquals(angleFor(b, 200, 50), 90);
+  assertEquals(Math.abs(angleFor(b, 50, 300)), 180);
+  assertEquals(angleFor(b, 120, -20, true) % 15, 0);
+});
+
+Deno.test("Gruppe: Rechteck, Aufziehen, Ausrichten, Verteilen, Duplizieren", () => {
+  let s = newScene();
+  const mk = (id: string, x: number, y: number, w: number, h: number) => addElement(s, { ...newElement("rect", s), id, x, y, w, h });
+  s = mk("a", 0, 0, 100, 100);
+  s = mk("b", 300, 50, 50, 50);
+  s = mk("c", 900, 10, 100, 200);
+  assertEquals(boundsOf(s, ["a", "c"]), { x: 0, y: 0, w: 1000, h: 210 });
+  assertEquals(boundsOf(s, []), null);
+  assertEquals(elementsInRect(s, { x: 250, y: 40, w: 100, h: 20 }), ["b"]);
+  assertEquals(elementsInRect(s, { x: 2000, y: 0, w: 5, h: 5 }), []);
+  const al = alignGroup(s, ["a", "b", "c"], "right");
+  assertEquals(al.elements.map((e) => e.x + e.w), [1000, 1000, 1000]);
+  const vc = alignGroup(s, ["a", "c"], "vcenter");
+  assertEquals(vc.elements.map((e) => Math.round(e.y + e.h / 2)), [105, 75, 105]); // b gehört nicht zur Auswahl
+  assertEquals(alignGroup(s, ["a"], "left"), s); // ein Element: keine Gruppe
+  const d = distribute(s, ["a", "b", "c"], "x");
+  assertEquals(d.elements.map((e) => e.x), [0, 475, 900]); // Lücke (1000−250)/2 = 375
+  const dup = duplicateMany(s, ["a", "b"]);
+  assertEquals([dup.scene.elements.length, dup.ids.length], [5, 2]);
+});
+
+Deno.test("parseScene behält gültige Schriften, verwirft unsichere", () => {
+  const sc = parseScene(JSON.stringify({ format: SCENE_FORMAT, elements: [], fonts: [{ family: "Meine Schrift", file: "a.woff2" }, { family: 'x";}', file: "b.woff2" }, { family: "ok", file: "../c.woff" }] }))!;
+  assertEquals(sc.fonts, [{ family: "Meine Schrift", file: "a.woff2" }]);
 });

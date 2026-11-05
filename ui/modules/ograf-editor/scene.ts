@@ -42,17 +42,26 @@ export interface SceneElement {
   lineHeight?: number;
   bg?: string;
   padding?: number;
+  /** Schrift verkleinern, bis der Text ins Feld passt (nicht unter `minSize`). */
+  autofit?: boolean;
+  minSize?: number;
   // Bild
   file?: string;
   fit?: "contain" | "cover" | "fill";
   // Zone
   zone?: string;
 }
+export interface SceneFont {
+  family: string;
+  file: string;
+}
 export interface Scene {
   format: typeof SCENE_FORMAT;
   width: number;
   height: number;
   elements: SceneElement[];
+  /** Schriftdateien des Pakets (woff/woff2/ttf), die als Schriftfamilie bereitstehen. */
+  fonts?: SceneFont[];
 }
 export interface Box {
   x: number;
@@ -124,6 +133,11 @@ export function parseScene(text: string): Scene | null {
   const o = v as Record<string, unknown> | null;
   if (!o || o.format !== SCENE_FORMAT || !Array.isArray(o.elements)) return null;
   const scene = newScene(Math.max(16, num(o.width, 1920)), Math.max(16, num(o.height, 1080)));
+  if (Array.isArray(o.fonts)) {
+    scene.fonts = (o.fonts as Record<string, unknown>[])
+      .filter((f) => f && typeof f.family === "string" && /^[^"'\\;{}]+$/.test(f.family as string) && typeof f.file === "string" && /^[A-Za-z0-9._-]+$/.test(f.file as string))
+      .map((f) => ({ family: f.family as string, file: f.file as string }));
+  }
   const seen = new Set<string>();
   for (const raw of o.elements) {
     const e = raw as Record<string, unknown>;
@@ -240,6 +254,87 @@ export function resizeBox(b: Box, handle: Handle, dx: number, dy: number, keepRa
   if (w < MIN_SIZE) { if (handle.includes("w")) x -= MIN_SIZE - w; w = MIN_SIZE; }
   if (h < MIN_SIZE) { if (handle.includes("n")) y -= MIN_SIZE - h; h = MIN_SIZE; }
   return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+}
+
+/** Wie `resizeBox`, aber für ein um seine Mitte gedrehtes Element: gezogen wird im Elementkoordinatensystem, die gegenüberliegende Kante bleibt stehen. */
+export function resizeRotated(b: Box, rotation: number, handle: Handle, dx: number, dy: number, keepRatio = false): Box {
+  const a = (rotation * Math.PI) / 180;
+  const c = Math.cos(a), sn = Math.sin(a);
+  const ldx = dx * c + dy * sn, ldy = -dx * sn + dy * c; // Zeigerweg ins Elementsystem (um −Winkel gedreht)
+  const nb = resizeBox({ x: 0, y: 0, w: b.w, h: b.h }, handle, ldx, ldy, keepRatio);
+  const shiftX = nb.x + nb.w / 2 - b.w / 2, shiftY = nb.y + nb.h / 2 - b.h / 2; // Verschiebung der Mitte im Elementsystem
+  const cx = b.x + b.w / 2 + shiftX * c - shiftY * sn;
+  const cy = b.y + b.h / 2 + shiftX * sn + shiftY * c;
+  return { x: Math.round(cx - nb.w / 2), y: Math.round(cy - nb.h / 2), w: nb.w, h: nb.h };
+}
+
+/** Drehwinkel (Grad) für einen Zeiger bei (px, py) um die Mitte des Elements; der Griff liegt oberhalb (0°); `snap` rastet auf 15°. */
+export function angleFor(b: Box, px: number, py: number, snap = false): number {
+  let deg = (Math.atan2(py - (b.y + b.h / 2), px - (b.x + b.w / 2)) * 180) / Math.PI + 90;
+  deg = ((deg + 180) % 360 + 360) % 360 - 180;
+  if (snap) deg = Math.round(deg / 15) * 15;
+  return Math.round(deg * 10) / 10;
+}
+
+/** Umgebendes Rechteck (ohne Drehung) mehrerer Elemente. */
+export function boundsOf(s: Scene, ids: string[]): Box | null {
+  const els = s.elements.filter((e) => ids.includes(e.id));
+  if (!els.length) return null;
+  const x1 = Math.min(...els.map((e) => e.x)), y1 = Math.min(...els.map((e) => e.y));
+  const x2 = Math.max(...els.map((e) => e.x + e.w)), y2 = Math.max(...els.map((e) => e.y + e.h));
+  return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+}
+
+/** Elemente, deren Rechteck das Auswahlrechteck berührt (Aufziehen). */
+export function elementsInRect(s: Scene, r: Box): string[] {
+  return s.elements.filter((e) => e.x < r.x + r.w && e.x + e.w > r.x && e.y < r.y + r.h && e.y + e.h > r.y).map((e) => e.id);
+}
+
+/** Mehrere Elemente aneinander ausrichten (an den Rändern/der Mitte ihres gemeinsamen Rechtecks). */
+export function alignGroup(s: Scene, ids: string[], how: Align): Scene {
+  const b = boundsOf(s, ids);
+  if (!b || ids.length < 2) return s;
+  return withElements(s, s.elements.map((e) => {
+    if (!ids.includes(e.id)) return e;
+    switch (how) {
+      case "left": return { ...e, x: b.x };
+      case "hcenter": return { ...e, x: Math.round(b.x + (b.w - e.w) / 2) };
+      case "right": return { ...e, x: b.x + b.w - e.w };
+      case "top": return { ...e, y: b.y };
+      case "vcenter": return { ...e, y: Math.round(b.y + (b.h - e.h) / 2) };
+      default: return { ...e, y: b.y + b.h - e.h };
+    }
+  }));
+}
+
+/** Drei oder mehr Elemente mit gleichem Abstand verteilen (nach Position sortiert, äußere bleiben stehen). */
+export function distribute(s: Scene, ids: string[], axis: "x" | "y"): Scene {
+  const els = s.elements.filter((e) => ids.includes(e.id));
+  if (els.length < 3) return s;
+  const size = axis === "x" ? "w" : "h";
+  const sorted = [...els].sort((a, b) => a[axis] - b[axis]);
+  const first = sorted[0], last = sorted[sorted.length - 1];
+  const total = last[axis] + last[size] - first[axis];
+  const gap = (total - sorted.reduce((a, e) => a + e[size], 0)) / (sorted.length - 1);
+  const pos = new Map<string, number>();
+  let at = first[axis];
+  for (const e of sorted) {
+    pos.set(e.id, Math.round(at));
+    at += e[size] + gap;
+  }
+  return withElements(s, s.elements.map((e) => pos.has(e.id) ? { ...e, [axis]: pos.get(e.id)! } : e));
+}
+
+/** Mehrere Elemente duplizieren (alle versetzt); liefert die neuen IDs. */
+export function duplicateMany(s: Scene, ids: string[]): { scene: Scene; ids: string[] } {
+  let cur = s;
+  const out: string[] = [];
+  for (const id of ids) {
+    const r = duplicateElement(cur, id);
+    cur = r.scene;
+    if (r.id) out.push(r.id);
+  }
+  return { scene: cur, ids: out };
 }
 
 export interface Guide {

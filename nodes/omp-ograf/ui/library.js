@@ -1,5 +1,5 @@
 // ui/modules/ograf-editor/runtime.js with { type: 'text' }
-var runtime_default = '// Laufzeit der Designer-Vorlagen des OGraf-Editors (Kapitel 90.5). Diese EINE Datei wird\n//  (a) vom Editor f\xFCr die Leinwand-Vorschau benutzt und\n//  (b) als Text in jede mit der Leinwand gebaute Vorlage kopiert (`<id>.js` = diese Datei + `export default createSceneElement(...)`),\n// damit Vorschau und Sendung denselben Code ausf\xFChren. Reines JavaScript ohne Abh\xE4ngigkeiten, ES-Modul.\n// Das Szenenmodell steht in `scene.json` des Pakets (Format `omp-ograf-scene/1`, s. scene.ts).\n\n/** Ersetzt `{{schluessel}}` durch Werte aus `data` (fehlend = leer). */\nexport function bindText(text, data) {\n  return String(text ?? "").replace(/\\{\\{\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*\\}\\}/g, (_, k) => {\n    const v = data ? data[k] : undefined;\n    return v === undefined || v === null ? "" : String(v);\n  });\n}\n\n/** Alle Animationsarten: Anzeigename-Schl\xFCssel \u2192 Start-Keyframes (Zustand \u201Eweg\u201C) und Ziel \u201Eda\u201C. */\nexport const ANIM_TYPES = ["none", "fade", "fromLeft", "fromRight", "fromTop", "fromBottom", "scale", "wipe"];\n\n/** Keyframes f\xFCr Einblenden (`dir` = "in") bzw. Ausblenden ("out", r\xFCckw\xE4rts). `dist` = Weg in Bildpunkten. */\nexport function keyframesFor(type, dir, dist = 80) {\n  const slide = (t) => [{ opacity: 0, transform: t }, { opacity: 1, transform: "none" }];\n  let pair;\n  switch (type) {\n    case "fade": pair = [{ opacity: 0 }, { opacity: 1 }]; break;\n    case "fromLeft": pair = slide(`translateX(${-dist}px)`); break;\n    case "fromRight": pair = slide(`translateX(${dist}px)`); break;\n    case "fromTop": pair = slide(`translateY(${-dist}px)`); break;\n    case "fromBottom": pair = slide(`translateY(${dist}px)`); break;\n    case "scale": pair = slide("scale(0.8)"); break;\n    case "wipe": pair = [{ clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0 0 0)" }]; break;\n    default: return null;\n  }\n  return dir === "in" ? pair : [pair[1], pair[0]];\n}\n\nfunction applyBox(el, e) {\n  const s = el.style;\n  s.position = "absolute";\n  s.left = `${e.x}px`;\n  s.top = `${e.y}px`;\n  s.width = `${e.w}px`;\n  s.height = `${e.h}px`;\n  s.transform = e.rotation ? `rotate(${e.rotation}deg)` : "none";\n  s.boxSizing = "border-box";\n}\n\nfunction paint(inner, e, data) {\n  const s = inner.style;\n  const color = (c) => bindText(c, data);\n  if (e.kind === "rect") {\n    s.background = color(e.fill || "transparent");\n    s.borderRadius = `${e.radius || 0}px`;\n    s.border = e.strokeW ? `${e.strokeW}px solid ${color(e.stroke || "#fff")}` : "none";\n  } else if (e.kind === "text") {\n    inner.textContent = bindText(e.text, data);\n    s.font = `${e.weight || 400} ${e.size || 40}px/${e.lineHeight || 1.2} ${e.font || "system-ui, sans-serif"}`;\n    s.color = color(e.color || "#fff");\n    s.textAlign = e.align || "left";\n    s.whiteSpace = "pre-wrap";\n    s.overflow = "hidden";\n    s.display = "flex";\n    s.alignItems = { top: "flex-start", middle: "center", bottom: "flex-end" }[e.valign || "top"];\n    s.justifyContent = { left: "flex-start", center: "center", right: "flex-end" }[e.align || "left"];\n    s.background = e.bg ? color(e.bg) : "transparent";\n    s.padding = `${e.padding || 0}px`;\n    s.borderRadius = `${e.radius || 0}px`;\n  } else if (e.kind === "image") {\n    s.objectFit = e.fit || "contain";\n    s.borderRadius = `${e.radius || 0}px`;\n  }\n}\n\n/**\n * Baut die Szene in `root` (ShadowRoot oder Element) und liefert den Griff `{play, stop, update, destroy, stage}`.\n * `opts.resolveAsset(datei) \u2192 URL`, `opts.scale() \u2192 Faktor` (Standard: Breite des Fensters / Szenenbreite),\n * `opts.editor = true` zeigt Zonen als gestrichelte Rahmen und spielt keine Animation (alles sichtbar).\n */\nexport function renderScene(root, scene, data, opts = {}) {\n  const stage = document.createElement("div");\n  stage.style.cssText = `position:absolute;left:0;top:0;width:${scene.width}px;height:${scene.height}px;transform-origin:0 0;overflow:hidden`;\n  const scaleOf = opts.scale || (() => (window.innerWidth || scene.width) / scene.width);\n  const fit = () => { stage.style.transform = `scale(${scaleOf()})`; };\n  fit();\n  const onResize = () => fit();\n  window.addEventListener("resize", onResize);\n  const items = [];\n  for (const e of scene.elements || []) {\n    const wrap = document.createElement("div");\n    applyBox(wrap, e);\n    wrap.style.opacity = String(e.opacity ?? 1);\n    wrap.dataset.elementId = e.id;\n    let inner;\n    if (e.kind === "image") {\n      inner = document.createElement("img");\n      inner.alt = "";\n      if (e.file && opts.resolveAsset) inner.src = opts.resolveAsset(e.file);\n    } else {\n      inner = document.createElement("div");\n    }\n    inner.style.cssText += ";width:100%;height:100%;box-sizing:border-box";\n    if (e.kind === "zone") {\n      wrap.setAttribute("data-ograf-zone", e.zone || "zone");\n      if (opts.editor) inner.style.outline = "2px dashed #00c8ff";\n    }\n    paint(inner, e, data);\n    wrap.append(inner);\n    stage.append(wrap);\n    items.push({ e, wrap, inner, anims: [] });\n  }\n  root.append(stage);\n  const clear = (it) => { for (const a of it.anims) a.cancel(); it.anims = []; };\n  const run = (it, dir) => {\n    const spec = it.e.anim && it.e.anim[dir];\n    const kf = spec ? keyframesFor(spec.type, dir) : null;\n    clear(it);\n    if (!kf) { it.inner.style.visibility = dir === "in" ? "visible" : "hidden"; return Promise.resolve(); }\n    it.inner.style.visibility = "visible";\n    const a = it.inner.animate(kf, { duration: spec.ms ?? 400, delay: spec.delay ?? 0, easing: spec.ease || "ease-out", fill: "both" });\n    it.anims.push(a);\n    return a.finished.catch(() => {});\n  };\n  if (!opts.editor) for (const it of items) it.inner.style.visibility = "hidden";\n  return {\n    stage,\n    play: () => Promise.all(items.map((it) => run(it, "in"))),\n    stop: () => Promise.all(items.map((it) => run(it, "out"))),\n    update(next) { for (const it of items) paint(it.inner, it.e, next); },\n    destroy() { window.removeEventListener("resize", onResize); for (const it of items) clear(it); stage.remove(); },\n  };\n}\n\n/** Die Web-Component-Klasse, die OGraf als `default export` erwartet. `base` = `import.meta.url` des Hauptmoduls. */\nexport function createSceneElement(scene, base) {\n  return class SceneGraphic extends HTMLElement {\n    constructor() {\n      super();\n      const sr = this.attachShadow({ mode: "open" });\n      const st = document.createElement("style");\n      st.textContent = ":host{position:fixed;inset:0;display:block;pointer-events:none}";\n      sr.append(st);\n    }\n    async load(p) {\n      this._data = (p && p.data) || {};\n      this._h = renderScene(this.shadowRoot, scene, this._data, { resolveAsset: (f) => new URL(f, base).href });\n      return { statusCode: 200 };\n    }\n    async dispose() { if (this._h) this._h.destroy(); return { statusCode: 200 }; }\n    async playAction() { await this._h.play(); return { statusCode: 200, currentStep: 0 }; }\n    async stopAction() { await this._h.stop(); return { statusCode: 200 }; }\n    async updateAction(p) { this._data = { ...this._data, ...((p && p.data) || {}) }; this._h.update(this._data); return { statusCode: 200 }; }\n    async customAction() { return { statusCode: 200 }; }\n  };\n}\n';
+var runtime_default = '// Laufzeit der Designer-Vorlagen des OGraf-Editors (Kapitel 90.5). Diese EINE Datei wird\n//  (a) vom Editor f\xFCr die Leinwand-Vorschau benutzt und\n//  (b) als Text in jede mit der Leinwand gebaute Vorlage kopiert (`<id>.js` = diese Datei + `export default createSceneElement(...)`),\n// damit Vorschau und Sendung denselben Code ausf\xFChren. Reines JavaScript ohne Abh\xE4ngigkeiten, ES-Modul.\n// Das Szenenmodell steht in `scene.json` des Pakets (Format `omp-ograf-scene/1`, s. scene.ts).\n\n/** Ersetzt `{{schluessel}}` durch Werte aus `data` (fehlend = leer). */\nexport function bindText(text, data) {\n  return String(text ?? "").replace(/\\{\\{\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*\\}\\}/g, (_, k) => {\n    const v = data ? data[k] : undefined;\n    return v === undefined || v === null ? "" : String(v);\n  });\n}\n\n/** Alle Animationsarten: Anzeigename-Schl\xFCssel \u2192 Start-Keyframes (Zustand \u201Eweg\u201C) und Ziel \u201Eda\u201C. */\nexport const ANIM_TYPES = ["none", "fade", "fromLeft", "fromRight", "fromTop", "fromBottom", "scale", "wipe"];\n\n/** Keyframes f\xFCr Einblenden (`dir` = "in") bzw. Ausblenden ("out", r\xFCckw\xE4rts). `dist` = Weg in Bildpunkten. */\nexport function keyframesFor(type, dir, dist = 80) {\n  const slide = (t) => [{ opacity: 0, transform: t }, { opacity: 1, transform: "none" }];\n  let pair;\n  switch (type) {\n    case "fade": pair = [{ opacity: 0 }, { opacity: 1 }]; break;\n    case "fromLeft": pair = slide(`translateX(${-dist}px)`); break;\n    case "fromRight": pair = slide(`translateX(${dist}px)`); break;\n    case "fromTop": pair = slide(`translateY(${-dist}px)`); break;\n    case "fromBottom": pair = slide(`translateY(${dist}px)`); break;\n    case "scale": pair = slide("scale(0.8)"); break;\n    case "wipe": pair = [{ clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0 0 0)" }]; break;\n    default: return null;\n  }\n  return dir === "in" ? pair : [pair[1], pair[0]];\n}\n\n/** Schrift verkleinern, bis der Text ins Feld passt (nur bei `e.autofit`, nicht unter `e.minSize`). Braucht ein eingeh\xE4ngtes Element. */\nexport function autofit(inner, e) {\n  if (e.kind !== "text" || !e.autofit) return;\n  let size = e.size || 40;\n  const min = e.minSize || 12;\n  const s = inner.style;\n  const keep = s.alignItems;\n  s.alignItems = "flex-start"; // sonst z\xE4hlt der \xDCberstand nach oben nicht in scrollHeight\n  s.fontSize = `${size}px`;\n  for (let guard = 0; guard < 60 && size > min && (inner.scrollHeight > inner.clientHeight + 1 || inner.scrollWidth > inner.clientWidth + 1); guard++) {\n    size = Math.max(min, size - Math.max(1, Math.round(size * 0.04)));\n    s.fontSize = `${size}px`;\n  }\n  s.alignItems = keep;\n}\n\nconst FONTS = new Set();\n/** Schriftdateien der Szene als Schriftfamilien anmelden; Ergebnis: Versprechen, das nach dem Laden aller erf\xFCllt ist. */\nfunction loadFonts(scene, resolveAsset) {\n  if (typeof FontFace === "undefined" || !document.fonts || !resolveAsset) return Promise.resolve();\n  const jobs = [];\n  for (const f of scene.fonts || []) {\n    const url = resolveAsset(f.file);\n    if (!url) continue;\n    const key = `${f.family}|${url}`;\n    if (FONTS.has(key)) continue;\n    FONTS.add(key);\n    const face = new FontFace(f.family, `url("${url}")`);\n    document.fonts.add(face);\n    jobs.push(face.load().catch(() => {}));\n  }\n  return Promise.all(jobs).then(() => {});\n}\n\nfunction applyBox(el, e) {\n  const s = el.style;\n  s.position = "absolute";\n  s.left = `${e.x}px`;\n  s.top = `${e.y}px`;\n  s.width = `${e.w}px`;\n  s.height = `${e.h}px`;\n  s.transform = e.rotation ? `rotate(${e.rotation}deg)` : "none";\n  s.boxSizing = "border-box";\n}\n\nfunction paint(inner, e, data) {\n  const s = inner.style;\n  const color = (c) => bindText(c, data);\n  if (e.kind === "rect") {\n    s.background = color(e.fill || "transparent");\n    s.borderRadius = `${e.radius || 0}px`;\n    s.border = e.strokeW ? `${e.strokeW}px solid ${color(e.stroke || "#fff")}` : "none";\n  } else if (e.kind === "text") {\n    inner.textContent = bindText(e.text, data);\n    s.font = `${e.weight || 400} ${e.size || 40}px/${e.lineHeight || 1.2} ${e.font || "system-ui, sans-serif"}`;\n    s.color = color(e.color || "#fff");\n    s.textAlign = e.align || "left";\n    s.whiteSpace = "pre-wrap";\n    s.overflow = "hidden";\n    s.display = "flex";\n    s.alignItems = { top: "flex-start", middle: "center", bottom: "flex-end" }[e.valign || "top"];\n    s.justifyContent = { left: "flex-start", center: "center", right: "flex-end" }[e.align || "left"];\n    s.background = e.bg ? color(e.bg) : "transparent";\n    s.padding = `${e.padding || 0}px`;\n    s.borderRadius = `${e.radius || 0}px`;\n  } else if (e.kind === "image") {\n    s.objectFit = e.fit || "contain";\n    s.borderRadius = `${e.radius || 0}px`;\n  }\n}\n\n/**\n * Baut die Szene in `root` (ShadowRoot oder Element) und liefert den Griff `{play, stop, update, destroy, stage}`.\n * `opts.resolveAsset(datei) \u2192 URL`, `opts.scale() \u2192 Faktor` (Standard: Breite des Fensters / Szenenbreite),\n * `opts.editor = true` zeigt Zonen als gestrichelte Rahmen und spielt keine Animation (alles sichtbar).\n */\nexport function renderScene(root, scene, data, opts = {}) {\n  const stage = document.createElement("div");\n  stage.style.cssText = `position:absolute;left:0;top:0;width:${scene.width}px;height:${scene.height}px;transform-origin:0 0;overflow:hidden`;\n  const scaleOf = opts.scale || (() => (window.innerWidth || scene.width) / scene.width);\n  const fit = () => { stage.style.transform = `scale(${scaleOf()})`; };\n  fit();\n  const onResize = () => fit();\n  window.addEventListener("resize", onResize);\n  const items = [];\n  for (const e of scene.elements || []) {\n    const wrap = document.createElement("div");\n    applyBox(wrap, e);\n    wrap.style.opacity = String(e.opacity ?? 1);\n    wrap.dataset.elementId = e.id;\n    let inner;\n    if (e.kind === "image") {\n      inner = document.createElement("img");\n      inner.alt = "";\n      if (e.file && opts.resolveAsset) inner.src = opts.resolveAsset(e.file);\n    } else {\n      inner = document.createElement("div");\n    }\n    inner.style.cssText += ";width:100%;height:100%;box-sizing:border-box";\n    if (e.kind === "zone") {\n      wrap.setAttribute("data-ograf-zone", e.zone || "zone");\n      if (opts.editor) inner.style.outline = "2px dashed #00c8ff";\n    }\n    paint(inner, e, data);\n    wrap.append(inner);\n    stage.append(wrap);\n    items.push({ e, wrap, inner, anims: [] });\n  }\n  root.append(stage);\n  const fitAll = () => { for (const it of items) autofit(it.inner, it.e); };\n  fitAll();\n  const ready = loadFonts(scene, opts.resolveAsset).then(fitAll);\n  const clear = (it) => { for (const a of it.anims) a.cancel(); it.anims = []; };\n  const run = (it, dir) => {\n    const spec = it.e.anim && it.e.anim[dir];\n    const kf = spec ? keyframesFor(spec.type, dir) : null;\n    clear(it);\n    if (!kf) { it.inner.style.visibility = dir === "in" ? "visible" : "hidden"; return Promise.resolve(); }\n    it.inner.style.visibility = "visible";\n    const a = it.inner.animate(kf, { duration: spec.ms ?? 400, delay: spec.delay ?? 0, easing: spec.ease || "ease-out", fill: "both" });\n    it.anims.push(a);\n    return a.finished.catch(() => {});\n  };\n  if (!opts.editor) for (const it of items) it.inner.style.visibility = "hidden";\n  return {\n    stage,\n    ready,\n    play: () => Promise.all(items.map((it) => run(it, "in"))),\n    stop: () => Promise.all(items.map((it) => run(it, "out"))),\n    update(next) { for (const it of items) { paint(it.inner, it.e, next); autofit(it.inner, it.e); } },\n    destroy() { window.removeEventListener("resize", onResize); for (const it of items) clear(it); stage.remove(); },\n  };\n}\n\n/** Die Web-Component-Klasse, die OGraf als `default export` erwartet. `base` = `import.meta.url` des Hauptmoduls. */\nexport function createSceneElement(scene, base) {\n  return class SceneGraphic extends HTMLElement {\n    constructor() {\n      super();\n      const sr = this.attachShadow({ mode: "open" });\n      const st = document.createElement("style");\n      st.textContent = ":host{position:fixed;inset:0;display:block;pointer-events:none}";\n      sr.append(st);\n    }\n    async load(p) {\n      this._data = (p && p.data) || {};\n      this._h = renderScene(this.shadowRoot, scene, this._data, { resolveAsset: (f) => new URL(f, base).href });\n      await this._h.ready;\n      return { statusCode: 200 };\n    }\n    async dispose() { if (this._h) this._h.destroy(); return { statusCode: 200 }; }\n    async playAction() { await this._h.play(); return { statusCode: 200, currentStep: 0 }; }\n    async stopAction() { await this._h.stop(); return { statusCode: 200 }; }\n    async updateAction(p) { this._data = { ...this._data, ...((p && p.data) || {}) }; this._h.update(this._data); return { statusCode: 200 }; }\n    async customAction() { return { statusCode: 200 }; }\n  };\n}\n';
 
 // ui/modules/ograf-editor/runtime.js
 function bindText(text, data) {
@@ -63,6 +63,38 @@ function keyframesFor(type, dir, dist = 80) {
     pair[1],
     pair[0]
   ];
+}
+function autofit(inner, e) {
+  if (e.kind !== "text" || !e.autofit) return;
+  let size = e.size || 40;
+  const min = e.minSize || 12;
+  const s = inner.style;
+  const keep = s.alignItems;
+  s.alignItems = "flex-start";
+  s.fontSize = `${size}px`;
+  for (let guard = 0; guard < 60 && size > min && (inner.scrollHeight > inner.clientHeight + 1 || inner.scrollWidth > inner.clientWidth + 1); guard++) {
+    size = Math.max(min, size - Math.max(1, Math.round(size * 0.04)));
+    s.fontSize = `${size}px`;
+  }
+  s.alignItems = keep;
+}
+var FONTS = /* @__PURE__ */ new Set();
+function loadFonts(scene, resolveAsset) {
+  if (typeof FontFace === "undefined" || !document.fonts || !resolveAsset) return Promise.resolve();
+  const jobs = [];
+  for (const f of scene.fonts || []) {
+    const url = resolveAsset(f.file);
+    if (!url) continue;
+    const key = `${f.family}|${url}`;
+    if (FONTS.has(key)) continue;
+    FONTS.add(key);
+    const face = new FontFace(f.family, `url("${url}")`);
+    document.fonts.add(face);
+    jobs.push(face.load().catch(() => {
+    }));
+  }
+  return Promise.all(jobs).then(() => {
+  });
 }
 function applyBox(el, e) {
   const s = el.style;
@@ -147,6 +179,11 @@ function renderScene(root, scene, data, opts = {}) {
     });
   }
   root.append(stage);
+  const fitAll = () => {
+    for (const it of items) autofit(it.inner, it.e);
+  };
+  fitAll();
+  const ready = loadFonts(scene, opts.resolveAsset).then(fitAll);
   const clear = (it) => {
     for (const a of it.anims) a.cancel();
     it.anims = [];
@@ -173,10 +210,14 @@ function renderScene(root, scene, data, opts = {}) {
   if (!opts.editor) for (const it of items) it.inner.style.visibility = "hidden";
   return {
     stage,
+    ready,
     play: () => Promise.all(items.map((it) => run(it, "in"))),
     stop: () => Promise.all(items.map((it) => run(it, "out"))),
     update(next) {
-      for (const it of items) paint(it.inner, it.e, next);
+      for (const it of items) {
+        paint(it.inner, it.e, next);
+        autofit(it.inner, it.e);
+      }
     },
     destroy() {
       window.removeEventListener("resize", onResize);
@@ -630,6 +671,12 @@ function parseScene(text) {
   const o = v;
   if (!o || o.format !== SCENE_FORMAT || !Array.isArray(o.elements)) return null;
   const scene = newScene(Math.max(16, num2(o.width, 1920)), Math.max(16, num2(o.height, 1080)));
+  if (Array.isArray(o.fonts)) {
+    scene.fonts = o.fonts.filter((f) => f && typeof f.family === "string" && /^[^"'\\;{}]+$/.test(f.family) && typeof f.file === "string" && /^[A-Za-z0-9._-]+$/.test(f.file)).map((f) => ({
+      family: f.family,
+      file: f.file
+    }));
+  }
   const seen = /* @__PURE__ */ new Set();
   for (const raw of o.elements) {
     const e = raw;
@@ -798,6 +845,120 @@ function resizeBox(b, handle, dx, dy, keepRatio = false) {
     y: Math.round(y),
     w: Math.round(w),
     h: Math.round(h)
+  };
+}
+function resizeRotated(b, rotation, handle, dx, dy, keepRatio = false) {
+  const a = rotation * Math.PI / 180;
+  const c = Math.cos(a), sn = Math.sin(a);
+  const ldx = dx * c + dy * sn, ldy = -dx * sn + dy * c;
+  const nb = resizeBox({
+    x: 0,
+    y: 0,
+    w: b.w,
+    h: b.h
+  }, handle, ldx, ldy, keepRatio);
+  const shiftX = nb.x + nb.w / 2 - b.w / 2, shiftY = nb.y + nb.h / 2 - b.h / 2;
+  const cx = b.x + b.w / 2 + shiftX * c - shiftY * sn;
+  const cy = b.y + b.h / 2 + shiftX * sn + shiftY * c;
+  return {
+    x: Math.round(cx - nb.w / 2),
+    y: Math.round(cy - nb.h / 2),
+    w: nb.w,
+    h: nb.h
+  };
+}
+function angleFor(b, px, py, snap = false) {
+  let deg = Math.atan2(py - (b.y + b.h / 2), px - (b.x + b.w / 2)) * 180 / Math.PI + 90;
+  deg = ((deg + 180) % 360 + 360) % 360 - 180;
+  if (snap) deg = Math.round(deg / 15) * 15;
+  return Math.round(deg * 10) / 10;
+}
+function boundsOf(s, ids) {
+  const els = s.elements.filter((e) => ids.includes(e.id));
+  if (!els.length) return null;
+  const x1 = Math.min(...els.map((e) => e.x)), y1 = Math.min(...els.map((e) => e.y));
+  const x2 = Math.max(...els.map((e) => e.x + e.w)), y2 = Math.max(...els.map((e) => e.y + e.h));
+  return {
+    x: x1,
+    y: y1,
+    w: x2 - x1,
+    h: y2 - y1
+  };
+}
+function elementsInRect(s, r) {
+  return s.elements.filter((e) => e.x < r.x + r.w && e.x + e.w > r.x && e.y < r.y + r.h && e.y + e.h > r.y).map((e) => e.id);
+}
+function alignGroup(s, ids, how) {
+  const b = boundsOf(s, ids);
+  if (!b || ids.length < 2) return s;
+  return withElements(s, s.elements.map((e) => {
+    if (!ids.includes(e.id)) return e;
+    switch (how) {
+      case "left":
+        return {
+          ...e,
+          x: b.x
+        };
+      case "hcenter":
+        return {
+          ...e,
+          x: Math.round(b.x + (b.w - e.w) / 2)
+        };
+      case "right":
+        return {
+          ...e,
+          x: b.x + b.w - e.w
+        };
+      case "top":
+        return {
+          ...e,
+          y: b.y
+        };
+      case "vcenter":
+        return {
+          ...e,
+          y: Math.round(b.y + (b.h - e.h) / 2)
+        };
+      default:
+        return {
+          ...e,
+          y: b.y + b.h - e.h
+        };
+    }
+  }));
+}
+function distribute(s, ids, axis) {
+  const els = s.elements.filter((e) => ids.includes(e.id));
+  if (els.length < 3) return s;
+  const size = axis === "x" ? "w" : "h";
+  const sorted = [
+    ...els
+  ].sort((a, b) => a[axis] - b[axis]);
+  const first = sorted[0], last = sorted[sorted.length - 1];
+  const total = last[axis] + last[size] - first[axis];
+  const gap = (total - sorted.reduce((a, e) => a + e[size], 0)) / (sorted.length - 1);
+  const pos = /* @__PURE__ */ new Map();
+  let at = first[axis];
+  for (const e of sorted) {
+    pos.set(e.id, Math.round(at));
+    at += e[size] + gap;
+  }
+  return withElements(s, s.elements.map((e) => pos.has(e.id) ? {
+    ...e,
+    [axis]: pos.get(e.id)
+  } : e));
+}
+function duplicateMany(s, ids) {
+  let cur = s;
+  const out = [];
+  for (const id of ids) {
+    const r = duplicateElement(cur, id);
+    cur = r.scene;
+    if (r.id) out.push(r.id);
+  }
+  return {
+    scene: cur,
+    ids: out
   };
 }
 function snapBox(b, s, skipIds, threshold) {
@@ -1216,6 +1377,17 @@ var messages = {
     anim_fromBottom: "von unten",
     anim_scale: "Zoom",
     anim_wipe: "Wischen",
+    fonts: "Schriften",
+    autofit: "Passend verkleinern / min.",
+    groupCount: "{n} Elemente gew\xE4hlt",
+    alignLeft: "Links b\xFCndig",
+    alignHCenter: "Horizontal zentrieren",
+    alignRight: "Rechts b\xFCndig",
+    alignTop: "Oben b\xFCndig",
+    alignVCenter: "Vertikal zentrieren",
+    alignBottom: "Unten b\xFCndig",
+    distributeX: "Waagerecht gleichm\xE4\xDFig verteilen",
+    distributeY: "Senkrecht gleichm\xE4\xDFig verteilen",
     generated: "Erzeugt aus der Leinwand \u2014 nicht von Hand bearbeiten."
   },
   en: {
@@ -1332,6 +1504,17 @@ var messages = {
     anim_fromBottom: "from bottom",
     anim_scale: "Zoom",
     anim_wipe: "Wipe",
+    fonts: "Fonts",
+    autofit: "Shrink to fit / min.",
+    groupCount: "{n} elements selected",
+    alignLeft: "Align left",
+    alignHCenter: "Centre horizontally",
+    alignRight: "Align right",
+    alignTop: "Align top",
+    alignVCenter: "Centre vertically",
+    alignBottom: "Align bottom",
+    distributeX: "Distribute horizontally",
+    distributeY: "Distribute vertically",
     generated: "Generated from the canvas \u2014 do not edit by hand."
   }
 };
@@ -1375,7 +1558,7 @@ var CanvasEditor = class {
   #root;
   #host;
   #hist;
-  #sel = "";
+  #selIds = [];
   #vp;
   #ov;
   #side;
@@ -1385,6 +1568,7 @@ var CanvasEditor = class {
   #handle = null;
   #guides = [];
   #drag = null;
+  #marquee = null;
   #preview = false;
   #ro;
   #snap = true;
@@ -1403,6 +1587,10 @@ var CanvasEditor = class {
   get scene() {
     return this.#hist.value;
   }
+  /** Nach Änderungen außerhalb (neue Bilder/Schriften im Paket) Listen und Vorschau neu aufbauen. */
+  refresh() {
+    this.#redraw();
+  }
   destroy() {
     this.#ro.disconnect();
     this.#handle?.destroy();
@@ -1410,7 +1598,7 @@ var CanvasEditor = class {
   /** Szene von außen ersetzen (z. B. nach Verwerfen). */
   setScene(s) {
     this.#hist = new History(s);
-    if (!s.elements.some((e) => e.id === this.#sel)) this.#sel = "";
+    this.#pick(this.#selIds);
     this.#redraw();
   }
   // ── Aufbau ──
@@ -1479,19 +1667,25 @@ var CanvasEditor = class {
     this.#drawLayers();
     this.#drawProps();
   }
+  /** Das einzelne gewählte Element (nur bei genau einer Auswahl). */
   #selected() {
-    return this.scene.elements.find((e) => e.id === this.#sel);
+    return this.#selIds.length === 1 ? this.scene.elements.find((e) => e.id === this.#selIds[0]) : void 0;
+  }
+  #pick(ids) {
+    this.#selIds = ids.filter((id) => this.scene.elements.some((e) => e.id === id));
   }
   #drawOverlay() {
     this.#ov.innerHTML = "";
     if (this.#preview) return;
-    const e = this.#selected();
     const k = this.#scale;
-    if (e) {
+    const single = this.#selected();
+    for (const id of this.#selIds) {
+      const e = this.scene.elements.find((x) => x.id === id);
+      if (!e) continue;
       const sel = document.createElement("div");
       sel.className = "sel";
       sel.style.cssText = `left:${e.x * k}px;top:${e.y * k}px;width:${e.w * k}px;height:${e.h * k}px;transform:rotate(${e.rotation}deg)`;
-      if (!e.rotation) {
+      if (e === single) {
         for (const h of HANDLES) {
           const d = document.createElement("div");
           d.className = "hd";
@@ -1501,8 +1695,31 @@ var CanvasEditor = class {
           d.style.top = h.includes("n") ? "0" : h.includes("s") ? "100%" : "50%";
           sel.append(d);
         }
+        const rot = document.createElement("div");
+        rot.className = "hd rot";
+        rot.dataset.handle = "rot";
+        rot.style.cssText = "left:50%;top:-22px;border-radius:50%;cursor:grab";
+        const stem = document.createElement("div");
+        stem.style.cssText = "position:absolute;left:50%;top:-17px;width:1px;height:17px;background:#00c8ff";
+        sel.append(stem, rot);
       }
       this.#ov.append(sel);
+    }
+    if (this.#selIds.length > 1) {
+      const bb = boundsOf(this.scene, this.#selIds);
+      if (bb) {
+        const g = document.createElement("div");
+        g.className = "sel";
+        g.style.cssText = `left:${bb.x * k}px;top:${bb.y * k}px;width:${bb.w * k}px;height:${bb.h * k}px;border-style:dashed`;
+        this.#ov.append(g);
+      }
+    }
+    if (this.#marquee) {
+      const m = this.#marquee;
+      const d = document.createElement("div");
+      d.className = "sel";
+      d.style.cssText = `left:${m.x * k}px;top:${m.y * k}px;width:${m.w * k}px;height:${m.h * k}px;background:rgba(0,200,255,.12)`;
+      this.#ov.append(d);
     }
     for (const g of this.#guides) {
       const d = document.createElement("div");
@@ -1515,7 +1732,7 @@ var CanvasEditor = class {
     const t = this.#tools;
     t.innerHTML = "";
     for (const k of KINDS) t.append(this.#btn(`\uFF0B ${tr(KIND_LABEL[k])}`, () => this.#add(k)));
-    const sel = !!this.#selected();
+    const sel = this.#selIds.length > 0;
     t.append(this.#btn("\u21B6", () => this.#undo(), tr("undo"), ""), this.#btn("\u21B7", () => this.#redo(), tr("redo"), ""), this.#btn("\u29C9", () => this.#dup(), tr("duplicate")), this.#btn("\u2715", () => this.#del(), tr("delete")), this.#btn("\u25B6 / \u25A0", () => this.#togglePreview(), tr("previewHint"), this.#preview ? "on" : ""), this.#btn("\u2317", () => {
       this.#snap = !this.#snap;
       this.#drawTools();
@@ -1534,7 +1751,7 @@ var CanvasEditor = class {
     ].reverse()) {
       const b = document.createElement("button");
       b.type = "button";
-      b.className = `ly${e.id === this.#sel ? " on" : ""}`;
+      b.className = `ly${this.#selIds.includes(e.id) ? " on" : ""}`;
       const icon = {
         text: "T",
         rect: "\u25AD",
@@ -1567,19 +1784,67 @@ var CanvasEditor = class {
         });
         b.append(m);
       }
-      b.addEventListener("click", () => {
-        this.#sel = e.id;
+      b.addEventListener("click", (ev) => {
+        this.#selIds = ev.shiftKey ? this.#selIds.includes(e.id) ? this.#selIds.filter((x) => x !== e.id) : [
+          ...this.#selIds,
+          e.id
+        ] : [
+          e.id
+        ];
         this.#redraw();
       });
       box.append(b);
     }
     if (!this.scene.elements.length) box.append(document.createTextNode(tr("canvasEmpty")));
+    this.#drawFonts();
+  }
+  #fontBox;
+  #drawFonts() {
+    if (!this.#fontBox) {
+      this.#fontBox = document.createElement("div");
+      this.#fontBox.className = "col";
+      this.#layers.after(this.#fontBox);
+    }
+    const box = this.#fontBox;
+    box.innerHTML = "";
+    const files = this.#host.fonts();
+    if (!files.length) return;
+    const h = document.createElement("div");
+    h.textContent = tr("fonts");
+    h.style.cssText = "color:var(--omp-text-dim,#9aa0a6);font-size:11px;text-transform:uppercase;letter-spacing:.05em";
+    box.append(h);
+    for (const f of files) {
+      const used = (this.scene.fonts ?? []).find((x) => x.file === f);
+      const row = document.createElement("label");
+      row.style.cssText = "display:flex;gap:6px;align-items:center";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.style.width = "auto";
+      cb.checked = !!used;
+      cb.addEventListener("change", () => {
+        const fonts = (this.scene.fonts ?? []).filter((x) => x.file !== f);
+        if (cb.checked) fonts.push({
+          family: f.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9 _-]/g, " ").trim() || "Schrift",
+          file: f
+        });
+        this.#commit({
+          ...this.scene,
+          fonts
+        });
+      });
+      row.append(cb, document.createTextNode(used ? `${f} \u2192 \u201E${used.family}\u201C` : f));
+      box.append(row);
+    }
   }
   // ── Eigenschaften ──
   #drawProps() {
     const side = this.#side;
     side.innerHTML = "";
     const e = this.#selected();
+    if (this.#selIds.length > 1) {
+      this.#drawGroupProps(side);
+      return;
+    }
     if (!e) {
       side.append(document.createTextNode(tr("noSelection")));
       return;
@@ -1692,6 +1957,10 @@ var CanvasEditor = class {
           });
         }));
       }
+      const own = (this.scene.fonts ?? []).map((f) => [
+        `"${f.family}", system-ui, sans-serif`,
+        f.family
+      ]);
       row(tr("font"), select(e.font ?? "", [
         [
           "system-ui, sans-serif",
@@ -1708,7 +1977,8 @@ var CanvasEditor = class {
         [
           "Impact, sans-serif",
           "Impact"
-        ]
+        ],
+        ...own
       ], (s) => patch({
         font: s
       })));
@@ -1758,6 +2028,16 @@ var CanvasEditor = class {
       })));
       row(tr("background"), ...color(e.bg, (s) => patch({
         bg: s
+      })));
+      const af = document.createElement("input");
+      af.type = "checkbox";
+      af.style.width = "auto";
+      af.checked = !!e.autofit;
+      af.addEventListener("change", () => patch({
+        autofit: af.checked
+      }));
+      row(tr("autofit"), af, number(e.minSize ?? 12, (n) => patch({
+        minSize: Math.max(4, n)
       })));
     } else if (e.kind === "rect") {
       head(tr("kRect"));
@@ -1871,6 +2151,18 @@ var CanvasEditor = class {
     }
     side.append(pp);
   }
+  #drawGroupProps(side) {
+    const info = document.createElement("div");
+    info.textContent = tr("groupCount").replace("{n}", String(this.#selIds.length));
+    const bar = document.createElement("div");
+    bar.className = "tools";
+    const al = (how, l, ttl) => this.#btn(l, () => this.#commit(alignGroup(this.scene, this.#selIds, how)), ttl);
+    bar.append(al("left", "\u21E4", tr("alignLeft")), al("hcenter", "\u2194", tr("alignHCenter")), al("right", "\u21E5", tr("alignRight")), al("top", "\u2912", tr("alignTop")), al("vcenter", "\u2195", tr("alignVCenter")), al("bottom", "\u2913", tr("alignBottom")));
+    const dist = document.createElement("div");
+    dist.className = "tools";
+    dist.append(this.#btn("\u21F9", () => this.#commit(distribute(this.scene, this.#selIds, "x")), tr("distributeX")), this.#btn("\u21F3", () => this.#commit(distribute(this.scene, this.#selIds, "y")), tr("distributeY")));
+    side.append(info, bar, dist);
+  }
   // ── Änderungen ──
   /** Änderung ohne Verlaufseintrag (während des Ziehens). */
   #live(s) {
@@ -1897,29 +2189,29 @@ var CanvasEditor = class {
   }
   #add(kind) {
     const e = newElement(kind, this.scene);
-    this.#sel = e.id;
+    this.#selIds = [
+      e.id
+    ];
     this.#commit(addElement(this.scene, e));
     this.#vp.focus();
   }
   #del() {
-    if (!this.#sel) return;
-    const id = this.#sel;
-    this.#sel = "";
-    this.#commit(removeElements(this.scene, [
-      id
-    ]));
+    if (!this.#selIds.length) return;
+    const ids = this.#selIds;
+    this.#selIds = [];
+    this.#commit(removeElements(this.scene, ids));
   }
   #dup() {
-    if (!this.#sel) return;
-    const r = duplicateElement(this.scene, this.#sel);
-    this.#sel = r.id;
+    if (!this.#selIds.length) return;
+    const r = duplicateMany(this.scene, this.#selIds);
+    this.#selIds = r.ids;
     this.#commit(r.scene);
   }
   #undo() {
     if (!this.#hist.canUndo) return;
     this.#hist.undo();
     this.#host.onChange(this.scene);
-    if (!this.#selected()) this.#sel = "";
+    this.#pick(this.#selIds);
     this.#redraw();
   }
   #redo() {
@@ -1951,16 +2243,27 @@ var CanvasEditor = class {
     const target = ev.target;
     const h = target.dataset?.handle;
     const p = this.#toScene(ev);
-    let id = this.#sel;
+    let id = this.#selIds[0] ?? "";
     let mode = "move";
     if (h && this.#selected()) mode = h;
     else {
-      id = hitTest(this.scene, p.x, p.y) ?? "";
-      this.#sel = id;
-    }
-    if (!id) {
-      this.#redraw();
-      return;
+      const hit = hitTest(this.scene, p.x, p.y) ?? "";
+      if (hit && ev.shiftKey) {
+        this.#selIds = this.#selIds.includes(hit) ? this.#selIds.filter((x) => x !== hit) : [
+          ...this.#selIds,
+          hit
+        ];
+        id = hit;
+      } else if (hit) {
+        if (!this.#selIds.includes(hit)) this.#selIds = [
+          hit
+        ];
+        id = hit;
+      } else {
+        if (!ev.shiftKey) this.#selIds = [];
+        mode = "marquee";
+        id = "";
+      }
     }
     this.#drag = {
       mode,
@@ -1968,7 +2271,8 @@ var CanvasEditor = class {
       sy: ev.clientY,
       base: this.scene,
       id,
-      changed: false
+      changed: false,
+      add: ev.shiftKey
     };
     try {
       this.#vp.setPointerCapture(ev.pointerId);
@@ -1984,36 +2288,57 @@ var CanvasEditor = class {
     if (!d) return;
     const dx = (ev.clientX - d.sx) / this.#scale;
     const dy = (ev.clientY - d.sy) / this.#scale;
-    const base = d.base.elements.find((e) => e.id === d.id);
-    if (!base) return;
-    let box = {
-      x: base.x,
-      y: base.y,
-      w: base.w,
-      h: base.h
-    };
-    if (d.mode === "move") box = {
-      ...box,
-      x: base.x + dx,
-      y: base.y + dy
-    };
-    else box = resizeBox(box, d.mode, dx, dy, ev.shiftKey);
-    this.#guides = [];
-    if (this.#snap && !ev.altKey) {
-      const sn = snapBox(box, d.base, [
-        d.id
-      ], 8 / this.#scale);
-      if (d.mode === "move") box = sn.box;
-      this.#guides = sn.guides;
-    }
-    box = {
-      x: Math.round(box.x),
-      y: Math.round(box.y),
-      w: Math.round(box.w),
-      h: Math.round(box.h)
-    };
     d.changed = d.changed || Math.abs(dx) + Math.abs(dy) > 0.5;
-    this.#hist.replaceCurrent(updateElement(d.base, d.id, box));
+    if (d.mode === "marquee") {
+      const p0 = {
+        x: (d.sx - this.#vp.getBoundingClientRect().left) / this.#scale,
+        y: (d.sy - this.#vp.getBoundingClientRect().top) / this.#scale
+      };
+      this.#marquee = {
+        x: Math.min(p0.x, p0.x + dx),
+        y: Math.min(p0.y, p0.y + dy),
+        w: Math.abs(dx),
+        h: Math.abs(dy)
+      };
+      this.#drawOverlay();
+      return;
+    }
+    if (d.mode === "move") {
+      const ids = this.#selIds;
+      const bb = boundsOf(d.base, ids);
+      if (!bb) return;
+      let box = {
+        ...bb,
+        x: bb.x + dx,
+        y: bb.y + dy
+      };
+      this.#guides = [];
+      if (this.#snap && !ev.altKey) {
+        const sn = snapBox(box, d.base, ids, 8 / this.#scale);
+        box = sn.box;
+        this.#guides = sn.guides;
+      }
+      const mx = Math.round(box.x - bb.x), my = Math.round(box.y - bb.y);
+      this.#hist.replaceCurrent(moveElements(d.base, ids, mx, my));
+    } else {
+      const base = d.base.elements.find((e) => e.id === d.id);
+      if (!base) return;
+      if (d.mode === "rot") {
+        const p = this.#toScene(ev);
+        this.#hist.replaceCurrent(updateElement(d.base, d.id, {
+          rotation: angleFor(base, p.x, p.y, ev.shiftKey)
+        }));
+      } else {
+        const b0 = {
+          x: base.x,
+          y: base.y,
+          w: base.w,
+          h: base.h
+        };
+        const box = base.rotation ? resizeRotated(b0, base.rotation, d.mode, dx, dy, ev.shiftKey) : resizeBox(b0, d.mode, dx, dy, ev.shiftKey);
+        this.#hist.replaceCurrent(updateElement(d.base, d.id, box));
+      }
+    }
     this.#host.onChange(this.scene);
     this.#redrawStage();
   }
@@ -2021,7 +2346,22 @@ var CanvasEditor = class {
     const d = this.#drag;
     this.#drag = null;
     this.#guides = [];
+    const m = this.#marquee;
+    this.#marquee = null;
     if (!d) return;
+    if (d.mode === "marquee") {
+      if (m && (m.w > 3 || m.h > 3)) {
+        const inside = elementsInRect(this.scene, m);
+        this.#selIds = d.add ? [
+          .../* @__PURE__ */ new Set([
+            ...this.#selIds,
+            ...inside
+          ])
+        ] : inside;
+      }
+      this.#redraw();
+      return;
+    }
     if (d.changed) {
       const final = this.scene;
       this.#hist.replaceCurrent(d.base);
@@ -2045,7 +2385,11 @@ var CanvasEditor = class {
     } else if (ev.key === "Delete" || ev.key === "Backspace") {
       ev.preventDefault();
       this.#del();
-    } else if (this.#sel && ev.key.startsWith("Arrow")) {
+    } else if (mod && ev.key.toLowerCase() === "a") {
+      ev.preventDefault();
+      this.#selIds = this.scene.elements.map((e) => e.id);
+      this.#redraw();
+    } else if (this.#selIds.length && ev.key.startsWith("Arrow")) {
       ev.preventDefault();
       const n = ev.shiftKey ? 10 : 1;
       const [dx, dy] = {
@@ -2069,9 +2413,7 @@ var CanvasEditor = class {
         0,
         0
       ];
-      this.#commit(moveElements(this.scene, [
-        this.#sel
-      ], dx, dy));
+      this.#commit(moveElements(this.scene, this.#selIds, dx, dy));
     }
   }
 };
@@ -2976,6 +3318,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
         scene,
         images: () => Object.keys(this.#files).filter(isBinaryOrSvg),
         assetUrl: (n) => this.#assetUrl(n),
+        fonts: () => Object.keys(this.#files).filter((n) => /\.(woff2?|ttf)$/i.test(n)),
         params: () => this.#fields.map((f) => ({
           key: f.key,
           kind: f.kind
@@ -2983,13 +3326,20 @@ var OmpOgrafLibrary = class extends HTMLElement {
         data: () => defaultsOf(this.#fields),
         onChange: (sc) => this.#onScene(sc)
       });
-    }
+    } else queueMicrotask(() => this.#canvas?.refresh());
     return this.#canvas.el;
   }
   #assetUrl(name) {
     const c = this.#files[name] ?? "";
     const ext = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
-    if (c.startsWith("base64:")) return `data:image/${ext === "jpg" ? "jpeg" : ext};base64,${c.slice(7)}`;
+    if (c.startsWith("base64:")) {
+      const mime = [
+        "woff",
+        "woff2",
+        "ttf"
+      ].includes(ext) ? `font/${ext}` : `image/${ext === "jpg" ? "jpeg" : ext}`;
+      return `data:${mime};base64,${c.slice(7)}`;
+    }
     if (ext === "svg") return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(c)}`;
     return "";
   }

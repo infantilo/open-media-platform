@@ -2,8 +2,9 @@
 // Vorschau der Ein-/Ausblendung. Gezeichnet wird mit derselben Laufzeit (`runtime.js`) wie in der Sendung. Zustand in `scene.ts`.
 import { renderScene } from "./runtime.js";
 import {
-  addElement, ANIM_TYPES, type Align, alignToScene, duplicateElement, type Guide, HANDLES, type Handle, hitTest, History, KINDS, type Kind,
-  moveElements, newElement, removeElements, reorder, resizeBox, type Scene, type SceneElement, snapBox, updateElement,
+  addElement, alignGroup, ANIM_TYPES, type Align, alignToScene, angleFor, boundsOf, distribute, duplicateMany, elementsInRect, type Guide, HANDLES,
+  type Handle, hitTest, History, KINDS, type Kind, moveElements, newElement, removeElements, reorder, resizeBox, resizeRotated, type Scene,
+  type SceneElement, snapBox, updateElement,
 } from "./scene.ts";
 import { messages } from "./messages.ts";
 
@@ -20,6 +21,8 @@ export interface CanvasHost {
   images: () => string[];
   assetUrl: (name: string) => string;
   params: () => ParamInfo[];
+  /** Schriftdateien des Pakets (Namen). */
+  fonts: () => string[];
   /** Vorgabewerte der Parameter für die Anzeige. */
   data: () => Record<string, unknown>;
   onChange: (scene: Scene) => void;
@@ -58,7 +61,7 @@ export class CanvasEditor {
   #root: ShadowRoot;
   #host: CanvasHost;
   #hist: History<Scene>;
-  #sel = "";
+  #selIds: string[] = [];
   #vp!: HTMLDivElement;
   #ov!: HTMLDivElement;
   #side!: HTMLDivElement;
@@ -67,7 +70,8 @@ export class CanvasEditor {
   #scale = 1;
   #handle: ReturnType<typeof renderScene> | null = null;
   #guides: Guide[] = [];
-  #drag: { mode: "move" | Handle; sx: number; sy: number; base: Scene; id: string; changed: boolean } | null = null;
+  #drag: { mode: "move" | "rot" | "marquee" | Handle; sx: number; sy: number; base: Scene; id: string; changed: boolean; add: boolean } | null = null;
+  #marquee: { x: number; y: number; w: number; h: number } | null = null;
   #preview = false;
   #ro: ResizeObserver;
   #snap = true;
@@ -86,6 +90,10 @@ export class CanvasEditor {
   get scene(): Scene {
     return this.#hist.value;
   }
+  /** Nach Änderungen außerhalb (neue Bilder/Schriften im Paket) Listen und Vorschau neu aufbauen. */
+  refresh() {
+    this.#redraw();
+  }
   destroy() {
     this.#ro.disconnect();
     this.#handle?.destroy();
@@ -93,7 +101,7 @@ export class CanvasEditor {
   /** Szene von außen ersetzen (z. B. nach Verwerfen). */
   setScene(s: Scene) {
     this.#hist = new History(s);
-    if (!s.elements.some((e) => e.id === this.#sel)) this.#sel = "";
+    this.#pick(this.#selIds);
     this.#redraw();
   }
 
@@ -167,19 +175,25 @@ export class CanvasEditor {
     this.#drawLayers();
     this.#drawProps();
   }
+  /** Das einzelne gewählte Element (nur bei genau einer Auswahl). */
   #selected(): SceneElement | undefined {
-    return this.scene.elements.find((e) => e.id === this.#sel);
+    return this.#selIds.length === 1 ? this.scene.elements.find((e) => e.id === this.#selIds[0]) : undefined;
+  }
+  #pick(ids: string[]) {
+    this.#selIds = ids.filter((id) => this.scene.elements.some((e) => e.id === id));
   }
   #drawOverlay() {
     this.#ov.innerHTML = "";
     if (this.#preview) return;
-    const e = this.#selected();
     const k = this.#scale;
-    if (e) {
+    const single = this.#selected();
+    for (const id of this.#selIds) {
+      const e = this.scene.elements.find((x) => x.id === id);
+      if (!e) continue;
       const sel = document.createElement("div");
       sel.className = "sel";
       sel.style.cssText = `left:${e.x * k}px;top:${e.y * k}px;width:${e.w * k}px;height:${e.h * k}px;transform:rotate(${e.rotation}deg)`;
-      if (!e.rotation) {
+      if (e === single) {
         for (const h of HANDLES) {
           const d = document.createElement("div");
           d.className = "hd";
@@ -189,8 +203,31 @@ export class CanvasEditor {
           d.style.top = h.includes("n") ? "0" : h.includes("s") ? "100%" : "50%";
           sel.append(d);
         }
+        const rot = document.createElement("div");
+        rot.className = "hd rot";
+        rot.dataset.handle = "rot";
+        rot.style.cssText = "left:50%;top:-22px;border-radius:50%;cursor:grab";
+        const stem = document.createElement("div");
+        stem.style.cssText = "position:absolute;left:50%;top:-17px;width:1px;height:17px;background:#00c8ff";
+        sel.append(stem, rot);
       }
       this.#ov.append(sel);
+    }
+    if (this.#selIds.length > 1) {
+      const bb = boundsOf(this.scene, this.#selIds);
+      if (bb) {
+        const g = document.createElement("div");
+        g.className = "sel";
+        g.style.cssText = `left:${bb.x * k}px;top:${bb.y * k}px;width:${bb.w * k}px;height:${bb.h * k}px;border-style:dashed`;
+        this.#ov.append(g);
+      }
+    }
+    if (this.#marquee) {
+      const m = this.#marquee;
+      const d = document.createElement("div");
+      d.className = "sel";
+      d.style.cssText = `left:${m.x * k}px;top:${m.y * k}px;width:${m.w * k}px;height:${m.h * k}px;background:rgba(0,200,255,.12)`;
+      this.#ov.append(d);
     }
     for (const g of this.#guides) {
       const d = document.createElement("div");
@@ -203,7 +240,7 @@ export class CanvasEditor {
     const t = this.#tools;
     t.innerHTML = "";
     for (const k of KINDS) t.append(this.#btn(`＋ ${tr(KIND_LABEL[k])}`, () => this.#add(k)));
-    const sel = !!this.#selected();
+    const sel = this.#selIds.length > 0;
     t.append(
       this.#btn("↶", () => this.#undo(), tr("undo"), ""),
       this.#btn("↷", () => this.#redo(), tr("redo"), ""),
@@ -224,7 +261,7 @@ export class CanvasEditor {
     for (const e of [...this.scene.elements].reverse()) {
       const b = document.createElement("button");
       b.type = "button";
-      b.className = `ly${e.id === this.#sel ? " on" : ""}`;
+      b.className = `ly${this.#selIds.includes(e.id) ? " on" : ""}`;
       const icon = { text: "T", rect: "▭", image: "🖼", zone: "⬚" }[e.kind];
       const n = document.createElement("span");
       n.className = "n";
@@ -241,10 +278,46 @@ export class CanvasEditor {
         });
         b.append(m);
       }
-      b.addEventListener("click", () => { this.#sel = e.id; this.#redraw(); });
+      b.addEventListener("click", (ev) => {
+        this.#selIds = ev.shiftKey ? (this.#selIds.includes(e.id) ? this.#selIds.filter((x) => x !== e.id) : [...this.#selIds, e.id]) : [e.id];
+        this.#redraw();
+      });
       box.append(b);
     }
     if (!this.scene.elements.length) box.append(document.createTextNode(tr("canvasEmpty")));
+    this.#drawFonts();
+  }
+  #fontBox?: HTMLDivElement;
+  #drawFonts() {
+    if (!this.#fontBox) {
+      this.#fontBox = document.createElement("div");
+      this.#fontBox.className = "col";
+      this.#layers.after(this.#fontBox);
+    }
+    const box = this.#fontBox;
+    box.innerHTML = "";
+    const files = this.#host.fonts();
+    if (!files.length) return;
+    const h = document.createElement("div");
+    h.textContent = tr("fonts");
+    h.style.cssText = "color:var(--omp-text-dim,#9aa0a6);font-size:11px;text-transform:uppercase;letter-spacing:.05em";
+    box.append(h);
+    for (const f of files) {
+      const used = (this.scene.fonts ?? []).find((x) => x.file === f);
+      const row = document.createElement("label");
+      row.style.cssText = "display:flex;gap:6px;align-items:center";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.style.width = "auto";
+      cb.checked = !!used;
+      cb.addEventListener("change", () => {
+        const fonts = (this.scene.fonts ?? []).filter((x) => x.file !== f);
+        if (cb.checked) fonts.push({ family: f.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9 _-]/g, " ").trim() || "Schrift", file: f });
+        this.#commit({ ...this.scene, fonts });
+      });
+      row.append(cb, document.createTextNode(used ? `${f} → „${used.family}“` : f));
+      box.append(row);
+    }
   }
 
   // ── Eigenschaften ──
@@ -252,6 +325,10 @@ export class CanvasEditor {
     const side = this.#side;
     side.innerHTML = "";
     const e = this.#selected();
+    if (this.#selIds.length > 1) {
+      this.#drawGroupProps(side);
+      return;
+    }
     if (!e) {
       side.append(document.createTextNode(tr("noSelection")));
       return;
@@ -329,12 +406,19 @@ export class CanvasEditor {
       if (keys.length) {
         row(tr("insertParam"), select("", [["", "…"], ...keys.map((k): [string, string] => [k, k])], (k) => { if (k) patch({ text: `${e.text ?? ""}{{${k}}}` }); }));
       }
-      row(tr("font"), select(e.font ?? "", [["system-ui, sans-serif", "Sans"], ["Georgia, serif", "Serif"], ["ui-monospace, monospace", "Mono"], ["Impact, sans-serif", "Impact"]], (s) => patch({ font: s })));
+      const own = (this.scene.fonts ?? []).map((f): [string, string] => [`"${f.family}", system-ui, sans-serif`, f.family]);
+      row(tr("font"), select(e.font ?? "", [["system-ui, sans-serif", "Sans"], ["Georgia, serif", "Serif"], ["ui-monospace, monospace", "Mono"], ["Impact, sans-serif", "Impact"], ...own], (s) => patch({ font: s })));
       row(tr("size"), number(e.size ?? 40, (n) => patch({ size: n })), number(e.weight ?? 400, (n) => patch({ weight: n }), 100));
       row(tr("color"), ...color(e.color, (s) => patch({ color: s })));
       row(tr("hAlign"), select(e.align ?? "left", [["left", "◀"], ["center", "◆"], ["right", "▶"]], (s) => patch({ align: s as "left" })), select(e.valign ?? "top", [["top", "▲"], ["middle", "◆"], ["bottom", "▼"]], (s) => patch({ valign: s as "top" })));
       row(tr("lineHeight"), number(e.lineHeight ?? 1.2, (n) => patch({ lineHeight: n }), 0.1), number(e.padding ?? 0, (n) => patch({ padding: n })));
       row(tr("background"), ...color(e.bg, (s) => patch({ bg: s })));
+      const af = document.createElement("input");
+      af.type = "checkbox";
+      af.style.width = "auto";
+      af.checked = !!e.autofit;
+      af.addEventListener("change", () => patch({ autofit: af.checked }));
+      row(tr("autofit"), af, number(e.minSize ?? 12, (n) => patch({ minSize: Math.max(4, n) })));
     } else if (e.kind === "rect") {
       head(tr("kRect"));
       row(tr("fill"), ...color(e.fill, (s) => patch({ fill: s })));
@@ -366,6 +450,23 @@ export class CanvasEditor {
     side.append(pp);
   }
 
+  #drawGroupProps(side: HTMLElement) {
+    const info = document.createElement("div");
+    info.textContent = tr("groupCount").replace("{n}", String(this.#selIds.length));
+    const bar = document.createElement("div");
+    bar.className = "tools";
+    const al = (how: Align, l: string, ttl: string) => this.#btn(l, () => this.#commit(alignGroup(this.scene, this.#selIds, how)), ttl);
+    bar.append(al("left", "⇤", tr("alignLeft")), al("hcenter", "↔", tr("alignHCenter")), al("right", "⇥", tr("alignRight")),
+      al("top", "⤒", tr("alignTop")), al("vcenter", "↕", tr("alignVCenter")), al("bottom", "⤓", tr("alignBottom")));
+    const dist = document.createElement("div");
+    dist.className = "tools";
+    dist.append(
+      this.#btn("⇹", () => this.#commit(distribute(this.scene, this.#selIds, "x")), tr("distributeX")),
+      this.#btn("⇳", () => this.#commit(distribute(this.scene, this.#selIds, "y")), tr("distributeY")),
+    );
+    side.append(info, bar, dist);
+  }
+
   // ── Änderungen ──
   /** Änderung ohne Verlaufseintrag (während des Ziehens). */
   #live(s: Scene) {
@@ -388,27 +489,27 @@ export class CanvasEditor {
   }
   #add(kind: Kind) {
     const e = newElement(kind, this.scene);
-    this.#sel = e.id;
+    this.#selIds = [e.id];
     this.#commit(addElement(this.scene, e));
     this.#vp.focus();
   }
   #del() {
-    if (!this.#sel) return;
-    const id = this.#sel;
-    this.#sel = "";
-    this.#commit(removeElements(this.scene, [id]));
+    if (!this.#selIds.length) return;
+    const ids = this.#selIds;
+    this.#selIds = [];
+    this.#commit(removeElements(this.scene, ids));
   }
   #dup() {
-    if (!this.#sel) return;
-    const r = duplicateElement(this.scene, this.#sel);
-    this.#sel = r.id;
+    if (!this.#selIds.length) return;
+    const r = duplicateMany(this.scene, this.#selIds);
+    this.#selIds = r.ids;
     this.#commit(r.scene);
   }
   #undo() {
     if (!this.#hist.canUndo) return;
     this.#hist.undo();
     this.#host.onChange(this.scene);
-    if (!this.#selected()) this.#sel = "";
+    this.#pick(this.#selIds);
     this.#redraw();
   }
   #redo() {
@@ -436,20 +537,26 @@ export class CanvasEditor {
     if (this.#preview || ev.button !== 0) return;
     this.#vp.focus();
     const target = ev.target as HTMLElement;
-    const h = target.dataset?.handle as Handle | undefined;
+    const h = target.dataset?.handle as Handle | "rot" | undefined;
     const p = this.#toScene(ev);
-    let id = this.#sel;
-    let mode: "move" | Handle = "move";
+    let id = this.#selIds[0] ?? "";
+    let mode: "move" | "rot" | "marquee" | Handle = "move";
     if (h && this.#selected()) mode = h;
     else {
-      id = hitTest(this.scene, p.x, p.y) ?? "";
-      this.#sel = id;
+      const hit = hitTest(this.scene, p.x, p.y) ?? "";
+      if (hit && ev.shiftKey) {
+        this.#selIds = this.#selIds.includes(hit) ? this.#selIds.filter((x) => x !== hit) : [...this.#selIds, hit];
+        id = hit;
+      } else if (hit) {
+        if (!this.#selIds.includes(hit)) this.#selIds = [hit];
+        id = hit;
+      } else {
+        if (!ev.shiftKey) this.#selIds = [];
+        mode = "marquee";
+        id = "";
+      }
     }
-    if (!id) {
-      this.#redraw();
-      return;
-    }
-    this.#drag = { mode, sx: ev.clientX, sy: ev.clientY, base: this.scene, id, changed: false };
+    this.#drag = { mode, sx: ev.clientX, sy: ev.clientY, base: this.scene, id, changed: false, add: ev.shiftKey };
     try {
       this.#vp.setPointerCapture(ev.pointerId);
     } catch { /* ohne Capture: Ziehen endet beim Verlassen */ }
@@ -463,20 +570,38 @@ export class CanvasEditor {
     if (!d) return;
     const dx = (ev.clientX - d.sx) / this.#scale;
     const dy = (ev.clientY - d.sy) / this.#scale;
-    const base = d.base.elements.find((e) => e.id === d.id);
-    if (!base) return;
-    let box = { x: base.x, y: base.y, w: base.w, h: base.h };
-    if (d.mode === "move") box = { ...box, x: base.x + dx, y: base.y + dy };
-    else box = resizeBox(box, d.mode, dx, dy, ev.shiftKey);
-    this.#guides = [];
-    if (this.#snap && !ev.altKey) {
-      const sn = snapBox(box, d.base, [d.id], 8 / this.#scale);
-      if (d.mode === "move") box = sn.box;
-      this.#guides = sn.guides;
-    }
-    box = { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.w), h: Math.round(box.h) };
     d.changed = d.changed || Math.abs(dx) + Math.abs(dy) > 0.5;
-    this.#hist.replaceCurrent(updateElement(d.base, d.id, box));
+    if (d.mode === "marquee") {
+      const p0 = { x: (d.sx - this.#vp.getBoundingClientRect().left) / this.#scale, y: (d.sy - this.#vp.getBoundingClientRect().top) / this.#scale };
+      this.#marquee = { x: Math.min(p0.x, p0.x + dx), y: Math.min(p0.y, p0.y + dy), w: Math.abs(dx), h: Math.abs(dy) };
+      this.#drawOverlay();
+      return;
+    }
+    if (d.mode === "move") {
+      const ids = this.#selIds;
+      const bb = boundsOf(d.base, ids);
+      if (!bb) return;
+      let box = { ...bb, x: bb.x + dx, y: bb.y + dy };
+      this.#guides = [];
+      if (this.#snap && !ev.altKey) {
+        const sn = snapBox(box, d.base, ids, 8 / this.#scale);
+        box = sn.box;
+        this.#guides = sn.guides;
+      }
+      const mx = Math.round(box.x - bb.x), my = Math.round(box.y - bb.y);
+      this.#hist.replaceCurrent(moveElements(d.base, ids, mx, my));
+    } else {
+      const base = d.base.elements.find((e) => e.id === d.id);
+      if (!base) return;
+      if (d.mode === "rot") {
+        const p = this.#toScene(ev);
+        this.#hist.replaceCurrent(updateElement(d.base, d.id, { rotation: angleFor(base, p.x, p.y, ev.shiftKey) }));
+      } else {
+        const b0 = { x: base.x, y: base.y, w: base.w, h: base.h };
+        const box = base.rotation ? resizeRotated(b0, base.rotation, d.mode, dx, dy, ev.shiftKey) : resizeBox(b0, d.mode, dx, dy, ev.shiftKey);
+        this.#hist.replaceCurrent(updateElement(d.base, d.id, box));
+      }
+    }
     this.#host.onChange(this.scene);
     this.#redrawStage();
   }
@@ -484,7 +609,17 @@ export class CanvasEditor {
     const d = this.#drag;
     this.#drag = null;
     this.#guides = [];
+    const m = this.#marquee;
+    this.#marquee = null;
     if (!d) return;
+    if (d.mode === "marquee") {
+      if (m && (m.w > 3 || m.h > 3)) {
+        const inside = elementsInRect(this.scene, m);
+        this.#selIds = d.add ? [...new Set([...this.#selIds, ...inside])] : inside;
+      }
+      this.#redraw();
+      return;
+    }
     if (d.changed) {
       const final = this.scene;
       this.#hist.replaceCurrent(d.base);
@@ -508,11 +643,15 @@ export class CanvasEditor {
     } else if (ev.key === "Delete" || ev.key === "Backspace") {
       ev.preventDefault();
       this.#del();
-    } else if (this.#sel && ev.key.startsWith("Arrow")) {
+    } else if (mod && ev.key.toLowerCase() === "a") {
+      ev.preventDefault();
+      this.#selIds = this.scene.elements.map((e) => e.id);
+      this.#redraw();
+    } else if (this.#selIds.length && ev.key.startsWith("Arrow")) {
       ev.preventDefault();
       const n = ev.shiftKey ? 10 : 1;
       const [dx, dy] = { ArrowLeft: [-n, 0], ArrowRight: [n, 0], ArrowUp: [0, -n], ArrowDown: [0, n] }[ev.key] ?? [0, 0];
-      this.#commit(moveElements(this.scene, [this.#sel], dx, dy));
+      this.#commit(moveElements(this.scene, this.#selIds, dx, dy));
     }
   }
 }
