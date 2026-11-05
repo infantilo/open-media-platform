@@ -205,8 +205,8 @@
     "runner": "process",
     "command": ["../nodes/target/release/omp-audio-monitor"],
     "env": {},
-    "description": "Spielt einen ausgewählten MXL-Audiostream (z. B. einen Audio-Mixer-Pre-Listen-Bus) als Abhörstrom im Browser ab.",
-    "i18n": { "en": {"description": "Plays a selected MXL audio stream (e.g. an audio mixer pre-listen bus) as a monitoring stream in the browser.", "expectedResources": "low"} },
+    "description": "Spielt einen ausgewählten MXL-Audiostream (z. B. einen Audio-Mixer-Pre-Listen-Bus) als Abhörstrom im Browser ab. Kompaktes Bedienpanel in der Konsole-2-Optik (Poti, Pegel, Schnellwahl, Kanalmodus, Kopfhörer-Ausgleich, A/V-Sync).",
+    "i18n": { "en": {"description": "Plays a selected MXL audio stream (e.g. an audio mixer pre-listen bus) as a monitoring stream in the browser. Compact control panel in the Console 2 look (knob, meters, quick select, channel mode, headphone compensation, A/V sync).", "expectedResources": "low"} },
     "expectedResources": "gering"
   },
   {

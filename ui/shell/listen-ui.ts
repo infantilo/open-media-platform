@@ -20,57 +20,62 @@ const KNOB_ARC_SPAN = 270;
 const NS = "http://www.w3.org/2000/svg";
 
 const CSS = `
-/* Eigenständige Basis-Optik (specificity 0): im Shadow-DOM eines Node-Panels
-   greift design-tokens.css' button/input-Reset nicht. */
-:where(.omp-listen) button { font-family:var(--omp-font); font-size:var(--omp-font-size-xs); color:var(--omp-text);
-  background:var(--omp-surface-raised); border:1px solid var(--omp-border); border-radius:var(--omp-radius);
-  padding:2px 7px; cursor:pointer; }
-:where(.omp-listen) button:hover { border-color:var(--omp-text-dim); }
-:where(.omp-listen) select, :where(.omp-listen) input:not([type=range]) { font-family:var(--omp-font);
-  font-size:var(--omp-font-size-sm); color:var(--omp-text); background:#060912; border:1px solid var(--omp-border);
-  border-radius:var(--omp-radius); padding:3px 6px; }
-:where(.omp-listen) .omp-btn-primary { background:linear-gradient(90deg,#0fb8e6,#2f8cff 55%,#8b5cf6); border-color:transparent; color:#fff; font-weight:600; }
-.omp-listen { color:var(--omp-text-dim); }
-.omp-listen { position:fixed; left:var(--omp-space-2); bottom:var(--omp-space-2); z-index:1000; display:none;
-  flex-direction:column; align-items:flex-start; gap:6px; font-family:var(--omp-font); font-size:var(--omp-font-size-xs);
-  color:var(--omp-text-dim); }
-.omp-listen-bar { display:flex; align-items:center; gap:var(--omp-space-3); padding:6px var(--omp-space-3);
-  background:var(--omp-surface); border:1px solid var(--omp-border); border-radius:var(--omp-radius);
-  box-shadow:0 2px 8px rgba(0,0,0,.3); }
-.omp-listen-bar .title { color:var(--omp-text); font-weight:700; letter-spacing:.04em; }
-.omp-listen-src { max-width:190px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--omp-accent-cyan); }
-.omp-listen-panel { display:none; flex-direction:column; gap:7px; width:280px; box-sizing:border-box; padding:10px;
-  border-radius:10px; border:1px solid rgba(110,150,255,.22);
-  background:linear-gradient(180deg,rgba(20,29,48,.98),rgba(8,12,22,.99));
-  box-shadow:0 24px 70px rgba(0,0,0,.6),0 0 50px rgba(47,140,255,.1),inset 0 1px 0 rgba(255,255,255,.06); }
+/* Konsole-2-Optik (wie Audio-/Videomischer): dichte Pult-Flächen, Mono-Schrift, Cyan-Akzent.
+   Eigenständige Basis (specificity 0): im Shadow-DOM eines Node-Panels greift design-tokens.css nicht. */
+.omp-listen { --l-bg:#111; --l-panel:#1a1a1a; --l-line:#2c2c2c; --l-line2:#3a3a3a; --l-txt:#d8dde2; --l-dim:#7d848c;
+  --l-cyan:#27e0f0; --l-mono:ui-monospace,"JetBrains Mono","SF Mono",Menlo,Consolas,monospace; }
+:where(.omp-listen) button { font:700 10px/1.2 var(--l-mono); letter-spacing:.04em; text-transform:uppercase; color:var(--l-txt);
+  background:linear-gradient(#3a3a3a,#262626); border:1px solid #060606; border-radius:2px; padding:3px 8px; cursor:pointer;
+  box-shadow:0 1px 0 rgba(255,255,255,.12) inset,0 1px 2px rgba(0,0,0,.5); }
+:where(.omp-listen) button:hover { background:linear-gradient(#444,#2d2d2d); }
+:where(.omp-listen) select, :where(.omp-listen) input:not([type=range]) { font:600 11px var(--l-mono); color:var(--l-cyan);
+  background:#06121c; border:1px solid #1d3b52; border-radius:2px; padding:2px 6px; }
+:where(.omp-listen) .omp-btn-primary { background:linear-gradient(#32b6c6,#168593); border-color:#46e6f6; color:#001a1f; }
+.omp-listen { color:var(--l-dim); }
+.omp-listen { position:fixed; left:var(--omp-space-2,8px); bottom:var(--omp-space-2,8px); z-index:1000; display:none;
+  flex-direction:column; align-items:flex-start; gap:4px; font:11px/1.2 var(--l-mono); }
+.omp-listen-bar { display:flex; align-items:center; gap:8px; padding:4px 8px; background:linear-gradient(#262626,#171717);
+  border:1px solid #000; border-radius:2px; box-shadow:0 2px 8px rgba(0,0,0,.4); }
+.omp-listen-bar .title { color:var(--l-txt); font-weight:700; letter-spacing:.08em; text-transform:uppercase; font-size:10px; }
+.omp-listen-src { max-width:190px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--l-cyan); }
+.omp-listen-panel { display:none; flex-direction:column; gap:6px; width:260px; box-sizing:border-box; padding:6px;
+  border:1px solid #000; border-radius:2px; background:var(--l-panel); box-shadow:0 12px 40px rgba(0,0,0,.6); }
 .omp-listen.open .omp-listen-panel { display:flex; }
 .omp-listen.embedded { position:static; display:block; }
-.omp-listen-panel.embedded { display:flex; width:auto; padding:8px; gap:6px; box-shadow:none; border-radius:10px; }
-.omp-listen-sec { font-size:10px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:var(--omp-text-dim); }
-.omp-listen-knobwrap { display:flex; flex-direction:column; align-items:center; gap:2px; }
-.omp-listen-knob { width:88px; height:88px; touch-action:none; cursor:grab; outline:none; user-select:none; }
-.omp-listen-knob:focus-visible { filter:drop-shadow(0 0 6px rgba(25,211,243,.6)); }
+.omp-listen-sec { font-size:9px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--l-dim); }
+.omp-listen-knobwrap { display:flex; flex-direction:column; align-items:center; gap:0; }
+.omp-listen-knob { width:72px; height:72px; touch-action:none; cursor:grab; outline:none; user-select:none; }
+.omp-listen-knob:focus-visible { filter:drop-shadow(0 0 6px rgba(39,224,240,.6)); }
 .omp-listen-knob:active { cursor:grabbing; }
-.omp-listen-db { font-size:13px; font-weight:700; color:var(--omp-text); font-variant-numeric:tabular-nums; margin-top:-12px; pointer-events:none; }
-.omp-listen-meters { display:flex; flex-direction:column; gap:3px; width:100%; }
-.omp-listen-meters div { height:4px; border-radius:3px; background:#050810; overflow:hidden; }
-.omp-listen-meters i { display:block; height:100%; width:0; background:var(--omp-accent-gradient); }
-.omp-listen-presets { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; }
-.omp-listen-preset { min-height:28px; padding:2px 4px; border-radius:6px; font-size:11px; font-weight:600; line-height:1.15;
-  overflow:hidden; background:linear-gradient(180deg,var(--omp-metal-light),var(--omp-metal-mid)); }
-.omp-listen-preset.empty { background:transparent; border-style:dashed; color:var(--omp-text-disabled); font-weight:400; }
-.omp-listen-preset.live { color:#fff; border-color:var(--omp-accent-cyan);
-  background:linear-gradient(180deg,rgba(25,211,243,.35),rgba(47,140,255,.18)); box-shadow:0 0 12px rgba(25,211,243,.35); }
-.omp-listen-preset.assigning { border-color:var(--omp-cue); color:var(--omp-cue); animation:omp-pulse 1s infinite; }
-.omp-listen-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.omp-listen-db { min-width:56px; text-align:center; font:700 11px var(--l-mono); color:var(--l-cyan); background:#06121c;
+  border:1px solid #1d3b52; border-radius:2px; padding:1px 4px; margin-top:-8px; pointer-events:none; font-variant-numeric:tabular-nums; }
+.omp-listen-meters { display:flex; flex-direction:column; gap:2px; width:100%; }
+.omp-listen-meters div { height:6px; background:#050505; border:1px solid #2a2a2a; overflow:hidden; }
+.omp-listen-meters i { display:block; height:100%; width:100%;
+  background:linear-gradient(90deg,#18b84a 0,#2fe06a 60%,#e8d41e 78%,#ff9a1a 90%,#ff3b3b 100%); clip-path:inset(0 100% 0 0); }
+.omp-listen-presets { display:grid; grid-template-columns:repeat(3,1fr); gap:3px; }
+.omp-listen-preset { min-height:24px; padding:2px 4px !important; font-size:10px !important; line-height:1.15; overflow:hidden; text-transform:none !important; }
+.omp-listen-preset.empty { background:transparent !important; border:1px dashed #3a3a3a !important; color:#555 !important; font-weight:400 !important; box-shadow:none !important; }
+.omp-listen-preset.live { color:#001a1f !important; border-color:#46e6f6 !important; background:linear-gradient(#32b6c6,#168593) !important; }
+.omp-listen-preset.assigning { border-color:#ff9f1c !important; color:#ff9f1c !important; animation:omp-pulse 1s infinite; }
+.omp-listen-row { display:flex; align-items:center; justify-content:space-between; gap:6px; }
+.omp-listen-ctl { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; }
+.omp-listen-ctl .omp-listen-row { justify-content:flex-start; }
 .omp-listen-seg { display:flex; }
-.omp-listen-seg button { border-radius:0; padding:2px 8px; }
-.omp-listen-seg button:first-child { border-radius:6px 0 0 6px; }
-.omp-listen-seg button:last-child { border-radius:0 6px 6px 0; }
+.omp-listen-seg button { border-radius:0; padding:3px 7px; }
+.omp-listen-seg button:first-child { border-radius:2px 0 0 2px; }
+.omp-listen-seg button:last-child { border-radius:0 2px 2px 0; }
 .omp-listen-seg button + button { margin-left:-1px; }
-.omp-listen button.on { color:var(--omp-accent-cyan); border-color:var(--omp-accent-cyan); background:rgba(25,211,243,.1); }
-.omp-listen input[type=range] { padding:0; width:80px; }
-.omp-listen-hint { font-size:10px; color:var(--omp-text-disabled); }
+.omp-listen button.on { background:linear-gradient(#32b6c6,#168593); color:#001a1f; border-color:#46e6f6; }
+.omp-listen input[type=range] { padding:0; width:64px; accent-color:#27e0f0; }
+.omp-listen-hint { font-size:10px; color:#555; }
+.omp-listen-hint:empty { display:none; }
+/* Eingebettet (Eigenschaften-Fenster des Audiomonitors): Poti links, Rest rechts — niedrig und breit. */
+.omp-listen-panel.embedded { display:grid; grid-template-columns:auto minmax(0,1fr); column-gap:10px; row-gap:5px; width:auto;
+  padding:6px; box-shadow:none; align-items:start; }
+.omp-listen-panel.embedded > * { grid-column:2; }
+.omp-listen-panel.embedded > .omp-listen-knobwrap { grid-column:1; grid-row:1 / span 6; }
+.omp-listen-panel.embedded .omp-listen-presets { grid-template-columns:repeat(6,1fr); }
 `;
 
 function svg<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string>): SVGElementTagNameMap[K] {
@@ -96,7 +101,7 @@ function buildKnob(initial: number, onChange: (v: number) => void) {
     "aria-label": t("listen.b34670"), "aria-valuemin": "0", "aria-valuemax": "100" });
   const defs = svg("defs", {});
   const grad = svg("linearGradient", { id: "omp-lk-grad", x1: "0", y1: "1", x2: "1", y2: "0" });
-  grad.append(svg("stop", { offset: "0", "stop-color": "#19d3f3" }), svg("stop", { offset: "1", "stop-color": "#a45cff" }));
+  grad.append(svg("stop", { offset: "0", "stop-color": "#27e0f0" }), svg("stop", { offset: "1", "stop-color": "#1fa4e6" }));
   const body = svg("radialGradient", { id: "omp-lk-body", cx: "35%", cy: "28%", r: "80%" });
   body.append(
     svg("stop", { offset: "0", "stop-color": "#59616c" }),
@@ -116,7 +121,7 @@ function buildKnob(initial: number, onChange: (v: number) => void) {
   }
   const cap = svg("circle", { cx: "75", cy: "75", r: "44", fill: "url(#omp-lk-body)", stroke: "#06080c", "stroke-width": "2" });
   const rim = svg("circle", { cx: "75", cy: "75", r: "44", fill: "none", stroke: "rgba(255,255,255,.1)", "stroke-width": "1" });
-  const pointer = svg("line", { x1: "75", y1: "75", x2: "75", y2: "40", stroke: "#19d3f3", "stroke-width": "4", "stroke-linecap": "round" });
+  const pointer = svg("line", { x1: "75", y1: "75", x2: "75", y2: "40", stroke: "#27e0f0", "stroke-width": "4", "stroke-linecap": "round" });
   root.append(defs, track, fill, ticks, cap, rim, pointer);
 
   let value = initial;
@@ -367,7 +372,10 @@ function buildControls(service: ListenService): { panel: HTMLElement; repaint: (
   btnPair.append(mute, dim);
   ctlRow.append(btnPair, syncWrap);
 
-  panel.append(style, knobWrap, meters, presetHead, presetGrid, editor, hint, modeRow, hpRow, ctlRow);
+  const ctl = document.createElement("div");
+  ctl.className = "omp-listen-ctl";
+  ctl.append(modeRow, hpRow, ctlRow);
+  panel.append(style, knobWrap, meters, presetHead, presetGrid, editor, hint, ctl);
 
   const mark = (b: HTMLElement, on: boolean) => b.classList.toggle("on", on);
   let raf = 0;
@@ -377,7 +385,7 @@ function buildControls(service: ListenService): { panel: HTMLElement; repaint: (
       const [l, r] = service.levels();
       for (const [fillEl, v] of [[bars[0], l], [bars[1], r]] as const) {
         const d = v > 0 ? 20 * Math.log10(v) : -60;
-        fillEl.style.width = `${Math.max(0, Math.min(100, ((d + 60) / 60) * 100))}%`;
+        fillEl.style.clipPath = `inset(0 ${100 - Math.max(0, Math.min(100, ((d + 60) / 60) * 100))}% 0 0)`;
       }
     }
     raf = requestAnimationFrame(frame);

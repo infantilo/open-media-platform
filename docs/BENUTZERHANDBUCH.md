@@ -2211,6 +2211,8 @@ Playlist funktioniert deshalb auch nach einem Neustart der Live-Quelle.
 
 **Dateiende:** Der Kanal-Player wiederholt eine Datei nach ihrem Ende **nicht** mehr, sondern zeigt das leere Bild, bis die Automation das nächste Event lädt (Loop nur mit `OMP_LOOP=1`).
 
+**Optik:** Das Panel des Audio-Monitors (Quellwahl, Abhör-Knopf, Poti, Pegel, Schnellwahl, Kanalmodus, Kopfhörer-Ausgleich, A/V-Sync) ist kompakt in derselben **Konsole-2-Optik** wie die Mischer gehalten; die **klassische** Oberfläche des Audiomischers ist farblich und in den Bedienelementen daran angeglichen.
+
 **Ausgangsgruppen hören:** Im Panel des **Audio-Monitors** über das Dropdown **Gruppenwahl** die gewünschte
 Quelle wählen — jeder Kanal-Player bietet dort seine Audio-Gruppen an („… Audio“ = Programmton, danach
 „… Audio Hörfilm/AD“, „… Originalton“, „… Dolby E“, „… Audio 5.1 Diskret“). Das Audio wird direkt im

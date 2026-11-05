@@ -153,13 +153,18 @@ class OmpAudioMonitorPanel extends HTMLElement {
 
     const style = document.createElement("style");
     style.textContent = `
-      :host { display: block; font-family: sans-serif; color: #eee; }
-      p { font-size: 12px; color: #888; margin: 4px 0; }
-      omp-source-selector { display: block; width: 100%; margin-bottom: 6px; }
-      button {
-        background: #333; color: #eee; border: 1px solid #555; border-radius: 3px;
-        cursor: pointer; font-size: 12px; padding: 4px 10px;
-      }
+      :host { display: block; font: 11px/1.2 ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; color: #d8dde2;
+        background: #111; padding: 6px; user-select: none; }
+      .head { display: flex; align-items: center; gap: 6px; padding: 4px 6px; margin-bottom: 6px;
+        background: linear-gradient(#262626, #171717); border: 1px solid #000; border-radius: 2px; }
+      .head omp-source-selector { flex: 1 1 auto; min-width: 0; }
+      p { font-size: 10px; color: #7d848c; margin: 0 0 4px; min-height: 0; }
+      p:empty { display: none; }
+      button { font-family: inherit; font-weight: 700; font-size: 10px; line-height: 1.2; letter-spacing: .04em; text-transform: uppercase; color: #d8dde2;
+        background: linear-gradient(#3a3a3a, #262626); border: 1px solid #060606; border-radius: 2px; cursor: pointer; padding: 5px 10px;
+        white-space: nowrap; box-shadow: 0 1px 0 rgba(255,255,255,.12) inset, 0 1px 2px rgba(0,0,0,.5); }
+      button:hover { background: linear-gradient(#444, #2d2d2d); }
+      button.on { background: linear-gradient(#32b6c6, #168593); color: #001a1f; border-color: #46e6f6; }
     `;
 
     // Hierarchischer Picker (ui/kit/omp-source-selector.ts), Wert = Sender-ID wie zuvor.
@@ -173,7 +178,10 @@ class OmpAudioMonitorPanel extends HTMLElement {
     const status = document.createElement("p");
     status.textContent = T("amon.5757a4");
 
-    shadow.append(style, select, listenBtn, status);
+    const head = document.createElement("div");
+    head.className = "head";
+    head.append(select, listenBtn);
+    shadow.append(style, head, status);
 
     const call = (method, body) =>
       fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {
@@ -257,6 +265,7 @@ class OmpAudioMonitorPanel extends HTMLElement {
       }
       status.textContent = "";
       listenBtn.textContent = T("amon.28bd4d");
+      listenBtn.classList.add("on");
 
       const reader = res.body.getReader();
       // Ungerade Byte-Reste zwischen zwei Chunks (BYTES_PER_FRAME teilt
@@ -288,6 +297,7 @@ class OmpAudioMonitorPanel extends HTMLElement {
       }
       status.textContent = T("amon.6a7ee7");
       listenBtn.textContent = T("amon.1e872e");
+      listenBtn.classList.remove("on");
       reading = false;
     };
 
@@ -323,6 +333,7 @@ class OmpAudioMonitorPanel extends HTMLElement {
       const paint = () => {
         const mine = shellListen.state.nodeId === nodeId;
         listenBtn.textContent = mine ? T("amon.28bd4d") : T("amon.1e872e");
+        listenBtn.classList.toggle("on", mine);
         const other = shellListen.state.nodeId && !mine;
         status.textContent = other
           ? T("amon.1050d8")
