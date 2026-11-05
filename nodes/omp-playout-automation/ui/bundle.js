@@ -47,7 +47,7 @@ const T = (() => {
       "stopTitle": "Hauptkanal sofort auf Schwarzbild schalten (Playlist bleibt erhalten)",
       "mode": "Modus ",
       "sec.control": "Playlist Control",
-      "sec.targets": "Ziele", "sec.channel": "Channel (Speicherung)", "ch.none": "— kein Channel —", "ch.link": "Verknüpfen", "ch.unlink": "Lösen", "ch.new": "Neuen Channel anlegen", "ch.newPh": "Name des neuen Channels", "ch.linked": "Mit Channel „{name}“ verknüpft.", "ch.unlinked": "Channel gelöst.", "ch.status": "Status: {p}", "ch.hint": "Ein Channel speichert Playlist und Einstellungen beim Orchestrator und überlebt Neustarts, Umzüge und Ausfälle. Ohne Channel sichert sich die Instanz nur lokal in einer Datei.", "ch.here": " (diese Instanz)", "ch.other": " (an andere Instanz gebunden)", "ch.role": " (an Workflow-Rolle gebunden)", "ch.takeover": "Channel „{name}“ ist schon an eine andere Instanz/Rolle gebunden. Trotzdem hierher umbinden?", "ch.overwrite": "Hat der Channel schon gespeicherten Inhalt, ersetzt der aktuelle Inhalt dieser Automation ihn.", "ch.viaRole": "Dieser Channel hängt an einer Workflow-Rolle und wird im Workflow gelöst.", "ch.noId": "Instanz-ID unbekannt (keine Orchestrator-Anbindung).", "ch.err": "Fehler: {e}",
+      "sec.targets": "Ziele", "sec.channel": "Channel (Speicherung)", "ch.notLinked": "Diese Instanz ist mit keinem Channel direkt verknüpft.", "ch.wfWarn": "⚠⚠ ACHTUNG ⚠⚠\n\nChannel „{name}“ gehört zu einem WORKFLOW. Wird der Workflow gestartet oder läuft er, schreiben ZWEI Automationen in denselben Channel: die Playlist wird gegenseitig überschrieben, Events können doppelt oder gar nicht laufen — auch auf Sendung.\n\nNur verknüpfen, wenn der Workflow gestoppt ist und bleibt.", "ch.roleWarn": "⚠⚠ ACHTUNG ⚠⚠\n\nDiese Instanz ist über eine WORKFLOW-ROLLE bereits mit einem Channel verbunden. Ein zweiter Channel „{name}“ vermischt Playlist und Zustand; nach dem nächsten Workflow-Start kann die Zuordnung unklar sein.\n\nNur fortfahren, wenn du genau weißt, was du tust.", "ch.wfWarnGo": "Ich habe verstanden …", "ch.wfWarn2": "LETZTE WARNUNG: „{name}“ wirklich trotz Workflow verknüpfen? Das kann die laufende Sendung stören und ist nur durch „Lösen“ rückgängig zu machen.", "ch.wfWarnGo2": "JA, TROTZDEM VERKNÜPFEN", "ch.none": "— kein Channel —", "ch.link": "Verknüpfen", "ch.unlink": "Lösen", "ch.new": "Neuen Channel anlegen", "ch.newPh": "Name des neuen Channels", "ch.linked": "Mit Channel „{name}“ verknüpft.", "ch.unlinked": "Channel gelöst.", "ch.status": "Status: {p}", "ch.hint": "Ein Channel speichert Playlist und Einstellungen beim Orchestrator und überlebt Neustarts, Umzüge und Ausfälle. Ohne Channel sichert sich die Instanz nur lokal in einer Datei.", "ch.here": " (diese Instanz)", "ch.other": " (an andere Instanz gebunden)", "ch.role": " (an Workflow-Rolle gebunden)", "ch.takeover": "Channel „{name}“ ist schon an eine andere Instanz/Rolle gebunden. Trotzdem hierher umbinden?", "ch.overwrite": "Hat der Channel schon gespeicherten Inhalt, ersetzt der aktuelle Inhalt dieser Automation ihn.", "ch.viaRole": "Dieser Channel hängt an einer Workflow-Rolle und wird im Workflow gelöst.", "ch.noId": "Instanz-ID unbekannt (keine Orchestrator-Anbindung).", "ch.err": "Fehler: {e}",
       "sec.playlist": "Playlist",
       "sec.carts": "Assets / Carts",
       "sec.trigger": "Channel-Trigger",
@@ -394,7 +394,7 @@ const T = (() => {
       "stopTitle": "Switch the main channel to black immediately (the playlist is kept)",
       "mode": "Mode ",
       "sec.control": "Playlist control",
-      "sec.targets": "Targets", "sec.channel": "Channel (storage)", "ch.none": "— no channel —", "ch.link": "Link", "ch.unlink": "Unlink", "ch.new": "Create new channel", "ch.newPh": "Name of the new channel", "ch.linked": "Linked to channel “{name}”.", "ch.unlinked": "Channel unlinked.", "ch.status": "Status: {p}", "ch.hint": "A channel stores playlist and settings at the orchestrator and survives restarts, moves and failures. Without a channel the instance only keeps a local file.", "ch.here": " (this instance)", "ch.other": " (bound to another instance)", "ch.role": " (bound to a workflow role)", "ch.takeover": "Channel “{name}” is already bound to another instance/role. Rebind it here anyway?", "ch.overwrite": "If the channel already has stored content, the current content of this automation replaces it.", "ch.viaRole": "This channel is bound to a workflow role and must be unlinked in the workflow.", "ch.noId": "Instance ID unknown (no orchestrator connection).", "ch.err": "Error: {e}",
+      "sec.targets": "Targets", "sec.channel": "Channel (storage)", "ch.notLinked": "This instance is not directly linked to any channel.", "ch.wfWarn": "⚠⚠ WARNING ⚠⚠\n\nChannel “{name}” belongs to a WORKFLOW. If the workflow is started or running, TWO automations write to the same channel: the playlist is overwritten back and forth, events may run twice or not at all — also on air.\n\nOnly link if the workflow is stopped and stays stopped.", "ch.roleWarn": "⚠⚠ WARNING ⚠⚠\n\nThis instance is already connected to a channel through a WORKFLOW ROLE. A second channel “{name}” mixes playlist and state; after the next workflow start the assignment may be unclear.\n\nOnly continue if you know exactly what you are doing.", "ch.wfWarnGo": "I understand …", "ch.wfWarn2": "FINAL WARNING: really link “{name}” despite the workflow? This can disturb the running broadcast and is only undone by “Unlink”.", "ch.wfWarnGo2": "YES, LINK ANYWAY", "ch.none": "— no channel —", "ch.link": "Link", "ch.unlink": "Unlink", "ch.new": "Create new channel", "ch.newPh": "Name of the new channel", "ch.linked": "Linked to channel “{name}”.", "ch.unlinked": "Channel unlinked.", "ch.status": "Status: {p}", "ch.hint": "A channel stores playlist and settings at the orchestrator and survives restarts, moves and failures. Without a channel the instance only keeps a local file.", "ch.here": " (this instance)", "ch.other": " (bound to another instance)", "ch.role": " (bound to a workflow role)", "ch.takeover": "Channel “{name}” is already bound to another instance/role. Rebind it here anyway?", "ch.overwrite": "If the channel already has stored content, the current content of this automation replaces it.", "ch.viaRole": "This channel is bound to a workflow role and must be unlinked in the workflow.", "ch.noId": "Instance ID unknown (no orchestrator connection).", "ch.err": "Error: {e}",
       "sec.playlist": "Playlist",
       "sec.carts": "Assets / carts",
       "sec.trigger": "Channel trigger",
@@ -1661,8 +1661,14 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     };
     const linkTo = async (c) => {
       if (!myInstance) { showBanner(T("ch.noId")); return; }
-      if ((c.instanceId && c.instanceId !== myInstance) || c.workflowId) {
-        if (c.workflowId) { showBanner(T("ch.viaRole")); return; }
+      const mine0 = chList.find((x) => x.instanceId === myInstance);
+      // Instanz hängt bereits über eine Workflow-Rolle an einem Channel (gefunden, aber nicht direkt gebunden).
+      const viaRole = chCurrentId && !mine0 && chCurrentId !== c.id;
+      if (c.workflowId || viaRole) {
+        // Extreme Warnung, zweistufig: zwei Schreiber auf demselben Channel zerstören Playlist und Sendeablauf.
+        if (!(await confirmDialog(T(c.workflowId ? "ch.wfWarn" : "ch.roleWarn", { name: c.name }), T("ch.wfWarnGo")))) return;
+        if (!(await confirmDialog(T("ch.wfWarn2", { name: c.name }), T("ch.wfWarnGo2")))) return;
+      } else if (c.instanceId && c.instanceId !== myInstance) {
         if (!(await confirmDialog(T("ch.takeover", { name: c.name }), T("ch.link")))) return;
       }
       // Höchstens ein Channel je Instanz: einen bisherigen zuerst lösen.
@@ -1682,8 +1688,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
             await linkTo(c);
           }) }, T("ch.link")),
           h("button", { onclick: () => chDo(async () => {
+            if (!myInstance) throw new Error(T("ch.noId"));
             const c = chList.find((x) => x.instanceId === myInstance);
-            if (!c) { if (chCurrentId) showBanner(T("ch.viaRole")); return; }
+            if (!c) { showBanner(chCurrentId ? T("ch.viaRole") : T("ch.notLinked")); return; }
             await putChannel(c, { instanceId: "" });
             showBanner(T("ch.unlinked"), true);
           }) }, T("ch.unlink"))),
