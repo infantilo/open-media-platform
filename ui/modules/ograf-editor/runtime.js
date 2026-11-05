@@ -66,6 +66,13 @@ function loadFonts(scene, resolveAsset) {
   return Promise.all(jobs).then(() => {});
 }
 
+/** Ist das Element im Schritt `step` sichtbar? (`from` Standard 0, `to` −1 = bis zum letzten Schritt.) */
+export function inStep(e, step) {
+  const from = e.from ?? 0;
+  const to = e.to ?? -1;
+  return step >= from && (to < 0 || step <= to);
+}
+
 function applyBox(el, e) {
   const s = el.style;
   s.position = "absolute";
@@ -121,6 +128,7 @@ export function renderScene(root, scene, data, opts = {}) {
     const wrap = document.createElement("div");
     applyBox(wrap, e);
     wrap.style.opacity = String(e.opacity ?? 1);
+    if (opts.editor && opts.step !== undefined && !inStep(e, opts.step)) wrap.style.opacity = String((e.opacity ?? 1) * 0.2);
     wrap.dataset.elementId = e.id;
     let inner;
     if (e.kind === "image") {
@@ -138,7 +146,7 @@ export function renderScene(root, scene, data, opts = {}) {
     paint(inner, e, data);
     wrap.append(inner);
     stage.append(wrap);
-    items.push({ e, wrap, inner, anims: [] });
+    items.push({ e, wrap, inner, anims: [], shown: false });
   }
   root.append(stage);
   const fitAll = () => { for (const it of items) autofit(it.inner, it.e); };
@@ -149,18 +157,32 @@ export function renderScene(root, scene, data, opts = {}) {
     const spec = it.e.anim && it.e.anim[dir];
     const kf = spec ? keyframesFor(spec.type, dir) : null;
     clear(it);
+    // Zonen melden ihr Rechteck über das umgebende Element; außerhalb ihrer Schritte gelten sie als unsichtbar
+    if (it.e.kind === "zone") it.wrap.style.visibility = dir === "in" ? "visible" : "hidden";
     if (!kf) { it.inner.style.visibility = dir === "in" ? "visible" : "hidden"; return Promise.resolve(); }
     it.inner.style.visibility = "visible";
     const a = it.inner.animate(kf, { duration: spec.ms ?? 400, delay: spec.delay ?? 0, easing: spec.ease || "ease-out", fill: "both" });
     it.anims.push(a);
     return a.finished.catch(() => {});
   };
-  if (!opts.editor) for (const it of items) it.inner.style.visibility = "hidden";
+  if (!opts.editor) {
+    for (const it of items) {
+      it.inner.style.visibility = "hidden";
+      if (it.e.kind === "zone") it.wrap.style.visibility = "hidden";
+    }
+  }
+  const goto = (step) => Promise.all(items.map((it) => {
+    const vis = inStep(it.e, step);
+    if (vis && !it.shown) { it.shown = true; return run(it, "in"); }
+    if (!vis && it.shown) { it.shown = false; return run(it, "out"); }
+    return Promise.resolve();
+  }));
   return {
     stage,
     ready,
-    play: () => Promise.all(items.map((it) => run(it, "in"))),
-    stop: () => Promise.all(items.map((it) => run(it, "out"))),
+    goto,
+    play: (step = 0) => goto(step),
+    stop: () => Promise.all(items.filter((it) => it.shown).map((it) => { it.shown = false; return run(it, "out"); })),
     update(next) { for (const it of items) { paint(it.inner, it.e, next); autofit(it.inner, it.e); } },
     destroy() { window.removeEventListener("resize", onResize); for (const it of items) clear(it); stage.remove(); },
   };
@@ -183,7 +205,19 @@ export function createSceneElement(scene, base) {
       return { statusCode: 200 };
     }
     async dispose() { if (this._h) this._h.destroy(); return { statusCode: 200 }; }
-    async playAction() { await this._h.play(); return { statusCode: 200, currentStep: 0 }; }
+    async playAction(p) {
+      const count = Math.max(1, scene.stepCount || 1);
+      const want = p && typeof p.goto === "number" ? p.goto : 0;
+      this._step = Math.max(0, Math.min(count - 1, want));
+      await this._h.goto(this._step);
+      return { statusCode: 200, currentStep: this._step };
+    }
+    async continueAction() {
+      const count = Math.max(1, scene.stepCount || 1);
+      this._step = Math.min(count - 1, (this._step || 0) + 1);
+      await this._h.goto(this._step);
+      return { statusCode: 200, currentStep: this._step };
+    }
     async stopAction() { await this._h.stop(); return { statusCode: 200 }; }
     async updateAction(p) { this._data = { ...this._data, ...((p && p.data) || {}) }; this._h.update(this._data); return { statusCode: 200 }; }
     async customAction() { return { statusCode: 200 }; }

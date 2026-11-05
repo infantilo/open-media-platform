@@ -231,6 +231,18 @@ class OmpOgrafLibrary extends HTMLElement {
     await this.#loadList();
     await this.#open(id);
   }
+  /** Sendetest: die gespeicherte Vorlage auf dem Grafik-Node einblenden, weiterschalten oder ausblenden. */
+  async #test(what: "show" | "continue" | "hide") {
+    if (!this.#selected) return;
+    if (what === "show" && this.#dirty()) return this.#say(tr("saveFirst"), true);
+    const body: Record<string, unknown> = { layerId: "editor-test" };
+    if (what === "show") {
+      body.templateId = this.#selected;
+      body.data = defaultsOf(this.#fields);
+    }
+    const err = await this.#call(what, body);
+    this.#say(err ? tr("testFailed", { why: err }) : "", !!err);
+  }
   async #duplicate() {
     if (!this.#selected) return;
     const name = await promptDialog(tr("askCopyName"), `${this.#selected}-kopie`);
@@ -334,6 +346,10 @@ class OmpOgrafLibrary extends HTMLElement {
     if (text !== undefined) e.textContent = text;
     return e;
   }
+  #tip<T extends HTMLElement>(el: T, title: string): T {
+    el.title = title;
+    return el;
+  }
   #btn(label: string, onClick: () => void, cls = "", disabled = false): HTMLButtonElement {
     const b = this.#el("button", `b ${cls}`.trim(), label);
     b.type = "button";
@@ -415,6 +431,9 @@ class OmpOgrafLibrary extends HTMLElement {
     const save = this.#btn(tr("save"), () => void this.#save(), "primary save", !this.#dirty());
     head.append(
       spacer,
+      this.#tip(this.#btn(tr("testShow"), () => void this.#test("show")), tr("testHint")),
+      this.#tip(this.#btn(tr("testNext"), () => void this.#test("continue")), tr("testNextHint")),
+      this.#tip(this.#btn(tr("testOff"), () => void this.#test("hide")), tr("testOffHint")),
       this.#btn(tr("duplicate"), () => void this.#duplicate()),
       this.#btn(tr("rename"), () => void this.#rename()),
       this.#btn(tr("exportBtn"), () => this.#export()),

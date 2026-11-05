@@ -45,6 +45,9 @@ export interface SceneElement {
   /** Schrift verkleinern, bis der Text ins Feld passt (nicht unter `minSize`). */
   autofit?: boolean;
   minSize?: number;
+  /** Schritte, in denen das Element steht: ab `from` (Standard 0), bis `to` (−1 = letzter Schritt). */
+  from?: number;
+  to?: number;
   // Bild
   file?: string;
   fit?: "contain" | "cover" | "fill";
@@ -60,6 +63,8 @@ export interface Scene {
   width: number;
   height: number;
   elements: SceneElement[];
+  /** Anzahl Schritte (Weiter-Taste), mindestens 1. */
+  stepCount?: number;
   /** Schriftdateien des Pakets (woff/woff2/ttf), die als Schriftfamilie bereitstehen. */
   fonts?: SceneFont[];
 }
@@ -133,6 +138,7 @@ export function parseScene(text: string): Scene | null {
   const o = v as Record<string, unknown> | null;
   if (!o || o.format !== SCENE_FORMAT || !Array.isArray(o.elements)) return null;
   const scene = newScene(Math.max(16, num(o.width, 1920)), Math.max(16, num(o.height, 1080)));
+  scene.stepCount = Math.min(20, Math.max(1, Math.round(num(o.stepCount, 1))));
   if (Array.isArray(o.fonts)) {
     scene.fonts = (o.fonts as Record<string, unknown>[])
       .filter((f) => f && typeof f.family === "string" && /^[^"'\\;{}]+$/.test(f.family as string) && typeof f.file === "string" && /^[A-Za-z0-9._-]+$/.test(f.file as string))
@@ -154,6 +160,8 @@ export function parseScene(text: string): Scene | null {
       x: num(e.x, 0), y: num(e.y, 0), w: Math.max(MIN_SIZE, num(e.w, 100)), h: Math.max(MIN_SIZE, num(e.h, 100)),
       rotation: num(e.rotation, 0),
       opacity: Math.min(1, Math.max(0, num(e.opacity, 1))),
+      from: Math.max(0, Math.round(num(e.from, 0))),
+      to: Math.max(-1, Math.round(num(e.to, -1))),
       anim: { in: parseAnim(anim.in), out: parseAnim(anim.out) },
     });
   }
@@ -205,6 +213,32 @@ export function reorder(s: Scene, id: string, how: "front" | "back" | "up" | "do
   const j = how === "front" ? els.length : how === "back" ? 0 : how === "up" ? Math.min(els.length, i + 1) : Math.max(0, i - 1);
   els.splice(j, 0, e);
   return withElements(s, els);
+}
+
+/** Dauer/Verzug einer Animation setzen (auf 50 ms gerundet, nie negativ); Art bleibt, bei „keine“ wird „Überblenden“ gesetzt. */
+export function setTiming(s: Scene, id: string, dir: "in" | "out", patch: { ms?: number; delay?: number }): Scene {
+  const e = s.elements.find((x) => x.id === id);
+  if (!e) return s;
+  const cur = e.anim?.[dir] ?? { type: "fade", ms: 300, delay: 0, ease: "ease-out" };
+  const snap = (v: number) => Math.max(0, Math.round(v / 50) * 50);
+  const next = { ...cur, type: cur.type === "none" ? "fade" : cur.type, ms: patch.ms !== undefined ? Math.max(50, snap(patch.ms)) : cur.ms, delay: patch.delay !== undefined ? snap(patch.delay) : cur.delay };
+  return updateElement(s, id, { anim: { ...e.anim, [dir]: next } });
+}
+
+/** Ende der längsten Animation (ms) einer Richtung, mindestens `min` — Maßstab der Zeitleiste. */
+export function timelineEnd(s: Scene, dir: "in" | "out", min = 1000): number {
+  let end = min;
+  for (const e of s.elements) {
+    const a = e.anim?.[dir];
+    if (a && a.type !== "none") end = Math.max(end, a.delay + a.ms);
+  }
+  return Math.ceil(end / 250) * 250;
+}
+
+/** Anzahl Schritte setzen und die Schrittbereiche der Elemente einpassen. */
+export function setStepCount(s: Scene, n: number): Scene {
+  const count = Math.min(20, Math.max(1, Math.round(n)));
+  return { ...s, stepCount: count, elements: s.elements.map((e) => ({ ...e, from: Math.min(e.from ?? 0, count - 1), to: (e.to ?? -1) >= count ? -1 : e.to ?? -1 })) };
 }
 
 export type Align = "left" | "hcenter" | "right" | "top" | "vcenter" | "bottom";
@@ -409,7 +443,8 @@ export function applyScene(files: Files, id: string, scene: Scene, runtime: stri
   if (mname) {
     try {
       const m = JSON.parse(out[mname]);
-      if (m.main !== `${id}.js`) out[mname] = stringify({ ...m, main: `${id}.js` });
+      const steps = Math.max(1, scene.stepCount ?? 1);
+      if (m.main !== `${id}.js` || m.stepCount !== steps) out[mname] = stringify({ ...m, main: `${id}.js`, stepCount: steps });
     } catch { /* kaputtes Manifest: der Node meldet es */ }
   }
   return out;

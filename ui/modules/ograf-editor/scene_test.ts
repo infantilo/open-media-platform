@@ -1,8 +1,8 @@
 import { assertEquals, assertNotEquals } from "jsr:@std/assert@1";
 import RUNTIME from "./runtime.js" with { type: "text" };
-import { bindText, keyframesFor } from "./runtime.js";
+import { bindText, inStep, keyframesFor } from "./runtime.js";
 import {
-  addElement, alignGroup, alignToScene, angleFor, boundsOf, distribute, duplicateMany, elementsInRect, ensureParams, resizeRotated, applyScene, duplicateElement, generateMain, hitTest, History, isDesigner, moveElements, newDesignerPackage,
+  addElement, alignGroup, alignToScene, angleFor, boundsOf, distribute, duplicateMany, elementsInRect, ensureParams, resizeRotated, setStepCount, setTiming, timelineEnd, applyScene, duplicateElement, generateMain, hitTest, History, isDesigner, moveElements, newDesignerPackage,
   newElement, newScene, parseScene, placeholders, removeElements, reorder, resizeBox, SCENE_FORMAT, snapBox, updateElement, usedAssets, zoneIds,
 } from "./scene.ts";
 import { parseManifest } from "./logic.ts";
@@ -134,7 +134,8 @@ Deno.test("Designer-Paket: Manifest gültig, main, Szene, Platzhalter ↔ Schema
   const keys = Object.keys((m.schema as { properties: object }).properties);
   for (const p of placeholders(scene)) assertEquals(keys.includes(p), true, `Platzhalter ${p} fehlt im Schema`);
   assertEquals(files["mein-titel.js"].includes("export default createSceneElement("), true);
-  assertEquals(files["mein-titel.js"].includes(JSON.stringify(scene)), true);
+  assertEquals(files["mein-titel.js"].includes(JSON.stringify(JSON.parse(files["scene.json"]))), true); // eingebettete Szene = scene.json
+  assertEquals(scene.stepCount, 1);
 });
 
 Deno.test("applyScene setzt main im Manifest und ersetzt das Hauptmodul", () => {
@@ -212,4 +213,33 @@ Deno.test("Gruppe: Rechteck, Aufziehen, Ausrichten, Verteilen, Duplizieren", () 
 Deno.test("parseScene behält gültige Schriften, verwirft unsichere", () => {
   const sc = parseScene(JSON.stringify({ format: SCENE_FORMAT, elements: [], fonts: [{ family: "Meine Schrift", file: "a.woff2" }, { family: 'x";}', file: "b.woff2" }, { family: "ok", file: "../c.woff" }] }))!;
   assertEquals(sc.fonts, [{ family: "Meine Schrift", file: "a.woff2" }]);
+});
+
+Deno.test("Schritte: inStep, setStepCount passt Bereiche an, Manifest bekommt stepCount", () => {
+  assertEquals([inStep({}, 0), inStep({}, 5), inStep({ from: 1 }, 0), inStep({ from: 1 }, 2), inStep({ from: 0, to: 1 }, 1), inStep({ from: 0, to: 1 }, 2)], [true, true, false, true, true, false]);
+  let s = newScene();
+  s = addElement(s, { ...newElement("text", s), id: "a", from: 3, to: 4 });
+  s = addElement(s, { ...newElement("text", s), id: "b" });
+  const s2 = setStepCount(s, 2);
+  assertEquals([s2.stepCount, s2.elements[0].from, s2.elements[0].to, s2.elements[1].to], [2, 1, -1, -1]);
+  assertEquals(setStepCount(s, 99).stepCount, 20);
+  assertEquals(setStepCount(s, 0).stepCount, 1);
+  const files = applyScene({ "x.ograf.json": JSON.stringify({ id: "x", main: "x.js", stepCount: 1 }) }, "x", s2, RUNTIME);
+  assertEquals(parseManifest(files)!.stepCount, 2);
+  assertEquals(parseScene(files["scene.json"])!.stepCount, 2);
+});
+
+Deno.test("Zeitleiste: setTiming rundet auf 50 ms, timelineEnd als Maßstab", () => {
+  let s = newScene();
+  s = addElement(s, { ...newElement("text", s), id: "a", anim: { in: { type: "fade", ms: 300, delay: 100, ease: "ease-out" } } });
+  s = setTiming(s, "a", "in", { delay: 123, ms: 780 });
+  assertEquals([s.elements[0].anim!.in!.delay, s.elements[0].anim!.in!.ms], [100, 800]);
+  s = setTiming(s, "a", "in", { delay: -50, ms: 10 });
+  assertEquals([s.elements[0].anim!.in!.delay, s.elements[0].anim!.in!.ms], [0, 50]);
+  s = setTiming(s, "a", "out", { ms: 400 }); // war nicht gesetzt: Standardart Überblenden
+  assertEquals(s.elements[0].anim!.out!.type, "fade");
+  assertEquals(timelineEnd(s, "in"), 1000);
+  s = setTiming(s, "a", "in", { delay: 1500, ms: 700 });
+  assertEquals(timelineEnd(s, "in"), 2250);
+  assertEquals(setTiming(s, "zzz", "in", { ms: 100 }), s);
 });

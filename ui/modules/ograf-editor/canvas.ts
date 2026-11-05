@@ -4,7 +4,7 @@ import { renderScene } from "./runtime.js";
 import {
   addElement, alignGroup, ANIM_TYPES, type Align, alignToScene, angleFor, boundsOf, distribute, duplicateMany, elementsInRect, type Guide, HANDLES,
   type Handle, hitTest, History, KINDS, type Kind, moveElements, newElement, removeElements, reorder, resizeBox, resizeRotated, type Scene,
-  type SceneElement, snapBox, updateElement,
+  type SceneElement, setStepCount, setTiming, snapBox, timelineEnd, updateElement,
 } from "./scene.ts";
 import { messages } from "./messages.ts";
 
@@ -38,6 +38,16 @@ const STYLE = `
 .sel { position: absolute; border: 1px solid #00c8ff; box-sizing: border-box; }
 .hd { position: absolute; width: 9px; height: 9px; margin: -5px 0 0 -5px; background: #fff; border: 1px solid #00c8ff; box-sizing: border-box; pointer-events: auto; }
 .guide { position: absolute; background: #ff3b81; }
+.tl { border: 1px solid var(--omp-border, #2e3338); border-radius: 4px; padding: 4px; display: flex; flex-direction: column; gap: 2px; }
+.tl .hd2 { display: flex; gap: 6px; align-items: center; }
+.tl .row { display: grid; grid-template-columns: 110px 1fr; gap: 6px; align-items: center; }
+.tl .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.tl .nm.on { color: #fff; background: var(--omp-info, #4285f4); border-radius: 3px; padding: 0 3px; }
+.tl .track { position: relative; height: 16px; background: var(--omp-bg-2, #1c1f22); border-radius: 3px; }
+.tl .bar { position: absolute; top: 2px; height: 12px; border-radius: 3px; background: #4285f4; cursor: grab; box-sizing: border-box; min-width: 4px; }
+.tl .bar.out { background: #d97706; }
+.tl .bar .gr { position: absolute; right: 0; top: 0; width: 6px; height: 100%; cursor: ew-resize; background: rgba(255,255,255,.45); border-radius: 0 3px 3px 0; }
+.tl .ruler { position: relative; height: 12px; color: var(--omp-text-dim, #9aa0a6); font-size: 10px; }
 .layers { display: flex; flex-direction: column; border: 1px solid var(--omp-border, #2e3338); border-radius: 4px; max-height: 360px; overflow: auto; }
 .ly { display: flex; align-items: center; gap: 4px; padding: 3px 6px; cursor: pointer; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; }
 .ly.on { background: var(--omp-info, #4285f4); color: #fff; }
@@ -72,6 +82,11 @@ export class CanvasEditor {
   #guides: Guide[] = [];
   #drag: { mode: "move" | "rot" | "marquee" | Handle; sx: number; sy: number; base: Scene; id: string; changed: boolean; add: boolean } | null = null;
   #marquee: { x: number; y: number; w: number; h: number } | null = null;
+  #viewStep = 0;
+  #pvStep = 0;
+  #tl!: HTMLDivElement;
+  #tlDir: "in" | "out" = "in";
+  #tdrag: { id: string; mode: "move" | "size"; sx: number; base: Scene; end: number; w: number; changed: boolean } | null = null;
   #preview = false;
   #ro: ResizeObserver;
   #snap = true;
@@ -106,9 +121,10 @@ export class CanvasEditor {
   }
 
   // ── Aufbau ──
-  #btn(label: string, onClick: () => void, title = "", cls = ""): HTMLButtonElement {
+  #btn(label: string, onClick: () => void, title = "", cls = "", disabled = false): HTMLButtonElement {
     const b = document.createElement("button");
     b.type = "button";
+    b.disabled = disabled;
     b.className = `s ${cls}`.trim();
     b.textContent = label;
     b.title = title;
@@ -137,7 +153,9 @@ export class CanvasEditor {
     this.#ov = document.createElement("div");
     this.#ov.className = "ov";
     this.#vp.append(this.#ov);
-    mid.append(this.#vp);
+    this.#tl = document.createElement("div");
+    this.#tl.className = "tl";
+    mid.append(this.#vp, this.#tl);
     // rechts: Eigenschaften
     this.#side = document.createElement("div");
     this.#side.className = "col";
@@ -166,11 +184,13 @@ export class CanvasEditor {
     this.#vp.style.height = `${Math.round(s.height * this.#scale)}px`;
     this.#handle = renderScene(this.#vp, s, this.#host.data(), {
       editor: !this.#preview,
+      step: this.#viewStep,
       scale: () => this.#scale,
       resolveAsset: (f: string) => this.#host.assetUrl(f),
     });
     this.#vp.insertBefore(this.#handle.stage, this.#ov);
     this.#drawOverlay();
+    this.#drawTimeline();
     this.#drawTools();
     this.#drawLayers();
     this.#drawProps();
@@ -239,21 +259,43 @@ export class CanvasEditor {
   #drawTools() {
     const t = this.#tools;
     t.innerHTML = "";
+    if (this.#preview) {
+      const n = this.scene.stepCount ?? 1;
+      t.append(
+        this.#btn("■", () => void this.#togglePreview(), tr("previewStop"), "on"),
+        this.#btn("⏭", () => void this.#pvNext(), tr("previewNext"), "", n < 2 || this.#pvStep >= n - 1),
+        document.createTextNode(` ${this.#pvStep + 1}/${n}`),
+      );
+      return;
+    }
     for (const k of KINDS) t.append(this.#btn(`＋ ${tr(KIND_LABEL[k])}`, () => this.#add(k)));
     const sel = this.#selIds.length > 0;
     t.append(
-      this.#btn("↶", () => this.#undo(), tr("undo"), ""),
-      this.#btn("↷", () => this.#redo(), tr("redo"), ""),
-      this.#btn("⧉", () => this.#dup(), tr("duplicate")),
-      this.#btn("✕", () => this.#del(), tr("delete")),
-      this.#btn("▶ / ■", () => this.#togglePreview(), tr("previewHint"), this.#preview ? "on" : ""),
+      this.#btn("↶", () => this.#undo(), tr("undo"), "", !this.#hist.canUndo),
+      this.#btn("↷", () => this.#redo(), tr("redo"), "", !this.#hist.canRedo),
+      this.#btn("⧉", () => this.#dup(), tr("duplicate"), "", !sel),
+      this.#btn("✕", () => this.#del(), tr("delete"), "", !sel),
+      this.#btn("▶", () => void this.#togglePreview(), tr("previewHint")),
       this.#btn("⌗", () => { this.#snap = !this.#snap; this.#drawTools(); }, tr("snap"), this.#snap ? "on" : ""),
     );
-    const bs = t.querySelectorAll("button");
-    (bs[kindsLen()] as HTMLButtonElement).disabled = !this.#hist.canUndo;
-    (bs[kindsLen() + 1] as HTMLButtonElement).disabled = !this.#hist.canRedo;
-    (bs[kindsLen() + 2] as HTMLButtonElement).disabled = !sel;
-    (bs[kindsLen() + 3] as HTMLButtonElement).disabled = !sel;
+    // Schritte: Anzahl und Ansicht
+    const n = this.scene.stepCount ?? 1;
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;gap:4px;align-items:center;flex-basis:100%";
+    const lab = document.createElement("span");
+    lab.textContent = tr("stepsLabel");
+    const cnt = document.createElement("input");
+    cnt.type = "number";
+    cnt.min = "1";
+    cnt.max = "20";
+    cnt.value = String(n);
+    cnt.style.width = "52px";
+    cnt.addEventListener("change", () => this.#commit(setStepCount(this.scene, Number(cnt.value) || 1)));
+    row.append(lab, cnt);
+    if (n > 1) {
+      for (let i = 0; i < n; i++) row.append(this.#btn(String(i + 1), () => { this.#viewStep = i; this.#redraw(); }, tr("viewStep"), i === this.#viewStep ? "on" : ""));
+    }
+    t.append(row);
   }
   #drawLayers() {
     const box = this.#layers;
@@ -437,6 +479,10 @@ export class CanvasEditor {
       row(tr("zoneId"), text(e.zone ?? "", (s) => patch({ zone: s.replace(/[^A-Za-z0-9_-]/g, "") || "zone" })));
       pp.append(document.createTextNode(tr("zoneHint")));
     }
+    if ((this.scene.stepCount ?? 1) > 1) {
+      head(tr("stepRange"));
+      row(tr("fromTo"), number((e.from ?? 0) + 1, (n) => patch({ from: Math.max(0, Math.round(n) - 1) })), number(e.to ?? -1, (n) => patch({ to: n <= 0 ? -1 : Math.round(n) - 1 })));
+    }
     if (e.kind !== "zone") {
       for (const dir of ["in", "out"] as const) {
         head(dir === "in" ? tr("animIn") : tr("animOut"));
@@ -476,7 +522,8 @@ export class CanvasEditor {
   }
   #redrawStage() {
     this.#handle?.destroy();
-    this.#handle = renderScene(this.#vp, this.scene, this.#host.data(), { editor: !this.#preview, scale: () => this.#scale, resolveAsset: (f: string) => this.#host.assetUrl(f) });
+    this.#handle = renderScene(this.#vp, this.scene, this.#host.data(), { editor: !this.#preview, step: this.#viewStep, scale: () => this.#scale, resolveAsset: (f: string) => this.#host.assetUrl(f) });
+    this.#drawTimeline();
     this.#vp.insertBefore(this.#handle.stage, this.#ov);
     this.#drawOverlay();
   }
@@ -519,13 +566,119 @@ export class CanvasEditor {
     this.#redraw();
   }
   async #togglePreview() {
-    this.#preview = !this.#preview;
-    this.#redraw();
-    if (this.#preview && this.#handle) {
-      await this.#handle.play();
-      await new Promise((r) => setTimeout(r, 800));
-      if (this.#preview && this.#handle) await this.#handle.stop();
+    if (!this.#preview) {
+      this.#preview = true;
+      this.#pvStep = 0;
+      this.#redraw();
+      await this.#handle?.ready;
+      await this.#handle?.play(0);
+      return;
     }
+    const h = this.#handle;
+    this.#preview = false;
+    this.#drawTools();
+    await h?.stop();
+    this.#redraw();
+  }
+  async #pvNext() {
+    const n = this.scene.stepCount ?? 1;
+    this.#pvStep = Math.min(n - 1, this.#pvStep + 1);
+    this.#drawTools();
+    await this.#handle?.goto(this.#pvStep);
+  }
+
+  // ── Zeitleiste ──
+  #drawTimeline() {
+    const box = this.#tl;
+    box.innerHTML = "";
+    const s = this.scene;
+    const dir = this.#tlDir;
+    const end = timelineEnd(s, dir);
+    const head = document.createElement("div");
+    head.className = "hd2";
+    head.append(
+      this.#btn(tr("animIn"), () => { this.#tlDir = "in"; this.#drawTimeline(); }, "", dir === "in" ? "on" : ""),
+      this.#btn(tr("animOut"), () => { this.#tlDir = "out"; this.#drawTimeline(); }, "", dir === "out" ? "on" : ""),
+      document.createTextNode(`${tr("timeline")} · ${end} ms`),
+    );
+    box.append(head);
+    const ruler = document.createElement("div");
+    ruler.className = "row";
+    const rp = document.createElement("div");
+    const rt = document.createElement("div");
+    rt.className = "ruler";
+    for (let t = 0; t <= end; t += end / 4) {
+      const m = document.createElement("span");
+      m.style.cssText = `position:absolute;left:${(t / end) * 100}%;transform:translateX(${t === end ? "-100%" : "0"})`;
+      m.textContent = `${Math.round(t)}`;
+      rt.append(m);
+    }
+    ruler.append(rp, rt);
+    box.append(ruler);
+    for (const e of [...s.elements].reverse()) {
+      if (e.kind === "zone") continue;
+      const a = e.anim?.[dir];
+      const row = document.createElement("div");
+      row.className = "row";
+      const nm = document.createElement("div");
+      nm.className = `nm${this.#selIds.includes(e.id) ? " on" : ""}`;
+      nm.textContent = e.name;
+      nm.title = e.name;
+      nm.addEventListener("click", () => { this.#selIds = [e.id]; this.#redraw(); });
+      const track = document.createElement("div");
+      track.className = "track";
+      if (a && a.type !== "none") {
+        const bar = document.createElement("div");
+        bar.className = `bar ${dir}`;
+        bar.style.left = `${(a.delay / end) * 100}%`;
+        bar.style.width = `${Math.max(1, (a.ms / end) * 100)}%`;
+        bar.title = `${tr(`anim_${a.type}`)} · ${a.delay} + ${a.ms} ms`;
+        const grip = document.createElement("div");
+        grip.className = "gr";
+        bar.append(grip);
+        bar.addEventListener("pointerdown", (ev) => {
+          ev.preventDefault();
+          this.#tdrag = { id: e.id, mode: ev.target === grip ? "size" : "move", sx: ev.clientX, base: this.scene, end, w: track.clientWidth || 1, changed: false };
+          this.#selIds = [e.id];
+          bar.setPointerCapture(ev.pointerId);
+        });
+        bar.addEventListener("pointermove", (ev) => this.#tlMove(ev));
+        bar.addEventListener("pointerup", () => this.#tlUp());
+        bar.addEventListener("pointercancel", () => this.#tlUp());
+        track.append(bar);
+      } else {
+        track.title = tr("noAnim");
+        track.style.opacity = ".5";
+        track.addEventListener("dblclick", () => this.#commit(setTiming(this.scene, e.id, dir, { ms: 400 })));
+      }
+      row.append(nm, track);
+      box.append(row);
+    }
+  }
+  #tlMove(ev: PointerEvent) {
+    const d = this.#tdrag;
+    if (!d) return;
+    const dms = ((ev.clientX - d.sx) / d.w) * d.end;
+    d.changed = d.changed || Math.abs(ev.clientX - d.sx) > 1;
+    const dir = this.#tlDir;
+    const cur = d.base.elements.find((e) => e.id === d.id)?.anim?.[dir];
+    if (!cur) return;
+    const next = d.mode === "move" ? setTiming(d.base, d.id, dir, { delay: cur.delay + dms }) : setTiming(d.base, d.id, dir, { ms: cur.ms + dms });
+    this.#hist.replaceCurrent(next);
+    this.#host.onChange(next);
+    this.#drawTimeline();
+  }
+  #tlUp() {
+    const d = this.#tdrag;
+    this.#tdrag = null;
+    if (!d) return;
+    if (d.changed) {
+      const final = this.scene;
+      this.#hist.replaceCurrent(d.base);
+      this.#hist.push(final);
+      this.#host.onChange(final);
+    }
+    this.#redraw();
   }
 
   // ── Zeigereingaben ──

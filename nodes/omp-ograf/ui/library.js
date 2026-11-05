@@ -1,5 +1,5 @@
 // ui/modules/ograf-editor/runtime.js with { type: 'text' }
-var runtime_default = '// Laufzeit der Designer-Vorlagen des OGraf-Editors (Kapitel 90.5). Diese EINE Datei wird\n//  (a) vom Editor f\xFCr die Leinwand-Vorschau benutzt und\n//  (b) als Text in jede mit der Leinwand gebaute Vorlage kopiert (`<id>.js` = diese Datei + `export default createSceneElement(...)`),\n// damit Vorschau und Sendung denselben Code ausf\xFChren. Reines JavaScript ohne Abh\xE4ngigkeiten, ES-Modul.\n// Das Szenenmodell steht in `scene.json` des Pakets (Format `omp-ograf-scene/1`, s. scene.ts).\n\n/** Ersetzt `{{schluessel}}` durch Werte aus `data` (fehlend = leer). */\nexport function bindText(text, data) {\n  return String(text ?? "").replace(/\\{\\{\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*\\}\\}/g, (_, k) => {\n    const v = data ? data[k] : undefined;\n    return v === undefined || v === null ? "" : String(v);\n  });\n}\n\n/** Alle Animationsarten: Anzeigename-Schl\xFCssel \u2192 Start-Keyframes (Zustand \u201Eweg\u201C) und Ziel \u201Eda\u201C. */\nexport const ANIM_TYPES = ["none", "fade", "fromLeft", "fromRight", "fromTop", "fromBottom", "scale", "wipe"];\n\n/** Keyframes f\xFCr Einblenden (`dir` = "in") bzw. Ausblenden ("out", r\xFCckw\xE4rts). `dist` = Weg in Bildpunkten. */\nexport function keyframesFor(type, dir, dist = 80) {\n  const slide = (t) => [{ opacity: 0, transform: t }, { opacity: 1, transform: "none" }];\n  let pair;\n  switch (type) {\n    case "fade": pair = [{ opacity: 0 }, { opacity: 1 }]; break;\n    case "fromLeft": pair = slide(`translateX(${-dist}px)`); break;\n    case "fromRight": pair = slide(`translateX(${dist}px)`); break;\n    case "fromTop": pair = slide(`translateY(${-dist}px)`); break;\n    case "fromBottom": pair = slide(`translateY(${dist}px)`); break;\n    case "scale": pair = slide("scale(0.8)"); break;\n    case "wipe": pair = [{ clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0 0 0)" }]; break;\n    default: return null;\n  }\n  return dir === "in" ? pair : [pair[1], pair[0]];\n}\n\n/** Schrift verkleinern, bis der Text ins Feld passt (nur bei `e.autofit`, nicht unter `e.minSize`). Braucht ein eingeh\xE4ngtes Element. */\nexport function autofit(inner, e) {\n  if (e.kind !== "text" || !e.autofit) return;\n  let size = e.size || 40;\n  const min = e.minSize || 12;\n  const s = inner.style;\n  const keep = s.alignItems;\n  s.alignItems = "flex-start"; // sonst z\xE4hlt der \xDCberstand nach oben nicht in scrollHeight\n  s.fontSize = `${size}px`;\n  for (let guard = 0; guard < 60 && size > min && (inner.scrollHeight > inner.clientHeight + 1 || inner.scrollWidth > inner.clientWidth + 1); guard++) {\n    size = Math.max(min, size - Math.max(1, Math.round(size * 0.04)));\n    s.fontSize = `${size}px`;\n  }\n  s.alignItems = keep;\n}\n\nconst FONTS = new Set();\n/** Schriftdateien der Szene als Schriftfamilien anmelden; Ergebnis: Versprechen, das nach dem Laden aller erf\xFCllt ist. */\nfunction loadFonts(scene, resolveAsset) {\n  if (typeof FontFace === "undefined" || !document.fonts || !resolveAsset) return Promise.resolve();\n  const jobs = [];\n  for (const f of scene.fonts || []) {\n    const url = resolveAsset(f.file);\n    if (!url) continue;\n    const key = `${f.family}|${url}`;\n    if (FONTS.has(key)) continue;\n    FONTS.add(key);\n    const face = new FontFace(f.family, `url("${url}")`);\n    document.fonts.add(face);\n    jobs.push(face.load().catch(() => {}));\n  }\n  return Promise.all(jobs).then(() => {});\n}\n\nfunction applyBox(el, e) {\n  const s = el.style;\n  s.position = "absolute";\n  s.left = `${e.x}px`;\n  s.top = `${e.y}px`;\n  s.width = `${e.w}px`;\n  s.height = `${e.h}px`;\n  s.transform = e.rotation ? `rotate(${e.rotation}deg)` : "none";\n  s.boxSizing = "border-box";\n}\n\nfunction paint(inner, e, data) {\n  const s = inner.style;\n  const color = (c) => bindText(c, data);\n  if (e.kind === "rect") {\n    s.background = color(e.fill || "transparent");\n    s.borderRadius = `${e.radius || 0}px`;\n    s.border = e.strokeW ? `${e.strokeW}px solid ${color(e.stroke || "#fff")}` : "none";\n  } else if (e.kind === "text") {\n    inner.textContent = bindText(e.text, data);\n    s.font = `${e.weight || 400} ${e.size || 40}px/${e.lineHeight || 1.2} ${e.font || "system-ui, sans-serif"}`;\n    s.color = color(e.color || "#fff");\n    s.textAlign = e.align || "left";\n    s.whiteSpace = "pre-wrap";\n    s.overflow = "hidden";\n    s.display = "flex";\n    s.alignItems = { top: "flex-start", middle: "center", bottom: "flex-end" }[e.valign || "top"];\n    s.justifyContent = { left: "flex-start", center: "center", right: "flex-end" }[e.align || "left"];\n    s.background = e.bg ? color(e.bg) : "transparent";\n    s.padding = `${e.padding || 0}px`;\n    s.borderRadius = `${e.radius || 0}px`;\n  } else if (e.kind === "image") {\n    s.objectFit = e.fit || "contain";\n    s.borderRadius = `${e.radius || 0}px`;\n  }\n}\n\n/**\n * Baut die Szene in `root` (ShadowRoot oder Element) und liefert den Griff `{play, stop, update, destroy, stage}`.\n * `opts.resolveAsset(datei) \u2192 URL`, `opts.scale() \u2192 Faktor` (Standard: Breite des Fensters / Szenenbreite),\n * `opts.editor = true` zeigt Zonen als gestrichelte Rahmen und spielt keine Animation (alles sichtbar).\n */\nexport function renderScene(root, scene, data, opts = {}) {\n  const stage = document.createElement("div");\n  stage.style.cssText = `position:absolute;left:0;top:0;width:${scene.width}px;height:${scene.height}px;transform-origin:0 0;overflow:hidden`;\n  const scaleOf = opts.scale || (() => (window.innerWidth || scene.width) / scene.width);\n  const fit = () => { stage.style.transform = `scale(${scaleOf()})`; };\n  fit();\n  const onResize = () => fit();\n  window.addEventListener("resize", onResize);\n  const items = [];\n  for (const e of scene.elements || []) {\n    const wrap = document.createElement("div");\n    applyBox(wrap, e);\n    wrap.style.opacity = String(e.opacity ?? 1);\n    wrap.dataset.elementId = e.id;\n    let inner;\n    if (e.kind === "image") {\n      inner = document.createElement("img");\n      inner.alt = "";\n      if (e.file && opts.resolveAsset) inner.src = opts.resolveAsset(e.file);\n    } else {\n      inner = document.createElement("div");\n    }\n    inner.style.cssText += ";width:100%;height:100%;box-sizing:border-box";\n    if (e.kind === "zone") {\n      wrap.setAttribute("data-ograf-zone", e.zone || "zone");\n      if (opts.editor) inner.style.outline = "2px dashed #00c8ff";\n    }\n    paint(inner, e, data);\n    wrap.append(inner);\n    stage.append(wrap);\n    items.push({ e, wrap, inner, anims: [] });\n  }\n  root.append(stage);\n  const fitAll = () => { for (const it of items) autofit(it.inner, it.e); };\n  fitAll();\n  const ready = loadFonts(scene, opts.resolveAsset).then(fitAll);\n  const clear = (it) => { for (const a of it.anims) a.cancel(); it.anims = []; };\n  const run = (it, dir) => {\n    const spec = it.e.anim && it.e.anim[dir];\n    const kf = spec ? keyframesFor(spec.type, dir) : null;\n    clear(it);\n    if (!kf) { it.inner.style.visibility = dir === "in" ? "visible" : "hidden"; return Promise.resolve(); }\n    it.inner.style.visibility = "visible";\n    const a = it.inner.animate(kf, { duration: spec.ms ?? 400, delay: spec.delay ?? 0, easing: spec.ease || "ease-out", fill: "both" });\n    it.anims.push(a);\n    return a.finished.catch(() => {});\n  };\n  if (!opts.editor) for (const it of items) it.inner.style.visibility = "hidden";\n  return {\n    stage,\n    ready,\n    play: () => Promise.all(items.map((it) => run(it, "in"))),\n    stop: () => Promise.all(items.map((it) => run(it, "out"))),\n    update(next) { for (const it of items) { paint(it.inner, it.e, next); autofit(it.inner, it.e); } },\n    destroy() { window.removeEventListener("resize", onResize); for (const it of items) clear(it); stage.remove(); },\n  };\n}\n\n/** Die Web-Component-Klasse, die OGraf als `default export` erwartet. `base` = `import.meta.url` des Hauptmoduls. */\nexport function createSceneElement(scene, base) {\n  return class SceneGraphic extends HTMLElement {\n    constructor() {\n      super();\n      const sr = this.attachShadow({ mode: "open" });\n      const st = document.createElement("style");\n      st.textContent = ":host{position:fixed;inset:0;display:block;pointer-events:none}";\n      sr.append(st);\n    }\n    async load(p) {\n      this._data = (p && p.data) || {};\n      this._h = renderScene(this.shadowRoot, scene, this._data, { resolveAsset: (f) => new URL(f, base).href });\n      await this._h.ready;\n      return { statusCode: 200 };\n    }\n    async dispose() { if (this._h) this._h.destroy(); return { statusCode: 200 }; }\n    async playAction() { await this._h.play(); return { statusCode: 200, currentStep: 0 }; }\n    async stopAction() { await this._h.stop(); return { statusCode: 200 }; }\n    async updateAction(p) { this._data = { ...this._data, ...((p && p.data) || {}) }; this._h.update(this._data); return { statusCode: 200 }; }\n    async customAction() { return { statusCode: 200 }; }\n  };\n}\n';
+var runtime_default = '// Laufzeit der Designer-Vorlagen des OGraf-Editors (Kapitel 90.5). Diese EINE Datei wird\n//  (a) vom Editor f\xFCr die Leinwand-Vorschau benutzt und\n//  (b) als Text in jede mit der Leinwand gebaute Vorlage kopiert (`<id>.js` = diese Datei + `export default createSceneElement(...)`),\n// damit Vorschau und Sendung denselben Code ausf\xFChren. Reines JavaScript ohne Abh\xE4ngigkeiten, ES-Modul.\n// Das Szenenmodell steht in `scene.json` des Pakets (Format `omp-ograf-scene/1`, s. scene.ts).\n\n/** Ersetzt `{{schluessel}}` durch Werte aus `data` (fehlend = leer). */\nexport function bindText(text, data) {\n  return String(text ?? "").replace(/\\{\\{\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*\\}\\}/g, (_, k) => {\n    const v = data ? data[k] : undefined;\n    return v === undefined || v === null ? "" : String(v);\n  });\n}\n\n/** Alle Animationsarten: Anzeigename-Schl\xFCssel \u2192 Start-Keyframes (Zustand \u201Eweg\u201C) und Ziel \u201Eda\u201C. */\nexport const ANIM_TYPES = ["none", "fade", "fromLeft", "fromRight", "fromTop", "fromBottom", "scale", "wipe"];\n\n/** Keyframes f\xFCr Einblenden (`dir` = "in") bzw. Ausblenden ("out", r\xFCckw\xE4rts). `dist` = Weg in Bildpunkten. */\nexport function keyframesFor(type, dir, dist = 80) {\n  const slide = (t) => [{ opacity: 0, transform: t }, { opacity: 1, transform: "none" }];\n  let pair;\n  switch (type) {\n    case "fade": pair = [{ opacity: 0 }, { opacity: 1 }]; break;\n    case "fromLeft": pair = slide(`translateX(${-dist}px)`); break;\n    case "fromRight": pair = slide(`translateX(${dist}px)`); break;\n    case "fromTop": pair = slide(`translateY(${-dist}px)`); break;\n    case "fromBottom": pair = slide(`translateY(${dist}px)`); break;\n    case "scale": pair = slide("scale(0.8)"); break;\n    case "wipe": pair = [{ clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0 0 0)" }]; break;\n    default: return null;\n  }\n  return dir === "in" ? pair : [pair[1], pair[0]];\n}\n\n/** Schrift verkleinern, bis der Text ins Feld passt (nur bei `e.autofit`, nicht unter `e.minSize`). Braucht ein eingeh\xE4ngtes Element. */\nexport function autofit(inner, e) {\n  if (e.kind !== "text" || !e.autofit) return;\n  let size = e.size || 40;\n  const min = e.minSize || 12;\n  const s = inner.style;\n  const keep = s.alignItems;\n  s.alignItems = "flex-start"; // sonst z\xE4hlt der \xDCberstand nach oben nicht in scrollHeight\n  s.fontSize = `${size}px`;\n  for (let guard = 0; guard < 60 && size > min && (inner.scrollHeight > inner.clientHeight + 1 || inner.scrollWidth > inner.clientWidth + 1); guard++) {\n    size = Math.max(min, size - Math.max(1, Math.round(size * 0.04)));\n    s.fontSize = `${size}px`;\n  }\n  s.alignItems = keep;\n}\n\nconst FONTS = new Set();\n/** Schriftdateien der Szene als Schriftfamilien anmelden; Ergebnis: Versprechen, das nach dem Laden aller erf\xFCllt ist. */\nfunction loadFonts(scene, resolveAsset) {\n  if (typeof FontFace === "undefined" || !document.fonts || !resolveAsset) return Promise.resolve();\n  const jobs = [];\n  for (const f of scene.fonts || []) {\n    const url = resolveAsset(f.file);\n    if (!url) continue;\n    const key = `${f.family}|${url}`;\n    if (FONTS.has(key)) continue;\n    FONTS.add(key);\n    const face = new FontFace(f.family, `url("${url}")`);\n    document.fonts.add(face);\n    jobs.push(face.load().catch(() => {}));\n  }\n  return Promise.all(jobs).then(() => {});\n}\n\n/** Ist das Element im Schritt `step` sichtbar? (`from` Standard 0, `to` \u22121 = bis zum letzten Schritt.) */\nexport function inStep(e, step) {\n  const from = e.from ?? 0;\n  const to = e.to ?? -1;\n  return step >= from && (to < 0 || step <= to);\n}\n\nfunction applyBox(el, e) {\n  const s = el.style;\n  s.position = "absolute";\n  s.left = `${e.x}px`;\n  s.top = `${e.y}px`;\n  s.width = `${e.w}px`;\n  s.height = `${e.h}px`;\n  s.transform = e.rotation ? `rotate(${e.rotation}deg)` : "none";\n  s.boxSizing = "border-box";\n}\n\nfunction paint(inner, e, data) {\n  const s = inner.style;\n  const color = (c) => bindText(c, data);\n  if (e.kind === "rect") {\n    s.background = color(e.fill || "transparent");\n    s.borderRadius = `${e.radius || 0}px`;\n    s.border = e.strokeW ? `${e.strokeW}px solid ${color(e.stroke || "#fff")}` : "none";\n  } else if (e.kind === "text") {\n    inner.textContent = bindText(e.text, data);\n    s.font = `${e.weight || 400} ${e.size || 40}px/${e.lineHeight || 1.2} ${e.font || "system-ui, sans-serif"}`;\n    s.color = color(e.color || "#fff");\n    s.textAlign = e.align || "left";\n    s.whiteSpace = "pre-wrap";\n    s.overflow = "hidden";\n    s.display = "flex";\n    s.alignItems = { top: "flex-start", middle: "center", bottom: "flex-end" }[e.valign || "top"];\n    s.justifyContent = { left: "flex-start", center: "center", right: "flex-end" }[e.align || "left"];\n    s.background = e.bg ? color(e.bg) : "transparent";\n    s.padding = `${e.padding || 0}px`;\n    s.borderRadius = `${e.radius || 0}px`;\n  } else if (e.kind === "image") {\n    s.objectFit = e.fit || "contain";\n    s.borderRadius = `${e.radius || 0}px`;\n  }\n}\n\n/**\n * Baut die Szene in `root` (ShadowRoot oder Element) und liefert den Griff `{play, stop, update, destroy, stage}`.\n * `opts.resolveAsset(datei) \u2192 URL`, `opts.scale() \u2192 Faktor` (Standard: Breite des Fensters / Szenenbreite),\n * `opts.editor = true` zeigt Zonen als gestrichelte Rahmen und spielt keine Animation (alles sichtbar).\n */\nexport function renderScene(root, scene, data, opts = {}) {\n  const stage = document.createElement("div");\n  stage.style.cssText = `position:absolute;left:0;top:0;width:${scene.width}px;height:${scene.height}px;transform-origin:0 0;overflow:hidden`;\n  const scaleOf = opts.scale || (() => (window.innerWidth || scene.width) / scene.width);\n  const fit = () => { stage.style.transform = `scale(${scaleOf()})`; };\n  fit();\n  const onResize = () => fit();\n  window.addEventListener("resize", onResize);\n  const items = [];\n  for (const e of scene.elements || []) {\n    const wrap = document.createElement("div");\n    applyBox(wrap, e);\n    wrap.style.opacity = String(e.opacity ?? 1);\n    if (opts.editor && opts.step !== undefined && !inStep(e, opts.step)) wrap.style.opacity = String((e.opacity ?? 1) * 0.2);\n    wrap.dataset.elementId = e.id;\n    let inner;\n    if (e.kind === "image") {\n      inner = document.createElement("img");\n      inner.alt = "";\n      if (e.file && opts.resolveAsset) inner.src = opts.resolveAsset(e.file);\n    } else {\n      inner = document.createElement("div");\n    }\n    inner.style.cssText += ";width:100%;height:100%;box-sizing:border-box";\n    if (e.kind === "zone") {\n      wrap.setAttribute("data-ograf-zone", e.zone || "zone");\n      if (opts.editor) inner.style.outline = "2px dashed #00c8ff";\n    }\n    paint(inner, e, data);\n    wrap.append(inner);\n    stage.append(wrap);\n    items.push({ e, wrap, inner, anims: [], shown: false });\n  }\n  root.append(stage);\n  const fitAll = () => { for (const it of items) autofit(it.inner, it.e); };\n  fitAll();\n  const ready = loadFonts(scene, opts.resolveAsset).then(fitAll);\n  const clear = (it) => { for (const a of it.anims) a.cancel(); it.anims = []; };\n  const run = (it, dir) => {\n    const spec = it.e.anim && it.e.anim[dir];\n    const kf = spec ? keyframesFor(spec.type, dir) : null;\n    clear(it);\n    // Zonen melden ihr Rechteck \xFCber das umgebende Element; au\xDFerhalb ihrer Schritte gelten sie als unsichtbar\n    if (it.e.kind === "zone") it.wrap.style.visibility = dir === "in" ? "visible" : "hidden";\n    if (!kf) { it.inner.style.visibility = dir === "in" ? "visible" : "hidden"; return Promise.resolve(); }\n    it.inner.style.visibility = "visible";\n    const a = it.inner.animate(kf, { duration: spec.ms ?? 400, delay: spec.delay ?? 0, easing: spec.ease || "ease-out", fill: "both" });\n    it.anims.push(a);\n    return a.finished.catch(() => {});\n  };\n  if (!opts.editor) {\n    for (const it of items) {\n      it.inner.style.visibility = "hidden";\n      if (it.e.kind === "zone") it.wrap.style.visibility = "hidden";\n    }\n  }\n  const goto = (step) => Promise.all(items.map((it) => {\n    const vis = inStep(it.e, step);\n    if (vis && !it.shown) { it.shown = true; return run(it, "in"); }\n    if (!vis && it.shown) { it.shown = false; return run(it, "out"); }\n    return Promise.resolve();\n  }));\n  return {\n    stage,\n    ready,\n    goto,\n    play: (step = 0) => goto(step),\n    stop: () => Promise.all(items.filter((it) => it.shown).map((it) => { it.shown = false; return run(it, "out"); })),\n    update(next) { for (const it of items) { paint(it.inner, it.e, next); autofit(it.inner, it.e); } },\n    destroy() { window.removeEventListener("resize", onResize); for (const it of items) clear(it); stage.remove(); },\n  };\n}\n\n/** Die Web-Component-Klasse, die OGraf als `default export` erwartet. `base` = `import.meta.url` des Hauptmoduls. */\nexport function createSceneElement(scene, base) {\n  return class SceneGraphic extends HTMLElement {\n    constructor() {\n      super();\n      const sr = this.attachShadow({ mode: "open" });\n      const st = document.createElement("style");\n      st.textContent = ":host{position:fixed;inset:0;display:block;pointer-events:none}";\n      sr.append(st);\n    }\n    async load(p) {\n      this._data = (p && p.data) || {};\n      this._h = renderScene(this.shadowRoot, scene, this._data, { resolveAsset: (f) => new URL(f, base).href });\n      await this._h.ready;\n      return { statusCode: 200 };\n    }\n    async dispose() { if (this._h) this._h.destroy(); return { statusCode: 200 }; }\n    async playAction(p) {\n      const count = Math.max(1, scene.stepCount || 1);\n      const want = p && typeof p.goto === "number" ? p.goto : 0;\n      this._step = Math.max(0, Math.min(count - 1, want));\n      await this._h.goto(this._step);\n      return { statusCode: 200, currentStep: this._step };\n    }\n    async continueAction() {\n      const count = Math.max(1, scene.stepCount || 1);\n      this._step = Math.min(count - 1, (this._step || 0) + 1);\n      await this._h.goto(this._step);\n      return { statusCode: 200, currentStep: this._step };\n    }\n    async stopAction() { await this._h.stop(); return { statusCode: 200 }; }\n    async updateAction(p) { this._data = { ...this._data, ...((p && p.data) || {}) }; this._h.update(this._data); return { statusCode: 200 }; }\n    async customAction() { return { statusCode: 200 }; }\n  };\n}\n';
 
 // ui/modules/ograf-editor/runtime.js
 function bindText(text, data) {
@@ -96,6 +96,11 @@ function loadFonts(scene, resolveAsset) {
   return Promise.all(jobs).then(() => {
   });
 }
+function inStep(e, step) {
+  const from = e.from ?? 0;
+  const to = e.to ?? -1;
+  return step >= from && (to < 0 || step <= to);
+}
 function applyBox(el, e) {
   const s = el.style;
   s.position = "absolute";
@@ -154,6 +159,7 @@ function renderScene(root, scene, data, opts = {}) {
     const wrap = document.createElement("div");
     applyBox(wrap, e);
     wrap.style.opacity = String(e.opacity ?? 1);
+    if (opts.editor && opts.step !== void 0 && !inStep(e, opts.step)) wrap.style.opacity = String((e.opacity ?? 1) * 0.2);
     wrap.dataset.elementId = e.id;
     let inner;
     if (e.kind === "image") {
@@ -175,7 +181,8 @@ function renderScene(root, scene, data, opts = {}) {
       e,
       wrap,
       inner,
-      anims: []
+      anims: [],
+      shown: false
     });
   }
   root.append(stage);
@@ -192,6 +199,7 @@ function renderScene(root, scene, data, opts = {}) {
     const spec = it.e.anim && it.e.anim[dir];
     const kf = spec ? keyframesFor(spec.type, dir) : null;
     clear(it);
+    if (it.e.kind === "zone") it.wrap.style.visibility = dir === "in" ? "visible" : "hidden";
     if (!kf) {
       it.inner.style.visibility = dir === "in" ? "visible" : "hidden";
       return Promise.resolve();
@@ -207,12 +215,33 @@ function renderScene(root, scene, data, opts = {}) {
     return a.finished.catch(() => {
     });
   };
-  if (!opts.editor) for (const it of items) it.inner.style.visibility = "hidden";
+  if (!opts.editor) {
+    for (const it of items) {
+      it.inner.style.visibility = "hidden";
+      if (it.e.kind === "zone") it.wrap.style.visibility = "hidden";
+    }
+  }
+  const goto = (step) => Promise.all(items.map((it) => {
+    const vis = inStep(it.e, step);
+    if (vis && !it.shown) {
+      it.shown = true;
+      return run(it, "in");
+    }
+    if (!vis && it.shown) {
+      it.shown = false;
+      return run(it, "out");
+    }
+    return Promise.resolve();
+  }));
   return {
     stage,
     ready,
-    play: () => Promise.all(items.map((it) => run(it, "in"))),
-    stop: () => Promise.all(items.map((it) => run(it, "out"))),
+    goto,
+    play: (step = 0) => goto(step),
+    stop: () => Promise.all(items.filter((it) => it.shown).map((it) => {
+      it.shown = false;
+      return run(it, "out");
+    })),
     update(next) {
       for (const it of items) {
         paint(it.inner, it.e, next);
@@ -671,6 +700,7 @@ function parseScene(text) {
   const o = v;
   if (!o || o.format !== SCENE_FORMAT || !Array.isArray(o.elements)) return null;
   const scene = newScene(Math.max(16, num2(o.width, 1920)), Math.max(16, num2(o.height, 1080)));
+  scene.stepCount = Math.min(20, Math.max(1, Math.round(num2(o.stepCount, 1))));
   if (Array.isArray(o.fonts)) {
     scene.fonts = o.fonts.filter((f) => f && typeof f.family === "string" && /^[^"'\\;{}]+$/.test(f.family) && typeof f.file === "string" && /^[A-Za-z0-9._-]+$/.test(f.file)).map((f) => ({
       family: f.family,
@@ -696,6 +726,8 @@ function parseScene(text) {
       h: Math.max(MIN_SIZE, num2(e.h, 100)),
       rotation: num2(e.rotation, 0),
       opacity: Math.min(1, Math.max(0, num2(e.opacity, 1))),
+      from: Math.max(0, Math.round(num2(e.from, 0))),
+      to: Math.max(-1, Math.round(num2(e.to, -1))),
       anim: {
         in: parseAnim(anim.in),
         out: parseAnim(anim.out)
@@ -773,6 +805,49 @@ function reorder(s, id, how) {
   const j = how === "front" ? els.length : how === "back" ? 0 : how === "up" ? Math.min(els.length, i + 1) : Math.max(0, i - 1);
   els.splice(j, 0, e);
   return withElements(s, els);
+}
+function setTiming(s, id, dir, patch) {
+  const e = s.elements.find((x) => x.id === id);
+  if (!e) return s;
+  const cur = e.anim?.[dir] ?? {
+    type: "fade",
+    ms: 300,
+    delay: 0,
+    ease: "ease-out"
+  };
+  const snap = (v) => Math.max(0, Math.round(v / 50) * 50);
+  const next = {
+    ...cur,
+    type: cur.type === "none" ? "fade" : cur.type,
+    ms: patch.ms !== void 0 ? Math.max(50, snap(patch.ms)) : cur.ms,
+    delay: patch.delay !== void 0 ? snap(patch.delay) : cur.delay
+  };
+  return updateElement(s, id, {
+    anim: {
+      ...e.anim,
+      [dir]: next
+    }
+  });
+}
+function timelineEnd(s, dir, min = 1e3) {
+  let end = min;
+  for (const e of s.elements) {
+    const a = e.anim?.[dir];
+    if (a && a.type !== "none") end = Math.max(end, a.delay + a.ms);
+  }
+  return Math.ceil(end / 250) * 250;
+}
+function setStepCount(s, n) {
+  const count = Math.min(20, Math.max(1, Math.round(n)));
+  return {
+    ...s,
+    stepCount: count,
+    elements: s.elements.map((e) => ({
+      ...e,
+      from: Math.min(e.from ?? 0, count - 1),
+      to: (e.to ?? -1) >= count ? -1 : e.to ?? -1
+    }))
+  };
 }
 function alignToScene(s, id, how) {
   const e = s.elements.find((x) => x.id === id);
@@ -1051,9 +1126,11 @@ function applyScene(files, id, scene, runtime) {
   if (mname) {
     try {
       const m = JSON.parse(out[mname]);
-      if (m.main !== `${id}.js`) out[mname] = stringify({
+      const steps = Math.max(1, scene.stepCount ?? 1);
+      if (m.main !== `${id}.js` || m.stepCount !== steps) out[mname] = stringify({
         ...m,
-        main: `${id}.js`
+        main: `${id}.js`,
+        stepCount: steps
       });
     } catch {
     }
@@ -1388,6 +1465,22 @@ var messages = {
     alignBottom: "Unten b\xFCndig",
     distributeX: "Waagerecht gleichm\xE4\xDFig verteilen",
     distributeY: "Senkrecht gleichm\xE4\xDFig verteilen",
+    stepsLabel: "Schritte",
+    viewStep: "Ansicht dieses Schritts (andere Elemente blass)",
+    previewStop: "Vorschau beenden (Ausblenden)",
+    previewNext: "N\xE4chster Schritt (Weiter)",
+    timeline: "Zeitleiste",
+    noAnim: "Keine Animation \u2014 Doppelklick legt eine an",
+    stepRange: "Sichtbar in Schritten",
+    fromTo: "von / bis (0 = Ende)",
+    testShow: "\u25B6 Sendetest",
+    testNext: "\u23ED",
+    testOff: "\u25A0",
+    testHint: "Vorlage auf dem Grafik-Node einblenden (Ebene \u201Eeditor-test\u201C)",
+    testNextHint: "Weiter (n\xE4chster Schritt)",
+    testOffHint: "Sendetest ausblenden",
+    saveFirst: "Erst speichern, dann testen.",
+    testFailed: "Sendetest fehlgeschlagen: {why}",
     generated: "Erzeugt aus der Leinwand \u2014 nicht von Hand bearbeiten."
   },
   en: {
@@ -1515,6 +1608,22 @@ var messages = {
     alignBottom: "Align bottom",
     distributeX: "Distribute horizontally",
     distributeY: "Distribute vertically",
+    stepsLabel: "Steps",
+    viewStep: "View this step (other elements dimmed)",
+    previewStop: "End preview (animate out)",
+    previewNext: "Next step (continue)",
+    timeline: "Timeline",
+    noAnim: "No animation \u2014 double-click adds one",
+    stepRange: "Visible in steps",
+    fromTo: "from / to (0 = end)",
+    testShow: "\u25B6 On-air test",
+    testNext: "\u23ED",
+    testOff: "\u25A0",
+    testHint: "Show the template on the graphics node (layer \u201Ceditor-test\u201D)",
+    testNextHint: "Continue (next step)",
+    testOffHint: "Hide the on-air test",
+    saveFirst: "Save first, then test.",
+    testFailed: "On-air test failed: {why}",
     generated: "Generated from the canvas \u2014 do not edit by hand."
   }
 };
@@ -1532,6 +1641,16 @@ var STYLE = `
 .sel { position: absolute; border: 1px solid #00c8ff; box-sizing: border-box; }
 .hd { position: absolute; width: 9px; height: 9px; margin: -5px 0 0 -5px; background: #fff; border: 1px solid #00c8ff; box-sizing: border-box; pointer-events: auto; }
 .guide { position: absolute; background: #ff3b81; }
+.tl { border: 1px solid var(--omp-border, #2e3338); border-radius: 4px; padding: 4px; display: flex; flex-direction: column; gap: 2px; }
+.tl .hd2 { display: flex; gap: 6px; align-items: center; }
+.tl .row { display: grid; grid-template-columns: 110px 1fr; gap: 6px; align-items: center; }
+.tl .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.tl .nm.on { color: #fff; background: var(--omp-info, #4285f4); border-radius: 3px; padding: 0 3px; }
+.tl .track { position: relative; height: 16px; background: var(--omp-bg-2, #1c1f22); border-radius: 3px; }
+.tl .bar { position: absolute; top: 2px; height: 12px; border-radius: 3px; background: #4285f4; cursor: grab; box-sizing: border-box; min-width: 4px; }
+.tl .bar.out { background: #d97706; }
+.tl .bar .gr { position: absolute; right: 0; top: 0; width: 6px; height: 100%; cursor: ew-resize; background: rgba(255,255,255,.45); border-radius: 0 3px 3px 0; }
+.tl .ruler { position: relative; height: 12px; color: var(--omp-text-dim, #9aa0a6); font-size: 10px; }
 .layers { display: flex; flex-direction: column; border: 1px solid var(--omp-border, #2e3338); border-radius: 4px; max-height: 360px; overflow: auto; }
 .ly { display: flex; align-items: center; gap: 4px; padding: 3px 6px; cursor: pointer; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; }
 .ly.on { background: var(--omp-info, #4285f4); color: #fff; }
@@ -1569,6 +1688,11 @@ var CanvasEditor = class {
   #guides = [];
   #drag = null;
   #marquee = null;
+  #viewStep = 0;
+  #pvStep = 0;
+  #tl;
+  #tlDir = "in";
+  #tdrag = null;
   #preview = false;
   #ro;
   #snap = true;
@@ -1602,9 +1726,10 @@ var CanvasEditor = class {
     this.#redraw();
   }
   // ── Aufbau ──
-  #btn(label, onClick, title = "", cls = "") {
+  #btn(label, onClick, title = "", cls = "", disabled = false) {
     const b = document.createElement("button");
     b.type = "button";
+    b.disabled = disabled;
     b.className = `s ${cls}`.trim();
     b.textContent = label;
     b.title = title;
@@ -1631,7 +1756,9 @@ var CanvasEditor = class {
     this.#ov = document.createElement("div");
     this.#ov.className = "ov";
     this.#vp.append(this.#ov);
-    mid.append(this.#vp);
+    this.#tl = document.createElement("div");
+    this.#tl.className = "tl";
+    mid.append(this.#vp, this.#tl);
     this.#side = document.createElement("div");
     this.#side.className = "col";
     cv.append(left, mid, this.#side);
@@ -1658,11 +1785,13 @@ var CanvasEditor = class {
     this.#vp.style.height = `${Math.round(s.height * this.#scale)}px`;
     this.#handle = renderScene(this.#vp, s, this.#host.data(), {
       editor: !this.#preview,
+      step: this.#viewStep,
       scale: () => this.#scale,
       resolveAsset: (f) => this.#host.assetUrl(f)
     });
     this.#vp.insertBefore(this.#handle.stage, this.#ov);
     this.#drawOverlay();
+    this.#drawTimeline();
     this.#drawTools();
     this.#drawLayers();
     this.#drawProps();
@@ -1731,17 +1860,37 @@ var CanvasEditor = class {
   #drawTools() {
     const t = this.#tools;
     t.innerHTML = "";
+    if (this.#preview) {
+      const n2 = this.scene.stepCount ?? 1;
+      t.append(this.#btn("\u25A0", () => void this.#togglePreview(), tr("previewStop"), "on"), this.#btn("\u23ED", () => void this.#pvNext(), tr("previewNext"), "", n2 < 2 || this.#pvStep >= n2 - 1), document.createTextNode(` ${this.#pvStep + 1}/${n2}`));
+      return;
+    }
     for (const k of KINDS) t.append(this.#btn(`\uFF0B ${tr(KIND_LABEL[k])}`, () => this.#add(k)));
     const sel = this.#selIds.length > 0;
-    t.append(this.#btn("\u21B6", () => this.#undo(), tr("undo"), ""), this.#btn("\u21B7", () => this.#redo(), tr("redo"), ""), this.#btn("\u29C9", () => this.#dup(), tr("duplicate")), this.#btn("\u2715", () => this.#del(), tr("delete")), this.#btn("\u25B6 / \u25A0", () => this.#togglePreview(), tr("previewHint"), this.#preview ? "on" : ""), this.#btn("\u2317", () => {
+    t.append(this.#btn("\u21B6", () => this.#undo(), tr("undo"), "", !this.#hist.canUndo), this.#btn("\u21B7", () => this.#redo(), tr("redo"), "", !this.#hist.canRedo), this.#btn("\u29C9", () => this.#dup(), tr("duplicate"), "", !sel), this.#btn("\u2715", () => this.#del(), tr("delete"), "", !sel), this.#btn("\u25B6", () => void this.#togglePreview(), tr("previewHint")), this.#btn("\u2317", () => {
       this.#snap = !this.#snap;
       this.#drawTools();
     }, tr("snap"), this.#snap ? "on" : ""));
-    const bs = t.querySelectorAll("button");
-    bs[kindsLen()].disabled = !this.#hist.canUndo;
-    bs[kindsLen() + 1].disabled = !this.#hist.canRedo;
-    bs[kindsLen() + 2].disabled = !sel;
-    bs[kindsLen() + 3].disabled = !sel;
+    const n = this.scene.stepCount ?? 1;
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;gap:4px;align-items:center;flex-basis:100%";
+    const lab = document.createElement("span");
+    lab.textContent = tr("stepsLabel");
+    const cnt = document.createElement("input");
+    cnt.type = "number";
+    cnt.min = "1";
+    cnt.max = "20";
+    cnt.value = String(n);
+    cnt.style.width = "52px";
+    cnt.addEventListener("change", () => this.#commit(setStepCount(this.scene, Number(cnt.value) || 1)));
+    row.append(lab, cnt);
+    if (n > 1) {
+      for (let i = 0; i < n; i++) row.append(this.#btn(String(i + 1), () => {
+        this.#viewStep = i;
+        this.#redraw();
+      }, tr("viewStep"), i === this.#viewStep ? "on" : ""));
+    }
+    t.append(row);
   }
   #drawLayers() {
     const box = this.#layers;
@@ -2095,6 +2244,14 @@ var CanvasEditor = class {
       })));
       pp.append(document.createTextNode(tr("zoneHint")));
     }
+    if ((this.scene.stepCount ?? 1) > 1) {
+      head(tr("stepRange"));
+      row(tr("fromTo"), number((e.from ?? 0) + 1, (n) => patch({
+        from: Math.max(0, Math.round(n) - 1)
+      })), number(e.to ?? -1, (n) => patch({
+        to: n <= 0 ? -1 : Math.round(n) - 1
+      })));
+    }
     if (e.kind !== "zone") {
       for (const dir of [
         "in",
@@ -2174,9 +2331,11 @@ var CanvasEditor = class {
     this.#handle?.destroy();
     this.#handle = renderScene(this.#vp, this.scene, this.#host.data(), {
       editor: !this.#preview,
+      step: this.#viewStep,
       scale: () => this.#scale,
       resolveAsset: (f) => this.#host.assetUrl(f)
     });
+    this.#drawTimeline();
     this.#vp.insertBefore(this.#handle.stage, this.#ov);
     this.#drawOverlay();
   }
@@ -2221,13 +2380,143 @@ var CanvasEditor = class {
     this.#redraw();
   }
   async #togglePreview() {
-    this.#preview = !this.#preview;
-    this.#redraw();
-    if (this.#preview && this.#handle) {
-      await this.#handle.play();
-      await new Promise((r) => setTimeout(r, 800));
-      if (this.#preview && this.#handle) await this.#handle.stop();
+    if (!this.#preview) {
+      this.#preview = true;
+      this.#pvStep = 0;
+      this.#redraw();
+      await this.#handle?.ready;
+      await this.#handle?.play(0);
+      return;
     }
+    const h = this.#handle;
+    this.#preview = false;
+    this.#drawTools();
+    await h?.stop();
+    this.#redraw();
+  }
+  async #pvNext() {
+    const n = this.scene.stepCount ?? 1;
+    this.#pvStep = Math.min(n - 1, this.#pvStep + 1);
+    this.#drawTools();
+    await this.#handle?.goto(this.#pvStep);
+  }
+  // ── Zeitleiste ──
+  #drawTimeline() {
+    const box = this.#tl;
+    box.innerHTML = "";
+    const s = this.scene;
+    const dir = this.#tlDir;
+    const end = timelineEnd(s, dir);
+    const head = document.createElement("div");
+    head.className = "hd2";
+    head.append(this.#btn(tr("animIn"), () => {
+      this.#tlDir = "in";
+      this.#drawTimeline();
+    }, "", dir === "in" ? "on" : ""), this.#btn(tr("animOut"), () => {
+      this.#tlDir = "out";
+      this.#drawTimeline();
+    }, "", dir === "out" ? "on" : ""), document.createTextNode(`${tr("timeline")} \xB7 ${end} ms`));
+    box.append(head);
+    const ruler = document.createElement("div");
+    ruler.className = "row";
+    const rp = document.createElement("div");
+    const rt = document.createElement("div");
+    rt.className = "ruler";
+    for (let t = 0; t <= end; t += end / 4) {
+      const m = document.createElement("span");
+      m.style.cssText = `position:absolute;left:${t / end * 100}%;transform:translateX(${t === end ? "-100%" : "0"})`;
+      m.textContent = `${Math.round(t)}`;
+      rt.append(m);
+    }
+    ruler.append(rp, rt);
+    box.append(ruler);
+    for (const e of [
+      ...s.elements
+    ].reverse()) {
+      if (e.kind === "zone") continue;
+      const a = e.anim?.[dir];
+      const row = document.createElement("div");
+      row.className = "row";
+      const nm = document.createElement("div");
+      nm.className = `nm${this.#selIds.includes(e.id) ? " on" : ""}`;
+      nm.textContent = e.name;
+      nm.title = e.name;
+      nm.addEventListener("click", () => {
+        this.#selIds = [
+          e.id
+        ];
+        this.#redraw();
+      });
+      const track = document.createElement("div");
+      track.className = "track";
+      if (a && a.type !== "none") {
+        const bar = document.createElement("div");
+        bar.className = `bar ${dir}`;
+        bar.style.left = `${a.delay / end * 100}%`;
+        bar.style.width = `${Math.max(1, a.ms / end * 100)}%`;
+        bar.title = `${tr(`anim_${a.type}`)} \xB7 ${a.delay} + ${a.ms} ms`;
+        const grip = document.createElement("div");
+        grip.className = "gr";
+        bar.append(grip);
+        bar.addEventListener("pointerdown", (ev) => {
+          ev.preventDefault();
+          this.#tdrag = {
+            id: e.id,
+            mode: ev.target === grip ? "size" : "move",
+            sx: ev.clientX,
+            base: this.scene,
+            end,
+            w: track.clientWidth || 1,
+            changed: false
+          };
+          this.#selIds = [
+            e.id
+          ];
+          bar.setPointerCapture(ev.pointerId);
+        });
+        bar.addEventListener("pointermove", (ev) => this.#tlMove(ev));
+        bar.addEventListener("pointerup", () => this.#tlUp());
+        bar.addEventListener("pointercancel", () => this.#tlUp());
+        track.append(bar);
+      } else {
+        track.title = tr("noAnim");
+        track.style.opacity = ".5";
+        track.addEventListener("dblclick", () => this.#commit(setTiming(this.scene, e.id, dir, {
+          ms: 400
+        })));
+      }
+      row.append(nm, track);
+      box.append(row);
+    }
+  }
+  #tlMove(ev) {
+    const d = this.#tdrag;
+    if (!d) return;
+    const dms = (ev.clientX - d.sx) / d.w * d.end;
+    d.changed = d.changed || Math.abs(ev.clientX - d.sx) > 1;
+    const dir = this.#tlDir;
+    const cur = d.base.elements.find((e) => e.id === d.id)?.anim?.[dir];
+    if (!cur) return;
+    const next = d.mode === "move" ? setTiming(d.base, d.id, dir, {
+      delay: cur.delay + dms
+    }) : setTiming(d.base, d.id, dir, {
+      ms: cur.ms + dms
+    });
+    this.#hist.replaceCurrent(next);
+    this.#host.onChange(next);
+    this.#drawTimeline();
+  }
+  #tlUp() {
+    const d = this.#tdrag;
+    this.#tdrag = null;
+    if (!d) return;
+    if (d.changed) {
+      const final = this.scene;
+      this.#hist.replaceCurrent(d.base);
+      this.#hist.push(final);
+      this.#host.onChange(final);
+    }
+    this.#redraw();
   }
   // ── Zeigereingaben ──
   #toScene(ev) {
@@ -2417,7 +2706,6 @@ var CanvasEditor = class {
     }
   }
 };
-var kindsLen = () => KINDS.length;
 
 // ui/modules/ograf-editor/zip.ts
 var TEXT_EXT = [
@@ -2824,6 +3112,22 @@ var OmpOgrafLibrary = class extends HTMLElement {
     await this.#loadList();
     await this.#open(id);
   }
+  /** Sendetest: die gespeicherte Vorlage auf dem Grafik-Node einblenden, weiterschalten oder ausblenden. */
+  async #test(what) {
+    if (!this.#selected) return;
+    if (what === "show" && this.#dirty()) return this.#say(tr2("saveFirst"), true);
+    const body = {
+      layerId: "editor-test"
+    };
+    if (what === "show") {
+      body.templateId = this.#selected;
+      body.data = defaultsOf(this.#fields);
+    }
+    const err = await this.#call(what, body);
+    this.#say(err ? tr2("testFailed", {
+      why: err
+    }) : "", !!err);
+  }
   async #duplicate() {
     if (!this.#selected) return;
     const name = await promptDialog(tr2("askCopyName"), `${this.#selected}-kopie`);
@@ -2977,6 +3281,10 @@ var OmpOgrafLibrary = class extends HTMLElement {
     if (text !== void 0) e.textContent = text;
     return e;
   }
+  #tip(el, title) {
+    el.title = title;
+    return el;
+  }
   #btn(label, onClick, cls = "", disabled = false) {
     const b = this.#el("button", `b ${cls}`.trim(), label);
     b.type = "button";
@@ -3053,7 +3361,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
     const spacer = this.#el("span");
     spacer.style.flex = "1";
     const save = this.#btn(tr2("save"), () => void this.#save(), "primary save", !this.#dirty());
-    head.append(spacer, this.#btn(tr2("duplicate"), () => void this.#duplicate()), this.#btn(tr2("rename"), () => void this.#rename()), this.#btn(tr2("exportBtn"), () => this.#export()), this.#btn(tr2("delete"), () => void this.#delete()), this.#btn(tr2("revert"), () => this.#revert(), "", false), save);
+    head.append(spacer, this.#tip(this.#btn(tr2("testShow"), () => void this.#test("show")), tr2("testHint")), this.#tip(this.#btn(tr2("testNext"), () => void this.#test("continue")), tr2("testNextHint")), this.#tip(this.#btn(tr2("testOff"), () => void this.#test("hide")), tr2("testOffHint")), this.#btn(tr2("duplicate"), () => void this.#duplicate()), this.#btn(tr2("rename"), () => void this.#rename()), this.#btn(tr2("exportBtn"), () => this.#export()), this.#btn(tr2("delete"), () => void this.#delete()), this.#btn(tr2("revert"), () => this.#revert(), "", false), save);
     main.append(head);
     if (this.#serverErrors.length) main.append(this.#list_("err", tr2("errors"), this.#serverErrors));
     if (this.#serverWarnings.length) main.append(this.#list_("warn", tr2("warnings"), this.#serverWarnings));
