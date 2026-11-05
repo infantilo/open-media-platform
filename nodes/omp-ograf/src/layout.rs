@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use omp_node_sdk::is04::RegistryClient;
 use omp_node_sdk::peer::PeerClient;
@@ -19,8 +19,8 @@ use crate::zones::{Zone, ZoneStore};
 
 /// Eine Zone darunter gilt als unsichtbar (Slot aus).
 const MIN_OPACITY: f64 = 0.02;
-/// Takt der Nachführung (ein Bild bei 25 fps).
-const TICK: Duration = Duration::from_millis(40);
+/// Takt der Nachführung (Abfrage des Speichers, billig; bestimmt den Nachlauf mit — bei 40 ms lag er bei ≈ 60 ms).
+const TICK: Duration = Duration::from_millis(8);
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Binding {
@@ -104,6 +104,9 @@ pub fn plan(b: &Binding, zone: Option<&Zone>, canvas: (u32, u32), st: &mut Appli
 struct Entry {
     applied: Applied,
     last_error: String,
+    /// Nachlauf: Zeit von der Meldung der Seite bis zum fertigen `pip.setPose`-Aufruf (ms), letzter und größter Wert.
+    lag_ms: f64,
+    lag_max_ms: f64,
     /// Von `unbind` markiert: der Slot wird noch ausgeschaltet, dann verschwindet die Bindung.
     unbound: bool,
 }
@@ -140,7 +143,7 @@ impl Layout {
         let mut map = self.shared.bindings.lock().expect("lock poisoned");
         // Eine geänderte Bindung (anderer Mischer/Slot/Quelle) beginnt von vorn.
         let key = b.key();
-        if map.get(&key).is_none_or(|(old, _)| *old != b) {
+        if map.get(&key).is_none_or(|(old, e)| *old != b || e.unbound) {
             map.insert(key, (b, Entry::default()));
         }
         self.shared.wake.notify_all();
@@ -156,6 +159,22 @@ impl Layout {
         self.shared.wake.notify_all();
     }
 
+    /// Aktive Bindungen für `GET /state` (Workflow-Sicherung).
+    pub fn export(&self) -> Vec<Binding> {
+        let map = self.shared.bindings.lock().expect("lock poisoned");
+        map.values().filter(|(_, e)| !e.unbound).map(|(b, _)| b.clone()).collect()
+    }
+
+    /// Stellt Bindungen aus `{"layout":[…]}` wieder her; ungültige Einträge werden übersprungen.
+    pub fn restore(&self, state: &Value) {
+        let list = state.get("layout").and_then(Value::as_array).cloned().unwrap_or_default();
+        for item in list {
+            if let Ok(b) = serde_json::from_value::<Binding>(item) {
+                let _ = self.bind(b);
+            }
+        }
+    }
+
     pub fn to_json(&self) -> Value {
         let map = self.shared.bindings.lock().expect("lock poisoned");
         Value::Array(
@@ -165,6 +184,8 @@ impl Layout {
                     let mut v = serde_json::to_value(b).unwrap_or(Value::Null);
                     v["enabled"] = json!(e.applied.enabled);
                     v["error"] = json!(e.last_error);
+                    v["lagMs"] = json!(e.lag_ms);
+                    v["lagMaxMs"] = json!(e.lag_max_ms);
                     v
                 })
                 .collect(),
@@ -203,7 +224,16 @@ fn worker(weak: std::sync::Weak<Shared>, registry: RegistryClient, zones: ZoneSt
                 }
                 e.applied = st;
                 if !unbound {
-                    e.last_error = result.err().unwrap_or_default();
+                    match result {
+                        Ok(lag) => {
+                            e.last_error = String::new();
+                            if let Some(ms) = lag {
+                                e.lag_ms = ms;
+                                e.lag_max_ms = e.lag_max_ms.max(ms);
+                            }
+                        }
+                        Err(err) => e.last_error = err,
+                    }
                 } else {
                     map.remove(&key);
                 }
@@ -221,7 +251,7 @@ fn run_one(
     b: &Binding,
     st: &mut Applied,
     unbound: bool,
-) -> Result<(), String> {
+) -> Result<Option<f64>, String> {
     if !links.contains_key(&b.mixer) {
         let node = registry
             .list_nodes()
@@ -244,7 +274,8 @@ fn run_one(
             c
         }
     };
-    let zone = if unbound { None } else { zones.layer(&b.layer).into_iter().find(|z| z.id == b.zone) };
+    let (layer_zones, seen) = if unbound { (Vec::new(), None) } else { zones.layer_seen(&b.layer) };
+    let zone = layer_zones.into_iter().find(|z| z.id == b.zone);
     let mut next = st.clone();
     let actions = plan(b, zone.as_ref(), canvas, &mut next);
     for a in &actions {
@@ -264,7 +295,8 @@ fn run_one(
         }
     }
     *st = next;
-    Ok(())
+    let moved = actions.iter().any(|a| matches!(a, Action::SetPose(_)));
+    Ok(seen.filter(|_| moved).map(|t| Instant::now().duration_since(t).as_secs_f64() * 1000.0))
 }
 
 #[cfg(test)]
@@ -314,7 +346,14 @@ mod tests {
         assert!(l.bind(Binding { sender_id: String::new(), ..b() }).is_err());
         assert!(l.bind(b()).is_ok());
         assert_eq!(l.to_json().as_array().unwrap().len(), 1);
+        let saved = serde_json::json!({"layout": l.export()});
+        assert_eq!(saved["layout"][0]["senderId"], "S");
         l.unbind("L1", "");
         assert!(l.to_json().as_array().unwrap().is_empty());
+        assert!(l.export().is_empty());
+        l.restore(&saved);
+        assert_eq!(l.export(), vec![b()]);
+        l.restore(&serde_json::json!({"layout": [{"nonsense": 1}]})); // ungültig: übersprungen
+        assert_eq!(l.export().len(), 1);
     }
 }

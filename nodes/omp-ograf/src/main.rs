@@ -457,6 +457,20 @@ impl ParamStore for OgrafStore {
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        // Workflow-Sicherung (wie omp-video-mixer-me): Layout-Bindungen überleben einen Neustart.
+        if method == "GET" && path == "/state" {
+            let payload = serde_json::to_vec(&serde_json::json!({ "state": { "layout": self.layout.export() } })).unwrap_or_default();
+            return Some(RawResponse { status: 200, content_type: "application/json", body: payload });
+        }
+        if method == "POST" && path == "/state" {
+            return Some(match serde_json::from_slice::<Value>(body) {
+                Ok(v) => {
+                    self.layout.restore(v.get("state").unwrap_or(&Value::Null));
+                    RawResponse { status: 200, content_type: "application/json", body: br#"{"ok":true}"#.to_vec() }
+                }
+                Err(_) => RawResponse { status: 400, content_type: "application/json", body: br#"{"error":"invalid JSON body"}"#.to_vec() },
+            });
+        }
         if let Some(conn) = &self.timecode_connection
             && let Some((status, content_type, body)) = conn.handle(method, path, body)
         {

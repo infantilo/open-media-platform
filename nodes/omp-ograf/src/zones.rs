@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use omp_node_sdk::RawResponse;
 use serde::{Deserialize, Serialize};
@@ -40,7 +41,7 @@ struct Report {
 
 /// Ebene → Zonen. Klein (wenige Ebenen, wenige Zonen), ein Mutex genügt.
 #[derive(Clone, Default)]
-pub struct ZoneStore(Arc<Mutex<BTreeMap<String, Vec<Zone>>>>);
+pub struct ZoneStore(Arc<Mutex<BTreeMap<String, (Vec<Zone>, Instant)>>>);
 
 impl ZoneStore {
     /// Übernimmt eine Meldung der Harness-Seite. Ungültige oder nicht endliche Werte werden verworfen (Fehlertext).
@@ -60,7 +61,7 @@ impl ZoneStore {
         if !ok || r.zones.len() > 32 {
             return Err("zones: ungueltige Zone".into());
         }
-        map.insert(r.layer, r.zones);
+        map.insert(r.layer, (r.zones, Instant::now()));
         Ok(())
     }
 
@@ -75,12 +76,22 @@ impl ZoneStore {
 
     /// `{ "<layerId>": [ {id,x,y,w,h,o}, … ] }`
     pub fn to_json(&self) -> Value {
-        serde_json::to_value(&*self.0.lock().expect("lock poisoned")).unwrap_or(Value::Null)
+        let map = self.0.lock().expect("lock poisoned");
+        let zones: BTreeMap<&String, &Vec<Zone>> = map.iter().map(|(k, (z, _))| (k, z)).collect();
+        serde_json::to_value(zones).unwrap_or(Value::Null)
     }
 
     /// Zonen einer Ebene (Kopie).
     pub fn layer(&self, layer: &str) -> Vec<Zone> {
-        self.0.lock().expect("lock poisoned").get(layer).cloned().unwrap_or_default()
+        self.layer_seen(layer).0
+    }
+
+    /// Zonen einer Ebene und der Zeitpunkt, an dem der Node die letzte Meldung der Seite erhielt (für die Nachlaufmessung).
+    pub fn layer_seen(&self, layer: &str) -> (Vec<Zone>, Option<Instant>) {
+        match self.0.lock().expect("lock poisoned").get(layer) {
+            Some((z, t)) => (z.clone(), Some(*t)),
+            None => (Vec::new(), None),
+        }
     }
 }
 
