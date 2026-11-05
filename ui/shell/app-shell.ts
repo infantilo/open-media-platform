@@ -100,7 +100,7 @@ const PILL_COLOR: Record<ConnectionState, string> = {
 
 const TAB_BUTTON_BASE =
   "border:1px solid transparent;border-radius:var(--omp-radius);" +
-  "padding:6px 12px;font-size:var(--omp-font-size-sm);font-family:var(--omp-font);cursor:pointer;";
+  "padding:6px 10px;font-size:var(--omp-font-size-sm);font-family:var(--omp-font);cursor:pointer;white-space:nowrap;flex:0 0 auto;";
 
 // S6 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "Workflow-Auswahl in
 // der App-Bar, Flow-Editor-Filter auf die Nodes des gewählten
@@ -325,7 +325,7 @@ class AppShell extends HTMLElement {
 
     const tabsWrap = document.createElement("div");
     tabsWrap.setAttribute("data-role", "app-tabs");
-    tabsWrap.style.cssText = "display:flex;gap:var(--omp-space-1);min-width:0;overflow-x:auto;scrollbar-width:thin;";
+    tabsWrap.style.cssText = "display:flex;gap:var(--omp-space-1);min-width:0;overflow-x:auto;scrollbar-width:thin;scrollbar-color:var(--omp-border) transparent;";
     this.#tabsWrap = tabsWrap;
     for (const tab of this.#tabs) {
       tabsWrap.appendChild(this.#buildTabButton(tab));

@@ -1006,7 +1006,8 @@ export class FlowCanvas extends HTMLElement {
     const svg = document.createElementNS(SVG_NS, "svg");
     svg.style.touchAction = "none";
     svg.style.userSelect = "none";
-    svg.style.background = "#1e1e1e";
+    svg.style.backgroundColor = "var(--omp-bg)";
+    svg.style.backgroundImage = "radial-gradient(circle, rgba(147,161,186,0.22) 1px, transparent 1.2px)";
     // Links Platz für die Katalog-Palette lassen (UMSETZUNG.md C8) —
     // sonst landen frisch platzierte Kacheln (defaultPosition startet
     // nahe world x=0) optisch unter der Palette. #screenPoint() liest
@@ -1041,7 +1042,7 @@ export class FlowCanvas extends HTMLElement {
     breadcrumb.setAttribute("data-role", "breadcrumb");
     breadcrumb.style.cssText =
       "position:absolute;top:0;left:var(--omp-palette-w);right:0;padding:var(--omp-space-2) var(--omp-space-3);" +
-      "background:var(--omp-surface);color:var(--omp-text);font-family:var(--omp-font);font-size:var(--omp-font-size-sm);" +
+      "background:rgba(15,21,34,0.88);backdrop-filter:blur(6px);color:var(--omp-text);font-family:var(--omp-font);font-size:var(--omp-font-size-sm);" +
       "display:flex;gap:var(--omp-space-2);align-items:center;z-index:10;border-bottom:1px solid var(--omp-border);";
 
     const panel = document.createElement("div");
@@ -3264,17 +3265,19 @@ export class FlowCanvas extends HTMLElement {
       const body = document.createElementNS(SVG_NS, "rect");
       body.setAttribute("width", String(NODE_WIDTH));
       body.setAttribute("height", String(height));
-      body.setAttribute("rx", "4");
-      body.setAttribute("fill", "#2d3a4d");
+      body.setAttribute("rx", "8");
+      body.setAttribute("fill", "#17263d");
+      body.style.filter = "drop-shadow(0 4px 10px rgba(0,0,0,0.45))";
       body.setAttribute("stroke", color);
-      body.setAttribute("stroke-width", "2");
+      body.setAttribute("stroke-width", "1.5");
       g.appendChild(body);
 
       const header = document.createElementNS(SVG_NS, "rect");
       header.setAttribute("width", String(NODE_WIDTH));
       header.setAttribute("height", String(HEADER_HEIGHT));
-      header.setAttribute("rx", "4");
-      header.setAttribute("fill", "#3a4a5d");
+      header.setAttribute("rx", "8");
+      header.setAttribute("fill", "#223a5a");
+      header.setAttribute("pointer-events", "none");
       g.appendChild(header);
 
       const fullLabel = `▣ ${wf.name}`;
@@ -3351,7 +3354,7 @@ export class FlowCanvas extends HTMLElement {
       const rootLink = document.createElement("a");
       rootLink.textContent = "Root";
       rootLink.href = "#";
-      rootLink.style.color = "#5b9bd5";
+      rootLink.style.color = "var(--omp-accent-cyan)";
       rootLink.addEventListener("click", (ev) => {
         ev.preventDefault();
         this.#exitWorkflowEditScope();
@@ -3646,7 +3649,7 @@ export class FlowCanvas extends HTMLElement {
     const link = document.createElement("a");
     link.textContent = label;
     link.href = "#";
-    link.style.color = "#5b9bd5";
+    link.style.color = "var(--omp-accent-cyan)";
     link.addEventListener("click", (ev) => {
       ev.preventDefault();
       this.#enterScope(scopeGroupId);
@@ -3967,6 +3970,10 @@ export class FlowCanvas extends HTMLElement {
   #applyViewportTransform() {
     const { x, y, scale } = this.#viewport;
     this.#viewportGroup.setAttribute("transform", `translate(${x},${y}) scale(${scale})`);
+    // Punktraster wandert und zoomt mit der Zeichenfläche (24 Welteinheiten Rasterweite).
+    const cell = 24 * scale;
+    this.#svg.style.backgroundSize = `${cell}px ${cell}px`;
+    this.#svg.style.backgroundPosition = `${x}px ${y}px`;
   }
 
   // Zentriert die Bounding-Box aller bekannten Kachel-Positionen im
@@ -4081,10 +4088,10 @@ export class FlowCanvas extends HTMLElement {
       rect.setAttribute("y", "0");
       rect.setAttribute("width", String(laneWidth));
       rect.setAttribute("height", String(bottom));
-      rect.setAttribute("rx", "6");
-      rect.setAttribute("fill", "#26282b");
+      rect.setAttribute("rx", "10");
+      rect.setAttribute("fill", "rgba(23,32,51,0.45)");
       const maint = isRealHost ? zone.maintenance : undefined;
-      rect.setAttribute("stroke", !hostOnline ? "#c0392b" : maint ? "#e0a030" : "#3a3d42");
+      rect.setAttribute("stroke", !hostOnline ? "#c0392b" : maint ? "#e0a030" : "var(--omp-border)");
       rect.setAttribute("stroke-width", hostOnline && !maint ? "1" : "2");
       if (maint) rect.setAttribute("stroke-dasharray", "6 4");
       g.appendChild(rect);
@@ -4094,8 +4101,8 @@ export class FlowCanvas extends HTMLElement {
       header.setAttribute("y", "0");
       header.setAttribute("width", String(laneWidth));
       header.setAttribute("height", String(HOST_ZONE_HEADER_HEIGHT));
-      header.setAttribute("rx", "6");
-      header.setAttribute("fill", !hostOnline ? "#3a2323" : maint ? "#3a3220" : "#2f3237");
+      header.setAttribute("rx", "10");
+      header.setAttribute("fill", !hostOnline ? "#3a1c22" : maint ? "#3a3220" : "rgba(34,48,73,0.7)");
       g.appendChild(header);
 
       // Online-Punkt (§13.3) nur für echte Hosts (Metriken kommen per
@@ -4361,8 +4368,9 @@ export class FlowCanvas extends HTMLElement {
     const body = document.createElementNS(SVG_NS, "rect");
     body.setAttribute("width", String(NODE_WIDTH));
     body.setAttribute("height", String(height));
-    body.setAttribute("rx", "4");
-    body.setAttribute("fill", onTally ? "#8b1a1a" : isGroup ? "#2d3a4d" : "#2d2d2d");
+    body.setAttribute("rx", "8");
+    body.setAttribute("fill", onTally ? "#5c1618" : isGroup ? "#17263d" : "var(--omp-surface)");
+    body.style.filter = "drop-shadow(0 4px 10px rgba(0,0,0,0.45))";
     body.setAttribute(
       "stroke",
       traceHighlighted
@@ -4374,10 +4382,10 @@ export class FlowCanvas extends HTMLElement {
             : tile.isStandby
               ? "#e0a020"
               : isGroup
-                ? "#5b9bd5"
+                ? "#3f78b5"
                 : healthColor(tile.health),
     );
-    body.setAttribute("stroke-width", traceHighlighted ? "4" : selected || onTally ? "3" : "2");
+    body.setAttribute("stroke-width", traceHighlighted ? "4" : selected || onTally ? "2.5" : "1.5");
     if (traceHighlighted) {
       const traceTitle = document.createElementNS(SVG_NS, "title");
       traceTitle.textContent = tt("flow.abd1ab");
@@ -4398,12 +4406,24 @@ export class FlowCanvas extends HTMLElement {
     }
     g.appendChild(body);
 
-    const header = document.createElementNS(SVG_NS, "rect");
-    header.setAttribute("width", String(NODE_WIDTH));
-    header.setAttribute("height", String(HEADER_HEIGHT));
-    header.setAttribute("rx", "4");
-    header.setAttribute("fill", isGroup ? "#3a4a5d" : "#3a3a3a");
+    // Kopf: nur oben abgerundet (passt zum Kachelradius), darunter feine Trennlinie.
+    const header = document.createElementNS(SVG_NS, "path");
+    const hr = 8;
+    header.setAttribute(
+      "d",
+      `M0 ${HEADER_HEIGHT} V${hr} Q0 0 ${hr} 0 H${NODE_WIDTH - hr} Q${NODE_WIDTH} 0 ${NODE_WIDTH} ${hr} V${HEADER_HEIGHT} Z`,
+    );
+    header.setAttribute("fill", onTally ? "#7a1f22" : isGroup ? "#223a5a" : "var(--omp-surface-raised)");
+    header.setAttribute("pointer-events", "none");
     g.appendChild(header);
+    const headerLine = document.createElementNS(SVG_NS, "line");
+    headerLine.setAttribute("x1", "0");
+    headerLine.setAttribute("x2", String(NODE_WIDTH));
+    headerLine.setAttribute("y1", String(HEADER_HEIGHT));
+    headerLine.setAttribute("y2", String(HEADER_HEIGHT));
+    headerLine.setAttribute("stroke", "var(--omp-border)");
+    headerLine.setAttribute("pointer-events", "none");
+    g.appendChild(headerLine);
 
     // Nutzerfund: bei längeren Labels überlappte der Titel den
     // Stop-Button (⏹, vorhanden bei tile.instanceId ODER — Nutzerfund
@@ -4433,7 +4453,7 @@ export class FlowCanvas extends HTMLElement {
       migBtn.setAttribute("x", String(NODE_WIDTH - (hasStopButton ? 26 : 8)));
       migBtn.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
       migBtn.setAttribute("text-anchor", "end");
-      migBtn.setAttribute("fill", "#c8c8c8");
+      migBtn.setAttribute("fill", "var(--omp-text-dim)");
       migBtn.setAttribute("font-size", "12");
       migBtn.style.cursor = "pointer";
       migBtn.setAttribute("data-role", "migrate-instance");
@@ -4529,7 +4549,7 @@ export class FlowCanvas extends HTMLElement {
       stopBtn.setAttribute("x", String(NODE_WIDTH - 8));
       stopBtn.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
       stopBtn.setAttribute("text-anchor", "end");
-      stopBtn.setAttribute("fill", "#e05050");
+      stopBtn.setAttribute("fill", "var(--omp-error)");
       stopBtn.setAttribute("font-size", "12");
       stopBtn.style.cursor = "pointer";
       stopBtn.setAttribute("data-role", "stop-instance");
@@ -4554,7 +4574,7 @@ export class FlowCanvas extends HTMLElement {
       stopBtn.setAttribute("x", String(NODE_WIDTH - 8));
       stopBtn.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
       stopBtn.setAttribute("text-anchor", "end");
-      stopBtn.setAttribute("fill", "#e05050");
+      stopBtn.setAttribute("fill", "var(--omp-error)");
       stopBtn.setAttribute("font-size", "12");
       stopBtn.style.cursor = "pointer";
       stopBtn.setAttribute("data-role", "stop-workflow");
@@ -4632,8 +4652,10 @@ export class FlowCanvas extends HTMLElement {
   #createTitle(fullLabel: string, perLine: number): SVGTextElement {
     const { lines, truncated } = wrapTitle(fullLabel, perLine, 2);
     const title = document.createElementNS(SVG_NS, "text");
-    title.setAttribute("fill", "#f0f0f0");
+    title.setAttribute("fill", "var(--omp-text)");
     title.setAttribute("font-size", "12");
+    title.setAttribute("font-weight", "600");
+    title.setAttribute("pointer-events", "none");
     if (lines.length === 1) {
       title.setAttribute("x", "8");
       title.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
@@ -4836,13 +4858,13 @@ export class FlowCanvas extends HTMLElement {
     const circle = document.createElementNS(SVG_NS, "circle");
     circle.setAttribute("cx", String(cx));
     circle.setAttribute("cy", String(cy));
-    circle.setAttribute("r", "5");
+    circle.setAttribute("r", "5.5");
     // Farbe primär nach Format (Nutzerfund 2026-07-12: zwei Output-Ports
     // desselben Nodes — z. B. omp-sources Video-/Audio-Sender — waren
     // beide gleich eingefärbt, nur nach input/output unterscheidbar, nicht
     // nach Format); input/output bleibt über die Randfarbe erkennbar.
     circle.setAttribute("fill", portColor(port.format, port.label));
-    circle.setAttribute("stroke", side === "input" ? "#5b9bd5" : "#70ad47");
+    circle.setAttribute("stroke", "var(--omp-surface)");
     circle.setAttribute("stroke-width", "1.5");
     circle.setAttribute("data-role", "port");
     circle.setAttribute("data-port-id", port.id);
@@ -4865,7 +4887,7 @@ export class FlowCanvas extends HTMLElement {
     // unterscheidenden) Kreisfarbe.
     const text = document.createElementNS(SVG_NS, "text");
     text.setAttribute("y", String(cy + 3));
-    text.setAttribute("font-size", "8");
+    text.setAttribute("font-size", "9");
     text.setAttribute("pointer-events", "none");
     if (side === "input") {
       text.setAttribute("x", String(cx + 8));
@@ -4878,7 +4900,7 @@ export class FlowCanvas extends HTMLElement {
     formatTspan.setAttribute("font-weight", "bold");
     formatTspan.textContent = formatAbbrev(port.format, port.label);
     const roleTspan = document.createElementNS(SVG_NS, "tspan");
-    roleTspan.setAttribute("fill", "#c8c8c8");
+    roleTspan.setAttribute("fill", "var(--omp-text-dim)");
     roleTspan.textContent = ` ${portShortLabel(port.label)}`;
     // Reihenfolge im Markup bleibt Format-vor-Rolle unabhängig von der
     // Seite — bei Ausgängen (rechte Kante) sorgt `text-anchor=end`
@@ -4909,9 +4931,10 @@ export class FlowCanvas extends HTMLElement {
     path.setAttribute("fill", "none");
     path.setAttribute(
       "stroke",
-      selected ? "#ffffff" : mxlZoneWarning ? "var(--omp-error)" : edge.state === "active" ? "#e0a030" : "#666",
+      selected ? "#ffffff" : mxlZoneWarning ? "var(--omp-error)" : edge.state === "active" ? "var(--omp-accent-cyan)" : "#4a5a78",
     );
     path.setAttribute("stroke-width", selected ? "3" : "2");
+    path.setAttribute("stroke-linecap", "round");
     if (mxlZoneWarning) path.setAttribute("stroke-dasharray", "6 4");
     path.setAttribute("data-role", "edge");
     path.setAttribute("data-id", edge.id);
@@ -6881,9 +6904,9 @@ function workflowIdFromTileId(id: string): string | null {
 function healthColor(health: string): string {
   switch (health) {
     case "ok":
-      return "#4caf50";
+      return "#3fae5a";
     case "offline":
-      return "#888";
+      return "#5f6b82";
     default:
       return "#e0a030";
   }
