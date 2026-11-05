@@ -15,7 +15,7 @@ endif
 image-pins-check:
 	./deploy/dev/update-image-pins.sh --check
 
-GO_MODULES := orchestrator nodes/mock nodes/omp-vfa nodes/omp-vfa-vision tools/contract-check tools/nmos-conformance-check tools/update-bundle host-agent supervisor update nodeoptions jobwire podmanrun
+GO_MODULES := orchestrator nodes/mock nodes/omp-vfa nodes/omp-vfa-vision tools/contract-check tools/segue-check tools/nmos-conformance-check tools/update-bundle host-agent supervisor update nodeoptions jobwire podmanrun
 
 build: ui
 	$(foreach m,$(GO_MODULES),cd $(m) && go build ./... && cd $(CURDIR) &&) true
@@ -114,6 +114,10 @@ update-bundle: ui nodes
 # ein leerer Wert den Go-seitigen Fallback überschreiben).
 contract:
 	cd tools/contract-check && NODE_URL=$(NODE_URL) go run .
+
+# Konformität eines laufenden Segue-Players (docs/CONTRACT-SEGUE-PLAYER.md); mit FILE=… auch das Verhalten
+segue-check:
+	cd tools/segue-check && NODE_URL=$(NODE_URL) FILE=$(FILE) go run .
 
 # OMP_POSTGRES_URL wird hier explizit exportiert (Nachtrag 108,
 # docs/decisions.md): die DB-Store-Tests (workflows/snapshots/hosts/…)

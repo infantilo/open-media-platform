@@ -7,6 +7,8 @@ edition = "2024"
 publish = false
 
 [dependencies]
+mxl = { path = "../../third_party/mxl/rust/mxl", features = ["mxl-not-built"] }
+mxl-sys = { path = "../../third_party/mxl/rust/mxl-sys", features = ["mxl-not-built"] }
 gstreamer = "0.25.3"
 gstreamer-app = "0.25"
 omp-mediaio = { version = "0.1.0", path = "../omp-mediaio", features = ["mxl"] }

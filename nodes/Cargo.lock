@@ -1683,6 +1683,8 @@ version = "0.1.0"
 dependencies = [
  "gstreamer",
  "gstreamer-app",
+ "mxl",
+ "mxl-sys",
  "omp-mediaio",
  "omp-node-sdk",
  "serde_json",

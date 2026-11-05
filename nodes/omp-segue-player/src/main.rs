@@ -58,14 +58,17 @@ struct Shared {
     /// Ausgabeuhr: Frame 0 liegt bei TAI `tai0`; `n` = nächster zu rechnender Frame.
     clock: Mutex<(u64, i64)>,
     out_peak: std::sync::atomic::AtomicU32,
+    last_index: AtomicU64,
+    head_index: AtomicU64,
     cache: decode::Cache,
     media_dir: PathBuf,
 }
 
 impl Shared {
+    /// Ausgabeframe, dessen MXL-Zeit `tai_ns` ist (Frame n trägt die Zeit `tai0 + n/SR − OUT_LAG`).
     fn frame_for_tai(&self, tai_ns: u64) -> i64 {
         let (tai0, _) = *self.clock.lock().expect("lock poisoned");
-        ((tai_ns as i128 - tai0 as i128) * SR as i128 / 1_000_000_000) as i64
+        ((tai_ns as i128 - tai0 as i128 + io::OUT_LAG_NS as i128) * SR as i128 / 1_000_000_000) as i64
     }
     fn now_frame(&self) -> i64 {
         self.frame_for_tai(omp_mediaio::timebase::tai_now_ns())
@@ -281,6 +284,7 @@ impl ParamStore for SegueStore {
                 ro("outputLevelDb", ParamType::Number, Some("dBFS")),
                 ro("cacheMb", ParamType::Number, Some("MB")),
                 ro("taiNowNs", ParamType::Number, Some("ns")),
+                ro("clock", ParamType::String, None),
             ],
             methods: vec![
                 MethodSpec {
@@ -319,6 +323,11 @@ impl ParamStore for SegueStore {
                 json!(if v <= 0.00003 { -90.0 } else { (20.0 * v.log10() * 10.0).round() / 10.0 })
             }
             "taiNowNs" => json!(omp_mediaio::timebase::tai_now_ns()),
+            "clock" => {
+                let (tai0, n) = *self.shared.clock.lock().expect("lock poisoned");
+                let now = omp_mediaio::timebase::tai_now_ns();
+                json!({ "tai0": tai0, "n": n, "nowMinusTai0Ms": (now as i128 - tai0 as i128) as f64 / 1e6, "nMs": n as f64 * 1000.0 / SR as f64, "lastIndex": self.shared.last_index.load(Ordering::Relaxed), "headIndex": self.shared.head_index.load(Ordering::Relaxed) })
+            }
             "cacheMb" => json!((self.shared.cache.bytes() as f64 / 1_048_576.0 * 10.0).round() / 10.0),
             _ => return None,
         })
@@ -365,6 +374,7 @@ fn clock_loop(shared: Arc<Shared>, out: Arc<io::MxlOut>, shutdown: Arc<AtomicBoo
     let period = std::time::Duration::from_millis(10);
     let mut next = std::time::Instant::now();
     let mut block = vec![0.0f32; BLOCK * mix::CH];
+    let mut write_warned = false;
     while !shutdown.load(Ordering::Relaxed) {
         heartbeat.fetch_add(1, Ordering::Relaxed);
         let n = {
@@ -373,16 +383,30 @@ fn clock_loop(shared: Arc<Shared>, out: Arc<io::MxlOut>, shutdown: Arc<AtomicBoo
             let expected = ((tai_now as i128 - c.0 as i128) * SR as i128 / 1_000_000_000) as i64;
             // Der Zähler darf der Echtzeit nur um wenige Blöcke vorauslaufen/nachhängen
             if (c.1 - expected).abs() > 20 * BLOCK as i64 {
-                c.0 = (tai_now as i128 - c.1 as i128 * 1_000_000_000 / SR as i128) as u64;
+                c.0 = out.align_tai((tai_now as i128 - c.1 as i128 * 1_000_000_000 / SR as i128) as u64);
             }
             c.1
         };
         shared.mixer.lock().expect("lock poisoned").render(n, &mut block);
-        shared.clock.lock().expect("lock poisoned").1 = n + BLOCK as i64;
+        let tai0 = {
+            let mut c = shared.clock.lock().expect("lock poisoned");
+            c.1 = n + BLOCK as i64;
+            c.0
+        };
+        // Schreibindex: Frame n trägt die MXL-Zeit tai0 + n/SR − LAG; tai0 liegt auf dem Blockraster, daher ist der Index exakt
+        let index0 = out.index_of(tai0).unwrap_or(0) as i128 - (io::OUT_LAG_NS as i128 * SR as i128 / 1_000_000_000);
+        let index = (index0 + n as i128).max(0) as u64;
         let peak = block.iter().fold(0.0f32, |m, v| m.max(v.abs()));
         let old = f32::from_bits(shared.out_peak.load(Ordering::Relaxed)) * 0.8;
         shared.out_peak.store(peak.max(old).to_bits(), Ordering::Relaxed);
-        out.push(&block);
+        shared.last_index.store(index, Ordering::Relaxed);
+        shared.head_index.store(out.index_of(omp_mediaio::timebase::tai_now_ns()).unwrap_or(0), Ordering::Relaxed);
+        if let Err(e) = out.write(&block, index) {
+            if !write_warned {
+                eprintln!("omp-segue-player: {e}");
+                write_warned = true;
+            }
+        }
         next += period;
         let now = std::time::Instant::now();
         if next > now {
@@ -408,12 +432,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     gstreamer::init()?;
     let flow = omp_node_sdk::idgen::new_v4();
     let out = io::MxlOut::new(&domain, &flow, &label)?;
-    let tai0 = omp_mediaio::timebase::tai_now_ns();
+    let tai0 = out.align_tai(omp_mediaio::timebase::tai_now_ns());
     let shared = Arc::new(Shared {
         mixer: Mutex::new(Mixer::new(MAX_VOICES)),
         metas: Mutex::new(BTreeMap::new()),
         clock: Mutex::new((tai0, 0)),
         out_peak: std::sync::atomic::AtomicU32::new(0),
+        last_index: AtomicU64::new(0),
+        head_index: AtomicU64::new(0),
         cache: decode::Cache::new(cache_mib),
         media_dir,
     });

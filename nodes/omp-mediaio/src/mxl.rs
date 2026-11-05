@@ -266,6 +266,11 @@ impl MxlContext {
         self.instance.get_time()
     }
 
+    /// Die zugrunde liegende MXL-Instanz (für Messwerkzeuge, die Samples direkt lesen, z. B. `omp-segue-player/examples/onset_probe.rs`).
+    pub fn instance(&self) -> &mxl::MxlInstance {
+        &self.instance
+    }
+
     /// MXL-Zeit (TAI, ns) des Beginns von Grain-/Sample-Index `index` bei der Rate `num/den`
     /// (Kapitel 39: Ausgabetakt, der exakt auf dem MXL-Raster liegt). `None` bei ungültiger Rate.
     pub fn index_to_ns(&self, index: u64, num: u32, den: u32) -> Option<u64> {
@@ -1393,7 +1398,7 @@ impl Drop for MxlVideoOutput {
     }
 }
 
-fn audio_flow_def(flow_id: &str, label: &str, sample_rate: u32, channel_count: u32) -> String {
+pub fn audio_flow_def(flow_id: &str, label: &str, sample_rate: u32, channel_count: u32) -> String {
     // Struktur 1:1 nach third_party/mxl/lib/tests/data/audio_flow.json
     // (offizielles Beispiel) — kein Rätselraten über MXLs Audio-Flow-
     // Schema. Audio ist bei MXL ein **"continuous"**-Flow (Sample-Ring-

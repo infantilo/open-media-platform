@@ -45,6 +45,10 @@ seine Ausgabeuhr (Frames bei 48 kHz) und setzt die Stimme **im exakten Frame** e
 Zeitpunkt schon in der Vergangenheit (Datei kam zu spät), startet die Stimme beim nächsten Block und meldet die Verspätung in
 `voices[].lateMs`. Der Parameter `taiNowNs` liefert die aktuelle TAI-Zeit des Nodes.
 
+**Gemessen (2026-11-05, Release, direkter MXL-Schreiber):** Startabweichung der Stimme gegen `startAt` im Mittel −0,008 ms, Streuung 0,017 ms (< 1 Abtastwert bei 48 kHz). Zählweise im MXL-Audioflow: der Index eines Blocks ist der Index seines **letzten** Abtastwerts. Die Gleichleistungs-Überblendung hält die Summe bei 0,00 dB, eine lineare Überblendung fällt um 2,61 dB ein.
+
+**Prüfung:** `make segue-check NODE_URL=… [FILE=…]` (`tools/segue-check`) prüft Aufbau und Verhalten (Idempotenz, `stop` vor Ladeende, Ablehnung ungültiger Eingaben).
+
 ## 5. Parameter (lesbar)
 
 | Parameter | Bedeutung |

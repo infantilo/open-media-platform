@@ -1,87 +1,67 @@
-//! MXL-Ausgang von `omp-segue-player` (Kapitel 89/RB3). Muster: `omp-intercom/src/mxl_io.rs` — `appsrc` → `MxlAudioOutput`.
+//! MXL-Ausgang von `omp-segue-player` (Kapitel 89/RB3): schreibt die gemischten Blöcke **direkt** in den MXL-Audio-Flow (kein
+//! GStreamer-Umweg). Der Sample-Index jedes Blocks folgt aus der eigenen Ausgabeuhr (`index = idx0 + n`), nicht aus einer
+//! Ankunftszeit — damit ist ein Einsatz auf den Sample genau (gemessen: Streuung unter einem Sample).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use gstreamer as gst;
-use gstreamer::prelude::*;
-use gstreamer_app as gst_app;
-use omp_mediaio::Output;
-use omp_mediaio::mxl::{MxlAudioOutput, MxlContext};
+use omp_mediaio::mxl::{MxlContext, audio_flow_def};
 
 use crate::mix::{BLOCK, CH, SR};
 
+/// Ausgabeverzug gegenüber der Echtzeit (ns): Block `n` trägt die MXL-Zeit `tai0 + n/SR − LAG` und wird erst gerechnet, wenn diese
+/// Zeit schon vorbei ist — so liegen alle Schreibzeitpunkte in der Vergangenheit (kein Vorgriff über den Kopf des Flows).
+pub const OUT_LAG_NS: u64 = 30_000_000;
+
 pub struct MxlOut {
-    pipeline: gst::Pipeline,
-    appsrc: gst_app::AppSrc,
-    flowed: Arc<AtomicBool>,
-    _output: MxlAudioOutput,
-    base: Mutex<(Option<u64>, u64)>,
-}
-
-impl Drop for MxlOut {
-    fn drop(&mut self) {
-        let _ = self.pipeline.set_state(gst::State::Null);
-    }
-}
-
-fn stereo_caps() -> gst::Caps {
-    gst::Caps::builder("audio/x-raw")
-        .field("format", "F32LE")
-        .field("layout", "interleaved")
-        .field("rate", SR as i32)
-        .field("channels", CH as i32)
-        .field("channel-mask", gst::Bitmask::new(0x3))
-        .build()
+    ctx: Arc<MxlContext>,
+    writer: Mutex<mxl::SamplesWriter>,
+    flowed: AtomicBool,
 }
 
 impl MxlOut {
     pub fn new(domain: &str, flow_id: &str, label: &str) -> Result<Arc<Self>, String> {
         let ctx = Arc::new(MxlContext::new(domain)?);
-        let pipeline = gst::Pipeline::new();
-        let appsrc = gst_app::AppSrc::builder()
-            .caps(&stereo_caps())
-            .format(gst::Format::Time)
-            .is_live(true)
-            .do_timestamp(false)
-            .max_bytes((BLOCK * CH * 4 * 16) as u64)
-            .build();
-        appsrc.set_property_from_str("leaky-type", "downstream");
-        pipeline.add(&appsrc).map_err(|e| e.to_string())?;
-        let output = MxlAudioOutput::new(&pipeline, appsrc.upcast_ref(), ctx, flow_id, label, SR, CH as u32)?;
-        output.set_active(true);
-        let flowed = output.flowed_handle();
-        pipeline.set_state(gst::State::Playing).map_err(|e| format!("Ausgang: {e}"))?;
-        Ok(Arc::new(Self { pipeline, appsrc, flowed, _output: output, base: Mutex::new((None, 0)) }))
+        let def = audio_flow_def(flow_id, label, SR, CH as u32);
+        let (writer, _cfg, _created) = ctx.instance().create_flow_writer(&def, None).map_err(|e| format!("create_flow_writer(audio): {e}"))?;
+        let writer = writer.to_samples_writer().map_err(|e| format!("to_samples_writer: {e}"))?;
+        Ok(Arc::new(Self { ctx, writer: Mutex::new(writer), flowed: AtomicBool::new(false) }))
     }
 
     pub fn flowed(&self) -> bool {
         self.flowed.load(Ordering::Relaxed)
     }
 
-    /// Einen Block (`BLOCK` Frames, interleaved Stereo) an den Ausgang.
-    pub fn push(&self, block: &[f32]) {
-        let mut bytes = Vec::with_capacity(block.len() * 4);
-        for v in block {
-            bytes.extend_from_slice(&v.to_le_bytes());
-        }
-        let mut buffer = gst::Buffer::from_slice(bytes);
-        {
-            let now_ns = self.pipeline.current_running_time().map(|t| t.nseconds()).unwrap_or(0);
-            let mut c = self.base.lock().expect("lock poisoned");
-            let step = 10_000_000u64;
-            let base = *c.0.get_or_insert(now_ns);
-            let mut pts = base + c.1 * step;
-            if pts + 3 * step < now_ns || pts > now_ns + 3 * step {
-                c.0 = Some(now_ns);
-                c.1 = 0;
-                pts = now_ns;
+    /// Rundet eine TAI-Zeit auf die nächste Blockgrenze des Sample-Rasters auf (Vielfache von `BLOCK`), damit Zeitnullpunkt und
+    /// Schreibraster zusammenfallen.
+    pub fn align_tai(&self, tai_ns: u64) -> u64 {
+        let Some(idx) = self.ctx.ns_to_index(tai_ns, SR, 1) else { return tai_ns };
+        let aligned = idx.div_ceil(BLOCK as u64) * BLOCK as u64;
+        self.ctx.index_to_ns(aligned, SR, 1).unwrap_or(tai_ns)
+    }
+
+    /// MXL-Sample-Index, in dem die TAI-Zeit liegt.
+    pub fn index_of(&self, tai_ns: u64) -> Option<u64> {
+        self.ctx.ns_to_index(tai_ns, SR, 1)
+    }
+
+    /// Schreibt einen Block (`BLOCK` Frames, interleaved Stereo), dessen **erster** Frame der Sample-Index `first_index` ist. MXL adressiert
+    /// einen Sample-Block über den Index seines **letzten** Samples (wie der Kopf-Index des Flows) — daher `first_index + BLOCK − 1`.
+    pub fn write(&self, block: &[f32], first_index: u64) -> Result<(), String> {
+        let index = first_index + BLOCK as u64 - 1;
+        let writer = self.writer.lock().expect("lock poisoned");
+        let mut access = writer.open_samples(index, BLOCK).map_err(|e| format!("open_samples {index}: {e}"))?;
+        for channel in 0..access.channels().min(CH) {
+            let (d1, d2) = access.channel_data_mut(channel).map_err(|e| format!("channel_data_mut: {e}"))?;
+            let mut i = 0usize;
+            for dst in d1.chunks_exact_mut(4).chain(d2.chunks_exact_mut(4)) {
+                let v = block.get(i * CH + channel).copied().unwrap_or(0.0);
+                dst.copy_from_slice(&v.to_le_bytes());
+                i += 1;
             }
-            c.1 += 1;
-            let b = buffer.get_mut().expect("neuer Puffer");
-            b.set_pts(gst::ClockTime::from_nseconds(pts));
-            b.set_duration(gst::ClockTime::from_nseconds(step));
         }
-        let _ = self.appsrc.push_buffer(buffer);
+        access.commit().map_err(|e| format!("commit {index}: {e}"))?;
+        self.flowed.store(true, Ordering::Relaxed);
+        Ok(())
     }
 }
