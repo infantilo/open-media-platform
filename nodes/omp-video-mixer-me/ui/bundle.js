@@ -149,9 +149,6 @@ const T = (() => {
       "promptName": "Name des Presets:",
       "newPresetName": "Neues Preset",
       "thumbnails": "Vorschaubilder",
-      "skinNew": "Konsole 2 ▸",
-      "skinClassic": "◂ Klassisch",
-      "skinTip": "Optik umschalten (nur Darstellung)"
   },
     en: {
       "close": "Close (Esc)",
@@ -257,9 +254,6 @@ const T = (() => {
       "promptName": "Preset name:",
       "newPresetName": "New preset",
       "thumbnails": "Thumbnails",
-      "skinNew": "Console 2 ▸",
-      "skinClassic": "◂ Classic",
-      "skinTip": "Switch look (display only)"
   },
   };
   const lang = document.documentElement.lang === "en" ? "en" : "de";
@@ -605,8 +599,6 @@ function openModal(titleText, opts) {
 
 // ───── Konsole 2: dichte Pult-Optik (gleicher Stil wie die Audiomischer-Konsole 2) ─────
 // Reine Darstellung: Logik, DOM und Kommandos bleiben unverändert. Umschaltbar (Kopf des Panels),
-// Wahl in localStorage `omp-mixer-skin` (gemeinsam mit dem Audiomischer: Standard "v2" = neue Optik, "classic" = alt).
-const SKIN_KEY = "omp-mixer-skin";
 const SKIN_C2_CSS = `
   :host([data-skin="c2"]) {
     --omp-bg: #111; --omp-surface: #1a1a1a; --omp-surface-raised: #222; --omp-border: #2c2c2c;
@@ -645,12 +637,6 @@ const SKIN_C2_CSS = `
   :host([data-skin="c2"]) .transition omp-button.auto::part(button) { background: linear-gradient(#ffb64d, #d77d00); border-color: #000; color: #241300; }
   :host([data-skin="c2"]) .pin-chip { background: #202020; border-color: #333; }
   :host([data-skin="c2"]) .thumbs-toggle { color: #9aa3ad; }
-  .skin-toggle {
-    margin-left: auto; height: 22px; padding: 0 9px; border: 1px solid #3a3a3a; border-radius: 3px; cursor: pointer;
-    background: linear-gradient(#3a3a3a, #262626); color: #d8dde2; font: 700 10px ui-monospace, Menlo, Consolas, monospace;
-    text-transform: uppercase; letter-spacing: 0.04em;
-  }
-  .skin-toggle:hover { background: linear-gradient(#444, #2d2d2d); }
   .skin-bar { display: flex; align-items: center; gap: 10px; }
 `;
 class OmpVideoMixerMePanel extends HTMLElement {
@@ -2417,24 +2403,11 @@ class OmpVideoMixerMePanel extends HTMLElement {
       this._refresh?.();
     });
 
-    const skinBtn = document.createElement("button");
-    skinBtn.type = "button";
-    skinBtn.className = "skin-toggle";
-    const applySkin = (skin) => {
-      this.setAttribute("data-skin", skin === "v2" ? "c2" : "classic");
-      skinBtn.textContent = skin === "v2" ? T("skinClassic") : T("skinNew");
-      skinBtn.title = T("skinTip");
-    };
-    const currentSkin = () => { try { return localStorage.getItem(SKIN_KEY) === "classic" ? "classic" : "v2"; } catch { return "v2"; } };
-    applySkin(new URLSearchParams(location.search).get("skin") === "classic" ? "classic" : currentSkin());
-    skinBtn.addEventListener("click", () => {
-      const next = this.getAttribute("data-skin") === "c2" ? "classic" : "v2";
-      try { localStorage.setItem(SKIN_KEY, next); } catch {}
-      applySkin(next);
-    });
+    // Nur noch die Konsole-2-Optik (die klassische Ansicht ist entfernt).
+    this.setAttribute("data-skin", "c2");
     const skinBar = document.createElement("div");
     skinBar.className = "skin-bar";
-    skinBar.append(thumbsToggle, skinBtn);
+    skinBar.append(thumbsToggle);
 
     const consoleSection = document.createElement("omp-panel-section");
     consoleSection.setAttribute("label", "Video Mixer M/E");
