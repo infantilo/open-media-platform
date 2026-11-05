@@ -275,8 +275,8 @@
     "runner": "process",
     "command": ["../nodes/target/release/omp-ograf"],
     "env": {},
-    "description": "Rendert eine EBU-OGraf-Grafikvorlage (Bauchbinde, Laufband u. a.) als Fill+Key-MXL-Ausgang für den Bildmischer-DSK.",
-    "i18n": { "en": {"label": "OGraf Graphics", "description": "Renders an EBU OGraf graphics template (lower third, ticker etc.) as a fill+key MXL output for the video mixer DSK.", "expectedResources": "moderate (web rendering per active template)"} },
+    "description": "Rendert eine EBU-OGraf-Grafikvorlage (Bauchbinde, Laufband u. a.) als Fill+Key-MXL-Ausgang für den Bildmischer-DSK. Enthält die Vorlagen-Bibliothek zum Anlegen und Bearbeiten eigener Vorlagen (Manifest, Parameter, Quelltext, Bilder/Schriften, ZIP-Import/-Export) und die Layout-Kopplung: markiert eine Vorlage ein Fenster (data-ograf-zone), führt es einen PIP-Slot des Bildmischers (Squeeze-back) oder das Fenster eines Paternoster-Übergangs.",
+    "i18n": { "en": {"label": "OGraf Graphics", "description": "Renders an EBU OGraf graphics template (lower third, ticker etc.) as a fill+key MXL output for the video mixer DSK. Includes the template library for creating and editing your own templates (manifest, parameters, source, images/fonts, ZIP import/export) and layout coupling: if a template marks a window (data-ograf-zone), it drives a PIP slot of the video mixer (squeeze-back) or the window of a paternoster transition.", "expectedResources": "moderate (web rendering per active template)"} },
     "expectedResources": "moderat (Web-Rendering pro aktivem Template)"
   },
   {

@@ -3,9 +3,10 @@
 // `omp-ograf` mit seinem Panel (`/ui/bundle.js`) und spricht dessen Descriptor-API über den Orchestrator an
 // (`GET /api/v1/nodes/{id}/params/library[.<id>]`, `POST …/methods/library.*`).
 import { messages } from "./messages.ts";
+import { bytesToFiles, filesToBytes, isBinaryName, makeZip, readZip } from "./zip.ts";
 import {
-  applyForm, exportPackage, type Field, FIELD_KINDS, type FieldKind, fieldsFromSchema, type Files, formFromManifest,
-  importPackage, manifestFileName, type ManifestForm, nextFreeId, parseManifest, renamePackage, schemaFromFields,
+  applyForm, type Field, FIELD_KINDS, type FieldKind, fieldsFromSchema, type Files, formFromManifest,
+  importPackage, manifestFileName, type ManifestForm, nextFreeId, parseManifest, renamePackage, schemaFromFields, slugify,
   stringify, validateFields,
 } from "./logic.ts";
 
@@ -121,6 +122,7 @@ class OmpOgrafLibrary extends HTMLElement {
   #tab: Tab = "general";
   #fields: Field[] = [];
   #sourceFile = "";
+  #filter = "";
   #status = "";
   #statusBad = false;
 
@@ -252,17 +254,54 @@ class OmpOgrafLibrary extends HTMLElement {
   }
   #export() {
     if (!this.#selected) return;
-    const blob = new Blob([exportPackage(this.#selected, this.#files)], { type: "application/json" });
+    const zip = makeZip(filesToBytes(this.#files));
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `${this.#selected}.ograf-package.json`;
+    a.href = URL.createObjectURL(new Blob([zip as unknown as BlobPart], { type: "application/zip" }));
+    a.download = `${this.#selected}.zip`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   }
+  async #rename() {
+    if (!this.#selected) return;
+    if (this.#dirty() && !(await confirmDialog(tr("leaveDirty")))) return;
+    const old = this.#selected;
+    const wanted = await promptDialog(tr("askRename", { id: old }), old);
+    const id = slugify(wanted ?? "");
+    if (!id || id === old) return;
+    if (this.#list.some((e) => e.id === id)) return this.#say(tr("renameFailed", { why: id }), true);
+    const files = renamePackage(this.#files, old, id);
+    let err = await this.#call("library.save", { id, files });
+    if (err) return this.#say(tr("renameFailed", { why: err }), true);
+    err = await this.#call("library.delete", { id: old });
+    if (err) this.#say(tr("renameFailed", { why: err }), true);
+    this.#orig = "";
+    this.#selected = "";
+    await this.#loadList();
+    await this.#open(id);
+  }
   async #import(file: File) {
-    const r = importPackage(await file.text());
-    if ("error" in r) return this.#say(tr("importFailed", { why: r.error }), true);
-    let { id, files } = r;
+    let id = "";
+    let files: Files = {};
+    let skipped: string[] = [];
+    if (file.name.toLowerCase().endsWith(".zip")) {
+      try {
+        const z = await readZip(new Uint8Array(await file.arrayBuffer()));
+        files = bytesToFiles(z.files);
+        skipped = z.skipped;
+      } catch (e) {
+        return this.#say(tr("importFailed", { why: (e as Error).message }), true);
+      }
+      const m = parseManifest(files);
+      if (!m) return this.#say(tr("importFailed", { why: "Manifest (*.ograf.json) fehlt oder ist kein JSON" }), true);
+      id = typeof m.id === "string" && slugify(m.id) === m.id ? m.id : slugify(String(m.name ?? file.name.replace(/\.zip$/i, "")));
+      if (!id) return this.#say(tr("importFailed", { why: "id" }), true);
+      const had = typeof m.id === "string" ? m.id : id;
+      if (had !== id || manifestFileName(files) !== `${id}.ograf.json`) files = renamePackage(files, manifestFileName(files)!.replace(/\.ograf\.json$/, ""), id);
+    } else {
+      const r = importPackage(await file.text());
+      if ("error" in r) return this.#say(tr("importFailed", { why: r.error }), true);
+      ({ id, files } = r);
+    }
     const taken = this.#list.map((e) => e.id);
     if (taken.includes(id)) {
       const newId = nextFreeId(id, taken);
@@ -274,6 +313,7 @@ class OmpOgrafLibrary extends HTMLElement {
     if (err) return this.#say(tr("importFailed", { why: err }), true);
     await this.#loadList();
     await this.#open(id);
+    if (skipped.length) this.#say(tr("importSkipped", { list: skipped.join(", ") }), false);
   }
 
   // ── Darstellung ──
@@ -305,7 +345,7 @@ class OmpOgrafLibrary extends HTMLElement {
     const imp = this.#el("label", "b", tr("importBtn"));
     const input = this.#el("input");
     input.type = "file";
-    input.accept = ".json,application/json";
+    input.accept = ".zip,.json,application/zip,application/json";
     input.style.display = "none";
     input.addEventListener("change", () => {
       const f = input.files?.[0];
@@ -314,9 +354,24 @@ class OmpOgrafLibrary extends HTMLElement {
     });
     imp.append(input);
     bar.append(this.#btn(tr("newTpl"), () => void this.#newTemplate(), "primary"), imp);
+    const search = this.#el("input");
+    search.type = "text";
+    search.placeholder = tr("search");
+    search.value = this.#filter;
+    search.addEventListener("input", () => {
+      this.#filter = search.value;
+      const pos = search.selectionStart;
+      this.#render();
+      const again = this.#root.querySelector(".side input[type=text]") as HTMLInputElement | null;
+      again?.focus();
+      again?.setSelectionRange(pos, pos);
+    });
     const list = this.#el("div", "list");
+    const q = this.#filter.trim().toLowerCase();
+    const shown = this.#list.filter((e) => !q || e.label.toLowerCase().includes(q) || e.id.includes(q));
     if (!this.#list.length) list.append(this.#el("div", "status", tr("empty")));
-    for (const e of this.#list) {
+    else if (!shown.length) list.append(this.#el("div", "status", tr("noMatch")));
+    for (const e of shown) {
       const it = this.#el("button", `item${e.id === this.#selected ? " sel" : ""}`);
       it.type = "button";
       it.title = e.errors.join("\n") || e.id;
@@ -325,7 +380,7 @@ class OmpOgrafLibrary extends HTMLElement {
       it.addEventListener("click", () => void this.#open(e.id));
       list.append(it);
     }
-    side.append(bar, list);
+    side.append(bar, search, list);
     return side;
   }
   #renderMain(): HTMLElement {
@@ -350,6 +405,7 @@ class OmpOgrafLibrary extends HTMLElement {
     head.append(
       spacer,
       this.#btn(tr("duplicate"), () => void this.#duplicate()),
+      this.#btn(tr("rename"), () => void this.#rename()),
       this.#btn(tr("exportBtn"), () => this.#export()),
       this.#btn(tr("delete"), () => void this.#delete()),
       this.#btn(tr("revert"), () => this.#revert(), "", false),
@@ -551,6 +607,31 @@ class OmpOgrafLibrary extends HTMLElement {
         this.#render();
       }, "", isManifest),
     );
+    const upload = this.#el("label", "b", tr("upload"));
+    const up = this.#el("input");
+    up.type = "file";
+    up.style.display = "none";
+    up.addEventListener("change", () => {
+      const f = up.files?.[0];
+      up.value = "";
+      if (f) void this.#uploadFile(f);
+    });
+    upload.append(up);
+    bar.append(upload);
+    if (isBinaryName(this.#sourceFile)) {
+      const content = this.#files[this.#sourceFile] ?? "";
+      const info = this.#el("div", "fields");
+      info.append(this.#el("div", "status", tr("binaryInfo", { kb: String(Math.round((content.length * 3) / 4 / 1024)) })));
+      const ext = this.#sourceFile.slice(this.#sourceFile.lastIndexOf(".") + 1).toLowerCase();
+      if (["png", "jpg", "jpeg", "webp", "gif"].includes(ext)) {
+        const img = this.#el("img");
+        img.src = `data:image/${ext === "jpg" ? "jpeg" : ext};base64,${content.replace(/^base64:/, "")}`;
+        img.style.cssText = "max-width:420px;max-height:260px;background:#444;border-radius:4px;align-self:flex-start";
+        info.append(img);
+      }
+      box.append(bar, info);
+      return box;
+    }
     const ta = this.#el("textarea");
     ta.spellcheck = false;
     ta.value = this.#files[this.#sourceFile] ?? "";
@@ -568,6 +649,15 @@ class OmpOgrafLibrary extends HTMLElement {
     });
     box.append(bar, ta);
     return box;
+  }
+  async #uploadFile(f: File) {
+    const name = f.name.replace(/[^A-Za-z0-9._-]/g, "-");
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    const content = bytesToFiles({ [name]: bytes })[name];
+    this.#files = { ...this.#files, [name]: content };
+    this.#sourceFile = name;
+    this.#markDirty();
+    this.#render();
   }
   async #addFile() {
     const name = await promptDialog(tr("askFile"));

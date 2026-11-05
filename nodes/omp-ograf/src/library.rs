@@ -4,8 +4,8 @@
 //! `name`, `main`, `supportsRealTime`, `supportsNonRealTime`; weitere Felder nur aus der Liste in `ALLOWED_KEYS` oder mit
 //! Präfix `v_`. Importierte ältere Vorlagen tragen Zusatzfelder (`designWidth`, `designHeight`): das ist eine Warnung, kein Fehler.
 //!
-//! Ein Paket ist ein flaches Verzeichnis aus Textdateien (Manifest `<id>.ograf.json`, Hauptmodul, optional `.js/.css/.svg/.json`).
-//! Binärdateien (Bilder, Schriften) kommen mit dem Editor (90.5). Geschrieben wird atomar (Zwischenverzeichnis, dann Umbenennen).
+//! Ein Paket ist ein flaches Verzeichnis (Manifest `<id>.ograf.json`, Hauptmodul, optional Text- und Binärdateien).
+//! Binärdateien (Bilder, Schriften) laufen als Text `base64:<Daten>` durch die JSON-Schnittstelle (`BINARY_EXT`). Geschrieben wird atomar (Zwischenverzeichnis, dann Umbenennen).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -13,10 +13,41 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 pub const SCHEMA_URL: &str = "https://ograf.ebu.io/v1/specification/json-schemas/graphics/schema.json";
-const MAX_FILES: usize = 40;
+const MAX_FILES: usize = 60;
 const MAX_FILE_BYTES: usize = 512 * 1024;
-const MAX_TOTAL_BYTES: usize = 2 * 1024 * 1024;
+const MAX_BINARY_BYTES: usize = 2 * 1024 * 1024;
+const MAX_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 const TEXT_EXT: [&str; 7] = ["js", "mjs", "json", "css", "svg", "html", "txt"];
+/// Binärdateien (Bilder, Schriften) laufen als Text `base64:<Daten>` durch die JSON-Schnittstelle.
+const BINARY_EXT: [&str; 8] = ["png", "jpg", "jpeg", "webp", "gif", "woff", "woff2", "ttf"];
+pub const BINARY_PREFIX: &str = "base64:";
+
+fn ext_of(n: &str) -> String {
+    Path::new(n).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
+}
+
+pub fn is_binary(n: &str) -> bool {
+    BINARY_EXT.contains(&ext_of(n).as_str())
+}
+
+/// Größe in Bytes, wie sie auf der Platte läge (Binärdateien: nach dem Dekodieren).
+fn byte_len(n: &str, content: &str) -> Result<usize, String> {
+    if !is_binary(n) {
+        return Ok(content.len());
+    }
+    decode_binary(content).map(|b| b.len())
+}
+
+fn decode_binary(content: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine;
+    let data = content.strip_prefix(BINARY_PREFIX).ok_or_else(|| "Binärdatei muss mit „base64:“ beginnen".to_string())?;
+    base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|e| format!("base64: {e}"))
+}
+
+fn encode_binary(bytes: &[u8]) -> String {
+    use base64::Engine;
+    format!("{BINARY_PREFIX}{}", base64::engine::general_purpose::STANDARD.encode(bytes))
+}
 /// Laut Schema erlaubte Felder oberhalb von `v_*`.
 const ALLOWED_KEYS: [&str; 14] = [
     "$schema", "id", "name", "main", "supportsRealTime", "supportsNonRealTime", "version", "stepCount", "author",
@@ -42,7 +73,7 @@ fn valid_file_name(n: &str) -> bool {
         && n.len() <= 80
         && !n.starts_with('.')
         && n.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-'))
-        && Path::new(n).extension().and_then(|e| e.to_str()).is_some_and(|e| TEXT_EXT.contains(&e.to_ascii_lowercase().as_str()))
+        && (TEXT_EXT.contains(&ext_of(n).as_str()) || is_binary(n))
 }
 
 /// Ergebnis der Prüfung eines Pakets.
@@ -68,12 +99,22 @@ pub fn check(id: &str, files: &Files) -> Report {
     let mut total = 0usize;
     for (n, c) in files {
         if !valid_file_name(n) {
-            r.errors.push(format!("Dateiname „{n}“ ungültig (flach, Buchstaben/Ziffern/._-, Endung {})", TEXT_EXT.join("/")));
+            r.errors.push(format!(
+                "Dateiname „{n}“ ungültig (flach, Buchstaben/Ziffern/._-, Endung {} oder {})",
+                TEXT_EXT.join("/"),
+                BINARY_EXT.join("/")
+            ));
         }
-        if c.len() > MAX_FILE_BYTES {
-            r.errors.push(format!("Datei „{n}“ zu groß (max. {} KB)", MAX_FILE_BYTES / 1024));
+        match byte_len(n, c) {
+            Ok(len) => {
+                let max = if is_binary(n) { MAX_BINARY_BYTES } else { MAX_FILE_BYTES };
+                if len > max {
+                    r.errors.push(format!("Datei „{n}“ zu groß (max. {} KB)", max / 1024));
+                }
+                total += len;
+            }
+            Err(e) => r.errors.push(format!("Datei „{n}“: {e}")),
         }
-        total += c.len();
     }
     if total > MAX_TOTAL_BYTES {
         r.errors.push(format!("Paket zu groß (max. {} MB)", MAX_TOTAL_BYTES / 1024 / 1024));
@@ -166,11 +207,14 @@ fn read_dir_files(dir: &Path) -> Files {
     for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let p = e.path();
         let name = e.file_name().to_string_lossy().into_owned();
-        if p.is_file()
-            && valid_file_name(&name)
-            && let Ok(text) = std::fs::read_to_string(&p)
-        {
-            out.insert(name, text);
+        if p.is_file() && valid_file_name(&name) {
+            if is_binary(&name) {
+                if let Ok(bytes) = std::fs::read(&p) {
+                    out.insert(name, encode_binary(&bytes));
+                }
+            } else if let Ok(text) = std::fs::read_to_string(&p) {
+                out.insert(name, text);
+            }
         }
     }
     out
@@ -223,7 +267,8 @@ pub fn save(root: &Path, id: &str, files: &Files) -> Result<Report, String> {
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).map_err(|e| format!("anlegen: {e}"))?;
     for (n, c) in files {
-        if let Err(e) = std::fs::write(tmp.join(n), c) {
+        let written = if is_binary(n) { decode_binary(c).and_then(|b| std::fs::write(tmp.join(n), b).map_err(|e| e.to_string())) } else { std::fs::write(tmp.join(n), c).map_err(|e| e.to_string()) };
+        if let Err(e) = written {
             let _ = std::fs::remove_dir_all(&tmp);
             return Err(format!("schreiben „{n}“: {e}"));
         }
@@ -376,6 +421,28 @@ mod tests {
         assert!(save(&root, "b", &bad).is_err());
         assert!(read(&root, "b").unwrap()["errors"].as_array().unwrap().is_empty());
         assert!(std::fs::read_dir(&root).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with('.')));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn binary_files_roundtrip_as_base64_and_are_checked() {
+        let root = tmp("bin");
+        let mut f = skeleton("b", "B");
+        let png = [0x89u8, b'P', b'N', b'G', 0, 1, 2, 255];
+        f.insert("logo.png".into(), encode_binary(&png));
+        assert!(save(&root, "b", &f).is_ok());
+        assert_eq!(std::fs::read(root.join("b").join("logo.png")).unwrap(), png);
+        let got = read(&root, "b").unwrap();
+        assert_eq!(got["files"]["logo.png"], encode_binary(&png));
+        assert!(got["errors"].as_array().unwrap().is_empty());
+        let mut bad = f.clone();
+        bad.insert("kaputt.png".into(), "kein base64".into());
+        assert!(check("b", &bad).errors.iter().any(|e| e.contains("base64")));
+        bad.insert("kaputt.png".into(), format!("{BINARY_PREFIX}!!!"));
+        assert!(check("b", &bad).errors.iter().any(|e| e.contains("kaputt.png")));
+        let mut big = f.clone();
+        big.insert("gross.png".into(), encode_binary(&vec![0u8; MAX_BINARY_BYTES + 1]));
+        assert!(check("b", &big).errors.iter().any(|e| e.contains("zu groß")));
         let _ = std::fs::remove_dir_all(&root);
     }
 

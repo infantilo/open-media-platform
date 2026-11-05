@@ -8,7 +8,15 @@ var messages = {
     duplicate: "Duplizieren",
     delete: "L\xF6schen",
     importBtn: "Import\u2026",
-    exportBtn: "Export",
+    exportBtn: "Export (ZIP)",
+    search: "Suchen\u2026",
+    rename: "ID \xE4ndern\u2026",
+    askRename: "Neue Kennung (ID) f\xFCr \u201E{id}\u201C",
+    renameFailed: "ID \xE4ndern fehlgeschlagen: {why}",
+    upload: "Hochladen\u2026",
+    binaryInfo: "Bin\xE4rdatei, {kb} KB",
+    importSkipped: "Importiert. Nicht \xFCbernommen: {list}",
+    noMatch: "Keine Treffer.",
     save: "Speichern",
     revert: "Verwerfen",
     dirty: "\u25CF ungespeichert",
@@ -72,7 +80,15 @@ var messages = {
     duplicate: "Duplicate",
     delete: "Delete",
     importBtn: "Import\u2026",
-    exportBtn: "Export",
+    exportBtn: "Export (ZIP)",
+    search: "Search\u2026",
+    rename: "Change ID\u2026",
+    askRename: "New identifier (ID) for \u201C{id}\u201D",
+    renameFailed: "Changing the ID failed: {why}",
+    upload: "Upload\u2026",
+    binaryInfo: "Binary file, {kb} KB",
+    importSkipped: "Imported. Not taken over: {list}",
+    noMatch: "No matches.",
     save: "Save",
     revert: "Discard",
     dirty: "\u25CF unsaved",
@@ -129,6 +145,181 @@ var messages = {
     manifestBroken: "The manifest is not valid JSON \u2014 please repair it in the source tab."
   }
 };
+
+// ui/modules/ograf-editor/zip.ts
+var TEXT_EXT = [
+  "js",
+  "mjs",
+  "json",
+  "css",
+  "svg",
+  "html",
+  "txt"
+];
+var BINARY_EXT = [
+  "png",
+  "jpg",
+  "jpeg",
+  "webp",
+  "gif",
+  "woff",
+  "woff2",
+  "ttf"
+];
+var BINARY_PREFIX = "base64:";
+var MAX_ENTRIES = 200;
+var MAX_UNPACKED = 16 * 1024 * 1024;
+var extOf = (n) => n.includes(".") ? n.slice(n.lastIndexOf(".") + 1).toLowerCase() : "";
+var isBinaryName = (n) => BINARY_EXT.includes(extOf(n));
+var isTextName = (n) => TEXT_EXT.includes(extOf(n));
+var CRC = null;
+function crc32(data) {
+  if (!CRC) {
+    CRC = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c2 = n;
+      for (let k = 0; k < 8; k++) c2 = c2 & 1 ? 3988292384 ^ c2 >>> 1 : c2 >>> 1;
+      CRC[n] = c2 >>> 0;
+    }
+  }
+  let c = 4294967295;
+  for (let i = 0; i < data.length; i++) c = CRC[(c ^ data[i]) & 255] ^ c >>> 8;
+  return (c ^ 4294967295) >>> 0;
+}
+function bytesToBase64(b) {
+  let s = "";
+  for (let i = 0; i < b.length; i += 32768) s += String.fromCharCode(...b.subarray(i, i + 32768));
+  return btoa(s);
+}
+function base64ToBytes(s) {
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function filesToBytes(files) {
+  const out = {};
+  for (const [n, c] of Object.entries(files)) {
+    out[n] = isBinaryName(n) && c.startsWith(BINARY_PREFIX) ? base64ToBytes(c.slice(BINARY_PREFIX.length)) : new TextEncoder().encode(c);
+  }
+  return out;
+}
+function makeZip(entries) {
+  const enc = new TextEncoder();
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  const u16 = (v) => new Uint8Array([
+    v & 255,
+    v >> 8 & 255
+  ]);
+  const u32 = (v) => new Uint8Array([
+    v & 255,
+    v >> 8 & 255,
+    v >> 16 & 255,
+    v >>> 24 & 255
+  ]);
+  const cat = (...p) => {
+    const o = new Uint8Array(p.reduce((a, b) => a + b.length, 0));
+    let i = 0;
+    for (const x of p) {
+      o.set(x, i);
+      i += x.length;
+    }
+    return o;
+  };
+  const DOS_TIME = 0, DOS_DATE = 1 << 5 | 1 | 2026 - 1980 << 9;
+  for (const [name, data] of Object.entries(entries)) {
+    const nm = enc.encode(name);
+    const crc = crc32(data);
+    const local = cat(u32(67324752), u16(20), u16(2048), u16(0), u16(DOS_TIME), u16(DOS_DATE), u32(crc), u32(data.length), u32(data.length), u16(nm.length), u16(0), nm, data);
+    central.push(cat(u32(33639248), u16(20), u16(20), u16(2048), u16(0), u16(DOS_TIME), u16(DOS_DATE), u32(crc), u32(data.length), u32(data.length), u16(nm.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(offset), nm));
+    chunks.push(local);
+    offset += local.length;
+  }
+  const cdSize = central.reduce((a, b) => a + b.length, 0);
+  const count = Object.keys(entries).length;
+  return cat(...chunks, ...central, u32(101010256), u16(0), u16(0), u16(count), u16(count), u32(cdSize), u32(offset), u16(0));
+}
+async function inflate(raw) {
+  const ds = new DecompressionStream("deflate-raw");
+  const w = ds.writable.getWriter();
+  void w.write(raw).then(() => w.close()).catch(() => {
+  });
+  const buf = await new Response(ds.readable).arrayBuffer();
+  return new Uint8Array(buf);
+}
+async function readZip(data) {
+  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  let eocd = -1;
+  for (let i = data.length - 22; i >= Math.max(0, data.length - 22 - 65535); i--) {
+    if (dv.getUint32(i, true) === 101010256) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) throw new Error("kein ZIP-Archiv");
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  if (count > MAX_ENTRIES) throw new Error("zu viele Eintr\xE4ge im Archiv");
+  const dec = new TextDecoder();
+  const raw = [];
+  let unpacked = 0;
+  for (let n = 0; n < count; n++) {
+    if (p + 46 > data.length || dv.getUint32(p, true) !== 33639248) throw new Error("Archiv besch\xE4digt");
+    const flags = dv.getUint16(p + 8, true);
+    const method = dv.getUint16(p + 10, true);
+    const crc = dv.getUint32(p + 16, true);
+    const csize = dv.getUint32(p + 20, true);
+    const usize = dv.getUint32(p + 24, true);
+    const nlen = dv.getUint16(p + 28, true), elen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true);
+    const lho = dv.getUint32(p + 42, true);
+    const name = dec.decode(data.subarray(p + 46, p + 46 + nlen));
+    p += 46 + nlen + elen + clen;
+    if (name.endsWith("/")) continue;
+    if (flags & 1) throw new Error("verschl\xFCsseltes Archiv wird nicht unterst\xFCtzt");
+    if (csize === 4294967295 || usize === 4294967295) throw new Error("ZIP64 wird nicht unterst\xFCtzt");
+    unpacked += usize;
+    if (unpacked > MAX_UNPACKED) throw new Error("Archiv entpackt zu gro\xDF");
+    if (lho + 30 > data.length || dv.getUint32(lho, true) !== 67324752) throw new Error("Archiv besch\xE4digt");
+    const start = lho + 30 + dv.getUint16(lho + 26, true) + dv.getUint16(lho + 28, true);
+    const body = data.subarray(start, start + csize);
+    if (body.length !== csize) throw new Error("Archiv besch\xE4digt");
+    let out;
+    if (method === 0) out = body;
+    else if (method === 8) out = await inflate(body);
+    else throw new Error(`Kompressionsmethode ${method} wird nicht unterst\xFCtzt`);
+    if (out.length !== usize || crc32(out) !== crc) throw new Error(`Pr\xFCfsumme von \u201E${name}\u201C stimmt nicht`);
+    raw.push({
+      name,
+      data: out
+    });
+  }
+  const clean = raw.filter((r) => !r.name.startsWith("__MACOSX/"));
+  const tops = new Set(clean.map((r) => r.name.includes("/") ? r.name.split("/")[0] : ""));
+  const strip = tops.size === 1 && !tops.has("") ? `${[
+    ...tops
+  ][0]}/` : "";
+  const files = {};
+  const skipped = [];
+  for (const r of clean) {
+    const name = strip ? r.name.slice(strip.length) : r.name;
+    const ok = name !== "" && !name.includes("/") && !name.startsWith(".") && /^[A-Za-z0-9._-]+$/.test(name) && (isTextName(name) || isBinaryName(name));
+    if (ok) files[name] = r.data;
+    else skipped.push(r.name);
+  }
+  return {
+    files,
+    skipped
+  };
+}
+function bytesToFiles(entries) {
+  const out = {};
+  for (const [n, b] of Object.entries(entries)) {
+    out[n] = isBinaryName(n) ? BINARY_PREFIX + bytesToBase64(b) : new TextDecoder().decode(b);
+  }
+  return out;
+}
 
 // ui/modules/ograf-editor/logic.ts
 var SCHEMA_URL = "https://ograf.ebu.io/v1/specification/json-schemas/graphics/schema.json";
@@ -350,13 +541,6 @@ function validateFields(fields) {
   }
   return out;
 }
-function exportPackage(id, files) {
-  return JSON.stringify({
-    format: PACKAGE_FORMAT,
-    id,
-    files
-  }, null, 2) + "\n";
-}
 function importPackage(text) {
   let v;
   try {
@@ -517,6 +701,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
   #tab = "general";
   #fields = [];
   #sourceFile = "";
+  #filter = "";
   #status = "";
   #statusBad = false;
   connectedCallback() {
@@ -678,23 +863,79 @@ var OmpOgrafLibrary = class extends HTMLElement {
   }
   #export() {
     if (!this.#selected) return;
-    const blob = new Blob([
-      exportPackage(this.#selected, this.#files)
-    ], {
-      type: "application/json"
-    });
+    const zip = makeZip(filesToBytes(this.#files));
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `${this.#selected}.ograf-package.json`;
+    a.href = URL.createObjectURL(new Blob([
+      zip
+    ], {
+      type: "application/zip"
+    }));
+    a.download = `${this.#selected}.zip`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 2e3);
   }
-  async #import(file) {
-    const r = importPackage(await file.text());
-    if ("error" in r) return this.#say(tr("importFailed", {
-      why: r.error
+  async #rename() {
+    if (!this.#selected) return;
+    if (this.#dirty() && !await confirmDialog(tr("leaveDirty"))) return;
+    const old = this.#selected;
+    const wanted = await promptDialog(tr("askRename", {
+      id: old
+    }), old);
+    const id = slugify(wanted ?? "");
+    if (!id || id === old) return;
+    if (this.#list.some((e) => e.id === id)) return this.#say(tr("renameFailed", {
+      why: id
     }), true);
-    let { id, files } = r;
+    const files = renamePackage(this.#files, old, id);
+    let err = await this.#call("library.save", {
+      id,
+      files
+    });
+    if (err) return this.#say(tr("renameFailed", {
+      why: err
+    }), true);
+    err = await this.#call("library.delete", {
+      id: old
+    });
+    if (err) this.#say(tr("renameFailed", {
+      why: err
+    }), true);
+    this.#orig = "";
+    this.#selected = "";
+    await this.#loadList();
+    await this.#open(id);
+  }
+  async #import(file) {
+    let id = "";
+    let files = {};
+    let skipped = [];
+    if (file.name.toLowerCase().endsWith(".zip")) {
+      try {
+        const z = await readZip(new Uint8Array(await file.arrayBuffer()));
+        files = bytesToFiles(z.files);
+        skipped = z.skipped;
+      } catch (e) {
+        return this.#say(tr("importFailed", {
+          why: e.message
+        }), true);
+      }
+      const m = parseManifest(files);
+      if (!m) return this.#say(tr("importFailed", {
+        why: "Manifest (*.ograf.json) fehlt oder ist kein JSON"
+      }), true);
+      id = typeof m.id === "string" && slugify(m.id) === m.id ? m.id : slugify(String(m.name ?? file.name.replace(/\.zip$/i, "")));
+      if (!id) return this.#say(tr("importFailed", {
+        why: "id"
+      }), true);
+      const had = typeof m.id === "string" ? m.id : id;
+      if (had !== id || manifestFileName(files) !== `${id}.ograf.json`) files = renamePackage(files, manifestFileName(files).replace(/\.ograf\.json$/, ""), id);
+    } else {
+      const r = importPackage(await file.text());
+      if ("error" in r) return this.#say(tr("importFailed", {
+        why: r.error
+      }), true);
+      ({ id, files } = r);
+    }
     const taken = this.#list.map((e) => e.id);
     if (taken.includes(id)) {
       const newId = nextFreeId(id, taken);
@@ -714,6 +955,9 @@ var OmpOgrafLibrary = class extends HTMLElement {
     }), true);
     await this.#loadList();
     await this.#open(id);
+    if (skipped.length) this.#say(tr("importSkipped", {
+      list: skipped.join(", ")
+    }), false);
   }
   // ── Darstellung ──
   #el(tag, cls, text) {
@@ -744,7 +988,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
     const imp = this.#el("label", "b", tr("importBtn"));
     const input = this.#el("input");
     input.type = "file";
-    input.accept = ".json,application/json";
+    input.accept = ".zip,.json,application/zip,application/json";
     input.style.display = "none";
     input.addEventListener("change", () => {
       const f = input.files?.[0];
@@ -753,9 +997,24 @@ var OmpOgrafLibrary = class extends HTMLElement {
     });
     imp.append(input);
     bar.append(this.#btn(tr("newTpl"), () => void this.#newTemplate(), "primary"), imp);
+    const search = this.#el("input");
+    search.type = "text";
+    search.placeholder = tr("search");
+    search.value = this.#filter;
+    search.addEventListener("input", () => {
+      this.#filter = search.value;
+      const pos = search.selectionStart;
+      this.#render();
+      const again = this.#root.querySelector(".side input[type=text]");
+      again?.focus();
+      again?.setSelectionRange(pos, pos);
+    });
     const list = this.#el("div", "list");
+    const q = this.#filter.trim().toLowerCase();
+    const shown = this.#list.filter((e) => !q || e.label.toLowerCase().includes(q) || e.id.includes(q));
     if (!this.#list.length) list.append(this.#el("div", "status", tr("empty")));
-    for (const e of this.#list) {
+    else if (!shown.length) list.append(this.#el("div", "status", tr("noMatch")));
+    for (const e of shown) {
       const it = this.#el("button", `item${e.id === this.#selected ? " sel" : ""}`);
       it.type = "button";
       it.title = e.errors.join("\n") || e.id;
@@ -764,7 +1023,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
       it.addEventListener("click", () => void this.#open(e.id));
       list.append(it);
     }
-    side.append(bar, list);
+    side.append(bar, search, list);
     return side;
   }
   #renderMain() {
@@ -783,7 +1042,7 @@ var OmpOgrafLibrary = class extends HTMLElement {
     const spacer = this.#el("span");
     spacer.style.flex = "1";
     const save = this.#btn(tr("save"), () => void this.#save(), "primary save", !this.#dirty());
-    head.append(spacer, this.#btn(tr("duplicate"), () => void this.#duplicate()), this.#btn(tr("exportBtn"), () => this.#export()), this.#btn(tr("delete"), () => void this.#delete()), this.#btn(tr("revert"), () => this.#revert(), "", false), save);
+    head.append(spacer, this.#btn(tr("duplicate"), () => void this.#duplicate()), this.#btn(tr("rename"), () => void this.#rename()), this.#btn(tr("exportBtn"), () => this.#export()), this.#btn(tr("delete"), () => void this.#delete()), this.#btn(tr("revert"), () => this.#revert(), "", false), save);
     main.append(head);
     if (this.#serverErrors.length) main.append(this.#list_("err", tr("errors"), this.#serverErrors));
     if (this.#serverWarnings.length) main.append(this.#list_("warn", tr("warnings"), this.#serverWarnings));
@@ -1056,6 +1315,39 @@ var OmpOgrafLibrary = class extends HTMLElement {
       this.#markDirty();
       this.#render();
     }, "", isManifest));
+    const upload = this.#el("label", "b", tr("upload"));
+    const up = this.#el("input");
+    up.type = "file";
+    up.style.display = "none";
+    up.addEventListener("change", () => {
+      const f = up.files?.[0];
+      up.value = "";
+      if (f) void this.#uploadFile(f);
+    });
+    upload.append(up);
+    bar.append(upload);
+    if (isBinaryName(this.#sourceFile)) {
+      const content = this.#files[this.#sourceFile] ?? "";
+      const info = this.#el("div", "fields");
+      info.append(this.#el("div", "status", tr("binaryInfo", {
+        kb: String(Math.round(content.length * 3 / 4 / 1024))
+      })));
+      const ext = this.#sourceFile.slice(this.#sourceFile.lastIndexOf(".") + 1).toLowerCase();
+      if ([
+        "png",
+        "jpg",
+        "jpeg",
+        "webp",
+        "gif"
+      ].includes(ext)) {
+        const img = this.#el("img");
+        img.src = `data:image/${ext === "jpg" ? "jpeg" : ext};base64,${content.replace(/^base64:/, "")}`;
+        img.style.cssText = "max-width:420px;max-height:260px;background:#444;border-radius:4px;align-self:flex-start";
+        info.append(img);
+      }
+      box.append(bar, info);
+      return box;
+    }
     const ta = this.#el("textarea");
     ta.spellcheck = false;
     ta.value = this.#files[this.#sourceFile] ?? "";
@@ -1076,6 +1368,20 @@ var OmpOgrafLibrary = class extends HTMLElement {
     });
     box.append(bar, ta);
     return box;
+  }
+  async #uploadFile(f) {
+    const name = f.name.replace(/[^A-Za-z0-9._-]/g, "-");
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    const content = bytesToFiles({
+      [name]: bytes
+    })[name];
+    this.#files = {
+      ...this.#files,
+      [name]: content
+    };
+    this.#sourceFile = name;
+    this.#markDirty();
+    this.#render();
   }
   async #addFile() {
     const name = await promptDialog(tr("askFile"));

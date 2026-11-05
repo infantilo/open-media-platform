@@ -1566,6 +1566,7 @@ dependencies = [
 name = "omp-ograf"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "gstreamer",
  "gstreamer-app",
  "omp-mediaio",
