@@ -343,7 +343,7 @@ const T = (() => {
       "cart.noSource": "Quelle fehlt", "cart.pickIcon": "Symbol wählen …", "cart.manager.edit": "Bearbeiten",
       "ic.title": "Symbol wählen", "ic.none": "Kein Symbol", "ic.custom": "Eigenes Zeichen", "ic.use": "Übernehmen", "ic.playback": "Wiedergabe", "ic.onair": "Sendung", "ic.audio": "Ton", "ic.notice": "Hinweis", "ic.misc": "Sonstiges",
       "fixCountdown": "⏰ {hms} „{label}“ in {t}",
-      "cntLive": "Nächstes Live-Event", "cntMan": "Nächstes manuelles Event", "waitHold": "HOLD: wartet auf Next", "waitMan": "{label} startet manuell", "waitEnd": "Manual Hold nach „{label}“", "waitCued": "{label} wartet auf Take/Next", "cntFix": "Nächstes Fix-Event", "cntMiss": "Nächstes Event ohne Quelle", "cntShow": "Zähler anzeigen:",
+      "cntLive": "Nächstes Live-Event", "cntMan": "Nächstes manuelles Event", "waitHold": "HOLD: wartet auf Next", "waitMan": "{label} startet manuell", "waitEnd": "Manual Hold nach „{label}“", "waitCued": "{label} wartet auf Take/Next", "cntFix": "Nächstes Fix-Event", "cntMiss": "Nächstes Event ohne Quelle", "cntShow": "Zähler anzeigen:", "tlBtn": "Timeline", "tlTip": "Zeitleiste mit Child Events ein-/ausblenden", "tlNow": "jetzt", "tlEmpty": "Keine Events in der Playlist.", "tlWin": "Fenster",
       "cntIn": "{label} in {t}",
       "planWarn.one": "⚠ 1 Plan-Warnung (Überlappung, Lücke oder unbestimmter Start — Details am ⚠ in der Zeitspalte)",
       "planWarn.many": "⚠ {n} Plan-Warnungen (Überlappung, Lücke oder unbestimmter Start — Details am ⚠ in der Zeitspalte)",
@@ -690,7 +690,7 @@ const T = (() => {
       "cart.noSource": "source missing", "cart.pickIcon": "Choose symbol …", "cart.manager.edit": "Edit",
       "ic.title": "Choose symbol", "ic.none": "No symbol", "ic.custom": "Custom character", "ic.use": "Apply", "ic.playback": "Playback", "ic.onair": "On air", "ic.audio": "Audio", "ic.notice": "Notice", "ic.misc": "Other",
       "fixCountdown": "⏰ {hms} “{label}” in {t}",
-      "cntLive": "Next live event", "cntMan": "Next manual event", "waitHold": "HOLD: waiting for Next", "waitMan": "{label} starts manually", "waitEnd": "Manual hold after “{label}”", "waitCued": "{label} waits for Take/Next", "cntFix": "Next fixed event", "cntMiss": "Next event without source", "cntShow": "Show counters:",
+      "cntLive": "Next live event", "cntMan": "Next manual event", "waitHold": "HOLD: waiting for Next", "waitMan": "{label} starts manually", "waitEnd": "Manual hold after “{label}”", "waitCued": "{label} waits for Take/Next", "cntFix": "Next fixed event", "cntMiss": "Next event without source", "cntShow": "Show counters:", "tlBtn": "Timeline", "tlTip": "Show/hide timeline with child events", "tlNow": "now", "tlEmpty": "No events in the playlist.", "tlWin": "Window",
       "cntIn": "{label} in {t}",
       "planWarn.one": "⚠ 1 plan warning (overlap, gap or undetermined start — details at the ⚠ in the time column)",
       "planWarn.many": "⚠ {n} plan warnings (overlap, gap or undetermined start — details at the ⚠ in the time column)",
@@ -1090,6 +1090,53 @@ const STYLE = `
   .pick-list .it { padding: 5px 8px; cursor: pointer; border-bottom: 1px solid #2a2a2e; display: flex; gap: 8px; }
   .pick-list .it:hover { background: #2a2a30; }
   .pick-list .it.chk { background: #26384f; }
+  /* Timeline */
+  .tl { margin-bottom: 8px; background: #0c0c0c; border: 1px solid #000; border-radius: 2px; padding: 4px 6px 6px; }
+  .tl-axis { position: relative; height: 14px; border-bottom: 1px solid var(--bd); font-size: 9px; color: var(--mut); }
+  .tl-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+  .tl-axis span:first-child { transform: none; } .tl-axis span:last-child { transform: translateX(-100%); }
+  .tl-body { position: relative; padding-top: 4px; }
+  .tl-lane, .tl-klane { position: relative; height: 24px; margin-bottom: 3px; }
+  .tl-klane { height: 16px; margin-bottom: 2px; }
+  .tl-ev, .tl-kid { position: absolute; top: 0; bottom: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; border: 1px solid #000; border-radius: 2px; }
+  .tl-ev { background: linear-gradient(#3a6f9a, #24506f); color: #fff; font: 700 11px/22px system-ui, sans-serif; padding: 0 5px; }
+  .tl-ev.live { background: linear-gradient(#b3407a, #7d2455); }
+  .tl-ev.ctl { background: linear-gradient(#555, #3a3a3a); }
+  .tl-ev.fix { box-shadow: 0 0 0 1px var(--acc) inset; }
+  .tl-ev.cued { background: linear-gradient(#c79a1c, #8a6a0a); color: #1a1100; }
+  .tl-ev.onair { background: linear-gradient(#35b862, #1c8a48); color: #02150a; }
+  .tl-kid { background: linear-gradient(#7c52b0, #5a3585); color: #f2e8ff; font: 10px/14px system-ui, sans-serif; padding: 0 4px; }
+  .tl-kid.Fired, .tl-kid.Active { background: linear-gradient(#35b862, #1c8a48); color: #02150a; }
+  .tl-kid.Failed { background: linear-gradient(#e05050, #a02020); }
+  .tl-kid.Completed, .tl-kid.Cancelled { opacity: .5; }
+  .tl-ev:hover, .tl-kid:hover { filter: brightness(1.2); }
+  .tl-ev span, .tl-kid span { pointer-events: none; }
+  .tl-now { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #ff4040; pointer-events: none; box-shadow: 0 0 4px #ff4040; }
+  .chip.empty { opacity: .45; }
+  /* ───── Konsole-2-Optik (wie Audio-/Videomischer) ───── */
+  :host { --bg: #111; --bg2: #1a1a1a; --bg3: #262626; --bd: #2c2c2c; --mut: #7d848c; --acc: #27e0f0; --ok: #25d366; --warn: #ffb000; --err: #ff4040;
+    font: 11px/1.25 ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; background: #111; padding: 6px; }
+  input, select, textarea { background: #06121c; color: var(--acc); border-color: #1d3b52; border-radius: 2px; }
+  button { background: linear-gradient(#3a3a3a, #262626); border: 1px solid #060606; border-radius: 2px; text-transform: uppercase; letter-spacing: .03em; font-weight: 700; font-size: 10px;
+    box-shadow: 0 1px 0 rgba(255,255,255,.12) inset, 0 1px 2px rgba(0,0,0,.5); }
+  button:hover:not(:disabled) { background: linear-gradient(#444, #2d2d2d); border-color: #060606; }
+  button.on, button.primary { background: linear-gradient(#32b6c6, #168593); color: #001a1f; border-color: #46e6f6; }
+  button.danger { background: linear-gradient(#3a2a2a, #261a1a); }
+  .take { background: linear-gradient(#ff5a5a, #c01f1f); border-color: #000; color: #fff; }
+  .head { padding: 4px 6px; background: linear-gradient(#262626, #171717); border: 1px solid #000; border-radius: 2px; }
+  .clock { color: #e8e8e8; }
+  .chip { border-radius: 2px; background: #2c2c2c; text-transform: uppercase; letter-spacing: .03em; font-size: 10px; font-weight: 700; }
+  .chip.blue { background: #0e4a63; color: var(--acc); } .chip.ok { background: #136b36; } .chip.onair { background: #25d366; color: #02150a; }
+  .nextfix, .info { font-weight: 700; }
+  .ptabs { border-bottom-color: #000; }
+  .ptab { border-radius: 2px 2px 0 0; text-transform: uppercase; letter-spacing: .06em; font-size: 10px; }
+  .ptab.act { background: linear-gradient(#32b6c6, #168593); color: #001a1f; box-shadow: none; border-color: #46e6f6; }
+  details.sec { border-radius: 2px; border-color: #000; background: var(--bg2); }
+  details.sec > summary { background: #202020; text-transform: uppercase; letter-spacing: .12em; font-size: 10px; color: #9aa3ad; }
+  .pl-hdr { background: #202020; }
+  .pl-row { border-bottom-color: #222; }
+  .pl-row.sel { background: #0e3340; } .pl-row.onair { background: #0f2a1a; } .pl-row.cued { background: #2e2408; }
+  .modal { border-radius: 2px; background: #1a1a1a; border-color: #444; }
 `;
 
 // ---------------------------------------------------------------------------
@@ -1179,7 +1226,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     // Zähler bis zum nächsten Live-/Fix-/Quelle-fehlt-Event; jeder einzeln abschaltbar (nur in diesem Browser gemerkt).
     const CNT_KINDS = ["live", "fix", "miss", "man"];
     const cntOn = (() => { try { return { live: true, fix: true, miss: true, man: true, ...JSON.parse(localStorage.getItem("omp-pa-counters") || "{}") }; } catch { return { live: true, fix: true, miss: true, man: true }; } })();
-    const cntEls = Object.fromEntries(CNT_KINDS.map((k) => [k, h("span", { class: "chip blue", style: "display:none" })]));
+    const cntEls = Object.fromEntries(CNT_KINDS.map((k) => [k, h("span", { class: "chip blue", style: cntOn[k] ? "" : "display:none" })]));
     const nextFixEl = h("div", { class: "info", style: "display:flex;gap:8px;flex-wrap:wrap;align-items:center" },
       ...CNT_KINDS.map((k) => cntEls[k]),
       h("span", { style: "margin-left:auto;opacity:.7;font-size:11px" }, T("cntShow")),
@@ -1360,7 +1407,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         h("label", {}, h("input", { type: "checkbox", checked: !!prefs[`show-${c.k}`], onchange: (e) => { prefs[`show-${c.k}`] = e.target.checked; savePrefs(); applyCols(); renderList(); } }), c.t)));
     const colsBtn = h("button", { title: T("columns"), onclick: () => colsPop.classList.toggle("show") }, "⚙");
     // Spaltenbreite per Maus ziehen (je Browser gemerkt); Doppelklick auf den Griff = Standardbreite.
-    const COL_DEFAULT = { dur: 54, time: 108, rem: 84 };
+    const COL_DEFAULT = { dur: 82, time: 116, rem: 96 };
     function resizeHandle(k) {
       const g = h("span", { class: "rz", title: T("col.resize") });
       g.addEventListener("dblclick", (e) => { e.stopPropagation(); delete prefs[`w-${k}`]; savePrefs(); applyCols(); });
@@ -1394,9 +1441,22 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       h("button", { class: "primary", title: T("newEvent"), onclick: () => openEditor(null) }, "＋"),
       h("button", { title: T("addMedia"), onclick: () => openMediaPicker() }, "📂"),
       h("button", { title: T("checkReady"), onclick: () => checkReadiness() }, "✓"));
+    // Optionale Timeline (je Browser gemerkt): Events als Blöcke auf einer Zeitachse, darunter ihre Child Events.
+    let tlOn = false, tlWinMin = 15;
+    try { tlOn = localStorage.getItem("omp-pa-timeline") === "1"; tlWinMin = Number(localStorage.getItem("omp-pa-timeline-win")) || 15; } catch { /* Standard */ }
+    const tlEl = h("div", { class: "tl", style: tlOn ? "" : "display:none" });
+    const tlWinSel = h("select", { title: T("tlWin"), style: tlOn ? "" : "display:none", onchange: () => { tlWinMin = Number(tlWinSel.value); try { localStorage.setItem("omp-pa-timeline-win", String(tlWinMin)); } catch { /* egal */ } renderTimeline(); } },
+      ...[5, 15, 30, 60, 120].map((m) => h("option", { value: String(m) }, `${m} min`)));
+    tlWinSel.value = String(tlWinMin);
+    const tlBtn = h("button", { title: T("tlTip"), class: tlOn ? "on" : "", onclick: () => {
+      tlOn = !tlOn;
+      try { localStorage.setItem("omp-pa-timeline", tlOn ? "1" : "0"); } catch { /* egal */ }
+      tlBtn.classList.toggle("on", tlOn); tlEl.style.display = tlOn ? "" : "none"; tlWinSel.style.display = tlOn ? "" : "none";
+      renderTimeline();
+    } }, `▤ ${T("tlBtn")}`);
     const plMain = h("div", { class: "pl-main" },
-      h("div", { class: "pl-tools", style: "position:relative" }, searchInput, colsBtn, colsPop),
-      hdr, listEl, emptyEl);
+      h("div", { class: "pl-tools", style: "position:relative" }, searchInput, tlBtn, tlWinSel, colsBtn, colsPop),
+      tlEl, hdr, listEl, emptyEl);
     const playlistSec = h("details", { class: "sec", open: true },
       h("summary", {}, T("sec.playlist")),
       h("div", { class: "body" }, h("div", { class: "pl-wrap" }, sidebar, plMain)));
@@ -1826,6 +1886,62 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       emptyEl.style.display = items.length === 0 ? "" : "none";
       hdr.style.display = items.length === 0 ? "none" : "";
     };
+
+    // Zeitfenster eines Child Events relativ zum Beginn seines Primary (ms) oder null (ABSOLUTE: nicht auf der Primary-Achse).
+    const childSpan = (c, dur, horizon) => {
+      const t = c.timing || (c.relativeTo === "END" ? "RELATIVE_TO_END" : "RELATIVE_TO_START");
+      if (t === "ABSOLUTE") return null;
+      const end = dur > 0 ? dur : horizon;
+      let a = 0;
+      if (t === "RELATIVE_TO_START") a = c.delayMs || 0;
+      else if (t === "RELATIVE_TO_END") a = Math.max(0, (dur > 0 ? dur : end) - (c.delayMs || 0));
+      const b = t === "FULL_PRIMARY" || !c.durationMs ? end : Math.min(end, a + c.durationMs);
+      return [a, Math.max(b, a + 1)];
+    };
+    const renderTimeline = () => {
+      if (!tlOn) return;
+      const W = tlWinMin * 60000;
+      const ent = items.map((it, i) => ({ it, i, e: timeByIndex.get(i) })).filter((x) => x.e);
+      if (!ent.length) { tlEl.replaceChildren(h("div", { class: "empty" }, T("tlEmpty"))); return; }
+      const cur = ent.find((x) => x.it.id === currentItemId);
+      const ref = cur ? cur.e.startMs + playheadMs : (ent.find((x) => x.it.id === cuedItemId) || ent[0]).e.startMs;
+      const t0 = ref - W * 0.06, t1 = t0 + W;
+      const pct = (ms) => `${((ms - t0) / W) * 100}%`;
+      const clip = (a, b) => { const x = Math.max(a, t0), y = Math.min(b, t1); return y > x ? [x, y] : null; };
+      const axis = h("div", { class: "tl-axis" });
+      const step = W / 6;
+      for (let k = 0; k <= 6; k++) {
+        const ms = t0 + step * k;
+        const rel = Math.round((ms - ref) / 1000);
+        axis.append(h("span", { style: `left:${(k / 6) * 100}%` }, rel === 0 ? T("tlNow") : `${rel < 0 ? "−" : "+"}${fmtRemainTl(Math.abs(rel))}`));
+      }
+      const lane = h("div", { class: "tl-lane" });
+      const kidRows = [];
+      for (const { it, i, e } of ent) {
+        const sp = clip(e.startMs, e.durationMs > 0 ? e.endMs : t1);
+        if (!sp) continue;
+        const cls = `tl-ev${it.id === currentItemId ? " onair" : it.id === cuedItemId ? " cued" : ""}${it.startType === "fixtime" ? " fix" : ""}${it.senderId ? " live" : ""}${it.eventType === "HOLD" || it.eventType === "JUMP" ? " ctl" : ""}`;
+        lane.append(h("div", { class: cls, style: `left:${pct(sp[0])};width:max(3px,calc(${pct(sp[1])} - ${pct(sp[0])}))`, title: `${it.label} · ${tcFormat(it.durationMs, TC_FPS)}`, onclick: (ev) => select(it.id, ev), ondblclick: () => openEditor(it) },
+          h("span", {}, it.label)));
+        // Child Events: Lanes so vergeben, dass sich überlappende Balken nicht verdecken.
+        (it.children || []).forEach((c, ci) => {
+          const span = childSpan(c, e.durationMs, Math.max(0, t1 - e.startMs));
+          if (!span) return;
+          const s2 = clip(e.startMs + span[0], e.startMs + span[1]);
+          if (!s2) return;
+          let r = kidRows.findIndex((row) => row.every(([a, b]) => s2[1] <= a || s2[0] >= b));
+          if (r < 0) { r = kidRows.length; kidRows.push([]); }
+          kidRows[r].push(s2);
+          const rt = childRuntime.find((x) => x.itemId === it.id && x.id === c.id);
+          (kidRows[r].els ||= []).push(h("div", { class: `tl-kid ${rt ? rt.state : ""}`, style: `left:${pct(s2[0])};width:max(3px,calc(${pct(s2[1])} - ${pct(s2[0])}))`, title: `${c.templateId || c.target || c.url || c.type} · ${timingText(c)}`, onclick: () => openEditor(it, "kids", ci) },
+            h("span", {}, `${CHILD_ICON[c.type] || "•"} ${c.templateId || c.target || c.url || c.type}`)));
+        });
+      }
+      const nowX = h("div", { class: "tl-now", style: `left:${pct(ref)}` });
+      const kidLanes = kidRows.map((row) => h("div", { class: "tl-klane" }, ...(row.els || [])));
+      tlEl.replaceChildren(axis, h("div", { class: "tl-body" }, lane, ...kidLanes, nowX));
+    };
+    const fmtRemainTl = (sec) => { const hh = Math.floor(sec / 3600), mm = Math.floor((sec % 3600) / 60), ss = sec % 60; return `${hh > 0 ? `${hh}:${String(mm).padStart(2, "0")}` : mm}:${String(ss).padStart(2, "0")}`; };
 
     const timingText = (c) => {
       const t = c.timing || (c.relativeTo === "END" ? "RELATIVE_TO_END" : "RELATIVE_TO_START");
@@ -2608,9 +2724,12 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         const [hh, mm, ss] = it.fixtimeHms.split(":").map(Number);
         return { label: it.label, hms: it.fixtimeHms, remain: hh * 3600 + mm * 60 + ss - nowSecs };
       }).filter((f) => Number.isFinite(f.remain) && f.remain >= 0).sort((a, b) => a.remain - b.remain);
+      // Angehakte Zähler bleiben sichtbar, auch wenn es kein passendes Event gibt (dann „Label: —“, abgedunkelt).
+      const cntLabel = (k) => T("cnt" + k[0].toUpperCase() + k.slice(1));
       const show = (k, text) => {
-        cntEls[k].textContent = text || "";
-        cntEls[k].style.display = cntOn[k] && text ? "" : "none";
+        cntEls[k].textContent = text || `${cntLabel(k)}: —`;
+        cntEls[k].classList.toggle("empty", !text);
+        cntEls[k].style.display = cntOn[k] ? "" : "none";
       };
       show("fix", upcoming.length ? T("fixCountdown", { hms: upcoming[0].hms, label: upcoming[0].label, t: fmtRemain(upcoming[0].remain) }) : "");
 
@@ -2657,8 +2776,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const owText = !ow ? "" : ow.kind === "hold" ? T("waitHold") : ow.kind === "manualStart" ? T("waitMan", { label: owLabel }) : ow.kind === "endHold" ? T("waitEnd", { label: owLabel }) : T("waitCued", { label: owLabel });
       const owRem = ow && Number.isFinite(ow.remainingMs) ? ` · ${fmtRemain(Math.ceil(ow.remainingMs / 1000))}` : "";
       nextBtn.title = ow ? `${T("nextTitle")}\n${owText}${owRem}` : T("nextTitle");
-      cntEls.man.textContent = owText ? owText + owRem : "";
-      cntEls.man.style.display = cntOn.man && owText ? "" : "none";
+      cntEls.man.textContent = owText ? owText + owRem : `${T("cntMan")}: —`;
+      cntEls.man.classList.toggle("empty", !owText);
+      cntEls.man.style.display = cntOn.man ? "" : "none";
       const refIdx = items.findIndex((i) => i.id === (currentItemId || cuedItemId));
       const hasLive = items.some((i) => i.senderId);
       nextLiveBtn.style.display = hasLive ? "" : "none";
@@ -2686,6 +2806,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (df && shadow.activeElement !== df && v.defaultFiller !== undefined) df.value = v.defaultFiller;
 
       renderList();
+      renderTimeline();
       renderCarts();
     };
 
