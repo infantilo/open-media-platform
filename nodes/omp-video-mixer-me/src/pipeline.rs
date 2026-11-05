@@ -168,10 +168,14 @@ pub enum TransKind {
     PushL,
     PushD,
     PushU,
+    /// Paternoster (Kapitel 90.3): beide Bilder laufen im Fenster (`crosspoint.setTransWindow`, meist die Zone einer
+    /// Rahmen-Grafik) wie Kabinen vertikal aneinander vorbei. Ohne Fenster wie Push über das ganze Bild.
+    PaternosterU,
+    PaternosterD,
 }
 
 impl TransKind {
-    const ALL: [TransKind; 12] = [
+    const ALL: [TransKind; 14] = [
         Self::Mix,
         Self::VFade,
         Self::FadeCut,
@@ -184,6 +188,8 @@ impl TransKind {
         Self::PushL,
         Self::PushD,
         Self::PushU,
+        Self::PaternosterU,
+        Self::PaternosterD,
     ];
 
     pub fn from_name(name: &str) -> Option<Self> {
@@ -204,6 +210,8 @@ impl TransKind {
             Self::PushL => "pushL",
             Self::PushD => "pushD",
             Self::PushU => "pushU",
+            Self::PaternosterU => "paternosterU",
+            Self::PaternosterD => "paternosterD",
         }
     }
 
@@ -220,14 +228,14 @@ impl TransKind {
         match self {
             Self::SlideR | Self::PushR => Some((1, 0)),
             Self::SlideL | Self::PushL => Some((-1, 0)),
-            Self::SlideD | Self::PushD => Some((0, 1)),
-            Self::SlideU | Self::PushU => Some((0, -1)),
+            Self::SlideD | Self::PushD | Self::PaternosterD => Some((0, 1)),
+            Self::SlideU | Self::PushU | Self::PaternosterU => Some((0, -1)),
             _ => None,
         }
     }
 
     fn is_push(self) -> bool {
-        matches!(self, Self::PushR | Self::PushL | Self::PushD | Self::PushU)
+        matches!(self, Self::PushR | Self::PushL | Self::PushD | Self::PushU | Self::PaternosterU | Self::PaternosterD)
     }
 }
 
@@ -545,6 +553,8 @@ pub struct PipelineHandle {
     /// `crosspoint.transType`: wie `trans_rate_ms` ein atomarer Store,
     /// gelesen beim Start von AUTO bzw. bei jedem T-Bar-Schritt.
     trans_kind: Vec<Arc<AtomicU8>>,
+    /// Paternoster-Fenster je Ebene (Kapitel 90.3).
+    trans_window: Vec<Arc<Mutex<Option<[i32; 4]>>>>,
     /// Option je Ebene (Nutzerwunsch 2026-10-15): nach CUT, AUTO und einem
     /// abgeschlossenen T-Bar-Zug wird das bisherige Programm zum neuen
     /// Preset (PGM/PST tauschen, wie "flip-flop" am Hardware-Pult). Ein
@@ -664,6 +674,13 @@ impl PipelineHandle {
     /// NÄCHSTE(n) `autoTrans()`-Aufrufe dieser Ebene — eine bereits
     /// laufende Überblendung läuft mit ihrer ursprünglichen Dauer zu Ende
     /// (`spawn_autotrans` liest `duration_ms` einmalig beim Start).
+    /// Fenster `[x, y, w, h]` (Mischer-Pixel) für Paternoster; `None` löscht es. Wirkt ab der nächsten Überblendung.
+    pub fn set_trans_window(&self, level: usize, window: Option<[i32; 4]>) {
+        if let Some(w) = self.trans_window.get(level) {
+            *w.lock().expect("lock poisoned") = window;
+        }
+    }
+
     pub fn set_trans_kind(&self, level: usize, kind: TransKind) {
         if let Some(k) = self.trans_kind.get(level) {
             k.store(kind.to_u8(), Ordering::Relaxed);
@@ -3024,6 +3041,8 @@ struct TransPads {
     bg: gst::Pad,
     width: i32,
     height: i32,
+    /// Fenster `[x, y, w, h]` in Mischer-Pixeln für Paternoster (Kapitel 90.3); `None` = ganzes Bild.
+    window: Option<[i32; 4]>,
 }
 
 fn set_pos(pad: &gst::Pad, x: i32, y: i32) {
@@ -3035,6 +3054,16 @@ fn set_pos(pad: &gst::Pad, x: i32, y: i32) {
 fn reset_positions(t: &TransPads) {
     set_pos(&t.fg, 0, 0);
     set_pos(&t.bg, 0, 0);
+    if t.window.is_some() {
+        // Größe zurück auf „Eingangsgröße“ (-1, Standard des Compositor-Pads); nur Pad-Properties, keine Caps-Änderung.
+        set_size(&t.fg, -1, -1);
+        set_size(&t.bg, -1, -1);
+    }
+}
+
+fn set_size(pad: &gst::Pad, w: i32, h: i32) {
+    pad.set_property("width", w);
+    pad.set_property("height", h);
 }
 
 /// Setzt EINEN Überblendungs-Frame für Position `pos` (0..1): `fg` ist das
@@ -3067,6 +3096,19 @@ fn apply_transition_frame(t: &TransPads, kind: TransKind, pos: f64) {
         TransKind::CutFade => {
             t.bg.set_property("alpha", 0.0f64);
             t.fg.set_property("alpha", pos);
+        }
+        // Paternoster im Fenster: beide Bilder auf Fenstergröße, eine Fensterhöhe Weg; der Überstand wird von der
+        // deckenden Rahmen-Grafik (Keyer, darüber) verdeckt.
+        TransKind::PaternosterU | TransKind::PaternosterD if t.window.is_some() => {
+            let [wx, wy, ww, wh] = t.window.unwrap_or([0, 0, t.width, t.height]);
+            let dy = kind.direction().map_or(-1, |d| d.1);
+            t.bg.set_property("alpha", 1.0f64);
+            set_size(&t.fg, ww, wh);
+            set_size(&t.bg, ww, wh);
+            let travel = (pos * wh as f64).round() as i32;
+            set_pos(&t.bg, wx, wy + dy * travel);
+            set_pos(&t.fg, wx, wy + dy * (travel - wh));
+            t.fg.set_property("alpha", if pos <= 0.0 { 0.0f64 } else { 1.0f64 });
         }
         slide_or_push => {
             let (dx, dy) = slide_or_push.direction().unwrap_or((1, 0));
@@ -3199,6 +3241,7 @@ pub fn run(
         .collect();
 
     let trans_kind: Vec<Arc<AtomicU8>> = (0..level_count).map(|_| Arc::new(AtomicU8::new(TransKind::Mix.to_u8()))).collect();
+    let trans_window: Vec<Arc<Mutex<Option<[i32; 4]>>>> = (0..level_count).map(|_| Arc::new(Mutex::new(None))).collect();
     let swap_on_transition: Vec<Arc<AtomicBool>> = (0..level_count).map(|_| Arc::new(AtomicBool::new(false))).collect();
     // Generationszähler je Ebene für PIP-Fahrten: jede neue Box-/PIP-Änderung
     // erhöht ihn und bricht damit eine laufende Fahrt ab.
@@ -3255,6 +3298,7 @@ pub fn run(
         output_delays: output_delays.clone(),
         trans_rate_ms: trans_rate_ms.clone(),
         trans_kind: trans_kind.clone(),
+        trans_window: trans_window.clone(),
         swap_on_transition: swap_on_transition.clone(),
         handover_pending: handover_pending.clone(),
     }));
@@ -3712,6 +3756,7 @@ pub fn run(
                         bg: p.comp_bg_pad.clone(),
                         width: config.width as i32,
                         height: config.height as i32,
+                        window: trans_window.get(level).and_then(|w| *w.lock().expect("lock poisoned")),
                     };
                     reset_positions(&trans_pads);
                     p.comp_bg_pad.set_property("alpha", 1.0f64);
@@ -3796,6 +3841,7 @@ pub fn run(
                             bg: p.comp_bg_pad.clone(),
                             width: config.width as i32,
                             height: config.height as i32,
+                            window: trans_window.get(level).and_then(|w| *w.lock().expect("lock poisoned")),
                         };
                         reset_positions(&start_pads);
                         p.comp_bg_pad.set_property("alpha", 1.0f64);
@@ -3809,6 +3855,7 @@ pub fn run(
                         bg: p.comp_bg_pad.clone(),
                         width: config.width as i32,
                         height: config.height as i32,
+                        window: trans_window.get(level).and_then(|w| *w.lock().expect("lock poisoned")),
                     };
                     apply_transition_frame(&trans_pads, kind, pos);
                     if pos >= 1.0 {

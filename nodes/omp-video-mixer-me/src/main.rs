@@ -669,6 +669,16 @@ fn level_method_specs(level_count: usize, level: usize) -> Vec<MethodSpec> {
                 kind: ParamType::Number,
             }],
         },
+        // Kapitel 90.3: Fenster des Paternoster-Übergangs in Mischer-Pixeln; ohne Breite/Höhe wird es gelöscht.
+        MethodSpec {
+            name: n("crosspoint.setTransWindow"),
+            args: vec![
+                MethodArg { name: "x".to_string(), kind: ParamType::Number },
+                MethodArg { name: "y".to_string(), kind: ParamType::Number },
+                MethodArg { name: "width".to_string(), kind: ParamType::Number },
+                MethodArg { name: "height".to_string(), kind: ParamType::Number },
+            ],
+        },
         // Manueller T-Bar (`docs/END-GOAL-FEATURES.md` §3.4 Teil 2).
         MethodSpec {
             name: n("crosspoint.setTransitionPosition"),
@@ -929,6 +939,15 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
             let on = args.get("enabled").and_then(Value::as_bool).ok_or(InvokeError::Unknown)?;
             *store.swap_on_transition[level].lock().expect("lock poisoned") = on;
             store.pipeline.set_swap_on_transition(level, on);
+            Ok(())
+        }
+        "crosspoint.setTransWindow" => {
+            let num = |k: &str| args.get(k).and_then(Value::as_f64).filter(|v| v.is_finite()).map(|v| v.round() as i32);
+            let window = match (num("x"), num("y"), num("width"), num("height")) {
+                (Some(x), Some(y), Some(w), Some(h)) if w >= 2 && h >= 2 => Some([x, y, w.min(store.width as i32 * 2), h.min(store.height as i32 * 2)]),
+                _ => None,
+            };
+            store.pipeline.set_trans_window(level, window);
             Ok(())
         }
         "crosspoint.setTransRate" => {

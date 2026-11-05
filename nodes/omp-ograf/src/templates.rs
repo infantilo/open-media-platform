@@ -158,6 +158,19 @@ fn content_type_for(path: &Path) -> &'static str {
     }
 }
 
+/// Mitgelieferte Rahmen-Vorlage für den Paternoster (Kapitel 90.3): wird beim Start geschrieben, falls noch keine liegt
+/// (das Datenverzeichnis ist nicht Teil des Repositories).
+pub fn ensure_builtin_paternoster_frame(templates_root: &Path) {
+    let dir = templates_root.join("paternoster-frame");
+    if dir.join("paternoster-frame.ograf.json").exists() {
+        return;
+    }
+    if std::fs::create_dir_all(&dir).is_ok() {
+        let _ = std::fs::write(dir.join("paternoster-frame.ograf.json"), include_str!("../builtin/paternoster-frame/paternoster-frame.ograf.json"));
+        let _ = std::fs::write(dir.join("paternoster-frame.js"), include_str!("../builtin/paternoster-frame/paternoster-frame.js"));
+    }
+}
+
 const HARNESS_HTML: &str = include_str!("../ui/harness.html");
 
 /// `ParamStore::extra_route`-Implementierung für die Harness-Seite

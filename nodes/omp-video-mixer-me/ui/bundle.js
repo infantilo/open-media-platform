@@ -79,6 +79,7 @@ const T = (() => {
       "kindCutfade": "Hart auf Schwarz, das neue Bild blendet auf",
       "slideWhat": "Slide: neues Bild fährt über das alte,",
       "pushWhat": "Push: neues Bild schiebt das alte hinaus,",
+      "paternosterWhat": "Paternoster: beide Bilder laufen im Fenster der Rahmen-Grafik aneinander vorbei,",
       "dirRight": "nach rechts",
       "dirLeft": "nach links",
       "dirDown": "nach unten",
@@ -184,6 +185,7 @@ const T = (() => {
       "kindCutfade": "Hard cut to black, the new picture fades in",
       "slideWhat": "Slide: new picture slides over the old one,",
       "pushWhat": "Push: new picture pushes the old one out,",
+      "paternosterWhat": "Paternoster: both pictures pass each other inside the window of the frame graphic,",
       "dirRight": "to the right",
       "dirLeft": "to the left",
       "dirDown": "downwards",
@@ -1525,6 +1527,16 @@ class OmpVideoMixerMePanel extends HTMLElement {
       };
       const slideRow = makeKindRow("SLIDE", "slide", T("slideWhat"));
       const pushRow = makeKindRow("PUSH", "push", T("pushWhat"));
+      // Paternoster (Kapitel 90.3): nur senkrecht; Fenster kommt von der Rahmen-Grafik (Layout-Kopplung, Art „Fenster“).
+      const paternosterCap = document.createElement("div");
+      paternosterCap.className = "wipe-caption";
+      paternosterCap.textContent = "PATERNOSTER";
+      const paternosterRow = document.createElement("div");
+      paternosterRow.className = "mix-wipe";
+      paternosterRow.append(
+        makeKindButton("paternosterD", "▼", `${T("paternosterWhat")} ${T("dirDown")}`),
+        makeKindButton("paternosterU", "▲", `${T("paternosterWhat")} ${T("dirUp")}`),
+      );
       setKindActive("mix");
       // Option "PGM/PST nach Übergang tauschen" (Nutzerwunsch 2026-10-15),
       // serverseitig je Ebene (`crosspoint.swapOnTransition`).
@@ -1543,7 +1555,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
       freezeBtn.textContent = T("freezeLabel");
       freezeBtn.title = T("freezeTitle");
       freezeBtn.addEventListener("click", () => call("freeze.capture", {}));
-      transition.append(cutBtn, autoBtn, rateRow, tBar, mixWipe, ...slideRow, ...pushRow, swapBtn, freezeBtn);
+      transition.append(cutBtn, autoBtn, rateRow, tBar, mixWipe, ...slideRow, ...pushRow, paternosterCap, paternosterRow, swapBtn, freezeBtn);
 
       console_.append(buses, transition);
       content.append(console_);

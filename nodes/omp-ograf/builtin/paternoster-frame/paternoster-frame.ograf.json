@@ -1,0 +1,26 @@
+{
+  "$schema": "https://ograf.ebu.io/v1/specification/json-schemas/graphics/schema.json",
+  "id": "paternoster-frame",
+  "version": "1.0.0",
+  "name": "Paternoster-Rahmen",
+  "description": "Deckender Rahmen mit einem Fenster (data-ograf-zone=\"window\"). Der Bildmischer fährt im Fenster PGM und PST als Paternoster aneinander vorbei (Layout-Kopplung kind=window, Übergang paternosterU/D). Kein OGraf-Standard, nur die Zone ist eine Erweiterung; in anderen Systemen erscheint ein Rahmen mit durchsichtigem Fenster.",
+  "author": { "name": "OpenMediaPlatform" },
+  "main": "paternoster-frame.js",
+  "designWidth": 1920,
+  "designHeight": 1080,
+  "supportsRealTime": true,
+  "supportsNonRealTime": false,
+  "stepCount": 1,
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "title": { "type": "string", "title": "Titel", "default": "" },
+      "frameColor": { "type": "string", "title": "Rahmenfarbe", "default": "#10151f", "gddType": "color-rrggbb", "pattern": "^#[0-9a-f]{6}$" },
+      "accentColor": { "type": "string", "title": "Akzentfarbe", "default": "#00c8ff", "gddType": "color-rrggbb", "pattern": "^#[0-9a-f]{6}$" }
+    }
+  },
+  "renderRequirements": [
+    { "resolution": { "width": { "ideal": 1920 }, "height": { "ideal": 1080 } }, "frameRate": { "ideal": 25 } }
+  ]
+}

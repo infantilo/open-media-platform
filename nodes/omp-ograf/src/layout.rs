@@ -34,12 +34,19 @@ pub struct Binding {
     pub level: u32,
     #[serde(default)]
     pub slot: u32,
-    /// Quelle im PIP-Slot (Sender-ID).
-    #[serde(rename = "senderId")]
+    /// Quelle im PIP-Slot (Sender-ID, `pst:N` folgt dem Preset der Ebene N). Bei `kind` = `window` unbenutzt.
+    #[serde(rename = "senderId", default)]
     pub sender_id: String,
+    /// `pip` (Standard): die Zone führt einen PIP-Slot (Squeeze-back). `window`: die Zone ist das Fenster des
+    /// Paternoster-Übergangs (`crosspoint.setTransWindow`, Kapitel 90.3).
+    #[serde(default)]
+    pub kind: String,
 }
 
 impl Binding {
+    fn is_window(&self) -> bool {
+        self.kind == "window"
+    }
     fn key(&self) -> String {
         format!("{}/{}", self.layer, self.zone)
     }
@@ -60,6 +67,8 @@ pub enum Action {
     SetSource(String),
     SetPose([i32; 4]),
     Enable(bool),
+    /// Paternoster-Fenster des Mischers setzen (`Some`) oder löschen (`None`).
+    SetWindow(Option<[i32; 4]>),
 }
 
 /// Zone (normiert) → Rechteck in Mischer-Pixeln `[x, y, w, h]`; mindestens 2×2.
@@ -77,6 +86,23 @@ pub fn zone_box(z: &Zone, canvas: (u32, u32)) -> [i32; 4] {
 pub fn plan(b: &Binding, zone: Option<&Zone>, canvas: (u32, u32), st: &mut Applied) -> Vec<Action> {
     let visible = zone.filter(|z| z.o >= MIN_OPACITY && z.w > 0.0 && z.h > 0.0);
     let mut out = Vec::new();
+    if b.is_window() {
+        match visible {
+            Some(z) => {
+                let bx = zone_box(z, canvas);
+                if st.pose != Some(bx) {
+                    st.pose = Some(bx);
+                    out.push(Action::SetWindow(Some(bx)));
+                }
+            }
+            None if st.pose.is_some() => {
+                st.pose = None;
+                out.push(Action::SetWindow(None));
+            }
+            None => {}
+        }
+        return out;
+    }
     let Some(z) = visible else {
         if st.enabled {
             st.enabled = false;
@@ -134,8 +160,11 @@ impl Layout {
     }
 
     pub fn bind(&self, b: Binding) -> Result<(), String> {
-        if b.layer.is_empty() || b.zone.is_empty() || b.mixer.is_empty() || b.sender_id.is_empty() {
-            return Err("layerId, zone, mixer und senderId sind nötig".into());
+        if !matches!(b.kind.as_str(), "" | "pip" | "window") {
+            return Err("kind: pip oder window".into());
+        }
+        if b.layer.is_empty() || b.zone.is_empty() || b.mixer.is_empty() || (!b.is_window() && b.sender_id.is_empty()) {
+            return Err("layerId, zone, mixer und (außer bei kind=window) senderId sind nötig".into());
         }
         if b.level > 16 || b.slot > 32 {
             return Err("level/slot außerhalb des Bereichs".into());
@@ -286,6 +315,10 @@ fn run_one(
                 json!({"pose": json!({"x": x, "y": y, "width": w, "height": h}).to_string(), "slot": b.slot}),
             ),
             Action::Enable(on) => link.peer.invoke_with(&b.method("pip.setEnabled"), json!({"enabled": on, "slot": b.slot})),
+            Action::SetWindow(Some([x, y, w, h])) => {
+                link.peer.invoke_with(&b.method("crosspoint.setTransWindow"), json!({"x": x, "y": y, "width": w, "height": h}))
+            }
+            Action::SetWindow(None) => link.peer.invoke_with(&b.method("crosspoint.setTransWindow"), json!({})),
         };
         if let Err(e) = r {
             // Beim Fehler den Mischer neu auflösen (Instanz kann neu gestartet sein) und von vorn beginnen.
@@ -295,7 +328,7 @@ fn run_one(
         }
     }
     *st = next;
-    let moved = actions.iter().any(|a| matches!(a, Action::SetPose(_)));
+    let moved = actions.iter().any(|a| matches!(a, Action::SetPose(_) | Action::SetWindow(Some(_))));
     Ok(seen.filter(|_| moved).map(|t| Instant::now().duration_since(t).as_secs_f64() * 1000.0))
 }
 
@@ -304,7 +337,7 @@ mod tests {
     use super::*;
 
     fn b() -> Binding {
-        Binding { layer: "L1".into(), zone: "box".into(), mixer: "M".into(), level: 0, slot: 1, sender_id: "S".into() }
+        Binding { layer: "L1".into(), zone: "box".into(), mixer: "M".into(), level: 0, slot: 1, sender_id: "S".into(), kind: String::new() }
     }
     fn z(o: f64) -> Zone {
         Zone { id: "box".into(), x: 0.0625, y: 0.375, w: 0.25, h: 1.0 / 3.0, o }
@@ -334,6 +367,19 @@ mod tests {
         assert_eq!(plan(&b(), Some(&z(0.0)), (1920, 1080), &mut st), vec![Action::Enable(false)]);
         assert!(plan(&b(), None, (1920, 1080), &mut st).is_empty());
         assert_eq!(plan(&b(), Some(&z(1.0)), (1920, 1080), &mut st), vec![Action::Enable(true)]);
+    }
+
+    #[test]
+    fn window_binding_sets_and_clears_the_transition_window() {
+        let w = Binding { kind: "window".into(), sender_id: String::new(), ..b() };
+        let mut st = Applied::default();
+        assert_eq!(plan(&w, Some(&z(1.0)), (1920, 1080), &mut st), vec![Action::SetWindow(Some([120, 405, 480, 360]))]);
+        assert!(plan(&w, Some(&z(1.0)), (1920, 1080), &mut st).is_empty());
+        assert_eq!(plan(&w, None, (1920, 1080), &mut st), vec![Action::SetWindow(None)]);
+        assert!(plan(&w, None, (1920, 1080), &mut st).is_empty());
+        let l = Layout { shared: Arc::new(Shared { bindings: Mutex::new(BTreeMap::new()), wake: Condvar::new() }) };
+        assert!(l.bind(w).is_ok());
+        assert!(l.bind(Binding { kind: "x".into(), ..b() }).is_err());
     }
 
     #[test]

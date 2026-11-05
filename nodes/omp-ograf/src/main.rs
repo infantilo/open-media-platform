@@ -286,6 +286,8 @@ impl ParamStore for OgrafStore {
                         MethodArg { name: "senderId".to_string(), kind: ParamType::String },
                         MethodArg { name: "slot".to_string(), kind: ParamType::Number },
                         MethodArg { name: "level".to_string(), kind: ParamType::Number },
+                        // `pip` (Standard) oder `window` (Paternoster-Fenster, ohne senderId)
+                        MethodArg { name: "kind".to_string(), kind: ParamType::String },
                     ],
                 },
                 MethodSpec {
@@ -443,6 +445,7 @@ impl ParamStore for OgrafStore {
                     level: num("level"),
                     slot: num("slot"),
                     sender_id: text("senderId"),
+                    kind: text("kind"),
                 };
                 self.layout.bind(b).map_err(|e| InvokeError::Message(e))
             }
@@ -554,6 +557,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let templates_root = PathBuf::from(env_or("OMP_OGRAF_TEMPLATES", "data/ograf-templates"));
     std::fs::create_dir_all(&templates_root).ok();
     subtitles::ensure_builtin_template(&templates_root);
+    templates::ensure_builtin_paternoster_frame(&templates_root);
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
 
     let templates = templates::scan_templates(&templates_root);
