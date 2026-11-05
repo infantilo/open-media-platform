@@ -384,6 +384,17 @@
     "expectedResources": "gering (Ringpuffer: 8 s Stereo ≈ 3 MB)"
   },
   {
+    "type": "omp-segue-player",
+    "label": "Segue-Player (Radio)",
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-segue-player"],
+    "env": {},
+    "mediaKind": "audio",
+    "description": "Spielt mehrere Audiodateien gleichzeitig in einem Prozess und mischt sie sample-genau auf einen Stereo-Ausgang „Programm“ — für Radio: Titel, Jingles, Bett. Jede Stimme startet auf einen TAI-Zeitpunkt (`startAt`) im exakten Frame, mit Pegel (z. B. aus der Lautheitsmessung), Einblenden und Ausblenden (linear, Gleichleistung, logarithmisch), Ausblenden an einer Stelle der Datei (`stopAtMs`) und Start mitten in der Datei (`offsetMs`). Marken (Intro, Hook, Ausklang) werden mitgeführt und angezeigt; der Automator plant damit die Übergänge. Dateien werden vor dem Start vollständig decodiert (Zwischenspeicher). Eine vom Aufrufer vergebene `voiceId` verhindert Doppelstarts bei Wiederholung. Bis zu 8 Stimmen.",
+    "i18n": { "en": {"label": "Segue player (radio)", "description": "Plays several audio files at once in one process and mixes them sample-accurately onto one stereo output “Programme” — for radio: tracks, jingles, beds. Each voice starts at a TAI time (`startAt`) in the exact frame, with level (e.g. from loudness measurement), fade in and out (linear, equal-power, logarithmic), fade out at a point in the file (`stopAtMs`) and start inside the file (`offsetMs`). Markers (intro, hook, outro) are carried and shown; the automation plans transitions with them. Files are fully decoded before they start (cache). A caller-assigned `voiceId` prevents double starts on retry. Up to 8 voices.", "expectedResources": "low to moderate (decoded files in memory, ≈ 23 MB per minute of stereo)"} },
+    "expectedResources": "gering bis moderat (decodierte Dateien im Speicher, ≈ 23 MB je Minute Stereo)"
+  },
+  {
     "type": "omp-playout-buffer",
     "label": "Playout-Puffer",
     "anchor": true,

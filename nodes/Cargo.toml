@@ -24,6 +24,7 @@ members = [
     "omp-aes67-gateway",
     "omp-fabrics-gateway",
     "omp-scte35",
+    "omp-segue-player",
     "omp-recorder",
     "omp-playout-buffer",
     "omp-scaler",
