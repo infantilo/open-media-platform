@@ -315,7 +315,7 @@ const T = (() => {
       "ed.badStart": "Startzeit ungültig (z. B. 14:30:00 oder 2026-10-03 06:00:00)",
       "ed.pickFile": "Datei wählen",
       "ed.pickImage": "Bilddatei wählen",
-      "ed.pickLive": "Live-Quelle wählen",
+      "ed.pickLive": "Live-Quelle wählen", "ed.liveNoSourceHint": "Ohne Quelle wird das Event als „Quelle fehlt“ angelegt (Zähler „Event ohne Quelle“) — die Quelle kann später gewählt werden.",
       "ed.needTag": "Live nach Tags braucht mindestens einen Pflicht-Tag",
       "ed.pickJump": "Sprungziel wählen",
       "ed.assetMissing": "Asset-ID fehlt",
@@ -662,7 +662,7 @@ const T = (() => {
       "ed.badStart": "Invalid start time (e.g. 14:30:00 or 2026-10-03 06:00:00)",
       "ed.pickFile": "Choose a file",
       "ed.pickImage": "Choose an image file",
-      "ed.pickLive": "Choose a live source",
+      "ed.pickLive": "Choose a live source", "ed.liveNoSourceHint": "Without a source the event is created as “source missing” (counter “event without source”) — the source can be chosen later.",
       "ed.needTag": "Live by tags needs at least one required tag",
       "ed.pickJump": "Choose a jump target",
       "ed.assetMissing": "Asset ID missing",
@@ -1638,7 +1638,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (it.eventType === "JUMP") return "↪";
       if (it.eventType === "IMAGE") return "🖼";
       if (it.asset) return "📦";
-      if (it.sourceSelector) return "🏷";
+      if (it.sourceSelector) return isPlaceholderSel(it.sourceSelector) ? "📡" : "🏷";
       return it.senderId ? "📡" : it.file ? "📁" : "🎨";
     };
     const describe = (it) => {
@@ -1649,6 +1649,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       }
       if (it.asset) return `Asset ${it.asset.assetId}${it.file ? ` → ${it.file}` : ""}`;
       if (it.eventType === "IMAGE") return T("describe.still", { file: it.file });
+      if (isPlaceholderSel(it.sourceSelector)) return T("noSource");
       if (it.sourceSelector) return T("describe.liveTags", { tags: (it.sourceSelector.required || []).join(", "), label: it.resolvedLabel || T("describe.noMatch") });
       if (it.senderId) return T("describe.live", { id: it.senderId });
       if (it.file) return T("describe.file", { file: it.file });
@@ -2028,13 +2029,15 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     };
     const field = (label, ...ctrl) => [h("label", {}, label), h("div", { class: "row" }, ...ctrl)];
 
+    // Live-Event ohne gewählte Quelle: Platzhalter (Selektor „exakte ID leer“ löst nie auf) → zählt als „Event ohne Quelle“, Quelle später im Editor wählbar.
+    const isPlaceholderSel = (sel) => sel && sel.exactId === "";
     const mediaKindOf = (it) => {
       if (!it) return "pattern";
       if (it.asset) return "asset";
       if (it.eventType === "HOLD") return "hold";
       if (it.eventType === "JUMP") return "jump";
       if (it.eventType === "IMAGE") return "image";
-      if (it.sourceSelector) return "liveselect";
+      if (it.sourceSelector) return isPlaceholderSel(it.sourceSelector) ? "live" : "liveselect";
       if (it.senderId) return "live";
       if (it.file) return "file";
       return "pattern";
@@ -2153,6 +2156,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
             const known = availableSources.map((s) => [s.senderId, s.label]);
             if (d.senderId && !known.some(([id]) => id === d.senderId)) known.unshift([d.senderId, d.senderId]);
             f.append(...field(T("ed.liveSource"), bindSelect(d, "senderId", [["", T("ed.chooseSource")], ...known])));
+            if (!d.senderId) f.append(h("div", { class: "hint" }, T("ed.liveNoSourceHint")));
             break;
           }
           case "liveselect":
@@ -2500,7 +2504,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         switch (d.kind) {
           case "pattern": return { kind: "pattern", pattern: d.pattern };
           case "file": case "image": return { kind: d.kind, file: d.file };
-          case "live": return { kind: "live", senderId: d.senderId };
+          case "live": return d.senderId ? { kind: "live", senderId: d.senderId } : { kind: "liveselect", sourceSelector: { exactId: "" } };
           case "liveselect": return { kind: "liveselect", sourceSelector: { required: splitTags(d.tags), preferred: splitTags(d.pref) } };
           case "jump": return { kind: "jump", jumpTarget: d.jumpTarget };
           case "asset": return { kind: "asset", asset: { assetId: d.assetId.trim() } };
@@ -2514,7 +2518,11 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           case "pattern": body.pattern = d.pattern; body.toneFrequency = 0; body.durationMs = cart ? d.durationMs : d.durationMs || 5000; break;
           case "file": if (!d.file) return T("ed.pickFile"); body.file = d.file; if (cart) body.durationMs = d.durationMs; break;
           case "image": if (!d.file) return T("ed.pickImage"); body.file = d.file; body.eventType = "image"; body.durationMs = cart ? d.durationMs : d.durationMs || 5000; break;
-          case "live": if (!d.senderId) return T("ed.pickLive"); body.senderId = d.senderId; body.durationMs = cart ? d.durationMs : d.durationMs || 5000; break;
+          case "live":
+            if (d.senderId) body.senderId = d.senderId;
+            else body.sourceSelectorJson = JSON.stringify({ exactId: "" });
+            body.durationMs = cart ? d.durationMs : d.durationMs || 5000;
+            break;
           case "liveselect":
             if (splitTags(d.tags).length === 0) return T("ed.needTag");
             body.sourceSelectorJson = JSON.stringify({ required: splitTags(d.tags), preferred: splitTags(d.pref) });
@@ -2572,7 +2580,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
             if (!created || list.length <= before) return null;
             delete patch.audio;
             const err2 = await tryCall("updateItem", { itemId: created.id, patchJson: JSON.stringify(patch) });
-            if (!err2 && ["live", "liveselect"].includes(d.kind)) {
+            if (!err2 && (d.kind === "liveselect" || (d.kind === "live" && d.senderId))) {
               // Die Audio-Wahl hängt von der aufgelösten Quelle ab: Editor direkt auf der Audio-Seite des neuen Events wieder öffnen.
               setTimeout(async () => {
                 const fresh = ((await getParam("items")) || []).find((x) => x.id === created.id);

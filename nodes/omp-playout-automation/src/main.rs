@@ -6394,6 +6394,17 @@ mod live_select_tests {
         let m = item_media_from_args(None, None, Some("snd-1"), None, None, None, Some(&s));
         assert_eq!(m, ItemMedia::Live { sender_id: "snd-1".to_string() });
     }
+
+    /// Live-Event ohne gewählte Quelle (UI-Platzhalter `exactId: ""`): löst nie auf → „Quelle fehlt“.
+    #[test]
+    fn live_placeholder_without_source_never_resolves() {
+        let sel: Selector = serde_json::from_str(r#"{"exactId":""}"#).unwrap();
+        assert_eq!(sel.exact_id.as_deref(), Some(""));
+        let m = item_media_from_args(None, None, None, None, None, None, Some(&sel));
+        assert!(matches!(m, ItemMedia::LiveSelect { .. }));
+        let r = omp_resolver::resolve(&effective_selector(&sel), &[]);
+        assert!(r.selected_id.is_none());
+    }
 }
 
 // Kapitel 27 / P2b: Bild-, Hold- und Jump-Events.
