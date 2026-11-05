@@ -2238,6 +2238,32 @@ class OmpVideoMixerMePanel extends HTMLElement {
       };
 
       let latestTransType = "mix";
+      // Kap. 88: senderId → Name des Workflow-Eingangs, der diesen Mischer speist (aus GET /workflows/{id}/interface).
+      // Kurz zwischengespeichert, damit der 2-s-Poll den Orchestrator nicht doppelt belastet.
+      const aliasCache = { at: 0, map: new Map() };
+      const loadInputAliases = async () => {
+        if (Date.now() - aliasCache.at < 5000) return aliasCache.map;
+        aliasCache.at = Date.now();
+        try {
+          const wfRes = await fetch("/api/v1/workflows");
+          const wf = wfRes.ok
+            ? (await wfRes.json()).find((w) => (w.definition?.interface?.inputs?.length ?? 0) > 0 &&
+              Object.values(w.runtime || {}).some((r) => r.nodeId === nodeId))
+            : null;
+          const map = new Map();
+          if (wf) {
+            const res = await fetch(`/api/v1/workflows/${encodeURIComponent(wf.id)}/interface`);
+            if (res.ok) {
+              for (const input of (await res.json()).inputs || []) {
+                if (!(input.members || []).some((m) => m.nodeId === nodeId)) continue;
+                for (const sid of input.feedSenderIds || []) map.set(sid, input.label || input.name);
+              }
+            }
+          }
+          aliasCache.map = map;
+        } catch { /* Alias ist Komfort: ohne Antwort bleiben die Sender-Labels */ }
+        return aliasCache.map;
+      };
       const refresh = async (workflowOwnSenderIds, otherLevelSenderIds, senderNodeId) => {
         lastWorkflowOwnSenderIds = workflowOwnSenderIds;
         lastOtherLevelSenderIds = otherLevelSenderIds;
@@ -2270,7 +2296,9 @@ class OmpVideoMixerMePanel extends HTMLElement {
           const fr = await fetch(`/api/v1/nodes/${nodeId}/params/freeze.list`);
           if (fr.ok) latestFreezes = (await fr.json()).value || [];
         } catch { /* Liste bleibt, wie sie war */ }
-        const inputs = (await inputsRes.json()).value || [];
+        // Kap. 88: Eingänge, die als Workflow-Eingang (z. B. „FQ1“) gespeist werden, tragen dessen Namen statt des Sender-Labels.
+        const aliases = await loadInputAliases();
+        const inputs = ((await inputsRes.json()).value || []).map((i) => (aliases.has(i.senderId) ? { ...i, label: aliases.get(i.senderId) } : i));
         const program = (await programRes.json()).value || "";
         const preset = (await presetRes.json()).value || "";
         keyerEnabled = keyerRes.ok ? (await keyerRes.json()).value === true : false;

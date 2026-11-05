@@ -2901,6 +2901,7 @@ export class FlowCanvas extends HTMLElement {
       roles: base.roles.map((r) => r.name),
       initial: base.interface as WorkflowInterface | undefined,
       portsOf,
+      nameOfWorkflow: (id) => this.#workflows.find((w) => w.id === id)?.name ?? id,
     });
     if (result === null) return;
     if (!live) {
@@ -4750,7 +4751,12 @@ export class FlowCanvas extends HTMLElement {
   }
 
   // Schaltet Sender auf einen Workflow-Eingang (Orchestrator: IS-05 bzw. Anheften im Mischer).
-  async #connectToWorkflowInput(workflowId: string, input: string, senderIds: string[]) {
+  async #connectToWorkflowInput(
+    workflowId: string,
+    input: string,
+    senderIds: string[],
+    feed?: { workflowId: string; output: string },
+  ) {
     if (senderIds.length === 0) {
       this.#showToast(tt("wfi.notRunning"));
       return;
@@ -4758,7 +4764,7 @@ export class FlowCanvas extends HTMLElement {
     try {
       const res = await apiFetch(
         `/api/v1/workflows/${encodeURIComponent(workflowId)}/interface/inputs/${encodeURIComponent(input)}/connect`,
-        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ senderIds }) },
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ senderIds, feed }) },
       );
       if (!res.ok) {
         this.#showToast(tt("flow.eeaf61", { p0: (await res.text()).trim() || res.status }), this.#traceToastAction(res));
@@ -5236,7 +5242,11 @@ export class FlowCanvas extends HTMLElement {
       if (!workflowId || !input) return;
       if (virtualFrom) {
         void this.#workflowOutputSenders(virtualFrom.workflowId, virtualFrom.output).then((senders) =>
-          this.#connectToWorkflowInput(workflowId, input, senders.map((x) => x.id))
+          // Quelle ist ein Workflow-Ausgang: Zuordnung wird dauerhaft gespeichert (überlebt Neustarts beider Workflows).
+          this.#connectToWorkflowInput(workflowId, input, senders.map((x) => x.id), {
+            workflowId: virtualFrom.workflowId,
+            output: virtualFrom.output,
+          })
         );
       } else {
         void this.#connectToWorkflowInput(workflowId, input, [fromPortId]);

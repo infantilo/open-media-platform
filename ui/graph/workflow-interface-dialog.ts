@@ -3,7 +3,7 @@
 
 import { t } from "../shell/i18n.ts";
 import {
-  addMember, addPort, type InterfaceSide, normalize, problems, removeMember, removePort, renamePort, setLabel, type WorkflowInterface,
+  addMember, addPort, clearFeed, type InterfaceSide, normalize, problems, removeMember, removePort, renamePort, setLabel, type WorkflowInterface,
 } from "./workflow-interface-logic.ts";
 
 export interface InterfaceDialogOptions {
@@ -12,6 +12,8 @@ export interface InterfaceDialogOptions {
   initial: WorkflowInterface | undefined;
   /** Vorschläge für das Port-Feld (Port-Namen der laufenden Rolle); leer = freies Feld. */
   portsOf: (role: string, side: InterfaceSide) => string[];
+  /** Anzeigename eines Workflows (für die Zuordnung „gespeist von …“). */
+  nameOfWorkflow?: (id: string) => string;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, css = "", text = ""): HTMLElementTagNameMap[K] {
@@ -86,6 +88,19 @@ export function openInterfaceDialog(opts: InterfaceDialogOptions): Promise<Workf
         del.addEventListener("click", () => apply(removePort(work, side, port.name)));
         head.append(name, label, del);
         card.append(head);
+
+        if (side === "inputs" && port.feed) {
+          const feedRow = el("div", "margin:4px 0 0 12px;font-size:12px;" + DIM);
+          feedRow.setAttribute("data-role", "wfi-feed");
+          feedRow.append(
+            t("wfi.fedBy", { p0: opts.nameOfWorkflow?.(port.feed.workflowId) ?? port.feed.workflowId, p1: port.feed.output }) + " ",
+          );
+          const unlink = el("button", "cursor:pointer;font:inherit;", t("wfi.unlink"));
+          unlink.type = "button";
+          unlink.addEventListener("click", () => apply(clearFeed(work!, port.name)));
+          feedRow.append(unlink);
+          card.append(feedRow);
+        }
 
         port.members.forEach((m, index) => {
           const row = el("div", "display:flex;gap:6px;align-items:center;margin:4px 0 0 12px;");

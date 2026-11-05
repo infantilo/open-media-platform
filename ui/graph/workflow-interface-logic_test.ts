@@ -1,6 +1,6 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import {
-  addMember, addPort, normalize, portNameOf, problems, removeMember, removePort, renamePort, renameRoleIn, setLabel,
+  addMember, addPort, clearFeed, normalize, portNameOf, problems, removeMember, removePort, renamePort, renameRoleIn, setLabel,
 } from "./workflow-interface-logic.ts";
 
 Deno.test("portNameOf entfernt Node-Label und Instanz-ID wie der Orchestrator", () => {
@@ -52,4 +52,12 @@ Deno.test("renameRoleIn: Rollen-Umbenennung folgt, Löschen entfernt Mitglieder 
 Deno.test("problems meldet unbekannte Rollen und leere Ausgänge", () => {
   const i = addPort(addPort(undefined, "outputs", "A", [{ role: "x" }])!, "outputs", "B")!;
   assertEquals(problems(i, ["mixer"]), ["outputs:A:unknownRole:x", "outputs:B:noMembers"]);
+});
+
+Deno.test("clearFeed entfernt nur die Zuordnung, Mitglieder bleiben; Umbenennen behält sie", () => {
+  let i = addPort(undefined, "inputs", "FQ1", [{ role: "mixer" }])!;
+  i = { inputs: [{ ...i.inputs![0], feed: { workflowId: "w", output: "PGM" } }] };
+  assertEquals(renamePort(i, "inputs", "FQ1", "FQ2")!.inputs![0].feed?.output, "PGM");
+  const c = clearFeed(i, "FQ1");
+  assertEquals(c.inputs![0], { name: "FQ1", members: [{ role: "mixer" }] });
 });

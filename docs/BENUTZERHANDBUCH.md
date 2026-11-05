@@ -407,9 +407,20 @@ Anschlüsse im Flow Editor:
 - Der Workflow-Eingang muss laufen; sonst meldet der Editor, dass nichts
   geschaltet werden konnte.
 
-Die Verbindung gilt für die laufenden Instanzen und wird nicht als feste
-Zuordnung im Workflow gespeichert; bei einem Neustart des Workflows ordnest
-du den Eingang neu zu (oder verdrahtest die Quelle fest im Workflow).
+**Dauerhafte Zuordnung.** Ziehst du den **Ausgang eines Workflows** auf einen
+Workflow-Eingang, wird gespeichert, dass dieser Eingang von diesem Ausgang
+gespeist wird (Workflow und Ausgang, nicht die wechselnde Sender-ID). Startet
+einer der beiden Workflows neu, schaltet der Orchestrator die Zuordnung
+selbst wieder; läuft die Quelle noch nicht, passiert es beim Start der
+Quelle. Im Dialog „Schnittstelle…“ steht am Eingang „Gespeist von …“; dort
+löst „Zuordnung lösen“ sie wieder. Schaltest du den Eingang von Hand auf
+eine andere Quelle (Sender statt Workflow-Ausgang), entfällt die gespeicherte
+Zuordnung. Eine einzelne Node-Quelle (kein Workflow-Ausgang) gilt nur für die
+laufenden Instanzen.
+
+Im **Videomixer M/E** trägt eine so gespeiste Quelle den **Namen des
+Workflow-Eingangs** (z. B. „FQ1“) statt des Sender-Labels, in den Tasten, der
+Quellenwahl und den PIP-/DSK-Listen.
 
 ### 4.0 Laufenden Workflow ändern und Startzustand speichern
 

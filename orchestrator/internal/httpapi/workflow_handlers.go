@@ -400,7 +400,8 @@ func handleWorkflowInterface(svc WorkflowService) http.HandlerFunc {
 func handleWorkflowInterfaceConnect(svc WorkflowService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			SenderIDs []string `json:"senderIds"`
+			SenderIDs []string                 `json:"senderIds"`
+			Feed      *workflows.InterfaceFeed `json:"feed"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
@@ -410,7 +411,7 @@ func handleWorkflowInterfaceConnect(svc WorkflowService) http.HandlerFunc {
 		if !workflowOrgGuard(w, r, svc, id) {
 			return
 		}
-		res, err := svc.ConnectInput(r.Context(), id, r.PathValue("name"), body.SenderIDs)
+		res, err := svc.ConnectInput(r.Context(), id, r.PathValue("name"), body.SenderIDs, body.Feed)
 		if err != nil {
 			writeWorkflowError(w, err)
 			return

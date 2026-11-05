@@ -275,6 +275,8 @@ export const en: Record<keyof typeof de, string> = {
   "wfi.notRunning": "The workflow is not running or provides no source.",
   "wfi.noMatch": "No sender of the output matches the target (media type).",
   "wfi.connected": "{p0} connected.",
+  "wfi.fedBy": "Fed by {p0} → {p1}",
+  "wfi.unlink": "Unlink",
   "kit.workflowOutputs": "Workflow outputs",
   "kit.currentWorkflow": "Current workflow",
   "kit.otherWorkflows": "Other workflows",

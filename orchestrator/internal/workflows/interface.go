@@ -3,7 +3,9 @@ package workflows
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 )
@@ -25,6 +27,9 @@ func validateInterface(ifc *Interface, roles map[string]string) error {
 				return fmt.Errorf("%w: interface %s %q is defined twice", ErrValidation, side, name)
 			}
 			seen[name] = true
+			if p.Feed != nil && (side != "input" || p.Feed.WorkflowID == "" || p.Feed.Output == "") {
+				return fmt.Errorf("%w: interface %s %q: feed only allowed on inputs and needs workflowId and output", ErrValidation, side, name)
+			}
 			if len(p.Members) == 0 {
 				return fmt.Errorf("%w: interface %s %q has no members", ErrValidation, side, name)
 			}
@@ -59,6 +64,9 @@ type ResolvedPort struct {
 	Label     string           `json:"label"`
 	Available bool             `json:"available"`
 	Members   []ResolvedMember `json:"members"`
+	// Eingänge: dauerhafte Zuordnung und die Sender, die den Eingang gerade speisen (leer = unbekannt/nicht geschaltet).
+	Feed          *InterfaceFeed `json:"feed,omitempty"`
+	FeedSenderIDs []string       `json:"feedSenderIds,omitempty"`
 }
 
 // ResolvedInterface ist die Antwort von GET /api/v1/workflows/{id}/interface.
@@ -77,7 +85,70 @@ func (s *Service) ResolveInterface(id string) (ResolvedInterface, error) {
 	if err != nil {
 		return ResolvedInterface{}, err
 	}
-	return resolveInterface(wf, s.nodeForRole), nil
+	res := resolveInterface(wf, s.nodeForRole)
+	for i := range res.Inputs {
+		in := &res.Inputs[i]
+		if p := findInterfacePort(wf.Definition.Interface, "inputs", in.Name); p != nil && p.Feed != nil {
+			in.Feed = p.Feed
+			for _, snd := range s.feedSenders(*p.Feed) {
+				in.FeedSenderIDs = append(in.FeedSenderIDs, snd.ID)
+			}
+		} else if ids := s.volatileFeed(id, in.Name); len(ids) > 0 {
+			in.FeedSenderIDs = ids
+		}
+	}
+	return res, nil
+}
+
+func findInterfacePort(ifc *Interface, side, name string) *InterfacePort {
+	if ifc == nil {
+		return nil
+	}
+	ports := ifc.Outputs
+	if side == "inputs" {
+		ports = ifc.Inputs
+	}
+	for i := range ports {
+		if ports[i].Name == name {
+			return &ports[i]
+		}
+	}
+	return nil
+}
+
+// feedSenders löst den Ausgang des Quell-Workflows zu den aktuellen Sendern auf (leer, wenn er nicht läuft).
+func (s *Service) feedSenders(f InterfaceFeed) []registry.SenderView {
+	src, err := s.store.Get(f.WorkflowID)
+	if err != nil || src.Status != StatusStarted {
+		return nil
+	}
+	var ids []string
+	for _, o := range resolveInterface(src, s.nodeForRole).Outputs {
+		if o.Name != f.Output {
+			continue
+		}
+		for _, m := range o.Members {
+			if m.Available && m.PortID != "" {
+				ids = append(ids, m.PortID)
+			}
+		}
+	}
+	return s.sendersByID(ids)
+}
+
+func (s *Service) volatileFeed(wfID, input string) []string {
+	s.feedMu.Lock()
+	defer s.feedMu.Unlock()
+	return append([]string(nil), s.volatileFeeds[wfID+"\x00"+input]...)
+}
+
+func (s *Service) setVolatileFeed(wfID, input string, ids []string) {
+	s.feedMu.Lock()
+	defer s.feedMu.Unlock()
+	if s.volatileFeeds == nil {
+		s.volatileFeeds = map[string][]string{}
+	}
+	s.volatileFeeds[wfID+"\x00"+input] = append([]string(nil), ids...)
 }
 
 func resolveInterface(wf Workflow, nodeForRole func(Workflow, string) (registry.NodeView, bool)) ResolvedInterface {
@@ -135,7 +206,9 @@ type ConnectedMember struct {
 // ConnectInput schaltet Quellen auf den Workflow-Eingang `input` (Kapitel 88): Jedes Mitglied bekommt den passenden
 // Sender (nach Medienart). Mitglieder mit Empfänger werden per IS-05 verbunden. Mitglieder ohne Empfänger (Mischer/
 // Umschalter: Eingänge sind dort angeheftete Quellen) heften die erste Bild-Quelle an. Der Workflow muss laufen.
-func (s *Service) ConnectInput(ctx context.Context, id, input string, senderIDs []string) ([]ConnectedMember, error) {
+// feed != nil speichert zusätzlich die dauerhafte Zuordnung (Quelle = Workflow-Ausgang); feed == nil hebt eine
+// frühere Zuordnung auf, weil der Eingang jetzt von Hand umgeschaltet wurde.
+func (s *Service) ConnectInput(ctx context.Context, id, input string, senderIDs []string, feed *InterfaceFeed) ([]ConnectedMember, error) {
 	wf, err := s.Get(id)
 	if err != nil {
 		return nil, err
@@ -143,14 +216,7 @@ func (s *Service) ConnectInput(ctx context.Context, id, input string, senderIDs 
 	if wf.Status != StatusStarted {
 		return nil, ErrNotRunning
 	}
-	var port *InterfacePort
-	if wf.Definition.Interface != nil {
-		for i := range wf.Definition.Interface.Inputs {
-			if wf.Definition.Interface.Inputs[i].Name == input {
-				port = &wf.Definition.Interface.Inputs[i]
-			}
-		}
-	}
+	port := findInterfacePort(wf.Definition.Interface, "inputs", input)
 	if port == nil {
 		return nil, fmt.Errorf("%w: workflow has no input %q", ErrValidation, input)
 	}
@@ -158,6 +224,23 @@ func (s *Service) ConnectInput(ctx context.Context, id, input string, senderIDs 
 	if len(senders) == 0 {
 		return nil, fmt.Errorf("%w: none of the given senders is registered", ErrValidation)
 	}
+	out, err := s.connectInputMembers(ctx, wf, *port, senders)
+	if err != nil {
+		return out, err
+	}
+	s.setVolatileFeed(id, input, senderIDs)
+	if (feed == nil) != (port.Feed == nil) || (feed != nil && *feed != *port.Feed) {
+		port.Feed = feed
+		wf.UpdatedAt = time.Now()
+		if err := s.store.Put(wf); err != nil {
+			return out, err
+		}
+		s.publish(wf)
+	}
+	return out, nil
+}
+
+func (s *Service) connectInputMembers(ctx context.Context, wf Workflow, port InterfacePort, senders []registry.SenderView) ([]ConnectedMember, error) {
 	var out []ConnectedMember
 	okCount := 0
 	for _, m := range port.Members {
@@ -211,6 +294,39 @@ func (s *Service) ConnectInput(ctx context.Context, id, input string, senderIDs 
 		return out, fmt.Errorf("%w: %s", ErrValidation, msg)
 	}
 	return out, nil
+}
+
+// applyFeeds schaltet die dauerhaft zugeordneten Eingänge (Feed) auf ihre Quell-Ausgänge: die Eingänge von `wf` selbst
+// und die aller anderen laufenden Workflows, die von `wf` gespeist werden. Aufruf nach dem Start eines Workflows
+// (best effort: fehlt die Quelle noch, passiert beim Start der Quelle dasselbe von der anderen Seite).
+func (s *Service) applyFeeds(ctx context.Context, wf Workflow) {
+	all, err := s.store.List()
+	if err != nil {
+		return
+	}
+	for _, w := range all {
+		if w.Status != StatusStarted || w.Definition.Interface == nil {
+			continue
+		}
+		for _, in := range w.Definition.Interface.Inputs {
+			if in.Feed == nil || (w.ID != wf.ID && in.Feed.WorkflowID != wf.ID) {
+				continue
+			}
+			senders := s.feedSenders(*in.Feed)
+			if len(senders) == 0 {
+				continue
+			}
+			if _, err := s.connectInputMembers(ctx, w, in, senders); err != nil {
+				slog.Warn("workflows: interface feed failed", "workflow", w.ID, "input", in.Name, "error", err)
+				continue
+			}
+			ids := make([]string, 0, len(senders))
+			for _, snd := range senders {
+				ids = append(ids, snd.ID)
+			}
+			s.setVolatileFeed(w.ID, in.Name, ids)
+		}
+	}
 }
 
 func (s *Service) sendersByID(ids []string) []registry.SenderView {

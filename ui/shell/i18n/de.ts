@@ -274,6 +274,8 @@ export const de = {
   "wfi.notRunning": "Der Workflow läuft nicht oder liefert keine Quelle.",
   "wfi.noMatch": "Kein Sender des Ausgangs passt zum Ziel (Medienart).",
   "wfi.connected": "{p0} geschaltet.",
+  "wfi.fedBy": "Gespeist von {p0} → {p1}",
+  "wfi.unlink": "Zuordnung lösen",
   "kit.workflowOutputs": "Workflow-Ausgänge",
   "kit.currentWorkflow": "Aktueller Workflow",
   "kit.otherWorkflows": "Andere Workflows",

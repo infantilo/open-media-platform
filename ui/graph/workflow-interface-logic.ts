@@ -14,6 +14,8 @@ export interface InterfacePort {
   name: string;
   label?: string;
   members: InterfaceMember[];
+  /** Nur Eingänge: dauerhaft von diesem Workflow-Ausgang gespeist (Orchestrator löst beim Start auf). */
+  feed?: { workflowId: string; output: string };
 }
 
 export interface WorkflowInterface {
@@ -129,4 +131,16 @@ export function problems(ifc: WorkflowInterface | undefined, roles: string[]): s
     }
   }
   return out;
+}
+
+/** Hebt die dauerhafte Zuordnung eines Eingangs auf. */
+export function clearFeed(ifc: WorkflowInterface, name: string): WorkflowInterface {
+  return {
+    ...ifc,
+    inputs: (ifc.inputs ?? []).map((p) => {
+      if (p.name !== name) return p;
+      const { feed: _feed, ...rest } = p;
+      return rest;
+    }),
+  };
 }

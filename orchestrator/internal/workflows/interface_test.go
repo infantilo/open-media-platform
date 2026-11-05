@@ -115,7 +115,7 @@ func connectFixture(t *testing.T) (*Service, *fakeGraph, *fakeMethodInvoker) {
 
 func TestConnectInputPinsOnCrosspointRole(t *testing.T) {
 	s, g, m := connectFixture(t)
-	res, err := s.ConnectInput(context.Background(), "wf", "FQ1", []string{"x-audio", "x-video"})
+	res, err := s.ConnectInput(context.Background(), "wf", "FQ1", []string{"x-audio", "x-video"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestConnectInputPinsOnCrosspointRole(t *testing.T) {
 
 func TestConnectInputConnectsReceiversByFormat(t *testing.T) {
 	s, g, _ := connectFixture(t)
-	if _, err := s.ConnectInput(context.Background(), "wf", "Mon", []string{"x-video", "x-audio"}); err != nil {
+	if _, err := s.ConnectInput(context.Background(), "wf", "Mon", []string{"x-video", "x-audio"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(g.calls) != 2 || g.calls[0] != (connectCall{"x-video", "r-video"}) || g.calls[1] != (connectCall{"x-audio", "r-audio"}) {
@@ -137,7 +137,7 @@ func TestConnectInputConnectsReceiversByFormat(t *testing.T) {
 	}
 	// nur Bild: Ton-Mitglied scheitert, Bild-Mitglied gelingt → Gesamterfolg mit Fehler am Mitglied
 	s2, g2, _ := connectFixture(t)
-	res, err := s2.ConnectInput(context.Background(), "wf", "Mon", []string{"x-video"})
+	res, err := s2.ConnectInput(context.Background(), "wf", "Mon", []string{"x-video"}, nil)
 	if err != nil || len(g2.calls) != 1 || res[1].Error == "" {
 		t.Errorf("err=%v calls=%+v res=%+v", err, g2.calls, res)
 	}
@@ -146,19 +146,88 @@ func TestConnectInputConnectsReceiversByFormat(t *testing.T) {
 func TestConnectInputErrors(t *testing.T) {
 	s, _, _ := connectFixture(t)
 	ctx := context.Background()
-	if _, err := s.ConnectInput(ctx, "wf", "gibtsnicht", []string{"x-video"}); !errors.Is(err, ErrValidation) {
+	if _, err := s.ConnectInput(ctx, "wf", "gibtsnicht", []string{"x-video"}, nil); !errors.Is(err, ErrValidation) {
 		t.Errorf("unknown input: %v", err)
 	}
-	if _, err := s.ConnectInput(ctx, "wf", "FQ1", []string{"unbekannt"}); !errors.Is(err, ErrValidation) {
+	if _, err := s.ConnectInput(ctx, "wf", "FQ1", []string{"unbekannt"}, nil); !errors.Is(err, ErrValidation) {
 		t.Errorf("unknown sender: %v", err)
 	}
-	if _, err := s.ConnectInput(ctx, "wf", "FQ1", []string{"x-audio"}); !errors.Is(err, ErrValidation) {
+	if _, err := s.ConnectInput(ctx, "wf", "FQ1", []string{"x-audio"}, nil); !errors.Is(err, ErrValidation) {
 		t.Errorf("audio only on crosspoint: %v", err)
 	}
 	wf, _ := s.store.Get("wf")
 	wf.Status = StatusStopped
 	_ = s.store.Put(wf)
-	if _, err := s.ConnectInput(ctx, "wf", "FQ1", []string{"x-video"}); !errors.Is(err, ErrNotRunning) {
+	if _, err := s.ConnectInput(ctx, "wf", "FQ1", []string{"x-video"}, nil); !errors.Is(err, ErrNotRunning) {
 		t.Errorf("stopped: %v", err)
+	}
+}
+
+func TestFeedIsPersistedResolvedAndAppliedFromBothSides(t *testing.T) {
+	s, g, m := connectFixture(t)
+	nodes := s.nodes.(*fakeNodeLister)
+	nodes.add(registry.NodeView{ID: "src", Label: "Src", Online: true, Senders: []registry.SenderView{{ID: "feed-video", Label: "PGM", Format: formatVideo}}})
+	_ = s.store.Put(Workflow{
+		ID: "up", Name: "Upstream", Status: StatusStarted,
+		Runtime: map[string]RoleRuntime{"src": {NodeID: "src"}},
+		Definition: Definition{
+			Roles:     []Role{{Name: "src", NodeType: "omp-source"}},
+			Interface: &Interface{Outputs: []InterfacePort{{Name: "OUT", Members: []InterfaceMember{{Role: "src", Port: "PGM"}}}}},
+		},
+	})
+	ctx := context.Background()
+	feed := &InterfaceFeed{WorkflowID: "up", Output: "OUT"}
+	if _, err := s.ConnectInput(ctx, "wf", "FQ1", []string{"feed-video"}, feed); err != nil {
+		t.Fatal(err)
+	}
+	wf, _ := s.store.Get("wf")
+	if got := wf.Definition.Interface.Inputs[0].Feed; got == nil || *got != *feed {
+		t.Fatalf("feed not persisted: %+v", got)
+	}
+	res, err := s.ResolveInterface("wf")
+	if err != nil || res.Inputs[0].Feed == nil || len(res.Inputs[0].FeedSenderIDs) != 1 || res.Inputs[0].FeedSenderIDs[0] != "feed-video" {
+		t.Fatalf("resolved = %+v err=%v", res.Inputs[0], err)
+	}
+	// Start der Quelle (oder des Ziels): applyFeeds pinnt erneut, von beiden Seiten
+	m.calls = nil
+	s.applyFeeds(ctx, Workflow{ID: "up"})
+	if len(m.calls) != 1 || m.calls[0].args["senderId"] != "feed-video" {
+		t.Errorf("apply from source side: %+v", m.calls)
+	}
+	m.calls = nil
+	s.applyFeeds(ctx, Workflow{ID: "wf"})
+	if len(m.calls) != 1 {
+		t.Errorf("apply from target side: %+v", m.calls)
+	}
+	// Quelle läuft nicht → nichts zu schalten, kein Fehler
+	up, _ := s.store.Get("up")
+	up.Status = StatusStopped
+	_ = s.store.Put(up)
+	m.calls = nil
+	s.applyFeeds(ctx, Workflow{ID: "wf"})
+	if len(m.calls) != 0 {
+		t.Errorf("stopped source must not be applied: %+v", m.calls)
+	}
+	// Hand-Umschalten (ohne feed) hebt die Zuordnung auf
+	up.Status = StatusStarted
+	_ = s.store.Put(up)
+	if _, err := s.ConnectInput(ctx, "wf", "FQ1", []string{"feed-video"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	wf, _ = s.store.Get("wf")
+	if wf.Definition.Interface.Inputs[0].Feed != nil {
+		t.Error("manual connect must clear the feed")
+	}
+	_ = g
+}
+
+func TestValidateRejectsBadFeed(t *testing.T) {
+	bad := &Interface{Outputs: []InterfacePort{{Name: "A", Members: []InterfaceMember{{Role: "mixer"}}, Feed: &InterfaceFeed{WorkflowID: "x", Output: "y"}}}}
+	if err := validate(ifcDef(bad)); !errors.Is(err, ErrValidation) {
+		t.Errorf("feed on output: %v", err)
+	}
+	bad2 := &Interface{Inputs: []InterfacePort{{Name: "A", Members: []InterfaceMember{{Role: "mixer"}}, Feed: &InterfaceFeed{WorkflowID: "x"}}}}
+	if err := validate(ifcDef(bad2)); !errors.Is(err, ErrValidation) {
+		t.Errorf("feed without output: %v", err)
 	}
 }

@@ -283,15 +283,17 @@ type Service struct {
 	stopCause sync.Map
 	// unrestored: Rollen, deren gespeicherter Zustand noch nicht wieder
 	// eingespielt ist (state.go, Unrestored-Schutz).
-	unrestoredMu sync.Mutex
-	unrestored   map[string]int
-	store        workflowStore
-	nodes        NodeLister
-	graph        GraphService
-	launcher     Launcher
-	events       EventPublisher
-	methods      methodInvoker
-	resources    ResourcePrecheck
+	feedMu        sync.Mutex
+	volatileFeeds map[string][]string // Workflow\x00Eingang → Sender, die ihn zuletzt gespeist haben (nur Laufzeit)
+	unrestoredMu  sync.Mutex
+	unrestored    map[string]int
+	store         workflowStore
+	nodes         NodeLister
+	graph         GraphService
+	launcher      Launcher
+	events        EventPublisher
+	methods       methodInvoker
+	resources     ResourcePrecheck
 	// httpClient: derselbe ggf. mTLS-fähige Client wie methods, hier
 	// zusätzlich direkt gehalten, weil state.go (getNodeState/
 	// postNodeState) den rohen JSON-Body des Node-eigenen /state-
@@ -1073,6 +1075,9 @@ func (s *Service) runStart(wf Workflow, ioAssignments map[string]ioPortAssignmen
 	// nächste manuelle Umschalten wieder auf den vorherigen Stand
 	// zurückkehren.
 	s.restoreRoleState(wf)
+	// Kapitel 88: dauerhaft zugeordnete Workflow-Eingänge schalten (nach dem Rollenzustand, der die angehefteten
+	// Quellen des Mischers sonst überschreiben würde).
+	s.applyFeeds(ctx, wf)
 }
 
 // awaitRegistration pollt den Node-Bestand, bis für jede Rolle ein Node

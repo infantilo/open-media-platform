@@ -165,7 +165,7 @@ type WorkflowService interface {
 	// ResolveInterface: benannte Ausgänge/Eingänge des Workflows mit aktuellen Sender-/Empfänger-IDs (Kap. 88).
 	ResolveInterface(id string) (workflows.ResolvedInterface, error)
 	// ConnectInput schaltet Quellen auf einen Workflow-Eingang (Kap. 88).
-	ConnectInput(ctx context.Context, id, input string, senderIDs []string) ([]workflows.ConnectedMember, error)
+	ConnectInput(ctx context.Context, id, input string, senderIDs []string, feed *workflows.InterfaceFeed) ([]workflows.ConnectedMember, error)
 	Update(id, name string, def workflows.Definition) (workflows.Workflow, error)
 	Delete(id string) error
 	Start(ctx context.Context, id string) error

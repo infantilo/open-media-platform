@@ -401,6 +401,15 @@ type InterfacePort struct {
 	// Label: Anzeigename; leer = Name.
 	Label   string            `json:"label,omitempty"`
 	Members []InterfaceMember `json:"members"`
+	// Feed (nur Eingänge): dauerhafte Zuordnung „dieser Eingang wird von jenem Workflow-Ausgang gespeist“. Wird beim
+	// Start beider Seiten aufgelöst; Sender-IDs wechseln, der Verweis auf Workflow + Ausgang nicht.
+	Feed *InterfaceFeed `json:"feed,omitempty"`
+}
+
+// InterfaceFeed verweist auf den Ausgang eines anderen Workflows.
+type InterfaceFeed struct {
+	WorkflowID string `json:"workflowId"`
+	Output     string `json:"output"`
 }
 
 // InterfaceMember verweist auf einen Sender (Ausgang) bzw. Empfänger (Eingang) einer Rolle — über das
