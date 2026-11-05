@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use crate::pipeline::{self, DiscoveredInput, FREEZE_PREFIX, Still, StillStore};
 
+#[derive(Clone)]
 pub struct FreezeMeta {
     pub id: String,
     pub name: String,
@@ -33,6 +34,8 @@ pub struct Freezes {
     pipeline: pipeline::PipelineHandle,
     /// Je Ebene die angehefteten Tasten — ein neuer Freeze wird dort sofort angeheftet.
     pinned: Vec<Arc<Mutex<Vec<String>>>>,
+    /// Kleine Vorschau je Freeze als `data:`-URI (Taste mit Vorschaubild); wird beim ersten Abruf erzeugt.
+    thumbs: Mutex<HashMap<String, String>>,
 }
 
 pub fn sender_id(id: &str) -> String {
@@ -82,6 +85,7 @@ impl Freezes {
             inputs,
             pipeline,
             pinned,
+            thumbs: Mutex::new(HashMap::new()),
         })
     }
 
@@ -195,6 +199,7 @@ impl Freezes {
         // Erst aus der Pipeline nehmen (`publish`), danach das Bild freigeben: der Feeder hält seine eigene Kopie.
         self.publish(None);
         self.stills.lock().expect("lock poisoned").remove(id);
+        self.thumbs.lock().expect("lock poisoned").remove(id);
         true
     }
 
@@ -221,13 +226,83 @@ impl Freezes {
     }
 
     pub fn list_json(&self) -> Value {
+        let metas = self.metas.lock().expect("lock poisoned").clone();
         json!(
-            self.metas
-                .lock()
-                .expect("lock poisoned")
+            metas
                 .iter()
-                .map(|m| json!({ "id": m.id, "name": m.name, "senderId": sender_id(&m.id), "at": m.at }))
+                .map(|m| json!({ "id": m.id, "name": m.name, "senderId": sender_id(&m.id), "at": m.at, "thumb": self.thumb(&m.id) }))
                 .collect::<Vec<_>>()
         )
+    }
+
+    /// Vorschaubild (JPEG als `data:`-URI) eines Freezes; einmal erzeugt, danach aus dem Zwischenspeicher.
+    fn thumb(&self, id: &str) -> Option<String> {
+        if let Some(t) = self.thumbs.lock().expect("lock poisoned").get(id) {
+            return Some(t.clone());
+        }
+        let still = self.stills.lock().expect("lock poisoned").get(id).cloned()?;
+        let uri = thumb_data_uri(&still)?;
+        self.thumbs.lock().expect("lock poisoned").insert(id.to_string(), uri.clone());
+        Some(uri)
+    }
+}
+
+const THUMB_WIDTH: u32 = 160;
+
+/// RGBA-Standbild → kleines JPEG als `data:`-URI (einmalige GStreamer-Kette, nicht in der Sendepipeline).
+fn thumb_data_uri(still: &Still) -> Option<String> {
+    use gst::prelude::*;
+    use gstreamer as gst;
+    use gstreamer_app as gst_app;
+    let h = ((THUMB_WIDTH as u64 * still.height as u64 / still.width.max(1) as u64) as u32).max(2) & !1;
+    let desc = format!(
+        "appsrc name=src format=time ! videoconvert ! videoscale ! video/x-raw,width={THUMB_WIDTH},height={h} ! jpegenc quality=70 ! appsink name=sink sync=false"
+    );
+    let pipe = gst::parse::launch(&desc).ok()?.downcast::<gst::Pipeline>().ok()?;
+    let src = pipe.by_name("src")?.downcast::<gst_app::AppSrc>().ok()?;
+    let sink = pipe.by_name("sink")?.downcast::<gst_app::AppSink>().ok()?;
+    let caps = gst::Caps::builder("video/x-raw")
+        .field("format", "RGBA")
+        .field("width", still.width as i32)
+        .field("height", still.height as i32)
+        .field("framerate", gst::Fraction::new(25, 1))
+        .build();
+    src.set_caps(Some(&caps));
+    pipe.set_state(gst::State::Playing).ok()?;
+    let mut buf = gst::Buffer::from_slice(still.rgba.clone());
+    buf.get_mut()?.set_pts(gst::ClockTime::ZERO);
+    src.push_buffer(buf).ok()?;
+    let _ = src.end_of_stream();
+    let sample = sink.try_pull_sample(gst::ClockTime::from_seconds(3));
+    let _ = pipe.set_state(gst::State::Null);
+    let sample = sample?;
+    let map = sample.buffer()?.map_readable().ok()?;
+    Some(format!("data:image/jpeg;base64,{}", base64(map.as_slice())))
+}
+
+fn base64(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for c in data.chunks(3) {
+        let n = (u32::from(c[0]) << 16) | (u32::from(*c.get(1).unwrap_or(&0)) << 8) | u32::from(*c.get(2).unwrap_or(&0));
+        out.push(T[(n >> 18) as usize & 63] as char);
+        out.push(T[(n >> 12) as usize & 63] as char);
+        out.push(if c.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if c.len() > 2 { T[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base64_matches_reference() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
     }
 }

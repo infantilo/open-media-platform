@@ -654,6 +654,10 @@ class OmpVideoMixerMePanel extends HTMLElement {
     const THUMBS_KEY = "omp-vmix-thumbs";
     const STREAM_TOKEN_KEY = "omp-auth-token";
     let thumbsEnabled = localStorage.getItem(THUMBS_KEY) === "1";
+    // Freezes sind Standbilder des Mischers selbst (keine Quelle im Netz): ihr Vorschaubild kommt als data-URI aus freeze.list.
+    const isFreezeId = (senderId) => typeof senderId === "string" && senderId.startsWith("freeze:");
+    const freezeThumbs = new Map(); // Sender-ID -> data-URI, gefüllt aus freeze.list
+    const freezeThumb = (senderId) => freezeThumbs.get(senderId) || "";
     const previewSnapshotUrl = (sourceNodeId) => {
       const token = localStorage.getItem(STREAM_TOKEN_KEY);
       const base = `/api/v1/nodes/${sourceNodeId}/stream/previewUrl`;
@@ -986,6 +990,11 @@ class OmpVideoMixerMePanel extends HTMLElement {
           noSignal.style.display = "none";
           void loadPreviewImage(img, noSignal, previewSnapshotUrl(sourceNodeId));
           thumb.append(img, noSignal);
+        } else if (isFreezeId(senderId) && freezeThumb(senderId)) {
+          const img = document.createElement("img");
+          img.alt = label;
+          img.src = freezeThumb(senderId);
+          thumb.append(img);
         } else if (senderId) {
           const noSignal = document.createElement("div");
           noSignal.className = "no-signal";
@@ -1086,7 +1095,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const hasImg = !!reused?.querySelector("img");
         const reusable = reused
           && reused.classList.contains("with-thumb") === wantsThumb
-          && hasImg === !!(wantsThumb && sourceNodeId);
+          && hasImg === !!(wantsThumb && (sourceNodeId || (isFreezeId(entry.senderId) && freezeThumb(entry.senderId))));
         // Formatabweichung (Nutzerwunsch 2026-09-30): Quelle hat andere
         // Auflösung/Bildrate als der Mixer — Warnsymbol + Tooltip.
         const health = sourceNodeId ? sourceHealth.get(sourceNodeId) : null;
@@ -1121,6 +1130,10 @@ class OmpVideoMixerMePanel extends HTMLElement {
         }
       }
 
+      // Freezes (Standbilder) stehen als eigene Gruppe ganz hinten: sie dürfen die Gruppierung „Eigener Workflow / Andere Quellen“
+      // weder erzeugen noch verschieben, wenn ein neuer Freeze entsteht.
+      const freezeEntries = remaining.filter((e) => isFreezeId(e.senderId));
+      remaining = remaining.filter((e) => !isFreezeId(e.senderId));
       const own = remaining.filter((e) => ownSenderIds.has(e.senderId));
       const others = remaining.filter((e) => !ownSenderIds.has(e.senderId));
       if (own.length > 0 && others.length > 0) {
@@ -1137,6 +1150,13 @@ class OmpVideoMixerMePanel extends HTMLElement {
         for (const entry of others) appendEntry(entry);
       } else {
         for (const entry of remaining) appendEntry(entry);
+      }
+      if (freezeEntries.length > 0) {
+        const freezeGroup = document.createElement("div");
+        freezeGroup.className = "group-label";
+        freezeGroup.textContent = T("freezes");
+        fragment.append(freezeGroup);
+        for (const entry of freezeEntries) appendEntry(entry);
       }
       container.append(fragment);
 
@@ -2307,7 +2327,11 @@ class OmpVideoMixerMePanel extends HTMLElement {
         if (!inputsRes.ok || !programRes.ok || !presetRes.ok) return;
         try {
           const fr = await fetch(`/api/v1/nodes/${nodeId}/params/freeze.list`);
-          if (fr.ok) latestFreezes = (await fr.json()).value || [];
+          if (fr.ok) {
+            latestFreezes = (await fr.json()).value || [];
+            freezeThumbs.clear();
+            for (const f of latestFreezes) if (f.thumb) freezeThumbs.set(f.senderId, f.thumb);
+          }
         } catch { /* Liste bleibt, wie sie war */ }
         // Kap. 88: Eingänge, die als Workflow-Eingang (z. B. „FQ1“) gespeist werden, tragen dessen Namen statt des Sender-Labels.
         const aliases = await loadInputAliases();
