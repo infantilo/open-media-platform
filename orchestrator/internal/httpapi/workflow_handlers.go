@@ -377,3 +377,20 @@ func handleWorkflowPlan(svc WorkflowService) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, plan)
 	}
 }
+
+// handleWorkflowInterface liefert GET /api/v1/workflows/{id}/interface (Kapitel 88): die benannten Ausgänge und
+// Eingänge des Workflows mit den aktuell aufgelösten Sender-/Empfänger-IDs.
+func handleWorkflowInterface(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if !workflowOrgGuard(w, r, svc, id) {
+			return
+		}
+		ifc, err := svc.ResolveInterface(id)
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, ifc)
+	}
+}

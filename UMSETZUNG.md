@@ -6374,3 +6374,28 @@ Entwurf, Messungen und Abweichungen: **`docs/ENTWURF-PIP-MEHRFACH-2D.md`** (Absc
 - **Tests:** Rust `pip.rs`/`pipstate.rs`/Argumente (35 grün) + ignorierter Live-Test `pip_live_test.rs` (`source deploy/dev/mxl.env && cargo test -p omp-video-mixer-me pip_live -- --ignored`, eigene MXL-Domäne: Trapez/Drehung/Rechteck, Außenpixel transparent, z-Reihenfolge, Fokusfahrt, 5× Quellen weg/hin), Deno (655 grün). Browser (Chromium/CDP, echte Mausereignisse, isolierter Node mit Standbild-Quellen und Fake-Registry): Monitor, Hover, Fokus hin/zurück, Klick ins Leere, Editor.
 - **Befunde:** (1) Der PIP-Editor rechnete bisher in einem festen **640×480-Raum**, der Mischer aber in seiner echten Auflösung — jetzt `pip.canvas`; vor diesem Stand gespeicherte Presets erscheinen bei anderer Auflösung verschoben. (2) Ein ausgeschalteter 2D-Slot rechnet weiter (`perspective` auf Schwarz): Leerlauf ≈ +7 % Kern je 2D-Slot bei 360p; `valve` bewusst nicht (Aggregator-Timeouts, altes Bild beim Einschalten) — nur so viele 2D-Slots wie nötig einstellen. (3) Node-Neustart nötig, Orchestrator nicht (kein Orchestrator-Code geändert).
 - **Offen:** nicht an echten Quellen/Sendebetrieb mit voller Last gemessen (nur Standbild-Quellen und Farb-Flows); Operator-Konsole zeigt das Mischer-Panel unverändert (Monitor-Klick dort nicht eigens geprüft); Hit-Test nutzt Zielposen, nicht den Pixelstand mitten in einer Fahrt.
+
+## Kapitel 88: Workflow-Schnittstelle — benannte Ausgänge und Eingänge (Nutzerwunsch 2026-11-05; **88.1 umgesetzt 2026-11-05, lokal; 88.2–88.4 offen**)
+
+**Anlass:** Ein Workflow ist ein Regieplatz oder Prozess. Der Operator, der eine Schaltung vornimmt, will nicht alle Sender
+der Rollen sehen, sondern den **Ausgang** des Workflows (z. B. „Regieplatz 1 → PGM“) finden und schalten; ebenso Eingänge.
+Gruppen zeigten Pads (`promotedPorts`, rein visuell), Workflow-Kacheln hatten keine Ports. Der Grouphint-Stand vom
+2026-11-04 (Gruppe = Instanzname) ist nur die Node-Ebene und die Basis, nicht dieses Feature.
+
+**Entscheidungen (Empfehlungen, vom Nutzer mit „ja“ bestätigt):** ein Ausgang/Eingang **bündelt mehrere Sender/Empfänger**
+(Bild + Ton = „PGM“); **strikt explizit** (kein automatisches Exponieren aller ungebundenen Ports); Rechte zunächst wie
+bisher, Workflow-Ebene-Rechte für Operatoren ohne Rollenzugriff später (88.4).
+
+**Datenmodell:** `Definition.Interface{Outputs,Inputs []InterfacePort}`; `InterfacePort{Name,Label,Members[]{Role,Port}}`.
+Mitglieder verweisen über **Rolle + Port-Label** (wie `Connection`), nie über IDs. Additiv, `omitempty`; Export/Import
+nehmen es automatisch mit. `validate()` prüft: Name nötig und je Seite eindeutig, ≥1 Mitglied, Rolle existiert.
+
+| Schritt | Inhalt | Status |
+|---|---|---|
+| 88.1 | Datenmodell + Validierung + `ResolveInterface` + `GET /api/v1/workflows/{id}/interface` (`workflows/interface.go`), Tests, Routen-Golden | erledigt |
+| 88.2 | Flow-Editor: Workflow-Kachel zeigt Ausgänge/Eingänge als Pads; im Bearbeiten-Modus Port einer Rolle „als Workflow-Ausgang/-Eingang“ exponieren, benennen, bündeln | offen |
+| 88.3 | Quellenwahl (`source-catalog.ts`) und Schalten: Workflow-Ausgänge als eigene Einträge (Gruppe „Regieplatz 1 → PGM“), Verbindung auf Workflow-Pad wird beim Schalten auf die echten IDs aufgelöst | offen |
+| 88.4 | Rechte auf Workflow-Ebene (Operator darf Ausgang schalten ohne Rollenzugriff), Handbuch | offen |
+
+**Verifikation 88.1:** `go test ./internal/workflows -run Interface`, `./internal/httpapi`, `./cmd/routetable` grün.
+Nicht live am Stack geprüft; kein Orchestrator-Neustart bisher nötig, wirksam erst nach Neustart.

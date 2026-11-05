@@ -2511,6 +2511,12 @@
     "domain": "core"
   },
   {
+    "method": "GET",
+    "path": "/api/v1/workflows/{id}/interface",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
     "method": "POST",
     "path": "/api/v1/workflows/{id}/pause",
     "auth": "verb:Admin",

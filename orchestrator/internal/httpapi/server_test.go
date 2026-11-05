@@ -589,6 +589,10 @@ func (f fakeWorkflowService) Create(name string, def workflows.Definition, adopt
 func (f fakeWorkflowService) List() ([]workflows.Workflow, error) { return f.list, f.listErr }
 
 func (f fakeWorkflowService) Get(id string) (workflows.Workflow, error) { return f.get, f.getErr }
+func (f fakeWorkflowService) ResolveInterface(id string) (workflows.ResolvedInterface, error) {
+	return workflows.ResolvedInterface{WorkflowID: id}, nil
+}
+
 func (f fakeWorkflowService) PlanStart(id string) (workflows.StartPlan, error) {
 	return workflows.StartPlan{WorkflowID: id}, nil
 }

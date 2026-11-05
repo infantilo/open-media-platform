@@ -2154,6 +2154,9 @@ func validate(def Definition) error {
 			crosspointTargets[c.ToRole] = true
 		}
 	}
+	if err := validateInterface(def.Interface, nodeTypeByRole); err != nil {
+		return err
+	}
 	// K7 Teil 4 (Hot-Standby, docs/END-GOAL-FEATURES.md §7.4): StandbyFor
 	// muss eine andere, existierende Rolle desselben NodeTypes referenzieren
 	// — keine Selbstreferenz, keine Ketten (eine Rolle ist entweder Primär-

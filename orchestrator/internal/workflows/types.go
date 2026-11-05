@@ -356,6 +356,9 @@ type Definition struct {
 	Connections []Connection `json:"connections"`
 	Settings    Settings     `json:"settings,omitempty"`
 	Schedules   []Schedule   `json:"schedules,omitempty"`
+	// Interface (Kapitel 88): die nach außen sichtbare Schnittstelle des Workflows — benannte Ausgänge und
+	// Eingänge, hinter denen Sender/Empfänger einzelner Rollen stehen. nil = keine (Verhalten wie vor Kap. 88).
+	Interface *Interface `json:"interface,omitempty"`
 	// Title/Description/Tags/Category (Kapitel 12 Teil 6,
 	// docs/END-GOAL-FEATURES.md §12.3g, ARCHITECTURE.md §22.3 Punkte
 	// 4+7): additive, rein darstellungsbezogene Felder für den
@@ -379,6 +382,33 @@ type Definition struct {
 	// zu werfen", dieselbe Robustheit gilt hier: freies Textfeld, die UI
 	// zeigt einen generischen Platzhalter für unbekannte/leere Werte).
 	Category string `json:"category,omitempty"`
+}
+
+// Interface (Kapitel 88) ist die „Außenseite“ eines Workflows: Ein Regieplatz oder Prozess zeigt dem Bediener
+// nicht alle Sender seiner Rollen, sondern benannte Ausgänge (z. B. „PGM“) und Eingänge (z. B. „Zuspiel“).
+// Die Zuordnung steht in der Definition, die echten Sender-/Empfänger-IDs entstehen beim Start und werden
+// erst bei der Abfrage aufgelöst (ResolveInterface).
+type Interface struct {
+	Outputs []InterfacePort `json:"outputs,omitempty"`
+	Inputs  []InterfacePort `json:"inputs,omitempty"`
+}
+
+// InterfacePort ist ein benannter Ausgang oder Eingang. Mehrere Mitglieder bündeln z. B. Bild und Ton zu einem
+// Ausgang; beim Eingang werden alle Mitglieder gemeinsam bedient.
+type InterfacePort struct {
+	// Name: eindeutiger Schlüssel je Seite (Ausgänge/Eingänge getrennt).
+	Name string `json:"name"`
+	// Label: Anzeigename; leer = Name.
+	Label   string            `json:"label,omitempty"`
+	Members []InterfaceMember `json:"members"`
+}
+
+// InterfaceMember verweist auf einen Sender (Ausgang) bzw. Empfänger (Eingang) einer Rolle — über das
+// Port-Label, nie über die ID (IDs ändern sich mit jedem Start). Leeres Port = erster/passender Port der
+// Rolle, wie bei Connection.
+type InterfaceMember struct {
+	Role string `json:"role"`
+	Port string `json:"port,omitempty"`
 }
 
 // RoleRuntime hält fest, welche konkrete Instanz/Node gerade eine Rolle
