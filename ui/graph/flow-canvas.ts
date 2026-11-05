@@ -468,7 +468,15 @@ interface PortLocation {
 type DragState =
   | { kind: "pan"; startScreen: Point; startViewport: Viewport; moved: boolean }
   | { kind: "node"; nodeId: string; startScreen: Point; startWorld: Point; moved: boolean }
-  | { kind: "connect"; fromPortId: string; fromFormat: string; fromWorld: Point; currentScreen: Point }
+  | {
+    kind: "connect";
+    fromPortId: string;
+    fromFormat: string;
+    fromWorld: Point;
+    currentScreen: Point;
+    /** Kap. 88: Quelle ist ein Workflow-Ausgang (virtueller Pad) statt eines echten Sender-Ports. */
+    fromWorkflowOutput?: { workflowId: string; output: string };
+  }
   | { kind: "select"; startScreen: Point }
   // Bug (Nutzerfund 2026-08-14): "brauchen Möglichkeit, die Host-Frames
   // zu resizen" — Ziehgriff am rechten Rand einer Host-Zone-Box
@@ -2824,7 +2832,7 @@ export class FlowCanvas extends HTMLElement {
 
   // Kap. 88: Pads der Workflow-Schnittstelle am Rand der Workflow-Kachel — Eingänge links, Ausgänge rechts, höchstens zwei
   // Zeilen je Seite ("+n" für den Rest; die volle Liste steht im Tooltip und im Schnittstellen-Dialog).
-  #appendWorkflowInterfacePads(g: SVGGElement, status: string, ifc: WorkflowInterface) {
+  #appendWorkflowInterfacePads(g: SVGGElement, workflowId: string, status: string, ifc: WorkflowInterface, tilePos: Point) {
     const MAX_ROWS = 2;
     const live = status === "started";
     const draw = (ports: InterfacePort[], side: "input" | "output") => {
@@ -2842,6 +2850,17 @@ export class FlowCanvas extends HTMLElement {
         pad.setAttribute("r", "5");
         pad.setAttribute("fill", live ? "#4caf50" : "#777");
         pad.setAttribute("stroke", "#1b1b1b");
+        if (!more) {
+          pad.setAttribute("data-workflow-id", workflowId);
+          pad.style.cursor = side === "output" ? "crosshair" : "copy";
+          // Kap. 88: Ausgang ist Ziehquelle, Eingang Ablageziel (s. #finishConnect).
+          pad.addEventListener("pointerdown", (ev) => {
+            ev.stopPropagation();
+            if (side === "output") {
+              this.#startWorkflowOutputDrag(ev, workflowId, ports[i].name, { x: tilePos.x + x, y: tilePos.y + y });
+            }
+          });
+        }
         const tip = document.createElementNS(SVG_NS, "title");
         tip.textContent = (more ? ports.slice(MAX_ROWS - 1) : [ports[i]]).map((p) => p.label || p.name).join(", ");
         pad.appendChild(tip);
@@ -2989,7 +3008,7 @@ export class FlowCanvas extends HTMLElement {
       if (hasPads) {
         // Kap. 88: mit Schnittstelle zeigt der Körper die Pads (Status steht im Rahmen und Tooltip), sonst den Status.
         subtitle.textContent = "";
-        this.#appendWorkflowInterfacePads(g, wf.status, ifc!);
+        this.#appendWorkflowInterfacePads(g, wf.id, wf.status, ifc!, pos);
       }
       g.appendChild(subtitle);
 
@@ -4696,6 +4715,62 @@ export class FlowCanvas extends HTMLElement {
     this.#updateRubberBand();
   }
 
+  // Kap. 88: Ziehen von einem Workflow-Ausgang (virtueller Pad). Gleiche Gummiband-Mechanik wie beim echten Port; die
+  // Zielprüfung nach Format geschieht erst beim Ablegen, weil ein Ausgang mehrere Medienarten bündeln kann.
+  #startWorkflowOutputDrag(ev: PointerEvent, workflowId: string, output: string, fromWorld: Point) {
+    if (ev.button !== 0) return;
+    this.#svg.setPointerCapture(ev.pointerId);
+    this.#drag = {
+      kind: "connect",
+      fromPortId: `workflow-output:${workflowId}:${output}`,
+      fromFormat: "",
+      fromWorld,
+      currentScreen: this.#screenPoint(ev),
+      fromWorkflowOutput: { workflowId, output },
+    };
+    this.#updateRubberBand();
+  }
+
+  async #workflowInterface(workflowId: string): Promise<
+    { outputs: { name: string; members: { portId?: string; format?: string; available: boolean }[] }[] } | null
+  > {
+    try {
+      const res = await apiFetch(`/api/v1/workflows/${encodeURIComponent(workflowId)}/interface`);
+      return res.ok ? await res.json() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Sender-IDs (mit Format) eines Workflow-Ausgangs; leer, wenn der Workflow nicht läuft.
+  async #workflowOutputSenders(workflowId: string, output: string): Promise<{ id: string; format: string }[]> {
+    const ifc = await this.#workflowInterface(workflowId);
+    const out = ifc?.outputs.find((o) => o.name === output);
+    return (out?.members ?? []).filter((m) => m.available && m.portId).map((m) => ({ id: m.portId!, format: m.format ?? "" }));
+  }
+
+  // Schaltet Sender auf einen Workflow-Eingang (Orchestrator: IS-05 bzw. Anheften im Mischer).
+  async #connectToWorkflowInput(workflowId: string, input: string, senderIds: string[]) {
+    if (senderIds.length === 0) {
+      this.#showToast(tt("wfi.notRunning"));
+      return;
+    }
+    try {
+      const res = await apiFetch(
+        `/api/v1/workflows/${encodeURIComponent(workflowId)}/interface/inputs/${encodeURIComponent(input)}/connect`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ senderIds }) },
+      );
+      if (!res.ok) {
+        this.#showToast(tt("flow.eeaf61", { p0: (await res.text()).trim() || res.status }), this.#traceToastAction(res));
+        return;
+      }
+      this.#showToast(tt("wfi.connected", { p0: input }));
+      await this.#queueFetchAndRender();
+    } catch (err) {
+      this.#showToast(tt("flow.eeaf61", { p0: err }));
+    }
+  }
+
   #onPointerDown(ev: PointerEvent) {
     if (this.#drag) return;
     this.#selectedEdgeId = null;
@@ -5150,13 +5225,41 @@ export class FlowCanvas extends HTMLElement {
     this.#clearPortHighlights();
     this.#removeRubberBand();
 
+    const virtualFrom = this.#drag.fromWorkflowOutput;
     const target = document.elementFromPoint(ev.clientX, ev.clientY);
+
+    // Kap. 88: Ablage auf einem Workflow-Eingang (virtueller Pad).
+    const padEl = target?.closest('[data-role="workflow-input-pad"]');
+    if (padEl) {
+      const workflowId = padEl.getAttribute("data-workflow-id");
+      const input = padEl.getAttribute("data-pad-name");
+      if (!workflowId || !input) return;
+      if (virtualFrom) {
+        void this.#workflowOutputSenders(virtualFrom.workflowId, virtualFrom.output).then((senders) =>
+          this.#connectToWorkflowInput(workflowId, input, senders.map((x) => x.id))
+        );
+      } else {
+        void this.#connectToWorkflowInput(workflowId, input, [fromPortId]);
+      }
+      return;
+    }
+
     const portEl = target?.closest('[data-role="port"][data-port-side="input"]');
     if (!portEl) return; // Drop außerhalb eines kompatiblen Ports: Kante wird nicht gezeichnet.
 
     const toPortId = portEl.getAttribute("data-port-id");
     if (!toPortId) return;
 
+    if (virtualFrom) {
+      // Workflow-Ausgang auf echten Empfänger: der Sender des Ausgangs mit passender Medienart wird verbunden.
+      const toFormat = portEl.getAttribute("data-format") ?? "";
+      void this.#workflowOutputSenders(virtualFrom.workflowId, virtualFrom.output).then((senders) => {
+        const match = senders.find((x) => portsCompatible(x.format, toFormat));
+        if (!match) this.#showToast(senders.length === 0 ? tt("wfi.notRunning") : tt("wfi.noMatch"));
+        else void this.#createEdge(match.id, toPortId);
+      });
+      return;
+    }
     this.#createEdge(fromPortId, toPortId);
   }
 

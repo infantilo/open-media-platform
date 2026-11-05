@@ -394,3 +394,27 @@ func handleWorkflowInterface(svc WorkflowService) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, ifc)
 	}
 }
+
+// handleWorkflowInterfaceConnect liefert POST /api/v1/workflows/{id}/interface/inputs/{name}/connect (Kapitel 88):
+// schaltet die genannten Sender auf den benannten Workflow-Eingang. Body: {"senderIds":["…"]}.
+func handleWorkflowInterfaceConnect(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			SenderIDs []string `json:"senderIds"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		id := r.PathValue("id")
+		if !workflowOrgGuard(w, r, svc, id) {
+			return
+		}
+		res, err := svc.ConnectInput(r.Context(), id, r.PathValue("name"), body.SenderIDs)
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"members": res})
+	}
+}

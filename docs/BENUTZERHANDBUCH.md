@@ -392,6 +392,25 @@ PGM“ mit Bild und Ton). Die Auswahl filtert wie sonst nach Medienart, ein
 Bildmischer-Eingang zeigt also nur das Bild des Ausgangs. Rechte ändern
 sich nicht: Geschaltet wird am Ziel, die Rechte dort entscheiden.
 
+**Pads ziehen (Drag & Drop).** Die Pads der Workflow-Kachel sind echte
+Anschlüsse im Flow Editor:
+
+- **Ausgang → Empfänger:** Den rechten Pad auf einen Eingang eines Nodes
+  ziehen (z. B. Viewer „Video in"). Verbunden wird der Sender des Ausgangs,
+  dessen Medienart zum Ziel passt (Bild auf Bild, Ton auf Ton).
+- **Sender → Workflow-Eingang:** Einen Ausgang eines Nodes (oder den Pad
+  eines anderen Workflows) auf den linken Pad ziehen. Der Orchestrator
+  schaltet auf die Mitglieder des Eingangs: Mitglieder mit Empfänger werden
+  per IS-05 verbunden, bei **Mischer und Umschalter** wird die Quelle
+  **angeheftet** — sie steht danach in dessen Quellenliste und lässt sich
+  dort schalten.
+- Der Workflow-Eingang muss laufen; sonst meldet der Editor, dass nichts
+  geschaltet werden konnte.
+
+Die Verbindung gilt für die laufenden Instanzen und wird nicht als feste
+Zuordnung im Workflow gespeichert; bei einem Neustart des Workflows ordnest
+du den Eingang neu zu (oder verdrahtest die Quelle fest im Workflow).
+
 ### 4.0 Laufenden Workflow ändern und Startzustand speichern
 
 Doppelklick auf einen laufenden Workflow öffnet ihn im Flow Editor. Dort

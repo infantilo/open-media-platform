@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -119,4 +120,120 @@ func resolveInterface(wf Workflow, nodeForRole func(Workflow, string) (registry.
 	out.Outputs = resolve(ifc.Outputs, true)
 	out.Inputs = resolve(ifc.Inputs, false)
 	return out
+}
+
+// ConnectedMember beschreibt, was beim Schalten einer Quelle auf einen Workflow-Eingang mit einem Mitglied geschah.
+type ConnectedMember struct {
+	Role       string `json:"role"`
+	Port       string `json:"port,omitempty"`
+	Action     string `json:"action"` // "connect" (IS-05-Verbindung) | "pin" (Quelle im Mischer/Umschalter angeheftet)
+	SenderID   string `json:"senderId,omitempty"`
+	ReceiverID string `json:"receiverId,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+// ConnectInput schaltet Quellen auf den Workflow-Eingang `input` (Kapitel 88): Jedes Mitglied bekommt den passenden
+// Sender (nach Medienart). Mitglieder mit Empfänger werden per IS-05 verbunden. Mitglieder ohne Empfänger (Mischer/
+// Umschalter: Eingänge sind dort angeheftete Quellen) heften die erste Bild-Quelle an. Der Workflow muss laufen.
+func (s *Service) ConnectInput(ctx context.Context, id, input string, senderIDs []string) ([]ConnectedMember, error) {
+	wf, err := s.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if wf.Status != StatusStarted {
+		return nil, ErrNotRunning
+	}
+	var port *InterfacePort
+	if wf.Definition.Interface != nil {
+		for i := range wf.Definition.Interface.Inputs {
+			if wf.Definition.Interface.Inputs[i].Name == input {
+				port = &wf.Definition.Interface.Inputs[i]
+			}
+		}
+	}
+	if port == nil {
+		return nil, fmt.Errorf("%w: workflow has no input %q", ErrValidation, input)
+	}
+	senders := s.sendersByID(senderIDs)
+	if len(senders) == 0 {
+		return nil, fmt.Errorf("%w: none of the given senders is registered", ErrValidation)
+	}
+	var out []ConnectedMember
+	okCount := 0
+	for _, m := range port.Members {
+		res := ConnectedMember{Role: m.Role, Port: m.Port}
+		node, found := s.nodeForRole(wf, m.Role)
+		if !found {
+			res.Action, res.Error = "connect", "role not running"
+			out = append(out, res)
+			continue
+		}
+		if len(node.Receivers) > 0 {
+			res.Action = "connect"
+			rcv, ok := findReceiver(node, m.Port)
+			if !ok {
+				res.Error = "no such receiver"
+			} else if snd, ok := firstWithFormat(senders, rcv.Format); !ok {
+				res.Error = "no sender with matching format"
+			} else if err := s.graph.Connect(ctx, snd.ID, rcv.ID); err != nil {
+				res.Error = err.Error()
+			} else {
+				res.SenderID, res.ReceiverID = snd.ID, rcv.ID
+			}
+		} else if _, cross := crosspointByNodeType[roleNodeType(wf, m.Role)]; cross {
+			res.Action = "pin"
+			snd, ok := firstWithFormat(senders, formatVideo)
+			switch {
+			case !ok:
+				res.Error = "no video sender"
+			case node.APIBaseURL == "":
+				res.Error = "node has no api endpoint"
+			default:
+				if err := s.methods.Invoke(ctx, node.APIBaseURL, "crosspoint.pin", map[string]any{"senderId": snd.ID}); err != nil {
+					res.Error = err.Error()
+				} else {
+					res.SenderID = snd.ID
+				}
+			}
+		} else {
+			res.Action, res.Error = "connect", "role has neither receivers nor crosspoint"
+		}
+		if res.Error == "" {
+			okCount++
+		}
+		out = append(out, res)
+	}
+	if okCount == 0 {
+		msg := "nothing could be connected"
+		if len(out) > 0 && out[0].Error != "" {
+			msg += ": " + out[0].Error
+		}
+		return out, fmt.Errorf("%w: %s", ErrValidation, msg)
+	}
+	return out, nil
+}
+
+func (s *Service) sendersByID(ids []string) []registry.SenderView {
+	want := map[string]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	var out []registry.SenderView
+	for _, n := range s.nodes.List() {
+		for _, snd := range n.Senders {
+			if want[snd.ID] {
+				out = append(out, snd)
+			}
+		}
+	}
+	return out
+}
+
+func firstWithFormat(senders []registry.SenderView, format string) (registry.SenderView, bool) {
+	for _, snd := range senders {
+		if snd.Format == format {
+			return snd, true
+		}
+	}
+	return registry.SenderView{}, false
 }

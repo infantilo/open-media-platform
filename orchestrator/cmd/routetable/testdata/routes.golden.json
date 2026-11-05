@@ -2518,6 +2518,12 @@
   },
   {
     "method": "POST",
+    "path": "/api/v1/workflows/{id}/interface/inputs/{name}/connect",
+    "auth": "verb:Operate",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
     "path": "/api/v1/workflows/{id}/pause",
     "auth": "verb:Admin",
     "domain": "core"

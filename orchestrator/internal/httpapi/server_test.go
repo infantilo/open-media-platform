@@ -593,6 +593,10 @@ func (f fakeWorkflowService) ResolveInterface(id string) (workflows.ResolvedInte
 	return workflows.ResolvedInterface{WorkflowID: id}, nil
 }
 
+func (f fakeWorkflowService) ConnectInput(_ context.Context, _, _ string, _ []string) ([]workflows.ConnectedMember, error) {
+	return nil, nil
+}
+
 func (f fakeWorkflowService) PlanStart(id string) (workflows.StartPlan, error) {
 	return workflows.StartPlan{WorkflowID: id}, nil
 }

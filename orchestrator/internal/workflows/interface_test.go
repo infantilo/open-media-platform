@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -83,5 +84,81 @@ func TestResolveInterface(t *testing.T) {
 	none := resolveInterface(Workflow{}, lookup)
 	if none.Outputs == nil || none.Inputs == nil {
 		t.Error("lists must be empty, not nil")
+	}
+}
+
+func connectFixture(t *testing.T) (*Service, *fakeGraph, *fakeMethodInvoker) {
+	t.Helper()
+	store := newFakeStore()
+	nodes := &fakeNodeLister{}
+	nodes.add(registry.NodeView{ID: "ext", Label: "Ext", Online: true, Senders: []registry.SenderView{
+		{ID: "x-video", Label: "Out", Format: formatVideo}, {ID: "x-audio", Label: "Out A", Format: "urn:x-nmos:format:audio"},
+	}})
+	nodes.add(registry.NodeView{ID: "mx", Label: "Mixer", Online: true, APIBaseURL: "http://mx"})
+	nodes.add(registry.NodeView{ID: "vw", Label: "Viewer", Online: true, Receivers: []registry.ReceiverView{
+		{ID: "r-video", Label: "Video in", Format: formatVideo}, {ID: "r-audio", Label: "Audio in", Format: "urn:x-nmos:format:audio"},
+	}})
+	g, m := &fakeGraph{}, &fakeMethodInvoker{}
+	_ = store.Put(Workflow{
+		ID: "wf", Name: "Regie", Status: StatusStarted,
+		Runtime: map[string]RoleRuntime{"mixer": {NodeID: "mx"}, "viewer": {NodeID: "vw"}},
+		Definition: Definition{
+			Roles: []Role{{Name: "mixer", NodeType: "omp-video-mixer-me"}, {Name: "viewer", NodeType: "omp-viewer"}},
+			Interface: &Interface{Inputs: []InterfacePort{
+				{Name: "FQ1", Members: []InterfaceMember{{Role: "mixer"}}},
+				{Name: "Mon", Members: []InterfaceMember{{Role: "viewer", Port: "Video in"}, {Role: "viewer", Port: "Audio in"}}},
+			}},
+		},
+	})
+	return &Service{store: store, nodes: nodes, graph: g, methods: m}, g, m
+}
+
+func TestConnectInputPinsOnCrosspointRole(t *testing.T) {
+	s, g, m := connectFixture(t)
+	res, err := s.ConnectInput(context.Background(), "wf", "FQ1", []string{"x-audio", "x-video"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 || res[0].Action != "pin" || res[0].SenderID != "x-video" {
+		t.Fatalf("res = %+v", res)
+	}
+	if len(m.calls) != 1 || m.calls[0].method != "crosspoint.pin" || m.calls[0].args["senderId"] != "x-video" || len(g.calls) != 0 {
+		t.Errorf("calls = %+v / %+v", m.calls, g.calls)
+	}
+}
+
+func TestConnectInputConnectsReceiversByFormat(t *testing.T) {
+	s, g, _ := connectFixture(t)
+	if _, err := s.ConnectInput(context.Background(), "wf", "Mon", []string{"x-video", "x-audio"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(g.calls) != 2 || g.calls[0] != (connectCall{"x-video", "r-video"}) || g.calls[1] != (connectCall{"x-audio", "r-audio"}) {
+		t.Errorf("calls = %+v", g.calls)
+	}
+	// nur Bild: Ton-Mitglied scheitert, Bild-Mitglied gelingt → Gesamterfolg mit Fehler am Mitglied
+	s2, g2, _ := connectFixture(t)
+	res, err := s2.ConnectInput(context.Background(), "wf", "Mon", []string{"x-video"})
+	if err != nil || len(g2.calls) != 1 || res[1].Error == "" {
+		t.Errorf("err=%v calls=%+v res=%+v", err, g2.calls, res)
+	}
+}
+
+func TestConnectInputErrors(t *testing.T) {
+	s, _, _ := connectFixture(t)
+	ctx := context.Background()
+	if _, err := s.ConnectInput(ctx, "wf", "gibtsnicht", []string{"x-video"}); !errors.Is(err, ErrValidation) {
+		t.Errorf("unknown input: %v", err)
+	}
+	if _, err := s.ConnectInput(ctx, "wf", "FQ1", []string{"unbekannt"}); !errors.Is(err, ErrValidation) {
+		t.Errorf("unknown sender: %v", err)
+	}
+	if _, err := s.ConnectInput(ctx, "wf", "FQ1", []string{"x-audio"}); !errors.Is(err, ErrValidation) {
+		t.Errorf("audio only on crosspoint: %v", err)
+	}
+	wf, _ := s.store.Get("wf")
+	wf.Status = StatusStopped
+	_ = s.store.Put(wf)
+	if _, err := s.ConnectInput(ctx, "wf", "FQ1", []string{"x-video"}); !errors.Is(err, ErrNotRunning) {
+		t.Errorf("stopped: %v", err)
 	}
 }
