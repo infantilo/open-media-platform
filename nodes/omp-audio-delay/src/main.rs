@@ -2,6 +2,7 @@
 //! (Sprung nach vorn), **Wiederaufbau** mit ±1 % Tonhöhe und **Notquelle** bei Ausfall des Eingangs. Logik: `delay.rs` (rein, getestet),
 //! MXL-Anbindung: `io.rs`. Der Ausgang läuft auf eigener Uhr (10-ms-Takt) und reißt nie ab.
 
+mod deadair;
 mod delay;
 mod io;
 
@@ -27,6 +28,9 @@ const MAX_DELAY_MS: u64 = 60_000;
 struct Levels {
     input: std::sync::atomic::AtomicU32,
     output: std::sync::atomic::AtomicU32,
+    /// Dead-Air-Wächter (RB6): Einstellungen und Zustand
+    settings: Mutex<deadair::Settings>,
+    watch: Mutex<deadair::Watch>,
 }
 
 fn peak(block: &[f32]) -> f32 {
@@ -81,6 +85,13 @@ impl ParamStore for DelayStore {
                 ro("inputConnected", ParamType::Boolean, None),
                 ro("inputFlowing", ParamType::Boolean, None),
                 ro("emergencyConnected", ParamType::Boolean, None),
+                ParamSpec { name: "deadAirEnabled".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: false },
+                ParamSpec { name: "deadAirThresholdDb".to_string(), kind: ParamType::Number, unit: Some("dBFS".to_string()), range: Some(Range::Number { min: -90.0, max: -20.0 }), readonly: false },
+                ParamSpec { name: "deadAirHoldMs".to_string(), kind: ParamType::Number, unit: Some("ms".to_string()), range: Some(Range::Number { min: 500.0, max: 120000.0 }), readonly: false },
+                ParamSpec { name: "deadAirReturnMs".to_string(), kind: ParamType::Number, unit: Some("ms".to_string()), range: Some(Range::Number { min: 200.0, max: 60000.0 }), readonly: false },
+                ro("deadAirActive", ParamType::Boolean, None),
+                ro("deadAirCount", ParamType::Number, None),
+                ro("deadAirSeconds", ParamType::Number, Some("s")),
             ],
             methods: vec![
                 // Sprung nach vorn: wirft höchstens `ms` der ältesten Verzögerung weg (Wiederaufbau folgt von selbst).
@@ -93,6 +104,13 @@ impl ParamStore for DelayStore {
         match name {
             "inputLevelDb" => return Some(serde_json::json!(db(self.levels.input.load(Ordering::Relaxed)))),
             "outputLevelDb" => return Some(serde_json::json!(db(self.levels.output.load(Ordering::Relaxed)))),
+            "deadAirEnabled" => return Some(serde_json::json!(self.levels.settings.lock().expect("lock poisoned").enabled)),
+            "deadAirThresholdDb" => return Some(serde_json::json!(self.levels.settings.lock().expect("lock poisoned").threshold_db)),
+            "deadAirHoldMs" => return Some(serde_json::json!(self.levels.settings.lock().expect("lock poisoned").hold_ms)),
+            "deadAirReturnMs" => return Some(serde_json::json!(self.levels.settings.lock().expect("lock poisoned").return_ms)),
+            "deadAirActive" => return Some(serde_json::json!(self.levels.watch.lock().expect("lock poisoned").active())),
+            "deadAirCount" => return Some(serde_json::json!(self.levels.watch.lock().expect("lock poisoned").takeovers)),
+            "deadAirSeconds" => return Some(serde_json::json!((self.levels.watch.lock().expect("lock poisoned").total_ms / 100.0).round() / 10.0)),
             _ => {}
         }
         let l = self.line.lock().expect("lock poisoned");
@@ -112,6 +130,10 @@ impl ParamStore for DelayStore {
     }
 
     fn set(&self, name: &str, value: Value) -> Result<(), SetError> {
+        if name == "deadAirEnabled" {
+            self.levels.settings.lock().expect("lock poisoned").enabled = value.as_bool().ok_or(SetError::Unknown)?;
+            return Ok(());
+        }
         let v = value.as_f64().filter(|v| v.is_finite()).ok_or(SetError::Unknown)?;
         match name {
             "delayMs" => {
@@ -121,6 +143,19 @@ impl ParamStore for DelayStore {
                 self.line.lock().expect("lock poisoned").set_target_ms(v as u64);
                 Ok(())
             }
+            "deadAirThresholdDb" if (-90.0..=-20.0).contains(&v) => {
+                self.levels.settings.lock().expect("lock poisoned").threshold_db = v;
+                Ok(())
+            }
+            "deadAirHoldMs" if (500.0..=120_000.0).contains(&v) => {
+                self.levels.settings.lock().expect("lock poisoned").hold_ms = v as u64;
+                Ok(())
+            }
+            "deadAirReturnMs" if (200.0..=60_000.0).contains(&v) => {
+                self.levels.settings.lock().expect("lock poisoned").return_ms = v as u64;
+                Ok(())
+            }
+            "deadAirThresholdDb" | "deadAirHoldMs" | "deadAirReturnMs" => Err(SetError::Unknown),
             "rebuildPercent" => {
                 if !(0.1..=5.0).contains(&v) {
                     return Err(SetError::Unknown);
@@ -152,7 +187,7 @@ impl ParamStore for DelayStore {
         // Workflow-Sicherung: Zielverzögerung und Wiederaufbau-Geschwindigkeit überleben einen Neustart
         if method == "GET" && path == "/state" {
             let l = self.line.lock().expect("lock poisoned");
-            let payload = serde_json::to_vec(&serde_json::json!({ "state": { "delayMs": l.target_ms(), "rebuildPermille": l.rebuild_permille() } })).unwrap_or_default();
+            let payload = serde_json::to_vec(&{ let st = self.levels.settings.lock().expect("lock poisoned").clone(); serde_json::json!({ "state": { "delayMs": l.target_ms(), "rebuildPermille": l.rebuild_permille(), "deadAir": { "enabled": st.enabled, "thresholdDb": st.threshold_db, "holdMs": st.hold_ms, "returnMs": st.return_ms } } }) }).unwrap_or_default();
             return Some(RawResponse { status: 200, content_type: "application/json", body: payload });
         }
         if method == "POST" && path == "/state" {
@@ -162,6 +197,13 @@ impl ParamStore for DelayStore {
                     let mut l = self.line.lock().expect("lock poisoned");
                     if let Some(ms) = s.get("delayMs").and_then(Value::as_u64).filter(|m| *m <= MAX_DELAY_MS) {
                         l.set_target_ms(ms);
+                    }
+                    if let Some(d) = s.get("deadAir") {
+                        let mut st = self.levels.settings.lock().expect("lock poisoned");
+                        if let Some(v) = d.get("enabled").and_then(Value::as_bool) { st.enabled = v; }
+                        if let Some(v) = d.get("thresholdDb").and_then(Value::as_f64).filter(|v| (-90.0..=-20.0).contains(v)) { st.threshold_db = v; }
+                        if let Some(v) = d.get("holdMs").and_then(Value::as_u64).filter(|v| (500..=120_000).contains(v)) { st.hold_ms = v; }
+                        if let Some(v) = d.get("returnMs").and_then(Value::as_u64).filter(|v| (200..=60_000).contains(v)) { st.return_ms = v; }
                     }
                     if let Some(p) = s.get("rebuildPermille").and_then(Value::as_u64).filter(|p| (1..=50).contains(p)) {
                         l.set_rebuild_permille(p as u32);
@@ -198,13 +240,26 @@ fn clock_loop(line: Arc<Mutex<DelayLine>>, io: Arc<MxlIo>, levels: Arc<Levels>, 
     let mut block = vec![0.0f32; BLOCK * delay::CH];
     while !shutdown.load(Ordering::Relaxed) {
         heartbeat.fetch_add(1, Ordering::Relaxed);
-        let input = io.drain_input(0);
+        let mut input = io.drain_input(0);
         // Spitzenpegel mit Abklingen (≈ 100 ms), damit kurze Töne in der Abfrage sichtbar bleiben
         let hold = |a: &std::sync::atomic::AtomicU32, new: f32| {
             let old = f32::from_bits(a.load(Ordering::Relaxed)) * 0.8;
             a.store(new.max(old).to_bits(), Ordering::Relaxed);
         };
         hold(&levels.input, peak(&input));
+        // Dead-Air-Wächter: bei anhaltender Stille übernimmt die Notquelle (nur wenn der Eingang Daten liefert; ein Ausfall ist Sache der Verzögerungsstrecke)
+        if !input.is_empty() {
+            let p = peak(&input) as f64;
+            let p_db = if p <= 0.000_001 { -120.0 } else { 20.0 * p.log10() };
+            let block_ms = input.len() as f64 / delay::CH as f64 * 1000.0 / SAMPLE_RATE as f64;
+            let settings = levels.settings.lock().expect("lock poisoned").clone();
+            let take = levels.watch.lock().expect("lock poisoned").feed(&settings, p_db, block_ms);
+            if take && !io.input_flow(1).is_empty() {
+                let mut buf = vec![0.0f32; input.len()];
+                io.take_input(1, input.len() / delay::CH, &mut buf);
+                input = buf;
+            }
+        }
         {
             let mut l = line.lock().expect("lock poisoned");
             if !input.is_empty() {
@@ -272,7 +327,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let media_io = io.clone();
-    let store: Arc<dyn ParamStore> = Arc::new(DelayStore { line: line.clone(), io: io.clone(), levels, connections });
+    let media_io2 = io.clone();
+    let guard_levels = levels.clone();
+    let store: Arc<dyn ParamStore> = Arc::new(DelayStore { line: line.clone(), io: io.clone(), levels: levels.clone(), connections });
     let handle = omp_node_sdk::start(
         NodeConfig {
             label,
@@ -291,7 +348,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     .await?;
     handle.register_worker("clock", heartbeat);
 
-    tokio::signal::ctrl_c().await?;
+    // Alarm bei Übernahme und bei Rückkehr (omp.alert.<node>), Zustand kommt aus dem Wächter
+    let mut was_active = false;
+    let mut ticker = tokio::time::interval(std::time::Duration::from_millis(250));
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => break,
+            _ = ticker.tick() => {
+                let now = guard_levels.watch.lock().expect("lock poisoned").active();
+                if now != was_active {
+                    was_active = now;
+                    let emergency = !media_io2.input_flow(1).is_empty();
+                    handle.publish_alert(if now { format!("Dead Air: Eingang still, {}", if emergency { "Notquelle übernimmt" } else { "keine Notquelle verbunden" }) } else { "Dead Air beendet: Eingang wieder da".to_string() }).await;
+                }
+            }
+        }
+    }
     eprintln!("omp-audio-delay: shutdown requested");
     shutdown.store(true, Ordering::Relaxed);
     let _ = clock.join();
