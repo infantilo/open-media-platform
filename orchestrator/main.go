@@ -925,6 +925,7 @@ func main() {
 	playoutmod.Register(workflowSvc)
 	// Video folgt Audio (Kapitel 46) steuert Bild- und Tonmischer fern und braucht wie die Automation ein Service-Token.
 	workflowSvc.RegisterControlPlaneType("omp-vfa")
+	workflowSvc.RegisterControlPlaneType("omp-radio-automation") // Radio-Automation (Kapitel 89/RB4): steuert den Segue-Player über den Proxy
 	// Lauf-Historie (Scheduler: geplant vs. real) samt täglicher Bereinigung.
 	workflowRunStore := workflows.NewRunStore(database)
 	workflowSvc.SetRunRecorder(workflowRunStore)
