@@ -8,7 +8,12 @@ const T = (() => {
       "frameRate": "Bildrate",
       "fps": "{fps} Bilder/s",
       "audioInputs": "Audio-Eingänge",
-      "addAudioInput": "+ Audio-Eingang"
+      "addAudioInput": "+ Audio-Eingang",
+      "settings": "Einstellungen",
+      "settingsTitle": "Bildrate und Audio-Eingänge",
+      "close": "Schließen",
+      "removeInput": "Audio-Eingang entfernen",
+      "noInputs": "keine Audio-Eingänge"
   },
     en: {
       "loadingPreview": "loading preview …",
@@ -16,7 +21,12 @@ const T = (() => {
       "frameRate": "Frame rate",
       "fps": "{fps} fps",
       "audioInputs": "Audio inputs",
-      "addAudioInput": "+ Audio input"
+      "addAudioInput": "+ Audio input",
+      "settings": "Settings",
+      "settingsTitle": "Frame rate and audio inputs",
+      "close": "Close",
+      "removeInput": "Remove audio input",
+      "noInputs": "no audio inputs"
   },
   };
   const lang = document.documentElement.lang === "en" ? "en" : "de";
@@ -89,6 +99,23 @@ class OmpViewerPanel extends HTMLElement {
         background: #333; color: #eee; border: 1px solid #555; border-radius: 3px;
         font-size: 11px; padding: 2px 4px;
       }
+      .settings-btn {
+        margin-top: 6px; background: #333; color: #eee; border: 1px solid #555; border-radius: 3px;
+        cursor: pointer; font-size: 11px; padding: 3px 8px;
+      }
+      .settings-overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; }
+      .settings-overlay[hidden] { display: none; }
+      .settings-dialog { background: #1e1e1e; border: 1px solid #555; border-radius: 6px; padding: 12px; width: min(92vw, 420px); max-height: 86vh; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+      .settings-head { display: flex; justify-content: space-between; align-items: center; font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+      .settings-close { background: none; border: none; color: #eee; cursor: pointer; font-size: 14px; }
+      /* Audio-Pegel als HTML-Overlay über dem Bild (nicht ins Video gerendert): senkrechte Balken am rechten Rand */
+      .meters-overlay {
+        position: absolute; right: 6px; top: 6px; bottom: 26px; display: flex; flex-direction: row; gap: 3px;
+        align-items: stretch; pointer-events: none; padding: 3px; border-radius: 3px; background: rgba(0,0,0,.35);
+      }
+      .meters-overlay:empty { display: none; }
+      .meters-overlay .meter-col { display: flex; }
+      .meters-overlay omp-meter { width: 8px; height: 100%; }
       .audio-inputs { margin-top: 10px; }
       .audio-inputs h4 { margin: 0 0 6px 0; font-size: 12px; color: #aaa; font-weight: normal; }
       .input-row {
@@ -198,17 +225,52 @@ class OmpViewerPanel extends HTMLElement {
     }
     fpsRow.append(fpsLabel, fpsSelect);
 
-    const audioSection = document.createElement("div");
-    audioSection.className = "audio-inputs";
-    const audioTitle = document.createElement("h4");
-    audioTitle.textContent = T("audioInputs");
     const rowsContainer = document.createElement("div");
+    rowsContainer.className = "meters-overlay";
+    wrap.append(rowsContainer);
     const addBtn = document.createElement("button");
     addBtn.className = "add-btn";
     addBtn.textContent = T("addAudioInput");
-    audioSection.append(audioTitle, rowsContainer, addBtn);
+    // Die Pegel liegen als Overlay über dem Bild; Bildrate und Verwalten (+/✕) im Einstellungsdialog.
 
-    shadow.append(style, wrap, status, fpsRow, audioSection);
+    const settingsBtn = document.createElement("button");
+    settingsBtn.className = "settings-btn";
+    settingsBtn.textContent = `⚙ ${T("settings")}`;
+    settingsBtn.title = T("settingsTitle");
+    const overlay = document.createElement("div");
+    overlay.className = "settings-overlay";
+    overlay.hidden = true;
+    const dialog = document.createElement("div");
+    dialog.className = "settings-dialog";
+    dialog.setAttribute("role", "dialog");
+    const head = document.createElement("div");
+    head.className = "settings-head";
+    const headTitle = document.createElement("span");
+    headTitle.textContent = T("settings");
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "settings-close";
+    closeBtn.textContent = "✕";
+    closeBtn.title = T("close");
+    head.append(headTitle, closeBtn);
+    const manageSection = document.createElement("div");
+    manageSection.className = "audio-inputs";
+    const manageTitle = document.createElement("h4");
+    manageTitle.textContent = T("audioInputs");
+    const manageList = document.createElement("div");
+    manageSection.append(manageTitle, manageList, addBtn);
+    dialog.append(head, fpsRow, manageSection);
+    overlay.append(dialog);
+    const setSettings = (open) => {
+      overlay.hidden = !open;
+      if (open) renderInputs();
+    };
+    settingsBtn.addEventListener("click", () => setSettings(overlay.hidden));
+    closeBtn.addEventListener("click", () => setSettings(false));
+    overlay.addEventListener("click", (ev) => { if (ev.target === overlay) setSettings(false); });
+    this._onKey = (ev) => { if (ev.key === "Escape" && !overlay.hidden) setSettings(false); };
+    window.addEventListener("keydown", this._onKey);
+
+    shadow.append(style, wrap, status, settingsBtn, overlay);
 
     // Bewusst per `style.display` statt `status.remove()` umgeschaltet
     // (vormaliger Bug: nach dem ersten erfolgreichen Frame war `status`
@@ -280,6 +342,7 @@ class OmpViewerPanel extends HTMLElement {
 
     const renderInputs = async () => {
       const inputs = (await getParam("audioInputs")) || [];
+      renderManage(inputs);
       const currentIds = new Set(inputs.map((i) => i.id));
       for (const id of meterEls.keys()) {
         if (!currentIds.has(id)) {
@@ -289,24 +352,42 @@ class OmpViewerPanel extends HTMLElement {
       }
       for (const input of inputs) {
         if (meterEls.has(input.id)) {
-          meterEls.get(input.id).row.querySelector(".label").textContent = input.label;
+          meterEls.get(input.id).row.title = input.label;
           continue;
         }
         const row = document.createElement("div");
-        row.className = "input-row";
+        row.className = "meter-col";
+        row.title = input.label;
         const meter = document.createElement("omp-meter");
-        const labelEl = document.createElement("span");
-        labelEl.className = "label";
-        labelEl.textContent = input.label;
-        const removeBtn = document.createElement("button");
-        removeBtn.textContent = "✕";
-        removeBtn.addEventListener("click", () => call("removeAudioInput", { id: input.id }).then(renderInputs));
-        row.append(meter, labelEl, removeBtn);
+        row.append(meter);
         rowsContainer.appendChild(row);
         meterEls.set(input.id, { row, meter });
       }
     };
 
+    // Verwaltungsliste im Dialog (Entfernen); nur gefüllt, solange der Dialog sichtbar sein kann
+    const renderManage = (inputs) => {
+      manageList.textContent = "";
+      if (!inputs.length) {
+        const p = document.createElement("p");
+        p.textContent = T("noInputs");
+        manageList.append(p);
+        return;
+      }
+      for (const input of inputs) {
+        const row = document.createElement("div");
+        row.className = "input-row";
+        const labelEl = document.createElement("span");
+        labelEl.className = "label";
+        labelEl.textContent = input.label;
+        const removeBtn = document.createElement("button");
+        removeBtn.textContent = "✕";
+        removeBtn.title = T("removeInput");
+        removeBtn.addEventListener("click", () => call("removeAudioInput", { id: input.id }).then(renderInputs));
+        row.append(labelEl, removeBtn);
+        manageList.append(row);
+      }
+    };
     addBtn.addEventListener("click", () => {
       // Drag & Drop im Flow-Editor verbindet die Quelle danach wie bei
       // jedem anderen Receiver auch (IS-05-PATCH, `AudioInputControl`
@@ -343,6 +424,7 @@ class OmpViewerPanel extends HTMLElement {
   }
 
   disconnectedCallback() {
+    window.removeEventListener("keydown", this._onKey);
     clearInterval(this._inputsInterval);
     clearInterval(this._previewInterval);
     clearInterval(this._labelInterval);

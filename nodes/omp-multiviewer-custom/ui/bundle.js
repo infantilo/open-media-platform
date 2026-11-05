@@ -4,6 +4,9 @@ const T = (() => {
   const D = {
     de: {
         "x.choose": "— auswählen —",
+        "mvc.settings": "Einstellungen",
+        "mvc.settingsTitle": "Leinwand, Layouts und Optionen",
+        "mvc.close": "Schließen",
         "mvc.burn": "Untertitel ins PGM-Bild einbrennen",
         "mvc.burnHint": "Aus (Standard): der Untertitel erscheint nur als Overlay in der Vorschau und spart Rechenzeit. An: er wird zusätzlich in den echten PGM-Ausgang gerendert (Aux-Eingang „Untertitel“ muss verbunden sein).",
         "mvc.26bc42": "Leinwand\n            ",
@@ -59,6 +62,9 @@ const T = (() => {
         "mvc.46f51f": "Höhe"
     },
     en: {
+        "mvc.settings": "Settings",
+        "mvc.settingsTitle": "Canvas, layouts and options",
+        "mvc.close": "Close",
         "mvc.burn": "Burn subtitles into the PGM picture",
         "mvc.burnHint": "Off (default): the subtitle only appears as an overlay in the preview and saves processing. On: it is additionally rendered into the real PGM output (the aux input “Subtitle” must be connected).",
         "x.choose": "— choose —",
@@ -182,22 +188,28 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
       <style>${this._css()}</style>
       <div class="wrap">
         <div class="toolbar">
+          <button class="add-pip">${T("mvc.f30ff5")}</button>
+          <span class="spacer"></span>
+          <span class="status"></span>
+          <button class="reload">${T("mvc.6e5595")}</button>
+          <button class="save omp-btn-primary">${T("mvc.b97d23")}</button>
+          <button class="settings-btn" title="${T("mvc.settingsTitle")}">⚙ ${T("mvc.settings")}</button>
+        </div>
+        <div class="settings-overlay" hidden>
+          <div class="settings-dialog" role="dialog" aria-label="${T("mvc.settings")}">
+            <div class="settings-head"><span>${T("mvc.settings")}</span><button class="settings-close" title="${T("mvc.close")}" aria-label="${T("mvc.close")}">✕</button></div>
+            <div class="toolbar">
           <label>${T("mvc.26bc42")}
             <input type="number" class="canvas-w" min="${MIN_PIP_SIZE}" max="7680" step="1"> ×
             <input type="number" class="canvas-h" min="${MIN_PIP_SIZE}" max="4320" step="1">
           </label>
-          <button class="add-pip">${T("mvc.f30ff5")}</button>
           <label class="keep-ratio-label" title="${T("mvc.3ee601")}">
             <input type="checkbox" class="keep-ratio" checked> ${T("mvc.2fe42e")}
           </label>
           <label class="burn-label" title="${T("mvc.burnHint")}">
             <input type="checkbox" class="burn"> ${T("mvc.burn")}
           </label>
-          <span class="spacer"></span>
-          <span class="status"></span>
-          <button class="reload">${T("mvc.6e5595")}</button>
-          <button class="save omp-btn-primary">${T("mvc.b97d23")}</button>
-        </div>
+            </div>
         <div class="toolbar layouts-toolbar">
           <label>${T("mvc.e7e31a")}
             <select class="layout-select"><option value="">${T("mvc.1e116b")}</option></select>
@@ -212,6 +224,8 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
             ${T("mvc.3331b7")}
             <input type="file" class="layout-import-file" accept="application/json,.json">
           </label>
+        </div>
+          </div>
         </div>
         <div class="body">
           <div class="canvas-outer">
@@ -289,6 +303,16 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
     this._el.reload.addEventListener("click", () => this._reload());
     this._el.save.addEventListener("click", () => this._save());
 
+    // Einstellungen (Leinwand, Layouts, Optionen) in einem Dialog statt dauerhaft im Panel. Die Elemente liegen von
+    // Anfang an im (versteckten) Dialog, die übrige Logik greift unverändert auf sie zu.
+    const overlay = shadow.querySelector(".settings-overlay");
+    const setSettings = (open) => { overlay.hidden = !open; };
+    shadow.querySelector(".settings-btn").addEventListener("click", () => setSettings(overlay.hidden));
+    shadow.querySelector(".settings-close").addEventListener("click", () => setSettings(false));
+    overlay.addEventListener("click", (ev) => { if (ev.target === overlay) setSettings(false); });
+    this._onKey = (ev) => { if (ev.key === "Escape" && !overlay.hidden) setSettings(false); };
+    window.addEventListener("keydown", this._onKey);
+
     this._onPointerMove = this._onPointerMove.bind(this);
     this._onPointerUp = this._onPointerUp.bind(this);
     window.addEventListener("pointermove", this._onPointerMove);
@@ -298,6 +322,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
   }
 
   disconnectedCallback() {
+    window.removeEventListener("keydown", this._onKey);
     window.removeEventListener("pointermove", this._onPointerMove);
     window.removeEventListener("pointerup", this._onPointerUp);
   }
@@ -310,6 +335,11 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
       .toolbar label { display:flex; align-items:center; gap:4px; font-size: var(--omp-font-size-sm, 12px); color: var(--omp-text-dim, #9aa0a6); }
       .toolbar input[type="number"] { width:70px; }
       .spacer { flex:1; }
+      .settings-overlay { position:fixed; inset:0; z-index:1000; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; }
+      .settings-overlay[hidden] { display:none; }
+      .settings-dialog { background: var(--omp-surface, #1a1d21); border:1px solid var(--omp-border, #2e3338); border-radius: var(--omp-radius, 6px); padding: var(--omp-space-3, 12px); width:min(92vw, 640px); max-height:86vh; overflow:auto; display:flex; flex-direction:column; gap: var(--omp-space-3, 12px); }
+      .settings-head { display:flex; justify-content:space-between; align-items:center; font-weight:700; text-transform:uppercase; letter-spacing:.04em; font-size: var(--omp-font-size-sm, 12px); }
+      .settings-close { cursor:pointer; }
       .layouts-toolbar { padding-top: var(--omp-space-2, 8px); border-top: 1px solid var(--omp-border, #2e3338); }
       .layouts-toolbar select { max-width:160px; }
       omp-source-selector { display:block; width:100%; }
