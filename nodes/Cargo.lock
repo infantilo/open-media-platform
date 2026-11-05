@@ -1370,6 +1370,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-audio-delay"
+version = "0.1.0"
+dependencies = [
+ "gstreamer",
+ "gstreamer-app",
+ "omp-mediaio",
+ "omp-node-sdk",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "omp-audio-mixer"
 version = "0.1.0"
 dependencies = [
