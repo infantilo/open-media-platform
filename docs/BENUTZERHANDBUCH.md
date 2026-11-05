@@ -1599,6 +1599,38 @@ bedienberechtigt:
   dann dem, was dort gerade vorgewählt ist. Schleifen (eine Quelle, die
   direkt oder über andere Ebenen das eigene Ausgangsbild enthält)
   schaltet der Mischer im PIP auf Schwarz.
+  **Mehrere PIPs, Drehung, Trapez (Kapitel 87):** jede Ebene hat eine feste
+  Reserve von **PIP-Slots** (Node-Option „PIP-Slots je Ebene", Standard 4,
+  `OMP_PIP_SLOTS`). Jeder Slot zeigt eine beliebige Quelle; ungenutzte
+  Slots kosten fast nichts. Eine **PIP-Szene** umfasst mehrere Slots und
+  fährt sie gemeinsam ein und aus. Im Szenen-Editor wählst du oben den Slot
+  (Reiter „Slot 1 … n", „+" fügt einen weiteren hinzu, „×" nimmt ihn aus der
+  Szene), dann Quelle, **Ebene (z)** (höhere Zahl liegt weiter vorn) und die
+  Positionen **Start → Halten → Ende** sowie optional **Fokus** (Ziel, wenn
+  das PIP angeklickt wird; ohne Angabe 94 % des Bildes, mittig). Ziehen auf
+  der Fläche verschiebt, das Quadrat unten rechts skaliert. **Drehung und
+  Trapez** gibt es in den **2D-Slots** (die ersten `OMP_PIP_2D_SLOTS`
+  Slots, Standard 2): dort lassen sich die vier Eckkreise einzeln ziehen
+  (Trapez/Perspektive), und das Feld „Drehung" dreht das Viereck um seine
+  Mitte; „Ecken zurücksetzen" macht daraus wieder ein gerades Rechteck. Die
+  übrigen Slots können nur gerade Rechtecke (beim Speichern wird dann der
+  umschließende Rahmen genommen). Ein 2D-Slot rechnet jedes Bild auf
+  Vollbildgröße (rund 3 ms je 360p-Bild, ab 1080p in halber Auflösung) — nur
+  so viele 2D-Slots einstellen wie gebraucht (0 = nur Rechtecke). Die
+  Koordinaten gelten in der **echten Mischer-Auflösung**.
+  **PGM-Monitor und Klick-Fokus:** die Taste „PGM-Monitor" (Gruppe
+  „Monitor") blendet ein kleines Programmbild der Ebene ein (Option
+  `OMP_ME_PGM_MONITOR=0` schaltet es ab; es wird nur gerechnet, solange jemand
+  zuschaut). Ein **Klick auf ein PIP** im Bild fährt es auf seine
+  Fokusposition (z. B. fast Vollbild, ganz nach vorn); ein **erneuter Klick**
+  fährt es zurück an die Haltposition. Mit der Maus über dem Bild
+  hebt sich das PIP unter dem Zeiger gelb hervor (bei mehreren
+  übereinanderliegenden gilt das oberste); ein Klick ins Leere ändert
+  nichts. Den Treffer rechnet der Node (Methode `pip.clickAt`), der Fokus
+  gilt daher für alle Bediener und das Stream Deck gleich. Am **Stream
+  Deck** gibt es für jedes eingeschaltete PIP eine Taste „PIP n / Fokus".
+  Wird eine andere PIP-Szene gewählt oder PIP ausgeschaltet, endet der
+  Fokus.
 - **Grafik** — Vorlage auswählen (Suchfeld + Dropdown), Formularfelder
   befüllen, „▶ Ein"/„■ Aus" schaltet die Grafik auf Sendung (im
   Screenshot bereits aktiv: „On Air: Hello Lower Third").
@@ -2361,7 +2393,7 @@ werden bei langen Namen kleiner; nur wenn auch die kleinste Schrift nicht reicht
 ### Video-Mixer M/E
 
 Zeile 1 = **PGM** (direkt auf Sendung, rot), Zeile 2 = **PRE** (Vorschau, grün), Zeile 3 = **CUT**, **AUTO**, **DSK**, Übergangstyp (weiter),
-Rate (weiter), **FREEZE** (nimmt das aktuelle Programmbild als Standbild auf; es erscheint danach als eigene Quellentaste in PGM/PRE) und die PIP-Voreinstellungen (Umschalter). Quellen, deren Node einen Fehler meldet, sind rot (Untertitel „✖“); bei einer Warnung steht „!“ im Untertitel; liegt die Quelle gerade auf dem Bus, bleibt dessen Farbe. Die Tasten sperren nicht — wer eine rote Quelle drückt, schaltet sie (am Bildschirm fragt der Mischer dagegen nach). Kleinere Geräte zeigen PGM/PRE/Steuerung nacheinander als Seiten. Nur die Master-Ebene.
+Rate (weiter), **FREEZE** (nimmt das aktuelle Programmbild als Standbild auf; es erscheint danach als eigene Quellentaste in PGM/PRE) und die PIP-Voreinstellungen (Umschalter) sowie je eingeschaltetem PIP eine Fokus-Taste „PIP n“ (Fokus an/aus). Quellen, deren Node einen Fehler meldet, sind rot (Untertitel „✖“); bei einer Warnung steht „!“ im Untertitel; liegt die Quelle gerade auf dem Bus, bleibt dessen Farbe. Die Tasten sperren nicht — wer eine rote Quelle drückt, schaltet sie (am Bildschirm fragt der Mischer dagegen nach). Kleinere Geräte zeigen PGM/PRE/Steuerung nacheinander als Seiten. Nur die Master-Ebene.
 
 ![Video-Mixer am XL: PGM, PRE und die Steuerzeile](screenshots/streamdeck-xl-videomixer.png)
 

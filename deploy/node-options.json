@@ -1311,6 +1311,41 @@
       "max": 8
     },
     {
+      "key": "OMP_PIP_SLOTS",
+      "i18n": { "en": {"label": "PiP slots per level", "description": "Reserve of picture-in-picture layers per level (1–8). Each slot can show any source; unused slots cost almost nothing. Only changeable at start.", "group": "Function"} },
+      "label": "PIP-Slots je Ebene",
+      "type": "int",
+      "description": "Reserve an Bild-im-Bild-Ebenen je Mischerebene (1–8). Jeder Slot kann eine beliebige Quelle zeigen; ungenutzte Slots kosten fast nichts. Nur beim Start änderbar.",
+      "default": "4",
+      "group": "Funktion",
+      "min": 1,
+      "max": 8
+    },
+    {
+      "key": "OMP_PIP_2D_SLOTS",
+      "i18n": { "en": {"label": "2D PiP slots (rotation/trapezoid)", "description": "How many of the PiP slots (counted from slot 1) can rotate and distort (trapezoid/perspective). A 2D slot computes every frame at full picture size (about 3 ms per 360p frame, 1080p runs at half resolution), so keep this as small as needed. 0 = rectangles only.", "group": "Function"} },
+      "label": "2D-PIP-Slots (Drehung/Trapez)",
+      "type": "int",
+      "description": "Wie viele der PIP-Slots (ab Slot 1) drehen und verzerren können (Trapez/Perspektive). Ein 2D-Slot rechnet jedes Bild auf Vollbildgröße (etwa 3 ms je 360p-Bild, 1080p läuft in halber Auflösung) — nur so viele wie nötig. 0 = nur Rechtecke.",
+      "default": "2",
+      "group": "Funktion",
+      "min": 0,
+      "max": 8
+    },
+    {
+      "key": "OMP_ME_PGM_MONITOR",
+      "i18n": { "en": {"label": "PGM monitor in the panel", "description": "Small PGM picture in the mixer panel (click a PiP to focus it). Encoded only while someone watches.", "group": "Function"} },
+      "label": "PGM-Monitor im Panel",
+      "type": "enum",
+      "description": "Kleines PGM-Bild im Mischer-Panel (Klick auf ein PIP = Fokus). Wird nur gerechnet, solange jemand zuschaut.",
+      "default": "1",
+      "group": "Funktion",
+      "choices": [
+        { "value": "1" },
+        { "value": "0" }
+      ]
+    },
+    {
       "key": "OMP_CPU_AFFINITY",
       "i18n": { "en": {"label": "CPU cores (pinning)", "description": "Pin this instance to these CPU cores (taskset list, e.g. 2-3 or 0,2,4). Empty = no pinning (default). Useful on production hosts to protect time-critical nodes from batch work; a wrong list only costs performance. Invalid or non-existent cores are ignored with a warning.", "group": "Performance"} },
       "label": "CPU-Kerne (Bindung)",

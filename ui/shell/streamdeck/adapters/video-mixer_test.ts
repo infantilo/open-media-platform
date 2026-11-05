@@ -35,6 +35,16 @@ Deno.test("Steuertasten: DSK-Umschalten, Übergangstyp/Rate weiterschalten, PIP-
   assertEquals(l.act[2][7], { method: "pip.setEnabled", body: { enabled: false } });
 });
 
+Deno.test("PIP-Slots: je eingeschaltetem Slot eine Fokus-Taste hinter den Presets", () => {
+  const l = layoutVideoMixer(state(1, { pipPresets: [{ id: "p1", name: "Drei" }], pipSlots: [{ slot: 0, enabled: true, focused: false }, { slot: 1, enabled: false, focused: false }] }), 8, 3, 0);
+  assertEquals(lbl(l, 2), "CUT,AUTO,DSK,Übergang,Rate,FREEZE,Drei,PIP 1");
+  assertEquals(l.act[2][7], { method: "pip.toggleFocus", body: { slot: 0 } });
+  const l2 = layoutVideoMixer(state(1, { pipSlots: [{ slot: 2, enabled: true, focused: true }] }), 8, 3, 0);
+  assertEquals(l2.keys[2][6]?.label, "PIP 3");
+  assertEquals(l2.keys[2][6]?.state, "cue");
+  assertEquals(l2.act[2][6], { method: "pip.toggleFocus", body: { slot: 2 } });
+});
+
 Deno.test("mehr Quellen als Spalten: Seiten, letzte Zelle bleibt frei, Seite 2 zeigt den Rest", () => {
   const s = state(10); // 11 Einträge inkl. BLK, 8 Spalten → cap 7 → 2 Seiten
   const p0 = layoutVideoMixer(s, 8, 3, 0), p1 = layoutVideoMixer(s, 8, 3, 1);

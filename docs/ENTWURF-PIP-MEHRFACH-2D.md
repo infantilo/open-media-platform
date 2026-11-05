@@ -1,6 +1,6 @@
 # Entwurf: Mehrere PIPs, 2D-Transformation, Klick-Fokus im Videomixer M/E
 
-Nutzerwunsch 2026-11-05. Stand: **nur Entwurf, kein Code.** Betrifft `nodes/omp-video-mixer-me` (`pipeline.rs`, `main.rs`, `ui/bundle.js`).
+Nutzerwunsch 2026-11-05. Stand: **umgesetzt 2026-11-05** (s. Abschnitt 6, Abweichungen vom Entwurf dort). Betrifft `nodes/omp-video-mixer-me` (`pipeline.rs`, `main.rs`, `ui/bundle.js`).
 
 ## 1. Wunsch (Originalwortlaut sinngemäß)
 
@@ -71,3 +71,21 @@ Das heutige `PipPreset` wird zur **PIP-Szene**: Liste von Slot-Einträgen, je Ei
 - **Matrix-Konvention/Außenpixel** sind bis 87.1 Annahmen — nicht im Handbuch versprechen, bevor gemessen.
 - **Hit-Test-Genauigkeit**: Vorschaubild ist ein Polling-Bild (Latenz); der Treffer wird gegen die Server-Posen gerechnet, nicht gegen Pixel — dadurch unabhängig von der Bildverzögerung.
 - Keine Herstellernamen in UI/Doku (Projektregel).
+
+## 6. Umsetzung (2026-11-05) und Abweichungen
+
+**Messungen (87.1, `examples/persp_probe.rs`, `nice`, ~2 s):**
+- `perspective.matrix` bildet **Ziel**pixel auf **Quell**pixel ab (Zielpixel x → Quelle `M·x`); für ein Viereck wird also die *Inverse* der Homographie Quelle→Ziel übergeben (`PipPose::inverse_matrix`, Test mit den vier Ecken).
+- Außenpixel: in **AYUV** deckend schwarz (unbrauchbar), in **ARGB** alles 0 = **transparent** → die 2D-Kette läuft in ARGB (`videoconvert ! videoscale ! ARGB ! perspective`), der Compositor wandelt ARGB→Ausgangsformat selbst.
+- Matrixwechsel zur Laufzeit: **keine** neue Caps-Aushandlung (1 Caps-Ereignis insgesamt über 40 Bilder mit zwei Matrixwechseln) — die harte Regel der Pipeline bleibt eingehalten.
+- Kosten: ≈ 3 ms je 360p-Bild und 2D-Slot (Wandzeit, ein Kern). Darum: 1080p rechnet die Zeichenfläche in halber Auflösung (`pip_2d_div`), Standard 2 2D-Slots, jeder Slot ohne Transform-Element kostet nichts zusätzlich. Gemessen am Test-Node (Debug-Build, 640×360, 3 Freeze-Quellen): Leerlauf ≈ 72 % eines Kerns, drei PIPs an (zwei 2D) ≈ 140 % — ein ausgeschalteter 2D-Slot **rechnet weiter** (Schwarz durch `perspective`); ein `valve` davor wurde bewusst nicht gebaut (ein ausgehungertes Compositor-Pad kann den Aggregator auf Timeouts setzen, und beim Einschalten bliebe kurz das letzte alte Bild stehen).
+
+**Abweichungen / Ergänzungen gegenüber Abschnitt 3:**
+- **Hit-Test im Node statt im UI:** `pip.clickAt{x,y}` (Mischer-Pixel) rechnet `LevelPips::plan_click` gegen die **Zielposen** (fokussiert → Fokuspose, sonst Haltepose, nie die gerade animierte), oberster Slot zuerst (Fokus immer oben). Vorteil: ein Ort, testbar (Rust), gleich für Mischer-Panel, Konsole und Stream Deck; das UI rechnet nur Klick → Mischer-Pixel um und zeichnet Rahmen.
+- **PGM-Monitor** (`monitor.rs`) war im Entwurf nur angedeutet: der Mischer hatte kein eigenes PGM-Bild. Umgesetzt abseits der Sendekette: der Compositor-Ausgang legt ohnehin das letzte Bild ab (`last_frame`), ein Thread codiert es per JPEG **nur**, wenn der Vorschau-Port in den letzten 3 s abgerufen wurde (`Broadcaster::requested_within`), Auslieferung über den vorhandenen Stream-Proxy (`/stream/pgmPreviewUrl`). Kein `tee`, keine Änderung an der Sendepfad-Topologie.
+- **Szenen statt Presets, aber gleiche Methoden/Parameter:** `pip.presets`/`pip.applyPreset`/`pip.savePreset`/`pip.deletePreset` bleiben (Stream Deck, alte Oberflächen), Szenen tragen `entries` plus die flachen Altfelder des ersten Eintrags; Altformat wird beim Laden (Momentaufnahme) und beim Speichern (flache Argumente) zu einem Eintrag für Slot 0. `pip.setEnabled`/`pip.setSource`/`dve.setBox`/`dve.reset` nehmen optional `slot` (ohne = Slot 0; `setEnabled{false}` ohne Slot schaltet **alle** Slots aus).
+- Neue Methoden: `pip.setPose` (JSON, auch `rotation` in Grad), `pip.setZ`, `pip.focus`, `pip.toggleFocus`, `pip.unfocus`, `pip.clickAt`; neue Parameter `pip.slots`, `pip.focusedSlot`, `pip.canvas`, `pgmPreviewUrl`.
+- **Editor:** Positionen sind Vierecke (vier Ecken), Verzerren per Eckkreise, Drehung per Zahlenfeld (relativ zum aktuellen Winkel der Oberkante), „Fokus" als vierter Punkt. Der Editor arbeitete bisher in einem festen **640×480-Raum**, obwohl der Mischer meist 1280×720 rechnet — er nimmt jetzt die echte Auflösung (`pip.canvas`); **vor diesem Stand gespeicherte Presets** lagen in dem alten Raum und erscheinen bei anderer Mischer-Auflösung entsprechend verschoben (sie wurden schon vorher 1:1 in Mischer-Pixeln angewandt).
+- Optionen: `OMP_PIP_SLOTS` (Standard 4), `OMP_PIP_2D_SLOTS` (Standard 2), `OMP_ME_PGM_MONITOR` (Standard an).
+
+**Tests:** `pip.rs` (Geometrie, Matrix gegen Ecken, Treffer, JSON), `pipstate.rs` (Szene anwenden/ausschalten, Fokus, Klick, Altformat), Live-Test `pip_live_test.rs` gegen die echte Pipeline (eigene MXL-Domäne: Trapez/Drehung/Rechteck, transparente Außenpixel, z-Reihenfolge, Fokusfahrt hin und zurück, 5× Quellen entfernen/hinzufügen), Deno (Stream-Deck-Tasten). Browser (Chromium/CDP, echte Mausereignisse): Monitor ein, Hover, Klick-Fokus hin/zurück, Klick ins Leere, Editor (Reiter, Eckkreis ziehen, Drehung, Fokus, Speichern).

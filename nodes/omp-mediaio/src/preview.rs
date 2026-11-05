@@ -35,6 +35,9 @@ type Frame = Arc<Vec<u8>>;
 /// `GET /preview` liefert genau dieses eine Bild (s. Moduldoku).
 pub struct Broadcaster {
     last_frame: Mutex<Option<Frame>>,
+    /// Zeitpunkt des letzten `GET /preview` — Erzeuger, die ihr Bild nur auf Nachfrage rechnen (z. B. der PGM-Monitor
+    /// des Videomixers), prüfen damit, ob überhaupt jemand zuschaut.
+    last_request: Mutex<Option<std::time::Instant>>,
 }
 
 impl Default for Broadcaster {
@@ -47,7 +50,13 @@ impl Broadcaster {
     pub fn new() -> Self {
         Broadcaster {
             last_frame: Mutex::new(None),
+            last_request: Mutex::new(None),
         }
+    }
+
+    /// Wurde das Bild in den letzten `within` abgerufen?
+    pub fn requested_within(&self, within: Duration) -> bool {
+        self.last_request.lock().expect("lock poisoned").is_some_and(|t| t.elapsed() < within)
     }
 
     /// Vom Pipeline-Thread aufgerufen: hinterlegt das neueste JPEG-Frame.
@@ -105,6 +114,7 @@ pub fn spawn(addr: &str, broadcaster: Arc<Broadcaster>, heartbeat: Arc<AtomicU64
                     // langsamer Client (Netzwerk-Backpressure beim
                     // `respond()`) nicht die Accept-Loop blockiert.
                     let broadcaster = broadcaster.clone();
+                    *broadcaster.last_request.lock().expect("lock poisoned") = Some(std::time::Instant::now());
                     std::thread::spawn(move || {
                         let jpeg_header = Header::from_bytes(&b"Content-Type"[..], &b"image/jpeg"[..])
                             .expect("static header");

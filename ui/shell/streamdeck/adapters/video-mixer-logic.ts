@@ -14,6 +14,8 @@ export interface MixerState {
   pipEnabled: boolean;
   pipPresets: { id: string; name: string }[];
   activePip: string;
+  /** Kapitel 87: PIP-Slots der Ebene (nur die eingeschalteten bekommen eine Fokus-Taste). Optional (ältere Zustände). */
+  pipSlots?: { slot: number; enabled: boolean; focused: boolean }[];
   transType: string;
   transRate: number;
 }
@@ -75,6 +77,14 @@ export function controlItems(s: MixerState): { key: KeyDef; act: MixerAction }[]
     items.push({
       key: { label: p.name || p.id, sub: "PIP", state: on ? "cue" : "off" },
       act: on ? { method: "pip.setEnabled", body: { enabled: false } } : { method: "pip.applyPreset", body: { id: p.id } },
+    });
+  }
+  // Fokus an/aus je eingeschaltetem PIP-Slot (Kapitel 87, dieselbe Methode wie der Klick im PGM-Monitor)
+  for (const sl of s.pipSlots ?? []) {
+    if (!sl.enabled) continue;
+    items.push({
+      key: { label: `PIP ${sl.slot + 1}`, sub: "Fokus", state: sl.focused ? "cue" : "off" },
+      act: { method: "pip.toggleFocus", body: { slot: sl.slot } },
     });
   }
   return items;

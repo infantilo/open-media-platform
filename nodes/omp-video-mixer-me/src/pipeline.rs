@@ -113,6 +113,8 @@ use std::time::{Duration, Instant};
 
 use gst::prelude::*;
 use gstreamer as gst;
+
+use crate::pip::PipPose;
 use omp_mediaio::Output;
 use omp_mediaio::mxl::{MxlContext, MxlVideoInput, MxlVideoOutput};
 use tokio::sync::mpsc::UnboundedSender;
@@ -325,6 +327,10 @@ pub struct Config {
     pub hwaccel: omp_mediaio::hwaccel::HwAccel,
     /// Freeze-Speicher (s. `StillStore`).
     pub stills: StillStore,
+    /// Kapitel 87: PIP-Slots je Ebene (feste Reserve, kein Pad-Umbau im Betrieb) und wie viele davon (ab Slot 0)
+    /// ein Transform-Element für Trapez/Rotation tragen.
+    pub pip_slots: usize,
+    pub pip_2d_slots: usize,
 }
 
 /// Standbild ("Freeze") eines PGM-Bildes: RGBA in Mischer-Auflösung, Zeile für Zeile ohne Padding.
@@ -430,9 +436,11 @@ pub enum Event {
         level: usize,
         preset: Option<String>,
     },
+    /// Pose eines PIP-Slots hat sich geändert (Kapitel 87).
     DveBoxChanged {
         level: usize,
-        box_: DveBox,
+        slot: usize,
+        pose: PipPose,
     },
     /// Manueller T-Bar (`docs/END-GOAL-FEATURES.md` §3.4 Teil 2,
     /// Nutzerauftrag 2026-09-04): Live-Position der laufenden/zuletzt
@@ -450,7 +458,14 @@ pub enum Event {
     /// eigenständiger Layer") — gleiches Muster wie `KeyerChanged`.
     PipChanged {
         level: usize,
+        slot: usize,
         enabled: bool,
+    },
+    /// z-Wert (Compositor-Ebenenreihenfolge) eines PIP-Slots hat sich geändert.
+    PipZChanged {
+        level: usize,
+        slot: usize,
+        z: u32,
     },
 }
 
@@ -474,19 +489,33 @@ enum Command {
     /// die Zielposition 0..1, s. `PipelineHandle::set_transition_position`-
     /// Doku für die Endpunkt-Semantik (Abbruch bei <=0, Commit bei >=1).
     SetTransitionPosition(usize, f64),
-    SetDveBox(usize, DveBox),
-    ResetDve(usize),
+    SetDveBox(usize, usize, PipPose),
+    ResetDve(usize, usize),
+    SetPipZ(usize, usize, u32),
     SetKeyerEnabled(usize, bool),
     SetKeyFillInputs(Vec<DiscoveredKeyFill>),
     SetKeyerSource(usize, Option<String>),
-    SetPipEnabled(usize, bool),
-    SetPipSource(usize, Option<String>),
+    SetPipEnabled(usize, usize, bool),
+    SetPipSource(usize, usize, Option<String>),
     /// Freeze: letztes PGM-Bild der Ebene als Standbild unter dieser ID im `StillStore` ablegen.
     CaptureFreeze(usize, String),
     /// PIP-Fahrt (Nutzerauftrag 2026-09-29): setzt die Box sofort auf
     /// `from`, fährt in `duration_ms` (Ease in/out) nach `to`; mit
     /// `then_disable` wird PIP am Ende ausgeschaltet.
-    PipAnimate { level: usize, from: DveBox, to: DveBox, duration_ms: u64, then_disable: bool },
+    ///
+    /// Kapitel 87: je Slot. `from == None` startet an der **tatsächlich angezeigten** Pose (wichtig, wenn eine Fahrt
+    /// mitten in einer anderen umgekehrt wird). `z_during` gilt ab Fahrtbeginn, `z_after` nach dem Ende (Fokusfahrt:
+    /// nach oben, danach wieder auf den Szenenwert).
+    PipAnimate {
+        level: usize,
+        slot: usize,
+        from: Option<PipPose>,
+        to: PipPose,
+        duration_ms: u64,
+        then_disable: bool,
+        z_during: Option<u32>,
+        z_after: Option<u32>,
+    },
 }
 
 #[derive(Clone)]
@@ -498,6 +527,8 @@ pub struct PipelineHandle {
     /// (Nutzerwunsch 2026-08-14) — Index 0 bei genau einer Ebene
     /// unverändert wie vor diesem Feature.
     flowed: Arc<Mutex<Vec<Option<Arc<AtomicBool>>>>>,
+    /// Letztes PGM-Bild je Ebene (für den PGM-Monitor, `monitor.rs`); wird nach jedem Neuaufbau ersetzt.
+    frames: Arc<Mutex<Vec<Arc<Mutex<Option<gst::Sample>>>>>>,
     /// output_delay (D8 Teil 3, ARCHITECTURE.md §15.1 Punkt 3/4): anders
     /// als `flowed` bewusst KEIN `Mutex<Option<...>>>`, das bei jedem
     /// Rebuild neu belegt wird — dieselben `Arc`s werden bei jedem
@@ -647,8 +678,19 @@ impl PipelineHandle {
     }
 
     /// Startet eine PIP-Fahrt, s. `Command::PipAnimate`.
-    pub fn pip_animate(&self, level: usize, from: DveBox, to: DveBox, duration_ms: u64, then_disable: bool) {
-        let _ = self.commands.send(Command::PipAnimate { level, from, to, duration_ms, then_disable });
+    #[allow(clippy::too_many_arguments)]
+    pub fn pip_animate(
+        &self,
+        level: usize,
+        slot: usize,
+        from: Option<PipPose>,
+        to: PipPose,
+        duration_ms: u64,
+        then_disable: bool,
+        z_during: Option<u32>,
+        z_after: Option<u32>,
+    ) {
+        let _ = self.commands.send(Command::PipAnimate { level, slot, from, to, duration_ms, then_disable, z_during, z_after });
     }
 
     pub fn set_trans_rate(&self, level: usize, frames: u32) {
@@ -657,12 +699,22 @@ impl PipelineHandle {
         }
     }
 
-    pub fn set_dve_box(&self, level: usize, box_: DveBox) {
-        let _ = self.commands.send(Command::SetDveBox(level, box_));
+    pub fn set_dve_box(&self, level: usize, slot: usize, pose: PipPose) {
+        let _ = self.commands.send(Command::SetDveBox(level, slot, pose));
     }
 
-    pub fn reset_dve(&self, level: usize) {
-        let _ = self.commands.send(Command::ResetDve(level));
+    pub fn reset_dve(&self, level: usize, slot: usize) {
+        let _ = self.commands.send(Command::ResetDve(level, slot));
+    }
+
+    /// Letztes PGM-Bild der Ebene (leer, solange noch keins kam).
+    pub fn last_frame(&self, level: usize) -> Option<gst::Sample> {
+        let slot = self.frames.lock().expect("lock poisoned").get(level).cloned()?;
+        slot.lock().expect("lock poisoned").clone()
+    }
+
+    pub fn set_pip_z(&self, level: usize, slot: usize, z: u32) {
+        let _ = self.commands.send(Command::SetPipZ(level, slot, z));
     }
 
     pub fn set_keyer_enabled(&self, level: usize, enabled: bool) {
@@ -685,8 +737,8 @@ impl PipelineHandle {
     /// `set_keyer_enabled`. `dve.setBox`/`dve.reset` (s. `set_dve_box`/
     /// `reset_dve` oben, unverändert) steuern seither die Box-Geometrie
     /// dieses Layers statt des PGM-Bilds selbst.
-    pub fn set_pip_enabled(&self, level: usize, enabled: bool) {
-        let _ = self.commands.send(Command::SetPipEnabled(level, enabled));
+    pub fn set_pip_enabled(&self, level: usize, slot: usize, enabled: bool) {
+        let _ = self.commands.send(Command::SetPipEnabled(level, slot, enabled));
     }
 
     /// `sender_id` wählt eine beliebige Crosspoint-Quelle (`crosspoint.
@@ -697,8 +749,8 @@ impl PipelineHandle {
         let _ = self.commands.send(Command::CaptureFreeze(level, id));
     }
 
-    pub fn set_pip_source(&self, level: usize, sender_id: Option<String>) {
-        let _ = self.commands.send(Command::SetPipSource(level, sender_id));
+    pub fn set_pip_source(&self, level: usize, slot: usize, sender_id: Option<String>) {
+        let _ = self.commands.send(Command::SetPipSource(level, slot, sender_id));
     }
 }
 
@@ -1737,6 +1789,17 @@ fn build_one_input(
     Ok((fg_pads, bg_pads, pip_pads, branch))
 }
 
+/// Ein PIP-Slot einer Ebene (Kapitel 87). Der Selektor wählt die Quelle live (`SetPipSource`), bei "pst:N" folgt er
+/// dem Preset der Ebene N. Mit `xform` (Slot ist "2D") läuft das Bild durch `perspective` auf einer ARGB-Zeichenfläche
+/// (Außenpixel transparent) und der Pad deckt das ganze Bild; ohne `xform` setzt `apply_pose` nur die Pad-Geometrie.
+struct PipSlot {
+    isel: gst::Element,
+    black_pad: gst::Pad,
+    source_pads: HashMap<String, gst::Pad>,
+    comp_pad: gst::Pad,
+    xform: Option<gst::Element>,
+}
+
 /// Eine unabhängige M/E-Bank (Nutzerwunsch 2026-08-14, "dynamische Anzahl
 /// an Mischerebenen... jede mit eigenem Output"): eigener Crosspoint
 /// (`isel`/`isel_bg`), eigener Compositor (`comp_*_pad`), eigener Keyer/
@@ -1752,18 +1815,11 @@ struct LevelPipeline {
     black_pad_bg: gst::Pad,
     source_pads_fg: HashMap<String, gst::Pad>,
     source_pads_bg: HashMap<String, gst::Pad>,
-    /// PIP-Selektor: wählt die PIP-Quelle live (`SetPipSource`), folgt bei "pst:N" dem Preset der Ebene N.
-    isel_pip: gst::Element,
-    black_pad_pip: gst::Pad,
-    source_pads_pip: HashMap<String, gst::Pad>,
+    /// PIP-Slots (Kapitel 87): feste Reserve, jeder mit eigenem Selektor und Compositor-Pad.
+    pips: Vec<PipSlot>,
     comp_fg_pad: gst::Pad,
     comp_bg_pad: gst::Pad,
     comp_keyer_pad: gst::Pad,
-    /// PIP-Layer (Nutzerwunsch 2026-07-22, s. Moduldoku "PIP als
-    /// eigenständiger Layer"): Box-Geometrie (`apply_dve_box`) trifft
-    /// jetzt diesen Pad, nicht mehr `comp_fg_pad` (der bleibt seither
-    /// dauerhaft vollflächig).
-    comp_pip_pad: gst::Pad,
     _mxl_output: MxlVideoOutput,
     /// `Some` nur, wenn der Keyer gerade eine echte Fill+Key-Quelle liest
     /// (statt der synthetischen Test-Farbfläche) — hält deren
@@ -1918,7 +1974,7 @@ fn feeds_level(
     inputs: &[DiscoveredInput],
     program: &[Option<String>],
     preset: &[Option<String>],
-    pip_sources: &[Option<String>],
+    pip_sources: &[Vec<Option<String>>],
     visited: &mut HashSet<usize>,
 ) -> bool {
     let Some(input) = inputs.iter().find(|i| i.sender_id == sender) else { return false };
@@ -1929,7 +1985,8 @@ fn feeds_level(
     if !visited.insert(j) {
         return false;
     }
-    let deps = [program.get(j).cloned().flatten(), preset.get(j).cloned().flatten(), pip_target(pip_sources.get(j).unwrap_or(&None), preset)];
+    let mut deps = vec![program.get(j).cloned().flatten(), preset.get(j).cloned().flatten()];
+    deps.extend(pip_sources.get(j).into_iter().flatten().map(|src| pip_target(src, preset)));
     deps.iter().flatten().any(|d| feeds_level(d, level, config, inputs, program, preset, pip_sources, visited))
 }
 
@@ -1941,19 +1998,22 @@ fn apply_pip_sources(
     inputs: &[DiscoveredInput],
     program: &[Option<String>],
     preset: &[Option<String>],
-    pip_sources: &[Option<String>],
+    pip_sources: &[Vec<Option<String>>],
 ) {
     for (level, lvl) in p.levels.iter().enumerate() {
-        let target = pip_target(&pip_sources[level], preset).filter(|id| {
-            !feeds_level(id, level, config, inputs, program, preset, pip_sources, &mut HashSet::new())
-        });
-        let want = target.as_ref().and_then(|id| lvl.source_pads_pip.get(id));
-        let ok = match want {
-            Some(pad) => is_active_pad(&lvl.isel_pip, Some(pad)),
-            None => is_active_pad(&lvl.isel_pip, Some(&lvl.black_pad_pip)),
-        };
-        if !ok {
-            lvl.isel_pip.set_property("active-pad", want.unwrap_or(&lvl.black_pad_pip));
+        for (slot_idx, slot) in lvl.pips.iter().enumerate() {
+            let src = pip_sources.get(level).and_then(|v| v.get(slot_idx)).cloned().flatten();
+            let target = pip_target(&src, preset).filter(|id| {
+                !feeds_level(id, level, config, inputs, program, preset, pip_sources, &mut HashSet::new())
+            });
+            let want = target.as_ref().and_then(|id| slot.source_pads.get(id));
+            let ok = match want {
+                Some(pad) => is_active_pad(&slot.isel, Some(pad)),
+                None => is_active_pad(&slot.isel, Some(&slot.black_pad)),
+            };
+            if !ok {
+                slot.isel.set_property("active-pad", want.unwrap_or(&slot.black_pad));
+            }
         }
     }
 }
@@ -2004,7 +2064,7 @@ fn refresh_source_gates(p: &ActivePipeline, last_used: &mut HashMap<String, Inst
             || p.levels.iter().any(|lvl| {
                 is_active_pad(&lvl.isel, lvl.source_pads_fg.get(id))
                     || is_active_pad(&lvl.isel_bg, lvl.source_pads_bg.get(id))
-                    || is_active_pad(&lvl.isel_pip, lvl.source_pads_pip.get(id))
+                    || lvl.pips.iter().any(|slot| is_active_pad(&slot.isel, slot.source_pads.get(id)))
             });
         let seen = last_used.entry(id.clone()).or_insert(now);
         if in_use {
@@ -2068,6 +2128,137 @@ fn report_missing_inputs(monitor: &omp_node_sdk::Monitor, missing: &[String]) {
     );
 }
 
+/// Teiler der Zeichenfläche eines 2D-Slots: ab 1080p halbe Auflösung (der Slot rechnet jedes Bild auf Vollbildgröße
+/// durch `perspective`, ca. 3 ms je 360p-Bild gemessen, `examples/persp_probe.rs`); der Compositor-Pad skaliert wieder hoch.
+pub fn pip_2d_div(height: u32) -> u32 {
+    if height > 720 { 2 } else { 1 }
+}
+
+/// Kette eines 2D-Slots: `isel_pip` → videoconvert → videoscale → ARGB (Zeichenfläche) → `perspective` → queue → Pad.
+/// ARGB, weil `perspective` die Außenpixel dort mit 0 füllt (= transparent); in AYUV wären sie deckend schwarz. Gibt
+/// das `perspective`-Element zurück. Alles feste Elemente — zur Laufzeit ändert sich nur die Matrix (keine Caps).
+fn build_pip_2d_chain(
+    pipeline: &gst::Pipeline,
+    isel_pip: &gst::Element,
+    comp_pad: &gst::Pad,
+    level_idx: usize,
+    slot: usize,
+    width: u32,
+    height: u32,
+) -> Result<gst::Element, String> {
+    let div = pip_2d_div(height);
+    let (cw, ch) = ((width / div) as i32, (height / div) as i32);
+    let mk = |factory: &str, name: &str| -> Result<gst::Element, String> {
+        gst::ElementFactory::make(factory)
+            .name(format!("{name}_l{level_idx}_s{slot}"))
+            .build()
+            .map_err(|e| format!("{factory} (pip 2d, level {level_idx}, slot {slot}): {e}"))
+    };
+    let convert = mk("videoconvert", "pip2d_conv")?;
+    let scale = mk("videoscale", "pip2d_scale")?;
+    let caps = gst::ElementFactory::make("capsfilter")
+        .name(format!("pip2d_caps_l{level_idx}_s{slot}"))
+        .property(
+            "caps",
+            gst::Caps::builder("video/x-raw")
+                .field("format", "ARGB")
+                .field("width", cw)
+                .field("height", ch)
+                .build(),
+        )
+        .build()
+        .map_err(|e| format!("capsfilter (pip 2d): {e}"))?;
+    let persp = mk("perspective", "pip2d_persp")?;
+    persp.set_property_from_str("off-edge-pixels", "ignore");
+    let queue = gst::ElementFactory::make("queue")
+        .name(format!("pip2d_queue_l{level_idx}_s{slot}"))
+        .property_from_str("leaky", "downstream")
+        .property("max-size-buffers", 3u32)
+        .property("max-size-bytes", 0u32)
+        .property("max-size-time", 0u64)
+        .build()
+        .map_err(|e| format!("queue (pip 2d): {e}"))?;
+    let chain = [&convert, &scale, &caps, &persp, &queue];
+    pipeline.add_many(chain).map_err(|e| format!("add pip 2d chain (level {level_idx}, slot {slot}): {e}"))?;
+    gst::Element::link_many([isel_pip, &convert, &scale, &caps, &persp, &queue])
+        .map_err(|e| format!("link pip 2d chain (level {level_idx}, slot {slot}): {e}"))?;
+    queue
+        .static_pad("src")
+        .ok_or("pip 2d queue: no src pad")?
+        .link(comp_pad)
+        .map_err(|e| format!("link pip 2d to compositor (level {level_idx}, slot {slot}): {e}"))?;
+    set_persp_matrix(&persp, &IDENTITY3);
+    Ok(persp)
+}
+
+const IDENTITY3: [f64; 9] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+
+fn set_persp_matrix(persp: &gst::Element, m: &[f64; 9]) {
+    persp.set_property("matrix", gst::glib::ValueArray::new(m.iter().map(|v| v.to_value())));
+}
+
+/// Pose auf einen PIP-Slot anwenden: Slot ohne Transform-Element → umschließendes Rechteck als Pad-Geometrie;
+/// 2D-Slot → Matrix für `perspective` (Pad bleibt vollflächig). Nur Properties, nie Caps.
+fn apply_pose(slot: &PipSlot, pose: &PipPose, width: u32, height: u32) {
+    apply_pose_to(&slot.comp_pad, slot.xform.as_ref(), pose, width, height);
+}
+
+fn apply_pose_to(comp_pad: &gst::Pad, xform: Option<&gst::Element>, pose: &PipPose, width: u32, height: u32) {
+    match xform {
+        Some(persp) => {
+            let div = pip_2d_div(height) as f64;
+            let (cw, ch) = (width as f64 / div, height as f64 / div);
+            if let Some(m) = pose.inverse_matrix(cw, ch, div) {
+                set_persp_matrix(persp, &m);
+            }
+        }
+        None => apply_dve_box(comp_pad, &pose.bounds()),
+    }
+}
+
+/// Laufzeitzustand aller PIP-Slots (Kapitel 87), im Pipeline-Thread geführt. `pose` ist die **angezeigte** Pose
+/// (die Fahrt schreibt jeden Schritt hinein), `z` der Compositor-z-Wert, `anim_gen` bricht eine laufende Fahrt ab.
+struct PipRuntime {
+    width: u32,
+    height: u32,
+    pose: Vec<Vec<Arc<Mutex<PipPose>>>>,
+    enabled: Vec<Vec<bool>>,
+    z: Vec<Vec<u32>>,
+    source: Vec<Vec<Option<String>>>,
+    anim_gen: Vec<Vec<Arc<AtomicU64>>>,
+}
+
+impl PipRuntime {
+    fn new(levels: usize, slots: usize, width: u32, height: u32) -> Self {
+        let full = PipPose::from_box(&DveBox::full_frame(width, height));
+        PipRuntime {
+            width,
+            height,
+            pose: (0..levels).map(|_| (0..slots).map(|_| Arc::new(Mutex::new(full))).collect()).collect(),
+            enabled: vec![vec![false; slots]; levels],
+            z: (0..levels).map(|_| (0..slots).map(|s| 4 + s as u32).collect()).collect(),
+            source: vec![vec![None; slots]; levels],
+            anim_gen: (0..levels).map(|_| (0..slots).map(|_| Arc::new(AtomicU64::new(0))).collect()).collect(),
+        }
+    }
+
+    fn slot_ok(&self, level: usize, slot: usize) -> bool {
+        self.pose.get(level).is_some_and(|l| slot < l.len())
+    }
+
+    /// Nach einem (Neu-)Aufbau: Pose, z-Wert und Sichtbarkeit aller Slots auf die frischen Pads übertragen.
+    fn apply_all(&self, p: &ActivePipeline) {
+        for (level, lvl) in p.levels.iter().enumerate() {
+            for (slot_idx, slot) in lvl.pips.iter().enumerate() {
+                let pose = *self.pose[level][slot_idx].lock().expect("lock poisoned");
+                apply_pose(slot, &pose, self.width, self.height);
+                slot.comp_pad.set_property("zorder", self.z[level][slot_idx]);
+                slot.comp_pad.set_property("alpha", if self.enabled[level][slot_idx] { 1.0f64 } else { 0.0f64 });
+            }
+        }
+    }
+}
+
 fn apply_dve_box(pad: &gst::Pad, box_: &DveBox) {
     pad.set_property("xpos", box_.x);
     pad.set_property("ypos", box_.y);
@@ -2087,14 +2278,13 @@ fn apply_dve_box(pad: &gst::Pad, box_: &DveBox) {
 struct PartialLevel {
     isel: gst::Element,
     isel_bg: gst::Element,
-    isel_pip: gst::Element,
+    /// (Selektor, Schwarz-Pad, Compositor-Pad, Transform-Element) je Slot, Pads der Quellen kommen später.
+    pip_parts: Vec<(gst::Element, gst::Pad, gst::Pad, Option<gst::Element>)>,
     black_pad_fg: gst::Pad,
     black_pad_bg: gst::Pad,
-    black_pad_pip: gst::Pad,
     comp_fg_pad: gst::Pad,
     comp_bg_pad: gst::Pad,
     comp_keyer_pad: gst::Pad,
-    comp_pip_pad: gst::Pad,
     mxl_output: MxlVideoOutput,
     keyer_keyfill: Option<(MxlVideoInput, MxlVideoInput)>,
     flowed: Arc<AtomicBool>,
@@ -2119,6 +2309,7 @@ fn build(
     output_delays: &[Arc<AtomicU64>],
 ) -> Result<(ActivePipeline, Vec<String>), String> {
     let level_count = config.flow_ids.len();
+    let slots = config.pip_slots.max(1);
     let pipeline = gst::Pipeline::new();
     // Zustand dieser Pipeline für die Node-Diagnose (GET /diag/pipelines, Kap. 72.7)
     {
@@ -2151,15 +2342,9 @@ fn build(
             .property("sync-streams", false)
             .build()
             .map_err(|e| format!("input-selector (bg, level {level_idx}): {e}"))?;
-        let isel_pip = gst::ElementFactory::make("input-selector")
-            .name(format!("isel_pip_l{level_idx}"))
-            .property("sync-streams", false)
-            .build()
-            .map_err(|e| format!("input-selector (pip, level {level_idx}): {e}"))?;
         pipeline
             .add(&isel)
             .and_then(|()| pipeline.add(&isel_bg))
-            .and_then(|()| pipeline.add(&isel_pip))
             .map_err(|e| format!("add isel (level {level_idx}): {e}"))?;
 
         // ── Schwarzbild-Fallback, auf beiden Selektoren (fg + bg)
@@ -2202,14 +2387,33 @@ fn build(
             config.height,
             program_format(config.hwaccel),
         )?;
-        let (black_caps_pip, _) = build_synthetic_branch(
-            &pipeline,
-            &black_tee,
-            &format!("black-pip-l{level_idx}"),
-            config.width,
-            config.height,
-            program_format(config.hwaccel),
-        )?;
+        for slot in 0..slots {
+            let isel_pip = gst::ElementFactory::make("input-selector")
+                .name(format!("isel_pip_l{level_idx}_s{slot}"))
+                .property("sync-streams", false)
+                .build()
+                .map_err(|e| format!("input-selector (pip, level {level_idx}, slot {slot}): {e}"))?;
+            pipeline.add(&isel_pip).map_err(|e| format!("add isel_pip (level {level_idx}, slot {slot}): {e}"))?;
+            let (black_caps_pip, _) = build_synthetic_branch(
+                &pipeline,
+                &black_tee,
+                &format!("black-pip-l{level_idx}-s{slot}"),
+                config.width,
+                config.height,
+                program_format(config.hwaccel),
+            )?;
+            let black_pad_pip = isel_pip
+                .request_pad_simple("sink_0")
+                .ok_or_else(|| format!("isel_pip: request sink_0 failed (level {level_idx}, slot {slot})"))?;
+            black_caps_pip
+                .static_pad("src")
+                .ok_or("black-pip capsfilter: no src pad")?
+                .link(&black_pad_pip)
+                .map_err(|e| format!("link black-pip to isel_pip (level {level_idx}, slot {slot}): {e}"))?;
+            isel_pip.set_property("active-pad", &black_pad_pip);
+            isel_pips.push(isel_pip);
+            black_pads_pip.push(black_pad_pip);
+        }
         black_tees.push(black_tee);
 
         let black_pad_fg = isel
@@ -2228,18 +2432,6 @@ fn build(
             .ok_or("black-bg capsfilter: no src pad")?
             .link(&black_pad_bg)
             .map_err(|e| format!("link black-bg to isel_bg (level {level_idx}): {e}"))?;
-
-        let black_pad_pip = isel_pip
-            .request_pad_simple("sink_0")
-            .ok_or_else(|| format!("isel_pip: request sink_0 failed (level {level_idx})"))?;
-        black_caps_pip
-            .static_pad("src")
-            .ok_or("black-pip capsfilter: no src pad")?
-            .link(&black_pad_pip)
-            .map_err(|e| format!("link black-pip to isel_pip (level {level_idx}): {e}"))?;
-        isel_pip.set_property("active-pad", &black_pad_pip);
-        isel_pips.push(isel_pip);
-        black_pads_pip.push(black_pad_pip);
 
         isels.push(isel);
         isel_bgs.push(isel_bg);
@@ -2265,7 +2457,6 @@ fn build(
     for level_idx in 0..level_count {
         let isel = isels[level_idx].clone();
         let isel_bg = isel_bgs[level_idx].clone();
-        let isel_pip = isel_pips[level_idx].clone();
 
         let comp = gst::ElementFactory::make("compositor")
             .name(format!("comp_l{level_idx}"))
@@ -2414,16 +2605,33 @@ fn build(
         //    Box-Geometrie kommt vom Aufrufer nach dem Build via
         //    `apply_dve_box` (dieselbe Funktion, die vorher `comp_fg_pad`
         //    traf).
-        let comp_pip_pad = comp
-            .request_pad_simple("sink_3")
-            .ok_or_else(|| format!("comp: request sink_3 (pip) failed (level {level_idx})"))?;
-        comp_pip_pad.set_property("zorder", 4u32);
-        comp_pip_pad.set_property("alpha", 0.0f64);
-        isel_pip
-            .static_pad("src")
-            .ok_or("isel_pip: no src pad")?
-            .link(&comp_pip_pad)
-            .map_err(|e| format!("link pip to comp.sink_3 (level {level_idx}): {e}"))?;
+        //    Kapitel 87: `slots` solche Layer je Ebene (sink_3 + Slot), z-Ordnung 4 + Slot.
+        let mut pip_parts = Vec::with_capacity(slots);
+        for slot in 0..slots {
+            let isel_pip = isel_pips[level_idx * slots + slot].clone();
+            let black_pad_pip = black_pads_pip[level_idx * slots + slot].clone();
+            let comp_pip_pad = comp
+                .request_pad_simple(&format!("sink_{}", 3 + slot))
+                .ok_or_else(|| format!("comp: request sink_{} (pip) failed (level {level_idx})", 3 + slot))?;
+            comp_pip_pad.set_property("zorder", 4 + slot as u32);
+            comp_pip_pad.set_property("alpha", 0.0f64);
+            let mut xform = None;
+            if slot < config.pip_2d_slots {
+                let persp = build_pip_2d_chain(&pipeline, &isel_pip, &comp_pip_pad, level_idx, slot, config.width, config.height)?;
+                comp_pip_pad.set_property("xpos", 0i32);
+                comp_pip_pad.set_property("ypos", 0i32);
+                comp_pip_pad.set_property("width", config.width as i32);
+                comp_pip_pad.set_property("height", config.height as i32);
+                xform = Some(persp);
+            } else {
+                isel_pip
+                    .static_pad("src")
+                    .ok_or("isel_pip: no src pad")?
+                    .link(&comp_pip_pad)
+                    .map_err(|e| format!("link pip to comp.sink_{} (level {level_idx}): {e}", 3 + slot))?;
+            }
+            pip_parts.push((isel_pip, black_pad_pip, comp_pip_pad, xform));
+        }
 
         // Ausgangsformat des Compositors FEST (AYUV, mit Alpha): sonst wählt er wegen der RGBA-Keyer-Ebene RGBA und wandelt
         // jede Programm-/Preset-Ebene in jedem Bild um.
@@ -2476,14 +2684,12 @@ fn build(
         partial_levels.push(PartialLevel {
             isel,
             isel_bg,
-            isel_pip,
+            pip_parts,
             black_pad_fg: black_pads_fg[level_idx].clone(),
             black_pad_bg: black_pads_bg[level_idx].clone(),
-            black_pad_pip: black_pads_pip[level_idx].clone(),
             comp_fg_pad,
             comp_bg_pad,
             comp_keyer_pad,
-            comp_pip_pad,
             mxl_output,
             keyer_keyfill,
             flowed,
@@ -2504,8 +2710,9 @@ fn build(
         (0..level_count).map(|_| HashMap::with_capacity(inputs.len())).collect();
     let mut source_pads_bg: Vec<HashMap<String, gst::Pad>> =
         (0..level_count).map(|_| HashMap::with_capacity(inputs.len())).collect();
+    // Ein Eintrag je PIP-Slot, Index = Ebene * Slots + Slot.
     let mut source_pads_pip: Vec<HashMap<String, gst::Pad>> =
-        (0..level_count).map(|_| HashMap::with_capacity(inputs.len())).collect();
+        (0..level_count * slots).map(|_| HashMap::with_capacity(inputs.len())).collect();
     let mut branches = HashMap::with_capacity(inputs.len());
     let mut warnings = Vec::new();
     for (i, input) in inputs.iter().enumerate() {
@@ -2540,9 +2747,18 @@ fn build(
         levels.push(LevelPipeline {
             isel: partial.isel,
             isel_bg: partial.isel_bg,
-            isel_pip: partial.isel_pip,
-            black_pad_pip: partial.black_pad_pip,
-            source_pads_pip: std::mem::take(&mut source_pads_pip[level_idx]),
+            pips: partial
+                .pip_parts
+                .into_iter()
+                .enumerate()
+                .map(|(slot, (isel, black_pad, comp_pad, xform))| PipSlot {
+                    isel,
+                    black_pad,
+                    source_pads: std::mem::take(&mut source_pads_pip[level_idx * slots + slot]),
+                    comp_pad,
+                    xform,
+                })
+                .collect(),
             black_pad_fg: partial.black_pad_fg,
             black_pad_bg: partial.black_pad_bg,
             source_pads_fg: std::mem::take(&mut source_pads_fg[level_idx]),
@@ -2550,7 +2766,6 @@ fn build(
             comp_fg_pad: partial.comp_fg_pad,
             comp_bg_pad: partial.comp_bg_pad,
             comp_keyer_pad: partial.comp_keyer_pad,
-            comp_pip_pad: partial.comp_pip_pad,
             _mxl_output: partial.mxl_output,
             _keyer_keyfill: partial.keyer_keyfill,
             flowed: partial.flowed,
@@ -2588,7 +2803,7 @@ fn add_input_live(
     let isel_bgs: Vec<gst::Element> = p.levels.iter().map(|l| l.isel_bg.clone()).collect();
     let pad_index = p.next_pad_index;
     p.next_pad_index += 1;
-    let isel_pips: Vec<gst::Element> = p.levels.iter().map(|l| l.isel_pip.clone()).collect();
+    let isel_pips: Vec<gst::Element> = p.levels.iter().flat_map(|l| l.pips.iter().map(|s| s.isel.clone())).collect();
     let (fg_pads, bg_pads, pip_pads, branch) =
         build_one_input(&p.pipeline, context, &isels, &isel_bgs, &isel_pips, input, pad_index, width, height, hwaccel, false, stills)?;
     if let Some(feeder) = &branch.feeder {
@@ -2613,8 +2828,13 @@ fn add_input_live(
     for (lvl, pad) in p.levels.iter_mut().zip(bg_pads) {
         lvl.source_pads_bg.insert(input.sender_id.clone(), pad);
     }
-    for (lvl, pad) in p.levels.iter_mut().zip(pip_pads) {
-        lvl.source_pads_pip.insert(input.sender_id.clone(), pad);
+    let mut pip_pads = pip_pads.into_iter();
+    for lvl in p.levels.iter_mut() {
+        for slot in lvl.pips.iter_mut() {
+            if let Some(pad) = pip_pads.next() {
+                slot.source_pads.insert(input.sender_id.clone(), pad);
+            }
+        }
     }
     // Freeze: Feeder erst jetzt starten (nach allen Abgriffen), s. `build_still_branch`.
     if let Some(feeder) = &branch.feeder {
@@ -2640,11 +2860,13 @@ fn remove_input_live(p: &mut ActivePipeline, sender_id: &str) {
             }
             lvl.isel_bg.release_request_pad(&pad);
         }
-        if let Some(pad) = lvl.source_pads_pip.remove(sender_id) {
-            if is_active_pad(&lvl.isel_pip, Some(&pad)) {
-                lvl.isel_pip.set_property("active-pad", &lvl.black_pad_pip);
+        for slot in lvl.pips.iter_mut() {
+            if let Some(pad) = slot.source_pads.remove(sender_id) {
+                if is_active_pad(&slot.isel, Some(&pad)) {
+                    slot.isel.set_property("active-pad", &slot.black_pad);
+                }
+                slot.isel.release_request_pad(&pad);
             }
-            lvl.isel_pip.release_request_pad(&pad);
         }
     }
     if let Some(branch) = p._branches.remove(sender_id) {
@@ -2970,6 +3192,7 @@ pub fn run(
 
     let level_count = config.flow_ids.len().max(1);
     let flowed_slot: Arc<Mutex<Vec<Option<Arc<AtomicBool>>>>> = Arc::new(Mutex::new(Vec::new()));
+    let frames_slot: Arc<Mutex<Vec<Arc<Mutex<Option<gst::Sample>>>>>> = Arc::new(Mutex::new(Vec::new()));
     let output_delays: Vec<Arc<AtomicU64>> = (0..level_count).map(|_| Arc::new(AtomicU64::new(0))).collect();
     let trans_rate_ms: Vec<Arc<AtomicU64>> = (0..level_count)
         .map(|_| Arc::new(AtomicU64::new(frames_to_ms(DEFAULT_TRANS_RATE_FRAMES))))
@@ -2979,7 +3202,7 @@ pub fn run(
     let swap_on_transition: Vec<Arc<AtomicBool>> = (0..level_count).map(|_| Arc::new(AtomicBool::new(false))).collect();
     // Generationszähler je Ebene für PIP-Fahrten: jede neue Box-/PIP-Änderung
     // erhöht ihn und bricht damit eine laufende Fahrt ab.
-    let pip_anim_gen: Vec<Arc<AtomicU64>> = (0..level_count).map(|_| Arc::new(AtomicU64::new(0))).collect();
+    let mut pips = PipRuntime::new(level_count, config.pip_slots.max(1), config.width, config.height);
 
     // Art der gerade laufenden manuellen T-Bar-Session je Ebene (s. `SetTransitionPosition`).
     let handover_pending = Arc::new(AtomicUsize::new(0));
@@ -2990,10 +3213,10 @@ pub fn run(
     let mut current_inputs: Vec<DiscoveredInput> = Vec::new();
     let mut keyfill_inputs: Vec<DiscoveredKeyFill> = Vec::new();
     let mut keyer_sources: Vec<Option<String>> = vec![None; level_count];
-    let mut pip_sources: Vec<Option<String>> = vec![None; level_count];
     let mut active = match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_sources, &output_delays) {
         Ok((p, _warnings)) => {
             *flowed_slot.lock().expect("lock poisoned") = p.levels.iter().map(|l| Some(l.flowed.clone())).collect();
+            *frames_slot.lock().expect("lock poisoned") = p.levels.iter().map(|l| l.last_frame.clone()).collect();
             Some(p)
         }
         Err(e) => {
@@ -3017,9 +3240,7 @@ pub fn run(
     // `SourceBranch`es, ein Eingang fehlt also für ALLE Ebenen gleichzeitig
     // oder für keine).
     let mut missing_inputs: Vec<String> = Vec::new();
-    let mut dve_box: Vec<DveBox> = vec![DveBox::full_frame(config.width, config.height); level_count];
     let mut keyer_enabled: Vec<bool> = vec![false; level_count];
-    let mut pip_enabled: Vec<bool> = vec![false; level_count];
     let fading: Vec<Arc<AtomicBool>> = (0..level_count).map(|_| Arc::new(AtomicBool::new(false))).collect();
     let fade_threads: Vec<Arc<Mutex<Option<std::thread::JoinHandle<()>>>>> =
         (0..level_count).map(|_| Arc::new(Mutex::new(None))).collect();
@@ -3030,6 +3251,7 @@ pub fn run(
     let _ = ready.send(Ok(PipelineHandle {
         commands: commands_tx,
         flowed: flowed_slot.clone(),
+        frames: frames_slot.clone(),
         output_delays: output_delays.clone(),
         trans_rate_ms: trans_rate_ms.clone(),
         trans_kind: trans_kind.clone(),
@@ -3064,19 +3286,16 @@ pub fn run(
     fn reapply_all_levels(
         p: &ActivePipeline,
         program: &mut [Option<String>],
-        dve_box: &[DveBox],
+        pips: &PipRuntime,
         keyer_enabled: &[bool],
-        pip_enabled: &[bool],
         tx: &UnboundedSender<Event>,
     ) {
+        pips.apply_all(p);
         for (level_idx, lvl) in p.levels.iter().enumerate() {
             let applied = switch_isel(&lvl.isel, &lvl.source_pads_fg, &lvl.black_pad_fg, &program[level_idx]);
             switch_isel(&lvl.isel_bg, &lvl.source_pads_bg, &lvl.black_pad_bg, &program[level_idx]);
-            apply_dve_box(&lvl.comp_pip_pad, &dve_box[level_idx]);
             lvl.comp_keyer_pad
                 .set_property("alpha", if keyer_enabled[level_idx] { 1.0f64 } else { 0.0f64 });
-            lvl.comp_pip_pad
-                .set_property("alpha", if pip_enabled[level_idx] { 1.0f64 } else { 0.0f64 });
             let previous = program[level_idx].clone();
             program[level_idx] = applied;
             let _ = tx.send(Event::ProgramChanged {
@@ -3094,11 +3313,11 @@ pub fn run(
         p: &ActivePipeline,
         program: &mut [Option<String>],
         preset: &mut [Option<String>],
-        dve_box: &[DveBox],
+        pips: &PipRuntime,
         tx: &UnboundedSender<Event>,
     ) {
-        for (level_idx, lvl) in p.levels.iter().enumerate() {
-            apply_dve_box(&lvl.comp_pip_pad, &dve_box[level_idx]);
+        pips.apply_all(p);
+        for (level_idx, _lvl) in p.levels.iter().enumerate() {
             let previous = program[level_idx].take();
             preset[level_idx] = None;
             let _ = tx.send(Event::ProgramChanged {
@@ -3109,7 +3328,8 @@ pub fn run(
         }
     }
 
-    fn update_flowed(flowed_slot: &Arc<Mutex<Vec<Option<Arc<AtomicBool>>>>>, p: &ActivePipeline) {
+    fn update_flowed(flowed_slot: &Arc<Mutex<Vec<Option<Arc<AtomicBool>>>>>, frames_slot: &Arc<Mutex<Vec<Arc<Mutex<Option<gst::Sample>>>>>>, p: &ActivePipeline) {
+        *frames_slot.lock().expect("lock poisoned") = p.levels.iter().map(|l| l.last_frame.clone()).collect();
         *flowed_slot.lock().expect("lock poisoned") = p.levels.iter().map(|l| Some(l.flowed.clone())).collect();
     }
 
@@ -3126,7 +3346,7 @@ pub fn run(
             process_handovers(p, &mut handovers, &mut zombies, &mut program, &mut preset, any_fading, &handover_pending, &tx);
         }
         if let Some(p) = &active {
-            apply_pip_sources(p, &config, &current_inputs, &program, &preset, &pip_sources);
+            apply_pip_sources(p, &config, &current_inputs, &program, &preset, &pips.source);
         }
         if let Some(p) = &active {
             let pinned: HashSet<&str> = handovers.iter().map(|h| h.new.as_str()).collect();
@@ -3233,14 +3453,14 @@ pub fn run(
                             for w in warnings {
                                 let _ = tx.send(Event::Error(w));
                             }
-                            reapply_all_levels(&p, &mut program, &dve_box, &keyer_enabled, &pip_enabled, &tx);
+                            reapply_all_levels(&p, &mut program, &pips, &keyer_enabled, &tx);
                             missing_inputs = p
                                 .levels
                                 .first()
                                 .map(|l| missing_input_ids(&current_inputs, &l.source_pads_fg))
                                 .unwrap_or_default();
                             report_missing_inputs(&monitor, &missing_inputs);
-                            update_flowed(&flowed_slot, &p);
+                            update_flowed(&flowed_slot, &frames_slot, &p);
                             active = Some(p);
                         }
                         Err(e) => {
@@ -3254,8 +3474,8 @@ pub fn run(
                             )));
                             match build(&context, &config, &[], &keyfill_inputs, &keyer_sources, &output_delays) {
                                 Ok((p, _warnings)) => {
-                                    reset_all_levels_to_black(&p, &mut program, &mut preset, &dve_box, &tx);
-                                    update_flowed(&flowed_slot, &p);
+                                    reset_all_levels_to_black(&p, &mut program, &mut preset, &pips, &tx);
+                                    update_flowed(&flowed_slot, &frames_slot, &p);
                                     active = Some(p);
                                 }
                                 Err(e2) => {
@@ -3313,8 +3533,8 @@ pub fn run(
                         for w in warnings {
                             let _ = tx.send(Event::Error(w));
                         }
-                        reapply_all_levels(&p, &mut program, &dve_box, &keyer_enabled, &pip_enabled, &tx);
-                        update_flowed(&flowed_slot, &p);
+                        reapply_all_levels(&p, &mut program, &pips, &keyer_enabled, &tx);
+                        update_flowed(&flowed_slot, &frames_slot, &p);
                         active = Some(p);
                     }
                     Err(e) => {
@@ -3323,8 +3543,8 @@ pub fn run(
                         )));
                         match build(&context, &config, &[], &keyfill_inputs, &keyer_sources, &output_delays) {
                             Ok((p, _warnings)) => {
-                                reset_all_levels_to_black(&p, &mut program, &mut preset, &dve_box, &tx);
-                                update_flowed(&flowed_slot, &p);
+                                reset_all_levels_to_black(&p, &mut program, &mut preset, &pips, &tx);
+                                update_flowed(&flowed_slot, &frames_slot, &p);
                                 active = Some(p);
                             }
                             Err(e2) => {
@@ -3343,10 +3563,10 @@ pub fn run(
             // `SetKeyerSource` oben (voller Rebuild, da eine neue
             // `MxlVideoInput`-Verbindung entsteht), nur ohne Fill+Key-Paar.
             // Gleiche Cross-Ebenen-Einschränkung wie dort.
-            Ok(Command::SetPipSource(level, source)) if pip_sources.get(level).is_some_and(|s| *s != source) => {
+            Ok(Command::SetPipSource(level, slot, source)) if pips.source.get(level).and_then(|l| l.get(slot)).is_some_and(|s| *s != source) => {
                 // Live am PIP-Selektor umschalten (kein Rebuild, PGM läuft ungestört); "pst:N" folgt dem Preset der Ebene N
                 // (s. `apply_pip_sources`, läuft in jeder Schleifenrunde).
-                pip_sources[level] = source;
+                pips.source[level][slot] = source;
             }
             Ok(Command::SetPipSource(..)) => {}
             Ok(Command::CaptureFreeze(level, id)) => {
@@ -3618,73 +3838,86 @@ pub fn run(
                     }
                 }
             }
-            Ok(Command::PipAnimate { level, from, to, duration_ms, then_disable }) => {
-                if let (Some(b), Some(anim_gen)) = (dve_box.get_mut(level), pip_anim_gen.get(level)) {
-                    let my_gen = anim_gen.fetch_add(1, Ordering::AcqRel) + 1;
-                    *b = from;
-                    if let Some(p) = active.as_ref().and_then(|a| a.levels.get(level)) {
-                        apply_dve_box(&p.comp_pip_pad, &from);
-                        let pad = p.comp_pip_pad.clone();
-                        let anim_gen = anim_gen.clone();
+            Ok(Command::PipAnimate { level, slot, from, to, duration_ms, then_disable, z_during, z_after }) => {
+                if pips.slot_ok(level, slot) {
+                    let my_gen = pips.anim_gen[level][slot].fetch_add(1, Ordering::AcqRel) + 1;
+                    let live = pips.pose[level][slot].clone();
+                    let start = from.unwrap_or_else(|| *live.lock().expect("lock poisoned"));
+                    *live.lock().expect("lock poisoned") = start;
+                    if let Some(z) = z_during {
+                        pips.z[level][slot] = z;
+                    }
+                    if let Some(slot_ref) = active.as_ref().and_then(|a| a.levels.get(level)).and_then(|l| l.pips.get(slot)) {
+                        apply_pose(slot_ref, &start, config.width, config.height);
+                        if let Some(z) = z_during {
+                            slot_ref.comp_pad.set_property("zorder", z);
+                            let _ = tx.send(Event::PipZChanged { level, slot, z });
+                        }
+                        let pad = slot_ref.comp_pad.clone();
+                        let xform = slot_ref.xform.clone();
+                        let anim_gen = pips.anim_gen[level][slot].clone();
                         let cmd_tx = anim_tx.clone();
+                        let (w, h) = (config.width, config.height);
                         std::thread::spawn(move || {
                             let steps = (duration_ms / STEP_MS).max(1);
-                            let start = std::time::Instant::now();
+                            let t0 = std::time::Instant::now();
                             for i in 1..=steps {
                                 let target = Duration::from_millis(duration_ms * i / steps);
-                                if let Some(wait) = target.checked_sub(start.elapsed()) {
+                                if let Some(wait) = target.checked_sub(t0.elapsed()) {
                                     std::thread::sleep(wait);
                                 }
                                 if anim_gen.load(Ordering::Acquire) != my_gen {
-                                    return; // von neuerer Box-/PIP-Änderung abgelöst
+                                    return; // von neuerer Pose-/PIP-Änderung abgelöst
                                 }
-                                let t = (start.elapsed().as_millis() as f64 / duration_ms.max(1) as f64).min(1.0);
+                                let t = (t0.elapsed().as_millis() as f64 / duration_ms.max(1) as f64).min(1.0);
                                 let e = t * t * (3.0 - 2.0 * t); // Ease in/out
-                                let lerp = |a: i32, b: i32| (a as f64 + (b - a) as f64 * e).round() as i32;
-                                apply_dve_box(
-                                    &pad,
-                                    &DveBox {
-                                        x: lerp(from.x, to.x),
-                                        y: lerp(from.y, to.y),
-                                        width: lerp(from.width, to.width).max(2),
-                                        height: lerp(from.height, to.height).max(2),
-                                    },
-                                );
+                                let pose = start.lerp(&to, e);
+                                apply_pose_to(&pad, xform.as_ref(), &pose, w, h);
+                                *live.lock().expect("lock poisoned") = pose;
                             }
                             if anim_gen.load(Ordering::Acquire) != my_gen {
                                 return;
                             }
-                            let _ = cmd_tx.send(Command::SetDveBox(level, to));
+                            let _ = cmd_tx.send(Command::SetDveBox(level, slot, to));
+                            if let Some(z) = z_after {
+                                let _ = cmd_tx.send(Command::SetPipZ(level, slot, z));
+                            }
                             if then_disable {
-                                let _ = cmd_tx.send(Command::SetPipEnabled(level, false));
+                                let _ = cmd_tx.send(Command::SetPipEnabled(level, slot, false));
                             }
                         });
                     }
-                    let _ = tx.send(Event::DveBoxChanged { level, box_: from });
+                    let _ = tx.send(Event::DveBoxChanged { level, slot, pose: start });
                 }
             }
-            Ok(Command::SetDveBox(level, box_)) => {
-                if let Some(g) = pip_anim_gen.get(level) {
-                    g.fetch_add(1, Ordering::AcqRel);
-                }
-                if let Some(b) = dve_box.get_mut(level) {
-                    *b = box_;
-                    if let Some(p) = active.as_ref().and_then(|a| a.levels.get(level)) {
-                        apply_dve_box(&p.comp_pip_pad, b);
+            Ok(Command::SetDveBox(level, slot, pose)) => {
+                if pips.slot_ok(level, slot) {
+                    pips.anim_gen[level][slot].fetch_add(1, Ordering::AcqRel);
+                    *pips.pose[level][slot].lock().expect("lock poisoned") = pose;
+                    if let Some(slot_ref) = active.as_ref().and_then(|a| a.levels.get(level)).and_then(|l| l.pips.get(slot)) {
+                        apply_pose(slot_ref, &pose, config.width, config.height);
                     }
-                    let _ = tx.send(Event::DveBoxChanged { level, box_: *b });
+                    let _ = tx.send(Event::DveBoxChanged { level, slot, pose });
                 }
             }
-            Ok(Command::ResetDve(level)) => {
-                if let Some(g) = pip_anim_gen.get(level) {
-                    g.fetch_add(1, Ordering::AcqRel);
-                }
-                if let Some(b) = dve_box.get_mut(level) {
-                    *b = DveBox::full_frame(config.width, config.height);
-                    if let Some(p) = active.as_ref().and_then(|a| a.levels.get(level)) {
-                        apply_dve_box(&p.comp_pip_pad, b);
+            Ok(Command::ResetDve(level, slot)) => {
+                if pips.slot_ok(level, slot) {
+                    pips.anim_gen[level][slot].fetch_add(1, Ordering::AcqRel);
+                    let pose = PipPose::from_box(&DveBox::full_frame(config.width, config.height));
+                    *pips.pose[level][slot].lock().expect("lock poisoned") = pose;
+                    if let Some(slot_ref) = active.as_ref().and_then(|a| a.levels.get(level)).and_then(|l| l.pips.get(slot)) {
+                        apply_pose(slot_ref, &pose, config.width, config.height);
                     }
-                    let _ = tx.send(Event::DveBoxChanged { level, box_: *b });
+                    let _ = tx.send(Event::DveBoxChanged { level, slot, pose });
+                }
+            }
+            Ok(Command::SetPipZ(level, slot, z)) => {
+                if pips.slot_ok(level, slot) {
+                    pips.z[level][slot] = z;
+                    if let Some(slot_ref) = active.as_ref().and_then(|a| a.levels.get(level)).and_then(|l| l.pips.get(slot)) {
+                        slot_ref.comp_pad.set_property("zorder", z);
+                    }
+                    let _ = tx.send(Event::PipZChanged { level, slot, z });
                 }
             }
             Ok(Command::SetKeyerEnabled(level, enabled)) => {
@@ -3697,17 +3930,14 @@ pub fn run(
                     let _ = tx.send(Event::KeyerChanged { level, enabled });
                 }
             }
-            Ok(Command::SetPipEnabled(level, enabled)) => {
-                if let Some(g) = pip_anim_gen.get(level) {
-                    g.fetch_add(1, Ordering::AcqRel);
-                }
-                if let Some(e) = pip_enabled.get_mut(level) {
-                    *e = enabled;
-                    if let Some(p) = active.as_ref().and_then(|a| a.levels.get(level)) {
-                        p.comp_pip_pad
-                            .set_property("alpha", if enabled { 1.0f64 } else { 0.0f64 });
+            Ok(Command::SetPipEnabled(level, slot, enabled)) => {
+                if pips.slot_ok(level, slot) {
+                    pips.anim_gen[level][slot].fetch_add(1, Ordering::AcqRel);
+                    pips.enabled[level][slot] = enabled;
+                    if let Some(slot_ref) = active.as_ref().and_then(|a| a.levels.get(level)).and_then(|l| l.pips.get(slot)) {
+                        slot_ref.comp_pad.set_property("alpha", if enabled { 1.0f64 } else { 0.0f64 });
                     }
-                    let _ = tx.send(Event::PipChanged { level, enabled });
+                    let _ = tx.send(Event::PipChanged { level, slot, enabled });
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
@@ -3941,6 +4171,8 @@ mod pip_loop_tests {
             height: 720,
             hwaccel: omp_mediaio::hwaccel::HwAccel::default(),
             stills: Arc::new(Mutex::new(HashMap::new())),
+            pip_slots: 2,
+            pip_2d_slots: 0,
         }
     }
 
@@ -3959,7 +4191,7 @@ mod pip_loop_tests {
         let inputs = vec![input("cam", "c"), input("pgm1", "f1"), input("pgm2", "f2")];
         let program = vec![None, None];
         let preset = vec![None, None];
-        let pip = vec![None, None];
+        let pip: Vec<Vec<Option<String>>> = vec![vec![None, None], vec![None, None]];
         let cfg = config();
         // Ebene 1 zeigt den eigenen Ausgang: Schleife.
         assert!(feeds_level("pgm1", 0, &cfg, &inputs, &program, &preset, &pip, &mut HashSet::new()));
@@ -3973,7 +4205,7 @@ mod pip_loop_tests {
         // ... auch über die PIP-Quelle von Ebene 2 ("pst:1" mit Preset pgm1).
         let program = vec![None, None];
         let preset = vec![Some("pgm1".to_string()), None];
-        let pip = vec![None, Some("pst:1".to_string())];
+        let pip = vec![vec![None, None], vec![None, Some("pst:1".to_string())]]; // zweiter Slot von Ebene 2
         assert!(feeds_level("pgm2", 0, &cfg, &inputs, &program, &preset, &pip, &mut HashSet::new()));
     }
 }

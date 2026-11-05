@@ -94,7 +94,7 @@ const T = (() => {
       "name": "Name",
       "source": "Quelle",
       "black": "Schwarz",
-      "pipPoints": "Fahrt: Start → Halten → Ende",
+      "pipPoints": "Fahrt: Start → Halten → Ende (+ Fokus)",
       "ptStart": "Start",
       "ptHold": "Halten",
       "ptEnd": "Ende",
@@ -106,7 +106,7 @@ const T = (() => {
       "edgeRight": "rechts ▶",
       "edgeTop": "▲ oben",
       "edgeBottom": "unten ▼",
-      "editorHint": "Ziehen zum Verschieben, Ecke zum Skalieren",
+      "editorHint": "Ziehen zum Verschieben, Quadrat unten rechts zum Skalieren, Kreise zum Verzerren (2D-Slots)",
       "hint0": "Ohne Start/Ende erscheint PIP direkt an der Haltposition.",
       "hint3": "3 Punkte: fährt von Start nach Halten; beim Ausschalten von Halten nach Ende.",
       "hint2s": "2 Punkte: fährt von Start nach Halten; beim Ausschalten zurück nach Start.",
@@ -119,9 +119,25 @@ const T = (() => {
       "saveShow": "Speichern & Anzeigen",
       "saveShowTitle": "Preset speichern und sofort einfahren",
       "editPreset": "Preset bearbeiten",
-      "editTitle": "PIP-Preset bearbeiten",
-      "newTitle": "Neues PIP-Preset",
+      "editTitle": "PIP-Szene bearbeiten",
+      "newTitle": "Neue PIP-Szene",
       "emptyPinned": "keine Quellen angeheftet — über den Quellen-Dialog hinzufügen",
+      "slotN": "Slot {n}",
+      "addSlot": "Weiteren PIP-Slot zur Szene hinzufügen",
+      "removeSlot": "Diesen Slot aus der Szene entfernen",
+      "zLabel": "Ebene (z)",
+      "zTitle": "Höhere Zahl liegt weiter vorn",
+      "ptFocus": "Fokus",
+      "rotation": "Drehung",
+      "resetCorners": "Ecken zurücksetzen",
+      "resetCornersTitle": "Wieder ein gerades Rechteck (umschließender Rahmen)",
+      "twoDHint": "Ecken ziehen = Trapez/Perspektive",
+      "noTwoD": "Dieser Slot kann nur gerade Rechtecke (Drehung/Trapez nur in 2D-Slots)",
+      "monitor": "PGM-Monitor",
+      "groupMonitor": "Monitor",
+      "monitorTitle": "PGM-Bild anzeigen: Klick auf ein PIP fährt es in den Fokus, erneuter Klick zurück",
+      "monitorEmpty": "kein Bild",
+      "focusHint": "Klick auf ein PIP = Fokus an/aus",
       "levels": "Ebenen",
       "apply": "Übernehmen",
       "applyTitle": "Node neu starten — kurz nicht erreichbar, zuvor aufgelegte Quellen werden danach automatisch wieder verbunden.",
@@ -186,7 +202,7 @@ const T = (() => {
       "name": "Name",
       "source": "Source",
       "black": "Black",
-      "pipPoints": "Move: start → hold → end",
+      "pipPoints": "Move: start → hold → end (+ focus)",
       "ptStart": "Start",
       "ptHold": "Hold",
       "ptEnd": "End",
@@ -198,7 +214,7 @@ const T = (() => {
       "edgeRight": "right ▶",
       "edgeTop": "▲ top",
       "edgeBottom": "bottom ▼",
-      "editorHint": "Drag to move, corner to resize",
+      "editorHint": "Drag to move, square bottom right to resize, circles to distort (2D slots)",
       "hint0": "Without start/end the PIP appears directly at the hold position.",
       "hint3": "3 points: moves from start to hold; when switched off from hold to end.",
       "hint2s": "2 points: moves from start to hold; when switched off back to start.",
@@ -211,9 +227,25 @@ const T = (() => {
       "saveShow": "Save & show",
       "saveShowTitle": "Save the preset and show it immediately",
       "editPreset": "Edit preset",
-      "editTitle": "Edit PIP preset",
-      "newTitle": "New PIP preset",
+      "editTitle": "Edit PIP scene",
+      "newTitle": "New PIP scene",
       "emptyPinned": "no sources pinned — add them via the sources dialog",
+      "slotN": "Slot {n}",
+      "addSlot": "Add another PiP slot to the scene",
+      "removeSlot": "Remove this slot from the scene",
+      "zLabel": "Layer (z)",
+      "zTitle": "Higher numbers sit in front",
+      "ptFocus": "Focus",
+      "rotation": "Rotation",
+      "resetCorners": "Reset corners",
+      "resetCornersTitle": "Back to a straight rectangle (bounding frame)",
+      "twoDHint": "Drag corners = trapezoid/perspective",
+      "noTwoD": "This slot only does straight rectangles (rotation/trapezoid need a 2D slot)",
+      "monitor": "PGM monitor",
+      "groupMonitor": "Monitor",
+      "monitorTitle": "Show the PGM picture: click a PiP to bring it into focus, click again to send it back",
+      "monitorEmpty": "no picture",
+      "focusHint": "Click a PiP = focus on/off",
       "levels": "Levels",
       "apply": "Apply",
       "applyTitle": "Restarts the node — briefly unreachable; sources patched in before are reconnected automatically afterwards.",
@@ -329,13 +361,13 @@ const T = (() => {
 // Param `crosspoint.transitionPosition` dient nur als Ausgangswert beim
 // Laden/Reconnect (server setzt ihn nach Cut/Take/AutoTrans-Ende auf 0,
 // die "Ruheposition" für den nächsten manuellen Zug).
-const WIDTH = 640;
-const HEIGHT = 480;
-// Default-Box für ein NEU angelegtes PIP-Preset (vormals die einzige,
-// feste `PIP_BOX`-Konstante) — der Editor erlaubt danach freies Ziehen.
-const PIP_BOX_DEFAULT = { width: Math.round(WIDTH / 3), height: Math.round(HEIGHT / 3) };
-PIP_BOX_DEFAULT.x = WIDTH - PIP_BOX_DEFAULT.width - 16;
-PIP_BOX_DEFAULT.y = HEIGHT - PIP_BOX_DEFAULT.height - 16;
+// Mischer-Auflösung (Koordinatenraum aller PIP-Positionen). Vor Kapitel 87 stand hier fest 640×480, obwohl der Mischer
+// meist 1280×720 rechnet — `setCanvas` übernimmt jetzt die echte Größe vom Node (`pip.canvas`).
+let WIDTH = 1280;
+let HEIGHT = 720;
+function setCanvas(w, h) {
+  if (w > 0 && h > 0) { WIDTH = w; HEIGHT = h; }
+}
 const PIP_MIN_SIZE = 32; // wie nodes/omp-multiviewer-custom/ui/bundle.js::MIN_PIP_SIZE, hier dupliziert (kein Framework-Zwang, s. Moduldoku).
 const PIP_EDITOR_WIDTH = 340;
 const PIP_DEFAULT_MS = 500; // Standarddauer Ein-/Ausfahrt im Editor
@@ -357,6 +389,46 @@ const MS_PER_TRANS_FRAME = 40;
 
 function clamp(v, lo, hi) {
   return Math.min(hi, Math.max(lo, v));
+}
+
+// ── Viereck-Geometrie (Kapitel 87): vier Ecken [[x,y]…], oben-links, oben-rechts, unten-rechts, unten-links.
+function quadFromBox(b) {
+  return [[b.x, b.y], [b.x + b.width, b.y], [b.x + b.width, b.y + b.height], [b.x, b.y + b.height]];
+}
+function boundsOf(q) {
+  const xs = q.map((p) => p[0]), ys = q.map((p) => p[1]);
+  const x = Math.min(...xs), y = Math.min(...ys);
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+}
+function moveQuad(q, dx, dy) {
+  return q.map((p) => [p[0] + dx, p[1] + dy]);
+}
+// Winkel der Oberkante in Grad (0 = waagerecht, im Uhrzeigersinn positiv).
+function quadAngle(q) {
+  return (Math.atan2(q[1][1] - q[0][1], q[1][0] - q[0][0]) * 180) / Math.PI;
+}
+function rotateQuad(q, deg) {
+  const cx = q.reduce((a, p) => a + p[0], 0) / 4, cy = q.reduce((a, p) => a + p[1], 0) / 4;
+  const s = Math.sin((deg * Math.PI) / 180), c = Math.cos((deg * Math.PI) / 180);
+  return q.map((p) => [cx + (p[0] - cx) * c - (p[1] - cy) * s, cy + (p[0] - cx) * s + (p[1] - cy) * c]);
+}
+function isRect(q) {
+  const t = 0.5;
+  return Math.abs(q[0][0] - q[3][0]) < t && Math.abs(q[1][0] - q[2][0]) < t && Math.abs(q[0][1] - q[1][1]) < t && Math.abs(q[3][1] - q[2][1]) < t;
+}
+// Punkt im Viereck (Strahlverfahren) — derselbe Test wie `pip.rs::PipPose::contains`.
+function pointInQuad(q, x, y) {
+  let inside = false;
+  for (let i = 0, j = 3; i < 4; j = i++) {
+    if ((q[i][1] > y) !== (q[j][1] > y) && x < ((q[j][0] - q[i][0]) * (y - q[i][1])) / (q[j][1] - q[i][1]) + q[i][0]) inside = !inside;
+  }
+  return inside;
+}
+// Vorgabe-Fokusposition wie `pip.rs::default_focus_pose`: 94 % des Bildes, mittig, gerade Maße.
+function focusBox() {
+  const even = (v) => Math.round(v / 2) * 2;
+  const w = even(WIDTH * 0.94), h = even(HEIGHT * 0.94);
+  return { x: Math.floor((WIDTH - w) / 2), y: Math.floor((HEIGHT - h) / 2), width: w, height: h };
 }
 
 // Wie `nodes/omp-multiviewer-custom/ui/bundle.js::newPipId` — bewusst
@@ -495,6 +567,13 @@ function openModal(titleText, opts) {
         border: 1px solid var(--omp-border, #2e3338); border-radius: var(--omp-radius, 6px);
       }
       .omp-vmix-modal .pip-edge-label { font-size: 11px; color: var(--omp-text-dim, #9aa0a6); }
+      .omp-vmix-modal .pip-tabs { gap: 4px; flex-wrap: wrap; }
+      .omp-vmix-modal .pip-tab { display: inline-flex; }
+      .omp-vmix-modal .pip-tabs button { padding: 3px 8px; font-size: 11px; cursor: pointer; }
+      .omp-vmix-modal .pip-tab button.active { border-color: var(--omp-info, #4285f4); font-weight: 700; }
+      .omp-vmix-modal .pip-2d { gap: 10px; align-items: center; flex-wrap: wrap; }
+      .omp-vmix-modal .pip-editor-svg { position: absolute; left: 0; top: 0; touch-action: none; }
+      .omp-vmix-modal .pip-editor-pathline { fill: none; stroke: var(--omp-text-dim, #9aa0a6); stroke-width: 1.5; stroke-dasharray: 4 3; pointer-events: none; }
       .omp-vmix-modal .pip-editor-resize {
         position: absolute; right: 0; bottom: 0; width: 16px; height: 16px;
         cursor: nwse-resize; background: linear-gradient(135deg, transparent 50%, var(--omp-text-dim, #9aa0a6) 50%);
@@ -719,6 +798,14 @@ class OmpVideoMixerMePanel extends HTMLElement {
          den vormals einzelnen PIP-Button) — je Preset ein "Mixer"-Knopf
          + ein kleiner Stift zum Bearbeiten, plus "+" für ein neues. */
       .pip-row { display: contents; }
+      .pgm-monitor { margin-top: 6px; max-width: 480px; }
+      .pgm-monitor-inner { position: relative; width: 100%; background: #000; border: 1px solid var(--omp-border, #2e3338); border-radius: 4px; overflow: hidden; user-select: none; }
+      .pgm-monitor-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
+      .pgm-monitor-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+      .pgm-monitor-overlay .mon-slot { fill: transparent; stroke: rgba(255,255,255,0.35); stroke-width: 3; stroke-dasharray: 10 8; vector-effect: non-scaling-stroke; }
+      .pgm-monitor-overlay .mon-slot.hover { stroke: #ffd54f; stroke-dasharray: none; fill: rgba(255,213,79,0.12); }
+      .pgm-monitor-overlay .mon-slot.focused { stroke: #ab47bc; }
+      .pgm-monitor-hint { font-size: 10px; color: var(--omp-text-dim, #9aa0a6); margin-top: 2px; }
       .pip-chip { display: inline-flex; align-items: flex-start; gap: 2px; }
       .pip-chip omp-button.pip-edit { width: 22px !important; height: 22px !important; font-size: 11px; padding: 0; }
 
@@ -1236,8 +1323,122 @@ class OmpVideoMixerMePanel extends HTMLElement {
       const [sourcesGroup] = toolGroup(T("groupSources"), sourcesBtn);
       const [dskGroup] = toolGroup("DSK", keyerBtn);
       const [pipGroup] = toolGroup(T("groupPip"), pipRow);
-      toolbarRow.append(sourcesGroup, dskGroup, pipGroup);
-      buses.append(pgmRow, pstRow, toolbarRow);
+
+      // PGM-Monitor (Kapitel 87): kleines PGM-Bild; Klick auf ein PIP schaltet dessen Fokus (Fahrt auf die
+      // Fokusposition bzw. zurück). Die Trefferprüfung rechnet der Node (`pip.clickAt`), hier wird nur umgerechnet.
+      const MON_KEY = `omp-vmix-monitor-${nodeId}-${level}`;
+      let monitorOn = localStorage.getItem(MON_KEY) === "1";
+      const monBtn = document.createElement("omp-button");
+      monBtn.className = "mon-btn";
+      monBtn.textContent = T("monitor");
+      monBtn.title = T("monitorTitle");
+      const [monGroup] = toolGroup(T("groupMonitor"), monBtn);
+      const monWrap = document.createElement("div");
+      monWrap.className = "pgm-monitor";
+      const monInner = document.createElement("div");
+      monInner.className = "pgm-monitor-inner";
+      const monImg = document.createElement("img");
+      monImg.className = "pgm-monitor-img";
+      monImg.alt = "";
+      monImg.draggable = false;
+      const monSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      monSvg.setAttribute("class", "pgm-monitor-overlay");
+      const monHint = document.createElement("div");
+      monHint.className = "pgm-monitor-hint";
+      monHint.textContent = T("focusHint");
+      monInner.append(monImg, monSvg);
+      monWrap.append(monInner, monHint);
+      monWrap.style.display = "none";
+      let monHover = -1;
+      const monSlots = () => (latestPipSlots || []).filter((s) => s.enabled);
+      // Oberster getroffener Slot in Mischer-Pixeln (höchstes z, bei Gleichstand der höhere Slot; Fokus liegt immer oben)
+      const monHit = (x, y) => {
+        let best = null;
+        for (const s of monSlots()) {
+          if (!s.pose || !s.pose.corners || !pointInQuad(s.pose.corners, x, y)) continue;
+          const z = s.focused ? 1e6 : s.z;
+          if (!best || z > best.z || (z === best.z && s.slot > best.slot)) best = { slot: s.slot, z };
+        }
+        return best ? best.slot : -1;
+      };
+      const monCoords = (ev) => {
+        const r = monInner.getBoundingClientRect();
+        return { x: ((ev.clientX - r.left) / r.width) * WIDTH, y: ((ev.clientY - r.top) / r.height) * HEIGHT };
+      };
+      const renderMonOverlay = () => {
+        monSvg.setAttribute("viewBox", `0 0 ${WIDTH} ${HEIGHT}`);
+        monSvg.textContent = "";
+        const ns = "http://www.w3.org/2000/svg";
+        for (const s of monSlots()) {
+          if (!s.pose || !s.pose.corners) continue;
+          const poly = document.createElementNS(ns, "polygon");
+          poly.setAttribute("points", s.pose.corners.map((p) => `${p[0]},${p[1]}`).join(" "));
+          poly.setAttribute("class", "mon-slot" + (s.focused ? " focused" : "") + (s.slot === monHover ? " hover" : ""));
+          monSvg.append(poly);
+        }
+      };
+      monInner.addEventListener("pointermove", (ev) => {
+        const { x, y } = monCoords(ev);
+        const hit = monHit(x, y);
+        if (hit !== monHover) { monHover = hit; renderMonOverlay(); }
+        monInner.style.cursor = hit >= 0 ? "pointer" : "default";
+      });
+      monInner.addEventListener("pointerleave", () => { if (monHover !== -1) { monHover = -1; renderMonOverlay(); } });
+      monInner.addEventListener("click", async (ev) => {
+        const { x, y } = monCoords(ev);
+        if (monHit(x, y) < 0) return;
+        await call("pip.clickAt", { x: Math.round(x), y: Math.round(y) });
+        setTimeout(() => this._refresh?.(), 150);
+        setTimeout(() => this._refresh?.(), 800);
+      });
+      const monUrl = () => {
+        const token = localStorage.getItem(STREAM_TOKEN_KEY);
+        const base = `/api/v1/nodes/${nodeId}/stream/${prefixed("pgmPreviewUrl")}`;
+        const withToken = token ? `${base}?access_token=${encodeURIComponent(token)}` : base;
+        return `${withToken}${withToken.includes("?") ? "&" : "?"}_=${Date.now()}`;
+      };
+      let monBusy = false;
+      const monTick = async () => {
+        if (monBusy || !monitorOn || !latestPgmPreview) return;
+        monBusy = true;
+        try {
+          const res = await fetch(monUrl(), { cache: "no-store" });
+          if (res.ok) {
+            const url = URL.createObjectURL(await res.blob());
+            const old = monImg.dataset.blobUrl;
+            monImg.src = url;
+            monImg.dataset.blobUrl = url;
+            if (old) URL.revokeObjectURL(old);
+          }
+        } catch { /* nächster Takt */ }
+        monBusy = false;
+      };
+      const renderMonitor = () => {
+        monGroup.style.display = latestPgmPreview ? "" : "none";
+        monBtn.active = monitorOn;
+        monWrap.style.display = monitorOn && latestPgmPreview ? "" : "none";
+        monInner.style.aspectRatio = `${WIDTH} / ${HEIGHT}`;
+        if (monitorOn && latestPgmPreview) {
+          renderMonOverlay();
+          if (!this._monTimers) this._monTimers = new Set();
+          if (!monImg._timer) {
+            monImg._timer = setInterval(monTick, 250);
+            this._monTimers.add(monImg._timer);
+            monTick();
+          }
+        } else if (monImg._timer) {
+          clearInterval(monImg._timer);
+          this._monTimers?.delete(monImg._timer);
+          monImg._timer = null;
+        }
+      };
+      monBtn.addEventListener("click", () => {
+        monitorOn = !monitorOn;
+        localStorage.setItem(MON_KEY, monitorOn ? "1" : "0");
+        renderMonitor();
+      });
+      toolbarRow.append(sourcesGroup, dskGroup, pipGroup, monGroup);
+      buses.append(pgmRow, pstRow, toolbarRow, monWrap);
 
       const transition = document.createElement("div");
       transition.className = "transition";
@@ -1400,6 +1601,8 @@ class OmpVideoMixerMePanel extends HTMLElement {
       let latestPipPresets = [];
       let latestActivePipPresetId = "";
       let latestPipEnabled = false;
+      let latestPipSlots = [];
+      let latestPgmPreview = false;
       let latestFreezes = [];
       let lastWorkflowOwnSenderIds = new Set();
       let lastOtherLevelSenderIds = new Set();
@@ -1562,42 +1765,37 @@ class OmpVideoMixerMePanel extends HTMLElement {
         bodyEl.append(pinnedSection, freezeSection, dskSection);
       });
 
-      // PIP-Editor (Nutzerauftrag 2026-09-04, s. Moduldoku) — `preset`
-      // ist entweder ein bestehendes Preset (Bearbeiten) oder `null`
-      // (Neuanlage mit `PIP_BOX_DEFAULT`).
-      const openPipEditor = (preset) => {
-        // `box` = Haltposition; `start`/`end` optional (null = nicht
-        // benutzt): nur Start = 2-Punkt (Rückfahrt nach Start), Start+Ende
-        // = 3-Punkt, keins = hartes Ein/Aus wie bisher.
-        const draft = preset
-          ? {
-              id: preset.id,
-              name: preset.name,
-              senderId: preset.senderId || "",
-              box: { ...preset.box },
-              start: preset.start ? { ...preset.start } : null,
-              end: preset.end ? { ...preset.end } : null,
-              inMs: preset.inMs > 0 ? preset.inMs : PIP_DEFAULT_MS,
-              outMs: preset.outMs > 0 ? preset.outMs : PIP_DEFAULT_MS,
-            }
-          : {
-              id: newPresetId(),
-              name: `PIP ${latestPipPresets.length + 1}`,
-              senderId: "",
-              box: { ...PIP_BOX_DEFAULT },
-              start: null,
-              end: null,
-              inMs: PIP_DEFAULT_MS,
-              outMs: PIP_DEFAULT_MS,
-            };
+      // PIP-Szenen-Editor (Kapitel 87): eine Szene = mehrere Slot-Einträge (Quelle, z, Fahrt Start→Halten→Ende,
+      // optionale Fokusposition). Jede Position ist ein Viereck ("quad": vier Ecken in Mischer-Pixeln, Reihenfolge
+      // oben-links, oben-rechts, unten-rechts, unten-links) — Rechteck, gedreht oder Trapez. `scene` ist eine
+      // bestehende Szene (Bearbeiten) oder `null` (Neuanlage).
+      const quadFromPose = (pose) => (pose.corners ? pose.corners.map((p) => [p[0], p[1]]) : quadFromBox(pose));
+      const slotInfo = (slot) => latestPipSlots.find((s) => s.slot === slot) || { slot, twoD: false };
+      const newEntry = (slot) => {
+        const w = Math.round(WIDTH / 3), h = Math.round(HEIGHT / 3);
+        const x = WIDTH - w - 16 - slot * Math.round(w * 0.15), y = HEIGHT - h - 16 - slot * Math.round(h * 0.4);
+        return { slot, senderId: "", hold: quadFromBox({ x, y: Math.max(0, y), width: w, height: h }), start: null, end: null, focus: null, inMs: PIP_DEFAULT_MS, outMs: PIP_DEFAULT_MS, z: 4 + slot };
+      };
+      const entryFromServer = (e) => ({
+        slot: e.slot ?? 0,
+        senderId: e.senderId || "",
+        hold: quadFromPose(e.pose),
+        start: e.start ? quadFromPose(e.start) : null,
+        end: e.end ? quadFromPose(e.end) : null,
+        focus: e.focus ? quadFromPose(e.focus) : null,
+        inMs: e.inMs > 0 ? e.inMs : PIP_DEFAULT_MS,
+        outMs: e.outMs > 0 ? e.outMs : PIP_DEFAULT_MS,
+        z: e.z ?? 4 + (e.slot ?? 0),
+      });
+      const openPipEditor = (scene) => {
+        const draft = scene
+          ? { id: scene.id, name: scene.name, entries: (scene.entries && scene.entries.length ? scene.entries : [{ slot: 0, senderId: scene.senderId, pose: scene.box, start: scene.start, end: scene.end, inMs: scene.inMs, outMs: scene.outMs }]).map(entryFromServer) }
+          : { id: newPresetId(), name: `PIP ${latestPipPresets.length + 1}`, entries: [newEntry(0)] };
+        let cur = 0; // gerade bearbeiteter Eintrag
+        let editing = "hold";
+        const entry = () => draft.entries[cur];
 
-        // `onClose` (statt nur `close`s Aufrufer) fängt JEDEN Schließweg
-        // ab — Backdrop-Klick/Escape rufen intern `close()` selbst auf,
-        // "Abbrechen"/"Speichern"/"Löschen" unten rufen das zurückgegebene
-        // `close` — beide Wege müssen die window-Listener unten abräumen.
-        const { bodyEl, close } = openModal(preset ? T("editTitle") : T("newTitle"), {
-          onClose: () => cleanup(),
-        });
+        const { bodyEl, close } = openModal(scene ? T("editTitle") : T("newTitle"), { onClose: () => cleanup() });
 
         const nameField = document.createElement("div");
         nameField.className = "field";
@@ -1609,6 +1807,41 @@ class OmpVideoMixerMePanel extends HTMLElement {
         nameInput.addEventListener("input", () => (draft.name = nameInput.value));
         nameField.append(nameLabel, nameInput);
 
+        // ── Slot-Reiter
+        const tabsRow = document.createElement("div");
+        tabsRow.className = "row pip-tabs";
+        const renderTabs = () => {
+          tabsRow.innerHTML = "";
+          draft.entries.forEach((e, i) => {
+            const wrap = document.createElement("span");
+            wrap.className = "pip-tab";
+            const b = document.createElement("button");
+            b.type = "button";
+            b.textContent = T("slotN", { n: e.slot + 1 });
+            b.classList.toggle("active", i === cur);
+            b.addEventListener("click", (ev) => { ev.preventDefault(); cur = i; if (!entry()[editing] && editing !== "hold") editing = "hold"; syncAll(); });
+            wrap.append(b);
+            if (draft.entries.length > 1) {
+              const x = document.createElement("button");
+              x.type = "button";
+              x.textContent = "×";
+              x.title = T("removeSlot");
+              x.addEventListener("click", (ev) => { ev.preventDefault(); draft.entries.splice(i, 1); cur = Math.min(cur, draft.entries.length - 1); editing = "hold"; syncAll(); });
+              wrap.append(x);
+            }
+            tabsRow.append(wrap);
+          });
+          const free = [...Array(Math.max(latestPipSlots.length, 1)).keys()].find((s) => !draft.entries.some((e) => e.slot === s));
+          const add = document.createElement("button");
+          add.type = "button";
+          add.textContent = "+";
+          add.title = T("addSlot");
+          add.disabled = free === undefined;
+          add.addEventListener("click", (ev) => { ev.preventDefault(); draft.entries.push(newEntry(free)); cur = draft.entries.length - 1; editing = "hold"; syncAll(); });
+          tabsRow.append(add);
+        };
+
+        // ── Quelle + Ebene (z)
         const sourceField = document.createElement("div");
         sourceField.className = "field";
         const sourceLabel = document.createElement("label");
@@ -1616,11 +1849,20 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const pstEntries = Array.from({ length: levelCount }, (_, k) => ({ senderId: `pst:${k + 1}`, label: levelCount > 1 ? T("pstOfLevel", { n: k + 1 }) : "PST", virtual: true }));
         const pipInputEntries = pstEntries.concat(latestInputs.map((i) => ({ label: i.mismatch ? `⚠ ${shortLabel(i.label)} (${i.format})` : shortLabel(i.label), senderId: i.senderId })));
         const sourceSelect = buildSourceSelector(pipInputEntries, T("black"));
-        sourceSelect.value = draft.senderId;
-        sourceSelect.addEventListener("change", () => (draft.senderId = sourceSelect.value));
-        sourceField.append(sourceLabel, sourceSelect);
+        sourceSelect.addEventListener("change", () => (entry().senderId = sourceSelect.value));
+        const zWrap = document.createElement("label");
+        zWrap.className = "pip-ms";
+        zWrap.title = T("zTitle");
+        zWrap.append(document.createTextNode(T("zLabel") + " "));
+        const zInput = document.createElement("input");
+        zInput.type = "number";
+        zInput.min = "0";
+        zInput.max = "99";
+        zInput.addEventListener("input", () => (entry().z = clamp(parseInt(zInput.value, 10) || 0, 0, 99)));
+        zWrap.append(zInput);
+        sourceField.append(sourceLabel, sourceSelect, zWrap);
 
-        // ── Punkte-Auswahl: Start/Ende optional zuschaltbar, "Halten" immer.
+        // ── Punkte: Start/Ende/Fokus optional zuschaltbar, "Halten" immer
         const pointsField = document.createElement("div");
         pointsField.className = "field";
         const pointsLabel = document.createElement("label");
@@ -1629,10 +1871,10 @@ class OmpVideoMixerMePanel extends HTMLElement {
         pointRow.className = "row pip-points";
         const POINTS = [
           { key: "start", text: T("ptStart"), color: "#4285f4", optional: true },
-          { key: "box", text: T("ptHold"), color: "#43a047", optional: false },
+          { key: "hold", text: T("ptHold"), color: "#43a047", optional: false },
           { key: "end", text: T("ptEnd"), color: "#fb8c00", optional: true },
+          { key: "focus", text: T("ptFocus"), color: "#ab47bc", optional: true },
         ];
-        let editing = "box";
         const pointEls = new Map();
         for (const pt of POINTS) {
           const wrap = document.createElement("label");
@@ -1642,16 +1884,15 @@ class OmpVideoMixerMePanel extends HTMLElement {
           if (pt.optional) {
             toggle = document.createElement("input");
             toggle.type = "checkbox";
-            toggle.checked = !!draft[pt.key];
             toggle.title = T("usePosition", { text: pt.text });
             toggle.addEventListener("change", () => {
+              const e = entry();
               if (toggle.checked) {
-                // Neuer Punkt startet als Kopie der Haltposition, knapp außerhalb des Bildes.
-                draft[pt.key] = { ...draft.box, x: pt.key === "start" ? WIDTH : -draft.box.width };
+                e[pt.key] = pt.key === "focus" ? quadFromBox(focusBox()) : moveQuad(e.hold, pt.key === "start" ? WIDTH - boundsOf(e.hold).x : -boundsOf(e.hold).x - boundsOf(e.hold).width, 0);
                 editing = pt.key;
               } else {
-                draft[pt.key] = null;
-                if (editing === pt.key) editing = "box";
+                e[pt.key] = null;
+                if (editing === pt.key) editing = "hold";
               }
               syncPoints();
             });
@@ -1660,20 +1901,16 @@ class OmpVideoMixerMePanel extends HTMLElement {
           const btn = document.createElement("button");
           btn.type = "button";
           btn.textContent = pt.text;
-          btn.addEventListener("click", (ev) => {
-            ev.preventDefault();
-            if (!draft[pt.key]) return;
-            editing = pt.key;
-            syncPoints();
-          });
+          btn.addEventListener("click", (ev) => { ev.preventDefault(); if (!entry()[pt.key]) return; editing = pt.key; syncPoints(); });
           wrap.append(btn);
           pointRow.append(wrap);
           pointEls.set(pt.key, { wrap, btn, toggle });
         }
         const hint = document.createElement("p");
         hint.className = "empty";
+        pointsField.append(pointsLabel, pointRow, hint);
 
-        // Ein-/Ausfahrdauer (nur sichtbar, wenn Start bzw. Ende/Start existiert).
+        // Ein-/Ausfahrdauer
         const timingRow = document.createElement("div");
         timingRow.className = "row";
         const makeMsInput = (labelText, key) => {
@@ -1685,16 +1922,43 @@ class OmpVideoMixerMePanel extends HTMLElement {
           input.min = "0";
           input.max = "60000";
           input.step = "50";
-          input.value = String(draft[key]);
-          input.addEventListener("input", () => (draft[key] = clamp(parseInt(input.value, 10) || 0, 0, 60000)));
+          input.addEventListener("input", () => (entry()[key] = clamp(parseInt(input.value, 10) || 0, 0, 60000)));
           wrap.append(input, document.createTextNode(" ms"));
-          return wrap;
+          return { wrap, input };
         };
-        const inMsWrap = makeMsInput(T("slideIn"), "inMs");
-        const outMsWrap = makeMsInput(T("slideOut"), "outMs");
-        timingRow.append(inMsWrap, outMsWrap);
+        const inMs = makeMsInput(T("slideIn"), "inMs");
+        const outMs = makeMsInput(T("slideOut"), "outMs");
+        timingRow.append(inMs.wrap, outMs.wrap);
 
-        // Randstart-Schnellwahl für den gerade bearbeiteten Start/Ende-Punkt.
+        // 2D: Drehung + Ecken (nur Slots mit Transform-Element)
+        const twoDRow = document.createElement("div");
+        twoDRow.className = "row pip-2d";
+        const rotWrap = document.createElement("label");
+        rotWrap.className = "pip-ms";
+        rotWrap.append(document.createTextNode(T("rotation") + " "));
+        const rotInput = document.createElement("input");
+        rotInput.type = "number";
+        rotInput.min = "-180";
+        rotInput.max = "180";
+        rotInput.step = "1";
+        rotInput.addEventListener("input", () => {
+          const q = entry()[editing];
+          if (!q) return;
+          const want = clamp(parseFloat(rotInput.value) || 0, -180, 180);
+          entry()[editing] = rotateQuad(q, want - quadAngle(q));
+          renderBoxes();
+        });
+        rotWrap.append(rotInput, document.createTextNode(" °"));
+        const resetCorners = document.createElement("button");
+        resetCorners.type = "button";
+        resetCorners.textContent = T("resetCorners");
+        resetCorners.title = T("resetCornersTitle");
+        resetCorners.addEventListener("click", (ev) => { ev.preventDefault(); const q = entry()[editing]; if (!q) return; entry()[editing] = quadFromBox(boundsOf(q)); syncPoints(); });
+        const twoDHint = document.createElement("span");
+        twoDHint.className = "pip-edge-label";
+        twoDRow.append(rotWrap, resetCorners, twoDHint);
+
+        // Randstart-Schnellwahl für Start/Ende
         const edgeRow = document.createElement("div");
         edgeRow.className = "row";
         const edgeLabel = document.createElement("span");
@@ -1702,10 +1966,10 @@ class OmpVideoMixerMePanel extends HTMLElement {
         edgeLabel.textContent = T("outside");
         edgeRow.append(edgeLabel);
         const EDGES = [
-          [T("edgeLeft"), (b) => ({ ...b, x: -b.width })],
-          [T("edgeRight"), (b) => ({ ...b, x: WIDTH })],
-          [T("edgeTop"), (b) => ({ ...b, y: -b.height })],
-          [T("edgeBottom"), (b) => ({ ...b, y: HEIGHT })],
+          [T("edgeLeft"), (q) => moveQuad(q, -boundsOf(q).x - boundsOf(q).width, 0)],
+          [T("edgeRight"), (q) => moveQuad(q, WIDTH - boundsOf(q).x, 0)],
+          [T("edgeTop"), (q) => moveQuad(q, 0, -boundsOf(q).y - boundsOf(q).height)],
+          [T("edgeBottom"), (q) => moveQuad(q, 0, HEIGHT - boundsOf(q).y)],
         ];
         for (const [text, fn] of EDGES) {
           const eb = document.createElement("button");
@@ -1713,15 +1977,14 @@ class OmpVideoMixerMePanel extends HTMLElement {
           eb.textContent = text;
           eb.addEventListener("click", (ev) => {
             ev.preventDefault();
-            if (editing === "box" || !draft[editing]) return;
-            draft[editing] = fn(draft[editing]);
+            if (editing === "hold" || editing === "focus" || !entry()[editing]) return;
+            entry()[editing] = fn(entry()[editing]);
             renderBoxes();
           });
           edgeRow.append(eb);
         }
-        pointsField.append(pointsLabel, pointRow, hint);
 
-        // ── Canvas mit Rand ("Stage"): Bild = umrandetes Rechteck in der Mitte.
+        // ── Bühne: Bild = umrandetes Rechteck in der Mitte, Rand für Positionen außerhalb
         const editorField = document.createElement("div");
         editorField.className = "field";
         const canvasOuter = document.createElement("div");
@@ -1741,131 +2004,148 @@ class OmpVideoMixerMePanel extends HTMLElement {
         frame.style.width = `${Math.round(WIDTH * scale)}px`;
         frame.style.height = `${Math.round(HEIGHT * scale)}px`;
         const svgNs = "http://www.w3.org/2000/svg";
-        const path = document.createElementNS(svgNs, "svg");
-        path.setAttribute("class", "pip-editor-path");
-        path.setAttribute("width", String(PIP_EDITOR_WIDTH));
-        path.setAttribute("height", String(stageHeight));
+        const svg = document.createElementNS(svgNs, "svg");
+        svg.setAttribute("class", "pip-editor-svg");
+        svg.setAttribute("width", String(PIP_EDITOR_WIDTH));
+        svg.setAttribute("height", String(stageHeight));
         const pathLine = document.createElementNS(svgNs, "polyline");
-        path.append(pathLine);
-        canvas.append(frame, path);
-
-        const boxEls = new Map();
+        pathLine.setAttribute("class", "pip-editor-pathline");
+        svg.append(pathLine);
+        const mk = (name, attrs) => { const el = document.createElementNS(svgNs, name); for (const k in attrs) el.setAttribute(k, attrs[k]); return el; };
+        const shapes = new Map();
         for (const pt of POINTS) {
-          const boxEl = document.createElement("div");
-          boxEl.className = "pip-editor-box";
-          boxEl.style.setProperty("--pt", pt.color);
-          const tag = document.createElement("span");
-          tag.className = "pip-editor-tag";
-          tag.textContent = pt.text;
-          const handle = document.createElement("div");
-          handle.className = "pip-editor-resize";
-          boxEl.append(tag, handle);
-          canvas.append(boxEl);
-          boxEls.set(pt.key, { boxEl, handle });
+          const g = mk("g", { class: "pip-shape" });
+          const poly = mk("polygon", { fill: pt.color, "fill-opacity": "0.3", stroke: pt.color, "stroke-width": "1.5" });
+          const label = mk("text", { fill: "#fff", "font-size": "9", "pointer-events": "none" });
+          label.textContent = pt.text;
+          const resize = mk("rect", { width: "10", height: "10", fill: pt.color, stroke: "#fff", "stroke-width": "1", style: "cursor:nwse-resize" });
+          const corners = [0, 1, 2, 3].map(() => mk("circle", { r: "5", fill: "#fff", stroke: pt.color, "stroke-width": "2", style: "cursor:crosshair" }));
+          g.append(poly, label, resize, ...corners);
+          svg.append(g);
+          shapes.set(pt.key, { g, poly, label, resize, corners });
         }
+        canvas.append(frame, svg);
         canvasOuter.append(canvas);
         const editorLabel = document.createElement("label");
         editorLabel.textContent = T("editorHint");
         editorField.append(editorLabel, canvasOuter, edgeRow);
 
-        const toStage = (v, margin) => Math.round((v + margin) * scale);
-        const renderBoxes = () => {
+        const sx = (v) => Math.round((v + marginX) * scale);
+        const sy = (v) => Math.round((v + marginY) * scale);
+        const twoDOk = () => !!slotInfo(entry().slot).twoD;
+        function renderBoxes() {
+          const e = entry();
           const centers = [];
           for (const pt of POINTS) {
-            const b = draft[pt.key];
-            const { boxEl, handle } = boxEls.get(pt.key);
-            boxEl.style.display = b ? "" : "none";
-            if (!b) continue;
-            boxEl.style.left = `${toStage(b.x, marginX)}px`;
-            boxEl.style.top = `${toStage(b.y, marginY)}px`;
-            boxEl.style.width = `${Math.round(b.width * scale)}px`;
-            boxEl.style.height = `${Math.round(b.height * scale)}px`;
-            boxEl.classList.toggle("active", editing === pt.key);
-            handle.style.display = editing === pt.key ? "" : "none";
-            centers.push(`${toStage(b.x + b.width / 2, marginX)},${toStage(b.y + b.height / 2, marginY)}`);
+            const q = e[pt.key];
+            const s = shapes.get(pt.key);
+            s.g.style.display = q ? "" : "none";
+            if (!q) continue;
+            const active = editing === pt.key;
+            s.g.style.opacity = active ? "1" : "0.55";
+            s.poly.setAttribute("points", q.map((p) => `${sx(p[0])},${sy(p[1])}`).join(" "));
+            s.poly.style.cursor = "move";
+            s.label.setAttribute("x", String(sx(q[0][0]) + 3));
+            s.label.setAttribute("y", String(sy(q[0][1]) + 11));
+            const b = boundsOf(q);
+            s.resize.style.display = active && !(twoDOk() && !isRect(q)) ? "" : "none";
+            s.resize.setAttribute("x", String(sx(b.x + b.width) - 5));
+            s.resize.setAttribute("y", String(sy(b.y + b.height) - 5));
+            s.corners.forEach((c, i) => {
+              c.style.display = active && twoDOk() ? "" : "none";
+              c.setAttribute("cx", String(sx(q[i][0])));
+              c.setAttribute("cy", String(sy(q[i][1])));
+            });
+            if (pt.key !== "focus") centers.push(`${sx(b.x + b.width / 2)},${sy(b.y + b.height / 2)}`);
           }
           pathLine.setAttribute("points", centers.join(" "));
-        };
-        // Halten: komplett im Bild; Start/Ende: beliebig bis vollständig außerhalb.
+          const q = e[editing];
+          if (q && document.activeElement !== rotInput) rotInput.value = String(Math.round(quadAngle(q)));
+        }
+        // Halten: komplett im Bild; Start/Ende/Fokus: bis vollständig außerhalb des Bildes.
         const limits = (key, b) => {
-          if (key === "box") return { minX: 0, maxX: Math.max(0, WIDTH - b.width), minY: 0, maxY: Math.max(0, HEIGHT - b.height) };
-          // Start/Ende dürfen komplett außerhalb des Bildes liegen (Einfliegen von außen).
+          if (key === "hold" || key === "focus") return { minX: 0, maxX: Math.max(0, WIDTH - b.width), minY: 0, maxY: Math.max(0, HEIGHT - b.height) };
           return { minX: -b.width, maxX: WIDTH, minY: -b.height, maxY: HEIGHT };
         };
-        const syncPoints = () => {
+        function syncPoints() {
+          const e = entry();
           for (const pt of POINTS) {
             const el = pointEls.get(pt.key);
-            const on = !!draft[pt.key];
+            const on = !!e[pt.key];
             el.btn.disabled = !on;
             el.btn.classList.toggle("active", editing === pt.key);
             if (el.toggle) el.toggle.checked = on;
           }
-          const hasExit = !!(draft.end || draft.start);
-          inMsWrap.style.display = draft.start ? "" : "none";
-          outMsWrap.style.display = hasExit ? "" : "none";
-          edgeRow.style.display = editing === "box" ? "none" : "";
-          hint.textContent = !draft.start && !draft.end
-            ? T("hint0")
-            : draft.start && draft.end
-              ? T("hint3")
-              : draft.start
-                ? T("hint2s")
-                : T("hint2e");
+          const hasExit = !!(e.end || e.start);
+          inMs.wrap.style.display = e.start ? "" : "none";
+          outMs.wrap.style.display = hasExit ? "" : "none";
+          inMs.input.value = String(e.inMs);
+          outMs.input.value = String(e.outMs);
+          edgeRow.style.display = editing === "hold" || editing === "focus" ? "none" : "";
+          twoDRow.style.display = "";
+          rotInput.disabled = !twoDOk();
+          resetCorners.disabled = !twoDOk();
+          twoDHint.textContent = twoDOk() ? T("twoDHint") : T("noTwoD");
+          hint.textContent = !e.start && !e.end ? T("hint0") : e.start && e.end ? T("hint3") : e.start ? T("hint2s") : T("hint2e");
           renderBoxes();
-        };
+        }
+        function syncAll() {
+          renderTabs();
+          const e = entry();
+          sourceSelect.value = e.senderId;
+          zInput.value = String(e.z);
+          syncPoints();
+        }
 
-        // Drag/Resize — gleiches Muster wie nodes/omp-multiviewer-custom/ui/
-        // bundle.js#_onPipPointerDown/_onPointerMove/_onPointerUp, hier mit
-        // bis zu drei Boxen; Pointerdown auf eine Box wählt sie zugleich aus.
-        // Listener nur, solange dieses Modal offen ist (`cleanup` unten).
+        // Ziehen: Verschieben (Fläche), Skalieren (Griff unten rechts), Ecke ziehen (Kreise, nur 2D-Slots)
         let drag = null;
-        const onPointerDown = (key, mode) => (ev) => {
+        const onDown = (key, mode, idx) => (ev) => {
           ev.preventDefault();
           ev.stopPropagation();
-          if (editing !== key) {
-            editing = key;
-            syncPoints();
-          }
-          const b = draft[key];
-          drag = { key, mode, sx: ev.clientX, sy: ev.clientY, x: b.x, y: b.y, w: b.width, h: b.height };
+          if (editing !== key) { editing = key; syncPoints(); }
+          drag = { key, mode, idx, sx: ev.clientX, sy: ev.clientY, q0: entry()[key].map((p) => [p[0], p[1]]) };
         };
-        const onPointerMove = (ev) => {
+        const onMove = (ev) => {
           if (!drag) return;
-          const b = draft[drag.key];
           const dx = Math.round((ev.clientX - drag.sx) / scale);
           const dy = Math.round((ev.clientY - drag.sy) / scale);
+          const e = entry();
+          const b0 = boundsOf(drag.q0);
           if (drag.mode === "move") {
-            const lim = limits(drag.key, b);
-            b.x = clamp(drag.x + dx, lim.minX, lim.maxX);
-            b.y = clamp(drag.y + dy, lim.minY, lim.maxY);
+            const lim = limits(drag.key, b0);
+            e[drag.key] = moveQuad(drag.q0, clamp(b0.x + dx, lim.minX, lim.maxX) - b0.x, clamp(b0.y + dy, lim.minY, lim.maxY) - b0.y);
+          } else if (drag.mode === "resize") {
+            const hard = drag.key === "hold" || drag.key === "focus";
+            const maxW = (hard ? WIDTH : WIDTH + marginX) - b0.x;
+            const maxH = (hard ? HEIGHT : HEIGHT + marginY) - b0.y;
+            const nw = clamp(b0.width + dx, PIP_MIN_SIZE, Math.max(PIP_MIN_SIZE, maxW));
+            const nh = clamp(b0.height + dy, PIP_MIN_SIZE, Math.max(PIP_MIN_SIZE, maxH));
+            e[drag.key] = drag.q0.map((p) => [b0.x + (p[0] - b0.x) * (nw / b0.width), b0.y + (p[1] - b0.y) * (nh / b0.height)]);
           } else {
-            const maxW = (drag.key === "box" ? WIDTH : WIDTH + marginX) - b.x;
-            const maxH = (drag.key === "box" ? HEIGHT : HEIGHT + marginY) - b.y;
-            b.width = clamp(drag.w + dx, PIP_MIN_SIZE, Math.max(PIP_MIN_SIZE, maxW));
-            b.height = clamp(drag.h + dy, PIP_MIN_SIZE, Math.max(PIP_MIN_SIZE, maxH));
+            const q = drag.q0.map((p) => [p[0], p[1]]);
+            q[drag.idx] = [clamp(drag.q0[drag.idx][0] + dx, -marginX, WIDTH + marginX), clamp(drag.q0[drag.idx][1] + dy, -marginY, HEIGHT + marginY)];
+            e[drag.key] = q;
           }
           renderBoxes();
         };
-        const onPointerUp = () => {
-          drag = null;
-        };
+        const onUp = () => { drag = null; };
         for (const pt of POINTS) {
-          const { boxEl, handle } = boxEls.get(pt.key);
-          boxEl.addEventListener("pointerdown", onPointerDown(pt.key, "move"));
-          handle.addEventListener("pointerdown", onPointerDown(pt.key, "resize"));
+          const s = shapes.get(pt.key);
+          s.poly.addEventListener("pointerdown", onDown(pt.key, "move"));
+          s.resize.addEventListener("pointerdown", onDown(pt.key, "resize"));
+          s.corners.forEach((c, i) => c.addEventListener("pointerdown", onDown(pt.key, "corner", i)));
         }
-        window.addEventListener("pointermove", onPointerMove);
-        window.addEventListener("pointerup", onPointerUp);
-        syncPoints();
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
 
         const actions = document.createElement("div");
         actions.className = "actions";
-        if (preset) {
+        if (scene) {
           const deleteBtn = document.createElement("omp-button");
           deleteBtn.textContent = T("delete");
           deleteBtn.addEventListener("click", async () => {
-            if (!(await confirmDialog(T("confirmDelete", { name: preset.name }), T("delete")))) return;
-            await call("pip.deletePreset", { id: preset.id });
+            if (!(await confirmDialog(T("confirmDelete", { name: scene.name }), T("delete")))) return;
+            await call("pip.deletePreset", { id: scene.id });
             close();
           });
           actions.append(deleteBtn);
@@ -1875,70 +2155,49 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const cancelBtn = document.createElement("omp-button");
         cancelBtn.textContent = T("cancel");
         cancelBtn.addEventListener("click", close);
-        // Gemeinsame Speicherroutine: "Nur speichern" legt das Preset an/aktualisiert es,
-        // ohne es zu aktivieren (nichts geht on air); "Speichern & Anzeigen" fährt es danach ein.
+        const poseJson = (q, slot) => {
+          // Slots ohne Transform-Element können nur Rechtecke: das umschließende Rechteck wird gespeichert.
+          const use = slotInfo(slot).twoD ? q : quadFromBox(boundsOf(q));
+          return { corners: use.map((p) => [Math.round(p[0] * 100) / 100, Math.round(p[1] * 100) / 100]) };
+        };
         const savePreset = async () => {
           const name = draft.name.trim() || `PIP ${latestPipPresets.length + 1}`;
-          const args = {
-            id: draft.id,
-            name,
-            senderId: draft.senderId,
-            x: draft.box.x,
-            y: draft.box.y,
-            width: draft.box.width,
-            height: draft.box.height,
-            inMs: draft.start ? draft.inMs : 0,
-            outMs: draft.end || draft.start ? draft.outMs : 0,
-          };
-          for (const key of ["start", "end"]) {
-            const b = draft[key];
-            if (!b) continue;
-            args[`${key}X`] = b.x;
-            args[`${key}Y`] = b.y;
-            args[`${key}Width`] = b.width;
-            args[`${key}Height`] = b.height;
-          }
-          await call("pip.savePreset", args);
+          const entries = draft.entries.map((e) => ({
+            slot: e.slot,
+            senderId: e.senderId,
+            pose: poseJson(e.hold, e.slot),
+            start: e.start ? poseJson(e.start, e.slot) : null,
+            end: e.end ? poseJson(e.end, e.slot) : null,
+            focus: e.focus ? poseJson(e.focus, e.slot) : null,
+            inMs: e.start ? e.inMs : 0,
+            outMs: e.end || e.start ? e.outMs : 0,
+            z: e.z,
+          }));
+          await call("pip.savePreset", { id: draft.id, name, entries: JSON.stringify(entries) });
         };
         const saveOnlyBtn = document.createElement("omp-button");
         saveOnlyBtn.textContent = T("saveOnly");
         saveOnlyBtn.title = T("saveOnlyTitle");
-        saveOnlyBtn.addEventListener("click", async () => {
-          await savePreset();
-          close();
-        });
+        saveOnlyBtn.addEventListener("click", async () => { await savePreset(); close(); });
         const saveBtn = document.createElement("omp-button");
         saveBtn.textContent = T("saveShow");
         saveBtn.title = T("saveShowTitle");
-        saveBtn.addEventListener("click", async () => {
-          await savePreset();
-          // applyPreset setzt die Box auf Start zurück und fährt die Einfahrt
-          // erneut (auch wenn das Preset schon aktiv war).
-          await call("pip.applyPreset", { id: draft.id });
-          close();
-        });
+        saveBtn.addEventListener("click", async () => { await savePreset(); await call("pip.applyPreset", { id: draft.id }); close(); });
         actions.append(spacer, cancelBtn, saveOnlyBtn, saveBtn);
 
-        bodyEl.append(nameField, sourceField, pointsField, timingRow, editorField, actions);
-
-        // Läuft über `openModal`s `onClose`-Hook oben, egal auf welchem
-        // Weg das Modal schließt (Backdrop/Escape/✕/Abbrechen/Speichern/
-        // Löschen) — sonst blieben die window-Listener nach dem
-        // Schließen aktiv (Leck + Doppel-Drag beim nächsten Öffnen).
+        bodyEl.append(nameField, tabsRow, sourceField, pointsField, timingRow, twoDRow, editorField, actions);
+        syncAll();
         const cleanup = () => {
-          window.removeEventListener("pointermove", onPointerMove);
-          window.removeEventListener("pointerup", onPointerUp);
+          window.removeEventListener("pointermove", onMove);
+          window.removeEventListener("pointerup", onUp);
         };
       };
 
       pipAddBtn.addEventListener("click", () => openPipEditor(null));
 
       // Mischer-Auflösung für die Szenen-Miniatur (aus dem Formattext der Quellen, sonst 1280x720).
-      const mixerSize = () => {
-        const m = /(\d+)\D+(\d+)/.exec(latestInputs.find((i) => i.mixerFormat)?.mixerFormat || "");
-        return m ? { w: +m[1], h: +m[2] } : { w: 1280, h: 720 };
-      };
-      // Miniatur einer PIP-Szene: Rahmen = Bild, grüne Fläche = Haltposition, gestrichelt = Start/Ende der Fahrt.
+      const mixerSize = () => ({ w: WIDTH, h: HEIGHT });
+      // Miniatur einer PIP-Szene: Rahmen = Bild, grüne Flächen = Haltepositionen aller Slots, gestrichelt = Fahrt-Positionen.
       const pipSceneThumb = (preset) => {
         const { w, h } = mixerSize();
         const wrap = document.createElement("div");
@@ -1953,9 +2212,12 @@ class OmpVideoMixerMePanel extends HTMLElement {
           el.style.height = `${(b.height / h) * 100}%`;
           wrap.append(el);
         };
-        addBox(preset.start, true);
-        addBox(preset.end, true);
-        addBox(preset.box, false);
+        const entries = preset.entries && preset.entries.length ? preset.entries : [{ pose: preset.box, start: preset.start, end: preset.end }];
+        for (const e of entries) {
+          addBox(e.start, true);
+          addBox(e.end, true);
+        }
+        for (const e of entries) addBox(e.pose, false);
         return wrap;
       };
       const renderPipRow = () => {
@@ -1993,7 +2255,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const [
           inputsRes, programRes, presetRes, keyerRes, keyerInputsRes, keyerSourceRes,
           pipEnabledRes, pipPresetsRes, pipActivePresetRes, pinnedRes, transRateRes, transitionPositionRes,
-          transTypeRes, swapRes,
+          transTypeRes, swapRes, pipSlotsRes, pipCanvasRes, pgmPreviewRes,
         ] = await Promise.all([
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.inputs")}`),
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.programInput")}`),
@@ -2009,6 +2271,9 @@ class OmpVideoMixerMePanel extends HTMLElement {
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.transitionPosition")}`),
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.transType")}`),
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.swapOnTransition")}`),
+          fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("pip.slots")}`),
+          fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("pip.canvas")}`),
+          fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("pgmPreviewUrl")}`),
         ]);
         if (!inputsRes.ok || !programRes.ok || !presetRes.ok) return;
         try {
@@ -2023,6 +2288,13 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const keyerSource = keyerSourceRes.ok ? (await keyerSourceRes.json()).value || "" : "";
         latestPipEnabled = pipEnabledRes.ok ? (await pipEnabledRes.json()).value === true : false;
         latestPipPresets = pipPresetsRes.ok ? (await pipPresetsRes.json()).value || [] : [];
+        if (pipCanvasRes.ok) {
+          const cv = (await pipCanvasRes.json()).value || {};
+          setCanvas(cv.width, cv.height);
+        }
+        latestPipSlots = pipSlotsRes.ok ? (await pipSlotsRes.json()).value || [] : [];
+        latestPgmPreview = pgmPreviewRes.ok ? !!(await pgmPreviewRes.json()).value : false;
+        renderMonitor();
         latestActivePipPresetId = pipActivePresetRes.ok ? (await pipActivePresetRes.json()).value || "" : "";
         const pinned = pinnedRes.ok ? (await pinnedRes.json()).value || [] : [];
         const transRateFrames = transRateRes.ok ? (await transRateRes.json()).value || 0 : 0;
@@ -2106,6 +2378,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
             pipEnabled: latestPipEnabled,
             pipPresets: (latestPipPresets || []).map((p) => ({ id: p.id, name: p.name || p.id })),
             activePip: latestActivePipPresetId,
+            pipSlots: (latestPipSlots || []).map((sl) => ({ slot: sl.slot, enabled: !!sl.enabled, focused: !!sl.focused })),
             transType: latestTransType,
             transRate: transRateFrames,
           };
@@ -2358,6 +2631,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
 
   disconnectedCallback() {
     clearInterval(this._interval);
+    for (const t of this._monTimers || []) clearInterval(t);
     if (this._es) this._es.close();
   }
 }

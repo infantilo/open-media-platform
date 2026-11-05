@@ -468,7 +468,8 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
 - **omp-video-mixer-me** — video mixer (configurable number of M/E
   levels via `OMP_ME_LEVELS`, default 1; each level with its own
   program/preset bus and output, shared source pool; cut, crossfade,
-  picture-in-picture, downstream keyer). Carries a frame-accurate
+  several picture-in-picture slots per level with scenes, layer order,
+  rotation/trapezoid and click-to-focus in the PGM monitor, downstream keyer). Carries a frame-accurate
   SMPTE ST 12-2 timecode output per level (the timecode of the input on
   programme, measured at 0 frames offset to the picture)
 - **omp-audio-mixer** — broadcast audio console: per-channel HPF + 4-band

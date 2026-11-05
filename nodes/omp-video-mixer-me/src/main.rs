@@ -27,7 +27,12 @@
 //! domänen-Eigene") korrekt, kein Standard wird dupliziert.
 
 mod freeze;
+mod monitor;
+mod pip;
+#[cfg(test)]
+mod pip_live_test;
 mod pipeline;
+mod pipstate;
 mod tc;
 #[cfg(test)]
 mod tc_probe;
@@ -45,66 +50,21 @@ use omp_node_sdk::{
     Descriptor, InvokeError, LatencyInfo, LatencyRange, MethodArg, MethodSpec, NodeConfig,
     ParamSpec, ParamStore, ParamType, RawResponse, SenderSpec, SetError,
 };
+use pip::PipPose;
 use pipeline::{DEFAULT_TRANS_RATE_FRAMES, DiscoveredInput, DiscoveredKeyFill, DveBox, TransKind};
+use pipstate::{LevelPips, PipEntry, PipPreset};
 use serde_json::Value;
 
-/// PIP-Preset (`docs/END-GOAL-FEATURES.md` §3.4-Nachfolger, Nutzerauftrag
-/// 2026-09-04: "PIP-Editor... als PIP-Preset abspeichern... für jedes
-/// Preset einen 'Mixer'-Button"): reine `MixerStore`-Buchführung, KEINE
-/// eigene Pipeline-Mechanik — `pip.applyPreset` ruft nur nacheinander die
-/// bereits bestehenden `pip.setSource`/`dve.setBox`/`pip.setEnabled`-Pfade
-/// auf (s. `level_invoke`). `id` wird clientseitig erzeugt (`bundle.js`,
-/// `crypto.randomUUID()`) — der Server verwaltet nur eine Liste, kein
-/// eigenes ID-Schema nötig. Kein `serde::Serialize`-Derive (kein
-/// `serde`-Derive-Dependency in diesem Crate, s. Cargo.toml) — JSON wird
-/// wie überall sonst hier per `serde_json::json!` von Hand gebaut
-/// (`level_get`s "pip.presets"-Zweig).
-#[derive(Debug, Clone)]
-struct PipPreset {
-    id: String,
-    name: String,
-    sender_id: Option<String>,
-    /// Haltposition ("Preset-Box").
-    box_: DveBox,
-    /// Optionale Startposition (PIP fährt beim Einschalten von hier nach
-    /// `box_`) und Endposition (beim Ausschalten fährt es von `box_` dorthin).
-    /// Nur Start gesetzt = 2-Punkt (Rückfahrt nach Start), Start+Ende = 3-Punkt,
-    /// keins von beiden = wie bisher hartes Ein/Aus.
-    start: Option<DveBox>,
-    end: Option<DveBox>,
-    in_ms: u32,
-    out_ms: u32,
-}
-
-impl PipPreset {
-    /// Ziel der Ausfahrt (`end`, sonst `start`), `None` = kein Ausfahren.
-    fn exit_box(&self) -> Option<DveBox> {
-        self.end.or(self.start)
-    }
-}
-
-fn box_json(b: &DveBox) -> Value {
-    serde_json::json!({"x": b.x, "y": b.y, "width": b.width, "height": b.height})
-}
-
-fn opt_box_json(b: &Option<DveBox>) -> Value {
-    b.as_ref().map_or(Value::Null, box_json)
-}
-
-fn box_from_json(b: &Value) -> Option<DveBox> {
-    Some(DveBox {
-        x: b.get("x")?.as_f64()? as i32,
-        y: b.get("y")?.as_f64()? as i32,
-        width: b.get("width")?.as_f64()? as i32,
-        height: b.get("height")?.as_f64()? as i32,
-    })
-}
-
-/// Optionale Box aus flachen Methoden-Argumenten `<prefix>X/Y/Width/Height`
-/// (alle vier oder keins).
-fn opt_box_args(args: &serde_json::Map<String, Value>, prefix: &str) -> Option<DveBox> {
+/// Optionale Box aus flachen Methoden-Argumenten `<prefix>X/Y/Width/Height` (alle vier oder keins) — Altformat von
+/// `pip.savePreset`; die Szenen-Logik selbst steht in `pipstate.rs`.
+fn opt_box_args(args: &serde_json::Map<String, Value>, prefix: &str) -> Option<PipPose> {
     let num = |suffix: &str| args.get(&format!("{prefix}{suffix}")).and_then(Value::as_f64).map(|v| v as i32);
-    Some(DveBox { x: num("X")?, y: num("Y")?, width: num("Width")?, height: num("Height")? })
+    Some(PipPose::from_box(&DveBox { x: num("X")?, y: num("Y")?, width: num("Width")?, height: num("Height")? }))
+}
+
+/// Slot-Argument (0-basiert); fehlt es, gilt Slot 0 (alte Aufrufer kennen keine Slots).
+fn slot_arg(args: &serde_json::Map<String, Value>) -> Option<usize> {
+    args.get("slot").and_then(Value::as_f64).filter(|v| v.is_finite() && *v >= 0.0).map(|v| v as usize)
 }
 
 /// Kapitel 15 Teil 3 (Rest 2, docs/END-GOAL-FEATURES.md §15.3b/§15.4):
@@ -143,7 +103,6 @@ struct MixerStore {
     sender_ids: Vec<String>,
     program: PerLevel<Option<String>>,
     preset: PerLevel<Option<String>>,
-    dve_box: PerLevel<DveBox>,
     keyer_enabled: PerLevel<bool>,
     /// Geteilt wie `inputs` — dieselben Fill+Key-Kandidaten stehen jeder
     /// Ebene zur Auswahl.
@@ -152,8 +111,10 @@ struct MixerStore {
     /// PIP-Layer (Nutzerwunsch 2026-07-22, s. `pipeline.rs`-Moduldoku
     /// "PIP als eigenständiger Layer") — gleiches Muster wie
     /// `keyer_enabled`/`keyer_source`.
-    pip_enabled: PerLevel<bool>,
-    pip_source: PerLevel<Option<String>>,
+    /// Kapitel 87: Zustand aller PIP-Slots je Ebene (Quelle, Pose, z, Fokus), s. `pipstate.rs`.
+    pip: PerLevel<LevelPips>,
+    /// Vorschau-URL des PGM-Monitors je Ebene (Kapitel 87, `monitor.rs`); leer, wenn abgeschaltet.
+    pgm_preview_urls: Vec<String>,
     /// Kuratierte Kreuzschiene (Nutzerwunsch 2026-07-22): welche
     /// entdeckten Quellen der Operator sich per "+" als dauerhafte PGM/
     /// PST-Tasten angelegt hat — bewusst getrennt von `inputs` (dem
@@ -533,6 +494,13 @@ fn level_param_specs(level_count: usize, level: usize) -> Vec<ParamSpec> {
             range: None,
             readonly: true,
         },
+        // Kapitel 87: alle PIP-Slots (JSON-Array) und der fokussierte Slot (-1 = keiner).
+        ParamSpec { name: n("pip.slots"), kind: ParamType::String, unit: None, range: None, readonly: true },
+        // Koordinatenraum aller PIP-Positionen: die Auflösung dieses Mischers.
+        ParamSpec { name: n("pip.canvas"), kind: ParamType::String, unit: None, range: None, readonly: true },
+        ParamSpec { name: n("pip.focusedSlot"), kind: ParamType::Number, unit: None, range: None, readonly: true },
+        // URL des PGM-Monitor-Bildes (über den Stream-Proxy des Orchestrators abrufbar), s. `monitor.rs`.
+        ParamSpec { name: n("pgmPreviewUrl"), kind: ParamType::String, unit: None, range: None, readonly: true },
     ]
 }
 
@@ -581,11 +549,12 @@ fn level_method_specs(level_count: usize, level: usize) -> Vec<MethodSpec> {
                     name: "height".to_string(),
                     kind: ParamType::Number,
                 },
+                MethodArg { name: "slot".to_string(), kind: ParamType::Number },
             ],
         },
         MethodSpec {
             name: n("dve.reset"),
-            args: vec![],
+            args: vec![MethodArg { name: "slot".to_string(), kind: ParamType::Number }],
         },
         MethodSpec {
             name: n("keyer.setEnabled"),
@@ -606,19 +575,58 @@ fn level_method_specs(level_count: usize, level: usize) -> Vec<MethodSpec> {
         },
         MethodSpec {
             name: n("pip.setEnabled"),
-            args: vec![MethodArg {
-                name: "enabled".to_string(),
-                kind: ParamType::Boolean,
-            }],
+            args: vec![
+                MethodArg { name: "enabled".to_string(), kind: ParamType::Boolean },
+                MethodArg { name: "slot".to_string(), kind: ParamType::Number },
+            ],
         },
         // Leerer String wählt Schwarz ab (kein PIP-Bild), gleiche
         // Konvention wie "keyer.setSource".
         MethodSpec {
             name: n("pip.setSource"),
-            args: vec![MethodArg {
-                name: "senderId".to_string(),
-                kind: ParamType::String,
-            }],
+            args: vec![
+                MethodArg { name: "senderId".to_string(), kind: ParamType::String },
+                MethodArg { name: "slot".to_string(), kind: ParamType::Number },
+            ],
+        },
+        // Kapitel 87: Pose als JSON ({corners:[[x,y]×4]} oder {x,y,width,height}), z-Wert, Fokus.
+        MethodSpec {
+            name: n("pip.setPose"),
+            args: vec![
+                MethodArg { name: "pose".to_string(), kind: ParamType::String },
+                MethodArg { name: "slot".to_string(), kind: ParamType::Number },
+            ],
+        },
+        MethodSpec {
+            name: n("pip.setZ"),
+            args: vec![
+                MethodArg { name: "z".to_string(), kind: ParamType::Number },
+                MethodArg { name: "slot".to_string(), kind: ParamType::Number },
+            ],
+        },
+        MethodSpec {
+            name: n("pip.focus"),
+            args: vec![
+                MethodArg { name: "slot".to_string(), kind: ParamType::Number },
+                MethodArg { name: "ms".to_string(), kind: ParamType::Number },
+            ],
+        },
+        MethodSpec {
+            name: n("pip.toggleFocus"),
+            args: vec![
+                MethodArg { name: "slot".to_string(), kind: ParamType::Number },
+                MethodArg { name: "ms".to_string(), kind: ParamType::Number },
+            ],
+        },
+        MethodSpec { name: n("pip.unfocus"), args: vec![MethodArg { name: "ms".to_string(), kind: ParamType::Number }] },
+        // Klick im PGM-Bild in Mischer-Pixeln: der oberste getroffene PIP-Slot wird fokussiert bzw. zurückgeholt.
+        MethodSpec {
+            name: n("pip.clickAt"),
+            args: vec![
+                MethodArg { name: "x".to_string(), kind: ParamType::Number },
+                MethodArg { name: "y".to_string(), kind: ParamType::Number },
+                MethodArg { name: "ms".to_string(), kind: ParamType::Number },
+            ],
         },
         MethodSpec {
             name: n("crosspoint.pin"),
@@ -692,6 +700,9 @@ fn level_method_specs(level_count: usize, level: usize) -> Vec<MethodSpec> {
                 MethodArg { name: "endHeight".to_string(), kind: ParamType::Number },
                 MethodArg { name: "inMs".to_string(), kind: ParamType::Number },
                 MethodArg { name: "outMs".to_string(), kind: ParamType::Number },
+                // Kapitel 87: Szene mit mehreren Slot-Einträgen (JSON-Array, s. `pipstate::entry_from_json`); ersetzt
+                // die flachen Felder, wenn gesetzt.
+                MethodArg { name: "entries".to_string(), kind: ParamType::String },
             ],
         },
         MethodSpec {
@@ -763,7 +774,7 @@ fn level_get(store: &MixerStore, name: &str) -> Option<Value> {
             store.preset[level].lock().expect("lock poisoned").clone().unwrap_or_default()
         )),
         "dve.box" => {
-            let b = *store.dve_box[level].lock().expect("lock poisoned");
+            let b = store.pip[level].lock().expect("lock poisoned").slots[0].pose.bounds();
             Some(serde_json::json!({"x": b.x, "y": b.y, "width": b.width, "height": b.height}))
         }
         "keyer.enabled" => Some(serde_json::json!(
@@ -786,10 +797,16 @@ fn level_get(store: &MixerStore, name: &str) -> Option<Value> {
             store.keyer_source[level].lock().expect("lock poisoned").clone().unwrap_or_default()
         )),
         "pip.enabled" => Some(serde_json::json!(
-            *store.pip_enabled[level].lock().expect("lock poisoned")
+            store.pip[level].lock().expect("lock poisoned").slots.iter().any(|s| s.enabled)
         )),
         "pip.source" => Some(serde_json::json!(
-            store.pip_source[level].lock().expect("lock poisoned").clone().unwrap_or_default()
+            store.pip[level].lock().expect("lock poisoned").slots[0].source.clone().unwrap_or_default()
+        )),
+        "pip.slots" => Some(store.pip[level].lock().expect("lock poisoned").slots_json()),
+        "pip.canvas" => Some(serde_json::json!({"width": store.width, "height": store.height})),
+        "pgmPreviewUrl" => Some(serde_json::json!(store.pgm_preview_urls.get(level).cloned().unwrap_or_default())),
+        "pip.focusedSlot" => Some(serde_json::json!(
+            store.pip[level].lock().expect("lock poisoned").focused.map_or(-1, |s| s as i64)
         )),
         "crosspoint.pinnedSenderIds" => Some(serde_json::json!(
             store.pinned[level].lock().expect("lock poisoned").clone()
@@ -808,21 +825,7 @@ fn level_get(store: &MixerStore, name: &str) -> Option<Value> {
         )),
         "pip.presets" => {
             let presets = store.pip_presets[level].lock().expect("lock poisoned");
-            Some(serde_json::json!(
-                presets
-                    .iter()
-                    .map(|p| serde_json::json!({
-                        "id": p.id,
-                        "name": p.name,
-                        "senderId": p.sender_id,
-                        "box": {"x": p.box_.x, "y": p.box_.y, "width": p.box_.width, "height": p.box_.height},
-                        "start": opt_box_json(&p.start),
-                        "end": opt_box_json(&p.end),
-                        "inMs": p.in_ms,
-                        "outMs": p.out_ms,
-                    }))
-                    .collect::<Vec<_>>()
-            ))
+            Some(Value::Array(presets.iter().map(pipstate::preset_to_json).collect()))
         }
         "pip.activePresetId" => Some(serde_json::json!(
             store.active_pip_preset[level].lock().expect("lock poisoned").clone().unwrap_or_default()
@@ -834,6 +837,22 @@ fn level_get(store: &MixerStore, name: &str) -> Option<Value> {
 /// Optionaler gemeinsamer Schaltzeitpunkt (`takeAt`, Kap. 31.4): absoluter TAI-Zeitpunkt in ns.
 fn take_at_arg(args: &serde_json::Map<String, Value>) -> Option<u64> {
     args.get("takeAt").and_then(Value::as_u64).filter(|v| *v > 0)
+}
+
+/// Dauer einer Fokusfahrt (Argument `ms`, sonst `FOCUS_MS`).
+fn focus_ms(args: &serde_json::Map<String, Value>) -> u32 {
+    args.get("ms").and_then(Value::as_f64).filter(|v| v.is_finite()).map_or(pipstate::FOCUS_MS, |v| v.clamp(0.0, 10_000.0) as u32)
+}
+
+/// Pose eines Slots von Hand setzen: wird zur neuen Ruhepose (dorthin kehrt der Slot nach einem Fokus zurück).
+fn set_slot_pose(store: &MixerStore, level: usize, slot: usize, pose: PipPose) -> Result<(), InvokeError> {
+    {
+        let mut pips = store.pip[level].lock().expect("lock poisoned");
+        let st = pips.slots.get_mut(slot).ok_or(InvokeError::Unknown)?;
+        st.hold = pose;
+    }
+    store.pipeline.set_dve_box(level, slot, pose);
+    Ok(())
 }
 
 /// `invoke()`-Implementierung — s. `level_get`-Doku zur Level-Auflösung.
@@ -930,11 +949,60 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
                 width: json_number(args, "width")?,
                 height: json_number(args, "height")?,
             };
-            store.pipeline.set_dve_box(level, box_);
-            Ok(())
+            set_slot_pose(store, level, slot_arg(args).unwrap_or(0), PipPose::from_box(&box_))
+        }
+        "pip.setPose" => {
+            let raw = args.get("pose").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+            let pose = serde_json::from_str::<Value>(raw).ok().and_then(|v| PipPose::from_json(&v)).ok_or(InvokeError::Unknown)?;
+            set_slot_pose(store, level, slot_arg(args).unwrap_or(0), pose)
         }
         "dve.reset" => {
-            store.pipeline.reset_dve(level);
+            let slot = slot_arg(args).unwrap_or(0);
+            {
+                let mut pips = store.pip[level].lock().expect("lock poisoned");
+                let st = pips.slots.get_mut(slot).ok_or(InvokeError::Unknown)?;
+                st.hold = PipPose::from_box(&DveBox::full_frame(store.width, store.height));
+            }
+            store.pipeline.reset_dve(level, slot);
+            Ok(())
+        }
+        "pip.setZ" => {
+            let slot = slot_arg(args).unwrap_or(0);
+            let z = args.get("z").and_then(Value::as_f64).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1000.0) as u32).ok_or(InvokeError::Unknown)?;
+            {
+                let mut pips = store.pip[level].lock().expect("lock poisoned");
+                let st = pips.slots.get_mut(slot).ok_or(InvokeError::Unknown)?;
+                st.z = z;
+                st.scene_z = z;
+            }
+            store.pipeline.set_pip_z(level, slot, z);
+            Ok(())
+        }
+        "pip.focus" | "pip.toggleFocus" => {
+            let slot = slot_arg(args).ok_or(InvokeError::Unknown)?;
+            let ms = focus_ms(args);
+            let actions = {
+                let mut pips = store.pip[level].lock().expect("lock poisoned");
+                if slot >= pips.slots.len() {
+                    return Err(InvokeError::Unknown);
+                }
+                if base == "pip.focus" { pips.plan_focus(slot, ms) } else { pips.plan_toggle(slot, ms) }
+            };
+            actions.iter().for_each(|a| a.run(&store.pipeline, level));
+            Ok(())
+        }
+        "pip.unfocus" => {
+            let actions = store.pip[level].lock().expect("lock poisoned").plan_unfocus(focus_ms(args));
+            actions.iter().for_each(|a| a.run(&store.pipeline, level));
+            Ok(())
+        }
+        "pip.clickAt" => {
+            let coord = |k: &str| args.get(k).and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or(InvokeError::Unknown);
+            let (x, y) = (coord("x")?, coord("y")?);
+            let hit = store.pip[level].lock().expect("lock poisoned").plan_click(x, y, focus_ms(args));
+            if let Some((_, actions)) = hit {
+                actions.iter().for_each(|a| a.run(&store.pipeline, level));
+            }
             Ok(())
         }
         "keyer.setEnabled" => {
@@ -954,38 +1022,35 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
         }
         "pip.setEnabled" => {
             let enabled = args.get("enabled").and_then(Value::as_bool).ok_or(InvokeError::Unknown)?;
-            // Ausschalten löscht immer das "aktive Preset" (Nutzerauftrag
-            // 2026-09-04) — kein Mixer-Button soll nach dem Ausschalten
-            // fälschlich noch als aktiv leuchten, egal ob PIP zuvor per
-            // Preset oder per Low-Level-`pip.setSource` gesetzt wurde.
+            let slot = slot_arg(args);
             if !enabled {
-                let active_id = store.active_pip_preset[level].lock().expect("lock poisoned").take();
-                // Hat das aktive Preset eine Ausfahrt (Ende/Start + Dauer),
-                // fährt PIP dorthin und schaltet sich erst danach ab.
-                let exit = active_id.and_then(|id| {
-                    store.pip_presets[level].lock().expect("lock poisoned").iter().find(|p| p.id == id).cloned()
-                });
-                if let Some(preset) = exit
-                    && let Some(to) = preset.exit_box()
-                    && preset.out_ms > 0
-                    && *store.pip_enabled[level].lock().expect("lock poisoned")
-                {
-                    let from = *store.dve_box[level].lock().expect("lock poisoned");
-                    store.pipeline.pip_animate(level, from, to, preset.out_ms as u64, true);
-                    return Ok(());
-                }
+                // Ausschalten löscht das "aktive Preset" (Nutzerauftrag 2026-09-04) — kein Mixer-Button soll danach
+                // noch leuchten. Ohne Slot-Angabe gehen alle Slots aus; hat die aktive Szene eine Ausfahrt, fährt
+                // der Slot dorthin und schaltet sich erst danach ab.
+                let active_id = if slot.is_none() { store.active_pip_preset[level].lock().expect("lock poisoned").take() } else { None };
+                let active_id = active_id.or_else(|| store.active_pip_preset[level].lock().expect("lock poisoned").clone());
+                let scene = active_id.and_then(|id| store.pip_presets[level].lock().expect("lock poisoned").iter().find(|p| p.id == id).cloned());
+                let actions = store.pip[level].lock().expect("lock poisoned").plan_disable(slot, scene.as_ref());
+                actions.iter().for_each(|a| a.run(&store.pipeline, level));
+                return Ok(());
             }
-            store.pipeline.set_pip_enabled(level, enabled);
+            let slot = slot.unwrap_or(0);
+            {
+                let mut pips = store.pip[level].lock().expect("lock poisoned");
+                pips.slots.get_mut(slot).ok_or(InvokeError::Unknown)?.enabled = true;
+            }
+            store.pipeline.set_pip_enabled(level, slot, true);
             Ok(())
         }
         "pip.setSource" => {
-            let sender_id = args
-                .get("senderId")
-                .and_then(Value::as_str)
-                .ok_or(InvokeError::Unknown)?;
+            let sender_id = args.get("senderId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
             let selected = if sender_id.is_empty() { None } else { Some(sender_id.to_string()) };
-            *store.pip_source[level].lock().expect("lock poisoned") = selected.clone();
-            store.pipeline.set_pip_source(level, selected);
+            let slot = slot_arg(args).unwrap_or(0);
+            {
+                let mut pips = store.pip[level].lock().expect("lock poisoned");
+                pips.slots.get_mut(slot).ok_or(InvokeError::Unknown)?.source = selected.clone();
+            }
+            store.pipeline.set_pip_source(level, slot, selected);
             Ok(())
         }
         "crosspoint.pin" => {
@@ -1036,35 +1101,49 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
         "pip.savePreset" => {
             let id = args.get("id").and_then(Value::as_str).ok_or(InvokeError::Unknown)?.to_string();
             let name = args.get("name").and_then(Value::as_str).ok_or(InvokeError::Unknown)?.to_string();
-            let sender_id = args
-                .get("senderId")
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string);
-            let box_ = DveBox {
-                x: json_number(args, "x")?,
-                y: json_number(args, "y")?,
-                width: json_number(args, "width")?,
-                height: json_number(args, "height")?,
+            let slots = store.pip[level].lock().expect("lock poisoned").slots.len();
+            let entries: Vec<PipEntry> = match args.get("entries").and_then(Value::as_str) {
+                Some(raw) => serde_json::from_str::<Value>(raw)
+                    .ok()
+                    .and_then(|v| v.as_array().map(|a| a.iter().filter_map(pipstate::entry_from_json).collect()))
+                    .ok_or(InvokeError::Unknown)?,
+                None => {
+                    // Altformat: ein Eintrag für Slot 0 aus den flachen Feldern
+                    let sender_id = args.get("senderId").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+                    let pose = PipPose::from_box(&DveBox {
+                        x: json_number(args, "x")?,
+                        y: json_number(args, "y")?,
+                        width: json_number(args, "width")?,
+                        height: json_number(args, "height")?,
+                    });
+                    let ms = |key: &str| {
+                        args.get(key).and_then(Value::as_f64).filter(|v| v.is_finite()).map_or(0, |v| v.clamp(0.0, 60_000.0) as u32)
+                    };
+                    vec![PipEntry {
+                        slot: 0,
+                        sender_id,
+                        pose,
+                        start: opt_box_args(args, "start"),
+                        end: opt_box_args(args, "end"),
+                        in_ms: ms("inMs"),
+                        out_ms: ms("outMs"),
+                        z: None,
+                        focus: None,
+                    }]
+                }
             };
-            let start = opt_box_args(args, "start");
-            let end = opt_box_args(args, "end");
-            let ms = |key: &str| {
-                args.get(key).and_then(Value::as_f64).filter(|v| v.is_finite()).map_or(0, |v| v.clamp(0.0, 60_000.0) as u32)
-            };
-            let (in_ms, out_ms) = (ms("inMs"), ms("outMs"));
+            // Slots müssen existieren und dürfen nicht doppelt vorkommen
+            let mut seen = std::collections::HashSet::new();
+            if entries.is_empty() || entries.iter().any(|e| e.slot >= slots || !seen.insert(e.slot)) {
+                return Err(InvokeError::Unknown);
+            }
             let mut presets = store.pip_presets[level].lock().expect("lock poisoned");
             match presets.iter_mut().find(|p| p.id == id) {
                 Some(existing) => {
                     existing.name = name;
-                    existing.sender_id = sender_id;
-                    existing.box_ = box_;
-                    existing.start = start;
-                    existing.end = end;
-                    existing.in_ms = in_ms;
-                    existing.out_ms = out_ms;
+                    existing.entries = entries;
                 }
-                None => presets.push(PipPreset { id, name, sender_id, box_, start, end, in_ms, out_ms }),
+                None => presets.push(PipPreset { id, name, entries }),
             }
             Ok(())
         }
@@ -1075,7 +1154,8 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
             if active.as_deref() == Some(id) {
                 *active = None;
                 drop(active);
-                store.pipeline.set_pip_enabled(level, false);
+                let actions = store.pip[level].lock().expect("lock poisoned").plan_disable(None, None);
+                actions.iter().for_each(|a| a.run(&store.pipeline, level));
             }
             Ok(())
         }
@@ -1088,17 +1168,8 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
                 .find(|p| p.id == id)
                 .cloned()
                 .ok_or(InvokeError::Unknown)?;
-            *store.pip_source[level].lock().expect("lock poisoned") = preset.sender_id.clone();
-            store.pipeline.set_pip_source(level, preset.sender_id.clone());
-            store.pipeline.set_dve_box(level, preset.box_);
-            store.pipeline.set_pip_enabled(level, true);
-            // Mit Startposition + Einfahrdauer fährt PIP von dort in die
-            // Haltposition (die Box wird dabei sofort auf `start` gesetzt).
-            if let Some(from) = preset.start
-                && preset.in_ms > 0
-            {
-                store.pipeline.pip_animate(level, from, preset.box_, preset.in_ms as u64, false);
-            }
+            let actions = store.pip[level].lock().expect("lock poisoned").plan_apply(&preset);
+            actions.iter().for_each(|a| a.run(&store.pipeline, level));
             *store.active_pip_preset[level].lock().expect("lock poisoned") = Some(preset.id);
             Ok(())
         }
@@ -1125,32 +1196,37 @@ impl MixerStore {
     }
 
     fn capture_level_state(&self, level: usize) -> Value {
-        let box_ = *self.dve_box[level].lock().expect("lock poisoned");
-        let pip_presets: Vec<Value> = self.pip_presets[level]
-            .lock()
-            .expect("lock poisoned")
-            .iter()
-            .map(|p| {
-                serde_json::json!({
-                    "id": p.id,
-                    "name": p.name,
-                    "senderId": p.sender_id,
-                    "box": {"x": p.box_.x, "y": p.box_.y, "width": p.box_.width, "height": p.box_.height},
-                    "start": opt_box_json(&p.start),
-                    "end": opt_box_json(&p.end),
-                    "inMs": p.in_ms,
-                    "outMs": p.out_ms,
+        let pip_presets: Vec<Value> =
+            self.pip_presets[level].lock().expect("lock poisoned").iter().map(pipstate::preset_to_json).collect();
+        // Kapitel 87: alle Slots; die Altfelder (`dveBox`, `pipEnabled`, `pipSourceSenderId`) bleiben für Slot 0
+        // erhalten, damit ältere Momentaufnahmen lesbar und neue von älteren Versionen nicht missverstanden werden.
+        let (slot0, slots_doc) = {
+            let pips = self.pip[level].lock().expect("lock poisoned");
+            let doc: Vec<Value> = pips
+                .slots
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "enabled": s.enabled,
+                        "senderId": s.source,
+                        "pose": s.hold.to_json(),
+                        "focusPose": s.focus_pose.to_json(),
+                        "z": s.scene_z,
+                    })
                 })
-            })
-            .collect();
+                .collect();
+            (pips.slots[0].clone(), doc)
+        };
+        let box_ = slot0.hold.bounds();
         serde_json::json!({
             "programSenderId": self.program[level].lock().expect("lock poisoned").clone(),
             "presetSenderId": self.preset[level].lock().expect("lock poisoned").clone(),
             "dveBox": {"x": box_.x, "y": box_.y, "width": box_.width, "height": box_.height},
             "keyerEnabled": *self.keyer_enabled[level].lock().expect("lock poisoned"),
             "keyerSourceSenderId": self.keyer_source[level].lock().expect("lock poisoned").clone(),
-            "pipEnabled": *self.pip_enabled[level].lock().expect("lock poisoned"),
-            "pipSourceSenderId": self.pip_source[level].lock().expect("lock poisoned").clone(),
+            "pipEnabled": slot0.enabled,
+            "pipSourceSenderId": slot0.source,
+            "pipSlots": slots_doc,
             "pinnedSenderIds": self.pinned[level].lock().expect("lock poisoned").clone(),
             "transRateFrames": *self.trans_rate[level].lock().expect("lock poisoned"),
             "transType": self.trans_kind[level].lock().expect("lock poisoned").name(),
@@ -1183,20 +1259,58 @@ impl MixerStore {
     /// berührt den Preset-Wert bewusst nicht), damit beide Busse
     /// unabhängig auf den gespeicherten Stand zurückkehren, genau wie sie
     /// unabhängig erfasst wurden.
+    /// Einen Slot aus der Momentaufnahme wiederherstellen (Quelle, Pose, z, Sichtbarkeit).
+    fn restore_pip_slot(&self, level: usize, slot: usize, entry: &Value) {
+        let pose = entry.get("pose").and_then(PipPose::from_json);
+        let focus = entry.get("focusPose").and_then(PipPose::from_json);
+        let source = entry.get("senderId").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+        let enabled = entry.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+        let z = entry.get("z").and_then(Value::as_u64).map(|z| z as u32);
+        {
+            let mut pips = self.pip[level].lock().expect("lock poisoned");
+            let Some(st) = pips.slots.get_mut(slot) else { return };
+            if let Some(p) = pose {
+                st.hold = p;
+            }
+            if let Some(f) = focus {
+                st.focus_pose = f;
+            }
+            if let Some(z) = z {
+                st.z = z;
+                st.scene_z = z;
+            }
+            st.source = source.clone();
+            st.enabled = enabled;
+        }
+        if let Some(p) = pose {
+            self.pipeline.set_dve_box(level, slot, p);
+        }
+        if let Some(z) = z {
+            self.pipeline.set_pip_z(level, slot, z);
+        }
+        self.pipeline.set_pip_source(level, slot, source);
+        self.pipeline.set_pip_enabled(level, slot, enabled);
+    }
+
     fn restore_level_state(&self, level: usize, doc: &Value) {
         let program = doc.get("programSenderId").and_then(Value::as_str).map(str::to_string);
         let preset = doc.get("presetSenderId").and_then(Value::as_str).map(str::to_string);
         self.pipeline.select_preset(level, preset);
         self.pipeline.take(level, program);
 
-        if let Some(b) = doc.get("dveBox") {
+        if let Some(slots) = doc.get("pipSlots").and_then(Value::as_array) {
+            for (slot, entry) in slots.iter().enumerate() {
+                self.restore_pip_slot(level, slot, entry);
+            }
+        } else if let Some(b) = doc.get("dveBox") {
+            // Altes Format (vor Kapitel 87): ein PIP in Slot 0
             let box_ = DveBox {
                 x: b.get("x").and_then(Value::as_i64).unwrap_or(0) as i32,
                 y: b.get("y").and_then(Value::as_i64).unwrap_or(0) as i32,
                 width: b.get("width").and_then(Value::as_i64).unwrap_or(0) as i32,
                 height: b.get("height").and_then(Value::as_i64).unwrap_or(0) as i32,
             };
-            self.pipeline.set_dve_box(level, box_);
+            let _ = set_slot_pose(self, level, 0, PipPose::from_box(&box_));
         }
         if let Some(enabled) = doc.get("keyerEnabled").and_then(Value::as_bool) {
             self.pipeline.set_keyer_enabled(level, enabled);
@@ -1205,12 +1319,15 @@ impl MixerStore {
             *self.keyer_source[level].lock().expect("lock poisoned") = Some(source.clone());
             self.pipeline.set_keyer_source(level, Some(source));
         }
-        if let Some(enabled) = doc.get("pipEnabled").and_then(Value::as_bool) {
-            self.pipeline.set_pip_enabled(level, enabled);
-        }
-        if let Some(source) = doc.get("pipSourceSenderId").and_then(Value::as_str).map(str::to_string) {
-            *self.pip_source[level].lock().expect("lock poisoned") = Some(source.clone());
-            self.pipeline.set_pip_source(level, Some(source));
+        if doc.get("pipSlots").is_none() {
+            if let Some(enabled) = doc.get("pipEnabled").and_then(Value::as_bool) {
+                self.pip[level].lock().expect("lock poisoned").slots[0].enabled = enabled;
+                self.pipeline.set_pip_enabled(level, 0, enabled);
+            }
+            if let Some(source) = doc.get("pipSourceSenderId").and_then(Value::as_str).map(str::to_string) {
+                self.pip[level].lock().expect("lock poisoned").slots[0].source = Some(source.clone());
+                self.pipeline.set_pip_source(level, 0, Some(source));
+            }
         }
         if let Some(pinned) = doc.get("pinnedSenderIds").and_then(Value::as_array) {
             *self.pinned[level].lock().expect("lock poisoned") = pinned
@@ -1237,26 +1354,7 @@ impl MixerStore {
         // Anzeige bleibt an `pipEnabled`/`pipSourceSenderId`/`dveBox`
         // oben gebunden, exakt wie vor diesem Feature).
         if let Some(presets) = doc.get("pipPresets").and_then(Value::as_array) {
-            let restored: Vec<PipPreset> = presets
-                .iter()
-                .filter_map(|p| {
-                    let id = p.get("id")?.as_str()?.to_string();
-                    let name = p.get("name")?.as_str().unwrap_or_default().to_string();
-                    let sender_id = p.get("senderId").and_then(Value::as_str).map(str::to_string);
-                    let b = p.get("box")?;
-                    let box_ = DveBox {
-                        x: b.get("x").and_then(Value::as_i64).unwrap_or(0) as i32,
-                        y: b.get("y").and_then(Value::as_i64).unwrap_or(0) as i32,
-                        width: b.get("width").and_then(Value::as_i64).unwrap_or(0) as i32,
-                        height: b.get("height").and_then(Value::as_i64).unwrap_or(0) as i32,
-                    };
-                    let start = p.get("start").and_then(box_from_json);
-                    let end = p.get("end").and_then(box_from_json);
-                    let in_ms = p.get("inMs").and_then(Value::as_u64).unwrap_or(0) as u32;
-                    let out_ms = p.get("outMs").and_then(Value::as_u64).unwrap_or(0) as u32;
-                    Some(PipPreset { id, name, sender_id, box_, start, end, in_ms, out_ms })
-                })
-                .collect();
+            let restored: Vec<PipPreset> = presets.iter().filter_map(pipstate::preset_from_json).collect();
             *self.pip_presets[level].lock().expect("lock poisoned") = restored;
         }
         if let Some(id) = doc.get("activePipPresetId").and_then(Value::as_str) {
@@ -1295,6 +1393,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // s. UMSETZUNG.md-Plan) — 0/fehlend/ungültig fällt auf 1 zurück, nie
     // ein Fehler.
     let level_count: usize = env_or("OMP_ME_LEVELS", "1").parse().unwrap_or(1).max(1);
+    // Kapitel 87: PIP-Slots je Ebene (1–8) und wie viele davon (ab Slot 0) Trapez/Rotation können (`perspective`,
+    // rechnet jedes Bild auf Vollbildgröße: nur so viele wie gebraucht).
+    let pip_slots: usize = env_or("OMP_PIP_SLOTS", "4").parse().unwrap_or(4).clamp(1, 8);
+    let pip_2d_slots: usize = env_or("OMP_PIP_2D_SLOTS", "2").parse().unwrap_or(2).min(pip_slots);
 
     let sender_ids: Vec<String> = (0..level_count).map(|_| omp_node_sdk::idgen::new_v4()).collect();
     let flow_ids: Vec<String> = (0..level_count).map(|_| omp_node_sdk::idgen::new_v4()).collect();
@@ -1329,6 +1431,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         height,
         hwaccel,
         stills: stills.clone(),
+        pip_slots,
+        pip_2d_slots,
     };
     let pipeline_shutdown = shutdown.clone();
     let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
@@ -1355,12 +1459,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let keyfill_inputs = Arc::new(Mutex::new(Vec::<DiscoveredKeyFill>::new()));
     let program: PerLevel<Option<String>> = (0..level_count).map(|_| Arc::new(Mutex::new(None))).collect();
     let preset: PerLevel<Option<String>> = (0..level_count).map(|_| Arc::new(Mutex::new(None))).collect();
-    let dve_box: PerLevel<DveBox> =
-        (0..level_count).map(|_| Arc::new(Mutex::new(DveBox::full_frame(width, height)))).collect();
     let keyer_enabled: PerLevel<bool> = (0..level_count).map(|_| Arc::new(Mutex::new(false))).collect();
     let keyer_source: PerLevel<Option<String>> = (0..level_count).map(|_| Arc::new(Mutex::new(None))).collect();
-    let pip_enabled: PerLevel<bool> = (0..level_count).map(|_| Arc::new(Mutex::new(false))).collect();
-    let pip_source: PerLevel<Option<String>> = (0..level_count).map(|_| Arc::new(Mutex::new(None))).collect();
+    let pip: PerLevel<LevelPips> = (0..level_count).map(|_| Arc::new(Mutex::new(LevelPips::new(pip_slots, pip_2d_slots, width, height)))).collect();
     let pinned: PerLevel<Vec<String>> = (0..level_count).map(|_| Arc::new(Mutex::new(Vec::new()))).collect();
     let trans_rate: PerLevel<i32> =
         (0..level_count).map(|_| Arc::new(Mutex::new(DEFAULT_TRANS_RATE_FRAMES as i32))).collect();
@@ -1380,6 +1481,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let safe: String = label.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
         base.join("omp").join("mixer-freezes").join(safe)
     });
+    // PGM-Monitor (Kapitel 87): Bild nur auf Abruf; mit OMP_ME_PGM_MONITOR=0 abschaltbar.
+    let mut pgm_urls: Vec<String> = Vec::new();
+    let mut monitor_heartbeats: Vec<Arc<AtomicU64>> = Vec::new();
+    if env_or("OMP_ME_PGM_MONITOR", "1") != "0" {
+        match monitor::start(pipeline_handle.clone(), level_count, &host, shutdown.clone()) {
+            Ok(list) => {
+                for (url, hb) in list {
+                    pgm_urls.push(url);
+                    monitor_heartbeats.push(hb);
+                }
+            }
+            Err(e) => eprintln!("omp-video-mixer-me: PGM-Monitor aus — {e}"),
+        }
+    }
     let freezes = freeze::Freezes::load(freeze_dir, width, height, stills.clone(), inputs.clone(), pipeline_handle.clone(), pinned.clone());
     let store: Arc<dyn ParamStore> = Arc::new(MixerStore {
         freezes: freezes.clone(),
@@ -1389,12 +1504,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         sender_ids: sender_ids.clone(),
         program: program.clone(),
         preset: preset.clone(),
-        dve_box: dve_box.clone(),
         keyer_enabled: keyer_enabled.clone(),
         keyfill_inputs: keyfill_inputs.clone(),
         keyer_source: keyer_source.clone(),
-        pip_enabled: pip_enabled.clone(),
-        pip_source: pip_source.clone(),
+        pip: pip.clone(),
+        pgm_preview_urls: pgm_urls,
         pinned: pinned.clone(),
         trans_rate: trans_rate.clone(),
         swap_on_transition: swap_on_transition.clone(),
@@ -1481,6 +1595,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
     // Nachtrag 130/131).
     handle.register_worker("pipeline", pipeline_heartbeat);
+    for (i, hb) in monitor_heartbeats.into_iter().enumerate() {
+        handle.register_worker(&format!("pgm-monitor-accept-{}", i + 1), hb);
+    }
 
     // Sender→Device→Node-Auflösung fürs Tally-Event (`omp.tally.<node_id>`,
     // C10-Moduldoku `pipeline.rs`): pro `device_id` höchstens einmal
@@ -1506,9 +1623,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         inputs,
         program,
         preset,
-        dve_box,
         keyer_enabled,
-        pip_enabled,
+        pip,
         transition_position,
         freezes,
     );
@@ -1631,9 +1747,8 @@ async fn handle_events(
     inputs: Arc<Mutex<Vec<DiscoveredInput>>>,
     program: PerLevel<Option<String>>,
     preset: PerLevel<Option<String>>,
-    dve_box: PerLevel<DveBox>,
     keyer_enabled: PerLevel<bool>,
-    pip_enabled: PerLevel<bool>,
+    pip: PerLevel<LevelPips>,
     transition_position: PerLevel<f64>,
     freezes: Arc<freeze::Freezes>,
 ) {
@@ -1696,9 +1811,16 @@ async fn handle_events(
                     *p.lock().expect("lock poisoned") = sender_id;
                 }
             }
-            pipeline::Event::DveBoxChanged { level, box_ } => {
-                if let Some(b) = dve_box.get(level) {
-                    *b.lock().expect("lock poisoned") = box_;
+            pipeline::Event::DveBoxChanged { level, slot, pose } => {
+                if let Some(st) = pip.get(level).and_then(|p| p.lock().expect("lock poisoned").slots.get_mut(slot).map(|s| s.pose = pose)) {
+                    let _ = st;
+                }
+            }
+            pipeline::Event::PipZChanged { level, slot, z } => {
+                if let Some(p) = pip.get(level) {
+                    if let Some(st) = p.lock().expect("lock poisoned").slots.get_mut(slot) {
+                        st.z = z;
+                    }
                 }
             }
             pipeline::Event::KeyerChanged { level, enabled } => {
@@ -1706,9 +1828,11 @@ async fn handle_events(
                     *e.lock().expect("lock poisoned") = enabled;
                 }
             }
-            pipeline::Event::PipChanged { level, enabled } => {
-                if let Some(e) = pip_enabled.get(level) {
-                    *e.lock().expect("lock poisoned") = enabled;
+            pipeline::Event::PipChanged { level, slot, enabled } => {
+                if let Some(p) = pip.get(level) {
+                    if let Some(st) = p.lock().expect("lock poisoned").slots.get_mut(slot) {
+                        st.enabled = enabled;
+                    }
                 }
             }
             pipeline::Event::TransitionPositionChanged { level, position } => {
@@ -1902,24 +2026,8 @@ async fn discovery_loop(
 }
 
 #[cfg(test)]
-mod pip_preset_tests {
+mod pip_arg_tests {
     use super::*;
-
-    fn b(x: i32) -> DveBox {
-        DveBox { x, y: 0, width: 10, height: 10 }
-    }
-
-    fn preset(start: Option<DveBox>, end: Option<DveBox>) -> PipPreset {
-        PipPreset { id: "p".into(), name: "p".into(), sender_id: None, box_: b(5), start, end, in_ms: 0, out_ms: 0 }
-    }
-
-    #[test]
-    fn exit_box_prefers_end_then_start() {
-        assert_eq!(preset(None, None).exit_box(), None);
-        assert_eq!(preset(Some(b(1)), None).exit_box(), Some(b(1))); // 2-Punkt: zurück nach Start
-        assert_eq!(preset(Some(b(1)), Some(b(2))).exit_box(), Some(b(2))); // 3-Punkt
-        assert_eq!(preset(None, Some(b(2))).exit_box(), Some(b(2)));
-    }
 
     #[test]
     fn opt_box_args_needs_all_four_fields() {
@@ -1929,15 +2037,17 @@ mod pip_preset_tests {
         }
         assert_eq!(opt_box_args(&args, "start"), None);
         args.insert("startHeight".into(), serde_json::json!(4));
-        assert_eq!(opt_box_args(&args, "start"), Some(DveBox { x: 1, y: 2, width: 3, height: 4 }));
+        assert_eq!(opt_box_args(&args, "start"), Some(PipPose::from_box(&DveBox { x: 1, y: 2, width: 3, height: 4 })));
         assert_eq!(opt_box_args(&args, "end"), None);
     }
 
     #[test]
-    fn box_json_roundtrip() {
-        let orig = DveBox { x: -213, y: 20, width: 200, height: 150 };
-        assert_eq!(box_from_json(&box_json(&orig)), Some(orig));
-        assert_eq!(box_from_json(&Value::Null), None);
-        assert_eq!(opt_box_json(&None), Value::Null);
+    fn slot_arg_defaults_and_rejects_garbage() {
+        let mut args = serde_json::Map::new();
+        assert_eq!(slot_arg(&args), None);
+        args.insert("slot".into(), serde_json::json!(2));
+        assert_eq!(slot_arg(&args), Some(2));
+        args.insert("slot".into(), serde_json::json!(-1));
+        assert_eq!(slot_arg(&args), None);
     }
 }
