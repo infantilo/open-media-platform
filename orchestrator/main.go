@@ -1419,6 +1419,12 @@ func main() {
 		Release: reviewmod.NewStore(database),
 	}
 	audioRulesSvc.Roles = workflowSvc
+	audioRulesSvc.LabelOf = func(id string) string {
+		if in, ok := launcherSvc.Get(id); ok {
+			return in.Label
+		}
+		return ""
+	}
 	if nc != nil {
 		playoutSvc.Publisher = nc
 	}

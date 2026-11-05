@@ -561,6 +561,13 @@
     "domain": "audio-rules"
   },
   {
+    "method": "POST",
+    "path": "/api/v1/audio-rules/channel/{id}/targets",
+    "auth": "auth",
+    "when": "module:audio-rules",
+    "domain": "audio-rules"
+  },
+  {
     "method": "GET",
     "path": "/api/v1/audio-rules/default",
     "auth": "auth",

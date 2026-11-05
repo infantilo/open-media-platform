@@ -6064,6 +6064,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tokio::spawn(persist::persist_loop(store.clone()));
     // Kapitel 27 / P10: As-Run an den Orchestrator liefern.
     tokio::spawn(persist::asrun_loop(store.clone()));
+    tokio::spawn(persist::audio_targets_loop(store.clone()));
     // Kapitel 27 / P8: Medien-Preflight (Verfügbarkeit, rechtzeitige Bereitstellung, Bereitschaft je Event).
     tokio::spawn(preflight_loop(store.clone()));
     tokio::spawn(release_loop(store.clone()));

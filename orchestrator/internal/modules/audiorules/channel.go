@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 )
@@ -27,6 +28,109 @@ type channelRules struct {
 	db       *sql.DB
 	roles    InstanceRoleResolver
 	actor    func(*http.Request) string
+	// labelOf liefert das Label einer Instanz (der Zielname, den die Automation für ihre Player/Mischer kennt).
+	labelOf func(instanceID string) string
+
+	mu sync.Mutex // schützt den Lese-Ändern-Schreiben-Zyklus des Zielindex
+}
+
+// Zielindex: Label eines Nodes → Channel, dessen Automation ihn als Ziel führt. Die Automation meldet ihre Ziele selbst
+// (`POST …/targets`); ein Player, den keine Automation führt, bleibt dadurch standalone (Plattform-Standard).
+const targetIndexKey = "audio-rules:targets"
+
+func (c *channelRules) targetIndex() map[string]string {
+	idx := map[string]string{}
+	if data, err := c.settings.Get(targetIndexKey); err == nil {
+		_ = json.Unmarshal(data, &idx)
+	}
+	if idx == nil {
+		idx = map[string]string{}
+	}
+	return idx
+}
+
+// targetChannelID: der Channel, dessen Automation die Instanz (über ihr Label) als Ziel führt ("" = keiner).
+func (c *channelRules) targetChannelID(instanceID string) string {
+	if c.labelOf == nil || instanceID == "" {
+		return ""
+	}
+	label := c.labelOf(instanceID)
+	if label == "" {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.targetIndex()[label]
+}
+
+// callerBoundToChannel: der Aufrufer ist die an den Channel gebundene Instanz (direkt oder über die Workflow-Rolle).
+func (c *channelRules) callerBoundToChannel(actor, channelID string) bool {
+	if actor == "" {
+		return true // Bootstrap-Modus ohne Nutzer, wie überall im Kern
+	}
+	if c.db == nil {
+		return false
+	}
+	var inst, wf, role string
+	if err := c.db.QueryRow(`SELECT instance_id, workflow_id, role FROM playout_channels WHERE id = $1`, channelID).Scan(&inst, &wf, &role); err != nil {
+		return false
+	}
+	if inst != "" && inst == actor {
+		return true
+	}
+	if wf != "" && c.roles != nil {
+		if w, r, ok := c.roles.FindRoleForInstance(actor); ok {
+			return w == wf && r == role
+		}
+	}
+	return false
+}
+
+// handlePostTargets: die Automation eines Channels meldet die Labels ihrer Ziel-Nodes (Player A/B, Audiomischer).
+func (c *channelRules) handlePostTargets() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if !channelIDPattern.MatchString(id) {
+			http.Error(w, "invalid channel id", http.StatusBadRequest)
+			return
+		}
+		actor := ""
+		if c.actor != nil {
+			actor = c.actor(r)
+		}
+		if !c.callerBoundToChannel(actor, id) {
+			http.Error(w, "forbidden: nur die an den Channel gebundene Automation", http.StatusForbidden)
+			return
+		}
+		var body struct {
+			Labels []string `json:"labels"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		idx := c.targetIndex()
+		for label, ch := range idx {
+			if ch == id {
+				delete(idx, label)
+			}
+		}
+		n := 0
+		for _, l := range body.Labels {
+			if l = strings.TrimSpace(l); l != "" {
+				idx[l] = id
+				n++
+			}
+		}
+		data, _ := json.Marshal(idx)
+		if err := c.settings.Put(targetIndexKey, data); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"channelId": id, "targets": n})
+	}
 }
 
 // channelDoc liefert das eigene Dokument eines Channels (nil = keines gesetzt; der Wert „null“ ist die Rücknahme).
@@ -78,6 +182,9 @@ func (c *channelRules) handleGetEffective() http.HandlerFunc {
 				actor = c.actor(r)
 			}
 			id = c.workflowChannelID(actor)
+			if id == "" {
+				id = c.targetChannelID(actor)
+			}
 		}
 		source := "platform"
 		var data []byte

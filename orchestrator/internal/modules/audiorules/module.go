@@ -18,6 +18,8 @@ type InstanceRoleResolver interface {
 type Services struct {
 	// Roles: Workflow einer anfragenden Instanz (ein Player im Workflow bekommt die Regeln des Channels dieses Workflows).
 	Roles InstanceRoleResolver
+	// LabelOf: Label einer Instanz ("" = unbekannt); verbindet einen Player mit dem Channel, dessen Automation ihn als Ziel führt.
+	LabelOf func(instanceID string) string
 }
 
 // Module ist das Audio-Ausgabe-Modul.
@@ -34,9 +36,10 @@ func (*Module) Name() string { return "audio-rules" }
 
 // Mount meldet die vier Routen an (Rechtepflicht je Route ausgeschrieben, damit auch das Routentabellen-Werkzeug sie liest).
 func (m *Module) Mount(r module.Routes, d module.Deps) error {
-	ch := &channelRules{settings: d.Settings, db: d.DB, roles: m.svc.Roles, actor: d.Actor}
+	ch := &channelRules{settings: d.Settings, db: d.DB, roles: m.svc.Roles, actor: d.Actor, labelOf: m.svc.LabelOf}
 	r.Handle("GET /api/v1/audio-rules", module.Authenticated(), ch.handleGetEffective())
 	r.Handle("GET /api/v1/audio-rules/channel/{id}", module.Authenticated(), ch.handleGetChannel())
+	r.Handle("POST /api/v1/audio-rules/channel/{id}/targets", module.Authenticated(), ch.handlePostTargets())
 	r.Handle("PUT /api/v1/audio-rules/channel/{id}", module.Verb(authz.VerbAdmin), ch.handlePutChannel())
 	r.Handle("DELETE /api/v1/audio-rules/channel/{id}", module.Verb(authz.VerbAdmin), ch.handleDeleteChannel())
 	r.Handle("GET /api/v1/audio-rules/default", module.Authenticated(), handleGetAudioRulesDefault())

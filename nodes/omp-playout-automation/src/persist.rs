@@ -740,6 +740,60 @@ pub async fn asrun_loop(store: Arc<AutomationStore>) {
     }
 }
 
+// ---- Ziele an den Orchestrator melden (Audio-Regeln je Channel) -----------------------------------------------
+//
+// Player und Mischer, die diese Automation führt (Ziel Player A/B, Audiomischer), bekommen beim Start das Audio-Dokument
+// dieses Channels: der Orchestrator ordnet sie über ihr Label zu. Die Automation meldet dafür ihre Ziel-Labels. Ein Player,
+// den keine Automation führt, bleibt standalone (Plattform-Standard). Wirkt beim nächsten Start des Players.
+
+/// Die Labels der Ziel-Nodes, sortiert und ohne Leerwerte/Doppelte.
+pub fn target_labels(state: &AutomationState) -> Vec<String> {
+    let mut v: Vec<String> = [&state.target_player_a_label, &state.target_player_b_label, &state.target_audio_mixer_label]
+        .iter()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
+pub async fn audio_targets_loop(store: Arc<AutomationStore>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(5));
+    let mut last: Option<(String, Vec<String>)> = None;
+    let mut last_at = Instant::now();
+    loop {
+        interval.tick().await;
+        let channel = store.persistence.channel_id();
+        if channel.is_empty() {
+            last = None;
+            continue;
+        }
+        let labels = target_labels(&store.state.lock().expect("lock poisoned"));
+        let current = (channel.clone(), labels.clone());
+        // Bei Änderung sofort, sonst alle 5 Minuten erneut (der Orchestrator könnte den Index verloren haben).
+        if last.as_ref() == Some(&current) && last_at.elapsed() < Duration::from_secs(300) {
+            continue;
+        }
+        let store2 = store.clone();
+        let ok = tokio::task::spawn_blocking(move || {
+            crate::remote::post_json(
+                &store2.orchestrator_url,
+                &store2.auth,
+                &format!("/api/v1/audio-rules/channel/{channel}/targets"),
+                &serde_json::json!({ "labels": labels }),
+            )
+            .is_ok()
+        })
+        .await
+        .unwrap_or(false);
+        if ok {
+            last = Some(current);
+            last_at = Instant::now();
+        }
+    }
+}
+
 // ---- Lokale Sicherung (Instanz ohne Channel) ------------------------------------------------------
 //
 // Eine freistehende Instanz hat keinen Channel; ein manueller Neustart gibt ihr eine neue Instanz-ID
@@ -898,6 +952,19 @@ mod tests {
         assert_eq!(back, snap);
         assert_eq!(back.items.len(), 3);
         assert_eq!(back.live_channel, "b");
+    }
+
+    #[test]
+    fn target_labels_are_sorted_trimmed_and_deduplicated() {
+        let mut s = state_with_three_items();
+        s.target_player_a_label = " Player A ".to_string();
+        s.target_player_b_label = "Player A".to_string();
+        s.target_audio_mixer_label = "Tonmischer".to_string();
+        assert_eq!(target_labels(&s), ["Player A", "Tonmischer"]);
+        s.target_player_a_label.clear();
+        s.target_player_b_label.clear();
+        s.target_audio_mixer_label.clear();
+        assert!(target_labels(&s).is_empty());
     }
 
     #[test]

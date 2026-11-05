@@ -101,3 +101,64 @@ func TestChannelIDIsValidated(t *testing.T) {
 		t.Fatalf("ungültige ID muss 400 liefern, got %d", rec.Code)
 	}
 }
+
+func TestAutomationTargetsBindPlayersToChannel(t *testing.T) {
+	store := &memSettings{m: map[string][]byte{}}
+	actor := ""
+	labels := map[string]string{"inst-player": "Player A", "inst-other": "Player Z"}
+	c := &channelRules{settings: store, actor: func(*http.Request) string { return actor }, labelOf: func(id string) string { return labels[id] }}
+
+	// Kanal-Dokument anlegen.
+	put := httptest.NewRecorder()
+	req := httptest.NewRequest("PUT", "/", strings.NewReader(channelDocWithGroup(t, "KANAL-EINS")))
+	req.SetPathValue("id", "ch1")
+	c.handlePutChannel()(put, req)
+	if put.Code != http.StatusOK {
+		t.Fatalf("PUT: %d", put.Code)
+	}
+	effective := func(instance string) string {
+		actor = instance
+		rec := httptest.NewRecorder()
+		c.handleGetEffective()(rec, httptest.NewRequest("GET", "/api/v1/audio-rules", nil))
+		return rec.Header().Get("X-Audio-Rules-Source")
+	}
+	if got := effective("inst-player"); got != "platform" {
+		t.Fatalf("vor der Meldung der Ziele bleibt der Player standalone, got %q", got)
+	}
+
+	// Die Automation meldet ihre Ziele (Bootstrap-Modus: actor == "").
+	actor = ""
+	rec := httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/", strings.NewReader(`{"labels":["Player A","  ","Tonmischer"]}`))
+	req.SetPathValue("id", "ch1")
+	c.handlePostTargets()(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST targets: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := effective("inst-player"); got != "channel" {
+		t.Fatalf("Ziel der Automation muss das Channel-Dokument bekommen, got %q", got)
+	}
+	if got := effective("inst-other"); got != "platform" {
+		t.Fatalf("ein nicht geführter Player bleibt standalone, got %q", got)
+	}
+
+	// Ändert die Automation ihre Ziele, fällt der alte Player wieder zurück.
+	actor = ""
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/", strings.NewReader(`{"labels":["Tonmischer"]}`))
+	req.SetPathValue("id", "ch1")
+	c.handlePostTargets()(rec, req)
+	if got := effective("inst-player"); got != "platform" {
+		t.Fatalf("nicht mehr geführt → standalone, got %q", got)
+	}
+
+	// Fremde Aufrufer dürfen keine Ziele eintragen (ohne DB nie „gebunden“).
+	actor = "inst-other"
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/", strings.NewReader(`{"labels":["Player Z"]}`))
+	req.SetPathValue("id", "ch1")
+	c.handlePostTargets()(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("ungebundene Instanz: %d, want 403", rec.Code)
+	}
+}
