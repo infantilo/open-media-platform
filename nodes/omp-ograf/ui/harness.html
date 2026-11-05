@@ -29,6 +29,61 @@
   // als Fill+Key. Der Schritt (continue) wird vom Node geführt und als
   // Zielschritt übergeben (Einzige Quelle der Wahrheit, kein Auseinander-
   // laufen mit einem hier mitgezählten Wert).
+  // Kapitel 90.1: Layout-Zonen. Vorlagen markieren Rechtecke mit data-ograf-zone="<id>" (Altname data-dve-zone). Solange
+  // eine Ebene steht, misst diese Schleife die Rechtecke jedes Bild (auch während CSS-Animationen) und meldet Änderungen
+  // (> 0,5 px oder Deckkraft > 0,01) an den Node. Ebenen ohne Zonen werden nur alle 30 Bilder erneut abgesucht.
+  const zoneState = new Map(); // layerId -> { sig, idle }
+  let zoneLoop = false;
+  function zonesOf(el) {
+    const found = new Set();
+    for (const root of [el.shadowRoot, el]) {
+      if (!root) continue;
+      root.querySelectorAll("[data-ograf-zone],[data-dve-zone]").forEach((z) => found.add(z));
+    }
+    return [...found];
+  }
+  function postZones(body) {
+    fetch("/ograf-zones", { method: "POST", body: JSON.stringify(body), keepalive: true }).catch(() => {});
+  }
+  function measureZones(layerId, layer) {
+    const W = window.innerWidth || 1, H = window.innerHeight || 1;
+    const out = [];
+    for (const z of zonesOf(layer.el)) {
+      const id = z.getAttribute("data-ograf-zone") || z.getAttribute("data-dve-zone");
+      if (!id) continue;
+      const r = z.getBoundingClientRect();
+      const cs = getComputedStyle(z);
+      const o = cs.visibility === "hidden" ? 0 : parseFloat(cs.opacity);
+      out.push({ id, x: r.left / W, y: r.top / H, w: r.width / W, h: r.height / H, o: Number.isFinite(o) ? o : 1 });
+    }
+    const sig = out.map((z) => [z.id, Math.round(z.x * W * 2), Math.round(z.y * H * 2), Math.round(z.w * W * 2),
+      Math.round(z.h * H * 2), Math.round(z.o * 100)].join(":")).join("|");
+    const st = zoneState.get(layerId) || { sig: "", idle: 0 };
+    zoneState.set(layerId, st);
+    st.idle = out.length ? 0 : st.idle + 1;
+    if (sig !== st.sig) {
+      st.sig = sig;
+      postZones({ layer: layerId, zones: out });
+    }
+    return out.length > 0;
+  }
+  function startZoneLoop() {
+    if (zoneLoop) return;
+    zoneLoop = true;
+    let frame = 0;
+    const tick = () => {
+      frame++;
+      if (window.omp.layers.size === 0) { zoneLoop = false; return; }
+      for (const [id, layer] of window.omp.layers) {
+        const st = zoneState.get(id);
+        if (st && st.idle > 0 && frame % 30 !== 0) continue;
+        try { measureZones(id, layer); } catch (e) { /* Messung darf die Grafik nie stören */ }
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
   window.omp = {
     layers: new Map(), // layerId -> { el, templateId }
 
@@ -55,6 +110,7 @@
           await layer.el.updateAction({ data });
         }
         await layer.el.playAction({});
+        startZoneLoop();
       } catch (e) {
         console.error("omp.show failed:", e);
       }
@@ -100,6 +156,7 @@
       } finally {
         layer.el.remove();
         this.layers.delete(layerId);
+        if (zoneState.delete(layerId)) postZones({ layer: layerId, remove: true });
       }
     },
   };

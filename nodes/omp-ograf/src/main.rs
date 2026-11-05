@@ -14,6 +14,7 @@ mod pipeline;
 mod subtitles;
 mod templates;
 mod uibundle;
+mod zones;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -64,6 +65,8 @@ struct OgrafStore {
     /// Gleichzeitig sichtbare Grafik-Ebenen (s. layers.rs).
     layers: Mutex<layers::Layers>,
     templates_root: PathBuf,
+    /// Kapitel 90.1: von der Harness-Seite gemessene Layout-Zonen je Ebene.
+    zones: zones::ZoneStore,
     pipeline: pipeline::PipelineHandle,
     /// Kapitel 27 / P9.4: Untertitel-Engine (s. `subtitles.rs`).
     subtitle_dir: PathBuf,
@@ -217,6 +220,8 @@ impl ParamStore for OgrafStore {
                 },
                 // Kapitel 27 / P9.4: Untertitel-Engine (JSON: selected, running, positionMs, text, tracks).
                 ParamSpec { name: "subtitle".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+                // Kapitel 90.1: gemessene Layout-Zonen je Ebene (JSON, normiert 0..1): { "<layerId>": [ {id,x,y,w,h,o} ] }.
+                ParamSpec { name: "zones".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
                 ParamSpec { name: "timecodeFlowId".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             ],
             methods: vec![
@@ -288,6 +293,9 @@ impl ParamStore for OgrafStore {
     fn get(&self, name: &str) -> Option<Value> {
         if name == "subtitle" {
             return Some(self.subtitle_state());
+        }
+        if name == "zones" {
+            return Some(self.zones.to_json());
         }
         if name == "timecodeFlowId" {
             return Some(serde_json::json!(self.timecode.connected_flow_id()));
@@ -387,6 +395,10 @@ impl ParamStore for OgrafStore {
             "hide" => {
                 let id = args.get("layerId").and_then(Value::as_str).filter(|s| !s.is_empty());
                 let removed = self.layers.lock().expect("lock poisoned").hide(id);
+                match id {
+                    Some(l) => self.zones.clear(l),
+                    None => self.zones.clear_all(),
+                }
                 // Eine unbekannte/bereits ausgeblendete Ebene ist kein Fehler
                 // (idempotent), schickt aber auch nichts an die Pipeline.
                 if id.is_none() || !removed.is_empty() {
@@ -413,6 +425,7 @@ impl ParamStore for OgrafStore {
 /// Descriptor/Params/Methods, davon ruft niemand darüber je etwas ab.
 struct HarnessOnlyStore {
     templates_root: PathBuf,
+    zones: zones::ZoneStore,
 }
 
 impl ParamStore for HarnessOnlyStore {
@@ -436,15 +449,15 @@ impl ParamStore for HarnessOnlyStore {
         Err(InvokeError::Unknown)
     }
 
-    fn extra_route(&self, method: &str, path: &str, _body: &[u8]) -> Option<RawResponse> {
-        templates::route(&self.templates_root, method, path)
+    fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        zones::route(&self.zones, method, path, body).or_else(|| templates::route(&self.templates_root, method, path))
     }
 
     /// `wpesrc` schickt kein Node-API-Token: ohne diese Freigabe beantwortet der Server die Harness-Seite mit 401 und die
     /// Grafik erscheint als winziger Fehlertext statt als Vorlage. Der Server lauscht nur auf 127.0.0.1 und liefert nur
     /// die statische Harness-Seite und die Vorlagendateien.
-    fn public_route(&self, method: &str, _path: &str) -> bool {
-        method == "GET"
+    fn public_route(&self, method: &str, path: &str) -> bool {
+        method == "GET" || (method == "POST" && path == zones::ZONES_PATH)
     }
 }
 
@@ -461,8 +474,8 @@ impl ParamStore for HarnessOnlyStore {
 /// sofort verbindungsfähig, auch bevor die Accept-Loop im eigenen Thread
 /// tatsächlich läuft — Verbindungen warten im Kernel-Backlog) und liefert
 /// den zugewiesenen Port zurück.
-fn spawn_harness_server(templates_root: PathBuf) -> std::io::Result<u16> {
-    let store: Arc<dyn ParamStore> = Arc::new(HarnessOnlyStore { templates_root });
+fn spawn_harness_server(templates_root: PathBuf, zones: zones::ZoneStore) -> std::io::Result<u16> {
+    let store: Arc<dyn ParamStore> = Arc::new(HarnessOnlyStore { templates_root, zones });
     let (port, _join_handle) = omp_node_sdk::server::spawn("127.0.0.1:0", store)?;
     Ok(port)
 }
@@ -503,7 +516,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Pfade zusätzlich (`OgrafStore::extra_route`), node-lokal ohne Auth
     // (gleiche Begründung wie `omp-audio-mixer::levels`), aber `wpesrc`
     // braucht die Seite schon vor dessen Start.
-    let harness_port = spawn_harness_server(templates_root.clone())?;
+    let zone_store = zones::ZoneStore::default();
+    let harness_port = spawn_harness_server(templates_root.clone(), zone_store.clone())?;
     let harness_url = format!("http://127.0.0.1:{harness_port}/ograf-harness.html");
 
     let pipeline_config = pipeline::Config {
@@ -568,6 +582,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         templates,
         layers: Mutex::new(layers::Layers::default()),
         templates_root,
+        zones: zone_store.clone(),
         pipeline: pipeline_handle,
         subtitle_dir: PathBuf::from(env_or("OMP_SUBTITLE_DIR", "data/subtitles")),
         subtitle_track: Mutex::new(None),
@@ -682,7 +697,7 @@ mod harness_tests {
     /// erschien nur als Fehlertext.
     #[test]
     fn harness_server_is_reachable_without_node_token() {
-        let store = HarnessOnlyStore { templates_root: PathBuf::from(".") };
+        let store = HarnessOnlyStore { templates_root: PathBuf::from("."), zones: zones::ZoneStore::default() };
         assert!(store.public_route("GET", "/ograf-harness.html"));
         assert!(store.public_route("GET", "/ograf-templates/x/y.js"));
         assert!(!store.public_route("POST", "/ograf-harness.html"));

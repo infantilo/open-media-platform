@@ -6444,7 +6444,7 @@ Vor jedem Schritt den Originaltext der zitierten Normen lesen (§0 Regel 10). Ve
 
 | Schritt | Inhalt | Status |
 |---|---|---|
-| 90.1 | Zonen-Rückkanal: Harness misst `data-ograf-zone`/`data-dve-zone` je Ebene, meldet per POST an den Node (Loopback), Property `zones` (normiert 0..1) | offen |
+| 90.1 | Zonen-Rückkanal: Harness misst `data-ograf-zone`/`data-dve-zone` je Ebene (jedes Bild per `requestAnimationFrame`, Meldung nur bei Änderung > 0,5 px), meldet per POST `/ograf-zones` an den Loopback-Server des Nodes (`zones.rs`, `ZoneStore`), Property `zones` = `{layerId:[{id,x,y,w,h,o}]}` normiert 0..1, `hide` löscht | erledigt 2026-11-05: `cargo test -p omp-ograf` 18 grün (3 neu); **live** (Release-Binary, Instanz per API): `dve-lower-third` zeigt `box` x=0,0625 y=0,375 w=0,25 h=0,333 (= 80/320 px von 1280×720), `update boxSide=right` → x=0,6875, `hide` → leer; Instanz danach gelöscht. **Orchestrator-Neustart nicht nötig, laufende `omp-ograf`-Instanzen neu starten (Release-Binary neu bauen: `cargo build --release -p omp-ograf`).** |
 | 90.2 | Layout-Kopplung Node → Mixer: Zone → PIP-Slot-Pose (Quelle PGM/PST/Quellenkennung wählbar), zeitgenau, Rückfahrt bei `hide` | offen |
 | 90.3 | Rahmen-Transition (Paternoster u. a.): zwei Zonen A/B, Mixer fährt zwei Posen, Take am Ende | offen; **Vorprüfung:** kann die Transition-Engine zwei Quellen mit je eigener 2D-Pose fahren? |
 | 90.4 | OGraf-Editor Grundgerüst: Bibliothek (neu/duplizieren/löschen/Import+Export als Paket), Manifest-Formular, Parameter-Schema-Editor | offen |
