@@ -465,6 +465,12 @@ entfernte Verbindungen. Beim Speichern gilt:
   oder übernimmt ihr Standby, geht der laufende Stand auf die neue Instanz
   über; die Festschreibung gilt für diese Rolle dann nicht mehr. Wer den
   Startzustand wieder festlegen will, speichert erneut.
+- **Rolle im laufenden Workflow stoppen und speichern:** Hast du den Node
+  einer Rolle im laufenden Workflow beendet (Stopp-Knopf an der Kachel) und
+  drückst „Im Workflow speichern“, fragt der Editor nach, ob die gestoppte
+  Rolle samt ihren Verbindungen und ihren Einträgen in der Schnittstelle aus
+  dem Workflow entfernt werden soll. Nach der Bestätigung ist sie aus der
+  Definition gelöscht. Ohne Bestätigung bleibt alles, wie es war.
 - Wird ein **gestoppter** Workflow bearbeitet und gespeichert, wird der
   gemerkte Bedienzustand verworfen, weil sich die Verkabelung geändert
   haben kann.

@@ -2009,6 +2009,9 @@ export class FlowCanvas extends HTMLElement {
         if (rt.nodeId) roleNameByNodeId.set(rt.nodeId, roleName);
       }
       if (roleNameByNodeId.size === 0) return false;
+      // Eine Rolle, deren Node nicht mehr läuft (im laufenden Workflow gestoppt), ist ebenfalls eine Änderung: Speichern
+      // nimmt sie aus der Definition.
+      for (const nodeId of roleNameByNodeId.keys()) if (!this.#graph.nodes.some((n) => n.id === nodeId)) return true;
       const key = (c: { fromRole: string; fromSender?: string; toRole: string; toReceiver?: string }) =>
         [c.fromRole, c.fromSender ?? "", c.toRole, c.toReceiver ?? ""].join("\u0000");
       const live = new Set(this.#liveConnections(roleNameByNodeId).map(key));
@@ -2605,15 +2608,18 @@ export class FlowCanvas extends HTMLElement {
     const roleNameByNodeId = new Map<string, string>();
     const roles: { name: string; nodeType: string; hostId?: string }[] = [];
     const missing: string[] = [];
-    const notRunning: string[] = [];
+    // Rollen, deren Node nicht mehr läuft (z. B. im laufenden Workflow gestoppt): sie fallen beim Speichern aus der Definition.
+    const stoppedRoles: string[] = [];
     const usedNames = new Set<string>(existingRoleNameByNodeId.values());
 
     for (const nodeId of memberIds) {
       const node = this.#graph.nodes.find((n) => n.id === nodeId);
       if (!node) {
-        // Der Workflow führt die Rolle noch, ihr Node ist aber nicht (mehr) in der Registry: Prozess beendet, nicht neu
-        // gestartet. Das ist etwas anderes als „nicht über den Katalog gestartet“ — mit Rollenname melden.
-        notRunning.push(existingRoleNameByNodeId.get(nodeId) ?? nodeId);
+        // Der Workflow führt die Rolle noch, ihr Node ist aber nicht (mehr) in der Registry: Prozess gestoppt. Das ist
+        // etwas anderes als „nicht über den Katalog gestartet“. Eine Rolle wird dann beim Speichern entfernt (s. u.);
+        // eine verwaiste Extra-Kachel ohne Rolle ist einfach weg.
+        const roleName = existingRoleNameByNodeId.get(nodeId);
+        if (roleName) stoppedRoles.push(roleName);
         continue;
       }
       const inst = node.instanceId ? instanceById.get(node.instanceId) : undefined;
@@ -2627,10 +2633,6 @@ export class FlowCanvas extends HTMLElement {
       roles.push({ name: roleName, nodeType: inst.type, hostId: inst.hostId });
     }
 
-    if (notRunning.length > 0) {
-      this.#showToast(tt("flow.roleNotRunning", { p0: notRunning.join(", ") }));
-      return;
-    }
     if (missing.length > 0) {
       this.#showToast(
         tt("flow.b2892b", { p0: 
@@ -2642,6 +2644,13 @@ export class FlowCanvas extends HTMLElement {
     if (roles.length === 0) {
       this.#showToast(tt("flow.303686"));
       return;
+    }
+
+    if (stoppedRoles.length > 0) {
+      // Im laufenden Workflow gestoppte Rollen: speichern heißt, sie samt ihren Verbindungen aus dem Workflow zu nehmen.
+      // Das ändert die Definition dauerhaft, darum erst nach Bestätigung.
+      const ok = await confirmDialog(tt("flow.removeStoppedRoles", { p0: stoppedRoles.join(", ") }), { confirmLabel: tt("kit.ok") });
+      if (!ok) return;
     }
 
     const connections = this.#liveConnections(roleNameByNodeId);
@@ -2659,7 +2668,19 @@ export class FlowCanvas extends HTMLElement {
       const res = await apiFetch(`/api/v1/workflows/${encodeURIComponent(workflowId)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: wf.name, definition: { ...wf.definition, roles, connections } }),
+        body: JSON.stringify({
+          name: wf.name,
+          definition: {
+            ...wf.definition,
+            roles,
+            connections,
+            // Mitglieder der Schnittstelle entfernter Rollen fallen mit weg (sonst lehnt der Orchestrator die Definition ab).
+            interface: stoppedRoles.reduce(
+              (ifc, role) => renameRoleIn(ifc, role, null),
+              wf.definition.interface as WorkflowInterface | undefined,
+            ),
+          },
+        }),
       });
       if (!res.ok) {
         const text = await res.text();

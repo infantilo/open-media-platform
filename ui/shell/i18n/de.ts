@@ -280,7 +280,7 @@ export const de = {
   "wfi.feedTip": "Dauerhafte Zuordnung (Ausgang → Eingang); anklicken und mit Entf trennen",
   "wfi.disconnected": "Verbindung getrennt.",
   "wfi.disconnect": "Trennen (Entf)",
-  "flow.roleNotRunning": "Im Workflow speichern nicht möglich — die Rolle läuft nicht (ihr Node ist nicht registriert): {p0}. Rolle neu starten oder den Workflow stoppen und starten, dann erneut speichern.",
+  "flow.removeStoppedRoles": "Die Rolle(n) {p0} laufen nicht mehr (gestoppt). Beim Speichern werden sie samt ihren Verbindungen aus dem Workflow entfernt. Fortfahren?",
   "kit.workflowOutputs": "Workflow-Ausgänge",
   "kit.currentWorkflow": "Aktueller Workflow",
   "kit.otherWorkflows": "Andere Workflows",
