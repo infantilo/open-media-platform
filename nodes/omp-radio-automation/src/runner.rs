@@ -3,6 +3,7 @@
 
 use std::collections::HashSet;
 
+use omp_playout_core::backtime;
 use omp_playout_core::segue::{self, Config, Item, Placed};
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +23,11 @@ pub struct LogItem {
     pub outro_ms: Option<i64>,
     #[serde(default)]
     pub gain_db: f64,
+    #[serde(default)]
+    pub optional: bool,
+    /// Harte Marke: dieses Element soll zu dieser Uhrzeit (Unix-ms) einsetzen (Backtiming, RB5).
+    #[serde(default)]
+    pub fix_at_unix_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -29,6 +35,9 @@ pub struct LogItem {
 pub struct Log {
     pub log_id: String,
     pub items: Vec<LogItem>,
+    /// Füllkandidaten für das Backtiming (werden nur bei Bedarf eingefügt).
+    #[serde(default)]
+    pub fillers: Vec<LogItem>,
 }
 
 /// Ein Aufruf `play` an den Segue-Player.
@@ -64,6 +73,42 @@ impl PlayCall {
     }
 }
 
+fn to_item(i: &LogItem) -> Item {
+    Item { id: i.id.clone(), kind: i.kind, duration_ms: i.duration_ms, som_ms: i.som_ms, intro_ms: i.intro_ms, outro_ms: i.outro_ms, gain_db: i.gain_db, optional: i.optional }
+}
+
+/// Backtiming beim Start: Für jede harte Marke (`fixAtUnixMs`) wird der Ablauf davor angepasst (Füllkandidaten weglassen/einfügen, Segue-Punkte
+/// verschieben). Ergebnis: angepasster Log, Entscheidungen als Text, größter Rest in ms.
+pub fn apply_fixtimes(log: &Log, start_unix_ms: i64, cfg: &Config, params: &backtime::Params) -> Result<(Log, Vec<String>, i64), String> {
+    let mut cur = log.clone();
+    let mut decisions = Vec::new();
+    let mut worst = 0i64;
+    let marks: Vec<String> = cur.items.iter().filter(|i| i.fix_at_unix_ms.is_some()).map(|i| i.id.clone()).collect();
+    for id in marks {
+        let idx = cur.items.iter().position(|i| i.id == id).ok_or("Marke verschwunden")?;
+        let at = cur.items[idx].fix_at_unix_ms.unwrap_or(0) - start_unix_ms;
+        let items: Vec<Item> = cur.items.iter().map(to_item).collect();
+        let fillers: Vec<Item> = cur.fillers.iter().map(to_item).collect();
+        let fit = backtime::fit(&items, idx, at, 0, &fillers, cfg, params)?;
+        let mut pool: Vec<LogItem> = cur.items.iter().chain(cur.fillers.iter()).cloned().collect();
+        let mut out = Vec::with_capacity(fit.items.len());
+        for it in &fit.items {
+            let pos = pool.iter().position(|x| x.id == it.id).ok_or("Element nicht gefunden")?;
+            let mut li = pool[pos].clone();
+            li.outro_ms = it.outro_ms;
+            out.push(li);
+            pool.remove(pos);
+        }
+        cur.fillers = cur.fillers.into_iter().filter(|f| !out.iter().any(|o| o.id == f.id)).collect();
+        cur.items = out;
+        decisions.extend(fit.decisions.iter().map(|d| format!("{id}: {d}")));
+        if fit.residual_ms.abs() > worst.abs() {
+            worst = fit.residual_ms;
+        }
+    }
+    Ok((cur, decisions, worst))
+}
+
 /// `voiceId` des Elements: Log-ID und Platz; nur erlaubte Zeichen, höchstens 40.
 pub fn voice_id(log_id: &str, index: usize) -> String {
     let clean: String = log_id.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' }).collect();
@@ -73,11 +118,7 @@ pub fn voice_id(log_id: &str, index: usize) -> String {
 }
 
 pub fn plan(log: &Log, cfg: &Config) -> Result<Vec<Placed>, String> {
-    let items: Vec<Item> = log
-        .items
-        .iter()
-        .map(|i| Item { id: i.id.clone(), kind: i.kind, duration_ms: i.duration_ms, som_ms: i.som_ms, intro_ms: i.intro_ms, outro_ms: i.outro_ms, gain_db: i.gain_db })
-        .collect();
+    let items: Vec<Item> = log.items.iter().map(to_item).collect();
     segue::plan(&items, 0, cfg)
 }
 
@@ -108,10 +149,10 @@ mod tests {
     use segue::Kind;
 
     fn item(id: &str, kind: Kind, dur: i64, outro: Option<i64>) -> LogItem {
-        LogItem { id: id.into(), kind, file: format!("/m/{id}.wav"), duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: outro, gain_db: -1.5 }
+        LogItem { id: id.into(), kind, file: format!("/m/{id}.wav"), duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: outro, gain_db: -1.5, optional: false, fix_at_unix_ms: None }
     }
     fn log() -> Log {
-        Log { log_id: "tag 1".into(), items: vec![item("a", Kind::Song, 200_000, Some(195_000)), item("j", Kind::Jingle, 6_000, None), item("b", Kind::Song, 180_000, None)] }
+        Log { log_id: "tag 1".into(), fillers: vec![], items: vec![item("a", Kind::Song, 200_000, Some(195_000)), item("j", Kind::Jingle, 6_000, None), item("b", Kind::Song, 180_000, None)] }
     }
 
     #[test]
@@ -148,6 +189,22 @@ mod tests {
         // Jetztzeit 300 s nach Start: Titel a und Jingle sind vorbei, b läuft (Beginn bei 200,5 s)
         let d = due(&l, &p, 0, 300_000_000_000, 30_000, &HashSet::new());
         assert_eq!(d.iter().map(|c| c.index).collect::<Vec<_>>(), vec![2]);
+    }
+
+    #[test]
+    fn fixtime_drops_optional_and_keeps_files() {
+        let mut l = log();
+        let mut x = item("x", Kind::Song, 100_000, Some(95_000));
+        x.optional = true;
+        l.items.insert(1, x);
+        // a (Segue 195 s) → x (Segue 95 s) → j → b: ohne Marke startet j bei 290 s; Marke auf j bei 195 s Logzeit
+        let n = l.items.iter().position(|i| i.id == "j").unwrap();
+        l.items[n].fix_at_unix_ms = Some(1_000_000 + 195_000);
+        let (out, notes, residual) = apply_fixtimes(&l, 1_000_000, &Config::default(), &backtime::Params::default()).unwrap();
+        assert_eq!(out.items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), vec!["a", "j", "b"]);
+        assert_eq!(out.items[0].file, "/m/a.wav");
+        assert_eq!(residual, 0);
+        assert!(notes[0].starts_with("j: "));
     }
 
     #[test]

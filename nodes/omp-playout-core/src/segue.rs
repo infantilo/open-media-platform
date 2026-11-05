@@ -51,6 +51,9 @@ pub struct Item {
     /// Pegelkorrektur aus der Lautheit (Ziel − gemessen).
     #[serde(default)]
     pub gain_db: f64,
+    /// Füllkandidat: darf das Backtiming weglassen (RB5).
+    #[serde(default)]
+    pub optional: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -138,7 +141,7 @@ pub fn plan(items: &[Item], start_ms: i64, cfg: &Config) -> Result<Vec<Placed>, 
                     p.end_ms = p.next_start_ms + xf;
                     pending_in = (xf, cfg.curve);
                 }
-                (Kind::Song, Kind::Jingle) => {
+                (Kind::Song, Kind::Jingle | Kind::Speech) => {
                     let o = outro_of(it, cfg);
                     let tail = it.duration_ms - o;
                     let f = cfg.under_jingle_fade_ms.min(tail.max(0));
@@ -167,13 +170,13 @@ mod tests {
     use super::*;
 
     fn song(id: &str, dur: i64, outro: Option<i64>) -> Item {
-        Item { id: id.into(), kind: Kind::Song, duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: outro, gain_db: 0.0 }
+        Item { id: id.into(), kind: Kind::Song, duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: outro, gain_db: 0.0, optional: false }
     }
     fn jingle(id: &str, dur: i64) -> Item {
-        Item { id: id.into(), kind: Kind::Jingle, duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: None, gain_db: 0.0 }
+        Item { id: id.into(), kind: Kind::Jingle, duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: None, gain_db: 0.0, optional: false }
     }
     fn speech(id: &str, dur: i64) -> Item {
-        Item { id: id.into(), kind: Kind::Speech, duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: None, gain_db: 0.0 }
+        Item { id: id.into(), kind: Kind::Speech, duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: None, gain_db: 0.0, optional: false }
     }
 
     #[test]

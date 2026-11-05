@@ -13,6 +13,7 @@ use std::time::Duration;
 use omp_node_sdk::is04::RegistryClient;
 use omp_node_sdk::{Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType, RawResponse, SetError};
 use omp_playout_core::remote::{self, OrchestratorAuth, ProxyClient};
+use omp_playout_core::backtime;
 use omp_playout_core::segue::{Config, Placed};
 use serde_json::{Value, json};
 
@@ -177,7 +178,20 @@ impl ParamStore for Store {
                     .filter(|v| *v > 0)
                     .or_else(|| args.get("atUnixMs").and_then(Value::as_u64).filter(|v| *v > 0).map(|ms| (ms as i128 * 1_000_000 + tai_offset_ns()) as u64));
                 let delay = args.get("delayMs").and_then(Value::as_u64).unwrap_or(3000);
-                r.start_tai_ns = at.unwrap_or_else(|| tai_now_ns() + delay * 1_000_000);
+                let start_tai = at.unwrap_or_else(|| tai_now_ns() + delay * 1_000_000);
+                // Backtiming gegen harte Marken (RB5): der Ablauf wird für diese Startzeit angepasst, Entscheidungen kommen ins As-Run
+                let start_unix_ms = ((start_tai as i128 - tai_offset_ns()) / 1_000_000) as i64;
+                if r.log.as_ref().is_some_and(|l| l.items.iter().any(|i| i.fix_at_unix_ms.is_some())) {
+                    let log = r.log.clone().expect("log");
+                    let (adj, notes, residual) = runner::apply_fixtimes(&log, start_unix_ms, &Config::default(), &backtime::Params::default()).map_err(InvokeError::Message)?;
+                    r.placed = runner::plan(&adj, &Config::default()).map_err(InvokeError::Message)?;
+                    r.log = Some(adj);
+                    for n in notes {
+                        r.as_run.push(json!({"event": "backtiming", "text": n, "taiNs": tai_now_ns()}));
+                    }
+                    r.as_run.push(json!({"event": "backtiming-result", "residualMs": residual, "taiNs": tai_now_ns()}));
+                }
+                r.start_tai_ns = start_tai;
                 Ok(())
             }
             "stop" => {

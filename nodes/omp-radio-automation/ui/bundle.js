@@ -7,29 +7,29 @@ const T = (() => {
       target: "Segue-Player (Ziel)", noTarget: "— kein Ziel —", lookahead: "Vorlauf (s)", state: "Zustand",
       "st.empty": "leer", "st.loaded": "geladen", "st.running": "läuft", "st.finished": "beendet",
       log: "Log", logId: "Log-Name", add: "+ Element", load: "Log laden", dirty: "ungeladene Änderungen", import: "JSON einfügen …", export: "Als JSON anzeigen", apply: "Übernehmen",
-      colId: "Name", colKind: "Art", colFile: "Datei", colDur: "Dauer (ms)", colIntro: "Intro (ms)", colOutro: "Segue-Punkt (ms)", colSom: "Start in Datei (ms)", colGain: "Pegel (dB)",
+      colId: "Name", colKind: "Art", colFile: "Datei", colDur: "Dauer (ms)", colIntro: "Intro (ms)", colOutro: "Segue-Punkt (ms)", colSom: "Start in Datei (ms)", colGain: "Pegel (dB)", colFix: "Harte Marke (HH:MM:SS)", colOpt: "Füller",
       "kind.song": "Titel", "kind.jingle": "Jingle", "kind.speech": "Gesprochenes",
       up: "nach oben", down: "nach unten", del: "Entfernen",
       plan: "Ablauf", now: "jetzt", noPlan: "Noch kein Log geladen.",
       start: "Start", startIn: "in {n} s", startAt: "um (HH:MM:SS)", startBtn: "Starten", stop: "Stoppen", stopAsk: "Sendung stoppen? Laufende Stimmen werden ausgeblendet.", stopGo: "Stoppen",
       sent: "gesendet", waiting: "wartet", playing: "läuft", done: "vorbei", elapsed: "Zeit",
-      asRun: "As-Run", noAsRun: "Noch keine Einträge.", evSched: "geplant", evStop: "Stopp", lead: "Vorlauf {s} s",
+      asRun: "As-Run", noAsRun: "Noch keine Einträge.", evSched: "geplant", evStop: "Stopp", evBack: "Backtiming", evBackRes: "Backtiming-Ergebnis: Rest {ms} ms", badFix: "Marke ungültig (HH:MM[:SS]): {v}", lead: "Vorlauf {s} s",
       loaded: "Log geladen.", started: "Gestartet.", stopped: "Gestoppt.", badTime: "Uhrzeit ungültig (HH:MM[:SS]).", badLog: "Log ungültig: {e}", fail: "{m} fehlgeschlagen: {d}",
-      hint: "Der Segue-Punkt ist die Stelle in der Datei, ab der der Nachfolger starten darf; ohne Angabe 3 s vor Dateiende. Der Log wird erst mit „Log laden“ übernommen.",
+      hint: "Eine harte Marke (Uhrzeit) lässt das Element zu dieser Zeit einsetzen: beim Start werden Füller weggelassen/eingefügt und Segue-Punkte verschoben (Entscheidungen im As-Run). Der Segue-Punkt ist die Stelle in der Datei, ab der der Nachfolger starten darf; ohne Angabe 3 s vor Dateiende. Der Log wird erst mit „Log laden“ übernommen.",
     },
     en: {
       target: "Segue player (target)", noTarget: "— no target —", lookahead: "Lead time (s)", state: "State",
       "st.empty": "empty", "st.loaded": "loaded", "st.running": "running", "st.finished": "finished",
       log: "Log", logId: "Log name", add: "+ Item", load: "Load log", dirty: "unloaded changes", import: "Paste JSON …", export: "Show as JSON", apply: "Apply",
-      colId: "Name", colKind: "Kind", colFile: "File", colDur: "Duration (ms)", colIntro: "Intro (ms)", colOutro: "Segue point (ms)", colSom: "Start in file (ms)", colGain: "Level (dB)",
+      colId: "Name", colKind: "Kind", colFile: "File", colDur: "Duration (ms)", colIntro: "Intro (ms)", colOutro: "Segue point (ms)", colSom: "Start in file (ms)", colGain: "Level (dB)", colFix: "Hard mark (HH:MM:SS)", colOpt: "Filler",
       "kind.song": "Track", "kind.jingle": "Jingle", "kind.speech": "Speech",
       up: "move up", down: "move down", del: "Remove",
       plan: "Schedule", now: "now", noPlan: "No log loaded yet.",
       start: "Start", startIn: "in {n} s", startAt: "at (HH:MM:SS)", startBtn: "Start", stop: "Stop", stopAsk: "Stop the broadcast? Running voices are faded out.", stopGo: "Stop",
       sent: "sent", waiting: "waiting", playing: "playing", done: "done", elapsed: "Time",
-      asRun: "As-run", noAsRun: "No entries yet.", evSched: "scheduled", evStop: "stop", lead: "lead {s} s",
+      asRun: "As-run", noAsRun: "No entries yet.", evSched: "scheduled", evStop: "stop", evBack: "Backtiming", evBackRes: "Backtiming result: remainder {ms} ms", badFix: "Invalid mark (HH:MM[:SS]): {v}", lead: "lead {s} s",
       loaded: "Log loaded.", started: "Started.", stopped: "Stopped.", badTime: "Invalid time (HH:MM[:SS]).", badLog: "Invalid log: {e}", fail: "{m} failed: {d}",
-      hint: "The segue point is the position in the file from which the next item may start; without it, 3 s before the end. The log only takes effect with “Load log”.",
+      hint: "A hard mark (time of day) makes the item start at that time: at start, fillers are dropped/inserted and segue points are moved (decisions in the as-run). The segue point is the position in the file from which the next item may start; without it, 3 s before the end. The log only takes effect with “Load log”.",
     },
   };
   const lang = document.documentElement.lang === "en" ? "en" : "de";
@@ -105,7 +105,9 @@ const STYLE = `
 `;
 
 const fmtMs = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
-const blankItem = () => ({ id: "", kind: "song", file: "", durationMs: 180000, somMs: 0, introMs: null, outroMs: null, gainDb: 0 });
+const blankItem = () => ({ id: "", kind: "song", file: "", durationMs: 180000, somMs: 0, introMs: null, outroMs: null, gainDb: 0, optional: false, fixText: "" });
+const fixToUnix = (text) => { const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(text.trim()); if (!m || +m[1] > 23 || +m[2] > 59 || +(m[3] || 0) > 59) return null; const d = new Date(); d.setHours(+m[1], +m[2], +(m[3] || 0), 0); if (d.getTime() < Date.now()) d.setDate(d.getDate() + 1); return d.getTime(); };
+const unixToFix = (ms) => (ms ? new Date(ms).toLocaleTimeString("de-DE") : "");
 
 class OmpRadioAutomationPanel extends HTMLElement {
   connectedCallback() {
@@ -113,6 +115,7 @@ class OmpRadioAutomationPanel extends HTMLElement {
     const shadow = this.attachShadow({ mode: "open" });
     let rows = [];
     let logId = "log1";
+    let fillers = [];
     let dirty = false;
     let view = { state: "empty", items: [], startUnixMs: 0, nowUnixMs: 0 };
     let asRun = [];
@@ -141,9 +144,11 @@ class OmpRadioAutomationPanel extends HTMLElement {
         id: r.id.trim() || `e${i + 1}`, kind: r.kind, file: r.file.trim(), durationMs: Number(r.durationMs) || 0,
         somMs: Number(r.somMs) || 0, introMs: r.introMs === null || r.introMs === "" ? null : Number(r.introMs),
         outroMs: r.outroMs === null || r.outroMs === "" ? null : Number(r.outroMs), gainDb: Number(r.gainDb) || 0,
+        optional: !!r.optional, fixAtUnixMs: r.fixText && r.fixText.trim() ? fixToUnix(r.fixText) : null,
       })),
+      fillers,
     });
-    const fromWire = (l) => { logId = l.logId || "log"; rows = (l.items || []).map((i) => ({ ...blankItem(), ...i, introMs: i.introMs ?? null, outroMs: i.outroMs ?? null })); };
+    const fromWire = (l) => { logId = l.logId || "log"; fillers = l.fillers || []; rows = (l.items || []).map((i) => ({ ...blankItem(), ...i, introMs: i.introMs ?? null, outroMs: i.outroMs ?? null, fixText: unixToFix(i.fixAtUnixMs) })); };
 
     // ---- Kopf ----
     const stateChip = h("span", { class: "chip" });
@@ -163,13 +168,16 @@ class OmpRadioAutomationPanel extends HTMLElement {
         const kind = h("select", { onchange: (e) => { r.kind = e.target.value; markDirty(); } }, ...["song", "jingle", "speech"].map((k) => h("option", { value: k }, T("kind." + k))));
         kind.value = r.kind;
         const move = (d) => () => { const j = i + d; if (j < 0 || j >= rows.length) return; [rows[i], rows[j]] = [rows[j], rows[i]]; markDirty(); renderRows(); };
-        return h("tr", {}, cell("", inp("id", "text")), cell("", kind), cell("file", inp("file", "text")), cell("num", inp("durationMs", "number")), cell("num", inp("introMs", "number")), cell("num", inp("outroMs", "number")), cell("num", inp("somMs", "number")), cell("num", inp("gainDb", "number")),
+        return h("tr", {}, cell("", inp("id", "text")), cell("", kind), cell("file", inp("file", "text")), cell("num", inp("durationMs", "number")), cell("num", inp("introMs", "number")), cell("num", inp("outroMs", "number")), cell("num", inp("somMs", "number")), cell("num", inp("gainDb", "number")), cell("", inp("fixText", "text")),
+          cell("", h("input", { type: "checkbox", style: "width:auto", checked: !!r.optional, onchange: (e) => { r.optional = e.target.checked; markDirty(); } })),
           cell("act", [h("button", { title: T("up"), onclick: move(-1) }, "↑"), h("button", { title: T("down"), onclick: move(1) }, "↓"), h("button", { title: T("del"), onclick: () => { rows.splice(i, 1); markDirty(); renderRows(); } }, "✕")]));
       }));
     };
     const loadBtn = h("button", { class: "primary", onclick: async () => {
       const w = toWire();
       if (!w.items.length) return show(T("badLog", { e: "—" }));
+      const badFix = rows.find((r) => r.fixText && r.fixText.trim() && fixToUnix(r.fixText) === null);
+      if (badFix) return show(T("badFix", { v: badFix.fixText }));
       if (w.items.some((x) => !x.file || x.durationMs <= 0)) return show(T("badLog", { e: `${T("colFile")} / ${T("colDur")}` }));
       if (await call("load", { log: JSON.stringify(w) })) { dirty = false; dirtyEl.textContent = ""; show(T("loaded"), true); poll(); }
     } }, T("load"));
@@ -181,7 +189,7 @@ class OmpRadioAutomationPanel extends HTMLElement {
         h("div", { class: "bar" }, h("label", {}, T("logId"), logIdInput), h("button", { onclick: () => { rows.push(blankItem()); markDirty(); renderRows(); } }, T("add")),
           loadBtn, h("button", { onclick: () => { jsonArea.value = JSON.stringify(toWire(), null, 2); jsonBox.style.display = ""; } }, T("export")),
           h("button", { onclick: () => { jsonArea.value = ""; jsonBox.style.display = ""; } }, T("import")), dirtyEl),
-        h("table", {}, h("thead", {}, h("tr", {}, ...["colId", "colKind", "colFile", "colDur", "colIntro", "colOutro", "colSom", "colGain"].map((k) => h("th", {}, T(k))), h("th"))), tbody),
+        h("table", {}, h("thead", {}, h("tr", {}, ...["colId", "colKind", "colFile", "colDur", "colIntro", "colOutro", "colSom", "colGain", "colFix", "colOpt"].map((k) => h("th", {}, T(k))), h("th"))), tbody),
         jsonBox, h("p", { class: "hint" }, T("hint"))));
 
     // ---- Ablauf (Zeitleiste) ----
@@ -233,8 +241,9 @@ class OmpRadioAutomationPanel extends HTMLElement {
     const renderAsRun = () => {
       if (!asRun.length) { asRunEl.replaceChildren(h("span", { class: "muted" }, T("noAsRun"))); return; }
       asRunEl.replaceChildren(...asRun.slice().reverse().slice(0, 100).map((e) => {
-        const t = e.startTaiNs ? "" : "";
-        return h("div", { class: "ev" }, e.event === "stop" ? T("evStop") : `${T("evSched")} #${e.index + 1} ${e.id}`, e.leadMs !== undefined ? ` — ${T("lead", { s: (e.leadMs / 1000).toFixed(1) })}` : "", t);
+        if (e.event === "backtiming") return h("div", { class: "ev" }, `${T("evBack")}: ${e.text}`);
+        if (e.event === "backtiming-result") return h("div", { class: "ev" }, T("evBackRes", { ms: e.residualMs }));
+        return h("div", { class: "ev" }, e.event === "stop" ? T("evStop") : `${T("evSched")} #${e.index + 1} ${e.id}`, e.leadMs !== undefined ? ` — ${T("lead", { s: (e.leadMs / 1000).toFixed(1) })}` : "");
       }));
     };
 
