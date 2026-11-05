@@ -4,7 +4,7 @@ import { renderScene } from "./runtime.js";
 import {
   addElement, alignGroup, ANIM_TYPES, type Align, alignToScene, angleFor, boundsOf, distribute, duplicateMany, elementsInRect, type Guide, HANDLES,
   type Handle, hitTest, History, KINDS, type Kind, moveElements, newElement, removeElements, reorder, resizeBox, resizeRotated, type Scene,
-  type SceneElement, setStepCount, setTiming, snapBox, timelineEnd, updateElement,
+  type SceneElement, setActions, setStepCount, setTiming, snapBox, timelineEnd, updateElement, EFFECT_TYPES, newAction,
 } from "./scene.ts";
 import { messages } from "./messages.ts";
 
@@ -328,8 +328,74 @@ export class CanvasEditor {
     }
     if (!this.scene.elements.length) box.append(document.createTextNode(tr("canvasEmpty")));
     this.#drawFonts();
+    this.#drawActions();
   }
+  #actBox?: HTMLDivElement;
   #fontBox?: HTMLDivElement;
+  #drawActions() {
+    if (!this.#actBox) {
+      this.#actBox = document.createElement("div");
+      this.#actBox.className = "col";
+      (this.#fontBox ?? this.#layers).after(this.#actBox);
+    }
+    const box = this.#actBox;
+    box.innerHTML = "";
+    const h = document.createElement("div");
+    h.textContent = tr("actions");
+    h.style.cssText = "color:var(--omp-text-dim,#9aa0a6);font-size:11px;text-transform:uppercase;letter-spacing:.05em";
+    box.append(h);
+    const acts = this.scene.actions ?? [];
+    const names = this.scene.elements.filter((e) => e.kind !== "zone");
+    const save = (next: typeof acts) => this.#commit(setActions(this.scene, next));
+    acts.forEach((a, ai) => {
+      const card = document.createElement("div");
+      card.style.cssText = "border:1px solid var(--omp-border,#2e3338);border-radius:4px;padding:4px;display:flex;flex-direction:column;gap:3px";
+      const top = document.createElement("div");
+      top.style.cssText = "display:flex;gap:4px";
+      const nm = document.createElement("input");
+      nm.value = a.name;
+      nm.title = `ID: ${a.id}`;
+      nm.addEventListener("change", () => save(acts.map((x, i) => i === ai ? { ...x, name: nm.value || x.id } : x)));
+      top.append(nm, this.#btn("▶", () => void this.#handle?.action(a.id), tr("actionPlay")), this.#btn("✕", () => save(acts.filter((_, i) => i !== ai)), tr("remove")));
+      card.append(top);
+      a.effects.forEach((fx, fi) => {
+        const row = document.createElement("div");
+        row.style.cssText = "display:grid;grid-template-columns:1fr 78px 50px auto;gap:3px";
+        const set = (p: Partial<typeof fx>) => save(acts.map((x, i) => i === ai ? { ...x, effects: x.effects.map((f, j) => j === fi ? { ...f, ...p } : f) } : x));
+        const tgt = document.createElement("select");
+        for (const e of names) {
+          const o = document.createElement("option");
+          o.value = e.id;
+          o.textContent = e.name;
+          tgt.append(o);
+        }
+        tgt.value = fx.target;
+        tgt.addEventListener("change", () => set({ target: tgt.value }));
+        const typ = document.createElement("select");
+        for (const t of EFFECT_TYPES) {
+          const o = document.createElement("option");
+          o.value = t;
+          o.textContent = tr(`fx_${t}`);
+          typ.append(o);
+        }
+        typ.value = fx.type;
+        typ.addEventListener("change", () => set({ type: typ.value }));
+        const ms = document.createElement("input");
+        ms.type = "number";
+        ms.value = String(fx.ms);
+        ms.title = tr("animMs");
+        ms.addEventListener("change", () => set({ ms: Math.max(50, Number(ms.value) || 600) }));
+        row.append(tgt, typ, ms, this.#btn("✕", () => save(acts.map((x, i) => i === ai ? { ...x, effects: x.effects.filter((_, j) => j !== fi) } : x)), tr("remove")));
+        card.append(row);
+      });
+      card.append(this.#btn(tr("addEffect"), () => {
+        const first = names[0];
+        if (first) save(acts.map((x, i) => i === ai ? { ...x, effects: [...x.effects, { target: first.id, type: "pulse", ms: 600, delay: 0 }] } : x));
+      }));
+      box.append(card);
+    });
+    box.append(this.#btn(tr("addAction"), () => save([...acts, newAction(this.scene)])));
+  }
   #drawFonts() {
     if (!this.#fontBox) {
       this.#fontBox = document.createElement("div");
@@ -601,6 +667,17 @@ export class CanvasEditor {
       this.#btn(tr("animOut"), () => { this.#tlDir = "out"; this.#drawTimeline(); }, "", dir === "out" ? "on" : ""),
       document.createTextNode(`${tr("timeline")} · ${end} ms`),
     );
+    const scrub = document.createElement("input");
+    scrub.type = "range";
+    scrub.min = "0";
+    scrub.max = String(end);
+    scrub.step = "10";
+    scrub.value = "0";
+    scrub.title = tr("scrub");
+    scrub.style.cssText = "flex:1;min-width:120px;padding:0";
+    scrub.addEventListener("input", () => this.#handle?.scrub(dir, Number(scrub.value)));
+    scrub.addEventListener("change", () => { scrub.value = "0"; this.#redrawStage(); });
+    head.append(scrub);
     box.append(head);
     const ruler = document.createElement("div");
     ruler.className = "row";

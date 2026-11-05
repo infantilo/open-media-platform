@@ -374,6 +374,15 @@ impl ParamStore for OgrafStore {
                         kind: ParamType::String,
                     }],
                 },
+                // OGraf customAction einer sichtbaren Ebene (z. B. „Hervorheben“); `id` aus `customActions` der Vorlage.
+                MethodSpec {
+                    name: "action".to_string(),
+                    args: vec![
+                        MethodArg { name: "layerId".to_string(), kind: ParamType::String },
+                        MethodArg { name: "id".to_string(), kind: ParamType::String },
+                        MethodArg { name: "payload".to_string(), kind: ParamType::String },
+                    ],
+                },
                 MethodSpec {
                     name: "hide".to_string(),
                     // layerId optional: ohne alle Ebenen ausblenden.
@@ -499,6 +508,24 @@ impl ParamStore for OgrafStore {
                 if let Some(step) = layers.advance(&layer_id) {
                     self.pipeline.send(pipeline::Command::Continue { layer_id, step });
                 }
+                Ok(())
+            }
+            "action" => {
+                let layers = self.layers.lock().expect("lock poisoned");
+                let layer_id = match args.get("layerId").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                    Some(id) => id.to_string(),
+                    None => layers.only().map(|l| l.id.clone()).ok_or(InvokeError::Unknown)?,
+                };
+                if !layers.contains(&layer_id) {
+                    return Err(InvokeError::Unknown);
+                }
+                let action_id = args.get("id").and_then(Value::as_str).filter(|s| !s.is_empty() && s.len() <= 64).ok_or(InvokeError::Unknown)?.to_string();
+                let payload = match args.get("payload") {
+                    Some(v @ Value::Object(_)) => v.clone(),
+                    _ => serde_json::json!({}),
+                };
+                drop(layers);
+                self.pipeline.send(Self::timed(args, pipeline::Command::Action { layer_id, action_id, payload }));
                 Ok(())
             }
             "hide" => {

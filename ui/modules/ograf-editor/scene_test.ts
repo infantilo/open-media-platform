@@ -1,8 +1,8 @@
 import { assertEquals, assertNotEquals } from "jsr:@std/assert@1";
 import RUNTIME from "./runtime.js" with { type: "text" };
-import { bindText, inStep, keyframesFor } from "./runtime.js";
+import { bindText, effectKeyframes, inStep, keyframesFor } from "./runtime.js";
 import {
-  addElement, alignGroup, alignToScene, angleFor, boundsOf, distribute, duplicateMany, elementsInRect, ensureParams, resizeRotated, setStepCount, setTiming, timelineEnd, applyScene, duplicateElement, generateMain, hitTest, History, isDesigner, moveElements, newDesignerPackage,
+  addElement, alignGroup, alignToScene, angleFor, boundsOf, distribute, duplicateMany, elementsInRect, ensureParams, newAction, resizeRotated, setActions, setStepCount, setTiming, timelineEnd, applyScene, duplicateElement, generateMain, hitTest, History, isDesigner, moveElements, newDesignerPackage,
   newElement, newScene, parseScene, placeholders, removeElements, reorder, resizeBox, SCENE_FORMAT, snapBox, updateElement, usedAssets, zoneIds,
 } from "./scene.ts";
 import { parseManifest } from "./logic.ts";
@@ -242,4 +242,26 @@ Deno.test("Zeitleiste: setTiming rundet auf 50 ms, timelineEnd als Maßstab", ()
   s = setTiming(s, "a", "in", { delay: 1500, ms: 700 });
   assertEquals(timelineEnd(s, "in"), 2250);
   assertEquals(setTiming(s, "zzz", "in", { ms: 100 }), s);
+});
+
+Deno.test("Aktionen: Effekte, Modell, Manifest-customActions", () => {
+  assertEquals(effectKeyframes("pulse")!.length, 3);
+  assertEquals(effectKeyframes("nix"), null);
+  let s = newScene();
+  s = addElement(s, { ...newElement("text", s), id: "t9" });
+  const a = newAction(s);
+  assertEquals([a.id, a.name, a.effects[0].target], ["aktion1", "Hervorheben", "t9"]);
+  s = setActions(s, [a, { ...newAction(setActions(s, [a])), effects: [] }]);
+  assertEquals(s.actions!.map((x) => x.id), ["aktion1", "aktion2"]);
+  const files = applyScene({ "x.ograf.json": JSON.stringify({ id: "x", main: "x.js", customActions: [{ id: "alt", name: "Alt" }] }) }, "x", s, RUNTIME);
+  assertEquals(parseManifest(files)!.customActions, [{ id: "aktion1", name: "Hervorheben" }, { id: "aktion2", name: "Aktion 2" }]);
+  const none = applyScene(files, "x", { ...s, actions: [] }, RUNTIME);
+  assertEquals("customActions" in parseManifest(none)!, false);
+  // Lesen: ungültige IDs, doppelte, fremde Effekte fallen heraus
+  const p = parseScene(JSON.stringify({ format: SCENE_FORMAT, elements: [], actions: [
+    { id: "gut", name: "Gut", effects: [{ target: "a", type: "shake" }, { target: "a", type: "nix" }, { type: "pulse" }] },
+    { id: "gut", name: "doppelt" }, { id: "schlecht id!", name: "x" }, { name: "ohne id" },
+  ] }))!;
+  assertEquals(p.actions!.length, 1);
+  assertEquals(p.actions![0].effects.map((f) => f.type), ["shake"]);
 });

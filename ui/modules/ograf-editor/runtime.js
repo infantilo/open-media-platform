@@ -73,6 +73,18 @@ export function inStep(e, step) {
   return step >= from && (to < 0 || step <= to);
 }
 
+/** Hervorhebe-Effekte für Aktionen (kehren zum Ausgangszustand zurück). */
+export const EFFECT_TYPES = ["pulse", "flash", "shake", "bounce"];
+export function effectKeyframes(type) {
+  switch (type) {
+    case "pulse": return [{ transform: "scale(1)" }, { transform: "scale(1.12)" }, { transform: "scale(1)" }];
+    case "flash": return [{ opacity: 1 }, { opacity: 0.15 }, { opacity: 1 }];
+    case "shake": return [{ transform: "translateX(0)" }, { transform: "translateX(-14px)" }, { transform: "translateX(14px)" }, { transform: "translateX(-10px)" }, { transform: "translateX(10px)" }, { transform: "translateX(0)" }];
+    case "bounce": return [{ transform: "translateY(0)" }, { transform: "translateY(-28px)" }, { transform: "translateY(0)" }];
+    default: return null;
+  }
+}
+
 function applyBox(el, e) {
   const s = el.style;
   s.position = "absolute";
@@ -177,9 +189,41 @@ export function renderScene(root, scene, data, opts = {}) {
     if (!vis && it.shown) { it.shown = false; return run(it, "out"); }
     return Promise.resolve();
   }));
+  /** Aktion der Szene abspielen (Effekte auf Elementen); unbekannte Aktion/Elemente werden übersprungen. */
+  const action = (id) => {
+    const a = (scene.actions || []).find((x) => x.id === id);
+    if (!a) return Promise.resolve();
+    const jobs = [];
+    for (const fx of a.effects || []) {
+      const it = items.find((i) => i.e.id === fx.target);
+      const kf = effectKeyframes(fx.type);
+      if (!it || !kf) continue;
+      const anim = it.inner.animate(kf, { duration: Math.max(50, fx.ms || 600), delay: fx.delay || 0, easing: "ease-in-out" });
+      jobs.push(anim.finished.catch(() => {}));
+    }
+    return Promise.all(jobs);
+  };
+  /** Zeitleisten-Wiedergabekopf (nur Editor): alle Animationen einer Richtung angehalten bei `t` ms zeigen. */
+  const scrub = (dir, t) => {
+    for (const it of items) {
+      clear(it);
+      const spec = it.e.anim && it.e.anim[dir];
+      const kf = spec ? keyframesFor(spec.type, dir) : null;
+      it.inner.style.visibility = "visible";
+      if (!kf) continue;
+      const a = it.inner.animate(kf, { duration: spec.ms ?? 400, delay: spec.delay ?? 0, easing: spec.ease || "ease-out", fill: "both" });
+      a.pause();
+      a.currentTime = t;
+      it.anims.push(a);
+    }
+  };
+  const unscrub = () => { for (const it of items) { clear(it); it.inner.style.visibility = "visible"; } };
   return {
     stage,
     ready,
+    action,
+    scrub,
+    unscrub,
     goto,
     play: (step = 0) => goto(step),
     stop: () => Promise.all(items.filter((it) => it.shown).map((it) => { it.shown = false; return run(it, "out"); })),
@@ -220,6 +264,9 @@ export function createSceneElement(scene, base) {
     }
     async stopAction() { await this._h.stop(); return { statusCode: 200 }; }
     async updateAction(p) { this._data = { ...this._data, ...((p && p.data) || {}) }; this._h.update(this._data); return { statusCode: 200 }; }
-    async customAction() { return { statusCode: 200 }; }
+    async customAction(p) {
+      if (p && p.id && this._h) await this._h.action(p.id);
+      return { statusCode: 200 };
+    }
   };
 }

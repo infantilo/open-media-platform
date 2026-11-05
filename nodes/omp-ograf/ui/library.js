@@ -1,5 +1,5 @@
 // ui/modules/ograf-editor/runtime.js with { type: 'text' }
-var runtime_default = '// Laufzeit der Designer-Vorlagen des OGraf-Editors (Kapitel 90.5). Diese EINE Datei wird\n//  (a) vom Editor f\xFCr die Leinwand-Vorschau benutzt und\n//  (b) als Text in jede mit der Leinwand gebaute Vorlage kopiert (`<id>.js` = diese Datei + `export default createSceneElement(...)`),\n// damit Vorschau und Sendung denselben Code ausf\xFChren. Reines JavaScript ohne Abh\xE4ngigkeiten, ES-Modul.\n// Das Szenenmodell steht in `scene.json` des Pakets (Format `omp-ograf-scene/1`, s. scene.ts).\n\n/** Ersetzt `{{schluessel}}` durch Werte aus `data` (fehlend = leer). */\nexport function bindText(text, data) {\n  return String(text ?? "").replace(/\\{\\{\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*\\}\\}/g, (_, k) => {\n    const v = data ? data[k] : undefined;\n    return v === undefined || v === null ? "" : String(v);\n  });\n}\n\n/** Alle Animationsarten: Anzeigename-Schl\xFCssel \u2192 Start-Keyframes (Zustand \u201Eweg\u201C) und Ziel \u201Eda\u201C. */\nexport const ANIM_TYPES = ["none", "fade", "fromLeft", "fromRight", "fromTop", "fromBottom", "scale", "wipe"];\n\n/** Keyframes f\xFCr Einblenden (`dir` = "in") bzw. Ausblenden ("out", r\xFCckw\xE4rts). `dist` = Weg in Bildpunkten. */\nexport function keyframesFor(type, dir, dist = 80) {\n  const slide = (t) => [{ opacity: 0, transform: t }, { opacity: 1, transform: "none" }];\n  let pair;\n  switch (type) {\n    case "fade": pair = [{ opacity: 0 }, { opacity: 1 }]; break;\n    case "fromLeft": pair = slide(`translateX(${-dist}px)`); break;\n    case "fromRight": pair = slide(`translateX(${dist}px)`); break;\n    case "fromTop": pair = slide(`translateY(${-dist}px)`); break;\n    case "fromBottom": pair = slide(`translateY(${dist}px)`); break;\n    case "scale": pair = slide("scale(0.8)"); break;\n    case "wipe": pair = [{ clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0 0 0)" }]; break;\n    default: return null;\n  }\n  return dir === "in" ? pair : [pair[1], pair[0]];\n}\n\n/** Schrift verkleinern, bis der Text ins Feld passt (nur bei `e.autofit`, nicht unter `e.minSize`). Braucht ein eingeh\xE4ngtes Element. */\nexport function autofit(inner, e) {\n  if (e.kind !== "text" || !e.autofit) return;\n  let size = e.size || 40;\n  const min = e.minSize || 12;\n  const s = inner.style;\n  const keep = s.alignItems;\n  s.alignItems = "flex-start"; // sonst z\xE4hlt der \xDCberstand nach oben nicht in scrollHeight\n  s.fontSize = `${size}px`;\n  for (let guard = 0; guard < 60 && size > min && (inner.scrollHeight > inner.clientHeight + 1 || inner.scrollWidth > inner.clientWidth + 1); guard++) {\n    size = Math.max(min, size - Math.max(1, Math.round(size * 0.04)));\n    s.fontSize = `${size}px`;\n  }\n  s.alignItems = keep;\n}\n\nconst FONTS = new Set();\n/** Schriftdateien der Szene als Schriftfamilien anmelden; Ergebnis: Versprechen, das nach dem Laden aller erf\xFCllt ist. */\nfunction loadFonts(scene, resolveAsset) {\n  if (typeof FontFace === "undefined" || !document.fonts || !resolveAsset) return Promise.resolve();\n  const jobs = [];\n  for (const f of scene.fonts || []) {\n    const url = resolveAsset(f.file);\n    if (!url) continue;\n    const key = `${f.family}|${url}`;\n    if (FONTS.has(key)) continue;\n    FONTS.add(key);\n    const face = new FontFace(f.family, `url("${url}")`);\n    document.fonts.add(face);\n    jobs.push(face.load().catch(() => {}));\n  }\n  return Promise.all(jobs).then(() => {});\n}\n\n/** Ist das Element im Schritt `step` sichtbar? (`from` Standard 0, `to` \u22121 = bis zum letzten Schritt.) */\nexport function inStep(e, step) {\n  const from = e.from ?? 0;\n  const to = e.to ?? -1;\n  return step >= from && (to < 0 || step <= to);\n}\n\nfunction applyBox(el, e) {\n  const s = el.style;\n  s.position = "absolute";\n  s.left = `${e.x}px`;\n  s.top = `${e.y}px`;\n  s.width = `${e.w}px`;\n  s.height = `${e.h}px`;\n  s.transform = e.rotation ? `rotate(${e.rotation}deg)` : "none";\n  s.boxSizing = "border-box";\n}\n\nfunction paint(inner, e, data) {\n  const s = inner.style;\n  const color = (c) => bindText(c, data);\n  if (e.kind === "rect") {\n    s.background = color(e.fill || "transparent");\n    s.borderRadius = `${e.radius || 0}px`;\n    s.border = e.strokeW ? `${e.strokeW}px solid ${color(e.stroke || "#fff")}` : "none";\n  } else if (e.kind === "text") {\n    inner.textContent = bindText(e.text, data);\n    s.font = `${e.weight || 400} ${e.size || 40}px/${e.lineHeight || 1.2} ${e.font || "system-ui, sans-serif"}`;\n    s.color = color(e.color || "#fff");\n    s.textAlign = e.align || "left";\n    s.whiteSpace = "pre-wrap";\n    s.overflow = "hidden";\n    s.display = "flex";\n    s.alignItems = { top: "flex-start", middle: "center", bottom: "flex-end" }[e.valign || "top"];\n    s.justifyContent = { left: "flex-start", center: "center", right: "flex-end" }[e.align || "left"];\n    s.background = e.bg ? color(e.bg) : "transparent";\n    s.padding = `${e.padding || 0}px`;\n    s.borderRadius = `${e.radius || 0}px`;\n  } else if (e.kind === "image") {\n    s.objectFit = e.fit || "contain";\n    s.borderRadius = `${e.radius || 0}px`;\n  }\n}\n\n/**\n * Baut die Szene in `root` (ShadowRoot oder Element) und liefert den Griff `{play, stop, update, destroy, stage}`.\n * `opts.resolveAsset(datei) \u2192 URL`, `opts.scale() \u2192 Faktor` (Standard: Breite des Fensters / Szenenbreite),\n * `opts.editor = true` zeigt Zonen als gestrichelte Rahmen und spielt keine Animation (alles sichtbar).\n */\nexport function renderScene(root, scene, data, opts = {}) {\n  const stage = document.createElement("div");\n  stage.style.cssText = `position:absolute;left:0;top:0;width:${scene.width}px;height:${scene.height}px;transform-origin:0 0;overflow:hidden`;\n  const scaleOf = opts.scale || (() => (window.innerWidth || scene.width) / scene.width);\n  const fit = () => { stage.style.transform = `scale(${scaleOf()})`; };\n  fit();\n  const onResize = () => fit();\n  window.addEventListener("resize", onResize);\n  const items = [];\n  for (const e of scene.elements || []) {\n    const wrap = document.createElement("div");\n    applyBox(wrap, e);\n    wrap.style.opacity = String(e.opacity ?? 1);\n    if (opts.editor && opts.step !== undefined && !inStep(e, opts.step)) wrap.style.opacity = String((e.opacity ?? 1) * 0.2);\n    wrap.dataset.elementId = e.id;\n    let inner;\n    if (e.kind === "image") {\n      inner = document.createElement("img");\n      inner.alt = "";\n      if (e.file && opts.resolveAsset) inner.src = opts.resolveAsset(e.file);\n    } else {\n      inner = document.createElement("div");\n    }\n    inner.style.cssText += ";width:100%;height:100%;box-sizing:border-box";\n    if (e.kind === "zone") {\n      wrap.setAttribute("data-ograf-zone", e.zone || "zone");\n      if (opts.editor) inner.style.outline = "2px dashed #00c8ff";\n    }\n    paint(inner, e, data);\n    wrap.append(inner);\n    stage.append(wrap);\n    items.push({ e, wrap, inner, anims: [], shown: false });\n  }\n  root.append(stage);\n  const fitAll = () => { for (const it of items) autofit(it.inner, it.e); };\n  fitAll();\n  const ready = loadFonts(scene, opts.resolveAsset).then(fitAll);\n  const clear = (it) => { for (const a of it.anims) a.cancel(); it.anims = []; };\n  const run = (it, dir) => {\n    const spec = it.e.anim && it.e.anim[dir];\n    const kf = spec ? keyframesFor(spec.type, dir) : null;\n    clear(it);\n    // Zonen melden ihr Rechteck \xFCber das umgebende Element; au\xDFerhalb ihrer Schritte gelten sie als unsichtbar\n    if (it.e.kind === "zone") it.wrap.style.visibility = dir === "in" ? "visible" : "hidden";\n    if (!kf) { it.inner.style.visibility = dir === "in" ? "visible" : "hidden"; return Promise.resolve(); }\n    it.inner.style.visibility = "visible";\n    const a = it.inner.animate(kf, { duration: spec.ms ?? 400, delay: spec.delay ?? 0, easing: spec.ease || "ease-out", fill: "both" });\n    it.anims.push(a);\n    return a.finished.catch(() => {});\n  };\n  if (!opts.editor) {\n    for (const it of items) {\n      it.inner.style.visibility = "hidden";\n      if (it.e.kind === "zone") it.wrap.style.visibility = "hidden";\n    }\n  }\n  const goto = (step) => Promise.all(items.map((it) => {\n    const vis = inStep(it.e, step);\n    if (vis && !it.shown) { it.shown = true; return run(it, "in"); }\n    if (!vis && it.shown) { it.shown = false; return run(it, "out"); }\n    return Promise.resolve();\n  }));\n  return {\n    stage,\n    ready,\n    goto,\n    play: (step = 0) => goto(step),\n    stop: () => Promise.all(items.filter((it) => it.shown).map((it) => { it.shown = false; return run(it, "out"); })),\n    update(next) { for (const it of items) { paint(it.inner, it.e, next); autofit(it.inner, it.e); } },\n    destroy() { window.removeEventListener("resize", onResize); for (const it of items) clear(it); stage.remove(); },\n  };\n}\n\n/** Die Web-Component-Klasse, die OGraf als `default export` erwartet. `base` = `import.meta.url` des Hauptmoduls. */\nexport function createSceneElement(scene, base) {\n  return class SceneGraphic extends HTMLElement {\n    constructor() {\n      super();\n      const sr = this.attachShadow({ mode: "open" });\n      const st = document.createElement("style");\n      st.textContent = ":host{position:fixed;inset:0;display:block;pointer-events:none}";\n      sr.append(st);\n    }\n    async load(p) {\n      this._data = (p && p.data) || {};\n      this._h = renderScene(this.shadowRoot, scene, this._data, { resolveAsset: (f) => new URL(f, base).href });\n      await this._h.ready;\n      return { statusCode: 200 };\n    }\n    async dispose() { if (this._h) this._h.destroy(); return { statusCode: 200 }; }\n    async playAction(p) {\n      const count = Math.max(1, scene.stepCount || 1);\n      const want = p && typeof p.goto === "number" ? p.goto : 0;\n      this._step = Math.max(0, Math.min(count - 1, want));\n      await this._h.goto(this._step);\n      return { statusCode: 200, currentStep: this._step };\n    }\n    async continueAction() {\n      const count = Math.max(1, scene.stepCount || 1);\n      this._step = Math.min(count - 1, (this._step || 0) + 1);\n      await this._h.goto(this._step);\n      return { statusCode: 200, currentStep: this._step };\n    }\n    async stopAction() { await this._h.stop(); return { statusCode: 200 }; }\n    async updateAction(p) { this._data = { ...this._data, ...((p && p.data) || {}) }; this._h.update(this._data); return { statusCode: 200 }; }\n    async customAction() { return { statusCode: 200 }; }\n  };\n}\n';
+var runtime_default = '// Laufzeit der Designer-Vorlagen des OGraf-Editors (Kapitel 90.5). Diese EINE Datei wird\n//  (a) vom Editor f\xFCr die Leinwand-Vorschau benutzt und\n//  (b) als Text in jede mit der Leinwand gebaute Vorlage kopiert (`<id>.js` = diese Datei + `export default createSceneElement(...)`),\n// damit Vorschau und Sendung denselben Code ausf\xFChren. Reines JavaScript ohne Abh\xE4ngigkeiten, ES-Modul.\n// Das Szenenmodell steht in `scene.json` des Pakets (Format `omp-ograf-scene/1`, s. scene.ts).\n\n/** Ersetzt `{{schluessel}}` durch Werte aus `data` (fehlend = leer). */\nexport function bindText(text, data) {\n  return String(text ?? "").replace(/\\{\\{\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*\\}\\}/g, (_, k) => {\n    const v = data ? data[k] : undefined;\n    return v === undefined || v === null ? "" : String(v);\n  });\n}\n\n/** Alle Animationsarten: Anzeigename-Schl\xFCssel \u2192 Start-Keyframes (Zustand \u201Eweg\u201C) und Ziel \u201Eda\u201C. */\nexport const ANIM_TYPES = ["none", "fade", "fromLeft", "fromRight", "fromTop", "fromBottom", "scale", "wipe"];\n\n/** Keyframes f\xFCr Einblenden (`dir` = "in") bzw. Ausblenden ("out", r\xFCckw\xE4rts). `dist` = Weg in Bildpunkten. */\nexport function keyframesFor(type, dir, dist = 80) {\n  const slide = (t) => [{ opacity: 0, transform: t }, { opacity: 1, transform: "none" }];\n  let pair;\n  switch (type) {\n    case "fade": pair = [{ opacity: 0 }, { opacity: 1 }]; break;\n    case "fromLeft": pair = slide(`translateX(${-dist}px)`); break;\n    case "fromRight": pair = slide(`translateX(${dist}px)`); break;\n    case "fromTop": pair = slide(`translateY(${-dist}px)`); break;\n    case "fromBottom": pair = slide(`translateY(${dist}px)`); break;\n    case "scale": pair = slide("scale(0.8)"); break;\n    case "wipe": pair = [{ clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0 0 0)" }]; break;\n    default: return null;\n  }\n  return dir === "in" ? pair : [pair[1], pair[0]];\n}\n\n/** Schrift verkleinern, bis der Text ins Feld passt (nur bei `e.autofit`, nicht unter `e.minSize`). Braucht ein eingeh\xE4ngtes Element. */\nexport function autofit(inner, e) {\n  if (e.kind !== "text" || !e.autofit) return;\n  let size = e.size || 40;\n  const min = e.minSize || 12;\n  const s = inner.style;\n  const keep = s.alignItems;\n  s.alignItems = "flex-start"; // sonst z\xE4hlt der \xDCberstand nach oben nicht in scrollHeight\n  s.fontSize = `${size}px`;\n  for (let guard = 0; guard < 60 && size > min && (inner.scrollHeight > inner.clientHeight + 1 || inner.scrollWidth > inner.clientWidth + 1); guard++) {\n    size = Math.max(min, size - Math.max(1, Math.round(size * 0.04)));\n    s.fontSize = `${size}px`;\n  }\n  s.alignItems = keep;\n}\n\nconst FONTS = new Set();\n/** Schriftdateien der Szene als Schriftfamilien anmelden; Ergebnis: Versprechen, das nach dem Laden aller erf\xFCllt ist. */\nfunction loadFonts(scene, resolveAsset) {\n  if (typeof FontFace === "undefined" || !document.fonts || !resolveAsset) return Promise.resolve();\n  const jobs = [];\n  for (const f of scene.fonts || []) {\n    const url = resolveAsset(f.file);\n    if (!url) continue;\n    const key = `${f.family}|${url}`;\n    if (FONTS.has(key)) continue;\n    FONTS.add(key);\n    const face = new FontFace(f.family, `url("${url}")`);\n    document.fonts.add(face);\n    jobs.push(face.load().catch(() => {}));\n  }\n  return Promise.all(jobs).then(() => {});\n}\n\n/** Ist das Element im Schritt `step` sichtbar? (`from` Standard 0, `to` \u22121 = bis zum letzten Schritt.) */\nexport function inStep(e, step) {\n  const from = e.from ?? 0;\n  const to = e.to ?? -1;\n  return step >= from && (to < 0 || step <= to);\n}\n\n/** Hervorhebe-Effekte f\xFCr Aktionen (kehren zum Ausgangszustand zur\xFCck). */\nexport const EFFECT_TYPES = ["pulse", "flash", "shake", "bounce"];\nexport function effectKeyframes(type) {\n  switch (type) {\n    case "pulse": return [{ transform: "scale(1)" }, { transform: "scale(1.12)" }, { transform: "scale(1)" }];\n    case "flash": return [{ opacity: 1 }, { opacity: 0.15 }, { opacity: 1 }];\n    case "shake": return [{ transform: "translateX(0)" }, { transform: "translateX(-14px)" }, { transform: "translateX(14px)" }, { transform: "translateX(-10px)" }, { transform: "translateX(10px)" }, { transform: "translateX(0)" }];\n    case "bounce": return [{ transform: "translateY(0)" }, { transform: "translateY(-28px)" }, { transform: "translateY(0)" }];\n    default: return null;\n  }\n}\n\nfunction applyBox(el, e) {\n  const s = el.style;\n  s.position = "absolute";\n  s.left = `${e.x}px`;\n  s.top = `${e.y}px`;\n  s.width = `${e.w}px`;\n  s.height = `${e.h}px`;\n  s.transform = e.rotation ? `rotate(${e.rotation}deg)` : "none";\n  s.boxSizing = "border-box";\n}\n\nfunction paint(inner, e, data) {\n  const s = inner.style;\n  const color = (c) => bindText(c, data);\n  if (e.kind === "rect") {\n    s.background = color(e.fill || "transparent");\n    s.borderRadius = `${e.radius || 0}px`;\n    s.border = e.strokeW ? `${e.strokeW}px solid ${color(e.stroke || "#fff")}` : "none";\n  } else if (e.kind === "text") {\n    inner.textContent = bindText(e.text, data);\n    s.font = `${e.weight || 400} ${e.size || 40}px/${e.lineHeight || 1.2} ${e.font || "system-ui, sans-serif"}`;\n    s.color = color(e.color || "#fff");\n    s.textAlign = e.align || "left";\n    s.whiteSpace = "pre-wrap";\n    s.overflow = "hidden";\n    s.display = "flex";\n    s.alignItems = { top: "flex-start", middle: "center", bottom: "flex-end" }[e.valign || "top"];\n    s.justifyContent = { left: "flex-start", center: "center", right: "flex-end" }[e.align || "left"];\n    s.background = e.bg ? color(e.bg) : "transparent";\n    s.padding = `${e.padding || 0}px`;\n    s.borderRadius = `${e.radius || 0}px`;\n  } else if (e.kind === "image") {\n    s.objectFit = e.fit || "contain";\n    s.borderRadius = `${e.radius || 0}px`;\n  }\n}\n\n/**\n * Baut die Szene in `root` (ShadowRoot oder Element) und liefert den Griff `{play, stop, update, destroy, stage}`.\n * `opts.resolveAsset(datei) \u2192 URL`, `opts.scale() \u2192 Faktor` (Standard: Breite des Fensters / Szenenbreite),\n * `opts.editor = true` zeigt Zonen als gestrichelte Rahmen und spielt keine Animation (alles sichtbar).\n */\nexport function renderScene(root, scene, data, opts = {}) {\n  const stage = document.createElement("div");\n  stage.style.cssText = `position:absolute;left:0;top:0;width:${scene.width}px;height:${scene.height}px;transform-origin:0 0;overflow:hidden`;\n  const scaleOf = opts.scale || (() => (window.innerWidth || scene.width) / scene.width);\n  const fit = () => { stage.style.transform = `scale(${scaleOf()})`; };\n  fit();\n  const onResize = () => fit();\n  window.addEventListener("resize", onResize);\n  const items = [];\n  for (const e of scene.elements || []) {\n    const wrap = document.createElement("div");\n    applyBox(wrap, e);\n    wrap.style.opacity = String(e.opacity ?? 1);\n    if (opts.editor && opts.step !== undefined && !inStep(e, opts.step)) wrap.style.opacity = String((e.opacity ?? 1) * 0.2);\n    wrap.dataset.elementId = e.id;\n    let inner;\n    if (e.kind === "image") {\n      inner = document.createElement("img");\n      inner.alt = "";\n      if (e.file && opts.resolveAsset) inner.src = opts.resolveAsset(e.file);\n    } else {\n      inner = document.createElement("div");\n    }\n    inner.style.cssText += ";width:100%;height:100%;box-sizing:border-box";\n    if (e.kind === "zone") {\n      wrap.setAttribute("data-ograf-zone", e.zone || "zone");\n      if (opts.editor) inner.style.outline = "2px dashed #00c8ff";\n    }\n    paint(inner, e, data);\n    wrap.append(inner);\n    stage.append(wrap);\n    items.push({ e, wrap, inner, anims: [], shown: false });\n  }\n  root.append(stage);\n  const fitAll = () => { for (const it of items) autofit(it.inner, it.e); };\n  fitAll();\n  const ready = loadFonts(scene, opts.resolveAsset).then(fitAll);\n  const clear = (it) => { for (const a of it.anims) a.cancel(); it.anims = []; };\n  const run = (it, dir) => {\n    const spec = it.e.anim && it.e.anim[dir];\n    const kf = spec ? keyframesFor(spec.type, dir) : null;\n    clear(it);\n    // Zonen melden ihr Rechteck \xFCber das umgebende Element; au\xDFerhalb ihrer Schritte gelten sie als unsichtbar\n    if (it.e.kind === "zone") it.wrap.style.visibility = dir === "in" ? "visible" : "hidden";\n    if (!kf) { it.inner.style.visibility = dir === "in" ? "visible" : "hidden"; return Promise.resolve(); }\n    it.inner.style.visibility = "visible";\n    const a = it.inner.animate(kf, { duration: spec.ms ?? 400, delay: spec.delay ?? 0, easing: spec.ease || "ease-out", fill: "both" });\n    it.anims.push(a);\n    return a.finished.catch(() => {});\n  };\n  if (!opts.editor) {\n    for (const it of items) {\n      it.inner.style.visibility = "hidden";\n      if (it.e.kind === "zone") it.wrap.style.visibility = "hidden";\n    }\n  }\n  const goto = (step) => Promise.all(items.map((it) => {\n    const vis = inStep(it.e, step);\n    if (vis && !it.shown) { it.shown = true; return run(it, "in"); }\n    if (!vis && it.shown) { it.shown = false; return run(it, "out"); }\n    return Promise.resolve();\n  }));\n  /** Aktion der Szene abspielen (Effekte auf Elementen); unbekannte Aktion/Elemente werden \xFCbersprungen. */\n  const action = (id) => {\n    const a = (scene.actions || []).find((x) => x.id === id);\n    if (!a) return Promise.resolve();\n    const jobs = [];\n    for (const fx of a.effects || []) {\n      const it = items.find((i) => i.e.id === fx.target);\n      const kf = effectKeyframes(fx.type);\n      if (!it || !kf) continue;\n      const anim = it.inner.animate(kf, { duration: Math.max(50, fx.ms || 600), delay: fx.delay || 0, easing: "ease-in-out" });\n      jobs.push(anim.finished.catch(() => {}));\n    }\n    return Promise.all(jobs);\n  };\n  /** Zeitleisten-Wiedergabekopf (nur Editor): alle Animationen einer Richtung angehalten bei `t` ms zeigen. */\n  const scrub = (dir, t) => {\n    for (const it of items) {\n      clear(it);\n      const spec = it.e.anim && it.e.anim[dir];\n      const kf = spec ? keyframesFor(spec.type, dir) : null;\n      it.inner.style.visibility = "visible";\n      if (!kf) continue;\n      const a = it.inner.animate(kf, { duration: spec.ms ?? 400, delay: spec.delay ?? 0, easing: spec.ease || "ease-out", fill: "both" });\n      a.pause();\n      a.currentTime = t;\n      it.anims.push(a);\n    }\n  };\n  const unscrub = () => { for (const it of items) { clear(it); it.inner.style.visibility = "visible"; } };\n  return {\n    stage,\n    ready,\n    action,\n    scrub,\n    unscrub,\n    goto,\n    play: (step = 0) => goto(step),\n    stop: () => Promise.all(items.filter((it) => it.shown).map((it) => { it.shown = false; return run(it, "out"); })),\n    update(next) { for (const it of items) { paint(it.inner, it.e, next); autofit(it.inner, it.e); } },\n    destroy() { window.removeEventListener("resize", onResize); for (const it of items) clear(it); stage.remove(); },\n  };\n}\n\n/** Die Web-Component-Klasse, die OGraf als `default export` erwartet. `base` = `import.meta.url` des Hauptmoduls. */\nexport function createSceneElement(scene, base) {\n  return class SceneGraphic extends HTMLElement {\n    constructor() {\n      super();\n      const sr = this.attachShadow({ mode: "open" });\n      const st = document.createElement("style");\n      st.textContent = ":host{position:fixed;inset:0;display:block;pointer-events:none}";\n      sr.append(st);\n    }\n    async load(p) {\n      this._data = (p && p.data) || {};\n      this._h = renderScene(this.shadowRoot, scene, this._data, { resolveAsset: (f) => new URL(f, base).href });\n      await this._h.ready;\n      return { statusCode: 200 };\n    }\n    async dispose() { if (this._h) this._h.destroy(); return { statusCode: 200 }; }\n    async playAction(p) {\n      const count = Math.max(1, scene.stepCount || 1);\n      const want = p && typeof p.goto === "number" ? p.goto : 0;\n      this._step = Math.max(0, Math.min(count - 1, want));\n      await this._h.goto(this._step);\n      return { statusCode: 200, currentStep: this._step };\n    }\n    async continueAction() {\n      const count = Math.max(1, scene.stepCount || 1);\n      this._step = Math.min(count - 1, (this._step || 0) + 1);\n      await this._h.goto(this._step);\n      return { statusCode: 200, currentStep: this._step };\n    }\n    async stopAction() { await this._h.stop(); return { statusCode: 200 }; }\n    async updateAction(p) { this._data = { ...this._data, ...((p && p.data) || {}) }; this._h.update(this._data); return { statusCode: 200 }; }\n    async customAction(p) {\n      if (p && p.id && this._h) await this._h.action(p.id);\n      return { statusCode: 200 };\n    }\n  };\n}\n';
 
 // ui/modules/ograf-editor/runtime.js
 function bindText(text, data) {
@@ -100,6 +100,69 @@ function inStep(e, step) {
   const from = e.from ?? 0;
   const to = e.to ?? -1;
   return step >= from && (to < 0 || step <= to);
+}
+function effectKeyframes(type) {
+  switch (type) {
+    case "pulse":
+      return [
+        {
+          transform: "scale(1)"
+        },
+        {
+          transform: "scale(1.12)"
+        },
+        {
+          transform: "scale(1)"
+        }
+      ];
+    case "flash":
+      return [
+        {
+          opacity: 1
+        },
+        {
+          opacity: 0.15
+        },
+        {
+          opacity: 1
+        }
+      ];
+    case "shake":
+      return [
+        {
+          transform: "translateX(0)"
+        },
+        {
+          transform: "translateX(-14px)"
+        },
+        {
+          transform: "translateX(14px)"
+        },
+        {
+          transform: "translateX(-10px)"
+        },
+        {
+          transform: "translateX(10px)"
+        },
+        {
+          transform: "translateX(0)"
+        }
+      ];
+    case "bounce":
+      return [
+        {
+          transform: "translateY(0)"
+        },
+        {
+          transform: "translateY(-28px)"
+        },
+        {
+          transform: "translateY(0)"
+        }
+      ];
+    default:
+      return null;
+  }
 }
 function applyBox(el, e) {
   const s = el.style;
@@ -233,9 +296,54 @@ function renderScene(root, scene, data, opts = {}) {
     }
     return Promise.resolve();
   }));
+  const action = (id) => {
+    const a = (scene.actions || []).find((x) => x.id === id);
+    if (!a) return Promise.resolve();
+    const jobs = [];
+    for (const fx of a.effects || []) {
+      const it = items.find((i) => i.e.id === fx.target);
+      const kf = effectKeyframes(fx.type);
+      if (!it || !kf) continue;
+      const anim = it.inner.animate(kf, {
+        duration: Math.max(50, fx.ms || 600),
+        delay: fx.delay || 0,
+        easing: "ease-in-out"
+      });
+      jobs.push(anim.finished.catch(() => {
+      }));
+    }
+    return Promise.all(jobs);
+  };
+  const scrub = (dir, t) => {
+    for (const it of items) {
+      clear(it);
+      const spec = it.e.anim && it.e.anim[dir];
+      const kf = spec ? keyframesFor(spec.type, dir) : null;
+      it.inner.style.visibility = "visible";
+      if (!kf) continue;
+      const a = it.inner.animate(kf, {
+        duration: spec.ms ?? 400,
+        delay: spec.delay ?? 0,
+        easing: spec.ease || "ease-out",
+        fill: "both"
+      });
+      a.pause();
+      a.currentTime = t;
+      it.anims.push(a);
+    }
+  };
+  const unscrub = () => {
+    for (const it of items) {
+      clear(it);
+      it.inner.style.visibility = "visible";
+    }
+  };
   return {
     stage,
     ready,
+    action,
+    scrub,
+    unscrub,
     goto,
     play: (step = 0) => goto(step),
     stop: () => Promise.all(items.filter((it) => it.shown).map((it) => {
@@ -552,6 +660,12 @@ var ANIM_TYPES = [
   "scale",
   "wipe"
 ];
+var EFFECT_TYPES = [
+  "pulse",
+  "flash",
+  "shake",
+  "bounce"
+];
 var MIN_SIZE = 4;
 var num2 = (v, d) => typeof v === "number" && Number.isFinite(v) ? v : d;
 var str2 = (v, d = "") => typeof v === "string" ? v : d;
@@ -700,6 +814,25 @@ function parseScene(text) {
   const o = v;
   if (!o || o.format !== SCENE_FORMAT || !Array.isArray(o.elements)) return null;
   const scene = newScene(Math.max(16, num2(o.width, 1920)), Math.max(16, num2(o.height, 1080)));
+  if (Array.isArray(o.actions)) {
+    const ids = /* @__PURE__ */ new Set();
+    scene.actions = [];
+    for (const a of o.actions) {
+      if (!a || typeof a.id !== "string" || !/^[A-Za-z0-9_-]{1,40}$/.test(a.id) || ids.has(a.id)) continue;
+      ids.add(a.id);
+      const effects = (Array.isArray(a.effects) ? a.effects : []).filter((f) => f && typeof f.target === "string" && EFFECT_TYPES.includes(f.type)).map((f) => ({
+        target: f.target,
+        type: f.type,
+        ms: Math.max(50, num2(f.ms, 600)),
+        delay: Math.max(0, num2(f.delay, 0))
+      }));
+      scene.actions.push({
+        id: a.id,
+        name: str2(a.name, a.id),
+        effects
+      });
+    }
+  }
   scene.stepCount = Math.min(20, Math.max(1, Math.round(num2(o.stepCount, 1))));
   if (Array.isArray(o.fonts)) {
     scene.fonts = o.fonts.filter((f) => f && typeof f.family === "string" && /^[^"'\\;{}]+$/.test(f.family) && typeof f.file === "string" && /^[A-Za-z0-9._-]+$/.test(f.file)).map((f) => ({
@@ -836,6 +969,30 @@ function timelineEnd(s, dir, min = 1e3) {
     if (a && a.type !== "none") end = Math.max(end, a.delay + a.ms);
   }
   return Math.ceil(end / 250) * 250;
+}
+function newAction(s) {
+  const used = new Set((s.actions ?? []).map((a) => a.id));
+  let i = 1;
+  while (used.has(`aktion${i}`)) i++;
+  const target = s.elements.find((e) => e.kind === "text") ?? s.elements.find((e) => e.kind !== "zone");
+  return {
+    id: `aktion${i}`,
+    name: i === 1 ? "Hervorheben" : `Aktion ${i}`,
+    effects: target ? [
+      {
+        target: target.id,
+        type: "pulse",
+        ms: 600,
+        delay: 0
+      }
+    ] : []
+  };
+}
+function setActions(s, actions) {
+  return {
+    ...s,
+    actions
+  };
 }
 function setStepCount(s, n) {
   const count = Math.min(20, Math.max(1, Math.round(n)));
@@ -1127,11 +1284,18 @@ function applyScene(files, id, scene, runtime) {
     try {
       const m = JSON.parse(out[mname]);
       const steps = Math.max(1, scene.stepCount ?? 1);
-      if (m.main !== `${id}.js` || m.stepCount !== steps) out[mname] = stringify({
+      const next = {
         ...m,
         main: `${id}.js`,
         stepCount: steps
-      });
+      };
+      const acts = (scene.actions ?? []).map((a) => ({
+        id: a.id,
+        name: a.name
+      }));
+      if (acts.length) next.customActions = acts;
+      else delete next.customActions;
+      if (JSON.stringify(next) !== JSON.stringify(m)) out[mname] = stringify(next);
     } catch {
     }
   }
@@ -1481,6 +1645,15 @@ var messages = {
     testOffHint: "Sendetest ausblenden",
     saveFirst: "Erst speichern, dann testen.",
     testFailed: "Sendetest fehlgeschlagen: {why}",
+    scrub: "Wiedergabekopf: Zeitpunkt der Animation ansehen (loslassen = zur\xFCck)",
+    actions: "Aktionen",
+    actionPlay: "Aktion in der Vorschau abspielen",
+    addAction: "\uFF0B Aktion",
+    addEffect: "\uFF0B Effekt",
+    fx_pulse: "Puls",
+    fx_flash: "Blinken",
+    fx_shake: "Wackeln",
+    fx_bounce: "H\xFCpfen",
     generated: "Erzeugt aus der Leinwand \u2014 nicht von Hand bearbeiten."
   },
   en: {
@@ -1624,6 +1797,15 @@ var messages = {
     testOffHint: "Hide the on-air test",
     saveFirst: "Save first, then test.",
     testFailed: "On-air test failed: {why}",
+    scrub: "Playhead: view the animation at a point in time (release = back)",
+    actions: "Actions",
+    actionPlay: "Play the action in the preview",
+    addAction: "\uFF0B Action",
+    addEffect: "\uFF0B Effect",
+    fx_pulse: "Pulse",
+    fx_flash: "Flash",
+    fx_shake: "Shake",
+    fx_bounce: "Bounce",
     generated: "Generated from the canvas \u2014 do not edit by hand."
   }
 };
@@ -1946,8 +2128,106 @@ var CanvasEditor = class {
     }
     if (!this.scene.elements.length) box.append(document.createTextNode(tr("canvasEmpty")));
     this.#drawFonts();
+    this.#drawActions();
   }
+  #actBox;
   #fontBox;
+  #drawActions() {
+    if (!this.#actBox) {
+      this.#actBox = document.createElement("div");
+      this.#actBox.className = "col";
+      (this.#fontBox ?? this.#layers).after(this.#actBox);
+    }
+    const box = this.#actBox;
+    box.innerHTML = "";
+    const h = document.createElement("div");
+    h.textContent = tr("actions");
+    h.style.cssText = "color:var(--omp-text-dim,#9aa0a6);font-size:11px;text-transform:uppercase;letter-spacing:.05em";
+    box.append(h);
+    const acts = this.scene.actions ?? [];
+    const names = this.scene.elements.filter((e) => e.kind !== "zone");
+    const save = (next) => this.#commit(setActions(this.scene, next));
+    acts.forEach((a, ai) => {
+      const card = document.createElement("div");
+      card.style.cssText = "border:1px solid var(--omp-border,#2e3338);border-radius:4px;padding:4px;display:flex;flex-direction:column;gap:3px";
+      const top = document.createElement("div");
+      top.style.cssText = "display:flex;gap:4px";
+      const nm = document.createElement("input");
+      nm.value = a.name;
+      nm.title = `ID: ${a.id}`;
+      nm.addEventListener("change", () => save(acts.map((x, i) => i === ai ? {
+        ...x,
+        name: nm.value || x.id
+      } : x)));
+      top.append(nm, this.#btn("\u25B6", () => void this.#handle?.action(a.id), tr("actionPlay")), this.#btn("\u2715", () => save(acts.filter((_, i) => i !== ai)), tr("remove")));
+      card.append(top);
+      a.effects.forEach((fx, fi) => {
+        const row = document.createElement("div");
+        row.style.cssText = "display:grid;grid-template-columns:1fr 78px 50px auto;gap:3px";
+        const set = (p) => save(acts.map((x, i) => i === ai ? {
+          ...x,
+          effects: x.effects.map((f, j) => j === fi ? {
+            ...f,
+            ...p
+          } : f)
+        } : x));
+        const tgt = document.createElement("select");
+        for (const e of names) {
+          const o = document.createElement("option");
+          o.value = e.id;
+          o.textContent = e.name;
+          tgt.append(o);
+        }
+        tgt.value = fx.target;
+        tgt.addEventListener("change", () => set({
+          target: tgt.value
+        }));
+        const typ = document.createElement("select");
+        for (const t of EFFECT_TYPES) {
+          const o = document.createElement("option");
+          o.value = t;
+          o.textContent = tr(`fx_${t}`);
+          typ.append(o);
+        }
+        typ.value = fx.type;
+        typ.addEventListener("change", () => set({
+          type: typ.value
+        }));
+        const ms = document.createElement("input");
+        ms.type = "number";
+        ms.value = String(fx.ms);
+        ms.title = tr("animMs");
+        ms.addEventListener("change", () => set({
+          ms: Math.max(50, Number(ms.value) || 600)
+        }));
+        row.append(tgt, typ, ms, this.#btn("\u2715", () => save(acts.map((x, i) => i === ai ? {
+          ...x,
+          effects: x.effects.filter((_, j) => j !== fi)
+        } : x)), tr("remove")));
+        card.append(row);
+      });
+      card.append(this.#btn(tr("addEffect"), () => {
+        const first = names[0];
+        if (first) save(acts.map((x, i) => i === ai ? {
+          ...x,
+          effects: [
+            ...x.effects,
+            {
+              target: first.id,
+              type: "pulse",
+              ms: 600,
+              delay: 0
+            }
+          ]
+        } : x));
+      }));
+      box.append(card);
+    });
+    box.append(this.#btn(tr("addAction"), () => save([
+      ...acts,
+      newAction(this.scene)
+    ])));
+  }
   #drawFonts() {
     if (!this.#fontBox) {
       this.#fontBox = document.createElement("div");
@@ -2416,6 +2696,20 @@ var CanvasEditor = class {
       this.#tlDir = "out";
       this.#drawTimeline();
     }, "", dir === "out" ? "on" : ""), document.createTextNode(`${tr("timeline")} \xB7 ${end} ms`));
+    const scrub = document.createElement("input");
+    scrub.type = "range";
+    scrub.min = "0";
+    scrub.max = String(end);
+    scrub.step = "10";
+    scrub.value = "0";
+    scrub.title = tr("scrub");
+    scrub.style.cssText = "flex:1;min-width:120px;padding:0";
+    scrub.addEventListener("input", () => this.#handle?.scrub(dir, Number(scrub.value)));
+    scrub.addEventListener("change", () => {
+      scrub.value = "0";
+      this.#redrawStage();
+    });
+    head.append(scrub);
     box.append(head);
     const ruler = document.createElement("div");
     ruler.className = "row";

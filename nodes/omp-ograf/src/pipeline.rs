@@ -70,6 +70,12 @@ pub enum Command {
         layer_id: String,
         step: u32,
     },
+    /// Benutzerdefinierte Aktion einer Ebene (OGraf `customAction`), z. B. „Hervorheben“.
+    Action {
+        layer_id: String,
+        action_id: String,
+        payload: Value,
+    },
     /// Eine Ebene (Some) oder alle (None) ausblenden.
     Hide {
         layer_id: Option<String>,
@@ -836,6 +842,14 @@ pub fn run(
                     }
                     Command::Continue { layer_id, step } => {
                         pipeline.run_javascript(&format!("window.omp.continue({}, {})", js_str(layer_id), step));
+                    }
+                    Command::Action { layer_id, action_id, payload } => {
+                        pipeline.run_javascript(&format!(
+                            "window.omp.action({}, {}, {})",
+                            js_str(layer_id),
+                            js_str(action_id),
+                            serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_string())
+                        ));
                     }
                     Command::Hide { layer_id } => {
                         // Erst pausieren, wenn KEINE Ebene mehr sichtbar ist —

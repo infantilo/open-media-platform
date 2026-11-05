@@ -187,6 +187,9 @@ class OmpOgrafPanel extends HTMLElement {
     actions.className = "actions";
     actions.append(showBtn, updateBtn, continueBtn, hideBtn);
 
+    // Aktionen der Vorlage (OGraf customActions), nur bei stehender Grafik bedienbar
+    const actionRow = document.createElement("div");
+    actionRow.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;";
     const onair = document.createElement("div");
     onair.className = "onair";
 
@@ -211,7 +214,7 @@ class OmpOgrafPanel extends HTMLElement {
     // Editor (Felder, variable Höhe).
     const controlSection = document.createElement("omp-panel-section");
     controlSection.setAttribute("label", T("ogr.9090e4"));
-    controlSection.append(target, actions, status);
+    controlSection.append(target, actions, actionRow, status);
 
     const pickSection = document.createElement("omp-panel-section");
     pickSection.setAttribute("label", T("ogr.25406b"));
@@ -526,6 +529,15 @@ class OmpOgrafPanel extends HTMLElement {
       continueBtn.style.visibility = multi ? "visible" : "hidden";
       setDisabled(continueBtn, !layer || !layer.canContinue);
       // Beschriftung bleibt konstant (feste Knopfbreite); der Schritt steht im Zustands-Badge.
+      actionRow.innerHTML = "";
+      for (const a of (tpl && Array.isArray(tpl.actions) ? tpl.actions : [])) {
+        const ab = document.createElement("omp-button");
+        ab.textContent = a.name || a.id;
+        if (a.description) ab.title = a.description;
+        ab.addEventListener("click", () => { if (layerOf(tpl.id) && !isOff(ab)) call("action", { layerId: tpl.id, id: a.id }); });
+        setDisabled(ab, !layer);
+        actionRow.append(ab);
+      }
       targetName.textContent = tpl ? tpl.label : T("ogr.98b54b");
       targetBadge.textContent = layer ? T("x.onair") + (multi ? T("x.step") + (layer.step + 1) + "/" + layer.stepCount : "") : T("x.off");
       targetBadge.className = layer ? "badge live" : "badge";

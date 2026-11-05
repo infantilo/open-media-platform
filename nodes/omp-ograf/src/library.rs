@@ -182,6 +182,31 @@ pub fn check(id: &str, files: &Files) -> Report {
             r.errors.push("author.name fehlt".into());
         }
     }
+    if let Some(ca) = obj.get("customActions") {
+        match ca.as_array() {
+            None => r.errors.push("customActions muss eine Liste sein".into()),
+            Some(list) => {
+                let mut seen: Vec<&str> = Vec::new();
+                for (i, a) in list.iter().enumerate() {
+                    let id = a.get("id").and_then(Value::as_str).unwrap_or("");
+                    if id.is_empty() || a.get("name").and_then(Value::as_str).is_none() {
+                        r.errors.push(format!("customActions[{i}]: id und name sind Pflicht"));
+                    } else if seen.contains(&id) {
+                        r.errors.push(format!("customActions: id „{id}“ doppelt"));
+                    } else {
+                        seen.push(id);
+                    }
+                    if let Some(o) = a.as_object() {
+                        for k in o.keys() {
+                            if !["id", "name", "description", "schema"].contains(&k.as_str()) && !k.starts_with("v_") {
+                                r.errors.push(format!("customActions[{i}]: Feld „{k}“ ist im Schema nicht erlaubt"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     for k in obj.keys() {
         let known = ALLOWED_KEYS.contains(&k.as_str()) || ALLOWED_KEYS_2.contains(&k.as_str()) || k.starts_with("v_");
         if !known {
@@ -422,6 +447,22 @@ mod tests {
         assert!(read(&root, "b").unwrap()["errors"].as_array().unwrap().is_empty());
         assert!(std::fs::read_dir(&root).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with('.')));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn custom_actions_follow_the_action_schema() {
+        let mut f = skeleton("a", "A");
+        let mut m: Value = serde_json::from_str(&f["a.ograf.json"]).unwrap();
+        m["customActions"] = json!([{"id": "pulse", "name": "Puls", "description": "x", "schema": null}]);
+        f.insert("a.ograf.json".into(), m.to_string());
+        assert!(check("a", &f).errors.is_empty());
+        m["customActions"] = json!([{"id": "p", "name": "P"}, {"id": "p", "name": "Q"}, {"name": "ohne id"}, {"id": "x", "name": "X", "bogus": 1}]);
+        f.insert("a.ograf.json".into(), m.to_string());
+        let e = check("a", &f).errors.join("|");
+        assert!(e.contains("doppelt") && e.contains("Pflicht") && e.contains("bogus"), "{e}");
+        m["customActions"] = json!("kaputt");
+        f.insert("a.ograf.json".into(), m.to_string());
+        assert!(check("a", &f).errors.iter().any(|e| e.contains("Liste")));
     }
 
     #[test]

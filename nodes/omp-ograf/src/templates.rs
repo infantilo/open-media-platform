@@ -26,6 +26,8 @@ pub struct TemplateInfo {
     pub label: String,
     pub step_count: u32,
     pub schema: Value,
+    /// `customActions` des Manifests (Liste `{id, name, …}`), leer wenn keine.
+    pub actions: Value,
     /// Verzeichnisname relativ zu `OMP_OGRAF_TEMPLATES` — Teil der
     /// Modul-URL (`/ograf-templates/<dir>/<main>`), nicht Teil des
     /// Descriptor-Werts (der Bildmeister braucht nur `id`/`label`, keine
@@ -42,6 +44,7 @@ impl TemplateInfo {
             label: id.to_string(),
             step_count,
             schema: Value::Null,
+            actions: Value::Array(vec![]),
             dir: id.to_string(),
             main: "main.js".to_string(),
         }
@@ -58,6 +61,7 @@ impl TemplateInfo {
             "label": self.label,
             "stepCount": self.step_count,
             "schema": self.schema,
+            "actions": self.actions,
         })
     }
 }
@@ -112,11 +116,13 @@ fn load_manifest(path: &Path, dir_name: &str) -> Result<TemplateInfo, String> {
         .to_string();
     let step_count = json["stepCount"].as_u64().unwrap_or(1) as u32;
     let schema = json["schema"].clone();
+    let actions = if json["customActions"].is_array() { json["customActions"].clone() } else { Value::Array(vec![]) };
     Ok(TemplateInfo {
         id,
         label,
         step_count,
         schema,
+        actions,
         dir: dir_name.to_string(),
         main,
     })

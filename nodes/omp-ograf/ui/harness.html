@@ -142,6 +142,17 @@
       }
     },
 
+    // Benutzerdefinierte Aktion (OGraf customAction) einer sichtbaren Ebene.
+    async action(layerId, id, payload) {
+      const layer = this.layers.get(layerId);
+      if (!layer || !layer.el.customAction) return;
+      try {
+        await layer.el.customAction({ id, payload: payload || {} });
+      } catch (e) {
+        console.error("omp.action failed:", e);
+      }
+    },
+
     // Eine Ebene ausblenden; ohne ID alle.
     async hide(layerId) {
       if (layerId === undefined || layerId === null) {

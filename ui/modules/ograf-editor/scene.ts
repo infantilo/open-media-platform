@@ -54,6 +54,19 @@ export interface SceneElement {
   // Zone
   zone?: string;
 }
+export const EFFECT_TYPES = ["pulse", "flash", "shake", "bounce"] as const;
+export interface SceneEffect {
+  target: string;
+  type: string;
+  ms: number;
+  delay: number;
+}
+/** Benutzerdefinierte Aktion (OGraf `customAction`): Effekte auf Elementen, z. B. „Hervorheben“. */
+export interface SceneAction {
+  id: string;
+  name: string;
+  effects: SceneEffect[];
+}
 export interface SceneFont {
   family: string;
   file: string;
@@ -63,6 +76,8 @@ export interface Scene {
   width: number;
   height: number;
   elements: SceneElement[];
+  /** Aktionen, die der Operator auf einer stehenden Grafik auslösen kann. */
+  actions?: SceneAction[];
   /** Anzahl Schritte (Weiter-Taste), mindestens 1. */
   stepCount?: number;
   /** Schriftdateien des Pakets (woff/woff2/ttf), die als Schriftfamilie bereitstehen. */
@@ -138,6 +153,18 @@ export function parseScene(text: string): Scene | null {
   const o = v as Record<string, unknown> | null;
   if (!o || o.format !== SCENE_FORMAT || !Array.isArray(o.elements)) return null;
   const scene = newScene(Math.max(16, num(o.width, 1920)), Math.max(16, num(o.height, 1080)));
+  if (Array.isArray(o.actions)) {
+    const ids = new Set<string>();
+    scene.actions = [];
+    for (const a of o.actions as Record<string, unknown>[]) {
+      if (!a || typeof a.id !== "string" || !/^[A-Za-z0-9_-]{1,40}$/.test(a.id) || ids.has(a.id)) continue;
+      ids.add(a.id);
+      const effects = (Array.isArray(a.effects) ? a.effects as Record<string, unknown>[] : [])
+        .filter((f) => f && typeof f.target === "string" && (EFFECT_TYPES as readonly string[]).includes(f.type as string))
+        .map((f) => ({ target: f.target as string, type: f.type as string, ms: Math.max(50, num(f.ms, 600)), delay: Math.max(0, num(f.delay, 0)) }));
+      scene.actions.push({ id: a.id, name: str(a.name, a.id), effects });
+    }
+  }
   scene.stepCount = Math.min(20, Math.max(1, Math.round(num(o.stepCount, 1))));
   if (Array.isArray(o.fonts)) {
     scene.fonts = (o.fonts as Record<string, unknown>[])
@@ -233,6 +260,19 @@ export function timelineEnd(s: Scene, dir: "in" | "out", min = 1000): number {
     if (a && a.type !== "none") end = Math.max(end, a.delay + a.ms);
   }
   return Math.ceil(end / 250) * 250;
+}
+
+/** Neue Aktion mit freier ID; nimmt, wenn vorhanden, das erste Textelement als Ziel. */
+export function newAction(s: Scene): SceneAction {
+  const used = new Set((s.actions ?? []).map((a) => a.id));
+  let i = 1;
+  while (used.has(`aktion${i}`)) i++;
+  const target = s.elements.find((e) => e.kind === "text") ?? s.elements.find((e) => e.kind !== "zone");
+  return { id: `aktion${i}`, name: i === 1 ? "Hervorheben" : `Aktion ${i}`, effects: target ? [{ target: target.id, type: "pulse", ms: 600, delay: 0 }] : [] };
+}
+
+export function setActions(s: Scene, actions: SceneAction[]): Scene {
+  return { ...s, actions };
 }
 
 /** Anzahl Schritte setzen und die Schrittbereiche der Elemente einpassen. */
@@ -444,7 +484,11 @@ export function applyScene(files: Files, id: string, scene: Scene, runtime: stri
     try {
       const m = JSON.parse(out[mname]);
       const steps = Math.max(1, scene.stepCount ?? 1);
-      if (m.main !== `${id}.js` || m.stepCount !== steps) out[mname] = stringify({ ...m, main: `${id}.js`, stepCount: steps });
+      const next: Record<string, unknown> = { ...m, main: `${id}.js`, stepCount: steps };
+      const acts = (scene.actions ?? []).map((a) => ({ id: a.id, name: a.name }));
+      if (acts.length) next.customActions = acts;
+      else delete next.customActions;
+      if (JSON.stringify(next) !== JSON.stringify(m)) out[mname] = stringify(next);
     } catch { /* kaputtes Manifest: der Node meldet es */ }
   }
   return out;
