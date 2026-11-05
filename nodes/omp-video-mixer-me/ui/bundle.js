@@ -650,7 +650,8 @@ class OmpVideoMixerMePanel extends HTMLElement {
     // kommentiert) — nur für Quellen, deren Node tatsächlich einen
     // `previewUrl`-Stream anbietet, sonst bleibt es beim reinen
     // beschrifteten Knopf.
-    const THUMBS_KEY = `omp-vmix-thumbs-${nodeId}`;
+    // Nicht an die Node-ID binden: die wechselt bei jedem Workflow-Start, die Wahl soll den Neustart überleben.
+    const THUMBS_KEY = "omp-vmix-thumbs";
     const STREAM_TOKEN_KEY = "omp-auth-token";
     let thumbsEnabled = localStorage.getItem(THUMBS_KEY) === "1";
     const previewSnapshotUrl = (sourceNodeId) => {
@@ -1315,7 +1316,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
 
       // PGM-Monitor (Kapitel 87): kleines PGM-Bild; Klick auf ein PIP schaltet dessen Fokus (Fahrt auf die
       // Fokusposition bzw. zurück). Die Trefferprüfung rechnet der Node (`pip.clickAt`), hier wird nur umgerechnet.
-      const MON_KEY = `omp-vmix-monitor-${nodeId}-${level}`;
+      const MON_KEY = `omp-vmix-monitor-level${level}`; // unabhängig von der Node-ID (Workflow-Neustart)
       let monitorOn = localStorage.getItem(MON_KEY) === "1";
       const monBtn = document.createElement("omp-button");
       monBtn.className = "mon-btn";
