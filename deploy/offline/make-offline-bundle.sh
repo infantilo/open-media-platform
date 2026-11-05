@@ -18,14 +18,13 @@
 #     --no-images                keine Container-Images (z. B. wenn der Zielrechner sie anders bekommt)
 #     --no-system-packages       keine .deb-Pakete (Zielrechner hat Podman/GStreamer schon)
 #     --no-plugin                avvideofilter weglassen
-#     --with-pipeline-controller auch das (2 GB große) Image des Pipeline-Controller-Nodes
 #     --keep-stage               Arbeitsverzeichnis nicht löschen (Fehlersuche)
 #     --dry-run                  nur anzeigen, was gepackt würde
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$HERE/../.." && pwd)"
-OUT="$PWD/offline-bundle"; SKIP_BUILD=0; IMAGES=1; DEBS=1; PLUGIN=1; PC_IMAGE=0; KEEP=0; DRY=0
+OUT="$PWD/offline-bundle"; SKIP_BUILD=0; IMAGES=1; DEBS=1; PLUGIN=1; KEEP=0; DRY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) OUT="${2:?--out braucht ein Verzeichnis}"; shift 2 ;;
@@ -33,7 +32,6 @@ while [ $# -gt 0 ]; do
     --no-images) IMAGES=0; shift ;;
     --no-system-packages) DEBS=0; shift ;;
     --no-plugin) PLUGIN=0; shift ;;
-    --with-pipeline-controller) PC_IMAGE=1; shift ;;
     --keep-stage) KEEP=1; shift ;;
     --dry-run) DRY=1; shift ;;
     -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -77,7 +75,6 @@ IMAGES_LIST=(
   "$STEP_CA_IMAGE|0"
   "$SEAWEEDFS_IMAGE|0"
 )
-[ "$PC_IMAGE" = 1 ] && IMAGES_LIST+=("localhost/omp-pipeline-controller:latest|0")
 
 # Binaries aus dem Katalog (runner=process): "../nodes/target/release/omp-x" relativ zu deploy/
 mapfile -t CAT_BINS < <(sed -n 's/.*"command": \["\([^"]*\)".*/\1/p' "$ROOT_DIR/deploy/catalog.json" | sort -u)

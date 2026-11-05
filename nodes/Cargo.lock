@@ -1575,17 +1575,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "omp-pipeline-controller"
-version = "0.1.0"
-dependencies = [
- "omp-node-sdk",
- "serde_json",
- "tiny_http",
- "tokio",
- "ureq",
-]
-
-[[package]]
 name = "omp-playout-automation"
 version = "0.1.0"
 dependencies = [

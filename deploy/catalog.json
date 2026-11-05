@@ -378,22 +378,6 @@
     }
   },
   {
-    "type": "omp-pipeline-controller",
-    "label": "Pipeline Controller",
-    "runner": "podman",
-    "image": "localhost/omp-pipeline-controller:latest",
-    "env": {},
-    "mxlAccess": true,
-    "extraPort": true,
-    "description": "Bettet PIPELINE CONTROLLER (eigenständiges, produktiv gelaufenes Broadcast-Playout-System) als OMP-Node ein — komplettes Web-UI + REST-API laufen unverändert im Container, das Bedienpanel zeigt es als <iframe>. Registriert zwei NMOS-Sender (Programm-Video/-Audio) und zwei Receiver für echte MXL-Ein-/Ausgänge im DMF-Verbund; per IS-05-Connect verkabelte Live-Quellen werden automatisch in PIPELINE CONTROLLERs eigene Live-Quellen-Liste eingetragen. Keine eigenen OMP-Play/Stop/Cue-Methoden — Playlist/Grafik/Player/Assets/Voiceover/Record bleiben ausschließlich über PIPELINE CONTROLLERs eigenes UI bedient.",
-    "i18n": { "en": {"description": "Embeds PIPELINE CONTROLLER (a standalone, production-proven broadcast playout system) as an OMP node — the complete web UI + REST API run unchanged in the container, the operating panel shows it as an <iframe>. Registers two NMOS senders (programme video/audio) and two receivers for real MXL inputs/outputs in the DMF fabric; live sources wired via IS-05 connect are automatically entered into PIPELINE CONTROLLER's own live-source list. No OMP play/stop/cue methods of its own — playlist/graphics/player/assets/voiceover/record remain operated exclusively via PIPELINE CONTROLLER's own UI.", "expectedResources": "moderate to high (own Node.js process incl. GStreamer pipelines in the container)"} },
-    "expectedResources": "moderat bis hoch (eigener Node.js-Prozess inkl. GStreamer-Pipelines im Container)",
-    "latency": {
-      "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 },
-      "audio": { "minLatencyFrames": 0, "maxLatencyFrames": 0 }
-    }
-  },
-  {
     "type": "omp-intercom",
     "label": "Intercom",
     "runner": "process",
