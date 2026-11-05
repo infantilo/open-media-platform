@@ -276,6 +276,8 @@ export const de = {
   "wfi.connected": "{p0} geschaltet.",
   "wfi.fedBy": "Gespeist von {p0} → {p1}",
   "wfi.unlink": "Zuordnung lösen",
+  "wfi.edgeTip": "Verbindung über die Workflow-Schnittstelle",
+  "wfi.feedTip": "Dauerhafte Zuordnung (Ausgang → Eingang); lösen im Dialog „Schnittstelle…“",
   "kit.workflowOutputs": "Workflow-Ausgänge",
   "kit.currentWorkflow": "Aktueller Workflow",
   "kit.otherWorkflows": "Andere Workflows",

@@ -192,6 +192,9 @@ func resolveInterface(wf Workflow, nodeForRole func(Workflow, string) (registry.
 						if snd, ok := findSender(node, m.Port, ""); ok {
 							rm.PortID, rm.Format, rm.Available = snd.ID, snd.Format, true
 						}
+					} else if len(node.Receivers) == 0 && isCrosspointRole(wf, m.Role) {
+						// Mischer/Umschalter haben keine IS-04-Empfänger: ihre Eingänge sind angeheftete Bild-Quellen.
+						rm.Format, rm.Available = formatVideo, true
 					} else if rcv, ok := findReceiver(node, m.Port); ok {
 						rm.PortID, rm.Format, rm.Available = rcv.ID, rcv.Format, true
 					}
@@ -369,4 +372,9 @@ func firstWithFormat(senders []registry.SenderView, format string) (registry.Sen
 		}
 	}
 	return registry.SenderView{}, false
+}
+
+func isCrosspointRole(wf Workflow, role string) bool {
+	_, ok := crosspointByNodeType[roleNodeType(wf, role)]
+	return ok
 }

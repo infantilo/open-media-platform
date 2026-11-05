@@ -100,6 +100,10 @@ const HOST_ZONE_LANE_GAP = 30;
 const HOST_ZONE_MIN_LANE_WIDTH = NODE_WIDTH + 40;
 const HOST_ZONE_RESIZE_HANDLE_WIDTH = 8;
 const HOST_ZONE_HEADER_HEIGHT = 46;
+// Kap. 88: Zeilen der Workflow-Pads an der Kachel (Eingänge links, Ausgänge rechts); Zeile 2 trägt bei mehr Pads das „+n“.
+const WORKFLOW_PAD_ROWS = 2;
+const WORKFLOW_PAD_FIRST_Y = 12;
+const WORKFLOW_PAD_GAP = 18;
 // Höhe des "Geplant"-Blocks am Fuß einer Host-Zone (Titelzeile + eine Zeile je nicht gestartetem Workflow).
 function ghostBlockHeight(entries: number): number {
   return 36 + entries * 14;
@@ -277,6 +281,16 @@ interface ApplyResult {
 // nur die Felder, die der Editor für den "benannten Rahmen um die
 // Kacheln ihrer Runtime-Nodes" braucht — Wire-Format identisch zu
 // workflows.Workflow (orchestrator/internal/workflows/types.go).
+interface ResolvedInterfaceView {
+  outputs: { name: string; members: { portId?: string; port?: string; format?: string; available?: boolean }[] }[];
+  inputs: {
+    name: string;
+    members: { portId?: string; port?: string; format?: string; available?: boolean }[];
+    feed?: { workflowId: string; output: string };
+    feedSenderIds?: string[];
+  }[];
+}
+
 interface WorkflowSummary {
   id: string;
   name: string;
@@ -531,6 +545,8 @@ export class FlowCanvas extends HTMLElement {
   // (#groupTree bleibt B5s rein visuelles Konzept, s. Abgrenzung in
   // docs/END-GOAL-FEATURES.md §12.1).
   #workflows: WorkflowSummary[] = [];
+  // Kap. 88: aufgelöste Schnittstellen laufender Workflows (Sender-/Empfänger-IDs, Zuordnungen) für die Verbindungslinien.
+  #workflowInterfaces = new Map<string, ResolvedInterfaceView>();
   // Plan-Vorschau nicht gestarteter Workflows (voraussichtliche Hosts je Rolle) für die Host-Ansicht.
   #workflowPlans = new Map<string, StartPlan>();
   // S6 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "Flow-Editor-Filter
@@ -1142,6 +1158,23 @@ export class FlowCanvas extends HTMLElement {
       this.#workflows = workflowsRes.ok ? await workflowsRes.json() : [];
     } catch {
       this.#workflows = [];
+    }
+    // Kap. 88: Schnittstellen laufender Workflows auflösen (für die Linien zu den Pads), best effort.
+    try {
+      const withIfc = this.#workflows.filter((wf) =>
+        wf.status === "started" &&
+        (((wf.definition.interface as WorkflowInterface | undefined)?.outputs?.length ?? 0) +
+              ((wf.definition.interface as WorkflowInterface | undefined)?.inputs?.length ?? 0)) > 0
+      );
+      const resolved = await Promise.all(
+        withIfc.map(async (wf): Promise<[string, ResolvedInterfaceView] | null> => {
+          const res = await apiFetch(`/api/v1/workflows/${encodeURIComponent(wf.id)}/interface`);
+          return res.ok ? [wf.id, (await res.json()) as ResolvedInterfaceView] : null;
+        }),
+      );
+      this.#workflowInterfaces = new Map(resolved.filter((r): r is [string, ResolvedInterfaceView] => r !== null));
+    } catch {
+      this.#workflowInterfaces = new Map();
     }
     // Nicht gestartete Workflows: voraussichtliche Hosts je Rolle (best effort, ohne Plan gilt "lokal"/Rollen-Host).
     try {
@@ -2789,6 +2822,9 @@ export class FlowCanvas extends HTMLElement {
       if (hiddenTileIds.has(tile.id)) continue;
       this.#viewportGroup.appendChild(this.#renderTile(tile));
     }
+    // Kap. 88: Linien zwischen Workflow-Pads und echten Ports bzw. anderen Pads.
+    // Über den Kacheln (nicht anklickbar): untereinander liegende Workflow-Kacheln würden die Linie sonst verdecken.
+    for (const line of this.#renderWorkflowInterfaceEdges()) this.#viewportGroup.appendChild(line);
     for (const edge of this.#graph.edges) {
       const edgeEl = this.#renderEdge(edge);
       if (edgeEl) {
@@ -2830,49 +2866,173 @@ export class FlowCanvas extends HTMLElement {
     return wf.status === "stopped" || wf.status === "paused";
   }
 
+  // Kap. 88: Position eines Workflow-Pads in Weltkoordinaten (null, wenn die Kachel/der Pad nicht gezeichnet ist).
+  #padWorld(workflowId: string, side: "input" | "output", name: string): Point | null {
+    const wf = this.#workflows.find((w) => w.id === workflowId);
+    const ifc = wf?.definition.interface as WorkflowInterface | undefined;
+    const ports = (side === "input" ? ifc?.inputs : ifc?.outputs) ?? [];
+    const idx = ports.findIndex((p) => p.name === name);
+    const pos = this.#positions[workflowTileId(workflowId)];
+    if (idx < 0 || !pos) return null;
+    if (this.#hostViewEnabled && this.#scope === null && wf && this.#collapsedZoneIds.has(this.#zoneIdForWorkflow(wf))) return null;
+    const row = Math.min(idx, WORKFLOW_PAD_ROWS - 1);
+    return {
+      x: pos.x + (side === "input" ? 0 : NODE_WIDTH),
+      y: pos.y + HEADER_HEIGHT + WORKFLOW_PAD_FIRST_Y + row * WORKFLOW_PAD_GAP,
+    };
+  }
+
+  // Kap. 88: Verbindungslinien der Workflow-Schnittstelle. Es entstehen drei Arten, jeweils nur wenn mindestens ein Ende ein
+  // Pad ist (reine Port-zu-Port-Kanten zeichnet #renderEdge): (1) echte Kanten, deren Port ein Mitglied eines Pads ist,
+  // (2) dauerhafte Zuordnungen (Ausgang → Eingang), (3) aktuell speisende Sender eines Eingangs (z. B. im Mischer angeheftet).
+  // Die Linien sind gestrichelt und nicht anklickbar; gelöst wird eine Zuordnung im Schnittstellen-Dialog.
+  #renderWorkflowInterfaceEdges(): SVGPathElement[] {
+    if (this.#scope !== null) return [];
+    const outPad = new Map<string, { wf: string; name: string }>();
+    const inPad = new Map<string, { wf: string; name: string }>();
+    for (const [wfId, ifc] of this.#workflowInterfaces) {
+      for (const o of ifc.outputs) for (const m of o.members) if (m.portId) outPad.set(m.portId, { wf: wfId, name: o.name });
+      for (const i of ifc.inputs) for (const m of i.members) if (m.portId) inPad.set(m.portId, { wf: wfId, name: i.name });
+    }
+    const senderPoint = (id: string): { pt: Point; key: string } | null => {
+      const pad = outPad.get(id);
+      if (pad) {
+        const pt = this.#padWorld(pad.wf, "output", pad.name);
+        return pt ? { pt, key: `o:${pad.wf}:${pad.name}` } : null;
+      }
+      const loc = this.#portLocation.get(id);
+      return loc ? { pt: this.#portWorldPosition(loc), key: `p:${id}` } : null;
+    };
+    const receiverPoint = (id: string): { pt: Point; key: string } | null => {
+      const pad = inPad.get(id);
+      if (pad) {
+        const pt = this.#padWorld(pad.wf, "input", pad.name);
+        return pt ? { pt, key: `i:${pad.wf}:${pad.name}` } : null;
+      }
+      const loc = this.#portLocation.get(id);
+      return loc ? { pt: this.#portWorldPosition(loc), key: `p:${id}` } : null;
+    };
+
+    const seen = new Set<string>();
+    const lines: SVGPathElement[] = [];
+    const add = (from: { pt: Point; key: string } | null, to: { pt: Point; key: string } | null, active: boolean, title: string) => {
+      if (!from || !to) return;
+      const isPad = (k: string) => k.startsWith("o:") || k.startsWith("i:");
+      if (!isPad(from.key) && !isPad(to.key)) return; // Port-zu-Port zeichnet #renderEdge
+      const key = `${from.key}>${to.key}`;
+      if (seen.has(key) || from.key.split(":")[1] === to.key.split(":")[1] && isPad(from.key) && isPad(to.key)) return;
+      seen.add(key);
+      // Läuft die Verbindung „rückwärts“ (Ausgang rechts, Eingang weiter links, z. B. Kacheln untereinander), würde die
+      // übliche S-Kurve durch die Kacheln gehen: dann außen herum führen, damit sie sichtbar bleibt.
+      const backwards = to.pt.x <= from.pt.x + 20;
+      const c1x = backwards ? from.pt.x + 70 : (from.pt.x + to.pt.x) / 2;
+      const c2x = backwards ? to.pt.x - 70 : (from.pt.x + to.pt.x) / 2;
+      const path = document.createElementNS(SVG_NS, "path");
+      path.setAttribute("d", `M ${from.pt.x} ${from.pt.y} C ${c1x} ${from.pt.y}, ${c2x} ${to.pt.y}, ${to.pt.x} ${to.pt.y}`);
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", active ? "#e0a030" : "#777");
+      path.setAttribute("stroke-width", "2");
+      path.setAttribute("stroke-dasharray", "6 3");
+      path.setAttribute("data-role", "workflow-interface-edge");
+      path.style.pointerEvents = "none";
+      const tip = document.createElementNS(SVG_NS, "title");
+      tip.textContent = title;
+      path.appendChild(tip);
+      lines.push(path);
+    };
+
+    for (const edge of this.#graph.edges) {
+      const from = outPad.has(edge.fromSender) || inPad.has(edge.toReceiver) ? senderPoint(edge.fromSender) : null;
+      const to = from ? receiverPoint(edge.toReceiver) : null;
+      add(from, to, edge.state === "active", tt("wfi.edgeTip"));
+    }
+    for (const wf of this.#workflowsInScope()) {
+      const ifc = this.#workflowInterfaces.get(wf.id);
+      for (const input of ifc?.inputs ?? []) {
+        const to = (() => {
+          const pt = this.#padWorld(wf.id, "input", input.name);
+          return pt ? { pt, key: `i:${wf.id}:${input.name}` } : null;
+        })();
+        if (input.feed) {
+          const pt = this.#padWorld(input.feed.workflowId, "output", input.feed.output);
+          add(pt ? { pt, key: `o:${input.feed.workflowId}:${input.feed.output}` } : null, to, (input.feedSenderIds?.length ?? 0) > 0, tt("wfi.feedTip"));
+        }
+        for (const sid of input.feedSenderIds ?? []) add(senderPoint(sid), to, true, tt("wfi.feedTip"));
+      }
+    }
+    return lines;
+  }
+
   // Kap. 88: Pads der Workflow-Schnittstelle am Rand der Workflow-Kachel — Eingänge links, Ausgänge rechts, höchstens zwei
   // Zeilen je Seite ("+n" für den Rest; die volle Liste steht im Tooltip und im Schnittstellen-Dialog).
   #appendWorkflowInterfacePads(g: SVGGElement, workflowId: string, status: string, ifc: WorkflowInterface, tilePos: Point) {
-    const MAX_ROWS = 2;
+    const MAX_ROWS = WORKFLOW_PAD_ROWS;
+    const MAX_DOTS = 4;
+    const DOT_STEP = 11;
     const live = status === "started";
+    const resolved = this.#workflowInterfaces.get(workflowId);
+    // Je Mitglied eine Kugel in der Farbe seiner Medienart (Bild/Ton/Daten); ohne aufgelöste Schnittstelle (Workflow läuft
+    // nicht) ist die Art unbekannt: graue Kugeln, eine je definiertem Mitglied.
+    const dotsOf = (side: "input" | "output", port: InterfacePort): { format: string; label: string; available: boolean }[] => {
+      const list = side === "input" ? resolved?.inputs : resolved?.outputs;
+      const r = list?.find((x) => x.name === port.name);
+      if (r && r.members.length > 0) {
+        return r.members.map((m, k) => ({ format: m.format ?? "", label: m.port ?? port.members[k]?.port ?? "", available: m.available !== false }));
+      }
+      return port.members.map((m) => ({ format: "", label: m.port ?? "", available: false }));
+    };
     const draw = (ports: InterfacePort[], side: "input" | "output") => {
-      const x = side === "input" ? 0 : NODE_WIDTH;
+      const dir = side === "input" ? 1 : -1;
+      const edgeX = side === "input" ? 0 : NODE_WIDTH;
       const shown = ports.length > MAX_ROWS ? MAX_ROWS : ports.length;
       for (let i = 0; i < shown; i++) {
-        const y = HEADER_HEIGHT + 12 + i * 18;
+        const y = HEADER_HEIGHT + WORKFLOW_PAD_FIRST_Y + i * WORKFLOW_PAD_GAP;
         const rest = ports.length - (MAX_ROWS - 1);
         const more = ports.length > MAX_ROWS && i === MAX_ROWS - 1;
-        const pad = document.createElementNS(SVG_NS, "circle");
-        pad.setAttribute("data-role", `workflow-${side}-pad`);
-        pad.setAttribute("data-pad-name", more ? "" : ports[i].name);
-        pad.setAttribute("cx", String(x));
-        pad.setAttribute("cy", String(y));
-        pad.setAttribute("r", "5");
-        pad.setAttribute("fill", live ? "#4caf50" : "#777");
-        pad.setAttribute("stroke", "#1b1b1b");
-        if (!more) {
-          pad.setAttribute("data-workflow-id", workflowId);
-          pad.style.cursor = side === "output" ? "crosshair" : "copy";
-          // Kap. 88: Ausgang ist Ziehquelle, Eingang Ablageziel (s. #finishConnect).
-          pad.addEventListener("pointerdown", (ev) => {
-            ev.stopPropagation();
-            if (side === "output") {
-              this.#startWorkflowOutputDrag(ev, workflowId, ports[i].name, { x: tilePos.x + x, y: tilePos.y + y });
-            }
-          });
-        }
-        const tip = document.createElementNS(SVG_NS, "title");
-        tip.textContent = (more ? ports.slice(MAX_ROWS - 1) : [ports[i]]).map((p) => p.label || p.name).join(", ");
-        pad.appendChild(tip);
-        g.appendChild(pad);
+        const dots = more ? [{ format: "", label: "", available: live }] : dotsOf(side, ports[i]).slice(0, MAX_DOTS);
+        const portName = more ? "" : ports[i].name;
+        dots.forEach((d, k) => {
+          const x = edgeX + dir * k * DOT_STEP;
+          const pad = document.createElementNS(SVG_NS, "circle");
+          pad.setAttribute("data-role", `workflow-${side}-pad`);
+          pad.setAttribute("data-pad-name", portName);
+          pad.setAttribute("data-format", d.format);
+          pad.setAttribute("cx", String(x));
+          pad.setAttribute("cy", String(y));
+          pad.setAttribute("r", "4.5");
+          pad.setAttribute("fill", d.format ? portColor(d.format, d.label) : live ? "#4caf50" : "#777");
+          pad.setAttribute("stroke", side === "input" ? "#5b9bd5" : "#70ad47");
+          pad.setAttribute("stroke-width", "1.5");
+          if (!d.available && d.format) pad.setAttribute("opacity", "0.45");
+          if (!more) {
+            pad.setAttribute("data-workflow-id", workflowId);
+            pad.style.cursor = side === "output" ? "crosshair" : "copy";
+            // Kap. 88: Ausgang ist Ziehquelle, Eingang Ablageziel (s. #finishConnect). Die Kugeln einer Gruppe gehören zusammen:
+            // gezogen/abgelegt wird immer die ganze Schnittstellengruppe, die Farben zeigen nur, was sie enthält.
+            pad.addEventListener("pointerdown", (ev) => {
+              ev.stopPropagation();
+              if (side === "output") {
+                this.#startWorkflowOutputDrag(ev, workflowId, ports[i].name, { x: tilePos.x + edgeX, y: tilePos.y + y });
+              }
+            });
+          }
+          const tip = document.createElementNS(SVG_NS, "title");
+          const kind = d.format ? formatAbbrev(d.format, d.label) : "";
+          tip.textContent = more
+            ? ports.slice(MAX_ROWS - 1).map((p) => p.label || p.name).join(", ")
+            : `${ports[i].label || ports[i].name}${kind ? ` — ${kind}${d.label ? ` ${d.label}` : ""}` : ""}`;
+          pad.appendChild(tip);
+          g.appendChild(pad);
+        });
         const text = document.createElementNS(SVG_NS, "text");
-        text.setAttribute("x", String(side === "input" ? 10 : NODE_WIDTH - 10));
+        const textX = edgeX + dir * ((dots.length - 1) * DOT_STEP + 9);
+        text.setAttribute("x", String(textX));
         text.setAttribute("y", String(y + 4));
         text.setAttribute("text-anchor", side === "input" ? "start" : "end");
         text.setAttribute("fill", "#d8d8d8");
         text.setAttribute("font-size", "10");
         text.setAttribute("pointer-events", "none");
-        text.textContent = more ? `+${rest}` : truncateTileTitle(ports[i].label || ports[i].name, 13);
+        text.textContent = more ? `+${rest}` : truncateTileTitle(ports[i].label || ports[i].name, Math.max(6, 13 - 2 * (dots.length - 1)));
         g.appendChild(text);
       }
     };
@@ -5171,6 +5331,11 @@ export class FlowCanvas extends HTMLElement {
   }
 
   #highlightIncompatiblePorts(fromFormat: string) {
+    // Kap. 88: auch die Kugeln der Workflow-Eingänge — unpassende Medienarten blass, damit man sieht, was dort ankommen kann.
+    this.#viewportGroup.querySelectorAll('[data-role="workflow-input-pad"]').forEach((el) => {
+      const format = el.getAttribute("data-format") ?? "";
+      (el as SVGElement).style.opacity = !format || portsCompatible(fromFormat, format) ? "1" : "0.25";
+    });
     const inputs = this.#viewportGroup.querySelectorAll('[data-port-side="input"]');
     inputs.forEach((el) => {
       const format = el.getAttribute("data-format") ?? "";
@@ -5182,6 +5347,9 @@ export class FlowCanvas extends HTMLElement {
   }
 
   #clearPortHighlights() {
+    this.#viewportGroup.querySelectorAll('[data-role="workflow-input-pad"]').forEach((el) => {
+      (el as SVGElement).style.opacity = "";
+    });
     const ports = this.#viewportGroup.querySelectorAll('[data-role="port"]');
     ports.forEach((el) => {
       const svgEl = el as SVGElement;

@@ -392,6 +392,23 @@ PGM“ mit Bild und Ton). Die Auswahl filtert wie sonst nach Medienart, ein
 Bildmischer-Eingang zeigt also nur das Bild des Ausgangs. Rechte ändern
 sich nicht: Geschaltet wird am Ziel, die Rechte dort entscheiden.
 
+**Kugeln je Schnittstellengruppe.** Jeder Pad besteht aus einer Kugel **je
+Mitglied** in der Farbe der Medienart (wie bei den Ports der Nodes: Bild,
+Ton, Daten). Ein Ausgang „PGM“ mit Bild, Ton und Zeitcode zeigt so drei
+Kugeln; an einem Eingang erkennst du, welche Medienarten er annimmt (ein
+Mischer-Eingang: Bild). Läuft der Workflow nicht, sind die Kugeln grau, weil
+die Medienart erst am laufenden Node feststeht. Beim Ziehen eines Ports
+werden die Kugeln der Workflow-Eingänge, die diese Medienart nicht annehmen,
+blass. Der Tooltip einer Kugel nennt die Medienart und den Port.
+
+**Verbindungslinien.** Der Editor zeichnet gestrichelte Linien zwischen den
+Pads und den echten Ports bzw. anderen Pads: für echte Verbindungen zu
+Mitgliedern, für dauerhafte Zuordnungen (Ausgang → Eingang) und für Quellen,
+die gerade einen Eingang speisen (z. B. im Mischer angeheftet). Die Linien
+liegen über den Kacheln, sind nicht anklickbar, und laufen bei untereinander
+liegenden Kacheln außen herum. Eine Zuordnung löst du im Dialog
+„Schnittstelle…“.
+
 **Pads ziehen (Drag & Drop).** Die Pads der Workflow-Kachel sind echte
 Anschlüsse im Flow Editor:
 

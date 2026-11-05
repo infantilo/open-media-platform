@@ -248,3 +248,17 @@ func TestResolveOutputWithoutPortExpandsToAllSenders(t *testing.T) {
 		t.Fatalf("members = %+v (lowres companion must be left out)", m)
 	}
 }
+
+func TestResolveCrosspointInputIsAvailableVideo(t *testing.T) {
+	wf := Workflow{ID: "w", Runtime: map[string]RoleRuntime{"mixer": {NodeID: "mx"}}, Definition: Definition{
+		Roles:     []Role{{Name: "mixer", NodeType: "omp-video-mixer-me"}},
+		Interface: &Interface{Inputs: []InterfacePort{{Name: "FQ1", Members: []InterfaceMember{{Role: "mixer"}}}}},
+	}}
+	got := resolveInterface(wf, func(Workflow, string) (registry.NodeView, bool) {
+		return registry.NodeView{ID: "mx", Online: true}, true
+	})
+	m := got.Inputs[0].Members[0]
+	if !got.Inputs[0].Available || m.Format != formatVideo {
+		t.Errorf("crosspoint input = %+v", got.Inputs[0])
+	}
+}

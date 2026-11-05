@@ -277,6 +277,8 @@ export const en: Record<keyof typeof de, string> = {
   "wfi.connected": "{p0} connected.",
   "wfi.fedBy": "Fed by {p0} → {p1}",
   "wfi.unlink": "Unlink",
+  "wfi.edgeTip": "Connection through the workflow interface",
+  "wfi.feedTip": "Permanent assignment (output → input); unlink in the “Interface…” dialog",
   "kit.workflowOutputs": "Workflow outputs",
   "kit.currentWorkflow": "Current workflow",
   "kit.otherWorkflows": "Other workflows",
