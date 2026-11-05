@@ -66,16 +66,67 @@ class AudioRulesView extends HTMLElement {
   #mappingIdx = 0;
   #schemaIdx = 0;
   #loaded = false;
+  /** Gesetzt: Editor für das Dokument dieses Channels (Automations-Konfiguration); sonst das plattformweite Dokument. */
+  #channelId = "";
+  #source: "channel" | "platform" = "platform";
   #sim = { kind: "schema", count: 8, schemaIdx: 0, mapping: "" };
   #simResult: { plan?: AudioPlan; errors?: string[] } | null = null;
 
   connectedCallback() {
     this.style.cssText = "display:block;";
+    this.#channelId = this.getAttribute("channel-id") ?? "";
     if (this.#loaded) this.#render();
     else {
       this.#loaded = true;
-      void this.#load("/api/v1/audio-rules");
+      void this.#reloadCurrent();
     }
+  }
+
+  static get observedAttributes() {
+    return ["channel-id"];
+  }
+
+  attributeChangedCallback(_name: string, old: string | null, value: string | null) {
+    if (!this.isConnected || old === value) return;
+    this.#channelId = value ?? "";
+    this.#doc = null;
+    this.#dirty = false;
+    void this.#reloadCurrent();
+  }
+
+  /** Lädt das gültige Dokument: je Channel (inkl. Herkunft) oder das plattformweite. */
+  #reloadCurrent() {
+    return this.#channelId ? this.#loadChannel() : this.#load("/api/v1/audio-rules");
+  }
+
+  async #loadChannel() {
+    try {
+      const res = await apiFetch(`/api/v1/audio-rules/channel/${encodeURIComponent(this.#channelId)}`);
+      if (!res.ok) throw new Error(String(res.status));
+      const body = (await res.json()) as { source: "channel" | "platform"; rules: AudioRulesDoc };
+      this.#doc = body.rules;
+      this.#source = body.source;
+      this.#dirty = false;
+      this.#error = "";
+      this.#mappingIdx = Math.min(this.#mappingIdx, Math.max(0, this.#doc.mappings.length - 1));
+      this.#schemaIdx = Math.min(this.#schemaIdx, Math.max(0, this.#doc.trackSchemas.length - 1));
+    } catch {
+      this.#error = tt("arv.2aeae0");
+    }
+    this.#render();
+  }
+
+  async #dropChannelDoc() {
+    try {
+      const res = await apiFetch(`/api/v1/audio-rules/channel/${encodeURIComponent(this.#channelId)}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.text()) || String(res.status));
+      this.#message = tt("arv.chRemoved");
+    } catch (e) {
+      this.#error = String((e as Error).message ?? e);
+      this.#render();
+      return;
+    }
+    await this.#loadChannel();
   }
 
   async #load(url: string, markDirty = false) {
@@ -97,7 +148,7 @@ class AudioRulesView extends HTMLElement {
     if (!this.#doc) return;
     this.#message = "";
     try {
-      const res = await apiFetch("/api/v1/audio-rules", {
+      const res = await apiFetch(this.#channelId ? `/api/v1/audio-rules/channel/${encodeURIComponent(this.#channelId)}` : "/api/v1/audio-rules", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(cleanDoc(this.#doc)),
@@ -108,6 +159,7 @@ class AudioRulesView extends HTMLElement {
         this.#doc = (await res.json()) as AudioRulesDoc;
         this.#dirty = false;
         this.#error = "";
+        if (this.#channelId) this.#source = "channel";
         this.#message = tt("arv.b01c7b");
       }
     } catch {
@@ -124,28 +176,40 @@ class AudioRulesView extends HTMLElement {
 
   #render() {
     this.replaceChildren();
-    const title = el("div", "", tt("arv.89810d"));
+    const title = el("div", "", this.#channelId ? tt("arv.chTitle") : tt("arv.89810d"));
     title.className = "omp-h1";
     this.append(title);
     this.append(el("div", `${DIM}max-width:900px;margin:6px 0 12px;`,
       tt("arv.6fe920") +
         tt("arv.3beb81")));
+    if (this.#channelId) {
+      const own = this.#source === "channel";
+      this.append(el("div", `margin:0 0 10px;padding:6px 10px;border-radius:3px;max-width:900px;${own ? "background:#0e4a63;color:#27e0f0;" : "background:#4a3a0e;color:#ffd27a;"}`,
+        own ? tt("arv.chOwn") : tt("arv.chInherit")));
+    }
     if (this.#error) this.append(el("div", "color:var(--omp-danger,#d33);margin-bottom:8px;white-space:pre-wrap;", this.#error));
     if (this.#message) this.append(el("div", "color:var(--omp-success,#4a4);margin-bottom:8px;max-width:900px;", this.#message));
     if (!this.#doc) return;
 
     const bar = el("div", "display:flex;gap:8px;align-items:center;margin-bottom:12px;position:sticky;top:0;z-index:3;padding:6px 0;background:var(--omp-bg);");
     const save = button(tt("arv.b97d23"), () => void this.#save(), "omp-btn-primary");
-    const reload = button(tt("arv.878028"), () => void this.#load("/api/v1/audio-rules"));
+    const reload = button(tt("arv.878028"), () => void this.#reloadCurrent());
     const reset = button(tt("arv.79101c"), async () => {
       if (await confirmDialog(tt("arv.4b1885"), { confirmLabel: tt("arv.3a6cf4") })) {
         await this.#load("/api/v1/audio-rules/default", true);
       }
     });
+    const inheritBtn = this.#channelId && this.#source === "channel"
+      ? button(tt("arv.chReset"), async () => {
+        if (await confirmDialog(tt("arv.chResetConfirm"), { confirmLabel: tt("arv.chResetGo") })) await this.#dropChannelDoc();
+      })
+      : null;
     const dirty = el("span", "color:var(--omp-warn,#b8860b);font-size:12px;", tt("arv.80a9b8"));
     dirty.dataset.role = "dirty";
     dirty.style.display = this.#dirty ? "" : "none";
-    bar.append(save, reload, reset, dirty);
+    bar.append(save, reload, reset);
+    if (inheritBtn) bar.append(inheritBtn);
+    bar.append(dirty);
     this.append(bar);
 
     const tags = el("datalist");

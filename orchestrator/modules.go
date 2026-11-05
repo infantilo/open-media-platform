@@ -35,8 +35,8 @@ import (
 // registerModules meldet die Module des Orchestrators an (UMSETZUNG.md Kapitel 36). Cloud (36.6), Audio-Ausgabe (36.7),
 // Playout (36.8), Eingang/Review (Kapitel 43) sind Module; `extsvc` ist das Dienst-Gateway (Kapitel 48), über das Fachdienste in eigenen
 // Nodes (z. B. Intercom) Rechte, Oberfläche, Metriken und Audit in die Plattform einbringen.
-func registerModules(reg *module.Registry, playoutSvc *playoutmod.Services, reviewMod *reviewmod.Module, ingestMod *ingestmod.Module, extsvcMod *extsvcmod.Module, jobsMod *jobsmod.Module, filesMod *filesmod.Module) {
-	for _, m := range []module.Module{cloudmod.New(), playoutmod.New(playoutSvc), audiorulesmod.New(), reviewMod, ingestMod, extsvcMod, jobsMod, filesMod} {
+func registerModules(reg *module.Registry, playoutSvc *playoutmod.Services, audioRulesSvc *audiorulesmod.Services, reviewMod *reviewmod.Module, ingestMod *ingestmod.Module, extsvcMod *extsvcmod.Module, jobsMod *jobsmod.Module, filesMod *filesmod.Module) {
+	for _, m := range []module.Module{cloudmod.New(), playoutmod.New(playoutSvc), audiorulesmod.New(audioRulesSvc), reviewMod, ingestMod, extsvcMod, jobsMod, filesMod} {
 		if err := reg.Register(m); err != nil {
 			slog.Error("module registration failed", "module", m.Name(), "error", err)
 		}

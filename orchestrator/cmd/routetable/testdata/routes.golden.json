@@ -540,6 +540,27 @@
     "domain": "audio-rules"
   },
   {
+    "method": "DELETE",
+    "path": "/api/v1/audio-rules/channel/{id}",
+    "auth": "verb:Admin",
+    "when": "module:audio-rules",
+    "domain": "audio-rules"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/audio-rules/channel/{id}",
+    "auth": "auth",
+    "when": "module:audio-rules",
+    "domain": "audio-rules"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/audio-rules/channel/{id}",
+    "auth": "verb:Admin",
+    "when": "module:audio-rules",
+    "domain": "audio-rules"
+  },
+  {
     "method": "GET",
     "path": "/api/v1/audio-rules/default",
     "auth": "auth",

@@ -69,6 +69,7 @@ import (
 	filesmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/files"
 	ingestmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/ingest"
 	jobsmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/jobs"
+	audiorulesmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/audiorules"
 	playoutmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/playout"
 	reviewmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/review"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
@@ -400,12 +401,13 @@ func main() {
 	// `failed` markiert und nicht gemountet; der Kern startet trotzdem.
 	modules := module.NewRegistry(module.DisabledFromEnv()...)
 	playoutSvc := &playoutmod.Services{}
+	audioRulesSvc := &audiorulesmod.Services{}
 	reviewMod := reviewmod.New(nil)                  // der Asset-Store folgt weiter unten (assetStore), vor dem Mounten der Routen
 	ingestMod := ingestmod.New(ingestmod.Services{}) // Kern-Dienste folgen weiter unten (vor dem Mounten der Routen)
 	extsvcMod := extsvcmod.New(extsvcmod.Services{}) // Registry, Launcher und Node-Client folgen weiter unten
 	jobsMod := jobsmod.New()                         // ffmpeg-Jobs: Host-Auswahl, Lastverteilung, Sendeschutz (Kapitel 52)
 	filesMod := filesmod.New()                       // Dateien: Explorer, Papierkorb, „Datei fehlt“ (Kapitel 86); Anbindungen folgen unten
-	registerModules(modules, playoutSvc, reviewMod, ingestMod, extsvcMod, jobsMod, filesMod)
+	registerModules(modules, playoutSvc, audioRulesSvc, reviewMod, ingestMod, extsvcMod, jobsMod, filesMod)
 	if err := modules.Migrate(ctx, database); err != nil {
 		slog.Error("module migration failed (affected modules are not mounted)", "error", err)
 	}
@@ -1416,6 +1418,7 @@ func main() {
 		Nodes: store, RetentionDays: cfg.AuditRetentionDays,
 		Release: reviewmod.NewStore(database),
 	}
+	audioRulesSvc.Roles = workflowSvc
 	if nc != nil {
 		playoutSvc.Publisher = nc
 	}

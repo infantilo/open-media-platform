@@ -9,16 +9,36 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 )
 
-// Module ist das Audio-Ausgabe-Modul.
-type Module struct{}
+// InstanceRoleResolver ordnet eine Launcher-Instanz ihrer Workflow-Rolle zu (*workflows.Service).
+type InstanceRoleResolver interface {
+	FindRoleForInstance(instanceID string) (workflowID, role string, ok bool)
+}
 
-func New() *Module { return &Module{} }
+// Services sind die Kerndienste, die das Modul braucht (vom Aufrufer in `main.go` gesetzt, vor dem Mounten der Routen).
+type Services struct {
+	// Roles: Workflow einer anfragenden Instanz (ein Player im Workflow bekommt die Regeln des Channels dieses Workflows).
+	Roles InstanceRoleResolver
+}
+
+// Module ist das Audio-Ausgabe-Modul.
+type Module struct{ svc *Services }
+
+func New(svc *Services) *Module {
+	if svc == nil {
+		svc = &Services{}
+	}
+	return &Module{svc: svc}
+}
 
 func (*Module) Name() string { return "audio-rules" }
 
 // Mount meldet die vier Routen an (Rechtepflicht je Route ausgeschrieben, damit auch das Routentabellen-Werkzeug sie liest).
-func (*Module) Mount(r module.Routes, d module.Deps) error {
-	r.Handle("GET /api/v1/audio-rules", module.Authenticated(), handleGetAudioRules(d.Settings))
+func (m *Module) Mount(r module.Routes, d module.Deps) error {
+	ch := &channelRules{settings: d.Settings, db: d.DB, roles: m.svc.Roles, actor: d.Actor}
+	r.Handle("GET /api/v1/audio-rules", module.Authenticated(), ch.handleGetEffective())
+	r.Handle("GET /api/v1/audio-rules/channel/{id}", module.Authenticated(), ch.handleGetChannel())
+	r.Handle("PUT /api/v1/audio-rules/channel/{id}", module.Verb(authz.VerbAdmin), ch.handlePutChannel())
+	r.Handle("DELETE /api/v1/audio-rules/channel/{id}", module.Verb(authz.VerbAdmin), ch.handleDeleteChannel())
 	r.Handle("GET /api/v1/audio-rules/default", module.Authenticated(), handleGetAudioRulesDefault())
 	r.Handle("POST /api/v1/audio-rules/simulate", module.Authenticated(), handleSimulateAudioRules())
 	r.Handle("PUT /api/v1/audio-rules", module.Verb(authz.VerbAdmin), handlePutAudioRules(d.Settings))

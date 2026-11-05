@@ -24,7 +24,15 @@ pub fn fetch_settings(orchestrator_url: &str, instance_id: Option<&str>, launch_
     }
     let instance_id = instance_id.filter(|_| !launch_secret.is_empty()).ok_or("OMP_INSTANCE_ID/OMP_LAUNCH_SECRET fehlen")?;
     let token = service_token(orchestrator_url, instance_id, launch_secret)?;
-    let url = format!("{}/api/v1/audio-rules", orchestrator_url.trim_end_matches('/'));
+    // Dokument je Channel: eine Instanz in einem Workflow bekommt es automatisch vom Orchestrator; freistehende Player
+    // wählen den Channel mit `OMP_AUDIO_RULES_CHANNEL` (Channel-ID).
+    let mut url = format!("{}/api/v1/audio-rules", orchestrator_url.trim_end_matches('/'));
+    if let Ok(ch) = std::env::var("OMP_AUDIO_RULES_CHANNEL") {
+        let ch = ch.trim();
+        if !ch.is_empty() && ch.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            url.push_str(&format!("?channelId={ch}"));
+        }
+    }
     let s = ureq::get(&url)
         .header("Authorization", &format!("Bearer {token}"))
         .call()
