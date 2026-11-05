@@ -1095,7 +1095,7 @@ const STYLE = `
   .tl-axis { position: relative; height: 14px; border-bottom: 1px solid var(--bd); font-size: 9px; color: var(--mut); }
   .tl-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
   .tl-axis span:first-child { transform: none; } .tl-axis span:last-child { transform: translateX(-100%); }
-  .tl-body { position: relative; padding-top: 4px; }
+  .tl-body { position: relative; padding-top: 4px; min-height: 88px; }
   .tl-lane, .tl-klane { position: relative; height: 24px; margin-bottom: 3px; }
   .tl-klane { height: 16px; margin-bottom: 2px; }
   .tl-ev, .tl-kid { position: absolute; top: 0; bottom: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; border: 1px solid #000; border-radius: 2px; }
@@ -1113,6 +1113,12 @@ const STYLE = `
   .tl-ev span, .tl-kid span { pointer-events: none; }
   .tl-now { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #ff4040; pointer-events: none; box-shadow: 0 0 4px #ff4040; }
   .chip.empty { opacity: .45; }
+  .cnt-row { position: relative; display: grid; gap: 6px; height: 24px; margin-bottom: 6px; align-items: stretch; }
+  .cnt-row .chip { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 20px; padding: 2px 8px; min-width: 0; }
+  .cnt-gear { padding: 0; height: 24px; }
+  .cnt-pop { display: none; position: absolute; right: 0; top: 28px; z-index: 6; background: var(--bg3); border: 1px solid var(--bd); border-radius: 2px; padding: 8px; flex-direction: column; gap: 4px; box-shadow: 0 6px 20px #000a; }
+  .cnt-pop.show { display: flex; }
+  .cnt-pop label { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
   /* ───── Konsole-2-Optik (wie Audio-/Videomischer) ───── */
   :host { --bg: #111; --bg2: #1a1a1a; --bg3: #262626; --bd: #2c2c2c; --mut: #7d848c; --acc: #27e0f0; --ok: #25d366; --warn: #ffb000; --err: #ff4040;
     font: 11px/1.25 ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; background: #111; padding: 6px; }
@@ -1227,12 +1233,22 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     const CNT_KINDS = ["live", "fix", "miss", "man"];
     const cntOn = (() => { try { return { live: true, fix: true, miss: true, man: true, ...JSON.parse(localStorage.getItem("omp-pa-counters") || "{}") }; } catch { return { live: true, fix: true, miss: true, man: true }; } })();
     const cntEls = Object.fromEntries(CNT_KINDS.map((k) => [k, h("span", { class: "chip blue", style: cntOn[k] ? "" : "display:none" })]));
-    const nextFixEl = h("div", { class: "info", style: "display:flex;gap:8px;flex-wrap:wrap;align-items:center" },
-      ...CNT_KINDS.map((k) => cntEls[k]),
-      h("span", { style: "margin-left:auto;opacity:.7;font-size:11px" }, T("cntShow")),
-      ...CNT_KINDS.map((k) => h("label", { style: "font-size:11px;opacity:.85" },
-        h("input", { type: "checkbox", checked: cntOn[k], onchange: (e) => { cntOn[k] = e.target.checked; try { localStorage.setItem("omp-pa-counters", JSON.stringify(cntOn)); } catch { /* ignorieren */ } } }),
+    // Feste Zeile: Höhe konstant, jeder angehakte Zähler hat einen gleich breiten Platz (Text wird gekürzt statt zu schieben);
+    // die Auswahl liegt in einem Popover (⚙) und verschiebt nichts. Die Spaltenzahl ändert sich nur durch Umschalten durch den Nutzer.
+    const cntCols = () => { const n = CNT_KINDS.filter((k) => cntOn[k]).length; return `repeat(${Math.max(n, 1)}, minmax(0, 1fr)) 26px`; };
+    const cntPop = h("div", { class: "cnt-pop" },
+      h("div", { style: "opacity:.7;font-size:10px;margin-bottom:2px" }, T("cntShow")),
+      ...CNT_KINDS.map((k) => h("label", {},
+        h("input", { type: "checkbox", checked: cntOn[k], onchange: (e) => {
+          cntOn[k] = e.target.checked;
+          try { localStorage.setItem("omp-pa-counters", JSON.stringify(cntOn)); } catch { /* ignorieren */ }
+          cntEls[k].style.display = cntOn[k] ? "" : "none";
+          nextFixEl.style.gridTemplateColumns = cntCols();
+        } }),
         ` ${T("cnt" + k[0].toUpperCase() + k.slice(1))}`)));
+    const cntBtn = h("button", { class: "cnt-gear", title: T("cntShow"), onclick: () => cntPop.classList.toggle("show") }, "⚙");
+    const nextFixEl = h("div", { class: "cnt-row", style: `grid-template-columns:${cntCols()}` },
+      ...CNT_KINDS.map((k) => cntEls[k]), cntBtn, cntPop);
     const planWarnEl = h("div", { class: "info warn", style: "display:none" });
     const head = h("div", { class: "head" }, clockEl, modeChip, connectedChip, persistChip);
 
