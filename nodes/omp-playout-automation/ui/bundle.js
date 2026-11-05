@@ -47,7 +47,7 @@ const T = (() => {
       "stopTitle": "Hauptkanal sofort auf Schwarzbild schalten (Playlist bleibt erhalten)",
       "mode": "Modus ",
       "sec.control": "Playlist Control",
-      "sec.targets": "Ziele",
+      "sec.targets": "Ziele", "sec.channel": "Channel (Speicherung)", "ch.none": "— kein Channel —", "ch.link": "Verknüpfen", "ch.unlink": "Lösen", "ch.new": "Neuen Channel anlegen", "ch.newPh": "Name des neuen Channels", "ch.linked": "Mit Channel „{name}“ verknüpft.", "ch.unlinked": "Channel gelöst.", "ch.status": "Status: {p}", "ch.hint": "Ein Channel speichert Playlist und Einstellungen beim Orchestrator und überlebt Neustarts, Umzüge und Ausfälle. Ohne Channel sichert sich die Instanz nur lokal in einer Datei.", "ch.here": " (diese Instanz)", "ch.other": " (an andere Instanz gebunden)", "ch.role": " (an Workflow-Rolle gebunden)", "ch.takeover": "Channel „{name}“ ist schon an eine andere Instanz/Rolle gebunden. Trotzdem hierher umbinden?", "ch.overwrite": "Hat der Channel schon gespeicherten Inhalt, ersetzt der aktuelle Inhalt dieser Automation ihn.", "ch.viaRole": "Dieser Channel hängt an einer Workflow-Rolle und wird im Workflow gelöst.", "ch.noId": "Instanz-ID unbekannt (keine Orchestrator-Anbindung).", "ch.err": "Fehler: {e}",
       "sec.playlist": "Playlist",
       "sec.carts": "Assets / Carts",
       "sec.trigger": "Channel-Trigger",
@@ -394,7 +394,7 @@ const T = (() => {
       "stopTitle": "Switch the main channel to black immediately (the playlist is kept)",
       "mode": "Mode ",
       "sec.control": "Playlist control",
-      "sec.targets": "Targets",
+      "sec.targets": "Targets", "sec.channel": "Channel (storage)", "ch.none": "— no channel —", "ch.link": "Link", "ch.unlink": "Unlink", "ch.new": "Create new channel", "ch.newPh": "Name of the new channel", "ch.linked": "Linked to channel “{name}”.", "ch.unlinked": "Channel unlinked.", "ch.status": "Status: {p}", "ch.hint": "A channel stores playlist and settings at the orchestrator and survives restarts, moves and failures. Without a channel the instance only keeps a local file.", "ch.here": " (this instance)", "ch.other": " (bound to another instance)", "ch.role": " (bound to a workflow role)", "ch.takeover": "Channel “{name}” is already bound to another instance/role. Rebind it here anyway?", "ch.overwrite": "If the channel already has stored content, the current content of this automation replaces it.", "ch.viaRole": "This channel is bound to a workflow role and must be unlinked in the workflow.", "ch.noId": "Instance ID unknown (no orchestrator connection).", "ch.err": "Error: {e}",
       "sec.playlist": "Playlist",
       "sec.carts": "Assets / carts",
       "sec.trigger": "Channel trigger",
@@ -1627,12 +1627,88 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       shadow.append(ov);
     }
 
+    // ---- Channel verknüpfen --------------------------------------------------
+    let chList = [], chAt = 0, myInstance = "", chCurrentId = "";
+    const chSel = h("select", {});
+    const chStatusEl = h("div", { class: "hint", style: "grid-column:1/-1" });
+    const chNewName = h("input", { type: "text", placeholder: T("ch.newPh") });
+    const putChannel = async (c, patch) => {
+      const body = { name: c.name, timezone: c.timezone, group: c.group || "", instanceId: c.instanceId || "", workflowId: c.workflowId || "", role: c.role || "", config: c.config || {}, ...patch };
+      const res = await fetch(`/api/v1/playout/channels/${encodeURIComponent(c.id)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error((await res.text().catch(() => "")) || `HTTP ${res.status}`);
+    };
+    const loadChannels = async (force) => {
+      if (!force && Date.now() - chAt < 8000) return;
+      chAt = Date.now();
+      try {
+        const res = await fetch("/api/v1/playout/channels");
+        if (res.ok) chList = await res.json();
+      } catch { /* Liste bleibt */ }
+      const mine = chList.find((c) => myInstance && c.instanceId === myInstance);
+      const cur = mine ? mine.id : chCurrentId;
+      const opts = [["", T("ch.none")], ...chList.map((c) => [c.id, c.name + (c.id === cur ? T("ch.here") : c.workflowId ? T("ch.role") : c.instanceId ? T("ch.other") : "")])];
+      const key = JSON.stringify(opts) + cur;
+      if (chSel.dataset.k !== key) {
+        chSel.dataset.k = key;
+        chSel.replaceChildren(...opts.map(([v, t]) => h("option", { value: v }, t)));
+        if (shadow.activeElement !== chSel) chSel.value = cur || "";
+      }
+    };
+    const chDo = async (fn) => {
+      try { await fn(); } catch (e) { showBanner(T("ch.err", { e: e.message })); }
+      await loadChannels(true);
+      poll();
+    };
+    const linkTo = async (c) => {
+      if (!myInstance) { showBanner(T("ch.noId")); return; }
+      if ((c.instanceId && c.instanceId !== myInstance) || c.workflowId) {
+        if (c.workflowId) { showBanner(T("ch.viaRole")); return; }
+        if (!(await confirmDialog(T("ch.takeover", { name: c.name }), T("ch.link")))) return;
+      }
+      // Höchstens ein Channel je Instanz: einen bisherigen zuerst lösen.
+      const old = chList.find((x) => x.instanceId === myInstance && x.id !== c.id);
+      if (old) await putChannel(old, { instanceId: "" });
+      await putChannel(c, { instanceId: myInstance });
+      showBanner(T("ch.linked", { name: c.name }), true);
+    };
+    const channelSec = h("details", { class: "sec", open: true },
+      h("summary", {}, T("sec.channel")),
+      h("div", { class: "body targets" },
+        h("label", {}, T("sec.channel"), chSel),
+        h("div", { class: "ctrl", style: "align-self:end" },
+          h("button", { class: "primary", onclick: () => chDo(async () => {
+            const c = chList.find((x) => x.id === chSel.value);
+            if (!c) throw new Error(T("ch.none"));
+            await linkTo(c);
+          }) }, T("ch.link")),
+          h("button", { onclick: () => chDo(async () => {
+            const c = chList.find((x) => x.instanceId === myInstance);
+            if (!c) { if (chCurrentId) showBanner(T("ch.viaRole")); return; }
+            await putChannel(c, { instanceId: "" });
+            showBanner(T("ch.unlinked"), true);
+          }) }, T("ch.unlink"))),
+        h("label", {}, T("ch.new"), chNewName),
+        h("div", { class: "ctrl", style: "align-self:end" },
+          h("button", { onclick: () => chDo(async () => {
+            const name = chNewName.value.trim();
+            if (!name) throw new Error(T("ch.newPh"));
+            const res = await fetch("/api/v1/playout/channels", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, group: "", timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" }) });
+            if (!res.ok) throw new Error((await res.text().catch(() => "")) || `HTTP ${res.status}`);
+            chNewName.value = "";
+            await loadChannels(true);
+            const created = chList.find((x) => x.name === name);
+            if (created) await linkTo(created);
+          }) }, "＋")),
+        chStatusEl,
+        h("div", { class: "hint", style: "grid-column:1/-1" }, T("ch.hint")),
+        h("div", { class: "hint", style: "grid-column:1/-1" }, T("ch.overwrite"))));
+
     // ---- Reiter: Sendung (Steuerung + Playlist) steht vorne, Einrichtung getrennt --------------------------
     const TABS = [
       ["live", T("tab.live"), [controlSec, playlistSec]],
       ["carts", T("tab.carts"), [cartsSec]],
       ["auto", T("tab.auto"), [triggerSec, adSec]],
-      ["config", T("tab.config"), [targetsSec, foreignSec]],
+      ["config", T("tab.config"), [channelSec, targetsSec, foreignSec]],
     ];
     for (const [, , secs] of TABS) for (const sec of secs) sec.open = true;
     let activeTab = "live";
@@ -1649,6 +1725,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     };
     shadow.append(h("style", {}, STYLE), head, nextFixEl, planWarnEl, banner, tabBar, ...panes);
     showTab(activeTab);
+    persistChip.style.cursor = "pointer";
+    persistChip.addEventListener("click", () => showTab("config"));
     plMain.style.setProperty("--cols", "");
     applyCols();
     // Spalten-Template an die Zeilen weitergeben
@@ -2784,7 +2862,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (dragging) return;
       const names = ["items", "currentItemId", "cuedItemId", "mode", "connected", "playheadPositionMs", "currentDurationMs", "assets", "activeCartId", "activeCartRemaining",
         "availableNodes", "targetPlayerALabel", "targetPlayerBLabel", "targetMixerLabel", "targetGraphicsLabel", "targetAudioMixerLabel", "liveChannel", "mediaLibrary", "audioPlans", "audioGroups", "audioMappings",
-        "availableSources", "channelName", "persistence", "schedule", "childEvents", "triggerLog", "channelId", "preflightWindowMin", "defaultFiller", "requireRelease", "foreignStatus", "adBreakEnabled", "adBreakTarget", "adBreakPreRollMs", "adBlocks", "operatorWait"];
+        "availableSources", "channelName", "instanceId", "persistence", "schedule", "childEvents", "triggerLog", "channelId", "preflightWindowMin", "defaultFiller", "requireRelease", "foreignStatus", "adBreakEnabled", "adBreakTarget", "adBreakPreRollMs", "adBlocks", "operatorWait"];
       const v = Object.fromEntries(await Promise.all(names.map(async (n) => [n, await getParam(n)])));
       if (dragging) return;
       items = v.items || [];
@@ -2873,6 +2951,10 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const ptxt = v.persistence || "";
       persistChip.textContent = v.channelName ? T("channelLabel", { name: v.channelName }) : T("noChannel");
       persistChip.title = ptxt;
+      myInstance = v.instanceId || "";
+      chCurrentId = v.channelId || "";
+      chStatusEl.textContent = T("ch.status", { p: ptxt || "—" });
+      loadChannels(false);
       persistChip.className = `chip${/fehlgeschlagen|Konflikt|nicht lesbar|nicht serialisierbar/.test(ptxt) ? " err" : v.channelName ? " blue" : ""}`;
       takeBtn.disabled = !cuedItemId;
       nextBtn.disabled = items.length === 0;

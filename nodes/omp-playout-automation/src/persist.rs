@@ -516,6 +516,10 @@ impl Persistence {
         Persistence { client, inner: Mutex::new(Inner { status, ..Inner::default() }) }
     }
 
+    pub fn instance_id(&self) -> String {
+        self.client.as_ref().map(|c| c.instance_id.clone()).unwrap_or_default()
+    }
+
     pub fn channel_id(&self) -> String {
         self.inner.lock().expect("lock poisoned").channel.as_ref().map(|c| c.id.clone()).unwrap_or_default()
     }

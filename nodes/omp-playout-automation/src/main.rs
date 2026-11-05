@@ -3928,6 +3928,13 @@ impl ParamStore for AutomationStore {
                 readonly: true,
             },
             ParamSpec {
+                name: "instanceId".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
                 name: "channelName".to_string(),
                 kind: ParamType::String,
                 unit: None,
@@ -4413,6 +4420,8 @@ impl ParamStore for AutomationStore {
             "childEvents" => Some(child_events_json(&state)),
             "channelId" => Some(serde_json::json!(self.persistence.channel_id())),
             "channelName" => Some(serde_json::json!(self.persistence.channel_name())),
+            // Eigene Instanz-ID (das Panel verknüpft damit einen Channel; nur mit Orchestrator-Anbindung, sonst leer).
+            "instanceId" => Some(serde_json::json!(self.persistence.instance_id())),
             "persistence" => Some(serde_json::json!(self.persistence.status())),
             "hookStatus" => Some(hooks::status_json(&self.plugins)),
             "foreignStatus" => Some(foreign::runtime::status_json(&self.plugins)),

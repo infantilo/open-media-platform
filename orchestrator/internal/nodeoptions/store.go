@@ -92,5 +92,12 @@ func (s *Store) MoveInstance(from, to string) error {
 	if _, err := tx.Exec(`DELETE FROM node_option_values WHERE scope = 'instance' AND subject = $1`, from); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// Ein an die alte Instanz gebundener Playout-Channel zieht mit um, sonst verliert die Automation nach einem
+	// Neustart ihren Zustand (Nutzerfund 2026-11-05). Bewusst getrennt und fehlertolerant (Tabelle gehört dem
+	// Playout-Modul; ohne sie bleiben die Einstellungen trotzdem übertragen).
+	_, _ = s.db.Exec(`UPDATE playout_channels SET instance_id = $2, updated_at = now() WHERE instance_id = $1`, from, to)
+	return nil
 }
