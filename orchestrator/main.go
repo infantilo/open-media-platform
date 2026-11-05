@@ -442,6 +442,8 @@ func main() {
 	go logStore.RunRetention(ctx, cfg.LogRetentionHours)
 
 	// Kapitel 21 Phase 5 Teil 1 (A8/B9): JetStream-Stream für die
+	// Subject `omp.files.>` (Kapitel 86, Dateiverwaltung: missing/deleted/recovered/trash-emergency) gehört in diesen Stream:
+	// ohne ihn findet der Outbox-Relay keinen Stream und scheitert je Ereignis dauerhaft mit „context deadline exceeded“.
 	// Process-/Asset-Domain-Events (s. processEventsStreamName-Doku
 	// oben) — Setup läuft auf JEDER Instanz (CreateOrUpdateStream ist
 	// idempotent, gleiche Linie wie logbus' Stream-Setup oben, kein
@@ -458,7 +460,7 @@ func main() {
 			processJS = nil
 		} else if _, err := outbox.EnsureStream(ctx, processJS, jetstream.StreamConfig{
 			Name:     processEventsStreamName,
-			Subjects: []string{"omp.asset.>", "omp.process.>"},
+			Subjects: []string{"omp.asset.>", "omp.process.>", "omp.files.>"},
 			MaxAge:   processEventsRetention,
 			Storage:  jetstream.FileStorage,
 			// Gleiche Replikationstiefe wie OMP_LOGS/der 3-Knoten-NATS-
