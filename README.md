@@ -507,7 +507,8 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   hot-desking. Mix-minus mixing in a dedicated 20 ms engine, browser panels
   over WebRTC/Opus (also on phones), MXL programme inputs and mix outputs
   (studio loudspeaker, recording), Stream Deck remote control, orchestrator
-  module for channels, parties and rights.
+  module for channels, parties and rights. Audio-only guests (one click:
+  return path and microphone channel, mix-minus from the audio mixer's N-1 bus).
 - **omp-vfa** / **omp-vfa-vision** — video follows audio: the face
   detection service (pure Go, no CGO) reports faces per camera from the
   camera previews, and the control node cuts the video mixer to the camera
@@ -521,6 +522,10 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   (video+audio in one step, by tags or 1:1), 60-second undo; usable
   on a phone
 - **omp-ograf** — EBU OGraf graphics overlay node (Fill+Key)
+- **omp-radio-automation** — plays a radio log through the segue player
+  (cross-fades at the segue point, jingles over the outro, hard fix times).
+  Includes a transition editor: waveforms with draggable markers, audition,
+  and a render check with the segue player's own mixer; non-destructive.
 - **omp-sign-avatar** — sign language avatar (DGS): a software-rasterised
   avatar (no browser, no GPU) delivered as Fill+Key MXL for the mixer
   picture-in-picture. Takes the subtitle stream (text or CEA-608), prepares
