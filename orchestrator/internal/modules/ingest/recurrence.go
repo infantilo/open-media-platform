@@ -177,7 +177,8 @@ func Occurrences(s Spec, from, to time.Time) ([]Occurrence, error) {
 		for _, d := range days {
 			wd = append(wd, int(weekdays[strings.ToUpper(d)]))
 		}
-		sort.Ints(wd)
+		// Die Woche beginnt am Montag: nach Position in der Woche sortieren (Sonntag zuletzt), sonst bricht die Schleife am Fensterende zu früh ab
+		sort.Slice(wd, func(i, j int) bool { return (wd[i]+6)%7 < (wd[j]+6)%7 })
 		// Wochenbeginn = Montag der Startwoche
 		cur := time.Date(y0, m0, d0, 0, 0, 0, 0, time.UTC)
 		cur = cur.AddDate(0, 0, -((int(cur.Weekday()) + 6) % 7))

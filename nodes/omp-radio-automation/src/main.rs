@@ -2,6 +2,7 @@
 //! Marken (`omp_playout_core::segue`), schickt die Stimmen rechtzeitig (Vorlauf) mit `startAt` auf TAI an den Segue-Player und führt
 //! ein As-Run. Kein Medien-I/O; Fernaufrufe laufen über den Orchestrator-Proxy (wie `omp-playout-automation`).
 
+mod autoload;
 mod runner;
 mod uibundle;
 
@@ -77,6 +78,12 @@ struct Run {
     /// Hotkey-Wand (Carts) und je Taste die zuletzt gestartete Stimme.
     carts: Vec<Cart>,
     cart_fired: std::collections::HashMap<usize, CartFired>,
+    /// Automatisches Laden/Starten der freigegebenen Sendung zur Sendezeit.
+    auto_load: bool,
+    auto_lead_ms: i64,
+    /// Zuletzt behandelte Sendung (`id:rowVersion`) — verhindert erneutes Laden nach Neustart und Wiederholung.
+    auto_key: String,
+    auto_status: String,
 }
 
 /// Eine Taste der Hotkey-Wand.
@@ -106,6 +113,42 @@ struct Remote {
     orchestrator_url: String,
     auth: OrchestratorAuth,
     registry: RegistryClient,
+}
+
+/// Log laden (Plan rechnen, Zustand zurücksetzen; Hotkeys und Einstellungen bleiben). Gemeinsam für `load` und das automatische Laden.
+fn load_log(r: &mut Run, log: Log) -> Result<(), String> {
+    let placed = runner::plan(&log, &Config::default())?;
+    *r = Run {
+        log: Some(log),
+        placed,
+        target_label: std::mem::take(&mut r.target_label),
+        lookahead_ms: r.lookahead_ms,
+        carts: std::mem::take(&mut r.carts),
+        cart_fired: std::mem::take(&mut r.cart_fired),
+        auto_load: r.auto_load,
+        auto_lead_ms: r.auto_lead_ms,
+        auto_key: std::mem::take(&mut r.auto_key),
+        auto_status: std::mem::take(&mut r.auto_status),
+        ..Run::default()
+    };
+    Ok(())
+}
+
+/// Ablauf starten (`start_tai` = TAI-Zeitpunkt des Logbeginns); rechnet das Backtiming gegen harte Marken und schreibt es ins As-Run.
+fn start_run(r: &mut Run, start_tai: u64) -> Result<(), String> {
+    let start_unix_ms = ((start_tai as i128 - tai_offset_ns()) / 1_000_000) as i64;
+    if r.log.as_ref().is_some_and(|l| l.items.iter().any(|i| i.fix_at_unix_ms.is_some())) {
+        let log = r.log.clone().expect("log");
+        let (adj, notes, residual) = runner::apply_fixtimes(&log, start_unix_ms, &Config::default(), &backtime::Params::default())?;
+        r.placed = runner::plan(&adj, &Config::default())?;
+        r.log = Some(adj);
+        for n in notes {
+            r.as_run.push(json!({"event": "backtiming", "text": n, "taiNs": tai_now_ns()}));
+        }
+        r.as_run.push(json!({"event": "backtiming-result", "residualMs": residual, "taiNs": tai_now_ns()}));
+    }
+    r.start_tai_ns = start_tai;
+    Ok(())
 }
 
 struct Store {
@@ -138,6 +181,9 @@ impl ParamStore for Store {
             parameters: vec![
                 ParamSpec { name: "target".to_string(), kind: ParamType::String, unit: None, range: None, readonly: false },
                 ParamSpec { name: "lookaheadMs".to_string(), kind: ParamType::Number, unit: Some("ms".to_string()), range: None, readonly: false },
+                ParamSpec { name: "autoLoad".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: false },
+                ParamSpec { name: "autoLeadMs".to_string(), kind: ParamType::Number, unit: Some("ms".to_string()), range: None, readonly: false },
+                ro("autoStatus", ParamType::String),
                 ro("state", ParamType::String),
                 ro("logId", ParamType::String),
                 ro("itemCount", ParamType::Number),
@@ -165,6 +211,9 @@ impl ParamStore for Store {
         Some(match name {
             "target" => json!(r.target_label),
             "lookaheadMs" => json!(r.lookahead_ms),
+            "autoLoad" => json!(r.auto_load),
+            "autoLeadMs" => json!(r.auto_lead_ms),
+            "autoStatus" => json!(r.auto_status),
             "state" => json!(Self::state_value(&r)),
             "logId" => json!(r.log.as_ref().map(|l| l.log_id.clone()).unwrap_or_default()),
             "itemCount" => json!(r.log.as_ref().map_or(0, |l| l.items.len())),
@@ -191,6 +240,15 @@ impl ParamStore for Store {
                 r.lookahead_ms = v;
                 Ok(())
             }
+            "autoLoad" => {
+                r.auto_load = value.as_bool().ok_or(SetError::Unknown)?;
+                r.auto_status = if r.auto_load { "wartet auf die nächste freigegebene Sendung".to_string() } else { String::new() };
+                Ok(())
+            }
+            "autoLeadMs" => {
+                r.auto_lead_ms = value.as_i64().filter(|v| (10_000..=3_600_000).contains(v)).ok_or(SetError::Unknown)?;
+                Ok(())
+            }
             _ => {
                 drop(r);
                 if self.get(name).is_some() { Err(SetError::ReadOnly) } else { Err(SetError::Unknown) }
@@ -210,8 +268,7 @@ impl ParamStore for Store {
                     Some(v) => serde_json::from_value(v.clone()).map_err(|e| InvokeError::Message(format!("Log ungültig: {e}")))?,
                     None => return Err(InvokeError::Unknown),
                 };
-                let placed = runner::plan(&log, &Config::default()).map_err(InvokeError::Message)?;
-                *r = Run { log: Some(log), placed, target_label: std::mem::take(&mut r.target_label), lookahead_ms: r.lookahead_ms, carts: std::mem::take(&mut r.carts), cart_fired: std::mem::take(&mut r.cart_fired), ..Run::default() };
+                load_log(&mut r, log).map_err(InvokeError::Message)?;
                 Ok(())
             }
             "start" => {
@@ -228,19 +285,7 @@ impl ParamStore for Store {
                     .or_else(|| args.get("atUnixMs").and_then(Value::as_u64).filter(|v| *v > 0).map(|ms| (ms as i128 * 1_000_000 + tai_offset_ns()) as u64));
                 let delay = args.get("delayMs").and_then(Value::as_u64).unwrap_or(3000);
                 let start_tai = at.unwrap_or_else(|| tai_now_ns() + delay * 1_000_000);
-                // Backtiming gegen harte Marken (RB5): der Ablauf wird für diese Startzeit angepasst, Entscheidungen kommen ins As-Run
-                let start_unix_ms = ((start_tai as i128 - tai_offset_ns()) / 1_000_000) as i64;
-                if r.log.as_ref().is_some_and(|l| l.items.iter().any(|i| i.fix_at_unix_ms.is_some())) {
-                    let log = r.log.clone().expect("log");
-                    let (adj, notes, residual) = runner::apply_fixtimes(&log, start_unix_ms, &Config::default(), &backtime::Params::default()).map_err(InvokeError::Message)?;
-                    r.placed = runner::plan(&adj, &Config::default()).map_err(InvokeError::Message)?;
-                    r.log = Some(adj);
-                    for n in notes {
-                        r.as_run.push(json!({"event": "backtiming", "text": n, "taiNs": tai_now_ns()}));
-                    }
-                    r.as_run.push(json!({"event": "backtiming-result", "residualMs": residual, "taiNs": tai_now_ns()}));
-                }
-                r.start_tai_ns = start_tai;
+                start_run(&mut r, start_tai).map_err(InvokeError::Message)?;
                 Ok(())
             }
             "stop" => {
@@ -313,7 +358,7 @@ impl ParamStore for Store {
             let r = self.run.lock().expect("lock poisoned");
             let mut sent: Vec<usize> = r.sent.iter().copied().collect();
             sent.sort_unstable();
-            return Some(json_ok(json!({"state": {"log": r.log, "startTaiNs": r.start_tai_ns, "sent": sent, "target": r.target_label, "lookaheadMs": r.lookahead_ms, "carts": r.carts}})));
+            return Some(json_ok(json!({"state": {"log": r.log, "startTaiNs": r.start_tai_ns, "sent": sent, "target": r.target_label, "lookaheadMs": r.lookahead_ms, "carts": r.carts, "autoLoad": r.auto_load, "autoLeadMs": r.auto_lead_ms, "autoKey": r.auto_key}})));
         }
         if method == "POST" && path == "/state" {
             let v: Value = match serde_json::from_slice(body) {
@@ -329,6 +374,15 @@ impl ParamStore for Store {
                     r.start_tai_ns = s.get("startTaiNs").and_then(Value::as_u64).unwrap_or(0);
                     r.sent = s.get("sent").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as usize)).collect()).unwrap_or_default();
                 }
+            }
+            if let Some(b) = s.get("autoLoad").and_then(Value::as_bool) {
+                r.auto_load = b;
+            }
+            if let Some(l) = s.get("autoLeadMs").and_then(Value::as_i64).filter(|v| (10_000..=3_600_000).contains(v)) {
+                r.auto_lead_ms = l;
+            }
+            if let Some(k) = s.get("autoKey").and_then(Value::as_str) {
+                r.auto_key = k.to_string();
             }
             if let Some(c) = s.get("carts").and_then(|c| serde_json::from_value::<Vec<Cart>>(c.clone()).ok()) {
                 r.carts = c;
@@ -361,13 +415,88 @@ fn resolve_target(orchestrator_url: &str, auth: &OrchestratorAuth, registry: &Re
     idx.resolve(label)
 }
 
+fn unix_now_ms() -> i64 {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: gültiger Zeiger auf eine lokale timespec
+    unsafe { libc::clock_gettime(libc::CLOCK_REALTIME, &mut ts) };
+    ts.tv_sec as i64 * 1000 + ts.tv_nsec as i64 / 1_000_000
+}
+
+/// Automatisches Laden (alle 5 s): die früheste freigegebene Sendung in Reichweite holen und nach `autoload::decide` laden und zum
+/// Beginn des Zeitfensters starten. Fehler stehen in `autoStatus`; die Sendung wird je Stand nur einmal behandelt.
+fn auto_tick(run: &Arc<Mutex<Run>>, url: &str, auth: &OrchestratorAuth) {
+    let (enabled, lead, key, running) = {
+        let r = run.lock().expect("lock poisoned");
+        (r.auto_load, r.auto_lead_ms, r.auto_key.clone(), Store::state_value(&r) == "running")
+    };
+    if !enabled {
+        return;
+    }
+    let set_status = |t: String| run.lock().expect("lock poisoned").auto_status = t;
+    let now = unix_now_ms();
+    let path = format!("/api/v1/radio/shows?template=0&from={}&to={}", autoload::fmt_rfc3339_ms(now), autoload::fmt_rfc3339_ms(now + lead));
+    let list = match remote::get_json(url, auth, &path) {
+        Ok(v) => v,
+        Err(e) => return set_status(format!("Sendungen nicht lesbar: {e}")),
+    };
+    let candidate = list.as_array().and_then(|a| a.iter().find(|s| matches!(s.get("status").and_then(Value::as_str), Some("ready") | Some("live")))).cloned();
+    let Some(c) = candidate else { return set_status("wartet auf die nächste freigegebene Sendung".to_string()) };
+    let id = c.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+    // vor dem Nachladen des Inhalts prüfen, ob die Liste (ohne Inhalt) schon „behandelt“ sagt
+    if autoload::key_of(&c) == key {
+        return;
+    }
+    let full = match remote::get_json(url, auth, &format!("/api/v1/radio/shows/{id}")) {
+        Ok(v) => v,
+        Err(e) => return set_status(format!("Sendung nicht lesbar: {e}")),
+    };
+    match autoload::decide(Some(&full), now, lead, running, &key) {
+        autoload::Decision::Nothing => {}
+        autoload::Decision::Note(t) => set_status(t),
+        autoload::Decision::Load { key, title, log, carts, start_unix_ms, late, .. } => {
+            let log: Log = match serde_json::from_value(log) {
+                Ok(l) => l,
+                Err(e) => return set_status(format!("Log der Sendung „{title}“ ungültig: {e}")),
+            };
+            let carts: Vec<Cart> = serde_json::from_value(carts).unwrap_or_default();
+            let mut r = run.lock().expect("lock poisoned");
+            if Store::state_value(&r) == "running" {
+                return;
+            }
+            if let Err(e) = load_log(&mut r, log) {
+                r.auto_status = format!("Log der Sendung „{title}“ nicht planbar: {e}");
+                return;
+            }
+            r.carts = carts;
+            r.auto_key = key;
+            let mut note = format!("Sendung „{title}“ geladen");
+            if let Some(ms) = start_unix_ms {
+                let tai = (ms as i128 * 1_000_000 + tai_offset_ns()) as u64;
+                match start_run(&mut r, tai) {
+                    Ok(()) => note.push_str(&format!(", Start um {}", autoload::fmt_rfc3339_ms(ms))),
+                    Err(e) => note.push_str(&format!(", Start fehlgeschlagen: {e}")),
+                }
+            } else if late {
+                note.push_str(" — Zeitfenster hat begonnen, bitte manuell starten");
+            }
+            r.as_run.push(json!({"event": "autoload", "text": note, "taiNs": tai_now_ns()}));
+            r.auto_status = note;
+        }
+    }
+}
+
 /// Planer: alle 250 ms fällige Stimmen senden; Fehler stehen in `lastError`, ein misslungener Aufruf wird beim nächsten Tick wiederholt
 /// (die `voiceId` macht die Wiederholung folgenlos).
 fn scheduler_loop(run: Arc<Mutex<Run>>, orchestrator_url: String, auth: OrchestratorAuth, registry: RegistryClient, heartbeat: Arc<AtomicU64>) {
     let mut cached: (String, String, std::time::Instant) = (String::new(), String::new(), std::time::Instant::now());
+    let mut last_auto = std::time::Instant::now() - Duration::from_secs(60);
     loop {
         heartbeat.fetch_add(1, Ordering::Relaxed);
         std::thread::sleep(Duration::from_millis(250));
+        if last_auto.elapsed() >= Duration::from_secs(5) {
+            last_auto = std::time::Instant::now();
+            auto_tick(&run, &orchestrator_url, &auth);
+        }
         let (label, calls, stop) = {
             let r = run.lock().expect("lock poisoned");
             let stop = STOP_REQUEST.swap(0, Ordering::Relaxed);
@@ -442,7 +571,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         eprintln!("omp-radio-automation: OMP_INSTANCE_ID/OMP_LAUNCH_SECRET fehlen — keine Fernsteuerung des Segue-Players");
     }
 
-    let run = Arc::new(Mutex::new(Run { target_label: env_or("OMP_RADIO_TARGET_LABEL", ""), lookahead_ms: 30_000, ..Run::default() }));
+    let run = Arc::new(Mutex::new(Run { target_label: env_or("OMP_RADIO_TARGET_LABEL", ""), lookahead_ms: 30_000, auto_lead_ms: 120_000, ..Run::default() }));
     let registry = RegistryClient::new(registry_url.clone());
     let heartbeat = Arc::new(AtomicU64::new(0));
     {

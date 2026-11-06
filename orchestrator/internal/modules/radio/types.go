@@ -69,11 +69,17 @@ type Show struct {
 	Owner       string          `json:"owner"`
 	Tags        []string        `json:"tags"`
 	Content     json.RawMessage `json:"content,omitempty"`
-	RowVersion  int             `json:"rowVersion"`
-	CreatedBy   string          `json:"createdBy"`
-	UpdatedBy   string          `json:"updatedBy"`
-	CreatedAt   time.Time       `json:"createdAt"`
-	UpdatedAt   time.Time       `json:"updatedAt"`
+	// Recurrence: nur bei Vorlagen — erzeugt Sendungen im Voraus (s. Recurrence).
+	Recurrence json.RawMessage `json:"recurrence,omitempty"`
+	// SourceTemplateID: Vorlage, aus der die Wiederkehr diese Sendung erzeugt hat.
+	SourceTemplateID string `json:"sourceTemplateId,omitempty"`
+	// AutoLive: das Modul schaltet die Sendung zum Beginn des Zeitfensters auf „live“ und zum Ende auf „done“.
+	AutoLive   bool      `json:"autoLive"`
+	RowVersion int       `json:"rowVersion"`
+	CreatedBy  string    `json:"createdBy"`
+	UpdatedBy  string    `json:"updatedBy"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 // Version ist ein früherer Stand des Sendungsdokuments.
@@ -96,10 +102,15 @@ type Input struct {
 	Presenters  []string        `json:"presenters"`
 	Tags        []string        `json:"tags"`
 	Content     json.RawMessage `json:"content"`
+	Recurrence  json.RawMessage `json:"recurrence"`
+	// AutoLive: nil = unverändert (neue Sendung: an).
+	AutoLive *bool `json:"autoLive"`
 	// RowVersion: beim Ändern der Stand, auf dem die Änderung beruht (Konflikterkennung).
 	RowVersion int `json:"rowVersion"`
 	// Reason: Vermerk zur Version („Hotkeys angepasst“).
 	Reason string `json:"reason"`
+
+	sourceTemplate string // nur intern: Herkunft bei erzeugten Sendungen
 }
 
 const (
@@ -179,6 +190,13 @@ func (in *Input) Validate() error {
 	}
 	if len(in.Presenters) > 20 || len(in.Tags) > 30 {
 		p = append(p, "höchstens 20 Moderierende und 30 Schlagworte")
+	}
+	if len(in.Recurrence) > 0 && string(in.Recurrence) != "null" {
+		if !in.Template {
+			p = append(p, "Wiederkehr gibt es nur bei Vorlagen")
+		} else if _, err := ParseRecurrence(in.Recurrence); err != nil {
+			p = append(p, err.Error())
+		}
 	}
 	if err := ValidateContent(in.Content); err != nil {
 		var ve *ValidationError

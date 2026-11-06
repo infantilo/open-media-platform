@@ -1,6 +1,7 @@
 package radio
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -188,6 +189,9 @@ func (a *api) create() http.HandlerFunc {
 			return
 		}
 		a.log(r, s.ID, "create", map[string]any{"title": s.Title, "template": s.Template})
+		if s.Template {
+			go a.m.Materialize(context.Background())
+		}
 		writeJSON(w, http.StatusCreated, s)
 	}
 }
@@ -214,6 +218,9 @@ func (a *api) update() http.HandlerFunc {
 			return
 		}
 		a.log(r, id, "update", map[string]any{"version": s.RowVersion, "reason": in.Reason})
+		if s.Template {
+			go a.m.Materialize(context.Background())
+		}
 		writeJSON(w, http.StatusOK, s)
 	}
 }
@@ -350,7 +357,7 @@ func (a *api) restore() http.HandlerFunc {
 			return
 		}
 		in := Input{Title: cur.Title, Description: cur.Description, Template: cur.Template, SlotStart: cur.SlotStart, SlotEnd: cur.SlotEnd,
-			Presenters: cur.Presenters, Tags: cur.Tags, Content: v.Content, RowVersion: cur.RowVersion, Reason: "wiederhergestellt aus Version " + strconv.Itoa(n)}
+			Presenters: cur.Presenters, Tags: cur.Tags, Content: v.Content, Recurrence: cur.Recurrence, AutoLive: &cur.AutoLive, RowVersion: cur.RowVersion, Reason: "wiederhergestellt aus Version " + strconv.Itoa(n)}
 		s, err := st.Update(r.Context(), id, in, actorOf(r))
 		if err != nil {
 			writeErr(w, err)

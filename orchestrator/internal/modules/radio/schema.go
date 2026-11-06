@@ -32,3 +32,19 @@ CREATE TABLE IF NOT EXISTS radio_show_versions (
     PRIMARY KEY (show_id, version)
 );
 `
+
+// Version 2: Wiederkehr (Vorlage → Sendungen), Zeitsteuerung des Status, Herkunft.
+const schemaV2 = `
+ALTER TABLE radio_shows ADD COLUMN IF NOT EXISTS recurrence JSONB;
+ALTER TABLE radio_shows ADD COLUMN IF NOT EXISTS source_template_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE radio_shows ADD COLUMN IF NOT EXISTS auto_live BOOLEAN NOT NULL DEFAULT true;
+CREATE UNIQUE INDEX IF NOT EXISTS radio_shows_occurrence_idx ON radio_shows (source_template_id, slot_start) WHERE source_template_id <> '';
+
+-- Gelöschte erzeugte Sendungen: die Wiederkehr legt sie nicht erneut an.
+CREATE TABLE IF NOT EXISTS radio_show_skips (
+    source_template_id TEXT NOT NULL,
+    slot_start         TIMESTAMPTZ NOT NULL,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (source_template_id, slot_start)
+);
+`

@@ -150,3 +150,22 @@ func TestIdempotencyKeyStable(t *testing.T) {
 		t.Fatal("different schedules must differ")
 	}
 }
+
+// Regression (2026-11-06): ein wöchentlicher Zeitplan mit Sonntag lieferte am Fensterende zu wenige Termine, weil die Wochentage
+// mit Sonntag zuerst durchlaufen wurden, die Woche aber am Montag beginnt.
+func TestWeeklyWithSundayInWindowEnd(t *testing.T) {
+	spec := Spec{TZ: "Europe/Berlin", StartLocal: "2026-11-05T18:00", DurationS: 3600, Rec: Recurrence{Freq: "weekly", ByDay: []string{"MO", "TU", "WE", "TH", "FR", "SA", "SU"}}}
+	from := time.Date(2026, 11, 6, 9, 0, 0, 0, time.UTC)
+	occ, err := Occurrences(spec, from, from.AddDate(0, 0, 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(occ) != 4 { // Fr 6., Sa 7., So 8., Mo 9. November
+		t.Fatalf("erwartet 4 Termine, es sind %d: %+v", len(occ), occ)
+	}
+	for i := 1; i < len(occ); i++ {
+		if !occ[i].Start.After(occ[i-1].Start) || occ[i].Index != occ[i-1].Index+1 {
+			t.Fatalf("Reihenfolge/Index: %+v", occ)
+		}
+	}
+}

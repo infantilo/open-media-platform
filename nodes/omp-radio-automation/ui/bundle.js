@@ -30,6 +30,10 @@ const T = (() => {
       showTplName: "Name der neuen Sendung", showPick: "Sendung wählen …",
       cards: "Moderationskarten", cardAdd: "+ Karte", cardTitle: "Überschrift", cardText: "Text", cardAt: "Bei Element", cardAtStart: "Sendungsbeginn", cardMin: "Min.", cardEmpty: "Keine Karten. „+ Karte“ legt eine an; sie erscheint während des gewählten Elements unter „Jetzt“.",
       notes: "Notizen zur Sendung", cardNow: "Moderation", cardNext: "Als Nächstes",
+      tplOpen: "Vorlage öffnen …", week: "Wochenplan", weekPrev: "← Woche", weekNext: "Woche →", weekToday: "Heute", weekAdd: "+ Sendung", weekOverlap: "überschneidet sich mit der vorigen Sendung", weekEmpty: "—",
+      "wd.MO": "Mo", "wd.TU": "Di", "wd.WE": "Mi", "wd.TH": "Do", "wd.FR": "Fr", "wd.SA": "Sa", "wd.SU": "So",
+      recur: "Wiederkehr (aus dieser Vorlage Sendungen im Voraus anlegen)", recurOn: "Wiederkehr an", recurDays: "Wochentage", recurTime: "Beginn (Uhr)", recurDur: "Dauer (min)", recurTz: "Zeitzone", recurHorizon: "Vorlauf (Tage)", recurUntil: "Bis (Datum, leer = unbegrenzt)", recurBad: "Wiederkehr unvollständig: Wochentage, Beginn und Dauer angeben.",
+      autoLive: "Status automatisch nach dem Zeitfenster (live/gesendet)", autoLoad: "Automatisch laden und zum Sendebeginn starten", autoLead: "Vorlauf (min)",
       hint: "Eine harte Marke (Uhrzeit) lässt das Element zu dieser Zeit einsetzen: beim Start werden Füller weggelassen/eingefügt und Segue-Punkte verschoben (Entscheidungen im As-Run). Der Segue-Punkt ist die Stelle in der Datei, ab der der Nachfolger starten darf; ohne Angabe 3 s vor Dateiende. Der Log wird erst mit „Log laden“ übernommen.",
     },
     en: {
@@ -59,6 +63,10 @@ const T = (() => {
       showTplName: "Name of the new show", showPick: "Choose a show …",
       cards: "Presenter cards", cardAdd: "+ Card", cardTitle: "Heading", cardText: "Text", cardAt: "At item", cardAtStart: "Start of show", cardMin: "Min.", cardEmpty: "No cards. “+ Card” adds one; it appears under “Now” while the chosen item plays.",
       notes: "Show notes", cardNow: "Presenter", cardNext: "Next up",
+      tplOpen: "Open template …", week: "Week plan", weekPrev: "← Week", weekNext: "Week →", weekToday: "Today", weekAdd: "+ Show", weekOverlap: "overlaps the previous show", weekEmpty: "—",
+      "wd.MO": "Mon", "wd.TU": "Tue", "wd.WE": "Wed", "wd.TH": "Thu", "wd.FR": "Fri", "wd.SA": "Sat", "wd.SU": "Sun",
+      recur: "Recurrence (create shows from this template in advance)", recurOn: "Recurrence on", recurDays: "Weekdays", recurTime: "Start (time)", recurDur: "Duration (min)", recurTz: "Time zone", recurHorizon: "Lead (days)", recurUntil: "Until (date, empty = unlimited)", recurBad: "Recurrence incomplete: give weekdays, start and duration.",
+      autoLive: "Status automatically after the time window (live/aired)", autoLoad: "Load automatically and start at show start", autoLead: "Lead (min)",
       hint: "A hard mark (time of day) makes the item start at that time: at start, fillers are dropped/inserted and segue points are moved (decisions in the as-run). The segue point is the position in the file from which the next item may start; without it, 3 s before the end. The log only takes effect with “Load log”.",
     },
   };
@@ -141,6 +149,10 @@ const STYLE = `
   .sstat { padding: 2px 10px; border-radius: 10px; background: var(--bg3); font-weight: 600; } .sstat.ready { background: #2a5a8f; } .sstat.live { background: var(--ok); color: #fff; } .sstat.done, .sstat.archived { color: var(--mut); }
   .card { border: 1px solid var(--bd); border-radius: 5px; padding: 6px; margin-bottom: 6px; display: grid; grid-template-columns: 1fr 180px 70px auto; gap: 6px; align-items: start; } .card textarea { grid-column: 1 / -1; min-height: 70px; font-family: inherit; }
   .cardlive { background: var(--bg2); border: 1px solid var(--acc); border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; display: none; } .cardlive.show { display: block; } .cardlive h4 { margin: 0 0 4px; } .cardlive .tx { white-space: pre-wrap; font-size: 15px; line-height: 1.45; }
+  .week { display: grid; grid-template-columns: repeat(7, minmax(120px, 1fr)); gap: 6px; } .wday { background: var(--bg); border: 1px solid var(--bd); border-radius: 5px; min-height: 90px; padding: 4px; } .wday.today { border-color: var(--acc); }
+  .wday h5 { margin: 0 0 4px; font-size: 11px; color: var(--mut); display: flex; justify-content: space-between; align-items: center; } .wday h5 button { padding: 0 6px; font-size: 11px; }
+  .wshow { display: block; width: 100%; text-align: left; margin-bottom: 4px; padding: 3px 5px; border-radius: 4px; border: 1px solid var(--bd); background: var(--bg3); font-size: 11px; } .wshow.ready { background: #1f3f66; } .wshow.live { background: #2a6a30; } .wshow.done { opacity: .55; } .wshow.sel { outline: 2px solid #fff; } .wshow.overlap { border-color: var(--err); }
+  .wshow .wt { color: var(--mut); font-variant-numeric: tabular-nums; } .recur { margin-top: 8px; padding: 8px; border: 1px dashed var(--bd); border-radius: 5px; display: none; } .recur.show { display: block; } .recur .days { display: flex; gap: 8px; flex-wrap: wrap; } .recur .days label { flex-direction: row; align-items: center; gap: 3px; }
   .hk { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
   .hkkey { position: relative; min-height: 58px; padding: 6px 8px; border-radius: 5px; border: 1px solid rgba(255,255,255,.2); color: #fff; text-align: left; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; }
   .hkkey .nm { font-weight: 700; font-size: 12px; text-shadow: 0 1px 2px rgba(0,0,0,.6); } .hkkey .tm { font-variant-numeric: tabular-nums; font-size: 11px; opacity: .9; }
@@ -203,7 +215,11 @@ class OmpRadioAutomationPanel extends HTMLElement {
     const stateChip = h("span", { class: "chip" });
     const targetSel = h("select", { onchange: () => setParam("target", targetSel.value) });
     const lookInput = h("input", { type: "number", min: "2", max: "300", style: "width:70px", onchange: () => setParam("lookaheadMs", Math.round(Number(lookInput.value) * 1000)).then((r) => { if (!r.ok) show(T("fail", { m: "lookahead", d: r.status })); }) });
-    const head = h("div", { class: "bar" }, h("label", {}, T("state"), stateChip), h("label", {}, T("target"), targetSel), h("label", {}, T("lookahead"), lookInput));
+    const autoChk = h("input", { type: "checkbox", style: "width:auto", onchange: () => setParam("autoLoad", autoChk.checked) });
+    const autoLead = h("input", { type: "number", min: "1", max: "60", style: "width:60px", onchange: () => setParam("autoLeadMs", Math.round(Number(autoLead.value) * 60000)) });
+    const autoSt = h("span", { class: "muted" });
+    const head = h("div", { class: "bar" }, h("label", {}, T("state"), stateChip), h("label", {}, T("target"), targetSel), h("label", {}, T("lookahead"), lookInput),
+      h("label", { style: "flex-direction:row;align-items:center;gap:6px" }, autoChk, T("autoLoad")), h("label", {}, T("autoLead"), autoLead), autoSt);
 
     // ---- Log-Editor ----
     const logIdInput = h("input", { style: "width:160px", oninput: () => { logId = logIdInput.value; markDirty(); } });
@@ -340,11 +356,53 @@ class OmpRadioAutomationPanel extends HTMLElement {
     const renderAsRun = () => {
       if (!asRun.length) { asRunEl.replaceChildren(h("span", { class: "muted" }, T("noAsRun"))); return; }
       asRunEl.replaceChildren(...asRun.slice().reverse().slice(0, 100).map((e) => {
+        if (e.event === "autoload") return h("div", { class: "ev" }, e.text);
         if (e.event === "backtiming") return h("div", { class: "ev" }, `${T("evBack")}: ${e.text}`);
         if (e.event === "backtiming-result") return h("div", { class: "ev" }, T("evBackRes", { ms: e.residualMs }));
         return h("div", { class: "ev" }, e.event === "stop" ? T("evStop") : `${T("evSched")} #${e.index + 1} ${e.id}`, e.leadMs !== undefined ? ` — ${T("lead", { s: (e.leadMs / 1000).toFixed(1) })}` : "");
       }));
     };
+
+    // ---- Wochenplan ----
+    let weekStart = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d; })();
+    let weekShows = [];
+    const weekEl = h("div", { class: "week" }), weekLabel = h("span", { class: "muted" });
+    const loadWeek = async () => {
+      const to = new Date(weekStart); to.setDate(to.getDate() + 7);
+      const l = await api("GET", `${API}?template=0&from=${encodeURIComponent(weekStart.toISOString())}&to=${encodeURIComponent(to.toISOString())}`); if (!l) return;
+      weekShows = l.filter((x) => x.slotStart && x.status !== "archived"); renderWeek();
+    };
+    const renderWeek = () => {
+      const end = new Date(weekStart); end.setDate(end.getDate() + 6);
+      weekLabel.textContent = `${weekStart.toLocaleDateString(LOCALE)} – ${end.toLocaleDateString(LOCALE)}`;
+      const WD = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
+      const todayStr = new Date().toDateString();
+      weekEl.replaceChildren(...WD.map((wd, i) => {
+        const day = new Date(weekStart); day.setDate(day.getDate() + i);
+        const list = weekShows.filter((x) => new Date(x.slotStart).toDateString() === day.toDateString()).sort((a, b) => new Date(a.slotStart) - new Date(b.slotStart));
+        let prevEnd = 0;
+        const chips = list.map((x) => {
+          const st = new Date(x.slotStart), en = x.slotEnd ? new Date(x.slotEnd) : null;
+          const ov = prevEnd && st.getTime() < prevEnd; prevEnd = Math.max(prevEnd, en ? en.getTime() : st.getTime());
+          const tm = (d) => d.toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" });
+          return h("button", { class: `wshow ${x.status}${curShow && curShow.id === x.id ? " sel" : ""}${ov ? " overlap" : ""}`, title: ov ? T("weekOverlap") : `${x.title} · ${T("ss." + x.status)}`, onclick: async () => {
+            if (showDirty && !(await confirmDialog(T("showUnsaved") + " — " + T("showOpen") + "?", T("showOpen")))) return;
+            showSel.value = x.id; await openShow(x.id); loadWeek(); } },
+            h("div", { class: "wt" }, `${tm(st)}${en ? "–" + tm(en) : ""}`), h("div", {}, x.title), (x.presenters || []).length ? h("div", { class: "wt" }, x.presenters.join(", ")) : null);
+        });
+        const add = h("button", { title: T("weekAdd"), onclick: () => {
+          if (curShow) { curShow = null; applyDoc(null); clearShowDirty(); showSel.value = ""; }
+          const d = new Date(day); d.setHours(8, 0, 0, 0); const e = new Date(d); e.setHours(9);
+          f_start.value = isoToLocal(d.toISOString()); f_end.value = isoToLocal(e.toISOString()); f_title.focus();
+          for (const el of [f_title, f_desc, f_pres, f_start, f_end, f_tpl, f_reason, f_auto]) el.disabled = false; } }, "+");
+        return h("div", { class: `wday${day.toDateString() === todayStr ? " today" : ""}` }, h("h5", {}, h("span", {}, `${T("wd." + wd)} ${day.getDate()}.${day.getMonth() + 1}.`), add), ...(chips.length ? chips : [h("span", { class: "muted" }, T("weekEmpty"))]));
+      }));
+    };
+    const weekSec = h("details", { class: "sec", open: "" }, h("summary", {}, T("week")),
+      h("div", { class: "body" }, h("div", { class: "bar" },
+        h("button", { onclick: () => { weekStart.setDate(weekStart.getDate() - 7); loadWeek(); } }, T("weekPrev")),
+        h("button", { onclick: () => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); weekStart = d; loadWeek(); } }, T("weekToday")),
+        h("button", { onclick: () => { weekStart.setDate(weekStart.getDate() + 7); loadWeek(); } }, T("weekNext")), weekLabel), weekEl));
 
     // ---- Sendung (Vorbereitung und Live) ----
     // Das Sendungsdokument fasst Log, Hotkeys, Karten und Notizen zusammen; es wird auf dem Server gespeichert (Modul „radio“) und zur
@@ -365,17 +423,42 @@ class OmpRadioAutomationPanel extends HTMLElement {
     const fmtSlot = (sh) => (sh.slotStart ? new Date(sh.slotStart).toLocaleString(LOCALE, { dateStyle: "short", timeStyle: "short" }) : "—");
 
     const showSel = h("select", { style: "min-width:240px" });
-    const tplSel = h("select");
+    const tplSel = h("select"), tplOpenSel = h("select");
     const refreshShows = async () => {
       const l = await api("GET", API); if (!l) return;
       shows = l.filter((x) => !x.template && x.status !== "archived"); templates = l.filter((x) => x.template);
       showSel.replaceChildren(h("option", { value: "" }, T("showPick")), ...shows.map((x) => h("option", { value: x.id }, `${fmtSlot(x)} · ${x.title} · ${T("ss." + x.status)}`)));
       tplSel.replaceChildren(h("option", { value: "" }, T("showFromTpl")), ...templates.map((x) => h("option", { value: x.id }, x.title)));
+      tplOpenSel.replaceChildren(h("option", { value: "" }, T("tplOpen")), ...templates.map((x) => h("option", { value: x.id }, x.title)));
       if (curShow) showSel.value = curShow.id;
     };
     const f_title = h("input", { type: "text", oninput: () => markShow() }), f_desc = h("input", { type: "text", oninput: () => markShow() }), f_pres = h("input", { type: "text", oninput: () => markShow() });
     const f_start = h("input", { type: "datetime-local", onchange: () => markShow() }), f_end = h("input", { type: "datetime-local", onchange: () => markShow() });
-    const f_tpl = h("input", { type: "checkbox", style: "width:auto", onchange: () => markShow() });
+    const f_tpl = h("input", { type: "checkbox", style: "width:auto", onchange: () => { markShow(); renderRecur(); } });
+    const f_auto = h("input", { type: "checkbox", style: "width:auto", checked: true, onchange: () => markShow() });
+    // Wiederkehr (nur Vorlagen)
+    const WDS = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
+    const r_on = h("input", { type: "checkbox", style: "width:auto", onchange: () => markShow() });
+    const r_days = WDS.map((d) => h("input", { type: "checkbox", style: "width:auto", "data-d": d, onchange: () => markShow() }));
+    const r_time = h("input", { type: "time", value: "07:00", onchange: () => markShow() });
+    const r_dur = h("input", { type: "number", min: "1", max: "1440", value: "180", style: "width:80px", oninput: () => markShow() });
+    const r_tz = h("input", { type: "text", value: Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Berlin", oninput: () => markShow() });
+    const r_hor = h("input", { type: "number", min: "1", max: "90", value: "14", style: "width:70px", oninput: () => markShow() });
+    const r_until = h("input", { type: "date", onchange: () => markShow() });
+    const recurBox = h("div", { class: "recur" }, h("div", { class: "muted" }, T("recur")),
+      h("div", { class: "showmeta" }, h("label", { style: "flex-direction:row;align-items:center;gap:6px" }, r_on, T("recurOn")),
+        h("div", {}, h("div", { class: "muted" }, T("recurDays")), h("div", { class: "days" }, ...WDS.map((d, i) => h("label", {}, r_days[i], T("wd." + d))))),
+        h("label", {}, T("recurTime"), r_time), h("label", {}, T("recurDur"), r_dur), h("label", {}, T("recurTz"), r_tz), h("label", {}, T("recurHorizon"), r_hor), h("label", {}, T("recurUntil"), r_until)));
+    const renderRecur = () => { recurBox.classList.toggle("show", f_tpl.checked); };
+    const recurFromShow = (sh) => {
+      const r = (sh && sh.recurrence) || {};
+      r_on.checked = !!r.enabled; r_days.forEach((c) => { c.checked = (r.byDay || []).includes(c.dataset.d); });
+      r_time.value = r.time || "07:00"; r_dur.value = r.durationMin || 180; r_tz.value = r.tz || Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Berlin"; r_hor.value = r.horizonDays || 14; r_until.value = r.until || "";
+    };
+    const recurToBody = () => {
+      if (!f_tpl.checked) return null;
+      return { enabled: r_on.checked, tz: r_tz.value.trim(), time: r_time.value, durationMin: Number(r_dur.value) || 0, byDay: r_days.filter((c) => c.checked).map((c) => c.dataset.d), horizonDays: Number(r_hor.value) || 14, until: r_until.value || "" };
+    };
     const f_reason = h("input", { type: "text", placeholder: T("showReason"), style: "width:220px" });
     const statChip = h("span", { class: "sstat" }), unsavedEl = h("span", { class: "dirty" });
     const markShow = () => { if (!curShow) return; showDirty = true; unsavedEl.textContent = T("showUnsaved"); };
@@ -392,11 +475,11 @@ class OmpRadioAutomationPanel extends HTMLElement {
     const renderShowBar = () => {
       const open = !!curShow;
       f_title.value = curShow ? curShow.title : ""; f_desc.value = curShow ? curShow.description || "" : ""; f_pres.value = curShow ? (curShow.presenters || []).join(", ") : "";
-      f_start.value = curShow ? isoToLocal(curShow.slotStart) : ""; f_end.value = curShow ? isoToLocal(curShow.slotEnd) : ""; f_tpl.checked = curShow ? !!curShow.template : false;
+      f_start.value = curShow ? isoToLocal(curShow.slotStart) : ""; f_end.value = curShow ? isoToLocal(curShow.slotEnd) : ""; f_tpl.checked = curShow ? !!curShow.template : false; f_auto.checked = curShow ? curShow.autoLive !== false : true; recurFromShow(curShow); renderRecur();
       statChip.textContent = curShow ? (curShow.template ? T("showTpl") : T("ss." + curShow.status)) : T("showNone"); statChip.className = `sstat ${curShow ? curShow.status : ""}`;
       const st = curShow ? curShow.status : "";
       const editable = open && (st === "draft" || st === "ready");
-      for (const el of [f_title, f_desc, f_pres, f_start, f_end, f_tpl, f_reason]) el.disabled = !editable;
+      for (const el of [f_title, f_desc, f_pres, f_start, f_end, f_tpl, f_reason, f_auto, r_on, r_time, r_dur, r_tz, r_hor, r_until, ...r_days]) el.disabled = !editable;
       saveBtn.disabled = !editable; saveTplBtn.disabled = !open;
       relBtn.style.display = open && !curShow.template && st === "draft" ? "" : "none";
       unrelBtn.style.display = open && !curShow.template && st === "ready" ? "" : "none";
@@ -418,15 +501,16 @@ class OmpRadioAutomationPanel extends HTMLElement {
       if (!curShow) return false;
       const bad = rows.find((r) => r.fixText && r.fixText.trim() && fixToUnix(r.fixText) === null); if (bad) { show_(T("badFix", { v: bad.fixText })); return false; }
       const body = { title: f_title.value.trim(), description: f_desc.value, template: f_tpl.checked, slotStart: localToIso(f_start.value), slotEnd: localToIso(f_end.value),
-        presenters: f_pres.value.split(",").map((x) => x.trim()).filter(Boolean), tags: curShow.tags || [], content: docFromState(), rowVersion: curShow.rowVersion, reason: reason ?? f_reason.value };
+        presenters: f_pres.value.split(",").map((x) => x.trim()).filter(Boolean), tags: curShow.tags || [], content: docFromState(), recurrence: recurToBody(), autoLive: f_auto.checked, rowVersion: curShow.rowVersion, reason: reason ?? f_reason.value };
+      if (body.recurrence && body.recurrence.enabled && (!body.recurrence.byDay.length || !body.recurrence.time || !body.recurrence.durationMin)) { show_(T("recurBad")); return false; }
       const r = await api("PUT", `${API}/${curShow.id}`, body); if (!r) return false;
-      curShow = r; clearShowDirty(); f_reason.value = ""; show_(T("showSaved", { v: r.rowVersion }), true); await refreshShows(); await loadVersions(); renderShowBar(); return true;
+      curShow = r; clearShowDirty(); f_reason.value = ""; show_(T("showSaved", { v: r.rowVersion }), true); await refreshShows(); loadWeek(); await loadVersions(); renderShowBar(); return true;
     };
     const saveBtn = h("button", { class: "primary", onclick: () => saveShow() }, T("showSave"));
     const newBtn = h("button", { onclick: async () => {
       const t = f_title.value.trim() || "Neue Sendung";
-      const r = await api("POST", API, { title: t, description: f_desc.value, slotStart: localToIso(f_start.value), slotEnd: localToIso(f_end.value), presenters: f_pres.value.split(",").map((x) => x.trim()).filter(Boolean), content: docFromState(), template: false }); if (!r) return;
-      curShow = r; clearShowDirty(); show_(T("showCreated"), true); await refreshShows(); showSel.value = r.id; await loadVersions(); renderShowBar();
+      const r = await api("POST", API, { title: t, description: f_desc.value, slotStart: localToIso(f_start.value), slotEnd: localToIso(f_end.value), presenters: f_pres.value.split(",").map((x) => x.trim()).filter(Boolean), content: docFromState(), template: f_tpl.checked, recurrence: recurToBody(), autoLive: f_auto.checked }); if (!r) return;
+      curShow = r; clearShowDirty(); show_(T("showCreated"), true); await refreshShows(); loadWeek(); showSel.value = r.id; await loadVersions(); renderShowBar();
     } }, T("showNew"));
     const saveTplBtn = h("button", { onclick: async () => {
       if (!curShow) return; const name = f_title.value.trim() || curShow.title;
@@ -453,6 +537,11 @@ class OmpRadioAutomationPanel extends HTMLElement {
     const restoreBtn = h("button", { onclick: async () => { if (!curShow || !verSel.value) return; const r = await api("POST", `${API}/${curShow.id}/versions/${verSel.value}/restore`); if (r) { curShow = r; applyDoc(r.content); markDirty(); clearShowDirty(); await loadVersions(); renderShowBar(); } } }, T("showRestore"));
     const verBox = h("span", { class: "bar", style: "margin:0" }, h("label", {}, T("showVersions"), verSel), restoreBtn);
     showSel.onchange = async () => { if (showDirty && !(await confirmDialog(T("showUnsaved") + " — " + T("showOpen") + "?", T("showOpen")))) { showSel.value = curShow ? curShow.id : ""; return; } await openShow(showSel.value); };
+    tplOpenSel.onchange = async () => {
+      const id = tplOpenSel.value; if (!id) return;
+      if (showDirty && !(await confirmDialog(T("showUnsaved") + " — " + T("showOpen") + "?", T("showOpen")))) { tplOpenSel.value = ""; return; }
+      await openShow(id); tplOpenSel.value = "";
+    };
     tplSel.onchange = async () => {
       const id = tplSel.value; if (!id) return; tplSel.value = "";
       const title = f_title.value.trim() || "Neue Sendung";
@@ -460,8 +549,8 @@ class OmpRadioAutomationPanel extends HTMLElement {
       if (!r) return; show_(T("showCreated"), true); await refreshShows(); showSel.value = r.id; await openShow(r.id);
     };
     const showSec = h("details", { class: "sec", open: "" }, h("summary", {}, T("show")),
-      h("div", { class: "body" }, h("div", { class: "showbar" }, h("label", {}, T("show"), showSel), tplSel, newBtn, statChip, unsavedEl),
-        h("div", { class: "showmeta" }, h("label", {}, T("showTitle"), f_title), h("label", {}, T("showStart"), f_start), h("label", {}, T("showEnd"), f_end), h("label", {}, T("showPres"), f_pres), h("label", {}, T("showDesc"), f_desc), h("label", {}, T("showTpl"), f_tpl)),
+      h("div", { class: "body" }, h("div", { class: "showbar" }, h("label", {}, T("show"), showSel), tplSel, tplOpenSel, newBtn, statChip, unsavedEl),
+        h("div", { class: "showmeta" }, h("label", {}, T("showTitle"), f_title), h("label", {}, T("showStart"), f_start), h("label", {}, T("showEnd"), f_end), h("label", {}, T("showPres"), f_pres), h("label", {}, T("showDesc"), f_desc), h("label", {}, T("showTpl"), f_tpl), h("label", { style: "flex-direction:row;align-items:center;gap:6px" }, f_auto, T("autoLive"))), recurBox,
         h("div", { class: "showbar", style: "margin-top:8px" }, f_reason, saveBtn, saveTplBtn, relBtn, unrelBtn, liveBtn, finBtn, archBtn, delBtn, verBox)));
 
     // ---- Moderationskarten und Notizen (je Sendung) ----
@@ -561,8 +650,8 @@ class OmpRadioAutomationPanel extends HTMLElement {
     };
     const cartSec = h("details", { class: "sec", open: "" }, h("summary", {}, T("hot")), h("div", { class: "body" }, h("div", { class: "bar" }, hkEditBtn, hkAdd, hkSave), hkEdit, hkGrid));
 
-    shadow.append(h("style", {}, STYLE), banner, head, showSec, nowBar, cardLive, cartSec, cardsSec, logSec, planSec, asRunSec);
-    renderRows(); renderPlan(); renderAsRun(); renderNow(); renderCarts(); renderCards(); renderShowBar(); refreshShows().then(async () => { const c = await api("GET", API + "/current"); if (c && c.show && c.show.status === "live" && !curShow) { showSel.value = c.show.id; await openShow(c.show.id); } });
+    shadow.append(h("style", {}, STYLE), banner, head, weekSec, showSec, nowBar, cardLive, cartSec, cardsSec, logSec, planSec, asRunSec);
+    renderRows(); renderPlan(); renderAsRun(); renderNow(); renderCarts(); renderCards(); renderShowBar(); loadWeek(); refreshShows().then(async () => { const c = await api("GET", API + "/current"); if (c && c.show && c.show.status === "live" && !curShow) { showSel.value = c.show.id; await openShow(c.show.id); } });
 
     const loadTargets = async () => {
       try {
@@ -579,7 +668,8 @@ class OmpRadioAutomationPanel extends HTMLElement {
     };
     const poll = async () => {
       try {
-        const [v, a, e, t, la, lg] = await Promise.all(["view", "asRun", "lastError", "target", "lookaheadMs", "log"].map(getParam));
+        const [v, a, e, t, la, lg, al, alm, als] = await Promise.all(["view", "asRun", "lastError", "target", "lookaheadMs", "log", "autoLoad", "autoLeadMs", "autoStatus"].map(getParam));
+        if (al !== undefined) { if (document.activeElement !== autoChk) autoChk.checked = !!al; if (document.activeElement !== autoLead && alm) autoLead.value = String(alm / 60000); autoSt.textContent = als || ""; }
         if (v !== undefined) view = JSON.parse(v);
         if (a) asRun = JSON.parse(a);
         lastError = e || "";
