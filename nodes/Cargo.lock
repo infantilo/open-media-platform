@@ -1466,6 +1466,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-failover"
+version = "0.1.0"
+dependencies = [
+ "gstreamer",
+ "gstreamer-app",
+ "omp-mediaio",
+ "omp-node-sdk",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "omp-gpio"
 version = "0.1.0"
 dependencies = [

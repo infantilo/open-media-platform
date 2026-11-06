@@ -428,6 +428,18 @@
     "expectedResources": "sehr gering"
   },
   {
+    "type": "omp-failover",
+    "label": "Havarieumschalter",
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-failover"],
+    "env": {},
+    "mediaKind": "audio",
+    "anchor": true,
+    "description": "Modulationswächter und Havarieumschalter vor dem letzten Signalpunkt (Radio; Fernsehen folgt). Hauptsignal und drei Notquellen kommen als MXL-Audio-Flows, dazu ein eingebauter Notclip (Datei in Schleife). Fällt das Hauptsignal aus — kein Signal länger als eingestellt oder Stille unter der Schwelle — schlägt der Node Alarm (Alarmwege des Orchestrators) und schaltet die erste gesunde Quelle der einstellbaren Reihenfolge („zuerst das, dann das“), mit 20 ms Überblendung. Rückkehr automatisch (nach stabilem Hauptsignal und Mindestverweildauer) oder von Hand; Umschaltung jederzeit manuell im Bedienfeld (Statusanzeige, Pegel je Quelle, Aufschalten, Automatik, Einstellungen, Protokoll). Alle Haltezeiten und Schwellen sind Eigenwerte (keine Norm).",
+    "i18n": { "en": {"label": "Failover switch", "description": "Modulation monitor and emergency switch in front of the last signal point (radio; television follows). Main signal and three fallback sources arrive as MXL audio flows, plus a built-in fallback clip (file in a loop). If the main signal fails — no signal for longer than set, or silence below the threshold — the node raises an alarm (the orchestrator's alert paths) and switches to the first healthy source of the configurable order (“first this, then that”), with a 20 ms crossfade. Return is automatic (after a stable main signal and minimum hold time) or manual; manual switching at any time in the panel (status display, level per source, take, automatic, settings, log). All hold times and thresholds are our own values (no standard).", "expectedResources": "very low"} },
+    "expectedResources": "sehr gering"
+  },
+  {
     "type": "omp-playout-buffer",
     "label": "Playout-Puffer",
     "anchor": true,

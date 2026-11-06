@@ -21,6 +21,7 @@ members = [
     "omp-playout-core",
     "omp-radio-automation",
     "omp-gpio",
+    "omp-failover",
     "omp-studio-logic",
     "omp-srt-gateway",
     "omp-ograf",
