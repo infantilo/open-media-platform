@@ -52,9 +52,10 @@ const STYLE = `
   button:hover:not(:disabled) { border-color: var(--acc); }
   .bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 8px; }
   .bar label { display: flex; flex-direction: column; gap: 2px; color: var(--mut); }
-  .chip { padding: 2px 10px; border-radius: 10px; background: var(--ok); color: #fff; font-weight: 600; }
+  .chip { display: inline-block; padding: 2px 10px; border-radius: 10px; background: var(--ok); color: #fff; font-weight: 600; min-width: 190px; white-space: nowrap; }
   .chip.down { background: var(--err); }
-  .banner { display: none; padding: 5px 8px; border-radius: 4px; background: var(--err); color: #fff; margin-bottom: 6px; }
+  :host { position: relative; }
+  .banner { display: none; position: absolute; top: 4px; left: 4px; right: 4px; z-index: 20; padding: 5px 8px; border-radius: 4px; background: var(--err); color: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.5); pointer-events: none; }
   .banner.show { display: block; }
   details.sec { border: 1px solid var(--bd); border-radius: 6px; margin-bottom: 8px; background: var(--bg2); }
   details.sec > summary { cursor: pointer; padding: 6px 10px; font-weight: 600; }
@@ -62,7 +63,7 @@ const STYLE = `
   table { border-collapse: collapse; width: 100%; }
   th { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: var(--mut); text-align: left; padding: 2px 4px; }
   td { padding: 2px 4px; } td input[type=text] { width: 100%; min-width: 100px; }
-  .led { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: var(--bg3); border: 1px solid var(--bd); vertical-align: middle; margin-right: 6px; }
+  td.lv { width: 90px; white-space: nowrap; } .led { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: var(--bg3); border: 1px solid var(--bd); vertical-align: middle; margin-right: 6px; }
   .led.on { background: var(--ok); border-color: var(--ok); box-shadow: 0 0 6px var(--ok); }
   .hint, .muted { color: var(--mut); } .ev { font-variant-numeric: tabular-nums; padding: 1px 0; font-family: monospace; }
 `;
@@ -106,9 +107,9 @@ class OmpGpioPanel extends HTMLElement {
     const render = () => {
       linkChip.textContent = linkUp ? T("linkUp") : T("linkDown"); linkChip.className = `chip${linkUp ? "" : " down"}`;
       if (shadow.activeElement && shadow.activeElement.tagName === "INPUT" && shadow.activeElement !== debInput) return;
-      inBody.replaceChildren(...ins.map((p) => h("tr", {}, h("td", {}, p.pin), h("td", {}, nameField("in", p, "i" + p.pin)), h("td", {}, lvl(p.level)),
+      inBody.replaceChildren(...ins.map((p) => h("tr", {}, h("td", {}, p.pin), h("td", {}, nameField("in", p, "i" + p.pin)), h("td", { class: "lv" }, lvl(p.level)),
         h("td", {}, h("button", { onclick: async () => { await call("simulateInput", { pin: p.pin, level: !p.level }); setTimeout(poll, 120); } }, T("toggle"))))));
-      outBody.replaceChildren(...outs.map((p) => h("tr", {}, h("td", {}, p.pin), h("td", {}, nameField("out", p, "o" + p.pin)), h("td", {}, lvl(p.level)),
+      outBody.replaceChildren(...outs.map((p) => h("tr", {}, h("td", {}, p.pin), h("td", {}, nameField("out", p, "o" + p.pin)), h("td", { class: "lv" }, lvl(p.level)),
         h("td", {}, h("input", { type: "checkbox", checked: p.failSafe, onchange: async (e) => { await call("configurePin", { kind: "out", pin: p.pin, failSafe: e.target.checked }); poll(); } })),
         h("td", {}, h("button", { onclick: async () => { await call("setOutput", { pin: p.pin, level: !p.level, holdMs }); poll(); } }, T("toggle"))))));
       evEl.replaceChildren(...(events.length ? events.slice().reverse().map((e) => h("div", { class: "ev" }, `#${e.event.seq} ${e.subject} ${JSON.stringify({ level: e.event.level, up: e.event.up, reason: e.event.reason })}`)) : [h("span", { class: "muted" }, T("noEvents"))]));

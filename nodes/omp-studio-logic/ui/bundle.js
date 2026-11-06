@@ -54,18 +54,20 @@ const STYLE = `
   button:hover:not(:disabled) { border-color: var(--acc); } button:disabled { opacity: .45; cursor: default; }
   button.primary { background: #2a5a8f; border-color: var(--acc); } button.danger { background: #6a2a2a; border-color: var(--err); }
   .bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 8px; } .bar label { display: flex; flex-direction: column; gap: 2px; color: var(--mut); }
-  .banner { display: none; padding: 5px 8px; border-radius: 4px; background: var(--err); color: #fff; margin-bottom: 6px; } .banner.show { display: block; } .banner.note { background: #2a5a8f; }
+  /* Meldungen liegen über dem Inhalt statt ihn zu verschieben (sonst springen Tasten, wenn eine Meldung kommt oder geht) */
+  :host { position: relative; }
+  .banner { display: none; position: absolute; top: 4px; left: 4px; right: 4px; z-index: 20; padding: 5px 8px; border-radius: 4px; background: var(--err); color: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.5); pointer-events: none; } .banner.show { display: block; } .banner.note { background: #2a5a8f; }
   details.sec { border: 1px solid var(--bd); border-radius: 6px; margin-bottom: 8px; background: var(--bg2); } details.sec > summary { cursor: pointer; padding: 6px 10px; font-weight: 600; }
   details.sec > .body { padding: 8px 10px 10px; border-top: 1px solid var(--bd); overflow-x: auto; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; }
   .grp { border: 1px solid var(--bd); border-radius: 6px; padding: 10px; background: var(--bg); display: flex; flex-direction: column; gap: 8px; } .grp.air { border-color: var(--err); box-shadow: 0 0 0 1px var(--err); }
-  .grp .nm { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .grp .nm { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; min-height: 22px; } .grp .nm .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; } .grp .info { min-height: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .lamp { width: 14px; height: 14px; border-radius: 50%; background: var(--bg3); border: 1px solid var(--bd); } .lamp.on { background: var(--err); border-color: var(--err); box-shadow: 0 0 8px var(--err); }
-  .chip { padding: 1px 8px; border-radius: 10px; background: var(--bg3); font-size: 11px; } .chip.air { background: var(--err); color: #fff; } .chip.cough { background: var(--warn); color: #000; }
+  .chip { padding: 1px 8px; border-radius: 10px; background: var(--bg3); font-size: 11px; white-space: nowrap; flex: none; min-width: 104px; text-align: center; } .chip.st-air { background: var(--err); color: #fff; } .chip.st-cough { background: var(--warn); color: #000; }
   .cough { min-height: 56px; font-size: 14px; font-weight: 700; user-select: none; touch-action: none; } .cough.hold { background: var(--warn); color: #000; border-color: var(--warn); }
   table { border-collapse: collapse; width: 100%; } th { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: var(--mut); text-align: left; padding: 2px 4px; } td { padding: 2px 3px; } td input { width: 100%; min-width: 70px; }
-  .muted, .hint { color: var(--mut); } .dirty { color: var(--warn); margin-left: 8px; } .ev { font-variant-numeric: tabular-nums; font-family: monospace; padding: 1px 0; }
-  .big { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .muted, .hint { color: var(--mut); } .dirty { color: var(--warn); margin-left: 8px; display: inline-block; min-width: 150px; } .ev { font-variant-numeric: tabular-nums; font-family: monospace; padding: 1px 0; }
+  .big { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; } .hstate { height: 30px; overflow: hidden; display: flex; align-items: center; } .hstate .big { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 `;
 
 const parseSpeakers = (t) => t.split(",").map((x) => x.trim()).filter(Boolean).map((x) => { const [kind, id] = x.includes(":") ? x.split(":") : ["channel", x]; return { kind: kind.trim(), id: (id || "").trim() }; });
@@ -116,20 +118,20 @@ class OmpStudioLogicPanel extends HTMLElement {
           const down = (e) => { e.preventDefault(); try { cb.setPointerCapture(e.pointerId); } catch { /* ohne Capture */ } if (coughDown.has(g.name)) return; coughDown.add(g.name); cb.classList.add("hold"); call("cough", { group: g.name, on: true }); };
           const up = () => { if (!coughDown.has(g.name)) return; coughDown.delete(g.name); cb.classList.remove("hold"); call("cough", { group: g.name, on: false }).then(poll); };
           cb.addEventListener("pointerdown", down); cb.addEventListener("pointerup", up); cb.addEventListener("pointercancel", up); cb.addEventListener("lostpointercapture", up);
-          const card = h("div", { class: "grp" }, h("div", { class: "nm" }, lamp, g.name, chip), h("div", { class: "muted" }, `${(g.channels || []).join(", ")} · ${g.light ? T("lightPin", { n: g.light }) : T("noLight")}`), cb);
+          const card = h("div", { class: "grp" }, h("div", { class: "nm" }, lamp, h("span", { class: "t" }, g.name), chip), h("div", { class: "muted info" }, `${(g.channels || []).join(", ")} · ${g.light ? T("lightPin", { n: g.light }) : T("noLight")}`), cb);
           gEls.push({ card, lamp, chip, cb }); return card;
         }));
       }
       gs.forEach((g, i) => { const e = gEls[i]; if (!e) return;
         e.card.classList.toggle("air", !!g.onAir); e.lamp.classList.toggle("on", !!g.onAir);
-        e.chip.textContent = g.cough ? T("coughOn") : g.onAir ? T("onAir") : T("off"); e.chip.className = `chip${g.cough ? " cough" : g.onAir ? " air" : ""}`; });
+        e.chip.textContent = g.cough ? T("coughOn") : g.onAir ? T("onAir") : T("off"); e.chip.className = `chip${g.cough ? " st-cough" : g.onAir ? " st-air" : ""}`; });
     };
     addEventListener("blur", releaseAll); addEventListener("pagehide", releaseAll);
 
     // ---- Übergabe ----
     const hFrom = h("select"), hTo = h("select"), hMode = h("select", { onchange: () => { hIn.style.display = hMode.value === "in" ? "" : "none"; hAt.style.display = hMode.value === "at" ? "" : "none"; } }, h("option", { value: "in" }, T("inSec", { n: "…" })), h("option", { value: "at" }, T("atTime")));
     const hIn = h("input", { type: "number", min: "3", value: "10", style: "width:70px" }), hAt = h("input", { type: "text", placeholder: "HH:MM:SS", style: "width:90px;display:none" });
-    const hState = h("div"), activeEl = h("span", { class: "big" }), auditEl = h("div");
+    const hState = h("div", { class: "hstate" }), activeEl = h("span", { class: "big" }), auditEl = h("div");
     const offerBtn = h("button", { class: "primary", onclick: async () => {
       let body = { from: hFrom.value, to: hTo.value };
       if (hMode.value === "in") body.delayMs = Math.max(3, Number(hIn.value) || 10) * 1000;

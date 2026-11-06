@@ -29,7 +29,7 @@ const T = (() => {
       showVersions: "Verlauf", showRestore: "Wiederherstellen", showUnsaved: "Sendung hat ungespeicherte Änderungen", showNeedTarget: "Erst oben einen Segue-Player als Ziel wählen.", showNotReady: "Nur freigegebene Sendungen werden auf Sendung geladen.",
       showTplName: "Name der neuen Sendung", showPick: "Sendung wählen …",
       cards: "Moderationskarten", cardAdd: "+ Karte", cardTitle: "Überschrift", cardText: "Text", cardAt: "Bei Element", cardAtStart: "Sendungsbeginn", cardMin: "Min.", cardEmpty: "Keine Karten. „+ Karte“ legt eine an; sie erscheint während des gewählten Elements unter „Jetzt“.",
-      notes: "Notizen zur Sendung", cardNow: "Moderation", cardNext: "Als Nächstes",
+      cardNone: "Keine Karte zu diesem Element.", notes: "Notizen zur Sendung", cardNow: "Moderation", cardNext: "Als Nächstes",
       tplOpen: "Vorlage öffnen …", week: "Wochenplan", weekPrev: "← Woche", weekNext: "Woche →", weekToday: "Heute", weekAdd: "+ Sendung", weekOverlap: "überschneidet sich mit der vorigen Sendung", weekEmpty: "—",
       "wd.MO": "Mo", "wd.TU": "Di", "wd.WE": "Mi", "wd.TH": "Do", "wd.FR": "Fr", "wd.SA": "Sa", "wd.SU": "So",
       recur: "Wiederkehr (aus dieser Vorlage Sendungen im Voraus anlegen)", recurOn: "Wiederkehr an", recurDays: "Wochentage", recurTime: "Beginn (Uhr)", recurDur: "Dauer (min)", recurTz: "Zeitzone", recurHorizon: "Vorlauf (Tage)", recurUntil: "Bis (Datum, leer = unbegrenzt)", recurBad: "Wiederkehr unvollständig: Wochentage, Beginn und Dauer angeben.",
@@ -64,7 +64,7 @@ const T = (() => {
       showVersions: "History", showRestore: "Restore", showUnsaved: "The show has unsaved changes", showNeedTarget: "Choose a segue player as target above first.", showNotReady: "Only released shows can be loaded on air.",
       showTplName: "Name of the new show", showPick: "Choose a show …",
       cards: "Presenter cards", cardAdd: "+ Card", cardTitle: "Heading", cardText: "Text", cardAt: "At item", cardAtStart: "Start of show", cardMin: "Min.", cardEmpty: "No cards. “+ Card” adds one; it appears under “Now” while the chosen item plays.",
-      notes: "Show notes", cardNow: "Presenter", cardNext: "Next up",
+      cardNone: "No card for this item.", notes: "Show notes", cardNow: "Presenter", cardNext: "Next up",
       tplOpen: "Open template …", week: "Week plan", weekPrev: "← Week", weekNext: "Week →", weekToday: "Today", weekAdd: "+ Show", weekOverlap: "overlaps the previous show", weekEmpty: "—",
       "wd.MO": "Mon", "wd.TU": "Tue", "wd.WE": "Wed", "wd.TH": "Thu", "wd.FR": "Fri", "wd.SA": "Sat", "wd.SU": "Sun",
       recur: "Recurrence (create shows from this template in advance)", recurOn: "Recurrence on", recurDays: "Weekdays", recurTime: "Start (time)", recurDur: "Duration (min)", recurTz: "Time zone", recurHorizon: "Lead (days)", recurUntil: "Until (date, empty = unlimited)", recurBad: "Recurrence incomplete: give weekdays, start and duration.",
@@ -124,9 +124,11 @@ const STYLE = `
   button.danger { background: #6a2a2a; border-color: var(--err); }
   .bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 8px; }
   .bar label { display: flex; flex-direction: column; gap: 2px; color: var(--mut); }
-  .chip { padding: 2px 10px; border-radius: 10px; background: var(--bg3); font-weight: 600; }
+  .chip { display: inline-block; padding: 2px 10px; border-radius: 10px; background: var(--bg3); font-weight: 600; min-width: 84px; text-align: center; white-space: nowrap; }
   .chip.running { background: var(--ok); color: #fff; } .chip.finished { color: var(--mut); }
-  .banner { display: none; padding: 5px 8px; border-radius: 4px; background: var(--err); color: #fff; margin-bottom: 6px; }
+  .lockbar { padding: 5px 8px; border-radius: 4px; background: #2a5a8f; color: #fff; margin-top: 6px; }
+  :host { position: relative; }
+  .banner { display: none; position: fixed; top: 6px; left: 50%; transform: translateX(-50%); max-width: 90%; z-index: 100; padding: 6px 12px; border-radius: 4px; background: var(--err); color: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.6); pointer-events: none; }
   .banner.show { display: block; } .banner.note { background: #2a5a8f; }
   details.sec { border: 1px solid var(--bd); border-radius: 6px; margin-bottom: 8px; background: var(--bg2); }
   details.sec > summary { cursor: pointer; padding: 6px 10px; font-weight: 600; }
@@ -135,7 +137,7 @@ const STYLE = `
   th { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: var(--mut); text-align: left; padding: 2px 4px; }
   td { padding: 2px 3px; } td input, td select { width: 100%; } td.num input { width: 84px; text-align: right; }
   td.file input { min-width: 200px; } td.act { white-space: nowrap; } td.act button { padding: 2px 6px; }
-  .hint, .muted { color: var(--mut); } .dirty { color: var(--warn); margin-left: 8px; }
+  .hint, .muted { color: var(--mut); } .dirty { color: var(--warn); margin-left: 8px; display: inline-block; min-width: 180px; }
   .tl { position: relative; margin-top: 6px; }
   .tlrow { position: relative; height: 22px; margin-bottom: 3px; background: var(--bg); border-radius: 3px; }
   .tlbar { position: absolute; top: 2px; height: 18px; border-radius: 3px; background: #2a5a8f; color: #fff; font-size: 10px; line-height: 18px; padding: 0 5px; overflow: hidden; white-space: nowrap; }
@@ -144,15 +146,15 @@ const STYLE = `
   .tlfade { position: absolute; top: 2px; height: 18px; background: repeating-linear-gradient(135deg, rgba(255,255,255,.28) 0 3px, transparent 3px 6px); border-radius: 3px; }
   .ev { font-variant-numeric: tabular-nums; padding: 1px 0; }
   textarea { width: 100%; min-height: 120px; font-family: monospace; }
-  tr.blockhead td { background: #3a2f1c; font-weight: 600; padding: 4px 6px; } tr.blockhead input { width: 70px; }
+  td.tcol, th.tcol { width: 82px; min-width: 82px; white-space: nowrap; } tr.blockhead td { background: #3a2f1c; font-weight: 600; padding: 4px 6px; } tr.blockhead input { width: 70px; }
   tr.dragover td { border-top: 2px solid var(--acc); } td.handle { cursor: grab; color: var(--mut); user-select: none; } tr.cur td { background: #1f3a24; } tr.done td { opacity: .55; }
   .ok { color: var(--ok); } .bad { color: var(--err); } .nowbar { display: flex; gap: 18px; align-items: center; padding: 8px 10px; background: var(--bg2); border: 1px solid var(--bd); border-radius: 6px; margin-bottom: 8px; }
-  .nowbar .big { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; } .nowbar .grow { flex: 1; min-width: 0; } .nowbar .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .autost { display: inline-block; width: 340px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; } .nowbar { min-height: 96px; } .nowbar .big { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; } .nowbar .grow { flex: 1; min-width: 0; } .nowbar .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .nowprog { height: 5px; background: var(--bg3); border-radius: 3px; margin-top: 4px; } .nowprog > div { height: 100%; background: var(--acc); border-radius: 3px; }
   .showbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; } .showbar label { display: flex; flex-direction: column; gap: 2px; color: var(--mut); } .showmeta { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; margin-top: 8px; }
-  .sstat { padding: 2px 10px; border-radius: 10px; background: var(--bg3); font-weight: 600; } .sstat.ready { background: #2a5a8f; } .sstat.live { background: var(--ok); color: #fff; } .sstat.done, .sstat.archived { color: var(--mut); }
+  .sstat { display: inline-block; padding: 2px 10px; border-radius: 10px; background: var(--bg3); font-weight: 600; min-width: 120px; text-align: center; white-space: nowrap; } .sstat.ready { background: #2a5a8f; } .sstat.live { background: var(--ok); color: #fff; } .sstat.done, .sstat.archived { color: var(--mut); }
   .card { border: 1px solid var(--bd); border-radius: 5px; padding: 6px; margin-bottom: 6px; display: grid; grid-template-columns: 1fr 180px 70px auto; gap: 6px; align-items: start; } .card textarea { grid-column: 1 / -1; min-height: 70px; font-family: inherit; }
-  .cardlive { background: var(--bg2); border: 1px solid var(--acc); border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; display: none; } .cardlive.show { display: block; } .cardlive h4 { margin: 0 0 4px; } .cardlive .tx { white-space: pre-wrap; font-size: 15px; line-height: 1.45; }
+  .cardlive { background: var(--bg2); border: 1px solid var(--acc); border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; display: none; height: 150px; overflow-y: auto; } .cardlive.show { display: block; } .cardlive.idle { opacity: .45; } .cardlive h4 { margin: 0 0 4px; } .cardlive .tx { white-space: pre-wrap; font-size: 15px; line-height: 1.45; }
   .week { display: grid; grid-template-columns: repeat(7, minmax(120px, 1fr)); gap: 6px; } .wday { background: var(--bg); border: 1px solid var(--bd); border-radius: 5px; min-height: 90px; padding: 4px; } .wday.today { border-color: var(--acc); }
   .wday h5 { margin: 0 0 4px; font-size: 11px; color: var(--mut); display: flex; justify-content: space-between; align-items: center; } .wday h5 button { padding: 0 6px; font-size: 11px; }
   .wshow { display: block; width: 100%; text-align: left; margin-bottom: 4px; padding: 3px 5px; border-radius: 4px; border: 1px solid var(--bd); background: var(--bg3); font-size: 11px; } .wshow.ready { background: #1f3f66; } .wshow.live { background: #2a6a30; } .wshow.done { opacity: .55; } .wshow.sel { outline: 2px solid #fff; } .wshow.overlap { border-color: var(--err); }
@@ -227,7 +229,7 @@ class OmpRadioAutomationPanel extends HTMLElement {
     const lookInput = h("input", { type: "number", min: "2", max: "300", style: "width:70px", onchange: () => setParam("lookaheadMs", Math.round(Number(lookInput.value) * 1000)).then((r) => { if (!r.ok) show(T("fail", { m: "lookahead", d: r.status })); }) });
     const autoChk = h("input", { type: "checkbox", style: "width:auto", onchange: () => setParam("autoLoad", autoChk.checked) });
     const autoLead = h("input", { type: "number", min: "1", max: "60", style: "width:60px", onchange: () => setParam("autoLeadMs", Math.round(Number(autoLead.value) * 60000)) });
-    const autoSt = h("span", { class: "muted" });
+    const autoSt = h("span", { class: "muted autost" });
     const head = h("div", { class: "bar" }, h("label", {}, T("state"), stateChip), h("label", {}, T("target"), targetSel), h("label", {}, T("lookahead"), lookInput),
       h("label", { style: "flex-direction:row;align-items:center;gap:6px" }, autoChk, T("autoLoad")), h("label", {}, T("autoLead"), autoLead), autoSt);
 
@@ -250,7 +252,7 @@ class OmpRadioAutomationPanel extends HTMLElement {
         const inp = (key, type) => h("input", { type, value: r[key] ?? "", oninput: (e) => { r[key] = type === "number" ? (e.target.value === "" ? null : Number(e.target.value)) : e.target.value; markDirty(); }, onchange: () => { if (key === "block" || key === "durationMs") renderRows(); } });
         const kind = h("select", { onchange: (e) => { r.kind = e.target.value; markDirty(); } }, ...["song", "jingle", "speech"].map((k) => h("option", { value: k }, T("kind." + k))));
         kind.value = r.kind;
-        const timeCell = h("td", { class: "muted" }); timeCells.push([i, timeCell]);
+        const timeCell = h("td", { class: "muted tcol" }); timeCells.push([i, timeCell]);
         const tr = h("tr", { draggable: "true",
           ondragstart: (e) => { dragFrom = i; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(i)); },
           ondragover: (e) => { if (dragFrom === null) return; e.preventDefault(); tr.classList.add("dragover"); },
@@ -314,7 +316,7 @@ class OmpRadioAutomationPanel extends HTMLElement {
         h("div", { class: "bar" }, h("label", {}, T("logId"), logIdInput), h("button", { onclick: () => { rows.push(blankItem()); markDirty(); renderRows(); } }, T("add")), h("button", { onclick: () => { const n = blankItem(); n.kind = "jingle"; n.block = "Werbeblock"; n.durationMs = 30000; rows.push(n); markDirty(); renderRows(); } }, T("addSpot")),
           loadBtn, h("button", { onclick: () => { jsonArea.value = JSON.stringify(toWire(), null, 2); jsonBox.style.display = ""; } }, T("export")),
           h("button", { onclick: () => { jsonArea.value = ""; jsonBox.style.display = ""; } }, T("import")), dirtyEl),
-        h("table", {}, h("thead", {}, h("tr", {}, h("th"), h("th", {}, "#"), ...["colId", "colTitle", "colKind", "colBlock", "colFile", "colDur", "colIntro", "colOutro", "colSom", "colGain", "colFix", "colOpt", "colTime"].map((k) => h("th", {}, T(k))), h("th"))), tbody),
+        h("table", {}, h("thead", {}, h("tr", {}, h("th"), h("th", {}, "#"), ...["colId", "colTitle", "colKind", "colBlock", "colFile", "colDur", "colIntro", "colOutro", "colSom", "colGain", "colFix", "colOpt", "colTime"].map((k) => h("th", { class: k === "colTime" ? "tcol" : "" }, T(k))), h("th"))), tbody),
         jsonBox, h("p", { class: "hint" }, T("hint"))));
 
     // ---- Ablauf (Zeitleiste) ----
@@ -552,7 +554,7 @@ class OmpRadioAutomationPanel extends HTMLElement {
     // ---- Bearbeitungssperre (weich): wer bearbeitet gerade ----
     const session = Math.random().toString(36).slice(2) + Date.now().toString(36);
     let lockedBy = "", lockBeat = null;
-    const lockBanner = h("div", { class: "banner note", style: "display:none;margin:6px 0 0" });
+    const lockBanner = h("div", { class: "lockbar", style: "display:none" });
     const takeBtn = h("button", { onclick: async () => { if (curShow) await acquireLock(true); } }, T("lockTake"));
     const setReadOnly = (who, lost) => {
       lockedBy = who; logSec.inert = !!who; cardsSec.inert = !!who; hkEditBtn.disabled = !!who;
@@ -653,8 +655,10 @@ class OmpRadioAutomationPanel extends HTMLElement {
       const pick = (id) => cards.filter((c) => (c.atItem || "") === (id || ""));
       const now = running && curId !== null ? pick(curId) : pick("");
       const nxt = running && nextId ? pick(nextId) : [];
-      if (!now.length && !nxt.length) { cardLive.classList.remove("show"); return; }
-      cardLive.classList.add("show");
+      // Hat die Sendung Karten, bleibt das Feld stehen (feste Höhe) — auch wenn zum aktuellen Element keine passt; sonst schöbe es Hotkeys und Log herunter
+      if (!cards.length) { cardLive.classList.remove("show"); return; }
+      cardLive.classList.add("show"); cardLive.classList.toggle("idle", !now.length && !nxt.length);
+      if (!now.length && !nxt.length) { cardLive.replaceChildren(h("span", { class: "muted" }, T("cardNone"))); return; }
       cardLive.replaceChildren(...now.flatMap((c) => [h("h4", {}, `${T("cardNow")}: ${c.title || ""}${c.minutes ? ` (${c.minutes} ${T("cardMin")})` : ""}`), h("div", { class: "tx" }, c.text || "")]),
         ...nxt.flatMap((c) => [h("h4", { class: "muted" }, `${T("cardNext")}: ${c.title || ""}`), h("div", { class: "tx muted" }, c.text || "")]));
     };
