@@ -1,7 +1,11 @@
 // Minimaler CDP-Helfer (Muster aus den anderen e2e-Skripten): ein Browser, mehrere Tabs.
 import { createRequire } from 'node:module';
-const require = createRequire('/home/infantilo/node_modules/');
-const WebSocket = require('ws');
+const WebSocket = (() => {
+  for (const base of ['/home/infantilo/node_modules/', '/home/infantilo/PIPELINE_CONTROLLER/node_modules/']) {
+    try { return createRequire(base)('ws'); } catch { /* nächster Pfad */ }
+  }
+  throw new Error('Paket „ws“ nicht gefunden');
+})();
 
 export async function openTab(port, url) {
   const r = await fetch(`http://127.0.0.1:${port}/json/new?${encodeURIComponent(url)}`, { method: 'PUT' });
