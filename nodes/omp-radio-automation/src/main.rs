@@ -4,6 +4,7 @@
 
 mod autoload;
 mod runner;
+mod segue_api;
 mod uibundle;
 
 use std::collections::HashSet;
@@ -354,6 +355,15 @@ impl ParamStore for Store {
         }
         // Sicherung: Log, Startzeit und gesendete Plätze überleben einen Neustart (kein Doppelstart, kein Verlust des Ablaufs)
         let json_ok = |v: Value| RawResponse { status: 200, content_type: "application/json", body: serde_json::to_vec(&v).unwrap_or_default() };
+        // Segue-Editor (RB7.2): Plan nach derselben Rechnung wie die Sendung, Spitzenwerte für die Wellenform
+        if method == "POST" && path == "/segue/plan" {
+            let (status, v) = segue_api::plan_response(body);
+            return Some(RawResponse { status, content_type: "application/json", body: serde_json::to_vec(&v).unwrap_or_default() });
+        }
+        if method == "GET" && path.starts_with("/segue/peaks") {
+            let (status, v) = segue_api::peaks_response(path.split_once('?').map(|(_, q)| q).unwrap_or(""));
+            return Some(RawResponse { status, content_type: "application/json", body: serde_json::to_vec(&v).unwrap_or_default() });
+        }
         if method == "GET" && path == "/state" {
             let r = self.run.lock().expect("lock poisoned");
             let mut sent: Vec<usize> = r.sent.iter().copied().collect();

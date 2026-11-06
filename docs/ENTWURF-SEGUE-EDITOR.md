@@ -76,6 +76,12 @@ gegen `Placed` ≤ 1 ms; Sendeweg gegen Plan weiter wie RB4 (`lateMs`).
   Einsatz nie vor dem Vorgänger). Ohne Wert unverändert (Test), leerer Übergang wird nicht geschrieben. `LogItem.transition` im Radio-Log;
   das Bedienfeld lässt das Feld beim Speichern stehen.
 
+* **RB7.2 erledigt (2026-11-06):** Node `omp-radio-automation`: `POST /segue/plan` (`{items, startMs, config}` → `placed[]`, gleiche
+  `segue::plan()` wie die Sendung, höchstens 64 Elemente) und `GET /segue/peaks?file=&durationMs=&bins=&fromMs=&toMs=` (ffmpeg-Dekodierung →
+  Spitzenwerte 0…255, Skala wie im Review-Player; nur Dateien unterhalb `OMP_MEDIA_MOUNTS`/`data/media`, sonst 403). Live am Release-Binary mit
+  der Demo-Datei geprüft: Demo-Übergang ergibt Einsatz 52 381 ms (Segue 52 881 − 500), Ausklang in den Spitzen sichtbar abfallend. 19 Tests grün.
+  **Offen:** Zugriff aus dem Browser über den Orchestrator-Proxy (Regel für `POST /segue/plan`/`GET /segue/peaks` prüfen, Isolations-Typ) — vor RB7.3.
+
 ## 9. Frühere offene Fragen (Rest)
 
 1. **Wohin mit den Marken?** Am Asset (setzt die Bibliothek-/MAM-Entscheidung voraus, die für die Woche ab 2026-11-09 erwartet wird) oder

@@ -92,7 +92,7 @@ impl PlayCall {
     }
 }
 
-fn to_item(i: &LogItem) -> Item {
+pub fn to_item(i: &LogItem) -> Item {
     Item { id: i.id.clone(), kind: i.kind, duration_ms: i.duration_ms, som_ms: i.som_ms, intro_ms: i.intro_ms, outro_ms: i.outro_ms, gain_db: i.gain_db, optional: i.optional, transition: i.transition.clone() }
 }
 
