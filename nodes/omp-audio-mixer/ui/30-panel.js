@@ -132,6 +132,8 @@ button{cursor:pointer}
 .rt[aria-pressed=true][data-kind=group]{background:#e0a04a}.rt[aria-pressed=true][data-kind=aux]{background:#5aa9e6}.rt[aria-pressed=true][data-kind=n1]{background:#b07ae0}
 .rt:disabled{opacity:.55;cursor:default}
 .b{font-size:10px;font-weight:700;line-height:1;padding:3px 5px;border-radius:3px;border:1px solid var(--c-border);white-space:nowrap;font-variant-numeric:tabular-nums}
+.b.onair{box-sizing:border-box;min-width:6.8em;text-align:center}
+.b.auto,.b.duck{box-sizing:border-box;min-width:8.8em;text-align:center}
 .b.onair[data-state=air]{background:var(--c-air);color:#03140a;border-color:var(--c-air)}
 .b.onair[data-state=muted]{background:var(--c-mute);color:#fff;border-color:var(--c-mute)}
 .b.onair[data-state=off]{color:var(--c-dim);border-style:dashed}
@@ -215,10 +217,10 @@ button{cursor:pointer}
 .channels[data-variant=touchf] .fread{right:6px;top:2px}
 .channels[data-variant=touchf] .fader{min-height:64px}
 .channels[data-variant=touchf] .fthumb{width:var(--thumb);height:44px;top:calc(50% - 22px)!important}
-.channels[data-meter=s]{--strip-h:220px;--hbar:10px}
-.channels[data-meter=l]{--strip-h:400px;--hbar:20px}
-.channels[data-meter=m]{--strip-h:300px;--hbar:14px}
-.channels[data-variant=gridf][data-meter=s]{--strip-h:160px}.channels[data-variant=gridf][data-meter=m]{--strip-h:220px}.channels[data-variant=gridf][data-meter=l]{--strip-h:300px}
+.channels[data-meter=s]{--strip-h:clamp(110px,calc(100vh - 300px),220px);--hbar:10px}
+.channels[data-meter=l]{--strip-h:clamp(200px,calc(100vh - 290px),400px);--hbar:20px}
+.channels[data-meter=m]{--strip-h:clamp(140px,calc(100vh - 290px),300px);--hbar:14px}
+.channels[data-variant=gridf][data-meter=s]{--strip-h:clamp(100px,calc(100vh - 380px),160px)}.channels[data-variant=gridf][data-meter=m]{--strip-h:clamp(120px,calc(100vh - 380px),220px)}.channels[data-variant=gridf][data-meter=l]{--strip-h:clamp(160px,calc(100vh - 380px),300px)}
 /* Dialog + Live-Region */
 .modal{position:fixed;inset:0;background:#000a;display:flex;align-items:center;justify-content:center;z-index:100}
 .modal .box{background:var(--c-surface);border:1px solid var(--c-border);border-radius:10px;padding:18px;max-width:360px}
@@ -409,7 +411,7 @@ class MixerApp {
     this.layoutNow();
     this.poll();
     this.loadNodes();
-    this.timers = [setInterval(() => this.poll(), 1500), setInterval(() => this.loadNodes(), 15000)];
+    this.timers = [setInterval(() => this.poll(), 700), setInterval(() => this.loadNodes(), 15000)];
     this.openStream();
     this.raf = requestAnimationFrame((t) => this.tick(t));
     this.ro = new ResizeObserver(() => this.layoutNow());
@@ -626,6 +628,8 @@ class MixerApp {
   }
 
   // ───── Zustand ─────
+  // Sofortige Abfrage (entprellt), z. B. nach einem On-Air-Wechsel im Live-Strom
+  pollSoon() { if (this._pollSoon) return; this._pollSoon = setTimeout(() => { this._pollSoon = null; this.poll(); }, 40); }
   async poll() {
     try {
       const res = await fetch(`/api/v1/nodes/${this.nodeId}/params/mixState`);
@@ -1011,6 +1015,9 @@ class MixerApp {
       v.setLevel(l.rms || 0, l.peak || 0, now);
       const sig = (l.onAir ? 1 : 0) + "|" + (l.afv === false ? 0 : 1) + "|" + Math.round((l.autoDb || 0) * 10) + "|" + Math.round((l.duckDb || 0) * 10);
       if (v.liveSig !== sig) {
+        // On-Air kommt sofort per Live-Strom, der Stummzustand aber per Abfrage: bei jedem On-Air-Wechsel sofort nachladen, sonst zeigt der Kanal
+        // dazwischen „OFF AIR“ statt „MUTED“ (Nutzerfund: Cough wirkt sofort im Ton, die Anzeige hinkt bis zu 1,5 s hinterher).
+        if (v.liveSig !== undefined && String(v.liveSig).charAt(0) !== sig.charAt(0)) this.pollSoon();
         v.liveSig = sig;
         const ch = this.state.channels.find((c) => c.id === id);
         if (ch) v.update(ch, l, this.ctxFor(ch));

@@ -36,6 +36,7 @@ const T = (() => {
       autoLive: "Status automatisch nach dem Zeitfenster (live/gesendet)", autoLoad: "Automatisch laden und zum Sendebeginn starten", autoLead: "Vorlauf (min)",
       lockedBy: "{u} bearbeitet diese Sendung gerade — schreibgeschützt.", lockTake: "Bearbeitung übernehmen", lockLost: "Die Bearbeitung wurde von {u} übernommen — schreibgeschützt.", lockMine: "Du bearbeitest",
       tp: "Teleprompter", tpClose: "Schließen", tpMirror: "Spiegeln", tpSpeed: "Auto-Scroll", tpSize: "Schrift", tpEmpty: "Keine Karten in dieser Sendung.", readTime: "Lesezeit ≈ {t}", readOver: "länger als geplant ({m} min)",
+      tabLive: "Sendebetrieb", tabPlan: "Planung", tabList: "Playlist", tabMod: "Moderation", tabLog: "Protokoll", tabsLabel: "Bereiche",
       hint: "Eine harte Marke (Uhrzeit) lässt das Element zu dieser Zeit einsetzen: beim Start werden Füller weggelassen/eingefügt und Segue-Punkte verschoben (Entscheidungen im As-Run). Der Segue-Punkt ist die Stelle in der Datei, ab der der Nachfolger starten darf; ohne Angabe 3 s vor Dateiende. Der Log wird erst mit „Log laden“ übernommen.",
     },
     en: {
@@ -71,6 +72,7 @@ const T = (() => {
       autoLive: "Status automatically after the time window (live/aired)", autoLoad: "Load automatically and start at show start", autoLead: "Lead (min)",
       lockedBy: "{u} is editing this show — read only.", lockTake: "Take over editing", lockLost: "Editing was taken over by {u} — read only.", lockMine: "You are editing",
       tp: "Teleprompter", tpClose: "Close", tpMirror: "Mirror", tpSpeed: "Auto-scroll", tpSize: "Size", tpEmpty: "No cards in this show.", readTime: "Reading time ≈ {t}", readOver: "longer than planned ({m} min)",
+      tabLive: "On air", tabPlan: "Planning", tabList: "Playlist", tabMod: "Presenter", tabLog: "Log", tabsLabel: "Sections",
       hint: "A hard mark (time of day) makes the item start at that time: at start, fillers are dropped/inserted and segue points are moved (decisions in the as-run). The segue point is the position in the file from which the next item may start; without it, 3 s before the end. The log only takes effect with “Load log”.",
     },
   };
@@ -164,6 +166,9 @@ const STYLE = `
   .tp .bar2 { display: flex; gap: 14px; align-items: center; padding: 8px 14px; background: #111; border-bottom: 1px solid #333; font-size: 14px; } .tp .bar2 .grow { flex: 1; } .tp .bar2 button, .tp .bar2 input { font-size: 14px; }
   .tp .scroll { flex: 1; overflow-y: auto; padding: 5vh 8vw 40vh; scroll-behavior: smooth; } .tp .scroll.mirror { transform: scaleX(-1); }
   .tp .tc { margin-bottom: 4vh; opacity: .45; } .tp .tc.active { opacity: 1; } .tp .tc h3 { margin: 0 0 1vh; font-size: .55em; color: #8ab4ff; text-transform: uppercase; letter-spacing: .06em; } .tp .tc .tx { white-space: pre-wrap; line-height: 1.5; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--bd); }
+  .tabs button { min-width: 96px; font-weight: 600; } .tabs button.on { background: #2a5a8f; border-color: var(--acc); color: #fff; }
+  .tabs .mk { color: var(--warn); margin-left: 4px; display: inline-block; min-width: 10px; } .tabs .cnt { color: var(--mut); margin-left: 4px; display: inline-block; min-width: 18px; } .tabs button.on .cnt { color: #cfe3ff; }
   .hk { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
   .hkkey { position: relative; min-height: 58px; padding: 6px 8px; border-radius: 5px; border: 1px solid rgba(255,255,255,.2); color: #fff; text-align: left; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; }
   .hkkey .nm { font-weight: 700; font-size: 12px; text-shadow: 0 1px 2px rgba(0,0,0,.6); } .hkkey .tm { font-variant-numeric: tabular-nums; font-size: 11px; opacity: .9; }
@@ -236,7 +241,7 @@ class OmpRadioAutomationPanel extends HTMLElement {
     // ---- Log-Editor ----
     const logIdInput = h("input", { style: "width:160px", oninput: () => { logId = logIdInput.value; markDirty(); } });
     const dirtyEl = h("span", { class: "dirty" });
-    const markDirty = () => { dirty = true; dirtyEl.textContent = T("dirty"); if (typeof markShow === "function") markShow(); };
+    const markDirty = () => { dirty = true; dirtyEl.textContent = T("dirty"); if (typeof markShow === "function") markShow(); if (typeof updTabs === "function") updTabs(); };
     const tbody = h("tbody");
     const cell = (cls, el) => h("td", { class: cls }, el);
     let timeCells = [];
@@ -504,8 +509,8 @@ class OmpRadioAutomationPanel extends HTMLElement {
     };
     const f_reason = h("input", { type: "text", placeholder: T("showReason"), style: "width:220px" });
     const statChip = h("span", { class: "sstat" }), unsavedEl = h("span", { class: "dirty" });
-    const markShow = () => { if (!curShow) return; showDirty = true; unsavedEl.textContent = T("showUnsaved"); };
-    const clearShowDirty = () => { showDirty = false; unsavedEl.textContent = ""; };
+    const markShow = () => { if (!curShow) return; showDirty = true; unsavedEl.textContent = T("showUnsaved"); if (typeof updTabs === "function") updTabs(); };
+    const clearShowDirty = () => { showDirty = false; unsavedEl.textContent = ""; if (typeof updTabs === "function") updTabs(); };
     const verSel = h("select");
     const docFromState = () => ({ log: toWire(), carts: showCarts, cards, notes: notesText.trim() ? [{ id: "n1", text: notesText }] : [] });
     const applyDoc = (c) => {
@@ -730,7 +735,29 @@ class OmpRadioAutomationPanel extends HTMLElement {
     };
     const cartSec = h("details", { class: "sec", open: "" }, h("summary", {}, T("hot")), h("div", { class: "body" }, h("div", { class: "bar" }, hkEditBtn, hkAdd, hkSave), hkEdit, hkGrid));
 
-    shadow.append(h("style", {}, STYLE), banner, tp, head, weekSec, showSec, nowBar, cardLive, cartSec, cardsSec, logSec, planSec, asRunSec);
+    // ---- Reiter: Sendebetrieb · Planung · Playlist · Moderation · Protokoll ----
+    // Oben bleiben Einstellungen, „Jetzt“ und die Live-Karte stehen (immer sichtbar im Betrieb); darunter wechselt der Bereich.
+    const mkPane = (...els) => h("div", { class: "pane" }, ...els);
+    const panes = { live: mkPane(cartSec, planSec), plan: mkPane(weekSec, showSec), list: mkPane(logSec), mod: mkPane(cardsSec), log: mkPane(asRunSec) };
+    const TABS = [["live", "tabLive"], ["plan", "tabPlan"], ["list", "tabList"], ["mod", "tabMod"], ["log", "tabLog"]];
+    const tabKey = `omp-radio-tab-${nodeId}`;
+    let tab = (() => { try { const v = localStorage.getItem(tabKey); return TABS.some(([k]) => k === v) ? v : "live"; } catch { return "live"; } })();
+    const tabBtns = {}, tabMk = {}, tabCnt = {};
+    const tabBar = h("div", { class: "tabs", role: "tablist", "aria-label": T("tabsLabel") }, ...TABS.map(([k, lab]) => {
+      tabMk[k] = h("span", { class: "mk" }); tabCnt[k] = h("span", { class: "cnt" });
+      tabBtns[k] = h("button", { role: "tab", onclick: () => selectTab(k) }, T(lab), tabMk[k], tabCnt[k]); return tabBtns[k];
+    }));
+    const selectTab = (k) => { tab = k; try { localStorage.setItem(tabKey, k); } catch { /* ohne Speicher */ } updTabs(); };
+    // Markierungen: ● = ungespeicherte/ungeladene Änderungen, Zahlen = Anzahl (Karten, Protokolleinträge)
+    const updTabs = () => {
+      for (const [k] of TABS) { const on = k === tab; panes[k].style.display = on ? "" : "none"; tabBtns[k].className = on ? "on" : ""; tabBtns[k].setAttribute("aria-selected", on ? "true" : "false"); }
+      tabMk.plan.textContent = typeof showDirty !== "undefined" && showDirty ? "●" : "";
+      tabMk.list.textContent = dirty ? "●" : "";
+      tabCnt.mod.textContent = cards.length ? String(cards.length) : "";
+      tabCnt.log.textContent = asRun.length ? String(asRun.length) : "";
+    };
+    shadow.append(h("style", {}, STYLE), banner, tp, head, nowBar, cardLive, tabBar, panes.live, panes.plan, panes.list, panes.mod, panes.log);
+    updTabs();
     renderRows(); renderPlan(); renderAsRun(); renderNow(); renderCarts(); renderCards(); renderShowBar(); loadWeek(); refreshShows().then(async () => { const c = await api("GET", API + "/current"); if (c && c.show && c.show.status === "live" && !curShow) { showSel.value = c.show.id; await openShow(c.show.id); } });
 
     const loadTargets = async () => {
@@ -765,7 +792,7 @@ class OmpRadioAutomationPanel extends HTMLElement {
         startBtn.disabled = running || view.state === "empty" || dirty; stopBtn.disabled = !running; loadBtn.disabled = running;
         if (lastError) { banner.textContent = lastError; banner.className = "banner show"; }
         else if (banner.className === "banner show") banner.className = "banner";
-        fillTargets(); renderPlan(); renderAsRun(); renderNow(); updateTimes(); if (!cartsEdit) renderCarts();
+        fillTargets(); renderPlan(); renderAsRun(); renderNow(); updateTimes(); if (!cartsEdit) renderCarts(); updTabs();
       } catch { /* nächster Takt */ }
     };
     loadTargets().then(poll);

@@ -34,7 +34,7 @@ const CSS2 = `
 .c2{--bg:#111;--panel:#1a1a1a;--panel2:#202020;--line:#2c2c2c;--line2:#3a3a3a;--txt:#d8dde2;--dim:#7d848c;
   --cyan:#27e0f0;--blue:#1fa4e6;--green:#25d366;--pink:#ff4f9a;--orange:#ff9f1c;--amber:#ffb000;--red:#ff4040;--violet:#b57bff;
   --mono:ui-monospace,"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
-  display:flex;flex-direction:column;background:var(--bg);color:var(--txt);font:11px/1.2 var(--mono);height:max(600px,calc(100vh - 120px));min-height:0;overflow:hidden;border:1px solid #000;position:relative;user-select:none}
+  display:flex;flex-direction:column;background:var(--bg);color:var(--txt);font:11px/1.2 var(--mono);height:max(var(--c2-min,620px),calc(100vh - var(--c2-off,0px) - 6px));min-height:0;overflow:hidden;border:1px solid #000;position:relative;user-select:none}
 .c2 :where(button){font:inherit;color:inherit;cursor:pointer}
 .c2 *{box-sizing:border-box}
 .c2 [hidden]{display:none!important}
@@ -130,7 +130,7 @@ const CSS2 = `
 .st-g{display:block;text-align:center;background:#06121c;color:var(--cyan);border:1px solid #1d3b52;border-radius:2px;font:700 12px var(--mono);padding:2px 0}
 .st-pk{display:block;text-align:center;color:#8a9199;font:11px var(--mono);height:13px}
 .st-flags{display:block;text-align:center;font-size:9px;height:11px;color:var(--amber);white-space:nowrap;overflow:hidden}
-.st-fz{position:relative;flex:1 1 auto;min-height:120px;display:grid;grid-template-columns:9px 1fr 22px;gap:2px;--th:44px}
+.st-fz{position:relative;flex:1 1 auto;min-height:100px;display:grid;grid-template-columns:9px 1fr 22px;gap:2px;--th:44px}
 .st-meter{position:relative;margin:calc(var(--th)/2) 0;background:#050505;border:1px solid #2a2a2a}
 .st-meter .meter{position:absolute;inset:0;width:auto;height:auto;background:transparent;border:0}
 .st-meter .mfill{position:absolute;left:0;right:0;bottom:0;height:100%;background:linear-gradient(to top,#18b84a 0,#2fe06a 60%,#e8d41e 78%,#ff9a1a 90%,#ff3b3b 100%);clip-path:inset(calc((1 - var(--v,0))*100%) 0 0 0)}
@@ -157,7 +157,8 @@ const CSS2 = `
 .st-num{height:15px;background:var(--col);color:#04131c;text-align:center;font:700 11px/15px var(--mono)}
 .st-solo{height:22px;border:1px solid #000;border-radius:2px;background:linear-gradient(#444,#2a2a2a);color:#dcdcdc;font:700 11px var(--mono);letter-spacing:.04em;margin:0 3px;box-shadow:0 1px 0 #666 inset}
 .st-solo[aria-pressed=true]{background:linear-gradient(#ffd23d,#d79b00);color:#221700}
-.st[data-onair="1"] .st-num::after{content:" ●";color:#c4001a}
+.st-num::after{content:" ●";visibility:hidden}
+.st[data-onair="1"] .st-num::after{visibility:visible;color:#c4001a}
 .st[data-kind=bus],.st[data-kind=grp]{flex:0 0 78px}
 .st[data-kind=master]{flex:0 0 96px;min-width:96px}
 .st[data-muted="1"] .st-g{opacity:.5}
@@ -354,6 +355,15 @@ class ConsoleApp extends MixerApp {
     const style = h("style");
     style.textContent = CSS + CSS2;
     this.root = h("div", { class: "root c2", tabindex: "-1" });
+    // Höhe = Fensterhöhe abzüglich der Position im Fenster (kein Seiten-Scrollbalken); die Fader füllen den Rest, unterhalb von --c2-min (620 px) wird gescrollt.
+    this.fitHeight = () => {
+      if (!this.root.isConnected) return;
+      const top = Math.max(0, Math.round(this.root.getBoundingClientRect().top + window.scrollY));
+      if (this.root.dataset.off !== String(top)) { this.root.dataset.off = String(top); this.root.style.setProperty("--c2-off", top + "px"); }
+    };
+    window.addEventListener("resize", this.fitHeight);
+    for (const ms of [0, 200, 800, 2000]) setTimeout(this.fitHeight, ms);
+    this.fitTimer = setInterval(this.fitHeight, 1000);
     this.stripViews = new Map(); // Gruppen/Busse
     this.binds = [];
     this.liveBinds = [];
@@ -421,7 +431,7 @@ class ConsoleApp extends MixerApp {
   }
 
   destroy() {
-    clearInterval(this.clockTimer);
+    clearInterval(this.clockTimer); clearInterval(this.fitTimer); window.removeEventListener("resize", this.fitHeight);
     window.removeEventListener("resize", this.onWinResize);
     super.destroy();
   }
@@ -882,6 +892,7 @@ class ConsoleApp extends MixerApp {
       v.setLevel(l.rms || 0, l.peak || 0, now);
       const sig = (l.onAir ? 1 : 0) + "|" + (l.afv === false ? 0 : 1) + "|" + Math.round((l.autoDb || 0)) + "|" + Math.round((l.duckDb || 0) * 10);
       if (v.liveSig !== sig) {
+        if (v.liveSig !== undefined && String(v.liveSig).charAt(0) !== sig.charAt(0)) this.pollSoon(); // Stummzustand sofort nachladen (s. 30-panel.js)
         v.liveSig = sig;
         const ch = this.state.channels.find((c) => c.id === id);
         if (ch) this.updateChannel(ch);
